@@ -1,0 +1,122 @@
+/**
+ * 006 ir-catalog — TDnet 適時開示の日次キャッチアップ (統一 daily cron 相乗り)。
+ *
+ * 新規 cron は作らない方針 (docs/new-project-template.md §9) に従い、既存の
+ * 日次 cron ハンドラ (src/index.ts) から **shard 0 のときだけ** 呼ばれる
+ * (TDnet は 1 リクエストで範囲全件を返せるためシャード分散は不要)。既存の
+ * 日次 sync (Yahoo) からは独立し、ここの失敗が本体 sync を壊さないよう
+ * 呼び出し側で握る (ただし結果はレスポンスに載せ運用者が気づける —
+ * 握り潰さない: ルール2)。
+ *
+ * 動作:
+ *   - 直近 WINDOW_DAYS 日を 1 日ずつ全件取得 (yanoshin は page 無効のため)
+ *   - core.stocks に居る個別株の開示を ir_catalog.disclosures へ冪等 upsert
+ *   - ルール6: 当日バッチの確定 JSONL を Notion 一次データへ実体記録
+ *     (key=tdnet-daily-YYYY-MM-DD 冪等)。高シグナルは人間可読 DB へ冪等記録。
+ *   - 取りこぼし (当日後追い開示・訂正) は翌日以降の WINDOW 重なりと
+ *     tdnet_id/Notion 冪等で回収する。
+ */
+import { createDb } from "../../services/ir-catalog/src/db/client.js";
+import { stocks } from "../../services/rsi-screening/src/db/core-schema.js";
+import { listRange } from "../../services/ir-catalog/src/services/tdnet/client.js";
+import { ingestBatch } from "../../services/ir-catalog/src/services/ingest.js";
+
+const WINDOW_DAYS = 7;
+/**
+ * 二次データ Notion 投入の実時間上限。日次 cron は shard 0 で Yahoo 本体
+ * sync + yuho-edinet の後に直列実行されるため、Vercel 関数上限 (300s) を
+ * 合算で超えないよう ir-catalog 自身の寄与をこの予算で必ず打ち切る。
+ * 打ち切った残りは WINDOW_DAYS の重なりと TDnet ID 冪等で翌日以降が回収
+ * する (Postgres が正本なので Notion 未投入分も失われない)。常態的に
+ * reachedDeadline=true なら過去ギャップが大きい合図 → backfill を回す。
+ */
+const NOTION_BUDGET_MS = 50_000;
+
+export interface IrCatalogResult {
+  ran: boolean;
+  range?: string;
+  fetched?: number;
+  inUniverse?: number;
+  upserted?: number;
+  unclassified?: number;
+  byPrimaryTag?: Record<string, number>;
+  notionArchive?: unknown;
+  notionByStock?: unknown;
+  elapsedSec?: number;
+}
+
+function pad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+export async function runIrCatalogCatchup(
+  databaseUrl: string,
+  shard?: { part: number; of: number }
+): Promise<IrCatalogResult> {
+  // TDnet は範囲一括取得できるのでシャード分散不要。重複実行を避け shard 0 のみ。
+  if (shard && shard.part !== 0) return { ran: false };
+
+  const started = Date.now();
+  const db = createDb(databaseUrl);
+
+  const allStocks = await db
+    .select({ id: stocks.id, code: stocks.code })
+    .from(stocks);
+  const codeToId = new Map<string, number>();
+  for (const s of allStocks) codeToId.set(s.code, s.id);
+
+  // TDnet の開示日は JST。日付境界も JST で揃える (UTC だと JST 午前に
+  // 走ったとき当日分が翌日まで取れず、Notion 冪等キーも 1 日ずれる)。
+  const JST_MS = 9 * 3600 * 1000;
+  const to = new Date(Date.now() + JST_MS); // 以降 getUTC* = JST 壁時計
+  const from = new Date(to);
+  from.setUTCDate(from.getUTCDate() - WINDOW_DAYS);
+  const rs = `${from.getUTCFullYear()}${pad(from.getUTCMonth() + 1)}${pad(
+    from.getUTCDate()
+  )}`;
+  const re = `${to.getUTCFullYear()}${pad(to.getUTCMonth() + 1)}${pad(
+    to.getUTCDate()
+  )}`;
+  const range = `${rs}-${re}`;
+  const dayKey = `${to.getUTCFullYear()}-${pad(to.getUTCMonth() + 1)}-${pad(
+    to.getUTCDate()
+  )}`;
+
+  const items = await listRange(range);
+  const r = await ingestBatch(db, items, {
+    batchKey: `tdnet-daily-${dayKey}`,
+    source: `yanoshin TDnet WebAPI /tdnet/list/{YYYYMMDD}.json 日次キャッチアップ 1日ずつ全件 (範囲 ${range})`,
+    archiveToNotion: true,
+    notionByStock: true,
+    notionByStockDeadlineMs: started + NOTION_BUDGET_MS,
+    codeToId,
+  });
+
+  const elapsedSec = (Date.now() - started) / 1000;
+  const bs = r.notionByStock;
+  const bsInfo =
+    bs && "created" in bs
+      ? `銘柄別${bs.stocksTouched}社+${bs.created}/upd${bs.updated}/skip${bs.skippedExisting}/skipNF${bs.skippedNoFile}/rej${bs.rejudged}/err${bs.rowErrors}${
+          bs.reachedDeadline ? "(打切)" : ""
+        }`
+      : bs && "error" in bs
+        ? `銘柄別ERR`
+        : "-";
+  console.info(
+    `[ir-catalog] 日次完了 range=${range} 取得=${r.fetched} ユニバース内=${r.inUniverse} upsert=${r.upserted} ${bsInfo} ${elapsedSec.toFixed(
+      1
+    )}s`
+  );
+  return {
+    ran: true,
+    range,
+    fetched: r.fetched,
+    inUniverse: r.inUniverse,
+    upserted: r.upserted,
+    unclassified: r.unclassified,
+    byPrimaryTag: r.byPrimaryTag,
+    notionArchive: r.notionArchive,
+    notionByStock: r.notionByStock,
+    elapsedSec,
+  };
+}

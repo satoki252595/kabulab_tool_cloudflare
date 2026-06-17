@@ -1,0 +1,77 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Node.js
+node_modules/
+**/node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output
+dist/
+build/
+.next/
+out/
+
+# Vercel
+.vercel/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# IDE / Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+logs/
+*.log
+
+# TypeScript
+*.tsbuildinfo
+
+# Drizzle journal/cache
+**/drizzle/meta/_journal.json.bak
+
+# Conductor (local agent state)
+conductor/
+
+# Claude Code ローカルキャッシュ (codegraph SQLite ~5MB、再生成可能)
+.codegraph/
+
+# Temporary files
+tmp/
+temp/
+.vercel
+
+# nix / direnv
+.direnv/
+result
+result-*
+
+# ローカル LLM の GGUF モデルキャッシュ (数 GB。優待解釈 step3 が DL)
+services/otakara-yutai/data-scripts/models/
+
+# 優待解釈 step3 の中間生成物 (chunk-*.jsonl は再生成可能。一次データ
+# 正本は Notion バックアップ / step4 で DB 反映済。_raw-fail-*.txt は
+# LLM 構造ドリフトのデバッグダンプで原文 description が入るため git に
+# 載せない)
+services/otakara-yutai/data-scripts/data/interpreted/
+
+# Cloudflare Wrangler
+.wrangler/
+.dev.vars

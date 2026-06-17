@@ -1,0 +1,18 @@
+name = "kabulab-cf"
+main = "worker/entry.ts"
+compatibility_date = "2025-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# 配信のみ（取込はローカル CLI: pnpm sync:daily / sync:monthly）。cron は置かない。
+# 静的アセット（public/ = kabulab PWA資産 + public/vwap-analysis/ フロント）。
+# 実在ファイルは assets が、動的ルート(/、各サービス、/api/*)は Hono が処理。
+[assets]
+directory = "public"
+binding = "ASSETS"
+
+# VWAP 時系列（intra/daily/margin）。Worker は binding 経由で読取（S3クレデンシャル不要）。
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "vwap-data"
+
+# DATABASE_URL は secret（`wrangler secret put DATABASE_URL`）／ローカルは .dev.vars。
