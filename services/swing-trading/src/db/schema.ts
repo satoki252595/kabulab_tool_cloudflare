@@ -1,0 +1,307 @@
+import {
+  pgSchema,
+  serial,
+  text,
+  integer,
+  real,
+  timestamp,
+  date,
+  boolean,
+  index,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
+import { relations } from "drizzle-orm";
+import { stocks } from "./core-schema.js";
+
+/**
+ * 003 Swing Trading 固有スキーマ
+ *
+ * 所有権: このプロジェクトのみが読み書きする。
+ * `core.stocks` / `core.stock_financials` は読み取り専用で参照する。
+ *
+ * 設計メモ:
+ *   - 日足 OHLCV 履歴は 001 が「メモリ計算で十分」として core.stock_price_history を
+ *     2026-04 に削除した。003 は ATR / 20 日レンジ / 5-20-60 日線 / 出来高 20 日平均 の
+ *     計算に過去 100 営業日程度の履歴が必要なので、`swing.daily_ohlcv` を 003 専用で
+ *     所有する (core スキーマを汚染しない)
+ *   - テクニカル指標の単一値は `swing.stock_indicators` に 1 銘柄 1 行で upsert
+ *   - 5 条件フィルター結果は `swing.stock_screening` に別出ししてロング/ショート 2 列で保持
+ *   - E&E パターン判定は 1 銘柄 × 複数パターンなので `swing.entry_signals` に行単位で
+ *   - マクロ判定は日次 1 行 `swing.market_context`
+ *   - セクター騰落ランキングは 1 日 × 33 業種 `swing.sector_daily`
+ */
+export const swingSchema = pgSchema("swing");
+
+// -----------------------------------------------------------------------------
+// 1. swing.daily_ohlcv — 日足 OHLCV 履歴 (約 100 営業日保持)
+// -----------------------------------------------------------------------------
+
+/**
+ * 日足 OHLCV 履歴
+ *
+ * Yahoo Finance が穴を開けることがあるため open/high/low/close/volume は NULL 許容。
+ * NULL 行は指標計算時に除外する。
+ */
+export const dailyOhlcv = swingSchema.table(
+  "daily_ohlcv",
+  {
+    id: serial("id").primaryKey(),
+    stockId: integer("stock_id")
+      .references(() => stocks.id, { onDelete: "cascade" })
+      .notNull(),
+    date: date("date").notNull(),
+    open: real("open"),
+    high: real("high"),
+    low: real("low"),
+    close: real("close"),
+    volume: real("volume"),
+  },
+  (table) => [
+    uniqueIndex("idx_swing_ohlcv_stock_date").on(table.stockId, table.date),
+    index("idx_swing_ohlcv_date").on(table.date),
+  ]
+);
+
+// -----------------------------------------------------------------------------
+// 2. swing.stock_indicators — 銘柄ごとの最新テクニカル集計 (1 銘柄 1 行 upsert)
+// -----------------------------------------------------------------------------
+
+export const stockIndicators = swingSchema.table(
+  "stock_indicators",
+  {
+    stockId: integer("stock_id")
+      .primaryKey()
+      .references(() => stocks.id, { onDelete: "cascade" }),
+
+    // --- 流動性 ---
+    /** 20 日平均売買代金 (円) = Σ(close × volume) / N */
+    avgTurnover20d: real("avg_turnover_20d"),
+    /** 20 日平均出来高 (株) */
+    volume20d: real("volume_20d"),
+    /** 当日出来高 / 20 日平均 (3 倍以上で「出来高急増」扱い) */
+    volumeRatio: real("volume_ratio"),
+
+    // --- ボラティリティ ---
+    /** ATR(14) — Wilder's true range average */
+    atr14: real("atr_14"),
+    /** ATR14 / 終値 (0.02 以上で条件②充足) */
+    atrPct: real("atr_pct"),
+
+    // --- トレンド ---
+    sma5: real("sma_5"),
+    sma20: real("sma_20"),
+    /**
+     * SMA(25) — otakara-yutai の MA25 乖離率スコアリングで使用する。
+     * swing 自体のスクリーニングには使わないが、月次 sync で otakara が
+     * このテーブルを読むため一緒に計算・保存している。
+     */
+    sma25: real("sma_25"),
+    sma60: real("sma_60"),
+    sma75: real("sma_75"),
+    /** 5>20 かつ 終値>5MA (ロング環境) */
+    trendLong: boolean("trend_long").default(false).notNull(),
+    /** 5<20 かつ 終値<5MA (ショート環境) */
+    trendShort: boolean("trend_short").default(false).notNull(),
+    /** パーフェクトオーダー 5>20>60 (押し目買いの前提条件) */
+    perfectOrderLong: boolean("perfect_order_long").default(false).notNull(),
+    /** パーフェクトオーダー 5<20<60 */
+    perfectOrderShort: boolean("perfect_order_short").default(false).notNull(),
+
+    // --- モメンタム ---
+    rsi14: real("rsi_14"),
+    macd: real("macd"),
+    macdSignal: real("macd_signal"),
+    macdHist: real("macd_hist"),
+
+    // --- 20 日レンジ (ブレイクアウト判定) ---
+    range20dHigh: real("range_20d_high"),
+    range20dLow: real("range_20d_low"),
+    /** range20dHigh - range20dLow */
+    rangeWidth: real("range_width"),
+
+    // --- フィボナッチ (押し目買い用、20 日高安の fib 38.2/50/61.8) ---
+    fibHigh: real("fib_high"),
+    fibLow: real("fib_low"),
+    fib382: real("fib_382"),
+    fib500: real("fib_500"),
+    fib618: real("fib_618"),
+
+    // --- 最新値 ---
+    latestClose: real("latest_close"),
+    latestVolume: real("latest_volume"),
+    latestDate: date("latest_date"),
+    /** 前日比% (当日 close - 前日 close) / 前日 close × 100 */
+    pctChange1d: real("pct_change_1d"),
+
+    computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_swing_indicators_trend_long").on(table.trendLong),
+    index("idx_swing_indicators_turnover").on(table.avgTurnover20d),
+  ]
+);
+
+// -----------------------------------------------------------------------------
+// 3. swing.stock_screening — 5 条件フィルター結果 (1 銘柄 1 行 upsert)
+// -----------------------------------------------------------------------------
+
+export const stockScreening = swingSchema.table(
+  "stock_screening",
+  {
+    stockId: integer("stock_id")
+      .primaryKey()
+      .references(() => stocks.id, { onDelete: "cascade" }),
+
+    // ① 流動性: avgTurnover20d ≧ 10億 OR (volumeRatio ≧ 3 AND avgTurnover20d ≧ 5億)
+    liquidityOk: boolean("liquidity_ok").default(false).notNull(),
+    // ② ボラ: atrPct ≧ 0.02
+    volatilityOk: boolean("volatility_ok").default(false).notNull(),
+    // ③ トレンド: 5>20 かつ close>5MA (long) / 逆 (short)
+    trendOkLong: boolean("trend_ok_long").default(false).notNull(),
+    trendOkShort: boolean("trend_ok_short").default(false).notNull(),
+
+    // ④ 需給: 信用倍率は Yahoo で取れないため常に "未対応" を表示
+    supplyNote: text("supply_note").default("外部データ未対応").notNull(),
+    // ⑤ カタリスト: 決算カレンダーは Yahoo で取れないため常に "未対応" を表示
+    catalystNote: text("catalyst_note").default("外部データ未対応").notNull(),
+
+    /** ① ② ③long 全て true */
+    allPassedLong: boolean("all_passed_long").default(false).notNull(),
+    /** ① ② ③short 全て true */
+    allPassedShort: boolean("all_passed_short").default(false).notNull(),
+
+    computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_swing_screening_long").on(table.allPassedLong),
+    index("idx_swing_screening_short").on(table.allPassedShort),
+  ]
+);
+
+// -----------------------------------------------------------------------------
+// 4. swing.entry_signals — E&E パターン判定 (1 銘柄 × 複数パターン行)
+// -----------------------------------------------------------------------------
+
+/**
+ * パターン種別:
+ *   - "breakout_long"   : ブレイクアウト (20 日高値突破 + 出来高 1.5x)
+ *   - "breakout_short"  : ブレイクアウト (20 日安値割れ + 出来高 1.5x)
+ *   - "pullback_long"   : 押し目買い (パーフェクトオーダー + fib 38.2-61.8)
+ *   - "pullback_short"  : 戻り売り
+ *   - "volume_surge"    : 出来高急増 (3 倍 + 値動き 3% 以上) 翌日狙い
+ *   - "gap_follow"      : ギャップ追随 (|ギャップ%| 1.5%+出来高 2x)
+ *   - "gap_fade"        : ギャップ逆張り (材料なしの普通窓 → 窓埋め狙い)
+ *   - "post_earnings"   : 決算後初動 (financials の直近更新 + 出来高急増)
+ */
+export const entrySignals = swingSchema.table(
+  "entry_signals",
+  {
+    id: serial("id").primaryKey(),
+    stockId: integer("stock_id")
+      .references(() => stocks.id, { onDelete: "cascade" })
+      .notNull(),
+    pattern: text("pattern").notNull(),
+    direction: text("direction").notNull(), // "long" | "short"
+
+    entryPrice: real("entry_price").notNull(),
+    stopLoss: real("stop_loss").notNull(),
+    target1: real("target_1"),
+    target2: real("target_2"),
+    /** (target1 - entry) / (entry - stop) の絶対値。2 以上で推奨 */
+    riskRewardRatio: real("risk_reward_ratio"),
+    /** 0-100 のシグナル強度 (出来高倍率・価格位置などから計算) */
+    signalStrength: real("signal_strength"),
+    note: text("note"),
+
+    computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_swing_signals_pattern_strength").on(table.pattern, table.signalStrength),
+    index("idx_swing_signals_stock").on(table.stockId),
+    index("idx_swing_signals_computed").on(table.computedAt),
+  ]
+);
+
+// -----------------------------------------------------------------------------
+// 5. swing.market_context — マクロ判定 (1 日 1 行 upsert)
+// -----------------------------------------------------------------------------
+
+export const marketContext = swingSchema.table("market_context", {
+  date: date("date").primaryKey(),
+
+  /** 日経平均終値 (^N225) */
+  nikkeiClose: real("nikkei_close"),
+  /** 日経平均前日比% */
+  nikkeiPct: real("nikkei_pct"),
+  /** 日経 VI (^NKVI) — 取得不能の場合は NULL */
+  nikkeiVi: real("nikkei_vi"),
+  /** TOPIX 売買代金 20 日平均比 (=当日 / 20 日平均) */
+  topixTurnoverRatio: real("topix_turnover_ratio"),
+  /** 日経 225 先物(^NKD) 夜間 - 日経現物前日終値 (円) */
+  futuresGap: real("futures_gap"),
+  /** VIX */
+  vix: real("vix"),
+  /** S&P500 前日比% */
+  sp500Pct: real("sp500_pct"),
+
+  /** "A" | "B" | "C" | "D" | "HOLD" (判定保留) */
+  judgment: text("judgment").notNull(),
+  judgmentReason: text("judgment_reason").notNull(),
+
+  computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// -----------------------------------------------------------------------------
+// 6. swing.sector_daily — セクター騰落ランキング (1 日 × 業種)
+// -----------------------------------------------------------------------------
+
+export const sectorDaily = swingSchema.table(
+  "sector_daily",
+  {
+    id: serial("id").primaryKey(),
+    date: date("date").notNull(),
+    sector: text("sector").notNull(),
+    /** 当日セクター平均騰落率% */
+    pct1d: real("pct_1d"),
+    /** 過去 5 営業日の累積騰落率% */
+    pct5d: real("pct_5d"),
+    /** セクター内銘柄数 */
+    stockCount: integer("stock_count").notNull(),
+    /** 当日ランク (1 = 最も上昇) */
+    rank1d: integer("rank_1d"),
+  },
+  (table) => [
+    uniqueIndex("idx_swing_sector_date_sector").on(table.date, table.sector),
+    index("idx_swing_sector_date_rank").on(table.date, table.rank1d),
+  ]
+);
+
+// --- Relations ---
+
+export const dailyOhlcvRelations = relations(dailyOhlcv, ({ one }) => ({
+  stock: one(stocks, {
+    fields: [dailyOhlcv.stockId],
+    references: [stocks.id],
+  }),
+}));
+
+export const stockIndicatorsRelations = relations(stockIndicators, ({ one }) => ({
+  stock: one(stocks, {
+    fields: [stockIndicators.stockId],
+    references: [stocks.id],
+  }),
+}));
+
+export const stockScreeningRelations = relations(stockScreening, ({ one }) => ({
+  stock: one(stocks, {
+    fields: [stockScreening.stockId],
+    references: [stocks.id],
+  }),
+}));
+
+export const entrySignalsRelations = relations(entrySignals, ({ one }) => ({
+  stock: one(stocks, {
+    fields: [entrySignals.stockId],
+    references: [stocks.id],
+  }),
+}));
