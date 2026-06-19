@@ -1,23 +1,23 @@
 /**
- * 005 yuho-quant — EDINET 有報の日次キャッチアップ (統一 daily cron に相乗り)。
+ * 005 yuho-quant — EDINET 有報の日次キャッチアップ (ADR-0001: D1 + Worker 実行)。
  *
- * 新規 cron は作らない方針 (docs/new-project-template.md §9) に従い、既存の
- * 日次 cron ハンドラ (src/index.ts) から **shard 0 のときだけ** 呼ばれる。
- * 既存の日次 sync (Yahoo パイプライン) からは完全に独立しており、ここの失敗が
- * 本体 sync を壊さないよう呼び出し側で握る (ただし結果はレスポンスに載せて
- * 運用者が気づけるようにする — 握り潰さない: ルール2)。
+ * D1 はバインディング経由でのみ触れるため、本処理は Worker 上で動く。現状の
+ * 起動経路は **認証付き HTTP ルート** (POST /yuho-quant/admin/catchup,
+ * services/yuho-quant/src/routes/admin.ts) で、D1 を `createDb(c.env.DB)` で
+ * 渡して呼ぶ。Workers Cron Trigger への配線 ([triggers] crons + scheduled
+ * ハンドラ) は Phase 3 で追加する (現状は未配線)。他5サービスの Neon 日次
+ * パイプライン (scripts/sync/all-daily.ts) からは分離済み。
  *
  * 動作:
  *   - 直近 WINDOW_DAYS 日を新しい順に EDINET 書類一覧で走査
- *   - core.stocks に居る上場銘柄の有報 (120/130) のうち未取込のものを
+ *   - core_stocks に居る上場銘柄の有報 (120/130) のうち未取込のものを
  *     ingestDocument で構造化保存 (CSV 事前判定で受注なしは XBRL を落とさない)
- *   - 1 回の実行は MAX_INGEST 件で打ち切り (Vercel 時間制約)。残りは翌日以降の
- *     実行が拾う (docId 一意で冪等)。6 月の有報集中期も日次×日数で吸収。
+ *   - 1 回の実行は MAX_INGEST 件 / TIME_BUDGET_MS で打ち切り。残りは次回実行が
+ *     拾う (docId 一意で冪等)。6 月の有報集中期も実行回数×日数で吸収。
  */
 import { eq } from "drizzle-orm";
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
-import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
+import type { Database } from "../../services/yuho-quant/src/db/client.js";
+import * as coreSchema from "../shared/db/core-schema.js";
 import * as yuhoSchema from "../../services/yuho-quant/src/db/schema.js";
 import { listDocuments } from "../../services/yuho-quant/src/services/edinet/client.js";
 import {
@@ -26,16 +26,19 @@ import {
 } from "../../services/yuho-quant/src/services/edinet/types.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
 
-const SCHEMAS = { ...coreSchema, ...yuhoSchema };
 const WINDOW_DAYS = 60;
-const MAX_INGEST = 60;
 /**
- * 実時間の上限。日次 cron は runDailySync の後に **各シャードで** これを
- * 直列実行するため、Vercel 関数上限 (現行プラン maxDuration 300s) を本体と
- * 合わせて超えないよう必ず時間で打ち切る。8 シャード化で本体が ~150s 級に
- * 下がったため キャッチアップは最大 90 秒。各シャードは docId ハッシュで
- * 1/of の文書だけを担当するので 6 月の有報集中も 8 シャード合算で当日中に
- * 捌け、打ち切った残りも翌日以降が docId 冪等で拾う (取りこぼさない)。
+ * 1 実行あたりの取込上限。Workers のサブリクエスト上限 (Paid 1000/invocation)
+ * に対し 1 doc で最悪 ~14 req (EDINET 2 + Notion 数〜十数) を要するため、
+ * 40 件 × ~14 ≈ 560 req と安全側に抑える。残りは次回実行が docId 冪等で拾う。
+ */
+const MAX_INGEST = 40;
+/**
+ * 実時間の上限。Workers の CPU 時間制限 (Paid 既定 30s, 最大 5 分まで引上可) と
+ * は別に、fetch/sleep 主体の本処理は壁時計でこの予算に達したら打ち切る。
+ * shard 指定時は docId ハッシュで 1/of の文書だけを担当するので、複数実行
+ * (cron 並走 or 連続実行) 合算で全件をカバーし、打ち切った残りも次回が docId
+ * 冪等で拾う (取りこぼさない)。
  */
 const TIME_BUDGET_MS = 90_000;
 
@@ -68,11 +71,10 @@ function hashDocId(docId: string): number {
 }
 
 export async function runYuhoEdinetCatchup(
-  databaseUrl: string,
+  db: Database,
   shard?: ShardOpts
 ): Promise<YuhoEdinetResult> {
   const startedAt = Date.now();
-  const db = drizzle(neon(databaseUrl), { schema: SCHEMAS });
 
   const allStocks = await db
     .select({ id: coreSchema.stocks.id, code: coreSchema.stocks.code })

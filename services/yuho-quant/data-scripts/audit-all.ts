@@ -38,6 +38,14 @@ import {
 } from "../src/services/edinet/html-table.js";
 import { parseOrderHtml } from "../src/services/edinet/order-parser.js";
 
+// ⚠️ ADR-0001: D1 移行に伴い本 CLI は無効化。createDb は D1 バインディングを要求し
+// Node ローカルからは接続できず、db.execute / `core.stocks` 等の PG 構文も SQLite
+// では無効。黙って壊れる代わりに fail-fast する (CLAUDE.md ルール2)。全数監査は
+// Worker 取込・別途の検証手段へ置換予定。詳細は docs/adr/0001-neon-to-d1-r2-notion.md。
+throw new Error(
+  "ADR-0001: yuho 全数監査 CLI は D1 移行で無効化されています (Worker 取込へ移行予定)。"
+);
+
 const OUT = join(process.cwd(), "tmp", "audit");
 mkdirSync(OUT, { recursive: true });
 const DONE = join(OUT, "done.jsonl");

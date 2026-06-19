@@ -66,6 +66,21 @@ function toYen(raw: number | null, factor: number): number | null {
   return Math.round(raw * factor);
 }
 
+/** 配列を size 件ずつに分割する（D1 の bind 変数上限対策） */
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/**
+ * D1(SQLite over Workers RPC) の 1 文あたり bind 変数上限は 100。order_facts は
+ * 12 列/行なので、1 つの INSERT に詰められるのは最大 8 行（8×12=96 ≤ 100）。
+ * 建設業など 9 セグメント超の有報は 1 通で 10+ ファクトを持つため、単一 INSERT
+ * だと bind 上限超過で取込が落ちる（ADR-0001 §6）。
+ */
+const MAX_FACT_ROWS_PER_STMT = 8;
+
 /**
  * @param force          true なら既存 docId でも再取得・再構造化して上書き
  * @param archiveToNotion true なら有報の物理ファイル(XBRL+CSV ZIP)とメタを
@@ -255,34 +270,38 @@ export async function ingestDocument(
       })
       .returning({ id: yuhoDocuments.id });
 
-    // 再取り込み (force) 時は当該書類の旧 facts を破棄してから入れ直す
-    await db.delete(orderFacts).where(eq(orderFacts.documentId, docRow.id));
+    // 再取り込み (force) 時は当該書類の旧 facts を破棄してから入れ直す。
+    // D1 の bind 上限 (100) を超えないよう insert を 8 行ずつに分割し、
+    // delete と全 insert を db.batch() で 1 トランザクションとして原子的に
+    // 置換する (Neon 版の delete→insert と等価以上の一貫性)。
+    const factRows = deduped.map((f) => ({
+      documentId: docRow.id,
+      stockId,
+      fiscalYearEnd: f.fiscalYearEnd,
+      segmentName: f.segmentName,
+      segmentKind: f.segmentKind,
+      isConsolidated: f.isConsolidated,
+      unitLabel: f.unitLabel,
+      ordersReceivedRaw: f.ordersReceived,
+      orderBacklogRaw: f.orderBacklog,
+      ordersReceivedYen: toYen(f.ordersReceived, f.unitYenFactor),
+      orderBacklogYen: toYen(f.orderBacklog, f.unitYenFactor),
+      pattern:
+        parseStatus === "ok_pattern_b"
+          ? "pattern_b"
+          : parseStatus === "ok_pattern_c"
+            ? "pattern_c"
+            : parseStatus === "ok_total_only"
+              ? "total_only"
+              : "pattern_a",
+    }));
 
-    if (deduped.length > 0) {
-      await db.insert(orderFacts).values(
-        deduped.map((f) => ({
-          documentId: docRow.id,
-          stockId,
-          fiscalYearEnd: f.fiscalYearEnd,
-          segmentName: f.segmentName,
-          segmentKind: f.segmentKind,
-          isConsolidated: f.isConsolidated,
-          unitLabel: f.unitLabel,
-          ordersReceivedRaw: f.ordersReceived,
-          orderBacklogRaw: f.orderBacklog,
-          ordersReceivedYen: toYen(f.ordersReceived, f.unitYenFactor),
-          orderBacklogYen: toYen(f.orderBacklog, f.unitYenFactor),
-          pattern:
-            parseStatus === "ok_pattern_b"
-              ? "pattern_b"
-              : parseStatus === "ok_pattern_c"
-                ? "pattern_c"
-                : parseStatus === "ok_total_only"
-                  ? "total_only"
-                  : "pattern_a",
-        }))
-      );
-    }
+    await db.batch([
+      db.delete(orderFacts).where(eq(orderFacts.documentId, docRow.id)),
+      ...chunk(factRows, MAX_FACT_ROWS_PER_STMT).map((rows) =>
+        db.insert(orderFacts).values(rows)
+      ),
+    ]);
   }
 
   // ルール6: 有報の物理ファイル(CSV+XBRL ZIP)とメタデータを Notion へ
