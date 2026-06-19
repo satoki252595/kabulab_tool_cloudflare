@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { createDb } from "../db/client.js";
-import { yuhoEnv } from "../env.js";
 import { BASE_PATH } from "../../base-path.js";
 import {
   searchStocks,
@@ -19,10 +18,12 @@ import { STOCK_CODE_ERROR } from "../../../../src/shared/jpx/stock-code.js";
 import { stockCodeSchema } from "../../../../src/shared/jpx/stock-code-schema.js";
 
 /**
- * SSR ルーター。DATABASE_URL は型付きアクセサ経由でのみ取得 (ルール3)。
- * 検索ヒット 0 件は「該当なし」を正直に返す (架空候補を作らない・ルール1)。
+ * SSR ルーター。データは Cloudflare D1 バインディング `c.env.DB` から取得する
+ * （ADR-0001: Neon 廃止）。検索ヒット 0 件は「該当なし」を正直に返す
+ * （架空候補を作らない・ルール1）。
  */
-export const pagesRoute = new Hono();
+type Bindings = { DB: D1Database };
+export const pagesRoute = new Hono<{ Bindings: Bindings }>();
 
 const homeQuery = z.object({
   q: z.preprocess((v) => (v === "" ? undefined : v), z.string().optional()),
@@ -34,7 +35,7 @@ pagesRoute.get("/", zValidator("query", homeQuery), async (c) => {
   if (q === undefined) {
     return c.html(homePage({ query: "", results: null }));
   }
-  const db = createDb(yuhoEnv.DATABASE_URL());
+  const db = createDb(c.env.DB);
   const results = await searchStocks(db, q);
   return c.html(homePage({ query: q, results }));
 });
@@ -141,7 +142,7 @@ pagesRoute.get(
   async (c) => {
     const opts = toScreenOpts(c.req.valid("query"));
     const deprecated = detectDeprecatedParams(c.req.query());
-    const db = createDb(yuhoEnv.DATABASE_URL());
+    const db = createDb(c.env.DB);
     const [rows, sectors] = await Promise.all([
       screenOrderGrowth(db, opts),
       listSectorsWithOrders(db),
@@ -155,7 +156,7 @@ pagesRoute.get(
   zValidator("query", screenQuery),
   async (c) => {
     const opts = toScreenOpts(c.req.valid("query"));
-    const db = createDb(yuhoEnv.DATABASE_URL());
+    const db = createDb(c.env.DB);
     const rows = await screenOrderGrowth(db, opts);
     return c.json({ opts, count: rows.length, rows });
   }
@@ -197,7 +198,7 @@ pagesRoute.get(
   }),
   async (c) => {
     const { code } = c.req.valid("param");
-    const db = createDb(yuhoEnv.DATABASE_URL());
+    const db = createDb(c.env.DB);
     const trend = await getOrderTrendByCode(db, code);
     if (!trend) {
       return c.html(
@@ -218,7 +219,7 @@ pagesRoute.get(
   zValidator("param", codeParam),
   async (c) => {
     const { code } = c.req.valid("param");
-    const db = createDb(yuhoEnv.DATABASE_URL());
+    const db = createDb(c.env.DB);
     const trend = await getOrderTrendByCode(db, code);
     if (!trend) return c.json({ error: "stock not found" }, 404);
     return c.json(trend);

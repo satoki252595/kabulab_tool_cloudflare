@@ -53,6 +53,14 @@ function shiftYearsISO(iso: string, dy: number): string {
 }
 
 async function main(): Promise<void> {
+  // ⚠️ ADR-0001: D1 移行に伴い本 CLI は無効化。createDb は D1 バインディングを
+  // 要求し Node ローカルからは接続できない。黙って壊れる代わりに fail-fast する
+  // (CLAUDE.md ルール2)。5 年バックフィルは Worker バルク取込 (別タスク・要
+  // EDINET/Notion 鍵) として再実装する。詳細は docs/adr/0001-neon-to-d1-r2-notion.md。
+  throw new Error(
+    "ADR-0001: yuho バックフィルは Worker バルク取込へ移行予定で、この CLI は無効です。"
+  );
+
   const db = createDb(yuhoEnv.DATABASE_URL());
 
   const to = arg("to") ?? todayISO();

@@ -3,7 +3,10 @@ main = "worker/entry.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
 
-# 配信のみ（取込はローカル CLI: pnpm sync:daily / sync:monthly）。cron は置かない。
+# 配信 + 一部取込。未移行サービス(Neon)の取込はローカル CLI(pnpm sync:daily 等)。
+# 005 yuho-quant は D1 へ移行済み(ADR-0001)で、EDINET 取込は Worker の認証ルート
+# POST /yuho-quant/admin/catchup(CRON_SECRET)で実行する。Workers Cron Trigger
+# ([triggers] crons + scheduled ハンドラ)は Phase 3 で追加(現状は未配線)。
 # 静的アセット（public/ = kabulab PWA資産 + public/vwap-analysis/ フロント）。
 # 実在ファイルは assets が、動的ルート(/、各サービス、/api/*)は Hono が処理。
 [assets]
@@ -15,4 +18,13 @@ binding = "ASSETS"
 binding = "BUCKET"
 bucket_name = "vwap-data"
 
+# 正規化リレーショナルの正本（ADR-0001）。Neon からの移行先。binding=DB で
+# c.env.DB から参照する。時系列は R2、一次データ(raw)は Notion に置く方針。
+# 単一 D1 にサービス別接頭辞テーブル（core_* / yuho_* / ...）を集約する。
+[[d1_databases]]
+binding = "DB"
+database_name = "kabulab-cf"
+database_id = "639c0315-0d41-4345-95ab-aec5906224ed"
+
 # DATABASE_URL は secret（`wrangler secret put DATABASE_URL`）／ローカルは .dev.vars。
+# EDINET_API_KEY / NOTION_TOKEN も Worker 取込で参照する secret（ローカルは .env）。

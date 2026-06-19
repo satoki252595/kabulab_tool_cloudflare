@@ -2,9 +2,9 @@ import "dotenv/config";
 // 全銘柄の5分足(直近5日)を取得→既存とマージ→保持期間で剪定→ R2 intra/{code}.json（1ファイル）
 // 配信はWorker素通し1回で済み低遅延。剪定はここに内包（別スクリプト不要）。
 // 実行: npx tsx scripts/ingest-intra.ts [--codes=...] [--limit=N]   KEEP_DAYS=365
-import { fetchBars5m } from "../../services/vwap-analysis/lib/yahoo.ts";
-import { r2Get, r2Put, mapLimit, sleep, retry } from "./lib/r2.ts";
-import { loadCodes, arg } from "./lib/codes.ts";
+import { fetchBars5m } from "../../services/vwap-analysis/lib/yahoo.js";
+import { r2Get, r2Put, mapLimit, sleep, retry } from "./lib/r2.js";
+import { loadCodes, arg } from "./lib/codes.js";
 
 const CONC = Number(process.env.CONC || 3);
 const DELAY = Number(process.env.DELAY_MS || 200);

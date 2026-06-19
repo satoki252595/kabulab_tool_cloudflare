@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { errorHandler } from "./middleware/error-handler.js";
 import { pagesRoute } from "./routes/pages.js";
+import { adminRoute } from "./routes/admin.js";
 
 /**
  * 005 yuho-quant — Hono サブアプリ本体
@@ -11,6 +12,8 @@ import { pagesRoute } from "./routes/pages.js";
  */
 export const app = new Hono({ strict: false });
 
+// 取込トリガ（Worker 側・CRON_SECRET 認証）。SSR より先に登録する。
+app.route("/admin", adminRoute);
 app.route("/", pagesRoute);
 
 app.onError(errorHandler);

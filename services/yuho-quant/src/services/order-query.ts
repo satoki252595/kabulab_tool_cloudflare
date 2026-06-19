@@ -6,10 +6,10 @@
  * (docTypeCode 130) 等で同一会計期末が重複する場合は提出日時が新しい
  * 書類の値を採用する (黙って先頭を選ばない — 明示的に最新を選ぶ)。
  */
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, like, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
-import { stocks, stockFinancials } from "../../../rsi-screening/src/db/core-schema.js";
+import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
 import { yuhoDocuments, orderFacts } from "../db/schema.js";
 
 /** サービスで表示する最大年数 (EDINET 取得可能な過去分の上限と整合) */
@@ -29,7 +29,7 @@ export async function searchStocks(
 ): Promise<StockHit[]> {
   const q = query.trim();
   if (q === "") return [];
-  const like = `%${q}%`;
+  const pat = `%${q}%`;
   // 完全一致の昇格は「正準形コード」で判定する (利用者が 130a と打っても DB の
   // 130A を先頭へ)。コードとして妥当でない検索語 (会社名など) は null になり、
   // case-sensitive な = 比較が一致せず昇格しないだけで害はない。name の部分一致
@@ -47,7 +47,7 @@ export async function searchStocks(
     .where(
       and(
         eq(stocks.isActive, true),
-        or(ilike(stocks.code, like), ilike(stocks.name, like))
+        or(like(stocks.code, pat), like(stocks.name, pat))
       )
     )
     .orderBy(

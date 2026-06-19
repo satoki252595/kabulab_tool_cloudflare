@@ -34,34 +34,38 @@
 無ければ重い XBRL(type=1) を**落とさない**。これは推測ではなく
 「CSV は全テキストブロックを平坦化して含む」事実に基づく確定判定。
 
+> ⚠️ **ADR-0001 で本サービスは Cloudflare D1 へ移行済み**（`docs/adr/0001-neon-to-d1-r2-notion.md`）。
+> 以下のうち「Neon / Vercel / 統一 daily cron 相乗り / 手書き SQL 適用 / `pnpm yuho:backfill`」の
+> 記述は移行前のもの。現状は **D1(`c.env.DB` バインディング) + Worker 取込ルート**で、CLI バックフィルは
+> 無効化（fail-fast）し Worker バルク取込へ再実装予定。
+
 ## 技術スタック
 
-- Runtime: Hono v4 + Vercel Serverless Functions
-- DB: Neon (PostgreSQL) + Drizzle ORM
+- Runtime: Hono v4 + Cloudflare Workers
+- DB: **Cloudflare D1 (SQLite) + Drizzle ORM**（`drizzle-orm/d1`。共有 core は `src/shared/db/core-schema.ts`）
 - Validation: Zod v4
 - ZIP 展開: 依存ゼロの自前リーダ (`src/services/edinet/zip.ts`)
 - Language: TypeScript (strict)
 
-## DB スキーマ
+## DB スキーマ（D1 / 単一 SQLite, 接頭辞テーブル）
 
-| PG スキーマ | 所有 | 用途 |
+| テーブル | 所有 | 用途 |
 |---|---|---|
-| `core` | 001 が更新 | 銘柄マスタ (読み取り専用で参照) |
-| `yuho_quant` | 005 のみ | `documents` / `order_facts` |
+| `core_stocks` 他 | 共有(001 系) | 銘柄マスタ・財務 (読み取り専用で参照) |
+| `yuho_documents` / `yuho_order_facts` | 005 のみ | 有報メタ / 受注ファクト |
 
-実 DB 反映は手書き SQL を `node scripts/db/apply-migration.mjs
-drizzle/create-yuho-quant.sql` で適用済み。`drizzle.yuho-quant.config.ts`
-は型生成 / studio / 差分確認用。
+スキーマ生成は `drizzle.d1.config.ts`（`pnpm db:generate:d1`）→ `drizzle/d1/*.sql` を
+`wrangler d1 execute kabulab-cf --remote --file=...` で適用。order_facts のバルク insert は
+D1 の bind 上限(100)に合わせ 8 行/文 + `db.batch()` で投入する（`ingest.ts`）。
 
 ## データ取得
 
-- **初回 5 年バックフィル (手動)**: `pnpm yuho:backfill`
-  (`-- --years=5` / `--from`/`--to` / `--ticker=7011` / `--force`)。
-  冪等・再開可能 (既存 docId はスキップ)。
-- **日次キャッチアップ**: 新規 cron は作らず統一 daily cron に相乗り。
-  `src/cron/yuho-edinet.ts` を `src/index.ts` の日次ハンドラが
-  **shard 0 のときだけ** 呼ぶ。直近 45 日を走査し未取込の有報を
-  **1 回 40 件 / 実時間 ~45 秒上限**で取り込み、超過分は翌日が docId
+- **初回 5 年バックフィル**: 旧 `pnpm yuho:backfill` は D1 移行で無効化（fail-fast）。
+  Worker バルク取込として再実装予定（別タスク・要 EDINET/Notion 鍵）。
+- **日次キャッチアップ**: Worker の認証ルート `POST /yuho-quant/admin/catchup`（CRON_SECRET）で
+  `runYuhoEdinetCatchup(createDb(c.env.DB))` を実行（`src/cron/yuho-edinet.ts`）。手動 curl / 薄い CLI
+  トリガ（`scripts/sync/yuho-edinet.ts` が `WORKER_BASE_URL` を叩く）から起動。Workers Cron Trigger 配線は
+  Phase 3。直近 WINDOW 日を走査し未取込の有報を **1 回 MAX_INGEST 件 / TIME_BUDGET_MS** で取り込み、超過分は次回が docId
   冪等で回収 (6 月の集中も日次×日数で吸収)。日次 cron 上限は現行プラン
   の maxDuration=300 秒。本体 sync と合わせて超えないようキャッチアップ
   側を 45 秒で必ず打ち切る。

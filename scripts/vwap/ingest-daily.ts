@@ -1,9 +1,9 @@
 import "dotenv/config";
 // 全銘柄の日足を更新（未取得は10年バックフィル、既存は直近1ヶ月差分）→ R2 daily/{code}.json
 // 実行: npx tsx scripts/ingest-daily.ts [--codes=7203,6758] [--limit=50]
-import { fetchDaily } from "../../services/vwap-analysis/lib/yahoo.ts";
-import { r2Get, r2Put, mapLimit, sleep, retry } from "./lib/r2.ts";
-import { loadCodes, arg } from "./lib/codes.ts";
+import { fetchDaily } from "../../services/vwap-analysis/lib/yahoo.js";
+import { r2Get, r2Put, mapLimit, sleep, retry } from "./lib/r2.js";
+import { loadCodes, arg } from "./lib/codes.js";
 
 const CONC = Number(process.env.CONC || 3);
 const DELAY = Number(process.env.DELAY_MS || 200);

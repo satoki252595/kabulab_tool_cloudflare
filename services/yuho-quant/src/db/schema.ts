@@ -1,42 +1,44 @@
 /**
- * 005 yuho-quant 固有スキーマ (`yuho_quant`)。
+ * 005 yuho-quant 固有スキーマ（Cloudflare D1 / SQLite 版 — ADR-0001）。
  *
  * EDINET の有価証券報告書から構造化した「受注高 / 受注残高」を保持する。
- * 銘柄マスタ core.stocks は 001 が所有するため **読み取り専用で参照** し、
- * ここでは再宣言せず rsi-screening の core-schema を import する
- * (src/cron/monthly.ts と同じ単一 source of truth 方針)。
+ * 銘柄マスタ core は 001 が所有するため **読み取り専用で参照** し、ここでは
+ * 再宣言せず共有 core スキーマ（src/shared/db/core-schema）を import する。
  *
- * 設計原則 (CLAUDE.md):
- *   - ルール1: 構造化できなかった有報も parse_status で事実を記録し、
- *     架空の数値で埋めない。
- *   - ルール2: 金額が欠損 (有報で「－」) の場合は NULL のまま保存する
- *     (0 で代替しない)。is_consolidated も判定不能なら NULL。
+ * D1 は 1 DB = 1 SQLite で名前空間が無いため、旧 `yuho_quant` スキーマ名を
+ * 接頭辞 `yuho_` に降ろす（documents → yuho_documents 等）。export 名は
+ * 不変（yuhoDocuments / orderFacts）なので参照側は変更不要。
+ *
+ * 設計原則（CLAUDE.md）:
+ *   - ルール1: 構造化できなかった有報も parse_status で事実を記録し、架空の
+ *     数値で埋めない。
+ *   - ルール2: 金額欠損（有報で「－」）は NULL のまま保存する（0 で代替しない）。
+ *     is_consolidated も判定不能なら NULL。
+ *
+ * 方言マッピング（PostgreSQL → SQLite, ADR-0001 §4）:
+ *   serial → integer autoIncrement / date → text / boolean → integer(boolean) /
+ *   bigint(number) → integer(number) / doublePrecision → real /
+ *   timestamp(tz) → integer({mode:'timestamp'})（JS Date を保ち比較が可能）
  */
+import { sql } from "drizzle-orm";
 import {
-  pgSchema,
-  serial,
+  sqliteTable,
   integer,
   text,
-  date,
-  boolean,
-  bigint,
-  doublePrecision,
-  timestamp,
+  real,
   index,
   uniqueIndex,
-} from "drizzle-orm/pg-core";
-import { stocks } from "../../../rsi-screening/src/db/core-schema.js";
-
-export const yuhoSchema = pgSchema("yuho_quant");
+} from "drizzle-orm/sqlite-core";
+import { stocks } from "../../../../src/shared/db/core-schema.js";
 
 /**
  * 取り込んだ有価証券報告書 1 通 = 1 行。docId が EDINET 上の一意キーで、
  * これを unique にして冪等な再取り込みを保証する。
  */
-export const yuhoDocuments = yuhoSchema.table(
-  "documents",
+export const yuhoDocuments = sqliteTable(
+  "yuho_documents",
   {
-    id: serial("id").primaryKey(),
+    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
       .references(() => stocks.id, { onDelete: "cascade" })
       .notNull(),
@@ -47,10 +49,10 @@ export const yuhoDocuments = yuhoSchema.table(
     /** 120=有価証券報告書 / 130=訂正有価証券報告書 */
     docTypeCode: text("doc_type_code").notNull(),
     filerName: text("filer_name").notNull(),
-    periodStart: date("period_start"),
+    periodStart: text("period_start"),
     /** 会計期末 (YYYY-MM-DD) */
-    periodEnd: date("period_end").notNull(),
-    submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull(),
+    periodEnd: text("period_end").notNull(),
+    submittedAt: integer("submitted_at", { mode: "timestamp" }).notNull(),
     /**
      * 受注構造化の結果。ok_pattern_a|ok_pattern_b|orders_only|
      * table_unrecognized|no_order_table。UI はこれを根拠に
@@ -59,8 +61,8 @@ export const yuhoDocuments = yuhoSchema.table(
     parseStatus: text("parse_status").notNull(),
     /** 抽出元の本文 iXBRL ファイル名 (調査・監査用) */
     honbunFile: text("honbun_file"),
-    ingestedAt: timestamp("ingested_at", { withTimezone: true })
-      .defaultNow()
+    ingestedAt: integer("ingested_at", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
       .notNull(),
   },
   (t) => [index("yuho_documents_stock_idx").on(t.stockId)]
@@ -71,10 +73,10 @@ export const yuhoDocuments = yuhoSchema.table(
  * (segment_kind で区別)。金額は「表の単位そのままの raw」と「円換算」を両方
  * 保持し、欠損は NULL。
  */
-export const orderFacts = yuhoSchema.table(
-  "order_facts",
+export const orderFacts = sqliteTable(
+  "yuho_order_facts",
   {
-    id: serial("id").primaryKey(),
+    id: integer("id").primaryKey({ autoIncrement: true }),
     documentId: integer("document_id")
       .references(() => yuhoDocuments.id, { onDelete: "cascade" })
       .notNull(),
@@ -83,23 +85,23 @@ export const orderFacts = yuhoSchema.table(
       .references(() => stocks.id, { onDelete: "cascade" })
       .notNull(),
     /** この行が属する会計期末 */
-    fiscalYearEnd: date("fiscal_year_end").notNull(),
+    fiscalYearEnd: text("fiscal_year_end").notNull(),
     /** 表記そのままのセグメント名 (合計含む) */
     segmentName: text("segment_name").notNull(),
     /** segment | subtotal | total | elimination */
     segmentKind: text("segment_kind").notNull(),
     /** 連結=true / 個別=false / 判定不能=NULL (推測しない) */
-    isConsolidated: boolean("is_consolidated"),
+    isConsolidated: integer("is_consolidated", { mode: "boolean" }),
     /** 金額単位ラベル (例: 百万円) */
     unitLabel: text("unit_label").notNull(),
     /** 受注高 (表の単位のまま, 欠損=NULL) */
-    ordersReceivedRaw: doublePrecision("orders_received_raw"),
+    ordersReceivedRaw: real("orders_received_raw"),
     /** 受注残高/期末繰越高 (表の単位のまま, 欠損=NULL) */
-    orderBacklogRaw: doublePrecision("order_backlog_raw"),
-    /** 受注高 (円換算, 欠損=NULL) */
-    ordersReceivedYen: bigint("orders_received_yen", { mode: "number" }),
+    orderBacklogRaw: real("order_backlog_raw"),
+    /** 受注高 (円換算, 欠損=NULL)。SQLite INTEGER は 64bit、円は 2^53 未満で安全 */
+    ordersReceivedYen: integer("orders_received_yen", { mode: "number" }),
     /** 受注残高 (円換算, 欠損=NULL) */
-    orderBacklogYen: bigint("order_backlog_yen", { mode: "number" }),
+    orderBacklogYen: integer("order_backlog_yen", { mode: "number" }),
     /** pattern_a | pattern_b */
     pattern: text("pattern").notNull(),
   },
