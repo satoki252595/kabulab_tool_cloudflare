@@ -75,3 +75,6 @@ services/otakara-yutai/data-scripts/data/interpreted/
 # Cloudflare Wrangler
 .wrangler/
 .dev.vars
+
+# 一度きりの cutover データダンプ (本番データ。コミットしない)
+drizzle/d1/_cutover-data.sql
