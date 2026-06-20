@@ -51,10 +51,45 @@ function ensureOk(r: Response): void {
   throw new Error(`yahoo ${r.status}`);
 }
 
-// 5分足など生レスポンスをそのまま返す（/api/chart 用）。
-export async function fetchChartRaw(symbol: string, range: string, interval: string): Promise<Response> {
+// 生レスポンスを Yahoo から**直接**取得して返す（Worker の /api/chart 中継 +
+// /api/ingest-fetch プロキシの実体）。Worker のエッジ IP から叩くため、ここは
+// 常に直叩き（プロキシ経由にするとプロキシ自身がループする）。
+export async function fetchChartRaw(
+  symbol: string,
+  range: string,
+  interval: string,
+  events = false
+): Promise<Response> {
   await ensureCookie();
-  return fetch(chartUrl(symbol, range, interval), {
+  return fetch(chartUrl(symbol, range, interval, events), {
+    headers: { "User-Agent": UA, ...(cookie ? { Cookie: cookie } : {}) },
+  });
+}
+
+/**
+ * chart 取得（取込 CLI 用・プロキシ対応）。`YAHOO_PROXY_BASE` が設定されている
+ * とき（= ローカル取込 CLI）は Cloudflare Worker の認証付きプロキシ
+ * `/vwap-analysis/api/ingest-fetch` 経由で取得し、ローカル IP の Yahoo 429 を
+ * 回避する（Worker のエッジ IP は通る・ADR-0001）。Worker ランタイムでは
+ * `YAHOO_PROXY_BASE` 未設定なので直叩きになり、ループしない。
+ */
+async function chartFetch(
+  symbol: string,
+  range: string,
+  interval: string,
+  events: boolean
+): Promise<Response> {
+  const base = process.env.YAHOO_PROXY_BASE;
+  const secret = process.env.CRON_SECRET;
+  if (base && secret) {
+    const u =
+      `${base.replace(/\/$/, "")}/vwap-analysis/api/ingest-fetch` +
+      `?symbol=${encodeURIComponent(symbol)}&range=${range}&interval=${interval}` +
+      (events ? "&events=1" : "");
+    return fetch(u, { headers: { Authorization: `Bearer ${secret}` } });
+  }
+  await ensureCookie();
+  return fetch(chartUrl(symbol, range, interval, events), {
     headers: { "User-Agent": UA, ...(cookie ? { Cookie: cookie } : {}) },
   });
 }
@@ -68,7 +103,7 @@ export interface Bar5m { ts: number; o: number; h: number; l: number; c: number;
 
 // 5分足を正準形 [{ts,o,h,l,c,v}] で取得（蓄積・フロント共通の内部形式）。
 export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]> {
-  const r = await fetchChartRaw(symbol, range, "5m");
+  const r = await chartFetch(symbol, range, "5m", false);
   ensureOk(r);
   const j: any = await r.json();
   const res = j?.chart?.result?.[0];
@@ -86,10 +121,7 @@ export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]
 
 // 日足（最大10年・分割/配当イベント込み）を取得・整形。
 export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyResult> {
-  await ensureCookie();
-  const r = await fetch(chartUrl(symbol, range, "1d", true), {
-    headers: { "User-Agent": UA, ...(cookie ? { Cookie: cookie } : {}) },
-  });
+  const r = await chartFetch(symbol, range, "1d", true);
   ensureOk(r);
   const j: any = await r.json();
   const res = j?.chart?.result?.[0];
