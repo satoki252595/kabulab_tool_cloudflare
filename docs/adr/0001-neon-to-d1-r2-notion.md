@@ -66,15 +66,57 @@ finmath_price_snapshot
 
 これで全サービスが参照する共有 `core_stocks` への FK が同一 DB 内に収まり、横断参照（N+1）を避けられる。
 
-### 3.2 時系列は D1 に入れない
+### 3.2 時系列は D1 に入れない（OHLCV は R2 に一本化）
 
-以下は **D1 ではなく R2** に置く（VWAP と同じ `{code}.json` / `{key}.json` 方式）:
+日足 OHLCV は現状 **三重保存**（`swing.daily_ohlcv` 90日 / `finmath.daily_ohlcv` 2y+指数 / R2 `daily/{code}.json` 10年）。
+源泉は同一の Yahoo Chart。正規化方針（重複を持たない）に従い **R2 `daily/{code}.json` の単一正本に一本化**する
+（指数 `^N225` も code 名前空間で同居）。`swing.daily_ohlcv` / `finmath.daily_ohlcv` は廃止し、指標は R2 を読んで計算。
 
-- `swing.daily_ohlcv`（36–45万行）→ R2 `swing/ohlcv/{code}.json`
-- `finmath.daily_ohlcv`（指数含む）→ R2 `finmath/ohlcv/{symbol}.json`
-- 既存 VWAP の `daily/` `intra/` `margin/` はそのまま
+- OHLCV（日足10年, 〜1,000万行級）→ R2 `daily/{code}.json`（**唯一の正本**）
+- 5分足 → R2 `intra/{code}.json` / 週次信用残高 → R2 `margin/{week}.json`（既存維持）
 
-これにより D1 の行数は ~25万行（IR開示が支配的, ~100MB）に収まり、**D1 無料枠 500MB/DB に余裕**。
+これにより D1 は小さな正規化テーブル群（年度財務2万行 / IR開示・受注ファクト数万行 / マクロ年245行 等）に収まる。
+
+### 3.3 正規化ターゲット（一次データ正本 + 派生層 / 重複排除）
+
+設計原則（決定）: **DBは正規化が肝。重複データを持たない。一次データ（源泉）を正本として保存し、
+派生値（指標・スコア・判定）は計算 or「VIEW的なもの」で導出する。** 3層に分離する:
+
+**(A) 正本 = primary（源泉・単一の真実）**
+
+| ストア | テーブル | 源泉 |
+|---|---|---|
+| D1 | `core_stocks` | JPX 上場 XLS（全サービスの FK 集約点） |
+| D1 | `core_stock_financials` | Yahoo QuoteSummary 生値（最新ファンダ唯一の正本） |
+| D1 | `core_stock_annual_financials` | Yahoo 年度売上 |
+| D1 | `yutai_genres` / `yutai_benefits` | minkabu 優待スクレイプ（LLM 確定出力は再生成不能→persist） |
+| D1 | `ir_disclosures` | TDnet 開示（PDFセンチメントは源泉PDFがpurgeされ再計算不可→persist） |
+| D1 | `yuho_documents` / `yuho_order_facts` | EDINET 有報（既に D1 済） |
+| D1 | `macro_market_context` | 日次マクロ指数生値（1日1行） |
+| **R2** | `daily/{code}.json` | **日足OHLCV 唯一の正本**（指標は全てここから計算） |
+
+**(B) 派生層 = derived（正本から導出。method で3分類）**
+
+- **sql-view**（D1通常VIEW・閾値/集計で表現可・低頻度）: `swing_screening_view`（指標の閾値判定）, `sector_daily_view`（業種集計 GROUP BY/RANK）
+- **on-read-ts**（リクエスト時に TS 純関数・複雑かつ個別経路）: VWAP / CAPM β / σ / モメンタム（個別詳細のみ）, IR タグ分類（取込時）, 受注CAGR/YoY（有報は小母集団）
+- **regenerable-cache**（日次/月次に再計算して D1 へ実体化・全銘柄スクリーニングの高頻度ホットパス）:
+  `rsi_percentile_cache`（Wilder RSI+5y percentile）, `blue_chip_judgment`, `swing_indicators`（SMA/ATR/MACD等）,
+  `entry_signals_cache`, `yutai_yield_cache`, `yutai_scores_cache`
+  → SQLite は materialized view 非対応 + Wilder/EMA/percentile は SQL 非現実的なため、TS で再計算し「VIEW的キャッシュ」として保持。源泉(R2/core)から常に再生成可能。
+
+**(C) 重複排除 = dedup（DROP して正本へ統合）**
+
+| 破棄 | 統合先 | 理由 |
+|---|---|---|
+| `otakara public.stock_financials`（財務9列） | `core_stock_financials` | core の完全ミラー |
+| `otakara public.stock_financials`（指標6列 ma/rsi/macd） | `swing_indicators` | swing 指標の二次コピー |
+| `finmath.price_snapshot` | `core_stock_financials`（+code オーバーレイ） | core とほぼ同一カラム |
+| `finmath.daily_ohlcv` / `swing.daily_ohlcv` | R2 `daily/{code}.json` | OHLCV 三重保存の解消 |
+| `rsi.stock_rsi_percentile.operating_margin_ttm` | `core_stock_financials.operating_margin` | 同値二重保存 |
+| `swing.stock_indicators.fib_high/low` | `range_20d_high/low` | 同値コピー列 |
+| `core-schema.ts` 物理4コピー | `src/shared/db/core-schema.ts` | 定義ドリフト源（re-export に統一） |
+
+> 2層分離（ホットパス派生は regenerable-cache、軽量判定のみ sql-view）で「正規化 vs スクリーニング性能」を両立する。
 
 ---
 
@@ -199,9 +241,19 @@ export function createDb(d1: D1Database) {
   - 推奨 POC = **005 yuho-quant**: 自己完結・EDINET(非Yahoo・今すぐ再取込可)・order_facts ~3万行で D1 適正・
     Notion ZIP 実体アップロード(ルール6)を通しで検証できる。時系列なしで D1 経路に集中できる。
   - `ir_disclosures.tags` の `text[]→JSON` 特殊ケースは本 ADR §4 で先に解法を確定済み。次フェーズ ir-catalog で適用。
-- **Phase 3 — 横展開**: 002/006 → 001/003/004 を順次。時系列は R2 へ退避。
-- **Phase 4 — 切替**: §7 cutover ゲートに従い「移送 → 本番 D1 行数検証 → main マージ → `deploy:cf`」
-  の順を厳守（空 D1 へ向けて本番を壊さない）→ Neon 解約。Workers Cron 配線もこの段階で追加。
+- **Phase 3 — 正規化横展開**（§3.3 設計に沿う。重複排除しながら移行）:
+  1. `core-schema.ts` 定義を `src/shared/db/core-schema.ts` に一本化（rsi/swing/finmath の逐語コピーを re-export へ）
+  2. R2 `daily/{code}.json` を OHLCV 正本に確定（指数含む全母集団バックフィル完了確認）
+  3. `core_stocks` / `core_stock_financials` / `core_stock_annual_financials` を D1 へ（writer を D1 化）
+  4. financials 重複解体（`finmath.price_snapshot` / `otakara public.stock_financials` 破棄 → core + code オーバーレイ）
+  5. `swing_indicators`（regenerable-cache）を R2 OHLCV から日次再計算で D1 へ。`swing/finmath.daily_ohlcv` を DROP→R2 参照
+  6. `swing_screening_view` / `sector_daily_view` を D1 通常 VIEW 化
+  7. `rsi_percentile_cache` / `blue_chip_judgment` / `entry_signals_cache` を日次再生成キャッシュとして D1 へ
+  8. otakara `yutai_genres/benefits` → D1、`yutai_yield_cache` / `yutai_scores_cache` を月次キャッシュ化（財務6列ミラー破棄）
+  9. ir-catalog（`ir_disclosures` + 分類/sentiment）→ D1（独立・最後に）
+  10. `intra/` `margin/` の R2 運用は維持（確認のみ）
+- **Phase 4 — 切替 & Neon 解約**: 各サービス cutover（§7 ゲート: 移送→行数検証→deploy）→ 全サービスが Neon 非依存に
+  なったことを確認 → **Neon 解約**（`DATABASE_URL` 依存を全廃）。取込は **Workers Cron Triggers** で自動化（C-4）。
 
 各 Phase 完了時に CLAUDE.md ルール4（専門エージェント精査）→ ルール5（push）。
 
