@@ -6,9 +6,12 @@ import { fetchBars5m } from "../../services/vwap-analysis/lib/yahoo.js";
 import { r2Get, r2Put, mapLimit, sleep, retry } from "./lib/r2.js";
 import { loadCodes, arg } from "./lib/codes.js";
 
-const CONC = Number(process.env.CONC || 3);
-const DELAY = Number(process.env.DELAY_MS || 200);
+// 既定は低負荷 (逐次・約1.5s間隔 + ジッタ)。速度優先なら CONC / DELAY_MS で上書き。
+const CONC = Number(process.env.CONC || 1);
+const DELAY = Number(process.env.DELAY_MS || 1500);
 const KEEP_DAYS = Number(process.env.KEEP_DAYS || 365);
+// 429/503 がこの回数連続したら IP レート制限と判断し全体を中断する (叩き続けない)。
+const MAX_RL = Number(process.env.MAX_RATE_LIMIT || 5);
 
 async function main() {
   let codes = await loadCodes();
@@ -16,11 +19,14 @@ async function main() {
   const limit = arg("limit"); if (limit) codes = codes.slice(0, Number(limit));
 
   const cutoffTs = Math.floor(Date.now() / 1000) - KEEP_DAYS * 86400;
-  let written = 0, empty = 0, errors = 0;
+  let written = 0, empty = 0, errors = 0, rateLimited = 0;
+  let consecRL = 0, aborted = false;
   await mapLimit(codes, CONC, async (code) => {
-    await sleep(DELAY);
+    if (aborted) return;                                   // ブロック検知後は残りを叩かない
+    await sleep(DELAY + Math.floor(Math.random() * 400));  // ジッタで規則性を避ける
     try {
       const fresh = await retry(() => fetchBars5m(`${code}.T`, "5d"), 3);
+      consecRL = 0;                                        // 成功で連続カウントをリセット
       if (!fresh.length) { empty++; return; }
       const existing = await r2Get(`intra/${code}.json`);
       const map = new Map<number, any>();
@@ -29,8 +35,20 @@ async function main() {
       const bars = [...map.values()].filter((b) => b.ts >= cutoffTs).sort((a, b) => a.ts - b.ts);
       await r2Put(`intra/${code}.json`, JSON.stringify({ code, updated: new Date().toISOString(), bars }));
       written++;
-    } catch (e) { errors++; if (errors <= 5) console.error(`  ${code}: ${e}`); }
+    } catch (e) {
+      // レート制限は即リトライせず連続数を数え、しきい値で全体を中断する。
+      if ((e as { name?: string })?.name === "YahooRateLimitError") {
+        rateLimited++; consecRL++;
+        if (consecRL >= MAX_RL && !aborted) {
+          aborted = true;
+          console.error(`[abort] Yahoo 429/503 が ${MAX_RL} 連続。IP がレート制限中のため中断します。別回線(テザリング等)か時間を空けて再実行してください。`);
+        }
+        return;
+      }
+      errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
+    }
   });
-  console.log(JSON.stringify({ codes: codes.length, written, empty, errors, keepDays: KEEP_DAYS }));
+  console.log(JSON.stringify({ codes: codes.length, written, empty, errors, rateLimited, keepDays: KEEP_DAYS, aborted }));
+  if (aborted) process.exitCode = 2;
 }
 main();
