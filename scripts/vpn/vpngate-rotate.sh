@@ -40,7 +40,10 @@ trap cleanup EXIT INT TERM
 BASE_IP="$(curl -s -m 10 https://api.ipify.org || true)"
 echo "baseline IP: ${BASE_IP:-?}"
 echo "VPNGate 一覧を取得中..."
-curl -s -m 30 "https://www.vpngate.net/api/iphone/" -o "$WORK/list.csv" || { echo "VPNGate 取得失敗"; exit 1; }
+# API は CRLF を返す。base64 フィールド末尾の \r が BSD base64(-d) を
+# "invalid input" で失敗させるため、CRLF→LF に正規化してから扱う。
+curl -s -m 30 "https://www.vpngate.net/api/iphone/" | tr -d '\r' > "$WORK/list.csv"
+[ -s "$WORK/list.csv" ] || { echo "VPNGate 取得失敗"; exit 1; }
 
 # 列: 1 HostName, 2 IP, 3 Score, 5 Speed, 7 CountryShort, 15 OpenVPN_ConfigData_Base64
 # 速度(=安定/帯域)降順で候補化。config を持つ行のみ。
