@@ -68,12 +68,19 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, i:
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// 指数バックオフ付きリトライ（Yahoo 429/5xx対策）
+// 指数バックオフ付きリトライ（一過性エラー用）。
+// レート制限 (YahooRateLimitError = 429/503) は即リトライで叩き返さず再スローし、
+// 呼び出し側 (ingest) がサーキットブレークで全体を中断する。Retry-After 無視の
+// 短時間リトライがブロックを延長していたため (低負荷化)。
 export async function retry<T>(fn: () => Promise<T>, n = 3, base = 1000): Promise<T> {
-  let last: any;
+  let last: unknown;
   for (let i = 0; i < n; i++) {
     try { return await fn(); }
-    catch (e) { last = e; await sleep(base * Math.pow(2, i)); }
+    catch (e) {
+      last = e;
+      if ((e as { name?: string })?.name === "YahooRateLimitError") throw e;
+      await sleep(base * Math.pow(2, i));
+    }
   }
   throw last;
 }

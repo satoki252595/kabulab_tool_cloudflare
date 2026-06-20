@@ -20,6 +20,37 @@ function chartUrl(symbol: string, range: string, interval: string, events = fals
     `?range=${range}&interval=${interval}${ev}`;
 }
 
+/**
+ * Yahoo のレート制限/一時不可 (429/503)。呼び出し側はこれを「これ以上叩くな」の
+ * シグナルとして扱い、即リトライで叩き返さない (retry は再スロー、ingest は
+ * サーキットブレークで中断する)。`retryAfterMs` は Retry-After ヘッダ由来。
+ */
+export class YahooRateLimitError extends Error {
+  constructor(
+    readonly status: number,
+    readonly retryAfterMs: number | null
+  ) {
+    super(`yahoo ${status} (rate limited)`);
+    this.name = "YahooRateLimitError";
+  }
+}
+
+function parseRetryAfter(r: Response): number | null {
+  const ra = r.headers.get("retry-after");
+  if (!ra) return null;
+  const sec = Number(ra);
+  return Number.isFinite(sec) && sec >= 0 ? sec * 1000 : null;
+}
+
+/** !ok を投げ分ける。429/503 はレート制限として型付きで投げる。 */
+function ensureOk(r: Response): void {
+  if (r.ok) return;
+  if (r.status === 429 || r.status === 503) {
+    throw new YahooRateLimitError(r.status, parseRetryAfter(r));
+  }
+  throw new Error(`yahoo ${r.status}`);
+}
+
 // 5分足など生レスポンスをそのまま返す（/api/chart 用）。
 export async function fetchChartRaw(symbol: string, range: string, interval: string): Promise<Response> {
   await ensureCookie();
@@ -38,7 +69,7 @@ export interface Bar5m { ts: number; o: number; h: number; l: number; c: number;
 // 5分足を正準形 [{ts,o,h,l,c,v}] で取得（蓄積・フロント共通の内部形式）。
 export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]> {
   const r = await fetchChartRaw(symbol, range, "5m");
-  if (!r.ok) throw new Error(`yahoo ${r.status}`);
+  ensureOk(r);
   const j: any = await r.json();
   const res = j?.chart?.result?.[0];
   if (!res || !res.timestamp) return [];
@@ -59,7 +90,7 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
   const r = await fetch(chartUrl(symbol, range, "1d", true), {
     headers: { "User-Agent": UA, ...(cookie ? { Cookie: cookie } : {}) },
   });
-  if (!r.ok) throw new Error(`yahoo ${r.status}`);
+  ensureOk(r);
   const j: any = await r.json();
   const res = j?.chart?.result?.[0];
   if (!res || !res.timestamp) return { bars: [], splits: [] };
