@@ -17,16 +17,17 @@
 
 ## プラットフォーム
 
-旧構成 (Vercel Serverless Functions + Neon) から **Cloudflare Workers** へ移行済み。Worker は
-**配信専用** (`worker/entry.ts` が `src/index.ts` の Hono root app を fetch ハンドラとして公開) で、
-データ取得・加工・本番書き込みは Worker に載せず **ローカル CLI** (`scripts/sync/*`, `scripts/vwap/*`)
-で実行する (D1 のみバインディング経由のため一部 Worker 側、後述)。
+旧構成 (Vercel Serverless Functions + Neon) から **Cloudflare Workers + Hono** へ移行済み
+([ADR-0001](./docs/adr/0001-neon-to-d1-r2-notion.md))。Worker は **配信専用**
+(`worker/entry.ts` が `src/index.ts` の Hono root app を fetch ハンドラとして公開) で、読取は
+**D1 バインディング** (`c.env.DB`) 経由。データ取得・加工・本番書き込みは Worker に載せず
+**Node (GitHub Actions)** で実行し、`createD1HttpDb` (D1 REST) で書き込む (後述)。
 
-データストアは段階移行中:
+データストア (ADR-0001 で確定):
 
 | 種別 | ストア | 状況 |
 |---|---|---|
-| 正規化リレーショナル | **Neon PostgreSQL** (主) / **Cloudflare D1** | 005 yuho-quant は D1 へ移行済み ([ADR-0001](./docs/adr/0001-neon-to-d1-r2-notion.md))。他サービスは Neon。Neon 全廃 (D1+R2+Notion 化) を段階移行中 |
+| 正規化リレーショナル | **Cloudflare D1** (SQLite) | 全サービスを単一 DB `kabulab-cf` に接頭辞テーブルで同居。Drizzle ORM は `drizzle-orm/d1` + sqlite-core ([ADR-0001](./docs/adr/0001-neon-to-d1-r2-notion.md))。旧 Neon PostgreSQL は廃止 (解約予定/済) |
 | 時系列ブロブ | **Cloudflare R2** (`vwap-data`) | 007 VWAP の 5分足/日足/信用残高 JSON |
 | 一次データ (raw) | **Notion** | CLAUDE.md ルール6。EDINET ZIP / TDnet / 優待スクレイプ等を物理ファイルごと冪等アーカイブ |
 
@@ -50,8 +51,8 @@ pnpm install              # 依存インストール
 ├── wrangler.toml                    # Worker 設定 — ASSETS(public) / R2(BUCKET=vwap-data) / D1(DB=kabulab-cf)
 ├── src/
 │   ├── index.ts                     # ルート Hono アプリ + ポータル + サブアプリ mount
-│   ├── cron/                        # 取込オーケストレーション (ローカル CLI から実行)
-│   │   ├── daily.ts / monthly.ts    # 日次/月次 sync (Yahoo → Neon)
+│   ├── cron/                        # 取込オーケストレーション (Node / GitHub Actions から実行)
+│   │   ├── daily.ts / monthly.ts    # 日次/月次 sync (Yahoo → D1。D1 REST 書込)
 │   │   ├── universe.ts              # JPX 母集団同期
 │   │   ├── yuho-edinet.ts           # 005 EDINET キャッチアップ (D1。Worker 取込ルートから呼ぶ)
 │   │   └── ir-catalog-tdnet.ts      # 006 TDnet キャッチアップ
@@ -75,7 +76,7 @@ pnpm install              # 依存インストール
 │   ├── sync/                        # universe / daily / monthly / all-daily / yuho-edinet / ir-tdnet
 │   └── vwap/                        # ingest-daily / ingest-intra / ingest-margin (→ R2)
 ├── drizzle/                         # マイグレーション SQL (drizzle/d1/ = D1 用)
-├── drizzle.*.config.ts              # スキーマ別 drizzle-kit 設定 (drizzle.d1.config.ts = D1)
+├── drizzle.d1.config.ts             # drizzle-kit 設定 (D1)。旧 drizzle.<svc>.config.ts(pg) は obsolete
 ├── public/                          # PWA 静的アセット + public/vwap-analysis/ フロント
 ├── docs/                            # mono-repo ドキュメント (docs/adr/ = 設計判断記録)
 ├── flake.nix / .envrc               # Nix devShell (Node 22 + pnpm 9)
@@ -101,7 +102,7 @@ pnpm deploy:cf            # 本番を手動デプロイ (= wrangler deploy)
 pnpm db:generate:d1       # D1(SQLite) スキーマ生成 → drizzle/d1/*.sql (適用は wrangler d1 execute)
 # 注: db:push:rsi / :otakara / :swing / :finmath / :ircat は旧 Neon(pg) 用で D1 移行後は obsolete
 
-# データ取得 (日次/月次 stock sync。本体は Worker Cron が自動実行 — 下記「運用ステータス」)
+# データ取得 (日次/月次 stock sync。本体は GitHub Actions が自動実行 — 下記「運用ステータス」)
 pnpm sync:daily           # 手動フル日次トリガ (Worker /admin/sync-daily を叩く + VWAP も束ねる)
 pnpm sync:monthly         # 手動 月次 otakara rebuild トリガ (Worker /admin/sync-monthly)
 pnpm sync:universe        # JPX 母集団 seed (xlsx=Node 専用・上場/廃止時に実行)
@@ -245,8 +246,8 @@ ADR-0001 で全サービスを Neon → D1 (SQLite) へ移行済み。共有 cor
 
 ## 運用 / 定点ジョブ
 
-日次 stock sync + 月次 otakara rebuild は **Worker Cron が自動実行**する（デプロイ後・要 Paid。
-詳細は上記「運用ステータス」）。以下は **cron 対象外で手動 (or CI) 実行**する取込:
+日次 stock sync + 月次 otakara rebuild は **GitHub Actions が自動実行**する（Workers Paid 不要・
+Workers Cron は使わない。詳細は上記「運用ステータス」）。以下は **定期取込の対象外で手動 (or CI) 実行**する取込:
 
 ```bash
 # 母集団 (JPX) — 上場/廃止があった時

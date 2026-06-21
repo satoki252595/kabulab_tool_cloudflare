@@ -4,7 +4,7 @@
 TDnet) を全量取得し、表題から決定論的にタグ分類して色分け、銘柄ごとに
 発表タイミングを時系列マッピングするサービス。
 
-ポータル: `https://kabulab.vercel.app/` / 本サービス: `/ir-catalog/`
+ポータル: `https://kabulab-cf.satoki252595.workers.dev/` / 本サービス: `/ir-catalog/`
 
 ## このサービス固有の絶対ルール (mono-repo CLAUDE.md に追加)
 
@@ -30,7 +30,7 @@ TDnet) を全量取得し、表題から決定論的にタグ分類して色分�
 
 ### ユニバース外は正直に切り捨てる
 
-`company_code` 先頭 4 桁が `core.stocks` に居ない開示
+`company_code` 先頭 4 桁が `core_stocks` に居ない開示
 (ETF/REIT/非上場/上場廃止) は取り込まない。推測で銘柄を当てない。
 
 ### サイトに負荷をかけない
@@ -48,7 +48,7 @@ TDnet 通信は `tdnet/client.ts` が全リクエストを直列化し最小間�
   1IR=1行** を冪等記録 (親=ticker / 子行=TDnet ID)。子DB行は銘柄が文脈で
   確定するため銘柄コード/銘柄名列は持たず、タイトル=開示表題・直後に
   タグ。暫定採用の旧フラット `適時開示｜ir-catalog` は初回に自動で
-  Notion ゴミ箱へ退避 (Postgres から再生可)。一次 Postgres 格納と同
+  Notion ゴミ箱へ退避 (D1 から再生可)。一次データの D1 格納と同
   タイミング・TDnet 追加負荷なし。行に開示 PDF 実体を `IR資料` 添付
   + `IR資料状態`(uploaded/unavailable/too_large/**error**)。**TDnet は PDF
   を ~31日で purge** するため過去分は原本消失 = `unavailable`(終端) を
@@ -67,21 +67,26 @@ TDnet 通信は `tdnet/client.ts` が全リクエストを直列化し最小間�
 
 ## 技術スタック
 
-- Runtime: Hono v4 + Vercel Serverless Functions
-- DB: Neon (PostgreSQL) + Drizzle ORM
+- Runtime: Hono v4 + Cloudflare Workers (読取)
+- DB: Cloudflare D1 (SQLite) + Drizzle ORM (drizzle-orm/d1 + sqlite-core)
 - Validation: Zod v4
 - Language: TypeScript (strict)
 
 ## DB スキーマ
 
-| PG スキーマ | 所有 | 用途 |
-|---|---|---|
-| `core` | 001 が更新 | 銘柄マスタ (読み取り専用で参照) |
-| `ir_catalog` | 006 のみ | `disclosures` |
+単一 D1 `kabulab-cf` に全サービスが接頭辞テーブルで同居 (ADR-0001)。
+006 は以下を使う。
 
-実 DB 反映: `node scripts/db/apply-migration.mjs
-drizzle/create-ir-catalog.sql`。`drizzle.ir-catalog.config.ts` は
-型生成 / studio / 差分確認用。
+| テーブル | 所有 | 用途 |
+|---|---|---|
+| `core_stocks` | 001 が更新 | 銘柄マスタ (読み取り専用で参照) |
+| `ir_disclosures` | 006 のみ | 適時開示 (1 IR = 1 行) |
+
+スキーマ正本: `services/ir-catalog/src/db/schema.ts` (export 名は
+`disclosures`、実テーブル名は `ir_disclosures`)。実 DB 反映:
+`pnpm db:generate:d1` → `wrangler d1 execute kabulab-cf --remote
+--file=drizzle/d1/<n>.sql`。読取は Worker の `c.env.DB` バインディング
+(createServiceDb / createDb)。
 
 ## データ取得
 
@@ -89,9 +94,12 @@ drizzle/create-ir-catalog.sql`。`drizzle.ir-catalog.config.ts` は
   (`-- --from=YYYY-MM` / `--to=YYYY-MM` / `--ticker=7203` /
   `--no-archive` / `--no-notion-signal` / `--refetch-archived`)。
   冪等・再開可能。
-- **日次キャッチアップ**: 新規 cron は作らず統一 daily cron に相乗り。
-  `src/cron/ir-catalog-tdnet.ts` を `src/index.ts` の日次ハンドラが
-  shard 0 のときだけ呼ぶ。直近 7 日を 1 回で取得。
+- **日次キャッチアップ**: GitHub Actions `catchup.yml` が `pnpm
+  ingest:ir-tdnet` (`scripts/sync/ir-tdnet.ts`) を平日に実行。Node で
+  kuromoji (PDF センチメント) を回し、D1 へは D1 HTTP API
+  (createD1HttpDb) で書く。`src/cron/ir-catalog-tdnet.ts` の
+  `runIrCatalogCatchup` を再利用し直近数日を 1 回で取得。TDnet は
+  ホストが異なり 429 されないためプロキシ不要。
 
 ## ディレクトリ
 
@@ -100,8 +108,8 @@ services/ir-catalog/
 ├── app.ts / base-path.ts
 ├── src/
 │   ├── index.ts                  # Hono サブアプリ本体
-│   ├── env.ts                    # 型付き env アクセサ (DATABASE_URL)
-│   ├── db/{client,schema}.ts     # ir_catalog スキーマ + Drizzle
+│   ├── env.ts                    # 型付き env アクセサ
+│   ├── db/{client,schema}.ts     # ir_disclosures スキーマ (sqlite-core) + Drizzle
 │   ├── routes/pages.ts           # SSR + JSON API
 │   ├── services/
 │   │   ├── tdnet/{client,types}.ts

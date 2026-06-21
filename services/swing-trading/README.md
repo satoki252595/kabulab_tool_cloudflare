@@ -2,8 +2,8 @@
 
 **kabulab** プロジェクト群の 003 番。数日〜2週間の短期売買を定量ルール化するサービス。
 
-ポータル: <https://kabulab.vercel.app/>
-本サービス: <https://kabulab.vercel.app/swing-trading/>
+ポータル: <https://kabulab-cf.satoki252595.workers.dev/>
+本サービス: <https://kabulab-cf.satoki252595.workers.dev/swing-trading/>
 
 ## 機能
 
@@ -27,14 +27,15 @@
 コマンドはリポジトリルートから実行する (`nix develop` 内 / pnpm 9)。同期は統一 sync に集約済み (旧 `pnpm sync:swing` は廃止)。
 
 ```bash
-# スキーマを Neon に push (core / swing)
-pnpm db:push:swing
+# D1 マイグレーション SQL を生成し、Cloudflare D1 に適用 (core / swing は接頭辞テーブル)
+pnpm db:generate:d1
+wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<file>.sql
 
 # 母集団 seed + 日次同期 (OHLCV/指標/screening/patterns/sector/マクロ)
 pnpm sync:universe
 pnpm sync:daily
 
-# ローカル開発サーバー
+# ローカル開発サーバー (wrangler dev)
 pnpm dev
 ```
 

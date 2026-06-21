@@ -2,7 +2,7 @@
 
 **kabulab** プロジェクト群の001番。日本株の個別銘柄を対象に、各期間のRSI (10/40/120営業日) が過去5年で最も下がっている優良株を発見するWebサービス。
 
-ポータル: `https://kabulab.vercel.app/`
+ポータル: `https://kabulab-cf.satoki252595.workers.dev/`
 
 ## 優良株の定義
 
@@ -11,36 +11,34 @@
 
 ## 技術スタック
 
-- **Runtime**: Hono v4 + Vercel Serverless Functions
-- **Database**: Neon (PostgreSQL) + Drizzle ORM
+- **Runtime**: Hono v4 + Cloudflare Workers
+- **Database**: Cloudflare D1 (SQLite) + Drizzle ORM (drizzle-orm/d1)
 - **Validation**: Zod
 - **Language**: TypeScript (strict mode)
 
 ## DB スキーマ設計 (共有DB方式)
 
-**kabulab** 配下の複数プロジェクトで単一Neon DBを共有する。
+**kabulab** 配下の複数プロジェクトで単一 D1 DB (`kabulab-cf`) を共有する。D1 は 1 DB = 1 SQLite で名前空間が無いため、旧 PostgreSQL スキーマ名を **接頭辞テーブル** (`core_*` / `rsi_percentile` 等) に降ろして同居させる (ADR-0001)。
 
-| PGスキーマ | 所有 | 用途 |
-|------------|------|------|
-| `core` | 001_RSIScreening が更新 | 銘柄マスタ・株価・財務 (一次情報) |
-| `rsi` | 001_RSIScreening のみ | RSI履歴・パーセンタイル |
-| `yutai` | 002_otakara-yutai のみ (未移行) | 優待情報・スコア |
+| 接頭辞 | 所有 | 用途 |
+|--------|------|------|
+| `core_*` | 001_RSIScreening が更新 | 銘柄マスタ・財務 (一次情報) |
+| `rsi_percentile` | 001_RSIScreening のみ | パーセンタイル + 優良株判定 |
+| `yutai_*` / `otakara_*` | 002_otakara-yutai | 優待情報・スコア |
 
-### core スキーマ (共有)
+### 共有テーブル (core_*)
 
-001がsync-coreバッチで日次更新する。他プロジェクトは読み取り専用で参照する。
+001 が日次同期で更新する。他プロジェクトは読み取り専用で参照する。
 
-- `core.stocks` — 銘柄マスタ
-- `core.stock_price_history` — 日次OHLCV (5年分)
-- `core.stock_financials` — 最新ファンダメンタルズ
-- `core.stock_annual_financials` — 年度売上高・営業利益
+- `core_stocks` — 銘柄マスタ
+- `core_stock_financials` — 最新ファンダメンタルズ
+- `core_stock_annual_financials` — 年度売上高
 
-**追加原則**: `core.*` には「Yahoo Finance等から取得した生に近いデータ」のみ置く。テクニカル指標やスコアは各プロジェクトのスキーマへ。
+**追加原則**: `core_*` には「Yahoo Finance等から取得した生に近いデータ」のみ置く。テクニカル指標やスコアは各プロジェクトのテーブルへ。
 
-### 001固有スキーマ (rsi)
+### 001固有テーブル
 
-- `rsi.stock_rsi_history` — 日次RSI(10/40/120)
-- `rsi.stock_rsi_percentile` — 現在のパーセンタイル + 優良株判定
+- `rsi_percentile` — 現在のパーセンタイル + 優良株判定
 
 ## ディレクトリ構成
 
@@ -48,21 +46,19 @@
 src/
 ├── index.ts                 # Honoエントリ
 ├── db/
-│   ├── client.ts            # Neon + Drizzle クライアント
-│   ├── core-schema.ts       # 共有スキーマ (core.*)
-│   └── schema.ts            # 001固有スキーマ (rsi.*)
+│   ├── client.ts            # D1 + Drizzle クライアント (createDb(c.env.DB))
+│   ├── core-schema.ts       # 共有テーブル (core_*)
+│   └── schema.ts            # 001固有テーブル (rsi_percentile)
 ├── routes/                  # ルートハンドラー
 ├── middleware/              # カスタムミドルウェア
 ├── validators/              # Zod スキーマ
 ├── services/                # ビジネスロジック
-├── views/                   # Hono JSX (SSR)
+├── views/                   # template literal を返す .ts 関数 (SSR)
 ├── scripts/                 # バッチスクリプト
 ├── types/                   # 型定義
 └── tests/
     ├── unit/
     └── integration/
-api/
-└── [[...route]].ts          # Vercelキャッチオール
 ```
 
 ## コーディング規約
@@ -77,33 +73,32 @@ api/
 
 ## コマンド
 
-このサービスは kabulab mono-repo のサブアプリ。コマンドはすべて **リポジトリルート** (`/Users/satoki252595/work/0002_kabuTool/`) から実行する。
+このサービスは kabulab mono-repo のサブアプリ。コマンドはすべて **リポジトリルート** (`/Users/satoki252595/projects/kabulab-cf/`) から実行する。
 
 ```bash
-pnpm dev                # ローカル開発サーバー起動
-pnpm db:generate:rsi    # マイグレーション生成 (このサービス専用)
-pnpm db:push:rsi        # スキーマを Neon に直接反映 (core / rsi スキーマ)
-pnpm db:studio:rsi      # Drizzle Studio
-pnpm sync:universe      # JPX 全内国株 ~4,000 を core.stocks に seed
+pnpm dev                # ローカル開発サーバー起動 (wrangler dev)
+pnpm db:generate:d1     # D1 マイグレーション生成 (drizzle/d1/*.sql。全サービス共通)
+                        # 反映: wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql
+pnpm sync:universe      # JPX 全内国株 ~4,000 を core_stocks に seed
 pnpm sync:daily         # 統一日次同期 (Yahoo → core/rsi/swing。サービス固有 sync:rsi は廃止)
 pnpm test               # 全サービス横断のテスト
 pnpm typecheck          # 全サービス型チェック
 pnpm lint               # ESLint
 ```
 
-ポータル: <https://kabulab.vercel.app/>
-このサービス: <https://kabulab.vercel.app/rsi-screening/>
+ポータル: <https://kabulab-cf.satoki252595.workers.dev/>
+このサービス: <https://kabulab-cf.satoki252595.workers.dev/rsi-screening/>
 
 ## フロントエンド方針
 
 - フレームワーク: Hono (template literal を返す `.ts` 関数で SSR)
-- **JSX は使えない** — Vercel `@vercel/node` が `.tsx` を bundle しないため、ビューは `views/*.ts` で `string` を返す関数として実装する
+- **JSX は使えない** — mono-repo 方針として、ビューは `views/*.ts` で `string` を返す template literal 関数で実装する (Workers/esbuild でも踏襲)
 - スタイリング: インライン CSS — 共通トークンは root の `src/shared/design.ts` から取り込み、サービス固有スタイルは `src/views/layout.ts` の `GLOBAL_STYLES` に集約
 - **デザインシステム: kabulab Editorial Swiss Grid**（[../docs/overview.md](../docs/overview.md) 参照）
   - 配色: 白 `#fafafa` ベース + 純黒 `#0a0a0a` ボーダー、アクセントは Blue `#1d4ed8`
   - フォント: Space Grotesk（display）+ JetBrains Mono（数字）+ Noto Sans JP（本文）
   - 角丸 4px、ボーダー 2px 黒、ホバーは `translate(-3px,-3px)` + `5px 5px 0 0 黒影`
-- ヘッダー左端に `← KABULAB` リンクを配置し、`https://kabulab.vercel.app/` へ遷移させる
+- ヘッダー左端に `← KABULAB` リンクを配置し、`https://kabulab-cf.satoki252595.workers.dev/` へ遷移させる
 - ロゴサブタイトルは `001 / KABULAB`
 
 ## Git 規約

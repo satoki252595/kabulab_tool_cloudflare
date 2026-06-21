@@ -2,12 +2,12 @@
 
 **kabulab** プロジェクト群の002番。割安な株主優待銘柄をファンダメンタルズ × テクニカル分析で発見するサービス。
 
-ポータル: `https://kabulab.vercel.app/`
+ポータル: `https://kabulab-cf.satoki252595.workers.dev/`
 
 ## 技術スタック
 
-- **Runtime**: Hono v4 + Vercel Serverless Functions
-- **Database**: Neon (PostgreSQL) + Drizzle ORM
+- **Runtime**: Hono v4 + Cloudflare Workers
+- **Database**: Cloudflare D1 (SQLite) + Drizzle ORM (`drizzle-orm/d1` + sqlite-core)
 - **Validation**: Zod
 - **Language**: TypeScript (strict mode)
 
@@ -20,13 +20,12 @@ services/otakara-yutai/
 │                              #   を保持する単一ファイル構成 (本番はこれだけ)
 ├── src/
 │   ├── db/
-│   │   ├── client.ts          # createDb() — Neon HTTP + Drizzle
-│   │   └── schema.ts          # public スキーマ定義 (stocks は core-schema 再 export)
+│   │   ├── client.ts          # createDb(c.env.DB) — D1 + Drizzle
+│   │   └── schema.ts          # yutai_*/otakara_* 接頭辞テーブル定義 (stocks は core-schema 再 export)
 │   ├── services/              # yutai-scraper.ts / yutai-data-provider.ts (取込系)
 │   ├── validators/            # 優待スクレイパー用 Zod スキーマ
 │   ├── types.ts               # 共通型定義
-│   ├── tests/                 # unit テスト
-│   └── index.ts, pages-app.ts # ★dead code (本番未使用。歴史的経緯で残存)
+│   └── tests/                 # unit テスト
 ├── data-scripts/              # 1 回限り/手動のデータ取得・解釈スクリプト
 ├── drizzle/                   # drizzle-kit 生成の migration
 ├── CLAUDE.md / README.md
@@ -36,9 +35,9 @@ services/otakara-yutai/
 
 - 本サービスは `app.ts` 単一ファイル構成 (ルート分割しない。下記「実装メモ」参照)
 - バリデーションには Zod を使う
-- DB 接続は `c.env?.DATABASE_URL ?? process.env.DATABASE_URL` (app.ts 冒頭) —
-  Vercel Bindings とローカル実行 (dotenv) の両対応のための実装。これは
-  「同じ値の取得経路の差異吸収」であり値のフォールバックではない
+- DB 接続は Worker の D1 バインディング `c.env.DB` を `dbMiddleware`
+  (`c.set("db", createDb(c.env.DB))`) で各リクエストの context に注入する。
+  ハンドラ側は `c.get("db")` で取得し、`DATABASE_URL` 等の接続文字列は参照しない
 
 ## Drizzle ORM 規約
 
@@ -46,13 +45,17 @@ services/otakara-yutai/
 - テーブル名・カラム名は snake_case を使用する
 - TypeScript側の変数名は camelCase を使用する（Drizzle が自動マッピング）
 - 型推論は `typeof table.$inferSelect` / `typeof table.$inferInsert` を使う
-- マイグレーションはルートから `pnpm db:generate:otakara` → `pnpm db:push:otakara` (または `node scripts/db/apply-migration.mjs <sql>`) の順で実行する
+- マイグレーションはルートから `pnpm db:generate:d1` で `drizzle/d1/*.sql` を生成し、
+  `wrangler d1 execute kabulab-cf --remote --file=<sql>` で D1 に適用する
+  (`db:push:*` / pg dialect の `drizzle.otakara-yutai.config.ts` は obsolete)
 
-## Neon 規約
+## D1 規約
 
-- SSL接続は必須（`sslmode=require`）
-- ドライバは `@neondatabase/serverless` の `neon()` + `drizzle-orm/neon-http` を使用する
-- プレビューブランチを活用し、本番DBに直接変更を加えない
+- 単一 DB `kabulab-cf` に全サービスが接頭辞テーブルで同居する。D1 は名前空間が
+  無いため、共有正本は `core_*` (`core_stocks` 等)、002 固有は `yutai_*` /
+  `otakara_*` 接頭辞で衝突を避ける
+- ドライバは `drizzle-orm/d1` + sqlite-core を使用する
+- 本番 DB への直接変更は避け、生成済み SQL を `wrangler d1 execute` で適用する
 
 ## コーディング規約
 
@@ -81,8 +84,9 @@ services/otakara-yutai/
 
 ## フロントエンド方針
 
-- **JSX は使えない** (mono-repo 共通規約) — Vercel `@vercel/node` が `.tsx` を
-  bundle しないため、HTML は **`app.ts` 内の template literal** で直接生成する
+- **JSX は使えない** (mono-repo 共通規約) — ビューは template literal を返す
+  `.ts` 関数として実装する方針を踏襲し、HTML は **`app.ts` 内の template
+  literal** で直接生成する (Workers/esbuild ビルドでも同方針)
 - スタイリング: インラインCSS（`app.ts` の `CSS` 定数、`<style>` タグ内）
 - インタラクションが必要な場合は純粋な form / `<details>` / CSS `:checked` か、
   最小限の vanilla JS (`/screening` の絞り込みのみ) を使う
@@ -91,7 +95,8 @@ services/otakara-yutai/
   からのインライン実装で、`src/shared/term-tip.ts` と挙動同一。改修で触れた際
   に共通実装へ移行してよい)
 - **本番は `services/otakara-yutai/app.ts` の 1 ファイルのみ**。旧
-  `src/index.ts` / `src/pages-app.ts` は dead code (画面変更で触らないこと)
+  `src/index.ts` / `src/pages-app.ts` は 2026-06 の整理で削除済み。現エントリは
+  `app.ts` の 1 ファイル構成
 
 ## デザイン方針 — kabulab Editorial Swiss Grid
 
@@ -121,7 +126,7 @@ services/otakara-yutai/
 - ボーダー 2px 黒
 - ホバー: `translate(-3px,-3px)` + `box-shadow: 5px 5px 0 0 #0a0a0a`（ニューブルータリスト）
 - セクションラベル: `001 / SECTION NAME` 形式（左に2px黒バー + uppercase mono）
-- ヘッダー左端に `← KABULAB` リンクを必ず配置し、`https://kabulab.vercel.app/` へ遷移
+- ヘッダー左端に `← KABULAB` リンクを必ず配置し、`https://kabulab-cf.satoki252595.workers.dev/` へ遷移
 - ロゴサブタイトル: `002 / KABULAB`
 
 ### NG
@@ -136,16 +141,15 @@ services/otakara-yutai/
 このサービスは kabulab mono-repo のサブアプリ。コマンドはすべて **リポジトリルート** から実行する。
 
 ```bash
-pnpm dev                  # ローカル開発サーバー起動
-pnpm run deploy               # Vercel 本番デプロイ (単一プロジェクト kabulab を更新)
-pnpm db:generate:otakara  # マイグレーションファイル生成
-pnpm db:push:otakara      # スキーマを Neon に直接反映 (public スキーマ)
-pnpm db:studio:otakara    # Drizzle Studio
-# データ同期はサービス固有コマンド無し。root 統一 sync を使う:
-pnpm sync:universe        # JPX 全内国株 ~4,000 を core.stocks に seed
+pnpm dev                  # ローカル開発サーバー起動 (wrangler dev)
+pnpm run deploy           # Cloudflare Workers 手動デプロイ (wrangler deploy)。
+                          #   通常は main push → Workers Builds (Git 連携) で無料自動デプロイ
+pnpm db:generate:d1       # drizzle/d1/*.sql を生成 (生成後 wrangler d1 execute で適用)
+# データ同期はサービス固有コマンド無し。root 統一 sync を使う (Node / GitHub Actions):
+pnpm sync:universe        # JPX 全内国株 ~4,000 を core_stocks に seed
 pnpm sync:daily           # 全 active の OHLCV/ファンダ/指標 (otakara も core/swing 経由で反映)
-pnpm sync:monthly         # 母集団同期 + is_yutai=true のみ public スコア再計算
-# 優待データ取込パイプライン (data-scripts、cron 非対象。.ts は tsx 実行):
+pnpm sync:monthly         # 母集団同期 + is_yutai=true のみ otakara_stock_scores 再計算
+# 優待データ取込パイプライン (data-scripts、GitHub Actions 非対象・ローカル手動。.ts は tsx 実行):
 #   1. pnpm exec tsx services/otakara-yutai/data-scripts/fetch-yutai-full.ts            # minkabu→yutai_benefits + is_yutai
 #   2. pnpm exec tsx services/otakara-yutai/data-scripts/export-benefit-descriptions.ts # →data/benefit-descriptions.jsonl
 #   3. pnpm interpret:yutai                                                             # ローカル LLM (node-llama-cpp) 解釈→data/interpreted/chunk-*.jsonl
@@ -156,15 +160,15 @@ pnpm lint                 # ESLint
 pnpm typecheck            # 全サービス型チェック
 ```
 
-ポータル: <https://kabulab.vercel.app/>
-このサービス: <https://kabulab.vercel.app/otakara-yutai/>
+ポータル: <https://kabulab-cf.satoki252595.workers.dev/>
+このサービス: <https://kabulab-cf.satoki252595.workers.dev/otakara-yutai/>
 
 ## 実装メモ
 
-- 本番ビルドは `services/otakara-yutai/app.ts` の 1 ファイル構成 (旧 src/index.ts + src/pages-app.ts は dead code)
+- 本番ビルドは `services/otakara-yutai/app.ts` の 1 ファイル構成 (旧 src/index.ts / src/pages-app.ts は削除済み)
 - DB スキーマとクライアントは `src/db/schema.ts` / `src/db/client.ts` の単一 source of truth
 - `src/services/` のスクレイパー類は `data-scripts/` から呼ばれる
-  (スコアリングは `src/shared/scoring.ts` + `src/cron/monthly.ts` に統合済み。
+  (スコアリングは `src/shared/scoring.ts` + 月次同期 (`pnpm sync:monthly`) に統合済み。
   旧 `src/scripts/sync-and-score.ts` は削除済み)
 - `data-scripts/` 配下の 1 回限りのデータ取得スクリプトは tsconfig から除外されている
-- **JSX は使えない** — Vercel `@vercel/node` が `.tsx` を bundle しないため、HTML は app.ts 内で template literal として直接生成する
+- **JSX は使えない** — mono-repo 方針 (ビューは template literal を返す .ts 関数。Workers/esbuild でも踏襲) により、HTML は app.ts 内で template literal として直接生成する
