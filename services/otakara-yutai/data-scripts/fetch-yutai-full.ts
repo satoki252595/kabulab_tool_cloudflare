@@ -5,48 +5,16 @@
  * Phase 2: 各銘柄の個別ページ /stock/XXXX/yutai から詳細データを取得
  * Phase 3: 既存データを削除してクリーンインポート
  */
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
-import { sql, and, eq, notInArray } from "drizzle-orm";
+import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import * as schema from "../src/db/schema.js";
+import { yutaiGenres, yutaiBenefits, stocks } from "../src/db/schema.js";
+import { sql, eq, inArray } from "drizzle-orm";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import "dotenv/config";
-import { pgTable, pgSchema, serial, text, integer, timestamp, boolean } from "drizzle-orm/pg-core";
 
-// Schema
-// 銘柄マスタは 2026-04 に core.stocks へ統合済み (public.stocks は廃止)。
-// search_path は public のみなので、未指定 pgTable("stocks") だと存在しない
-// public.stocks を指して全件失敗する。必ず core スキーマで定義する。
-// 一方 yutai_genres / yutai_benefits は otakara の public スキーマ。
-const core = pgSchema("core");
-const yutaiGenres = pgTable("yutai_genres", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull().unique(),
-  slug: text("slug").notNull().unique(),
-  description: text("description"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
-const stocks = core.table("stocks", {
-  id: serial("id").primaryKey(),
-  code: text("code").notNull().unique(),
-  name: text("name").notNull(),
-  market: text("market").notNull(),
-  sector: text("sector"),
-  isActive: boolean("is_active").default(true).notNull(),
-  isYutai: boolean("is_yutai").default(false).notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
-const yutaiBenefits = pgTable("yutai_benefits", {
-  id: serial("id").primaryKey(),
-  stockId: integer("stock_id").references(() => stocks.id).notNull(),
-  genreId: integer("genre_id").references(() => yutaiGenres.id).notNull(),
-  description: text("description").notNull(),
-  minShares: integer("min_shares").notNull(),
-  recordMonth: integer("record_month").notNull(),
-  estimatedValue: integer("estimated_value"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+// Schema は src/db/schema.ts に集約済み (D1/SQLite 版 — ADR-0001)。
+// 銘柄マスタ stocks は core_stocks の再 export、yutai_genres / yutai_benefits は
+// otakara 固有テーブル。インラインの pgTable 定義は廃止した。
 
 // ジャンルマッピング（minkabuのカテゴリ名→slug）
 const GENRE_SLUG_MAP: Record<string, string> = {
@@ -248,15 +216,12 @@ async function fetchStockDetail(code: string): Promise<StockYutaiData | null> {
 
 /** Phase 3: DBにインポート */
 async function importToDb(allData: StockYutaiData[]) {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) throw new Error("DATABASE_URL is required");
-  const sqlClient = neon(databaseUrl);
-  const db = drizzle(sqlClient);
+  const db = createD1HttpDb(schema);
 
   // 既存の優待データのみ削除する。
   // core.stocks は全 JPX 上場株 (~4,000) の母集団なので **削除しない**。
   //
-  // is_yutai は「事前に全 false → ループで true」だと neon-http が
+  // is_yutai は「事前に全 false → ループで true」だと D1 HTTP クライアントが
   // トランザクション非対応のためループ途中で落ちると全優待が消える窓が
   // できる。よって upsert を全件成功させた **後** に、今回スクレイプできた
   // code の補集合だけ false へ落とす後処理方式にする (CLAUDE.md ルール2)。
@@ -311,7 +276,7 @@ async function importToDb(allData: StockYutaiData[]) {
           name: sql`excluded.name`,
           market: sql`excluded.market`,
           isYutai: sql`true`,
-          updatedAt: sql`now()`,
+          updatedAt: sql`(unixepoch())`,
         },
       }).returning({ id: stocks.id });
       stockCount++;
@@ -358,11 +323,26 @@ async function importToDb(allData: StockYutaiData[]) {
   }
 
   // 後処理: 今回スクレイプできなかった既存 is_yutai 銘柄を false へ。
-  // (優待を廃止した銘柄が翌月 false に落ちる。core.stocks 行自体は残す)
-  await db
-    .update(stocks)
-    .set({ isYutai: false, updatedAt: sql`now()` })
-    .where(and(eq(stocks.isYutai, true), notInArray(stocks.code, scrapedCodes)));
+  // (優待を廃止した銘柄が翌月 false に落ちる。core_stocks 行自体は残す)
+  //
+  // D1 の bind 上限 (100/文) のため notInArray(全スクレイプコード ~1,600) は
+  // 使えない。is_yutai=true を読み出して in-memory で差集合を取り、ID で
+  // 分割更新する (monthly.ts と同じ D1 方言パターン)。
+  const scrapedSet = new Set(scrapedCodes);
+  const currentYutai = await db
+    .select({ id: stocks.id, code: stocks.code })
+    .from(stocks)
+    .where(eq(stocks.isYutai, true));
+  const toFalseIds = currentYutai
+    .filter((s) => !scrapedSet.has(s.code))
+    .map((s) => s.id);
+  const RESET_CHUNK = 80;
+  for (let i = 0; i < toFalseIds.length; i += RESET_CHUNK) {
+    await db
+      .update(stocks)
+      .set({ isYutai: false, updatedAt: sql`(unixepoch())` })
+      .where(inArray(stocks.id, toFalseIds.slice(i, i + RESET_CHUNK)));
+  }
 
   if (failedCodes.length > 0) {
     console.warn(

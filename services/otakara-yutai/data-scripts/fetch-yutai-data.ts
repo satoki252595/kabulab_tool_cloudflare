@@ -2,40 +2,15 @@
  * 優待銘柄の全量データ取得スクリプト
  * minkabu.jp のランキングページから全月・全ジャンルのデータを取得
  */
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import * as schema from "../src/db/schema.js";
+import { yutaiGenres, yutaiBenefits, stocks } from "../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import "dotenv/config";
-import { pgTable, serial, text, integer, real, timestamp, date, boolean } from "drizzle-orm/pg-core";
 
-const yutaiGenres = pgTable("yutai_genres", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull().unique(),
-  slug: text("slug").notNull().unique(),
-  description: text("description"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
-const stocks = pgTable("stocks", {
-  id: serial("id").primaryKey(),
-  code: text("code").notNull().unique(),
-  name: text("name").notNull(),
-  market: text("market").notNull(),
-  sector: text("sector"),
-  isActive: boolean("is_active").default(true).notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
-const yutaiBenefits = pgTable("yutai_benefits", {
-  id: serial("id").primaryKey(),
-  stockId: integer("stock_id").references(() => stocks.id).notNull(),
-  genreId: integer("genre_id").references(() => yutaiGenres.id).notNull(),
-  description: text("description").notNull(),
-  minShares: integer("min_shares").notNull(),
-  recordMonth: integer("record_month").notNull(),
-  estimatedValue: integer("estimated_value"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+// Schema は src/db/schema.ts に集約済み (D1/SQLite 版 — ADR-0001)。
+// stocks は core_stocks の再 export、yutai_genres / yutai_benefits は otakara 固有。
+// インラインの pgTable 定義は廃止した。
 
 const GENRE_MAP: Record<string, { name: string; slug: string; desc: string }> = {
   grocery: { name: "食品・飲料", slug: "food", desc: "食品、飲料、食料品" },
@@ -200,10 +175,7 @@ async function main() {
   }
 
   // 4. DBにインポート
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) throw new Error("DATABASE_URL is required");
-  const sql = neon(databaseUrl);
-  const db = drizzle(sql);
+  const db = createD1HttpDb(schema);
 
   console.log("📦 DBにインポート中...\n");
 

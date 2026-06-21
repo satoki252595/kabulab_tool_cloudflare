@@ -19,26 +19,15 @@ import { stockDetailPage, stockNotFoundPage } from "../views/stock-detail.js";
 import { riskPage } from "../views/risk.js";
 import { riskQuerySchema } from "../validators/risk.js";
 
-/** SSR ページルーター */
-export const pagesRoute = new Hono();
+/** SSR ページルーター。データは Cloudflare D1 バインディング `c.env.DB` から取得する（ADR-0001: Neon 廃止）。 */
+type Bindings = { DB: D1Database };
+export const pagesRoute = new Hono<{ Bindings: Bindings }>();
 
 // -----------------------------------------------------------------------------
 // GET / — ダッシュボード
 // -----------------------------------------------------------------------------
 pagesRoute.get("/", async (c) => {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.html(
-      dashboardPage({
-        macro: null,
-        topSectors: [],
-        counts: { totalScreened: 0, passedLong: 0, passedShort: 0, totalSignals: 0 },
-        topBreakouts: [],
-      }),
-      500
-    );
-  }
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
 
   // マクロ判定 — 最新 1 行
   const macroRows = await db.select().from(marketContext).orderBy(desc(marketContext.date)).limit(1);
@@ -66,18 +55,18 @@ pagesRoute.get("/", async (c) => {
 
   // カウント集計
   const [{ totalScreened }] = await db
-    .select({ totalScreened: sql<number>`count(*)::int` })
+    .select({ totalScreened: sql<number>`count(*)` })
     .from(stockScreening);
   const [{ passedLong }] = await db
-    .select({ passedLong: sql<number>`count(*)::int` })
+    .select({ passedLong: sql<number>`count(*)` })
     .from(stockScreening)
     .where(eq(stockScreening.allPassedLong, true));
   const [{ passedShort }] = await db
-    .select({ passedShort: sql<number>`count(*)::int` })
+    .select({ passedShort: sql<number>`count(*)` })
     .from(stockScreening)
     .where(eq(stockScreening.allPassedShort, true));
   const [{ totalSignals }] = await db
-    .select({ totalSignals: sql<number>`count(*)::int` })
+    .select({ totalSignals: sql<number>`count(*)` })
     .from(entrySignals);
 
   // 強度上位シグナル 5 件
@@ -139,11 +128,7 @@ const screeningQuerySchema = z.object({
 
 pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c) => {
   const { direction } = c.req.valid("query");
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.html(screeningPage({ direction, rows: [], totalCount: 0 }), 500);
-  }
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
 
   const whereCondition =
     direction === "long"
@@ -214,11 +199,7 @@ const signalsQuerySchema = z.object({
 
 pagesRoute.get("/signals", zValidator("query", signalsQuerySchema), async (c) => {
   const { pattern } = c.req.valid("query");
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.html(signalsPage({ pattern, rows: [], totalCount: 0 }), 500);
-  }
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
 
   const base = db
     .select({
@@ -274,11 +255,7 @@ const stockParamSchema = z.object({
 
 pagesRoute.get("/stock/:code", zValidator("param", stockParamSchema), async (c) => {
   const { code } = c.req.valid("param");
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.html(stockNotFoundPage(code), 500);
-  }
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
 
   const [stock] = await db.select().from(stocks).where(eq(stocks.code, code)).limit(1);
   if (!stock) {

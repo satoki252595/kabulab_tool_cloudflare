@@ -185,10 +185,12 @@ export async function getOhlcvSeries(
   assertSymbol(symbol);
 
   // 鮮度チェック (per-row TTL: 最新行の fetched_at で判定)
+  // D1/SQLite: fetched_at は integer epoch 秒。MAX() はその秒値を返すので
+  // ミリ秒へ直してから now() と比較する (pg の ::text/::int キャストは廃止)。
   const [meta] = await db
     .select({
-      latestFetchedAt: sql<string | null>`MAX(${dailyOhlcv.fetchedAt})::text`,
-      rowCount: sql<number>`COUNT(*)::int`,
+      latestFetchedAt: sql<number | null>`MAX(${dailyOhlcv.fetchedAt})`,
+      rowCount: sql<number>`COUNT(*)`,
     })
     .from(dailyOhlcv)
     .where(eq(dailyOhlcv.symbol, symbol));
@@ -197,7 +199,7 @@ export async function getOhlcvSeries(
     meta?.latestFetchedAt !== null &&
     meta?.latestFetchedAt !== undefined &&
     (meta.rowCount ?? 0) > 0 &&
-    Date.now() - new Date(meta.latestFetchedAt).getTime() < CACHE_TTL_MS;
+    Date.now() - meta.latestFetchedAt * 1000 < CACHE_TTL_MS;
 
   if (cacheFresh) {
     const rows = await db

@@ -28,8 +28,7 @@
  */
 
 import { sql, eq, and, lt, gte, inArray } from "drizzle-orm";
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 
 // core スキーマは rsi-screening の定義を流用 (001 が所有・更新)
 import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
@@ -72,8 +71,9 @@ import type { DailyOhlcv } from "../shared/types.js";
 // 型定義
 // -----------------------------------------------------------------------------
 
-type Db = ReturnType<typeof drizzle<typeof SCHEMAS>>;
-const SCHEMAS = { ...coreSchema, ...rsiSchema, ...swingSchema };
+// createD1HttpDb が core_* を自動登録するので rsi/swing スキーマのみ渡す。
+const SCHEMAS = { ...rsiSchema, ...swingSchema };
+type Db = ReturnType<typeof createDailyDb>;
 
 /** 日次 sync の結果サマリ */
 export interface DailySyncResult {
@@ -177,10 +177,19 @@ const CONCURRENCY = 5;
 /** ワーカー間隔 (ms) */
 const DELAY_MS = 200;
 /**
- * swing.daily_ohlcv の保持期間 (営業日)
+ * swing_daily_ohlcv の保持期間 (営業日)
  *
- * 母集団が全 JPX 内国株 (~4,000) に拡張されたため、Neon Free tier の
- * ストレージ余裕を確保すべく 120→90 に短縮 (約 -25% 行数)。
+ * 母集団が全 JPX 内国株 (~4,000) に拡張されたため、ストレージ余裕を確保すべく
+ * 120→90 に短縮 (約 -25% 行数)。
+ *
+ * ⚠️ ADR-0001 既知の Phase 3 課題 (D1 書き込みコスト):
+ *   現状 writeStockSnapshot は毎回 6mo スライス (~130 行) を全 upsert するため、
+ *   全銘柄日次で ~130×4,000 ≈ 52 万 rows-written/日 となり D1 無料枠
+ *   (10万 rows/日) を超える。さらに createD1HttpDb は db.batch() 非対応で
+ *   1 行=1 HTTP のため遅い。本格運用時は (a) 取込を Worker バインディング
+ *   + db.batch() へ移し、(b) OHLCV は差分 (最新 N 営業日) のみ upsert する
+ *   こと。日次取込の Workers Cron 配線も Phase 3 (現状 CLI 手動・Yahoo 429 で
+ *   実質停止中) なので、移行完了時点では write 超過は発生しない。
  */
 const OHLCV_RETENTION_DAYS = 90;
 
@@ -189,11 +198,11 @@ const OHLCV_RETENTION_DAYS = 90;
 // -----------------------------------------------------------------------------
 
 /**
- * Neon 接続用の Drizzle クライアントを作成する
+ * Node から D1 へ書き込む Drizzle クライアントを作成する (取込専用 HTTP)。
+ * createD1HttpDb が core_* を自動登録するので rsi/swing スキーマのみ渡す。
  */
-export function createDailyDb(databaseUrl: string): Db {
-  const neonSql = neon(databaseUrl);
-  return drizzle(neonSql, { schema: SCHEMAS });
+export function createDailyDb() {
+  return createD1HttpDb(SCHEMAS);
 }
 
 /**
@@ -353,11 +362,15 @@ export async function runDailySync(
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 5: クリーンアップ");
 
-  if (inactivated.length > 0) {
+  // D1 bind 上限: IN リストを 80 件/文に分割して inactivate。
+  const INACT_CHUNK = 80;
+  for (let i = 0; i < inactivated.length; i += INACT_CHUNK) {
     await db
       .update(coreSchema.stocks)
       .set({ isActive: false, updatedAt: new Date() })
-      .where(inArray(coreSchema.stocks.id, inactivated));
+      .where(
+        inArray(coreSchema.stocks.id, inactivated.slice(i, i + INACT_CHUNK))
+      );
   }
 
   // -----------------------------------------------------------------
@@ -379,7 +392,7 @@ export async function runDailySync(
     // sector_daily を不完全な集計で上書きせず警告で止める (CLAUDE.md ルール2:
     // 黙って誤った値を出さない / オペレータ通知)。
     const [{ activeCount }] = await db
-      .select({ activeCount: sql<number>`count(*)::int` })
+      .select({ activeCount: sql<number>`count(*)` })
       .from(coreSchema.stocks)
       .where(eq(coreSchema.stocks.isActive, true));
 
@@ -396,7 +409,11 @@ export async function runDailySync(
       .where(
         and(
           eq(coreSchema.stocks.isActive, true),
-          gte(swingSchema.stockIndicators.computedAt, sql`CURRENT_DATE`)
+          // D1/SQLite: computed_at は epoch 秒。本日(UTC)0 時の epoch と比較する。
+          gte(
+            swingSchema.stockIndicators.computedAt,
+            sql`unixepoch('now','start of day')`
+          )
         )
       );
 
@@ -423,9 +440,11 @@ export async function runDailySync(
       await db
         .delete(swingSchema.sectorDaily)
         .where(eq(swingSchema.sectorDaily.date, today));
-      if (sectorAggs.length > 0) {
+      // D1 bind 上限 (100/文): sector_daily は 6 列なので 16 行/文に分割。
+      const SECTOR_CHUNK = 16;
+      for (let i = 0; i < sectorAggs.length; i += SECTOR_CHUNK) {
         await db.insert(swingSchema.sectorDaily).values(
-          sectorAggs.map((a) => ({
+          sectorAggs.slice(i, i + SECTOR_CHUNK).map((a) => ({
             date: today,
             sector: a.sector,
             pct1d: a.pct1d,
@@ -643,7 +662,7 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
         marketCap: sql`excluded.market_cap`,
         operatingMargin: sql`excluded.operating_margin`,
         dataDate: sql`excluded.data_date`,
-        fetchedAt: sql`now()`,
+        fetchedAt: sql`(unixepoch())`,
       },
     });
 
@@ -676,7 +695,7 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
         isBlueChip: sql`excluded.is_blue_chip`,
         operatingMarginTtm: sql`excluded.operating_margin_ttm`,
         revenueTrend: sql`excluded.revenue_trend`,
-        computedAt: sql`now()`,
+        computedAt: sql`(unixepoch())`,
       },
     });
 
@@ -692,19 +711,23 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
     volume: r.volume,
   }));
   if (ohlcvRows.length > 0) {
-    await db
-      .insert(swingSchema.dailyOhlcv)
-      .values(ohlcvRows)
-      .onConflictDoUpdate({
-        target: [swingSchema.dailyOhlcv.stockId, swingSchema.dailyOhlcv.date],
-        set: {
-          open: sql`excluded.open`,
-          high: sql`excluded.high`,
-          low: sql`excluded.low`,
-          close: sql`excluded.close`,
-          volume: sql`excluded.volume`,
-        },
-      });
+    // D1 bind 上限 (100/文): daily_ohlcv は 7 列なので 14 行/文に分割。
+    const OHLCV_CHUNK = 14;
+    for (let i = 0; i < ohlcvRows.length; i += OHLCV_CHUNK) {
+      await db
+        .insert(swingSchema.dailyOhlcv)
+        .values(ohlcvRows.slice(i, i + OHLCV_CHUNK))
+        .onConflictDoUpdate({
+          target: [swingSchema.dailyOhlcv.stockId, swingSchema.dailyOhlcv.date],
+          set: {
+            open: sql`excluded.open`,
+            high: sql`excluded.high`,
+            low: sql`excluded.low`,
+            close: sql`excluded.close`,
+            volume: sql`excluded.volume`,
+          },
+        });
+    }
     // 古いレコード削除 (OHLCV_RETENTION_DAYS より前)
     const cutoffDate =
       snap.ohlcv6mo[Math.max(0, snap.ohlcv6mo.length - OHLCV_RETENTION_DAYS)]
@@ -788,7 +811,7 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
         latestVolume: sql`excluded.latest_volume`,
         latestDate: sql`excluded.latest_date`,
         pctChange1d: sql`excluded.pct_change_1d`,
-        computedAt: sql`now()`,
+        computedAt: sql`(unixepoch())`,
       },
     });
 
@@ -821,7 +844,7 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
         trendOkShort: sql`excluded.trend_ok_short`,
         allPassedLong: sql`excluded.all_passed_long`,
         allPassedShort: sql`excluded.all_passed_short`,
-        computedAt: sql`now()`,
+        computedAt: sql`(unixepoch())`,
       },
     });
 
@@ -969,7 +992,7 @@ async function syncMarketContext(db: Db): Promise<void> {
         sp500Pct: sql`excluded.sp500_pct`,
         judgment: sql`excluded.judgment`,
         judgmentReason: sql`excluded.judgment_reason`,
-        computedAt: sql`now()`,
+        computedAt: sql`(unixepoch())`,
       },
     });
 }

@@ -2,28 +2,17 @@
  * 銘柄名修正スクリプト
  * 「銘柄XXXX」になっている銘柄名をminkabuから正しい名前に更新
  */
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import * as schema from "../src/db/schema.js";
+import { stocks } from "../src/db/schema.js";
 import { eq, like } from "drizzle-orm";
 import "dotenv/config";
-import { pgTable, serial, text, integer, boolean, timestamp } from "drizzle-orm/pg-core";
 
-const stocks = pgTable("stocks", {
-  id: serial("id").primaryKey(),
-  code: text("code").notNull().unique(),
-  name: text("name").notNull(),
-  market: text("market").notNull(),
-  sector: text("sector"),
-  isActive: boolean("is_active").default(true).notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+// Schema は src/db/schema.ts に集約済み (D1/SQLite 版 — ADR-0001)。
+// stocks は core_stocks の再 export。インラインの pgTable 定義は廃止した。
 
 async function main() {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) throw new Error("DATABASE_URL required");
-  const sql = neon(databaseUrl);
-  const db = drizzle(sql);
+  const db = createD1HttpDb(schema);
 
   // 名前が「銘柄XXXX」のものを取得
   const badNames = await db.select({ id: stocks.id, code: stocks.code, name: stocks.name })

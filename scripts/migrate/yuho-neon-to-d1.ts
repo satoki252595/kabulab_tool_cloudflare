@@ -1,5 +1,5 @@
 /**
- * 一度きりの cutover: Neon(yuho 系 + 共有 core) → Cloudflare D1 へ実データ移送
+ * 一度きりの cutover: Neon(全サービス + 共有 core) → Cloudflare D1 へ実データ移送
  * (ADR-0001 §7)。型変換は Postgres 側で投影して決定論的に行う:
  *   timestamptz → epoch 秒(integer) / date → text 'YYYY-MM-DD' / boolean → 0|1
  * FK 整合のため Neon の serial id をそのまま D1 へ持ち込む。
@@ -7,13 +7,22 @@
  * 生成物: drizzle/d1/_cutover-data.sql（DELETE → INSERT 群。冪等再実行可）。
  * 適用は呼び出し側で `wrangler d1 execute kabulab-cf --remote --file=...`。
  *
- * 実行: npx tsx scripts/migrate/yuho-neon-to-d1.ts
+ * 実行例:
+ *   npx tsx scripts/migrate/yuho-neon-to-d1.ts                       # 全テーブル
+ *   npx tsx scripts/migrate/yuho-neon-to-d1.ts --only=rsi_percentile  # 一部だけ
+ *   npx tsx scripts/migrate/yuho-neon-to-d1.ts --only=swing_daily_ohlcv \
+ *     --out=drizzle/d1/_cutover-swing-ohlcv.sql --maxRowsPerFile=60000
+ *
+ * 大きいテーブル (swing_daily_ohlcv ~337k) は --maxRowsPerFile で
+ * <out>.part01.sql, part02.sql ... に分割し、wrangler 1 回当たりのサイズを抑える。
+ * finmath_daily_ohlcv (~1.8M) は再生成可能な遅延キャッシュ (price-cache が Worker
+ * エッジから Yahoo を再取得) なので cutover 対象外 (ADR-0001 正規化方針)。
  */
 import "dotenv/config";
 import { promises as fs } from "node:fs";
 import { neon } from "@neondatabase/serverless";
 
-const OUT = "drizzle/d1/_cutover-data.sql";
+const DEFAULT_OUT = "drizzle/d1/_cutover-data.sql";
 const ROWS_PER_INSERT = 50; // 1 文の行数（bind ではなく生 SQL だが小さく保つ）
 
 type Col = { name: string; type: "int" | "real" | "text" };
@@ -138,6 +147,198 @@ async function main() {
         extract(epoch from ingested_at)::bigint AS ingested_at
         FROM ir_catalog.disclosures ORDER BY id`,
     },
+    // -------- ADR-0001 第2弾 cluster: 001/002/003/004 --------
+    {
+      d1: "rsi_percentile",
+      cols: [
+        { name: "id", type: "int" }, { name: "stock_id", type: "int" },
+        { name: "rsi_10", type: "real" }, { name: "rsi_10_percentile", type: "real" },
+        { name: "rsi_40", type: "real" }, { name: "rsi_40_percentile", type: "real" },
+        { name: "rsi_120", type: "real" }, { name: "rsi_120_percentile", type: "real" },
+        { name: "rsi_min_percentile", type: "real" }, { name: "is_blue_chip", type: "int" },
+        { name: "operating_margin_ttm", type: "real" }, { name: "revenue_trend", type: "int" },
+        { name: "computed_at", type: "int" },
+      ],
+      select: `SELECT id, stock_id, rsi_10, rsi_10_percentile, rsi_40, rsi_40_percentile,
+        rsi_120, rsi_120_percentile, rsi_min_percentile,
+        is_blue_chip::int AS is_blue_chip, operating_margin_ttm, revenue_trend,
+        extract(epoch from computed_at)::bigint AS computed_at
+        FROM rsi.stock_rsi_percentile ORDER BY id`,
+    },
+    {
+      d1: "swing_stock_indicators",
+      cols: [
+        { name: "stock_id", type: "int" },
+        { name: "avg_turnover_20d", type: "real" }, { name: "volume_20d", type: "real" },
+        { name: "volume_ratio", type: "real" }, { name: "atr_14", type: "real" },
+        { name: "atr_pct", type: "real" }, { name: "sma_5", type: "real" },
+        { name: "sma_20", type: "real" }, { name: "sma_25", type: "real" },
+        { name: "sma_60", type: "real" }, { name: "sma_75", type: "real" },
+        { name: "trend_long", type: "int" }, { name: "trend_short", type: "int" },
+        { name: "perfect_order_long", type: "int" }, { name: "perfect_order_short", type: "int" },
+        { name: "rsi_14", type: "real" }, { name: "macd", type: "real" },
+        { name: "macd_signal", type: "real" }, { name: "macd_hist", type: "real" },
+        { name: "range_20d_high", type: "real" }, { name: "range_20d_low", type: "real" },
+        { name: "range_width", type: "real" }, { name: "fib_high", type: "real" },
+        { name: "fib_low", type: "real" }, { name: "fib_382", type: "real" },
+        { name: "fib_500", type: "real" }, { name: "fib_618", type: "real" },
+        { name: "latest_close", type: "real" }, { name: "latest_volume", type: "real" },
+        { name: "latest_date", type: "text" }, { name: "pct_change_1d", type: "real" },
+        { name: "computed_at", type: "int" },
+      ],
+      select: `SELECT stock_id, avg_turnover_20d, volume_20d, volume_ratio, atr_14, atr_pct,
+        sma_5, sma_20, sma_25, sma_60, sma_75,
+        trend_long::int AS trend_long, trend_short::int AS trend_short,
+        perfect_order_long::int AS perfect_order_long, perfect_order_short::int AS perfect_order_short,
+        rsi_14, macd, macd_signal, macd_hist,
+        range_20d_high, range_20d_low, range_width, fib_high, fib_low, fib_382, fib_500, fib_618,
+        latest_close, latest_volume, to_char(latest_date,'YYYY-MM-DD') AS latest_date, pct_change_1d,
+        extract(epoch from computed_at)::bigint AS computed_at
+        FROM swing.stock_indicators ORDER BY stock_id`,
+    },
+    {
+      d1: "swing_stock_screening",
+      cols: [
+        { name: "stock_id", type: "int" }, { name: "liquidity_ok", type: "int" },
+        { name: "volatility_ok", type: "int" }, { name: "trend_ok_long", type: "int" },
+        { name: "trend_ok_short", type: "int" }, { name: "supply_note", type: "text" },
+        { name: "catalyst_note", type: "text" }, { name: "all_passed_long", type: "int" },
+        { name: "all_passed_short", type: "int" }, { name: "computed_at", type: "int" },
+      ],
+      select: `SELECT stock_id, liquidity_ok::int AS liquidity_ok, volatility_ok::int AS volatility_ok,
+        trend_ok_long::int AS trend_ok_long, trend_ok_short::int AS trend_ok_short,
+        supply_note, catalyst_note,
+        all_passed_long::int AS all_passed_long, all_passed_short::int AS all_passed_short,
+        extract(epoch from computed_at)::bigint AS computed_at
+        FROM swing.stock_screening ORDER BY stock_id`,
+    },
+    {
+      d1: "swing_entry_signals",
+      cols: [
+        { name: "id", type: "int" }, { name: "stock_id", type: "int" },
+        { name: "pattern", type: "text" }, { name: "direction", type: "text" },
+        { name: "entry_price", type: "real" }, { name: "stop_loss", type: "real" },
+        { name: "target_1", type: "real" }, { name: "target_2", type: "real" },
+        { name: "risk_reward_ratio", type: "real" }, { name: "signal_strength", type: "real" },
+        { name: "note", type: "text" }, { name: "computed_at", type: "int" },
+      ],
+      select: `SELECT id, stock_id, pattern, direction, entry_price, stop_loss,
+        target_1, target_2, risk_reward_ratio, signal_strength, note,
+        extract(epoch from computed_at)::bigint AS computed_at
+        FROM swing.entry_signals ORDER BY id`,
+    },
+    {
+      d1: "swing_market_context",
+      cols: [
+        { name: "date", type: "text" }, { name: "nikkei_close", type: "real" },
+        { name: "nikkei_pct", type: "real" }, { name: "nikkei_vi", type: "real" },
+        { name: "topix_turnover_ratio", type: "real" }, { name: "futures_gap", type: "real" },
+        { name: "vix", type: "real" }, { name: "sp500_pct", type: "real" },
+        { name: "judgment", type: "text" }, { name: "judgment_reason", type: "text" },
+        { name: "computed_at", type: "int" },
+      ],
+      select: `SELECT to_char(date,'YYYY-MM-DD') AS date, nikkei_close, nikkei_pct, nikkei_vi,
+        topix_turnover_ratio, futures_gap, vix, sp500_pct, judgment, judgment_reason,
+        extract(epoch from computed_at)::bigint AS computed_at
+        FROM swing.market_context ORDER BY date`,
+    },
+    {
+      d1: "swing_sector_daily",
+      cols: [
+        { name: "id", type: "int" }, { name: "date", type: "text" },
+        { name: "sector", type: "text" }, { name: "pct_1d", type: "real" },
+        { name: "pct_5d", type: "real" }, { name: "stock_count", type: "int" },
+        { name: "rank_1d", type: "int" },
+      ],
+      select: `SELECT id, to_char(date,'YYYY-MM-DD') AS date, sector, pct_1d, pct_5d,
+        stock_count, rank_1d FROM swing.sector_daily ORDER BY id`,
+    },
+    {
+      d1: "yutai_genres",
+      cols: [
+        { name: "id", type: "int" }, { name: "name", type: "text" },
+        { name: "slug", type: "text" }, { name: "description", type: "text" },
+        { name: "created_at", type: "int" },
+      ],
+      select: `SELECT id, name, slug, description,
+        extract(epoch from created_at)::bigint AS created_at
+        FROM public.yutai_genres ORDER BY id`,
+    },
+    {
+      d1: "yutai_benefits",
+      cols: [
+        { name: "id", type: "int" }, { name: "stock_id", type: "int" },
+        { name: "genre_id", type: "int" }, { name: "description", type: "text" },
+        { name: "short_summary", type: "text" }, { name: "min_shares", type: "int" },
+        { name: "record_month", type: "int" }, { name: "estimated_value", type: "int" },
+        { name: "created_at", type: "int" }, { name: "updated_at", type: "int" },
+      ],
+      select: `SELECT id, stock_id, genre_id, description, short_summary, min_shares,
+        record_month, estimated_value,
+        extract(epoch from created_at)::bigint AS created_at,
+        extract(epoch from updated_at)::bigint AS updated_at
+        FROM public.yutai_benefits ORDER BY id`,
+    },
+    {
+      d1: "otakara_stock_financials",
+      cols: [
+        { name: "id", type: "int" }, { name: "stock_id", type: "int" },
+        { name: "price", type: "real" }, { name: "per", type: "real" },
+        { name: "pbr", type: "real" }, { name: "dividend_yield", type: "real" },
+        { name: "eps", type: "real" }, { name: "bps", type: "real" },
+        { name: "roe", type: "real" }, { name: "roa", type: "real" },
+        { name: "market_cap", type: "real" }, { name: "ma_5", type: "real" },
+        { name: "ma_25", type: "real" }, { name: "ma_75", type: "real" },
+        { name: "rsi_14", type: "real" }, { name: "macd", type: "real" },
+        { name: "macd_signal", type: "real" }, { name: "yutai_yield", type: "real" },
+        { name: "fetched_at", type: "int" }, { name: "data_date", type: "text" },
+      ],
+      select: `SELECT id, stock_id, price, per, pbr, dividend_yield, eps, bps, roe, roa,
+        market_cap, ma_5, ma_25, ma_75, rsi_14, macd, macd_signal, yutai_yield,
+        extract(epoch from fetched_at)::bigint AS fetched_at,
+        to_char(data_date,'YYYY-MM-DD') AS data_date
+        FROM public.stock_financials ORDER BY id`,
+    },
+    {
+      d1: "otakara_stock_scores",
+      cols: [
+        { name: "id", type: "int" }, { name: "stock_id", type: "int" },
+        { name: "fundamental_score", type: "real" }, { name: "technical_score", type: "real" },
+        { name: "total_score", type: "real" }, { name: "scored_at", type: "int" },
+      ],
+      select: `SELECT id, stock_id, fundamental_score, technical_score, total_score,
+        extract(epoch from scored_at)::bigint AS scored_at
+        FROM public.stock_scores ORDER BY id`,
+    },
+    {
+      d1: "finmath_price_snapshot",
+      cols: [
+        { name: "id", type: "int" }, { name: "code", type: "text" },
+        { name: "name", type: "text" }, { name: "price", type: "real" },
+        { name: "per", type: "real" }, { name: "pbr", type: "real" },
+        { name: "dividend_yield", type: "real" }, { name: "eps", type: "real" },
+        { name: "bps", type: "real" }, { name: "roe", type: "real" },
+        { name: "roa", type: "real" }, { name: "market_cap", type: "real" },
+        { name: "operating_margin_ttm", type: "real" }, { name: "data_date", type: "text" },
+        { name: "fetched_at", type: "int" },
+      ],
+      select: `SELECT id, code, name, price, per, pbr, dividend_yield, eps, bps, roe, roa,
+        market_cap, operating_margin_ttm, to_char(data_date,'YYYY-MM-DD') AS data_date,
+        extract(epoch from fetched_at)::bigint AS fetched_at
+        FROM finmath.price_snapshot ORDER BY id`,
+    },
+    {
+      d1: "swing_daily_ohlcv",
+      cols: [
+        { name: "id", type: "int" }, { name: "stock_id", type: "int" },
+        { name: "date", type: "text" }, { name: "open", type: "real" },
+        { name: "high", type: "real" }, { name: "low", type: "real" },
+        { name: "close", type: "real" }, { name: "volume", type: "real" },
+      ],
+      select: `SELECT id, stock_id, to_char(date,'YYYY-MM-DD') AS date,
+        open, high, low, close, volume FROM swing.daily_ohlcv ORDER BY id`,
+    },
+    // 注: finmath_daily_ohlcv (~1.8M) は再生成可能な遅延キャッシュのため cutover 対象外。
   ];
 
   // --only=table1,table2 で対象テーブルを限定（既存の正本を再投入せず安全に追加移送）。
@@ -146,11 +347,55 @@ async function main() {
   const activeTables = onlySet ? tables.filter((t) => onlySet.has(t.d1)) : tables;
   if (activeTables.length === 0) throw new Error("--only に一致するテーブルがありません");
 
+  const outArg = process.argv.find((a) => a.startsWith("--out="));
+  const OUT = outArg ? outArg.slice("--out=".length) : DEFAULT_OUT;
+
+  const maxRowsArg = process.argv.find((a) => a.startsWith("--maxRowsPerFile="));
+  const maxRowsPerFile = maxRowsArg
+    ? Number(maxRowsArg.slice("--maxRowsPerFile=".length))
+    : 0;
+  if (maxRowsPerFile && activeTables.length !== 1) {
+    throw new Error("--maxRowsPerFile は単一テーブル (--only=<1つ>) のときのみ使えます");
+  }
+
+  const counts: Record<string, number> = {};
+
+  // --- 分割モード (単一テーブル・巨大データ用) ---
+  if (maxRowsPerFile) {
+    const t = activeTables[0];
+    const rows = (await sql.query(t.select)) as Record<string, unknown>[];
+    counts[t.d1] = rows.length;
+    const colList = t.cols.map((c) => c.name).join(", ");
+    const outFiles: string[] = [];
+    let part = 0;
+    for (let start = 0; start < rows.length; start += maxRowsPerFile) {
+      const fileRows = rows.slice(start, start + maxRowsPerFile);
+      const parts: string[] = ["PRAGMA foreign_keys=OFF;"];
+      // DELETE は最初の part だけ (全 part を順に適用する前提)
+      if (part === 0) parts.push(`DELETE FROM ${t.d1};`);
+      for (let i = 0; i < fileRows.length; i += ROWS_PER_INSERT) {
+        const chunk = fileRows.slice(i, i + ROWS_PER_INSERT);
+        const values = chunk
+          .map((r) => "(" + t.cols.map((c) => sqlLit(r[c.name], c.type)).join(",") + ")")
+          .join(",\n");
+        parts.push(`INSERT INTO ${t.d1} (${colList}) VALUES\n${values};`);
+      }
+      parts.push("PRAGMA foreign_keys=ON;");
+      const partPath = OUT.replace(/\.sql$/, "") + `.part${String(part + 1).padStart(2, "0")}.sql`;
+      await fs.writeFile(partPath, parts.join("\n") + "\n");
+      outFiles.push(partPath);
+      part++;
+    }
+    console.log("OUT(split):", JSON.stringify(outFiles));
+    console.log("COUNTS:", JSON.stringify(counts));
+    return;
+  }
+
+  // --- 通常モード (単一ファイル) ---
   const parts: string[] = ["PRAGMA foreign_keys=OFF;"];
   // DELETE は子→親の逆順（FK OFF だが念のため）
   for (const t of [...activeTables].reverse()) parts.push(`DELETE FROM ${t.d1};`);
 
-  const counts: Record<string, number> = {};
   for (const t of activeTables) {
     const rows = (await sql.query(t.select)) as Record<string, unknown>[];
     counts[t.d1] = rows.length;

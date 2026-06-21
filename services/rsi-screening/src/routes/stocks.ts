@@ -5,16 +5,12 @@ import { getStockDetail } from "../services/stock-detail-service.js";
 import { createDb } from "../db/client.js";
 
 /** 銘柄詳細APIルーター */
-export const stocksRoute = new Hono();
+type Bindings = { DB: D1Database };
+export const stocksRoute = new Hono<{ Bindings: Bindings }>();
 
 stocksRoute.get("/:code", zValidator("param", stockCodeParamSchema), async (c) => {
   const { code } = c.req.valid("param");
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.json({ error: "DATABASE_URL is not configured" }, 500);
-  }
-
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
   const detail = await getStockDetail(db, code);
 
   if (!detail) {

@@ -7,7 +7,8 @@
  *   - data/interpreted/chunk-*.jsonl   (idx -> shortSummary/estimatedValue)
  */
 import "dotenv/config";
-import { createDb } from "../src/db/client.js";
+import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import * as schema from "../src/db/schema.js";
 import { yutaiBenefits } from "../src/db/schema.js";
 import { inArray } from "drizzle-orm";
 import { readFileSync, readdirSync } from "fs";
@@ -18,10 +19,7 @@ import { fileURLToPath } from "node:url";
 // 出力先がズレてパイプラインが silent に繋がらなくなるため)。
 const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), "data");
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) throw new Error("DATABASE_URL is not set");
-
-const db = createDb(databaseUrl);
+const db = createD1HttpDb(schema);
 
 type SourceEntry = {
   idx: number;
