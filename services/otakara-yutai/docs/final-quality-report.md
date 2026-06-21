@@ -4,6 +4,11 @@
 **Date:** 2026-03-22
 **Reviewer:** Claude Opus 4.6 (comprehensive-review + security-scanning)
 
+> ※ 本レポートは 2026-03-22 時点の歴史的記録。以降 ADR-0001 により DB は
+> Neon PostgreSQL → Cloudflare D1 (SQLite)、ランタイムは Vercel → Cloudflare
+> Workers へ移行済み。以下の Neon/Vercel 前提の記述は当時の事実として残すが、
+> 現行アーキテクチャは D1/Workers である。歴史的な数値・指摘内容はそのまま保持。
+
 ## 1. Test Coverage
 
 | Metric | Value | Threshold | Status |
@@ -48,7 +53,7 @@
 | Pages app missing security headers | Security | Added secureHeaders() + onError + notFound handlers |
 | Unused better-auth dependency | Security/Code | Removed from package.json |
 
-## 5. Hono/Drizzle/Neon Specific Checks
+## 5. Hono/Drizzle/Neon Specific Checks (当時。現行は D1。ADR-0001 で移行済み)
 
 | Check | Status |
 |-------|--------|
@@ -66,7 +71,7 @@
 
 | Item | Severity | Notes |
 |------|----------|-------|
-| DB connection middleware for DRY | Medium | Neon HTTP is stateless, per-request is acceptable |
+| DB connection middleware for DRY | Medium | Neon HTTP is stateless, per-request is acceptable (※ADR-0001 で D1/Workers へ移行済み。現行は `dbMiddleware` が `createDb(c.env.DB)` を context に注入) |
 | Rate limiting | Medium | Recommended for production |
 | updatedAt auto-update | Medium | Needs .$onUpdate() or trigger |
 | Negative PER/PBR scoring | Low | Intentional per spec; could be improved |

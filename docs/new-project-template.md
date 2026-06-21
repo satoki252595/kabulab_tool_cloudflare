@@ -4,14 +4,16 @@
 
 ## 0. 前提
 
-kabulab は **単一の Vercel プロジェクト** (`kabulab`) に複数のサービスを Hono サブアプリとしてマウントする mono-repo 構成。既存サービスと依存関係 (Hono / Drizzle / Neon / Zod 等) を共有し、root の単一 `package.json` で全てを管理する。新サービス追加時は依存関係の追加は基本的に不要。
+kabulab は **単一の Cloudflare Workers プロジェクト** (`kabulab-cf`) に複数のサービスを Hono サブアプリとしてマウントする mono-repo 構成 (ADR-0001)。既存サービスと依存関係 (Hono / Drizzle (`drizzle-orm/d1` + `sqlite-core`) / Zod 等) を共有し、root の単一 `package.json` で全てを管理する。新サービス追加時は依存関係の追加は基本的に不要。
 
-**sync は統一 3 コマンド** (`sync:universe` / `sync:daily` / `sync:monthly`) に集約されている。母集団は `core.stocks` = 全 JPX 上場内国株 ~4,000 (`sync:universe` が JPX XLS から seed、月次 cron Phase 1 にも内包)。新サービスが日次/月次のデータ取得を必要とする場合、独自の sync を書かずに [src/cron/daily.ts](../src/cron/daily.ts) / [src/cron/monthly.ts](../src/cron/monthly.ts) に統合する (本ドキュメント §9 参照)。`core.stocks.is_yutai` は 002 otakara 専用フラグなので、他サービスは全 active を対象にしてよい。
+DB は **Cloudflare D1 (SQLite)** の単一 DB `kabulab-cf`。名前空間が無いため、全サービスを **接頭辞テーブル** (`core_*` / `<slug>_*`) で同居させる。Worker からは `c.env.DB` バインディング経由で読み取る。
+
+**sync は統一 3 コマンド** (`sync:universe` / `sync:daily` / `sync:monthly`) に集約されている。母集団は `core_stocks` = 全 JPX 上場内国株 ~4,000 (`sync:universe` が JPX XLS から seed、月次 rebuild Phase 1 にも内包)。新サービスが日次/月次のデータ取得を必要とする場合、独自の sync を書かずに [src/cron/daily.ts](../src/cron/daily.ts) / [src/cron/monthly.ts](../src/cron/monthly.ts) に統合する (本ドキュメント §9 参照)。`core_stocks.is_yutai` は 002 otakara 専用フラグなので、他サービスは全 active を対象にしてよい。
 
 ## 1. サービスフォルダの作成
 
 ```bash
-cd /Users/satoki252595/projects/kabulab_tool
+cd /Users/satoki252595/projects/kabulab-cf
 mkdir -p services/<slug>/src/{db,routes,services,validators,views,tests}
 ```
 
@@ -29,63 +31,69 @@ mkdir -p services/<slug>/src/{db,routes,services,validators,views,tests}
 export const BASE_PATH = "/<slug>";
 ```
 
-## 3. DB スキーマ (Drizzle)
+## 3. DB スキーマ (Drizzle + D1 / sqlite-core)
+
+DB は単一の Cloudflare D1 `kabulab-cf`。名前空間が無いため旧 PG スキーマ名 (core / public / swing 等) の概念は廃止し、**接頭辞テーブル** (`core_*` / `<slug>_*`) で同居させる。スキーマは `drizzle-orm/sqlite-core` で定義する。
 
 ### 共有スキーマを使う場合
 
-日次 sync が `core` スキーマを更新している。新サービスはそれを **読み取り専用** で参照する。
+共有 core は単一正本の [src/shared/db/core-schema.ts](../src/shared/db/core-schema.ts) (`core_stocks` / `core_stock_financials` / `core_stock_annual_financials`)。新サービスはそれを **読み取り専用** で参照し、再宣言しない。
 
 ```ts
-// services/<slug>/src/db/core-schema.ts
-// 既存の services/rsi-screening/src/db/core-schema.ts からコピーして利用
-// または import で参照: `import { stocks } from "../../../rsi-screening/src/db/core-schema.js"`
+// services/<slug>/src/db/schema.ts で import するだけ
+import { stocks } from "../../../../src/shared/db/core-schema.js";
 ```
 
 ### 固有スキーマを定義
 
+テーブル名は必ず `<slug 由来の接頭辞>_` を付ける (例: 005 `yuho_documents`、006 `ir_disclosures`)。PG → SQLite の方言マッピング (ADR-0001 §4) は core-schema.ts の冒頭コメントを参照 (`serial` → `integer autoIncrement` / `timestamp(tz)` → `integer({mode:'timestamp'})` / `date` → `text` / `boolean` → `integer({mode:'boolean'})`)。
+
 ```ts
 // services/<slug>/src/db/schema.ts
-import { pgSchema, serial, integer, real, timestamp } from "drizzle-orm/pg-core";
-import { stocks } from "./core-schema.js";
+import { sqliteTable, integer, real, text } from "drizzle-orm/sqlite-core";
+import { stocks } from "../../../../src/shared/db/core-schema.js";
 
-export const mySchema = pgSchema("<slug_underscore>");
-
-export const myProjectData = mySchema.table("my_table", {
-  id: serial("id").primaryKey(),
+export const myProjectData = sqliteTable("<prefix>_my_table", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
   stockId: integer("stock_id").references(() => stocks.id, { onDelete: "cascade" }).notNull(),
   // ... プロジェクト固有カラム
 });
 ```
 
-### Drizzle 設定 (root)
+### DB クライアント
 
-`drizzle.<slug>.config.ts` を root に追加:
+各サービスは共有ファクトリ [src/shared/db/client.ts](../src/shared/db/client.ts) の `createServiceDb` を薄くラップするだけ。core は内部で必ず混ざる。
 
 ```ts
-import "dotenv/config";
-import { defineConfig } from "drizzle-kit";
+// services/<slug>/src/db/client.ts
+import * as schema from "./schema.js";
+import { createServiceDb } from "../../../../src/shared/db/client.js";
 
-export default defineConfig({
-  schema: [
-    "./services/<slug>/src/db/core-schema.ts",
-    "./services/<slug>/src/db/schema.ts",
-  ],
-  out: "./services/<slug>/drizzle",
-  dialect: "postgresql",
-  schemaFilter: ["core", "<slug_underscore>"],
-  dbCredentials: { url: process.env.DATABASE_URL! },
-  strict: true,
-  verbose: true,
-});
+/** Worker バインディング `c.env.DB`（または取込の env.DB）を渡す。 */
+export function createDb(d1: D1Database) {
+  return createServiceDb(d1, schema);
+}
+
+export type Database = ReturnType<typeof createDb>;
 ```
 
-`package.json` に対応スクリプトを追加:
+### Drizzle 設定 (root) とスキーマ反映
 
-```json
-"db:push:<slug>": "drizzle-kit push --config=drizzle.<slug>.config.ts",
-"db:generate:<slug>": "drizzle-kit generate --config=drizzle.<slug>.config.ts",
-"db:studio:<slug>": "drizzle-kit studio --config=drizzle.<slug>.config.ts"
+新サービスの sqlite スキーマは、サービスごとの config を作らず **共通の [drizzle.d1.config.ts](../drizzle.d1.config.ts)** の `schema` 配列へ追記する (dialect は `sqlite` 固定、`out` は `./drizzle/d1`)。
+
+```ts
+// drizzle.d1.config.ts の schema 配列に1行追加
+"./services/<slug>/src/db/schema.ts",
 ```
+
+スキーマの生成・反映は 2 段階:
+
+```bash
+pnpm db:generate:d1                                              # drizzle/d1/*.sql を生成
+wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql  # D1 へ反映
+```
+
+> ❌ `db:push:<slug>` / サービス別 `drizzle.<slug>.config.ts` (dialect=postgresql) は obsolete。新サービスでは作らない。
 
 ## 4. Hono サブアプリ
 
@@ -119,9 +127,9 @@ export const <slug>App = app;
 export default app;
 ```
 
-## 5. ビュー (重要 — JSX は使えない)
+## 5. ビュー (重要 — JSX は使わない)
 
-**Vercel `@vercel/node` は `.tsx` ファイルを bundle しない** ため、ビューは JSX を使わず template literal を返す `.ts` 関数として実装する。001 / 003 の `src/views/` を参考にする。
+ビューは JSX を使わず template literal を返す `.ts` 関数として実装する (mono-repo の方針。Workers/esbuild バンドルでも template literal を踏襲する)。001 / 003 の `src/views/` を参考にする。
 
 ```ts
 // services/<slug>/src/views/layout.ts
@@ -171,7 +179,7 @@ app.route(<SLUG>_BASE_PATH, <slug>App);
 
 ## 7. 静的アセット (PWA など)
 
-`public/<slug>/` 配下に置けば Vercel が同一オリジンで配信する。`manifest.json` の `start_url` と `scope` は `/<slug>/` にする:
+`public/<slug>/` 配下に置けば Cloudflare Workers の静的アセット (`wrangler.toml` の `[assets]` = `ASSETS` バインディング) が同一オリジンで配信する。`manifest.json` の `start_url` と `scope` は `/<slug>/` にする:
 
 ```json
 {
@@ -185,32 +193,34 @@ app.route(<SLUG>_BASE_PATH, <slug>App);
 
 Service Worker のキャッシュ範囲も `/<slug>/` に閉じること。
 
-## 8. 認証 (cron などを自分で持つ場合)
+## 8. 認証 (取込ルートなどを自分で持つ場合)
 
-もし本当に独自の認証エンドポイントを持つなら、共通認証を使う:
+もし本当に独自の認証取込エンドポイント (例: 005/006 の `/admin/catchup`) を持つなら、共通認証を使う:
 
 ```ts
 import { cronAuthMiddleware } from "../../../src/shared/auth.js";
 app.get("/api/some-protected", cronAuthMiddleware, async (c) => { ... });
 ```
 
-ただし **cron 新規登録は原則禁止** (§9 参照)。
+ただし **独自の自動取込ジョブの新規追加は原則禁止** (§9 参照)。
 
-## 9. データ同期 — 統一 cron に相乗り
+## 9. データ同期 — 統一パイプラインに相乗り
 
-**サービス独自の `sync-daily` / `sync-monthly` は作らない**。2026-04 の refactor で、日次/月次 sync は root の [src/cron/daily.ts](../src/cron/daily.ts) / [src/cron/monthly.ts](../src/cron/monthly.ts) に一本化された。2026-05 に母集団を全 JPX 内国株 ~4,000 へ拡張し、母集団 seed の [src/cron/universe.ts](../src/cron/universe.ts) (`sync:universe`) を追加。日次 cron は ~4,000 を Vercel タイムアウト内に収めるため 8 シャード分割実行 (Vercel Pro 前提)。
+**サービス独自の `sync-daily` / `sync-monthly` は作らない**。日次/月次 sync は root の [src/cron/daily.ts](../src/cron/daily.ts) / [src/cron/monthly.ts](../src/cron/monthly.ts) に実装が一本化され、母集団 seed は [src/cron/universe.ts](../src/cron/universe.ts) (`sync:universe`) にある。母集団は全 JPX 内国株 ~4,000 (xlsx パースは Node 専用)。
+
+自動実行は **GitHub Actions (Node)** が担う ([.github/workflows/stock-sync.yml](../.github/workflows/stock-sync.yml) — 日次 core/rsi/swing + 月次 universe/otakara rebuild)。Workers Paid を使わないため **Workers Cron は使わない** (無料枠の subrequest 上限では Worker 上で全銘柄 sync を捌けない)。Node からの書込は [src/shared/db/d1-http-client.ts](../src/shared/db/d1-http-client.ts) の `createD1HttpDb` (D1 REST) 経由、Yahoo は共有クライアントが `YAHOO_PROXY_BASE` (Worker エッジ `/api/ingest/yahoo`) 経由で叩き 429 を回避する。手動実行・バックフィルは `scripts/sync/*.ts` (`pnpm sync:daily` / `sync:monthly`)。
 
 ### 新サービスが日次データを必要とする場合
 
-[src/cron/daily.ts](../src/cron/daily.ts) の `StockSnapshot` 型と `buildSnapshot()` にフィールドを追加し、`writeStockSnapshot()` で自分のテーブルに upsert する。Yahoo は 1 銘柄につき `fetchStockRawData(code, "5y")` が Chart + QuoteSummary を並列取得しているので、追加フェッチは不要。in-memory の OHLCV / 指標から自分が欲しい値を計算するだけで済む。
+[src/cron/daily.ts](../src/cron/daily.ts) の `runDailySync()` 系に、自分のテーブルへの upsert を追加する。Yahoo は 1 銘柄につき Chart + QuoteSummary をまとめて取得しているので追加フェッチは不要。in-memory の OHLCV / 指標から自分が欲しい値を計算するだけで済む。
 
 ### 新サービスが月次データを必要とする場合
 
-[src/cron/monthly.ts](../src/cron/monthly.ts) に Phase を追加。Yahoo を追加で叩かないこと (DB からの集計で足りるはず)。
+[src/cron/monthly.ts](../src/cron/monthly.ts) の `runMonthlyRebuild()` に Phase を追加。Yahoo を追加で叩かないこと (DB からの集計で足りるはず)。
 
 ### それ以外のバッチが必要な場合
 
-`scripts/db/*.mjs` として手動実行スクリプトに閉じる (cron には登録しない)。
+`scripts/` 配下の手動実行スクリプトに閉じる (自動取込ジョブには登録しない)。
 
 ## 10. デザインシステム適用（必須）
 
@@ -227,8 +237,8 @@ app.get("/api/some-protected", cronAuthMiddleware, async (c) => { ... });
 ## 11. デプロイ後チェックリスト
 
 - [ ] `pnpm typecheck` / `pnpm test` / `pnpm lint` が通る
-- [ ] `https://kabulab.vercel.app/<slug>/` が 200 を返す
-- [ ] `https://kabulab.vercel.app/<slug>` (slash なし) も 200
+- [ ] デプロイ後 `/<slug>/` が 200 を返す (本番 Worker URL 配下)
+- [ ] `/<slug>` (slash なし) も 200
 - [ ] ヘッダーの `← KABULAB` リンクが `/` に遷移する
 - [ ] ロゴサブタイトルが `NNN / KABULAB` 形式
 - [ ] フォント Space Grotesk / JetBrains Mono / Noto Sans JP が読み込まれている
@@ -237,6 +247,6 @@ app.get("/api/some-protected", cronAuthMiddleware, async (c) => { ... });
 - [ ] モバイルで bottom-nav に PORTAL ボタンがある (`/` に遷移)
 - [ ] ポータル `/` の SERVICES グリッドに新サービスのカードが表示されている
 - [ ] 同一タブで遷移する (sub-path なので `target="_blank"` 不要)
-- [ ] (該当時) `pnpm db:push:<slug>` で Neon にスキーマが作成された
+- [ ] (該当時) `pnpm db:generate:d1` → `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql` で D1 にスキーマが作成された
 - [ ] (該当時) `src/cron/daily.ts` or `monthly.ts` に新サービス用の書き込みを統合済み
 - [ ] (該当時) `pnpm sync:universe` で母集団を seed 後、`pnpm sync:daily` / `pnpm sync:monthly` を手動実行してデータが入ることを確認

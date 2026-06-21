@@ -5,7 +5,7 @@ Notion ガイド「短期売買実践ガイド」の 3 章 (スクリーニン�
 日足ベースで自動化する。
 
 > kabulab mono-repo (`services/swing-trading/`) として配置され、
-> `https://kabulab.vercel.app/swing-trading/*` で公開される。
+> Cloudflare Workers + Hono 上で `https://kabulab-cf.satoki252595.workers.dev/swing-trading/*` として公開される。
 
 ## コンセプト
 
@@ -23,9 +23,9 @@ services/swing-trading/
 ├── src/
 │   ├── index.ts               # Hono アプリ本体 (routes + onError)
 │   ├── db/
-│   │   ├── client.ts          # createDb() — Neon HTTP + Drizzle
-│   │   ├── core-schema.ts     # 共有 core スキーマ (読み取り専用)
-│   │   └── schema.ts          # 003 固有 swing スキーマ (6 テーブル)
+│   │   ├── client.ts          # createDb(c.env.DB) — D1 バインディング + Drizzle (drizzle-orm/d1)
+│   │   ├── core-schema.ts     # 共有 core_* スキーマ (読み取り専用)
+│   │   └── schema.ts          # 003 固有 swing_* テーブル (6 テーブル)
 │   ├── routes/
 │   │   ├── pages.ts           # GET / /screening /signals /stock/:code /risk
 │   │   └── api.ts             # POST /api/risk/calc のみ (cron 系は root app に集約)
@@ -35,10 +35,12 @@ services/swing-trading/
 │   ├── validators/            # Zod スキーマ
 │   ├── middleware/            # error-handler
 │   └── tests/unit/            # indicators / patterns / risk のユニットテスト
-├── drizzle/                   # drizzle-kit 生成の migration
 ├── CLAUDE.md
 └── README.md
 ```
+
+D1 マイグレーションは root の `drizzle/d1/*.sql`（サービス配下の `drizzle/` は持たない）。
+`pnpm db:generate:d1` で生成し、`wrangler d1 execute kabulab-cf --remote --file=...` で適用する。
 
 **過去から変わった点** (2026-04):
 
@@ -50,25 +52,27 @@ services/swing-trading/
   - `macro.ts` (A/B/C/D)
   - `sector-aggregate.ts` (33 業種集計)
   - `yahoo/client.ts` + `yahoo/nikkei-vi.ts`
-- 本サービス内の cron ルート `/api/cron/sync-daily` と `/api/cron/sync-light` は廃止。統一 cron (`/api/cron/sync-daily` at root) が代替。**intraday マクロ更新 (sync-light) は削除**。
+- 本サービス内の cron ルート `/api/cron/sync-daily` と `/api/cron/sync-light` は廃止。取込は **GitHub Actions (`stock-sync.yml`) から Node で実行する統一 sync** が代替する。**intraday マクロ更新 (sync-light) は削除**。
 - 純関数の `risk.ts` のみ `services/swing-trading/src/services/` 配下に残存 (UI 側から直接 import しているため)。
 
-## DB スキーマ (swing)
+## DB スキーマ (swing_*)
+
+単一 Cloudflare D1 (SQLite) `kabulab-cf` に全サービスが接頭辞テーブルで同居する (ADR-0001)。D1 は名前空間が無いため旧 PG スキーマ `swing.<table>` は接頭辞 `swing_<table>` へ降ろしている。Drizzle ORM は `drizzle-orm/d1` + `sqlite-core`。
 
 | テーブル | 用途 | 粒度 |
 |---|---|---|
-| `swing.daily_ohlcv` | 日足 OHLCV 履歴 | 1 銘柄 × 最大 120 営業日 |
-| `swing.stock_indicators` | テクニカル指標の最新値 (SMA5/20/**25**/60/75, ATR, RSI, MACD, Fib 等) | 1 銘柄 1 行 |
-| `swing.stock_screening` | 5 条件フィルター結果 | 1 銘柄 1 行 |
-| `swing.entry_signals` | E&E パターン判定 | 1 銘柄 × 複数パターン |
-| `swing.market_context` | マクロ判定 (A/B/C/D) | 1 日 1 行 |
-| `swing.sector_daily` | セクター騰落ランキング | 1 日 × 業種 |
+| `swing_daily_ohlcv` | 日足 OHLCV 履歴 | 1 銘柄 × 最大 90 営業日 |
+| `swing_stock_indicators` | テクニカル指標の最新値 (SMA5/20/**25**/60/75, ATR, RSI, MACD, Fib 等) | 1 銘柄 1 行 |
+| `swing_stock_screening` | 5 条件フィルター結果 | 1 銘柄 1 行 |
+| `swing_entry_signals` | E&E パターン判定 | 1 銘柄 × 複数パターン |
+| `swing_market_context` | マクロ判定 (A/B/C/D) | 1 日 1 行 |
+| `swing_sector_daily` | セクター騰落ランキング | 1 日 × 業種 |
 
-`core.stocks` と `core.stock_financials` は 日次 sync が所有しており、003 は読み取り専用で参照する。
+`core_stocks` と `core_stock_financials` は 日次 sync が所有しており (正本 `src/shared/db/core-schema.ts`)、003 は読み取り専用で参照する。
 
 ### `sma_25` カラムの特殊性
 
-`swing.stock_indicators.sma_25` は **002 otakara の MA25 乖離率スコアリングで使う** ために追加されている (2026-04)。swing 自身の screening/patterns では使わないが、共通フェッチパスで計算しておくことで月次 sync が Yahoo を叩かずに済む。
+`swing_stock_indicators.sma_25` は **002 otakara の MA25 乖離率スコアリングで使う** ために追加されている (2026-04)。swing 自身の screening/patterns では使わないが、共通フェッチパスで計算しておくことで月次 sync が Yahoo を叩かずに済む。
 
 ## ページ
 
@@ -130,13 +134,15 @@ Notion ガイドの例題を再現:
 
 本サービスは独自の sync を持たない。**統一日次 sync** ([src/cron/daily.ts](../src/cron/daily.ts)) が以下を行う:
 
-1. マクロ 4 指数 + 日経VI を並列取得 → `swing.market_context` に A/B/C/D 判定付きで upsert
+1. マクロ 4 指数 + 日経VI を並列取得 → `swing_market_context` に A/B/C/D 判定付きで upsert
 2. 全 active 銘柄を worker pool (5 並列 × 200ms 間隔) で:
    - Yahoo `fetchStockRawData(code, "5y")` = Chart + QuoteSummary 並列
    - 5y の末尾 6mo をスライスして SMA/ATR/RSI14/MACD/Fib/volume 計算
-   - `swing.daily_ohlcv` に 6mo 分を upsert (90 営業日を超える古い行は削除。母集団 ~4,000 化で Neon 容量確保のため 120→90 に短縮)
-   - `swing.stock_indicators` / `swing.stock_screening` / `swing.entry_signals` に upsert
-3. セクター集計: `core.stocks ⋈ swing.stock_indicators` を DB から再読込し `swing.sector_daily` を書き直し。シャード実行時は最終 shard のみが担当し、本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留・警告
+   - `swing_daily_ohlcv` に 6mo 分を upsert (90 営業日を超える古い行は削除。母集団 ~4,000 化で D1 容量確保のため 120→90 に短縮)
+   - `swing_stock_indicators` / `swing_stock_screening` / `swing_entry_signals` に upsert
+3. セクター集計: `core_stocks ⋈ swing_stock_indicators` を DB から再読込し `swing_sector_daily` を書き直し。シャード実行時は最終 shard のみが担当し、本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留・警告
+
+書込 (取込) は **Node (GitHub Actions)** から D1 REST 経由 (`createD1HttpDb`) で行う。Yahoo へのアクセスは `YAHOO_PROXY_BASE` (Worker エッジ `/api/ingest/yahoo`) を介して 429 を回避する。Worker 側の読取は `c.env.DB` バインディング (`createDb(c.env.DB)`)。
 
 起動:
 
@@ -144,7 +150,7 @@ Notion ガイドの例題を再現:
 pnpm sync:daily        # ローカル手動実行 (全 active ~4,000 を一括、無分割)
 ```
 
-自動実行: `vercel.json` の cron で **平日 20:00–20:49 UTC (JST 翌 05:00–05:49)** に `/api/cron/sync-daily/{part}/8` が 8 シャード (part=0..7) として叩かれる。母集団 ~4,000 が単一 invocation で Vercel タイムアウトを超えるための分割で、**Vercel 有料プラン前提** (`functions.maxDuration=300`・cron 6 本)。
+自動実行: **GitHub Actions** `stock-sync.yml` が日次で統一 sync (core/rsi/swing) を、月次で universe / otakara rebuild を実行する。母集団 ~4,000 を Node ランナー上で一括処理するため、Workers Cron / Workers Paid は使わない。VWAP 時系列 (007) は `vwap-ingest.yml`、005 EDINET / 006 TDnet は `catchup.yml` が担当する。
 
 ## スコープ外の明示
 

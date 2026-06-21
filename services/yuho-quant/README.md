@@ -3,7 +3,7 @@
 金融庁 **EDINET** の有価証券報告書から「受注高 / 受注残高」をセグメント別 +
 全社合計で構造化し、最大 5 年の推移をグラフ化する定量情報検索サービス。
 
-公開 URL: `https://kabulab.vercel.app/yuho-quant/`
+公開 URL: `https://kabulab-cf.satoki252595.workers.dev/yuho-quant/`
 
 ## 何ができるか
 
@@ -16,12 +16,19 @@
 ## セットアップ
 
 1. `.env` に `EDINET_API_KEY`(EDINET 利用登録で発行される Subscription-Key)
-   を設定。
-2. スキーマ適用 (適用済みなら不要):
-   `node scripts/db/apply-migration.mjs drizzle/create-yuho-quant.sql`
-3. 初回 5 年バックフィル: `pnpm yuho:backfill`
-   - 動作確認は `pnpm yuho:backfill -- --ticker=7012 --from=2025-06-24 --to=2025-06-24`
-4. 以降は統一 daily cron が自動で新規有報を取り込む (shard 0 で実行)。
+   を設定 (Worker では secret として登録)。
+2. スキーマ適用 (適用済みなら不要): `pnpm db:generate:d1` で
+   `drizzle/d1/*.sql` を生成し、
+   `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<生成された>.sql`
+   で D1 に反映。
+3. 取込は **Worker 側で実行**: 認証ルート
+   `POST /yuho-quant/admin/catchup` (Bearer `CRON_SECRET`) を叩く。手動なら
+   `pnpm ingest:yuho-edinet` (`scripts/sync/yuho-edinet.ts` が
+   `WORKER_BASE_URL` を叩く薄いトリガ。`--part=0 --of=8` で shard 指定可)。
+   - 初回 5 年バックフィル CLI (`yuho:backfill`) は ADR-0001 の D1 移行で
+     無効化 (fail-fast)。Worker バルク取込へ再実装予定。
+4. 以降は GitHub Actions の `catchup.yml` (平日夜) が自動で新規有報を
+   取り込む。
 
 ## 注意
 

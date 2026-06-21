@@ -4,7 +4,7 @@
 「**受注高 / 受注残高**」をセグメント別 + 全社合計で構造化し、最大 5 年の
 推移を可視化する定量情報検索サービス。
 
-ポータル: `https://kabulab.vercel.app/` / 本サービス: `/yuho-quant/`
+ポータル: `https://kabulab-cf.satoki252595.workers.dev/` / 本サービス: `/yuho-quant/`
 
 ## このサービス固有の絶対ルール (mono-repo CLAUDE.md に追加)
 
@@ -26,7 +26,8 @@
 
 `process.env.EDINET_API_KEY` 直参照禁止。`src/env.ts` の
 `yuhoEnv.EDINET_API_KEY()` を使う (未設定なら throw)。`.env` のみが
-正のソース。Vercel では Dashboard Env が正。
+正のソース。Worker ランタイムでは Cloudflare の Secrets が正
+(`nodejs_compat` 経由で `process.env` に注入される)。
 
 ### 帯域を無駄にしない (CSV 事前判定)
 
@@ -34,10 +35,9 @@
 無ければ重い XBRL(type=1) を**落とさない**。これは推測ではなく
 「CSV は全テキストブロックを平坦化して含む」事実に基づく確定判定。
 
-> ⚠️ **ADR-0001 で本サービスは Cloudflare D1 へ移行済み**（`docs/adr/0001-neon-to-d1-r2-notion.md`）。
-> 以下のうち「Neon / Vercel / 統一 daily cron 相乗り / 手書き SQL 適用 / `pnpm yuho:backfill`」の
-> 記述は移行前のもの。現状は **D1(`c.env.DB` バインディング) + Worker 取込ルート**で、CLI バックフィルは
-> 無効化（fail-fast）し Worker バルク取込へ再実装予定。
+> ✅ **ADR-0001 で本サービスは Cloudflare D1 へ移行済み・本番稼働中**（`docs/adr/0001-neon-to-d1-r2-notion.md`）。
+> DB は **D1(`c.env.DB` バインディング)**、取込は **Worker の認証ルート + GitHub Actions トリガ**。
+> 旧 `pnpm yuho:backfill` CLI は D1 移行で無効化（fail-fast）し、Worker バルク取込へ再実装予定。
 
 ## 技術スタック
 
@@ -63,13 +63,12 @@ D1 の bind 上限(100)に合わせ 8 行/文 + `db.batch()` で投入する（`
 - **初回 5 年バックフィル**: 旧 `pnpm yuho:backfill` は D1 移行で無効化（fail-fast）。
   Worker バルク取込として再実装予定（別タスク・要 EDINET/Notion 鍵）。
 - **日次キャッチアップ**: Worker の認証ルート `POST /yuho-quant/admin/catchup`（CRON_SECRET）で
-  `runYuhoEdinetCatchup(createDb(c.env.DB))` を実行（`src/cron/yuho-edinet.ts`）。手動 curl / 薄い CLI
-  トリガ（`scripts/sync/yuho-edinet.ts` が `WORKER_BASE_URL` を叩く）から起動。Workers Cron Trigger 配線は
-  Phase 3。直近 WINDOW 日を走査し未取込の有報を **1 回 MAX_INGEST 件 / TIME_BUDGET_MS** で取り込み、超過分は次回が docId
-  冪等で回収 (6 月の集中も日次×日数で吸収)。日次 cron 上限は現行プラン
-  の maxDuration=300 秒。本体 sync と合わせて超えないようキャッチアップ
-  側を 45 秒で必ず打ち切る。
-  既存 Yahoo 日次とは独立し、失敗しても本体を壊さない
+  `runYuhoEdinetCatchup(createDb(c.env.DB))` を実行（`src/cron/yuho-edinet.ts`）。GitHub Actions の
+  `catchup.yml`（平日夜）が薄いトリガ（`scripts/sync/yuho-edinet.ts` が `WORKER_BASE_URL` を叩く）から起動する。
+  手動 curl / `pnpm ingest:yuho-edinet` でも叩ける。Workers Cron Trigger 配線は
+  Phase 3。直近 WINDOW_DAYS(=60) 日を走査し未取込の有報を **1 回 MAX_INGEST(=40) 件 / TIME_BUDGET_MS(=90 秒)**
+  で取り込み、超過分は次回が docId 冪等で回収 (6 月の集中も日次×日数で吸収)。`part`/`of` で
+  shard 並走可。既存の他バッチとは独立し、失敗しても本体を壊さない
   (が結果はレスポンスに載せて運用者が気づける)。
 - **調査スクリプト**: `pnpm yuho:investigate` (一回限り、`tmp/` 出力)。
 
@@ -92,7 +91,7 @@ services/yuho-quant/
 ├── src/
 │   ├── index.ts                  # Hono サブアプリ本体
 │   ├── env.ts                    # 型付き env アクセサ (ルール3)
-│   ├── db/{client,schema}.ts     # yuho_quant スキーマ + Drizzle
+│   ├── db/{client,schema}.ts     # yuho_* 接頭辞テーブル + Drizzle(d1)
 │   ├── routes/pages.ts           # SSR + JSON API
 │   ├── services/
 │   │   ├── edinet/{client,types,zip,csv,html-table,order-parser}.ts

@@ -21,16 +21,17 @@ kabulab プロジェクト群の統合ポータル。各サービスへのハブ
 ## ディレクトリ構成
 
 ```
-api/
-└── index.ts                 # Vercel 関数エントリ — handle(rootApp)
+worker/
+└── entry.ts                 # Cloudflare Worker エントリ — src/index.ts(Hono) を fetch で公開
 src/
-├── index.ts                 # ルート Hono アプリ + ポータル HTML + サブアプリ mount + 統一 cron 2 本
+├── index.ts                 # ルート Hono アプリ + ポータル HTML + サブアプリ mount
 ├── cron/
-│   ├── daily.ts             # 日次 sync オーケストレータ (全サービス分)
+│   ├── daily.ts             # 日次 sync オーケストレータ (全サービス分・GitHub Actions から実行)
 │   └── monthly.ts           # 月次 sync オーケストレータ
 └── shared/
     ├── design.ts            # 共通デザイントークン (CSS 変数 / フォントリンク)
     ├── auth.ts              # 統一 cron Bearer token 検証
+    ├── db/                  # D1(SQLite) 共有 core スキーマ + CF 型 (ADR-0001)
     ├── yahoo/ / jpx/ / indicators/
     └── ... (scoring / screener / patterns / macro / sector-aggregate / types)
 ```
@@ -44,14 +45,14 @@ src/
 | カテゴリ | 技術 |
 |---|---|
 | Backend | Hono v4 |
-| Deploy | Vercel Serverless Functions (単一プロジェクト) |
+| Runtime / Deploy | Cloudflare Workers (単一 Worker `kabulab-cf`) |
 | View | Hono が直接 HTML 文字列を返却 (JSX 不可) |
 | Language | TypeScript |
 | Package Manager | pnpm |
 
 ## サービス登録
 
-`src/index.ts` の `SERVICES` 配列に Service オブジェクトを追加し、サブアプリを import して `app.route(BASE_PATH, ...)` で mount する。現状は 001〜006 の 6 サービス (001 RSI Screening / 002 お宝優待 / 003 Swing Trading / 004 金融数学 / 005 有報定量検索 / 006 IR Catalog) が登録済み。
+`src/index.ts` の `SERVICES` 配列に Service オブジェクトを追加し、サブアプリを import して `app.route(BASE_PATH, ...)` で mount する。現状は 001〜007 の 7 サービス (001 RSI Screening / 002 お宝優待 / 003 Swing Trading / 004 金融数学 / 005 有報定量検索 / 006 IR Catalog / 007 VWAP / 価格別出来高) が登録済み。
 
 ```ts
 import {
@@ -108,16 +109,17 @@ URL が `/` で始まる場合は同一タブ遷移、外部 URL の場合は新
 ## デプロイ
 
 ```bash
-pnpm run deploy           # vercel deploy --prod
-                      # ルート リポジトリから単一の kabulab プロジェクトを更新
+pnpm deploy:cf            # = wrangler deploy (本番を手動デプロイ)
 ```
 
-Vercel プロジェクト名は `kabulab`、本番URLは `https://kabulab.vercel.app/`。旧 `otakara-yutai.vercel.app` は廃止済み (404)。
+Worker 名は `kabulab-cf`、本番URLは `https://kabulab-cf.satoki252595.workers.dev/`。
+通常は Cloudflare Workers Builds (Git 連携) により `main` への push で**無料**自動デプロイされる。
+旧 `kabulab.vercel.app` / `otakara-yutai.vercel.app` は廃止済み。
 
 ## ローカル開発
 
 ```bash
-pnpm dev              # vercel dev でローカル起動
+pnpm dev:cf           # wrangler dev でローカル起動
 ```
 
 ## トレーリングスラッシュ

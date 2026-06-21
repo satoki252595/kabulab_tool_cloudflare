@@ -5,8 +5,8 @@
 「短期売買実践ガイド」の 3 章 (銘柄スクリーニング / エントリー&エグジット / リスク管理) を
 日足ベースで自動化し、定量ルールで毎朝の売買判断を再現可能にする。
 
-ポータル: <https://kabulab.vercel.app/>
-本サービス: <https://kabulab.vercel.app/swing-trading/>
+ポータル: <https://kabulab-cf.satoki252595.workers.dev/>
+本サービス: <https://kabulab-cf.satoki252595.workers.dev/swing-trading/>
 
 ## 何ができるか
 
@@ -24,37 +24,41 @@
 
 ## 技術スタック
 
-- **Runtime**: Hono v4 + Vercel Serverless Functions
-- **Database**: Neon (PostgreSQL) + Drizzle ORM
+- **Runtime**: Hono v4 + Cloudflare Workers
+- **Database**: Cloudflare D1 (SQLite) + Drizzle ORM (`drizzle-orm/d1` + `sqlite-core`)
 - **Validation**: Zod
 - **Language**: TypeScript (strict mode)
 
 ## DB スキーマ設計
 
-**kabulab** 配下の複数プロジェクトで単一 Neon DB を共有する。
+**kabulab** 配下の全プロジェクトで単一 Cloudflare D1 (SQLite) `kabulab-cf` を共有し、
+名前空間の代わりに **接頭辞テーブル** で同居する (ADR-0001)。旧 PG スキーマ名
+(`core` / `rsi` / `swing` …) の概念は廃止し、`swing_<table>` などの接頭辞テーブルへ降ろした。
 
-| PG スキーマ | 所有 | 用途 |
+| 接頭辞 | 所有 | 用途 |
 |------------|------|------|
-| `core` | 001_RSIScreening が更新 | 銘柄マスタ・最新ファンダメンタル (一次情報) |
-| `rsi` | 001_RSIScreening のみ | RSI パーセンタイル |
-| `swing` | 003_swing-trading のみ | OHLCV 履歴・指標・スクリーニング・E&E シグナル・マクロ・セクター |
+| `core_*` | 日次 sync が更新 | 銘柄マスタ・最新ファンダメンタル (一次情報) |
+| `rsi_*` | 001_RSIScreening のみ | RSI パーセンタイル |
+| `swing_*` | 003_swing-trading のみ | OHLCV 履歴・指標・スクリーニング・E&E シグナル・マクロ・セクター |
 
-### core スキーマ (共有、読み取り専用)
+### core_* テーブル (共有、読み取り専用)
 
-- `core.stocks` — 銘柄マスタ
-- `core.stock_financials` — 最新ファンダメンタル (PER/PBR/配当利回り/時価総額 等)
+- `core_stocks` — 銘柄マスタ
+- `core_stock_financials` — 最新ファンダメンタル (PER/PBR/配当利回り/時価総額 等)
 
-**追加原則**: `core.*` には「Yahoo Finance から取得した生に近いデータ」のみ置く。
-テクニカル指標・スクリーニング結果・E&E シグナルなど「003 の解釈」は `swing.*` に置く。
+正本は共有スキーマ `src/shared/db/core-schema.ts` (sqlite-core)。
 
-### 003 固有スキーマ (swing)
+**追加原則**: `core_*` には「Yahoo Finance から取得した生に近いデータ」のみ置く。
+テクニカル指標・スクリーニング結果・E&E シグナルなど「003 の解釈」は `swing_*` に置く。
 
-- `swing.daily_ohlcv` — 日足 OHLCV (約 100 営業日保持、100 日超は削除)
-- `swing.stock_indicators` — 銘柄ごとの最新テクニカル集計 (1 銘柄 1 行)
-- `swing.stock_screening` — 5 条件フィルター結果 (1 銘柄 1 行)
-- `swing.entry_signals` — E&E パターン判定 (1 銘柄 × 複数パターン)
-- `swing.market_context` — マクロ判定 (1 日 1 行)
-- `swing.sector_daily` — セクター騰落ランキング (1 日 × 業種)
+### 003 固有テーブル (swing_*)
+
+- `swing_daily_ohlcv` — 日足 OHLCV (約 90 営業日保持、90 日超は削除)
+- `swing_stock_indicators` — 銘柄ごとの最新テクニカル集計 (1 銘柄 1 行)
+- `swing_stock_screening` — 5 条件フィルター結果 (1 銘柄 1 行)
+- `swing_entry_signals` — E&E パターン判定 (1 銘柄 × 複数パターン)
+- `swing_market_context` — マクロ判定 (1 日 1 行)
+- `swing_sector_daily` — セクター騰落ランキング (1 日 × 業種)
 
 ## ディレクトリ構成
 
@@ -65,9 +69,9 @@ services/swing-trading/
 └── src/
     ├── index.ts                  # Hono({ strict: false }) + routes + onError
     ├── db/
-    │   ├── client.ts             # Neon + Drizzle クライアント
-    │   ├── core-schema.ts        # 共有スキーマ (core.*) — 読み取り専用
-    │   └── schema.ts             # 003 固有スキーマ (swing.*)
+    │   ├── client.ts             # createDb(c.env.DB) — D1 バインディング + Drizzle (drizzle-orm/d1)
+    │   ├── core-schema.ts        # 共有スキーマ (core_*) — 読み取り専用
+    │   └── schema.ts             # 003 固有スキーマ (swing_*)
     ├── middleware/
     │   └── error-handler.ts      # グローバルエラーハンドラ
     ├── services/
@@ -83,7 +87,7 @@ services/swing-trading/
     │   └── risk.ts               # /risk
     ├── routes/
     │   ├── pages.ts              # SSR ページ
-    │   └── api.ts                # POST /api/risk/calc + GET /api/cron/sync-daily
+    │   └── api.ts                # POST /api/risk/calc (cron 系は廃止・GitHub Actions へ集約)
     └── tests/
         └── unit/
             ├── indicators.test.ts
@@ -120,31 +124,33 @@ services/swing-trading/
 ### 2. 実データ必須
 
 - ユニットテストの純関数は OK (indicators/patterns/risk)
-- 統合テストは Neon preview branch で実データを使うこと
+- 統合テストはローカルの D1 (wrangler) で実データを使うこと
 - sync は 1 銘柄単位で Yahoo から実際のレスポンスを取ってくる
 
 ## コマンド
 
 このサービスは kabulab mono-repo のサブアプリ。コマンドはすべて **リポジトリルート**
-(`/Users/satoki252595/work/0002_kabuTool/`) から実行する。
+から実行する。
 
 ```bash
-pnpm dev                 # ローカル開発サーバー起動
-pnpm db:generate:swing   # マイグレーションファイル生成
-pnpm db:push:swing       # スキーマを Neon に直接反映 (swing スキーマ)
-pnpm db:studio:swing     # Drizzle Studio
-pnpm sync:universe       # JPX 全内国株 ~4,000 を core.stocks に seed
+pnpm dev                 # ローカル開発サーバー起動 (wrangler dev)
+pnpm db:generate:d1      # D1 マイグレーション SQL を生成 (drizzle/d1/*.sql)
+# 適用: wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<file>.sql
+pnpm sync:universe       # JPX 全内国株 ~4,000 を core_stocks に seed (Node 専用)
 pnpm sync:daily          # 統一日次同期 (Yahoo → core/rsi/swing。サービス固有 sync:swing は廃止)
 pnpm test                # 全サービス横断のテスト
 pnpm typecheck           # 全サービス型チェック
 pnpm lint                # ESLint
 ```
 
+> 旧 `pnpm db:push:swing` / `db:generate:swing` / `db:studio:swing` (pg dialect) は
+> ADR-0001 移行で obsolete。スキーマ管理は `db:generate:d1` + `wrangler d1 execute` に一本化。
+
 ## フロントエンド方針
 
 - フレームワーク: Hono (template literal を返す `.ts` 関数で SSR)
-- **JSX は使えない** — Vercel `@vercel/node` が `.tsx` を bundle しないため、ビューは
-  `views/*.ts` で `string` を返す関数として実装する
+- **JSX は使えない** — mono-repo 方針として、ビューは `views/*.ts` で `string` を返す
+  template literal 関数で実装する (Workers / esbuild ビルドでもこの方針を踏襲)
 - スタイリング: インライン CSS — `views/layout.ts` の `GLOBAL_STYLES` に集約
 - **デザインシステム: kabulab Editorial Swiss Grid** (`../../docs/overview.md` 参照)
   - 配色: 白 `#fafafa` ベース + 純黒 `#0a0a0a` ボーダー、アクセントは Blue `#1d4ed8`

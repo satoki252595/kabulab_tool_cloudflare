@@ -4,14 +4,14 @@
 セグメント別 + 全社合計で構造化し、最大 5 年の推移を可視化するサービス。
 
 > kabulab mono-repo (`services/yuho-quant/`) として配置され、
-> `https://kabulab.vercel.app/yuho-quant/*` で公開される。
+> `https://kabulab-cf.satoki252595.workers.dev/yuho-quant/*` で公開される。
 
 ## コンセプト
 
 - 有報の **受注に関する開示は非構造化** (会社ごとに表の作りが違う)。これを
   ローカルで実データ精査 → 決定論的パーサで構造化 → DB 化して横断検索。
 - 取得範囲はユーザ要件により **「受注 + 書類メタのみ」**。全 XBRL ファクトは
-  Neon 容量逼迫リスクのため取り込まない。
+  D1 容量逼迫リスクのため取り込まない。
 - EDINET で取得できる過去分 (本サービスは最大 5 年表示)。
 
 ## EDINET API v2 (使用エンドポイント)
@@ -24,7 +24,7 @@
 - `type=1` = 提出本文書 (XBRL) ZIP / `type=5` = CSV ZIP
 - 有報判定: `docTypeCode` `120`(有報) / `130`(訂正有報)、`withdrawalStatus≠1`
 - 書類一覧の `results[]` に `secCode`(証券コード5桁) と `edinetCode` が含まれる
-  ため、**別途 EDINET コードリストを引かず** `secCode→core.stocks.code`
+  ため、**別途 EDINET コードリストを引かず** `secCode→core_stocks.code`
   (先頭4桁) で銘柄突合する。
 - `filerName` / `submitDateTime` は取下げ等で `null` になり得る (実 API 確認済)。
 
@@ -77,16 +77,16 @@
 を `parse_status` に正直に記録し、UI で「未対応 / データなし」と表示。
 数値は一切捏造しない。
 
-## DB スキーマ (`yuho_quant`)
+## DB スキーマ (D1 / 単一 SQLite, 接頭辞テーブル)
 
 ```
-yuho_quant.documents      取り込んだ有報 1 通 = 1 行 (doc_id 一意 = 冪等キー)
-  stock_id → core.stocks(id)
+yuho_documents        取り込んだ有報 1 通 = 1 行 (doc_id 一意 = 冪等キー)
+  stock_id → core_stocks(id)
   edinet_code / doc_id / doc_type_code / filer_name
   period_start / period_end / submitted_at
   parse_status / honbun_file / ingested_at
-yuho_quant.order_facts    (有報, 会計期末, セグメント) 粒度
-  document_id → documents(id) / stock_id → core.stocks(id)
+yuho_order_facts      (有報, 会計期末, セグメント) 粒度
+  document_id → yuho_documents(id) / stock_id → core_stocks(id)
   fiscal_year_end / segment_name / segment_kind (segment|subtotal|total|elimination)
   is_consolidated (連結t/個別f/不明NULL — 推測しない)
   unit_label / orders_received_raw / order_backlog_raw
@@ -95,9 +95,11 @@ yuho_quant.order_facts    (有報, 会計期末, セグメント) 粒度
   UNIQUE(document_id, fiscal_year_end, segment_name)  -- 冪等 upsert
 ```
 
-`core` は 001 所有のため読み取り専用参照 (再宣言せず rsi-screening の
-core-schema を import)。実反映は `drizzle/create-yuho-quant.sql` を
-`scripts/db/apply-migration.mjs` で適用。
+`core_*` は 001 所有のため読み取り専用参照 (再宣言せず共有
+`src/shared/db/core-schema.ts` を import)。スキーマ生成は
+`pnpm db:generate:d1` → `drizzle/d1/*.sql` を
+`wrangler d1 execute kabulab-cf --remote --file=...` で適用。order_facts の
+バルク insert は D1 の bind 上限(100)に合わせ 8 行/文 + `db.batch()` で投入する。
 
 ## データ取得フロー
 
@@ -106,10 +108,18 @@ core-schema を import)。実反映は `drizzle/create-yuho-quant.sql` を
    XBRL(type=1) を取得し `parseOrderData` で構造化 → `documents` /
    `order_facts` を冪等 upsert。訂正報告書 (130) は提出日時が新しい方を
    UI 採用。
-2. **初回 5 年バックフィル**: `pnpm yuho:backfill` (手動・冪等・再開可能)。
-3. **日次キャッチアップ**: 統一 daily cron (shard 0) が
-   `runYuhoEdinetCatchup` を呼ぶ。直近 45 日・1 回 80 件上限。
-   既存 Yahoo 日次から独立し、失敗は本体を壊さずレスポンスに記録。
+2. **初回 5 年バックフィル**: 旧 `pnpm yuho:backfill` CLI は ADR-0001 の
+   D1 移行に伴い無効化 (fail-fast)。D1 はバインディング経由でのみ触れるため、
+   バルク取込は Worker 側へ再実装予定 (別タスク)。
+3. **日次キャッチアップ**: Worker の認証ルート
+   `POST /yuho-quant/admin/catchup` (CRON_SECRET) が
+   `runYuhoEdinetCatchup(createDb(c.env.DB))` を呼ぶ (`src/cron/yuho-edinet.ts`)。
+   GitHub Actions の `catchup.yml` が平日夜に薄いトリガ
+   (`scripts/sync/yuho-edinet.ts` が `WORKER_BASE_URL` を叩く) で起動する。
+   直近 60 日を走査し 1 回 40 件 / TIME_BUDGET 90 秒で打ち切り、超過分は
+   次回が docId 冪等で回収。`part`/`of` で shard 並走可。失敗しても本体を
+   壊さずレスポンスに記録 (運用者が気づける)。Workers Cron Trigger 配線は
+   Phase 3。
 
 ## UI
 
