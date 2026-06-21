@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { errorHandler } from "./middleware/error-handler.js";
 import { pagesRoute } from "./routes/pages.js";
-import { adminRoute } from "./routes/admin.js";
 
 /**
  * 006 ir-catalog — Hono サブアプリ本体
@@ -12,8 +11,9 @@ import { adminRoute } from "./routes/admin.js";
  */
 export const app = new Hono({ strict: false });
 
-// 取込トリガ（Worker 側・CRON_SECRET 認証）。SSR より先に登録する。
-app.route("/admin", adminRoute);
+// 注: ir-catalog の取込(catchup)は PDF センチメントが kuromoji(Node 専用 fs 依存)
+// のため Worker 上で動かせない。取込は Node 実行で D1 HTTP API へ書く(別タスク)。
+// Worker は読取(SSR/JSON, c.env.DB)のみを担う。
 app.route("/", pagesRoute);
 
 app.onError(errorHandler);

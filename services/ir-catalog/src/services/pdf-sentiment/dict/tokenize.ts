@@ -24,13 +24,16 @@ interface Tokenizer {
   tokenize: (text: string) => Token[];
 }
 
-const DICT_PATH = (() => {
+// 辞書パスは**遅延**解決する。モジュール import 時に fileURLToPath を呼ぶと、
+// Worker バンドルの起動検証で import.meta.url が undefined になり落ちるため
+// (kuromoji 自体が Node 専用 fs 依存で、本関数は Node 実行時にのみ呼ばれる)。
+function dictPath(): string {
   // node_modules/kuromoji/dict 内の辞書を直接指す (require.resolve は ESM では使えない)
   const here = dirname(fileURLToPath(import.meta.url));
   // services/ir-catalog/src/services/pdf-sentiment/dict/ から
   // <project>/node_modules/kuromoji/dict まで辿る
   return resolve(here, "..", "..", "..", "..", "..", "..", "node_modules", "kuromoji", "dict");
-})();
+}
 
 let tokenizerPromise: Promise<Tokenizer> | null = null;
 
@@ -38,7 +41,7 @@ export function getTokenizer(): Promise<Tokenizer> {
   if (tokenizerPromise) return tokenizerPromise;
   tokenizerPromise = new Promise<Tokenizer>((resolveT, rejectT) => {
     kuromoji
-      .builder({ dicPath: DICT_PATH })
+      .builder({ dicPath: dictPath() })
       .build((err: Error | null, tk: Tokenizer) => {
         if (err) {
           tokenizerPromise = null; // 失敗時は再試行可能にする
