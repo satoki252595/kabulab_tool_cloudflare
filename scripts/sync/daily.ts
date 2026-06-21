@@ -1,46 +1,47 @@
 /**
- * 日次データ取得エントリポイント (CLI)
+ * 日次データ取得トリガ (CLI) — ADR-0001 Phase 3。
  *
- * 3 サービス (001 RSI / 002 otakara / 003 swing) すべてが必要とする日次データを
- * 1 本のフローで取得・計算・保存する。詳細は src/cron/daily.ts を参照。
+ * 実体の取込は Worker 上で実行する (Yahoo エッジ直叩きで 429 回避・D1 binding +
+ * db.batch)。本スクリプトは認証付きルート POST /admin/sync-daily を **シャード毎に
+ * 叩く薄いトリガ** で、手動実行・バックフィル用。通常運用は Workers Cron が自動発火する
+ * (wrangler.toml [triggers] crons → src/cron/scheduled.ts)。
  *
- * Phase 0 で母集団 (core.stocks) を JPX 最新へ同期するため、`pnpm sync:universe`
- * を別途先に走らせる必要はない (日次に内包済み)。初回 seed もこれ 1 本で足りる。
+ * 母集団 (core_stocks) が空/古い場合は先に `pnpm sync:universe` を実行すること
+ * (JPX の xlsx パースは Node 専用のため Worker 取込には含まれない)。
  *
  * 実行:
- *   pnpm sync:daily
- *
- * 関連:
- *   - Vercel cron: `/api/cron/sync-daily` (平日 20:00 UTC)
+ *   pnpm sync:daily            # 全 4 シャードを順に叩く
+ *   pnpm sync:daily --part=0   # 単一シャードのみ
  */
 
 import "dotenv/config";
-import { createDailyDb, runDailySync } from "../../src/cron/daily.js";
+
+/** wrangler.toml の日次 cron 数 (= scheduled.ts の DAILY_OF) と一致させる */
+const OF = 4;
 
 async function main(): Promise<void> {
-  // D1 への書き込みは createDailyDb() が CLOUDFLARE_* env (型付きアクセサ) を
-  // 内部で解決する。未設定なら createD1HttpDb が throw する (フォールバック無し)。
-  const db = createDailyDb();
-  const result = await runDailySync(db);
+  const base = process.env.WORKER_BASE_URL;
+  const secret = process.env.CRON_SECRET;
+  if (!base) throw new Error("WORKER_BASE_URL が設定されていません (.env)");
+  if (!secret) throw new Error("CRON_SECRET が設定されていません (.env)");
 
-  if (result.universe) {
-    console.info(
-      `[sync-daily] 母集団同期: 内国株=${result.universe.equities} upsert=${result.universe.upserted} 廃止=${result.universe.delisted}`
-    );
-  } else {
-    console.warn(
-      "[sync-daily] 母集団同期は未実行/失敗 (既存 core.stocks を使用)。Phase 0 のログを確認してください。"
-    );
-  }
+  const partArg = process.argv.find((a) => a.startsWith("--part="));
+  const parts = partArg
+    ? [Number(partArg.slice("--part=".length))]
+    : Array.from({ length: OF }, (_, i) => i);
 
-  if (result.failures.length > 0) {
-    console.warn("[sync-daily] 失敗銘柄:");
-    for (const f of result.failures.slice(0, 50)) {
-      console.warn(`  - ${f.code}: ${f.error}`);
+  for (const part of parts) {
+    const url = `${base.replace(/\/$/, "")}/admin/sync-daily?part=${part}&of=${OF}`;
+    console.info(`[sync-daily] POST ${url}`);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    const body = await res.text();
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${body.slice(0, 500)}`);
     }
-    if (result.failures.length > 50) {
-      console.warn(`  ... 他 ${result.failures.length - 50} 銘柄`);
-    }
+    console.info(`[sync-daily] shard ${part}/${OF}:`, body);
   }
 }
 

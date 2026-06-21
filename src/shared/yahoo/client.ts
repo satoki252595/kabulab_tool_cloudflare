@@ -58,44 +58,62 @@ function normalizeSymbol(raw: string): string {
   );
 }
 
-/** Yahoo Finance の crumb 認証トークンを取得する (30 分キャッシュ) */
+/**
+ * crumb bootstrap の single-flight ガード。並列ワーカー (daily の CONCURRENCY=8 等)
+ * が冷えキャッシュ/401 で同時に再取得すると thundering herd になり subrequest を
+ * 浪費するため、進行中の bootstrap を共有する。
+ */
+let crumbInFlight: Promise<{ crumb: string; cookie: string }> | null = null;
+
+/** Yahoo Finance の crumb 認証トークンを取得する (30 分キャッシュ + single-flight) */
 async function getYahooCrumb(): Promise<{ crumb: string; cookie: string }> {
   if (cachedCrumb && cachedCookie && Date.now() < crumbExpiry) {
     return { crumb: cachedCrumb, cookie: cachedCookie };
   }
+  // 同時呼び出しは進行中の 1 回の bootstrap に相乗りする (各自再取得しない)。
+  if (crumbInFlight) return crumbInFlight;
 
-  const pageRes = await fetch("https://finance.yahoo.com/quote/AAPL", {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-      Accept: "text/html",
-    },
-    redirect: "manual",
-  });
-
-  const cookies = pageRes.headers.getSetCookie?.() ?? [];
-  const cookieStr = cookies.map((c) => c.split(";")[0]).join("; ");
-
-  const crumbRes = await fetch(
-    "https://query2.finance.yahoo.com/v1/test/getcrumb",
-    {
+  crumbInFlight = (async () => {
+    const pageRes = await fetch("https://finance.yahoo.com/quote/AAPL", {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        Cookie: cookieStr,
+        Accept: "text/html",
       },
+      redirect: "manual",
+    });
+
+    const cookies = pageRes.headers.getSetCookie?.() ?? [];
+    const cookieStr = cookies.map((c) => c.split(";")[0]).join("; ");
+
+    const crumbRes = await fetch(
+      "https://query2.finance.yahoo.com/v1/test/getcrumb",
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+          Cookie: cookieStr,
+        },
+      }
+    );
+
+    if (!crumbRes.ok) {
+      throw new Error(`Yahoo crumb 取得失敗: ${crumbRes.status}`);
     }
-  );
 
-  if (!crumbRes.ok) {
-    throw new Error(`Yahoo crumb 取得失敗: ${crumbRes.status}`);
+    const crumb = (await crumbRes.text()).trim();
+    cachedCrumb = crumb;
+    cachedCookie = cookieStr;
+    crumbExpiry = Date.now() + 30 * 60 * 1000;
+    return { crumb, cookie: cookieStr };
+  })();
+
+  // 失敗時は rejected promise が全 joiner に伝播する (fallback しない — rule2)。
+  try {
+    return await crumbInFlight;
+  } finally {
+    crumbInFlight = null;
   }
-
-  const crumb = (await crumbRes.text()).trim();
-  cachedCrumb = crumb;
-  cachedCookie = cookieStr;
-  crumbExpiry = Date.now() + 30 * 60 * 1000;
-  return { crumb, cookie: cookieStr };
 }
 
 /** 認証付き fetch (401 時のみ 1 度 crumb を取り直して retry) */

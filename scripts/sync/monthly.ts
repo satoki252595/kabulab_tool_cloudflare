@@ -1,24 +1,37 @@
 /**
- * 月次データ取得エントリポイント (CLI)
+ * 月次 rebuild トリガ (CLI) — ADR-0001 Phase 3。
  *
- * JPX 公式 XLS で core.stocks.sector を更新し、otakara の public.stock_financials
- * / public.stock_scores を再構築する。詳細は src/cron/monthly.ts を参照。
+ * 実体の再構築 (otakara_stock_financials / otakara_stock_scores を core_/swing_ から
+ * 再生成) は Worker 上で実行する。本スクリプトは認証付きルート
+ * POST /admin/sync-monthly を叩く薄いトリガ。通常運用は Workers Cron が毎月 1 日に
+ * 自動発火する。
  *
- * Yahoo は 1 回も叩かない (日次 sync が取得済みのデータを DB 経由で再利用)。
+ * 前提順序: 母集団 `pnpm sync:universe` → 優待スクレイプ/解釈 (data-scripts) →
+ * 日次 sync (swing 指標) → 本 rebuild。is_yutai は rebuild 内で yutai_benefits から
+ * 再導出される。
  *
- * 実行:
- *   pnpm sync:monthly
- *
- * 関連:
- *   - Vercel cron: `/api/cron/sync-monthly` (毎月 1 日 22:00 UTC)
+ * 実行: pnpm sync:monthly
  */
 
 import "dotenv/config";
-import { createMonthlyDb, runMonthlySync } from "../../src/cron/monthly.js";
 
 async function main(): Promise<void> {
-  const db = createMonthlyDb();
-  await runMonthlySync(db);
+  const base = process.env.WORKER_BASE_URL;
+  const secret = process.env.CRON_SECRET;
+  if (!base) throw new Error("WORKER_BASE_URL が設定されていません (.env)");
+  if (!secret) throw new Error("CRON_SECRET が設定されていません (.env)");
+
+  const url = `${base.replace(/\/$/, "")}/admin/sync-monthly`;
+  console.info(`[sync-monthly] POST ${url}`);
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${secret}` },
+  });
+  const body = await res.text();
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 500)}`);
+  }
+  console.info("[sync-monthly] 完了:", body);
 }
 
 main().catch((e) => {

@@ -28,9 +28,10 @@ import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js
 
 const WINDOW_DAYS = 60;
 /**
- * 1 実行あたりの取込上限。Workers のサブリクエスト上限 (Paid 1000/invocation)
- * に対し 1 doc で最悪 ~14 req (EDINET 2 + Notion 数〜十数) を要するため、
- * 40 件 × ~14 ≈ 560 req と安全側に抑える。残りは次回実行が docId 冪等で拾う。
+ * 1 実行あたりの取込上限。Workers のサブリクエスト上限 (Paid は 2026-02 に
+ * 1,000→10,000/invocation へ増加。Free は外部 50) に対し、1 doc で最悪 ~14 req
+ * (EDINET 2 + Notion 数〜十数) を要する。40 件 × ~14 ≈ 560 req と、時間予算 +
+ * Notion レート (~3 req/s) の両面から安全側に抑える。残りは次回が docId 冪等で拾う。
  */
 const MAX_INGEST = 40;
 /**
