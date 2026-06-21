@@ -45,3 +45,32 @@ Cloudflare ネイティブの **Workers Builds**(Git 連携)を使う。GitHub �
 ## ロールバック
 
 ダッシュボード **Deployments** から過去デプロイへワンクリックでロールバック可能。
+
+## VWAP 定期取込 (GitHub Actions)
+
+007 VWAP(日足10年/5分足/信用残高 → R2)は Worker Cron の対象外なので、
+GitHub Actions で定期実行する(`.github/workflows/vwap-ingest.yml`)。
+
+- Yahoo は **`YAHOO_PROXY_BASE` 経由(Worker エッジの `/vwap-analysis/api/ingest-fetch`)**
+  で叩くため、GitHub ランナーの IP が Yahoo に直接弾かれること(429)はない。
+  → **public 切り出し不要・private repo のままで OK**。
+- スケジュール: 平日 08:00 UTC(日足+5分足)/ 土 09:00 UTC(信用残高週次)。
+  手動実行は Actions タブの「Run workflow」(target: daily-intra / margin / all)。
+- **発火条件**: schedule は **default ブランチ(main)** のワークフローのみ。PR #1 を
+  main にマージすると有効化される。
+- 無料枠(private 2,000 min/月)内の想定。
+
+### 必要な GitHub Secrets
+
+リポジトリ **Settings → Secrets and variables → Actions → New repository secret** で、
+ローカル `.env` と同じ値を登録する:
+
+| Secret | 値 |
+|---|---|
+| `YAHOO_PROXY_BASE` | デプロイ済み Worker の URL(例 `https://kabulab-cf.<sub>.workers.dev`) |
+| `CRON_SECRET` | Worker secret と同値(プロキシ認証) |
+| `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET` | R2 書込(S3 互換) |
+
+> EDINET(005)/ TDnet(006)の日次キャッチアップも同様に GitHub Actions 化できる
+> (`pnpm ingest:yuho-edinet` / `ingest:ir-tdnet` を `WORKER_BASE_URL` + `CRON_SECRET`
+> で叩くだけ)。必要になれば同じ要領で追加する。

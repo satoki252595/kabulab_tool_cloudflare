@@ -120,13 +120,11 @@ kabulab_tool/                          (git: satoki252595/kabulab_tool)
 ├── scripts/
 │   ├── README.md
 │   ├── sync/
-│   │   ├── universe.ts                # pnpm sync:universe の CLI エントリ (JPX 全内国株を core.stocks に seed)
-│   │   ├── daily.ts                   # pnpm sync:daily の CLI エントリ (runDailySync を呼ぶ)
-│   │   └── monthly.ts                 # pnpm sync:monthly の CLI エントリ
-│   └── db/
-│       ├── apply-migration.mjs        # drizzle 生成 SQL を Neon HTTP で適用 (--> statement-breakpoint 区切り)
-│       ├── apply-unify-migration.mjs  # public.stocks → core.stocks 統一マイグレーションの一回限りランナ
-│       └── check-db.mjs               # 各スキーマの行数確認
+│   │   ├── universe.ts                # pnpm sync:universe (JPX 全内国株を core_stocks に seed・Node)
+│   │   ├── daily.ts                   # pnpm sync:daily トリガ (Worker /admin/sync-daily を叩く)
+│   │   └── monthly.ts                 # pnpm sync:monthly トリガ (Worker /admin/sync-monthly を叩く)
+│   ├── vwap/                          # 007 VWAP 取込 → R2 (GitHub Actions で定期実行)
+│   └── migrate/                       # Neon→D1 cutover ツール (一度きり)
 ├── drizzle/                           # マイグレーション SQL (手書き)
 ├── docs/                              # mono-repo 全体のドキュメント (このフォルダ)
 ├── drizzle.*.config.ts                # スキーマ別 drizzle-kit 設定
