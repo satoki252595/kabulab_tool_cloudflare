@@ -223,11 +223,10 @@ export async function getOhlcvSeries(
     return [];
   }
 
-  // 5y = 約 1,250 行 × 7 列 = 8,750 個のバインドパラメータ。
-  // neon-http の HTTP body / Postgres parser のサイズ制限 (パラメータ多数 + 長いクエリ文字列)
-  // で「Failed query: insert into ...」と落ちるケースがあるため CHUNK 分割する。
-  // 過去テストで全銘柄の 1/4 以上 (909/3760) がこの理由で失敗していた。
-  const CHUNK = 300;
+  // D1 の bind 上限は 100 params/文。finmath_daily_ohlcv は 7 列なので 14 行/文に抑える
+  // (旧 Neon 版は 300 行だったが、D1 では 100 bind を超えると "too many SQL variables" で
+  //  落ちる)。Worker バインディング経由のレイジー取得なので 1 シンボル分のみ。
+  const CHUNK = 14;
   const rows = chart.ohlcv.map((bar) => ({
     symbol,
     date: bar.date,
