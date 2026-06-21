@@ -116,8 +116,12 @@ async function getYahooCrumb(): Promise<{ crumb: string; cookie: string }> {
   }
 }
 
-/** 認証付き fetch (401 時のみ 1 度 crumb を取り直して retry) */
-async function yahooFetch(url: string): Promise<Response> {
+/**
+ * crumb 付きの直接 fetch (401 時のみ 1 度 crumb を取り直して retry)。
+ * **エッジ (Worker) 上で動く前提**。Cloudflare エッジ IP は Yahoo の 429 に掛からない。
+ * 取込プロキシルート (/api/ingest/yahoo) からも直接呼ばれる (export)。
+ */
+export async function yahooFetchDirect(url: string): Promise<Response> {
   const { crumb, cookie } = await getYahooCrumb();
   const separator = url.includes("?") ? "&" : "?";
   const authUrl = `${url}${separator}crumb=${encodeURIComponent(crumb)}`;
@@ -146,6 +150,28 @@ async function yahooFetch(url: string): Promise<Response> {
   }
 
   return res;
+}
+
+/**
+ * 認証付き fetch。
+ *
+ * - **Node 取込 (GitHub Actions / ローカル)**: `YAHOO_PROXY_BASE` が設定されていれば
+ *   Cloudflare エッジの取込プロキシ (`/api/ingest/yahoo`) 経由で叩き、自宅/CI IP の
+ *   429 を回避する。crumb/cookie はエッジ側 (yahooFetchDirect) が処理する。
+ * - **エッジ (Worker) / プロキシ未設定**: そのまま直接 fetch (yahooFetchDirect)。
+ *
+ * CLAUDE.md ルール2: プロキシ未到達でも別値で握り潰さず、エラーはそのまま伝播させる。
+ */
+async function yahooFetch(url: string): Promise<Response> {
+  const proxyBase = process.env.YAHOO_PROXY_BASE;
+  const secret = process.env.CRON_SECRET;
+  if (proxyBase && secret) {
+    const proxied = `${proxyBase.replace(/\/$/, "")}/api/ingest/yahoo?u=${encodeURIComponent(url)}`;
+    return fetch(proxied, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+  }
+  return yahooFetchDirect(url);
 }
 
 /** Yahoo の `{ raw, fmt }` フィールドから raw 数値を取り出す */

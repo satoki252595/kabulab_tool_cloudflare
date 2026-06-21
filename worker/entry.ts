@@ -1,25 +1,11 @@
-// Cloudflare Worker エントリ。
-// fetch ハンドラ = Hono root app（配信 + 認証取込ルート /admin/*）。
-// scheduled ハンドラ = Workers Cron Trigger（日次/月次の自動取込・ADR-0001 Phase 3）。
+// Cloudflare Worker エントリ。Hono root app をそのまま fetch ハンドラとして公開する。
 //
-// データストア参照:
-//   - D1(c.env.DB バインディング): 全サービスの正規化リレーショナル正本
-//   - R2(c.env.BUCKET): 時系列(VWAP 等)
-//   - 一次データ(raw): Notion
-//
-// 取込:
-//   - 日次/月次の指標・スコア計算は Worker 上(Cron / POST /admin/sync-*)で実行。
-//     Yahoo はエッジから直接叩くので自宅 IP の 429 に掛からない。
-//   - 母集団 (core_stocks) の JPX 同期は xlsx パーサが Node 専用のため
-//     `pnpm sync:universe`(Node) で別途実行する。
+// データストア: D1(c.env.DB バインディング) / R2(c.env.BUCKET) / 一次データは Notion。
+// 取込(日次/月次の指標計算 + VWAP)は **GitHub Actions(Node)** で実行し、Worker は
+//   - サイト配信(D1 読取)
+//   - Yahoo/VWAP 取込プロキシ(エッジ経由で 429 回避)
+//   - 005/006 の認証取込ルート /admin/catchup
+// のみを担う。Workers Paid を使わないため Workers Cron(scheduled)は配線しない。
 import app from "../src/index.js";
-import { handleScheduled, type WorkerEnv } from "../src/cron/scheduled.js";
 
-export default {
-  fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext) {
-    return app.fetch(request, env, ctx);
-  },
-  scheduled(controller: ScheduledController, env: WorkerEnv) {
-    return handleScheduled(controller, env);
-  },
-};
+export default app;

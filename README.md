@@ -137,39 +137,47 @@ ADR-0001 で **Neon を全廃し Cloudflare D1 + R2 + Notion へ移行済み**�
 | 信用残高 (週次) | R2 `margin/{week}.json` | 週次 | 直近週 |
 | 一次データ (raw) | Notion | サービス別 | 取込次第 |
 
-### 自動化（Workers Cron・**要 Workers Paid + デプロイ**）
+### 自動化（GitHub Actions・**Workers Paid 不要**）
 
-デプロイ後、Worker の Cron Trigger が自動実行する（`wrangler.toml [triggers]` / `src/cron/scheduled.ts`）:
+取込はすべて GitHub Actions(Node)で定期実行する。Yahoo は共有クライアントが
+`YAHOO_PROXY_BASE`(Cloudflare エッジの `/api/ingest/yahoo` / VWAP は
+`/vwap-analysis/api/ingest-fetch`)経由で叩くため、ランナー IP の 429 を回避する。
+D1 へは `createD1HttpDb`(D1 REST)で書き込む。
 
-- **日次 stock sync** … 平日 20:00 UTC〜（4 シャード・3 分間隔）。core/rsi/swing の財務・指標・OHLCV を D1 へ。Yahoo はエッジ直叩きで 429 回避、`db.batch` + 増分 OHLCV。
-- **月次 otakara rebuild** … 毎月 1 日 22:00 UTC。core/swing から otakara 財務/スコアを再構築。
+| ワークフロー | 内容 | スケジュール (UTC) |
+|---|---|---|
+| `.github/workflows/stock-sync.yml` | 日次=core/rsi/swing 取得+指標+**増分 OHLCV** / 月次=母集団(JPX)同期 + otakara rebuild | 平日 21:00 / 1 日 22:30 |
+| `.github/workflows/vwap-ingest.yml` | 日足10年 + **5分足** → R2 / 信用残高(週次) | 平日 08:00 / 土 09:00 |
 
-push→自動デプロイは **Cloudflare Workers Builds**（Git 連携）。手順は [docs/deploy-cloudflare.md](./docs/deploy-cloudflare.md)。
+Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキシ + 005/006 の
+`/admin/catchup` のみを担う(Workers Cron は使わない)。schedule は **main にマージ後**に
+有効化される(GitHub Actions の schedule は default ブランチのみ)。
 
-### ⚠️ まだ手作業（Worker Cron 未配線・Node 実行）
+> 💡 GH Actions 無料枠(private 2,000 min/月)目安: 日次 stock(~40-50分) + VWAP(~30-40分)
+> ×平日 ≈ 月 1,700-1,900 分。枠に近い場合は stock-sync を Mon/Wed/Fri 等へ間引く。
 
-以下は Phase 3 の Worker Cron に**含まれない**。ローカル/CI で実行する（将来 GitHub Actions 等で自動化可・`scripts/vwap/lib/r2.ts` は GitHub Actions 実行を想定済み）:
+### 手作業のまま（任意・低頻度）
 
-| 処理 | コマンド | 頻度 | 備考 |
-|---|---|---|---|
-| JPX 母集団同期 | `pnpm sync:universe` | 上場/廃止時 | xlsx パーサが Node 専用 → Worker 不可 |
-| VWAP 日足10年 → R2 | `pnpm ingest:vwap-daily` | 日次 | Yahoo。`YAHOO_PROXY_BASE` でエッジ経由 429 回避 |
-| **VWAP 5分足 → R2** | `pnpm ingest:vwap-intra` | 日次 | 同上・**Phase 3 cron 対象外** |
-| 信用残高 → R2 | `pnpm ingest:vwap-margin` | 週次 | JPX PDF |
-| 適時開示 (006) | `pnpm ingest:ir-tdnet` | 日次 | Worker `/ir-catalog/admin/catchup` を叩く薄いトリガ |
-| 有報 (005) | `pnpm ingest:yuho-edinet` | 日次 | Worker `/yuho-quant/admin/catchup` を叩く薄いトリガ |
-| 優待スクレイプ+LLM解釈 (002) | data-scripts 4 step（後述） | 月次 | step3 はローカル OSS LLM |
+| 処理 | コマンド | 備考 |
+|---|---|---|
+| 適時開示 (006) | `pnpm ingest:ir-tdnet` | Worker `/ir-catalog/admin/catchup` を叩く。GH Actions 化も容易 |
+| 有報 (005) | `pnpm ingest:yuho-edinet` | Worker `/yuho-quant/admin/catchup` を叩く。同上 |
+| 優待スクレイプ+LLM解釈 (002) | data-scripts 4 step（後述） | step3 はローカル OSS LLM のため自動化対象外 |
 
-> `pnpm sync:daily`(= `all-daily.ts`) はローカルからの手動フル実行用で、上記 VWAP も束ねて叩く。日次 stock sync 本体は Worker Cron が担うため、通常は cron に任せてよい（VWAP のみ手動 or CI が必要）。
+> `pnpm sync:daily`(= `all-daily.ts`)はローカル手動フル実行用(stock + VWAP を束ねる)。
+> 通常は GitHub Actions に任せてよい。
 
 ### 残タスク
 
-1. **【未実施・要対応】Workers Paid 化 → 自動デプロイ稼働**
-   - Paid へアップグレード（cron / `[limits] cpu_ms` / 10,000 subrequests に必須）
-   - Workers Builds は接続済み。**PR #1（`feat/d1-r2-migration`）を `main` にマージ**すると初回自動デプロイ + cron 登録。
-   - デプロイ後: 本番ページが D1 から読めること + Triggers に cron 5 本を確認 → **Neon 解約**。
-2. **VWAP / EDINET / TDnet / 優待スクレイプの定期自動化**（任意）… GitHub Actions 等へ。
-3. **legacy 掃除**（一部完了・残りは非ブロッキング）… ✅ 旧 Neon DB 管理スクリプト `scripts/db/*.mjs` は削除済み。残: `db:push:*` / `drizzle.<svc>.config.ts`（pg dialect・D1 移行で obsolete）、`scripts/full-validation*.mjs` / `get-jpx-listing.mjs`（Neon 依存の dev one-off）、`services/otakara-yutai/src/index.ts`（dead code・ビルド除外）。Neon 解約後に削除でよい。
+1. **【要対応】GitHub Secrets 追加 + main マージで全自動化を有効化**
+   - GH Secrets(Settings → Secrets and variables → Actions・`.env` と同値): `CLOUDFLARE_API_TOKEN` /
+     `CLOUDFLARE_ACCOUNT_ID` / `D1_DATABASE_ID` / `YAHOO_PROXY_BASE` / `CRON_SECRET` / `R2_*` /
+     `NOTION_TOKEN` / `NOTION_BACKUP_PAGE_ID` / `NOTION_TRASH_PAGE_ID`。
+   - **PR #1（`feat/d1-r2-migration`）を `main` にマージ** → Workers Builds が Worker を自動
+     デプロイ(無料) + GitHub Actions の schedule が有効化。
+   - 本番ページが D1 から読める + Actions が成功するのを確認 → **Neon 解約**。
+2. **EDINET / TDnet / 優待スクレイプの GitHub Actions 化**（任意）。
+3. **legacy 掃除**（一部完了・残り非ブロッキング）… ✅ 旧 Neon DB スクリプト `scripts/db/*.mjs` 削除済み。残: `db:push:*` / `drizzle.<svc>.config.ts`(pg・obsolete)、`scripts/full-validation*.mjs` / `get-jpx-listing.mjs`(Neon 依存 dev one-off)、`services/otakara-yutai/src/index.ts`(dead code)。Neon 解約後に削除でよい。
 
 ## デプロイ
 
@@ -191,11 +199,12 @@ npx wrangler tail                # 本番ログをストリーム
 3. **シークレットは Cloudflare が正のソース** — `wrangler secret put DATABASE_URL` 等で設定する
    (`.env` はローカル開発/取込専用で、本番 Worker には読まれない)。Worker は `nodejs_compat` 有効で
    secret を `process.env` 経由でも参照する。
-4. **Workers Cron Trigger 配置済み (ADR-0001 Phase 3)** — `wrangler.toml [triggers]` に日次 stock sync
-   (4 シャード) + 月次 otakara rebuild を配線。デプロイ時に自動登録される (**要 Workers Paid**)。VWAP /
-   EDINET / TDnet / 優待スクレイプは cron 対象外で別途 Node 実行 (上記「運用ステータス」参照)。
+4. **Workers Cron は不使用（Workers Paid 不要）** — 取込(日次/月次 stock + VWAP)は
+   GitHub Actions(Node)で実行する。`wrangler.toml` に `[triggers]`/`[limits]` は無い。Worker は
+   サイト配信 + 取込プロキシ(`/api/ingest/yahoo`, `/vwap-analysis/api/ingest-fetch`)+ 005/006 の
+   `/admin/catchup` のみ。
 5. **push→自動デプロイ** — Cloudflare Workers Builds (Git 連携) を接続済み。`main` への push で
-   自動 build & deploy + cron 自動登録。手順・前提は [docs/deploy-cloudflare.md](./docs/deploy-cloudflare.md)。
+   **無料プランのまま**自動 build & deploy。手順は [docs/deploy-cloudflare.md](./docs/deploy-cloudflare.md)。
 
 ## 環境変数
 

@@ -29,10 +29,9 @@ scripts/
 
 | ジョブ | 実行 | コマンド / トリガ |
 |---|---|---|
-| 日次 stock sync (core/rsi/swing) | **自動** (Workers Cron) | 平日 20:00 UTC〜 4 シャード / 手動は `pnpm sync:daily` |
-| 月次 otakara rebuild | **自動** (Workers Cron) | 毎月 1 日 22:00 UTC / 手動は `pnpm sync:monthly` |
+| 日次 stock sync (core/rsi/swing) | **自動** (GitHub Actions) | `.github/workflows/stock-sync.yml`(平日 21:00 UTC) / 手動 `pnpm sync:daily:core` |
+| 月次 母集団 + otakara rebuild | **自動** (GitHub Actions) | 同上(1 日 22:30 UTC) / 手動 `pnpm sync:universe` + `pnpm sync:monthly:core` |
 | VWAP 日足/5分足/信用 → R2 | **自動** (GitHub Actions) | `.github/workflows/vwap-ingest.yml` / 手動 `pnpm ingest:vwap-*` |
-| JPX 母集団同期 | 手動 (Node) | `pnpm sync:universe`（上場/廃止時） |
 | 005 EDINET / 006 TDnet | 手動/CI (Node→Worker) | `pnpm ingest:yuho-edinet` / `pnpm ingest:ir-tdnet` |
 | 002 優待スクレイプ+LLM | 手動 (Node・ローカル LLM) | `services/otakara-yutai/data-scripts/*`（月次） |
 
@@ -41,12 +40,12 @@ scripts/
 
 ## 取込の実装メモ
 
-- `sync/daily.ts` / `sync/monthly.ts` は Worker の認証ルート (`/admin/sync-daily` /
-  `/admin/sync-monthly`, `CRON_SECRET`) を叩くだけ。実装本体は
-  [`src/cron/daily.ts`](../src/cron/daily.ts) / [`src/cron/monthly.ts`](../src/cron/monthly.ts)
-  で、Worker 上 (D1 binding + `db.batch`、Yahoo はエッジ直叩きで 429 回避) で動く。
-- `vwap/*` は Node 実行だが Yahoo を `YAHOO_PROXY_BASE`（Worker エッジ）経由で叩くため
-  ランナー IP の 429 を回避する。R2 へは S3 互換 API で書く。
+- `sync/daily.ts`(= [`src/cron/daily.ts`](../src/cron/daily.ts)) / `sync/monthly.ts`(=
+  [`src/cron/monthly.ts`](../src/cron/monthly.ts)) は **Node 実行**。D1 へは `createD1HttpDb`
+  (D1 REST)で書き、Yahoo は共有クライアントが `YAHOO_PROXY_BASE`(Worker エッジの
+  `/api/ingest/yahoo`)経由で叩いて 429 を回避する。OHLCV は増分 upsert。
+- `vwap/*` も Node 実行。Yahoo は `/vwap-analysis/api/ingest-fetch` 経由、R2 へは S3 互換 API。
+- Worker(無料プラン)は配信 + 取込プロキシ + 005/006 の /admin/catchup のみ(Workers Cron は不使用)。
 - スキーマ反映は `pnpm db:generate:d1` →
   `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql`
   （旧 Neon 用の `scripts/db/*.mjs` は D1 移行で廃止・削除済み）。

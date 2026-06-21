@@ -10,11 +10,11 @@ Cloudflare ネイティブの **Workers Builds**(Git 連携)を使う。GitHub �
 
 ## 前提
 
-1. **Workers Paid プラン**。Cron Triggers / `[limits] cpu_ms` / 10,000 subrequests は
-   すべて Paid 必須。Free のままだと `[limits]` で deploy が弾かれる。
+1. **Workers Paid は不要(無料プランで OK)**。取込は GitHub Actions(Node)で行うため
+   Worker は配信 + 取込プロキシのみ。`wrangler.toml` に `[triggers]`/`[limits]` は無い。
 2. **Worker secrets は設定済み**で deploy をまたいで保持される
-   (`CRON_SECRET` / `DATABASE_URL` 等)。Workers Builds は secrets を触らない。
-3. **production ブランチ = `main`**。今の作業ブランチ `feat/d1-r2-migration` は
+   (`CRON_SECRET` / `EDINET_API_KEY` / `NOTION_TOKEN` 等)。Workers Builds は secrets を触らない。
+3. **production ブランチ = `main`**。作業ブランチ `feat/d1-r2-migration` は
    PR #1 を `main` にマージしてから自動デプロイ対象になる。
 
 ## 設定手順 (Cloudflare ダッシュボード)
@@ -29,48 +29,48 @@ Cloudflare ネイティブの **Workers Builds**(Git 連携)を使う。GitHub �
    - **Root directory**: `/`(wrangler.toml はリポジトリ直下)
    - パッケージマネージャ/Node は repo の `packageManager`(pnpm@9.15.9)と
      `.node-version`(22)から自動解決される。
-4. 保存 → 以降 `main` への push ごとに自動ビルド&デプロイ。Cron Triggers
-   (wrangler.toml の `[triggers]`)はデプロイ時に自動登録される。
+4. 保存 → 以降 `main` への push ごとに自動ビルド&デプロイ(無料プラン)。
 5. (任意)非 production ブランチに **Preview デプロイ**を有効化すると PR ごとに
    プレビュー URL が出る。
 
 ## 確認
 
-- 初回デプロイ後、ダッシュボードの **kabulab-cf → Triggers** に 5 本の Cron
-  (`0/3/6/9 20 * * 1-5` + `0 22 1 * *`)が表示されること。
-- ログは **kabulab-cf → Logs**(または `wrangler tail`)で確認。日次 cron は
-  `[cron] sync-daily shard N/4: {...}` を出す。
-- 手動トリガ(任意): `curl -X POST "https://kabulab-cf.<sub>.workers.dev/admin/sync-daily?part=0&of=4" -H "Authorization: Bearer $CRON_SECRET"`
+- 初回デプロイ後、本番ページ(例 `/swing-trading/`, `/financial-math/emh`)が D1 から
+  読めること。ログは **kabulab-cf → Logs**(または `wrangler tail`)。
+- 取込は GitHub Actions(下記)で実行・確認する。
 
 ## ロールバック
 
 ダッシュボード **Deployments** から過去デプロイへワンクリックでロールバック可能。
 
-## VWAP 定期取込 (GitHub Actions)
+## 取込の定期実行 (GitHub Actions)
 
-007 VWAP(日足10年/5分足/信用残高 → R2)は Worker Cron の対象外なので、
-GitHub Actions で定期実行する(`.github/workflows/vwap-ingest.yml`)。
+取込(株価 日次/月次 + VWAP)はすべて GitHub Actions(Node)で定期実行する。Yahoo は
+`YAHOO_PROXY_BASE`(Worker エッジの `/api/ingest/yahoo` / VWAP は `/vwap-analysis/api/ingest-fetch`)
+経由で叩くため、ランナー IP の 429 を回避する → **Workers Paid 不要・private repo のままで OK**。
 
-- Yahoo は **`YAHOO_PROXY_BASE` 経由(Worker エッジの `/vwap-analysis/api/ingest-fetch`)**
-  で叩くため、GitHub ランナーの IP が Yahoo に直接弾かれること(429)はない。
-  → **public 切り出し不要・private repo のままで OK**。
-- スケジュール: 平日 08:00 UTC(日足+5分足)/ 土 09:00 UTC(信用残高週次)。
-  手動実行は Actions タブの「Run workflow」(target: daily-intra / margin / all)。
-- **発火条件**: schedule は **default ブランチ(main)** のワークフローのみ。PR #1 を
-  main にマージすると有効化される。
-- 無料枠(private 2,000 min/月)内の想定。
+| ワークフロー | 内容 | スケジュール (UTC) |
+|---|---|---|
+| `.github/workflows/stock-sync.yml` | 日次 stock(core/rsi/swing) / 月次 universe + otakara rebuild | 平日 21:00 / 1 日 22:30 |
+| `.github/workflows/vwap-ingest.yml` | 日足10年 + 5分足 / 信用残高週次 → R2 | 平日 08:00 / 土 09:00 |
+
+- 手動実行は Actions タブの「Run workflow」(stock: daily/monthly/all、vwap: daily-intra/margin/all)。
+- **schedule は default ブランチ(main)のワークフローのみ発火**。PR #1 を main にマージで有効化。
+- 無料枠(private 2,000 min/月)目安: 日次 stock(~40-50分)+ VWAP(~30-40分)×平日 ≈ 月 1,700-1,900 分。
+  枠が厳しければ stock-sync を Mon/Wed/Fri 等へ間引く。
 
 ### 必要な GitHub Secrets
 
 リポジトリ **Settings → Secrets and variables → Actions → New repository secret** で、
 ローカル `.env` と同じ値を登録する:
 
-| Secret | 値 |
+| Secret | 用途 |
 |---|---|
+| `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / `D1_DATABASE_ID` | D1 REST 書込 (createD1HttpDb) |
 | `YAHOO_PROXY_BASE` | デプロイ済み Worker の URL(例 `https://kabulab-cf.<sub>.workers.dev`) |
-| `CRON_SECRET` | Worker secret と同値(プロキシ認証) |
-| `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET` | R2 書込(S3 互換) |
+| `CRON_SECRET` | 取込プロキシ認証(Worker secret と同値) |
+| `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET` | VWAP の R2 書込(S3 互換) |
+| `NOTION_TOKEN` / `NOTION_BACKUP_PAGE_ID` / `NOTION_TRASH_PAGE_ID` | 月次 universe の JPX XLS 一次データ Notion アーカイブ(ルール6) |
 
-> EDINET(005)/ TDnet(006)の日次キャッチアップも同様に GitHub Actions 化できる
-> (`pnpm ingest:yuho-edinet` / `ingest:ir-tdnet` を `WORKER_BASE_URL` + `CRON_SECRET`
-> で叩くだけ)。必要になれば同じ要領で追加する。
+> EDINET(005)/ TDnet(006)も同様に GitHub Actions 化できる(`pnpm ingest:yuho-edinet` /
+> `ingest:ir-tdnet` を `WORKER_BASE_URL` + `CRON_SECRET` で叩くだけ)。

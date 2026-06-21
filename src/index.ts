@@ -26,7 +26,7 @@ import {
 import vwapAnalysisApp, {
   BASE_PATH as VWAP_BASE_PATH,
 } from "../services/vwap-analysis/app.js";
-import { adminRoute } from "./routes/admin.js";
+import { ingestProxyRoute } from "./routes/ingest-proxy.js";
 import { DESIGN_TOKENS, BASE_RESET, FONT_LINKS } from "./shared/design.js";
 
 /**
@@ -310,8 +310,8 @@ app.route(IRC_BASE_PATH, irCatalogApp);
 // 007 VWAP Analysis — /vwap-analysis/* 配下
 app.route(VWAP_BASE_PATH, vwapAnalysisApp);
 
-// 横断取込 (日次/月次) の認証ルート — /admin/sync-daily, /admin/sync-monthly
-// (Workers Cron の scheduled ハンドラと同じオーケストレータを手動/CLI から叩く入口)
-app.route("/admin", adminRoute);
+// 取込プロキシ — Node(GitHub Actions)からの Yahoo 取得をエッジ経由にする認証ルート
+// (/api/ingest/yahoo, CRON_SECRET)。Workers Paid を使わない取込運用の要。
+app.route("/api/ingest", ingestProxyRoute);
 
 export default app;
