@@ -31,11 +31,19 @@ function optional(key: string): string | undefined {
 
 export const sharedEnv = {
   /**
-   * Vercel Cron 認証用シークレット。未設定は `undefined` を返す —
+   * Cron 認証用シークレット。未設定は `undefined` を返す —
    * auth.ts 側が fail-closed (常に 401) で処理するため、参照時 throw に
    * すると cron 全体が 500 になり挙動が変わる。optional が正。
    */
   CRON_SECRET: () => optional("CRON_SECRET"),
+  /**
+   * Node 取込から D1 へ書くための Cloudflare D1 HTTP API 認証 (ADR-0001)。
+   * Worker の読取はバインディングで完結するため不要。Node 取込 (ir-catalog /
+   * otakara / sync) でのみ参照するので未設定は required で throw。
+   */
+  CLOUDFLARE_API_TOKEN: () => required("CLOUDFLARE_API_TOKEN"),
+  CLOUDFLARE_ACCOUNT_ID: () => required("CLOUDFLARE_ACCOUNT_ID"),
+  D1_DATABASE_ID: () => required("D1_DATABASE_ID"),
 };
 
 // required は今後 root 共有変数を追加する際に使う (現時点では CRON_SECRET のみ)
