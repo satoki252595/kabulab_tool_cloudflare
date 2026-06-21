@@ -169,7 +169,7 @@ push→自動デプロイは **Cloudflare Workers Builds**（Git 連携）。手
    - Workers Builds は接続済み。**PR #1（`feat/d1-r2-migration`）を `main` にマージ**すると初回自動デプロイ + cron 登録。
    - デプロイ後: 本番ページが D1 から読めること + Triggers に cron 5 本を確認 → **Neon 解約**。
 2. **VWAP / EDINET / TDnet / 優待スクレイプの定期自動化**（任意）… GitHub Actions 等へ。
-3. **legacy 掃除**（非ブロッキング）… `scripts/db/*.mjs` 等の旧 Neon 管理スクリプト、`db:push:*`（pg dialect・スキーマは D1 へ移行済みのため obsolete）。
+3. **legacy 掃除**（一部完了・残りは非ブロッキング）… ✅ 旧 Neon DB 管理スクリプト `scripts/db/*.mjs` は削除済み。残: `db:push:*` / `drizzle.<svc>.config.ts`（pg dialect・D1 移行で obsolete）、`scripts/full-validation*.mjs` / `get-jpx-listing.mjs`（Neon 依存の dev one-off）、`services/otakara-yutai/src/index.ts`（dead code・ビルド除外）。Neon 解約後に削除でよい。
 
 ## デプロイ
 

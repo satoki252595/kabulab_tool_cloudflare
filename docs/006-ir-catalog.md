@@ -85,12 +85,12 @@ ir_catalog.disclosures   1 適時開示 = 1 行 (tdnet_id 一意 = 冪等キー)
   pdf_sentiment_at timestamptz(nullable)
 ```
 
-実 DB 反映は手書き SQL を
-`node scripts/db/apply-migration.mjs drizzle/create-ir-catalog.sql`。
-PDF センチメント 4 列は後追いの
-`drizzle/add-pdf-sentiment-to-ir-disclosures.sql` で追加 (NULL 多数のため
-`pdf_sentiment` は WHERE 付き部分 index)。
-`drizzle.ir-catalog.config.ts` は型生成 / studio / 差分確認用。
+> ⚠️ ADR-0001 で D1 へ移行済み。スキーマ正本は `services/ir-catalog/src/db/schema.ts`
+> (sqlite-core)。実 DB 反映は `pnpm db:generate:d1` →
+> `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql`。
+> `pdf_sentiment` は NULL 多数のため WHERE 付き部分 index。以下の Neon 期の記述
+> (手書き SQL `drizzle/create-ir-catalog.sql` / `apply-migration.mjs` / pg dialect の
+> `drizzle.ir-catalog.config.ts`) は歴史的経緯であり現行では使わない。
 
 ## データ取得フロー
 
