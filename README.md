@@ -17,16 +17,17 @@
 
 ## プラットフォーム
 
-旧構成 (Vercel Serverless Functions + Neon) から **Cloudflare Workers** へ移行済み。Worker は
-**配信専用** (`worker/entry.ts` が `src/index.ts` の Hono root app を fetch ハンドラとして公開) で、
-データ取得・加工・本番書き込みは Worker に載せず **ローカル CLI** (`scripts/sync/*`, `scripts/vwap/*`)
-で実行する (D1 のみバインディング経由のため一部 Worker 側、後述)。
+旧構成 (Vercel Serverless Functions + Neon) から **Cloudflare Workers + Hono** へ移行済み
+([ADR-0001](./docs/adr/0001-neon-to-d1-r2-notion.md))。Worker は **配信専用**
+(`worker/entry.ts` が `src/index.ts` の Hono root app を fetch ハンドラとして公開) で、読取は
+**D1 バインディング** (`c.env.DB`) 経由。データ取得・加工・本番書き込みは Worker に載せず
+**Node (GitHub Actions)** で実行し、`createD1HttpDb` (D1 REST) で書き込む (後述)。
 
-データストアは段階移行中:
+データストア (ADR-0001 で確定):
 
 | 種別 | ストア | 状況 |
 |---|---|---|
-| 正規化リレーショナル | **Neon PostgreSQL** (主) / **Cloudflare D1** | 005 yuho-quant は D1 へ移行済み ([ADR-0001](./docs/adr/0001-neon-to-d1-r2-notion.md))。他サービスは Neon。Neon 全廃 (D1+R2+Notion 化) を段階移行中 |
+| 正規化リレーショナル | **Cloudflare D1** (SQLite) | 全サービスを単一 DB `kabulab-cf` に接頭辞テーブルで同居。Drizzle ORM は `drizzle-orm/d1` + sqlite-core ([ADR-0001](./docs/adr/0001-neon-to-d1-r2-notion.md))。旧 Neon PostgreSQL は廃止 (解約予定/済) |
 | 時系列ブロブ | **Cloudflare R2** (`vwap-data`) | 007 VWAP の 5分足/日足/信用残高 JSON |
 | 一次データ (raw) | **Notion** | CLAUDE.md ルール6。EDINET ZIP / TDnet / 優待スクレイプ等を物理ファイルごと冪等アーカイブ |
 
@@ -50,8 +51,8 @@ pnpm install              # 依存インストール
 ├── wrangler.toml                    # Worker 設定 — ASSETS(public) / R2(BUCKET=vwap-data) / D1(DB=kabulab-cf)
 ├── src/
 │   ├── index.ts                     # ルート Hono アプリ + ポータル + サブアプリ mount
-│   ├── cron/                        # 取込オーケストレーション (ローカル CLI から実行)
-│   │   ├── daily.ts / monthly.ts    # 日次/月次 sync (Yahoo → Neon)
+│   ├── cron/                        # 取込オーケストレーション (Node / GitHub Actions から実行)
+│   │   ├── daily.ts / monthly.ts    # 日次/月次 sync (Yahoo → D1。D1 REST 書込)
 │   │   ├── universe.ts              # JPX 母集団同期
 │   │   ├── yuho-edinet.ts           # 005 EDINET キャッチアップ (D1。Worker 取込ルートから呼ぶ)
 │   │   └── ir-catalog-tdnet.ts      # 006 TDnet キャッチアップ
@@ -75,7 +76,7 @@ pnpm install              # 依存インストール
 │   ├── sync/                        # universe / daily / monthly / all-daily / yuho-edinet / ir-tdnet
 │   └── vwap/                        # ingest-daily / ingest-intra / ingest-margin (→ R2)
 ├── drizzle/                         # マイグレーション SQL (drizzle/d1/ = D1 用)
-├── drizzle.*.config.ts              # スキーマ別 drizzle-kit 設定 (drizzle.d1.config.ts = D1)
+├── drizzle.d1.config.ts             # drizzle-kit 設定 (D1)。旧 drizzle.<svc>.config.ts(pg) は obsolete
 ├── public/                          # PWA 静的アセット + public/vwap-analysis/ フロント
 ├── docs/                            # mono-repo ドキュメント (docs/adr/ = 設計判断記録)
 ├── flake.nix / .envrc               # Nix devShell (Node 22 + pnpm 9)
@@ -101,7 +102,7 @@ pnpm deploy:cf            # 本番を手動デプロイ (= wrangler deploy)
 pnpm db:generate:d1       # D1(SQLite) スキーマ生成 → drizzle/d1/*.sql (適用は wrangler d1 execute)
 # 注: db:push:rsi / :otakara / :swing / :finmath / :ircat は旧 Neon(pg) 用で D1 移行後は obsolete
 
-# データ取得 (日次/月次 stock sync。本体は Worker Cron が自動実行 — 下記「運用ステータス」)
+# データ取得 (日次/月次 stock sync。本体は GitHub Actions が自動実行 — 下記「運用ステータス」)
 pnpm sync:daily           # 手動フル日次トリガ (Worker /admin/sync-daily を叩く + VWAP も束ねる)
 pnpm sync:monthly         # 手動 月次 otakara rebuild トリガ (Worker /admin/sync-monthly)
 pnpm sync:universe        # JPX 母集団 seed (xlsx=Node 専用・上場/廃止時に実行)
@@ -148,6 +149,7 @@ D1 へは `createD1HttpDb`(D1 REST)で書き込む。
 |---|---|---|
 | `.github/workflows/stock-sync.yml` | 日次=core/rsi/swing 取得+指標+**増分 OHLCV** / 月次=母集団(JPX)同期 + otakara rebuild | 平日 21:00 / 1 日 22:30 |
 | `.github/workflows/vwap-ingest.yml` | 日足10年 + **5分足** → R2 / 信用残高(週次) | 平日 08:00 / 土 09:00 |
+| `.github/workflows/catchup.yml` | 005 有報(EDINET) + 006 適時開示(TDnet) キャッチアップ(TDnet=Node, EDINET=Worker ルート) | 平日 11:00 |
 
 Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキシ + 005/006 の
 `/admin/catchup` のみを担う(Workers Cron は使わない)。schedule は **main にマージ後**に
@@ -160,8 +162,6 @@ Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキ�
 
 | 処理 | コマンド | 備考 |
 |---|---|---|
-| 適時開示 (006) | `pnpm ingest:ir-tdnet` | Worker `/ir-catalog/admin/catchup` を叩く。GH Actions 化も容易 |
-| 有報 (005) | `pnpm ingest:yuho-edinet` | Worker `/yuho-quant/admin/catchup` を叩く。同上 |
 | 優待スクレイプ+LLM解釈 (002) | data-scripts 4 step（後述） | step3 はローカル OSS LLM のため自動化対象外 |
 
 > `pnpm sync:daily`(= `all-daily.ts`)はローカル手動フル実行用(stock + VWAP を束ねる)。
@@ -169,15 +169,15 @@ Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキ�
 
 ### 残タスク
 
-1. **【要対応】GitHub Secrets 追加 + main マージで全自動化を有効化**
-   - GH Secrets(Settings → Secrets and variables → Actions・`.env` と同値): `CLOUDFLARE_API_TOKEN` /
-     `CLOUDFLARE_ACCOUNT_ID` / `D1_DATABASE_ID` / `YAHOO_PROXY_BASE` / `CRON_SECRET` / `R2_*` /
-     `NOTION_TOKEN` / `NOTION_BACKUP_PAGE_ID` / `NOTION_TRASH_PAGE_ID`。
-   - **PR #1（`feat/d1-r2-migration`）を `main` にマージ** → Workers Builds が Worker を自動
-     デプロイ(無料) + GitHub Actions の schedule が有効化。
-   - 本番ページが D1 から読める + Actions が成功するのを確認 → **Neon 解約**。
-2. **EDINET / TDnet / 優待スクレイプの GitHub Actions 化**（任意）。
-3. **legacy 掃除**（一部完了・残り非ブロッキング）… ✅ 旧 Neon DB スクリプト `scripts/db/*.mjs` 削除済み。残: `db:push:*` / `drizzle.<svc>.config.ts`(pg・obsolete)、`scripts/full-validation*.mjs` / `get-jpx-listing.mjs`(Neon 依存 dev one-off)、`services/otakara-yutai/src/index.ts`(dead code)。Neon 解約後に削除でよい。
+1. **✅ 本番稼働確認済み** — main マージ → Workers Builds が**無料で自動デプロイ済**。スモーク全 PASS
+   (全9サービス D1 読取)、stock-sync GitHub Actions 成功(D1 へフレッシュ書込確認)。
+   **残るは Neon 解約**(あなたが Neon コンソールで実施)。解約後は `.env`/GH Secret の `DATABASE_URL` 不要。
+   - catchup.yml(EDINET/TDnet)用に GH Secret **`WORKER_BASE_URL`**(= Worker URL)が未追加なら追加。
+2. **legacy 掃除**（✅ ほぼ完了）… 旧 Neon DB スクリプト `scripts/db/*.mjs`・dev one-off
+   (`full-validation*` / `get-jpx-listing`)・otakara dead code(`src/index.ts` / `pages-app.ts` /
+   Neon integration test)は **削除済み**。残りは Neon 解約時にまとめて整理推奨: `DATABASE_URL` +
+   cutover ツール(`scripts/migrate/`)、obsolete な `db:push:*` + `drizzle.<svc>.config.ts`(pg dialect)、
+   各サービス CLAUDE.md/README の Neon/Vercel 期記述(一括リフレッシュ)。
 
 ## デプロイ
 
@@ -246,8 +246,8 @@ ADR-0001 で全サービスを Neon → D1 (SQLite) へ移行済み。共有 cor
 
 ## 運用 / 定点ジョブ
 
-日次 stock sync + 月次 otakara rebuild は **Worker Cron が自動実行**する（デプロイ後・要 Paid。
-詳細は上記「運用ステータス」）。以下は **cron 対象外で手動 (or CI) 実行**する取込:
+日次 stock sync + 月次 otakara rebuild は **GitHub Actions が自動実行**する（Workers Paid 不要・
+Workers Cron は使わない。詳細は上記「運用ステータス」）。以下は **定期取込の対象外で手動 (or CI) 実行**する取込:
 
 ```bash
 # 母集団 (JPX) — 上場/廃止があった時

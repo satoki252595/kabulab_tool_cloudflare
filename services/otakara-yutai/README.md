@@ -2,16 +2,16 @@
 
 日本株の株主優待において、ファンダメンタルズ及びテクニカルの観点から割安な銘柄を優待ジャンル毎に紹介するWebサービス。
 
-> **本サービスは [kabulab](../../README.md) mono-repo の 002 サブアプリ**。`https://kabulab.vercel.app/otakara-yutai/` で公開され、コマンドは全て **リポジトリルート**から実行する。実装規約の正本は [CLAUDE.md](./CLAUDE.md)。
+> **本サービスは [kabulab](../../README.md) mono-repo の 002 サブアプリ**。`https://kabulab-cf.satoki252595.workers.dev/otakara-yutai/` で公開され、コマンドは全て **リポジトリルート**から実行する。実装規約の正本は [CLAUDE.md](./CLAUDE.md)。
 
 ## 技術スタック
 
 | カテゴリ | 技術 |
 |----------|------|
 | Backend | Hono v4 (`new Hono({ strict: false })`) |
-| Deploy | Vercel Serverless Functions (単一プロジェクト kabulab) |
-| Database | Neon (PostgreSQL) — `public` スキーマ + 共有 `core`/`swing` を参照 |
-| ORM | Drizzle ORM |
+| Deploy | Cloudflare Workers (単一 Worker kabulab-cf。Workers Builds の Git 連携で自動デプロイ) |
+| Database | Cloudflare D1 (SQLite) — 単一 DB `kabulab-cf` に `yutai_*`/`otakara_*` 接頭辞テーブル + 共有 `core_*` を参照 |
+| ORM | Drizzle ORM (`drizzle-orm/d1` + sqlite-core) |
 | Validation | Zod + @hono/zod-validator |
 | Frontend | Hono SSR — **HTML は `app.ts` 内の template literal で生成 (JSX 不可)** |
 | Test | Vitest + @vitest/coverage-v8 |
@@ -22,8 +22,8 @@
 ### 前提条件
 
 - Node.js 22 / pnpm 9 (リポジトリルートの **Nix Flake** で固定。`nix develop` 推奨)
-- Neon データベース
-- Vercel アカウント
+- Cloudflare アカウント (D1 `kabulab-cf` + Workers)
+- `wrangler` CLI (D1 操作・デプロイ)
 
 ### インストール
 
@@ -44,16 +44,22 @@ cp .env.example .env
 
 | 変数名 | 説明 | 必須 |
 |--------|------|------|
-| `DATABASE_URL` | Neon PostgreSQL 接続文字列 (`sslmode=require` 必須) | Yes |
+| `CLOUDFLARE_API_TOKEN` | 取込 (Node / GitHub Actions) が D1 REST 書込に使う API トークン (D1 edit 権限) | 取込時 |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare アカウント ID (D1 REST 用) | 取込時 |
+| `D1_DATABASE_ID` | D1 データベース `kabulab-cf` の ID (D1 REST 用) | 取込時 |
 | `OTAKARA_LLM_MODEL` | 優待解釈 (interpret:yutai) の GGUF モデル上書き (HF URI)。既定 ELYZA-JP-8B | No |
+
+> Worker の読取経路は D1 バインディング `c.env.DB` を使うため接続文字列は不要。
+> 上記 `CLOUDFLARE_*` / `D1_DATABASE_ID` は **書込 (取込)** を行う Node 側でのみ参照する。
 
 ### データベースセットアップ
 
-スキーマ操作は **ルートからサービス別サフィックス付きコマンド**で行う (サービス固有の `pnpm db:push` は存在しない)。シード投入は無く、データは統一 sync + 優待取込パイプラインで投入する。
+スキーマ操作は **ルートからコマンド**で行う。シード投入は無く、データは統一 sync + 優待取込パイプラインで投入する。
 
 ```bash
-pnpm db:push:otakara       # public スキーマを Neon に反映
-pnpm sync:universe         # core.stocks を全 JPX 内国株 ~4,000 に seed
+pnpm db:generate:d1        # drizzle/d1/*.sql を生成
+wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<生成SQL>  # D1 に適用
+pnpm sync:universe         # core_stocks を全 JPX 内国株 ~4,000 に seed
 pnpm sync:monthly          # 母集団同期 + is_yutai 銘柄のスコア再計算
 ```
 
@@ -61,21 +67,19 @@ pnpm sync:monthly          # 母集団同期 + is_yutai 銘柄のスコア再計
 
 | コマンド | 説明 |
 |----------|------|
-| `pnpm dev` | ローカル開発サーバー起動 (vercel dev) |
-| `pnpm run deploy` | Vercel デプロイ (単一プロジェクト kabulab) |
+| `pnpm dev` | ローカル開発サーバー起動 (wrangler dev) |
+| `pnpm run deploy` | Cloudflare Workers 手動デプロイ (wrangler deploy)。通常は main push の自動デプロイで足りる |
 | `pnpm test` / `pnpm test:coverage` | テスト / カバレッジ付き |
 | `pnpm typecheck` | TypeScript 型チェック |
 | `pnpm lint` | ESLint 実行 |
-| `pnpm db:generate:otakara` | マイグレーションファイル生成 (public) |
-| `pnpm db:push:otakara` | スキーマを Neon に直接反映 (public) |
-| `pnpm db:studio:otakara` | Drizzle Studio 起動 |
+| `pnpm db:generate:d1` | D1 マイグレーション SQL 生成 (`drizzle/d1/*.sql`)。適用は `wrangler d1 execute kabulab-cf --remote --file=...` |
 | `pnpm interpret:yutai` | 優待 description をローカル LLM (node-llama-cpp) で解釈 (取込パイプライン step3) |
 
 優待データ取込パイプライン (fetch → export → interpret → apply) の詳細は [CLAUDE.md](./CLAUDE.md) と [ルート README](../../README.md#優待データ取込パイプライン-002-otakara-data-scriptscron-非対象) を参照。
 
 ## デプロイ
 
-kabulab は **単一 Vercel プロジェクト**。`git push origin main` で auto-deploy が発火する (手動は `pnpm run deploy`)。ビルドは Vercel 側が処理するため独自 Build Command は不要 (`build` スクリプトは no-op)。環境変数 (`DATABASE_URL` 等) は Vercel Env Variables で管理し、`vercel.json` はルート 1 つに集約 (rewrites + cron)。
+kabulab は **単一 Cloudflare Worker** (`kabulab-cf`)。`git push origin main` で Workers Builds (Git 連携) の **無料**自動デプロイが発火する (手動は `pnpm run deploy` = `wrangler deploy`)。ビルド/ルーティング設定は `wrangler.toml` に集約し、D1 (`binding=DB`) / R2 (`binding=BUCKET`) / 静的アセット (`binding=ASSETS`) のバインディングを定義する。取込用シークレット (`CLOUDFLARE_API_TOKEN` 等) は GitHub Actions Secrets で管理する。
 
 本サービスは root app が `app.route("/otakara-yutai", otakaraYutaiApp)` で mount する。`app.ts` のルート:
 
@@ -107,33 +111,27 @@ kabulab は **単一 Vercel プロジェクト**。`git push origin main` で au
 | `order` | `asc` \| `desc` | `desc` | 並び順 |
 | `limit` | number | 50 | 取得件数（最大100） |
 
-## CI/CD ワークフロー
+## 自動化 (GitHub Actions)
 
-### ci.yml — 継続的インテグレーション
+データ取込 (書込) は Node で動く **GitHub Actions 3 本**が担う (Workers Cron / Workers Paid は使わない)。02 優待の LLM 解釈のみローカル手動。
 
-- **トリガー**: `push` (main), `pull_request`
-- **内容**: pnpm install → typecheck → lint → test:coverage → Drizzle整合性チェック
-- **カバレッジ**: 80%未満で失敗
+### stock-sync.yml — 銘柄データ同期 (002 に直接関係)
 
-### pr-review.yml — Claude Code 自動レビュー
+- **トリガー**: 平日 21:00 UTC (日次 core/rsi/swing sync) + 毎月 1 日 22:30 UTC (母集団同期 + otakara rebuild) + 手動
+- **内容**: `sync:daily` / `sync:monthly` 等を実行し D1 を REST 経由で更新。is_yutai 銘柄の `otakara_stock_scores` も月次で再計算
+- **デプロイは Workers Builds が別途担当** (このワークフローは取込専用)
 
-- **トリガー**: PR作成・更新時
-- **内容**: Claude Code が変更ファイルをレビューし、PRコメントに投稿
-- **観点**: TypeScript strict、Hono/Drizzle規約、セキュリティ
-- **必要シークレット**: `ANTHROPIC_API_KEY`
+### vwap-ingest.yml — VWAP 時系列取込 (007)
 
-### security-audit.yml — 定期セキュリティ監査
+- **トリガー**: 平日 08:00 UTC (日足10年 + 5分足) + 土 09:00 UTC (信用残高 週次) + 手動
+- **内容**: Yahoo データを R2 (`vwap-data`) へ書込
 
-- **トリガー**: 毎週月曜 AM3:00 (UTC) + 手動
-- **内容**: Claude Code がセキュリティ監査を実施
-- **アクション**: Critical/High 発見時にGitHub issue自動作成
-- **必要シークレット**: `ANTHROPIC_API_KEY`
+### catchup.yml — 開示取込 (005 / 006)
 
-### db-migration-check.yml — DBマイグレーションチェック
+- **トリガー**: 平日 11:00 UTC + 手動
+- **内容**: EDINET 有報 (005) / TDnet 適時開示 (006) を取り込み
 
-- **トリガー**: PRに `src/db/` 配下の変更がある場合
-- **内容**: スキーマ変更を検出し、破壊的変更があればPRにコメント
-- **必要シークレット**: `DATABASE_URL`
+> 優待データ取込パイプライン (fetch → export → interpret → apply) は GitHub Actions 非対象・ローカル手動。詳細は [CLAUDE.md](./CLAUDE.md)。
 
 ## ディレクトリ構成
 
@@ -142,20 +140,20 @@ services/otakara-yutai/
 ├── app.ts                       # ★本番ビルドの単一ファイル — 全 HTML を template literal で生成 + 全ルート
 ├── src/
 │   ├── db/
-│   │   ├── client.ts            # Neon + Drizzle クライアント
-│   │   └── schema.ts            # public スキーマ定義 (single source of truth)
+│   │   ├── client.ts            # createDb(c.env.DB) — D1 + Drizzle クライアント
+│   │   └── schema.ts            # yutai_*/otakara_* 接頭辞テーブル定義 (single source of truth)
 │   ├── services/
 │   │   ├── yutai-scraper.ts         # 優待データ取込 (HTML/CSV/JSON)
 │   │   └── yutai-data-provider.ts   # ファイルベースインポート
 │   └── (index.ts / pages-app.ts / routes/ / views/ / middleware/ 等は dead code — 本番は app.ts)
-└── data-scripts/                # cron 非対象・手動実行の優待取込パイプライン
+└── data-scripts/                # GitHub Actions 非対象・ローカル手動実行の優待取込パイプライン
     ├── fetch-yutai-full.ts          # 1. minkabu → yutai_benefits + is_yutai
     ├── export-benefit-descriptions.ts # 2. → data/benefit-descriptions.jsonl
     ├── interpret-benefits.ts        # 3. ローカル LLM (node-llama-cpp) で解釈 → data/interpreted/
     └── apply-benefit-interpretations.ts # 4. → DB short_summary / estimated_value
 ```
 
-> Vercel 関数エントリは **ルートの `api/index.ts`** 1 つ。本サービスは root app (`src/index.ts`) が `/otakara-yutai` に mount する。
+> Worker エントリは **ルートの `worker/entry.ts`** 1 つ。root app (`src/index.ts`) が本サービスを `/otakara-yutai` に mount する。
 
 ## ライセンス
 

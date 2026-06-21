@@ -1,6 +1,6 @@
 # CLAUDE.md — kabulab mono-repo 開発ルール
 
-このリポジトリは [kabulab](https://kabulab.vercel.app/) — 日本株投資ツール統合ポータル。
+このリポジトリは [kabulab](https://kabulab-cf.satoki252595.workers.dev/) — 日本株投資ツール統合ポータル。
 詳細は [README.md](./README.md) と [docs/overview.md](./docs/overview.md) を参照。
 
 このファイルは Claude Code セッション開始時に自動で読み込まれる。本プロジェクトの全実装作業に適用される絶対ルールを以下に記す。違反した場合は実装をやり直す。
@@ -361,9 +361,9 @@ import して使う（各サービスで `.tip` を再定義しない）。利�
 
 ## プロジェクト固有の規約
 
-- **JSX 禁止**: Vercel `@vercel/node` が `.tsx` を bundle しないため、ビューは template literal を返す `.ts` 関数として実装する。詳細は [`docs/new-project-template.md`](./docs/new-project-template.md) の §5。
+- **JSX 禁止**: mono-repo 方針として、ビューは template literal を返す `.ts` 関数として実装する (Cloudflare Workers / esbuild ビルドでも全サービスがこの方式を踏襲する)。詳細は [`docs/new-project-template.md`](./docs/new-project-template.md) の §5。
 - **Hono のサブアプリ**は必ず `new Hono({ strict: false })` で生成し、trailing slash の有無に依らずマッチさせる。
-- **DB アクセス**は必ず `process.env.DATABASE_URL` から取得し、引数にハードコードしない。
+- **DB アクセス**は必ず Worker の D1 バインディング (`c.env.DB` → `createDb(c.env.DB)` / `createServiceDb`) 経由で取得し、接続先をハードコードしない。取込 (書込) は Node から `createD1HttpDb` (D1 REST) を使う。
 - **POST フォームの optional フィールド**は `z.preprocess((v) => v === "" ? undefined : v, ...)` で空文字列を undefined に正規化する (HTML form の標準挙動でフォーム未入力は `""` 送信)。`z.coerce.number().optional()` 単独だと `""` が `0` に変換されるバグの温床。
 - **データ層に「初期値・デフォルト値」を埋め込まない** (ルール1帰結): フォームのプリフィル値も `null` で起動し、実データが取得できた場合のみ実値をセット。「とりあえず 100 円」のような根拠不明値は本番経路から消す。
 
