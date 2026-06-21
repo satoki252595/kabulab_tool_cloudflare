@@ -9,9 +9,11 @@ import { spawnSync } from "node:child_process";
 // 有報 EDINET は D1 へ移行済み（ADR-0001）。取込は Worker 側の認証ルートで
 // 実行するため、本ローカル日次パイプラインからは外した（`pnpm ingest:yuho-edinet`
 // が Worker /yuho-quant/admin/catchup を叩く独立トリガになっている）。
+// 適時開示 TDnet は D1 へ移行済み（ADR-0001）。取込は Worker 認証ルートで実行する
+// ため本ローカル日次パイプラインからは外した（`pnpm ingest:ir-tdnet` が Worker
+// /ir-catalog/admin/catchup を叩く独立トリガになっている）。
 const steps: Array<[string, string]> = [
   ["kabulab日次 (Yahoo全銘柄→Neon)", "scripts/sync/daily.ts"],
-  ["適時開示 TDnet", "scripts/sync/ir-tdnet.ts"],
   ["VWAP 日足10年→R2", "scripts/vwap/ingest-daily.ts"],
   ["VWAP 5分足蓄積→R2", "scripts/vwap/ingest-intra.ts"],
   ["VWAP 信用残高(週次PDF)→R2", "scripts/vwap/ingest-margin.ts"],

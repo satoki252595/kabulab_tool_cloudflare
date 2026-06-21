@@ -41,6 +41,7 @@
     "services/otakara-yutai/src/middleware/**",
     "services/otakara-yutai/src/tests/**",
     "services/otakara-yutai/data-scripts/**",
-    "services/yuho-quant/data-scripts/**"
+    "services/yuho-quant/data-scripts/**",
+    "services/ir-catalog/data-scripts/**"
   ]
 }

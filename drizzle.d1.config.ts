@@ -16,6 +16,7 @@ export default defineConfig({
   schema: [
     "./src/shared/db/core-schema.ts",
     "./services/yuho-quant/src/db/schema.ts",
+    "./services/ir-catalog/src/db/schema.ts",
   ],
   out: "./drizzle/d1",
   dialect: "sqlite",

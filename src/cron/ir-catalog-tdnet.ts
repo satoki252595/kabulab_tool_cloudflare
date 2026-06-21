@@ -1,33 +1,30 @@
 /**
- * 006 ir-catalog — TDnet 適時開示の日次キャッチアップ (統一 daily cron 相乗り)。
+ * 006 ir-catalog — TDnet 適時開示の日次キャッチアップ (ADR-0001: D1 + Worker 実行)。
  *
- * 新規 cron は作らない方針 (docs/new-project-template.md §9) に従い、既存の
- * 日次 cron ハンドラ (src/index.ts) から **shard 0 のときだけ** 呼ばれる
- * (TDnet は 1 リクエストで範囲全件を返せるためシャード分散は不要)。既存の
- * 日次 sync (Yahoo) からは独立し、ここの失敗が本体 sync を壊さないよう
- * 呼び出し側で握る (ただし結果はレスポンスに載せ運用者が気づける —
- * 握り潰さない: ルール2)。
+ * D1 はバインディング経由でのみ触れるため Worker 上で動く。現状の起動経路は
+ * 認証付き HTTP ルート POST /ir-catalog/admin/catchup
+ * (services/ir-catalog/src/routes/admin.ts) で、D1 を createDb(c.env.DB) で渡して
+ * 呼ぶ。TDnet は 1 リクエストで範囲全件を返せるためシャード分散は不要
+ * (shard 指定時は part 0 のみ実行)。Workers Cron Trigger 配線は Phase 3。
+ * 失敗は握り潰さず結果に載せる (ルール2)。
  *
  * 動作:
  *   - 直近 WINDOW_DAYS 日を 1 日ずつ全件取得 (yanoshin は page 無効のため)
- *   - core.stocks に居る個別株の開示を ir_catalog.disclosures へ冪等 upsert
- *   - ルール6: 当日バッチの確定 JSONL を Notion 一次データへ実体記録
+ *   - core_stocks に居る個別株の開示を ir_disclosures へ冪等 upsert
+ *   - ルール6: 当日バッチの確定 JSON を Notion 一次データへ実体記録
  *     (key=tdnet-daily-YYYY-MM-DD 冪等)。高シグナルは人間可読 DB へ冪等記録。
- *   - 取りこぼし (当日後追い開示・訂正) は翌日以降の WINDOW 重なりと
- *     tdnet_id/Notion 冪等で回収する。
+ *   - 取りこぼしは翌日以降の WINDOW 重なりと tdnet_id/Notion 冪等で回収。
  */
-import { createDb } from "../../services/ir-catalog/src/db/client.js";
-import { stocks } from "../../services/rsi-screening/src/db/core-schema.js";
+import type { Database } from "../../services/ir-catalog/src/db/client.js";
+import { stocks } from "../shared/db/core-schema.js";
 import { listRange } from "../../services/ir-catalog/src/services/tdnet/client.js";
 import { ingestBatch } from "../../services/ir-catalog/src/services/ingest.js";
 
 const WINDOW_DAYS = 7;
 /**
- * 二次データ Notion 投入の実時間上限。日次 cron は shard 0 で Yahoo 本体
- * sync + yuho-edinet の後に直列実行されるため、Vercel 関数上限 (300s) を
- * 合算で超えないよう ir-catalog 自身の寄与をこの予算で必ず打ち切る。
- * 打ち切った残りは WINDOW_DAYS の重なりと TDnet ID 冪等で翌日以降が回収
- * する (Postgres が正本なので Notion 未投入分も失われない)。常態的に
+ * 二次データ Notion 投入の実時間上限。Worker 実行時間に収まるよう Notion 投入を
+ * この予算で必ず打ち切る。打ち切った残りは WINDOW_DAYS の重なりと TDnet ID 冪等で
+ * 次回が回収する (D1 が正本なので Notion 未投入分も失われない)。常態的に
  * reachedDeadline=true なら過去ギャップが大きい合図 → backfill を回す。
  */
 const NOTION_BUDGET_MS = 50_000;
@@ -50,14 +47,13 @@ function pad(n: number): string {
 }
 
 export async function runIrCatalogCatchup(
-  databaseUrl: string,
+  db: Database,
   shard?: { part: number; of: number }
 ): Promise<IrCatalogResult> {
   // TDnet は範囲一括取得できるのでシャード分散不要。重複実行を避け shard 0 のみ。
   if (shard && shard.part !== 0) return { ran: false };
 
   const started = Date.now();
-  const db = createDb(databaseUrl);
 
   const allStocks = await db
     .select({ id: stocks.id, code: stocks.code })
