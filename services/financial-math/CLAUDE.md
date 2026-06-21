@@ -4,7 +4,7 @@
 (**DCF / CAPM / EMH アノマリー / Black-Scholes**) を東証の実銘柄データと
 組み合わせて使えるようにする計算ツール群。
 
-ポータル: `https://kabulab.vercel.app/` / 本サービス: `/financial-math/`
+ポータル: `https://kabulab-cf.satoki252595.workers.dev/` / 本サービス: `/financial-math/`
 
 ## このサービス固有の絶対ルール (mono-repo CLAUDE.md に追加)
 
@@ -20,26 +20,31 @@
 **無配銘柄は理論株価を直接計算できない**。FCF ベースを実装する場合は
 明示的な別モジュールとして追加し、配当ベースの結果と混ぜない。
 
-### core / swing スキーマは読み取り専用
+### core_* / swing_* テーブルは読み取り専用
 
-書き込みは `finmath` スキーマ (`price_snapshot` / `daily_ohlcv`) のみ。
+書き込みは 004 所有の `finmath_price_snapshot` / `finmath_daily_ohlcv` のみ。
 `src/db/core-schema.ts` / `swing-readonly.ts` は参照専用の定義。
 
 ## 技術スタック
 
-- Runtime: Hono v4 + Vercel Serverless Functions
-- DB: Neon (PostgreSQL) + Drizzle ORM (`finmath` スキーマ)
+- Runtime: Cloudflare Workers + Hono v4
+- DB: Cloudflare D1 (SQLite) + Drizzle ORM (drizzle-orm/d1 + sqlite-core)。
+  単一 DB `kabulab-cf` に接頭辞テーブル `finmath_*` で同居 (ADR-0001)。
+  読取は Worker の `c.env.DB` バインディング (`createDb(c.env.DB)`)。
 - Validation: Zod
 - Language: TypeScript (strict)
 - **JSX 禁止** (mono-repo 共通) — ビューは `src/views/*.ts` の template literal
 
 ## DB スキーマ
 
-| PG スキーマ | 所有 | 用途 |
+D1 は名前空間が無いため、旧 PG スキーマ名 (core/swing/finmath) は廃止し、
+接頭辞テーブルで同居させる。
+
+| テーブル接頭辞 | 所有 | 用途 |
 |---|---|---|
-| `core` | 001 が更新 | 銘柄マスタ (読み取り専用で参照) |
-| `swing` | 003 が更新 | 日足 OHLCV (読み取り専用で参照) |
-| `finmath` | 004 のみ | `price_snapshot` / `daily_ohlcv` (Yahoo 取得キャッシュ) |
+| `core_*` | 001/002 が更新 | 銘柄マスタ `core_stocks` (読み取り専用で参照) |
+| `swing_*` | 003 が更新 | 日足 OHLCV `swing_daily_ohlcv` 等 (読み取り専用で参照) |
+| `finmath_*` | 004 のみ | `finmath_price_snapshot` / `finmath_daily_ohlcv` (Yahoo 取得キャッシュ) |
 
 ## コマンド
 
@@ -47,12 +52,15 @@
 **リポジトリルート** から実行する。
 
 ```bash
-pnpm dev                   # ローカル開発サーバー起動
-pnpm db:generate:finmath   # マイグレーションファイル生成
-pnpm db:push:finmath       # スキーマを Neon に反映 (finmath スキーマ)
-pnpm db:studio:finmath     # Drizzle Studio
+pnpm dev                   # ローカル開発サーバー起動 (wrangler dev)
+pnpm db:generate:d1        # drizzle/d1/*.sql を生成 (全サービス共通)
+# 実 DB 反映: wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql
 pnpm test / pnpm typecheck / pnpm lint
 ```
+
+※ `db:push:finmath` / `db:studio:finmath` / `drizzle.financial-math.config.ts`
+(pg dialect) は ADR-0001 で **obsolete**。スキーマは `pnpm db:generate:d1` →
+`wrangler d1 execute` で反映する。
 
 ## ディレクトリ
 
@@ -61,6 +69,7 @@ services/financial-math/
 ├── app.ts / base-path.ts      # Hono サブアプリ本体 (BASE_PATH=/financial-math)
 ├── src/
 │   ├── db/                    # finmath-schema.ts + core/swing 読み取り専用定義
+│   │                          #   client.ts: createDb(c.env.DB) = D1 バインディング
 │   ├── routes/{pages,api}.ts  # SSR ページ + フォーム POST (応答も SSR HTML)
 │   ├── services/              # 純関数: dcf / capm / black-scholes / emh /
 │   │                          #   volatility / price-cache (唯一の I/O 層)

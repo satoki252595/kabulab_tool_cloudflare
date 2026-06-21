@@ -1,6 +1,6 @@
 # AGENTS.md — kabulab mono-repo 開発ルール (Codex 向けポインタ)
 
-このリポジトリは [kabulab](https://kabulab.vercel.app/) — 日本株投資ツール統合ポータル。
+このリポジトリは [kabulab](https://kabulab-cf.satoki252595.workers.dev/) — 日本株投資ツール統合ポータル。
 このファイルは Codex セッション開始時に自動で読み込まれる。
 
 ## 正本は CLAUDE.md

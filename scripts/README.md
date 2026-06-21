@@ -32,7 +32,7 @@ scripts/
 | 日次 stock sync (core/rsi/swing) | **自動** (GitHub Actions) | `.github/workflows/stock-sync.yml`(平日 21:00 UTC) / 手動 `pnpm sync:daily:core` |
 | 月次 母集団 + otakara rebuild | **自動** (GitHub Actions) | 同上(1 日 22:30 UTC) / 手動 `pnpm sync:universe` + `pnpm sync:monthly:core` |
 | VWAP 日足/5分足/信用 → R2 | **自動** (GitHub Actions) | `.github/workflows/vwap-ingest.yml` / 手動 `pnpm ingest:vwap-*` |
-| 005 EDINET / 006 TDnet | 手動/CI (Node→Worker) | `pnpm ingest:yuho-edinet` / `pnpm ingest:ir-tdnet` |
+| 005 EDINET / 006 TDnet | **自動** (GitHub Actions) | `.github/workflows/catchup.yml`(平日 11:00 UTC) / 手動 `pnpm ingest:yuho-edinet` / `ingest:ir-tdnet` |
 | 002 優待スクレイプ+LLM | 手動 (Node・ローカル LLM) | `services/otakara-yutai/data-scripts/*`（月次） |
 
 詳細・前提・残タスクは root [`README.md`](../README.md#運用ステータス自動化手作業残タスク) と

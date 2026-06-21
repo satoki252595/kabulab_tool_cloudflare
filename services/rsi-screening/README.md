@@ -4,15 +4,15 @@
 
 ## DB共有方針
 
-kabuTool配下のプロジェクトは**単一のNeon DB**を共有し、PostgreSQLスキーマで名前空間を分離する。
+kabulab 配下のプロジェクトは**単一の Cloudflare D1 DB (`kabulab-cf`)** を共有し、**接頭辞テーブル**で名前空間を分離する (D1 は 1 DB = 1 SQLite で PostgreSQL のようなスキーマ名が無いため。ADR-0001)。
 
-| PGスキーマ | 所有 | 用途 |
-|------------|------|------|
-| `core` | 001 (sync-coreバッチ) | 銘柄マスタ・日次株価・ファンダメンタルズ・年度財務 |
-| `rsi` | 001 のみ | RSI履歴・パーセンタイル・優良株判定 |
-| `yutai` | 002 (未移行) | 優待情報・スコア |
+| 接頭辞 | 所有 | 用途 |
+|--------|------|------|
+| `core_*` | 001 (日次同期) | 銘柄マスタ・ファンダメンタルズ・年度財務 |
+| `rsi_percentile` | 001 のみ | パーセンタイル・優良株判定 |
+| `yutai_*` / `otakara_*` | 002 | 優待情報・スコア |
 
-001は `core.*` を更新する「同期オーナー」であり、他プロジェクトは `core.*` を読むだけ。Yahoo Finance API呼び出しを重複させずに済む。
+001は `core_*` を更新する「同期オーナー」であり、他プロジェクトは `core_*` を読むだけ。Yahoo Finance API呼び出しを重複させずに済む。
 
 詳細: [docs/architecture/shared-database.md](./docs/architecture/shared-database.md)
 
@@ -28,44 +28,45 @@ kabuTool配下のプロジェクトは**単一のNeon DB**を共有し、Postgre
 | カテゴリ | 技術 |
 |----------|------|
 | Backend | Hono v4 |
-| Deploy | Vercel Serverless Functions |
-| Database | Neon (PostgreSQL) |
-| ORM | Drizzle ORM |
+| Deploy | Cloudflare Workers (Workers Builds の Git 連携で自動デプロイ) |
+| Database | Cloudflare D1 (SQLite) |
+| ORM | Drizzle ORM (drizzle-orm/d1) |
 | Validation | Zod + @hono/zod-validator |
-| Frontend | Hono JSX (SSR) |
+| Frontend | template literal SSR (.ts 関数・JSX不可) |
 | Test | Vitest |
 | External API | Yahoo Finance API |
 
 ## セットアップ
 
-> **本サービスは [kabulab](../../README.md) mono-repo の 001 サブアプリ**。コマンドは全て **リポジトリルート**から実行する (サービス固有の `pnpm sync`/`pnpm db:push` は廃止し、サフィックス付き・統一コマンドに移行済み)。
+> **本サービスは [kabulab](../../README.md) mono-repo の 001 サブアプリ**。コマンドは全て **リポジトリルート**から実行する (サービス固有の `pnpm sync` は廃止し、統一コマンドに移行済み)。
 
 ### 前提条件
 
 - Node.js 22 / pnpm 9 (ルートの **Nix Flake** で固定。`nix develop` 推奨)
-- Neon データベース
+- Cloudflare D1 データベース (`kabulab-cf`) + wrangler
 
 ### インストール
 
 ```bash
 nix develop                 # Node 22 + pnpm 9 の dev shell
 pnpm install                # mono-repo ルートで一括インストール
-cp .env.example .env        # DATABASE_URL / CRON_SECRET を設定
+cp .env.example .env        # 取込用シークレット等を設定 (Worker 側は Cloudflare Secrets)
 ```
 
 ### DB初期化
 
 ```bash
-pnpm db:push:rsi            # core / rsi スキーマを Neon に反映
+pnpm db:generate:d1                                              # drizzle/d1/*.sql を生成
+wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/0000_clean_tag.sql   # D1 に反映
 ```
 
 ### 銘柄マスタ + データ同期
 
-母集団 seed と日次同期は **統一 sync** で行う (旧 `pnpm sync` / 手動 TSV seed は廃止)。
+母集団 seed と日次同期は **統一 sync** で行う (旧 `pnpm sync` / 手動 TSV seed は廃止)。取込 (書込) は Node (GitHub Actions) から D1 REST 経由で実行する。
 
 ```bash
-pnpm sync:universe          # JPX 全内国株 ~4,000 を core.stocks に seed (Yahoo なし)
-pnpm sync:daily             # 全 active の OHLCV/ファンダ/RSI/percentile/優良株判定
+pnpm sync:universe          # JPX 全内国株 ~4,000 を core_stocks に seed (Yahoo なし)
+pnpm sync:daily             # 全 active の ファンダ/RSI/percentile/優良株判定
 ```
 
 ### 開発サーバー起動
@@ -78,15 +79,15 @@ pnpm dev
 
 | コマンド | 説明 |
 |----------|------|
-| `pnpm dev` | ローカル開発サーバー |
-| `pnpm db:push:rsi` | core / rsi スキーマを Neon に反映 |
-| `pnpm db:studio:rsi` | Drizzle Studio 起動 |
+| `pnpm dev` | ローカル開発サーバー (wrangler dev) |
+| `pnpm db:generate:d1` | D1 マイグレーション生成 (drizzle/d1/*.sql) |
+| `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql` | D1 に反映 |
 | `pnpm sync:universe` / `pnpm sync:daily` | 母集団 seed / 日次同期 |
 | `pnpm test` | テスト実行 |
 | `pnpm test:coverage` | カバレッジ測定 |
 | `pnpm typecheck` | TypeScript型チェック |
 | `pnpm lint` | ESLint |
-| `pnpm run deploy` | Vercelデプロイ |
+| `pnpm run deploy` | Cloudflare Workers デプロイ (`wrangler deploy`。通常は Workers Builds が自動) |
 
 ## API
 
@@ -107,9 +108,9 @@ RSIパーセンタイル順位で銘柄をスクリーニング。
 
 銘柄詳細。価格履歴・RSI履歴・年度財務を含む。
 
-### `GET /api/cron/sync-daily`
+### 日次同期 (GitHub Actions)
 
-Vercel Cronから呼び出す日次同期エンドポイント。`Authorization: Bearer <CRON_SECRET>` 必須。
+日次同期は Worker のエンドポイントではなく **GitHub Actions** (`.github/workflows/stock-sync.yml`) が Node から D1 REST 経由で実行する (`pnpm sync:daily`)。Yahoo 取得は Worker エッジ (`/api/ingest/yahoo`, `YAHOO_PROXY_BASE`) を経由して 429 を回避する。
 
 ## ページ
 
@@ -119,9 +120,9 @@ Vercel Cronから呼び出す日次同期エンドポイント。`Authorization:
 | `/screening` | スクリーニング結果一覧 |
 | `/stocks/:code` | 銘柄詳細 |
 
-## Vercel Cron
+## 自動化 (GitHub Actions)
 
-`vercel.json` で平日 UTC 20:00 (JST 05:00) に `/api/cron/sync-daily` を自動実行する設定。
+`.github/workflows/stock-sync.yml` が日次で core/rsi/swing を同期し、月次で universe / otakara を rebuild する (Workers Cron / Workers Paid は不使用)。
 
 ## ディレクトリ構成
 
@@ -132,9 +133,9 @@ services/rsi-screening/
 └── src/
     ├── index.ts                 # サブアプリ組み立て
     ├── db/
-    │   ├── client.ts            # Neon + Drizzle
-    │   ├── core-schema.ts       # 共有スキーマ (core.*)
-    │   └── schema.ts            # 001 固有スキーマ (rsi.*)
+    │   ├── client.ts            # D1 + Drizzle (createDb(c.env.DB))
+    │   ├── core-schema.ts       # 共有テーブル (core_*)
+    │   └── schema.ts            # 001 固有テーブル (rsi_percentile)
     ├── routes/                  # pages.ts / screening.ts / stocks.ts
     ├── services/                # screening-service.ts / stock-detail-service.ts
     ├── views/                   # home.ts / screening.ts / stock-detail.ts / layout.ts (template literal・JSX不可)
@@ -143,11 +144,11 @@ services/rsi-screening/
     └── scripts/                 # seed-stocks.ts
 ```
 
-> Vercel 関数エントリは **ルートの `api/index.ts`** 1 つ。RSI 計算・Yahoo 取得・
-> percentile・優良株判定は 2026-04 の sync 統一化で root の `src/shared/indicators/`
-> + `src/cron/daily.ts` へ移動済み (本サービス固有の `yahoo-finance.ts` /
-> `rsi-calculator.ts` / `percentile-engine.ts` / `blue-chip-filter.ts` /
-> `sync-service.ts` は削除)。
+> Worker エントリは **ルートの `src/index.ts`** 1 つ (本サービスは `app.route()` で mount)。
+> RSI 計算・Yahoo 取得・percentile・優良株判定は 2026-04 の sync 統一化で root の
+> `src/shared/indicators/` + `scripts/sync/daily.ts` (Node/GitHub Actions) へ移動済み
+> (本サービス固有の `yahoo-finance.ts` / `rsi-calculator.ts` / `percentile-engine.ts` /
+> `blue-chip-filter.ts` / `sync-service.ts` は削除)。
 
 ## ライセンス
 

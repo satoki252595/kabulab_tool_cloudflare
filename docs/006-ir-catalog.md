@@ -5,7 +5,7 @@
 マッピングするサービス。
 
 > kabulab mono-repo (`services/ir-catalog/`) として配置され、
-> `https://kabulab.vercel.app/ir-catalog/*` で公開される。
+> `https://kabulab-cf.satoki252595.workers.dev/ir-catalog/*` で公開される。
 
 ## コンセプト
 
@@ -34,7 +34,7 @@
 - `total_count` は当該レスポンス件数なので **件数判定に使わない**。
   返却件数 < `limit` のページで打ち切る。
 - `company_code` は 5 桁 (例 `72030` → ティッカー `7203`)。先頭 4 桁を
-  取り `core.stocks.code` と突合。居なければ **ユニバース外**として
+  取り `core_stocks.code` と突合。居なければ **ユニバース外**として
   正直に除外 (ETF/REIT/非上場/上場廃止)。
 - 全 TDnet 通信は `tdnet/client.ts` がプロセス内で直列化し最小間隔
   750ms を強制 (サイト負荷回避)。5xx/429 は指数バックオフ、4xx は throw。
@@ -69,27 +69,31 @@ M&A・資本提携 / 月次・速報 / 重要事象(調査等) / 上場・市場
 - **表題で方向確定済**のタグ (上方修正 / 下方修正 / 増配 / 減配・無配 / 自社株買い / 自己株式の消却 等) や判定不要タグ・未分類は `skipped`。PDF が画像化/抽出 0 文字なら `unknown`。**架空の positive/negative で埋めない** (ルール1/2)。
 - ingest 経路 (`ingest.ts`) で算出し DB の `pdf_sentiment*` 4 列へ保存。既存行の再判定は `pnpm ir:backfill -- --rejudge-pdf-sentiment` (terminal でない行を再評価)。
 
-## DB スキーマ (`ir_catalog`)
+## DB スキーマ (`ir_disclosures`)
+
+単一 D1 `kabulab-cf` に全サービスが接頭辞テーブルで同居 (ADR-0001)。
 
 ```
-ir_catalog.disclosures   1 適時開示 = 1 行 (tdnet_id 一意 = 冪等キー)
-  stock_id → core.stocks(id)            -- core は 001 所有・読み取り専用
+ir_disclosures   1 適時開示 = 1 行 (tdnet_id 一意 = 冪等キー)
+  stock_id → core_stocks(id)            -- core は 001 所有・読み取り専用
   tdnet_id / company_code / company_name / title
   pubdate / document_url / xbrl_url(nullable) / markets_string
-  tags text[] (0件可=未分類) / primary_tag(nullable=未分類)
+  tags (JSON 文字列・0件可=未分類) / primary_tag(nullable=未分類)
   ingested_at
   -- PDF センチメント (後述。判定対象外/未判定は NULL)
   pdf_sentiment text(nullable)         -- positive / negative / mixed / unknown / skipped
   pdf_sentiment_method text(nullable)  -- rule_v1 / dict_v1
   pdf_sentiment_score real(nullable)   -- -1.0〜+1.0
-  pdf_sentiment_at timestamptz(nullable)
+  pdf_sentiment_at integer(nullable)   -- epoch (SQLite timestamp)
 ```
 
-> ⚠️ ADR-0001 で D1 へ移行済み。スキーマ正本は `services/ir-catalog/src/db/schema.ts`
-> (sqlite-core)。実 DB 反映は `pnpm db:generate:d1` →
+> ⚠️ スキーマ正本は `services/ir-catalog/src/db/schema.ts` (sqlite-core。
+> export 名は `disclosures`、実テーブル名は `ir_disclosures`)。実 DB 反映は
+> `pnpm db:generate:d1` →
 > `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql`。
-> `pdf_sentiment` は NULL 多数のため WHERE 付き部分 index。以下の Neon 期の記述
-> (手書き SQL `drizzle/create-ir-catalog.sql` / `apply-migration.mjs` / pg dialect の
+> 読取は Worker の `c.env.DB` バインディング。`pdf_sentiment` は NULL 多数の
+> ため WHERE 付き部分 index。Neon 期の記述 (手書き SQL
+> `drizzle/create-ir-catalog.sql` / `apply-migration.mjs` / pg dialect の
 > `drizzle.ir-catalog.config.ts`) は歴史的経緯であり現行では使わない。
 
 ## データ取得フロー
@@ -100,11 +104,14 @@ ir_catalog.disclosures   1 適時開示 = 1 行 (tdnet_id 一意 = 冪等キー)
    月単位で新しい順に遡り、空月が 12 連続したらデータ開始点に到達と
    判断して停止 (推測でなく事実で止める)。tdnet_id / Notion key 冪等で
    **再開可能**。確定済み過去月は API を叩かずスキップ。
-2. **日次キャッチアップ**: 新規 cron は作らず統一 daily cron に相乗り。
-   `src/cron/ir-catalog-tdnet.ts` を `src/index.ts` の日次ハンドラが
-   **shard 0 のときだけ** 呼ぶ (TDnet は範囲一括取得でシャード分散
-   不要)。直近 7 日を 1 回で取得。既存 Yahoo 日次とは独立し、失敗
-   しても本体を壊さない (が結果はレスポンスに載せ運用者が気づける)。
+2. **日次キャッチアップ**: GitHub Actions `catchup.yml` が平日に
+   `pnpm ingest:ir-tdnet` (`scripts/sync/ir-tdnet.ts`) を実行。PDF
+   センチメントが kuromoji (Node 専用) 依存のため **Node で実行**し、
+   D1 へは D1 HTTP API (createD1HttpDb) で書く。共有ロジック
+   `src/cron/ir-catalog-tdnet.ts` の `runIrCatalogCatchup` を再利用し、
+   直近数日を 1 回で取得 (TDnet は範囲一括取得でシャード分散不要)。
+   TDnet はホストが異なり 429 されないためプロキシ不要。失敗しても
+   他サービスを壊さず、結果はログに載せ運用者が気づける。
 
 ### Notion 記録 (一次データ + 二次データ)
 
@@ -117,10 +124,10 @@ ir_catalog.disclosures   1 適時開示 = 1 行 (tdnet_id 一意 = 冪等キー)
 銘柄名[rich_text・buffett-code リンク] / コード[select]) → 各銘柄ページ
 配下に子 DB `適時開示｜<コード>` を自動生成し、その銘柄の
 **全適時開示・全タグ・1 IR = 1 行** で冪等記録する。一次データの
-Postgres 格納と同タイミング、TDnet API へ追加負荷なし。冪等キー:
+D1 格納と同タイミング、TDnet API へ追加負荷なし。冪等キー:
 親=ticker / 子行=TDnet ID。暫定採用していた旧フラット DB
 `適時開示｜ir-catalog` は初回に **自動で Notion ゴミ箱へ退避**
-(Postgres から再生可)。
+(D1 から再生可)。
 
 子 DB の列 (タイトル列は Notion 仕様上必ず最左固定。タグはタイトル直後):
 開示表題[タイトル] / **タグ[multi_select・色付き・全タグ]** /
@@ -154,7 +161,7 @@ TDnet ID[rich_text=冪等キー]。子DB行は銘柄が文脈で確定するた�
 > 可視化し、再実行で収束。backfill は `--notion-deadline-hours=N` で
 > 上限を設けると、広域遮断継続時に正直に打ち切り (`(打切)` ログ) →
 > 再実行で `error`/未添付行から収束できる。
-一次データの Postgres 格納と **同タイミング** で投入する (手元の items を
+一次データの D1 格納と **同タイミング** で投入する (手元の items を
 そのまま使うため TDnet API へ追加負荷なし)。親は ticker、子行は TDnet ID
 で冪等 (全履歴投入が再開可能)。
 
@@ -164,7 +171,7 @@ TDnet ID[rich_text=冪等キー]。子DB行は銘柄が文脈で確定するた�
 > をユーザが明示了承したうえでの設計判断。冪等・再開可能 (現状の運用
 > 方針は「直近 ~1ヶ月」。過去 5 年は不要)。
 
-日次キャッチアップの二次データ投入は Vercel 300s 内に収めるため
+日次キャッチアップの二次データ投入は GitHub Actions 実行を軽量に保つため
 `NOTION_BUDGET_MS`(50s) で必ず打ち切り、残りは WINDOW_DAYS の重なりと
 TDnet ID 冪等で翌日以降が回収する (常態的に打ち切るなら過去ギャップ大
 = backfill を回す合図)。backfill は無制限 (再開可能)。Notion 通信は

@@ -2,7 +2,7 @@
 
 割安な株主優待銘柄をファンダメンタルズ × テクニカル分析のスコアリングで発見するサービス。
 
-> kabulab mono-repo (`services/otakara-yutai/`) として配置され、`https://kabulab.vercel.app/otakara-yutai/*` で公開される。
+> kabulab mono-repo (`services/otakara-yutai/`) として配置され、Cloudflare Workers 上で `https://kabulab-cf.satoki252595.workers.dev/otakara-yutai/*` として公開される。
 
 ## コンセプト
 
@@ -19,8 +19,8 @@ services/otakara-yutai/
 │                              #   /stocks/:code 等) と /api/screening を保持する単一ファイル構成
 ├── src/
 │   ├── db/
-│   │   ├── client.ts          # createDb() — Neon HTTP + Drizzle
-│   │   └── schema.ts          # public スキーマ定義
+│   │   ├── client.ts          # createDb(c.env.DB) — D1 + Drizzle (drizzle-orm/d1)
+│   │   └── schema.ts          # yutai_* / otakara_* 接頭辞テーブル定義
 │   │                          # (stocks は core-schema.ts から再 export — 銘柄マスタ統一化)
 │   ├── services/
 │   │   ├── yutai-scraper.ts        # HTML/CSV/JSON からの優待データ取込
@@ -55,21 +55,21 @@ import { otakaraYutaiApp, BASE_PATH as OTAKARA_BASE_PATH } from "../services/ota
 app.route(OTAKARA_BASE_PATH, otakaraYutaiApp);
 ```
 
-PWA 静的アセット (`manifest.json` / `sw.js` / `icon-*.png`) は ルート repo の `public/otakara-yutai/` に配置し、Vercel が直接配信する。
+PWA 静的アセット (`manifest.json` / `sw.js` / `icon-*.png`) は ルート repo の `public/otakara-yutai/` に配置し、Cloudflare Worker の静的アセット (`ASSETS` バインディング) として配信する。
 
 ## DB スキーマ
 
-銘柄マスタは **`core.stocks` を参照** する (2026-04 に `public.stocks` を廃止)。`yutai_benefits.stock_id` / `stock_financials.stock_id` / `stock_scores.stock_id` は全て `core.stocks(id)` に対する FK。
+銘柄マスタは **`core_stocks` を参照** する (2026-04 に `public.stocks` を廃止)。`yutai_benefits.stock_id` / `otakara_stock_financials.stock_id` / `otakara_stock_scores.stock_id` は全て `core_stocks(id)` に対する FK。
 
 ```
-public.yutai_genres
+yutai_genres
 ├── id / name (UNIQUE) / slug (UNIQUE) / description?
 └── created_at
 
-public.yutai_benefits
+yutai_benefits
 ├── id          serial PK
-├── stock_id    FK → core.stocks(id)
-├── genre_id    FK → public.yutai_genres
+├── stock_id    FK → core_stocks(id)
+├── genre_id    FK → yutai_genres
 ├── description     text        # スクレイピング元テキスト (長文)
 ├── short_summary   text?       # 手動解釈した短縮文言 (20-30 文字)
 ├── min_shares      integer     # 最低必要株数
@@ -77,17 +77,17 @@ public.yutai_benefits
 ├── estimated_value integer?    # 推定金銭価値 (円)
 └── created_at / updated_at
 
-public.stock_financials
-├── id / stock_id FK → core.stocks(id) (UNIQUE)
+otakara_stock_financials
+├── id / stock_id FK → core_stocks(id) (UNIQUE)
 ├── price / per / pbr / dividend_yield / eps / bps   # core から monthly sync でコピー
 ├── roe / roa / market_cap                           # core から monthly sync でコピー
-├── ma_5 / ma_25 / ma_75       # swing.stock_indicators から monthly sync でコピー
-├── rsi_14 / macd / macd_signal # swing.stock_indicators から monthly sync でコピー
+├── ma_5 / ma_25 / ma_75       # swing_stock_indicators から monthly sync でコピー
+├── rsi_14 / macd / macd_signal # swing_stock_indicators から monthly sync でコピー
 ├── yutai_yield                 # monthly sync で yutai_benefits から算出
 ├── data_date / fetched_at
 
-public.stock_scores
-├── id / stock_id FK → core.stocks(id) (UNIQUE)
+otakara_stock_scores
+├── id / stock_id FK → core_stocks(id) (UNIQUE)
 ├── fundamental_score / technical_score / total_score   real (0-100)
 └── scored_at
 ```
@@ -137,22 +137,22 @@ null 指標はウェイト再配分で欠損を補正。実装は [src/shared/sc
 
 ```
 pnpm sync:monthly
-  Phase 1: JPX 公式 XLS → core.stocks を全内国株 ~4,000 に同期
+  Phase 1: JPX 公式 XLS → core_stocks を全内国株 ~4,000 に同期
            (seedUniverse: 新規 upsert + name/market/sector 更新 + 廃止 inactivate)
   Phase 2:
-    for each core.stocks (is_active AND is_yutai):   # 優待銘柄のみ ~1,600
-      - core.stock_financials から PER/PBR/配当/EPS/BPS/ROE/時価総額 を取得
-      - swing.stock_indicators から MA5/25/75 / RSI14 / MACD/Signal を取得
-      - public.yutai_benefits から推定価値合計 → yutai_yield 算出
+    for each core_stocks (is_active AND is_yutai):   # 優待銘柄のみ ~1,600
+      - core_stock_financials から PER/PBR/配当/EPS/BPS/ROE/時価総額 を取得
+      - swing_stock_indicators から MA5/25/75 / RSI14 / MACD/Signal を取得
+      - yutai_benefits から推定価値合計 → yutai_yield 算出
       - scoreStock(input) でファンダ + テクニカル → 総合スコア
-      - public.stock_financials と public.stock_scores に upsert
+      - otakara_stock_financials と otakara_stock_scores に upsert
 ```
 
-> **母集団について**: 2026-05 に sync 母集団は「優待縛り ~1,600」から **全 JPX 上場内国株 ~4,000** へ拡張された (004 financial-math が一般日本株を要するため)。`core.stocks` には非優待銘柄も含まれるが、002 otakara は一覧・カウント・詳細・スコアいずれも `is_yutai=true` で絞るため、優待サービスとしての見え方は不変。`is_yutai` フラグの writer は優待スクレイパー [services/otakara-yutai/data-scripts/fetch-yutai-full.ts](../services/otakara-yutai/data-scripts/fetch-yutai-full.ts) (core.stocks は削除せず upsert + フラグ更新)。
+> **母集団について**: 2026-05 に sync 母集団は「優待縛り ~1,600」から **全 JPX 上場内国株 ~4,000** へ拡張された (004 financial-math が一般日本株を要するため)。`core_stocks` には非優待銘柄も含まれるが、002 otakara は一覧・カウント・詳細・スコアいずれも `is_yutai=true` で絞るため、優待サービスとしての見え方は不変。`is_yutai` フラグの writer は優待スクレイパー [services/otakara-yutai/data-scripts/fetch-yutai-full.ts](../services/otakara-yutai/data-scripts/fetch-yutai-full.ts) (core_stocks は削除せず upsert + フラグ更新)。
 
-自動実行: `vercel.json` の cron で **毎月 1 日 22:00 UTC (JST 2 日 07:00)** に `/api/cron/sync-monthly` が叩かれる。
+自動実行: GitHub Actions の [.github/workflows/stock-sync.yml](../.github/workflows/stock-sync.yml) の月次 cron (**毎月 1 日 22:30 UTC = JST 2 日 07:30**) で universe seed + monthly rebuild ([src/cron/monthly.ts](../src/cron/monthly.ts)) が走る。Node から `createD1HttpDb` (D1 REST) で書き込む。
 
-> ※ 日次の Yahoo データ取得は統一 daily sync ([src/cron/daily.ts](../src/cron/daily.ts)) が `core.stock_financials` / `swing.stock_indicators` を更新することで間接的に本サービスにも反映される。本サービス独自の Yahoo 呼び出しはゼロ。
+> ※ 日次の Yahoo データ取得は統一 daily sync ([src/cron/daily.ts](../src/cron/daily.ts)) が `core_stock_financials` / `swing_stock_indicators` を更新することで間接的に本サービスにも反映される。本サービス独自の Yahoo 呼び出しはゼロ。
 
 ## 優待データの短縮サマリー (`shortSummary`)
 

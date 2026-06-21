@@ -1,7 +1,7 @@
 # ADR-0001: Neon PostgreSQL を廃し Cloudflare D1 + R2 + Notion へ移行する
 
-- ステータス: **承認済 / Phase 1 基盤 + Phase 2 POC(005 yuho-quant) 実装済・cutover 前**
-- 日付: 2026-06-20
+- ステータス: **完了 / 本番稼働中**（Neon 廃止、全サービス D1 + R2 + Notion へ移行済。取込は GitHub Actions(Node)。Workers Paid / Cron は不使用）
+- 日付: 2026-06-20（起案） / 2026-06-22（完了)
 - 決定者: @satoki252595
 - 関連: [overview.md](../overview.md) / CLAUDE.md ルール6（一次データ Notion アーカイブ）
 
@@ -32,16 +32,20 @@
 | **正規化リレーショナル** | 銘柄マスタ・財務・スコア・RSI・優待・IR開示メタ・受注高 | **D1**（SQLite, 単一DB） | クエリ性が要る。総量は最大でも ~100MB 級で D1 無料枠に収まる |
 | **時系列ブロブ** | 日足OHLCV(36–45万行)・5分足・週次信用残高・指数 | **R2**（JSON/JSONL, code別ファイル） | 大量・追記中心。VWAP 007 の素通しパターンを踏襲し D1 を軽く保つ |
 
-取込（書込）は Node ローカル CLI から **Worker 上** へ移す（D1 はバインディング経由のみ）。
-取込ロジックを Worker に置き `c.env.DB`(D1) / `c.env.BUCKET`(R2) を直接叩く。
+**読取（配信）**は Cloudflare Workers + Hono が `c.env.DB`(D1) バインディング / `c.env.BUCKET`(R2) を
+直接叩く（`createServiceDb` / `createDb(c.env.DB)`）。`DATABASE_URL`(Neon) 参照は全廃。
 
-**起動経路は段階導入**する:
-- **現状（Phase 2）**: 認証付き HTTP ルート `POST /yuho-quant/admin/catchup`（CRON_SECRET, fail-closed）。
-  手動 curl / 薄い CLI トリガ（`scripts/sync/yuho-edinet.ts` が `WORKER_BASE_URL` を叩く）から起動。
-- **Phase 3**: `wrangler.toml` に `[triggers] crons` + `worker/entry.ts` に `scheduled` ハンドラを足して
-  定期自動起動にする（現状は未配線）。
+**取込（書込）**は **Node（GitHub Actions）** から D1 REST 経由（`createD1HttpDb`）で UPSERT し、
+時系列は R2 へ書く。Yahoo 由来（株価日次）は 429 制約があるため **Worker のエッジルート
+（`/api/ingest/yahoo`, 環境変数 `YAHOO_PROXY_BASE`）を経由**してエッジ IP から叩き、レート制限を回避する。
+一次データ（raw）は `src/shared/notion-archive` で Notion へ物理バイト列を冪等記録する（ルール6）。
 
-Yahoo 由来（株価日次）の取込は 429 制約があるため本 ADR の対象外とし、別途検討する。
+> ⚠️ **検討途中で破棄した選択肢（歴史的経緯）**: 当初は取込ロジックを Worker 上に置き、
+> 認証付き HTTP ルート（`POST /yuho-quant/admin/catchup`, CRON_SECRET, fail-closed）→ 最終的に
+> Workers Cron Triggers + `scheduled` ハンドラで自動化する段階導入を想定していた。
+> しかし **Workers Cron は Paid プラン前提**であり、xlsx パース（JPX 母集団同期）等が Node 専用で
+> あることも踏まえ、**取込は GitHub Actions(Node) に確定**した。Workers Paid / Workers Cron は
+> 採用しない（配信は無料枠の Workers のまま）。
 
 ---
 
@@ -52,23 +56,28 @@ Yahoo 由来（株価日次）の取込は 429 制約があるため本 ADR の�
 D1 は **1 DB = 1 SQLite ファイル**で、DB 間 JOIN が不可。現在 PostgreSQL の `core` / `rsi` / `swing` /
 `ir_catalog` / `yuho_quant` / `otakara` / `finmath` というスキーマ分割は使えない。
 
-→ **全テーブルを 1 つの D1 に統合**し、旧スキーマ名を接頭辞に降ろす:
+→ **全テーブルを 1 つの D1（`kabulab-cf`）に統合**し、旧スキーマ名を接頭辞に降ろす（本番の実テーブル名）:
 
 ```
 core_stocks, core_stock_financials, core_stock_annual_financials
 rsi_percentile
-swing_indicators, swing_screening, swing_entry_signals, swing_market_context, swing_sector_daily
+swing_daily_ohlcv, swing_stock_indicators, swing_stock_screening, swing_entry_signals, swing_market_context, swing_sector_daily
 ir_disclosures
 yuho_documents, yuho_order_facts
-otakara_yutai_genres, otakara_yutai_benefits, otakara_stock_financials, otakara_stock_scores
-finmath_price_snapshot
+yutai_genres, yutai_benefits, otakara_stock_financials, otakara_stock_scores
+finmath_price_snapshot, finmath_daily_ohlcv
 ```
 
 これで全サービスが参照する共有 `core_stocks` への FK が同一 DB 内に収まり、横断参照（N+1）を避けられる。
 
-### 3.2 時系列は D1 に入れない（OHLCV は R2 に一本化）
+### 3.2 時系列は R2 へ（007 VWAP は R2 が正本）
 
-日足 OHLCV は現状 **三重保存**（`swing.daily_ohlcv` 90日 / `finmath.daily_ohlcv` 2y+指数 / R2 `daily/{code}.json` 10年）。
+> **as-built 補足**: 007 VWAP の時系列（日足10年 / 5分足 / 週次信用残高）は **R2（バケット `vwap-data`：
+> `daily/{code}.json` / `intra/{code}.json` / `margin/{week}.json`）が正本**で、`vwap-ingest.yml`（GitHub Actions）
+> が書き込む。一方、当初プランで「廃止」とした `swing_daily_ohlcv` / `finmath_daily_ohlcv` は移行後も D1 に
+> 残置している（§3.1 の実テーブル一覧参照）。以下は設計時のOHLCV一本化案の記録。
+
+日足 OHLCV は移行前は **三重保存**（`swing.daily_ohlcv` 90日 / `finmath.daily_ohlcv` 2y+指数 / R2 `daily/{code}.json` 10年）。
 源泉は同一の Yahoo Chart。正規化方針（重複を持たない）に従い **R2 `daily/{code}.json` の単一正本に一本化**する
 （指数 `^N225` も code 名前空間で同居）。`swing.daily_ohlcv` / `finmath.daily_ohlcv` は廃止し、指標は R2 を読んで計算。
 
@@ -140,7 +149,7 @@ PG 独占機能（enum / jsonb / window / date_trunc / percentile_cont / PostGIS
 
 ## 5. 接続層の変更
 
-### 5.1 現状（全 6 サービス共通パターン）
+### 5.1 移行前（歴史的経緯 — 全 6 サービス共通の Neon パターン）
 
 ```ts
 // services/*/src/db/client.ts
@@ -151,7 +160,7 @@ export function createDb(databaseUrl: string) {
 }
 ```
 
-### 5.2 移行後（POC 実装の実態）
+### 5.2 移行後（本番稼働中の実態）
 
 共有 `core` スキーマは `src/shared/db/core-schema.ts`（sqlite-core）に集約するが、
 drizzle クライアント生成は従来どおり **per-service**（`services/*/src/db/client.ts`）に置く。
@@ -166,34 +175,42 @@ export function createDb(d1: D1Database) {
 }
 ```
 
-- Worker: `createDb(c.env.DB)` を使う。`DATABASE_URL`（Neon）参照を全廃。
-- 影響範囲（移行するごとに）: 各 `services/*/src/db/client.ts` + 取込経路。
-- `wrangler.toml` に `[[d1_databases]] binding = "DB"` を追加（実施済）。
+- **読取（配信）**: Worker は `createServiceDb` / `createDb(c.env.DB)` を使う。`DATABASE_URL`（Neon）参照を全廃。
+- **書込（取込）**: Node（GitHub Actions）は `src/shared/db/d1-http-client.ts` の `createD1HttpDb`（D1 REST）を使う。
+- `wrangler.toml` に `[[d1_databases]] binding = "DB"`（単一 DB `kabulab-cf`）を追加（実施済）。
 - D1 型は `@cloudflare/workers-types` を入れず `src/shared/db/cloudflare.d.ts` に最小宣言。
 
 ---
 
-## 6. 取込モデル (Workers Cron へ移管)
+## 6. 取込モデル (GitHub Actions(Node) へ確定)
 
 ```
-[Cron Trigger 日次/月次/週次]
+[GitHub Actions cron: 日次/月次/週次]
         │
         ├─ fetch 一次データ (EDINET/TDnet/JPX/scrape)
         │      └─ recordPrimaryData()  → Notion「バックアップ」へ物理バイト列 (ルール6)
         │
         ├─ parse → 正規化
-        │      └─ UPSERT → D1 (c.env.DB)
+        │      └─ UPSERT → D1 (createD1HttpDb / D1 REST)
         │
-        └─ 時系列があれば → R2 (c.env.BUCKET) に {code}.json
+        └─ 時系列があれば → R2 に {code}.json
 ```
 
-- `wrangler.toml` に `[triggers] crons = [...]` を追加（日次/週次など）。
-- D1 の制約に合わせ **バッチ書込は `db.batch()` で分割**（1文 100KB / bind 変数 **100** / 1 invocation 1000 query 以内）。
+- **自動化は GitHub Actions 3 本**（Workers Cron は不使用 = Paid 回避）:
+  - `stock-sync.yml`: 日次 core/rsi/swing 同期 + 月次 universe / otakara rebuild。
+  - `vwap-ingest.yml`: 日足10年 / 5分足 / 信用残高 → R2（007 VWAP）。
+  - `catchup.yml`: 005 EDINET 有報 + 006 TDnet 開示のキャッチアップ。
+  - 002 優待の LLM 解釈のみローカル手動。
+- 書込は Node から **`createD1HttpDb`（D1 REST）** 経由。D1 の制約に合わせ **バッチ書込は `db.batch()` で分割**
+  （1文 100KB / bind 変数 **100** / 1 invocation 1000 query 以内）。
   **実装済**: `ingest.ts` の `order_facts`（12 列/行）は 8 行/文（96 bind）に分割し、delete と全 insert を
   `db.batch()` で原子的に置換（建設業など 9 セグメント超で単一 INSERT が bind 上限超過で落ちるのを防ぐ）。
-- 1 実行のサブリクエスト数は Workers 上限内に収める（Paid は 2026-02 に 1,000→**10,000**/invocation へ増加・wrangler `[limits] subrequests` で最大 10M。Free は外部 50）。`MAX_INGEST=40`（×最悪 ~14 req/doc ≈ 560）は時間予算/Notion レートからの保守値。
-  大量分は「1 回で N 件・docId 冪等で次回継続」（既存の時間予算パターン）を踏襲。
-- Yahoo 系（株価）日次は Phase 3 で **Worker 取込へ移行**（エッジから Yahoo 直叩き=429 回避、`db.batch` + 増分 OHLCV、Workers Cron 自動化）。母集団 JPX 同期だけ xlsx パーサが Node 専用のため `pnpm sync:universe` に残す。
+- Yahoo 直叩きは GitHub Actions ランナー IP だと 429 を食らうため、**Worker のエッジルート
+  `/api/ingest/yahoo`（環境変数 `YAHOO_PROXY_BASE`）経由**でエッジ IP から取得する。
+  サブリクエスト上限の参考（このエッジルートに効く Workers 値）: Paid は 2026-02 に 1,000→**10,000**/invocation
+  へ増加・wrangler `[limits] subrequests` で最大 10M、Free は外部 50。大量分は「1 回で N 件・docId 冪等で
+  次回継続」（既存の時間予算パターン）を踏襲。
+- 母集団 JPX 同期は xlsx パーサが Node 専用のため `pnpm sync:universe`（Node / GitHub Actions）に残す。
 
 ---
 
@@ -224,18 +241,23 @@ export function createDb(d1: D1Database) {
 | D1 ストレージ | 500MB/DB・10DB | ~100MB（時系列はR2へ） | $0 |
 | D1 読取/書込 | 25B読/5000万行書 月 | 日次数万件 | $0 |
 | R2 ストレージ/操作 | 10GB / 1M書・10M読 月 | VWAP+時系列で数GB | $0 |
-| Workers + Cron | Cron無料 / Paidで$5 | 配信+定期取込 | $0〜$5/月 |
+| Workers（配信のみ） | Free プラン | 配信（Workers Builds の Git 連携で自動デプロイ） | $0 |
+| 取込自動化 | GitHub Actions Free | stock-sync / vwap-ingest / catchup の 3 ワークフロー | $0 |
 
-→ **実質 $0〜$5/月**。Yahoo を高頻度ポーリングしない限り超過は出ない。
+→ **実質 $0/月**。取込は Workers Cron(Paid) ではなく GitHub Actions(Node) で回すため Paid 課金は発生しない。
+Yahoo を高頻度ポーリングしない限り無料枠超過も出ない。
 
 ---
 
 ## 9. 段階移行プラン（決定: 設計書→1サービス実証）
 
+> **現況: 全 Phase 完了・本番稼働中。** 全 6 サービスが D1 + R2 + Notion 構成へ移行し、Neon 依存は全廃。
+> 取込自動化は当初想定の Workers Cron ではなく **GitHub Actions(Node) に確定**（§6）。以下は移行プランの記録。
+
 - **Phase 0**（本 ADR）: 設計合意。✅
 - **Phase 1 — 基盤** ✅: 単一 D1(`kabulab-cf`) 作成、`wrangler.toml` `binding=DB`、共有 `core_*` スキーマ
   (`src/shared/db/core-schema.ts`, sqlite-core)、CF 型のローカル宣言、`drizzle.d1.config.ts` + 生成 SQL 適用。
-- **Phase 2 — 実証(POC)** ✅(cutover 前): **005 yuho-quant を D1 へ通し移行**（schema/client/read/取込ルート）。
+- **Phase 2 — 実証(POC)** ✅: **005 yuho-quant を D1 へ通し移行**（schema/client/read/取込ルート）。
   検証: typecheck/test green、wrangler dev で D1 読取確認、admin 取込ルート 401。
   **保留**: 5 年バックフィル(bulk) の Worker 実装（要 EDINET/Notion 鍵）、Neon→D1 実データ移送(§7, cutover)。
   - 推奨 POC = **005 yuho-quant**: 自己完結・EDINET(非Yahoo・今すぐ再取込可)・order_facts ~3万行で D1 適正・
@@ -252,8 +274,9 @@ export function createDb(d1: D1Database) {
   8. otakara `yutai_genres/benefits` → D1、`yutai_yield_cache` / `yutai_scores_cache` を月次キャッシュ化（財務6列ミラー破棄）
   9. ir-catalog（`ir_disclosures` + 分類/sentiment）→ D1（独立・最後に）
   10. `intra/` `margin/` の R2 運用は維持（確認のみ）
-- **Phase 4 — 切替 & Neon 解約**: 各サービス cutover（§7 ゲート: 移送→行数検証→deploy）→ 全サービスが Neon 非依存に
-  なったことを確認 → **Neon 解約**（`DATABASE_URL` 依存を全廃）。取込は **Workers Cron Triggers** で自動化（C-4）。
+- **Phase 4 — 切替 & Neon 解約** ✅: 各サービス cutover（§7 ゲート: 移送→行数検証→deploy）→ 全サービスが Neon 非依存に
+  なったことを確認 → **Neon 解約**（`DATABASE_URL` 依存を全廃）。取込自動化は **GitHub Actions(Node)** に確定（§6。
+  Workers Cron / Workers Paid は不採用）。デプロイは **Cloudflare Workers Builds（Git 連携）** で main push 時に無料自動化。
 
 各 Phase 完了時に CLAUDE.md ルール4（専門エージェント精査）→ ルール5（push）。
 
@@ -265,14 +288,17 @@ export function createDb(d1: D1Database) {
 |---|---|
 | 時系列を D1 に残すと書込負荷・容量超過 | §3.2 で R2 へ退避（最優先の一手） |
 | スキーマ統合時のテーブル名衝突 | §3.1 接頭辞で回避。migration を root 単一正本に |
-| 取込を Worker 化する際の実行時間制限 | `db.batch()` 分割 + 冪等キーで分割継続（既存 45s 予算パターン踏襲） |
+| D1 のバッチ書込制約（1文 100KB / bind 100 / 1000 query） | `db.batch()` 分割 + 冪等キーで分割継続（GitHub Actions(Node) → D1 REST。既存の時間予算パターン踏襲） |
+| GitHub Actions ランナー IP からの Yahoo 429 | Worker エッジルート `/api/ingest/yahoo`（`YAHOO_PROXY_BASE`）経由でエッジ IP から取得（§6） |
 | Neon 移送時の型崩れ（timestamp/array/数値精度） | §4 マッピング表に沿う変換スクリプト + 件数/代表値の突合検証 |
 | Yahoo 系株価が 429 で再取込できない | 既存 Neon 移送で保全（§7）。Yahoo 取込は別 ADR |
 
 ---
 
-## 11. 未決事項 (POC 開始前に確認)
+## 11. 未決事項（起案時 / 全て解決済）
 
-- POC 対象サービスを **005 yuho-quant** で確定してよいか（代替: 006 ir-catalog で array 変換も同時実証）。
-- 既存 Neon の実 `DATABASE_URL` を移送時に一時提供できるか（§7-1）。
-- Notion 連携（`NOTION_TOKEN` / バックアップ・ごみページ ID）の実値を `.env` に投入できるか（ルール6取込に必須）。
+起案時の確認事項は全て解決し、移行は完了している（記録として残す）:
+
+- ~~POC 対象サービスを **005 yuho-quant** で確定してよいか~~ → 005 で実証し、全サービスへ横展開完了。
+- ~~既存 Neon の実 `DATABASE_URL` を移送時に一時提供できるか~~ → 移送完了 → **Neon 解約済**。
+- ~~Notion 連携（`NOTION_TOKEN` / バックアップ・ごみページ ID）の実値を `.env` に投入できるか~~ → 投入済（ルール6 取込稼働中）。

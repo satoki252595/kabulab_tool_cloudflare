@@ -53,6 +53,7 @@ Cloudflare ネイティブの **Workers Builds**(Git 連携)を使う。GitHub �
 |---|---|---|
 | `.github/workflows/stock-sync.yml` | 日次 stock(core/rsi/swing) / 月次 universe + otakara rebuild | 平日 21:00 / 1 日 22:30 |
 | `.github/workflows/vwap-ingest.yml` | 日足10年 + 5分足 / 信用残高週次 → R2 | 平日 08:00 / 土 09:00 |
+| `.github/workflows/catchup.yml` | 005 有報(EDINET) + 006 適時開示(TDnet) キャッチアップ | 平日 11:00 |
 
 - 手動実行は Actions タブの「Run workflow」(stock: daily/monthly/all、vwap: daily-intra/margin/all)。
 - **schedule は default ブランチ(main)のワークフローのみ発火**。PR #1 を main にマージで有効化。
@@ -70,7 +71,8 @@ Cloudflare ネイティブの **Workers Builds**(Git 連携)を使う。GitHub �
 | `YAHOO_PROXY_BASE` | デプロイ済み Worker の URL(例 `https://kabulab-cf.<sub>.workers.dev`) |
 | `CRON_SECRET` | 取込プロキシ認証(Worker secret と同値) |
 | `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET` | VWAP の R2 書込(S3 互換) |
-| `NOTION_TOKEN` / `NOTION_BACKUP_PAGE_ID` / `NOTION_TRASH_PAGE_ID` | 月次 universe の JPX XLS 一次データ Notion アーカイブ(ルール6) |
+| `NOTION_TOKEN` / `NOTION_BACKUP_PAGE_ID` / `NOTION_TRASH_PAGE_ID` | 月次 universe / TDnet の一次データ Notion アーカイブ(ルール6) |
+| `WORKER_BASE_URL` | catchup.yml の EDINET トリガが叩く Worker URL(= `YAHOO_PROXY_BASE` と同値) |
 
-> EDINET(005)/ TDnet(006)も同様に GitHub Actions 化できる(`pnpm ingest:yuho-edinet` /
-> `ingest:ir-tdnet` を `WORKER_BASE_URL` + `CRON_SECRET` で叩くだけ)。
+> 005 EDINET / 006 TDnet は `catchup.yml` で自動化済み(TDnet=Node+kuromoji→D1、EDINET=Worker
+> ルート /yuho-quant/admin/catchup を叩く)。優待(002)の LLM 解釈のみローカル手動。
