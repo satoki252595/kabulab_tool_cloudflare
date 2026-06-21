@@ -115,14 +115,43 @@ async function main() {
         orders_received_yen, order_backlog_yen, pattern
         FROM yuho_quant.order_facts ORDER BY id`,
     },
+    {
+      d1: "ir_disclosures",
+      cols: [
+        { name: "id", type: "int" }, { name: "stock_id", type: "int" },
+        { name: "tdnet_id", type: "text" }, { name: "company_code", type: "text" },
+        { name: "company_name", type: "text" }, { name: "title", type: "text" },
+        { name: "pubdate", type: "int" }, { name: "document_url", type: "text" },
+        { name: "xbrl_url", type: "text" }, { name: "markets_string", type: "text" },
+        { name: "tags", type: "text" }, { name: "primary_tag", type: "text" },
+        { name: "notion_page_id", type: "text" }, { name: "pdf_sentiment", type: "text" },
+        { name: "pdf_sentiment_method", type: "text" }, { name: "pdf_sentiment_score", type: "real" },
+        { name: "pdf_sentiment_at", type: "int" }, { name: "ingested_at", type: "int" },
+      ],
+      // tags(text[]) は array_to_json で JSON 文字列化（D1 は text({mode:'json'}) で
+      // 受け、読取時に JSON.parse される）。timestamp は epoch 秒へ。
+      select: `SELECT id, stock_id, tdnet_id, company_code, company_name, title,
+        extract(epoch from pubdate)::bigint AS pubdate, document_url, xbrl_url, markets_string,
+        array_to_json(tags)::text AS tags, primary_tag, notion_page_id,
+        pdf_sentiment, pdf_sentiment_method, pdf_sentiment_score,
+        extract(epoch from pdf_sentiment_at)::bigint AS pdf_sentiment_at,
+        extract(epoch from ingested_at)::bigint AS ingested_at
+        FROM ir_catalog.disclosures ORDER BY id`,
+    },
   ];
+
+  // --only=table1,table2 で対象テーブルを限定（既存の正本を再投入せず安全に追加移送）。
+  const onlyArg = process.argv.find((a) => a.startsWith("--only="));
+  const onlySet = onlyArg ? new Set(onlyArg.slice("--only=".length).split(",")) : null;
+  const activeTables = onlySet ? tables.filter((t) => onlySet.has(t.d1)) : tables;
+  if (activeTables.length === 0) throw new Error("--only に一致するテーブルがありません");
 
   const parts: string[] = ["PRAGMA foreign_keys=OFF;"];
   // DELETE は子→親の逆順（FK OFF だが念のため）
-  for (const t of [...tables].reverse()) parts.push(`DELETE FROM ${t.d1};`);
+  for (const t of [...activeTables].reverse()) parts.push(`DELETE FROM ${t.d1};`);
 
   const counts: Record<string, number> = {};
-  for (const t of tables) {
+  for (const t of activeTables) {
     const rows = (await sql.query(t.select)) as Record<string, unknown>[];
     counts[t.d1] = rows.length;
     const colList = t.cols.map((c) => c.name).join(", ");

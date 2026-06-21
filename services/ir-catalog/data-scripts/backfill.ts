@@ -60,6 +60,13 @@ function cmp(a: { y: number; m: number }, b: { y: number; m: number }): number {
 }
 
 async function main(): Promise<void> {
+  // ⚠️ ADR-0001: D1 移行に伴い本 CLI は無効化。createDb は D1 バインディングを
+  // 要求し Node ローカルからは接続できない。黙って壊れる代わりに fail-fast する
+  // (CLAUDE.md ルール2)。全履歴バックフィルは Worker バルク取込（別タスク）へ。
+  throw new Error(
+    "ADR-0001: ir-catalog バックフィルは Worker 取込へ移行予定で、この CLI は無効です。"
+  );
+
   const db = createDb(irEnv.DATABASE_URL());
 
   // 既定の「今月」は JST 基準 (TDnet の開示日は JST。月末深夜の UTC ずれ防止)

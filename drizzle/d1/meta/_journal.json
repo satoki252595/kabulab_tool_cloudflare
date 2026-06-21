@@ -8,6 +8,13 @@
       "when": 1781905615382,
       "tag": "0000_clean_tag",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1782003495267,
+      "tag": "0001_colossal_starbolt",
+      "breakpoints": true
     }
   ]
 }
