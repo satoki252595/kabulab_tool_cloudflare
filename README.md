@@ -148,6 +148,7 @@ D1 へは `createD1HttpDb`(D1 REST)で書き込む。
 |---|---|---|
 | `.github/workflows/stock-sync.yml` | 日次=core/rsi/swing 取得+指標+**増分 OHLCV** / 月次=母集団(JPX)同期 + otakara rebuild | 平日 21:00 / 1 日 22:30 |
 | `.github/workflows/vwap-ingest.yml` | 日足10年 + **5分足** → R2 / 信用残高(週次) | 平日 08:00 / 土 09:00 |
+| `.github/workflows/catchup.yml` | 005 有報(EDINET) + 006 適時開示(TDnet) キャッチアップ(TDnet=Node, EDINET=Worker ルート) | 平日 11:00 |
 
 Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキシ + 005/006 の
 `/admin/catchup` のみを担う(Workers Cron は使わない)。schedule は **main にマージ後**に
@@ -160,8 +161,6 @@ Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキ�
 
 | 処理 | コマンド | 備考 |
 |---|---|---|
-| 適時開示 (006) | `pnpm ingest:ir-tdnet` | Worker `/ir-catalog/admin/catchup` を叩く。GH Actions 化も容易 |
-| 有報 (005) | `pnpm ingest:yuho-edinet` | Worker `/yuho-quant/admin/catchup` を叩く。同上 |
 | 優待スクレイプ+LLM解釈 (002) | data-scripts 4 step（後述） | step3 はローカル OSS LLM のため自動化対象外 |
 
 > `pnpm sync:daily`(= `all-daily.ts`)はローカル手動フル実行用(stock + VWAP を束ねる)。
@@ -169,15 +168,15 @@ Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキ�
 
 ### 残タスク
 
-1. **【要対応】GitHub Secrets 追加 + main マージで全自動化を有効化**
-   - GH Secrets(Settings → Secrets and variables → Actions・`.env` と同値): `CLOUDFLARE_API_TOKEN` /
-     `CLOUDFLARE_ACCOUNT_ID` / `D1_DATABASE_ID` / `YAHOO_PROXY_BASE` / `CRON_SECRET` / `R2_*` /
-     `NOTION_TOKEN` / `NOTION_BACKUP_PAGE_ID` / `NOTION_TRASH_PAGE_ID`。
-   - **PR #1（`feat/d1-r2-migration`）を `main` にマージ** → Workers Builds が Worker を自動
-     デプロイ(無料) + GitHub Actions の schedule が有効化。
-   - 本番ページが D1 から読める + Actions が成功するのを確認 → **Neon 解約**。
-2. **EDINET / TDnet / 優待スクレイプの GitHub Actions 化**（任意）。
-3. **legacy 掃除**（一部完了・残り非ブロッキング）… ✅ 旧 Neon DB スクリプト `scripts/db/*.mjs` 削除済み。残: `db:push:*` / `drizzle.<svc>.config.ts`(pg・obsolete)、`scripts/full-validation*.mjs` / `get-jpx-listing.mjs`(Neon 依存 dev one-off)、`services/otakara-yutai/src/index.ts`(dead code)。Neon 解約後に削除でよい。
+1. **✅ 本番稼働確認済み** — main マージ → Workers Builds が**無料で自動デプロイ済**。スモーク全 PASS
+   (全9サービス D1 読取)、stock-sync GitHub Actions 成功(D1 へフレッシュ書込確認)。
+   **残るは Neon 解約**(あなたが Neon コンソールで実施)。解約後は `.env`/GH Secret の `DATABASE_URL` 不要。
+   - catchup.yml(EDINET/TDnet)用に GH Secret **`WORKER_BASE_URL`**(= Worker URL)が未追加なら追加。
+2. **legacy 掃除**（✅ ほぼ完了）… 旧 Neon DB スクリプト `scripts/db/*.mjs`・dev one-off
+   (`full-validation*` / `get-jpx-listing`)・otakara dead code(`src/index.ts` / `pages-app.ts` /
+   Neon integration test)は **削除済み**。残りは Neon 解約時にまとめて整理推奨: `DATABASE_URL` +
+   cutover ツール(`scripts/migrate/`)、obsolete な `db:push:*` + `drizzle.<svc>.config.ts`(pg dialect)、
+   各サービス CLAUDE.md/README の Neon/Vercel 期記述(一括リフレッシュ)。
 
 ## デプロイ
 

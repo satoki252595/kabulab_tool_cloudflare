@@ -1,0 +1,71 @@
+# 005 EDINET(有報) + 006 TDnet(適時開示) の日次キャッチアップを GitHub Actions で実行。
+#
+# - TDnet(006): PDF センチメントが kuromoji(Node 専用)依存のため Node で実行し
+#   D1 へ HTTP API で書く。取込元 TDnet はホストが異なり 429 されないのでプロキシ不要。
+# - EDINET(005): Worker の認証ルート POST /yuho-quant/admin/catchup を叩くだけの薄い
+#   トリガ(EDINET fetch + Notion アーカイブ + D1 書込は Worker 側が時間予算内で実行)。
+#
+# どちらも時間予算付きで軽量(~数分)。default ブランチ(main)から発火。
+#
+# 必要な GitHub Secrets:
+#   CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID / D1_DATABASE_ID … TDnet の D1 REST 書込
+#   NOTION_TOKEN / NOTION_BACKUP_PAGE_ID / NOTION_TRASH_PAGE_ID  … 一次データ Notion アーカイブ(ルール6)
+#   WORKER_BASE_URL … デプロイ済み Worker の URL(EDINET トリガが叩く)
+#   CRON_SECRET     … Worker 認証ルートの Bearer
+name: catchup
+
+on:
+  schedule:
+    - cron: "0 11 * * 1-5" # 平日 11:00 UTC (20:00 JST): 当日の開示を取り込み
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "実行対象"
+        type: choice
+        default: all
+        options:
+          - all
+          - tdnet
+          - edinet
+
+concurrency:
+  group: catchup
+  cancel-in-progress: false
+
+jobs:
+  catchup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_BACKUP_PAGE_ID: ${{ secrets.NOTION_BACKUP_PAGE_ID }}
+      NOTION_TRASH_PAGE_ID: ${{ secrets.NOTION_TRASH_PAGE_ID }}
+      WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # 006 TDnet 適時開示 (Node + kuromoji → D1 HTTP)
+      - name: ir-catalog TDnet catchup
+        if: >-
+          github.event_name == 'schedule' ||
+          (github.event_name == 'workflow_dispatch' &&
+            (github.event.inputs.target == 'tdnet' || github.event.inputs.target == 'all'))
+        run: pnpm ingest:ir-tdnet
+
+      # 005 EDINET 有報 (Worker /yuho-quant/admin/catchup を叩く)
+      - name: yuho-quant EDINET catchup
+        if: >-
+          github.event_name == 'schedule' ||
+          (github.event_name == 'workflow_dispatch' &&
+            (github.event.inputs.target == 'edinet' || github.event.inputs.target == 'all'))
+        run: pnpm ingest:yuho-edinet
