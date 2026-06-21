@@ -18,12 +18,9 @@ import "dotenv/config";
 import { createDailyDb, runDailySync } from "../../src/cron/daily.js";
 
 async function main(): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error("DATABASE_URL is not configured");
-  }
-
-  const db = createDailyDb(databaseUrl);
+  // D1 への書き込みは createDailyDb() が CLOUDFLARE_* env (型付きアクセサ) を
+  // 内部で解決する。未設定なら createD1HttpDb が throw する (フォールバック無し)。
+  const db = createDailyDb();
   const result = await runDailySync(db);
 
   if (result.universe) {

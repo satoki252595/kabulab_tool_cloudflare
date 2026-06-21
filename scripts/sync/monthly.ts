@@ -17,12 +17,7 @@ import "dotenv/config";
 import { createMonthlyDb, runMonthlySync } from "../../src/cron/monthly.js";
 
 async function main(): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error("DATABASE_URL is not configured");
-  }
-
-  const db = createMonthlyDb(databaseUrl);
+  const db = createMonthlyDb();
   await runMonthlySync(db);
 }
 

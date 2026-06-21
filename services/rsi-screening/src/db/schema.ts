@@ -1,24 +1,26 @@
-import { pgSchema, serial, integer, real, timestamp, boolean, index } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { sql, relations } from "drizzle-orm";
+import { sqliteTable, integer, real, index } from "drizzle-orm/sqlite-core";
 import { stocks } from "./core-schema.js";
 
 /**
- * 001_RSIScreening 固有スキーマ。
+ * 001_RSIScreening 固有スキーマ（Cloudflare D1 / SQLite 版） — ADR-0001。
  *
  * 所有権: このプロジェクトのみが読み書きする。
- * core.stocks を参照することで銘柄マスタを共有する。
+ * core.stocks（共有）を参照して銘柄マスタを共有する。
  *
- * 注意: 過去には `stockRsiHistory` (rsi.stock_rsi_history) を持っていたが、
- * RSI パーセンタイル算出は in-memory で完結し、UI からも参照されないため
+ * D1 は名前空間が無いため、旧 `rsi.stock_rsi_percentile` は冗長な接頭を
+ * 落として `rsi_percentile` に降ろす。
+ *
+ * 注意: 過去には `stockRsiHistory`（rsi.stock_rsi_history）を持っていたが、
+ * RSI パーセンタイル算出は in-memory で完結し UI からも参照されないため
  * 2026-04 に削除した。
  */
-export const rsiSchema = pgSchema("rsi");
 
 /** 現在のRSIパーセンタイル順位 + 優良株判定 (スクリーニング用) */
-export const stockRsiPercentile = rsiSchema.table(
-  "stock_rsi_percentile",
+export const stockRsiPercentile = sqliteTable(
+  "rsi_percentile",
   {
-    id: serial("id").primaryKey(),
+    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
       .references(() => stocks.id, { onDelete: "cascade" })
       .notNull()
@@ -32,7 +34,9 @@ export const stockRsiPercentile = rsiSchema.table(
     /** 3期間のパーセンタイルの最小値 (最も底にある期間) */
     rsiMinPercentile: real("rsi_min_percentile"),
     /** 優良株フラグ: 売上高増加基調 AND 営業利益率TTM が一定以上 */
-    isBlueChip: boolean("is_blue_chip").default(false).notNull(),
+    isBlueChip: integer("is_blue_chip", { mode: "boolean" })
+      .default(false)
+      .notNull(),
     /**
      * 営業利益率 TTM (trailing 12 months)
      * Yahoo Finance `financialData.operatingMargins` の生値 (0.1234 = 12.34%)
@@ -44,7 +48,9 @@ export const stockRsiPercentile = rsiSchema.table(
     operatingMarginTtm: real("operating_margin_ttm"),
     /** 売上高トレンド (+1=上昇 / 0=横ばい / -1=下降) */
     revenueTrend: integer("revenue_trend"),
-    computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+    computedAt: integer("computed_at", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
   },
   (table) => [
     index("idx_rsi_percentile_min").on(table.rsiMinPercentile),
@@ -54,9 +60,12 @@ export const stockRsiPercentile = rsiSchema.table(
 
 // --- Relations ---
 
-export const stockRsiPercentileRelations = relations(stockRsiPercentile, ({ one }) => ({
-  stock: one(stocks, {
-    fields: [stockRsiPercentile.stockId],
-    references: [stocks.id],
-  }),
-}));
+export const stockRsiPercentileRelations = relations(
+  stockRsiPercentile,
+  ({ one }) => ({
+    stock: one(stocks, {
+      fields: [stockRsiPercentile.stockId],
+      references: [stocks.id],
+    }),
+  })
+);
