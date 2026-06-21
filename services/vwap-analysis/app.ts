@@ -68,22 +68,33 @@ app.get("/api/daily", async (c) => {
   return passthrough(o.body, 3600);
 });
 
-// 週次信用残高(R2)を直近16週ぶん集約
+// 週次信用残高(R2)を集約。n=直近何週ぶん返すか(既定16・上限260=約5年)。
+// 日足チャートへ重畳する用途では長期(n=260)を要求する。R2 はバインディング
+// 経由(=subrequest にカウントされない)なので、各週ファイルは並列取得して待ち時間を抑える。
 app.get("/api/margin", async (c) => {
   const code = (c.req.query("code") || "").trim();
   if (!CODE_RE.test(code)) return json({ error: "bad code" }, 400);
+  const nRaw = c.req.query("n");
+  let n = 16;
+  if (nRaw !== undefined) {
+    const parsed = Number(nRaw);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 260) return json({ error: "bad n" }, 400);
+    n = parsed;
+  }
+  // 週次データなので 1 日キャッシュ可。同一銘柄の再オープンで R2 読取を繰り返さない。
+  const cached = (o: unknown) =>
+    new Response(JSON.stringify(o), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=86400" } });
   const wl = await c.env.BUCKET.get("margin/weeks.json");
-  if (!wl) return json({ code, weeks: [] });
-  const weeks: string[] = JSON.parse(await wl.text()).slice(-16);
-  const out: unknown[] = [];
-  for (const w of weeks) {
+  if (!wl) return cached({ code, weeks: [] });
+  const weeks: string[] = JSON.parse(await wl.text()).slice(-n);
+  const rows = await Promise.all(weeks.map(async (w) => {
     const o = await c.env.BUCKET.get(`margin/${w}.json`);
-    if (!o) continue;
+    if (!o) return null;
     const snap = JSON.parse(await o.text());
     const row = (snap.rows || []).find((r: { code: string }) => r.code === code);
-    if (row) out.push({ week: w, ...row });
-  }
-  return json({ code, weeks: out });
+    return row ? { week: w, ...row } : null;
+  }));
+  return cached({ code, weeks: rows.filter((r) => r !== null) });
 });
 
 export default app;
