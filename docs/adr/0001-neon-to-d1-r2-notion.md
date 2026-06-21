@@ -191,9 +191,9 @@ export function createDb(d1: D1Database) {
 - D1 の制約に合わせ **バッチ書込は `db.batch()` で分割**（1文 100KB / bind 変数 **100** / 1 invocation 1000 query 以内）。
   **実装済**: `ingest.ts` の `order_facts`（12 列/行）は 8 行/文（96 bind）に分割し、delete と全 insert を
   `db.batch()` で原子的に置換（建設業など 9 セグメント超で単一 INSERT が bind 上限超過で落ちるのを防ぐ）。
-- 1 実行のサブリクエスト数は Workers 上限（Paid 1000/invocation）内に収める。`MAX_INGEST=40`（×最悪 ~14 req/doc ≈ 560）。
+- 1 実行のサブリクエスト数は Workers 上限内に収める（Paid は 2026-02 に 1,000→**10,000**/invocation へ増加・wrangler `[limits] subrequests` で最大 10M。Free は外部 50）。`MAX_INGEST=40`（×最悪 ~14 req/doc ≈ 560）は時間予算/Notion レートからの保守値。
   大量分は「1 回で N 件・docId 冪等で次回継続」（既存の時間予算パターン）を踏襲。
-- Yahoo 系（株価）は 429 制約のため本 ADR 対象外（別 ADR で検討）。
+- Yahoo 系（株価）日次は Phase 3 で **Worker 取込へ移行**（エッジから Yahoo 直叩き=429 回避、`db.batch` + 増分 OHLCV、Workers Cron 自動化）。母集団 JPX 同期だけ xlsx パーサが Node 専用のため `pnpm sync:universe` に残す。
 
 ---
 

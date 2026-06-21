@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { createDb } from "../db/client.js";
 import { stocks, stockFinancials } from "../db/core-schema.js";
 import {
@@ -65,9 +65,13 @@ pagesRoute.get("/", async (c) => {
     .select({ passedShort: sql<number>`count(*)` })
     .from(stockScreening)
     .where(eq(stockScreening.allPassedShort, true));
+  // entry_signals は active 銘柄分のみ集計/表示する。廃止 (is_active=false) 銘柄に
+  // 取込打ち切り等で古いシグナルが残っても UI に出さない (鮮度のない値を出さない)。
   const [{ totalSignals }] = await db
     .select({ totalSignals: sql<number>`count(*)` })
-    .from(entrySignals);
+    .from(entrySignals)
+    .innerJoin(stocks, eq(stocks.id, entrySignals.stockId))
+    .where(eq(stocks.isActive, true));
 
   // 強度上位シグナル 5 件
   const topSigRows = await db
@@ -81,6 +85,7 @@ pagesRoute.get("/", async (c) => {
     })
     .from(entrySignals)
     .innerJoin(stocks, eq(stocks.id, entrySignals.stockId))
+    .where(eq(stocks.isActive, true))
     .orderBy(desc(entrySignals.signalStrength))
     .limit(5);
   const topBreakouts = topSigRows.map((r) => ({
@@ -221,9 +226,14 @@ pagesRoute.get("/signals", zValidator("query", signalsQuerySchema), async (c) =>
 
   const rows =
     pattern === "all"
-      ? await base.orderBy(desc(entrySignals.signalStrength)).limit(200)
+      ? await base
+          .where(eq(stocks.isActive, true))
+          .orderBy(desc(entrySignals.signalStrength))
+          .limit(200)
       : await base
-          .where(eq(entrySignals.pattern, pattern))
+          .where(
+            and(eq(stocks.isActive, true), eq(entrySignals.pattern, pattern))
+          )
           .orderBy(desc(entrySignals.signalStrength))
           .limit(200);
 

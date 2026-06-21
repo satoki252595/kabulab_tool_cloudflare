@@ -3,15 +3,33 @@ main = "worker/entry.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
 
-# 配信 + 一部取込。未移行サービス(Neon)の取込はローカル CLI(pnpm sync:daily 等)。
-# 005 yuho-quant は D1 へ移行済み(ADR-0001)で、EDINET 取込は Worker の認証ルート
-# POST /yuho-quant/admin/catchup(CRON_SECRET)で実行する。Workers Cron Trigger
-# ([triggers] crons + scheduled ハンドラ)は Phase 3 で追加(現状は未配線)。
+# 配信 + 取込。全サービス D1 移行済み(ADR-0001)。日次/月次の指標・スコア計算は
+# Worker 上で実行する: (a) Workers Cron Trigger → scheduled ハンドラ
+# (worker/entry.ts → src/cron/scheduled.ts)、(b) 認証ルート POST /admin/sync-daily
+# /admin/sync-monthly(CRON_SECRET)。EDINET/TDnet は各サービスの /admin/catchup。
+# 母集団(core_stocks)の JPX 同期だけは xlsx パーサが Node 専用のため
+# `pnpm sync:universe`(Node)で別途実行する。
 # 静的アセット（public/ = kabulab PWA資産 + public/vwap-analysis/ フロント）。
 # 実在ファイルは assets が、動的ルート(/、各サービス、/api/*)は Hono が処理。
 [assets]
 directory = "public"
 binding = "ASSETS"
+
+# Workers Cron Trigger（ADR-0001 Phase 3・完全自動化）。
+# 日次 sync は母集団 ~4,000 を 4 シャードに分け、各 part を別 cron 式
+# (=別 invocation) で 3 分間隔に発火（subrequest/時間バジェットをシャード毎に独立
+# 確保）。最終 shard(part 3) がセクター集計を担う。月次 rebuild は毎月 1 日。
+# 時刻は UTC。平日 20:00 UTC = 翌 05:00 JST(東証引け後)。
+# ⚠️ Workers Paid 前提（無料枠 50 subreq/invocation では 1 シャードを捌けない）。
+# cron 式は src/cron/scheduled.ts の DAILY_CRON_TO_PART / MONTHLY_CRON と一致させる。
+[triggers]
+crons = [
+  "0 20 * * 1-5",
+  "3 20 * * 1-5",
+  "6 20 * * 1-5",
+  "9 20 * * 1-5",
+  "0 22 1 * *",
+]
 
 # VWAP 時系列（intra/daily/margin）。Worker は binding 経由で読取（S3クレデンシャル不要）。
 [[r2_buckets]]
@@ -25,6 +43,12 @@ bucket_name = "vwap-data"
 binding = "DB"
 database_name = "kabulab-cf"
 database_id = "639c0315-0d41-4345-95ab-aec5906224ed"
+
+# 日次/月次取込 (scheduled / POST /admin/sync-*) の CPU 上限を Paid 上限 (5 分) へ。
+# 既定 30s だと ~1,000 銘柄/シャードの指標計算で稀に足りない可能性への保険。
+# (主負荷は I/O = CPU 非課金だが defense-in-depth。Workers Paid 前提。)
+[limits]
+cpu_ms = 300000
 
 # DATABASE_URL は secret（`wrangler secret put DATABASE_URL`）／ローカルは .dev.vars。
 # EDINET_API_KEY / NOTION_TOKEN も Worker 取込で参照する secret（ローカルは .env）。
