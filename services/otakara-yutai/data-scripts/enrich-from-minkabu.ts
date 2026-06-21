@@ -4,31 +4,15 @@
  * minkabu.jp/stock/{code} ページの :record 属性に埋め込まれたJSONから抽出。
  * Yahoo Finance APIで取得できないPER・配当利回りを補完する用途。
  */
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import * as schema from "../src/db/schema.js";
+import { stocks, stockFinancials } from "../src/db/schema.js";
 import { eq, desc, isNull, and } from "drizzle-orm";
 import "dotenv/config";
-import { pgTable, serial, text, integer, real, timestamp, date, boolean } from "drizzle-orm/pg-core";
 
-// インラインスキーマ
-const stocks = pgTable("stocks", {
-  id: serial("id").primaryKey(),
-  code: text("code").notNull().unique(),
-  name: text("name").notNull(),
-  isActive: boolean("is_active").default(true).notNull(),
-});
-const stockFinancials = pgTable("stock_financials", {
-  id: serial("id").primaryKey(),
-  stockId: integer("stock_id").notNull(),
-  price: real("price"), per: real("per"), pbr: real("pbr"),
-  dividendYield: real("dividend_yield"), eps: real("eps"), bps: real("bps"),
-  roe: real("roe"), roa: real("roa"), marketCap: real("market_cap"),
-  ma5: real("ma_5"), ma25: real("ma_25"), ma75: real("ma_75"),
-  rsi14: real("rsi_14"), macd: real("macd"), macdSignal: real("macd_signal"),
-  yutaiYield: real("yutai_yield"),
-  fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
-  dataDate: date("data_date").notNull(),
-});
+// Schema は src/db/schema.ts に集約済み (D1/SQLite 版 — ADR-0001)。
+// 財務テーブルは otakara_stock_financials (stockFinancials)、stocks は
+// core_stocks の再 export。インラインの pgTable 定義は廃止した。
 
 /** minkabuページ内の :record JSON から財務指標を抽出 */
 type MinkabuRecord = {
@@ -77,10 +61,7 @@ async function fetchMinkabuData(code: string): Promise<MinkabuRecord | null> {
 }
 
 async function main() {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) throw new Error("DATABASE_URL required");
-  const sql = neon(databaseUrl);
-  const db = drizzle(sql);
+  const db = createD1HttpDb(schema);
 
   // アクティブ銘柄の最新stockFinancialsを取得（PERがnullのもの）
   const allStocks = await db.select({

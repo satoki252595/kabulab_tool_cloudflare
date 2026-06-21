@@ -14,13 +14,8 @@ import { bsPage, type BsStockContext } from "../views/black-scholes.js";
 import { buildCapmView } from "./pages.js";
 
 /** API ルーター — POST フォーム送信ハンドラ */
-export const apiRoute = new Hono();
-
-function requireDbUrl(): string {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("DATABASE_URL is not configured");
-  return url;
-}
+type Bindings = { DB: D1Database };
+export const apiRoute = new Hono<{ Bindings: Bindings }>();
 
 // =============================================================================
 // POST /api/dcf/calc
@@ -68,7 +63,7 @@ apiRoute.post(
   let stockEstimatedDividend: number | null = null;
 
   if (v.code) {
-    const db = createDb(requireDbUrl());
+    const db = createDb(c.env.DB);
     try {
       const ctx = await getPriceContext(db, v.code);
       currentPrice = ctx.price;
@@ -234,6 +229,7 @@ apiRoute.post("/capm/calc", zValidator("form", capmFormSchema), async (c) => {
   const v = c.req.valid("form");
   try {
     const view = await buildCapmView({
+      db: c.env.DB,
       code: v.code,
       mode: v.mode,
       // CLAUDE.md ルール1: フォールバック ?? 1.0 を排除。null のまま渡し、
@@ -276,7 +272,7 @@ apiRoute.post("/black-scholes/calc", zValidator("form", bsFormSchema), async (c)
   let stockSpot: number | null = null;
   let stockHistVol: number | null = null;
   if (v.code) {
-    const db = createDb(requireDbUrl());
+    const db = createDb(c.env.DB);
     try {
       const [priceCtx, ohlcv] = await Promise.all([
         getPriceContext(db, v.code),

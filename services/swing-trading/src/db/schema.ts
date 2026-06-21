@@ -1,39 +1,31 @@
+import { sql, relations } from "drizzle-orm";
 import {
-  pgSchema,
-  serial,
-  text,
+  sqliteTable,
   integer,
+  text,
   real,
-  timestamp,
-  date,
-  boolean,
   index,
   uniqueIndex,
-} from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+} from "drizzle-orm/sqlite-core";
 import { stocks } from "./core-schema.js";
 
 /**
- * 003 Swing Trading 固有スキーマ
+ * 003 Swing Trading 固有スキーマ（Cloudflare D1 / SQLite 版） — ADR-0001。
  *
  * 所有権: このプロジェクトのみが読み書きする。
- * `core.stocks` / `core.stock_financials` は読み取り専用で参照する。
+ * `core_stocks` / `core_stock_financials` は読み取り専用で参照する。
  *
- * 設計メモ:
- *   - 日足 OHLCV 履歴は 001 が「メモリ計算で十分」として core.stock_price_history を
- *     2026-04 に削除した。003 は ATR / 20 日レンジ / 5-20-60 日線 / 出来高 20 日平均 の
- *     計算に過去 100 営業日程度の履歴が必要なので、`swing.daily_ohlcv` を 003 専用で
- *     所有する (core スキーマを汚染しない)
- *   - テクニカル指標の単一値は `swing.stock_indicators` に 1 銘柄 1 行で upsert
- *   - 5 条件フィルター結果は `swing.stock_screening` に別出ししてロング/ショート 2 列で保持
- *   - E&E パターン判定は 1 銘柄 × 複数パターンなので `swing.entry_signals` に行単位で
- *   - マクロ判定は日次 1 行 `swing.market_context`
- *   - セクター騰落ランキングは 1 日 × 33 業種 `swing.sector_daily`
+ * D1 は名前空間が無いため旧 `swing.<table>` を `swing_<table>` に降ろす。
+ *
+ * 方言マッピング (PostgreSQL → SQLite, ADR-0001 §4):
+ *   serial            → integer primaryKey autoIncrement
+ *   timestamp+now()   → integer({mode:'timestamp'}) default (unixepoch())
+ *   date              → text ('YYYY-MM-DD' 文字列)
+ *   boolean           → integer({mode:'boolean'})
  */
-export const swingSchema = pgSchema("swing");
 
 // -----------------------------------------------------------------------------
-// 1. swing.daily_ohlcv — 日足 OHLCV 履歴 (約 100 営業日保持)
+// 1. swing_daily_ohlcv — 日足 OHLCV 履歴 (約 90 営業日保持)
 // -----------------------------------------------------------------------------
 
 /**
@@ -42,14 +34,14 @@ export const swingSchema = pgSchema("swing");
  * Yahoo Finance が穴を開けることがあるため open/high/low/close/volume は NULL 許容。
  * NULL 行は指標計算時に除外する。
  */
-export const dailyOhlcv = swingSchema.table(
-  "daily_ohlcv",
+export const dailyOhlcv = sqliteTable(
+  "swing_daily_ohlcv",
   {
-    id: serial("id").primaryKey(),
+    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
       .references(() => stocks.id, { onDelete: "cascade" })
       .notNull(),
-    date: date("date").notNull(),
+    date: text("date").notNull(),
     open: real("open"),
     high: real("high"),
     low: real("low"),
@@ -63,11 +55,11 @@ export const dailyOhlcv = swingSchema.table(
 );
 
 // -----------------------------------------------------------------------------
-// 2. swing.stock_indicators — 銘柄ごとの最新テクニカル集計 (1 銘柄 1 行 upsert)
+// 2. swing_stock_indicators — 銘柄ごとの最新テクニカル集計 (1 銘柄 1 行 upsert)
 // -----------------------------------------------------------------------------
 
-export const stockIndicators = swingSchema.table(
-  "stock_indicators",
+export const stockIndicators = sqliteTable(
+  "swing_stock_indicators",
   {
     stockId: integer("stock_id")
       .primaryKey()
@@ -99,13 +91,21 @@ export const stockIndicators = swingSchema.table(
     sma60: real("sma_60"),
     sma75: real("sma_75"),
     /** 5>20 かつ 終値>5MA (ロング環境) */
-    trendLong: boolean("trend_long").default(false).notNull(),
+    trendLong: integer("trend_long", { mode: "boolean" })
+      .default(false)
+      .notNull(),
     /** 5<20 かつ 終値<5MA (ショート環境) */
-    trendShort: boolean("trend_short").default(false).notNull(),
+    trendShort: integer("trend_short", { mode: "boolean" })
+      .default(false)
+      .notNull(),
     /** パーフェクトオーダー 5>20>60 (押し目買いの前提条件) */
-    perfectOrderLong: boolean("perfect_order_long").default(false).notNull(),
+    perfectOrderLong: integer("perfect_order_long", { mode: "boolean" })
+      .default(false)
+      .notNull(),
     /** パーフェクトオーダー 5<20<60 */
-    perfectOrderShort: boolean("perfect_order_short").default(false).notNull(),
+    perfectOrderShort: integer("perfect_order_short", { mode: "boolean" })
+      .default(false)
+      .notNull(),
 
     // --- モメンタム ---
     rsi14: real("rsi_14"),
@@ -129,11 +129,13 @@ export const stockIndicators = swingSchema.table(
     // --- 最新値 ---
     latestClose: real("latest_close"),
     latestVolume: real("latest_volume"),
-    latestDate: date("latest_date"),
+    latestDate: text("latest_date"),
     /** 前日比% (当日 close - 前日 close) / 前日 close × 100 */
     pctChange1d: real("pct_change_1d"),
 
-    computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+    computedAt: integer("computed_at", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
   },
   (table) => [
     index("idx_swing_indicators_trend_long").on(table.trendLong),
@@ -142,23 +144,31 @@ export const stockIndicators = swingSchema.table(
 );
 
 // -----------------------------------------------------------------------------
-// 3. swing.stock_screening — 5 条件フィルター結果 (1 銘柄 1 行 upsert)
+// 3. swing_stock_screening — 5 条件フィルター結果 (1 銘柄 1 行 upsert)
 // -----------------------------------------------------------------------------
 
-export const stockScreening = swingSchema.table(
-  "stock_screening",
+export const stockScreening = sqliteTable(
+  "swing_stock_screening",
   {
     stockId: integer("stock_id")
       .primaryKey()
       .references(() => stocks.id, { onDelete: "cascade" }),
 
     // ① 流動性: avgTurnover20d ≧ 10億 OR (volumeRatio ≧ 3 AND avgTurnover20d ≧ 5億)
-    liquidityOk: boolean("liquidity_ok").default(false).notNull(),
+    liquidityOk: integer("liquidity_ok", { mode: "boolean" })
+      .default(false)
+      .notNull(),
     // ② ボラ: atrPct ≧ 0.02
-    volatilityOk: boolean("volatility_ok").default(false).notNull(),
+    volatilityOk: integer("volatility_ok", { mode: "boolean" })
+      .default(false)
+      .notNull(),
     // ③ トレンド: 5>20 かつ close>5MA (long) / 逆 (short)
-    trendOkLong: boolean("trend_ok_long").default(false).notNull(),
-    trendOkShort: boolean("trend_ok_short").default(false).notNull(),
+    trendOkLong: integer("trend_ok_long", { mode: "boolean" })
+      .default(false)
+      .notNull(),
+    trendOkShort: integer("trend_ok_short", { mode: "boolean" })
+      .default(false)
+      .notNull(),
 
     // ④ 需給: 信用倍率は Yahoo で取れないため常に "未対応" を表示
     supplyNote: text("supply_note").default("外部データ未対応").notNull(),
@@ -166,11 +176,17 @@ export const stockScreening = swingSchema.table(
     catalystNote: text("catalyst_note").default("外部データ未対応").notNull(),
 
     /** ① ② ③long 全て true */
-    allPassedLong: boolean("all_passed_long").default(false).notNull(),
+    allPassedLong: integer("all_passed_long", { mode: "boolean" })
+      .default(false)
+      .notNull(),
     /** ① ② ③short 全て true */
-    allPassedShort: boolean("all_passed_short").default(false).notNull(),
+    allPassedShort: integer("all_passed_short", { mode: "boolean" })
+      .default(false)
+      .notNull(),
 
-    computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+    computedAt: integer("computed_at", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
   },
   (table) => [
     index("idx_swing_screening_long").on(table.allPassedLong),
@@ -179,7 +195,7 @@ export const stockScreening = swingSchema.table(
 );
 
 // -----------------------------------------------------------------------------
-// 4. swing.entry_signals — E&E パターン判定 (1 銘柄 × 複数パターン行)
+// 4. swing_entry_signals — E&E パターン判定 (1 銘柄 × 複数パターン行)
 // -----------------------------------------------------------------------------
 
 /**
@@ -193,10 +209,10 @@ export const stockScreening = swingSchema.table(
  *   - "gap_fade"        : ギャップ逆張り (材料なしの普通窓 → 窓埋め狙い)
  *   - "post_earnings"   : 決算後初動 (financials の直近更新 + 出来高急増)
  */
-export const entrySignals = swingSchema.table(
-  "entry_signals",
+export const entrySignals = sqliteTable(
+  "swing_entry_signals",
   {
-    id: serial("id").primaryKey(),
+    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
       .references(() => stocks.id, { onDelete: "cascade" })
       .notNull(),
@@ -213,21 +229,26 @@ export const entrySignals = swingSchema.table(
     signalStrength: real("signal_strength"),
     note: text("note"),
 
-    computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+    computedAt: integer("computed_at", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
   },
   (table) => [
-    index("idx_swing_signals_pattern_strength").on(table.pattern, table.signalStrength),
+    index("idx_swing_signals_pattern_strength").on(
+      table.pattern,
+      table.signalStrength
+    ),
     index("idx_swing_signals_stock").on(table.stockId),
     index("idx_swing_signals_computed").on(table.computedAt),
   ]
 );
 
 // -----------------------------------------------------------------------------
-// 5. swing.market_context — マクロ判定 (1 日 1 行 upsert)
+// 5. swing_market_context — マクロ判定 (1 日 1 行 upsert)
 // -----------------------------------------------------------------------------
 
-export const marketContext = swingSchema.table("market_context", {
-  date: date("date").primaryKey(),
+export const marketContext = sqliteTable("swing_market_context", {
+  date: text("date").primaryKey(),
 
   /** 日経平均終値 (^N225) */
   nikkeiClose: real("nikkei_close"),
@@ -248,18 +269,20 @@ export const marketContext = swingSchema.table("market_context", {
   judgment: text("judgment").notNull(),
   judgmentReason: text("judgment_reason").notNull(),
 
-  computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+  computedAt: integer("computed_at", { mode: "timestamp" })
+    .default(sql`(unixepoch())`)
+    .notNull(),
 });
 
 // -----------------------------------------------------------------------------
-// 6. swing.sector_daily — セクター騰落ランキング (1 日 × 業種)
+// 6. swing_sector_daily — セクター騰落ランキング (1 日 × 業種)
 // -----------------------------------------------------------------------------
 
-export const sectorDaily = swingSchema.table(
-  "sector_daily",
+export const sectorDaily = sqliteTable(
+  "swing_sector_daily",
   {
-    id: serial("id").primaryKey(),
-    date: date("date").notNull(),
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    date: text("date").notNull(),
     sector: text("sector").notNull(),
     /** 当日セクター平均騰落率% */
     pct1d: real("pct_1d"),

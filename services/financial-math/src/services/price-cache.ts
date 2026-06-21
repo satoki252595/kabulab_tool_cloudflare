@@ -185,10 +185,12 @@ export async function getOhlcvSeries(
   assertSymbol(symbol);
 
   // 鮮度チェック (per-row TTL: 最新行の fetched_at で判定)
+  // D1/SQLite: fetched_at は integer epoch 秒。MAX() はその秒値を返すので
+  // ミリ秒へ直してから now() と比較する (pg の ::text/::int キャストは廃止)。
   const [meta] = await db
     .select({
-      latestFetchedAt: sql<string | null>`MAX(${dailyOhlcv.fetchedAt})::text`,
-      rowCount: sql<number>`COUNT(*)::int`,
+      latestFetchedAt: sql<number | null>`MAX(${dailyOhlcv.fetchedAt})`,
+      rowCount: sql<number>`COUNT(*)`,
     })
     .from(dailyOhlcv)
     .where(eq(dailyOhlcv.symbol, symbol));
@@ -197,7 +199,7 @@ export async function getOhlcvSeries(
     meta?.latestFetchedAt !== null &&
     meta?.latestFetchedAt !== undefined &&
     (meta.rowCount ?? 0) > 0 &&
-    Date.now() - new Date(meta.latestFetchedAt).getTime() < CACHE_TTL_MS;
+    Date.now() - meta.latestFetchedAt * 1000 < CACHE_TTL_MS;
 
   if (cacheFresh) {
     const rows = await db
@@ -221,11 +223,10 @@ export async function getOhlcvSeries(
     return [];
   }
 
-  // 5y = 約 1,250 行 × 7 列 = 8,750 個のバインドパラメータ。
-  // neon-http の HTTP body / Postgres parser のサイズ制限 (パラメータ多数 + 長いクエリ文字列)
-  // で「Failed query: insert into ...」と落ちるケースがあるため CHUNK 分割する。
-  // 過去テストで全銘柄の 1/4 以上 (909/3760) がこの理由で失敗していた。
-  const CHUNK = 300;
+  // D1 の bind 上限は 100 params/文。finmath_daily_ohlcv は 7 列なので 14 行/文に抑える
+  // (旧 Neon 版は 300 行だったが、D1 では 100 bind を超えると "too many SQL variables" で
+  //  落ちる)。Worker バインディング経由のレイジー取得なので 1 シンボル分のみ。
+  const CHUNK = 14;
   const rows = chart.ohlcv.map((bar) => ({
     symbol,
     date: bar.date,

@@ -3,7 +3,6 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { eq } from "drizzle-orm";
 import { createDb } from "../db/client.js";
-import { irEnv } from "../env.js";
 import { BASE_PATH } from "../../base-path.js";
 import {
   searchStocks,
@@ -21,10 +20,11 @@ import { disclosures } from "../db/schema.js";
 import { fetchPageFileUrl } from "../../../../src/shared/notion-archive/index.js";
 
 /**
- * SSR ルーター。DATABASE_URL は型付きアクセサ経由でのみ取得 (ルール3)。
- * 検索ヒット 0 件は「該当なし」を正直に返す (架空候補を作らない・ルール1)。
+ * SSR ルーター。データは Cloudflare D1 バインディング `c.env.DB` から取得する
+ * （ADR-0001: Neon 廃止）。検索ヒット 0 件は「該当なし」を正直に返す。
  */
-export const pagesRoute = new Hono();
+type Bindings = { DB: D1Database };
+export const pagesRoute = new Hono<{ Bindings: Bindings }>();
 
 const HIGH_SIGNAL_LIST = [...HIGH_SIGNAL_TAGS];
 
@@ -35,7 +35,7 @@ const homeQuery = z.object({
 
 pagesRoute.get("/", zValidator("query", homeQuery), async (c) => {
   const { q } = c.req.valid("query");
-  const db = createDb(irEnv.DATABASE_URL());
+  const db = createDb(c.env.DB);
   const recent = await recentHighSignal(db, HIGH_SIGNAL_LIST, 25);
   if (q === undefined) {
     return c.html(homePage({ query: "", results: null, recent }));
@@ -45,7 +45,7 @@ pagesRoute.get("/", zValidator("query", homeQuery), async (c) => {
 });
 
 pagesRoute.get("/signals", async (c) => {
-  const db = createDb(irEnv.DATABASE_URL());
+  const db = createDb(c.env.DB);
   const rows = await recentHighSignal(db, HIGH_SIGNAL_LIST, 100);
   return c.html(signalsPage(rows));
 });
@@ -94,7 +94,7 @@ pagesRoute.get(
   async (c) => {
     const { code } = c.req.valid("param");
     const { months, tag } = c.req.valid("query");
-    const db = createDb(irEnv.DATABASE_URL());
+    const db = createDb(c.env.DB);
     const tl = await getStockTimeline(db, code, months, tag ?? null);
     if (!tl) {
       return c.html(
@@ -180,7 +180,7 @@ pagesRoute.get(
     const { tdnetId } = c.req.valid("param");
 
     const tDbStart = Date.now();
-    const db = createDb(irEnv.DATABASE_URL());
+    const db = createDb(c.env.DB);
     const rows = await db
       .select({
         notionPageId: disclosures.notionPageId,
@@ -269,7 +269,7 @@ pagesRoute.get(
   async (c) => {
     const { code } = c.req.valid("param");
     const { months, tag } = c.req.valid("query");
-    const db = createDb(irEnv.DATABASE_URL());
+    const db = createDb(c.env.DB);
     const tl = await getStockTimeline(db, code, months, tag ?? null);
     if (!tl) return c.json({ error: "stock not found" }, 404);
     return c.json(tl);

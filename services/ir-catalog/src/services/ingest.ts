@@ -18,7 +18,7 @@
  * DB 取込とは独立し、失敗しても DB 取込結果は返すが error を結果に載せて
  * 運用者が気づけるようにする (黙殺しない)。
  */
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   recordPrimaryData,
   upsertDisclosuresByStock,
@@ -27,7 +27,7 @@ import {
 } from "../../../../src/shared/notion-archive/index.js";
 import type { Database } from "../db/client.js";
 import { disclosures } from "../db/schema.js";
-import { stocks } from "../../../rsi-screening/src/db/core-schema.js";
+import { stocks } from "../../../../src/shared/db/core-schema.js";
 import { classify, notionTagOptions, buffettCodeUrl } from "./classify.js";
 import { companyCodeToTicker, type TdnetItemRaw } from "./tdnet/types.js";
 import { classifyPdfSentiment } from "./pdf-sentiment/index.js";
@@ -105,19 +105,13 @@ async function persistNotionPageIds(
     ([k, v]) => typeof k === "string" && k.length > 0 && typeof v === "string" && v.length > 0
   );
   if (entries.length === 0) return;
-  const CHUNK = 200;
-  for (let i = 0; i < entries.length; i += CHUNK) {
-    const chunk = entries.slice(i, i + CHUNK);
-    const values = sql.join(
-      chunk.map(([k, v]) => sql`(${k}::text, ${v}::text)`),
-      sql`, `
-    );
-    await db.execute(sql`
-      UPDATE ir_catalog.disclosures AS d
-      SET notion_page_id = v.page_id
-      FROM (VALUES ${values}) AS v(tdnet_id, page_id)
-      WHERE d.tdnet_id = v.tdnet_id
-    `);
+  // D1 は PG の `UPDATE ... FROM (VALUES ...)` を使えないため drizzle の
+  // per-row update（tdnet_id 等値）で冪等に書き戻す。
+  for (const [tdnetId, pageId] of entries) {
+    await db
+      .update(disclosures)
+      .set({ notionPageId: pageId })
+      .where(eq(disclosures.tdnetId, tdnetId));
   }
 }
 
@@ -135,25 +129,18 @@ async function persistPdfSentiments(
     ([k]) => typeof k === "string" && k.length > 0
   );
   if (entries.length === 0) return;
-  const CHUNK = 200;
-  for (let i = 0; i < entries.length; i += CHUNK) {
-    const chunk = entries.slice(i, i + CHUNK);
-    const values = sql.join(
-      chunk.map(
-        ([k, c]) =>
-          sql`(${k}::text, ${c.sentiment}::text, ${c.method ?? null}::text, ${c.score ?? null}::real)`
-      ),
-      sql`, `
-    );
-    await db.execute(sql`
-      UPDATE ir_catalog.disclosures AS d
-      SET pdf_sentiment = v.sentiment,
-          pdf_sentiment_method = v.method,
-          pdf_sentiment_score = v.score,
-          pdf_sentiment_at = now()
-      FROM (VALUES ${values}) AS v(tdnet_id, sentiment, method, score)
-      WHERE d.tdnet_id = v.tdnet_id
-    `);
+  // D1: per-row update。判定時刻は実行時刻で統一（再判定検出クエリ用）。
+  const now = new Date();
+  for (const [tdnetId, c] of entries) {
+    await db
+      .update(disclosures)
+      .set({
+        pdfSentiment: c.sentiment,
+        pdfSentimentMethod: c.method ?? null,
+        pdfSentimentScore: c.score ?? null,
+        pdfSentimentAt: now,
+      })
+      .where(eq(disclosures.tdnetId, tdnetId));
   }
 }
 
@@ -236,9 +223,10 @@ export async function ingestBatch(
   }
 
   // DB へ冪等 upsert (tdnet_id 一意)。タイトル訂正等に追従するため
-  // 内容列は更新、ingested_at は据え置き。Neon HTTP 制約で 500 件ずつ。
+  // 内容列は更新、ingested_at は据え置き。D1 の bind 変数上限は 100 で、
+  // 1 行 11 列なので 9 行(=99 bind)ずつに分割する(ADR-0001)。
   let upserted = 0;
-  const CHUNK = 500;
+  const CHUNK = 9;
   for (let i = 0; i < prepared.length; i += CHUNK) {
     const slice = prepared.slice(i, i + CHUNK);
     if (slice.length === 0) continue;

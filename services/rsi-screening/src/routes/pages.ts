@@ -13,14 +13,11 @@ import { stockDetailPage } from "../views/stock-detail.js";
 import { BASE_PATH } from "../../base-path.js";
 
 /** SSR ページルーター */
-export const pagesRoute = new Hono();
+type Bindings = { DB: D1Database };
+export const pagesRoute = new Hono<{ Bindings: Bindings }>();
 
 pagesRoute.get("/", async (c) => {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.html(homePage({ totalStocks: 0, blueChipCount: 0, lastUpdate: null }), 500);
-  }
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
 
   const [{ total }] = await db
     .select({ total: count() })
@@ -41,22 +38,14 @@ pagesRoute.get("/", async (c) => {
 
 pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c) => {
   const query = c.req.valid("query");
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.html(screeningPage({ query, results: [] }), 500);
-  }
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
   const results = await screenStocks(db, query);
   return c.html(screeningPage({ query, results }));
 });
 
 pagesRoute.get("/stocks/:code", zValidator("param", stockCodeParamSchema), async (c) => {
   const { code } = c.req.valid("param");
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.notFound();
-  }
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
   const detail = await getStockDetail(db, code);
   if (!detail) {
     return c.html(

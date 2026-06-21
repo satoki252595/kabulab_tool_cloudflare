@@ -1,20 +1,17 @@
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
-import * as coreSchema from "../../../rsi-screening/src/db/core-schema.js";
 import * as irSchema from "./schema.js";
+import { createServiceDb } from "../../../../src/shared/db/client.js";
 
 /**
- * Neon PostgreSQL に接続した Drizzle クライアントを生成する。
+ * Cloudflare D1 に接続した Drizzle クライアント（ADR-0001 / 共有ファクトリ使用）。
+ * D1 はバインディング経由（Worker の `c.env.DB`）でのみアクセスする。
  *
- * 006 ir-catalog が触るスキーマ:
- *   - ir_catalog (所有): disclosures
- *   - core       (共有・読み取り): 銘柄マスタ core.stocks の参照のみ
+ * 006 ir-catalog が触るテーブル:
+ *   - ir_disclosures（所有）/ core_*（共有・読み取り）
  *
- * @param databaseUrl - `sslmode=require` を含む Neon 接続文字列
+ * @param d1 - Worker バインディング `c.env.DB`
  */
-export function createDb(databaseUrl: string) {
-  const sql = neon(databaseUrl);
-  return drizzle(sql, { schema: { ...coreSchema, ...irSchema } });
+export function createDb(d1: D1Database) {
+  return createServiceDb(d1, irSchema);
 }
 
 export type Database = ReturnType<typeof createDb>;

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { createDb } from "../db/client.js";
 import { stocks, stockFinancials } from "../db/core-schema.js";
 import {
@@ -19,26 +19,15 @@ import { stockDetailPage, stockNotFoundPage } from "../views/stock-detail.js";
 import { riskPage } from "../views/risk.js";
 import { riskQuerySchema } from "../validators/risk.js";
 
-/** SSR ページルーター */
-export const pagesRoute = new Hono();
+/** SSR ページルーター。データは Cloudflare D1 バインディング `c.env.DB` から取得する（ADR-0001: Neon 廃止）。 */
+type Bindings = { DB: D1Database };
+export const pagesRoute = new Hono<{ Bindings: Bindings }>();
 
 // -----------------------------------------------------------------------------
 // GET / — ダッシュボード
 // -----------------------------------------------------------------------------
 pagesRoute.get("/", async (c) => {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.html(
-      dashboardPage({
-        macro: null,
-        topSectors: [],
-        counts: { totalScreened: 0, passedLong: 0, passedShort: 0, totalSignals: 0 },
-        topBreakouts: [],
-      }),
-      500
-    );
-  }
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
 
   // マクロ判定 — 最新 1 行
   const macroRows = await db.select().from(marketContext).orderBy(desc(marketContext.date)).limit(1);
@@ -66,19 +55,23 @@ pagesRoute.get("/", async (c) => {
 
   // カウント集計
   const [{ totalScreened }] = await db
-    .select({ totalScreened: sql<number>`count(*)::int` })
+    .select({ totalScreened: sql<number>`count(*)` })
     .from(stockScreening);
   const [{ passedLong }] = await db
-    .select({ passedLong: sql<number>`count(*)::int` })
+    .select({ passedLong: sql<number>`count(*)` })
     .from(stockScreening)
     .where(eq(stockScreening.allPassedLong, true));
   const [{ passedShort }] = await db
-    .select({ passedShort: sql<number>`count(*)::int` })
+    .select({ passedShort: sql<number>`count(*)` })
     .from(stockScreening)
     .where(eq(stockScreening.allPassedShort, true));
+  // entry_signals は active 銘柄分のみ集計/表示する。廃止 (is_active=false) 銘柄に
+  // 取込打ち切り等で古いシグナルが残っても UI に出さない (鮮度のない値を出さない)。
   const [{ totalSignals }] = await db
-    .select({ totalSignals: sql<number>`count(*)::int` })
-    .from(entrySignals);
+    .select({ totalSignals: sql<number>`count(*)` })
+    .from(entrySignals)
+    .innerJoin(stocks, eq(stocks.id, entrySignals.stockId))
+    .where(eq(stocks.isActive, true));
 
   // 強度上位シグナル 5 件
   const topSigRows = await db
@@ -92,6 +85,7 @@ pagesRoute.get("/", async (c) => {
     })
     .from(entrySignals)
     .innerJoin(stocks, eq(stocks.id, entrySignals.stockId))
+    .where(eq(stocks.isActive, true))
     .orderBy(desc(entrySignals.signalStrength))
     .limit(5);
   const topBreakouts = topSigRows.map((r) => ({
@@ -139,11 +133,7 @@ const screeningQuerySchema = z.object({
 
 pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c) => {
   const { direction } = c.req.valid("query");
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.html(screeningPage({ direction, rows: [], totalCount: 0 }), 500);
-  }
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
 
   const whereCondition =
     direction === "long"
@@ -214,11 +204,7 @@ const signalsQuerySchema = z.object({
 
 pagesRoute.get("/signals", zValidator("query", signalsQuerySchema), async (c) => {
   const { pattern } = c.req.valid("query");
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.html(signalsPage({ pattern, rows: [], totalCount: 0 }), 500);
-  }
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
 
   const base = db
     .select({
@@ -240,9 +226,14 @@ pagesRoute.get("/signals", zValidator("query", signalsQuerySchema), async (c) =>
 
   const rows =
     pattern === "all"
-      ? await base.orderBy(desc(entrySignals.signalStrength)).limit(200)
+      ? await base
+          .where(eq(stocks.isActive, true))
+          .orderBy(desc(entrySignals.signalStrength))
+          .limit(200)
       : await base
-          .where(eq(entrySignals.pattern, pattern))
+          .where(
+            and(eq(stocks.isActive, true), eq(entrySignals.pattern, pattern))
+          )
           .orderBy(desc(entrySignals.signalStrength))
           .limit(200);
 
@@ -274,11 +265,7 @@ const stockParamSchema = z.object({
 
 pagesRoute.get("/stock/:code", zValidator("param", stockParamSchema), async (c) => {
   const { code } = c.req.valid("param");
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.html(stockNotFoundPage(code), 500);
-  }
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
 
   const [stock] = await db.select().from(stocks).where(eq(stocks.code, code)).limit(1);
   if (!stock) {

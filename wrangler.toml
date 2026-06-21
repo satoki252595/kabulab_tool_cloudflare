@@ -3,12 +3,18 @@ main = "worker/entry.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
 
-# 配信 + 一部取込。未移行サービス(Neon)の取込はローカル CLI(pnpm sync:daily 等)。
-# 005 yuho-quant は D1 へ移行済み(ADR-0001)で、EDINET 取込は Worker の認証ルート
-# POST /yuho-quant/admin/catchup(CRON_SECRET)で実行する。Workers Cron Trigger
-# ([triggers] crons + scheduled ハンドラ)は Phase 3 で追加(現状は未配線)。
+# 配信 + プロキシ。全サービス D1 移行済み(ADR-0001)。Worker は **無料プラン**で運用する:
+#   - 配信: ポータル + 各サービス(D1 読取は c.env.DB バインディング)
+#   - 取込プロキシ: Node(GitHub Actions)からの Yahoo 取得を Cloudflare エッジ経由に
+#     する認証プロキシ(/vwap-analysis/api/ingest-fetch / /api/ingest/yahoo)。自宅/CI の
+#     IP が Yahoo に 429 されるのを回避する。
+# 日次/月次の指標・スコア計算と VWAP 取込は **GitHub Actions(Node)** で実行する
+#   (createD1HttpDb で D1 へ直接書込・Yahoo は上記プロキシ経由)。Workers Paid を
+#   使わないため Workers Cron / [limits] は使わない (subrequest 50/invocation の無料枠では
+#   Worker 上で全銘柄 sync を捌けないため)。
+# EDINET/TDnet は各サービスの認証ルート /admin/catchup を Node トリガが叩く。
+# 母集団(core_stocks)の JPX 同期は `pnpm sync:universe`(Node)。
 # 静的アセット（public/ = kabulab PWA資産 + public/vwap-analysis/ フロント）。
-# 実在ファイルは assets が、動的ルート(/、各サービス、/api/*)は Hono が処理。
 [assets]
 directory = "public"
 binding = "ASSETS"
@@ -26,5 +32,5 @@ binding = "DB"
 database_name = "kabulab-cf"
 database_id = "639c0315-0d41-4345-95ab-aec5906224ed"
 
-# DATABASE_URL は secret（`wrangler secret put DATABASE_URL`）／ローカルは .dev.vars。
-# EDINET_API_KEY / NOTION_TOKEN も Worker 取込で参照する secret（ローカルは .env）。
+# CRON_SECRET は取込プロキシ/取込ルートの認証 secret（`wrangler secret put CRON_SECRET`）。
+# EDINET_API_KEY / NOTION_TOKEN も Worker 取込ルートで参照する secret（ローカルは .env）。

@@ -1,32 +1,27 @@
-import {
-  pgTable,
-  serial,
-  text,
-  integer,
-  real,
-  timestamp,
-  date,
-  index,
-} from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { sql, relations } from "drizzle-orm";
+import { sqliteTable, integer, text, real, index } from "drizzle-orm/sqlite-core";
 import { stocks as coreStocks } from "../../../rsi-screening/src/db/core-schema.js";
 
 /**
- * 002 お宝優待 のスキーマ定義。
+ * 002 お宝優待 のスキーマ定義（Cloudflare D1 / SQLite 版） — ADR-0001。
  *
  * 銘柄マスタは core.stocks に一本化済み (2026-04)。public.stocks は廃止し、
  * ここからは core.stocks を `stocks` として再 export して UI の query を変えずに
  * 使えるようにしている。
+ *
+ * D1 は名前空間が無いため、core_stock_financials と衝突しないよう
+ * 旧 public.stock_financials / stock_scores は `otakara_` 接頭辞へ降ろす。
+ * 優待固有テーブルはそのまま yutai_genres / yutai_benefits。
  */
 
 /** 優待ジャンルマスタ */
-export const yutaiGenres = pgTable("yutai_genres", {
-  id: serial("id").primaryKey(),
+export const yutaiGenres = sqliteTable("yutai_genres", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull().unique(),
   slug: text("slug").notNull().unique(),
   description: text("description"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .default(sql`(unixepoch())`)
     .notNull(),
 });
 
@@ -39,10 +34,10 @@ export const yutaiGenres = pgTable("yutai_genres", {
 export const stocks = coreStocks;
 
 /** 優待情報 — stock_id は core.stocks(id) を参照 */
-export const yutaiBenefits = pgTable(
+export const yutaiBenefits = sqliteTable(
   "yutai_benefits",
   {
-    id: serial("id").primaryKey(),
+    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
       .references(() => coreStocks.id)
       .notNull(),
@@ -54,11 +49,11 @@ export const yutaiBenefits = pgTable(
     minShares: integer("min_shares").notNull(),
     recordMonth: integer("record_month").notNull(),
     estimatedValue: integer("estimated_value"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
       .notNull(),
   },
   (table) => [
@@ -68,10 +63,10 @@ export const yutaiBenefits = pgTable(
 );
 
 /** 株価・財務データ (1 銘柄 1 行) — stock_id は core.stocks(id) を参照 */
-export const stockFinancials = pgTable(
-  "stock_financials",
+export const stockFinancials = sqliteTable(
+  "otakara_stock_financials",
   {
-    id: serial("id").primaryKey(),
+    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
       .references(() => coreStocks.id)
       .notNull()
@@ -92,19 +87,19 @@ export const stockFinancials = pgTable(
     macd: real("macd"),
     macdSignal: real("macd_signal"),
     yutaiYield: real("yutai_yield"),
-    fetchedAt: timestamp("fetched_at", { withTimezone: true })
-      .defaultNow()
+    fetchedAt: integer("fetched_at", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
       .notNull(),
-    dataDate: date("data_date").notNull(),
+    dataDate: text("data_date").notNull(),
   },
-  (table) => [index("idx_stock_financials_stock_id").on(table.stockId)]
+  (table) => [index("idx_otakara_financials_stock_id").on(table.stockId)]
 );
 
 /** スコアリング結果 (1 銘柄 1 行) — stock_id は core.stocks(id) を参照 */
-export const stockScores = pgTable(
-  "stock_scores",
+export const stockScores = sqliteTable(
+  "otakara_stock_scores",
   {
-    id: serial("id").primaryKey(),
+    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
       .references(() => coreStocks.id)
       .notNull()
@@ -112,19 +107,18 @@ export const stockScores = pgTable(
     fundamentalScore: real("fundamental_score").notNull(),
     technicalScore: real("technical_score").notNull(),
     totalScore: real("total_score").notNull(),
-    scoredAt: timestamp("scored_at", { withTimezone: true })
-      .defaultNow()
+    scoredAt: integer("scored_at", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
       .notNull(),
   },
-  (table) => [index("idx_stock_scores_stock_id").on(table.stockId)]
+  (table) => [index("idx_otakara_scores_stock_id").on(table.stockId)]
 );
 
 // --- Relations ---
 //
 // app.ts は db.query.stocks.findFirst({ with: { benefits, financials, scores } })
 // の形で otakara 固有のリレーションを参照する。coreStocks をここで再 export した上で、
-// otakara 用のリレーション集を定義する。core-schema の stocksRelations (→
-// annualFinancials 等) とは別の Drizzle registry スペースに属する。
+// otakara 用のリレーション集を定義する。
 
 export const stocksRelations = relations(coreStocks, ({ many }) => ({
   benefits: many(yutaiBenefits),

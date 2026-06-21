@@ -75,3 +75,8 @@ services/otakara-yutai/data-scripts/data/interpreted/
 # Cloudflare Wrangler
 .wrangler/
 .dev.vars
+
+# 一度きりの cutover データダンプ (本番データ。コミットしない)
+# _cutover-data.sql (yuho/ir) / _cutover-cluster.sql (001-004) /
+# _cutover-swing-ohlcv.part*.sql (337k 行 OHLCV) など、生成物は全て除外。
+drizzle/d1/_cutover-*.sql

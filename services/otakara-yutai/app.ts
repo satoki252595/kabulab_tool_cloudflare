@@ -31,15 +31,13 @@ const BP = BASE_PATH;
 
 // ===== Types =====
 type AppEnv = {
-  Bindings: { DATABASE_URL: string };
+  Bindings: { DB: D1Database };
   Variables: { db: Database };
 };
 
 // ===== DB Middleware =====
 const dbMiddleware = createMiddleware<AppEnv>(async (c, next) => {
-  const url = c.env?.DATABASE_URL ?? process.env.DATABASE_URL;
-  if (!url) throw new Error("DATABASE_URL is not configured");
-  c.set("db", createDb(url));
+  c.set("db", createDb(c.env.DB));
   await next();
 });
 
