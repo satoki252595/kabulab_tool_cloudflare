@@ -17,7 +17,7 @@
  */
 
 import { sql, eq, and, isNotNull } from "drizzle-orm";
-import { createServiceDb } from "../shared/db/client.js";
+import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 
 import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
@@ -33,9 +33,9 @@ export interface MonthlyRebuildResult {
   elapsedSec: number;
 }
 
-/** D1 バインディング接続の Drizzle クライアント (db.batch 対応)。 */
-export function createMonthlyRebuildDb(d1: D1Database) {
-  return createServiceDb(d1, SCHEMAS);
+/** Node→D1 HTTP クライアント (取込専用)。CLOUDFLARE_* env を内部で解決する。 */
+export function createMonthlyRebuildDb() {
+  return createD1HttpDb(SCHEMAS);
 }
 
 export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
@@ -120,71 +120,69 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
     };
     const score = scoreStock(input);
 
-    // 1 銘柄=2 upsert (financials + scores) を 1 バッチで書く。
-    await db.batch([
-      db
-        .insert(otakaraSchema.stockFinancials)
-        .values({
-          stockId: s.id,
-          price: core.price,
-          per: core.per,
-          pbr: core.pbr,
-          dividendYield: core.dividendYield,
-          eps: core.eps,
-          bps: core.bps,
-          roe: core.roe,
-          roa: core.roa,
-          marketCap: core.marketCap,
-          ma5: swing?.sma5 ?? null,
-          ma25: swing?.sma25 ?? null,
-          ma75: swing?.sma75 ?? null,
-          rsi14: swing?.rsi14 ?? null,
-          macd: swing?.macd ?? null,
-          macdSignal: swing?.macdSignal ?? null,
-          yutaiYield,
-          dataDate: today,
-        })
-        .onConflictDoUpdate({
-          target: otakaraSchema.stockFinancials.stockId,
-          set: {
-            price: sql`excluded.price`,
-            per: sql`excluded.per`,
-            pbr: sql`excluded.pbr`,
-            dividendYield: sql`excluded.dividend_yield`,
-            eps: sql`excluded.eps`,
-            bps: sql`excluded.bps`,
-            roe: sql`excluded.roe`,
-            roa: sql`excluded.roa`,
-            marketCap: sql`excluded.market_cap`,
-            ma5: sql`excluded.ma_5`,
-            ma25: sql`excluded.ma_25`,
-            ma75: sql`excluded.ma_75`,
-            rsi14: sql`excluded.rsi_14`,
-            macd: sql`excluded.macd`,
-            macdSignal: sql`excluded.macd_signal`,
-            yutaiYield: sql`excluded.yutai_yield`,
-            dataDate: sql`excluded.data_date`,
-            fetchedAt: sql`(unixepoch())`,
-          },
-        }),
-      db
-        .insert(otakaraSchema.stockScores)
-        .values({
-          stockId: s.id,
-          fundamentalScore: score.fundamentalScore,
-          technicalScore: score.technicalScore,
-          totalScore: score.totalScore,
-        })
-        .onConflictDoUpdate({
-          target: otakaraSchema.stockScores.stockId,
-          set: {
-            fundamentalScore: sql`excluded.fundamental_score`,
-            technicalScore: sql`excluded.technical_score`,
-            totalScore: sql`excluded.total_score`,
-            scoredAt: sql`(unixepoch())`,
-          },
-        }),
-    ]);
+    // 1 銘柄=2 upsert を逐次実行 (createD1HttpDb は db.batch 非対応・冪等)。
+    await db
+      .insert(otakaraSchema.stockFinancials)
+      .values({
+        stockId: s.id,
+        price: core.price,
+        per: core.per,
+        pbr: core.pbr,
+        dividendYield: core.dividendYield,
+        eps: core.eps,
+        bps: core.bps,
+        roe: core.roe,
+        roa: core.roa,
+        marketCap: core.marketCap,
+        ma5: swing?.sma5 ?? null,
+        ma25: swing?.sma25 ?? null,
+        ma75: swing?.sma75 ?? null,
+        rsi14: swing?.rsi14 ?? null,
+        macd: swing?.macd ?? null,
+        macdSignal: swing?.macdSignal ?? null,
+        yutaiYield,
+        dataDate: today,
+      })
+      .onConflictDoUpdate({
+        target: otakaraSchema.stockFinancials.stockId,
+        set: {
+          price: sql`excluded.price`,
+          per: sql`excluded.per`,
+          pbr: sql`excluded.pbr`,
+          dividendYield: sql`excluded.dividend_yield`,
+          eps: sql`excluded.eps`,
+          bps: sql`excluded.bps`,
+          roe: sql`excluded.roe`,
+          roa: sql`excluded.roa`,
+          marketCap: sql`excluded.market_cap`,
+          ma5: sql`excluded.ma_5`,
+          ma25: sql`excluded.ma_25`,
+          ma75: sql`excluded.ma_75`,
+          rsi14: sql`excluded.rsi_14`,
+          macd: sql`excluded.macd`,
+          macdSignal: sql`excluded.macd_signal`,
+          yutaiYield: sql`excluded.yutai_yield`,
+          dataDate: sql`excluded.data_date`,
+          fetchedAt: sql`(unixepoch())`,
+        },
+      });
+    await db
+      .insert(otakaraSchema.stockScores)
+      .values({
+        stockId: s.id,
+        fundamentalScore: score.fundamentalScore,
+        technicalScore: score.technicalScore,
+        totalScore: score.totalScore,
+      })
+      .onConflictDoUpdate({
+        target: otakaraSchema.stockScores.stockId,
+        set: {
+          fundamentalScore: sql`excluded.fundamental_score`,
+          technicalScore: sql`excluded.technical_score`,
+          totalScore: sql`excluded.total_score`,
+          scoredAt: sql`(unixepoch())`,
+        },
+      });
 
     scoredCount++;
   }

@@ -1,47 +1,33 @@
 /**
- * 日次データ取得トリガ (CLI) — ADR-0001 Phase 3。
+ * 日次データ取得エントリポイント (Node / GitHub Actions)
  *
- * 実体の取込は Worker 上で実行する (Yahoo エッジ直叩きで 429 回避・D1 binding +
- * db.batch)。本スクリプトは認証付きルート POST /admin/sync-daily を **シャード毎に
- * 叩く薄いトリガ** で、手動実行・バックフィル用。通常運用は Workers Cron が自動発火する
- * (wrangler.toml [triggers] crons → src/cron/scheduled.ts)。
+ * core/rsi/swing が必要とする財務・指標・OHLCV を Yahoo から取得し D1 へ書き込む。
+ * Yahoo は共有クライアントが `YAHOO_PROXY_BASE`(Worker エッジ)経由で叩き、自宅/CI の
+ * IP の 429 を回避する。D1 へは `createD1HttpDb`(CLOUDFLARE_* env)。
+ * 実装本体は src/cron/daily.ts。
  *
- * 母集団 (core_stocks) が空/古い場合は先に `pnpm sync:universe` を実行すること
- * (JPX の xlsx パースは Node 専用のため Worker 取込には含まれない)。
+ * 母集団 (core_stocks) の JPX 同期は xlsx が Node 専用のため別途 `pnpm sync:universe`。
  *
  * 実行:
- *   pnpm sync:daily            # 全 4 シャードを順に叩く
- *   pnpm sync:daily --part=0   # 単一シャードのみ
+ *   pnpm sync:daily:core      # この単体
+ *   pnpm sync:daily           # all-daily.ts (これ + VWAP を束ねる)
+ *   GitHub Actions: .github/workflows/stock-sync.yml
  */
-
 import "dotenv/config";
-
-/** wrangler.toml の日次 cron 数 (= scheduled.ts の DAILY_OF) と一致させる */
-const OF = 4;
+import { createDailyDb, runDailySync } from "../../src/cron/daily.js";
 
 async function main(): Promise<void> {
-  const base = process.env.WORKER_BASE_URL;
-  const secret = process.env.CRON_SECRET;
-  if (!base) throw new Error("WORKER_BASE_URL が設定されていません (.env)");
-  if (!secret) throw new Error("CRON_SECRET が設定されていません (.env)");
+  const db = createDailyDb();
+  const result = await runDailySync(db);
 
-  const partArg = process.argv.find((a) => a.startsWith("--part="));
-  const parts = partArg
-    ? [Number(partArg.slice("--part=".length))]
-    : Array.from({ length: OF }, (_, i) => i);
-
-  for (const part of parts) {
-    const url = `${base.replace(/\/$/, "")}/admin/sync-daily?part=${part}&of=${OF}`;
-    console.info(`[sync-daily] POST ${url}`);
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${secret}` },
-    });
-    const body = await res.text();
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${body.slice(0, 500)}`);
+  if (result.failures.length > 0) {
+    console.warn("[sync-daily] 失敗銘柄:");
+    for (const f of result.failures.slice(0, 50)) {
+      console.warn(`  - ${f.code}: ${f.error}`);
     }
-    console.info(`[sync-daily] shard ${part}/${OF}:`, body);
+    if (result.failures.length > 50) {
+      console.warn(`  ... 他 ${result.failures.length - 50} 銘柄`);
+    }
   }
 }
 
