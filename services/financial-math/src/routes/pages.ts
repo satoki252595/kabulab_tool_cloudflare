@@ -19,13 +19,8 @@ import { calcLogReturns, estimateBetaOLS, calcCapmExpectedReturn } from "../serv
 import { calcMomentum } from "../services/emh.js";
 
 /** SSR ページルーター */
-export const pagesRoute = new Hono();
-
-function requireDbUrl(): string {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("DATABASE_URL is not configured");
-  return url;
-}
+type Bindings = { DB: D1Database };
+export const pagesRoute = new Hono<{ Bindings: Bindings }>();
 
 // =============================================================================
 // GET / — ホーム
@@ -49,7 +44,7 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
   const presetG = 3;
 
   if (code) {
-    const db = createDb(requireDbUrl());
+    const db = createDb(c.env.DB);
     try {
       // finmath キャッシュ (Yahoo 二次利用) で 1414 等の otakara 未登録銘柄も対応
       const ctx = await getPriceContext(db, code);
@@ -102,6 +97,7 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
 pagesRoute.get("/capm", zValidator("query", capmQuerySchema), async (c) => {
   const { code } = c.req.valid("query");
   const view = await buildCapmView({
+    db: c.env.DB,
     code,
     mode: code ? "auto" : "manual",
     // CLAUDE.md ルール1: β=1.0 等のダミー値は埋めない。null で起動し、
@@ -127,7 +123,7 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
   let presetVolPct: number | null = null;
 
   if (code) {
-    const db = createDb(requireDbUrl());
+    const db = createDb(c.env.DB);
     try {
       const [priceCtx, ohlcv] = await Promise.all([
         getPriceContext(db, code),
@@ -190,17 +186,17 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
 // 一致する (otakara の優待縛り ~1,600 ではない)。is_yutai フラグは 002 専用。
 pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   const q = c.req.valid("query");
-  const db = createDb(requireDbUrl());
+  const db = createDb(c.env.DB);
 
   // 全 active 銘柄数
   const [{ universeSize }] = await db
-    .select({ universeSize: sql<number>`count(*)::int` })
+    .select({ universeSize: sql<number>`count(*)` })
     .from(stocks)
     .where(eq(stocks.isActive, true));
 
   // 最新 OHLCV 日付 (参考表示)
   const [{ latestDate }] = await db
-    .select({ latestDate: sql<string | null>`MAX(${dailyOhlcv.date})::text` })
+    .select({ latestDate: sql<string | null>`MAX(${dailyOhlcv.date})` })
     .from(dailyOhlcv);
 
   let rows: EmhRow[] = [];
@@ -272,7 +268,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   } else if (q.type === "small-cap") {
     const thresholdYen = q.smallCapMaxOku * 1e8;
     const [{ matchedTotal }] = await db
-      .select({ matchedTotal: sql<number>`count(*)::int` })
+      .select({ matchedTotal: sql<number>`count(*)` })
       .from(stockFinancials)
       .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), eq(stocks.isActive, true)))
       .where(and(isNotNull(stockFinancials.marketCap), gt(stockFinancials.marketCap, 0), lt(stockFinancials.marketCap, thresholdYen)));
@@ -315,7 +311,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   } else if (q.type === "low-vol") {
     const threshold = q.lowVolMaxAtrPct;
     const [{ matchedTotal }] = await db
-      .select({ matchedTotal: sql<number>`count(*)::int` })
+      .select({ matchedTotal: sql<number>`count(*)` })
       .from(stockIndicators)
       .innerJoin(stocks, and(eq(stockIndicators.stockId, stocks.id), eq(stocks.isActive, true)))
       .where(and(isNotNull(stockIndicators.atrPct), gt(stockIndicators.atrPct, 0), lt(stockIndicators.atrPct, threshold)));
@@ -377,7 +373,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   } else if (q.type === "post-earnings") {
     // 簡易代理: stock_financials.fetched_at 降順 (最近更新された銘柄)
     const [{ matchedTotal }] = await db
-      .select({ matchedTotal: sql<number>`count(*)::int` })
+      .select({ matchedTotal: sql<number>`count(*)` })
       .from(stockFinancials)
       .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), eq(stocks.isActive, true)));
     totalMatched = matchedTotal;
@@ -431,6 +427,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
 // =============================================================================
 
 interface CapmViewInput {
+  db: D1Database;
   code: string | undefined;
   mode: "auto" | "manual";
   /** β。null = 未入力 (auto モード初期 or manual モード未入力)。CLAUDE.md ルール1 に従い 1.0 等のダミー値は禁止。 */
@@ -445,7 +442,7 @@ export async function buildCapmView(input: CapmViewInput): Promise<Parameters<ty
   let betaUnavailableReason: string | null = null;
 
   if (input.code) {
-    const db = createDb(requireDbUrl());
+    const db = createDb(input.db);
     try {
       // finmath キャッシュ (Yahoo 二次利用) で otakara 未登録銘柄も対応
       const priceCtx = await getPriceContext(db, input.code);

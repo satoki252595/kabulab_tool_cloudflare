@@ -13,12 +13,7 @@ import "dotenv/config";
 import { createUniverseDb, runUniverseSync } from "../../src/cron/universe.js";
 
 async function main(): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error("DATABASE_URL is not configured");
-  }
-
-  const db = createUniverseDb(databaseUrl);
+  const db = createUniverseDb();
   const result = await runUniverseSync(db);
   console.info(
     `[sync-universe] 完了: JPX=${result.jpxRows} 内国株=${result.equities} upsert=${result.upserted} 廃止=${result.delisted}`

@@ -1,25 +1,31 @@
 /**
- * 日次 sync オーケストレータ
+ * 日次 sync オーケストレータ（Node / GitHub Actions 実行・ADR-0001）
  *
- * 3 サービス (001 RSI / 002 otakara / 003 swing) すべてが必要とする日次データを
- * **1 本の統一フロー** で取得・計算・書き込む。ユーザー要件:
- *   - データ取得コマンドは日次/月次の 2 つだけ
- *   - サービス毎の sync は廃止
- *   - 重複 Yahoo 呼び出しを排除 (1 銘柄につき Chart + QuoteSummary 各 1 回)
+ * 3 サービス (001 RSI / 002 otakara / 003 swing) が必要とする日次データを 1 本の
+ * 統一フローで取得・計算・書き込む。
  *
- * フロー:
- *   Phase 0. 母集団同期: JPX 公式 XLS で core.stocks を全内国株へ upsert
- *            (旧 `pnpm sync:universe` を日次に内包。shard 分割時は shard 0 のみ)
- *   Phase 1. ブートストラップ: core.stocks からアクティブ銘柄リストを取得
- *   Phase 2. マクロコンテキスト (^N225 / ^VIX / ^GSPC / NIY=F + 日経VI) を並列取得
- *   Phase 3. worker pool (CONCURRENCY=5) で各銘柄について:
- *     - Chart(5y) + QuoteSummary を Yahoo から取得
- *     - in-memory で全指標を計算
- *     - core.stock_financials / core.stock_annual_financials 書き込み
- *     - rsi.stock_rsi_percentile 書き込み
- *     - swing.daily_ohlcv / stock_indicators / stock_screening / entry_signals 書き込み
- *   Phase 4. セクター集計 (in-memory の pct1d から 33 業種を集計)
- *   Phase 5. 廃止銘柄の is_active=false + swing.sector_daily 書き込み
+ * 実行形態（Workers Paid を使わない運用）:
+ *   - **Node で実行**（GitHub Actions / ローカル CLI）。D1 へは `createD1HttpDb`
+ *     (sqlite-proxy → D1 REST) で直接書き込む。
+ *   - Yahoo は共有クライアントが `YAHOO_PROXY_BASE`（Cloudflare エッジの
+ *     `/api/ingest/yahoo`）経由で叩くため、自宅/CI IP の 429 を回避する。
+ *   - 起動: `pnpm sync:daily:core`（scripts/sync/daily.ts）/ GitHub Actions。
+ *
+ * フロー（母集団同期 Phase 0 は除外）:
+ *   Phase 1. ブートストラップ: core_stocks のアクティブ銘柄を取得 + 既存 OHLCV の
+ *            MAX(date) を読む（増分判定用）
+ *   Phase 2. マクロコンテキスト (^N225 / ^VIX / ^GSPC / NIY=F + 日経VI)
+ *   Phase 3. worker pool で各銘柄: Chart(5y)+QuoteSummary 取得 → 全指標を計算 →
+ *            core_financials / rsi_percentile / swing_* を **増分** upsert
+ *   Phase 4. セクター集計（当日更新済 indicators から集計・90% カバレッジ guard）
+ *   Phase 5. 廃止銘柄 (Yahoo 404) の is_active=false
+ *
+ * 母集団 (core_stocks) の JPX 同期は xlsx パーサが Node 専用のため
+ * `pnpm sync:universe`（src/cron/universe.ts）で別途同期する。
+ *
+ * D1 書込コスト対策: OHLCV は「既存 MAX(date) より新しい bar のみ」を増分 upsert
+ * する。初回(空)は全 6mo backfill、以降は当日分 1〜2 行のみ。全銘柄日次の
+ * rows-written を ~52 万 → ~3 万/日 に抑え D1 無料枠 (10 万/日) 内に収める。
  *
  * CLAUDE.md のフォールバック禁止ルールに従い:
  *   - 銘柄の Yahoo 404 は is_active=false に更新 (silent 無視しない)
@@ -28,8 +34,7 @@
  */
 
 import { sql, eq, and, lt, gte, inArray } from "drizzle-orm";
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 
 // core スキーマは rsi-screening の定義を流用 (001 が所有・更新)
 import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
@@ -64,16 +69,15 @@ import {
   aggregateSectors,
   type StockChangeInput,
 } from "../shared/sector-aggregate.js";
-import { downloadJpxListing } from "../shared/jpx/sectors.js";
-import { seedUniverse, type UniverseSyncResult } from "./universe.js";
 import type { DailyOhlcv } from "../shared/types.js";
 
 // -----------------------------------------------------------------------------
 // 型定義
 // -----------------------------------------------------------------------------
 
-type Db = ReturnType<typeof drizzle<typeof SCHEMAS>>;
-const SCHEMAS = { ...coreSchema, ...rsiSchema, ...swingSchema };
+// createD1HttpDb は core_* を自動登録するので rsi/swing スキーマのみ渡す。
+const SCHEMAS = { ...rsiSchema, ...swingSchema };
+type Db = ReturnType<typeof createDailyDb>;
 
 /** 日次 sync の結果サマリ */
 export interface DailySyncResult {
@@ -82,12 +86,6 @@ export interface DailySyncResult {
   failedStocks: number;
   inactivatedStocks: number;
   marketContextOk: boolean;
-  /**
-   * Phase 0 母集団同期の結果。shard 0 / CLI で実行され成功すれば値が入る。
-   * JPX 取得失敗時は null (既存 core.stocks で続行・要 operator 確認)。
-   * shard 1.. では実行しないため null。
-   */
-  universe: UniverseSyncResult | null;
   elapsedSec: number;
   failures: { code: string; error: string }[];
 }
@@ -172,109 +170,44 @@ interface StockSnapshot {
 // 定数
 // -----------------------------------------------------------------------------
 
-/** ワーカー並列度 (Yahoo rate limit 配慮) */
+/** ワーカー並列度 (Yahoo はエッジプロキシ経由なので 429 は無いが配慮) */
 const CONCURRENCY = 5;
 /** ワーカー間隔 (ms) */
-const DELAY_MS = 200;
-/**
- * swing.daily_ohlcv の保持期間 (営業日)
- *
- * 母集団が全 JPX 内国株 (~4,000) に拡張されたため、Neon Free tier の
- * ストレージ余裕を確保すべく 120→90 に短縮 (約 -25% 行数)。
- */
+const DELAY_MS = 150;
+/** swing_daily_ohlcv の保持期間 (営業日)。増分 upsert と併せて書込/容量を抑える。 */
 const OHLCV_RETENTION_DAYS = 90;
+/** OHLCV insert の D1 bind 上限対策 (7 列なので 14 行/文) */
+const OHLCV_CHUNK = 14;
+/** sector_daily insert の bind 上限対策 (6 列なので 16 行/文) */
+const SECTOR_CHUNK = 16;
+/** inactivate IN リストの bind 上限対策 */
+const INACT_CHUNK = 80;
 
 // -----------------------------------------------------------------------------
 // エントリポイント
 // -----------------------------------------------------------------------------
 
 /**
- * Neon 接続用の Drizzle クライアントを作成する
+ * Node から D1 へ書き込む Drizzle クライアントを作成する (取込専用 HTTP)。
+ * createD1HttpDb が CLOUDFLARE_* env (型付きアクセサ) を内部で解決する。
  */
-export function createDailyDb(databaseUrl: string): Db {
-  const neonSql = neon(databaseUrl);
-  return drizzle(neonSql, { schema: SCHEMAS });
-}
-
-/**
- * 日次 sync のシャード指定。
- *
- * 母集団が ~4,000 に拡張され単一実行が Vercel cron のタイムアウト
- * (現行プラン上限 300s) を超えるため、Vercel cron 側で
- * `of` 個に分割し各 `part` を別 invocation で並列実行する。
- * `id % of = part` で銘柄を均等分割する。
- * CLI (`pnpm sync:daily`) は shard 無し = 全銘柄一括。
- */
-export interface ShardOpts {
-  /** 0-based シャード番号 (0 <= part < of) */
-  part: number;
-  /** 総シャード数 (>= 1) */
-  of: number;
+export function createDailyDb() {
+  return createD1HttpDb(SCHEMAS);
 }
 
 /**
  * 日次 sync 本体
  *
- * @param shard 指定時はその銘柄サブセットのみ処理する (Vercel cron 分割用)
+ * @param db createDailyDb() の戻り (Node→D1 HTTP)
  */
-export async function runDailySync(
-  db: Db,
-  shard?: ShardOpts
-): Promise<DailySyncResult> {
+export async function runDailySync(db: Db): Promise<DailySyncResult> {
   const startedAt = Date.now();
   const failures: { code: string; error: string }[] = [];
 
   // -----------------------------------------------------------------
-  // Phase 0: 母集団 (core.stocks) 同期
-  //
-  // 旧来は `pnpm sync:universe` を日次の前に手動実行する運用だったが、
-  // 日次フローに取り込み毎営業日 core.stocks を JPX 最新へ更新する。
-  // マクロと同様、銘柄数に依存しないグローバル処理なのでシャード分割時は
-  // shard 0 のみが実行し、JPX XLS の重複 DL (×of) と upsert 競合を避ける。
-  // (shard 1.. は Phase 1 で core.stocks を読む。vercel.json の cron は
-  //  shard を 7 分間隔で順次起動するため、shard 0 の Phase 0 (数秒) は
-  //  後続 shard の起動前に完了する。よって新規上場/廃止は当日中に全 shard へ
-  //  反映される。万一 shard を同時起動する構成にした場合は、新規上場の反映が
-  //  翌実行に遅延しうる点に注意。)
-  //
-  // CLAUDE.md ルール2: JPX 取得失敗を別値で埋めない。ラウドに警告し、結果に
-  // universe=null を残してオペレータが気づける状態にしつつ、既存 core.stocks
-  // (前営業日の母集団) で日次の主目的=価格更新を止めずに続行する。
-  // (架空データの注入ではなく「任意の更新ステップが今回 skip された」状態。)
+  // Phase 1: アクティブ銘柄取得 + 既存 OHLCV の MAX(date) (増分判定用)
   // -----------------------------------------------------------------
-  const runGlobalUniverse = !shard || shard.part === 0;
-  let universe: UniverseSyncResult | null = null;
-  if (runGlobalUniverse) {
-    console.info("[sync-daily] Phase 0: 母集団同期 (全 JPX 内国株)");
-    try {
-      const jpxRows = await downloadJpxListing();
-      universe = await seedUniverse(db, jpxRows);
-      console.info(
-        `[sync-daily]   内国株=${universe.equities} upsert=${universe.upserted} 廃止=${universe.delisted}`
-      );
-    } catch (e) {
-      console.warn(
-        "[sync-daily]   Phase 0 母集団同期 失敗 (既存 core.stocks で続行・要確認):",
-        e instanceof Error ? e.message : e
-      );
-      universe = null;
-    }
-  } else {
-    console.info("[sync-daily] Phase 0: 母集団同期スキップ (shard 0 が担当)");
-  }
-
-  console.info(
-    `[sync-daily] Phase 1: ブートストラップ${
-      shard ? ` (shard ${shard.part}/${shard.of})` : ""
-    }`
-  );
-  const activeCond = eq(coreSchema.stocks.isActive, true);
-  const whereCond = shard
-    ? and(
-        activeCond,
-        sql`${coreSchema.stocks.id} % ${shard.of} = ${shard.part}`
-      )
-    : activeCond;
+  console.info("[sync-daily] Phase 1: ブートストラップ");
   const targets = await db
     .select({
       id: coreSchema.stocks.id,
@@ -282,41 +215,38 @@ export async function runDailySync(
       sector: coreSchema.stocks.sector,
     })
     .from(coreSchema.stocks)
-    .where(whereCond);
+    .where(eq(coreSchema.stocks.isActive, true));
   console.info(`[sync-daily]   対象: ${targets.length} 銘柄`);
 
+  // 各銘柄の既存 MAX(date) を 1 クエリで取得 (bind 不要)。null/未登録は初回 backfill。
+  const maxDateRows = await db
+    .select({
+      stockId: swingSchema.dailyOhlcv.stockId,
+      maxDate: sql<string>`MAX(${swingSchema.dailyOhlcv.date})`,
+    })
+    .from(swingSchema.dailyOhlcv)
+    .groupBy(swingSchema.dailyOhlcv.stockId);
+  const maxDateByStock = new Map<number, string>(
+    maxDateRows.map((r) => [r.stockId, r.maxDate])
+  );
+
   // -----------------------------------------------------------------
-  // Phase 2: マクロコンテキスト (並列)
-  //
-  // マクロ指数は銘柄数に依存しないグローバル処理。シャード分割時は
-  // shard 0 のみが実行し、Yahoo への重複呼び出し (×of) を避ける。
+  // Phase 2: マクロコンテキスト
   // -----------------------------------------------------------------
-  const runGlobalMacro = !shard || shard.part === 0;
-  let marketContextOk: boolean;
-  if (runGlobalMacro) {
-    console.info("[sync-daily] Phase 2: マクロコンテキスト取得");
-    marketContextOk = await syncMarketContext(db).then(
-      () => true,
-      (e) => {
-        console.warn(
-          "[sync-daily]   マクロ取得部分失敗:",
-          e instanceof Error ? e.message : e
-        );
-        return false;
-      }
-    );
-  } else {
-    console.info("[sync-daily] Phase 2: マクロ取得スキップ (shard 0 が担当)");
-    marketContextOk = false;
-  }
+  console.info("[sync-daily] Phase 2: マクロコンテキスト取得");
+  const marketContextOk = await syncMarketContext(db).then(
+    () => true,
+    (e) => {
+      console.warn(
+        "[sync-daily]   マクロ取得部分失敗:",
+        e instanceof Error ? e.message : e
+      );
+      return false;
+    }
+  );
 
   // -----------------------------------------------------------------
   // Phase 3: 銘柄ごとのフェッチ + 計算 + DB 書き込み (worker pool)
-  //
-  // 旧 swing-trading/sync.ts と同じパターン: 1 銘柄の fetch→write を
-  // 1 ワーカー内で完結させ、CONCURRENCY=5 ワーカーで並列動作させる。
-  // 書き込みまで同一ワーカーで行うことで、1580 銘柄 × ~8 DB roundtrips の
-  // 並列化が効き Yahoo rate limit にも掛からない。
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 3: 銘柄フェッチ + 計算 + 書き込み");
   const queue = [...targets];
@@ -329,7 +259,7 @@ export async function runDailySync(
       if (!target) break;
       try {
         const snap = await buildSnapshot(target.id, target.code, target.sector);
-        await writeStockSnapshot(db, snap);
+        await writeStockSnapshot(db, snap, maxDateByStock.get(target.id));
         succeeded++;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -348,98 +278,80 @@ export async function runDailySync(
 
   // -----------------------------------------------------------------
   // Phase 5: クリーンアップ (廃止銘柄)
-  //
-  // 404 廃止はこのシャードが処理した銘柄のみが対象なので shard 毎に実行。
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 5: クリーンアップ");
-
-  if (inactivated.length > 0) {
+  for (let i = 0; i < inactivated.length; i += INACT_CHUNK) {
     await db
       .update(coreSchema.stocks)
       .set({ isActive: false, updatedAt: new Date() })
-      .where(inArray(coreSchema.stocks.id, inactivated));
+      .where(
+        inArray(coreSchema.stocks.id, inactivated.slice(i, i + INACT_CHUNK))
+      );
   }
 
   // -----------------------------------------------------------------
-  // Phase 4: セクター集計 (DB ベース)
-  //
-  // セクター集計は全銘柄の pct1d が必要なため、シャード分割時は最終シャード
-  // (part === of-1) のみが実行し、swing.stock_indicators (全シャードが書き
-  // 終えた最新値) を core.stocks と join して集計する。in-memory 集計では
-  // シャード単体の部分集合しか持てず誤った sector_daily になるため DB から
-  // 読み直す。
+  // Phase 4: セクター集計 (当日更新済 indicators から・90% カバレッジ guard)
   // -----------------------------------------------------------------
-  const runSectorAgg = !shard || shard.part === shard.of - 1;
-  if (runSectorAgg) {
-    console.info("[sync-daily] Phase 4: セクター集計 (DB ベース)");
+  console.info("[sync-daily] Phase 4: セクター集計");
+  const [{ activeCount }] = await db
+    .select({ activeCount: sql<number>`count(*)` })
+    .from(coreSchema.stocks)
+    .where(eq(coreSchema.stocks.isActive, true));
 
-    // シャード分割時、最終 shard 実行時点で先行 shard がまだ書き込み中の
-    // 可能性がある。**今日更新された** stock_indicators だけを集計対象にし
-    // (computed_at >= CURRENT_DATE)、カバレッジが著しく低い場合は古い
-    // sector_daily を不完全な集計で上書きせず警告で止める (CLAUDE.md ルール2:
-    // 黙って誤った値を出さない / オペレータ通知)。
-    const [{ activeCount }] = await db
-      .select({ activeCount: sql<number>`count(*)::int` })
-      .from(coreSchema.stocks)
-      .where(eq(coreSchema.stocks.isActive, true));
-
-    const indicatorRows = await db
-      .select({
-        sector: coreSchema.stocks.sector,
-        pct1d: swingSchema.stockIndicators.pctChange1d,
-      })
-      .from(coreSchema.stocks)
-      .innerJoin(
-        swingSchema.stockIndicators,
-        eq(swingSchema.stockIndicators.stockId, coreSchema.stocks.id)
+  const indicatorRows = await db
+    .select({
+      sector: coreSchema.stocks.sector,
+      pct1d: swingSchema.stockIndicators.pctChange1d,
+    })
+    .from(coreSchema.stocks)
+    .innerJoin(
+      swingSchema.stockIndicators,
+      eq(swingSchema.stockIndicators.stockId, coreSchema.stocks.id)
+    )
+    .where(
+      and(
+        eq(coreSchema.stocks.isActive, true),
+        // D1/SQLite: computed_at は epoch 秒。本日(UTC)0 時の epoch と比較。
+        gte(
+          swingSchema.stockIndicators.computedAt,
+          sql`unixepoch('now','start of day')`
+        )
       )
-      .where(
-        and(
-          eq(coreSchema.stocks.isActive, true),
-          gte(swingSchema.stockIndicators.computedAt, sql`CURRENT_DATE`)
-        )
-      );
-
-    const coverage =
-      activeCount > 0 ? indicatorRows.length / activeCount : 0;
-    if (coverage < 0.9) {
-      console.warn(
-        `[sync-daily]   セクター集計スキップ: 本日更新 ${indicatorRows.length}/${activeCount} ` +
-          `(${(coverage * 100).toFixed(1)}%) が閾値 90% 未満。先行 shard 未完か大量失敗の` +
-          `可能性。sector_daily は前回値を保持します。`
-      );
-    } else {
-      const sectorAggs = aggregateSectors(
-        indicatorRows.map(
-          (r): StockChangeInput => ({
-            sector: r.sector,
-            pct1d: r.pct1d,
-            pct5d: null,
-          })
-        )
-      );
-
-      const today = new Date().toISOString().split("T")[0];
-      await db
-        .delete(swingSchema.sectorDaily)
-        .where(eq(swingSchema.sectorDaily.date, today));
-      if (sectorAggs.length > 0) {
-        await db.insert(swingSchema.sectorDaily).values(
-          sectorAggs.map((a) => ({
-            date: today,
-            sector: a.sector,
-            pct1d: a.pct1d,
-            pct5d: a.pct5d,
-            stockCount: a.stockCount,
-            rank1d: a.rank1d,
-          }))
-        );
-      }
-    }
-  } else {
-    console.info(
-      "[sync-daily] Phase 4: セクター集計スキップ (最終 shard が担当)"
     );
+
+  const coverage = activeCount > 0 ? indicatorRows.length / activeCount : 0;
+  if (coverage < 0.9) {
+    console.warn(
+      `[sync-daily]   セクター集計スキップ: 本日更新 ${indicatorRows.length}/${activeCount} ` +
+        `(${(coverage * 100).toFixed(1)}%) が閾値 90% 未満 (大量失敗の可能性)。` +
+        `sector_daily は前回値を保持します。`
+    );
+  } else {
+    const sectorAggs = aggregateSectors(
+      indicatorRows.map(
+        (r): StockChangeInput => ({
+          sector: r.sector,
+          pct1d: r.pct1d,
+          pct5d: null,
+        })
+      )
+    );
+    const today = new Date().toISOString().split("T")[0];
+    await db
+      .delete(swingSchema.sectorDaily)
+      .where(eq(swingSchema.sectorDaily.date, today));
+    for (let i = 0; i < sectorAggs.length; i += SECTOR_CHUNK) {
+      await db.insert(swingSchema.sectorDaily).values(
+        sectorAggs.slice(i, i + SECTOR_CHUNK).map((a) => ({
+          date: today,
+          sector: a.sector,
+          pct1d: a.pct1d,
+          pct5d: a.pct5d,
+          stockCount: a.stockCount,
+          rank1d: a.rank1d,
+        }))
+      );
+    }
   }
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
@@ -453,14 +365,13 @@ export async function runDailySync(
     failedStocks: failures.length,
     inactivatedStocks: inactivated.length,
     marketContextOk,
-    universe,
     elapsedSec,
     failures,
   };
 }
 
 // -----------------------------------------------------------------------------
-// 銘柄ごとの snapshot 構築
+// 銘柄ごとの snapshot 構築 (純計算)
 // -----------------------------------------------------------------------------
 
 async function buildSnapshot(
@@ -480,7 +391,6 @@ async function buildSnapshot(
   const blueChip = evaluateBlueChip(raw.annualFinancials, raw.operatingMarginTtm);
 
   // -- 6mo スライス → swing 用指標 --
-  //    5y の末尾 ~130 営業日を取る (6mo 相当)
   const ohlcv6mo = raw.ohlcv.slice(-130);
   const closes6mo = ohlcv6mo.map((r) => r.close);
 
@@ -588,11 +498,18 @@ async function buildSnapshot(
 }
 
 // -----------------------------------------------------------------------------
-// 銘柄ごとの DB 書き込み
+// 銘柄ごとの DB 書き込み (Node→D1 HTTP・逐次・増分 OHLCV)
+//
+// createD1HttpDb (sqlite-proxy) は db.batch/トランザクション非対応のため逐次 await。
+// 各 upsert は冪等なので途中失敗しても次回実行が回収する。
 // -----------------------------------------------------------------------------
 
-async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
-  // --- core.stock_annual_financials ---
+async function writeStockSnapshot(
+  db: Db,
+  snap: StockSnapshot,
+  existingMaxDate: string | undefined
+): Promise<void> {
+  // --- core_stock_annual_financials ---
   if (snap.annualFinancials.length > 0) {
     await db
       .insert(coreSchema.stockAnnualFinancials)
@@ -612,7 +529,7 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
       });
   }
 
-  // --- core.stock_financials ---
+  // --- core_stock_financials ---
   await db
     .insert(coreSchema.stockFinancials)
     .values({
@@ -643,11 +560,11 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
         marketCap: sql`excluded.market_cap`,
         operatingMargin: sql`excluded.operating_margin`,
         dataDate: sql`excluded.data_date`,
-        fetchedAt: sql`now()`,
+        fetchedAt: sql`(unixepoch())`,
       },
     });
 
-  // --- rsi.stock_rsi_percentile ---
+  // --- rsi_percentile ---
   await db
     .insert(rsiSchema.stockRsiPercentile)
     .values({
@@ -676,25 +593,28 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
         isBlueChip: sql`excluded.is_blue_chip`,
         operatingMarginTtm: sql`excluded.operating_margin_ttm`,
         revenueTrend: sql`excluded.revenue_trend`,
-        computedAt: sql`now()`,
+        computedAt: sql`(unixepoch())`,
       },
     });
 
-  // --- swing.daily_ohlcv ---
-  //    全 6mo を毎回 upsert する (旧 sync の挙動そのまま)
-  const ohlcvRows = snap.ohlcv6mo.map((r) => ({
-    stockId: snap.stockId,
-    date: r.date,
-    open: r.open,
-    high: r.high,
-    low: r.low,
-    close: r.close,
-    volume: r.volume,
-  }));
-  if (ohlcvRows.length > 0) {
+  // --- swing_daily_ohlcv (増分: 既存 MAX(date) より新しい bar のみ) ---
+  const newOhlcv = existingMaxDate
+    ? snap.ohlcv6mo.filter((r) => r.date > existingMaxDate)
+    : snap.ohlcv6mo;
+  for (let i = 0; i < newOhlcv.length; i += OHLCV_CHUNK) {
     await db
       .insert(swingSchema.dailyOhlcv)
-      .values(ohlcvRows)
+      .values(
+        newOhlcv.slice(i, i + OHLCV_CHUNK).map((r) => ({
+          stockId: snap.stockId,
+          date: r.date,
+          open: r.open,
+          high: r.high,
+          low: r.low,
+          close: r.close,
+          volume: r.volume,
+        }))
+      )
       .onConflictDoUpdate({
         target: [swingSchema.dailyOhlcv.stockId, swingSchema.dailyOhlcv.date],
         set: {
@@ -705,7 +625,9 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
           volume: sql`excluded.volume`,
         },
       });
-    // 古いレコード削除 (OHLCV_RETENTION_DAYS より前)
+  }
+  // 保持期間より古い行を削除
+  if (snap.ohlcv6mo.length > 0) {
     const cutoffDate =
       snap.ohlcv6mo[Math.max(0, snap.ohlcv6mo.length - OHLCV_RETENTION_DAYS)]
         .date;
@@ -719,7 +641,7 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
       );
   }
 
-  // --- swing.stock_indicators ---
+  // --- swing_stock_indicators ---
   await db
     .insert(swingSchema.stockIndicators)
     .values({
@@ -788,11 +710,11 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
         latestVolume: sql`excluded.latest_volume`,
         latestDate: sql`excluded.latest_date`,
         pctChange1d: sql`excluded.pct_change_1d`,
-        computedAt: sql`now()`,
+        computedAt: sql`(unixepoch())`,
       },
     });
 
-  // --- swing.stock_screening ---
+  // --- swing_stock_screening ---
   const screen = screenStock({
     avgTurnover20d: snap.avgTurnover20d,
     volumeRatio: snap.volumeRatio,
@@ -821,11 +743,16 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
         trendOkShort: sql`excluded.trend_ok_short`,
         allPassedLong: sql`excluded.all_passed_long`,
         allPassedShort: sql`excluded.all_passed_short`,
-        computedAt: sql`now()`,
+        computedAt: sql`(unixepoch())`,
       },
     });
 
-  // --- swing.entry_signals ---
+  // --- swing_entry_signals ---
+  // 既存シグナルは無条件にクリア (latestClose が null でも古い entry/stop を残さない
+  // — CLAUDE.md rule2)。算出できた時だけ再挿入する。
+  await db
+    .delete(swingSchema.entrySignals)
+    .where(eq(swingSchema.entrySignals.stockId, snap.stockId));
   if (snap.latestClose !== null) {
     const prevOhlcv =
       snap.ohlcv6mo.length >= 2 ? snap.ohlcv6mo[snap.ohlcv6mo.length - 2] : null;
@@ -855,10 +782,6 @@ async function writeStockSnapshot(db: Db, snap: StockSnapshot): Promise<void> {
       pctChange1d: snap.pctChange1d,
     };
     const signals = detectAllPatterns(signalSnap, prevOhlcv ? [prevOhlcv] : []);
-
-    await db
-      .delete(swingSchema.entrySignals)
-      .where(eq(swingSchema.entrySignals.stockId, snap.stockId));
     if (signals.length > 0) {
       await db.insert(swingSchema.entrySignals).values(
         signals.map((s) => ({
@@ -969,7 +892,7 @@ async function syncMarketContext(db: Db): Promise<void> {
         sp500Pct: sql`excluded.sp500_pct`,
         judgment: sql`excluded.judgment`,
         judgmentReason: sql`excluded.judgment_reason`,
-        computedAt: sql`now()`,
+        computedAt: sql`(unixepoch())`,
       },
     });
 }

@@ -5,16 +5,12 @@ import { screenStocks } from "../services/screening-service.js";
 import { createDb } from "../db/client.js";
 
 /** スクリーニングAPIルーター */
-export const screeningRoute = new Hono();
+type Bindings = { DB: D1Database };
+export const screeningRoute = new Hono<{ Bindings: Bindings }>();
 
 screeningRoute.get("/", zValidator("query", screeningQuerySchema), async (c) => {
   const query = c.req.valid("query");
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    return c.json({ error: "DATABASE_URL is not configured" }, 500);
-  }
-
-  const db = createDb(databaseUrl);
+  const db = createDb(c.env.DB);
   const results = await screenStocks(db, query);
 
   return c.json({

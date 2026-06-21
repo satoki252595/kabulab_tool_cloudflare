@@ -4,10 +4,10 @@
  * ヒット 0 件は「該当なし」を呼び出し側で正直に表示する (架空候補を作らない
  * — ルール1)。期間指定が無い場合の既定は直近 24 か月。
  */
-import { and, desc, eq, gte, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, like, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { disclosures } from "../db/schema.js";
-import { stocks } from "../../../rsi-screening/src/db/core-schema.js";
+import { stocks } from "../../../../src/shared/db/core-schema.js";
 import { rowSentiments } from "./sentiment.js";
 
 export interface StockHit {
@@ -31,12 +31,13 @@ export async function searchStocks(
       code: stocks.code,
       name: stocks.name,
       market: stocks.market,
-      disclosureCount: sql<number>`count(${disclosures.id})::int`,
-      latestPubdate: sql<string | null>`max(${disclosures.pubdate})`,
+      disclosureCount: sql<number>`count(${disclosures.id})`,
+      // pubdate は epoch 秒 integer。max() は epoch 秒(number)を返す。
+      latestPubdate: sql<number | null>`max(${disclosures.pubdate})`,
     })
     .from(stocks)
     .innerJoin(disclosures, eq(disclosures.stockId, stocks.id))
-    .where(or(ilike(stocks.code, `${term}%`), ilike(stocks.name, `%${term}%`)))
+    .where(or(like(stocks.code, `${term}%`), like(stocks.name, `%${term}%`)))
     .groupBy(stocks.id, stocks.code, stocks.name, stocks.market)
     .orderBy(desc(sql`max(${disclosures.pubdate})`))
     .limit(limit);
@@ -45,9 +46,10 @@ export async function searchStocks(
     name: r.name,
     market: r.market,
     disclosureCount: r.disclosureCount,
-    latestPubdate: r.latestPubdate
-      ? new Date(r.latestPubdate).toISOString()
-      : null,
+    latestPubdate:
+      r.latestPubdate != null
+        ? new Date(Number(r.latestPubdate) * 1000).toISOString()
+        : null,
   }));
 }
 
@@ -147,7 +149,7 @@ export async function getStockTimeline(
     .orderBy(desc(disclosures.pubdate));
 
   const totalRow = await db
-    .select({ n: sql<number>`count(*)::int` })
+    .select({ n: sql<number>`count(*)` })
     .from(disclosures)
     .where(eq(disclosures.stockId, stock.id));
 

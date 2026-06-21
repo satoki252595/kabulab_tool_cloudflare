@@ -26,6 +26,7 @@ import {
 import vwapAnalysisApp, {
   BASE_PATH as VWAP_BASE_PATH,
 } from "../services/vwap-analysis/app.js";
+import { ingestProxyRoute } from "./routes/ingest-proxy.js";
 import { DESIGN_TOKENS, BASE_RESET, FONT_LINKS } from "./shared/design.js";
 
 /**
@@ -284,8 +285,8 @@ ${HEADER}
 
   <div class="about">
     <p><strong>kabulab について</strong></p>
-    <p>kabulab は日本株投資を支援するツール群の統合ブランドです。各サービスは独立して動作しますが、共通の Neon PostgreSQL データベースを使い、銘柄マスタ・株価・財務データを共有しています。</p>
-    <p>すべてのサービスは Hono + TypeScript + Drizzle ORM で構築され、Vercel Serverless Functions 上で稼働しています。</p>
+    <p>kabulab は日本株投資を支援するツール群の統合ブランドです。各サービスは独立して動作しますが、共通の Cloudflare D1 データベースを使い、銘柄マスタ・株価・財務データを共有しています。</p>
+    <p>すべてのサービスは Hono + TypeScript + Drizzle ORM で構築され、Cloudflare Workers 上で稼働しています。</p>
   </div>
 </div>
 ${FOOTER}
@@ -308,5 +309,9 @@ app.route(YQ_BASE_PATH, yuhoQuantApp);
 app.route(IRC_BASE_PATH, irCatalogApp);
 // 007 VWAP Analysis — /vwap-analysis/* 配下
 app.route(VWAP_BASE_PATH, vwapAnalysisApp);
+
+// 取込プロキシ — Node(GitHub Actions)からの Yahoo 取得をエッジ経由にする認証ルート
+// (/api/ingest/yahoo, CRON_SECRET)。Workers Paid を使わない取込運用の要。
+app.route("/api/ingest", ingestProxyRoute);
 
 export default app;

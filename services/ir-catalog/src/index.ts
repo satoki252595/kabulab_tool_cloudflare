@@ -11,6 +11,9 @@ import { pagesRoute } from "./routes/pages.js";
  */
 export const app = new Hono({ strict: false });
 
+// 注: ir-catalog の取込(catchup)は PDF センチメントが kuromoji(Node 専用 fs 依存)
+// のため Worker 上で動かせない。取込は Node 実行で D1 HTTP API へ書く(別タスク)。
+// Worker は読取(SSR/JSON, c.env.DB)のみを担う。
 app.route("/", pagesRoute);
 
 app.onError(errorHandler);

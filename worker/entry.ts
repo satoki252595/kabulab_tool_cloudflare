@@ -1,11 +1,11 @@
-// Cloudflare Worker エントリ。
-// Hono の root app をそのまま Worker の fetch ハンドラとして公開する。
-// データストア参照(ADR-0001 で移行中):
-//   - 005 yuho-quant: D1(c.env.DB バインディング) ← Neon から移行済み
-//   - 未移行サービス: Neon(c.env.DATABASE_URL / 各サービスの dbMiddleware)
-//   - 時系列(VWAP 等): R2(c.env.BUCKET)
-// 取得・加工は原則ローカル CLI(scripts/sync/*)。ただし D1 はバインディング経由のみ
-// のため yuho の EDINET 取込は Worker 上(認証ルート /yuho-quant/admin/catchup)で実行する。
+// Cloudflare Worker エントリ。Hono root app をそのまま fetch ハンドラとして公開する。
+//
+// データストア: D1(c.env.DB バインディング) / R2(c.env.BUCKET) / 一次データは Notion。
+// 取込(日次/月次の指標計算 + VWAP)は **GitHub Actions(Node)** で実行し、Worker は
+//   - サイト配信(D1 読取)
+//   - Yahoo/VWAP 取込プロキシ(エッジ経由で 429 回避)
+//   - 005/006 の認証取込ルート /admin/catchup
+// のみを担う。Workers Paid を使わないため Workers Cron(scheduled)は配線しない。
 import app from "../src/index.js";
 
 export default app;

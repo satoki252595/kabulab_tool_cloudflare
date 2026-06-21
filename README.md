@@ -97,26 +97,22 @@ pnpm lint
 # デプロイ (詳細は下記「デプロイ」節)
 pnpm deploy:cf            # 本番を手動デプロイ (= wrangler deploy)
 
-# DB スキーマ管理
+# DB スキーマ管理 (D1)
 pnpm db:generate:d1       # D1(SQLite) スキーマ生成 → drizzle/d1/*.sql (適用は wrangler d1 execute)
-pnpm db:push:rsi          # 001 (Neon: core / rsi スキーマ)
-pnpm db:push:otakara      # 002 (Neon: public スキーマ)
-pnpm db:push:swing        # 003 (Neon: core / swing スキーマ)
-pnpm db:push:finmath      # 004 (Neon: finmath スキーマ)
-pnpm db:push:ircat        # 006 (Neon: ir_catalog スキーマ)
+# 注: db:push:rsi / :otakara / :swing / :finmath / :ircat は旧 Neon(pg) 用で D1 移行後は obsolete
 
-# データ取得 (Neon 系 / 全サービス統一の Yahoo パイプライン)
-pnpm sync:daily           # 平日: JPX 母集団同期 → 全 active ~4,000 の OHLCV + ファンダ + 指標 + screening + patterns + sector + マクロ
-pnpm sync:monthly         # 月初: 母集団同期 + 優待 (is_yutai) スコアリング再計算 (Yahoo 呼び出しなし)
-pnpm sync:universe        # (通常不要) JPX 母集団のみ明示 seed
+# データ取得 (日次/月次 stock sync。本体は Worker Cron が自動実行 — 下記「運用ステータス」)
+pnpm sync:daily           # 手動フル日次トリガ (Worker /admin/sync-daily を叩く + VWAP も束ねる)
+pnpm sync:monthly         # 手動 月次 otakara rebuild トリガ (Worker /admin/sync-monthly)
+pnpm sync:universe        # JPX 母集団 seed (xlsx=Node 専用・上場/廃止時に実行)
 
-# データ取得 (007 VWAP → R2)
+# データ取得 (007 VWAP → R2。cron 対象外=手動/CI)
 pnpm ingest:vwap-daily    # 全銘柄の日足10年 (未取得はバックフィル, 既存は差分) → R2 daily/{code}.json
 pnpm ingest:vwap-intra    # 全銘柄の5分足 (直近) を蓄積 → R2 intra/{code}.json
 pnpm ingest:vwap-margin   # JPX 週次PDF (信用残高) → R2 margin/{week}.json
 
-# データ取得 (006 TDnet → Neon)
-pnpm ingest:ir-tdnet      # TDnet 適時開示キャッチアップ
+# データ取得 (006 TDnet → D1。Worker 取込ルートを叩く)
+pnpm ingest:ir-tdnet      # /ir-catalog/admin/catchup を CRON_SECRET 認証で POST
 
 # データ取得 (005 EDINET → D1。Worker 取込ルートを叩く)
 pnpm ingest:yuho-edinet   # WORKER_BASE_URL の /yuho-quant/admin/catchup を CRON_SECRET 認証で POST
@@ -124,6 +120,64 @@ pnpm ingest:yuho-edinet   # WORKER_BASE_URL の /yuho-quant/admin/catchup を CR
 
 > **母集団**: 全 JPX 上場内国株 ~4,000 銘柄。002 otakara は `is_yutai=true` の優待銘柄のみを対象とする。
 > Yahoo Finance はレート制限 (429) が厳しいため、VWAP の大量取得は低負荷 (逐次 + ディレイ) で行う。
+
+## 運用ステータス（自動化・手作業・残タスク）
+
+ADR-0001 で **Neon を全廃し Cloudflare D1 + R2 + Notion へ移行済み**。データ・読取・取込の現況:
+
+### データ格納状況（直近営業日まで投入済み）
+
+| データ | 保存先 | 規模 | 鮮度 |
+|---|---|---|---|
+| 日次 OHLCV + 財務 + RSI + swing 指標 | D1 | ~3,754 銘柄 | 直近営業日 |
+| お宝優待 財務/スコア (`otakara_*`) | D1 | ~1,605 銘柄 | 月次 |
+| 有報受注 (`yuho_*`) / 適時開示 (`ir_disclosures`) | D1 | 移行済み | 取込次第 |
+| 日足10年 (007 VWAP) | R2 `daily/{code}.json` | 4,444 銘柄 | 直近 |
+| **5分足** (007 VWAP) | R2 `intra/{code}.json` | 4,243 銘柄 | 直近 |
+| 信用残高 (週次) | R2 `margin/{week}.json` | 週次 | 直近週 |
+| 一次データ (raw) | Notion | サービス別 | 取込次第 |
+
+### 自動化（GitHub Actions・**Workers Paid 不要**）
+
+取込はすべて GitHub Actions(Node)で定期実行する。Yahoo は共有クライアントが
+`YAHOO_PROXY_BASE`(Cloudflare エッジの `/api/ingest/yahoo` / VWAP は
+`/vwap-analysis/api/ingest-fetch`)経由で叩くため、ランナー IP の 429 を回避する。
+D1 へは `createD1HttpDb`(D1 REST)で書き込む。
+
+| ワークフロー | 内容 | スケジュール (UTC) |
+|---|---|---|
+| `.github/workflows/stock-sync.yml` | 日次=core/rsi/swing 取得+指標+**増分 OHLCV** / 月次=母集団(JPX)同期 + otakara rebuild | 平日 21:00 / 1 日 22:30 |
+| `.github/workflows/vwap-ingest.yml` | 日足10年 + **5分足** → R2 / 信用残高(週次) | 平日 08:00 / 土 09:00 |
+
+Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキシ + 005/006 の
+`/admin/catchup` のみを担う(Workers Cron は使わない)。schedule は **main にマージ後**に
+有効化される(GitHub Actions の schedule は default ブランチのみ)。
+
+> 💡 GH Actions 無料枠(private 2,000 min/月)目安: 日次 stock(~40-50分) + VWAP(~30-40分)
+> ×平日 ≈ 月 1,700-1,900 分。枠に近い場合は stock-sync を Mon/Wed/Fri 等へ間引く。
+
+### 手作業のまま（任意・低頻度）
+
+| 処理 | コマンド | 備考 |
+|---|---|---|
+| 適時開示 (006) | `pnpm ingest:ir-tdnet` | Worker `/ir-catalog/admin/catchup` を叩く。GH Actions 化も容易 |
+| 有報 (005) | `pnpm ingest:yuho-edinet` | Worker `/yuho-quant/admin/catchup` を叩く。同上 |
+| 優待スクレイプ+LLM解釈 (002) | data-scripts 4 step（後述） | step3 はローカル OSS LLM のため自動化対象外 |
+
+> `pnpm sync:daily`(= `all-daily.ts`)はローカル手動フル実行用(stock + VWAP を束ねる)。
+> 通常は GitHub Actions に任せてよい。
+
+### 残タスク
+
+1. **【要対応】GitHub Secrets 追加 + main マージで全自動化を有効化**
+   - GH Secrets(Settings → Secrets and variables → Actions・`.env` と同値): `CLOUDFLARE_API_TOKEN` /
+     `CLOUDFLARE_ACCOUNT_ID` / `D1_DATABASE_ID` / `YAHOO_PROXY_BASE` / `CRON_SECRET` / `R2_*` /
+     `NOTION_TOKEN` / `NOTION_BACKUP_PAGE_ID` / `NOTION_TRASH_PAGE_ID`。
+   - **PR #1（`feat/d1-r2-migration`）を `main` にマージ** → Workers Builds が Worker を自動
+     デプロイ(無料) + GitHub Actions の schedule が有効化。
+   - 本番ページが D1 から読める + Actions が成功するのを確認 → **Neon 解約**。
+2. **EDINET / TDnet / 優待スクレイプの GitHub Actions 化**（任意）。
+3. **legacy 掃除**（一部完了・残り非ブロッキング）… ✅ 旧 Neon DB スクリプト `scripts/db/*.mjs` 削除済み。残: `db:push:*` / `drizzle.<svc>.config.ts`(pg・obsolete)、`scripts/full-validation*.mjs` / `get-jpx-listing.mjs`(Neon 依存 dev one-off)、`services/otakara-yutai/src/index.ts`(dead code)。Neon 解約後に削除でよい。
 
 ## デプロイ
 
@@ -145,9 +199,12 @@ npx wrangler tail                # 本番ログをストリーム
 3. **シークレットは Cloudflare が正のソース** — `wrangler secret put DATABASE_URL` 等で設定する
    (`.env` はローカル開発/取込専用で、本番 Worker には読まれない)。Worker は `nodejs_compat` 有効で
    secret を `process.env` 経由でも参照する。
-4. **cron は Worker に未配置** — 取込は原則ローカル CLI。005 EDINET 取込のみ Worker の認証ルート
-   `POST /yuho-quant/admin/catchup` で実行する (D1 がバインディング経由のみのため)。定期自動化は
-   ローカル launchd/cron か、将来の Workers Cron Trigger 配線 (ADR-0001 Phase 3) で行う。
+4. **Workers Cron は不使用（Workers Paid 不要）** — 取込(日次/月次 stock + VWAP)は
+   GitHub Actions(Node)で実行する。`wrangler.toml` に `[triggers]`/`[limits]` は無い。Worker は
+   サイト配信 + 取込プロキシ(`/api/ingest/yahoo`, `/vwap-analysis/api/ingest-fetch`)+ 005/006 の
+   `/admin/catchup` のみ。
+5. **push→自動デプロイ** — Cloudflare Workers Builds (Git 連携) を接続済み。`main` への push で
+   **無料プランのまま**自動 build & deploy。手順は [docs/deploy-cloudflare.md](./docs/deploy-cloudflare.md)。
 
 ## 環境変数
 
@@ -155,7 +212,7 @@ npx wrangler tail                # 本番ログをストリーム
 Secret が正のソース。
 
 ```
-DATABASE_URL=postgresql://user:password@host/database?sslmode=require  # Neon (未移行サービス)
+DATABASE_URL=postgresql://user:password@host/database?sslmode=require  # 旧 Neon (cutover 移行ツール専用・本番未使用。解約後は不要)
 CRON_SECRET=your-cron-secret-here                                      # 取込ルート/cron 認証
 EDINET_API_KEY=your-edinet-subscription-key-here                       # 005 yuho-quant
 NOTION_TOKEN=ntn_xxx                                                   # 一次データ Notion アーカイブ (ルール6)
@@ -171,43 +228,42 @@ WORKER_BASE_URL=https://kabulab-cf.<subdomain>.workers.dev             # 005 取
 > R2 の Access Key は Cloudflare ダッシュボード → R2 → Overview → Account details → API Tokens
 > 「Manage」→ Object Read & Write で発行する (Secret は発行時のみ表示)。
 
-### Neon スキーマ (未移行サービス)
+### D1 スキーマ（全サービス・単一 `kabulab-cf` に接頭辞テーブルで同居）
 
-全 Neon サービスで同じ DB を共有し、PG スキーマで分離:
+ADR-0001 で全サービスを Neon → D1 (SQLite) へ移行済み。共有 core を各サービスが参照する:
 
-| PG スキーマ | 主な所有 | 主なテーブル |
+| 接頭辞 | 所有 | 主なテーブル |
 |---|---|---|
-| `core` | 001 が日次更新 (他は読み取り専用) | `stocks` (銘柄マスタ) / `stock_financials` (最新ファンダ + 営業利益率 TTM) / `stock_annual_financials` (年度売上高) |
-| `rsi` | 001 RSI Screening | `stock_rsi_percentile` (RSI 10/40/120 + パーセンタイル + 優良株フラグ) |
-| `public` | 002 お宝優待 | `stock_financials` / `stock_scores` / `yutai_benefits` / `yutai_genres` (銘柄マスタは `core.stocks` を参照) |
-| `swing` | 003 Swing Trading | `daily_ohlcv` (90 営業日) / `stock_indicators` / `stock_screening` / `entry_signals` / `market_context` / `sector_daily` |
-| `finmath` | 004 金融数学 | `price_snapshot` / `daily_ohlcv` (Yahoo 由来キャッシュ)。加えて `core.*` / `swing.*` を読み取り専用で参照 |
-| `ir_catalog` | 006 IR Catalog | `disclosures` (TDnet 全量 + タグ + PDF センチメント) |
+| `core_*` | 日次 sync が更新 (他は読取専用) | `core_stocks` / `core_stock_financials` / `core_stock_annual_financials` (`src/shared/db/core-schema.ts` が正本) |
+| `rsi_*` | 001 RSI Screening | `rsi_percentile` (RSI 10/40/120 + パーセンタイル + 優良株フラグ) |
+| `yutai_*` / `otakara_*` | 002 お宝優待 | `yutai_genres` / `yutai_benefits` / `otakara_stock_financials` / `otakara_stock_scores` |
+| `swing_*` | 003 Swing Trading | `swing_daily_ohlcv` (90 営業日) / `swing_stock_indicators` / `swing_stock_screening` / `swing_entry_signals` / `swing_market_context` / `swing_sector_daily` |
+| `finmath_*` | 004 金融数学 | `finmath_price_snapshot` / `finmath_daily_ohlcv` (Yahoo 由来の遅延キャッシュ・空起動でエッジ再取得)。`core_*` / `swing_*` も読取参照 |
+| `yuho_*` | 005 有報定量 | `yuho_documents` / `yuho_order_facts` |
+| `ir_disclosures` | 006 IR Catalog | `ir_disclosures` (TDnet 全量 + タグ + PDF センチメント) |
 
-### D1 (移行済みサービス — ADR-0001)
-
-005 yuho-quant は単一 D1 (`kabulab-cf`) に接頭辞テーブルで同居:
-
-- `core_stocks` / `core_stock_financials` / `core_stock_annual_financials` … 共有 core (sqlite-core, `src/shared/db/core-schema.ts`)
-- `yuho_documents` / `yuho_order_facts` … 005 固有
+時系列 (VWAP) は R2、一次データ (raw) は Notion。スキーマ生成は `pnpm db:generate:d1` → `drizzle/d1/*.sql` を `wrangler d1 execute kabulab-cf --remote --file=...` で適用。
 
 ## 運用 / 定点ジョブ
 
-Worker に cron Trigger は無い。取込はローカル CLI を主とし、launchd/cron 等で定期実行する。
+日次 stock sync + 月次 otakara rebuild は **Worker Cron が自動実行**する（デプロイ後・要 Paid。
+詳細は上記「運用ステータス」）。以下は **cron 対象外で手動 (or CI) 実行**する取込:
 
 ```bash
-# Neon 系 (Yahoo パイプライン)
-pnpm sync:daily         # 平日: 全銘柄の日次取得 + 全指標再計算 (~4,000 銘柄, 数十分)
-pnpm sync:monthly       # 月初: 母集団同期 + 優待スコアリング (Yahoo なし)
-pnpm ingest:ir-tdnet    # 006 TDnet 適時開示
+# 母集団 (JPX) — 上場/廃止があった時
+pnpm sync:universe
 
-# R2 系 (007 VWAP)。Yahoo 429 を避け低負荷で
-pnpm ingest:vwap-margin # JPX 週次PDF (Yahoo 非依存)
-pnpm ingest:vwap-daily  # 日足10年 (Yahoo)
-pnpm ingest:vwap-intra  # 5分足 (Yahoo)
+# 007 VWAP → R2 (Yahoo 429 を避け低負荷で。YAHOO_PROXY_BASE 経由推奨)
+pnpm ingest:vwap-daily  # 日足10年
+pnpm ingest:vwap-intra  # 5分足
+pnpm ingest:vwap-margin # 信用残高 (週次・JPX PDF・Yahoo 非依存)
 
-# D1 系 (005 EDINET)。デプロイ済み Worker を叩く
+# 006 TDnet / 005 EDINET — デプロイ済み Worker の /admin/catchup を叩く薄いトリガ
+pnpm ingest:ir-tdnet
 pnpm ingest:yuho-edinet
+
+# 手動フル日次 (上記 VWAP も束ねて叩く・ローカル実行用)。stock sync 本体は cron に任せてよい
+pnpm sync:daily
 ```
 
 ### 優待データ取込パイプライン (002 otakara, data-scripts・cron 非対象)

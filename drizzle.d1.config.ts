@@ -16,6 +16,14 @@ export default defineConfig({
   schema: [
     "./src/shared/db/core-schema.ts",
     "./services/yuho-quant/src/db/schema.ts",
+    "./services/ir-catalog/src/db/schema.ts",
+    // ADR-0001 第2弾: 001/002/003/004 を Neon→D1 へ移行 (cluster)。
+    // swing-readonly.ts は swing/schema.ts のテーブルの再宣言なので追加しない
+    // (同名 CREATE TABLE 重複を避ける)。
+    "./services/rsi-screening/src/db/schema.ts",
+    "./services/swing-trading/src/db/schema.ts",
+    "./services/otakara-yutai/src/db/schema.ts",
+    "./services/financial-math/src/db/finmath-schema.ts",
   ],
   out: "./drizzle/d1",
   dialect: "sqlite",

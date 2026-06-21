@@ -5,7 +5,8 @@
  * 各行: { "id": number, "description": string, "existingValue": number | null }
  */
 import "dotenv/config";
-import { createDb } from "../src/db/client.js";
+import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import * as schema from "../src/db/schema.js";
 import { yutaiBenefits, stocks } from "../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { writeFileSync, mkdirSync, readFileSync } from "fs";
@@ -16,10 +17,7 @@ import { recordPrimaryData } from "../../../src/shared/notion-archive/index.js";
 // cwd 依存だと interpret/apply と入出力パスがズレるためスクリプト位置基準で解決
 const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), "data");
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) throw new Error("DATABASE_URL is not set");
-
-const db = createDb(databaseUrl);
+const db = createD1HttpDb(schema);
 
 async function main() {
   const rows = await db
