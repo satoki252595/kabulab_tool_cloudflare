@@ -386,8 +386,8 @@ td{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-weight:50
 .filter-group select,.filter-group input{background:var(--bg);color:var(--text);border:2px solid var(--border);border-radius:var(--radius);padding:0 14px;font-family:var(--font-mono);font-size:14px;width:100%;min-height:var(--tap)}
 .filter-group .hint{font-size:11px;color:var(--text-muted)}
 .filter-actions{display:flex;gap:10px;margin-top:16px}
-.filter-actions button{flex:1;border-radius:var(--radius);padding:0 18px;font-family:var(--font-display);font-size:14px;font-weight:700;cursor:pointer;min-height:var(--tap);border:2px solid var(--border);text-transform:uppercase;letter-spacing:0.04em;transition:transform .15s,box-shadow .15s}
-.filter-actions button:hover{transform:translate(-2px,-2px);box-shadow:3px 3px 0 0 var(--border)}
+.filter-actions button,.filter-actions a{flex:1;display:inline-flex;align-items:center;justify-content:center;border-radius:var(--radius);padding:0 18px;font-family:var(--font-display);font-size:14px;font-weight:700;cursor:pointer;min-height:var(--tap);border:2px solid var(--border);text-transform:uppercase;letter-spacing:0.04em;text-decoration:none;transition:transform .15s,box-shadow .15s}
+.filter-actions button:hover,.filter-actions a:hover{transform:translate(-2px,-2px);box-shadow:3px 3px 0 0 var(--border);text-decoration:none}
 .filter-actions .btn-search{background:var(--bg-invert);color:var(--text-invert)}
 .filter-actions .btn-reset{background:var(--bg);color:var(--text)}
 @media(max-width:400px){.filter-row{grid-template-columns:1fr}}
@@ -729,19 +729,50 @@ app.get("/genres/:slug", async (c) => {
   if (!genre) return c.html(layout("Not Found", `<div class="container"><h2>ジャンルが見つかりません</h2><a href="${BP}/" class="back">← ホームに戻る</a></div>`), 404);
 
   const page = Math.max(1, Math.min(parseInt(c.req.query("page") ?? "1", 10) || 1, 500));
-  const gSort = c.req.query("sort") ?? "total";
-  const gOrder = c.req.query("order") ?? "desc";
+  // ソートは "<列>-<昇降>" の複合値 (sortOptions と同形式)。旧 ?sort=&order= 形式も後方互換で受理。
+  const sortRaw = c.req.query("sort") ?? "total-desc";
+  let gSort: string, gOrder: string;
+  if (sortRaw.includes("-")) { const [col, ord] = sortRaw.split("-"); gSort = col; gOrder = ord; }
+  else { gSort = sortRaw; gOrder = c.req.query("order") ?? "desc"; }
+  if (!["total", "fundamental", "technical", "dividend", "pbr", "yutai"].includes(gSort)) gSort = "total";
+  if (gOrder !== "asc") gOrder = "desc";
   const PAGE_SIZE = 20;
 
-  const benefitRows = await db.selectDistinct({ stockId: yutaiBenefits.stockId })
-    .from(yutaiBenefits).where(eq(yutaiBenefits.genreId, genre.id));
-  const stockIds = benefitRows.map(b => b.stockId);
+  // 絞り込み条件 (スクリーニングと同一パラメータ)。空 (未入力) は適用しない。
+  // ルール2 帰結: 未指定を 0 等で勝手に埋めず「条件なし」として扱う。
+  const fMonthRaw = parseInt(c.req.query("month") ?? "", 10);
+  const fMonth = fMonthRaw >= 1 && fMonthRaw <= 12 ? fMonthRaw : 0;
+  const fPerMax = parseFloat(c.req.query("perMax") ?? "") || 0;
+  const fPbrMax = parseFloat(c.req.query("pbrMax") ?? "") || 0;
+  const fYieldMin = parseFloat(c.req.query("yieldMin") ?? "") || 0;
+  const fRsiMax = parseFloat(c.req.query("rsiMax") ?? "") || 0;
+  const activeFilters = [fMonth, fPerMax, fPbrMax, fYieldMin, fRsiMax].filter(v => v > 0).length;
 
-  if (stockIds.length === 0) {
-    return c.html(layout(genre.name, `<div class="container"><a href="${BP}/" class="back">← ホーム</a><h2>${h(genre.name)}</h2><p>該当する銘柄がありません</p></div>`));
-  }
+  // WHERE: ジャンル該当 (サブクエリ) + active + 絞り込み。ID 配列を JS 展開せず
+  // サブクエリを inArray に渡し D1 のバインド変数上限 (1クエリ100個) を回避する。
+  const gWhere: unknown[] = [
+    inArray(stocks.id,
+      db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
+        .where(eq(yutaiBenefits.genreId, genre.id))),
+    eq(stocks.isActive, true),
+  ];
+  if (fMonth) gWhere.push(inArray(stocks.id,
+    db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
+      .where(eq(yutaiBenefits.recordMonth, fMonth))));
+  if (fPerMax > 0) gWhere.push(lte(stockFinancials.per, fPerMax));
+  if (fPbrMax > 0) gWhere.push(lte(stockFinancials.pbr, fPbrMax));
+  if (fYieldMin > 0) gWhere.push(gte(stockFinancials.dividendYield, fYieldMin));
+  if (fRsiMax > 0) gWhere.push(lte(stockFinancials.rsi14, fRsiMax));
+  const gWhereCond = and(...(gWhere as Parameters<typeof and>));
 
-  const totalPages = Math.max(1, Math.ceil(stockIds.length / PAGE_SIZE));
+  // 絞り込み後の件数 (= ページ数)。財務列フィルタのため stockFinancials を join し、
+  // count(distinct) で行転送なしに正確な件数を得る。
+  const cntRow = await db.select({ c: sql<number>`count(distinct ${stocks.id})` }).from(stocks)
+    .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
+    .where(gWhereCond);
+  const matchedCount = Number(cntRow[0]?.c ?? 0);
+
+  const totalPages = Math.max(1, Math.ceil(matchedCount / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const offset = (safePage - 1) * PAGE_SIZE;
 
@@ -754,7 +785,7 @@ app.get("/genres/:slug", async (c) => {
   const gCol = gColMap[gSort] ?? stockScores.totalScore;
   const gSortExpr = gOrder === "asc" ? sql`${gCol} ASC NULLS LAST` : sql`${gCol} DESC NULLS LAST`;
 
-  const rows = await db.select({
+  const rows = matchedCount === 0 ? [] : await db.select({
     id: stocks.id, code: stocks.code, name: stocks.name,
     fundamentalScore: stockScores.fundamentalScore,
     technicalScore: stockScores.technicalScore,
@@ -765,17 +796,7 @@ app.get("/genres/:slug", async (c) => {
   }).from(stocks)
     .leftJoin(stockScores, eq(stockScores.stockId, stocks.id))
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
-    // stockIds を inArray に直接渡すと件数の多いジャンルで D1 のバインド変数
-    // 上限 (1クエリ100個) を超え 500 になるため、yutai_benefits を引くサブクエリ
-    // を渡す (IN リストは D1 内で完結。バインド変数は genreId の1個のみ)。
-    // 上の stockIds 取得は件数 (totalPages) 算出に使うが inArray ではないため
-    // バインド変数を増やさず安全。
-    .where(and(
-      inArray(stocks.id,
-        db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
-          .where(eq(yutaiBenefits.genreId, genre.id))),
-      eq(stocks.isActive, true),
-    ))
+    .where(gWhereCond)
     .orderBy(gSortExpr)
     .limit(PAGE_SIZE * 3).offset(offset);
 
@@ -817,29 +838,81 @@ app.get("/genres/:slug", async (c) => {
       </a>`;
   }).join("");
 
-  // ページネーション（ソートパラメータ維持）
-  const sortParam = (gSort !== "total" || gOrder !== "desc") ? `&sort=${gSort}&order=${gOrder}` : "";
+  // 現在のソート/絞り込みを保持したページネーション URL
+  const qs = (p: number) => {
+    const parts = [`page=${p}`, `sort=${gSort}-${gOrder}`];
+    if (fMonth) parts.push(`month=${fMonth}`);
+    if (fPerMax > 0) parts.push(`perMax=${fPerMax}`);
+    if (fPbrMax > 0) parts.push(`pbrMax=${fPbrMax}`);
+    if (fYieldMin > 0) parts.push(`yieldMin=${fYieldMin}`);
+    if (fRsiMax > 0) parts.push(`rsiMax=${fRsiMax}`);
+    return `${BP}/genres/${slug}?${parts.join("&")}`;
+  };
   let pag = "";
   if (totalPages > 1) {
     pag = `<div class="pagination">`;
-    if (safePage > 1) pag += `<a href="${BP}/genres/${slug}?page=${safePage - 1}${sortParam}">← 前</a>`;
+    if (safePage > 1) pag += `<a href="${qs(safePage - 1)}">← 前</a>`;
     pag += `<span>${safePage} / ${totalPages}</span>`;
-    if (safePage < totalPages) pag += `<a href="${BP}/genres/${slug}?page=${safePage + 1}${sortParam}">次 →</a>`;
+    if (safePage < totalPages) pag += `<a href="${qs(safePage + 1)}">次 →</a>`;
     pag += `</div>`;
   }
 
-  const currentSortVal = `${gSort}-${gOrder}`;
+  const monthOpts = Array.from({ length: 12 }, (_, i) =>
+    `<option value="${i + 1}"${fMonth === i + 1 ? " selected" : ""}>${i + 1}月</option>`).join("");
+  const numVal = (v: number) => (v > 0 ? String(v) : "");
+  const listBody = cards || `<div class="empty-list">${activeFilters > 0 ? "絞り込み条件に合う銘柄がありません。条件をゆるめてください。" : "該当する銘柄がありません"}</div>`;
 
+  // ジャンル一覧にもスクリーニングと同じ絞り込み条件を併設 (右上の絞り込みトグル
+  // + FILTER ドロワー)。フォーム GET 方式でサーバ側適用するため、SSR ページネーション
+  // と件数表示を絞り込み後の値で保ちつつ JS 非依存で動く (トグル開閉のみ JS)。
   return c.html(layout(genre.name, `
     <div class="container">
       <a href="${BP}/" class="back">← ホーム</a>
-      <div class="list-header">
-        <h2>${h(genre.name)} <span class="list-count">(${stockIds.length}銘柄)</span></h2>
-        <select id="genre-sort" class="list-sort">${sortOptions(currentSortVal)}</select>
-      </div>
-      ${cards}${pag}
+      <form id="genre-filter" method="get" action="${BP}/genres/${slug}">
+        <div class="list-header">
+          <h2>${h(genre.name)} <span class="list-count">(${matchedCount}銘柄${activeFilters > 0 ? " · 絞り込み中" : ""})</span></h2>
+          <div class="toolbar">
+            <select name="sort" class="list-sort" onchange="this.form.submit()">${sortOptions(`${gSort}-${gOrder}`)}</select>
+            <button type="button" class="filter-toggle${activeFilters > 0 ? " has-filter" : ""}" id="filter-toggle">${activeFilters > 0 ? `絞り込み(${activeFilters})` : "絞り込み"}</button>
+          </div>
+        </div>
+        <div class="filter-drawer${activeFilters > 0 ? " open" : ""}" id="filter-drawer">
+          <div class="filter-row">
+            <div class="filter-group">
+              <label>${tip("recordmonth", "権利月")}</label>
+              <select name="month"><option value="">すべて</option>${monthOpts}</select>
+            </div>
+            <div class="filter-group">
+              <label>${tip("dividend", "配当利回り")} 最低%</label>
+              <input name="yieldMin" type="number" step="0.1" min="0" inputmode="decimal" placeholder="3.0" value="${numVal(fYieldMin)}">
+            </div>
+          </div>
+          <div class="filter-row">
+            <div class="filter-group">
+              <label>${tip("pbr", "PBR")} 上限</label>
+              <input name="pbrMax" type="number" step="0.1" min="0" inputmode="decimal" placeholder="1.0" value="${numVal(fPbrMax)}">
+            </div>
+            <div class="filter-group">
+              <label>${tip("per", "PER")} 上限</label>
+              <input name="perMax" type="number" min="0" inputmode="numeric" placeholder="15" value="${numVal(fPerMax)}">
+            </div>
+          </div>
+          <div class="filter-row">
+            <div class="filter-group">
+              <label>${tip("rsi", "RSI")} 上限</label>
+              <input name="rsiMax" type="number" min="0" max="100" inputmode="numeric" placeholder="30" value="${numVal(fRsiMax)}">
+            </div>
+            <div class="filter-group"></div>
+          </div>
+          <div class="filter-actions">
+            <a class="btn-reset" href="${BP}/genres/${slug}">リセット</a>
+            <button type="submit" class="btn-search">検索</button>
+          </div>
+        </div>
+        ${listBody}${pag}
+      </form>
       <script>
-        document.getElementById('genre-sort').addEventListener('change',function(){var v=this.value.split('-');location.href='${BP}/genres/${slug}?sort='+v[0]+'&order='+v[1]});
+        (function(){var t=document.getElementById('filter-toggle'),d=document.getElementById('filter-drawer');if(t&&d){t.addEventListener('click',function(){d.classList.toggle('open')})}})();
       </script>
     </div>
   `));
@@ -1011,7 +1084,7 @@ app.get("/screening", async (c) => {
       <div class="filter-drawer" id="filter-drawer">
         <div class="filter-row">
           <div class="filter-group">
-            <label>権利月</label>
+            <label>${tip("recordmonth", "権利月")}</label>
             <select id="filter-month"><option value="">すべて</option>${monthOptions}</select>
           </div>
           <div class="filter-group">
