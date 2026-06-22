@@ -3,19 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>VWAP / 価格別出来高 / 日足 / 信用残高</title>
+  <title>VWAP / 価格別出来高 / 信用残高 — 日本株ボード</title>
   <link rel="stylesheet" href="./style.css" />
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
   <header>
     <div class="brand">日本株ボード</div>
-
-    <div class="tabs" id="tabs">
-      <button class="tab on" data-view="intra">5分足VWAP</button>
-      <button class="tab" data-view="daily">日足(長期)</button>
-      <button class="tab" data-view="margin">信用残高</button>
-    </div>
 
     <div class="search" id="search">
       <svg viewBox="0 0 24 24" class="search-ic" aria-hidden="true"><path d="M21 21l-4.3-4.3M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"/></svg>
@@ -24,36 +18,22 @@
     </div>
 
     <div class="opts">
-      <!-- 5分足ビュー専用コントロール -->
-      <span class="ctl" data-for="intra">
-        <select id="date" class="date" title="表示日"></select>
-        <div class="seg" id="period" title="価格帯別出来高の集計期間"></div>
-        <div class="toggles">
-          <button class="toggle on" data-key="vwap"><i class="dot vwap"></i>VWAP</button>
-          <button class="toggle on" data-key="profile"><i class="dot poc"></i>価格別出来高</button>
-          <button class="toggle on" data-key="volume"><i class="dot vol"></i>出来高</button>
-        </div>
-      </span>
-      <!-- 日足ビュー専用コントロール -->
-      <span class="ctl" data-for="daily" hidden>
-        <div class="seg" id="drange" title="表示期間"></div>
-        <div class="toggles" id="dtoggles">
-          <button class="toggle on" data-key="vwap5m"><i class="dot vwap"></i>VWAP(5分足)</button>
-          <button class="toggle on" data-key="profile5m"><i class="dot poc"></i>価格別出来高(5分足)</button>
-          <button class="toggle on" data-key="margin"><i class="dot mgn"></i>信用残高</button>
-          <button class="toggle on" data-key="volume"><i class="dot vol"></i>出来高</button>
-        </div>
-      </span>
+      <div class="seg" id="range" title="表示期間（5分足が在る範囲を上限に絞り込み）"></div>
+      <div class="toggles">
+        <button class="toggle on" data-key="vwap"><i class="dot vwap"></i>VWAP</button>
+        <button class="toggle on" data-key="profile"><i class="dot poc"></i>価格別出来高</button>
+        <button class="toggle on" data-key="margin"><i class="dot mgn"></i>信用残高</button>
+        <button class="toggle on" data-key="volume"><i class="dot vol"></i>出来高</button>
+      </div>
     </div>
   </header>
 
   <section class="bar" id="meta"></section>
 
   <main id="chartWrap">
-    <div id="chart" class="view" data-view="intra"></div>
+    <div id="chart"></div>
     <canvas id="overlay"></canvas>
-    <div id="chartDaily" class="view" data-view="daily" hidden></div>
-    <div id="chartMargin" class="view" data-view="margin" hidden></div>
+    <div id="info" class="info" hidden></div>
     <div id="empty" class="empty" hidden></div>
   </main>
 
