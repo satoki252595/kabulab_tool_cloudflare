@@ -23,8 +23,10 @@
  *   - バッチ毎に LlamaChatSession を新規生成 (systemPrompt=採点ルール)。
  *     セッションを使い捨てることで前バッチの履歴汚染を防ぐ。
  *   - バッチ: BATCH_SIZE 件/セッション。CONCURRENCY 個の sequence で並列。
- *   - 冪等・再開可能: 既存 chunk-*.jsonl の idx はスキップ。途中失敗しても
- *     完了済みバッチは chunk ファイルに残るので再実行で続きから。
+ *   - 冪等・再開可能: 既存 chunk-*.jsonl の key (内容アドレス) はスキップ。
+ *     途中失敗しても完了済みバッチは chunk ファイルに残るので再実行で続きから。
+ *     key は (stockCode, description) 由来なので、再フェッチで idx が振り直され
+ *     ても整合が壊れない (旧実装の idx 連番キャッシュの取り違えバグを解消)。
  *   - CLAUDE.md ルール2: grammar.parse 失敗/Zod 不一致/idx 欠落/要約空 なら
  *     throw。estimatedValue=null は「推定不能」を型で明示するもので
  *     fallback ではない。grammar により JSON 崩れは起きないが、決定論ガード
@@ -56,6 +58,7 @@ import {
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { benefitKey } from "./benefit-key.js";
 
 // --- パス (このスクリプトの位置基準で解決) ---
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -146,6 +149,8 @@ const RAW_FAIL_KEEP = 50;
 // --- 入出力スキーマ ---
 interface SourceEntry {
   idx: number;
+  /** 内容アドレスキー (benefitKey)。再開キャッシュ/出力の正キー。 */
+  key: string;
   stockCode: string;
   stockName: string;
   description: string;
@@ -166,7 +171,18 @@ const InterpretedItem = z.object({
 const ResponseSchema = z.object({
   results: z.array(InterpretedItem),
 });
-type InterpretedEntry = z.infer<typeof InterpretedItem>;
+/** LLM が返す 1 件 (idx ベース。idx は単一ラン内でのみ有効)。 */
+type LlmItem = z.infer<typeof InterpretedItem>;
+/**
+ * chunk-*.jsonl に永続化する 1 件。再開キャッシュ/apply 結合の正キーは
+ * `key` (内容アドレス)。`idx` は人間可読の参考値として併記する。
+ */
+interface PersistedEntry {
+  key: string;
+  idx: number;
+  shortSummary: string;
+  estimatedValue: number | null;
+}
 
 /**
  * 上記 Zod スキーマと等価な node-llama-cpp GbnfJson スキーマ。grammar 化して
@@ -283,14 +299,20 @@ function loadSource(): SourceEntry[] {
   const out: SourceEntry[] = [];
   for (const line of lines) {
     if (!line.trim()) continue;
-    out.push(JSON.parse(line) as SourceEntry);
+    const raw = JSON.parse(line) as Omit<SourceEntry, "key"> & {
+      key?: string;
+    };
+    // key は (stockCode, description) から決定的に再計算する。古い source
+    // ファイル (key フィールド無し) でも動くようにし、ファイル上の key とは
+    // 独立に常にコード側で導出する (改竄/欠落に依存しない)。
+    out.push({ ...raw, key: benefitKey(raw.stockCode, raw.description) });
   }
   return out;
 }
 
-/** 既存 chunk-*.jsonl から解釈済み idx を収集 (再開用) */
-function loadDoneIdx(): Set<number> {
-  const done = new Set<number>();
+/** 既存 chunk-*.jsonl から解釈済み key を収集 (再開用) */
+function loadDoneKeys(): Set<string> {
+  const done = new Set<string>();
   if (!existsSync(INTERPRETED_DIR)) {
     mkdirSync(INTERPRETED_DIR, { recursive: true });
     return done;
@@ -302,8 +324,16 @@ function loadDoneIdx(): Set<number> {
     const content = readFileSync(join(INTERPRETED_DIR, f), "utf-8");
     for (const line of content.trim().split("\n")) {
       if (!line.trim()) continue;
-      const e = JSON.parse(line) as InterpretedEntry;
-      done.add(e.idx);
+      const e = JSON.parse(line) as Partial<PersistedEntry>;
+      // 内容アドレス化後の chunk は必ず key を持つ。idx しか持たない旧形式の
+      // chunk が残っていたら、salvage 未実行のサインなので黙って無視せず throw
+      // (ルール2: 整合の崩れた再開を許さない)。
+      if (typeof e.key !== "string" || e.key.length === 0) {
+        throw new Error(
+          `${f} に key を持たない旧形式の行があります。先に salvage-realign-interpretations.ts で再整合してください。`
+        );
+      }
+      done.add(e.key);
     }
   }
   return done;
@@ -704,7 +734,7 @@ async function attemptInterpretBatch(
   }
 
   // 要求した idx が全て返っているか検証 (欠落を黙って捨てない)
-  const byIdx = new Map<number, InterpretedEntry>();
+  const byIdx = new Map<number, LlmItem>();
   for (const r of parsed.data.results) byIdx.set(r.idx, r);
   const missing = [...requestedIdx].filter((i) => !byIdx.has(i));
   if (missing.length > 0) {
@@ -737,7 +767,8 @@ async function attemptInterpretBatch(
       }
       const safeValue = sanitizeEstimatedValue(b.description, r.estimatedValue);
       if (r.estimatedValue !== null && safeValue === null) demotedCount++;
-      const entry: InterpretedEntry = {
+      const entry: PersistedEntry = {
+        key: b.key,
         idx: b.idx,
         shortSummary: summary,
         estimatedValue: safeValue,
@@ -765,7 +796,10 @@ async function interpretBatch(
   for (let attempt = 1; attempt <= MAX_BATCH_ATTEMPTS; attempt++) {
     try {
       const lines = await attemptInterpretBatch(batch, llm, sequence, attempt);
-      const fname = `chunk-${String(batch[0].idx).padStart(5, "0")}.jsonl`;
+      // ファイル名は内容アドレス key 基準。再フェッチで idx が変わっても
+      // 同じ (銘柄, 文言) は同じファイルに上書きされ、跨ぎ run の重複/取り違え
+      // が起きない (旧 idx 連番命名は run 毎に衝突し stale 行を残した)。
+      const fname = `chunk-${batch[0].key}.jsonl`;
       writeFileSync(join(INTERPRETED_DIR, fname), lines + "\n", "utf-8");
       if (attempt > 1) {
         console.info(
@@ -817,7 +851,7 @@ async function interpretBatch(
         MAX_BATCH_ATTEMPTS + 1,
         true // lenientLength
       );
-      const fname = `chunk-${String(batch[0].idx).padStart(5, "0")}.jsonl`;
+      const fname = `chunk-${batch[0].key}.jsonl`;
       writeFileSync(join(INTERPRETED_DIR, fname), lines + "\n", "utf-8");
       lenientAcceptCount++;
       const acceptedLen = lines.split("\n")[0].length; // 表示用 (lines は JSON 1 行)
@@ -838,8 +872,8 @@ async function interpretBatch(
 
 async function main(): Promise<void> {
   const source = loadSource();
-  const done = loadDoneIdx();
-  const pending = source.filter((s) => !done.has(s.idx));
+  const done = loadDoneKeys();
+  const pending = source.filter((s) => !done.has(s.key));
   console.info(
     `[interpret] 全 ${source.length} 件 / 解釈済み ${done.size} / 今回対象 ${pending.length}`
   );
