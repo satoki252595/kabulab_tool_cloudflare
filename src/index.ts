@@ -26,6 +26,10 @@ import {
 import vwapAnalysisApp, {
   BASE_PATH as VWAP_BASE_PATH,
 } from "../services/vwap-analysis/app.js";
+import {
+  overseasSalesApp,
+  BASE_PATH as OSEAS_BASE_PATH,
+} from "../services/overseas-sales/app.js";
 import { ingestProxyRoute } from "./routes/ingest-proxy.js";
 import { DESIGN_TOKENS, BASE_RESET, FONT_LINKS } from "./shared/design.js";
 
@@ -225,6 +229,17 @@ const SERVICES: Service[] = [
     url: `${VWAP_BASE_PATH}/`,
     status: "live",
   },
+  {
+    num: "008",
+    slug: "overseas-sales",
+    title: "海外売上高",
+    subtitle: "海外売上高比率と地域別推移を可視化",
+    desc:
+      "金融庁 EDINET の有価証券報告書から「海外（地域別）売上高」と「海外売上高比率」を構造化。会社を検索すると最大5年の海外売上高・比率・地域別内訳をグラフで確認できます。地域別売上を確実に判定できない開示は数値を作らず「未対応」と明示します。",
+    features: ["EDINET", "海外売上高比率", "地域別", "5Y Trend"],
+    url: `${OSEAS_BASE_PATH}/`,
+    status: "live",
+  },
 ];
 
 /**
@@ -309,6 +324,8 @@ app.route(YQ_BASE_PATH, yuhoQuantApp);
 app.route(IRC_BASE_PATH, irCatalogApp);
 // 007 VWAP Analysis — /vwap-analysis/* 配下
 app.route(VWAP_BASE_PATH, vwapAnalysisApp);
+// 008 海外売上高 — /overseas-sales/* 配下
+app.route(OSEAS_BASE_PATH, overseasSalesApp);
 
 // 取込プロキシ — Node(GitHub Actions)からの Yahoo 取得をエッジ経由にする認証ルート
 // (/api/ingest/yahoo, CRON_SECRET)。Workers Paid を使わない取込運用の要。

@@ -1,0 +1,1 @@
+CREATE INDEX `oseas_facts_kind_stock_idx` ON `oseas_sales_facts` (`region_kind`,`stock_id`,`fiscal_year_end`);
