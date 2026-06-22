@@ -83,42 +83,29 @@ app.get("/api/screening", async (c) => {
   const order = c.req.query("order") ?? "desc";
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") ?? "50", 10) || 50));
 
-  // ジャンルフィルター
-  let genreStockIds: number[] | null = null;
+  // 母集団は全 JPX ~4,000 だが otakara は優待サービスなので is_yutai=true に限定
+  const whereClauses: unknown[] = [eq(stocks.isActive, true), eq(stocks.isYutai, true)];
+
+  // ジャンル/権利月フィルター。
+  // 該当 stockId を JS 配列へ展開して inArray に渡すと、件数の多いジャンル
+  // (QUOカード/金券/ポイント/その他) で ID 数が D1 のバインド変数上限 (1クエリ
+  // 100個) を超えクエリが reject され 500 になる。そのため ID 配列を materialize
+  // せず、yutai_benefits を引くサブクエリを inArray に渡す (IN リストが D1 内で
+  // 完結し、バインド変数は genreId/month の各1個のみ)。ジャンル∩権利月は
+  // 2つの IN を AND で重ねることで表現する。
   if (genre) {
     const genreRow = await db.select({ id: yutaiGenres.id }).from(yutaiGenres)
       .where(eq(yutaiGenres.slug, genre)).limit(1);
     if (genreRow.length === 0) return c.json([]);
-    const benefitRows = await db.selectDistinct({ stockId: yutaiBenefits.stockId })
-      .from(yutaiBenefits).where(eq(yutaiBenefits.genreId, genreRow[0].id));
-    genreStockIds = benefitRows.map(b => b.stockId);
-    if (genreStockIds.length === 0) return c.json([]);
+    whereClauses.push(inArray(stocks.id,
+      db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
+        .where(eq(yutaiBenefits.genreId, genreRow[0].id))));
   }
-
-  // 権利月フィルター
-  let monthStockIds: number[] | null = null;
   if (month >= 1 && month <= 12) {
-    const benefitRows = await db.selectDistinct({ stockId: yutaiBenefits.stockId })
-      .from(yutaiBenefits).where(eq(yutaiBenefits.recordMonth, month));
-    monthStockIds = benefitRows.map(b => b.stockId);
-    if (monthStockIds.length === 0) return c.json([]);
+    whereClauses.push(inArray(stocks.id,
+      db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
+        .where(eq(yutaiBenefits.recordMonth, month))));
   }
-
-  // ジャンルと権利月の交差
-  let filteredIds: number[] | null = null;
-  if (genreStockIds && monthStockIds) {
-    const set = new Set(genreStockIds);
-    filteredIds = monthStockIds.filter(id => set.has(id));
-    if (filteredIds.length === 0) return c.json([]);
-  } else if (genreStockIds) {
-    filteredIds = genreStockIds;
-  } else if (monthStockIds) {
-    filteredIds = monthStockIds;
-  }
-
-  // 母集団は全 JPX ~4,000 だが otakara は優待サービスなので is_yutai=true に限定
-  const whereClauses: unknown[] = [eq(stocks.isActive, true), eq(stocks.isYutai, true)];
-  if (filteredIds) whereClauses.push(inArray(stocks.id, filteredIds));
   if (perMax > 0) whereClauses.push(lte(stockFinancials.per, perMax));
   if (pbrMax > 0) whereClauses.push(lte(stockFinancials.pbr, pbrMax));
   if (yieldMin > 0) whereClauses.push(gte(stockFinancials.dividendYield, yieldMin));
@@ -778,7 +765,17 @@ app.get("/genres/:slug", async (c) => {
   }).from(stocks)
     .leftJoin(stockScores, eq(stockScores.stockId, stocks.id))
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
-    .where(and(inArray(stocks.id, stockIds), eq(stocks.isActive, true)))
+    // stockIds を inArray に直接渡すと件数の多いジャンルで D1 のバインド変数
+    // 上限 (1クエリ100個) を超え 500 になるため、yutai_benefits を引くサブクエリ
+    // を渡す (IN リストは D1 内で完結。バインド変数は genreId の1個のみ)。
+    // 上の stockIds 取得は件数 (totalPages) 算出に使うが inArray ではないため
+    // バインド変数を増やさず安全。
+    .where(and(
+      inArray(stocks.id,
+        db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
+          .where(eq(yutaiBenefits.genreId, genre.id))),
+      eq(stocks.isActive, true),
+    ))
     .orderBy(gSortExpr)
     .limit(PAGE_SIZE * 3).offset(offset);
 
@@ -805,9 +802,9 @@ app.get("/genres/:slug", async (c) => {
             <div>${months.map(m => `<span class="tag">${m}月</span>`).join("")}</div>
           </div>
           <div class="scores">
-            ${scoreBadge(row.totalScore, "総合")}
-            ${scoreBadge(row.fundamentalScore, "ファンダ")}
-            ${scoreBadge(row.technicalScore, "テクニカル")}
+            ${scoreBadge(row.totalScore, tip("total", "総合"))}
+            ${scoreBadge(row.fundamentalScore, tip("fundamental", "ファンダ"))}
+            ${scoreBadge(row.technicalScore, tip("technical", "テクニカル"))}
           </div>
           <div class="metrics">
             <span>${tip("per", "PER")} <strong>${fmt(row.per)}</strong></span>
