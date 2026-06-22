@@ -51,18 +51,6 @@ header {
 .brand { font-size: 17px; font-weight: 700; letter-spacing: .2px; white-space: nowrap; }
 .brand span { color: var(--muted); margin: 0 6px; font-weight: 400; }
 
-/* ---------- view tabs ---------- */
-.tabs { display: inline-flex; gap: 2px; background: var(--bg-soft); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 3px; }
-.tab {
-  border: 0; background: transparent; color: var(--fg-2);
-  font-size: 13px; font-weight: 600; padding: 7px 13px; border-radius: var(--radius-xs); cursor: pointer;
-  transition: color .15s, background .15s, box-shadow .15s;
-}
-.tab:hover:not(.on) { color: var(--fg); }
-.tab.on { background: #fff; color: var(--accent); box-shadow: var(--pill-shadow); }
-.ctl { display: inline-flex; align-items: center; gap: 14px; }
-.ctl[hidden] { display: none; }
-
 /* ---------- search ---------- */
 .search { position: relative; flex: 1 1 360px; max-width: 460px; min-width: 240px; }
 .search-ic {
@@ -98,11 +86,6 @@ header {
 }
 .suggest .nm { flex: 1; font-size: 14.5px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suggest .seg { font-size: 12px; color: var(--fg-2); }
-.suggest .have {
-  font-size: 11px; font-weight: 700; color: var(--accent-strong);
-  background: var(--accent-weak); padding: 2px 7px; border-radius: 999px;
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, .18);
-}
 .suggest .empty-hint { padding: 14px; color: var(--muted); font-size: 14px; }
 
 /* ---------- options ---------- */
@@ -119,18 +102,7 @@ header {
 }
 .seg-btn:hover:not(.on) { color: var(--fg); }
 .seg-btn.on { background: #fff; color: var(--fg); box-shadow: var(--pill-shadow); }
-.date {
-  height: 38px; padding: 0 32px 0 12px; font-size: 14px; color: var(--fg);
-  background-color: var(--bg-soft); border: 1px solid var(--line);
-  border-radius: var(--radius-sm); cursor: pointer;
-  -webkit-appearance: none; appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat; background-position: right 10px center;
-  transition: border-color .15s ease, box-shadow .15s ease;
-}
-.date:hover { border-color: #cdd6e3; }
-.date:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
-.toggles { display: flex; gap: 8px; padding-left: 14px; border-left: 1px solid var(--line-soft); }
+.toggles { display: flex; gap: 8px; padding-left: 14px; border-left: 1px solid var(--line-soft); flex-wrap: wrap; }
 .toggle {
   display: inline-flex; align-items: center; gap: 7px;
   height: 38px; padding: 0 13px; font-size: 13px; font-weight: 600; letter-spacing: .15px;
@@ -145,9 +117,16 @@ header {
 .toggle .dot { width: 9px; height: 9px; border-radius: 3px; background: currentColor; }
 .dot.vwap { background: var(--accent); }
 .dot.poc { background: var(--poc); }
-.dot.vol { background: var(--up); }
+/* 出来高は陽線=緑/陰線=赤の二色ヒストグラムなので、凡例ドットも緑赤の二分割で表す */
+.dot.vol { background: linear-gradient(90deg, var(--up) 50%, var(--down) 50%); }
 .dot.mgn { background: #7c3aed; }
 .toggle:not(.on) .dot { background: var(--muted); }
+
+/* 狭幅: オプション群が改行落ちした時の宙に浮く縦罫線・余白を解消 */
+@media (max-width: 860px) {
+  .opts { margin-left: 0; padding-left: 0; border-left: 0; width: 100%; }
+  .toggles { padding-left: 0; border-left: 0; }
+}
 
 /* ---------- meta bar ---------- */
 .bar {
@@ -177,35 +156,52 @@ header {
 .v.vwap { color: var(--accent); }
 .v.poc { color: var(--poc-text); }
 
-/* ---------- 用語ヘルプ（ルール7・初心者向けバルーン） ---------- */
+/* ---------- 用語ヘルプ（ルール7・初心者向けバルーン。src/shared/term-tip.ts の体裁に準拠） ---------- */
+/* プレーンJS SPA でビルドが無く .ts を直接 import できないため CSS を移植。配色・影は Editorial
+   Swiss Grid（反転背景 #0a0a0a / 2px枠 / ハード影 5px 5px 0 0・ソフト影/グロー禁止）に統一。
+   "up" 方向(footer 凡例)は将来 term-tip.ts に align 引数として還元する想定の既知 no-build 重複。 */
 .tip {
-  position: relative; border-bottom: 2px dotted var(--muted);
-  cursor: help; outline: none;
+  position: relative; display: inline-block; cursor: help; outline: none;
+  border-bottom: 2px dotted var(--muted); font-weight: 600;
 }
 .tip:focus-visible { border-bottom-color: var(--accent); }
 .tip-text {
-  position: absolute; left: 0; top: calc(100% + 6px); z-index: 60;
-  width: max-content; max-width: min(280px, calc(100vw - 32px));
-  padding: 9px 11px; text-align: left; white-space: normal;
-  font-size: 12.5px; font-weight: 500; line-height: 1.5; letter-spacing: 0;
-  color: #fff; background: #0f172a;
-  border: 1px solid rgba(255, 255, 255, .1); border-radius: var(--radius-xs);
-  box-shadow: var(--shadow);
-  opacity: 0; visibility: hidden; transform: translateY(-2px);
-  transition: opacity .12s ease, transform .12s ease, visibility .12s;
-  pointer-events: none;
+  visibility: hidden; opacity: 0;
+  position: absolute; z-index: 60; top: calc(100% + 10px); left: 50%; transform: translateX(-50%);
+  width: max-content; max-width: min(300px, calc(100vw - 32px));
+  padding: 13px 15px; text-align: left; white-space: normal; word-break: break-word;
+  font-size: 13px; font-weight: 400; line-height: 1.65; letter-spacing: 0;
+  color: #fafafa; background: #0a0a0a;
+  border: 2px solid #0a0a0a; border-radius: var(--radius-xs);
+  box-shadow: 5px 5px 0 0 #0a0a0a;
+  transition: opacity .15s ease-out; pointer-events: none;
 }
-.tip:hover .tip-text, .tip:focus .tip-text, .tip:focus-within .tip-text, .tip:active .tip-text {
-  opacity: 1; visibility: visible; transform: translateY(0);
+.tip-text::after { content: ""; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); border: 8px solid transparent; border-bottom-color: #0a0a0a; }
+/* 右端トリガ: 右寄せして画面外はみ出しを防ぐ */
+.tip.tip-r .tip-text { left: auto; right: 0; transform: none; }
+.tip.tip-r .tip-text::after { left: auto; right: 22px; transform: none; }
+/* 上方向(footer 凡例・画面下端): 上に開く */
+.tip.tip-up .tip-text { top: auto; bottom: calc(100% + 10px); }
+.tip.tip-up .tip-text::after { top: 100%; bottom: auto; border-bottom-color: transparent; border-top-color: #0a0a0a; }
+.tip:hover .tip-text, .tip:focus .tip-text, .tip:focus-within .tip-text, .tip:active .tip-text { visibility: visible; opacity: 1; }
+@media (max-width: 600px) {
+  .tip .tip-text, .tip.tip-r .tip-text { left: 0; right: auto; transform: none; max-width: min(280px, calc(100vw - 32px)); }
+  .tip .tip-text::after, .tip.tip-r .tip-text::after { left: 22px; right: auto; transform: none; }
 }
 
 /* ---------- chart ---------- */
 #chartWrap { position: relative; flex: 1 1 auto; min-height: 440px; width: 100%; }
-.view { position: absolute; inset: 0; z-index: 1; }
-.view[hidden] { display: none; }
 #chart { position: absolute; inset: 0; z-index: 1; }
 #overlay { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
 #overlay[hidden] { display: none; }
+/* 5分足被覆が浅い過渡期の注記バー（チャート上部・控えめ） */
+.info {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 4;
+  max-width: calc(100% - 24px); padding: 6px 12px;
+  font-size: 12.5px; font-weight: 600; color: var(--fg-2);
+  background: var(--bg-soft); border: 1px solid var(--line); border-radius: var(--radius-sm);
+}
+.info[hidden] { display: none; }
 .empty {
   position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 8px; text-align: center;
@@ -217,9 +213,10 @@ header {
 .empty code { background: var(--bg-soft); border: 1px solid var(--line); padding: 2px 8px; border-radius: 6px; color: var(--fg-2); }
 
 footer {
-  display: flex; align-items: center; padding: 7px 22px;
-  font-size: 12.5px; line-height: 1.3; color: var(--fg-2);
+  display: flex; align-items: center; flex-wrap: wrap; gap: 2px 18px; justify-content: space-between;
+  padding: 7px 22px; font-size: 12.5px; line-height: 1.4; color: var(--fg-2);
   border-top: 1px solid var(--line); flex-shrink: 0;
 }
-
-.hidden { display: none !important; }
+.ft-note { flex: 1 1 auto; min-width: 0; }
+.ft-legend { color: var(--muted); }
+.ft-legend .tip { margin: 0 1px; }

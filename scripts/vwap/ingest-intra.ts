@@ -26,11 +26,14 @@ async function main() {
   const limit = arg("limit"); if (limit) codes = codes.slice(0, Number(limit));
 
   const cutoffTs = Math.floor(Date.now() / 1000) - KEEP_DAYS * 86400;
-  let written = 0, empty = 0, errors = 0, rateLimited = 0;
+  let written = 0, empty = 0, errors = 0, rateLimited = 0, done = 0;
   let consecRL = 0, aborted = false;
   await mapLimit(codes, CONC, async (code) => {
     if (aborted) return;                                   // ブロック検知後は残りを叩かない
     await sleep(DELAY + Math.floor(Math.random() * 400));  // ジッタで規則性を避ける
+    done++;
+    // 途中で timeout kill されても進捗が分かるよう定期的に出す(60d バックフィルは長時間)。
+    if (done % 500 === 0) console.log(JSON.stringify({ progress: done, total: codes.length, range: RANGE, written, empty, errors, rateLimited }));
     try {
       const fresh = await retry(() => fetchBars5m(`${code}.T`, RANGE), 3);
       consecRL = 0;                                        // 成功で連続カウントをリセット

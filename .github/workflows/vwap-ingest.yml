@@ -5,8 +5,18 @@
 # Cloudflare エッジ IP 経由になるので runner IP は Yahoo から見えない。
 #
 # このワークフローは **default ブランチ(main)** から発火する。schedule を効かせるには
-# main にマージ済みであること。private repo でも無料枠(2,000 min/月)内で収まる想定
-# (日足+5分足 ~35min/日 × 平日 + 週次 margin)。
+# main にマージ済みであること。
+#
+# ⚠️ 実行時間/コスト: 取込は逐次(CONC=1)で全 ~4,445 銘柄を回す。runner 側の待機は
+# DELAY_MS で律速する。Yahoo は YAHOO_PROXY_BASE(Cloudflare エッジ)経由で叩くため
+# runner IP は 429 対象外で、過剰防衛だった 1500ms を 500ms に下げてある(下の env)。
+# それでも 日足+5分足 の平日 cron は概算 ~2h/日 × 平日 ≈ 月数千分規模になり得るので、
+# private repo の無料枠(2,000 min/月)に**収まらない可能性**がある。超過が問題なら
+# (a) 日足を Mon/Wed/Fri に間引く / (b) repo を public 化(Actions 無制限) /
+# (c) CONC を上げる(プロキシ経由なので 429 は MAX_RL ガードで抑制) を検討。実測してから調整すること。
+#
+# ⚠️ 取込は **本番 R2(R2_BUCKET secret)** に直接書く(環境分離なし)。マージ剪定で冪等なので
+# 再実行は安全(既書込分は ts キーでマージされる)。
 #
 # 必要な GitHub Secrets (Settings → Secrets and variables → Actions):
 #   YAHOO_PROXY_BASE      … デプロイ済み Worker の URL 例 https://kabulab-cf.<sub>.workers.dev
@@ -41,8 +51,10 @@ concurrency:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 180 # 60d バックフィル(全銘柄・逐次)は ~2h かかり得るため余裕を持たせる
+    timeout-minutes: 300 # 60d バックフィル/日足+5分足 の逐次全銘柄は実測で 2-3h 域。GH 上限 360 内で余裕を持たせる
     env:
+      # プロキシ(エッジIP)経由なので runner 側 429 リスクは無い。1500ms→500ms に短縮し所要時間を約1/3に。
+      DELAY_MS: "500"
       YAHOO_PROXY_BASE: ${{ secrets.YAHOO_PROXY_BASE }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
