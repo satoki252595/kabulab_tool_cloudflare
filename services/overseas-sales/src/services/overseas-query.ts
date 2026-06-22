@@ -215,9 +215,38 @@ export async function getOverseasTrend(
 // 海外売上高比率 / 成長性 スクリーニング (会社全体 = overseas_total / total)
 // ===========================================================================
 
+/**
+ * 地域別スクリーニング用の「正規化バケット」。会社ごとに地域語の粒度・表記が
+ * バラバラ (中国/中華圏/香港、米国/北米/南北アメリカ 等) なので、同義の地域語を
+ * 1 バケットに束ねて比率を出す。**そのバケットを明示開示している会社だけ**が対象で、
+ * アジア等へ丸めている会社は比率を捏造せず除外する (ルール1/2)。
+ * key は URL/フォーム値、label は表示、rx は overseas 行の region_name 突合用。
+ */
+export const REGION_BUCKETS: Record<string, { label: string; rx: RegExp }> = {
+  china: { label: "中国・中華圏", rx: /中国|中華|香港/ },
+  americas: {
+    label: "米国・米州",
+    rx: /米国|アメリカ|北米|米州|南北アメリカ|中南米|南米|北中米|米大陸|カナダ|メキシコ/,
+  },
+  europe: {
+    label: "欧州",
+    rx: /欧州|ヨーロッパ|EMEA|ドイツ|英国|フランス|イタリア|スペイン|オランダ/,
+  },
+  asia: {
+    label: "アジア・オセアニア",
+    rx: /アジア|オセアニア|大洋州|韓国|台湾|タイ|ベトナム|インド|シンガポール|インドネシア|フィリピン|マレーシア/,
+  },
+};
+
 export interface ScreenOpts {
   /** 必要な年数 (これ未満はデータ不足として除外, 既定 3) */
   minYears: number;
+  /** 地域バケット key (REGION_BUCKETS)。指定時のみ地域別比率を算出・絞り込む */
+  region?: string;
+  /** 選択地域の対連結売上比率(%) 下限。地域を明示開示しない銘柄は除外 (架空値禁止) */
+  minRegionRatioPct?: number;
+  /** 選択地域の対連結売上比率(%) 上限。地域を明示開示しない銘柄は除外 */
+  maxRegionRatioPct?: number;
   /** 直近 海外売上高比率(%) 下限 (未指定なら絞らない) */
   minOverseasRatioPct?: number;
   /** 直近 海外売上高比率(%) 上限 (内需株抽出用) */
@@ -268,6 +297,12 @@ export interface ScreenRow {
   overseasCagr: number | null;
   /** 直近 海外売上高 前年比 (小数) */
   overseasYoy: number | null;
+  /** 選択地域バケットの表示名 (region 指定時のみ)。未指定は null */
+  regionLabel: string | null;
+  /** 選択地域の直近売上高 (円)。地域を開示していなければ null */
+  latestRegionYen: number | null;
+  /** 選択地域の対連結売上比率 (%)。算出不能/未開示は null (0 で埋めない) */
+  regionRatioPct: number | null;
 }
 
 function cagr(first: number | null, last: number | null, yearsSpan: number): number | null {
@@ -281,6 +316,13 @@ function yoy(prev: number | null, last: number | null): number | null {
   return last / prev - 1;
 }
 
+/** 地域名が合致するバケット key 一覧。複数該当 = 複合地域("アジア・中国"等)。 */
+function bucketKeysFor(name: string): string[] {
+  return Object.entries(REGION_BUCKETS)
+    .filter(([, b]) => b.rx.test(name))
+    .map(([k]) => k);
+}
+
 /**
  * 会社全体 (overseas_total / total) の海外売上高比率・成長性で銘柄を
  * スクリーニングする。データが minYears 未満の銘柄は「データ不足」として除外
@@ -290,6 +332,18 @@ export async function screenOverseasGrowth(
   db: Database,
   opts: ScreenOpts
 ): Promise<ScreenRow[]> {
+  const bucket = opts.region ? REGION_BUCKETS[opts.region] : undefined;
+  // 地域絞り込み時のみ overseas 行も読む (普段は overseas_total/total だけで軽量)。
+  const kindCond = bucket
+    ? or(
+        eq(overseasSalesFacts.regionKind, "overseas_total"),
+        eq(overseasSalesFacts.regionKind, "total"),
+        eq(overseasSalesFacts.regionKind, "overseas")
+      )
+    : or(
+        eq(overseasSalesFacts.regionKind, "overseas_total"),
+        eq(overseasSalesFacts.regionKind, "total")
+      );
   const rows = await db
     .select({
       stockId: overseasSalesFacts.stockId,
@@ -298,6 +352,7 @@ export async function screenOverseasGrowth(
       sector: stocks.sector,
       fy: overseasSalesFacts.fiscalYearEnd,
       regionKind: overseasSalesFacts.regionKind,
+      regionName: overseasSalesFacts.regionName,
       salesYen: overseasSalesFacts.salesYen,
       submittedAt: overseasDocuments.submittedAt,
       finOpMargin: stockFinancials.operatingMargin,
@@ -313,15 +368,7 @@ export async function screenOverseasGrowth(
     )
     .innerJoin(stocks, eq(overseasSalesFacts.stockId, stocks.id))
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, overseasSalesFacts.stockId))
-    .where(
-      and(
-        or(
-          eq(overseasSalesFacts.regionKind, "overseas_total"),
-          eq(overseasSalesFacts.regionKind, "total")
-        ),
-        eq(stocks.isActive, true)
-      )
-    );
+    .where(and(kindCond, eq(stocks.isActive, true)));
 
   type Fin = {
     opMargin: number | null;
@@ -330,7 +377,13 @@ export async function screenOverseasGrowth(
     roe: number | null;
     divYield: number | null;
   };
-  type YearVals = { sub: Date; overseas: number | null; total: number | null };
+  type YearVals = {
+    sub: Date;
+    overseas: number | null;
+    total: number | null;
+    /** 選択地域バケットに合致した overseas 行の合計 (region 指定時のみ)。未開示=null */
+    region: number | null;
+  };
   const byStock = new Map<
     number,
     {
@@ -363,21 +416,43 @@ export async function screenOverseasGrowth(
     // overseas_total と total は同一書類 (同一 submittedAt) に同居する。
     // (stockId, fy) で最新提出の書類の行だけを採る: 新しい提出が来たら作り直し、
     // 同じ提出なら overseas/total を同じレコードに集約する (訂正報告で最新優先)。
+    // 選択バケットに合致し、かつ **そのバケットだけ** に合致する行のみ算入する。
+    // "アジア・中国" のような複合地域行は 2 バケットに該当 → どちらにも入れない
+    // (china に丸ごと足して過大評価しない・asia に丸めて見落とさない = 中立で除外)。
+    const matchesBucket =
+      bucket !== undefined &&
+      r.regionKind === "overseas" &&
+      r.salesYen !== null &&
+      (() => {
+        const keys = bucketKeysFor(r.regionName);
+        return keys.length === 1 && keys[0] === opts.region;
+      })();
     const cur = s.best.get(r.fy);
     if (!cur || r.submittedAt > cur.sub) {
-      const v: YearVals = { sub: r.submittedAt, overseas: null, total: null };
+      const v: YearVals = {
+        sub: r.submittedAt,
+        overseas: null,
+        total: null,
+        region: null,
+      };
       if (r.regionKind === "overseas_total") v.overseas = r.salesYen;
       else if (r.regionKind === "total") v.total = r.salesYen;
+      else if (matchesBucket) v.region = r.salesYen;
       s.best.set(r.fy, v);
     } else if (r.submittedAt.getTime() === cur.sub.getTime()) {
       if (r.regionKind === "overseas_total") cur.overseas = r.salesYen;
       else if (r.regionKind === "total") cur.total = r.salesYen;
+      else if (matchesBucket) cur.region = (cur.region ?? 0) + r.salesYen!;
     }
   }
 
   const ratioOf = (v: YearVals): number | null =>
     v.overseas !== null && v.total !== null && v.total > 0
       ? (v.overseas / v.total) * 100
+      : null;
+  const regionRatioOf = (v: YearVals): number | null =>
+    v.region !== null && v.total !== null && v.total > 0
+      ? (v.region / v.total) * 100
       : null;
 
   const out: ScreenRow[] = [];
@@ -406,6 +481,7 @@ export async function screenOverseasGrowth(
     // 直近比率が算出不能な銘柄は順位付け不能 → 除外 (架空値を作らない)
     if (latestRatio === null) continue;
     const firstRatio = ratioOf(first);
+    const regionRatio = bucket ? regionRatioOf(last) : null;
 
     const row: ScreenRow = {
       code: s.code,
@@ -423,11 +499,32 @@ export async function screenOverseasGrowth(
       hasYearGap: fys.length < span + 1,
       overseasCagr: cagr(first.overseas, last.overseas, span),
       overseasYoy: yoy(prev?.overseas ?? null, last.overseas),
+      regionLabel: bucket ? bucket.label : null,
+      latestRegionYen: bucket ? last.region : null,
+      regionRatioPct: regionRatio === null ? null : +regionRatio.toFixed(1),
     };
 
     if (opts.minOverseasRatioPct !== undefined && row.latestRatioPct! < opts.minOverseasRatioPct) continue;
     if (opts.maxOverseasRatioPct !== undefined && row.latestRatioPct! > opts.maxOverseasRatioPct) continue;
     if (opts.minOverseasCagrPct !== undefined && (row.overseasCagr === null || row.overseasCagr * 100 < opts.minOverseasCagrPct)) continue;
+    // 地域別絞り込みは「地域を選択したとき」だけ適用する。地域未選択で比率レンジ
+    // だけ入力されても全件除外せず無視する (入力に意味が無いため)。地域選択時は、
+    // 当該地域を明示開示せず比率が算出できない銘柄を min/max いずれの条件も満たせ
+    // ないものとして除外する (欠損を 0 扱いで通さない・ルール2)。
+    if (bucket) {
+      if (
+        opts.minRegionRatioPct !== undefined &&
+        (row.regionRatioPct === null || row.regionRatioPct < opts.minRegionRatioPct)
+      ) {
+        continue;
+      }
+      if (
+        opts.maxRegionRatioPct !== undefined &&
+        (row.regionRatioPct === null || row.regionRatioPct > opts.maxRegionRatioPct)
+      ) {
+        continue;
+      }
+    }
 
     out.push(row);
   }

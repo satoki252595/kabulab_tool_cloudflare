@@ -1,7 +1,11 @@
 import { layout, h } from "./layout.js";
 import { BASE_PATH } from "../../base-path.js";
 import { termTip, TERM_TIP_STYLES } from "../../../../src/shared/term-tip.js";
-import type { ScreenRow, ScreenOpts } from "../services/overseas-query.js";
+import {
+  REGION_BUCKETS,
+  type ScreenRow,
+  type ScreenOpts,
+} from "../services/overseas-query.js";
 
 /** 円 → 億円 (欠損は「—」。0 で埋めない) */
 function oku(yen: number | null): string {
@@ -74,6 +78,14 @@ export function screeningPage(v: ScreeningView): string {
     )
     .join("");
 
+  const regionOpts = Object.entries(REGION_BUCKETS)
+    .map(
+      ([key, b]) =>
+        `<option value="${h(key)}"${key === (opts.region ?? "") ? " selected" : ""}>${h(b.label)}</option>`
+    )
+    .join("");
+  const regionSel = opts.region ? REGION_BUCKETS[opts.region] : undefined;
+
   const form = `
 <form class="screen-form" method="get" action="${BASE_PATH}/screening">
   <div class="f">
@@ -91,6 +103,21 @@ export function screeningPage(v: ScreeningView): string {
   <div class="f">
     <label for="minOverseasCagrPct">${termTip("海外売上高", "海外（日本以外）向け売上高の合計。")} ${termTip("年率", "年平均成長率(CAGR)。複数年の伸びを「1年あたり平均何%」にならした値。")}<span class="u">下限(%)</span></label>
     <input id="minOverseasCagrPct" name="minOverseasCagrPct" type="number" step="1" inputmode="numeric" value="${opts.minOverseasCagrPct ?? ""}" placeholder="例 10">
+  </div>
+  <div class="f">
+    <label for="region">${termTip("地域別エクスポージャ", "中国・米州・欧州・アジアなど、特定の地域の売上が連結売上の何%かで絞り込みます。その地域を明示開示している会社だけが対象で、『アジア』等にまとめて中国を出していない会社は架空の数字を作らず除外します。")}</label>
+    <select id="region" name="region">
+      <option value="">指定なし</option>
+      ${regionOpts}
+    </select>
+  </div>
+  <div class="f">
+    <label for="minRegionRatioPct">${termTip("選択地域の比率", "選んだ地域の売上が会社全体(連結売上)の何%か。例: 中国20%なら売上の約5分の1が中国。地政学リスクを避けたいなら『上限』を低く(例: 中国 上限10%で中国依存の低い銘柄)、その地域に賭けたいなら『下限』を高く設定します。")}<span class="u">レンジ(%)</span></label>
+    <div class="range">
+      <input id="minRegionRatioPct" name="minRegionRatioPct" type="number" step="1" min="0" max="100" inputmode="numeric" value="${opts.minRegionRatioPct ?? ""}" placeholder="下限 例 20" aria-label="選択地域比率 下限(%)">
+      <span class="range-sep" aria-hidden="true">〜</span>
+      <input id="maxRegionRatioPct" name="maxRegionRatioPct" type="number" step="1" min="0" max="100" inputmode="numeric" value="${opts.maxRegionRatioPct ?? ""}" placeholder="上限 例 80" aria-label="選択地域比率 上限(%)">
+    </div>
   </div>
   <div class="f">
     <label for="sector">業種</label>
@@ -148,6 +175,7 @@ export function screeningPage(v: ScreeningView): string {
         <td>${h(r.name)}</td>
         <td class="muted">${h(r.sector ?? "")}</td>
         <td class="num strong">${ratioCell(r.latestRatioPct)}${flags}</td>
+        ${regionSel ? `<td class="num">${ratioCell(r.regionRatioPct)}</td>` : ""}
         <td class="num">${pp(r.ratioChangePp)}</td>
         <td class="num">${pct(r.overseasCagr)}</td>
         <td class="num">${oku(r.latestOverseasYen)}</td>
@@ -158,13 +186,14 @@ export function screeningPage(v: ScreeningView): string {
         })
         .join("");
       result = `
-  <div class="section-label">RESULT — ${rows.length} 件 (海外売上高比率の高い順)</div>
-  <p class="disclaimer" style="margin:4px 0 14px">並び替えは「海外売上高比率」の高い順で固定。背景強調は同列に表示します。比率は直近年度ベース。点線の用語にカーソル/タップで説明が出ます。${flag("※年欠落")}=対象期間に欠落年あり。</p>
+  <div class="section-label">RESULT — ${rows.length} 件 (海外売上高比率の高い順${regionSel ? `・${h(regionSel.label)}比率は別列` : ""})</div>
+  <p class="disclaimer" style="margin:4px 0 14px">並び替えは「海外売上高比率」の高い順で固定。背景強調は同列に表示します。比率は直近年度ベース。点線の用語にカーソル/タップで説明が出ます。${flag("※年欠落")}=対象期間に欠落年あり。${regionSel ? `<br><b>「${h(regionSel.label)}比率」</b>列は ${h(regionSel.label)} を<b>明示開示している会社のみ</b>。アジア等にまとめて開示している会社は架空値を作らず除外しています。` : ""}</p>
   <div class="table-wrap"><table>
     <thead><tr>
       <th class="num">${th("#")}</th>
       <th>コード</th><th>会社名</th><th>業種</th>
       <th class="num strong" aria-sort="descending">${th("海外売上高比率")}</th>
+      ${regionSel ? `<th class="num">${termTip(regionSel.label + "比率", "選択した地域(" + regionSel.label + ")の売上が連結売上に占める割合。この地域を明示開示している会社のみ表示・対象です。")}</th>` : ""}
       <th class="num">${th("比率の変化")}</th>
       <th class="num">${th("海外売上高 年率")}</th>
       <th class="num">${th("直近海外売上高(億円)")}</th>

@@ -8,6 +8,7 @@ import {
   getOverseasTrendByCode,
   screenOverseasGrowth,
   listSectorsWithOverseas,
+  REGION_BUCKETS,
   type ScreenOpts,
 } from "../services/overseas-query.js";
 import { homePage } from "../views/home.js";
@@ -52,6 +53,13 @@ const screenQuery = z.object({
   minOverseasRatioPct: numOpt,
   maxOverseasRatioPct: numOpt,
   minOverseasCagrPct: numOpt,
+  // 地域別絞り込み (REGION_BUCKETS の key)。空文字→未指定。不正値は 422 で弾く。
+  region: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.enum(Object.keys(REGION_BUCKETS) as [string, ...string[]]).optional()
+  ),
+  minRegionRatioPct: numOpt,
+  maxRegionRatioPct: numOpt,
   sector: z.preprocess((v) => (v === "" ? undefined : v), z.string().optional()),
   minOpMarginPct: numOpt,
   minMarketCapOku: numOpt,
@@ -71,6 +79,9 @@ function toScreenOpts(q: z.infer<typeof screenQuery>): ScreenOpts {
     minOverseasRatioPct: q.minOverseasRatioPct,
     maxOverseasRatioPct: q.maxOverseasRatioPct,
     minOverseasCagrPct: q.minOverseasCagrPct,
+    region: q.region,
+    minRegionRatioPct: q.minRegionRatioPct,
+    maxRegionRatioPct: q.maxRegionRatioPct,
     sector: q.sector,
     minOpMarginPct: q.minOpMarginPct,
     minMarketCapOku: q.minMarketCapOku,
