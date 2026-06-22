@@ -49,6 +49,18 @@ export const yutaiBenefits = sqliteTable(
     minShares: integer("min_shares").notNull(),
     recordMonth: integer("record_month").notNull(),
     estimatedValue: integer("estimated_value"),
+    /**
+     * estimated_value の根拠区分 (ルール1: 推定値と企業公表値を機械可読に分離)。
+     *   - "company": description に企業が「○○円相当/分」と明示した額 (or
+     *     カタログ交換ポイント等、本文から確定できる額)。従来の解釈経路の値。
+     *   - "web": 金額表記が無い自社商品について、外部 EC (楽天市場 API) の
+     *     実勢価格から推定した参考値。確度は company より低く、UI で「WEB推定」
+     *     バッジを必ず付ける。出典は estimate_source_url に残す。
+     * null は estimated_value 自体が null (推定不能) のとき。
+     */
+    estimateValueSource: text("estimate_value_source"),
+    /** "web" 推定時の出典 URL (楽天商品ページ等)。company / null では未設定。 */
+    estimateSourceUrl: text("estimate_source_url"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),

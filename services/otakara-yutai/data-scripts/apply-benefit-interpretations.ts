@@ -3,17 +3,29 @@
  * short_summary と estimated_value を更新する。
  *
  * 入力 (このスクリプト位置基準の data/):
- *   - data/benefit-descriptions.jsonl  (idx -> ids配列の対応)
- *   - data/interpreted/chunk-*.jsonl   (idx -> shortSummary/estimatedValue)
+ *   - data/benefit-descriptions.jsonl  (key -> ids配列の対応)
+ *   - data/interpreted/chunk-*.jsonl   (key -> shortSummary/estimatedValue)
+ *   - data/web-enriched/web-*.jsonl    (任意。key -> web推定値/出典URL。
+ *     enrich-from-web.ts が金額表記なし自社商品について楽天市場API+ローカルLLM
+ *     で推定したもの。interpret が null にした key のみ補填する)
+ *
+ * 値の出典は estimate_value_source 列で機械可読に分離する (ルール1):
+ *   "company"=本文の企業公表/確定額, "web"=楽天由来の参考推定 (UIで「WEB推定」
+ *   バッジ), null=推定不能。"web" のとき estimate_source_url に出典を残す。
+ *
+ * 結合キーは内容アドレス `key` (benefitKey)。旧実装は位置 idx で結合していたが、
+ * idx は再フェッチで振り直されるため別銘柄に解釈が貼り付く破損が起きた。key は
+ * (stockCode, description) 由来で再フェッチを跨いで安定する。
  */
 import "dotenv/config";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as schema from "../src/db/schema.js";
 import { yutaiBenefits } from "../src/db/schema.js";
 import { inArray } from "drizzle-orm";
-import { readFileSync, readdirSync } from "fs";
+import { readFileSync, readdirSync, existsSync } from "fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { benefitKey } from "./benefit-key.js";
 
 // パスはこのスクリプトの位置基準で解決する (cwd 依存だと export/interpret と
 // 出力先がズレてパイプラインが silent に繋がらなくなるため)。
@@ -23,6 +35,7 @@ const db = createD1HttpDb(schema);
 
 type SourceEntry = {
   idx: number;
+  key?: string;
   stockCode: string;
   stockName: string;
   description: string;
@@ -32,67 +45,148 @@ type SourceEntry = {
 };
 
 type InterpretedEntry = {
-  idx: number;
+  key: string;
+  idx?: number;
   shortSummary: string;
   estimatedValue: number | null;
 };
 
 async function main() {
-  // 1. 元データ読み込み (idx -> ids)
+  // 1. 元データ読み込み (key -> ids)。key はファイル上の値に依存せず
+  //    (stockCode, description) から再計算する (旧 source も読める)。
   const sourcePath = join(DATA_DIR, "benefit-descriptions.jsonl");
   const sourceLines = readFileSync(sourcePath, "utf-8").trim().split("\n");
-  const idxToIds = new Map<number, number[]>();
+  const keyToIds = new Map<string, number[]>();
   for (const line of sourceLines) {
     if (!line.trim()) continue;
     const entry = JSON.parse(line) as SourceEntry;
-    idxToIds.set(entry.idx, entry.ids);
+    keyToIds.set(benefitKey(entry.stockCode, entry.description), entry.ids);
   }
-  console.log(`Loaded ${idxToIds.size} source entries`);
+  console.log(`Loaded ${keyToIds.size} source entries`);
 
-  // 2. 解釈済みchunk全ファイル読み込み
+  // 2. 解釈済みchunk全ファイル読み込み (key -> 解釈)
   const interpretedDir = join(DATA_DIR, "interpreted");
   const chunkFiles = readdirSync(interpretedDir)
     .filter((f) => f.startsWith("chunk-") && f.endsWith(".jsonl"))
     .sort();
   console.log(`Found ${chunkFiles.length} chunk files`);
 
-  const interpreted = new Map<number, InterpretedEntry>();
+  const interpreted = new Map<string, InterpretedEntry>();
   for (const file of chunkFiles) {
     const content = readFileSync(join(interpretedDir, file), "utf-8");
     for (const line of content.trim().split("\n")) {
       if (!line.trim()) continue;
       const entry = JSON.parse(line) as InterpretedEntry;
-      interpreted.set(entry.idx, entry);
+      // 内容アドレス化後の chunk は必ず key を持つ。旧形式 (idx のみ) が残って
+      // いたら整合の崩れた適用になるので黙って続けず throw (ルール2)。
+      if (typeof entry.key !== "string" || entry.key.length === 0) {
+        throw new Error(
+          `${file} に key を持たない旧形式の行があります。先に salvage-realign-interpretations.ts で再整合してください。`
+        );
+      }
+      interpreted.set(entry.key, entry);
     }
   }
   console.log(`Loaded ${interpreted.size} interpretations`);
 
-  // 3. idx -> {ids[], shortSummary, estimatedValue} の形で更新対象を構築
+  // 2.5 web 推定 (enrich-from-web.ts) の取り込み。金額表記なし自社商品について
+  //     楽天市場 API + ローカル LLM が推定した参考値を、interpret が null にした
+  //     key にだけ補填する。ディレクトリが無ければ Part B 未実行としてスキップ
+  //     (Part A 単体でも apply は成立する)。
+  //     ルール1: web 推定は estimate_value_source="web" + URL で企業公表値と
+  //     機械可読に分離する。company 値を web で上書きはしない。
+  const webDir = join(DATA_DIR, "web-enriched");
+  const webByKey = new Map<
+    string,
+    { estimatedValue: number; estimateSourceUrl: string | null }
+  >();
+  if (existsSync(webDir)) {
+    let webFiles = 0;
+    for (const file of readdirSync(webDir).filter(
+      (f) => f.startsWith("web-") && f.endsWith(".jsonl")
+    )) {
+      webFiles++;
+      for (const line of readFileSync(join(webDir, file), "utf-8")
+        .trim()
+        .split("\n")) {
+        if (!line.trim()) continue;
+        const e = JSON.parse(line) as {
+          key?: string;
+          estimatedValue: number | null;
+          estimateValueSource?: "web" | null;
+          estimateSourceUrl?: string | null;
+        };
+        // 値が付いた web 推定 (estimateValueSource==="web") のみ採用。null 据え置き
+        // (非物販/ヒット無し/根拠不足) は補填しないので無視する。
+        if (
+          typeof e.key === "string" &&
+          e.estimateValueSource === "web" &&
+          typeof e.estimatedValue === "number"
+        ) {
+          webByKey.set(e.key, {
+            estimatedValue: e.estimatedValue,
+            estimateSourceUrl: e.estimateSourceUrl ?? null,
+          });
+        }
+      }
+    }
+    console.log(`Loaded web-enriched: ${webFiles} files / ${webByKey.size} 推定値`);
+  }
+
+  // 3. key -> 更新内容 を構築。値の出典を estimate_value_source で分離 (ルール1):
+  //   - interpret が非 null  → "company" (本文の企業公表額/確定額)
+  //   - interpret が null かつ web 推定あり → "web" (+ estimate_source_url)
+  //   - どちらも無し → null (推定不能を正直表示)
   const updateGroups: {
     ids: number[];
     shortSummary: string;
     estimatedValue: number | null;
+    estimateValueSource: "company" | "web" | null;
+    estimateSourceUrl: string | null;
   }[] = [];
 
-  let missingIdxCount = 0;
-  for (const [idx, entry] of interpreted) {
-    const ids = idxToIds.get(idx);
+  let missingKeyCount = 0;
+  let webFilledCount = 0;
+  for (const [key, entry] of interpreted) {
+    const ids = keyToIds.get(key);
     if (!ids) {
-      missingIdxCount++;
+      missingKeyCount++;
       continue;
+    }
+    let estimatedValue = entry.estimatedValue;
+    let estimateValueSource: "company" | "web" | null =
+      entry.estimatedValue !== null ? "company" : null;
+    let estimateSourceUrl: string | null = null;
+    if (entry.estimatedValue === null) {
+      const web = webByKey.get(key);
+      if (web) {
+        estimatedValue = web.estimatedValue;
+        estimateValueSource = "web";
+        estimateSourceUrl = web.estimateSourceUrl;
+        webFilledCount++;
+      }
     }
     updateGroups.push({
       ids,
       shortSummary: entry.shortSummary,
-      estimatedValue: entry.estimatedValue,
+      estimatedValue,
+      estimateValueSource,
+      estimateSourceUrl,
     });
   }
-  if (missingIdxCount > 0) {
-    console.warn(`Warning: ${missingIdxCount} interpretations had no matching source idx`);
+  if (missingKeyCount > 0) {
+    console.warn(
+      `Warning: ${missingKeyCount} interpretations had no matching source key (旧文言の解釈。現 source に無いので適用しない)`
+    );
   }
-  console.log(`Update groups: ${updateGroups.length}`);
+  console.log(
+    `Update groups: ${updateGroups.length} (うち web 推定で補填 ${webFilledCount} 件)`
+  );
 
   // 4. バッチUPDATE実行
+  //   注: estimate_value_source / estimate_source_url 列は migration
+  //   drizzle/d1/0005_*.sql の適用が前提。未適用だと D1 がカラム不在で
+  //   エラーを返す (ルール2: 黙って続けず明示的に失敗する)。
   let updatedRows = 0;
   let groupCount = 0;
   for (const group of updateGroups) {
@@ -101,6 +195,8 @@ async function main() {
       .set({
         shortSummary: group.shortSummary,
         estimatedValue: group.estimatedValue,
+        estimateValueSource: group.estimateValueSource,
+        estimateSourceUrl: group.estimateSourceUrl,
       })
       .where(inArray(yutaiBenefits.id, group.ids));
     updatedRows += group.ids.length;
