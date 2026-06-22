@@ -14,6 +14,7 @@ import {
   parseOverseasHtml,
   type OverseasFact,
 } from "../services/overseas-parser.js";
+import { REGION_BUCKETS } from "../services/overseas-query.js";
 
 const FX = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const fx = (n: string) => readFileSync(join(FX, n), "utf8");
@@ -166,6 +167,48 @@ describe("実在の大型輸出企業 (答え合わせ済み・現実の海外�
     expect(honda.status).toBe("ok_geo_cols");
     expect(pick(honda.facts, "domestic")!.salesAmount).toBe(2845609);
     expect(pick(honda.facts, "overseas_total")!.ratioPct).toBeCloseTo(86.9, 0);
+  });
+});
+
+describe("地域別バケット (REGION_BUCKETS) — 同義地域語の正規化と二重計上回避", () => {
+  it("中国バケットは中国/中華圏/香港に当たり、アジア/中南米/中東/米国には当たらない", () => {
+    const china = REGION_BUCKETS.china.rx;
+    expect(china.test("中国")).toBe(true);
+    expect(china.test("中華圏")).toBe(true);
+    expect(china.test("香港")).toBe(true);
+    expect(china.test("アジア")).toBe(false);
+    expect(china.test("中南米")).toBe(false);
+    expect(china.test("中東")).toBe(false);
+    expect(china.test("米国")).toBe(false);
+  });
+
+  it("米州/欧州/アジア バケットの代表語 (中国はアジアに入れない)", () => {
+    expect(REGION_BUCKETS.americas.rx.test("米国")).toBe(true);
+    expect(REGION_BUCKETS.americas.rx.test("南北アメリカ")).toBe(true);
+    expect(REGION_BUCKETS.americas.rx.test("北米")).toBe(true);
+    expect(REGION_BUCKETS.americas.rx.test("中国")).toBe(false);
+    expect(REGION_BUCKETS.europe.rx.test("欧州")).toBe(true);
+    expect(REGION_BUCKETS.asia.rx.test("アジア・オセアニア")).toBe(true);
+    expect(REGION_BUCKETS.asia.rx.test("中国")).toBe(false);
+  });
+
+  it("複合地域『アジア・中国』は2バケットに該当する (query 側は中立で除外する)", () => {
+    const hit = Object.values(REGION_BUCKETS).filter((b) => b.rx.test("アジア・中国"));
+    // china と asia の両方にマッチ = 複合行。screenOverseasGrowth は単一該当行のみ算入。
+    expect(hit.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("ソニー実有報: 地域別比率を正しく束ね、中国をアジアに二重計上しない", () => {
+    const r = parseOverseasHtml(fx("georows-sony-S100W19Q.html"), "2025-03-31");
+    const total = pick(r.facts, "total")!.salesAmount!;
+    const sumBucket = (rx: RegExp) =>
+      r.facts
+        .filter((f) => f.regionKind === "overseas" && rx.test(f.regionName))
+        .reduce((a, f) => a + (f.salesAmount ?? 0), 0);
+    expect(sumBucket(REGION_BUCKETS.china.rx)).toBe(27372); // 「中国」行のみ
+    expect(sumBucket(REGION_BUCKETS.americas.rx)).toBe(2915183); // 「米国」行
+    expect(sumBucket(REGION_BUCKETS.asia.rx)).toBe(233895); // 中国を含めない
+    expect(+((sumBucket(REGION_BUCKETS.americas.rx) / total) * 100).toFixed(1)).toBeCloseTo(45.1, 0);
   });
 });
 
