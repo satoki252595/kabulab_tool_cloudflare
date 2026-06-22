@@ -3,8 +3,12 @@
  * short_summary と estimated_value を更新する。
  *
  * 入力 (このスクリプト位置基準の data/):
- *   - data/benefit-descriptions.jsonl  (idx -> ids配列の対応)
- *   - data/interpreted/chunk-*.jsonl   (idx -> shortSummary/estimatedValue)
+ *   - data/benefit-descriptions.jsonl  (key -> ids配列の対応)
+ *   - data/interpreted/chunk-*.jsonl   (key -> shortSummary/estimatedValue)
+ *
+ * 結合キーは内容アドレス `key` (benefitKey)。旧実装は位置 idx で結合していたが、
+ * idx は再フェッチで振り直されるため別銘柄に解釈が貼り付く破損が起きた。key は
+ * (stockCode, description) 由来で再フェッチを跨いで安定する。
  */
 import "dotenv/config";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
@@ -14,6 +18,7 @@ import { inArray } from "drizzle-orm";
 import { readFileSync, readdirSync } from "fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { benefitKey } from "./benefit-key.js";
 
 // パスはこのスクリプトの位置基準で解決する (cwd 依存だと export/interpret と
 // 出力先がズレてパイプラインが silent に繋がらなくなるため)。
@@ -23,6 +28,7 @@ const db = createD1HttpDb(schema);
 
 type SourceEntry = {
   idx: number;
+  key?: string;
   stockCode: string;
   stockName: string;
   description: string;
@@ -32,53 +38,62 @@ type SourceEntry = {
 };
 
 type InterpretedEntry = {
-  idx: number;
+  key: string;
+  idx?: number;
   shortSummary: string;
   estimatedValue: number | null;
 };
 
 async function main() {
-  // 1. 元データ読み込み (idx -> ids)
+  // 1. 元データ読み込み (key -> ids)。key はファイル上の値に依存せず
+  //    (stockCode, description) から再計算する (旧 source も読める)。
   const sourcePath = join(DATA_DIR, "benefit-descriptions.jsonl");
   const sourceLines = readFileSync(sourcePath, "utf-8").trim().split("\n");
-  const idxToIds = new Map<number, number[]>();
+  const keyToIds = new Map<string, number[]>();
   for (const line of sourceLines) {
     if (!line.trim()) continue;
     const entry = JSON.parse(line) as SourceEntry;
-    idxToIds.set(entry.idx, entry.ids);
+    keyToIds.set(benefitKey(entry.stockCode, entry.description), entry.ids);
   }
-  console.log(`Loaded ${idxToIds.size} source entries`);
+  console.log(`Loaded ${keyToIds.size} source entries`);
 
-  // 2. 解釈済みchunk全ファイル読み込み
+  // 2. 解釈済みchunk全ファイル読み込み (key -> 解釈)
   const interpretedDir = join(DATA_DIR, "interpreted");
   const chunkFiles = readdirSync(interpretedDir)
     .filter((f) => f.startsWith("chunk-") && f.endsWith(".jsonl"))
     .sort();
   console.log(`Found ${chunkFiles.length} chunk files`);
 
-  const interpreted = new Map<number, InterpretedEntry>();
+  const interpreted = new Map<string, InterpretedEntry>();
   for (const file of chunkFiles) {
     const content = readFileSync(join(interpretedDir, file), "utf-8");
     for (const line of content.trim().split("\n")) {
       if (!line.trim()) continue;
       const entry = JSON.parse(line) as InterpretedEntry;
-      interpreted.set(entry.idx, entry);
+      // 内容アドレス化後の chunk は必ず key を持つ。旧形式 (idx のみ) が残って
+      // いたら整合の崩れた適用になるので黙って続けず throw (ルール2)。
+      if (typeof entry.key !== "string" || entry.key.length === 0) {
+        throw new Error(
+          `${file} に key を持たない旧形式の行があります。先に salvage-realign-interpretations.ts で再整合してください。`
+        );
+      }
+      interpreted.set(entry.key, entry);
     }
   }
   console.log(`Loaded ${interpreted.size} interpretations`);
 
-  // 3. idx -> {ids[], shortSummary, estimatedValue} の形で更新対象を構築
+  // 3. key -> {ids[], shortSummary, estimatedValue} の形で更新対象を構築
   const updateGroups: {
     ids: number[];
     shortSummary: string;
     estimatedValue: number | null;
   }[] = [];
 
-  let missingIdxCount = 0;
-  for (const [idx, entry] of interpreted) {
-    const ids = idxToIds.get(idx);
+  let missingKeyCount = 0;
+  for (const [key, entry] of interpreted) {
+    const ids = keyToIds.get(key);
     if (!ids) {
-      missingIdxCount++;
+      missingKeyCount++;
       continue;
     }
     updateGroups.push({
@@ -87,8 +102,10 @@ async function main() {
       estimatedValue: entry.estimatedValue,
     });
   }
-  if (missingIdxCount > 0) {
-    console.warn(`Warning: ${missingIdxCount} interpretations had no matching source idx`);
+  if (missingKeyCount > 0) {
+    console.warn(
+      `Warning: ${missingKeyCount} interpretations had no matching source key (旧文言の解釈。現 source に無いので適用しない)`
+    );
   }
   console.log(`Update groups: ${updateGroups.length}`);
 
