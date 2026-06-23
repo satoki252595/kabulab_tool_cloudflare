@@ -62,19 +62,11 @@ jobs:
             (github.event.inputs.target == 'tdnet' || github.event.inputs.target == 'all'))
         run: pnpm ingest:ir-tdnet
 
-      # 005 EDINET 有報 (Worker /yuho-quant/admin/catchup を叩く)
-      - name: yuho-quant EDINET catchup
+      # 005 EDINET 有報 (Worker /yuho-quant/admin/catchup を叩く)。受注と海外売上を
+      # 同じ有報 1 通から並行構造化するため、本ステップ 1 つで両方が取り込まれる。
+      - name: yuho-quant EDINET catchup (受注 + 海外売上)
         if: >-
           github.event_name == 'schedule' ||
           (github.event_name == 'workflow_dispatch' &&
             (github.event.inputs.target == 'edinet' || github.event.inputs.target == 'all'))
         run: pnpm ingest:yuho-edinet
-
-      # 008 EDINET 有報 海外売上高 (Worker /overseas-sales/admin/catchup を叩く)
-      # 005 と同一の EDINET 一覧を走査し、海外(地域別)売上を別途構造化する。
-      - name: overseas-sales EDINET catchup
-        if: >-
-          github.event_name == 'schedule' ||
-          (github.event_name == 'workflow_dispatch' &&
-            (github.event.inputs.target == 'edinet' || github.event.inputs.target == 'all'))
-        run: pnpm ingest:overseas-edinet

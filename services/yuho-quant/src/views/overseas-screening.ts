@@ -62,13 +62,13 @@ function flag(label: "※年欠落"): string {
   return `<span class="flag">${termTip(label, TIP[label])}</span>`;
 }
 
-export interface ScreeningView {
+export interface OverseasScreeningView {
   opts: ScreenOpts;
   sectors: string[];
   rows: ScreenRow[] | null;
 }
 
-export function screeningPage(v: ScreeningView): string {
+export function overseasScreeningPage(v: OverseasScreeningView): string {
   const { opts, sectors, rows } = v;
 
   const sectorOpts = ["", ...sectors]
@@ -87,7 +87,7 @@ export function screeningPage(v: ScreeningView): string {
   const regionSel = opts.region ? REGION_BUCKETS[opts.region] : undefined;
 
   const form = `
-<form class="screen-form" method="get" action="${BASE_PATH}/screening">
+<form class="screen-form" method="get" action="${BASE_PATH}/screening-overseas">
   <div class="f">
     <label for="minYears">最低年数</label>
     <input id="minYears" name="minYears" type="number" min="2" max="5" value="${opts.minYears}">
@@ -232,16 +232,27 @@ table td a{font-weight:700;text-decoration:underline;text-underline-offset:2px}
 thead th:first-child .tip .tip-text{left:0;transform:none}
 thead th:first-child .tip .tip-text::after{left:12px;transform:none}
 table th,table td{white-space:nowrap}
+.screen-mode-toggle{display:inline-flex;border:2px solid var(--border);border-radius:var(--radius);overflow:hidden;margin:0 0 4px;font-family:var(--font-display)}
+.screen-mode-toggle a{padding:10px 18px;font-size:13px;font-weight:700;color:var(--text);background:var(--bg-pure);border-right:2px solid var(--border);text-transform:uppercase;letter-spacing:0.04em}
+.screen-mode-toggle a:last-child{border-right:none}
+.screen-mode-toggle a:hover{text-decoration:none;background:var(--bg-soft)}
+.screen-mode-toggle a.active{background:var(--bg-invert);color:var(--text-invert)}
 ${TERM_TIP_STYLES}`;
+
+  const modeToggle = `<div class="screen-mode-toggle" role="tablist" aria-label="スクリーニング指標">
+  <a href="${BASE_PATH}/screening" role="tab">受注の成長性</a>
+  <a href="${BASE_PATH}/screening-overseas" role="tab" class="active" aria-selected="true">海外売上高比率</a>
+</div>`;
 
   const bodyHtml = `
 <div class="hero"><div class="inner">
-  <div class="label">008 / OVERSEAS-SALES — SCREENING</div>
+  <div class="label">005 / YUHO-QUANT — 海外売上高</div>
   <h1>海外売上高比率で<br>銘柄を発掘する</h1>
   <p class="lead">有価証券報告書の地域別売上開示から算出した「海外売上高比率」(会社全体) と海外売上高の成長率で銘柄を絞り込み。データは EDINET 原典を構造化したもので、最低年数に満たない銘柄・直近比率が算出できない銘柄は架空値を作らず除外します。</p>
 </div></div>
 <style>${styles}</style>
 <div class="container">
+  ${modeToggle}
   ${form}
   ${result}
   <p class="disclaimer">海外売上高比率 = 海外売上高 ÷ 連結売上高 (直近年度)。海外売上高は会社が開示した海外地域行の合計。年率(年平均成長率) = (直近額/起点額)^(1/年数) − 1、起点が0以下や1年以下は「—」で除外します。金額は有報の開示単位を円換算し億円表示。出典: 金融庁 EDINET。</p>

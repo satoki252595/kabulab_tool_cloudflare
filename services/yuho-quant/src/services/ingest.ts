@@ -16,7 +16,7 @@
  */
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { yuhoDocuments, orderFacts } from "../db/schema.js";
+import { yuhoDocuments, orderFacts, overseasSalesFacts } from "../db/schema.js";
 import {
   recordPrimaryData,
   isArchived,
@@ -28,6 +28,11 @@ import {
   RX_ORDER_KEYWORD,
   type ParseStatus,
 } from "./edinet/order-parser.js";
+import {
+  parseOverseasData,
+  RX_OVERSEAS_KEYWORD,
+  type OverseasParseStatus,
+} from "./overseas-parser.js";
 import { resolveReportPeriodEnd, type EdinetDoc } from "./edinet/types.js";
 
 // 受注開示判定の語はパーサと単一定義を共有 (RX_ORDER_KEYWORD)。CSV(type=5)
@@ -49,8 +54,17 @@ export interface IngestResult {
   outcome: IngestOutcome;
   parseStatus: ParseStatus | "parse_error";
   factCount: number;
+  /** 海外売上の構造化結果 (同じ有報から並行構造化)。 */
+  overseasParseStatus: OverseasParseStatus | "parse_error";
+  overseasFactCount: number;
   /** 確定した会計期末 (訂正有報は docDescription から導出)。不明時 null */
   periodEnd: string | null;
+}
+
+function overseasPatternOf(status: OverseasParseStatus | "parse_error"): string {
+  if (status === "ok_geo_rows") return "geo_rows";
+  if (status === "ok_geo_cols") return "geo_cols";
+  return "none";
 }
 
 /** "2024-06-27 15:30" / "2024-06-27" を Date 化 (JST 表記をそのまま) */
@@ -119,7 +133,9 @@ export async function ingestDocument(
     return {
       outcome: "skipped_existing",
       parseStatus: "no_order_table",
+      overseasParseStatus: "no_overseas_table",
       factCount: 0,
+      overseasFactCount: 0,
       periodEnd: doc.periodEnd ?? null,
     };
   }
@@ -138,7 +154,9 @@ export async function ingestDocument(
     return {
       outcome: "skipped_invalid_meta",
       parseStatus: "no_order_table",
+      overseasParseStatus: "no_overseas_table",
       factCount: 0,
+      overseasFactCount: 0,
       periodEnd: null,
     };
   }
@@ -152,23 +170,35 @@ export async function ingestDocument(
     return {
       outcome: "skipped_no_period",
       parseStatus: "no_order_table",
+      overseasParseStatus: "no_overseas_table",
       factCount: 0,
+      overseasFactCount: 0,
       periodEnd: null,
     };
   }
 
-  // 1) 軽量な CSV で受注開示の有無を確定。無ければ重い XBRL を落とさない。
+  // 1) 軽量な CSV で受注・海外売上 開示の有無を確定。どちらも無ければ重い XBRL を
+  //    落とさない (帯域節約)。CSV は全テキストブロックを平坦化して含むので、開示が
+  //    あれば必ず語が現れる (推測ではなく CSV 全文判定)。
   let parseStatus: ParseStatus | "parse_error";
   let honbunFile: string | null = null;
   let facts: ReturnType<typeof parseOrderData>["facts"] = [];
+  let overseasParseStatus: OverseasParseStatus | "parse_error";
+  let overseasHonbunFile: string | null = null;
+  let overseasFacts: ReturnType<typeof parseOverseasData>["facts"] = [];
 
   const csvZip = await downloadDocument(doc.docID, 5);
   let hasOrderKeyword = false;
+  let hasOverseasKeyword = false;
   let csvError = false;
   try {
     const rows = parseEdinetCsvZip(csvZip);
     hasOrderKeyword = rows.some(
       (r) => RX_ORDER_KEYWORD.test(r.itemName) || RX_ORDER_KEYWORD.test(r.value)
+    );
+    hasOverseasKeyword = rows.some(
+      (r) =>
+        RX_OVERSEAS_KEYWORD.test(r.itemName) || RX_OVERSEAS_KEYWORD.test(r.value)
     );
   } catch (e) {
     // CSV 解析自体が壊れたら事実として記録 (捏造しない)
@@ -178,12 +208,14 @@ export async function ingestDocument(
     );
   }
 
-  // XBRL(type=1) は「受注ありで構造化が要る」か「Notion へ物理保存する
-  // (ルール6: 有報自体をアップロード)」のいずれかで取得する。受注なし且つ
-  // Notion 保存不要なら従来どおり重い XBRL を落とさない (帯域節約)。
+  // XBRL(type=1) は「受注 or 海外売上 ありで構造化が要る」か「Notion へ物理保存
+  // する (ルール6)」のいずれかで取得する。どちらの開示も無く Notion 保存不要なら
+  // 従来どおり重い XBRL を落とさない (帯域節約)。1 通の XBRL を 1 回だけ取得し、
+  // 受注と海外売上を並行して構造化する (二重ダウンロードしない)。
   let xbrlZip: Buffer | null = null;
   let xbrlUnavailable = false;
-  const wantXbrl = (!csvError && hasOrderKeyword) || needArchive;
+  const wantXbrl =
+    (!csvError && (hasOrderKeyword || hasOverseasKeyword)) || needArchive;
   if (wantXbrl) {
     try {
       xbrlZip = await downloadDocument(doc.docID, 1);
@@ -224,6 +256,29 @@ export async function ingestDocument(
     }
   }
 
+  // 2') 同じ XBRL から海外（地域別）売上を並行構造化する (受注とは独立)。
+  if (csvError) {
+    overseasParseStatus = "parse_error";
+  } else if (!hasOverseasKeyword) {
+    overseasParseStatus = "no_overseas_table";
+  } else if (!xbrlZip) {
+    overseasParseStatus = "parse_error";
+  } else {
+    try {
+      const ex = parseOverseasData(xbrlZip, periodEnd);
+      overseasParseStatus = ex.status;
+      overseasHonbunFile = ex.honbunFile;
+      overseasFacts = ex.facts;
+    } catch (e) {
+      overseasParseStatus = "parse_error";
+      overseasHonbunFile = null;
+      overseasFacts = [];
+      console.warn(
+        `[ingest] overseas parse_error docID=${doc.docID} ${doc.filerName}: ${(e as Error).message}`
+      );
+    }
+  }
+
   // 安全弁: 同一 (会計期末, セグメント名) の重複は order_facts の一意制約に
   // 反し 1 件でもあると企業全体の insert が落ちる。万一パーサが重複を出して
   // も会社単位で取りこぼさないよう、先頭を採用し重複は警告して落とす
@@ -243,6 +298,21 @@ export async function ingestDocument(
     deduped.push(f);
   }
 
+  // 海外売上ファクトも同様に (会計期末, 地域名) の重複を落とす。
+  const overseasDeduped: typeof overseasFacts = [];
+  const seenRegion = new Set<string>();
+  for (const f of overseasFacts) {
+    const fk = `${f.fiscalYearEnd} ${f.regionName}`;
+    if (seenRegion.has(fk)) {
+      console.warn(
+        `[ingest] dup-region-skip docID=${doc.docID} fy=${f.fiscalYearEnd} region=${f.regionName}`
+      );
+      continue;
+    }
+    seenRegion.add(fk);
+    overseasDeduped.push(f);
+  }
+
   if (needDbWork) {
     const [docRow] = await db
       .insert(yuhoDocuments)
@@ -257,12 +327,16 @@ export async function ingestDocument(
         submittedAt: parseSubmitDateTime(doc.submitDateTime),
         parseStatus,
         honbunFile,
+        overseasParseStatus,
+        overseasHonbunFile,
       })
       .onConflictDoUpdate({
         target: yuhoDocuments.docId,
         set: {
           parseStatus,
           honbunFile,
+          overseasParseStatus,
+          overseasHonbunFile,
           submittedAt: parseSubmitDateTime(doc.submitDateTime),
           periodStart: doc.periodStart,
           periodEnd,
@@ -296,10 +370,32 @@ export async function ingestDocument(
               : "pattern_a",
     }));
 
+    // 海外売上ファクト (yuho_overseas_facts) も同じ docRow を親に置換する。
+    // 11 列/行 → D1 bind 上限 100 に対し 8 行/文 (8×11=88) で分割。
+    const overseasRows = overseasDeduped.map((f) => ({
+      documentId: docRow.id,
+      stockId,
+      fiscalYearEnd: f.fiscalYearEnd,
+      regionName: f.regionName,
+      regionKind: f.regionKind,
+      isConsolidated: f.isConsolidated,
+      unitLabel: f.unitLabel,
+      salesRaw: f.salesAmount,
+      salesYen: toYen(f.salesAmount, f.unitYenFactor),
+      ratioPct: f.ratioPct,
+      pattern: overseasPatternOf(overseasParseStatus),
+    }));
+
     await db.batch([
       db.delete(orderFacts).where(eq(orderFacts.documentId, docRow.id)),
       ...chunk(factRows, MAX_FACT_ROWS_PER_STMT).map((rows) =>
         db.insert(orderFacts).values(rows)
+      ),
+      db
+        .delete(overseasSalesFacts)
+        .where(eq(overseasSalesFacts.documentId, docRow.id)),
+      ...chunk(overseasRows, MAX_FACT_ROWS_PER_STMT).map((rows) =>
+        db.insert(overseasSalesFacts).values(rows)
       ),
     ]);
   }
@@ -342,6 +438,9 @@ export async function ingestDocument(
         parseStatus,
         honbunFile,
         factCount: deduped.length,
+        overseasParseStatus,
+        overseasHonbunFile,
+        overseasFactCount: overseasDeduped.length,
         xbrlUnavailable,
       },
       files,
@@ -353,6 +452,8 @@ export async function ingestDocument(
     outcome: needDbWork ? "ingested" : "archived_only",
     parseStatus,
     factCount: deduped.length,
+    overseasParseStatus,
+    overseasFactCount: overseasDeduped.length,
     periodEnd,
   };
 }

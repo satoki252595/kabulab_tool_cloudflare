@@ -10,6 +10,14 @@ import {
   listSectorsWithOrders,
   type ScreenOpts,
 } from "../services/order-query.js";
+import {
+  getOverseasTrendByCode,
+  screenOverseasGrowth,
+  listSectorsWithOverseas,
+  REGION_BUCKETS,
+  type ScreenOpts as OverseasScreenOpts,
+} from "../services/overseas-query.js";
+import { overseasScreeningPage } from "../views/overseas-screening.js";
 import { homePage } from "../views/home.js";
 import { stockDetailPage } from "../views/stock-detail.js";
 import { screeningPage } from "../views/screening.js";
@@ -162,6 +170,88 @@ pagesRoute.get(
   }
 );
 
+// ---- 海外売上高比率スクリーニング (同一サービスの第2指標) ----
+const overseasScreenQuery = z.object({
+  minYears: z.preprocess(
+    (v) => (v === "" || v === undefined ? 3 : v),
+    z.coerce.number().int().min(2).max(5)
+  ),
+  minOverseasRatioPct: numOpt,
+  maxOverseasRatioPct: numOpt,
+  minOverseasCagrPct: numOpt,
+  // 地域別絞り込み (REGION_BUCKETS の key)。空文字→未指定。不正値は 422 で弾く。
+  region: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.enum(Object.keys(REGION_BUCKETS) as [string, ...string[]]).optional()
+  ),
+  minRegionRatioPct: numOpt,
+  maxRegionRatioPct: numOpt,
+  sector: z.preprocess((v) => (v === "" ? undefined : v), z.string().optional()),
+  minOpMarginPct: numOpt,
+  minMarketCapOku: numOpt,
+  maxMarketCapOku: numOpt,
+  maxPer: numOpt,
+  minRoePct: numOpt,
+  minDivYieldPct: numOpt,
+  limit: z.preprocess(
+    (v) => (v === "" || v === undefined ? 100 : v),
+    z.coerce.number().int().min(1).max(500)
+  ),
+});
+
+function toOverseasScreenOpts(
+  q: z.infer<typeof overseasScreenQuery>
+): OverseasScreenOpts {
+  return {
+    minYears: q.minYears,
+    minOverseasRatioPct: q.minOverseasRatioPct,
+    maxOverseasRatioPct: q.maxOverseasRatioPct,
+    minOverseasCagrPct: q.minOverseasCagrPct,
+    region: q.region,
+    minRegionRatioPct: q.minRegionRatioPct,
+    maxRegionRatioPct: q.maxRegionRatioPct,
+    sector: q.sector,
+    minOpMarginPct: q.minOpMarginPct,
+    minMarketCapOku: q.minMarketCapOku,
+    maxMarketCapOku: q.maxMarketCapOku,
+    maxPer: q.maxPer,
+    minRoePct: q.minRoePct,
+    minDivYieldPct: q.minDivYieldPct,
+    limit: q.limit,
+  };
+}
+
+// スクリーニングは全銘柄の facts を走査する重いクエリ。facts は日次取込でしか
+// 更新されないため、エッジ/ブラウザに 30 分キャッシュさせ D1 読取を抑える。
+const SCREEN_CACHE = "public, max-age=1800";
+
+pagesRoute.get(
+  "/screening-overseas",
+  zValidator("query", overseasScreenQuery),
+  async (c) => {
+    const opts = toOverseasScreenOpts(c.req.valid("query"));
+    const db = createDb(c.env.DB);
+    const [rows, sectors] = await Promise.all([
+      screenOverseasGrowth(db, opts),
+      listSectorsWithOverseas(db),
+    ]);
+    c.header("Cache-Control", SCREEN_CACHE);
+    return c.html(overseasScreeningPage({ opts, sectors, rows }));
+  }
+);
+
+pagesRoute.get(
+  "/api/screening-overseas",
+  zValidator("query", overseasScreenQuery),
+  async (c) => {
+    const opts = toOverseasScreenOpts(c.req.valid("query"));
+    const db = createDb(c.env.DB);
+    const rows = await screenOverseasGrowth(db, opts);
+    c.header("Cache-Control", SCREEN_CACHE);
+    return c.json({ opts, count: rows.length, rows });
+  }
+);
+
 // URL は証券コード (ティッカー) で受ける。内部 serial id を URL に
 // 出すと「数字＝ティッカー」と誤認され別銘柄が表示されるため (バグ修正)。
 // 数字 4 桁 (例: 7011) と JPX 英数字コード (例: 130A) の両方を受理し、
@@ -199,7 +289,11 @@ pagesRoute.get(
   async (c) => {
     const { code } = c.req.valid("param");
     const db = createDb(c.env.DB);
-    const trend = await getOrderTrendByCode(db, code);
+    // 受注 + 海外売上 の両トレンドを 1 ページに並べる (同じ有報由来)。
+    const [trend, overseasTrend] = await Promise.all([
+      getOrderTrendByCode(db, code),
+      getOverseasTrendByCode(db, code),
+    ]);
     if (!trend) {
       return c.html(
         ...noticePage(
@@ -209,7 +303,7 @@ pagesRoute.get(
         )
       );
     }
-    return c.html(stockDetailPage(trend));
+    return c.html(stockDetailPage(trend, overseasTrend));
   }
 );
 
