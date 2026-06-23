@@ -7,54 +7,17 @@
  * (docTypeCode 130) 等で同一会計期末が重複する場合は提出日時が新しい書類の
  * 値を採用する (黙って先頭を選ばない — 明示的に最新を選ぶ)。
  */
-import { and, desc, eq, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, or } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
-import { overseasDocuments, overseasSalesFacts } from "../db/schema.js";
+import { yuhoDocuments, overseasSalesFacts } from "../db/schema.js";
+import type { StockHit } from "./order-query.js";
 
-/** サービスで表示する最大年数 (EDINET 取得可能な過去分の上限と整合) */
-export const MAX_YEARS = 5;
+/** 海外売上の表示でも受注と同じ最大年数 (受注側 MAX_YEARS と一致) */
+const MAX_YEARS = 5;
 
-export interface StockHit {
-  id: number;
-  code: string;
-  name: string;
-  market: string;
-  sector: string | null;
-}
-
-export async function searchStocks(
-  db: Database,
-  query: string
-): Promise<StockHit[]> {
-  const q = query.trim();
-  if (q === "") return [];
-  const pat = `%${q}%`;
-  // 完全一致の昇格は「正準形コード」で判定する。コードとして妥当でない検索語は
-  // null になり case-sensitive な = 比較が一致せず昇格しないだけで害はない。
-  const exactCode = parseStockCode(q);
-  return db
-    .select({
-      id: stocks.id,
-      code: stocks.code,
-      name: stocks.name,
-      market: stocks.market,
-      sector: stocks.sector,
-    })
-    .from(stocks)
-    .where(
-      and(
-        eq(stocks.isActive, true),
-        or(like(stocks.code, pat), like(stocks.name, pat))
-      )
-    )
-    .orderBy(
-      sql`case when ${stocks.code} = ${exactCode} then 0 else 1 end`,
-      stocks.code
-    )
-    .limit(20);
-}
+// 検索 (searchStocks) と StockHit は受注側 order-query と共通 (再定義しない)。
 
 export interface OverseasYearPoint {
   fiscalYearEnd: string;
@@ -79,7 +42,8 @@ export interface OverseasTrend {
     periodEnd: string;
     submittedAt: Date;
     docTypeCode: string;
-    parseStatus: string;
+    /** 当該有報の海外売上 構造化結果。未取込(受注のみの旧レコード)は null */
+    overseasParseStatus: string | null;
   }>;
   /** 古い→新しい順。最大 MAX_YEARS 年 */
   points: OverseasYearPoint[];
@@ -120,15 +84,15 @@ export async function getOverseasTrend(
 
   const docs = await db
     .select({
-      docId: overseasDocuments.docId,
-      periodEnd: overseasDocuments.periodEnd,
-      submittedAt: overseasDocuments.submittedAt,
-      docTypeCode: overseasDocuments.docTypeCode,
-      parseStatus: overseasDocuments.parseStatus,
+      docId: yuhoDocuments.docId,
+      periodEnd: yuhoDocuments.periodEnd,
+      submittedAt: yuhoDocuments.submittedAt,
+      docTypeCode: yuhoDocuments.docTypeCode,
+      overseasParseStatus: yuhoDocuments.overseasParseStatus,
     })
-    .from(overseasDocuments)
-    .where(eq(overseasDocuments.stockId, stockId))
-    .orderBy(desc(overseasDocuments.submittedAt));
+    .from(yuhoDocuments)
+    .where(eq(yuhoDocuments.stockId, stockId))
+    .orderBy(desc(yuhoDocuments.submittedAt));
 
   const rows = await db
     .select({
@@ -139,12 +103,12 @@ export async function getOverseasTrend(
       unitLabel: overseasSalesFacts.unitLabel,
       salesYen: overseasSalesFacts.salesYen,
       ratioPct: overseasSalesFacts.ratioPct,
-      submittedAt: overseasDocuments.submittedAt,
+      submittedAt: yuhoDocuments.submittedAt,
     })
     .from(overseasSalesFacts)
     .innerJoin(
-      overseasDocuments,
-      eq(overseasSalesFacts.documentId, overseasDocuments.id)
+      yuhoDocuments,
+      eq(overseasSalesFacts.documentId, yuhoDocuments.id)
     )
     .where(eq(overseasSalesFacts.stockId, stockId));
 
@@ -204,7 +168,7 @@ export async function getOverseasTrend(
       periodEnd: d.periodEnd,
       submittedAt: d.submittedAt,
       docTypeCode: d.docTypeCode,
-      parseStatus: d.parseStatus,
+      overseasParseStatus: d.overseasParseStatus,
     })),
     points,
     hasStructuredData: points.some((p) => p.overseasYen !== null),
@@ -354,7 +318,7 @@ export async function screenOverseasGrowth(
       regionKind: overseasSalesFacts.regionKind,
       regionName: overseasSalesFacts.regionName,
       salesYen: overseasSalesFacts.salesYen,
-      submittedAt: overseasDocuments.submittedAt,
+      submittedAt: yuhoDocuments.submittedAt,
       finOpMargin: stockFinancials.operatingMargin,
       finMarketCap: stockFinancials.marketCap,
       finPer: stockFinancials.per,
@@ -363,8 +327,8 @@ export async function screenOverseasGrowth(
     })
     .from(overseasSalesFacts)
     .innerJoin(
-      overseasDocuments,
-      eq(overseasSalesFacts.documentId, overseasDocuments.id)
+      yuhoDocuments,
+      eq(overseasSalesFacts.documentId, yuhoDocuments.id)
     )
     .innerJoin(stocks, eq(overseasSalesFacts.stockId, stocks.id))
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, overseasSalesFacts.stockId))

@@ -216,7 +216,17 @@ thead th:first-child .tip .tip-text::after{left:12px;transform:none}
    横スクロール。セルは折返さず scroll させる (他サービスと同じ表側方式)。
    見出しの用語バルーンは絶対配置なので nowrap の影響を受けない。 */
 table th,table td{white-space:nowrap}
+.screen-mode-toggle{display:inline-flex;border:2px solid var(--border);border-radius:var(--radius);overflow:hidden;margin:0 0 4px;font-family:var(--font-display)}
+.screen-mode-toggle a{padding:10px 18px;font-size:13px;font-weight:700;color:var(--text);background:var(--bg-pure);border-right:2px solid var(--border);text-transform:uppercase;letter-spacing:0.04em}
+.screen-mode-toggle a:last-child{border-right:none}
+.screen-mode-toggle a:hover{text-decoration:none;background:var(--bg-soft)}
+.screen-mode-toggle a.active{background:var(--bg-invert);color:var(--text-invert)}
 ${TERM_TIP_STYLES}`;
+
+  const modeToggle = `<div class="screen-mode-toggle" role="tablist" aria-label="スクリーニング指標">
+  <a href="${BASE_PATH}/screening" role="tab" class="active" aria-selected="true">受注の成長性</a>
+  <a href="${BASE_PATH}/screening-overseas" role="tab">海外売上高比率</a>
+</div>`;
 
   const bodyHtml = `
 <div class="hero"><div class="inner">
@@ -226,6 +236,7 @@ ${TERM_TIP_STYLES}`;
 </div></div>
 <style>${styles}</style>
 <div class="container">
+  ${modeToggle}
   ${
     deprecated.length === 0
       ? ""
