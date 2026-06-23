@@ -1,9 +1,15 @@
-import { layout, h } from "./layout.js";
-import { BASE_PATH } from "../../base-path.js";
+/**
+ * 個別銘柄ページの「海外売上高 / 海外売上高比率」セクション。
+ * 受注セクション (stock-detail.ts) の下に並べて、同じ有報から構造化した海外売上を
+ * 積み上げ棒 (海外/国内ほか) + 比率の折れ線 (右軸) で可視化する。
+ */
+import { h } from "./layout.js";
 import { termTip, TERM_TIP_STYLES } from "../../../../src/shared/term-tip.js";
-import type { OverseasTrend, OverseasYearPoint } from "../services/overseas-query.js";
+import type {
+  OverseasTrend,
+  OverseasYearPoint,
+} from "../services/overseas-query.js";
 
-/** 円 → 億円 表示 (欠損は「—」。0 で埋めない) */
 function oku(yen: number | null): string {
   if (yen === null) return "—";
   return (yen / 1e8).toLocaleString("ja-JP", {
@@ -23,12 +29,7 @@ const PARSE_STATUS_LABEL: Record<string, string> = {
   parse_error: "解析エラー (原典要確認)",
 };
 
-/**
- * 海外売上高(億円) の積み上げ棒 + 海外売上高比率の折れ線 (依存なし・決定論的)。
- * - 棒 = 連結売上高。下=海外売上高(濃い塗り)、上=国内ほか(ハッチング)で total まで。
- * - 折れ線 = 海外売上高比率 (右軸 0-100%)。色覚非依存 (塗り分け + 線 + マーカ)。
- * - 全期間スロットを描画し、欠損年は「未開示」と明示してタイムラインの穴を隠さない。
- */
+/** 海外売上高(積み上げ棒) + 海外売上高比率(折れ線・右軸) の SVG。 */
 function trendChart(points: OverseasYearPoint[]): string {
   if (points.length === 0) return "";
   const W = 720;
@@ -86,7 +87,6 @@ function trendChart(points: OverseasYearPoint[]): string {
     })
     .join("");
 
-  // 比率の折れ線 (欠損は線を切る)
   const ratioY = (r: number) => padT + innerH * (1 - Math.min(100, r) / 100);
   let path = "";
   let prev: { x: number; ratio: number } | null = null;
@@ -104,7 +104,7 @@ function trendChart(points: OverseasYearPoint[]): string {
     prev = { x: pt.x, ratio: pt.ratio };
   }
   const ratioLine = path
-    ? `<path d="${path}" fill="none" stroke="var(--text)" stroke-width="2.5" stroke-dasharray="1 0"/>${dots.join("")}`
+    ? `<path d="${path}" fill="none" stroke="var(--text)" stroke-width="2.5"/>${dots.join("")}`
     : "";
 
   const first = points[0].fiscalYearEnd.slice(0, 7);
@@ -145,24 +145,36 @@ function yearTable(points: OverseasYearPoint[]): string {
       const cons =
         p.isConsolidated === true ? "連結" : p.isConsolidated === false ? "個別" : "—";
       return `<tr class="total"><td>${h(p.fiscalYearEnd)}<span class="muted"> (${cons})</span></td><td class="num">${oku(p.overseasYen)}</td><td class="num">${pctStr(p.ratioPct)}</td></tr>
-      <tr><td class="muted">&#12288;連結売上高</td><td class="num muted">${oku(p.totalYen)}</td><td class="num muted">100%</td></tr>${segRows}`;
+      <tr><td class="muted">&#12288;${termTip("連結売上高", "親会社＋子会社を合算した会社全体の売上高。海外売上高比率の分母。")}</td><td class="num muted">${oku(p.totalYen)}</td><td class="num muted">100%</td></tr>${segRows}`;
     })
     .join("");
   return `<table>
-  <thead><tr><th>会計期末 / 地域</th><th class="num">${termTip("海外売上高", "海外（日本以外）の顧客向け売上高。億円表示。会社が地域別に開示した海外地域の合計です。")} (億円)</th><th class="num">${termTip("海外売上高比率", "海外売上高 ÷ 連結売上高。会社の売上のうち海外がどれだけを占めるかを表します。高いほど為替や海外景気の影響を受けやすい一方、内需縮小に強い面があります。")}</th></tr></thead>
+  <thead><tr><th>会計期末 / 地域</th><th class="num">${termTip("海外売上高", "海外（日本以外）の顧客向け売上高。億円表示。会社が地域別に開示した海外地域の合計です。")} (億円)</th><th class="num">${termTip("海外売上高比率", "海外売上高 ÷ 連結売上高。会社の売上のうち海外がどれだけを占めるか。")}</th></tr></thead>
   <tbody>${body}</tbody>
 </table>`;
 }
 
-export function stockDetailPage(trend: OverseasTrend): string {
-  const { stock, points, documents, hasStructuredData } = trend;
+/** 海外売上高セクションの CSS (受注チャートと別の凡例スウォッチ等)。1ページ1回でよい。 */
+export const OVERSEAS_SECTION_STYLES = `
+.cross-section-rule{height:0;border-top:2px dashed var(--border-soft);margin:44px 0 0}
+.chart-legend i.sw-overseas{background:var(--bg-invert)}
+.chart-legend i.sw-domestic{background:var(--bg-pure);background-image:repeating-linear-gradient(45deg,var(--border) 0 2px,transparent 2px 6px)}
+.chart-legend i.sw-ratio{background:var(--bg-pure);border-radius:50%;border:2px solid var(--text)}
+${TERM_TIP_STYLES}`;
 
+/**
+ * 海外売上高セクション本体。overseasTrend が null (= 海外データ無し) や未対応の
+ * ときは「データなし/未対応」を正直に表示する (架空値を作らない)。
+ */
+export function overseasSection(trend: OverseasTrend | null): string {
+  const heading = `<div class="section-label">海外売上高 / 海外売上高比率 の推移</div>`;
+  if (!trend) {
+    return `${heading}<div class="notice"><strong>海外（地域別）売上のデータはありません。</strong></div>`;
+  }
+  const { points, documents, hasStructuredData } = trend;
   const latestDoc = documents[0];
-  const statusPill = latestDoc
-    ? `<span class="pill">${h(PARSE_STATUS_LABEL[latestDoc.parseStatus] ?? latestDoc.parseStatus)}</span>`
-    : `<span class="pill">有報未取得</span>`;
+  const latestStatus = latestDoc?.overseasParseStatus ?? null;
 
-  let main: string;
   if (hasStructuredData) {
     const latest = [...points].reverse().find((p) => p.overseasYen !== null);
     const summary = latest
@@ -170,47 +182,17 @@ export function stockDetailPage(trend: OverseasTrend): string {
       <div><span class="lbl">最新 ${h(latest.fiscalYearEnd)}</span></div>
       <div><span class="lbl">${termTip("海外売上高", "海外（日本以外）向け売上高の合計。億円表示。")}</span><span class="val">${oku(latest.overseasYen)}<small> 億円</small></span></div>
       <div><span class="lbl">${termTip("海外売上高比率", "海外売上高 ÷ 連結売上高。売上の海外依存度。")}</span><span class="val">${pctStr(latest.ratioPct)}</span></div>
-      <div><span class="lbl">${termTip("連結売上高", "会社とその子会社をまとめた売上高の合計。海外売上高比率の分母です。")}</span><span class="val">${oku(latest.totalYen)}<small> 億円</small></span></div>
+      <div><span class="lbl">${termTip("連結売上高", "親会社＋子会社を合算した会社全体の売上高。海外売上高比率の分母です。")}</span><span class="val">${oku(latest.totalYen)}<small> 億円</small></span></div>
     </div>`
       : "";
-    main = `${summary}${trendChart(points)}
+    return `${heading}${summary}${trendChart(points)}
   <div class="section-label">YEARLY — 最大5年 (地域別内訳付き)</div>
   <div class="table-wrap">${yearTable(points)}</div>`;
-  } else if (documents.length === 0) {
-    main = `<div class="notice"><strong>この銘柄の有価証券報告書はまだ取り込まれていません。</strong>
-    <span class="st">取込未実施、または EDINET に対象期間の有報がありません</span></div>`;
-  } else {
-    main = `<div class="notice"><strong>海外（地域別）売上高の構造化データはありません。</strong>
-    <span class="st">${h(PARSE_STATUS_LABEL[latestDoc.parseStatus] ?? latestDoc.parseStatus)} — 海外売上の開示が無い(内需企業)、または開示形式が現行パーサ未対応</span></div>`;
   }
-
-  const docList = documents.length
-    ? `<div class="section-label">SOURCE — 取り込んだ有報</div>
-  <div class="table-wrap"><table><thead><tr><th>会計期末</th><th>種別</th><th>提出日</th><th>EDINET docID</th><th>構造化結果</th></tr></thead><tbody>
-  ${documents
-    .map(
-      (d) =>
-        `<tr><td>${h(d.periodEnd)}</td><td>${d.docTypeCode === "130" ? "訂正有報" : "有報"}</td><td>${h(d.submittedAt.toISOString().slice(0, 10))}</td><td class="muted">${h(d.docId)}</td><td>${h(PARSE_STATUS_LABEL[d.parseStatus] ?? d.parseStatus)}</td></tr>`
-    )
-    .join("")}
-  </tbody></table></div>`
-    : "";
-
-  const body = `
-<div class="container">
-  <p style="margin:8px 0"><a href="${BASE_PATH}/?q=${encodeURIComponent(stock.code)}">← 検索に戻る</a></p>
-  <div class="detail-head">
-    <span class="code">${h(stock.code)}</span>
-    <h2>${h(stock.name)}</h2>
-  </div>
-  <p class="muted" style="font-family:var(--font-mono);font-size:12px">${h(stock.market)}${stock.sector ? " / " + h(stock.sector) : ""} ${statusPill}</p>
-
-  <div class="section-label">海外売上高 / 海外売上高比率 の推移</div>
-  ${main}
-  ${docList}
-  <p class="disclaimer">数値は有報の地域別売上開示を円換算し億円表示しています。海外売上高は会社が開示した海外地域行の合計で、「その他の収益」など地域に按分されない分は海外に含めません。「—」は当該欄が有報で非開示=欠損であることを示し、0 ではありません。構造化できなかった有報は数値を作らず「未対応」と明記しています。出典: 金融庁 EDINET。</p>
-  <style>${TERM_TIP_STYLES}</style>
-</div>`;
-
-  return layout(`${stock.name} (${stock.code})`, body, "detail");
+  const label =
+    latestStatus !== null
+      ? (PARSE_STATUS_LABEL[latestStatus] ?? latestStatus)
+      : "海外売上の取込はこれからです";
+  return `${heading}<div class="notice"><strong>海外（地域別）売上の構造化データはありません。</strong>
+    <span class="st">${h(label)} — 海外売上の開示が無い(内需企業)、または開示形式が現行パーサ未対応</span></div>`;
 }

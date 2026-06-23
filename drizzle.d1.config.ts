@@ -24,8 +24,6 @@ export default defineConfig({
     "./services/swing-trading/src/db/schema.ts",
     "./services/otakara-yutai/src/db/schema.ts",
     "./services/financial-math/src/db/finmath-schema.ts",
-    // 008 海外売上高 (有報 地域別売上の派生構造化)。
-    "./services/overseas-sales/src/db/schema.ts",
   ],
   out: "./drizzle/d1",
   dialect: "sqlite",

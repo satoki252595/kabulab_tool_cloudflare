@@ -26,10 +26,6 @@ import {
 import vwapAnalysisApp, {
   BASE_PATH as VWAP_BASE_PATH,
 } from "../services/vwap-analysis/app.js";
-import {
-  overseasSalesApp,
-  BASE_PATH as OSEAS_BASE_PATH,
-} from "../services/overseas-sales/app.js";
 import { ingestProxyRoute } from "./routes/ingest-proxy.js";
 import { DESIGN_TOKENS, BASE_RESET, FONT_LINKS } from "./shared/design.js";
 
@@ -200,10 +196,10 @@ const SERVICES: Service[] = [
     num: "005",
     slug: "yuho-quant",
     title: "有報定量検索",
-    subtitle: "受注高・受注残高の推移を可視化",
+    subtitle: "受注高・受注残高 と 海外売上高比率 の推移を可視化",
     desc:
-      "金融庁 EDINET の有価証券報告書から「受注高 / 受注残高」をセグメント別 + 全社合計で構造化。会社を検索すると最大5年の受注推移をグラフで確認できます。構造を判定できない開示は数値を作らず「未対応」と明示します。",
-    features: ["EDINET", "受注高/残高", "セグメント別", "5Y Trend"],
+      "金融庁 EDINET の有価証券報告書から「受注高 / 受注残高」と「海外（地域別）売上高 / 海外売上高比率」を構造化。会社を検索すると最大5年の推移をグラフで確認でき、受注の成長性・海外売上高比率(中国/米州等の地域別エクスポージャ)でスクリーニングできます。構造を判定できない開示は数値を作らず「未対応」と明示します。",
+    features: ["EDINET", "受注高/残高", "海外売上高比率", "5Y Trend"],
     url: `${YQ_BASE_PATH}/`,
     status: "live",
   },
@@ -227,17 +223,6 @@ const SERVICES: Service[] = [
       "全上場銘柄を4桁/英数字コードまたは銘柄名で検索し、5分足のVWAPと価格別出来高(POC/バリューエリア)、日足10年(分割・併合調整)、週次の信用残高(買残/売残/信用倍率)を多時間軸で表示。5分足は蓄積(R2)＋当日ライブ、過去日は高速表示します。",
     features: ["5分足VWAP", "価格別出来高", "日足10年", "週次信用残高"],
     url: `${VWAP_BASE_PATH}/`,
-    status: "live",
-  },
-  {
-    num: "008",
-    slug: "overseas-sales",
-    title: "海外売上高",
-    subtitle: "海外売上高比率と地域別推移を可視化",
-    desc:
-      "金融庁 EDINET の有価証券報告書から「海外（地域別）売上高」と「海外売上高比率」を構造化。会社を検索すると最大5年の海外売上高・比率・地域別内訳をグラフで確認できます。地域別売上を確実に判定できない開示は数値を作らず「未対応」と明示します。",
-    features: ["EDINET", "海外売上高比率", "地域別", "5Y Trend"],
-    url: `${OSEAS_BASE_PATH}/`,
     status: "live",
   },
 ];
@@ -324,8 +309,6 @@ app.route(YQ_BASE_PATH, yuhoQuantApp);
 app.route(IRC_BASE_PATH, irCatalogApp);
 // 007 VWAP Analysis — /vwap-analysis/* 配下
 app.route(VWAP_BASE_PATH, vwapAnalysisApp);
-// 008 海外売上高 — /overseas-sales/* 配下
-app.route(OSEAS_BASE_PATH, overseasSalesApp);
 
 // 取込プロキシ — Node(GitHub Actions)からの Yahoo 取得をエッジ経由にする認証ルート
 // (/api/ingest/yahoo, CRON_SECRET)。Workers Paid を使わない取込運用の要。
