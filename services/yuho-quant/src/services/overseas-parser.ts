@@ -31,15 +31,15 @@
  * 内訳行や「その他の収益」は地域に含めない (二重計上・非地域分の混入を避ける)。
  *
  * EDINET 由来の汎用ユーティリティ (ZIP 展開・HTML テーブル化・数値正規化) は
- * 005 yuho-quant の実装を再利用する (重複を作らない)。海外売上高 固有の構造化
- * のみ本ファイルが担う。
+ * 受注パーサ (order-parser) と同じ `./edinet/*` を共用する。本ファイルは海外
+ * 売上高 固有の構造化のみを担い、受注と同じ有報 1 通から並行して構造化される。
  */
-import { unzip } from "../../../yuho-quant/src/services/edinet/zip.js";
+import { unzip } from "./edinet/zip.js";
 import {
   tableToGridExpanded,
   parseJpNumber,
   unitToYenFactor,
-} from "../../../yuho-quant/src/services/edinet/html-table.js";
+} from "./edinet/html-table.js";
 
 export type RegionKind = "domestic" | "overseas" | "overseas_total" | "total";
 

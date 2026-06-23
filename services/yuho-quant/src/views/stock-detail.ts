@@ -1,6 +1,12 @@
 import { layout, h } from "./layout.js";
 import { BASE_PATH } from "../../base-path.js";
+import { termTip } from "../../../../src/shared/term-tip.js";
 import type { OrderTrend, OrderYearPoint } from "../services/order-query.js";
+import type { OverseasTrend } from "../services/overseas-query.js";
+import {
+  overseasSection,
+  OVERSEAS_SECTION_STYLES,
+} from "./overseas-section.js";
 
 /** 円 → 億円 表示 (欠損は「—」。0 で埋めない) */
 function oku(yen: number | null): string {
@@ -138,7 +144,10 @@ function yearTable(points: OrderYearPoint[]): string {
 </table>`;
 }
 
-export function stockDetailPage(trend: OrderTrend): string {
+export function stockDetailPage(
+  trend: OrderTrend,
+  overseasTrend: OverseasTrend | null
+): string {
   const { stock, points, documents, hasStructuredData } = trend;
 
   const latestDoc = documents[0];
@@ -155,8 +164,8 @@ export function stockDetailPage(trend: OrderTrend): string {
     const summary = latest
       ? `<div class="latest-stat">
       <div><span class="lbl">最新 ${h(latest.fiscalYearEnd)}</span></div>
-      <div><span class="lbl">受注高</span><span class="val">${oku(latest.totalOrdersYen)}<small> 億円</small></span></div>
-      <div><span class="lbl">受注残高</span><span class="val">${oku(latest.totalBacklogYen)}<small> 億円</small></span></div>
+      <div><span class="lbl">${termTip("受注高", "その会計期間に新しく受けた注文の合計金額。将来の売上の種。")}</span><span class="val">${oku(latest.totalOrdersYen)}<small> 億円</small></span></div>
+      <div><span class="lbl">${termTip("受注残高", "期末時点で受注済みだがまだ売上になっていない注文の残高。先々の売上の裏付け。")}</span><span class="val">${oku(latest.totalBacklogYen)}<small> 億円</small></span></div>
     </div>`
       : "";
     main = `${summary}${trendChart(points)}
@@ -193,8 +202,13 @@ export function stockDetailPage(trend: OrderTrend): string {
 
   <div class="section-label">受注高 / 受注残高 の推移</div>
   ${main}
+
+  <div class="cross-section-rule" aria-hidden="true"></div>
+  ${overseasSection(overseasTrend)}
+
   ${docList}
-  <p class="disclaimer">数値は有報の開示単位を円換算し億円表示しています。「—」は当該欄が有報で「－」等の非開示=欠損であることを示し、0 ではありません。構造化できなかった有報は数値を作らず結果を「未対応」と明記しています。出典: 金融庁 EDINET。</p>
+  <p class="disclaimer">数値は有報の開示単位を円換算し億円表示しています。「—」は当該欄が有報で「－」等の非開示=欠損であることを示し、0 ではありません。構造化できなかった有報は数値を作らず結果を「未対応」と明記しています。受注高/受注残高 と 海外売上高 は同じ有報1通から並行して構造化しています。出典: 金融庁 EDINET。</p>
+  <style>${OVERSEAS_SECTION_STYLES}</style>
 </div>`;
 
   return layout(`${stock.name} (${stock.code})`, body, "detail");

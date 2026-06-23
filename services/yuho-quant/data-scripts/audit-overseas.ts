@@ -19,7 +19,7 @@
  * 必要env(.env): EDINET_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
  *               D1_DATABASE_ID (yuho_documents コーパス読取に使用)。
  *
- * 実行: D1_DATABASE_ID=<id> pnpm exec tsx services/overseas-sales/data-scripts/audit-all.ts [--limit=N] [--concurrency=2] [--offset=N]
+ * 実行: D1_DATABASE_ID=<id> pnpm audit:overseas [--limit=N] [--concurrency=2] [--offset=N]
  */
 import "dotenv/config";
 import {
@@ -34,12 +34,12 @@ import { sharedEnv } from "../../../src/shared/env.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
-} from "../../yuho-quant/src/services/edinet/client.js";
-import { unzip } from "../../yuho-quant/src/services/edinet/zip.js";
+} from "../src/services/edinet/client.js";
+import { unzip } from "../src/services/edinet/zip.js";
 import {
   tableToGridExpanded,
   parseJpNumber,
-} from "../../yuho-quant/src/services/edinet/html-table.js";
+} from "../src/services/edinet/html-table.js";
 import { parseOverseasHtml } from "../src/services/overseas-parser.js";
 
 const OUT = join(process.cwd(), "tmp", "oseas-audit");
