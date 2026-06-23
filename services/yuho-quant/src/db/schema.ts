@@ -61,6 +61,15 @@ export const yuhoDocuments = sqliteTable(
     parseStatus: text("parse_status").notNull(),
     /** 抽出元の本文 iXBRL ファイル名 (調査・監査用) */
     honbunFile: text("honbun_file"),
+    /**
+     * 海外（地域別）売上 構造化の結果。ok_geo_rows|ok_geo_cols|
+     * geo_present_unstructured|no_overseas_table|parse_error。受注とは独立に同じ
+     * 有報 1 通から構造化する（取込は XBRL を 1 回だけ取得し両方を解く）。未取込は
+     * NULL（後方互換: 受注のみ取込済みの旧レコードは NULL のまま）。
+     */
+    overseasParseStatus: text("overseas_parse_status"),
+    /** 海外売上 抽出元の本文 iXBRL ファイル名（調査・監査用）。未取込は NULL */
+    overseasHonbunFile: text("overseas_honbun_file"),
     ingestedAt: integer("ingested_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),
@@ -112,5 +121,59 @@ export const orderFacts = sqliteTable(
       t.segmentName
     ),
     index("order_facts_stock_period_idx").on(t.stockId, t.fiscalYearEnd),
+  ]
+);
+
+/**
+ * 海外売上ファクト = (有報, 会計期末, 地域) 粒度。受注ファクトと同じ
+ * yuho_documents を親に持つ（同一有報を 1 回取得して受注・海外売上を両方構造化）。
+ * region_kind:
+ *   - domestic       : 日本/本邦 向け売上高
+ *   - overseas       : 個別の海外地域 (北米/欧州/アジア/中国/その他…)
+ *   - overseas_total : 海外売上高合計 (= 開示された overseas 行の合計)
+ *   - total          : 連結売上高 (外部顧客への売上高/連結) = 比率の分母
+ * 金額は raw + 円換算を両方保持し、欠損は NULL（0 で埋めない・ルール2）。
+ */
+export const overseasSalesFacts = sqliteTable(
+  "yuho_overseas_facts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    documentId: integer("document_id")
+      .references(() => yuhoDocuments.id, { onDelete: "cascade" })
+      .notNull(),
+    stockId: integer("stock_id")
+      .references(() => stocks.id, { onDelete: "cascade" })
+      .notNull(),
+    fiscalYearEnd: text("fiscal_year_end").notNull(),
+    /** 表記そのままの地域名 (合計含む) */
+    regionName: text("region_name").notNull(),
+    /** domestic | overseas | overseas_total | total */
+    regionKind: text("region_kind").notNull(),
+    /** 連結=true / 個別=false / 判定不能=NULL (推測しない) */
+    isConsolidated: integer("is_consolidated", { mode: "boolean" }),
+    unitLabel: text("unit_label").notNull(),
+    /** 売上高 (表の単位のまま, 欠損=NULL) */
+    salesRaw: real("sales_raw"),
+    /** 売上高 (円換算, 欠損=NULL) */
+    salesYen: integer("sales_yen", { mode: "number" }),
+    /** 連結売上高に占める割合 (%)。開示/算出があるときのみ。無ければ NULL */
+    ratioPct: real("ratio_pct"),
+    /** geo_rows | geo_cols | none */
+    pattern: text("pattern").notNull(),
+  },
+  (t) => [
+    uniqueIndex("overseas_facts_doc_period_region_uq").on(
+      t.documentId,
+      t.fiscalYearEnd,
+      t.regionName
+    ),
+    index("overseas_facts_stock_period_idx").on(t.stockId, t.fiscalYearEnd),
+    // スクリーニングは region_kind IN ('overseas_total','total'[,'overseas']) を
+    // 全銘柄走査する。region_kind 先頭の複合インデックスで対象種だけをシーク。
+    index("overseas_facts_kind_stock_idx").on(
+      t.regionKind,
+      t.stockId,
+      t.fiscalYearEnd
+    ),
   ]
 );

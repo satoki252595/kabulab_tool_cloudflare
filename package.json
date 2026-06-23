@@ -42,6 +42,8 @@
     "interpret:yutai": "tsx services/otakara-yutai/data-scripts/interpret-benefits.ts",
     "yuho:backfill": "tsx services/yuho-quant/data-scripts/backfill.ts",
     "yuho:investigate": "tsx services/yuho-quant/data-scripts/investigate.ts",
+    "backfill:overseas": "tsx services/yuho-quant/data-scripts/backfill-overseas.ts",
+    "audit:overseas": "tsx services/yuho-quant/data-scripts/audit-overseas.ts",
     "ir:backfill": "tsx services/ir-catalog/data-scripts/backfill.ts"
   },
   "dependencies": {
