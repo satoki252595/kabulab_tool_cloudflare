@@ -211,7 +211,7 @@ export async function fetchChart(
   range = "5y"
 ): Promise<ChartResult> {
   const normalized = normalizeSymbol(symbol);
-  const url = `${CHART_API_BASE}/${normalized}?range=${range}&interval=1d`;
+  const url = `${CHART_API_BASE}/${normalized}?range=${range}&interval=1d&events=split%2Cdiv`;
   const response = await yahooFetch(url);
 
   if (!response.ok) {
@@ -235,6 +235,10 @@ export async function fetchChart(
   const result = parsed.chart.result[0];
   const timestamps = result.timestamp ?? [];
   const quote = result.indicators.quote[0];
+  // Yahoo は interval=1d では indicators.adjclose を常に含む。
+  // 配列が空になるのは仕様変更時のみ。その場合 adj は全 null となり
+  // 呼び出し側の `r.adj ?? r.close` が機能する（adjclose 欠落 = 分割なし = close が正値）。
+  const adjcloseArr = result.indicators.adjclose?.[0]?.adjclose ?? [];
 
   const ohlcv: DailyOhlcv[] = timestamps.map((ts, i) => ({
     date: toDateString(ts),
@@ -243,6 +247,7 @@ export async function fetchChart(
     low: quote?.low?.[i] ?? null,
     close: quote?.close?.[i] ?? null,
     volume: quote?.volume?.[i] ?? null,
+    adj: adjcloseArr[i] ?? null,
   }));
 
   const closePrices = quote?.close ?? [];
