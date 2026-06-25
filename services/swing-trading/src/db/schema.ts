@@ -47,6 +47,8 @@ export const dailyOhlcv = sqliteTable(
     low: real("low"),
     close: real("close"),
     volume: real("volume"),
+    /** 分割調整済み終値 (Yahoo adjclose)。CA 前後の RSI/SMA/MACD 計算に使用 */
+    adj: real("adj"),
   },
   (table) => [
     uniqueIndex("idx_swing_ohlcv_stock_date").on(table.stockId, table.date),

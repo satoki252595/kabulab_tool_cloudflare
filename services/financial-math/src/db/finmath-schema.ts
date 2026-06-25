@@ -76,6 +76,8 @@ export const dailyOhlcv = sqliteTable(
     low: real("low"),
     close: real("close"),
     volume: real("volume"),
+    /** 分割調整済み終値 (Yahoo adjclose)。CAPM β 推定など長期計算に使用 */
+    adj: real("adj"),
     fetchedAt: integer("fetched_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),

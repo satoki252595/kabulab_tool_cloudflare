@@ -57,6 +57,13 @@
       "when": 1782174175440,
       "tag": "0007_elite_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1782407896617,
+      "tag": "0008_young_ben_urich",
+      "breakpoints": true
     }
   ]
 }
