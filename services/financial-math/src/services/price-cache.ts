@@ -168,6 +168,8 @@ export interface OhlcvBar {
   low: number | null;
   close: number | null;
   volume: number | null;
+  /** 分割調整済み終値 (Yahoo adjclose)。CAPM β 推定など長期計算では adj ?? close を使う */
+  adj?: number | null;
 }
 
 /**
@@ -210,6 +212,7 @@ export async function getOhlcvSeries(
         low: dailyOhlcv.low,
         close: dailyOhlcv.close,
         volume: dailyOhlcv.volume,
+        adj: dailyOhlcv.adj,
       })
       .from(dailyOhlcv)
       .where(eq(dailyOhlcv.symbol, symbol))
@@ -223,10 +226,8 @@ export async function getOhlcvSeries(
     return [];
   }
 
-  // D1 の bind 上限は 100 params/文。finmath_daily_ohlcv は 7 列なので 14 行/文に抑える
-  // (旧 Neon 版は 300 行だったが、D1 では 100 bind を超えると "too many SQL variables" で
-  //  落ちる)。Worker バインディング経由のレイジー取得なので 1 シンボル分のみ。
-  const CHUNK = 14;
+  // D1 の bind 上限は 100 params/文。adj 追加で 8 列になったので 12 行/文 (8×12=96≤100)。
+  const CHUNK = 12;
   const rows = chart.ohlcv.map((bar) => ({
     symbol,
     date: bar.date,
@@ -235,6 +236,7 @@ export async function getOhlcvSeries(
     low: bar.low,
     close: bar.close,
     volume: bar.volume,
+    adj: bar.adj,
   }));
   for (let i = 0; i < rows.length; i += CHUNK) {
     const slice = rows.slice(i, i + CHUNK);
@@ -249,6 +251,7 @@ export async function getOhlcvSeries(
           low: sql`excluded.low`,
           close: sql`excluded.close`,
           volume: sql`excluded.volume`,
+          adj: sql`excluded.adj`,
           fetchedAt: sql`excluded.fetched_at`,
         },
       });

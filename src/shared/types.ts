@@ -13,6 +13,8 @@ export interface DailyOhlcv {
   low: number | null;
   close: number | null;
   volume: number | null;
+  /** 分割調整済み終値 (Yahoo adjclose)。分割がない日は close と同値 */
+  adj?: number | null;
 }
 
 /** 年度財務データ (売上高のみ) */

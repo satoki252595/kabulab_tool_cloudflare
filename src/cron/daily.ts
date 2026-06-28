@@ -176,8 +176,8 @@ const CONCURRENCY = 5;
 const DELAY_MS = 150;
 /** swing_daily_ohlcv の保持期間 (営業日)。増分 upsert と併せて書込/容量を抑える。 */
 const OHLCV_RETENTION_DAYS = 90;
-/** OHLCV insert の D1 bind 上限対策 (7 列なので 14 行/文) */
-const OHLCV_CHUNK = 14;
+/** OHLCV insert の D1 bind 上限対策 (adj 追加で 8 列になったので 12 行/文: 8×12=96≤100) */
+const OHLCV_CHUNK = 12;
 /** sector_daily insert の bind 上限対策 (6 列なので 16 行/文) */
 const SECTOR_CHUNK = 16;
 /** inactivate IN リストの bind 上限対策 */
@@ -382,17 +382,17 @@ async function buildSnapshot(
   // 1 回の Chart(5y) + QuoteSummary で全指標を賄う
   const raw = await fetchStockRawData(code, "5y");
 
-  // -- RSI 時系列 (5y 全量) → percentile --
+  // -- RSI 時系列 (5y 全量) → percentile —— adjclose ベースで分割歪みを除去 --
   const closes5y = raw.ohlcv
-    .map((r) => r.close)
+    .map((r) => r.adj ?? r.close)
     .filter((c): c is number => c !== null);
   const rsiSeries = calculateAllRsiSeries(closes5y);
   const rsiPercentile = computeRsiPercentileSnapshot(rsiSeries);
   const blueChip = evaluateBlueChip(raw.annualFinancials, raw.operatingMarginTtm);
 
-  // -- 6mo スライス → swing 用指標 --
+  // -- 6mo スライス → swing 用指標 —— adjclose ベースで分割歪みを除去 --
   const ohlcv6mo = raw.ohlcv.slice(-130);
-  const closes6mo = ohlcv6mo.map((r) => r.close);
+  const closes6mo = ohlcv6mo.map((r) => r.adj ?? r.close);
 
   const sma5Val = sma(closes6mo, 5);
   const sma20Val = sma(closes6mo, 20);
@@ -613,6 +613,7 @@ async function writeStockSnapshot(
           low: r.low,
           close: r.close,
           volume: r.volume,
+          adj: r.adj,
         }))
       )
       .onConflictDoUpdate({
@@ -623,6 +624,7 @@ async function writeStockSnapshot(
           low: sql`excluded.low`,
           close: sql`excluded.close`,
           volume: sql`excluded.volume`,
+          adj: sql`excluded.adj`,
         },
       });
   }

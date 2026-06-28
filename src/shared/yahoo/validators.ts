@@ -52,6 +52,13 @@ export const yahooChartResponseSchema = z.object({
                 volume: z.array(z.number().nullable()).optional(),
               })
             ),
+            adjclose: z
+              .array(
+                z.object({
+                  adjclose: z.array(z.number().nullable()).optional(),
+                })
+              )
+              .optional(),
           }),
         })
       )
