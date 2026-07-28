@@ -219,7 +219,7 @@ async function importToDb(allData: StockYutaiData[]) {
   const db = createD1HttpDb(schema);
 
   // 既存の優待データのみ削除する。
-  // core.stocks は全 JPX 上場株 (~4,000) の母集団なので **削除しない**。
+  // core.stocks は東証内国普通株 (~3,700) の共有母集団なので **削除しない**。
   //
   // is_yutai は「事前に全 false → ループで true」だと D1 HTTP クライアントが
   // トランザクション非対応のためループ途中で落ちると全優待が消える窓が

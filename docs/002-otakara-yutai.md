@@ -6,7 +6,7 @@
 
 ## コンセプト
 
-- 全上場銘柄の株主優待を分類・スクリーニング
+- 東証対象銘柄の株主優待を分類・スクリーニング
 - 独自スコアリング (ファンダ 60% + テクニカル 40%) で「割安な優待銘柄」を自動ランク付け
 - モバイルファーストの PWA 対応 UI で投資判断を支援
 - 優待内容は手動解釈した短縮サマリー (`shortSummary`) をカード表示に活用
@@ -136,10 +136,11 @@ null 指標はウェイト再配分で欠損を補正。実装は [src/shared/sc
 実装は [src/cron/monthly.ts](../src/cron/monthly.ts)。**Yahoo を 1 回も叩かない**。
 
 ```
-pnpm sync:monthly
-  Phase 1: JPX 公式 XLS → core_stocks を全内国株 ~4,000 に同期
-           (seedUniverse: 新規 upsert + name/market/sector 更新 + 廃止 inactivate)
-  Phase 2:
+GitHub Actions 月次
+  Phase 1: pnpm sync:universe
+           JPX 公式 XLS → core_stocks を東証内国普通株 ~3,700 に同期
+           (新規 upsert + name/market/sector 更新 + JPX 基準の対象外化)
+  Phase 2: pnpm sync:monthly:core
     for each core_stocks (is_active AND is_yutai):   # 優待銘柄のみ ~1,600
       - core_stock_financials から PER/PBR/配当/EPS/BPS/ROE/時価総額 を取得
       - swing_stock_indicators から MA5/25/75 / RSI14 / MACD/Signal を取得
@@ -148,9 +149,9 @@ pnpm sync:monthly
       - otakara_stock_financials と otakara_stock_scores に upsert
 ```
 
-> **母集団について**: 2026-05 に sync 母集団は「優待縛り ~1,600」から **全 JPX 上場内国株 ~4,000** へ拡張された (004 financial-math が一般日本株を要するため)。`core_stocks` には非優待銘柄も含まれるが、002 otakara は一覧・カウント・詳細・スコアいずれも `is_yutai=true` で絞るため、優待サービスとしての見え方は不変。`is_yutai` フラグの writer は優待スクレイパー [services/otakara-yutai/data-scripts/fetch-yutai-full.ts](../services/otakara-yutai/data-scripts/fetch-yutai-full.ts) (core_stocks は削除せず upsert + フラグ更新)。
+> **母集団について**: 2026-05 に sync 母集団は「優待縛り ~1,600」から **東証プライム／スタンダード／グロースの内国株式（共有4文字コード、約3,700）** へ拡張された (004 financial-math が一般日本株を要するため)。地域市場の単独上場銘柄と5桁種類株は対象外。`core_stocks` には非優待銘柄も含まれるが、002 otakara は一覧・カウント・詳細・スコアいずれも `is_yutai=true` で絞るため、優待サービスとしての見え方は不変。`is_yutai` フラグの writer は優待スクレイパー [services/otakara-yutai/data-scripts/fetch-yutai-full.ts](../services/otakara-yutai/data-scripts/fetch-yutai-full.ts) (core_stocks は削除せず upsert + フラグ更新)。
 
-自動実行: GitHub Actions の [.github/workflows/stock-sync.yml](../.github/workflows/stock-sync.yml) の月次 cron (**毎月 1 日 22:30 UTC = JST 2 日 07:30**) で universe seed + monthly rebuild ([src/cron/monthly.ts](../src/cron/monthly.ts)) が走る。Node から `createD1HttpDb` (D1 REST) で書き込む。
+自動実行: GitHub Actions の [.github/workflows/stock-sync.yml](../.github/workflows/stock-sync.yml) の月次 cron (**毎月10日 01:30 UTC = JST 10:30**) で universe seed + monthly rebuild ([src/cron/monthly.ts](../src/cron/monthly.ts)) が走る。JPX の前月末版が第3営業日以降に公開されるため、旧版を翌月分として扱わない日程にしている。Node から `createD1HttpDb` (D1 REST) で書き込む。
 
 > ※ 日次の Yahoo データ取得は統一 daily sync ([src/cron/daily.ts](../src/cron/daily.ts)) が `core_stock_financials` / `swing_stock_indicators` を更新することで間接的に本サービスにも反映される。本サービス独自の Yahoo 呼び出しはゼロ。
 

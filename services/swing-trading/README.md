@@ -33,7 +33,7 @@ wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<file>.sql
 
 # 母集団 seed + 日次同期 (OHLCV/指標/screening/patterns/sector/マクロ)
 pnpm sync:universe
-pnpm sync:daily
+pnpm sync:daily:core
 
 # ローカル開発サーバー (wrangler dev)
 pnpm dev

@@ -37,6 +37,12 @@ export const sharedEnv = {
    */
   CRON_SECRET: () => optional("CRON_SECRET"),
   /**
+   * Node 取込が Yahoo を Cloudflare エッジ経由で取得する際の Worker URL。
+   * URL があるのに CRON_SECRET が無い状態は yahoo/client.ts が構成エラーとして
+   * 拒否する。Worker 自身は CRON_SECRET のみを持ち、意図どおり直接取得する。
+   */
+  YAHOO_PROXY_BASE: () => optional("YAHOO_PROXY_BASE"),
+  /**
    * Node 取込から D1 へ書くための Cloudflare D1 HTTP API 認証 (ADR-0001)。
    * Worker の読取はバインディングで完結するため不要。Node 取込 (ir-catalog /
    * otakara / sync) でのみ参照するので未設定は required で throw。
@@ -46,5 +52,20 @@ export const sharedEnv = {
   D1_DATABASE_ID: () => required("D1_DATABASE_ID"),
 };
 
-// required は今後 root 共有変数を追加する際に使う (現時点では CRON_SECRET のみ)
+/**
+ * GitHub Actions / ローカル Node の全銘柄取込では、Yahoo 直アクセスを許可しない。
+ * Worker 内の取込プロキシは yahooFetchDirect() を明示的に呼ぶため、この検査は
+ * Node エントリポイントだけが実行する。
+ */
+export function requireYahooProxyForNodeSync(): void {
+  const proxyBase = sharedEnv.YAHOO_PROXY_BASE();
+  const secret = sharedEnv.CRON_SECRET();
+  if (!proxyBase || !secret) {
+    throw new Error(
+      "Node 日次同期には YAHOO_PROXY_BASE と CRON_SECRET の両方が必要です。" +
+        " GitHub Actions Secrets または .env を確認してください。"
+    );
+  }
+}
+
 export { required as requiredEnv, optional as optionalEnv };

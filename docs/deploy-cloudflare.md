@@ -51,7 +51,7 @@ Cloudflare ネイティブの **Workers Builds**(Git 連携)を使う。GitHub �
 
 | ワークフロー | 内容 | スケジュール (UTC) |
 |---|---|---|
-| `.github/workflows/stock-sync.yml` | 日次 stock(core/rsi/swing) / 月次 universe + otakara rebuild | 平日 21:00 / 1 日 22:30 |
+| `.github/workflows/stock-sync.yml` | 日次 stock(core/rsi/swing) / 月次 universe + otakara rebuild | 平日 21:00 / 10 日 01:30 |
 | `.github/workflows/vwap-ingest.yml` | 日足10年 + 5分足 / 信用残高週次 → R2 | 平日 08:00 / 土 09:00 |
 | `.github/workflows/catchup.yml` | 005 有報(EDINET) + 006 適時開示(TDnet) キャッチアップ | 平日 11:00 |
 

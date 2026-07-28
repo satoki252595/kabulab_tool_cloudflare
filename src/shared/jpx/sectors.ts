@@ -2,8 +2,8 @@
  * JPX 上場銘柄一覧 (data_j.xls) から 33 業種区分を取得するモジュール
  *
  * ソース: https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls
- *   - 月初更新、~838KB
- *   - 全上場銘柄 (~4400 行) × 東証 33 業種区分 + 市場区分
+ *   - 毎月第3営業日以降に前月末版へ更新、~838KB
+ *   - 東証上場銘柄（株式・ETF 等、~4400 行）× 東証 33 業種区分 + 市場区分
  *
  * なぜ JPX XLS か:
  *   - Yahoo JP の per-stock スクレイピングは rate limit で ~100 銘柄でブロックされる
@@ -16,19 +16,41 @@
 
 import * as XLSX from "xlsx";
 import { recordPrimaryData } from "../notion-archive/index.js";
-import { normalizeStockCode } from "./stock-code.js";
+import { isValidStockCode, normalizeStockCode } from "./stock-code.js";
 
 const JPX_LISTING_URL =
   "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls";
 
 /** JPX XLS の 1 行 (必要なカラムのみ) */
 export interface JpxRow {
+  /** JPX ファイル「日付」の基準日 (YYYY-MM-DD) */
+  asOf: string;
   /** 4 桁 0 パディング済み */
   code: string;
   name: string;
   marketCategory: string;
   /** 33 業種区分。"-" (ETF/REIT) は null */
   sector33: string | null;
+}
+
+/** JPX XLS の YYYYMMDD 値を、推定せず検証して YYYY-MM-DD に正規化する。 */
+export function parseJpxAsOf(value: unknown): string {
+  const compact = String(value ?? "").trim();
+  if (!/^\d{8}$/.test(compact)) {
+    throw new Error(`JPX XLS: 日付が YYYYMMDD 形式ではありません: ${compact}`);
+  }
+  const year = Number(compact.slice(0, 4));
+  const month = Number(compact.slice(4, 6));
+  const day = Number(compact.slice(6, 8));
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    throw new Error(`JPX XLS: 実在しない日付です: ${compact}`);
+  }
+  return `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}`;
 }
 
 /**
@@ -60,6 +82,7 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
 
   const rows: JpxRow[] = [];
   for (const raw of json) {
+    const asOf = parseJpxAsOf(raw["日付"]);
     const codeRaw = raw["コード"];
     const name = String(raw["銘柄名"] ?? "").trim();
     const marketCategory = String(raw["市場・商品区分"] ?? "").trim();
@@ -75,27 +98,40 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
 
     // "-" は ETF/REIT 等で業種無し → null
     const sector33 = sectorRaw && sectorRaw !== "-" ? sectorRaw : null;
-    rows.push({ code, name, marketCategory, sector33 });
+    rows.push({ asOf, code, name, marketCategory, sector33 });
   }
+
+  if (rows.length === 0) {
+    throw new Error("JPX XLS: データ行が 0 件です");
+  }
+  const sourceDates = new Set(rows.map((row) => row.asOf));
+  if (sourceDates.size !== 1) {
+    throw new Error(
+      `JPX XLS: 基準日が複数混在しています: ${[...sourceDates].join(", ")}`
+    );
+  }
+  const sourceAsOf = rows[0].asOf;
+  const sourceMonth = sourceAsOf.slice(0, 7);
 
   // ルール6: JPX 公式 XLS は物理ファイルの一次取得物。母集団 (universe)
   // の正本ソースなので、その実体を Notion へ必ずアップロードする。
-  // 月初更新の単一ファイルなので YYYY-MM をキーに冪等 (月内再実行は skip)。
-  const ym = new Date().toISOString().slice(0, 7);
+  // 実行月ではなくファイル内の基準月をキーにする。公開差替え前の旧ファイルを
+  // 翌月名で誤アーカイブせず、同一の一次データは冪等に skip する。
   await recordPrimaryData({
     service: "universe",
-    key: `jpx-listing-${ym}`,
+    key: `jpx-listing-${sourceMonth}`,
     source: JPX_LISTING_URL,
     metadata: {
       rowCount: rows.length,
       listedEquityCount: rows.filter(isListedEquity).length,
       bytes: buf.byteLength,
-      yearMonth: ym,
+      sourceAsOf,
+      sourceMonth,
     },
     files: [
       {
         bytes: buf,
-        filename: `data_j-${ym}.xls`,
+        filename: `data_j-${sourceAsOf}.xls`,
         contentType: "application/vnd.ms-excel",
       },
     ],
@@ -105,19 +141,22 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
 }
 
 /**
- * 「日本上場株」= 内国株式 (プライム / スタンダード / グロース) かを判定する。
+ * 共有 Yahoo パイプラインの対象となる東証内国普通株かを判定する。
  *
  * data_j.xls の「市場・商品区分」の代表値:
  *   - プライム（内国株式） / スタンダード（内国株式） / グロース（内国株式）  ← 対象
  *   - プライム（外国株式） 等                                                ← 除外 (海外株)
  *   - ETF・ETN / REIT・ベンチャーファンド… / PRO Market / 出資証券          ← 除外 (非株式)
  *
- * 母集団 (sync 対象 ~4,000) を JPX 内国普通株に限定するためのフィルタ。
+ * 母集団を JPX 内国株式かつ共通4文字コード形式に限定するためのフィルタ。
+ * JPX一覧には種類株等の5桁コードも「内国株式」として含まれるが、共有サービスの
+ * 銘柄コード契約・Yahoo正規化は4文字の普通株を対象とするため除外する。
  * 株主優待 REIT などは除外されるが、is_yutai 銘柄の active 維持は
  * 月次 sync 側で「raw JPX に存在する限り inactivate しない」ことで担保する。
  */
 export function isListedEquity(row: JpxRow): boolean {
   const mc = row.marketCategory;
+  if (!isValidStockCode(row.code)) return false;
   if (!mc.includes("内国株式")) return false;
   return (
     mc.includes("プライム") ||

@@ -65,8 +65,8 @@ wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/0000_clean_tag.sql   #
 母集団 seed と日次同期は **統一 sync** で行う (旧 `pnpm sync` / 手動 TSV seed は廃止)。取込 (書込) は Node (GitHub Actions) から D1 REST 経由で実行する。
 
 ```bash
-pnpm sync:universe          # JPX 全内国株 ~4,000 を core_stocks に seed (Yahoo なし)
-pnpm sync:daily             # 全 active の ファンダ/RSI/percentile/優良株判定
+pnpm sync:universe          # 東証内国普通株・共有4文字コード ~3,700 を seed (Yahoo なし)
+pnpm sync:daily:core        # 全 active の ファンダ/RSI/percentile/優良株判定
 ```
 
 ### 開発サーバー起動
@@ -82,7 +82,8 @@ pnpm dev
 | `pnpm dev` | ローカル開発サーバー (wrangler dev) |
 | `pnpm db:generate:d1` | D1 マイグレーション生成 (drizzle/d1/*.sql) |
 | `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql` | D1 に反映 |
-| `pnpm sync:universe` / `pnpm sync:daily` | 母集団 seed / 日次同期 |
+| `pnpm sync:universe` / `pnpm sync:daily:core` | 母集団 seed / core 日次同期 |
+| `pnpm sync:daily` | core + VWAP 3 工程のローカル手動フル実行 |
 | `pnpm test` | テスト実行 |
 | `pnpm test:coverage` | カバレッジ測定 |
 | `pnpm typecheck` | TypeScript型チェック |
@@ -110,7 +111,7 @@ RSIパーセンタイル順位で銘柄をスクリーニング。
 
 ### 日次同期 (GitHub Actions)
 
-日次同期は Worker のエンドポイントではなく **GitHub Actions** (`.github/workflows/stock-sync.yml`) が Node から D1 REST 経由で実行する (`pnpm sync:daily`)。Yahoo 取得は Worker エッジ (`/api/ingest/yahoo`, `YAHOO_PROXY_BASE`) を経由して 429 を回避する。
+日次同期は Worker のエンドポイントではなく **GitHub Actions** (`.github/workflows/stock-sync.yml`) が Node から D1 REST 経由で実行する (`pnpm sync:daily:core`)。Yahoo 取得は Worker エッジ (`/api/ingest/yahoo`, `YAHOO_PROXY_BASE`) を経由して 429 を回避する。
 
 ## ページ
 

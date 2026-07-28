@@ -179,7 +179,8 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
 // DCF/CAPM/BS は finmath.price_snapshot + .daily_ohlcv (Yahoo 二次利用) で
 // 個別銘柄を lazy-fetch する。EMH は「横断スクリーニング」のため母集団が入力。
 //
-// 母集団は設計選択肢 (b) を採用済み: core.stocks を全 JPX 内国株 (~4,000) に
+// 母集団は設計選択肢 (b) を採用済み: core.stocks を東証内国普通株
+// (共有4文字コード、~3,700) に
 // seed (src/cron/universe.ts) し、日次 sync (src/cron/daily.ts) が全 active の
 // core.stock_financials + swing.daily_ohlcv を更新する。EMH はそれを読むため、
 // universeSize = count(core.stocks WHERE is_active) は実際に集計可能な母集団と

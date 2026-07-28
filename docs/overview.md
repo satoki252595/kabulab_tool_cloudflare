@@ -126,9 +126,11 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 ├── scripts/
 │   ├── README.md
 │   ├── sync/
-│   │   ├── universe.ts                # pnpm sync:universe (JPX 全内国株を core_stocks に seed・Node)
-│   │   ├── all-daily.ts               # pnpm sync:daily (日次 core/rsi/swing 指標を計算 → D1。GitHub Actions)
-│   │   ├── all-monthly.ts             # pnpm sync:monthly (月次 universe + otakara rebuild → D1)
+│   │   ├── universe.ts                # pnpm sync:universe (東証内国普通株を core_stocks に seed・Node)
+│   │   ├── daily.ts                   # pnpm sync:daily:core (core/rsi/swing → D1。GitHub Actions)
+│   │   ├── monthly.ts                 # pnpm sync:monthly:core (otakara 派生テーブル rebuild → D1)
+│   │   ├── all-daily.ts               # pnpm sync:daily (core + VWAP のローカル手動フル)
+│   │   ├── all-monthly.ts             # pnpm sync:monthly (rebuild + 優待4工程のローカル手動フル)
 │   │   ├── yuho-edinet.ts             # pnpm ingest:yuho-edinet (Worker /yuho-quant/admin/catchup を叩く)
 │   │   └── ir-tdnet.ts                # pnpm ingest:ir-tdnet (TDnet + kuromoji → D1 HTTP)
 │   ├── vwap/                          # 007 VWAP 取込 → R2 (GitHub Actions で定期実行)
@@ -168,13 +170,13 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 ```
 Cloudflare D1 (kabulab-cf, SQLite)
 ├── 共有 core_* (sync が更新。全サービスが c.env.DB で読み取り)
-│   ├── core_stocks                    銘柄マスタ = 全 JPX 上場内国株 ~4,000 行 (is_yutai で優待銘柄を区別)
+│   ├── core_stocks                    銘柄マスタ = 東証内国普通株・共有4文字コード ~3,700 行
 │   ├── core_stock_financials          最新ファンダ + 営業利益率 TTM
 │   └── core_stock_annual_financials   年度売上高 (過去 4 年程度)
 ├── 001 RSI 固有
 │   └── rsi_percentile                 RSI(10/40/120) + percentile + 優良株フラグ
 ├── 003 Swing 固有
-│   ├── swing_daily_ohlcv              日足 OHLCV (90 営業日。母集団 ~4,000 化で容量確保のため 120→90 に短縮)
+│   ├── swing_daily_ohlcv              日足 OHLCV (90 営業日。母集団 ~3,700 化で容量確保のため 120→90 に短縮)
 │   ├── swing_stock_indicators         SMA(5/20/25/60/75) + ATR14 + RSI14 + MACD + Fib
 │   ├── swing_stock_screening          5 条件フィルター結果
 │   ├── swing_entry_signals            E&E 6 パターン signal
@@ -238,20 +240,19 @@ Cloudflare D1 (kabulab-cf, SQLite)
 
 取込 (書込) は **GitHub Actions(Node)** が担う。指標・スコア計算は Node で行い、D1 へは `createD1HttpDb` (D1 REST) で書き込む。Yahoo は共有クライアントが **`YAHOO_PROXY_BASE`** (Worker エッジの `/api/ingest/yahoo`) 経由で叩くため、ランナー IP が 429 されない。Workers Paid / Workers Cron は使わない (subrequest 50/invocation の無料枠では Worker 上で全銘柄 sync を捌けないため)。
 
-株価系の自動化は GitHub Actions ワークフロー [`.github/workflows/stock-sync.yml`](../.github/workflows/stock-sync.yml) が担当 (平日 21:00 UTC = 翌 06:00 JST に日次、毎月 1 日 22:30 UTC に月次 universe + otakara rebuild)。
+株価系の自動化は GitHub Actions ワークフロー [`.github/workflows/stock-sync.yml`](../.github/workflows/stock-sync.yml) が担当 (平日 21:00 UTC = 翌 06:00 JST に日次、毎月10日 01:30 UTC = 10:30 JST に月次 universe + otakara rebuild)。
 
-従来はサービス毎に sync コマンド (`sync:rsi`, `sync:otakara`, `sync:swing`, `sync:sectors`, `sync-light`) が分裂していた。2026-04 の refactor で `sync:daily` / `sync:monthly` の 2 本に統合。2026-05、004 financial-math (DCF/CAPM/EMH) が一般日本株ユニバースを要するため母集団を「otakara が seed する優待縛り ~1,600」から **全 JPX 上場内国株 ~4,000** へ拡張し、母集団 seed 用の `sync:universe` を追加した (3 コマンド体制)。優待は `core_stocks.is_yutai` フラグで保持し、002 otakara のみ is_yutai=true を母集団とする。
+従来はサービス毎に sync コマンド (`sync:rsi`, `sync:otakara`, `sync:swing`, `sync:sectors`, `sync-light`) が分裂していた。2026-04 の refactor で `sync:daily` / `sync:monthly` の 2 本に統合。2026-05、004 financial-math (DCF/CAPM/EMH) が一般日本株ユニバースを要するため母集団を「otakara が seed する優待縛り ~1,600」から **東証プライム／スタンダード／グロースの内国株式（共有4文字コード、約3,700）** へ拡張し、母集団 seed 用の `sync:universe` を追加した (3 コマンド体制)。地域市場の単独上場銘柄と5桁種類株は対象外。優待は `core_stocks.is_yutai` フラグで保持し、002 otakara のみ is_yutai=true を母集団とする。
 
 ### `pnpm sync:universe`
 
-JPX 公式 `data_j.xls` の内国普通株 (プライム/スタンダード/グロース) を `core_stocks` に upsert。新規 insert + name/market/sector 更新 + raw JPX に無い code の inactivate (上場廃止)。`is_yutai` は触らない (otakara の優待スクレイパーが writer)。xlsx パースは Node 専用。月次ワークフローで `sync:monthly` の前段として実行され、母集団 (`core_stocks`) を最新化する。明示的な手動 seed/復旧用 CLI としても使う。
+JPX 公式 `data_j.xls` の東証内国株 (プライム/スタンダード/グロース) から共有4文字コードだけを `core_stocks` に upsert。新規 insert + name/market/sector 更新を行い、raw JPX 不在またはコード契約外の銘柄を対象外化する。`is_active` の writer はこの universe sync に限定し、Yahoo の取得失敗では変更しない。`is_yutai` は触らない (otakara の優待スクレイパーが writer)。部分取得による大量対象外化を避ける件数ガードを持つ。xlsx パースは Node 専用。月次ワークフローで `sync:monthly:core` の前段として実行され、母集団 (`core_stocks`) を最新化する。明示的な手動 seed/復旧用 CLI としても使う。
 
-### `pnpm sync:daily` (= `scripts/sync/all-daily.ts`)
+### `pnpm sync:daily:core` (= `scripts/sync/daily.ts`)
 
 1 銘柄につき Yahoo を **Chart(5y) 1 回 + QuoteSummary 1 回** だけ叩き、in-memory で全サービス分の指標を計算して D1 に書き込む。
 
-- Phase 0: JPX `data_j.xls` で `core_stocks` を全内国株へ同期 (= `seedUniverse`)。失敗時は別値で埋めず警告 + `universe=null` を残し既存 `core_stocks` で続行 (ルール2)
-- Phase 1: `core_stocks` から active 銘柄を取得
+- Phase 1: 必須 D1 スキーマを検証し、`core_stocks` から active 銘柄を取得
 - Phase 2: マクロ指数 (^N225 / ^VIX / ^GSPC / NIY=F) + 日経VI を並列取得
 - Phase 3: worker pool (CONCURRENCY=5, DELAY_MS=200) で:
   - Yahoo `fetchStockRawData(code, "5y")` = Chart + QuoteSummary 並列 (`YAHOO_PROXY_BASE` 経由)
@@ -259,18 +260,29 @@ JPX 公式 `data_j.xls` の内国普通株 (プライム/スタンダード/グ�
   - 6mo スライス → SMA(5/20/25/60/75) + ATR14 + RSI14 + MACD + Fib + volume/turnover + 前日比%
   - 5 条件 screening と E&E 6 パターン判定
   - `core_stock_financials` / `core_stock_annual_financials` / `rsi_percentile` / `swing_{daily_ohlcv,stock_indicators,stock_screening,entry_signals}` を upsert
-  - 404 の銘柄は `core_stocks.is_active=false` 予約
-- Phase 5: 廃止銘柄の is_active 更新
+  - Yahoo の個別取得失敗はコードと根本原因を記録し、`is_active` は変更しない
 - Phase 4: セクター集計。`core_stocks ⋈ swing_stock_indicators` を D1 から再読込し、本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留 (前回値維持)・警告。`swing_sector_daily` 書き直し
 
-母集団 ~4,000 を 1 回の Node 実行で回す。GitHub Actions ジョブの `timeout-minutes: 90` (~40-50 分/回) 内で完結する。GH Actions 無料枠 (private 2,000 min/月) を意識し、VWAP と合わせて枠に近づく場合は cron を間引く運用余地がある。
+母集団 ~3,700 を 1 回の Node 実行で回す。個別銘柄またはマクロに欠損があれば終了コードを非ゼロにして、部分成功を正常終了として扱わない。GitHub Actions ジョブの `timeout-minutes: 90` (~40-50 分/回) 内で完結する。GH Actions 無料枠 (private 2,000 min/月) を意識し、VWAP と合わせて枠に近づく場合は cron を間引く運用余地がある。
 
-### `pnpm sync:monthly` (= `scripts/sync/all-monthly.ts`)
+`pnpm sync:daily` はローカル手動用のフルオーケストレータで、この core 同期に加えて
+VWAP の日足10年・5分足・信用残高を順に実行する。定常運用では stock-sync と
+vwap-ingest の各 GitHub Actions が別々に担当する。
 
-**Yahoo を 1 回も叩かない**。JPX 公式 XLS と D1 内データだけで完結する。
+### `pnpm sync:monthly:core` (= `scripts/sync/monthly.ts`)
 
-- Phase 1: JPX `data_j.xls` から `core_stocks` を全内国株に同期 (= `seedUniverse`、sector も upsert に内包)
-- Phase 2: `is_yutai=true` の優待銘柄のみ `core_stock_financials` + `swing_stock_indicators` + `yutai_benefits` を読んで `otakara_stock_financials` / `otakara_stock_scores` を再計算 (otakara テーブルを ~1,600 に抑える)
+`is_yutai=true` の優待銘柄のみ `core_stock_financials` +
+`swing_stock_indicators` + `yutai_benefits` を読み、
+`otakara_stock_financials` / `otakara_stock_scores` を再計算する。
+**Yahoo を 1 回も叩かず**、D1 内データだけで完結する。
+
+stock-sync の月次ジョブは次の順に別コマンドとして実行する。
+
+1. `pnpm sync:universe` — JPX `data_j.xls` から東証母集団を同期
+2. `pnpm sync:monthly:core` — otakara 派生テーブルを rebuild
+
+`pnpm sync:monthly` はローカル手動用のフルオーケストレータで、core rebuild に加え、
+優待取得、記述抽出、ローカル LLM 解釈、解釈結果の DB 反映を順に実行する。
 
 ### その他の取込ワークフロー (GitHub Actions)
 
@@ -336,10 +348,12 @@ pnpm run deploy             # (任意) wrangler deploy で手動デプロイ
 pnpm db:generate:d1         # D1(SQLite) スキーマ生成 → drizzle/d1/*.sql
 # 反映: wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql
 
-# データ同期 (GitHub Actions / Node。定常運用は daily / monthly の 2 本)
-pnpm sync:daily             # 全 active ~4,000 + マクロ + 全サービス指標・パターン・セクター (~40-50分)。Phase 0 で JPX 母集団同期を内包
-pnpm sync:monthly           # 優待 (is_yutai) 再スコア (Yahoo なし)
-pnpm sync:universe          # JPX 母集団 (core_stocks) を seed/更新 (月次 universe の前段。手動 seed/復旧にも使う)
+# データ同期 (GitHub Actions / Node)
+pnpm sync:daily:core        # 全 active ~3,700 + マクロ + 全サービス指標・パターン・セクター
+pnpm sync:daily             # 手動フル日次: core + VWAP 日足/5分足/信用残高
+pnpm sync:monthly:core      # 優待 (is_yutai) 再スコア (Yahoo なし)
+pnpm sync:monthly           # 手動フル月次: rebuild + 優待取得/抽出/LLM解釈/DB反映
+pnpm sync:universe          # 東証母集団 (core_stocks) を seed/更新 (月次 rebuild の前段。手動 seed/復旧にも使う)
 
 # 取込 (GitHub Actions / Node)
 pnpm ingest:vwap-daily / :vwap-intra / :vwap-margin   # 007 VWAP → R2

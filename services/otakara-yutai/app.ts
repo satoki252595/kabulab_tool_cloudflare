@@ -83,7 +83,7 @@ app.get("/api/screening", async (c) => {
   const order = c.req.query("order") ?? "desc";
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") ?? "50", 10) || 50));
 
-  // 母集団は全 JPX ~4,000 だが otakara は優待サービスなので is_yutai=true に限定
+  // 母集団は東証対象 ~3,700 だが otakara は優待サービスなので is_yutai=true に限定
   const whereClauses: unknown[] = [eq(stocks.isActive, true), eq(stocks.isYutai, true)];
 
   // ジャンル/権利月フィルター。
@@ -1169,7 +1169,7 @@ app.get("/stocks/:code", async (c) => {
   if (code === null) return c.html(layout("Not Found", `<div class="container"><h2>不正な銘柄コード</h2></div>`), 400);
   const db = c.get("db");
 
-  // otakara は優待サービス。母集団 ~4,000 のうち is_yutai=true のみ詳細表示する
+  // otakara は優待サービス。母集団 ~3,700 のうち is_yutai=true のみ詳細表示する
   const stockData = await db.query.stocks.findFirst({
     where: and(eq(stocks.code, code), eq(stocks.isYutai, true)),
     with: {

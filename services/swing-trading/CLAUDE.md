@@ -136,8 +136,8 @@ services/swing-trading/
 pnpm dev                 # ローカル開発サーバー起動 (wrangler dev)
 pnpm db:generate:d1      # D1 マイグレーション SQL を生成 (drizzle/d1/*.sql)
 # 適用: wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<file>.sql
-pnpm sync:universe       # JPX 全内国株 ~4,000 を core_stocks に seed (Node 専用)
-pnpm sync:daily          # 統一日次同期 (Yahoo → core/rsi/swing。サービス固有 sync:swing は廃止)
+pnpm sync:universe       # 東証内国普通株・共有4文字コード ~3,700 を seed (Node 専用)
+pnpm sync:daily:core     # core/rsi/swing 日次同期 (サービス固有 sync:swing は廃止)
 pnpm test                # 全サービス横断のテスト
 pnpm typecheck           # 全サービス型チェック
 pnpm lint                # ESLint

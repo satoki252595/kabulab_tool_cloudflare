@@ -165,7 +165,7 @@ const SERVICES: Service[] = [
     title: "お宝優待",
     subtitle: "割安な株主優待を発見",
     desc:
-      "全上場銘柄の株主優待を分類・スクリーニング。ファンダメンタルズ60% + テクニカル40% の独自スコアで、割安な優待銘柄を自動ランク付けします。",
+      "東京証券取引所（東証）の対象銘柄から株主優待を分類・スクリーニング。ファンダメンタルズ60% + テクニカル40% の独自スコアで、割安な優待銘柄を自動ランク付けします。",
     features: ["Fundamental", "Technical", "Yutai Score"],
     url: `${OTAKARA_BASE_PATH}/`,
     status: "live",

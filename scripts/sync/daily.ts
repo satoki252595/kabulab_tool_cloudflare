@@ -14,24 +14,58 @@
  *   GitHub Actions: .github/workflows/stock-sync.yml
  */
 import "dotenv/config";
-import { createDailyDb, runDailySync } from "../../src/cron/daily.js";
+import {
+  createDailyDb,
+  isDailySyncIncomplete,
+  runDailySync,
+} from "../../src/cron/daily.js";
+import { requireYahooProxyForNodeSync } from "../../src/shared/env.js";
+import { rootCauseMessage } from "../../src/shared/errors.js";
+
+const MAX_CODES_PER_ERROR = 50;
+
+function printFailureSummary(
+  failures: { code: string; error: string }[]
+): void {
+  const groups = new Map<string, string[]>();
+  for (const failure of failures) {
+    const codes = groups.get(failure.error) ?? [];
+    codes.push(failure.code);
+    groups.set(failure.error, codes);
+  }
+
+  console.warn(
+    `[sync-daily] 失敗銘柄: ${failures.length} 件 / 原因グループ: ${groups.size} 件`
+  );
+  for (const [error, codes] of groups) {
+    const shown = codes.slice(0, MAX_CODES_PER_ERROR).join(", ");
+    const omitted =
+      codes.length > MAX_CODES_PER_ERROR
+        ? ` …他${codes.length - MAX_CODES_PER_ERROR}件`
+        : "";
+    console.warn(`  - ${codes.length}件 [${shown}${omitted}]: ${error}`);
+  }
+}
 
 async function main(): Promise<void> {
+  // Node から Yahoo を直接叩く構成は 429 と全銘柄リトライを招くため、DB 接続前に拒否。
+  requireYahooProxyForNodeSync();
   const db = createDailyDb();
   const result = await runDailySync(db);
 
   if (result.failures.length > 0) {
-    console.warn("[sync-daily] 失敗銘柄:");
-    for (const f of result.failures.slice(0, 50)) {
-      console.warn(`  - ${f.code}: ${f.error}`);
-    }
-    if (result.failures.length > 50) {
-      console.warn(`  ... 他 ${result.failures.length - 50} 銘柄`);
-    }
+    printFailureSummary(result.failures);
+  }
+
+  if (isDailySyncIncomplete(result)) {
+    throw new Error(
+      `日次同期が不完全です: 成功=${result.successStocks}/${result.totalStocks}, ` +
+        `失敗=${result.failedStocks}, マクロ=${result.marketContextOk ? "成功" : "失敗"}`
+    );
   }
 }
 
 main().catch((e) => {
-  console.error("[sync-daily] エラー:", e);
+  console.error("[sync-daily] エラー:", rootCauseMessage(e));
   process.exit(1);
 });

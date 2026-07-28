@@ -94,7 +94,7 @@ Notion「金融数学入門」で紹介された **4 つのアノマリー** を
 | `low-vol` | 低ボラ・アノマリー | `swing_stock_indicators.atr_pct` < 閾値 (デフォルト 1.5)。**atr_pct は % 値保存** (decimal ではない) |
 | `post-earnings` | PEAD (決算後ドリフト) | **決算日が外部データなしに取れないため、`core_stock_financials.fetched_at` (更新時刻) を簡易代理** とする — 真の決算発表日ではない (コード内コメントで明示済の制限) |
 
-- 母集団は `core_stocks` の **is_active 全銘柄 (全 JPX 内国株 ~4,000)**。
+- 母集団は `core_stocks` の **is_active 全銘柄（東証内国普通株・共有4文字コード、約3,700）**。
   時系列は `swing_daily_ohlcv` (003 所有、**約 100 営業日保持** — window 上限
   100 の根拠)、指標は `swing_stock_indicators`、時価総額等は
   `core_stock_financials` をいずれも読み取り専用で参照。

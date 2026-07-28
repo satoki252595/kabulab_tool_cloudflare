@@ -8,7 +8,7 @@ kabulab は **単一の Cloudflare Workers プロジェクト** (`kabulab-cf`) �
 
 DB は **Cloudflare D1 (SQLite)** の単一 DB `kabulab-cf`。名前空間が無いため、全サービスを **接頭辞テーブル** (`core_*` / `<slug>_*`) で同居させる。Worker からは `c.env.DB` バインディング経由で読み取る。
 
-**sync は統一 3 コマンド** (`sync:universe` / `sync:daily` / `sync:monthly`) に集約されている。母集団は `core_stocks` = 全 JPX 上場内国株 ~4,000 (`sync:universe` が JPX XLS から seed、月次 rebuild Phase 1 にも内包)。新サービスが日次/月次のデータ取得を必要とする場合、独自の sync を書かずに [src/cron/daily.ts](../src/cron/daily.ts) / [src/cron/monthly.ts](../src/cron/monthly.ts) に統合する (本ドキュメント §9 参照)。`core_stocks.is_yutai` は 002 otakara 専用フラグなので、他サービスは全 active を対象にしてよい。
+**定常 sync は統一 3 コマンド** (`sync:universe` / `sync:daily:core` / `sync:monthly:core`) に集約されている。`:core` なしの daily/monthly は追加取込も束ねるローカル手動フル実行。母集団は `core_stocks` = 東証プライム／スタンダード／グロースの内国株式（共有4文字コード、約3,700）で、`sync:universe` が JPX XLS から seed する。月次ワークフローは universe の後に rebuild を実行する。新サービスが日次/月次のデータ取得を必要とする場合、独自の sync を書かずに [src/cron/daily.ts](../src/cron/daily.ts) / [src/cron/monthly.ts](../src/cron/monthly.ts) に統合する (本ドキュメント §9 参照)。`core_stocks.is_yutai` は 002 otakara 専用フラグなので、他サービスは全 active を対象にしてよい。
 
 ## 1. サービスフォルダの作成
 
@@ -206,9 +206,9 @@ app.get("/api/some-protected", cronAuthMiddleware, async (c) => { ... });
 
 ## 9. データ同期 — 統一パイプラインに相乗り
 
-**サービス独自の `sync-daily` / `sync-monthly` は作らない**。日次/月次 sync は root の [src/cron/daily.ts](../src/cron/daily.ts) / [src/cron/monthly.ts](../src/cron/monthly.ts) に実装が一本化され、母集団 seed は [src/cron/universe.ts](../src/cron/universe.ts) (`sync:universe`) にある。母集団は全 JPX 内国株 ~4,000 (xlsx パースは Node 専用)。
+**サービス独自の `sync-daily` / `sync-monthly` は作らない**。日次/月次 sync は root の [src/cron/daily.ts](../src/cron/daily.ts) / [src/cron/monthly.ts](../src/cron/monthly.ts) に実装が一本化され、母集団 seed は [src/cron/universe.ts](../src/cron/universe.ts) (`sync:universe`) にある。母集団は東証内国普通株の共有4文字コード約3,700銘柄 (xlsx パースは Node 専用)。地域市場の単独上場銘柄を追加する場合は、市場マスターと対応プロバイダーを別途設計し、`.T` への一律変換や suffix 推測は行わない。
 
-自動実行は **GitHub Actions (Node)** が担う ([.github/workflows/stock-sync.yml](../.github/workflows/stock-sync.yml) — 日次 core/rsi/swing + 月次 universe/otakara rebuild)。Workers Paid を使わないため **Workers Cron は使わない** (無料枠の subrequest 上限では Worker 上で全銘柄 sync を捌けない)。Node からの書込は [src/shared/db/d1-http-client.ts](../src/shared/db/d1-http-client.ts) の `createD1HttpDb` (D1 REST) 経由、Yahoo は共有クライアントが `YAHOO_PROXY_BASE` (Worker エッジ `/api/ingest/yahoo`) 経由で叩き 429 を回避する。手動実行・バックフィルは `scripts/sync/*.ts` (`pnpm sync:daily` / `sync:monthly`)。
+自動実行は **GitHub Actions (Node)** が担う ([.github/workflows/stock-sync.yml](../.github/workflows/stock-sync.yml) — 日次 core/rsi/swing + 月次 universe/otakara rebuild)。Workers Paid を使わないため **Workers Cron は使わない** (無料枠の subrequest 上限では Worker 上で全銘柄 sync を捌けない)。Node からの書込は [src/shared/db/d1-http-client.ts](../src/shared/db/d1-http-client.ts) の `createD1HttpDb` (D1 REST) 経由、Yahoo は共有クライアントが `YAHOO_PROXY_BASE` (Worker エッジ `/api/ingest/yahoo`) 経由で叩き 429 を回避する。手動実行・バックフィルは `pnpm sync:daily:core` / `pnpm sync:monthly:core` を使う。`:core` なしは VWAP や優待4工程も動かすローカル手動フル実行。
 
 ### 新サービスが日次データを必要とする場合
 
@@ -249,4 +249,4 @@ app.get("/api/some-protected", cronAuthMiddleware, async (c) => { ... });
 - [ ] 同一タブで遷移する (sub-path なので `target="_blank"` 不要)
 - [ ] (該当時) `pnpm db:generate:d1` → `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql` で D1 にスキーマが作成された
 - [ ] (該当時) `src/cron/daily.ts` or `monthly.ts` に新サービス用の書き込みを統合済み
-- [ ] (該当時) `pnpm sync:universe` で母集団を seed 後、`pnpm sync:daily` / `pnpm sync:monthly` を手動実行してデータが入ることを確認
+- [ ] (該当時) `pnpm sync:universe` で母集団を seed 後、`pnpm sync:daily:core` / `pnpm sync:monthly:core` を手動実行してデータが入ることを確認

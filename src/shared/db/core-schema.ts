@@ -34,7 +34,7 @@ export const stocks = sqliteTable("core_stocks", {
   sector: text("sector"),
   isActive: integer("is_active", { mode: "boolean" }).default(true).notNull(),
   /**
-   * 株主優待を実施している銘柄か。母集団は全 JPX 上場株 (~4,000) だが、
+   * 株主優待を実施している銘柄か。母集団は東証内国普通株 (~3,700) だが、
    * 002 otakara-yutai は is_yutai=true のみを母集団とする。
    */
   isYutai: integer("is_yutai", { mode: "boolean" }).default(false).notNull(),

@@ -47,7 +47,7 @@ import { rsiScreeningApp, BASE_PATH as RSI_BASE_PATH } from "../services/rsi-scr
 app.route(RSI_BASE_PATH, rsiScreeningApp);
 ```
 
-**Cron は本サービス内には無い**。日次同期は **GitHub Actions** (`.github/workflows/stock-sync.yml`) が Node から D1 REST 経由で全サービス分を一括実行し、本サービスのテーブルも更新される (Workers Cron / Workers Paid は不使用)。母集団は 2026-05 に「優待縛り ~1,600」から **全 JPX 上場内国株 ~4,000** へ拡張済み。本サービスは全 active 銘柄を対象とする (is_yutai は 002 専用フラグで RSI 判定には無関係)。
+**Cron は本サービス内には無い**。日次同期は **GitHub Actions** (`.github/workflows/stock-sync.yml`) が Node から D1 REST 経由で全サービス分を一括実行し、本サービスのテーブルも更新される (Workers Cron / Workers Paid は不使用)。母集団は 2026-05 に「優待縛り ~1,600」から **東証プライム／スタンダード／グロースの内国株式（共有4文字コード、約3,700）** へ拡張済み。本サービスは全 active 銘柄を対象とする (is_yutai は 002 専用フラグで RSI 判定には無関係)。
 
 ## DB スキーマ
 
@@ -129,10 +129,10 @@ GET /api/screening
 起動:
 
 ```bash
-pnpm sync:daily      # ローカル手動実行 (全サービス分を一括)
+pnpm sync:daily:core # core/rsi/swing 単体の手動実行
 ```
 
-自動実行: GitHub Actions (`.github/workflows/stock-sync.yml`) が日次で `pnpm sync:daily` を実行し、全 active を一括処理する (Workers Cron / Workers Paid は不使用)。
+自動実行: GitHub Actions (`.github/workflows/stock-sync.yml`) が日次で `pnpm sync:daily:core` を実行し、全 active を一括処理する (Workers Cron / Workers Paid は不使用)。`pnpm sync:daily` はこれに VWAP 3 工程を加えたローカル手動フル実行。
 
 ## 優良株判定ロジック
 

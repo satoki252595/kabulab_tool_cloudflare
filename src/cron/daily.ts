@@ -18,7 +18,6 @@
  *   Phase 3. worker pool で各銘柄: Chart(5y)+QuoteSummary 取得 → 全指標を計算 →
  *            core_financials / rsi_percentile / swing_* を **増分** upsert
  *   Phase 4. セクター集計（当日更新済 indicators から集計・90% カバレッジ guard）
- *   Phase 5. 廃止銘柄 (Yahoo 404) の is_active=false
  *
  * 母集団 (core_stocks) の JPX 同期は xlsx パーサが Node 専用のため
  * `pnpm sync:universe`（src/cron/universe.ts）で別途同期する。
@@ -28,12 +27,13 @@
  * rows-written を ~52 万 → ~3 万/日 に抑え D1 無料枠 (10 万/日) 内に収める。
  *
  * CLAUDE.md のフォールバック禁止ルールに従い:
- *   - 銘柄の Yahoo 404 は is_active=false に更新 (silent 無視しない)
+ *   - Yahoo の取得失敗は failure として明示し、上場状態は変更しない
+ *   - is_active の所有者は JPX 公式一覧を読む universe sync に限定する
  *   - 日経VI 取得失敗は judgeMacro() が HOLD を返すので B/C 判定に変えない
  *   - マクロ 4 指数のどれかが取れない場合も null で通す
  */
 
-import { sql, eq, and, lt, gte, inArray } from "drizzle-orm";
+import { sql, eq, and, lt, gte } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 
 // core スキーマは rsi-screening の定義を流用 (001 が所有・更新)
@@ -70,6 +70,7 @@ import {
   type StockChangeInput,
 } from "../shared/sector-aggregate.js";
 import type { DailyOhlcv } from "../shared/types.js";
+import { rootCauseMessage } from "../shared/errors.js";
 
 // -----------------------------------------------------------------------------
 // 型定義
@@ -84,7 +85,6 @@ export interface DailySyncResult {
   totalStocks: number;
   successStocks: number;
   failedStocks: number;
-  inactivatedStocks: number;
   marketContextOk: boolean;
   elapsedSec: number;
   failures: { code: string; error: string }[];
@@ -180,9 +180,6 @@ const OHLCV_RETENTION_DAYS = 90;
 const OHLCV_CHUNK = 12;
 /** sector_daily insert の bind 上限対策 (6 列なので 16 行/文) */
 const SECTOR_CHUNK = 16;
-/** inactivate IN リストの bind 上限対策 */
-const INACT_CHUNK = 80;
-
 // -----------------------------------------------------------------------------
 // エントリポイント
 // -----------------------------------------------------------------------------
@@ -195,6 +192,43 @@ export function createDailyDb() {
   return createD1HttpDb(SCHEMAS);
 }
 
+/** 成功件数が残っていても、欠損を含む run は監視上の失敗として扱う。 */
+export function isDailySyncIncomplete(
+  result: Pick<
+    DailySyncResult,
+    "totalStocks" | "successStocks" | "failedStocks" | "marketContextOk"
+  >
+): boolean {
+  return (
+    result.totalStocks === 0 ||
+    result.successStocks + result.failedStocks !== result.totalStocks ||
+    result.failedStocks > 0 ||
+    !result.marketContextOk
+  );
+}
+
+/**
+ * コードが要求する D1 スキーマを、数千銘柄の取得を始める前に検証する。
+ *
+ * 2026-06-29〜07-27 は `adj` 追加 migration が本番未適用のままコードだけ先行し、
+ * 毎回ほぼ全銘柄が15分後に失敗した。存在列を SELECT することで同種の適用漏れを
+ * 即時かつ具体的に検出する。
+ */
+async function assertDailySchema(db: Db): Promise<void> {
+  try {
+    await db
+      .select({ adj: swingSchema.dailyOhlcv.adj })
+      .from(swingSchema.dailyOhlcv)
+      .limit(1);
+  } catch (error) {
+    throw new Error(
+      "D1 スキーマ不整合: swing_daily_ohlcv.adj を確認できません。" +
+        " drizzle/d1/0008_young_ben_urich.sql の本番適用状態を確認してください。",
+      { cause: error }
+    );
+  }
+}
+
 /**
  * 日次 sync 本体
  *
@@ -205,9 +239,10 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   const failures: { code: string; error: string }[] = [];
 
   // -----------------------------------------------------------------
-  // Phase 1: アクティブ銘柄取得 + 既存 OHLCV の MAX(date) (増分判定用)
+  // Phase 1: スキーマ検証 + アクティブ銘柄取得 + 既存 OHLCV の MAX(date)
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 1: ブートストラップ");
+  await assertDailySchema(db);
   const targets = await db
     .select({
       id: coreSchema.stocks.id,
@@ -235,11 +270,11 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 2: マクロコンテキスト取得");
   const marketContextOk = await syncMarketContext(db).then(
-    () => true,
+    (complete) => complete,
     (e) => {
       console.warn(
         "[sync-daily]   マクロ取得部分失敗:",
-        e instanceof Error ? e.message : e
+        rootCauseMessage(e)
       );
       return false;
     }
@@ -250,7 +285,6 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 3: 銘柄フェッチ + 計算 + 書き込み");
   const queue = [...targets];
-  const inactivated: number[] = [];
   let succeeded = 0;
 
   async function worker(): Promise<void> {
@@ -262,32 +296,16 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
         await writeStockSnapshot(db, snap, maxDateByStock.get(target.id));
         succeeded++;
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = rootCauseMessage(e);
         failures.push({ code: target.code, error: msg });
-        if (msg.includes("404") || msg.includes("見つかりません")) {
-          inactivated.push(target.id);
-        }
       }
       await sleep(DELAY_MS);
     }
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
   console.info(
-    `[sync-daily]   成功: ${succeeded} / 失敗: ${failures.length} / 廃止: ${inactivated.length}`
+    `[sync-daily]   成功: ${succeeded} / 失敗: ${failures.length}`
   );
-
-  // -----------------------------------------------------------------
-  // Phase 5: クリーンアップ (廃止銘柄)
-  // -----------------------------------------------------------------
-  console.info("[sync-daily] Phase 5: クリーンアップ");
-  for (let i = 0; i < inactivated.length; i += INACT_CHUNK) {
-    await db
-      .update(coreSchema.stocks)
-      .set({ isActive: false, updatedAt: new Date() })
-      .where(
-        inArray(coreSchema.stocks.id, inactivated.slice(i, i + INACT_CHUNK))
-      );
-  }
 
   // -----------------------------------------------------------------
   // Phase 4: セクター集計 (当日更新済 indicators から・90% カバレッジ guard)
@@ -356,14 +374,13 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   console.info(
-    `[sync-daily] 完了: 成功=${succeeded} 失敗=${failures.length} 廃止=${inactivated.length} 所要=${elapsedSec.toFixed(1)}s`
+    `[sync-daily] 完了: 成功=${succeeded} 失敗=${failures.length} 所要=${elapsedSec.toFixed(1)}s`
   );
 
   return {
     totalStocks: targets.length,
     successStocks: succeeded,
     failedStocks: failures.length,
-    inactivatedStocks: inactivated.length,
     marketContextOk,
     elapsedSec,
     failures,
@@ -807,7 +824,7 @@ async function writeStockSnapshot(
 // マクロコンテキスト同期 (^N225 / ^VIX / ^GSPC / NIY=F + 日経VI)
 // -----------------------------------------------------------------------------
 
-async function syncMarketContext(db: Db): Promise<void> {
+async function syncMarketContext(db: Db): Promise<boolean> {
   const today = new Date().toISOString().split("T")[0];
 
   async function safeFetchLatest(
@@ -819,7 +836,7 @@ async function syncMarketContext(db: Db): Promise<void> {
     } catch (e) {
       console.warn(
         `[sync-daily]   マクロ取得失敗 ${symbol}:`,
-        e instanceof Error ? e.message : e
+        rootCauseMessage(e)
       );
       return { price: null, prevClose: null };
     }
@@ -832,7 +849,7 @@ async function syncMarketContext(db: Db): Promise<void> {
     } catch (e) {
       console.warn(
         `[sync-daily]   日経VI 取得失敗:`,
-        e instanceof Error ? e.message : e
+        rootCauseMessage(e)
       );
       return null;
     }
@@ -897,6 +914,16 @@ async function syncMarketContext(db: Db): Promise<void> {
         computedAt: sql`(unixepoch())`,
       },
     });
+
+  return (
+    n225.price !== null &&
+    n225.prevClose !== null &&
+    vix.price !== null &&
+    gspc.price !== null &&
+    gspc.prevClose !== null &&
+    niy.price !== null &&
+    nikkeiVi !== null
+  );
 }
 
 function sleep(ms: number): Promise<void> {

@@ -23,6 +23,7 @@ import type {
   DailyOhlcv,
   StockRawData,
 } from "../types.js";
+import { sharedEnv } from "../env.js";
 
 /**
  * 日本株銘柄コード。
@@ -163,8 +164,14 @@ export async function yahooFetchDirect(url: string): Promise<Response> {
  * CLAUDE.md ルール2: プロキシ未到達でも別値で握り潰さず、エラーはそのまま伝播させる。
  */
 async function yahooFetch(url: string): Promise<Response> {
-  const proxyBase = process.env.YAHOO_PROXY_BASE;
-  const secret = process.env.CRON_SECRET;
+  const proxyBase = sharedEnv.YAHOO_PROXY_BASE();
+  const secret = sharedEnv.CRON_SECRET();
+  if (proxyBase && !secret) {
+    throw new Error(
+      "Yahoo 取込プロキシ設定が不完全です: " +
+        "YAHOO_PROXY_BASE を使う場合は CRON_SECRET も設定してください。"
+    );
+  }
   if (proxyBase && secret) {
     const proxied = `${proxyBase.replace(/\/$/, "")}/api/ingest/yahoo?u=${encodeURIComponent(url)}`;
     return fetch(proxied, {
@@ -290,7 +297,9 @@ export interface QuoteSummaryResult {
 
 export async function fetchQuoteSummary(code: string): Promise<QuoteSummaryResult> {
   if (!JP_STOCK_PATTERN.test(code)) {
-    throw new Error(`不正な銘柄コード: ${code} (4桁数字である必要があります)`);
+    throw new Error(
+      `不正な銘柄コード: ${code} (数字4桁または数字3桁+末尾英字である必要があります)`
+    );
   }
 
   const url = `${QUOTE_SUMMARY_API_BASE}/${code}.T?modules=${QUOTE_SUMMARY_MODULES}`;
@@ -380,7 +389,9 @@ export async function fetchStockRawData(
   range = "5y"
 ): Promise<StockRawData> {
   if (!JP_STOCK_PATTERN.test(code)) {
-    throw new Error(`不正な銘柄コード: ${code} (4桁数字である必要があります)`);
+    throw new Error(
+      `不正な銘柄コード: ${code} (数字4桁または数字3桁+末尾英字である必要があります)`
+    );
   }
 
   const [chart, summary] = await Promise.all([

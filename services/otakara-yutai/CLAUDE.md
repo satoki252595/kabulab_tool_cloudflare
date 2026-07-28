@@ -146,9 +146,9 @@ pnpm run deploy           # Cloudflare Workers 手動デプロイ (wrangler depl
                           #   通常は main push → Workers Builds (Git 連携) で無料自動デプロイ
 pnpm db:generate:d1       # drizzle/d1/*.sql を生成 (生成後 wrangler d1 execute で適用)
 # データ同期はサービス固有コマンド無し。root 統一 sync を使う (Node / GitHub Actions):
-pnpm sync:universe        # JPX 全内国株 ~4,000 を core_stocks に seed
-pnpm sync:daily           # 全 active の OHLCV/ファンダ/指標 (otakara も core/swing 経由で反映)
-pnpm sync:monthly         # 母集団同期 + is_yutai=true のみ otakara_stock_scores 再計算
+pnpm sync:universe        # 東証内国普通株・共有4文字コード ~3,700 を core_stocks に seed
+pnpm sync:daily:core      # 全 active の OHLCV/ファンダ/指標 (otakara も core/swing 経由で反映)
+pnpm sync:monthly:core    # is_yutai=true のみ otakara_stock_scores 再計算
 # 優待データ取込パイプライン (data-scripts、GitHub Actions 非対象・ローカル手動。.ts は tsx 実行):
 #   1. pnpm exec tsx services/otakara-yutai/data-scripts/fetch-yutai-full.ts            # minkabu→yutai_benefits + is_yutai
 #   2. pnpm exec tsx services/otakara-yutai/data-scripts/export-benefit-descriptions.ts # →data/benefit-descriptions.jsonl
@@ -168,7 +168,7 @@ pnpm typecheck            # 全サービス型チェック
 - 本番ビルドは `services/otakara-yutai/app.ts` の 1 ファイル構成 (旧 src/index.ts / src/pages-app.ts は削除済み)
 - DB スキーマとクライアントは `src/db/schema.ts` / `src/db/client.ts` の単一 source of truth
 - `src/services/` のスクレイパー類は `data-scripts/` から呼ばれる
-  (スコアリングは `src/shared/scoring.ts` + 月次同期 (`pnpm sync:monthly`) に統合済み。
+  (スコアリングは `src/shared/scoring.ts` + 月次同期 (`pnpm sync:monthly:core`) に統合済み。
   旧 `src/scripts/sync-and-score.ts` は削除済み)
 - `data-scripts/` 配下の 1 回限りのデータ取得スクリプトは tsconfig から除外されている
 - **JSX は使えない** — mono-repo 方針 (ビューは template literal を返す .ts 関数。Workers/esbuild でも踏襲) により、HTML は app.ts 内で template literal として直接生成する

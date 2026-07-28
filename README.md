@@ -103,9 +103,11 @@ pnpm db:generate:d1       # D1(SQLite) スキーマ生成 → drizzle/d1/*.sql (
 # 注: db:push:rsi / :otakara / :swing / :finmath / :ircat は旧 Neon(pg) 用で D1 移行後は obsolete
 
 # データ取得 (日次/月次 stock sync。本体は GitHub Actions が自動実行 — 下記「運用ステータス」)
-pnpm sync:daily           # 手動フル日次トリガ (Worker /admin/sync-daily を叩く + VWAP も束ねる)
-pnpm sync:monthly         # 手動 月次 otakara rebuild トリガ (Worker /admin/sync-monthly)
-pnpm sync:universe        # JPX 母集団 seed (xlsx=Node 専用・上場/廃止時に実行)
+pnpm sync:daily:core      # core/rsi/swing 日次 (Node → D1 REST。GitHub Actions と同じ本体)
+pnpm sync:daily           # 手動フル日次 (上記 core + VWAP 日足/5分足/信用残高)
+pnpm sync:monthly:core    # otakara 派生テーブル rebuild (Node → D1 REST、Yahoo なし)
+pnpm sync:monthly         # 手動フル月次 (上記 rebuild + 優待取得/抽出/ローカルLLM解釈/DB反映)
+pnpm sync:universe        # 東証内国株の母集団 seed (xlsx=Node 専用・月次/復旧時に実行)
 
 # データ取得 (007 VWAP → R2。cron 対象外=手動/CI)
 pnpm ingest:vwap-daily    # 全銘柄の日足10年 (未取得はバックフィル, 既存は差分) → R2 daily/{code}.json
@@ -119,7 +121,10 @@ pnpm ingest:ir-tdnet      # /ir-catalog/admin/catchup を CRON_SECRET 認証で 
 pnpm ingest:yuho-edinet   # WORKER_BASE_URL の /yuho-quant/admin/catchup を CRON_SECRET 認証で POST
 ```
 
-> **母集団**: 全 JPX 上場内国株 ~4,000 銘柄。002 otakara は `is_yutai=true` の優待銘柄のみを対象とする。
+> **母集団**: JPX `data_j.xls` に載る東証プライム／スタンダード／グロースの
+> 内国株式のうち、共有 4 文字コード契約に合う約 3,700 銘柄。地域市場の
+> 単独上場銘柄と 5 桁種類株は対象外。002 otakara はさらに
+> `is_yutai=true` の優待銘柄のみを対象とする。
 > Yahoo Finance はレート制限 (429) が厳しいため、VWAP の大量取得は低負荷 (逐次 + ディレイ) で行う。
 
 ## 運用ステータス（自動化・手作業・残タスク）
@@ -130,7 +135,7 @@ ADR-0001 で **Neon を全廃し Cloudflare D1 + R2 + Notion へ移行済み**�
 
 | データ | 保存先 | 規模 | 鮮度 |
 |---|---|---|---|
-| 日次 OHLCV + 財務 + RSI + swing 指標 | D1 | ~3,754 銘柄 | 直近営業日 |
+| 日次 OHLCV + 財務 + RSI + swing 指標 | D1 | ~3,700 銘柄 | 直近営業日 |
 | お宝優待 財務/スコア (`otakara_*`) | D1 | ~1,605 銘柄 | 月次 |
 | 有報受注 (`yuho_*`) / 適時開示 (`ir_disclosures`) | D1 | 移行済み | 取込次第 |
 | 日足10年 (007 VWAP) | R2 `daily/{code}.json` | 4,444 銘柄 | 直近 |
@@ -147,7 +152,7 @@ D1 へは `createD1HttpDb`(D1 REST)で書き込む。
 
 | ワークフロー | 内容 | スケジュール (UTC) |
 |---|---|---|
-| `.github/workflows/stock-sync.yml` | 日次=core/rsi/swing 取得+指標+**増分 OHLCV** / 月次=母集団(JPX)同期 + otakara rebuild | 平日 21:00 / 1 日 22:30 |
+| `.github/workflows/stock-sync.yml` | 日次=core/rsi/swing 取得+指標+**増分 OHLCV** / 月次=東証母集団同期 + otakara rebuild | 平日 21:00 / 10 日 01:30 |
 | `.github/workflows/vwap-ingest.yml` | 日足10年 + **5分足** → R2 / 信用残高(週次) | 平日 08:00 / 土 09:00 |
 | `.github/workflows/catchup.yml` | 005 有報(EDINET) + 006 適時開示(TDnet) キャッチアップ(TDnet=Node, EDINET=Worker ルート) | 平日 11:00 |
 
@@ -300,7 +305,7 @@ pnpm exec tsx services/otakara-yutai/data-scripts/apply-benefit-interpretations.
 |---|---|---|
 | VWAP の日足/5分足が「未取得」 | Yahoo Finance の 429 (IP レート制限) で未投入 | 別回線/時間を空けて低負荷 (逐次 + ディレイ) で `ingest:vwap-*` を再実行 |
 | マクロ判定が `HOLD` のまま | 日経電子版の HTML 構造変更 or 到達不能 | `src/shared/yahoo/nikkei-vi.ts` を確認 (silent に B/C 判定しない・ルール2) |
-| セクター一覧が "未分類" 1 件 | `core.stocks.sector` が NULL (初回 or JPX URL 変更) | `pnpm sync:monthly` を手動実行 |
+| セクター一覧が "未分類" 1 件 | `core.stocks.sector` が NULL (初回 or JPX URL 変更) | `pnpm sync:universe` を手動実行。必要なら続けて `pnpm sync:monthly:core` |
 | Yahoo rate limit で失敗多発 | crumb 期限切れ or 上限超過 | 並列度を下げる (`CONC` / `DELAY_MS`)、翌日再試行 |
 | 005 yuho-quant が空表示 | D1 へ未投入 (cutover 前) | ADR-0001 §7 の Neon→D1 移送、または `ingest:yuho-edinet` で取込 |
 

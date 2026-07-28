@@ -13,14 +13,16 @@
 #   NOTION_TOKEN / NOTION_BACKUP_PAGE_ID / NOTION_TRASH_PAGE_ID … 月次 universe の
 #     JPX XLS 一次データ Notion アーカイブ(ルール6)用
 #
-# 💡 GH Actions 無料枠(private 2,000 min/月)を意識: 日次 ~4,000 銘柄は ~40-50 分/回。
+# 💡 GH Actions 無料枠(private 2,000 min/月)を意識: 日次 ~3,700 銘柄は ~40-50 分/回。
 #    平日毎日 + VWAP と合わせると枠に近づくため、必要なら cron を Mon/Wed/Fri 等へ間引く。
 name: stock-sync
 
 on:
   schedule:
     - cron: "0 21 * * 1-5" # 平日 21:00 UTC (翌 06:00 JST・東証 EOD 確定後): 日次 sync
-    - cron: "30 22 1 * *" # 毎月 1 日 22:30 UTC: 母集団同期 + otakara rebuild
+    # JPX data_j.xls は毎月第3営業日以降に前月末版へ差し替わる。
+    # 月初の旧版取得を避け、毎月10日 10:30 JST に母集団同期する。
+    - cron: "30 1 10 * *"
   workflow_dispatch:
     inputs:
       target:
@@ -72,7 +74,7 @@ jobs:
       # 月次: 母集団(JPX)同期 → otakara rebuild (月次 cron または dispatch=monthly/all)
       - name: monthly universe + rebuild
         if: >-
-          (github.event_name == 'schedule' && github.event.schedule == '30 22 1 * *') ||
+          (github.event_name == 'schedule' && github.event.schedule == '30 1 10 * *') ||
           (github.event_name == 'workflow_dispatch' &&
             (github.event.inputs.target == 'monthly' || github.event.inputs.target == 'all'))
         run: |

@@ -79,8 +79,8 @@ src/
 pnpm dev                # ローカル開発サーバー起動 (wrangler dev)
 pnpm db:generate:d1     # D1 マイグレーション生成 (drizzle/d1/*.sql。全サービス共通)
                         # 反映: wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql
-pnpm sync:universe      # JPX 全内国株 ~4,000 を core_stocks に seed
-pnpm sync:daily         # 統一日次同期 (Yahoo → core/rsi/swing。サービス固有 sync:rsi は廃止)
+pnpm sync:universe      # 東証内国普通株・共有4文字コード ~3,700 を core_stocks に seed
+pnpm sync:daily:core    # core/rsi/swing 日次同期 (サービス固有 sync:rsi は廃止)
 pnpm test               # 全サービス横断のテスト
 pnpm typecheck          # 全サービス型チェック
 pnpm lint               # ESLint

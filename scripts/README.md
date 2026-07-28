@@ -5,17 +5,17 @@
 `services/<slug>/data-scripts/` に置く。
 
 > ADR-0001 で全サービスを **Cloudflare D1 + R2 + Notion** へ移行済み（Neon 全廃）。
-> 日次/月次の指標・スコア計算は **Worker Cron** が自動実行する。本ディレクトリの
-> `sync/*` は手動/CI 用の薄いトリガ、`vwap/*` は GitHub Actions 用の取込、
+> 日次/月次の指標・スコア計算は **GitHub Actions (Node)** が自動実行する。本ディレクトリの
+> `sync/*` は手動/CI 用の実行入口、`vwap/*` は GitHub Actions 用の取込、
 > `migrate/*` は一度きりの cutover ツール。
 
 ```
 scripts/
 ├── README.md                         # このファイル
 ├── sync/                             # 取込トリガ / 母集団 seed
-│   ├── daily.ts                      # pnpm sync:daily   — Worker /admin/sync-daily を叩く薄いトリガ (+ VWAP 束ね)
-│   ├── monthly.ts                    # pnpm sync:monthly — Worker /admin/sync-monthly を叩く薄いトリガ
-│   ├── universe.ts                   # pnpm sync:universe — JPX 母集団を core_stocks に seed (Node・xlsx)
+│   ├── daily.ts                      # pnpm sync:daily:core — core/rsi/swing を計算して D1 へ書込
+│   ├── monthly.ts                    # pnpm sync:monthly:core — otakara 派生テーブルを再構築
+│   ├── universe.ts                   # pnpm sync:universe — 東証母集団を core_stocks に seed (Node・xlsx)
 │   ├── all-daily.ts / all-monthly.ts # ローカル手動フル実行のオーケストレータ
 │   ├── yuho-edinet.ts / ir-tdnet.ts  # 005/006 の Worker /admin/catchup を叩く薄いトリガ
 ├── vwap/                             # 007 VWAP 取込 → R2 (GitHub Actions で定期実行)
@@ -30,7 +30,7 @@ scripts/
 | ジョブ | 実行 | コマンド / トリガ |
 |---|---|---|
 | 日次 stock sync (core/rsi/swing) | **自動** (GitHub Actions) | `.github/workflows/stock-sync.yml`(平日 21:00 UTC) / 手動 `pnpm sync:daily:core` |
-| 月次 母集団 + otakara rebuild | **自動** (GitHub Actions) | 同上(1 日 22:30 UTC) / 手動 `pnpm sync:universe` + `pnpm sync:monthly:core` |
+| 月次 母集団 + otakara rebuild | **自動** (GitHub Actions) | 同上(10 日 01:30 UTC) / 手動 `pnpm sync:universe` + `pnpm sync:monthly:core` |
 | VWAP 日足/5分足/信用 → R2 | **自動** (GitHub Actions) | `.github/workflows/vwap-ingest.yml` / 手動 `pnpm ingest:vwap-*` |
 | 005 EDINET / 006 TDnet | **自動** (GitHub Actions) | `.github/workflows/catchup.yml`(平日 11:00 UTC) / 手動 `pnpm ingest:yuho-edinet` / `ingest:ir-tdnet` |
 | 002 優待スクレイプ+LLM | 手動 (Node・ローカル LLM) | `services/otakara-yutai/data-scripts/*`（月次） |

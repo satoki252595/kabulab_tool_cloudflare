@@ -59,8 +59,8 @@ cp .env.example .env
 ```bash
 pnpm db:generate:d1        # drizzle/d1/*.sql を生成
 wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<生成SQL>  # D1 に適用
-pnpm sync:universe         # core_stocks を全 JPX 内国株 ~4,000 に seed
-pnpm sync:monthly          # 母集団同期 + is_yutai 銘柄のスコア再計算
+pnpm sync:universe         # 東証内国普通株・共有4文字コード ~3,700 を seed
+pnpm sync:monthly:core     # is_yutai 銘柄のスコア再計算
 ```
 
 ## 開発コマンド (全てリポジトリルートから)
@@ -117,8 +117,8 @@ kabulab は **単一 Cloudflare Worker** (`kabulab-cf`)。`git push origin main`
 
 ### stock-sync.yml — 銘柄データ同期 (002 に直接関係)
 
-- **トリガー**: 平日 21:00 UTC (日次 core/rsi/swing sync) + 毎月 1 日 22:30 UTC (母集団同期 + otakara rebuild) + 手動
-- **内容**: `sync:daily` / `sync:monthly` 等を実行し D1 を REST 経由で更新。is_yutai 銘柄の `otakara_stock_scores` も月次で再計算
+- **トリガー**: 平日 21:00 UTC (日次 core/rsi/swing sync) + 毎月10日 01:30 UTC (母集団同期 + otakara rebuild) + 手動
+- **内容**: 日次は `sync:daily:core`、月次は `sync:universe` → `sync:monthly:core` を実行し D1 を REST 経由で更新。is_yutai 銘柄の `otakara_stock_scores` も月次で再計算
 - **デプロイは Workers Builds が別途担当** (このワークフローは取込専用)
 
 ### vwap-ingest.yml — VWAP 時系列取込 (007)
