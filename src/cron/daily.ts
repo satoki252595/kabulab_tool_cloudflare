@@ -174,6 +174,8 @@ interface StockSnapshot {
 const CONCURRENCY = 5;
 /** ワーカー間隔 (ms) */
 const DELAY_MS = 150;
+/** 90 分の Actions 上限内で最終集約まで完了させる回復件数上限。 */
+const MAX_RECOVERY_TARGETS = 100;
 /** swing_daily_ohlcv の保持期間 (営業日)。増分 upsert と併せて書込/容量を抑える。 */
 const OHLCV_RETENTION_DAYS = 90;
 /** OHLCV insert の D1 bind 上限対策 (adj 追加で 8 列になったので 12 行/文: 8×12=96≤100) */
@@ -207,6 +209,75 @@ export function isDailySyncIncomplete(
   );
 }
 
+export interface DailyRecoveryFailure<T> {
+  target: T;
+  error: string;
+}
+
+export interface DailyRecoveryResult<T> {
+  attempted: number;
+  recovered: number;
+  skippedDueToLimit: number;
+  failures: DailyRecoveryFailure<T>[];
+}
+
+/** 取得元または D1 の 5xx・ネットワーク障害だけを回収対象にする。 */
+export function isTransientDailySyncFailure(message: string): boolean {
+  return (
+    /^(?:Chart|QuoteSummary) API HTTP エラー \[[^\]]+\]: 5\d{2}\b/.test(
+      message
+    ) ||
+    /^D1 HTTP 5\d{2}\b/.test(message) ||
+    /D1 HTTP error:.*"message":"internal error; reference =/i.test(message) ||
+    /\b(?:fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR_SOCKET|socket hang up|other side closed|terminated)\b/i.test(
+      message
+    )
+  );
+}
+
+/**
+ * 初回バッチ完走後、一過性失敗だけを逐次 1 回再処理する。
+ * 永続エラーは再試行せず、再処理にも失敗した対象は最新原因を返す。
+ */
+export async function recoverTransientDailyFailures<T>(
+  failures: readonly DailyRecoveryFailure<T>[],
+  processTarget: (target: T) => Promise<void>
+): Promise<DailyRecoveryResult<T>> {
+  const unresolved: DailyRecoveryFailure<T>[] = [];
+  let attempted = 0;
+  let recovered = 0;
+  let skippedDueToLimit = 0;
+  for (const failure of failures) {
+    if (!isTransientDailySyncFailure(failure.error)) {
+      unresolved.push(failure);
+      continue;
+    }
+    if (attempted >= MAX_RECOVERY_TARGETS) {
+      unresolved.push(failure);
+      skippedDueToLimit++;
+      continue;
+    }
+    attempted++;
+    try {
+      await processTarget(failure.target);
+      recovered++;
+    } catch (error) {
+      unresolved.push({
+        target: failure.target,
+        error: rootCauseMessage(error),
+      });
+    }
+    await sleep(DELAY_MS);
+  }
+
+  return {
+    attempted,
+    recovered,
+    skippedDueToLimit,
+    failures: unresolved,
+  };
+}
+
 /**
  * コードが要求する D1 スキーマを、数千銘柄の取得を始める前に検証する。
  *
@@ -236,7 +307,6 @@ async function assertDailySchema(db: Db): Promise<void> {
  */
 export async function runDailySync(db: Db): Promise<DailySyncResult> {
   const startedAt = Date.now();
-  const failures: { code: string; error: string }[] = [];
 
   // -----------------------------------------------------------------
   // Phase 1: スキーマ検証 + アクティブ銘柄取得 + 既存 OHLCV の MAX(date)
@@ -285,27 +355,53 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 3: 銘柄フェッチ + 計算 + 書き込み");
   const queue = [...targets];
+  const firstPassFailures: DailyRecoveryFailure<(typeof targets)[number]>[] =
+    [];
   let succeeded = 0;
+
+  async function processTarget(
+    target: (typeof targets)[number]
+  ): Promise<void> {
+    const snap = await buildSnapshot(target.id, target.code, target.sector);
+    await writeStockSnapshot(db, snap, maxDateByStock.get(target.id));
+  }
 
   async function worker(): Promise<void> {
     while (queue.length > 0) {
       const target = queue.shift();
       if (!target) break;
       try {
-        const snap = await buildSnapshot(target.id, target.code, target.sector);
-        await writeStockSnapshot(db, snap, maxDateByStock.get(target.id));
+        await processTarget(target);
         succeeded++;
       } catch (e) {
         const msg = rootCauseMessage(e);
-        failures.push({ code: target.code, error: msg });
+        firstPassFailures.push({ target, error: msg });
       }
       await sleep(DELAY_MS);
     }
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
   console.info(
-    `[sync-daily]   成功: ${succeeded} / 失敗: ${failures.length}`
+    `[sync-daily]   初回成功: ${succeeded} / 初回失敗: ${firstPassFailures.length}`
   );
+
+  const recovery = await recoverTransientDailyFailures(
+    firstPassFailures,
+    processTarget
+  );
+  succeeded += recovery.recovered;
+  if (recovery.attempted > 0 || recovery.skippedDueToLimit > 0) {
+    console.info(
+      `[sync-daily]   一過性失敗の回収: 実行=${recovery.attempted} ` +
+        `回復=${recovery.recovered} ` +
+        `未回復=${recovery.attempted - recovery.recovered + recovery.skippedDueToLimit} ` +
+        `上限超過=${recovery.skippedDueToLimit}`
+    );
+  }
+  const failures = recovery.failures.map(({ target, error }) => ({
+    code: target.code,
+    error,
+  }));
 
   // -----------------------------------------------------------------
   // Phase 4: セクター集計 (当日更新済 indicators から・90% カバレッジ guard)

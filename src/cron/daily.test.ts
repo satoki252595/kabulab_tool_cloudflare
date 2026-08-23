@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { isDailySyncIncomplete } from "./daily.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  isDailySyncIncomplete,
+  isTransientDailySyncFailure,
+  recoverTransientDailyFailures,
+} from "./daily.js";
 
 describe("isDailySyncIncomplete", () => {
   it("全対象成功かつマクロ成功だけを完全成功とする", () => {
@@ -46,5 +50,112 @@ describe("isDailySyncIncomplete", () => {
         marketContextOk: true,
       })
     ).toBe(true);
+  });
+});
+
+describe("isTransientDailySyncFailure", () => {
+  it.each([
+    ["Chart API HTTP エラー [3675]: 500 Internal Server Error", true],
+    ["QuoteSummary API HTTP エラー [8383]: 502 Bad Gateway", true],
+    ["QuoteSummary API HTTP エラー [7203]: 429 Too Many Requests", false],
+    ["D1 HTTP 500: internal error", true],
+    [
+      'D1 HTTP error: [{"code":7500,"message":"internal error; reference = abc"}]',
+      true,
+    ],
+    ["fetch failed / 原因: read ECONNRESET", true],
+    ["TypeError: terminated / 原因: other side closed", true],
+    ["TypeError: UND_ERR_SOCKET", true],
+    ["QuoteSummary API HTTP エラー [7203]: 404 Not Found", false],
+    ["D1 HTTP 400: no such column: adj", false],
+    ["D1 スキーマ不整合: migration適用状態を確認してください。", false],
+  ])("%s -> %s", (message, expected) => {
+    expect(isTransientDailySyncFailure(message)).toBe(expected);
+  });
+});
+
+describe("recoverTransientDailyFailures", () => {
+  it("一過性失敗だけを1回再処理し、恒久エラーはそのまま残す", async () => {
+    const processed: string[] = [];
+    const result = await recoverTransientDailyFailures(
+      [
+        {
+          target: "yahoo-500",
+          error: "Chart API HTTP エラー [3675]: 500 Internal Server Error",
+        },
+        { target: "d1-500", error: "D1 HTTP 500: internal error" },
+        {
+          target: "schema",
+          error: "D1 スキーマ不整合: migration適用状態を確認してください。",
+        },
+      ],
+      async (target) => {
+        processed.push(target);
+      }
+    );
+
+    expect(new Set(processed)).toEqual(new Set(["yahoo-500", "d1-500"]));
+    expect(result.attempted).toBe(2);
+    expect(result.recovered).toBe(2);
+    expect(result.skippedDueToLimit).toBe(0);
+    expect(result.failures).toEqual([
+      {
+        target: "schema",
+        error: "D1 スキーマ不整合: migration適用状態を確認してください。",
+      },
+    ]);
+  });
+
+  it("再処理も失敗した対象は最新原因で1件だけ残す", async () => {
+    let attempts = 0;
+    const result = await recoverTransientDailyFailures(
+      [
+        {
+          target: "8383",
+          error: "QuoteSummary API HTTP エラー [8383]: 502 Bad Gateway",
+        },
+      ],
+      async () => {
+        attempts++;
+        throw new Error(
+          "QuoteSummary API HTTP エラー [8383]: 500 Internal Server Error"
+        );
+      }
+    );
+
+    expect(attempts).toBe(1);
+    expect(result.attempted).toBe(1);
+    expect(result.recovered).toBe(0);
+    expect(result.skippedDueToLimit).toBe(0);
+    expect(result.failures).toEqual([
+      {
+        target: "8383",
+        error: "QuoteSummary API HTTP エラー [8383]: 500 Internal Server Error",
+      },
+    ]);
+  });
+
+  it("回復処理を100件で止め、超過対象を未解決として残す", async () => {
+    vi.useFakeTimers();
+    try {
+      const failures = Array.from({ length: 101 }, (_, index) => ({
+        target: String(index),
+        error: `Chart API HTTP エラー [${index}]: 500 Internal Server Error`,
+      }));
+      const processed: string[] = [];
+      const pending = recoverTransientDailyFailures(failures, async (target) => {
+        processed.push(target);
+      });
+      await vi.runAllTimersAsync();
+      const result = await pending;
+
+      expect(processed).toHaveLength(100);
+      expect(result.attempted).toBe(100);
+      expect(result.recovered).toBe(100);
+      expect(result.skippedDueToLimit).toBe(1);
+      expect(result.failures).toEqual([failures[100]]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

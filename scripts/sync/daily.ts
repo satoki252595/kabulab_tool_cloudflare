@@ -23,6 +23,7 @@ import { requireYahooProxyForNodeSync } from "../../src/shared/env.js";
 import { rootCauseMessage } from "../../src/shared/errors.js";
 
 const MAX_CODES_PER_ERROR = 50;
+const MAX_ERROR_GROUPS = 20;
 
 function printFailureSummary(
   failures: { code: string; error: string }[]
@@ -37,13 +38,16 @@ function printFailureSummary(
   console.warn(
     `[sync-daily] 失敗銘柄: ${failures.length} 件 / 原因グループ: ${groups.size} 件`
   );
-  for (const [error, codes] of groups) {
+  for (const [error, codes] of [...groups].slice(0, MAX_ERROR_GROUPS)) {
     const shown = codes.slice(0, MAX_CODES_PER_ERROR).join(", ");
     const omitted =
       codes.length > MAX_CODES_PER_ERROR
         ? ` …他${codes.length - MAX_CODES_PER_ERROR}件`
         : "";
     console.warn(`  - ${codes.length}件 [${shown}${omitted}]: ${error}`);
+  }
+  if (groups.size > MAX_ERROR_GROUPS) {
+    console.warn(`  - 他${groups.size - MAX_ERROR_GROUPS}原因グループは省略`);
   }
 }
 
