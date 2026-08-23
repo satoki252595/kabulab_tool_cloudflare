@@ -41,6 +41,72 @@ const CHART_API_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
 const QUOTE_SUMMARY_API_BASE = "https://query1.finance.yahoo.com/v10/finance/quoteSummary";
 const QUOTE_SUMMARY_MODULES =
   "financialData,defaultKeyStatistics,summaryDetail,incomeStatementHistory";
+const HTTP_ERROR_BODY_MAX_BYTES = 300;
+
+async function readResponsePrefix(
+  response: Response,
+  maxBytes: number
+): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const prefix = new Uint8Array(maxBytes);
+  let written = 0;
+  try {
+    while (written < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value.subarray(0, maxBytes - written);
+      prefix.set(chunk, written);
+      written += chunk.length;
+    }
+  } finally {
+    await reader.cancel();
+  }
+  return new TextDecoder().decode(prefix.subarray(0, written));
+}
+
+function redactYahooDiagnostic(value: string): string {
+  return value
+    .replace(/([?&]crumb=)[^&\s"'<>]+/gi, "$1[redacted]")
+    .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(/\b((?:Set-)?Cookie)\s*:\s*[^\r\n]*/gi, "$1: [redacted]");
+}
+
+/** Yahoo/取込プロキシの失敗元を次回ログで切り分けられる形にする。 */
+export async function yahooHttpErrorMessage(
+  label: string,
+  response: Response
+): Promise<string> {
+  const details: string[] = [];
+  const upstreamStatus = response.headers.get("X-Kabulab-Yahoo-Status");
+  const cfRay = response.headers.get("CF-Ray");
+  const source = upstreamStatus
+    ? "yahoo-upstream"
+    : sharedEnv.YAHOO_PROXY_BASE()
+      ? "ingest-proxy"
+      : "yahoo-direct";
+  details.push(`source=${source}`);
+  if (upstreamStatus) details.push(`yahoo-status=${upstreamStatus}`);
+  if (source === "ingest-proxy" && cfRay) details.push(`cf-ray=${cfRay}`);
+
+  try {
+    const body = redactYahooDiagnostic(
+      await readResponsePrefix(response, HTTP_ERROR_BODY_MAX_BYTES)
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    if (body) {
+      details.push(`body=${JSON.stringify(body)}`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    details.push(
+      `body-read-error=${JSON.stringify(redactYahooDiagnostic(message))}`
+    );
+  }
+
+  return `${label}: ${response.status} ${response.statusText}; ${details.join("; ")}`;
+}
 
 /** プロセス 1 回ぶんで共有する crumb/cookie キャッシュ (module-level singleton) */
 let cachedCrumb: string | null = null;
@@ -99,7 +165,9 @@ async function getYahooCrumb(): Promise<{ crumb: string; cookie: string }> {
     );
 
     if (!crumbRes.ok) {
-      throw new Error(`Yahoo crumb 取得失敗: ${crumbRes.status}`);
+      throw new Error(
+        await yahooHttpErrorMessage("Yahoo crumb HTTP エラー", crumbRes)
+      );
     }
 
     const crumb = (await crumbRes.text()).trim();
@@ -223,7 +291,7 @@ export async function fetchChart(
 
   if (!response.ok) {
     throw new Error(
-      `Chart API HTTP エラー [${symbol}]: ${response.status} ${response.statusText}`
+      await yahooHttpErrorMessage(`Chart API HTTP エラー [${symbol}]`, response)
     );
   }
 
@@ -307,7 +375,10 @@ export async function fetchQuoteSummary(code: string): Promise<QuoteSummaryResul
 
   if (!response.ok) {
     throw new Error(
-      `QuoteSummary API HTTP エラー [${code}]: ${response.status} ${response.statusText}`
+      await yahooHttpErrorMessage(
+        `QuoteSummary API HTTP エラー [${code}]`,
+        response
+      )
     );
   }
 

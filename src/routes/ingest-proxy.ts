@@ -44,10 +44,19 @@ ingestProxyRoute.get("/yahoo", async (c) => {
   }
 
   // エッジで crumb 付き直接 fetch (この Worker は YAHOO_PROXY_BASE 未設定なので
-  // プロキシループにはならない)。生レスポンスをそのまま返す。
+  // プロキシループにはならない)。status ヘッダで upstream 応答と Worker 内部
+  // 例外を呼び出し側が区別できるようにし、本文はバッファせず中継する。
   const res = await yahooFetchDirect(u);
-  return new Response(await res.text(), {
+  const headers = new Headers({
+    "X-Kabulab-Yahoo-Status": String(res.status),
+  });
+  const contentType = res.headers.get("Content-Type");
+  if (contentType) headers.set("Content-Type", contentType);
+  const contentEncoding = res.headers.get("Content-Encoding");
+  if (contentEncoding) headers.set("Content-Encoding", contentEncoding);
+  return new Response(res.body, {
     status: res.status,
-    headers: { "Content-Type": "application/json" },
+    statusText: res.statusText,
+    headers,
   });
 });
