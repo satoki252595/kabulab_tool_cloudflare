@@ -42,6 +42,30 @@ const QUOTE_SUMMARY_API_BASE = "https://query1.finance.yahoo.com/v10/finance/quo
 const QUOTE_SUMMARY_MODULES =
   "financialData,defaultKeyStatistics,summaryDetail,incomeStatementHistory";
 const HTTP_ERROR_BODY_MAX_BYTES = 300;
+const DEFAULT_RATE_LIMIT_BACKOFF_MS = 5_000;
+const MAX_RATE_LIMIT_BACKOFF_MS = 30_000;
+
+/** Retry-After を絶対時刻へ変換し、Actions の実行時間を守るため最大30秒に制限する。 */
+function rateLimitRetryAt(response: Response): number | null {
+  if (response.status !== 429) return null;
+
+  const now = Date.now();
+  const value = response.headers.get("Retry-After")?.trim();
+  let delayMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
+  if (value && /^\d+$/.test(value)) {
+    delayMs = Number(value) * 1_000;
+  } else if (value) {
+    const retryAt = Date.parse(value);
+    if (
+      Number.isFinite(retryAt) &&
+      new Date(retryAt).toUTCString() === value
+    ) {
+      delayMs = Math.max(0, retryAt - now);
+    }
+  }
+
+  return now + Math.min(delayMs, MAX_RATE_LIMIT_BACKOFF_MS);
+}
 
 async function readResponsePrefix(
   response: Response,
@@ -88,6 +112,8 @@ export async function yahooHttpErrorMessage(
   details.push(`source=${source}`);
   if (upstreamStatus) details.push(`yahoo-status=${upstreamStatus}`);
   if (source === "ingest-proxy" && cfRay) details.push(`cf-ray=${cfRay}`);
+  const retryAt = rateLimitRetryAt(response);
+  if (retryAt !== null) details.push(`retry-at-ms=${retryAt}`);
 
   try {
     const body = redactYahooDiagnostic(

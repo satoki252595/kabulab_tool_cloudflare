@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 describe("GET /yahoo", () => {
-  it("Yahooのstatus・Content-Type・本文と診断markerだけを中継する", async () => {
+  it("Yahooのstatus・許可ヘッダ・本文と診断markerだけを中継する", async () => {
     fetchYahoo.mockResolvedValue(
       new Response('{"error":"upstream"}', {
         status: 502,
@@ -32,6 +32,7 @@ describe("GET /yahoo", () => {
         headers: {
           "Content-Type": "application/json",
           "Content-Encoding": "gzip",
+          "Retry-After": "2",
           "Set-Cookie": "must-not-leak=1",
         },
       })
@@ -49,6 +50,7 @@ describe("GET /yahoo", () => {
     expect(response.statusText).toBe("Bad Gateway");
     expect(response.headers.get("Content-Type")).toContain("application/json");
     expect(response.headers.get("Content-Encoding")).toBe("gzip");
+    expect(response.headers.get("Retry-After")).toBe("2");
     expect(response.headers.get("X-Kabulab-Yahoo-Status")).toBe("502");
     expect(response.headers.get("Set-Cookie")).toBeNull();
     expect(await response.text()).toBe('{"error":"upstream"}');

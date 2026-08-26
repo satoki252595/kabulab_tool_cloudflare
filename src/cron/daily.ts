@@ -170,12 +170,14 @@ interface StockSnapshot {
 // 定数
 // -----------------------------------------------------------------------------
 
-/** ワーカー並列度 (Yahoo はエッジプロキシ経由なので 429 は無いが配慮) */
+/** ワーカー並列度 (Yahoo はエッジプロキシ経由でも upstream 制限に配慮) */
 const CONCURRENCY = 5;
 /** ワーカー間隔 (ms) */
 const DELAY_MS = 150;
 /** 90 分の Actions 上限内で最終集約まで完了させる回復件数上限。 */
 const MAX_RECOVERY_TARGETS = 100;
+/** upstream 指示や診断文字列が異常でも回復待機を30秒で止める。 */
+const MAX_RECOVERY_BACKOFF_MS = 30_000;
 /** swing_daily_ohlcv の保持期間 (営業日)。増分 upsert と併せて書込/容量を抑える。 */
 const OHLCV_RETENTION_DAYS = 90;
 /** OHLCV insert の D1 bind 上限対策 (adj 追加で 8 列になったので 12 行/文: 8×12=96≤100) */
@@ -221,12 +223,10 @@ export interface DailyRecoveryResult<T> {
   failures: DailyRecoveryFailure<T>[];
 }
 
-/** 取得元または D1 の 5xx・ネットワーク障害だけを回収対象にする。 */
+/** 取得元の429/5xx、D1の5xx、ネットワーク障害だけを回収対象にする。 */
 export function isTransientDailySyncFailure(message: string): boolean {
   return (
-    /^(?:Chart|QuoteSummary) API HTTP エラー \[[^\]]+\]: 5\d{2}\b/.test(
-      message
-    ) ||
+    /^(?:(?:Chart|QuoteSummary) API HTTP エラー \[[^\]]+\]|Yahoo crumb HTTP エラー): (?:429|5\d{2})\b/.test(message) ||
     /^D1 HTTP 5\d{2}\b/.test(message) ||
     /D1 HTTP error:.*"message":"internal error; reference =/i.test(message) ||
     /\b(?:fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR_SOCKET|socket hang up|other side closed|terminated)\b/i.test(
@@ -247,6 +247,20 @@ export async function recoverTransientDailyFailures<T>(
   let attempted = 0;
   let recovered = 0;
   let skippedDueToLimit = 0;
+  const requestedRetryAt = Math.max(
+    0,
+    ...failures
+      .filter(({ error }) => isTransientDailySyncFailure(error))
+      .map(
+        ({ error }) => Number(/\bretry-at-ms=(\d+)\b/.exec(error)?.[1]) || 0
+      )
+  );
+  const retryAt = Math.min(
+    requestedRetryAt,
+    Date.now() + MAX_RECOVERY_BACKOFF_MS
+  );
+  if (retryAt > Date.now()) await sleep(retryAt - Date.now());
+
   for (const failure of failures) {
     if (!isTransientDailySyncFailure(failure.error)) {
       unresolved.push(failure);
