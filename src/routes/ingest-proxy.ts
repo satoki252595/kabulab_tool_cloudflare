@@ -54,6 +54,8 @@ ingestProxyRoute.get("/yahoo", async (c) => {
   if (contentType) headers.set("Content-Type", contentType);
   const contentEncoding = res.headers.get("Content-Encoding");
   if (contentEncoding) headers.set("Content-Encoding", contentEncoding);
+  const retryAfter = res.headers.get("Retry-After");
+  if (retryAfter) headers.set("Retry-After", retryAfter);
   return new Response(res.body, {
     status: res.status,
     statusText: res.statusText,

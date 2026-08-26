@@ -57,7 +57,8 @@ describe("isTransientDailySyncFailure", () => {
   it.each([
     ["Chart API HTTP エラー [3675]: 500 Internal Server Error", true],
     ["QuoteSummary API HTTP エラー [8383]: 502 Bad Gateway", true],
-    ["QuoteSummary API HTTP エラー [7203]: 429 Too Many Requests", false],
+    ["QuoteSummary API HTTP エラー [7203]: 429 Too Many Requests", true],
+    ["Yahoo crumb HTTP エラー: 429 Too Many Requests", true],
     ["D1 HTTP 500: internal error", true],
     [
       'D1 HTTP error: [{"code":7500,"message":"internal error; reference = abc"}]',
@@ -75,6 +76,76 @@ describe("isTransientDailySyncFailure", () => {
 });
 
 describe("recoverTransientDailyFailures", () => {
+  it("429を有界なRetry-After後に1回再処理して回復する", async () => {
+    vi.useFakeTimers();
+    try {
+      const retryAt = Date.now() + 60_000;
+      const processed: string[] = [];
+      const pending = recoverTransientDailyFailures(
+        [
+          {
+            target: "2418",
+            error:
+              `Chart API HTTP エラー [2418]: 429 Too Many Requests; ` +
+              `retry-at-ms=${retryAt}`,
+          },
+        ],
+        async (target) => {
+          processed.push(target);
+        }
+      );
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(processed).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(processed).toEqual(["2418"]);
+      await vi.runAllTimersAsync();
+      const result = await pending;
+
+      expect(result.attempted).toBe(1);
+      expect(result.recovered).toBe(1);
+      expect(result.failures).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("429が再処理後も続けば成功扱いせず最新失敗を残す", async () => {
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      const pending = recoverTransientDailyFailures(
+        [
+          {
+            target: "2418",
+            error: "Chart API HTTP エラー [2418]: 429 Too Many Requests",
+          },
+        ],
+        async () => {
+          attempts++;
+          throw new Error(
+            "Chart API HTTP エラー [2418]: 429 Too Many Requests; retry-at-ms=9999999999999"
+          );
+        }
+      );
+      await vi.runAllTimersAsync();
+      const result = await pending;
+
+      expect(attempts).toBe(1);
+      expect(result.attempted).toBe(1);
+      expect(result.recovered).toBe(0);
+      expect(result.failures).toEqual([
+        {
+          target: "2418",
+          error:
+            "Chart API HTTP エラー [2418]: 429 Too Many Requests; retry-at-ms=9999999999999",
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("一過性失敗だけを1回再処理し、恒久エラーはそのまま残す", async () => {
     const processed: string[] = [];
     const result = await recoverTransientDailyFailures(
