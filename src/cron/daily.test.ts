@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   isDailySyncIncomplete,
   isTransientDailySyncFailure,
+  prioritizeDailyRecoveryFailures,
   recoverTransientDailyFailures,
 } from "./daily.js";
 
@@ -59,6 +60,7 @@ describe("isTransientDailySyncFailure", () => {
     ["QuoteSummary API HTTP エラー [8383]: 502 Bad Gateway", true],
     ["QuoteSummary API HTTP エラー [7203]: 429 Too Many Requests", true],
     ["Yahoo crumb HTTP エラー: 429 Too Many Requests", true],
+    ["Nikkei smartchart HTTP エラー: 500 Internal Server Error", true],
     ["D1 HTTP 500: internal error", true],
     [
       'D1 HTTP error: [{"code":7500,"message":"internal error; reference = abc"}]',
@@ -225,6 +227,56 @@ describe("recoverTransientDailyFailures", () => {
       expect(result.recovered).toBe(100);
       expect(result.skippedDueToLimit).toBe(1);
       expect(result.failures).toEqual([failures[100]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("macroを優先しstockと共有する100件枠・外部call上限を守る", async () => {
+    vi.useFakeTimers();
+    try {
+      const macroFailures = Array.from({ length: 5 }, (_, index) => ({
+        target: `macro-${index}`,
+        error: `Chart API HTTP エラー [macro-${index}]: 500 Internal Server Error`,
+      }));
+      const stockFailures = Array.from({ length: 100 }, (_, index) => ({
+        target: `stock-${index}`,
+        error: `Chart API HTTP エラー [stock-${index}]: 500 Internal Server Error`,
+      }));
+      const prioritized = prioritizeDailyRecoveryFailures(
+        macroFailures,
+        stockFailures
+      );
+      let macroAttempts = 0;
+      let stockAttempts = 0;
+      let externalCalls = 0;
+      const pending = recoverTransientDailyFailures(
+        prioritized,
+        async (target) => {
+          if (target.kind === "macro") {
+            macroAttempts++;
+            externalCalls++;
+          } else {
+            stockAttempts++;
+            externalCalls += 2;
+          }
+        }
+      );
+
+      await vi.runAllTimersAsync();
+      const result = await pending;
+
+      expect(prioritized.slice(0, 5).map(({ target }) => target.kind)).toEqual(
+        Array(5).fill("macro")
+      );
+      expect(macroAttempts).toBe(5);
+      expect(stockAttempts).toBe(95);
+      expect(macroAttempts + stockAttempts).toBe(100);
+      expect(externalCalls).toBe(195);
+      expect(externalCalls).toBeLessThanOrEqual(200);
+      expect(result.attempted).toBe(100);
+      expect(result.recovered).toBe(100);
+      expect(result.skippedDueToLimit).toBe(5);
     } finally {
       vi.useRealTimers();
     }

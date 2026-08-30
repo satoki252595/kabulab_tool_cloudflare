@@ -1,6 +1,10 @@
 import { Hono } from "hono";
 import { verifyCronSecret } from "../shared/auth.js";
-import { yahooFetchDirect } from "../shared/yahoo/client.js";
+import { rootCauseMessage } from "../shared/errors.js";
+import {
+  redactYahooDiagnostic,
+  yahooFetchDirect,
+} from "../shared/yahoo/client.js";
 
 /**
  * 取込プロキシ — Node(GitHub Actions / ローカル)からの Yahoo 取得を Cloudflare
@@ -46,7 +50,19 @@ ingestProxyRoute.get("/yahoo", async (c) => {
   // エッジで crumb 付き直接 fetch (この Worker は YAHOO_PROXY_BASE 未設定なので
   // プロキシループにはならない)。status ヘッダで upstream 応答と Worker 内部
   // 例外を呼び出し側が区別できるようにし、本文はバッファせず中継する。
-  const res = await yahooFetchDirect(u);
+  let res: Response;
+  try {
+    res = await yahooFetchDirect(u);
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "yahoo_ingest_proxy_error",
+        source: "ingest-proxy",
+        error: redactYahooDiagnostic(rootCauseMessage(error)),
+      })
+    );
+    return c.json({ error: "yahoo ingest proxy failed" }, 502);
+  }
   const headers = new Headers({
     "X-Kabulab-Yahoo-Status": String(res.status),
   });

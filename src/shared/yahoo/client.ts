@@ -89,7 +89,7 @@ async function readResponsePrefix(
   return new TextDecoder().decode(prefix.subarray(0, written));
 }
 
-function redactYahooDiagnostic(value: string): string {
+export function redactYahooDiagnostic(value: string): string {
   return value
     .replace(/([?&]crumb=)[^&\s"'<>]+/gi, "$1[redacted]")
     .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
@@ -134,10 +134,23 @@ export async function yahooHttpErrorMessage(
   return `${label}: ${response.status} ${response.statusText}; ${details.join("; ")}`;
 }
 
-/** プロセス 1 回ぶんで共有する crumb/cookie キャッシュ (module-level singleton) */
-let cachedCrumb: string | null = null;
-let cachedCookie: string | null = null;
-let crumbExpiry = 0;
+interface YahooCredential {
+  crumb: string;
+  cookie: string;
+  generation: number;
+}
+
+/** isolate 内で共有するのは request I/O を含まない認証値と更新メタデータだけ。 */
+let cachedCredential: YahooCredential | null = null;
+let credentialExpiry = 0;
+let credentialGeneration = 0;
+let credentialRefreshInProgress = false;
+let credentialRefreshAttempt = 0;
+let credentialRefreshStartedAt = 0;
+const credentialRefreshErrors: Record<number, string> = {};
+const credentialRefreshWaiterCounts: Record<number, number> = {};
+const CREDENTIAL_REFRESH_POLL_MS = 100;
+const MAX_CREDENTIAL_REFRESH_MS = 30_000;
 
 /**
  * 日本株コードは ".T" を付けて Yahoo シンボルに正規化する。
@@ -151,64 +164,184 @@ function normalizeSymbol(raw: string): string {
   );
 }
 
-/**
- * crumb bootstrap の single-flight ガード。並列ワーカー (daily の CONCURRENCY=8 等)
- * が冷えキャッシュ/401 で同時に再取得すると thundering herd になり subrequest を
- * 浪費するため、進行中の bootstrap を共有する。
- */
-let crumbInFlight: Promise<{ crumb: string; cookie: string }> | null = null;
-
-/** Yahoo Finance の crumb 認証トークンを取得する (30 分キャッシュ + single-flight) */
-async function getYahooCrumb(): Promise<{ crumb: string; cookie: string }> {
-  if (cachedCrumb && cachedCookie && Date.now() < crumbExpiry) {
-    return { crumb: cachedCrumb, cookie: cachedCookie };
+function currentYahooCredential(): YahooCredential | null {
+  if (cachedCredential && Date.now() < credentialExpiry) {
+    return cachedCredential;
   }
-  // 同時呼び出しは進行中の 1 回の bootstrap に相乗りする (各自再取得しない)。
-  if (crumbInFlight) return crumbInFlight;
+  return null;
+}
 
-  crumbInFlight = (async () => {
-    const pageRes = await fetch("https://finance.yahoo.com/quote/AAPL", {
+/** request ごとに生成する timer。Promise を module global に保持しない。 */
+function waitForCredentialRefresh(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function assertCredentialRefreshOwner(refreshAttempt: number): void {
+  if (
+    !credentialRefreshInProgress ||
+    credentialRefreshAttempt !== refreshAttempt
+  ) {
+    throw new Error("Yahoo credential refresh ownership expired");
+  }
+}
+
+function addCredentialRefreshWaiter(refreshAttempt: number): void {
+  const count = credentialRefreshWaiterCounts[refreshAttempt];
+  credentialRefreshWaiterCounts[refreshAttempt] =
+    count === undefined ? 1 : count + 1;
+}
+
+function removeCredentialRefreshWaiter(refreshAttempt: number): void {
+  const count = credentialRefreshWaiterCounts[refreshAttempt];
+  if (count === undefined || count <= 1) {
+    delete credentialRefreshWaiterCounts[refreshAttempt];
+    delete credentialRefreshErrors[refreshAttempt];
+    return;
+  }
+  credentialRefreshWaiterCounts[refreshAttempt] = count - 1;
+}
+
+function recordCredentialRefreshError(
+  refreshAttempt: number,
+  message: string
+): void {
+  credentialRefreshErrors[refreshAttempt] = message;
+  if (credentialRefreshWaiterCounts[refreshAttempt] === undefined) {
+    delete credentialRefreshErrors[refreshAttempt];
+  }
+}
+
+function expireCredentialRefresh(refreshAttempt: number): void {
+  if (
+    credentialRefreshInProgress &&
+    credentialRefreshAttempt === refreshAttempt
+  ) {
+    recordCredentialRefreshError(
+      refreshAttempt,
+      `Yahoo credential refresh timed out after ${MAX_CREDENTIAL_REFRESH_MS}ms`
+    );
+    credentialRefreshInProgress = false;
+  }
+}
+
+async function bootstrapYahooCredential(
+  refreshAttempt: number,
+  signal: AbortSignal
+): Promise<{
+  crumb: string;
+  cookie: string;
+}> {
+  const pageRes = await fetch("https://finance.yahoo.com/quote/AAPL", {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+      Accept: "text/html",
+    },
+    redirect: "manual",
+    signal,
+  });
+  assertCredentialRefreshOwner(refreshAttempt);
+
+  const cookies = pageRes.headers.getSetCookie?.() ?? [];
+  const cookieStr = cookies.map((c) => c.split(";")[0]).join("; ");
+
+  const crumbRes = await fetch(
+    "https://query2.finance.yahoo.com/v1/test/getcrumb",
+    {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        Accept: "text/html",
+        Cookie: cookieStr,
       },
-      redirect: "manual",
-    });
-
-    const cookies = pageRes.headers.getSetCookie?.() ?? [];
-    const cookieStr = cookies.map((c) => c.split(";")[0]).join("; ");
-
-    const crumbRes = await fetch(
-      "https://query2.finance.yahoo.com/v1/test/getcrumb",
-      {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-          Cookie: cookieStr,
-        },
-      }
-    );
-
-    if (!crumbRes.ok) {
-      throw new Error(
-        await yahooHttpErrorMessage("Yahoo crumb HTTP エラー", crumbRes)
-      );
+      signal,
     }
+  );
+  assertCredentialRefreshOwner(refreshAttempt);
 
-    const crumb = (await crumbRes.text()).trim();
-    cachedCrumb = crumb;
-    cachedCookie = cookieStr;
-    crumbExpiry = Date.now() + 30 * 60 * 1000;
-    return { crumb, cookie: cookieStr };
-  })();
-
-  // 失敗時は rejected promise が全 joiner に伝播する (fallback しない — rule2)。
-  try {
-    return await crumbInFlight;
-  } finally {
-    crumbInFlight = null;
+  if (!crumbRes.ok) {
+    throw new Error(
+      await yahooHttpErrorMessage("Yahoo crumb HTTP エラー", crumbRes)
+    );
   }
+
+  const crumb = (await crumbRes.text()).trim();
+  assertCredentialRefreshOwner(refreshAttempt);
+  return { crumb, cookie: cookieStr };
+}
+
+/**
+ * Yahoo Finance の認証値を取得する (30 分キャッシュ + isolate 内 single-flight)。
+ * 待機側は自 request の timer だけを await し、bootstrap の I/O Promise を共有しない。
+ */
+async function getYahooCredential(): Promise<YahooCredential> {
+  const cached = currentYahooCredential();
+  if (cached) return cached;
+
+  if (credentialRefreshInProgress) {
+    const joinedAttempt = credentialRefreshAttempt;
+    const refreshDeadline =
+      credentialRefreshStartedAt + MAX_CREDENTIAL_REFRESH_MS;
+    addCredentialRefreshWaiter(joinedAttempt);
+    try {
+      while (
+        credentialRefreshInProgress &&
+        credentialRefreshAttempt === joinedAttempt
+      ) {
+        const remainingMs = refreshDeadline - Date.now();
+        if (remainingMs <= 0) {
+          expireCredentialRefresh(joinedAttempt);
+          break;
+        }
+        await waitForCredentialRefresh(
+          Math.min(CREDENTIAL_REFRESH_POLL_MS, remainingMs)
+        );
+      }
+      const refreshError = credentialRefreshErrors[joinedAttempt];
+      if (refreshError !== undefined) throw new Error(refreshError);
+      return getYahooCredential();
+    } finally {
+      removeCredentialRefreshWaiter(joinedAttempt);
+    }
+  }
+
+  const refreshAttempt = ++credentialRefreshAttempt;
+  credentialRefreshInProgress = true;
+  credentialRefreshStartedAt = Date.now();
+  try {
+    const bootstrap = await bootstrapYahooCredential(
+      refreshAttempt,
+      AbortSignal.timeout(MAX_CREDENTIAL_REFRESH_MS)
+    );
+    assertCredentialRefreshOwner(refreshAttempt);
+    const credential: YahooCredential = {
+      ...bootstrap,
+      generation: ++credentialGeneration,
+    };
+    cachedCredential = credential;
+    credentialExpiry = Date.now() + 30 * 60 * 1000;
+    return credential;
+  } catch (error) {
+    const message = redactYahooDiagnostic(
+      error instanceof Error ? error.message : String(error)
+    );
+    if (credentialRefreshAttempt === refreshAttempt) {
+      recordCredentialRefreshError(refreshAttempt, message);
+    }
+    if (error instanceof Error) throw error;
+    throw new Error(message, { cause: error });
+  } finally {
+    if (credentialRefreshAttempt === refreshAttempt) {
+      credentialRefreshInProgress = false;
+      credentialRefreshStartedAt = 0;
+    }
+  }
+}
+
+/** 遅れて届いた旧 credential の 401 では、更新済み cache を消さない。 */
+function invalidateYahooCredential(used: YahooCredential): void {
+  if (cachedCredential?.generation !== used.generation) return;
+  cachedCredential = null;
+  credentialExpiry = 0;
 }
 
 /**
@@ -217,23 +350,21 @@ async function getYahooCrumb(): Promise<{ crumb: string; cookie: string }> {
  * 取込プロキシルート (/api/ingest/yahoo) からも直接呼ばれる (export)。
  */
 export async function yahooFetchDirect(url: string): Promise<Response> {
-  const { crumb, cookie } = await getYahooCrumb();
+  const credential = await getYahooCredential();
   const separator = url.includes("?") ? "&" : "?";
-  const authUrl = `${url}${separator}crumb=${encodeURIComponent(crumb)}`;
+  const authUrl = `${url}${separator}crumb=${encodeURIComponent(credential.crumb)}`;
 
   const res = await fetch(authUrl, {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-      Cookie: cookie,
+      Cookie: credential.cookie,
     },
   });
 
   if (res.status === 401) {
-    cachedCrumb = null;
-    cachedCookie = null;
-    crumbExpiry = 0;
-    const fresh = await getYahooCrumb();
+    invalidateYahooCredential(credential);
+    const fresh = await getYahooCredential();
     const retryUrl = `${url}${separator}crumb=${encodeURIComponent(fresh.crumb)}`;
     return fetch(retryUrl, {
       headers: {
