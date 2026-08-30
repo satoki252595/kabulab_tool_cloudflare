@@ -178,6 +178,25 @@ const DELAY_MS = 150;
 const MAX_RECOVERY_TARGETS = 100;
 /** upstream 指示や診断文字列が異常でも回復待機を30秒で止める。 */
 const MAX_RECOVERY_BACKOFF_MS = 30_000;
+const MARKET_CONTEXT_CHART_SYMBOLS = [
+  "^N225",
+  "^VIX",
+  "^GSPC",
+  "NIY=F",
+] as const;
+const NIKKEI_VI_TARGET = "NIKKEI_VI" as const;
+type MarketContextChartSymbol = (typeof MARKET_CONTEXT_CHART_SYMBOLS)[number];
+type MarketContextTarget =
+  | MarketContextChartSymbol
+  | typeof NIKKEI_VI_TARGET;
+interface MarketContextChartValue {
+  price: number | null;
+  prevClose: number | null;
+}
+interface MarketContextDraft {
+  charts: Record<MarketContextChartSymbol, MarketContextChartValue>;
+  nikkeiVi: number | null;
+}
 /** swing_daily_ohlcv の保持期間 (営業日)。増分 upsert と併せて書込/容量を抑える。 */
 const OHLCV_RETENTION_DAYS = 90;
 /** OHLCV insert の D1 bind 上限対策 (adj 追加で 8 列になったので 12 行/文: 8×12=96≤100) */
@@ -223,10 +242,34 @@ export interface DailyRecoveryResult<T> {
   failures: DailyRecoveryFailure<T>[];
 }
 
+export type PrioritizedDailyRecoveryTarget<MacroTarget, StockTarget> =
+  | { kind: "macro"; target: MacroTarget }
+  | { kind: "stock"; target: StockTarget };
+
+/** macro を先頭にして、両系統を同じ回収件数上限へ流す。 */
+export function prioritizeDailyRecoveryFailures<MacroTarget, StockTarget>(
+  macroFailures: readonly DailyRecoveryFailure<MacroTarget>[],
+  stockFailures: readonly DailyRecoveryFailure<StockTarget>[]
+): DailyRecoveryFailure<
+  PrioritizedDailyRecoveryTarget<MacroTarget, StockTarget>
+>[] {
+  return [
+    ...macroFailures.map(({ target, error }) => ({
+      target: { kind: "macro" as const, target },
+      error,
+    })),
+    ...stockFailures.map(({ target, error }) => ({
+      target: { kind: "stock" as const, target },
+      error,
+    })),
+  ];
+}
+
 /** 取得元の429/5xx、D1の5xx、ネットワーク障害だけを回収対象にする。 */
 export function isTransientDailySyncFailure(message: string): boolean {
   return (
     /^(?:(?:Chart|QuoteSummary) API HTTP エラー \[[^\]]+\]|Yahoo crumb HTTP エラー): (?:429|5\d{2})\b/.test(message) ||
+    /^Nikkei smartchart HTTP エラー: (?:429|5\d{2})\b/.test(message) ||
     /^D1 HTTP 5\d{2}\b/.test(message) ||
     /D1 HTTP error:.*"message":"internal error; reference =/i.test(message) ||
     /\b(?:fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR_SOCKET|socket hang up|other side closed|terminated)\b/i.test(
@@ -353,16 +396,17 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   // Phase 2: マクロコンテキスト
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 2: マクロコンテキスト取得");
-  const marketContextOk = await syncMarketContext(db).then(
-    (complete) => complete,
-    (e) => {
-      console.warn(
-        "[sync-daily]   マクロ取得部分失敗:",
-        rootCauseMessage(e)
-      );
-      return false;
-    }
+  const marketContext = await fetchMarketContextDraft();
+  const deferMarketContextPersistence = marketContext.failures.some(
+    ({ error }) => isTransientDailySyncFailure(error)
   );
+  let marketContextOk: boolean | undefined;
+  if (!deferMarketContextPersistence) {
+    marketContextOk = await persistMarketContextWithDiagnostics(
+      db,
+      marketContext.draft
+    );
+  }
 
   // -----------------------------------------------------------------
   // Phase 3: 銘柄ごとのフェッチ + 計算 + DB 書き込み (worker pool)
@@ -399,23 +443,56 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
     `[sync-daily]   初回成功: ${succeeded} / 初回失敗: ${firstPassFailures.length}`
   );
 
-  const recovery = await recoverTransientDailyFailures(
-    firstPassFailures,
-    processTarget
+  const recoveryTargets = prioritizeDailyRecoveryFailures(
+    marketContext.failures,
+    firstPassFailures
   );
-  succeeded += recovery.recovered;
+  let recoveredStocks = 0;
+  const recovery = await recoverTransientDailyFailures(
+    recoveryTargets,
+    async (recoveryTarget) => {
+      if (recoveryTarget.kind === "macro") {
+        await fetchMarketContextTarget(
+          marketContext.draft,
+          recoveryTarget.target
+        );
+        return;
+      }
+      await processTarget(recoveryTarget.target);
+      recoveredStocks++;
+    }
+  );
+  succeeded += recoveredStocks;
+  const recoveredMacros = recovery.recovered - recoveredStocks;
   if (recovery.attempted > 0 || recovery.skippedDueToLimit > 0) {
     console.info(
       `[sync-daily]   一過性失敗の回収: 実行=${recovery.attempted} ` +
-        `回復=${recovery.recovered} ` +
+        `回復=${recovery.recovered} (macro=${recoveredMacros}, stock=${recoveredStocks}) ` +
         `未回復=${recovery.attempted - recovery.recovered + recovery.skippedDueToLimit} ` +
         `上限超過=${recovery.skippedDueToLimit}`
     );
   }
-  const failures = recovery.failures.map(({ target, error }) => ({
-    code: target.code,
-    error,
-  }));
+  const failures: DailySyncResult["failures"] = [];
+  for (const failure of recovery.failures) {
+    if (failure.target.kind === "macro") {
+      console.warn(
+        `[sync-daily]   マクロ未回復 ${failure.target.target}:`,
+        failure.error
+      );
+    } else {
+      failures.push({
+        code: failure.target.target.code,
+        error: failure.error,
+      });
+    }
+  }
+
+  if (marketContextOk === undefined) {
+    marketContextOk = await persistMarketContextWithDiagnostics(
+      db,
+      marketContext.draft
+    );
+  }
 
   // -----------------------------------------------------------------
   // Phase 4: セクター集計 (当日更新済 indicators から・90% カバレッジ guard)
@@ -934,44 +1011,71 @@ async function writeStockSnapshot(
 // マクロコンテキスト同期 (^N225 / ^VIX / ^GSPC / NIY=F + 日経VI)
 // -----------------------------------------------------------------------------
 
-async function syncMarketContext(db: Db): Promise<boolean> {
+function createMarketContextDraft(): MarketContextDraft {
+  return {
+    charts: {
+      "^N225": { price: null, prevClose: null },
+      "^VIX": { price: null, prevClose: null },
+      "^GSPC": { price: null, prevClose: null },
+      "NIY=F": { price: null, prevClose: null },
+    },
+    nikkeiVi: null,
+  };
+}
+
+async function fetchMarketContextTarget(
+  draft: MarketContextDraft,
+  target: MarketContextTarget
+): Promise<void> {
+  if (target === NIKKEI_VI_TARGET) {
+    const snapshot = await fetchNikkeiVi();
+    draft.nikkeiVi = snapshot.price;
+    return;
+  }
+
+  const chart = await fetchChart(target, "1mo");
+  draft.charts[target] = {
+    price: chart.price,
+    prevClose: chart.previousClose,
+  };
+}
+
+async function fetchMarketContextDraft(): Promise<{
+  draft: MarketContextDraft;
+  failures: DailyRecoveryFailure<MarketContextTarget>[];
+}> {
+  const draft = createMarketContextDraft();
+  const failures: DailyRecoveryFailure<MarketContextTarget>[] = [];
+  const targets: readonly MarketContextTarget[] = [
+    ...MARKET_CONTEXT_CHART_SYMBOLS,
+    NIKKEI_VI_TARGET,
+  ];
+
+  await Promise.all(
+    targets.map(async (target) => {
+      try {
+        await fetchMarketContextTarget(draft, target);
+      } catch (error) {
+        const message = rootCauseMessage(error);
+        failures.push({ target, error: message });
+        console.warn(`[sync-daily]   マクロ取得失敗 ${target}:`, message);
+      }
+    })
+  );
+
+  return { draft, failures };
+}
+
+async function persistMarketContext(
+  db: Db,
+  draft: MarketContextDraft
+): Promise<boolean> {
   const today = new Date().toISOString().split("T")[0];
-
-  async function safeFetchLatest(
-    symbol: string
-  ): Promise<{ price: number | null; prevClose: number | null }> {
-    try {
-      const chart = await fetchChart(symbol, "1mo");
-      return { price: chart.price, prevClose: chart.previousClose };
-    } catch (e) {
-      console.warn(
-        `[sync-daily]   マクロ取得失敗 ${symbol}:`,
-        rootCauseMessage(e)
-      );
-      return { price: null, prevClose: null };
-    }
-  }
-
-  async function safeFetchNikkeiVi(): Promise<number | null> {
-    try {
-      const snap = await fetchNikkeiVi();
-      return snap.price;
-    } catch (e) {
-      console.warn(
-        `[sync-daily]   日経VI 取得失敗:`,
-        rootCauseMessage(e)
-      );
-      return null;
-    }
-  }
-
-  const [n225, vix, gspc, niy, nikkeiVi] = await Promise.all([
-    safeFetchLatest("^N225"),
-    safeFetchLatest("^VIX"),
-    safeFetchLatest("^GSPC"),
-    safeFetchLatest("NIY=F"),
-    safeFetchNikkeiVi(),
-  ]);
+  const n225 = draft.charts["^N225"];
+  const vix = draft.charts["^VIX"];
+  const gspc = draft.charts["^GSPC"];
+  const niy = draft.charts["NIY=F"];
+  const nikkeiVi = draft.nikkeiVi;
 
   const nikkeiPct =
     n225.price !== null && n225.prevClose !== null && n225.prevClose > 0
@@ -1034,6 +1138,21 @@ async function syncMarketContext(db: Db): Promise<boolean> {
     niy.price !== null &&
     nikkeiVi !== null
   );
+}
+
+async function persistMarketContextWithDiagnostics(
+  db: Db,
+  draft: MarketContextDraft
+): Promise<boolean> {
+  try {
+    return await persistMarketContext(db, draft);
+  } catch (error) {
+    console.warn(
+      "[sync-daily]   マクロ保存失敗:",
+      rootCauseMessage(error)
+    );
+    return false;
+  }
 }
 
 function sleep(ms: number): Promise<void> {
