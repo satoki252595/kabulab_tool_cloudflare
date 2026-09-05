@@ -174,6 +174,8 @@ interface StockSnapshot {
 const CONCURRENCY = 5;
 /** ワーカー間隔 (ms) */
 const DELAY_MS = 150;
+/** 5 worker の既存待機量を均した、銘柄開始の最小間隔。 */
+const STOCK_START_INTERVAL_MS = DELAY_MS / CONCURRENCY;
 /** 90 分の Actions 上限内で最終集約まで完了させる回復件数上限。 */
 const MAX_RECOVERY_TARGETS = 100;
 /** upstream 指示や診断文字列が異常でも回復待機を30秒で止める。 */
@@ -245,6 +247,46 @@ export interface DailyRecoveryResult<T> {
 export type PrioritizedDailyRecoveryTarget<MacroTarget, StockTarget> =
   | { kind: "macro"; target: MacroTarget }
   | { kind: "stock"; target: StockTarget };
+
+/**
+ * 銘柄開始を平準化し、最初の429の Retry-After 中は未実行銘柄を止める。
+ * run 内の数値だけを共有し、外部 call、retry、30秒超の待機は増やさない。
+ */
+export function createDailyStockStartGate(startIntervalMs: number) {
+  let nextStartAt = 0;
+  let backoffUntil = 0;
+  let rateLimitObserved = false;
+
+  return {
+    async wait(): Promise<void> {
+      while (true) {
+        const now = Date.now();
+        const startAt = Math.max(now, nextStartAt, backoffUntil);
+        nextStartAt = startAt + startIntervalMs;
+        if (startAt <= now) return;
+        await sleep(startAt - now);
+        if (backoffUntil <= startAt) return;
+      }
+    },
+    observeFailure(message: string): void {
+      if (rateLimitObserved) return;
+      if (
+        !/^(?:Chart|QuoteSummary) API HTTP エラー \[[^\]]+\]: 429\b/.test(
+          message
+        )
+      ) {
+        return;
+      }
+      const requested = Number(/\bretry-at-ms=(\d+)\b/.exec(message)?.[1]);
+      if (!Number.isFinite(requested)) return;
+      rateLimitObserved = true;
+      backoffUntil = Math.min(
+        requested,
+        Date.now() + MAX_RECOVERY_BACKOFF_MS
+      );
+    },
+  };
+}
 
 /** macro を先頭にして、両系統を同じ回収件数上限へ流す。 */
 export function prioritizeDailyRecoveryFailures<MacroTarget, StockTarget>(
@@ -415,11 +457,13 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   const queue = [...targets];
   const firstPassFailures: DailyRecoveryFailure<(typeof targets)[number]>[] =
     [];
+  const stockStartGate = createDailyStockStartGate(STOCK_START_INTERVAL_MS);
   let succeeded = 0;
 
   async function processTarget(
     target: (typeof targets)[number]
   ): Promise<void> {
+    await stockStartGate.wait();
     const snap = await buildSnapshot(target.id, target.code, target.sector);
     await writeStockSnapshot(db, snap, maxDateByStock.get(target.id));
   }
@@ -433,6 +477,7 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
         succeeded++;
       } catch (e) {
         const msg = rootCauseMessage(e);
+        stockStartGate.observeFailure(msg);
         firstPassFailures.push({ target, error: msg });
       }
       await sleep(DELAY_MS);
