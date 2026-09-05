@@ -1,10 +1,74 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createDailyStockStartGate,
   isDailySyncIncomplete,
   isTransientDailySyncFailure,
   prioritizeDailyRecoveryFailures,
   recoverTransientDailyFailures,
 } from "./daily.js";
+
+describe("createDailyStockStartGate", () => {
+  it("既存の待機量のまま5 workerの開始を30msずつ平準化する", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-05T00:00:00.000Z"));
+      const base = Date.now();
+      const startedAt: number[] = [];
+      const gate = createDailyStockStartGate(30);
+      const pending = Promise.all(
+        Array.from({ length: 5 }, async () => {
+          await gate.wait();
+          startedAt.push(Date.now());
+        })
+      );
+
+      await vi.runAllTimersAsync();
+      await pending;
+
+      expect(startedAt.map((value) => value - base)).toEqual([
+        0, 30, 60, 90, 120,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("待機中に観測した最初の429だけで後続を最大30秒止める", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-05T00:00:00.000Z"));
+      const base = Date.now();
+      const startedAt: number[] = [];
+      const gate = createDailyStockStartGate(30);
+      const pending = Promise.all(
+        Array.from({ length: 3 }, async () => {
+          await gate.wait();
+          startedAt.push(Date.now());
+        })
+      );
+
+      await vi.advanceTimersByTimeAsync(10);
+      gate.observeFailure(
+        "Chart API HTTP エラー [9503]: 429 Too Many Requests; " +
+          `retry-at-ms=${Date.now() + 60_000}`
+      );
+      await vi.advanceTimersByTimeAsync(990);
+      gate.observeFailure(
+        "QuoteSummary API HTTP エラー [9506]: 429 Too Many Requests; " +
+          `retry-at-ms=${Date.now() + 60_000}`
+      );
+
+      await vi.advanceTimersByTimeAsync(29_040);
+      await pending;
+
+      expect(startedAt.map((value) => value - base)).toEqual([
+        0, 30_010, 30_040,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("isDailySyncIncomplete", () => {
   it("全対象成功かつマクロ成功だけを完全成功とする", () => {
