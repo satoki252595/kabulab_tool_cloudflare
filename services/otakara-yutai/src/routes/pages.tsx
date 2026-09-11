@@ -75,7 +75,7 @@ async function getTopStocksByMonth(
     ? await db
         .select({
           stockId: yutaiBenefits.stockId,
-          description: yutaiBenefits.description,
+          shortSummary: yutaiBenefits.shortSummary,
           shortSummary: yutaiBenefits.shortSummary,
           genreName: yutaiGenres.name,
           minShares: yutaiBenefits.minShares,
@@ -103,7 +103,7 @@ async function getTopStocksByMonth(
       price,
       minInvestment: price != null && minShares != null ? price * minShares : null,
       recordMonths: [...new Set(rowBenefits.map((b) => b.recordMonth))].sort((a, b) => a - b),
-      benefitSummary: rowBenefits.map((b) => b.shortSummary ?? b.description).join(" / "),
+      benefitSummary: rowBenefits.map((b) => b.shortSummary ?? "").join(" / "),
     };
   });
 }
@@ -276,7 +276,7 @@ pages.get("/genres/:slug", async (c) => {
           .select({
             stockId: yutaiBenefits.stockId,
             genreName: yutaiGenres.name,
-            description: yutaiBenefits.description,
+            shortSummary: yutaiBenefits.shortSummary,
             shortSummary: yutaiBenefits.shortSummary,
             minShares: yutaiBenefits.minShares,
             recordMonth: yutaiBenefits.recordMonth,
@@ -290,7 +290,7 @@ pages.get("/genres/:slug", async (c) => {
   const stockItems = pagedRows.map((row) => {
     const rowBenefits = benefitsForPage.filter((b) => b.stockId === row.stockId);
     const genres = [...new Set(rowBenefits.map((b) => b.genreName))];
-    const benefitSummary = rowBenefits.map((b) => b.shortSummary ?? b.description).join(" / ");
+    const benefitSummary = rowBenefits.map((b) => b.shortSummary ?? "").join(" / ");
     const price = row.price ?? null;
     const minShares = rowBenefits.length > 0 ? Math.min(...rowBenefits.map((b) => b.minShares)) : null;
 
@@ -373,7 +373,7 @@ pages.get("/stocks/:code", async (c) => {
     .select({
       genreName: yutaiGenres.name,
       genreSlug: yutaiGenres.slug,
-      description: yutaiBenefits.description,
+      shortSummary: yutaiBenefits.shortSummary,
       shortSummary: yutaiBenefits.shortSummary,
       minShares: yutaiBenefits.minShares,
       recordMonth: yutaiBenefits.recordMonth,
@@ -525,7 +525,7 @@ pages.get("/months/:month", async (c) => {
           .select({
             stockId: yutaiBenefits.stockId,
             genreName: yutaiGenres.name,
-            description: yutaiBenefits.description,
+            shortSummary: yutaiBenefits.shortSummary,
             shortSummary: yutaiBenefits.shortSummary,
             minShares: yutaiBenefits.minShares,
             recordMonth: yutaiBenefits.recordMonth,
@@ -538,7 +538,7 @@ pages.get("/months/:month", async (c) => {
   const stockItems = rows.map((row) => {
     const rowBenefits = benefitsForPage.filter((b) => b.stockId === row.stockId);
     const genres = [...new Set(rowBenefits.map((b) => b.genreName))];
-    const benefitSummary = rowBenefits.map((b) => b.shortSummary ?? b.description).join(" / ");
+    const benefitSummary = rowBenefits.map((b) => b.shortSummary ?? "").join(" / ");
     const price = row.price ?? null;
     const minShares = rowBenefits.length > 0 ? Math.min(...rowBenefits.map((b) => b.minShares)) : null;
 
@@ -633,7 +633,7 @@ pages.get("/search", async (c) => {
           .select({
             stockId: yutaiBenefits.stockId,
             genreName: yutaiGenres.name,
-            description: yutaiBenefits.description,
+            shortSummary: yutaiBenefits.shortSummary,
             shortSummary: yutaiBenefits.shortSummary,
           })
           .from(yutaiBenefits)
@@ -653,7 +653,7 @@ pages.get("/search", async (c) => {
       per: row.per ?? null,
       pbr: row.pbr ?? null,
       dividendYield: row.dividendYield ?? null,
-      benefitSummary: rowBenefits.map((b) => b.shortSummary ?? b.description).join(" / "),
+      benefitSummary: rowBenefits.map((b) => b.shortSummary ?? "").join(" / "),
     };
   });
 

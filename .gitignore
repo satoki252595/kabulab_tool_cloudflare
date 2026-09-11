@@ -66,11 +66,14 @@ result-*
 # ローカル LLM の GGUF モデルキャッシュ (数 GB。優待解釈 step3 が DL)
 services/otakara-yutai/data-scripts/models/
 
-# 優待解釈 step3 の中間生成物 (chunk-*.jsonl は再生成可能。一次データ
-# 正本は Notion バックアップ / step4 で DB 反映済。_raw-fail-*.txt は
-# LLM 構造ドリフトのデバッグダンプで原文 description が入るため git に
-# 載せない)
-services/otakara-yutai/data-scripts/data/interpreted/
+# 優待データの作業ディレクトリ一式。ここには出典サイト由来の掲載文
+# (benefit-descriptions.jsonl) と、その解釈の中間生成物 (interpreted/chunk-*.jsonl、
+# 原文 description を含む _raw-fail-*.txt) が入る。
+# 出典サイトの規約が私的使用を超えた蓄積・公開を禁じており、public リポジトリに
+# 載せると画面から掲載文を外しても raw URL で全量を取得できてしまう
+# (2026-09-12 に benefit-descriptions.jsonl 5,694行を履歴ごと除去した)。
+# 中間生成物は再生成可能で、解釈の正本は step4 で D1 に反映済み。
+services/otakara-yutai/data-scripts/data/
 
 # Cloudflare Wrangler
 .wrangler/

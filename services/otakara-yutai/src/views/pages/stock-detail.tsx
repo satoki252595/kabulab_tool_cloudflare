@@ -7,7 +7,7 @@ import ScoreBadge from "../components/score-badge.js";
 type BenefitInfo = {
   genreName: string;
   genreSlug: string;
-  description: string;
+  /** 公開表示に使うのは short_summary だけ。出典サイトの掲載文は持ち込まない。 */
   shortSummary: string | null;
   minShares: number;
   recordMonth: number;
@@ -733,7 +733,7 @@ const StockDetail: FC<StockDetailProps> = (props) => {
                         whiteSpace: "pre-wrap",
                       }}
                     >
-                      {b.description}
+                      {b.shortSummary ?? ""}
                     </p>
                     <dl
                       style={{

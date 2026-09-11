@@ -50,6 +50,36 @@ function onNotFound(c: any): Response {
   return c.html(layout("Not Found", `<div class="container"><h2>ページが見つかりません</h2><p style="color:#888">${c.req.path} は存在しません</p><a href="${BP}/" class="back">← ホームに戻る</a></div>`), 404);
 }
 
+// ===== 公開表示テキスト =====
+
+/**
+ * 公開面 (HTML / JSON API) に出してよい優待内容テキストを返す。
+ *
+ * `yutai_benefits.description` は外部優待サイト由来の**掲載文そのもの**であり、
+ * 出典サイトの利用規約が転載・再掲を禁じているため、公開面には一切出さない。
+ * 公開してよいのは、そこから機械的に抽出した事実 (「N円相当」「N枚」等) だけを
+ * 持つ `short_summary` に限る。
+ *
+ * `description` 列自体は推定額の算出など内部処理に必要なので DB には残す。
+ * **この関数を経由せずに `description` を描画・API 応答に渡さないこと。**
+ */
+export function publicSummary(b: { shortSummary: string | null }): string {
+  return (b.shortSummary ?? "").trim();
+}
+
+/** カード1行サマリの表示上限。サーバ描画とクライアント描画で同じ値を使う。 */
+export const CARD_SUMMARY_MAX = 80;
+
+/** 切り詰めたことが分かるように … を付ける (エスケープ前に切る)。 */
+export function clipSummary(text: string, max: number = CARD_SUMMARY_MAX): string {
+  return text.length > max ? text.slice(0, max) + "…" : text;
+}
+
+/** 複数優待の内容要約を重複なく列挙する (カード / API の一行サマリ用)。 */
+export function publicSummaries(rows: { shortSummary: string | null }[]): string[] {
+  return [...new Set(rows.map(publicSummary))].filter((t) => t !== "");
+}
+
 // ===== App =====
 // strict: false → `/screening` と `/screening/` を同一視する。
 // 親アプリ側で trailing slash の有無に依らずマッチさせるために必要。
@@ -144,7 +174,7 @@ app.get("/api/screening", async (c) => {
   // 優待情報の取得
   const stockIds = unique.map(r => r.id);
   const benefits = stockIds.length > 0
-    ? await db.select({ stockId: yutaiBenefits.stockId, description: yutaiBenefits.description, recordMonth: yutaiBenefits.recordMonth, genreId: yutaiBenefits.genreId })
+    ? await db.select({ stockId: yutaiBenefits.stockId, shortSummary: yutaiBenefits.shortSummary, recordMonth: yutaiBenefits.recordMonth, genreId: yutaiBenefits.genreId })
         .from(yutaiBenefits).where(inArray(yutaiBenefits.stockId, stockIds))
     : [];
   const apiGenres = await db.select({ id: yutaiGenres.id, name: yutaiGenres.name }).from(yutaiGenres);
@@ -153,7 +183,7 @@ app.get("/api/screening", async (c) => {
   const result = unique.map(row => {
     const rowBenefits = benefits.filter(b => b.stockId === row.id);
     const months = [...new Set(rowBenefits.map(b => b.recordMonth))].sort((a, b) => a - b);
-    const descs = [...new Set(rowBenefits.map(b => b.description))].join(" / ");
+    const descs = publicSummaries(rowBenefits).join(" / ");
     const genreNames = [...new Set(rowBenefits.map(b => apiGenreMap.get(b.genreId)).filter(Boolean))];
     return {
       code: row.code, name: row.name, market: row.market, sector: row.sector,
@@ -348,6 +378,8 @@ td{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-weight:50
 .product-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
 .product-value{font-family:var(--font-mono);font-size:11px;font-weight:700;color:var(--text);background:var(--bg-pure);border:1.5px solid var(--border);padding:2px 8px;border-radius:var(--radius);letter-spacing:0.02em}
 .product-value-unknown{color:var(--text-muted);border-style:dashed;font-weight:600}
+/* --bg-soft の上に載るので --text-muted (4.16:1) では AA を満たさない */
+.product-desc-empty{color:var(--text-secondary)}
 /* WEB推定: 企業公表額より確度が低い参考値。warning 系で視覚的に区別 (ルール1)。
    グロー/影は付けない (Editorial Swiss Grid)。*/
 .product-value-web{color:var(--warning);border-color:var(--warning);background:var(--warning-soft)}
@@ -460,11 +492,15 @@ function tip(key: keyof typeof TIPS, label: string): string {
 }
 
 /** 優待行（DBから取得された1行） */
-type BenefitRow = {
+export type BenefitRow = {
   genre: { name: string; slug: string } | null;
   minShares: number;
   recordMonth: number;
-  description: string;
+  /**
+   * 公開してよい優待内容の要約 (`short_summary` 由来。publicSummary() を通した値)。
+   * 出典サイトの掲載文 `description` をここに入れてはいけない。
+   */
+  summary: string;
   estimatedValue: number | null;
   /** 推定額の出典 (ルール1): "company"=企業公表/確定額, "web"=楽天由来の参考推定, null */
   estimateValueSource: string | null;
@@ -474,7 +510,8 @@ type BenefitRow = {
 
 /** 優待をジャンル → 保有段階 → 商品 の3階層にまとめる */
 type ProductGroup = {
-  description: string;
+  /** 公開表示用の要約 (BenefitRow.summary と同じ制約)。 */
+  summary: string;
   estimatedValue: number | null;
   estimateValueSource: string | null;
   estimateSourceUrl: string | null;
@@ -491,7 +528,7 @@ type GenreGroup = {
   tiers: TierGroup[];
 };
 
-function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
+export function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
   const byGenre = new Map<string, { slug: string | null; list: BenefitRow[] }>();
   for (const r of rows) {
     const name = r.genre?.name ?? "その他";
@@ -502,14 +539,20 @@ function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
   for (const [genreName, { slug, list }] of byGenre) {
     const monthsSet = new Set<number>();
     const tierMap = new Map<number, Map<string, ProductGroup>>();
+    // 要約が空の行は「同じ商品」と判断できないため、互いにまとめずに個別扱いする。
+    // (表示テキストが無い行同士を 1 行に潰すと株数段階の情報が失われる)
+    let anonSeq = 0;
     for (const b of list) {
       monthsSet.add(b.recordMonth);
       if (!tierMap.has(b.minShares)) tierMap.set(b.minShares, new Map());
       const productMap = tierMap.get(b.minShares)!;
-      const key = b.description;
+      // 表示テキスト単位でまとめる (以前は出典掲載文 description をキーにしていた)。
+      // 原文が違っても要約が同じなら 1 行に畳まれる (意図的)。実データでは 17 組で、
+      // いずれも推定額が一致するため金額は失われない。権利月は months に束ねる。
+      const key = b.summary || `\u0000anon:${anonSeq++}`;
       if (!productMap.has(key)) {
         productMap.set(key, {
-          description: b.description,
+          summary: b.summary,
           estimatedValue: b.estimatedValue,
           estimateValueSource: b.estimateValueSource,
           estimateSourceUrl: b.estimateSourceUrl,
@@ -532,7 +575,7 @@ function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
       .map(([minShares, productMap]) => ({
         minShares,
         products: [...productMap.values()].map((p) => ({
-          description: p.description,
+          summary: p.summary,
           estimatedValue: p.estimatedValue,
           estimateValueSource: p.estimateValueSource,
           estimateSourceUrl: p.estimateSourceUrl,
@@ -677,7 +720,11 @@ function renderBenefitGroups(groups: GenreGroup[]): string {
               } else {
                 valueNote = `<span class="product-value">推定 ${p.estimatedValue.toLocaleString()}円</span>`;
               }
-              const descHtml = h(p.description).replace(/\n/g, "<br>");
+              // 公開してよいのは short_summary 由来の要約だけ (publicSummary 参照)。
+              // 要約が無い場合は出典掲載文で埋めず、一次情報へ誘導する。
+              const descHtml = p.summary
+                ? h(p.summary).replace(/\n/g, "<br>")
+                : `<span class="product-desc-empty">優待内容の要約なし（会社の発表をご確認ください）</span>`;
               return `<li class="benefit-product"><div class="product-desc">${descHtml}</div><div class="product-meta">${valueNote}${monthNote}</div></li>`;
             })
             .join("");
@@ -846,14 +893,14 @@ app.get("/genres/:slug", async (c) => {
   // 優待情報取得
   const pageIds = gUnique.map(r => r.id);
   const benefits = pageIds.length > 0
-    ? await db.select({ stockId: yutaiBenefits.stockId, description: yutaiBenefits.description, recordMonth: yutaiBenefits.recordMonth })
+    ? await db.select({ stockId: yutaiBenefits.stockId, shortSummary: yutaiBenefits.shortSummary, recordMonth: yutaiBenefits.recordMonth })
         .from(yutaiBenefits).where(inArray(yutaiBenefits.stockId, pageIds))
     : [];
 
   const cards = gUnique.map(row => {
     const rowBenefits = benefits.filter(b => b.stockId === row.id);
     const months = [...new Set(rowBenefits.map(b => b.recordMonth))].sort((a, b) => a - b);
-    const desc = [...new Set(rowBenefits.map(b => b.description))].join(" / ");
+    const desc = publicSummaries(rowBenefits).join(" / ");
     return `
       <a href="${BP}/stocks/${row.code}" style="text-decoration:none;color:inherit">
         <div class="stock-card">
@@ -872,7 +919,7 @@ app.get("/genres/:slug", async (c) => {
             <span>${tip("dividend", "配当")} <strong>${row.dividendYield !== null ? row.dividendYield.toFixed(2) + "%" : "-"}</strong></span>
             <span>${tip("yutai_yield", "優待")} <strong>${row.yutaiYield !== null ? row.yutaiYield.toFixed(2) + "%" : "-"}</strong></span>
           </div>
-          ${desc ? `<div class="benefit">${h(desc.substring(0, 80))}</div>` : ""}
+          ${desc ? `<div class="benefit">${h(clipSummary(desc))}</div>` : ""}
         </div>
       </a>`;
   }).join("");
@@ -983,7 +1030,7 @@ app.get("/screening", async (c) => {
 
   const stockIds = initUnique.map(r => r.id);
   const benefits = stockIds.length > 0
-    ? await db.select({ stockId: yutaiBenefits.stockId, description: yutaiBenefits.description, recordMonth: yutaiBenefits.recordMonth, genreId: yutaiBenefits.genreId })
+    ? await db.select({ stockId: yutaiBenefits.stockId, shortSummary: yutaiBenefits.shortSummary, recordMonth: yutaiBenefits.recordMonth, genreId: yutaiBenefits.genreId })
         .from(yutaiBenefits).where(inArray(yutaiBenefits.stockId, stockIds))
     : [];
   const allGenres = await db.select({ id: yutaiGenres.id, name: yutaiGenres.name }).from(yutaiGenres);
@@ -992,7 +1039,7 @@ app.get("/screening", async (c) => {
   const stocksData = initUnique.map(row => {
     const rowBenefits = benefits.filter(b => b.stockId === row.id);
     const months = [...new Set(rowBenefits.map(b => b.recordMonth))].sort((a, b) => a - b);
-    const descs = [...new Set(rowBenefits.map(b => b.description))].join(" / ");
+    const descs = publicSummaries(rowBenefits).join(" / ");
     const genreNames = [...new Set(rowBenefits.map(b => genreMap.get(b.genreId)).filter(Boolean))];
     return {
       code: row.code, name: row.name,
@@ -1025,6 +1072,20 @@ app.get("/screening", async (c) => {
 
   function fmtMetric(v) { return v != null ? v.toFixed(2) : '-'; }
 
+  // このカードは innerHTML で組み立てるため、DB 由来の文字列は必ずここを通す。
+  // short_summary には <梅> <竹> 等の山括弧が実在し、素通しすると未知タグとして
+  // 飲まれて等級ラベルだけが画面から消える (SSR 側は h() が守っている)。
+  function esc(v) {
+    return String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // 切り詰めたことが分かるように … を付ける (エスケープ前に切って実体参照を割らない)
+  function clip(text) {
+    return text.length > ${CARD_SUMMARY_MAX} ? text.slice(0, ${CARD_SUMMARY_MAX}) + '…' : text;
+  }
+
   function scoreCls(v) {
     if (v === null) return 'score-none';
     return v >= 80 ? 'score-green' : v >= 60 ? 'score-yellow' : v >= 40 ? 'score-orange' : 'score-red';
@@ -1035,9 +1096,9 @@ app.get("/screening", async (c) => {
     for (var i = 0; i < stocks.length; i++) {
       var s = stocks[i];
       var months = s.benefitMonths.length > 0 ? s.benefitMonths.map(function(m){return '<span class="tag">'+m+'月</span>'}).join('') : '';
-      var genres = s.genres && s.genres.length > 0 ? s.genres.map(function(g){return '<span class="genre-tag">'+g+'</span>'}).join('') : '';
-      html += '<a href="${BP}/stocks/' + s.code + '?from=screening" style="text-decoration:none;color:inherit"><div class="stock-card">' +
-        '<div class="stock-header"><div class="stock-id"><span class="stock-code">' + s.code + '</span><span class="stock-name">' + s.name + '</span></div><div>' + months + '</div></div>' +
+      var genres = s.genres && s.genres.length > 0 ? s.genres.map(function(g){return '<span class="genre-tag">'+esc(g)+'</span>'}).join('') : '';
+      html += '<a href="${BP}/stocks/' + encodeURIComponent(s.code) + '?from=screening" style="text-decoration:none;color:inherit"><div class="stock-card">' +
+        '<div class="stock-header"><div class="stock-id"><span class="stock-code">' + esc(s.code) + '</span><span class="stock-name">' + esc(s.name) + '</span></div><div>' + months + '</div></div>' +
         (genres ? '<div style="margin-bottom:8px">' + genres + '</div>' : '') +
         '<div class="scores">' +
           '<span class="score-badge ' + scoreCls(s.totalScore) + '">' + (s.totalScore != null ? s.totalScore.toFixed(1) : '-') + ' 総合</span>' +
@@ -1050,7 +1111,7 @@ app.get("/screening", async (c) => {
           '<span>${tip("dividend", "配当")} <strong>' + (s.dividendYield != null ? s.dividendYield.toFixed(2) + '%' : '-') + '</strong></span>' +
           '<span>${tip("yutai_yield", "優待")} <strong>' + (s.yutaiYield != null ? s.yutaiYield.toFixed(2) + '%' : '-') + '</strong></span>' +
         '</div>' +
-        (s.benefitSummary ? '<div class="benefit">' + s.benefitSummary.substring(0, 80) + '</div>' : '') +
+        (s.benefitSummary ? '<div class="benefit">' + esc(clip(s.benefitSummary)) + '</div>' : '') +
       '</div></a>';
     }
     listView.innerHTML = html || '<div class="empty-list">該当する銘柄がありません</div>';
@@ -1173,7 +1234,19 @@ app.get("/stocks/:code", async (c) => {
   const stockData = await db.query.stocks.findFirst({
     where: and(eq(stocks.code, code), eq(stocks.isYutai, true)),
     with: {
-      benefits: { with: { genre: true } },
+      // description (出典サイトの掲載文) は**列ごと引かない**。うっかり
+      // stockData をそのまま返しても公開面に出ない多層防御にする。
+      benefits: {
+        columns: {
+          minShares: true,
+          recordMonth: true,
+          shortSummary: true,
+          estimatedValue: true,
+          estimateValueSource: true,
+          estimateSourceUrl: true,
+        },
+        with: { genre: true },
+      },
       financials: { orderBy: (f: any, { desc: d }: any) => [d(f.fetchedAt)], limit: 1 },
       scores: { orderBy: (s: any, { desc: d }: any) => [d(s.scoredAt)], limit: 1 },
     },
@@ -1211,14 +1284,29 @@ app.get("/stocks/:code", async (c) => {
       <h3 style="margin-top:24px">${tip("yutai", "株主優待")}</h3>
       <div class="guide">${tip("recordmonth", "権利確定月")}の月末に株を保有していると優待がもらえます。${tip("minshares", "最低株数")}以上の保有が必要です。</div>
       ${renderBenefitGroups(groupBenefits(
-        stockData.benefits.map((b: any) => ({
+        // `any` にしない: `with.benefits.columns` から shortSummary を落とすと
+        // publicSummary(b) が全行 "" になり、型でもテストでも気づけないまま
+        // 優待内容が全銘柄で空になる。必要な列をここで明示して型で縛る。
+        stockData.benefits.map((b: {
+          genre: { name: string; slug: string } | null;
+          minShares: number;
+          recordMonth: number;
+          shortSummary: string | null;
+          estimatedValue: number | null;
+          estimateValueSource: string | null;
+          estimateSourceUrl: string | null;
+        }) => ({
           genre: b.genre ? { name: b.genre.name, slug: b.genre.slug } : null,
           minShares: b.minShares,
           recordMonth: b.recordMonth,
-          description: b.description,
+          summary: publicSummary(b),
           estimatedValue: b.estimatedValue,
-          estimateValueSource: b.estimateValueSource ?? null,
-          estimateSourceUrl: b.estimateSourceUrl ?? null,
+          // drizzle/d1/0005 を 2026-09-12 に本番 D1 へ適用済み。それ以前は列が
+          // 無く、SQLite が解決できない二重引用符付き識別子を**文字列リテラル**
+          // として返すため、この2つに "estimate_value_source" という列名の文字列が
+          // 入っていた (= WEB推定バッジが恒久的に出ない状態だった)。
+          estimateValueSource: b.estimateValueSource,
+          estimateSourceUrl: b.estimateSourceUrl,
         }))
       ))}
     </div>
