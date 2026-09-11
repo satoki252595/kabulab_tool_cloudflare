@@ -1242,6 +1242,8 @@ app.get("/stocks/:code", async (c) => {
           recordMonth: true,
           shortSummary: true,
           estimatedValue: true,
+          estimateValueSource: true,
+          estimateSourceUrl: true,
         },
         with: { genre: true },
       },
@@ -1291,19 +1293,20 @@ app.get("/stocks/:code", async (c) => {
           recordMonth: number;
           shortSummary: string | null;
           estimatedValue: number | null;
+          estimateValueSource: string | null;
+          estimateSourceUrl: string | null;
         }) => ({
           genre: b.genre ? { name: b.genre.name, slug: b.genre.slug } : null,
           minShares: b.minShares,
           recordMonth: b.recordMonth,
           summary: publicSummary(b),
           estimatedValue: b.estimatedValue,
-          // 本番 D1 に estimate_value_source / estimate_source_url 列は無い
-          // (drizzle/d1/0005 が未適用)。SQLite は解決できない二重引用符付き
-          // 識別子を**文字列リテラル**として返すため、以前はこの2つに
-          // "estimate_value_source" という文字列が入っていた。列ごと引かない
-          // ようにしたので null で固定する。
-          estimateValueSource: null,
-          estimateSourceUrl: null,
+          // drizzle/d1/0005 を 2026-09-12 に本番 D1 へ適用済み。それ以前は列が
+          // 無く、SQLite が解決できない二重引用符付き識別子を**文字列リテラル**
+          // として返すため、この2つに "estimate_value_source" という列名の文字列が
+          // 入っていた (= WEB推定バッジが恒久的に出ない状態だった)。
+          estimateValueSource: b.estimateValueSource,
+          estimateSourceUrl: b.estimateSourceUrl,
         }))
       ))}
     </div>
