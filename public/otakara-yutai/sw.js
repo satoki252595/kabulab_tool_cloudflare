@@ -1,4 +1,6 @@
-const CACHE = "otakara-v3";
+// 出典掲載文 (description) を描画していた旧 HTML をオフライン fallback から
+// 失効させるため v3 -> v4 へ上げた。activate の旧キー削除で消える。
+const CACHE = "otakara-v4";
 const PRECACHE = ["/otakara-yutai/", "/otakara-yutai/screening"];
 
 self.addEventListener("install", (e) => {

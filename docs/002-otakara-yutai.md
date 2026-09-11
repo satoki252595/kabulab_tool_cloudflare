@@ -162,4 +162,6 @@ GitHub Actions 月次
 - 例: `"QUOカード 1,000円相当"` / `"ゼンショー食事券 6,000円(年12,000円)"` / `"高島屋10%割引(限度30万円)"`
 - `estimatedValue`: 年間の推定金銭価値 (円)。割引券など金額換算不能なものは `null`
 - カード一覧: `shortSummary` を `" / "` 区切りで表示
-- 銘柄詳細: `shortSummary` をハイライト + `description` を補足表示
+- 銘柄詳細: `shortSummary` のみを表示する。`description` は出典サイトの掲載文そのもので、
+  規約上の再掲不可のため**公開面には出さない** (推定額の算出など内部処理専用。
+  `app.ts` の `publicSummary()` と `public-summary-safety.test.ts` で固定)

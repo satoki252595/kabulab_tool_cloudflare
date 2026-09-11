@@ -130,7 +130,7 @@ stockRoutes.get(
         ? await db
             .select({
               stockId: yutaiBenefits.stockId,
-              description: yutaiBenefits.description,
+              shortSummary: yutaiBenefits.shortSummary,
               genreSlug: yutaiGenres.slug,
               genreName: yutaiGenres.name,
             })
@@ -147,7 +147,11 @@ stockRoutes.get(
         name: row.name,
         market: row.market,
         sector: row.sector ?? null,
-        benefitDescription: rowBenefits.map((b) => b.description).join(" / "),
+        // 出典サイトの掲載文 description は公開面に出さない (app.ts の publicSummary と同じ規約)
+        benefitSummary: rowBenefits
+          .map((b) => (b.shortSummary ?? "").trim())
+          .filter((t) => t !== "")
+          .join(" / "),
         genreSlug: rowBenefits[0]?.genreSlug ?? null,
         genreName: rowBenefits[0]?.genreName ?? null,
         price: row.price ?? null,
@@ -227,7 +231,7 @@ stockRoutes.get("/:code", async (c) => {
     sector: stockData.sector ?? null,
     benefits: stockData.benefits.map((b) => ({
       id: b.id,
-      description: b.description,
+      shortSummary: b.shortSummary ?? null,
       minShares: b.minShares,
       recordMonth: b.recordMonth,
       estimatedValue: b.estimatedValue ?? null,

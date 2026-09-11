@@ -9,6 +9,7 @@ import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as schema from "../src/db/schema.js";
 import { yutaiGenres, yutaiBenefits, stocks } from "../src/db/schema.js";
 import { sql, eq, inArray } from "drizzle-orm";
+import { benefitKey } from "./benefit-key.js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import "dotenv/config";
 
@@ -214,6 +215,43 @@ async function fetchStockDetail(code: string): Promise<StockYutaiData | null> {
   }
 }
 
+/** 退避した解釈 (step3 の産物)。key は benefitKey(銘柄コード, description)。 */
+type CarriedInterpretation = {
+  shortSummary: string | null;
+  estimatedValue: number | null;
+};
+
+/**
+ * 全削除の前に short_summary / estimated_value を退避する。
+ *
+ * どちらも step3 のローカル LLM 解釈でしか作れず、このスクリプトの INSERT は
+ * 値を入れない。退避しないと再フェッチのたびに全銘柄の解釈が消える。
+ */
+async function carryOverInterpretations(
+  db: ReturnType<typeof createD1HttpDb<typeof schema>>,
+): Promise<Map<string, CarriedInterpretation>> {
+  const rows = await db
+    .select({
+      code: stocks.code,
+      description: yutaiBenefits.description,
+      shortSummary: yutaiBenefits.shortSummary,
+      estimatedValue: yutaiBenefits.estimatedValue,
+    })
+    .from(yutaiBenefits)
+    .innerJoin(stocks, eq(stocks.id, yutaiBenefits.stockId));
+
+  const carried = new Map<string, CarriedInterpretation>();
+  for (const row of rows) {
+    if (row.shortSummary == null && row.estimatedValue == null) continue;
+    // 同一キーが複数行 (権利月違い) ある。解釈は文言単位なのでどれでも同じ。
+    carried.set(benefitKey(row.code, row.description), {
+      shortSummary: row.shortSummary,
+      estimatedValue: row.estimatedValue,
+    });
+  }
+  return carried;
+}
+
 /** Phase 3: DBにインポート */
 async function importToDb(allData: StockYutaiData[]) {
   const db = createD1HttpDb(schema);
@@ -225,6 +263,16 @@ async function importToDb(allData: StockYutaiData[]) {
   // トランザクション非対応のためループ途中で落ちると全優待が消える窓が
   // できる。よって upsert を全件成功させた **後** に、今回スクレイプできた
   // code の補集合だけ false へ落とす後処理方式にする (CLAUDE.md ルール2)。
+  // 全削除の前に、**作り直せない派生値**を退避する。
+  // short_summary / estimated_value は step3 (ローカル LLM 解釈) の産物で、
+  // このスクリプトの INSERT では値を入れない。退避せずに消すと、step3 を
+  // 人手で回し終わるまで公開面の優待内容が全銘柄で空になる
+  // (掲載文 description は公開面に出せないため代わりが無い)。
+  // キーは (銘柄コード, description) の内容アドレスなので、文言が変わらない
+  // 限り再フェッチ後も同じ解釈に戻せる。
+  const carried = await carryOverInterpretations(db);
+  console.log(`  既存の解釈を退避: ${carried.size}件`);
+
   console.log("  既存の優待データを削除中 (core.stocks は保持)...");
   await db.delete(yutaiBenefits);
   await db.delete(yutaiGenres);
@@ -292,13 +340,18 @@ async function importToDb(allData: StockYutaiData[]) {
             ? `${benefit.description}${benefit.notes ? "\n" + benefit.notes.substring(0, 200) : ""}`
             : benefit.description;
 
+          const stored = desc.substring(0, 500);
+          // 同じ (銘柄, 文言) なら退避した解釈をそのまま戻す。新規/文言変更は
+          // 未解釈のまま入り、step3 の対象になる。
+          const previous = carried.get(benefitKey(data.code, stored));
           await db.insert(yutaiBenefits).values({
             stockId: stockRow.id,
             genreId,
-            description: desc.substring(0, 500),
+            description: stored,
+            shortSummary: previous?.shortSummary ?? null,
             minShares: benefit.minShares,
             recordMonth: month,
-            estimatedValue: null,
+            estimatedValue: previous?.estimatedValue ?? null,
           });
           benefitCount++;
         }
