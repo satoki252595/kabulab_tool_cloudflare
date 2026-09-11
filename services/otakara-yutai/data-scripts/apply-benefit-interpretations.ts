@@ -26,6 +26,7 @@ import { readFileSync, readdirSync, existsSync } from "fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { benefitKey } from "./benefit-key.js";
+import { checkSummary, formatViolations } from "./summary-contract.js";
 
 // パスはこのスクリプトの位置基準で解決する (cwd 依存だと export/interpret と
 // 出力先がズレてパイプラインが silent に繋がらなくなるため)。
@@ -182,6 +183,33 @@ async function main() {
   console.log(
     `Update groups: ${updateGroups.length} (うち web 推定で補填 ${webFilledCount} 件)`
   );
+
+  // 3.5 公開表示契約の最終ゲート。short_summary は公開面に出る唯一の優待内容
+  //     テキストなので、掲載文の注記ブロックや説明文を持ち込んだものを DB へ
+  //     入れない。違反は黙って直さず、該当を列挙して中止する (ルール2)。
+  //     生成側 (interpret-benefits.ts) にも上限チェックはあるが lenientLength の
+  //     退路があり、実測で 35 行がすり抜けていた。
+  const violations: string[] = [];
+  for (const group of updateGroups) {
+    const found = checkSummary(group.shortSummary);
+    if (found.length > 0) {
+      violations.push(
+        `  ids=[${group.ids.slice(0, 3).join(",")}${group.ids.length > 3 ? ",…" : ""}] ` +
+          `${formatViolations(found)} :: ${group.shortSummary.slice(0, 70)}`
+      );
+    }
+  }
+  if (violations.length > 0) {
+    const allowed = process.argv.includes("--allow-contract-violations");
+    const head = `公開表示契約に違反する shortSummary が ${violations.length} 群あります:\n${violations.slice(0, 20).join("\n")}`;
+    if (!allowed) {
+      throw new Error(
+        `${head}\n\n該当を再解釈 (pnpm interpret:yutai) してから再実行してください。` +
+          `意図して流す場合のみ --allow-contract-violations を付けます。`
+      );
+    }
+    console.warn(`[apply] WARNING (--allow-contract-violations 指定): ${head}`);
+  }
 
   // 4. バッチUPDATE実行
   //   注: estimate_value_source / estimate_source_url 列は migration
