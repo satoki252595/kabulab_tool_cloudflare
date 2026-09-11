@@ -1,7 +1,7 @@
 /**
  * 母集団 (core.stocks) 同期エントリポイント (CLI)
  *
- * JPX 公式 data_j.xls の東証内国普通株（共有4文字コード、~3,700）を
+ * JPX 公式 data_j.xlsx の東証内国普通株（共有4文字コード、~3,700）を
  * core.stocks に upsert する。
  * 初回 seed や JPX 構成変更の手動反映に使う。月次は stock-sync.yml が
  * このコマンドを実行した後に `pnpm sync:monthly:core` を呼ぶ。
