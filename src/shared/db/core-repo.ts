@@ -37,6 +37,12 @@ type CoreDb = BaseSQLiteDatabase<"async", unknown, Record<string, unknown>>;
 /**
  * 公開面へ渡してよい列だけを並べた select 形。市場区分と業種は
  * src/shared/db/public-columns.ts 経由 (JPX 由来を直接読まない)。
+ *
+ * ⚠️ **取込・集計はこの形を使わないこと。** `market` は常に `null`、`sector` は
+ * EDINET 由来の `sector33` (本番は当面全行 NULL) なので、ここで引いた値を
+ * `core_stocks` へ書き戻すと JPX の値を NULL で潰す。JPX の値が必要な writer は
+ * `coreSchema.stocks.market` / `.sector` を自分で指名すること
+ * (下の `listActiveStocks` は母集団 = id / code / name の取得用)。
  */
 const STOCK_REF = {
   id: stocks.id,

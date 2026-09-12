@@ -34,13 +34,20 @@
  * 宣言に列を足した瞬間から personal-only 列を含んだ行を返し始める。
  * 呼び出し側が必要フィールドだけ詰め替えていれば今日は漏れないが、行を
  * spread した / JSON にそのまま流した 1 箇所で崩れ、型でも lint でも
- * 検出できない。そこで 4 つを見る:
+ * 検出できない。そこで 5 つを見る:
  *
  *   1. `.select()` (列指定なし) + `from(stocks)` が**リポジトリ全体で** 0 件。
  *   2. `db.query.stocks.findFirst/findMany` で `columns` を省いたものが 0 件。
  *   3. 公開面のファイルに `<なにか>stocks.<personal-only 列>` という
  *      **修飾つき参照**が無い。
  *   4. 公開面の関係クエリの `columns` に personal-only 列の**キー**が無い。
+ *   5. `core_stocks` へ**書く**経路が `sector33` を書き込み先にしない。
+ *
+ * 5 は読み側ではなく書き側の検査。公開面が `sector33` を読むようになったので、
+ * この repo の取込が `sector33` へ JPX の 33業種を書き足すと、**1〜4 が全部緑の
+ * まま**公開面が personal-only を返す状態へ戻る (列の中身は静的検査に映らない)。
+ * 業種の書き込み先は `sector` のままにし、`sector33` の充填は EDINET を持つ
+ * stockStock 側でやる。
  *
  * 2 を落とすと検査は無意味になる。1 だけを見ていた版では
  * services/otakara-yutai/app.ts の銘柄詳細 (`db.query.stocks.findFirst`) が
@@ -318,6 +325,31 @@ function findPersonalOnlyRelationalColumns(source: string): string[] {
   return [...found].sort();
 }
 
+/**
+ * `core_stocks` へ**書く**ファイル (`insert(stocks)` / `update(stocks)`)。
+ *
+ * 公開面が `sector33` を読むようになったので、危ないのは読み側だけではなくなった。
+ * この repo の取込が `sector33` へ JPX (data_j.xls) の 33業種区分を書き足すと、
+ * 公開面は**コードを 1 行も変えずに** personal-only を返す状態へ戻る。
+ * 読み側の検査は全部緑のままなので、書き側で止める。
+ */
+const WRITES_STOCKS = /\.\s*(?:insert|update)\s*\(\s*(?:\w+\.)?\w*[Ss]tocks\s*\)/;
+
+/**
+ * `sector33` を**書き込み先**として指名している箇所。
+ *
+ * 拾うのは代入キー (`sector33:`) と短縮プロパティ (`{ ..., sector33 }`) だけで、
+ * **プロパティ参照 (`r.sector33`) は拾わない**。src/cron/universe.ts は
+ * `sector: r.sector33` と書く (JPX パーサの項目名が `sector33`) ので、参照まで
+ * 拾うと常時赤になり、赤を消すために検査を緩める道をたどる。
+ */
+const SECTOR33_WRITE_KEY = /(?<![.\w$])sector33\s*[:,}]/;
+
+function writesSector33(source: string): boolean {
+  const code = stripComments(source);
+  return WRITES_STOCKS.test(code) && SECTOR33_WRITE_KEY.test(code);
+}
+
 /** 走査対象のソース (テストと型定義は除く)。 */
 function collectSources(dir: string, acc: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -531,6 +563,39 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
     expect(
       findPersonalOnlyRelationalColumns("// db.query.stocks.findFirst({ columns: { market: true } })"),
     ).toEqual([]);
+  });
+
+  it("core_stocks へ書く経路が sector33 を書き込み先にしない", () => {
+    // 公開面が読む列へ JPX の値が流れ込む唯一の経路。ここが開くと、読み側の
+    // 検査 (上の 3 つ) が全部緑のまま公開面が personal-only を返す状態へ戻る。
+    // 業種の書き込み先は `sector` のままにし、`sector33` の充填は EDINET を
+    // 持っている stockStock 側でやること (src/shared/db/core-schema.ts)。
+    const offenders = collectSources(join(ROOT, "src"))
+      .concat(collectSources(join(ROOT, "services")))
+      .filter((path) => writesSector33(readFileSync(path, "utf-8")))
+      .map((path) => relative(ROOT, path).split(sep).join("/"));
+    expect(
+      offenders,
+      "sector33 は公開面が読む列。JPX (data_j.xls) の 33業種を書くなら `sector` へ",
+    ).toEqual([]);
+  });
+
+  it("sector33 の書き込み検出器が参照と書き込みを取り違えない", () => {
+    // 拾うべきもの (書き込み先としての指名)
+    expect(writesSector33("db.insert(stocks).values({ sector33: r.sector33 })")).toBe(true);
+    expect(writesSector33("db.insert(coreSchema.stocks).values({ code, sector33 })")).toBe(true);
+    expect(
+      writesSector33("db.update(stocks).set({ sector33: sql`excluded.sector33` })"),
+    ).toBe(true);
+    // 拾ってはいけないもの: JPX パーサの項目名を読んで `sector` へ書く現状の形。
+    // ここを誤検出すると検査が常時赤になり、緩める方向へ倒れる。
+    expect(
+      writesSector33("db.insert(coreSchema.stocks).values({ sector: r.sector33 })"),
+    ).toBe(false);
+    // 読み取りだけのファイルは対象外 (読み側は別の検査が見ている)
+    expect(writesSector33("db.select({ sector: stocks.sector33 }).from(stocks)")).toBe(false);
+    // コメント中の例示で落ちない
+    expect(writesSector33("// db.insert(stocks).values({ sector33: x })")).toBe(false);
   });
 
   it("フラグを 1 箇所だけで切り替えられる (戻し道が残っている)", () => {
