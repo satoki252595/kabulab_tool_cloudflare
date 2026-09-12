@@ -84,13 +84,18 @@ error TS18047: 'bs' is possibly 'null'.
 
 ## lint 側の死角
 
-`pnpm lint` は `eslint src services` なので、以下は lint されない。
+`pnpm lint` は `eslint src services` なので、以下は lint されない
+（実測: lint されているのは `src` と `services` の 228 ファイルのみ）。
 
-- `scripts/**`（`sync:*` / `ingest:*` の実行本体）
-- `worker/**`（本番エントリ `worker/entry.ts`）
-- `*.config.ts`（`vitest.config.ts` / `drizzle.*.config.ts`）
+| 範囲 | TS ファイル数 | 中身 |
+|---|---|---|
+| `scripts/**` | 13 | `sync:*` / `ingest:*` の実行本体 |
+| `worker/**` | 1 | **本番エントリ `worker/entry.ts`** |
+| `*.config.ts` | 数件 | `vitest.config.ts` / `drizzle.*.config.ts` |
 
 `worker/entry.ts` は本番エントリなので、優先的に対象へ入れるべき。
+確認は `npx eslint src services --format=json` で対象ファイルを数えればよい
+（`eslint` は指定パス外を黙って無視するので、緑でも対象内とは限らない）。
 本 PR では lint 対象を広げていない（既存 warning 127 件の扱いを決める必要があり、
 死角を塞ぐ話とは別の判断になるため）。
 
