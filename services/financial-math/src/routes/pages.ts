@@ -4,6 +4,8 @@ import { and, asc, desc, eq, gt, inArray, isNotNull, lt, sql } from "drizzle-orm
 import { createDb } from "../db/client.js";
 import { stocks, stockFinancials } from "../db/core-schema.js";
 import { dailyOhlcv, stockIndicators } from "../db/swing-readonly.js";
+import { momentumProjection } from "../../../../src/shared/db/projection-schema.js";
+import { decodeCloses } from "../../../../src/shared/indicators/momentum-series.js";
 import { getOhlcvSeries, getPriceContext, type OhlcvBar } from "../services/price-cache.js";
 import { homePage } from "../views/home.js";
 import { dcfPage, type StockContext as DcfStockContext } from "../views/dcf.js";
@@ -190,49 +192,60 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   const q = c.req.valid("query");
   const db = createDb(requireDb(c));
 
-  // 全 active 銘柄数
+  // 全 active 銘柄数。`idx_core_stocks_active_market` 越しでも走査行は
+  // インデックスエントリ数 (実測 3,715) 分かかる。4 タブ共通の分母なので残すが、
+  // これが /emh の残る走査行の大半である (詳細は PR の「コスト影響」)。
   const [{ universeSize }] = await db
     .select({ universeSize: sql<number>`count(*)` })
     .from(stocks)
     .where(eq(stocks.isActive, true));
 
-  // 最新 OHLCV 日付 (参考表示)
-  const [{ latestDate }] = await db
-    .select({ latestDate: sql<string | null>`MAX(${dailyOhlcv.date})` })
-    .from(dailyOhlcv);
-
   let rows: EmhRow[] = [];
   let totalMatched = 0;
+  /** 投影が持つ最長の終値本数。window の実効上限を画面へ出すために使う。 */
+  let maxBars = 0;
+  /** 投影の最新 as_of。momentum タブの鮮度表示に使う。 */
+  let projectionAsOf: string | null = null;
+  /** 投影行数 (= 有効な終値を持つ active 銘柄数)。 */
+  let projectedStocks = 0;
+  /**
+   * momentum 以外のタブが出す最新 OHLCV 日付。
+   *
+   * momentum では引かない。投影から `as_of` が取れるので、追加の
+   * `MAX(swing_daily_ohlcv.date)` は「投影が見ていない行」を根拠に鮮度を
+   * 名乗ることになり、表示と数値の出所がずれる。
+   */
+  let latestDate: string | null = null;
 
   if (q.type === "momentum") {
-    // 全 active 銘柄の OHLCV を取得して momentum を計算
-    // (集計対象が大きいので per-stock loop は避けて 1 SQL でまとめる)
-    const ohlcv = await db
+    // L2 投影 (p_momentum) だけを読む。1 銘柄 1 行なので走査は銘柄数 (実測 3,764)。
+    //
+    // 以前はここで swing_daily_ohlcv を全走査しており、1 表示で 340,763 rows_read
+    // / TTFB 0.86〜1.01 秒だった (他 13 経路は 42〜195 ms)。D1 は走査行課金なので
+    // 訪問者ごとに払う継続コストになっていた。被覆索引では下がらない
+    // (対照実験: 索引外の close を足しても rows_read は同値) ため、
+    // 事前集計へ移した。投影は日次 cron の Phase 6 が作る。
+    //
+    // 投影が持つのは**終値列そのもの**なので window は従来どおり可変で、
+    // 同じ calcMomentum に同じ配列が入る = 表示される数値は変わらない。
+    const projected = await db
       .select({
-        stockId: dailyOhlcv.stockId,
-        date: dailyOhlcv.date,
-        close: dailyOhlcv.close,
+        stockId: momentumProjection.stockId,
+        bars: momentumProjection.bars,
+        closes: momentumProjection.closes,
+        asOf: momentumProjection.asOf,
       })
-      .from(dailyOhlcv)
-      .innerJoin(stocks, and(eq(dailyOhlcv.stockId, stocks.id), eq(stocks.isActive, true)))
-      .where(isNotNull(dailyOhlcv.close))
-      .orderBy(asc(dailyOhlcv.stockId), asc(dailyOhlcv.date));
-
-    // 銘柄ごとに closes を集約してモメンタム計算
-    const byStock = new Map<number, number[]>();
-    for (const row of ohlcv) {
-      if (row.close === null) continue;
-      const arr = byStock.get(row.stockId);
-      if (arr) arr.push(row.close);
-      else byStock.set(row.stockId, [row.close]);
-    }
+      .from(momentumProjection);
 
     type Score = { stockId: number; cumRet: number; risk: number };
     const scores: Score[] = [];
-    for (const [stockId, closes] of byStock.entries()) {
-      const m = calcMomentum(closes, q.window);
-      if (m) scores.push({ stockId, cumRet: m.cumulativeReturn, risk: m.riskAdjustedScore });
+    for (const row of projected) {
+      const m = calcMomentum(decodeCloses(row.closes), q.window);
+      if (m) scores.push({ stockId: row.stockId, cumRet: m.cumulativeReturn, risk: m.riskAdjustedScore });
+      if (row.bars > maxBars) maxBars = row.bars;
+      if (projectionAsOf === null || row.asOf > projectionAsOf) projectionAsOf = row.asOf;
     }
+    projectedStocks = projected.length;
     totalMatched = scores.length;
 
     // 累積リターン降順で limit 件
@@ -267,7 +280,16 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         price: st?.price ?? null,
       };
     });
-  } else if (q.type === "small-cap") {
+  } else {
+    // momentum 以外は従来どおり断面 (stock_financials / stock_indicators) を読む。
+    // これらは既に 1 銘柄 1 行で、走査行は母集団サイズのままなので投影は要らない。
+    const [{ maxOhlcvDate }] = await db
+      .select({ maxOhlcvDate: sql<string | null>`MAX(${dailyOhlcv.date})` })
+      .from(dailyOhlcv);
+    latestDate = maxOhlcvDate;
+  }
+
+  if (q.type === "small-cap") {
     const thresholdYen = q.smallCapMaxOku * 1e8;
     const [{ matchedTotal }] = await db
       .select({ matchedTotal: sql<number>`count(*)` })
@@ -419,7 +441,14 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
       query: q,
       rows,
       totalMatched,
-      meta: { latestDate, universeSize },
+      meta: {
+        latestDate: q.type === "momentum" ? projectionAsOf : latestDate,
+        universeSize,
+        // momentum 以外では投影を読まないので 0 のまま。view は 0 を
+        // 「この指標には投影が関係ない」として扱う。
+        projectedStocks,
+        maxBars,
+      },
     })
   );
 });

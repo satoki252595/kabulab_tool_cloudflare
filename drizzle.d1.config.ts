@@ -37,6 +37,10 @@ import { defineConfig } from "drizzle-kit";
 export default defineConfig({
   schema: [
     "./src/shared/db/core-schema.ts",
+    // L2 投影層 (p_*)。writer は共有の日次 cron、reader は各サービスの画面。
+    // 所有が 1 サービスに閉じないのでここへ独立させてある
+    // (置き場が暫定である理由と撤去条件はファイル冒頭のコメント)。
+    "./src/shared/db/projection-schema.ts",
     "./services/yuho-quant/src/db/schema.ts",
     "./services/ir-catalog/src/db/schema.ts",
     // ADR-0001 第2弾: 001/002/003/004 を Neon→D1 へ移行 (cluster)。

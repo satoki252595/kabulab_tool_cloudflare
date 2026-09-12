@@ -28,10 +28,25 @@ export interface EmhPageProps {
   totalMatched: number;
   /** 集計時の参考メタ情報 */
   meta: {
-    /** 最新 OHLCV 日付 */
+    /**
+     * 数値の出所の最新日付。momentum では投影 (`p_momentum.as_of`) の最大値、
+     * それ以外のタブでは `MAX(swing_daily_ohlcv.date)`。
+     */
     latestDate: string | null;
-    /** 集計に使用した銘柄全体の数 */
+    /** 集計に使用した銘柄全体の数 (core_stocks の is_active 件数) */
     universeSize: number;
+    /**
+     * 投影行数 (= 有効な終値列を持つ銘柄数)。momentum 以外のタブは投影を
+     * 読まないので 0。0 のときは投影に関する表示を出さない。
+     */
+    projectedStocks: number;
+    /**
+     * 投影が持つ最長の終値本数。**window の実効上限**。
+     * 保持が 90 営業日なので実測では約 89 で、UI の max=100 は実データ上
+     * ほぼ必ず 0 件になる。この値を出さないと「条件に合う銘柄が無い」のか
+     * 「そもそも本数が足りない」のかが画面から判別できない。
+     */
+    maxBars: number;
   };
 }
 
@@ -59,7 +74,11 @@ export function emhPage(props: EmhPageProps): string {
       ? `<div class="form-field">
            <label>集計 window (営業日)</label>
            <input type="number" step="5" name="window" value="${q.window}" min="20" max="100">
-           <span class="hint">最大 100 日 (swing.daily_ohlcv の保持上限)</span>
+           <span class="hint">${
+             props.meta.maxBars > 0
+               ? `入力上限は 100 だが、実データの最長は <strong>${props.meta.maxBars} 本</strong> (保持 90 営業日)。これを超える window は 0 件になる`
+               : "最大 100 日 (swing.daily_ohlcv の保持上限)"
+           }</span>
          </div>`
       : ""
   }
@@ -139,7 +158,7 @@ export function emhPage(props: EmhPageProps): string {
 
   const description: Record<AnomalyType, string> = {
     momentum:
-      "過去の上昇銘柄が次も上昇しやすい現象。Notion ガイドの「6〜12ヶ月モメンタム」を、swing.daily_ohlcv の最新 100 営業日から推定する。リスク調整スコアは累積リターン / 年率ボラ。",
+      "過去の上昇銘柄が次も上昇しやすい現象。Notion ガイドの「6〜12ヶ月モメンタム」を、保持されている最新 90 営業日ぶんの終値から推定する (6〜12ヶ月には届かない)。リスク調整スコアは累積リターン / 年率ボラ。集計は日次 sync が銘柄ごとに 1 行へ畳んだ投影を読む。",
     "small-cap":
       "時価総額の小さい銘柄に流動性プレミアムがあり、リスク調整後で大型株を上回る現象。閾値はデフォルト 500 億円。",
     "low-vol":
@@ -169,7 +188,21 @@ export function emhPage(props: EmhPageProps): string {
     集計対象: ${props.meta.universeSize.toLocaleString("ja-JP")} 銘柄 / 該当: ${props.totalMatched.toLocaleString("ja-JP")} 件
     / 表示: ${Math.min(q.limit, props.rows.length).toLocaleString("ja-JP")} 件
     ${props.meta.latestDate ? ` / 最新日付: ${h(props.meta.latestDate)}` : ""}
+    ${
+      props.meta.projectedStocks > 0
+        ? ` / 終値列を持つ銘柄: ${props.meta.projectedStocks.toLocaleString("ja-JP")} 件 (最長 ${props.meta.maxBars} 本)`
+        : ""
+    }
   </p>
+  ${
+    // window が実データの本数を超えている状態を明示する。以前は「該当 0 件」と
+    // 出るだけで、アノマリーが無いのか本数が足りないのかが分からなかった。
+    q.type === "momentum" && props.meta.maxBars > 0 && q.window > props.meta.maxBars
+      ? `<div class="notice"><strong>window=${q.window} は実データの最長 ${props.meta.maxBars} 本を超えています</strong> —
+           この条件を満たす銘柄は存在しません。swing.daily_ohlcv の保持は 90 営業日なので、
+           <a href="${BASE_PATH}/emh?type=momentum&window=${props.meta.maxBars}&limit=${q.limit}&smallCapMaxOku=${q.smallCapMaxOku}&lowVolMaxAtrPct=${q.lowVolMaxAtrPct}">window=${props.meta.maxBars}</a> まで下げてください。</div>`
+      : ""
+  }
   ${
     props.totalMatched > q.limit
       ? `<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
