@@ -21,11 +21,25 @@
 export function encodeCloses(closes: ReadonlyArray<number | null>): string {
   const out: string[] = [];
   for (const c of closes) {
-    if (c === null || !Number.isFinite(c) || c <= 0) continue;
+    if (!isUsableClose(c)) continue;
     // Number → String は往復で値が変わらない (最短再現表現)。
     out.push(String(c));
   }
   return out.join(",");
+}
+
+/**
+ * 終値として使えるか (有限・正)。
+ *
+ * `encodeCloses` が落とす条件を**述語として公開**している。writer 側は
+ * `bars` / `as_of` をこの述語で絞った配列から作らないと、「`bars` は 90 本と
+ * 言っているのに `closes` は 89 本」「`as_of` が落とした行の日付」という形で
+ * 投影の中で数字が食い違う。`bars` は画面の window 実効上限として表示される
+ * ので、食い違うと「window=90 は出せると書いてあるのに 0 件」になり、
+ * その 0 件の理由が画面から消える。
+ */
+export function isUsableClose(c: number | null): c is number {
+  return c !== null && Number.isFinite(c) && c > 0;
 }
 
 /**

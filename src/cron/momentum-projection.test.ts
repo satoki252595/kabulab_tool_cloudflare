@@ -259,6 +259,54 @@ describe("rebuildMomentumProjection", () => {
     expect(readProjection().map((r) => r.stock_id)).toEqual([1]);
   });
 
+  it("bars / as_of は符号化が落とした終値を数えない", async () => {
+    // `encodeCloses` は 0 以下 / 非有限の終値を落とす。`bars` は画面が出す
+    // window の実効上限なので、落とした分を数に含めると「window=5 まで出せる」と
+    // 書いてあるのに 0 件になり、その理由が画面から消える。
+    insertStock(1);
+    // 末尾 2 本が 0 と負値。SQL の close IS NOT NULL は通るので JS 側で落とす。
+    insertBars(1, [100, 110, 120, 0, -5]);
+
+    const result = await rebuildMomentumProjection(db);
+    expect(result.projectedStocks).toBe(1);
+
+    const [row] = readProjection();
+    expect(decodeCloses(row.closes)).toEqual([100, 110, 120]);
+    // bars は closes の本数と一致する (reader が数えるのと同じ本数)
+    expect(row.bars).toBe(decodeCloses(row.closes).length);
+    expect(row.bars).toBe(3);
+    // as_of は落とした行の日付を名乗らない
+    expect(row.as_of).toBe(dateAt(2));
+  });
+
+  it("有効な終値が 1 本も無い銘柄は投影行を作らない", async () => {
+    insertStock(1);
+    insertStock(2);
+    insertBars(1, [100, 110]);
+    insertBars(2, [0, -1]);
+
+    const result = await rebuildMomentumProjection(db);
+    expect(result.projectedStocks).toBe(1);
+    expect(readProjection().map((r) => r.stock_id)).toEqual([1]);
+  });
+
+  it("is_active が 0 件なら投影を全消しせず run を失敗させる", async () => {
+    // 掃除 DELETE は「今回の run で触られなかった行」を落とす。母集団が空だと
+    // upsert が 1 行も走らないので、そのまま進むと投影が全消しになる。
+    // /emh は maxBars=0 で window 超過の notice も出せず、理由なしの
+    // 「該当 0 件」になる (OHLCV が空の初回 backfill 前とは違い、これは異常)。
+    insertStock(1);
+    insertBars(1, [100, 110]);
+    await rebuildMomentumProjection(db);
+    expect(readProjection()).toHaveLength(1);
+
+    sqlite.exec("UPDATE core_stocks SET is_active = 0");
+    sqlite.exec("UPDATE p_momentum SET computed_at = computed_at - 10");
+    await expect(rebuildMomentumProjection(db)).rejects.toThrow(/母集団が空/);
+    // 投影は残っている (古さは as_of で見える)
+    expect(readProjection()).toHaveLength(1);
+  });
+
   it("OHLCV が 1 行も無いときは投影を消さない (初回 backfill 前)", async () => {
     insertStock(1);
     insertBars(1, [100, 110]);

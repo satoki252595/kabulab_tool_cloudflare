@@ -233,12 +233,13 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   let latestDate: string | null = null;
 
   if (q.type === "momentum") {
-    // L2 投影 (p_momentum) だけを読む。1 銘柄 1 行なので走査は銘柄数 (実測 3,764)。
+    // L2 投影 (p_momentum) だけを読む。1 銘柄 1 行なので走査は銘柄数 (実測 3,715)。
     //
-    // 以前はここで swing_daily_ohlcv を全走査しており、1 表示で 340,763 rows_read
-    // / TTFB 0.86〜1.01 秒だった (他 13 経路は 42〜195 ms)。D1 は走査行課金なので
-    // 訪問者ごとに払う継続コストになっていた。被覆索引では下がらない
-    // (対照実験: 索引外の close を足しても rows_read は同値) ため、
+    // 以前はここで swing_daily_ohlcv を全走査しており、1 表示で 651,494 rows_read
+    // (集計クエリ単体 647,628。本番実測 2026-09-13) / TTFB 0.86〜1.01 秒だった
+    // (他 13 経路は 42〜195 ms)。D1 は走査行課金なので訪問者ごとに払う継続コストに
+    // なっていた。被覆索引では下がらない (対照実験: 同じ計画で索引外の close を
+    // SELECT 句から抜いても入れても rows_read は 674,097 で同値) ため、
     // 事前集計へ移した。投影は日次 cron の Phase 6 が作る。
     //
     // 投影が持つのは**終値列そのもの**なので window は従来どおり可変で、

@@ -4,7 +4,7 @@
  * 固定したい契約:
  *
  *   1. **`swing_daily_ohlcv` を触らない**。ここを全走査していたのが
- *      340,763 rows_read / TTFB 0.86〜1.01 秒の原因で、直したのはこの 1 点。
+ *      651,494 rows_read / TTFB 0.86〜1.01 秒の原因で、直したのはこの 1 点。
  *      「速くなった」は行数では測れないので、**どの表を読んだか**で固定する。
  *   2. 投影の終値列でランキングが作れる (累積リターン降順・limit 件)。
  *   3. window が実データの本数を超えたとき、0 件の理由が画面に出る。
@@ -74,7 +74,7 @@ describe("/emh?type=momentum は投影だけを読む", () => {
     const ohlcvReads = d1.executed.filter((q) => /swing_daily_ohlcv/i.test(q));
     expect(
       ohlcvReads,
-      "OHLCV の全走査が復活している (1 表示 340,763 rows_read の原因)"
+      "OHLCV の全走査が復活している (1 表示 651,494 rows_read の原因)"
     ).toEqual([]);
     expect(d1.executed.some((q) => /p_momentum/i.test(q))).toBe(true);
   });

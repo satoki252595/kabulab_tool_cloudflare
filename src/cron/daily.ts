@@ -46,7 +46,7 @@ import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 // L2 投影 (p_*)。writer はこの cron だけ。
 import * as projectionSchema from "../shared/db/projection-schema.js";
-import { encodeCloses } from "../shared/indicators/momentum-series.js";
+import { encodeCloses, isUsableClose } from "../shared/indicators/momentum-series.js";
 
 import {
   fetchChart,
@@ -1249,7 +1249,8 @@ export async function pruneOhlcvRetention(
 // L2 投影 (p_momentum) の再生成
 //
 // なぜ cron 側に置くのか: `/financial-math/emh?type=momentum` は 1 表示ごとに
-// swing_daily_ohlcv を全走査していた (実測 340,763 rows_read / TTFB 0.86〜1.01 秒)。
+// swing_daily_ohlcv を全走査していた (本番実測 2026-09-13: 集計クエリ単体で
+// 647,628 rows_read、1 リクエスト合計 651,494 / TTFB 0.86〜1.01 秒)。
 // D1 は走査行課金なので、これは訪問者 1 人ごとに払う継続コストである。
 // 走査を「1 日 1 回」へ移し、画面は 1 銘柄 1 行の投影だけを読む。
 //
@@ -1288,7 +1289,11 @@ const PROJECTION_CHUNK = 16;
 export interface MomentumProjectionResult {
   /** 書いた投影行数 (= 母集団のうち有効な終値を持つ銘柄数) */
   projectedStocks: number;
-  /** 走査した swing_daily_ohlcv の行数 (= 画面から消えた走査行) */
+  /**
+   * 読み出した swing_daily_ohlcv の**返却行数** (`close IS NOT NULL` のもの)。
+   * D1 の rows_read はこれより多い: `close` が NULL の行 (実測 27,013) も
+   * 走査されるので、1 run の実測は約 336,169 + ページ数ぶんの端数になる。
+   */
   scannedBars: number;
   /** 生成時の MAX(swing_daily_ohlcv.date)。1 行も無ければ null */
   sourceMaxDate: string | null;
@@ -1303,10 +1308,10 @@ export interface MomentumProjectionResult {
  * NULL でない行」。同じ WHERE / 同じ順序で読むので、投影を経由しても
  * `calcMomentum` に入る配列は**従来と同一**になる (= 画面の数値は変わらない)。
  *
- * 全消し → 全挿入は採らなかった。3,764 行の DELETE + 3,764 行の INSERT で
+ * 全消し → 全挿入は採らなかった。3,715 行の DELETE + 3,715 行の INSERT で
  * 書込が 2 倍になる。代わりに upsert してから「今回の run で触られなかった行」を
  * 1 文の DELETE で落とす。観測できる結果 (孤児行が残らない) は同じで、
- * 書込は約 3,764 行/日に収まる。
+ * 書込は約 3,715 行/日に収まる (実測: is_active かつ有効終値を持つ銘柄 3,715)。
  *
  * 途中で例外が出た場合、掃除 DELETE は走らないので古い行が残る。その行は
  * `as_of` が進まないので画面側で古さとして見える (黙って新しいふりをしない)。
@@ -1330,6 +1335,19 @@ export async function rebuildMomentumProjection(
         .where(eq(coreSchema.stocks.isActive, true))
     ).map((r) => r.id)
   );
+
+  if (activeIds.size === 0) {
+    // is_active な銘柄が 1 件も返らないのは「母集団が空になった」ではなく
+    // core_stocks 側の異常である。このまま進むと upsert 対象が 0 行になり、
+    // 下の掃除 DELETE が**投影を全消し**する。/emh は理由を出せないまま
+    // 「該当 0 件」になる (maxBars=0 なので window 超過の notice も出ない)。
+    // OHLCV が 1 行も無い状態 (= 初回 backfill 前) は正常だが、is_active が
+    // 0 件になるのは正常ではないので、静かに返さず run を失敗させる。
+    throw new Error(
+      "投影の母集団が空です: core_stocks に is_active=1 の行が 1 件もありません。" +
+        " 投影を全消しすると /emh が理由なしの 0 件になるので中断します。"
+    );
+  }
 
   const barsByStock = new Map<number, { date: string; close: number }[]>();
   let scannedBars = 0;
@@ -1389,16 +1407,23 @@ export async function rebuildMomentumProjection(
   // rowid 順で読んだので日付順とは限らない (prune と増分 upsert で id と date の
   // 単調性が一致しない)。**ここで date 昇順に揃える**。逆順や飛び順のまま
   // 畳むと累積リターンの符号が黙って反転する。
-  const rows = [...barsByStock.entries()].map(([stockId, bars]) => {
+  const rows = [...barsByStock.entries()].flatMap(([stockId, bars]) => {
     bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    return {
-      stockId,
-      asOf: bars[bars.length - 1].date,
-      sourceMaxDate: sourceMaxDate as string,
-      bars: bars.length,
-      closes: encodeCloses(bars.map((b) => b.close)),
-      computedAt: new Date(runStartedSec * 1000),
-    };
+    // `encodeCloses` は 0 以下 / 非有限の終値を落とす。落ちた分を数に含めると
+    // `bars` (= 画面が出す window 実効上限) と `closes` の本数がずれ、`as_of` が
+    // 落とした行の日付になる。**符号化と同じ述語で先に絞る**。
+    const usable = bars.filter((b) => isUsableClose(b.close));
+    if (usable.length === 0) return [];
+    return [
+      {
+        stockId,
+        asOf: usable[usable.length - 1].date,
+        sourceMaxDate: sourceMaxDate as string,
+        bars: usable.length,
+        closes: encodeCloses(usable.map((b) => b.close)),
+        computedAt: new Date(runStartedSec * 1000),
+      },
+    ];
   });
 
   for (let i = 0; i < rows.length; i += PROJECTION_CHUNK) {
@@ -1419,7 +1444,7 @@ export async function rebuildMomentumProjection(
 
   // 今回の run で触られなかった行 = 非活動化・上場廃止で母集団から落ちた銘柄。
   // 件数は D1 REST が changes を返さないので DELETE の前に数える
-  // (行は転送しない = count(*)。どちらも p_momentum の全走査 3,764 行)。
+  // (行は転送しない = count(*)。どちらも p_momentum の全走査 = 行数ぶん 3,715 行)。
   const staleBefore = new Date((runStartedSec - 1) * 1000);
   const [{ staleCount }] = await db
     .select({ staleCount: sql<number>`count(*)` })
