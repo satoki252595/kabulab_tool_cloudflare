@@ -1,13 +1,14 @@
 /**
- * JPX 上場銘柄一覧 (data_j.xls) から 33 業種区分を取得するモジュール
+ * JPX 上場銘柄一覧 (data_j.xlsx) から 33 業種区分を取得するモジュール
  *
- * ソース: https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls
- *   - 毎月第3営業日以降に前月末版へ更新、~838KB
+ * ソース: https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx
+ *   - 毎月第3営業日以降に前月末版へ更新（2026-08-31 版で約 223KB。
+ *     旧 .xls は約 811KB だったので、サイズで取得失敗を判定しないこと）
  *   - 東証上場銘柄（株式・ETF 等、~4400 行）× 東証 33 業種区分 + 市場区分
  *
- * なぜ JPX XLS か:
+ * なぜ JPX の一覧ファイルか:
  *   - Yahoo JP の per-stock スクレイピングは rate limit で ~100 銘柄でブロックされる
- *   - JPX XLS は 1 回のダウンロードで 4400 銘柄を取れる。レート制限無し、公式、無料
+ *   - JPX の一覧は 1 回のダウンロードで 4400 銘柄を取れる。レート制限無し、公式、無料
  *   - 東証 33 業種区分 (輸送用機器 / 情報・通信業 / 銀行業 等) が正規の形式で取れる
  *
  * 以前は scripts/sync/sectors.ts に CLI スクリプトとしてべた書きされていたが、
@@ -18,8 +19,14 @@ import * as XLSX from "xlsx";
 import { recordPrimaryData } from "../notion-archive/index.js";
 import { isValidStockCode, normalizeStockCode } from "./stock-code.js";
 
-const JPX_LISTING_URL =
-  "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls";
+// JPX は 2026-08-10 〜 2026-09-10 の間に配布形式を .xls から .xlsx へ差し替えた。
+// 旧 URL (.xls) は HTTP 404 を返すようになり、月次の universe sync が 2026-09-10 の
+// 実行から失敗している (core_stocks.MAX(updated_at) は 2026-08-10 で止まっていた)。
+// パスとファイル名の他の部分・列構成 (10列) は変わっていない。
+// 一覧ページ https://www.jpx.co.jp/markets/statistics-equities/misc/01.html が
+// 指すリンクを正とする。
+export const JPX_LISTING_URL =
+  "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx";
 
 /** JPX XLS の 1 行 (必要なカラムのみ) */
 export interface JpxRow {
@@ -63,11 +70,19 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0",
-      Accept: "application/vnd.ms-excel,*/*",
+      Accept:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,*/*",
     },
   });
   if (!res.ok) {
-    throw new Error(`JPX listing HTTP エラー: ${res.status} ${res.statusText}`);
+    // 404 は配布形式の差し替えを真っ先に疑う (2026-09 に .xls → .xlsx が起きた)。
+    // ここで黙って空配列を返すと母集団が全滅するので必ず throw する。
+    throw new Error(
+      `JPX listing HTTP エラー: ${res.status} ${res.statusText} (${JPX_LISTING_URL})` +
+        (res.status === 404
+          ? " — 配布ファイルの拡張子/URL が変わっていないか一覧ページで確認すること"
+          : "")
+    );
   }
   const buf = new Uint8Array(await res.arrayBuffer());
 
@@ -131,8 +146,9 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
     files: [
       {
         bytes: buf,
-        filename: `data_j-${sourceAsOf}.xls`,
-        contentType: "application/vnd.ms-excel",
+        filename: `data_j-${sourceAsOf}.xlsx`,
+        contentType:
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       },
     ],
   });
@@ -143,7 +159,7 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
 /**
  * 共有 Yahoo パイプラインの対象となる東証内国普通株かを判定する。
  *
- * data_j.xls の「市場・商品区分」の代表値:
+ * data_j.xlsx の「市場・商品区分」の代表値:
  *   - プライム（内国株式） / スタンダード（内国株式） / グロース（内国株式）  ← 対象
  *   - プライム（外国株式） 等                                                ← 除外 (海外株)
  *   - ETF・ETN / REIT・ベンチャーファンド… / PRO Market / 出資証券          ← 除外 (非株式)

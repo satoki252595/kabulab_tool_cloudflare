@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-JPX 公式の「東証上場銘柄一覧(data_j.xls)」を取得し、検索用の銘柄マスター
+JPX 公式の「東証上場銘柄一覧(data_j.xlsx)」を取得し、検索用の銘柄マスター
 docs/data/stocks.json を生成する。
 
 - 4桁コード + 銘柄名 + 市場区分 を抽出(配列形式でサイズ最小化)。
@@ -18,9 +18,17 @@ import xlrd
 # 東証コード: 4桁数字、または新形式の英数字4文字(例 130A)。指数等の特殊行を除外。
 CODE_RE = re.compile(r"[0-9][0-9A-Z]{3}")
 
+# 2026-09 に JPX が .xls -> .xlsx へ差し替えた。旧 URL は HTTP 404。
+# ただしこのスクリプトは **現状そのままでは動かない**:
+#   - xlrd 2.x は .xlsx を読めない (openpyxl への差し替えが要る)
+#   - 出力先 docs/data/stocks.json は存在せず、配信されているのは
+#     public/vwap-analysis/data/stocks.json (2026-06-18 更新で停止)
+#   - flake.nix に python が無く、リポジトリの開発環境では実行できない
+#   - どこからも呼ばれていない (package.json / GitHub Actions に参照なし)
+# 使う前に上記を直すこと。母集団の正本は src/cron/universe.ts が D1 へ書いている。
 JPX_URL = (
     "https://www.jpx.co.jp/markets/statistics-equities/misc/"
-    "tvdivq0000001vg2-att/data_j.xls"
+    "tvdivq0000001vg2-att/data_j.xlsx"
 )
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "docs", "data", "stocks.json")

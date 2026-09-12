@@ -121,7 +121,7 @@ pnpm ingest:ir-tdnet      # /ir-catalog/admin/catchup を CRON_SECRET 認証で 
 pnpm ingest:yuho-edinet   # WORKER_BASE_URL の /yuho-quant/admin/catchup を CRON_SECRET 認証で POST
 ```
 
-> **母集団**: JPX `data_j.xls` に載る東証プライム／スタンダード／グロースの
+> **母集団**: JPX `data_j.xlsx` に載る東証プライム／スタンダード／グロースの
 > 内国株式のうち、共有 4 文字コード契約に合う約 3,700 銘柄。地域市場の
 > 単独上場銘柄と 5 桁種類株は対象外。002 otakara はさらに
 > `is_yutai=true` の優待銘柄のみを対象とする。

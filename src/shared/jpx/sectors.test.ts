@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  JPX_LISTING_URL,
   isListedEquity,
   parseJpxAsOf,
   type JpxRow,
 } from "./sectors.js";
 
-// JPX data_j.xls 2026-06-30版の実在行。手作りの架空銘柄は使わない。
+// JPX data_j 2026-06-30版の実在行。手作りの架空銘柄は使わない。
 const VERITAS: JpxRow = {
   asOf: "2026-06-30",
   code: "130A",
@@ -47,5 +48,21 @@ describe("isListedEquity", () => {
   it("5桁種類株とETFを普通株母集団から除外する", () => {
     expect(isListedEquity(ITO_EN_PREFERRED)).toBe(false);
     expect(isListedEquity(IFREE_TOPIX)).toBe(false);
+  });
+});
+
+describe("JPX_LISTING_URL", () => {
+  // 2026-09 に JPX が .xls から .xlsx へ差し替え、旧 URL が 404 になった。
+  // 月次の universe sync が 2026-09-10 から失敗していた原因なので、
+  // 拡張子の取り違えをここで固定する。
+  it("配布形式は .xlsx (旧 .xls は 404)", () => {
+    expect(JPX_LISTING_URL.endsWith(".xlsx")).toBe(true);
+    expect(JPX_LISTING_URL.endsWith(".xls")).toBe(false);
+  });
+
+  it("一覧ページが指すパスと一致する", () => {
+    expect(JPX_LISTING_URL).toBe(
+      "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx",
+    );
   });
 });

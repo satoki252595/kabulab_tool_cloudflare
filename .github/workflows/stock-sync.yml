@@ -20,7 +20,7 @@ name: stock-sync
 on:
   schedule:
     - cron: "0 21 * * 1-5" # 平日 21:00 UTC (翌 06:00 JST・東証 EOD 確定後): 日次 sync
-    # JPX data_j.xls は毎月第3営業日以降に前月末版へ差し替わる。
+    # JPX data_j.xlsx は毎月第3営業日以降に前月末版へ差し替わる。
     # 月初の旧版取得を避け、毎月10日 10:30 JST に母集団同期する。
     - cron: "30 1 10 * *"
   workflow_dispatch:

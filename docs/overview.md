@@ -246,7 +246,7 @@ Cloudflare D1 (kabulab-cf, SQLite)
 
 ### `pnpm sync:universe`
 
-JPX 公式 `data_j.xls` の東証内国株 (プライム/スタンダード/グロース) から共有4文字コードだけを `core_stocks` に upsert。新規 insert + name/market/sector 更新を行い、raw JPX 不在またはコード契約外の銘柄を対象外化する。`is_active` の writer はこの universe sync に限定し、Yahoo の取得失敗では変更しない。`is_yutai` は触らない (otakara の優待スクレイパーが writer)。部分取得による大量対象外化を避ける件数ガードを持つ。xlsx パースは Node 専用。月次ワークフローで `sync:monthly:core` の前段として実行され、母集団 (`core_stocks`) を最新化する。明示的な手動 seed/復旧用 CLI としても使う。
+JPX 公式 `data_j.xlsx` の東証内国株 (プライム/スタンダード/グロース) から共有4文字コードだけを `core_stocks` に upsert。新規 insert + name/market/sector 更新を行い、raw JPX 不在またはコード契約外の銘柄を対象外化する。`is_active` の writer はこの universe sync に限定し、Yahoo の取得失敗では変更しない。`is_yutai` は触らない (otakara の優待スクレイパーが writer)。部分取得による大量対象外化を避ける件数ガードを持つ。xlsx パースは Node 専用。月次ワークフローで `sync:monthly:core` の前段として実行され、母集団 (`core_stocks`) を最新化する。明示的な手動 seed/復旧用 CLI としても使う。
 
 ### `pnpm sync:daily:core` (= `scripts/sync/daily.ts`)
 
@@ -278,7 +278,7 @@ vwap-ingest の各 GitHub Actions が別々に担当する。
 
 stock-sync の月次ジョブは次の順に別コマンドとして実行する。
 
-1. `pnpm sync:universe` — JPX `data_j.xls` から東証母集団を同期
+1. `pnpm sync:universe` — JPX `data_j.xlsx` から東証母集団を同期
 2. `pnpm sync:monthly:core` — otakara 派生テーブルを rebuild
 
 `pnpm sync:monthly` はローカル手動用のフルオーケストレータで、core rebuild に加え、

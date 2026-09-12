@@ -1,7 +1,7 @@
 /**
  * 母集団 (core_stocks) 同期オーケストレータ（Cloudflare D1 / Node 取込版） — ADR-0001。
  *
- * JPX 公式 data_j.xls の東証内国株 (プライム/スタンダード/グロース) のうち
+ * JPX 公式 data_j.xlsx の東証内国株 (プライム/スタンダード/グロース) のうち
  * 共有4文字コード契約に合う ~3,700 銘柄を
  * core_stocks に upsert する。これにより日次/月次 sync・001/003/004 の母集団が
  * 「優待縛り ~1,600」から「東証内国普通株」へ拡張される。
@@ -63,7 +63,7 @@ const MAX_DEACTIVATION_RATIO = 0.02;
 export interface UniverseSyncResult {
   /** JPX ファイル内の基準日 (YYYY-MM-DD) */
   sourceAsOf: string;
-  /** data_j.xls の全行数 */
+  /** data_j.xlsx の全行数 */
   jpxRows: number;
   /** 内国普通株 (sync 対象) 件数 */
   equities: number;
@@ -88,13 +88,13 @@ export function assertUniverseCoverage(
   if (rawCount < MIN_JPX_ROWS) {
     throw new Error(
       `JPX listing が ${rawCount} 件で安全下限 ${MIN_JPX_ROWS} 件未満です。` +
-        " data_j.xls の部分取得・列形式変更を疑ってください。"
+        " data_j.xlsx の部分取得・列形式変更を疑ってください。"
     );
   }
   if (equityCount < MIN_EQUITY_ROWS) {
     throw new Error(
       `JPX 対象株が ${equityCount} 件で安全下限 ${MIN_EQUITY_ROWS} 件未満です。` +
-        " data_j.xls の部分取得・列形式変更を疑ってください。"
+        " data_j.xlsx の部分取得・列形式変更を疑ってください。"
     );
   }
   if (
@@ -138,7 +138,7 @@ export async function seedUniverse(
   jpxRows: JpxRow[]
 ): Promise<UniverseSyncResult> {
   if (jpxRows.length === 0) {
-    throw new Error("JPX listing が 0 行。data_j.xls の取得を確認してください。");
+    throw new Error("JPX listing が 0 行。data_j.xlsx の取得を確認してください。");
   }
   const equities = jpxRows.filter(isListedEquity);
   const sourceDates = new Set(jpxRows.map((row) => row.asOf));
