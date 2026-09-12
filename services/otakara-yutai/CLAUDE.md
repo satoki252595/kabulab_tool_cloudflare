@@ -97,6 +97,14 @@ services/otakara-yutai/
 - **本番は `services/otakara-yutai/app.ts` の 1 ファイルのみ**。旧
   `src/index.ts` / `src/pages-app.ts` は 2026-06 の整理で削除済み。現エントリは
   `app.ts` の 1 ファイル構成
+- 2026-09 に `src/routes/` / `src/views/` / `src/types.ts` /
+  `src/validators/index.ts` / `src/middleware/{index,db}.ts` も削除した
+  (17 ファイル / 4,245 行)。**2026-06 の整理でエントリだけ消してルートとビューが
+  残っていた**ため、未マウントのまま `ILIKE` (D1 で動かない) と重複キー 5 箇所を
+  温存していた。公開面を足すときは `app.ts` に書く。別ディレクトリに
+  「新しい実装」を作ると、マウントし忘れた瞬間に同じ状態に戻る
+  (`src/tests/public-summary-safety.test.ts` が `src/routes` / `src/views` の
+  再出現を検知して落とす)
 
 ## デザイン方針 — kabulab Editorial Swiss Grid
 
@@ -170,5 +178,8 @@ pnpm typecheck            # 全サービス型チェック
 - `src/services/` のスクレイパー類は `data-scripts/` から呼ばれる
   (スコアリングは `src/shared/scoring.ts` + 月次同期 (`pnpm sync:monthly:core`) に統合済み。
   旧 `src/scripts/sync-and-score.ts` は削除済み)
-- `data-scripts/` 配下の 1 回限りのデータ取得スクリプトは tsconfig から除外されている
+- `data-scripts/` 配下は **2026-09 から typecheck 対象**
+  (以前はディレクトリ単位で tsconfig の `exclude` に入っていた)。
+  除外はファイル単位に変わり、otakara は 1 件も除外が無い。
+  残っている除外は [../../docs/ci-typecheck-blind-spots.md](../../docs/ci-typecheck-blind-spots.md) を参照
 - **JSX は使えない** — mono-repo 方針 (ビューは template literal を返す .ts 関数。Workers/esbuild でも踏襲) により、HTML は app.ts 内で template literal として直接生成する

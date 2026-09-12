@@ -1,86 +1,93 @@
-/**
- * 銘柄詳細ページの鮮度表示の検証。
- *
- * 一覧は鮮度上限を超えた行を除外するが、詳細ページは除外しない (1 銘柄しか
- * 無いのでページが空になるだけ)。除外しない代わりに警告が出ていることを固定する
- * —— バルーンヘルプが「7 日を超えた古い値は表から除外する」と述べているため、
- * 警告が無いと「表示されている = 7 日以内」と誤読される。
- */
-import { describe, expect, it } from "vitest";
-import { stockDetailPage } from "../../views/stock-detail.js";
-import { PERCENTILE_MAX_AGE_DAYS } from "../../services/screening-service.js";
+import { describe, it, expect } from "vitest";
+import {
+  stockDetailPage,
+  ANNUAL_BREAK_NOTE,
+} from "../../views/stock-detail.js";
 import type { StockDetail } from "../../services/stock-detail-service.js";
 
-const NOW = new Date("2026-09-14T21:30:00.000Z");
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function detail(computedAt: Date): StockDetail {
+/**
+ * 年度売上テーブルの注記 (連結/単体の混在)
+ *
+ * revenueTrend を「判定不能」にしても、テーブルが素の数値を並べていれば
+ * 読者はそこから成長率を読み取ってしまう。表示面でも段差を明示することを
+ * 仕様として固定する。
+ */
+function detailWith(
+  annual: Array<{ fiscalYear: number; revenue: number | null }>,
+  revenueTrend: number | null
+): StockDetail {
   return {
-    code: "1001",
-    name: "テスト銘柄",
+    code: "7203",
+    name: "トヨタ自動車",
     market: "プライム",
-    sector: "情報・通信業",
-    financials: {
-      price: 1200,
-      per: 12.3,
-      pbr: 1.1,
-      dividendYield: 2.5,
-      eps: 97.5,
-      bps: 1090,
-      roe: 0.09,
-      roa: 0.05,
-      marketCap: 1.2e11,
-      operatingMargin: 0.12,
-      dataDate: "2026-09-11",
-    },
+    sector: "輸送用機器",
+    financials: null,
     rsi: {
-      rsi10: 25,
-      rsi10Percentile: 2,
-      rsi40: 30,
-      rsi40Percentile: 5,
-      rsi120: 35,
-      rsi120Percentile: 8,
-      rsiMinPercentile: 2,
+      rsi10: 40,
+      rsi10Percentile: 10,
+      rsi40: 45,
+      rsi40Percentile: 12,
+      rsi120: 50,
+      rsi120Percentile: 15,
+      rsiMinPercentile: 10,
       isBlueChip: false,
       operatingMarginTtm: 0.12,
-      revenueTrend: 1,
+      revenueTrend,
+      // 鮮度警告 (stock-detail-freshness.test.ts) とは別の関心なので、
+      // ここでは常に「算出直後」を置いて段差注記だけを見る。
       percentileSampleBars: 1223,
-      computedAt,
+      computedAt: new Date("2026-09-11T21:30:00.000Z"),
     },
-    annualFinancials: [{ fiscalYear: 2026, revenue: 1.0e11 }],
+    annualFinancials: annual,
   };
 }
 
-describe("stockDetailPage の鮮度表示", () => {
-  it("鮮度上限内なら算出日と経過日数だけを出す", () => {
+describe("stockDetailPage: 年度売上テーブルの段差注記", () => {
+  it("系列に2倍超の段差があれば注記を出す", () => {
     const html = stockDetailPage({
-      detail: detail(new Date(NOW.getTime() - 3 * DAY_MS)),
-      now: NOW,
+      detail: detailWith(
+        [
+          { fiscalYear: 2024, revenue: 17.58e12 },
+          { fiscalYear: 2025, revenue: 18.28e12 },
+          { fiscalYear: 2026, revenue: 50.68e12 },
+        ],
+        null
+      ),
     });
-
-    expect(html).toContain("2026-09-11");
-    expect(html).toContain("3 日前");
-    expect(html).not.toContain("鮮度不足");
+    expect(html).toContain(ANNUAL_BREAK_NOTE);
+    expect(html).toContain("判定不能");
   });
 
-  it("鮮度上限を超えた算出値は「一覧では除外される値」と警告する", () => {
-    // 実測で残っていた 2026-05-15 算出の行。一覧からは消えるが、詳細ページは
-    // URL 直打ちで到達できるので、古いまま黙って出さない。
+  it("段差が無ければ注記は出さない", () => {
     const html = stockDetailPage({
-      detail: detail(new Date("2026-05-15T21:10:00.000Z")),
-      now: NOW,
+      detail: detailWith(
+        [
+          { fiscalYear: 2024, revenue: 100e8 },
+          { fiscalYear: 2025, revenue: 115e8 },
+          { fiscalYear: 2026, revenue: 130e8 },
+        ],
+        1
+      ),
     });
-
-    expect(html).toContain("鮮度不足のため一覧では除外される値");
-    expect(html).toContain('class="bad"');
+    expect(html).not.toContain(ANNUAL_BREAK_NOTE);
+    expect(html).toContain("上昇基調");
   });
 
-  it("境界 (上限ちょうど) は警告しない", () => {
+  // 判定窓 (直近3期) の外にある段差は revenueTrend を null にしないが、
+  // 表には写っているので注記は出す — ガードの「窓の外は素通り」を表示面で埋める。
+  it("段差が判定窓の外でも、表示系列に写っていれば注記を出す", () => {
     const html = stockDetailPage({
-      detail: detail(new Date(NOW.getTime() - PERCENTILE_MAX_AGE_DAYS * DAY_MS)),
-      now: NOW,
+      detail: detailWith(
+        [
+          { fiscalYear: 2022, revenue: 1.6e12 },
+          { fiscalYear: 2023, revenue: 45.1e12 },
+          { fiscalYear: 2024, revenue: 48.0e12 },
+          { fiscalYear: 2025, revenue: 50.7e12 },
+        ],
+        1
+      ),
     });
-
-    expect(html).not.toContain("鮮度不足");
+    expect(html).toContain(ANNUAL_BREAK_NOTE);
+    expect(html).toContain("上昇基調");
   });
 });

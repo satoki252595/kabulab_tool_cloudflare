@@ -25,12 +25,18 @@ function pctBadge(p: number | null): string {
   return "neutral";
 }
 
-/** トレンドマーク */
+/**
+ * トレンドマーク
+ *
+ * null は "—" (データ無し) ではなく "?" = 判定不能。一覧は横幅が無いので記号だが、
+ * "→" (横ばい) と混同されないようにする。null になる理由は
+ * src/shared/indicators/blue-chip.ts の hasDefinitionBreak (連結/単体の混在)。
+ */
 function trendMark(t: number | null): { mark: string; cls: string } {
   if (t === 1) return { mark: "↑", cls: "trend-up" };
   if (t === -1) return { mark: "↓", cls: "trend-down" };
   if (t === 0) return { mark: "→", cls: "trend-flat" };
-  return { mark: "—", cls: "trend-flat" };
+  return { mark: "?", cls: "trend-flat" };
 }
 
 /** TTM 営業利益率を %表示 + 良/悪の色分けセルに整形 */

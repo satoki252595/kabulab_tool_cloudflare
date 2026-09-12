@@ -2,6 +2,7 @@ import { layout, h, tip } from "./layout.js";
 import { BASE_PATH } from "../../base-path.js";
 import type { StockDetail } from "../services/stock-detail-service.js";
 import { PERCENTILE_MAX_AGE_DAYS } from "../services/screening-service.js";
+import { hasDefinitionBreak } from "../../../../src/shared/indicators/blue-chip.js";
 
 function fmt(n: number | null | undefined, digits = 2): string {
   if (n === null || n === undefined || !isFinite(n)) return "—";
@@ -20,11 +21,30 @@ function fmtMarketCap(n: number | null | undefined): string {
   return `${oku.toFixed(0)}億円`;
 }
 
+/**
+ * 売上高トレンドのラベル
+ *
+ * null を "—" (データ無し) ではなく「判定不能」と出す。
+ * Yahoo が連結と単体を混ぜて返すため、判定窓に定義切り替えの段差がある銘柄は
+ * トレンドを算出せず null にしている (src/shared/indicators/blue-chip.ts)。
+ * 「横ばい」と読まれると捏造したトレンドを見せるのと同じなので、明示的に分ける。
+ */
+/**
+ * 年度売上テーブルに添える注記 (連結/単体の混在)
+ *
+ * ツールチップ (layout.ts の TIPS.revenueTrend) にも 2 倍段差の説明があるが、
+ * あれは「トレンドが判定不能な理由」の説明で、こちらは「表に並んでいる数値が
+ * 比較できない」ことの注記。文言を定数に出しているのはテストから参照するため
+ * (ツールチップ文と部分一致してしまわないよう、独立した一文にしてある)。
+ */
+export const ANNUAL_BREAK_NOTE =
+  "※ この系列には前年比 2 倍超の段差があります。取得元 (Yahoo) が連結売上と親会社単体の売上高を期ごとに混在させるため、年度間の増減は企業の成長を表していません。";
+
 function trendLabel(t: number | null): { label: string; cls: string } {
   if (t === 1) return { label: "上昇基調", cls: "trend-up" };
   if (t === -1) return { label: "下降基調", cls: "trend-down" };
   if (t === 0) return { label: "横ばい", cls: "trend-flat" };
-  return { label: "—", cls: "trend-flat" };
+  return { label: "判定不能", cls: "trend-flat" };
 }
 
 /**
@@ -179,6 +199,23 @@ export function stockDetailPage(props: {
     )
     .join("");
 
+  // 表示している系列自体に段差があるなら、表に注記を添える。
+  //
+  // revenueTrend を「判定不能」に倒しても、この表が 17.58 兆 → 18.28 兆 → 50.68 兆 を
+  // 素で並べていれば読者は +188% の成長を読み取る。ラベルだけ直して数字を無注記で
+  // 見せるのは、捏造したトレンドを見せているのと同じ。
+  //
+  // 判定窓 (直近 3 期) ではなく**表示している全期間**で判定する理由: 段差が窓の外に
+  // ある銘柄は revenueTrend は +1 のまま正当だが、表には段差が写っているため。
+  // つまりこの注記は判定ガード (blue-chip.ts) の「窓の外は素通りする」限界を
+  // 表示面だけ埋める。数値そのものの是正には既存行の再構築が必要
+  // (docs/001-rsi-screening.md)。
+  const annualNote = hasDefinitionBreak(
+    detail.annualFinancials.map((f) => f.revenue)
+  )
+    ? `<p style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);margin-top:10px;line-height:1.6">${ANNUAL_BREAK_NOTE}</p>`
+    : "";
+
   const annualTable =
     detail.annualFinancials.length > 0
       ? `<table>
@@ -188,7 +225,7 @@ export function stockDetailPage(props: {
             </tr>
           </thead>
           <tbody>${annualRows}</tbody>
-        </table>`
+        </table>${annualNote}`
       : "";
 
   const body = `

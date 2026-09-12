@@ -77,6 +77,25 @@ export const stockFinancials = sqliteTable(
 /**
  * 年度財務（共有） — 売上高の年度推移。
  * Yahoo が無料 API から operatingIncome を削除したため revenue のみ保持。
+ *
+ * この表には Yahoo 由来の既知の欠陥が 2 つ埋まっている (どちらも列では直していない)。
+ *
+ * 1. `revenue` は**連結と単体が混在**する。Yahoo の
+ *    `incomeStatementHistory[].totalRevenue` をそのまま入れているが、Yahoo は期ごとに
+ *    連結 (売上収益) と親会社単体の売上高を混ぜて返す。持株会社では単体が連結の
+ *    2〜10% しかないため、同一銘柄の系列内に 10〜40 倍の段差が生まれる。
+ *    → この列で売上トレンドを判定する側は
+ *      `src/shared/indicators/blue-chip.ts` の `hasDefinitionBreak` で降りること。
+ *
+ * 2. `fiscal_year` は**銘柄間で意味が違う**。期末日 (endDate) を
+ *    `getUTCFullYear()` で暦年に丸めているだけなので、3 月期企業の 2025 は
+ *    和暦 2024 年度、12 月期企業の 2025 は 2025 年度を指す。
+ *    → 銘柄をまたいだ「同じ fiscal_year 同士の比較」は成立しない。
+ *      同一銘柄内の時系列としてのみ使う。
+ *
+ * どちらも列追加 (連結/単体フラグ・期末日) で直せるが、この表は
+ * 「現状維持のまま、既存消費者を新しい正本へ向け終えたら DROP する」方針なので、
+ * 寿命の短い表にスキーマ変更を積まない。
  */
 export const stockAnnualFinancials = sqliteTable(
   "core_stock_annual_financials",
