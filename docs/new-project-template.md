@@ -249,6 +249,6 @@ app.get("/api/some-protected", cronAuthMiddleware, async (c) => { ... });
 - [ ] モバイルで bottom-nav に PORTAL ボタンがある (`/` に遷移)
 - [ ] ポータル `/` の SERVICES グリッドに新サービスのカードが表示されている
 - [ ] 同一タブで遷移する (sub-path なので `target="_blank"` 不要)
-- [ ] (該当時) `pnpm db:generate:d1` → `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql` で D1 にスキーマが作成された
+- [ ] (該当時) `pnpm db:generate:d1` → `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql` で D1 にスキーマが作成された（**流す前に [drizzle/d1/README.md](../drizzle/d1/README.md) を読む**。本番へ流してはいけない生成物がある。`drizzle-kit push` は D1 では禁止）
 - [ ] (該当時) `src/cron/daily.ts` or `monthly.ts` に新サービス用の書き込みを統合済み
 - [ ] (該当時) `pnpm sync:universe` で母集団を seed 後、`pnpm sync:daily:core` / `pnpm sync:monthly:core` を手動実行してデータが入ることを確認

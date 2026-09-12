@@ -197,8 +197,12 @@ export async function importYutaiData(
       }
 
       // 2. 銘柄をfind or create
+      // 列は id だけ。core_stocks の `personal-only` 列 (sector33 / sector17 /
+      // instrument_type / license_tag / src_source / quality) を取込プロセスへ
+      // 載せない。列指定なし select の禁止は
+      // src/shared/db/core-stocks-license-boundary.test.ts が見ている。
       const existingStocks = await db
-        .select()
+        .select({ id: stocks.id })
         .from(stocks)
         .where(eq(stocks.code, item.stockCode));
 

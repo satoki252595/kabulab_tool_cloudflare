@@ -71,6 +71,13 @@
       "when": 1789218833698,
       "tag": "0009_natural_loners",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1789222062654,
+      "tag": "0010_common_black_bird",
+      "breakpoints": true
     }
   ]
 }

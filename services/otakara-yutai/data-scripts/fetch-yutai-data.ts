@@ -210,7 +210,15 @@ async function main() {
     try {
       // 銘柄 find or create
       let stockId: number;
-      const existing = await db.select().from(stocks).where(eq(stocks.code, stock.code)).limit(1);
+      // 列は id だけ。core_stocks の `personal-only` 列 (sector33 / sector17 /
+      // instrument_type / license_tag / src_source / quality) を取込プロセスへ
+      // 載せない。列指定なし select の禁止は
+      // src/shared/db/core-stocks-license-boundary.test.ts が見ている。
+      const existing = await db
+        .select({ id: stocks.id })
+        .from(stocks)
+        .where(eq(stocks.code, stock.code))
+        .limit(1);
       if (existing.length > 0) {
         stockId = existing[0].id;
       } else {
