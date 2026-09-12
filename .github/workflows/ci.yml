@@ -24,9 +24,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      # version は指定しない。package.json の packageManager (pnpm@9.15.9) が
+      # 唯一の source of truth で、両方書くと action が二重指定で落ちる。
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
