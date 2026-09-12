@@ -104,7 +104,7 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
   // (MIN_JPX_ROWS=4000 は「ETF/REIT/PRO/外国株を含む data_j の全行数」の下限)。
   // パーサ側で 5 文字の種類株や ETF を落とすと rawCount が「正準コード行数」へ
   // 変質し、部分取得・列崩れの検知器としての意味が失われる。さらに
-  // universe.ts:156 の `rawCodes` から 5 文字コードが消えると
+  // universe.ts:151 の `rawCodes` から 5 文字コードが消えると
   // shouldDeactivateUniverseCode の `!rawCodes.has(code)` 節が種類株について
   // 到達不能になる。母集団の絞り込みは isListedEquity 側の責務。
   const rows: JpxRow[] = [];

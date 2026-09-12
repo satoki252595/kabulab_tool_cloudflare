@@ -95,7 +95,7 @@ describe("downloadJpxListing", () => {
     expect(rows.filter(isListedEquity).map((r) => r.code)).toEqual(["7203"]);
   });
 
-  // universe.ts:156 の rawCodes に 5 文字コードが残っていることが、
+  // universe.ts:151 の rawCodes に 5 文字コードが残っていることが、
   // shouldDeactivateUniverseCode の `!rawCodes.has(code)` 節が種類株について
   // 到達可能である前提。
   it("種類株コードを正準形に丸めず原形のまま返す", async () => {
