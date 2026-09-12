@@ -80,6 +80,10 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
   const swingIndicators = await db.select().from(swingSchema.stockIndicators);
   const swingIndMap = new Map(swingIndicators.map((i) => [i.stockId, i]));
 
+  // 金額換算できた行だけを対象にする。利回りは「**価値が算定できる最小の
+  // 保有段階**での利回り」と定義する。NULL 行も含めて最低単元を決めると、
+  // 最小段階の優待が金額換算不能な銘柄で分子が 0 になり、本来 0.3% などの
+  // 妥当な利回りが出ていた 95 銘柄が一斉に算定不能になる（本番データで実測）。
   const benefitRows = await db
     .select({
       stockId: otakaraSchema.yutaiBenefits.stockId,
@@ -199,8 +203,50 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
  * 優待利回りを算出する
  *
  * 優待利回り(%) = (優待の推定価値合計 / (株価 × 最低必要株数)) × 100
+ *
+ * 「保有しているだけで確実に受け取れる価値」だけを分子に入れる。
+ * 抽選や、大きな買い物を条件にするキャッシュバックを合算すると、
+ * 実在しない利回りが出る（本番実測）:
+ *
+ *   7578  65円 ×100株=6,500円 に対し「50万円相当の商品券贈呈(抽選)」を
+ *         3月・9月の2回ぶん確定価値として合算 → 16,676.9%
+ *   3477  「新築分譲住宅のキャッシュバック20万円」を年2回合算 → 455.3%
+ *   5618  「定額カルモくん申込みで100,000円キャッシュバック」 → 694.2%
+ *
+ * いずれもスクリーニングの上位に出ていた。
  */
-function calcYutaiYield(
+
+/**
+ * 条件付き優待を**文言では判定しない**（判定器を作らない）。
+ *
+ * 検討して捨てた案を記録しておく。本番データで実際に試した結果である。
+ *
+ * - 「キャッシュバック」「申込み」「入会時」「購入時」等で弾く
+ *   → 「買物金額の5%キャッシュバック」のような正当な優待も同じ語を使うため、
+ *      利回り 0.3% の銘柄まで含め **93 銘柄が誤って算定不能**になった
+ * - 「抽選」だけで弾く
+ *   → 「抽選**に当選されなかった場合は**3,000円相当」(2751 = 必ずもらえる)、
+ *      「特製QUOカード1,000円相当…フジテレビ番組観覧(抽選)」(4676 = QUOカードは確実)、
+ *      「…日本酒のセット、抽選で塩数の子は上限1000個」(2683 = 本体は確実)
+ *      のように、**優待の一部だけが抽選**のケースを丸ごと落としてしまう
+ *
+ * 「優待全体が抽選か、一部だけか」をテキストから見分けるのは推定であり、
+ * §3-1 に反する。桁外れの値は下の上限側で拾えば足りる。
+ */
+
+/**
+ * これを超える優待利回りは推定が壊れているとみなし、値を出さない。
+ *
+ * 本番 1,261 銘柄の実測分布: ≤5% が 86.8% / ≤10% が 94.9% / ≤30% が 98.3% /
+ * ≤50% が 98.6%。50% 超の 18 件（1.4%）はすべて上記の条件付き優待が
+ * 混ざったもので、実在する利回りではない。
+ *
+ * 推定できない優待を 0 円として扱うのではなく **値を出さない**のは、
+ * 既存の「金額換算が難しい優待」表示と同じ方針（§3-1 推定禁止）。
+ */
+export const YUTAI_YIELD_MAX_PCT = 50;
+
+export function calcYutaiYield(
   price: number | null,
   benefits: ReadonlyArray<{
     minShares: number;
@@ -210,6 +256,7 @@ function calcYutaiYield(
   if (price === null || price <= 0) return null;
   if (benefits.length === 0) return null;
 
+  // 価値が算定できる行のうち最小の保有段階（呼び出し側が NULL 行を除いている）
   const minRequired = Math.min(...benefits.map((b) => b.minShares));
   const investmentAmount = price * minRequired;
   const totalValue = benefits
@@ -217,5 +264,8 @@ function calcYutaiYield(
     .reduce((sum, b) => sum + (b.estimatedValue ?? 0), 0);
 
   if (totalValue <= 0) return null;
-  return (totalValue / investmentAmount) * 100;
+  const pct = (totalValue / investmentAmount) * 100;
+  // 上限超過は「高利回り」ではなく「推定が壊れている」。値を出さない。
+  if (pct > YUTAI_YIELD_MAX_PCT) return null;
+  return pct;
 }
