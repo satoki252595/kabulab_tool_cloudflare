@@ -14,6 +14,13 @@ import {
 } from "./src/db/schema.js";
 import { createDb, type Database } from "./src/db/client.js";
 import { parseStockCode } from "../../src/shared/jpx/stock-code.js";
+import {
+  publicMarketColumn,
+  publicSectorColumn,
+  publicStockRelationalColumns,
+  publicStockMetaFromRow,
+  publicStockMetaLabel,
+} from "../../src/shared/db/public-columns.js";
 
 /**
  * 002 お宝優待 — kabulab portal 配下の /otakara-yutai サブアプリ
@@ -246,7 +253,9 @@ app.get("/api/screening", async (c) => {
   // 先頭ページしか出せなかったのでこのズレは露出しなかった)。前提が成り立つなら
   // 無駄・崩れるなら有害なので外し、代わりに UNIQUE 前提を上のテストで固定した。
   const rows = await db.select({
-    id: stocks.id, code: stocks.code, name: stocks.name, market: stocks.market, sector: stocks.sector,
+    // JPX 由来の market / sector は公開面へ出さない (src/shared/db/public-columns.ts)。
+    id: stocks.id, code: stocks.code, name: stocks.name,
+    market: publicMarketColumn, sector: publicSectorColumn,
     price: stockFinancials.price, per: stockFinancials.per, pbr: stockFinancials.pbr,
     dividendYield: stockFinancials.dividendYield, yutaiYield: stockFinancials.yutaiYield, rsi14: stockFinancials.rsi14,
     fundamentalScore: stockScores.fundamentalScore, technicalScore: stockScores.technicalScore,
@@ -1389,7 +1398,7 @@ app.get("/stocks/:code", async (c) => {
     // 時点で経路が開く。`.select()` 側の禁止だけでは関係クエリは塞げないので、
     // ここは `columns` で塞ぐ (禁止は core-stocks-license-boundary.test.ts、
     // 出力が漏れないことは src/tests/stock-detail-license.test.ts が見ている)。
-    columns: { id: true, name: true, market: true, sector: true },
+    columns: { id: true, name: true, ...publicStockRelationalColumns },
     where: and(eq(stocks.code, code), eq(stocks.isYutai, true)),
     with: {
       // description (出典サイトの掲載文) は**列ごと引かない**。うっかり
@@ -1412,6 +1421,8 @@ app.get("/stocks/:code", async (c) => {
 
   if (!stockData) return c.html(layout("Not Found", `<div class="container"><h2>銘柄が見つかりません</h2><a href="${BP}/" class="back">← ホーム</a></div>`), 404);
 
+  // 市場区分 / 業種はフラグで列名が変わる。読み替えは public-columns.ts に閉じる。
+  const stockMeta = publicStockMetaFromRow(stockData);
   const fin = stockData.financials[0] ?? null;
   const score = stockData.scores[0] ?? null;
   const genreSlugs = [...new Set(stockData.benefits.map((b: any) => b.genre?.slug).filter(Boolean))];
@@ -1424,7 +1435,7 @@ app.get("/stocks/:code", async (c) => {
         : `<a href="${BP}/" class="back">← ホーム</a>${genreSlugs.length > 0 ? genreSlugs.map(s => `<a href="${BP}/genres/${s}" class="back">← ジャンルに戻る</a>`).join("") : ""}`
       }
       <h2>${h(stockData.name)} <span style="color:#666">${h(code)}</span></h2>
-      <p style="color:#888">${h(stockData.market)}${stockData.sector ? " / " + h(stockData.sector) : ""}</p>
+      <p style="color:#888">${h(publicStockMetaLabel([stockMeta.market, stockMeta.sector]))}</p>
 
       <div class="detail-scores">
         <div class="detail-score"><div class="val" style="color:${score?.totalScore != null ? (score.totalScore >= 60 ? "var(--score-high)" : "var(--score-mid)") : "var(--text-muted)"}">${score?.totalScore?.toFixed(1) ?? "-"}</div><div class="lbl">${tip("total", "総合スコア")}</div></div>

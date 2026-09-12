@@ -1,11 +1,14 @@
 import { BASE_PATH } from "../../base-path.js";
 import { h, fmtNum, fmtYen, pctCell, layout } from "./layout.js";
+import { publicStockMetaLabel } from "../../../../src/shared/db/public-columns.js";
 
 export interface StockDetailData {
   code: string;
   name: string;
+  /** 業種。既定では `core_stocks.sector33` (EDINET 提出者業種)。 */
   sector: string | null;
-  market: string;
+  /** 市場区分。JPX 由来 = personal-only なので既定では常に `null`。 */
+  market: string | null;
   // 指標
   latestClose: number | null;
   latestDate: string | null;
@@ -121,7 +124,7 @@ export function stockDetailPage(data: StockDetailData): string {
   <div class="inner">
     <div class="label"><span class="label-text">003 / STOCK DETAIL / ${h(data.code)}</span><span>${h(data.latestDate ?? "—")}</span></div>
     <h1>${h(data.name)}</h1>
-    <p class="lead">${h(data.sector ?? "未分類")} / ${h(data.market)} / ${h(data.code)}</p>
+    <p class="lead">${h(publicStockMetaLabel([data.sector, data.market, data.code]))}</p>
   </div>
 </div>
 

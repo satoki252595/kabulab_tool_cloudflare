@@ -1,6 +1,7 @@
 import { layout, h } from "./layout.js";
 import { BASE_PATH } from "../../base-path.js";
 import type { StockHit } from "../services/order-query.js";
+import { publicStockMetaLabel } from "../../../../src/shared/db/public-columns.js";
 
 /**
  * ホーム = 検索フォーム + (検索時) 結果一覧。
@@ -52,7 +53,7 @@ export function homePage(opts: {
           (s) => `<li><a href="${BASE_PATH}/stock/${s.code}">
         <div class="code">${h(s.code)}</div>
         <div class="nm">${h(s.name)}</div>
-        <div class="meta">${h(s.market)}${s.sector ? " / " + h(s.sector) : ""}</div>
+        <div class="meta">${h(publicStockMetaLabel([s.market, s.sector]))}</div>
       </a></li>`
         )
         .join("");
