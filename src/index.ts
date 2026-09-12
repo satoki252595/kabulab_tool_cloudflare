@@ -133,7 +133,14 @@ const HEAD = `<meta charset="UTF-8"><meta name="viewport" content="width=device-
 
 const HEADER = `<header class="top-header"><div class="inner"><a href="/" class="brand"><span class="mark"></span><span class="name"><span class="ja">kabulab</span><span class="en">JAPAN STOCK / TOOLKIT</span></span></a><div class="header-meta">EST. 2026</div></div></header>`;
 
-const FOOTER = `<footer class="footer"><div class="inner"><div class="meta">© ${new Date().getFullYear()} kabulab — Japan Stock Toolkit</div><div class="links"><a href="/">Home</a><a href="${RSI_BASE_PATH}/">RSI Screening</a><a href="${OTAKARA_BASE_PATH}/">お宝優待</a></div></div></footer>`;
+/**
+ * フッターはリクエストごとに組み立てる。
+ *
+ * モジュールスコープで `new Date()` を評価すると、Workers は起動時（実質 epoch 0）
+ * の値を掴んでしまい「© 1970 kabulab」と表示される（本番で実際に出ていた）。
+ * 同じページのヘッダ "EST. 2026" は定数なので正しく、気づきにくかった。
+ */
+const footerHtml = () => `<footer class="footer"><div class="inner"><div class="meta">© ${new Date().getFullYear()} kabulab — Japan Stock Toolkit</div><div class="links"><a href="/">Home</a><a href="${RSI_BASE_PATH}/">RSI Screening</a><a href="${OTAKARA_BASE_PATH}/">お宝優待</a></div></div></footer>`;
 
 /** サービス一覧の型定義 */
 type Service = {
@@ -157,7 +164,7 @@ const SERVICES: Service[] = [
       "過去5年間の RSI（10日 / 40日 / 120日）パーセンタイルで「今が5年で何%の底値水準か」を定量化。営業利益率と売上高の上昇トレンドで優良株のみを抽出します。",
     features: ["RSI Percentile", "Blue-Chip Filter", "5Y History"],
     url: `${RSI_BASE_PATH}/`,
-    status: "soon",
+    status: "live",
   },
   {
     num: "002",
@@ -179,7 +186,7 @@ const SERVICES: Service[] = [
       "マクロ判定 (A/B/C/D) + 5 条件スクリーニング + E&E 6 パターン判定 + 2% ルール計算機を日足ベースで自動化。毎朝の売買ルールを再現性のある型に落とす短期売買支援ツール。",
     features: ["Macro A/B/C/D", "5-Filter", "E&E Patterns", "Risk Calc"],
     url: `${SWING_BASE_PATH}/`,
-    status: "soon",
+    status: "live",
   },
   {
     num: "004",
@@ -289,7 +296,7 @@ ${HEADER}
     <p>すべてのサービスは Hono + TypeScript + Drizzle ORM で構築され、Cloudflare Workers 上で稼働しています。</p>
   </div>
 </div>
-${FOOTER}
+${footerHtml()}
 </body></html>`);
 });
 

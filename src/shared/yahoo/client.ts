@@ -24,6 +24,7 @@ import type {
   StockRawData,
 } from "../types.js";
 import { sharedEnv } from "../env.js";
+import { sanitizeBars } from "./bar-sanity.js";
 
 /**
  * 日本株銘柄コード。
@@ -472,7 +473,7 @@ export async function fetchChart(
   // 呼び出し側の `r.adj ?? r.close` が機能する（adjclose 欠落 = 分割なし = close が正値）。
   const adjcloseArr = result.indicators.adjclose?.[0]?.adjclose ?? [];
 
-  const ohlcv: DailyOhlcv[] = timestamps.map((ts, i) => ({
+  const rawBars: DailyOhlcv[] = timestamps.map((ts, i) => ({
     date: toDateString(ts),
     open: quote?.open?.[i] ?? null,
     high: quote?.high?.[i] ?? null,
@@ -481,6 +482,17 @@ export async function fetchChart(
     volume: quote?.volume?.[i] ?? null,
     adj: adjcloseArr[i] ?? null,
   }));
+
+  // 桁の壊れたバーを取り込まない (bar-sanity.ts 参照)。
+  // 1909 の 2026-09-11 は close=16,278,046,720 / volume=0（前日 3,700）で、
+  // これが業種平均を汚染して 003 のトップに「機械 +2,105,009.25%」が出た。
+  const { bars: ohlcv, rejected } = sanitizeBars(rawBars);
+  if (rejected.length > 0) {
+    console.warn(
+      `[yahoo] ${symbol}: 帯域チェックで ${rejected.length} 本を採用しませんでした ` +
+        rejected.map((r) => `${r.date}(${r.reason})`).join(" ")
+    );
+  }
 
   const closePrices = quote?.close ?? [];
   const price =
