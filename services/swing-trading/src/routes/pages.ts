@@ -3,6 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { createDb } from "../db/client.js";
+import { PUBLISH_JPX_DERIVED_COLUMNS } from "../../../../src/shared/db/public-columns.js";
 import { stocks, stockFinancials } from "../db/core-schema.js";
 import {
   stockIndicators,
@@ -39,19 +40,22 @@ pagesRoute.get("/", async (c) => {
 
   // セクター上位 — 最新 date の rank_1d 昇順で 5 件
   //
-  // ⚠️ **この面はまだ JPX の 33 業種名を出している。** `swing_sector_daily.sector`
-  // は src/cron/daily.ts が `core_stocks.sector` (= JPX 33 業種) を集約キーに
-  // して書いた**保存済みの派生コピー**で、core_stocks を読んでいないため
-  // src/shared/db/public-columns.ts の切り替えが届かない
-  // (実測: GET /swing-trading/ が 200 / 23,768 B で「銀行業」を 1 件返す)。
+  // `swing_sector_daily.sector` は src/cron/daily.ts が `core_stocks.sector`
+  // (= JPX 33 業種) を集約キーにして書いた**保存済みの派生コピー**で、
+  // core_stocks を読まないため src/shared/db/public-columns.ts の切り替えが
+  // 届かない。実測 (2026-09-13): 他の 6 サービスから JPX 由来を外した後も
+  // GET /swing-trading/ だけが「銀行業」「ゴム製品」を返していた。
   //
-  // ここで名前だけ伏せるのは採らなかった: 業種名の無い業種ランキングは
-  // 読者にとって意味が無く、機能を壊すだけになる。集約キーを `sector33`
-  // (EDINET 由来) へ移す変更が正しいが、本番の `sector33` は全行 NULL なので
-  // 今やると表が空になる。**`sector33` を充填するレーンと同じ PR で移すこと。**
+  // → **同じフラグで表示ごと閉じる。** 業種名を伏せて順位だけ出す案は採らな
+  // かった (業種名の無い業種ランキングは読者にとって意味が無い)。集約キーを
+  // `sector33` (EDINET 由来) へ移すのが本筋だが、本番の `sector33` は全行
+  // NULL (P4b 未了) なので今移すと表が空になる。**充填が済んだら
+  // daily.ts の集約キーを移し、ここのガードを外すこと。**
+  //
+  // 読まない = Worker のプロセスにも載らない。クエリごと飛ばす (rows_read も減る)。
   const latestSectorDate = macro?.date;
   let topSectors: Array<{ sector: string; pct1d: number; stockCount: number; rank1d: number }> = [];
-  if (latestSectorDate) {
+  if (latestSectorDate && PUBLISH_JPX_DERIVED_COLUMNS) {
     const rows = await db
       .select()
       .from(sectorDaily)
