@@ -2,13 +2,19 @@ import { and, asc, count, desc, eq, gte, lt, lte, sql, type SQL } from "drizzle-
 import type { Database } from "../db/client.js";
 import { stocks, stockFinancials } from "../db/core-schema.js";
 import { stockRsiPercentile } from "../db/schema.js";
+import {
+  publicMarketColumn,
+  publicSectorColumn,
+} from "../../../../src/shared/db/public-columns.js";
 import type { ScreeningQuery } from "../validators/screening.js";
 
 /** スクリーニング結果の1行 */
 export interface ScreeningRow {
   code: string;
   name: string;
-  market: string;
+  /** 市場区分。JPX 由来 = personal-only なので既定では常に `null`。 */
+  market: string | null;
+  /** 業種。既定では `core_stocks.sector33` (EDINET 提出者業種)。 */
   sector: string | null;
   price: number | null;
   per: number | null;
@@ -132,8 +138,9 @@ export async function screenStocks(
     .select({
       code: stocks.code,
       name: stocks.name,
-      market: stocks.market,
-      sector: stocks.sector,
+      // JPX 由来は公開面へ出さない (src/shared/db/public-columns.ts)。
+      market: publicMarketColumn,
+      sector: publicSectorColumn,
       price: stockFinancials.price,
       per: stockFinancials.per,
       pbr: stockFinancials.pbr,

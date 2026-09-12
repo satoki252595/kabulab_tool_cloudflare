@@ -43,23 +43,16 @@
   // 置くだけで tsc から消えた)。ファイル単位なら、既知の借金だけが除外され、
   // 新規ファイルは必ず typecheck される。
   //
-  // 下の 5 ファイルは取込パイプラインで実際に tsx 実行される Node スクリプトで、
-  // 合計 33 件の型エラーが残っている (本 PR では未修正)。内訳と直し方の当たりは
+  // 残りは 1 ファイル / 型エラー 1 件。内訳と直し方の当たりは
   // docs/ci-typecheck-blind-spots.md に書いた。**1 ファイル直すたびにここから消す**。
   "exclude": [
     "node_modules",
     "dist",
-    ".vercel",
-    // 26 件 — TS2339/TS18047。`ir:backfill` で実行される。
-    "services/ir-catalog/data-scripts/backfill.ts",
-    // 2 件 — `yuho:backfill` で実行される。
-    "services/yuho-quant/data-scripts/backfill.ts",
-    // 2 件 — 手動実行 (pnpm exec tsx)。
-    "services/yuho-quant/data-scripts/audit-all.ts",
-    // 2 件 — 手動実行 (pnpm exec tsx)。`createDb(url)` が Neon 期のシグネチャで、
-    // `buildCapmView` に必須の `db` も渡していないので**既に動かない**。
-    // verify-price-cache.ts は同じ理由で消したが、こちらは β/σ のスモークという
-    // 用途がまだ生きているので、D1 バインディング経由へ直す PR まで残してある。
-    "services/financial-math/scripts/verify-capm-bs.ts"
+    ".vercel"
+    // ここは空。UNI レーンが 4 ファイルの型エラーを直し、EMH レーンが
+    // verify-price-cache.ts (Neon 期のシグネチャで既に動かなかった) を削除したので、
+    // 除外すべき既知の借金はもう無い。**新しい除外を足すときは規模と実行経路を
+    // docs/ci-typecheck-blind-spots.md に必ず書くこと**（黙って除外すると、
+    // ILIKE と重複キーが 4,245 行の死にコードに紛れて CI を通った件を繰り返す）。
   ]
 }

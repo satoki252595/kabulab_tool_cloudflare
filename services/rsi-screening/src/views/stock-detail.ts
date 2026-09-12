@@ -3,6 +3,7 @@ import { BASE_PATH } from "../../base-path.js";
 import type { StockDetail } from "../services/stock-detail-service.js";
 import { PERCENTILE_MAX_AGE_DAYS } from "../services/screening-service.js";
 import { hasDefinitionBreak } from "../../../../src/shared/indicators/blue-chip.js";
+import { publicStockMetaLabel } from "../../../../src/shared/db/public-columns.js";
 
 function fmt(n: number | null | undefined, digits = 2): string {
   if (n === null || n === undefined || !isFinite(n)) return "—";
@@ -244,7 +245,7 @@ export function stockDetailPage(props: {
           }
         </h2>
         <p style="color:var(--text-muted);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:0.08em;margin-top:8px">
-          ${h(detail.market)}${detail.sector ? ` · ${h(detail.sector)}` : ""}
+          ${h(publicStockMetaLabel([detail.market, detail.sector], " · "))}
         </p>
       </div>
 

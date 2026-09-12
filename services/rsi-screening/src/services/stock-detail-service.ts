@@ -6,12 +6,21 @@ import {
   stockAnnualFinancials,
 } from "../db/core-schema.js";
 import { stockRsiPercentile } from "../db/schema.js";
+import {
+  publicMarketColumn,
+  publicSectorColumn,
+} from "../../../../src/shared/db/public-columns.js";
 
 /** 銘柄詳細レスポンス */
 export interface StockDetail {
   code: string;
   name: string;
-  market: string;
+  /**
+   * 市場区分。JPX 由来 = personal-only なので既定では常に `null`
+   * (src/shared/db/public-columns.ts)。表示側は null を省くこと。
+   */
+  market: string | null;
+  /** 業種。既定では `core_stocks.sector33` (EDINET 提出者業種)。 */
   sector: string | null;
   financials: {
     price: number | null;
@@ -68,8 +77,10 @@ export async function getStockDetail(db: Database, code: string): Promise<StockD
       id: stocks.id,
       code: stocks.code,
       name: stocks.name,
-      market: stocks.market,
-      sector: stocks.sector,
+      // JPX 由来の market / sector は公開面へ出さない。出す列は
+      // src/shared/db/public-columns.ts が 1 箇所で決める。
+      market: publicMarketColumn,
+      sector: publicSectorColumn,
     })
     .from(stocks)
     .where(eq(stocks.code, code))

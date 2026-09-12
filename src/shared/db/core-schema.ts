@@ -28,13 +28,20 @@ import {
 /**
  * 銘柄マスタ（共有）
  *
- * ⚠️ **ライセンス境界**: `market` / `sector17` / `sector33` / `instrument_type` /
+ * ⚠️ **ライセンス境界**: `market` / `sector` / `sector17` / `instrument_type` /
  * `license_tag` / `src_source` / `quality` は `personal-only`。公開面 (HTML /
- * JSON API) へ新たに出してはいけない。drizzle の既定 select は**全列返し**なので、
+ * JSON API) へ出してはいけない。drizzle の既定 select は**全列返し**なので、
  * `db.select().from(stocks)` (列指定なし) はこれらを必ず含んだ行を返す。
  * 公開面で列指定なし select を使う場合は、必要フィールドだけを詰め替えること
  * (行の spread / JSON.stringify はしない)。
  * この約束は src/shared/db/core-stocks-license-boundary.test.ts が機械的に見ている。
+ *
+ * `sector` を 2026-09-13 にこの一覧へ入れた。JPX data_j.xls の 33業種区分を
+ * src/cron/universe.ts が `sector: r.sector33` で書いているので、名前が
+ * `sector33` でないだけで出所は `sector33` 列と同じ JPX ではなく —— 逆で、
+ * **`sector` が JPX 由来**、`sector33` は EDINET コードリストの「提出者業種」
+ * という別物である。公開面が読むのは `sector33` 側で、切替は
+ * src/shared/db/public-columns.ts が 1 箇所で決める。
  */
 export const stocks = sqliteTable(
   "core_stocks",
@@ -44,14 +51,18 @@ export const stocks = sqliteTable(
     name: text("name").notNull(),
     market: text("market").notNull(),
     /**
-     * **JPX 33業種の正本**。src/cron/universe.ts が JPX 東証上場銘柄一覧の
-     * 33業種区分をこの列へ書いており (`sector: r.sector33`)、全サービスの
-     * 読み出し口もここを見ている。
+     * `personal-only`。**JPX 33業種区分の置き場**。src/cron/universe.ts が JPX
+     * 東証上場銘柄一覧 (data_j.xls) の 33業種区分をこの列へ書いている
+     * (`sector: r.sector33`)。
      *
-     * 下の `sector33` は stockStock 側 (移行 P4a) が同じ 33業種を別名で足した列で、
-     * **2026-09-12 時点で本番は全行 NULL**。値の置き場が 2 つあるので、
-     * 「読むのは `sector`・書くのは `sector`」を守ること。詳細は `sector33` 側の
-     * コメント。
+     * ⚠️ 2026-09-13 以降、**公開面はこの列を読まない**。data_j.xls の再配布可否が
+     * 未判断なので、公開面の業種は下の `sector33` (EDINET 提出者業種) へ
+     * 切り替えた (src/shared/db/public-columns.ts)。取込・集計 (src/cron) が
+     * この列を読むのは従来どおり構わない。
+     *
+     * 「読むのは `sector`」だった旧方針をここに書いていたが、それは
+     * **公開面については誤り**になったので消した。取込側の書き込み先は `sector`
+     * のままで、`sector33` へ JPX の値を書き足してはいけない (下参照)。
      */
     sector: text("sector"),
     isActive: integer("is_active", { mode: "boolean" }).default(true).notNull(),
@@ -78,11 +89,22 @@ export const stocks = sqliteTable(
     /** `personal-only`。内国普通株 / ETF / REIT 等の区分。 */
     instrumentType: text("instrument_type"),
     /**
-     * `personal-only`。JPX 33業種。**正本は上の `sector`** で、こちらは P4b が
-     * 埋めるまで全行 NULL。読む側は `sector` を見ること。両方に書く実装を足すと
-     * 同じ値の置き場が 2 つになり、片方だけ更新された行を誰も検知できない。
-     * 将来 `sector` をこちらへ寄せるなら、universe.ts の書き込みと全サービスの
-     * 読み出しを同じ PR で移し、`sector` を落とすところまでやる。
+     * **公開面が業種として読む列** (src/shared/db/public-columns.ts)。値を書くのは
+     * stockStock の `collectors/edinet_codelist.py` だけで、そこは EDINET
+     * コードリストの「提出者業種」を `license_tag=commercial-ok` として取る。
+     * 2026-09-13 時点で本番は全行 NULL (充填は stockStock 側の P4b)。
+     *
+     * ⚠️ **この列へ JPX (data_j.xls) の 33業種区分を書いてはいけない。** 名前が
+     * `sector33` なので上の `sector` と同じ値を入れたくなるが、この列は公開面に
+     * 出ているため、JPX の値を入れると無認証の HTML / JSON が personal-only を
+     * 返す状態に**テストが全部緑のまま**戻る。この禁止は
+     * src/shared/db/core-stocks-license-boundary.test.ts が機械的に見ている。
+     *
+     * ⚠️ **未了**: stockStock 側の宣言 (`MIXED_LICENSE_COLUMNS` /
+     * `worker/src/shared/license.ts` の `RESTRICTED_COLUMNS`) は今もこの列を
+     * personal-only としており、`cloud_store/core_stocks.py` は「出自は §8-2 で
+     * 未決」と書いている。公開してよい根拠は現在の書き込み元 (EDINET) であって
+     * 宣言ではない。宣言を直すか公開を止めるかは stockStock 側のレーンの判断。
      */
     sector33: text("sector33"),
     /** `personal-only`。JPX 17業種。33業種と違い `sector` に相当する既存列は無い。 */

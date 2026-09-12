@@ -20,6 +20,7 @@ import { calcHistoricalVolatility } from "../services/volatility.js";
 import { calcLogReturns, estimateBetaOLS, calcCapmExpectedReturn } from "../services/capm.js";
 import { calcMomentum } from "../services/emh.js";
 import { requireBinding, requireDb } from "./env.js";
+import { publicSectorColumn } from "../../../../src/shared/db/public-columns.js";
 
 /** SSR ページルーター */
 type Bindings = { DB: D1Database };
@@ -276,7 +277,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
             id: stocks.id,
             code: stocks.code,
             name: stocks.name,
-            sector: stocks.sector,
+            // JPX 由来の業種は公開面へ出さない (src/shared/db/public-columns.ts)。
+            sector: publicSectorColumn,
             price: stockFinancials.price,
           })
           .from(stocks)
@@ -318,7 +320,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
       .select({
         code: stocks.code,
         name: stocks.name,
-        sector: stocks.sector,
+        // JPX 由来の業種は公開面へ出さない (src/shared/db/public-columns.ts)。
+        sector: publicSectorColumn,
         marketCap: stockFinancials.marketCap,
         price: stockFinancials.price,
         stockId: stocks.id,
@@ -363,7 +366,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         stockId: stocks.id,
         code: stocks.code,
         name: stocks.name,
-        sector: stocks.sector,
+        // JPX 由来の業種は公開面へ出さない (src/shared/db/public-columns.ts)。
+        sector: publicSectorColumn,
         atrPct: stockIndicators.atrPct,
         price: stockFinancials.price,
       })
@@ -423,7 +427,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         stockId: stocks.id,
         code: stocks.code,
         name: stocks.name,
-        sector: stocks.sector,
+        // JPX 由来の業種は公開面へ出さない (src/shared/db/public-columns.ts)。
+        sector: publicSectorColumn,
         price: stockFinancials.price,
         fetchedAt: stockFinancials.fetchedAt,
       })
@@ -567,8 +572,14 @@ export async function buildCapmView(input: CapmViewInput): Promise<Parameters<ty
  * 94 日**。下限 31 本を満たさない銘柄が 13 件ある (実測 2026-09-13)。
  * つまり **β の数値そのものが変わる**ので、画面はサンプル数を併記する
  * (views/capm.ts の「サンプル数」セル)。R2 系列ができたらそちらを読む。
+ *
+ * export しているのは、Node のスモークスクリプト
+ * (scripts/verify-capm-bs.ts) がここを直接叩くため。buildCapmView は
+ * Worker バインディング (`D1Database`) を要求するので Node からは呼べない一方、
+ * 確かめたい実体 (β 推定) はこの関数なので、ラッパ越しではなくここを検証する。
+
  */
-async function estimateBetaForCode(
+export async function estimateBetaForCode(
   db: ReturnType<typeof createDb>,
   code: string
 ): Promise<{ estimate: ReturnType<typeof estimateBetaOLS>; reason: string | null }> {

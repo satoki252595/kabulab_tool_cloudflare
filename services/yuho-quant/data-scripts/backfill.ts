@@ -21,11 +21,24 @@
  *   pnpm yuho:backfill -- --reparse-unrecognized --no-archive --concurrency=3
  *       # パーサ改善反映: table_unrecognized/parse_error/orders_only だけ
  *       # force 再取込 (他は EDINET を叩かず skip)、Notion 再保存はしない
+ *
+ * ADR-0001 (Neon → D1) 後の接続:
+ *   D1 はバインディング経由でのみ触れるが、本処理は Node 専用 (大量の EDINET
+ *   取得 + ローカルパース) なので Worker 化できない。接続自体は
+ *   backfill-overseas.ts / scripts/sync/ir-tdnet.ts と同じ createD1HttpDb
+ *   (drizzle sqlite-proxy / D1 REST)。
+ *
+ * ⚠️ **本 CLI は現在も無効**。理由は「Node から D1 へ接続できない」ではなく、
+ *   **ingestDocument が `db.batch()` を使う**こと (assertYuhoBackfillSupported)。
+ *   sqlite-proxy には batch callback が無いので実行すれば必ず落ちる。
+ *   必要 env は EDINET_API_KEY / CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID /
+ *   D1_DATABASE_ID (未設定なら required で throw)。
  */
 import "dotenv/config";
-import { createDb } from "../src/db/client.js";
+import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import * as yuhoSchema from "../src/db/schema.js";
+import type { Database } from "../src/db/client.js";
 import { inArray } from "drizzle-orm";
-import { yuhoEnv } from "../src/env.js";
 import { stocks } from "../../rsi-screening/src/db/core-schema.js";
 import { yuhoDocuments } from "../src/db/schema.js";
 import { listDocuments } from "../src/services/edinet/client.js";
@@ -52,16 +65,64 @@ function shiftYearsISO(iso: string, dy: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-async function main(): Promise<void> {
-  // ⚠️ ADR-0001: D1 移行に伴い本 CLI は無効化。createDb は D1 バインディングを
-  // 要求し Node ローカルからは接続できない。黙って壊れる代わりに fail-fast する
-  // (CLAUDE.md ルール2)。5 年バックフィルは Worker バルク取込 (別タスク・要
-  // EDINET/Notion 鍵) として再実装する。詳細は docs/adr/0001-neon-to-d1-r2-notion.md。
+/**
+ * 本 CLI を有効化できない理由を、**書き込みが 1 行も走る前に**言葉で止める。
+ *
+ * `ingestDocument` は facts を
+ * `db.batch([delete, ...insert])` で原子的に置換する
+ * (services/yuho-quant/src/services/ingest.ts)。ところが `createD1HttpDb` は
+ * `drizzle(callback, { schema })` の形で batch callback を渡していないため、
+ * `db.batch()` は `TypeError: this.batchCLient is not a function` で落ちる
+ * (drizzle-orm/sqlite-proxy の session が `this.batchCLient(...)` を直呼びする)。
+ * 型では捕まらない: 受け口の `Database` は D1 バインディング版で `batch` を持つ。
+ *
+ * 落ちる位置が悪い。`db.batch()` の**手前**で `yuho_documents` の upsert
+ * (parse_status / honbun_file / overseas_* を含む) が既にコミットされているので、
+ * このまま走らせると本番 D1 に
+ *
+ *   「parse_status が ok_pattern_* なのに yuho_order_facts が 0 件」
+ *
+ * の行が残る。しかも呼び出し側の worker は例外を console.error で握って次へ進み、
+ * 次回実行では `existsInDb` が真なので `skipped_existing` になる
+ * (= --force を付けない限り永久に埋まらない)。fail-fast を外した結果として
+ * **黙って壊れる**状態を作ることになり、CLAUDE.md ルール2 に反する。
+ *
+ * sibling の backfill-overseas.ts が「sqlite-proxy は db.batch 非対応なので
+ * per-statement の冪等 update/insert で書く」と明記して ingestDocument を
+ * 使っていないのは、まさにこの理由。
+ *
+ * 有効化するには次のどちらかが必要 (どちらも本 PR の範囲外):
+ *   1. `createD1HttpDb` に batch callback を実装する (D1 REST の複文対応が前提。
+ *      逐次実行で代替すると delete+insert の原子性が黙って失われるので、
+ *      フォールバック禁止の観点からそれは選べない)
+ *   2. backfill-overseas.ts と同じ per-statement の冪等書込へ書き換える
+ *
+ * `throw` を main() の先頭へ直に置くと以降が到達不能になり、TypeScript が
+ * 制御フロー解析をやめて幻の型エラーが復活する
+ * (docs/ci-typecheck-blind-spots.md の (b'))。**戻り型 void の関数呼び出し**に
+ * してあるのは、本体を tsconfig の検査対象に残したまま fail-fast させるため。
+ */
+function assertYuhoBackfillSupported(): void {
   throw new Error(
-    "ADR-0001: yuho バックフィルは Worker バルク取込へ移行予定で、この CLI は無効です。"
+    "yuho バックフィルは無効です: ingestDocument が db.batch() を使いますが、" +
+      "createD1HttpDb (drizzle sqlite-proxy) は batch 非対応で " +
+      "TypeError になります。しかも失敗位置が yuho_documents の upsert より後なので、" +
+      "実行すると parse_status だけ埋まって facts が 0 件の行が残り、" +
+      "次回以降 skipped_existing で永久に埋まりません。" +
+      "createD1HttpDb に batch を実装するか、backfill-overseas.ts と同じ " +
+      "per-statement の冪等書込へ書き換えてから有効化してください " +
+      "(docs/ci-typecheck-blind-spots.md)。"
   );
+}
 
-  const db = createDb(yuhoEnv.DATABASE_URL());
+async function main(): Promise<void> {
+  // ⚠️ 書き込みの手前で止める。理由は assertYuhoBackfillSupported の docstring。
+  assertYuhoBackfillSupported();
+
+  // sqlite-proxy (D1 HTTP) と D1 バインディング版は同じ async SQLite クエリビルダ
+  // API を持つ (共に BaseSQLiteDatabase)。型クラスのみ異なるためキャストで橋渡し。
+  // backfill-overseas.ts / scripts/sync/ir-tdnet.ts と同じ形。
+  const db = createD1HttpDb(yuhoSchema) as unknown as Database;
 
   const to = arg("to") ?? todayISO();
   const years = Number(arg("years") ?? "5");
