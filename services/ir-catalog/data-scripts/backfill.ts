@@ -24,11 +24,19 @@
  *       # 二次データ投入の上限時間。Notion エッジ遮断が広域継続した際の
  *       # 時間膨張を防ぐ。超過で正直に打ち切り → 再実行で収束 (冪等)
  *   pnpm ir:backfill -- --refetch-archived  # 確定済み過去月も再取得 (訂正反映)
+ *
+ * ADR-0001 (Neon → D1) 後の接続:
+ *   D1 はバインディング経由でのみ触れるが、本 CLI は PDF センチメントが
+ *   kuromoji (Node 専用) 依存で Worker 化できない。そこで日次キャッチアップ
+ *   (scripts/sync/ir-tdnet.ts) と**同じ** createD1HttpDb (drizzle sqlite-proxy /
+ *   D1 REST) で書く。必要 env は CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID /
+ *   D1_DATABASE_ID (未設定なら sharedEnv の required で throw)。
  */
 import "dotenv/config";
-import { createDb } from "../src/db/client.js";
+import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import * as irSchema from "../src/db/schema.js";
+import type { Database } from "../src/db/client.js";
 import { stocks } from "../../rsi-screening/src/db/core-schema.js";
-import { irEnv } from "../src/env.js";
 import { isArchived } from "../../../src/shared/notion-archive/index.js";
 import { listRange } from "../src/services/tdnet/client.js";
 import { ingestBatch } from "../src/services/ingest.js";
@@ -60,14 +68,10 @@ function cmp(a: { y: number; m: number }, b: { y: number; m: number }): number {
 }
 
 async function main(): Promise<void> {
-  // ⚠️ ADR-0001: D1 移行に伴い本 CLI は無効化。createDb は D1 バインディングを
-  // 要求し Node ローカルからは接続できない。黙って壊れる代わりに fail-fast する
-  // (CLAUDE.md ルール2)。全履歴バックフィルは Worker バルク取込（別タスク）へ。
-  throw new Error(
-    "ADR-0001: ir-catalog バックフィルは Worker 取込へ移行予定で、この CLI は無効です。"
-  );
-
-  const db = createDb(irEnv.DATABASE_URL());
+  // sqlite-proxy (D1 HTTP) と D1 バインディング版は同じ async SQLite クエリビルダ
+  // API を持つ (共に BaseSQLiteDatabase)。型クラスのみ異なるためキャストで橋渡し。
+  // scripts/sync/ir-tdnet.ts と同じ形。
+  const db = createD1HttpDb(irSchema) as unknown as Database;
 
   // 既定の「今月」は JST 基準 (TDnet の開示日は JST。月末深夜の UTC ずれ防止)
   const now = new Date(Date.now() + 9 * 3600 * 1000);
