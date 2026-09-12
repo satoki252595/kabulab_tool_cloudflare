@@ -25,19 +25,40 @@ services/otakara-yutai/
 │   ├── services/
 │   │   ├── yutai-scraper.ts        # HTML/CSV/JSON からの優待データ取込
 │   │   └── yutai-data-provider.ts  # ファイルベースインポート
-│   ├── validators/            # 優待スクレイパー用 Zod スキーマ
-│   ├── types.ts               # 共通型定義
+│   ├── validators/
+│   │   └── yutai-scraper.ts   # 優待スクレイパー用 Zod スキーマ
+│   ├── middleware/            # ⚠️ app.ts は未使用 (テストのみが参照)。
+│   │   ├── error-handler.ts   #    将来マウントする余地として据え置き
+│   │   └── rate-limiter.ts
 │   └── tests/                 # scoring は src/shared/ に移動済み、本サービスは他の unit test のみ
-├── data-scripts/              # 1 回限りのデータ取得・解釈スクリプト
-│   ├── export-benefit-descriptions.ts
-│   ├── apply-benefit-interpretations.ts
-│   ├── enrich-from-minkabu.ts
-│   ├── fetch-yutai-data.ts / fetch-yutai-full.ts / fix-stock-names.ts / verify-data.ts
+├── data-scripts/              # 月次パイプライン + 1 回限りの保守スクリプト
+│   ├── fetch-yutai-full.ts             # 月次 ①minkabu 取得 → yutai_benefits + is_yutai
+│   ├── export-benefit-descriptions.ts  # 月次 ②ユニーク description 抽出 → JSONL
+│   ├── interpret-benefits.ts           # 月次 ③ローカル LLM (ELYZA) 解釈
+│   ├── apply-benefit-interpretations.ts# 月次 ④short_summary/estimated_value を DB 反映
+│   ├── benefit-key.ts / summary-contract.ts  # 上記が共有するキー生成・要約契約
+│   ├── enrich-from-web.ts / fetch-yutai-data.ts / fix-stock-names.ts
+│   ├── salvage-realign-interpretations.ts / test-parse.ts / verify-data.ts
 │   └── data/                  # ソースデータ + 解釈結果のチャンク
 ├── drizzle/                   # drizzle-kit 生成の migration
 ├── CLAUDE.md
 └── README.md
 ```
+
+**過去から変わった点** (2026-09):
+
+- `src/routes/` (5 ファイル) と `src/views/` (8 ファイル)、および `src/types.ts` /
+  `src/validators/index.ts` / `src/middleware/index.ts` / `src/middleware/db.ts` を **削除**
+  (計 17 ファイル / 4,245 行)。いずれも `app.ts` 単一ファイル構成へ移行した後に
+  残っていた**未マウントの並行実装**で、本番エントリ
+  (`wrangler.toml` → `worker/entry.ts` → `src/index.ts` → `app.ts`) から到達不能だった。
+  `src/views/*.tsx` は overview.md の「ビューは JSX を使わず template literal」という
+  mono-repo 方針にも反していた。
+- 放置の代償として、D1 (SQLite) が解釈できない `ILIKE` と同一オブジェクト内の
+  重複キー 5 箇所を抱えたまま CI が緑だった。再発防止は
+  [docs/ci-typecheck-blind-spots.md](./ci-typecheck-blind-spots.md) を参照。
+- `src/middleware/db.ts` は `DATABASE_URL` 文字列を `createDb()` に渡す Neon 期の残骸で、
+  ADR-0001 (D1 バインディング経由のみ) と矛盾していたため削除。`app.ts` はインライン版を使う。
 
 **過去から変わった点** (2026-04):
 

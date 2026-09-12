@@ -586,6 +586,21 @@ export async function fetchQuoteSummary(code: string): Promise<QuoteSummaryResul
 
   const incomeHistory =
     result.incomeStatementHistory?.incomeStatementHistory ?? [];
+  // 既知の欠陥 1: revenue (totalRevenue) は**連結と単体が期ごとに混在**する。
+  //   Yahoo は持株会社で親会社単体の売上高を混ぜて返すため、同一銘柄の系列内に
+  //   10〜40 倍の段差が出る。ここでは供給された値をそのまま保存し、
+  //   利用側 (src/shared/indicators/blue-chip.ts の hasDefinitionBreak) で降りる。
+  //   書き込み側で弾かない理由は同ファイルのコメント参照 (更新が永久停止するため)。
+  //
+  // 既知の欠陥 2: fiscalYear は**期末日を捨てて暦年に丸めている**。
+  //   結果、この列は銘柄間で意味が違う:
+  //     3 月期企業の fiscal_year=2025 は和暦の 2024 年度 (2024-04〜2025-03)
+  //     12 月期企業の fiscal_year=2025 は 2025 年度 (2025-01〜2025-12)
+  //   つまり fiscal_year を銘柄間で横並びに比較してはいけない (同一銘柄内の
+  //   時系列としてのみ有効)。決算期変更で暦年が衝突すると年が 1 つ欠ける。
+  //   列 (fiscal_period_end 等) を足して直さない理由:
+  //   core_stock_annual_financials は「現状維持のまま、既存消費者を移し終えたら
+  //   DROP する」と決めた表なので、寿命の短い表にスキーマ変更を積まない。
   const annualFinancials: AnnualFinancial[] = incomeHistory
     .map((item) => {
       const endDate = extractRawValue(item.endDate);
