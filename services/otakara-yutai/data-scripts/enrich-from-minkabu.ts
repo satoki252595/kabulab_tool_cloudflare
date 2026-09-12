@@ -7,7 +7,7 @@
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as schema from "../src/db/schema.js";
 import { stocks, stockFinancials } from "../src/db/schema.js";
-import { eq, desc, isNull, and } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import "dotenv/config";
 
 // Schema は src/db/schema.ts に集約済み (D1/SQLite 版 — ADR-0001)。

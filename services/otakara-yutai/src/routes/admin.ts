@@ -4,7 +4,7 @@ import {
   csvImportBodySchema,
   jsonImportBodySchema,
 } from "../validators/yutai-scraper.js";
-import { parseYutaiCSV, parseYutaiJSON } from "../services/yutai-data-provider.js";
+import { parseYutaiCSV } from "../services/yutai-data-provider.js";
 import { importYutaiData } from "../services/yutai-scraper.js";
 import type { AppEnv } from "../types.js";
 import type { ImportResult } from "../services/yutai-scraper.js";

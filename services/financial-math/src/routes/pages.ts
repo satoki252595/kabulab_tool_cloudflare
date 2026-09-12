@@ -17,6 +17,7 @@ import { emhQuerySchema } from "../validators/emh.js";
 import { calcHistoricalVolatility } from "../services/volatility.js";
 import { calcLogReturns, estimateBetaOLS, calcCapmExpectedReturn } from "../services/capm.js";
 import { calcMomentum } from "../services/emh.js";
+import { requireBinding, requireDb } from "./env.js";
 
 /** SSR ページルーター */
 type Bindings = { DB: D1Database };
@@ -44,7 +45,7 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
   const presetG = 3;
 
   if (code) {
-    const db = createDb(c.env.DB);
+    const db = createDb(requireDb(c));
     try {
       // finmath キャッシュ (Yahoo 二次利用) で 1414 等の otakara 未登録銘柄も対応
       const ctx = await getPriceContext(db, code);
@@ -97,7 +98,7 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
 pagesRoute.get("/capm", zValidator("query", capmQuerySchema), async (c) => {
   const { code } = c.req.valid("query");
   const view = await buildCapmView({
-    db: c.env.DB,
+    db: requireDb(c),
     code,
     mode: code ? "auto" : "manual",
     // CLAUDE.md ルール1: β=1.0 等のダミー値は埋めない。null で起動し、
@@ -123,7 +124,7 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
   let presetVolPct: number | null = null;
 
   if (code) {
-    const db = createDb(c.env.DB);
+    const db = createDb(requireDb(c));
     try {
       const [priceCtx, ohlcv] = await Promise.all([
         getPriceContext(db, code),
@@ -187,7 +188,7 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
 // 一致する (otakara の優待縛り ~1,600 ではない)。is_yutai フラグは 002 専用。
 pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   const q = c.req.valid("query");
-  const db = createDb(c.env.DB);
+  const db = createDb(requireDb(c));
 
   // 全 active 銘柄数
   const [{ universeSize }] = await db
@@ -443,7 +444,8 @@ export async function buildCapmView(input: CapmViewInput): Promise<Parameters<ty
   let betaUnavailableReason: string | null = null;
 
   if (input.code) {
-    const db = createDb(input.db);
+    // ここで初めてバインディングを要求する（code 無しなら DB に触らない）
+    const db = createDb(requireBinding(input.db, "DB"));
     try {
       // finmath キャッシュ (Yahoo 二次利用) で otakara 未登録銘柄も対応
       const priceCtx = await getPriceContext(db, input.code);

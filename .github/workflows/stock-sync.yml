@@ -38,6 +38,10 @@ concurrency:
   group: stock-sync
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  issues: write  # 失敗時に Issue を立てるため
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -80,3 +84,23 @@ jobs:
         run: |
           pnpm sync:universe
           pnpm sync:monthly:core
+      # 定期ジョブの失敗に気づく唯一の経路。これまで 14 workflow に
+      # `if: failure()` も webhook も 0 行で、JPX の 404 で母集団同期が
+      # 1 ヶ月止まっていたことに誰も気づかなかった。
+      # 通知先を増やすと見なくなるので、GitHub Issue を 1 本だけ立てる
+      # （既に open があれば重複を作らずコメントを足す）。
+      - name: 失敗したら Issue を立てる
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WF: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="[ジョブ失敗] $WF"
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          BODY="$WF が失敗しました。%0A%0A実行: $RUN_URL%0A検知: $(date -u '+%Y-%m-%d %H:%M UTC')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$(printf '%b' "${BODY//%0A/\\n}")"
+          else
+            gh issue create --title "$TITLE" --label "" --body "$(printf '%b' "${BODY//%0A/\\n}")"
+          fi

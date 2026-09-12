@@ -12,6 +12,7 @@ import { dcfPage, type StockContext as DcfStockContext } from "../views/dcf.js";
 import { capmPage } from "../views/capm.js";
 import { bsPage, type BsStockContext } from "../views/black-scholes.js";
 import { buildCapmView } from "./pages.js";
+import { errorStatus, requireDb } from "./env.js";
 
 /** API ルーター — POST フォーム送信ハンドラ */
 type Bindings = { DB: D1Database };
@@ -63,7 +64,7 @@ apiRoute.post(
   let stockEstimatedDividend: number | null = null;
 
   if (v.code) {
-    const db = createDb(c.env.DB);
+    const db = createDb(requireDb(c));
     try {
       const ctx = await getPriceContext(db, v.code);
       currentPrice = ctx.price;
@@ -217,7 +218,7 @@ apiRoute.post(
         error: errMsg,
         infoNotice: overrideNotice, // 上書きは無関係なので情報として残す
       }),
-      400
+      errorStatus(e)
     );
   }
 });
@@ -229,7 +230,8 @@ apiRoute.post("/capm/calc", zValidator("form", capmFormSchema), async (c) => {
   const v = c.req.valid("form");
   try {
     const view = await buildCapmView({
-      db: c.env.DB,
+      // code が無ければ DB に触らないので、ここでは要求しない
+      db: c.env?.DB,
       code: v.code,
       mode: v.mode,
       // CLAUDE.md ルール1: フォールバック ?? 1.0 を排除。null のまま渡し、
@@ -255,7 +257,7 @@ apiRoute.post("/capm/calc", zValidator("form", capmFormSchema), async (c) => {
         betaUnavailableReason: null,
         error: e instanceof Error ? e.message : String(e),
       }),
-      400
+      errorStatus(e)
     );
   }
 });
@@ -272,7 +274,7 @@ apiRoute.post("/black-scholes/calc", zValidator("form", bsFormSchema), async (c)
   let stockSpot: number | null = null;
   let stockHistVol: number | null = null;
   if (v.code) {
-    const db = createDb(c.env.DB);
+    const db = createDb(requireDb(c));
     try {
       const [priceCtx, ohlcv] = await Promise.all([
         getPriceContext(db, v.code),
@@ -394,7 +396,7 @@ apiRoute.post("/black-scholes/calc", zValidator("form", bsFormSchema), async (c)
         error: combined,
         infoNotice: overrideNotice,
       }),
-      400
+      errorStatus(e)
     );
   }
 });
