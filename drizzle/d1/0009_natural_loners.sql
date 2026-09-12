@@ -1,0 +1,1 @@
+ALTER TABLE `rsi_percentile` ADD `percentile_sample_bars` integer;

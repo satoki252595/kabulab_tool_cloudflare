@@ -1,6 +1,7 @@
 import { layout, h, tip } from "./layout.js";
 import { BASE_PATH } from "../../base-path.js";
 import type { StockDetail } from "../services/stock-detail-service.js";
+import { PERCENTILE_MAX_AGE_DAYS } from "../services/screening-service.js";
 import { hasDefinitionBreak } from "../../../../src/shared/indicators/blue-chip.js";
 
 function fmt(n: number | null | undefined, digits = 2): string {
@@ -92,6 +93,37 @@ function metricBox(label: string, tipKey: string, value: string, unit?: string):
     </div>`;
 }
 
+/**
+ * 母数 (パーセンタイルに使った終値本数) の表示
+ *
+ * 「5 年パーセンタイル」の母集団は Yahoo が返した本数で決まり、銘柄によって
+ * 1,223 本 と 461 本 (≒1.9 年) が混在する。順位の意味が銘柄間で違うので、
+ * パーセンタイルの隣に必ず本数を出す。
+ */
+function fmtSampleBars(bars: number | null): string {
+  // 未計算 (sync が 1 周していない行) は「—」。0 で埋めない (ルール2)。
+  if (bars === null) return "—";
+  return bars.toLocaleString("ja-JP");
+}
+
+/**
+ * 算出日 + 経過日数。鮮度上限を超えた値は色と但し書きで警告する。
+ *
+ * 一覧 (screening) は上限超過の行を除外するが、詳細ページは 1 銘柄しか無いので
+ * 除外するとページが空になり、何が起きたのか読者に伝わらない。出したまま警告する。
+ * 警告を省く案は採らない: バルーンヘルプ (computedAt) が「7 日を超えた古い値は
+ * 表から除外する」と述べているので、黙って出すと読者は「表示されている
+ * = 7 日以内の値」と読み違える (ルール2: 古さは古さとして見せる)。
+ */
+function fmtComputedAt(computedAt: Date, now: Date): string {
+  const ageDays = Math.floor(
+    (now.getTime() - computedAt.getTime()) / (24 * 60 * 60 * 1000)
+  );
+  const date = h(computedAt.toISOString().slice(0, 10));
+  if (ageDays <= PERCENTILE_MAX_AGE_DAYS) return `${date} (${ageDays} 日前)`;
+  return `<span class="bad">${date} (${ageDays} 日前 — 鮮度不足のため一覧では除外される値)</span>`;
+}
+
 /** TTM 営業利益率を %ラベル + 色クラスに整形 */
 function fmtOpMarginTtm(om: number | null): { label: string; cls: string } {
   if (om === null) return { label: "—", cls: "trend-flat" };
@@ -101,8 +133,13 @@ function fmtOpMarginTtm(om: number | null): { label: string; cls: string } {
 }
 
 /** 銘柄詳細ページ */
-export function stockDetailPage(props: { detail: StockDetail }): string {
+export function stockDetailPage(props: {
+  detail: StockDetail;
+  /** 経過日数の基準時刻 (テストからの注入点) */
+  now?: Date;
+}): string {
   const { detail } = props;
+  const now = props.now ?? new Date();
   const revTrend = trendLabel(detail.rsi?.revenueTrend ?? null);
   const omTtm = fmtOpMarginTtm(detail.rsi?.operatingMarginTtm ?? null);
 
@@ -123,6 +160,10 @@ export function stockDetailPage(props: { detail: StockDetail }): string {
             <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);margin-top:4px;text-transform:uppercase;letter-spacing:0.06em">5Y BOTTOM ◯%</div>
           </div>
         </div>
+        <p style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);margin-top:14px;text-transform:uppercase;letter-spacing:0.06em">
+          ${tip("sampleBars", "母数")}: ${h(fmtSampleBars(detail.rsi.percentileSampleBars))} 本 ·
+          ${tip("computedAt", "算出日")}: ${fmtComputedAt(detail.rsi.computedAt, now)}
+        </p>
       </div>`
     : "";
 

@@ -33,6 +33,10 @@ function detailWith(
       isBlueChip: false,
       operatingMarginTtm: 0.12,
       revenueTrend,
+      // 鮮度警告 (stock-detail-freshness.test.ts) とは別の関心なので、
+      // ここでは常に「算出直後」を置いて段差注記だけを見る。
+      percentileSampleBars: 1223,
+      computedAt: new Date("2026-09-11T21:30:00.000Z"),
     },
     annualFinancials: annual,
   };

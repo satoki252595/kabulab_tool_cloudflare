@@ -1,7 +1,7 @@
 import { layout, h, tip } from "./layout.js";
 import { BASE_PATH } from "../../base-path.js";
 import type { ScreeningQuery } from "../validators/screening.js";
-import type { ScreeningRow } from "../services/screening-service.js";
+import type { ScreeningResult } from "../services/screening-service.js";
 
 /** 数値フォーマット */
 function fmt(n: number | null, digits = 2): string {
@@ -47,9 +47,37 @@ function fmtOpMarginCell(om: number | null): { text: string; cls: string } {
   return { text: pct.toFixed(1) + "%", cls };
 }
 
+/** 母数 (パーセンタイルに使った終値本数) の表示 */
+function fmtSampleBars(bars: number | null): string {
+  // 未計算 (sync が 1 周していない行) は「—」。0 で埋めない (ルール2)。
+  if (bars === null) return "—";
+  return bars.toLocaleString("ja-JP");
+}
+
+/** 算出日 (computed_at) を YYYY-MM-DD と経過日数に整形 */
+function fmtComputedAt(
+  computedAt: Date,
+  now: Date
+): { date: string; ageDays: number; cls: string } {
+  const ageDays = Math.floor(
+    (now.getTime() - computedAt.getTime()) / (24 * 60 * 60 * 1000)
+  );
+  // 3 日は平日 cron の金→月で普通に開く。それより開いた行は run の失敗を
+  // 疑う段階なので、除外される前に読者へ色で知らせる。
+  const cls = ageDays >= 4 ? "bad" : "neutral";
+  return { date: computedAt.toISOString().slice(0, 10), ageDays, cls };
+}
+
 /** スクリーニングページ */
-export function screeningPage(props: { query: ScreeningQuery; results: ScreeningRow[] }): string {
-  const { query, results } = props;
+export function screeningPage(props: {
+  query: ScreeningQuery;
+  result: ScreeningResult;
+  /** 経過日数の基準時刻 (テストからの注入点) */
+  now?: Date;
+}): string {
+  const { query, result } = props;
+  const results = result.rows;
+  const now = props.now ?? new Date();
 
   const periodLabel =
     query.period === "min"
@@ -70,6 +98,7 @@ export function screeningPage(props: { query: ScreeningQuery; results: Screening
     .map((r) => {
       const rev = trendMark(r.revenueTrend);
       const om = fmtOpMarginCell(r.operatingMarginTtm);
+      const age = fmtComputedAt(r.computedAt, now);
       return `
         <tr>
           <td><a href="${BASE_PATH}/stocks/${h(r.code)}">${h(r.code)}</a></td>
@@ -92,13 +121,19 @@ export function screeningPage(props: { query: ScreeningQuery; results: Screening
               ? '<span class="badge badge-good">優良</span>'
               : '<span class="badge badge-neutral">—</span>'
           }</td>
+          <td class="num">${fmtSampleBars(r.percentileSampleBars)}</td>
+          <td class="num ${age.cls}">${h(age.date)}<span style="color:var(--text-muted);margin-left:4px">${h(String(age.ageDays))}d</span></td>
         </tr>`;
     })
     .join("");
 
   const tableOrEmpty =
     results.length === 0
-      ? `<div class="empty">条件に合致する銘柄が見つかりません</div>`
+      ? `<div class="empty">${
+          result.staleExcluded > 0
+            ? `条件に合致した ${result.staleExcluded} 銘柄はすべて ${result.maxAgeDays} 日超の古い算出値で、鮮度不足として除外しました`
+            : "条件に合致する銘柄が見つかりません"
+        }</div>`
       : `<div style="overflow-x:auto"><table>
           <thead>
             <tr>
@@ -107,7 +142,7 @@ export function screeningPage(props: { query: ScreeningQuery; results: Screening
               <th class="num">${tip("rsi10", "RSI(10)")}</th><th class="num">${tip("percentile", "%ile")}</th>
               <th class="num">${tip("rsi40", "RSI(40)")}</th><th class="num">${tip("percentile", "%ile")}</th>
               <th class="num">${tip("rsi120", "RSI(120)")}</th><th class="num">${tip("percentile", "%ile")}</th>
-              <th class="num">${tip("rsiMin", "最小%")}</th><th>${tip("revenueTrend", "売上")}</th><th class="num">${tip("operatingMarginTtm", "営利率TTM")}</th><th>${tip("blueChip", "優良")}</th>
+              <th class="num">${tip("rsiMin", "最小%")}</th><th>${tip("revenueTrend", "売上")}</th><th class="num">${tip("operatingMarginTtm", "営利率TTM")}</th><th>${tip("blueChip", "優良")}</th><th class="num">${tip("sampleBars", "母数")}</th><th class="num">${tip("computedAt", "算出日")}</th>
             </tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
@@ -160,6 +195,14 @@ export function screeningPage(props: { query: ScreeningQuery; results: Screening
         <span style="font-family:var(--font-mono);font-size:13px;color:var(--text);font-weight:700">
           ${results.length} HITS
         </span>
+        ${
+          result.staleExcluded > 0
+            ? `<span class="pill" style="border-color:var(--danger);color:var(--danger)">${tip(
+                "staleExcluded",
+                "鮮度不足で除外"
+              )} ${result.staleExcluded} 件</span>`
+            : ""
+        }
       </div>
 
       ${tableOrEmpty}

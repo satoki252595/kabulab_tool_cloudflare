@@ -138,7 +138,8 @@ Notion ガイドの例題を再現:
 2. 全 active 銘柄を worker pool (5 並列 × 200ms 間隔) で:
    - Yahoo `fetchStockRawData(code, "5y")` = Chart + QuoteSummary 並列
    - 5y の末尾 6mo をスライスして SMA/ATR/RSI14/MACD/Fib/volume 計算
-   - `swing_daily_ohlcv` に 6mo 分を upsert (90 営業日を超える古い行は削除。母集団 ~3,700 化で D1 容量確保のため 120→90 に短縮)
+   - `swing_daily_ohlcv` に 6mo 分を upsert (母集団 ~3,700 化で D1 容量確保のため保持を 120→90 に短縮)
+   - 90 本を超える古い行の削除は書き込み経路ではなく **Phase 4 の一括 sweep** (`pruneOhlcvRetention`) が行う。書き込み経路内で prune していた頃は Yahoo 取得が失敗し続けた銘柄で一度も走らず、120 行の残骸が残っていた
    - `swing_stock_indicators` / `swing_stock_screening` / `swing_entry_signals` に upsert
 3. セクター集計: `core_stocks ⋈ swing_stock_indicators` を DB から再読込し `swing_sector_daily` を書き直し。シャード実行時は最終 shard のみが担当し、本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留・警告
 

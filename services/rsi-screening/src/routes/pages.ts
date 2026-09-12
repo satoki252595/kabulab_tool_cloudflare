@@ -39,8 +39,8 @@ pagesRoute.get("/", async (c) => {
 pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c) => {
   const query = c.req.valid("query");
   const db = createDb(c.env.DB);
-  const results = await screenStocks(db, query);
-  return c.html(screeningPage({ query, results }));
+  const result = await screenStocks(db, query);
+  return c.html(screeningPage({ query, result }));
 });
 
 pagesRoute.get("/stocks/:code", zValidator("param", stockCodeParamSchema), async (c) => {
