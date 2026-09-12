@@ -393,7 +393,7 @@ export async function recoverTransientDailyFailures<T>(
  * 毎回ほぼ全銘柄が15分後に失敗した。存在列を SELECT することで同種の適用漏れを
  * 即時かつ具体的に検出する。
  */
-async function assertDailySchema(db: Db): Promise<void> {
+export async function assertDailySchema(db: Db): Promise<void> {
   try {
     await db
       .select({ adj: swingSchema.dailyOhlcv.adj })
@@ -403,6 +403,22 @@ async function assertDailySchema(db: Db): Promise<void> {
     throw new Error(
       "D1 スキーマ不整合: swing_daily_ohlcv.adj を確認できません。" +
         " drizzle/d1/0008_young_ben_urich.sql の本番適用状態を確認してください。",
+      { cause: error }
+    );
+  }
+  // percentile_sample_bars は全銘柄の rsi_percentile upsert が値を載せる列。
+  // 0009 が未適用のままコードだけ先行すると、adj のとき (2026-06-29〜07-27) と
+  // 同じ「3,700 銘柄を取得し終えた頃に全件が書込で落ちる」状態になるので、
+  // 取得を始める前に 1 SELECT で確かめる。
+  try {
+    await db
+      .select({ bars: rsiSchema.stockRsiPercentile.percentileSampleBars })
+      .from(rsiSchema.stockRsiPercentile)
+      .limit(1);
+  } catch (error) {
+    throw new Error(
+      "D1 スキーマ不整合: rsi_percentile.percentile_sample_bars を確認できません。" +
+        " drizzle/d1/0009_natural_loners.sql の本番適用状態を確認してください。",
       { cause: error }
     );
   }

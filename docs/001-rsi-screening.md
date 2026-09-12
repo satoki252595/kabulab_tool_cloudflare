@@ -131,6 +131,14 @@ GET /api/screening
 SSR 画面 (「鮮度不足で除外 N 件」) に出す — 黙って落とすと「該当なし」と「古い行しか
 無い」の区別が読者に付かないため (ルール2)。
 
+銘柄詳細ページ (`/stocks/:code`) は**除外しない**。1 銘柄しか無いので除外すると
+ページが空になるだけなので、算出日を赤字 +「鮮度不足のため一覧では除外される値」
+の但し書きで出す (一覧から消えた銘柄も URL 直打ちで到達できる)。
+
+日次 sync は起動時に `rsi_percentile.percentile_sample_bars` を SELECT して 0009 の
+適用漏れを検出する (`assertDailySchema`)。0008 (`adj`) のときは検知が無く、未適用の
+まま 1 ヶ月ほど毎回 3,700 銘柄を取得し終えてから全件が書込で落ちていた。
+
 ## データ更新フロー
 
 本サービスは独自の sync を持たない。**統一日次 sync** ([scripts/sync/daily.ts](../scripts/sync/daily.ts)) を Node (GitHub Actions) から実行し、1 銘柄あたり Yahoo Chart(5y) + QuoteSummary を 1 回ずつ叩いて、以下を in-memory で計算し D1 REST 経由で書き込む (Yahoo 取得は Worker エッジ `/api/ingest/yahoo` = `YAHOO_PROXY_BASE` 経由で 429 を回避):
