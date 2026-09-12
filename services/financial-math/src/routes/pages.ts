@@ -512,8 +512,13 @@ export async function buildCapmView(input: CapmViewInput): Promise<Parameters<ty
  * 新実装: 対象銘柄 OHLCV と ^N225 OHLCV を Yahoo Chart API から finmath
  * キャッシュ経由で取得 (= 二次利用)。日付整合後の単純リターンで OLS。
  * 市場の定義として ^N225 は理論的にも標準的な選択。
+ *
+ * export しているのは、Node のスモークスクリプト
+ * (scripts/verify-capm-bs.ts) がここを直接叩くため。buildCapmView は
+ * Worker バインディング (`D1Database`) を要求するので Node からは呼べない一方、
+ * 確かめたい実体 (β 推定) はこの関数なので、ラッパ越しではなくここを検証する。
  */
-async function estimateBetaForCode(
+export async function estimateBetaForCode(
   db: ReturnType<typeof createDb>,
   code: string
 ): Promise<{ estimate: ReturnType<typeof estimateBetaOLS>; reason: string | null }> {

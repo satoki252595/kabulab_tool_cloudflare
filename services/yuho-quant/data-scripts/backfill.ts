@@ -21,11 +21,21 @@
  *   pnpm yuho:backfill -- --reparse-unrecognized --no-archive --concurrency=3
  *       # パーサ改善反映: table_unrecognized/parse_error/orders_only だけ
  *       # force 再取込 (他は EDINET を叩かず skip)、Notion 再保存はしない
+ *
+ * ADR-0001 (Neon → D1) 後の接続:
+ *   D1 はバインディング経由でのみ触れるが、本処理は Node 専用 (大量の EDINET
+ *   取得 + ローカルパース) なので Worker 化できない。同じ EDINET バックフィルの
+ *   backfill-overseas.ts と**同じ** createD1HttpDb (drizzle sqlite-proxy /
+ *   D1 REST) で書く。sqlite-proxy は db.batch / トランザクション非対応なので
+ *   冪等な per-row upsert 前提 (ingestDocument は既にそう書かれている)。
+ *   必要 env は EDINET_API_KEY / CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID /
+ *   D1_DATABASE_ID (未設定なら required で throw)。
  */
 import "dotenv/config";
-import { createDb } from "../src/db/client.js";
+import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import * as yuhoSchema from "../src/db/schema.js";
+import type { Database } from "../src/db/client.js";
 import { inArray } from "drizzle-orm";
-import { yuhoEnv } from "../src/env.js";
 import { stocks } from "../../rsi-screening/src/db/core-schema.js";
 import { yuhoDocuments } from "../src/db/schema.js";
 import { listDocuments } from "../src/services/edinet/client.js";
@@ -53,15 +63,10 @@ function shiftYearsISO(iso: string, dy: number): string {
 }
 
 async function main(): Promise<void> {
-  // ⚠️ ADR-0001: D1 移行に伴い本 CLI は無効化。createDb は D1 バインディングを
-  // 要求し Node ローカルからは接続できない。黙って壊れる代わりに fail-fast する
-  // (CLAUDE.md ルール2)。5 年バックフィルは Worker バルク取込 (別タスク・要
-  // EDINET/Notion 鍵) として再実装する。詳細は docs/adr/0001-neon-to-d1-r2-notion.md。
-  throw new Error(
-    "ADR-0001: yuho バックフィルは Worker バルク取込へ移行予定で、この CLI は無効です。"
-  );
-
-  const db = createDb(yuhoEnv.DATABASE_URL());
+  // sqlite-proxy (D1 HTTP) と D1 バインディング版は同じ async SQLite クエリビルダ
+  // API を持つ (共に BaseSQLiteDatabase)。型クラスのみ異なるためキャストで橋渡し。
+  // backfill-overseas.ts / scripts/sync/ir-tdnet.ts と同じ形。
+  const db = createD1HttpDb(yuhoSchema) as unknown as Database;
 
   const to = arg("to") ?? todayISO();
   const years = Number(arg("years") ?? "5");

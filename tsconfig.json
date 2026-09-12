@@ -43,22 +43,18 @@
   // 置くだけで tsc から消えた)。ファイル単位なら、既知の借金だけが除外され、
   // 新規ファイルは必ず typecheck される。
   //
-  // 下の 5 ファイルは取込パイプラインで実際に tsx 実行される Node スクリプトで、
-  // 合計 33 件の型エラーが残っている (本 PR では未修正)。内訳と直し方の当たりは
+  // 残りは 1 ファイル / 型エラー 1 件。内訳と直し方の当たりは
   // docs/ci-typecheck-blind-spots.md に書いた。**1 ファイル直すたびにここから消す**。
   "exclude": [
     "node_modules",
     "dist",
     ".vercel",
-    // 26 件 — TS2339/TS18047。`ir:backfill` で実行される。
-    "services/ir-catalog/data-scripts/backfill.ts",
-    // 2 件 — `yuho:backfill` で実行される。
-    "services/yuho-quant/data-scripts/backfill.ts",
-    // 2 件 — 手動実行 (pnpm exec tsx)。
-    "services/yuho-quant/data-scripts/audit-all.ts",
-    // 2 件 — 手動実行 (pnpm exec tsx)。
-    "services/financial-math/scripts/verify-capm-bs.ts",
-    // 1 件 — 手動実行 (pnpm exec tsx)。
+    // 1 件 (TS2345) — 手動実行 (pnpm exec tsx)。ADR-0001 の移行残骸で
+    // createDb に接続文字列を渡している。sibling の verify-capm-bs.ts と
+    // まったく同じ直し方 (createD1HttpDb へ差し替え) で消えるが、EMH レーンが
+    // このファイル自体を削除する可能性があるため手を付けていない。
+    // EMH レーンが削除しない結論になったら、その 1 行の差し替えとここからの
+    // 削除をまとめてやること。
     "services/financial-math/scripts/verify-price-cache.ts"
   ]
 }

@@ -20,6 +20,7 @@ function required(key: string): string {
 export const yuhoEnv = {
   /** EDINET API v2 の Subscription-Key (金融庁 EDINET 利用登録で発行) */
   EDINET_API_KEY: () => required("EDINET_API_KEY"),
-  /** Neon 接続文字列 (sslmode=require を含む) */
-  DATABASE_URL: () => required("DATABASE_URL"),
+  // DATABASE_URL (Neon 接続文字列) は ADR-0001 の D1 移行で参照元が無くなった
+  // ため削除した。Node から D1 へ書く経路は createD1HttpDb で、認証は
+  // src/shared/env.ts の CLOUDFLARE_* アクセサが持つ。
 };

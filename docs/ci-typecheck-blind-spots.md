@@ -34,24 +34,37 @@
 
 ---
 
-## 残っている除外（5 ファイル / 型エラー 33 件）
-
-いずれも取込パイプラインで **実際に `tsx` 実行される Node スクリプト**。
-`tsx` は型検査せずトランスパイルするだけなので、型エラーを抱えたまま動いている。
+## 残っている除外（1 ファイル / 型エラー 1 件）
 
 | ファイル | 件数 | 実行経路 |
 |---|---|---|
-| `services/ir-catalog/data-scripts/backfill.ts` | 26 | `pnpm ir:backfill` |
-| `services/yuho-quant/data-scripts/backfill.ts` | 2 | `pnpm yuho:backfill` |
-| `services/yuho-quant/data-scripts/audit-all.ts` | 2 | 手動 `pnpm exec tsx` |
-| `services/financial-math/scripts/verify-capm-bs.ts` | 2 | 手動 `pnpm exec tsx` |
-| `services/financial-math/scripts/verify-price-cache.ts` | 1 | 手動 `pnpm exec tsx` |
+| `services/financial-math/scripts/verify-price-cache.ts` | 1 (TS2345) | 手動 `pnpm exec tsx` |
 
-内訳: TS18047 が 13 件、TS2339 が 12 件、TS2345 が 6 件、TS7006 が 2 件。
+下記 (a) の移行残骸 1 箇所だけ。sibling の `verify-capm-bs.ts` と**同じ直し方**
+（`createDb(接続文字列)` → `createD1HttpDb`）で消えるが、EMH レーンがこのファイル
+自体を削除する可能性があるため手を付けていない。削除しない結論になったら、
+その 1 行の差し替えと `tsconfig.json` の `exclude` からの削除を一緒にやること。
 
-### 33 件の実体は 2 つの根本原因
+---
 
-件数は多いが独立した 33 個のバグではない。直す順序を誤らないため記録しておく。
+## 解決済み（4 ファイル / 32 件）— 「33 件」の内訳を測り直した
+
+2026-09-13 に 4 ファイルを検査対象へ戻した（`exclude` から削除済み）。
+**件数の内訳は当初の記述と違っていた**ので、測り直した結果を残す。
+
+| ファイル | 当初 | 実際の原因 | 対応 |
+|---|---|---|---|
+| `services/ir-catalog/data-scripts/backfill.ts` | 26 | (a) 1 件 + (b') 25 件 | 直して検査対象へ |
+| `services/yuho-quant/data-scripts/backfill.ts` | 2 | (a) 1 件 + (b') 1 件 | 直して検査対象へ |
+| `services/yuho-quant/data-scripts/audit-all.ts` | 2 | (a) 1 件 + (c') 1 件 | **削除** |
+| `services/financial-math/scripts/verify-capm-bs.ts` | 2 | (a) 1 件 + (d') 1 件 | 直して検査対象へ |
+
+当初この表には「実行経路」列があり、5 ファイルすべてを
+「実際に `tsx` 実行される Node スクリプト」と書いていた。**これも誤りだった**:
+ir-catalog / yuho の 2 つの `backfill.ts` と `audit-all.ts` は先頭で
+ADR-0001 の無効化 `throw` に当たるので、`pnpm ir:backfill` / `pnpm yuho:backfill`
+は即座に失敗していた（型エラーを抱えて動いていたわけではない）。
+実際に動いていたのは financial-math の 2 スクリプトだけ。
 
 **(a) ADR-0001 (Neon → D1) の移行残骸 — 5 ファイル全部に 1 箇所ずつ**
 
@@ -61,24 +74,65 @@ error TS2345: Argument of type 'string' is not assignable to parameter of type '
 
 `createDb()` は D1 バインディング (`D1Database`) を取るが、呼び出し側が
 Neon 期のまま接続文字列 (`process.env.DATABASE_URL`) を渡している。
-Node 側から D1 を触るなら `createD1HttpDb` (D1 REST) を使うのが正しい。
+Node 側から D1 を触るなら `createD1HttpDb` (D1 REST) を使うのが正しい
+（`scripts/sync/ir-tdnet.ts` / `data-scripts/backfill-overseas.ts` が既にその形）。
 
 > 同じ残骸が 002 otakara の `src/middleware/db.ts` にもあり、そちらは
 > 本番未到達だったため削除した（`app.ts` はインライン版を使っている）。
-> **この (a) を直すと `db` の型が正しく付き、下の (b) の一部は自然に消える。**
 
-**(b) 戻り値ユニオンを絞らずにプロパティを触っている — 主に ir-catalog**
+**(b') 無効化の `throw` より後ろが到達不能で、TypeScript が絞り込みをやめる**
 
+当初この文書は「(b) 戻り値ユニオンを絞らずにプロパティを触っている。
+**失敗時に `undefined` をログ出力する実行時の不具合**でもある」と書いていたが、
+**これは誤りだった**。ir-catalog の該当箇所は
+
+```ts
+bs ? ("created" in bs ? `${bs.stocksTouched}社 …` : `ERR:${bs.error}`) : "-"
 ```
-error TS2339: Property 'created' does not exist on type
-  '{ stocksTouched: number; ... } | { error: string; }'
-error TS18047: 'bs' is possibly 'null'.
+
+と**正しく絞り込めており**、失敗時は `ERR:…` を出す。実行時の不具合は無い。
+
+真の原因は、3 ファイルの先頭にあった ADR-0001 の無効化
+
+```ts
+throw new Error("ADR-0001: … この CLI は無効です。");
 ```
 
-成功形 `{ stocksTouched, created, ... }` と失敗形 `{ error }` のユニオンを
-`"error" in bs` 等で絞らずに直接参照している。**これは型だけの問題ではなく、
-失敗時に `undefined` をログ出力する実行時の不具合**でもある
-（集計値 0 件と失敗の区別がログから付かない）。修正時はここを直す価値がある。
+である。これより後ろのコードは**到達不能** (unreachable) で、TypeScript は
+到達不能コードで制御フロー解析＝**型の絞り込みを行わない**。そのため
+`bs ?` や `"created" in bs` が効かず、宣言型 (`… | { error } | null`) のまま
+参照しているように見えて TS18047/TS2339 が量産される。`let items;` も
+到達不能なので代入からの推論が働かず、`items.filter((it) => …)` の `it` が
+TS7006 になる。
+
+実測（`throw` を条件付きに差し替えて再計測）:
+
+| ファイル | `throw` あり | `throw` なし |
+|---|---|---|
+| ir-catalog `backfill.ts` | 26 件 | **1 件** |
+| yuho `backfill.ts` | 2 件 | **1 件** |
+
+→ **33 件のうち 26 件は `throw` が作った幻で、実在したのは 7 件だけだった。**
+件数の多さを「バグの多さ」と読むと直す順序を誤る。同種の借金を見たら、
+まず到達不能コードが無いかを疑うこと。
+
+**(c') Neon 専用 API / PostgreSQL 専用 SQL — `audit-all.ts`**
+
+`db.execute()`（D1 の drizzle には無い）に加え、`distinct on (…)`（PostgreSQL
+専用構文）・`core.stocks` / `yuho_quant.documents`（スキーマ修飾名。D1 の実テーブルは
+`core_stocks` / `yuho_documents`）・`is_active = true` を使っていた。
+**型を通しても動かない**（通してしまうと「動くように見えるのに実行すれば落ちる」
+という、除外されていたときより悪い状態になる）。一回限りの全数監査で
+package.json からも参照されていないため削除した。
+中身が必要になったら `5e66a3b` から取り出して D1 向けに書き直すこと。
+
+**(d') ルートのラッパが Worker バインディングを要求する — `verify-capm-bs.ts`**
+
+`buildCapmView` は `db: D1Database`（バインディング）を要求するので、Node から
+`createD1HttpDb` の db では呼べない。スモークが確かめたい実体は β 推定と期待収益率の
+計算なので、`estimateBetaForCode`（このために `export` した）と
+`calcCapmExpectedReturn` を直接叩く形に変えた。ルートの組み立て自体は
+`src/tests/integration/routes.test.ts` の担当。
 
 ---
 
@@ -96,7 +150,7 @@ error TS18047: 'bs' is possibly 'null'.
 `worker/entry.ts` は本番エントリなので、優先的に対象へ入れるべき。
 確認は `npx eslint src services --format=json` で対象ファイルを数えればよい
 （`eslint` は指定パス外を黙って無視するので、緑でも対象内とは限らない）。
-本 PR では lint 対象を広げていない（既存 warning 127 件の扱いを決める必要があり、
+本 PR では lint 対象を広げていない（既存 warning 116 件の扱いを決める必要があり、
 死角を塞ぐ話とは別の判断になるため）。
 
 ---
