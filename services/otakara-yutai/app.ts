@@ -952,6 +952,12 @@ app.get("/genres/:slug", async (c) => {
     pbr: stockFinancials.pbr, yutai: stockFinancials.yutaiYield,
   };
   const gCol = gColMap[gSort] ?? stockScores.totalScore;
+  // 第2キーに id を足して全順序にする。#17 で /api/screening 側に入れたのと同じ形。
+  // 総合スコアは半数近くが NULL で、値があっても同値が大量にあるため、単一キー
+  // では同値行の順序が保証されない。OFFSET ページングでは**ページ間で順序が
+  // 揺れると行の重複と取りこぼしが同時に起きる** (2 ページ目に 1 ページ目の行が
+  // 再登場し、その分だけ別の銘柄が永久に表示されない)。
+  // 下の重複除去は同一レスポンス内しか見ないので、この事故は検出できない。
   const gSortExpr = gOrder === "asc" ? sql`${gCol} ASC NULLS LAST` : sql`${gCol} DESC NULLS LAST`;
 
   const rows = matchedCount === 0 ? [] : await db.select({
@@ -966,21 +972,32 @@ app.get("/genres/:slug", async (c) => {
     .leftJoin(stockScores, eq(stockScores.stockId, stocks.id))
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
     .where(gWhereCond)
-    .orderBy(gSortExpr)
-    .limit(PAGE_SIZE * 3).offset(offset);
+    .orderBy(gSortExpr, asc(stocks.id))
+    // 1 銘柄 1 行であることは JOIN 先の UNIQUE 制約が保証する
+    // (otakara_stock_financials / _scores の stock_id は UNIQUE。本番 D1 にも
+    // 同名の unique index が実在する)。だから limit を PAGE_SIZE より大きく取る
+    // 必要は無い。
+    //
+    // **ただし rows_read は減らない。** 本番実測 (2026-09-13, genre_id=110 /
+    // 373 銘柄): limit 20 / 60 / 200 のいずれでも rows_read は 5,568 で同値。
+    // EXPLAIN が `USE TEMP B-TREE FOR ORDER BY` を出すとおり、ORDER BY のために
+    // 一致集合を全部並べ替えてから LIMIT を適用するので、LIMIT は**返却行数
+    // だけ**を変える。3 倍にしていた分の実害は行転送量と SSR 側の処理で、
+    // 走査行課金には出ない。索引でもコストが下がらないのと同じ構図なので、
+    // ここを「コスト削減」と書かないこと。
+    .limit(PAGE_SIZE).offset(offset);
 
-  // 重複除去
-  const gSeen = new Set<number>();
-  const gUnique = rows.filter(r => { if (gSeen.has(r.id)) return false; gSeen.add(r.id); return true; }).slice(0, PAGE_SIZE);
-
-  // 優待情報取得
-  const pageIds = gUnique.map(r => r.id);
+  // JS 側の重複除去も外した。上の UNIQUE が成り立つ限り一度も仕事をせず、
+  // 崩れたときはむしろ有害: OFFSET は重複除去**前**の行数を数えるため、
+  // 除去した分だけページ境界が実際の銘柄数からずれて次ページの先頭を取りこぼす。
+  // (#17 で /api/screening から外したのと同じ理由・同じ判断)
+  const pageIds = rows.map(r => r.id);
   const benefits = pageIds.length > 0
     ? await db.select({ stockId: yutaiBenefits.stockId, shortSummary: yutaiBenefits.shortSummary, recordMonth: yutaiBenefits.recordMonth })
         .from(yutaiBenefits).where(inArray(yutaiBenefits.stockId, pageIds))
     : [];
 
-  const cards = gUnique.map(row => {
+  const cards = rows.map(row => {
     const rowBenefits = benefits.filter(b => b.stockId === row.id);
     const months = [...new Set(rowBenefits.map(b => b.recordMonth))].sort((a, b) => a - b);
     const desc = publicSummaries(rowBenefits).join(" / ");
