@@ -102,6 +102,11 @@ export const DEFINITION_BREAK_RATIO = 2;
  *     (UNIQUE(stock_id, fiscal_year) が実在し重複 0 件、隣接年比 1e4 超は 0 件、
  *      この表へ流れるのは通期の incomeStatementHistory のみ)。
  *
+ * null (欠損年) は除外してから隣接判定するため、年が飛んでいる系列では
+ * **隣接年ではなく「飛んだ先の年」との比**を見る ([100, null, 1000] → true)。
+ * 欠損を挟んだ 2 年分の複利成長が 2 倍を超える場合も「判定不能」に倒れるが、
+ * 欠損年のある系列で成長率を主張できない以上、null に倒すのが安全側。
+ *
  * **このガードの限界 (是正ではなく止血)**:
  * 検出できるのは「定義が切り替わった**瞬間**」だけ。判定窓の 3 期すべてが単体に
  * (あるいはすべて連結に) 揃っている系列は段差を持たないので**素通りする**。
@@ -117,8 +122,12 @@ export function hasDefinitionBreak(values: (number | null)[]): boolean {
     const prev = valid[i - 1];
     const curr = valid[i];
     // 0 / 負の売上は比率が定義できない (符号反転で無意味な倍率になる) ため段差判定から除く。
-    // 「0 を含む系列は無条件で null」にしない理由: 売上 0 は上場企業では実質出現せず、
-    // 出現したなら judgeTrend 側の first===0 で既に null になる。
+    // 「0 を含む系列は無条件で null」にしない理由: 0 を含む窓は judgeTrend が
+    // +1 を返せない (先頭の 0 は first===0 で null、途中/末尾の 0 は -100% の YoY 下落に
+    // なり hasSignificantDrop が立つ) ので、素通りさせても優良株フラグには届かない。
+    // ※ 負の売上だけは judgeTrend が Math.abs(first) を使うため +1 になり得る
+    //   ([-100, 50, 60] → +1)。totalRevenue が負で返る例は実測に無いため
+    //   judgeTrend 側は触っていないが、負値が入り始めたらここは穴になる。
     if (prev <= 0 || curr <= 0) continue;
     const ratio = curr / prev;
     if (ratio > DEFINITION_BREAK_RATIO || ratio < 1 / DEFINITION_BREAK_RATIO) {
