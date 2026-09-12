@@ -7,23 +7,32 @@ import {
 } from "../../../../../src/shared/scoring.js";
 import type { ScoringInput } from "../../../../../src/shared/scoring.js";
 
-/** テスト用デフォルトデータ */
-function makeInput(overrides: Record<string, number | null> = {}): ScoringInput {
+/**
+ * テスト用デフォルトデータ。
+ *
+ * 以前は `ma5` / `ma75` を渡し、全体を `as ScoringInput` でキャストしていた。
+ * だが `ScoringInput` に両者は無い（テクニカルは MA25 乖離率・RSI・MACD のみで、
+ * MA5/MA75 は純粋関数へ移植した時点で入力から落ちている）。キャストが余剰
+ * プロパティ検査を潰していたため、このテストは「実際には渡らない値を渡したつもり」
+ * の状態で通っていた。tsconfig の exclude で tsc からも外れていたので誰も気付けなかった。
+ *
+ * `overrides` を `Record<string, number | null>` ではなく `Partial<ScoringInput>` に
+ * するのは、キー名の打ち間違い（`ma5` や `rsi` 等）をテスト側で型エラーにするため。
+ */
+function makeInput(overrides: Partial<ScoringInput> = {}): ScoringInput {
   return {
     price: 1000,
     per: 12,
     pbr: 0.8,
     dividendYield: 3.5,
     roe: null,
-    ma5: 1010,
     ma25: 1050,
-    ma75: 1100,
     rsi14: 45,
     macd: null,
     macdSignal: null,
     yutaiYield: null,
     ...overrides,
-  } as ScoringInput;
+  };
 }
 
 // =============================================================
@@ -495,9 +504,7 @@ describe("scoreStock", () => {
       pbr: null,
       dividendYield: null,
       roe: null,
-      ma5: null,
       ma25: null,
-      ma75: null,
       rsi14: null,
       macd: null,
       macdSignal: null,
