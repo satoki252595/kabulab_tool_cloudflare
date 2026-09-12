@@ -36,13 +36,17 @@ const ALLOWED = [
   /\bname="description"/g, // <meta name="description">
   /\bg\.description\b/g, // yutai_genres の自作説明 (app.ts)
 ];
-// 以前あった 2 本は外した:
+// 以前あった 3 本は外した（いずれも削除した未マウント実装のための減算で、
+// 由来が消えた今は根拠が無い）:
 //   - /\bdescription: g\.description\b/ ... 由来は routes/genres.ts
 //   - /\bdescription: string \| null;/  ... 由来は views/pages/home.tsx
-// どちらも未マウントの並行実装のための減算で、その実装を消した今は
-// 「`description:` という**キー名**への代入」を無条件で許す過剰な穴になる
+//   - /\bgenre\.description\b/          ... 由来は views/*（app.ts は `g.description`
+//                                          しか使わないので、残しても何も減算しない）
+// 前 2 本は「`description:` という**キー名**への代入」を無条件で許す過剰な穴になる
 // （例: `select({ description: yutaiBenefits.description })` の左辺を
-// 1 個分だけ見逃す）。根拠を失った減算は残さない。
+// 1 個分だけ見逃す）。3 本目は無害だが、由来を失った減算を残すと
+// 「app.ts に `genre.description` を書いてよい」と誤読され、次に views を
+// 復活させたとき減算だけが先に効いてしまう。根拠を失った減算は残さない。
 
 function unexplainedDescriptions(source: string): number {
   let code = stripComments(source);
@@ -116,6 +120,9 @@ describe("公開面に出典掲載文 (description) を出さない", () => {
     // /\bdescription: string \| null;/ はここを素通りさせていた。
     expect(unexplainedDescriptions("{ description: g.description }")).toBe(1);
     expect(unexplainedDescriptions("type G = { description: string | null; };")).toBe(1);
+    // 3 本目に外した /\bgenre\.description\b/ も戻っていないこと。`g.description`
+    // だけを許すのが意図で、別名 (genre 等) を足すと許可の範囲が静かに広がる。
+    expect(unexplainedDescriptions("const t = genre.description;")).toBe(1);
     // 許可された文脈は通る
     expect(unexplainedDescriptions("<p>{h(g.description)}</p>")).toBe(0);
   });
