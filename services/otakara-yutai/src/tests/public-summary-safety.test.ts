@@ -31,7 +31,7 @@ function stripComments(source: string): string {
 }
 
 /** `description` が出てよい文脈（自作のジャンル説明とページ meta のみ）。 */
-// 長い文脈から先に消す（`description: g.description` を `g.description` より先に）
+// 減算なので、部分一致で食い合う文脈を足すときは長い方を先に置くこと。
 const ALLOWED = [
   /\bname="description"/g, // <meta name="description">
   /\bg\.description\b/g, // yutai_genres の自作説明 (app.ts)
