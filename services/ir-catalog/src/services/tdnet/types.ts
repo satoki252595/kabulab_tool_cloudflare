@@ -8,9 +8,12 @@
  *   - `?page=N` は無視される (ページング不可)。1 日単位で取得する。
  *   - 各 item は通常 `{ "Tdnet": {...} }` だが、limit 値によってはラッパ
  *     無しの素フィールドで返ることがある (同一データの符号化揺れ)。
- *   - company_code は 5 桁 (4 桁ティッカー + 1 桁; 例 "72030" → 7203)。
+ *   - company_code は 5 文字 (4 文字ティッカー + 検査文字 1 文字; 例 "72030" → 7203)。
+ *     本番 ir_disclosures 37,641 行は全件この形で、末尾は全件 "0" (実測)。
  *   - url_xbrl は提供されない開示で null になり得る。
  */
+
+import { sourceCodeToTicker } from "../../../../../src/shared/jpx/stock-code.js";
 
 /** TDnet 開示 1 件の正規化後フィールド */
 export interface TdnetItemRaw {
@@ -96,18 +99,21 @@ export function normalizeTdnetItem(
 }
 
 /**
- * TDnet の 5 桁コードを 4 桁ティッカーへ変換する。
+ * TDnet の 5 文字コードを 4 文字ティッカーへ変換する。
  *
- * 証券コードは 5 桁 (4 桁基底 + 末尾 1 桁)。2024 年以降は英数字混在の
- * 新コード (例 "135A0" → "135A") もある。先頭 4 桁を取る (英数字許容)。
- * 想定外フォーマットは推測で補正せず null を返し、呼び出し側で
- * core.stocks 突合により「ユニバース外」として正直に切り捨てる (ルール2)。
+ * 判定と正規化は共有ヘルパ {@link sourceCodeToTicker} に委譲する。ここに独自の
+ * 正規表現を持っていたため、同じ入力に対する答えが EDINET 側 (`secCodeToTicker`)
+ * や Python 側の実装と割れていた:
+ *   - `07203` / `25935` を先頭 4 文字で切って `0720` / `2593` を返していた
+ *     (`2593` は伊藤園 普通株で、`25935` は同社の第1種優先株式 — 取り違え)
+ *   - `A130` (1 桁目英字。JPX 付番体系に無い) を通していた
+ *   - 全角 `７２０３` だけを弾いていた (EDINET 側は半角化して受理していた)
+ *
+ * 想定外フォーマットは推測で補正せず null を返し、呼び出し側で core_stocks
+ * 突合により「ユニバース外」として正直に切り捨てる (ルール2)。
  */
 export function companyCodeToTicker(
   code: string | null | undefined
 ): string | null {
-  if (!code) return null;
-  const trimmed = code.trim().toUpperCase();
-  if (!/^[0-9A-Z]{4,5}$/.test(trimmed)) return null;
-  return trimmed.slice(0, 4);
+  return sourceCodeToTicker(code);
 }

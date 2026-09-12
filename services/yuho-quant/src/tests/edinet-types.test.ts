@@ -142,4 +142,28 @@ describe("secCodeToTicker (JPX 英数字コード対応)", () => {
     expect(secCodeToTicker(null)).toBeNull();
     expect(secCodeToTicker("")).toBeNull();
   });
+
+  // ここは厳格化。以前は 5 文字なら無条件に slice(0, 4) していた。
+  //
+  // **EDINET については末尾検査文字が "0" 限定という実測根拠が無い。**
+  // 末尾非 0 が 0 件だと確認できたのは TDnet 由来の ir_disclosures
+  // (37,641 行) だけで、生の secCode を保存する表が無いため EDINET の分布は
+  // 取れていない。仕様上の同形性 (4 文字 + 検査文字) を根拠に厳格側へ寄せた
+  // 未検証の変更である。実在すれば取りこぼす — 取り違えより取りこぼしを選ぶ。
+  it("末尾検査文字が 0 でない 5 文字は null (取り違え防止・EDINET は未検証)", () => {
+    // 伊藤園第1種優先株式。旧挙動は "2593" (同社 普通株) を返していた。
+    // 本番 core_stocks に 25935 と 2593 の両方が実在するので、優先株の
+    // 有報を普通株へ紐付ける取り違えになっていた。
+    expect(secCodeToTicker("25935")).toBeNull();
+    // 実在しないコード "0720" を捏造していた (本番に先頭 0 のコードは 0 件)。
+    expect(secCodeToTicker("07203")).toBeNull();
+  });
+
+  it("1 桁目英字は JPX 付番体系に無いので null", () => {
+    expect(secCodeToTicker("A130")).toBeNull();
+  });
+
+  it("全角は表現揺れとして半角化して受理する (TDnet 側と同一)", () => {
+    expect(secCodeToTicker("７２０３")).toBe("7203");
+  });
 });
