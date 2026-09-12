@@ -214,6 +214,8 @@ app.get("/api/some-protected", cronAuthMiddleware, async (c) => { ... });
 
 [src/cron/daily.ts](../src/cron/daily.ts) の `runDailySync()` 系に、自分のテーブルへの upsert を追加する。Yahoo は 1 銘柄につき Chart + QuoteSummary をまとめて取得しているので追加フェッチは不要。in-memory の OHLCV / 指標から自分が欲しい値を計算するだけで済む。
 
+なお `writeStockSnapshot()` の ②断面 (`core_stock_financials`) だけは `options.writeCoreFinancials` (既定 true) で止められる。writer が外へ移る移行のためのスイッチなので、**新サービスは「日次 sync が必ず ②断面を書く」前提を置かないこと**（options は任意引数なので、追加する upsert 側の書き方は変わらない）。
+
 ### 新サービスが月次データを必要とする場合
 
 [src/cron/monthly.ts](../src/cron/monthly.ts) の `runMonthlyRebuild()` に Phase を追加。Yahoo を追加で叩かないこと (DB からの集計で足りるはず)。
