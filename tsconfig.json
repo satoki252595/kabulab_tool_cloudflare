@@ -30,19 +30,35 @@
     "drizzle.*.config.ts",
     "vitest.config.ts"
   ],
+  // exclude はそのまま「CI が見ていない範囲」になる。ここに足すのは
+  // 型エラーを消す最短手段だが、除外した先は lint 側も
+  // typescript-eslint recommended が `no-dupe-keys` 等のコア規則を
+  // 「tsc が見るから」と無効化しているため、**どちらも見ない死角**になる。
+  // 実際に 002 otakara の未マウント実装では ILIKE (D1 が解釈できない) と
+  // shortSummary の重複キー 5 件がこの死角で温存されていた。
+  // 増やす前に必ず「なぜ tsc に見せられないか」を書くこと。
+  // 除外は**ディレクトリ単位ではなくファイル単位**にする。
+  // ディレクトリ単位だと、後から同じ階層に足したファイルまで自動的に
+  // 死角へ入る (otakara の未マウント実装がまさにそれで、routes/** 配下に
+  // 置くだけで tsc から消えた)。ファイル単位なら、既知の借金だけが除外され、
+  // 新規ファイルは必ず typecheck される。
+  //
+  // 下の 5 ファイルは取込パイプラインで実際に tsx 実行される Node スクリプトで、
+  // 合計 33 件の型エラーが残っている (本 PR では未修正)。内訳と直し方の当たりは
+  // docs/ci-typecheck-blind-spots.md に書いた。**1 ファイル直すたびにここから消す**。
   "exclude": [
     "node_modules",
     "dist",
     ".vercel",
-    "services/otakara-yutai/src/index.ts",
-    "services/otakara-yutai/src/pages-app.ts",
-    "services/otakara-yutai/src/routes/**",
-    "services/otakara-yutai/src/views/**",
-    "services/otakara-yutai/src/middleware/**",
-    "services/otakara-yutai/src/tests/**",
-    "services/otakara-yutai/data-scripts/**",
-    "services/yuho-quant/data-scripts/**",
-    "services/ir-catalog/data-scripts/**",
-    "services/financial-math/scripts/**"
+    // 26 件 — TS2339/TS18047。`ir:backfill` で実行される。
+    "services/ir-catalog/data-scripts/backfill.ts",
+    // 2 件 — `yuho:backfill` で実行される。
+    "services/yuho-quant/data-scripts/backfill.ts",
+    // 2 件 — 手動実行 (pnpm exec tsx)。
+    "services/yuho-quant/data-scripts/audit-all.ts",
+    // 2 件 — 手動実行 (pnpm exec tsx)。
+    "services/financial-math/scripts/verify-capm-bs.ts",
+    // 1 件 — 手動実行 (pnpm exec tsx)。
+    "services/financial-math/scripts/verify-price-cache.ts"
   ]
 }

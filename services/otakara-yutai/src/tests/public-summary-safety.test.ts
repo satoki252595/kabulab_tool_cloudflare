@@ -11,7 +11,7 @@
  * コメントを除いたコードに `description` が出てよいのは、自作のジャンル説明
  * (`yutai_genres.description`) と `<meta name="description">` だけ。
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -33,12 +33,16 @@ function stripComments(source: string): string {
 /** `description` が出てよい文脈（自作のジャンル説明とページ meta のみ）。 */
 // 長い文脈から先に消す（`description: g.description` を `g.description` より先に）
 const ALLOWED = [
-  /\bdescription: g\.description\b/g, // ジャンル API の詰め替え (routes/genres.ts)
   /\bname="description"/g, // <meta name="description">
   /\bg\.description\b/g, // yutai_genres の自作説明 (app.ts)
-  /\bgenre\.description\b/g, // 同上 (views)
-  /\bdescription: string \| null;/g, // ジャンル型の宣言 (views/home.tsx)
 ];
+// 以前あった 2 本は外した:
+//   - /\bdescription: g\.description\b/ ... 由来は routes/genres.ts
+//   - /\bdescription: string \| null;/  ... 由来は views/pages/home.tsx
+// どちらも未マウントの並行実装のための減算で、その実装を消した今は
+// 「`description:` という**キー名**への代入」を無条件で許す過剰な穴になる
+// （例: `select({ description: yutaiBenefits.description })` の左辺を
+// 1 個分だけ見逃す）。根拠を失った減算は残さない。
 
 function unexplainedDescriptions(source: string): number {
   let code = stripComments(source);
@@ -46,33 +50,50 @@ function unexplainedDescriptions(source: string): number {
   return (code.match(/description/g) ?? []).length;
 }
 
-/** 公開面になり得る TS/TSX を全て集める（死にコードも再マウントされ得るので含める）。 */
+/**
+ * 検査対象 = **本番に到達する公開面**のファイル。
+ *
+ * 以前はここで `src/routes` / `src/views` を再帰 walk し、「死にコードも再マウント
+ * され得るので含める」という建前で未マウントの並行実装まで舐めていた。だがその
+ * 並行実装は tsconfig の exclude で tsc からも外れていたため、本番に出ないコードを
+ * このテストだけが見ている状態になり、結果として `ILIKE`（D1 は解釈できない）や
+ * `shortSummary` の重複キー 5 件を誰も落とせないまま温存していた。並行実装を削除
+ * したので、走査は「実際にマウントされている公開面」に定義し直す。
+ *
+ * walk をやめたのは、対象ディレクトリが消えても walk は静かに 0 件を返し、
+ * 件数の下限 (`toBeGreaterThan`) だけが形骸化して気付けないため。**明示リスト +
+ * 実在検証**にすれば、パスが変わった時点でこのテストが落ちる。
+ * 公開面のファイルを増やしたらここに足すこと。
+ */
+const PUBLIC_SURFACE = ["app.ts"];
+
+/** 並行実装が再び生えたらここで落とす（走査漏れとして見逃さないため）。 */
+const MUST_NOT_EXIST = ["src/routes", "src/views"];
+
 function collectSources(): string[] {
-  const out: string[] = [join(SERVICE_DIR, "app.ts")];
-  for (const sub of ["src/routes", "src/views"]) {
-    const root = join(SERVICE_DIR, sub);
-    const walk = (dir: string) => {
-      for (const name of readdirSync(dir)) {
-        const full = join(dir, name);
-        if (statSync(full).isDirectory()) walk(full);
-        else if (/\.tsx?$/.test(name)) out.push(full);
-      }
-    };
-    try {
-      walk(root);
-    } catch {
-      // ディレクトリが無いのは構わない
-    }
-  }
-  return out;
+  return PUBLIC_SURFACE.map((rel) => join(SERVICE_DIR, rel));
 }
 
 describe("公開面に出典掲載文 (description) を出さない", () => {
   const sources = collectSources();
 
   it("検査対象を取り逃していない", () => {
-    expect(sources.length).toBeGreaterThan(5);
+    // 件数の下限ではなく「明示リストの全件が実在するファイルであること」を見る。
+    expect(sources).toHaveLength(PUBLIC_SURFACE.length);
+    for (const path of sources) {
+      expect(existsSync(path), `${path} が無い（PUBLIC_SURFACE が古い）`).toBe(true);
+      expect(statSync(path).isFile()).toBe(true);
+    }
     expect(sources.some((p) => p.endsWith("app.ts"))).toBe(true);
+  });
+
+  it.each(MUST_NOT_EXIST)("%s に未マウントの公開面が再び生えていない", (sub) => {
+    // ここが生き返ると「本番に出ないが公開面の形をしたコード」が再び溜まる。
+    // 再マウントするなら PUBLIC_SURFACE に足して検査対象に入れるのが先。
+    expect(
+      existsSync(join(SERVICE_DIR, sub)),
+      `${sub} を復活させるなら PUBLIC_SURFACE に追加して検査対象に入れること`,
+    ).toBe(false);
   });
 
   it.each(sources.map((p) => [p.slice(SERVICE_DIR.length), p]))(
@@ -90,6 +111,11 @@ describe("公開面に出典掲載文 (description) を出さない", () => {
     expect(unexplainedDescriptions("const { description } = b;")).toBe(1);
     expect(unexplainedDescriptions('const t = (b as any)["description"];')).toBe(1);
     expect(unexplainedDescriptions("select({ description: yutaiBenefits.description })")).toBe(2);
+    // `description:` というキー名への代入だけでは許可されない。
+    // かつて ALLOWED にあった /\bdescription: g\.description\b/ と
+    // /\bdescription: string \| null;/ はここを素通りさせていた。
+    expect(unexplainedDescriptions("{ description: g.description }")).toBe(1);
+    expect(unexplainedDescriptions("type G = { description: string | null; };")).toBe(1);
     // 許可された文脈は通る
     expect(unexplainedDescriptions("<p>{h(g.description)}</p>")).toBe(0);
   });

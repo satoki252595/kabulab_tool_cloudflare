@@ -94,6 +94,9 @@ pnpm dev:cf               # wrangler dev (Cloudflare ローカル実行)
 pnpm typecheck
 pnpm test
 pnpm lint
+# ⚠️ 上記 3 つが緑でも検査されていない範囲がある (tsconfig の exclude 5 ファイル /
+#    型エラー 33 件、lint 対象外の scripts・worker)。残高は
+#    docs/ci-typecheck-blind-spots.md
 
 # デプロイ (詳細は下記「デプロイ」節)
 pnpm deploy:cf            # 本番を手動デプロイ (= wrangler deploy)
