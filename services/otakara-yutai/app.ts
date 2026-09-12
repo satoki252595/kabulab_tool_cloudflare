@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
 import { createMiddleware } from "hono/factory";
-import { eq, inArray, count, and, lte, gte, sql } from "drizzle-orm";
+import { eq, inArray, count, and, lte, gte, sql, asc } from "drizzle-orm";
 
 // 002 サービス固有の DB スキーマとクライアント
 import {
@@ -80,6 +80,55 @@ export function publicSummaries(rows: { shortSummary: string | null }[]): string
   return [...new Set(rows.map(publicSummary))].filter((t) => t !== "");
 }
 
+/** スクリーニング1ページの件数。SSR 初期表示と /api/screening の既定 limit で共有する。 */
+export const SCREENING_PAGE_SIZE = 50;
+
+/**
+ * /api/screening の limit 上限。
+ *
+ * 上限そのものは D1 の1レスポンス肥大を抑えるために残すが、以前は
+ * **これがそのまま閲覧可能件数の上限**だった (offset が無かったため)。
+ * 優待銘柄の母集団は 1,616、権利月3月だけで 848 件あり、どう絞り込んでも
+ * 101 件目以降に到達する手段が無かった。offset 追加後は 1 ページの大きさに
+ * すぎない。
+ */
+export const SCREENING_MAX_LIMIT = 100;
+
+/**
+ * 一覧カードに載せる優待情報 (権利月 / 一行サマリ / ジャンル名) を銘柄 ID 別に引く。
+ *
+ * 公開面に出す文言は必ず publicSummaries() を通す (= short_summary 由来だけ)。
+ * SSR 初期表示と /api/screening が別々に詰め替えていたため、片方だけが
+ * この関門を迂回する余地があった。両者から同じ関数を呼ぶことで塞ぐ。
+ */
+async function loadCardBenefits(
+  db: Database,
+  stockIds: number[],
+): Promise<Map<number, { benefitMonths: number[]; benefitSummary: string; genres: string[] }>> {
+  const out = new Map<number, { benefitMonths: number[]; benefitSummary: string; genres: string[] }>();
+  if (stockIds.length === 0) return out;
+
+  const rows = await db.select({
+    stockId: yutaiBenefits.stockId,
+    shortSummary: yutaiBenefits.shortSummary,
+    recordMonth: yutaiBenefits.recordMonth,
+    genreId: yutaiBenefits.genreId,
+  }).from(yutaiBenefits).where(inArray(yutaiBenefits.stockId, stockIds));
+
+  const genreRows = await db.select({ id: yutaiGenres.id, name: yutaiGenres.name }).from(yutaiGenres);
+  const genreMap = new Map(genreRows.map((g) => [g.id, g.name]));
+
+  for (const id of stockIds) {
+    const mine = rows.filter((b) => b.stockId === id);
+    out.set(id, {
+      benefitMonths: [...new Set(mine.map((b) => b.recordMonth))].sort((a, b) => a - b),
+      benefitSummary: publicSummaries(mine).join(" / "),
+      genres: [...new Set(mine.map((b) => genreMap.get(b.genreId)).filter((n): n is string => Boolean(n)))],
+    });
+  }
+  return out;
+}
+
 // ===== App =====
 // strict: false → `/screening` と `/screening/` を同一視する。
 // 親アプリ側で trailing slash の有無に依らずマッチさせるために必要。
@@ -111,7 +160,14 @@ app.get("/api/screening", async (c) => {
   const rsiMax = parseFloat(c.req.query("rsiMax") ?? "0") || 0;
   const sort = c.req.query("sort") ?? "total";
   const order = c.req.query("order") ?? "desc";
-  const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") ?? "50", 10) || 50));
+  const limit = Math.min(SCREENING_MAX_LIMIT, Math.max(1, parseInt(c.req.query("limit") ?? String(SCREENING_PAGE_SIZE), 10) || SCREENING_PAGE_SIZE));
+  // ページ送り。OFFSET の走査コストは実測で平坦 (同一条件で OFFSET 0 と 1550 が
+  // どちらも rows_read 6,947) なので、keyset ページングではなく素直な OFFSET を採る。
+  // 上限は母集団 (優待銘柄 1,616) を十分に超える値で、桁を間違えた URL で
+  // 無意味な走査をさせないための歯止め。
+  const offset = Math.max(0, Math.min(100_000, parseInt(c.req.query("offset") ?? "0", 10) || 0));
+  // 総件数を返すか。既定 false ＝ 打たない (理由は下の COUNT 付近を参照)。
+  const withTotal = c.req.query("withTotal") === "1";
 
   // 母集団は東証対象 ~3,700 だが otakara は優待サービスなので is_yutai=true に限定
   const whereClauses: unknown[] = [eq(stocks.isActive, true), eq(stocks.isYutai, true)];
@@ -126,7 +182,7 @@ app.get("/api/screening", async (c) => {
   if (genre) {
     const genreRow = await db.select({ id: yutaiGenres.id }).from(yutaiGenres)
       .where(eq(yutaiGenres.slug, genre)).limit(1);
-    if (genreRow.length === 0) return c.json([]);
+    if (genreRow.length === 0) return c.json({ items: [], total: withTotal ? 0 : null, offset, limit });
     whereClauses.push(inArray(stocks.id,
       db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
         .where(eq(yutaiBenefits.genreId, genreRow[0].id))));
@@ -150,10 +206,41 @@ app.get("/api/screening", async (c) => {
     pbr: stockFinancials.pbr, yutai: stockFinancials.yutaiYield,
   };
   const col = colMap[sort] ?? stockScores.totalScore;
+  // 第2キーに id を足して全順序にする。総合スコア等は NULL / 同値が大量にあり、
+  // 単一キーだけでは同値行の順序が保証されない。OFFSET ページングでは
+  // ページ間で順序が揺れると 101 件目以降で行の重複と取りこぼしが起きる。
   const sortExpr = order === "asc"
     ? sql`${col} ASC NULLS LAST`
     : sql`${col} DESC NULLS LAST`;
 
+  // 総件数。同一 WHERE の COUNT は**データ取得と同額の走査を払う** (実測 rows_read:
+  // 無フィルタ 6,947 / 権利月フィルタ 13,725 / 全条件 13,412)。D1 は走査行課金なので
+  // 毎リクエストで打つと権利月フィルタ時に 13,725 → 27,450 と倍になる。
+  // そこで「絞り込み条件を変えた最初の1回だけクライアントが withTotal=1 を付ける」
+  // 方式にした (ページ送りとソート変更では総件数は変わらないのでキャッシュを使う)。
+  // 採らなかった案: (a) 毎回 COUNT — 上記のとおり課金が倍。(b) limit+1 件だけ引いて
+  // 「100件以上」と曖昧に出す — 権利月3月で 848 件という規模では「848件中」と
+  // 正確に出せる価値の方が大きい。
+  let total: number | null = null;
+  if (withTotal) {
+    // 財務列の絞り込みが無いときは LEFT JOIN を落とす。LEFT JOIN は行を減らさず、
+    // otakara_stock_financials / _scores の stock_id は UNIQUE なので行も増えない
+    // → join 無しの count(*) と同値でありながら走査行が大幅に減る。
+    // 財務列を WHERE で参照するときは落とせないので、その場合だけ join する。
+    const financialFiltered = perMax > 0 || pbrMax > 0 || yieldMin > 0 || rsiMax > 0;
+    const countRow = financialFiltered
+      ? await db.select({ c: sql<number>`count(distinct ${stocks.id})` }).from(stocks)
+          .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
+          .where(whereCondition)
+      : await db.select({ c: sql<number>`count(*)` }).from(stocks).where(whereCondition);
+    total = Number(countRow[0]?.c ?? 0);
+  }
+
+  // 1 銘柄 1 行であることは JOIN 先の UNIQUE 制約が保証する (schema.ts の
+  // stockId.unique(); 本番 D1 にも otakara_stock_financials_stock_id_unique /
+  // otakara_stock_scores_stock_id_unique が実在)。以前あった limit*3 + JS 側の
+  // 重複除去は行が増えない前提では死にコードで、しかも OFFSET と併用すると
+  // 「3倍引いて先頭 limit 件に切る」ためページ跨ぎの取りこぼしを生む。外した。
   const rows = await db.select({
     id: stocks.id, code: stocks.code, name: stocks.name, market: stocks.market, sector: stocks.sector,
     price: stockFinancials.price, per: stockFinancials.per, pbr: stockFinancials.pbr,
@@ -164,37 +251,26 @@ app.get("/api/screening", async (c) => {
     .leftJoin(stockScores, eq(stockScores.stockId, stocks.id))
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
     .where(whereCondition)
-    .orderBy(sortExpr)
-    .limit(limit * 3);
+    .orderBy(sortExpr, asc(stocks.id))
+    .limit(limit).offset(offset);
 
-  // 重複除去（stockFinancials/stockScoresの複数レコードによるJOIN重複を排除）
-  const seen = new Set<number>();
-  const unique = rows.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; }).slice(0, limit);
+  const cardBenefits = await loadCardBenefits(db, rows.map(r => r.id));
 
-  // 優待情報の取得
-  const stockIds = unique.map(r => r.id);
-  const benefits = stockIds.length > 0
-    ? await db.select({ stockId: yutaiBenefits.stockId, shortSummary: yutaiBenefits.shortSummary, recordMonth: yutaiBenefits.recordMonth, genreId: yutaiBenefits.genreId })
-        .from(yutaiBenefits).where(inArray(yutaiBenefits.stockId, stockIds))
-    : [];
-  const apiGenres = await db.select({ id: yutaiGenres.id, name: yutaiGenres.name }).from(yutaiGenres);
-  const apiGenreMap = new Map(apiGenres.map(g => [g.id, g.name]));
-
-  const result = unique.map(row => {
-    const rowBenefits = benefits.filter(b => b.stockId === row.id);
-    const months = [...new Set(rowBenefits.map(b => b.recordMonth))].sort((a, b) => a - b);
-    const descs = publicSummaries(rowBenefits).join(" / ");
-    const genreNames = [...new Set(rowBenefits.map(b => apiGenreMap.get(b.genreId)).filter(Boolean))];
+  const items = rows.map(row => {
+    const b = cardBenefits.get(row.id);
     return {
       code: row.code, name: row.name, market: row.market, sector: row.sector,
       price: row.price, per: row.per, pbr: row.pbr, dividendYield: row.dividendYield,
       yutaiYield: row.yutaiYield, rsi14: row.rsi14,
       fundamentalScore: row.fundamentalScore, technicalScore: row.technicalScore, totalScore: row.totalScore,
-      benefitMonths: months, benefitSummary: descs, genres: genreNames,
+      benefitMonths: b?.benefitMonths ?? [], benefitSummary: b?.benefitSummary ?? "", genres: b?.genres ?? [],
     };
   });
 
-  return c.json(result);
+  // 応答は裸の配列から { items, total, offset, limit } に変えた。総件数と
+  // 現在位置は配列では表現できず、この API の利用者は同ファイル内の
+  // スクリーニングページのクライアント JS だけ (README でも内部利用と明記)。
+  return c.json({ items, total, offset, limit });
 });
 
 // ===== HTML Helpers =====
@@ -302,10 +378,13 @@ h3{font-family:var(--font-display);font-size:20px;font-weight:700;color:var(--te
 
 /* === Pagination === */
 .pagination{display:flex;justify-content:center;align-items:center;gap:6px;margin-top:32px;padding-top:24px;border-top:2px solid var(--border);flex-wrap:wrap}
-.pagination a,.pagination span{min-height:var(--tap);min-width:var(--tap);padding:0 16px;font-family:var(--font-mono);font-size:15px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;border:2px solid var(--border);border-radius:var(--radius)}
-.pagination a{background:var(--bg);color:var(--text)}
-.pagination a:hover{background:var(--bg-invert);color:var(--text-invert);text-decoration:none}
-.pagination span{background:var(--bg-invert);color:var(--text-invert)}
+/* クライアント描画のページ送りは器を先に置くので、中身が空なら罫線ごと消す */
+.pagination:empty{display:none}
+.pagination a,.pagination span,.pagination button{min-height:var(--tap);min-width:var(--tap);padding:0 16px;font-family:var(--font-mono);font-size:15px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;border:2px solid var(--border);border-radius:var(--radius)}
+.pagination a,.pagination button{background:var(--bg);color:var(--text);cursor:pointer}
+.pagination a:hover,.pagination button:hover{background:var(--bg-invert);color:var(--text-invert);text-decoration:none}
+/* 件数表示は SSR 側が <span>、クライアント側は表示件数の文言が入るので折返しを許す */
+.pagination span{background:var(--bg-invert);color:var(--text-invert);text-align:center}
 
 /* === Detail score === */
 .detail-scores{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin:24px 0}
@@ -1009,7 +1088,11 @@ app.get("/screening", async (c) => {
   const db = c.get("db");
   const genres = await db.select({ name: yutaiGenres.name, slug: yutaiGenres.slug }).from(yutaiGenres).orderBy(yutaiGenres.name);
 
-  // スコアが存在する銘柄を優先的に取得（NULLS LAST）
+  // 初期表示は /api/screening の1ページ目と同じ条件 (無絞り込み・総合スコア降順・
+  // 先頭 SCREENING_PAGE_SIZE 件)。以降のページ送りはクライアント JS が API で引く。
+  // 第2キーの id は API 側と同じ理由 (同値行の順序を固定してページ跨ぎの
+  // 重複/取りこぼしを防ぐ) で必要。
+  const initialWhere = and(eq(stocks.isActive, true), eq(stocks.isYutai, true));
   const rows = await db.select({
     id: stocks.id, code: stocks.code, name: stocks.name,
     price: stockFinancials.price, per: stockFinancials.per, pbr: stockFinancials.pbr,
@@ -1020,33 +1103,26 @@ app.get("/screening", async (c) => {
   }).from(stocks)
     .leftJoin(stockScores, eq(stockScores.stockId, stocks.id))
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
-    .where(and(eq(stocks.isActive, true), eq(stocks.isYutai, true)))
-    .orderBy(sql`${stockScores.totalScore} DESC NULLS LAST`)
-    .limit(150);
+    .where(initialWhere)
+    .orderBy(sql`${stockScores.totalScore} DESC NULLS LAST`, asc(stocks.id))
+    .limit(SCREENING_PAGE_SIZE);
 
-  // 重複除去
-  const initSeen = new Set<number>();
-  const initUnique = rows.filter(r => { if (initSeen.has(r.id)) return false; initSeen.add(r.id); return true; }).slice(0, 50);
+  // 初期表示の総件数。無絞り込みなので LEFT JOIN 無しの count(*) で足りる
+  // (財務列を WHERE で見ていない = join は行を増減させない)。これでページ表示の
+  // 「N 件中 1〜50 件」が最初の描画から出るため、クライアントは総件数 COUNT を
+  // 絞り込み条件を変えるまで一度も打たなくて済む。
+  const totalRow = await db.select({ c: sql<number>`count(*)` }).from(stocks).where(initialWhere);
+  const initialTotal = Number(totalRow[0]?.c ?? 0);
 
-  const stockIds = initUnique.map(r => r.id);
-  const benefits = stockIds.length > 0
-    ? await db.select({ stockId: yutaiBenefits.stockId, shortSummary: yutaiBenefits.shortSummary, recordMonth: yutaiBenefits.recordMonth, genreId: yutaiBenefits.genreId })
-        .from(yutaiBenefits).where(inArray(yutaiBenefits.stockId, stockIds))
-    : [];
-  const allGenres = await db.select({ id: yutaiGenres.id, name: yutaiGenres.name }).from(yutaiGenres);
-  const genreMap = new Map(allGenres.map(g => [g.id, g.name]));
-
-  const stocksData = initUnique.map(row => {
-    const rowBenefits = benefits.filter(b => b.stockId === row.id);
-    const months = [...new Set(rowBenefits.map(b => b.recordMonth))].sort((a, b) => a - b);
-    const descs = publicSummaries(rowBenefits).join(" / ");
-    const genreNames = [...new Set(rowBenefits.map(b => genreMap.get(b.genreId)).filter(Boolean))];
+  const initialBenefits = await loadCardBenefits(db, rows.map(r => r.id));
+  const stocksData = rows.map(row => {
+    const b = initialBenefits.get(row.id);
     return {
       code: row.code, name: row.name,
       price: row.price, per: row.per, pbr: row.pbr, dividendYield: row.dividendYield,
       yutaiYield: row.yutaiYield, rsi14: row.rsi14,
       fundamentalScore: row.fundamentalScore, technicalScore: row.technicalScore, totalScore: row.totalScore,
-      benefitMonths: months, benefitSummary: descs, genres: genreNames,
+      benefitMonths: b?.benefitMonths ?? [], benefitSummary: b?.benefitSummary ?? "", genres: b?.genres ?? [],
     };
   });
 
@@ -1062,9 +1138,21 @@ app.get("/screening", async (c) => {
 (function(){
   var stocks = ${JSON.stringify(stocksData).replace(/<\//g, "<\\/")};
   var listView = document.getElementById('list-view');
+  var pager = document.getElementById('screening-pager');
   var sortSelect = document.getElementById('sort-select');
   var filterToggle = document.getElementById('filter-toggle');
   var filterDrawer = document.getElementById('filter-drawer');
+
+  // ページング状態。初期表示は SSR が 1 ページ目と総件数を埋め込んでいるので、
+  // ページを開いただけでは API も COUNT も打たない。
+  var limit = ${SCREENING_PAGE_SIZE};
+  var offset = 0;
+  var total = ${initialTotal};
+  // 総件数キャッシュのキー。絞り込み条件のみ (ソートとページ送りは総件数を
+  // 変えないので、そのときは COUNT を要求しない)。初期値は「絞り込み無し」と
+  // 一致させ、SSR が渡した総件数をそのまま信用する。
+  var filterSig = '';
+  var loading = false;
 
   filterToggle.addEventListener('click', function() {
     filterDrawer.classList.toggle('open');
@@ -1129,6 +1217,77 @@ app.get("/screening", async (c) => {
     filterToggle.classList.toggle('has-filter', count > 0);
   }
 
+  // 「N 件中 X〜Y 件を表示」+ 前後のページ送り。
+  // これが無かったため、limit が 100 で打ち止め・offset 無しの API 仕様と合わせて
+  // 101 件目以降に到達する手段が存在しなかった (優待銘柄 1,616 / 権利月3月 848 件)。
+  function renderPager() {
+    if (stocks.length === 0) {
+      // 1 ページ目が空なら器ごと消す (:empty で罫線も消える)。
+      // 2 ページ目以降が空になるのは手打ち URL か、絞り込み後にデータが減った
+      // ときだけなので、件数レンジは出さず戻る手段だけ残す。
+      pager.innerHTML = offset > 0
+        ? '<button type="button" data-offset="' + Math.max(0, offset - limit) + '">← 前</button>'
+        : '';
+      return;
+    }
+    var from = offset + 1;
+    var to = offset + stocks.length;
+    // total が不明なとき (COUNT を打っていない初回以外の異常系) は
+    // 「ちょうど limit 件返ってきた = まだ先がありそう」で次へを出す。
+    var hasNext = total !== null ? to < total : stocks.length === limit;
+    var html = '';
+    if (offset > 0) html += '<button type="button" data-offset="' + Math.max(0, offset - limit) + '">← 前</button>';
+    html += '<span>' + (total !== null ? total + ' 件中 ' : '') + from + '〜' + to + ' 件を表示</span>';
+    if (hasNext) html += '<button type="button" data-offset="' + (offset + limit) + '">次 →</button>';
+    pager.innerHTML = html;
+  }
+
+  function filterParams() {
+    var v = function(id) { return document.getElementById(id).value; };
+    var p = [];
+    if (v('filter-month')) p.push('month=' + encodeURIComponent(v('filter-month')));
+    if (v('filter-genre')) p.push('genre=' + encodeURIComponent(v('filter-genre')));
+    if (v('filter-pbr')) p.push('pbrMax=' + encodeURIComponent(v('filter-pbr')));
+    if (v('filter-rsi')) p.push('rsiMax=' + encodeURIComponent(v('filter-rsi')));
+    if (v('filter-per')) p.push('perMax=' + encodeURIComponent(v('filter-per')));
+    if (v('filter-yield')) p.push('yieldMin=' + encodeURIComponent(v('filter-yield')));
+    return p;
+  }
+
+  // 総件数 (withTotal=1) は**絞り込み条件を変えた最初の1回だけ**要求する。
+  // サーバ側の COUNT は取得クエリと同額の走査を払う (D1 は走査行課金) ため、
+  // ページ送り・ソート変更では取得済みの total を使い回す。
+  function load(nextOffset) {
+    // バッジは通信の成否に関係なく現在の入力を映す (連打で置き去りにしない)
+    updateFilterBadge();
+    if (loading) return;
+    var fp = filterParams();
+    var sig = fp.join('&');
+    var params = fp.slice();
+    var sv = sortSelect.value.split('-');
+    if (sv[0] !== 'total') params.push('sort=' + sv[0]);
+    if (sv[1] === 'asc') params.push('order=asc');
+    params.push('limit=' + limit);
+    if (nextOffset > 0) params.push('offset=' + nextOffset);
+    if (sig !== filterSig || total === null) params.push('withTotal=1');
+    loading = true;
+    fetch('${BP}/api/screening?' + params.join('&'))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        stocks = data.items || [];
+        offset = data.offset || 0;
+        if (data.total !== null && data.total !== undefined) total = data.total;
+        filterSig = sig;
+        renderListView();
+        renderPager();
+      })
+      .catch(function() {
+        listView.innerHTML = '<div class="empty-list">読み込みに失敗しました。時間をおいて再度お試しください。</div>';
+        pager.innerHTML = '';
+      })
+      .then(function() { loading = false; });
+  }
+
   document.getElementById('filter-reset').addEventListener('click', function() {
     document.getElementById('filter-month').value = '';
     document.getElementById('filter-genre').value = '';
@@ -1137,38 +1296,24 @@ app.get("/screening", async (c) => {
     document.getElementById('filter-per').value = '';
     document.getElementById('filter-yield').value = '';
     updateFilterBadge();
-    doSearch();
+    load(0);
   });
 
-  function doSearch() {
-    var month = document.getElementById('filter-month').value;
-    var genre = document.getElementById('filter-genre').value;
-    var pbrMax = document.getElementById('filter-pbr').value;
-    var rsiMax = document.getElementById('filter-rsi').value;
-    var perMax = document.getElementById('filter-per').value;
-    var yieldMin = document.getElementById('filter-yield').value;
-    var sv = sortSelect.value.split('-');
-    var params = [];
-    if (month) params.push('month=' + month);
-    if (genre) params.push('genre=' + genre);
-    if (pbrMax) params.push('pbrMax=' + pbrMax);
-    if (rsiMax) params.push('rsiMax=' + rsiMax);
-    if (perMax) params.push('perMax=' + perMax);
-    if (yieldMin) params.push('yieldMin=' + yieldMin);
-    if (sv[0] !== 'total') params.push('sort=' + sv[0]);
-    if (sv[1] === 'asc') params.push('order=asc');
-    var url = '${BP}/api/screening' + (params.length ? '?' + params.join('&') : '');
-    fetch(url).then(function(r){return r.json()}).then(function(data) {
-      stocks = data;
-      renderListView();
-    });
-    updateFilterBadge();
-  }
+  pager.addEventListener('click', function(e) {
+    var el = e.target;
+    while (el && el !== pager && el.tagName !== 'BUTTON') el = el.parentNode;
+    if (!el || el === pager || !el.getAttribute('data-offset')) return;
+    load(parseInt(el.getAttribute('data-offset'), 10) || 0);
+    window.scrollTo(0, 0);
+  });
 
-  sortSelect.addEventListener('change', doSearch);
-  document.getElementById('screening-search').addEventListener('click', doSearch);
+  // 絞り込み / ソートを変えたら 1 ページ目に戻す (現在位置のまま条件だけ
+  // 変えると「N 件中 300〜349 件」が空になるだけで読者が迷う)。
+  sortSelect.addEventListener('change', function() { load(0); });
+  document.getElementById('screening-search').addEventListener('click', function() { load(0); });
 
   renderListView();
+  renderPager();
 })();
 </script>`;
 
@@ -1218,6 +1363,7 @@ app.get("/screening", async (c) => {
         </div>
       </div>
       <div id="list-view"></div>
+      <div class="pagination" id="screening-pager"></div>
     </div>
     ${screeningJS}
   `, "screening"));

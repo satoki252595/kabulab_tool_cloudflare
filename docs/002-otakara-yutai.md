@@ -165,3 +165,86 @@ GitHub Actions 月次
 - 銘柄詳細: `shortSummary` のみを表示する。`description` は出典サイトの掲載文そのもので、
   規約上の再掲不可のため**公開面には出さない** (推定額の算出など内部処理専用。
   `app.ts` の `publicSummary()` と `public-summary-safety.test.ts` で固定)
+
+## スクリーニングのページングと総件数 (2026-09-12)
+
+### 直った実害
+
+`/api/screening` は `month/genre/perMax/pbrMax/yieldMin/rsiMax/sort/order/limit` の 9 個を
+サーバ側で読み、ジャンル・権利月は `inArray(stocks.id, サブクエリ)` で効かせている
+(**サーバ側フィルタは以前から実在した**。「固定 50 件を返すだけ」という理解は誤り)。
+実害は別のところにあった:
+
+- `limit` は既定 50・**上限 100 にクランプ**され、`offset` / `page` が無かった。
+  優待銘柄の母集団は **1,616**、権利月3月だけで **848 件**。どう絞り込んでも
+  **101 件目以降に到達する手段が無かった**。
+- 総件数を返していないため、読者は「848 件中の 100 件を見ている」ことを知れなかった。
+
+応答は裸の配列から `{ items, total, offset, limit }` に変えた。利用者は同ファイル内の
+スクリーニングページのクライアント JS だけ (README でも内部利用と明記) なので、
+互換シムは置かなかった。
+
+### COUNT の走査コスト (D1 は走査行課金)
+
+同一 WHERE の `COUNT(*)` は**データ取得クエリと同額の走査を払う**。実測 rows_read:
+
+| クエリ | rows_read |
+|--------|-----------|
+| データ取得 (無フィルタ / OFFSET 0) | 6,947 |
+| データ取得 (無フィルタ / OFFSET 1550) | 6,947 |
+| `COUNT` 無フィルタ | 6,947 |
+| `COUNT` 権利月=3 | 13,725 |
+| `COUNT` 全条件 | 13,412 |
+
+OFFSET の走査コストは平坦 (0 と 1550 で同値) なので keyset ページングは採らず素直な
+OFFSET にした。一方 COUNT を毎リクエスト打つと権利月フィルタ時に 13,725 → 27,450 と
+倍になるため、次の 2 段構えにした:
+
+1. **`withTotal=1` を付けた時だけ COUNT を打つ。** クライアントは絞り込み条件を
+   変えた最初の 1 回だけ付ける (ページ送り・ソート変更では総件数が変わらない)。
+   SSR の `/screening` は 1 ページ目と総件数を埋め込むので、ページを開いた時点では
+   API も COUNT も走らない。
+2. **財務列フィルタが無い COUNT は LEFT JOIN を落とす。** LEFT JOIN は行を減らさず、
+   `otakara_stock_financials` / `otakara_stock_scores` の `stock_id` は UNIQUE なので
+   行も増えない → join 無しの `count(*)` と同値。財務列を WHERE で参照するときは
+   落とせないので、その場合だけ `count(distinct)` で join する。
+
+採らなかった案: 「先頭 N 件で打ち切って `N+` と表示」。母集団 1,616 / 権利月3月 848 件
+という規模では「848 件中」と正確に出せる価値の方が大きい。
+
+この設計は `services/otakara-yutai/src/tests/screening-pagination.test.ts` の
+「COUNT の走査コスト設計」で SQL レベルに固定してある (withTotal 無しでは COUNT が
+1 回も発行されないこと、join を落とす/落とさない分岐)。
+
+### 死にコードの除去
+
+`.limit(limit * 3)` + JS 側の重複除去は死にコードだった。`schema.ts` の
+`stockId.unique()` (本番 D1 にも `otakara_stock_financials_stock_id_unique` /
+`otakara_stock_scores_stock_id_unique` が実在) により JOIN で行は増えない。
+さらに OFFSET と併用すると「3 倍引いて先頭 limit 件に切る」ためページ跨ぎの
+取りこぼしを生むので、素直な `.limit(limit).offset(offset)` にした。
+
+ORDER BY には第 2 キーとして `stocks.id` を足した。総合スコアは NULL と同値が
+大量にあり単一キーでは全順序にならず、OFFSET ページングではページ間で順序が
+揺れると行の重複と欠落が起きる。
+
+### 索引: 必要だが本 PR では入れない
+
+EXPLAIN では `idx_core_stocks_active_market` で SEARCH → 権利月/ジャンルの
+サブクエリで `SCAN yutai_benefits` になる。実測どおり 1 クエリ 6,947〜13,725 行を
+走査しており、**`core_stocks.is_yutai` と `yutai_benefits.record_month` に索引が無い**
+(実測で確認)。母集団が増えれば走査行課金に直接跳ねる。
+
+それでも本 PR では追加しない。理由:
+
+- `pnpm db:generate:otakara` は `dialect: "postgresql"` の死んだ経路で、
+  **D1 マイグレーションを 1 行も生成しない**。
+- D1 用は `pnpm db:generate:d1` だが、`drizzle/d1/meta/0008_snapshot.json` は
+  `core_stocks` を **9 列・索引 1 本**と記録しているのに本番は **21 列・索引 3 本**
+  (2026-09-12 の移行 P4a が直接 ALTER で先行適用)。この状態で生成すると
+  `core_stocks` への `ALTER TABLE ADD COLUMN` が 12 本混入し、適用すれば
+  `duplicate column name` で落ちる。`drizzle.d1.config.ts` の冒頭コメントが
+  この手順を警告している。
+
+→ 索引追加は「スナップショットを本番に合わせる」作業と同じ PR でやるべきで、
+別タスクとして切る。
