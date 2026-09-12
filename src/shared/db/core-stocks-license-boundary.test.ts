@@ -1,46 +1,81 @@
 /**
  * `core_stocks` のライセンス境界ガード。
  *
- * `core_stocks` の `market` / `sector17` / `sector33` / `instrument_type` /
- * `license_tag` / `src_source` / `quality` は `personal-only` で、公開面へ
- * **新たに**出してはいけない。
+ * `core_stocks` は 1 行に出所の違う列を混ぜている。JPX「東証上場銘柄一覧
+ * (data_j.xls)」由来の `market` / `sector` / `sector17` / `instrument_type` と、
+ * 判断そのものである `license_tag` / `src_source` / `quality` は
+ * **personal-only** で、公開面 (無認証の HTML / JSON) へ出してはいけない。
+ * EDINET コードリスト由来の `code` / `name` / `edinet_code` / `sector33` は
+ * commercial-ok。行の `license_tag` 1 列では表現できないので、判定は列単位になる。
+ *
+ * ## 2026-09-13 に検査範囲を変えた
+ *
+ * それまで `market` は「以前から公開しているので、止めるのはこのガードの
+ * 仕事ではない」として**検査対象から外していた**。同日、公開面の表示を落とす
+ * 変更 (src/shared/db/public-columns.ts) と一緒に対象へ入れた。
+ * `sector` (JPX 33 業種を src/cron/universe.ts が `sector: r.sector33` で
+ * 書いている) も同じ理由で入れた。
+ *
+ * 逆に **`sector33` は対象から外した**。`core_stocks.sector33` を書いているのは
+ * stockStock の `collectors/edinet_codelist.py` だけで、そこは EDINET
+ * コードリストの「提出者業種」を `license_tag=commercial-ok` として取得している。
+ * 公開面の業種表示はこの列へ切り替えた (= 出してよい列になった)。
+ *
+ * ⚠️ **未了**: stockStock 側の宣言 (`jss_column_license` /
+ * `worker/src/shared/license.ts` の `RESTRICTED_COLUMNS`) は今も `sector33` を
+ * personal-only としている。値の出所 (EDINET) とは食い違っており、**宣言側を
+ * 直すのは stockStock 側のレーン**。ここを commercial-ok として扱う根拠は
+ * 書き込み元であって、まだ宣言ではない。
+ *
+ * ## 何を機械的に見ているのか
  *
  * 危ないのは列名を書いた漏れではなく、**列名を一度も書かない漏れ**である。
  * drizzle の既定 select は全列返しなので、`db.select().from(stocks)` は
- * 宣言に列を足した瞬間から `personal-only` 列を含んだ行を返し始める。
- * 呼び出し側が必要フィールドだけ詰め替えていれば今日は漏れないが、
- * 行を spread した / JSON にそのまま流した 1 箇所で崩れ、型でも lint でも
- * 検出できない。2026-09-12 時点では 12 列すべて本番で全行 NULL なので実害は
- * 無いが、移行 P4b が値を入れた瞬間に経路が開く。
+ * 宣言に列を足した瞬間から personal-only 列を含んだ行を返し始める。
+ * 呼び出し側が必要フィールドだけ詰め替えていれば今日は漏れないが、行を
+ * spread した / JSON にそのまま流した 1 箇所で崩れ、型でも lint でも
+ * 検出できない。そこで 4 つを見る:
  *
- * そこで**クエリの形**を検査する。全列返しになる書き方は drizzle に 2 系統ある
- * ので、両方を非テストのソースから 0 件にする:
- *
- *   1. `.select()` (列指定なし) + `from(stocks)`
- *   2. `db.query.stocks.findFirst/findMany` で `columns` を省いたもの
+ *   1. `.select()` (列指定なし) + `from(stocks)` が**リポジトリ全体で** 0 件。
+ *   2. `db.query.stocks.findFirst/findMany` で `columns` を省いたものが 0 件。
+ *   3. 公開面のファイルに `<なにか>stocks.<personal-only 列>` という
+ *      **修飾つき参照**が無い。
+ *   4. 公開面の関係クエリの `columns` に personal-only 列の**キー**が無い。
  *
  * 2 を落とすと検査は無意味になる。1 だけを見ていた版では
  * services/otakara-yutai/app.ts の銘柄詳細 (`db.query.stocks.findFirst`) が
  * 全列を SSR プロセスへ載せたまま緑になっていた。regex も型も別系統の API には
- * 掛からない。
+ * 掛からない。同じ理由で 4 を足した: `columns: { market: true }` は 2 を通る
+ * (`columns` は書いてある) のに personal-only 列を 1 列だけ確実に持ってくる。
  *
- * 許可リストを持たないのは、例外を 1 件認めるとその 1 件が「行をどこへ渡して
- * いるか」の追跡を永久に要求し、追跡は人にしかできない（= いつか外れる）ため。
- * id だけ要る writer 経路も `select({ id: stocks.id })` と書けば済む。
+ * ### 3 が「修飾つき参照」なのはなぜか
  *
- * **静的検査の限界**: ここで見ているのは書き方だけで、実際に HTML/JSON へ出たか
- * は見ていない。銘柄詳細の出力に `personal-only` の値が出ないことは
+ * 旧版は `\bmarket\b` のような**裸の識別子** grep だった。`market` を対象に
+ * 入れた瞬間にこれは壊れる: select のキー名 (`market: publicMarketColumn`)、
+ * 型注釈 (`market: string | null`)、コメントの説明文が必ず一致するので、
+ * **常時赤か、赤を消すために検査を無意味に緩めるかの二択**になる。
+ * `sector` はさらに悪く、`sectorDaily` / `sectorOpts` / `業種` の説明文と
+ * 衝突する。
+ *
+ * 見たいのは「その列を `core_stocks` から読んでいるか」なので、
+ * `stocks.market` / `coreStocks.market` / `coreSchema.stocks.market` という
+ * **表を修飾した形**だけを拾う。`stockFinancials.marketCap` は
+ * 接尾辞が `stocks` でないので当たらず、`marketCap` は `market` の直後が
+ * 単語文字なので `\b` でも当たらない (どちらも確認済み)。
+ *
+ * ### 許可リストを持たない理由
+ *
+ * 例外を 1 件認めるとその 1 件が「行をどこへ渡しているか」の追跡を永久に
+ * 要求し、追跡は人にしかできない (= いつか外れる)。id だけ要る writer 経路も
+ * `select({ id: stocks.id })` と書けば済む。
+ *
+ * ### 静的検査の限界
+ *
+ * ここで見ているのは書き方だけで、実際に HTML/JSON へ出たかは見ていない。
+ * 出力に personal-only の値が出ないこと / 出してよい `sector33` が出ること /
+ * `sector33` が NULL のとき JPX の `sector` へ落ちないことは
  * services/otakara-yutai/src/tests/stock-detail-license.test.ts が
  * 番兵値を DB に入れて実測している。
- *
- * 併せて、公開面のファイルに `personal-only` 列の識別子が現れないことも見る
- * (列を明示して出してしまう素直な漏れ方を塞ぐ)。
- *
- * **`market` は検査対象から外している。** `personal-only` だが銘柄詳細ページ /
- * API が以前から市場区分を表示しており、既存の公開を止めるのはこのガードの
- * 仕事ではない (制約は「新たに出さない」)。ここへ足すなら公開面の表示を
- * 落とす PR と一緒にやること。外してある理由を書かずに消すと、次の人が
- * 「market は personal-only ではない」と読む。
  */
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -51,11 +86,16 @@ import { describe, expect, it } from "vitest";
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
 /**
- * 移行 P4a が足した `personal-only` 列。左が drizzle のプロパティ名、
- * 右が列名。`market` を含めない理由は冒頭コメント。
+ * personal-only 列。左が drizzle のプロパティ名、右が列名 (どちらの綴りで
+ * 書かれても拾う)。**`sector33` は入れない** —— 理由は冒頭コメント。
+ *
+ * `market` と `sector` を入れてよくなったのは、公開面の表示を
+ * src/shared/db/public-columns.ts 経由に寄せたから。ここから消す前に、
+ * 公開面がその列を直接読み始めていないか必ず確かめること。
  */
-const PERSONAL_ONLY_IDENTIFIERS = [
-  "sector33",
+const PERSONAL_ONLY_COLUMNS = [
+  "market",
+  "sector",
   "sector17",
   "instrumentType",
   "instrument_type",
@@ -73,6 +113,11 @@ const PERSONAL_ONLY_IDENTIFIERS = [
  */
 const PUBLIC_SURFACE = [
   "services/rsi-screening/src/services/stock-detail-service.ts",
+  // スクリーニング結果表。`from(stockRsiPercentile).innerJoin(stocks, ...)` と
+  // 書くので `from(stocks)` を探す旧検出器には引っかからず、リストからも
+  // 漏れていた。**`stocks.market` を select している公開面が丸ごと無検査**
+  // だったということ (2026-09-13 に join も検出対象へ入れて発見)。
+  "services/rsi-screening/src/services/screening-service.ts",
   "services/rsi-screening/src/routes/pages.ts",
   "services/swing-trading/src/routes/pages.ts",
   "services/otakara-yutai/app.ts",
@@ -190,6 +235,89 @@ function countUnrestrictedRelationalQueries(source: string): number {
   return count;
 }
 
+/**
+ * `<なにか>stocks.<personal-only 列>` という**修飾つき参照**。
+ *
+ * 裸の識別子 grep にしない理由は冒頭コメント (`market` / `sector` を対象に
+ * 入れると select のキー名・型注釈・説明文が必ず一致して機能しなくなる)。
+ *
+ * 表の側は `.select()` 検出器と同じく**`stocks` で終わる識別子**を拾う。
+ * `import { stocks as coreStocks }` の別名で抜けられないようにするため
+ * (この書き方はリポジトリに実在する)。
+ */
+function findQualifiedPersonalOnlyRefs(source: string): string[] {
+  const code = stripComments(source);
+  const found = new Set<string>();
+  for (const column of PERSONAL_ONLY_COLUMNS) {
+    const re = new RegExp(`\\b\\w*[Ss]tocks\\s*\\.\\s*${column}\\b`, "g");
+    for (const m of code.matchAll(re)) found.add(m[0].replace(/\s+/g, ""));
+  }
+  return [...found].sort();
+}
+
+/**
+ * 関係クエリの**トップレベル `columns` に書かれた personal-only 列のキー**。
+ *
+ * `columns` を書いてあれば `countUnrestrictedRelationalQueries` は 0 を返すので、
+ * `columns: { market: true }` はそこを素通りする。しかも `columns` は
+ * 「この列だけ確実に取ってくる」という宣言なので、全列返しより**狙って**
+ * personal-only を持ってきている。別枠で見る。
+ *
+ * 走査範囲を関係クエリの引数に限るので、ここでは裸のキー名で一致させてよい
+ * (`{ market: true }` の `market` は列名そのもの)。
+ */
+function findPersonalOnlyRelationalColumns(source: string): string[] {
+  const code = stripComments(source);
+  const found = new Set<string>();
+  for (const match of code.matchAll(RELATIONAL_STOCKS_QUERY)) {
+    const open = code.indexOf("{", match.index + match[0].length - 1);
+    if (open === -1) continue;
+    let depth = 0;
+    let end = code.length;
+    for (let i = open; i < code.length; i++) {
+      if (code[i] === "{") depth++;
+      else if (code[i] === "}") {
+        depth--;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    const args = code.slice(open + 1, end);
+    // `columns: { ... }` の中身だけを取る。`with: { benefits: { columns: ... } }`
+    // の内側は別の表なので対象外 —— `columns` の直前がトップレベルかを深さで見る。
+    let nest = 0;
+    for (let i = 0; i < args.length; i++) {
+      const ch = args[i];
+      if (ch === "{" || ch === "[" || ch === "(") nest++;
+      else if (ch === "}" || ch === "]" || ch === ")") nest--;
+      else if (nest === 0 && args.startsWith("columns", i)) {
+        const braceStart = args.indexOf("{", i);
+        if (braceStart === -1) break;
+        let d = 0;
+        let braceEnd = args.length;
+        for (let j = braceStart; j < args.length; j++) {
+          if (args[j] === "{") d++;
+          else if (args[j] === "}") {
+            d--;
+            if (d === 0) {
+              braceEnd = j;
+              break;
+            }
+          }
+        }
+        const body = args.slice(braceStart + 1, braceEnd);
+        for (const column of PERSONAL_ONLY_COLUMNS) {
+          if (new RegExp(`\\b${column}\\s*:`).test(body)) found.add(column);
+        }
+        break;
+      }
+    }
+  }
+  return [...found].sort();
+}
+
 /** 走査対象のソース (テストと型定義は除く)。 */
 function collectSources(dir: string, acc: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -258,7 +386,13 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
   it("core_stocks を引く公開面が PUBLIC_SURFACE に全部載っている", () => {
     // リストへの足し忘れを検査に現れさせる。載っていない公開面は
     // personal-only 列の識別子検査を一切受けていない。
-    const readsStocks = /\bfrom\(\s*(?:\w+\.)?\w*[Ss]tocks\s*\)|\bquery\s*\.\s*stocks\s*\./;
+    // join だけで `core_stocks` を読む公開面も拾う。`from(stocks)` と
+    // `query.stocks.` しか見ていなかった版では
+    // services/rsi-screening/src/services/screening-service.ts
+    // (`from(stockRsiPercentile).innerJoin(stocks, ...)` で `stocks.market` を
+    // select している) がリストから漏れ、無検査のままだった。
+    const readsStocks =
+      /\bfrom\(\s*(?:\w+\.)?\w*[Ss]tocks\s*\)|\b(?:inner|left|right|full)?[Jj]oin\(\s*(?:\w+\.)?\w*[Ss]tocks\s*,|\bquery\s*\.\s*stocks\s*\./;
     const missing = PUBLIC_SURFACE_DIRS.flatMap((dir) => collectSources(join(ROOT, dir)))
       .map((path) => relative(ROOT, path))
       .filter((rel) => !NOT_PUBLIC_SURFACE.test(rel))
@@ -275,12 +409,24 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
     expect(statSync(path).isFile()).toBe(true);
   });
 
-  it.each(PUBLIC_SURFACE)("%s が personal-only 列を参照しない", (rel) => {
-    const code = stripComments(readFileSync(join(ROOT, rel), "utf-8"));
-    const found = PERSONAL_ONLY_IDENTIFIERS.filter((id) =>
-      new RegExp(`\\b${id}\\b`).test(code),
-    );
-    expect(found, `${rel} が personal-only 列を参照しています`).toEqual([]);
+  it.each(PUBLIC_SURFACE)("%s が personal-only 列を修飾つきで読まない", (rel) => {
+    // `stocks.market` / `coreStocks.sector` のような修飾つき参照。
+    // 出してよい列へ切り替えるなら src/shared/db/public-columns.ts 経由で書く。
+    const found = findQualifiedPersonalOnlyRefs(readFileSync(join(ROOT, rel), "utf-8"));
+    expect(
+      found,
+      `${rel} が core_stocks の personal-only 列を直接読んでいます。` +
+        " 公開面の市場区分 / 業種は src/shared/db/public-columns.ts 経由にすること",
+    ).toEqual([]);
+  });
+
+  it.each(PUBLIC_SURFACE)("%s の関係クエリが columns で personal-only を指名しない", (rel) => {
+    // `columns: { market: true }` は「columns を書いてあるか」の検査を通る。
+    const found = findPersonalOnlyRelationalColumns(readFileSync(join(ROOT, rel), "utf-8"));
+    expect(
+      found,
+      `${rel} の db.query.stocks.find* が personal-only 列を columns で指名しています`,
+    ).toEqual([]);
   });
 
   it("検出器が名前を変えただけでは抜けられない", () => {
@@ -327,5 +473,74 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
     expect(countUnrestrictedRelationalQueries("db.query.benefits.findMany({})")).toBe(0);
     // コメント中の例示で落ちない
     expect(countUnrestrictedRelationalQueries("// db.query.stocks.findFirst({}) は禁止")).toBe(0);
+  });
+
+  it("修飾つき参照の検出器が誤検出せず、別名でも抜けられない", () => {
+    // 拾うべきもの
+    expect(findQualifiedPersonalOnlyRefs("stocks.market")).toEqual(["stocks.market"]);
+    expect(findQualifiedPersonalOnlyRefs("coreSchema.stocks.sector")).toEqual(["stocks.sector"]);
+    // 別名 import。この書き方はリポジトリに実在するので、拾えないと無効化される。
+    expect(findQualifiedPersonalOnlyRefs("coreStocks.market")).toEqual(["coreStocks.market"]);
+    expect(findQualifiedPersonalOnlyRefs("schema.coreStocks.quality")).toEqual([
+      "coreStocks.quality",
+    ]);
+    // 改行・空白を挟んだ形
+    expect(findQualifiedPersonalOnlyRefs("stocks\n  .sector17")).toEqual(["stocks.sector17"]);
+
+    // **拾ってはいけないもの**。裸の識別子 grep にすると全部誤検出になり、
+    // 検査が常時赤 → 無意味に緩める、という道をたどる。
+    expect(findQualifiedPersonalOnlyRefs("market: publicMarketColumn,")).toEqual([]);
+    expect(findQualifiedPersonalOnlyRefs("sector: string | null;")).toEqual([]);
+    expect(findQualifiedPersonalOnlyRefs("stockFinancials.marketCap")).toEqual([]);
+    expect(findQualifiedPersonalOnlyRefs("stocks.marketCap")).toEqual([]); // 列自体が無い綴り
+    expect(findQualifiedPersonalOnlyRefs("sectorDaily.sector")).toEqual([]); // 別表
+    expect(findQualifiedPersonalOnlyRefs("marketContext.date")).toEqual([]);
+    // `sector33` は commercial-ok なので対象外 (冒頭コメント)。
+    expect(findQualifiedPersonalOnlyRefs("stocks.sector33")).toEqual([]);
+    // コメント中の例示で落ちない
+    expect(findQualifiedPersonalOnlyRefs("// stocks.market は禁止")).toEqual([]);
+  });
+
+  it("columns 指名の検出器がトップレベルだけを見る", () => {
+    expect(
+      findPersonalOnlyRelationalColumns("db.query.stocks.findFirst({ columns: { market: true } })"),
+    ).toEqual(["market"]);
+    expect(
+      findPersonalOnlyRelationalColumns(
+        "db.query.stocks.findFirst({ columns: { id: true, name: true, sector: true } })",
+      ),
+    ).toEqual(["sector"]);
+    // 出してよい列だけなら通る
+    expect(
+      findPersonalOnlyRelationalColumns(
+        "db.query.stocks.findFirst({ columns: { id: true, sector33: true } })",
+      ),
+    ).toEqual([]);
+    // `with` の内側 (別表の columns) をトップレベルと取り違えない。
+    // yutai_benefits の `description` は別のライセンス境界で、この検査の対象外。
+    expect(
+      findPersonalOnlyRelationalColumns(
+        "db.query.stocks.findFirst({ columns: { id: true }, with: { benefits: { columns: { quality: true } } } })",
+      ),
+    ).toEqual([]);
+    // 他表の関係クエリは対象外
+    expect(
+      findPersonalOnlyRelationalColumns("db.query.benefits.findMany({ columns: { market: true } })"),
+    ).toEqual([]);
+    // コメント中の例示で落ちない
+    expect(
+      findPersonalOnlyRelationalColumns("// db.query.stocks.findFirst({ columns: { market: true } })"),
+    ).toEqual([]);
+  });
+
+  it("フラグを 1 箇所だけで切り替えられる (戻し道が残っている)", () => {
+    // 「元に戻せる」と PR に書いたのに定数が複数箇所に散っていた、を防ぐ。
+    const flagged = collectSources(join(ROOT, "src"))
+      .concat(collectSources(join(ROOT, "services")))
+      .filter((path) => /\bPUBLISH_JPX_DERIVED_COLUMNS\s*=/.test(readFileSync(path, "utf-8")))
+      .map((path) => relative(ROOT, path).split(sep).join("/"));
+    expect(flagged, "定数の定義は 1 ファイルに閉じること").toEqual([
+      "src/shared/db/public-columns.ts",
+    ]);
   });
 });

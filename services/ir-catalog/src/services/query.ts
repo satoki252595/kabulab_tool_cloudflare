@@ -8,12 +8,14 @@ import { and, desc, eq, gte, like, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { disclosures } from "../db/schema.js";
 import { stocks } from "../../../../src/shared/db/core-schema.js";
+import { publicMarketColumn } from "../../../../src/shared/db/public-columns.js";
 import { rowSentiments } from "./sentiment.js";
 
 export interface StockHit {
   code: string;
   name: string;
-  market: string;
+  /** 市場区分。JPX 由来 = personal-only なので既定では常に `null`。 */
+  market: string | null;
   disclosureCount: number;
   latestPubdate: string | null;
 }
@@ -30,7 +32,8 @@ export async function searchStocks(
     .select({
       code: stocks.code,
       name: stocks.name,
-      market: stocks.market,
+      // JPX 由来の市場区分は公開面へ出さない (src/shared/db/public-columns.ts)。
+      market: publicMarketColumn,
       disclosureCount: sql<number>`count(${disclosures.id})`,
       // pubdate は epoch 秒 integer。max() は epoch 秒(number)を返す。
       latestPubdate: sql<number | null>`max(${disclosures.pubdate})`,
@@ -38,7 +41,9 @@ export async function searchStocks(
     .from(stocks)
     .innerJoin(disclosures, eq(disclosures.stockId, stocks.id))
     .where(or(like(stocks.code, `${term}%`), like(stocks.name, `%${term}%`)))
-    .groupBy(stocks.id, stocks.code, stocks.name, stocks.market)
+    // market を select しなくなったので集約キーからも落とす。stocks.id で
+    // 一意なので、この 3 列を足さなくても行数は変わらない。
+    .groupBy(stocks.id, stocks.code, stocks.name)
     .orderBy(desc(sql`max(${disclosures.pubdate})`))
     .limit(limit);
   return rows.map((r) => ({
@@ -73,7 +78,8 @@ export interface DisclosureRow {
 export interface StockTimeline {
   code: string;
   name: string;
-  market: string;
+  /** 市場区分。JPX 由来 = personal-only なので既定では常に `null`。 */
+  market: string | null;
   /** 集計対象期間の開始 (ISO date) */
   since: string;
   /** 月数 */
@@ -116,7 +122,8 @@ export async function getStockTimeline(
       id: stocks.id,
       code: stocks.code,
       name: stocks.name,
-      market: stocks.market,
+      // JPX 由来の市場区分は公開面へ出さない (src/shared/db/public-columns.ts)。
+      market: publicMarketColumn,
     })
     .from(stocks)
     .where(eq(stocks.code, code))

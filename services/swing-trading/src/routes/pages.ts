@@ -12,6 +12,10 @@ import {
   sectorDaily,
 } from "../db/schema.js";
 import { stockCodeSchema } from "../../../../src/shared/jpx/stock-code-schema.js";
+import {
+  publicMarketColumn,
+  publicSectorColumn,
+} from "../../../../src/shared/db/public-columns.js";
 import { dashboardPage } from "../views/dashboard.js";
 import { screeningPage } from "../views/screening.js";
 import { signalsPage } from "../views/signals.js";
@@ -34,6 +38,17 @@ pagesRoute.get("/", async (c) => {
   const macro = macroRows[0] ?? null;
 
   // セクター上位 — 最新 date の rank_1d 昇順で 5 件
+  //
+  // ⚠️ **この面はまだ JPX の 33 業種名を出している。** `swing_sector_daily.sector`
+  // は src/cron/daily.ts が `core_stocks.sector` (= JPX 33 業種) を集約キーに
+  // して書いた**保存済みの派生コピー**で、core_stocks を読んでいないため
+  // src/shared/db/public-columns.ts の切り替えが届かない
+  // (実測: GET /swing-trading/ が 200 / 23,768 B で「銀行業」を 1 件返す)。
+  //
+  // ここで名前だけ伏せるのは採らなかった: 業種名の無い業種ランキングは
+  // 読者にとって意味が無く、機能を壊すだけになる。集約キーを `sector33`
+  // (EDINET 由来) へ移す変更が正しいが、本番の `sector33` は全行 NULL なので
+  // 今やると表が空になる。**`sector33` を充填するレーンと同じ PR で移すこと。**
   const latestSectorDate = macro?.date;
   let topSectors: Array<{ sector: string; pct1d: number; stockCount: number; rank1d: number }> = [];
   if (latestSectorDate) {
@@ -144,7 +159,8 @@ pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c
     .select({
       code: stocks.code,
       name: stocks.name,
-      sector: stocks.sector,
+      // JPX 由来の業種は公開面へ出さない (src/shared/db/public-columns.ts)。
+      sector: publicSectorColumn,
       latestClose: stockIndicators.latestClose,
       pctChange1d: stockIndicators.pctChange1d,
       avgTurnover20d: stockIndicators.avgTurnover20d,
@@ -210,7 +226,8 @@ pagesRoute.get("/signals", zValidator("query", signalsQuerySchema), async (c) =>
     .select({
       code: stocks.code,
       name: stocks.name,
-      sector: stocks.sector,
+      // JPX 由来の業種は公開面へ出さない (src/shared/db/public-columns.ts)。
+      sector: publicSectorColumn,
       pattern: entrySignals.pattern,
       direction: entrySignals.direction,
       entryPrice: entrySignals.entryPrice,
@@ -277,8 +294,9 @@ pagesRoute.get("/stock/:code", zValidator("param", stockParamSchema), async (c) 
       id: stocks.id,
       code: stocks.code,
       name: stocks.name,
-      market: stocks.market,
-      sector: stocks.sector,
+      // JPX 由来は公開面へ出さない (src/shared/db/public-columns.ts)。
+      market: publicMarketColumn,
+      sector: publicSectorColumn,
     })
     .from(stocks)
     .where(eq(stocks.code, code))

@@ -1,6 +1,7 @@
 import { layout, h } from "./layout.js";
 import { BASE_PATH } from "../../base-path.js";
 import { termTip } from "../../../../src/shared/term-tip.js";
+import { publicStockMetaLabel } from "../../../../src/shared/db/public-columns.js";
 import type { OrderTrend, OrderYearPoint } from "../services/order-query.js";
 import type { OverseasTrend } from "../services/overseas-query.js";
 import {
@@ -198,7 +199,7 @@ export function stockDetailPage(
     <span class="code">${h(stock.code)}</span>
     <h2>${h(stock.name)}</h2>
   </div>
-  <p class="muted" style="font-family:var(--font-mono);font-size:12px">${h(stock.market)}${stock.sector ? " / " + h(stock.sector) : ""} ${statusPill}</p>
+  <p class="muted" style="font-family:var(--font-mono);font-size:12px">${h(publicStockMetaLabel([stock.market, stock.sector]))} ${statusPill}</p>
 
   <div class="section-label">受注高 / 受注残高 の推移</div>
   ${main}

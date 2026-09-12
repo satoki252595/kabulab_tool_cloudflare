@@ -11,6 +11,10 @@ import { and, desc, eq, or } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
+import {
+  publicMarketColumn,
+  publicSectorColumn,
+} from "../../../../src/shared/db/public-columns.js";
 import { yuhoDocuments, overseasSalesFacts } from "../db/schema.js";
 import type { StockHit } from "./order-query.js";
 
@@ -74,8 +78,9 @@ export async function getOverseasTrend(
       id: stocks.id,
       code: stocks.code,
       name: stocks.name,
-      market: stocks.market,
-      sector: stocks.sector,
+      // JPX 由来は公開面へ出さない (src/shared/db/public-columns.ts)。
+      market: publicMarketColumn,
+      sector: publicSectorColumn,
     })
     .from(stocks)
     .where(eq(stocks.id, stockId))
@@ -217,7 +222,7 @@ export interface ScreenOpts {
   maxOverseasRatioPct?: number;
   /** 海外売上高 年率(%) 下限 (未指定なら絞らない) */
   minOverseasCagrPct?: number;
-  /** 業種 (core.stocks.sector) 完全一致で絞る */
+  /** 業種 (公開面が出している業種列。src/shared/db/public-columns.ts) 完全一致で絞る */
   sector?: string;
   // --- ファンダ絞り込み (共有 core.stock_financials。結果表には出さない) ---
   /** 営業利益率 (%) 下限。core.operating_margin は小数 (0.1234=12.34%) */
@@ -313,7 +318,8 @@ export async function screenOverseasGrowth(
       stockId: overseasSalesFacts.stockId,
       code: stocks.code,
       name: stocks.name,
-      sector: stocks.sector,
+      // JPX 由来は公開面へ出さない (src/shared/db/public-columns.ts)。
+      sector: publicSectorColumn,
       fy: overseasSalesFacts.fiscalYearEnd,
       regionKind: overseasSalesFacts.regionKind,
       regionName: overseasSalesFacts.regionName,
@@ -500,7 +506,9 @@ export async function screenOverseasGrowth(
 /** スクリーニング対象になり得る業種一覧 (絞り込みプルダウン用) */
 export async function listSectorsWithOverseas(db: Database): Promise<string[]> {
   const rows = await db
-    .selectDistinct({ sector: stocks.sector })
+    // JPX 由来は公開面へ出さない (src/shared/db/public-columns.ts)。
+    // プルダウンの候補も結果表と同じ列から作る (ズレると絞り込みが空振りする)。
+    .selectDistinct({ sector: publicSectorColumn })
     .from(overseasSalesFacts)
     .innerJoin(stocks, eq(overseasSalesFacts.stockId, stocks.id))
     .where(

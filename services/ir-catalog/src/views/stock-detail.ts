@@ -10,6 +10,7 @@
 import { BASE_PATH } from "../../base-path.js";
 import { layout, h } from "./layout.js";
 import { tagChip, tagChips } from "./tag-chip.js";
+import { publicStockMetaLabel } from "../../../../src/shared/db/public-columns.js";
 import { buffettCodeUrl } from "../services/classify.js";
 import {
   NEGATIVE_TAG_LIST,
@@ -421,7 +422,7 @@ export function stockDetailPage(t: StockTimeline): string {
 <div class="container">
   <p style="margin-bottom:14px"><a href="${BASE_PATH}/" style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted)">← 検索に戻る</a></p>
   <div class="detail-head">
-    <span class="code">${h(t.code)} · ${h(t.market)}</span>
+    <span class="code">${h(publicStockMetaLabel([t.code, t.market], " · "))}</span>
     <h2 style="margin:0">${h(t.name)}</h2>
     <a class="bc-link" href="${h(
       bc

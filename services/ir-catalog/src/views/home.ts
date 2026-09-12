@@ -4,6 +4,7 @@
  */
 import { BASE_PATH } from "../../base-path.js";
 import { layout, h } from "./layout.js";
+import { publicStockMetaLabel } from "../../../../src/shared/db/public-columns.js";
 import { tagChip } from "./tag-chip.js";
 import { TAGS } from "../services/classify.js";
 import type { StockHit } from "../services/query.js";
@@ -39,7 +40,7 @@ function resultsBlock(query: string, results: StockHit[] | null): string {
   const cards = results
     .map(
       (r) => `<a href="${BASE_PATH}/stock/${h(r.code)}">
-      <span class="code">${h(r.code)} · ${h(r.market)}</span>
+      <span class="code">${h(publicStockMetaLabel([r.code, r.market], " · "))}</span>
       <div class="nm">${h(r.name)}</div>
       <span class="meta">開示 ${r.disclosureCount} 件${
         r.latestPubdate ? ` · 最新 ${fmtDate(r.latestPubdate)}` : ""

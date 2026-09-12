@@ -10,6 +10,10 @@ import { and, desc, eq, like, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
+import {
+  publicMarketColumn,
+  publicSectorColumn,
+} from "../../../../src/shared/db/public-columns.js";
 import { yuhoDocuments, orderFacts } from "../db/schema.js";
 
 /** サービスで表示する最大年数 (EDINET 取得可能な過去分の上限と整合) */
@@ -19,7 +23,9 @@ export interface StockHit {
   id: number;
   code: string;
   name: string;
-  market: string;
+  /** 市場区分。JPX 由来 = personal-only なので既定では常に `null`。 */
+  market: string | null;
+  /** 業種。既定では `core_stocks.sector33` (EDINET 提出者業種)。 */
   sector: string | null;
 }
 
@@ -40,8 +46,9 @@ export async function searchStocks(
       id: stocks.id,
       code: stocks.code,
       name: stocks.name,
-      market: stocks.market,
-      sector: stocks.sector,
+      // JPX 由来は公開面へ出さない (src/shared/db/public-columns.ts)。
+      market: publicMarketColumn,
+      sector: publicSectorColumn,
     })
     .from(stocks)
     .where(
@@ -117,8 +124,9 @@ export async function getOrderTrend(
       id: stocks.id,
       code: stocks.code,
       name: stocks.name,
-      market: stocks.market,
-      sector: stocks.sector,
+      // JPX 由来は公開面へ出さない (src/shared/db/public-columns.ts)。
+      market: publicMarketColumn,
+      sector: publicSectorColumn,
     })
     .from(stocks)
     .where(eq(stocks.id, stockId))
@@ -225,7 +233,7 @@ export interface ScreenOpts {
   minOrdersCagrPct?: number;
   /** 受注残高 年率(%) 下限 */
   minBacklogCagrPct?: number;
-  /** 業種 (core.stocks.sector) 完全一致で絞る */
+  /** 業種 (公開面が出している業種列。src/shared/db/public-columns.ts) 完全一致で絞る */
   sector?: string;
   /**
    * ファンダメンタルズ絞り込み (共有 core.stock_financials 由来。Yahoo Finance)。
@@ -298,7 +306,8 @@ export async function screenOrderGrowth(
       stockId: orderFacts.stockId,
       code: stocks.code,
       name: stocks.name,
-      sector: stocks.sector,
+      // JPX 由来は公開面へ出さない (src/shared/db/public-columns.ts)。
+      sector: publicSectorColumn,
       fy: orderFacts.fiscalYearEnd,
       ordersYen: orderFacts.ordersReceivedYen,
       backlogYen: orderFacts.orderBacklogYen,
@@ -471,7 +480,9 @@ export async function listSectorsWithOrders(
   db: Database
 ): Promise<string[]> {
   const rows = await db
-    .selectDistinct({ sector: stocks.sector })
+    // JPX 由来は公開面へ出さない (src/shared/db/public-columns.ts)。
+    // プルダウンの候補も結果表と同じ列から作る (ズレると絞り込みが空振りする)。
+    .selectDistinct({ sector: publicSectorColumn })
     .from(orderFacts)
     .innerJoin(stocks, eq(orderFacts.stockId, stocks.id))
     .where(and(eq(orderFacts.segmentKind, "total"), eq(stocks.isActive, true)));

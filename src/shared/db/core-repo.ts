@@ -14,25 +14,36 @@
 import { and, eq, like, or, sql } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { stocks } from "./core-schema.js";
+import { publicMarketColumn, publicSectorColumn } from "./public-columns.js";
 import { parseStockCode } from "../jpx/stock-code.js";
 
 export interface StockRef {
   id: number;
   code: string;
   name: string;
-  market: string;
+  /**
+   * 市場区分。`PUBLISH_JPX_DERIVED_COLUMNS` が `false` の間は常に `null`
+   * (JPX 由来 = personal-only なので公開面へ出さない)。詳細は
+   * src/shared/db/public-columns.ts。
+   */
+  market: string | null;
+  /** 業種。既定では `core_stocks.sector33` (EDINET 提出者業種)。 */
   sector: string | null;
 }
 
 /** core テーブルにアクセスできれば足りる最小の drizzle db 型 */
 type CoreDb = BaseSQLiteDatabase<"async", unknown, Record<string, unknown>>;
 
+/**
+ * 公開面へ渡してよい列だけを並べた select 形。市場区分と業種は
+ * src/shared/db/public-columns.ts 経由 (JPX 由来を直接読まない)。
+ */
 const STOCK_REF = {
   id: stocks.id,
   code: stocks.code,
   name: stocks.name,
-  market: stocks.market,
-  sector: stocks.sector,
+  market: publicMarketColumn,
+  sector: publicSectorColumn,
 } as const;
 
 /** 正準化したコードで 1 銘柄を引く。形式不正・該当なしは null（捏造しない）。 */

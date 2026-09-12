@@ -18,6 +18,7 @@ import { calcHistoricalVolatility } from "../services/volatility.js";
 import { calcLogReturns, estimateBetaOLS, calcCapmExpectedReturn } from "../services/capm.js";
 import { calcMomentum } from "../services/emh.js";
 import { requireBinding, requireDb } from "./env.js";
+import { publicSectorColumn } from "../../../../src/shared/db/public-columns.js";
 
 /** SSR ページルーター */
 type Bindings = { DB: D1Database };
@@ -247,7 +248,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
             id: stocks.id,
             code: stocks.code,
             name: stocks.name,
-            sector: stocks.sector,
+            // JPX 由来の業種は公開面へ出さない (src/shared/db/public-columns.ts)。
+            sector: publicSectorColumn,
             price: stockFinancials.price,
           })
           .from(stocks)
@@ -280,7 +282,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
       .select({
         code: stocks.code,
         name: stocks.name,
-        sector: stocks.sector,
+        // JPX 由来の業種は公開面へ出さない (src/shared/db/public-columns.ts)。
+        sector: publicSectorColumn,
         marketCap: stockFinancials.marketCap,
         price: stockFinancials.price,
         stockId: stocks.id,
@@ -325,7 +328,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         stockId: stocks.id,
         code: stocks.code,
         name: stocks.name,
-        sector: stocks.sector,
+        // JPX 由来の業種は公開面へ出さない (src/shared/db/public-columns.ts)。
+        sector: publicSectorColumn,
         atrPct: stockIndicators.atrPct,
         price: stockFinancials.price,
       })
@@ -385,7 +389,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         stockId: stocks.id,
         code: stocks.code,
         name: stocks.name,
-        sector: stocks.sector,
+        // JPX 由来の業種は公開面へ出さない (src/shared/db/public-columns.ts)。
+        sector: publicSectorColumn,
         price: stockFinancials.price,
         fetchedAt: stockFinancials.fetchedAt,
       })
