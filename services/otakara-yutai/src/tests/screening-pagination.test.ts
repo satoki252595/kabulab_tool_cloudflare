@@ -302,21 +302,22 @@ describe("ページングが公開文言の関門を迂回しない", () => {
   });
 });
 
+/** 発行 SQL を記録する最小データセット。COUNT / ORDER BY の形を SQL レベルで固定するのに使う。 */
+function recording(): { db: unknown; log: string[] } {
+  const sqlite = new DatabaseSync(":memory:");
+  sqlite.exec(DDL);
+  sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (1, 'QUOカード', 'quo')");
+  sqlite.exec("INSERT INTO core_stocks (id, code, name, market, is_active, is_yutai) VALUES (1, '1001', 'A', 'プライム', 1, 1)");
+  const log: string[] = [];
+  return { db: createD1(sqlite, log), log };
+}
+
 describe("COUNT の走査コスト設計", () => {
   /**
    * 同一 WHERE の COUNT はデータ取得と同額の走査を払う (実測 rows_read:
    * 無フィルタ 6,947 / 権利月フィルタ 13,725)。D1 は走査行課金なので
    * 「毎リクエスト COUNT」は課金を倍にする。ここではその設計を SQL レベルで固定する。
    */
-  function recording(): { db: unknown; log: string[] } {
-    const sqlite = new DatabaseSync(":memory:");
-    sqlite.exec(DDL);
-    sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (1, 'QUOカード', 'quo')");
-    sqlite.exec("INSERT INTO core_stocks (id, code, name, market, is_active, is_yutai) VALUES (1, '1001', 'A', 'プライム', 1, 1)");
-    const log: string[] = [];
-    return { db: createD1(sqlite, log), log };
-  }
-
   const counts = (log: string[]) => log.filter((q) => /count\(/i.test(q));
 
   it("withTotal 無しのリクエストでは COUNT を1回も打たない", async () => {
@@ -339,5 +340,55 @@ describe("COUNT の走査コスト設計", () => {
     const [countSql] = counts(log);
     expect(countSql.toLowerCase()).toContain("left join");
     expect(countSql.toLowerCase()).toContain("distinct");
+  });
+});
+
+describe("ページ跨ぎの順序安定性", () => {
+  /**
+   * OFFSET ページングは「同じ条件なら毎回同じ順序」が前提。総合スコアは NULL と
+   * 同値が大量にあるため単一キーでは全順序にならず、DB がページごとに違う順序を
+   * 返せばページ間で行の重複と欠落が起きる。そこで第2キーに core_stocks.id を
+   * 足してある。
+   *
+   * これを「ページを跨いで実際に取りこぼす」形では固定できない: node:sqlite は
+   * この規模だと第2キー無しでも安定した順序を返してしまい (第2キーを外しても
+   * ページング系のテストは全て通る)、本番 D1 で索引や実行計画が変われば順序が
+   * 揺れるという肝心の差が再現しない。よって**発行 SQL の ORDER BY 句の形**を
+   * 直接固定する。第2キーが消えたらここで落ちる。
+   */
+  const dataOrderBy = (log: string[]): string => {
+    // データ取得クエリ (core_stocks を引き、order by を持つもの) の ORDER BY 句。
+    const q = log.find((s) => /order by/i.test(s) && /from "core_stocks"/i.test(s));
+    expect(q, "データ取得クエリが記録されていない").toBeDefined();
+    const m = /order by (.+?)(?: limit | offset |$)/i.exec(q as string);
+    expect(m, `ORDER BY 句を取り出せない: ${q}`).not.toBeNull();
+    return (m as RegExpExecArray)[1];
+  };
+
+  /** 最後のソートキーが core_stocks.id であることを確かめる (= 全順序になっている)。 */
+  function expectIdTieBreaker(clause: string) {
+    const keys = clause.split(",");
+    expect(keys.length, `第2ソートキーが無い: ${clause}`).toBeGreaterThanOrEqual(2);
+    expect(keys[keys.length - 1]).toContain('"core_stocks"."id"');
+  }
+
+  it("/api/screening の ORDER BY は第2キーに core_stocks.id を持つ", async () => {
+    const { db, log } = recording();
+    await otakaraYutaiApp.request("/api/screening?limit=10&offset=10", {}, { DB: db });
+    expectIdTieBreaker(dataOrderBy(log));
+  });
+
+  it("ソート列を変えても第2キーは付く (どの列も NULL/同値がある)", async () => {
+    for (const sort of ["pbr", "dividend", "yutai", "fundamental", "technical"]) {
+      const { db, log } = recording();
+      await otakaraYutaiApp.request(`/api/screening?sort=${sort}&order=asc&limit=10`, {}, { DB: db });
+      expectIdTieBreaker(dataOrderBy(log));
+    }
+  });
+
+  it("SSR /screening の 1 ページ目も同じ第2キーで並ぶ (API の続きとして読めること)", async () => {
+    const { db, log } = recording();
+    await otakaraYutaiApp.request("/screening", {}, { DB: db });
+    expectIdTieBreaker(dataOrderBy(log));
   });
 });

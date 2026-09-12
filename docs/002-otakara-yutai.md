@@ -220,13 +220,26 @@ OFFSET にした。一方 COUNT を毎リクエスト打つと権利月フィル
 
 `.limit(limit * 3)` + JS 側の重複除去は死にコードだった。`schema.ts` の
 `stockId.unique()` (本番 D1 にも `otakara_stock_financials_stock_id_unique` /
-`otakara_stock_scores_stock_id_unique` が実在) により JOIN で行は増えない。
-さらに OFFSET と併用すると「3 倍引いて先頭 limit 件に切る」ためページ跨ぎの
-取りこぼしを生むので、素直な `.limit(limit).offset(offset)` にした。
+`otakara_stock_scores_stock_id_unique` が実在) により JOIN で行は増えないため、
+重複除去は一度も仕事をしない。素直な `.limit(limit).offset(offset)` にした。
+
+「保険として残す」は採らなかった。**この組み合わせは前提が崩れたときにこそ有害**で、
+OFFSET は重複除去**前**の行数を数えるため、除去した分だけページ境界が実際の
+銘柄数からずれて次ページの先頭を取りこぼす (offset が無かった旧実装では先頭
+ページしか出せなかったのでこのズレは露出しなかった)。前提が成り立つなら無駄・
+崩れるなら有害、という判断で外し、UNIQUE 前提の側をテストで固定した。
 
 ORDER BY には第 2 キーとして `stocks.id` を足した。総合スコアは NULL と同値が
 大量にあり単一キーでは全順序にならず、OFFSET ページングではページ間で順序が
-揺れると行の重複と欠落が起きる。
+揺れると行の重複と欠落が起きる。これは「実際に取りこぼす」形ではテストに
+固定できない (node:sqlite はこの規模だと第 2 キー無しでも安定した順序を返し、
+第 2 キーを外してもページング系のテストは全て通ってしまう。順序が揺れるのは
+索引や実行計画が変わる本番 D1 側)。そのため**発行 SQL の ORDER BY 句の形**を
+`screening-pagination.test.ts` の「ページ跨ぎの順序安定性」で固定してある。
+
+なお同じ「第 2 キーが無い OFFSET ページング」は `/genres/:slug` の SSR ページング
+(`gSortExpr` + `page` パラメータ) にも残っている。本 PR の対象外だが同種の
+ページ間ズレを起こしうるので、`.limit(PAGE_SIZE * 3)` の整理と併せて別タスク。
 
 ### 索引: 必要だが本 PR では入れない
 

@@ -239,8 +239,12 @@ app.get("/api/screening", async (c) => {
   // 1 銘柄 1 行であることは JOIN 先の UNIQUE 制約が保証する (schema.ts の
   // stockId.unique(); 本番 D1 にも otakara_stock_financials_stock_id_unique /
   // otakara_stock_scores_stock_id_unique が実在)。以前あった limit*3 + JS 側の
-  // 重複除去は行が増えない前提では死にコードで、しかも OFFSET と併用すると
-  // 「3倍引いて先頭 limit 件に切る」ためページ跨ぎの取りこぼしを生む。外した。
+  // 重複除去は、この前提が成り立つ限り一度も仕事をしない死にコードだった。
+  // 「保険として残す」も採らない: 前提が崩れて重複行が出たときこそ有害で、
+  // OFFSET は重複除去**前**の行数を数えるため、除去した分だけページ境界が
+  // 実際の銘柄数からずれて次ページの先頭を取りこぼす (offset の無い旧実装では
+  // 先頭ページしか出せなかったのでこのズレは露出しなかった)。前提が成り立つなら
+  // 無駄・崩れるなら有害なので外し、代わりに UNIQUE 前提を上のテストで固定した。
   const rows = await db.select({
     id: stocks.id, code: stocks.code, name: stocks.name, market: stocks.market, sector: stocks.sector,
     price: stockFinancials.price, per: stockFinancials.per, pbr: stockFinancials.pbr,
