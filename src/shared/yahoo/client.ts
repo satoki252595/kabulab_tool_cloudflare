@@ -25,14 +25,19 @@ import type {
 } from "../types.js";
 import { sharedEnv } from "../env.js";
 import { sanitizeBars } from "./bar-sanity.js";
+import { STOCK_CODE_REGEX } from "../jpx/stock-code.js";
 
 /**
  * 日本株銘柄コード。
  * 従来 4 桁数字のみだったが、2024 年から JPX が新規上場銘柄に
  * 「4 桁数字 + 末尾英字 1 文字」(例: 130A ソラコム、141A トライアル) を採用。
  * 末尾英字も Yahoo の `<code>.T` 形式で取得可能。
+ *
+ * パターンは銘柄コード契約の {@link STOCK_CODE_REGEX} を使う。ここに
+ * `/^\d{3}[\dA-Z]$/` を写経していたため、正準パターンの写しが 1 つ増えていた
+ * (financial-math の price-cache.ts は既に共有定数を参照している)。
  */
-const JP_STOCK_PATTERN = /^\d{3}[\dA-Z]$/;
+const JP_STOCK_PATTERN = STOCK_CODE_REGEX;
 /** 指数シンボル (例: ^N225, ^VIX) */
 const INDEX_PATTERN = /^\^[A-Z0-9]+$/;
 /** 先物シンボル (例: NIY=F) */

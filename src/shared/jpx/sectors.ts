@@ -32,7 +32,11 @@ export const JPX_LISTING_URL =
 export interface JpxRow {
   /** JPX ファイル「日付」の基準日 (YYYY-MM-DD) */
   asOf: string;
-  /** 4 桁 0 パディング済み */
+  /**
+   * 正準化 (trim / 全角→半角 / 大文字) 済みの生コード。**妥当性は未検証**で、
+   * 5 文字の種類株や ETF の行もそのまま入る (上記の不変条件)。4 文字契約の
+   * 判定は isListedEquity / isValidStockCode で行う。
+   */
   code: string;
   name: string;
   marketCategory: string;
@@ -95,6 +99,14 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
     defval: "",
   });
 
+  // **不変条件: ここで非正準コードの行を落としてはならない。**
+  // 返した配列の長さが universe.ts:159 でガード (a) の `rawCount` に渡る
+  // (MIN_JPX_ROWS=4000 は「ETF/REIT/PRO/外国株を含む data_j の全行数」の下限)。
+  // パーサ側で 5 文字の種類株や ETF を落とすと rawCount が「正準コード行数」へ
+  // 変質し、部分取得・列崩れの検知器としての意味が失われる。さらに
+  // universe.ts:151 の `rawCodes` から 5 文字コードが消えると
+  // shouldDeactivateUniverseCode の `!rawCodes.has(code)` 節が種類株について
+  // 到達不能になる。母集団の絞り込みは isListedEquity 側の責務。
   const rows: JpxRow[] = [];
   for (const raw of json) {
     const asOf = parseJpxAsOf(raw["日付"]);
@@ -103,13 +115,19 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
     const marketCategory = String(raw["市場・商品区分"] ?? "").trim();
     const sectorRaw = String(raw["33業種区分"] ?? "").trim();
 
-    // コードを正準形 (大文字・半角) に正規化してから 4 桁 0 パディング。
-    // 母集団マスタ (core.stocks の正本) の書込を、読込側 parseStockCode と同じ
-    // 正準形へ揃える (ルール2: フォールバックでなく表現揺れの吸収)。
+    // コードを正準形 (大文字・半角) に正規化するだけに留める。母集団マスタ
+    // (core_stocks の正本) の書込を、読込側 parseStockCode と同じ正準形へ
+    // 揃える (ルール2: フォールバックでなく表現揺れの吸収)。
+    //
+    // 以前あった `.padStart(4, "0")` は削除した。3 文字以下の入力を 4 文字コードに
+    // 「見せて」しまい、列ズレや型崩れで入った短い値が実在しないコード
+    // (例 "720" → "0720") として母集団に入りうる。本番 core_stocks に先頭 0 の
+    // コードは 1 件も無く (leading_zero=0)、JPX 実ファイルにパディングを要する行も
+    // 無いので、実データに対する挙動は変わらない (純粋な捏造防止)。
     if (typeof codeRaw !== "number" && typeof codeRaw !== "string") {
       continue;
     }
-    const code = normalizeStockCode(String(codeRaw)).padStart(4, "0");
+    const code = normalizeStockCode(String(codeRaw));
 
     // "-" は ETF/REIT 等で業種無し → null
     const sector33 = sectorRaw && sectorRaw !== "-" ? sectorRaw : null;
