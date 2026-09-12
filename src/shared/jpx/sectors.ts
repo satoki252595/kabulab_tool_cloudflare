@@ -2,12 +2,13 @@
  * JPX 上場銘柄一覧 (data_j.xlsx) から 33 業種区分を取得するモジュール
  *
  * ソース: https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx
- *   - 毎月第3営業日以降に前月末版へ更新、~838KB
+ *   - 毎月第3営業日以降に前月末版へ更新（2026-08-31 版で約 223KB。
+ *     旧 .xls は約 811KB だったので、サイズで取得失敗を判定しないこと）
  *   - 東証上場銘柄（株式・ETF 等、~4400 行）× 東証 33 業種区分 + 市場区分
  *
- * なぜ JPX XLS か:
+ * なぜ JPX の一覧ファイルか:
  *   - Yahoo JP の per-stock スクレイピングは rate limit で ~100 銘柄でブロックされる
- *   - JPX XLS は 1 回のダウンロードで 4400 銘柄を取れる。レート制限無し、公式、無料
+ *   - JPX の一覧は 1 回のダウンロードで 4400 銘柄を取れる。レート制限無し、公式、無料
  *   - 東証 33 業種区分 (輸送用機器 / 情報・通信業 / 銀行業 等) が正規の形式で取れる
  *
  * 以前は scripts/sync/sectors.ts に CLI スクリプトとしてべた書きされていたが、
@@ -146,7 +147,8 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
       {
         bytes: buf,
         filename: `data_j-${sourceAsOf}.xlsx`,
-        contentType: "application/vnd.ms-excel",
+        contentType:
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       },
     ],
   });

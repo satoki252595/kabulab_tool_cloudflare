@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-JPX 公式の「東証上場銘柄一覧(data_j.xls)」を取得し、検索用の銘柄マスター
+JPX 公式の「東証上場銘柄一覧(data_j.xlsx)」を取得し、検索用の銘柄マスター
 docs/data/stocks.json を生成する。
 
 - 4桁コード + 銘柄名 + 市場区分 を抽出(配列形式でサイズ最小化)。
