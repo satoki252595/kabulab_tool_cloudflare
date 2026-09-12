@@ -19,11 +19,19 @@ function fmtMarketCap(n: number | null | undefined): string {
   return `${oku.toFixed(0)}億円`;
 }
 
+/**
+ * 売上高トレンドのラベル
+ *
+ * null を "—" (データ無し) ではなく「判定不能」と出す。
+ * Yahoo が連結と単体を混ぜて返すため、判定窓に定義切り替えの段差がある銘柄は
+ * トレンドを算出せず null にしている (src/shared/indicators/blue-chip.ts)。
+ * 「横ばい」と読まれると捏造したトレンドを見せるのと同じなので、明示的に分ける。
+ */
 function trendLabel(t: number | null): { label: string; cls: string } {
   if (t === 1) return { label: "上昇基調", cls: "trend-up" };
   if (t === -1) return { label: "下降基調", cls: "trend-down" };
   if (t === 0) return { label: "横ばい", cls: "trend-flat" };
-  return { label: "—", cls: "trend-flat" };
+  return { label: "判定不能", cls: "trend-flat" };
 }
 
 /**
