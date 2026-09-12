@@ -56,9 +56,10 @@
     "services/yuho-quant/data-scripts/backfill.ts",
     // 2 件 — 手動実行 (pnpm exec tsx)。
     "services/yuho-quant/data-scripts/audit-all.ts",
-    // 2 件 — 手動実行 (pnpm exec tsx)。
-    "services/financial-math/scripts/verify-capm-bs.ts",
-    // 1 件 — 手動実行 (pnpm exec tsx)。
-    "services/financial-math/scripts/verify-price-cache.ts"
+    // 2 件 — 手動実行 (pnpm exec tsx)。`createDb(url)` が Neon 期のシグネチャで、
+    // `buildCapmView` に必須の `db` も渡していないので**既に動かない**。
+    // verify-price-cache.ts は同じ理由で消したが、こちらは β/σ のスモークという
+    // 用途がまだ生きているので、D1 バインディング経由へ直す PR まで残してある。
+    "services/financial-math/scripts/verify-capm-bs.ts"
   ]
 }

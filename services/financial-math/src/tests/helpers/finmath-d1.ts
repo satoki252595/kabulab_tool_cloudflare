@@ -181,3 +181,80 @@ export function createFinmathD1(ddl: string = FINMATH_DDL): FinmathD1 {
 export function writeStatements(executed: string[]): string[] {
   return executed.filter((q) => /^\s*(insert|update|delete|replace)\b/i.test(q));
 }
+
+/** シードで使う基準日。`core_stock_financials.data_date` と日足の最終日。 */
+export const SEED_AS_OF = "2026-09-11";
+
+/** 営業日っぽい連続日付 (土日は考えない。本数と順序だけが検証対象) */
+export function seedDate(i: number): string {
+  return new Date(Date.UTC(2026, 4, 1) + i * 86_400_000).toISOString().slice(0, 10);
+}
+
+export interface SeedStock {
+  id: number;
+  code: string;
+  name: string;
+  /** 価格断面を作るか (false = core_stock_financials に行が無い銘柄) */
+  financials?: boolean;
+  price?: number;
+  dividendYieldPct?: number;
+  /** 日足の本数。0 なら日足なし */
+  bars?: number;
+  /** 初日の終値 (以降 step で増える) */
+  close?: number;
+  step?: number;
+}
+
+/**
+ * 004 の読み取り経路に必要な最小データを入れる。
+ *
+ * `marketBars` は `swing_market_context` の行数。β 推定は個別銘柄と市場の
+ * 日付の積集合を使うので、日付は `seedDate(0..n-1)` で銘柄側と揃えてある
+ * (本番では重なるのが 94 日しかない — price-cache.ts のコメント参照)。
+ */
+export function seedFinmathData(
+  sqlite: DatabaseSync,
+  stocks: SeedStock[],
+  marketBars = 0
+): void {
+  const insStock = sqlite.prepare(
+    "INSERT INTO core_stocks (id, code, name, market, sector, is_active) VALUES (?, ?, ?, ?, ?, 1)"
+  );
+  const insFin = sqlite.prepare(
+    "INSERT INTO core_stock_financials (stock_id, price, dividend_yield, market_cap, data_date) VALUES (?, ?, ?, ?, ?)"
+  );
+  const insBar = sqlite.prepare(
+    "INSERT INTO swing_daily_ohlcv (stock_id, date, open, high, low, close, volume, adj) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+  );
+
+  for (const s of stocks) {
+    insStock.run(s.id, s.code, s.name, "プライム", "輸送用機器");
+    if (s.financials !== false) {
+      insFin.run(
+        s.id,
+        s.price ?? 1000,
+        s.dividendYieldPct ?? 2.5,
+        1.0e12,
+        SEED_AS_OF
+      );
+    }
+    const bars = s.bars ?? 0;
+    const base = s.close ?? 1000;
+    const step = s.step ?? 3;
+    for (let i = 0; i < bars; i++) {
+      // 単調増加のままだとボラが 0 に近づいて σ/β が退化するのでばらす
+      const close = Math.round((base + step * i + (i % 4) * 1.5) * 100) / 100;
+      insBar.run(s.id, seedDate(i), close, close * 1.01, close * 0.99, close, 1000, close);
+    }
+  }
+
+  if (marketBars > 0) {
+    const insMkt = sqlite.prepare(
+      "INSERT INTO swing_market_context (date, nikkei_close, nikkei_pct, judgment, judgment_reason) VALUES (?, ?, ?, 'GO', 'テスト')"
+    );
+    for (let i = 0; i < marketBars; i++) {
+      const close = Math.round((40000 + i * 55 + (i % 5) * 20) * 100) / 100;
+      insMkt.run(seedDate(i), close, 0.1);
+    }
+  }
+}

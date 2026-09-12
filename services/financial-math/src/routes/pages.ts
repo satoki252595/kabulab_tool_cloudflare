@@ -37,9 +37,17 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
   const { code } = c.req.valid("query");
   let stockContext: DcfStockContext | null = null;
   // CLAUDE.md ルール1: ダミーデフォルト値を埋めない。
-  // 銘柄プリフィルで Yahoo から実値が取れた場合のみセット、それ以外は null。
+  // 銘柄プリフィルで D1 の断面から実値が取れた場合のみセット、それ以外は null。
   // View 側で null のときは input value="" で空欄表示し、ユーザーに手動入力を促す。
   let presetDividend: number | null = null;
+  /**
+   * プリフィルできなかった理由。
+   *
+   * ここは以前 `catch {}` で、取得失敗が**何も表示されないまま**フォームが
+   * 空欄で出ていた (真の silent catch 2 箇所のうちの 1 つ)。ユーザからは
+   * 「銘柄コードを入れたのに何も起きない」としか見えない。
+   */
+  let prefillNotice: string | null = null;
   // 要求リターン (k) と成長率 (g) は「Gordon モデルの計算前提として使用者が決める値」で、
   // 銘柄固有値ではない。フォーム再描画時の initial state として一般的な値を残す
   // (k=7% は東証長期平均、g=3% は日本企業の中期トレンド)。UI で根拠を明記している。
@@ -49,7 +57,7 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
   if (code) {
     const db = createDb(requireDb(c));
     try {
-      // finmath キャッシュ (Yahoo 二次利用) で 1414 等の otakara 未登録銘柄も対応
+      // core_stock_financials の断面を読む (1414 のような優待なし銘柄も含む)
       const ctx = await getPriceContext(db, code);
       // 無配銘柄判定: Yahoo の dividendYield が null/0 なら estimatedDividend も null
       const isNonDividend = ctx.estimatedDividend === null || ctx.estimatedDividend <= 0;
@@ -65,10 +73,10 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
       if (!isNonDividend && ctx.estimatedDividend !== null) {
         presetDividend = Math.round(ctx.estimatedDividend * 100) / 100;
       }
-      // 無配 / Yahoo 取得失敗時は presetDividend は null のまま → input 空欄
-    } catch {
-      // Yahoo 404 / 不正コード等は静かに stockContext=null のままにする
-      // (フォームのプリフィルは出来ないが画面自体は描画する)
+      // 無配時は presetDividend は null のまま → input 空欄
+    } catch (e) {
+      // 不正コード / 断面未登録。画面自体は描画するが、**理由は必ず出す**。
+      prefillNotice = `銘柄 ${code} のプリフィルができません: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -78,7 +86,7 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
         code,
         mode: "gordon",
         expectedDividend: presetDividend,
-        // GET 時に Yahoo prefill が走った場合のみ「自動」バッジを出す
+        // GET 時に断面からのプリフィルが走った場合のみ「自動」バッジを出す
         expectedDividendAutoFilled: presetDividend !== null && presetDividend > 0,
         requiredReturnPct: presetK,
         growthRatePct: presetG,
@@ -90,6 +98,7 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
       twoStageResult: null,
       currentPrice: stockContext?.currentPrice ?? null,
       error: null,
+      infoNotice: prefillNotice,
     })
   );
 });
@@ -120,10 +129,12 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
   const { code } = c.req.valid("query");
   let stockContext: BsStockContext | null = null;
   // CLAUDE.md ルール1: spot=1000, strike=1000, vol=30 等のダミー値を埋めない。
-  // 銘柄プリフィル時のみ Yahoo の実値を入れる。それ以外は null = フォーム空欄。
+  // 銘柄プリフィル時のみ D1 の実値を入れる。それ以外は null = フォーム空欄。
   let presetSpot: number | null = null;
   let presetStrike: number | null = null;
   let presetVolPct: number | null = null;
+  /** プリフィルできなかった理由。以前は `catch {}` で無言だった (silent catch)。 */
+  let prefillNotice: string | null = null;
 
   if (code) {
     const db = createDb(requireDb(c));
@@ -140,6 +151,9 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
         name: priceCtx.name ?? priceCtx.code,
         currentPrice: price,
         historicalVolatility: histVol?.annualizedVolatility ?? null,
+        volSampleSize: histVol?.sampleSize ?? null,
+        priceAsOf: priceCtx.asOf,
+        seriesAsOf: ohlcv.length > 0 ? ohlcv[ohlcv.length - 1].date : null,
       };
       if (price !== null && Number.isFinite(price) && price > 0) {
         presetSpot = Math.round(price * 100) / 100;
@@ -148,8 +162,8 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
       if (histVol) {
         presetVolPct = Math.round(histVol.annualizedVolatility * 1000) / 10;
       }
-    } catch {
-      // Yahoo 404 / 不正コード等は静かに stockContext=null のままにする
+    } catch (e) {
+      prefillNotice = `銘柄 ${code} のプリフィルができません: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -159,7 +173,7 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
         code,
         spot: presetSpot,
         strike: presetStrike,
-        // GET 時に Yahoo prefill が走った場合のみ「自動」バッジ
+        // GET 時に断面からのプリフィルが走った場合のみ「自動」バッジ
         spotAutoFilled: presetSpot !== null && presetSpot > 0,
         strikeAutoFilled: presetStrike !== null && presetStrike > 0,
         volAutoFilled: presetVolPct !== null && presetVolPct > 0,
@@ -172,6 +186,7 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
       impliedVolatility: null,
       ivUnavailableReason: null,
       error: null,
+      infoNotice: prefillNotice,
     })
   );
 });
@@ -179,8 +194,8 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
 // =============================================================================
 // GET /emh?type=momentum&... — EMH アノマリースクリーニング
 // =============================================================================
-// DCF/CAPM/BS は finmath.price_snapshot + .daily_ohlcv (Yahoo 二次利用) で
-// 個別銘柄を lazy-fetch する。EMH は「横断スクリーニング」のため母集団が入力。
+// DCF/CAPM/BS は core_stock_financials (断面) と swing_daily_ohlcv (日足) を
+// 銘柄 1 件ぶん読む。EMH は「横断スクリーニング」のため母集団が入力。
 //
 // 母集団は設計選択肢 (b) を採用済み: core.stocks を東証内国普通株
 // (共有4文字コード、~3,700) に
@@ -476,13 +491,16 @@ export async function buildCapmView(input: CapmViewInput): Promise<Parameters<ty
     // ここで初めてバインディングを要求する（code 無しなら DB に触らない）
     const db = createDb(requireBinding(input.db, "DB"));
     try {
-      // finmath キャッシュ (Yahoo 二次利用) で otakara 未登録銘柄も対応
+      // core_stock_financials の断面を読む (日次 sync が writer)。
+      // is_active=1 の 3,715 銘柄を完全被覆しているので 1414 のような
+      // 優待なし銘柄も取れる。GET が Yahoo を叩くことも書き込むことも無い。
       const priceCtx = await getPriceContext(db, input.code);
       stockContext = {
         code: priceCtx.code,
         name: priceCtx.name ?? priceCtx.code,
         currentPrice: priceCtx.price,
         marketCap: priceCtx.marketCap,
+        priceAsOf: priceCtx.asOf,
       };
 
       if (input.mode === "auto") {
@@ -538,9 +556,16 @@ export async function buildCapmView(input: CapmViewInput): Promise<Parameters<ty
  * これは otakara-yutai がスクレイプした銘柄(~1,600件)に限定されており、
  * 1414 などの未登録銘柄では 0 件しか集まらず β 推定が失敗した。
  *
- * 新実装: 対象銘柄 OHLCV と ^N225 OHLCV を Yahoo Chart API から finmath
- * キャッシュ経由で取得 (= 二次利用)。日付整合後の単純リターンで OLS。
- * 市場の定義として ^N225 は理論的にも標準的な選択。
+ * 現行: 対象銘柄は `swing_daily_ohlcv`、市場 (^N225) は
+ * `swing_market_context.nikkei_close` を**読むだけ**で取る。日付整合後の
+ * 単純リターンで OLS。市場の定義として ^N225 は理論的にも標準的な選択。
+ *
+ * **サンプル数は以前より減る**。旧実装は GET 中に Yahoo Chart API を叩いて
+ * 2 年ぶん (514 本) 取っていたが、D1 の保持は銘柄側 90 営業日
+ * (実測 avg 89.3 / min 2)、市場側 107 行 (2026-04-12 開始) で、**日付が重なるのは
+ * 94 日**。下限 31 本を満たさない銘柄が 13 件ある (実測 2026-09-13)。
+ * つまり **β の数値そのものが変わる**ので、画面はサンプル数を併記する
+ * (views/capm.ts の「サンプル数」セル)。R2 系列ができたらそちらを読む。
  */
 async function estimateBetaForCode(
   db: ReturnType<typeof createDb>,
@@ -555,13 +580,13 @@ async function estimateBetaForCode(
   if (stockRows.length < 31) {
     return {
       estimate: null,
-      reason: `銘柄の OHLCV が ${stockRows.length} 日分しかなく β 推定不能 (最低 31 日必要)`,
+      reason: `銘柄の日足が ${stockRows.length} 日分しかなく β 推定不能 (最低 31 日必要。D1 の保持は 90 営業日)`,
     };
   }
   if (marketRows.length < 31) {
     return {
       estimate: null,
-      reason: `^N225 の OHLCV が ${marketRows.length} 日分しかなく β 推定不能`,
+      reason: `^N225 の系列が ${marketRows.length} 日分しかなく β 推定不能 (swing_market_context は 2026-04-12 開始)`,
     };
   }
 

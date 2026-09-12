@@ -9,6 +9,19 @@ export interface BsStockContext {
   currentPrice: number | null;
   /** 過去日足から推定したヒストリカルボラ (年率小数) */
   historicalVolatility: number | null;
+  /**
+   * σ の算出に使った日次リターンの本数。
+   *
+   * **出さないと嘘になる**。日足の出所を `finmath_daily_ohlcv` (2y = 514 本) から
+   * `swing_daily_ohlcv` (保持 90 営業日 = avg 89.3 本) へ振り替えたので、
+   * 同じ銘柄でも σ の数値が変わる。ユーザには「値が変わった」としてしか
+   * 見えないため、何本で算出したのかを添える。
+   */
+  volSampleSize: number | null;
+  /** 価格断面の基準日 'YYYY-MM-DD' (core_stock_financials.data_date) */
+  priceAsOf: string | null;
+  /** 日足系列の最新日付 'YYYY-MM-DD'。系列が空なら null */
+  seriesAsOf: string | null;
 }
 
 export interface BsPageProps {
@@ -17,12 +30,12 @@ export interface BsPageProps {
     /**
      * 株価 S (円)。null = 銘柄プリフィルしていない (ダミー値を入れない)。
      * **CLAUDE.md ルール1**: spot=1000 のような根拠不明値は禁止。
-     * 銘柄コードを入れた場合のみ Yahoo の現在株価を実値で入れる。
+     * 銘柄コードを入れた場合のみ D1 の断面の株価を実値で入れる。
      */
     spot: number | null;
     /** 行使価格 K (円)。null = 未入力 (ATM 想定なら spot と同値、ITM/OTM はユーザー指定)。 */
     strike: number | null;
-    /** Yahoo 自動補完フラグ — true なら label 横に「自動」バッジ表示 */
+    /** 断面からの自動補完フラグ — true なら label 横に「自動」バッジ表示 */
     spotAutoFilled?: boolean;
     strikeAutoFilled?: boolean;
     volAutoFilled?: boolean;
@@ -43,7 +56,7 @@ export interface BsPageProps {
   impliedVolatility: number | null;
   ivUnavailableReason: string | null;
   error: string | null;
-  /** 情報通知 (Yahoo 自動補完など) — 青系 notice で表示 */
+  /** 情報通知 (自動補完・プリフィル失敗の理由など) — 青系 notice で表示 */
   infoNotice?: string | null;
 }
 
@@ -61,7 +74,16 @@ export function bsPage(props: BsPageProps): string {
          <span class="code">${h(ctx.code)}</span>
          <span class="name">${h(ctx.name)}</span>
          <span class="meta">現在株価: ${ctx.currentPrice !== null ? Math.round(ctx.currentPrice).toLocaleString("ja-JP") + " 円" : "—"}</span>
+         ${ctx.priceAsOf !== null ? `<span class="meta">株価 as of: ${h(ctx.priceAsOf)}</span>` : ""}
          ${ctx.historicalVolatility !== null ? `<span class="meta">ヒストリカルボラ: ${(ctx.historicalVolatility * 100).toFixed(1)}%</span>` : ""}
+         ${
+           // as_of だけでは「短い系列で計算した」ことが伝わらない。
+           // 日足の出所を 2y の Yahoo キャッシュから保持 90 営業日の
+           // swing_daily_ohlcv へ振り替えた結果、σ の数値そのものが変わる。
+           ctx.volSampleSize !== null
+             ? `<span class="meta">σ サンプル: ${ctx.volSampleSize} 本${ctx.seriesAsOf !== null ? ` (〜${h(ctx.seriesAsOf)})` : ""}</span>`
+             : `<span class="meta">σ サンプル: 不足 (20 本未満)</span>`
+         }
        </div>`
     : "";
 
@@ -77,7 +99,7 @@ export function bsPage(props: BsPageProps): string {
   const guideBlock = `
 <div class="guide">
   <p><strong>はじめての方へ</strong></p>
-  <p>銘柄コードを入れると<strong>${tip("株価", "現在の株価 S。Yahoo から自動取得します。")}</strong>と<strong>${tip("ボラティリティ", "値動きの激しさ。過去の日足から自動計算した実績値 (ヒストリカル σ) を初期値に。")}</strong>を自動入力します。あとは知りたい<strong>${tip("行使価格", "オプションを行使するときの「ストライク」。例: 株価 8,000 円のコール 8,500 円なら、8,500 円で買う権利を意味する。")}</strong>と<strong>${tip("残存日数", "オプションの満期までのカレンダー日数。30日, 90日 などが定番。")}</strong>を入れて計算ボタンを押すだけ。</p>
+  <p>銘柄コードを入れると<strong>${tip("株価", "現在の株価 S。日次同期が取得した株価断面から自動入力します。")}</strong>と<strong>${tip("ボラティリティ", "値動きの激しさ。過去の日足から自動計算した実績値 (ヒストリカル σ) を初期値に。")}</strong>を自動入力します。あとは知りたい<strong>${tip("行使価格", "オプションを行使するときの「ストライク」。例: 株価 8,000 円のコール 8,500 円なら、8,500 円で買う権利を意味する。")}</strong>と<strong>${tip("残存日数", "オプションの満期までのカレンダー日数。30日, 90日 などが定番。")}</strong>を入れて計算ボタンを押すだけ。</p>
   <p>計算結果は <strong>${tip("コール", "「ある価格で買う権利」。株価上昇で価値が上がる。例: 8,000 円コール = 満期時に株価が 8,000 円を超えていれば 差額だけ利益。")}</strong> と <strong>${tip("プット", "「ある価格で売る権利」。株価下落で価値が上がる。下落リスクヘッジに使う。")}</strong> 両方の理論価格と、5つの ${tip("感応度 (Greeks)", "オプション価格が S・σ・時間・金利の変化にどれだけ反応するかの指標 5 つ。")} です。</p>
 </div>
 `;
@@ -108,7 +130,7 @@ export function bsPage(props: BsPageProps): string {
     <div class="advanced-body">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
         <div class="form-field">
-          <label>${tip("株価 S (円)", "現在の株価。銘柄コードを入れると Yahoo の現在株価が自動入力されます。")}${p.spotAutoFilled ? '<span class="auto-badge">自動</span>' : ""}</label>
+          <label>${tip("株価 S (円)", "現在の株価。銘柄コードを入れると日次同期の株価断面から自動入力されます。")}${p.spotAutoFilled ? '<span class="auto-badge">自動</span>' : ""}</label>
           <input type="number" step="0.5" name="spot"
                  value="${p.spot !== null && p.spot > 0 ? h(p.spot) : ""}"
                  placeholder="${ctx ? "" : "銘柄コード入力時は自動取得"}"
