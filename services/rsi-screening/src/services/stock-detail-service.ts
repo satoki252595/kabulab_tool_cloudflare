@@ -39,6 +39,10 @@ export interface StockDetail {
     /** 営業利益率 TTM (0.1234 = 12.34%) */
     operatingMarginTtm: number | null;
     revenueTrend: number | null;
+    /** パーセンタイル母集団に使った終値の本数 (母数 N)。未計算は null */
+    percentileSampleBars: number | null;
+    /** パーセンタイルの算出時刻 (鮮度) */
+    computedAt: Date;
   } | null;
   annualFinancials: Array<{
     fiscalYear: number;
@@ -111,6 +115,8 @@ export async function getStockDetail(db: Database, code: string): Promise<StockD
           isBlueChip: pct.isBlueChip,
           operatingMarginTtm: pct.operatingMarginTtm,
           revenueTrend: pct.revenueTrend,
+          percentileSampleBars: pct.percentileSampleBars,
+          computedAt: pct.computedAt,
         }
       : null,
     annualFinancials: annualRows.map((r) => ({

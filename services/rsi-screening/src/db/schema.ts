@@ -48,6 +48,22 @@ export const stockRsiPercentile = sqliteTable(
     operatingMarginTtm: real("operating_margin_ttm"),
     /** 売上高トレンド (+1=上昇 / 0=横ばい / -1=下降) */
     revenueTrend: integer("revenue_trend"),
+    /**
+     * パーセンタイル母集団に使った終値の本数。
+     *
+     * パーセンタイルは日次 sync が Yahoo の 5y チャートをメモリ上で処理して
+     * 算出する (src/cron/daily.ts)。母集団は「5 年」ではなく「Yahoo が返した
+     * 本数」なので、上場が浅い銘柄は 400 件サンプルの実測で最短 461 本
+     * (≒1.9 年) しかない。同じ「5年パーセンタイル」の列に 1,223 本の銘柄と
+     * 461 本の銘柄が並ぶため、**母数を持たないと読者は深さの差に気づけない**。
+     *
+     * 期間別の分母はこの本数 − 期間長 (rsi10 なら −10)。3 期間で分母が違うが、
+     * 3 列持つのは D1 の列追加コストと UI の情報量に見合わないので、共通の
+     * 元本数 1 列だけを持つ。
+     *
+     * 既存行は sync が 1 周するまで NULL (ルール2: 0 で埋めない)。
+     */
+    percentileSampleBars: integer("percentile_sample_bars"),
     computedAt: integer("computed_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),

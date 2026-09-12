@@ -100,8 +100,14 @@ rsi_percentile
 ├── is_blue_chip             integer(boolean)   # 優良株フラグ
 ├── operating_margin_ttm     real?      # 営業利益率 TTM
 ├── revenue_trend            integer?   # +1=上昇 / 0=横ばい / -1=下降
+├── percentile_sample_bars   integer?   # パーセンタイル母集団に使った終値の本数 (母数 N)
 └── computed_at              integer(timestamp)
 ```
+
+> `percentile_sample_bars` は 2026-09 追加 (drizzle/d1/0009)。「5 年パーセンタイル」の
+> 母集団は Yahoo が返した本数で決まり、実測 400 銘柄で 389 銘柄が 1,223 本、最短は
+> 461 本 (≒1.9 年) と銘柄差がある。順位の意味が銘柄間で違うので UI に母数を併記する。
+> sync が 1 周するまで既存行は NULL (0 で埋めない — ルール2)。
 
 > 過去には `rsi_stock_rsi_history` (5 年分の日次 RSI 時系列) も持っていたが、
 > パーセンタイル算出がメモリ上で完結するため 2026-04 に削除した。
@@ -116,6 +122,14 @@ GET /api/screening
   &sort=percentile     # "percentile" | "rsi" | "marketCap"
   &limit=50&offset=0
 ```
+
+レスポンスは `{ query, count, staleExcluded, freshnessMaxAgeDays, results }`。
+
+**鮮度条件**: `rsi_percentile.computed_at` が `freshnessMaxAgeDays` (7 日) より古い行は
+結果から除外する。日次 sync は平日のみ (`0 21 * * 1-5`) 回るので金→月の 3 日据え置きは
+正常、そこへ run 失敗 1〜2 回ぶんの予備を足した値。除外した件数は `staleExcluded` と
+SSR 画面 (「鮮度不足で除外 N 件」) に出す — 黙って落とすと「該当なし」と「古い行しか
+無い」の区別が読者に付かないため (ルール2)。
 
 ## データ更新フロー
 

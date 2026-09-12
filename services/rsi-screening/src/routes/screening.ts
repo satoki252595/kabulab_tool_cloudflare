@@ -11,11 +11,15 @@ export const screeningRoute = new Hono<{ Bindings: Bindings }>();
 screeningRoute.get("/", zValidator("query", screeningQuerySchema), async (c) => {
   const query = c.req.valid("query");
   const db = createDb(c.env.DB);
-  const results = await screenStocks(db, query);
+  const { rows, staleExcluded, maxAgeDays } = await screenStocks(db, query);
 
+  // 鮮度で落とした件数も返す。API 利用側が「0 件」と「古い行しか無い」を
+  // 区別できないと、上流の同期停止に気づけない。
   return c.json({
     query,
-    count: results.length,
-    results,
+    count: rows.length,
+    staleExcluded,
+    freshnessMaxAgeDays: maxAgeDays,
+    results: rows,
   });
 });

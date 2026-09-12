@@ -17,7 +17,9 @@
  *   Phase 2. マクロコンテキスト (^N225 / ^VIX / ^GSPC / NIY=F + 日経VI)
  *   Phase 3. worker pool で各銘柄: Chart(5y)+QuoteSummary 取得 → 全指標を計算 →
  *            core_financials / rsi_percentile / swing_* を **増分** upsert
- *   Phase 4. セクター集計（当日更新済 indicators から集計・90% カバレッジ guard）
+ *   Phase 4. swing_daily_ohlcv の保持期間 prune（全銘柄を一括。書き込み経路から
+ *            独立させてあるので、同期が止まった銘柄でも保持本数が効く）
+ *   Phase 5. セクター集計（当日更新済 indicators から集計・90% カバレッジ guard）
  *
  * 母集団 (core_stocks) の JPX 同期は xlsx パーサが Node 専用のため
  * `pnpm sync:universe`（src/cron/universe.ts）で別途同期する。
@@ -33,7 +35,7 @@
  *   - マクロ 4 指数のどれかが取れない場合も null で通す
  */
 
-import { sql, eq, and, lt, gte } from "drizzle-orm";
+import { sql, eq, and, gte } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 
 // core スキーマは rsi-screening の定義を流用 (001 が所有・更新)
@@ -128,6 +130,8 @@ interface StockSnapshot {
     rsi120: number | null;
     rsi120Percentile: number | null;
     rsiMinPercentile: number | null;
+    /** パーセンタイル母集団に使った終値の本数 (UI の「母数 N」) */
+    sampleBars: number;
   };
   blueChip: {
     isBlueChip: boolean;
@@ -199,12 +203,17 @@ interface MarketContextDraft {
   charts: Record<MarketContextChartSymbol, MarketContextChartValue>;
   nikkeiVi: number | null;
 }
-/** swing_daily_ohlcv の保持期間 (営業日)。増分 upsert と併せて書込/容量を抑える。 */
+/**
+ * swing_daily_ohlcv の保持本数 (営業日相当)。増分 upsert と併せて書込/容量を抑える。
+ * 適用は Phase 4 の一括 sweep (pruneOhlcvRetention) — 書き込み経路では行わない。
+ */
 const OHLCV_RETENTION_DAYS = 90;
 /** OHLCV insert の D1 bind 上限対策 (adj 追加で 8 列になったので 12 行/文: 8×12=96≤100) */
 const OHLCV_CHUNK = 12;
 /** sector_daily insert の bind 上限対策 (6 列なので 16 行/文) */
 const SECTOR_CHUNK = 16;
+/** prune の DELETE 1 文に載せる stock_id 数 (bind 上限 100: ids + retention で余裕を取る) */
+const OHLCV_PRUNE_ID_CHUNK = 50;
 // -----------------------------------------------------------------------------
 // エントリポイント
 // -----------------------------------------------------------------------------
@@ -540,9 +549,25 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   }
 
   // -----------------------------------------------------------------
-  // Phase 4: セクター集計 (当日更新済 indicators から・90% カバレッジ guard)
+  // Phase 4: OHLCV 保持期間の一括 prune (同期が止まった銘柄も対象)
   // -----------------------------------------------------------------
-  console.info("[sync-daily] Phase 4: セクター集計");
+  console.info("[sync-daily] Phase 4: OHLCV 保持期間の prune");
+  const pruned = await pruneOhlcvRetention(db);
+  if (pruned.prunedStocks > 0) {
+    console.info(
+      `[sync-daily]   保持本数超過: ${pruned.prunedStocks} 銘柄 / ` +
+        `削除 ${pruned.deletedRows} 行 (保持 ${OHLCV_RETENTION_DAYS} 本)`
+    );
+  } else {
+    console.info(
+      `[sync-daily]   保持本数超過なし (保持 ${OHLCV_RETENTION_DAYS} 本)`
+    );
+  }
+
+  // -----------------------------------------------------------------
+  // Phase 5: セクター集計 (当日更新済 indicators から・90% カバレッジ guard)
+  // -----------------------------------------------------------------
+  console.info("[sync-daily] Phase 5: セクター集計");
   const [{ activeCount }] = await db
     .select({ activeCount: sql<number>`count(*)` })
     .from(coreSchema.stocks)
@@ -632,6 +657,12 @@ async function buildSnapshot(
   const raw = await fetchStockRawData(code, "5y");
 
   // -- RSI 時系列 (5y 全量) → percentile —— adjclose ベースで分割歪みを除去 --
+  //
+  // ここで null を落とすのは、RSI が「欠損なしの終値列」を要求するため
+  // (calculateRsiSeries の前提)。ただし落とした分は日付の穴として残らず
+  // **欠損日を無言で詰めて母集団を縮める**ので、何本で算出したのかを
+  // rsiPercentile.sampleBars として持ち UI (母数 N) まで運ぶ。
+  // 「5 年」は名前であって保証ではない: 実測で最短 461 本 (≒1.9 年) の銘柄がある。
   const closes5y = raw.ohlcv
     .map((r) => r.adj ?? r.close)
     .filter((c): c is number => c !== null);
@@ -825,6 +856,7 @@ async function writeStockSnapshot(
       rsi120: snap.rsiPercentile.rsi120,
       rsi120Percentile: snap.rsiPercentile.rsi120Percentile,
       rsiMinPercentile: snap.rsiPercentile.rsiMinPercentile,
+      percentileSampleBars: snap.rsiPercentile.sampleBars,
       isBlueChip: snap.blueChip.isBlueChip,
       operatingMarginTtm: snap.blueChip.operatingMarginTtm,
       revenueTrend: snap.blueChip.revenueTrend,
@@ -839,6 +871,7 @@ async function writeStockSnapshot(
         rsi120: sql`excluded.rsi_120`,
         rsi120Percentile: sql`excluded.rsi_120_percentile`,
         rsiMinPercentile: sql`excluded.rsi_min_percentile`,
+        percentileSampleBars: sql`excluded.percentile_sample_bars`,
         isBlueChip: sql`excluded.is_blue_chip`,
         operatingMarginTtm: sql`excluded.operating_margin_ttm`,
         revenueTrend: sql`excluded.revenue_trend`,
@@ -877,20 +910,12 @@ async function writeStockSnapshot(
         },
       });
   }
-  // 保持期間より古い行を削除
-  if (snap.ohlcv6mo.length > 0) {
-    const cutoffDate =
-      snap.ohlcv6mo[Math.max(0, snap.ohlcv6mo.length - OHLCV_RETENTION_DAYS)]
-        .date;
-    await db
-      .delete(swingSchema.dailyOhlcv)
-      .where(
-        and(
-          eq(swingSchema.dailyOhlcv.stockId, snap.stockId),
-          lt(swingSchema.dailyOhlcv.date, cutoffDate)
-        )
-      );
-  }
+  // 保持期間の prune はここ (書き込み経路) では行わない。
+  // 以前は snap.ohlcv6mo から cutoff 日付を作って銘柄ごとに DELETE していたが、
+  // それだと **Yahoo 取得が失敗し続けている銘柄では prune が一度も走らない**。
+  // 実測で stock_id 640/710/992/1009 が 120→90 短縮前の 120 行を保持したままで、
+  // swing_daily_ohlcv の DISTINCT date が 203 に伸びる直接の原因になっていた。
+  // 全銘柄の一括 sweep (pruneOhlcvRetention) が Phase 4 で面倒を見る。
 
   // --- swing_stock_indicators ---
   await db
@@ -1050,6 +1075,90 @@ async function writeStockSnapshot(
       );
     }
   }
+}
+
+// -----------------------------------------------------------------------------
+// OHLCV 保持期間の一括 prune (書き込み経路から独立)
+//
+// 判定は「銘柄ごとに新しい方から OHLCV_RETENTION_DAYS 本だけ残す」。
+// **is_active や「MAX(date) が N 日以上遅れている」条件は採らない**:
+//   - is_active の所有者は JPX 一覧を読む universe sync で、同期が止まっただけの
+//     銘柄は is_active=true のまま残る (実測 4 銘柄が is_active かどうかは
+//     このレーンからは D1 を読めず未確認)。is_active 条件では取り残される。
+//   - 遅れ日数 N を導入すると「N をいくつにするか」の根拠が別途必要になり、
+//     しかも N 日以内の銘柄の余剰行は放置される。
+// 「新しい方から N 本」なら同期が止まっていても本数が収束し、閾値を 1 つ
+// (保持本数) しか持たなくて済む。
+// -----------------------------------------------------------------------------
+
+/**
+ * 保持本数を超えている銘柄と超過本数を選ぶ (純関数)
+ *
+ * @param counts - 銘柄ごとの OHLCV 行数
+ * @param retentionDays - 残す本数 (営業日ベースの行数)
+ */
+export function selectOverRetentionStocks(
+  counts: { stockId: number; bars: number }[],
+  retentionDays: number
+): { stockId: number; excessBars: number }[] {
+  return counts
+    .filter((r) => r.bars > retentionDays)
+    .map((r) => ({ stockId: r.stockId, excessBars: r.bars - retentionDays }));
+}
+
+/**
+ * swing_daily_ohlcv を「銘柄ごとに新しい方から retentionDays 本」へ揃える。
+ *
+ * 全銘柄を 1 度の GROUP BY で走査するので、同期が止まって Phase 3 に現れない
+ * 銘柄も対象になる (これが書き込み経路内 prune との違い)。
+ *
+ * @returns prune 対象になった銘柄数と削除行数 (D1 REST は changes を返さないので
+ *          超過本数の合計から算出した期待値)
+ */
+export async function pruneOhlcvRetention(
+  db: Db,
+  retentionDays: number = OHLCV_RETENTION_DAYS
+): Promise<{ prunedStocks: number; deletedRows: number }> {
+  const counts = await db
+    .select({
+      stockId: swingSchema.dailyOhlcv.stockId,
+      bars: sql<number>`count(*)`,
+    })
+    .from(swingSchema.dailyOhlcv)
+    .groupBy(swingSchema.dailyOhlcv.stockId)
+    .having(sql`count(*) > ${retentionDays}`);
+
+  const over = selectOverRetentionStocks(counts, retentionDays);
+  if (over.length === 0) return { prunedStocks: 0, deletedRows: 0 };
+
+  for (let i = 0; i < over.length; i += OHLCV_PRUNE_ID_CHUNK) {
+    const ids = over.slice(i, i + OHLCV_PRUNE_ID_CHUNK).map((r) => r.stockId);
+    // ROW_NUMBER で「新しい日付から数えて retentionDays 本目より古い行」を消す。
+    // date 文字列から cutoff を引き算する方式は、欠損日 (取引所休場・取得欠け) で
+    // 残る本数がぶれるので採らない。
+    await db.run(sql`
+      DELETE FROM swing_daily_ohlcv
+      WHERE rowid IN (
+        SELECT rowid FROM (
+          SELECT rowid,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY stock_id ORDER BY date DESC
+                 ) AS rn
+          FROM swing_daily_ohlcv
+          WHERE stock_id IN (${sql.join(
+            ids.map((id) => sql`${id}`),
+            sql`, `
+          )})
+        )
+        WHERE rn > ${retentionDays}
+      )
+    `);
+  }
+
+  return {
+    prunedStocks: over.length,
+    deletedRows: over.reduce((acc, r) => acc + r.excessBars, 0),
+  };
 }
 
 // -----------------------------------------------------------------------------

@@ -72,6 +72,19 @@ function metricBox(label: string, tipKey: string, value: string, unit?: string):
     </div>`;
 }
 
+/**
+ * 母数 (パーセンタイルに使った終値本数) の表示
+ *
+ * 「5 年パーセンタイル」の母集団は Yahoo が返した本数で決まり、銘柄によって
+ * 1,223 本 と 461 本 (≒1.9 年) が混在する。順位の意味が銘柄間で違うので、
+ * パーセンタイルの隣に必ず本数を出す。
+ */
+function fmtSampleBars(bars: number | null): string {
+  // 未計算 (sync が 1 周していない行) は「—」。0 で埋めない (ルール2)。
+  if (bars === null) return "—";
+  return bars.toLocaleString("ja-JP");
+}
+
 /** TTM 営業利益率を %ラベル + 色クラスに整形 */
 function fmtOpMarginTtm(om: number | null): { label: string; cls: string } {
   if (om === null) return { label: "—", cls: "trend-flat" };
@@ -103,6 +116,10 @@ export function stockDetailPage(props: { detail: StockDetail }): string {
             <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);margin-top:4px;text-transform:uppercase;letter-spacing:0.06em">5Y BOTTOM ◯%</div>
           </div>
         </div>
+        <p style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);margin-top:14px;text-transform:uppercase;letter-spacing:0.06em">
+          ${tip("sampleBars", "母数")}: ${h(fmtSampleBars(detail.rsi.percentileSampleBars))} 本 ·
+          ${tip("computedAt", "算出日")}: ${h(detail.rsi.computedAt.toISOString().slice(0, 10))}
+        </p>
       </div>`
     : "";
 
