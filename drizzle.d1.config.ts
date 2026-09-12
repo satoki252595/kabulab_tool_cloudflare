@@ -1,21 +1,23 @@
 /**
- * ⚠️ `core_stocks` は drizzle 管理外で列が先行適用されている。
+ * ⚠️ **D1 に対して `drizzle-kit push` を絶対に使わない。**
  *
- * 2026-09-12 に stockStock 側の移行 P4a が、本番 D1 の `core_stocks` へ
- * 12 列 (instrument_type / sector33 / sector17 / edinet_code / listing_status /
- * listing_date / delisting_date / license_tag / src_source / src_data_date /
- * src_fetched_at / quality) と 2 索引 (idx_core_stocks_active_market /
- * idx_core_stocks_edinet) を直接 ALTER で追加した。
+ * `push` は宣言とライブ DB の差分を取り、drizzle が知らないオブジェクトを
+ * DROP しようとする。`core_stocks` の `idx_core_stocks_edinet` は
+ * `WHERE edinet_code IS NOT NULL` の**部分索引**で、drizzle がこれを完全に
+ * 表現できるとは限らない。表現が 1 文字でもずれれば push は「不要な索引」と
+ * 判断して落としにかかり、EDINET 突合クエリが無言で全表スキャンに落ちる。
+ * 3,700 銘柄 × 日次の経路なので、気付くのは D1 の課金か遅延が出てから。
  *
- * このため drizzle の最新スナップショット (drizzle/d1/meta/0008_snapshot.json) は
- * `core_stocks` を 9 列・索引 1 本として記録したままで、**本番 (21 列・索引 3 本)
- * と乖離している**。
+ * D1 への反映は **`generate` した SQL を読んでから `wrangler d1 execute --file`**
+ * の一本道だけ。`package.json` には `db:push:*` が 5 本残っているが、いずれも
+ * Neon (postgres) 向けで、D1 用の push スクリプトは作らないこと。
  *
- * `src/shared/db/core-schema.ts` にこれらの列を足して `pnpm db:generate:d1` を
- * 実行すると、drizzle は 9 列スナップショットとの差分から
- * `ALTER TABLE core_stocks ADD ...` を生成する。そのまま適用すると
- * `duplicate column name` で落ちるので、**生成された SQL から該当文を手で落とす**
- * こと。詳細は stockStock の docs/CF-CANONICAL-DESIGN.md「P4a 実施記録」。
+ * 本番 `core_stocks` は 21 列・索引 3 本。うち 12 列と 2 索引は stockStock 側の
+ * 移行 P4a (2026-09-12) が直接 ALTER で入れたもので、長らく snapshot が 9 列・
+ * 索引 1 本のまま乖離していた。現在は `src/shared/db/core-schema.ts` に宣言を
+ * 足して snapshot を揃えてある (drizzle/d1/0010)。**生成済みの 0010 は本番へ
+ * 流さない** (適用済み。流すと duplicate column name で落ちる)。
+ * 新規 DB / 適用先ごとの手順は drizzle/d1/README.md を読むこと。
  */
 import { defineConfig } from "drizzle-kit";
 
@@ -28,6 +30,7 @@ import { defineConfig } from "drizzle-kit";
  *
  *   pnpm exec drizzle-kit generate --config=drizzle.d1.config.ts   # SQL 生成
  *   wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql  # 反映
+ *                                                    ↑ 流す前に drizzle/d1/README.md
  *
  * 移行が進むにつれ schema 配列へ各サービスの sqlite スキーマを追加していく。
  */

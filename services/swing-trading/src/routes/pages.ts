@@ -267,7 +267,22 @@ pagesRoute.get("/stock/:code", zValidator("param", stockParamSchema), async (c) 
   const { code } = c.req.valid("param");
   const db = createDb(c.env.DB);
 
-  const [stock] = await db.select().from(stocks).where(eq(stocks.code, code)).limit(1);
+  // 列を明示する。`select()` (列指定なし) は core_stocks の全列 = `personal-only` の
+  // sector33 / sector17 / instrument_type / license_tag / src_source / quality まで
+  // SSR プロセスへ載せてしまう。今は本番で全行 NULL だが、移行 P4b が値を入れた
+  // 時点で漏れうる。詰め替え漏れではなくクエリで落とす。
+  // (src/shared/db/core-stocks-license-boundary.test.ts が列指定なしを禁じている)
+  const [stock] = await db
+    .select({
+      id: stocks.id,
+      code: stocks.code,
+      name: stocks.name,
+      market: stocks.market,
+      sector: stocks.sector,
+    })
+    .from(stocks)
+    .where(eq(stocks.code, code))
+    .limit(1);
   if (!stock) {
     return c.html(stockNotFoundPage(code), 404);
   }

@@ -392,6 +392,13 @@ export async function recoverTransientDailyFailures<T>(
  * 2026-06-29〜07-27 は `adj` 追加 migration が本番未適用のままコードだけ先行し、
  * 毎回ほぼ全銘柄が15分後に失敗した。存在列を SELECT することで同種の適用漏れを
  * 即時かつ具体的に検出する。
+ *
+ * ここで見ている列は `swing_daily_ohlcv.adj` と
+ * `rsi_percentile.percentile_sample_bars` の 2 本だけで、どちらも
+ * `WriteStockSnapshotOptions` のフラグとは無関係に毎回書かれる。②断面
+ * (`core_stock_financials`) を止めてもこの検証の前提は変わらない。逆に、
+ * フラグで止まりうる列をここへ足すと「書かないのに検証だけ落ちる」になるので、
+ * 足すときは無条件に書かれる列かを先に確かめること。
  */
 export async function assertDailySchema(db: Db): Promise<void> {
   try {
@@ -800,11 +807,35 @@ async function buildSnapshot(
 // 各 upsert は冪等なので途中失敗しても次回実行が回収する。
 // -----------------------------------------------------------------------------
 
-async function writeStockSnapshot(
+/**
+ * `writeStockSnapshot` の書き込み範囲スイッチ。
+ *
+ * 移行 P5-b で ②断面 (`core_stock_financials`) の writer が stockStock 側へ移る。
+ * 両者が同じ 1 行 (stock_id ユニーク) を upsert すると、残る値は実行順で決まり、
+ * `fetched_at` と値の組が壊れる（新しい fetched_at に古い価格が乗る）。切替当日に
+ * daily.ts のコードを削るのではなく、**呼び出し側で止められる**形にしておく。
+ */
+export interface WriteStockSnapshotOptions {
+  /**
+   * ②断面 (`core_stock_financials`) を書くか。既定 true = 従来どおり書く。
+   *
+   * 年次 (`core_stock_annual_financials`) はこのフラグの対象外。年次は Yahoo の
+   * annualFinancials が唯一の出所で P5-b の移行対象に入っていないため、ここで
+   * 一緒に止めると「フラグを立てた瞬間に売上推移が止まる」副作用になる。
+   */
+  writeCoreFinancials?: boolean;
+}
+
+// export しているのは src/cron/daily-write-snapshot.test.ts から
+// フラグの両分岐を直接叩くため。呼び出し元は runDailySync 内の 1 箇所だけ。
+export async function writeStockSnapshot(
   db: Db,
   snap: StockSnapshot,
-  existingMaxDate: string | undefined
+  existingMaxDate: string | undefined,
+  options: WriteStockSnapshotOptions = {}
 ): Promise<void> {
+  const { writeCoreFinancials = true } = options;
+
   // --- core_stock_annual_financials ---
   if (snap.annualFinancials.length > 0) {
     await db
@@ -825,40 +856,44 @@ async function writeStockSnapshot(
       });
   }
 
-  // --- core_stock_financials ---
-  await db
-    .insert(coreSchema.stockFinancials)
-    .values({
-      stockId: snap.stockId,
-      price: snap.price,
-      per: snap.per,
-      pbr: snap.pbr,
-      dividendYield: snap.dividendYield,
-      eps: snap.eps,
-      bps: snap.bps,
-      roe: snap.roe,
-      roa: snap.roa,
-      marketCap: snap.marketCap,
-      operatingMargin: snap.operatingMarginTtm,
-      dataDate: snap.dataDate,
-    })
-    .onConflictDoUpdate({
-      target: coreSchema.stockFinancials.stockId,
-      set: {
-        price: sql`excluded.price`,
-        per: sql`excluded.per`,
-        pbr: sql`excluded.pbr`,
-        dividendYield: sql`excluded.dividend_yield`,
-        eps: sql`excluded.eps`,
-        bps: sql`excluded.bps`,
-        roe: sql`excluded.roe`,
-        roa: sql`excluded.roa`,
-        marketCap: sql`excluded.market_cap`,
-        operatingMargin: sql`excluded.operating_margin`,
-        dataDate: sql`excluded.data_date`,
-        fetchedAt: sql`(unixepoch())`,
-      },
-    });
+  // --- core_stock_financials (②断面) ---
+  // 囲むのはこの upsert だけ。上の年次と下の rsi_percentile 以降は
+  // writer 移行の対象外なので、フラグを立てても従来どおり書き続ける。
+  if (writeCoreFinancials) {
+    await db
+      .insert(coreSchema.stockFinancials)
+      .values({
+        stockId: snap.stockId,
+        price: snap.price,
+        per: snap.per,
+        pbr: snap.pbr,
+        dividendYield: snap.dividendYield,
+        eps: snap.eps,
+        bps: snap.bps,
+        roe: snap.roe,
+        roa: snap.roa,
+        marketCap: snap.marketCap,
+        operatingMargin: snap.operatingMarginTtm,
+        dataDate: snap.dataDate,
+      })
+      .onConflictDoUpdate({
+        target: coreSchema.stockFinancials.stockId,
+        set: {
+          price: sql`excluded.price`,
+          per: sql`excluded.per`,
+          pbr: sql`excluded.pbr`,
+          dividendYield: sql`excluded.dividend_yield`,
+          eps: sql`excluded.eps`,
+          bps: sql`excluded.bps`,
+          roe: sql`excluded.roe`,
+          roa: sql`excluded.roa`,
+          marketCap: sql`excluded.market_cap`,
+          operatingMargin: sql`excluded.operating_margin`,
+          dataDate: sql`excluded.data_date`,
+          fetchedAt: sql`(unixepoch())`,
+        },
+      });
+  }
 
   // --- rsi_percentile ---
   await db

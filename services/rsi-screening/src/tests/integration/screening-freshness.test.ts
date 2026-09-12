@@ -32,7 +32,14 @@ CREATE TABLE core_stocks (
   is_active integer NOT NULL DEFAULT 1,
   is_yutai integer NOT NULL DEFAULT 0,
   created_at integer NOT NULL DEFAULT (unixepoch()),
-  updated_at integer NOT NULL DEFAULT (unixepoch())
+  updated_at integer NOT NULL DEFAULT (unixepoch()),
+  -- 移行 P4a が本番へ足した 12 列。全 nullable / default なし (本番 PRAGMA と同じ)。
+  -- ここで使う値は無いが、drizzle の insert は列指定なしで全列を並べるので
+  -- 落とすと "table core_stocks has no column named instrument_type" で落ちる。
+  instrument_type text, sector33 text, sector17 text, edinet_code text,
+  listing_status text, listing_date text, delisting_date text,
+  license_tag text, src_source text, src_data_date text,
+  src_fetched_at integer, quality text
 );
 CREATE TABLE core_stock_financials (
   id integer PRIMARY KEY AUTOINCREMENT,

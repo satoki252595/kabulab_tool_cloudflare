@@ -1382,6 +1382,14 @@ app.get("/stocks/:code", async (c) => {
 
   // otakara は優待サービス。母集団 ~3,700 のうち is_yutai=true のみ詳細表示する
   const stockData = await db.query.stocks.findFirst({
+    // core_stocks も**列ごと引かない**。`db.query` の関係クエリは `columns` を
+    // 省くと全列返しなので、移行 P4a が足した `personal-only` 列
+    // (sector33 / sector17 / instrument_type / license_tag / src_source / quality)
+    // まで SSR プロセスへ載る。2026-09-12 時点は全行 NULL だが P4b が値を入れた
+    // 時点で経路が開く。`.select()` 側の禁止だけでは関係クエリは塞げないので、
+    // ここは `columns` で塞ぐ (禁止は core-stocks-license-boundary.test.ts、
+    // 出力が漏れないことは src/tests/stock-detail-license.test.ts が見ている)。
+    columns: { id: true, name: true, market: true, sector: true },
     where: and(eq(stocks.code, code), eq(stocks.isYutai, true)),
     with: {
       // description (出典サイトの掲載文) は**列ごと引かない**。うっかり

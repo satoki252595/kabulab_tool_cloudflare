@@ -38,6 +38,32 @@ jobs:
         run: pnpm lint
       - name: test
         run: pnpm test
+      # スキーマ宣言と drizzle スナップショットの乖離を落とす。
+      #
+      # 実際に起きた形: 本番 core_stocks は 21 列・索引 3 本なのに
+      # src/shared/db/core-schema.ts は 9 列・索引宣言 0 本、snapshot は 9 列・
+      # 索引 1 本。誰も突き合わせていなかったため 3 者が別々の形を主張していた。
+      #
+      # `drizzle-kit export` の golden diff 方式は採らない。export は
+      # **スキーマファイルから DDL を吐くだけで snapshot を見ない**ので、
+      # 捕まえたい「宣言 ⇄ snapshot の乖離」をそもそも観測しない
+      # (`drizzle-kit check` も journal/snapshot 同士の衝突しか見ない)。
+      # Secret 無しで再生成漏れを強制できるのは generate + git status だけ。
+      #
+      # 注意: これは「宣言 ⇄ snapshot」の一致しか保証しない。本番 D1 との一致は
+      # 手 ALTER をやめることでしか守れない (drizzle/d1/README.md)。
+      - name: drizzle スナップショットの再生成漏れを検出
+        run: |
+          pnpm db:generate:d1
+          if [ -n "$(git status --porcelain drizzle/d1)" ]; then
+            echo "::error::スキーマ宣言と drizzle/d1 のスナップショットが乖離しています。"
+            echo "pnpm db:generate:d1 を実行して生成物をコミットしてください。"
+            echo "生成された SQL は適用前に必ず読むこと (drizzle/d1/README.md)。"
+            git status --porcelain drizzle/d1
+            git --no-pager diff -- drizzle/d1
+            exit 1
+          fi
+          echo "drizzle/d1 に差分はありません"
       # skip されたテストを可視化する。フィクスチャ未取得や条件付き skip は
       # 「緑」に見えてしまい、実際に JPX パーサーの破損を 1 ヶ月見逃した。
       - name: skip されたテストを報告
