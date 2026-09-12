@@ -55,7 +55,7 @@
 | ファイル | 当初 | 実際の原因 | 対応 |
 |---|---|---|---|
 | `services/ir-catalog/data-scripts/backfill.ts` | 26 | (a) 1 件 + (b') 25 件 | 直して検査対象へ |
-| `services/yuho-quant/data-scripts/backfill.ts` | 2 | (a) 1 件 + (b') 1 件 | 直して検査対象へ |
+| `services/yuho-quant/data-scripts/backfill.ts` | 2 | (a) 1 件 + (b') 1 件 | 直して検査対象へ（**実行は無効のまま**。下記 (e')） |
 | `services/yuho-quant/data-scripts/audit-all.ts` | 2 | (a) 1 件 + (c') 1 件 | **削除** |
 | `services/financial-math/scripts/verify-capm-bs.ts` | 2 | (a) 1 件 + (d') 1 件 | 直して検査対象へ |
 
@@ -125,6 +125,61 @@ TS7006 になる。
 という、除外されていたときより悪い状態になる）。一回限りの全数監査で
 package.json からも参照されていないため削除した。
 中身が必要になったら `5e66a3b` から取り出して D1 向けに書き直すこと。
+
+**(e') 「(a) を直せば有効化できる」は yuho backfill には成り立たなかった**
+
+(a) を直すと `pnpm ir:backfill` / `pnpm yuho:backfill` の**無効化 `throw` を外せる**、
+というのが当初の結論だった。ir-catalog 側はそれで正しい
+（日次キャッチアップ `scripts/sync/ir-tdnet.ts` が同じ `ingestBatch` を同じ
+`createD1HttpDb` 経由で呼んでおり、ir の取込は per-statement の update/insert だけ）。
+
+**yuho 側は成り立たない。** `ingestDocument` は facts を
+
+```ts
+await db.batch([db.delete(orderFacts)…, …db.insert(orderFacts)…, …]);
+```
+
+で原子的に置換する（`services/yuho-quant/src/services/ingest.ts`）。ところが
+`createD1HttpDb` は `drizzle(callback, { schema })` の形で **batch callback を
+渡していない**ので、`db.batch()` は
+`TypeError: this.batchCLient is not a function` で落ちる。
+
+型では捕まらない: 受け口の `Database` は D1 バインディング版で `batch` を持ち、
+Node スクリプト側は `as unknown as Database` でキャストして渡す定型なので、
+tsc も eslint も緑になる。
+
+壊れ方が悪い。`db.batch()` の**手前**で `yuho_documents` の upsert
+（`parse_status` / `honbun_file` / `overseas_*` を含む）が既にコミットされており、
+呼び出し側の worker は例外を `console.error` で握って次の書類へ進む。結果として
+本番 D1 に
+
+> `parse_status` が `ok_pattern_*` なのに `yuho_order_facts` が 0 件
+
+の行が残り、次回実行は `existsInDb` が真なので `skipped_existing`
+（`--force` なしでは二度と埋まらない）。**fail-fast を外した結果として
+「黙って壊れる」状態**を作るので、`audit-all.ts` を削除した理由（「型を通しても
+動かないものを通すと除外時より悪い」）とまったく同じ判断が当てはまる。
+
+sibling の `backfill-overseas.ts` が「sqlite-proxy は db.batch 非対応なので
+per-statement の冪等 update/insert で書く」と明記して `ingestDocument` を
+**使っていない**のは、この理由による。
+
+→ 対応: `createD1HttpDb` への差し替え（= 本体を検査対象に戻す）は保ったまま、
+`assertYuhoBackfillSupported()` で**書き込みの前に** fail-fast させた。
+`throw` を `main()` の先頭に直に置くと以降が到達不能になって (b') の幻が復活
+するので、**戻り型 `void` の関数呼び出し**にしてある（到達不能扱いにならず
+絞り込みが働く）。有効化するには次のどちらかが必要:
+
+1. `createD1HttpDb` に batch callback を実装する（D1 REST の複文対応が前提。
+   逐次実行で代替すると delete+insert の原子性が黙って失われるため、
+   フォールバック禁止の観点からそれは選べない）
+2. `backfill-overseas.ts` と同じ per-statement の冪等書込へ書き換える
+
+この境界は `src/shared/db/d1-http-batch-boundary.test.ts` が機械的に見ている
+（sqlite-proxy が本当に batch で落ちること・`ingestDocument` が今も
+`db.batch()` を使うこと・呼び出し側が ingest より手前で fail-fast すること）。
+
+---
 
 **(d') ルートのラッパが Worker バインディングを要求する — `verify-capm-bs.ts`**
 
