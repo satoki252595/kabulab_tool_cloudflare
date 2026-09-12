@@ -195,9 +195,17 @@ export function emhPage(props: EmhPageProps): string {
     }
   </p>
   ${
-    // window が実データの本数を超えている状態を明示する。以前は「該当 0 件」と
-    // 出るだけで、アノマリーが無いのか本数が足りないのかが分からなかった。
-    q.type === "momentum" && props.meta.maxBars > 0 && q.window > props.meta.maxBars
+    // 投影がまだ 1 行も無い状態を明示する。「集計対象 3,715 銘柄 / 該当 0 件」だけ
+    // だと「3,715 件を調べて誰も条件を満たさなかった」と読めてしまうが、実際は
+    // **1 件も調べていない**。0011 を当てた直後や、日次 sync が未走の間に必ず通る。
+    q.type === "momentum" && props.meta.projectedStocks === 0
+      ? `<div class="notice"><strong>モメンタムの投影がまだ作られていません</strong> —
+           集計は日次 sync (平日 21:00 UTC) が銘柄ごとに 1 行へ畳んだ投影 (p_momentum) を
+           読みます。この表が空の間は、条件を満たす銘柄が無いのではなく
+           <strong>まだ 1 件も集計していない</strong>状態です。次の日次 sync で埋まります。</div>`
+      : // window が実データの本数を超えている状態を明示する。以前は「該当 0 件」と
+        // 出るだけで、アノマリーが無いのか本数が足りないのかが分からなかった。
+        q.type === "momentum" && props.meta.maxBars > 0 && q.window > props.meta.maxBars
       ? `<div class="notice"><strong>window=${q.window} は実データの最長 ${props.meta.maxBars} 本を超えています</strong> —
            この条件を満たす銘柄は存在しません。swing.daily_ohlcv の保持は 90 営業日なので、
            <a href="${BASE_PATH}/emh?type=momentum&window=${props.meta.maxBars}&limit=${q.limit}&smallCapMaxOku=${q.smallCapMaxOku}&lowVolMaxAtrPct=${q.lowVolMaxAtrPct}">window=${props.meta.maxBars}</a> まで下げてください。</div>`
