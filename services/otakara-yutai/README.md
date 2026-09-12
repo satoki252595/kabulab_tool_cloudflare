@@ -109,7 +109,22 @@ kabulab は **単一 Cloudflare Worker** (`kabulab-cf`)。`git push origin main`
 | `rsiMax` | number | - | RSI上限 |
 | `sort` | string | `total` | ソート対象 |
 | `order` | `asc` \| `desc` | `desc` | 並び順 |
-| `limit` | number | 50 | 取得件数（最大100） |
+| `limit` | number | 50 | 1ページの件数（最大100） |
+| `offset` | number | 0 | ページ送り（最大100,000） |
+| `withTotal` | `1` | - | 総件数を返す。**絞り込み条件を変えた最初の1回だけ**付ける |
+
+### レスポンス (GET /api/screening)
+
+```json
+{ "items": [ /* 銘柄カード */ ], "total": 848, "offset": 0, "limit": 50 }
+```
+
+- `total` は `withTotal=1` のときだけ数値、それ以外は `null`。
+  同一 WHERE の `COUNT(*)` は**データ取得クエリと同額の走査を払う** (実測 rows_read:
+  無フィルタ 6,947 / 権利月フィルタ 13,725)。D1 は走査行課金なので毎リクエストでは打たない。
+  ページ送りとソート変更では総件数が変わらないため、クライアントは取得済みの値を使い回す。
+- 以前は裸の配列を返していた。offset が無く limit が 100 で打ち止めだったため、
+  優待銘柄 1,616 件 (権利月3月だけで 848 件) に対して 101 件目以降へ到達できなかった。
 
 ## 自動化 (GitHub Actions)
 
