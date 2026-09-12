@@ -7,7 +7,7 @@
  * `?? デフォルト` で消さない。
  */
 import { z } from "zod";
-import { parseStockCode } from "../../../../../src/shared/jpx/stock-code.js";
+import { sourceCodeToTicker } from "../../../../../src/shared/jpx/stock-code.js";
 
 /** documents.json の results[] 1 件 (有報判定に使う項目を中心に型付け) */
 export const edinetDocSchema = z.object({
@@ -126,16 +126,18 @@ export function resolveReportPeriodEnd(doc: EdinetDoc): string | null {
 }
 
 /**
- * EDINET の 5 文字 secCode を core.stocks.code (4 文字ティッカー) に変換する。
- * secCode は「4 文字ティッカー + 末尾チェック 1 文字」。JPX 英数字コード
- * (例: 130A) も "130A0" のように下 4 文字がティッカーになる。4 文字でそのまま
- * 来る場合もある。形式判定・正規化は共有ヘルパに委ね、不確かなら null を返す
- * (ルール2: 埋めずに null を返し、呼び出し側で除外させる)。
+ * EDINET の 5 文字 secCode を core_stocks.code (4 文字ティッカー) に変換する。
+ *
+ * TDnet 側 (`companyCodeToTicker`) と同じ「4 文字 + 検査文字」形式なので、
+ * 共有ヘルパ {@link sourceCodeToTicker} へ委譲して 1 実装に寄せる。以前は
+ * ここで 5 文字を無条件に `slice(0, 4)` していたため `25935` (伊藤園 第1種
+ * 優先株式) を `2593` (同社 普通株) に丸めていた。
+ *
+ * **注意 (未検証):** 末尾検査文字が `'0'` に限られるという実測根拠は TDnet
+ * (`ir_disclosures` 37,641 行) にしか無い。EDINET は生の secCode を保存する表が
+ * 無く分布を取れていないため、仕様上の同形性を根拠に厳格側へ寄せている。
+ * 末尾非 0 の secCode が実在すれば取りこぼす (取り違えより取りこぼしを選ぶ)。
  */
 export function secCodeToTicker(secCode: string | null): string | null {
-  if (!secCode) return null;
-  const s = secCode.trim();
-  if (s.length === 5) return parseStockCode(s.slice(0, 4));
-  if (s.length === 4) return parseStockCode(s);
-  return null;
+  return sourceCodeToTicker(secCode);
 }

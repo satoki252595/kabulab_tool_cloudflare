@@ -30,6 +30,11 @@ export function parseMarginText(text: string): MarginData {
   const rows: MarginRow[] = [];
   for (const mm of text.matchAll(re)) {
     rows.push({
+      // 既知例外 (stockStock docs/CONTRACTS.md 不変条件9): ここは共有ヘルパ
+      // `sourceCodeToTicker` を通していない。5 文字を無条件に先頭 4 文字へ切る
+      // = 種類株を普通株へ取り違える規則そのものだが、末尾 "0" 限定にすると
+      // 信用銘柄の ETF/REIT (検査文字が "0" でない見込み) を大量に落とす恐れが
+      // ある。実 PDF で検査文字の分布を測るまで触らない。
       code: mm[1].slice(0, 4),
       sell: toInt(mm[3]), sell_chg: toInt(mm[4]),
       buy: toInt(mm[5]), buy_chg: toInt(mm[6]),

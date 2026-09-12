@@ -96,7 +96,36 @@ describe("companyCodeToTicker — 推測で補正しない", () => {
     expect(companyCodeToTicker(null)).toBeNull();
     expect(companyCodeToTicker("12")).toBeNull();
     expect(companyCodeToTicker("12-34")).toBeNull();
-    expect(companyCodeToTicker("７２０３")).toBeNull();
+  });
+
+  // 元はこの行が「想定外は null」の一部として `７２０３` → null を要求していた。
+  // 全角→半角は「推測による補正」ではなく「同じ値の表現揺れを揃える処理」で、
+  // 共有ヘルパ normalizeStockCode が仕様として明記している挙動 (ルール2 の明示的な
+  // 例外)。EDINET 側の secCodeToTicker は以前から半角化して受理しており、
+  // TDnet 側だけが弾いていたのが割れの実体だったので、削除せず反転して残す。
+  // 実データへの影響は無い: 本番 ir_disclosures 37,641 行の company_code は
+  // 全件 ASCII (小文字 0 件・全角 0 件。TDnet WebAPI 由来なので当然)。
+  it("全角は表現揺れとして半角化して受理する", () => {
+    expect(companyCodeToTicker("７２０３")).toBe("7203");
+    expect(companyCodeToTicker("１３０ａ")).toBe("130A");
+  });
+
+  // 5 文字を無条件に先頭 4 文字で切ると別の証券に取り違える。
+  // 検査文字が "0" のものだけを 4 文字化する。
+  it("末尾検査文字が 0 でない 5 文字は null (取り違えより取りこぼし)", () => {
+    // 伊藤園第1種優先株式。旧実装は "2593" (同社 普通株) を返しており、
+    // 優先株の開示を普通株のページへ付け替えていた。両方が本番 core_stocks に実在。
+    expect(companyCodeToTicker("25935")).toBeNull();
+    // 実在しないコード "0720" を捏造していた (本番に先頭 0 のコードは 0 件)。
+    expect(companyCodeToTicker("07203")).toBeNull();
+    // ETF 1671 の TDnet 形式。1671 は core_stocks に無い (母集団は内国普通株のみ)
+    // ため、旧実装でも次行の codeToId 突合で落ちていた。取りこぼしは増えない。
+    expect(companyCodeToTicker("16714")).toBeNull();
+  });
+
+  it("1 桁目英字は JPX 付番体系に無いので null", () => {
+    // 旧実装は /^[0-9A-Z]{4,5}$/ だったため "A130" をそのまま通していた。
+    expect(companyCodeToTicker("A130")).toBeNull();
   });
 });
 
