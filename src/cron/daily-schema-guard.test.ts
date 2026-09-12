@@ -12,7 +12,20 @@ import { drizzle } from "drizzle-orm/sqlite-proxy";
 import * as coreSchema from "../shared/db/core-schema.js";
 import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
+import * as projectionSchema from "../shared/db/projection-schema.js";
 import { assertDailySchema } from "./daily.js";
+
+/** 0011 (p_momentum) 適用後の形 */
+const PROJECTION_DDL = `
+CREATE TABLE p_momentum (
+  stock_id integer PRIMARY KEY NOT NULL,
+  as_of text NOT NULL,
+  source_max_date text NOT NULL,
+  bars integer NOT NULL,
+  closes text NOT NULL,
+  computed_at integer NOT NULL DEFAULT (unixepoch())
+);
+`;
 
 /** 0008 (adj) / 0009 (percentile_sample_bars) 適用後の形 */
 const OHLCV_DDL_WITH_ADJ = `
@@ -62,7 +75,7 @@ function makeProxyDb(target: DatabaseSync) {
       const rows = objs.map((o) => Object.values(o));
       return { rows: method === "get" ? (rows[0] ?? []) : rows };
     },
-    { schema: { ...coreSchema, ...rsiSchema, ...swingSchema } }
+    { schema: { ...coreSchema, ...rsiSchema, ...swingSchema, ...projectionSchema } }
   );
 }
 
@@ -77,24 +90,46 @@ afterEach(() => {
 });
 
 describe("assertDailySchema", () => {
-  it("0008 と 0009 が適用済みなら通る", async () => {
-    const db = setup([OHLCV_DDL_WITH_ADJ, PERCENTILE_DDL_WITH_BARS]);
+  it("0008 / 0009 / 0011 が適用済みなら通る", async () => {
+    const db = setup([
+      OHLCV_DDL_WITH_ADJ,
+      PERCENTILE_DDL_WITH_BARS,
+      PROJECTION_DDL,
+    ]);
     await expect(assertDailySchema(db)).resolves.toBeUndefined();
   });
 
   it("0009 未適用なら列名と migration ファイル名を挙げて落ちる", async () => {
     // これが無いと、全銘柄の rsi_percentile upsert が終盤まで走ってから全滅する
     // (adj のときに実際に起きた失敗の形)。
-    const db = setup([OHLCV_DDL_WITH_ADJ, PERCENTILE_DDL_WITHOUT_BARS]);
+    const db = setup([
+      OHLCV_DDL_WITH_ADJ,
+      PERCENTILE_DDL_WITHOUT_BARS,
+      PROJECTION_DDL,
+    ]);
     await expect(assertDailySchema(db)).rejects.toThrow(
       /percentile_sample_bars.*0009_natural_loners\.sql/s
     );
   });
 
   it("0008 未適用なら 0008 を挙げて落ちる", async () => {
-    const db = setup([OHLCV_DDL_WITHOUT_ADJ, PERCENTILE_DDL_WITH_BARS]);
+    const db = setup([
+      OHLCV_DDL_WITHOUT_ADJ,
+      PERCENTILE_DDL_WITH_BARS,
+      PROJECTION_DDL,
+    ]);
     await expect(assertDailySchema(db)).rejects.toThrow(
       /swing_daily_ohlcv\.adj.*0008_young_ben_urich\.sql/s
+    );
+  });
+
+  it("0011 未適用なら p_momentum を挙げて落ちる", async () => {
+    // p_momentum を書くのは Phase 6 (最終フェーズ)。検証が無いと、
+    // 3,700 銘柄を取り終えた後に投影の書込だけが全滅する — adj のときと
+    // 同じ「15 分走ってから落ちる」形になる。
+    const db = setup([OHLCV_DDL_WITH_ADJ, PERCENTILE_DDL_WITH_BARS]);
+    await expect(assertDailySchema(db)).rejects.toThrow(
+      /p_momentum\.closes.*0011_clean_iron_fist\.sql/s
     );
   });
 });

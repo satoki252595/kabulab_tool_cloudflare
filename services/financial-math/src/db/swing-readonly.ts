@@ -26,6 +26,11 @@ import {
 /**
  * 日足 OHLCV 履歴 (約 90 営業日保持)
  * — 003 が日次 sync で更新する。
+ *
+ * 004 はここを **個別銘柄の日足の正本**として読む (CAPM の β 推定、
+ * Black-Scholes のヒストリカル σ)。以前は `finmath_daily_ohlcv` へ GET 中に
+ * Yahoo から遅延充填していたが、実際に入っていたのは 7 シンボル 3,490 行だけで、
+ * それ以外の銘柄では β/σ が既に死んでいた。詳細は services/price-cache.ts。
  */
 export const dailyOhlcv = sqliteTable(
   "swing_daily_ohlcv",
@@ -38,6 +43,14 @@ export const dailyOhlcv = sqliteTable(
     low: real("low"),
     close: real("close"),
     volume: real("volume"),
+    /**
+     * 分割調整済み終値 (Yahoo adjclose)。0008 で本番へ入った列。
+     *
+     * 宣言から漏れていた。この再宣言は「本番の表と一致していること」だけが
+     * 価値なので、列が欠けていると読めない列があることに気付けない。
+     * (drizzle.d1.config.ts はこのファイルを読まないので DDL には影響しない)
+     */
+    adj: real("adj"),
   },
   (table) => [
     uniqueIndex("idx_swing_ohlcv_stock_date").on(table.stockId, table.date),
@@ -103,7 +116,14 @@ export const stockIndicators = sqliteTable("swing_stock_indicators", {
 
 /**
  * 日次マクロ判定 (1 日 1 行)
- * 004 では nikkei_pct (日経平均前日比%) を CAPM の市場リターンとして参照する。
+ *
+ * 004 は `nikkei_close` を **CAPM の市場系列**として読む。`swing_daily_ohlcv` の
+ * FK は `core_stocks` なので指数 (`^N225`) を置く場所が無く、D1 で日経平均の
+ * 系列を持っているのはここだけ。実測 107 行 (2026-04-12 開始・`nikkei_close`
+ * 非 NULL 106) で、`swing_daily_ohlcv` と日付が重なるのは 94 日しかない。
+ *
+ * 注意: 1 行は「日次 sync の run 1 回」であって 1 営業日ではない
+ * (休場日にも行ができ、`nikkei_close` は前営業日の値のまま)。
  */
 export const marketContext = sqliteTable("swing_market_context", {
   date: text("date").primaryKey(),

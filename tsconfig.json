@@ -48,13 +48,11 @@
   "exclude": [
     "node_modules",
     "dist",
-    ".vercel",
-    // 1 件 (TS2345) — 手動実行 (pnpm exec tsx)。ADR-0001 の移行残骸で
-    // createDb に接続文字列を渡している。sibling の verify-capm-bs.ts と
-    // まったく同じ直し方 (createD1HttpDb へ差し替え) で消えるが、EMH レーンが
-    // このファイル自体を削除する可能性があるため手を付けていない。
-    // EMH レーンが削除しない結論になったら、その 1 行の差し替えとここからの
-    // 削除をまとめてやること。
-    "services/financial-math/scripts/verify-price-cache.ts"
+    ".vercel"
+    // ここは空。UNI レーンが 4 ファイルの型エラーを直し、EMH レーンが
+    // verify-price-cache.ts (Neon 期のシグネチャで既に動かなかった) を削除したので、
+    // 除外すべき既知の借金はもう無い。**新しい除外を足すときは規模と実行経路を
+    // docs/ci-typecheck-blind-spots.md に必ず書くこと**（黙って除外すると、
+    // ILIKE と重複キーが 4,245 行の死にコードに紛れて CI を通った件を繰り返す）。
   ]
 }

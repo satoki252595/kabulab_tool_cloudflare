@@ -4,6 +4,8 @@ import { and, asc, desc, eq, gt, inArray, isNotNull, lt, sql } from "drizzle-orm
 import { createDb } from "../db/client.js";
 import { stocks, stockFinancials } from "../db/core-schema.js";
 import { dailyOhlcv, stockIndicators } from "../db/swing-readonly.js";
+import { momentumProjection } from "../../../../src/shared/db/projection-schema.js";
+import { decodeCloses } from "../../../../src/shared/indicators/momentum-series.js";
 import { getOhlcvSeries, getPriceContext, type OhlcvBar } from "../services/price-cache.js";
 import { homePage } from "../views/home.js";
 import { dcfPage, type StockContext as DcfStockContext } from "../views/dcf.js";
@@ -36,9 +38,17 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
   const { code } = c.req.valid("query");
   let stockContext: DcfStockContext | null = null;
   // CLAUDE.md ルール1: ダミーデフォルト値を埋めない。
-  // 銘柄プリフィルで Yahoo から実値が取れた場合のみセット、それ以外は null。
+  // 銘柄プリフィルで D1 の断面から実値が取れた場合のみセット、それ以外は null。
   // View 側で null のときは input value="" で空欄表示し、ユーザーに手動入力を促す。
   let presetDividend: number | null = null;
+  /**
+   * プリフィルできなかった理由。
+   *
+   * ここは以前 `catch {}` で、取得失敗が**何も表示されないまま**フォームが
+   * 空欄で出ていた (真の silent catch 2 箇所のうちの 1 つ)。ユーザからは
+   * 「銘柄コードを入れたのに何も起きない」としか見えない。
+   */
+  let prefillNotice: string | null = null;
   // 要求リターン (k) と成長率 (g) は「Gordon モデルの計算前提として使用者が決める値」で、
   // 銘柄固有値ではない。フォーム再描画時の initial state として一般的な値を残す
   // (k=7% は東証長期平均、g=3% は日本企業の中期トレンド)。UI で根拠を明記している。
@@ -48,7 +58,7 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
   if (code) {
     const db = createDb(requireDb(c));
     try {
-      // finmath キャッシュ (Yahoo 二次利用) で 1414 等の otakara 未登録銘柄も対応
+      // core_stock_financials の断面を読む (1414 のような優待なし銘柄も含む)
       const ctx = await getPriceContext(db, code);
       // 無配銘柄判定: Yahoo の dividendYield が null/0 なら estimatedDividend も null
       const isNonDividend = ctx.estimatedDividend === null || ctx.estimatedDividend <= 0;
@@ -64,10 +74,10 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
       if (!isNonDividend && ctx.estimatedDividend !== null) {
         presetDividend = Math.round(ctx.estimatedDividend * 100) / 100;
       }
-      // 無配 / Yahoo 取得失敗時は presetDividend は null のまま → input 空欄
-    } catch {
-      // Yahoo 404 / 不正コード等は静かに stockContext=null のままにする
-      // (フォームのプリフィルは出来ないが画面自体は描画する)
+      // 無配時は presetDividend は null のまま → input 空欄
+    } catch (e) {
+      // 不正コード / 断面未登録。画面自体は描画するが、**理由は必ず出す**。
+      prefillNotice = `銘柄 ${code} のプリフィルができません: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -77,7 +87,7 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
         code,
         mode: "gordon",
         expectedDividend: presetDividend,
-        // GET 時に Yahoo prefill が走った場合のみ「自動」バッジを出す
+        // GET 時に断面からのプリフィルが走った場合のみ「自動」バッジを出す
         expectedDividendAutoFilled: presetDividend !== null && presetDividend > 0,
         requiredReturnPct: presetK,
         growthRatePct: presetG,
@@ -89,6 +99,7 @@ pagesRoute.get("/dcf", zValidator("query", dcfQuerySchema), async (c) => {
       twoStageResult: null,
       currentPrice: stockContext?.currentPrice ?? null,
       error: null,
+      infoNotice: prefillNotice,
     })
   );
 });
@@ -119,10 +130,12 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
   const { code } = c.req.valid("query");
   let stockContext: BsStockContext | null = null;
   // CLAUDE.md ルール1: spot=1000, strike=1000, vol=30 等のダミー値を埋めない。
-  // 銘柄プリフィル時のみ Yahoo の実値を入れる。それ以外は null = フォーム空欄。
+  // 銘柄プリフィル時のみ D1 の実値を入れる。それ以外は null = フォーム空欄。
   let presetSpot: number | null = null;
   let presetStrike: number | null = null;
   let presetVolPct: number | null = null;
+  /** プリフィルできなかった理由。以前は `catch {}` で無言だった (silent catch)。 */
+  let prefillNotice: string | null = null;
 
   if (code) {
     const db = createDb(requireDb(c));
@@ -139,6 +152,9 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
         name: priceCtx.name ?? priceCtx.code,
         currentPrice: price,
         historicalVolatility: histVol?.annualizedVolatility ?? null,
+        volSampleSize: histVol?.sampleSize ?? null,
+        priceAsOf: priceCtx.asOf,
+        seriesAsOf: ohlcv.length > 0 ? ohlcv[ohlcv.length - 1].date : null,
       };
       if (price !== null && Number.isFinite(price) && price > 0) {
         presetSpot = Math.round(price * 100) / 100;
@@ -147,8 +163,8 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
       if (histVol) {
         presetVolPct = Math.round(histVol.annualizedVolatility * 1000) / 10;
       }
-    } catch {
-      // Yahoo 404 / 不正コード等は静かに stockContext=null のままにする
+    } catch (e) {
+      prefillNotice = `銘柄 ${code} のプリフィルができません: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -158,7 +174,7 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
         code,
         spot: presetSpot,
         strike: presetStrike,
-        // GET 時に Yahoo prefill が走った場合のみ「自動」バッジ
+        // GET 時に断面からのプリフィルが走った場合のみ「自動」バッジ
         spotAutoFilled: presetSpot !== null && presetSpot > 0,
         strikeAutoFilled: presetStrike !== null && presetStrike > 0,
         volAutoFilled: presetVolPct !== null && presetVolPct > 0,
@@ -171,6 +187,7 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
       impliedVolatility: null,
       ivUnavailableReason: null,
       error: null,
+      infoNotice: prefillNotice,
     })
   );
 });
@@ -178,8 +195,8 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
 // =============================================================================
 // GET /emh?type=momentum&... — EMH アノマリースクリーニング
 // =============================================================================
-// DCF/CAPM/BS は finmath.price_snapshot + .daily_ohlcv (Yahoo 二次利用) で
-// 個別銘柄を lazy-fetch する。EMH は「横断スクリーニング」のため母集団が入力。
+// DCF/CAPM/BS は core_stock_financials (断面) と swing_daily_ohlcv (日足) を
+// 銘柄 1 件ぶん読む。EMH は「横断スクリーニング」のため母集団が入力。
 //
 // 母集団は設計選択肢 (b) を採用済み: core.stocks を東証内国普通株
 // (共有4文字コード、~3,700) に
@@ -191,49 +208,61 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   const q = c.req.valid("query");
   const db = createDb(requireDb(c));
 
-  // 全 active 銘柄数
+  // 全 active 銘柄数。`idx_core_stocks_active_market` 越しでも走査行は
+  // インデックスエントリ数 (実測 3,715) 分かかる。4 タブ共通の分母なので残すが、
+  // これが /emh の残る走査行の大半である (詳細は PR の「コスト影響」)。
   const [{ universeSize }] = await db
     .select({ universeSize: sql<number>`count(*)` })
     .from(stocks)
     .where(eq(stocks.isActive, true));
 
-  // 最新 OHLCV 日付 (参考表示)
-  const [{ latestDate }] = await db
-    .select({ latestDate: sql<string | null>`MAX(${dailyOhlcv.date})` })
-    .from(dailyOhlcv);
-
   let rows: EmhRow[] = [];
   let totalMatched = 0;
+  /** 投影が持つ最長の終値本数。window の実効上限を画面へ出すために使う。 */
+  let maxBars = 0;
+  /** 投影の最新 as_of。momentum タブの鮮度表示に使う。 */
+  let projectionAsOf: string | null = null;
+  /** 投影行数 (= 有効な終値を持つ active 銘柄数)。 */
+  let projectedStocks = 0;
+  /**
+   * momentum 以外のタブが出す最新 OHLCV 日付。
+   *
+   * momentum では引かない。投影から `as_of` が取れるので、追加の
+   * `MAX(swing_daily_ohlcv.date)` は「投影が見ていない行」を根拠に鮮度を
+   * 名乗ることになり、表示と数値の出所がずれる。
+   */
+  let latestDate: string | null = null;
 
   if (q.type === "momentum") {
-    // 全 active 銘柄の OHLCV を取得して momentum を計算
-    // (集計対象が大きいので per-stock loop は避けて 1 SQL でまとめる)
-    const ohlcv = await db
+    // L2 投影 (p_momentum) だけを読む。1 銘柄 1 行なので走査は銘柄数 (実測 3,715)。
+    //
+    // 以前はここで swing_daily_ohlcv を全走査しており、1 表示で 651,494 rows_read
+    // (集計クエリ単体 647,628。本番実測 2026-09-13) / TTFB 0.86〜1.01 秒だった
+    // (他 13 経路は 42〜195 ms)。D1 は走査行課金なので訪問者ごとに払う継続コストに
+    // なっていた。被覆索引では下がらない (対照実験: 同じ計画で索引外の close を
+    // SELECT 句から抜いても入れても rows_read は 674,097 で同値) ため、
+    // 事前集計へ移した。投影は日次 cron の Phase 6 が作る。
+    //
+    // 投影が持つのは**終値列そのもの**なので window は従来どおり可変で、
+    // 同じ calcMomentum に同じ配列が入る = 表示される数値は変わらない。
+    const projected = await db
       .select({
-        stockId: dailyOhlcv.stockId,
-        date: dailyOhlcv.date,
-        close: dailyOhlcv.close,
+        stockId: momentumProjection.stockId,
+        bars: momentumProjection.bars,
+        closes: momentumProjection.closes,
+        asOf: momentumProjection.asOf,
       })
-      .from(dailyOhlcv)
-      .innerJoin(stocks, and(eq(dailyOhlcv.stockId, stocks.id), eq(stocks.isActive, true)))
-      .where(isNotNull(dailyOhlcv.close))
-      .orderBy(asc(dailyOhlcv.stockId), asc(dailyOhlcv.date));
-
-    // 銘柄ごとに closes を集約してモメンタム計算
-    const byStock = new Map<number, number[]>();
-    for (const row of ohlcv) {
-      if (row.close === null) continue;
-      const arr = byStock.get(row.stockId);
-      if (arr) arr.push(row.close);
-      else byStock.set(row.stockId, [row.close]);
-    }
+      .from(momentumProjection);
 
     type Score = { stockId: number; cumRet: number; risk: number };
     const scores: Score[] = [];
-    for (const [stockId, closes] of byStock.entries()) {
-      const m = calcMomentum(closes, q.window);
-      if (m) scores.push({ stockId, cumRet: m.cumulativeReturn, risk: m.riskAdjustedScore });
+    for (const row of projected) {
+      const m = calcMomentum(decodeCloses(row.closes), q.window);
+      if (m) scores.push({ stockId: row.stockId, cumRet: m.cumulativeReturn, risk: m.riskAdjustedScore });
+      if (row.bars > maxBars) maxBars = row.bars;
+      if (projectionAsOf === null || row.asOf > projectionAsOf) projectionAsOf = row.asOf;
     }
+    projectedStocks = projected.length;
     totalMatched = scores.length;
 
     // 累積リターン降順で limit 件
@@ -269,7 +298,16 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         price: st?.price ?? null,
       };
     });
-  } else if (q.type === "small-cap") {
+  } else {
+    // momentum 以外は従来どおり断面 (stock_financials / stock_indicators) を読む。
+    // これらは既に 1 銘柄 1 行で、走査行は母集団サイズのままなので投影は要らない。
+    const [{ maxOhlcvDate }] = await db
+      .select({ maxOhlcvDate: sql<string | null>`MAX(${dailyOhlcv.date})` })
+      .from(dailyOhlcv);
+    latestDate = maxOhlcvDate;
+  }
+
+  if (q.type === "small-cap") {
     const thresholdYen = q.smallCapMaxOku * 1e8;
     const [{ matchedTotal }] = await db
       .select({ matchedTotal: sql<number>`count(*)` })
@@ -424,7 +462,14 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
       query: q,
       rows,
       totalMatched,
-      meta: { latestDate, universeSize },
+      meta: {
+        latestDate: q.type === "momentum" ? projectionAsOf : latestDate,
+        universeSize,
+        // momentum 以外では投影を読まないので 0 のまま。view は 0 を
+        // 「この指標には投影が関係ない」として扱う。
+        projectedStocks,
+        maxBars,
+      },
     })
   );
 });
@@ -452,13 +497,16 @@ export async function buildCapmView(input: CapmViewInput): Promise<Parameters<ty
     // ここで初めてバインディングを要求する（code 無しなら DB に触らない）
     const db = createDb(requireBinding(input.db, "DB"));
     try {
-      // finmath キャッシュ (Yahoo 二次利用) で otakara 未登録銘柄も対応
+      // core_stock_financials の断面を読む (日次 sync が writer)。
+      // is_active=1 の 3,715 銘柄を完全被覆しているので 1414 のような
+      // 優待なし銘柄も取れる。GET が Yahoo を叩くことも書き込むことも無い。
       const priceCtx = await getPriceContext(db, input.code);
       stockContext = {
         code: priceCtx.code,
         name: priceCtx.name ?? priceCtx.code,
         currentPrice: priceCtx.price,
         marketCap: priceCtx.marketCap,
+        priceAsOf: priceCtx.asOf,
       };
 
       if (input.mode === "auto") {
@@ -514,14 +562,22 @@ export async function buildCapmView(input: CapmViewInput): Promise<Parameters<ty
  * これは otakara-yutai がスクレイプした銘柄(~1,600件)に限定されており、
  * 1414 などの未登録銘柄では 0 件しか集まらず β 推定が失敗した。
  *
- * 新実装: 対象銘柄 OHLCV と ^N225 OHLCV を Yahoo Chart API から finmath
- * キャッシュ経由で取得 (= 二次利用)。日付整合後の単純リターンで OLS。
- * 市場の定義として ^N225 は理論的にも標準的な選択。
+ * 現行: 対象銘柄は `swing_daily_ohlcv`、市場 (^N225) は
+ * `swing_market_context.nikkei_close` を**読むだけ**で取る。日付整合後の
+ * 単純リターンで OLS。市場の定義として ^N225 は理論的にも標準的な選択。
+ *
+ * **サンプル数は以前より減る**。旧実装は GET 中に Yahoo Chart API を叩いて
+ * 2 年ぶん (514 本) 取っていたが、D1 の保持は銘柄側 90 営業日
+ * (実測 avg 89.3 / min 2)、市場側 107 行 (2026-04-12 開始) で、**日付が重なるのは
+ * 94 日**。下限 31 本を満たさない銘柄が 13 件ある (実測 2026-09-13)。
+ * つまり **β の数値そのものが変わる**ので、画面はサンプル数を併記する
+ * (views/capm.ts の「サンプル数」セル)。R2 系列ができたらそちらを読む。
  *
  * export しているのは、Node のスモークスクリプト
  * (scripts/verify-capm-bs.ts) がここを直接叩くため。buildCapmView は
  * Worker バインディング (`D1Database`) を要求するので Node からは呼べない一方、
  * 確かめたい実体 (β 推定) はこの関数なので、ラッパ越しではなくここを検証する。
+
  */
 export async function estimateBetaForCode(
   db: ReturnType<typeof createDb>,
@@ -536,13 +592,13 @@ export async function estimateBetaForCode(
   if (stockRows.length < 31) {
     return {
       estimate: null,
-      reason: `銘柄の OHLCV が ${stockRows.length} 日分しかなく β 推定不能 (最低 31 日必要)`,
+      reason: `銘柄の日足が ${stockRows.length} 日分しかなく β 推定不能 (最低 31 日必要。D1 の保持は 90 営業日)`,
     };
   }
   if (marketRows.length < 31) {
     return {
       estimate: null,
-      reason: `^N225 の OHLCV が ${marketRows.length} 日分しかなく β 推定不能`,
+      reason: `^N225 の系列が ${marketRows.length} 日分しかなく β 推定不能 (swing_market_context は 2026-04-12 開始)`,
     };
   }
 

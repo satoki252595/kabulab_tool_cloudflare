@@ -54,9 +54,10 @@ apiRoute.post(
   async (c) => {
   const v = c.req.valid("form");
 
-  // 銘柄コード指定があれば finmath キャッシュ (＝ Yahoo の二次利用) から
+  // 銘柄コード指定があれば core_stock_financials の断面 (日次 sync が writer) から
   // 現在株価・配当利回りを取得して表示用 context を構築する。
-  // core.stocks に依存しないので 1414 のような otakara-yutai 未登録銘柄も拾える。
+  // 母集団は JPX 一覧由来の東証内国普通株なので 1414 のような優待なし銘柄も拾える。
+  // POST でも Yahoo は叩かない (= 計算結果が「誰が押したか」に依存しない)。
   let stockContext: DcfStockContext | null = null;
   let currentPrice: number | null = null;
   let priceFetchError: string | null = null;
@@ -79,7 +80,7 @@ apiRoute.post(
         isNonDividend: ctx.estimatedDividend === null || ctx.estimatedDividend <= 0,
       };
     } catch (e) {
-      // Yahoo 404 / ネットワーク / 不正コードなどは UI に出して計算は続行
+      // 断面未登録 / 不正コードなどは UI に出して計算は続行
       priceFetchError = `銘柄 ${v.code} の価格取得に失敗: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
@@ -90,7 +91,7 @@ apiRoute.post(
   // 関係ない理論株価 (= 100/0.04 = 2,500 円) が出る。これは UX 的に「銘柄を入れたのに
   // その銘柄と無関係な計算結果」になり混乱の元。
   //
-  // 設計: 銘柄コードが指定 + Yahoo から配当推定値が取れた場合、フォーム送信値を
+  // 設計: 銘柄コードが指定 + 断面から配当推定値が取れた場合、フォーム送信値を
   // 無視して銘柄プリフィル値で計算する。「配当を手動で試算したい」場合は
   // 銘柄コードを空にして submit すれば従来通り user 入力で計算可能。
   //
@@ -98,8 +99,8 @@ apiRoute.post(
   //   「銘柄コードを入れた時点でそのデータが正、フォームの古い値は破棄」という
   //   意図的な仕様。サイレントではなく view 側で「銘柄プリフィル値で計算」と明示する。
   // expectedDividend は optional (validator で「code or expectedDividend のどちらか」必須)
-  // - 入力あり + code 指定 + Yahoo 推定値あり: 上書き発動 (フォームの古い値は破棄、Yahoo を優先)
-  // - 入力なし + code 指定 + Yahoo 推定値あり: Yahoo 推定値で計算 (notice 不要)
+  // - 入力あり + code 指定 + 断面の推定値あり: 上書き発動 (フォームの古い値は破棄、銘柄データを優先)
+  // - 入力なし + code 指定 + 断面の推定値あり: 断面の推定値で計算 (notice 不要)
   // - 入力あり + code 空: ユーザー手動値で計算
   const overrideKind: "form-override" | "auto-fill" | "user-input" | "none" =
     v.code !== undefined && stockEstimatedDividend !== null && stockEstimatedDividend > 0
@@ -115,7 +116,7 @@ apiRoute.post(
       ? Math.round(stockEstimatedDividend! * 100) / 100
       : v.expectedDividend ?? 0; // 0 はここに来ない (validator が弾く)
 
-  // 無配 + ユーザー入力なしの早期エラー: code 指定したが Yahoo に配当データがなく、
+  // 無配 + ユーザー入力なしの早期エラー: code 指定したが断面に配当データがなく、
   // ユーザーも手動入力していないケース。calcGordonValue が「正の数を」と汎用エラーを
   // 出す前に、より具体的な誘導メッセージを返す。
   if (
@@ -138,7 +139,7 @@ apiRoute.post(
         gordonResult: null,
         twoStageResult: null,
         currentPrice,
-        error: `銘柄 ${v.code} は無配銘柄 (Yahoo から配当データなし) のため、Gordon DCF では理論株価を直接算出できません。詳細設定を開いて「来期予想配当」に想定値を手動入力してください (会社 IR の予想配当 / FCF ベース DCF の併用を推奨)。`,
+        error: `銘柄 ${v.code} は無配銘柄 (断面に配当利回りなし) のため、Gordon DCF では理論株価を直接算出できません。詳細設定を開いて「来期予想配当」に想定値を手動入力してください (会社 IR の予想配当 / FCF ベース DCF の併用を推奨)。`,
       }),
       400
     );
@@ -159,9 +160,9 @@ apiRoute.post(
   // 上書き / 自動入力が起きたことをユーザーに通知 (silent fallback 禁止 — ルール2)。
   const overrideNotice =
     overrideKind === "form-override"
-      ? `銘柄 ${v.code} の Yahoo 推定配当 ${effectiveDividend.toFixed(2)} 円で計算しました (フォーム入力 ${(v.expectedDividend ?? 0).toFixed(2)} 円より銘柄データを優先)。手動値で計算したい場合は銘柄コード欄を空にして再計算してください。`
+      ? `銘柄 ${v.code} の推定配当 ${effectiveDividend.toFixed(2)} 円 (日次同期の断面) で計算しました (フォーム入力 ${(v.expectedDividend ?? 0).toFixed(2)} 円より銘柄データを優先)。手動値で計算したい場合は銘柄コード欄を空にして再計算してください。`
       : overrideKind === "auto-fill"
-        ? `銘柄 ${v.code} の Yahoo 推定配当 ${effectiveDividend.toFixed(2)} 円で計算しました (来期予想配当未入力のため自動補完)。手動指定したい場合は詳細設定で値を入力してください。`
+        ? `銘柄 ${v.code} の推定配当 ${effectiveDividend.toFixed(2)} 円 (日次同期の断面) で計算しました (来期予想配当未入力のため自動補完)。手動指定したい場合は詳細設定で値を入力してください。`
         : null;
 
   try {
@@ -270,7 +271,7 @@ apiRoute.post("/black-scholes/calc", zValidator("form", bsFormSchema), async (c)
 
   let stockContext: BsStockContext | null = null;
   let priceFetchError: string | null = null;
-  // Yahoo から取れた値 (effective に流す)
+  // 断面 / 日足から取れた値 (effective に流す)
   let stockSpot: number | null = null;
   let stockHistVol: number | null = null;
   if (v.code) {
@@ -288,6 +289,9 @@ apiRoute.post("/black-scholes/calc", zValidator("form", bsFormSchema), async (c)
         name: priceCtx.name ?? priceCtx.code,
         currentPrice: priceCtx.price,
         historicalVolatility: stockHistVol,
+        volSampleSize: histVol?.sampleSize ?? null,
+        priceAsOf: priceCtx.asOf,
+        seriesAsOf: ohlcv.length > 0 ? ohlcv[ohlcv.length - 1].date : null,
       };
     } catch (e) {
       priceFetchError = `銘柄 ${v.code} のデータ取得に失敗: ${e instanceof Error ? e.message : String(e)}`;
@@ -295,7 +299,7 @@ apiRoute.post("/black-scholes/calc", zValidator("form", bsFormSchema), async (c)
   }
 
   // === effective 値の決定 ===
-  // - spot 空 + code 指定 + Yahoo 取得成功 → 現在株価で補完
+  // - spot 空 + code 指定 + 断面あり → 現在株価で補完
   // - strike 空 → ATM (= effective spot) で計算
   // - volatility 空 + code 指定 + ヒストリカル σ 取得成功 → 補完
   const effectiveSpot: number | null =
@@ -308,7 +312,7 @@ apiRoute.post("/black-scholes/calc", zValidator("form", bsFormSchema), async (c)
   // 補完 notice の組み立て (silent fallback 禁止 — ルール2)
   const fillMsgs: string[] = [];
   if (v.spot === undefined && effectiveSpot !== null && stockSpot !== null) {
-    fillMsgs.push(`株価 S = ${effectiveSpot.toFixed(2)} 円 (Yahoo 現在株価で自動補完)`);
+    fillMsgs.push(`株価 S = ${effectiveSpot.toFixed(2)} 円 (日次同期の断面の株価で自動補完)`);
   }
   if (v.strike === undefined && effectiveStrike !== null) {
     fillMsgs.push(`行使価格 K = ${effectiveStrike.toFixed(2)} 円 (ATM = 現在株価)`);

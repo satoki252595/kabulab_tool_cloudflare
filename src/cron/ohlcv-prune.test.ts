@@ -12,6 +12,7 @@ import { drizzle } from "drizzle-orm/sqlite-proxy";
 import * as coreSchema from "../shared/db/core-schema.js";
 import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
+import * as projectionSchema from "../shared/db/projection-schema.js";
 import { pruneOhlcvRetention, selectOverRetentionStocks } from "./daily.js";
 
 const DDL = `
@@ -46,7 +47,7 @@ function makeProxyDb(target: DatabaseSync, log: string[]) {
       const rows = objs.map((o) => Object.values(o));
       return { rows: method === "get" ? (rows[0] ?? []) : rows };
     },
-    { schema: { ...coreSchema, ...rsiSchema, ...swingSchema } }
+    { schema: { ...coreSchema, ...rsiSchema, ...swingSchema, ...projectionSchema } }
   );
 }
 

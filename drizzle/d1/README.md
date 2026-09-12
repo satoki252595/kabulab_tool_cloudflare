@@ -19,6 +19,12 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 | 本番 `kabulab-cf` | **`0010_common_black_bird.sql` は流さない**（適用済み。流すと `duplicate column name` で落ちる）。それ以外の未適用ファイルを番号順に `wrangler d1 execute kabulab-cf --remote --file=...` |
 | 新規 DB (ローカル / preview) | `0000` から**全ファイルを番号順に流す**。`0010` も含める |
 
+`0011_clean_iron_fist.sql`（`p_momentum` の CREATE TABLE）は**本番未適用**。
+`CREATE TABLE` 1 文だけで既存表に触らないので本番へそのまま流せる。
+流す前にこれを適用しておかないと、日次 sync が Phase 1 の `assertDailySchema` で
+`p_momentum.closes` を確認できず即座に落ちる（3,700 銘柄を取り終えてから
+落ちるのを避けるために、あえて取得前に落としている）。
+
 本番に `d1_migrations` 表は**無い**（`sqlite_master` の 32 表に存在しない）。
 つまり適用は完全に手動で、D1 が自動で再生することはない。逆に「どこまで流したか」
 の記録も DB 側に無いので、本番へ流すときは必ずこの表と各ファイル冒頭のコメントを

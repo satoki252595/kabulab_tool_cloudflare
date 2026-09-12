@@ -8,6 +8,8 @@ export interface CapmStockContext {
   name: string;
   currentPrice: number | null;
   marketCap: number | null;
+  /** 価格断面の基準日 'YYYY-MM-DD' (core_stock_financials.data_date) */
+  priceAsOf: string | null;
 }
 
 export interface CapmPageProps {
@@ -41,6 +43,7 @@ export function capmPage(props: CapmPageProps): string {
          <span class="code">${h(ctx.code)}</span>
          <span class="name">${h(ctx.name)}</span>
          <span class="meta">現在株価: ${ctx.currentPrice !== null ? Math.round(ctx.currentPrice).toLocaleString("ja-JP") + " 円" : "—"}</span>
+         ${ctx.priceAsOf !== null ? `<span class="meta">株価 as of: ${h(ctx.priceAsOf)}</span>` : ""}
        </div>`
     : "";
 
@@ -139,7 +142,7 @@ export function capmPage(props: CapmPageProps): string {
       <div class="val">${b.correlation.toFixed(3)}</div>
     </div>
     <div class="stat-cell">
-      <div class="lbl">サンプル数</div>
+      <div class="lbl">${tip("サンプル数", "β の回帰に使った日次リターンの本数。銘柄の日足 (D1 の保持は 90 営業日) と日経平均系列 (2026-04-12 開始) の日付が重なった日だけが使える。以前は Yahoo から 2 年ぶん取っていたので、同じ銘柄でも β の値が変わる。")}</div>
       <div class="val">${b.sampleSize}</div>
       <div class="sub">営業日</div>
     </div>

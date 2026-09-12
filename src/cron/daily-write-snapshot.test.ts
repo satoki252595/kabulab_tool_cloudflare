@@ -19,6 +19,7 @@ import { drizzle } from "drizzle-orm/sqlite-proxy";
 import * as coreSchema from "../shared/db/core-schema.js";
 import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
+import * as projectionSchema from "../shared/db/projection-schema.js";
 import { writeStockSnapshot } from "./daily.js";
 
 /** createD1HttpDb と同じ sqlite-proxy 経路で、発行 SQL だけを記録する。 */
@@ -32,7 +33,7 @@ function makeRecordingDb(): {
       statements.push(sqlStr);
       return { rows: [] };
     },
-    { schema: { ...coreSchema, ...rsiSchema, ...swingSchema } }
+    { schema: { ...coreSchema, ...rsiSchema, ...swingSchema, ...projectionSchema } }
   );
   return { db: db as Parameters<typeof writeStockSnapshot>[0], statements };
 }

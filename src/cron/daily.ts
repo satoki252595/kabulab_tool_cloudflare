@@ -35,7 +35,7 @@
  *   - マクロ 4 指数のどれかが取れない場合も null で通す
  */
 
-import { sql, eq, and, gte } from "drizzle-orm";
+import { sql, asc, eq, and, gt, gte, isNotNull, lte } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 
 // core スキーマは rsi-screening の定義を流用 (001 が所有・更新)
@@ -44,6 +44,9 @@ import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js"
 import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
 // swing スキーマ
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
+// L2 投影 (p_*)。writer はこの cron だけ。
+import * as projectionSchema from "../shared/db/projection-schema.js";
+import { encodeCloses, isUsableClose } from "../shared/indicators/momentum-series.js";
 
 import {
   fetchChart,
@@ -78,8 +81,8 @@ import { rootCauseMessage } from "../shared/errors.js";
 // 型定義
 // -----------------------------------------------------------------------------
 
-// createD1HttpDb は core_* を自動登録するので rsi/swing スキーマのみ渡す。
-const SCHEMAS = { ...rsiSchema, ...swingSchema };
+// createD1HttpDb は core_* を自動登録するので rsi/swing/p_* スキーマのみ渡す。
+const SCHEMAS = { ...rsiSchema, ...swingSchema, ...projectionSchema };
 type Db = ReturnType<typeof createDailyDb>;
 
 /** 日次 sync の結果サマリ */
@@ -429,6 +432,22 @@ export async function assertDailySchema(db: Db): Promise<void> {
       { cause: error }
     );
   }
+  // p_momentum は Phase 6 が**無条件に**全銘柄ぶん書き直す投影表。
+  // フラグで止まる経路には無いので、この検証の前提 (「書かないのに検証だけ落ちる」
+  // にならない) を満たす。未適用のまま走ると 3,700 銘柄を取り終えた後の
+  // Phase 6 で全件が書込で落ちる — adj (2026-06-29〜07-27) と同じ失敗の形になる。
+  try {
+    await db
+      .select({ closes: projectionSchema.momentumProjection.closes })
+      .from(projectionSchema.momentumProjection)
+      .limit(1);
+  } catch (error) {
+    throw new Error(
+      "D1 スキーマ不整合: p_momentum.closes を確認できません。" +
+        " drizzle/d1/0011_clean_iron_fist.sql の本番適用状態を確認してください。",
+      { cause: error }
+    );
+  }
 }
 
 /**
@@ -651,6 +670,20 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
       );
     }
   }
+
+  // -----------------------------------------------------------------
+  // Phase 6: L2 投影 (p_momentum) の再生成
+  //
+  // prune の後に置く (投影の本数を D1 の実在本数と一致させるため)。
+  // ここで失敗したら run 全体を失敗にする。投影が書けていないまま緑にすると、
+  // /emh は前日の as_of を表示し続けるのに監視上は成功に見える。
+  // -----------------------------------------------------------------
+  console.info("[sync-daily] Phase 6: モメンタム投影の再生成");
+  const projected = await rebuildMomentumProjection(db);
+  console.info(
+    `[sync-daily]   投影 ${projected.projectedStocks} 行 (走査 ${projected.scannedBars} 行 / ` +
+      `as_of ${projected.sourceMaxDate ?? "—"} / 掃除 ${projected.removedStocks} 行)`
+  );
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   console.info(
@@ -1209,6 +1242,223 @@ export async function pruneOhlcvRetention(
   return {
     prunedStocks: over.length,
     deletedRows: over.reduce((acc, r) => acc + r.excessBars, 0),
+  };
+}
+
+// -----------------------------------------------------------------------------
+// L2 投影 (p_momentum) の再生成
+//
+// なぜ cron 側に置くのか: `/financial-math/emh?type=momentum` は 1 表示ごとに
+// swing_daily_ohlcv を全走査していた (本番実測 2026-09-13: 集計クエリ単体で
+// 647,628 rows_read、1 リクエスト合計 651,494 / TTFB 0.86〜1.01 秒)。
+// D1 は走査行課金なので、これは訪問者 1 人ごとに払う継続コストである。
+// 走査を「1 日 1 回」へ移し、画面は 1 銘柄 1 行の投影だけを読む。
+//
+// **新しい cron は足さない**。既存の日次 sync (平日 21:00 UTC) の最終フェーズに
+// 相乗りさせる。prune (Phase 4) の後に置くのは、投影の中身を「prune 後に D1 に
+// 実在する本数」と一致させるため (先に作ると消える行まで畳んでしまう)。
+// -----------------------------------------------------------------------------
+
+/**
+ * 投影再生成の 1 ページで読む OHLCV 行数。
+ *
+ * 刻まずに 1 文で読むと 336,169 行 ≒ 25 MB を 1 レスポンスで受けることになり、
+ * D1 REST の応答上限に依存した壊れ方をする。1 ページ 40,000 行 ≒ 3 MB。
+ *
+ * 刻み方は **rowid カーソル** (`WHERE id > :last ORDER BY id LIMIT n`)。
+ * 本番実測で走査行の比率がこれだけ違う (2026-09-13, kabulab-cf):
+ *
+ *   | 読み方 | rows_read | 返却行 | 比 |
+ *   |---|---|---|---|
+ *   | rowid カーソル 40,000 行 | 40,150 | 40,000 | **1.004** |
+ *   | 全表走査 (join なし) | 336,169 | 309,156 | 1.09 |
+ *   | stock_id 範囲 400 銘柄 (join なし) | 35,281 | 31,296 | 1.13 |
+ *   | stock_id 範囲 400 銘柄 + core_stocks join | **371,793** | 31,030 | 12.0 |
+ *
+ * 最後の行が落とし穴で、`core_stocks` を JOIN すると SQLite は
+ * `SEARCH core_stocks USING COVERING INDEX (is_active=?)` を外側ループに選び、
+ * stock_id の範囲条件が**外側を刈らない**。1 チャンクごとに OHLCV を全走査する
+ * ので、32 チャンクで 1,190 万行になる。**is_active の絞り込みは SQL で
+ * JOIN せず、id 集合を先に引いて JS 側で落とす。**
+ */
+const PROJECTION_SCAN_PAGE = 40_000;
+/** p_momentum upsert の bind 上限対策 (6 列なので 16 行/文: 6×16=96≤100) */
+const PROJECTION_CHUNK = 16;
+
+/** 投影再生成の結果 (コスト実測をログへ出すために行数を返す) */
+export interface MomentumProjectionResult {
+  /** 書いた投影行数 (= 母集団のうち有効な終値を持つ銘柄数) */
+  projectedStocks: number;
+  /**
+   * 読み出した swing_daily_ohlcv の**返却行数** (`close IS NOT NULL` のもの)。
+   * D1 の rows_read はこれより多い: `close` が NULL の行 (実測 27,013) も
+   * 走査されるので、1 run の実測は約 336,169 + ページ数ぶんの端数になる。
+   */
+  scannedBars: number;
+  /** 生成時の MAX(swing_daily_ohlcv.date)。1 行も無ければ null */
+  sourceMaxDate: string | null;
+  /** 母集団から落ちて掃除した投影行数 */
+  removedStocks: number;
+}
+
+/**
+ * `p_momentum` を `swing_daily_ohlcv` から作り直す。
+ *
+ * 母集団は `/emh` が数えているものと同じ「`core_stocks.is_active` かつ終値が
+ * NULL でない行」。同じ WHERE / 同じ順序で読むので、投影を経由しても
+ * `calcMomentum` に入る配列は**従来と同一**になる (= 画面の数値は変わらない)。
+ *
+ * 全消し → 全挿入は採らなかった。3,715 行の DELETE + 3,715 行の INSERT で
+ * 書込が 2 倍になる。代わりに upsert してから「今回の run で触られなかった行」を
+ * 1 文の DELETE で落とす。観測できる結果 (孤児行が残らない) は同じで、
+ * 書込は約 3,715 行/日に収まる (実測: is_active かつ有効終値を持つ銘柄 3,715)。
+ *
+ * 途中で例外が出た場合、掃除 DELETE は走らないので古い行が残る。その行は
+ * `as_of` が進まないので画面側で古さとして見える (黙って新しいふりをしない)。
+ */
+export async function rebuildMomentumProjection(
+  db: Db
+): Promise<MomentumProjectionResult> {
+  // 掃除の閾値。この時刻以降に computed_at が書かれた行だけが「今回の run で
+  // 触られた行」。unixepoch() 秒に合わせるため切り捨てる。
+  const runStartedSec = Math.floor(Date.now() / 1000);
+  const projection = projectionSchema.momentumProjection;
+
+  // 母集団 = /emh が分母に使っているのと同じ is_active の集合。
+  // **JOIN にはしない** (上の表のとおり JOIN すると 1 ページごとに OHLCV を
+  // 全走査する計画を選ばれる)。id 集合を先に引いて JS 側で落とす。
+  const activeIds = new Set(
+    (
+      await db
+        .select({ id: coreSchema.stocks.id })
+        .from(coreSchema.stocks)
+        .where(eq(coreSchema.stocks.isActive, true))
+    ).map((r) => r.id)
+  );
+
+  if (activeIds.size === 0) {
+    // is_active な銘柄が 1 件も返らないのは「母集団が空になった」ではなく
+    // core_stocks 側の異常である。このまま進むと upsert 対象が 0 行になり、
+    // 下の掃除 DELETE が**投影を全消し**する。/emh は理由を出せないまま
+    // 「該当 0 件」になる (maxBars=0 なので window 超過の notice も出ない)。
+    // OHLCV が 1 行も無い状態 (= 初回 backfill 前) は正常だが、is_active が
+    // 0 件になるのは正常ではないので、静かに返さず run を失敗させる。
+    throw new Error(
+      "投影の母集団が空です: core_stocks に is_active=1 の行が 1 件もありません。" +
+        " 投影を全消しすると /emh が理由なしの 0 件になるので中断します。"
+    );
+  }
+
+  const barsByStock = new Map<number, { date: string; close: number }[]>();
+  let scannedBars = 0;
+  let sourceMaxDate: string | null = null;
+
+  // rowid カーソルで前進する。id は autoincrement だが prune で穴が空くため
+  // (実測 336,169 行が id 8,916〜20,625,713 に散っている) 固定幅の範囲刻みは
+  // 使えない。カーソルなら空き番地を跨いでも走査行が返却行に比例する。
+  let lastId = 0;
+  for (;;) {
+    const page = await db
+      .select({
+        id: swingSchema.dailyOhlcv.id,
+        stockId: swingSchema.dailyOhlcv.stockId,
+        date: swingSchema.dailyOhlcv.date,
+        close: swingSchema.dailyOhlcv.close,
+      })
+      .from(swingSchema.dailyOhlcv)
+      .where(
+        and(
+          isNotNull(swingSchema.dailyOhlcv.close),
+          gt(swingSchema.dailyOhlcv.id, lastId)
+        )
+      )
+      .orderBy(asc(swingSchema.dailyOhlcv.id))
+      .limit(PROJECTION_SCAN_PAGE);
+    if (page.length === 0) break;
+
+    scannedBars += page.length;
+    for (const bar of page) {
+      if (bar.close === null) continue;
+      // データセット全体の鮮度。非活動銘柄のバーも含める (as_of との差が
+      // 「この銘柄だけ取得が止まっている」ことを示すので、分母は揃えない)。
+      if (sourceMaxDate === null || bar.date > sourceMaxDate) {
+        sourceMaxDate = bar.date;
+      }
+      if (!activeIds.has(bar.stockId)) continue;
+      const arr = barsByStock.get(bar.stockId);
+      if (arr) arr.push({ date: bar.date, close: bar.close });
+      else barsByStock.set(bar.stockId, [{ date: bar.date, close: bar.close }]);
+    }
+    lastId = page[page.length - 1].id;
+    if (page.length < PROJECTION_SCAN_PAGE) break;
+  }
+
+  if (sourceMaxDate === null) {
+    // OHLCV が 1 行も無い = 初回 backfill 前。ここで投影を全消しすると
+    // 「まだ取れていない」と「母集団から落ちた」の区別が付かなくなるので触らない。
+    return {
+      projectedStocks: 0,
+      scannedBars,
+      sourceMaxDate: null,
+      removedStocks: 0,
+    };
+  }
+
+  // rowid 順で読んだので日付順とは限らない (prune と増分 upsert で id と date の
+  // 単調性が一致しない)。**ここで date 昇順に揃える**。逆順や飛び順のまま
+  // 畳むと累積リターンの符号が黙って反転する。
+  const rows = [...barsByStock.entries()].flatMap(([stockId, bars]) => {
+    bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    // `encodeCloses` は 0 以下 / 非有限の終値を落とす。落ちた分を数に含めると
+    // `bars` (= 画面が出す window 実効上限) と `closes` の本数がずれ、`as_of` が
+    // 落とした行の日付になる。**符号化と同じ述語で先に絞る**。
+    const usable = bars.filter((b) => isUsableClose(b.close));
+    if (usable.length === 0) return [];
+    return [
+      {
+        stockId,
+        asOf: usable[usable.length - 1].date,
+        sourceMaxDate: sourceMaxDate as string,
+        bars: usable.length,
+        closes: encodeCloses(usable.map((b) => b.close)),
+        computedAt: new Date(runStartedSec * 1000),
+      },
+    ];
+  });
+
+  for (let i = 0; i < rows.length; i += PROJECTION_CHUNK) {
+    await db
+      .insert(projection)
+      .values(rows.slice(i, i + PROJECTION_CHUNK))
+      .onConflictDoUpdate({
+        target: projection.stockId,
+        set: {
+          asOf: sql`excluded.as_of`,
+          sourceMaxDate: sql`excluded.source_max_date`,
+          bars: sql`excluded.bars`,
+          closes: sql`excluded.closes`,
+          computedAt: sql`excluded.computed_at`,
+        },
+      });
+  }
+
+  // 今回の run で触られなかった行 = 非活動化・上場廃止で母集団から落ちた銘柄。
+  // 件数は D1 REST が changes を返さないので DELETE の前に数える
+  // (行は転送しない = count(*)。どちらも p_momentum の全走査 = 行数ぶん 3,715 行)。
+  const staleBefore = new Date((runStartedSec - 1) * 1000);
+  const [{ staleCount }] = await db
+    .select({ staleCount: sql<number>`count(*)` })
+    .from(projection)
+    .where(lte(projection.computedAt, staleBefore));
+  if (staleCount > 0) {
+    await db.delete(projection).where(lte(projection.computedAt, staleBefore));
+  }
+
+  return {
+    projectedStocks: rows.length,
+    scannedBars,
+    sourceMaxDate,
+    removedStocks: staleCount,
   };
 }
 

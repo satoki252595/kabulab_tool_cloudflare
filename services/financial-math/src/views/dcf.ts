@@ -31,7 +31,7 @@ export interface DcfPageProps {
      * View 側は null/0 のときフォーム input を空欄にし、ユーザーに手動入力を促す。
      */
     expectedDividend: number | null;
-    /** true なら expectedDividend は Yahoo 自動補完値 (label 横に「自動」バッジ表示) */
+    /** true なら expectedDividend は断面からの自動補完値 (label 横に「自動」バッジ表示) */
     expectedDividendAutoFilled?: boolean;
     /** 要求リターン (%)。CAPM 算出値が無いときのフォーム再表示用初期値 7%。 */
     requiredReturnPct: number;
@@ -124,12 +124,12 @@ export function dcfPage(props: DcfPageProps): string {
           </select>
         </div>
         <div class="form-field">
-          <label>${tip("来期予想配当 (円/株)", "1株あたりの予想年間配当金額。銘柄コードを入れると Yahoo 由来の TTM (過去12ヶ月実績) ベースの推定値を自動入力。会社IRの予想と異なる場合があります。")}${p.expectedDividendAutoFilled ? '<span class="auto-badge">自動</span>' : ""}</label>
+          <label>${tip("来期予想配当 (円/株)", "1株あたりの予想年間配当金額。銘柄コードを入れると日次同期の株価断面 (Yahoo 由来の TTM = 過去12ヶ月実績) から推定値を自動入力。会社IRの予想と異なる場合があります。")}${p.expectedDividendAutoFilled ? '<span class="auto-badge">自動</span>' : ""}</label>
           <input type="number" step="0.01" name="expectedDividend"
                  value="${p.expectedDividend !== null && p.expectedDividend > 0 ? h(p.expectedDividend) : ""}"
                  placeholder="${ctx ? (ctx.isNonDividend ? "無配銘柄: 想定配当を手動入力" : "") : "銘柄コード入力時は自動取得"}"
                  min="0.01">
-          <span class="hint">銘柄コード指定時は Yahoo 推定値で自動補完。code 空時のみ手動入力必須。</span>
+          <span class="hint">銘柄コード指定時は断面の推定値で自動補完。code 空時のみ手動入力必須。</span>
         </div>
         <div class="form-field">
           <label>${tip("要求リターン k (%)", "投資家がこの銘柄に求める年率リターン。CAPM で算出した期待リターンを使うのが標準。デフォルト 7% は東証平均の感覚値。")}</label>
