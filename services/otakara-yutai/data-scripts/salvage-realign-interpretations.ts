@@ -101,7 +101,8 @@ function main(): void {
   } catch (e) {
     throw new Error(
       `git HEAD から旧 source を取得できませんでした (${SOURCE_REPO_RELPATH})。` +
-        `救済は旧 source に依存します: ${(e as Error).message}`
+        `救済は旧 source に依存します: ${(e as Error).message}`,
+      { cause: e }
     );
   }
   const oldRows = parseJsonl<SourceRow>(oldSourceRaw);

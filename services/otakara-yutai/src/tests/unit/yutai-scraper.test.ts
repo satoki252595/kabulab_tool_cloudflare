@@ -7,7 +7,6 @@ import type { YutaiRawData } from "../../services/yutai-scraper";
 
 import {
   parseYutaiData,
-  fetchYutaiPage,
   importYutaiData,
   scrapeAndImport,
 } from "../../services/yutai-scraper";

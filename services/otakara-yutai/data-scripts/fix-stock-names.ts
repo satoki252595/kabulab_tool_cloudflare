@@ -35,7 +35,7 @@ async function main() {
       const patterns = [
         /<h1[^>]*>([^<]+?)\s*\(\d{3}[0-9A-Z]\)/,
         /<title>([^<]+?)\s*\(\d{3}[0-9A-Z]\)/,
-        /<title>([^<]+?)\s*[\|｜]/,
+        /<title>([^<]+?)\s*[|｜]/,
         /class="stock_name"[^>]*>([^<]+)/,
         /class="md_stockBoard_stockName"[^>]*>([^<]+)/,
       ];
@@ -64,7 +64,7 @@ async function main() {
       }
 
       await new Promise(r => setTimeout(r, 300));
-    } catch (e) {
+    } catch {
       failed++;
     }
   }

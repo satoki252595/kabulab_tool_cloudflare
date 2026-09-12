@@ -243,7 +243,7 @@ async function main() {
           }
         }
       }
-    } catch (e) {
+    } catch {
       skipCount++;
     }
   }

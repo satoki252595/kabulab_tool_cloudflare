@@ -62,7 +62,8 @@ export async function fetchNikkeiVi(): Promise<NikkeiViSnapshot> {
     state = JSON.parse(match[1]);
   } catch (e) {
     throw new Error(
-      `Nikkei smartchart: __INITIAL_STATE__ JSON パース失敗: ${e instanceof Error ? e.message : e}`
+      `Nikkei smartchart: __INITIAL_STATE__ JSON パース失敗: ${e instanceof Error ? e.message : e}`,
+      { cause: e }
     );
   }
 

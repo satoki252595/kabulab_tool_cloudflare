@@ -1,0 +1,57 @@
+# push / PR ごとに typecheck + lint + test を回す。
+#
+# これまで CI が存在せず（既存 3 workflow はすべて schedule/dispatch のデータ取込）、
+# main に 2 件 red のテストが残ったままだった。壊れたことに気づく層が無かった。
+#
+# 必要な Secret は無い。DB を持たない環境でも通るテストだけを回す。
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: typecheck
+        run: pnpm typecheck
+      - name: lint
+        run: pnpm lint
+      - name: test
+        run: pnpm test
+      # skip されたテストを可視化する。フィクスチャ未取得や条件付き skip は
+      # 「緑」に見えてしまい、実際に JPX パーサーの破損を 1 ヶ月見逃した。
+      - name: skip されたテストを報告
+        if: always()
+        run: |
+          pnpm exec vitest run --reporter=json --outputFile=/tmp/vitest.json > /dev/null 2>&1 || true
+          if [ -f /tmp/vitest.json ]; then
+            node -e '
+              const r = require("/tmp/vitest.json");
+              const skipped = (r.testResults ?? []).flatMap(f =>
+                (f.assertionResults ?? []).filter(a => a.status === "pending" || a.status === "skipped")
+                  .map(a => `${f.name.replace(process.cwd()+"/","")} > ${a.fullName}`));
+              if (skipped.length === 0) { console.log("skip されたテストはありません"); process.exit(0); }
+              console.log(`::warning::skip されたテストが ${skipped.length} 件あります`);
+              for (const s of skipped) console.log("  " + s);
+            '
+          fi

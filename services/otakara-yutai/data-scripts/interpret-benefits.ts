@@ -659,7 +659,8 @@ async function runLocalLlm(
         return grammar.parse(res);
       } catch (e) {
         throw new Error(
-          `grammar.parse 失敗: ${(e as Error).message.slice(0, 200)}`
+          `grammar.parse 失敗: ${(e as Error).message.slice(0, 200)}`,
+          { cause: e }
         );
       }
     } else {
@@ -861,7 +862,8 @@ async function interpretBatch(
       return;
     } catch (graceErr) {
       throw new Error(
-        `単一エントリ idx=${batch[0].idx} がグレースフル退路でも失敗: ${(graceErr as Error).message}`
+        `単一エントリ idx=${batch[0].idx} がグレースフル退路でも失敗: ${(graceErr as Error).message}`,
+        { cause: graceErr }
       );
     }
   }
