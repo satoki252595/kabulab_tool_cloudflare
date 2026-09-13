@@ -208,6 +208,29 @@ describe("planSummaryImport", () => {
     expect(p.rejections.map((r) => r.reason)).toEqual(["verbatim"]);
   });
 
+  it("形の崩れた行と正しい行が同じ taskId に並んだら、正しい方も duplicate ではじく", () => {
+    const p = plan([result({ description: DESC_CATALOG }), result({})].join("\n"));
+    expect(p.updates).toEqual([]);
+    expect(p.rejections.map((r) => [r.line, r.reason])).toEqual([
+      [1, "schema"],
+      [2, "duplicate"],
+    ]);
+  });
+
+  it("掲載文に金額表現が無いのに推定金額を入れた結果ははじく (企業公表額として出るため)", () => {
+    const p = plan(result({ taskId: K_NEW, shortSummary: "新米 5kg", estimatedValue: 3000 }));
+    expect(p.updates).toEqual([]);
+    expect(p.rejections.map((r) => r.reason)).toEqual(["value_ungrounded"]);
+  });
+
+  it("既存の推定金額が消える / 変わる行数を dry-run の報告に出す", () => {
+    const p = plan(result({ estimatedValue: null }));
+    expect(p.valueChanges).toEqual({ toNull: 2, fromNull: 0, changed: 0 });
+    expect(formatPlanReport(p).join("\n")).toContain("消える 2 行");
+    const same = plan(result({}));
+    expect(same.valueChanges).toEqual({ toNull: 0, fromNull: 0, changed: 0 });
+  });
+
   it("結果に現れないタスクは未回答として数える", () => {
     const p = plan(result({}));
     expect(p.unansweredTaskIds).toEqual([K_NEW]);

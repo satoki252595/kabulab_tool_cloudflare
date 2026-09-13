@@ -11,6 +11,14 @@
  *   - タスク発行後に掲載文が変わっていないか = 今の D1 にその内容キーがあるか (stale)
  *   - 要約契約 `checkSummary` (contract) / 掲載文の長い逐語コピー (verbatim)
  *   - 推定金額の決定論ガード `sanitizeEstimatedValue` (value_guard)
+ *   - 推定金額が掲載文の金額表現に根拠を持つか (value_ungrounded)
+ *
+ * 取り込んだ金額は公開面で `estimate_value_source = "company"` (企業が示した額) として
+ * 出る (`services/otakara-yutai/src/db/schema.ts` の定義)。`sanitizeEstimatedValue` は
+ * 5 万円未満を無条件に通すので、掲載文に金額が 1 つも無いのに LLM が相場を見積もった
+ * 値まで「企業公表」として載ってしまう。そこで金額を入れるなら掲載文に金額表現が
+ * あることを別に求める (ルール1)。`sanitizeEstimatedValue` 自体を変えないのは、
+ * 移設で挙動不変としたガードの判定基準をこの変更で動かさないため。
  *
  * 書き込み先の行 ID はタスクファイルではなく**今の D1 から内容キーで引き直す**。
  * `fetch-yutai-full.ts` は再取得のたびに全行を作り直して ID を振り直すため、
@@ -21,10 +29,13 @@
  *   そうしていたが、ガードに掛かるのは「割引を金額にした」「桁を取り違えた」
  *   出力で、同じ回答の要約側も誤読している疑いが強い。行ごとはじいて再依頼する。
  * - 違反を自動で切り詰めて書く: ルール2 (黙って直さない) に反するので採らない。
+ * - 5 万円未満にも高額帯と同じ「本文の金額 × 数量 / 合計に一致」を求める: 仕様書が
+ *   認める「年間額 ÷ 回数」などが一致せず正しい回答まではじくので、金額表現の
+ *   有無だけを見る。
  */
 import { z } from "zod";
 import { benefitKey } from "./benefit-key.js";
-import { sanitizeEstimatedValue } from "./estimated-value-guard.js";
+import { extractYenAmounts, sanitizeEstimatedValue } from "./estimated-value-guard.js";
 import {
   SUMMARY_CONTRACT_VERSION,
   checkSummary,
@@ -55,7 +66,8 @@ export type RejectReason =
   | "stale"
   | "contract"
   | "verbatim"
-  | "value_guard";
+  | "value_guard"
+  | "value_ungrounded";
 
 export type Rejection = {
   /** 結果ファイルの行番号 (1 始まり)。 */
@@ -80,6 +92,12 @@ export type ImportPlan = {
   rejections: Rejection[];
   /** 結果に 1 行も現れなかったタスク (未回答)。 */
   unansweredTaskIds: string[];
+  /**
+   * 書き込み対象の行で、今の D1 の `estimated_value` がどう変わるか (行数)。
+   * 契約違反の要約を直すだけのつもりでも、回答の金額が null なら既存の金額が消えて
+   * 優待利回りの計算から外れる。dry-run で人が気付けるように数える。
+   */
+  valueChanges: { toNull: number; fromNull: number; changed: number };
 };
 
 /** 結果ファイルとタスク・現行行を突き合わせ、書き込み計画を作る (副作用なし)。 */
@@ -89,12 +107,16 @@ export function planSummaryImport(input: {
   currentRows: readonly BenefitRow[];
 }): ImportPlan {
   const taskById = new Map(input.tasks.map((t) => [t.taskId, t]));
-  const current = new Map<string, { ids: number[]; description: string }>();
+  const current = new Map<string, { ids: number[]; description: string; values: (number | null)[] }>();
   for (const r of input.currentRows) {
     const key = benefitKey(r.stockCode, r.description);
     const e = current.get(key);
-    if (e) e.ids.push(r.id);
-    else current.set(key, { ids: [r.id], description: r.description });
+    if (e) {
+      e.ids.push(r.id);
+      e.values.push(r.estimatedValue);
+    } else {
+      current.set(key, { ids: [r.id], description: r.description, values: [r.estimatedValue] });
+    }
   }
 
   const rejections: Rejection[] = [];
@@ -132,9 +154,17 @@ export function planSummaryImport(input: {
     answered.add(result.taskId);
     countById.set(result.taskId, (countById.get(result.taskId) ?? 0) + 1);
   }
-  for (const rej of rejections) if (rej.taskId) answered.add(rej.taskId);
+  for (const rej of rejections) {
+    if (!rej.taskId) continue;
+    answered.add(rej.taskId);
+    // 形の崩れた行も「そのタスクへの回答」として数える。数えないと、崩れた行と
+    // 正しい行が同じ taskId に並んだとき正しい方だけが通り、仕様書の
+    // 「同じ taskId を 2 回書くと両方はじく」と食い違う (どちらが本意か決められない)。
+    countById.set(rej.taskId, (countById.get(rej.taskId) ?? 0) + 1);
+  }
 
   const updates: PlannedUpdate[] = [];
+  const valueChanges = { toNull: 0, fromNull: 0, changed: 0 };
   for (const { line, result } of parsed) {
     const reject = (reason: RejectReason, detail: string) =>
       rejections.push({ line, taskId: result.taskId, reason, detail });
@@ -174,6 +204,16 @@ export function planSummaryImport(input: {
       reject("value_guard", `estimatedValue=${result.estimatedValue} が割引の金額化か、本文の金額と桁が合わない`);
       continue;
     }
+    if (result.estimatedValue !== null && extractYenAmounts(row.description).length === 0) {
+      reject("value_ungrounded", `estimatedValue=${result.estimatedValue} だが掲載文に金額表現 (円・千円・万円・ポイント) が無い`);
+      continue;
+    }
+    for (const prev of row.values) {
+      if (prev === result.estimatedValue) continue;
+      if (result.estimatedValue === null) valueChanges.toNull++;
+      else if (prev === null) valueChanges.fromNull++;
+      else valueChanges.changed++;
+    }
     updates.push({
       taskId: result.taskId,
       ids: [...row.ids].sort((a, b) => a - b),
@@ -186,7 +226,7 @@ export function planSummaryImport(input: {
 
   rejections.sort((a, b) => a.line - b.line);
   const unansweredTaskIds = input.tasks.map((t) => t.taskId).filter((id) => !answered.has(id));
-  return { updates, rejections, unansweredTaskIds };
+  return { updates, rejections, unansweredTaskIds, valueChanges };
 }
 
 /** D1 への書き込み口。テストでは差し替える。 */
@@ -240,6 +280,11 @@ export function formatPlanReport(plan: ImportPlan, maxRejections = 30): string[]
     out.push(`  L${r.line} ${r.taskId ?? "(taskId なし)"} ${r.reason}: ${r.detail}`);
   }
   if (plan.rejections.length > maxRejections) out.push(`  … 他 ${plan.rejections.length - maxRejections} 行`);
+  const vc = plan.valueChanges;
+  out.push(`推定金額の変化: 消える ${vc.toNull} 行 / 新たに付く ${vc.fromNull} 行 / 値が変わる ${vc.changed} 行`);
+  if (vc.toNull > 0) {
+    out.push(`  注意: 今ある推定金額が ${vc.toNull} 行で null になり、優待利回りの計算から外れる`);
+  }
   out.push(`未回答のタスク: ${plan.unansweredTaskIds.length}`);
   return out;
 }
