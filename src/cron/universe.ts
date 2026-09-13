@@ -33,7 +33,16 @@ import {
   isListedEquity,
   type JpxRow,
 } from "../shared/jpx/sectors.js";
+import {
+  INSTRUMENT_TYPE_EQUITY,
+  classifyInstrumentType,
+  type InstrumentType,
+} from "../shared/jpx/instrument-type.js";
 import { isValidStockCode } from "../shared/jpx/stock-code.js";
+
+// 語彙の正本は src/shared/jpx/instrument-type.ts。既存の import 元 (このファイル)
+// を壊さないよう、ここからも見えるようにしておく。
+export { INSTRUMENT_TYPE_EQUITY };
 
 type Db = ReturnType<typeof createUniverseDb>;
 
@@ -48,9 +57,9 @@ type CoreWriterDb = Pick<Db, "insert" | "select" | "update">;
  * 6 列 (code/name/market/sector/is_active/is_yutai既定値) を bind するので
  * 16 行/文 (96 bind) に抑える。
  */
-const UPSERT_CHUNK = 16;
+export const UPSERT_CHUNK = 16;
 /** inactivate の IN リスト bind 上限対策チャンク (1 列 × N 値、80 < 100)。 */
-const INACT_CHUNK = 80;
+export const INACT_CHUNK = 80;
 /**
  * ガード(a) の下限。**`rawCount` は data_j の全行数**で、ETF/ETN・REIT・PRO Market・
  * 外国株の行も、5 文字の種類株の行も含む (`isListedEquity` も 4 文字コード契約も
@@ -74,18 +83,24 @@ const MIN_EXISTING_COVERAGE = 0.98;
 const MAX_DEACTIVATION_RATIO = 0.02;
 
 /**
- * `core_stocks.instrument_type` の内国普通株を表す語彙。ガード(c) の分母の
- * 絞り込み条件 `is_active = 1 AND instrument_type = 'equity'` と、
- * stockStock 側の充填で**同じ文字列**を使う
- * (`src/jp_stock_pipeline/cloud_store/universe_guards.py`)。
+ * upsert で `instrument_type` に書く値を**SQL リテラル**として埋め込む。
  *
- * 充填の述語をずらしてはいけない。(c) の分子は `isListedEquity` (「内国株式」かつ
- * プライム|スタンダード|グロース かつ 4 文字コード) を通った件数なので、分母を
- * `instrument_type='equity'` で数えるなら充填も同じ述語でなければならない。
- * たとえば PRO Market の内国株を `equity` に入れると分母が分子より構造的に
- * 大きくなり、(c) が恒久的に 98% を割る。
+ * bind にしない理由: core_stocks の upsert は 1 行あたり 6 bind
+ * (code/name/market/sector/is_active/is_yutai 既定値) で、16 行/文 = 96 bind に
+ * 収めてある (D1 の上限は 100/文)。`instrument_type` を bind で足すと
+ * 7 × 16 = 112 で上限を超え、チャンクを 14 行に落とすと月次の文数が
+ * 232 → 265 に増える。値は語彙の定数 1 つなので、リテラルにすれば文数も bind も
+ * 変わらない (universe.test.ts が bind 数を実測で固定)。
+ *
+ * `sql.raw` に渡すので、定数が `[a-z_]` 以外を含んだら起動時に止める
+ * (語彙を書き換えた人がクォートを混ぜても SQL に届かない)。
  */
-export const INSTRUMENT_TYPE_EQUITY = "equity";
+if (!/^[a-z_]+$/.test(INSTRUMENT_TYPE_EQUITY)) {
+  throw new Error(
+    `INSTRUMENT_TYPE_EQUITY は [a-z_] だけで書くこと: ${INSTRUMENT_TYPE_EQUITY}`
+  );
+}
+const INSTRUMENT_TYPE_EQUITY_LITERAL = sql.raw(`'${INSTRUMENT_TYPE_EQUITY}'`);
 
 /**
  * 「`instrument_type` の充填が済んでいる」と見なす equity 件数の下限。
@@ -108,6 +123,19 @@ export interface UniverseSyncResult {
   upserted: number;
   /** raw JPX 不在またはコード契約対象外として inactive にした件数 */
   deactivated: number;
+  /**
+   * 内国普通株**以外**の既存 active 行のうち、`instrument_type` を書き換えた件数。
+   * 内国普通株は upsert が `equity` を書くのでここには入らない。差分だけ書くので
+   * 充填が済んだ翌月からは区分が変わった銘柄の件数 (通常 0) になる。
+   */
+  instrumentTypeUpdated: number;
+  /**
+   * data_j の全行のうち `instrument_type` を分類できなかった行の、区分文字列ごとの件数。
+   * 5 文字の種類株 (「プライム（内国株式）」等) は毎月ここに出るのが正常。
+   * それ以外の区分が現れたら JPX が区分を変えた合図で、
+   * src/shared/jpx/instrument-type.ts の表を見直す。
+   */
+  unclassifiedCategories: Record<string, number>;
 }
 
 export function createUniverseDb() {
@@ -321,8 +349,189 @@ export function shouldDeactivateUniverseCode(
   return !rawCodes.has(code) || !isValidStockCode(code);
 }
 
+/** `planInstrumentTypeUpdates` が見る既存 active 行。 */
+export interface ExistingActiveStock {
+  id: number;
+  code: string;
+  instrumentType: string | null;
+}
+
+/** 内国普通株以外の既存 active 行へ書く `instrument_type`。 */
+export interface InstrumentTypeUpdate {
+  id: number;
+  code: string;
+  /** 書き換え前の値 (ログと検査用)。 */
+  from: string | null;
+  /** 書き込む値。`null` は「未分類」で、別の語で埋めない。 */
+  to: InstrumentType | null;
+}
+
+/**
+ * 内国普通株**以外**の既存 active 行に書く `instrument_type` を決める。書き込みはしない。
+ *
+ * ## なぜ upsert だけでは足りないのか
+ *
+ * upsert が触るのは `isListedEquity` を通った行だけで、それ以外の active 行
+ * (本番 2026-09-13 実測で 9 行: 優待のある J-REIT 等を `otakara` の取込が入れたもの)
+ * は `instrument_type` が NULL のまま残る。また内国普通株が PRO Market へ移ると、
+ * その行は data_j に載り続けるので対象外化されず、upsert の対象からも外れ、
+ * **`equity` のまま残る**。放置するとガード (c)(d2) の equity 分母が
+ * `isListedEquity` の集合から毎月少しずつずれていく。
+ *
+ * ## 何を書かないか
+ *
+ * - **行を足さない。** 対象は既存の active 行だけ (非 equity 行の追加は P4b 第 2 段)
+ * - `is_active` を変えない。対象外化する行 (`deactivatedIds`) は触らない
+ * - 値が変わらない行は書かない (翌月以降の書込を 0 行にする。コスト)
+ *
+ * ## 例外で止める入力
+ *
+ * data_j に同じコードが 2 行あり分類が食い違う場合。`コード` は data_j のキーなので
+ * 構造的には起きず、起きたらパース崩れを疑う。どちらかを選ぶと推定になる
+ * (ルール2)。書込前に呼ぶので、ここで止まれば 1 行も書かない。
+ */
+export function planInstrumentTypeUpdates(
+  existingActive: ReadonlyArray<ExistingActiveStock>,
+  jpxRows: ReadonlyArray<JpxRow>,
+  deactivatedIds: ReadonlySet<number>
+): InstrumentTypeUpdate[] {
+  const rowByCode = new Map<string, JpxRow>();
+  for (const row of jpxRows) {
+    const seen = rowByCode.get(row.code);
+    if (seen && classifyInstrumentType(seen) !== classifyInstrumentType(row)) {
+      throw new Error(
+        `JPX listing にコード ${row.code} が複数行あり、市場・商品区分が食い違っています` +
+          ` (「${seen.marketCategory}」と「${row.marketCategory}」)。` +
+          " data_j.xlsx のパース崩れを疑ってください。"
+      );
+    }
+    if (!seen) rowByCode.set(row.code, row);
+  }
+
+  const updates: InstrumentTypeUpdate[] = [];
+  for (const stock of existingActive) {
+    if (deactivatedIds.has(stock.id)) continue;
+    const row = rowByCode.get(stock.code);
+    // data_j に無い行は deactivatedIds に入っているはず。入っていないなら
+    // 対象外化の判定と食い違っているので、ここで値を作らない。
+    if (!row) continue;
+    // 内国普通株は upsert が `equity` を書く (述語を 2 箇所に持たない)。
+    if (isListedEquity(row)) continue;
+    const to = classifyInstrumentType(row);
+    if (to === stock.instrumentType) continue;
+    updates.push({ id: stock.id, code: stock.code, from: stock.instrumentType, to });
+  }
+  return updates;
+}
+
+/** data_j の全行のうち `instrument_type` を分類できなかった行を区分ごとに数える。 */
+export function countUnclassifiedCategories(
+  jpxRows: ReadonlyArray<JpxRow>
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const row of jpxRows) {
+    if (classifyInstrumentType(row) !== null) continue;
+    counts[row.marketCategory] = (counts[row.marketCategory] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/** `writeUniverse` に渡す、ガードを通った後の書込計画。 */
+export interface UniverseWritePlan {
+  /** `isListedEquity` を通った行 (upsert 対象)。 */
+  equities: ReadonlyArray<JpxRow>;
+  /** 内国普通株以外の既存 active 行への `instrument_type` の書き換え。 */
+  instrumentTypeUpdates: ReadonlyArray<InstrumentTypeUpdate>;
+  /** `is_active = 0` にする行の id。 */
+  deactivatedIds: ReadonlyArray<number>;
+}
+
+/**
+ * ガードを通った計画を core_stocks へ書く。**ガードはここでは評価しない**
+ * (呼び出し側 seedUniverse が mutation 前に済ませる)。
+ *
+ * 書く順は upsert → 非 equity の `instrument_type` → 対象外化。途中で落ちると
+ * 充填が一部だけ済んだ状態になるが、equity 件数が 3,000 未満なら次回のガードは
+ * 従来の分母へ縮退する (instrumentTypeBackfilled)。
+ */
+export async function writeUniverse(
+  db: CoreWriterDb,
+  plan: UniverseWritePlan
+): Promise<{ upserted: number; instrumentTypeUpdated: number }> {
+  // --- 内国普通株を upsert (is_yutai は触らない) ---
+  let upserted = 0;
+  for (let i = 0; i < plan.equities.length; i += UPSERT_CHUNK) {
+    const slice = plan.equities.slice(i, i + UPSERT_CHUNK);
+    await db
+      .insert(coreSchema.stocks)
+      .values(
+        slice.map((r) => ({
+          code: r.code,
+          name: r.name,
+          market: r.marketCategory,
+          sector: r.sector33,
+          isActive: true,
+          // equities は isListedEquity を通った行なので語は常に equity。
+          // bind ではなくリテラル (INSTRUMENT_TYPE_EQUITY_LITERAL の docstring)。
+          instrumentType: INSTRUMENT_TYPE_EQUITY_LITERAL,
+        }))
+      )
+      .onConflictDoUpdate({
+        target: coreSchema.stocks.code,
+        set: {
+          name: sql`excluded.name`,
+          market: sql`excluded.market`,
+          sector: sql`excluded.sector`,
+          instrumentType: sql`excluded.instrument_type`,
+          isActive: sql`1`,
+          updatedAt: sql`(unixepoch())`,
+        },
+      });
+    upserted += slice.length;
+  }
+
+  // --- 内国普通株以外の既存 active 行: instrument_type だけを書く ---
+  // 値ごとにまとめて `WHERE id IN (...)` にする (1 値 + id 80 個 = 81 bind)。
+  // `updated_at` も進める: この表の鮮度 (MAX(updated_at)) を進めてよいのは
+  // universe sync だけで、ここはその universe sync 自身の書込である。
+  const idsByType = new Map<InstrumentType | null, number[]>();
+  for (const u of plan.instrumentTypeUpdates) {
+    const ids = idsByType.get(u.to) ?? [];
+    ids.push(u.id);
+    idsByType.set(u.to, ids);
+  }
+  for (const [to, ids] of idsByType) {
+    for (let i = 0; i < ids.length; i += INACT_CHUNK) {
+      await db
+        .update(coreSchema.stocks)
+        .set({ instrumentType: to, updatedAt: sql`(unixepoch())` })
+        .where(inArray(coreSchema.stocks.id, ids.slice(i, i + INACT_CHUNK)));
+    }
+  }
+
+  // --- 対象外化: raw JPX 不在、または共有4文字コード契約の対象外 ---
+  // 5桁種類株は Yahoo 自体に存在しても全サービスのコード契約外なので、
+  // 過去runでactive化済みの行もここで明示的に外す。
+  for (let i = 0; i < plan.deactivatedIds.length; i += INACT_CHUNK) {
+    await db
+      .update(coreSchema.stocks)
+      .set({ isActive: false, updatedAt: sql`(unixepoch())` })
+      .where(
+        inArray(
+          coreSchema.stocks.id,
+          plan.deactivatedIds.slice(i, i + INACT_CHUNK)
+        )
+      );
+  }
+
+  return { upserted, instrumentTypeUpdated: plan.instrumentTypeUpdates.length };
+}
+
 /**
  * 取得済み JPX 行から core_stocks を東証内国普通株へ同期する。
+ *
+ * `instrument_type` も同じ run で書く (内国普通株は upsert、それ以外の既存 active 行は
+ * planInstrumentTypeUpdates)。**行は増やさない** —— 非 equity 行の追加は P4b 第 2 段。
  *
  * @param db      core スキーマに書ける drizzle クライアント
  * @param jpxRows downloadJpxListing() の戻り (raw 全行を渡すこと)
@@ -347,6 +556,7 @@ export async function seedUniverse(
   // **相乗りさせて** JS 側で数える。列を 1 つ射影に足しても走査する行は同じで、
   // 別に `SELECT COUNT(*) ... WHERE instrument_type='equity'` を撃つと
   // そのぶん rows_read (D1 の課金単位) が増える。増やさないのが要件。
+  // 非 equity 行の充填計画 (planInstrumentTypeUpdates) も同じ行から作る。
   const existing = await db
     .select({
       id: coreSchema.stocks.id,
@@ -361,6 +571,9 @@ export async function seedUniverse(
   const deactivatedIds = pendingDeactivation.map((s) => s.id);
   const isEquityRow = (s: { instrumentType: string | null }): boolean =>
     s.instrumentType === INSTRUMENT_TYPE_EQUITY;
+  // ガードは**書込前の** `instrument_type` で数える。充填する run そのものは
+  // 未充填 (equity 0 件) として従来の分母で判定され、分母が equity へ切り替わるのは
+  // 充填が済んだ翌 run から。
   assertUniverseCoverage(
     jpxRows.length,
     equities.length,
@@ -373,49 +586,18 @@ export async function seedUniverse(
       pendingDeactivationEquityCount: pendingDeactivation.filter(isEquityRow).length,
     }
   );
+  // 計画は書込の前に全部作る (食い違いで throw するなら 1 行も書かない)。
+  const instrumentTypeUpdates = planInstrumentTypeUpdates(
+    existing,
+    jpxRows,
+    new Set(deactivatedIds)
+  );
 
-  // --- 内国普通株を upsert (is_yutai は触らない) ---
-  let upserted = 0;
-  for (let i = 0; i < equities.length; i += UPSERT_CHUNK) {
-    const slice = equities.slice(i, i + UPSERT_CHUNK);
-    await db
-      .insert(coreSchema.stocks)
-      .values(
-        slice.map((r) => ({
-          code: r.code,
-          name: r.name,
-          market: r.marketCategory,
-          sector: r.sector33,
-          isActive: true,
-        }))
-      )
-      .onConflictDoUpdate({
-        target: coreSchema.stocks.code,
-        set: {
-          name: sql`excluded.name`,
-          market: sql`excluded.market`,
-          sector: sql`excluded.sector`,
-          isActive: sql`1`,
-          updatedAt: sql`(unixepoch())`,
-        },
-      });
-    upserted += slice.length;
-  }
-
-  // --- 対象外化: raw JPX 不在、または共有4文字コード契約の対象外 ---
-  // 5桁種類株は Yahoo 自体に存在しても全サービスのコード契約外なので、
-  // 過去runでactive化済みの行もここで明示的に外す。
-  for (let i = 0; i < deactivatedIds.length; i += INACT_CHUNK) {
-    await db
-      .update(coreSchema.stocks)
-      .set({ isActive: false, updatedAt: sql`(unixepoch())` })
-      .where(
-        inArray(
-          coreSchema.stocks.id,
-          deactivatedIds.slice(i, i + INACT_CHUNK)
-        )
-      );
-  }
+  const { upserted, instrumentTypeUpdated } = await writeUniverse(db, {
+    equities,
+    instrumentTypeUpdates,
+    deactivatedIds,
+  });
 
   return {
     sourceAsOf,
@@ -423,6 +605,8 @@ export async function seedUniverse(
     equities: equities.length,
     upserted,
     deactivated: deactivatedIds.length,
+    instrumentTypeUpdated,
+    unclassifiedCategories: countUnclassifiedCategories(jpxRows),
   };
 }
 

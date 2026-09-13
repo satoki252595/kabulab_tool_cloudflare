@@ -19,7 +19,13 @@ async function main(): Promise<void> {
   const result = await runUniverseSync(db);
   console.info(
     `[sync-universe] 完了: 基準日=${result.sourceAsOf} JPX=${result.jpxRows} ` +
-      `対象株=${result.equities} upsert=${result.upserted} 対象外化=${result.deactivated}`
+      `対象株=${result.equities} upsert=${result.upserted} 対象外化=${result.deactivated} ` +
+      `instrument_type更新(非内国普通株)=${result.instrumentTypeUpdated}`
+  );
+  // 5 文字の種類株 (内国株式の区分) が毎月出るのは正常。それ以外の区分が出たら
+  // JPX が区分を変えた合図 (src/shared/jpx/instrument-type.ts の表を見直す)。
+  console.info(
+    `[sync-universe] instrument_type 未分類: ${JSON.stringify(result.unclassifiedCategories)}`
   );
 }
 
