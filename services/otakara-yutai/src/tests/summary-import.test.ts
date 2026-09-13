@@ -238,6 +238,45 @@ describe("planSummaryImport", () => {
   });
 });
 
+describe("dry-run の出力に掲載文の断片を出さない (既定)", () => {
+  const tasks = selectSummaryTasks(ROWS);
+  const plan = (resultsText: string, currentRows: BenefitRow[] = ROWS, includeText?: boolean) =>
+    planSummaryImport({ tasks, resultsText, currentRows, includeText });
+
+  it("formatPlanReport の出力に task.description と拒否した shortSummary が含まれない", () => {
+    // 注記記号を含む = 掲載文の注記ブロックをそのまま写した要約、という契約違反の典型例。
+    const rejectedSummary = "※争奪ギフトは抽選になります";
+    const p = plan(result({ shortSummary: rejectedSummary }));
+    expect(p.rejections).toHaveLength(1);
+    expect(p.rejections[0]).toMatchObject({ reason: "contract", taskId: K_CATALOG });
+    // detail は規則名と字数だけで、要約本体そのものは積まない。
+    expect(p.rejections[0].detail).not.toContain(rejectedSummary);
+    expect(p.rejections[0].text).toBeUndefined();
+    const report = formatPlanReport(p).join("\n");
+    expect(report).not.toContain(rejectedSummary);
+    expect(report).not.toContain(DESC_CATALOG);
+  });
+
+  it("JSON として読めない行は固定文になり、Node のエラー文 (入力の先頭を含む) を出さない", () => {
+    // ```json フェンス混入や、掲載文をそのまま書き戻した行を想定した壊れた入力。
+    const brokenLine = "架空の掲載文をそのままここに書いてしまった行";
+    const p = plan(brokenLine);
+    expect(p.rejections).toEqual([{ line: 1, taskId: null, reason: "parse", detail: "JSON として読めない" }]);
+    const report = formatPlanReport(p).join("\n");
+    expect(report).not.toContain(brokenLine);
+    expect(report).not.toContain("架空の掲載文");
+  });
+
+  it("includeText: true を明示したときだけ Rejection.text が付き、showText: true のときだけ出力に出る", () => {
+    const rejectedSummary = "※争奪ギフトは抽選になります";
+    const p = plan(result({ shortSummary: rejectedSummary }), ROWS, true);
+    expect(p.rejections[0].text).toBe(rejectedSummary);
+    expect(formatPlanReport(p, 30, true).join("\n")).toContain(rejectedSummary);
+    // showText を渡さなければ、text を保持していても出力には出さない。
+    expect(formatPlanReport(p).join("\n")).not.toContain(rejectedSummary);
+  });
+});
+
 describe("applySummaryImport", () => {
   const tasks = selectSummaryTasks(ROWS);
   const p = planSummaryImport({ tasks, resultsText: result({}), currentRows: ROWS });

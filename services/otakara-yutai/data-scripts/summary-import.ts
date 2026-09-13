@@ -75,6 +75,14 @@ export type Rejection = {
   taskId: string | null;
   reason: RejectReason;
   detail: string;
+  /**
+   * `planSummaryImport` の `includeText` を明示的に指定したときだけ持つ、掲載文
+   * 由来のテキスト (契約違反になった要約本体、または JSON として読めなかった行の
+   * 原文)。既定 (`includeText` 省略) では入らない。`formatPlanReport` も
+   * `showText` を渡さない限りこれを出力しないので、既定の dry-run ログには
+   * 掲載文の断片が出ない。
+   */
+  text?: string;
 };
 
 export type PlannedUpdate = {
@@ -105,6 +113,12 @@ export function planSummaryImport(input: {
   tasks: readonly SummaryTask[];
   resultsText: string;
   currentRows: readonly BenefitRow[];
+  /**
+   * true のときだけ、はじいた行に掲載文由来のテキスト (`Rejection.text`) を残す。
+   * 既定 (省略・false) では残さない — dry-run のログに掲載文の断片を出さないための
+   * 既定値。運用者が端末で本文を確認したいとき (`--show-text`) だけ true にする。
+   */
+  includeText?: boolean;
 }): ImportPlan {
   const taskById = new Map(input.tasks.map((t) => [t.taskId, t]));
   const current = new Map<string, { ids: number[]; description: string; values: (number | null)[] }>();
@@ -127,8 +141,18 @@ export function planSummaryImport(input: {
     let raw: unknown;
     try {
       raw = JSON.parse(text);
-    } catch (e) {
-      rejections.push({ line, taskId: null, reason: "parse", detail: (e as Error).message.slice(0, 120) });
+    } catch {
+      // Node の JSON.parse エラー文には入力の先頭が乗る (例: Node 22 の
+      // `Unexpected token '架', "架空の掲載文がそのま"... is not valid JSON`)。
+      // 壊れた行は往々にして掲載文をそのまま書き戻そうとした行なので、
+      // メッセージをそのまま出さず固定文にする。
+      rejections.push({
+        line,
+        taskId: null,
+        reason: "parse",
+        detail: "JSON として読めない",
+        ...(input.includeText ? { text } : {}),
+      });
       return;
     }
     const r = SummaryResult.safeParse(raw);
@@ -166,8 +190,14 @@ export function planSummaryImport(input: {
   const updates: PlannedUpdate[] = [];
   const valueChanges = { toNull: 0, fromNull: 0, changed: 0 };
   for (const { line, result } of parsed) {
-    const reject = (reason: RejectReason, detail: string) =>
-      rejections.push({ line, taskId: result.taskId, reason, detail });
+    const reject = (reason: RejectReason, detail: string, text?: string) =>
+      rejections.push({
+        line,
+        taskId: result.taskId,
+        reason,
+        detail,
+        ...(input.includeText && text !== undefined ? { text } : {}),
+      });
 
     if ((countById.get(result.taskId) ?? 0) > 1) {
       reject("duplicate", `taskId が結果に ${countById.get(result.taskId)} 回現れる`);
@@ -193,7 +223,10 @@ export function planSummaryImport(input: {
     const summary = normalizeSummary(result.shortSummary);
     const violations = checkSummary(summary);
     if (violations.length > 0) {
-      reject("contract", `${formatViolations(violations)} :: ${summary.slice(0, 70)}`);
+      // detail は規則名と字数だけ (formatViolations 参照)。要約本体は積まない —
+      // annotation 違反はまさに「掲載文の注記ブロックを写した要約」なので、
+      // ここで本体を出すとログに掲載文の断片が出てしまう。
+      reject("contract", formatViolations(violations), summary);
       continue;
     }
     if (isVerbatimCopy(summary, row.description)) {
@@ -267,8 +300,14 @@ export async function applySummaryImport(
   return { rows, groups: plan.updates.length, written: true };
 }
 
-/** 計画をログ用の行にする。掲載文は出さない (要約は公開予定の文字列なので出す)。 */
-export function formatPlanReport(plan: ImportPlan, maxRejections = 30): string[] {
+/**
+ * 計画をログ用の行にする。既定 (`showText` 省略・false) では掲載文由来の文字列を
+ * 一切出さない — `Rejection.detail` は規則名・字数・件数だけ、`Rejection.text`
+ * (契約違反の要約本体や壊れた行の原文) はそもそも `planSummaryImport` に
+ * `includeText: true` を渡さない限り無い。`showText: true` は運用者が端末で
+ * 本文を確認したいとき専用で、貼り付け前提の出力ではない。
+ */
+export function formatPlanReport(plan: ImportPlan, maxRejections = 30, showText = false): string[] {
   const out: string[] = [];
   const rows = plan.updates.reduce((s, u) => s + u.ids.length, 0);
   out.push(`書き込み対象: ${plan.updates.length} タスク / ${rows} 行`);
@@ -277,7 +316,8 @@ export function formatPlanReport(plan: ImportPlan, maxRejections = 30): string[]
   for (const r of plan.rejections) byReason.set(r.reason, (byReason.get(r.reason) ?? 0) + 1);
   for (const [reason, n] of [...byReason].sort((a, b) => b[1] - a[1])) out.push(`  ${reason}: ${n}`);
   for (const r of plan.rejections.slice(0, maxRejections)) {
-    out.push(`  L${r.line} ${r.taskId ?? "(taskId なし)"} ${r.reason}: ${r.detail}`);
+    const textSuffix = showText && r.text !== undefined ? ` :: ${r.text}` : "";
+    out.push(`  L${r.line} ${r.taskId ?? "(taskId なし)"} ${r.reason}: ${r.detail}${textSuffix}`);
   }
   if (plan.rejections.length > maxRejections) out.push(`  … 他 ${plan.rejections.length - maxRejections} 行`);
   const vc = plan.valueChanges;

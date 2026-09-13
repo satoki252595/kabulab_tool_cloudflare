@@ -9,7 +9,10 @@
  *   pnpm yutai:summary:import --tasks <タスクファイル> --results <結果ファイル>          # dry-run
  *   pnpm yutai:summary:import --tasks <タスクファイル> --results <結果ファイル> --apply  # 書き込み
  *
- * dry-run は D1 を読むだけで、書く件数・はじいた行と理由を出す。
+ * dry-run は D1 を読むだけで、書く件数・はじいた行と理由を出す。既定では、はじいた
+ * 行の詳細に掲載文由来の文字列 (契約違反の要約本体・JSON として読めなかった行の
+ * 原文) を出さない。`--show-text` を付けると端末にだけそれを出すが、Issue / PR /
+ * チャット等には貼らないこと (掲載元サイトの規約・private-path.ts の趣旨と同じ)。
  *
  * 採らなかった案: 違反が 1 行でもあれば全体を止める (旧 apply の挙動)。旧経路は
  * 自前の LLM を再実行すれば済んだが、外部エージェントへの再依頼は往復が重く、
@@ -36,6 +39,10 @@ async function main(): Promise<void> {
       tasks: { type: "string" },
       results: { type: "string" },
       apply: { type: "boolean", default: false },
+      // 既定オフ。付けると、はじいた行の詳細に掲載文由来の文字列 (契約違反の
+      // 要約本体・壊れた JSON 行の原文) を端末にだけ出す。Issue / PR / チャット
+      // には貼らないこと。
+      "show-text": { type: "boolean", default: false },
     },
     strict: true,
   });
@@ -43,6 +50,7 @@ async function main(): Promise<void> {
     throw new Error("--tasks <タスクファイル> と --results <結果ファイル> を指定してください");
   }
   const apply = values.apply ?? false;
+  const showText = values["show-text"] ?? false;
   assertNotCommittable(values.tasks);
   assertNotCommittable(values.results);
 
@@ -51,9 +59,9 @@ async function main(): Promise<void> {
   const db = openOtakaraD1();
   const currentRows = await loadBenefitRows(db);
 
-  const plan = planSummaryImport({ tasks, resultsText, currentRows });
+  const plan = planSummaryImport({ tasks, resultsText, currentRows, includeText: showText });
   console.info(`[summary:import] タスク ${tasks.length} 件 / D1 の優待行 ${currentRows.length}`);
-  for (const line of formatPlanReport(plan)) console.info(`[summary:import] ${line}`);
+  for (const line of formatPlanReport(plan, undefined, showText)) console.info(`[summary:import] ${line}`);
 
   const writer: SummaryWriter = {
     async update(ids, v) {
