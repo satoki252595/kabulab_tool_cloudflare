@@ -9,6 +9,7 @@
  *   - normalize         … 表現揺れの吸収のみ (妥当性は見ない)
  *   - parse             … 4 文字の正準形か (取込済みデータ・URL パラメータ用)
  *   - source_to_ticker  … TDnet/EDINET の 5 文字形式 → 4 文字ティッカー
+ *   - margin_to_key     … JPX 信用残 PDF の 5 文字形式 → rows[].code (種類株は 5 文字のまま)
  * この 3 つを 1 つの関数で兼ねようとして各実装が割れていた。
  */
 import { describe, expect, it } from "vitest";
@@ -16,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   STOCK_CODE_REGEX,
+  marginCodeToKey,
   normalizeStockCode,
   parseStockCode,
   sourceCodeToTicker,
@@ -29,6 +31,7 @@ interface Vector {
   normalize: string;
   parse: string | null;
   source_to_ticker: string | null;
+  margin_to_key: string | null;
   note: string;
 }
 
@@ -68,6 +71,17 @@ describe.each(fixture.vectors)("ベクタ $id ($input)", (v: Vector) => {
 
   it(`source_to_ticker → ${JSON.stringify(v.source_to_ticker)}`, () => {
     expect(sourceCodeToTicker(v.input)).toBe(v.source_to_ticker);
+  });
+
+  it(`margin_to_key → ${JSON.stringify(v.margin_to_key)}`, () => {
+    expect(marginCodeToKey(v.input)).toBe(v.margin_to_key);
+  });
+
+  // 4 文字を返すなら source_to_ticker と同じ値。種類株を普通株のコードへ潰さない
+  // (取り違え) ことの一般形。
+  it("margin_to_key は別のティッカーの 4 文字を返さない", () => {
+    const key = marginCodeToKey(v.input);
+    if (key !== null && key.length === 4) expect(key).toBe(v.source_to_ticker);
   });
 
   // 取込 2 系統 (TDnet / EDINET) が共有ヘルパへ委譲しきっていることを、

@@ -129,3 +129,45 @@ export function sourceCodeToTicker(
   }
   return null;
 }
+
+/** 信用残 PDF で「別の証券」として 5 文字のまま残す検査文字 (数字の 1-9)。 */
+const CLASS_SHARE_CHECK_CHAR_REGEX = /^[1-9]$/;
+
+/**
+ * JPX 信用残 PDF の 5 文字コードを R2 `margin/{date}.json` の `rows[].code` へ変換する。
+ *
+ *   - 末尾 `'0'` (と 4 文字) は {@link sourceCodeToTicker} と同じ 4 文字ティッカー。
+ *   - 「4 文字の正準形 + 数字 1-9」の 5 文字は **5 文字のまま** 返す (種類株)。
+ *   - それ以外は `null`。
+ *
+ * stockStock `contracts/stock_code.py` の `margin_code_to_key` と同じ契約
+ * (共有テストベクタの `margin_to_key`)。
+ *
+ * ## なぜ sourceCodeToTicker をそのまま使わないか
+ * 実 PDF (2026-08-28 / 09-04 申込み現在、各 4,229 / 4,227 明細) の実測で、検査文字が
+ * `'0'` でない行は両週とも 7 行だけ。ETF・ETN・REIT・インフラファンド・JDR は全件
+ * `'0'` だった。非 `'0'` の 7 行はすべて種類株 (伊藤園第１種優先株式 `25935`、
+ * 社債型種類株式 `94345` 等) で、全件が同社普通株と先頭 4 文字を共有する。
+ * 旧実装 (`slice(0, 4)`) はこれを 6 つの 4 文字コードへ 13 行潰していた (取り違え)。
+ * sourceCodeToTicker を当てると取り違えは消えるが、実在する別の証券の 7 行を落とす。
+ * 5 文字キーは 4 文字ティッカーと衝突しないので、落とさず別キーにする。
+ *
+ * 採らなかった案: ISIN を rows に足す (公開 API `/vwap-analysis/api/margin` が行を
+ * 丸ごとスプレッドするため公開面が広がる) / 非 `'0'` 行を捨てる (データ欠損)。
+ *
+ * TDnet/EDINET の取込には使わないこと (4 文字の銘柄母集団へ突合する面なので
+ * sourceCodeToTicker の「取りこぼし側」が正しい)。
+ */
+export function marginCodeToKey(raw: string | null | undefined): string | null {
+  const ticker = sourceCodeToTicker(raw);
+  if (ticker !== null) return ticker;
+  const s = normalizeStockCode(raw);
+  if (
+    s.length === 5 &&
+    STOCK_CODE_REGEX.test(s.slice(0, 4)) &&
+    CLASS_SHARE_CHECK_CHAR_REGEX.test(s.slice(4))
+  ) {
+    return s;
+  }
+  return null;
+}
