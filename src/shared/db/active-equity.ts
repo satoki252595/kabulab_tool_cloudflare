@@ -129,7 +129,7 @@ type CoreDb = BaseSQLiteDatabase<"async", unknown, Record<string, unknown>>;
  * |---|---|---|---|
  * | 1 | `equity` | する | 上場中の内国普通株 |
  * | 0 | `equity` | する | 区分を書いた後に対象外化された普通株 |
- * | 0 | NULL | する | 区分を書く前に対象外化された行 (上場廃止・地域取引所の単独上場) |
+ * | 0 | NULL | する | 区分を書く前に対象外化された行 (上場廃止・地域取引所の単独上場)。区分を NULL に書き換えられた後に対象外化された非普通株も入る (下記) |
  * | 1 | NULL | しない | 区分が未分類の active 行 (日次にも公開面にも居ない) |
  * | 1 / 0 | `equity` 以外 | しない | 非普通株 |
  *
@@ -139,6 +139,13 @@ type CoreDb = BaseSQLiteDatabase<"async", unknown, Record<string, unknown>>;
  *   inactive の行はすべて NULL なので、変更前の全行 (3,810) と同じ集合になる。
  * - P4b 第 2 段が非普通株 (区分が非 NULL) を INSERT しても、その開示・有報は取り込まない。
  *   区分を持ったまま対象外化された非普通株も取り込まない。
+ * - **既知の限界**: universe sync は、JPX の区分の表記が変わって分類できなくなった既存
+ *   active の非普通株の区分を NULL (未分類) に書き換える (src/cron/universe.ts の
+ *   `planInstrumentTypeUpdates`)。対象外化の書込は `instrument_type` に触らないので、その行が
+ *   後で上場廃止などで対象外化されると `is_active = 0 AND instrument_type IS NULL` になり、
+ *   取り込む側へ戻る。active の間は取り込まない。区分の表記変化は
+ *   `countUnclassifiedCategories` が数える。塞ぐなら universe sync が「非 NULL → NULL」の
+ *   書き換えをしない形にする (universe.ts の挙動変更で、この述語の範囲外)。
  * - 優待の取込は `activeEquityCondition()` のまま (`findActiveEquityStockId` と
  *   services/otakara-yutai/data-scripts/yutai-full-import.ts)。
  * - `is_active = 0` の開示・有報も止めるなら、`loadIngestCodeToId` の WHERE を
