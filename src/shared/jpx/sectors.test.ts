@@ -6,7 +6,9 @@ import {
   type JpxRow,
 } from "./sectors.js";
 
-// JPX data_j 2026-06-30版の実在行。手作りの架空銘柄は使わない。
+// 内国株式の 2 行は JPX data_j 2026-06-30 版の実在行。ETF の行は合成で、コードは JPX の
+// 上場銘柄一覧 (2026-08-31 版) にも本番 core_stocks にも無く、銘柄名も架空。
+// 区分文字列だけが data_j の表記。
 const VERITAS: JpxRow = {
   asOf: "2026-06-30",
   code: "130A",
@@ -21,10 +23,10 @@ const ITO_EN_PREFERRED: JpxRow = {
   marketCategory: "プライム（内国株式）",
   sector33: "食料品",
 };
-const IFREE_TOPIX: JpxRow = {
+const SYNTHETIC_ETF: JpxRow = {
   asOf: "2026-06-30",
-  code: "1305",
-  name: "ｉＦｒｅｅＥＴＦ　ＴＯＰＩＸ（年１回決算型）",
+  code: "1202",
+  name: "合成テスト指数連動型ＥＴＦ",
   marketCategory: "ETF・ETN",
   sector33: null,
 };
@@ -47,7 +49,7 @@ describe("isListedEquity", () => {
 
   it("5桁種類株とETFを普通株母集団から除外する", () => {
     expect(isListedEquity(ITO_EN_PREFERRED)).toBe(false);
-    expect(isListedEquity(IFREE_TOPIX)).toBe(false);
+    expect(isListedEquity(SYNTHETIC_ETF)).toBe(false);
   });
 });
 

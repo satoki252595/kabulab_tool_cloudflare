@@ -100,7 +100,8 @@ beforeEach(() => {
   applyD1Migrations(sqlite);
   sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (1, 'QUOカード', 'quo')");
   seedYutaiStock(EQUITY_ID, "7203", INSTRUMENT_TYPES.equity);
-  seedYutaiStock(REIT_ID, "8951", INSTRUMENT_TYPES.reitFund);
+  // 合成コード。JPX の上場銘柄一覧 (2026-08-31 版) にも本番 core_stocks にも無い。
+  seedYutaiStock(REIT_ID, "1201", INSTRUMENT_TYPES.reitFund);
 });
 
 afterEach(() => {

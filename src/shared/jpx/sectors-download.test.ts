@@ -49,11 +49,13 @@ function stubFetch(bytes: Uint8Array) {
   );
 }
 
-// data_j 2026-06-30 版の実在行を使う (架空銘柄は使わない)。
+// 内国株式の行は data_j 2026-06-30 版の実在行を使う。ETF の行は合成で、コードは JPX の
+// 上場銘柄一覧 (2026-08-31 版) にも本番 core_stocks にも無く、銘柄名も架空。
+// 区分文字列だけが data_j の表記。
 const TOYOTA = row(7203, "トヨタ自動車", "プライム（内国株式）", "輸送用機器");
 const VERITAS = row("130A", "Ｖｅｒｉｔａｓ　Ｉｎ　Ｓｉｌｉｃｏ", "グロース（内国株式）", "医薬品");
 const ITO_EN_PREFERRED = row(25935, "伊藤園第１種優先株式", "プライム（内国株式）", "食料品");
-const IFREE_TOPIX = row(1305, "ｉＦｒｅｅＥＴＦ　ＴＯＰＩＸ（年１回決算型）", "ETF・ETN");
+const SYNTHETIC_ETF = row(1202, "合成テスト指数連動型ＥＴＦ", "ETF・ETN");
 
 describe("downloadJpxListing", () => {
   beforeEach(() => {
@@ -87,10 +89,10 @@ describe("downloadJpxListing", () => {
   // 非正準コード行を落とすと rawCount が「正準コード行数」に変質し、部分取得の
   // 検知器としての意味が変わる。ここを回帰で固定する。
   it("5文字の種類株・ETF 行も落とさない (rawCount の母集団を保つ)", async () => {
-    stubFetch(xlsxBytes([TOYOTA, ITO_EN_PREFERRED, IFREE_TOPIX]));
+    stubFetch(xlsxBytes([TOYOTA, ITO_EN_PREFERRED, SYNTHETIC_ETF]));
     const rows = await downloadJpxListing();
     expect(rows).toHaveLength(3);
-    expect(rows.map((r) => r.code)).toEqual(["7203", "25935", "1305"]);
+    expect(rows.map((r) => r.code)).toEqual(["7203", "25935", "1202"]);
     // 絞り込みは isListedEquity 側の責務
     expect(rows.filter(isListedEquity).map((r) => r.code)).toEqual(["7203"]);
   });
@@ -155,7 +157,7 @@ describe("downloadJpxListing", () => {
   });
 
   it("一次取得物を基準月キーで Notion へ原本アーカイブする", async () => {
-    stubFetch(xlsxBytes([TOYOTA, ITO_EN_PREFERRED, IFREE_TOPIX]));
+    stubFetch(xlsxBytes([TOYOTA, ITO_EN_PREFERRED, SYNTHETIC_ETF]));
     await downloadJpxListing();
     expect(recordPrimaryData).toHaveBeenCalledTimes(1);
     const arg = recordPrimaryData.mock.calls[0][0] as {

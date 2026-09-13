@@ -99,8 +99,9 @@ describe("loadDailyTargets", () => {
   it("active かつ equity の行だけを返す", async () => {
     seedStock({ id: 1, code: "7203", active: true, instrumentType: INSTRUMENT_TYPES.equity, sector: "輸送用機器" });
     seedStock({ id: 2, code: "1001", active: false, instrumentType: INSTRUMENT_TYPES.equity });
-    seedStock({ id: 3, code: "8951", active: true, instrumentType: INSTRUMENT_TYPES.reitFund });
-    seedStock({ id: 4, code: "1306", active: true, instrumentType: INSTRUMENT_TYPES.etfEtn });
+    // 非普通株の 2 行のコードは合成 (JPX の上場銘柄一覧 2026-08-31 版にも本番 core_stocks にも無い)。
+    seedStock({ id: 3, code: "1201", active: true, instrumentType: INSTRUMENT_TYPES.reitFund });
+    seedStock({ id: 4, code: "1202", active: true, instrumentType: INSTRUMENT_TYPES.etfEtn });
     seedStock({ id: 5, code: "9999", active: true, instrumentType: null });
 
     const targets = await loadDailyTargets(db());

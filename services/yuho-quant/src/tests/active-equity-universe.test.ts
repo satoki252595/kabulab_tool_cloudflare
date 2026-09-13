@@ -78,10 +78,13 @@ function createD1(sqlite: DatabaseSync): unknown {
   };
 }
 
-/** 3 銘柄。`instrument_type` 以外 (名前・業種の有無・データの形) は揃えてある。 */
+/**
+ * 3 銘柄。`instrument_type` 以外 (名前・業種の有無・データの形) は揃えてある。
+ * 7203 以外のコードは合成 (JPX の上場銘柄一覧 2026-08-31 版にも本番 core_stocks にも無い)。
+ */
 const STOCKS = [
   { id: 1, code: "7203", name: "テスト普通株", instrumentType: "equity", sector33: "輸送用機器" },
-  { id: 2, code: "8951", name: "テストREIT", instrumentType: "reit_fund", sector33: "REIT業種" },
+  { id: 2, code: "1201", name: "テストREIT", instrumentType: "reit_fund", sector33: "REIT業種" },
   { id: 3, code: "9999", name: "テスト未分類", instrumentType: null, sector33: "未分類業種" },
 ] as const;
 

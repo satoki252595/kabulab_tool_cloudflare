@@ -135,8 +135,9 @@ describe("/emh の母集団は active かつ equity (非普通株を数えも並
    * 日次の対象から外れた REIT。断面と指標は凍結したまま残っていて、small-cap /
    * low-vol / post-earnings のどの条件も満たし、しかも絞り込みが外れたら先頭に
    * 並ぶ値にしてある (時価総額が最小・ATR% が最小・fetched_at が最新)。
+   * コードは合成 (JPX の上場銘柄一覧 2026-08-31 版にも本番 core_stocks にも無い)。
    */
-  const REIT_CODE = "8951";
+  const REIT_CODE = "1201";
 
   beforeEach(() => {
     d1.sqlite

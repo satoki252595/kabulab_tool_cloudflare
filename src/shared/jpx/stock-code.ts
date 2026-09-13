@@ -115,7 +115,7 @@ export function parseStockCode(raw: string | null | undefined): string | null {
  *
  * **EDINET については末尾 `'0'` 限定の実測根拠が無い** (生の `secCode` を保存して
  * いる表が無く分布を取れない)。仕様上は「4 文字 + 検査文字」なので同形と見なすが、
- * 未検証のまま厳格側へ寄せている。末尾非 0 (例 ETF `1671` の `16714`) は
+ * 未検証のまま厳格側へ寄せている。末尾非 0 (例 `16714`) は
  * `null` になり呼び出し側で母集団外として落ちる — 取り違えより取りこぼしを選ぶ。
  */
 export function sourceCodeToTicker(
