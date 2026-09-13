@@ -52,13 +52,6 @@ beforeEach(() => {
     // 市場系列。本番は 107 行で銘柄側と重なるのが 94 日。
     95
   );
-  // 旧経路が書いていた 2 表に、書き換えを検知するための番兵を置く。
-  d1.sqlite.exec(
-    "INSERT INTO finmath_price_snapshot (code, price, data_date) VALUES ('7203', 1, '2020-01-01')"
-  );
-  d1.sqlite.exec(
-    "INSERT INTO finmath_daily_ohlcv (symbol, date, close) VALUES ('^N225', '2020-01-01', 1)"
-  );
 });
 
 afterEach(() => {
@@ -86,15 +79,21 @@ async function post(
   return { status: res.status, body: await res.text() };
 }
 
-/** 旧経路の書き込み先の中身 (番兵が書き換わっていないこと) */
-function sentinels(): { price: number; ohlcvClose: number } {
-  const p = d1.sqlite
-    .prepare("SELECT price FROM finmath_price_snapshot WHERE code='7203'")
-    .get() as { price: number };
-  const o = d1.sqlite
-    .prepare("SELECT close FROM finmath_daily_ohlcv WHERE symbol='^N225'")
-    .get() as { close: number };
-  return { price: p.price, ohlcvClose: o.close };
+/**
+ * テスト DB にある `finmath_` 表の名前。
+ *
+ * 以前はここで旧 2 表の番兵行が書き換わっていないかを見ていた。2 表は
+ * drizzle/d1/0012 で本番から DROP するので、テスト DB も本番と同じく
+ * **表を持たない**形にした。読み書きに行けば `no such table` で 500 になり、
+ * 各テストの status 検査で落ちる。この関数はその前提 (表が無い) 自体が
+ * 崩れていないことを確かめる。
+ */
+function finmathTables(): string[] {
+  return (
+    d1.sqlite
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'finmath\\_%' ESCAPE '\\'")
+      .all() as { name: string }[]
+  ).map((r) => r.name);
 }
 
 describe("code 付き GET が D1 へ書き込まない", () => {
@@ -117,13 +116,15 @@ describe("code 付き GET が D1 へ書き込まない", () => {
     ).toEqual([]);
   });
 
-  it.each(paths)("GET %s は廃止した 2 表を触らない", async (path) => {
-    await get(path);
+  it.each(paths)("GET %s は削除した 2 表を触らない", async (path) => {
+    // 前提: テスト DB に 2 表が無い (本番と同じ)。あると触っても落ちない。
+    expect(finmathTables()).toEqual([]);
+    const { status } = await get(path);
+    // 触っていれば `no such table` で 500 になる
+    expect(status).toBe(200);
     expect(
       d1.executed.filter((q) => /finmath_(price_snapshot|daily_ohlcv)/i.test(q))
     ).toEqual([]);
-    // 番兵が 2020-01-01 の値のまま = 書き換えていない
-    expect(sentinels()).toEqual({ price: 1, ohlcvClose: 1 });
   });
 
   it("計算 POST も書き込まない (誰が押したかでデータが変わらない)", async () => {
@@ -136,8 +137,11 @@ describe("code 付き GET が D1 へ書き込まない", () => {
       const { status } = await post(path, fields);
       expect(status, `${path} が 200 を返さない`).toBe(200);
       expect(writeStatements(d1.executed), `${path} が書き込んでいる`).toEqual([]);
+      expect(
+        d1.executed.filter((q) => /finmath_(price_snapshot|daily_ohlcv)/i.test(q)),
+        `${path} が削除した 2 表を触っている`
+      ).toEqual([]);
     }
-    expect(sentinels()).toEqual({ price: 1, ohlcvClose: 1 });
   });
 });
 

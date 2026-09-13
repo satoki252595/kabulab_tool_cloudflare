@@ -22,14 +22,14 @@
 
 ### core_* / swing_* テーブルは読み取り専用
 
-書き込みは 004 所有の `finmath_price_snapshot` / `finmath_daily_ohlcv` のみ。
+004 は D1 に書き込まない (所有する表が無い)。旧 `finmath_*` 2 表は drizzle/d1/0012 で削除した。
 `src/db/core-schema.ts` / `swing-readonly.ts` は参照専用の定義。
 
 ## 技術スタック
 
 - Runtime: Cloudflare Workers + Hono v4
 - DB: Cloudflare D1 (SQLite) + Drizzle ORM (drizzle-orm/d1 + sqlite-core)。
-  単一 DB `kabulab-cf` に接頭辞テーブル `finmath_*` で同居 (ADR-0001)。
+  単一 DB `kabulab-cf` の core_* / swing_* を読み取り専用で参照 (ADR-0001)。
   読取は Worker の `c.env.DB` バインディング (`createDb(c.env.DB)`)。
 - Validation: Zod
 - Language: TypeScript (strict)
@@ -44,7 +44,6 @@ D1 は名前空間が無いため、旧 PG スキーマ名 (core/swing/finmath) 
 |---|---|---|
 | `core_*` | 001/002 が更新 | 銘柄マスタ `core_stocks` (読み取り専用で参照) |
 | `swing_*` | 003 が更新 | 日足 OHLCV `swing_daily_ohlcv` 等 (読み取り専用で参照) |
-| `finmath_*` | 004 のみ | `finmath_price_snapshot` / `finmath_daily_ohlcv` (Yahoo 取得キャッシュ) |
 
 ## コマンド
 
@@ -58,9 +57,9 @@ pnpm db:generate:d1        # drizzle/d1/*.sql を生成 (全サービス共通)
 pnpm test / pnpm typecheck / pnpm lint
 ```
 
-※ `db:push:finmath` / `db:studio:finmath` / `drizzle.financial-math.config.ts`
-(pg dialect) は ADR-0001 で **obsolete**。スキーマは `pnpm db:generate:d1` →
-`wrangler d1 execute` で反映する。
+※ `db:*:finmath` と `drizzle.financial-math.config.ts` (pg dialect) は ADR-0001 で
+obsolete になっており、指していた `finmath-schema.ts` を消したので削除した。
+004 は所有する表を持たないので、スキーマの生成・反映は発生しない。
 
 ## ディレクトリ
 
@@ -68,7 +67,7 @@ pnpm test / pnpm typecheck / pnpm lint
 services/financial-math/
 ├── app.ts / base-path.ts      # Hono サブアプリ本体 (BASE_PATH=/financial-math)
 ├── src/
-│   ├── db/                    # finmath-schema.ts + core/swing 読み取り専用定義
+│   ├── db/                    # core/swing 読み取り専用定義 (所有する表は無い)
 │   │                          #   client.ts: createDb(c.env.DB) = D1 バインディング
 │   ├── routes/{pages,api}.ts  # SSR ページ + フォーム POST (応答も SSR HTML)
 │   ├── services/              # 純関数: dcf / capm / black-scholes / emh /

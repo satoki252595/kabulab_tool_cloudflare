@@ -187,9 +187,6 @@ Cloudflare D1 (kabulab-cf, SQLite)
 │   ├── yutai_benefits                 優待情報 (7986 件)
 │   ├── otakara_stock_financials       monthly sync で core + swing から合成 (is_yutai=true のみ)
 │   └── otakara_stock_scores           monthly sync の再スコア結果 (is_yutai=true のみ)
-├── 004 金融数学 固有 (銘柄マスタは core_stocks を参照)
-│   ├── finmath_price_snapshot         Yahoo 由来の最新価格スナップショット (自前ユニバース)
-│   └── finmath_daily_ohlcv            Yahoo 由来の日足 OHLCV キャッシュ
 ├── 005 有報定量検索 固有 (銘柄マスタは core_stocks を参照)
 │   ├── yuho_documents                 取り込んだ有報 1 通 = 1 行 (doc_id 一意 = 冪等キー)
 │   └── yuho_order_facts               受注高/受注残高 (有報×会計期末×セグメント粒度)
@@ -199,7 +196,7 @@ Cloudflare D1 (kabulab-cf, SQLite)
 
 時系列データ (007 VWAP の daily/intra/margin) は D1 ではなく **R2** (バケット `vwap-data`)、外部取得した一次データ (raw) は **Notion** に置く (後述)。
 
-**004 金融数学** は `finmath_price_snapshot` / `finmath_daily_ohlcv` で Yahoo 由来の価格・OHLCV をキャッシュしつつ、`core_stocks` / `core_stock_financials` / `core_stock_annual_financials` / `swing_daily_ohlcv` / `swing_stock_indicators` を読み取り専用で集計する。DCF/CAPM/EMH 等の集計計算は永続化せずオンデマンドでレスポンスに返す。
+**004 金融数学** は所有する表を持たず、`core_stocks` / `core_stock_financials` / `core_stock_annual_financials` / `swing_daily_ohlcv` / `swing_stock_indicators` / `swing_market_context` を読み取り専用で集計する。DCF/CAPM/EMH 等の集計計算は永続化せずオンデマンドでレスポンスに返す。
 
 ### 過去に存在したが削除されたテーブル
 
@@ -209,6 +206,8 @@ Cloudflare D1 (kabulab-cf, SQLite)
 | `rsi_stock_rsi_history` | 2026-04 | 日次 RSI 時系列は UI 非使用、percentile だけ保存 |
 | `public.stock_history` | 2026-04 | 月次 PER/PBR 推移は UI 非使用 |
 | `public.stocks` | 2026-04 | core_stocks に一本化 (FK 付け替え済み) |
+| `finmath_price_snapshot` | 2026-09 (drizzle/d1/0012) | 訪問者依存の遅延キャッシュ。価格断面は `core_stock_financials` へ振り替え (PR #23)。全行を DROP 前に退避 |
+| `finmath_daily_ohlcv` | 2026-09 (drizzle/d1/0012) | 7 シンボルだけの遅延キャッシュ。`swing_daily_ohlcv` / `swing_market_context` へ振り替え (PR #23) |
 
 ### `swing_stock_indicators.sma_25` の特殊性
 

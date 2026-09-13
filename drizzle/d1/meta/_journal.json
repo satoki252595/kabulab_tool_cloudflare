@@ -85,6 +85,13 @@
       "when": 1789230474856,
       "tag": "0011_clean_iron_fist",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789300416295,
+      "tag": "0012_tearful_abomination",
+      "breakpoints": true
     }
   ]
 }

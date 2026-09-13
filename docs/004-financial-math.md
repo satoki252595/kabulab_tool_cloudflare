@@ -101,52 +101,33 @@ Notion「金融数学入門」で紹介された **4 つのアノマリー** を
 - クエリ: `window` 20〜100 / `limit` 10〜500 (デフォルト 50) /
   `smallCapMaxOku` / `lowVolMaxAtrPct` (Zod 検証、範囲外は 400)。
 
-## DB スキーマ (`finmath_*`)
+## DB スキーマ
 
-Cloudflare D1 (SQLite) は名前空間が無いため、旧 PG スキーマ `finmath` の
-概念は廃止し、接頭辞テーブルとして単一 DB `kabulab-cf` に同居させる
-(ADR-0001)。定義の正本は `src/db/finmath-schema.ts` (drizzle-orm sqlite-core)。
+004 は**所有する表を持たない**。価格断面・日足・市場系列はすべて他サービスが
+書いた表を読み取り専用で参照する (`src/db/core-schema.ts` / `swing-readonly.ts` /
+`src/shared/db/projection-schema.ts`)。
 
-```
-finmath_price_snapshot   最新価格スナップショット (code 一意 = UPSERT、1 銘柄 1 行)
-  code / name(nullable) / price / per / pbr / dividend_yield / eps / bps
-  roe / roa / market_cap / operating_margin_ttm
-  data_date (Yahoo Chart の最新営業日) / fetched_at (キャッシュ TTL 判定)
-finmath_daily_ohlcv      日足 OHLCV キャッシュ (symbol × date 一意)
-  symbol (4桁/英数字コード or "^N225" 等の指数) / date
-  open / high / low / close / volume / fetched_at
-```
+| 用途 | 読む表 |
+|---|---|
+| 価格・配当利回り・時価総額 | `core_stock_financials` (日次 sync が書く断面) |
+| 個別銘柄の日足 | `swing_daily_ohlcv` (保持 90 営業日) |
+| 市場系列 (^N225) | `swing_market_context.nikkei_close` |
 
-- `finmath_*` は **004 が所有・唯一の writer**。`core_stocks` (銘柄マスタ。
-  otakara-yutai が writer) と `swing_*` (003 所有) は **読み取り専用** で
-  再宣言して参照する (`src/db/core-schema.ts` / `swing-readonly.ts`)。
-- finmath_* を自前で持つ理由: core_stocks のユニバースに縛られず、
-  1414 のような優待なし銘柄も Yahoo 二次利用の遅延フェッチで扱うため。
-- `finmath_daily_ohlcv` は **再生成可能な遅延キャッシュ**。欠損/TTL 切れ時は
-  Worker エッジ (`c.env.DB` 経由で計算、取得は Yahoo 二次利用) で再取得して
-  UPSERT し直せるため、恒久データではない。
-- 実 DB 反映は `pnpm db:generate:d1` で `drizzle/d1/*.sql` を生成し、
-  `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<n>.sql` で適用する。
-  ※ `drizzle.financial-math.config.ts` (pg dialect) / `pnpm db:push:finmath` /
-  `db:generate:finmath` / `db:studio:finmath` は ADR-0001 で **obsolete**。
+旧 `finmath_price_snapshot` / `finmath_daily_ohlcv` は「SSR の GET 中に Yahoo を
+叩いて D1 に書く」遅延キャッシュだった。PR #23 で読み取り面を上の表へ振り替え、
+読み書きが無くなったので宣言を消して `drizzle/d1/0012` で DROP する。
+DROP 前の全行 (3,759 行 / 3,490 行) は `~/kabulab-cf-backup-20260913/d1-finmath/`
+に JSONL で退避してあり、同ディレクトリの README.md に復元手順がある。
+
 - DCF/CAPM/EMH/BS の **計算結果は永続化しない** (オンデマンド計算)。
+- 読み取り面は D1 へ書かない (`src/tests/integration/price-read-path.test.ts`)。
 
 ## データ取得フロー (`src/services/price-cache.ts`)
 
-1. `getPriceContext(db, code)` — `finmath_price_snapshot` の `fetched_at` が
-   **TTL 24 時間** 以内ならキャッシュ返却。ミス時は Yahoo
-   (Chart + QuoteSummary、取込バッチと同じ共有クライアント
-   `src/shared/yahoo/client.ts` の二次利用) を 1 銘柄ぶん叩いて UPSERT。
-   銘柄名は finmath_* に持たないため core_stocks にあれば補完 (なければ null)。
-2. `getOhlcvSeries(db, symbol)` — 同一 symbol の `MAX(fetched_at)` で鮮度判定
-   (TTL 24h)。ミス時は Yahoo Chart から **2 年分** (`DEFAULT_OHLCV_RANGE="2y"`)
-   を取得し **300 行チャンク** で UPSERT。`finmath_daily_ohlcv` は再生成可能な
-   遅延キャッシュなので、欠損時はこの経路でいつでも作り直せる。
-   - 5y にしていた当初、全銘柄 ×1,250 行 ≈ 600 MB で **DB 容量を超過する事故**
-     が発生 → 2y (~240 MB) に縮小。用途
-     (β 推定 60-120 営業日 / ヒストリカル σ / 6-12 ヶ月モメンタム) には十分。
-   - チャンク分割は SQL バインドパラメータ数の上限対策 (一括 insert で
-     過去に 909/3,760 銘柄が失敗)。
+1. `getPriceContext(db, code)` — `core_stock_financials` の断面を読む。
+   断面が無い銘柄は 0 や null で埋めずに throw し、画面に理由を出す。
+2. `getOhlcvSeries(db, symbol)` — 個別銘柄は `swing_daily_ohlcv`、`^N225` は
+   `swing_market_context` を読む。それ以外の指数は黙って空にせず落とす。
 3. シンボル検証: 銘柄コードは共有ヘルパ `src/shared/jpx/stock-code.ts` の
    正準パターン (数字 4 桁 / 数字 3 桁 + 英字 1 文字)、指数は `^XXX` 形式。
    不一致は throw。

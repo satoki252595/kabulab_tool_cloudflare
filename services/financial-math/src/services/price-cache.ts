@@ -61,10 +61,10 @@
  * それまでは D1 の 90 営業日で妥協し、代わりに本数を画面に出して
  * 「短い系列で計算した」ことを隠さない。
  *
- * 旧 2 表 (`finmath_price_snapshot` / `finmath_daily_ohlcv`) は本番にまだ実在する。
- * ここからは**読まないし書かない**が、スキーマ宣言は残してある
- * (宣言を消すと `drizzle-kit generate` が DROP TABLE を吐き、それを誤って
- * 本番へ流す事故の口が開く)。撤去は「本番の DROP を流す PR」で別にやること。
+ * 旧 2 表 (`finmath_price_snapshot` / `finmath_daily_ohlcv`) は宣言ごと撤去し、
+ * `drizzle/d1/0012` で DROP する。本番の全行は DROP 前に
+ * `~/kabulab-cf-backup-20260913/d1-finmath/` へ JSONL で退避してある
+ * (復元手順は同ディレクトリの README.md)。
  */
 
 import { and, asc, eq, isNotNull } from "drizzle-orm";

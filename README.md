@@ -246,7 +246,7 @@ ADR-0001 で全サービスを Neon → D1 (SQLite) へ移行済み。共有 cor
 | `rsi_*` | 001 RSI Screening | `rsi_percentile` (RSI 10/40/120 + パーセンタイル + 優良株フラグ) |
 | `yutai_*` / `otakara_*` | 002 お宝優待 | `yutai_genres` / `yutai_benefits` / `otakara_stock_financials` / `otakara_stock_scores` |
 | `swing_*` | 003 Swing Trading | `swing_daily_ohlcv` (90 営業日) / `swing_stock_indicators` / `swing_stock_screening` / `swing_entry_signals` / `swing_market_context` / `swing_sector_daily` |
-| `finmath_*` | 004 金融数学 | `finmath_price_snapshot` / `finmath_daily_ohlcv` (Yahoo 由来の遅延キャッシュ・空起動でエッジ再取得)。`core_*` / `swing_*` も読取参照 |
+| (なし) | 004 金融数学 | 所有する表は無い。`core_stock_financials` / `swing_daily_ohlcv` / `swing_market_context` を読取参照 (旧 `finmath_*` 2 表は 0012 で削除) |
 | `yuho_*` | 005 有報定量 | `yuho_documents` / `yuho_order_facts` |
 | `ir_disclosures` | 006 IR Catalog | `ir_disclosures` (TDnet 全量 + タグ + PDF センチメント) |
 
