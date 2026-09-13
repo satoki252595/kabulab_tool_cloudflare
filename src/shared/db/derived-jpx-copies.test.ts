@@ -18,7 +18,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PUBLISH_JPX_DERIVED_COLUMNS } from "./public-columns.js";
+import { PUBLISH_JPX_DERIVED_COLUMNS, SECTOR_DAILY_PUBLIC_KEY_SINCE } from "./public-columns.js";
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
@@ -66,12 +66,41 @@ describe("保存済みの派生コピー経由での JPX 由来の漏れ", () =>
     }
   );
 
-  it("既定 (false) では業種ランキングを引くクエリ自体が走らない", () => {
+  it("既定 (false) では集約キー切り替え日より前の業種ランキングを引かない", () => {
     // フラグの既定値を固定する。true に倒す判断をしたらこのテストの期待値も
     // 変える (通すためにガードを緩めるのではなく、判断が変わった記録を残す)。
     expect(PUBLISH_JPX_DERIVED_COLUMNS).toBe(false);
 
+    // 2026-09-13 に期待値を変えた。旧: `latestSectorDate && PUBLISH_JPX_DERIVED_COLUMNS`
+    // (= 既定では常に閉じる)。日次 cron の集約キーを `publicSectorColumn`
+    // (sector33 / EDINET) へ移したので、**切り替え後に書かれた日付の行**は
+    // 出してよくなった。
+    //
+    // ただし `swing_sector_daily` の **2026-09-11 以前の行は JPX 33 業種を
+    // キーにしたまま残る** (cron は当日分しか書き直さない。本番の実測で
+    // 最新 2026-09-11 = JPX キー 33 業種 + 未分類)。だから日付の下限を外して
+    // `latestSectorDate` だけにする変更は漏れの再発で、ここで落とす。
+    // 下限の値そのものと、その値が正しい前提は SECTOR_DAILY_PUBLIC_KEY_SINCE の
+    // コメント。値でも固定する: 後ろへずらすのは安全側だが、前へずらすと
+    // JPX キーの行が出るので、変えるなら理由をコミットに残すこと。
+    expect(SECTOR_DAILY_PUBLIC_KEY_SINCE).toBe("2026-09-14");
+
     const src = readFileSync(join(ROOT, "services/swing-trading/src/routes/pages.ts"), "utf-8");
-    expect(src).toMatch(/if\s*\(\s*latestSectorDate\s*&&\s*PUBLISH_JPX_DERIVED_COLUMNS\s*\)/);
+    expect(src).toMatch(
+      /if\s*\(\s*latestSectorDate\s*&&\s*\(\s*PUBLISH_JPX_DERIVED_COLUMNS\s*\|\|\s*latestSectorDate\s*>=\s*SECTOR_DAILY_PUBLIC_KEY_SINCE\s*\)\s*\)/
+    );
+  });
+
+  it("日次 cron が業種ランキングを書く集約キーは公開面と同じ列", () => {
+    // 読み側 (pages.ts) で日付を見て開けている前提は「書き側が公開面と同じ列で
+    // 集約している」こと。書き側が `coreSchema.stocks.sector` (JPX) に
+    // 戻ると、切り替え日以降の行にも JPX の業種名が入り、読み側のガードは
+    // 素通りする。値での確認は src/cron/daily-sector-aggregate.test.ts。
+    const src = readFileSync(join(ROOT, "src/cron/daily.ts"), "utf-8");
+    const start = src.indexOf("export async function aggregateSectorDaily(");
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf("\n}\n", start));
+    expect(body).toMatch(/sector:\s*publicSectorColumn\b/);
+    expect(body).not.toMatch(/stocks\.sector\b(?!33)/);
   });
 });

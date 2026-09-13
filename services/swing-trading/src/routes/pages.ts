@@ -3,7 +3,10 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { createDb } from "../db/client.js";
-import { PUBLISH_JPX_DERIVED_COLUMNS } from "../../../../src/shared/db/public-columns.js";
+import {
+  PUBLISH_JPX_DERIVED_COLUMNS,
+  SECTOR_DAILY_PUBLIC_KEY_SINCE,
+} from "../../../../src/shared/db/public-columns.js";
 import { stocks, stockFinancials } from "../db/core-schema.js";
 import {
   stockIndicators,
@@ -46,16 +49,34 @@ pagesRoute.get("/", async (c) => {
   // 届かない。実測 (2026-09-13): 他の 6 サービスから JPX 由来を外した後も
   // GET /swing-trading/ だけが「銀行業」「ゴム製品」を返していた。
   //
-  // → **同じフラグで表示ごと閉じる。** 業種名を伏せて順位だけ出す案は採らな
-  // かった (業種名の無い業種ランキングは読者にとって意味が無い)。集約キーを
-  // `sector33` (EDINET 由来) へ移すのが本筋だが、本番の `sector33` は全行
-  // NULL (P4b 未了) なので今移すと表が空になる。**充填が済んだら
-  // daily.ts の集約キーを移し、ここのガードを外すこと。**
+  // PR #24 はここを同じフラグで**表示ごと**閉じた。業種名を伏せて順位だけ
+  // 出す案は採らなかった (業種名の無い業種ランキングは読者にとって意味が無い)。
+  //
+  // 2026-09-13: 集約キーを書く側 (daily.ts `aggregateSectorDaily`) で
+  // `publicSectorColumn` (= `sector33`, EDINET 由来) へ移した。ただし
+  // **切り替え前の日付の行は JPX キーのまま表に残る**ので、ガードは外さず
+  // 「切り替え後に cron が書いた日付だけ出す」へ変える。
+  // 日付と、その日付が正しい前提 (マージ時期 / sector33 の backfill) は
+  // `SECTOR_DAILY_PUBLIC_KEY_SINCE` のコメントにまとめてある。
+  //
+  // 比較に `macro.date` (swing_market_context の最新日付) を使ってよい理由:
+  // 下のクエリは `WHERE date = latestSectorDate` なので、**実際に読む行の日付**
+  // がこの値そのもの。両表は同じ cron が同じ UTC 日付で書いており、本番の
+  // 実測 (2026-09-13, 直近 8 営業日 09-02〜09-11) でも日付の並びが一致した。
+  // ずれる日 (マクロ取得の一過性失敗で market_context だけ前日のまま /
+  // カバレッジ不足で sector_daily だけ書かない) も、読む日付で判定しているので
+  // 切り替え前の行を出すことは無い (前者は前日 = 古い日付を比べて閉じる、
+  // 後者はその日付の行が無く空)。
   //
   // 読まない = Worker のプロセスにも載らない。クエリごと飛ばす (rows_read も減る)。
+  // 出す日のコスト: `idx_swing_sector_date_rank (date=?)` の SEARCH で
+  // 1 表示あたり rows_read 5 (本番の実測)。
   const latestSectorDate = macro?.date;
   let topSectors: Array<{ sector: string; pct1d: number; stockCount: number; rank1d: number }> = [];
-  if (latestSectorDate && PUBLISH_JPX_DERIVED_COLUMNS) {
+  if (
+    latestSectorDate &&
+    (PUBLISH_JPX_DERIVED_COLUMNS || latestSectorDate >= SECTOR_DAILY_PUBLIC_KEY_SINCE)
+  ) {
     const rows = await db
       .select()
       .from(sectorDaily)

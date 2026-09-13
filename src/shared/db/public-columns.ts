@@ -103,6 +103,53 @@ export const publicSectorColumn = PUBLISH_JPX_DERIVED_COLUMNS
   : stocks.sector33;
 
 /**
+ * `swing_sector_daily` (業種ランキングの**保存済み派生コピー**) のうち、
+ * `publicSectorColumn` を集約キーにして書かれた**最初の日付**。
+ *
+ * ### なぜ日付で切るのか
+ *
+ * 日次 cron (src/cron/daily.ts の `aggregateSectorDaily`) の集約キーを
+ * `core_stocks.sector` (JPX) から `publicSectorColumn` へ移しても、
+ * **それより前の日付の行は JPX の 33 業種をキーにしたまま表に残る**
+ * (cron は当日分を delete → insert するだけで、過去日を書き直さない)。
+ * 公開面 (`GET /swing-trading/`) は「最新日付の行」を読むので、切り替え後に
+ * 1 回も cron が走っていない間は JPX キーの行を読んでしまう。
+ * そこで「この日付以降の行だけ出す」で閉じる。
+ *
+ * ### なぜ 2026-09-14 なのか
+ *
+ * - 日次 cron は GitHub Actions `stock-sync.yml` の `0 21 * * 1-5`
+ *   (平日 21:00 UTC) で、日付は `new Date().toISOString()` の UTC 日付。
+ * - 切り替えを入れたのが 2026-09-13 (日)。次に走る cron は
+ *   **2026-09-14 (月) 21:00 UTC** で、その行の `date` が `2026-09-14`。
+ * - 本番の実測 (2026-09-13): `swing_sector_daily` の最新日付は `2026-09-11`
+ *   (JPX キー, 33 業種 + 未分類)。`2026-09-14` 以降の行はまだ無い。
+ *
+ * ### ⚠️ この値が正しいのは次の前提が成り立つときだけ
+ *
+ * 1. **この変更が 2026-09-14 21:00 UTC より前に main へ入っている**
+ *    (cron は main のワークフローから走る)。遅れると `2026-09-14` の行が
+ *    **旧コード = JPX キー**で書かれ、この日付の比較を素通りして公開面に出る。
+ *    マージが遅れたら、マージ後に最初に走る cron の UTC 日付へこの値を進めること。
+ * 2. stockStock 側の `core_stocks.sector33` の backfill が同じ cron より前に
+ *    本番へ入っている。入っていないとその日のランキングは全行 `未分類` になる
+ *    (JPX へのフォールバックはしない。理由は `publicSectorColumn` の上)。
+ *
+ * 月曜の cron が失敗した / 銘柄カバレッジ 90% 未満で集計をスキップした場合は、
+ * その日の行が無いのでランキングは**出ないまま** (安全側)。翌営業日の cron が
+ * 書いた時点で出る。
+ *
+ * 採らなかった案: 行ごとに「どのキーで書いたか」の列を足す — DDL が要り、
+ * 本番 D1 へのマイグレーションを伴う。ここで閉じたいのは切り替え前の
+ * 数日分だけで、日付 1 つで表せる。
+ *
+ * `PUBLISH_JPX_DERIVED_COLUMNS = true` のときは集約キーも JPX に戻り、
+ * 全日付を出してよい (公開面の読み側 `services/swing-trading/src/routes/pages.ts`
+ * がフラグと OR で見ている)。
+ */
+export const SECTOR_DAILY_PUBLIC_KEY_SINCE = "2026-09-14";
+
+/**
  * フラグの**型**。
  *
  * TypeScript は三項演算子の条件が `false` リテラル型でも結果を**両枝の union**
