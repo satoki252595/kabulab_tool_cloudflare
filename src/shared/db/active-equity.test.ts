@@ -10,6 +10,10 @@
  *      残ると、そこだけ非普通株を含む別の集合を見る (分母と分子がずれる、凍結した
  *      値が一覧に並ぶ)。
  *   3. 2 の検出器が拾うべき書き方を拾い、コメントの中の同じ文字列は拾わない。
+ *   4. 取込の母集団の述語 `ingestUniverseCondition()` の発行 SQL が
+ *      `instrument_type = ?` と (`is_active = ?` かつ `instrument_type is null`) の OR で、
+ *      値は bind のまま (`["equity", 0]`)。取り込む行・取り込まない行は
+ *      src/cron/ingest-universe.test.ts が値で見る。
  *
  * 2 は書き方の検査で、実際に非普通株が落ちるかは値で見ているテストがある:
  * src/cron/daily-targets.test.ts / daily-sector-aggregate.test.ts /
@@ -24,7 +28,7 @@ import { join, relative, sep } from "node:path";
 import { SQLiteSyncDialect } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 import { INSTRUMENT_TYPE_EQUITY } from "../jpx/instrument-type.js";
-import { activeEquityCondition } from "./active-equity.js";
+import { activeEquityCondition, ingestUniverseCondition } from "./active-equity.js";
 import {
   NOT_PUBLIC_SURFACE,
   PUBLIC_SURFACE_DIRS,
@@ -82,6 +86,21 @@ describe("activeEquityCondition", () => {
 
   it("呼ぶたびに新しい SQL を返す (インスタンスを共有しない)", () => {
     expect(activeEquityCondition()).not.toBe(activeEquityCondition());
+  });
+});
+
+describe("ingestUniverseCondition (TDnet / EDINET の取込の母集団)", () => {
+  it("発行 SQL は equity か (is_active = 0 かつ区分が NULL) で、値は bind のまま", () => {
+    const { sql, params } = new SQLiteSyncDialect().sqlToQuery(ingestUniverseCondition());
+    expect({ sql, params }).toEqual({
+      sql:
+        '("core_stocks"."instrument_type" = ? or ("core_stocks"."is_active" = ? and "core_stocks"."instrument_type" is null))',
+      params: ["equity", 0],
+    });
+  });
+
+  it("呼ぶたびに新しい SQL を返す (インスタンスを共有しない)", () => {
+    expect(ingestUniverseCondition()).not.toBe(ingestUniverseCondition());
   });
 });
 

@@ -1,7 +1,7 @@
 /**
  * 有価証券報告書 受注データ 5 年バックフィル (一回限り・手動。cron 非対象)。
  *
- * EDINET 書類一覧 API を日次で遡り、対象=core_stocks の active かつ equity の
+ * EDINET 書類一覧 API を日次で遡り、対象=取込の母集団 (日次キャッチアップと同じ) の
  * 有報 (docTypeCode 120/130) を見つけて ingestDocument で構造化・保存する。
  *
  * 設計 (CLAUDE.md):
@@ -39,7 +39,7 @@ import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as yuhoSchema from "../src/db/schema.js";
 import type { Database } from "../src/db/client.js";
 import { inArray } from "drizzle-orm";
-import { loadActiveEquityCodeToId } from "../../../src/shared/db/active-equity.js";
+import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
 import { yuhoDocuments } from "../src/db/schema.js";
 import { listDocuments } from "../src/services/edinet/client.js";
 import {
@@ -163,10 +163,11 @@ async function main(): Promise<void> {
   const concurrency = Math.min(4, Math.max(1, Number(arg("concurrency") ?? "1")));
 
   // code(4桁) → stockId マップ。母集団は日次キャッチアップ (src/cron/yuho-edinet.ts) と
-  // 同じ active かつ equity (理由は src/shared/db/active-equity.ts)。
-  const codeToId = await loadActiveEquityCodeToId(db);
+  // 同じ取込の母集団 (非普通株と、区分が NULL の active 行を除く。理由は
+  // src/shared/db/active-equity.ts の ingestUniverseCondition)。
+  const codeToId = await loadIngestCodeToId(db);
   console.info(
-    `[backfill] core_stocks (active かつ equity) ${codeToId.size} 社 / 期間 ${from}〜${to}` +
+    `[backfill] core_stocks (取込の母集団) ${codeToId.size} 社 / 期間 ${from}〜${to}` +
       (tickerFilter ? ` / ticker=${tickerFilter}` : "")
   );
 

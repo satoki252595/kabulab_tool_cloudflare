@@ -2,9 +2,10 @@
  * TDnet 適時開示バッチの取り込み (バックフィル / 日次キャッチアップ共用)。
  *
  * 流れ:
- *   1. TDnet items を core_stocks の active かつ equity (日次・公開面と同じ母集団。
- *      src/shared/db/active-equity.ts) に絞る。ユニバース外 (ETF/REIT 等の非普通株・
- *      区分が NULL・非上場・上場廃止のコード) は正直に切り捨てる — 推測しない
+ *   1. TDnet items を取込の母集団 (src/shared/db/active-equity.ts の `loadIngestCodeToId`。
+ *      core_stocks から非普通株と、区分が NULL の active 行を除いたもの) に絞る。
+ *      ユニバース外 (ETF/REIT 等の非普通株・区分が NULL の active 行・core_stocks に無い
+ *      コード) は正直に切り捨てる — 推測しない。is_active=0 (上場廃止など) の銘柄は取り込む
  *   2. タイトルを決定論的に分類 (classify)。未分類は tags=[] のまま
  *   3. ir_catalog.disclosures へ冪等 upsert (tdnet_id 一意)
  *   4. ルール6: 取得バッチ単位の確定 JSONL を「一次データ｜ir-catalog」へ
@@ -28,7 +29,7 @@ import {
 } from "../../../../src/shared/notion-archive/index.js";
 import type { Database } from "../db/client.js";
 import { disclosures } from "../db/schema.js";
-import { loadActiveEquityCodeToId } from "../../../../src/shared/db/active-equity.js";
+import { loadIngestCodeToId } from "../../../../src/shared/db/active-equity.js";
 import { classify, notionTagOptions, buffettCodeUrl } from "./classify.js";
 import { companyCodeToTicker, type TdnetItemRaw } from "./tdnet/types.js";
 import { classifyPdfSentiment } from "./pdf-sentiment/index.js";
@@ -47,8 +48,8 @@ export interface IngestOptions {
   notionByStockDeadlineMs?: number;
   /**
    * code→id マップ (バックフィルで再取得を避けるため注入可)。注入するなら
-   * src/shared/db/active-equity.ts の `loadActiveEquityCodeToId` で作ること
-   * (省略時もそれで作る。母集団を日次・公開面と揃えるため)。
+   * src/shared/db/active-equity.ts の `loadIngestCodeToId` で作ること
+   * (省略時もそれで作る。TDnet と EDINET の取込で母集団を揃えるため)。
    */
   codeToId?: Map<string, number>;
   /**
@@ -62,7 +63,7 @@ export interface IngestOptions {
 
 export interface IngestResult {
   fetched: number;
-  /** ユニバース内 (= core_stocks の active かつ equity) に絞った件数 */
+  /** ユニバース内 (= 取込の母集団。src/shared/db/active-equity.ts の loadIngestCodeToId) に絞った件数 */
   inUniverse: number;
   upserted: number;
   /** タグが 1 つも付かなかった (未分類) 件数 */
@@ -208,7 +209,7 @@ export async function ingestBatch(
   items: TdnetItemRaw[],
   opts: IngestOptions
 ): Promise<IngestResult> {
-  const codeToId = opts.codeToId ?? (await loadActiveEquityCodeToId(db));
+  const codeToId = opts.codeToId ?? (await loadIngestCodeToId(db));
   const prepared = prepareRows(items, codeToId);
 
   const byPrimaryTag: Record<string, number> = {};

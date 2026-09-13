@@ -10,15 +10,15 @@
  *
  * 動作:
  *   - 直近 WINDOW_DAYS 日を新しい順に EDINET 書類一覧で走査
- *   - core_stocks の active かつ equity (日次・公開面と同じ母集団。
- *     src/shared/db/active-equity.ts) の有報 (120/130) のうち未取込のものを
+ *   - 取込の母集団 (src/shared/db/active-equity.ts の `loadIngestCodeToId`。core_stocks から
+ *     非普通株と、区分が NULL の active 行を除いたもの) の有報 (120/130) のうち未取込のものを
  *     ingestDocument で構造化保存 (CSV 事前判定で受注なしは XBRL を落とさない)
  *   - 1 回の実行は MAX_INGEST 件 / TIME_BUDGET_MS で打ち切り。残りは次回実行が
  *     拾う (docId 一意で冪等)。6 月の有報集中期も実行回数×日数で吸収。
  */
 import { eq } from "drizzle-orm";
 import type { Database } from "../../services/yuho-quant/src/db/client.js";
-import { loadActiveEquityCodeToId } from "../shared/db/active-equity.js";
+import { loadIngestCodeToId } from "../shared/db/active-equity.js";
 import * as yuhoSchema from "../../services/yuho-quant/src/db/schema.js";
 import { listDocuments } from "../../services/yuho-quant/src/services/edinet/client.js";
 import {
@@ -56,8 +56,9 @@ export interface YuhoEdinetResult {
   ingested: number;
   skippedExisting: number;
   /**
-   * 有報 (120/130) のうち、証券コードが母集団 (active かつ equity) に無く取り込まなかった件数
-   * (上場廃止・非普通株など)。シャード指定時はこのシャードの担当分だけを数える。
+   * 有報 (120/130) のうち、証券コードが取込の母集団 (`loadIngestCodeToId`) に無く取り込まなかった
+   * 件数 (非普通株・区分が NULL の active 行・core_stocks に無いコード)。シャード指定時は
+   * このシャードの担当分だけを数える。
    */
   outOfUniverse: number;
   byStatus: Record<string, number>;
@@ -83,10 +84,10 @@ export async function runYuhoEdinetCatchup(
 ): Promise<YuhoEdinetResult> {
   const startedAt = Date.now();
 
-  // 母集団は日次・公開面と同じ active かつ equity。yuho-quant の検索・スクリーニングは
-  // この述語で絞っているので、母集団外の有報は取り込んでも表に出ず、EDINET と Notion の
-  // 帯域だけを使う (理由は src/shared/db/active-equity.ts)。
-  const codeToId = await loadActiveEquityCodeToId(db);
+  // 取込の母集団。変更前 (core_stocks の全行) から、非普通株と、区分が NULL の active 行
+  // だけを除く。is_active=0 の会社 (上場廃止・地域取引所の単独上場) の有報は取り込み続ける
+  // (理由は src/shared/db/active-equity.ts の ingestUniverseCondition)。
+  const codeToId = await loadIngestCodeToId(db);
 
   const byStatus: Record<string, number> = {};
   let scannedDays = 0;

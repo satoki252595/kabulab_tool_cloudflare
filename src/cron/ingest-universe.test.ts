@@ -1,31 +1,38 @@
 /**
- * 証券コードから `stock_id` を引く取込が、日次・公開面と同じ母集団
- * (`core_stocks` の active かつ equity、src/shared/db/active-equity.ts) だけを見ることの検証。
+ * TDnet 開示・EDINET 有報の取込が、証券コードから `stock_id` を引くときに**取込の母集団**
+ * (src/shared/db/active-equity.ts の `ingestUniverseCondition`) だけを見ることの検証。
+ * あわせて、優待の取込が使う `findActiveEquityStockId` が active かつ equity のままであることも見る。
  *
  * 固定したい契約:
  *
- *   1. `loadActiveEquityCodeToId` / `findActiveEquityStockId` は active かつ equity だけを
- *      返し、次は全部落とす: active の非普通株 (reit_fund)、active で区分が NULL、
- *      上場廃止 (is_active = 0) の普通株、`core_stocks` に無いコード。**値**で見る。
- *   2. TDnet の日次キャッチアップ (`runIrCatalogCatchup`) は、母集団外の開示を
+ *   1. `loadIngestCodeToId` は次の 3 通りだけを返す。**値**で見る。
+ *      - 取り込む: active の equity / inactive の equity / inactive で区分が NULL
+ *        (地域取引所にだけ上場を続ける会社を想定)
+ *      - 取り込まない: active で区分が NULL / active の非普通株 / inactive の非普通株 /
+ *        `core_stocks` に無いコード
+ *   2. `findActiveEquityStockId` (優待の取込) は active の equity だけを返す。
+ *   3. TDnet の日次キャッチアップ (`runIrCatalogCatchup`) は、母集団外の開示を
  *      ir_disclosures に書かず、Notion (一次データの確定 JSON・銘柄別 DB) にも渡さない。
- *   3. `ingestBatch` に code→id を注入しない既定の経路も、同じ母集団で絞る。
- *   4. EDINET の日次キャッチアップ (`runYuhoEdinetCatchup`) は、母集団外の有報を
- *      取り込まない。
- *   5. code→id を `core_stocks` の全行から作る形 (`select({ id, code }).from(stocks)` の
+ *      inactive の 2 通りの開示は書いて渡す。
+ *   4. `ingestBatch` に code→id を注入しない既定の経路も、同じ母集団で絞る。
+ *   5. EDINET の日次キャッチアップ (`runYuhoEdinetCatchup`) も同じ母集団で絞り、
+ *      落とした件数を戻り値に出す。
+ *   6. code→id を `core_stocks` の全行から作る形 (`select({ id, code }).from(stocks)` の
  *      後に WHERE が無い。キーの順は問わない) が src / services / scripts のどこにも
- *      残っていない。
+ *      残っておらず、取込の呼び出し元は `loadIngestCodeToId` を経由する。
  *      ir / yuho の backfill CLI は import すると main() が走るので値では試せず、
  *      この静的検査だけが担保している。
  *
  * 背景: 2026-09-13 のユーザー決定で、日次取込と公開面の母集団を active かつ equity に
- * 絞った (PR #30)。取込だけが全行でコードを引くと、公開面から外した銘柄の開示が
- * 取り込まれ、Notion に記録され、ir-catalog の一覧と検索に出る (ir-catalog の読み手は
- * この述語で絞っていない)。P4b が非普通株 (+725 行) を core_stocks に INSERT した時点で、
- * その全銘柄について自動で始まる。
+ * 絞った (PR #30)。取込が全行でコードを引いたままだと、P4b が非普通株を core_stocks に
+ * INSERT した時点で、その開示が取り込まれ、Notion に記録され、ir-catalog の一覧と検索に
+ * 出る (ir-catalog の読み手は母集団で絞っていない)。一方で取込を active かつ equity に
+ * 絞ると、上場廃止や地域取引所の単独上場の会社 (is_active = 0) の開示が止まる。
+ * ユーザー決定は非普通株を外すことだけなので、取込は is_active = 0 を取り込み続ける。
  *
- * 外部 (TDnet / EDINET / Notion) は vi.mock で塞ぐ。D1 は daily-targets.test.ts と同じく、
- * drizzle/d1 のマイグレーションを流したローカル SQLite に sqlite-proxy で向ける。
+ * コードは 7203 以外すべて合成 (JPX の上場銘柄一覧 2026-08-31 版にも本番 core_stocks にも
+ * 無い)。外部 (TDnet / EDINET / Notion) は vi.mock で塞ぐ。D1 は daily-targets.test.ts と
+ * 同じく、drizzle/d1 のマイグレーションを流したローカル SQLite に sqlite-proxy で向ける。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
@@ -34,9 +41,10 @@ import { join, relative, sep } from "node:path";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import {
   findActiveEquityStockId,
-  loadActiveEquityCodeToId,
+  loadIngestCodeToId,
 } from "../shared/db/active-equity.js";
 import { ROOT, collectSources, stripComments } from "../shared/db/tests/source-scan.js";
+import { INSTRUMENT_TYPES } from "../shared/jpx/instrument-type.js";
 import {
   recordPrimaryData,
   upsertDisclosuresByStock,
@@ -90,17 +98,25 @@ function makeProxyDb(target: DatabaseSync) {
 }
 
 /**
- * 4 銘柄 + core_stocks に無い 1 コード。取り込んでよいのは 7203 だけ。
- * `instrument_type` と `is_active` 以外 (名前・市場) は揃えてある。
+ * `is_active` と `instrument_type` の 6 通り + `core_stocks` に無い 1 コード。
+ * 名前は揃え、市場は合成値 (地域取引所を想定した行だけ別の値)。
  */
 const STOCKS = [
-  { id: 1, code: "7203", active: 1, instrumentType: "equity" },
-  { id: 2, code: "9002", active: 1, instrumentType: "reit_fund" },
-  { id: 3, code: "9999", active: 1, instrumentType: null },
-  { id: 4, code: "6501", active: 0, instrumentType: "equity" },
+  // 取り込む
+  { id: 1, code: "7203", active: 1, instrumentType: INSTRUMENT_TYPES.equity, market: "テスト市場" },
+  { id: 2, code: "1203", active: 0, instrumentType: INSTRUMENT_TYPES.equity, market: "テスト市場" },
+  // 地域取引所にだけ上場を続ける会社を想定 (東証の一覧に無いので対象外化され、区分は未充填)
+  { id: 3, code: "1204", active: 0, instrumentType: null, market: "テスト地域取引所" },
+  // 取り込まない
+  { id: 4, code: "1205", active: 1, instrumentType: null, market: "テスト市場" },
+  { id: 5, code: "1206", active: 1, instrumentType: INSTRUMENT_TYPES.reitFund, market: "テスト市場" },
+  { id: 6, code: "1207", active: 0, instrumentType: INSTRUMENT_TYPES.etfEtn, market: "テスト市場" },
 ] as const;
-const ABSENT_CODE = "1301";
+const ABSENT_CODE = "1208";
 const ALL_CODES = [...STOCKS.map((s) => s.code), ABSENT_CODE];
+/** 取り込む 3 銘柄 (id 昇順)。 */
+const INGESTED = STOCKS.filter((s) => s.id <= 3);
+const INGESTED_TICKERS = INGESTED.map((s) => s.code).sort();
 
 let sqlite: DatabaseSync;
 let db: ReturnType<typeof makeProxyDb>;
@@ -110,9 +126,11 @@ beforeEach(() => {
   sqlite = new DatabaseSync(":memory:");
   applyD1Migrations(sqlite);
   const ins = sqlite.prepare(
-    "INSERT INTO core_stocks (id, code, name, market, is_active, instrument_type) VALUES (?, ?, ?, 'テスト市場', ?, ?)"
+    "INSERT INTO core_stocks (id, code, name, market, is_active, instrument_type) VALUES (?, ?, ?, ?, ?, ?)"
   );
-  for (const s of STOCKS) ins.run(s.id, s.code, `テスト${s.code}`, s.active, s.instrumentType);
+  for (const s of STOCKS) {
+    ins.run(s.id, s.code, `テスト${s.code}`, s.market, s.active, s.instrumentType);
+  }
   db = makeProxyDb(sqlite);
 });
 
@@ -134,15 +152,19 @@ function tdnetItem(code: string): TdnetItemRaw {
   } as TdnetItemRaw;
 }
 
-describe("取込用の code→id は active かつ equity だけ", () => {
-  it("loadActiveEquityCodeToId は 7203 だけを返す", async () => {
-    const map = await loadActiveEquityCodeToId(db);
-    expect([...map.entries()]).toEqual([["7203", 1]]);
+describe("取込の code→id は非普通株と、区分が NULL の active 行だけを除く", () => {
+  it("loadIngestCodeToId は active の equity・inactive の equity・inactive で区分が NULL を返す", async () => {
+    const map = await loadIngestCodeToId(db);
+    expect([...map.entries()].sort((a, b) => a[1] - b[1])).toEqual(
+      INGESTED.map((s) => [s.code, s.id])
+    );
   });
+});
 
-  it("findActiveEquityStockId は母集団外のコードに null を返す", async () => {
+describe("優待の取込の銘柄引きは active かつ equity のまま", () => {
+  it("findActiveEquityStockId は active の equity 以外に null を返す", async () => {
     expect(await findActiveEquityStockId(db, "7203")).toBe(1);
-    for (const code of ["9002", "9999", "6501", ABSENT_CODE]) {
+    for (const code of ALL_CODES.filter((c) => c !== "7203")) {
       expect(await findActiveEquityStockId(db, code), code).toBeNull();
     }
   });
@@ -156,8 +178,8 @@ describe("TDnet の取込は母集団外の開示を書かず、Notion にも渡
       fileTooLarge: false,
     } as never);
     vi.mocked(upsertDisclosuresByStock).mockResolvedValue({
-      stocksTouched: 1,
-      created: 1,
+      stocksTouched: INGESTED.length,
+      created: INGESTED.length,
       updated: 0,
       skippedExisting: 0,
       skippedNoFile: 0,
@@ -172,23 +194,23 @@ describe("TDnet の取込は母集団外の開示を書かず、Notion にも渡
 
     expect({ fetched: r.fetched, inUniverse: r.inUniverse, upserted: r.upserted }).toEqual({
       fetched: ALL_CODES.length,
-      inUniverse: 1,
-      upserted: 1,
+      inUniverse: INGESTED.length,
+      upserted: INGESTED.length,
     });
-    expect(sqlite.prepare("SELECT stock_id, company_code FROM ir_disclosures").all()).toEqual([
-      { stock_id: 1, company_code: "72030" },
-    ]);
+    expect(
+      sqlite.prepare("SELECT stock_id, company_code FROM ir_disclosures ORDER BY stock_id").all()
+    ).toEqual(INGESTED.map((s) => ({ stock_id: s.id, company_code: `${s.code}0` })));
 
-    // 一次データの確定 JSON に載るのも母集団内の 1 件だけ
+    // 一次データの確定 JSON に載るのも母集団内の 3 件だけ
     const archivedFile = vi.mocked(recordPrimaryData).mock.calls[0][0].files?.[0];
     expect(archivedFile).toBeDefined();
     const archived = JSON.parse(new TextDecoder().decode(archivedFile!.bytes)) as {
       ticker: string;
     }[];
-    expect(archived.map((a) => a.ticker)).toEqual(["7203"]);
+    expect(archived.map((a) => a.ticker).sort()).toEqual(INGESTED_TICKERS);
     // 銘柄別 DB へ渡す行も同じ
     const byStock = vi.mocked(upsertDisclosuresByStock).mock.calls[0][0];
-    expect(byStock.rows.map((row) => row.ticker)).toEqual(["7203"]);
+    expect(byStock.rows.map((row) => row.ticker).sort()).toEqual(INGESTED_TICKERS);
   });
 
   it("ingestBatch に code→id を注入しない既定の経路", async () => {
@@ -199,10 +221,10 @@ describe("TDnet の取込は母集団外の開示を書かず、Notion にも渡
       notionByStock: false,
     });
 
-    expect(r.inUniverse).toBe(1);
-    expect(sqlite.prepare("SELECT stock_id FROM ir_disclosures").all()).toEqual([
-      { stock_id: 1 },
-    ]);
+    expect(r.inUniverse).toBe(INGESTED.length);
+    expect(sqlite.prepare("SELECT stock_id FROM ir_disclosures ORDER BY stock_id").all()).toEqual(
+      INGESTED.map((s) => ({ stock_id: s.id }))
+    );
     expect(recordPrimaryData).not.toHaveBeenCalled();
     expect(upsertDisclosuresByStock).not.toHaveBeenCalled();
   });
@@ -218,7 +240,7 @@ describe("EDINET の取込は母集団外の有報を取り込まない", () => 
       formCode: "030000",
       filerName: `テスト${code}`,
     }));
-    // 最初の日だけ 5 件を返し、残りの日は空。
+    // 最初の日だけ 7 件を返し、残りの日は空。
     vi.mocked(listDocuments)
       .mockResolvedValueOnce({ results: docs } as never)
       .mockResolvedValue({ results: [] } as never);
@@ -243,12 +265,14 @@ describe("EDINET の取込は母集団外の有報を取り込まない", () => 
     }
 
     expect(vi.mocked(listDocuments)).toHaveBeenCalledTimes(60);
-    expect(vi.mocked(ingestDocument).mock.calls.map(([, opts]) => opts.stockId)).toEqual([1]);
+    expect(vi.mocked(ingestDocument).mock.calls.map(([, opts]) => opts.stockId)).toEqual(
+      INGESTED.map((s) => s.id)
+    );
     // 母集団外の 4 件は取り込まず、落とした件数を戻り値に出す
     expect({ matched: r.matched, ingested: r.ingested, outOfUniverse: r.outOfUniverse }).toEqual({
-      matched: 1,
-      ingested: 1,
-      outOfUniverse: ALL_CODES.length - 1,
+      matched: INGESTED.length,
+      ingested: INGESTED.length,
+      outOfUniverse: ALL_CODES.length - INGESTED.length,
     });
   });
 });
@@ -271,13 +295,14 @@ function findCodeToIdFromAllRows(source: string): string[] {
   return [...stripComments(source).matchAll(CODE_TO_ID_FROM_ALL_ROWS)].map((m) => m[0]);
 }
 
-/** 証券コードから stock_id を引く取込。どれも共有の loader を呼ぶ。 */
+/** 証券コードから stock_id を引く取込 (と、その共有の入口)。どれも `loadIngestCodeToId` を呼ぶ。 */
 const INGEST_CODE_TO_ID_CALLERS = [
   "src/cron/ir-catalog-tdnet.ts",
   "src/cron/yuho-edinet.ts",
   "services/ir-catalog/src/services/ingest.ts",
   "services/ir-catalog/data-scripts/backfill.ts",
   "services/yuho-quant/data-scripts/backfill.ts",
+  "src/shared/db/core-repo.ts",
 ];
 
 describe("code→id を core_stocks の全行から作る形が残っていない", () => {
@@ -293,13 +318,13 @@ describe("code→id を core_stocks の全行から作る形が残っていな�
     expect(
       offenders,
       "取込で証券コードから stock_id を引くなら src/shared/db/active-equity.ts の" +
-        " loadActiveEquityCodeToId() を使うこと。全行で引くと、公開面から外した銘柄まで取り込む",
+        " loadIngestCodeToId() を使うこと。全行で引くと、P4b で入る非普通株まで取り込む",
     ).toEqual([]);
   });
 
-  it.each(INGEST_CODE_TO_ID_CALLERS)("%s は loadActiveEquityCodeToId を呼ぶ", (rel) => {
+  it.each(INGEST_CODE_TO_ID_CALLERS)("%s は loadIngestCodeToId を呼ぶ", (rel) => {
     const code = stripComments(readFileSync(join(ROOT, rel), "utf-8"));
-    expect(code).toMatch(/\bloadActiveEquityCodeToId\(\s*db\s*\)/);
+    expect(code).toMatch(/\bloadIngestCodeToId\(\s*db\s*\)/);
   });
 
   it("検出器が書き方を問わず拾い、WHERE 付きとコメントは拾わない", () => {
@@ -322,12 +347,12 @@ describe("code→id を core_stocks の全行から作る形が残っていな�
     // 拾ってはいけないもの
     expect(
       findCodeToIdFromAllRows(
-        "db.select({ code: stocks.code, id: stocks.id }).from(stocks).where(activeEquityCondition())"
+        "db.select({ id: stocks.id, code: stocks.code })\n  .from(stocks)\n  .where(ingestUniverseCondition());"
       )
     ).toEqual([]);
     expect(
       findCodeToIdFromAllRows(
-        "db.select({ id: stocks.id, code: stocks.code })\n  .from(stocks)\n  .where(activeEquityCondition());"
+        "db.select({ code: stocks.code, id: stocks.id }).from(stocks).where(activeEquityCondition())"
       )
     ).toEqual([]);
     expect(

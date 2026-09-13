@@ -14,7 +14,7 @@
 import { and, eq, like, or, sql } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { stocks } from "./core-schema.js";
-import { loadActiveEquityCodeToId } from "./active-equity.js";
+import { loadIngestCodeToId } from "./active-equity.js";
 import { publicMarketColumn, publicSectorColumn } from "./public-columns.js";
 import { parseStockCode } from "../jpx/stock-code.js";
 
@@ -112,9 +112,9 @@ export async function listActiveStocks(db: CoreDb): Promise<StockRef[]> {
 /**
  * code→id の Map。取込で証券コードから stock_id を引く用途。
  *
- * 母集団は日次・公開面と同じ active かつ equity (src/shared/db/active-equity.ts の
- * `loadActiveEquityCodeToId` に委ねる)。全行で引くと、公開面から外した銘柄まで取り込む。
+ * 母集団は TDnet / EDINET の取込と同じ (src/shared/db/active-equity.ts の
+ * `loadIngestCodeToId` に委ねる)。全行で引くと、非普通株まで取り込む。
  */
 export async function loadCodeToIdMap(db: CoreDb): Promise<Map<string, number>> {
-  return loadActiveEquityCodeToId(db);
+  return loadIngestCodeToId(db);
 }

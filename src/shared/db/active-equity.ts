@@ -12,24 +12,14 @@
  *   (src/cron/monthly.ts Phase 2) も含む。
  * - **それを読む公開面の一覧・検索・件数**: rsi-screening / swing-trading /
  *   financial-math / otakara-yutai / yuho-quant。
- * - **証券コードから `stock_id` を引く取込** (2026-09-14 に追加): TDnet 開示
- *   (src/cron/ir-catalog-tdnet.ts と services/ir-catalog)、EDINET 有報
- *   (src/cron/yuho-edinet.ts と services/yuho-quant/data-scripts/backfill.ts)、
- *   優待 (services/otakara-yutai)。下の `loadActiveEquityCodeToId` /
- *   `findActiveEquityStockId` を使う。
+ * - **優待の取込** (2026-09-14 に追加): services/otakara-yutai の 3 経路。下の
+ *   `findActiveEquityStockId` と、全量取込 (data-scripts/yutai-full-import.ts) の
+ *   `activeEquityCondition()` を使う。優待の取込は、コードが `core_stocks` に無ければ
+ *   行を足していた (区分が NULL の active 行になり、日次からも公開面からも外れたまま残る)。
  *
- * 取込だけが `core_stocks` の全行でコードを引くと、公開面の一覧から外した銘柄の
- * 開示・有報・優待が取り込まれ、Notion にも記録される。ir-catalog の一覧と検索は
- * この述語で絞っていないので、そのまま表に出る。P4b が非普通株 (+725 行) を
- * `core_stocks` に INSERT した時点で、その全銘柄について自動で取込が始まる。
- * 優待の取込は、コードが `core_stocks` に無ければ行を足していた (区分が NULL の
- * active 行になり、日次からも公開面からも外れたまま残る)。
- *
- * `is_active = 0` は「東証の上場銘柄一覧に無い」行で、東証の上場廃止に加えて、地域取引所
- * (名証・札証・福証) にだけ上場を続ける会社も入る (src/shared/jpx/sectors.ts の
- * isListedEquity と src/cron/universe.ts の対象外化)。取込をこの述語で絞ると、その会社の
- * 新しい開示・有報は入らなくなる。ir-catalog の読み手はこの述語で絞っていないので、
- * 既存の開示は一覧・検索・詳細に出たまま、更新だけが止まる。
+ * **TDnet 開示・EDINET 有報の取込は、この述語を使わない。** 使うのは下の
+ * `ingestUniverseCondition()` / `loadIngestCodeToId()` で、非普通株と、区分が NULL の
+ * active 行だけを除き、`is_active = 0` の銘柄は取り込む (理由はそちらの docstring)。
  *
  * 片方だけを絞ると分母と分子が別の集合になる。日次だけを絞って公開面を
  * `is_active` のままにすると、日次が更新しなくなった非普通株の凍結値が
@@ -93,7 +83,7 @@
  *   `is_active` の covering index を外側ループに選ばれて 1,190 万行を読んだ実例がある。
  *   新しい呼び出し元を足すときは、実際に発行される SQL で rows_read を測ること。
  */
-import { and, eq, type SQL } from "drizzle-orm";
+import { and, eq, isNull, or, type SQL } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { INSTRUMENT_TYPE_EQUITY } from "../jpx/instrument-type.js";
 import { stocks } from "./core-schema.js";
@@ -114,19 +104,71 @@ export function activeEquityCondition(): SQL {
 type CoreDb = BaseSQLiteDatabase<"async", unknown, Record<string, unknown>>;
 
 /**
- * 取込用の code → `stock_id` 表。母集団は `activeEquityCondition()` と同じ。
+ * **取込の母集団**の述語。TDnet 開示・EDINET 有報の取込が、証券コードから `stock_id` を
+ * 引くときに使う。`instrument_type = 'equity' OR (is_active = 0 AND instrument_type IS NULL)`
+ * (値は bind。呼ぶたびに新しい SQL を返すのは `activeEquityCondition()` と同じ)。
  *
- * 表に無いコード (上場廃止・非普通株・区分が NULL・`core_stocks` に無い) は、
+ * ## `activeEquityCondition()` と分けた理由
+ *
+ * 2026-09-13 のユーザー決定は、日次取込と公開面から非普通株 (ETF・REIT・出資証券など) を
+ * 外すことだけで、開示・有報の取込を上場中の銘柄に絞る決定ではない。
+ *
+ * `activeEquityCondition()` で引くと、`is_active = 0` の銘柄の開示・有報も入らなくなる。
+ * `is_active = 0` は「東証の上場銘柄一覧に無い」行で、東証の上場廃止に加えて、地域取引所
+ * (名証・札証・福証) にだけ上場を続ける会社も入る (src/shared/jpx/sectors.ts の
+ * `isListedEquity` と src/cron/universe.ts の対象外化)。本番 2026-09-14 の実測で、直近 30 日に
+ * そうした会社 15 社の、上場廃止に関係しないタイトルの開示が 22 件あった。ir-catalog の読み手
+ * (一覧・検索・コード指定のタイムライン) はどの述語でも絞っていないので、その会社の既存の
+ * 開示は表に出たまま、更新だけが止まる。
+ *
+ * だから取込は、変更前 (`core_stocks` の全行) の挙動を保ったまま、非普通株だけを除く。
+ *
+ * ## 取り込む行と取り込まない行
+ *
+ * | `is_active` | `instrument_type` | 取り込むか | どんな行か |
+ * |---|---|---|---|
+ * | 1 | `equity` | する | 上場中の内国普通株 |
+ * | 0 | `equity` | する | 区分を書いた後に対象外化された普通株 |
+ * | 0 | NULL | する | 区分を書く前に対象外化された行 (上場廃止・地域取引所の単独上場) |
+ * | 1 | NULL | しない | 区分が未分類の active 行 (日次にも公開面にも居ない) |
+ * | 1 / 0 | `equity` 以外 | しない | 非普通株 |
+ *
+ * - 区分の充填 (P4b 第 1 段) は active の行にだけ書いたので、区分が NULL の inactive 行が
+ *   普通株かどうかは、この列からは分からない。変更前と同じく取り込む。
+ * - 今の本番 (2026-09-14、非普通株 9 行の削除後) では、active の行はすべて `equity`、
+ *   inactive の行はすべて NULL なので、変更前の全行 (3,810) と同じ集合になる。
+ * - P4b 第 2 段が非普通株 (区分が非 NULL) を INSERT しても、その開示・有報は取り込まない。
+ *   区分を持ったまま対象外化された非普通株も取り込まない。
+ * - 優待の取込は `activeEquityCondition()` のまま (`findActiveEquityStockId` と
+ *   services/otakara-yutai/data-scripts/yutai-full-import.ts)。
+ * - `is_active = 0` の開示・有報も止めるなら、`loadIngestCodeToId` の WHERE を
+ *   `activeEquityCondition()` に替える 1 行で戻せる (そのときは ir-catalog の読み手を
+ *   同じ述語で絞るかも決めること)。
+ */
+export function ingestUniverseCondition(): SQL {
+  return or(
+    eq(stocks.instrumentType, INSTRUMENT_TYPE_EQUITY),
+    and(eq(stocks.isActive, false), isNull(stocks.instrumentType))
+  ) as SQL;
+}
+
+/**
+ * 取込 (TDnet 開示・EDINET 有報) 用の code → `stock_id` 表。母集団は
+ * `ingestUniverseCondition()`。
+ *
+ * 表に無いコード (非普通株・区分が NULL の active 行・`core_stocks` に無い) は、
  * 呼び出し側でユニバース外として飛ばす。
  *
- * rows_read (本番 2026-09-14 実測): 絞る前の全行 SELECT が 3,819、この形が 3,709
- * (`idx_core_stocks_active_market` の `is_active=?` で引く)。絞っても増えない。
+ * rows_read (本番 2026-09-14 実測、非普通株 9 行の削除後): 3,810 (`SCAN core_stocks`)。
+ * 変更前の全行 SELECT も 3,810 (`core_stocks_code_unique` の covering index) で、増えない。
+ * active かつ equity で絞る形 (3,700) より、inactive の行数ぶん多い。P4b の後も
+ * 全行版と同じく `core_stocks` の行数ぶんを読む (非普通株の行も読むが、取り込まない)。
  */
-export async function loadActiveEquityCodeToId(db: CoreDb): Promise<Map<string, number>> {
+export async function loadIngestCodeToId(db: CoreDb): Promise<Map<string, number>> {
   const rows = await db
     .select({ id: stocks.id, code: stocks.code })
     .from(stocks)
-    .where(activeEquityCondition());
+    .where(ingestUniverseCondition());
   return new Map(rows.map((r) => [r.code, r.id]));
 }
 
