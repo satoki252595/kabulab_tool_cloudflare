@@ -33,13 +33,15 @@ services/otakara-yutai/
 │   └── tests/                 # scoring は src/shared/ に移動済み、本サービスは他の unit test のみ
 ├── data-scripts/              # 月次パイプライン + 1 回限りの保守スクリプト
 │   ├── fetch-yutai-full.ts             # 月次 ①minkabu 取得 → yutai_benefits + is_yutai
-│   ├── export-benefit-descriptions.ts  # 月次 ②ユニーク description 抽出 → JSONL
-│   ├── interpret-benefits.ts           # 月次 ③ローカル LLM (ELYZA) 解釈
-│   ├── apply-benefit-interpretations.ts# 月次 ④short_summary/estimated_value を DB 反映
+│   ├── export-benefit-descriptions.ts  # 月次 ②ユニーク description 抽出 → JSONL (Notion 一次データ記録)
+│   ├── export-summary-tasks.ts         # 月次 ③要約タスク書き出し (要約は外部のクラウド LLM)
+│   ├── import-summary-results.ts       # ④LLM の結果を検証し short_summary/estimated_value を D1 反映 (既定 dry-run)
+│   ├── summary-tasks.ts / summary-import.ts  # ③④の純ロジック (タスク選定 / 結果検証)
+│   ├── estimated-value-guard.ts / private-path.ts / benefit-rows.ts  # 金額ガード / 置き場所ガード / D1 読み取り
 │   ├── benefit-key.ts / summary-contract.ts  # 上記が共有するキー生成・要約契約
-│   ├── enrich-from-web.ts / fetch-yutai-data.ts / fix-stock-names.ts
-│   ├── salvage-realign-interpretations.ts / test-parse.ts / verify-data.ts
-│   └── data/                  # ソースデータ + 解釈結果のチャンク
+│   ├── fetch-yutai-data.ts / fix-stock-names.ts / test-parse.ts / verify-data.ts
+│   └── data/                  # (gitignore) 掲載文を含む作業ファイル: 抽出 JSONL・要約タスク・結果
+├── docs/llm-summary-task.md   # クラウド LLM 向けの要約作業仕様書
 ├── drizzle/                   # drizzle-kit 生成の migration
 ├── CLAUDE.md
 └── README.md
@@ -178,7 +180,15 @@ GitHub Actions 月次
 
 ## 優待データの短縮サマリー (`shortSummary`)
 
-ユニークな優待 description を **node-llama-cpp によるローカル OSS LLM** で自動解釈し (パイプライン step3 `pnpm interpret:yutai`、既定モデル ELYZA-JP-8B)、モバイル表示向けの短縮文言 (`shortSummary`) と推定金銭価値 (`estimatedValue`) を付与。トークン生成レベルで JSON schema を強制し、決定論ガード (`sanitizeEstimatedValue`) で過大評価を null へ落とす。旧実装の `claude -p` (サブスク CLI) 依存は撤廃済み (クラウド API 課金ゼロ)。
+ユニークな優待 description について、モバイル表示向けの短縮文言 (`shortSummary`) と推定金銭価値 (`estimatedValue`) を **リポジトリ外のクラウド LLM (Cursor Automations 等)** が作る (2026-09-13 から)。
+
+1. `pnpm yutai:summary:export` が要約の要る `(銘柄, 掲載文)` をタスク JSONL に書き出す (要約が NULL / 既存要約が契約違反。`--violations-only` で後者だけ)。
+2. 外部エージェントが [作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md) に従って結果 JSONL を返す。
+3. `pnpm yutai:summary:import` が結果を**信用せずに**検証し (要約契約 `summary-contract.ts`、金額の決定論ガード `sanitizeEstimatedValue`、`taskId` と今の D1 の内容キーの一致、契約の版)、通った行だけを書く。既定は dry-run。
+
+タスク / 結果ファイルは掲載文を含むので gitignore 済みの `data-scripts/data/` かリポジトリ外にしか置けない (`private-path.ts` が git に確かめて止める)。
+
+経緯: `claude -p` (サブスク CLI) → node-llama-cpp によるローカル LLM (ELYZA-JP-8B、初回に数 GB を DL) → クラウド LLM。ローカル経路は生成側に長さチェックの退路があり、契約違反の要約 85 行 (8,314 行中) を公開面に残していた。クラウド LLM の費用は Cursor 等の契約側で発生し、このリポジトリの原価ではない。
 
 - 例: `"QUOカード 1,000円相当"` / `"ゼンショー食事券 6,000円(年12,000円)"` / `"高島屋10%割引(限度30万円)"`
 - `estimatedValue`: 年間の推定金銭価値 (円)。割引券など金額換算不能なものは `null`

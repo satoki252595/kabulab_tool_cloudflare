@@ -109,7 +109,7 @@ pnpm db:generate:d1       # D1(SQLite) スキーマ生成 → drizzle/d1/*.sql (
 pnpm sync:daily:core      # core/rsi/swing 日次 (Node → D1 REST。GitHub Actions と同じ本体)
 pnpm sync:daily           # 手動フル日次 (上記 core + VWAP 日足/5分足/信用残高)
 pnpm sync:monthly:core    # otakara 派生テーブル rebuild (Node → D1 REST、Yahoo なし)
-pnpm sync:monthly         # 手動フル月次 (上記 rebuild + 優待取得/抽出/ローカルLLM解釈/DB反映)
+pnpm sync:monthly         # 手動フル月次 (上記 rebuild + 優待取得/抽出/要約タスク書き出し。要約は外部のクラウド LLM)
 pnpm sync:universe        # 東証内国株の母集団 seed (xlsx=Node 専用・月次/復旧時に実行)
 
 # データ取得 (007 VWAP → R2。cron 対象外=手動/CI)
@@ -170,7 +170,7 @@ Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキ�
 
 | 処理 | コマンド | 備考 |
 |---|---|---|
-| 優待スクレイプ+LLM解釈 (002) | data-scripts 4 step（後述） | step3 はローカル OSS LLM のため自動化対象外 |
+| 優待スクレイプ+LLM要約 (002) | data-scripts（後述） | 要約はリポジトリ外のクラウド LLM (Cursor Automations 等) が行い、結果を検証して取り込む |
 
 > `pnpm sync:daily`(= `all-daily.ts`)はローカル手動フル実行用(stock + VWAP を束ねる)。
 > 通常は GitHub Actions に任せてよい。
@@ -277,19 +277,23 @@ pnpm sync:daily
 ### 優待データ取込パイプライン (002 otakara, data-scripts・cron 非対象)
 
 優待情報 (`is_yutai` フラグ + `yutai_benefits` + `short_summary`/`estimated_value`) は統一 sync とは
-別系統。step3 は完全ローカルの OSS LLM (node-llama-cpp) で実行され、クラウド API も従量課金も発生
-しない。初回のみ GGUF モデル (数 GB) を自動 DL する (要ネット)。
+別系統。要約 (`short_summary`) と推定金額はこのリポジトリでは作らず、**リポジトリ外のクラウド LLM
+(Cursor Automations 等)** が [作業仕様書](./services/otakara-yutai/docs/llm-summary-task.md) に従って作る。
+このリポジトリはタスクの書き出しと、結果の検証・取り込みだけを持つ (LLM の出力は信用しない)。
 
 ```bash
 pnpm exec tsx services/otakara-yutai/data-scripts/fetch-yutai-full.ts          # 1. minkabu スクレイプ → 本番 DB
-pnpm exec tsx services/otakara-yutai/data-scripts/export-benefit-descriptions.ts # 2. ユニーク description 抽出
-pnpm interpret:yutai                                                            # 3. ローカル LLM で解釈 (冪等・再開可能)
-pnpm exec tsx services/otakara-yutai/data-scripts/apply-benefit-interpretations.ts # 4. 解釈を DB に反映
+pnpm exec tsx services/otakara-yutai/data-scripts/export-benefit-descriptions.ts # 2. ユニーク description 抽出 (Notion 一次データ記録)
+pnpm yutai:summary:export                                                       # 3. 要約タスク書き出し (--violations-only で契約違反だけ)
+#    → タスクファイルと作業仕様書をクラウド LLM に渡し、結果 JSONL を受け取る (どちらもコミットしない)
+pnpm yutai:summary:import --tasks <タスク> --results <結果>                      # 4. dry-run: 書く件数・はじいた行と理由
+pnpm yutai:summary:import --tasks <タスク> --results <結果> --apply              # 5. 通った行だけ D1 に書く
 ```
 
-- 既に最新の `yutai_benefits` があれば step1 はスキップ可 (`2 → 3 → 4` のみ)。
-- **step3 は冪等・再開可能**: 途中停止しても再実行で未処理バッチから継続。
-- **step4 を実行しないと** otakara の `short_summary`/`estimated_value` に反映されない。
+- タスク / 結果ファイルは出典サイトの掲載文を含むので、`services/otakara-yutai/data-scripts/data/` (gitignore 済み) かリポジトリ外にだけ置く。コマンドはそれ以外を指定すると止まる。
+- 取り込みは要約契約 (`summary-contract.ts`)・金額ガード (`estimated-value-guard.ts`)・`taskId` と今の D1 の一致を検査し、違反した行だけをはじく。
+- `pnpm sync:monthly` は 1〜3 までを実行し、要約が未反映でも失敗にしない (取り込み手順をログに出す)。
+- クラウド LLM の費用は Cursor 等の契約側で発生し、このリポジトリの原価には乗らない。
 
 ### 一次データの Notion アーカイブ (CLAUDE.md ルール6)
 

@@ -41,7 +41,8 @@
     "ingest:vwap-daily": "tsx scripts/vwap/ingest-daily.ts",
     "ingest:vwap-intra": "tsx scripts/vwap/ingest-intra.ts",
     "ingest:vwap-margin": "tsx scripts/vwap/ingest-margin.ts",
-    "interpret:yutai": "tsx services/otakara-yutai/data-scripts/interpret-benefits.ts",
+    "yutai:summary:export": "tsx services/otakara-yutai/data-scripts/export-summary-tasks.ts",
+    "yutai:summary:import": "tsx services/otakara-yutai/data-scripts/import-summary-results.ts",
     "yuho:backfill": "tsx services/yuho-quant/data-scripts/backfill.ts",
     "yuho:investigate": "tsx services/yuho-quant/data-scripts/investigate.ts",
     "ir:backfill": "tsx services/ir-catalog/data-scripts/backfill.ts"
@@ -58,25 +59,22 @@
     "zod": "^4.3.6"
   },
   "pnpm": {
-    "onlyBuiltDependencies": [
-      "node-llama-cpp"
-    ]
+    "onlyBuiltDependencies": []
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.600.0",
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.5.0",
     "@vitest/coverage-v8": "^4.1.0",
     "dotenv": "^17.3.1",
     "drizzle-kit": "^0.31.10",
     "eslint": "^10.1.0",
-    "node-llama-cpp": "^3.14.0",
     "prettier": "^3.8.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.57.2",
     "vercel": "^54.11.1",
     "vitest": "^4.1.0",
-    "wrangler": "^4.20.0",
-    "@aws-sdk/client-s3": "^3.600.0"
+    "wrangler": "^4.20.0"
   }
 }
