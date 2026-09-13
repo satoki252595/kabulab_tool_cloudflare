@@ -308,3 +308,16 @@ describe("GET /stocks/:code のライセンス境界", () => {
     expect(html).toContain('<p style="color:#888">—</p>');
   });
 });
+
+describe("GET /stocks/:code は財務指標の更新日を出す", () => {
+  // 月次の再構築は active かつ equity だけを対象にする (src/cron/monthly.ts Phase 2)。
+  // 1 件目は instrument_type が番兵値 = 普通株ではないので、本番ならこの行は作り直されず
+  // 値が凍結する。詳細は 200 のまま出すので、古さが読めるよう更新日を出す。
+  it("financials 行の data_date を出す", async () => {
+    expect(await detailHtml()).toContain("財務指標の更新日: 2026-09-01");
+  });
+
+  it("financials 行が無い銘柄には更新日の行を出さない", async () => {
+    expect(await detailHtml(CODE_NO_SECTOR33)).not.toContain("財務指標の更新日");
+  });
+});

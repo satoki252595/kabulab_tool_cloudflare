@@ -30,9 +30,16 @@
  *   select しない)。
  * - WHERE / ON は D1 の中で評価され、**値は Worker に返らない**。したがって
  *   この方針に反しない。
- * - 外から観測できるのは「その銘柄が一覧に載るかどうか」の 1 bit だけ。同じ
- *   JPX 由来の `is_active` は既に公開面の述語に使っており、同じ種類の情報である。
- * - 結論: 述語としての利用は、**この helper 1 箇所を経由する場合に限って**認める。
+ * - 外から観測できるのは「その銘柄が一覧に載るかどうか」の 1 bit だけ。
+ * - 公開面は既に `is_active` を述語に使っているが、**これはライセンス判断の前例では
+ *   ない**。`is_active` は stockStock の列地図 (tests/fixtures/contracts/
+ *   d1-license-map.json) に宣言が無い列で (cloud_store/schema.py が「派生元の判断が
+ *   要る」として宣言を保留している)、地図の `$undeclared_policy` では「公開してよいと
+ *   決まっていない」扱いである。
+ * - 結論 (暫定): 述語としての利用は、**この helper 1 箇所を経由する場合に限って**
+ *   認める。personal-only の列を公開面の母集団の述語に使うこと自体は、2026-09-14
+ *   時点で**ユーザーの承認待ち** (PR #30 の「マージ前にユーザー判断が要るもの」)で、
+ *   ライセンスの正本 (stockStock) にはまだ記録していない。
  *   src/shared/db/core-stocks-license-boundary.test.ts が、`instrumentType` を
  *   修飾つきで参照するファイルを src/cron/universe.ts (唯一の書き手) とこの
  *   ファイルだけに固定している。

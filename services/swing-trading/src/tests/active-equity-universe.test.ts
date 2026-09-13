@@ -9,7 +9,10 @@
  *
  *   - GET /screening のロング / ショート (以前は is_active の条件も無かった)
  *   - GET /signals の all / pattern 指定
- *   - GET / の強度上位シグナル
+ *   - GET / の強度上位シグナルと「シグナル総数」
+ *
+ * GET /screening は core_stocks を CROSS JOIN + WHERE の等値で結ぶ (pages.ts のコメント)。
+ * 結合条件はその等値 1 項だけが担うので、1 銘柄 1 行であることと、発行 SQL の形も固定する。
  *
  * 非普通株の行は、絞り込みが外れたら**先頭に来る**値 (売買代金・シグナル強度が最大)
  * にしてある。末尾に並ぶ値だと、limit で切れて「出ない」ように見えてしまう。
@@ -35,9 +38,10 @@ function applyD1Migrations(target: DatabaseSync): void {
   }
 }
 
-/** drizzle-orm/d1 が触る範囲だけの D1Database シム。 */
-function createD1(sqlite: DatabaseSync): unknown {
+/** drizzle-orm/d1 が触る範囲だけの D1Database シム。発行した SQL を `queries` に積む。 */
+function createD1(sqlite: DatabaseSync, queries: string[]): unknown {
   const prepare = (query: string) => {
+    queries.push(query);
     const make = (params: unknown[]) => ({
       all: async () => ({
         results: sqlite.prepare(query).all(...(params as never[])),
@@ -71,8 +75,10 @@ const EQUITY_CODE = "7203";
 const REIT_CODE = "8951";
 
 let sqlite: DatabaseSync;
+let queries: string[];
 
 beforeEach(() => {
+  queries = [];
   sqlite = new DatabaseSync(":memory:");
   applyD1Migrations(sqlite);
 
@@ -107,7 +113,7 @@ afterEach(() => {
 });
 
 async function page(path: string): Promise<string> {
-  const res = await swingTradingApp.request(path, {}, { DB: createD1(sqlite) });
+  const res = await swingTradingApp.request(path, {}, { DB: createD1(sqlite, queries) });
   expect(res.status, path).toBe(200);
   return res.text();
 }
@@ -119,6 +125,24 @@ describe("swing-trading の一覧は active かつ equity の銘柄だけを出�
       const html = await page(path);
       expect(html).toContain(`/stock/${EQUITY_CODE}"`);
       expect(html).not.toContain(REIT_CODE);
+    }
+  );
+
+  it.each(["/screening?direction=long", "/screening?direction=short"])(
+    "GET %s は 1 銘柄 1 行で、core_stocks を CROSS JOIN + 等値で結ぶ",
+    async (path) => {
+      const html = await page(path);
+      // 等値を消すと screening 行 × equity 行の直積になり、REIT の screening /
+      // indicators の値が 7203 の名前でもう 1 行並ぶ。REIT のコードは出ないので、
+      // 上の not.toContain(REIT_CODE) だけでは素通りする。
+      expect(html.split(`/stock/${EQUITY_CODE}"`).length - 1).toBe(1);
+
+      const screeningSql = queries.find((q) => q.includes('from "swing_stock_screening"'));
+      expect(screeningSql).toBeDefined();
+      // INNER JOIN に戻すと core_stocks の is_active 索引が外側ループになり、本番の
+      // rows_read が long 356 → 7,585 / short 1,356 → 8,085 に増える (pages.ts)。
+      expect(screeningSql).toContain('from "swing_stock_screening" cross join "core_stocks"');
+      expect(screeningSql).toContain('"core_stocks"."id" = "swing_stock_screening"."stock_id"');
     }
   );
 
@@ -135,5 +159,11 @@ describe("swing-trading の一覧は active かつ equity の銘柄だけを出�
     const html = await page("/");
     expect(html).toContain(`/stock/${EQUITY_CODE}"`);
     expect(html).not.toContain(REIT_CODE);
+  });
+
+  it("GET / のシグナル総数に reit_fund のシグナルを数えない", async () => {
+    // 一覧 (/signals) と同じ母集団で数える。述語を外すと REIT の凍結シグナルも数えて 2 になる。
+    const html = await page("/");
+    expect(html).toMatch(/シグナル総数<\/div>\s*<div class="val">1<\/div>/);
   });
 });

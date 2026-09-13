@@ -1446,6 +1446,10 @@ app.get("/stocks/:code", async (c) => {
 
   // 市場区分 / 業種はフラグで列名が変わる。読み替えは public-columns.ts に閉じる。
   const stockMeta = publicStockMetaFromRow(stockData);
+  // 財務指標は月次 (src/cron/monthly.ts Phase 2) が日次の値から作り直す。日次の母集団
+  // (active かつ equity) から外れた非普通株は作り直されず値が凍結する一方、この詳細は
+  // コード指定なので 200 で出る。古さを読めるよう、行の data_date を「更新日」として出す。
+  // data_date は月次で作り直した日で、株価の取得日ではない (だから「基準日」とは書かない)。
   const fin = stockData.financials[0] ?? null;
   const score = stockData.scores[0] ?? null;
   const genreSlugs = [...new Set(stockData.benefits.map((b: any) => b.genre?.slug).filter(Boolean))];
@@ -1471,6 +1475,7 @@ app.get("/stocks/:code", async (c) => {
 
       <h3 style="margin-top:24px">財務指標</h3>
       <div class="guide">企業の実力を数字で見るエリアです。用語をタップすると説明が表示されます。</div>
+      ${fin?.dataDate ? `<p style="color:#888;font-size:13px;margin:4px 0 8px">財務指標の更新日: ${h(fin.dataDate)}</p>` : ""}
       ${renderFinGrid(fin)}
 
       <h3 style="margin-top:24px">${tip("yutai", "株主優待")}</h3>

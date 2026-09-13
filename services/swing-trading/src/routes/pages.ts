@@ -96,9 +96,15 @@ pagesRoute.get("/", async (c) => {
 
   // カウント集計
   // totalScreened / passedLong / passedShort は core_stocks を JOIN しないので、
-  // 母集団 (active かつ equity) では絞っていない。絞るには JOIN が要り、閲覧 1 回の
-  // rows_read が約 2 倍になる (本番実測 2026-09-13: totalScreened 3,764 → 7,409)。
-  // 上場廃止の行も数えている既存の食い違いと同じ扱いで残す。
+  // 母集団 (active かつ equity) では絞っていない。上場廃止の行と、日次の対象外に
+  // なって凍結した非普通株の行も数える。
+  //
+  // passedLong / passedShort は、GET /screening に母集団の条件が無かった間は一覧と
+  // 同じ集合だった。/screening を母集団で絞ったので、**件数が一覧と食い違う**
+  // (本番 2026-09-14: 母集団で数えると long 89 → 88、short 339 → 338)。
+  // /screening と同じ CROSS JOIN + 述語で数えれば揃うが、閲覧 1 回の rows_read が
+  // long 89 → 178 / short 339 → 678 (同日実測) と倍になる。totalScreened も
+  // 3,764 → 7,409 (2026-09-13 実測)。ランニングコストを増やさない制約により採らない。
   const [{ totalScreened }] = await db
     .select({ totalScreened: sql<number>`count(*)` })
     .from(stockScreening);

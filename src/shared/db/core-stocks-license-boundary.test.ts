@@ -27,12 +27,13 @@
  * 直すのは stockStock 側のレーン**。ここを commercial-ok として扱う根拠は
  * 書き込み元であって、まだ宣言ではない。
  *
- * ## `instrument_type` を**述語として**使うことは認めた (2026-09-13)
+ * ## `instrument_type` を**述語として**使うことは暫定で認める (2026-09-13、ユーザー承認待ち)
  *
  * 日次取込と公開面の一覧を普通株に絞るため、`instrument_type` (personal-only のまま)
  * を WHERE / JOIN の ON で使う。WHERE は D1 の中で評価されるので値は Worker にも
  * レスポンスにも載らず、外から観測できるのは「一覧に載るかどうか」の 1 bit だけ
- * (公開面が既に述語に使っている JPX 由来の `is_active` と同じ種類の情報)。よって
+ * (公開面が述語に使っている `is_active` はライセンス未宣言の列で、前例にはならない。
+ * 判断の根拠と承認待ちであることは src/shared/db/active-equity.ts §2)。よって
  * src/shared/db/public-columns.ts の「値を載せない・出さない」方針に反しない。
  * ただし述語は src/shared/db/active-equity.ts の 1 箇所を経由する場合に限る。
  * 値の select と、`market` / `sector` / `sector17` を述語に使うことは引き続き禁止。
