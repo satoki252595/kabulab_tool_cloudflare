@@ -71,8 +71,11 @@ const OUTSIDE = [
   { id: 303, code: "9002", active: 1, instrumentType: "reit_fund" }, // 非普通株
 ] as const;
 const OUTSIDE_IDS: readonly number[] = OUTSIDE.map((s) => s.id);
-/** core_stocks に無いコード。 */
-const ABSENT_CODE = "9997";
+/**
+ * core_stocks に無いコード。テストの DB に無いだけでなく、実在もしない合成コード
+ * (JPX の上場銘柄一覧 2026-08-31 版にも本番 core_stocks にも、1300 未満の数字コードは無い)。
+ */
+const ABSENT_CODE = "1299";
 
 const descOf = (code: string) => `架空優待${code}`;
 
