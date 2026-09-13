@@ -15,6 +15,7 @@ import {
   screenStocks,
 } from "../../services/screening-service.js";
 import { screeningQuerySchema } from "../../validators/screening.js";
+import { app } from "../../index.js";
 import { createSqliteD1 } from "../helpers/sqlite-d1.js";
 
 /**
@@ -83,6 +84,8 @@ async function seed(input: {
   minPercentile: number;
   computedAt: Date;
   isActive?: boolean;
+  /** 既定は `equity` (日次の処理対象)。`null` は未分類。 */
+  instrumentType?: string | null;
   sampleBars?: number | null;
 }): Promise<void> {
   const [stock] = await db
@@ -92,6 +95,7 @@ async function seed(input: {
       name: `テスト ${input.code}`,
       market: "プライム",
       isActive: input.isActive ?? true,
+      instrumentType: input.instrumentType === undefined ? "equity" : input.instrumentType,
     })
     .returning({ id: coreSchema.stocks.id });
 
@@ -234,5 +238,41 @@ describe("screenStocks の鮮度条件", () => {
     expect(result.rows[0].computedAt.toISOString()).toBe(
       "2026-09-11T21:10:00.000Z"
     );
+  });
+
+  it("instrument_type が equity 以外の行は、結果にも鮮度除外件数にも入らない", async () => {
+    // 日次取込は active かつ equity だけを更新する。REIT 等の行は凍結したまま残るので、
+    // 結果に並べると古い値が今日の底値に見え、鮮度除外に数えると「条件には合うが
+    // 古い」件数が母集団外の行で水増しされる。
+    const fresh = new Date(NOW.getTime() - DAY_MS);
+    const stale = new Date("2026-05-15T21:10:00.000Z");
+    await seed({ code: "6001", minPercentile: 3, computedAt: fresh });
+    await seed({ code: "6002", minPercentile: 1, computedAt: fresh, instrumentType: "reit_fund" });
+    await seed({ code: "6003", minPercentile: 2, computedAt: fresh, instrumentType: null });
+    await seed({ code: "6004", minPercentile: 2, computedAt: stale });
+    await seed({ code: "6005", minPercentile: 2, computedAt: stale, instrumentType: "reit_fund" });
+
+    const result = await screenStocks(db, query, NOW);
+
+    expect(result.rows.map((r) => r.code)).toEqual(["6001"]);
+    expect(result.staleExcluded).toBe(1);
+  });
+});
+
+describe("GET / (ホーム) の銘柄数", () => {
+  // ホームの total は screenStocks と同じ母集団 (active かつ equity) で数える。
+  // src/shared/db/active-equity.test.ts の静的検査は `eq(stocks.isActive, true)` の
+  // 字面しか見ないので、述語の削除や別表記での戻しはここで値として捕まえる。
+  it("非普通株・instrument_type NULL・上場廃止を数えない", async () => {
+    const fresh = new Date(NOW.getTime() - DAY_MS);
+    await seed({ code: "1001", minPercentile: 5, computedAt: fresh });
+    await seed({ code: "1002", minPercentile: 5, computedAt: fresh, instrumentType: "reit_fund" });
+    await seed({ code: "1003", minPercentile: 5, computedAt: fresh, instrumentType: null });
+    await seed({ code: "1004", minPercentile: 5, computedAt: fresh, isActive: false });
+
+    const res = await app.request("/", {}, { DB: harness.db });
+    expect(res.status).toBe(200);
+    // 述語を外すと 4、is_active 単独に戻すと 3。
+    expect(await res.text()).toMatch(/<span class="num">1<\/span>\s*<span class="lbl">Stocks<\/span>/);
   });
 });

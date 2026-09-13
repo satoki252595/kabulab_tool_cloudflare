@@ -40,6 +40,13 @@
  *
  * 本番の `core_stocks.sector33` は**全行 NULL** (移行 P4b が未了)。よって
  * 当面、公開面の業種は空 (`—`) になる。値を入れるのは stockStock 側の別レーン。
+ *
+ * ## 公開面の母集団の述語は active-equity.ts に置く
+ *
+ * 公開面の一覧・検索・件数を絞る母集団の述語 (`instrument_type = 'equity'`) は
+ * src/shared/db/active-equity.ts に置く。personal-only の `instrument_type` を
+ * WHERE / ON で使うだけで、値は select せず、Worker にもレスポンスにも出さない
+ * (判断の根拠はそのファイルの docstring)。
  */
 import { sql } from "drizzle-orm";
 import { stocks } from "./core-schema.js";

@@ -12,7 +12,7 @@
  *   - 起動: `pnpm sync:daily:core`（scripts/sync/daily.ts）/ GitHub Actions。
  *
  * フロー（母集団同期 Phase 0 は除外）:
- *   Phase 1. ブートストラップ: core_stocks のアクティブ銘柄を取得 + 既存 OHLCV の
+ *   Phase 1. ブートストラップ: core_stocks の active かつ equity の銘柄を取得 + 既存 OHLCV の
  *            MAX(date) を読む（増分判定用）
  *   Phase 2. マクロコンテキスト (^N225 / ^VIX / ^GSPC / NIY=F + 日経VI)
  *   Phase 3. worker pool で各銘柄: Chart(5y)+QuoteSummary 取得 → 全指標を計算 →
@@ -38,6 +38,7 @@
 import { sql, asc, eq, and, gt, gte, isNotNull, lte } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
+import { activeEquityCondition } from "../shared/db/active-equity.js";
 
 // core スキーマは rsi-screening の定義を流用 (001 が所有・更新)
 import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
@@ -88,6 +89,7 @@ type Db = ReturnType<typeof createDailyDb>;
 
 /** 日次 sync の結果サマリ */
 export interface DailySyncResult {
+  /** 処理対象の件数 = `core_stocks` の active かつ equity (`loadDailyTargets`)。 */
   totalStocks: number;
   successStocks: number;
   failedStocks: number;
@@ -452,19 +454,19 @@ export async function assertDailySchema(db: Db): Promise<void> {
 }
 
 /**
- * 日次 sync 本体
+ * 日次取込の処理対象 = `core_stocks` の **active かつ equity (内国普通株)**。
  *
- * @param db createDailyDb() の戻り (Node→D1 HTTP)
+ * 2026-09-13 のユーザー決定で `is_active` 単独から絞った。移行 P4b が非普通株
+ * (+725 行: ETF/ETN・PRO Market・REIT 等・外国株) を INSERT しても、日次の対象件数・
+ * Actions の所要時間・D1 の書込が増えないようにするため。述語の定義とライセンス判断は
+ * src/shared/db/active-equity.ts。業種集計 (Phase 5) と投影 (Phase 6) も同じ述語を使う。
+ *
+ * 対象から外れた銘柄 (本番 2026-09-13: reit_fund 8 / investment_certificate 1) の
+ * 派生行は消さない。更新が止まって凍結し、公開面の一覧は同じ述語で隠す。
+ * 対象が 0 件なら run を失敗にする判定 (`isDailySyncIncomplete`) は従来どおり効く。
  */
-export async function runDailySync(db: Db): Promise<DailySyncResult> {
-  const startedAt = Date.now();
-
-  // -----------------------------------------------------------------
-  // Phase 1: スキーマ検証 + アクティブ銘柄取得 + 既存 OHLCV の MAX(date)
-  // -----------------------------------------------------------------
-  console.info("[sync-daily] Phase 1: ブートストラップ");
-  await assertDailySchema(db);
-  const targets = await db
+export async function loadDailyTargets(db: Db) {
+  return db
     .select({
       id: coreSchema.stocks.id,
       code: coreSchema.stocks.code,
@@ -478,8 +480,24 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
       sector: coreSchema.stocks.sector,
     })
     .from(coreSchema.stocks)
-    .where(eq(coreSchema.stocks.isActive, true));
-  console.info(`[sync-daily]   対象: ${targets.length} 銘柄`);
+    .where(activeEquityCondition());
+}
+
+/**
+ * 日次 sync 本体
+ *
+ * @param db createDailyDb() の戻り (Node→D1 HTTP)
+ */
+export async function runDailySync(db: Db): Promise<DailySyncResult> {
+  const startedAt = Date.now();
+
+  // -----------------------------------------------------------------
+  // Phase 1: スキーマ検証 + 処理対象 (active かつ equity) の取得 + 既存 OHLCV の MAX(date)
+  // -----------------------------------------------------------------
+  console.info("[sync-daily] Phase 1: ブートストラップ");
+  await assertDailySchema(db);
+  const targets = await loadDailyTargets(db);
+  console.info(`[sync-daily]   対象: ${targets.length} 銘柄 (active かつ equity)`);
 
   // 各銘柄の既存 MAX(date) を 1 クエリで取得 (bind 不要)。null/未登録は初回 backfill。
   const maxDateRows = await db
@@ -666,8 +684,9 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
  *
  * - フラグ (`PUBLISH_JPX_DERIVED_COLUMNS`) が false → `core_stocks.sector33`
  *   (EDINET 提出者業種 / commercial-ok)。戻すときもフラグ 1 箇所。
- * - `sector33` が NULL の銘柄 (REIT・インフラファンド等、EDINET の提出者業種を
- *   持たないもの) は `aggregateSectors` が `未分類` にまとめる。
+ * - `sector33` が NULL の銘柄は `aggregateSectors` が `未分類` にまとめる。
+ *   EDINET の提出者業種を持たない REIT・インフラファンド等は、下の母集団の述語で
+ *   先に外れる (本番 2026-09-13: active かつ equity で `sector33` が NULL は 1 銘柄)。
  *   **JPX の `sector` へフォールバックしない** —— フォールバックすると
  *   `sector33` に値が無い銘柄の分だけ JPX の業種名が表に保存され、公開面に出る。
  *
@@ -676,6 +695,13 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
  *
  * 切り替え前の日付の行は JPX キーのまま残る。公開面がそれを読まないための
  * 日付は `SECTOR_DAILY_PUBLIC_KEY_SINCE` (public-columns.ts)。
+ *
+ * **分母と分子は同じ述語を使う** (`activeEquityCondition` = active かつ equity。
+ * 日次の処理対象 `loadDailyTargets` と同じ集合)。分母は「当日更新されるはずの
+ * 銘柄数」なので、日次が更新しない銘柄を数えるとカバレッジが構造的に下がる。
+ * P4b (+725 行) の後に分母を is_active のままにすると、3,700/4,434=83.4% で
+ * 毎日スキップされる。分子も同じ述語にしておかないと、分母に居ない銘柄を分子が
+ * 数えうる (カバレッジが 100% を超える / 業種や `未分類` に非普通株が混ざる)。
  *
  * @returns 書いた業種数。カバレッジ不足でスキップしたら `null`。
  */
@@ -686,7 +712,7 @@ export async function aggregateSectorDaily(
   const [{ activeCount }] = await db
     .select({ activeCount: sql<number>`count(*)` })
     .from(coreSchema.stocks)
-    .where(eq(coreSchema.stocks.isActive, true));
+    .where(activeEquityCondition());
 
   const indicatorRows = await db
     .select({
@@ -700,7 +726,7 @@ export async function aggregateSectorDaily(
     )
     .where(
       and(
-        eq(coreSchema.stocks.isActive, true),
+        activeEquityCondition(),
         // D1/SQLite: computed_at は epoch 秒。本日(UTC)0 時の epoch と比較。
         gte(
           swingSchema.stockIndicators.computedAt,
@@ -1324,7 +1350,7 @@ export async function pruneOhlcvRetention(
  * 最後の行が落とし穴で、`core_stocks` を JOIN すると SQLite は
  * `SEARCH core_stocks USING COVERING INDEX (is_active=?)` を外側ループに選び、
  * stock_id の範囲条件が**外側を刈らない**。1 チャンクごとに OHLCV を全走査する
- * ので、32 チャンクで 1,190 万行になる。**is_active の絞り込みは SQL で
+ * ので、32 チャンクで 1,190 万行になる。**母集団 (active かつ equity) の絞り込みは SQL で
  * JOIN せず、id 集合を先に引いて JS 側で落とす。**
  */
 const PROJECTION_SCAN_PAGE = 40_000;
@@ -1350,14 +1376,16 @@ export interface MomentumProjectionResult {
 /**
  * `p_momentum` を `swing_daily_ohlcv` から作り直す。
  *
- * 母集団は `/emh` が数えているものと同じ「`core_stocks.is_active` かつ終値が
- * NULL でない行」。同じ WHERE / 同じ順序で読むので、投影を経由しても
+ * 母集団は `/emh` が数えているものと同じ「`core_stocks` の active かつ equity
+ * (src/shared/db/active-equity.ts) で、終値が NULL でない行」。同じ WHERE /
+ * 同じ順序で読むので、投影を経由しても
  * `calcMomentum` に入る配列は**従来と同一**になる (= 画面の数値は変わらない)。
  *
  * 全消し → 全挿入は採らなかった。3,715 行の DELETE + 3,715 行の INSERT で
  * 書込が 2 倍になる。代わりに upsert してから「今回の run で触られなかった行」を
  * 1 文の DELETE で落とす。観測できる結果 (孤児行が残らない) は同じで、
- * 書込は約 3,715 行/日に収まる (実測: is_active かつ有効終値を持つ銘柄 3,715)。
+ * 書込は約 3,715 行/日に収まる (実測 2026-09-13: is_active かつ有効終値を持つ
+ * 銘柄 3,715。active かつ equity に絞った後はそれ以下で、上限は 3,700)。
  *
  * 途中で例外が出た場合、掃除 DELETE は走らないので古い行が残る。その行は
  * `as_of` が進まないので画面側で古さとして見える (黙って新しいふりをしない)。
@@ -1370,7 +1398,8 @@ export async function rebuildMomentumProjection(
   const runStartedSec = Math.floor(Date.now() / 1000);
   const projection = projectionSchema.momentumProjection;
 
-  // 母集団 = /emh が分母に使っているのと同じ is_active の集合。
+  // 母集団 = /emh が分母に使っているのと同じ active かつ equity の集合
+  // (src/shared/db/active-equity.ts)。
   // **JOIN にはしない** (上の表のとおり JOIN すると 1 ページごとに OHLCV を
   // 全走査する計画を選ばれる)。id 集合を先に引いて JS 側で落とす。
   const activeIds = new Set(
@@ -1378,19 +1407,20 @@ export async function rebuildMomentumProjection(
       await db
         .select({ id: coreSchema.stocks.id })
         .from(coreSchema.stocks)
-        .where(eq(coreSchema.stocks.isActive, true))
+        .where(activeEquityCondition())
     ).map((r) => r.id)
   );
 
   if (activeIds.size === 0) {
-    // is_active な銘柄が 1 件も返らないのは「母集団が空になった」ではなく
-    // core_stocks 側の異常である。このまま進むと upsert 対象が 0 行になり、
+    // active かつ equity の銘柄が 1 件も返らないのは「母集団が空になった」ではなく
+    // core_stocks 側の異常である (is_active の一括対象外化、instrument_type の
+    // 充填が消えた等)。このまま進むと upsert 対象が 0 行になり、
     // 下の掃除 DELETE が**投影を全消し**する。/emh は理由を出せないまま
     // 「該当 0 件」になる (maxBars=0 なので window 超過の notice も出ない)。
-    // OHLCV が 1 行も無い状態 (= 初回 backfill 前) は正常だが、is_active が
+    // OHLCV が 1 行も無い状態 (= 初回 backfill 前) は正常だが、母集団が
     // 0 件になるのは正常ではないので、静かに返さず run を失敗させる。
     throw new Error(
-      "投影の母集団が空です: core_stocks に is_active=1 の行が 1 件もありません。" +
+      "投影の母集団が空です: core_stocks に is_active=1 かつ instrument_type='equity' の行が 1 件もありません。" +
         " 投影を全消しすると /emh が理由なしの 0 件になるので中断します。"
     );
   }
@@ -1425,7 +1455,7 @@ export async function rebuildMomentumProjection(
     scannedBars += page.length;
     for (const bar of page) {
       if (bar.close === null) continue;
-      // データセット全体の鮮度。非活動銘柄のバーも含める (as_of との差が
+      // データセット全体の鮮度。母集団外 (非活動・非普通株) のバーも含める (as_of との差が
       // 「この銘柄だけ取得が止まっている」ことを示すので、分母は揃えない)。
       if (sourceMaxDate === null || bar.date > sourceMaxDate) {
         sourceMaxDate = bar.date;

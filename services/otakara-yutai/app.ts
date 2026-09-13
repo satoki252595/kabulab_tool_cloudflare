@@ -21,6 +21,7 @@ import {
   publicStockMetaFromRow,
   publicStockMetaLabel,
 } from "../../src/shared/db/public-columns.js";
+import { activeEquityCondition } from "../../src/shared/db/active-equity.js";
 
 /**
  * 002 お宝優待 — kabulab portal 配下の /otakara-yutai サブアプリ
@@ -176,8 +177,9 @@ app.get("/api/screening", async (c) => {
   // 総件数を返すか。既定 false ＝ 打たない (理由は下の COUNT 付近を参照)。
   const withTotal = c.req.query("withTotal") === "1";
 
-  // 母集団は東証対象 ~3,700 だが otakara は優待サービスなので is_yutai=true に限定
-  const whereClauses: unknown[] = [eq(stocks.isActive, true), eq(stocks.isYutai, true)];
+  // 母集団は日次・月次の対象と同じ active かつ equity (src/shared/db/active-equity.ts)。
+  // otakara は優待サービスなので、その中の is_yutai=true に限定する。
+  const whereClauses: unknown[] = [activeEquityCondition(), eq(stocks.isYutai, true)];
 
   // ジャンル/権利月フィルター。
   // 該当 stockId を JS 配列へ展開して inArray に渡すと、件数の多いジャンル
@@ -864,7 +866,10 @@ function sortOptions(current = "total-desc"): string {
 app.get("/", async (c) => {
   const db = c.get("db");
   const genres = await db.select().from(yutaiGenres).orderBy(yutaiGenres.name);
-  const [{ count: totalStocks }] = await db.select({ count: count() }).from(stocks).where(eq(stocks.isYutai, true));
+  // 銘柄数は一覧 (/screening と /api/screening) の母集団と同じ述語で数える。
+  // 以前は is_yutai だけを見ており、上場廃止した優待銘柄まで数えていた。
+  const [{ count: totalStocks }] = await db.select({ count: count() }).from(stocks)
+    .where(and(activeEquityCondition(), eq(stocks.isYutai, true)));
 
   const cards = genres.map(g =>
     `<a href="${BP}/genres/${h(g.slug)}" style="text-decoration:none;color:inherit"><div class="card"><h3>${h(g.name)}</h3><p>${h(g.description || "")}</p></div></a>`
@@ -926,13 +931,13 @@ app.get("/genres/:slug", async (c) => {
   const fRsiMax = parseFloat(c.req.query("rsiMax") ?? "") || 0;
   const activeFilters = [fMonth, fPerMax, fPbrMax, fYieldMin, fRsiMax].filter(v => v > 0).length;
 
-  // WHERE: ジャンル該当 (サブクエリ) + active + 絞り込み。ID 配列を JS 展開せず
+  // WHERE: ジャンル該当 (サブクエリ) + 母集団 (active かつ equity) + 絞り込み。ID 配列を JS 展開せず
   // サブクエリを inArray に渡し D1 のバインド変数上限 (1クエリ100個) を回避する。
   const gWhere: unknown[] = [
     inArray(stocks.id,
       db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
         .where(eq(yutaiBenefits.genreId, genre.id))),
-    eq(stocks.isActive, true),
+    activeEquityCondition(),
   ];
   if (fMonth) gWhere.push(inArray(stocks.id,
     db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
@@ -1122,7 +1127,8 @@ app.get("/screening", async (c) => {
   // 先頭 SCREENING_PAGE_SIZE 件)。以降のページ送りはクライアント JS が API で引く。
   // 第2キーの id は API 側と同じ理由 (同値行の順序を固定してページ跨ぎの
   // 重複/取りこぼしを防ぐ) で必要。
-  const initialWhere = and(eq(stocks.isActive, true), eq(stocks.isYutai, true));
+  // 母集団の述語は /api/screening と同じ (active かつ equity のうち is_yutai)。
+  const initialWhere = and(activeEquityCondition(), eq(stocks.isYutai, true));
   const rows = await db.select({
     id: stocks.id, code: stocks.code, name: stocks.name,
     price: stockFinancials.price, per: stockFinancials.per, pbr: stockFinancials.pbr,
@@ -1440,6 +1446,10 @@ app.get("/stocks/:code", async (c) => {
 
   // 市場区分 / 業種はフラグで列名が変わる。読み替えは public-columns.ts に閉じる。
   const stockMeta = publicStockMetaFromRow(stockData);
+  // 財務指標は月次 (src/cron/monthly.ts Phase 2) が日次の値から作り直す。日次の母集団
+  // (active かつ equity) から外れた非普通株は作り直されず値が凍結する一方、この詳細は
+  // コード指定なので 200 で出る。古さを読めるよう、行の data_date を「更新日」として出す。
+  // data_date は月次で作り直した日で、株価の取得日ではない (だから「基準日」とは書かない)。
   const fin = stockData.financials[0] ?? null;
   const score = stockData.scores[0] ?? null;
   const genreSlugs = [...new Set(stockData.benefits.map((b: any) => b.genre?.slug).filter(Boolean))];
@@ -1465,6 +1475,7 @@ app.get("/stocks/:code", async (c) => {
 
       <h3 style="margin-top:24px">財務指標</h3>
       <div class="guide">企業の実力を数字で見るエリアです。用語をタップすると説明が表示されます。</div>
+      ${fin?.dataDate ? `<p style="color:#888;font-size:13px;margin:4px 0 8px">財務指標の更新日: ${h(fin.dataDate)}</p>` : ""}
       ${renderFinGrid(fin)}
 
       <h3 style="margin-top:24px">${tip("yutai", "株主優待")}</h3>

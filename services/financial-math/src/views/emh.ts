@@ -33,7 +33,7 @@ export interface EmhPageProps {
      * それ以外のタブでは `MAX(swing_daily_ohlcv.date)`。
      */
     latestDate: string | null;
-    /** 集計に使用した銘柄全体の数 (core_stocks の is_active 件数) */
+    /** 集計に使用した銘柄全体の数 (core_stocks の active かつ equity の件数) */
     universeSize: number;
     /**
      * 投影行数 (= 有効な終値列を持つ銘柄数)。momentum 以外のタブは投影を

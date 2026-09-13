@@ -20,9 +20,10 @@
  * 日付条件も効かない（`idx_swing_ohlcv_date` が `ORDER BY stock_id, date` に負ける）。
  *
  * 残る手は**事前集計（投影）**だけ。銘柄ごとに 1 行へ畳んでおけば、画面の走査は
- * 336,169 行 → **is_active な銘柄数（実測 3,715）**になる。
- * （`swing_daily_ohlcv` の `DISTINCT stock_id` は 3,764 だが、投影は
- * `core_stocks.is_active` で絞るので行数は 3,715 が上限。）
+ * 336,169 行 → **母集団 (active かつ equity) の銘柄数**になる（実測 3,715 は
+ * 2026-09-13 に is_active だけで絞っていた時点の値。equity に絞った後の上限は 3,700）。
+ * （`swing_daily_ohlcv` の `DISTINCT stock_id` は 3,764 だが、投影は `core_stocks` の
+ * active かつ equity (src/shared/db/active-equity.ts) で絞るので、行数はその件数が上限。）
  *
  * ## なぜ「指標値」ではなく「終値列」を持つのか
  *

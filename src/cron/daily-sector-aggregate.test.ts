@@ -13,6 +13,9 @@
  *      **JPX の `sector` へフォールバックしない**。
  *   4. カバレッジ 90% 未満では書かず、前回値を残す (関数に切り出したときに
  *      制御の流れを変えたので、スキップ経路も見る)。
+ *   5. 分母と分子は同じ母集団 (active かつ equity)。非普通株は分子にも `未分類`
+ *      にも入らず、当日未更新でも分母に数えない (P4b 後に分母を is_active の
+ *      ままにすると 3,700/4,434=83.4% で毎日スキップされる)。
  *
  * スキーマは drizzle/d1 のマイグレーションをそのまま流して作る。手書き DDL に
  * しなかったのは、この表 (`swing_sector_daily`) の一意索引 (date, sector) が
@@ -81,10 +84,12 @@ function seedStock(opts: {
   sector33: string | null;
   pct1d?: number;
   active?: boolean;
+  /** 既定は `equity` (日次の処理対象)。`null` は未分類。 */
+  instrumentType?: string | null;
 }): void {
   sqlite
     .prepare(
-      "INSERT INTO core_stocks (id, code, name, market, sector, sector33, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO core_stocks (id, code, name, market, sector, sector33, is_active, instrument_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .run(
       opts.id,
@@ -93,7 +98,8 @@ function seedStock(opts: {
       "番兵JPX市場区分",
       opts.jpxSector,
       opts.sector33,
-      opts.active === false ? 0 : 1
+      opts.active === false ? 0 : 1,
+      opts.instrumentType === undefined ? "equity" : opts.instrumentType
     );
   if (opts.pct1d !== undefined) {
     // computed_at は既定 unixepoch() = 「本日更新済み」
@@ -210,5 +216,36 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
 
     expect(written).toBeNull();
     expect(savedRows(TODAY).map((r) => r.sector)).toEqual(["前回値"]);
+  });
+
+  it("非普通株は分子にも未分類にも入らない", async () => {
+    // REIT 等は EDINET の提出者業種を持たず sector33 が NULL。母集団で先に外さないと
+    // `未分類` に混ざり、日次が更新しない銘柄の騰落がランキングに入る。
+    seedStock({ id: 1, jpxSector: null, sector33: "情報・通信業", pct1d: 1 });
+    seedStock({ id: 2, jpxSector: null, sector33: "銀行業", pct1d: 2 });
+    seedStock({ id: 3, jpxSector: null, sector33: null, pct1d: -1 });
+    seedStock({ id: 4, jpxSector: null, sector33: null, pct1d: -5, instrumentType: "reit_fund" });
+    seedStock({ id: 5, jpxSector: null, sector33: null, pct1d: -7, instrumentType: null });
+
+    await aggregateSectorDaily(db(), TODAY);
+
+    const rows = savedRows(TODAY);
+    expect(rows.find((r) => r.sector === "未分類")?.stockCount).toBe(1);
+    expect(rows.reduce((acc, r) => acc + r.stockCount, 0)).toBe(3);
+  });
+
+  it("active の非普通株が当日未更新でも、equity が全件更新ならカバレッジで落ちない", async () => {
+    // 日次は非普通株を更新しない。分母を is_active のままにすると 9/11=81.8% で
+    // スキップされる (P4b 後の本番なら 3,700/4,434=83.4% で毎日スキップ)。
+    for (let id = 1; id <= 9; id++) {
+      seedStock({ id, jpxSector: null, sector33: "情報・通信業", pct1d: id });
+    }
+    seedStock({ id: 10, jpxSector: null, sector33: null, instrumentType: "reit_fund" });
+    seedStock({ id: 11, jpxSector: null, sector33: null, instrumentType: "reit_fund" });
+
+    const written = await aggregateSectorDaily(db(), TODAY);
+
+    expect(written).toBe(1);
+    expect(savedRows(TODAY).map((r) => [r.sector, r.stockCount])).toEqual([["情報・通信業", 9]]);
   });
 });

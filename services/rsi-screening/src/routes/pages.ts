@@ -11,6 +11,7 @@ import { homePage } from "../views/home.js";
 import { screeningPage } from "../views/screening.js";
 import { stockDetailPage } from "../views/stock-detail.js";
 import { BASE_PATH } from "../../base-path.js";
+import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 
 /** SSR ページルーター */
 type Bindings = { DB: D1Database };
@@ -19,10 +20,12 @@ export const pagesRoute = new Hono<{ Bindings: Bindings }>();
 pagesRoute.get("/", async (c) => {
   const db = createDb(c.env.DB);
 
+  // 母集団の件数。スクリーニング一覧 (screening-service.ts) と同じ述語
+  // (active かつ equity, src/shared/db/active-equity.ts) で数える。
   const [{ total }] = await db
     .select({ total: count() })
     .from(stocks)
-    .where(eq(stocks.isActive, true));
+    .where(activeEquityCondition());
 
   const [{ blue }] = await db
     .select({ blue: count() })

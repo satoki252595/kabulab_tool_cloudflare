@@ -18,6 +18,7 @@
 
 import { sql, eq, and, isNotNull } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
+import { activeEquityCondition } from "../shared/db/active-equity.js";
 
 import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
@@ -64,15 +65,20 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
   // -----------------------------------------------------------------
   console.info("[sync-monthly] Phase 2: otakara public 再構築");
 
+  // 母集団は日次 (src/cron/daily.ts の loadDailyTargets) と同じ active かつ equity。
+  // 日次を equity に絞ったため、非普通株の断面 (core_stock_financials /
+  // swing_stock_indicators) は更新されず凍結する。非普通株はここで作り直さない
+  // (作り直すと、止まった値に毎月その日の data_date が付き、新しい値に見える)。
+  // 既に書かれている非普通株の otakara 行は消さない。一覧・件数は同じ述語で隠し、
+  // 詳細 (/stocks/:code) は data_date を「財務指標の更新日」として出す。
+  //
+  // 注意: 下の `dataDate: today` は equity の行にも月次の実行日を付ける。元の
+  // core_stock_financials.data_date (日次の取得日。通常は数日前) は引き継いでいない。
+  // この改修より前からの挙動で、ここでは直さない。
   const activeStocks = await db
     .select({ id: coreSchema.stocks.id, code: coreSchema.stocks.code })
     .from(coreSchema.stocks)
-    .where(
-      and(
-        eq(coreSchema.stocks.isActive, true),
-        eq(coreSchema.stocks.isYutai, true)
-      )
-    );
+    .where(and(activeEquityCondition(), eq(coreSchema.stocks.isYutai, true)));
 
   const coreFinancials = await db.select().from(coreSchema.stockFinancials);
   const coreFinMap = new Map(coreFinancials.map((f) => [f.stockId, f]));

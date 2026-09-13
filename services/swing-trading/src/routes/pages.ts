@@ -20,6 +20,7 @@ import {
   publicMarketColumn,
   publicSectorColumn,
 } from "../../../../src/shared/db/public-columns.js";
+import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { dashboardPage } from "../views/dashboard.js";
 import { screeningPage } from "../views/screening.js";
 import { signalsPage } from "../views/signals.js";
@@ -94,6 +95,16 @@ pagesRoute.get("/", async (c) => {
   }
 
   // カウント集計
+  // totalScreened / passedLong / passedShort は core_stocks を JOIN しないので、
+  // 母集団 (active かつ equity) では絞っていない。上場廃止の行と、日次の対象外に
+  // なって凍結した非普通株の行も数える。
+  //
+  // passedLong / passedShort は、GET /screening に母集団の条件が無かった間は一覧と
+  // 同じ集合だった。/screening を母集団で絞ったので、**件数が一覧と食い違う**
+  // (本番 2026-09-14: 母集団で数えると long 89 → 88、short 339 → 338)。
+  // /screening と同じ CROSS JOIN + 述語で数えれば揃うが、閲覧 1 回の rows_read が
+  // long 89 → 178 / short 339 → 678 (同日実測) と倍になる。totalScreened も
+  // 3,764 → 7,409 (2026-09-13 実測)。ランニングコストを増やさない制約により採らない。
   const [{ totalScreened }] = await db
     .select({ totalScreened: sql<number>`count(*)` })
     .from(stockScreening);
@@ -105,13 +116,14 @@ pagesRoute.get("/", async (c) => {
     .select({ passedShort: sql<number>`count(*)` })
     .from(stockScreening)
     .where(eq(stockScreening.allPassedShort, true));
-  // entry_signals は active 銘柄分のみ集計/表示する。廃止 (is_active=false) 銘柄に
-  // 取込打ち切り等で古いシグナルが残っても UI に出さない (鮮度のない値を出さない)。
+  // entry_signals は日次の母集団 (active かつ equity, src/shared/db/active-equity.ts)
+  // の銘柄分のみ集計/表示する。廃止 (is_active=false) 銘柄や、日次の対象外になった
+  // 非普通株に古いシグナルが残っても UI に出さない (鮮度のない値を出さない)。
   const [{ totalSignals }] = await db
     .select({ totalSignals: sql<number>`count(*)` })
     .from(entrySignals)
     .innerJoin(stocks, eq(stocks.id, entrySignals.stockId))
-    .where(eq(stocks.isActive, true));
+    .where(activeEquityCondition());
 
   // 強度上位シグナル 5 件
   const topSigRows = await db
@@ -125,7 +137,7 @@ pagesRoute.get("/", async (c) => {
     })
     .from(entrySignals)
     .innerJoin(stocks, eq(stocks.id, entrySignals.stockId))
-    .where(eq(stocks.isActive, true))
+    .where(activeEquityCondition())
     .orderBy(desc(entrySignals.signalStrength))
     .limit(5);
   const topBreakouts = topSigRows.map((r) => ({
@@ -175,10 +187,27 @@ pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c
   const { direction } = c.req.valid("query");
   const db = createDb(c.env.DB);
 
-  const whereCondition =
+  // 日次の母集団 (active かつ equity) の銘柄だけを出す。以前はここに is_active の
+  // 条件も無く、上場廃止や日次の対象外になった銘柄の screening 行も並びえた。
+  //
+  // **`core_stocks` は CROSS JOIN + WHERE の等値で結ぶ (INNER JOIN にしない)。**
+  // INNER JOIN のまま母集団の述語を足すと、SQLite は `core_stocks` の
+  // `idx_core_stocks_active_market (is_active=?)` を外側ループに選び直し、通過銘柄
+  // だけを引く `idx_swing_screening_{long,short}` を使わなくなる。本番実測
+  // (2026-09-13, rows_read): long 356 → 7,585 / short 1,356 → 8,085。述語を
+  // INNER JOIN の ON に移しても計画は同じだった (ON は WHERE と同じ扱い)。
+  // SQLite の CROSS JOIN は左表を必ず外側に置くので、計画は変更前と同じ
+  // 「screening の索引 → core_stocks の PK → indicators の PK」に戻る
+  // (同日実測: long 354 / short 1,354 rows_read。変更前は 356 / 1,356)。
+  // 結合条件は WHERE の等値なので、返る行は INNER JOIN と同じ。
+  // 順序 (screening → stocks → indicators) は変えていない。
+  const whereCondition = and(
     direction === "long"
       ? eq(stockScreening.allPassedLong, true)
-      : eq(stockScreening.allPassedShort, true);
+      : eq(stockScreening.allPassedShort, true),
+    eq(stocks.id, stockScreening.stockId),
+    activeEquityCondition()
+  );
 
   const rows = await db
     .select({
@@ -199,7 +228,8 @@ pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c
       trendOkShort: stockScreening.trendOkShort,
     })
     .from(stockScreening)
-    .innerJoin(stocks, eq(stocks.id, stockScreening.stockId))
+    // INNER JOIN にしない理由は whereCondition の上のコメント (結合順の固定)。
+    .crossJoin(stocks)
     .innerJoin(stockIndicators, eq(stockIndicators.stockId, stockScreening.stockId))
     .where(whereCondition)
     .orderBy(desc(stockIndicators.avgTurnover20d))
@@ -269,12 +299,12 @@ pagesRoute.get("/signals", zValidator("query", signalsQuerySchema), async (c) =>
   const rows =
     pattern === "all"
       ? await base
-          .where(eq(stocks.isActive, true))
+          .where(activeEquityCondition())
           .orderBy(desc(entrySignals.signalStrength))
           .limit(200)
       : await base
           .where(
-            and(eq(stocks.isActive, true), eq(entrySignals.pattern, pattern))
+            and(activeEquityCondition(), eq(entrySignals.pattern, pattern))
           )
           .orderBy(desc(entrySignals.signalStrength))
           .limit(200);

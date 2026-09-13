@@ -27,6 +27,20 @@
  * 直すのは stockStock 側のレーン**。ここを commercial-ok として扱う根拠は
  * 書き込み元であって、まだ宣言ではない。
  *
+ * ## `instrument_type` を**述語として**使うことは暫定で認める (2026-09-13、ユーザー承認待ち)
+ *
+ * 日次取込と公開面の一覧を普通株に絞るため、`instrument_type` (personal-only のまま)
+ * を WHERE / JOIN の ON で使う。WHERE は D1 の中で評価されるので値は Worker にも
+ * レスポンスにも載らず、外から観測できるのは「一覧に載るかどうか」の 1 bit だけ
+ * (公開面が述語に使っている `is_active` はライセンス未宣言の列で、前例にはならない。
+ * 判断の根拠と承認待ちであることは src/shared/db/active-equity.ts §2)。よって
+ * src/shared/db/public-columns.ts の「値を載せない・出さない」方針に反しない。
+ * ただし述語は src/shared/db/active-equity.ts の 1 箇所を経由する場合に限る。
+ * 値の select と、`market` / `sector` / `sector17` を述語に使うことは引き続き禁止。
+ * 下の「instrument_type を書くのは universe sync だけ」のテストが、`instrumentType`
+ * を修飾つきで参照するファイルを universe.ts (書き手) と active-equity.ts (述語) の
+ * 2 つに固定している。
+ *
  * ## 何を機械的に見ているのか
  *
  * 危ないのは列名を書いた漏れではなく、**列名を一度も書かない漏れ**である。
@@ -84,13 +98,16 @@
  * services/otakara-yutai/src/tests/stock-detail-license.test.ts が
  * 番兵値を DB に入れて実測している。
  */
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-
-/** リポジトリルート (src/shared/db/ から 3 階層上)。 */
-const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+import {
+  NOT_PUBLIC_SURFACE,
+  PUBLIC_SURFACE_DIRS,
+  ROOT,
+  collectSources,
+  stripComments,
+} from "./tests/source-scan.js";
 
 /**
  * personal-only 列。左が drizzle のプロパティ名、右が列名 (どちらの綴りで
@@ -140,33 +157,16 @@ const PUBLIC_SURFACE = [
   "services/ir-catalog/src/services/ingest.ts",
 ];
 
-/**
- * 明示リストが本当に公開面を網羅しているかの下支え。
- *
- * `PUBLIC_SURFACE` を 2 件だけにしていた版は、`core_stocks` を引く公開面が
- * 実際には 8 件あるのに 2 件しか検査していなかった (リストが作られた時点で
- * 既に不完全)。「増えたら足すこと」と書いてあっても、足し忘れは検査自体には
- * 現れない。そこで**走査して見つかった公開面がリストに載っているか**を見る。
- *
- * ここに挙げたディレクトリは Worker がレスポンスを組み立てる層。
- * 取込 (data-scripts / src/cron) とスキーマ定義は対象外。
- */
-const PUBLIC_SURFACE_DIRS = [
-  join("services", "rsi-screening", "src"),
-  join("services", "swing-trading", "src"),
-  join("services", "otakara-yutai"),
-  join("services", "financial-math", "src"),
-  join("services", "ir-catalog", "src"),
-  join("services", "yuho-quant", "src"),
-];
-
-/** 公開面の判定から外すもの (取込経路・スキーマ定義・クライアント JS 生成)。 */
-const NOT_PUBLIC_SURFACE = /(^|[\\/])(data-scripts|db|tests)[\\/]/;
-
-/** コメント (ブロック / 行) を除いた実コード。説明文まで弾かないため。 */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-}
+// 明示リスト (PUBLIC_SURFACE) が本当に公開面を網羅しているかの下支え。
+//
+// `PUBLIC_SURFACE` を 2 件だけにしていた版は、`core_stocks` を引く公開面が
+// 実際には 8 件あるのに 2 件しか検査していなかった (リストが作られた時点で
+// 既に不完全)。「増えたら足すこと」と書いてあっても、足し忘れは検査自体には
+// 現れない。そこで**走査して見つかった公開面がリストに載っているか**を見る。
+//
+// 走査範囲 (`PUBLIC_SURFACE_DIRS` / `NOT_PUBLIC_SURFACE`) と `stripComments` /
+// `collectSources` は ./tests/source-scan.ts に置いた。src/shared/db/active-equity.test.ts
+// も同じ範囲を走査するので、片方にだけディレクトリを足す食い違いを作らないため。
 
 /**
  * 列指定なし select + from(stocks)。
@@ -350,25 +350,6 @@ function writesSector33(source: string): boolean {
   return WRITES_STOCKS.test(code) && SECTOR33_WRITE_KEY.test(code);
 }
 
-/** 走査対象のソース (テストと型定義は除く)。 */
-function collectSources(dir: string, acc: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    if (entry === "node_modules" || entry === "dist" || entry === "coverage") {
-      continue;
-    }
-    const path = join(dir, entry);
-    if (statSync(path).isDirectory()) {
-      collectSources(path, acc);
-      continue;
-    }
-    if (!/\.tsx?$/.test(entry)) continue;
-    if (/\.test\.tsx?$/.test(entry) || /\.d\.ts$/.test(entry)) continue;
-    if (relative(ROOT, path).split(sep).includes("tests")) continue;
-    acc.push(path);
-  }
-  return acc;
-}
-
 describe("core_stocks の personal-only 列を公開面へ出さない", () => {
   it("列指定なし select + from(stocks) がどこにも無い", () => {
     // ここが 1 件でも増えると、その行は core_stocks の全列を持って歩き回る。
@@ -424,7 +405,7 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
     // (`from(stockRsiPercentile).innerJoin(stocks, ...)` で `stocks.market` を
     // select している) がリストから漏れ、無検査のままだった。
     const readsStocks =
-      /\bfrom\(\s*(?:\w+\.)?\w*[Ss]tocks\s*\)|\b(?:inner|left|right|full)?[Jj]oin\(\s*(?:\w+\.)?\w*[Ss]tocks\s*,|\bquery\s*\.\s*stocks\s*\./;
+      /\bfrom\(\s*(?:\w+\.)?\w*[Ss]tocks\s*\)|\b(?:inner|left|right|full)?[Jj]oin\(\s*(?:\w+\.)?\w*[Ss]tocks\s*,|\bcrossJoin\(\s*(?:\w+\.)?\w*[Ss]tocks\s*\)|\bquery\s*\.\s*stocks\s*\./;
     const missing = PUBLIC_SURFACE_DIRS.flatMap((dir) => collectSources(join(ROOT, dir)))
       .map((path) => relative(ROOT, path))
       .filter((rel) => !NOT_PUBLIC_SURFACE.test(rel))
@@ -580,7 +561,7 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
     ).toEqual([]);
   });
 
-  it("instrument_type を書くのは universe sync だけで、公開面は書きも読みもしない", () => {
+  it("instrument_type を書くのは universe sync だけで、公開面は値を読まない（母集団の述語は src/shared/db/active-equity.ts 経由だけ）", () => {
     // 移行 P4b 第 1 段で src/cron/universe.ts が JPX の「市場・商品区分」から
     // `instrument_type` (personal-only) を書き始めた。値が入った瞬間から、公開面が
     // この列を読めば番兵ではなく実値が出る。読み側は上の修飾つき参照の検査と
@@ -613,6 +594,25 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
     expect(
       writesInstrumentType("db.select({ t: stocks.instrumentType }).from(stocks)"),
     ).toBe(false);
+
+    // `instrumentType` を修飾つきで参照するファイル (テスト以外) を固定する。
+    //   - src/cron/universe.ts: 唯一の書き手 (ガードの件数も同じ SELECT で数える)
+    //   - src/shared/db/active-equity.ts: 母集団の述語 (WHERE / ON だけで使う)
+    // 3 つ目が現れたら、値を select しているか、helper を経由しない述語である。
+    const qualifiedReferrers = collectSources(join(ROOT, "src"))
+      .concat(collectSources(join(ROOT, "services")))
+      .concat(collectSources(join(ROOT, "scripts")))
+      .filter((path) =>
+        findQualifiedPersonalOnlyRefs(readFileSync(path, "utf-8")).some((ref) =>
+          /instrument(Type|_type)$/.test(ref),
+        ),
+      )
+      .map((path) => relative(ROOT, path).split(sep).join("/"))
+      .sort();
+    expect(
+      qualifiedReferrers,
+      "instrument_type を述語に使うなら src/shared/db/active-equity.ts の activeEquityCondition() を経由すること",
+    ).toEqual(["src/cron/universe.ts", "src/shared/db/active-equity.ts"]);
   });
 
   it("sector33 の書き込み検出器が参照と書き込みを取り違えない", () => {

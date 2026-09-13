@@ -15,6 +15,7 @@ import {
   publicMarketColumn,
   publicSectorColumn,
 } from "../../../../src/shared/db/public-columns.js";
+import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { yuhoDocuments, overseasSalesFacts } from "../db/schema.js";
 import type { StockHit } from "./order-query.js";
 
@@ -338,7 +339,7 @@ export async function screenOverseasGrowth(
     )
     .innerJoin(stocks, eq(overseasSalesFacts.stockId, stocks.id))
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, overseasSalesFacts.stockId))
-    .where(and(kindCond, eq(stocks.isActive, true)));
+    .where(and(kindCond, activeEquityCondition()));
 
   type Fin = {
     opMargin: number | null;
@@ -507,14 +508,15 @@ export async function screenOverseasGrowth(
 export async function listSectorsWithOverseas(db: Database): Promise<string[]> {
   const rows = await db
     // JPX 由来は公開面へ出さない (src/shared/db/public-columns.ts)。
-    // プルダウンの候補も結果表と同じ列から作る (ズレると絞り込みが空振りする)。
+    // プルダウンの候補も結果表と同じ列・同じ母集団 (active かつ equity) から作る
+    // (ズレると絞り込みが空振りする)。
     .selectDistinct({ sector: publicSectorColumn })
     .from(overseasSalesFacts)
     .innerJoin(stocks, eq(overseasSalesFacts.stockId, stocks.id))
     .where(
       and(
         eq(overseasSalesFacts.regionKind, "overseas_total"),
-        eq(stocks.isActive, true)
+        activeEquityCondition()
       )
     );
   return rows
