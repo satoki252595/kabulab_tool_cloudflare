@@ -100,8 +100,8 @@ async function main(): Promise<void> {
       : undefined;
 
   // 母集団は日次キャッチアップ (src/cron/ir-catalog-tdnet.ts) と同じ active かつ equity。
-  // 上場廃止した銘柄と非普通株の開示は、過去の月でも取り込まない
-  // (理由は src/shared/db/active-equity.ts)。
+  // is_active=0 の銘柄 (東証の上場廃止。地域取引所にだけ上場を続ける会社を含む) と
+  // 非普通株の開示は、過去の月でも取り込まない (理由は src/shared/db/active-equity.ts)。
   const codeToId = await loadActiveEquityCodeToId(db);
   console.info(
     `[ir:backfill] core_stocks (active かつ equity) ${codeToId.size} 社 / ${pad(from.m)}/${from.y}〜${pad(

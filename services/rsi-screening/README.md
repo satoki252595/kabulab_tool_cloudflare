@@ -141,8 +141,7 @@ services/rsi-screening/
     ├── services/                # screening-service.ts / stock-detail-service.ts
     ├── views/                   # home.ts / screening.ts / stock-detail.ts / layout.ts (template literal・JSX不可)
     ├── validators/              # screening.ts (Zod)
-    ├── middleware/              # error-handler.ts
-    └── scripts/                 # seed-stocks.ts
+    └── middleware/              # error-handler.ts
 ```
 
 > Worker エントリは **ルートの `src/index.ts`** 1 つ (本サービスは `app.route()` で mount)。

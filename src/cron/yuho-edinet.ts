@@ -55,6 +55,11 @@ export interface YuhoEdinetResult {
   matched: number;
   ingested: number;
   skippedExisting: number;
+  /**
+   * 有報 (120/130) のうち、証券コードが母集団 (active かつ equity) に無く取り込まなかった件数
+   * (上場廃止・非普通株など)。シャード指定時はこのシャードの担当分だけを数える。
+   */
+  outOfUniverse: number;
   byStatus: Record<string, number>;
   reachedCap: boolean;
   elapsedSec: number;
@@ -88,6 +93,7 @@ export async function runYuhoEdinetCatchup(
   let matched = 0;
   let ingested = 0;
   let skippedExisting = 0;
+  let outOfUniverse = 0;
   let reachedCap = false;
 
   const overBudget = () => Date.now() - startedAt > TIME_BUDGET_MS;
@@ -116,11 +122,17 @@ export async function runYuhoEdinetCatchup(
 
     const targets = list.results.filter((doc) => {
       if (!isAnnualSecuritiesReport(doc)) return false;
-      const t = secCodeToTicker(doc.secCode);
-      if (t === null || !codeToId.has(t)) return false;
       // シャード分配: 各シャードは docId ハッシュ %of==part の文書のみ担当
-      // (8 シャード合算で全文書を一意にカバー・重複なし)
+      // (8 シャード合算で全文書を一意にカバー・重複なし)。母集団外の件数をシャード間で
+      // 重複して数えないよう、コードの判定より先に振り分ける。
       if (shard && hashDocId(doc.docID) % shard.of !== shard.part) return false;
+      const t = secCodeToTicker(doc.secCode);
+      if (t === null) return false;
+      if (!codeToId.has(t)) {
+        // 取り込まないが、落とした量は完了ログと戻り値に出す (黙って落とさない)。
+        outOfUniverse++;
+        return false;
+      }
       return true;
     });
 
@@ -170,7 +182,7 @@ export async function runYuhoEdinetCatchup(
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   console.info(
-    `[yuho-edinet] 完了: shard=${shard ? `${shard.part}/${shard.of}` : "-"} 走査${scannedDays}日 matched=${matched} ingested=${ingested} skip=${skippedExisting} cap=${reachedCap} ${elapsedSec.toFixed(1)}s`
+    `[yuho-edinet] 完了: shard=${shard ? `${shard.part}/${shard.of}` : "-"} 走査${scannedDays}日 matched=${matched} ingested=${ingested} skip=${skippedExisting} outOfUniverse=${outOfUniverse} cap=${reachedCap} ${elapsedSec.toFixed(1)}s`
   );
   return {
     shard: shard ?? null,
@@ -178,6 +190,7 @@ export async function runYuhoEdinetCatchup(
     matched,
     ingested,
     skippedExisting,
+    outOfUniverse,
     byStatus,
     reachedCap,
     elapsedSec,

@@ -13,7 +13,8 @@
  *   4. EDINET の日次キャッチアップ (`runYuhoEdinetCatchup`) は、母集団外の有報を
  *      取り込まない。
  *   5. code→id を `core_stocks` の全行から作る形 (`select({ id, code }).from(stocks)` の
- *      後に WHERE が無い) が src / services / scripts のどこにも残っていない。
+ *      後に WHERE が無い。キーの順は問わない) が src / services / scripts のどこにも
+ *      残っていない。
  *      ir / yuho の backfill CLI は import すると main() が走るので値では試せず、
  *      この静的検査だけが担保している。
  *
@@ -94,7 +95,7 @@ function makeProxyDb(target: DatabaseSync) {
  */
 const STOCKS = [
   { id: 1, code: "7203", active: 1, instrumentType: "equity" },
-  { id: 2, code: "8951", active: 1, instrumentType: "reit_fund" },
+  { id: 2, code: "9002", active: 1, instrumentType: "reit_fund" },
   { id: 3, code: "9999", active: 1, instrumentType: null },
   { id: 4, code: "6501", active: 0, instrumentType: "equity" },
 ] as const;
@@ -141,7 +142,7 @@ describe("取込用の code→id は active かつ equity だけ", () => {
 
   it("findActiveEquityStockId は母集団外のコードに null を返す", async () => {
     expect(await findActiveEquityStockId(db, "7203")).toBe(1);
-    for (const code of ["8951", "9999", "6501", ABSENT_CODE]) {
+    for (const code of ["9002", "9999", "6501", ABSENT_CODE]) {
       expect(await findActiveEquityStockId(db, code), code).toBeNull();
     }
   });
@@ -243,16 +244,28 @@ describe("EDINET の取込は母集団外の有報を取り込まない", () => 
 
     expect(vi.mocked(listDocuments)).toHaveBeenCalledTimes(60);
     expect(vi.mocked(ingestDocument).mock.calls.map(([, opts]) => opts.stockId)).toEqual([1]);
-    expect({ matched: r.matched, ingested: r.ingested }).toEqual({ matched: 1, ingested: 1 });
+    // 母集団外の 4 件は取り込まず、落とした件数を戻り値に出す
+    expect({ matched: r.matched, ingested: r.ingested, outOfUniverse: r.outOfUniverse }).toEqual({
+      matched: 1,
+      ingested: 1,
+      outOfUniverse: ALL_CODES.length - 1,
+    });
   });
 });
 
 /**
  * code→id を `core_stocks` の全行から作る形。`.from(<...>stocks)` の直後に `.where(` が
  * 続かないものを拾う。表の側は `stocks` で終わる識別子 (`stocks` / `coreSchema.stocks`)。
+ * select のキーは id と code の 2 つで、順は問わない (`{ code, id }` もすり抜けない)。
  */
-const CODE_TO_ID_FROM_ALL_ROWS =
-  /\.select\(\s*\{\s*id:\s*(?:\w+\.)*\w*[Ss]tocks\.id\s*,\s*code:\s*(?:\w+\.)*\w*[Ss]tocks\.code\s*,?\s*\}\s*\)\s*\.from\(\s*(?:\w+\.)*\w*[Ss]tocks\s*\)(?!\s*\.\s*where\s*\()/g;
+const STOCKS_TABLE = String.raw`(?:\w+\.)*\w*[Ss]tocks`;
+const ID_KEY = String.raw`id:\s*${STOCKS_TABLE}\.id`;
+const CODE_KEY = String.raw`code:\s*${STOCKS_TABLE}\.code`;
+const CODE_TO_ID_FROM_ALL_ROWS = new RegExp(
+  String.raw`\.select\(\s*\{\s*(?:${ID_KEY}\s*,\s*${CODE_KEY}|${CODE_KEY}\s*,\s*${ID_KEY})\s*,?\s*\}\s*\)` +
+    String.raw`\s*\.from\(\s*${STOCKS_TABLE}\s*\)(?!\s*\.\s*where\s*\()`,
+  "g",
+);
 
 function findCodeToIdFromAllRows(source: string): string[] {
   return [...stripComments(source).matchAll(CODE_TO_ID_FROM_ALL_ROWS)].map((m) => m[0]);
@@ -302,7 +315,16 @@ describe("code→id を core_stocks の全行から作る形が残っていな�
     expect(
       findCodeToIdFromAllRows("db.select({ id: stocks.id, code: stocks.code }).from(stocks).orderBy(stocks.code)")
     ).toHaveLength(1);
+    // キーの順が逆でも拾う
+    expect(
+      findCodeToIdFromAllRows("await db.select({ code: stocks.code, id: stocks.id }).from(stocks);")
+    ).toHaveLength(1);
     // 拾ってはいけないもの
+    expect(
+      findCodeToIdFromAllRows(
+        "db.select({ code: stocks.code, id: stocks.id }).from(stocks).where(activeEquityCondition())"
+      )
+    ).toEqual([]);
     expect(
       findCodeToIdFromAllRows(
         "db.select({ id: stocks.id, code: stocks.code })\n  .from(stocks)\n  .where(activeEquityCondition());"

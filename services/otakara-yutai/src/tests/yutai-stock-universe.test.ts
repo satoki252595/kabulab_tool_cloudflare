@@ -7,13 +7,14 @@
  *   1. `importYutaiData` は、母集団に無いコード (active の非普通株・区分が NULL・
  *      上場廃止・`core_stocks` に無い) を `skipped` に数えて飛ばし、`core_stocks` に
  *      行を足さず、ジャンルも作らない。**値**で見る。
- *   2. services/otakara-yutai のどのファイルも `core_stocks` へ INSERT しない。
- *      data-scripts の CLI は import すると main() が走るので値では試せず、
- *      この静的検査が担保している。
- *   3. 取込の 3 経路 (importYutaiData / fetch-yutai-full.ts / fetch-yutai-data.ts) は
- *      `findActiveEquityStockId` で銘柄を引く。
- *   4. fetch-yutai-full.ts は、銘柄を引き終えて 0 件でないことを確かめてから優待を
- *      全削除する (1 件も引けなければ削除の前に止まる)。
+ *   2. `core_stocks` へ INSERT するのは src/cron/universe.ts (東証の上場銘柄一覧からの
+ *      同期) だけ。src / services / scripts の全体を静的に見る。data-scripts の CLI は
+ *      import すると main() が走るので値では試せず、この静的検査が担保している。
+ *   3. 1 コードずつ銘柄を引く取込 (importYutaiData / fetch-yutai-data.ts) は
+ *      `findActiveEquityStockId` で引き、`core_stocks` を UPDATE しない。
+ *   4. fetch-yutai-full.ts は D1 へ直接書かず、yutai-full-import.ts の `importYutaiFull` に
+ *      委ねる。その中身 (母集団の銘柄の優待だけを作り直す・削除の前に止める・
+ *      name / market を書かない) は src/tests/yutai-full-import.test.ts が値で見る。
  *
  * 背景: 以前の取込は、コードが `core_stocks` に無ければ行を足していた。足した行は
  * 区分が NULL の active 行になり、日次からも公開面からも外れたまま残る
@@ -64,7 +65,7 @@ function makeProxyDb(target: DatabaseSync) {
 /** 4 銘柄。優待を付けてよいのは 7203 だけ。 */
 const STOCKS = [
   { id: 1, code: "7203", active: 1, instrumentType: "equity" },
-  { id: 2, code: "8951", active: 1, instrumentType: "reit_fund" },
+  { id: 2, code: "9002", active: 1, instrumentType: "reit_fund" },
   { id: 3, code: "9999", active: 1, instrumentType: null },
   { id: 4, code: "6501", active: 0, instrumentType: "equity" },
 ] as const;
@@ -72,7 +73,7 @@ const STOCKS = [
 /** 1 コード 1 ジャンル。ジャンルを分けてあるので、飛ばした行がジャンルを作ると分かる。 */
 const ITEMS: YutaiRawData[] = [
   { code: "7203", genre: "テストジャンルA" },
-  { code: "8951", genre: "テストジャンルB" },
+  { code: "9002", genre: "テストジャンルB" },
   { code: "9999", genre: "テストジャンルC" },
   { code: "6501", genre: "テストジャンルD" },
   { code: "1301", genre: "テストジャンルE" },
@@ -128,10 +129,17 @@ describe("importYutaiData は core_stocks に行を足さず、母集団の銘�
 
 /** `core_stocks` への INSERT。表の側は `stocks` で終わる識別子。 */
 const INSERTS_STOCKS = /\.\s*insert\s*\(\s*(?:\w+\.)?\w*[Ss]tocks\s*\)/;
+/** `core_stocks` への UPDATE。 */
+const UPDATES_STOCKS = /\.\s*update\s*\(\s*(?:\w+\.)?\w*[Ss]tocks\s*\)/;
 
-const YUTAI_IMPORTERS = [
+/** `core_stocks` に行を足してよい唯一の経路 (東証の上場銘柄一覧からの同期)。 */
+const CORE_STOCKS_INSERTER = "src/cron/universe.ts";
+
+const YUTAI_FULL_CLI = "services/otakara-yutai/data-scripts/fetch-yutai-full.ts";
+const YUTAI_FULL_IMPORT = "services/otakara-yutai/data-scripts/yutai-full-import.ts";
+/** 1 コードずつ銘柄を引く優待の取込。 */
+const YUTAI_PER_CODE_IMPORTERS = [
   "services/otakara-yutai/src/services/yutai-scraper.ts",
-  "services/otakara-yutai/data-scripts/fetch-yutai-full.ts",
   "services/otakara-yutai/data-scripts/fetch-yutai-data.ts",
 ];
 
@@ -140,40 +148,52 @@ function code(rel: string): string {
 }
 
 describe("優待の取込の書き方", () => {
-  it("services/otakara-yutai のどのファイルも core_stocks へ INSERT しない", () => {
-    const sources = collectSources(join(ROOT, "services", "otakara-yutai")).map((path) =>
-      relative(ROOT, path).split(sep).join("/")
+  it(`core_stocks へ INSERT するのは ${CORE_STOCKS_INSERTER} だけ`, () => {
+    const sources = ["src", "services", "scripts"]
+      .flatMap((dir) => collectSources(join(ROOT, dir)))
+      .map((path) => relative(ROOT, path).split(sep).join("/"));
+    // 走査が空振りすると下の検査は無条件に緑になる。data-scripts と唯一の経路も入っていること。
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        ...YUTAI_PER_CODE_IMPORTERS,
+        YUTAI_FULL_CLI,
+        YUTAI_FULL_IMPORT,
+        CORE_STOCKS_INSERTER,
+      ])
     );
-    // 走査が空振りすると下の検査は無条件に緑になる。data-scripts も入っていること。
-    expect(sources).toEqual(expect.arrayContaining(YUTAI_IMPORTERS));
-    const offenders = sources.filter((rel) => INSERTS_STOCKS.test(code(rel)));
+    const inserters = sources.filter((rel) => INSERTS_STOCKS.test(code(rel)));
     expect(
-      offenders,
-      "優待の取込は core_stocks に行を足さないこと。銘柄は src/shared/db/active-equity.ts の" +
-        " findActiveEquityStockId() で引き、無ければ飛ばす",
-    ).toEqual([]);
+      inserters,
+      "core_stocks に行を足すのは東証の上場銘柄一覧からの同期 (src/cron/universe.ts) だけ。" +
+        " 取込は src/shared/db/active-equity.ts で銘柄を引き、無ければ飛ばす",
+    ).toEqual([CORE_STOCKS_INSERTER]);
   });
 
-  it.each(YUTAI_IMPORTERS)("%s は findActiveEquityStockId で銘柄を引く", (rel) => {
-    expect(code(rel)).toMatch(/\bfindActiveEquityStockId\(\s*db\s*,/);
+  it.each(YUTAI_PER_CODE_IMPORTERS)(
+    "%s は findActiveEquityStockId で銘柄を引き、core_stocks を UPDATE しない",
+    (rel) => {
+      const source = code(rel);
+      expect(source).toMatch(/\bfindActiveEquityStockId\(\s*db\s*,/);
+      expect(source).not.toMatch(UPDATES_STOCKS);
+    },
+  );
+
+  it("fetch-yutai-full.ts は D1 へ直接書かず、importYutaiFull に委ねる", () => {
+    const cli = code(YUTAI_FULL_CLI);
+    expect(cli).toMatch(/\bimportYutaiFull\(/);
+    expect(cli).not.toMatch(/\.\s*(?:insert|update|delete)\s*\(/);
+    expect(code(YUTAI_FULL_IMPORT)).toMatch(/\bactiveEquityCondition\(\)/);
   });
 
-  it("fetch-yutai-full.ts は銘柄を引き、0 件なら止めてから優待を全削除する", () => {
-    const full = code("services/otakara-yutai/data-scripts/fetch-yutai-full.ts");
-    const resolveAt = full.indexOf("findActiveEquityStockId(");
-    const guardAt = full.indexOf("stockIds.size === 0");
-    const deleteAt = full.indexOf("db.delete(yutaiBenefits)");
-    expect(resolveAt).toBeGreaterThan(-1);
-    expect(guardAt).toBeGreaterThan(resolveAt);
-    expect(deleteAt).toBeGreaterThan(guardAt);
-  });
-
-  it("INSERT の検出器が書き方を問わず拾い、別の表とコメントは拾わない", () => {
+  it("検出器が書き方を問わず拾い、別の表とコメントは拾わない", () => {
     expect(INSERTS_STOCKS.test("db.insert(stocks).values({ code })")).toBe(true);
     expect(INSERTS_STOCKS.test("db\n  .insert(coreSchema.stocks)")).toBe(true);
     expect(INSERTS_STOCKS.test("db.insert(coreStocks)")).toBe(true);
     expect(INSERTS_STOCKS.test("db.insert(yutaiBenefits)")).toBe(false);
     expect(INSERTS_STOCKS.test("db.update(stocks).set({ isYutai: true })")).toBe(false);
     expect(INSERTS_STOCKS.test(stripComments("// db.insert(stocks)"))).toBe(false);
+    expect(UPDATES_STOCKS.test("db\n  .update(stocks)\n  .set({ name })")).toBe(true);
+    expect(UPDATES_STOCKS.test("db.update(coreSchema.stocks)")).toBe(true);
+    expect(UPDATES_STOCKS.test("db.update(yutaiBenefits)")).toBe(false);
   });
 });
