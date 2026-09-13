@@ -37,6 +37,7 @@
 
 import { sql, asc, eq, and, gt, gte, isNotNull, lte } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
+import { publicSectorColumn } from "../shared/db/public-columns.js";
 
 // core スキーマは rsi-screening の定義を流用 (001 が所有・更新)
 import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
@@ -467,6 +468,13 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
     .select({
       id: coreSchema.stocks.id,
       code: coreSchema.stocks.code,
+      // この `sector` (JPX 33 業種) は `buildSnapshot` 経由で
+      // `StockSnapshot.sector` に入るが、**どこにも保存されず公開面にも出ない**:
+      // `writeStockSnapshot` はこのフィールドを参照しない (2026-09-13 に確認)。
+      // 公開面に出る業種ランキングの集約キーは Phase 5 (`aggregateSectorDaily`)
+      // が別のクエリで引いている。ここを `publicSectorColumn` に揃える案は
+      // 採らなかった: 値がどこにも流れない以上、切り替えても挙動が変わらず、
+      // 差分だけが増える。保存や表示に使い始めるときは公開面と同じ列へ移すこと。
       sector: coreSchema.stocks.sector,
     })
     .from(coreSchema.stocks)
@@ -610,66 +618,7 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   // Phase 5: セクター集計 (当日更新済 indicators から・90% カバレッジ guard)
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 5: セクター集計");
-  const [{ activeCount }] = await db
-    .select({ activeCount: sql<number>`count(*)` })
-    .from(coreSchema.stocks)
-    .where(eq(coreSchema.stocks.isActive, true));
-
-  const indicatorRows = await db
-    .select({
-      sector: coreSchema.stocks.sector,
-      pct1d: swingSchema.stockIndicators.pctChange1d,
-    })
-    .from(coreSchema.stocks)
-    .innerJoin(
-      swingSchema.stockIndicators,
-      eq(swingSchema.stockIndicators.stockId, coreSchema.stocks.id)
-    )
-    .where(
-      and(
-        eq(coreSchema.stocks.isActive, true),
-        // D1/SQLite: computed_at は epoch 秒。本日(UTC)0 時の epoch と比較。
-        gte(
-          swingSchema.stockIndicators.computedAt,
-          sql`unixepoch('now','start of day')`
-        )
-      )
-    );
-
-  const coverage = activeCount > 0 ? indicatorRows.length / activeCount : 0;
-  if (coverage < 0.9) {
-    console.warn(
-      `[sync-daily]   セクター集計スキップ: 本日更新 ${indicatorRows.length}/${activeCount} ` +
-        `(${(coverage * 100).toFixed(1)}%) が閾値 90% 未満 (大量失敗の可能性)。` +
-        `sector_daily は前回値を保持します。`
-    );
-  } else {
-    const sectorAggs = aggregateSectors(
-      indicatorRows.map(
-        (r): StockChangeInput => ({
-          sector: r.sector,
-          pct1d: r.pct1d,
-          pct5d: null,
-        })
-      )
-    );
-    const today = new Date().toISOString().split("T")[0];
-    await db
-      .delete(swingSchema.sectorDaily)
-      .where(eq(swingSchema.sectorDaily.date, today));
-    for (let i = 0; i < sectorAggs.length; i += SECTOR_CHUNK) {
-      await db.insert(swingSchema.sectorDaily).values(
-        sectorAggs.slice(i, i + SECTOR_CHUNK).map((a) => ({
-          date: today,
-          sector: a.sector,
-          pct1d: a.pct1d,
-          pct5d: a.pct5d,
-          stockCount: a.stockCount,
-          rank1d: a.rank1d,
-        }))
-      );
-    }
-  }
+  await aggregateSectorDaily(db, new Date().toISOString().split("T")[0]);
 
   // -----------------------------------------------------------------
   // Phase 6: L2 投影 (p_momentum) の再生成
@@ -698,6 +647,103 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
     elapsedSec,
     failures,
   };
+}
+
+/**
+ * Phase 5: 業種騰落ランキング (`swing_sector_daily`) を `today` の日付で書き直す。
+ *
+ * 当日更新済みの indicators だけを集計し、カバレッジが 90% 未満なら書かない
+ * (大量失敗の日に一部銘柄だけの平均で前日分を上書きしないため)。
+ *
+ * ### 集約キーは `publicSectorColumn` (2026-09-13 に `core_stocks.sector` から移した)
+ *
+ * この表は公開面 `GET /swing-trading/` がそのまま業種名として表示する
+ * **保存済みの派生コピー**で、core_stocks を読み直さないため
+ * src/shared/db/public-columns.ts のフラグが読み側では届かない。
+ * 旧コードは JPX の 33 業種 (`core_stocks.sector`, personal-only) をキーに
+ * していたので、公開面ではフラグで表示ごと閉じていた (PR #24)。
+ * 書く側で公開面と同じ列を選べば、保存される値の出所がフラグと一致する。
+ *
+ * - フラグ (`PUBLISH_JPX_DERIVED_COLUMNS`) が false → `core_stocks.sector33`
+ *   (EDINET 提出者業種 / commercial-ok)。戻すときもフラグ 1 箇所。
+ * - `sector33` が NULL の銘柄 (REIT・インフラファンド等、EDINET の提出者業種を
+ *   持たないもの) は `aggregateSectors` が `未分類` にまとめる。
+ *   **JPX の `sector` へフォールバックしない** —— フォールバックすると
+ *   `sector33` に値が無い銘柄の分だけ JPX の業種名が表に保存され、公開面に出る。
+ *
+ * rows_read は変わらない: 同じ join で select する列が 1 本入れ替わるだけ
+ * (本番の実測で `sector` / `sector33` どちらも 7,430 rows_read、同じ実行計画)。
+ *
+ * 切り替え前の日付の行は JPX キーのまま残る。公開面がそれを読まないための
+ * 日付は `SECTOR_DAILY_PUBLIC_KEY_SINCE` (public-columns.ts)。
+ *
+ * @returns 書いた業種数。カバレッジ不足でスキップしたら `null`。
+ */
+export async function aggregateSectorDaily(
+  db: Db,
+  today: string
+): Promise<number | null> {
+  const [{ activeCount }] = await db
+    .select({ activeCount: sql<number>`count(*)` })
+    .from(coreSchema.stocks)
+    .where(eq(coreSchema.stocks.isActive, true));
+
+  const indicatorRows = await db
+    .select({
+      sector: publicSectorColumn,
+      pct1d: swingSchema.stockIndicators.pctChange1d,
+    })
+    .from(coreSchema.stocks)
+    .innerJoin(
+      swingSchema.stockIndicators,
+      eq(swingSchema.stockIndicators.stockId, coreSchema.stocks.id)
+    )
+    .where(
+      and(
+        eq(coreSchema.stocks.isActive, true),
+        // D1/SQLite: computed_at は epoch 秒。本日(UTC)0 時の epoch と比較。
+        gte(
+          swingSchema.stockIndicators.computedAt,
+          sql`unixepoch('now','start of day')`
+        )
+      )
+    );
+
+  const coverage = activeCount > 0 ? indicatorRows.length / activeCount : 0;
+  if (coverage < 0.9) {
+    console.warn(
+      `[sync-daily]   セクター集計スキップ: 本日更新 ${indicatorRows.length}/${activeCount} ` +
+        `(${(coverage * 100).toFixed(1)}%) が閾値 90% 未満 (大量失敗の可能性)。` +
+        `sector_daily は前回値を保持します。`
+    );
+    return null;
+  }
+
+  const sectorAggs = aggregateSectors(
+    indicatorRows.map(
+      (r): StockChangeInput => ({
+        sector: r.sector,
+        pct1d: r.pct1d,
+        pct5d: null,
+      })
+    )
+  );
+  await db
+    .delete(swingSchema.sectorDaily)
+    .where(eq(swingSchema.sectorDaily.date, today));
+  for (let i = 0; i < sectorAggs.length; i += SECTOR_CHUNK) {
+    await db.insert(swingSchema.sectorDaily).values(
+      sectorAggs.slice(i, i + SECTOR_CHUNK).map((a) => ({
+        date: today,
+        sector: a.sector,
+        pct1d: a.pct1d,
+        pct5d: a.pct5d,
+        stockCount: a.stockCount,
+        rank1d: a.rank1d,
+      }))
+    );
+  }
+  return sectorAggs.length;
 }
 
 // -----------------------------------------------------------------------------
