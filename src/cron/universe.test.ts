@@ -252,17 +252,26 @@ describe("planInstrumentTypeUpdates", () => {
     expect(updates.map((u) => u.code)).not.toContain("1305");
   });
 
-  it("値が変わらない行・対象外化する行は書かない", () => {
+  it("値が変わらない行は書かない", () => {
     expect(
       planInstrumentTypeUpdates(
-        [
-          { id: 2, code: "8975", instrumentType: "reit_fund" },
-          { id: 3, code: "25935", instrumentType: null },
-        ],
+        [{ id: 2, code: "8975", instrumentType: "reit_fund" }],
         jpx,
-        new Set([3])
+        new Set()
       )
     ).toEqual([]);
+  });
+
+  it("対象外化する行は、値が変わる場合でも書かない", () => {
+    // 以前は id 3 を instrumentType: null にしていたが、25935 の分類も null なので
+    // 「値が変わらない」の枝で先に除かれ、deactivatedIds の除外を消しても緑のままだった
+    // (レビューで変異させて確認)。分類 (null) と違う値を置いて、除外の枝だけで守られる形にする。
+    const deactivating = { id: 3, code: "25935", instrumentType: "equity" };
+    // 前提: 対象外化の集合に入れなければ計画に出る (= この入力は除外の枝を通る)
+    expect(planInstrumentTypeUpdates([deactivating], jpx, new Set())).toEqual([
+      { id: 3, code: "25935", from: "equity", to: null },
+    ]);
+    expect(planInstrumentTypeUpdates([deactivating], jpx, new Set([3]))).toEqual([]);
   });
 
   it("equity のまま区分が変わった行は書き換える (equity 分母を isListedEquity の集合に保つ)", () => {
