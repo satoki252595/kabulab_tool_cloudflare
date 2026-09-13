@@ -2,7 +2,7 @@
  * Node 実行から D1 へ書き込むための D1 HTTP クライアント（ADR-0001 / 共通化 P1）。
  *
  * D1 は Worker バインディング経由でのみ触れるが、kuromoji（ir-catalog の PDF
- * センチメント）やローカル LLM（otakara 優待解釈）など **Node 専用依存**を持つ取込は
+ * センチメント）や otakara 優待のスクレイプ・要約取り込みなど **Node で動かす**取込は
  * Worker に載せられない。そこで drizzle-orm/sqlite-proxy を Cloudflare D1 REST API
  * (`/accounts/:acct/d1/database/:id/query`) に接続し、Node プロセスから D1 へ直接
  * 書けるようにする。読取は Worker のバインディングで足りるので、これは取込専用。

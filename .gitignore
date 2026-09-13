@@ -63,16 +63,19 @@ temp/
 result
 result-*
 
-# ローカル LLM の GGUF モデルキャッシュ (数 GB。優待解釈 step3 が DL)
+# 撤去した優待解釈のローカル LLM (node-llama-cpp) が DL していた GGUF モデルキャッシュ。
+# 今は何も書かないが、手元に数 GB 残っている環境で誤ってコミットしないよう無視は残す
+# (残っていれば削除してよい)。
 services/otakara-yutai/data-scripts/models/
 
 # 優待データの作業ディレクトリ一式。ここには出典サイト由来の掲載文
-# (benefit-descriptions.jsonl) と、その解釈の中間生成物 (interpreted/chunk-*.jsonl、
-# 原文 description を含む _raw-fail-*.txt) が入る。
+# (benefit-descriptions.jsonl) と、クラウド LLM に渡す要約タスク (summary-tasks/*.jsonl、
+# 原文 description を含む) とその結果ファイルが入る。書き出し・取り込みのコマンドは
+# ここ (かリポジトリ外) 以外を指定すると止まる (data-scripts/private-path.ts)。
 # 出典サイトの規約が私的使用を超えた蓄積・公開を禁じており、public リポジトリに
 # 載せると画面から掲載文を外しても raw URL で全量を取得できてしまう
 # (2026-09-12 に benefit-descriptions.jsonl 5,694行を履歴ごと除去した)。
-# 中間生成物は再生成可能で、解釈の正本は step4 で D1 に反映済み。
+# 作業ファイルは再生成可能で、要約の正本は取り込み (import-summary-results.ts) で D1 にある。
 services/otakara-yutai/data-scripts/data/
 
 # Cloudflare Wrangler

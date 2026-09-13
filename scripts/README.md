@@ -33,7 +33,7 @@ scripts/
 | 月次 母集団 + otakara rebuild | **自動** (GitHub Actions) | 同上(10 日 01:30 UTC) / 手動 `pnpm sync:universe` + `pnpm sync:monthly:core` |
 | VWAP 日足/5分足/信用 → R2 | **自動** (GitHub Actions) | `.github/workflows/vwap-ingest.yml` / 手動 `pnpm ingest:vwap-*` |
 | 005 EDINET / 006 TDnet | **自動** (GitHub Actions) | `.github/workflows/catchup.yml`(平日 11:00 UTC) / 手動 `pnpm ingest:yuho-edinet` / `ingest:ir-tdnet` |
-| 002 優待スクレイプ+LLM | 手動 (Node・ローカル LLM) | `services/otakara-yutai/data-scripts/*`（月次） |
+| 002 優待スクレイプ+LLM要約 | 手動 (Node) + 要約は外部のクラウド LLM | `services/otakara-yutai/data-scripts/*`（月次）/ [作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md) |
 
 詳細・前提・残タスクは root [`README.md`](../README.md#運用ステータス自動化手作業残タスク) と
 [`docs/deploy-cloudflare.md`](../docs/deploy-cloudflare.md) を参照。

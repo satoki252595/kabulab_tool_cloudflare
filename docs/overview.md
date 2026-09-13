@@ -282,13 +282,14 @@ stock-sync の月次ジョブは次の順に別コマンドとして実行する
 2. `pnpm sync:monthly:core` — otakara 派生テーブルを rebuild
 
 `pnpm sync:monthly` はローカル手動用のフルオーケストレータで、core rebuild に加え、
-優待取得、記述抽出、ローカル LLM 解釈、解釈結果の DB 反映を順に実行する。
+優待取得、記述抽出、要約タスクの書き出しを順に実行する (要約そのものは外部のクラウド LLM が行い、
+`pnpm yutai:summary:import` で検証して取り込む。要約が未反映でも月次同期は失敗させない)。
 
 ### その他の取込ワークフロー (GitHub Actions)
 
 - **007 VWAP** ([`.github/workflows/vwap-ingest.yml`](../.github/workflows/vwap-ingest.yml)): 平日 08:00 UTC に日足10年 + 5分足、土 09:00 UTC に信用残高 (週次) を取得し **R2** (`vwap-data` バケット、`daily/{code}.json` / `intra/{code}.json` / `margin/{week}.json`) へ書き込む。Yahoo は `YAHOO_PROXY_BASE` (Worker エッジ `/vwap-analysis/api/ingest-fetch`) 経由。
 - **005 EDINET + 006 TDnet** ([`.github/workflows/catchup.yml`](../.github/workflows/catchup.yml)): 平日 11:00 UTC に当日の開示をキャッチアップ。006 TDnet は kuromoji (Node 専用) のセンチメント判定込みで Node 実行 → D1 HTTP 書込。005 EDINET は Worker の認証ルート `/yuho-quant/admin/catchup` を叩く薄いトリガ (EDINET fetch + Notion アーカイブ + D1 書込は Worker 側が時間予算内で実行)。
-- **002 優待の LLM 解釈** (`pnpm interpret:yutai`) のみローカル手動運用 (自動化対象外)。
+- **002 優待の LLM 要約**はリポジトリ外のクラウド LLM (Cursor Automations 等) で行う。このリポジトリのコマンドはタスク書き出し (`pnpm yutai:summary:export`) と取り込み (`pnpm yutai:summary:import`、既定 dry-run) だけ ([作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md))。
 
 ## 認証
 

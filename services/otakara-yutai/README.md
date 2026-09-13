@@ -47,7 +47,6 @@ cp .env.example .env
 | `CLOUDFLARE_API_TOKEN` | 取込 (Node / GitHub Actions) が D1 REST 書込に使う API トークン (D1 edit 権限) | 取込時 |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare アカウント ID (D1 REST 用) | 取込時 |
 | `D1_DATABASE_ID` | D1 データベース `kabulab-cf` の ID (D1 REST 用) | 取込時 |
-| `OTAKARA_LLM_MODEL` | 優待解釈 (interpret:yutai) の GGUF モデル上書き (HF URI)。既定 ELYZA-JP-8B | No |
 
 > Worker の読取経路は D1 バインディング `c.env.DB` を使うため接続文字列は不要。
 > 上記 `CLOUDFLARE_*` / `D1_DATABASE_ID` は **書込 (取込)** を行う Node 側でのみ参照する。
@@ -73,9 +72,10 @@ pnpm sync:monthly:core     # is_yutai 銘柄のスコア再計算
 | `pnpm typecheck` | TypeScript 型チェック |
 | `pnpm lint` | ESLint 実行 |
 | `pnpm db:generate:d1` | D1 マイグレーション SQL 生成 (`drizzle/d1/*.sql`)。適用は `wrangler d1 execute kabulab-cf --remote --file=...` |
-| `pnpm interpret:yutai` | 優待 description をローカル LLM (node-llama-cpp) で解釈 (取込パイプライン step3) |
+| `pnpm yutai:summary:export` | 要約タスクを書き出す (要約はリポジトリ外のクラウド LLM。`--violations-only` で契約違反だけ) |
+| `pnpm yutai:summary:import` | クラウド LLM の結果を検証し、通った行だけ D1 に書く (既定 dry-run、`--apply` で書き込み) |
 
-優待データ取込パイプライン (fetch → export → interpret → apply) の詳細は [CLAUDE.md](./CLAUDE.md) と [ルート README](../../README.md#優待データ取込パイプライン-002-otakara-data-scriptscron-非対象) を参照。
+優待データ取込パイプライン (fetch → export → 要約タスク書き出し → クラウド LLM → 取り込み) の詳細は [CLAUDE.md](./CLAUDE.md)・[要約作業仕様書](./docs/llm-summary-task.md)・ [ルート README](../../README.md#優待データ取込パイプライン-002-otakara-data-scriptscron-非対象) を参照。
 
 ## デプロイ
 
@@ -146,7 +146,7 @@ kabulab は **単一 Cloudflare Worker** (`kabulab-cf`)。`git push origin main`
 - **トリガー**: 平日 11:00 UTC + 手動
 - **内容**: EDINET 有報 (005) / TDnet 適時開示 (006) を取り込み
 
-> 優待データ取込パイプライン (fetch → export → interpret → apply) は GitHub Actions 非対象・ローカル手動。詳細は [CLAUDE.md](./CLAUDE.md)。
+> 優待データ取込パイプライン (fetch → export → 要約タスク書き出し → クラウド LLM → 取り込み) は GitHub Actions 非対象・ローカル手動。詳細は [CLAUDE.md](./CLAUDE.md)。
 
 ## ディレクトリ構成
 
@@ -164,8 +164,8 @@ services/otakara-yutai/
 └── data-scripts/                # GitHub Actions 非対象・ローカル手動実行の優待取込パイプライン
     ├── fetch-yutai-full.ts          # 1. minkabu → yutai_benefits + is_yutai
     ├── export-benefit-descriptions.ts # 2. → data/benefit-descriptions.jsonl
-    ├── interpret-benefits.ts        # 3. ローカル LLM (node-llama-cpp) で解釈 → data/interpreted/
-    └── apply-benefit-interpretations.ts # 4. → DB short_summary / estimated_value
+    ├── export-summary-tasks.ts      # 3. 要約タスク → data/summary-tasks/ (要約は外部のクラウド LLM)
+    └── import-summary-results.ts    # 4. 結果を検証 → DB short_summary / estimated_value (既定 dry-run)
 ```
 
 > Worker エントリは **ルートの `worker/entry.ts`** 1 つ。root app (`src/index.ts`) が本サービスを `/otakara-yutai` に mount する。

@@ -215,7 +215,7 @@ async function fetchStockDetail(code: string): Promise<StockYutaiData | null> {
   }
 }
 
-/** 退避した解釈 (step3 の産物)。key は benefitKey(銘柄コード, description)。 */
+/** 退避した解釈 (要約取り込みの産物)。key は benefitKey(銘柄コード, description)。 */
 type CarriedInterpretation = {
   shortSummary: string | null;
   estimatedValue: number | null;
@@ -224,7 +224,8 @@ type CarriedInterpretation = {
 /**
  * 全削除の前に short_summary / estimated_value を退避する。
  *
- * どちらも step3 のローカル LLM 解釈でしか作れず、このスクリプトの INSERT は
+ * どちらも外部のクラウド LLM の要約を import-summary-results.ts で取り込んだ
+ * ものでしか作れず、このスクリプトの INSERT は
  * 値を入れない。退避しないと再フェッチのたびに全銘柄の解釈が消える。
  */
 async function carryOverInterpretations(
@@ -264,9 +265,10 @@ async function importToDb(allData: StockYutaiData[]) {
   // できる。よって upsert を全件成功させた **後** に、今回スクレイプできた
   // code の補集合だけ false へ落とす後処理方式にする (CLAUDE.md ルール2)。
   // 全削除の前に、**作り直せない派生値**を退避する。
-  // short_summary / estimated_value は step3 (ローカル LLM 解釈) の産物で、
-  // このスクリプトの INSERT では値を入れない。退避せずに消すと、step3 を
-  // 人手で回し終わるまで公開面の優待内容が全銘柄で空になる
+  // short_summary / estimated_value はクラウド LLM 要約の取り込み
+  // (import-summary-results.ts) の産物で、このスクリプトの INSERT では値を
+  // 入れない。退避せずに消すと、要約を外部に依頼して取り込み直す
+  // までの間、公開面の優待内容が全銘柄で空になる
   // (掲載文 description は公開面に出せないため代わりが無い)。
   // キーは (銘柄コード, description) の内容アドレスなので、文言が変わらない
   // 限り再フェッチ後も同じ解釈に戻せる。
@@ -342,7 +344,7 @@ async function importToDb(allData: StockYutaiData[]) {
 
           const stored = desc.substring(0, 500);
           // 同じ (銘柄, 文言) なら退避した解釈をそのまま戻す。新規/文言変更は
-          // 未解釈のまま入り、step3 の対象になる。
+          // 未解釈のまま入り、次の要約タスク書き出し (export-summary-tasks.ts) の対象になる。
           const previous = carried.get(benefitKey(data.code, stored));
           await db.insert(yutaiBenefits).values({
             stockId: stockRow.id,

@@ -160,8 +160,9 @@ pnpm sync:monthly:core    # is_yutai=true のみ otakara_stock_scores 再計算
 # 優待データ取込パイプライン (data-scripts、GitHub Actions 非対象・ローカル手動。.ts は tsx 実行):
 #   1. pnpm exec tsx services/otakara-yutai/data-scripts/fetch-yutai-full.ts            # minkabu→yutai_benefits + is_yutai
 #   2. pnpm exec tsx services/otakara-yutai/data-scripts/export-benefit-descriptions.ts # →data/benefit-descriptions.jsonl
-#   3. pnpm interpret:yutai                                                             # ローカル LLM (node-llama-cpp) 解釈→data/interpreted/chunk-*.jsonl
-#   4. pnpm exec tsx services/otakara-yutai/data-scripts/apply-benefit-interpretations.ts # →DB short_summary/estimated_value
+#   3. pnpm yutai:summary:export [--violations-only]                                     # 要約タスク→data/summary-tasks/*.jsonl (掲載文入り。コミット禁止)
+#      → 要約はリポジトリ外のクラウド LLM (Cursor Automations 等) が docs/llm-summary-task.md に従って作る
+#   4. pnpm yutai:summary:import --tasks <タスク> --results <結果> [--apply]             # 検証して通った行だけ D1 に書く (既定 dry-run)
 pnpm test                 # 全サービス横断のテスト
 pnpm test:coverage        # カバレッジ付き
 pnpm lint                 # ESLint
