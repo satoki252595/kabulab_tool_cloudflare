@@ -203,7 +203,7 @@ export function dashboardPage(data: DashboardData): string {
     <div class="stat-cell">
       <div class="lbl">対象銘柄</div>
       <div class="val">${fmtNum(data.counts.totalScreened, 0)}</div>
-      <div class="sub">判定済み (上場廃止・非普通株を含む)</div>
+      <div class="sub">判定済み (上場廃止など日次の対象外の銘柄を含む)</div>
     </div>
   </div>
 

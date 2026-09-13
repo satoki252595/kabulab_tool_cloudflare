@@ -1447,9 +1447,12 @@ app.get("/stocks/:code", async (c) => {
   // 市場区分 / 業種はフラグで列名が変わる。読み替えは public-columns.ts に閉じる。
   const stockMeta = publicStockMetaFromRow(stockData);
   // 財務指標は月次 (src/cron/monthly.ts Phase 2) が日次の値から作り直す。日次の母集団
-  // (active かつ equity) から外れた非普通株は作り直されず値が凍結する一方、この詳細は
-  // コード指定なので 200 で出る。古さを読めるよう、行の data_date を「更新日」として出す。
+  // (active かつ equity) から外れた行 (上場廃止した銘柄など) は作り直されず値が凍結する
+  // 一方、この詳細はコード指定なので 200 で出る。古さを読めるよう、行の data_date を
+  // 「更新日」として出す。
   // data_date は月次で作り直した日で、株価の取得日ではない (だから「基準日」とは書かない)。
+  // 2026-09-13 に日次の対象から外れた非普通株 9 銘柄は、同日のユーザー決定で core_stocks の
+  // 行ごと元データから削除する。削除後、その 9 コードは上の `!stockData` で 404 になる。
   const fin = stockData.financials[0] ?? null;
   const score = stockData.scores[0] ?? null;
   const genreSlugs = [...new Set(stockData.benefits.map((b: any) => b.genre?.slug).filter(Boolean))];

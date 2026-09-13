@@ -18,6 +18,7 @@ import {
   yutaiRawDataSchema,
   yutaiImportResultSchema,
 } from "../../validators/yutai-scraper";
+import { stocks, yutaiBenefits, yutaiGenres } from "../../db/schema";
 
 // --- テスト用HTML ---
 const SAMPLE_HTML = `
@@ -231,17 +232,45 @@ describe("優待データスクレイピングサービス", () => {
   // importYutaiData
   // =========================================================
   describe("importYutaiData", () => {
-    it("新規ジャンル・銘柄・優待を作成すること", async () => {
+    it("銘柄が母集団 (active かつ equity) に無ければ core_stocks に足さずスキップすること", async () => {
       const mockDb = createMockDb();
 
+      // stock select (active かつ equity) → 見つからない
+      mockDb._selectWhere.mockResolvedValueOnce([]);
+
+      const data: YutaiRawData[] = [
+        {
+          stockCode: "2702",
+          stockName: "日本マクドナルドHD",
+          market: "東証プライム",
+          genreName: "食事券",
+          description: "バーガー類無料引換券",
+          minShares: 100,
+          recordMonth: 6,
+          estimatedValue: 3000,
+        },
+      ];
+
+      const result = await importYutaiData(
+        mockDb as unknown as Parameters<typeof importYutaiData>[0],
+        data,
+      );
+
+      expect(result).toEqual({ created: 0, updated: 0, skipped: 1 });
+      // 銘柄もジャンルも優待も書かない。引いたのは銘柄の 1 回だけ
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expect(mockDb.select).toHaveBeenCalledTimes(1);
+    });
+
+    it("新規ジャンルと優待を作成し、銘柄は既存行を引くだけであること", async () => {
+      const mockDb = createMockDb();
+
+      // stock select → 既存
+      mockDb._selectWhere.mockResolvedValueOnce([{ id: 10 }]);
       // genre select → 見つからない
       mockDb._selectWhere.mockResolvedValueOnce([]);
       // genre insert → 新規作成
       mockDb._returning.mockResolvedValueOnce([{ id: 1 }]);
-      // stock select → 見つからない
-      mockDb._selectWhere.mockResolvedValueOnce([]);
-      // stock insert → 新規作成
-      mockDb._returning.mockResolvedValueOnce([{ id: 10 }]);
       // benefit upsert
       mockDb._onConflictDoUpdate.mockReturnValueOnce({
         returning: vi.fn().mockResolvedValueOnce([{ id: 100 }]),
@@ -265,17 +294,21 @@ describe("優待データスクレイピングサービス", () => {
       expect(result.created).toBe(1);
       expect(result.updated).toBe(0);
       expect(result.skipped).toBe(0);
+      // insert はジャンルと優待の 2 回で、core_stocks へは書かない
+      expect(mockDb.insert.mock.calls.map(([table]) => table)).toEqual([
+        yutaiGenres,
+        yutaiBenefits,
+      ]);
+      expect(mockDb.insert.mock.calls.map(([table]) => table)).not.toContain(stocks);
     });
 
     it("既存のジャンル・銘柄がある場合はそれを再利用すること", async () => {
       const mockDb = createMockDb();
 
+      // stock select → 既存
+      mockDb._selectWhere.mockResolvedValueOnce([{ id: 10 }]);
       // genre select → 既存
       mockDb._selectWhere.mockResolvedValueOnce([{ id: 1, name: "食事券" }]);
-      // stock select → 既存
-      mockDb._selectWhere.mockResolvedValueOnce([
-        { id: 10, code: "2702", name: "日本マクドナルドHD" },
-      ]);
       // benefit upsert → 更新
       mockDb._onConflictDoUpdate.mockReturnValueOnce({
         returning: vi.fn().mockResolvedValueOnce([{ id: 100 }]),
@@ -297,7 +330,7 @@ describe("優待データスクレイピングサービス", () => {
       const result = await importYutaiData(mockDb as any, data);
 
       // ジャンルinsertは呼ばれない（既存を再利用）
-      // 2回のselectのみ（genre, stock）
+      // 2回のselectのみ（stock, genre）
       expect(mockDb.select).toHaveBeenCalledTimes(2);
       expect(result.created + result.updated).toBe(1);
     });
@@ -314,7 +347,7 @@ describe("優待データスクレイピングサービス", () => {
     it("DB操作でエラーが発生した場合は該当データをスキップすること", async () => {
       const mockDb = createMockDb();
 
-      // genre select → エラー
+      // stock select → エラー
       mockDb._selectWhere.mockRejectedValueOnce(new Error("DB Error"));
 
       const data: YutaiRawData[] = [
@@ -353,12 +386,10 @@ describe("優待データスクレイピングサービス", () => {
 
       // 3件分のDB操作モック
       for (let i = 0; i < 3; i++) {
+        // stock select
+        mockDb._selectWhere.mockResolvedValueOnce([{ id: i + 10 }]);
         // genre select
         mockDb._selectWhere.mockResolvedValueOnce([{ id: 1, name: "食事券" }]);
-        // stock select
-        mockDb._selectWhere.mockResolvedValueOnce([
-          { id: i + 10, code: "XXXX" },
-        ]);
         // benefit upsert
         mockDb._onConflictDoUpdate.mockReturnValueOnce({
           returning: vi.fn().mockResolvedValueOnce([{ id: i + 100 }]),

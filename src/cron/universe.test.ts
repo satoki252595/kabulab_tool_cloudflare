@@ -188,9 +188,10 @@ describe("shouldDeactivateUniverseCode", () => {
 // ---------------------------------------------------------------------------
 
 /**
- * JPX data_j の実在行。sectors*.test.ts と同じ 4 行に、本番 core_stocks に
- * active で実在する優待 J-REIT 1 件 (8975) を足した。8975 の区分文字列は
- * data_j を取得せずに書いている (J-REIT の区分は REIT… の 1 区分しか無い)。
+ * JPX data_j の形の行。内国株式の 3 行は sectors*.test.ts と同じ data_j の実在行。
+ * ETF と REIT の 2 行は合成で、コードは JPX の上場銘柄一覧 (2026-08-31 版) にも本番
+ * core_stocks にも無く、銘柄名も架空。区分文字列だけが data_j の表記
+ * (REIT 等は REIT… の 1 区分しか無い)。
  */
 const TOYOTA: JpxRow = {
   asOf: "2026-06-30",
@@ -213,49 +214,49 @@ const ITO_EN_PREFERRED: JpxRow = {
   marketCategory: "プライム（内国株式）",
   sector33: "食料品",
 };
-const IFREE_TOPIX: JpxRow = {
+const SYNTHETIC_ETF: JpxRow = {
   asOf: "2026-06-30",
-  code: "1305",
-  name: "ｉＦｒｅｅＥＴＦ　ＴＯＰＩＸ（年１回決算型）",
+  code: "1202",
+  name: "合成テスト指数連動型ＥＴＦ",
   marketCategory: "ETF・ETN",
   sector33: null,
 };
-const ICHIGO_OFFICE: JpxRow = {
+const SYNTHETIC_REIT: JpxRow = {
   asOf: "2026-06-30",
-  code: "8975",
-  name: "いちごオフィスリート投資法人",
+  code: "1201",
+  name: "合成テストリート投資法人",
   marketCategory: "REIT・ベンチャーファンド・カントリーファンド・インフラファンド",
   sector33: null,
 };
 
 describe("planInstrumentTypeUpdates", () => {
-  const jpx = [TOYOTA, VERITAS, ITO_EN_PREFERRED, IFREE_TOPIX, ICHIGO_OFFICE];
+  const jpx = [TOYOTA, VERITAS, ITO_EN_PREFERRED, SYNTHETIC_ETF, SYNTHETIC_REIT];
 
   it("内国普通株以外の既存 active 行だけに区分を書く (内国普通株は upsert の担当)", () => {
     const updates = planInstrumentTypeUpdates(
       [
         { id: 1, code: "7203", instrumentType: null },
-        { id: 2, code: "8975", instrumentType: null },
+        { id: 2, code: "1201", instrumentType: null },
       ],
       jpx,
       new Set()
     );
-    expect(updates).toEqual([{ id: 2, code: "8975", from: null, to: "reit_fund" }]);
+    expect(updates).toEqual([{ id: 2, code: "1201", from: null, to: "reit_fund" }]);
   });
 
-  it("行は増やさない: core に無い ETF (1305) は data_j にあっても計画に出ない", () => {
+  it("行は増やさない: core に無い ETF (1202) は data_j にあっても計画に出ない", () => {
     const updates = planInstrumentTypeUpdates(
-      [{ id: 2, code: "8975", instrumentType: null }],
+      [{ id: 2, code: "1201", instrumentType: null }],
       jpx,
       new Set()
     );
-    expect(updates.map((u) => u.code)).not.toContain("1305");
+    expect(updates.map((u) => u.code)).not.toContain("1202");
   });
 
   it("値が変わらない行は書かない", () => {
     expect(
       planInstrumentTypeUpdates(
-        [{ id: 2, code: "8975", instrumentType: "reit_fund" }],
+        [{ id: 2, code: "1201", instrumentType: "reit_fund" }],
         jpx,
         new Set()
       )
@@ -288,21 +289,21 @@ describe("planInstrumentTypeUpdates", () => {
   });
 
   it("分類できない区分は別の語で埋めず null (未分類) を書く", () => {
-    const renamed: JpxRow = { ...ICHIGO_OFFICE, marketCategory: "REIT等" };
+    const renamed: JpxRow = { ...SYNTHETIC_REIT, marketCategory: "REIT等" };
     expect(
       planInstrumentTypeUpdates(
-        [{ id: 2, code: "8975", instrumentType: "reit_fund" }],
+        [{ id: 2, code: "1201", instrumentType: "reit_fund" }],
         [renamed],
         new Set()
       )
-    ).toEqual([{ id: 2, code: "8975", from: "reit_fund", to: null }]);
+    ).toEqual([{ id: 2, code: "1201", from: "reit_fund", to: null }]);
   });
 
   it("同じコードで区分が食い違う data_j は書込前に止める", () => {
     expect(() =>
       planInstrumentTypeUpdates(
-        [{ id: 2, code: "8975", instrumentType: null }],
-        [ICHIGO_OFFICE, { ...ICHIGO_OFFICE, marketCategory: "ETF・ETN" }],
+        [{ id: 2, code: "1201", instrumentType: null }],
+        [SYNTHETIC_REIT, { ...SYNTHETIC_REIT, marketCategory: "ETF・ETN" }],
         new Set()
       )
     ).toThrow("食い違って");
@@ -312,7 +313,7 @@ describe("planInstrumentTypeUpdates", () => {
 describe("countUnclassifiedCategories", () => {
   it("5 文字の種類株は内国株式の区分で未分類に数える (区分の変化の検知用)", () => {
     expect(
-      countUnclassifiedCategories([TOYOTA, ITO_EN_PREFERRED, IFREE_TOPIX, ICHIGO_OFFICE])
+      countUnclassifiedCategories([TOYOTA, ITO_EN_PREFERRED, SYNTHETIC_ETF, SYNTHETIC_REIT])
     ).toEqual({ "プライム（内国株式）": 1 });
   });
 });
@@ -368,7 +369,7 @@ describe("writeUniverse: instrument_type の書込", () => {
     );
     // 本番の形: 内国普通株は market=JPX 区分、優待 REIT は otakara の取込が入れた market='東証'。
     ins.run(1, "7203", "トヨタ自動車", "プライム（内国株式）", "輸送用機器", 1, 1, "輸送用機器");
-    ins.run(2, "8975", "いちごオフィスリート投資法人", "東証", null, 1, 1, null);
+    ins.run(2, "1201", "合成テストリート投資法人", "東証", null, 1, 1, null);
     ins.run(3, "25935", "伊藤園第１種優先株式", "プライム（内国株式）", "食料品", 1, 0, null);
   });
 
@@ -388,14 +389,14 @@ describe("writeUniverse: instrument_type の書込", () => {
     const db = makeProxyDb(sqlite);
     const result = await writeUniverse(db as never, {
       equities: [TOYOTA],
-      instrumentTypeUpdates: [{ id: 2, code: "8975", from: null, to: "reit_fund" }],
+      instrumentTypeUpdates: [{ id: 2, code: "1201", from: null, to: "reit_fund" }],
       deactivatedIds: [3],
     });
     expect(result).toEqual({ upserted: 1, instrumentTypeUpdated: 1 });
     expect(readStocks()).toEqual([
       // sector33 (stockStock が書く enrich 列) と is_yutai は触らない
       { id: 1, code: "7203", is_active: 1, instrument_type: "equity", sector33: "輸送用機器", is_yutai: 1 },
-      { id: 2, code: "8975", is_active: 1, instrument_type: "reit_fund", sector33: null, is_yutai: 1 },
+      { id: 2, code: "1201", is_active: 1, instrument_type: "reit_fund", sector33: null, is_yutai: 1 },
       // 対象外化する行は instrument_type を書かない
       { id: 3, code: "25935", is_active: 0, instrument_type: null, sector33: null, is_yutai: 0 },
     ]);
@@ -435,7 +436,7 @@ describe("writeUniverse: instrument_type の書込", () => {
     await writeUniverse(db as never, {
       equities: [],
       instrumentTypeUpdates: [
-        { id: 2, code: "8975", from: null, to: "reit_fund" },
+        { id: 2, code: "1201", from: null, to: "reit_fund" },
         { id: 3, code: "25935", from: null, to: null },
       ],
       deactivatedIds: [],

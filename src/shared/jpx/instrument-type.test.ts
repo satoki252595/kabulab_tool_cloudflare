@@ -7,7 +7,9 @@ import {
 } from "./instrument-type.js";
 import { isListedEquity, type JpxRow } from "./sectors.js";
 
-// JPX data_j 2026-06-30版の実在行 (sectors.test.ts と同じ 3 行)。手作りの架空銘柄は使わない。
+// 内国株式の 2 行は JPX data_j 2026-06-30 版の実在行 (sectors.test.ts と同じ)。
+// ETF の行は合成で、コードは JPX の上場銘柄一覧 (2026-08-31 版) にも本番 core_stocks にも無く、
+// 銘柄名も架空。区分文字列だけが data_j の表記。
 const VERITAS: JpxRow = {
   asOf: "2026-06-30",
   code: "130A",
@@ -22,10 +24,10 @@ const ITO_EN_PREFERRED: JpxRow = {
   marketCategory: "プライム（内国株式）",
   sector33: "食料品",
 };
-const IFREE_TOPIX: JpxRow = {
+const SYNTHETIC_ETF: JpxRow = {
   asOf: "2026-06-30",
-  code: "1305",
-  name: "ｉＦｒｅｅＥＴＦ　ＴＯＰＩＸ（年１回決算型）",
+  code: "1202",
+  name: "合成テスト指数連動型ＥＴＦ",
   marketCategory: "ETF・ETN",
   sector33: null,
 };
@@ -33,7 +35,7 @@ const IFREE_TOPIX: JpxRow = {
 describe("classifyInstrumentType", () => {
   it("内国普通株は equity、ETF・ETN は etf_etn", () => {
     expect(classifyInstrumentType(VERITAS)).toBe("equity");
-    expect(classifyInstrumentType(IFREE_TOPIX)).toBe("etf_etn");
+    expect(classifyInstrumentType(SYNTHETIC_ETF)).toBe("etf_etn");
   });
 
   it("区分が内国株式でも 4 文字コード契約外の種類株は未分類 (null)", () => {
@@ -43,7 +45,7 @@ describe("classifyInstrumentType", () => {
   });
 
   it("equity の述語は isListedEquity と完全に一致する (ガード (c) の分子と分母を揃える)", () => {
-    const rows = [VERITAS, ITO_EN_PREFERRED, IFREE_TOPIX];
+    const rows = [VERITAS, ITO_EN_PREFERRED, SYNTHETIC_ETF];
     for (const row of rows) {
       expect(classifyInstrumentType(row) === INSTRUMENT_TYPE_EQUITY).toBe(
         isListedEquity(row)
@@ -80,7 +82,7 @@ describe("classifyInstrumentType", () => {
       "",
     ]) {
       expect(
-        classifyInstrumentType({ code: IFREE_TOPIX.code, marketCategory })
+        classifyInstrumentType({ code: SYNTHETIC_ETF.code, marketCategory })
       ).toBeNull();
     }
   });

@@ -34,8 +34,10 @@
 - `total_count` は当該レスポンス件数なので **件数判定に使わない**。
   返却件数 < `limit` のページで打ち切る。
 - `company_code` は 5 桁 (例 `72030` → ティッカー `7203`)。先頭 4 桁を
-  取り `core_stocks.code` と突合。居なければ **ユニバース外**として
-  正直に除外 (ETF/REIT/非上場/上場廃止)。
+  取り、取込の母集団 (`src/shared/db/active-equity.ts` の `loadIngestCodeToId`) の
+  `core_stocks.code` と突合。居なければ **ユニバース外**として正直に除外
+  (ETF/REIT 等の非普通株・区分が NULL の active 行・`core_stocks` に無いコード)。
+  上場廃止 (`is_active=0`) の銘柄は取り込む。
 - 全 TDnet 通信は `tdnet/client.ts` がプロセス内で直列化し最小間隔
   750ms を強制 (サイト負荷回避)。5xx/429 は指数バックオフ、4xx は throw。
 

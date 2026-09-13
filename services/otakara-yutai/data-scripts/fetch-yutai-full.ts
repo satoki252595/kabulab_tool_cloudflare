@@ -3,63 +3,23 @@
  *
  * Phase 1: minkabu.jp/yutai/search の全ページから銘柄コード一覧を取得
  * Phase 2: 各銘柄の個別ページ /stock/XXXX/yutai から詳細データを取得
- * Phase 3: 既存データを削除してクリーンインポート
+ * Phase 3: 母集団 (core_stocks の active かつ equity) の銘柄の優待を作り直す。
+ *          母集団外の銘柄の優待には触らない。D1 への書き込みと、削除の前に止める
+ *          条件は yutai-full-import.ts (値のテストは src/tests/yutai-full-import.test.ts)
  */
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as schema from "../src/db/schema.js";
-import { yutaiGenres, yutaiBenefits, stocks } from "../src/db/schema.js";
-import { sql, eq, inArray } from "drizzle-orm";
-import { benefitKey } from "./benefit-key.js";
+import {
+  importYutaiFull,
+  type BenefitDetail,
+  type StockYutaiData,
+} from "./yutai-full-import.js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import "dotenv/config";
 
 // Schema は src/db/schema.ts に集約済み (D1/SQLite 版 — ADR-0001)。
 // 銘柄マスタ stocks は core_stocks の再 export、yutai_genres / yutai_benefits は
 // otakara 固有テーブル。インラインの pgTable 定義は廃止した。
-
-// ジャンルマッピング（minkabuのカテゴリ名→slug）
-const GENRE_SLUG_MAP: Record<string, string> = {
-  "食事券": "dining", "食品": "food", "飲料": "food", "お米": "rice",
-  "交通・旅行": "travel", "旅行": "travel", "交通": "travel",
-  "スポーツ": "leisure", "レジャー施設": "leisure", "娯楽": "leisure", "映画": "leisure",
-  "美容": "beauty", "ファッション": "beauty", "化粧品": "beauty",
-  "暮らし": "living", "日用品": "living", "住まい": "living",
-  "ギフトカード": "gift-card", "ギフト券": "gift-card",
-  "QUOカード": "quo-card", "クオカード": "quo-card",
-  "金券": "voucher", "商品券": "voucher",
-  "カタログギフト": "catalog", "特産品": "catalog",
-  "ポイント": "point",
-  "金融": "financial", "銀行": "financial", "保険": "financial", "証券": "financial",
-  "クレジット": "financial", "リース": "financial", "FX": "financial", "信託": "financial",
-  "医療": "medical", "介護": "medical", "ヘルスケア": "medical",
-  "社会貢献": "social", "寄付": "social",
-};
-
-function guessGenreSlug(title: string, description: string): string {
-  const text = title + " " + description;
-  for (const [keyword, slug] of Object.entries(GENRE_SLUG_MAP)) {
-    if (text.includes(keyword)) return slug;
-  }
-  if (text.match(/食|グルメ|弁当|菓子/)) return "food";
-  if (text.match(/割引券|優待券|施設利用/)) return "voucher";
-  if (text.match(/自社製品|自社商品/)) return "living";
-  return "other";
-}
-
-type BenefitDetail = {
-  minShares: number;
-  description: string;
-  notes: string;
-};
-
-type StockYutaiData = {
-  code: string;
-  name: string;
-  market: string;
-  recordMonths: number[];
-  category: string;
-  benefits: BenefitDetail[];
-};
 
 async function fetchPage(url: string): Promise<string> {
   const res = await fetch(url, {
@@ -215,201 +175,6 @@ async function fetchStockDetail(code: string): Promise<StockYutaiData | null> {
   }
 }
 
-/** 退避した解釈 (要約取り込みの産物)。key は benefitKey(銘柄コード, description)。 */
-type CarriedInterpretation = {
-  shortSummary: string | null;
-  estimatedValue: number | null;
-};
-
-/**
- * 全削除の前に short_summary / estimated_value を退避する。
- *
- * どちらも外部のクラウド LLM の要約を import-summary-results.ts で取り込んだ
- * ものでしか作れず、このスクリプトの INSERT は
- * 値を入れない。退避しないと再フェッチのたびに全銘柄の解釈が消える。
- */
-async function carryOverInterpretations(
-  db: ReturnType<typeof createD1HttpDb<typeof schema>>,
-): Promise<Map<string, CarriedInterpretation>> {
-  const rows = await db
-    .select({
-      code: stocks.code,
-      description: yutaiBenefits.description,
-      shortSummary: yutaiBenefits.shortSummary,
-      estimatedValue: yutaiBenefits.estimatedValue,
-    })
-    .from(yutaiBenefits)
-    .innerJoin(stocks, eq(stocks.id, yutaiBenefits.stockId));
-
-  const carried = new Map<string, CarriedInterpretation>();
-  for (const row of rows) {
-    if (row.shortSummary == null && row.estimatedValue == null) continue;
-    // 同一キーが複数行 (権利月違い) ある。解釈は文言単位なのでどれでも同じ。
-    carried.set(benefitKey(row.code, row.description), {
-      shortSummary: row.shortSummary,
-      estimatedValue: row.estimatedValue,
-    });
-  }
-  return carried;
-}
-
-/** Phase 3: DBにインポート */
-async function importToDb(allData: StockYutaiData[]) {
-  const db = createD1HttpDb(schema);
-
-  // 既存の優待データのみ削除する。
-  // core.stocks は東証内国普通株 (~3,700) の共有母集団なので **削除しない**。
-  //
-  // is_yutai は「事前に全 false → ループで true」だと D1 HTTP クライアントが
-  // トランザクション非対応のためループ途中で落ちると全優待が消える窓が
-  // できる。よって upsert を全件成功させた **後** に、今回スクレイプできた
-  // code の補集合だけ false へ落とす後処理方式にする (CLAUDE.md ルール2)。
-  // 全削除の前に、**作り直せない派生値**を退避する。
-  // short_summary / estimated_value はクラウド LLM 要約の取り込み
-  // (import-summary-results.ts) の産物で、このスクリプトの INSERT では値を
-  // 入れない。退避せずに消すと、要約を外部に依頼して取り込み直す
-  // までの間、公開面の優待内容が全銘柄で空になる
-  // (掲載文 description は公開面に出せないため代わりが無い)。
-  // キーは (銘柄コード, description) の内容アドレスなので、文言が変わらない
-  // 限り再フェッチ後も同じ解釈に戻せる。
-  const carried = await carryOverInterpretations(db);
-  console.log(`  既存の解釈を退避: ${carried.size}件`);
-
-  console.log("  既存の優待データを削除中 (core.stocks は保持)...");
-  await db.delete(yutaiBenefits);
-  await db.delete(yutaiGenres);
-
-  // ジャンル作成
-  const GENRES = [
-    { name: "食品・飲料", slug: "food", description: "食品、飲料、食料品" },
-    { name: "食事券・外食", slug: "dining", description: "食事券、外食割引、レストラン" },
-    { name: "お米", slug: "rice", description: "お米、米関連" },
-    { name: "交通・旅行", slug: "travel", description: "交通、旅行、航空、鉄道" },
-    { name: "レジャー・娯楽", slug: "leisure", description: "スポーツ、レジャー、映画、娯楽" },
-    { name: "美容・ファッション", slug: "beauty", description: "化粧品、衣料品、ファッション" },
-    { name: "暮らし・住まい", slug: "living", description: "日用品、住居関連、自社製品" },
-    { name: "ギフトカード", slug: "gift-card", description: "ギフトカード" },
-    { name: "QUOカード", slug: "quo-card", description: "QUOカード" },
-    { name: "金券・商品券", slug: "voucher", description: "金券、商品券、割引券" },
-    { name: "カタログギフト", slug: "catalog", description: "カタログギフト、特産品" },
-    { name: "ポイント", slug: "point", description: "ポイントサービス" },
-    { name: "金融サービス", slug: "financial", description: "銀行、証券、保険、金融サービス" },
-    { name: "医療・介護", slug: "medical", description: "医療、介護、ヘルスケア" },
-    { name: "社会貢献", slug: "social", description: "社会貢献、寄付" },
-    { name: "その他", slug: "other", description: "その他の株主優待" },
-  ];
-
-  const genreCache = new Map<string, number>();
-  for (const g of GENRES) {
-    const [row] = await db.insert(yutaiGenres).values(g).returning({ id: yutaiGenres.id });
-    genreCache.set(g.slug, row.id);
-  }
-  console.log(`  ジャンル: ${genreCache.size}件作成`);
-
-  let stockCount = 0;
-  let benefitCount = 0;
-  const scrapedCodes: string[] = [];
-  const failedCodes: string[] = [];
-
-  for (const data of allData) {
-    try {
-      // JPX 母集団 seed で既に存在する可能性があるため upsert。
-      // is_yutai=true を立て、name/market は minkabu 由来で更新する。
-      const [stockRow] = await db.insert(stocks).values({
-        code: data.code,
-        name: data.name,
-        market: data.market,
-        isYutai: true,
-      }).onConflictDoUpdate({
-        target: stocks.code,
-        set: {
-          name: sql`excluded.name`,
-          market: sql`excluded.market`,
-          isYutai: sql`true`,
-          updatedAt: sql`(unixepoch())`,
-        },
-      }).returning({ id: stocks.id });
-      stockCount++;
-      scrapedCodes.push(data.code);
-
-      const genreSlug = guessGenreSlug(data.category, data.benefits.map(b => b.description).join(" "));
-      const genreId = genreCache.get(genreSlug) ?? genreCache.get("other")!;
-
-      // 各権利月 × 各株数条件で優待レコードを作成
-      for (const month of data.recordMonths) {
-        for (const benefit of data.benefits) {
-          const desc = benefit.notes
-            ? `${benefit.description}${benefit.notes ? "\n" + benefit.notes.substring(0, 200) : ""}`
-            : benefit.description;
-
-          const stored = desc.substring(0, 500);
-          // 同じ (銘柄, 文言) なら退避した解釈をそのまま戻す。新規/文言変更は
-          // 未解釈のまま入り、次の要約タスク書き出し (export-summary-tasks.ts) の対象になる。
-          const previous = carried.get(benefitKey(data.code, stored));
-          await db.insert(yutaiBenefits).values({
-            stockId: stockRow.id,
-            genreId,
-            description: stored,
-            shortSummary: previous?.shortSummary ?? null,
-            minShares: benefit.minShares,
-            recordMonth: month,
-            estimatedValue: previous?.estimatedValue ?? null,
-          });
-          benefitCount++;
-        }
-      }
-    } catch (e) {
-      // 個別銘柄の失敗は握り潰さず記録する (CLAUDE.md ルール2: オペレータ通知)
-      failedCodes.push(data.code);
-      console.error(
-        `  [warn] ${data.code} の取り込み失敗:`,
-        e instanceof Error ? e.message : e
-      );
-    }
-  }
-
-  // 全件失敗 = スクレイプ/DB が壊れている。後処理で全優待を false に
-  // 落とすと otakara が全滅するので早期 throw する (ルール2: 早期失敗)。
-  if (scrapedCodes.length === 0) {
-    throw new Error(
-      `優待銘柄を 1 件も取り込めませんでした (失敗 ${failedCodes.length} 件)。` +
-        `minkabu スクレイプか DB 接続を確認してください。`
-    );
-  }
-
-  // 後処理: 今回スクレイプできなかった既存 is_yutai 銘柄を false へ。
-  // (優待を廃止した銘柄が翌月 false に落ちる。core_stocks 行自体は残す)
-  //
-  // D1 の bind 上限 (100/文) のため notInArray(全スクレイプコード ~1,600) は
-  // 使えない。is_yutai=true を読み出して in-memory で差集合を取り、ID で
-  // 分割更新する (monthly.ts と同じ D1 方言パターン)。
-  const scrapedSet = new Set(scrapedCodes);
-  const currentYutai = await db
-    .select({ id: stocks.id, code: stocks.code })
-    .from(stocks)
-    .where(eq(stocks.isYutai, true));
-  const toFalseIds = currentYutai
-    .filter((s) => !scrapedSet.has(s.code))
-    .map((s) => s.id);
-  const RESET_CHUNK = 80;
-  for (let i = 0; i < toFalseIds.length; i += RESET_CHUNK) {
-    await db
-      .update(stocks)
-      .set({ isYutai: false, updatedAt: sql`(unixepoch())` })
-      .where(inArray(stocks.id, toFalseIds.slice(i, i + RESET_CHUNK)));
-  }
-
-  if (failedCodes.length > 0) {
-    console.warn(
-      `  取り込み失敗 ${failedCodes.length} 件: ${failedCodes.slice(0, 30).join(", ")}${
-        failedCodes.length > 30 ? " ..." : ""
-      }`
-    );
-  }
-
-  return { stockCount, benefitCount };
-}
-
 // ===== Main =====
 async function main() {
   console.log("🚀 優待銘柄データ全量取得 v2\n");
@@ -460,12 +225,16 @@ async function main() {
 
   // Phase 3: DB import
   console.log("\n📦 Phase 3: DBにインポート中...");
-  const result = await importToDb(allData);
+  const result = await importYutaiFull(createD1HttpDb(schema), allData);
 
   console.log("\n" + "=".repeat(60));
   console.log("📊 最終結果:");
   console.log(`  銘柄数: ${result.stockCount}`);
   console.log(`  優待レコード数: ${result.benefitCount}`);
+  console.info(`  母集団に無く飛ばした銘柄 (既存の優待行は保持): ${result.outOfUniverse.length}`);
+  console.info(`  取得できず優待行を消した銘柄: ${result.abolishedCount}`);
+  console.info(`  戻せなかった解釈: ${result.droppedInterpretations}`);
+  console.info(`  取り込み失敗: ${result.failedCodes.length}`);
   console.log(`  複数権利月の銘柄: ${multiMonth}`);
   console.log(`  複数株数条件の銘柄: ${multiShare}`);
   console.log("=".repeat(60));

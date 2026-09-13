@@ -10,13 +10,16 @@
  *
  * 動作:
  *   - 直近 WINDOW_DAYS 日を 1 日ずつ全件取得 (yanoshin は page 無効のため)
- *   - core_stocks に居る個別株の開示を ir_disclosures へ冪等 upsert
+ *   - 取込の母集団 (src/shared/db/active-equity.ts の `loadIngestCodeToId`。core_stocks から
+ *     非普通株と、区分が NULL の active 行を除いたもの) の開示を ir_disclosures へ冪等 upsert。
+ *     is_active=0 の銘柄 (上場廃止・地域取引所にだけ上場する会社) の開示は取り込む。
+ *     母集団外のコードは取り込まず、Notion にも記録しない
  *   - ルール6: 当日バッチの確定 JSON を Notion 一次データへ実体記録
  *     (key=tdnet-daily-YYYY-MM-DD 冪等)。高シグナルは人間可読 DB へ冪等記録。
  *   - 取りこぼしは翌日以降の WINDOW 重なりと tdnet_id/Notion 冪等で回収。
  */
 import type { Database } from "../../services/ir-catalog/src/db/client.js";
-import { stocks } from "../shared/db/core-schema.js";
+import { loadIngestCodeToId } from "../shared/db/active-equity.js";
 import { listRange } from "../../services/ir-catalog/src/services/tdnet/client.js";
 import { ingestBatch } from "../../services/ir-catalog/src/services/ingest.js";
 
@@ -55,11 +58,11 @@ export async function runIrCatalogCatchup(
 
   const started = Date.now();
 
-  const allStocks = await db
-    .select({ id: stocks.id, code: stocks.code })
-    .from(stocks);
-  const codeToId = new Map<string, number>();
-  for (const s of allStocks) codeToId.set(s.code, s.id);
+  // 取込の母集団。変更前 (core_stocks の全行) から、非普通株と、区分が NULL の active 行
+  // だけを除く。P4b で入る非普通株の開示は取り込まず (Notion にも ir-catalog の一覧にも
+  // 出さない)、is_active=0 の会社 (上場廃止・地域取引所の単独上場) の開示は取り込み続ける
+  // (理由は src/shared/db/active-equity.ts の ingestUniverseCondition)。
+  const codeToId = await loadIngestCodeToId(db);
 
   // TDnet の開示日は JST。日付境界も JST で揃える (UTC だと JST 午前に
   // 走ったとき当日分が翌日まで取れず、Notion 冪等キーも 1 日ずれる)。

@@ -10,14 +10,15 @@
  *
  * 動作:
  *   - 直近 WINDOW_DAYS 日を新しい順に EDINET 書類一覧で走査
- *   - core_stocks に居る上場銘柄の有報 (120/130) のうち未取込のものを
+ *   - 取込の母集団 (src/shared/db/active-equity.ts の `loadIngestCodeToId`。core_stocks から
+ *     非普通株と、区分が NULL の active 行を除いたもの) の有報 (120/130) のうち未取込のものを
  *     ingestDocument で構造化保存 (CSV 事前判定で受注なしは XBRL を落とさない)
  *   - 1 回の実行は MAX_INGEST 件 / TIME_BUDGET_MS で打ち切り。残りは次回実行が
  *     拾う (docId 一意で冪等)。6 月の有報集中期も実行回数×日数で吸収。
  */
 import { eq } from "drizzle-orm";
 import type { Database } from "../../services/yuho-quant/src/db/client.js";
-import * as coreSchema from "../shared/db/core-schema.js";
+import { loadIngestCodeToId } from "../shared/db/active-equity.js";
 import * as yuhoSchema from "../../services/yuho-quant/src/db/schema.js";
 import { listDocuments } from "../../services/yuho-quant/src/services/edinet/client.js";
 import {
@@ -54,6 +55,12 @@ export interface YuhoEdinetResult {
   matched: number;
   ingested: number;
   skippedExisting: number;
+  /**
+   * 有報 (120/130) のうち、証券コードが取込の母集団 (`loadIngestCodeToId`) に無く取り込まなかった
+   * 件数 (非普通株・区分が NULL の active 行・core_stocks に無いコード)。シャード指定時は
+   * このシャードの担当分だけを数える。
+   */
+  outOfUniverse: number;
   byStatus: Record<string, number>;
   reachedCap: boolean;
   elapsedSec: number;
@@ -77,17 +84,17 @@ export async function runYuhoEdinetCatchup(
 ): Promise<YuhoEdinetResult> {
   const startedAt = Date.now();
 
-  const allStocks = await db
-    .select({ id: coreSchema.stocks.id, code: coreSchema.stocks.code })
-    .from(coreSchema.stocks);
-  const codeToId = new Map<string, number>();
-  for (const s of allStocks) codeToId.set(s.code, s.id);
+  // 取込の母集団。変更前 (core_stocks の全行) から、非普通株と、区分が NULL の active 行
+  // だけを除く。is_active=0 の会社 (上場廃止・地域取引所の単独上場) の有報は取り込み続ける
+  // (理由は src/shared/db/active-equity.ts の ingestUniverseCondition)。
+  const codeToId = await loadIngestCodeToId(db);
 
   const byStatus: Record<string, number> = {};
   let scannedDays = 0;
   let matched = 0;
   let ingested = 0;
   let skippedExisting = 0;
+  let outOfUniverse = 0;
   let reachedCap = false;
 
   const overBudget = () => Date.now() - startedAt > TIME_BUDGET_MS;
@@ -116,11 +123,17 @@ export async function runYuhoEdinetCatchup(
 
     const targets = list.results.filter((doc) => {
       if (!isAnnualSecuritiesReport(doc)) return false;
-      const t = secCodeToTicker(doc.secCode);
-      if (t === null || !codeToId.has(t)) return false;
       // シャード分配: 各シャードは docId ハッシュ %of==part の文書のみ担当
-      // (8 シャード合算で全文書を一意にカバー・重複なし)
+      // (8 シャード合算で全文書を一意にカバー・重複なし)。母集団外の件数をシャード間で
+      // 重複して数えないよう、コードの判定より先に振り分ける。
       if (shard && hashDocId(doc.docID) % shard.of !== shard.part) return false;
+      const t = secCodeToTicker(doc.secCode);
+      if (t === null) return false;
+      if (!codeToId.has(t)) {
+        // 取り込まないが、落とした量は完了ログと戻り値に出す (黙って落とさない)。
+        outOfUniverse++;
+        return false;
+      }
       return true;
     });
 
@@ -170,7 +183,7 @@ export async function runYuhoEdinetCatchup(
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   console.info(
-    `[yuho-edinet] 完了: shard=${shard ? `${shard.part}/${shard.of}` : "-"} 走査${scannedDays}日 matched=${matched} ingested=${ingested} skip=${skippedExisting} cap=${reachedCap} ${elapsedSec.toFixed(1)}s`
+    `[yuho-edinet] 完了: shard=${shard ? `${shard.part}/${shard.of}` : "-"} 走査${scannedDays}日 matched=${matched} ingested=${ingested} skip=${skippedExisting} outOfUniverse=${outOfUniverse} cap=${reachedCap} ${elapsedSec.toFixed(1)}s`
   );
   return {
     shard: shard ?? null,
@@ -178,6 +191,7 @@ export async function runYuhoEdinetCatchup(
     matched,
     ingested,
     skippedExisting,
+    outOfUniverse,
     byStatus,
     reachedCap,
     elapsedSec,

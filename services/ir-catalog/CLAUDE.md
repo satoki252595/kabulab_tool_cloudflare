@@ -30,8 +30,10 @@ TDnet) を全量取得し、表題から決定論的にタグ分類して色分�
 
 ### ユニバース外は正直に切り捨てる
 
-`company_code` 先頭 4 桁が `core_stocks` に居ない開示
-(ETF/REIT/非上場/上場廃止) は取り込まない。推測で銘柄を当てない。
+`company_code` 先頭 4 桁が取込の母集団 (`src/shared/db/active-equity.ts` の
+`loadIngestCodeToId`。`core_stocks` から非普通株と、区分が NULL の active 行を除いたもの)
+に居ない開示 (ETF/REIT 等・`core_stocks` に無いコード) は取り込まない。上場廃止
+(`is_active=0`) の銘柄の開示は取り込む。推測で銘柄を当てない。
 
 ### サイトに負荷をかけない
 

@@ -72,7 +72,8 @@ function createD1(sqlite: DatabaseSync, queries: string[]): unknown {
 }
 
 const EQUITY_CODE = "7203";
-const REIT_CODE = "8951";
+// 合成コード。JPX の上場銘柄一覧 (2026-08-31 版) にも本番 core_stocks にも無い。
+const REIT_CODE = "1201";
 
 let sqlite: DatabaseSync;
 let queries: string[];
