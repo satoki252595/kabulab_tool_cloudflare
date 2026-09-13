@@ -118,9 +118,9 @@ describe("companyCodeToTicker — 推測で補正しない", () => {
     expect(companyCodeToTicker("25935")).toBeNull();
     // 実在しないコード "0720" を捏造していた (本番に先頭 0 のコードは 0 件)。
     expect(companyCodeToTicker("07203")).toBeNull();
-    // 末尾の検査文字が 0 でない 5 文字。先頭 4 文字の 1671 は core_stocks に無いため、
+    // 末尾の検査文字が 0 でない 5 文字。先頭 4 文字の 1202 (合成コード) は core_stocks に無いため、
     // 旧実装でも次行の codeToId 突合で落ちていた。取りこぼしは増えない。
-    expect(companyCodeToTicker("16714")).toBeNull();
+    expect(companyCodeToTicker("12024")).toBeNull();
   });
 
   it("1 桁目英字は JPX 付番体系に無いので null", () => {

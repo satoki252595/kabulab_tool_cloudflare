@@ -247,10 +247,10 @@ describe("screenStocks の鮮度条件", () => {
     const fresh = new Date(NOW.getTime() - DAY_MS);
     const stale = new Date("2026-05-15T21:10:00.000Z");
     await seed({ code: "6001", minPercentile: 3, computedAt: fresh });
-    await seed({ code: "6002", minPercentile: 1, computedAt: fresh, instrumentType: "reit_fund" });
+    await seed({ code: "1201", minPercentile: 1, computedAt: fresh, instrumentType: "reit_fund" });
     await seed({ code: "6003", minPercentile: 2, computedAt: fresh, instrumentType: null });
     await seed({ code: "6004", minPercentile: 2, computedAt: stale });
-    await seed({ code: "6005", minPercentile: 2, computedAt: stale, instrumentType: "reit_fund" });
+    await seed({ code: "1203", minPercentile: 2, computedAt: stale, instrumentType: "reit_fund" });
 
     const result = await screenStocks(db, query, NOW);
 

@@ -65,7 +65,7 @@ function makeProxyDb(target: DatabaseSync) {
 /** 4 銘柄。優待を付けてよいのは 7203 だけ。 */
 const STOCKS = [
   { id: 1, code: "7203", active: 1, instrumentType: "equity" },
-  { id: 2, code: "9002", active: 1, instrumentType: "reit_fund" },
+  { id: 2, code: "1201", active: 1, instrumentType: "reit_fund" },
   { id: 3, code: "9999", active: 1, instrumentType: null },
   { id: 4, code: "6501", active: 0, instrumentType: "equity" },
 ] as const;
@@ -73,7 +73,7 @@ const STOCKS = [
 /** 1 コード 1 ジャンル。ジャンルを分けてあるので、飛ばした行がジャンルを作ると分かる。 */
 const ITEMS: YutaiRawData[] = [
   { code: "7203", genre: "テストジャンルA" },
-  { code: "9002", genre: "テストジャンルB" },
+  { code: "1201", genre: "テストジャンルB" },
   { code: "9999", genre: "テストジャンルC" },
   { code: "6501", genre: "テストジャンルD" },
   { code: "1301", genre: "テストジャンルE" },

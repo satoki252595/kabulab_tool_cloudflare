@@ -68,7 +68,7 @@ const NEW_HOLDER = { id: 200, code: "9200" };
 const OUTSIDE = [
   { id: 301, code: "9998", active: 0, instrumentType: "equity" }, // 上場廃止
   { id: 302, code: "9999", active: 1, instrumentType: null }, // 区分が NULL
-  { id: 303, code: "9002", active: 1, instrumentType: "reit_fund" }, // 非普通株
+  { id: 303, code: "1201", active: 1, instrumentType: "reit_fund" }, // 非普通株
 ] as const;
 const OUTSIDE_IDS: readonly number[] = OUTSIDE.map((s) => s.id);
 /**
