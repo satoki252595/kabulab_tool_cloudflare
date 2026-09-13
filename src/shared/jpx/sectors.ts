@@ -188,7 +188,7 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
  * 株主優待 REIT などは除外されるが、is_yutai 銘柄の active 維持は
  * 月次 sync 側で「raw JPX に存在する限り inactivate しない」ことで担保する。
  */
-export function isListedEquity(row: JpxRow): boolean {
+export function isListedEquity(row: Pick<JpxRow, "code" | "marketCategory">): boolean {
   const mc = row.marketCategory;
   if (!isValidStockCode(row.code)) return false;
   if (!mc.includes("内国株式")) return false;

@@ -580,6 +580,41 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
     ).toEqual([]);
   });
 
+  it("instrument_type を書くのは universe sync だけで、公開面は書きも読みもしない", () => {
+    // 移行 P4b 第 1 段で src/cron/universe.ts が JPX の「市場・商品区分」から
+    // `instrument_type` (personal-only) を書き始めた。値が入った瞬間から、公開面が
+    // この列を読めば番兵ではなく実値が出る。読み側は上の修飾つき参照の検査と
+    // services/otakara-yutai/src/tests/stock-detail-license.test.ts (番兵) が見ている。
+    // ここでは「書く経路が取込層の 1 箇所に留まっている」ことを固定する。
+    const writesInstrumentType = (source: string): boolean => {
+      const code = stripComments(source);
+      return (
+        WRITES_STOCKS.test(code) &&
+        /(?<![.\w$])instrumentType\s*[:,}]/.test(code)
+      );
+    };
+    const writers = collectSources(join(ROOT, "src"))
+      .concat(collectSources(join(ROOT, "services")))
+      .concat(collectSources(join(ROOT, "scripts")))
+      .filter((path) => writesInstrumentType(readFileSync(path, "utf-8")))
+      .map((path) => relative(ROOT, path).split(sep).join("/"));
+    expect(writers).toEqual(["src/cron/universe.ts"]);
+    expect(PUBLIC_SURFACE).not.toContain("src/cron/universe.ts");
+    for (const rel of PUBLIC_SURFACE) {
+      expect(
+        findQualifiedPersonalOnlyRefs(readFileSync(join(ROOT, rel), "utf-8")).filter(
+          (ref) => /instrument(Type|_type)$/.test(ref),
+        ),
+        rel,
+      ).toEqual([]);
+    }
+    // 検出器の健全性: 書き込み先としての指名は拾い、参照は拾わない
+    expect(writesInstrumentType("db.update(stocks).set({ instrumentType: to })")).toBe(true);
+    expect(
+      writesInstrumentType("db.select({ t: stocks.instrumentType }).from(stocks)"),
+    ).toBe(false);
+  });
+
   it("sector33 の書き込み検出器が参照と書き込みを取り違えない", () => {
     // 拾うべきもの (書き込み先としての指名)
     expect(writesSector33("db.insert(stocks).values({ sector33: r.sector33 })")).toBe(true);
