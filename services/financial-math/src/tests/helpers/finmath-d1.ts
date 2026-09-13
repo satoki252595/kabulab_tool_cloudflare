@@ -17,14 +17,15 @@ import { DatabaseSync } from "node:sqlite";
 
 /**
  * 004 が読む表の DDL。`src/shared/db/core-schema.ts` /
- * `src/shared/db/projection-schema.ts` / `services/swing-trading/src/db/schema.ts` /
- * `services/financial-math/src/db/finmath-schema.ts` に対応する。
+ * `src/shared/db/projection-schema.ts` / `services/swing-trading/src/db/schema.ts`
+ * に対応する。
  *
- * `finmath_price_snapshot` / `finmath_daily_ohlcv` を**あえて含めている**。
- * 004 はもう読まないが、本番にはまだ実在する。テスト DB から消してしまうと
- * 「実は書いていた」という退行が `no such table` で落ちるのでなく
- * **本番でだけ起きる**ようになる。ここに置いておけば、書きに行った瞬間に
- * 行数の検査が落ちる。
+ * 旧 `finmath_price_snapshot` / `finmath_daily_ohlcv` は**含めない**。以前は
+ * 「本番にまだ実在するので、テスト DB から消すと書き込みの退行が本番でだけ
+ * 起きる」という理由で番兵行を置いていたが、drizzle/d1/0012 で本番からも
+ * DROP する。本番と同じく表が無ければ、どこかが読み書きした瞬間に
+ * `no such table` で 500 になり、テストの status 検査で落ちる。
+ * 表を残すと逆に「本番に無い表を読む退行」をテストだけが通してしまう。
  */
 export const FINMATH_DDL = `
 CREATE TABLE core_stocks (
@@ -87,23 +88,6 @@ CREATE TABLE p_momentum (
   bars integer NOT NULL,
   closes text NOT NULL,
   computed_at integer NOT NULL DEFAULT (unixepoch())
-);
-CREATE TABLE finmath_price_snapshot (
-  id integer PRIMARY KEY AUTOINCREMENT,
-  code text NOT NULL UNIQUE,
-  name text, price real, per real, pbr real, dividend_yield real,
-  eps real, bps real, roe real, roa real, market_cap real,
-  operating_margin_ttm real,
-  data_date text NOT NULL,
-  fetched_at integer NOT NULL DEFAULT (unixepoch())
-);
-CREATE TABLE finmath_daily_ohlcv (
-  id integer PRIMARY KEY AUTOINCREMENT,
-  symbol text NOT NULL,
-  date text NOT NULL,
-  open real, high real, low real, close real, volume real, adj real,
-  fetched_at integer NOT NULL DEFAULT (unixepoch()),
-  UNIQUE (symbol, date)
 );
 `;
 

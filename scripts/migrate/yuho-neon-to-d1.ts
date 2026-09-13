@@ -15,8 +15,8 @@
  *
  * 大きいテーブル (swing_daily_ohlcv ~337k) は --maxRowsPerFile で
  * <out>.part01.sql, part02.sql ... に分割し、wrangler 1 回当たりのサイズを抑える。
- * finmath_daily_ohlcv (~1.8M) は再生成可能な遅延キャッシュ (price-cache が Worker
- * エッジから Yahoo を再取得) なので cutover 対象外 (ADR-0001 正規化方針)。
+ * finmath_daily_ohlcv (~1.8M) は再生成可能な遅延キャッシュだったので cutover 対象外
+ * (ADR-0001 正規化方針)。finmath_* の 2 表はその後 drizzle/d1/0012 で DROP した。
  */
 import "dotenv/config";
 import { promises as fs } from "node:fs";
@@ -310,23 +310,8 @@ async function main() {
         extract(epoch from scored_at)::bigint AS scored_at
         FROM public.stock_scores ORDER BY id`,
     },
-    {
-      d1: "finmath_price_snapshot",
-      cols: [
-        { name: "id", type: "int" }, { name: "code", type: "text" },
-        { name: "name", type: "text" }, { name: "price", type: "real" },
-        { name: "per", type: "real" }, { name: "pbr", type: "real" },
-        { name: "dividend_yield", type: "real" }, { name: "eps", type: "real" },
-        { name: "bps", type: "real" }, { name: "roe", type: "real" },
-        { name: "roa", type: "real" }, { name: "market_cap", type: "real" },
-        { name: "operating_margin_ttm", type: "real" }, { name: "data_date", type: "text" },
-        { name: "fetched_at", type: "int" },
-      ],
-      select: `SELECT id, code, name, price, per, pbr, dividend_yield, eps, bps, roe, roa,
-        market_cap, operating_margin_ttm, to_char(data_date,'YYYY-MM-DD') AS data_date,
-        extract(epoch from fetched_at)::bigint AS fetched_at
-        FROM finmath.price_snapshot ORDER BY id`,
-    },
+    // 注: finmath_price_snapshot は drizzle/d1/0012 で D1 から DROP した。
+    // 移送先の表が無いので定義を外す (残すと全表実行が DELETE の時点で落ちる)。
     {
       d1: "swing_daily_ohlcv",
       cols: [

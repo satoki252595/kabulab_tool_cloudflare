@@ -49,7 +49,8 @@ export default defineConfig({
     "./services/rsi-screening/src/db/schema.ts",
     "./services/swing-trading/src/db/schema.ts",
     "./services/otakara-yutai/src/db/schema.ts",
-    "./services/financial-math/src/db/finmath-schema.ts",
+    // 004 financial-math は所有する表を持たない。旧 finmath_price_snapshot /
+    // finmath_daily_ohlcv は読み書きが無くなったので宣言を消し、0012 で DROP する。
   ],
   out: "./drizzle/d1",
   dialect: "sqlite",

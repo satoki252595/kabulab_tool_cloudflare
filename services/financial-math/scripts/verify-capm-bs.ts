@@ -16,7 +16,6 @@
 import "dotenv/config";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as swingSchema from "../src/db/swing-readonly.js";
-import * as finmathSchema from "../src/db/finmath-schema.js";
 import type { Database } from "../src/db/client.js";
 import { getOhlcvSeries, getPriceContext } from "../src/services/price-cache.js";
 import { estimateBetaForCode } from "../src/routes/pages.js";
@@ -32,7 +31,6 @@ async function main() {
   // API を持つ (共に BaseSQLiteDatabase)。型クラスのみ異なるためキャストで橋渡し。
   const db = createD1HttpDb({
     ...swingSchema,
-    ...finmathSchema,
   }) as unknown as Database;
 
   console.info(`[verify] === CAPM auto for ${code} (uses ^N225 internally) ===`);

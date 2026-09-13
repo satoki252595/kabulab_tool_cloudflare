@@ -1,5 +1,4 @@
 import * as swingSchema from "./swing-readonly.js";
-import * as finmathSchema from "./finmath-schema.js";
 import * as projectionSchema from "../../../../src/shared/db/projection-schema.js";
 import { createServiceDb } from "../../../../src/shared/db/client.js";
 
@@ -8,20 +7,19 @@ import { createServiceDb } from "../../../../src/shared/db/client.js";
  * D1 はバインディング経由（Worker の `c.env.DB`）でのみアクセスする。
  *
  * 004 financial-math が触るテーブル:
- *   - finmath_*（所有・読み書き。Yahoo 取得キャッシュ。Worker エッジ取得なので 429 回避）
  *   - swing_*（003 所有・読み取り。BS/CAPM の OHLCV/指標参照）
  *   - core_*（共有・読み取り。価格断面と銘柄名）
  *   - p_*（L2 投影・読み取り。writer は日次 cron の Phase 6）
  *
- * swing-readonly と finmath-schema は同名 `dailyOhlcv` を持つが、明示 import で
- * 区別して使うため衝突は無害（relational query は使わない）。
+ * 004 が所有する表は無い。旧 `finmath_price_snapshot` / `finmath_daily_ohlcv` は
+ * 読み取り面を core_* / swing_* へ振り替えた後に宣言ごと撤去した
+ * (drizzle/d1/0012。本番の行は ~/kabulab-cf-backup-20260913/d1-finmath/ に退避)。
  *
  * @param d1 - Worker バインディング `c.env.DB`
  */
 export function createDb(d1: D1Database) {
   return createServiceDb(d1, {
     ...swingSchema,
-    ...finmathSchema,
     ...projectionSchema,
   });
 }
