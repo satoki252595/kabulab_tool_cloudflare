@@ -131,7 +131,7 @@ beforeAll(() => {
   sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (1, 'QUOカード', 'quo')");
 
   const insStock = sqlite.prepare(
-    "INSERT INTO core_stocks (id, code, name, market, sector, is_active, is_yutai) VALUES (?, ?, ?, ?, ?, 1, 1)"
+    "INSERT INTO core_stocks (id, code, name, market, sector, is_active, is_yutai, instrument_type) VALUES (?, ?, ?, ?, ?, 1, 1, 'equity')"
   );
   const insBenefit = sqlite.prepare(
     "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month) VALUES (?, ?, ?, ?, ?, ?)"
@@ -211,7 +211,7 @@ describe("/genres/:slug のページング", () => {
     sqlite.exec(DDL);
     sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (1, 'QUOカード', 'quo')");
     sqlite.exec(
-      "INSERT INTO core_stocks (id, code, name, market, sector, is_active, is_yutai) VALUES (1, '1001', 'テスト', 'プライム', '小売業', 1, 1)"
+      "INSERT INTO core_stocks (id, code, name, market, sector, is_active, is_yutai, instrument_type) VALUES (1, '1001', 'テスト', 'プライム', '小売業', 1, 1, 'equity')"
     );
     sqlite.exec(
       "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month) VALUES (1, 1, '掲載文', '100円相当', 100, 3)"
@@ -242,7 +242,7 @@ describe("/genres/:slug のページング", () => {
     sqlite.exec(DDL);
     sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (1, 'QUOカード', 'quo')");
     const insStock = sqlite.prepare(
-      "INSERT INTO core_stocks (id, code, name, market, sector, is_active, is_yutai) VALUES (?, ?, ?, ?, ?, 1, 1)"
+      "INSERT INTO core_stocks (id, code, name, market, sector, is_active, is_yutai, instrument_type) VALUES (?, ?, ?, ?, ?, 1, 1, 'equity')"
     );
     const insBenefit = sqlite.prepare(
       "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month) VALUES (?, ?, ?, ?, ?, ?)"

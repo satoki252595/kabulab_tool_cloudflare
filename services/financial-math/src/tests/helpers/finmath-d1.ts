@@ -201,8 +201,10 @@ export function seedFinmathData(
   stocks: SeedStock[],
   marketBars = 0
 ): void {
+  // instrument_type は日次の処理対象 (active かつ equity) に揃える。/emh の件数と一覧は
+  // src/shared/db/active-equity.ts の述語で絞るので、NULL のままだと母集団から落ちる。
   const insStock = sqlite.prepare(
-    "INSERT INTO core_stocks (id, code, name, market, sector, is_active) VALUES (?, ?, ?, ?, ?, 1)"
+    "INSERT INTO core_stocks (id, code, name, market, sector, is_active, instrument_type) VALUES (?, ?, ?, ?, ?, 1, 'equity')"
   );
   const insFin = sqlite.prepare(
     "INSERT INTO core_stock_financials (stock_id, price, dividend_yield, market_cap, data_date) VALUES (?, ?, ?, ?, ?)"

@@ -147,6 +147,12 @@ const PUBLISHED_SECTOR33 = "ZZ_SECTOR33_PUBLISHED";
 const CODE = "7203";
 /** `sector33` が NULL の銘柄。JPX の `sector` へ落ちないことを見る用。 */
 const CODE_NO_SECTOR33 = "6758";
+/**
+ * `instrument_type = 'equity'` の銘柄。一覧 (/api/screening) の母集団は active かつ
+ * equity (src/shared/db/active-equity.ts) なので、`instrument_type` が番兵値の 1・2 件目は
+ * 一覧に出ない。一覧の JSON を値で検査するための 3 件目 (他の personal-only 列は番兵値)。
+ */
+const CODE_EQUITY = "8058";
 
 let d1: unknown;
 
@@ -185,6 +191,33 @@ beforeAll(() => {
     SENTINELS.src_source,
     SENTINELS.quality,
   );
+  insertStock.run(
+    3,
+    CODE_EQUITY,
+    SENTINELS.market,
+    SENTINELS.sector,
+    "equity",
+    PUBLISHED_SECTOR33,
+    SENTINELS.sector17,
+    SENTINELS.license_tag,
+    SENTINELS.src_source,
+    SENTINELS.quality,
+  );
+  sqlite
+    .prepare(
+      "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month) VALUES (3, 1, ?, ?, 100, 3)",
+    )
+    .run("出典サイトの掲載文", "2000円相当のQUOカード");
+  sqlite
+    .prepare(
+      "INSERT INTO otakara_stock_financials (stock_id, price, per, pbr, dividend_yield, rsi_14, yutai_yield, data_date) VALUES (3, 2000, 10, 1.0, 2.5, 50, 1.0, '2026-09-01')",
+    )
+    .run();
+  sqlite
+    .prepare(
+      "INSERT INTO otakara_stock_scores (stock_id, fundamental_score, technical_score, total_score) VALUES (3, 51, 52, 53)",
+    )
+    .run();
   sqlite
     .prepare(
       "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month) VALUES (1, 1, ?, ?, 100, 3)",
@@ -240,18 +273,24 @@ describe("GET /stocks/:code のライセンス境界", () => {
   it("JSON API (/api/screening) にも personal-only が出ない", async () => {
     // HTML だけを見ていると、同じ列を返す JSON API が無検査で残る。
     // /api/screening は `.select()` 経路なので、関係クエリとは別の系統。
+    // 一覧の母集団は active かつ equity なので並ぶのは 3 件目 (CODE_EQUITY) だけ。
+    // instrument_type は WHERE で使うが、値もキーもレスポンスに出ない
+    // (src/shared/db/active-equity.ts のライセンス判断)。
     const res = await otakaraYutaiApp.request("/api/screening?limit=50", {}, { DB: d1 });
     expect(res.status).toBe(200);
     const body = await res.text();
     for (const sentinel of Object.values(SENTINELS)) {
       expect(body, `${sentinel} が JSON に出ています`).not.toContain(sentinel);
     }
+    expect(body).not.toContain("instrument_type");
+    expect(body).not.toContain("instrumentType");
+    expect(body).not.toContain("equity");
     // 出してよい列は出る (絞りすぎの検出)。
     expect(body).toContain(PUBLISHED_SECTOR33);
     // キーは残す。消すと利用者が「その項目は存在しない」と解釈する
     // (src/shared/db/public-columns.ts の方針)。
-    const parsed = JSON.parse(body) as { items: Array<{ market: unknown }> };
-    expect(parsed.items.length).toBeGreaterThan(0);
+    const parsed = JSON.parse(body) as { items: Array<{ code: string; market: unknown }> };
+    expect(parsed.items.map((item) => item.code)).toEqual([CODE_EQUITY]);
     for (const item of parsed.items) {
       expect(item).toHaveProperty("market");
       expect(item.market).toBeNull();

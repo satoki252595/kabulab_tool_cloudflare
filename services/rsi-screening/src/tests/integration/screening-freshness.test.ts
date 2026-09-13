@@ -83,6 +83,8 @@ async function seed(input: {
   minPercentile: number;
   computedAt: Date;
   isActive?: boolean;
+  /** 既定は `equity` (日次の処理対象)。`null` は未分類。 */
+  instrumentType?: string | null;
   sampleBars?: number | null;
 }): Promise<void> {
   const [stock] = await db
@@ -92,6 +94,7 @@ async function seed(input: {
       name: `テスト ${input.code}`,
       market: "プライム",
       isActive: input.isActive ?? true,
+      instrumentType: input.instrumentType === undefined ? "equity" : input.instrumentType,
     })
     .returning({ id: coreSchema.stocks.id });
 
@@ -234,5 +237,23 @@ describe("screenStocks の鮮度条件", () => {
     expect(result.rows[0].computedAt.toISOString()).toBe(
       "2026-09-11T21:10:00.000Z"
     );
+  });
+
+  it("instrument_type が equity 以外の行は、結果にも鮮度除外件数にも入らない", async () => {
+    // 日次取込は active かつ equity だけを更新する。REIT 等の行は凍結したまま残るので、
+    // 結果に並べると古い値が今日の底値に見え、鮮度除外に数えると「条件には合うが
+    // 古い」件数が母集団外の行で水増しされる。
+    const fresh = new Date(NOW.getTime() - DAY_MS);
+    const stale = new Date("2026-05-15T21:10:00.000Z");
+    await seed({ code: "6001", minPercentile: 3, computedAt: fresh });
+    await seed({ code: "6002", minPercentile: 1, computedAt: fresh, instrumentType: "reit_fund" });
+    await seed({ code: "6003", minPercentile: 2, computedAt: fresh, instrumentType: null });
+    await seed({ code: "6004", minPercentile: 2, computedAt: stale });
+    await seed({ code: "6005", minPercentile: 2, computedAt: stale, instrumentType: "reit_fund" });
+
+    const result = await screenStocks(db, query, NOW);
+
+    expect(result.rows.map((r) => r.code)).toEqual(["6001"]);
+    expect(result.staleExcluded).toBe(1);
   });
 });

@@ -6,7 +6,7 @@
  *   1. **投影を経由しても /emh の数値が変わらない** — 投影に入った終値列を
  *      `calcMomentum` に渡した結果が、`swing_daily_ohlcv` を直接読んだ結果と一致する。
  *      ここが崩れると「速くなったが数字が違う」になり、一番気付きにくい。
- *   2. 母集団が `/emh` と同じ (is_active + close IS NOT NULL)。
+ *   2. 母集団が `/emh` と同じ (active かつ equity + close IS NOT NULL)。
  *   3. 終値列が **date 昇順** で入る。順序が逆だと累積リターンの符号が反転し、
  *      エラーにならずにランキングが裏返る。
  *   4. 母集団から落ちた銘柄の投影行が残らない (孤児行が「現役の 0% 銘柄」として並ぶ)。
@@ -21,7 +21,7 @@ import * as coreSchema from "../shared/db/core-schema.js";
 import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as projectionSchema from "../shared/db/projection-schema.js";
-import { decodeCloses } from "../shared/indicators/momentum-series.js";
+import { decodeCloses, encodeCloses } from "../shared/indicators/momentum-series.js";
 import { calcMomentum } from "../../services/financial-math/src/services/emh.js";
 import { rebuildMomentumProjection } from "./daily.js";
 
@@ -91,12 +91,16 @@ function dateAt(i: number): string {
   return new Date(start + i * 86_400_000).toISOString().slice(0, 10);
 }
 
-function insertStock(id: number, isActive = 1): void {
+function insertStock(
+  id: number,
+  isActive = 1,
+  instrumentType: string | null = "equity"
+): void {
   sqlite
     .prepare(
-      "INSERT INTO core_stocks (id, code, name, market, is_active) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO core_stocks (id, code, name, market, is_active, instrument_type) VALUES (?, ?, ?, ?, ?, ?)"
     )
-    .run(id, String(1000 + id), `銘柄${id}`, "プライム", isActive);
+    .run(id, String(1000 + id), `銘柄${id}`, "プライム", isActive, instrumentType);
 }
 
 /** stockId に bars 本の終値を入れる。closes[i] は dateAt(i) の終値。 */
@@ -259,6 +263,26 @@ describe("rebuildMomentumProjection", () => {
     expect(readProjection().map((r) => r.stock_id)).toEqual([1]);
   });
 
+  it("instrument_type が equity 以外や NULL の active 銘柄は投影に入らず、既にある投影行は掃除される", async () => {
+    // 日次は active かつ equity だけを更新する。非普通株の OHLCV は凍結するので、
+    // 投影に入れると /emh のモメンタムに古い終値列が今日の値として並ぶ。
+    insertStock(1);
+    insertStock(2, 1, "reit_fund");
+    insertStock(3, 1, null);
+    for (const id of [1, 2, 3]) insertBars(id, [100, 110, 120]);
+    // 絞り込み前の run が作った投影行 (前回の run = computed_at が古い)。
+    const ins = sqlite.prepare(
+      "INSERT INTO p_momentum (stock_id, as_of, source_max_date, bars, closes, computed_at) VALUES (?, ?, ?, 2, ?, unixepoch() - 10)"
+    );
+    for (const id of [2, 3]) ins.run(id, dateAt(1), dateAt(1), encodeCloses([100, 110]));
+
+    const result = await rebuildMomentumProjection(db);
+
+    expect(result.projectedStocks).toBe(1);
+    expect(result.removedStocks).toBe(2);
+    expect(readProjection().map((r) => r.stock_id)).toEqual([1]);
+  });
+
   it("bars / as_of は符号化が落とした終値を数えない", async () => {
     // `encodeCloses` は 0 以下 / 非有限の終値を落とす。`bars` は画面が出す
     // window の実効上限なので、落とした分を数に含めると「window=5 まで出せる」と
@@ -290,7 +314,7 @@ describe("rebuildMomentumProjection", () => {
     expect(readProjection().map((r) => r.stock_id)).toEqual([1]);
   });
 
-  it("is_active が 0 件なら投影を全消しせず run を失敗させる", async () => {
+  it("is_active が 0 件 / active に equity が 0 件なら投影を全消しせず run を失敗させる", async () => {
     // 掃除 DELETE は「今回の run で触られなかった行」を落とす。母集団が空だと
     // upsert が 1 行も走らないので、そのまま進むと投影が全消しになる。
     // /emh は maxBars=0 で window 超過の notice も出せず、理由なしの
@@ -300,10 +324,18 @@ describe("rebuildMomentumProjection", () => {
     await rebuildMomentumProjection(db);
     expect(readProjection()).toHaveLength(1);
 
+    const emptyUniverse =
+      /母集団が空です: core_stocks に is_active=1 かつ instrument_type='equity' の行が 1 件もありません/;
     sqlite.exec("UPDATE core_stocks SET is_active = 0");
     sqlite.exec("UPDATE p_momentum SET computed_at = computed_at - 10");
-    await expect(rebuildMomentumProjection(db)).rejects.toThrow(/母集団が空/);
+    await expect(rebuildMomentumProjection(db)).rejects.toThrow(emptyUniverse);
     // 投影は残っている (古さは as_of で見える)
+    expect(readProjection()).toHaveLength(1);
+
+    // active の行はあるが equity が 0 件 (instrument_type の充填が消えた等) でも同じ。
+    // is_active だけで絞ると、日次が更新しない銘柄で投影を作り直してしまう。
+    sqlite.exec("UPDATE core_stocks SET is_active = 1, instrument_type = NULL");
+    await expect(rebuildMomentumProjection(db)).rejects.toThrow(emptyUniverse);
     expect(readProjection()).toHaveLength(1);
   });
 

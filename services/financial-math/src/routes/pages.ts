@@ -21,6 +21,7 @@ import { calcLogReturns, estimateBetaOLS, calcCapmExpectedReturn } from "../serv
 import { calcMomentum } from "../services/emh.js";
 import { requireBinding, requireDb } from "./env.js";
 import { publicSectorColumn } from "../../../../src/shared/db/public-columns.js";
+import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 
 /** SSR ページルーター */
 type Bindings = { DB: D1Database };
@@ -200,21 +201,23 @@ pagesRoute.get("/black-scholes", zValidator("query", bsQuerySchema), async (c) =
 //
 // 母集団は設計選択肢 (b) を採用済み: core.stocks を東証内国普通株
 // (共有4文字コード、~3,700) に
-// seed (src/cron/universe.ts) し、日次 sync (src/cron/daily.ts) が全 active の
-// core.stock_financials + swing.daily_ohlcv を更新する。EMH はそれを読むため、
-// universeSize = count(core.stocks WHERE is_active) は実際に集計可能な母集団と
-// 一致する (otakara の優待縛り ~1,600 ではない)。is_yutai フラグは 002 専用。
+// seed (src/cron/universe.ts) し、日次 sync (src/cron/daily.ts) が active かつ equity
+// (src/shared/db/active-equity.ts) の core.stock_financials + swing.daily_ohlcv を
+// 更新する。EMH はそれを読むため、universeSize = count(core_stocks WHERE active かつ
+// equity) は実際に集計可能な母集団と一致する (otakara の優待縛り ~1,600 ではない)。
+// small-cap / low-vol / post-earnings の件数と一覧も同じ述語で絞る (日次の対象から
+// 外れた非普通株の凍結値を並べない)。is_yutai フラグは 002 専用。
 pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   const q = c.req.valid("query");
   const db = createDb(requireDb(c));
 
-  // 全 active 銘柄数。`idx_core_stocks_active_market` 越しでも走査行は
+  // 母集団 (active かつ equity) の銘柄数。`idx_core_stocks_active_market` 越しでも走査行は
   // インデックスエントリ数 (実測 3,715) 分かかる。4 タブ共通の分母なので残すが、
   // これが /emh の残る走査行の大半である (詳細は PR の「コスト影響」)。
   const [{ universeSize }] = await db
     .select({ universeSize: sql<number>`count(*)` })
     .from(stocks)
-    .where(eq(stocks.isActive, true));
+    .where(activeEquityCondition());
 
   let rows: EmhRow[] = [];
   let totalMatched = 0;
@@ -312,7 +315,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
     const [{ matchedTotal }] = await db
       .select({ matchedTotal: sql<number>`count(*)` })
       .from(stockFinancials)
-      .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), eq(stocks.isActive, true)))
+      .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), activeEquityCondition()))
       .where(and(isNotNull(stockFinancials.marketCap), gt(stockFinancials.marketCap, 0), lt(stockFinancials.marketCap, thresholdYen)));
     totalMatched = matchedTotal;
 
@@ -327,7 +330,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         stockId: stocks.id,
       })
       .from(stockFinancials)
-      .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), eq(stocks.isActive, true)))
+      .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), activeEquityCondition()))
       .where(and(isNotNull(stockFinancials.marketCap), gt(stockFinancials.marketCap, 0), lt(stockFinancials.marketCap, thresholdYen)))
       .orderBy(asc(stockFinancials.marketCap))
       .limit(q.limit);
@@ -356,7 +359,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
     const [{ matchedTotal }] = await db
       .select({ matchedTotal: sql<number>`count(*)` })
       .from(stockIndicators)
-      .innerJoin(stocks, and(eq(stockIndicators.stockId, stocks.id), eq(stocks.isActive, true)))
+      .innerJoin(stocks, and(eq(stockIndicators.stockId, stocks.id), activeEquityCondition()))
       .where(and(isNotNull(stockIndicators.atrPct), gt(stockIndicators.atrPct, 0), lt(stockIndicators.atrPct, threshold)));
     totalMatched = matchedTotal;
 
@@ -372,7 +375,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         price: stockFinancials.price,
       })
       .from(stockIndicators)
-      .innerJoin(stocks, and(eq(stockIndicators.stockId, stocks.id), eq(stocks.isActive, true)))
+      .innerJoin(stocks, and(eq(stockIndicators.stockId, stocks.id), activeEquityCondition()))
       .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
       .where(and(isNotNull(stockIndicators.atrPct), gt(stockIndicators.atrPct, 0), lt(stockIndicators.atrPct, threshold)))
       .orderBy(asc(stockIndicators.atrPct))
@@ -419,7 +422,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
     const [{ matchedTotal }] = await db
       .select({ matchedTotal: sql<number>`count(*)` })
       .from(stockFinancials)
-      .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), eq(stocks.isActive, true)));
+      .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), activeEquityCondition()));
     totalMatched = matchedTotal;
 
     const records = await db
@@ -433,7 +436,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         fetchedAt: stockFinancials.fetchedAt,
       })
       .from(stockFinancials)
-      .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), eq(stocks.isActive, true)))
+      .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), activeEquityCondition()))
       .orderBy(desc(stockFinancials.fetchedAt))
       .limit(q.limit);
 

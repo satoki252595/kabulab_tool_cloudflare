@@ -140,8 +140,10 @@ beforeAll(() => {
 
   sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (1, 'QUOカード', 'quo'), (2, '食品・飲料', 'food')");
 
+  // 最後の引数は instrument_type。一覧の母集団は active かつ equity
+  // (src/shared/db/active-equity.ts) なので、母集団に入れる行は 'equity'。
   const insStock = sqlite.prepare(
-    "INSERT INTO core_stocks (id, code, name, market, sector, is_active, is_yutai) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO core_stocks (id, code, name, market, sector, is_active, is_yutai, instrument_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   );
   const insBenefit = sqlite.prepare(
     "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month) VALUES (?, ?, ?, ?, ?, ?)",
@@ -155,7 +157,7 @@ beforeAll(() => {
 
   for (let i = 1; i <= TOTAL_STOCKS; i++) {
     const code = String(1000 + i);
-    insStock.run(i, code, `テスト銘柄${i}`, "プライム", "小売業", 1, 1);
+    insStock.run(i, code, `テスト銘柄${i}`, "プライム", "小売業", 1, 1, "equity");
     insBenefit.run(i, 1, FORBIDDEN_TEXT, `${i * 100}円相当の優待券`, 100, i <= MARCH_STOCKS ? 3 : 9);
     // 同一銘柄に 3 月の優待をもう1件。inArray サブクエリが IN リストなので
     // 行は増えないはずで、増えたらここで露見する。
@@ -168,9 +170,19 @@ beforeAll(() => {
     insFin.run(i, 1000, 15, i <= 30 ? 0.8 : 2.5, 3.5, 40, 1.2, "2026-09-01");
   }
 
-  // 優待非対象 / 上場廃止は母集団に入らない
-  insStock.run(900, "9000", "優待なし銘柄", "プライム", "小売業", 1, 0);
-  insStock.run(901, "9001", "上場廃止銘柄", "プライム", "小売業", 0, 1);
+  // 優待非対象 / 上場廃止 / 非普通株 / 未分類は母集団に入らない
+  insStock.run(900, "9000", "優待なし銘柄", "プライム", "小売業", 1, 0, "equity");
+  insStock.run(901, "9001", "上場廃止銘柄", "プライム", "小売業", 0, 1, "equity");
+  // active かつ優待ありの非普通株と、instrument_type が NULL の行 (日次取込の対象外)。
+  // 優待・財務・スコアを持たせ、しかもスコアを最高にしてある。絞り込みが外れたら
+  // SSR の 1 ページ目とジャンルの 1 ページ目の先頭に並ぶので、「出ない」を検査できる。
+  insStock.run(902, "9002", "非普通株銘柄", "プライム", "小売業", 1, 1, "reit_fund");
+  insStock.run(903, "9003", "未分類銘柄", "プライム", "小売業", 1, 1, null);
+  for (const id of [902, 903]) {
+    insBenefit.run(id, 1, FORBIDDEN_TEXT, "非普通株の優待", 100, 9);
+    insScore.run(id, 99, 99, 99);
+    insFin.run(id, 1000, 15, 2.5, 3.5, 40, 1.2, "2026-09-01");
+  }
 
   d1 = createD1(sqlite);
 });
@@ -266,11 +278,33 @@ describe("/api/screening の絞り込みと総件数", () => {
     expect(page.total).toBe(0);
   });
 
-  it("優待非対象・上場廃止は母集団に入らない", async () => {
-    const page = await screening("withTotal=1&limit=100");
-    expect(page.total).toBe(TOTAL_STOCKS);
-    expect(page.items.map((s) => s.code)).not.toContain("9000");
-    expect(page.items.map((s) => s.code)).not.toContain("9001");
+  it("優待非対象・上場廃止・非普通株・instrument_type NULL は母集団に入らない", async () => {
+    const excluded = ["9000", "9001", "9002", "9003"];
+
+    // /api/screening: withTotal=1 の総件数と、全ページの行
+    const pages = [await screening("withTotal=1&limit=100"), await screening("limit=100&offset=100")];
+    expect(pages[0].total).toBe(TOTAL_STOCKS);
+    const codes = pages.flatMap((p) => p.items.map((s) => s.code));
+    expect(codes).toHaveLength(TOTAL_STOCKS);
+    for (const code of excluded) expect(codes, `/api/screening に ${code}`).not.toContain(code);
+
+    // SSR /screening: 初期の総件数と 1 ページ目の行
+    const ssr = await (await otakaraYutaiApp.request("/screening", {}, { DB: d1 })).text();
+    expect(ssr).toContain(`var total = ${TOTAL_STOCKS};`);
+    for (const code of excluded) {
+      expect(ssr, `SSR /screening に ${code}`).not.toContain(`"code":"${code}"`);
+    }
+
+    // /genres/:slug: 件数と 1 ページ目の行 (quo には 120 銘柄 + 非普通株 2 件の優待がある)
+    const genre = await (await otakaraYutaiApp.request("/genres/quo", {}, { DB: d1 })).text();
+    expect(genre).toContain(`(${TOTAL_STOCKS}銘柄)`);
+    for (const code of excluded) {
+      expect(genre, `/genres/quo に ${code}`).not.toContain(`/stocks/${code}"`);
+    }
+
+    // ホーム GET /: 銘柄数 (以前は is_yutai だけを見ていて、上場廃止まで数えていた)
+    const home = await (await otakaraYutaiApp.request("/", {}, { DB: d1 })).text();
+    expect(home).toContain(`<span class="num">${TOTAL_STOCKS.toLocaleString()}</span>`);
   });
 });
 
@@ -314,7 +348,7 @@ function recording(): { db: unknown; log: string[] } {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(DDL);
   sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (1, 'QUOカード', 'quo')");
-  sqlite.exec("INSERT INTO core_stocks (id, code, name, market, is_active, is_yutai) VALUES (1, '1001', 'A', 'プライム', 1, 1)");
+  sqlite.exec("INSERT INTO core_stocks (id, code, name, market, is_active, is_yutai, instrument_type) VALUES (1, '1001', 'A', 'プライム', 1, 1, 'equity')");
   const log: string[] = [];
   return { db: createD1(sqlite, log), log };
 }

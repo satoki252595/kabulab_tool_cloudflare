@@ -6,6 +6,7 @@ import {
   publicMarketColumn,
   publicSectorColumn,
 } from "../../../../src/shared/db/public-columns.js";
+import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import type { ScreeningQuery } from "../validators/screening.js";
 
 /** スクリーニング結果の1行 */
@@ -108,7 +109,9 @@ export async function screenStocks(
 
   // 鮮度以外の条件。鮮度で落ちた件数を数えるときに同じ条件を使い回す。
   const baseConditions: SQL[] = [
-    eq(stocks.isActive, true),
+    // 母集団 = active かつ equity (src/shared/db/active-equity.ts)。行の取得と
+    // staleExcluded が同じ配列を使うので、両方が同じ集合を見る。
+    activeEquityCondition(),
     sql`${targetColumn} IS NOT NULL`,
     lte(targetColumn, query.percentileMax),
   ];

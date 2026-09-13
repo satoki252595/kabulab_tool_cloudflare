@@ -31,7 +31,7 @@ const AS_OF = "2026-09-11";
 beforeEach(() => {
   d1 = createFinmathD1();
   const insStock = d1.sqlite.prepare(
-    "INSERT INTO core_stocks (id, code, name, market, sector, is_active) VALUES (?, ?, ?, ?, ?, ?)"
+    "INSERT INTO core_stocks (id, code, name, market, sector, is_active, instrument_type) VALUES (?, ?, ?, ?, ?, ?, 'equity')"
   );
   const insFin = d1.sqlite.prepare(
     "INSERT INTO core_stock_financials (stock_id, price, dividend_yield, market_cap, data_date) VALUES (?, ?, ?, ?, ?)"
@@ -86,7 +86,7 @@ describe("/emh?type=momentum は投影だけを読む", () => {
     // 投影に終値列が無い 1414 はランキングに現れない (= 該当 3 件)
     expect(codes).not.toContain("1414");
     expect(html).toContain("該当: 3 件");
-    // 母集団の分母は core_stocks の is_active 件数 (投影行数ではない)
+    // 母集団の分母は core_stocks の active かつ equity の件数 (投影行数ではない)
     expect(html).toContain("集計対象: 4 銘柄");
     // 終値列を持つ銘柄数と最長本数を併記する
     expect(html).toContain("終値列を持つ銘柄: 3 件 (最長 40 本)");
@@ -127,5 +127,56 @@ describe("/emh?type=momentum は投影だけを読む", () => {
         d1.executed.filter((q) => /^\s*(insert|update|delete|replace)\b/i.test(q))
       ).toEqual([]);
     }
+  });
+});
+
+describe("/emh の母集団は active かつ equity (非普通株を数えも並べもしない)", () => {
+  /**
+   * 日次の対象から外れた REIT。断面と指標は凍結したまま残っていて、small-cap /
+   * low-vol / post-earnings のどの条件も満たし、しかも絞り込みが外れたら先頭に
+   * 並ぶ値にしてある (時価総額が最小・ATR% が最小・fetched_at が最新)。
+   */
+  const REIT_CODE = "8951";
+
+  beforeEach(() => {
+    d1.sqlite
+      .prepare(
+        "INSERT INTO core_stocks (id, code, name, market, sector, is_active, instrument_type) VALUES (5, ?, 'REITテスト', 'REIT', NULL, 1, 'reit_fund')"
+      )
+      .run(REIT_CODE);
+    d1.sqlite.exec(
+      "INSERT INTO core_stock_financials (stock_id, price, dividend_yield, market_cap, data_date, fetched_at) VALUES (5, 100000, 4.0, 1.0e9, '2026-09-11', unixepoch() + 3600)"
+    );
+    d1.sqlite.exec(
+      "INSERT INTO swing_stock_indicators (stock_id, atr_pct, pct_change_1d) VALUES (5, 0.3, 0.5), (1, 0.9, 1.2)"
+    );
+  });
+
+  it("集計対象 (universeSize) に数えない", async () => {
+    for (const type of ["momentum", "small-cap", "low-vol", "post-earnings"]) {
+      expect(await emh(`type=${type}&limit=50`), type).toContain("集計対象: 4 銘柄");
+    }
+  });
+
+  it("small-cap の件数と一覧に出ない", async () => {
+    // 閾値を全銘柄が入る大きさにする (equity 4 件が並ぶ = 絞りすぎでないことも見る)
+    const html = await emh("type=small-cap&smallCapMaxOku=50000&limit=50");
+    expect(html).toContain("/dcf?code=7203");
+    expect(html).not.toContain(`code=${REIT_CODE}`);
+    expect(html).toContain("該当: 4 件");
+  });
+
+  it("low-vol の件数と一覧に出ない", async () => {
+    const html = await emh("type=low-vol&limit=50");
+    expect(html).toContain("/dcf?code=7203");
+    expect(html).not.toContain(`code=${REIT_CODE}`);
+    expect(html).toContain("該当: 1 件");
+  });
+
+  it("post-earnings の件数と一覧に出ない", async () => {
+    const html = await emh("type=post-earnings&limit=50");
+    expect(html).toContain("/dcf?code=7203");
+    expect(html).not.toContain(`code=${REIT_CODE}`);
+    expect(html).toContain("該当: 4 件");
   });
 });

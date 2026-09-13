@@ -14,6 +14,7 @@ import {
   publicMarketColumn,
   publicSectorColumn,
 } from "../../../../src/shared/db/public-columns.js";
+import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { yuhoDocuments, orderFacts } from "../db/schema.js";
 
 /** サービスで表示する最大年数 (EDINET 取得可能な過去分の上限と整合) */
@@ -53,7 +54,9 @@ export async function searchStocks(
     .from(stocks)
     .where(
       and(
-        eq(stocks.isActive, true),
+        // 母集団 = active かつ equity (src/shared/db/active-equity.ts)。
+        // 検索・スクリーニング・業種プルダウンで同じ集合を見る。
+        activeEquityCondition(),
         or(like(stocks.code, pat), like(stocks.name, pat))
       )
     )
@@ -323,7 +326,7 @@ export async function screenOrderGrowth(
     .innerJoin(yuhoDocuments, eq(orderFacts.documentId, yuhoDocuments.id))
     .innerJoin(stocks, eq(orderFacts.stockId, stocks.id))
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, orderFacts.stockId))
-    .where(and(eq(orderFacts.segmentKind, "total"), eq(stocks.isActive, true)));
+    .where(and(eq(orderFacts.segmentKind, "total"), activeEquityCondition()));
 
   // (stockId, fy) ごとに提出日時が最新の書類の値を採用
   type Pt = { ordersYen: number | null; backlogYen: number | null };
@@ -481,11 +484,12 @@ export async function listSectorsWithOrders(
 ): Promise<string[]> {
   const rows = await db
     // JPX 由来は公開面へ出さない (src/shared/db/public-columns.ts)。
-    // プルダウンの候補も結果表と同じ列から作る (ズレると絞り込みが空振りする)。
+    // プルダウンの候補も結果表と同じ列・同じ母集団 (active かつ equity) から作る
+    // (ズレると絞り込みが空振りする)。
     .selectDistinct({ sector: publicSectorColumn })
     .from(orderFacts)
     .innerJoin(stocks, eq(orderFacts.stockId, stocks.id))
-    .where(and(eq(orderFacts.segmentKind, "total"), eq(stocks.isActive, true)));
+    .where(and(eq(orderFacts.segmentKind, "total"), activeEquityCondition()));
   return rows
     .map((r) => r.sector)
     .filter((s): s is string => s !== null)
