@@ -372,8 +372,9 @@ export interface InstrumentTypeUpdate {
  * ## なぜ upsert だけでは足りないのか
  *
  * upsert が触るのは `isListedEquity` を通った行だけで、それ以外の active 行
- * (本番 2026-09-13 実測で 9 行: 優待のある J-REIT 等を `otakara` の取込が入れたもの)
- * は `instrument_type` が NULL のまま残る。また内国普通株が PRO Market へ移ると、
+ * (本番 2026-09-13 実測で 9 行: 優待のある J-REIT 等を `otakara` の取込が入れたもの。
+ * この 9 行は同日のユーザー決定で元データから削除する。優待の取込も 2026-09-14 から
+ * `core_stocks` に行を足さない) は `instrument_type` が NULL のまま残る。また内国普通株が PRO Market へ移ると、
  * その行は data_j に載り続けるので対象外化されず、upsert の対象からも外れ、
  * **`equity` のまま残る**。放置するとガード (c)(d2) の equity 分母が
  * `isListedEquity` の集合から毎月少しずつずれていく。

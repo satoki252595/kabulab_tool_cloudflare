@@ -461,8 +461,10 @@ export async function assertDailySchema(db: Db): Promise<void> {
  * Actions の所要時間・D1 の書込が増えないようにするため。述語の定義とライセンス判断は
  * src/shared/db/active-equity.ts。業種集計 (Phase 5) と投影 (Phase 6) も同じ述語を使う。
  *
- * 対象から外れた銘柄 (本番 2026-09-13: reit_fund 8 / investment_certificate 1) の
- * 派生行は消さない。更新が止まって凍結し、公開面の一覧は同じ述語で隠す。
+ * このコードは対象から外れた銘柄の派生行を消さない。更新が止まって凍結し、公開面の
+ * 一覧は同じ述語で隠す。2026-09-13 に外れた非普通株 9 銘柄 (reit_fund 8 /
+ * investment_certificate 1) は、同日のユーザー決定で core_stocks の行ごと元データから
+ * 削除する (一度きりの手作業で、このコードの仕事ではない)。
  * 対象が 0 件なら run を失敗にする判定 (`isDailySyncIncomplete`) は従来どおり効く。
  */
 export async function loadDailyTargets(db: Db) {

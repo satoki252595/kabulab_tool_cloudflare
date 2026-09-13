@@ -8,7 +8,8 @@
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as schema from "../src/db/schema.js";
 import { yutaiGenres, yutaiBenefits, stocks } from "../src/db/schema.js";
-import { sql, eq, inArray } from "drizzle-orm";
+import { and, sql, eq, inArray } from "drizzle-orm";
+import { findActiveEquityStockId } from "../../../src/shared/db/active-equity.js";
 import { benefitKey } from "./benefit-key.js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import "dotenv/config";
@@ -262,8 +263,37 @@ async function importToDb(allData: StockYutaiData[]) {
   //
   // is_yutai は「事前に全 false → ループで true」だと D1 HTTP クライアントが
   // トランザクション非対応のためループ途中で落ちると全優待が消える窓が
-  // できる。よって upsert を全件成功させた **後** に、今回スクレイプできた
+  // できる。よって is_yutai を立て終えた **後** に、今回取り込めた
   // code の補集合だけ false へ落とす後処理方式にする (CLAUDE.md ルール2)。
+  //
+  // 取り込み先の銘柄は、**全削除より前に**すべて引いておく。銘柄は core_stocks の
+  // active かつ equity (日次・公開面と同じ母集団。src/shared/db/active-equity.ts) から
+  // 引くだけで、行を足さない。1 件も引けないのは母集団側の異常 (is_active の一括
+  // 対象外化、instrument_type の充填が消えた等) で、削除の後に気づくと公開面の優待が
+  // 全銘柄で空になる。削除の前に止める。
+  const stockIds = new Map<string, number>();
+  const outOfUniverse: string[] = [];
+  for (const data of allData) {
+    const id = await findActiveEquityStockId(db, data.code);
+    if (id === null) outOfUniverse.push(data.code);
+    else stockIds.set(data.code, id);
+  }
+  if (stockIds.size === 0) {
+    throw new Error(
+      `取り込み先の銘柄が 1 件もありません (取得 ${allData.length} 件がすべて core_stocks の` +
+        ` active かつ equity に無い)。優待データは削除していません。` +
+        ` core_stocks の is_active / instrument_type を確認してください。`
+    );
+  }
+  console.info(
+    `  取り込み先の銘柄: ${stockIds.size}件 / 母集団 (active かつ equity) に無く飛ばす: ${outOfUniverse.length}件`
+  );
+  if (outOfUniverse.length > 0) {
+    console.warn(
+      `  飛ばすコード: ${outOfUniverse.slice(0, 30).join(", ")}${outOfUniverse.length > 30 ? " ..." : ""}`
+    );
+  }
+
   // 全削除の前に、**作り直せない派生値**を退避する。
   // short_summary / estimated_value はクラウド LLM 要約の取り込み
   // (import-summary-results.ts) の産物で、このスクリプトの INSERT では値を
@@ -312,23 +342,17 @@ async function importToDb(allData: StockYutaiData[]) {
   const failedCodes: string[] = [];
 
   for (const data of allData) {
+    const stockId = stockIds.get(data.code);
+    if (stockId === undefined) continue; // 母集団に無い。件数は上で出した
     try {
-      // JPX 母集団 seed で既に存在する可能性があるため upsert。
-      // is_yutai=true を立て、name/market は minkabu 由来で更新する。
-      const [stockRow] = await db.insert(stocks).values({
-        code: data.code,
-        name: data.name,
-        market: data.market,
-        isYutai: true,
-      }).onConflictDoUpdate({
-        target: stocks.code,
-        set: {
-          name: sql`excluded.name`,
-          market: sql`excluded.market`,
-          isYutai: sql`true`,
-          updatedAt: sql`(unixepoch())`,
-        },
-      }).returning({ id: stocks.id });
+      // is_yutai だけを立て、値が変わる行だけ書く (毎月全銘柄を書き直さない)。
+      // name / market は書かない。以前はここで取得元の銘柄名・市場名で core_stocks を
+      // 上書きしていたが、どちらも core_stocks の同期 (src/cron/universe.ts ほか) が
+      // 書く列で、優待の取込が上書きするものではない。
+      await db
+        .update(stocks)
+        .set({ isYutai: true, updatedAt: sql`(unixepoch())` })
+        .where(and(eq(stocks.id, stockId), eq(stocks.isYutai, false)));
       stockCount++;
       scrapedCodes.push(data.code);
 
@@ -347,7 +371,7 @@ async function importToDb(allData: StockYutaiData[]) {
           // 未解釈のまま入り、次の要約タスク書き出し (export-summary-tasks.ts) の対象になる。
           const previous = carried.get(benefitKey(data.code, stored));
           await db.insert(yutaiBenefits).values({
-            stockId: stockRow.id,
+            stockId,
             genreId,
             description: stored,
             shortSummary: previous?.shortSummary ?? null,

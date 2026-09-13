@@ -12,6 +12,18 @@
  *   (src/cron/monthly.ts Phase 2) も含む。
  * - **それを読む公開面の一覧・検索・件数**: rsi-screening / swing-trading /
  *   financial-math / otakara-yutai / yuho-quant。
+ * - **証券コードから `stock_id` を引く取込** (2026-09-14 に追加): TDnet 開示
+ *   (src/cron/ir-catalog-tdnet.ts と services/ir-catalog)、EDINET 有報
+ *   (src/cron/yuho-edinet.ts と services/yuho-quant/data-scripts/backfill.ts)、
+ *   優待 (services/otakara-yutai)。下の `loadActiveEquityCodeToId` /
+ *   `findActiveEquityStockId` を使う。
+ *
+ * 取込だけが `core_stocks` の全行でコードを引くと、公開面の一覧から外した銘柄の
+ * 開示・有報・優待が取り込まれ、Notion にも記録される。ir-catalog の一覧と検索は
+ * この述語で絞っていないので、そのまま表に出る。P4b が非普通株 (+725 行) を
+ * `core_stocks` に INSERT した時点で、その全銘柄について自動で取込が始まる。
+ * 優待の取込は、コードが `core_stocks` に無ければ行を足していた (区分が NULL の
+ * active 行になり、日次からも公開面からも外れたまま残る)。
  *
  * 片方だけを絞ると分母と分子が別の集合になる。日次だけを絞って公開面を
  * `is_active` のままにすると、日次が更新しなくなった非普通株の凍結値が
@@ -76,6 +88,7 @@
  *   新しい呼び出し元を足すときは、実際に発行される SQL で rows_read を測ること。
  */
 import { and, eq, type SQL } from "drizzle-orm";
+import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { INSTRUMENT_TYPE_EQUITY } from "../jpx/instrument-type.js";
 import { stocks } from "./core-schema.js";
 
@@ -85,4 +98,44 @@ export function activeEquityCondition(): SQL {
     eq(stocks.isActive, true),
     eq(stocks.instrumentType, INSTRUMENT_TYPE_EQUITY)
   ) as SQL;
+}
+
+/**
+ * `core_stocks` にアクセスできれば足りる最小の drizzle db 型。Worker のバインディング版
+ * (DrizzleD1Database) と Node の D1 HTTP 版 (sqlite-proxy) のどちらも渡せる
+ * (src/shared/db/core-repo.ts と同じ形)。
+ */
+type CoreDb = BaseSQLiteDatabase<"async", unknown, Record<string, unknown>>;
+
+/**
+ * 取込用の code → `stock_id` 表。母集団は `activeEquityCondition()` と同じ。
+ *
+ * 表に無いコード (上場廃止・非普通株・区分が NULL・`core_stocks` に無い) は、
+ * 呼び出し側でユニバース外として飛ばす。
+ *
+ * rows_read (本番 2026-09-14 実測): 絞る前の全行 SELECT が 3,819、この形が 3,709
+ * (`idx_core_stocks_active_market` の `is_active=?` で引く)。絞っても増えない。
+ */
+export async function loadActiveEquityCodeToId(db: CoreDb): Promise<Map<string, number>> {
+  const rows = await db
+    .select({ id: stocks.id, code: stocks.code })
+    .from(stocks)
+    .where(activeEquityCondition());
+  return new Map(rows.map((r) => [r.code, r.id]));
+}
+
+/**
+ * 1 コードぶんの `stock_id`。母集団 (active かつ equity) に無ければ `null`。
+ *
+ * **`core_stocks` に行を足さない。** 以前の優待取込は、見つからなければ INSERT
+ * していた。ここで `null` を返し、呼び出し側が件数を記録して飛ばす。
+ *
+ * rows_read (本番 2026-09-14 実測): 1。`code` の一意索引で引くので、絞らない形と同じ。
+ */
+export async function findActiveEquityStockId(db: CoreDb, code: string): Promise<number | null> {
+  const rows = await db
+    .select({ id: stocks.id })
+    .from(stocks)
+    .where(and(eq(stocks.code, code), activeEquityCondition()));
+  return rows[0]?.id ?? null;
 }

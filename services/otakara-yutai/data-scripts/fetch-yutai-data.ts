@@ -4,7 +4,8 @@
  */
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as schema from "../src/db/schema.js";
-import { yutaiGenres, yutaiBenefits, stocks } from "../src/db/schema.js";
+import { yutaiGenres, yutaiBenefits } from "../src/db/schema.js";
+import { findActiveEquityStockId } from "../../../src/shared/db/active-equity.js";
 import { eq } from "drizzle-orm";
 import "dotenv/config";
 
@@ -202,33 +203,23 @@ async function main() {
   console.log(`   ジャンル: ${genreCache.size}件`);
 
   // 銘柄 + 優待情報 作成
-  let stockCount = 0;
   let benefitCount = 0;
   let skipCount = 0;
+  const outOfUniverse: string[] = [];
 
   for (const stock of allStocks.values()) {
     try {
-      // 銘柄 find or create
-      let stockId: number;
+      // 銘柄は core_stocks の active かつ equity (日次・公開面と同じ母集団。
+      // src/shared/db/active-equity.ts) から引くだけで、行を足さない。以前は見つからない
+      // 銘柄を INSERT しており、足した行は区分が NULL の active 行として残った。
       // 列は id だけ。core_stocks の `personal-only` 列 (sector33 / sector17 /
       // instrument_type / license_tag / src_source / quality) を取込プロセスへ
       // 載せない。列指定なし select の禁止は
       // src/shared/db/core-stocks-license-boundary.test.ts が見ている。
-      const existing = await db
-        .select({ id: stocks.id })
-        .from(stocks)
-        .where(eq(stocks.code, stock.code))
-        .limit(1);
-      if (existing.length > 0) {
-        stockId = existing[0].id;
-      } else {
-        const [newS] = await db.insert(stocks).values({
-          code: stock.code,
-          name: stock.name,
-          market: "東証",
-        }).returning({ id: stocks.id });
-        stockId = newS.id;
-        stockCount++;
+      const stockId = await findActiveEquityStockId(db, stock.code);
+      if (stockId === null) {
+        outOfUniverse.push(stock.code);
+        continue;
       }
 
       // 優待情報を作成（月×ジャンル）
@@ -259,7 +250,7 @@ async function main() {
   console.log("\n" + "=".repeat(50));
   console.log("📊 インポート結果:");
   console.log(`   ジャンル: ${genreCache.size}件`);
-  console.log(`   新規銘柄: ${stockCount}件`);
+  console.log(`   母集団 (active かつ equity) に無く飛ばした銘柄: ${outOfUniverse.length}件`);
   console.log(`   優待情報: ${benefitCount}件`);
   console.log(`   スキップ: ${skipCount}件`);
   console.log(`   全ユニーク銘柄: ${allStocks.size}件`);

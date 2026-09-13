@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { stocks, yutaiGenres, yutaiBenefits } from "../db/schema.js";
+import { yutaiGenres, yutaiBenefits } from "../db/schema.js";
+import { findActiveEquityStockId } from "../../../../src/shared/db/active-equity.js";
 
 /**
  * 優待生データの型定義
@@ -157,8 +158,16 @@ function generateSlug(name: string): string {
 /**
  * 優待データをDBにインポートする
  *
- * ジャンル・銘柄・優待情報をそれぞれfind or createし、
- * 優待情報はupsert（既存があれば更新）する。
+ * 銘柄は `core_stocks` の active かつ equity (日次・公開面と同じ母集団。
+ * src/shared/db/active-equity.ts) から引くだけで、**行を足さない**。母集団に無い
+ * コード (非普通株・区分が NULL・上場廃止・`core_stocks` に無い) は `skipped` に
+ * 数えて飛ばし、ジャンルも作らない。
+ *
+ * 以前は見つからない銘柄を INSERT していた。足した行は区分が NULL の active 行になり、
+ * 日次からも公開面からも外れたまま残る (src/cron/universe.ts の instrument_type 充填の
+ * 注記にある、本番 2026-09-13 の 9 行はこの種類の取込が入れたもの)。
+ *
+ * ジャンルはfind or createし、優待情報はupsert（既存があれば更新）する。
  *
  * @param db - Drizzle ORMのデータベースインスタンス
  * @param data - インポートする優待生データの配列
@@ -174,9 +183,23 @@ export async function importYutaiData(
     return result;
   }
 
+  const outOfUniverse: string[] = [];
+
   for (const item of data) {
     try {
-      // 1. ジャンルをfind or create
+      // 1. 銘柄を引く (足さない)。
+      // 列は id だけ。core_stocks の `personal-only` 列 (sector33 / sector17 /
+      // instrument_type / license_tag / src_source / quality) を取込プロセスへ
+      // 載せない。列指定なし select の禁止は
+      // src/shared/db/core-stocks-license-boundary.test.ts が見ている。
+      const stockId = await findActiveEquityStockId(db, item.stockCode);
+      if (stockId === null) {
+        outOfUniverse.push(item.stockCode);
+        result.skipped += 1;
+        continue;
+      }
+
+      // 2. ジャンルをfind or create
       const existingGenres = await db
         .select()
         .from(yutaiGenres)
@@ -194,31 +217,6 @@ export async function importYutaiData(
           })
           .returning({ id: yutaiGenres.id });
         genreId = newGenre.id;
-      }
-
-      // 2. 銘柄をfind or create
-      // 列は id だけ。core_stocks の `personal-only` 列 (sector33 / sector17 /
-      // instrument_type / license_tag / src_source / quality) を取込プロセスへ
-      // 載せない。列指定なし select の禁止は
-      // src/shared/db/core-stocks-license-boundary.test.ts が見ている。
-      const existingStocks = await db
-        .select({ id: stocks.id })
-        .from(stocks)
-        .where(eq(stocks.code, item.stockCode));
-
-      let stockId: number;
-      if (existingStocks.length > 0) {
-        stockId = existingStocks[0].id;
-      } else {
-        const [newStock] = await db
-          .insert(stocks)
-          .values({
-            code: item.stockCode,
-            name: item.stockName,
-            market: item.market,
-          })
-          .returning({ id: stocks.id });
-        stockId = newStock.id;
       }
 
       // 3. 優待情報をupsert
@@ -251,6 +249,13 @@ export async function importYutaiData(
       );
       result.skipped += 1;
     }
+  }
+
+  if (outOfUniverse.length > 0) {
+    console.warn(
+      `母集団 (active かつ equity) に無い銘柄を ${outOfUniverse.length} 件飛ばしました:` +
+        ` ${outOfUniverse.slice(0, 30).join(", ")}${outOfUniverse.length > 30 ? " ..." : ""}`,
+    );
   }
 
   return result;

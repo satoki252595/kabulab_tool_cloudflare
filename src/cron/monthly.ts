@@ -66,11 +66,14 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
   console.info("[sync-monthly] Phase 2: otakara public 再構築");
 
   // 母集団は日次 (src/cron/daily.ts の loadDailyTargets) と同じ active かつ equity。
-  // 日次を equity に絞ったため、非普通株の断面 (core_stock_financials /
-  // swing_stock_indicators) は更新されず凍結する。非普通株はここで作り直さない
+  // 母集団から外れた行 (上場廃止した銘柄など) の断面 (core_stock_financials /
+  // swing_stock_indicators) は日次で更新されず凍結するので、ここでも作り直さない
   // (作り直すと、止まった値に毎月その日の data_date が付き、新しい値に見える)。
-  // 既に書かれている非普通株の otakara 行は消さない。一覧・件数は同じ述語で隠し、
+  // このコードは既に書かれた otakara 行を消さない。一覧・件数は同じ述語で隠し、
   // 詳細 (/stocks/:code) は data_date を「財務指標の更新日」として出す。
+  // 2026-09-13 に日次の対象から外れた非普通株 9 銘柄 (reit_fund 8 /
+  // investment_certificate 1) は、同日のユーザー決定で core_stocks の行ごと元データから
+  // 削除する (一度きりの手作業で、このコードの仕事ではない)。削除後、その詳細は 404 になる。
   //
   // 注意: 下の `dataDate: today` は equity の行にも月次の実行日を付ける。元の
   // core_stock_financials.data_date (日次の取得日。通常は数日前) は引き継いでいない。

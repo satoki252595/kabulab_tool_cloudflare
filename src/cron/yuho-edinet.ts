@@ -10,14 +10,15 @@
  *
  * 動作:
  *   - 直近 WINDOW_DAYS 日を新しい順に EDINET 書類一覧で走査
- *   - core_stocks に居る上場銘柄の有報 (120/130) のうち未取込のものを
+ *   - core_stocks の active かつ equity (日次・公開面と同じ母集団。
+ *     src/shared/db/active-equity.ts) の有報 (120/130) のうち未取込のものを
  *     ingestDocument で構造化保存 (CSV 事前判定で受注なしは XBRL を落とさない)
  *   - 1 回の実行は MAX_INGEST 件 / TIME_BUDGET_MS で打ち切り。残りは次回実行が
  *     拾う (docId 一意で冪等)。6 月の有報集中期も実行回数×日数で吸収。
  */
 import { eq } from "drizzle-orm";
 import type { Database } from "../../services/yuho-quant/src/db/client.js";
-import * as coreSchema from "../shared/db/core-schema.js";
+import { loadActiveEquityCodeToId } from "../shared/db/active-equity.js";
 import * as yuhoSchema from "../../services/yuho-quant/src/db/schema.js";
 import { listDocuments } from "../../services/yuho-quant/src/services/edinet/client.js";
 import {
@@ -77,11 +78,10 @@ export async function runYuhoEdinetCatchup(
 ): Promise<YuhoEdinetResult> {
   const startedAt = Date.now();
 
-  const allStocks = await db
-    .select({ id: coreSchema.stocks.id, code: coreSchema.stocks.code })
-    .from(coreSchema.stocks);
-  const codeToId = new Map<string, number>();
-  for (const s of allStocks) codeToId.set(s.code, s.id);
+  // 母集団は日次・公開面と同じ active かつ equity。yuho-quant の検索・スクリーニングは
+  // この述語で絞っているので、母集団外の有報は取り込んでも表に出ず、EDINET と Notion の
+  // 帯域だけを使う (理由は src/shared/db/active-equity.ts)。
+  const codeToId = await loadActiveEquityCodeToId(db);
 
   const byStatus: Record<string, number> = {};
   let scannedDays = 0;

@@ -1,7 +1,7 @@
 /**
  * TDnet 適時開示 全履歴バックフィル (一回限り・手動。cron 非対象)。
  *
- * 月単位で新しい順に遡り、各月の全開示を取得 → core.stocks に居る個別株
+ * 月単位で新しい順に遡り、各月の全開示を取得 → core_stocks の active かつ equity
  * だけに絞って ir_catalog.disclosures へ冪等 upsert。さらにルール6 に従い
  * 「取得バッチ (= 月) 単位の確定 JSONL」を Notion 一次データへ実体
  * アップロードし、高シグナル開示は人間可読 Notion DB へ冪等記録する。
@@ -36,7 +36,7 @@ import "dotenv/config";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as irSchema from "../src/db/schema.js";
 import type { Database } from "../src/db/client.js";
-import { stocks } from "../../rsi-screening/src/db/core-schema.js";
+import { loadActiveEquityCodeToId } from "../../../src/shared/db/active-equity.js";
 import { isArchived } from "../../../src/shared/notion-archive/index.js";
 import { listRange } from "../src/services/tdnet/client.js";
 import { ingestBatch } from "../src/services/ingest.js";
@@ -99,13 +99,12 @@ async function main(): Promise<void> {
       ? Date.now() + Math.max(0.1, Number(ndh)) * 3600_000
       : undefined;
 
-  const allStocks = await db
-    .select({ id: stocks.id, code: stocks.code })
-    .from(stocks);
-  const codeToId = new Map<string, number>();
-  for (const s of allStocks) codeToId.set(s.code, s.id);
+  // 母集団は日次キャッチアップ (src/cron/ir-catalog-tdnet.ts) と同じ active かつ equity。
+  // 上場廃止した銘柄と非普通株の開示は、過去の月でも取り込まない
+  // (理由は src/shared/db/active-equity.ts)。
+  const codeToId = await loadActiveEquityCodeToId(db);
   console.info(
-    `[ir:backfill] core.stocks ${codeToId.size} 社 / ${pad(from.m)}/${from.y}〜${pad(
+    `[ir:backfill] core_stocks (active かつ equity) ${codeToId.size} 社 / ${pad(from.m)}/${from.y}〜${pad(
       to.m
     )}/${to.y}` +
       (tickerFilter ? ` / ticker=${tickerFilter} (DB 反映を1社に限定)` : "") +

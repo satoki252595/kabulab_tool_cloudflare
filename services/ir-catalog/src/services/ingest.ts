@@ -2,8 +2,9 @@
  * TDnet 適時開示バッチの取り込み (バックフィル / 日次キャッチアップ共用)。
  *
  * 流れ:
- *   1. TDnet items を core.stocks に居る個別株だけに絞る (ユニバース外の
- *      ETF/REIT/非上場/上場廃止コードは正直に切り捨てる — 推測しない)
+ *   1. TDnet items を core_stocks の active かつ equity (日次・公開面と同じ母集団。
+ *      src/shared/db/active-equity.ts) に絞る。ユニバース外 (ETF/REIT 等の非普通株・
+ *      区分が NULL・非上場・上場廃止のコード) は正直に切り捨てる — 推測しない
  *   2. タイトルを決定論的に分類 (classify)。未分類は tags=[] のまま
  *   3. ir_catalog.disclosures へ冪等 upsert (tdnet_id 一意)
  *   4. ルール6: 取得バッチ単位の確定 JSONL を「一次データ｜ir-catalog」へ
@@ -27,7 +28,7 @@ import {
 } from "../../../../src/shared/notion-archive/index.js";
 import type { Database } from "../db/client.js";
 import { disclosures } from "../db/schema.js";
-import { stocks } from "../../../../src/shared/db/core-schema.js";
+import { loadActiveEquityCodeToId } from "../../../../src/shared/db/active-equity.js";
 import { classify, notionTagOptions, buffettCodeUrl } from "./classify.js";
 import { companyCodeToTicker, type TdnetItemRaw } from "./tdnet/types.js";
 import { classifyPdfSentiment } from "./pdf-sentiment/index.js";
@@ -44,7 +45,11 @@ export interface IngestOptions {
   /** 二次データ投入の打ち切り絶対時刻 (epoch ms)。日次 cron 用。
    *  未指定 = 無制限 (backfill。再開可能) */
   notionByStockDeadlineMs?: number;
-  /** core.stocks の code→id マップ (バックフィルで再取得を避けるため注入可) */
+  /**
+   * code→id マップ (バックフィルで再取得を避けるため注入可)。注入するなら
+   * src/shared/db/active-equity.ts の `loadActiveEquityCodeToId` で作ること
+   * (省略時もそれで作る。母集団を日次・公開面と揃えるため)。
+   */
   codeToId?: Map<string, number>;
   /**
    * 既存 terminal (uploaded+hasFile) 行に対しても PDF を再 fetch + 再判定する。
@@ -57,7 +62,7 @@ export interface IngestOptions {
 
 export interface IngestResult {
   fetched: number;
-  /** ユニバース内 (= core.stocks に居る) に絞った件数 */
+  /** ユニバース内 (= core_stocks の active かつ equity) に絞った件数 */
   inUniverse: number;
   upserted: number;
   /** タグが 1 つも付かなかった (未分類) 件数 */
@@ -79,15 +84,6 @@ export interface IngestResult {
       }
     | { error: string }
     | null;
-}
-
-async function loadCodeToId(db: Database): Promise<Map<string, number>> {
-  const rows = await db
-    .select({ id: stocks.id, code: stocks.code })
-    .from(stocks);
-  const m = new Map<string, number>();
-  for (const r of rows) m.set(r.code, r.id);
-  return m;
 }
 
 /**
@@ -172,7 +168,7 @@ function parsePubdate(s: string): Date {
 /**
  * TDnet items を取り込み可能な行へ変換する純関数 (DB 非依存・テスト可能)。
  *
- *  - ユニバース外 (ticker が core.stocks に無い) / コード不正は正直に除外
+ *  - ユニバース外 (ticker が codeToId に無い) / コード不正は正直に除外
  *  - tdnet_id で de-dupe (後勝ち)。TDnet は訂正再掲で同一 id を同一バッチに
  *    複数返すことがあり、その重複が 1 INSERT 内に入ると Postgres が
  *    「ON CONFLICT DO UPDATE command cannot affect row a second time」で
@@ -212,7 +208,7 @@ export async function ingestBatch(
   items: TdnetItemRaw[],
   opts: IngestOptions
 ): Promise<IngestResult> {
-  const codeToId = opts.codeToId ?? (await loadCodeToId(db));
+  const codeToId = opts.codeToId ?? (await loadActiveEquityCodeToId(db));
   const prepared = prepareRows(items, codeToId);
 
   const byPrimaryTag: Record<string, number> = {};

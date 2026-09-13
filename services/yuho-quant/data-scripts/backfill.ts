@@ -1,7 +1,7 @@
 /**
  * 有価証券報告書 受注データ 5 年バックフィル (一回限り・手動。cron 非対象)。
  *
- * EDINET 書類一覧 API を日次で遡り、対象=core.stocks に存在する上場銘柄の
+ * EDINET 書類一覧 API を日次で遡り、対象=core_stocks の active かつ equity の
  * 有報 (docTypeCode 120/130) を見つけて ingestDocument で構造化・保存する。
  *
  * 設計 (CLAUDE.md):
@@ -39,7 +39,7 @@ import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as yuhoSchema from "../src/db/schema.js";
 import type { Database } from "../src/db/client.js";
 import { inArray } from "drizzle-orm";
-import { stocks } from "../../rsi-screening/src/db/core-schema.js";
+import { loadActiveEquityCodeToId } from "../../../src/shared/db/active-equity.js";
 import { yuhoDocuments } from "../src/db/schema.js";
 import { listDocuments } from "../src/services/edinet/client.js";
 import {
@@ -162,14 +162,11 @@ async function main(): Promise<void> {
   // (EDINET は公開上限なしだが常識的レートに収めるため上限 4)。
   const concurrency = Math.min(4, Math.max(1, Number(arg("concurrency") ?? "1")));
 
-  // core.stocks の code(4桁) → stockId マップ
-  const allStocks = await db
-    .select({ id: stocks.id, code: stocks.code })
-    .from(stocks);
-  const codeToId = new Map<string, number>();
-  for (const s of allStocks) codeToId.set(s.code, s.id);
+  // code(4桁) → stockId マップ。母集団は日次キャッチアップ (src/cron/yuho-edinet.ts) と
+  // 同じ active かつ equity (理由は src/shared/db/active-equity.ts)。
+  const codeToId = await loadActiveEquityCodeToId(db);
   console.info(
-    `[backfill] core.stocks ${codeToId.size} 社 / 期間 ${from}〜${to}` +
+    `[backfill] core_stocks (active かつ equity) ${codeToId.size} 社 / 期間 ${from}〜${to}` +
       (tickerFilter ? ` / ticker=${tickerFilter}` : "")
   );
 
