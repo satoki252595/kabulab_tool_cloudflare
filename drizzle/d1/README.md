@@ -22,12 +22,24 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 | 新規 DB (ローカル / preview) | `0000` から**全ファイルを番号順に流す**。`0010` も含める |
 
 `0011_clean_iron_fist.sql`（`p_momentum` の CREATE TABLE）は 2026-09-13 に本番
-`sqlite_master` で `p_momentum` の存在を確認済み（以下は適用前に書いた注意）。
-当初は**本番未適用**だった。
-`CREATE TABLE` 1 文だけで既存表に触らないので本番へそのまま流せる。
+`sqlite_master` で `p_momentum` の存在を確認済み。
 流す前にこれを適用しておかないと、日次 sync が Phase 1 の `assertDailySchema` で
 `p_momentum.closes` を確認できず即座に落ちる（3,700 銘柄を取り終えてから
 落ちるのを避けるために、あえて取得前に落としている）。
+
+### 0013〜0017 は通常の DDL。番号順に流す
+
+| migration | 内容 | 本番 |
+|---|---|---|
+| `0013` | 索引の整理 (未使用 INDEX の DROP + `ir_disclosures` 高シグナル部分索引の CREATE) | 要確認 |
+| `0014` | `ir_disclosures_primary_tag_idx` の DROP | 要確認 |
+| `0015` | `swing_stock_screening` の DROP + `swing_stock_indicators` へ畳み込み 6 列の ADD (L-52) | 要確認 |
+| `0016` | `otakara_stock_scores` へ `yutai_months` / `yutai_genre_ids` の ADD | 要確認 |
+| `0017` | L2 投影 `p_yuho_growth` の CREATE TABLE (K4b) | **適用済み** (09-14 に 1,302 行を確認) |
+
+0013〜0016 は本番 `sqlite_master` で適用状態を確かめてから、未適用のものだけ
+番号順に流す。0012 と同じく stockStock の地図 (`TABLE_LICENSE` /
+`RETIRED_TABLES`) との突合 (P6) が前提。0017 は適用済みなので流さない。
 
 ### 0012（finmath の 2 表の DROP）は順序と事前確認がある
 

@@ -31,7 +31,7 @@ src/
 └── shared/
     ├── design.ts            # 共通デザイントークン (CSS 変数 / フォントリンク)
     ├── auth.ts              # 統一 cron Bearer token 検証
-    ├── db/                  # D1(SQLite) 共有 core スキーマ + CF 型 (ADR-0001)
+    ├── db/                  # D1(SQLite) 共有 core スキーマ + CF 型
     ├── yahoo/ / jpx/ / indicators/
     └── ... (scoring / screener / patterns / macro / sector-aggregate / types)
 ```

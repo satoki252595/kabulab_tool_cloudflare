@@ -3,7 +3,7 @@ main = "worker/entry.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
 
-# 配信 + プロキシ。全サービス D1 移行済み(ADR-0001)。Worker は **無料プラン**で運用する:
+# 配信 + プロキシ。全サービス D1 移行済み。Worker は **無料プラン**で運用する:
 #   - 配信: ポータル + 各サービス(D1 読取は c.env.DB バインディング)
 #   - 取込プロキシ: Node(GitHub Actions)からの Yahoo 取得を Cloudflare エッジ経由に
 #     する認証プロキシ(/api/ingest/yahoo の 1 系統)。自宅/CI の
@@ -24,7 +24,7 @@ binding = "ASSETS"
 binding = "BUCKET"
 bucket_name = "vwap-data"
 
-# 正規化リレーショナルの正本（ADR-0001）。Neon からの移行先。binding=DB で
+# 正規化リレーショナルの正本。Neon からの移行先。binding=DB で
 # c.env.DB から参照する。時系列は R2、一次データ(raw)は Notion に置く方針。
 # 単一 D1 にサービス別接頭辞テーブル（core_* / yuho_* / ...）を集約する。
 [[d1_databases]]

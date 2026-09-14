@@ -10,12 +10,12 @@
 import "dotenv/config";
 import { spawnSync } from "node:child_process";
 
-// 有報 EDINET は D1 へ移行済み（ADR-0001）。取込は Worker 側の認証ルートで
+// 有報 EDINET は D1 へ移行済み。取込は Worker 側の認証ルートで
 // 実行するため、本ローカル日次パイプラインからは外した（`pnpm ingest:yuho-edinet`
 // が Worker /yuho-quant/admin/catchup を叩く独立トリガになっている）。
-// 適時開示 TDnet は D1 へ移行済み（ADR-0001）。取込は Worker 認証ルートで実行する
-// ため本ローカル日次パイプラインからは外した（`pnpm ingest:ir-tdnet` が Worker
-// /ir-catalog/admin/catchup を叩く独立トリガになっている）。
+// 適時開示 TDnet は D1 へ移行済み。取込は `pnpm ingest:ir-tdnet` の Node 直接実行
+// (kuromoji が Node 専用のため。Worker 側に /ir-catalog/admin/catchup は無い) で
+// 行うため、本ローカル日次パイプラインからは外した。
 const steps: Array<[string, string]> = [
   ["core/rsi/swing 日次 (Node → D1 REST)", "scripts/sync/daily.ts"],
   ["VWAP 日足10年→R2", "scripts/vwap/ingest-daily.ts"],

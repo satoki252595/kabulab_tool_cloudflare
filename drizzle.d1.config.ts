@@ -22,10 +22,10 @@
 import { defineConfig } from "drizzle-kit";
 
 /**
- * Cloudflare D1(SQLite) スキーマ生成設定（ADR-0001）。
+ * Cloudflare D1(SQLite) スキーマ生成設定。
  *
- * Neon 用の各 drizzle.<service>.config.ts（dialect=postgresql）とは別に、D1 へ
- * 移行したサービスの sqlite-core スキーマをここへ集約する。D1 は 1 DB = 1 SQLite
+ * 旧 Neon 用の各 drizzle.<service>.config.ts（dialect=postgresql。K1a で削除済み）とは別に、
+ * D1 へ移行したサービスの sqlite-core スキーマをここへ集約する。D1 は 1 DB = 1 SQLite
  * のため、共有 core と各サービスを単一 DB に同居させ、接頭辞でテーブルを分ける。
  *
  *   pnpm exec drizzle-kit generate --config=drizzle.d1.config.ts   # SQL 生成
@@ -43,7 +43,7 @@ export default defineConfig({
     "./src/shared/db/projection-schema.ts",
     "./services/yuho-quant/src/db/schema.ts",
     "./services/ir-catalog/src/db/schema.ts",
-    // ADR-0001 第2弾: 001/002/003/004 を Neon→D1 へ移行 (cluster)。
+    // 001/002/003/004 の D1 スキーマ。
     // swing-readonly.ts は swing/schema.ts のテーブルの再宣言なので追加しない
     // (同名 CREATE TABLE 重複を避ける)。
     "./services/rsi-screening/src/db/schema.ts",
