@@ -34,23 +34,23 @@
 
 ---
 
-## 残っている除外（1 ファイル / 型エラー 1 件）
+## 残っている除外（0 ファイル — 完済）
 
-| ファイル | 件数 | 実行経路 |
-|---|---|---|
-| `services/financial-math/scripts/verify-price-cache.ts` | 1 (TS2345) | 手動 `pnpm exec tsx` |
+`services/financial-math/scripts/verify-price-cache.ts` (TS2345 1 件) は EMH レーンが
+ファイルごと削除したため、`tsconfig.json` の `exclude` は `node_modules` / `dist` のみ
+(実質なし) になった。**借金残高はゼロ**。以下は解決済みの記録として残す。
 
-下記 (a) の移行残骸 1 箇所だけ。sibling の `verify-capm-bs.ts` と**同じ直し方**
-（`createDb(接続文字列)` → `createD1HttpDb`）で消えるが、EMH レーンがこのファイル
-自体を削除する可能性があるため手を付けていない。削除しない結論になったら、
-その 1 行の差し替えと `tsconfig.json` の `exclude` からの削除を一緒にやること。
+> 新しい除外を足すときは規模と実行経路をここに必ず書くこと
+> (黙って除外すると、ILIKE と重複キーが 4,245 行の死にコードに紛れて
+> CI を通った件を繰り返す)。
 
 ---
 
-## 解決済み（4 ファイル / 32 件）— 「33 件」の内訳を測り直した
+## 解決済み（5 ファイル / 33 件）— 完済。「33 件」の内訳を測り直した
 
 2026-09-13 に 4 ファイルを検査対象へ戻した（`exclude` から削除済み）。
 **件数の内訳は当初の記述と違っていた**ので、測り直した結果を残す。
+残り 1 ファイル (`verify-price-cache.ts`) は EMH レーンが削除して完済。
 
 | ファイル | 当初 | 実際の原因 | 対応 |
 |---|---|---|---|
@@ -58,6 +58,7 @@
 | `services/yuho-quant/data-scripts/backfill.ts` | 2 | (a) 1 件 + (b') 1 件 | 直して検査対象へ（**実行は無効のまま**。下記 (e')） |
 | `services/yuho-quant/data-scripts/audit-all.ts` | 2 | (a) 1 件 + (c') 1 件 | **削除** |
 | `services/financial-math/scripts/verify-capm-bs.ts` | 2 | (a) 1 件 + (d') 1 件 | 削除（K1a。一度きりスモーク。`export` も内側へ戻した） |
+| `services/financial-math/scripts/verify-price-cache.ts` | 1 | (a) 1 件 | 削除（EMH レーン。Neon 期のシグネチャで既に動かなかった） |
 
 当初この表には「実行経路」列があり、5 ファイルすべてを
 「実際に `tsx` 実行される Node スクリプト」と書いていた。**これも誤りだった**:
@@ -193,20 +194,20 @@ per-statement の冪等 update/insert で書く」と明記して `ingestDocumen
 
 ## lint 側の死角
 
-`pnpm lint` は `eslint src services` なので、以下は lint されない
-（実測: lint されているのは `src` と `services` の 228 ファイルのみ）。
+`pnpm lint` は `eslint src services` なので、以下は lint されない。
 
 | 範囲 | TS ファイル数 | 中身 |
 |---|---|---|
-| `scripts/**` | 13 | `sync:*` / `ingest:*` の実行本体 |
+| `scripts/**` | 12 | `sync:*` / `ingest:*` の実行本体 |
 | `worker/**` | 1 | **本番エントリ `worker/entry.ts`** |
 | `*.config.ts` | 数件 | `vitest.config.ts` / `drizzle.*.config.ts` |
+| `tests/**` (root) | 数件 | root 直下のテスト |
 
 `worker/entry.ts` は本番エントリなので、優先的に対象へ入れるべき。
 確認は `npx eslint src services --format=json` で対象ファイルを数えればよい
 （`eslint` は指定パス外を黙って無視するので、緑でも対象内とは限らない）。
-本 PR では lint 対象を広げていない（既存 warning 116 件の扱いを決める必要があり、
-死角を塞ぐ話とは別の判断になるため）。
+lint 対象は広げていない（既存 warning 32 件〈2026-09-14 実測。以前は 116 件〉の
+扱いを決める必要があり、死角を塞ぐ話とは別の判断になるため）。
 
 ---
 
