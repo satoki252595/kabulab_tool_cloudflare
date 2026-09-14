@@ -4,7 +4,7 @@
 
 ## 0. 前提
 
-kabulab は **単一の Cloudflare Workers プロジェクト** (`kabulab-cf`) に複数のサービスを Hono サブアプリとしてマウントする mono-repo 構成 (ADR-0001)。既存サービスと依存関係 (Hono / Drizzle (`drizzle-orm/d1` + `sqlite-core`) / Zod 等) を共有し、root の単一 `package.json` で全てを管理する。新サービス追加時は依存関係の追加は基本的に不要。
+kabulab は **単一の Cloudflare Workers プロジェクト** (`kabulab-cf`) に複数のサービスを Hono サブアプリとしてマウントする mono-repo 構成。既存サービスと依存関係 (Hono / Drizzle (`drizzle-orm/d1` + `sqlite-core`) / Zod 等) を共有し、root の単一 `package.json` で全てを管理する。新サービス追加時は依存関係の追加は基本的に不要。
 
 DB は **Cloudflare D1 (SQLite)** の単一 DB `kabulab-cf`。名前空間が無いため、全サービスを **接頭辞テーブル** (`core_*` / `<slug>_*`) で同居させる。Worker からは `c.env.DB` バインディング経由で読み取る。
 
@@ -46,7 +46,7 @@ import { stocks } from "../../../../src/shared/db/core-schema.js";
 
 ### 固有スキーマを定義
 
-テーブル名は必ず `<slug 由来の接頭辞>_` を付ける (例: 005 `yuho_documents`、006 `ir_disclosures`)。PG → SQLite の方言マッピング (ADR-0001 §4) は core-schema.ts の冒頭コメントを参照 (`serial` → `integer autoIncrement` / `timestamp(tz)` → `integer({mode:'timestamp'})` / `date` → `text` / `boolean` → `integer({mode:'boolean'})`)。
+テーブル名は必ず `<slug 由来の接頭辞>_` を付ける (例: 005 `yuho_documents`、006 `ir_disclosures`)。PG → SQLite の方言マッピングは core-schema.ts の冒頭コメントを参照 (`serial` → `integer autoIncrement` / `timestamp(tz)` → `integer({mode:'timestamp'})` / `date` → `text` / `boolean` → `integer({mode:'boolean'})`)。
 
 ```ts
 // services/<slug>/src/db/schema.ts
@@ -103,10 +103,11 @@ Hono アプリ本体。**`strict: false`** を必ず指定 (trailing slash 吸�
 
 ```ts
 import { Hono } from "hono";
-import { errorHandler } from "./middleware/error-handler.js";
+import { createErrorHandler } from "../../../src/shared/error-handler.js";
 import { pagesRoute } from "./routes/pages.js";
 
 export const app = new Hono({ strict: false });
+const errorHandler = createErrorHandler("<slug>");
 
 app.route("/api/...", apiRoute);  // 必要に応じて
 app.route("/", pagesRoute);
@@ -114,6 +115,9 @@ app.onError(errorHandler);
 
 export default app;
 ```
+
+> エラーハンドラはサービス内に作らず、共有の `createErrorHandler()` を使う
+> (K4c-1 で一本化。各サービスの `src/middleware/error-handler.ts` は削除済み)。
 
 ### `services/<slug>/app.ts`
 

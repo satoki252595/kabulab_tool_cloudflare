@@ -18,16 +18,16 @@
 ## プラットフォーム
 
 旧構成 (Vercel Serverless Functions + Neon) から **Cloudflare Workers + Hono** へ移行済み
-([ADR-0001](./docs/adr/0001-neon-to-d1-r2-notion.md))。Worker は **配信専用**
+(2026-06 確定。経緯は git 履歴)。Worker は **配信専用**
 (`worker/entry.ts` が `src/index.ts` の Hono root app を fetch ハンドラとして公開) で、読取は
 **D1 バインディング** (`c.env.DB`) 経由。データ取得・加工・本番書き込みは Worker に載せず
 **Node (GitHub Actions)** で実行し、`createD1HttpDb` (D1 REST) で書き込む (後述)。
 
-データストア (ADR-0001 で確定):
+データストア:
 
 | 種別 | ストア | 状況 |
 |---|---|---|
-| 正規化リレーショナル | **Cloudflare D1** (SQLite) | 全サービスを単一 DB `kabulab-cf` に接頭辞テーブルで同居。Drizzle ORM は `drizzle-orm/d1` + sqlite-core ([ADR-0001](./docs/adr/0001-neon-to-d1-r2-notion.md))。旧 Neon PostgreSQL は廃止 (解約予定/済) |
+| 正規化リレーショナル | **Cloudflare D1** (SQLite) | 全サービスを単一 DB `kabulab-cf` に接頭辞テーブルで同居。Drizzle ORM は `drizzle-orm/d1` + sqlite-core |
 | 時系列ブロブ | **Cloudflare R2** (`vwap-data`) | 007 VWAP の 5分足/日足/信用残高 JSON |
 | 一次データ (raw) | **Notion** | CLAUDE.md ルール6。EDINET ZIP / TDnet / 優待スクレイプ等を物理ファイルごと冪等アーカイブ |
 
@@ -60,7 +60,7 @@ pnpm install              # 依存インストール
 │       ├── design.ts                # 共通デザイントークン
 │       ├── term-tip.ts              # 投資初心者向けバルーンヘルプ (ルール7)
 │       ├── auth.ts                  # cron Bearer token 認証 (CRON_SECRET)
-│       ├── db/                      # D1(SQLite) 共有 core スキーマ + CF 型 (ADR-0001)
+│       ├── db/                      # D1(SQLite) 共有 core スキーマ + CF 型
 │       ├── notion-archive/          # 一次データ Notion アーカイブ (ルール6)
 │       ├── yahoo/ jpx/ indicators/  # Yahoo クライアント / JPX パーサ / RSI・SMA 等の純関数
 │       └── scoring.ts screener.ts patterns.ts macro.ts ...
@@ -78,7 +78,7 @@ pnpm install              # 依存インストール
 ├── drizzle/                         # マイグレーション SQL (drizzle/d1/ = D1 用)
 ├── drizzle.d1.config.ts             # drizzle-kit 設定 (D1)。旧 drizzle.<svc>.config.ts(pg) は obsolete
 ├── public/                          # PWA 静的アセット + public/vwap-analysis/ フロント
-├── docs/                            # mono-repo ドキュメント (docs/adr/ = 設計判断記録)
+├── docs/                            # mono-repo ドキュメント (概要=overview.md / 設計判断は git 履歴)
 ├── flake.nix / .envrc               # Nix devShell (Node 22 + pnpm 9)
 └── package.json
 ```
@@ -94,9 +94,11 @@ pnpm dev:cf               # wrangler dev (Cloudflare ローカル実行)
 pnpm typecheck
 pnpm test
 pnpm lint
-# ⚠️ 上記 3 つが緑でも検査されていない範囲がある (tsconfig の exclude 5 ファイル /
-#    型エラー 33 件、lint 対象外の scripts・worker)。残高は
-#    docs/ci-typecheck-blind-spots.md
+# ⚠️ 上記 3 つが緑でも検査されていない範囲がある。tsconfig の exclude は実質なし
+#    (node_modules/dist のみ。経緯は tsconfig.json のコメント) だが、include 対象は
+#    src・services・scripts・*.config.ts のみで worker/・tests/ は tsc の対象外。
+#    lint は src + services のみ (scripts・worker・config は対象外)。
+#    詳細は docs/ci-typecheck-blind-spots.md
 
 # デプロイ (詳細は下記「デプロイ」節)
 pnpm deploy:cf            # 本番を手動デプロイ (= wrangler deploy)
@@ -132,7 +134,8 @@ pnpm ingest:yuho-edinet   # WORKER_BASE_URL の /yuho-quant/admin/catchup を CR
 
 ## 運用ステータス（自動化・手作業・残タスク）
 
-ADR-0001 で **Neon を全廃し Cloudflare D1 + R2 + Notion へ移行済み**。データ・読取・取込の現況:
+**Neon を全廃し Cloudflare D1 + R2 + Notion へ移行済み**。データ・読取・取込の現況
+(規模の数値は 09-13 受入時点。変動する):
 
 ### データ格納状況（直近営業日まで投入済み）
 
@@ -149,22 +152,24 @@ ADR-0001 で **Neon を全廃し Cloudflare D1 + R2 + Notion へ移行済み**�
 ### 自動化（GitHub Actions・**Workers Paid 不要**）
 
 取込はすべて GitHub Actions(Node)で定期実行する。Yahoo は共有クライアントが
-`YAHOO_PROXY_BASE`(Cloudflare エッジの `/api/ingest/yahoo` / VWAP は
-`/vwap-analysis/api/ingest-fetch`)経由で叩くため、ランナー IP の 429 を回避する。
+`YAHOO_PROXY_BASE`(Cloudflare エッジの `/api/ingest/yahoo` に一本化)経由で
+叩くため、ランナー IP の 429 を回避する。
 D1 へは `createD1HttpDb`(D1 REST)で書き込む。
 
 | ワークフロー | 内容 | スケジュール (UTC) |
 |---|---|---|
 | `.github/workflows/stock-sync.yml` | 日次=core/rsi/swing 取得+指標+**増分 OHLCV** / 月次=東証母集団同期 + otakara rebuild | 平日 21:00 / 10 日 01:30 |
-| `.github/workflows/vwap-ingest.yml` | 日足10年 + **5分足** → R2 / 信用残高(週次) | 平日 08:00 / 土 09:00 |
+| `.github/workflows/vwap-ingest.yml` | 日足10年 + **5分足** → R2 / 信用残高(週次) | 月水金 08:00 / 土 09:00 |
 | `.github/workflows/catchup.yml` | 005 有報(EDINET) + 006 適時開示(TDnet) キャッチアップ(TDnet=Node, EDINET=Worker ルート) | 平日 11:00 |
+| `.github/workflows/ci.yml` | 型・lint・単体テスト + 地図突合 + D1 generate 差分 | push/PR 毎 (cron なし) |
 
 Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキシ + 005/006 の
 `/admin/catchup` のみを担う(Workers Cron は使わない)。schedule は **main にマージ後**に
 有効化される(GitHub Actions の schedule は default ブランチのみ)。
 
-> 💡 GH Actions 無料枠(private 2,000 min/月)目安: 日次 stock(~40-50分) + VWAP(~30-40分)
-> ×平日 ≈ 月 1,700-1,900 分。枠に近い場合は stock-sync を Mon/Wed/Fri 等へ間引く。
+> 💡 GH Actions 無料枠(private 2,000 min/月)目安: 日次 stock(~40-50分)×平日 +
+> VWAP(月水金。差分時は数十分、バックフィル時は 2-3h 域。timeout 300 分) ≈ 月
+> 1,300-1,600 分(バックフィル除く)。枠に近い場合は stock-sync を Mon/Wed/Fri 等へ間引く。
 
 ### 手作業のまま（任意・低頻度）
 
@@ -177,16 +182,11 @@ Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキ�
 
 ### 残タスク
 
-1. **✅ 本番稼働確認済み** — main マージ → Workers Builds が**無料で自動デプロイ済**。スモーク全 PASS
-   (全9サービス D1 読取)、stock-sync GitHub Actions 成功(D1 へフレッシュ書込確認)。
-   **残るは Neon 解約**(あなたが Neon コンソールで実施)。解約後は `.env`/GH Secret の `DATABASE_URL` 不要。
-   - catchup.yml(EDINET/TDnet)用に GH Secret **`WORKER_BASE_URL`**(= Worker URL)が未追加なら追加。
-2. **legacy 掃除**（✅ ほぼ完了）… 旧 Neon DB スクリプト `scripts/db/*.mjs`・dev one-off
-   (`full-validation*` / `get-jpx-listing`)・otakara dead code(`src/index.ts` / `pages-app.ts` /
-   Neon integration test)は **削除済み**。cutover ツール(`scripts/migrate/`)・
-   `db:push:*` + `drizzle.<svc>.config.ts`(pg dialect) も K1a で削除済み。
-   残りは Neon 解約時にまとめて整理推奨: `DATABASE_URL` +
-   各サービス CLAUDE.md/README の Neon/Vercel 期記述(一括リフレッシュ)。
+1. **Neon 解約** (あなたの手作業。Neon コンソールで実施) — 解約後は `.env`/GH Secret の
+   `DATABASE_URL` を削除してよい。
+2. **GH Secret `WORKER_BASE_URL`** (= Worker URL) — catchup.yml(EDINET/TDnet)用。未追加なら追加。
+3. **文書リフレッシュ** — 各サービス CLAUDE.md/README の Neon/Vercel 期記述を現行に合わせる
+   (K5c で順次実施中)。
 
 ## デプロイ
 
@@ -204,13 +204,13 @@ npx wrangler tail                # 本番ログをストリーム
 2. **バインディング** (`wrangler.toml`):
    - `ASSETS` … `public/` の静的アセット
    - `BUCKET` … R2 バケット `vwap-data` (VWAP 時系列)
-   - `DB` … D1 データベース `kabulab-cf` (005 yuho-quant。ADR-0001)
+   - `DB` … D1 データベース `kabulab-cf` (全サービス共有の単一 DB)
 3. **シークレットは Cloudflare が正のソース** — `wrangler secret put DATABASE_URL` 等で設定する
    (`.env` はローカル開発/取込専用で、本番 Worker には読まれない)。Worker は `nodejs_compat` 有効で
    secret を `process.env` 経由でも参照する。
 4. **Workers Cron は不使用（Workers Paid 不要）** — 取込(日次/月次 stock + VWAP)は
    GitHub Actions(Node)で実行する。`wrangler.toml` に `[triggers]`/`[limits]` は無い。Worker は
-   サイト配信 + 取込プロキシ(`/api/ingest/yahoo`, `/vwap-analysis/api/ingest-fetch`)+ 005/006 の
+   サイト配信 + 取込プロキシ(`/api/ingest/yahoo`)+ 005/006 の
    `/admin/catchup` のみ。
 5. **push→自動デプロイ** — Cloudflare Workers Builds (Git 連携) を接続済み。`main` への push で
    **無料プランのまま**自動 build & deploy。手順は [docs/deploy-cloudflare.md](./docs/deploy-cloudflare.md)。
@@ -238,16 +238,18 @@ WORKER_BASE_URL=https://kabulab-cf.<subdomain>.workers.dev             # 005 取
 
 ### D1 スキーマ（全サービス・単一 `kabulab-cf` に接頭辞テーブルで同居）
 
-ADR-0001 で全サービスを Neon → D1 (SQLite) へ移行済み。共有 core を各サービスが参照する:
+全サービスを Neon → D1 (SQLite) へ移行済み。共有 core を各サービスが参照する
+(0017 時点の実効テーブル。DROP 済みは除く):
 
 | 接頭辞 | 所有 | 主なテーブル |
 |---|---|---|
 | `core_*` | 日次 sync が更新 (他は読取専用) | `core_stocks` / `core_stock_financials` / `core_stock_annual_financials` (`src/shared/db/core-schema.ts` が正本) |
 | `rsi_*` | 001 RSI Screening | `rsi_percentile` (RSI 10/40/120 + パーセンタイル + 優良株フラグ) |
 | `yutai_*` / `otakara_*` | 002 お宝優待 | `yutai_genres` / `yutai_benefits` / `otakara_stock_financials` / `otakara_stock_scores` |
-| `swing_*` | 003 Swing Trading | `swing_daily_ohlcv` (90 営業日) / `swing_stock_indicators` / `swing_stock_screening` / `swing_entry_signals` / `swing_market_context` / `swing_sector_daily` |
-| (なし) | 004 金融数学 | 所有する表は無い。`core_stock_financials` / `swing_daily_ohlcv` / `swing_market_context` を読取参照 (旧 `finmath_*` 2 表は 0012 で削除) |
-| `yuho_*` | 005 有報定量 | `yuho_documents` / `yuho_order_facts` |
+| `swing_*` | 003 Swing Trading | `swing_daily_ohlcv` (90 営業日) / `swing_stock_indicators` / `swing_entry_signals` / `swing_market_context` / `swing_sector_daily` (旧 `swing_stock_screening` は 0015 で削除) |
+| (なし) | 004 金融数学 | 所有する表は無い。`core_stock_financials` / `swing_daily_ohlcv` / `swing_market_context` / `p_momentum` を読取参照 (旧 `finmath_*` 2 表は 0012 で削除) |
+| `yuho_*` | 005 有報定量 | `yuho_documents` / `yuho_order_facts` / `yuho_overseas_facts` |
+| `p_*` | 日次 sync が更新 (L2 投影) | `p_momentum` (004 EMH が参照) / `p_yuho_growth` (005 が参照。0017 で追加) |
 | `ir_disclosures` | 006 IR Catalog | `ir_disclosures` (TDnet 全量 + タグ + PDF センチメント) |
 
 時系列 (VWAP) は R2、一次データ (raw) は Notion。スキーマ生成は `pnpm db:generate:d1` → `drizzle/d1/*.sql` を `wrangler d1 execute kabulab-cf --remote --file=...` で適用。
@@ -314,7 +316,7 @@ pnpm yutai:summary:import --tasks <タスク> --results <結果> --apply        
 | マクロ判定が `HOLD` のまま | 日経電子版の HTML 構造変更 or 到達不能 | `src/shared/yahoo/nikkei-vi.ts` を確認 (silent に B/C 判定しない・ルール2) |
 | セクター一覧が "未分類" 1 件 | `core.stocks.sector` が NULL (初回 or JPX URL 変更) | `pnpm sync:universe` を手動実行。必要なら続けて `pnpm sync:monthly:core` |
 | Yahoo rate limit で失敗多発 | crumb 期限切れ or 上限超過 | 並列度を下げる (`CONC` / `DELAY_MS`)、翌日再試行 |
-| 005 yuho-quant が空表示 | D1 へ未投入 (cutover 前) | ADR-0001 §7 の Neon→D1 移送、または `ingest:yuho-edinet` で取込 |
+| 005 yuho-quant が空表示 | D1 へ未投入 | `pnpm ingest:yuho-edinet` で EDINET から取込 (要 `WORKER_BASE_URL` + `CRON_SECRET`) |
 
 ## 新サービスの追加
 
