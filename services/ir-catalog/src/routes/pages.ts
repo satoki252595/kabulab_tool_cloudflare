@@ -9,7 +9,6 @@ import {
   getStockTimeline,
   recentHighSignal,
 } from "../services/query.js";
-import { HIGH_SIGNAL_TAGS } from "../services/classify.js";
 import { homePage } from "../views/home.js";
 import { stockDetailPage } from "../views/stock-detail.js";
 import { signalsPage } from "../views/signals.js";
@@ -26,8 +25,6 @@ import { fetchPageFileUrl } from "../../../../src/shared/notion-archive/index.js
 type Bindings = { DB: D1Database };
 export const pagesRoute = new Hono<{ Bindings: Bindings }>();
 
-const HIGH_SIGNAL_LIST = [...HIGH_SIGNAL_TAGS];
-
 const homeQuery = z.object({
   q: z.preprocess((v) => (v === "" ? undefined : v), z.string().optional()),
   focus: z.string().optional(),
@@ -36,7 +33,7 @@ const homeQuery = z.object({
 pagesRoute.get("/", zValidator("query", homeQuery), async (c) => {
   const { q } = c.req.valid("query");
   const db = createDb(c.env.DB);
-  const recent = await recentHighSignal(db, HIGH_SIGNAL_LIST, 25);
+  const recent = await recentHighSignal(db, 25);
   if (q === undefined) {
     return c.html(homePage({ query: "", results: null, recent }));
   }
@@ -46,7 +43,7 @@ pagesRoute.get("/", zValidator("query", homeQuery), async (c) => {
 
 pagesRoute.get("/signals", async (c) => {
   const db = createDb(c.env.DB);
-  const rows = await recentHighSignal(db, HIGH_SIGNAL_LIST, 100);
+  const rows = await recentHighSignal(db, 100);
   return c.html(signalsPage(rows));
 });
 

@@ -103,8 +103,8 @@ export const stockFinancials = sqliteTable(
       .default(sql`(unixepoch())`)
       .notNull(),
     dataDate: text("data_date").notNull(),
-  },
-  (table) => [index("idx_otakara_financials_stock_id").on(table.stockId)]
+  }
+  // stock_id の列宣言 (.unique()) が自動索引を作るので、named な重複は持たない (L-45)。
 );
 
 /** スコアリング結果 (1 銘柄 1 行) — stock_id は core.stocks(id) を参照 */
@@ -122,8 +122,8 @@ export const stockScores = sqliteTable(
     scoredAt: integer("scored_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),
-  },
-  (table) => [index("idx_otakara_scores_stock_id").on(table.stockId)]
+  }
+  // stock_id の列宣言 (.unique()) が自動索引を作るので、named な重複は持たない (L-45)。
 );
 
 // --- Relations ---
