@@ -108,6 +108,32 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
     else benefitMap.set(b.stockId, [b]);
   }
 
+  // 権利月・ジャンルの集計 (L-51)。利回り用とは別に**全優待行**から引く。
+  // 月/ジャンルの絞り込みは金額換算の可否と無関係なので、estimatedValue の
+  // NULL 行を落とすと絞り込みの母集団が欠ける (旧 IN 副問合せに条件は無い)。
+  const monthGenreRows = await db
+    .select({
+      stockId: otakaraSchema.yutaiBenefits.stockId,
+      recordMonth: otakaraSchema.yutaiBenefits.recordMonth,
+      genreId: otakaraSchema.yutaiBenefits.genreId,
+    })
+    .from(otakaraSchema.yutaiBenefits);
+  const monthMap = new Map<number, Set<number>>();
+  const genreMap = new Map<number, Set<number>>();
+  for (const b of monthGenreRows) {
+    let months = monthMap.get(b.stockId);
+    if (!months) monthMap.set(b.stockId, (months = new Set()));
+    months.add(b.recordMonth);
+    let genres = genreMap.get(b.stockId);
+    if (!genres) genreMap.set(b.stockId, (genres = new Set()));
+    genres.add(b.genreId);
+  }
+  /** 昇順・重複なし JSON (P4 backfill の json_group_array と同じ形)。空は NULL。 */
+  const toJsonSet = (set: Set<number> | undefined): string | null =>
+    set === undefined || set.size === 0
+      ? null
+      : JSON.stringify([...set].sort((a, b) => a - b));
+
   let scoredCount = 0;
   const today = new Date().toISOString().split("T")[0];
 
@@ -186,6 +212,8 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
         fundamentalScore: score.fundamentalScore,
         technicalScore: score.technicalScore,
         totalScore: score.totalScore,
+        yutaiMonths: toJsonSet(monthMap.get(s.id)),
+        yutaiGenreIds: toJsonSet(genreMap.get(s.id)),
       })
       .onConflictDoUpdate({
         target: otakaraSchema.stockScores.stockId,
@@ -193,6 +221,8 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
           fundamentalScore: sql`excluded.fundamental_score`,
           technicalScore: sql`excluded.technical_score`,
           totalScore: sql`excluded.total_score`,
+          yutaiMonths: sql`excluded.yutai_months`,
+          yutaiGenreIds: sql`excluded.yutai_genre_ids`,
           scoredAt: sql`(unixepoch())`,
         },
       });

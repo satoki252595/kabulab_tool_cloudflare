@@ -76,6 +76,8 @@ CREATE TABLE otakara_stock_scores (
   fundamental_score real NOT NULL,
   technical_score real NOT NULL,
   total_score real NOT NULL,
+  yutai_months text,
+  yutai_genre_ids text,
   scored_at integer NOT NULL DEFAULT (unixepoch())
 );
 `;
@@ -137,7 +139,7 @@ beforeAll(() => {
     "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month) VALUES (?, ?, ?, ?, ?, ?)"
   );
   const insScore = sqlite.prepare(
-    "INSERT INTO otakara_stock_scores (stock_id, fundamental_score, technical_score, total_score) VALUES (?, ?, ?, ?)"
+    "INSERT INTO otakara_stock_scores (stock_id, fundamental_score, technical_score, total_score, yutai_months, yutai_genre_ids) VALUES (?, ?, ?, ?, ?, ?)"
   );
   const insFin = sqlite.prepare(
     "INSERT INTO otakara_stock_financials (stock_id, price, per, pbr, dividend_yield, rsi_14, yutai_yield, data_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
@@ -146,12 +148,14 @@ beforeAll(() => {
   for (let i = 1; i <= TOTAL; i++) {
     insStock.run(i, String(1000 + i), `テスト銘柄${i}`, "プライム", "小売業");
     insBenefit.run(i, 1, "出典サイトの掲載文", `${i * 100}円相当の優待券`, 100, 3);
-    // 同一銘柄に 2 件目の優待。ジャンル該当はサブクエリの IN なので行は増えない
-    // はずで、増えたらページの件数がここで崩れる。
+    // 同一銘柄に 2 件目の優待。ジャンル該当は集計列の EXISTS なので行は増えない
+    // はずで、増えたらページの件数がここで崩れる (L-51)。
     if (i <= 5) insBenefit.run(i, 1, "出典サイトの掲載文", `カタログギフト ${i}`, 1000, 9);
-    // スコアは半数だけ・しかも全員同値。NULLS LAST + 同値だらけが
-    // OFFSET ページングの最悪ケース (第2キーが無いと順序が揺れる)。
-    if (i % 2 === 0) insScore.run(i, 50, 50, 50);
+    // スコアは全件・全員同値で与える。ジャンル該当は scores の集計列を引く
+    // (L-51) ので、スコア行の無い銘柄はページに出ない。NULLS LAST の最悪
+    // ケースは screening-pagination.test.ts の半数シードで見る (同じ 2 キー順序)。
+    const months = i <= 5 ? "[3,9]" : "[3]";
+    insScore.run(i, 50, 50, 50, months, "[1]");
     insFin.run(i, 1000, 15, 1.2, 3.5, 40, 1.2, "2026-09-01");
   }
 
@@ -216,6 +220,10 @@ describe("/genres/:slug のページング", () => {
     sqlite.exec(
       "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month) VALUES (1, 1, '掲載文', '100円相当', 100, 3)"
     );
+    // ジャンル該当は集計列を引く (L-51)。スコア行が無いと 0 件になる。
+    sqlite.exec(
+      "INSERT INTO otakara_stock_scores (stock_id, fundamental_score, technical_score, total_score, yutai_months, yutai_genre_ids) VALUES (1, 50, 50, 50, '[3]', '[1]')"
+    );
     const res = await otakaraYutaiApp.request(
       "/genres/quo?page=1",
       {},
@@ -224,7 +232,11 @@ describe("/genres/:slug のページング", () => {
     expect(res.status).toBe(200);
 
     const listQueries = log.filter(
-      (e) => /from "core_stocks"/i.test(e.query) && /"otakara_stock_scores"/i.test(e.query)
+      (e) =>
+        /from "core_stocks"/i.test(e.query) &&
+        /"otakara_stock_scores"/i.test(e.query) &&
+        // 総件数の COUNT も scores を join する (L-51) が ORDER BY を持たない
+        !/count\(/i.test(e.query)
     );
     expect(listQueries.length).toBeGreaterThan(0);
     for (const q of listQueries) {
@@ -247,9 +259,14 @@ describe("/genres/:slug のページング", () => {
     const insBenefit = sqlite.prepare(
       "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month) VALUES (?, ?, ?, ?, ?, ?)"
     );
+    const insScore = sqlite.prepare(
+      "INSERT INTO otakara_stock_scores (stock_id, fundamental_score, technical_score, total_score, yutai_months, yutai_genre_ids) VALUES (?, 50, 50, 50, '[3]', '[1]')"
+    );
     for (let i = 1; i <= TOTAL; i++) {
       insStock.run(i, String(1000 + i), `テスト銘柄${i}`, "プライム", "小売業");
       insBenefit.run(i, 1, "出典サイトの掲載文", `${i * 100}円相当`, 100, 3);
+      // ジャンル該当は集計列を引く (L-51)。無いと 0 件で LIMIT の検証が空振りする。
+      insScore.run(i);
     }
     const res = await otakaraYutaiApp.request(
       "/genres/quo?page=1",
@@ -269,6 +286,40 @@ describe("/genres/:slug のページング", () => {
         PAGE_SIZE
       );
     }
+    sqlite.close();
+  });
+
+  it("ジャンル・月フィルターは集計列を引き benefits の副問合せを打たない (L-51)", async () => {
+    // 最小 DB で SQL の形を見る (共有 DB のシムにはログが無いため作り直す)。
+    const log: Executed[] = [];
+    const sqlite = new DatabaseSync(":memory:");
+    sqlite.exec(DDL);
+    sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (1, 'QUOカード', 'quo')");
+    sqlite.exec(
+      "INSERT INTO core_stocks (id, code, name, market, sector, is_active, is_yutai, instrument_type) VALUES (1, '1001', 'テスト', 'プライム', '小売業', 1, 1, 'equity')"
+    );
+    sqlite.exec(
+      "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month) VALUES (1, 1, '掲載文', '100円相当', 100, 3)"
+    );
+    sqlite.exec(
+      "INSERT INTO otakara_stock_scores (stock_id, fundamental_score, technical_score, total_score, yutai_months, yutai_genre_ids) VALUES (1, 50, 50, 50, '[3]', '[1]')"
+    );
+    const res = await otakaraYutaiApp.request(
+      "/genres/quo?page=1&month=3",
+      {},
+      { DB: createD1(sqlite, log) }
+    );
+    expect(res.status).toBe(200);
+
+    const listQueries = log.filter((e) => /from "core_stocks"/i.test(e.query));
+    expect(listQueries.length).toBeGreaterThan(0);
+    for (const q of listQueries) {
+      expect(q.query, "benefits の IN 副問合せが復活している").not.toMatch(/yutai_benefits/i);
+    }
+    // ジャンルと月の両述語が集計列を引いている
+    const filterSql = listQueries.map((q) => q.query).join("\n");
+    expect(filterSql).toMatch(/json_each\("otakara_stock_scores"\."yutai_genre_ids"\)/i);
+    expect(filterSql).toMatch(/json_each\("otakara_stock_scores"\."yutai_months"\)/i);
     sqlite.close();
   });
 });

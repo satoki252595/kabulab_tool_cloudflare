@@ -80,6 +80,8 @@ CREATE TABLE otakara_stock_scores (
   fundamental_score real NOT NULL,
   technical_score real NOT NULL,
   total_score real NOT NULL,
+  yutai_months text,
+  yutai_genre_ids text,
   scored_at integer NOT NULL DEFAULT (unixepoch())
 );
 `;
@@ -149,7 +151,7 @@ beforeAll(() => {
     "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month) VALUES (?, ?, ?, ?, ?, ?)",
   );
   const insScore = sqlite.prepare(
-    "INSERT INTO otakara_stock_scores (stock_id, fundamental_score, technical_score, total_score) VALUES (?, ?, ?, ?)",
+    "INSERT INTO otakara_stock_scores (stock_id, fundamental_score, technical_score, total_score, yutai_months, yutai_genre_ids) VALUES (?, ?, ?, ?, ?, ?)",
   );
   const insFin = sqlite.prepare(
     "INSERT INTO otakara_stock_financials (stock_id, price, per, pbr, dividend_yield, rsi_14, yutai_yield, data_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -166,7 +168,14 @@ beforeAll(() => {
     // スコアは半数だけ与え、しかも全銘柄同値にする。NULLS LAST + 同値が
     // 大量にある状態でも OFFSET ページングが破綻しないことを確かめる
     // (第2ソートキーに id を足した理由がこれ)。
-    if (i % 2 === 0) insScore.run(i, 50, 50, 50);
+    // 集計列は優待の実態どおりに入れる (L-51)。月フィルターは集計列を引くので、
+    // スコア行の無い奇数 i は month=3 にヒットしない (本番の優待母集団は全件
+    // スコア行を持つ。2026-09-14 実測で欠け 0)。
+    if (i % 2 === 0) {
+      const months = i <= MARCH_STOCKS ? "[3]" : "[9]";
+      const genres = i <= MARCH_DOUBLE ? "[1,2]" : "[1]";
+      insScore.run(i, 50, 50, 50, months, genres);
+    }
     insFin.run(i, 1000, 15, i <= 30 ? 0.8 : 2.5, 3.5, 40, 1.2, "2026-09-01");
   }
 
@@ -176,11 +185,12 @@ beforeAll(() => {
   // active かつ優待ありの非普通株と、instrument_type が NULL の行 (日次取込の対象外)。
   // 優待・財務・スコアを持たせ、しかもスコアを最高にしてある。絞り込みが外れたら
   // SSR の 1 ページ目とジャンルの 1 ページ目の先頭に並ぶので、「出ない」を検査できる。
+  // 集計列も実態どおりに入れる (無いと母集団の絞り漏れを集計欠けが隠す)。
   insStock.run(902, "1201", "非普通株銘柄", "プライム", "小売業", 1, 1, "reit_fund");
   insStock.run(903, "9003", "未分類銘柄", "プライム", "小売業", 1, 1, null);
   for (const id of [902, 903]) {
     insBenefit.run(id, 1, FORBIDDEN_TEXT, "非普通株の優待", 100, 9);
-    insScore.run(id, 99, 99, 99);
+    insScore.run(id, 99, 99, 99, "[9]", "[1]");
     insFin.run(id, 1000, 15, 2.5, 3.5, 40, 1.2, "2026-09-01");
   }
 
@@ -250,13 +260,15 @@ describe("/api/screening のページング", () => {
 
 describe("/api/screening の絞り込みと総件数", () => {
   it("権利月フィルタで 1 銘柄が複数優待を持っても行が重複しない", async () => {
+    // 月フィルターは scores の集計列を引く (L-51)。集計のある偶数 i のうち
+    // 3 月優待を持つのは 30 件 (奇数 i はスコア行自体が無い。本番は全件ある)。
     const page = await screening("month=3&limit=100&withTotal=1");
-    expect(page.total).toBe(MARCH_STOCKS);
-    expect(page.items).toHaveLength(MARCH_STOCKS);
-    expect(new Set(page.items.map((s) => s.code)).size).toBe(MARCH_STOCKS);
+    expect(page.total).toBe(MARCH_STOCKS / 2);
+    expect(page.items).toHaveLength(MARCH_STOCKS / 2);
+    expect(new Set(page.items.map((s) => s.code)).size).toBe(MARCH_STOCKS / 2);
 
-    // 3 月優待を2件持つ銘柄は、月が 1 つに畳まれて出る
-    const doubled = page.items.find((s) => s.code === "1001");
+    // 3 月優待を2件持つ銘柄は、月が 1 つに畳まれて出る (1002 は偶数 i=2)
+    const doubled = page.items.find((s) => s.code === "1002");
     expect(doubled?.benefitMonths).toEqual([3]);
   });
 
@@ -267,9 +279,10 @@ describe("/api/screening の絞り込みと総件数", () => {
   });
 
   it("ジャンル ∩ 権利月を重ねても件数が合う", async () => {
+    // 集計のある偶数 i のうち food (id 2) かつ 3 月なのは 5 件 (L-51)。
     const page = await screening("genre=food&month=3&limit=100&withTotal=1");
-    expect(page.total).toBe(MARCH_DOUBLE);
-    expect(page.items).toHaveLength(MARCH_DOUBLE);
+    expect(page.total).toBe(MARCH_DOUBLE / 2);
+    expect(page.items).toHaveLength(MARCH_DOUBLE / 2);
   });
 
   it("存在しないジャンルは空ページ + 総件数 0", async () => {
@@ -295,9 +308,12 @@ describe("/api/screening の絞り込みと総件数", () => {
       expect(ssr, `SSR /screening に ${code}`).not.toContain(`"code":"${code}"`);
     }
 
-    // /genres/:slug: 件数と 1 ページ目の行 (quo には 120 銘柄 + 非普通株 2 件の優待がある)
+    // /genres/:slug: 件数と 1 ページ目の行。quo の優待は 120 銘柄 + 非普通株 2 件に
+    // あるが、ジャンル該当は scores の集計列を引く (L-51) ので、スコア行のある
+    // 偶数 i の 60 件だけが載る (本番は全件スコア行あり)。非普通株 2 件は集計列を
+    // 持っていても母集団で落ちる。
     const genre = await (await otakaraYutaiApp.request("/genres/quo", {}, { DB: d1 })).text();
-    expect(genre).toContain(`(${TOTAL_STOCKS}銘柄)`);
+    expect(genre).toContain(`(${TOTAL_STOCKS / 2}銘柄)`);
     for (const code of excluded) {
       expect(genre, `/genres/quo に ${code}`).not.toContain(`/stocks/${code}"`);
     }
@@ -369,10 +385,20 @@ describe("COUNT の走査コスト設計", () => {
 
   it("財務列フィルタが無い COUNT は LEFT JOIN を落とす (走査行を増やさない)", async () => {
     const { db, log } = recording();
-    await otakaraYutaiApp.request("/api/screening?withTotal=1&month=3", {}, { DB: db });
+    await otakaraYutaiApp.request("/api/screening?withTotal=1", {}, { DB: db });
     const [countSql, ...rest] = counts(log);
     expect(rest).toHaveLength(0);
     expect(countSql.toLowerCase()).not.toContain("left join");
+  });
+
+  it("月フィルタの COUNT は scores だけ JOIN する (L-51)", async () => {
+    const { db, log } = recording();
+    await otakaraYutaiApp.request("/api/screening?withTotal=1&month=3", {}, { DB: db });
+    const [countSql, ...rest] = counts(log);
+    expect(rest).toHaveLength(0);
+    // scores の集計列を WHERE で見るので scores は落とせない。financials は不要。
+    expect(countSql.toLowerCase()).toContain("otakara_stock_scores");
+    expect(countSql.toLowerCase()).not.toContain("otakara_stock_financials");
   });
 
   it("財務列フィルタがあるときは COUNT も JOIN する (WHERE がその列を見るため落とせない)", async () => {

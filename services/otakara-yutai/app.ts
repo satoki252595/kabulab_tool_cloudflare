@@ -37,6 +37,20 @@ import { activeEquityCondition } from "../../src/shared/db/active-equity.js";
 export const BASE_PATH = "/otakara-yutai";
 const BP = BASE_PATH;
 
+/**
+ * 権利月・ジャンルの絞り込み述語 (L-51)。
+ *
+ * 旧形は `yutai_benefits` (8,295 行) を引く IN 副問合せで、rows と count の
+ * 2 回打っていた (≈2.8 万 rows_read/表示)。月次 rebuild が銘柄ごとに集計した
+ * `otakara_stock_scores.yutai_months` / `yutai_genre_ids` (昇順 JSON 配列) を
+ * `json_each` で引く。NULL・空配列の銘柄はヒットしない (副問合せと同値)。
+ * バインド変数は 1 個 (D1 上限 100 を食わない)。
+ */
+const hasYutaiMonth = (month: number) =>
+  sql`EXISTS (SELECT 1 FROM json_each(${stockScores.yutaiMonths}) WHERE value = ${month})`;
+const hasYutaiGenre = (genreId: number) =>
+  sql`EXISTS (SELECT 1 FROM json_each(${stockScores.yutaiGenreIds}) WHERE value = ${genreId})`;
+
 // ===== Types =====
 type AppEnv = {
   Bindings: { DB: D1Database };
@@ -181,25 +195,19 @@ app.get("/api/screening", async (c) => {
   // otakara は優待サービスなので、その中の is_yutai=true に限定する。
   const whereClauses: unknown[] = [activeEquityCondition(), eq(stocks.isYutai, true)];
 
-  // ジャンル/権利月フィルター。
-  // 該当 stockId を JS 配列へ展開して inArray に渡すと、件数の多いジャンル
-  // (QUOカード/金券/ポイント/その他) で ID 数が D1 のバインド変数上限 (1クエリ
-  // 100個) を超えクエリが reject され 500 になる。そのため ID 配列を materialize
-  // せず、yutai_benefits を引くサブクエリを inArray に渡す (IN リストが D1 内で
-  // 完結し、バインド変数は genreId/month の各1個のみ)。ジャンル∩権利月は
-  // 2つの IN を AND で重ねることで表現する。
+  // ジャンル/権利月フィルター (L-51)。月次 rebuild の集計列を引く。
+  // 旧形は yutai_benefits の IN 副問合せだったが、rows と count で 2 回
+  // 8,295 行を走査していた。JS 配列への展開は D1 のバインド上限 (100) で
+  // 500 になるため採らない (副問合せ時代からの制約のまま)。
+  // ジャンル∩権利月は 2 つの述語を AND で重ねることで表現する。
   if (genre) {
     const genreRow = await db.select({ id: yutaiGenres.id }).from(yutaiGenres)
       .where(eq(yutaiGenres.slug, genre)).limit(1);
     if (genreRow.length === 0) return c.json({ items: [], total: withTotal ? 0 : null, offset, limit });
-    whereClauses.push(inArray(stocks.id,
-      db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
-        .where(eq(yutaiBenefits.genreId, genreRow[0].id))));
+    whereClauses.push(hasYutaiGenre(genreRow[0].id));
   }
   if (month >= 1 && month <= 12) {
-    whereClauses.push(inArray(stocks.id,
-      db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
-        .where(eq(yutaiBenefits.recordMonth, month))));
+    whereClauses.push(hasYutaiMonth(month));
   }
   if (perMax > 0) whereClauses.push(lte(stockFinancials.per, perMax));
   if (pbrMax > 0) whereClauses.push(lte(stockFinancials.pbr, pbrMax));
@@ -237,11 +245,27 @@ app.get("/api/screening", async (c) => {
     // → join 無しの count(*) と同値でありながら走査行が大幅に減る。
     // 財務列を WHERE で参照するときは落とせないので、その場合だけ join する。
     const financialFiltered = perMax > 0 || pbrMax > 0 || yieldMin > 0 || rsiMax > 0;
-    const countRow = financialFiltered
-      ? await db.select({ c: sql<number>`count(distinct ${stocks.id})` }).from(stocks)
+    // 月/ジャンル条件は scores の集計列を参照する (L-51) ので、その場合だけ
+    // scores を join する。join 先は UNIQUE だが、旧形どおり count(distinct)。
+    const scoresFiltered = genre !== "" || (month >= 1 && month <= 12);
+    const joined = scoresFiltered || financialFiltered;
+    const countSel = joined
+      ? { c: sql<number>`count(distinct ${stocks.id})` }
+      : { c: sql<number>`count(*)` };
+    const countRow = await (scoresFiltered && financialFiltered
+      ? db.select(countSel).from(stocks)
+          .leftJoin(stockScores, eq(stockScores.stockId, stocks.id))
           .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
           .where(whereCondition)
-      : await db.select({ c: sql<number>`count(*)` }).from(stocks).where(whereCondition);
+      : scoresFiltered
+        ? db.select(countSel).from(stocks)
+            .leftJoin(stockScores, eq(stockScores.stockId, stocks.id))
+            .where(whereCondition)
+        : financialFiltered
+          ? db.select(countSel).from(stocks)
+              .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
+              .where(whereCondition)
+          : db.select(countSel).from(stocks).where(whereCondition));
     total = Number(countRow[0]?.c ?? 0);
   }
 
@@ -931,17 +955,13 @@ app.get("/genres/:slug", async (c) => {
   const fRsiMax = parseFloat(c.req.query("rsiMax") ?? "") || 0;
   const activeFilters = [fMonth, fPerMax, fPbrMax, fYieldMin, fRsiMax].filter(v => v > 0).length;
 
-  // WHERE: ジャンル該当 (サブクエリ) + 母集団 (active かつ equity) + 絞り込み。ID 配列を JS 展開せず
-  // サブクエリを inArray に渡し D1 のバインド変数上限 (1クエリ100個) を回避する。
+  // WHERE: ジャンル該当 (集計列) + 母集団 (active かつ equity) + 絞り込み。
+  // ID 配列の JS 展開は D1 のバインド上限 (100) で 500 になるため採らない。
   const gWhere: unknown[] = [
-    inArray(stocks.id,
-      db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
-        .where(eq(yutaiBenefits.genreId, genre.id))),
+    hasYutaiGenre(genre.id),
     activeEquityCondition(),
   ];
-  if (fMonth) gWhere.push(inArray(stocks.id,
-    db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
-      .where(eq(yutaiBenefits.recordMonth, fMonth))));
+  if (fMonth) gWhere.push(hasYutaiMonth(fMonth));
   if (fPerMax > 0) gWhere.push(lte(stockFinancials.per, fPerMax));
   if (fPbrMax > 0) gWhere.push(lte(stockFinancials.pbr, fPbrMax));
   if (fYieldMin > 0) gWhere.push(gte(stockFinancials.dividendYield, fYieldMin));
@@ -949,9 +969,11 @@ app.get("/genres/:slug", async (c) => {
   const gWhereCond = and(...(gWhere as Parameters<typeof and>));
 
   // 絞り込み後の件数 (= ページ数)。財務列フィルタのため stockFinancials を join し、
-  // count(distinct) で行転送なしに正確な件数を得る。
+  // count(distinct) で行転送なしに正確な件数を得る。ジャンル条件は scores の
+  // 集計列を参照する (L-51) ので scores も join する (UNIQUE なので行は増えない)。
   const cntRow = await db.select({ c: sql<number>`count(distinct ${stocks.id})` }).from(stocks)
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
+    .leftJoin(stockScores, eq(stockScores.stockId, stocks.id))
     .where(gWhereCond);
   const matchedCount = Number(cntRow[0]?.c ?? 0);
 
