@@ -22,14 +22,6 @@ services/otakara-yutai/
 │   │   ├── client.ts          # createDb(c.env.DB) — D1 + Drizzle (drizzle-orm/d1)
 │   │   └── schema.ts          # yutai_* / otakara_* 接頭辞テーブル定義
 │   │                          # (stocks は core-schema.ts から再 export — 銘柄マスタ統一化)
-│   ├── services/
-│   │   ├── yutai-scraper.ts        # HTML/CSV/JSON からの優待データ取込
-│   │   └── yutai-data-provider.ts  # ファイルベースインポート
-│   ├── validators/
-│   │   └── yutai-scraper.ts   # 優待スクレイパー用 Zod スキーマ
-│   ├── middleware/            # ⚠️ app.ts は未使用 (テストのみが参照)。
-│   │   ├── error-handler.ts   #    将来マウントする余地として据え置き
-│   │   └── rate-limiter.ts
 │   └── tests/                 # scoring は src/shared/ に移動済み、本サービスは他の unit test のみ
 ├── data-scripts/              # 月次パイプライン + 1 回限りの保守スクリプト
 │   ├── fetch-yutai-full.ts             # 月次 ①minkabu 取得 → yutai_benefits + is_yutai
@@ -39,7 +31,6 @@ services/otakara-yutai/
 │   ├── summary-tasks.ts / summary-import.ts  # ③④の純ロジック (タスク選定 / 結果検証)
 │   ├── estimated-value-guard.ts / private-path.ts / benefit-rows.ts  # 金額ガード / 置き場所ガード / D1 読み取り
 │   ├── benefit-key.ts / summary-contract.ts  # 上記が共有するキー生成・要約契約
-│   ├── fetch-yutai-data.ts
 │   └── data/                  # (gitignore) 掲載文を含む作業ファイル: 抽出 JSONL・要約タスク・結果
 ├── docs/llm-summary-task.md   # クラウド LLM 向けの要約作業仕様書
 ├── CLAUDE.md

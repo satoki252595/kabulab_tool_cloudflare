@@ -22,8 +22,6 @@ services/otakara-yutai/
 │   ├── db/
 │   │   ├── client.ts          # createDb(c.env.DB) — D1 + Drizzle
 │   │   └── schema.ts          # yutai_*/otakara_* 接頭辞テーブル定義 (stocks は core-schema 再 export)
-│   ├── services/              # yutai-scraper.ts / yutai-data-provider.ts (取込系)
-│   ├── validators/            # 優待スクレイパー用 Zod スキーマ
 │   ├── types.ts               # 共通型定義
 │   └── tests/                 # unit テスト
 ├── data-scripts/              # 1 回限り/手動のデータ取得・解釈スクリプト

@@ -23,7 +23,7 @@
  *      ir / yuho の backfill CLI は import すると main() が走るので値では試せず、
  *      静的検査だけが担保している。そのため backfill は、code→id の出どころを
  *      `const codeToId = await loadIngestCodeToId(db)` の 1 つに固定する (代入は 1 つだけ・
- *      core_stocks を drizzle でも生 SQL でも直接引かない・core スキーマと core-repo を
+ *      core_stocks を drizzle でも生 SQL でも直接引かない・core スキーマを
  *      import しない・`ingestBatch` には `codeToId` を渡す)。
  *
  * 背景: 2026-09-13 のユーザー決定で、日次取込と公開面の母集団を active かつ equity に
@@ -305,7 +305,6 @@ const INGEST_CODE_TO_ID_CALLERS = [
   "services/ir-catalog/src/services/ingest.ts",
   "services/ir-catalog/data-scripts/backfill.ts",
   "services/yuho-quant/data-scripts/backfill.ts",
-  "src/shared/db/core-repo.ts",
 ];
 
 /** 値で試せない取込の backfill CLI (import すると main() が走る)。 */
@@ -344,8 +343,8 @@ function findBackfillCodeToIdViolations(code: string): string[] {
     violations.push("core_stocks を drizzle で直接引いている");
   }
   if (/\bfrom\s+["'`]?core_stocks\b/i.test(code)) violations.push("core_stocks を生 SQL で引いている");
-  if (/\bimport\b[^;]*\bfrom\s*["'][^"']*\/(?:core-schema|core-repo)(?:\.js)?["']/.test(code)) {
-    violations.push("core スキーマか core-repo を import している");
+  if (/\bimport\b[^;]*\bfrom\s*["'][^"']*\/core-schema(?:\.js)?["']/.test(code)) {
+    violations.push("core スキーマを import している");
   }
   for (const call of callSites(code, "ingestBatch")) {
     if (!/\bcodeToId(?:\s*:\s*codeToId)?\s*[,}]/.test(call)) {
