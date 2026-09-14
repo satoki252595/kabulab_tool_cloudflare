@@ -226,3 +226,29 @@ export function publicStockMetaLabel(
   const shown = parts.filter((p): p is string => typeof p === "string" && p.trim() !== "");
   return shown.length === 0 ? "—" : shown.join(separator);
 }
+
+/**
+ * personal-only 列。drizzle のプロパティ名 (camelCase) と列名 (snake_case) の
+ * 両綴り (どちらの綴りで書かれても拾う)。**`sector33` は入れない** —— EDINET
+ * 由来で commercial-ok (下の地図突合テストが固定)。
+ *
+ * `market` と `sector` を入れてよくなったのは、公開面の表示をこのモジュール
+ * 経由に寄せたから。ここから消す前に、公開面がその列を直接読み始めていないか
+ * 必ず確かめること。
+ *
+ * `license_tag` / `src_source` / `quality` は地図 (column_license) では
+ * commercial-ok だが、判断そのものの列なのでガード側は保守的に残す。
+ * 余分は `public-columns.test.ts` が 3 列ちょうどに固定する。
+ */
+export const PERSONAL_ONLY_COLUMNS = [
+  "market",
+  "sector",
+  "sector17",
+  "instrumentType",
+  "instrument_type",
+  "licenseTag",
+  "license_tag",
+  "srcSource",
+  "src_source",
+  "quality",
+] as const;
