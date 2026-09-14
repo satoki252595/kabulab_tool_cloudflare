@@ -72,7 +72,9 @@ export const disclosures = sqliteTable(
   (t) => [
     // tdnet_id の列宣言 (.unique()) が自動索引を作るので、 named な重複は持たない (L-45)。
     index("ir_disclosures_stock_pubdate_idx").on(t.stockId, t.pubdate),
-    index("ir_disclosures_primary_tag_idx").on(t.primaryTag),
+    // primary_tag の単独索引は持たない。recentHighSignal 以外に primary_tag で
+    // 絞る SQL は無く、残すと planner がそちら + TEMP B-TREE を選び続けて
+    // 部分索引が使われない (本番 EXPLAIN で確認。L-50 の後日談)。
     // home/signals の「高シグナル最新 N 件」を引く部分索引 (L-50)。
     // 述語は HIGH_SIGNAL_TAG_LIST_SQL と同じ文字列であること (classify.ts)。
     // 束縛パラメータの IN では planner が部分索引を選ばないので、

@@ -1,0 +1,1 @@
+DROP INDEX `ir_disclosures_primary_tag_idx`;

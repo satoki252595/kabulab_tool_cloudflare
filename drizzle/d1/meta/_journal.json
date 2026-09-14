@@ -99,6 +99,13 @@
       "when": 1789385548134,
       "tag": "0013_neat_stone_men",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1789385965385,
+      "tag": "0014_true_red_hulk",
+      "breakpoints": true
     }
   ]
 }
