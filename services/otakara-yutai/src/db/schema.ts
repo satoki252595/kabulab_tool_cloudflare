@@ -119,6 +119,18 @@ export const stockScores = sqliteTable(
     fundamentalScore: real("fundamental_score").notNull(),
     technicalScore: real("technical_score").notNull(),
     totalScore: real("total_score").notNull(),
+    /**
+     * 権利月の集計 (L-51)。`yutai_benefits.record_month` の銘柄ごとの
+     * 昇順・重複なし JSON 配列 (例: "[3,9]")。月次 rebuild が書く。
+     * /api/screening と /genres/:slug の月フィルターはこの列を引き、
+     * benefits 8,295 行の IN 副問合せを打たない。優待なし銘柄は NULL。
+     */
+    yutaiMonths: text("yutai_months"),
+    /**
+     * ジャンルの集計 (L-51)。`yutai_benefits.genre_id` の銘柄ごとの
+     * 昇順・重複なし JSON 配列。月次 rebuild が書く。優待なし銘柄は NULL。
+     */
+    yutaiGenreIds: text("yutai_genre_ids"),
     scoredAt: integer("scored_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),

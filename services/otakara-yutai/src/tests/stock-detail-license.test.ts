@@ -85,6 +85,8 @@ CREATE TABLE otakara_stock_scores (
   fundamental_score real NOT NULL,
   technical_score real NOT NULL,
   total_score real NOT NULL,
+  yutai_months text,
+  yutai_genre_ids text,
   scored_at integer NOT NULL DEFAULT (unixepoch())
 );
 `;
