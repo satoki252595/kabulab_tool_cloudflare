@@ -4,9 +4,10 @@
  * ヒット 0 件は「該当なし」を呼び出し側で正直に表示する (架空候補を作らない
  * — ルール1)。期間指定が無い場合の既定は直近 24 か月。
  */
-import { and, desc, eq, gte, like, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, like, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { disclosures } from "../db/schema.js";
+import { HIGH_SIGNAL_TAG_LIST_SQL } from "./classify.js";
 import { stocks } from "../../../../src/shared/db/core-schema.js";
 import { publicMarketColumn } from "../../../../src/shared/db/public-columns.js";
 import { rowSentiments } from "./sentiment.js";
@@ -210,10 +211,17 @@ export async function getStockTimeline(
   };
 }
 
-/** ポータル/ホームの「最近の高シグナル開示」用 (期間内・高シグナルのみ) */
+/**
+ * ポータル/ホームの「最近の高シグナル開示」用 (期間内・高シグナルのみ)。
+ *
+ * WHERE の IN は `HIGH_SIGNAL_TAG_LIST_SQL` のリテラル列で書く。束縛
+ * パラメータ (`inArray`) では SQLite が部分索引
+ * `ir_disclosures_high_signal_pubdate` を選ばない (値が静的に分からない
+ * ので述語の含意を証明できない)。タグ集合は classify.ts の固定定数だけ
+ * で、呼び出し側から変えられない (利用者入力は混ざらない)。
+ */
 export async function recentHighSignal(
   db: Database,
-  highSignalTags: readonly string[],
   limit = 30
 ): Promise<
   Array<{
@@ -238,7 +246,9 @@ export async function recentHighSignal(
     })
     .from(disclosures)
     .innerJoin(stocks, eq(stocks.id, disclosures.stockId))
-    .where(inArray(disclosures.primaryTag, [...highSignalTags]))
+    .where(
+      sql`"ir_disclosures"."primary_tag" IN (${sql.raw(HIGH_SIGNAL_TAG_LIST_SQL)})`
+    )
     .orderBy(desc(disclosures.pubdate))
     .limit(limit);
   return rows.map((r) => ({

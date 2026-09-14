@@ -23,9 +23,9 @@ import {
   text,
   real,
   index,
-  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 import { stocks } from "../../../../src/shared/db/core-schema.js";
+import { HIGH_SIGNAL_TAG_LIST_SQL } from "../services/classify.js";
 
 export const disclosures = sqliteTable(
   "ir_disclosures",
@@ -70,10 +70,15 @@ export const disclosures = sqliteTable(
       .notNull(),
   },
   (t) => [
-    uniqueIndex("ir_disclosures_tdnet_uq").on(t.tdnetId),
+    // tdnet_id の列宣言 (.unique()) が自動索引を作るので、 named な重複は持たない (L-45)。
     index("ir_disclosures_stock_pubdate_idx").on(t.stockId, t.pubdate),
-    index("ir_disclosures_pubdate_idx").on(t.pubdate),
     index("ir_disclosures_primary_tag_idx").on(t.primaryTag),
-    index("ir_disclosures_pdf_sentiment_idx").on(t.pdfSentiment),
+    // home/signals の「高シグナル最新 N 件」を引く部分索引 (L-50)。
+    // 述語は HIGH_SIGNAL_TAG_LIST_SQL と同じ文字列であること (classify.ts)。
+    // 束縛パラメータの IN では planner が部分索引を選ばないので、
+    // クエリ側も同じリテラル列で書く。
+    index("ir_disclosures_high_signal_pubdate")
+      .on(sql`"pubdate" DESC`)
+      .where(sql.raw(`"primary_tag" IN (${HIGH_SIGNAL_TAG_LIST_SQL})`)),
   ]
 );

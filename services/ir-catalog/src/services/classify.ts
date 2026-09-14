@@ -328,6 +328,19 @@ export const HIGH_SIGNAL_TAGS: ReadonlySet<string> = new Set(
   TAGS.filter((d) => d.highSignal).map((d) => d.label)
 );
 
+/**
+ * 高シグナルタグの SQL リテラル列 (`'上方修正','下方修正',...`)。
+ *
+ * 部分索引 `ir_disclosures_high_signal_pubdate` の述語と
+ * `recentHighSignal` の WHERE で**同じ文字列**を使う。ずれたら planner が
+ * 部分索引を選ばなくなる (値はこの固定定数だけ。利用者入力は混ざらない)。
+ * IN を束縛パラメータで書くと SQLite は部分索引を使えないので、
+ * リテラル埋め込みは意図的 (L-50)。
+ */
+export const HIGH_SIGNAL_TAG_LIST_SQL: string = [...HIGH_SIGNAL_TAGS]
+  .map((t) => `'${t.replace(/'/g, "''")}'`)
+  .join(",");
+
 /** buffett-code の銘柄ページ URL (UI / Notion 共通) */
 export function buffettCodeUrl(ticker: string): string {
   return `https://www.buffett-code.com/company/${ticker}/`;

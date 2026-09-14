@@ -167,8 +167,8 @@ export const stockFinancials = sqliteTable(
     fetchedAt: integer("fetched_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),
-  },
-  (table) => [index("idx_core_financials_stock_id").on(table.stockId)]
+  }
+  // stock_id の列宣言 (.unique()) が自動索引を作るので、named な重複は持たない (L-45)。
 );
 
 /**
