@@ -6,7 +6,7 @@
  * 前日終値取得にも使えるようにしている。
  */
 
-import { z } from "zod";
+import { z } from "../zod-mini.js";
 
 /**
  * Yahoo の { raw, fmt } 形式の数値フィールド
@@ -15,62 +15,67 @@ import { z } from "zod";
  * Zod で数値型を強く要求すると 1 銘柄の 1 フィールド異常が全銘柄の失敗になる
  * ので、string → number を coerce する。
  */
-const rawValueSchema = z
-  .object({
-    raw: z.union([z.number(), z.string()]).optional().transform((v) => {
-      if (v === undefined) return undefined;
-      if (typeof v === "number") return v;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : undefined;
-    }),
-    fmt: z.string().nullable().optional(),
-  })
-  .nullable()
-  .optional();
+const rawValueSchema = z.optional(
+  z.nullable(
+    z.object({
+      raw: z.pipe(
+        z.optional(z.union([z.number(), z.string()])),
+        z.transform((v) => {
+          if (v === undefined) return undefined;
+          if (typeof v === "number") return v;
+          const n = Number(v);
+          return Number.isFinite(n) ? n : undefined;
+        })
+      ),
+      fmt: z.optional(z.nullable(z.string())),
+    })
+  )
+);
 
-/** Chart API レスポンス */
 export const yahooChartResponseSchema = z.object({
   chart: z.object({
-    result: z
-      .array(
-        z.object({
-          meta: z.object({
-            symbol: z.string(),
-            regularMarketPrice: z.number().nullable().optional(),
-            previousClose: z.number().nullable().optional(),
-            chartPreviousClose: z.number().nullable().optional(),
-            currency: z.string().optional(),
-          }),
-          timestamp: z.array(z.number()).optional(),
-          indicators: z.object({
-            quote: z.array(
-              z.object({
-                open: z.array(z.number().nullable()).optional(),
-                high: z.array(z.number().nullable()).optional(),
-                low: z.array(z.number().nullable()).optional(),
-                close: z.array(z.number().nullable()).optional(),
-                volume: z.array(z.number().nullable()).optional(),
-              })
-            ),
-            adjclose: z
-              .array(
+    result: z.optional(
+      z.nullable(
+        z.array(
+          z.object({
+            meta: z.object({
+              symbol: z.string(),
+              regularMarketPrice: z.optional(z.nullable(z.number())),
+              previousClose: z.optional(z.nullable(z.number())),
+              chartPreviousClose: z.optional(z.nullable(z.number())),
+              currency: z.optional(z.string()),
+            }),
+            timestamp: z.optional(z.array(z.number())),
+            indicators: z.object({
+              quote: z.array(
                 z.object({
-                  adjclose: z.array(z.number().nullable()).optional(),
+                  open: z.optional(z.array(z.nullable(z.number()))),
+                  high: z.optional(z.array(z.nullable(z.number()))),
+                  low: z.optional(z.array(z.nullable(z.number()))),
+                  close: z.optional(z.array(z.nullable(z.number()))),
+                  volume: z.optional(z.array(z.nullable(z.number()))),
                 })
-              )
-              .optional(),
-          }),
+              ),
+              adjclose: z.optional(
+                z.array(
+                  z.object({
+                    adjclose: z.optional(z.array(z.nullable(z.number()))),
+                  })
+                )
+              ),
+            }),
+          })
+        )
+      )
+    ),
+    error: z.optional(
+      z.nullable(
+        z.object({
+          code: z.string(),
+          description: z.string(),
         })
       )
-      .nullable()
-      .optional(),
-    error: z
-      .object({
-        code: z.string(),
-        description: z.string(),
-      })
-      .nullable()
-      .optional(),
+    ),
   }),
 });
 
@@ -84,55 +89,61 @@ export const yahooChartResponseSchema = z.object({
  */
 export const yahooQuoteSummaryResponseSchema = z.object({
   quoteSummary: z.object({
-    result: z
-      .array(
-        z.object({
-          financialData: z
-            .object({
-              returnOnEquity: rawValueSchema,
-              returnOnAssets: rawValueSchema,
-              totalRevenue: rawValueSchema,
-              operatingMargins: rawValueSchema,
-            })
-            .nullable()
-            .optional(),
-          defaultKeyStatistics: z
-            .object({
-              priceToBook: rawValueSchema,
-              trailingEps: rawValueSchema,
-              bookValue: rawValueSchema,
-            })
-            .nullable()
-            .optional(),
-          summaryDetail: z
-            .object({
-              trailingPE: rawValueSchema,
-              marketCap: rawValueSchema,
-              dividendYield: rawValueSchema,
-            })
-            .nullable()
-            .optional(),
-          incomeStatementHistory: z
-            .object({
-              incomeStatementHistory: z.array(
+    result: z.optional(
+      z.nullable(
+        z.array(
+          z.object({
+            financialData: z.optional(
+              z.nullable(
                 z.object({
-                  endDate: rawValueSchema,
+                  returnOnEquity: rawValueSchema,
+                  returnOnAssets: rawValueSchema,
                   totalRevenue: rawValueSchema,
+                  operatingMargins: rawValueSchema,
                 })
-              ),
-            })
-            .nullable()
-            .optional(),
+              )
+            ),
+            defaultKeyStatistics: z.optional(
+              z.nullable(
+                z.object({
+                  priceToBook: rawValueSchema,
+                  trailingEps: rawValueSchema,
+                  bookValue: rawValueSchema,
+                })
+              )
+            ),
+            summaryDetail: z.optional(
+              z.nullable(
+                z.object({
+                  trailingPE: rawValueSchema,
+                  marketCap: rawValueSchema,
+                  dividendYield: rawValueSchema,
+                })
+              )
+            ),
+            incomeStatementHistory: z.optional(
+              z.nullable(
+                z.object({
+                  incomeStatementHistory: z.array(
+                    z.object({
+                      endDate: rawValueSchema,
+                      totalRevenue: rawValueSchema,
+                    })
+                  ),
+                })
+              )
+            ),
+          })
+        )
+      )
+    ),
+    error: z.optional(
+      z.nullable(
+        z.object({
+          code: z.string(),
+          description: z.string(),
         })
       )
-      .nullable()
-      .optional(),
-    error: z
-      .object({
-        code: z.string(),
-        description: z.string(),
-      })
-      .nullable()
-      .optional(),
+    ),
   }),
 });

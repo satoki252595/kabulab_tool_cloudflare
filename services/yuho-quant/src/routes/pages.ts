@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { z } from "zod";
+import { z } from "../../../../src/shared/zod-mini.js";
 import { zValidator } from "@hono/zod-validator";
 import { createDb } from "../db/client.js";
 import { BASE_PATH } from "../../base-path.js";
@@ -33,9 +33,13 @@ import { stockCodeSchema } from "../../../../src/shared/jpx/stock-code-schema.js
 type Bindings = { DB: D1Database };
 export const pagesRoute = new Hono<{ Bindings: Bindings }>();
 
+const emptyToUndef = z.transform<unknown, unknown>((v) =>
+  v === "" ? undefined : v
+);
+
 const homeQuery = z.object({
-  q: z.preprocess((v) => (v === "" ? undefined : v), z.string().optional()),
-  focus: z.string().optional(),
+  q: z.pipe(emptyToUndef, z.optional(z.string())),
+  focus: z.optional(z.string()),
 });
 
 // EDINET 由来のみの公開面 (L-62)。facts は日次取込でしか更新されないため、
@@ -56,29 +60,30 @@ pagesRoute.get("/", zValidator("query", homeQuery), async (c) => {
 });
 
 // ---- 受注成長性スクリーニング ----
-const numOpt = z.preprocess(
-  (v) => (v === "" || v === undefined ? undefined : v),
-  z.coerce.number().optional()
+const numOpt = z.pipe(
+  z.transform<unknown, unknown>((v) =>
+    v === "" || v === undefined ? undefined : v
+  ),
+  z.optional(z.coerce.number())
 );
 const screenQuery = z.object({
   // metric は UI から並び替え選択を撤去したため、内部的にも "orders" 固定。
   // 旧 URL `?metric=backlog` は "orders" に正規化する（移行期間終了。
   // 廃止通知シムは K1c で削除）。
-  metric: z
-    .enum(["orders", "backlog"])
-    .default("orders")
-    .transform(() => "orders" as const),
-  minYears: z.preprocess(
-    (v) => (v === "" || v === undefined ? 3 : v),
-    z.coerce.number().int().min(2).max(5)
+  metric: z.pipe(
+    z.prefault(z.enum(["orders", "backlog"]), "orders"),
+    z.transform(() => "orders" as const)
+  ),
+  minYears: z.pipe(
+    z.transform<unknown, unknown>((v) =>
+      v === "" || v === undefined ? 3 : v
+    ),
+    z.coerce.number().check(z.int(), z.minimum(2), z.maximum(5))
   ),
   // 受注高 / 受注残高 を独立に条件化 (ユーザ要件: 同時にスクリーニング)。
   minOrdersCagrPct: numOpt,
   minBacklogCagrPct: numOpt,
-  sector: z.preprocess(
-    (v) => (v === "" ? undefined : v),
-    z.string().optional()
-  ),
+  sector: z.pipe(emptyToUndef, z.optional(z.string())),
   // ファンダ絞り込み (共有 core.stock_financials)。結果表には出さず
   // 条件としてのみ使う。未入力 = 解除 (undefined)。
   minOpMarginPct: numOpt,
@@ -87,9 +92,11 @@ const screenQuery = z.object({
   maxPer: numOpt,
   minRoePct: numOpt,
   minDivYieldPct: numOpt,
-  limit: z.preprocess(
-    (v) => (v === "" || v === undefined ? 100 : v),
-    z.coerce.number().int().min(1).max(500)
+  limit: z.pipe(
+    z.transform<unknown, unknown>((v) =>
+      v === "" || v === undefined ? 100 : v
+    ),
+    z.coerce.number().check(z.int(), z.minimum(1), z.maximum(500))
   ),
 });
 
@@ -139,30 +146,34 @@ pagesRoute.get(
 
 // ---- 海外売上高比率スクリーニング (同一サービスの第2指標) ----
 const overseasScreenQuery = z.object({
-  minYears: z.preprocess(
-    (v) => (v === "" || v === undefined ? 3 : v),
-    z.coerce.number().int().min(2).max(5)
+  minYears: z.pipe(
+    z.transform<unknown, unknown>((v) =>
+      v === "" || v === undefined ? 3 : v
+    ),
+    z.coerce.number().check(z.int(), z.minimum(2), z.maximum(5))
   ),
   minOverseasRatioPct: numOpt,
   maxOverseasRatioPct: numOpt,
   minOverseasCagrPct: numOpt,
   // 地域別絞り込み (REGION_BUCKETS の key)。空文字→未指定。不正値は 422 で弾く。
-  region: z.preprocess(
-    (v) => (v === "" ? undefined : v),
-    z.enum(Object.keys(REGION_BUCKETS) as [string, ...string[]]).optional()
+  region: z.pipe(
+    emptyToUndef,
+    z.optional(z.enum(Object.keys(REGION_BUCKETS) as [string, ...string[]]))
   ),
   minRegionRatioPct: numOpt,
   maxRegionRatioPct: numOpt,
-  sector: z.preprocess((v) => (v === "" ? undefined : v), z.string().optional()),
+  sector: z.pipe(emptyToUndef, z.optional(z.string())),
   minOpMarginPct: numOpt,
   minMarketCapOku: numOpt,
   maxMarketCapOku: numOpt,
   maxPer: numOpt,
   minRoePct: numOpt,
   minDivYieldPct: numOpt,
-  limit: z.preprocess(
-    (v) => (v === "" || v === undefined ? 100 : v),
-    z.coerce.number().int().min(1).max(500)
+  limit: z.pipe(
+    z.transform<unknown, unknown>((v) =>
+      v === "" || v === undefined ? 100 : v
+    ),
+    z.coerce.number().check(z.int(), z.minimum(1), z.maximum(500))
   ),
 });
 

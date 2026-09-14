@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "../../../../src/shared/zod-mini.js";
 import { optionalStockCodeSchema } from "../../../../src/shared/jpx/stock-code-schema.js";
 
 /**
@@ -6,8 +6,7 @@ import { optionalStockCodeSchema } from "../../../../src/shared/jpx/stock-code-s
  * パーセント入力 (例: 7) → 小数 (0.07) に変換する。
  */
 
-export const dcfFormSchema = z
-  .object({
+const dcfFormBase = z.object({
     /**
      * 銘柄コード (任意。指定があれば DB からプリフィルに使う)。
      * 未入力時の空文字列は undefined に正規化。数字 4 桁と JPX 英数字コード
@@ -25,45 +24,63 @@ export const dcfFormSchema = z
      *                    code 空時は API 側で「銘柄コード or 配当のいずれか必須」と返す)
      * - 数値 → positive() で弾く (0/負はエラー)
      */
-    expectedDividend: z.preprocess(
-      (v) => (v === "" || v === null || v === undefined ? undefined : v),
-      z.coerce
-        .number({ error: "来期予想配当は数値で入力してください" })
-        .positive("来期予想配当は正の数で入力してください")
-        .optional()
+    expectedDividend: z.pipe(
+      // <unknown, unknown> 必須。付けないと falsy 分岐の絞り込み ({}) が
+      // pipe の出力型になり、後段の unknown 入力と合わなくなる。
+      z.transform<unknown, unknown>((v) =>
+        v === "" || v === null || v === undefined ? undefined : v
+      ),
+      z.optional(
+        z.coerce
+          .number({ error: "来期予想配当は数値で入力してください" })
+          .check(z.positive("来期予想配当は正の数で入力してください"))
+      )
     ),
 
     /** 要求リターン (% 入力 → 小数) */
     requiredReturnPct: z.coerce
       .number()
-      .min(0.1, "要求リターンは 0.1% 以上")
-      .max(30, "要求リターンは 30% 以下"),
+      .check(
+        z.minimum(0.1, "要求リターンは 0.1% 以上"),
+        z.maximum(30, "要求リターンは 30% 以下")
+      ),
 
     /** 配当成長率 (% 入力 → 小数。負も可) */
     growthRatePct: z.coerce
       .number()
-      .min(-10, "成長率は -10% 以上")
-      .max(20, "成長率は 20% 以下"),
+      .check(
+        z.minimum(-10, "成長率は -10% 以上"),
+        z.maximum(20, "成長率は 20% 以下")
+      ),
 
     /** モード: gordon (1段階) or two-stage (2段階) */
-    mode: z.enum(["gordon", "two-stage"]).default("gordon"),
+    mode: z.prefault(z.enum(["gordon", "two-stage"]), "gordon"),
 
     /** 高成長期年数 (two-stage 時のみ使用) */
-    highGrowthYears: z.coerce.number().int().min(1).max(30).optional(),
+    highGrowthYears: z.optional(
+      z.coerce.number().check(z.int(), z.minimum(1), z.maximum(30))
+    ),
     /** 安定期成長率% (two-stage 時のみ) */
-    terminalGrowthPct: z.coerce.number().min(-5).max(10).optional(),
-  })
-  .superRefine((v, ctx) => {
-    // code 空 + expectedDividend 空 = 計算不能。少なくともどちらか必須。
-    if (v.code === undefined && v.expectedDividend === undefined) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["expectedDividend"],
-        message: "銘柄コード または 来期予想配当 のどちらかを入力してください",
-      });
-    }
-  })
-  .transform((v) => ({
+    terminalGrowthPct: z.optional(
+      z.coerce.number().check(z.minimum(-5), z.maximum(10))
+    ),
+  }).check(
+    z.superRefine((v, ctx) => {
+      // code 空 + expectedDividend 空 = 計算不能。少なくともどちらか必須。
+      if (v.code === undefined && v.expectedDividend === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["expectedDividend"],
+          message:
+            "銘柄コード または 来期予想配当 のどちらかを入力してください",
+        });
+      }
+    })
+  );
+
+export const dcfFormSchema = z.pipe(
+  dcfFormBase,
+  z.transform((v) => ({
     code: v.code,
     mode: v.mode,
     expectedDividend: v.expectedDividend,
@@ -80,7 +97,8 @@ export const dcfFormSchema = z
       highGrowthYears: v.highGrowthYears,
       terminalGrowthPct: v.terminalGrowthPct,
     },
-  }));
+  }))
+);
 
 export type DcfFormParsed = z.infer<typeof dcfFormSchema>;
 

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
+import { z } from "../../../../src/shared/zod-mini.js";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { createDb } from "../db/client.js";
 import {
@@ -188,7 +188,7 @@ pagesRoute.get("/", async (c) => {
 // GET /screening — 5 条件フィルター一覧 (long/short)
 // -----------------------------------------------------------------------------
 const screeningQuerySchema = z.object({
-  direction: z.enum(["long", "short"]).default("long"),
+  direction: z.prefault(z.enum(["long", "short"]), "long"),
 });
 
 pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c) => {
@@ -278,7 +278,7 @@ const VALID_PATTERNS = [
 ] as const;
 
 const signalsQuerySchema = z.object({
-  pattern: z.enum(VALID_PATTERNS).default("all"),
+  pattern: z.prefault(z.enum(VALID_PATTERNS), "all"),
 });
 
 pagesRoute.get("/signals", zValidator("query", signalsQuerySchema), async (c) => {
