@@ -13,7 +13,7 @@
 #   NOTION_TOKEN / NOTION_BACKUP_PAGE_ID / NOTION_TRASH_PAGE_ID … 月次 universe の
 #     JPX XLS 一次データ Notion アーカイブ(ルール6)用
 #
-# 💡 GH Actions 無料枠(private 2,000 min/月)を意識: 日次 ~3,700 銘柄は ~40-50 分/回。
+# 日次 ~3,700 銘柄は ~40-50 分/回 (public repo のため Actions 分課金は無し)。
 #    平日毎日 + VWAP と合わせると枠に近づくため、必要なら cron を Mon/Wed/Fri 等へ間引く。
 name: stock-sync
 

@@ -270,7 +270,7 @@ JPX 公式 `data_j.xlsx` の東証内国株 (プライム/スタンダード/グ
   - Yahoo の個別取得失敗はコードと根本原因を記録し、`is_active` は変更しない
 - Phase 4: セクター集計。`core_stocks ⋈ swing_stock_indicators` を D1 から再読込し、本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留 (前回値維持)・警告。`swing_sector_daily` 書き直し
 
-母集団 ~3,700 を 1 回の Node 実行で回す。個別銘柄またはマクロに欠損があれば終了コードを非ゼロにして、部分成功を正常終了として扱わない。GitHub Actions ジョブの `timeout-minutes: 90` (~40-50 分/回) 内で完結する。GH Actions 無料枠 (private 2,000 min/月) を意識し、VWAP と合わせて枠に近づく場合は cron を間引く運用余地がある。
+母集団 ~3,700 を 1 回の Node 実行で回す。個別銘柄またはマクロに欠損があれば終了コードを非ゼロにして、部分成功を正常終了として扱わない。GitHub Actions ジョブの `timeout-minutes: 90` (~40-50 分/回) 内で完結する (public repo のため Actions 分課金は無し)。
 
 `pnpm sync:daily` はローカル手動用のフルオーケストレータで、この core 同期に加えて
 VWAP の日足10年・5分足・信用残高を順に実行する。定常運用では stock-sync と
