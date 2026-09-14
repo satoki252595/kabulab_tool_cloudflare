@@ -167,9 +167,9 @@ Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキ�
 `/admin/catchup` のみを担う(Workers Cron は使わない)。schedule は **main にマージ後**に
 有効化される(GitHub Actions の schedule は default ブランチのみ)。
 
-> 💡 GH Actions 無料枠(private 2,000 min/月)目安: 日次 stock(~40-50分)×平日 +
+> 💡 実行時間の目安 (public repo のため Actions 分課金は無し): 日次 stock(~40-50分)×平日 +
 > VWAP(月水金。差分時は数十分、バックフィル時は 2-3h 域。timeout 300 分) ≈ 月
-> 1,300-1,600 分(バックフィル除く)。枠に近い場合は stock-sync を Mon/Wed/Fri 等へ間引く。
+> 1,300-1,600 分(バックフィル除く)。
 
 ### 手作業のまま（任意・低頻度）
 

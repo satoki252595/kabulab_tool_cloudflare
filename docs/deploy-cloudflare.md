@@ -49,7 +49,7 @@ GitHub Actions 4 本 (`.github/workflows/` の stock-sync / vwap-ingest / catchu
 取込(株価 日次/月次 + VWAP)はすべて GitHub Actions(Node)で定期実行する。Yahoo は
 `YAHOO_PROXY_BASE`(Worker エッジの `/api/ingest/yahoo` に一本化。旧
 `/vwap-analysis/api/ingest-fetch` は K4c-1 で廃止)
-経由で叩くため、ランナー IP の 429 を回避する → **Workers Paid 不要・private repo のままで OK**。
+経由で叩くため、ランナー IP の 429 を回避する → **Workers Paid 不要**。
 
 | ワークフロー | 内容 | スケジュール (UTC) |
 |---|---|---|
@@ -60,8 +60,7 @@ GitHub Actions 4 本 (`.github/workflows/` の stock-sync / vwap-ingest / catchu
 
 - 手動実行は Actions タブの「Run workflow」(stock: daily/monthly/all、vwap: daily-intra/intra/margin/all、catchup: all/tdnet/edinet)。
 - **schedule は default ブランチ(main)のワークフローのみ発火**。
-- 無料枠(private 2,000 min/月)目安: 日次 stock(~40-50分)×平日 + VWAP(月水金。差分時は数十分、バックフィル時は 2-3h 域。timeout 300 分) ≈ 月 1,300-1,600 分(バックフィル除く)。
-  枠が厳しければ stock-sync を Mon/Wed/Fri 等へ間引く。
+- 実行時間の目安 (public repo のため Actions 分課金は無し): 日次 stock(~40-50分)×平日 + VWAP(月水金。差分時は数十分、バックフィル時は 2-3h 域。timeout 300 分) ≈ 月 1,300-1,600 分(バックフィル除く)。
 
 ### 必要な GitHub Secrets
 

@@ -10,7 +10,7 @@
 # ⚠️ 実行時間/コスト: 全 ~4,445 銘柄を回す。**CONC=5 並列**(下の env)で 1パス ~30分、
 # daily+intra ~1h(旧 CONC=1 は ~5h で timeout 接近・月数千分だった)。日足+5分足 cron は
 # **週3(月/水/金)** なので概算 ~1h × 週3 ≈ 月 ~800 分 + margin。stock-sync/catchup を足しても
-# private 無料枠(2,000 min/月)内に収まる想定。Yahoo は YAHOO_PROXY_BASE 経由 + MAX_RL ガードで
+# 実行時間の目安: 差分時は数十分、バックフィル時は 2-3h 域 (timeout 300 分)。Yahoo は YAHOO_PROXY_BASE 経由 + MAX_RL ガードで
 # 並列でも 429 は抑制(stock-sync が同 CONC=5 で実証済み)。実測は run の所要時間で監視すること。
 #
 # ⚠️ 取込は **本番 R2(R2_BUCKET secret)** に直接書く(環境分離なし)。マージ剪定で冪等なので
