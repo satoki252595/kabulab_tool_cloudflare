@@ -3,10 +3,6 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "../../../../src/shared/zod-mini.js";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { createDb } from "../db/client.js";
-import {
-  PUBLISH_JPX_DERIVED_COLUMNS,
-  SECTOR_DAILY_PUBLIC_KEY_SINCE,
-} from "../../../../src/shared/db/public-columns.js";
 import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
 import {
   stockIndicators,
@@ -42,17 +38,11 @@ pagesRoute.get("/", async (c) => {
   const macro = macroRows[0] ?? null;
 
   // セクター上位 — 最新 date の rank_1d 昇順で 5 件。
-  // `sector` は保存済みの派生コピーで public-columns の切り替えが届かないため、
-  // 切り替え後に cron が書いた日付だけ出す (日付と前提は
-  // `SECTOR_DAILY_PUBLIC_KEY_SINCE` のコメント)。比較に `macro.date` を使うのは、
-  // 下のクエリが `WHERE date = latestSectorDate` で実際に読む行の日付そのものの
-  // ため。読まない日はクエリごと飛ばす (Worker に載せない・rows_read も減る)。
+  // P5 で切り替え前の JPX キー行を DELETE 済みのため日付ガードは不要 (L-64)。
+  // 無い日はクエリごと飛ばす (Worker に載せない・rows_read も減る)。
   const latestSectorDate = macro?.date;
   let topSectors: Array<{ sector: string; pct1d: number; stockCount: number; rank1d: number }> = [];
-  if (
-    latestSectorDate &&
-    (PUBLISH_JPX_DERIVED_COLUMNS || latestSectorDate >= SECTOR_DAILY_PUBLIC_KEY_SINCE)
-  ) {
+  if (latestSectorDate) {
     const rows = await db
       .select()
       .from(sectorDaily)

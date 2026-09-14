@@ -15,9 +15,8 @@
  * 3 銘柄とも受注・海外売上のデータを同じ形で持たせ、`instrument_type` 以外の
  * 条件では区別できないようにしてある。
  *
- * D1 シムは services/swing-trading/src/tests/sector-ranking-key-switch.test.ts と
- * 同じ方式。yuho の表 (yuho_documents / yuho_order_facts / yuho_overseas_facts) は
- * drizzle/d1 のマイグレーションに含まれているので、そのまま流す。
+ * D1 シムは src/cron/daily-sector-aggregate.test.ts と同じ方式
+ * (node:sqlite に drizzle/d1 のマイグレーションをそのまま流す)。
  */
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";

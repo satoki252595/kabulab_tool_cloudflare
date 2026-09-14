@@ -41,17 +41,6 @@ export const publicSectorColumn = PUBLISH_JPX_DERIVED_COLUMNS
   ? stocks.sector
   : stocks.sector33;
 
-/**
- * `swing_sector_daily` のうち `publicSectorColumn` を集約キーにして書かれた最初の日付。
- * 切り替え前の行は JPX キーのまま残る (cron は当日分しか書き直さない) ため、
- * この日付以降の行だけ出す。L-64 で撤去予定 (P5 の DELETE 後)。
- *
- * ⚠️ 前提: (1) この変更が 2026-09-14 21:00 UTC より前に main へ入っていること
- * (遅れたらマージ後最初の cron 日付へ進める)。(2) `sector33` の backfill が
- * 同じ cron より前に入っていること (無いと全行 `未分類`)。
- * cron 失敗・スキップ時は行が無く出ないまま (安全側)。
- */
-export const SECTOR_DAILY_PUBLIC_KEY_SINCE = "2026-09-14";
 
 /** フラグの型。三項演算子では union になって drizzle の推論が壊れるため、条件型で形を 1 つに固定する。 */
 type PublishJpxDerived = typeof PUBLISH_JPX_DERIVED_COLUMNS;

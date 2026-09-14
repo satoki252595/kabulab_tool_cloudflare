@@ -806,8 +806,7 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
  * rows_read は変わらない: 同じ join で select する列が 1 本入れ替わるだけ
  * (本番の実測で `sector` / `sector33` どちらも 7,430 rows_read、同じ実行計画)。
  *
- * 切り替え前の日付の行は JPX キーのまま残る。公開面がそれを読まないための
- * 日付は `SECTOR_DAILY_PUBLIC_KEY_SINCE` (public-columns.ts)。
+ * 切り替え前の JPX キー行は P5 で DELETE 済み (L-64)。
  *
  * **分母と分子は同じ述語を使う** (`activeEquityCondition` = active かつ equity。
  * 日次の処理対象 `loadDailyTargets` と同じ集合)。分母は「当日更新されるはずの
