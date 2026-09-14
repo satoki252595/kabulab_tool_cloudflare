@@ -75,7 +75,7 @@ export async function retry<T>(fn: () => Promise<T>, n = 3, base = 1000): Promis
       last = e;
       if ((e as { name?: string })?.name === "YahooRateLimitError") throw e;
       // Yahoo 404 (上場廃止・コード変更) は待っても直らないので即 throw (L-57)。
-      // 形状は services/vwap-analysis/lib/yahoo.ts の `yahoo ${status}`。
+      // 形状は src/shared/yahoo/client.ts の `yahoo ${status}`。
       if (/^yahoo 404\b/.test((e as Error)?.message ?? "")) throw e;
       await sleep(base * Math.pow(2, i));
     }

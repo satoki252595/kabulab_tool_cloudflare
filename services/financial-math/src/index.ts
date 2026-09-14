@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { errorHandler } from "./middleware/error-handler.js";
+import { createErrorHandler } from "../../../src/shared/error-handler.js";
 import { pagesRoute } from "./routes/pages.js";
 import { apiRoute } from "./routes/api.js";
 
@@ -11,6 +11,7 @@ import { apiRoute } from "./routes/api.js";
  * BASE_PATH が自動で前置されるため、サブアプリ内の登録は相対パスで十分。
  */
 export const app = new Hono({ strict: false });
+const errorHandler = createErrorHandler("financial-math");
 
 // API routes (POST フォーム送信)
 app.route("/api", apiRoute);
