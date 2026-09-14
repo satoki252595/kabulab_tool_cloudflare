@@ -29,6 +29,13 @@
  */
 export const SUMMARY_CONTRACT_VERSION = "2026-09-13.1";
 
+/**
+ * `contractVersion` の形式 (日付 + 連番)。結果ファイル側のスキーマ検証に使う —
+ * ここを外すと、結果行のフィールドを取り違えた入力 (掲載文が `contractVersion` に
+ * 入る等) がスキーマを通ってしまい、契約違反の dry-run 出力に本文が乗る。
+ */
+export const CONTRACT_VERSION_PATTERN = /^\d{4}-\d{2}-\d{2}\.\d+$/;
+
 /** 一覧カードに 1 行で出す前提の上限。作業仕様書の上限と同じ値。 */
 export const SUMMARY_MAX_CHARS = 60;
 

@@ -35,11 +35,14 @@ export type BenefitRow = {
 
 const VIOLATION_RULES = ["annotation", "too_long", "prose", "empty"] as const satisfies readonly SummaryViolation["rule"][];
 
+/** `taskId` の形式 (`benefitKey` の出力形式)。結果ファイル側のスキーマ検証にも使う。 */
+export const TASK_ID_PATTERN = /^[0-9a-f]{16}$/;
+
 /** タスクファイル 1 行。外部エージェントへの入力。 */
 export const SummaryTask = z
   .object({
     /** `benefitKey(stockCode, description)`。結果の突き合わせキー。 */
-    taskId: z.string().regex(/^[0-9a-f]{16}$/),
+    taskId: z.string().regex(TASK_ID_PATTERN),
     contractVersion: z.string().min(1),
     /** missing = 要約が無い / contract_violation = 今の要約が契約違反。 */
     reason: z.enum(["missing", "contract_violation"]),
@@ -132,8 +135,13 @@ export function parseTaskFile(text: string): SummaryTask[] {
     let raw: unknown;
     try {
       raw = JSON.parse(line);
-    } catch (e) {
-      throw new Error(`タスクファイル ${i + 1} 行目が JSON ではありません: ${(e as Error).message}`, { cause: e });
+    } catch {
+      // Node の JSON.parse エラー文には入力の先頭がそのまま乗る (例: Node 22 の
+      // `Unexpected token '架', "架空の掲載文がそのま"... is not valid JSON`)。
+      // タスクファイルは自分で書き出したものだが、手で壊れた場合に掲載文の断片が
+      // 端末 (message) にも `console.error` の `[cause]` にも出ないよう、
+      // 元のエラーは message にも cause にも埋め込まない。
+      throw new Error(`タスクファイル ${i + 1} 行目が JSON ではありません`);
     }
     const parsed = SummaryTask.safeParse(raw);
     if (!parsed.success) {
