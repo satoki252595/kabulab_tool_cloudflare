@@ -12,14 +12,18 @@
  *   - 起動: `pnpm sync:daily:core`（scripts/sync/daily.ts）/ GitHub Actions。
  *
  * フロー（母集団同期 Phase 0 は除外）:
- *   Phase 1. ブートストラップ: core_stocks の active かつ equity の銘柄を取得 + 既存 OHLCV の
- *            MAX(date) を読む（増分判定用）
+ *   Phase 1. ブートストラップ: core_stocks の active かつ equity の銘柄を取得 +
+ *            swing_stock_indicators.latest_date を LEFT JOIN（増分判定用。
+ *            OHLCV の MAX(date) GROUP BY だったが L-47 で JOIN へ置換）
  *   Phase 2. マクロコンテキスト (^N225 / ^VIX / ^GSPC / NIY=F + 日経VI)
  *   Phase 3. worker pool で各銘柄: Chart(5y)+QuoteSummary 取得 → 全指標を計算 →
- *            core_financials / rsi_percentile / swing_* を **増分** upsert
- *   Phase 4. swing_daily_ohlcv の保持期間 prune（全銘柄を一括。書き込み経路から
- *            独立させてあるので、同期が止まった銘柄でも保持本数が効く）
+ *            core_financials / rsi_percentile / swing_* を **増分** upsert +
+ *            p_momentum へ 1 文 upsert（L-47。Phase 6 の読み直しはしない）
+ *   Phase 4. swing_daily_ohlcv の保持期間 prune（月曜 UTC の run のみ。
+ *            全銘柄を一括。書き込み経路から独立させてあるので、同期が止まった
+ *            銘柄でも保持本数が効く）
  *   Phase 5. セクター集計（当日更新済 indicators から集計・90% カバレッジ guard）
+ *   Phase 6. p_momentum の仕上げ: source_max_date の backfill + 掃除 DELETE
  *
  * 母集団 (core_stocks) の JPX 同期は xlsx パーサが Node 専用のため
  * `pnpm sync:universe`（src/cron/universe.ts）で別途同期する。
@@ -35,7 +39,7 @@
  *   - マクロ 4 指数のどれかが取れない場合も null で通す
  */
 
-import { sql, asc, eq, and, gt, gte, isNotNull, lte } from "drizzle-orm";
+import { sql, eq, and, gte, lte } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
@@ -186,8 +190,27 @@ const CONCURRENCY = 5;
 const DELAY_MS = 150;
 /** 5 worker の既存待機量を均した、銘柄開始の最小間隔。 */
 const STOCK_START_INTERVAL_MS = DELAY_MS / CONCURRENCY;
-/** 90 分の Actions 上限内で最終集約まで完了させる回復件数上限。 */
-const MAX_RECOVERY_TARGETS = 100;
+/**
+ * 一過性失敗の回収に使える時間予算 (ms)。run 開始からの経過で見る。
+ *
+ * 90 分の Actions 上限 (stock-sync.yml の timeout-minutes) から、後段
+ * (Phase 4〜6 + 余裕) の 30 分を引いた 60 分。件数上限 (旧 100 件) だと
+ * 失敗の規模で回収が頭打ちになり、52% の run が失敗扱いになっていた (L-57)。
+ * timeout-minutes を変えたらここも変えること。
+ */
+const RECOVERY_TIME_BUDGET_MS = 3_600_000;
+/** 失敗率がこの以下なら run 成功扱いにする (L-57。Issue にはコメントする)。 */
+const TOLERATED_FAILURE_RATE = 0.01;
+
+/**
+ * 月曜 (UTC) だけ真。週1ジョブ (prune・年次) の同 run 内分岐用。
+ *
+ * cron は平日 21:00 UTC なので UTC 曜日で見る。JST で見ると run は
+ * 火〜土曜 06:00 になり「月曜」の run が存在しない。UTC 月曜 = 週の最初の run。
+ */
+export function isMondayUtc(now: Date = new Date()): boolean {
+  return now.getUTCDay() === 1;
+}
 /** upstream 指示や診断文字列が異常でも回復待機を30秒で止める。 */
 const MAX_RECOVERY_BACKOFF_MS = 30_000;
 const MARKET_CONTEXT_CHART_SYMBOLS = [
@@ -232,19 +255,28 @@ export function createDailyDb() {
   return createD1HttpDb(SCHEMAS);
 }
 
-/** 成功件数が残っていても、欠損を含む run は監視上の失敗として扱う。 */
+/**
+ * 監視上の失敗か。失敗率 ≤1% は成功扱い (L-57)。
+ *
+ * 以前は 1 件でも失敗で run 失敗にし、52% の run が失敗扱いになっていた。
+ * 上場廃止・Yahoo 欠損などの恒久失敗が毎日数件は出るため、≤1% は成功扱いにし、
+ * 代わりに Issue へコメントして trace を残す (scripts/sync/daily.ts が出す)。
+ * 空母集団・件数不一致・マクロ失敗は従来どおり失敗。
+ */
 export function isDailySyncIncomplete(
   result: Pick<
     DailySyncResult,
     "totalStocks" | "successStocks" | "failedStocks" | "marketContextOk"
   >
 ): boolean {
-  return (
+  if (
     result.totalStocks === 0 ||
     result.successStocks + result.failedStocks !== result.totalStocks ||
-    result.failedStocks > 0 ||
     !result.marketContextOk
-  );
+  ) {
+    return true;
+  }
+  return result.failedStocks / result.totalStocks > TOLERATED_FAILURE_RATE;
 }
 
 export interface DailyRecoveryFailure<T> {
@@ -303,7 +335,7 @@ export function createDailyStockStartGate(startIntervalMs: number) {
   };
 }
 
-/** macro を先頭にして、両系統を同じ回収件数上限へ流す。 */
+/** macro を先頭にして、両系統を同じ時間予算へ流す。 */
 export function prioritizeDailyRecoveryFailures<MacroTarget, StockTarget>(
   macroFailures: readonly DailyRecoveryFailure<MacroTarget>[],
   stockFailures: readonly DailyRecoveryFailure<StockTarget>[]
@@ -338,10 +370,16 @@ export function isTransientDailySyncFailure(message: string): boolean {
 /**
  * 初回バッチ完走後、一過性失敗だけを逐次 1 回再処理する。
  * 永続エラーは再試行せず、再処理にも失敗した対象は最新原因を返す。
+ *
+ * 回収量は件数ではなく時間予算 (`deadlineMs`) で区切る (L-57)。
+ * 予算切れで手を付けなかった対象は `skippedDueToLimit` に数える。
+ * 2 パス目も Retry-After を尊重する (初回の指示を上限 30 秒で待つ)。
+ * `deadlineMs` を渡さないと全件を回収する (テスト用)。
  */
 export async function recoverTransientDailyFailures<T>(
   failures: readonly DailyRecoveryFailure<T>[],
-  processTarget: (target: T) => Promise<void>
+  processTarget: (target: T) => Promise<void>,
+  options: { deadlineMs?: number } = {}
 ): Promise<DailyRecoveryResult<T>> {
   const unresolved: DailyRecoveryFailure<T>[] = [];
   let attempted = 0;
@@ -366,7 +404,7 @@ export async function recoverTransientDailyFailures<T>(
       unresolved.push(failure);
       continue;
     }
-    if (attempted >= MAX_RECOVERY_TARGETS) {
+    if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
       unresolved.push(failure);
       skippedDueToLimit++;
       continue;
@@ -480,8 +518,17 @@ export async function loadDailyTargets(db: Db) {
       // 採らなかった: 値がどこにも流れない以上、切り替えても挙動が変わらず、
       // 差分だけが増える。保存や表示に使い始めるときは公開面と同じ列へ移すこと。
       sector: coreSchema.stocks.sector,
+      // 増分判定用。OHLCV の MAX(date) GROUP BY (336k 行走査) の代わりに
+      // indicators の latest_date を LEFT JOIN で引く (L-47)。NULL の銘柄は
+      // 初回 backfill (6mo 全 upsert)。latest_date は成功時に必ず書かれるので、
+      // 古い値を見ても再 upsert になるだけで欠損にはならない (安全側に倒れる)。
+      latestDate: swingSchema.stockIndicators.latestDate,
     })
     .from(coreSchema.stocks)
+    .leftJoin(
+      swingSchema.stockIndicators,
+      eq(swingSchema.stockIndicators.stockId, coreSchema.stocks.id)
+    )
     .where(activeEquityCondition());
 }
 
@@ -501,16 +548,12 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   const targets = await loadDailyTargets(db);
   console.info(`[sync-daily]   対象: ${targets.length} 銘柄 (active かつ equity)`);
 
-  // 各銘柄の既存 MAX(date) を 1 クエリで取得 (bind 不要)。null/未登録は初回 backfill。
-  const maxDateRows = await db
-    .select({
-      stockId: swingSchema.dailyOhlcv.stockId,
-      maxDate: sql<string>`MAX(${swingSchema.dailyOhlcv.date})`,
-    })
-    .from(swingSchema.dailyOhlcv)
-    .groupBy(swingSchema.dailyOhlcv.stockId);
-  const maxDateByStock = new Map<number, string>(
-    maxDateRows.map((r) => [r.stockId, r.maxDate])
+  // 増分判定の既存日付は Phase 1 の targets に載っている (latest_date JOIN)。
+  // NULL/未登録は初回 backfill (6mo 全 upsert)。
+  const latestDateByStock = new Map<number, string>(
+    targets.flatMap((t) =>
+      t.latestDate === null ? [] : [[t.id, t.latestDate] as const]
+    )
   );
 
   // -----------------------------------------------------------------
@@ -539,12 +582,17 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   const stockStartGate = createDailyStockStartGate(STOCK_START_INTERVAL_MS);
   let succeeded = 0;
 
+  // 年次は月曜 UTC の run でのみ書く (L-49)。年 1 回変わるものに毎日
+  // 15,900 行 upsert していた。
+  const writeAnnual = isMondayUtc();
   async function processTarget(
     target: (typeof targets)[number]
   ): Promise<void> {
     await stockStartGate.wait();
     const snap = await buildSnapshot(target.id, target.code, target.sector);
-    await writeStockSnapshot(db, snap, maxDateByStock.get(target.id));
+    await writeStockSnapshot(db, snap, latestDateByStock.get(target.id), {
+      writeAnnual,
+    });
   }
 
   async function worker(): Promise<void> {
@@ -575,16 +623,23 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   const recovery = await recoverTransientDailyFailures(
     recoveryTargets,
     async (recoveryTarget) => {
-      if (recoveryTarget.kind === "macro") {
-        await fetchMarketContextTarget(
-          marketContext.draft,
-          recoveryTarget.target
-        );
-        return;
+      try {
+        if (recoveryTarget.kind === "macro") {
+          await fetchMarketContextTarget(
+            marketContext.draft,
+            recoveryTarget.target
+          );
+          return;
+        }
+        await processTarget(recoveryTarget.target);
+        recoveredStocks++;
+      } catch (error) {
+        // 2 パス目も 429 を尊重する (L-57)。初回と同じゲートへ観測を流す。
+        stockStartGate.observeFailure(rootCauseMessage(error));
+        throw error;
       }
-      await processTarget(recoveryTarget.target);
-      recoveredStocks++;
-    }
+    },
+    { deadlineMs: startedAt + RECOVERY_TIME_BUDGET_MS }
   );
   succeeded += recoveredStocks;
   const recoveredMacros = recovery.recovered - recoveredStocks;
@@ -593,7 +648,7 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
       `[sync-daily]   一過性失敗の回収: 実行=${recovery.attempted} ` +
         `回復=${recovery.recovered} (macro=${recoveredMacros}, stock=${recoveredStocks}) ` +
         `未回復=${recovery.attempted - recovery.recovered + recovery.skippedDueToLimit} ` +
-        `上限超過=${recovery.skippedDueToLimit}`
+        `予算超過=${recovery.skippedDueToLimit}`
     );
   }
   const failures: DailySyncResult["failures"] = [];
@@ -619,19 +674,24 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   }
 
   // -----------------------------------------------------------------
-  // Phase 4: OHLCV 保持期間の一括 prune (同期が止まった銘柄も対象)
+  // Phase 4: OHLCV 保持期間の一括 prune (同期が止まった銘柄も対象)。
+  // 月曜 UTC の run のみ (L-47)。1 日で増えるのは 1 本/銘柄なので週1で足りる。
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 4: OHLCV 保持期間の prune");
-  const pruned = await pruneOhlcvRetention(db);
-  if (pruned.prunedStocks > 0) {
-    console.info(
-      `[sync-daily]   保持本数超過: ${pruned.prunedStocks} 銘柄 / ` +
-        `削除 ${pruned.deletedRows} 行 (保持 ${OHLCV_RETENTION_DAYS} 本)`
-    );
+  if (isMondayUtc()) {
+    const pruned = await pruneOhlcvRetention(db);
+    if (pruned.prunedStocks > 0) {
+      console.info(
+        `[sync-daily]   保持本数超過: ${pruned.prunedStocks} 銘柄 / ` +
+          `削除 ${pruned.deletedRows} 行 (保持 ${OHLCV_RETENTION_DAYS} 本)`
+      );
+    } else {
+      console.info(
+        `[sync-daily]   保持本数超過なし (保持 ${OHLCV_RETENTION_DAYS} 本)`
+      );
+    }
   } else {
-    console.info(
-      `[sync-daily]   保持本数超過なし (保持 ${OHLCV_RETENTION_DAYS} 本)`
-    );
+    console.info("[sync-daily]   月曜のみ (今日はスキップ)");
   }
 
   // -----------------------------------------------------------------
@@ -641,17 +701,21 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   await aggregateSectorDaily(db, new Date().toISOString().split("T")[0]);
 
   // -----------------------------------------------------------------
-  // Phase 6: L2 投影 (p_momentum) の再生成
+  // Phase 6: L2 投影 (p_momentum) の仕上げ
   //
-  // prune の後に置く (投影の本数を D1 の実在本数と一致させるため)。
-  // ここで失敗したら run 全体を失敗にする。投影が書けていないまま緑にすると、
+  // 投影行自体は Phase 3 で銘柄ごとに upsert 済み (L-47)。ここでは
+  // source_max_date の backfill と掃除 DELETE だけを行う。
+  // ここで失敗したら run 全体を失敗にする。掃除が走っていないまま緑にすると、
   // /emh は前日の as_of を表示し続けるのに監視上は成功に見える。
+  // runStartedSec は run 開始時刻 (Phase 3 の upsert より前でないと、
+  // 掃除が今回の行まで消す)。
   // -----------------------------------------------------------------
-  console.info("[sync-daily] Phase 6: モメンタム投影の再生成");
-  const projected = await rebuildMomentumProjection(db);
+  console.info("[sync-daily] Phase 6: モメンタム投影の仕上げ");
+  const runStartedSec = Math.floor(startedAt / 1000);
+  const projected = await rebuildMomentumProjection(db, runStartedSec);
   console.info(
-    `[sync-daily]   投影 ${projected.projectedStocks} 行 (走査 ${projected.scannedBars} 行 / ` +
-      `as_of ${projected.sourceMaxDate ?? "—"} / 掃除 ${projected.removedStocks} 行)`
+    `[sync-daily]   投影 ${projected.projectedStocks} 行 (` +
+      `as_of 上限 ${projected.sourceMaxDate ?? "—"} / 掃除 ${projected.removedStocks} 行)`
   );
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
@@ -931,6 +995,13 @@ export interface WriteStockSnapshotOptions {
    * 一緒に止めると「フラグを立てた瞬間に売上推移が止まる」副作用になる。
    */
   writeCoreFinancials?: boolean;
+  /**
+   * 年次 (`core_stock_annual_financials`) を書くか。既定 true。
+   *
+   * 年 1 回変わるものに毎日 15,900 行 upsert していたので、月曜 UTC の run
+   * でのみ真にする (L-49)。呼び出し側 (processTarget) が曜日で決める。
+   */
+  writeAnnual?: boolean;
 }
 
 // export しているのは src/cron/daily-write-snapshot.test.ts から
@@ -941,10 +1012,10 @@ export async function writeStockSnapshot(
   existingMaxDate: string | undefined,
   options: WriteStockSnapshotOptions = {}
 ): Promise<void> {
-  const { writeCoreFinancials = true } = options;
+  const { writeCoreFinancials = true, writeAnnual = true } = options;
 
   // --- core_stock_annual_financials ---
-  if (snap.annualFinancials.length > 0) {
+  if (writeAnnual && snap.annualFinancials.length > 0) {
     await db
       .insert(coreSchema.stockAnnualFinancials)
       .values(
@@ -1233,6 +1304,35 @@ export async function writeStockSnapshot(
       );
     }
   }
+
+  // --- p_momentum (L-47) ---
+  // Phase 6 の D1 読み直しの代わりに、メモリ上の 6mo スライスから 1 文 upsert。
+  // 同じ入力・同じ関数 (buildMomentumRow) なので /emh の数値は不変。
+  // source_max_date は暫定で自銘柄の最新日、Phase 6 で全体 MAX に直す。
+  const row = buildMomentumRow(snap.ohlcv6mo);
+  if (row !== null) {
+    const now = new Date();
+    await db
+      .insert(projectionSchema.momentumProjection)
+      .values({
+        stockId: snap.stockId,
+        asOf: row.asOf,
+        bars: row.bars,
+        closes: row.closes,
+        sourceMaxDate: snap.latestDate,
+        computedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: projectionSchema.momentumProjection.stockId,
+        set: {
+          asOf: row.asOf,
+          bars: row.bars,
+          closes: row.closes,
+          sourceMaxDate: snap.latestDate,
+          computedAt: now,
+        },
+      });
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -1320,7 +1420,7 @@ export async function pruneOhlcvRetention(
 }
 
 // -----------------------------------------------------------------------------
-// L2 投影 (p_momentum) の再生成
+// L2 投影 (p_momentum) の生成
 //
 // なぜ cron 側に置くのか: `/financial-math/emh?type=momentum` は 1 表示ごとに
 // swing_daily_ohlcv を全走査していた (本番実測 2026-09-13: 集計クエリ単体で
@@ -1328,82 +1428,88 @@ export async function pruneOhlcvRetention(
 // D1 は走査行課金なので、これは訪問者 1 人ごとに払う継続コストである。
 // 走査を「1 日 1 回」へ移し、画面は 1 銘柄 1 行の投影だけを読む。
 //
-// **新しい cron は足さない**。既存の日次 sync (平日 21:00 UTC) の最終フェーズに
-// 相乗りさせる。prune (Phase 4) の後に置くのは、投影の中身を「prune 後に D1 に
-// 実在する本数」と一致させるため (先に作ると消える行まで畳んでしまう)。
+// **新しい cron は足さない**。既存の日次 sync (平日 21:00 UTC) に相乗りさせる。
+//
+// 生成は 2 段 (L-47)。Phase 6 で OHLCV を読み直す (40k 行×9 ページ) のをやめ、
+// Phase 3 の各銘柄でメモリ上のスナップショットから upsert する:
+//   1. `writeStockSnapshot` が `snap.ohlcv6mo` の末尾 90 本から 1 文 upsert。
+//      `source_max_date` は暫定で自銘柄の最新日、Phase 6 で全体 MAX に直す。
+//   2. Phase 6 (`rebuildMomentumProjection`) は MAX(date) 1 文 +
+//      source_max_date の backfill + 掃除 DELETE だけを行う。
+//
+// メモリ build が D1 読み直しと一致する根拠:
+//   - 読む列は `close` (生値)。Yahoo の生終値は分割・配当で遡及修正されない
+//     (修正されるのは adj の方) ので、D1 の蓄積値と一致する。
+//   - 窓は末尾 90 本。prune 後 (≤90 本) の D1 と同じ窓。過去に失敗日がある銘柄は
+//     D1 窓と 1〜数本ずれるが、欠損が埋まるにつれ一致する (screening 用の
+//     順位信号であり、会計ではない)。
+//   - 日付順ソート・usable 判定・encode は D1 読み直しと同じ関数。
+// 失敗した銘柄の行は掃除 DELETE で消える (従来は古い as_of の行が残った)。
+// 新鮮でない行を出さない方が正しい: /emh は欠けた分だけ件数が減る。
 // -----------------------------------------------------------------------------
 
-/**
- * 投影再生成の 1 ページで読む OHLCV 行数。
- *
- * 刻まずに 1 文で読むと 336,169 行 ≒ 25 MB を 1 レスポンスで受けることになり、
- * D1 REST の応答上限に依存した壊れ方をする。1 ページ 40,000 行 ≒ 3 MB。
- *
- * 刻み方は **rowid カーソル** (`WHERE id > :last ORDER BY id LIMIT n`)。
- * 本番実測で走査行の比率がこれだけ違う (2026-09-13, kabulab-cf):
- *
- *   | 読み方 | rows_read | 返却行 | 比 |
- *   |---|---|---|---|
- *   | rowid カーソル 40,000 行 | 40,150 | 40,000 | **1.004** |
- *   | 全表走査 (join なし) | 336,169 | 309,156 | 1.09 |
- *   | stock_id 範囲 400 銘柄 (join なし) | 35,281 | 31,296 | 1.13 |
- *   | stock_id 範囲 400 銘柄 + core_stocks join | **371,793** | 31,030 | 12.0 |
- *
- * 最後の行が落とし穴で、`core_stocks` を JOIN すると SQLite は
- * `SEARCH core_stocks USING COVERING INDEX (is_active=?)` を外側ループに選び、
- * stock_id の範囲条件が**外側を刈らない**。1 チャンクごとに OHLCV を全走査する
- * ので、32 チャンクで 1,190 万行になる。**母集団 (active かつ equity) の絞り込みは SQL で
- * JOIN せず、id 集合を先に引いて JS 側で落とす。**
- */
-const PROJECTION_SCAN_PAGE = 40_000;
-/** p_momentum upsert の bind 上限対策 (6 列なので 16 行/文: 6×16=96≤100) */
-const PROJECTION_CHUNK = 16;
+/** 投影 1 行に入れる終値の本数。prune の保持本数と一致させる。 */
+const PROJECTION_BARS = 90;
 
-/** 投影再生成の結果 (コスト実測をログへ出すために行数を返す) */
+/** 投影仕上げの結果 (コスト実測をログへ出すために行数を返す) */
 export interface MomentumProjectionResult {
-  /** 書いた投影行数 (= 母集団のうち有効な終値を持つ銘柄数) */
+  /** 今 run に upsert された投影行数 (computed_at で数える) */
   projectedStocks: number;
-  /**
-   * 読み出した swing_daily_ohlcv の**返却行数** (`close IS NOT NULL` のもの)。
-   * D1 の rows_read はこれより多い: `close` が NULL の行 (実測 27,013) も
-   * 走査されるので、1 run の実測は約 336,169 + ページ数ぶんの端数になる。
-   */
+  /** 読み出した swing_daily_ohlcv の返却行数。L-47 以降は常に 0 (読み直さない)。 */
   scannedBars: number;
-  /** 生成時の MAX(swing_daily_ohlcv.date)。1 行も無ければ null */
+  /** OHLCV 全体の MAX(date)。1 行も無ければ null */
   sourceMaxDate: string | null;
   /** 母集団から落ちて掃除した投影行数 */
   removedStocks: number;
 }
 
 /**
- * `p_momentum` を `swing_daily_ohlcv` から作り直す。
+ * メモリ上の OHLCV から投影 1 行分を作る (純関数)。
  *
- * 母集団は `/emh` が数えているものと同じ「`core_stocks` の active かつ equity
- * (src/shared/db/active-equity.ts) で、終値が NULL でない行」。同じ WHERE /
- * 同じ順序で読むので、投影を経由しても
- * `calcMomentum` に入る配列は**従来と同一**になる (= 画面の数値は変わらない)。
+ * 末尾 90 本を取り、日付順に並べ、使える終値だけ残す。D1 読み直しと同じ
+ * 順序・同じ述語なので、同じ入力なら同じ行になる。有効な終値が 1 本も無ければ
+ * null (その銘柄は投影しない。D1 読み直し版の `usable.length === 0` continue
+ * と同じ)。
+ */
+export function buildMomentumRow(
+  ohlcv: ReadonlyArray<{ date: string; close: number | null }>
+): { asOf: string; bars: number; closes: string } | null {
+  const tail = ohlcv.slice(-PROJECTION_BARS);
+  const sorted = [...tail].sort((a, b) => (a.date < b.date ? -1 : 1));
+  const usable = sorted.filter((b) => isUsableClose(b.close));
+  if (usable.length === 0) return null;
+  const last = usable[usable.length - 1] as { date: string; close: number };
+  return {
+    asOf: last.date,
+    bars: usable.length,
+    closes: encodeCloses(usable.map((b) => b.close)),
+  };
+}
+
+/**
+ * `p_momentum` の仕上げ: source_max_date の backfill + 掃除 DELETE。
  *
- * 全消し → 全挿入は採らなかった。3,715 行の DELETE + 3,715 行の INSERT で
- * 書込が 2 倍になる。代わりに upsert してから「今回の run で触られなかった行」を
- * 1 文の DELETE で落とす。観測できる結果 (孤児行が残らない) は同じで、
- * 書込は約 3,715 行/日に収まる (実測 2026-09-13: is_active かつ有効終値を持つ
- * 銘柄 3,715。active かつ equity に絞った後はそれ以下で、上限は 3,700)。
+ * 投影行自体は Phase 3 で銘柄ごとに upsert 済み。ここでは全体の MAX(date) を
+ * 1 文で引いて全行へ backfill し、「今回の run で触られなかった行」を 1 文の
+ * DELETE で落とす。
+ *
+ * @param runStartedSec run 開始時刻 (unix 秒)。Phase 3 の upsert より前で
+ *   ないと掃除が今回の行まで消すので、呼び出し側が run 開始時に取る。
+ *
+ * 全消し → 全挿入は採らなかった (書込 2 倍)。upsert + 掃除 DELETE で
+ * 観測できる結果 (孤児行が残らない) は同じ。
  *
  * 途中で例外が出た場合、掃除 DELETE は走らないので古い行が残る。その行は
  * `as_of` が進まないので画面側で古さとして見える (黙って新しいふりをしない)。
  */
 export async function rebuildMomentumProjection(
-  db: Db
+  db: Db,
+  runStartedSec: number
 ): Promise<MomentumProjectionResult> {
-  // 掃除の閾値。この時刻以降に computed_at が書かれた行だけが「今回の run で
-  // 触られた行」。unixepoch() 秒に合わせるため切り捨てる。
-  const runStartedSec = Math.floor(Date.now() / 1000);
   const projection = projectionSchema.momentumProjection;
 
   // 母集団 = /emh が分母に使っているのと同じ active かつ equity の集合
   // (src/shared/db/active-equity.ts)。
-  // **JOIN にはしない** (上の表のとおり JOIN すると 1 ページごとに OHLCV を
-  // 全走査する計画を選ばれる)。id 集合を先に引いて JS 側で落とす。
   const activeIds = new Set(
     (
       await db
@@ -1416,113 +1522,54 @@ export async function rebuildMomentumProjection(
   if (activeIds.size === 0) {
     // active かつ equity の銘柄が 1 件も返らないのは「母集団が空になった」ではなく
     // core_stocks 側の異常である (is_active の一括対象外化、instrument_type の
-    // 充填が消えた等)。このまま進むと upsert 対象が 0 行になり、
-    // 下の掃除 DELETE が**投影を全消し**する。/emh は理由を出せないまま
-    // 「該当 0 件」になる (maxBars=0 なので window 超過の notice も出ない)。
-    // OHLCV が 1 行も無い状態 (= 初回 backfill 前) は正常だが、母集団が
-    // 0 件になるのは正常ではないので、静かに返さず run を失敗させる。
+    // 充填が消えた等)。このまま進むと下の掃除 DELETE が**投影を全消し**する。
+    // /emh は理由を出せないまま「該当 0 件」になる (maxBars=0 なので window 超過の
+    // notice も出ない)。静かに返さず run を失敗させる。
     throw new Error(
       "投影の母集団が空です: core_stocks に is_active=1 かつ instrument_type='equity' の行が 1 件もありません。" +
         " 投影を全消しすると /emh が理由なしの 0 件になるので中断します。"
     );
   }
 
-  const barsByStock = new Map<number, { date: string; close: number }[]>();
-  let scannedBars = 0;
-  let sourceMaxDate: string | null = null;
-
-  // rowid カーソルで前進する。id は autoincrement だが prune で穴が空くため
-  // (実測 336,169 行が id 8,916〜20,625,713 に散っている) 固定幅の範囲刻みは
-  // 使えない。カーソルなら空き番地を跨いでも走査行が返却行に比例する。
-  let lastId = 0;
-  for (;;) {
-    const page = await db
-      .select({
-        id: swingSchema.dailyOhlcv.id,
-        stockId: swingSchema.dailyOhlcv.stockId,
-        date: swingSchema.dailyOhlcv.date,
-        close: swingSchema.dailyOhlcv.close,
-      })
-      .from(swingSchema.dailyOhlcv)
-      .where(
-        and(
-          isNotNull(swingSchema.dailyOhlcv.close),
-          gt(swingSchema.dailyOhlcv.id, lastId)
-        )
-      )
-      .orderBy(asc(swingSchema.dailyOhlcv.id))
-      .limit(PROJECTION_SCAN_PAGE);
-    if (page.length === 0) break;
-
-    scannedBars += page.length;
-    for (const bar of page) {
-      if (bar.close === null) continue;
-      // データセット全体の鮮度。母集団外 (非活動・非普通株) のバーも含める (as_of との差が
-      // 「この銘柄だけ取得が止まっている」ことを示すので、分母は揃えない)。
-      if (sourceMaxDate === null || bar.date > sourceMaxDate) {
-        sourceMaxDate = bar.date;
-      }
-      if (!activeIds.has(bar.stockId)) continue;
-      const arr = barsByStock.get(bar.stockId);
-      if (arr) arr.push({ date: bar.date, close: bar.close });
-      else barsByStock.set(bar.stockId, [{ date: bar.date, close: bar.close }]);
-    }
-    lastId = page[page.length - 1].id;
-    if (page.length < PROJECTION_SCAN_PAGE) break;
-  }
-
-  if (sourceMaxDate === null) {
-    // OHLCV が 1 行も無い = 初回 backfill 前。ここで投影を全消しすると
-    // 「まだ取れていない」と「母集団から落ちた」の区別が付かなくなるので触らない。
+  // 今 run に触られた行数。0 = Phase 3 が全滅か新冠で、掃除すると全消しに
+  // なるので何もせず返す (旧「OHLCV 空」ガードと同じ役割)。
+  const runStarted = new Date(runStartedSec * 1000);
+  const [{ freshCount }] = await db
+    .select({ freshCount: sql<number>`count(*)` })
+    .from(projection)
+    .where(gte(projection.computedAt, runStarted));
+  if (freshCount === 0) {
     return {
       projectedStocks: 0,
-      scannedBars,
+      scannedBars: 0,
       sourceMaxDate: null,
       removedStocks: 0,
     };
   }
 
-  // rowid 順で読んだので日付順とは限らない (prune と増分 upsert で id と date の
-  // 単調性が一致しない)。**ここで date 昇順に揃える**。逆順や飛び順のまま
-  // 畳むと累積リターンの符号が黙って反転する。
-  const rows = [...barsByStock.entries()].flatMap(([stockId, bars]) => {
-    bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    // `encodeCloses` は 0 以下 / 非有限の終値を落とす。落ちた分を数に含めると
-    // `bars` (= 画面が出す window 実効上限) と `closes` の本数がずれ、`as_of` が
-    // 落とした行の日付になる。**符号化と同じ述語で先に絞る**。
-    const usable = bars.filter((b) => isUsableClose(b.close));
-    if (usable.length === 0) return [];
-    return [
-      {
-        stockId,
-        asOf: usable[usable.length - 1].date,
-        sourceMaxDate: sourceMaxDate as string,
-        bars: usable.length,
-        closes: encodeCloses(usable.map((b) => b.close)),
-        computedAt: new Date(runStartedSec * 1000),
-      },
-    ];
-  });
-
-  for (let i = 0; i < rows.length; i += PROJECTION_CHUNK) {
-    await db
-      .insert(projection)
-      .values(rows.slice(i, i + PROJECTION_CHUNK))
-      .onConflictDoUpdate({
-        target: projection.stockId,
-        set: {
-          asOf: sql`excluded.as_of`,
-          sourceMaxDate: sql`excluded.source_max_date`,
-          bars: sql`excluded.bars`,
-          closes: sql`excluded.closes`,
-          computedAt: sql`excluded.computed_at`,
-        },
-      });
+  // 全体の MAX(date) を 1 文で引く (covering index の seek)。
+  const maxRows = await db
+    .select({ maxDate: sql<string | null>`MAX(${swingSchema.dailyOhlcv.date})` })
+    .from(swingSchema.dailyOhlcv);
+  const sourceMaxDate = maxRows[0]?.maxDate ?? null;
+  if (sourceMaxDate === null) {
+    // OHLCV が 1 行も無い (= 初回 backfill 前)。何も触らずに返す。
+    return {
+      projectedStocks: 0,
+      scannedBars: 0,
+      sourceMaxDate: null,
+      removedStocks: 0,
+    };
   }
 
-  // 今回の run で触られなかった行 = 非活動化・上場廃止で母集団から落ちた銘柄。
-  // 件数は D1 REST が changes を返さないので DELETE の前に数える
-  // (行は転送しない = count(*)。どちらも p_momentum の全走査 = 行数ぶん 3,715 行)。
+  // 今 run の行へ全体 MAX を backfill する。
+  await db
+    .update(projection)
+    .set({ sourceMaxDate })
+    .where(gte(projection.computedAt, runStarted));
+
+  // 掃除: 今回の run で触られなかった行 (母集団落ち + 今回失敗) を落とす。
+  // 時刻の直接比較で十分 (computed_at は run ごとに進む単調時計)。
   const staleBefore = new Date((runStartedSec - 1) * 1000);
   const [{ staleCount }] = await db
     .select({ staleCount: sql<number>`count(*)` })
@@ -1533,8 +1580,8 @@ export async function rebuildMomentumProjection(
   }
 
   return {
-    projectedStocks: rows.length,
-    scannedBars,
+    projectedStocks: freshCount,
+    scannedBars: 0,
     sourceMaxDate,
     removedStocks: staleCount,
   };

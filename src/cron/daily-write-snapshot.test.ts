@@ -170,3 +170,45 @@ describe("writeStockSnapshot の options.writeCoreFinancials", () => {
     expect(on.statements.length - off.statements.length).toBe(1);
   });
 });
+
+describe("writeStockSnapshot の options.writeAnnual", () => {
+  it("既定では年次を書く", async () => {
+    const { db, statements } = makeRecordingDb();
+    await writeStockSnapshot(db, SNAP, undefined);
+    expect(countInsertsInto(statements, "core_stock_annual_financials")).toBe(1);
+  });
+
+  it("false なら年次を書かない (L-49。呼び出し側が月曜のみ真にする)", async () => {
+    const on = makeRecordingDb();
+    const off = makeRecordingDb();
+    await writeStockSnapshot(on.db, SNAP, undefined, { writeAnnual: true });
+    await writeStockSnapshot(off.db, SNAP, undefined, { writeAnnual: false });
+    expect(countInsertsInto(off.statements, "core_stock_annual_financials")).toBe(0);
+    // 差分は年次の 1 文だけであること。
+    expect(on.statements.length - off.statements.length).toBe(1);
+  });
+});
+
+describe("writeStockSnapshot の p_momentum upsert", () => {
+  const BARS = [
+    { date: "2026-09-09", open: null, high: null, low: null, close: 100, volume: null },
+    { date: "2026-09-10", open: null, high: null, low: null, close: 110, volume: null },
+    { date: "2026-09-11", open: null, high: null, low: null, close: 121, volume: null },
+  ];
+
+  it("6mo スライスから 1 文 upsert する (L-47)", async () => {
+    const { db, statements } = makeRecordingDb();
+    await writeStockSnapshot(
+      db,
+      { ...SNAP, ohlcv6mo: BARS },
+      "2026-09-10"
+    );
+    expect(countInsertsInto(statements, "p_momentum")).toBe(1);
+  });
+
+  it("有効な終値が無ければ投影しない", async () => {
+    const { db, statements } = makeRecordingDb();
+    await writeStockSnapshot(db, SNAP, undefined);
+    expect(countInsertsInto(statements, "p_momentum")).toBe(0);
+  });
+});

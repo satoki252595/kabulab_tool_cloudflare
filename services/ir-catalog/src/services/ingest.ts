@@ -255,6 +255,16 @@ export async function ingestBatch(
           tags: sql`excluded.tags`,
           primaryTag: sql`excluded.primary_tag`,
         },
+        // 差分更新: 変わっていない行の UPDATE を省く (L-49)。TDnet 7 日窓の
+        // 再取込は既存行の再 upsert が大半で、実測 15,774 行中 2,406 行だけが
+        // 新規だった。比較は 4 列 (title/tags/primary_tag/document_url)。
+        // IS NOT は NULL 安全 (両 NULL は「変化なし」になる)。
+        setWhere: sql`
+          "ir_disclosures"."title" IS NOT excluded.title
+          OR "ir_disclosures"."tags" IS NOT excluded.tags
+          OR "ir_disclosures"."primary_tag" IS NOT excluded.primary_tag
+          OR "ir_disclosures"."document_url" IS NOT excluded.document_url
+        `,
       });
     upserted += slice.length;
   }

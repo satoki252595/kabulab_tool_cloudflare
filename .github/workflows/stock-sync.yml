@@ -69,6 +69,7 @@ jobs:
 
       # 日次 sync (平日 cron または dispatch=daily/all)
       - name: stock daily sync
+        id: daily
         if: >-
           (github.event_name == 'schedule' && github.event.schedule == '0 21 * * 1-5') ||
           (github.event_name == 'workflow_dispatch' &&
@@ -99,6 +100,24 @@ jobs:
           TITLE="[ジョブ失敗] $WF"
           EXISTING=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
           BODY="$WF が失敗しました。%0A%0A実行: $RUN_URL%0A検知: $(date -u '+%Y-%m-%d %H:%M UTC')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$(printf '%b' "${BODY//%0A/\\n}")"
+          else
+            gh issue create --title "$TITLE" --label "" --body "$(printf '%b' "${BODY//%0A/\\n}")"
+          fi
+      # 失敗率 ≤1% の成功扱い (L-57) の trace。成功は成功だが、失敗が 0 ではない
+      # run を Issue へ記録する (恒久失敗の混入・回収漏れの早期発見用)。
+      - name: 許容内失敗があれば Issue にコメント
+        if: success() && steps.daily.outputs.tolerated_failures != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WF: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COUNT: ${{ steps.daily.outputs.tolerated_failures }}
+        run: |
+          TITLE="[ジョブ失敗] $WF"
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          BODY="$WF は成功扱い (失敗率 1% 以下) ですが、許容内失敗が $COUNT 件ありました。%0A%0A実行: $RUN_URL%0A検知: $(date -u '+%Y-%m-%d %H:%M UTC')"
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body "$(printf '%b' "${BODY//%0A/\\n}")"
           else

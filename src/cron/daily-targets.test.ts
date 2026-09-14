@@ -63,6 +63,14 @@ function makeProxyDb(target: DatabaseSync, log: string[]) {
 type Db = Parameters<typeof loadDailyTargets>[0];
 const db = (): Db => makeProxyDb(sqlite, executed) as unknown as Db;
 
+function seedIndicators(stockId: number, latestDate: string | null): void {
+  sqlite
+    .prepare(
+      "INSERT INTO swing_stock_indicators (stock_id, latest_date) VALUES (?, ?)"
+    )
+    .run(stockId, latestDate);
+}
+
 function seedStock(opts: {
   id: number;
   code: string;
@@ -103,10 +111,23 @@ describe("loadDailyTargets", () => {
     seedStock({ id: 3, code: "1201", active: true, instrumentType: INSTRUMENT_TYPES.reitFund });
     seedStock({ id: 4, code: "1202", active: true, instrumentType: INSTRUMENT_TYPES.etfEtn });
     seedStock({ id: 5, code: "9999", active: true, instrumentType: null });
+    seedIndicators(1, "2026-09-11");
 
     const targets = await loadDailyTargets(db());
 
-    expect(targets).toEqual([{ id: 1, code: "7203", sector: "輸送用機器" }]);
+    expect(targets).toEqual([
+      { id: 1, code: "7203", sector: "輸送用機器", latestDate: "2026-09-11" },
+    ]);
+  });
+
+  it("indicators が無い銘柄は latestDate が null (初回 backfill 扱い)", async () => {
+    seedStock({ id: 1, code: "7203", active: true, instrumentType: INSTRUMENT_TYPES.equity });
+
+    const targets = await loadDailyTargets(db());
+
+    expect(targets).toEqual([
+      { id: 1, code: "7203", sector: null, latestDate: null },
+    ]);
   });
 
   it("絞り込みは SQL の WHERE で行い、instrument_type を select しない", async () => {
@@ -116,7 +137,9 @@ describe("loadDailyTargets", () => {
 
     const [query] = executed;
     expect(query).toContain('where ("core_stocks"."is_active" = ? and "core_stocks"."instrument_type" = ?)');
-    // 読むのは id / code / sector だけ (値を JS 側へ持ってこない)
+    // 読むのは id / code / sector / latest_date だけ (値を JS 側へ持ってこない)
     expect(query.slice(0, query.indexOf(" from "))).not.toContain("instrument_type");
+    // 増分判定は OHLCV の GROUP BY ではなく indicators の LEFT JOIN (L-47)
+    expect(query).toContain('left join "swing_stock_indicators"');
   });
 });
