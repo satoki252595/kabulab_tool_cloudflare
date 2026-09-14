@@ -89,6 +89,24 @@ describe("selectSummaryTasks", () => {
     expect(() => parseTaskFile(tampered)).toThrow(/taskId が銘柄コードと掲載文に一致しません/);
     expect(() => parseTaskFile("{not json")).toThrow(/JSON ではありません/);
   });
+
+  it("非 JSON 行の内容は例外の message にも cause にも出ない", () => {
+    // タスクファイルは自分で書き出したものだが、手で壊れて掲載文がそのまま
+    // 1 行になったケースを想定 (Node の JSON.parse エラー文は入力の先頭を含む)。
+    const bogus = "架空の掲載文をそのままここに書いてしまった行";
+    let caught: unknown;
+    try {
+      parseTaskFile(bogus);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const err = caught as Error;
+    expect(err.message).toMatch(/JSON ではありません/);
+    expect(err.message).not.toContain(bogus);
+    expect(err.message).not.toContain("架空の掲載文");
+    expect(err.cause).toBeUndefined();
+  });
 });
 
 describe("planSummaryImport", () => {
@@ -249,7 +267,10 @@ describe("dry-run の出力に掲載文の断片を出さない (既定)", () =>
     const p = plan(result({ shortSummary: rejectedSummary }));
     expect(p.rejections).toHaveLength(1);
     expect(p.rejections[0]).toMatchObject({ reason: "contract", taskId: K_CATALOG });
-    // detail は規則名と字数だけで、要約本体そのものは積まない。
+    // detail は規則名と字数だけの完全一致で固定する。`not.toContain(rejectedSummary)`
+    // だけだと、旧実装より短い断片 (例: summary.slice(0, 10)) を detail に足しても
+    // 通ってしまい「断片が出ない」という不変条件を固定し切れない。
+    expect(p.rejections[0].detail).toBe("annotation: 掲載文の注記記号 ※ を含む");
     expect(p.rejections[0].detail).not.toContain(rejectedSummary);
     expect(p.rejections[0].text).toBeUndefined();
     const report = formatPlanReport(p).join("\n");
@@ -274,6 +295,34 @@ describe("dry-run の出力に掲載文の断片を出さない (既定)", () =>
     expect(formatPlanReport(p, 30, true).join("\n")).toContain(rejectedSummary);
     // showText を渡さなければ、text を保持していても出力には出さない。
     expect(formatPlanReport(p).join("\n")).not.toContain(rejectedSummary);
+  });
+
+  it("結果行のフィールドを取り違えて掲載文が taskId / contractVersion に入っても既定出力に出ない", () => {
+    const bogus = "架空の掲載文がそのままここに紛れ込んだ場合";
+    const p = plan(
+      [
+        JSON.stringify({ taskId: bogus, contractVersion: SUMMARY_CONTRACT_VERSION, shortSummary: "x", estimatedValue: null }),
+        JSON.stringify({ taskId: K_CATALOG, contractVersion: bogus, shortSummary: "x", estimatedValue: null }),
+      ].join("\n"),
+    );
+    expect(p.rejections).toHaveLength(2);
+    // taskId 自体が形式外 (16 桁 hex でない) の行は taskId を null にする — その
+    // 文字列 (掲載文) を Rejection.taskId として持ち回らない。
+    expect(p.rejections[0].taskId).toBeNull();
+    expect(p.rejections[1].reason).toBe("schema");
+    const report = formatPlanReport(p).join("\n");
+    expect(report).not.toContain(bogus);
+  });
+
+  it("本文をキー名にした行 (JSON の形が崩れた別パターン) も既定出力に出ない", () => {
+    const bogus = "架空の掲載文をキー名にしてしまった行";
+    const p = plan(JSON.stringify({ [bogus]: true, taskId: K_CATALOG, contractVersion: SUMMARY_CONTRACT_VERSION, shortSummary: "x", estimatedValue: null }));
+    expect(p.rejections).toHaveLength(1);
+    expect(p.rejections[0].reason).toBe("schema");
+    // 余計なキーは件数に畳み、キー名 (掲載文) は出さない。
+    expect(p.rejections[0].detail).toBe("(root): 余計なキー 1 個");
+    const report = formatPlanReport(p).join("\n");
+    expect(report).not.toContain(bogus);
   });
 });
 

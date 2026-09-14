@@ -20,6 +20,7 @@
  * はじいた行は理由つきで列挙し、未反映のまま残る (公開面は前の値のまま)。
  */
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { inArray } from "drizzle-orm";
 import { yutaiBenefits } from "../src/db/schema.js";
@@ -33,8 +34,21 @@ import {
 } from "./summary-import.js";
 import { parseTaskFile } from "./summary-tasks.js";
 
-async function main(): Promise<void> {
+export type ImportArgs = {
+  tasks: string;
+  results: string;
+  apply: boolean;
+  showText: boolean;
+};
+
+/**
+ * CLI 引数を解釈する。`main` から切り出してテストで固定する — CLI の配線
+ * (`--show-text` 既定 false の値がどのオプションに渡るか) は D1 を読まずに
+ * ここだけで検証できる。
+ */
+export function parseImportArgs(argv: readonly string[]): ImportArgs {
   const { values } = parseArgs({
+    args: argv,
     options: {
       tasks: { type: "string" },
       results: { type: "string" },
@@ -49,13 +63,21 @@ async function main(): Promise<void> {
   if (!values.tasks || !values.results) {
     throw new Error("--tasks <タスクファイル> と --results <結果ファイル> を指定してください");
   }
-  const apply = values.apply ?? false;
-  const showText = values["show-text"] ?? false;
-  assertNotCommittable(values.tasks);
-  assertNotCommittable(values.results);
+  return {
+    tasks: values.tasks,
+    results: values.results,
+    apply: values.apply ?? false,
+    showText: values["show-text"] ?? false,
+  };
+}
 
-  const tasks = parseTaskFile(readFileSync(values.tasks, "utf-8"));
-  const resultsText = readFileSync(values.results, "utf-8");
+async function main(): Promise<void> {
+  const { tasks: tasksPath, results: resultsPath, apply, showText } = parseImportArgs(process.argv.slice(2));
+  assertNotCommittable(tasksPath);
+  assertNotCommittable(resultsPath);
+
+  const tasks = parseTaskFile(readFileSync(tasksPath, "utf-8"));
+  const resultsText = readFileSync(resultsPath, "utf-8");
   const db = openOtakaraD1();
   const currentRows = await loadBenefitRows(db);
 
@@ -91,7 +113,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e) => {
-  console.error("[summary:import] エラー:", e);
-  process.exit(1);
-});
+// CLI として直接実行されたときだけ動かす。`parseImportArgs` をテストから
+// import しても `main()` (D1 アクセス・`process.exit`) が走らないようにするため。
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => {
+    console.error("[summary:import] エラー:", e);
+    process.exit(1);
+  });
+}

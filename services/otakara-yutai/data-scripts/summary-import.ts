@@ -37,19 +37,26 @@ import { z } from "zod";
 import { benefitKey } from "./benefit-key.js";
 import { extractYenAmounts, sanitizeEstimatedValue } from "./estimated-value-guard.js";
 import {
+  CONTRACT_VERSION_PATTERN,
   SUMMARY_CONTRACT_VERSION,
   checkSummary,
   formatViolations,
   isVerbatimCopy,
   normalizeSummary,
 } from "./summary-contract.js";
-import type { BenefitRow, SummaryTask } from "./summary-tasks.js";
+import { TASK_ID_PATTERN, type BenefitRow, type SummaryTask } from "./summary-tasks.js";
 
-/** 結果ファイル 1 行。外部エージェントの出力。 */
+/**
+ * 結果ファイル 1 行。外部エージェントの出力。`taskId` / `contractVersion` は
+ * 形式を絞る (`TASK_ID_PATTERN` / `CONTRACT_VERSION_PATTERN`) — LLM や手編集で
+ * フィールドを取り違え、掲載文が本来別の値であるべきここに紛れ込んでも、
+ * その時点でスキーマ違反としてはじき、後続の `contract_version` 等の detail に
+ * 埋め込まれて dry-run 出力に本文が乗る経路を閉じるため。
+ */
 export const SummaryResult = z
   .object({
-    taskId: z.string(),
-    contractVersion: z.string(),
+    taskId: z.string().regex(TASK_ID_PATTERN),
+    contractVersion: z.string().regex(CONTRACT_VERSION_PATTERN),
     shortSummary: z.string(),
     /** 優待 1 単位あたりの推定金額 (円・正の整数)。推定しないなら null。 */
     estimatedValue: z.number().int().positive().nullable(),
@@ -157,16 +164,23 @@ export function planSummaryImport(input: {
     }
     const r = SummaryResult.safeParse(raw);
     if (!r.success) {
-      const taskId =
+      const rawTaskId =
         raw && typeof raw === "object" && typeof (raw as { taskId?: unknown }).taskId === "string"
           ? (raw as { taskId: string }).taskId
           : null;
-      rejections.push({
-        line,
-        taskId,
-        reason: "schema",
-        detail: r.error.issues.map((x) => `${x.path.join(".") || "(root)"}: ${x.message}`).join(" / ").slice(0, 200),
-      });
+      // taskId の形式 (16 桁 hex) に一致するときだけ出す。フィールド取り違えで
+      // 掲載文がそのまま taskId に入っていても、形式外なら null にして出さない。
+      const taskId = rawTaskId !== null && TASK_ID_PATTERN.test(rawTaskId) ? rawTaskId : null;
+      const detail = r.error.issues
+        .map((x) =>
+          x.code === "unrecognized_keys"
+            // キー名に掲載文が紛れ込んでいても (例: 本文をキーにした行) キー数だけにする。
+            ? `${x.path.join(".") || "(root)"}: 余計なキー ${x.keys.length} 個`
+            : `${x.path.join(".") || "(root)"}: ${x.message}`,
+        )
+        .join(" / ")
+        .slice(0, 200);
+      rejections.push({ line, taskId, reason: "schema", detail });
       return;
     }
     parsed.push({ line, result: r.data });
