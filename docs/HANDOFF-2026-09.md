@@ -78,7 +78,7 @@
 ### C. ライセンス境界（実効防御）
 - **C1** `public-columns.ts`: `PUBLISH_JPX_DERIVED_COLUMNS=false` は 1 箇所のみ、`publicMarketColumn=NULL`、`publicSectorColumn=sector33`、`sector` へフォールバックしない。`SECTOR_DAILY_PUBLIC_KEY_SINCE` は一時ガードで K3 の後に撤去（L-64）。
 - **C2** `core-stocks-license-boundary.test.ts` の 5 検査はパス・識別子ベース（`PUBLIC_SURFACE` 12 ファイル、`*[Ss]tocks` 接尾辞）。公開面ファイルの移動/改名は `PUBLIC_SURFACE` と `source-scan.ts` を同時更新。`public/` は走査対象外（X-07）。
-- **C3** `activeEquityCondition()` は WHERE/ON のみ・select しない。`instrument_type` の書き手は `universe.ts` だけ、修飾参照は `universe.ts` と `active-equity.ts` だけ。取込は `ingestUniverseCondition()`。
+- **C3** `activeEquityCondition()` は WHERE/ON のみ・select しない。`instrument_type` の書き手は `universe.ts` だけ、修飾参照は `universe.ts` と `active-equity.ts` だけ。取込は `disclosureIngestCondition()` (X-05 で改名)。
 - **C4** `yutai_benefits.description`（出典サイトの掲載文）は公開面 `app.ts` で `name="description"` と `g.description` 以外に出さない。`src/routes`・`src/views` は存在してはならない。D1 の SELECT でも `description` を引かない。
 - **C5** 業種集計は分母・分子 `activeEquityCondition`、キー `sector33`、カバレッジ <90% で書かない、当日分のみ delete→insert。
 - **C6** `notion-archive` は ir-catalog 公開ページの `fetchPageFileUrl` が使う（消すと PDF リンクが死ぬ）。L-44 で消すのは旧フラット DB 退避コード（`archiveFlatDbOnce` / `obsoleteFlatTitle`）だけ。

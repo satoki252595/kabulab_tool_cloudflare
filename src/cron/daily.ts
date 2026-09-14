@@ -1,5 +1,5 @@
 /**
- * 日次 sync オーケストレータ（Node / GitHub Actions 実行・ADR-0001）
+ * 日次 sync オーケストレータ (Node / GitHub Actions 実行)。
  *
  * 3 サービス (001 RSI / 002 otakara / 003 swing) が必要とする日次データを 1 本の
  * 統一フローで取得・計算・書き込む。
@@ -13,8 +13,7 @@
  *
  * フロー（母集団同期 Phase 0 は除外）:
  *   Phase 1. ブートストラップ: core_stocks の active かつ equity の銘柄を取得 +
- *            swing_stock_indicators.latest_date を LEFT JOIN（増分判定用。
- *            OHLCV の MAX(date) GROUP BY だったが L-47 で JOIN へ置換）
+ *            swing_stock_indicators.latest_date を LEFT JOIN (増分判定用)
  *   Phase 2. マクロコンテキスト (^N225 / ^VIX / ^GSPC / NIY=F + 日経VI)
  *   Phase 3. worker pool で各銘柄: Chart(5y)+QuoteSummary 取得 → 全指標を計算 →
  *            core_financials / rsi_percentile / swing_* を **増分** upsert +
@@ -44,7 +43,7 @@ import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 
-// core スキーマは rsi-screening の定義を流用 (001 が所有・更新)
+// core スキーマ (共有。日次 sync が更新)
 import * as coreSchema from "../shared/db/core-schema.js";
 // rsi スキーマ
 import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
@@ -1035,20 +1034,13 @@ async function buildSnapshot(
 // -----------------------------------------------------------------------------
 
 /**
- * `writeStockSnapshot` の書き込み範囲スイッチ。
- *
- * 移行 P5-b で ②断面 (`core_stock_financials`) の writer が stockStock 側へ移る。
- * 両者が同じ 1 行 (stock_id ユニーク) を upsert すると、残る値は実行順で決まり、
- * `fetched_at` と値の組が壊れる（新しい fetched_at に古い価格が乗る）。切替当日に
- * daily.ts のコードを削るのではなく、**呼び出し側で止められる**形にしておく。
+ * `writeStockSnapshot` の書き込み範囲スイッチ。将来 ②断面の writer が移る場合に
+ * 呼び出し側で止められる形 (両者が同じ 1 行を upsert すると実行順で値が決まる)。
  */
 export interface WriteStockSnapshotOptions {
   /**
-   * ②断面 (`core_stock_financials`) を書くか。既定 true = 従来どおり書く。
-   *
-   * 年次 (`core_stock_annual_financials`) はこのフラグの対象外。年次は Yahoo の
-   * annualFinancials が唯一の出所で P5-b の移行対象に入っていないため、ここで
-   * 一緒に止めると「フラグを立てた瞬間に売上推移が止まる」副作用になる。
+   * ②断面 (`core_stock_financials`) を書くか。既定 true。
+   * 年次は対象外 (別出所のため一緒に止めると売上推移が止まる)。
    */
   writeCoreFinancials?: boolean;
   /**
@@ -1685,32 +1677,18 @@ export async function pruneOhlcvRetention(
 }
 
 // -----------------------------------------------------------------------------
-// L2 投影 (p_momentum) の生成
+// L2 投影 (p_momentum) の生成。画面の全走査を「1 日 1 回」の cron 生成へ移し、
+// 画面は 1 銘柄 1 行の投影だけを読む。新しい cron は足さず日次 sync に相乗り。
 //
-// なぜ cron 側に置くのか: `/financial-math/emh?type=momentum` は 1 表示ごとに
-// swing_daily_ohlcv を全走査していた (本番実測 2026-09-13: 集計クエリ単体で
-// 647,628 rows_read、1 リクエスト合計 651,494 / TTFB 0.86〜1.01 秒)。
-// D1 は走査行課金なので、これは訪問者 1 人ごとに払う継続コストである。
-// 走査を「1 日 1 回」へ移し、画面は 1 銘柄 1 行の投影だけを読む。
-//
-// **新しい cron は足さない**。既存の日次 sync (平日 21:00 UTC) に相乗りさせる。
-//
-// 生成は 2 段 (L-47)。Phase 6 で OHLCV を読み直す (40k 行×9 ページ) のをやめ、
-// Phase 3 の各銘柄でメモリ上のスナップショットから upsert する:
+// 生成は 2 段:
 //   1. `writeStockSnapshot` が `snap.ohlcv6mo` の末尾 90 本から 1 文 upsert。
 //      `source_max_date` は暫定で自銘柄の最新日、Phase 6 で全体 MAX に直す。
 //   2. Phase 6 (`rebuildMomentumProjection`) は MAX(date) 1 文 +
 //      source_max_date の backfill + 掃除 DELETE だけを行う。
 //
-// メモリ build が D1 読み直しと一致する根拠:
-//   - 読む列は `close` (生値)。Yahoo の生終値は分割・配当で遡及修正されない
-//     (修正されるのは adj の方) ので、D1 の蓄積値と一致する。
-//   - 窓は末尾 90 本。prune 後 (≤90 本) の D1 と同じ窓。過去に失敗日がある銘柄は
-//     D1 窓と 1〜数本ずれるが、欠損が埋まるにつれ一致する (screening 用の
-//     順位信号であり、会計ではない)。
-//   - 日付順ソート・usable 判定・encode は D1 読み直しと同じ関数。
-// 失敗した銘柄の行は掃除 DELETE で消える (従来は古い as_of の行が残った)。
-// 新鮮でない行を出さない方が正しい: /emh は欠けた分だけ件数が減る。
+// メモリ build が D1 読み直しと一致する根拠: 読む列は遡及修正されない生 `close`、
+// 窓は prune 後と同じ末尾 90 本、ソート・usable 判定・encode は同じ関数。
+// 失敗した銘柄の行は掃除 DELETE で消える (/emh は欠けた分だけ件数が減る)。
 // -----------------------------------------------------------------------------
 
 /** 投影 1 行に入れる終値の本数。prune の保持本数と一致させる。 */

@@ -1,12 +1,12 @@
 /**
- * 005 yuho-quant — EDINET 有報の日次キャッチアップ (ADR-0001: D1 + Worker 実行)。
+ * 005 yuho-quant — EDINET 有報の日次キャッチアップ (D1 + Worker 実行)。
  *
- * D1 はバインディング経由でのみ触れるため、本処理は Worker 上で動く。現状の
+ * D1 はバインディング経由でのみ触れるため、本処理は Worker 上で動く。
  * 起動経路は **認証付き HTTP ルート** (POST /yuho-quant/admin/catchup,
  * services/yuho-quant/src/routes/admin.ts) で、D1 を `createDb(c.env.DB)` で
- * 渡して呼ぶ。Workers Cron Trigger への配線 ([triggers] crons + scheduled
- * ハンドラ) は Phase 3 で追加する (現状は未配線)。他5サービスの Neon 日次
- * パイプライン (scripts/sync/all-daily.ts) からは分離済み。
+ * 渡して呼ぶ。catchup.yml が薄いトリガ (scripts/sync/yuho-edinet.ts) で叩く。
+ * Workers Cron は使わない (無料運用方針)。Node の日次パイプライン
+ * (scripts/sync/all-daily.ts) からは分離済み。
  *
  * 動作:
  *   - 直近 WINDOW_DAYS 日を新しい順に EDINET 書類一覧で走査
@@ -89,7 +89,7 @@ export async function runYuhoEdinetCatchup(
 
   // 取込の母集団。変更前 (core_stocks の全行) から、非普通株と、区分が NULL の active 行
   // だけを除く。is_active=0 の会社 (上場廃止・地域取引所の単独上場) の有報は取り込み続ける
-  // (理由は src/shared/db/active-equity.ts の ingestUniverseCondition)。
+  // (理由は src/shared/db/active-equity.ts の disclosureIngestCondition)。
   const codeToId = await loadIngestCodeToId(db);
 
   const byStatus: Record<string, number> = {};

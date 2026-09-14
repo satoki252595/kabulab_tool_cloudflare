@@ -164,7 +164,7 @@ async function main(): Promise<void> {
 
   // code(4桁) → stockId マップ。母集団は日次キャッチアップ (src/cron/yuho-edinet.ts) と
   // 同じ取込の母集団 (非普通株と、区分が NULL の active 行を除く。理由は
-  // src/shared/db/active-equity.ts の ingestUniverseCondition)。
+  // src/shared/db/active-equity.ts の disclosureIngestCondition)。
   const codeToId = await loadIngestCodeToId(db);
   console.info(
     `[backfill] core_stocks (取込の母集団) ${codeToId.size} 社 / 期間 ${from}〜${to}` +

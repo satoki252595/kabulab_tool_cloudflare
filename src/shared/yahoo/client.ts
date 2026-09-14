@@ -1,9 +1,5 @@
 /**
- * 統一 Yahoo Finance クライアント
- *
- * 以前は rsi-screening / swing-trading / otakara-yutai の 3 サービスが
- * それぞれ独自の yahoo-finance.ts を持ち、crumb/cookie キャッシュも別々だった。
- * このモジュールはそれらを 1 つにまとめ、全サービス共通で使う。
+ * 統一 Yahoo Finance クライアント (全サービス共通。crumb/cookie キャッシュも共有)。
  *
  * 提供する API:
  *   - fetchChart(symbol, range)      : Chart API (日足 OHLCV)

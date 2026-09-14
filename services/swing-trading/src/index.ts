@@ -13,7 +13,7 @@ import { apiRoute } from "./routes/api.js";
 export const app = new Hono({ strict: false });
 const errorHandler = createErrorHandler("swing-trading");
 
-// API routes (POST /api/risk/calc + GET /api/cron/sync-daily)
+// API routes (POST /api/risk/calc のみ)
 app.route("/api", apiRoute);
 
 // SSR pages (GET / /screening /signals /stock/:code /risk)

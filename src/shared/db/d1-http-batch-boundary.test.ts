@@ -1,29 +1,12 @@
 /**
- * `createD1HttpDb` (drizzle sqlite-proxy / D1 REST) の **batch 境界**ガード。
+ * `createD1HttpDb` (sqlite-proxy / D1 REST) の **batch 境界**ガード。
+ * batch callback を渡していないため `db.batch()` は実行時に落ちる。
+ * **型では捕まらない** (Node スクリプトは `as unknown as Database` で渡す定型)。
  *
- * `createD1HttpDb` は `drizzle(callback, { schema })` の形で呼んでおり、
- * sqlite-proxy の第 2 引数 (batch callback) を渡していない。そのため
- * `db.batch()` は実行時に `TypeError: this.batchCLient is not a function` で
- * 落ちる (session が `this.batchCLient(...)` を直呼びする)。
- *
- * **型では捕まらない。** Node 側の取込スクリプトは `createD1HttpDb(...)` を
- * `as unknown as Database` (= D1 バインディング版) へキャストして
- * サービス共通の ingest 関数へ渡すのが定型で、その `Database` は `batch` を
- * 持つ。つまり「batch を使う ingest 関数を sqlite-proxy 経由で呼ぶ」誤配線は
- * tsc も eslint も緑にする。
- *
- * 壊れ方が悪いのは、`db.batch()` を使う ingest が **batch の手前で
- * 親行 (yuho_documents) をコミットしている**こと。落ちた時点で
- * 「parse_status は ok_* なのに facts が 0 件」の行が本番 D1 に残り、
- * 次回実行は既存 docId として `skipped_existing` になるので二度と埋まらない
- * (CLAUDE.md ルール2 の「黙って壊れる」)。
- *
- * そこで 2 つを機械的に見る:
- *   1. sqlite-proxy を createD1HttpDb と同じ形で組むと `db.batch()` が
- *      本当に落ちること (前提そのもの。drizzle 側や createD1HttpDb が
- *      batch 対応になったらここが落ちるので、その時はこのガードを畳む)
- *   2. `createD1HttpDb` を使う Node スクリプトが batch 依存の ingest 関数を
- *      呼ぶなら、**書き込みの前に fail-fast すること**
+ * 機械的に見る 2 つ:
+ *   1. 同じ形で組むと `db.batch()` が本当に落ちること (batch 対応になったら畳む)
+ *   2. batch 依存の ingest を呼ぶなら**書き込みの前に fail-fast すること**
+ *      (親行コミット後に落ちると facts 0 件の行が残り二度と埋まらない)。
  */
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";

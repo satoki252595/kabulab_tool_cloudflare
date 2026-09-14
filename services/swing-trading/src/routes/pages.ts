@@ -41,36 +41,12 @@ pagesRoute.get("/", async (c) => {
   const macroRows = await db.select().from(marketContext).orderBy(desc(marketContext.date)).limit(1);
   const macro = macroRows[0] ?? null;
 
-  // セクター上位 — 最新 date の rank_1d 昇順で 5 件
-  //
-  // `swing_sector_daily.sector` は src/cron/daily.ts が `core_stocks.sector`
-  // (= JPX 33 業種) を集約キーにして書いた**保存済みの派生コピー**で、
-  // core_stocks を読まないため src/shared/db/public-columns.ts の切り替えが
-  // 届かない。実測 (2026-09-13): 他の 6 サービスから JPX 由来を外した後も
-  // GET /swing-trading/ だけが「銀行業」「ゴム製品」を返していた。
-  //
-  // PR #24 はここを同じフラグで**表示ごと**閉じた。業種名を伏せて順位だけ
-  // 出す案は採らなかった (業種名の無い業種ランキングは読者にとって意味が無い)。
-  //
-  // 2026-09-13: 集約キーを書く側 (daily.ts `aggregateSectorDaily`) で
-  // `publicSectorColumn` (= `sector33`, EDINET 由来) へ移した。ただし
-  // **切り替え前の日付の行は JPX キーのまま表に残る**ので、ガードは外さず
-  // 「切り替え後に cron が書いた日付だけ出す」へ変える。
-  // 日付と、その日付が正しい前提 (マージ時期 / sector33 の backfill) は
-  // `SECTOR_DAILY_PUBLIC_KEY_SINCE` のコメントにまとめてある。
-  //
-  // 比較に `macro.date` (swing_market_context の最新日付) を使ってよい理由:
-  // 下のクエリは `WHERE date = latestSectorDate` なので、**実際に読む行の日付**
-  // がこの値そのもの。両表は同じ cron が同じ UTC 日付で書いており、本番の
-  // 実測 (2026-09-13, 直近 8 営業日 09-02〜09-11) でも日付の並びが一致した。
-  // ずれる日 (マクロ取得の一過性失敗で market_context だけ前日のまま /
-  // カバレッジ不足で sector_daily だけ書かない) も、読む日付で判定しているので
-  // 切り替え前の行を出すことは無い (前者は前日 = 古い日付を比べて閉じる、
-  // 後者はその日付の行が無く空)。
-  //
-  // 読まない = Worker のプロセスにも載らない。クエリごと飛ばす (rows_read も減る)。
-  // 出す日のコスト: `idx_swing_sector_date_rank (date=?)` の SEARCH で
-  // 1 表示あたり rows_read 5 (本番の実測)。
+  // セクター上位 — 最新 date の rank_1d 昇順で 5 件。
+  // `sector` は保存済みの派生コピーで public-columns の切り替えが届かないため、
+  // 切り替え後に cron が書いた日付だけ出す (日付と前提は
+  // `SECTOR_DAILY_PUBLIC_KEY_SINCE` のコメント)。比較に `macro.date` を使うのは、
+  // 下のクエリが `WHERE date = latestSectorDate` で実際に読む行の日付そのものの
+  // ため。読まない日はクエリごと飛ばす (Worker に載せない・rows_read も減る)。
   const latestSectorDate = macro?.date;
   let topSectors: Array<{ sector: string; pct1d: number; stockCount: number; rank1d: number }> = [];
   if (
@@ -98,15 +74,8 @@ pagesRoute.get("/", async (c) => {
   // 母集団 (active かつ equity) では絞っていない。上場廃止の行と、日次の対象外に
   // なって凍結した行も数える。
   //
-  // passedLong / passedShort は、GET /screening に母集団の条件が無かった間は一覧と
-  // 同じ集合だった。/screening を母集団で絞ったので、**件数が一覧と食い違う**
-  // (本番 2026-09-14: 母集団で数えると long 89 → 88、short 339 → 338。差の内訳は
-  // long が上場廃止の行 1、short が非普通株の行 1)。非普通株 9 銘柄の行は
-  // 2026-09-13 のユーザー決定で元データから削除するので、削除後に残る差は上場廃止の
-  // 行の分だけになる。
-  // /screening と同じ CROSS JOIN + 述語で数えれば揃うが、閲覧 1 回の rows_read が
-  // long 89 → 178 / short 339 → 678 (同日実測) と倍になる。totalScreened も
-  // 3,764 → 7,409 (2026-09-13 実測)。ランニングコストを増やさない制約により採らない。
+  // 件数は一覧と食い違う (/screening は母集団で絞るが、ここは絞らない)。
+  // 同じ CROSS JOIN + 述語で数えれば揃うが rows_read が倍になるため採らない。
   // スクリーニング結果は swing_stock_indicators の列 (L-52 で表を畳んだ)。
   const [{ totalScreened }] = await db
     .select({ totalScreened: sql<number>`count(*)` })
@@ -195,21 +164,11 @@ pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c
   const { direction } = c.req.valid("query");
   const db = createDb(c.env.DB);
 
-  // 日次の母集団 (active かつ equity) の銘柄だけを出す。以前はここに is_active の
-  // 条件も無く、上場廃止や日次の対象外になった銘柄の screening 行も並びえた。
-  //
+  // 日次の母集団 (active かつ equity) の銘柄だけを出す。
   // **`core_stocks` は CROSS JOIN + WHERE の等値で結ぶ (INNER JOIN にしない)。**
-  // INNER JOIN のまま母集団の述語を足すと、SQLite は `core_stocks` の
-  // `idx_core_stocks_active_market (is_active=?)` を外側ループに選び直し、通過銘柄
-  // だけを引く `idx_swing_indicators_all_passed_{long,short}` を使わなくなる。
-  // 本番実測 (2026-09-13, rows_read。畳む前の screening 表の索引での値):
-  // long 356 → 7,585 / short 1,356 → 8,085。述語を INNER JOIN の ON に移しても
-  // 計画は同じだった (ON は WHERE と同じ扱い)。
-  // SQLite の CROSS JOIN は左表を必ず外側に置くので、計画は
-  // 「indicators の all_passed 索引 → core_stocks の PK」になる
-  // (L-52 で screening 表を indicators の列に畳み、3 表結合が 2 表結合になった。
-  // 旧計画の実測: long 354 / short 1,354 rows_read)。
-  // 結合条件は WHERE の等値なので、返る行は INNER JOIN と同じ。
+  // INNER JOIN だと SQLite が `core_stocks` 側を外側ループに選び直し、
+  // `idx_swing_indicators_all_passed_*` を使わなくなる (ON に移しても同じ)。
+  // CROSS JOIN は左表を必ず外側に置く。返る行は INNER JOIN と同じ。
   const whereCondition = and(
     direction === "long"
       ? eq(stockIndicators.allPassedLong, true)

@@ -105,15 +105,7 @@ export function publicSummaries(rows: { shortSummary: string | null }[]): string
 /** スクリーニング1ページの件数。SSR 初期表示と /api/screening の既定 limit で共有する。 */
 export const SCREENING_PAGE_SIZE = 50;
 
-/**
- * /api/screening の limit 上限。
- *
- * 上限そのものは D1 の1レスポンス肥大を抑えるために残すが、以前は
- * **これがそのまま閲覧可能件数の上限**だった (offset が無かったため)。
- * 優待銘柄の母集団は 1,616、権利月3月だけで 848 件あり、どう絞り込んでも
- * 101 件目以降に到達する手段が無かった。offset 追加後は 1 ページの大きさに
- * すぎない。
- */
+/** /api/screening の limit 上限 (1 レスポンスの肥大抑止。offset とは別に 1 ページの大きさ)。 */
 export const SCREENING_MAX_LIMIT = 100;
 
 /**
@@ -157,7 +149,7 @@ async function loadCardBenefits(
 const app = new Hono<AppEnv>({ strict: false });
 
 // PWA 用静的ファイル (manifest.json / sw.js / icons) は
-// ルート repo の public/otakara-yutai/ に配置し、Vercel が直接配信する。
+// ルート repo の public/otakara-yutai/ に配置し、Worker の [assets] が直接配信する。
 // サブアプリ側のルート定義は不要。
 
 app.use("*", logger());
@@ -183,10 +175,8 @@ app.get("/api/screening", async (c) => {
   const sort = c.req.query("sort") ?? "total";
   const order = c.req.query("order") ?? "desc";
   const limit = Math.min(SCREENING_MAX_LIMIT, Math.max(1, parseInt(c.req.query("limit") ?? String(SCREENING_PAGE_SIZE), 10) || SCREENING_PAGE_SIZE));
-  // ページ送り。OFFSET の走査コストは実測で平坦 (同一条件で OFFSET 0 と 1550 が
-  // どちらも rows_read 6,947) なので、keyset ページングではなく素直な OFFSET を採る。
-  // 上限は母集団 (優待銘柄 1,616) を十分に超える値で、桁を間違えた URL で
-  // 無意味な走査をさせないための歯止め。
+  // ページ送り。OFFSET の走査コストは平坦なので keyset ではなく素直な OFFSET を採る。
+  // 上限は桁を間違えた URL で無意味な走査をさせないための歯止め。
   const offset = Math.max(0, Math.min(100_000, parseInt(c.req.query("offset") ?? "0", 10) || 0));
   // 総件数を返すか。既定 false ＝ 打たない (理由は下の COUNT 付近を参照)。
   const withTotal = c.req.query("withTotal") === "1";
@@ -196,9 +186,6 @@ app.get("/api/screening", async (c) => {
   const whereClauses: unknown[] = [activeEquityCondition(), eq(stocks.isYutai, true)];
 
   // ジャンル/権利月フィルター (L-51)。月次 rebuild の集計列を引く。
-  // 旧形は yutai_benefits の IN 副問合せだったが、rows と count で 2 回
-  // 8,295 行を走査していた。JS 配列への展開は D1 のバインド上限 (100) で
-  // 500 になるため採らない (副問合せ時代からの制約のまま)。
   // ジャンル∩権利月は 2 つの述語を AND で重ねることで表現する。
   if (genre) {
     const genreRow = await db.select({ id: yutaiGenres.id }).from(yutaiGenres)
@@ -230,14 +217,9 @@ app.get("/api/screening", async (c) => {
     ? sql`${col} ASC NULLS LAST`
     : sql`${col} DESC NULLS LAST`;
 
-  // 総件数。同一 WHERE の COUNT は**データ取得と同額の走査を払う** (実測 rows_read:
-  // 無フィルタ 6,947 / 権利月フィルタ 13,725 / 全条件 13,412)。D1 は走査行課金なので
-  // 毎リクエストで打つと権利月フィルタ時に 13,725 → 27,450 と倍になる。
-  // そこで「絞り込み条件を変えた最初の1回だけクライアントが withTotal=1 を付ける」
-  // 方式にした (ページ送りとソート変更では総件数は変わらないのでキャッシュを使う)。
-  // 採らなかった案: (a) 毎回 COUNT — 上記のとおり課金が倍。(b) limit+1 件だけ引いて
-  // 「100件以上」と曖昧に出す — 権利月3月で 848 件という規模では「848件中」と
-  // 正確に出せる価値の方が大きい。
+  // 総件数。同一 WHERE の COUNT はデータ取得と同額の走査を払うため、
+  // 「絞り込み条件を変えた最初の1回だけクライアントが withTotal=1 を付ける」方式
+  // (ページ送りとソート変更ではキャッシュを使う)。
   let total: number | null = null;
   if (withTotal) {
     // 財務列の絞り込みが無いときは LEFT JOIN を落とす。LEFT JOIN は行を減らさず、
@@ -890,8 +872,7 @@ function sortOptions(current = "total-desc"): string {
 app.get("/", async (c) => {
   const db = c.get("db");
   const genres = await db.select().from(yutaiGenres).orderBy(yutaiGenres.name);
-  // 銘柄数は一覧 (/screening と /api/screening) の母集団と同じ述語で数える。
-  // 以前は is_yutai だけを見ており、上場廃止した優待銘柄まで数えていた。
+  // 銘柄数は一覧の母集団と同じ述語で数える。
   const [{ count: totalStocks }] = await db.select({ count: count() }).from(stocks)
     .where(and(activeEquityCondition(), eq(stocks.isYutai, true)));
 
@@ -1009,18 +990,9 @@ app.get("/genres/:slug", async (c) => {
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
     .where(gWhereCond)
     .orderBy(gSortExpr, asc(stocks.id))
-    // 1 銘柄 1 行であることは JOIN 先の UNIQUE 制約が保証する
-    // (otakara_stock_financials / _scores の stock_id は UNIQUE。本番 D1 にも
-    // 同名の unique index が実在する)。だから limit を PAGE_SIZE より大きく取る
-    // 必要は無い。
-    //
-    // **ただし rows_read は減らない。** 本番実測 (2026-09-13, genre_id=110 /
-    // 373 銘柄): limit 20 / 60 / 200 のいずれでも rows_read は 5,568 で同値。
-    // EXPLAIN が `USE TEMP B-TREE FOR ORDER BY` を出すとおり、ORDER BY のために
-    // 一致集合を全部並べ替えてから LIMIT を適用するので、LIMIT は**返却行数
-    // だけ**を変える。3 倍にしていた分の実害は行転送量と SSR 側の処理で、
-    // 走査行課金には出ない。索引でもコストが下がらないのと同じ構図なので、
-    // ここを「コスト削減」と書かないこと。
+    // 1 銘柄 1 行は JOIN 先の UNIQUE 制約が保証する (limit を大きく取る必要は無い)。
+    // ただし rows_read は減らない: ORDER BY の TEMP B-TREE ソートが一致集合を
+    // 全部並べ替えてから LIMIT を適用するため。ここを「コスト削減」と書かないこと。
     .limit(PAGE_SIZE).offset(offset);
 
   // JS 側の重複除去も外した。上の UNIQUE が成り立つ限り一度も仕事をせず、
@@ -1523,10 +1495,8 @@ app.get("/stocks/:code", async (c) => {
           recordMonth: b.recordMonth,
           summary: publicSummary(b),
           estimatedValue: b.estimatedValue,
-          // drizzle/d1/0005 を 2026-09-12 に本番 D1 へ適用済み。それ以前は列が
-          // 無く、SQLite が解決できない二重引用符付き識別子を**文字列リテラル**
-          // として返すため、この2つに "estimate_value_source" という列名の文字列が
-          // 入っていた (= WEB推定バッジが恒久的に出ない状態だった)。
+          // 列が無い時代は SQLite が識別子を文字列リテラルとして返していた
+          // (0005 で解消)。
           estimateValueSource: b.estimateValueSource,
           estimateSourceUrl: b.estimateSourceUrl,
         }))
