@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { and, asc, desc, eq, gt, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import { createDb } from "../db/client.js";
-import { stocks, stockFinancials } from "../db/core-schema.js";
+import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
 import { dailyOhlcv, stockIndicators } from "../db/swing-readonly.js";
 import { momentumProjection } from "../../../../src/shared/db/projection-schema.js";
 import { decodeCloses } from "../../../../src/shared/indicators/momentum-series.js";

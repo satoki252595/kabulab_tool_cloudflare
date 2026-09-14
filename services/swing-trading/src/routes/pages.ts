@@ -7,7 +7,7 @@ import {
   PUBLISH_JPX_DERIVED_COLUMNS,
   SECTOR_DAILY_PUBLIC_KEY_SINCE,
 } from "../../../../src/shared/db/public-columns.js";
-import { stocks, stockFinancials } from "../db/core-schema.js";
+import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
 import {
   stockIndicators,
   entrySignals,

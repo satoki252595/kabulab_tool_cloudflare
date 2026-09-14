@@ -4,7 +4,7 @@ import {
   stocks,
   stockFinancials,
   stockAnnualFinancials,
-} from "../db/core-schema.js";
+} from "../../../../src/shared/db/core-schema.js";
 import { stockRsiPercentile } from "../db/schema.js";
 import {
   publicMarketColumn,

@@ -1,6 +1,6 @@
 import { sql, relations } from "drizzle-orm";
 import { sqliteTable, integer, text, real, index } from "drizzle-orm/sqlite-core";
-import { stocks as coreStocks } from "../../../rsi-screening/src/db/core-schema.js";
+import { stocks as coreStocks } from "../../../../src/shared/db/core-schema.js";
 
 /**
  * 002 お宝優待 のスキーマ定義（Cloudflare D1 / SQLite 版） — ADR-0001。
