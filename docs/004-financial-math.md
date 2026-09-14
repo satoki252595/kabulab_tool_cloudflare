@@ -10,8 +10,8 @@
 ## コンセプト
 
 - 銘柄コード (数字 4 桁 / `130A` 形式の英数字コード) を入れるだけで、
-  Yahoo Finance 由来の実データ (株価・配当利回り・日足) を自動取得して
-  理論値を計算する。
+  日次 sync が D1 に書いた実データ (株価・配当利回り・日足) を読み取り専用で参照して
+  理論値を計算する (Yahoo へは直接取りに行かない)。
 - 計算ロジックは全て **純関数** (`src/services/*.ts`)。前提条件を満たさない
   入力は **throw**、データ不足は **null + 理由文字列** で正直に返す。
   「それっぽい近似値」での代替はしない (ルール1/2)。
@@ -48,8 +48,9 @@
   `r_i = α + β r_m + ε`。**有効ペアのサンプル数 < 30、または市場リターンの
   分散が 0 の場合は null** (計算不能を正直に返す)。戻り値は β / 年率換算 α
   (×252) / R² / サンプル数 / 銘柄・市場の年率ボラ / 相関係数。
-- **auto モードの市場 = `^N225` (日経平均)**。対象銘柄と ^N225 の OHLCV を
-  finmath キャッシュ経由で取得し、**日付整合した単純リターン (前日比)** で
+- **auto モードの市場 = `^N225` (日経平均)**。対象銘柄の日足は
+  `swing_daily_ohlcv`、^N225 は `swing_market_context.nikkei_close` から読み
+  (旧 finmath キャッシュは PR #23 で廃止)、**日付整合した単純リターン (前日比)** で
   OLS する (`routes/pages.ts` の `estimateBetaForCode`)。各系列 31 日未満 /
   日付整合後 30 サンプル未満 / 分散 0 は推定せず、理由を
   `betaUnavailableReason` として UI に表示する。
@@ -89,23 +90,25 @@ Notion「金融数学入門」で紹介された **4 つのアノマリー** を
 
 | type | 内容 | 実装 |
 |---|---|---|
-| `momentum` | モメンタム | window (20〜100 営業日、デフォルト 60) の累積リターン降順。リスク調整スコア = 累積リターン ÷ 年率ボラも併記。window 分のサンプルが無い銘柄は null (除外) |
+| `momentum` | モメンタム | L2 投影 `p_momentum.closes` (日次 sync が書く終値配列) から window (20〜100 営業日、デフォルト 60) の累積リターン降順。リスク調整スコア = 累積リターン ÷ 年率ボラも併記。window 分のサンプルが無い銘柄は null (除外) |
 | `small-cap` | 小型株効果 | 時価総額 < 閾値 (デフォルト 500 億円) を時価総額昇順 |
 | `low-vol` | 低ボラ・アノマリー | `swing_stock_indicators.atr_pct` < 閾値 (デフォルト 1.5)。**atr_pct は % 値保存** (decimal ではない) |
 | `post-earnings` | PEAD (決算後ドリフト) | **決算日が外部データなしに取れないため、`core_stock_financials.fetched_at` (更新時刻) を簡易代理** とする — 真の決算発表日ではない (コード内コメントで明示済の制限) |
 
 - 母集団は `core_stocks` の **is_active 全銘柄（東証内国普通株・共有4文字コード、約3,700）**。
-  時系列は `swing_daily_ohlcv` (003 所有、**約 100 営業日保持** — window 上限
-  100 の根拠)、指標は `swing_stock_indicators`、時価総額等は
-  `core_stock_financials` をいずれも読み取り専用で参照。
+  モメンタムの時系列は L2 投影 `p_momentum.closes`、指標は `swing_stock_indicators`、
+  時価総額等は `core_stock_financials` をいずれも読み取り専用で参照。
+  `swing_daily_ohlcv` の保持は **90 営業日** (window 上限 100 との差に注意。
+  条文上 91〜100 を指定できるが終値が足りず null 除外されうる)。
 - クエリ: `window` 20〜100 / `limit` 10〜500 (デフォルト 50) /
   `smallCapMaxOku` / `lowVolMaxAtrPct` (Zod 検証、範囲外は 400)。
 
 ## DB スキーマ
 
 004 は**所有する表を持たない**。価格断面・日足・市場系列はすべて他サービスが
-書いた表を読み取り専用で参照する (`src/db/core-schema.ts` / `swing-readonly.ts` /
-`src/shared/db/projection-schema.ts`)。
+書いた表を読み取り専用で参照する (`src/shared/db/core-schema.ts` /
+`src/db/swing-readonly.ts` / `src/shared/db/projection-schema.ts` /
+L2 投影 `p_momentum`)。
 
 | 用途 | 読む表 |
 |---|---|
@@ -115,14 +118,15 @@ Notion「金融数学入門」で紹介された **4 つのアノマリー** を
 
 旧 `finmath_price_snapshot` / `finmath_daily_ohlcv` は「SSR の GET 中に Yahoo を
 叩いて D1 に書く」遅延キャッシュだった。PR #23 で読み取り面を上の表へ振り替え、
-読み書きが無くなったので宣言を消して `drizzle/d1/0012` で DROP する。
+読み書きが無くなったので宣言を消して `drizzle/d1/0012` で DROP する
+(本番適用は `sqlite_master` で確認すること)。
 DROP 前の全行 (3,759 行 / 3,490 行) は `~/kabulab-cf-backup-20260913/d1-finmath/`
 に JSONL で退避してあり、同ディレクトリの README.md に復元手順がある。
 
 - DCF/CAPM/EMH/BS の **計算結果は永続化しない** (オンデマンド計算)。
 - 読み取り面は D1 へ書かない (`src/tests/integration/price-read-path.test.ts`)。
 
-## データ取得フロー (`src/services/price-cache.ts`)
+## データ取得フロー (`src/services/price-cache.ts` — 名前は残るが現行は読み取り専用アクセス層)
 
 1. `getPriceContext(db, code)` — `core_stock_financials` の断面を読む。
    断面が無い銘柄は 0 や null で埋めずに throw し、画面に理由を出す。
@@ -145,18 +149,18 @@ DROP 前の全行 (3,759 行 / 3,490 行) は `~/kabulab-cf-backup-20260913/d1-f
 | パス | 内容 |
 |---|---|
 | `/` | 4 ツールのハブ (初心者向けバルーンヘルプ付き) |
-| `/dcf?code=` | DCF フォーム。code 指定時は Yahoo 推定配当をプリフィル (無配 / 取得失敗時は **空欄のまま** — ダミー値を埋めない) |
+| `/dcf?code=` | DCF フォーム。code 指定時は D1 断面の推定配当をプリフィル (無配 / 取得失敗時は **空欄のまま** — ダミー値を埋めない) |
 | `/capm?code=` | CAPM フォーム。code 指定時は auto モードで β を OLS 推定 |
-| `/black-scholes?code=` | BS フォーム。code 指定時は現在株価 (S, K=ATM) とヒストリカル σ を自動入力 |
+| `/black-scholes?code=` | BS フォーム。code 指定時は D1 断面の現在株価 (S, K=ATM) とヒストリカル σ を自動入力 |
 | `/emh?type=&window=&limit=...` | EMH アノマリースクリーニング (4 種) |
 
 ### フォーム送信 (POST、`src/routes/api.ts` — 応答は JSON でなく HTML 再描画)
 
 | パス | 内容 |
 |---|---|
-| `/api/dcf/calc` | Gordon / 2 段階 DCF。**code 指定 + Yahoo 推定配当ありの場合はフォームの配当値を破棄して銘柄データで計算** (古いフォーム値による無関係な結果を防ぐ意図的仕様。silent でなく notice で明示)。手動値で計算したい場合は code 欄を空にする |
+| `/api/dcf/calc` | Gordon / 2 段階 DCF。**code 指定 + 断面に推定配当ありの場合はフォームの配当値を破棄して銘柄データで計算** (古いフォーム値による無関係な結果を防ぐ意図的仕様。silent でなく notice で明示)。手動値で計算したい場合は code 欄を空にする |
 | `/api/capm/calc` | mode=auto (β 自動推定) / manual (β 手動入力)。β のダミーデフォルト (1.0 等) は埋めない |
-| `/api/black-scholes/calc` | spot 空→Yahoo 現値 / strike 空→ATM (=S) / σ 空→ヒストリカル σ で補完 (全て notice 明示)。marketPrice 指定時は IV を逆算 |
+| `/api/black-scholes/calc` | spot 空→断面の現値 / strike 空→ATM (=S) / σ 空→ヒストリカル σ で補完 (全て notice 明示)。marketPrice 指定時は IV を逆算 |
 
 JSON API は提供していない (005/006 と異なり全応答が SSR HTML)。
 
@@ -170,5 +174,5 @@ JSON API は提供していない (005/006 と異なり全応答が SSR HTML)。
 - **PEAD は真の決算日ではなく `fetched_at` の簡易代理** — 厳密な
   決算後ドリフト分析には使えない。
 - β・ヒストリカルボラは過去データに基づく推定値であり将来を保証しない。
-- 価格データの出典は Yahoo Finance (最大 24 時間のキャッシュ遅延あり)。
-  投資判断は自己責任で。
+- 価格データの出典は Yahoo Finance (日次 sync が D1 へ書いた断面を読む。鮮度は
+  日次 sync の最終成功時刻に依存する)。投資判断は自己責任で。

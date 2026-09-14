@@ -28,10 +28,8 @@ services/rsi-screening/
 │   │   ├── screening-service.ts     # スクリーニングクエリ (UI)
 │   │   └── stock-detail-service.ts  # 個別銘柄クエリ (UI)
 │   ├── views/                 # template literal を返す .ts 関数 (layout/home/screening/stock-detail)
-│   ├── validators/            # Zod スキーマ
-│   ├── middleware/            # error-handler
+│   ├── validators/            # Zod スキーマ (zod/mini。K4c-2 で移行)
 │   └── tests/unit/            # ユニットテスト (shared/indicators 配下を参照)
-├── drizzle/                   # drizzle-kit 生成の migration
 ├── CLAUDE.md
 └── README.md
 ```
@@ -51,7 +49,7 @@ app.route(RSI_BASE_PATH, rsiScreeningApp);
 
 ### core_* (共有 — 日次 sync が更新)
 
-D1(SQLite) 版の型表記 (ADR-0001): `serial`→`integer PK autoincrement`、`boolean`→`integer(mode:boolean)`、`date`→`text('YYYY-MM-DD')`、`timestamptz`→`integer(mode:timestamp)`。
+D1(SQLite) 版の型表記: `serial`→`integer PK autoincrement`、`boolean`→`integer(mode:boolean)`、`date`→`text('YYYY-MM-DD')`、`timestamptz`→`integer(mode:timestamp)`。
 
 ```
 core_stocks
@@ -59,8 +57,8 @@ core_stocks
 ├── code        text UNIQUE          # 4 桁銘柄コード
 ├── name        text
 ├── market      text
-├── sector      text?                # 月次 sync で JPX 33 業種を backfill
-├── is_active   integer(boolean)     # Yahoo 404 時に false に更新
+├── sector      text?                # universe sync が JPX 33 業種で更新
+├── is_active   integer(boolean)     # writer は universe sync のみ (JPX 不在で対象外化。Yahoo 取得失敗では変えない)
 ├── is_yutai    integer(boolean)     # 002 専用の母集団フラグ
 └── created_at / updated_at
 
@@ -133,7 +131,7 @@ rsi_percentile
 
 (JSON API 2 本は K1c で撤去。SSR のみ。)
 
-**鮮度条件**: `rsi_percentile.computed_at` が `freshnessMaxAgeDays` (7 日) より古い行は
+**鮮度条件**: `rsi_percentile.computed_at` が `PERCENTILE_MAX_AGE_DAYS` (7 日) より古い行は
 結果から除外する。日次 sync は平日のみ (`0 21 * * 1-5`) 回るので金→月の 3 日据え置きは
 正常、そこへ run 失敗 1〜2 回ぶんの予備を足した値。除外した件数は
 SSR 画面 (「鮮度不足で除外 N 件」) に出す — 黙って落とすと「該当なし」と「古い行しか
@@ -143,8 +141,9 @@ SSR 画面 (「鮮度不足で除外 N 件」) に出す — 黙って落とす�
 ページが空になるだけなので、算出日を赤字 +「鮮度不足のため一覧では除外される値」
 の但し書きで出す (一覧から消えた銘柄も URL 直打ちで到達できる)。
 
-日次 sync は起動時に `rsi_percentile.percentile_sample_bars` を SELECT して 0009 の
-適用漏れを検出する (`assertDailySchema`)。0008 (`adj`) のときは検知が無く、未適用の
+日次 sync は起動時に `rsi_percentile.percentile_sample_bars` と
+`p_momentum.closes` を SELECT して 0009 / 0011 の適用漏れを検出する
+(`assertDailySchema`)。0008 (`adj`) のときは検知が無く、未適用の
 まま 1 ヶ月ほど毎回 3,700 銘柄を取得し終えてから全件が書込で落ちていた。
 
 ## データ更新フロー
