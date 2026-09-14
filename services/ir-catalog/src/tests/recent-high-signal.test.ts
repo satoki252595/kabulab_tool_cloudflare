@@ -47,7 +47,6 @@ CREATE TABLE ir_disclosures (
   document_url text NOT NULL,
   primary_tag text
 );
-CREATE INDEX ir_disclosures_primary_tag_idx ON ir_disclosures(primary_tag);
 CREATE INDEX ir_disclosures_stock_pubdate_idx ON ir_disclosures(stock_id, pubdate);
 `;
 
