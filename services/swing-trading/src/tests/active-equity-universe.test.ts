@@ -18,7 +18,7 @@
  * 非普通株の行は、絞り込みが外れたら**先頭に来る**値 (売買代金・シグナル強度が最大)
  * にしてある。末尾に並ぶ値だと、limit で切れて「出ない」ように見えてしまう。
  *
- * D1 シムとスキーマは sector-ranking-key-switch.test.ts と同じ方式
+ * D1 シムとスキーマは src/cron/daily-sector-aggregate.test.ts と同じ方式
  * (node:sqlite に drizzle/d1 のマイグレーションをそのまま流す)。
  */
 import { DatabaseSync } from "node:sqlite";

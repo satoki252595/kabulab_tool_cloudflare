@@ -13,8 +13,8 @@ import app from "../index.js";
  * - `public/_headers`: vwap の data/app.js/vendor を 1 日キャッシュ。
  * - lightweight-charts は unpkg 参照をやめ `vendor/` 同梱の相対参照。
  *
- * D1 シムは sector-ranking-key-switch.test.ts と同じ方式。スキーマは
- * drizzle/d1 のマイグレーションをそのまま流す。
+ * D1 シムは src/cron/daily-sector-aggregate.test.ts と同じ方式
+ * (node:sqlite に drizzle/d1 のマイグレーションをそのまま流す)。
  */
 
 const ROOT = fileURLToPath(new URL("../../../..", import.meta.url));
