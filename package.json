@@ -10,7 +10,7 @@
     "dev:cf": "wrangler dev",
     "deploy:cf": "wrangler deploy",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src services",
+    "lint": "eslint src services --max-warnings=0",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "db:generate:d1": "drizzle-kit generate --config=drizzle.d1.config.ts",
