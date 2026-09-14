@@ -237,8 +237,27 @@ interface MarketContextDraft {
  * 適用は Phase 4 の一括 sweep (pruneOhlcvRetention) — 書き込み経路では行わない。
  */
 const OHLCV_RETENTION_DAYS = 90;
-/** OHLCV insert の D1 bind 上限対策 (adj 追加で 8 列になったので 12 行/文: 8×12=96≤100) */
-const OHLCV_CHUNK = 12;
+/**
+ * 表ごとの multi-row upsert の行数/文 (L-56)。D1 の bind 上限 (100/文) 対策。
+ * 行数×列数 ≤ 100。列を足したらここも直すこと (universe.ts の UPSERT_CHUNK と
+ * 同じ規約。flush-snapshot.test.ts が bind 数を実測で固定)。
+ */
+const FLUSH_ROWS_PER_STATEMENT = {
+  /** 年次: 3 列 × 33 = 99 */
+  annual: 33,
+  /** ②断面: 12 列 × 8 = 96 */
+  financials: 8,
+  /** rsi: 12 列 × 8 = 96 */
+  rsi: 8,
+  /** OHLCV: 8 列 × 12 = 96 (旧 OHLCV_CHUNK) */
+  ohlcv: 12,
+  /** 指標 (+L-52 の畳み 6 列で 37 列): 37 × 2 = 74。3 行は 111 で上限超え */
+  indicators: 2,
+  /** シグナル (run 刻み込みで 11 列): 11 × 9 = 99 */
+  signals: 9,
+  /** モメンタム投影: 6 列 × 16 = 96 */
+  momentum: 16,
+} as const;
 /** sector_daily insert の bind 上限対策 (6 列なので 16 行/文) */
 const SECTOR_CHUNK = 16;
 /** prune の DELETE 1 文に載せる stock_id 数 (bind 上限 100: ids + retention で余裕を取る) */
@@ -589,24 +608,22 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   // (L-52)、および Phase 6 の投影掃除の境界に使う。Phase 3 の upsert より
   // 前の時刻でないと、掃除が今回の行まで消す。
   const runStartedSec = Math.floor(startedAt / 1000);
-  async function processTarget(
-    target: (typeof targets)[number]
-  ): Promise<void> {
-    await stockStartGate.wait();
-    const snap = await buildSnapshot(target.id, target.code, target.sector);
-    await writeStockSnapshot(db, snap, latestDateByStock.get(target.id), {
-      writeAnnual,
-      runStartedSec,
-    });
-  }
 
+  // Phase 3a: 取込プール。fetch だけ集め、書込は 3b で表ごとに畳む (L-56)。
+  // 取れた snapshot を全部メモリに置く (~3,755 件で数十 MB。runner には十分)。
+  const pending: FlushItem<(typeof targets)[number]>[] = [];
   async function worker(): Promise<void> {
     while (queue.length > 0) {
       const target = queue.shift();
       if (!target) break;
       try {
-        await processTarget(target);
-        succeeded++;
+        await stockStartGate.wait();
+        const snap = await buildSnapshot(target.id, target.code, target.sector);
+        pending.push({
+          target,
+          snap,
+          existingMaxDate: latestDateByStock.get(target.id),
+        });
       } catch (e) {
         const msg = rootCauseMessage(e);
         stockStartGate.observeFailure(msg);
@@ -616,6 +633,19 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
     }
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+
+  // Phase 3b: 表ごとの multi-row flush。失敗は初回失敗に積んで回収へ回す。
+  const flushFailures = await flushSnapshots(db, pending, {
+    writeAnnual,
+    runStartedSec,
+  });
+  for (const f of flushFailures) {
+    if (f.target !== undefined) {
+      stockStartGate.observeFailure(f.error);
+      firstPassFailures.push({ target: f.target, error: f.error });
+    }
+  }
+  succeeded += pending.length - flushFailures.length;
   console.info(
     `[sync-daily]   初回成功: ${succeeded} / 初回失敗: ${firstPassFailures.length}`
   );
@@ -636,7 +666,14 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
           );
           return;
         }
-        await processTarget(recoveryTarget.target);
+        // 回収は件数が少ないので 1 行 flush のまま (初回パスと行 builder は共有)。
+        const target = recoveryTarget.target;
+        await stockStartGate.wait();
+        const snap = await buildSnapshot(target.id, target.code, target.sector);
+        await writeStockSnapshot(db, snap, latestDateByStock.get(target.id), {
+          writeAnnual,
+          runStartedSec,
+        });
         recoveredStocks++;
       } catch (error) {
         // 2 パス目も 429 を尊重する (L-57)。初回と同じゲートへ観測を流す。
@@ -1010,7 +1047,7 @@ export interface WriteStockSnapshotOptions {
    * 年次 (`core_stock_annual_financials`) を書くか。既定 true。
    *
    * 年 1 回変わるものに毎日 15,900 行 upsert していたので、月曜 UTC の run
-   * でのみ真にする (L-49)。呼び出し側 (processTarget) が曜日で決める。
+   * でのみ真にする (L-49)。呼び出し側 (Phase 3) が曜日で決める。
    */
   writeAnnual?: boolean;
   /**
@@ -1018,50 +1055,54 @@ export interface WriteStockSnapshotOptions {
    *
    * 銘柄ごとの無条件 DELETE (3,755 文/日) の代わりに、Phase 3 末尾で
    * `computed_at < runStartedSec` を 1 文で掃除する (L-52)。既定は呼び出し
-   * 時の現在秒 (テスト用。本番は processTarget が run 開始秒を渡す)。
+   * 時の現在秒 (テスト用。本番は Phase 3 が run 開始秒を渡す)。
    */
   runStartedSec?: number;
 }
 
-// export しているのは src/cron/daily-write-snapshot.test.ts から
-// フラグの両分岐を直接叩くため。呼び出し元は runDailySync 内の 1 箇所だけ。
-export async function writeStockSnapshot(
-  db: Db,
-  snap: StockSnapshot,
-  existingMaxDate: string | undefined,
-  options: WriteStockSnapshotOptions = {}
-): Promise<void> {
-  const { writeCoreFinancials = true, writeAnnual = true } = options;
-  const runStartedSec =
-    options.runStartedSec ?? Math.floor(Date.now() / 1000);
+// -----------------------------------------------------------------------------
+// 表ごとの multi-row upsert (L-56)。
+//
+// 銘柄ごと 7〜8 文 (27.9k 往復/日) を、表ごとに VALUES 複数行へ畳む (~3.7k 往復)。
+// 行 builder は writeStockSnapshot と flushSnapshots の共有 (1 行 flush が
+// 旧 writeStockSnapshot と同じ文になるので、既存テストがそのまま通る)。
+// -----------------------------------------------------------------------------
 
-  // --- core_stock_annual_financials ---
-  if (writeAnnual && snap.annualFinancials.length > 0) {
-    await db
-      .insert(coreSchema.stockAnnualFinancials)
-      .values(
-        snap.annualFinancials.map((f) => ({
-          stockId: snap.stockId,
-          fiscalYear: f.fiscalYear,
-          revenue: f.revenue,
-        }))
-      )
-      .onConflictDoUpdate({
-        target: [
-          coreSchema.stockAnnualFinancials.stockId,
-          coreSchema.stockAnnualFinancials.fiscalYear,
-        ],
-        set: { revenue: sql`excluded.revenue` },
-      });
-  }
+export interface FlushItem<T = unknown> {
+  /** 失敗の帰属先 (回収がこの単位でリトライする)。1 行 flush では省略。 */
+  target?: T;
+  snap: StockSnapshot;
+  existingMaxDate: string | undefined;
+}
 
-  // --- core_stock_financials (②断面) ---
-  // 囲むのはこの upsert だけ。上の年次と下の rsi_percentile 以降は
-  // writer 移行の対象外なので、フラグを立てても従来どおり書き続ける。
-  if (writeCoreFinancials) {
-    await db
-      .insert(coreSchema.stockFinancials)
-      .values({
+export interface FlushFailure<T = unknown> {
+  target: T | undefined;
+  error: string;
+}
+
+type BuiltRow<R> = { item: FlushItem<never>; row: R };
+
+function buildAnnualRows(
+  item: FlushItem<never>,
+  writeAnnual: boolean
+): BuiltRow<{ stockId: number; fiscalYear: number; revenue: number | null }>[] {
+  if (!writeAnnual || item.snap.annualFinancials.length === 0) return [];
+  return item.snap.annualFinancials.map((f) => ({
+    item,
+    row: { stockId: item.snap.stockId, fiscalYear: f.fiscalYear, revenue: f.revenue },
+  }));
+}
+
+function buildFinancialsRows(
+  item: FlushItem<never>,
+  writeCoreFinancials: boolean
+): BuiltRow<Record<string, unknown>>[] {
+  if (!writeCoreFinancials) return [];
+  const snap = item.snap;
+  return [
+    {
+      item,
+      row: {
         stockId: snap.stockId,
         price: snap.price,
         per: snap.per,
@@ -1074,100 +1115,60 @@ export async function writeStockSnapshot(
         marketCap: snap.marketCap,
         operatingMargin: snap.operatingMarginTtm,
         dataDate: snap.dataDate,
-      })
-      .onConflictDoUpdate({
-        target: coreSchema.stockFinancials.stockId,
-        set: {
-          price: sql`excluded.price`,
-          per: sql`excluded.per`,
-          pbr: sql`excluded.pbr`,
-          dividendYield: sql`excluded.dividend_yield`,
-          eps: sql`excluded.eps`,
-          bps: sql`excluded.bps`,
-          roe: sql`excluded.roe`,
-          roa: sql`excluded.roa`,
-          marketCap: sql`excluded.market_cap`,
-          operatingMargin: sql`excluded.operating_margin`,
-          dataDate: sql`excluded.data_date`,
-          fetchedAt: sql`(unixepoch())`,
-        },
-      });
-  }
-
-  // --- rsi_percentile ---
-  await db
-    .insert(rsiSchema.stockRsiPercentile)
-    .values({
-      stockId: snap.stockId,
-      rsi10: snap.rsiPercentile.rsi10,
-      rsi10Percentile: snap.rsiPercentile.rsi10Percentile,
-      rsi40: snap.rsiPercentile.rsi40,
-      rsi40Percentile: snap.rsiPercentile.rsi40Percentile,
-      rsi120: snap.rsiPercentile.rsi120,
-      rsi120Percentile: snap.rsiPercentile.rsi120Percentile,
-      rsiMinPercentile: snap.rsiPercentile.rsiMinPercentile,
-      percentileSampleBars: snap.rsiPercentile.sampleBars,
-      isBlueChip: snap.blueChip.isBlueChip,
-      operatingMarginTtm: snap.blueChip.operatingMarginTtm,
-      revenueTrend: snap.blueChip.revenueTrend,
-    })
-    .onConflictDoUpdate({
-      target: rsiSchema.stockRsiPercentile.stockId,
-      set: {
-        rsi10: sql`excluded.rsi_10`,
-        rsi10Percentile: sql`excluded.rsi_10_percentile`,
-        rsi40: sql`excluded.rsi_40`,
-        rsi40Percentile: sql`excluded.rsi_40_percentile`,
-        rsi120: sql`excluded.rsi_120`,
-        rsi120Percentile: sql`excluded.rsi_120_percentile`,
-        rsiMinPercentile: sql`excluded.rsi_min_percentile`,
-        percentileSampleBars: sql`excluded.percentile_sample_bars`,
-        isBlueChip: sql`excluded.is_blue_chip`,
-        operatingMarginTtm: sql`excluded.operating_margin_ttm`,
-        revenueTrend: sql`excluded.revenue_trend`,
-        computedAt: sql`(unixepoch())`,
       },
-    });
+    },
+  ];
+}
 
-  // --- swing_daily_ohlcv (増分: 既存 MAX(date) より新しい bar のみ) ---
+function buildRsiRows(item: FlushItem<never>): BuiltRow<Record<string, unknown>>[] {
+  const snap = item.snap;
+  return [
+    {
+      item,
+      row: {
+        stockId: snap.stockId,
+        rsi10: snap.rsiPercentile.rsi10,
+        rsi10Percentile: snap.rsiPercentile.rsi10Percentile,
+        rsi40: snap.rsiPercentile.rsi40,
+        rsi40Percentile: snap.rsiPercentile.rsi40Percentile,
+        rsi120: snap.rsiPercentile.rsi120,
+        rsi120Percentile: snap.rsiPercentile.rsi120Percentile,
+        rsiMinPercentile: snap.rsiPercentile.rsiMinPercentile,
+        percentileSampleBars: snap.rsiPercentile.sampleBars,
+        isBlueChip: snap.blueChip.isBlueChip,
+        operatingMarginTtm: snap.blueChip.operatingMarginTtm,
+        revenueTrend: snap.blueChip.revenueTrend,
+      },
+    },
+  ];
+}
+
+function buildOhlcvRows(
+  item: FlushItem<never>
+): BuiltRow<Record<string, unknown>>[] {
+  const { snap, existingMaxDate } = item;
   const newOhlcv = existingMaxDate
     ? snap.ohlcv6mo.filter((r) => r.date > existingMaxDate)
     : snap.ohlcv6mo;
-  for (let i = 0; i < newOhlcv.length; i += OHLCV_CHUNK) {
-    await db
-      .insert(swingSchema.dailyOhlcv)
-      .values(
-        newOhlcv.slice(i, i + OHLCV_CHUNK).map((r) => ({
-          stockId: snap.stockId,
-          date: r.date,
-          open: r.open,
-          high: r.high,
-          low: r.low,
-          close: r.close,
-          volume: r.volume,
-          adj: r.adj,
-        }))
-      )
-      .onConflictDoUpdate({
-        target: [swingSchema.dailyOhlcv.stockId, swingSchema.dailyOhlcv.date],
-        set: {
-          open: sql`excluded.open`,
-          high: sql`excluded.high`,
-          low: sql`excluded.low`,
-          close: sql`excluded.close`,
-          volume: sql`excluded.volume`,
-          adj: sql`excluded.adj`,
-        },
-      });
-  }
-  // 保持期間の prune はここ (書き込み経路) では行わない。
-  // 以前は snap.ohlcv6mo から cutoff 日付を作って銘柄ごとに DELETE していたが、
-  // それだと **Yahoo 取得が失敗し続けている銘柄では prune が一度も走らない**。
-  // 実測で stock_id 640/710/992/1009 が 120→90 短縮前の 120 行を保持したままで、
-  // swing_daily_ohlcv の DISTINCT date が 203 に伸びる直接の原因になっていた。
-  // 全銘柄の一括 sweep (pruneOhlcvRetention) が Phase 4 で面倒を見る。
+  return newOhlcv.map((r) => ({
+    item,
+    row: {
+      stockId: snap.stockId,
+      date: r.date,
+      open: r.open,
+      high: r.high,
+      low: r.low,
+      close: r.close,
+      volume: r.volume,
+      adj: r.adj,
+    },
+  }));
+}
 
-  // --- swing_stock_indicators (スクリーニング結果も同行に畳む。L-52) ---
+function buildIndicatorRows(
+  item: FlushItem<never>
+): BuiltRow<Record<string, unknown>>[] {
+  const snap = item.snap;
   // screenStock() は indicators 6 値の純関数。旧 swing_stock_screening 表と
   // 同じ値を同じ run で書くので、表示される数値は変わらない。
   const screen = screenStock({
@@ -1178,171 +1179,390 @@ export async function writeStockSnapshot(
     sma20: snap.sma20,
     latestClose: snap.latestClose,
   });
-  await db
-    .insert(swingSchema.stockIndicators)
-    .values({
-      stockId: snap.stockId,
-      avgTurnover20d: snap.avgTurnover20d,
-      volume20d: snap.volume20d,
-      volumeRatio: snap.volumeRatio,
-      atr14: snap.atr14,
-      atrPct: snap.atrPct,
-      sma5: snap.sma5,
-      sma20: snap.sma20,
-      sma25: snap.sma25,
-      sma60: snap.sma60,
-      sma75: snap.sma75,
-      trendLong: snap.trendLong,
-      trendShort: snap.trendShort,
-      perfectOrderLong: snap.perfectOrderLong,
-      perfectOrderShort: snap.perfectOrderShort,
-      rsi14: snap.rsi14,
-      macd: snap.macd,
-      macdSignal: snap.macdSignal,
-      macdHist: snap.macdHist,
-      range20dHigh: snap.range20dHigh,
-      range20dLow: snap.range20dLow,
-      rangeWidth: snap.rangeWidth,
-      fibHigh: snap.range20dHigh,
-      fibLow: snap.range20dLow,
-      fib382: snap.fib382,
-      fib500: snap.fib500,
-      fib618: snap.fib618,
-      latestClose: snap.latestClose,
-      latestVolume: snap.latestVolume,
-      latestDate: snap.latestDate,
-      pctChange1d: snap.pctChange1d,
-      liquidityOk: screen.liquidityOk,
-      volatilityOk: screen.volatilityOk,
-      trendOkLong: screen.trendOkLong,
-      trendOkShort: screen.trendOkShort,
-      allPassedLong: screen.allPassedLong,
-      allPassedShort: screen.allPassedShort,
-    })
-    .onConflictDoUpdate({
-      target: swingSchema.stockIndicators.stockId,
-      set: {
-        avgTurnover20d: sql`excluded.avg_turnover_20d`,
-        volume20d: sql`excluded.volume_20d`,
-        volumeRatio: sql`excluded.volume_ratio`,
-        atr14: sql`excluded.atr_14`,
-        atrPct: sql`excluded.atr_pct`,
-        sma5: sql`excluded.sma_5`,
-        sma20: sql`excluded.sma_20`,
-        sma25: sql`excluded.sma_25`,
-        sma60: sql`excluded.sma_60`,
-        sma75: sql`excluded.sma_75`,
-        trendLong: sql`excluded.trend_long`,
-        trendShort: sql`excluded.trend_short`,
-        perfectOrderLong: sql`excluded.perfect_order_long`,
-        perfectOrderShort: sql`excluded.perfect_order_short`,
-        rsi14: sql`excluded.rsi_14`,
-        macd: sql`excluded.macd`,
-        macdSignal: sql`excluded.macd_signal`,
-        macdHist: sql`excluded.macd_hist`,
-        range20dHigh: sql`excluded.range_20d_high`,
-        range20dLow: sql`excluded.range_20d_low`,
-        rangeWidth: sql`excluded.range_width`,
-        fibHigh: sql`excluded.fib_high`,
-        fibLow: sql`excluded.fib_low`,
-        fib382: sql`excluded.fib_382`,
-        fib500: sql`excluded.fib_500`,
-        fib618: sql`excluded.fib_618`,
-        latestClose: sql`excluded.latest_close`,
-        latestVolume: sql`excluded.latest_volume`,
-        latestDate: sql`excluded.latest_date`,
-        pctChange1d: sql`excluded.pct_change_1d`,
-        liquidityOk: sql`excluded.liquidity_ok`,
-        volatilityOk: sql`excluded.volatility_ok`,
-        trendOkLong: sql`excluded.trend_ok_long`,
-        trendOkShort: sql`excluded.trend_ok_short`,
-        allPassedLong: sql`excluded.all_passed_long`,
-        allPassedShort: sql`excluded.all_passed_short`,
-        computedAt: sql`(unixepoch())`,
+  return [
+    {
+      item,
+      row: {
+        stockId: snap.stockId,
+        avgTurnover20d: snap.avgTurnover20d,
+        volume20d: snap.volume20d,
+        volumeRatio: snap.volumeRatio,
+        atr14: snap.atr14,
+        atrPct: snap.atrPct,
+        sma5: snap.sma5,
+        sma20: snap.sma20,
+        sma25: snap.sma25,
+        sma60: snap.sma60,
+        sma75: snap.sma75,
+        trendLong: snap.trendLong,
+        trendShort: snap.trendShort,
+        perfectOrderLong: snap.perfectOrderLong,
+        perfectOrderShort: snap.perfectOrderShort,
+        rsi14: snap.rsi14,
+        macd: snap.macd,
+        macdSignal: snap.macdSignal,
+        macdHist: snap.macdHist,
+        range20dHigh: snap.range20dHigh,
+        range20dLow: snap.range20dLow,
+        rangeWidth: snap.rangeWidth,
+        fibHigh: snap.range20dHigh,
+        fibLow: snap.range20dLow,
+        fib382: snap.fib382,
+        fib500: snap.fib500,
+        fib618: snap.fib618,
+        latestClose: snap.latestClose,
+        latestVolume: snap.latestVolume,
+        latestDate: snap.latestDate,
+        pctChange1d: snap.pctChange1d,
+        liquidityOk: screen.liquidityOk,
+        volatilityOk: screen.volatilityOk,
+        trendOkLong: screen.trendOkLong,
+        trendOkShort: screen.trendOkShort,
+        allPassedLong: screen.allPassedLong,
+        allPassedShort: screen.allPassedShort,
       },
-    });
+    },
+  ];
+}
 
-  // --- swing_entry_signals (INSERT のみ。掃除は Phase 3 末尾の sweep 1 文。L-52) ---
-  // 銘柄ごとの無条件 DELETE (3,755 文/日) はやめた。算出できた時だけ run 開始秒を
-  // 刻んで挿入し、古い run の行は sweepStaleEntrySignals がまとめて消す。
-  // 取得失敗銘柄の前日シグナルは残さない (鮮度のない値を出さない。J3)。
-  if (snap.latestClose !== null) {
-    const prevOhlcv =
-      snap.ohlcv6mo.length >= 2 ? snap.ohlcv6mo[snap.ohlcv6mo.length - 2] : null;
-    const signalSnap: IndicatorSnapshot = {
-      latestClose: snap.latestClose,
-      prevClose: snap.previousClose,
-      latestOpen: snap.latestOpen,
-      latestHigh: snap.latestHigh,
-      latestLow: snap.latestLow,
-      atr14: snap.atr14,
-      atrPct: snap.atrPct,
-      sma5: snap.sma5,
-      sma20: snap.sma20,
-      sma60: snap.sma60,
-      rsi14: snap.rsi14,
-      macd: snap.macd,
-      macdSignal: snap.macdSignal,
-      range20dHigh: snap.range20dHigh,
-      range20dLow: snap.range20dLow,
-      rangeWidth: snap.rangeWidth,
-      fib382: snap.fib382,
-      fib618: snap.fib618,
-      volumeRatio: snap.volumeRatio,
-      avgTurnover20d: snap.avgTurnover20d,
-      perfectOrderLong: snap.perfectOrderLong,
-      perfectOrderShort: snap.perfectOrderShort,
-      pctChange1d: snap.pctChange1d,
-    };
-    const signals = detectAllPatterns(signalSnap, prevOhlcv ? [prevOhlcv] : []);
-    if (signals.length > 0) {
-      await db.insert(swingSchema.entrySignals).values(
-        signals.map((s) => ({
-          stockId: snap.stockId,
-          pattern: s.pattern,
-          direction: s.direction,
-          entryPrice: s.entryPrice,
-          stopLoss: s.stopLoss,
-          target1: s.target1,
-          target2: s.target2,
-          riskRewardRatio: s.riskRewardRatio,
-          signalStrength: s.signalStrength,
-          note: s.note,
-          // sweep が「この run の行」と判定する刻み。秒の一致は「残す」側。
-          computedAt: new Date(runStartedSec * 1000),
-        }))
-      );
-    }
-  }
+function buildSignalRows(
+  item: FlushItem<never>,
+  runStartedSec: number
+): BuiltRow<Record<string, unknown>>[] {
+  const snap = item.snap;
+  if (snap.latestClose === null) return [];
+  const prevOhlcv =
+    snap.ohlcv6mo.length >= 2 ? snap.ohlcv6mo[snap.ohlcv6mo.length - 2] : null;
+  const signalSnap: IndicatorSnapshot = {
+    latestClose: snap.latestClose,
+    prevClose: snap.previousClose,
+    latestOpen: snap.latestOpen,
+    latestHigh: snap.latestHigh,
+    latestLow: snap.latestLow,
+    atr14: snap.atr14,
+    atrPct: snap.atrPct,
+    sma5: snap.sma5,
+    sma20: snap.sma20,
+    sma60: snap.sma60,
+    rsi14: snap.rsi14,
+    macd: snap.macd,
+    macdSignal: snap.macdSignal,
+    range20dHigh: snap.range20dHigh,
+    range20dLow: snap.range20dLow,
+    rangeWidth: snap.rangeWidth,
+    fib382: snap.fib382,
+    fib618: snap.fib618,
+    volumeRatio: snap.volumeRatio,
+    avgTurnover20d: snap.avgTurnover20d,
+    perfectOrderLong: snap.perfectOrderLong,
+    perfectOrderShort: snap.perfectOrderShort,
+    pctChange1d: snap.pctChange1d,
+  };
+  const signals = detectAllPatterns(signalSnap, prevOhlcv ? [prevOhlcv] : []);
+  return signals.map((s) => ({
+    item,
+    row: {
+      stockId: snap.stockId,
+      pattern: s.pattern,
+      direction: s.direction,
+      entryPrice: s.entryPrice,
+      stopLoss: s.stopLoss,
+      target1: s.target1,
+      target2: s.target2,
+      riskRewardRatio: s.riskRewardRatio,
+      signalStrength: s.signalStrength,
+      note: s.note,
+      // sweep が「この run の行」と判定する刻み。秒の一致は「残す」側。
+      computedAt: new Date(runStartedSec * 1000),
+    },
+  }));
+}
 
-  // --- p_momentum (L-47) ---
-  // Phase 6 の D1 読み直しの代わりに、メモリ上の 6mo スライスから 1 文 upsert。
+function buildMomentumRows(
+  item: FlushItem<never>
+): BuiltRow<Record<string, unknown>>[] {
+  // Phase 6 の D1 読み直しの代わりに、メモリ上の 6mo スライスから upsert。
   // 同じ入力・同じ関数 (buildMomentumRow) なので /emh の数値は不変。
   // source_max_date は暫定で自銘柄の最新日、Phase 6 で全体 MAX に直す。
-  const row = buildMomentumRow(snap.ohlcv6mo);
-  if (row !== null) {
-    const now = new Date();
-    await db
-      .insert(projectionSchema.momentumProjection)
-      .values({
-        stockId: snap.stockId,
+  const row = buildMomentumRow(item.snap.ohlcv6mo);
+  if (row === null) return [];
+  return [
+    {
+      item,
+      row: {
+        stockId: item.snap.stockId,
         asOf: row.asOf,
         bars: row.bars,
         closes: row.closes,
-        sourceMaxDate: snap.latestDate,
-        computedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: projectionSchema.momentumProjection.stockId,
-        set: {
-          asOf: row.asOf,
-          bars: row.bars,
-          closes: row.closes,
-          sourceMaxDate: snap.latestDate,
-          computedAt: now,
-        },
-      });
+        sourceMaxDate: item.snap.latestDate,
+        computedAt: new Date(),
+      },
+    },
+  ];
+}
+
+/**
+ * 表ごとの multi-row upsert 1 仕様。行の組み立て (build) と書込 (upsert) を分ける。
+ */
+interface TableFlushSpec {
+  rowsPerStatement: number;
+  build: (item: FlushItem<never>) => BuiltRow<Record<string, unknown>>[];
+  upsert: (db: Db, rows: Record<string, unknown>[]) => Promise<void>;
+}
+
+/**
+ * 複数銘柄の snapshot を表ごとにまとめて書く (L-56)。
+ *
+ * 失敗の扱いは旧 writeStockSnapshot と同じ粒度にする: チャンク単位で
+ * try/catch し、落ちたチャンクの銘柄だけを失敗として返して続行する。
+ * upsert は冪等なので、回収がその銘柄を全表で書き直しても壊れない。
+ * 1 行 flush は旧 writeStockSnapshot と同じ文になる。
+ *
+ * @returns 失敗した銘柄 (target 付き)。空なら全件成功。
+ */
+export async function flushSnapshots<T>(
+  db: Db,
+  items: FlushItem<T>[],
+  options: WriteStockSnapshotOptions = {}
+): Promise<FlushFailure<T>[]> {
+  const { writeCoreFinancials = true, writeAnnual = true } = options;
+  const runStartedSec =
+    options.runStartedSec ?? Math.floor(Date.now() / 1000);
+  if (items.length === 0) return [];
+
+  const specs: TableFlushSpec[] = [
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.annual,
+      build: (item) =>
+        buildAnnualRows(
+          item as FlushItem<never>,
+          writeAnnual
+        ) as BuiltRow<Record<string, unknown>>[],
+      upsert: (db, rows) =>
+        db
+          .insert(coreSchema.stockAnnualFinancials)
+          .values(
+            rows as {
+              stockId: number;
+              fiscalYear: number;
+              revenue: number | null;
+            }[]
+          )
+          .onConflictDoUpdate({
+            target: [
+              coreSchema.stockAnnualFinancials.stockId,
+              coreSchema.stockAnnualFinancials.fiscalYear,
+            ],
+            set: { revenue: sql`excluded.revenue` },
+          })
+          .then(() => undefined),
+    },
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.financials,
+      build: (item) =>
+        buildFinancialsRows(item as FlushItem<never>, writeCoreFinancials),
+      upsert: (db, rows) =>
+        db
+          .insert(coreSchema.stockFinancials)
+          .values(rows as never[])
+          .onConflictDoUpdate({
+            target: coreSchema.stockFinancials.stockId,
+            set: {
+              price: sql`excluded.price`,
+              per: sql`excluded.per`,
+              pbr: sql`excluded.pbr`,
+              dividendYield: sql`excluded.dividend_yield`,
+              eps: sql`excluded.eps`,
+              bps: sql`excluded.bps`,
+              roe: sql`excluded.roe`,
+              roa: sql`excluded.roa`,
+              marketCap: sql`excluded.market_cap`,
+              operatingMargin: sql`excluded.operating_margin`,
+              dataDate: sql`excluded.data_date`,
+              fetchedAt: sql`(unixepoch())`,
+            },
+          })
+          .then(() => undefined),
+    },
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.rsi,
+      build: (item) => buildRsiRows(item as FlushItem<never>),
+      upsert: (db, rows) =>
+        db
+          .insert(rsiSchema.stockRsiPercentile)
+          .values(rows as never[])
+          .onConflictDoUpdate({
+            target: rsiSchema.stockRsiPercentile.stockId,
+            set: {
+              rsi10: sql`excluded.rsi_10`,
+              rsi10Percentile: sql`excluded.rsi_10_percentile`,
+              rsi40: sql`excluded.rsi_40`,
+              rsi40Percentile: sql`excluded.rsi_40_percentile`,
+              rsi120: sql`excluded.rsi_120`,
+              rsi120Percentile: sql`excluded.rsi_120_percentile`,
+              rsiMinPercentile: sql`excluded.rsi_min_percentile`,
+              percentileSampleBars: sql`excluded.percentile_sample_bars`,
+              isBlueChip: sql`excluded.is_blue_chip`,
+              operatingMarginTtm: sql`excluded.operating_margin_ttm`,
+              revenueTrend: sql`excluded.revenue_trend`,
+              computedAt: sql`(unixepoch())`,
+            },
+          })
+          .then(() => undefined),
+    },
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.ohlcv,
+      build: (item) => buildOhlcvRows(item as FlushItem<never>),
+      upsert: (db, rows) =>
+        db
+          .insert(swingSchema.dailyOhlcv)
+          .values(rows as never[])
+          .onConflictDoUpdate({
+            target: [swingSchema.dailyOhlcv.stockId, swingSchema.dailyOhlcv.date],
+            set: {
+              open: sql`excluded.open`,
+              high: sql`excluded.high`,
+              low: sql`excluded.low`,
+              close: sql`excluded.close`,
+              volume: sql`excluded.volume`,
+              adj: sql`excluded.adj`,
+            },
+          })
+          .then(() => undefined),
+    },
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.indicators,
+      build: (item) => buildIndicatorRows(item as FlushItem<never>),
+      upsert: (db, rows) =>
+        db
+          .insert(swingSchema.stockIndicators)
+          .values(rows as never[])
+          .onConflictDoUpdate({
+            target: swingSchema.stockIndicators.stockId,
+            set: {
+              avgTurnover20d: sql`excluded.avg_turnover_20d`,
+              volume20d: sql`excluded.volume_20d`,
+              volumeRatio: sql`excluded.volume_ratio`,
+              atr14: sql`excluded.atr_14`,
+              atrPct: sql`excluded.atr_pct`,
+              sma5: sql`excluded.sma_5`,
+              sma20: sql`excluded.sma_20`,
+              sma25: sql`excluded.sma_25`,
+              sma60: sql`excluded.sma_60`,
+              sma75: sql`excluded.sma_75`,
+              trendLong: sql`excluded.trend_long`,
+              trendShort: sql`excluded.trend_short`,
+              perfectOrderLong: sql`excluded.perfect_order_long`,
+              perfectOrderShort: sql`excluded.perfect_order_short`,
+              rsi14: sql`excluded.rsi_14`,
+              macd: sql`excluded.macd`,
+              macdSignal: sql`excluded.macd_signal`,
+              macdHist: sql`excluded.macd_hist`,
+              range20dHigh: sql`excluded.range_20d_high`,
+              range20dLow: sql`excluded.range_20d_low`,
+              rangeWidth: sql`excluded.range_width`,
+              fibHigh: sql`excluded.fib_high`,
+              fibLow: sql`excluded.fib_low`,
+              fib382: sql`excluded.fib_382`,
+              fib500: sql`excluded.fib_500`,
+              fib618: sql`excluded.fib_618`,
+              latestClose: sql`excluded.latest_close`,
+              latestVolume: sql`excluded.latest_volume`,
+              latestDate: sql`excluded.latest_date`,
+              pctChange1d: sql`excluded.pct_change_1d`,
+              liquidityOk: sql`excluded.liquidity_ok`,
+              volatilityOk: sql`excluded.volatility_ok`,
+              trendOkLong: sql`excluded.trend_ok_long`,
+              trendOkShort: sql`excluded.trend_ok_short`,
+              allPassedLong: sql`excluded.all_passed_long`,
+              allPassedShort: sql`excluded.all_passed_short`,
+              computedAt: sql`(unixepoch())`,
+            },
+          })
+          .then(() => undefined),
+    },
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.signals,
+      build: (item) =>
+        buildSignalRows(item as FlushItem<never>, runStartedSec),
+      upsert: (db, rows) =>
+        db
+          .insert(swingSchema.entrySignals)
+          .values(rows as never[])
+          .then(() => undefined),
+    },
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.momentum,
+      build: (item) => buildMomentumRows(item as FlushItem<never>),
+      upsert: (db, rows) =>
+        db
+          .insert(projectionSchema.momentumProjection)
+          .values(rows as never[])
+          .onConflictDoUpdate({
+            target: projectionSchema.momentumProjection.stockId,
+            set: {
+              asOf: sql`excluded.as_of`,
+              bars: sql`excluded.bars`,
+              closes: sql`excluded.closes`,
+              sourceMaxDate: sql`excluded.source_max_date`,
+              computedAt: sql`excluded.computed_at`,
+            },
+          })
+          .then(() => undefined),
+    },
+  ];
+
+  const failed = new Map<FlushItem<T>, FlushFailure<T>>();
+  const failItems = (chunk: BuiltRow<Record<string, unknown>>[], error: unknown) => {
+    const message = rootCauseMessage(error);
+    for (const { item } of chunk) {
+      if (!failed.has(item as FlushItem<T>)) {
+        failed.set(item as FlushItem<T>, {
+          target: (item as FlushItem<T>).target,
+          error: message,
+        });
+      }
+    }
+  };
+
+  for (const spec of specs) {
+    // 行の組み立ては銘柄ごとに隔離する (旧 writeStockSnapshot は銘柄単位で
+    // throw していた。1 銘柄の変な値で 3,755 件道連れは出さない)。
+    const built: BuiltRow<Record<string, unknown>>[] = [];
+    for (const item of items) {
+      if (failed.has(item)) continue;
+      try {
+        built.push(...spec.build(item as FlushItem<never>));
+      } catch (error) {
+        failItems([{ item: item as FlushItem<never>, row: {} }], error);
+      }
+    }
+    for (let i = 0; i < built.length; i += spec.rowsPerStatement) {
+      const chunk = built.slice(i, i + spec.rowsPerStatement);
+      try {
+        await spec.upsert(
+          db,
+          chunk.map((b) => b.row)
+        );
+      } catch (error) {
+        failItems(chunk, error);
+      }
+    }
   }
+  return [...failed.values()];
+}
+
+// export しているのは回収パスとテストから 1 行 flush として使うため。
+// 初回パスは flushSnapshots を直接叩く (L-56)。
+export async function writeStockSnapshot(
+  db: Db,
+  snap: StockSnapshot,
+  existingMaxDate: string | undefined,
+  options: WriteStockSnapshotOptions = {}
+): Promise<void> {
+  // 1 行 flush。回収パスとテストが使う。失敗したら throw (旧動作と同じ)。
+  const failed = await flushSnapshots(db, [{ snap, existingMaxDate }], options);
+  if (failed.length > 0) throw new Error(failed[0].error);
 }
 
 /**
