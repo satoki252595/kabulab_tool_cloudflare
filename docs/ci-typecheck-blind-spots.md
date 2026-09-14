@@ -57,7 +57,7 @@
 | `services/ir-catalog/data-scripts/backfill.ts` | 26 | (a) 1 件 + (b') 25 件 | 直して検査対象へ |
 | `services/yuho-quant/data-scripts/backfill.ts` | 2 | (a) 1 件 + (b') 1 件 | 直して検査対象へ（**実行は無効のまま**。下記 (e')） |
 | `services/yuho-quant/data-scripts/audit-all.ts` | 2 | (a) 1 件 + (c') 1 件 | **削除** |
-| `services/financial-math/scripts/verify-capm-bs.ts` | 2 | (a) 1 件 + (d') 1 件 | 直して検査対象へ |
+| `services/financial-math/scripts/verify-capm-bs.ts` | 2 | (a) 1 件 + (d') 1 件 | 削除（K1a。一度きりスモーク。`export` も内側へ戻した） |
 
 当初この表には「実行経路」列があり、5 ファイルすべてを
 「実際に `tsx` 実行される Node スクリプト」と書いていた。**これも誤りだった**:
@@ -181,7 +181,7 @@ per-statement の冪等 update/insert で書く」と明記して `ingestDocumen
 
 ---
 
-**(d') ルートのラッパが Worker バインディングを要求する — `verify-capm-bs.ts`**
+**(d') ルートのラッパが Worker バインディングを要求する — `verify-capm-bs.ts`（K1a で削除）**
 
 `buildCapmView` は `db: D1Database`（バインディング）を要求するので、Node から
 `createD1HttpDb` の db では呼べない。スモークが確かめたい実体は β 推定と期待収益率の

@@ -576,13 +576,8 @@ export async function buildCapmView(input: CapmViewInput): Promise<Parameters<ty
  * つまり **β の数値そのものが変わる**ので、画面はサンプル数を併記する
  * (views/capm.ts の「サンプル数」セル)。R2 系列ができたらそちらを読む。
  *
- * export しているのは、Node のスモークスクリプト
- * (scripts/verify-capm-bs.ts) がここを直接叩くため。buildCapmView は
- * Worker バインディング (`D1Database`) を要求するので Node からは呼べない一方、
- * 確かめたい実体 (β 推定) はこの関数なので、ラッパ越しではなくここを検証する。
-
  */
-export async function estimateBetaForCode(
+async function estimateBetaForCode(
   db: ReturnType<typeof createDb>,
   code: string
 ): Promise<{ estimate: ReturnType<typeof estimateBetaOLS>; reason: string | null }> {
