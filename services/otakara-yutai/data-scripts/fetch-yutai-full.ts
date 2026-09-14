@@ -8,6 +8,7 @@
  *          条件は yutai-full-import.ts (値のテストは src/tests/yutai-full-import.test.ts)
  */
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import { log } from "../../../src/shared/log.js";
 import * as schema from "../src/db/schema.js";
 import {
   importYutaiFull,
@@ -55,7 +56,7 @@ async function collectAllStockCodes(): Promise<string[]> {
       }
 
       if (page % 10 === 0) {
-        console.log(`  Page ${page}: 累計 ${allCodes.size}銘柄`);
+        log.info(`  Page ${page}: 累計 ${allCodes.size}銘柄`);
       }
 
       page++;
@@ -177,23 +178,23 @@ async function fetchStockDetail(code: string): Promise<StockYutaiData | null> {
 
 // ===== Main =====
 async function main() {
-  console.log("🚀 優待銘柄データ全量取得 v2\n");
+  log.info("🚀 優待銘柄データ全量取得 v2\n");
 
   // Phase 1: 銘柄コード収集（キャッシュ利用可）
   const CACHE_FILE = "/tmp/yutai-codes-cache.json";
   let codes: string[];
   if (existsSync(CACHE_FILE)) {
     codes = JSON.parse(readFileSync(CACHE_FILE, "utf-8"));
-    console.log(`📋 Phase 1: キャッシュから ${codes.length}銘柄のコードを読込\n`);
+    log.info(`📋 Phase 1: キャッシュから ${codes.length}銘柄のコードを読込\n`);
   } else {
-    console.log("📋 Phase 1: 全銘柄コードを収集中...");
+    log.info("📋 Phase 1: 全銘柄コードを収集中...");
     codes = await collectAllStockCodes();
     writeFileSync(CACHE_FILE, JSON.stringify(codes));
-    console.log(`\n✅ ${codes.length}銘柄のコードを収集\n`);
+    log.info(`\n✅ ${codes.length}銘柄のコードを収集\n`);
   }
 
   // Phase 2: 個別ページから詳細取得
-  console.log("📊 Phase 2: 各銘柄の詳細データを取得中...");
+  log.info("📊 Phase 2: 各銘柄の詳細データを取得中...");
   const allData: StockYutaiData[] = [];
   let progress = 0;
 
@@ -204,40 +205,40 @@ async function main() {
     }
     progress++;
     if (progress % 50 === 0) {
-      console.log(`  ${progress}/${codes.length} (成功: ${allData.length})`);
+      log.info(`  ${progress}/${codes.length} (成功: ${allData.length})`);
     }
     await new Promise(r => setTimeout(r, 400)); // レート制限
   }
-  console.log(`\n✅ ${allData.length}銘柄の詳細データを取得\n`);
+  log.info(`\n✅ ${allData.length}銘柄の詳細データを取得\n`);
 
   // データ品質サマリー
   const multiMonth = allData.filter(d => d.recordMonths.length > 1).length;
   const multiShare = allData.filter(d => d.benefits.length > 1).length;
-  console.log(`  複数権利月: ${multiMonth}銘柄`);
-  console.log(`  複数株数条件: ${multiShare}銘柄`);
-  console.log(`  サンプル: ${allData[0]?.name} (${allData[0]?.code})`);
+  log.info(`  複数権利月: ${multiMonth}銘柄`);
+  log.info(`  複数株数条件: ${multiShare}銘柄`);
+  log.info(`  サンプル: ${allData[0]?.name} (${allData[0]?.code})`);
   if (allData[0]) {
-    console.log(`    権利月: ${allData[0].recordMonths.join(",")}`);
+    log.info(`    権利月: ${allData[0].recordMonths.join(",")}`);
     for (const b of allData[0].benefits) {
-      console.log(`    ${b.minShares}株: ${b.description.substring(0, 50)}`);
+      log.info(`    ${b.minShares}株: ${b.description.substring(0, 50)}`);
     }
   }
 
   // Phase 3: DB import
-  console.log("\n📦 Phase 3: DBにインポート中...");
+  log.info("\n📦 Phase 3: DBにインポート中...");
   const result = await importYutaiFull(createD1HttpDb(schema), allData);
 
-  console.log("\n" + "=".repeat(60));
-  console.log("📊 最終結果:");
-  console.log(`  銘柄数: ${result.stockCount}`);
-  console.log(`  優待レコード数: ${result.benefitCount}`);
+  log.info("\n" + "=".repeat(60));
+  log.info("📊 最終結果:");
+  log.info(`  銘柄数: ${result.stockCount}`);
+  log.info(`  優待レコード数: ${result.benefitCount}`);
   console.info(`  母集団に無く飛ばした銘柄 (既存の優待行は保持): ${result.outOfUniverse.length}`);
   console.info(`  取得できず優待行を消した銘柄: ${result.abolishedCount}`);
   console.info(`  戻せなかった解釈: ${result.droppedInterpretations}`);
   console.info(`  取り込み失敗: ${result.failedCodes.length}`);
-  console.log(`  複数権利月の銘柄: ${multiMonth}`);
-  console.log(`  複数株数条件の銘柄: ${multiShare}`);
-  console.log("=".repeat(60));
+  log.info(`  複数権利月の銘柄: ${multiMonth}`);
+  log.info(`  複数株数条件の銘柄: ${multiShare}`);
+  log.info("=".repeat(60));
 }
 
 main().catch(e => { console.error("❌ Fatal:", e); process.exit(1); });

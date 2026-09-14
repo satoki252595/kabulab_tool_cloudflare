@@ -1,0 +1,32 @@
+# 定期ジョブの失敗に気づく唯一の経路。これまで 14 workflow に
+# `if: failure()` も webhook も 0 行で、JPX の 404 で母集団同期が
+# 1 ヶ月止まっていたことに誰も気づかなかった。
+# 通知先を増やすと見なくなるので、GitHub Issue を 1 本だけ立てる
+# （既に open があれば重複を作らずコメントを足す）。
+name: notify-failure
+description: ジョブ失敗の通知 Issue を立てる（同名 open があればコメント）
+inputs:
+  title:
+    description: Issue 表題（例: "[ジョブ失敗] stock-sync"）
+    required: true
+  summary:
+    description: 本文の 1 行目（例: "stock-sync が失敗しました"）
+    required: true
+runs:
+  using: composite
+  steps:
+    - run: |
+        TITLE="${{ inputs.title }}"
+        # gh の in:title 検索は部分一致なので、候補を取って jq で完全一致に絞る。
+        # （部分一致のまま [0] を掴むと、別ジョブの Issue に誤ってコメントする）
+        CANDIDATES=$(gh issue list --state open --search "$TITLE in:title" --json number,title)
+        EXISTING=$(echo "$CANDIDATES" | jq -r --arg t "$TITLE" '[.[] | select(.title == $t)][0].number // empty')
+        BODY="${{ inputs.summary }}%0A%0A実行: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}%0A検知: $(date -u '+%Y-%m-%d %H:%M UTC')"
+        if [ -n "$EXISTING" ]; then
+          gh issue comment "$EXISTING" --body "$(printf '%b' "${BODY//%0A/\\n}")"
+        else
+          gh issue create --title "$TITLE" --label "" --body "$(printf '%b' "${BODY//%0A/\\n}")"
+        fi
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}

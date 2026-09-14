@@ -13,6 +13,7 @@ import { writeFileSync, mkdirSync, readFileSync } from "fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { recordPrimaryData } from "../../../src/shared/notion-archive/index.js";
+import { log } from "../../../src/shared/log.js";
 import { benefitKey } from "./benefit-key.js";
 
 // cwd 依存だと interpret/apply と入出力パスがズレるためスクリプト位置基準で解決
@@ -33,7 +34,7 @@ async function main() {
     .from(yutaiBenefits)
     .innerJoin(stocks, eq(yutaiBenefits.stockId, stocks.id));
 
-  console.log(`Total benefit rows: ${rows.length}`);
+  log.info(`Total benefit rows: ${rows.length}`);
 
   // (stockCode, description) でグルーピング
   // 同じ銘柄の同じ文言は1つにまとめてIDリストを保持
@@ -66,7 +67,7 @@ async function main() {
     entry.minSharesList.push(r.minShares);
   }
 
-  console.log(`Unique (stock, description) pairs: ${byKey.size}`);
+  log.info(`Unique (stock, description) pairs: ${byKey.size}`);
 
   // 出力ディレクトリ作成
   const outDir = DATA_DIR;
@@ -107,7 +108,7 @@ async function main() {
     );
   }
   writeFileSync(outPath, lines.join("\n") + "\n", "utf-8");
-  console.log(`Wrote ${lines.length} lines to ${outPath}`);
+  log.info(`Wrote ${lines.length} lines to ${outPath}`);
 
   // ルール6: 優待一次データの確定スナップショット (JSONL) を物理ファイルとして
   // Notion へ実体アップロード。日付キーで冪等 (同日再実行は skip)。これは
@@ -134,7 +135,7 @@ async function main() {
       },
     ],
   });
-  console.log(`Notion: benefit-descriptions-${day} を一次データ DB に記録`);
+  log.info(`Notion: benefit-descriptions-${day} を一次データ DB に記録`);
 }
 
 main().catch((e) => {

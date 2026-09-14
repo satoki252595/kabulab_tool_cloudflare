@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
 import { createMiddleware } from "hono/factory";
@@ -64,11 +64,11 @@ const dbMiddleware = createMiddleware<AppEnv>(async (c, next) => {
 });
 
 // ===== Error Handler =====
-function onError(err: Error, c: any): Response {
+function onError(err: Error, c: Context): Response {
   console.error(`[Error] ${err.message}`);
   return c.html(layout("エラー", `<div class="container"><h2>エラーが発生しました</h2><p style="color:#888">予期しないエラーが発生しました。</p><a href="${BP}/" class="back">← ホームに戻る</a></div>`), 500);
 }
-function onNotFound(c: any): Response {
+function onNotFound(c: Context): Response {
   return c.html(layout("Not Found", `<div class="container"><h2>ページが見つかりません</h2><p style="color:#888">${c.req.path} は存在しません</p><a href="${BP}/" class="back">← ホームに戻る</a></div>`), 404);
 }
 
@@ -1459,8 +1459,8 @@ app.get("/stocks/:code", async (c) => {
         },
         with: { genre: true },
       },
-      financials: { orderBy: (f: any, { desc: d }: any) => [d(f.fetchedAt)], limit: 1 },
-      scores: { orderBy: (s: any, { desc: d }: any) => [d(s.scoredAt)], limit: 1 },
+      financials: { orderBy: (f, { desc: d }) => [d(f.fetchedAt)], limit: 1 },
+      scores: { orderBy: (s, { desc: d }) => [d(s.scoredAt)], limit: 1 },
     },
   });
 
@@ -1477,7 +1477,7 @@ app.get("/stocks/:code", async (c) => {
   // 行ごと元データから削除する。削除後、その 9 コードは上の `!stockData` で 404 になる。
   const fin = stockData.financials[0] ?? null;
   const score = stockData.scores[0] ?? null;
-  const genreSlugs = [...new Set(stockData.benefits.map((b: any) => b.genre?.slug).filter(Boolean))];
+  const genreSlugs = [...new Set(stockData.benefits.map((b) => b.genre?.slug).filter(Boolean))];
   const fromScreening = c.req.query("from") === "screening";
 
   return c.html(layout(`${stockData.name} (${code})`, `
