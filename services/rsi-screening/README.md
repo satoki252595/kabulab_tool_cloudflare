@@ -90,26 +90,7 @@ pnpm dev
 | `pnpm lint` | ESLint |
 | `pnpm run deploy` | Cloudflare Workers デプロイ (`wrangler deploy`。通常は Workers Builds が自動) |
 
-## API
-
-### `GET /api/screening`
-
-RSIパーセンタイル順位で銘柄をスクリーニング。
-
-| パラメータ | 型 | デフォルト | 説明 |
-|-----------|------|-----------|------|
-| `period` | `10` \| `40` \| `120` \| `min` | `min` | RSI期間 (min=3期間の最小) |
-| `percentileMax` | number | 10 | パーセンタイル上限 (0〜100) |
-| `blueChip` | boolean | true | 優良株フィルタ |
-| `sort` | `percentile` \| `rsi` \| `marketCap` | `percentile` | 並び順 |
-| `limit` | number | 50 | 件数 (最大200) |
-| `offset` | number | 0 | オフセット |
-
-### `GET /api/stocks/:code`
-
-銘柄詳細。価格履歴・RSI履歴・年度財務を含む。
-
-### 日次同期 (GitHub Actions)
+## 日次同期 (GitHub Actions)
 
 日次同期は Worker のエンドポイントではなく **GitHub Actions** (`.github/workflows/stock-sync.yml`) が Node から D1 REST 経由で実行する (`pnpm sync:daily:core`)。Yahoo 取得は Worker エッジ (`/api/ingest/yahoo`, `YAHOO_PROXY_BASE`) を経由して 429 を回避する。
 

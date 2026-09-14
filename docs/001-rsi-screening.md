@@ -17,14 +17,12 @@ services/rsi-screening/
 ├── app.ts                     # Hono サブアプリ公開エントリ (export default app)
 ├── base-path.ts               # export const BASE_PATH = "/rsi-screening"
 ├── src/
-│   ├── index.ts               # Hono アプリ本体 (API + SSR 配線、onError)
+│   ├── index.ts               # Hono アプリ本体 (SSR 配線、onError)
 │   ├── db/
 │   │   ├── client.ts          # createDb(c.env.DB) — D1 + Drizzle (drizzle-orm/d1)
 │   │   ├── core-schema.ts     # core_* (共有テーブル)
 │   │   └── schema.ts          # rsi_percentile (固有テーブル)
 │   ├── routes/
-│   │   ├── screening.ts       # GET /api/screening
-│   │   ├── stocks.ts          # GET /api/stocks/:code
 │   │   └── pages.ts           # SSR: /, /screening, /stocks/:code
 │   ├── services/
 │   │   ├── screening-service.ts     # スクリーニングクエリ (UI)
@@ -131,22 +129,13 @@ rsi_percentile
 > 過去には `rsi_stock_rsi_history` (5 年分の日次 RSI 時系列) も持っていたが、
 > パーセンタイル算出がメモリ上で完結するため 2026-04 に削除した。
 
-## スクリーニング API
+## スクリーニング一覧の鮮度
 
-```
-GET /api/screening
-  ?period=min          # "10" | "40" | "120" | "min"
-  &percentileMax=10    # パーセンタイル上限 (0-100)
-  &blueChip=true       # 優良株のみ
-  &sort=percentile     # "percentile" | "rsi" | "marketCap"
-  &limit=50&offset=0
-```
-
-レスポンスは `{ query, count, staleExcluded, freshnessMaxAgeDays, results }`。
+(JSON API 2 本は K1c で撤去。SSR のみ。)
 
 **鮮度条件**: `rsi_percentile.computed_at` が `freshnessMaxAgeDays` (7 日) より古い行は
 結果から除外する。日次 sync は平日のみ (`0 21 * * 1-5`) 回るので金→月の 3 日据え置きは
-正常、そこへ run 失敗 1〜2 回ぶんの予備を足した値。除外した件数は `staleExcluded` と
+正常、そこへ run 失敗 1〜2 回ぶんの予備を足した値。除外した件数は
 SSR 画面 (「鮮度不足で除外 N 件」) に出す — 黙って落とすと「該当なし」と「古い行しか
 無い」の区別が読者に付かないため (ルール2)。
 

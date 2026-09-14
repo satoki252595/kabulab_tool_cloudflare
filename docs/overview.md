@@ -82,7 +82,7 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 │   │   ├── src/
 │   │   │   ├── index.ts               # Hono アプリ本体 (API + SSR 配線)
 │   │   │   ├── db/                    # core_* + rsi_percentile スキーマ (sqlite-core) + Drizzle/D1 クライアント
-│   │   │   ├── routes/                # /api/screening, /api/stocks, SSR pages
+│   │   │   ├── routes/                # SSR pages
 │   │   │   ├── services/              # screening-service / stock-detail-service (UI クエリ用)
 │   │   │   ├── views/                 # template literal を返す .ts 関数
 │   │   │   └── tests/
