@@ -73,7 +73,7 @@
  * commit gate が無いので接頭辞は現時点では**規約に過ぎない**。
  */
 import { sql } from "drizzle-orm";
-import { sqliteTable, integer, text } from "drizzle-orm/sqlite-core";
+import { sqliteTable, integer, real, text } from "drizzle-orm/sqlite-core";
 
 /**
  * モメンタム投影 — 1 銘柄 1 行。
@@ -113,3 +113,75 @@ export const momentumProjection = sqliteTable("p_momentum", {
 });
 
 export type MomentumProjection = typeof momentumProjection.$inferSelect;
+
+/**
+ * 有報成長性投影 — 1 銘柄 1 行 (L-51/K4b)。
+ *
+ * yuho の受注/海外スクリーニングは 1 表示で全ファクト (23k + 14k 行) を
+ * 走査していた (6 万超 / 2.5 万 rows_read)。訂正対応の「(会計期末, 最新提出)
+ * 採用 → 直近 5 年窓 → CAGR/YoY/比率」の畳み込みを EDINET catchup の末尾で
+ * 事前集計し、画面はこの表を WHERE/ORDER BY で引く (~1.2k 行)。
+ *
+ * 不変条件 (地域窓の一致): 地域選択時の年窓は「合計行だけの窓」と一致する。
+ * パーサ (overseas-parser.ts の 2 経路) は地域行と合計行 (overseas_total /
+ * total) を同一 parse の成功時に原子的に出し、失敗時は行を出さない。
+ * よって最新提出に地域行がある会計期末は必ず合計行を持ち、地域指定の有無で
+ * 年窓も first/last も変わらない (本番実測: 合計行の無い (stock, fy) の
+ * 地域行は 0 件)。地域比率は末端 fy の地域円貨 4 列と last_total から
+ * 読み側で `+(yen/total*100).toFixed(1)` 復元し、従来式と一致する。
+ */
+export const yuhoGrowthProjection = sqliteTable("p_yuho_growth", {
+  /** `core_stocks.id`。FK は張らない (p_momentum と同じ理由)。 */
+  stockId: integer("stock_id").primaryKey(),
+  // ---- 受注 (segment_kind='total' の全社合計) ----
+  /** 直近 5 年窓の会計期末数。minYears の判定に使う */
+  ordYears: integer("ord_years").notNull(),
+  ordFirstFy: text("ord_first_fy").notNull(),
+  ordLastFy: text("ord_last_fy").notNull(),
+  ordFirstOrdersYen: integer("ord_first_orders_yen", { mode: "number" }),
+  ordLastOrdersYen: integer("ord_last_orders_yen", { mode: "number" }),
+  ordFirstBacklogYen: integer("ord_first_backlog_yen", { mode: "number" }),
+  ordLastBacklogYen: integer("ord_last_backlog_yen", { mode: "number" }),
+  /** 年平均成長率 (小数)。基準<=0 や暦年差 0 は null */
+  ordOrdersCagr: real("ord_orders_cagr"),
+  ordBacklogCagr: real("ord_backlog_cagr"),
+  /** 直近前年比 (小数) */
+  ordOrdersYoy: real("ord_orders_yoy"),
+  ordBacklogYoy: real("ord_backlog_yoy"),
+  /** データ点数 < 暦年差+1 (=途中年が欠落) */
+  ordHasYearGap: integer("ord_has_year_gap", { mode: "boolean" }).notNull(),
+  // ---- 海外売上 (overseas_total / total + 地域バケット) ----
+  ovsYears: integer("ovs_years").notNull(),
+  ovsFirstFy: text("ovs_first_fy").notNull(),
+  ovsLastFy: text("ovs_last_fy").notNull(),
+  ovsFirstOverseasYen: integer("ovs_first_overseas_yen", { mode: "number" }),
+  ovsLastOverseasYen: integer("ovs_last_overseas_yen", { mode: "number" }),
+  ovsLastTotalYen: integer("ovs_last_total_yen", { mode: "number" }),
+  /** 海外売上高比率 (%)。toFixed(1) 済みの値をそのまま持つ */
+  ovsFirstRatioPct: real("ovs_first_ratio_pct"),
+  ovsLatestRatioPct: real("ovs_latest_ratio_pct"),
+  ovsOverseasCagr: real("ovs_overseas_cagr"),
+  ovsOverseasYoy: real("ovs_overseas_yoy"),
+  ovsHasYearGap: integer("ovs_has_year_gap", { mode: "boolean" }).notNull(),
+  /** overseas_total 行を持つ (プルダウンの母集団。total 行だけの銘柄と区別) */
+  ovsHasOverseasTotal: integer("ovs_has_overseas_total", { mode: "boolean" }).notNull(),
+  /** 末端 fy の地域バケット円貨 (単独合致行のみ合計。未開示は null) */
+  ovsRegionChinaYen: integer("ovs_region_china_yen", { mode: "number" }),
+  ovsRegionAmericasYen: integer("ovs_region_americas_yen", { mode: "number" }),
+  ovsRegionEuropeYen: integer("ovs_region_europe_yen", { mode: "number" }),
+  ovsRegionAsiaYen: integer("ovs_region_asia_yen", { mode: "number" }),
+  // ---- 来歴 (p_momentum と同じ規約) ----
+  /** 再生成日 'YYYY-MM-DD' */
+  asOf: text("as_of").notNull(),
+  /** 生成時の `MAX(yuho_documents.submitted_at)` 日付 'YYYY-MM-DD' */
+  sourceMaxDate: text("source_max_date").notNull(),
+  /**
+   * 生成時刻 (epoch 秒)。「今回の run で書き直されなかった行」を 1 文の
+   * DELETE で掃除するために使う。
+   */
+  computedAt: integer("computed_at", { mode: "timestamp" })
+    .default(sql`(unixepoch())`)
+    .notNull(),
+});
+
+export type YuhoGrowthProjection = typeof yuhoGrowthProjection.$inferSelect;
