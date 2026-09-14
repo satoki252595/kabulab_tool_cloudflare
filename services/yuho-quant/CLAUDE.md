@@ -120,7 +120,7 @@ services/yuho-quant/
 │   │   └── order-query.ts        # UI クエリ (5年推移)
 │   ├── views/{layout,home,stock-detail}.ts
 │   └── tests/{order-parser.test.ts, fixtures/*}
-└── data-scripts/{investigate,investigate2,backfill}.ts
+└── data-scripts/backfill.ts
 ```
 
 詳細は [docs/005-yuho-quant.md](../../docs/005-yuho-quant.md) を参照。

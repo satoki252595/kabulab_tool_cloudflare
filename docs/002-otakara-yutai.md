@@ -39,10 +39,9 @@ services/otakara-yutai/
 │   ├── summary-tasks.ts / summary-import.ts  # ③④の純ロジック (タスク選定 / 結果検証)
 │   ├── estimated-value-guard.ts / private-path.ts / benefit-rows.ts  # 金額ガード / 置き場所ガード / D1 読み取り
 │   ├── benefit-key.ts / summary-contract.ts  # 上記が共有するキー生成・要約契約
-│   ├── fetch-yutai-data.ts / fix-stock-names.ts / test-parse.ts / verify-data.ts
+│   ├── fetch-yutai-data.ts
 │   └── data/                  # (gitignore) 掲載文を含む作業ファイル: 抽出 JSONL・要約タスク・結果
 ├── docs/llm-summary-task.md   # クラウド LLM 向けの要約作業仕様書
-├── drizzle/                   # drizzle-kit 生成の migration
 ├── CLAUDE.md
 └── README.md
 ```

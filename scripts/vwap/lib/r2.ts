@@ -4,7 +4,7 @@
 // 必要env(本番): R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET(任意)
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 
 const LOCAL_OUT = process.env.LOCAL_OUT;
 const BUCKET = process.env.R2_BUCKET || "vwap-data";
@@ -45,11 +45,6 @@ export async function r2Get(key: string): Promise<string | null> {
     if (e?.name === "NoSuchKey" || e?.$metadata?.httpStatusCode === 404) return null;
     throw e;
   }
-}
-
-export async function r2Delete(key: string): Promise<void> {
-  if (LOCAL_OUT) { try { await fs.unlink(path.join(LOCAL_OUT, key)); } catch { /* no-op */ } return; }
-  await client().send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
 }
 
 // 簡易スロットル付き並列実行（Yahooレート制限対策）

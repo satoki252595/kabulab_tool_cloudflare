@@ -103,7 +103,7 @@ pnpm deploy:cf            # 本番を手動デプロイ (= wrangler deploy)
 
 # DB スキーマ管理 (D1)
 pnpm db:generate:d1       # D1(SQLite) スキーマ生成 → drizzle/d1/*.sql (適用は wrangler d1 execute)
-# 注: db:push:rsi / :otakara / :swing / :finmath / :ircat は旧 Neon(pg) 用で D1 移行後は obsolete
+# 注: 旧 Neon(pg) 用の db:push:* / db:generate:<svc> / db:studio:* は K1a で削除済み
 
 # データ取得 (日次/月次 stock sync。本体は GitHub Actions が自動実行 — 下記「運用ステータス」)
 pnpm sync:daily:core      # core/rsi/swing 日次 (Node → D1 REST。GitHub Actions と同じ本体)
@@ -183,8 +183,9 @@ Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキ�
    - catchup.yml(EDINET/TDnet)用に GH Secret **`WORKER_BASE_URL`**(= Worker URL)が未追加なら追加。
 2. **legacy 掃除**（✅ ほぼ完了）… 旧 Neon DB スクリプト `scripts/db/*.mjs`・dev one-off
    (`full-validation*` / `get-jpx-listing`)・otakara dead code(`src/index.ts` / `pages-app.ts` /
-   Neon integration test)は **削除済み**。残りは Neon 解約時にまとめて整理推奨: `DATABASE_URL` +
-   cutover ツール(`scripts/migrate/`)、obsolete な `db:push:*` + `drizzle.<svc>.config.ts`(pg dialect)、
+   Neon integration test)は **削除済み**。cutover ツール(`scripts/migrate/`)・
+   `db:push:*` + `drizzle.<svc>.config.ts`(pg dialect) も K1a で削除済み。
+   残りは Neon 解約時にまとめて整理推奨: `DATABASE_URL` +
    各サービス CLAUDE.md/README の Neon/Vercel 期記述(一括リフレッシュ)。
 
 ## デプロイ
@@ -220,7 +221,6 @@ npx wrangler tail                # 本番ログをストリーム
 Secret が正のソース。
 
 ```
-DATABASE_URL=postgresql://user:password@host/database?sslmode=require  # 旧 Neon (cutover 移行ツール専用・本番未使用。解約後は不要)
 CRON_SECRET=your-cron-secret-here                                      # 取込ルート/cron 認証
 EDINET_API_KEY=your-edinet-subscription-key-here                       # 005 yuho-quant
 NOTION_TOKEN=ntn_xxx                                                   # 一次データ Notion アーカイブ (ルール6)

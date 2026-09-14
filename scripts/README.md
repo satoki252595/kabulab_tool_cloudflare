@@ -18,11 +18,9 @@ scripts/
 │   ├── universe.ts                   # pnpm sync:universe — 東証母集団を core_stocks に seed (Node・xlsx)
 │   ├── all-daily.ts / all-monthly.ts # ローカル手動フル実行のオーケストレータ
 │   ├── yuho-edinet.ts / ir-tdnet.ts  # 005/006 の Worker /admin/catchup を叩く薄いトリガ
-├── vwap/                             # 007 VWAP 取込 → R2 (GitHub Actions で定期実行)
-│   ├── ingest-daily.ts / ingest-intra.ts / ingest-margin.ts
-│   └── lib/                          # R2(S3互換) / Yahoo(YAHOO_PROXY_BASE 経由) / codes ヘルパ
-└── migrate/                          # Neon→D1 cutover (一度きり・移行ツール)
-    └── yuho-neon-to-d1.ts
+└── vwap/                             # 007 VWAP 取込 → R2 (GitHub Actions で定期実行)
+    ├── ingest-daily.ts / ingest-intra.ts / ingest-margin.ts
+    └── lib/                          # R2(S3互換) / Yahoo(YAHOO_PROXY_BASE 経由) / codes ヘルパ
 ```
 
 ## 運用サマリ（定点ジョブ）

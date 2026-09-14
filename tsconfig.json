@@ -24,10 +24,9 @@
   },
   "include": [
     "src/**/*",
-    "api/**/*",
     "services/**/*",
     "scripts/**/*.ts",
-    "drizzle.*.config.ts",
+    "drizzle.d1.config.ts",
     "vitest.config.ts"
   ],
   // exclude はそのまま「CI が見ていない範囲」になる。ここに足すのは
@@ -47,8 +46,7 @@
   // docs/ci-typecheck-blind-spots.md に書いた。**1 ファイル直すたびにここから消す**。
   "exclude": [
     "node_modules",
-    "dist",
-    ".vercel"
+    "dist"
     // ここは空。UNI レーンが 4 ファイルの型エラーを直し、EMH レーンが
     // verify-price-cache.ts (Neon 期のシグネチャで既に動かなかった) を削除したので、
     // 除外すべき既知の借金はもう無い。**新しい除外を足すときは規模と実行経路を

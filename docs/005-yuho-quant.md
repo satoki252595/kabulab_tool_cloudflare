@@ -33,9 +33,10 @@
   (先頭4桁) で銘柄突合する。
 - `filerName` / `submitDateTime` は取下げ等で `null` になり得る (実 API 確認済)。
 
-## 受注開示の実地調査 (data-scripts/investigate*.ts, tmp/)
+## 受注開示の実地調査 (削除済みの一時スクリプト data-scripts/investigate*.ts と tmp/)
 
-`pnpm yuho:investigate` で受注生産型 28 社の最新有報を取得し精査した結果:
+一時スクリプトで受注生産型 28 社の最新有報を取得し精査した結果（スクリプトは
+K1a で削除。git 履歴に残る）:
 
 - **EDINET CSV(type=5)** はテキストブロックを平坦テキスト化し表セル境界を
   失う → 受注表の確実な構造化には **iXBRL(type=1) の `<table>`** が必要。

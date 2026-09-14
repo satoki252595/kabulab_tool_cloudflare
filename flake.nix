@@ -16,12 +16,9 @@
         default = pkgs.mkShell {
           # pnpm-lock.yaml は lockfileVersion 9.0 → pnpm 9 系で固定。
           # Node は package.json 運用に合わせ 22 系。
-          # openvpn: VWAP 取込の Yahoo 429 回避用 VPN ローテーション
-          # (scripts/vpn/vpngate-rotate.sh) で使用。接続自体は sudo が必要。
           packages = [
             pkgs.nodejs_22
             pkgs.pnpm_9
-            pkgs.openvpn
           ];
 
           shellHook = ''

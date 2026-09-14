@@ -82,8 +82,8 @@ export const INSTRUMENT_TYPE_EQUITY = INSTRUMENT_TYPES.equity;
  * 非 equity の区分文字列 → 語。**完全一致**で引く (部分一致にしない理由は docstring)。
  *
  * 区分文字列は data_j の「市場・商品区分」列の値で、sectors.ts が前後の空白だけを
- * trim して `JpxRow.marketCategory` に入れたもの。括弧は全角。出典はリポジトリ内の
- * 既存コード (scripts/vwap/build_stocks.py の `SEG_SHORT`、sectors.ts の
+ * trim して `JpxRow.marketCategory` に入れたもの。括弧は全角。出典は当時の
+ * 既存コード (scripts/vwap/build_stocks.py〈K1a で削除〉の `SEG_SHORT`、sectors.ts の
  * isListedEquity の docstring、sectors*.test.ts の実在行) と stockStock 設計書 P4a 節。
  */
 const NON_EQUITY_CATEGORIES: ReadonlyMap<string, InstrumentType> = new Map([

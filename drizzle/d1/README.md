@@ -11,6 +11,8 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 2. **生成された SQL は手で読む。** 意図した表以外への DDL が混ざっていたら落とす。
 3. **`meta/` を手で書かない。** 手書きの snapshot は journal との対応を崩し、
    次の `generate` が「何からの差分か」を見失う。
+4. **旧 snapshot は残さない。** `generate` は journal の最新 snapshot だけを読むので、
+   実施済み migration の旧 snapshot は `git rm` する（最新と `_journal.json` だけ残す）。
 
 ## 適用先が 2 系統あることに注意
 

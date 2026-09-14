@@ -9,8 +9,8 @@
  * 3,700 銘柄 × 日次の経路なので、気付くのは D1 の課金か遅延が出てから。
  *
  * D1 への反映は **`generate` した SQL を読んでから `wrangler d1 execute --file`**
- * の一本道だけ。`package.json` には `db:push:*` が 5 本残っているが、いずれも
- * Neon (postgres) 向けで、D1 用の push スクリプトは作らないこと。
+ * の一本道だけ。Neon (postgres) 向けの `db:push:*` は K1a で削除した。
+ * D1 用の push スクリプトは作らないこと。
  *
  * 本番 `core_stocks` は 21 列・索引 3 本。うち 12 列と 2 索引は stockStock 側の
  * 移行 P4a (2026-09-12) が直接 ALTER で入れたもので、長らく snapshot が 9 列・
