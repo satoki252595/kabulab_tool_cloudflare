@@ -38,8 +38,15 @@ const homeQuery = z.object({
   focus: z.string().optional(),
 });
 
+// EDINET 由来のみの公開面 (L-62)。facts は日次取込でしか更新されないため、
+// 一覧/ホームは 5 分・詳細は 1 分エッジ/ブラウザにキャッシュさせ D1 読取を抑える。
+// /screening-overseas の 30 分 (SCREEN_CACHE) は重い全件走査の既存判断で残す。
+const LIST_CACHE = "public, max-age=300";
+const DETAIL_CACHE = "public, max-age=60";
+
 pagesRoute.get("/", zValidator("query", homeQuery), async (c) => {
   const { q } = c.req.valid("query");
+  c.header("Cache-Control", LIST_CACHE);
   if (q === undefined) {
     return c.html(homePage({ query: "", results: null }));
   }
@@ -113,6 +120,7 @@ pagesRoute.get(
       screenOrderGrowth(db, opts),
       listSectorsWithOrders(db),
     ]);
+    c.header("Cache-Control", LIST_CACHE);
     return c.html(screeningPage({ opts, sectors, rows }));
   }
 );
@@ -124,6 +132,7 @@ pagesRoute.get(
     const opts = toScreenOpts(c.req.valid("query"));
     const db = createDb(c.env.DB);
     const rows = await screenOrderGrowth(db, opts);
+    c.header("Cache-Control", LIST_CACHE);
     return c.json({ opts, count: rows.length, rows });
   }
 );
@@ -261,6 +270,7 @@ pagesRoute.get(
         )
       );
     }
+    c.header("Cache-Control", DETAIL_CACHE);
     return c.html(stockDetailPage(trend, overseasTrend));
   }
 );
@@ -274,6 +284,7 @@ pagesRoute.get(
     const db = createDb(c.env.DB);
     const trend = await getOrderTrendByCode(db, code);
     if (!trend) return c.json({ error: "stock not found" }, 404);
+    c.header("Cache-Control", DETAIL_CACHE);
     return c.json(trend);
   }
 );

@@ -1,0 +1,8 @@
+# L-62: 月次更新の vwap 静的ファイルは 1 日キャッシュ (再訪の再検証を抑える)。
+# stocks.json 等は月次生成で内容が変わるが、URL が固定なので日次粒度で十分。
+/vwap-analysis/data/*
+  Cache-Control: public, max-age=86400
+/vwap-analysis/app.js
+  Cache-Control: public, max-age=86400
+/vwap-analysis/vendor/*
+  Cache-Control: public, max-age=86400
