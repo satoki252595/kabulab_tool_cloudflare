@@ -176,7 +176,7 @@ beforeAll(() => {
   // active かつ優待ありの非普通株と、instrument_type が NULL の行 (日次取込の対象外)。
   // 優待・財務・スコアを持たせ、しかもスコアを最高にしてある。絞り込みが外れたら
   // SSR の 1 ページ目とジャンルの 1 ページ目の先頭に並ぶので、「出ない」を検査できる。
-  insStock.run(902, "9002", "非普通株銘柄", "プライム", "小売業", 1, 1, "reit_fund");
+  insStock.run(902, "1201", "非普通株銘柄", "プライム", "小売業", 1, 1, "reit_fund");
   insStock.run(903, "9003", "未分類銘柄", "プライム", "小売業", 1, 1, null);
   for (const id of [902, 903]) {
     insBenefit.run(id, 1, FORBIDDEN_TEXT, "非普通株の優待", 100, 9);
@@ -279,7 +279,7 @@ describe("/api/screening の絞り込みと総件数", () => {
   });
 
   it("優待非対象・上場廃止・非普通株・instrument_type NULL は母集団に入らない", async () => {
-    const excluded = ["9000", "9001", "9002", "9003"];
+    const excluded = ["9000", "9001", "1201", "9003"];
 
     // /api/screening: withTotal=1 の総件数と、全ページの行
     const pages = [await screening("withTotal=1&limit=100"), await screening("limit=100&offset=100")];
