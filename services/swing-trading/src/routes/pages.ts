@@ -122,11 +122,16 @@ pagesRoute.get("/", async (c) => {
   // entry_signals は日次の母集団 (active かつ equity, src/shared/db/active-equity.ts)
   // の銘柄分のみ集計/表示する。廃止 (is_active=false) 銘柄や、日次の対象外になった
   // 銘柄に古いシグナルが残っても UI に出さない (鮮度のない値を出さない)。
+  // `stocks` は CROSS JOIN + WHERE の等値で結ぶ (INNER JOIN にしない)。
+  // INNER JOIN だと `core_stocks` の索引が外側ループに選ばれ、entry_signals 側の
+  // 絞り込みが効かなくなる (L-48。/screening と同じ前例)。
   const [{ totalSignals }] = await db
     .select({ totalSignals: sql<number>`count(*)` })
     .from(entrySignals)
-    .innerJoin(stocks, eq(stocks.id, entrySignals.stockId))
-    .where(activeEquityCondition());
+    .crossJoin(stocks)
+    .where(
+      and(activeEquityCondition(), eq(stocks.id, entrySignals.stockId))
+    );
 
   // 強度上位シグナル 5 件
   const topSigRows = await db
@@ -139,8 +144,8 @@ pagesRoute.get("/", async (c) => {
       note: entrySignals.note,
     })
     .from(entrySignals)
-    .innerJoin(stocks, eq(stocks.id, entrySignals.stockId))
-    .where(activeEquityCondition())
+    .crossJoin(stocks)
+    .where(and(activeEquityCondition(), eq(stocks.id, entrySignals.stockId)))
     .orderBy(desc(entrySignals.signalStrength))
     .limit(5);
   const topBreakouts = topSigRows.map((r) => ({
@@ -297,17 +302,22 @@ pagesRoute.get("/signals", zValidator("query", signalsQuerySchema), async (c) =>
       note: entrySignals.note,
     })
     .from(entrySignals)
-    .innerJoin(stocks, eq(stocks.id, entrySignals.stockId));
+    .crossJoin(stocks);
 
+  const joinStocks = eq(stocks.id, entrySignals.stockId);
   const rows =
     pattern === "all"
       ? await base
-          .where(activeEquityCondition())
+          .where(and(activeEquityCondition(), joinStocks))
           .orderBy(desc(entrySignals.signalStrength))
           .limit(200)
       : await base
           .where(
-            and(activeEquityCondition(), eq(entrySignals.pattern, pattern))
+            and(
+              activeEquityCondition(),
+              joinStocks,
+              eq(entrySignals.pattern, pattern)
+            )
           )
           .orderBy(desc(entrySignals.signalStrength))
           .limit(200);
