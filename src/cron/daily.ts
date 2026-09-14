@@ -39,7 +39,7 @@
  *   - マクロ 4 指数のどれかが取れない場合も null で通す
  */
 
-import { sql, eq, and, gte, lte, lt } from "drizzle-orm";
+import { sql, eq, and, or, gte, lte, lt } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
@@ -864,20 +864,28 @@ export async function aggregateSectorDaily(
       (r): StockChangeInput => ({
         sector: r.sector,
         pct1d: r.pct1d,
-        pct5d: null,
       })
     )
   );
-  await db
-    .delete(swingSchema.sectorDaily)
-    .where(eq(swingSchema.sectorDaily.date, today));
+  // 当日分の書き直し + 30 日より古い行の破棄 (L-53。読み手は最新日だけ見る)。
+  // 基準は引数の today (Date.now ではない。テストで固定できる)。
+  const retentionCutoff = new Date(
+    new Date(`${today}T00:00:00Z`).getTime() - 30 * 24 * 60 * 60 * 1000
+  )
+    .toISOString()
+    .split("T")[0];
+  await db.delete(swingSchema.sectorDaily).where(
+    or(
+      eq(swingSchema.sectorDaily.date, today),
+      lt(swingSchema.sectorDaily.date, retentionCutoff)
+    )
+  );
   for (let i = 0; i < sectorAggs.length; i += SECTOR_CHUNK) {
     await db.insert(swingSchema.sectorDaily).values(
       sectorAggs.slice(i, i + SECTOR_CHUNK).map((a) => ({
         date: today,
         sector: a.sector,
         pct1d: a.pct1d,
-        pct5d: a.pct5d,
         stockCount: a.stockCount,
         rank1d: a.rank1d,
       }))
@@ -1136,7 +1144,6 @@ function buildRsiRows(item: FlushItem<never>): BuiltRow<Record<string, unknown>>
         rsiMinPercentile: snap.rsiPercentile.rsiMinPercentile,
         percentileSampleBars: snap.rsiPercentile.sampleBars,
         isBlueChip: snap.blueChip.isBlueChip,
-        operatingMarginTtm: snap.blueChip.operatingMarginTtm,
         revenueTrend: snap.blueChip.revenueTrend,
       },
     },
@@ -1403,7 +1410,6 @@ export async function flushSnapshots<T>(
               rsiMinPercentile: sql`excluded.rsi_min_percentile`,
               percentileSampleBars: sql`excluded.percentile_sample_bars`,
               isBlueChip: sql`excluded.is_blue_chip`,
-              operatingMarginTtm: sql`excluded.operating_margin_ttm`,
               revenueTrend: sql`excluded.revenue_trend`,
               computedAt: sql`(unixepoch())`,
             },

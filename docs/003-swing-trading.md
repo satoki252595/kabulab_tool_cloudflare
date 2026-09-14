@@ -64,7 +64,7 @@ D1 マイグレーションは root の `drizzle/d1/*.sql`（サービス配下�
 | `swing_stock_indicators` | テクニカル指標の最新値 (SMA5/20/**25**/60/75, ATR, RSI, MACD, Fib 等) + 5 条件の畳み込み列 (L-52) | 1 銘柄 1 行 |
 | `swing_entry_signals` | E&E パターン判定 | 1 銘柄 × 複数パターン |
 | `swing_market_context` | マクロ判定 (A/B/C/D) | 1 日 1 行 |
-| `swing_sector_daily` | セクター騰落ランキング | 1 日 × 業種 |
+| `swing_sector_daily` | セクター騰落ランキング (30 日保持。旧 `pct_5d` は常時 NULL のため 0018 で DROP) | 1 日 × 業種 |
 
 `core_stocks` と `core_stock_financials` は 日次 sync が所有しており (正本 `src/shared/db/core-schema.ts`)、003 は読み取り専用で参照する。
 
@@ -139,7 +139,7 @@ Notion ガイドの例題を再現:
    - `swing_daily_ohlcv` は増分 upsert (初回のみ 6mo 全 backfill、以降は当日分 1〜2 行。保持は 90 営業日)
    - 90 本を超える古い行の削除は書き込み経路ではなく **Phase 4 の一括 sweep** (`pruneOhlcvRetention`) が行う。書き込み経路内で prune していた頃は Yahoo 取得が失敗し続けた銘柄で一度も走らず、120 行の残骸が残っていた
    - `swing_stock_indicators` (5 条件の畳み込み列を含む) / `swing_entry_signals` に multi-row upsert (K4a 系)
-3. セクター集計 (Phase 5): `core_stocks ⋈ swing_stock_indicators` を DB から再読込し `swing_sector_daily` を書き直し。本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留・警告
+3. セクター集計 (Phase 5): `core_stocks ⋈ swing_stock_indicators` を DB から再読込し `swing_sector_daily` を書き直し (当日分 + 30 日より古い行を破棄)。本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留・警告
 
 書込 (取込) は **Node (GitHub Actions)** から D1 REST 経由 (`createD1HttpDb`) で行う。Yahoo へのアクセスは `YAHOO_PROXY_BASE` (Worker エッジ `/api/ingest/yahoo`) を介して 429 を回避する。Worker 側の読取は `c.env.DB` バインディング (`createDb(c.env.DB)`)。
 

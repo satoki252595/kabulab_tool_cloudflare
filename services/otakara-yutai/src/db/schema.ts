@@ -74,15 +74,13 @@ export const yutaiBenefits = sqliteTable(
   ]
 );
 
-/** 株価・財務データ (1 銘柄 1 行) — stock_id は core.stocks(id) を参照 */
+/** 株価・財務データ (1 銘柄 1 行) — stock_id は core.stocks(id) を参照し PK (L-53) */
 export const stockFinancials = sqliteTable(
   "otakara_stock_financials",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
-      .references(() => coreStocks.id)
-      .notNull()
-      .unique(),
+      .primaryKey()
+      .references(() => coreStocks.id),
     price: real("price"),
     per: real("per"),
     pbr: real("pbr"),
@@ -107,15 +105,13 @@ export const stockFinancials = sqliteTable(
   // stock_id の列宣言 (.unique()) が自動索引を作るので、named な重複は持たない (L-45)。
 );
 
-/** スコアリング結果 (1 銘柄 1 行) — stock_id は core.stocks(id) を参照 */
+/** スコアリング結果 (1 銘柄 1 行) — stock_id は core.stocks(id) を参照し PK (L-53) */
 export const stockScores = sqliteTable(
   "otakara_stock_scores",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
-      .references(() => coreStocks.id)
-      .notNull()
-      .unique(),
+      .primaryKey()
+      .references(() => coreStocks.id),
     fundamentalScore: real("fundamental_score").notNull(),
     technicalScore: real("technical_score").notNull(),
     totalScore: real("total_score").notNull(),

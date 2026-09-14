@@ -36,6 +36,7 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 | `0015` | `swing_stock_screening` の DROP + `swing_stock_indicators` へ畳み込み 6 列の ADD (L-52) | 要確認 |
 | `0016` | `otakara_stock_scores` へ `yutai_months` / `yutai_genre_ids` の ADD | 要確認 |
 | `0017` | L2 投影 `p_yuho_growth` の CREATE TABLE (K4b) | **適用済み** (09-14 に 1,302 行を確認) |
+| `0018` | 1 銘柄 1 行 4 表のサロゲート id 撤去 (stock_id を PK に作り直し) + `rsi_percentile.operating_margin_ttm` と `swing_sector_daily.pct_5d` の DROP COLUMN (L-53/K5d) | 未適用 (P4: マージ後に手動適用) |
 
 0013〜0016 は本番 `sqlite_master` で適用状態を確かめてから、未適用のものだけ
 番号順に流す。0012 と同じく stockStock の地図 (`TABLE_LICENSE` /

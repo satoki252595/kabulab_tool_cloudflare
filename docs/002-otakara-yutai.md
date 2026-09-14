@@ -92,7 +92,7 @@ yutai_benefits
 └── created_at / updated_at
 
 otakara_stock_financials
-├── id / stock_id FK → core_stocks(id) (UNIQUE)
+├── stock_id PK + FK → core_stocks(id) (旧サロゲート id は 0018 で撤去)
 ├── price / per / pbr / dividend_yield / eps / bps   # core から monthly sync でコピー
 ├── roe / roa / market_cap                           # core から monthly sync でコピー
 ├── ma_5 / ma_25 / ma_75       # swing_stock_indicators から monthly sync でコピー
@@ -101,7 +101,7 @@ otakara_stock_financials
 ├── data_date / fetched_at
 
 otakara_stock_scores
-├── id / stock_id FK → core_stocks(id) (UNIQUE)
+├── stock_id PK + FK → core_stocks(id) (旧サロゲート id は 0018 で撤去)
 ├── fundamental_score / technical_score / total_score   real (0-100)
 ├── yutai_months / yutai_genre_ids   text?  # 月次 rebuild が集計する昇順 JSON 配列 (0016。/api/screening の月・ジャンル絞り込み用)
 └── scored_at

@@ -269,8 +269,7 @@ export const sectorDaily = sqliteTable(
     sector: text("sector").notNull(),
     /** 当日セクター平均騰落率% */
     pct1d: real("pct_1d"),
-    /** 過去 5 営業日の累積騰落率% */
-    pct5d: real("pct_5d"),
+    // NOTE (L-53): 旧 pct_5d 列は書き手が常に NULL だったため 0018 で DROP。
     /** セクター内銘柄数 */
     stockCount: integer("stock_count").notNull(),
     /** 当日ランク (1 = 最も上昇) */
