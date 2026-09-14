@@ -25,6 +25,10 @@
           ];
 
           shellHook = ''
+            # wrangler が既定で書く ~/Library/Preferences/.wrangler/logs には D1 の応答
+            # (規約上公開できない本文を含みうる) が残るため、既定では書かない。デバッグ時は WRANGLER_WRITE_LOGS=true WRANGLER_LOG=debug を付ける。
+            export WRANGLER_WRITE_LOGS=false
+            export WRANGLER_LOG_PATH="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.wrangler/logs"
             echo "kabulab dev shell  node $(node -v)  pnpm $(pnpm -v)"
           '';
         };
