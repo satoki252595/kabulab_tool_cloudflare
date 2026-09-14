@@ -44,8 +44,7 @@ CREATE TABLE core_stocks (
   src_fetched_at integer, quality text
 );
 CREATE TABLE core_stock_financials (
-  id integer PRIMARY KEY AUTOINCREMENT,
-  stock_id integer NOT NULL UNIQUE REFERENCES core_stocks(id),
+  stock_id integer PRIMARY KEY NOT NULL REFERENCES core_stocks(id),
   price real, per real, pbr real, dividend_yield real, eps real, bps real,
   roe real, roa real, market_cap real, operating_margin real,
   data_date text NOT NULL,

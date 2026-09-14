@@ -106,15 +106,14 @@ core_stock_annual_financials
 
 ```
 rsi_percentile
-├── id                       integer PK (autoincrement)
-├── stock_id                 FK → core_stocks (CASCADE, UNIQUE)
+├── stock_id                 PK + FK → core_stocks (CASCADE。旧サロゲート id は 0018 で撤去)
 ├── rsi_10 / rsi_10_percentile          real?
 ├── rsi_40 / rsi_40_percentile          real?
 ├── rsi_120 / rsi_120_percentile        real?
 ├── rsi_min_percentile       real?      # 3 期間の最小パーセンタイル
 ├── is_blue_chip             integer(boolean)   # 優良株フラグ
-├── operating_margin_ttm     real?      # 営業利益率 TTM
 ├── revenue_trend            integer?   # +1=上昇 / 0=横ばい / -1=下降 / NULL=判定不能
+├── (旧 operating_margin_ttm は financials.operating_margin と二重持ちのため 0018 で DROP)
 ├── percentile_sample_bars   integer?   # パーセンタイル母集団に使った終値の本数 (母数 N)
 └── computed_at              integer(timestamp)
 ```

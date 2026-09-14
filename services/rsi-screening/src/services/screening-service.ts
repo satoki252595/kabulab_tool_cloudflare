@@ -163,7 +163,7 @@ export async function screenStocks(
       rsi120Percentile: stockRsiPercentile.rsi120Percentile,
       rsiMinPercentile: stockRsiPercentile.rsiMinPercentile,
       isBlueChip: stockRsiPercentile.isBlueChip,
-      operatingMarginTtm: stockRsiPercentile.operatingMarginTtm,
+      operatingMarginTtm: stockFinancials.operatingMargin,
       revenueTrend: stockRsiPercentile.revenueTrend,
       percentileSampleBars: stockRsiPercentile.percentileSampleBars,
       computedAt: stockRsiPercentile.computedAt,

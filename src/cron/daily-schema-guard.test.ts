@@ -41,14 +41,12 @@ const OHLCV_DDL_WITHOUT_ADJ = OHLCV_DDL_WITH_ADJ.replace(", adj real", "");
 
 const PERCENTILE_DDL_WITH_BARS = `
 CREATE TABLE rsi_percentile (
-  id integer PRIMARY KEY AUTOINCREMENT,
-  stock_id integer NOT NULL UNIQUE,
+  stock_id integer PRIMARY KEY NOT NULL,
   rsi_10 real, rsi_10_percentile real,
   rsi_40 real, rsi_40_percentile real,
   rsi_120 real, rsi_120_percentile real,
   rsi_min_percentile real,
   is_blue_chip integer NOT NULL DEFAULT 0,
-  operating_margin_ttm real,
   revenue_trend integer,
   percentile_sample_bars integer,
   computed_at integer NOT NULL DEFAULT (unixepoch())

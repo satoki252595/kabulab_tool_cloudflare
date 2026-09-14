@@ -203,6 +203,29 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
     expect(savedRows(TODAY).map((r) => r.sector)).toEqual(["情報・通信業"]);
   });
 
+  it("30 日より古い行は破棄し、30 日以内の過去日は残す (L-53)", async () => {
+    sqlite
+      .prepare(
+        "INSERT INTO swing_sector_daily (date, sector, pct_1d, stock_count, rank_1d) VALUES ('2026-08-01', '古い行', 0.1, 10, 1)"
+      )
+      .run();
+    sqlite
+      .prepare(
+        "INSERT INTO swing_sector_daily (date, sector, pct_1d, stock_count, rank_1d) VALUES ('2026-09-11', '新しい行', 0.5, 10, 1)"
+      )
+      .run();
+    seedStock({ id: 1, jpxSector: "番兵JPX業種A", sector33: "情報・通信業", pct1d: 1 });
+
+    await aggregateSectorDaily(db(), TODAY);
+
+    const dates = (
+      sqlite.prepare("SELECT DISTINCT date AS d FROM swing_sector_daily").all() as Array<{ d: string }>
+    ).map((r) => r.d);
+    expect(dates).not.toContain("2026-08-01");
+    expect(dates).toContain("2026-09-11");
+    expect(dates).toContain(TODAY);
+  });
+
   it("カバレッジ 90% 未満なら書かず、同じ日付の前回値を残す", async () => {
     sqlite
       .prepare(

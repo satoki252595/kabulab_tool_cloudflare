@@ -143,15 +143,13 @@ export const stocks = sqliteTable(
   ]
 );
 
-/** 最新ファンダメンタルズ（共有） */
+/** 最新ファンダメンタルズ（共有）。1 銘柄 1 行のため stock_id が PK (L-53) */
 export const stockFinancials = sqliteTable(
   "core_stock_financials",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
-      .references(() => stocks.id, { onDelete: "cascade" })
-      .notNull()
-      .unique(),
+      .primaryKey()
+      .references(() => stocks.id, { onDelete: "cascade" }),
     price: real("price"),
     per: real("per"),
     pbr: real("pbr"),

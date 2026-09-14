@@ -139,7 +139,7 @@ export async function getStockDetail(db: Database, code: string): Promise<StockD
           rsi120Percentile: pct.rsi120Percentile,
           rsiMinPercentile: pct.rsiMinPercentile,
           isBlueChip: pct.isBlueChip,
-          operatingMarginTtm: pct.operatingMarginTtm,
+          operatingMarginTtm: fin?.operatingMargin ?? null,
           revenueTrend: pct.revenueTrend,
           percentileSampleBars: pct.percentileSampleBars,
           computedAt: pct.computedAt,
