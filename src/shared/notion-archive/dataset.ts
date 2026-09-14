@@ -168,9 +168,6 @@ const stockCache = new Map<
   string,
   { stockPageId: string; childDbId: string }
 >();
-/** 旧フラットDBをゴミ箱送り済みフラグ (プロセス内・1 回だけ試行) */
-const flatDbArchived = new Set<string>();
-
 /** 親 DB のタイトル (1 銘柄 = 1 ページ) */
 function parentTitle(service: string): string {
   return `銘柄一覧｜${service}`;
@@ -178,10 +175,6 @@ function parentTitle(service: string): string {
 /** 子 DB のタイトル (その銘柄の適時開示 1IR=1行) */
 function childTitle(ticker: string): string {
   return `適時開示｜${ticker}`;
-}
-/** 旧フラット DB のタイトル (退避対象) */
-function obsoleteFlatTitle(service: string): string {
-  return `適時開示｜${service}`;
 }
 
 async function findChildDatabase(
@@ -254,32 +247,13 @@ function childProperties(
   };
 }
 
-/**
- * 暫定採用していた旧フラット DB `適時開示｜<service>` を **Notion ゴミ箱**
- * へ退避する (archived:true)。二次データは Postgres から再生可能なため
- * 復元不要。冪等: 見つからなければ何もしない。プロセス内 1 回だけ試行。
- */
-async function archiveFlatDbOnce(service: string): Promise<void> {
-  if (flatDbArchived.has(service)) return;
-  flatDbArchived.add(service);
-  const backup = notionEnv.NOTION_BACKUP_PAGE_ID();
-  const oldId = await findChildDatabase(backup, obsoleteFlatTitle(service));
-  if (!oldId) return;
-  await notionRequest("PATCH", `/databases/${oldId}`, { archived: true });
-  console.info(
-    `[notion-bystock] 旧フラット ${obsoleteFlatTitle(service)} をゴミ箱へ退避`
-  );
-}
-
-/** 親「銘柄一覧」DB を確保 (無ければ作成)。初回に旧フラットDBを退避。 */
+/** 親「銘柄一覧」DB を確保 (無ければ作成)。 */
 async function ensureParentDb(
   service: string,
   tagOptions: ByStockInput["tagOptions"]
 ): Promise<string> {
   const cached = parentDbCache.get(service);
   if (cached) return cached;
-
-  await archiveFlatDbOnce(service);
 
   const backup = notionEnv.NOTION_BACKUP_PAGE_ID();
   const title = parentTitle(service);

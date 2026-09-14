@@ -1,15 +1,9 @@
 import { Hono } from "hono";
 import { errorHandler } from "./middleware/error-handler.js";
-import { screeningRoute } from "./routes/screening.js";
-import { stocksRoute } from "./routes/stocks.js";
 import { pagesRoute } from "./routes/pages.js";
 
 /** Honoアプリ — strict: false で trailing slash の有無を吸収 */
 export const app = new Hono({ strict: false });
-
-// API routes
-app.route("/api/screening", screeningRoute);
-app.route("/api/stocks", stocksRoute);
 
 // NOTE: 旧 /api/cron/sync-daily エンドポイントは廃止された。
 // 日次/月次の統一 cron は root app (/api/cron/sync-{daily,monthly}) に集約している。

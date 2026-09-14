@@ -55,8 +55,8 @@ const numOpt = z.preprocess(
 );
 const screenQuery = z.object({
   // metric は UI から並び替え選択を撤去したため、内部的にも "orders" 固定。
-  // 旧 URL `?metric=backlog` は detectDeprecatedParams() で通知の上、ここで
-  // "orders" に正規化する (ルール2: 黙ったフォールバック禁止 — 廃止通知あり)。
+  // 旧 URL `?metric=backlog` は "orders" に正規化する（移行期間終了。
+  // 廃止通知シムは K1c で削除）。
   metric: z
     .enum(["orders", "backlog"])
     .default("orders")
@@ -103,59 +103,17 @@ function toScreenOpts(q: z.infer<typeof screenQuery>): ScreenOpts {
   };
 }
 
-/**
- * 廃止された旧 URL パラメータ (受注高/受注残高 独立4条件化に伴い、
- * 単一指標の minCagrPct / minLatestOku は分割された) を**サイレントに
- * 黙殺せず**、ユーザに「廃止された / 何に置き換わったか」を必ず通知する
- * (ルール2: 黙ったフォールバック禁止の境界対応)。zod は unknown key を
- * 既定で strip するため、raw query から先に検出する。
- */
-const DEPRECATED_PARAM_RENAMES: Record<string, string> = {
-  minCagrPct: "minOrdersCagrPct / minBacklogCagrPct (受注高・受注残高を独立に指定)",
-  minLatestOku: "廃止 (規模条件は撤去。年率下限と時価総額レンジで代替してください)",
-  minLatestOrdersOku: "廃止 (規模条件は撤去。年率下限と時価総額レンジで代替してください)",
-  minLatestBacklogOku: "廃止 (規模条件は撤去。年率下限と時価総額レンジで代替してください)",
-};
-/**
- * metric=backlog の URL 廃止判定。`metric` パラメータ自体は内部で
- * "orders" 固定 (default) として残しているが、UI から並び替え選択を
- * 撤去したため、旧ブックマーク `?metric=backlog` は黙って吸収せず
- * 利用者に廃止を通知する (ルール2: 黙ったフォールバック禁止)。
- * "orders" 指定は冗長だが破綻ではないので通知対象外とする。
- */
-function detectDeprecatedParams(raw: Record<string, string | string[]>): string[] {
-  // c.req.query() は単値のみ返す (queries() を使えば配列)。将来 queries()
-  // へ差し替えても誤検出しないよう配列分岐も保持する。
-  const present = (v: string | string[] | undefined): boolean => {
-    if (v === undefined) return false;
-    if (Array.isArray(v)) return v.some((s) => s !== "");
-    return v !== "";
-  };
-  const out = Object.keys(DEPRECATED_PARAM_RENAMES)
-    .filter((k) => present(raw[k]))
-    .map((k) => `${k} → ${DEPRECATED_PARAM_RENAMES[k]}`);
-  const metricRaw = raw["metric"];
-  const metricVal = Array.isArray(metricRaw) ? metricRaw[0] : metricRaw;
-  if (metricVal === "backlog") {
-    out.push(
-      "metric=backlog → 廃止 (並び替え UI は撤去され、結果は常に受注高 年率の降順で表示されます)"
-    );
-  }
-  return out;
-}
-
 pagesRoute.get(
   "/screening",
   zValidator("query", screenQuery),
   async (c) => {
     const opts = toScreenOpts(c.req.valid("query"));
-    const deprecated = detectDeprecatedParams(c.req.query());
     const db = createDb(c.env.DB);
     const [rows, sectors] = await Promise.all([
       screenOrderGrowth(db, opts),
       listSectorsWithOrders(db),
     ]);
-    return c.html(screeningPage({ opts, sectors, rows, deprecated }));
+    return c.html(screeningPage({ opts, sectors, rows }));
   }
 );
 

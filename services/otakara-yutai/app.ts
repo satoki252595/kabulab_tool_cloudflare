@@ -912,11 +912,11 @@ app.get("/genres/:slug", async (c) => {
   if (!genre) return c.html(layout("Not Found", `<div class="container"><h2>ジャンルが見つかりません</h2><a href="${BP}/" class="back">← ホームに戻る</a></div>`), 404);
 
   const page = Math.max(1, Math.min(parseInt(c.req.query("page") ?? "1", 10) || 1, 500));
-  // ソートは "<列>-<昇降>" の複合値 (sortOptions と同形式)。旧 ?sort=&order= 形式も後方互換で受理。
+  // ソートは "<列>-<昇降>" の複合値 (sortOptions と同形式)。旧 ?sort=&order= 形式は K1c で打ち切り。
   const sortRaw = c.req.query("sort") ?? "total-desc";
-  let gSort: string, gOrder: string;
-  if (sortRaw.includes("-")) { const [col, ord] = sortRaw.split("-"); gSort = col; gOrder = ord; }
-  else { gSort = sortRaw; gOrder = c.req.query("order") ?? "desc"; }
+  const [col, ord] = sortRaw.split("-");
+  let gSort: string = col;
+  let gOrder: string = ord;
   if (!["total", "fundamental", "technical", "dividend", "pbr", "yutai"].includes(gSort)) gSort = "total";
   if (gOrder !== "asc") gOrder = "desc";
   const PAGE_SIZE = 20;
