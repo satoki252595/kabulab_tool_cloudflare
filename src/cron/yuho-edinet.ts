@@ -26,6 +26,7 @@ import {
   secCodeToTicker,
 } from "../../services/yuho-quant/src/services/edinet/types.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
+import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
 
 const WINDOW_DAYS = 60;
 /**
@@ -64,6 +65,8 @@ export interface YuhoEdinetResult {
   byStatus: Record<string, number>;
   reachedCap: boolean;
   elapsedSec: number;
+  /** L2 投影 `p_yuho_growth` の再生成銘柄数。シャード実行では 0 (再生成しない) */
+  projectionStocks: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -181,9 +184,18 @@ export async function runYuhoEdinetCatchup(
     await sleep(150);
   }
 
+  // L2 投影 `p_yuho_growth` の再生成 (L-51/K4b)。シャード実行では走らせない
+  // (各シャードが全表を書き直すと sweep が競合する。非シャードの定時実行が
+  // 拾う。手動バックフィル直後は次回定時まで画面が古いまま)。
+  let projectionStocks = 0;
+  if (!shard) {
+    const proj = await rebuildYuhoGrowthProjection(db);
+    projectionStocks = proj.stocks;
+  }
+
   const elapsedSec = (Date.now() - startedAt) / 1000;
   console.info(
-    `[yuho-edinet] 完了: shard=${shard ? `${shard.part}/${shard.of}` : "-"} 走査${scannedDays}日 matched=${matched} ingested=${ingested} skip=${skippedExisting} outOfUniverse=${outOfUniverse} cap=${reachedCap} ${elapsedSec.toFixed(1)}s`
+    `[yuho-edinet] 完了: shard=${shard ? `${shard.part}/${shard.of}` : "-"} 走査${scannedDays}日 matched=${matched} ingested=${ingested} skip=${skippedExisting} outOfUniverse=${outOfUniverse} cap=${reachedCap} 投影=${projectionStocks} ${elapsedSec.toFixed(1)}s`
   );
   return {
     shard: shard ?? null,
@@ -195,5 +207,6 @@ export async function runYuhoEdinetCatchup(
     byStatus,
     reachedCap,
     elapsedSec,
+    projectionStocks,
   };
 }

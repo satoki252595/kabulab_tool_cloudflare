@@ -6,7 +6,7 @@
  * (docTypeCode 130) 等で同一会計期末が重複する場合は提出日時が新しい
  * 書類の値を採用する (黙って先頭を選ばない — 明示的に最新を選ぶ)。
  */
-import { and, desc, eq, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, isNotNull, like, lte, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
@@ -15,6 +15,7 @@ import {
   publicSectorColumn,
 } from "../../../../src/shared/db/public-columns.js";
 import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
+import { yuhoGrowthProjection } from "../../../../src/shared/db/projection-schema.js";
 import { yuhoDocuments, orderFacts } from "../db/schema.js";
 
 /** サービスで表示する最大年数 (EDINET 取得可能な過去分の上限と整合) */
@@ -283,202 +284,92 @@ export interface ScreenRow {
   backlogYoy: number | null;
 }
 
-function cagr(first: number | null, last: number | null, yearsSpan: number): number | null {
-  if (first === null || last === null) return null;
-  if (first <= 0 || last <= 0 || yearsSpan < 1) return null;
-  return Math.pow(last / first, 1 / yearsSpan) - 1;
-}
-
-function yoy(prev: number | null, last: number | null): number | null {
-  if (prev === null || last === null || prev <= 0) return null;
-  return last / prev - 1;
-}
-
 /**
  * 全社合計 (segment_kind='total') の受注高/受注残高の成長性で銘柄を
- * スクリーニングする。訂正等で同一会計期末が重複する場合は提出日時が
- * 新しい書類の値を採用 (getOrderTrend と同じ方針)。データが
- * minYears 未満の銘柄は「データ不足」として除外 (架空値を作らない)。
+ * スクリーニングする。L2 投影 `p_yuho_growth` (EDINET catchup の末尾で再生成)
+ * を WHERE/ORDER BY で引く。全ファクト走査 (6 万超 rows_read) はしない。
+ *
+ * 旧実装 (JS で全行畳み込み) との一致:
+ * - 年窓・CAGR/YoY・欠落判定は再生成の純関数 (projection.ts) が旧式と同じ式で
+ *   格納する。ここでは再計算せず格納値をそのまま ScreenRow へ写す。
+ * - 「条件指定かつ値 null → 除外」(ルール2) は SQL の 3 値論理で再現する
+ *   (`col * 100 >= ?` は null 行を落とす)。並び替え不能 (metric null) の除外
+ *   だけは ORDER BY が null を先頭に持ってくるため明示の IS NOT NULL が要る。
+ * - 同率は code 昇順で確定させる。旧実装は DB 返却順の安定ソートで、順序は
+ *   未定義だった (クエリに ORDER BY が無い)。
  */
 export async function screenOrderGrowth(
   db: Database,
   opts: ScreenOpts
 ): Promise<ScreenRow[]> {
-  const rows = await db
+  const p = yuhoGrowthProjection;
+  const metricCol =
+    opts.metric === "orders" ? p.ordOrdersCagr : p.ordBacklogCagr;
+  const conds = [
+    gte(p.ordYears, opts.minYears),
+    isNotNull(metricCol),
+    activeEquityCondition(),
+  ];
+  if (opts.sector !== undefined) {
+    conds.push(eq(publicSectorColumn, opts.sector));
+  }
+  if (opts.minOrdersCagrPct !== undefined) {
+    conds.push(sql`${p.ordOrdersCagr} * 100 >= ${opts.minOrdersCagrPct}`);
+  }
+  if (opts.minBacklogCagrPct !== undefined) {
+    conds.push(sql`${p.ordBacklogCagr} * 100 >= ${opts.minBacklogCagrPct}`);
+  }
+  const fin = stockFinancials;
+  if (opts.minOpMarginPct !== undefined) {
+    conds.push(sql`${fin.operatingMargin} * 100 >= ${opts.minOpMarginPct}`);
+  }
+  if (opts.minMarketCapOku !== undefined) {
+    conds.push(sql`${fin.marketCap} / 100000000 >= ${opts.minMarketCapOku}`);
+  }
+  if (opts.maxMarketCapOku !== undefined) {
+    conds.push(sql`${fin.marketCap} / 100000000 <= ${opts.maxMarketCapOku}`);
+  }
+  if (opts.maxPer !== undefined) {
+    conds.push(gt(fin.per, 0), lte(fin.per, opts.maxPer));
+  }
+  if (opts.minRoePct !== undefined) {
+    conds.push(sql`${fin.roe} * 100 >= ${opts.minRoePct}`);
+  }
+  if (opts.minDivYieldPct !== undefined) {
+    // dividend_yield は既に % 値なので 100 倍しない (旧実装と同じ)
+    conds.push(gte(fin.dividendYield, opts.minDivYieldPct));
+  }
+
+  return db
     .select({
-      stockId: orderFacts.stockId,
       code: stocks.code,
       name: stocks.name,
-      // JPX 由来は公開面へ出さない (src/shared/db/public-columns.ts)。
       sector: publicSectorColumn,
-      fy: orderFacts.fiscalYearEnd,
-      ordersYen: orderFacts.ordersReceivedYen,
-      backlogYen: orderFacts.orderBacklogYen,
-      submittedAt: yuhoDocuments.submittedAt,
-      // 共有 core.stock_financials (絞り込み専用。結果表には出さない)
-      finOpMargin: stockFinancials.operatingMargin,
-      finMarketCap: stockFinancials.marketCap,
-      finPer: stockFinancials.per,
-      finRoe: stockFinancials.roe,
-      finDivYield: stockFinancials.dividendYield,
+      years: p.ordYears,
+      firstFiscalYearEnd: p.ordFirstFy,
+      lastFiscalYearEnd: p.ordLastFy,
+      latestOrdersYen: p.ordLastOrdersYen,
+      latestBacklogYen: p.ordLastBacklogYen,
+      firstOrdersYen: p.ordFirstOrdersYen,
+      firstBacklogYen: p.ordFirstBacklogYen,
+      hasYearGap: p.ordHasYearGap,
+      ordersCagr: p.ordOrdersCagr,
+      backlogCagr: p.ordBacklogCagr,
+      ordersYoy: p.ordOrdersYoy,
+      backlogYoy: p.ordBacklogYoy,
     })
-    .from(orderFacts)
-    .innerJoin(yuhoDocuments, eq(orderFacts.documentId, yuhoDocuments.id))
-    .innerJoin(stocks, eq(orderFacts.stockId, stocks.id))
-    .leftJoin(stockFinancials, eq(stockFinancials.stockId, orderFacts.stockId))
-    .where(and(eq(orderFacts.segmentKind, "total"), activeEquityCondition()));
-
-  // (stockId, fy) ごとに提出日時が最新の書類の値を採用
-  type Pt = { ordersYen: number | null; backlogYen: number | null };
-  type Fin = {
-    opMargin: number | null;
-    marketCap: number | null;
-    per: number | null;
-    roe: number | null;
-    divYield: number | null;
-  };
-  const byStock = new Map<
-    number,
-    {
-      code: string;
-      name: string;
-      sector: string | null;
-      fin: Fin;
-      best: Map<string, { sub: Date; pt: Pt }>;
-    }
-  >();
-  for (const r of rows) {
-    let s = byStock.get(r.stockId);
-    if (!s) {
-      s = {
-        code: r.code,
-        name: r.name,
-        sector: r.sector,
-        fin: {
-          opMargin: r.finOpMargin,
-          marketCap: r.finMarketCap,
-          per: r.finPer,
-          roe: r.finRoe,
-          divYield: r.finDivYield,
-        },
-        best: new Map(),
-      };
-      byStock.set(r.stockId, s);
-    }
-    const cur = s.best.get(r.fy);
-    if (!cur || r.submittedAt > cur.sub) {
-      s.best.set(r.fy, {
-        sub: r.submittedAt,
-        pt: { ordersYen: r.ordersYen, backlogYen: r.backlogYen },
-      });
-    }
-  }
-
-  const out: ScreenRow[] = [];
-  for (const s of byStock.values()) {
-    if (opts.sector && s.sector !== opts.sector) continue;
-
-    // ファンダ絞り込み (結果表には出さない)。条件が指定され、かつ当該
-    // 銘柄の財務値が NULL なら「条件を満たせない」ので除外する
-    // (ルール2: 欠損を黙って通さない / 架空値で埋めない)。
-    const f = s.fin;
-    if (
-      opts.minOpMarginPct !== undefined &&
-      (f.opMargin === null || f.opMargin * 100 < opts.minOpMarginPct)
-    ) {
-      continue;
-    }
-    if (
-      opts.minMarketCapOku !== undefined &&
-      (f.marketCap === null || f.marketCap / 1e8 < opts.minMarketCapOku)
-    ) {
-      continue;
-    }
-    if (
-      opts.maxMarketCapOku !== undefined &&
-      (f.marketCap === null || f.marketCap / 1e8 > opts.maxMarketCapOku)
-    ) {
-      continue;
-    }
-    if (
-      opts.maxPer !== undefined &&
-      (f.per === null || f.per <= 0 || f.per > opts.maxPer)
-    ) {
-      continue;
-    }
-    if (
-      opts.minRoePct !== undefined &&
-      (f.roe === null || f.roe * 100 < opts.minRoePct)
-    ) {
-      continue;
-    }
-    if (
-      opts.minDivYieldPct !== undefined &&
-      (f.divYield === null || f.divYield < opts.minDivYieldPct)
-    ) {
-      continue;
-    }
-
-    // 古い→新しい順、直近 MAX_YEARS 年
-    const fys = [...s.best.keys()].sort().slice(-MAX_YEARS);
-    if (fys.length < opts.minYears) continue;
-    const series = fys.map((fy) => ({ fy, ...s.best.get(fy)!.pt }));
-    const first = series[0];
-    const last = series[series.length - 1];
-    const prev = series[series.length - 2] ?? null;
-    const span =
-      Number(last.fy.slice(0, 4)) - Number(first.fy.slice(0, 4));
-
-    const row: ScreenRow = {
-      code: s.code,
-      name: s.name,
-      sector: s.sector,
-      years: fys.length,
-      firstFiscalYearEnd: first.fy,
-      lastFiscalYearEnd: last.fy,
-      latestOrdersYen: last.ordersYen,
-      latestBacklogYen: last.backlogYen,
-      firstOrdersYen: first.ordersYen,
-      firstBacklogYen: first.backlogYen,
-      hasYearGap: fys.length < span + 1,
-      ordersCagr: cagr(first.ordersYen, last.ordersYen, span),
-      backlogCagr: cagr(first.backlogYen, last.backlogYen, span),
-      ordersYoy: yoy(prev?.ordersYen ?? null, last.ordersYen),
-      backlogYoy: yoy(prev?.backlogYen ?? null, last.backlogYen),
-    };
-
-    // 並び替え基準が算出不能な銘柄は順位付け不能 → 除外 (架空値を作らない)
-    const sortKey =
-      opts.metric === "orders" ? row.ordersCagr : row.backlogCagr;
-    if (sortKey === null) continue;
-
-    // 受注高 / 受注残高 を独立に絞り込み (ユーザ要件: 同時条件)。
-    // 指定された軸の値が null なら条件未充足として除外 (ルール2)。
-    if (
-      opts.minOrdersCagrPct !== undefined &&
-      (row.ordersCagr === null || row.ordersCagr * 100 < opts.minOrdersCagrPct)
-    ) {
-      continue;
-    }
-    if (
-      opts.minBacklogCagrPct !== undefined &&
-      (row.backlogCagr === null ||
-        row.backlogCagr * 100 < opts.minBacklogCagrPct)
-    ) {
-      continue;
-    }
-    out.push(row);
-  }
-
-  out.sort((a, b) => {
-    const ka = (opts.metric === "orders" ? a.ordersCagr : a.backlogCagr)!;
-    const kb = (opts.metric === "orders" ? b.ordersCagr : b.backlogCagr)!;
-    return kb - ka;
-  });
-  return out.slice(0, opts.limit);
+    .from(p)
+    .innerJoin(stocks, eq(p.stockId, stocks.id))
+    .leftJoin(fin, eq(fin.stockId, p.stockId))
+    .where(and(...conds))
+    .orderBy(desc(metricCol), stocks.code)
+    .limit(opts.limit);
 }
 
-/** スクリーニング対象になり得る業種一覧 (絞り込みプルダウン用) */
+/**
+ * スクリーニング対象になり得る業種一覧 (絞り込みプルダウン用)。
+ * 「全社合計行を 1 行でも持つ銘柄の業種」= 投影の `ord_years >= 1` と一致する。
+ */
 export async function listSectorsWithOrders(
   db: Database
 ): Promise<string[]> {
@@ -487,9 +378,11 @@ export async function listSectorsWithOrders(
     // プルダウンの候補も結果表と同じ列・同じ母集団 (active かつ equity) から作る
     // (ズレると絞り込みが空振りする)。
     .selectDistinct({ sector: publicSectorColumn })
-    .from(orderFacts)
-    .innerJoin(stocks, eq(orderFacts.stockId, stocks.id))
-    .where(and(eq(orderFacts.segmentKind, "total"), activeEquityCondition()));
+    .from(yuhoGrowthProjection)
+    .innerJoin(stocks, eq(yuhoGrowthProjection.stockId, stocks.id))
+    .where(
+      and(gte(yuhoGrowthProjection.ordYears, 1), activeEquityCondition())
+    );
   return rows
     .map((r) => r.sector)
     .filter((s): s is string => s !== null)
