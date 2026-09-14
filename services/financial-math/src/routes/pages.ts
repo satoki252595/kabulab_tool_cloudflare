@@ -312,13 +312,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
 
   if (q.type === "small-cap") {
     const thresholdYen = q.smallCapMaxOku * 1e8;
-    const [{ matchedTotal }] = await db
-      .select({ matchedTotal: sql<number>`count(*)` })
-      .from(stockFinancials)
-      .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), activeEquityCondition()))
-      .where(and(isNotNull(stockFinancials.marketCap), gt(stockFinancials.marketCap, 0), lt(stockFinancials.marketCap, thresholdYen)));
-    totalMatched = matchedTotal;
-
+    // 件数と行を 1 クエリに畳む (L-48)。window 関数は LIMIT の前に評価される
+    // ので、over() の値はページ切り捨て前の総件数になる。
     const records = await db
       .select({
         code: stocks.code,
@@ -328,12 +323,14 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         marketCap: stockFinancials.marketCap,
         price: stockFinancials.price,
         stockId: stocks.id,
+        matchedTotal: sql<number>`count(*) over()`,
       })
       .from(stockFinancials)
       .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), activeEquityCondition()))
       .where(and(isNotNull(stockFinancials.marketCap), gt(stockFinancials.marketCap, 0), lt(stockFinancials.marketCap, thresholdYen)))
       .orderBy(asc(stockFinancials.marketCap))
       .limit(q.limit);
+    totalMatched = records[0]?.matchedTotal ?? 0;
 
     // 前日比% を indicators から取得
     const ids = records.map((r) => r.stockId);
@@ -356,13 +353,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
     }));
   } else if (q.type === "low-vol") {
     const threshold = q.lowVolMaxAtrPct;
-    const [{ matchedTotal }] = await db
-      .select({ matchedTotal: sql<number>`count(*)` })
-      .from(stockIndicators)
-      .innerJoin(stocks, and(eq(stockIndicators.stockId, stocks.id), activeEquityCondition()))
-      .where(and(isNotNull(stockIndicators.atrPct), gt(stockIndicators.atrPct, 0), lt(stockIndicators.atrPct, threshold)));
-    totalMatched = matchedTotal;
-
+    // 件数と行を 1 クエリに畳む (L-48)。window 関数は LIMIT の前に評価される
+    // ので、over() の値はページ切り捨て前の総件数になる。
     // 低ボラ + 過去 20 日リターンを計算する用に OHLCV を取得
     const records = await db
       .select({
@@ -373,6 +365,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         sector: publicSectorColumn,
         atrPct: stockIndicators.atrPct,
         price: stockFinancials.price,
+        matchedTotal: sql<number>`count(*) over()`,
       })
       .from(stockIndicators)
       .innerJoin(stocks, and(eq(stockIndicators.stockId, stocks.id), activeEquityCondition()))
@@ -380,6 +373,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
       .where(and(isNotNull(stockIndicators.atrPct), gt(stockIndicators.atrPct, 0), lt(stockIndicators.atrPct, threshold)))
       .orderBy(asc(stockIndicators.atrPct))
       .limit(q.limit);
+    totalMatched = records[0]?.matchedTotal ?? 0;
 
     // 各銘柄の 20 日累積リターンを取得 (簡易: 最新 20 営業日分の close を取って計算)
     const ids = records.map((r) => r.stockId);
@@ -419,12 +413,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
     }));
   } else if (q.type === "post-earnings") {
     // 簡易代理: stock_financials.fetched_at 降順 (最近更新された銘柄)
-    const [{ matchedTotal }] = await db
-      .select({ matchedTotal: sql<number>`count(*)` })
-      .from(stockFinancials)
-      .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), activeEquityCondition()));
-    totalMatched = matchedTotal;
-
+    // 件数と行を 1 クエリに畳む (L-48)。window 関数は LIMIT の前に評価される
+    // ので、over() の値はページ切り捨て前の総件数になる。
     const records = await db
       .select({
         stockId: stocks.id,
@@ -434,11 +424,13 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         sector: publicSectorColumn,
         price: stockFinancials.price,
         fetchedAt: stockFinancials.fetchedAt,
+        matchedTotal: sql<number>`count(*) over()`,
       })
       .from(stockFinancials)
       .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), activeEquityCondition()))
       .orderBy(desc(stockFinancials.fetchedAt))
       .limit(q.limit);
+    totalMatched = records[0]?.matchedTotal ?? 0;
 
     const ids = records.map((r) => r.stockId);
     const indMap = new Map<number, number | null>();
