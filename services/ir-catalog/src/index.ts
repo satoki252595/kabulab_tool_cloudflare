@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { errorHandler } from "./middleware/error-handler.js";
+import { createErrorHandler } from "../../../src/shared/error-handler.js";
 import { pagesRoute } from "./routes/pages.js";
 
 /**
@@ -10,6 +10,7 @@ import { pagesRoute } from "./routes/pages.js";
  * ここでは相対パスで登録する。
  */
 export const app = new Hono({ strict: false });
+const errorHandler = createErrorHandler("ir-catalog");
 
 // 注: ir-catalog の取込(catchup)は PDF センチメントが kuromoji(Node 専用 fs 依存)
 // のため Worker 上で動かせない。取込は Node 実行で D1 HTTP API へ書く(別タスク)。

@@ -1,6 +1,6 @@
 # 007 VWAP 取込を GitHub Actions で定期実行 → R2。
 #
-# Yahoo は **YAHOO_PROXY_BASE 経由 (Worker エッジの /vwap-analysis/api/ingest-fetch)** で
+# Yahoo は **YAHOO_PROXY_BASE 経由 (Worker エッジの /api/ingest/yahoo)** で
 # 叩くため、GitHub ランナー(Azure 共有 IP)が Yahoo に直接弾かれる(429)ことはない。
 # Cloudflare エッジ IP 経由になるので runner IP は Yahoo から見えない。
 #

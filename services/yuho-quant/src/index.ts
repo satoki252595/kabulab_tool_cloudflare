@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { errorHandler } from "./middleware/error-handler.js";
+import { createErrorHandler } from "../../../src/shared/error-handler.js";
 import { pagesRoute } from "./routes/pages.js";
 import { adminRoute } from "./routes/admin.js";
 
@@ -11,6 +11,7 @@ import { adminRoute } from "./routes/admin.js";
  * ここでは相対パスで登録する。
  */
 export const app = new Hono({ strict: false });
+const errorHandler = createErrorHandler("yuho-quant");
 
 // 取込トリガ（Worker 側・CRON_SECRET 認証）。SSR より先に登録する。
 app.route("/admin", adminRoute);
