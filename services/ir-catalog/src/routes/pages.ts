@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { z } from "zod";
+import { z } from "../../../../src/shared/zod-mini.js";
 import { zValidator } from "@hono/zod-validator";
 import { eq } from "drizzle-orm";
 import { createDb } from "../db/client.js";
@@ -25,9 +25,13 @@ import { fetchPageFileUrl } from "../../../../src/shared/notion-archive/index.js
 type Bindings = { DB: D1Database };
 export const pagesRoute = new Hono<{ Bindings: Bindings }>();
 
+const emptyToUndef = z.transform<unknown, unknown>((v) =>
+  v === "" ? undefined : v
+);
+
 const homeQuery = z.object({
-  q: z.preprocess((v) => (v === "" ? undefined : v), z.string().optional()),
-  focus: z.string().optional(),
+  q: z.pipe(emptyToUndef, z.optional(z.string())),
+  focus: z.optional(z.string()),
 });
 
 pagesRoute.get("/", zValidator("query", homeQuery), async (c) => {
@@ -52,14 +56,13 @@ pagesRoute.get("/signals", async (c) => {
 // (TDnet 取込側 companyCodeToTicker も英数字コードを通すため整合させる)。
 const codeParam = z.object({ code: stockCodeSchema });
 const monthsQuery = z.object({
-  months: z.preprocess(
-    (v) => (v === "" || v === undefined ? 24 : v),
-    z.coerce.number().int().min(1).max(1200)
+  months: z.pipe(
+    z.transform<unknown, unknown>((v) =>
+      v === "" || v === undefined ? 24 : v
+    ),
+    z.coerce.number().check(z.int(), z.minimum(1), z.maximum(1200))
   ),
-  tag: z.preprocess(
-    (v) => (v === "" ? undefined : v),
-    z.string().optional()
-  ),
+  tag: z.pipe(emptyToUndef, z.optional(z.string())),
 });
 
 function noticePage(title: string, message: string, status: 404 | 422) {
@@ -116,7 +119,9 @@ pagesRoute.get(
  * する)。Notion 取得失敗時は TDnet 原本にフォールバック (≤31日生存)、
  * 両方失敗なら 502 を正直に返す (捏造しない — ルール1/2)。
  */
-const tdnetIdParam = z.object({ tdnetId: z.string().regex(/^\d+$/) });
+const tdnetIdParam = z.object({
+  tdnetId: z.string().check(z.regex(/^\d+$/)),
+});
 
 /** PDF を upstream から取得しストリーミング 200 で返す。失敗なら null */
 async function streamPdf(

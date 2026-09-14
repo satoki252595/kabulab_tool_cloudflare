@@ -33,7 +33,7 @@
  *   認める「年間額 ÷ 回数」などが一致せず正しい回答まではじくので、金額表現の
  *   有無だけを見る。
  */
-import { z } from "zod";
+import { z } from "../../../src/shared/zod-mini.js";
 import { benefitKey } from "./benefit-key.js";
 import { extractYenAmounts, sanitizeEstimatedValue } from "./estimated-value-guard.js";
 import {
@@ -53,15 +53,13 @@ import { TASK_ID_PATTERN, type BenefitRow, type SummaryTask } from "./summary-ta
  * その時点でスキーマ違反としてはじき、後続の `contract_version` 等の detail に
  * 埋め込まれて dry-run 出力に本文が乗る経路を閉じるため。
  */
-export const SummaryResult = z
-  .object({
-    taskId: z.string().regex(TASK_ID_PATTERN),
-    contractVersion: z.string().regex(CONTRACT_VERSION_PATTERN),
+export const SummaryResult = z.strictObject({
+    taskId: z.string().check(z.regex(TASK_ID_PATTERN)),
+    contractVersion: z.string().check(z.regex(CONTRACT_VERSION_PATTERN)),
     shortSummary: z.string(),
     /** 優待 1 単位あたりの推定金額 (円・正の整数)。推定しないなら null。 */
-    estimatedValue: z.number().int().positive().nullable(),
-  })
-  .strict();
+    estimatedValue: z.nullable(z.number().check(z.int(), z.positive())),
+});
 export type SummaryResult = z.infer<typeof SummaryResult>;
 
 export type RejectReason =

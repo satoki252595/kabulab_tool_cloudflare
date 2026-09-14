@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "../../../../src/shared/zod-mini.js";
 import { stockCodeSchema } from "../../../../src/shared/jpx/stock-code-schema.js";
 
 /** RSI期間キー */
@@ -18,15 +18,24 @@ export const sortSchema = z.enum(["percentile", "rsi", "marketCap"]);
  * デフォルト 0 hits になっていたため、`false` に変更している。
  */
 export const screeningQuerySchema = z.object({
-  period: rsiPeriodSchema.default("min"),
-  percentileMax: z.coerce.number().min(0).max(100).default(10),
-  blueChip: z
-    .enum(["true", "false"])
-    .default("false")
-    .transform((v) => v === "true"),
-  sort: sortSchema.default("percentile"),
-  limit: z.coerce.number().int().min(1).max(200).default(50),
-  offset: z.coerce.number().int().min(0).default(0),
+  period: z.prefault(rsiPeriodSchema, "min"),
+  percentileMax: z.prefault(
+    z.coerce.number().check(z.minimum(0), z.maximum(100)),
+    10
+  ),
+  blueChip: z.pipe(
+    z.prefault(z.enum(["true", "false"]), "false"),
+    z.transform((v) => v === "true")
+  ),
+  sort: z.prefault(sortSchema, "percentile"),
+  limit: z.prefault(
+    z.coerce.number().check(z.int(), z.minimum(1), z.maximum(200)),
+    50
+  ),
+  offset: z.prefault(
+    z.coerce.number().check(z.int(), z.minimum(0)),
+    0
+  ),
 });
 
 export type ScreeningQuery = z.infer<typeof screeningQuerySchema>;
