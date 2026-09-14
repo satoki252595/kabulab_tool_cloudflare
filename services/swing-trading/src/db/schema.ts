@@ -135,48 +135,25 @@ export const stockIndicators = sqliteTable(
     /** 前日比% (当日 close - 前日 close) / 前日 close × 100 */
     pctChange1d: real("pct_change_1d"),
 
-    computedAt: integer("computed_at", { mode: "timestamp" })
-      .default(sql`(unixepoch())`)
-      .notNull(),
-  },
-  (table) => [
-    index("idx_swing_indicators_trend_long").on(table.trendLong),
-    index("idx_swing_indicators_turnover").on(table.avgTurnover20d),
-  ]
-);
-
-// -----------------------------------------------------------------------------
-// 3. swing_stock_screening — 5 条件フィルター結果 (1 銘柄 1 行 upsert)
-// -----------------------------------------------------------------------------
-
-export const stockScreening = sqliteTable(
-  "swing_stock_screening",
-  {
-    stockId: integer("stock_id")
-      .primaryKey()
-      .references(() => stocks.id, { onDelete: "cascade" }),
-
-    // ① 流動性: avgTurnover20d ≧ 10億 OR (volumeRatio ≧ 3 AND avgTurnover20d ≧ 5億)
+    // --- スクリーニング結果 (L-52: swing_stock_screening を畳む) ---
+    // screenStock() (src/shared/screener.ts) の純関数 4 bool + 2 派生。
+    // 需給/カタリストの note 列は定数 ("外部データ未対応") で読み手が無いので畳まない。
+    /** ① 流動性: avgTurnover20d ≧ 10億 OR (volumeRatio ≧ 3 AND avgTurnover20d ≧ 5億) */
     liquidityOk: integer("liquidity_ok", { mode: "boolean" })
       .default(false)
       .notNull(),
-    // ② ボラ: atrPct ≧ 0.02
+    /** ② ボラ: atrPct ≧ 0.02 */
     volatilityOk: integer("volatility_ok", { mode: "boolean" })
       .default(false)
       .notNull(),
-    // ③ トレンド: 5>20 かつ close>5MA (long) / 逆 (short)
+    /** ③ トレンド long: 5>20 かつ close>5MA */
     trendOkLong: integer("trend_ok_long", { mode: "boolean" })
       .default(false)
       .notNull(),
+    /** ③ トレンド short: 逆 */
     trendOkShort: integer("trend_ok_short", { mode: "boolean" })
       .default(false)
       .notNull(),
-
-    // ④ 需給: 信用倍率は Yahoo で取れないため常に "未対応" を表示
-    supplyNote: text("supply_note").default("外部データ未対応").notNull(),
-    // ⑤ カタリスト: 決算カレンダーは Yahoo で取れないため常に "未対応" を表示
-    catalystNote: text("catalyst_note").default("外部データ未対応").notNull(),
-
     /** ① ② ③long 全て true */
     allPassedLong: integer("all_passed_long", { mode: "boolean" })
       .default(false)
@@ -191,10 +168,14 @@ export const stockScreening = sqliteTable(
       .notNull(),
   },
   (table) => [
-    index("idx_swing_screening_long").on(table.allPassedLong),
-    index("idx_swing_screening_short").on(table.allPassedShort),
+    // screening 表の 2 索引を移したもの (L-52)。/screening の駆動索引。
+    index("idx_swing_indicators_all_passed_long").on(table.allPassedLong),
+    index("idx_swing_indicators_all_passed_short").on(table.allPassedShort),
   ]
 );
+
+// swing_stock_screening は L-52 で削除 (indicators の列に畳んだ。kabulab-cf 0015 で DROP)。
+// 番号は振り直さない (drizzle の migration 履歴とコメントの対応がずれるため)。
 
 // -----------------------------------------------------------------------------
 // 4. swing_entry_signals — E&E パターン判定 (1 銘柄 × 複数パターン行)
@@ -313,13 +294,6 @@ export const dailyOhlcvRelations = relations(dailyOhlcv, ({ one }) => ({
 export const stockIndicatorsRelations = relations(stockIndicators, ({ one }) => ({
   stock: one(stocks, {
     fields: [stockIndicators.stockId],
-    references: [stocks.id],
-  }),
-}));
-
-export const stockScreeningRelations = relations(stockScreening, ({ one }) => ({
-  stock: one(stocks, {
-    fields: [stockScreening.stockId],
     references: [stocks.id],
   }),
 }));

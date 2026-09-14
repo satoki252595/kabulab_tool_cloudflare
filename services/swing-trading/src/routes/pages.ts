@@ -10,7 +10,6 @@ import {
 import { stocks, stockFinancials } from "../db/core-schema.js";
 import {
   stockIndicators,
-  stockScreening,
   entrySignals,
   marketContext,
   sectorDaily,
@@ -108,17 +107,18 @@ pagesRoute.get("/", async (c) => {
   // /screening と同じ CROSS JOIN + 述語で数えれば揃うが、閲覧 1 回の rows_read が
   // long 89 → 178 / short 339 → 678 (同日実測) と倍になる。totalScreened も
   // 3,764 → 7,409 (2026-09-13 実測)。ランニングコストを増やさない制約により採らない。
+  // スクリーニング結果は swing_stock_indicators の列 (L-52 で表を畳んだ)。
   const [{ totalScreened }] = await db
     .select({ totalScreened: sql<number>`count(*)` })
-    .from(stockScreening);
+    .from(stockIndicators);
   const [{ passedLong }] = await db
     .select({ passedLong: sql<number>`count(*)` })
-    .from(stockScreening)
-    .where(eq(stockScreening.allPassedLong, true));
+    .from(stockIndicators)
+    .where(eq(stockIndicators.allPassedLong, true));
   const [{ passedShort }] = await db
     .select({ passedShort: sql<number>`count(*)` })
-    .from(stockScreening)
-    .where(eq(stockScreening.allPassedShort, true));
+    .from(stockIndicators)
+    .where(eq(stockIndicators.allPassedShort, true));
   // entry_signals は日次の母集団 (active かつ equity, src/shared/db/active-equity.ts)
   // の銘柄分のみ集計/表示する。廃止 (is_active=false) 銘柄や、日次の対象外になった
   // 銘柄に古いシグナルが残っても UI に出さない (鮮度のない値を出さない)。
@@ -201,19 +201,20 @@ pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c
   // **`core_stocks` は CROSS JOIN + WHERE の等値で結ぶ (INNER JOIN にしない)。**
   // INNER JOIN のまま母集団の述語を足すと、SQLite は `core_stocks` の
   // `idx_core_stocks_active_market (is_active=?)` を外側ループに選び直し、通過銘柄
-  // だけを引く `idx_swing_screening_{long,short}` を使わなくなる。本番実測
-  // (2026-09-13, rows_read): long 356 → 7,585 / short 1,356 → 8,085。述語を
-  // INNER JOIN の ON に移しても計画は同じだった (ON は WHERE と同じ扱い)。
-  // SQLite の CROSS JOIN は左表を必ず外側に置くので、計画は変更前と同じ
-  // 「screening の索引 → core_stocks の PK → indicators の PK」に戻る
-  // (同日実測: long 354 / short 1,354 rows_read。変更前は 356 / 1,356)。
+  // だけを引く `idx_swing_indicators_all_passed_{long,short}` を使わなくなる。
+  // 本番実測 (2026-09-13, rows_read。畳む前の screening 表の索引での値):
+  // long 356 → 7,585 / short 1,356 → 8,085。述語を INNER JOIN の ON に移しても
+  // 計画は同じだった (ON は WHERE と同じ扱い)。
+  // SQLite の CROSS JOIN は左表を必ず外側に置くので、計画は
+  // 「indicators の all_passed 索引 → core_stocks の PK」になる
+  // (L-52 で screening 表を indicators の列に畳み、3 表結合が 2 表結合になった。
+  // 旧計画の実測: long 354 / short 1,354 rows_read)。
   // 結合条件は WHERE の等値なので、返る行は INNER JOIN と同じ。
-  // 順序 (screening → stocks → indicators) は変えていない。
   const whereCondition = and(
     direction === "long"
-      ? eq(stockScreening.allPassedLong, true)
-      : eq(stockScreening.allPassedShort, true),
-    eq(stocks.id, stockScreening.stockId),
+      ? eq(stockIndicators.allPassedLong, true)
+      : eq(stockIndicators.allPassedShort, true),
+    eq(stocks.id, stockIndicators.stockId),
     activeEquityCondition()
   );
 
@@ -230,15 +231,14 @@ pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c
       sma5: stockIndicators.sma5,
       sma20: stockIndicators.sma20,
       volumeRatio: stockIndicators.volumeRatio,
-      liquidityOk: stockScreening.liquidityOk,
-      volatilityOk: stockScreening.volatilityOk,
-      trendOkLong: stockScreening.trendOkLong,
-      trendOkShort: stockScreening.trendOkShort,
+      liquidityOk: stockIndicators.liquidityOk,
+      volatilityOk: stockIndicators.volatilityOk,
+      trendOkLong: stockIndicators.trendOkLong,
+      trendOkShort: stockIndicators.trendOkShort,
     })
-    .from(stockScreening)
+    .from(stockIndicators)
     // INNER JOIN にしない理由は whereCondition の上のコメント (結合順の固定)。
     .crossJoin(stocks)
-    .innerJoin(stockIndicators, eq(stockIndicators.stockId, stockScreening.stockId))
     .where(whereCondition)
     .orderBy(desc(stockIndicators.avgTurnover20d))
     .limit(200);
@@ -379,12 +379,6 @@ pagesRoute.get("/stock/:code", zValidator("param", stockParamSchema), async (c) 
     .where(eq(stockIndicators.stockId, stock.id))
     .limit(1);
 
-  const [screening] = await db
-    .select()
-    .from(stockScreening)
-    .where(eq(stockScreening.stockId, stock.id))
-    .limit(1);
-
   const [financial] = await db
     .select()
     .from(stockFinancials)
@@ -426,10 +420,10 @@ pagesRoute.get("/stock/:code", zValidator("param", stockParamSchema), async (c) 
       trendShort: indicator?.trendShort ?? false,
       perfectOrderLong: indicator?.perfectOrderLong ?? false,
       perfectOrderShort: indicator?.perfectOrderShort ?? false,
-      liquidityOk: screening?.liquidityOk ?? false,
-      volatilityOk: screening?.volatilityOk ?? false,
-      trendOkLong: screening?.trendOkLong ?? false,
-      trendOkShort: screening?.trendOkShort ?? false,
+      liquidityOk: indicator?.liquidityOk ?? false,
+      volatilityOk: indicator?.volatilityOk ?? false,
+      trendOkLong: indicator?.trendOkLong ?? false,
+      trendOkShort: indicator?.trendOkShort ?? false,
       per: financial?.per ?? null,
       pbr: financial?.pbr ?? null,
       dividendYield: financial?.dividendYield ?? null,
