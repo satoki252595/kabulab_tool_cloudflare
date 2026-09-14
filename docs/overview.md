@@ -91,7 +91,6 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 │   │   ├── app.ts                     # Hono サブアプリ (SSR ページを集約)
 │   │   ├── src/
 │   │   │   ├── db/                    # yutai_* / otakara_* スキーマ (core_stocks を再 export) + Drizzle/D1 クライアント
-│   │   │   ├── services/              # yutai-scraper / yutai-data-provider (優待マスタ管理用)
 │   │   │   └── tests/
 │   │   ├── data-scripts/              # 優待マスタ投入用の 1 回限りスクリプト
 │   │   └── CLAUDE.md / README.md
