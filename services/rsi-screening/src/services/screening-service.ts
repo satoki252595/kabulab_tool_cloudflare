@@ -1,6 +1,6 @@
 import { and, asc, count, desc, eq, gte, lt, lte, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { stocks, stockFinancials } from "../db/core-schema.js";
+import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
 import { stockRsiPercentile } from "../db/schema.js";
 import {
   publicMarketColumn,

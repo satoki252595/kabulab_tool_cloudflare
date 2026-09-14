@@ -1,6 +1,6 @@
 import { sql, relations } from "drizzle-orm";
 import { sqliteTable, integer, real, index } from "drizzle-orm/sqlite-core";
-import { stocks } from "./core-schema.js";
+import { stocks } from "../../../../src/shared/db/core-schema.js";
 
 /**
  * 001_RSIScreening 固有スキーマ（Cloudflare D1 / SQLite 版） — ADR-0001。

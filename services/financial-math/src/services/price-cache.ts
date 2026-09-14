@@ -69,7 +69,7 @@
 
 import { and, asc, eq, isNotNull } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { stocks as coreStocks, stockFinancials } from "../db/core-schema.js";
+import { stocks as coreStocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
 import { dailyOhlcv as swingDailyOhlcv, marketContext } from "../db/swing-readonly.js";
 import {
   STOCK_CODE_REGEX,

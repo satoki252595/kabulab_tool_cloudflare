@@ -7,7 +7,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
-import { stocks } from "./core-schema.js";
+import { stocks } from "../../../../src/shared/db/core-schema.js";
 
 /**
  * 003 Swing Trading 固有スキーマ（Cloudflare D1 / SQLite 版） — ADR-0001。

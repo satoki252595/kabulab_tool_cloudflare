@@ -45,7 +45,7 @@ import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 
 // core スキーマは rsi-screening の定義を流用 (001 が所有・更新)
-import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
+import * as coreSchema from "../shared/db/core-schema.js";
 // rsi スキーマ
 import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
 // swing スキーマ

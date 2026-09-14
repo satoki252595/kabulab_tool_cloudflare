@@ -27,7 +27,7 @@
 import { sql, inArray, eq } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 
-import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
+import * as coreSchema from "../shared/db/core-schema.js";
 import {
   downloadJpxListing,
   isListedEquity,

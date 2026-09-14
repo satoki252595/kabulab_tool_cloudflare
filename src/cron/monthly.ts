@@ -20,7 +20,7 @@ import { sql, eq, and, isNotNull } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 
-import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
+import * as coreSchema from "../shared/db/core-schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as otakaraSchema from "../../services/otakara-yutai/src/db/schema.js";
 
