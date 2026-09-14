@@ -61,7 +61,7 @@ export async function runIrCatalogCatchup(
   // 取込の母集団。変更前 (core_stocks の全行) から、非普通株と、区分が NULL の active 行
   // だけを除く。P4b で入る非普通株の開示は取り込まず (Notion にも ir-catalog の一覧にも
   // 出さない)、is_active=0 の会社 (上場廃止・地域取引所の単独上場) の開示は取り込み続ける
-  // (理由は src/shared/db/active-equity.ts の ingestUniverseCondition)。
+  // (理由は src/shared/db/active-equity.ts の disclosureIngestCondition)。
   const codeToId = await loadIngestCodeToId(db);
 
   // TDnet の開示日は JST。日付境界も JST で揃える (UTC だと JST 午前に

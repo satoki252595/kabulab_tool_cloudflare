@@ -1,6 +1,6 @@
 /**
  * TDnet 開示・EDINET 有報の取込が、証券コードから `stock_id` を引くときに**取込の母集団**
- * (src/shared/db/active-equity.ts の `ingestUniverseCondition`) だけを見ることの検証。
+ * (src/shared/db/active-equity.ts の `disclosureIngestCondition`) だけを見ることの検証。
  * あわせて、優待の取込が使う `findActiveEquityStockId` が active かつ equity のままであることも見る。
  *
  * 固定したい契約:
@@ -453,7 +453,7 @@ describe("code→id を core_stocks の全行から作る形が残っていな�
     // 拾ってはいけないもの
     expect(
       findCodeToIdFromAllRows(
-        "db.select({ id: stocks.id, code: stocks.code })\n  .from(stocks)\n  .where(ingestUniverseCondition());"
+        "db.select({ id: stocks.id, code: stocks.code })\n  .from(stocks)\n  .where(disclosureIngestCondition());"
       )
     ).toEqual([]);
     expect(

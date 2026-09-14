@@ -137,7 +137,7 @@ async function streamPdf(
       signal: AbortSignal.timeout(20_000),
       headers: {
         "User-Agent":
-          "kabulab-ir-catalog/1.0 (+https://kabulab.vercel.app)",
+          "kabulab-ir-catalog/1.0 (+https://kabulab-cf.satoki252595.workers.dev/ir-catalog/)",
       },
     });
   } catch (e) {

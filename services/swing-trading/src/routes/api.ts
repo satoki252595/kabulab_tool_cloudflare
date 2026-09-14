@@ -52,6 +52,5 @@ apiRoute.post("/risk/calc", zValidator("form", riskFormSchema), (c) => {
 });
 
 // NOTE: 旧 /api/cron/sync-daily と /api/cron/sync-light は廃止された。
-// 日次/月次の統一 cron は root app (/api/cron/sync-{daily,monthly}) に集約している。
+// 日次/月次の取込は GitHub Actions (Node) が実行する (src/cron/{daily,monthly}.ts)。
 // 昼休みの intraday マクロ更新機能 (sync-light) はシンプル化のため削除した。
-// 詳細は src/index.ts / src/cron/{daily,monthly}.ts を参照。

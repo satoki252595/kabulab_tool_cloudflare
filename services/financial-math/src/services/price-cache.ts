@@ -1,70 +1,13 @@
 /**
- * 価格・日足の**読み取り専用**アクセス層（004 financial-math）。
+ * 価格・日足の**読み取り専用**アクセス層 (004 financial-math。経緯は git 履歴)。
+ * 日次 sync が書いた断面と日足をそのまま読む (SSR 中に Yahoo/D1 へ書かない)。
  *
- * ## 何を直したのか
+ * 読む先: 価格・配当・時価総額 = `core_stock_financials`、個別日足 =
+ * `swing_daily_ohlcv` (90 営業日保持)、^N225 = `swing_market_context.nikkei_close`。
  *
- * ここは以前「SSR の GET 中に Yahoo を同期で叩いて本番 D1 へ UPSERT する」
- * 遅延キャッシュだった。書き込みは 2 箇所 (価格 / OHLCV) だけだが、
- * 実害は調査中に観測できた: `/financial-math/dcf?code=7203` を開いた瞬間に
- * `core` 側と揃っていた 7203 の値が書き換わり、`finmath_daily_ohlcv` の
- * `^N225` も同じ瞬間に更新された。**読み取り面が書き込み面を兼ねている**ので、
- *
- *   - 誰が画面を開いたかによってデータの中身と鮮度が変わる
- *     (実測: finmath の 3,759 行中 3,547 行 = 94.4% が 2026-06 以前で、
- *      09-11 に揃っている行だけが「前回の調査で開いたページ」だった)
- *   - GET が Yahoo のレイテンシと 429 を背負う (dcf 1.62s / capm 1.89s)
- *   - GET が D1 の書込を消費する
- *
- * が同時に起きていた。読み取り面から書き込みを外し、**日次 sync が書いた断面と
- * 日足をそのまま読む**形にした。
- *
- * ## 何を読むようになったか
- *
- * | 用途 | 旧 | 新 |
- * |---|---|---|
- * | 価格・配当利回り・時価総額 | `finmath_price_snapshot` (訪問者依存の遅延充填) | `core_stock_financials` (日次 sync が書く断面) |
- * | 個別銘柄の日足 | `finmath_daily_ohlcv` (7 シンボルのみ) | `swing_daily_ohlcv` (3,764 銘柄) |
- * | 市場系列 (^N225) | `finmath_daily_ohlcv` | `swing_market_context.nikkei_close` |
- *
- * `core_stock_financials` で足りる根拠 (本番実測 2026-09-13): 3,764 行あり、
- * `core_stocks` に行が無いのは 54 件、**そのうち `is_active=1` は 0 件**。
- * つまり現役銘柄は完全被覆で、旧コメントにあった「core.stocks は
- * otakara-yutai が writer なので優待のない銘柄が載らない」は既に事実ではない
- * (母集団は universe sync が JPX 一覧から作る東証内国普通株 ~3,700)。
- * 1414 のような優待なし銘柄もここから取れる。
- *
- * `finmath_daily_ohlcv` は **3,490 行 / 7 シンボル** (7203, 7974, ^N225, 8035,
- * 9984, 9432, 9983) しか無く、バッチ writer が存在しなかった。つまり
- * `/capm` の β 自動推定と `/black-scholes` のヒストリカル σ は
- * **その 7 つ以外では既に死んでいた**。`swing_daily_ohlcv` へ振り替えると
- * 全銘柄で動くようになる。
- *
- * ## 品質は落ちる (画面に出す)
- *
- * 個別銘柄: 旧 514 本 (2y) → 新は保持 90 営業日。本番実測 2026-09-13 で
- * is_active な 3,715 銘柄のバー数は avg 89.7 / min 9 / max 90、うち
- * **有効な終値 (close IS NOT NULL) だけ**だと avg 82.6 / min 1 / max 86。
- * β の下限 31 本を満たさない銘柄が **13 件**、σ の下限 21 本を
- * 満たさない銘柄が **7 件** ある (実測)。
- * 市場側: `swing_market_context` は 2026-04-12 開始・107 行 (`nikkei_close`
- * 非 NULL 106)、`swing_daily_ohlcv` と日付が重なるのは **94 日**。
- *
- * したがって **σ と β の数値は変わる**。ユーザには「値が変わった」として
- * 現れるので、`as_of` だけでなく**使用サンプル本数**を画面へ出すこと
- * (views/capm.ts は既に出していた。views/black-scholes.ts に足した)。
- *
- * ## これは暫定である
- *
- * `docs/TARGET-ARCHITECTURE.md §4.4` は「D1 に長い時系列を置かない」を最も強い
- * 制約としており、本来の正本は R2 の `facts/price_daily/{code}/{yyyy}.ndjson.gz`
- * (約 10 年 / 1 銘柄約 2,450 本)。**R2 系列ができたらこの層はそちらを読む**。
- * それまでは D1 の 90 営業日で妥協し、代わりに本数を画面に出して
- * 「短い系列で計算した」ことを隠さない。
- *
- * 旧 2 表 (`finmath_price_snapshot` / `finmath_daily_ohlcv`) は宣言ごと撤去し、
- * `drizzle/d1/0012` で DROP する。本番の全行は DROP 前に
- * `~/kabulab-cf-backup-20260913/d1-finmath/` へ JSONL で退避してある
- * (復元手順は同ディレクトリの README.md)。
+ * 規則: `as_of` だけでなく**使用サンプル本数**を画面へ出す (短い系列で
+ * 計算したことを隠さない)。R2 の長期系列ができたらこの層はそちらを読む。
+ * 旧 `finmath_*` 2 表は 0012 で DROP (退避は `~/kabulab-cf-backup-20260913/d1-finmath/`)。
  */
 
 import { and, asc, eq, isNotNull } from "drizzle-orm";
@@ -90,9 +33,7 @@ const JP_STOCK_PATTERN = STOCK_CODE_REGEX;
  * 以前は `/^\^[A-Z0-9]+$/` を通して Yahoo へ投げていたので ^GSPC でも
  * ^VIX でも「取れたら返る」形だった。D1 が持っているのは
  * `swing_market_context.nikkei_close` の**日経平均だけ**なので、
- * 他の指数は**黙って空配列を返さず**に落とす (ルール2: サイレント
- * フォールバック禁止。β が「サンプル不足」と表示されるのと
- * 「その指数は持っていない」は別の事実)。
+ * 他の指数は**黙って空配列を返さず**に落とす (ルール2)。
  */
 const MARKET_SYMBOL = "^N225";
 

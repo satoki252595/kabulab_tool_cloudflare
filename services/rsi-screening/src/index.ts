@@ -7,8 +7,8 @@ export const app = new Hono({ strict: false });
 const errorHandler = createErrorHandler("rsi-screening");
 
 // NOTE: 旧 /api/cron/sync-daily エンドポイントは廃止された。
-// 日次/月次の統一 cron は root app (/api/cron/sync-{daily,monthly}) に集約している。
-// 詳細は src/index.ts / src/cron/{daily,monthly}.ts を参照。
+// 日次/月次の取込は GitHub Actions (Node) が実行する (src/cron/{daily,monthly}.ts)。
+// Worker 上に cron ルートは無い。
 
 // SSR pages
 app.route("/", pagesRoute);

@@ -1,18 +1,7 @@
 /**
- * `writeStockSnapshot` の書き込み範囲の検証。
- *
- * 移行 P5-b で ②断面 (`core_stock_financials`) の writer が stockStock 側へ移る。
- * そのとき daily.ts 側を止める手段が `options.writeCoreFinancials` しかないので、
- * **フラグが囲んでいる範囲**をテストで固定する。ここが崩れる形は 2 つある:
- *
- *   1. フラグを立てても ②断面が書かれる  → 二重 writer になり、残る値が実行順で
- *      決まる (新しい fetched_at に古い価格が乗る)。
- *   2. フラグで年次 (`core_stock_annual_financials`) まで止まる → 移行対象でない
- *      売上推移が無言で止まる。
- *
- * 実 SQLite を立てず SQL 文字列を記録する driver を使うのは、ここで見たいのが
- * 「どのテーブルに INSERT を発行したか」だけで、6 表の DDL を並べると DDL 側の
- * 写し間違いでテストが落ちる（検証したい性質と無関係な保守コストが乗る）ため。
+ * `writeStockSnapshot` の書き込み範囲の検証。**フラグが囲んでいる範囲**を固定する:
+ * フラグを立てても ②断面が書かれる (二重 writer) と、年次まで止まる (無言停止) の
+ * 2 つの崩れを防ぐ。SQL 文字列を記録する driver で「どの表に INSERT したか」だけ見る。
  */
 import { describe, expect, it } from "vitest";
 import { drizzle } from "drizzle-orm/sqlite-proxy";

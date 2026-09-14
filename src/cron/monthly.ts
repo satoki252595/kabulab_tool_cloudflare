@@ -1,16 +1,16 @@
 /**
- * 月次 rebuild オーケストレータ（Cloudflare Worker 版・ADR-0001 Phase 3）
+ * 月次 rebuild オーケストレータ (Node。GitHub Actions の月次 cron が起動)。
  *
  * core_* / swing_* / yutai_benefits を読んで otakara の派生テーブル
  * (otakara_stock_financials / otakara_stock_scores) を再構築する。
  *
  * 特徴:
  *   - Yahoo を 1 回も叩かない (日次 sync が取得済みのデータを DB 経由で再利用)
- *   - D1 バインディング + db.batch (1 銘柄=2 upsert を 1 バッチ)
- *   - 起動: Workers Cron (scheduled) / 認証ルート POST /admin/sync-monthly
+ *   - D1 HTTP 書込 (createD1HttpDb)。multi-row upsert で投入する
+ *   - 起動: stock-sync.yml の月次 cron → `pnpm sync:monthly:core`
  *
- * 母集団 (core_stocks) の JPX 同期は xlsx パーサが Node 専用のため Worker 不可。
- * `pnpm sync:universe`（Node）で別途同期してから本 rebuild を走らせる。
+ * 母集団 (core_stocks) の JPX 同期は `pnpm sync:universe` で別途同期してから
+ * 本 rebuild を走らせる (月次ワークフローが順に実行する)。
  *
  * CLAUDE.md のフォールバック禁止ルールに従い:
  *   - core_stock_financials が未作成の銘柄はスコア計算をスキップ (silent 0 にはしない)

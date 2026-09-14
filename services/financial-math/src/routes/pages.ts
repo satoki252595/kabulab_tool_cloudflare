@@ -211,9 +211,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   const q = c.req.valid("query");
   const db = createDb(requireDb(c));
 
-  // 母集団 (active かつ equity) の銘柄数。`idx_core_stocks_active_market` 越しでも走査行は
-  // インデックスエントリ数 (実測 3,715) 分かかる。4 タブ共通の分母なので残すが、
-  // これが /emh の残る走査行の大半である (詳細は PR の「コスト影響」)。
+  // 母集団 (active かつ equity) の銘柄数。4 タブ共通の分母。
+  // /emh の残る走査行の大半はこの COUNT である。
   const [{ universeSize }] = await db
     .select({ universeSize: sql<number>`count(*)` })
     .from(stocks)
@@ -237,17 +236,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   let latestDate: string | null = null;
 
   if (q.type === "momentum") {
-    // L2 投影 (p_momentum) だけを読む。1 銘柄 1 行なので走査は銘柄数 (実測 3,715)。
-    //
-    // 以前はここで swing_daily_ohlcv を全走査しており、1 表示で 651,494 rows_read
-    // (集計クエリ単体 647,628。本番実測 2026-09-13) / TTFB 0.86〜1.01 秒だった
-    // (他 13 経路は 42〜195 ms)。D1 は走査行課金なので訪問者ごとに払う継続コストに
-    // なっていた。被覆索引では下がらない (対照実験: 同じ計画で索引外の close を
-    // SELECT 句から抜いても入れても rows_read は 674,097 で同値) ため、
-    // 事前集計へ移した。投影は日次 cron の Phase 6 が作る。
-    //
-    // 投影が持つのは**終値列そのもの**なので window は従来どおり可変で、
-    // 同じ calcMomentum に同じ配列が入る = 表示される数値は変わらない。
+    // L2 投影 (p_momentum) だけを読む。1 銘柄 1 行なので走査は銘柄数。
+    // 投影が持つのは終値列そのものなので window は可変のまま、数値は変わらない。
     const projected = await db
       .select({
         stockId: momentumProjection.stockId,
@@ -561,12 +551,9 @@ export async function buildCapmView(input: CapmViewInput): Promise<Parameters<ty
  * `swing_market_context.nikkei_close` を**読むだけ**で取る。日付整合後の
  * 単純リターンで OLS。市場の定義として ^N225 は理論的にも標準的な選択。
  *
- * **サンプル数は以前より減る**。旧実装は GET 中に Yahoo Chart API を叩いて
- * 2 年ぶん (514 本) 取っていたが、D1 の保持は銘柄側 90 営業日
- * (実測 avg 89.3 / min 2)、市場側 107 行 (2026-04-12 開始) で、**日付が重なるのは
- * 94 日**。下限 31 本を満たさない銘柄が 13 件ある (実測 2026-09-13)。
- * つまり **β の数値そのものが変わる**ので、画面はサンプル数を併記する
- * (views/capm.ts の「サンプル数」セル)。R2 系列ができたらそちらを読む。
+ * D1 の保持は銘柄側 90 営業日・市場側は日付が重なる分だけなので、β の数値は
+ * 旧実装と変わる。画面はサンプル数を併記する (「サンプル数」セル)。
+ * R2 系列ができたらそちらを読む。
  *
  */
 async function estimateBetaForCode(
