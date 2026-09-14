@@ -67,6 +67,19 @@ async function main(): Promise<void> {
         `失敗=${result.failedStocks}, マクロ=${result.marketContextOk ? "成功" : "失敗"}`
     );
   }
+
+  // 失敗率 ≤1% の成功扱い (L-57)。成功は成功だが、失敗の trace を残すため
+  // workflow が Issue へコメントする。件数を GITHUB_OUTPUT へ出す。
+  if (result.failures.length > 0) {
+    const out = process.env.GITHUB_OUTPUT;
+    if (out !== undefined) {
+      const { appendFileSync } = await import("node:fs");
+      appendFileSync(out, `tolerated_failures=${result.failures.length}\n`);
+    }
+    console.info(
+      `[sync-daily] 許容内失敗: ${result.failures.length} 件 (失敗率 1% 以下のため成功扱い)`
+    );
+  }
 }
 
 main().catch((e) => {

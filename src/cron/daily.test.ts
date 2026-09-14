@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createDailyStockStartGate,
   isDailySyncIncomplete,
+  isMondayUtc,
   isTransientDailySyncFailure,
   prioritizeDailyRecoveryFailures,
   recoverTransientDailyFailures,
@@ -82,12 +83,12 @@ describe("isDailySyncIncomplete", () => {
     ).toBe(false);
   });
 
-  it("個別失敗・マクロ失敗・空母集団を監視上の失敗にする", () => {
+  it("失敗率 1% 超・マクロ失敗・空母集団を監視上の失敗にする", () => {
     expect(
       isDailySyncIncomplete({
         totalStocks: 3_716,
-        successStocks: 3_715,
-        failedStocks: 1,
+        successStocks: 3_678,
+        failedStocks: 38,
         marketContextOk: true,
       })
     ).toBe(true);
@@ -115,6 +116,25 @@ describe("isDailySyncIncomplete", () => {
         marketContextOk: true,
       })
     ).toBe(true);
+  });
+
+  it("失敗率 1% 以下は成功扱いにする (L-57)", () => {
+    expect(
+      isDailySyncIncomplete({
+        totalStocks: 3_716,
+        successStocks: 3_715,
+        failedStocks: 1,
+        marketContextOk: true,
+      })
+    ).toBe(false);
+    expect(
+      isDailySyncIncomplete({
+        totalStocks: 3_716,
+        successStocks: 3_679,
+        failedStocks: 37,
+        marketContextOk: true,
+      })
+    ).toBe(false);
   });
 });
 
@@ -272,31 +292,65 @@ describe("recoverTransientDailyFailures", () => {
     ]);
   });
 
-  it("回復処理を100件で止め、超過対象を未解決として残す", async () => {
+  it("時間予算を過ぎたら止め、超過対象を未解決として残す", async () => {
     vi.useFakeTimers();
     try {
-      const failures = Array.from({ length: 101 }, (_, index) => ({
+      const failures = Array.from({ length: 5 }, (_, index) => ({
         target: String(index),
         error: `Chart API HTTP エラー [${index}]: 500 Internal Server Error`,
       }));
       const processed: string[] = [];
-      const pending = recoverTransientDailyFailures(failures, async (target) => {
-        processed.push(target);
-      });
+      const start = Date.now();
+      const pending = recoverTransientDailyFailures(
+        failures,
+        async (target) => {
+          processed.push(target);
+          // 1 件の処理に 600ms かかる想定で時計を進める。
+          vi.advanceTimersByTime(600);
+        },
+        { deadlineMs: start + 1000 }
+      );
       await vi.runAllTimersAsync();
       const result = await pending;
 
-      expect(processed).toHaveLength(100);
-      expect(result.attempted).toBe(100);
-      expect(result.recovered).toBe(100);
-      expect(result.skippedDueToLimit).toBe(1);
-      expect(result.failures).toEqual([failures[100]]);
+      expect(processed).toEqual(["0", "1"]);
+      expect(result.attempted).toBe(2);
+      expect(result.recovered).toBe(2);
+      expect(result.skippedDueToLimit).toBe(3);
+      expect(result.failures).toEqual(failures.slice(2));
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("macroを優先しstockと共有する100件枠・外部call上限を守る", async () => {
+  it("deadline を渡さないと全件を回収する", async () => {
+    vi.useFakeTimers();
+    try {
+      const failures = Array.from({ length: 150 }, (_, index) => ({
+        target: String(index),
+        error: `Chart API HTTP エラー [${index}]: 500 Internal Server Error`,
+      }));
+      const processed: string[] = [];
+      const pending = recoverTransientDailyFailures(
+        failures,
+        async (target) => {
+          processed.push(target);
+        }
+      );
+      await vi.runAllTimersAsync();
+      const result = await pending;
+
+      expect(processed).toHaveLength(150);
+      expect(result.attempted).toBe(150);
+      expect(result.recovered).toBe(150);
+      expect(result.skippedDueToLimit).toBe(0);
+      expect(result.failures).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("macroを優先する (件数上限なし・時間予算のみ)", async () => {
     vi.useFakeTimers();
     try {
       const macroFailures = Array.from({ length: 5 }, (_, index) => ({
@@ -311,19 +365,11 @@ describe("recoverTransientDailyFailures", () => {
         macroFailures,
         stockFailures
       );
-      let macroAttempts = 0;
-      let stockAttempts = 0;
-      let externalCalls = 0;
+      const order: string[] = [];
       const pending = recoverTransientDailyFailures(
         prioritized,
         async (target) => {
-          if (target.kind === "macro") {
-            macroAttempts++;
-            externalCalls++;
-          } else {
-            stockAttempts++;
-            externalCalls += 2;
-          }
+          order.push(target.kind);
         }
       );
 
@@ -333,16 +379,25 @@ describe("recoverTransientDailyFailures", () => {
       expect(prioritized.slice(0, 5).map(({ target }) => target.kind)).toEqual(
         Array(5).fill("macro")
       );
-      expect(macroAttempts).toBe(5);
-      expect(stockAttempts).toBe(95);
-      expect(macroAttempts + stockAttempts).toBe(100);
-      expect(externalCalls).toBe(195);
-      expect(externalCalls).toBeLessThanOrEqual(200);
-      expect(result.attempted).toBe(100);
-      expect(result.recovered).toBe(100);
-      expect(result.skippedDueToLimit).toBe(5);
+      expect(order.slice(0, 5)).toEqual(Array(5).fill("macro"));
+      expect(result.attempted).toBe(105);
+      expect(result.recovered).toBe(105);
+      expect(result.skippedDueToLimit).toBe(0);
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("isMondayUtc", () => {
+  it("UTC の月曜だけ真 (週1ジョブの分岐用)", () => {
+    // 2026-09-14 は月曜 (UTC)。
+    expect(isMondayUtc(new Date("2026-09-14T00:30:00Z"))).toBe(true);
+    expect(isMondayUtc(new Date("2026-09-14T23:59:59Z"))).toBe(true);
+    expect(isMondayUtc(new Date("2026-09-15T00:00:00Z"))).toBe(false);
+    expect(isMondayUtc(new Date("2026-09-13T23:59:59Z"))).toBe(false);
+    // 週の最初の run は UTC 月曜 21:00 (= JST 火曜 06:00)。JST で見ると
+    // run は火〜土曜にしか無いので、JST 曜日では「月曜」を拾えない。
+    expect(isMondayUtc(new Date("2026-09-14T21:00:00Z"))).toBe(true);
   });
 });
