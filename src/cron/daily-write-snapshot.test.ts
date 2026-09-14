@@ -38,6 +38,27 @@ function makeRecordingDb(): {
   return { db: db as Parameters<typeof writeStockSnapshot>[0], statements };
 }
 
+interface RecordedCall {
+  sql: string;
+  params: unknown[];
+}
+
+/** makeRecordingDb の束縛パラメータ付き版。値の検査が必要なテスト用。 */
+function makeRecordingDbWithParams(): {
+  db: Parameters<typeof writeStockSnapshot>[0];
+  calls: RecordedCall[];
+} {
+  const calls: RecordedCall[] = [];
+  const db = drizzle(
+    async (sqlStr, params) => {
+      calls.push({ sql: sqlStr, params: [...params] });
+      return { rows: [] };
+    },
+    { schema: { ...coreSchema, ...rsiSchema, ...swingSchema, ...projectionSchema } }
+  );
+  return { db: db as Parameters<typeof writeStockSnapshot>[0], calls };
+}
+
 /**
  * StockSnapshot は export されていないので、関数の引数型から借りる。
  * (テストのために本体の型を export すると、内部表現が API になってしまう)
@@ -160,7 +181,6 @@ describe("writeStockSnapshot の options.writeCoreFinancials", () => {
     for (const table of [
       "rsi_percentile",
       "swing_stock_indicators",
-      "swing_stock_screening",
     ]) {
       expect(countInsertsInto(off.statements, table), table).toBe(
         countInsertsInto(on.statements, table)
@@ -186,6 +206,77 @@ describe("writeStockSnapshot の options.writeAnnual", () => {
     expect(countInsertsInto(off.statements, "core_stock_annual_financials")).toBe(0);
     // 差分は年次の 1 文だけであること。
     expect(on.statements.length - off.statements.length).toBe(1);
+  });
+});
+
+describe("writeStockSnapshot の screening 畳み (L-52)", () => {
+  it("swing_stock_screening には書かない", async () => {
+    const { db, statements } = makeRecordingDb();
+    await writeStockSnapshot(db, SNAP, undefined);
+    expect(
+      statements.filter((s) => s.includes("swing_stock_screening")),
+      "screening 表への書き込みが残っている"
+    ).toEqual([]);
+  });
+
+  it("indicators の upsert に 6 列が載る", async () => {
+    const { db, statements } = makeRecordingDb();
+    await writeStockSnapshot(db, SNAP, undefined);
+    const upsert = statements.find((s) =>
+      new RegExp(`insert into "swing_stock_indicators"`, "i").test(s)
+    );
+    expect(upsert).toBeDefined();
+    for (const col of [
+      "liquidity_ok",
+      "volatility_ok",
+      "trend_ok_long",
+      "trend_ok_short",
+      "all_passed_long",
+      "all_passed_short",
+    ]) {
+      expect(upsert, col).toContain(col);
+    }
+  });
+});
+
+describe("writeStockSnapshot の entry_signals INSERT-only (L-52)", () => {
+  /** breakout_long を発火させる最小上書き (detectBreakoutLong の条件)。 */
+  const BREAKOUT_SNAP: Snapshot = {
+    ...SNAP,
+    latestClose: 100,
+    latestOpen: 95,
+    latestHigh: 101,
+    latestLow: 94,
+    previousClose: 95,
+    range20dHigh: 90,
+    range20dLow: 80,
+    rangeWidth: 10,
+    volumeRatio: 2,
+  };
+
+  it("銘柄ごとの DELETE を発行しない", async () => {
+    const { db, statements } = makeRecordingDb();
+    // 旧コードは latestClose が null でも DELETE を打っていた。
+    await writeStockSnapshot(db, SNAP, undefined);
+    await writeStockSnapshot(db, BREAKOUT_SNAP, undefined);
+    expect(
+      statements.filter((s) => /^\s*delete\b/i.test(s)),
+      "銘柄ごとの DELETE が残っている (sweep への置換漏れ)"
+    ).toEqual([]);
+  });
+
+  it("シグナル INSERT に run 開始秒を刻む", async () => {
+    const { db, calls } = makeRecordingDbWithParams();
+    const runStartedSec = 1_700_000_000;
+    await writeStockSnapshot(db, BREAKOUT_SNAP, undefined, { runStartedSec });
+    const insert = calls.find((c) =>
+      new RegExp(`insert into "swing_entry_signals"`, "i").test(c.sql)
+    );
+    expect(insert, "シグナルが発火していない (スナップの条件を見直すこと)").toBeDefined();
+    expect(insert!.sql).toContain("computed_at");
+    // drizzle の timestamp モードは unix 秒で束縛する (unixepoch() と同じ単位)。
+    // ミリ秒で刻むと sweep の境界比較がずれて今回の行まで消す。
+    expect(insert!.params).toContain(runStartedSec);
   });
 });
 

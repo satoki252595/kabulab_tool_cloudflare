@@ -39,7 +39,7 @@
  *   - マクロ 4 指数のどれかが取れない場合も null で通す
  */
 
-import { sql, eq, and, gte, lte } from "drizzle-orm";
+import { sql, eq, and, gte, lte, lt } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
@@ -585,6 +585,10 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   // 年次は月曜 UTC の run でのみ書く (L-49)。年 1 回変わるものに毎日
   // 15,900 行 upsert していた。
   const writeAnnual = isMondayUtc();
+  // run 開始秒で固定。entry_signals の INSERT 刻みと Phase 3.5 の sweep 境界
+  // (L-52)、および Phase 6 の投影掃除の境界に使う。Phase 3 の upsert より
+  // 前の時刻でないと、掃除が今回の行まで消す。
+  const runStartedSec = Math.floor(startedAt / 1000);
   async function processTarget(
     target: (typeof targets)[number]
   ): Promise<void> {
@@ -592,6 +596,7 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
     const snap = await buildSnapshot(target.id, target.code, target.sector);
     await writeStockSnapshot(db, snap, latestDateByStock.get(target.id), {
       writeAnnual,
+      runStartedSec,
     });
   }
 
@@ -674,6 +679,15 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   }
 
   // -----------------------------------------------------------------
+  // Phase 3.5: 前 run 以前の entry_signals を 1 文で掃除 (L-52)。
+  // 回収 (recovery) の後。銘柄ごとの DELETE 3,755 文の代替。
+  // -----------------------------------------------------------------
+  const sweptSignals = await sweepStaleEntrySignals(db, runStartedSec);
+  console.info(
+    `[sync-daily] Phase 3.5: entry_signals sweep: ${sweptSignals} 行を削除`
+  );
+
+  // -----------------------------------------------------------------
   // Phase 4: OHLCV 保持期間の一括 prune (同期が止まった銘柄も対象)。
   // 月曜 UTC の run のみ (L-47)。1 日で増えるのは 1 本/銘柄なので週1で足りる。
   // -----------------------------------------------------------------
@@ -707,11 +721,8 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   // source_max_date の backfill と掃除 DELETE だけを行う。
   // ここで失敗したら run 全体を失敗にする。掃除が走っていないまま緑にすると、
   // /emh は前日の as_of を表示し続けるのに監視上は成功に見える。
-  // runStartedSec は run 開始時刻 (Phase 3 の upsert より前でないと、
-  // 掃除が今回の行まで消す)。
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 6: モメンタム投影の仕上げ");
-  const runStartedSec = Math.floor(startedAt / 1000);
   const projected = await rebuildMomentumProjection(db, runStartedSec);
   console.info(
     `[sync-daily]   投影 ${projected.projectedStocks} 行 (` +
@@ -1002,6 +1013,14 @@ export interface WriteStockSnapshotOptions {
    * でのみ真にする (L-49)。呼び出し側 (processTarget) が曜日で決める。
    */
   writeAnnual?: boolean;
+  /**
+   * run 開始時刻 (unix 秒)。`swing_entry_signals` の INSERT に刻む。
+   *
+   * 銘柄ごとの無条件 DELETE (3,755 文/日) の代わりに、Phase 3 末尾で
+   * `computed_at < runStartedSec` を 1 文で掃除する (L-52)。既定は呼び出し
+   * 時の現在秒 (テスト用。本番は processTarget が run 開始秒を渡す)。
+   */
+  runStartedSec?: number;
 }
 
 // export しているのは src/cron/daily-write-snapshot.test.ts から
@@ -1013,6 +1032,8 @@ export async function writeStockSnapshot(
   options: WriteStockSnapshotOptions = {}
 ): Promise<void> {
   const { writeCoreFinancials = true, writeAnnual = true } = options;
+  const runStartedSec =
+    options.runStartedSec ?? Math.floor(Date.now() / 1000);
 
   // --- core_stock_annual_financials ---
   if (writeAnnual && snap.annualFinancials.length > 0) {
@@ -1146,7 +1167,17 @@ export async function writeStockSnapshot(
   // swing_daily_ohlcv の DISTINCT date が 203 に伸びる直接の原因になっていた。
   // 全銘柄の一括 sweep (pruneOhlcvRetention) が Phase 4 で面倒を見る。
 
-  // --- swing_stock_indicators ---
+  // --- swing_stock_indicators (スクリーニング結果も同行に畳む。L-52) ---
+  // screenStock() は indicators 6 値の純関数。旧 swing_stock_screening 表と
+  // 同じ値を同じ run で書くので、表示される数値は変わらない。
+  const screen = screenStock({
+    avgTurnover20d: snap.avgTurnover20d,
+    volumeRatio: snap.volumeRatio,
+    atrPct: snap.atrPct,
+    sma5: snap.sma5,
+    sma20: snap.sma20,
+    latestClose: snap.latestClose,
+  });
   await db
     .insert(swingSchema.stockIndicators)
     .values({
@@ -1181,6 +1212,12 @@ export async function writeStockSnapshot(
       latestVolume: snap.latestVolume,
       latestDate: snap.latestDate,
       pctChange1d: snap.pctChange1d,
+      liquidityOk: screen.liquidityOk,
+      volatilityOk: screen.volatilityOk,
+      trendOkLong: screen.trendOkLong,
+      trendOkShort: screen.trendOkShort,
+      allPassedLong: screen.allPassedLong,
+      allPassedShort: screen.allPassedShort,
     })
     .onConflictDoUpdate({
       target: swingSchema.stockIndicators.stockId,
@@ -1215,33 +1252,6 @@ export async function writeStockSnapshot(
         latestVolume: sql`excluded.latest_volume`,
         latestDate: sql`excluded.latest_date`,
         pctChange1d: sql`excluded.pct_change_1d`,
-        computedAt: sql`(unixepoch())`,
-      },
-    });
-
-  // --- swing_stock_screening ---
-  const screen = screenStock({
-    avgTurnover20d: snap.avgTurnover20d,
-    volumeRatio: snap.volumeRatio,
-    atrPct: snap.atrPct,
-    sma5: snap.sma5,
-    sma20: snap.sma20,
-    latestClose: snap.latestClose,
-  });
-  await db
-    .insert(swingSchema.stockScreening)
-    .values({
-      stockId: snap.stockId,
-      liquidityOk: screen.liquidityOk,
-      volatilityOk: screen.volatilityOk,
-      trendOkLong: screen.trendOkLong,
-      trendOkShort: screen.trendOkShort,
-      allPassedLong: screen.allPassedLong,
-      allPassedShort: screen.allPassedShort,
-    })
-    .onConflictDoUpdate({
-      target: swingSchema.stockScreening.stockId,
-      set: {
         liquidityOk: sql`excluded.liquidity_ok`,
         volatilityOk: sql`excluded.volatility_ok`,
         trendOkLong: sql`excluded.trend_ok_long`,
@@ -1252,12 +1262,10 @@ export async function writeStockSnapshot(
       },
     });
 
-  // --- swing_entry_signals ---
-  // 既存シグナルは無条件にクリア (latestClose が null でも古い entry/stop を残さない
-  // — CLAUDE.md rule2)。算出できた時だけ再挿入する。
-  await db
-    .delete(swingSchema.entrySignals)
-    .where(eq(swingSchema.entrySignals.stockId, snap.stockId));
+  // --- swing_entry_signals (INSERT のみ。掃除は Phase 3 末尾の sweep 1 文。L-52) ---
+  // 銘柄ごとの無条件 DELETE (3,755 文/日) はやめた。算出できた時だけ run 開始秒を
+  // 刻んで挿入し、古い run の行は sweepStaleEntrySignals がまとめて消す。
+  // 取得失敗銘柄の前日シグナルは残さない (鮮度のない値を出さない。J3)。
   if (snap.latestClose !== null) {
     const prevOhlcv =
       snap.ohlcv6mo.length >= 2 ? snap.ohlcv6mo[snap.ohlcv6mo.length - 2] : null;
@@ -1300,6 +1308,8 @@ export async function writeStockSnapshot(
           riskRewardRatio: s.riskRewardRatio,
           signalStrength: s.signalStrength,
           note: s.note,
+          // sweep が「この run の行」と判定する刻み。秒の一致は「残す」側。
+          computedAt: new Date(runStartedSec * 1000),
         }))
       );
     }
@@ -1333,6 +1343,35 @@ export async function writeStockSnapshot(
         },
       });
   }
+}
+
+/**
+ * 前 run 以前の `swing_entry_signals` 行を 1 文で掃除する (L-52)。
+ *
+ * 銘柄ごとの無条件 DELETE (3,755 文/日) の代替。`writeStockSnapshot` は
+ * INSERT のみで run 開始秒を刻むので、ここではそれより古い行だけ消す。
+ * 境界 (`computed_at == runStartedSec`) は残す。取得失敗で INSERT が無かった
+ * 銘柄の前日シグナルも消える (鮮度のない値を出さない。J3)。
+ * `idx_swing_signals_computed` を使う。run が途中で落ちて sweep まで届かなくても、
+ * 次 run の sweep が古い行をまとめて消す (自己修復)。
+ *
+ * @returns 削除行数 (事前 COUNT。pruneOhlcvRetention と同じ方式)
+ */
+export async function sweepStaleEntrySignals(
+  db: Db,
+  runStartedSec: number
+): Promise<number> {
+  const cutoff = new Date(runStartedSec * 1000);
+  const [{ stale }] = await db
+    .select({ stale: sql<number>`count(*)` })
+    .from(swingSchema.entrySignals)
+    .where(lt(swingSchema.entrySignals.computedAt, cutoff));
+  if (stale > 0) {
+    await db
+      .delete(swingSchema.entrySignals)
+      .where(lt(swingSchema.entrySignals.computedAt, cutoff));
+  }
+  return stale;
 }
 
 // -----------------------------------------------------------------------------
