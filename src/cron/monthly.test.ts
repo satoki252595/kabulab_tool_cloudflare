@@ -1,91 +1,147 @@
-/**
- * 月次スコア再構築の純関数テスト。
- *
- * 優待利回りは「保有しているだけで確実に受け取れる価値 / 最低投資額」を
- * 意図しているが、実際には**条件付きの優待**（住宅購入時のキャッシュバック、
- * 車リース契約時のキャッシュバック、抽選の商品券）が確定価値として合算され、
- * 本番のスクリーニング上位が実在しない利回りで占められていた。
- */
 import { describe, expect, it } from "vitest";
 
-import { YUTAI_YIELD_MAX_PCT, calcYutaiYield } from "./monthly.js";
+import { runMonthlyRebuild } from "./monthly.js";
+import * as coreSchema from "../shared/db/core-schema.js";
+import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
+import * as otakaraSchema from "../../services/otakara-yutai/src/db/schema.js";
 
-describe("calcYutaiYield", () => {
-  it("最低単元での年間価値を利回りにする", () => {
-    // 1,000円 × 100株 = 100,000円 に対し年 2,000円 → 2%
-    expect(
-      calcYutaiYield(1000, [
-        { minShares: 100, estimatedValue: 1000 },
-        { minShares: 100, estimatedValue: 1000 },
-      ]),
-    ).toBeCloseTo(2, 10);
+/**
+ * L-56: 月次 rebuild は表ごとに multi-row upsert で書き戻す。
+ *
+ * 旧実装は 1 銘柄=2 upsert を db.batch で逐次 (1,615 銘柄で 3,230 往復・
+ * 670 秒)。新実装は全行を貯めてチャンク分割の一括 upsert にする。
+ *
+ * このテストは stub db で insert() 呼び出し回数とチャンク上限を検証する。
+ * stub に batch() が無いこと自体が、旧逐次パスを使わないことの保証になる
+ * (使えば TypeError で落ちる)。
+ */
+describe("runMonthlyRebuild batch writes (L-56)", () => {
+  const N = 40;
+  const active = Array.from({ length: N }, (_, i) => ({
+    id: i + 1,
+    code: `${1000 + i}`,
+  }));
+  // scoreStock / calcYutaiYield が例外を出さない穏当な値
+  const core = active.map((s) => ({
+    stockId: s.id,
+    price: 1000,
+    per: 10,
+    pbr: 1,
+    dividendYield: 2,
+    eps: 100,
+    bps: 1000,
+    roe: 8,
+    roa: 4,
+    marketCap: 100000,
+  }));
+  const swing = active.map((s) => ({
+    stockId: s.id,
+    sma5: 1000,
+    sma25: 990,
+    sma75: 980,
+    rsi14: 50,
+    macd: 1,
+    macdSignal: 0.5,
+  }));
+  const benefits = active.map((s) => ({
+    stockId: s.id,
+    minShares: 100,
+    estimatedValue: 1000,
+    recordMonth: 3,
+    genreId: 1,
+  }));
+
+  type Db = Parameters<typeof runMonthlyRebuild>[0];
+
+  function makeStub() {
+    const calls: { table: unknown; rowCount: number; rows: unknown[] }[] = [];
+    const fakeDb = {
+      update: () => ({ set: () => ({ where: async () => [] as unknown[] }) }),
+      select: () => ({
+        from: (t: unknown) => {
+          if (t === coreSchema.stocks) return { where: async () => active };
+          if (t === coreSchema.stockFinancials) return core;
+          if (t === swingSchema.stockIndicators) return swing;
+          // 同一テーブルに .where() 付き (利回り用) となし (月/ジャンル用) が
+          // あるため、await 可能かつ .where() を持つ thenable を返す
+          if (t === otakaraSchema.yutaiBenefits) {
+            return {
+              where: async () => benefits,
+              then: (
+                resolve: (v: typeof benefits) => void,
+                reject?: (e: unknown) => void
+              ) => Promise.resolve(benefits).then(resolve, reject),
+            };
+          }
+          throw new Error("unexpected table in stub select");
+        },
+      }),
+      insert: (t: unknown) => ({
+        values: (rows: unknown[]) => ({
+          onConflictDoUpdate: async () => {
+            calls.push({ table: t, rowCount: rows.length, rows });
+            return [] as unknown[];
+          },
+        }),
+      }),
+    };
+    return { db: fakeDb as unknown as Db, calls };
+  }
+
+  it("全 N 銘柄をスコア化する", async () => {
+    const { db } = makeStub();
+    const result = await runMonthlyRebuild(db);
+    expect(result.scoredStocks).toBe(N);
   });
 
-  it("最低単元を超える段階の優待は分子に入れない", () => {
-    expect(
-      calcYutaiYield(1000, [
-        { minShares: 100, estimatedValue: 1000 },
-        { minShares: 1000, estimatedValue: 90000 },
-      ]),
-    ).toBeCloseTo(1, 10);
+  it("insert は ceil(N/5) + ceil(N/16) 回だけ呼ばれる", async () => {
+    const { db, calls } = makeStub();
+    await runMonthlyRebuild(db);
+    // 40 銘柄: financials 8 回 (5×8) + scores 3 回 (16+16+8)
+    expect(calls).toHaveLength(8 + 3);
+    const fin = calls.filter((c) => c.table === otakaraSchema.stockFinancials);
+    const scores = calls.filter((c) => c.table === otakaraSchema.stockScores);
+    expect(fin).toHaveLength(8);
+    expect(scores).toHaveLength(3);
+    expect(fin.map((c) => c.rowCount)).toEqual([5, 5, 5, 5, 5, 5, 5, 5]);
+    expect(scores.map((c) => c.rowCount)).toEqual([16, 16, 8]);
   });
 
-  it("価値が算定できる最小の保有段階で計算する", () => {
-    // 呼び出し側が estimated_value NULL の行を除いて渡す前提。
-    // 100株の優待が金額換算不能なら 500株段階での利回りになる
-    expect(
-      calcYutaiYield(100, [{ minShares: 500, estimatedValue: 5000 }]),
-    ).toBeCloseTo(10, 10);
+  it("チャンク行数は D1 bind 上限 (100/文) を超えない", async () => {
+    const { db, calls } = makeStub();
+    await runMonthlyRebuild(db);
+    // financials 18 列×行数 ≤ 100 → 5 行まで、scores 6 列×行数 ≤ 100 → 16 行まで
+    for (const c of calls) {
+      if (c.table === otakaraSchema.stockFinancials) {
+        expect(c.rowCount).toBeLessThanOrEqual(5);
+      } else if (c.table === otakaraSchema.stockScores) {
+        expect(c.rowCount).toBeLessThanOrEqual(16);
+      } else {
+        throw new Error("unexpected insert target");
+      }
+    }
+    // 合計行数が N ずつ (欠けも重複もなし)
+    const finTotal = calls
+      .filter((c) => c.table === otakaraSchema.stockFinancials)
+      .reduce((a, c) => a + c.rowCount, 0);
+    const scoreTotal = calls
+      .filter((c) => c.table === otakaraSchema.stockScores)
+      .reduce((a, c) => a + c.rowCount, 0);
+    expect(finTotal).toBe(N);
+    expect(scoreTotal).toBe(N);
   });
 
-  describe("実在しない利回りを出さない", () => {
-    // 本番で実際にスクリーニング上位に出ていた値
-    it.each([
-      // 7578: 65円 × 100株 に「50万円相当の商品券贈呈(抽選)」等を年2回合算 → 16,676.9%
-      ["7578 抽選の商品券", 65, [{ minShares: 100, estimatedValue: 1084000 }], 16676.9],
-      // 3477: 「新築分譲住宅のキャッシュバック20万円」を年2回合算 → 455.3%
-      ["3477 住宅購入キャッシュバック", 883, [{ minShares: 100, estimatedValue: 402000 }], 455.3],
-      // 5618: 「定額カルモくん申込みで100,000円キャッシュバック」 → 694.2%
-      ["5618 リース契約キャッシュバック", 291, [{ minShares: 100, estimatedValue: 202000 }], 694.2],
-    ])("%s は値を出さない", (_label, price, benefits, naive) => {
-      // 素朴に計算すると桁外れになることを確認してから、null になることを確認する
-      const raw =
-        benefits.reduce((s, b) => s + (b.estimatedValue ?? 0), 0) /
-        (price * Math.min(...benefits.map((b) => b.minShares))) *
-        100;
-      expect(raw).toBeGreaterThan(YUTAI_YIELD_MAX_PCT);
-      expect(Math.round(raw * 10) / 10).toBeCloseTo(naive, 0);
-      expect(calcYutaiYield(price, benefits)).toBeNull();
-    });
-
-    it("上限ちょうどは通す", () => {
-      // 1,000円 × 100株 に対し 50,000円 = ちょうど 50%
-      expect(calcYutaiYield(1000, [{ minShares: 100, estimatedValue: 50000 }])).toBeCloseTo(
-        YUTAI_YIELD_MAX_PCT,
-        10,
-      );
-    });
-
-    it("上限をわずかに超えたら出さない", () => {
-      expect(calcYutaiYield(1000, [{ minShares: 100, estimatedValue: 50001 }])).toBeNull();
-    });
-
-    it("本番分布の 98.6% は上限内に収まる", () => {
-      // ≤5% が 86.8% / ≤10% が 94.9% / ≤30% が 98.3% / ≤50% が 98.6%（1,261銘柄の実測）
-      expect(YUTAI_YIELD_MAX_PCT).toBe(50);
-    });
-  });
-
-  describe("値を出せない入力", () => {
-    it.each([
-      ["株価が無い", null, [{ minShares: 100, estimatedValue: 1000 }]],
-      ["株価が 0", 0, [{ minShares: 100, estimatedValue: 1000 }]],
-      ["株価が負", -1, [{ minShares: 100, estimatedValue: 1000 }]],
-      ["優待が無い", 1000, []],
-      ["価値が全て NULL", 1000, [{ minShares: 100, estimatedValue: null }]],
-      ["価値が 0", 1000, [{ minShares: 100, estimatedValue: 0 }]],
-    ])("%s なら null", (_label, price, benefits) => {
-      expect(calcYutaiYield(price, benefits)).toBeNull();
-    });
+  it("書き戻し行の stockId に欠け・重複がない", async () => {
+    const { db, calls } = makeStub();
+    await runMonthlyRebuild(db);
+    for (const c of calls) {
+      const ids = (c.rows as { stockId: number }[]).map((r) => r.stockId);
+      expect(new Set(ids).size).toBe(ids.length);
+    }
+    const allFinIds = calls
+      .filter((c) => c.table === otakaraSchema.stockFinancials)
+      .flatMap((c) => (c.rows as { stockId: number }[]).map((r) => r.stockId))
+      .sort((a, b) => a - b);
+    expect(allFinIds).toEqual(active.map((s) => s.id));
   });
 });

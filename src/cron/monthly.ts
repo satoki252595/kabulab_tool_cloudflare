@@ -137,6 +137,14 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
   let scoredCount = 0;
   const today = new Date().toISOString().split("T")[0];
 
+  // 行を貯めて表ごとに multi-row upsert (L-56)。1 銘柄=2 upsert 逐次だと
+  // 3,230 往復/670 秒かかる。D1 bind 上限 (100/文): financials 18 列×5 行=90、
+  // scores 6 列×16 行=96。列を足したらチャンクも直すこと。
+  const FIN_ROWS_PER_STATEMENT = 5;
+  const SCORES_ROWS_PER_STATEMENT = 16;
+  const finRows: (typeof otakaraSchema.stockFinancials.$inferInsert)[] = [];
+  const scoreRows: (typeof otakaraSchema.stockScores.$inferInsert)[] = [];
+
   for (const s of activeStocks) {
     const core = coreFinMap.get(s.id);
     if (!core) continue; // 未取得銘柄はスキップ (silent 0 は禁止)
@@ -159,29 +167,44 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
     };
     const score = scoreStock(input);
 
-    // 1 銘柄=2 upsert を逐次実行 (createD1HttpDb は db.batch 非対応・冪等)。
+    finRows.push({
+      stockId: s.id,
+      price: core.price,
+      per: core.per,
+      pbr: core.pbr,
+      dividendYield: core.dividendYield,
+      eps: core.eps,
+      bps: core.bps,
+      roe: core.roe,
+      roa: core.roa,
+      marketCap: core.marketCap,
+      ma5: swing?.sma5 ?? null,
+      ma25: swing?.sma25 ?? null,
+      ma75: swing?.sma75 ?? null,
+      rsi14: swing?.rsi14 ?? null,
+      macd: swing?.macd ?? null,
+      macdSignal: swing?.macdSignal ?? null,
+      yutaiYield,
+      dataDate: today,
+    });
+    scoreRows.push({
+      stockId: s.id,
+      fundamentalScore: score.fundamentalScore,
+      technicalScore: score.technicalScore,
+      totalScore: score.totalScore,
+      yutaiMonths: toJsonSet(monthMap.get(s.id)),
+      yutaiGenreIds: toJsonSet(genreMap.get(s.id)),
+    });
+
+    scoredCount++;
+  }
+
+  // 失敗したら throw して run 全体を止める (従来の逐次 upsert と同じ。月次は
+  // 全再構築で冪等なので、次 run が書き直す)。
+  for (let i = 0; i < finRows.length; i += FIN_ROWS_PER_STATEMENT) {
     await db
       .insert(otakaraSchema.stockFinancials)
-      .values({
-        stockId: s.id,
-        price: core.price,
-        per: core.per,
-        pbr: core.pbr,
-        dividendYield: core.dividendYield,
-        eps: core.eps,
-        bps: core.bps,
-        roe: core.roe,
-        roa: core.roa,
-        marketCap: core.marketCap,
-        ma5: swing?.sma5 ?? null,
-        ma25: swing?.sma25 ?? null,
-        ma75: swing?.sma75 ?? null,
-        rsi14: swing?.rsi14 ?? null,
-        macd: swing?.macd ?? null,
-        macdSignal: swing?.macdSignal ?? null,
-        yutaiYield,
-        dataDate: today,
-      })
+      .values(finRows.slice(i, i + FIN_ROWS_PER_STATEMENT))
       .onConflictDoUpdate({
         target: otakaraSchema.stockFinancials.stockId,
         set: {
@@ -205,16 +228,11 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
           fetchedAt: sql`(unixepoch())`,
         },
       });
+  }
+  for (let i = 0; i < scoreRows.length; i += SCORES_ROWS_PER_STATEMENT) {
     await db
       .insert(otakaraSchema.stockScores)
-      .values({
-        stockId: s.id,
-        fundamentalScore: score.fundamentalScore,
-        technicalScore: score.technicalScore,
-        totalScore: score.totalScore,
-        yutaiMonths: toJsonSet(monthMap.get(s.id)),
-        yutaiGenreIds: toJsonSet(genreMap.get(s.id)),
-      })
+      .values(scoreRows.slice(i, i + SCORES_ROWS_PER_STATEMENT))
       .onConflictDoUpdate({
         target: otakaraSchema.stockScores.stockId,
         set: {
@@ -226,8 +244,6 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
           scoredAt: sql`(unixepoch())`,
         },
       });
-
-    scoredCount++;
   }
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
