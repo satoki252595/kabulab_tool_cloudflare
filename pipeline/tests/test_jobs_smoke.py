@@ -435,10 +435,7 @@ class TestWorkflowCrons:
 
     def test_ci_runs_pytest(self):
         text = _workflow_text("ci")
-        # TODO(PR-2): python-pipeline ジョブの追加後はこの skip を消して
-        # assert に戻す（job 追加忘れを skip で隠さないため）。
-        if "pytest" not in text:
-            pytest.skip("ci.yml の python-pipeline ジョブは PR-2 で追加予定")
+        assert "pytest" in text
         assert "nix develop" in text
 
 
