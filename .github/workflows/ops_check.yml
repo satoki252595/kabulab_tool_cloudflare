@@ -1,0 +1,268 @@
+# 鮮度を観測して記録し（freshness_probe）、そのあと SLO を判定する（ops_check）。
+# 続いて core_stocks の列定義ドリフトを検出し（core_stocks_migrate --verify / E7）、
+# 最後に列単位ライセンス地図を投入して実表と照合する（license_map）。
+# 異常があれば Issue を 1 本立てる。4 層すべてが正常なら、open の同名 Issue を
+# 閉じる（無ければ何も出さない）。
+#
+# 「壊れても音が鳴らない」を塞ぐための層。実測で次が誰にも気づかれなかった:
+#   EDINET 11 営業日連続 processed=0 で「成功」/ JPX 404 で銘柄マスタ 33 日停止
+#   優待 81.5 日停止 / 14 workflow に失敗通知 0 行
+#
+# ## cron を 10:00 UTC から動かした理由（前提が逆だった）
+#
+# 旧版のコメントは「日次ジョブが出揃った後。10:00 UTC」と書いていたが、
+# **edinet_daily は 12:00 UTC 開始（timeout 120分）で ops_check より後**だった。
+# つまり毎日「まだ走っていない
+# ジョブの鮮度」を測って赤にしていた。日次ジョブが全部終わり得る 14:00 UTC の
+# 後ろへ移す（14:30 UTC = 23:30 JST。JST の暦日を跨がない時刻に置くことで、
+# データ基準日ベースの加齢が 1 日ずれないようにしてある）。
+#
+# ## 2 ステップに分けてあり、判定は `if: always()`
+#
+# 観測が落ちても判定は必ず走らせる。観測失敗で判定をスキップすると
+# 「前日の凍結した行が加齢して赤」という**正しい判定が消えて静かになる**のが
+# 最悪の失敗モードで、それは壊れているのに緑と区別できない。
+#
+# ## 第3層に列定義ドリフトの検出（E7）を相乗りさせた理由
+#
+# `core_stocks` の列定義は両リポジトリに散っており **本番 PRAGMA が正で 21 列**
+# （kabulab-cf の `src/shared/db/core-schema.ts` と drizzle `0008_snapshot.json` は
+# 9 列のまま）。読み取り専用の検出実装は `core_stocks_migrate --verify` に既にあった
+# が、**`.github/workflows/` のどこからも呼ばれていなかった**（grep 0 件）ので、
+# 対向リポジトリが列を足しても誰も気づかない状態だった。
+#
+# `cloud_check.yml` に足しても CI では走らない（1 行目のとおり workflow_dispatch
+# のみで cron が無い）。別 workflow に cron を付ける案も採らなかった。理由は
+# **通知経路を増やすと見なくなる**ことで、これは `cloud_check.yml` のコメントが
+# 既に書いている失敗（14 workflow に失敗通知 0 行）と同じ穴の裏側である。
+# 自動で走る口が既にあり、Issue を 1 本だけ立てる経路も既にある ops_check に
+# 相乗りさせ、どの層で落ちたかは Issue 本文の outcome で切り分ける。
+#
+# 引き換えに、Issue のタイトルが「[SLO違反]」のままドリフトも入る点は不正確。
+# タイトルを分けると open 中の Issue スレッドが分断されるので、本文の
+# outcome 行で読み分ける側に倒した。
+#
+# ## トークンの権限分離ができていない点
+#
+# 観測（freshness_probe）は D1 への**書き込み**権限が必要で、判定（ops_check）は
+# 読み取りだけで足りる。しかし現在の secret 構成は CF_API_TOKEN 1 本しかなく、
+# 両ステップが同じトークンを使う。判定側を読み取り専用トークンに分けるには
+# Cloudflare 側でトークンを 2 本発行して secret を増やす必要がある（未実施）。
+name: ops_check
+
+on:
+  # schedule は Wave 5（週末カットオーバー）で有効化する。
+  # 元: cron: "30 14 * * *"（日次ジョブ出揃い後。14:30 UTC = 23:30 JST）
+  workflow_dispatch:
+
+concurrency:
+  group: ops_check
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write  # SLO 違反時に Issue を立て、緑に戻ったら閉じるため
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 立てる側と閉じる側で同じ文字列を使う。片方だけ書き換わると、閉じる側が
+    # 永久に何も見つけられず黙る（完全一致で探しているため）。
+    env:
+      SLO_ISSUE_TITLE: "[SLO違反] データの鮮度またはジョブ結果"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Sync dependencies
+        run: nix develop -c bash -c 'cd pipeline && uv sync --frozen'
+
+      # 観測層: 実表を測って jss_dataset_freshness へ書く（判定も通知もしない）。
+      - name: Record freshness
+        id: probe
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+        run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.freshness_probe'
+
+      # 判定層: 何も書かない。観測が落ちても必ず走らせる（上のコメント参照）。
+      - name: Judge SLO
+        id: judge
+        if: always()
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+        run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.ops_check'
+
+      # 検出層: core_stocks の列定義ドリフト (E7)。**`core_stocks` に対しては
+      # SELECT / PRAGMA しか発行しない**（`--apply` を付けない限り DDL は出ない）。
+      # `--compare-to` を渡さないので G-core-2/3（適用前後の差分）は見ず、
+      # 列・索引の定義と孤児だけを見る。
+      #
+      # この形では断面・件数・`sqlite_sequence` を読まない。以前は
+      # `--compare-to` の有無に関わらず断面（全 3,818 行）と件数（同 3,818 行）と
+      # `sqlite_sequence`（18 行）を読んでハッシュを計算していたが、G-core-2/3 は
+      # 比較相手が無ければ `_verify` が早期 return するので、毎日 7,654 行を
+      # 走査して結果を捨てていた（2026-09-13 に本番の `meta.rows_read` で実測）。
+      # D1 の課金軸は走査行数なので、料金だけ払って何も検知していない。
+      #
+      # **「core_stocks を 1 行も走査しない」わけではない**: 孤児検査 (G-core-5)
+      # は比較相手なしでも判定に使い、`子表 LEFT JOIN core_stocks` なので
+      # core_stocks の索引行を読む（`core_stock_financials` 1 表ぶんだけで
+      # rows_read 7,528）。ここで消したのは「読んで捨てていた分」だけである。
+      #
+      # 「1 文も書かない」ではない点だけ正確に書いておく: 他の全ジョブと同じく
+      # `jobs/runner.run_job` が終了時に ⑦ `jss_job_runs` へ 1 行 INSERT する
+      # （`cloud_store/ops.safe_record_job_run`。失敗してもジョブは落ちない）。
+      # 移行対象表には触らないが、読み取り専用トークンでは動かない。
+      #
+      # 上2層と同じく `if: always()`。観測や判定が落ちた日にドリフト検出だけが
+      # 静かになると、「壊れているのに緑」と区別できなくなる。
+      - name: Detect core_stocks schema drift
+        id: drift
+        if: always()
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+        run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.core_stocks_migrate --verify'
+
+      # 投入・照合層: 列単位ライセンス地図 (jss_column_license) と参照表。
+      #
+      # `cloud_store/schema.seed_reference_tables()` は定義とテストだけがあって
+      # **`jobs/*.py` からの呼び出しが 0 件**で、本番の 7 行は経路外で一度だけ
+      # 手で入れられたものだった。宣言を直しても実表に届かず、実表を手で直しても
+      # 宣言に戻らない = 2 つの真実が乖離しても誰も検知しない状態。
+      #
+      # ## 新しい cron を足さずここへ相乗りさせた理由
+      #
+      # `cloud_check.yml` は `workflow_dispatch` のみで cron が無いので、そこに
+      # 足しても CI では走らない。別 workflow に cron を付ける案も採らない
+      # （通知経路を増やすと見なくなる。この workflow は既に Issue を 1 本だけ
+      # 立てる経路を持っている）。列定義ドリフト検出 (E7) を第3ステップへ
+      # 相乗りさせたのと同じ判断である。
+      #
+      # ## 実行時間の帳尻
+      #
+      # ステップが 1 つ増えるぶんの実行時間は、同じ PR で第3ステップから
+      # `core_stocks` の全行走査 2 本（3,818 行 × 2 と、その JSON 転送と sha256
+      # 計算）を外して相殺している。nix devShell は同一 job 内で温まっている
+      # ので、増えるのは `uv run` の起動と D1 への数往復だけ。
+      #
+      # rows_read の収支（2026-09-13 に本番の `meta.rows_read` で実測）:
+      # 削除 −7,654/日（3,818 + 3,818 + 18）に対して、このステップの追加は
+      # 参照表 3 本 39 行 + `sqlite_master` 2 文 231 行 = +270/日。差し引き
+      # **−7,384 行/日**。追加分は宣言と表の件数で決まりデータ量では増えない。
+      #
+      # ## 上3層と同じく `if: always()`
+      #
+      # 観測や判定が落ちた日に地図の照合だけ静かになると、「壊れているのに緑」と
+      # 区別できなくなる。
+      - name: Seed and verify the column license map
+        id: license
+        if: always()
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+        run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.license_map'
+
+      # どの層で落ちたかが分かるように4ステップの outcome を本文へ入れる
+      # （観測が落ちたのか、観測はできたが SLO を割ったのか、列定義がドリフトした
+      # のか、ライセンス地図が実表と乖離したのかで対処がまったく違う）。
+      #
+      # 既存 Issue の探し方は下の「閉じる」ステップと同じ完全一致にそろえる。
+      # 以前は `--search "$TITLE in:title"` の先頭を取っていたが、GitHub 検索は
+      # 語の部分一致で、日本語タイトルは分かち書きが効かないため、語が重なる
+      # 別 Issue にコメントし得た。作る側と閉じる側で「どれが SLO 違反 Issue か」の
+      # 判定がずれると、閉じたはずの Issue とは別の Issue に積まれる。
+      - name: SLO 違反を Issue に出す
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PROBE_OUTCOME: ${{ steps.probe.outcome }}
+          JUDGE_OUTCOME: ${{ steps.judge.outcome }}
+          DRIFT_OUTCOME: ${{ steps.drift.outcome }}
+          LICENSE_OUTCOME: ${{ steps.license.outcome }}
+        run: |
+          EXISTING=$(gh issue list --state open --limit 200 --json number,title \
+            --jq '[.[] | select(.title == env.SLO_ISSUE_TITLE)][0].number // empty')
+          BODY=$(printf '観測・判定・列定義ドリフト検出・ライセンス地図の照合のいずれかが失敗しました。\n\n- 観測 (freshness_probe): %s\n- 判定 (ops_check): %s\n- 列定義ドリフト (core_stocks_migrate --verify / E7): %s\n- ライセンス地図 (license_map): %s\n\n実行ログ: %s\n検知: %s' \
+            "$PROBE_OUTCOME" "$JUDGE_OUTCOME" "$DRIFT_OUTCOME" "$LICENSE_OUTCOME" "$RUN_URL" "$(date -u '+%Y-%m-%d %H:%M UTC')")
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$SLO_ISSUE_TITLE" --body "$BODY"
+          fi
+
+      # 4 層がすべて緑に戻ったら、open の SLO 違反 Issue を閉じる。
+      #
+      # ## なぜ閉じるのか
+      #
+      # 上のステップは赤のたびに同じ Issue へコメントを積むが、緑に戻っても
+      # 閉じなかった。残った Issue は「今も壊れている」と読まれ、次に本物の赤が
+      # 来てもコメント 1 件が増えるだけで気づかれない（通知の残骸が検知を鈍らせる）。
+      # 手で閉じる運用は、閉じ忘れと「まだ赤の日に閉じて翌日また立つ」の両方を招く。
+      #
+      # ## 採らなかった案: 赤を `slo.ACCEPTED_RED` へ入れて黙らせる
+      #
+      # 新しい writer の初回実行は黙った失敗が最も起きやすく、その赤が唯一の検知に
+      # なる（2026-09-13、本番 `jss_financials` の PK が旧いままで
+      # `ON CONFLICT (..., consolidated)` の書き込みが全部黙って失敗していたのを
+      # 手で見つけた）。赤は赤のまま出し、残骸は緑で片付ける側に倒した。
+      #
+      # ## 条件を `success()` だけにしない理由
+      #
+      # `success()` は `if:` で skip されたステップを失敗と数えない。将来どれかの
+      # 層に条件を付けて skip される日が来ると、「見ていないのに緑として閉じる」
+      # ことになる。4 層の outcome を明示して、全部 success のときだけ閉じる。
+      # 層を足したらここにも足すこと（tests/test_jobs_smoke.py が突き合わせる）。
+      #
+      # ## タイトルは完全一致
+      #
+      # `--search` は部分一致で無関係な Issue を拾い得るので使わない。open の一覧を
+      # 取って jq で完全一致させる（open Issue は数件規模なので `--limit 200` で
+      # 足りる）。同名が複数 open なら全部閉じる（手で立てた重複も同じ残骸）。
+      #
+      # ## 既知の割り切り
+      #
+      # - 赤→緑→赤と揺れると、Issue が閉じて新しい番号で立ち直る。日次なので
+      #   多くて 1 日 1 本。閉じた Issue を reopen して 1 スレッドに保つ案は、
+      #   closed を遡って探す分だけシェルが大きくなるので採らない。
+      # - `gh` が落ちるとこのステップが失敗し、Issue の無い赤い実行が残る。
+      #   `continue-on-error` にしないのは、閉じられなかったことが黙るより赤で
+      #   見える方がよいから（Issue が 1 本残るだけで害は小さい）。
+      - name: SLO が緑に戻ったら SLO 違反 Issue を閉じる
+        if: >-
+          success()
+          && steps.probe.outcome == 'success'
+          && steps.judge.outcome == 'success'
+          && steps.drift.outcome == 'success'
+          && steps.license.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PROBE_OUTCOME: ${{ steps.probe.outcome }}
+          JUDGE_OUTCOME: ${{ steps.judge.outcome }}
+          DRIFT_OUTCOME: ${{ steps.drift.outcome }}
+          LICENSE_OUTCOME: ${{ steps.license.outcome }}
+        run: |
+          NUMBERS=$(gh issue list --state open --limit 200 --json number,title \
+            --jq '.[] | select(.title == env.SLO_ISSUE_TITLE) | .number')
+          if [ -z "$NUMBERS" ]; then
+            echo "open の SLO 違反 Issue は無い"
+            exit 0
+          fi
+          BODY=$(printf '観測・判定・列定義ドリフト検出・ライセンス地図の照合がすべて成功したので閉じます。\n\n- 観測 (freshness_probe): %s\n- 判定 (ops_check): %s\n- 列定義ドリフト (core_stocks_migrate --verify / E7): %s\n- ライセンス地図 (license_map): %s\n\n実行ログ: %s\n回復: %s' \
+            "$PROBE_OUTCOME" "$JUDGE_OUTCOME" "$DRIFT_OUTCOME" "$LICENSE_OUTCOME" "$RUN_URL" "$(date -u '+%Y-%m-%d %H:%M UTC')")
+          for N in $NUMBERS; do
+            gh issue close "$N" --reason completed --comment "$BODY"
+          done
