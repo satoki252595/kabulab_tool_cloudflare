@@ -7,10 +7,10 @@ name: notify-failure
 description: ジョブ失敗の通知 Issue を立てる（同名 open があればコメント）
 inputs:
   title:
-    description: Issue 表題（例: "[ジョブ失敗] stock-sync"）
+    description: "Issue 表題（例: [ジョブ失敗] stock-sync）"
     required: true
   summary:
-    description: 本文の 1 行目（例: "stock-sync が失敗しました"）
+    description: "本文の 1 行目（例: stock-sync が失敗しました）"
     required: true
 runs:
   using: composite
