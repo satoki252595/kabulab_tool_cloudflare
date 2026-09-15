@@ -86,3 +86,41 @@ services/otakara-yutai/data-scripts/data/
 # _cutover-data.sql (yuho/ir) / _cutover-cluster.sql (001-004) /
 # _cutover-swing-ohlcv.part*.sql (337k 行 OHLCV) など、生成物は全て除外。
 drizzle/d1/_cutover-*.sql
+
+# Python パイプライン (pipeline/)
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# 収集データ（原本は Notion ⑤ に保存。ローカルは作業領域）
+pipeline/data/raw/
+pipeline/data/export/
+
+# ------------------------------------------------------------------
+# 実レスポンスフィクスチャ（取得はするが commit しない）
+#
+# このリポジトリは PUBLIC。personal-only（JPX / 日証金 / yfinance）と
+# factual-cite（TDnet 開示）のフィクスチャを commit すると、各 README が
+# 自ら禁じている「公開・再配布」をリポジトリ自身が行うことになる。
+#
+# commercial-ok の EDINET と、データを含まない README / .source.txt /
+# エラーレスポンス断片だけを追跡する。
+# 取得は `cd pipeline && uv run --no-sync python scripts/capture_*.py`。
+# 未取得の環境では pipeline/tests/conftest.py の fixture_path() が skip する。
+pipeline/tests/fixtures/**/*.xls
+pipeline/tests/fixtures/**/*.xlsx
+pipeline/tests/fixtures/**/*.csv
+pipeline/tests/fixtures/**/*.pdf
+pipeline/tests/fixtures/tdnet/*.zip
+pipeline/tests/fixtures/tdnet/*.json
+pipeline/tests/fixtures/tdnet/*.html
+pipeline/tests/fixtures/convert/yanoshin_tdnet_recent.json
+pipeline/tests/fixtures/jpx/*.txt
+pipeline/tests/fixtures/jpx/*.json
+pipeline/tests/fixtures/transform/*.json
+# 下の例外が上書きされないよう、EDINET の追跡対象は明示的に除外解除する
+!pipeline/tests/fixtures/edinet/Edinetcode.zip
+!pipeline/tests/fixtures/edinet/documents_error_401.json

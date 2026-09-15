@@ -48,7 +48,15 @@
   "exclude": [
     "node_modules",
     "dist",
-    ".vercel"
+    ".vercel",
+    // services/jss-api/** は除外ではなく所有権の委譲。jss-api は独自 lock・
+    // 独自 tsconfig (types: workers-types) を持つ standalone の配信 Worker で、
+    // ルート設定 (DOM lib・types: node) では R2Bucket 等が解決できず 4 件の
+    // 誤検出が出る。配下の src/test は jss-api 自身の `pnpm typecheck`
+    // (CI の python-pipeline ジョブ) が見るので死角にはならない。新規ファイルも
+    // jss-api 側の include (src/**/*.ts・test/**/*.ts) に自動で入る。
+    // 詳細は docs/ci-typecheck-blind-spots.md の「委譲」節。
+    "services/jss-api/**/*"
     // ここは空。UNI レーンが 4 ファイルの型エラーを直し、EMH レーンが
     // verify-price-cache.ts (Neon 期のシグネチャで既に動かなかった) を削除したので、
     // 除外すべき既知の借金はもう無い。**新しい除外を足すときは規模と実行経路を
