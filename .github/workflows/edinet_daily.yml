@@ -2,7 +2,8 @@
 name: edinet_daily
 
 on:
-  # schedule は Wave 5（週末カットオーバー）で有効化する。元: cron: "0 12 * * 1-5"
+  schedule:
+    - cron: "0 12 * * 1-5"
   workflow_dispatch:
     inputs:
       date:

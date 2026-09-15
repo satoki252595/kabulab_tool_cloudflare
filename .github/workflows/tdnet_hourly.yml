@@ -2,7 +2,8 @@
 name: tdnet_hourly
 
 on:
-  # schedule は Wave 5（週末カットオーバー）で有効化する。元: cron: "0 0-10 * * 1-5"
+  schedule:
+    - cron: "0 0-10 * * 1-5"
   workflow_dispatch:
     inputs:
       date:

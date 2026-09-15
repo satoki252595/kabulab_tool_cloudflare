@@ -433,9 +433,7 @@ class TestWorkflowCrons:
             line for line in text.splitlines() if not line.strip().startswith("#")
         )
         m = re.search(r'cron:\s*"([^"]+)"', live)
-        # TODO(Wave-5): cron 有効化後はこの skip を消して assert に戻す。
-        if not m:
-            pytest.skip(f"{name}.yml の cron は Wave 5 で有効化予定")
+        assert m, f"{name}.yml に live の cron が無い"
         assert m.group(1) == self.EXPECTED[name]
         assert "workflow_dispatch" in text  # 手動実行可
         assert f"jp_stock_pipeline.jobs.{name}" in text
