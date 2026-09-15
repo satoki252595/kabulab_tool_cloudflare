@@ -15,8 +15,8 @@
 
 - 有報の **受注に関する開示は非構造化** (会社ごとに表の作りが違う)。これを
   ローカルで実データ精査 → 決定論的パーサで構造化 → DB 化して横断検索。
-- 取得範囲はユーザ要件により **「受注 + 書類メタのみ」**。全 XBRL ファクトは
-  D1 容量逼迫リスクのため取り込まない。
+- 取得範囲はユーザ要件により **「受注 + 海外売上 + 書類メタのみ」**。
+  全 XBRL ファクトは D1 容量逼迫リスクのため取り込まない。
 - EDINET で取得できる過去分 (本サービスは最大 5 年表示)。
 
 ## EDINET API v2 (使用エンドポイント)
@@ -33,9 +33,10 @@
   (先頭4桁) で銘柄突合する。
 - `filerName` / `submitDateTime` は取下げ等で `null` になり得る (実 API 確認済)。
 
-## 受注開示の実地調査 (data-scripts/investigate*.ts, tmp/)
+## 受注開示の実地調査 (削除済みの一時スクリプト data-scripts/investigate*.ts と tmp/)
 
-`pnpm yuho:investigate` で受注生産型 28 社の最新有報を取得し精査した結果:
+一時スクリプトで受注生産型 28 社の最新有報を取得し精査した結果（スクリプトは
+K1a で削除。git 履歴に残る）:
 
 - **EDINET CSV(type=5)** はテキストブロックを平坦テキスト化し表セル境界を
   失う → 受注表の確実な構造化には **iXBRL(type=1) の `<table>`** が必要。
@@ -98,9 +99,14 @@ yuho_order_facts      (有報, 会計期末, セグメント) 粒度
   orders_received_yen / order_backlog_yen (円換算, 欠損NULL)
   pattern (pattern_a|pattern_b)
   UNIQUE(document_id, fiscal_year_end, segment_name)  -- 冪等 upsert
+yuho_overseas_facts     (有報, 会計期末, 地域) 粒度
+  document_id → yuho_documents(id) / stock_id → core_stocks(id)
+  fiscal_year_end / region_name / overseas_sales_yen / overseas_ratio
+p_yuho_growth           L2 投影 (K4b)。EDINET catchup の末尾で再生成
+  stock_id / 受注 CAGR・YoY / 海外比率 (screening の読取専用)
 ```
 
-`core_*` は 001 所有のため読み取り専用参照 (再宣言せず共有
+`core_*` は日次 sync が更新するため読み取り専用参照 (再宣言せず共有
 `src/shared/db/core-schema.ts` を import)。スキーマ生成は
 `pnpm db:generate:d1` → `drizzle/d1/*.sql` を
 `wrangler d1 execute kabulab-cf --remote --file=...` で適用。order_facts の
@@ -113,25 +119,33 @@ yuho_order_facts      (有報, 会計期末, セグメント) 粒度
    XBRL(type=1) を取得し `parseOrderData` で構造化 → `documents` /
    `order_facts` を冪等 upsert。訂正報告書 (130) は提出日時が新しい方を
    UI 採用。
-2. **初回 5 年バックフィル**: 旧 `pnpm yuho:backfill` CLI は ADR-0001 の
-   D1 移行に伴い無効化 (fail-fast)。D1 はバインディング経由でのみ触れるため、
-   バルク取込は Worker 側へ再実装予定 (別タスク)。
+2. **初回 5 年バックフィル**: 旧 `pnpm yuho:backfill` CLI は D1 移行に伴い
+   無効化 (fail-fast。`assertYuhoBackfillSupported()`。理由は同関数の
+   docstring と `d1-http-batch-boundary.test.ts` を参照:
+   `db.batch()` が sqlite-proxy で動かないため)。
+   D1 はバインディング経由でのみ触れるため、バルク取込は Worker 側へ
+   再実装予定 (別タスク)。
 3. **日次キャッチアップ**: Worker の認証ルート
    `POST /yuho-quant/admin/catchup` (CRON_SECRET) が
    `runYuhoEdinetCatchup(createDb(c.env.DB))` を呼ぶ (`src/cron/yuho-edinet.ts`)。
-   GitHub Actions の `catchup.yml` が平日夜に薄いトリガ
+   GitHub Actions の `catchup.yml` が平日 11:00 UTC に薄いトリガ
    (`scripts/sync/yuho-edinet.ts` が `WORKER_BASE_URL` を叩く) で起動する。
    直近 60 日を走査し 1 回 40 件 / TIME_BUDGET 90 秒で打ち切り、超過分は
-   次回が docId 冪等で回収。`part`/`of` で shard 並走可。失敗しても本体を
-   壊さずレスポンスに記録 (運用者が気づける)。Workers Cron Trigger 配線は
-   Phase 3。
+   次回が docId 冪等で回収。`part`/`of` で shard 並走可 (非シャード実行の
+   末尾で L2 投影 `p_yuho_growth` を再生成)。失敗しても本体を
+   壊さずレスポンスに記録 (運用者が気づける)。Workers Cron は使わない
+   (無料運用方針)。
 
 ## UI
 
 - `/` 検索フォーム (コード/会社名)。ヒット 0 件は「該当なし」を正直表示。
-- `/stock/:id` 受注高/受注残高の 5 年 SVG グラフ + 年次×セグメント表 +
+- `/screening` 受注の成長性スクリーニング (L2 投影 `p_yuho_growth` 読み) +
+  `/api/screening` JSON。
+- `/screening-overseas` 海外売上高比率スクリーニング (地域別エクスポージャ) +
+  `/api/screening-overseas` JSON。
+- `/stock/:code` 受注高/受注残高の 5 年 SVG グラフ + 年次×セグメント表 +
   出典 (EDINET docID/提出日/構造化結果)。構造化不能は「未対応」を明示。
-- `/api/trend/:id` JSON。
+- `/api/trend/:code` JSON。
 - デザインは共通 Editorial Swiss Grid (`src/shared/design.ts` から token)。
 
 ## 注意・免責

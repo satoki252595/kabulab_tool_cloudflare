@@ -6,7 +6,8 @@
 可視化する定量情報検索サービス。**同じ有報 1 通**から受注と海外売上を並行して
 構造化する（XBRL を 1 回だけ取得）。
 
-ポータル: `https://kabulab-cf.satoki252595.workers.dev/` / 本サービス: `/yuho-quant/`
+仕様の正本は [docs/005-yuho-quant.md](../../docs/005-yuho-quant.md)。
+本ファイルは実装時の規約のみを持つ。
 
 ## このサービス固有の絶対ルール (mono-repo CLAUDE.md に追加)
 
@@ -53,74 +54,38 @@ UI で「未対応」と出す（ルール1/2）。**海外売上高 = 開示さ
 テストで固定してから**。旧基準「海外売上高」注記は現行有報からほぼ消滅（調査280件で
 0件）のため対象外。`pnpm audit:overseas` で全銘柄の取りこぼし署名を集計できる。
 
-> ✅ **ADR-0001 で本サービスは Cloudflare D1 へ移行済み・本番稼働中**（`docs/adr/0001-neon-to-d1-r2-notion.md`）。
-> DB は **D1(`c.env.DB` バインディング)**、取込は **Worker の認証ルート + GitHub Actions トリガ**。
+> 本サービスは Cloudflare D1 で本番稼働中。DB は **D1(`c.env.DB` バインディング)**、
+> 取込は **Worker の認証ルート + GitHub Actions トリガ**。
 > 旧 `pnpm yuho:backfill` CLI は D1 移行で無効化（fail-fast）し、Worker バルク取込へ再実装予定。
-
-## 技術スタック
-
-- Runtime: Hono v4 + Cloudflare Workers
-- DB: **Cloudflare D1 (SQLite) + Drizzle ORM**（`drizzle-orm/d1`。共有 core は `src/shared/db/core-schema.ts`）
-- Validation: Zod v4
-- ZIP 展開: 依存ゼロの自前リーダ (`src/services/edinet/zip.ts`)
-- Language: TypeScript (strict)
-
-## DB スキーマ（D1 / 単一 SQLite, 接頭辞テーブル）
-
-| テーブル | 所有 | 用途 |
-|---|---|---|
-| `core_stocks` 他 | 共有(001 系) | 銘柄マスタ・財務 (読み取り専用で参照) |
-| `yuho_documents` | 005 のみ | 有報メタ 1 通 = 1 行。`parse_status`(受注) + `overseas_parse_status`(海外) を併記 |
-| `yuho_order_facts` | 005 のみ | 受注ファクト (segment 別 + 全社合計) |
-| `yuho_overseas_facts` | 005 のみ | 海外売上ファクト (地域別)。同じ `yuho_documents` を親に持つ |
-
-スキーマ生成は `drizzle.d1.config.ts`（`pnpm db:generate:d1`）→ `drizzle/d1/*.sql` を
-`wrangler d1 execute kabulab-cf --remote --file=...` で適用。受注・海外とも facts の
-バルク insert は D1 の bind 上限(100)に合わせ 8 行/文 + `db.batch()` で投入する（`ingest.ts`）。
-統合前に受注のみ取り込んだ既存有報の海外埋め戻しは `pnpm backfill:overseas`（D1 HTTP）。
-
-## データ取得
-
-- **初回 5 年バックフィル**: 旧 `pnpm yuho:backfill` は D1 移行で無効化（fail-fast）。
-  Worker バルク取込として再実装予定（別タスク・要 EDINET/Notion 鍵）。
-- **日次キャッチアップ**: Worker の認証ルート `POST /yuho-quant/admin/catchup`（CRON_SECRET）で
-  `runYuhoEdinetCatchup(createDb(c.env.DB))` を実行（`src/cron/yuho-edinet.ts`）。GitHub Actions の
-  `catchup.yml`（平日夜）が薄いトリガ（`scripts/sync/yuho-edinet.ts` が `WORKER_BASE_URL` を叩く）から起動する。
-  手動 curl / `pnpm ingest:yuho-edinet` でも叩ける。Workers Cron Trigger 配線は
-  Phase 3。直近 WINDOW_DAYS(=60) 日を走査し未取込の有報を **1 回 MAX_INGEST(=40) 件 / TIME_BUDGET_MS(=90 秒)**
-  で取り込み、超過分は次回が docId 冪等で回収 (6 月の集中も日次×日数で吸収)。`part`/`of` で
-  shard 並走可。既存の他バッチとは独立し、失敗しても本体を壊さない
-  (が結果はレスポンスに載せて運用者が気づける)。
-- **調査スクリプト**: `pnpm yuho:investigate` (一回限り、`tmp/` 出力)。
-
-### 一次データ Notion アーカイブ (mono-repo ルール6)
-
-`ingestDocument` は `archiveToNotion: true` のとき、有報の **物理 ZIP を 2 本
-(type=5 CSV / type=1 XBRL) そのまま Notion へ実体アップロード** し、EDINET
-一覧のメタを `一次データ｜yuho-quant` DB (「バックアップ」配下) へ docId
-キーで冪等記録する (`src/shared/notion-archive`)。backfill / 日次
-キャッチアップとも `archiveToNotion: true`。Notion 記録は DB 取込とは独立に
-冪等で、**DB 取込済でも Notion 未記録なら ZIP を取得して記録する** (再開
-可能)。受注語なしでも有報自体は全件アップロード対象 (ユーザ要件「全有報」)。
-type=1 未提供は捏造せず `xbrlUnavailable=true` を残し CSV のみ記録する。
 
 ## ディレクトリ
 
 ```
 services/yuho-quant/
 ├── app.ts / base-path.ts
-├── src/
-│   ├── index.ts                  # Hono サブアプリ本体
-│   ├── env.ts                    # 型付き env アクセサ (ルール3)
-│   ├── db/{client,schema}.ts     # yuho_* 接頭辞テーブル + Drizzle(d1)
-│   ├── routes/pages.ts           # SSR + JSON API
-│   ├── services/
-│   │   ├── edinet/{client,types,zip,csv,html-table,order-parser}.ts
-│   │   ├── ingest.ts             # 1 通取り込み (backfill/cron 共用)
-│   │   └── order-query.ts        # UI クエリ (5年推移)
-│   ├── views/{layout,home,stock-detail}.ts
-│   └── tests/{order-parser.test.ts, fixtures/*}
-└── data-scripts/{investigate,investigate2,backfill}.ts
+└── src/
+    ├── index.ts                  # Hono サブアプリ本体
+    ├── env.ts                    # 型付き env アクセサ (ルール3)
+    ├── db/{client,schema}.ts     # yuho_* 接頭辞テーブル + Drizzle(d1)
+    ├── routes/{pages,admin}.ts   # SSR + JSON API / 認証取込ルート
+    ├── services/
+    │   ├── edinet/{client,types,zip,csv,html-table,order-parser}.ts
+    │   ├── ingest.ts             # 1 通取り込み (catchup 共用)
+    │   ├── order-query.ts / overseas-query.ts  # UI クエリ (L2 投影読み)
+    │   ├── overseas-parser.ts    # 海外売上の構造化
+    │   └── projection.ts         # L2 投影 p_yuho_growth の再生成
+    ├── views/                    # layout/home/stock-detail/screening/overseas-*
+    └── tests/                    # parser/order/projection/universe テスト + fixtures
+└── data-scripts/{backfill,backfill-overseas,audit-overseas}.ts
 ```
 
-詳細は [docs/005-yuho-quant.md](../../docs/005-yuho-quant.md) を参照。
+## コマンド
+
+すべて **リポジトリルート** から実行する (一覧は root README 参照):
+
+```bash
+pnpm ingest:yuho-edinet     # Worker /yuho-quant/admin/catchup を叩く (要 WORKER_BASE_URL + CRON_SECRET)
+pnpm backfill:overseas      # 既存有報の海外埋め戻し (D1 HTTP)
+pnpm audit:overseas         # 全銘柄の取りこぼし署名を集計
+pnpm test / pnpm typecheck / pnpm lint
+```

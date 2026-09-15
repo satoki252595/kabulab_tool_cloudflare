@@ -5,7 +5,7 @@
  * ここでは zod へのアダプタのみを提供する。各サービスは個別に
  * `z.string().regex(/^\d{4}$/)` を書かず、本スキーマを import して使う。
  */
-import { z } from "zod";
+import { z } from "../zod-mini.js";
 import {
   STOCK_CODE_REGEX,
   STOCK_CODE_ERROR,
@@ -19,10 +19,13 @@ import {
  * 出力は正準形 (大文字・半角) の string。検証失敗時は
  * {@link STOCK_CODE_ERROR} を message に持つ ZodError を投げる。
  */
-export const stockCodeSchema = z
-  .string()
-  .transform(normalizeStockCode)
-  .pipe(z.string().regex(STOCK_CODE_REGEX, STOCK_CODE_ERROR));
+export const stockCodeSchema = z.pipe(
+  z.pipe(
+    z.string(),
+    z.transform<string, string>((v) => normalizeStockCode(v))
+  ),
+  z.string().check(z.regex(STOCK_CODE_REGEX, STOCK_CODE_ERROR))
+);
 
 /**
  * 任意の証券コード (プリフィル用クエリ `?code=...` 等)。
@@ -32,7 +35,9 @@ export const stockCodeSchema = z
  * `""` が誤変換される事故を避ける)。非空の値は {@link stockCodeSchema} で
  * 正規化+検証し、不正なら throw する (黙って捨てない)。
  */
-export const optionalStockCodeSchema = z.preprocess(
-  (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
-  stockCodeSchema.optional()
+export const optionalStockCodeSchema = z.pipe(
+  z.transform<unknown, unknown>((v) =>
+    typeof v === "string" && v.trim() === "" ? undefined : v
+  ),
+  z.optional(stockCodeSchema)
 );

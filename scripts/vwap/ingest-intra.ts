@@ -4,7 +4,7 @@ import "dotenv/config";
 // 取得範囲は INTRA_RANGE / --range で指定 (既定 5d=日次トップアップ)。Yahoo は 5分足を
 // 最大 60d まで提供するので、初回は INTRA_RANGE=60d でバックフィルし、以後 5d で延伸。
 // 実行: npx tsx scripts/ingest-intra.ts [--codes=...] [--limit=N] [--range=60d]   KEEP_DAYS=365
-import { fetchBars5m } from "../../services/vwap-analysis/lib/yahoo.js";
+import { fetchBars5m } from "../../src/shared/yahoo/client.js";
 import { r2Get, r2Put, mapLimit, sleep, retry } from "./lib/r2.js";
 import { loadCodes, arg } from "./lib/codes.js";
 

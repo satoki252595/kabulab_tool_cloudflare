@@ -1,6 +1,6 @@
 import { and, asc, count, desc, eq, gte, lt, lte, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { stocks, stockFinancials } from "../db/core-schema.js";
+import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
 import { stockRsiPercentile } from "../db/schema.js";
 import {
   publicMarketColumn,
@@ -112,6 +112,12 @@ export async function screenStocks(
     // 母集団 = active かつ equity (src/shared/db/active-equity.ts)。行の取得と
     // staleExcluded が同じ配列を使うので、両方が同じ集合を見る。
     activeEquityCondition(),
+    // **`stocks` は CROSS JOIN + WHERE の等値で結ぶ (INNER JOIN にしない)。**
+    // INNER JOIN だと SQLite は `core_stocks` の `idx_core_stocks_active_market`
+    // を外側ループに選び直し、パーセンタイルの索引を使わなくなる (L-48)。
+    // SQLite の CROSS JOIN は左表を必ず外側に置くので、`rsi_percentile` の
+    // 索引が外側になる。返る行は INNER JOIN と同じ。
+    eq(stocks.id, stockRsiPercentile.stockId),
     sql`${targetColumn} IS NOT NULL`,
     lte(targetColumn, query.percentileMax),
   ];
@@ -157,13 +163,13 @@ export async function screenStocks(
       rsi120Percentile: stockRsiPercentile.rsi120Percentile,
       rsiMinPercentile: stockRsiPercentile.rsiMinPercentile,
       isBlueChip: stockRsiPercentile.isBlueChip,
-      operatingMarginTtm: stockRsiPercentile.operatingMarginTtm,
+      operatingMarginTtm: stockFinancials.operatingMargin,
       revenueTrend: stockRsiPercentile.revenueTrend,
       percentileSampleBars: stockRsiPercentile.percentileSampleBars,
       computedAt: stockRsiPercentile.computedAt,
     })
     .from(stockRsiPercentile)
-    .innerJoin(stocks, eq(stocks.id, stockRsiPercentile.stockId))
+    .crossJoin(stocks)
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
     .where(and(...conditions))
     .orderBy(orderBy)
@@ -175,7 +181,7 @@ export async function screenStocks(
   const [{ staleExcluded }] = await db
     .select({ staleExcluded: count() })
     .from(stockRsiPercentile)
-    .innerJoin(stocks, eq(stocks.id, stockRsiPercentile.stockId))
+    .crossJoin(stocks)
     .where(
       and(...baseConditions, lt(stockRsiPercentile.computedAt, freshnessCutoff))
     );

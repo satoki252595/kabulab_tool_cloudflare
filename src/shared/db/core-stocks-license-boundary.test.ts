@@ -21,11 +21,9 @@
  * コードリストの「提出者業種」を `license_tag=commercial-ok` として取得している。
  * 公開面の業種表示はこの列へ切り替えた (= 出してよい列になった)。
  *
- * ⚠️ **未了**: stockStock 側の宣言 (`jss_column_license` /
- * `worker/src/shared/license.ts` の `RESTRICTED_COLUMNS`) は今も `sector33` を
- * personal-only としている。値の出所 (EDINET) とは食い違っており、**宣言側を
- * 直すのは stockStock 側のレーン**。ここを commercial-ok として扱う根拠は
- * 書き込み元であって、まだ宣言ではない。
+ * 2026-09-14 に stockStock 側の宣言も `sector33` を commercial-ok に直した
+ * (列単位ライセンス地図 `tests/fixtures/contracts/d1-license-map.json`)。
+ * 宣言とこのガードの対応は `public-columns.test.ts` が固定する。
  *
  * ## `instrument_type` を**述語として**使うことは暫定で認める (2026-09-13、ユーザー承認待ち)
  *
@@ -108,27 +106,7 @@ import {
   collectSources,
   stripComments,
 } from "./tests/source-scan.js";
-
-/**
- * personal-only 列。左が drizzle のプロパティ名、右が列名 (どちらの綴りで
- * 書かれても拾う)。**`sector33` は入れない** —— 理由は冒頭コメント。
- *
- * `market` と `sector` を入れてよくなったのは、公開面の表示を
- * src/shared/db/public-columns.ts 経由に寄せたから。ここから消す前に、
- * 公開面がその列を直接読み始めていないか必ず確かめること。
- */
-const PERSONAL_ONLY_COLUMNS = [
-  "market",
-  "sector",
-  "sector17",
-  "instrumentType",
-  "instrument_type",
-  "licenseTag",
-  "license_tag",
-  "srcSource",
-  "src_source",
-  "quality",
-] as const;
+import { PERSONAL_ONLY_COLUMNS } from "./public-columns.js";
 
 /**
  * 公開面 = 本番の Worker がレスポンスを組み立てるために `core_stocks` を読む
@@ -149,10 +127,9 @@ const PUBLIC_SURFACE = [
   "services/ir-catalog/src/services/query.ts",
   "services/yuho-quant/src/services/order-query.ts",
   "services/yuho-quant/src/services/overseas-query.ts",
-  // 以下 3 件は Worker の中で `core_stocks` を引くが、レスポンスを直接
+  // 以下 2 件は Worker の中で `core_stocks` を引くが、レスポンスを直接
   // 組み立てるのではなく取込 / キャッシュ充填の層。除外する理由を書き分けるより
   // 検査を受けさせた方が安い (現状どれも識別子を参照していない)。
-  "services/otakara-yutai/src/services/yutai-scraper.ts",
   "services/financial-math/src/services/price-cache.ts",
   "services/ir-catalog/src/services/ingest.ts",
 ];

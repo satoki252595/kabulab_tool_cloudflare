@@ -13,7 +13,7 @@
 #   NOTION_TOKEN / NOTION_BACKUP_PAGE_ID / NOTION_TRASH_PAGE_ID … 月次 universe の
 #     JPX XLS 一次データ Notion アーカイブ(ルール6)用
 #
-# 💡 GH Actions 無料枠(private 2,000 min/月)を意識: 日次 ~3,700 銘柄は ~40-50 分/回。
+# 日次 ~3,700 銘柄は ~40-50 分/回 (public repo のため Actions 分課金は無し)。
 #    平日毎日 + VWAP と合わせると枠に近づくため、必要なら cron を Mon/Wed/Fri 等へ間引く。
 name: stock-sync
 
@@ -69,6 +69,7 @@ jobs:
 
       # 日次 sync (平日 cron または dispatch=daily/all)
       - name: stock daily sync
+        id: daily
         if: >-
           (github.event_name == 'schedule' && github.event.schedule == '0 21 * * 1-5') ||
           (github.event_name == 'workflow_dispatch' &&
@@ -84,23 +85,17 @@ jobs:
         run: |
           pnpm sync:universe
           pnpm sync:monthly:core
-      # 定期ジョブの失敗に気づく唯一の経路。これまで 14 workflow に
-      # `if: failure()` も webhook も 0 行で、JPX の 404 で母集団同期が
-      # 1 ヶ月止まっていたことに誰も気づかなかった。
-      # 通知先を増やすと見なくなるので、GitHub Issue を 1 本だけ立てる
-      # （既に open があれば重複を作らずコメントを足す）。
       - name: 失敗したら Issue を立てる
         if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WF: ${{ github.workflow }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          TITLE="[ジョブ失敗] $WF"
-          EXISTING=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
-          BODY="$WF が失敗しました。%0A%0A実行: $RUN_URL%0A検知: $(date -u '+%Y-%m-%d %H:%M UTC')"
-          if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body "$(printf '%b' "${BODY//%0A/\\n}")"
-          else
-            gh issue create --title "$TITLE" --label "" --body "$(printf '%b' "${BODY//%0A/\\n}")"
-          fi
+        uses: ./.github/actions/notify-failure
+        with:
+          title: "[ジョブ失敗] ${{ github.workflow }}"
+          summary: "${{ github.workflow }} が失敗しました。"
+      # 失敗率 ≤1% の成功扱い (L-57) の trace。成功は成功だが、失敗が 0 ではない
+      # run を Issue へ記録する (恒久失敗の混入・回収漏れの早期発見用)。
+      - name: 許容内失敗があれば Issue にコメント
+        if: success() && steps.daily.outputs.tolerated_failures != ''
+        uses: ./.github/actions/notify-failure
+        with:
+          title: "[ジョブ失敗] ${{ github.workflow }}"
+          summary: "${{ github.workflow }} は成功扱い (失敗率 1% 以下) ですが、許容内失敗が ${{ steps.daily.outputs.tolerated_failures }} 件ありました。"

@@ -15,9 +15,8 @@
  * 3 銘柄とも受注・海外売上のデータを同じ形で持たせ、`instrument_type` 以外の
  * 条件では区別できないようにしてある。
  *
- * D1 シムは services/swing-trading/src/tests/sector-ranking-key-switch.test.ts と
- * 同じ方式。yuho の表 (yuho_documents / yuho_order_facts / yuho_overseas_facts) は
- * drizzle/d1 のマイグレーションに含まれているので、そのまま流す。
+ * D1 シムは src/cron/daily-sector-aggregate.test.ts と同じ方式
+ * (node:sqlite に drizzle/d1 のマイグレーションをそのまま流す)。
  */
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
@@ -34,6 +33,7 @@ import {
   listSectorsWithOverseas,
   screenOverseasGrowth,
 } from "../services/overseas-query.js";
+import { rebuildYuhoGrowthProjection } from "../services/projection.js";
 
 const ROOT = fileURLToPath(new URL("../../../..", import.meta.url));
 
@@ -93,7 +93,7 @@ const FISCAL_YEAR_ENDS = ["2023-03-31", "2024-03-31", "2025-03-31"];
 let sqlite: DatabaseSync;
 let db: Database;
 
-beforeEach(() => {
+beforeEach(async () => {
   sqlite = new DatabaseSync(":memory:");
   applyD1Migrations(sqlite);
 
@@ -126,6 +126,8 @@ beforeEach(() => {
   }
 
   db = createDb(createD1(sqlite) as D1Database);
+  // 画面は L2 投影を読む (L-51/K4b)。ファクトを seed したら再生成する。
+  await rebuildYuhoGrowthProjection(db);
 });
 
 afterEach(() => {

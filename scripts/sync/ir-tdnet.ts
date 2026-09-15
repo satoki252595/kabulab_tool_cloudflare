@@ -1,4 +1,4 @@
-// TDnet 適時開示キャッチアップ CLI（ADR-0001: Node 実行 + D1 HTTP API 書込）。
+// TDnet 適時開示キャッチアップ CLI（Node 実行 + D1 HTTP API 書込）。
 //
 // ir-catalog の取込は PDF センチメントが kuromoji(Node 専用)依存で Worker 化不可。
 // そこで Node で実行し、D1 へは D1 HTTP API(drizzle sqlite-proxy)で書く。読取は

@@ -28,11 +28,12 @@
 
 | 用途 | エンドポイント |
 |---|---|
-| 開示一覧 | `GET https://webapi.yanoshin.jp/webapi/tdnet/list/{range}.json?limit=N&page=P` |
+| 開示一覧 | `GET https://webapi.yanoshin.jp/webapi/tdnet/list/{range}.json?limit=N` |
 
 - `{range}` = `YYYYMMDD` / `YYYYMMDD-YYYYMMDD` / `recent`。
+  `?page=N` は**無視される** (変えても常に最新 limit 件)。取込は日単位
+  (`{YYYYMMDD}.json?limit=DAY_LIMIT`) で 1 日ずつ全件取得する。
 - `total_count` は当該レスポンス件数なので **件数判定に使わない**。
-  返却件数 < `limit` のページで打ち切る。
 - `company_code` は 5 桁 (例 `72030` → ティッカー `7203`)。先頭 4 桁を
   取り、取込の母集団 (`src/shared/db/active-equity.ts` の `loadIngestCodeToId`) の
   `core_stocks.code` と突合。居なければ **ユニバース外**として正直に除外
@@ -73,11 +74,11 @@ M&A・資本提携 / 月次・速報 / 重要事象(調査等) / 上場・市場
 
 ## DB スキーマ (`ir_disclosures`)
 
-単一 D1 `kabulab-cf` に全サービスが接頭辞テーブルで同居 (ADR-0001)。
+単一 D1 `kabulab-cf` に全サービスが接頭辞テーブルで同居。
 
 ```
 ir_disclosures   1 適時開示 = 1 行 (tdnet_id 一意 = 冪等キー)
-  stock_id → core_stocks(id)            -- core は 001 所有・読み取り専用
+  stock_id → core_stocks(id)            -- core は日次 sync が更新。本サービスは読み取り専用
   tdnet_id / company_code / company_name / title
   pubdate / document_url / xbrl_url(nullable) / markets_string
   tags (JSON 文字列・0件可=未分類) / primary_tag(nullable=未分類)
@@ -102,7 +103,8 @@ ir_disclosures   1 適時開示 = 1 行 (tdnet_id 一意 = 冪等キー)
 
 1. **全履歴バックフィル (手動)**: `pnpm ir:backfill`
    (`-- --from=YYYY-MM` / `--to=YYYY-MM` / `--ticker=7203` /
-   `--no-archive` / `--no-notion-signal` / `--refetch-archived`)。
+   `--no-archive` / `--no-notion-by-stock` / `--refetch-archived` /
+   `--rejudge-pdf-sentiment` / `--notion-deadline-hours=N`)。
    月単位で新しい順に遡り、空月が 12 連続したらデータ開始点に到達と
    判断して停止 (推測でなく事実で止める)。tdnet_id / Notion key 冪等で
    **再開可能**。確定済み過去月は API を叩かずスキップ。
@@ -193,6 +195,7 @@ TDnet ID 冪等で翌日以降が回収する (常態的に打ち切るなら過
   PDF センチメントで左ボーダー色付け、矛盾時は「本文確認推奨」を明示。
   「PDF推定」は確定でない旨と「AI API 不使用 (利用料 0)」をバルーンで明記。
 - `/signals` 全銘柄横断の高シグナル一覧。
+- `/file/:tdnetId` 開示 PDF の Worker プロキシ (原本が purge 前の直近分のみ到達)。
 - `/api/stock/:code` JSON。
 - デザインは共通 Editorial Swiss Grid (`src/shared/design.ts`)。
 

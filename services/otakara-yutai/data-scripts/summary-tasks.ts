@@ -15,7 +15,7 @@
  * 再取得時に解釈を `(銘柄, 掲載文)` の内容キーで戻すので、文言が変わった行は
  * `short_summary` が NULL のまま入り、`missing` で拾えるから。
  */
-import { z } from "zod";
+import { z } from "../../../src/shared/zod-mini.js";
 import { benefitKey } from "./benefit-key.js";
 import {
   SUMMARY_CONTRACT_VERSION,
@@ -39,21 +39,19 @@ const VIOLATION_RULES = ["annotation", "too_long", "prose", "empty"] as const sa
 export const TASK_ID_PATTERN = /^[0-9a-f]{16}$/;
 
 /** タスクファイル 1 行。外部エージェントへの入力。 */
-export const SummaryTask = z
-  .object({
+export const SummaryTask = z.strictObject({
     /** `benefitKey(stockCode, description)`。結果の突き合わせキー。 */
-    taskId: z.string().regex(TASK_ID_PATTERN),
-    contractVersion: z.string().min(1),
+    taskId: z.string().check(z.regex(TASK_ID_PATTERN)),
+    contractVersion: z.string().check(z.minLength(1)),
     /** missing = 要約が無い / contract_violation = 今の要約が契約違反。 */
     reason: z.enum(["missing", "contract_violation"]),
     violations: z.array(z.enum(VIOLATION_RULES)),
-    stockCode: z.string().min(1),
+    stockCode: z.string().check(z.minLength(1)),
     stockName: z.string(),
     description: z.string(),
     /** この文言を持つ D1 の行数 (権利月違い等)。作業量の目安。 */
-    rowCount: z.number().int().positive(),
-  })
-  .strict();
+    rowCount: z.number().check(z.int(), z.positive()),
+});
 export type SummaryTask = z.infer<typeof SummaryTask>;
 
 export type SelectOptions = {

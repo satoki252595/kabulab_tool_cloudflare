@@ -1,5 +1,5 @@
 /**
- * 日次 sync オーケストレータ（Node / GitHub Actions 実行・ADR-0001）
+ * 日次 sync オーケストレータ (Node / GitHub Actions 実行)。
  *
  * 3 サービス (001 RSI / 002 otakara / 003 swing) が必要とする日次データを 1 本の
  * 統一フローで取得・計算・書き込む。
@@ -12,14 +12,17 @@
  *   - 起動: `pnpm sync:daily:core`（scripts/sync/daily.ts）/ GitHub Actions。
  *
  * フロー（母集団同期 Phase 0 は除外）:
- *   Phase 1. ブートストラップ: core_stocks の active かつ equity の銘柄を取得 + 既存 OHLCV の
- *            MAX(date) を読む（増分判定用）
+ *   Phase 1. ブートストラップ: core_stocks の active かつ equity の銘柄を取得 +
+ *            swing_stock_indicators.latest_date を LEFT JOIN (増分判定用)
  *   Phase 2. マクロコンテキスト (^N225 / ^VIX / ^GSPC / NIY=F + 日経VI)
  *   Phase 3. worker pool で各銘柄: Chart(5y)+QuoteSummary 取得 → 全指標を計算 →
- *            core_financials / rsi_percentile / swing_* を **増分** upsert
- *   Phase 4. swing_daily_ohlcv の保持期間 prune（全銘柄を一括。書き込み経路から
- *            独立させてあるので、同期が止まった銘柄でも保持本数が効く）
+ *            core_financials / rsi_percentile / swing_* を **増分** upsert +
+ *            p_momentum へ 1 文 upsert（L-47。Phase 6 の読み直しはしない）
+ *   Phase 4. swing_daily_ohlcv の保持期間 prune（月曜 UTC の run のみ。
+ *            全銘柄を一括。書き込み経路から独立させてあるので、同期が止まった
+ *            銘柄でも保持本数が効く）
  *   Phase 5. セクター集計（当日更新済 indicators から集計・90% カバレッジ guard）
+ *   Phase 6. p_momentum の仕上げ: source_max_date の backfill + 掃除 DELETE
  *
  * 母集団 (core_stocks) の JPX 同期は xlsx パーサが Node 専用のため
  * `pnpm sync:universe`（src/cron/universe.ts）で別途同期する。
@@ -35,13 +38,13 @@
  *   - マクロ 4 指数のどれかが取れない場合も null で通す
  */
 
-import { sql, asc, eq, and, gt, gte, isNotNull, lte } from "drizzle-orm";
+import { sql, eq, and, or, gte, lte, lt } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 
-// core スキーマは rsi-screening の定義を流用 (001 が所有・更新)
-import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
+// core スキーマ (共有。日次 sync が更新)
+import * as coreSchema from "../shared/db/core-schema.js";
 // rsi スキーマ
 import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
 // swing スキーマ
@@ -186,8 +189,27 @@ const CONCURRENCY = 5;
 const DELAY_MS = 150;
 /** 5 worker の既存待機量を均した、銘柄開始の最小間隔。 */
 const STOCK_START_INTERVAL_MS = DELAY_MS / CONCURRENCY;
-/** 90 分の Actions 上限内で最終集約まで完了させる回復件数上限。 */
-const MAX_RECOVERY_TARGETS = 100;
+/**
+ * 一過性失敗の回収に使える時間予算 (ms)。run 開始からの経過で見る。
+ *
+ * 90 分の Actions 上限 (stock-sync.yml の timeout-minutes) から、後段
+ * (Phase 4〜6 + 余裕) の 30 分を引いた 60 分。件数上限 (旧 100 件) だと
+ * 失敗の規模で回収が頭打ちになり、52% の run が失敗扱いになっていた (L-57)。
+ * timeout-minutes を変えたらここも変えること。
+ */
+const RECOVERY_TIME_BUDGET_MS = 3_600_000;
+/** 失敗率がこの以下なら run 成功扱いにする (L-57。Issue にはコメントする)。 */
+const TOLERATED_FAILURE_RATE = 0.01;
+
+/**
+ * 月曜 (UTC) だけ真。週1ジョブ (prune・年次) の同 run 内分岐用。
+ *
+ * cron は平日 21:00 UTC なので UTC 曜日で見る。JST で見ると run は
+ * 火〜土曜 06:00 になり「月曜」の run が存在しない。UTC 月曜 = 週の最初の run。
+ */
+export function isMondayUtc(now: Date = new Date()): boolean {
+  return now.getUTCDay() === 1;
+}
 /** upstream 指示や診断文字列が異常でも回復待機を30秒で止める。 */
 const MAX_RECOVERY_BACKOFF_MS = 30_000;
 const MARKET_CONTEXT_CHART_SYMBOLS = [
@@ -214,8 +236,27 @@ interface MarketContextDraft {
  * 適用は Phase 4 の一括 sweep (pruneOhlcvRetention) — 書き込み経路では行わない。
  */
 const OHLCV_RETENTION_DAYS = 90;
-/** OHLCV insert の D1 bind 上限対策 (adj 追加で 8 列になったので 12 行/文: 8×12=96≤100) */
-const OHLCV_CHUNK = 12;
+/**
+ * 表ごとの multi-row upsert の行数/文 (L-56)。D1 の bind 上限 (100/文) 対策。
+ * 行数×列数 ≤ 100。列を足したらここも直すこと (universe.ts の UPSERT_CHUNK と
+ * 同じ規約。flush-snapshot.test.ts が bind 数を実測で固定)。
+ */
+const FLUSH_ROWS_PER_STATEMENT = {
+  /** 年次: 3 列 × 33 = 99 */
+  annual: 33,
+  /** ②断面: 12 列 × 8 = 96 */
+  financials: 8,
+  /** rsi: 12 列 × 8 = 96 */
+  rsi: 8,
+  /** OHLCV: 8 列 × 12 = 96 (旧 OHLCV_CHUNK) */
+  ohlcv: 12,
+  /** 指標 (+L-52 の畳み 6 列で 37 列): 37 × 2 = 74。3 行は 111 で上限超え */
+  indicators: 2,
+  /** シグナル (run 刻み込みで 11 列): 11 × 9 = 99 */
+  signals: 9,
+  /** モメンタム投影: 6 列 × 16 = 96 */
+  momentum: 16,
+} as const;
 /** sector_daily insert の bind 上限対策 (6 列なので 16 行/文) */
 const SECTOR_CHUNK = 16;
 /** prune の DELETE 1 文に載せる stock_id 数 (bind 上限 100: ids + retention で余裕を取る) */
@@ -232,19 +273,28 @@ export function createDailyDb() {
   return createD1HttpDb(SCHEMAS);
 }
 
-/** 成功件数が残っていても、欠損を含む run は監視上の失敗として扱う。 */
+/**
+ * 監視上の失敗か。失敗率 ≤1% は成功扱い (L-57)。
+ *
+ * 以前は 1 件でも失敗で run 失敗にし、52% の run が失敗扱いになっていた。
+ * 上場廃止・Yahoo 欠損などの恒久失敗が毎日数件は出るため、≤1% は成功扱いにし、
+ * 代わりに Issue へコメントして trace を残す (scripts/sync/daily.ts が出す)。
+ * 空母集団・件数不一致・マクロ失敗は従来どおり失敗。
+ */
 export function isDailySyncIncomplete(
   result: Pick<
     DailySyncResult,
     "totalStocks" | "successStocks" | "failedStocks" | "marketContextOk"
   >
 ): boolean {
-  return (
+  if (
     result.totalStocks === 0 ||
     result.successStocks + result.failedStocks !== result.totalStocks ||
-    result.failedStocks > 0 ||
     !result.marketContextOk
-  );
+  ) {
+    return true;
+  }
+  return result.failedStocks / result.totalStocks > TOLERATED_FAILURE_RATE;
 }
 
 export interface DailyRecoveryFailure<T> {
@@ -303,7 +353,7 @@ export function createDailyStockStartGate(startIntervalMs: number) {
   };
 }
 
-/** macro を先頭にして、両系統を同じ回収件数上限へ流す。 */
+/** macro を先頭にして、両系統を同じ時間予算へ流す。 */
 export function prioritizeDailyRecoveryFailures<MacroTarget, StockTarget>(
   macroFailures: readonly DailyRecoveryFailure<MacroTarget>[],
   stockFailures: readonly DailyRecoveryFailure<StockTarget>[]
@@ -338,10 +388,16 @@ export function isTransientDailySyncFailure(message: string): boolean {
 /**
  * 初回バッチ完走後、一過性失敗だけを逐次 1 回再処理する。
  * 永続エラーは再試行せず、再処理にも失敗した対象は最新原因を返す。
+ *
+ * 回収量は件数ではなく時間予算 (`deadlineMs`) で区切る (L-57)。
+ * 予算切れで手を付けなかった対象は `skippedDueToLimit` に数える。
+ * 2 パス目も Retry-After を尊重する (初回の指示を上限 30 秒で待つ)。
+ * `deadlineMs` を渡さないと全件を回収する (テスト用)。
  */
 export async function recoverTransientDailyFailures<T>(
   failures: readonly DailyRecoveryFailure<T>[],
-  processTarget: (target: T) => Promise<void>
+  processTarget: (target: T) => Promise<void>,
+  options: { deadlineMs?: number } = {}
 ): Promise<DailyRecoveryResult<T>> {
   const unresolved: DailyRecoveryFailure<T>[] = [];
   let attempted = 0;
@@ -366,7 +422,7 @@ export async function recoverTransientDailyFailures<T>(
       unresolved.push(failure);
       continue;
     }
-    if (attempted >= MAX_RECOVERY_TARGETS) {
+    if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
       unresolved.push(failure);
       skippedDueToLimit++;
       continue;
@@ -480,8 +536,17 @@ export async function loadDailyTargets(db: Db) {
       // 採らなかった: 値がどこにも流れない以上、切り替えても挙動が変わらず、
       // 差分だけが増える。保存や表示に使い始めるときは公開面と同じ列へ移すこと。
       sector: coreSchema.stocks.sector,
+      // 増分判定用。OHLCV の MAX(date) GROUP BY (336k 行走査) の代わりに
+      // indicators の latest_date を LEFT JOIN で引く (L-47)。NULL の銘柄は
+      // 初回 backfill (6mo 全 upsert)。latest_date は成功時に必ず書かれるので、
+      // 古い値を見ても再 upsert になるだけで欠損にはならない (安全側に倒れる)。
+      latestDate: swingSchema.stockIndicators.latestDate,
     })
     .from(coreSchema.stocks)
+    .leftJoin(
+      swingSchema.stockIndicators,
+      eq(swingSchema.stockIndicators.stockId, coreSchema.stocks.id)
+    )
     .where(activeEquityCondition());
 }
 
@@ -501,16 +566,12 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   const targets = await loadDailyTargets(db);
   console.info(`[sync-daily]   対象: ${targets.length} 銘柄 (active かつ equity)`);
 
-  // 各銘柄の既存 MAX(date) を 1 クエリで取得 (bind 不要)。null/未登録は初回 backfill。
-  const maxDateRows = await db
-    .select({
-      stockId: swingSchema.dailyOhlcv.stockId,
-      maxDate: sql<string>`MAX(${swingSchema.dailyOhlcv.date})`,
-    })
-    .from(swingSchema.dailyOhlcv)
-    .groupBy(swingSchema.dailyOhlcv.stockId);
-  const maxDateByStock = new Map<number, string>(
-    maxDateRows.map((r) => [r.stockId, r.maxDate])
+  // 増分判定の既存日付は Phase 1 の targets に載っている (latest_date JOIN)。
+  // NULL/未登録は初回 backfill (6mo 全 upsert)。
+  const latestDateByStock = new Map<number, string>(
+    targets.flatMap((t) =>
+      t.latestDate === null ? [] : [[t.id, t.latestDate] as const]
+    )
   );
 
   // -----------------------------------------------------------------
@@ -539,21 +600,29 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   const stockStartGate = createDailyStockStartGate(STOCK_START_INTERVAL_MS);
   let succeeded = 0;
 
-  async function processTarget(
-    target: (typeof targets)[number]
-  ): Promise<void> {
-    await stockStartGate.wait();
-    const snap = await buildSnapshot(target.id, target.code, target.sector);
-    await writeStockSnapshot(db, snap, maxDateByStock.get(target.id));
-  }
+  // 年次は月曜 UTC の run でのみ書く (L-49)。年 1 回変わるものに毎日
+  // 15,900 行 upsert していた。
+  const writeAnnual = isMondayUtc();
+  // run 開始秒で固定。entry_signals の INSERT 刻みと Phase 3.5 の sweep 境界
+  // (L-52)、および Phase 6 の投影掃除の境界に使う。Phase 3 の upsert より
+  // 前の時刻でないと、掃除が今回の行まで消す。
+  const runStartedSec = Math.floor(startedAt / 1000);
 
+  // Phase 3a: 取込プール。fetch だけ集め、書込は 3b で表ごとに畳む (L-56)。
+  // 取れた snapshot を全部メモリに置く (~3,755 件で数十 MB。runner には十分)。
+  const pending: FlushItem<(typeof targets)[number]>[] = [];
   async function worker(): Promise<void> {
     while (queue.length > 0) {
       const target = queue.shift();
       if (!target) break;
       try {
-        await processTarget(target);
-        succeeded++;
+        await stockStartGate.wait();
+        const snap = await buildSnapshot(target.id, target.code, target.sector);
+        pending.push({
+          target,
+          snap,
+          existingMaxDate: latestDateByStock.get(target.id),
+        });
       } catch (e) {
         const msg = rootCauseMessage(e);
         stockStartGate.observeFailure(msg);
@@ -563,6 +632,19 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
     }
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+
+  // Phase 3b: 表ごとの multi-row flush。失敗は初回失敗に積んで回収へ回す。
+  const flushFailures = await flushSnapshots(db, pending, {
+    writeAnnual,
+    runStartedSec,
+  });
+  for (const f of flushFailures) {
+    if (f.target !== undefined) {
+      stockStartGate.observeFailure(f.error);
+      firstPassFailures.push({ target: f.target, error: f.error });
+    }
+  }
+  succeeded += pending.length - flushFailures.length;
   console.info(
     `[sync-daily]   初回成功: ${succeeded} / 初回失敗: ${firstPassFailures.length}`
   );
@@ -575,16 +657,30 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   const recovery = await recoverTransientDailyFailures(
     recoveryTargets,
     async (recoveryTarget) => {
-      if (recoveryTarget.kind === "macro") {
-        await fetchMarketContextTarget(
-          marketContext.draft,
-          recoveryTarget.target
-        );
-        return;
+      try {
+        if (recoveryTarget.kind === "macro") {
+          await fetchMarketContextTarget(
+            marketContext.draft,
+            recoveryTarget.target
+          );
+          return;
+        }
+        // 回収は件数が少ないので 1 行 flush のまま (初回パスと行 builder は共有)。
+        const target = recoveryTarget.target;
+        await stockStartGate.wait();
+        const snap = await buildSnapshot(target.id, target.code, target.sector);
+        await writeStockSnapshot(db, snap, latestDateByStock.get(target.id), {
+          writeAnnual,
+          runStartedSec,
+        });
+        recoveredStocks++;
+      } catch (error) {
+        // 2 パス目も 429 を尊重する (L-57)。初回と同じゲートへ観測を流す。
+        stockStartGate.observeFailure(rootCauseMessage(error));
+        throw error;
       }
-      await processTarget(recoveryTarget.target);
-      recoveredStocks++;
-    }
+    },
+    { deadlineMs: startedAt + RECOVERY_TIME_BUDGET_MS }
   );
   succeeded += recoveredStocks;
   const recoveredMacros = recovery.recovered - recoveredStocks;
@@ -593,7 +689,7 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
       `[sync-daily]   一過性失敗の回収: 実行=${recovery.attempted} ` +
         `回復=${recovery.recovered} (macro=${recoveredMacros}, stock=${recoveredStocks}) ` +
         `未回復=${recovery.attempted - recovery.recovered + recovery.skippedDueToLimit} ` +
-        `上限超過=${recovery.skippedDueToLimit}`
+        `予算超過=${recovery.skippedDueToLimit}`
     );
   }
   const failures: DailySyncResult["failures"] = [];
@@ -619,19 +715,33 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   }
 
   // -----------------------------------------------------------------
-  // Phase 4: OHLCV 保持期間の一括 prune (同期が止まった銘柄も対象)
+  // Phase 3.5: 前 run 以前の entry_signals を 1 文で掃除 (L-52)。
+  // 回収 (recovery) の後。銘柄ごとの DELETE 3,755 文の代替。
+  // -----------------------------------------------------------------
+  const sweptSignals = await sweepStaleEntrySignals(db, runStartedSec);
+  console.info(
+    `[sync-daily] Phase 3.5: entry_signals sweep: ${sweptSignals} 行を削除`
+  );
+
+  // -----------------------------------------------------------------
+  // Phase 4: OHLCV 保持期間の一括 prune (同期が止まった銘柄も対象)。
+  // 月曜 UTC の run のみ (L-47)。1 日で増えるのは 1 本/銘柄なので週1で足りる。
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 4: OHLCV 保持期間の prune");
-  const pruned = await pruneOhlcvRetention(db);
-  if (pruned.prunedStocks > 0) {
-    console.info(
-      `[sync-daily]   保持本数超過: ${pruned.prunedStocks} 銘柄 / ` +
-        `削除 ${pruned.deletedRows} 行 (保持 ${OHLCV_RETENTION_DAYS} 本)`
-    );
+  if (isMondayUtc()) {
+    const pruned = await pruneOhlcvRetention(db);
+    if (pruned.prunedStocks > 0) {
+      console.info(
+        `[sync-daily]   保持本数超過: ${pruned.prunedStocks} 銘柄 / ` +
+          `削除 ${pruned.deletedRows} 行 (保持 ${OHLCV_RETENTION_DAYS} 本)`
+      );
+    } else {
+      console.info(
+        `[sync-daily]   保持本数超過なし (保持 ${OHLCV_RETENTION_DAYS} 本)`
+      );
+    }
   } else {
-    console.info(
-      `[sync-daily]   保持本数超過なし (保持 ${OHLCV_RETENTION_DAYS} 本)`
-    );
+    console.info("[sync-daily]   月曜のみ (今日はスキップ)");
   }
 
   // -----------------------------------------------------------------
@@ -641,17 +751,18 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
   await aggregateSectorDaily(db, new Date().toISOString().split("T")[0]);
 
   // -----------------------------------------------------------------
-  // Phase 6: L2 投影 (p_momentum) の再生成
+  // Phase 6: L2 投影 (p_momentum) の仕上げ
   //
-  // prune の後に置く (投影の本数を D1 の実在本数と一致させるため)。
-  // ここで失敗したら run 全体を失敗にする。投影が書けていないまま緑にすると、
+  // 投影行自体は Phase 3 で銘柄ごとに upsert 済み (L-47)。ここでは
+  // source_max_date の backfill と掃除 DELETE だけを行う。
+  // ここで失敗したら run 全体を失敗にする。掃除が走っていないまま緑にすると、
   // /emh は前日の as_of を表示し続けるのに監視上は成功に見える。
   // -----------------------------------------------------------------
-  console.info("[sync-daily] Phase 6: モメンタム投影の再生成");
-  const projected = await rebuildMomentumProjection(db);
+  console.info("[sync-daily] Phase 6: モメンタム投影の仕上げ");
+  const projected = await rebuildMomentumProjection(db, runStartedSec);
   console.info(
-    `[sync-daily]   投影 ${projected.projectedStocks} 行 (走査 ${projected.scannedBars} 行 / ` +
-      `as_of ${projected.sourceMaxDate ?? "—"} / 掃除 ${projected.removedStocks} 行)`
+    `[sync-daily]   投影 ${projected.projectedStocks} 行 (` +
+      `as_of 上限 ${projected.sourceMaxDate ?? "—"} / 掃除 ${projected.removedStocks} 行)`
   );
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
@@ -695,8 +806,7 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
  * rows_read は変わらない: 同じ join で select する列が 1 本入れ替わるだけ
  * (本番の実測で `sector` / `sector33` どちらも 7,430 rows_read、同じ実行計画)。
  *
- * 切り替え前の日付の行は JPX キーのまま残る。公開面がそれを読まないための
- * 日付は `SECTOR_DAILY_PUBLIC_KEY_SINCE` (public-columns.ts)。
+ * 切り替え前の JPX キー行は P5 で DELETE 済み (L-64)。
  *
  * **分母と分子は同じ述語を使う** (`activeEquityCondition` = active かつ equity。
  * 日次の処理対象 `loadDailyTargets` と同じ集合)。分母は「当日更新されるはずの
@@ -752,20 +862,28 @@ export async function aggregateSectorDaily(
       (r): StockChangeInput => ({
         sector: r.sector,
         pct1d: r.pct1d,
-        pct5d: null,
       })
     )
   );
-  await db
-    .delete(swingSchema.sectorDaily)
-    .where(eq(swingSchema.sectorDaily.date, today));
+  // 当日分の書き直し + 30 日より古い行の破棄 (L-53。読み手は最新日だけ見る)。
+  // 基準は引数の today (Date.now ではない。テストで固定できる)。
+  const retentionCutoff = new Date(
+    new Date(`${today}T00:00:00Z`).getTime() - 30 * 24 * 60 * 60 * 1000
+  )
+    .toISOString()
+    .split("T")[0];
+  await db.delete(swingSchema.sectorDaily).where(
+    or(
+      eq(swingSchema.sectorDaily.date, today),
+      lt(swingSchema.sectorDaily.date, retentionCutoff)
+    )
+  );
   for (let i = 0; i < sectorAggs.length; i += SECTOR_CHUNK) {
     await db.insert(swingSchema.sectorDaily).values(
       sectorAggs.slice(i, i + SECTOR_CHUNK).map((a) => ({
         date: today,
         sector: a.sector,
         pct1d: a.pct1d,
-        pct5d: a.pct5d,
         stockCount: a.stockCount,
         rank1d: a.rank1d,
       }))
@@ -915,61 +1033,75 @@ async function buildSnapshot(
 // -----------------------------------------------------------------------------
 
 /**
- * `writeStockSnapshot` の書き込み範囲スイッチ。
- *
- * 移行 P5-b で ②断面 (`core_stock_financials`) の writer が stockStock 側へ移る。
- * 両者が同じ 1 行 (stock_id ユニーク) を upsert すると、残る値は実行順で決まり、
- * `fetched_at` と値の組が壊れる（新しい fetched_at に古い価格が乗る）。切替当日に
- * daily.ts のコードを削るのではなく、**呼び出し側で止められる**形にしておく。
+ * `writeStockSnapshot` の書き込み範囲スイッチ。将来 ②断面の writer が移る場合に
+ * 呼び出し側で止められる形 (両者が同じ 1 行を upsert すると実行順で値が決まる)。
  */
 export interface WriteStockSnapshotOptions {
   /**
-   * ②断面 (`core_stock_financials`) を書くか。既定 true = 従来どおり書く。
-   *
-   * 年次 (`core_stock_annual_financials`) はこのフラグの対象外。年次は Yahoo の
-   * annualFinancials が唯一の出所で P5-b の移行対象に入っていないため、ここで
-   * 一緒に止めると「フラグを立てた瞬間に売上推移が止まる」副作用になる。
+   * ②断面 (`core_stock_financials`) を書くか。既定 true。
+   * 年次は対象外 (別出所のため一緒に止めると売上推移が止まる)。
    */
   writeCoreFinancials?: boolean;
+  /**
+   * 年次 (`core_stock_annual_financials`) を書くか。既定 true。
+   *
+   * 年 1 回変わるものに毎日 15,900 行 upsert していたので、月曜 UTC の run
+   * でのみ真にする (L-49)。呼び出し側 (Phase 3) が曜日で決める。
+   */
+  writeAnnual?: boolean;
+  /**
+   * run 開始時刻 (unix 秒)。`swing_entry_signals` の INSERT に刻む。
+   *
+   * 銘柄ごとの無条件 DELETE (3,755 文/日) の代わりに、Phase 3 末尾で
+   * `computed_at < runStartedSec` を 1 文で掃除する (L-52)。既定は呼び出し
+   * 時の現在秒 (テスト用。本番は Phase 3 が run 開始秒を渡す)。
+   */
+  runStartedSec?: number;
 }
 
-// export しているのは src/cron/daily-write-snapshot.test.ts から
-// フラグの両分岐を直接叩くため。呼び出し元は runDailySync 内の 1 箇所だけ。
-export async function writeStockSnapshot(
-  db: Db,
-  snap: StockSnapshot,
-  existingMaxDate: string | undefined,
-  options: WriteStockSnapshotOptions = {}
-): Promise<void> {
-  const { writeCoreFinancials = true } = options;
+// -----------------------------------------------------------------------------
+// 表ごとの multi-row upsert (L-56)。
+//
+// 銘柄ごと 7〜8 文 (27.9k 往復/日) を、表ごとに VALUES 複数行へ畳む (~3.7k 往復)。
+// 行 builder は writeStockSnapshot と flushSnapshots の共有 (1 行 flush が
+// 旧 writeStockSnapshot と同じ文になるので、既存テストがそのまま通る)。
+// -----------------------------------------------------------------------------
 
-  // --- core_stock_annual_financials ---
-  if (snap.annualFinancials.length > 0) {
-    await db
-      .insert(coreSchema.stockAnnualFinancials)
-      .values(
-        snap.annualFinancials.map((f) => ({
-          stockId: snap.stockId,
-          fiscalYear: f.fiscalYear,
-          revenue: f.revenue,
-        }))
-      )
-      .onConflictDoUpdate({
-        target: [
-          coreSchema.stockAnnualFinancials.stockId,
-          coreSchema.stockAnnualFinancials.fiscalYear,
-        ],
-        set: { revenue: sql`excluded.revenue` },
-      });
-  }
+export interface FlushItem<T = unknown> {
+  /** 失敗の帰属先 (回収がこの単位でリトライする)。1 行 flush では省略。 */
+  target?: T;
+  snap: StockSnapshot;
+  existingMaxDate: string | undefined;
+}
 
-  // --- core_stock_financials (②断面) ---
-  // 囲むのはこの upsert だけ。上の年次と下の rsi_percentile 以降は
-  // writer 移行の対象外なので、フラグを立てても従来どおり書き続ける。
-  if (writeCoreFinancials) {
-    await db
-      .insert(coreSchema.stockFinancials)
-      .values({
+export interface FlushFailure<T = unknown> {
+  target: T | undefined;
+  error: string;
+}
+
+type BuiltRow<R> = { item: FlushItem<never>; row: R };
+
+function buildAnnualRows(
+  item: FlushItem<never>,
+  writeAnnual: boolean
+): BuiltRow<{ stockId: number; fiscalYear: number; revenue: number | null }>[] {
+  if (!writeAnnual || item.snap.annualFinancials.length === 0) return [];
+  return item.snap.annualFinancials.map((f) => ({
+    item,
+    row: { stockId: item.snap.stockId, fiscalYear: f.fiscalYear, revenue: f.revenue },
+  }));
+}
+
+function buildFinancialsRows(
+  item: FlushItem<never>,
+  writeCoreFinancials: boolean
+): BuiltRow<Record<string, unknown>>[] {
+  if (!writeCoreFinancials) return [];
+  const snap = item.snap;
+  return [
+    {
+      item,
+      row: {
         stockId: snap.stockId,
         price: snap.price,
         per: snap.per,
@@ -982,173 +1114,61 @@ export async function writeStockSnapshot(
         marketCap: snap.marketCap,
         operatingMargin: snap.operatingMarginTtm,
         dataDate: snap.dataDate,
-      })
-      .onConflictDoUpdate({
-        target: coreSchema.stockFinancials.stockId,
-        set: {
-          price: sql`excluded.price`,
-          per: sql`excluded.per`,
-          pbr: sql`excluded.pbr`,
-          dividendYield: sql`excluded.dividend_yield`,
-          eps: sql`excluded.eps`,
-          bps: sql`excluded.bps`,
-          roe: sql`excluded.roe`,
-          roa: sql`excluded.roa`,
-          marketCap: sql`excluded.market_cap`,
-          operatingMargin: sql`excluded.operating_margin`,
-          dataDate: sql`excluded.data_date`,
-          fetchedAt: sql`(unixepoch())`,
-        },
-      });
-  }
-
-  // --- rsi_percentile ---
-  await db
-    .insert(rsiSchema.stockRsiPercentile)
-    .values({
-      stockId: snap.stockId,
-      rsi10: snap.rsiPercentile.rsi10,
-      rsi10Percentile: snap.rsiPercentile.rsi10Percentile,
-      rsi40: snap.rsiPercentile.rsi40,
-      rsi40Percentile: snap.rsiPercentile.rsi40Percentile,
-      rsi120: snap.rsiPercentile.rsi120,
-      rsi120Percentile: snap.rsiPercentile.rsi120Percentile,
-      rsiMinPercentile: snap.rsiPercentile.rsiMinPercentile,
-      percentileSampleBars: snap.rsiPercentile.sampleBars,
-      isBlueChip: snap.blueChip.isBlueChip,
-      operatingMarginTtm: snap.blueChip.operatingMarginTtm,
-      revenueTrend: snap.blueChip.revenueTrend,
-    })
-    .onConflictDoUpdate({
-      target: rsiSchema.stockRsiPercentile.stockId,
-      set: {
-        rsi10: sql`excluded.rsi_10`,
-        rsi10Percentile: sql`excluded.rsi_10_percentile`,
-        rsi40: sql`excluded.rsi_40`,
-        rsi40Percentile: sql`excluded.rsi_40_percentile`,
-        rsi120: sql`excluded.rsi_120`,
-        rsi120Percentile: sql`excluded.rsi_120_percentile`,
-        rsiMinPercentile: sql`excluded.rsi_min_percentile`,
-        percentileSampleBars: sql`excluded.percentile_sample_bars`,
-        isBlueChip: sql`excluded.is_blue_chip`,
-        operatingMarginTtm: sql`excluded.operating_margin_ttm`,
-        revenueTrend: sql`excluded.revenue_trend`,
-        computedAt: sql`(unixepoch())`,
       },
-    });
+    },
+  ];
+}
 
-  // --- swing_daily_ohlcv (増分: 既存 MAX(date) より新しい bar のみ) ---
+function buildRsiRows(item: FlushItem<never>): BuiltRow<Record<string, unknown>>[] {
+  const snap = item.snap;
+  return [
+    {
+      item,
+      row: {
+        stockId: snap.stockId,
+        rsi10: snap.rsiPercentile.rsi10,
+        rsi10Percentile: snap.rsiPercentile.rsi10Percentile,
+        rsi40: snap.rsiPercentile.rsi40,
+        rsi40Percentile: snap.rsiPercentile.rsi40Percentile,
+        rsi120: snap.rsiPercentile.rsi120,
+        rsi120Percentile: snap.rsiPercentile.rsi120Percentile,
+        rsiMinPercentile: snap.rsiPercentile.rsiMinPercentile,
+        percentileSampleBars: snap.rsiPercentile.sampleBars,
+        isBlueChip: snap.blueChip.isBlueChip,
+        revenueTrend: snap.blueChip.revenueTrend,
+      },
+    },
+  ];
+}
+
+function buildOhlcvRows(
+  item: FlushItem<never>
+): BuiltRow<Record<string, unknown>>[] {
+  const { snap, existingMaxDate } = item;
   const newOhlcv = existingMaxDate
     ? snap.ohlcv6mo.filter((r) => r.date > existingMaxDate)
     : snap.ohlcv6mo;
-  for (let i = 0; i < newOhlcv.length; i += OHLCV_CHUNK) {
-    await db
-      .insert(swingSchema.dailyOhlcv)
-      .values(
-        newOhlcv.slice(i, i + OHLCV_CHUNK).map((r) => ({
-          stockId: snap.stockId,
-          date: r.date,
-          open: r.open,
-          high: r.high,
-          low: r.low,
-          close: r.close,
-          volume: r.volume,
-          adj: r.adj,
-        }))
-      )
-      .onConflictDoUpdate({
-        target: [swingSchema.dailyOhlcv.stockId, swingSchema.dailyOhlcv.date],
-        set: {
-          open: sql`excluded.open`,
-          high: sql`excluded.high`,
-          low: sql`excluded.low`,
-          close: sql`excluded.close`,
-          volume: sql`excluded.volume`,
-          adj: sql`excluded.adj`,
-        },
-      });
-  }
-  // 保持期間の prune はここ (書き込み経路) では行わない。
-  // 以前は snap.ohlcv6mo から cutoff 日付を作って銘柄ごとに DELETE していたが、
-  // それだと **Yahoo 取得が失敗し続けている銘柄では prune が一度も走らない**。
-  // 実測で stock_id 640/710/992/1009 が 120→90 短縮前の 120 行を保持したままで、
-  // swing_daily_ohlcv の DISTINCT date が 203 に伸びる直接の原因になっていた。
-  // 全銘柄の一括 sweep (pruneOhlcvRetention) が Phase 4 で面倒を見る。
-
-  // --- swing_stock_indicators ---
-  await db
-    .insert(swingSchema.stockIndicators)
-    .values({
+  return newOhlcv.map((r) => ({
+    item,
+    row: {
       stockId: snap.stockId,
-      avgTurnover20d: snap.avgTurnover20d,
-      volume20d: snap.volume20d,
-      volumeRatio: snap.volumeRatio,
-      atr14: snap.atr14,
-      atrPct: snap.atrPct,
-      sma5: snap.sma5,
-      sma20: snap.sma20,
-      sma25: snap.sma25,
-      sma60: snap.sma60,
-      sma75: snap.sma75,
-      trendLong: snap.trendLong,
-      trendShort: snap.trendShort,
-      perfectOrderLong: snap.perfectOrderLong,
-      perfectOrderShort: snap.perfectOrderShort,
-      rsi14: snap.rsi14,
-      macd: snap.macd,
-      macdSignal: snap.macdSignal,
-      macdHist: snap.macdHist,
-      range20dHigh: snap.range20dHigh,
-      range20dLow: snap.range20dLow,
-      rangeWidth: snap.rangeWidth,
-      fibHigh: snap.range20dHigh,
-      fibLow: snap.range20dLow,
-      fib382: snap.fib382,
-      fib500: snap.fib500,
-      fib618: snap.fib618,
-      latestClose: snap.latestClose,
-      latestVolume: snap.latestVolume,
-      latestDate: snap.latestDate,
-      pctChange1d: snap.pctChange1d,
-    })
-    .onConflictDoUpdate({
-      target: swingSchema.stockIndicators.stockId,
-      set: {
-        avgTurnover20d: sql`excluded.avg_turnover_20d`,
-        volume20d: sql`excluded.volume_20d`,
-        volumeRatio: sql`excluded.volume_ratio`,
-        atr14: sql`excluded.atr_14`,
-        atrPct: sql`excluded.atr_pct`,
-        sma5: sql`excluded.sma_5`,
-        sma20: sql`excluded.sma_20`,
-        sma25: sql`excluded.sma_25`,
-        sma60: sql`excluded.sma_60`,
-        sma75: sql`excluded.sma_75`,
-        trendLong: sql`excluded.trend_long`,
-        trendShort: sql`excluded.trend_short`,
-        perfectOrderLong: sql`excluded.perfect_order_long`,
-        perfectOrderShort: sql`excluded.perfect_order_short`,
-        rsi14: sql`excluded.rsi_14`,
-        macd: sql`excluded.macd`,
-        macdSignal: sql`excluded.macd_signal`,
-        macdHist: sql`excluded.macd_hist`,
-        range20dHigh: sql`excluded.range_20d_high`,
-        range20dLow: sql`excluded.range_20d_low`,
-        rangeWidth: sql`excluded.range_width`,
-        fibHigh: sql`excluded.fib_high`,
-        fibLow: sql`excluded.fib_low`,
-        fib382: sql`excluded.fib_382`,
-        fib500: sql`excluded.fib_500`,
-        fib618: sql`excluded.fib_618`,
-        latestClose: sql`excluded.latest_close`,
-        latestVolume: sql`excluded.latest_volume`,
-        latestDate: sql`excluded.latest_date`,
-        pctChange1d: sql`excluded.pct_change_1d`,
-        computedAt: sql`(unixepoch())`,
-      },
-    });
+      date: r.date,
+      open: r.open,
+      high: r.high,
+      low: r.low,
+      close: r.close,
+      volume: r.volume,
+      adj: r.adj,
+    },
+  }));
+}
 
-  // --- swing_stock_screening ---
+function buildIndicatorRows(
+  item: FlushItem<never>
+): BuiltRow<Record<string, unknown>>[] {
+  const snap = item.snap;
+  // screenStock() は indicators 6 値の純関数。旧 swing_stock_screening 表と
+  // 同じ値を同じ run で書くので、表示される数値は変わらない。
   const screen = screenStock({
     avgTurnover20d: snap.avgTurnover20d,
     volumeRatio: snap.volumeRatio,
@@ -1157,82 +1177,418 @@ export async function writeStockSnapshot(
     sma20: snap.sma20,
     latestClose: snap.latestClose,
   });
-  await db
-    .insert(swingSchema.stockScreening)
-    .values({
-      stockId: snap.stockId,
-      liquidityOk: screen.liquidityOk,
-      volatilityOk: screen.volatilityOk,
-      trendOkLong: screen.trendOkLong,
-      trendOkShort: screen.trendOkShort,
-      allPassedLong: screen.allPassedLong,
-      allPassedShort: screen.allPassedShort,
-    })
-    .onConflictDoUpdate({
-      target: swingSchema.stockScreening.stockId,
-      set: {
-        liquidityOk: sql`excluded.liquidity_ok`,
-        volatilityOk: sql`excluded.volatility_ok`,
-        trendOkLong: sql`excluded.trend_ok_long`,
-        trendOkShort: sql`excluded.trend_ok_short`,
-        allPassedLong: sql`excluded.all_passed_long`,
-        allPassedShort: sql`excluded.all_passed_short`,
-        computedAt: sql`(unixepoch())`,
+  return [
+    {
+      item,
+      row: {
+        stockId: snap.stockId,
+        avgTurnover20d: snap.avgTurnover20d,
+        volume20d: snap.volume20d,
+        volumeRatio: snap.volumeRatio,
+        atr14: snap.atr14,
+        atrPct: snap.atrPct,
+        sma5: snap.sma5,
+        sma20: snap.sma20,
+        sma25: snap.sma25,
+        sma60: snap.sma60,
+        sma75: snap.sma75,
+        trendLong: snap.trendLong,
+        trendShort: snap.trendShort,
+        perfectOrderLong: snap.perfectOrderLong,
+        perfectOrderShort: snap.perfectOrderShort,
+        rsi14: snap.rsi14,
+        macd: snap.macd,
+        macdSignal: snap.macdSignal,
+        macdHist: snap.macdHist,
+        range20dHigh: snap.range20dHigh,
+        range20dLow: snap.range20dLow,
+        rangeWidth: snap.rangeWidth,
+        fibHigh: snap.range20dHigh,
+        fibLow: snap.range20dLow,
+        fib382: snap.fib382,
+        fib500: snap.fib500,
+        fib618: snap.fib618,
+        latestClose: snap.latestClose,
+        latestVolume: snap.latestVolume,
+        latestDate: snap.latestDate,
+        pctChange1d: snap.pctChange1d,
+        liquidityOk: screen.liquidityOk,
+        volatilityOk: screen.volatilityOk,
+        trendOkLong: screen.trendOkLong,
+        trendOkShort: screen.trendOkShort,
+        allPassedLong: screen.allPassedLong,
+        allPassedShort: screen.allPassedShort,
       },
-    });
+    },
+  ];
+}
 
-  // --- swing_entry_signals ---
-  // 既存シグナルは無条件にクリア (latestClose が null でも古い entry/stop を残さない
-  // — CLAUDE.md rule2)。算出できた時だけ再挿入する。
-  await db
-    .delete(swingSchema.entrySignals)
-    .where(eq(swingSchema.entrySignals.stockId, snap.stockId));
-  if (snap.latestClose !== null) {
-    const prevOhlcv =
-      snap.ohlcv6mo.length >= 2 ? snap.ohlcv6mo[snap.ohlcv6mo.length - 2] : null;
-    const signalSnap: IndicatorSnapshot = {
-      latestClose: snap.latestClose,
-      prevClose: snap.previousClose,
-      latestOpen: snap.latestOpen,
-      latestHigh: snap.latestHigh,
-      latestLow: snap.latestLow,
-      atr14: snap.atr14,
-      atrPct: snap.atrPct,
-      sma5: snap.sma5,
-      sma20: snap.sma20,
-      sma60: snap.sma60,
-      rsi14: snap.rsi14,
-      macd: snap.macd,
-      macdSignal: snap.macdSignal,
-      range20dHigh: snap.range20dHigh,
-      range20dLow: snap.range20dLow,
-      rangeWidth: snap.rangeWidth,
-      fib382: snap.fib382,
-      fib618: snap.fib618,
-      volumeRatio: snap.volumeRatio,
-      avgTurnover20d: snap.avgTurnover20d,
-      perfectOrderLong: snap.perfectOrderLong,
-      perfectOrderShort: snap.perfectOrderShort,
-      pctChange1d: snap.pctChange1d,
-    };
-    const signals = detectAllPatterns(signalSnap, prevOhlcv ? [prevOhlcv] : []);
-    if (signals.length > 0) {
-      await db.insert(swingSchema.entrySignals).values(
-        signals.map((s) => ({
-          stockId: snap.stockId,
-          pattern: s.pattern,
-          direction: s.direction,
-          entryPrice: s.entryPrice,
-          stopLoss: s.stopLoss,
-          target1: s.target1,
-          target2: s.target2,
-          riskRewardRatio: s.riskRewardRatio,
-          signalStrength: s.signalStrength,
-          note: s.note,
-        }))
-      );
+function buildSignalRows(
+  item: FlushItem<never>,
+  runStartedSec: number
+): BuiltRow<Record<string, unknown>>[] {
+  const snap = item.snap;
+  if (snap.latestClose === null) return [];
+  const prevOhlcv =
+    snap.ohlcv6mo.length >= 2 ? snap.ohlcv6mo[snap.ohlcv6mo.length - 2] : null;
+  const signalSnap: IndicatorSnapshot = {
+    latestClose: snap.latestClose,
+    prevClose: snap.previousClose,
+    latestOpen: snap.latestOpen,
+    latestHigh: snap.latestHigh,
+    latestLow: snap.latestLow,
+    atr14: snap.atr14,
+    atrPct: snap.atrPct,
+    sma5: snap.sma5,
+    sma20: snap.sma20,
+    sma60: snap.sma60,
+    rsi14: snap.rsi14,
+    macd: snap.macd,
+    macdSignal: snap.macdSignal,
+    range20dHigh: snap.range20dHigh,
+    range20dLow: snap.range20dLow,
+    rangeWidth: snap.rangeWidth,
+    fib382: snap.fib382,
+    fib618: snap.fib618,
+    volumeRatio: snap.volumeRatio,
+    avgTurnover20d: snap.avgTurnover20d,
+    perfectOrderLong: snap.perfectOrderLong,
+    perfectOrderShort: snap.perfectOrderShort,
+    pctChange1d: snap.pctChange1d,
+  };
+  const signals = detectAllPatterns(signalSnap, prevOhlcv ? [prevOhlcv] : []);
+  return signals.map((s) => ({
+    item,
+    row: {
+      stockId: snap.stockId,
+      pattern: s.pattern,
+      direction: s.direction,
+      entryPrice: s.entryPrice,
+      stopLoss: s.stopLoss,
+      target1: s.target1,
+      target2: s.target2,
+      riskRewardRatio: s.riskRewardRatio,
+      signalStrength: s.signalStrength,
+      note: s.note,
+      // sweep が「この run の行」と判定する刻み。秒の一致は「残す」側。
+      computedAt: new Date(runStartedSec * 1000),
+    },
+  }));
+}
+
+function buildMomentumRows(
+  item: FlushItem<never>
+): BuiltRow<Record<string, unknown>>[] {
+  // Phase 6 の D1 読み直しの代わりに、メモリ上の 6mo スライスから upsert。
+  // 同じ入力・同じ関数 (buildMomentumRow) なので /emh の数値は不変。
+  // source_max_date は暫定で自銘柄の最新日、Phase 6 で全体 MAX に直す。
+  const row = buildMomentumRow(item.snap.ohlcv6mo);
+  if (row === null) return [];
+  return [
+    {
+      item,
+      row: {
+        stockId: item.snap.stockId,
+        asOf: row.asOf,
+        bars: row.bars,
+        closes: row.closes,
+        sourceMaxDate: item.snap.latestDate,
+        computedAt: new Date(),
+      },
+    },
+  ];
+}
+
+/**
+ * 表ごとの multi-row upsert 1 仕様。行の組み立て (build) と書込 (upsert) を分ける。
+ */
+interface TableFlushSpec {
+  rowsPerStatement: number;
+  build: (item: FlushItem<never>) => BuiltRow<Record<string, unknown>>[];
+  upsert: (db: Db, rows: Record<string, unknown>[]) => Promise<void>;
+}
+
+/**
+ * 複数銘柄の snapshot を表ごとにまとめて書く (L-56)。
+ *
+ * 失敗の扱いは旧 writeStockSnapshot と同じ粒度にする: チャンク単位で
+ * try/catch し、落ちたチャンクの銘柄だけを失敗として返して続行する。
+ * upsert は冪等なので、回収がその銘柄を全表で書き直しても壊れない。
+ * 1 行 flush は旧 writeStockSnapshot と同じ文になる。
+ *
+ * @returns 失敗した銘柄 (target 付き)。空なら全件成功。
+ */
+export async function flushSnapshots<T>(
+  db: Db,
+  items: FlushItem<T>[],
+  options: WriteStockSnapshotOptions = {}
+): Promise<FlushFailure<T>[]> {
+  const { writeCoreFinancials = true, writeAnnual = true } = options;
+  const runStartedSec =
+    options.runStartedSec ?? Math.floor(Date.now() / 1000);
+  if (items.length === 0) return [];
+
+  const specs: TableFlushSpec[] = [
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.annual,
+      build: (item) =>
+        buildAnnualRows(
+          item as FlushItem<never>,
+          writeAnnual
+        ) as BuiltRow<Record<string, unknown>>[],
+      upsert: (db, rows) =>
+        db
+          .insert(coreSchema.stockAnnualFinancials)
+          .values(
+            rows as {
+              stockId: number;
+              fiscalYear: number;
+              revenue: number | null;
+            }[]
+          )
+          .onConflictDoUpdate({
+            target: [
+              coreSchema.stockAnnualFinancials.stockId,
+              coreSchema.stockAnnualFinancials.fiscalYear,
+            ],
+            set: { revenue: sql`excluded.revenue` },
+          })
+          .then(() => undefined),
+    },
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.financials,
+      build: (item) =>
+        buildFinancialsRows(item as FlushItem<never>, writeCoreFinancials),
+      upsert: (db, rows) =>
+        db
+          .insert(coreSchema.stockFinancials)
+          .values(rows as never[])
+          .onConflictDoUpdate({
+            target: coreSchema.stockFinancials.stockId,
+            set: {
+              price: sql`excluded.price`,
+              per: sql`excluded.per`,
+              pbr: sql`excluded.pbr`,
+              dividendYield: sql`excluded.dividend_yield`,
+              eps: sql`excluded.eps`,
+              bps: sql`excluded.bps`,
+              roe: sql`excluded.roe`,
+              roa: sql`excluded.roa`,
+              marketCap: sql`excluded.market_cap`,
+              operatingMargin: sql`excluded.operating_margin`,
+              dataDate: sql`excluded.data_date`,
+              fetchedAt: sql`(unixepoch())`,
+            },
+          })
+          .then(() => undefined),
+    },
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.rsi,
+      build: (item) => buildRsiRows(item as FlushItem<never>),
+      upsert: (db, rows) =>
+        db
+          .insert(rsiSchema.stockRsiPercentile)
+          .values(rows as never[])
+          .onConflictDoUpdate({
+            target: rsiSchema.stockRsiPercentile.stockId,
+            set: {
+              rsi10: sql`excluded.rsi_10`,
+              rsi10Percentile: sql`excluded.rsi_10_percentile`,
+              rsi40: sql`excluded.rsi_40`,
+              rsi40Percentile: sql`excluded.rsi_40_percentile`,
+              rsi120: sql`excluded.rsi_120`,
+              rsi120Percentile: sql`excluded.rsi_120_percentile`,
+              rsiMinPercentile: sql`excluded.rsi_min_percentile`,
+              percentileSampleBars: sql`excluded.percentile_sample_bars`,
+              isBlueChip: sql`excluded.is_blue_chip`,
+              revenueTrend: sql`excluded.revenue_trend`,
+              computedAt: sql`(unixepoch())`,
+            },
+          })
+          .then(() => undefined),
+    },
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.ohlcv,
+      build: (item) => buildOhlcvRows(item as FlushItem<never>),
+      upsert: (db, rows) =>
+        db
+          .insert(swingSchema.dailyOhlcv)
+          .values(rows as never[])
+          .onConflictDoUpdate({
+            target: [swingSchema.dailyOhlcv.stockId, swingSchema.dailyOhlcv.date],
+            set: {
+              open: sql`excluded.open`,
+              high: sql`excluded.high`,
+              low: sql`excluded.low`,
+              close: sql`excluded.close`,
+              volume: sql`excluded.volume`,
+              adj: sql`excluded.adj`,
+            },
+          })
+          .then(() => undefined),
+    },
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.indicators,
+      build: (item) => buildIndicatorRows(item as FlushItem<never>),
+      upsert: (db, rows) =>
+        db
+          .insert(swingSchema.stockIndicators)
+          .values(rows as never[])
+          .onConflictDoUpdate({
+            target: swingSchema.stockIndicators.stockId,
+            set: {
+              avgTurnover20d: sql`excluded.avg_turnover_20d`,
+              volume20d: sql`excluded.volume_20d`,
+              volumeRatio: sql`excluded.volume_ratio`,
+              atr14: sql`excluded.atr_14`,
+              atrPct: sql`excluded.atr_pct`,
+              sma5: sql`excluded.sma_5`,
+              sma20: sql`excluded.sma_20`,
+              sma25: sql`excluded.sma_25`,
+              sma60: sql`excluded.sma_60`,
+              sma75: sql`excluded.sma_75`,
+              trendLong: sql`excluded.trend_long`,
+              trendShort: sql`excluded.trend_short`,
+              perfectOrderLong: sql`excluded.perfect_order_long`,
+              perfectOrderShort: sql`excluded.perfect_order_short`,
+              rsi14: sql`excluded.rsi_14`,
+              macd: sql`excluded.macd`,
+              macdSignal: sql`excluded.macd_signal`,
+              macdHist: sql`excluded.macd_hist`,
+              range20dHigh: sql`excluded.range_20d_high`,
+              range20dLow: sql`excluded.range_20d_low`,
+              rangeWidth: sql`excluded.range_width`,
+              fibHigh: sql`excluded.fib_high`,
+              fibLow: sql`excluded.fib_low`,
+              fib382: sql`excluded.fib_382`,
+              fib500: sql`excluded.fib_500`,
+              fib618: sql`excluded.fib_618`,
+              latestClose: sql`excluded.latest_close`,
+              latestVolume: sql`excluded.latest_volume`,
+              latestDate: sql`excluded.latest_date`,
+              pctChange1d: sql`excluded.pct_change_1d`,
+              liquidityOk: sql`excluded.liquidity_ok`,
+              volatilityOk: sql`excluded.volatility_ok`,
+              trendOkLong: sql`excluded.trend_ok_long`,
+              trendOkShort: sql`excluded.trend_ok_short`,
+              allPassedLong: sql`excluded.all_passed_long`,
+              allPassedShort: sql`excluded.all_passed_short`,
+              computedAt: sql`(unixepoch())`,
+            },
+          })
+          .then(() => undefined),
+    },
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.signals,
+      build: (item) =>
+        buildSignalRows(item as FlushItem<never>, runStartedSec),
+      upsert: (db, rows) =>
+        db
+          .insert(swingSchema.entrySignals)
+          .values(rows as never[])
+          .then(() => undefined),
+    },
+    {
+      rowsPerStatement: FLUSH_ROWS_PER_STATEMENT.momentum,
+      build: (item) => buildMomentumRows(item as FlushItem<never>),
+      upsert: (db, rows) =>
+        db
+          .insert(projectionSchema.momentumProjection)
+          .values(rows as never[])
+          .onConflictDoUpdate({
+            target: projectionSchema.momentumProjection.stockId,
+            set: {
+              asOf: sql`excluded.as_of`,
+              bars: sql`excluded.bars`,
+              closes: sql`excluded.closes`,
+              sourceMaxDate: sql`excluded.source_max_date`,
+              computedAt: sql`excluded.computed_at`,
+            },
+          })
+          .then(() => undefined),
+    },
+  ];
+
+  const failed = new Map<FlushItem<T>, FlushFailure<T>>();
+  const failItems = (chunk: BuiltRow<Record<string, unknown>>[], error: unknown) => {
+    const message = rootCauseMessage(error);
+    for (const { item } of chunk) {
+      if (!failed.has(item as FlushItem<T>)) {
+        failed.set(item as FlushItem<T>, {
+          target: (item as FlushItem<T>).target,
+          error: message,
+        });
+      }
+    }
+  };
+
+  for (const spec of specs) {
+    // 行の組み立ては銘柄ごとに隔離する (旧 writeStockSnapshot は銘柄単位で
+    // throw していた。1 銘柄の変な値で 3,755 件道連れは出さない)。
+    const built: BuiltRow<Record<string, unknown>>[] = [];
+    for (const item of items) {
+      if (failed.has(item)) continue;
+      try {
+        built.push(...spec.build(item as FlushItem<never>));
+      } catch (error) {
+        failItems([{ item: item as FlushItem<never>, row: {} }], error);
+      }
+    }
+    for (let i = 0; i < built.length; i += spec.rowsPerStatement) {
+      const chunk = built.slice(i, i + spec.rowsPerStatement);
+      try {
+        await spec.upsert(
+          db,
+          chunk.map((b) => b.row)
+        );
+      } catch (error) {
+        failItems(chunk, error);
+      }
     }
   }
+  return [...failed.values()];
+}
+
+// export しているのは回収パスとテストから 1 行 flush として使うため。
+// 初回パスは flushSnapshots を直接叩く (L-56)。
+export async function writeStockSnapshot(
+  db: Db,
+  snap: StockSnapshot,
+  existingMaxDate: string | undefined,
+  options: WriteStockSnapshotOptions = {}
+): Promise<void> {
+  // 1 行 flush。回収パスとテストが使う。失敗したら throw (旧動作と同じ)。
+  const failed = await flushSnapshots(db, [{ snap, existingMaxDate }], options);
+  if (failed.length > 0) throw new Error(failed[0].error);
+}
+
+/**
+ * 前 run 以前の `swing_entry_signals` 行を 1 文で掃除する (L-52)。
+ *
+ * 銘柄ごとの無条件 DELETE (3,755 文/日) の代替。`writeStockSnapshot` は
+ * INSERT のみで run 開始秒を刻むので、ここではそれより古い行だけ消す。
+ * 境界 (`computed_at == runStartedSec`) は残す。取得失敗で INSERT が無かった
+ * 銘柄の前日シグナルも消える (鮮度のない値を出さない。J3)。
+ * `idx_swing_signals_computed` を使う。run が途中で落ちて sweep まで届かなくても、
+ * 次 run の sweep が古い行をまとめて消す (自己修復)。
+ *
+ * @returns 削除行数 (事前 COUNT。pruneOhlcvRetention と同じ方式)
+ */
+export async function sweepStaleEntrySignals(
+  db: Db,
+  runStartedSec: number
+): Promise<number> {
+  const cutoff = new Date(runStartedSec * 1000);
+  const [{ stale }] = await db
+    .select({ stale: sql<number>`count(*)` })
+    .from(swingSchema.entrySignals)
+    .where(lt(swingSchema.entrySignals.computedAt, cutoff));
+  if (stale > 0) {
+    await db
+      .delete(swingSchema.entrySignals)
+      .where(lt(swingSchema.entrySignals.computedAt, cutoff));
+  }
+  return stale;
 }
 
 // -----------------------------------------------------------------------------
@@ -1320,90 +1676,82 @@ export async function pruneOhlcvRetention(
 }
 
 // -----------------------------------------------------------------------------
-// L2 投影 (p_momentum) の再生成
+// L2 投影 (p_momentum) の生成。画面の全走査を「1 日 1 回」の cron 生成へ移し、
+// 画面は 1 銘柄 1 行の投影だけを読む。新しい cron は足さず日次 sync に相乗り。
 //
-// なぜ cron 側に置くのか: `/financial-math/emh?type=momentum` は 1 表示ごとに
-// swing_daily_ohlcv を全走査していた (本番実測 2026-09-13: 集計クエリ単体で
-// 647,628 rows_read、1 リクエスト合計 651,494 / TTFB 0.86〜1.01 秒)。
-// D1 は走査行課金なので、これは訪問者 1 人ごとに払う継続コストである。
-// 走査を「1 日 1 回」へ移し、画面は 1 銘柄 1 行の投影だけを読む。
+// 生成は 2 段:
+//   1. `writeStockSnapshot` が `snap.ohlcv6mo` の末尾 90 本から 1 文 upsert。
+//      `source_max_date` は暫定で自銘柄の最新日、Phase 6 で全体 MAX に直す。
+//   2. Phase 6 (`rebuildMomentumProjection`) は MAX(date) 1 文 +
+//      source_max_date の backfill + 掃除 DELETE だけを行う。
 //
-// **新しい cron は足さない**。既存の日次 sync (平日 21:00 UTC) の最終フェーズに
-// 相乗りさせる。prune (Phase 4) の後に置くのは、投影の中身を「prune 後に D1 に
-// 実在する本数」と一致させるため (先に作ると消える行まで畳んでしまう)。
+// メモリ build が D1 読み直しと一致する根拠: 読む列は遡及修正されない生 `close`、
+// 窓は prune 後と同じ末尾 90 本、ソート・usable 判定・encode は同じ関数。
+// 失敗した銘柄の行は掃除 DELETE で消える (/emh は欠けた分だけ件数が減る)。
 // -----------------------------------------------------------------------------
 
-/**
- * 投影再生成の 1 ページで読む OHLCV 行数。
- *
- * 刻まずに 1 文で読むと 336,169 行 ≒ 25 MB を 1 レスポンスで受けることになり、
- * D1 REST の応答上限に依存した壊れ方をする。1 ページ 40,000 行 ≒ 3 MB。
- *
- * 刻み方は **rowid カーソル** (`WHERE id > :last ORDER BY id LIMIT n`)。
- * 本番実測で走査行の比率がこれだけ違う (2026-09-13, kabulab-cf):
- *
- *   | 読み方 | rows_read | 返却行 | 比 |
- *   |---|---|---|---|
- *   | rowid カーソル 40,000 行 | 40,150 | 40,000 | **1.004** |
- *   | 全表走査 (join なし) | 336,169 | 309,156 | 1.09 |
- *   | stock_id 範囲 400 銘柄 (join なし) | 35,281 | 31,296 | 1.13 |
- *   | stock_id 範囲 400 銘柄 + core_stocks join | **371,793** | 31,030 | 12.0 |
- *
- * 最後の行が落とし穴で、`core_stocks` を JOIN すると SQLite は
- * `SEARCH core_stocks USING COVERING INDEX (is_active=?)` を外側ループに選び、
- * stock_id の範囲条件が**外側を刈らない**。1 チャンクごとに OHLCV を全走査する
- * ので、32 チャンクで 1,190 万行になる。**母集団 (active かつ equity) の絞り込みは SQL で
- * JOIN せず、id 集合を先に引いて JS 側で落とす。**
- */
-const PROJECTION_SCAN_PAGE = 40_000;
-/** p_momentum upsert の bind 上限対策 (6 列なので 16 行/文: 6×16=96≤100) */
-const PROJECTION_CHUNK = 16;
+/** 投影 1 行に入れる終値の本数。prune の保持本数と一致させる。 */
+const PROJECTION_BARS = 90;
 
-/** 投影再生成の結果 (コスト実測をログへ出すために行数を返す) */
+/** 投影仕上げの結果 (コスト実測をログへ出すために行数を返す) */
 export interface MomentumProjectionResult {
-  /** 書いた投影行数 (= 母集団のうち有効な終値を持つ銘柄数) */
+  /** 今 run に upsert された投影行数 (computed_at で数える) */
   projectedStocks: number;
-  /**
-   * 読み出した swing_daily_ohlcv の**返却行数** (`close IS NOT NULL` のもの)。
-   * D1 の rows_read はこれより多い: `close` が NULL の行 (実測 27,013) も
-   * 走査されるので、1 run の実測は約 336,169 + ページ数ぶんの端数になる。
-   */
+  /** 読み出した swing_daily_ohlcv の返却行数。L-47 以降は常に 0 (読み直さない)。 */
   scannedBars: number;
-  /** 生成時の MAX(swing_daily_ohlcv.date)。1 行も無ければ null */
+  /** OHLCV 全体の MAX(date)。1 行も無ければ null */
   sourceMaxDate: string | null;
   /** 母集団から落ちて掃除した投影行数 */
   removedStocks: number;
 }
 
 /**
- * `p_momentum` を `swing_daily_ohlcv` から作り直す。
+ * メモリ上の OHLCV から投影 1 行分を作る (純関数)。
  *
- * 母集団は `/emh` が数えているものと同じ「`core_stocks` の active かつ equity
- * (src/shared/db/active-equity.ts) で、終値が NULL でない行」。同じ WHERE /
- * 同じ順序で読むので、投影を経由しても
- * `calcMomentum` に入る配列は**従来と同一**になる (= 画面の数値は変わらない)。
+ * 末尾 90 本を取り、日付順に並べ、使える終値だけ残す。D1 読み直しと同じ
+ * 順序・同じ述語なので、同じ入力なら同じ行になる。有効な終値が 1 本も無ければ
+ * null (その銘柄は投影しない。D1 読み直し版の `usable.length === 0` continue
+ * と同じ)。
+ */
+export function buildMomentumRow(
+  ohlcv: ReadonlyArray<{ date: string; close: number | null }>
+): { asOf: string; bars: number; closes: string } | null {
+  const tail = ohlcv.slice(-PROJECTION_BARS);
+  const sorted = [...tail].sort((a, b) => (a.date < b.date ? -1 : 1));
+  const usable = sorted.filter((b) => isUsableClose(b.close));
+  if (usable.length === 0) return null;
+  const last = usable[usable.length - 1] as { date: string; close: number };
+  return {
+    asOf: last.date,
+    bars: usable.length,
+    closes: encodeCloses(usable.map((b) => b.close)),
+  };
+}
+
+/**
+ * `p_momentum` の仕上げ: source_max_date の backfill + 掃除 DELETE。
  *
- * 全消し → 全挿入は採らなかった。3,715 行の DELETE + 3,715 行の INSERT で
- * 書込が 2 倍になる。代わりに upsert してから「今回の run で触られなかった行」を
- * 1 文の DELETE で落とす。観測できる結果 (孤児行が残らない) は同じで、
- * 書込は約 3,715 行/日に収まる (実測 2026-09-13: is_active かつ有効終値を持つ
- * 銘柄 3,715。active かつ equity に絞った後はそれ以下で、上限は 3,700)。
+ * 投影行自体は Phase 3 で銘柄ごとに upsert 済み。ここでは全体の MAX(date) を
+ * 1 文で引いて全行へ backfill し、「今回の run で触られなかった行」を 1 文の
+ * DELETE で落とす。
+ *
+ * @param runStartedSec run 開始時刻 (unix 秒)。Phase 3 の upsert より前で
+ *   ないと掃除が今回の行まで消すので、呼び出し側が run 開始時に取る。
+ *
+ * 全消し → 全挿入は採らなかった (書込 2 倍)。upsert + 掃除 DELETE で
+ * 観測できる結果 (孤児行が残らない) は同じ。
  *
  * 途中で例外が出た場合、掃除 DELETE は走らないので古い行が残る。その行は
  * `as_of` が進まないので画面側で古さとして見える (黙って新しいふりをしない)。
  */
 export async function rebuildMomentumProjection(
-  db: Db
+  db: Db,
+  runStartedSec: number
 ): Promise<MomentumProjectionResult> {
-  // 掃除の閾値。この時刻以降に computed_at が書かれた行だけが「今回の run で
-  // 触られた行」。unixepoch() 秒に合わせるため切り捨てる。
-  const runStartedSec = Math.floor(Date.now() / 1000);
   const projection = projectionSchema.momentumProjection;
 
   // 母集団 = /emh が分母に使っているのと同じ active かつ equity の集合
   // (src/shared/db/active-equity.ts)。
-  // **JOIN にはしない** (上の表のとおり JOIN すると 1 ページごとに OHLCV を
-  // 全走査する計画を選ばれる)。id 集合を先に引いて JS 側で落とす。
   const activeIds = new Set(
     (
       await db
@@ -1416,113 +1764,54 @@ export async function rebuildMomentumProjection(
   if (activeIds.size === 0) {
     // active かつ equity の銘柄が 1 件も返らないのは「母集団が空になった」ではなく
     // core_stocks 側の異常である (is_active の一括対象外化、instrument_type の
-    // 充填が消えた等)。このまま進むと upsert 対象が 0 行になり、
-    // 下の掃除 DELETE が**投影を全消し**する。/emh は理由を出せないまま
-    // 「該当 0 件」になる (maxBars=0 なので window 超過の notice も出ない)。
-    // OHLCV が 1 行も無い状態 (= 初回 backfill 前) は正常だが、母集団が
-    // 0 件になるのは正常ではないので、静かに返さず run を失敗させる。
+    // 充填が消えた等)。このまま進むと下の掃除 DELETE が**投影を全消し**する。
+    // /emh は理由を出せないまま「該当 0 件」になる (maxBars=0 なので window 超過の
+    // notice も出ない)。静かに返さず run を失敗させる。
     throw new Error(
       "投影の母集団が空です: core_stocks に is_active=1 かつ instrument_type='equity' の行が 1 件もありません。" +
         " 投影を全消しすると /emh が理由なしの 0 件になるので中断します。"
     );
   }
 
-  const barsByStock = new Map<number, { date: string; close: number }[]>();
-  let scannedBars = 0;
-  let sourceMaxDate: string | null = null;
-
-  // rowid カーソルで前進する。id は autoincrement だが prune で穴が空くため
-  // (実測 336,169 行が id 8,916〜20,625,713 に散っている) 固定幅の範囲刻みは
-  // 使えない。カーソルなら空き番地を跨いでも走査行が返却行に比例する。
-  let lastId = 0;
-  for (;;) {
-    const page = await db
-      .select({
-        id: swingSchema.dailyOhlcv.id,
-        stockId: swingSchema.dailyOhlcv.stockId,
-        date: swingSchema.dailyOhlcv.date,
-        close: swingSchema.dailyOhlcv.close,
-      })
-      .from(swingSchema.dailyOhlcv)
-      .where(
-        and(
-          isNotNull(swingSchema.dailyOhlcv.close),
-          gt(swingSchema.dailyOhlcv.id, lastId)
-        )
-      )
-      .orderBy(asc(swingSchema.dailyOhlcv.id))
-      .limit(PROJECTION_SCAN_PAGE);
-    if (page.length === 0) break;
-
-    scannedBars += page.length;
-    for (const bar of page) {
-      if (bar.close === null) continue;
-      // データセット全体の鮮度。母集団外 (非活動・非普通株) のバーも含める (as_of との差が
-      // 「この銘柄だけ取得が止まっている」ことを示すので、分母は揃えない)。
-      if (sourceMaxDate === null || bar.date > sourceMaxDate) {
-        sourceMaxDate = bar.date;
-      }
-      if (!activeIds.has(bar.stockId)) continue;
-      const arr = barsByStock.get(bar.stockId);
-      if (arr) arr.push({ date: bar.date, close: bar.close });
-      else barsByStock.set(bar.stockId, [{ date: bar.date, close: bar.close }]);
-    }
-    lastId = page[page.length - 1].id;
-    if (page.length < PROJECTION_SCAN_PAGE) break;
-  }
-
-  if (sourceMaxDate === null) {
-    // OHLCV が 1 行も無い = 初回 backfill 前。ここで投影を全消しすると
-    // 「まだ取れていない」と「母集団から落ちた」の区別が付かなくなるので触らない。
+  // 今 run に触られた行数。0 = Phase 3 が全滅か新冠で、掃除すると全消しに
+  // なるので何もせず返す (旧「OHLCV 空」ガードと同じ役割)。
+  const runStarted = new Date(runStartedSec * 1000);
+  const [{ freshCount }] = await db
+    .select({ freshCount: sql<number>`count(*)` })
+    .from(projection)
+    .where(gte(projection.computedAt, runStarted));
+  if (freshCount === 0) {
     return {
       projectedStocks: 0,
-      scannedBars,
+      scannedBars: 0,
       sourceMaxDate: null,
       removedStocks: 0,
     };
   }
 
-  // rowid 順で読んだので日付順とは限らない (prune と増分 upsert で id と date の
-  // 単調性が一致しない)。**ここで date 昇順に揃える**。逆順や飛び順のまま
-  // 畳むと累積リターンの符号が黙って反転する。
-  const rows = [...barsByStock.entries()].flatMap(([stockId, bars]) => {
-    bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    // `encodeCloses` は 0 以下 / 非有限の終値を落とす。落ちた分を数に含めると
-    // `bars` (= 画面が出す window 実効上限) と `closes` の本数がずれ、`as_of` が
-    // 落とした行の日付になる。**符号化と同じ述語で先に絞る**。
-    const usable = bars.filter((b) => isUsableClose(b.close));
-    if (usable.length === 0) return [];
-    return [
-      {
-        stockId,
-        asOf: usable[usable.length - 1].date,
-        sourceMaxDate: sourceMaxDate as string,
-        bars: usable.length,
-        closes: encodeCloses(usable.map((b) => b.close)),
-        computedAt: new Date(runStartedSec * 1000),
-      },
-    ];
-  });
-
-  for (let i = 0; i < rows.length; i += PROJECTION_CHUNK) {
-    await db
-      .insert(projection)
-      .values(rows.slice(i, i + PROJECTION_CHUNK))
-      .onConflictDoUpdate({
-        target: projection.stockId,
-        set: {
-          asOf: sql`excluded.as_of`,
-          sourceMaxDate: sql`excluded.source_max_date`,
-          bars: sql`excluded.bars`,
-          closes: sql`excluded.closes`,
-          computedAt: sql`excluded.computed_at`,
-        },
-      });
+  // 全体の MAX(date) を 1 文で引く (covering index の seek)。
+  const maxRows = await db
+    .select({ maxDate: sql<string | null>`MAX(${swingSchema.dailyOhlcv.date})` })
+    .from(swingSchema.dailyOhlcv);
+  const sourceMaxDate = maxRows[0]?.maxDate ?? null;
+  if (sourceMaxDate === null) {
+    // OHLCV が 1 行も無い (= 初回 backfill 前)。何も触らずに返す。
+    return {
+      projectedStocks: 0,
+      scannedBars: 0,
+      sourceMaxDate: null,
+      removedStocks: 0,
+    };
   }
 
-  // 今回の run で触られなかった行 = 非活動化・上場廃止で母集団から落ちた銘柄。
-  // 件数は D1 REST が changes を返さないので DELETE の前に数える
-  // (行は転送しない = count(*)。どちらも p_momentum の全走査 = 行数ぶん 3,715 行)。
+  // 今 run の行へ全体 MAX を backfill する。
+  await db
+    .update(projection)
+    .set({ sourceMaxDate })
+    .where(gte(projection.computedAt, runStarted));
+
+  // 掃除: 今回の run で触られなかった行 (母集団落ち + 今回失敗) を落とす。
+  // 時刻の直接比較で十分 (computed_at は run ごとに進む単調時計)。
   const staleBefore = new Date((runStartedSec - 1) * 1000);
   const [{ staleCount }] = await db
     .select({ staleCount: sql<number>`count(*)` })
@@ -1533,8 +1822,8 @@ export async function rebuildMomentumProjection(
   }
 
   return {
-    projectedStocks: rows.length,
-    scannedBars,
+    projectedStocks: freshCount,
+    scannedBars: 0,
     sourceMaxDate,
     removedStocks: staleCount,
   };

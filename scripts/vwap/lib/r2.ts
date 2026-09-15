@@ -4,7 +4,7 @@
 // 必要env(本番): R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET(任意)
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 
 const LOCAL_OUT = process.env.LOCAL_OUT;
 const BUCKET = process.env.R2_BUCKET || "vwap-data";
@@ -47,11 +47,6 @@ export async function r2Get(key: string): Promise<string | null> {
   }
 }
 
-export async function r2Delete(key: string): Promise<void> {
-  if (LOCAL_OUT) { try { await fs.unlink(path.join(LOCAL_OUT, key)); } catch { /* no-op */ } return; }
-  await client().send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
-}
-
 // 簡易スロットル付き並列実行（Yahooレート制限対策）
 export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -79,6 +74,9 @@ export async function retry<T>(fn: () => Promise<T>, n = 3, base = 1000): Promis
     catch (e) {
       last = e;
       if ((e as { name?: string })?.name === "YahooRateLimitError") throw e;
+      // Yahoo 404 (上場廃止・コード変更) は待っても直らないので即 throw (L-57)。
+      // 形状は src/shared/yahoo/client.ts の `yahoo ${status}`。
+      if (/^yahoo 404\b/.test((e as Error)?.message ?? "")) throw e;
       await sleep(base * Math.pow(2, i));
     }
   }

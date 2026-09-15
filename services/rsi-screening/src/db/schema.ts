@@ -1,6 +1,6 @@
 import { sql, relations } from "drizzle-orm";
 import { sqliteTable, integer, real, index } from "drizzle-orm/sqlite-core";
-import { stocks } from "./core-schema.js";
+import { stocks } from "../../../../src/shared/db/core-schema.js";
 
 /**
  * 001_RSIScreening 固有スキーマ（Cloudflare D1 / SQLite 版） — ADR-0001。
@@ -16,15 +16,13 @@ import { stocks } from "./core-schema.js";
  * 2026-04 に削除した。
  */
 
-/** 現在のRSIパーセンタイル順位 + 優良株判定 (スクリーニング用) */
+/** 現在のRSIパーセンタイル順位 + 優良株判定 (スクリーニング用)。1 銘柄 1 行のため stock_id が PK (L-53) */
 export const stockRsiPercentile = sqliteTable(
   "rsi_percentile",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
-      .references(() => stocks.id, { onDelete: "cascade" })
-      .notNull()
-      .unique(),
+      .primaryKey()
+      .references(() => stocks.id, { onDelete: "cascade" }),
     rsi10: real("rsi_10"),
     rsi10Percentile: real("rsi_10_percentile"),
     rsi40: real("rsi_40"),
@@ -37,15 +35,8 @@ export const stockRsiPercentile = sqliteTable(
     isBlueChip: integer("is_blue_chip", { mode: "boolean" })
       .default(false)
       .notNull(),
-    /**
-     * 営業利益率 TTM (trailing 12 months)
-     * Yahoo Finance `financialData.operatingMargins` の生値 (0.1234 = 12.34%)
-     *
-     * 元々は過去3年の営業利益率トレンド (+1/0/-1) を保持していたが、
-     * Yahoo が無料 API から historical operating_income を削除したため、
-     * TTM 単一値に変更した。詳細は services/blue-chip-filter.ts のコメント参照。
-     */
-    operatingMarginTtm: real("operating_margin_ttm"),
+    // NOTE (L-53): 旧 operating_margin_ttm 列は core_stock_financials.operating_margin と
+    // 完全一致の二重持ちだったため 0018 で DROP。読み手は financials 側を参照する。
     /** 売上高トレンド (+1=上昇 / 0=横ばい / -1=下降) */
     revenueTrend: integer("revenue_trend"),
     /**

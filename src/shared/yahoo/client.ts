@@ -1,9 +1,5 @@
 /**
- * 統一 Yahoo Finance クライアント
- *
- * 以前は rsi-screening / swing-trading / otakara-yutai の 3 サービスが
- * それぞれ独自の yahoo-finance.ts を持ち、crumb/cookie キャッシュも別々だった。
- * このモジュールはそれらを 1 つにまとめ、全サービス共通で使う。
+ * 統一 Yahoo Finance クライアント (全サービス共通。crumb/cookie キャッシュも共有)。
  *
  * 提供する API:
  *   - fetchChart(symbol, range)      : Chart API (日足 OHLCV)
@@ -517,6 +513,183 @@ export async function fetchChart(
     null;
 
   return { symbol, price, previousClose, dataDate, ohlcv };
+}
+
+// -----------------------------------------------------------------------------
+// 生 chart レスポンス + VWAP 用の整形取得 (L-60 で lib/yahoo.ts から移動)
+// -----------------------------------------------------------------------------
+
+/**
+ * Yahoo のレート制限/一時不可 (429/503)。呼び出し側はこれを「これ以上叩くな」の
+ * シグナルとして扱い、即リトライで叩き返さない (retry は再スロー、ingest は
+ * サーキットブレークで中断する)。`retryAfterMs` は Retry-After ヘッダ由来。
+ */
+export class YahooRateLimitError extends Error {
+  constructor(
+    readonly status: number,
+    readonly retryAfterMs: number | null
+  ) {
+    super(`yahoo ${status} (rate limited)`);
+    this.name = "YahooRateLimitError";
+  }
+}
+
+function parseRetryAfter(r: Response): number | null {
+  const ra = r.headers.get("retry-after");
+  if (!ra) return null;
+  const sec = Number(ra);
+  return Number.isFinite(sec) && sec >= 0 ? sec * 1000 : null;
+}
+
+/** !ok を投げ分ける。429/503 はレート制限として型付きで投げる。 */
+function ensureOk(r: Response): void {
+  if (r.ok) return;
+  if (r.status === 429 || r.status === 503) {
+    throw new YahooRateLimitError(r.status, parseRetryAfter(r));
+  }
+  throw new Error(`yahoo ${r.status}`);
+}
+
+/**
+ * chart 生レスポンスを取得する (007 の当日 5 分足中継 + 取込 CLI 用)。
+ *
+ * 共有の yahooFetch (プロキシ対応・crumb 付き) を使う。`symbol` は Yahoo 形式の
+ * 完全形 ("7203.T" / "^N225" 等) で渡す (fetchChart のような正規化はしない)。
+ * Worker ランタイムでは `YAHOO_PROXY_BASE` 未設定なので直叩きになり、
+ * プロキシ自身がループしない。
+ */
+export async function fetchYahooChartRaw(
+  symbol: string,
+  range: string,
+  interval: string,
+  events = false
+): Promise<Response> {
+  const ev = events ? "&events=split,div" : "";
+  const url =
+    `${CHART_API_BASE}/${encodeURIComponent(symbol)}` +
+    `?range=${range}&interval=${interval}${ev}`;
+  return yahooFetch(url);
+}
+
+/** chart JSON の最小構造 (fetchBars5m / fetchDaily が読む範囲だけ)。 */
+interface YahooChartJson {
+  chart?: {
+    result?: Array<{
+      timestamp?: number[];
+      indicators?: {
+        quote?: Array<{
+          open?: (number | null)[];
+          high?: (number | null)[];
+          low?: (number | null)[];
+          close?: (number | null)[];
+          volume?: (number | null)[];
+        }>;
+        adjclose?: Array<{ adjclose?: (number | null)[] }>;
+      };
+      events?: {
+        splits?: Record<
+          string,
+          { date: number; numerator: number; denominator: number }
+        >;
+      };
+    }>;
+  };
+}
+
+export interface DailyBar {
+  date: string;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+  adj: number;
+}
+export interface DailyResult {
+  bars: DailyBar[];
+  splits: { date: string; ratio: number }[];
+}
+
+export const jstDate = (ts: number) =>
+  new Date((ts + 32400) * 1000).toISOString().slice(0, 10);
+
+export interface Bar5m {
+  ts: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+}
+
+// 5分足を正準形 [{ts,o,h,l,c,v}] で取得（蓄積・フロント共通の内部形式）。
+export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]> {
+  const r = await fetchYahooChartRaw(symbol, range, "5m", false);
+  ensureOk(r);
+  const j = (await r.json()) as YahooChartJson;
+  const res = j?.chart?.result?.[0];
+  if (!res || !res.timestamp) return [];
+  // quote 欠落は仕様変更の疑い。空で黙殺せず落とす (旧実装は TypeError)。
+  const q = res.indicators?.quote?.[0];
+  if (!q) throw new Error(`Chart API エラー [${symbol}]: quote がありません`);
+  const out: Bar5m[] = [];
+  for (let i = 0; i < res.timestamp.length; i++) {
+    const o = q.open?.[i],
+      h = q.high?.[i],
+      l = q.low?.[i],
+      c = q.close?.[i],
+      v = q.volume?.[i];
+    if (o == null || h == null || l == null || c == null || !v) continue;
+    out.push({
+      ts: res.timestamp[i],
+      o: +o.toFixed(2),
+      h: +h.toFixed(2),
+      l: +l.toFixed(2),
+      c: +c.toFixed(2),
+      v,
+    });
+  }
+  out.sort((a, b) => a.ts - b.ts);
+  return out;
+}
+
+// 日足（最大10年・分割/配当イベント込み）を取得・整形。
+export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyResult> {
+  const r = await fetchYahooChartRaw(symbol, range, "1d", true);
+  ensureOk(r);
+  const j = (await r.json()) as YahooChartJson;
+  const res = j?.chart?.result?.[0];
+  if (!res || !res.timestamp) return { bars: [], splits: [] };
+  // quote 欠落は仕様変更の疑い。空で黙殺せず落とす (旧実装は TypeError)。
+  const q = res.indicators?.quote?.[0];
+  if (!q) throw new Error(`Chart API エラー [${symbol}]: quote がありません`);
+  const adj = res.indicators?.adjclose?.[0]?.adjclose || [];
+  const bars: DailyBar[] = [];
+  for (let i = 0; i < res.timestamp.length; i++) {
+    const o = q.open?.[i],
+      h = q.high?.[i],
+      l = q.low?.[i],
+      c = q.close?.[i],
+      v = q.volume?.[i];
+    if (o == null || h == null || l == null || c == null) continue;
+    const a = adj[i];
+    bars.push({
+      date: jstDate(res.timestamp[i]),
+      o: +o.toFixed(2),
+      h: +h.toFixed(2),
+      l: +l.toFixed(2),
+      c: +c.toFixed(2),
+      v: v || 0,
+      adj: a != null ? +a.toFixed(2) : +c.toFixed(2),
+    });
+  }
+  const splits: { date: string; ratio: number }[] = [];
+  const ev = res.events?.splits || {};
+  for (const k of Object.keys(ev)) {
+    const s = ev[k];
+    splits.push({ date: jstDate(s.date), ratio: s.numerator / s.denominator });
+  }
+  return { bars, splits };
 }
 
 // -----------------------------------------------------------------------------

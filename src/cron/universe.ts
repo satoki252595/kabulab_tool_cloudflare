@@ -1,33 +1,16 @@
 /**
- * 母集団 (core_stocks) 同期オーケストレータ（Cloudflare D1 / Node 取込版） — ADR-0001。
+ * 母集団 (core_stocks) 同期オーケストレータ (Node。JPX XLS のパースが Node 専用のため)。
+ * `pnpm sync:universe` / 月次 cron が起動。D1 へは D1 REST 経由で書く。
  *
- * JPX 公式 data_j.xlsx の東証内国株 (プライム/スタンダード/グロース) のうち
- * 共有4文字コード契約に合う ~3,700 銘柄を
- * core_stocks に upsert する。これにより日次/月次 sync・001/003/004 の母集団が
- * 「優待縛り ~1,600」から「東証内国普通株」へ拡張される。
- *
- * 書き込みは Node から D1 REST API 経由 (createD1HttpDb)。D1 はバインディング
- * 経由でのみ触れるが、JPX XLS のパースは Node 専用 (zip/xls) なので取込は Node 側。
- *
- * 設計:
- *   - is_yutai は触らない (otakara の優待スクレイパーが writer)
- *   - 対象外化は **raw JPX (全行)** に code が無いもの、または共有4文字コード契約
- *     の対象外になったものだけに限定する。
- *     これにより優待 REIT 等 (内国普通株フィルタ外だが JPX には掲載) を
- *     誤って inactivate しない
- *
- * CLAUDE.md フォールバック禁止: JPX の件数不足・既存母集団からの異常縮小は
- * 書き込み前に throw し、大量 inactivate を防ぐ。
- *
- * 実行:
- *   pnpm sync:universe              (CLI / scripts/sync/universe.ts)
- *   月次 cron は sync:universe の後に sync:monthly:core を呼ぶ
+ * 規則: is_yutai は触らない。対象外化は raw JPX に code が無いものか共有
+ * 4 文字コード契約の対象外だけ (優待 REIT 等を誤って inactivate しない)。
+ * JPX の件数不足・異常縮小は書き込み前に throw する。
  */
 
 import { sql, inArray, eq } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 
-import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
+import * as coreSchema from "../shared/db/core-schema.js";
 import {
   downloadJpxListing,
   isListedEquity,
@@ -217,51 +200,24 @@ export interface UniverseEquityCounts {
  * (c)(d1)(d2) は `existingActiveCount === 0` のとき丸ごとスキップされる — 0 除算
  * 避けではなく**初回 seed を通すための意図的な穴**なので、そのまま保つ。
  *
- * stockStock 側 (`src/jp_stock_pipeline/cloud_store/universe_guards.py`、PR #36) と
- * **1:1 で同じ条件・同じ分母**にしてある。実際に月次で throw するのはこちら側なので、
- * 揃えないと移行 P4b (母集団 +725 行) で母集団同期が恒久的に止まる。
+ * stockStock 側 (`universe_guards.py`) と 1:1 で同じ条件・同じ分母にしてある。
  *
  * ## (c) の分母を equity に絞る理由
  *
- * 元の実装は (c)(d) の分母をどちらも `is_active=1` の全件にしていた。P4b で
- * ETF/ETN/PRO/外国株が +725 行入って active が 4,440 になると、(c) は
- * **3,700/4,440 = 0.833 < 0.98 で毎月 throw** する。分子 `equityCount` は
- * `isListedEquity` を通った内国普通株しか数えないのに分母だけが全銘柄種別を数えて
- * いるせいで、**母集団を広げるほど比率が下がる**という壊れ方をする。
+ * 分子は内国普通株しか数えないのに分母が全銘柄種別だと、母集団を広げるほど
+ * 比率が下がり (c) が毎月 throw する。分子と分母の母集団を揃える。
  *
  * ## (d) を (d1)/(d2) に割る理由
  *
- * (d) の分子 `pendingDeactivationCount` は active **全件**から算出される
- * (`shouldDeactivateUniverseCode` は data_j の全行集合と突き合わせるので ETF や
- * REIT の上場廃止も候補に入る)。ここで (d) の分母だけを equity に絞ると
- * **分子 ⊄ 分母**になり、「守っている母集団に対する割合」という意味が消える
- * (極端には比率が 1 を超える)。よって分子と分母の母集団を必ず揃える:
- *
- * - (d1) = 分子・分母とも active 全体 (元の実装のまま)。銘柄種別を問わない
- *   大量対象外化 (ETF が一斉に消える事故) を拾う
- * - (d2) = 分子・分母とも equity。P4b 後に内国普通株の対象外化の実効上限が
- *   74 件 → 88 件へ自動的に緩むのを塞ぐ。対象外化の候補は実質すべて内国普通株
- *   なので、(d1) だけだと防御が弱くなる一方になる
+ * (d) の分子は active 全件から算出される (ETF/REIT の上場廃止も候補に入る)。
+ * 分母だけ equity に絞ると分子 ⊄ 分母になるため、(d1) = 全体、(d2) = equity
+ * に割って分子と分母の母集団を必ず揃える。
  *
  * ## `instrument_type` が未充填・部分充填のとき
  *
- * 2026-09-12 時点の本番 `core_stocks` は P4a の列追加だけが済んでおり
- * `instrument_type` は全行 NULL。この状態で equity に絞ると分子ではなく**分母が 0**
- * になる。また充填は 3,818 行への UPDATE をチャンクで回す別フェーズなので、D1 の
- * レート制限やタイムアウトで**途中終了しうる**。
- *
- * `0` だけを未充填として扱うと、部分充填で穴が開く。equity 件数が 500 のまま
- * P4b を通した場合:
- *
- * - **(c) は fail-open**: 3,100/500 = 6.2 なので 0.98 を割らない。本当の被覆率は
- *   3,100/4,440 = 0.698 で、部分取得された data_j を素通しする
- * - **(d2) は fail-closed だが誤発火**: 11/500 = 2.2% で止まる。実母集団に対しては
- *   11/3,700 = 0.3% で、これは消したはずの「毎月 throw する」の再来
- *
- * → `MIN_BACKFILLED_EQUITY_ROWS` を下回る equity 件数は `0` と同じ扱いにし、
- * (c) は従来の分母へ縮退 (P4b 後なら 0.833 で発火 = fail-closed)、(d2) は
- * 評価しない (誤発火させない)。どちらも `instrumentTypeBackfilled()` という
- * 1 つの述語から出す。
+ * equity に絞ると分母が 0 になる。充填は別フェーズで途中終了しうるため、
+ * 下限未満は `0` と同じ扱いにし、(c) は従来の分母へ縮退、(d2) は評価しない
+ * (`instrumentTypeBackfilled()` 1 つの述語から出す)。
  */
 export function assertUniverseCoverage(
   rawCount: number,

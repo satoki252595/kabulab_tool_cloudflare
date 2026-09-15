@@ -1,6 +1,12 @@
 # kabulab プロジェクト群 概要
 
-**kabulab** は日本株投資を支援する Web サービス群の統合ブランド。**単一の Cloudflare Worker** (`kabulab-cf`) に複数のサービスを Hono サブアプリとしてマウントする mono-repo 構成で運用する。共通 DB として単一の Cloudflare D1 (SQLite) を共有する (ADR-0001 で Neon PostgreSQL から移行済み)。
+**kabulab** は日本株投資を支援する Web サービス群の統合ブランド。**単一の Cloudflare Worker** (`kabulab-cf`) に複数のサービスを Hono サブアプリとしてマウントする mono-repo 構成で運用する。共通 DB として単一の Cloudflare D1 (SQLite) を共有する。
+
+> データストア方針 (2026-06 確定。旧 ADR-0001 の要旨。経緯は git 履歴):
+> Neon PostgreSQL を全廃し、正規化リレーショナルは単一 D1 `kabulab-cf`
+> (接頭辞テーブルで全サービス同居)、時系列ブロブは R2、一次データ (raw) は
+> Notion に置く。Worker は配信専用とし、日次・月次の取込と指標計算は
+> Node (GitHub Actions) が D1 REST で書き込む。Neon は解約する。
 
 ## ブランドアイデンティティ
 
@@ -29,7 +35,7 @@
 | View | Hono が直接 HTML 文字列を返却（**JSX 不可** — mono-repo 方針として Workers/esbuild バンドルでも template literal を踏襲する） |
 | Language | TypeScript (strict mode) |
 | Deploy | Cloudflare Workers Builds (Git 連携。main push で無料自動デプロイ。手動は `wrangler deploy`) |
-| 自動化 | GitHub Actions (Node) 3 本: stock-sync / vwap-ingest / catchup |
+| 自動化 | GitHub Actions 4 本: 取込 3 (stock-sync / vwap-ingest / catchup。Node) + CI 1 (ci) |
 | Test | Vitest |
 | Package Manager | pnpm 9 (Nix Flake で固定。`nix develop` で Node 22 + pnpm 9) |
 
@@ -82,7 +88,7 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 │   │   ├── src/
 │   │   │   ├── index.ts               # Hono アプリ本体 (API + SSR 配線)
 │   │   │   ├── db/                    # core_* + rsi_percentile スキーマ (sqlite-core) + Drizzle/D1 クライアント
-│   │   │   ├── routes/                # /api/screening, /api/stocks, SSR pages
+│   │   │   ├── routes/                # SSR pages
 │   │   │   ├── services/              # screening-service / stock-detail-service (UI クエリ用)
 │   │   │   ├── views/                 # template literal を返す .ts 関数
 │   │   │   └── tests/
@@ -91,7 +97,6 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 │   │   ├── app.ts                     # Hono サブアプリ (SSR ページを集約)
 │   │   ├── src/
 │   │   │   ├── db/                    # yutai_* / otakara_* スキーマ (core_stocks を再 export) + Drizzle/D1 クライアント
-│   │   │   ├── services/              # yutai-scraper / yutai-data-provider (優待マスタ管理用)
 │   │   │   └── tests/
 │   │   ├── data-scripts/              # 優待マスタ投入用の 1 回限りスクリプト
 │   │   └── CLAUDE.md / README.md
@@ -111,7 +116,7 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 │   │   ├── base-path.ts               # BASE_PATH = "/financial-math"
 │   │   └── src/
 │   │       ├── index.ts               # Hono アプリ本体 (routes + onError)
-│   │       ├── db/                    # core_* + finmath_* + swing-readonly (sqlite-core) + Drizzle/D1 クライアント
+│   │       ├── db/                    # core 再 export + swing-readonly + L2 投影参照 (所有表なし。旧 finmath_* は 0012 で削除)
 │   │       ├── routes/                # POST /api/{dcf,capm,black-scholes}/calc + SSR pages
 │   │       ├── services/              # 純関数: dcf.ts / capm.ts / black-scholes.ts / volatility.ts / emh.ts
 │   │       ├── validators/            # Zod (空文字列は preprocess で undefined に正規化)
@@ -133,14 +138,13 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 │   │   ├── all-monthly.ts             # pnpm sync:monthly (rebuild + 優待4工程のローカル手動フル)
 │   │   ├── yuho-edinet.ts             # pnpm ingest:yuho-edinet (Worker /yuho-quant/admin/catchup を叩く)
 │   │   └── ir-tdnet.ts                # pnpm ingest:ir-tdnet (TDnet + kuromoji → D1 HTTP)
-│   ├── vwap/                          # 007 VWAP 取込 → R2 (GitHub Actions で定期実行)
-│   └── migrate/                       # Neon→D1 移行ツール (一度きり)
+│   └── vwap/                          # 007 VWAP 取込 → R2 (GitHub Actions で定期実行)
 ├── drizzle/                           # マイグレーション SQL。drizzle/d1/*.sql が D1 へ適用する正本
 ├── docs/                              # mono-repo 全体のドキュメント (このフォルダ)
 ├── drizzle.d1.config.ts               # D1 スキーマ生成用 drizzle-kit 設定 (sqlite dialect)
 ├── package.json
 ├── wrangler.toml                      # Worker 設定 (DB=D1 / BUCKET=R2 / ASSETS=public バインディング)
-├── .github/workflows/                # GitHub Actions: stock-sync.yml / vwap-ingest.yml / catchup.yml
+├── .github/workflows/                # GitHub Actions 4 本: stock-sync / vwap-ingest / catchup / ci
 └── tsconfig.json / vitest.config.ts / eslint.config.js
 ```
 
@@ -163,7 +167,7 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 
 ## DB 設計 — 単一 source of truth
 
-リレーショナルの正本は **単一の Cloudflare D1 (SQLite) `kabulab-cf`** (ADR-0001 で Neon PostgreSQL から移行)。PG のスキーマ名 (core / rsi / public / swing / finmath / ir_catalog) という概念は廃止し、**サービス別の接頭辞テーブル** (`core_*` / `rsi_*` / `swing_*` / `yutai_*` / `otakara_*` / `finmath_*` / `yuho_*` / `ir_*`) を 1 つの D1 に集約する。Drizzle は `drizzle-orm/d1` + sqlite-core。スキーマの正本は [`src/shared/db/core-schema.ts`](../src/shared/db/core-schema.ts) (共有 core) と各サービスの `db/`。
+リレーショナルの正本は **単一の Cloudflare D1 (SQLite) `kabulab-cf`** (2026-06 に Neon PostgreSQL から移行)。PG のスキーマ名 (core / rsi / public / swing / finmath / ir_catalog) という概念は廃止し、**サービス別の接頭辞テーブル** (`core_*` / `rsi_*` / `swing_*` / `yutai_*` / `otakara_*` / `yuho_*` / `ir_disclosures` / L2 投影 `p_*`) を 1 つの D1 に集約する。Drizzle は `drizzle-orm/d1` + sqlite-core。スキーマの正本は [`src/shared/db/core-schema.ts`](../src/shared/db/core-schema.ts) (共有 core) と各サービスの `db/`。
 
 銘柄マスタは **`core_stocks` に 1 本化** 済み (2026-04 の refactor で別マスタを廃止)。`yutai_benefits` 等の FK は `core_stocks(id)` を指す。
 
@@ -178,7 +182,6 @@ Cloudflare D1 (kabulab-cf, SQLite)
 ├── 003 Swing 固有
 │   ├── swing_daily_ohlcv              日足 OHLCV (90 営業日。母集団 ~3,700 化で容量確保のため 120→90 に短縮)
 │   ├── swing_stock_indicators         SMA(5/20/25/60/75) + ATR14 + RSI14 + MACD + Fib
-│   ├── swing_stock_screening          5 条件フィルター結果
 │   ├── swing_entry_signals            E&E 6 パターン signal
 │   ├── swing_market_context           A/B/C/D マクロ判定 (日次)
 │   └── swing_sector_daily             33 業種の騰落ランキング (日次)
@@ -189,14 +192,18 @@ Cloudflare D1 (kabulab-cf, SQLite)
 │   └── otakara_stock_scores           monthly sync の再スコア結果 (is_yutai=true のみ)
 ├── 005 有報定量検索 固有 (銘柄マスタは core_stocks を参照)
 │   ├── yuho_documents                 取り込んだ有報 1 通 = 1 行 (doc_id 一意 = 冪等キー)
-│   └── yuho_order_facts               受注高/受注残高 (有報×会計期末×セグメント粒度)
-└── 006 IR Catalog 固有 (銘柄マスタは core_stocks を参照)
-    └── ir_disclosures                 TDnet 適時開示 1 件 = 1 行 (タグ分類 + PDF センチメント)
+│   ├── yuho_order_facts               受注高/受注残高 (有報×会計期末×セグメント粒度)
+│   └── yuho_overseas_facts            海外売上高 (有報×会計期末×地域粒度)
+├── 006 IR Catalog 固有 (銘柄マスタは core_stocks を参照)
+│   └── ir_disclosures                 TDnet 適時開示 1 件 = 1 行 (タグ分類 + PDF センチメント)
+└── L2 投影 (日次 sync が更新。各サービスが読取参照)
+    ├── p_momentum                     EMH 用モメンタム断面 (004 が参照)
+    └── p_yuho_growth                  有報 CAGR・YoY・比率の銘柄別集計 (005 が参照。0017 で追加)
 ```
 
 時系列データ (007 VWAP の daily/intra/margin) は D1 ではなく **R2** (バケット `vwap-data`)、外部取得した一次データ (raw) は **Notion** に置く (後述)。
 
-**004 金融数学** は所有する表を持たず、`core_stocks` / `core_stock_financials` / `core_stock_annual_financials` / `swing_daily_ohlcv` / `swing_stock_indicators` / `swing_market_context` を読み取り専用で集計する。DCF/CAPM/EMH 等の集計計算は永続化せずオンデマンドでレスポンスに返す。
+**004 金融数学** は所有する表を持たず、`core_stocks` / `core_stock_financials` / `core_stock_annual_financials` / `swing_daily_ohlcv` / `swing_stock_indicators` / `swing_market_context` / L2 投影 `p_momentum` を読み取り専用で集計する。DCF/CAPM 等の集計計算は永続化せずオンデマンドでレスポンスに返す (EMH 用のモメンタム断面だけ日次 sync が `p_momentum` に永続化する)。
 
 ### 過去に存在したが削除されたテーブル
 
@@ -208,6 +215,7 @@ Cloudflare D1 (kabulab-cf, SQLite)
 | `public.stocks` | 2026-04 | core_stocks に一本化 (FK 付け替え済み) |
 | `finmath_price_snapshot` | 2026-09 (drizzle/d1/0012) | 訪問者依存の遅延キャッシュ。価格断面は `core_stock_financials` へ振り替え (PR #23)。全行を DROP 前に退避 |
 | `finmath_daily_ohlcv` | 2026-09 (drizzle/d1/0012) | 7 シンボルだけの遅延キャッシュ。`swing_daily_ohlcv` / `swing_market_context` へ振り替え (PR #23) |
+| `swing_stock_screening` | 2026-09 (drizzle/d1/0015) | 5 条件フィルター結果。L-52 で indicators の列に畳み込み、表は DROP |
 
 ### `swing_stock_indicators.sma_25` の特殊性
 
@@ -237,7 +245,7 @@ Cloudflare D1 (kabulab-cf, SQLite)
 
 ## データ取得 — 日次 / 月次 (GitHub Actions / Node)
 
-取込 (書込) は **GitHub Actions(Node)** が担う。指標・スコア計算は Node で行い、D1 へは `createD1HttpDb` (D1 REST) で書き込む。Yahoo は共有クライアントが **`YAHOO_PROXY_BASE`** (Worker エッジの `/api/ingest/yahoo`) 経由で叩くため、ランナー IP が 429 されない。Workers Paid / Workers Cron は使わない (subrequest 50/invocation の無料枠では Worker 上で全銘柄 sync を捌けないため)。
+取込 (書込) は **GitHub Actions(Node)** が担う。指標・スコア計算は Node で行い、D1 へは `createD1HttpDb` (D1 REST) で書き込む。Yahoo は共有クライアントが **`YAHOO_PROXY_BASE`** (Worker エッジの `/api/ingest/yahoo` に一本化。旧 `/vwap-analysis/api/ingest-fetch` は K4c-1 で廃止) 経由で叩くため、ランナー IP が 429 されない。Workers Paid / Workers Cron は使わない (subrequest 50/invocation の無料枠では Worker 上で全銘柄 sync を捌けないため)。
 
 株価系の自動化は GitHub Actions ワークフロー [`.github/workflows/stock-sync.yml`](../.github/workflows/stock-sync.yml) が担当 (平日 21:00 UTC = 翌 06:00 JST に日次、毎月10日 01:30 UTC = 10:30 JST に月次 universe + otakara rebuild)。
 
@@ -253,16 +261,16 @@ JPX 公式 `data_j.xlsx` の東証内国株 (プライム/スタンダード/グ
 
 - Phase 1: 必須 D1 スキーマを検証し、`core_stocks` から active 銘柄を取得
 - Phase 2: マクロ指数 (^N225 / ^VIX / ^GSPC / NIY=F) + 日経VI を並列取得
-- Phase 3: worker pool (CONCURRENCY=5, DELAY_MS=200) で:
+- Phase 3: worker pool (CONCURRENCY=5, DELAY_MS=150) で:
   - Yahoo `fetchStockRawData(code, "5y")` = Chart + QuoteSummary 並列 (`YAHOO_PROXY_BASE` 経由)
   - 5y OHLCV → RSI(10/40/120) 時系列 + percentile snapshot + 優良株判定
   - 6mo スライス → SMA(5/20/25/60/75) + ATR14 + RSI14 + MACD + Fib + volume/turnover + 前日比%
   - 5 条件 screening と E&E 6 パターン判定
-  - `core_stock_financials` / `core_stock_annual_financials` / `rsi_percentile` / `swing_{daily_ohlcv,stock_indicators,stock_screening,entry_signals}` を upsert
+  - `core_stock_financials` / `core_stock_annual_financials` / `rsi_percentile` / `swing_{daily_ohlcv,stock_indicators,entry_signals}` / L2 投影 `p_momentum` を upsert (旧 `swing_stock_screening` は L-52 で indicators に畳み込み)
   - Yahoo の個別取得失敗はコードと根本原因を記録し、`is_active` は変更しない
 - Phase 4: セクター集計。`core_stocks ⋈ swing_stock_indicators` を D1 から再読込し、本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留 (前回値維持)・警告。`swing_sector_daily` 書き直し
 
-母集団 ~3,700 を 1 回の Node 実行で回す。個別銘柄またはマクロに欠損があれば終了コードを非ゼロにして、部分成功を正常終了として扱わない。GitHub Actions ジョブの `timeout-minutes: 90` (~40-50 分/回) 内で完結する。GH Actions 無料枠 (private 2,000 min/月) を意識し、VWAP と合わせて枠に近づく場合は cron を間引く運用余地がある。
+母集団 ~3,700 を 1 回の Node 実行で回す。個別銘柄またはマクロに欠損があれば終了コードを非ゼロにして、部分成功を正常終了として扱わない。GitHub Actions ジョブの `timeout-minutes: 90` (~40-50 分/回) 内で完結する (public repo のため Actions 分課金は無し)。
 
 `pnpm sync:daily` はローカル手動用のフルオーケストレータで、この core 同期に加えて
 VWAP の日足10年・5分足・信用残高を順に実行する。定常運用では stock-sync と
@@ -286,7 +294,7 @@ stock-sync の月次ジョブは次の順に別コマンドとして実行する
 
 ### その他の取込ワークフロー (GitHub Actions)
 
-- **007 VWAP** ([`.github/workflows/vwap-ingest.yml`](../.github/workflows/vwap-ingest.yml)): 平日 08:00 UTC に日足10年 + 5分足、土 09:00 UTC に信用残高 (週次) を取得し **R2** (`vwap-data` バケット、`daily/{code}.json` / `intra/{code}.json` / `margin/{week}.json`) へ書き込む。Yahoo は `YAHOO_PROXY_BASE` (Worker エッジ `/vwap-analysis/api/ingest-fetch`) 経由。
+- **007 VWAP** ([`.github/workflows/vwap-ingest.yml`](../.github/workflows/vwap-ingest.yml)): 月・水・金 08:00 UTC に日足10年 + 5分足、土 09:00 UTC に信用残高 (週次) を取得し **R2** (`vwap-data` バケット、`daily/{code}.json` / `intra/{code}.json` / `margin/{week}.json`) へ書き込む。Yahoo は `YAHOO_PROXY_BASE` (Worker エッジ `/api/ingest/yahoo`) 経由。
 - **005 EDINET + 006 TDnet** ([`.github/workflows/catchup.yml`](../.github/workflows/catchup.yml)): 平日 11:00 UTC に当日の開示をキャッチアップ。006 TDnet は kuromoji (Node 専用) のセンチメント判定込みで Node 実行 → D1 HTTP 書込。005 EDINET は Worker の認証ルート `/yuho-quant/admin/catchup` を叩く薄いトリガ (EDINET fetch + Notion アーカイブ + D1 書込は Worker 側が時間予算内で実行)。
 - **002 優待の LLM 要約**はリポジトリ外のクラウド LLM (Cursor Automations 等) で行う。このリポジトリのコマンドはタスク書き出し (`pnpm yutai:summary:export`) と取り込み (`pnpm yutai:summary:import`、既定 dry-run) だけ ([作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md))。
 
@@ -373,7 +381,7 @@ pnpm ingest:yuho-edinet     # 005 EDINET 有報トリガ (Worker /yuho-quant/adm
 6. `src/index.ts` に `app.route(BASE_PATH, mySubApp)` を追加
 7. `SERVICES` 配列にカードを追加（src/index.ts 内）
 8. PWA / 静的アセットは `public/<slug>/` に配置
-9. **定期実行が必要なら Worker 上の cron ではなく GitHub Actions(Node) の既存ワークフロー (stock-sync / vwap-ingest / catchup) に相乗りさせる**。Workers Cron は使わない (無料運用方針)。指標計算は Node で行い D1 へは `createD1HttpDb` で書く
+9. **定期実行が必要なら Worker 上の cron ではなく GitHub Actions(Node) の既存ワークフロー (stock-sync / vwap-ingest / catchup。ci は取込を持たない) に相乗りさせる**。Workers Cron は使わない (無料運用方針)。指標計算は Node で行い D1 へは `createD1HttpDb` で書く
 10. **JSX は使えない** — ビューは template literal を返す `.ts` 関数として実装する (mono-repo 方針として Workers/esbuild バンドルでも踏襲)
 11. **POST フォームの optional フィールド**は `z.preprocess((v) => v === "" ? undefined : v, ...)` で空文字列を吸収する (HTML form の標準挙動でフォーム未入力は `""` 送信)。`z.coerce.number().optional()` 単独だと `""` が `0` に変換されるバグの温床になるので注意。
 12. **DB アクセス** — Worker (読取) は `c.env.DB` を `createServiceDb(c.env.DB, ownSchema)` でラップ、取込 (書込) は Node 側で `createD1HttpDb` (D1 REST) を使う。共有 core スキーマ + サービス固有スキーマはいずれも sqlite-core で定義する。

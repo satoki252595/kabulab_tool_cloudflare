@@ -1,19 +1,10 @@
 /**
- * 共有 core スキーマ（Cloudflare D1 / SQLite 版） — ADR-0001。
+ * 共有 core スキーマ (D1/SQLite)。銘柄マスタ・財務の一次情報
+ * (「Yahoo Finance 等から取得した生に近いデータ」のみ。指標やスコアは各サービス側)。
  *
- * Neon PostgreSQL の `core` スキーマ（services/rsi-screening/src/db/core-schema.ts）を
- * D1(SQLite) へ移行したもの。D1 は 1 DB = 1 SQLite で名前空間が無いため、旧
- * スキーマ名を接頭辞 `core_` に降ろしてテーブル名衝突を避ける。
- *
- * 所有権: 銘柄マスタ・財務の一次情報。Neon 版と同じく「Yahoo Finance 等から
- * 取得した生に近いデータ」のみ。テクニカル指標やスコアは各サービス側に置く。
- *
- * 方言マッピング（PostgreSQL → SQLite, ADR-0001 §4）:
- *   serial                         → integer primaryKey autoIncrement
- *   timestamp(withTimezone)+now()  → integer({mode:'timestamp'}) default unixepoch()
- *   date                           → text（'YYYY-MM-DD' 文字列のまま）
- *   boolean                        → integer({mode:'boolean'})
- *   real / doublePrecision         → real
+ * 方言マッピング (PostgreSQL → SQLite):
+ *   serial / timestamp(tz)+now() / date / boolean → integer PK autoincrement /
+ *   integer({mode:'timestamp'}) default unixepoch() / text / integer({mode:'boolean'})
  */
 import { sql, relations } from "drizzle-orm";
 import {
@@ -36,12 +27,8 @@ import {
  * (行の spread / JSON.stringify はしない)。
  * この約束は src/shared/db/core-stocks-license-boundary.test.ts が機械的に見ている。
  *
- * `sector` を 2026-09-13 にこの一覧へ入れた。JPX data_j.xls の 33業種区分を
- * src/cron/universe.ts が `sector: r.sector33` で書いているので、名前が
- * `sector33` でないだけで出所は `sector33` 列と同じ JPX ではなく —— 逆で、
- * **`sector` が JPX 由来**、`sector33` は EDINET コードリストの「提出者業種」
- * という別物である。公開面が読むのは `sector33` 側で、切替は
- * src/shared/db/public-columns.ts が 1 箇所で決める。
+ * `sector` は JPX 由来 (personal-only)。`sector33` 列は EDINET の「提出者業種」で
+ * 別物。公開面が読むのは `sector33` 側で、切替は public-columns.ts が 1 箇所で決める。
  */
 export const stocks = sqliteTable(
   "core_stocks",
@@ -143,15 +130,13 @@ export const stocks = sqliteTable(
   ]
 );
 
-/** 最新ファンダメンタルズ（共有） */
+/** 最新ファンダメンタルズ（共有）。1 銘柄 1 行のため stock_id が PK (L-53) */
 export const stockFinancials = sqliteTable(
   "core_stock_financials",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
-      .references(() => stocks.id, { onDelete: "cascade" })
-      .notNull()
-      .unique(),
+      .primaryKey()
+      .references(() => stocks.id, { onDelete: "cascade" }),
     price: real("price"),
     per: real("per"),
     pbr: real("pbr"),
@@ -167,8 +152,8 @@ export const stockFinancials = sqliteTable(
     fetchedAt: integer("fetched_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),
-  },
-  (table) => [index("idx_core_financials_stock_id").on(table.stockId)]
+  }
+  // stock_id の列宣言 (.unique()) が自動索引を作るので、named な重複は持たない (L-45)。
 );
 
 /**

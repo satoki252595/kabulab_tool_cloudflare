@@ -3,8 +3,9 @@
  * **値**で見る (書き方の検査は src/shared/db/active-equity.test.ts)。
  *
  * 日次取込 (src/cron/daily.ts) は 2026-09-13 から active かつ equity だけを更新する。
- * 非普通株 (REIT 等) の `swing_stock_screening` / `swing_entry_signals` 行は消されずに
- * 凍結するので、公開面が同じ述語で絞らないと古いシグナルや通過判定が今日の行として並ぶ。
+ * 非普通株 (REIT 等) の `swing_stock_indicators` (L-52 で screening を畳んだ) /
+ * `swing_entry_signals` 行は消されずに凍結するので、公開面が同じ述語で絞らないと
+ * 古いシグナルや通過判定が今日の行として並ぶ。
  * 固定したい契約: 次のどこにも reit_fund の銘柄が出ない。
  *
  *   - GET /screening のロング / ショート (以前は is_active の条件も無かった)
@@ -17,7 +18,7 @@
  * 非普通株の行は、絞り込みが外れたら**先頭に来る**値 (売買代金・シグナル強度が最大)
  * にしてある。末尾に並ぶ値だと、limit で切れて「出ない」ように見えてしまう。
  *
- * D1 シムとスキーマは sector-ranking-key-switch.test.ts と同じ方式
+ * D1 シムとスキーマは src/cron/daily-sector-aggregate.test.ts と同じ方式
  * (node:sqlite に drizzle/d1 のマイグレーションをそのまま流す)。
  */
 import { DatabaseSync } from "node:sqlite";
@@ -86,12 +87,9 @@ beforeEach(() => {
   const insStock = sqlite.prepare(
     "INSERT INTO core_stocks (id, code, name, market, is_active, instrument_type) VALUES (?, ?, ?, 'プライム', 1, ?)"
   );
-  const insIndicator = sqlite.prepare(
-    "INSERT INTO swing_stock_indicators (stock_id, latest_close, avg_turnover_20d, atr_pct, pct_change_1d) VALUES (?, 1000, ?, 2.0, 1.0)"
-  );
   // ロング通過とショート通過の両方を立てる (1 銘柄 1 行なので同じ行に)。
-  const insScreening = sqlite.prepare(
-    "INSERT INTO swing_stock_screening (stock_id, liquidity_ok, volatility_ok, trend_ok_long, trend_ok_short, all_passed_long, all_passed_short) VALUES (?, 1, 1, 1, 1, 1, 1)"
+  const insIndicator = sqlite.prepare(
+    "INSERT INTO swing_stock_indicators (stock_id, latest_close, avg_turnover_20d, atr_pct, pct_change_1d, liquidity_ok, volatility_ok, trend_ok_long, trend_ok_short, all_passed_long, all_passed_short) VALUES (?, 1000, ?, 2.0, 1.0, 1, 1, 1, 1, 1, 1)"
   );
   const insSignal = sqlite.prepare(
     "INSERT INTO swing_entry_signals (stock_id, pattern, direction, entry_price, stop_loss, signal_strength, note) VALUES (?, 'breakout_long', 'long', 1000, 950, ?, 'テスト')"
@@ -99,13 +97,11 @@ beforeEach(() => {
 
   insStock.run(1, EQUITY_CODE, "普通株テスト", "equity");
   insIndicator.run(1, 1.0e9);
-  insScreening.run(1);
   insSignal.run(1, 50);
 
   // 日次の対象外になった REIT。絞り込みが外れたら先頭に来る値にする。
   insStock.run(2, REIT_CODE, "REITテスト", "reit_fund");
   insIndicator.run(2, 9.0e9);
-  insScreening.run(2);
   insSignal.run(2, 99);
 });
 
@@ -133,17 +129,17 @@ describe("swing-trading の一覧は active かつ equity の銘柄だけを出�
     "GET %s は 1 銘柄 1 行で、core_stocks を CROSS JOIN + 等値で結ぶ",
     async (path) => {
       const html = await page(path);
-      // 等値を消すと screening 行 × equity 行の直積になり、REIT の screening /
-      // indicators の値が 7203 の名前でもう 1 行並ぶ。REIT のコードは出ないので、
+      // 等値を消すと indicators 行 × equity 行の直積になり、REIT の indicators の
+      // 値が 7203 の名前でもう 1 行並ぶ。REIT のコードは出ないので、
       // 上の not.toContain(REIT_CODE) だけでは素通りする。
       expect(html.split(`/stock/${EQUITY_CODE}"`).length - 1).toBe(1);
 
-      const screeningSql = queries.find((q) => q.includes('from "swing_stock_screening"'));
+      const screeningSql = queries.find((q) => q.includes('from "swing_stock_indicators"'));
       expect(screeningSql).toBeDefined();
       // INNER JOIN に戻すと core_stocks の is_active 索引が外側ループになり、本番の
       // rows_read が long 356 → 7,585 / short 1,356 → 8,085 に増える (pages.ts)。
-      expect(screeningSql).toContain('from "swing_stock_screening" cross join "core_stocks"');
-      expect(screeningSql).toContain('"core_stocks"."id" = "swing_stock_screening"."stock_id"');
+      expect(screeningSql).toContain('from "swing_stock_indicators" cross join "core_stocks"');
+      expect(screeningSql).toContain('"core_stocks"."id" = "swing_stock_indicators"."stock_id"');
     }
   );
 
@@ -155,6 +151,20 @@ describe("swing-trading の一覧は active かつ equity の銘柄だけを出�
       expect(html).not.toContain(REIT_CODE);
     }
   );
+
+  it("GET /screening は売買代金降順に並ぶ (L-52 の 2 表結合)", async () => {
+    // 7203 (1.0e9) より売買代金が小さい通過銘柄を足す。
+    sqlite.prepare(
+      "INSERT INTO core_stocks (id, code, name, market, is_active, instrument_type) VALUES (3, '9984', '二番手テスト', 'プライム', 1, 'equity')"
+    ).run();
+    sqlite.prepare(
+      "INSERT INTO swing_stock_indicators (stock_id, latest_close, avg_turnover_20d, atr_pct, pct_change_1d, liquidity_ok, volatility_ok, trend_ok_long, trend_ok_short, all_passed_long, all_passed_short) VALUES (3, 1000, ?, 2.0, 1.0, 1, 1, 1, 1, 1, 1)"
+    ).run(0.5e9);
+
+    const html = await page("/screening?direction=long");
+    const codes = [...html.matchAll(/\/stock\/(\w+)"/g)].map((m) => m[1]);
+    expect(codes).toEqual([EQUITY_CODE, "9984"]);
+  });
 
   it("GET / の強度上位シグナルに reit_fund が出ない", async () => {
     const html = await page("/");

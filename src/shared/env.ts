@@ -10,8 +10,6 @@
  *
  * 注: 各サービス固有の env は従来どおり各自の env.ts (例:
  * `src/shared/notion-archive/env.ts`) に置く。ここは root 共有分のみ。
- * `DATABASE_URL` は root 規約「必ず process.env.DATABASE_URL から取得」が
- * 現存し参照箇所が多いため、本アクセサへの移行は別タスク。
  */
 
 function required(key: string): string {

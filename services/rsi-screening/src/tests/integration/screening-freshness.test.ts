@@ -43,8 +43,7 @@ CREATE TABLE core_stocks (
   src_fetched_at integer, quality text
 );
 CREATE TABLE core_stock_financials (
-  id integer PRIMARY KEY AUTOINCREMENT,
-  stock_id integer NOT NULL UNIQUE,
+  stock_id integer PRIMARY KEY NOT NULL,
   price real, per real, pbr real, dividend_yield real,
   eps real, bps real, roe real, roa real, market_cap real,
   operating_margin real,
@@ -52,14 +51,12 @@ CREATE TABLE core_stock_financials (
   fetched_at integer NOT NULL DEFAULT (unixepoch())
 );
 CREATE TABLE rsi_percentile (
-  id integer PRIMARY KEY AUTOINCREMENT,
-  stock_id integer NOT NULL UNIQUE,
+  stock_id integer PRIMARY KEY NOT NULL,
   rsi_10 real, rsi_10_percentile real,
   rsi_40 real, rsi_40_percentile real,
   rsi_120 real, rsi_120_percentile real,
   rsi_min_percentile real,
   is_blue_chip integer NOT NULL DEFAULT 0,
-  operating_margin_ttm real,
   revenue_trend integer,
   percentile_sample_bars integer,
   computed_at integer NOT NULL DEFAULT (unixepoch())

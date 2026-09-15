@@ -2,8 +2,7 @@
 // 配信のみ（Hono サブアプリ）。時系列は R2(c.env.BUCKET)、当日5分足は Yahoo 中継。
 // フロント(SPA)は public/vwap-analysis/ を ASSETS が配信。ここは /api/* だけ。
 import { Hono } from "hono";
-import { fetchChartRaw } from "./lib/yahoo.js";
-import { verifyCronSecret } from "../../src/shared/auth.js";
+import { fetchYahooChartRaw } from "../../src/shared/yahoo/client.js";
 
 export const BASE_PATH = "/vwap-analysis";
 
@@ -21,32 +20,10 @@ const passthrough = (body: ReadableStream, maxAge: number) =>
 app.get("/api/chart", async (c) => {
   const symbol = (c.req.query("symbol") || "").trim();
   if (!SYMBOL_RE.test(symbol)) return json({ error: "bad symbol" }, 400);
-  const r = await fetchChartRaw(symbol, c.req.query("range") || "60d", c.req.query("interval") || "5m");
+  const r = await fetchYahooChartRaw(symbol, c.req.query("range") || "60d", c.req.query("interval") || "5m");
   return new Response(await r.text(), {
     status: r.status,
     headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=300" },
-  });
-});
-
-// 取込専用プロキシ（認証付き・ADR-0001）。ローカル取込 CLI が Cloudflare の
-// エッジ IP 経由で Yahoo を叩き、ローカル IP の 429 を回避するための中継。
-// 認証は CRON_SECRET（fail-closed）。Yahoo の status をそのまま透過して返すので、
-// 429/503 は CLI 側のサーキットブレーカーに正しく伝わる。range/interval は
-// 英数字のみに制限（query1 への余計なパラメータ注入を防ぐ）。
-app.get("/api/ingest-fetch", async (c) => {
-  if (!verifyCronSecret(c.req.raw)) return json({ error: "unauthorized" }, 401);
-  const symbol = (c.req.query("symbol") || "").trim();
-  if (!SYMBOL_RE.test(symbol)) return json({ error: "bad symbol" }, 400);
-  const range = c.req.query("range") || "5d";
-  const interval = c.req.query("interval") || "5m";
-  if (!/^[0-9a-z]{1,4}$/.test(range) || !/^[0-9a-z]{1,3}$/.test(interval)) {
-    return json({ error: "bad range/interval" }, 400);
-  }
-  const events = c.req.query("events") === "1";
-  const r = await fetchChartRaw(symbol, range, interval, events);
-  return new Response(await r.text(), {
-    status: r.status,
-    headers: { "Content-Type": "application/json" },
   });
 });
 

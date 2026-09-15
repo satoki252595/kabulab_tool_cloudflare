@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { and, asc, desc, eq, gt, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import { createDb } from "../db/client.js";
-import { stocks, stockFinancials } from "../db/core-schema.js";
+import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
 import { dailyOhlcv, stockIndicators } from "../db/swing-readonly.js";
 import { momentumProjection } from "../../../../src/shared/db/projection-schema.js";
 import { decodeCloses } from "../../../../src/shared/indicators/momentum-series.js";
@@ -211,9 +211,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   const q = c.req.valid("query");
   const db = createDb(requireDb(c));
 
-  // 母集団 (active かつ equity) の銘柄数。`idx_core_stocks_active_market` 越しでも走査行は
-  // インデックスエントリ数 (実測 3,715) 分かかる。4 タブ共通の分母なので残すが、
-  // これが /emh の残る走査行の大半である (詳細は PR の「コスト影響」)。
+  // 母集団 (active かつ equity) の銘柄数。4 タブ共通の分母。
+  // /emh の残る走査行の大半はこの COUNT である。
   const [{ universeSize }] = await db
     .select({ universeSize: sql<number>`count(*)` })
     .from(stocks)
@@ -237,17 +236,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
   let latestDate: string | null = null;
 
   if (q.type === "momentum") {
-    // L2 投影 (p_momentum) だけを読む。1 銘柄 1 行なので走査は銘柄数 (実測 3,715)。
-    //
-    // 以前はここで swing_daily_ohlcv を全走査しており、1 表示で 651,494 rows_read
-    // (集計クエリ単体 647,628。本番実測 2026-09-13) / TTFB 0.86〜1.01 秒だった
-    // (他 13 経路は 42〜195 ms)。D1 は走査行課金なので訪問者ごとに払う継続コストに
-    // なっていた。被覆索引では下がらない (対照実験: 同じ計画で索引外の close を
-    // SELECT 句から抜いても入れても rows_read は 674,097 で同値) ため、
-    // 事前集計へ移した。投影は日次 cron の Phase 6 が作る。
-    //
-    // 投影が持つのは**終値列そのもの**なので window は従来どおり可変で、
-    // 同じ calcMomentum に同じ配列が入る = 表示される数値は変わらない。
+    // L2 投影 (p_momentum) だけを読む。1 銘柄 1 行なので走査は銘柄数。
+    // 投影が持つのは終値列そのものなので window は可変のまま、数値は変わらない。
     const projected = await db
       .select({
         stockId: momentumProjection.stockId,
@@ -312,13 +302,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
 
   if (q.type === "small-cap") {
     const thresholdYen = q.smallCapMaxOku * 1e8;
-    const [{ matchedTotal }] = await db
-      .select({ matchedTotal: sql<number>`count(*)` })
-      .from(stockFinancials)
-      .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), activeEquityCondition()))
-      .where(and(isNotNull(stockFinancials.marketCap), gt(stockFinancials.marketCap, 0), lt(stockFinancials.marketCap, thresholdYen)));
-    totalMatched = matchedTotal;
-
+    // 件数と行を 1 クエリに畳む (L-48)。window 関数は LIMIT の前に評価される
+    // ので、over() の値はページ切り捨て前の総件数になる。
     const records = await db
       .select({
         code: stocks.code,
@@ -328,12 +313,14 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         marketCap: stockFinancials.marketCap,
         price: stockFinancials.price,
         stockId: stocks.id,
+        matchedTotal: sql<number>`count(*) over()`,
       })
       .from(stockFinancials)
       .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), activeEquityCondition()))
       .where(and(isNotNull(stockFinancials.marketCap), gt(stockFinancials.marketCap, 0), lt(stockFinancials.marketCap, thresholdYen)))
       .orderBy(asc(stockFinancials.marketCap))
       .limit(q.limit);
+    totalMatched = records[0]?.matchedTotal ?? 0;
 
     // 前日比% を indicators から取得
     const ids = records.map((r) => r.stockId);
@@ -356,13 +343,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
     }));
   } else if (q.type === "low-vol") {
     const threshold = q.lowVolMaxAtrPct;
-    const [{ matchedTotal }] = await db
-      .select({ matchedTotal: sql<number>`count(*)` })
-      .from(stockIndicators)
-      .innerJoin(stocks, and(eq(stockIndicators.stockId, stocks.id), activeEquityCondition()))
-      .where(and(isNotNull(stockIndicators.atrPct), gt(stockIndicators.atrPct, 0), lt(stockIndicators.atrPct, threshold)));
-    totalMatched = matchedTotal;
-
+    // 件数と行を 1 クエリに畳む (L-48)。window 関数は LIMIT の前に評価される
+    // ので、over() の値はページ切り捨て前の総件数になる。
     // 低ボラ + 過去 20 日リターンを計算する用に OHLCV を取得
     const records = await db
       .select({
@@ -373,6 +355,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         sector: publicSectorColumn,
         atrPct: stockIndicators.atrPct,
         price: stockFinancials.price,
+        matchedTotal: sql<number>`count(*) over()`,
       })
       .from(stockIndicators)
       .innerJoin(stocks, and(eq(stockIndicators.stockId, stocks.id), activeEquityCondition()))
@@ -380,6 +363,7 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
       .where(and(isNotNull(stockIndicators.atrPct), gt(stockIndicators.atrPct, 0), lt(stockIndicators.atrPct, threshold)))
       .orderBy(asc(stockIndicators.atrPct))
       .limit(q.limit);
+    totalMatched = records[0]?.matchedTotal ?? 0;
 
     // 各銘柄の 20 日累積リターンを取得 (簡易: 最新 20 営業日分の close を取って計算)
     const ids = records.map((r) => r.stockId);
@@ -419,12 +403,8 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
     }));
   } else if (q.type === "post-earnings") {
     // 簡易代理: stock_financials.fetched_at 降順 (最近更新された銘柄)
-    const [{ matchedTotal }] = await db
-      .select({ matchedTotal: sql<number>`count(*)` })
-      .from(stockFinancials)
-      .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), activeEquityCondition()));
-    totalMatched = matchedTotal;
-
+    // 件数と行を 1 クエリに畳む (L-48)。window 関数は LIMIT の前に評価される
+    // ので、over() の値はページ切り捨て前の総件数になる。
     const records = await db
       .select({
         stockId: stocks.id,
@@ -434,11 +414,13 @@ pagesRoute.get("/emh", zValidator("query", emhQuerySchema), async (c) => {
         sector: publicSectorColumn,
         price: stockFinancials.price,
         fetchedAt: stockFinancials.fetchedAt,
+        matchedTotal: sql<number>`count(*) over()`,
       })
       .from(stockFinancials)
       .innerJoin(stocks, and(eq(stockFinancials.stockId, stocks.id), activeEquityCondition()))
       .orderBy(desc(stockFinancials.fetchedAt))
       .limit(q.limit);
+    totalMatched = records[0]?.matchedTotal ?? 0;
 
     const ids = records.map((r) => r.stockId);
     const indMap = new Map<number, number | null>();
@@ -569,20 +551,12 @@ export async function buildCapmView(input: CapmViewInput): Promise<Parameters<ty
  * `swing_market_context.nikkei_close` を**読むだけ**で取る。日付整合後の
  * 単純リターンで OLS。市場の定義として ^N225 は理論的にも標準的な選択。
  *
- * **サンプル数は以前より減る**。旧実装は GET 中に Yahoo Chart API を叩いて
- * 2 年ぶん (514 本) 取っていたが、D1 の保持は銘柄側 90 営業日
- * (実測 avg 89.3 / min 2)、市場側 107 行 (2026-04-12 開始) で、**日付が重なるのは
- * 94 日**。下限 31 本を満たさない銘柄が 13 件ある (実測 2026-09-13)。
- * つまり **β の数値そのものが変わる**ので、画面はサンプル数を併記する
- * (views/capm.ts の「サンプル数」セル)。R2 系列ができたらそちらを読む。
+ * D1 の保持は銘柄側 90 営業日・市場側は日付が重なる分だけなので、β の数値は
+ * 旧実装と変わる。画面はサンプル数を併記する (「サンプル数」セル)。
+ * R2 系列ができたらそちらを読む。
  *
- * export しているのは、Node のスモークスクリプト
- * (scripts/verify-capm-bs.ts) がここを直接叩くため。buildCapmView は
- * Worker バインディング (`D1Database`) を要求するので Node からは呼べない一方、
- * 確かめたい実体 (β 推定) はこの関数なので、ラッパ越しではなくここを検証する。
-
  */
-export async function estimateBetaForCode(
+async function estimateBetaForCode(
   db: ReturnType<typeof createDb>,
   code: string
 ): Promise<{ estimate: ReturnType<typeof estimateBetaOLS>; reason: string | null }> {

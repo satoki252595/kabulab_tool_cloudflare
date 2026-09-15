@@ -1,18 +1,7 @@
 /**
- * `writeStockSnapshot` の書き込み範囲の検証。
- *
- * 移行 P5-b で ②断面 (`core_stock_financials`) の writer が stockStock 側へ移る。
- * そのとき daily.ts 側を止める手段が `options.writeCoreFinancials` しかないので、
- * **フラグが囲んでいる範囲**をテストで固定する。ここが崩れる形は 2 つある:
- *
- *   1. フラグを立てても ②断面が書かれる  → 二重 writer になり、残る値が実行順で
- *      決まる (新しい fetched_at に古い価格が乗る)。
- *   2. フラグで年次 (`core_stock_annual_financials`) まで止まる → 移行対象でない
- *      売上推移が無言で止まる。
- *
- * 実 SQLite を立てず SQL 文字列を記録する driver を使うのは、ここで見たいのが
- * 「どのテーブルに INSERT を発行したか」だけで、6 表の DDL を並べると DDL 側の
- * 写し間違いでテストが落ちる（検証したい性質と無関係な保守コストが乗る）ため。
+ * `writeStockSnapshot` の書き込み範囲の検証。**フラグが囲んでいる範囲**を固定する:
+ * フラグを立てても ②断面が書かれる (二重 writer) と、年次まで止まる (無言停止) の
+ * 2 つの崩れを防ぐ。SQL 文字列を記録する driver で「どの表に INSERT したか」だけ見る。
  */
 import { describe, expect, it } from "vitest";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
@@ -36,6 +25,27 @@ function makeRecordingDb(): {
     { schema: { ...coreSchema, ...rsiSchema, ...swingSchema, ...projectionSchema } }
   );
   return { db: db as Parameters<typeof writeStockSnapshot>[0], statements };
+}
+
+interface RecordedCall {
+  sql: string;
+  params: unknown[];
+}
+
+/** makeRecordingDb の束縛パラメータ付き版。値の検査が必要なテスト用。 */
+function makeRecordingDbWithParams(): {
+  db: Parameters<typeof writeStockSnapshot>[0];
+  calls: RecordedCall[];
+} {
+  const calls: RecordedCall[] = [];
+  const db = drizzle(
+    async (sqlStr, params) => {
+      calls.push({ sql: sqlStr, params: [...params] });
+      return { rows: [] };
+    },
+    { schema: { ...coreSchema, ...rsiSchema, ...swingSchema, ...projectionSchema } }
+  );
+  return { db: db as Parameters<typeof writeStockSnapshot>[0], calls };
 }
 
 /**
@@ -160,7 +170,6 @@ describe("writeStockSnapshot の options.writeCoreFinancials", () => {
     for (const table of [
       "rsi_percentile",
       "swing_stock_indicators",
-      "swing_stock_screening",
     ]) {
       expect(countInsertsInto(off.statements, table), table).toBe(
         countInsertsInto(on.statements, table)
@@ -168,5 +177,118 @@ describe("writeStockSnapshot の options.writeCoreFinancials", () => {
     }
     // 差分は ②断面の 1 文だけであること (囲む範囲が広がっていないことの検査)。
     expect(on.statements.length - off.statements.length).toBe(1);
+  });
+});
+
+describe("writeStockSnapshot の options.writeAnnual", () => {
+  it("既定では年次を書く", async () => {
+    const { db, statements } = makeRecordingDb();
+    await writeStockSnapshot(db, SNAP, undefined);
+    expect(countInsertsInto(statements, "core_stock_annual_financials")).toBe(1);
+  });
+
+  it("false なら年次を書かない (L-49。呼び出し側が月曜のみ真にする)", async () => {
+    const on = makeRecordingDb();
+    const off = makeRecordingDb();
+    await writeStockSnapshot(on.db, SNAP, undefined, { writeAnnual: true });
+    await writeStockSnapshot(off.db, SNAP, undefined, { writeAnnual: false });
+    expect(countInsertsInto(off.statements, "core_stock_annual_financials")).toBe(0);
+    // 差分は年次の 1 文だけであること。
+    expect(on.statements.length - off.statements.length).toBe(1);
+  });
+});
+
+describe("writeStockSnapshot の screening 畳み (L-52)", () => {
+  it("swing_stock_screening には書かない", async () => {
+    const { db, statements } = makeRecordingDb();
+    await writeStockSnapshot(db, SNAP, undefined);
+    expect(
+      statements.filter((s) => s.includes("swing_stock_screening")),
+      "screening 表への書き込みが残っている"
+    ).toEqual([]);
+  });
+
+  it("indicators の upsert に 6 列が載る", async () => {
+    const { db, statements } = makeRecordingDb();
+    await writeStockSnapshot(db, SNAP, undefined);
+    const upsert = statements.find((s) =>
+      new RegExp(`insert into "swing_stock_indicators"`, "i").test(s)
+    );
+    expect(upsert).toBeDefined();
+    for (const col of [
+      "liquidity_ok",
+      "volatility_ok",
+      "trend_ok_long",
+      "trend_ok_short",
+      "all_passed_long",
+      "all_passed_short",
+    ]) {
+      expect(upsert, col).toContain(col);
+    }
+  });
+});
+
+describe("writeStockSnapshot の entry_signals INSERT-only (L-52)", () => {
+  /** breakout_long を発火させる最小上書き (detectBreakoutLong の条件)。 */
+  const BREAKOUT_SNAP: Snapshot = {
+    ...SNAP,
+    latestClose: 100,
+    latestOpen: 95,
+    latestHigh: 101,
+    latestLow: 94,
+    previousClose: 95,
+    range20dHigh: 90,
+    range20dLow: 80,
+    rangeWidth: 10,
+    volumeRatio: 2,
+  };
+
+  it("銘柄ごとの DELETE を発行しない", async () => {
+    const { db, statements } = makeRecordingDb();
+    // 旧コードは latestClose が null でも DELETE を打っていた。
+    await writeStockSnapshot(db, SNAP, undefined);
+    await writeStockSnapshot(db, BREAKOUT_SNAP, undefined);
+    expect(
+      statements.filter((s) => /^\s*delete\b/i.test(s)),
+      "銘柄ごとの DELETE が残っている (sweep への置換漏れ)"
+    ).toEqual([]);
+  });
+
+  it("シグナル INSERT に run 開始秒を刻む", async () => {
+    const { db, calls } = makeRecordingDbWithParams();
+    const runStartedSec = 1_700_000_000;
+    await writeStockSnapshot(db, BREAKOUT_SNAP, undefined, { runStartedSec });
+    const insert = calls.find((c) =>
+      new RegExp(`insert into "swing_entry_signals"`, "i").test(c.sql)
+    );
+    expect(insert, "シグナルが発火していない (スナップの条件を見直すこと)").toBeDefined();
+    expect(insert!.sql).toContain("computed_at");
+    // drizzle の timestamp モードは unix 秒で束縛する (unixepoch() と同じ単位)。
+    // ミリ秒で刻むと sweep の境界比較がずれて今回の行まで消す。
+    expect(insert!.params).toContain(runStartedSec);
+  });
+});
+
+describe("writeStockSnapshot の p_momentum upsert", () => {
+  const BARS = [
+    { date: "2026-09-09", open: null, high: null, low: null, close: 100, volume: null },
+    { date: "2026-09-10", open: null, high: null, low: null, close: 110, volume: null },
+    { date: "2026-09-11", open: null, high: null, low: null, close: 121, volume: null },
+  ];
+
+  it("6mo スライスから 1 文 upsert する (L-47)", async () => {
+    const { db, statements } = makeRecordingDb();
+    await writeStockSnapshot(
+      db,
+      { ...SNAP, ohlcv6mo: BARS },
+      "2026-09-10"
+    );
+    expect(countInsertsInto(statements, "p_momentum")).toBe(1);
+  });
+
+  it("有効な終値が無ければ投影しない", async () => {
+    const { db, statements } = makeRecordingDb();
+    await writeStockSnapshot(db, SNAP, undefined);
+    expect(countInsertsInto(statements, "p_momentum")).toBe(0);
   });
 });

@@ -10,7 +10,7 @@ Notion ガイド「短期売買実践ガイド」の 3 章 (スクリーニン�
 ## コンセプト
 
 - **マクロ → セクター → 個別** の 3 層フィルターで「今日、短期で取るべきか」を定量判断
-- 6 実戦パターン (ブレイクアウト / 押し目買い / 出来高急増 / ギャップ / 決算後) を日足ベースで自動検出
+- 5 実戦パターン (ブレイクアウト / 押し目買い / 出来高急増 / ギャップ / 決算後代理) を日足ベースで自動検出 (6 番目の VWAP は分足必須でスコープ外)
 - **2% ルール** のポジションサイズ計算機で、口座資金とロスカット幅から最適な株数を自動計算
 - **④需給 / ⑤カタリスト** は Yahoo Finance で取れないため「外部データ未対応」として UI 明示
 
@@ -25,15 +25,14 @@ services/swing-trading/
 │   ├── db/
 │   │   ├── client.ts          # createDb(c.env.DB) — D1 バインディング + Drizzle (drizzle-orm/d1)
 │   │   ├── core-schema.ts     # 共有 core_* スキーマ (読み取り専用)
-│   │   └── schema.ts          # 003 固有 swing_* テーブル (6 テーブル)
+│   │   └── schema.ts          # 003 固有 swing_* テーブル (5 テーブル。旧 screening は indicators に畳み)
 │   ├── routes/
 │   │   ├── pages.ts           # GET / /screening /signals /stock/:code /risk
-│   │   └── api.ts             # POST /api/risk/calc のみ (cron 系は root app に集約)
+│   │   └── api.ts             # POST /api/risk/calc のみ
 │   ├── services/
 │   │   └── risk.ts            # 2% ルール ポジションサイズ計算 (純関数)
 │   ├── views/                 # template literal を返す .ts 関数
-│   ├── validators/            # Zod スキーマ
-│   ├── middleware/            # error-handler
+│   ├── validators/            # Zod スキーマ (zod/mini。K4c-2 で移行)
 │   └── tests/unit/            # indicators / patterns / risk のユニットテスト
 ├── CLAUDE.md
 └── README.md
@@ -57,16 +56,15 @@ D1 マイグレーションは root の `drizzle/d1/*.sql`（サービス配下�
 
 ## DB スキーマ (swing_*)
 
-単一 Cloudflare D1 (SQLite) `kabulab-cf` に全サービスが接頭辞テーブルで同居する (ADR-0001)。D1 は名前空間が無いため旧 PG スキーマ `swing.<table>` は接頭辞 `swing_<table>` へ降ろしている。Drizzle ORM は `drizzle-orm/d1` + `sqlite-core`。
+単一 Cloudflare D1 (SQLite) `kabulab-cf` に全サービスが接頭辞テーブルで同居する。D1 は名前空間が無いため旧 PG スキーマ `swing.<table>` は接頭辞 `swing_<table>` へ降ろしている。Drizzle ORM は `drizzle-orm/d1` + `sqlite-core`。
 
 | テーブル | 用途 | 粒度 |
 |---|---|---|
 | `swing_daily_ohlcv` | 日足 OHLCV 履歴 | 1 銘柄 × 最大 90 営業日 |
-| `swing_stock_indicators` | テクニカル指標の最新値 (SMA5/20/**25**/60/75, ATR, RSI, MACD, Fib 等) | 1 銘柄 1 行 |
-| `swing_stock_screening` | 5 条件フィルター結果 | 1 銘柄 1 行 |
+| `swing_stock_indicators` | テクニカル指標の最新値 (SMA5/20/**25**/60/75, ATR, RSI, MACD, Fib 等) + 5 条件の畳み込み列 (L-52) | 1 銘柄 1 行 |
 | `swing_entry_signals` | E&E パターン判定 | 1 銘柄 × 複数パターン |
 | `swing_market_context` | マクロ判定 (A/B/C/D) | 1 日 1 行 |
-| `swing_sector_daily` | セクター騰落ランキング | 1 日 × 業種 |
+| `swing_sector_daily` | セクター騰落ランキング (30 日保持。旧 `pct_5d` は常時 NULL のため 0018 で DROP) | 1 日 × 業種 |
 
 `core_stocks` と `core_stock_financials` は 日次 sync が所有しており (正本 `src/shared/db/core-schema.ts`)、003 は読み取り専用で参照する。
 
@@ -96,7 +94,7 @@ D (見送り): 日経VI 35 超 or VIX 20 超 & S&P500 -1% 以下
 HOLD  : 日経VI 取得不能 (silent fallback せず保留)
 ```
 
-マクロデータは日次 sync の `syncMarketContext()` ([src/cron/daily.ts](../src/cron/daily.ts)) が以下を取得して判定する:
+マクロデータは日次 sync の `fetchMarketContextDraft()` が以下を取得し、`judgeMacro()` で判定する ([src/cron/daily.ts](../src/cron/daily.ts)):
 
 - Yahoo Finance (統一クライアント [src/shared/yahoo/client.ts](../src/shared/yahoo/client.ts)): `^N225` / `^VIX` / `^GSPC` / `NIY=F` (CME 日経 225 円建て先物)
 - Nikkei 電子版スマートチャート (scrape): 日経平均 VI ([src/shared/yahoo/nikkei-vi.ts](../src/shared/yahoo/nikkei-vi.ts))
@@ -108,7 +106,7 @@ HOLD  : 日経VI 取得不能 (silent fallback せず保留)
 | # | 条件 | 計算 | 実装 |
 |---|---|---|---|
 | ① | 流動性 | `avgTurnover20d ≧ 10億 OR (volumeRatio ≧ 3 AND ≧ 5億)` | ✅ |
-| ② | ボラ | `atr14 / latestClose ≧ 閾値` | ✅ |
+| ② | ボラ | `atrPct ≧ 0.02` (% 値比較のため実効 0.02% と極めて緩い既知の状態。別タスクで挙動修正を検討) | ✅ |
 | ③ | トレンド | `sma5>sma20 AND close>sma5` (long) / 逆 (short) | ✅ |
 | ④ | 需給 (信用倍率) | 松井証券ページ | ❌ 外部未対応 |
 | ⑤ | カタリスト (決算) | 株予報カレンダー | ❌ 外部未対応 |
@@ -135,13 +133,13 @@ Notion ガイドの例題を再現:
 本サービスは独自の sync を持たない。**統一日次 sync** ([src/cron/daily.ts](../src/cron/daily.ts)) が以下を行う:
 
 1. マクロ 4 指数 + 日経VI を並列取得 → `swing_market_context` に A/B/C/D 判定付きで upsert
-2. 全 active 銘柄を worker pool (5 並列 × 200ms 間隔) で:
+2. 全 active 銘柄を worker pool (5 並列 × 150ms 間隔) で:
    - Yahoo `fetchStockRawData(code, "5y")` = Chart + QuoteSummary 並列
    - 5y の末尾 6mo をスライスして SMA/ATR/RSI14/MACD/Fib/volume 計算
-   - `swing_daily_ohlcv` に 6mo 分を upsert (母集団 ~3,700 化で D1 容量確保のため保持を 120→90 に短縮)
+   - `swing_daily_ohlcv` は増分 upsert (初回のみ 6mo 全 backfill、以降は当日分 1〜2 行。保持は 90 営業日)
    - 90 本を超える古い行の削除は書き込み経路ではなく **Phase 4 の一括 sweep** (`pruneOhlcvRetention`) が行う。書き込み経路内で prune していた頃は Yahoo 取得が失敗し続けた銘柄で一度も走らず、120 行の残骸が残っていた
-   - `swing_stock_indicators` / `swing_stock_screening` / `swing_entry_signals` に upsert
-3. セクター集計: `core_stocks ⋈ swing_stock_indicators` を DB から再読込し `swing_sector_daily` を書き直し。シャード実行時は最終 shard のみが担当し、本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留・警告
+   - `swing_stock_indicators` (5 条件の畳み込み列を含む) / `swing_entry_signals` に multi-row upsert (K4a 系)
+3. セクター集計 (Phase 5): `core_stocks ⋈ swing_stock_indicators` を DB から再読込し `swing_sector_daily` を書き直し (当日分 + 30 日より古い行を破棄)。本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留・警告
 
 書込 (取込) は **Node (GitHub Actions)** から D1 REST 経由 (`createD1HttpDb`) で行う。Yahoo へのアクセスは `YAHOO_PROXY_BASE` (Worker エッジ `/api/ingest/yahoo`) を介して 429 を回避する。Worker 側の読取は `c.env.DB` バインディング (`createDb(c.env.DB)`)。
 

@@ -1,16 +1,16 @@
 /**
- * 月次 rebuild オーケストレータ（Cloudflare Worker 版・ADR-0001 Phase 3）
+ * 月次 rebuild オーケストレータ (Node。GitHub Actions の月次 cron が起動)。
  *
  * core_* / swing_* / yutai_benefits を読んで otakara の派生テーブル
  * (otakara_stock_financials / otakara_stock_scores) を再構築する。
  *
  * 特徴:
  *   - Yahoo を 1 回も叩かない (日次 sync が取得済みのデータを DB 経由で再利用)
- *   - D1 バインディング + db.batch (1 銘柄=2 upsert を 1 バッチ)
- *   - 起動: Workers Cron (scheduled) / 認証ルート POST /admin/sync-monthly
+ *   - D1 HTTP 書込 (createD1HttpDb)。multi-row upsert で投入する
+ *   - 起動: stock-sync.yml の月次 cron → `pnpm sync:monthly:core`
  *
- * 母集団 (core_stocks) の JPX 同期は xlsx パーサが Node 専用のため Worker 不可。
- * `pnpm sync:universe`（Node）で別途同期してから本 rebuild を走らせる。
+ * 母集団 (core_stocks) の JPX 同期は `pnpm sync:universe` で別途同期してから
+ * 本 rebuild を走らせる (月次ワークフローが順に実行する)。
  *
  * CLAUDE.md のフォールバック禁止ルールに従い:
  *   - core_stock_financials が未作成の銘柄はスコア計算をスキップ (silent 0 にはしない)
@@ -20,7 +20,7 @@ import { sql, eq, and, isNotNull } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 
-import * as coreSchema from "../../services/rsi-screening/src/db/core-schema.js";
+import * as coreSchema from "../shared/db/core-schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as otakaraSchema from "../../services/otakara-yutai/src/db/schema.js";
 
@@ -108,8 +108,42 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
     else benefitMap.set(b.stockId, [b]);
   }
 
+  // 権利月・ジャンルの集計 (L-51)。利回り用とは別に**全優待行**から引く。
+  // 月/ジャンルの絞り込みは金額換算の可否と無関係なので、estimatedValue の
+  // NULL 行を落とすと絞り込みの母集団が欠ける (旧 IN 副問合せに条件は無い)。
+  const monthGenreRows = await db
+    .select({
+      stockId: otakaraSchema.yutaiBenefits.stockId,
+      recordMonth: otakaraSchema.yutaiBenefits.recordMonth,
+      genreId: otakaraSchema.yutaiBenefits.genreId,
+    })
+    .from(otakaraSchema.yutaiBenefits);
+  const monthMap = new Map<number, Set<number>>();
+  const genreMap = new Map<number, Set<number>>();
+  for (const b of monthGenreRows) {
+    let months = monthMap.get(b.stockId);
+    if (!months) monthMap.set(b.stockId, (months = new Set()));
+    months.add(b.recordMonth);
+    let genres = genreMap.get(b.stockId);
+    if (!genres) genreMap.set(b.stockId, (genres = new Set()));
+    genres.add(b.genreId);
+  }
+  /** 昇順・重複なし JSON (P4 backfill の json_group_array と同じ形)。空は NULL。 */
+  const toJsonSet = (set: Set<number> | undefined): string | null =>
+    set === undefined || set.size === 0
+      ? null
+      : JSON.stringify([...set].sort((a, b) => a - b));
+
   let scoredCount = 0;
   const today = new Date().toISOString().split("T")[0];
+
+  // 行を貯めて表ごとに multi-row upsert (L-56)。1 銘柄=2 upsert 逐次だと
+  // 3,230 往復/670 秒かかる。D1 bind 上限 (100/文): financials 18 列×5 行=90、
+  // scores 6 列×16 行=96。列を足したらチャンクも直すこと。
+  const FIN_ROWS_PER_STATEMENT = 5;
+  const SCORES_ROWS_PER_STATEMENT = 16;
+  const finRows: (typeof otakaraSchema.stockFinancials.$inferInsert)[] = [];
+  const scoreRows: (typeof otakaraSchema.stockScores.$inferInsert)[] = [];
 
   for (const s of activeStocks) {
     const core = coreFinMap.get(s.id);
@@ -133,29 +167,44 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
     };
     const score = scoreStock(input);
 
-    // 1 銘柄=2 upsert を逐次実行 (createD1HttpDb は db.batch 非対応・冪等)。
+    finRows.push({
+      stockId: s.id,
+      price: core.price,
+      per: core.per,
+      pbr: core.pbr,
+      dividendYield: core.dividendYield,
+      eps: core.eps,
+      bps: core.bps,
+      roe: core.roe,
+      roa: core.roa,
+      marketCap: core.marketCap,
+      ma5: swing?.sma5 ?? null,
+      ma25: swing?.sma25 ?? null,
+      ma75: swing?.sma75 ?? null,
+      rsi14: swing?.rsi14 ?? null,
+      macd: swing?.macd ?? null,
+      macdSignal: swing?.macdSignal ?? null,
+      yutaiYield,
+      dataDate: today,
+    });
+    scoreRows.push({
+      stockId: s.id,
+      fundamentalScore: score.fundamentalScore,
+      technicalScore: score.technicalScore,
+      totalScore: score.totalScore,
+      yutaiMonths: toJsonSet(monthMap.get(s.id)),
+      yutaiGenreIds: toJsonSet(genreMap.get(s.id)),
+    });
+
+    scoredCount++;
+  }
+
+  // 失敗したら throw して run 全体を止める (従来の逐次 upsert と同じ。月次は
+  // 全再構築で冪等なので、次 run が書き直す)。
+  for (let i = 0; i < finRows.length; i += FIN_ROWS_PER_STATEMENT) {
     await db
       .insert(otakaraSchema.stockFinancials)
-      .values({
-        stockId: s.id,
-        price: core.price,
-        per: core.per,
-        pbr: core.pbr,
-        dividendYield: core.dividendYield,
-        eps: core.eps,
-        bps: core.bps,
-        roe: core.roe,
-        roa: core.roa,
-        marketCap: core.marketCap,
-        ma5: swing?.sma5 ?? null,
-        ma25: swing?.sma25 ?? null,
-        ma75: swing?.sma75 ?? null,
-        rsi14: swing?.rsi14 ?? null,
-        macd: swing?.macd ?? null,
-        macdSignal: swing?.macdSignal ?? null,
-        yutaiYield,
-        dataDate: today,
-      })
+      .values(finRows.slice(i, i + FIN_ROWS_PER_STATEMENT))
       .onConflictDoUpdate({
         target: otakaraSchema.stockFinancials.stockId,
         set: {
@@ -179,25 +228,22 @@ export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
           fetchedAt: sql`(unixepoch())`,
         },
       });
+  }
+  for (let i = 0; i < scoreRows.length; i += SCORES_ROWS_PER_STATEMENT) {
     await db
       .insert(otakaraSchema.stockScores)
-      .values({
-        stockId: s.id,
-        fundamentalScore: score.fundamentalScore,
-        technicalScore: score.technicalScore,
-        totalScore: score.totalScore,
-      })
+      .values(scoreRows.slice(i, i + SCORES_ROWS_PER_STATEMENT))
       .onConflictDoUpdate({
         target: otakaraSchema.stockScores.stockId,
         set: {
           fundamentalScore: sql`excluded.fundamental_score`,
           technicalScore: sql`excluded.technical_score`,
           totalScore: sql`excluded.total_score`,
+          yutaiMonths: sql`excluded.yutai_months`,
+          yutaiGenreIds: sql`excluded.yutai_genre_ids`,
           scoredAt: sql`(unixepoch())`,
         },
       });
-
-    scoredCount++;
   }
 
   const elapsedSec = (Date.now() - startedAt) / 1000;

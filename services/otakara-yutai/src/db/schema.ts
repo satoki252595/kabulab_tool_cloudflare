@@ -1,6 +1,6 @@
 import { sql, relations } from "drizzle-orm";
 import { sqliteTable, integer, text, real, index } from "drizzle-orm/sqlite-core";
-import { stocks as coreStocks } from "../../../rsi-screening/src/db/core-schema.js";
+import { stocks as coreStocks } from "../../../../src/shared/db/core-schema.js";
 
 /**
  * 002 お宝優待 のスキーマ定義（Cloudflare D1 / SQLite 版） — ADR-0001。
@@ -74,15 +74,13 @@ export const yutaiBenefits = sqliteTable(
   ]
 );
 
-/** 株価・財務データ (1 銘柄 1 行) — stock_id は core.stocks(id) を参照 */
+/** 株価・財務データ (1 銘柄 1 行) — stock_id は core.stocks(id) を参照し PK (L-53) */
 export const stockFinancials = sqliteTable(
   "otakara_stock_financials",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
-      .references(() => coreStocks.id)
-      .notNull()
-      .unique(),
+      .primaryKey()
+      .references(() => coreStocks.id),
     price: real("price"),
     per: real("per"),
     pbr: real("pbr"),
@@ -103,27 +101,37 @@ export const stockFinancials = sqliteTable(
       .default(sql`(unixepoch())`)
       .notNull(),
     dataDate: text("data_date").notNull(),
-  },
-  (table) => [index("idx_otakara_financials_stock_id").on(table.stockId)]
+  }
+  // stock_id の列宣言 (.unique()) が自動索引を作るので、named な重複は持たない (L-45)。
 );
 
-/** スコアリング結果 (1 銘柄 1 行) — stock_id は core.stocks(id) を参照 */
+/** スコアリング結果 (1 銘柄 1 行) — stock_id は core.stocks(id) を参照し PK (L-53) */
 export const stockScores = sqliteTable(
   "otakara_stock_scores",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
     stockId: integer("stock_id")
-      .references(() => coreStocks.id)
-      .notNull()
-      .unique(),
+      .primaryKey()
+      .references(() => coreStocks.id),
     fundamentalScore: real("fundamental_score").notNull(),
     technicalScore: real("technical_score").notNull(),
     totalScore: real("total_score").notNull(),
+    /**
+     * 権利月の集計 (L-51)。`yutai_benefits.record_month` の銘柄ごとの
+     * 昇順・重複なし JSON 配列 (例: "[3,9]")。月次 rebuild が書く。
+     * /api/screening と /genres/:slug の月フィルターはこの列を引き、
+     * benefits 8,295 行の IN 副問合せを打たない。優待なし銘柄は NULL。
+     */
+    yutaiMonths: text("yutai_months"),
+    /**
+     * ジャンルの集計 (L-51)。`yutai_benefits.genre_id` の銘柄ごとの
+     * 昇順・重複なし JSON 配列。月次 rebuild が書く。優待なし銘柄は NULL。
+     */
+    yutaiGenreIds: text("yutai_genre_ids"),
     scoredAt: integer("scored_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),
-  },
-  (table) => [index("idx_otakara_scores_stock_id").on(table.stockId)]
+  }
+  // stock_id の列宣言 (.unique()) が自動索引を作るので、named な重複は持たない (L-45)。
 );
 
 // --- Relations ---

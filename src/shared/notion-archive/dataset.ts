@@ -6,7 +6,7 @@
  *     └ 子 DB 「適時開示｜<ticker>」 (銘柄ページ配下) … 1 IR = 1 行 (全タグ)
  *
  *   旧フラット DB「適時開示｜<service>」(暫定採用) は初回に自動で Notion
- *   ゴミ箱へ退避する (二次データは Postgres から再生可能なため復元不要)。
+ *   ゴミ箱へ退避する (二次データは D1 から再生可能なため復元不要)。
  *
  * 一次データ本体 (`一次データ｜<service>` のバッチ確定ファイル) とは別の
  * **二次データ**。Notion 通信窓口を分散させない (= レート制御一元化) ため
@@ -86,15 +86,15 @@ export interface ByStockInput {
   tagOptions: Array<{ name: string; color: NotionSelectColor }>;
   rows: ByStockRow[];
   /**
-   * 投入を打ち切る絶対時刻 (epoch ms)。日次 cron が Vercel 300s 内に
-   * 収めるため指定する。超過時は残りを作らず中断 (Postgres が正本・
+   * 投入を打ち切る絶対時刻 (epoch ms)。日次 catchup が NOTION_BUDGET_MS
+   * 内に収めるため指定する。超過時は残りを作らず中断 (D1 が正本・
    * WINDOW 重なりと TDnet ID 冪等で翌日以降が回収する)。backfill は
    * 未指定 = 無制限 (再開可能・数日級をユーザ了承済)。
    */
   deadlineMs?: number;
   /**
    * 行のページ作成/更新が成功した直後に呼ばれる。呼び出し側は (key,
-   * pageId) を Postgres に書き戻して `notion_page_id` を埋めるために使う
+   * pageId) を D1 に書き戻して `notion_page_id` を埋めるために使う
    * (ファイルプロキシで Notion から最新 signed URL を取得するための索引)。
    */
   onPagePersisted?: (key: string, pageId: string) => void;
@@ -110,7 +110,7 @@ export interface ByStockInput {
     primaryTag: string | null
   ) => Promise<PdfClassification>;
   /**
-   * PDF 判定結果を確定した直後に呼ばれる (Postgres `pdf_sentiment*` 4 列の
+   * PDF 判定結果を確定した直後に呼ばれる (D1 `pdf_sentiment*` 4 列の
    * バルク UPDATE 用)。`onPagePersisted` と同パターン。
    */
   onPdfClassified?: (key: string, c: PdfClassification) => void;
@@ -168,9 +168,6 @@ const stockCache = new Map<
   string,
   { stockPageId: string; childDbId: string }
 >();
-/** 旧フラットDBをゴミ箱送り済みフラグ (プロセス内・1 回だけ試行) */
-const flatDbArchived = new Set<string>();
-
 /** 親 DB のタイトル (1 銘柄 = 1 ページ) */
 function parentTitle(service: string): string {
   return `銘柄一覧｜${service}`;
@@ -178,10 +175,6 @@ function parentTitle(service: string): string {
 /** 子 DB のタイトル (その銘柄の適時開示 1IR=1行) */
 function childTitle(ticker: string): string {
   return `適時開示｜${ticker}`;
-}
-/** 旧フラット DB のタイトル (退避対象) */
-function obsoleteFlatTitle(service: string): string {
-  return `適時開示｜${service}`;
 }
 
 async function findChildDatabase(
@@ -254,32 +247,13 @@ function childProperties(
   };
 }
 
-/**
- * 暫定採用していた旧フラット DB `適時開示｜<service>` を **Notion ゴミ箱**
- * へ退避する (archived:true)。二次データは Postgres から再生可能なため
- * 復元不要。冪等: 見つからなければ何もしない。プロセス内 1 回だけ試行。
- */
-async function archiveFlatDbOnce(service: string): Promise<void> {
-  if (flatDbArchived.has(service)) return;
-  flatDbArchived.add(service);
-  const backup = notionEnv.NOTION_BACKUP_PAGE_ID();
-  const oldId = await findChildDatabase(backup, obsoleteFlatTitle(service));
-  if (!oldId) return;
-  await notionRequest("PATCH", `/databases/${oldId}`, { archived: true });
-  console.info(
-    `[notion-bystock] 旧フラット ${obsoleteFlatTitle(service)} をゴミ箱へ退避`
-  );
-}
-
-/** 親「銘柄一覧」DB を確保 (無ければ作成)。初回に旧フラットDBを退避。 */
+/** 親「銘柄一覧」DB を確保 (無ければ作成)。 */
 async function ensureParentDb(
   service: string,
   tagOptions: ByStockInput["tagOptions"]
 ): Promise<string> {
   const cached = parentDbCache.get(service);
   if (cached) return cached;
-
-  await archiveFlatDbOnce(service);
 
   const backup = notionEnv.NOTION_BACKUP_PAGE_ID();
   const title = parentTitle(service);
@@ -449,7 +423,7 @@ async function fetchIrPdf(
       redirect: "follow",
       signal: AbortSignal.timeout(15_000),
       headers: {
-        "User-Agent": "kabulab-ir-catalog/1.0 (+https://kabulab.vercel.app)",
+        "User-Agent": "kabulab-ir-catalog/1.0 (+https://kabulab-cf.satoki252595.workers.dev/ir-catalog/)",
       },
     });
   } catch (e) {

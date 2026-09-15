@@ -22,14 +22,6 @@ services/otakara-yutai/
 │   │   ├── client.ts          # createDb(c.env.DB) — D1 + Drizzle (drizzle-orm/d1)
 │   │   └── schema.ts          # yutai_* / otakara_* 接頭辞テーブル定義
 │   │                          # (stocks は core-schema.ts から再 export — 銘柄マスタ統一化)
-│   ├── services/
-│   │   ├── yutai-scraper.ts        # HTML/CSV/JSON からの優待データ取込
-│   │   └── yutai-data-provider.ts  # ファイルベースインポート
-│   ├── validators/
-│   │   └── yutai-scraper.ts   # 優待スクレイパー用 Zod スキーマ
-│   ├── middleware/            # ⚠️ app.ts は未使用 (テストのみが参照)。
-│   │   ├── error-handler.ts   #    将来マウントする余地として据え置き
-│   │   └── rate-limiter.ts
 │   └── tests/                 # scoring は src/shared/ に移動済み、本サービスは他の unit test のみ
 ├── data-scripts/              # 月次パイプライン + 1 回限りの保守スクリプト
 │   ├── fetch-yutai-full.ts             # 月次 ①minkabu 取得 → yutai_benefits + is_yutai
@@ -39,10 +31,9 @@ services/otakara-yutai/
 │   ├── summary-tasks.ts / summary-import.ts  # ③④の純ロジック (タスク選定 / 結果検証)
 │   ├── estimated-value-guard.ts / private-path.ts / benefit-rows.ts  # 金額ガード / 置き場所ガード / D1 読み取り
 │   ├── benefit-key.ts / summary-contract.ts  # 上記が共有するキー生成・要約契約
-│   ├── fetch-yutai-data.ts / fix-stock-names.ts / test-parse.ts / verify-data.ts
+│   ├── yutai-full-import.ts            # fetch-yutai-full の取り込み本体 (純ロジック分離)
 │   └── data/                  # (gitignore) 掲載文を含む作業ファイル: 抽出 JSONL・要約タスク・結果
 ├── docs/llm-summary-task.md   # クラウド LLM 向けの要約作業仕様書
-├── drizzle/                   # drizzle-kit 生成の migration
 ├── CLAUDE.md
 └── README.md
 ```
@@ -60,14 +51,14 @@ services/otakara-yutai/
   重複キー 5 箇所を抱えたまま CI が緑だった。再発防止は
   [docs/ci-typecheck-blind-spots.md](./ci-typecheck-blind-spots.md) を参照。
 - `src/middleware/db.ts` は `DATABASE_URL` 文字列を `createDb()` に渡す Neon 期の残骸で、
-  ADR-0001 (D1 バインディング経由のみ) と矛盾していたため削除。`app.ts` はインライン版を使う。
+  D1 バインディング経由のみの方針と矛盾していたため削除。`app.ts` はインライン版を使う。
 
 **過去から変わった点** (2026-04):
 
 - 本サービス固有の `yahoo-finance.ts` / `stock-data-sync.ts` / `scoring.ts` / `cron-auth.ts` / `validators/yahoo-finance.ts` / `scripts/sync-and-score.ts` は **削除**。
 - `scoring.ts` は [src/shared/scoring.ts](../src/shared/scoring.ts) に移動 (純関数のみ)。DB I/O を伴う `scoreAllStocks` は [src/cron/monthly.ts](../src/cron/monthly.ts) に統合。
 - 銘柄マスタを `core.stocks` に一本化 (旧 `public.stocks` は削除、`yutai_benefits.stock_id` の FK を付け替え)。`src/db/schema.ts` は `stocks` シンボルを `coreStocks` の再 export として提供しているので、`app.ts` の既存クエリはそのまま動く。
-- 本サービス内の cron ルート `/api/cron/sync-monthly` は廃止。統一 cron (`/api/cron/sync-monthly` at root) が代替。
+- 本サービス内の cron ルート `/api/cron/sync-monthly` は廃止。月次 rebuild は GitHub Actions (`stock-sync.yml` の月次 cron → `sync:universe` + `sync:monthly:core`) が代替 (Worker 上の cron ルートは存在しない)。
 
 `app.ts` がモノリシックに全ての SSR ページと内部 API (`/api/screening`) を保持する設計は変わらず。`src/db/` は単一 source of truth として `app.ts` と `data-scripts/` の両方から参照される。
 
@@ -90,7 +81,7 @@ yutai_genres
 └── created_at
 
 yutai_benefits
-├── id          serial PK
+├── id          integer PK (autoincrement)
 ├── stock_id    FK → core_stocks(id)
 ├── genre_id    FK → yutai_genres
 ├── description     text        # スクレイピング元テキスト (長文)
@@ -101,7 +92,7 @@ yutai_benefits
 └── created_at / updated_at
 
 otakara_stock_financials
-├── id / stock_id FK → core_stocks(id) (UNIQUE)
+├── stock_id PK + FK → core_stocks(id) (旧サロゲート id は 0018 で撤去)
 ├── price / per / pbr / dividend_yield / eps / bps   # core から monthly sync でコピー
 ├── roe / roa / market_cap                           # core から monthly sync でコピー
 ├── ma_5 / ma_25 / ma_75       # swing_stock_indicators から monthly sync でコピー
@@ -110,8 +101,9 @@ otakara_stock_financials
 ├── data_date / fetched_at
 
 otakara_stock_scores
-├── id / stock_id FK → core_stocks(id) (UNIQUE)
+├── stock_id PK + FK → core_stocks(id) (旧サロゲート id は 0018 で撤去)
 ├── fundamental_score / technical_score / total_score   real (0-100)
+├── yutai_months / yutai_genre_ids   text?  # 月次 rebuild が集計する昇順 JSON 配列 (0016。/api/screening の月・ジャンル絞り込み用)
 └── scored_at
 ```
 
@@ -129,7 +121,7 @@ otakara_stock_scores
 |---|---|---|
 | PER | 25% | <10→100, <15→80, <20→60, <30→40, else 20 |
 | PBR | 20% | <0.5→100, <1.0→80, <1.5→60, <2.0→40, else 20 |
-| 配当利回り | 25% | >5%→100, ≥4→80, ≥3→60, ≥2→40, ≥1→20 |
+| 配当利回り | 25% | >5%→100, ≥4%→80, ≥3%→60, ≥2%→40, ≥1%→20, else 10 |
 | ROE | 15% | >15%→100, ≥10→80, ≥5→60, ≥0→40, else 20 |
 | 優待利回り | 15% | >5%→100, ≥3→80, ≥2→60, ≥1→40, else 20 |
 
@@ -137,9 +129,9 @@ otakara_stock_scores
 
 | 指標 | 配分 | ロジック |
 |---|---|---|
-| MA25 乖離率 | 45% | 株価が MA25 を下回るほど高スコア |
-| RSI(14) | 35% | <30→100 (売られすぎ=買いシグナル) |
-| MACD | 20% | MACD>Signal かつ 両方<0 (底値ゴールデンクロス) → 100 |
+| MA25 乖離率 | 45% | 乖離率 <-10→100, <-5→80, <0→60, <5→40, else 20 (下回るほど高スコア) |
+| RSI(14) | 35% | <30→100, <40→80, <50→60, <60→40, <70→20, else 10 (売られすぎ=買いシグナル) |
+| MACD | 20% | MACD>Signal かつ 両方<0 (底値ゴールデンクロス) →100、MACD>Signal→60、else 20 |
 
 null 指標はウェイト再配分で欠損を補正。実装は [src/shared/scoring.ts](../src/shared/scoring.ts) (純関数)。
 
@@ -150,9 +142,9 @@ null 指標はウェイト再配分で欠損を補正。実装は [src/shared/sc
 | `/` | ジャンル一覧、今月/来月注目銘柄 |
 | `/genres/:slug` | ジャンル別スクリーニング (ページネーション + フィルタ) |
 | `/stocks/:code` | 銘柄詳細 (スコア内訳、財務、優待情報をジャンル→保有段階→商品の 3 階層で表示) |
-| `/months/:month` | 月別権利確定銘柄一覧 |
-| `/search?q=` | 銘柄検索 (コード前方一致 / 名前部分一致) |
 | `/screening` | スクリーニング一覧 (2026-04: カードスワイプ UI を廃止、一覧のみに統一) |
+
+> 旧 `/months/:month` (月別一覧) と `/search` (銘柄検索) のルートは現行 `app.ts` に無い。月・ジャンルの絞り込みは `/screening` + `/api/screening` のクエリで行う。
 
 ## 月次 sync フロー
 
@@ -168,8 +160,9 @@ GitHub Actions 月次
       - core_stock_financials から PER/PBR/配当/EPS/BPS/ROE/時価総額 を取得
       - swing_stock_indicators から MA5/25/75 / RSI14 / MACD/Signal を取得
       - yutai_benefits から推定価値合計 → yutai_yield 算出
+      - yutai_benefits を銘柄ごとに集計 → yutai_months / yutai_genre_ids (昇順 JSON 配列。L-51)
       - scoreStock(input) でファンダ + テクニカル → 総合スコア
-      - otakara_stock_financials と otakara_stock_scores に upsert
+      - otakara_stock_financials と otakara_stock_scores に multi-row upsert (K4a-3)
 ```
 
 > **母集団について**: 2026-05 に sync 母集団は「優待縛り ~1,600」から **東証プライム／スタンダード／グロースの内国株式（共有4文字コード、約3,700）** へ拡張された (004 financial-math が一般日本株を要するため)。地域市場の単独上場銘柄と5桁種類株は対象外。`core_stocks` には非優待銘柄も含まれるが、002 otakara は一覧・カウント・詳細・スコアいずれも `is_yutai=true` で絞るため、優待サービスとしての見え方は不変。`is_yutai` フラグの writer は優待スクレイパー [services/otakara-yutai/data-scripts/fetch-yutai-full.ts](../services/otakara-yutai/data-scripts/fetch-yutai-full.ts) (core_stocks は削除せず upsert + フラグ更新)。
@@ -202,8 +195,11 @@ GitHub Actions 月次
 ### 直った実害
 
 `/api/screening` は `month/genre/perMax/pbrMax/yieldMin/rsiMax/sort/order/limit` の 9 個を
-サーバ側で読み、ジャンル・権利月は `inArray(stocks.id, サブクエリ)` で効かせている
-(**サーバ側フィルタは以前から実在した**。「固定 50 件を返すだけ」という理解は誤り)。
+サーバ側で読む (**サーバ側フィルタは以前から実在した**。「固定 50 件を返すだけ」という理解は誤り)。
+ジャンル・権利月の効かせ方は L-51 で変わった: 旧形は `yutai_benefits` (8,295 行) を引く
+`inArray` 副問合せだったが、現行は月次 rebuild が集計した `otakara_stock_scores` の
+`yutai_months` / `yutai_genre_ids` (昇順 JSON 配列) を `json_each` で引く
+(`hasYutaiMonth` / `hasYutaiGenre`。バインド変数 1 個)。
 実害は別のところにあった:
 
 - `limit` は既定 50・**上限 100 にクランプ**され、`offset` / `page` が無かった。
@@ -235,10 +231,11 @@ OFFSET にした。一方 COUNT を毎リクエスト打つと権利月フィル
    変えた最初の 1 回だけ付ける (ページ送り・ソート変更では総件数が変わらない)。
    SSR の `/screening` は 1 ページ目と総件数を埋め込むので、ページを開いた時点では
    API も COUNT も走らない。
-2. **財務列フィルタが無い COUNT は LEFT JOIN を落とす。** LEFT JOIN は行を減らさず、
+2. **参照しない JOIN は COUNT から落とす。** LEFT JOIN は行を減らさず、
    `otakara_stock_financials` / `otakara_stock_scores` の `stock_id` は UNIQUE なので
-   行も増えない → join 無しの `count(*)` と同値。財務列を WHERE で参照するときは
-   落とせないので、その場合だけ `count(distinct)` で join する。
+   行も増えない → 落とした `count(*)` と同値。財務列フィルタがあるときは financials を、
+   月・ジャンル条件があるときは (集計列が scores 上にあるため L-51 以降) scores を
+   join し、その場合だけ `count(distinct stocks.id)` で数える。
 
 採らなかった案: 「先頭 N 件で打ち切って `N+` と表示」。母集団 1,616 / 権利月3月 848 件
 という規模では「848 件中」と正確に出せる価値の方が大きい。
@@ -269,26 +266,18 @@ ORDER BY には第 2 キーとして `stocks.id` を足した。総合スコア�
 `screening-pagination.test.ts` の「ページ跨ぎの順序安定性」で固定してある。
 
 なお同じ「第 2 キーが無い OFFSET ページング」は `/genres/:slug` の SSR ページング
-(`gSortExpr` + `page` パラメータ) にも残っている。本 PR の対象外だが同種の
-ページ間ズレを起こしうるので、`.limit(PAGE_SIZE * 3)` の整理と併せて別タスク。
+(`gSortExpr` + `page` パラメータ) にも残っていたが、現行は `.orderBy(gSortExpr,
+asc(stocks.id))` と第 2 キー付きで解消済み。
 
-### 索引: 必要だが本 PR では入れない
+### 索引: `is_yutai` / `record_month` に索引が無い (残タスク)
 
 EXPLAIN では `idx_core_stocks_active_market` で SEARCH → 権利月/ジャンルの
-サブクエリで `SCAN yutai_benefits` になる。実測どおり 1 クエリ 6,947〜13,725 行を
-走査しており、**`core_stocks.is_yutai` と `yutai_benefits.record_month` に索引が無い**
-(実測で確認)。母集団が増えれば走査行課金に直接跳ねる。
+条件で `yutai_benefits` を走査する形だった。**`core_stocks.is_yutai` と
+`yutai_benefits.record_month` に索引が無い** (実測で確認)。母集団が増えれば
+走査行課金に直接跳ねる。
 
-それでも本 PR では追加しない。理由:
-
-- `pnpm db:generate:otakara` は `dialect: "postgresql"` の死んだ経路で、
-  **D1 マイグレーションを 1 行も生成しない**。
-- D1 用は `pnpm db:generate:d1` だが、`drizzle/d1/meta/0008_snapshot.json` は
-  `core_stocks` を **9 列・索引 1 本**と記録しているのに本番は **21 列・索引 3 本**
-  (2026-09-12 の移行 P4a が直接 ALTER で先行適用)。この状態で生成すると
-  `core_stocks` への `ALTER TABLE ADD COLUMN` が 12 本混入し、適用すれば
-  `duplicate column name` で落ちる。`drizzle.d1.config.ts` の冒頭コメントが
-  この手順を警告している。
-
-→ 索引追加は「スナップショットを本番に合わせる」作業と同じ PR でやるべきで、
-別タスクとして切る。
+当時入れなかった理由のうち「snapshot が本番と乖離 (9 列・索引 1 本 vs 本番
+21 列・索引 3 本) していて `db:generate:d1` が余計な ALTER を混入させる」は、
+0010 で snapshot を本番に合わせたため解消済み (現行 snapshot は 21 列・索引 3 本)。
+残りは索引の追加だけなので、`db:generate:d1` で生成して番号順に流す通常手順で
+入れられる。別タスクとして切る。

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { count, eq, max } from "drizzle-orm";
 import { createDb } from "../db/client.js";
-import { stocks, stockFinancials } from "../db/core-schema.js";
+import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
 import { stockRsiPercentile } from "../db/schema.js";
 import { screeningQuerySchema, stockCodeParamSchema } from "../validators/screening.js";
 import { screenStocks } from "../services/screening-service.js";

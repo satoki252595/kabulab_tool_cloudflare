@@ -6,31 +6,31 @@
  * (silent な穴埋めをしない)。null になり得るフィールドは null のまま保持し、
  * `?? デフォルト` で消さない。
  */
-import { z } from "zod";
+import { z } from "../../../../../src/shared/zod-mini.js";
 import { sourceCodeToTicker } from "../../../../../src/shared/jpx/stock-code.js";
 
 /** documents.json の results[] 1 件 (有報判定に使う項目を中心に型付け) */
 export const edinetDocSchema = z.object({
-  seqNumber: z.number().int(),
+  seqNumber: z.number().check(z.int()),
   docID: z.string(),
   /** 提出者 EDINET コード (例: E01234)。ファンド等で null になり得る */
-  edinetCode: z.string().nullable(),
+  edinetCode: z.nullable(z.string()),
   /** 証券コード 5 桁 (4 桁ティッカー + 末尾 0)。非上場提出者は null */
-  secCode: z.string().nullable(),
-  JCN: z.string().nullable(),
+  secCode: z.nullable(z.string()),
+  JCN: z.nullable(z.string()),
   /** 提出者名。取下げ等で null になり得る (実 API 確認済) */
-  filerName: z.string().nullable(),
+  filerName: z.nullable(z.string()),
   /** 府令コード — 有報は "010" (企業内容等の開示に関する内閣府令) */
-  ordinanceCode: z.string().nullable(),
+  ordinanceCode: z.nullable(z.string()),
   /** 様式コード — 有報は "030000" */
-  formCode: z.string().nullable(),
+  formCode: z.nullable(z.string()),
   /** 書類種別コード — 120=有価証券報告書, 130=訂正有価証券報告書 */
-  docTypeCode: z.string().nullable(),
-  periodStart: z.string().nullable(),
-  periodEnd: z.string().nullable(),
+  docTypeCode: z.nullable(z.string()),
+  periodStart: z.nullable(z.string()),
+  periodEnd: z.nullable(z.string()),
   /** 提出日時。取下げ等で null になり得る (実 API 確認済) */
-  submitDateTime: z.string().nullable(),
-  docDescription: z.string().nullable(),
+  submitDateTime: z.nullable(z.string()),
+  docDescription: z.nullable(z.string()),
   /** "1"=XBRL あり */
   xbrlFlag: z.string(),
   /** "1"=CSV あり */
@@ -46,7 +46,7 @@ export const edinetListResponseSchema = z.object({
     /** API レベルのステータス。"200" 以外は異常 → 呼び出し側で throw */
     status: z.string(),
     message: z.string(),
-    resultset: z.object({ count: z.number().int() }),
+    resultset: z.object({ count: z.number().check(z.int()) }),
   }),
   results: z.array(edinetDocSchema),
 });

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { z } from "zod";
+import { z } from "../../../../src/shared/zod-mini.js";
 import { zValidator } from "@hono/zod-validator";
 import { createDb } from "../db/client.js";
 import { BASE_PATH } from "../../base-path.js";
@@ -33,13 +33,24 @@ import { stockCodeSchema } from "../../../../src/shared/jpx/stock-code-schema.js
 type Bindings = { DB: D1Database };
 export const pagesRoute = new Hono<{ Bindings: Bindings }>();
 
+const emptyToUndef = z.transform<unknown, unknown>((v) =>
+  v === "" ? undefined : v
+);
+
 const homeQuery = z.object({
-  q: z.preprocess((v) => (v === "" ? undefined : v), z.string().optional()),
-  focus: z.string().optional(),
+  q: z.pipe(emptyToUndef, z.optional(z.string())),
+  focus: z.optional(z.string()),
 });
+
+// EDINET 由来のみの公開面 (L-62)。facts は日次取込でしか更新されないため、
+// 一覧/ホームは 5 分・詳細は 1 分エッジ/ブラウザにキャッシュさせ D1 読取を抑える。
+// /screening-overseas の 30 分 (SCREEN_CACHE) は重い全件走査の既存判断で残す。
+const LIST_CACHE = "public, max-age=300";
+const DETAIL_CACHE = "public, max-age=60";
 
 pagesRoute.get("/", zValidator("query", homeQuery), async (c) => {
   const { q } = c.req.valid("query");
+  c.header("Cache-Control", LIST_CACHE);
   if (q === undefined) {
     return c.html(homePage({ query: "", results: null }));
   }
@@ -49,29 +60,30 @@ pagesRoute.get("/", zValidator("query", homeQuery), async (c) => {
 });
 
 // ---- 受注成長性スクリーニング ----
-const numOpt = z.preprocess(
-  (v) => (v === "" || v === undefined ? undefined : v),
-  z.coerce.number().optional()
+const numOpt = z.pipe(
+  z.transform<unknown, unknown>((v) =>
+    v === "" || v === undefined ? undefined : v
+  ),
+  z.optional(z.coerce.number())
 );
 const screenQuery = z.object({
   // metric は UI から並び替え選択を撤去したため、内部的にも "orders" 固定。
-  // 旧 URL `?metric=backlog` は detectDeprecatedParams() で通知の上、ここで
-  // "orders" に正規化する (ルール2: 黙ったフォールバック禁止 — 廃止通知あり)。
-  metric: z
-    .enum(["orders", "backlog"])
-    .default("orders")
-    .transform(() => "orders" as const),
-  minYears: z.preprocess(
-    (v) => (v === "" || v === undefined ? 3 : v),
-    z.coerce.number().int().min(2).max(5)
+  // 旧 URL `?metric=backlog` は "orders" に正規化する（移行期間終了。
+  // 廃止通知シムは K1c で削除）。
+  metric: z.pipe(
+    z.prefault(z.enum(["orders", "backlog"]), "orders"),
+    z.transform(() => "orders" as const)
+  ),
+  minYears: z.pipe(
+    z.transform<unknown, unknown>((v) =>
+      v === "" || v === undefined ? 3 : v
+    ),
+    z.coerce.number().check(z.int(), z.minimum(2), z.maximum(5))
   ),
   // 受注高 / 受注残高 を独立に条件化 (ユーザ要件: 同時にスクリーニング)。
   minOrdersCagrPct: numOpt,
   minBacklogCagrPct: numOpt,
-  sector: z.preprocess(
-    (v) => (v === "" ? undefined : v),
-    z.string().optional()
-  ),
+  sector: z.pipe(emptyToUndef, z.optional(z.string())),
   // ファンダ絞り込み (共有 core.stock_financials)。結果表には出さず
   // 条件としてのみ使う。未入力 = 解除 (undefined)。
   minOpMarginPct: numOpt,
@@ -80,9 +92,11 @@ const screenQuery = z.object({
   maxPer: numOpt,
   minRoePct: numOpt,
   minDivYieldPct: numOpt,
-  limit: z.preprocess(
-    (v) => (v === "" || v === undefined ? 100 : v),
-    z.coerce.number().int().min(1).max(500)
+  limit: z.pipe(
+    z.transform<unknown, unknown>((v) =>
+      v === "" || v === undefined ? 100 : v
+    ),
+    z.coerce.number().check(z.int(), z.minimum(1), z.maximum(500))
   ),
 });
 
@@ -103,59 +117,18 @@ function toScreenOpts(q: z.infer<typeof screenQuery>): ScreenOpts {
   };
 }
 
-/**
- * 廃止された旧 URL パラメータ (受注高/受注残高 独立4条件化に伴い、
- * 単一指標の minCagrPct / minLatestOku は分割された) を**サイレントに
- * 黙殺せず**、ユーザに「廃止された / 何に置き換わったか」を必ず通知する
- * (ルール2: 黙ったフォールバック禁止の境界対応)。zod は unknown key を
- * 既定で strip するため、raw query から先に検出する。
- */
-const DEPRECATED_PARAM_RENAMES: Record<string, string> = {
-  minCagrPct: "minOrdersCagrPct / minBacklogCagrPct (受注高・受注残高を独立に指定)",
-  minLatestOku: "廃止 (規模条件は撤去。年率下限と時価総額レンジで代替してください)",
-  minLatestOrdersOku: "廃止 (規模条件は撤去。年率下限と時価総額レンジで代替してください)",
-  minLatestBacklogOku: "廃止 (規模条件は撤去。年率下限と時価総額レンジで代替してください)",
-};
-/**
- * metric=backlog の URL 廃止判定。`metric` パラメータ自体は内部で
- * "orders" 固定 (default) として残しているが、UI から並び替え選択を
- * 撤去したため、旧ブックマーク `?metric=backlog` は黙って吸収せず
- * 利用者に廃止を通知する (ルール2: 黙ったフォールバック禁止)。
- * "orders" 指定は冗長だが破綻ではないので通知対象外とする。
- */
-function detectDeprecatedParams(raw: Record<string, string | string[]>): string[] {
-  // c.req.query() は単値のみ返す (queries() を使えば配列)。将来 queries()
-  // へ差し替えても誤検出しないよう配列分岐も保持する。
-  const present = (v: string | string[] | undefined): boolean => {
-    if (v === undefined) return false;
-    if (Array.isArray(v)) return v.some((s) => s !== "");
-    return v !== "";
-  };
-  const out = Object.keys(DEPRECATED_PARAM_RENAMES)
-    .filter((k) => present(raw[k]))
-    .map((k) => `${k} → ${DEPRECATED_PARAM_RENAMES[k]}`);
-  const metricRaw = raw["metric"];
-  const metricVal = Array.isArray(metricRaw) ? metricRaw[0] : metricRaw;
-  if (metricVal === "backlog") {
-    out.push(
-      "metric=backlog → 廃止 (並び替え UI は撤去され、結果は常に受注高 年率の降順で表示されます)"
-    );
-  }
-  return out;
-}
-
 pagesRoute.get(
   "/screening",
   zValidator("query", screenQuery),
   async (c) => {
     const opts = toScreenOpts(c.req.valid("query"));
-    const deprecated = detectDeprecatedParams(c.req.query());
     const db = createDb(c.env.DB);
     const [rows, sectors] = await Promise.all([
       screenOrderGrowth(db, opts),
       listSectorsWithOrders(db),
     ]);
-    return c.html(screeningPage({ opts, sectors, rows, deprecated }));
+    c.header("Cache-Control", LIST_CACHE);
+    return c.html(screeningPage({ opts, sectors, rows }));
   }
 );
 
@@ -166,36 +139,41 @@ pagesRoute.get(
     const opts = toScreenOpts(c.req.valid("query"));
     const db = createDb(c.env.DB);
     const rows = await screenOrderGrowth(db, opts);
+    c.header("Cache-Control", LIST_CACHE);
     return c.json({ opts, count: rows.length, rows });
   }
 );
 
 // ---- 海外売上高比率スクリーニング (同一サービスの第2指標) ----
 const overseasScreenQuery = z.object({
-  minYears: z.preprocess(
-    (v) => (v === "" || v === undefined ? 3 : v),
-    z.coerce.number().int().min(2).max(5)
+  minYears: z.pipe(
+    z.transform<unknown, unknown>((v) =>
+      v === "" || v === undefined ? 3 : v
+    ),
+    z.coerce.number().check(z.int(), z.minimum(2), z.maximum(5))
   ),
   minOverseasRatioPct: numOpt,
   maxOverseasRatioPct: numOpt,
   minOverseasCagrPct: numOpt,
   // 地域別絞り込み (REGION_BUCKETS の key)。空文字→未指定。不正値は 422 で弾く。
-  region: z.preprocess(
-    (v) => (v === "" ? undefined : v),
-    z.enum(Object.keys(REGION_BUCKETS) as [string, ...string[]]).optional()
+  region: z.pipe(
+    emptyToUndef,
+    z.optional(z.enum(Object.keys(REGION_BUCKETS) as [string, ...string[]]))
   ),
   minRegionRatioPct: numOpt,
   maxRegionRatioPct: numOpt,
-  sector: z.preprocess((v) => (v === "" ? undefined : v), z.string().optional()),
+  sector: z.pipe(emptyToUndef, z.optional(z.string())),
   minOpMarginPct: numOpt,
   minMarketCapOku: numOpt,
   maxMarketCapOku: numOpt,
   maxPer: numOpt,
   minRoePct: numOpt,
   minDivYieldPct: numOpt,
-  limit: z.preprocess(
-    (v) => (v === "" || v === undefined ? 100 : v),
-    z.coerce.number().int().min(1).max(500)
+  limit: z.pipe(
+    z.transform<unknown, unknown>((v) =>
+      v === "" || v === undefined ? 100 : v
+    ),
+    z.coerce.number().check(z.int(), z.minimum(1), z.maximum(500))
   ),
 });
 
@@ -303,6 +281,7 @@ pagesRoute.get(
         )
       );
     }
+    c.header("Cache-Control", DETAIL_CACHE);
     return c.html(stockDetailPage(trend, overseasTrend));
   }
 );
@@ -316,6 +295,7 @@ pagesRoute.get(
     const db = createDb(c.env.DB);
     const trend = await getOrderTrendByCode(db, code);
     if (!trend) return c.json({ error: "stock not found" }, 404);
+    c.header("Cache-Control", DETAIL_CACHE);
     return c.json(trend);
   }
 );

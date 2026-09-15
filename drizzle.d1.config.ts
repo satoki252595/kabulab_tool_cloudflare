@@ -9,8 +9,8 @@
  * 3,700 銘柄 × 日次の経路なので、気付くのは D1 の課金か遅延が出てから。
  *
  * D1 への反映は **`generate` した SQL を読んでから `wrangler d1 execute --file`**
- * の一本道だけ。`package.json` には `db:push:*` が 5 本残っているが、いずれも
- * Neon (postgres) 向けで、D1 用の push スクリプトは作らないこと。
+ * の一本道だけ。Neon (postgres) 向けの `db:push:*` は K1a で削除した。
+ * D1 用の push スクリプトは作らないこと。
  *
  * 本番 `core_stocks` は 21 列・索引 3 本。うち 12 列と 2 索引は stockStock 側の
  * 移行 P4a (2026-09-12) が直接 ALTER で入れたもので、長らく snapshot が 9 列・
@@ -22,10 +22,10 @@
 import { defineConfig } from "drizzle-kit";
 
 /**
- * Cloudflare D1(SQLite) スキーマ生成設定（ADR-0001）。
+ * Cloudflare D1(SQLite) スキーマ生成設定。
  *
- * Neon 用の各 drizzle.<service>.config.ts（dialect=postgresql）とは別に、D1 へ
- * 移行したサービスの sqlite-core スキーマをここへ集約する。D1 は 1 DB = 1 SQLite
+ * 旧 Neon 用の各 drizzle.<service>.config.ts（dialect=postgresql。K1a で削除済み）とは別に、
+ * D1 へ移行したサービスの sqlite-core スキーマをここへ集約する。D1 は 1 DB = 1 SQLite
  * のため、共有 core と各サービスを単一 DB に同居させ、接頭辞でテーブルを分ける。
  *
  *   pnpm exec drizzle-kit generate --config=drizzle.d1.config.ts   # SQL 生成
@@ -43,7 +43,7 @@ export default defineConfig({
     "./src/shared/db/projection-schema.ts",
     "./services/yuho-quant/src/db/schema.ts",
     "./services/ir-catalog/src/db/schema.ts",
-    // ADR-0001 第2弾: 001/002/003/004 を Neon→D1 へ移行 (cluster)。
+    // 001/002/003/004 の D1 スキーマ。
     // swing-readonly.ts は swing/schema.ts のテーブルの再宣言なので追加しない
     // (同名 CREATE TABLE 重複を避ける)。
     "./services/rsi-screening/src/db/schema.ts",

@@ -111,36 +111,47 @@ jobs:
           repository: satoki252595/stockStock
           path: .peer-stockstock
           persist-credentials: false
-      - name: 共有テストベクタを突合
+      # 対象ファイルを増やすので、1 ファイル分の手順を関数にして呼ぶ形にした
+      # （複製すると片方だけ直される。移行期の猶予判定はコピーしてはいけない
+      # 種類のロジックである）。判定とメッセージは従来と 1:1 で同じ。
+      - name: 共有契約ファイルを突合
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
         run: |
           set -euo pipefail
-          MINE=tests/fixtures/contracts/stock-code-vectors.json
-          PEER=.peer-stockstock/tests/fixtures/contracts/stock-code-vectors.json
-          test -f "$MINE" || { echo "::error::$MINE が無い"; exit 1; }
-          if [ ! -f "$PEER" ]; then
-            # 移行期の例外はここだけ。**自リポの main にまだベクタが無い間**に
-            # 限って通す。両リポへ入り終わった後 (= 自 main にファイルがある) の
-            # 相手側の欠落は「導入途中」ではなく「共有の破棄」なので必ず落とす。
-            # 無条件に exit 0 にすると、相手がファイルを移動・改名した瞬間に
-            # この突合が「緑のまま無効化」され、乖離検出を謳ったジョブが
-            # 何も見ていない状態になる。
-            if ! git fetch --depth=1 origin "$DEFAULT_BRANCH" >/dev/null 2>&1; then
-              echo "::error::自リポ $DEFAULT_BRANCH を取得できず、移行期か共有破棄かを判別できない。"
-              exit 1
+          # 共有契約ファイルの突合。「自 main にあるのに相手に無い = 共有の破棄」
+          # で落とす。pending-peer 猶予は L-36 で畳んだ（両リポ導入済みのため撤去）。
+          compare_contract() {
+            REL="$1"
+            LABEL="$2"
+            MINE="$REL"
+            PEER=".peer-stockstock/$REL"
+            test -f "$MINE" || { echo "::error::$MINE が無い"; return 1; }
+            if [ ! -f "$PEER" ]; then
+              # 移行期の例外はここだけ。**自リポの main にまだファイルが無い間**に
+              # 限って通す。両リポへ入り終わった後 (= 自 main にファイルがある) の
+              # 相手側の欠落は「導入途中」ではなく「共有の破棄」なので必ず落とす。
+              # 無条件に exit 0 にすると、相手がファイルを移動・改名した瞬間に
+              # この突合が「緑のまま無効化」され、乖離検出を謳ったジョブが
+              # 何も見ていない状態になる。
+              if ! git fetch --depth=1 origin "$DEFAULT_BRANCH" >/dev/null 2>&1; then
+                echo "::error::自リポ $DEFAULT_BRANCH を取得できず、移行期か共有破棄かを判別できない。"
+                return 1
+              fi
+              if git cat-file -e "FETCH_HEAD:$MINE" 2>/dev/null; then
+                echo "::error::自リポ $DEFAULT_BRANCH には $MINE があるのに相手リポに無い。"
+                echo "::error::${LABEL}の片側削除・移動を疑うこと（移行期の猶予は既に終了している）。"
+                return 1
+              fi
+              echo "::warning::相手リポに $PEER が無い（両リポへの導入が完了していない）。突合をスキップ。"
+              return 0
             fi
-            if git cat-file -e "FETCH_HEAD:$MINE" 2>/dev/null; then
-              echo "::error::自リポ $DEFAULT_BRANCH には $MINE があるのに相手リポに無い。"
-              echo "::error::共有テストベクタの片側削除・移動を疑うこと（移行期の猶予は既に終了している）。"
-              exit 1
+            if ! diff -u "$PEER" "$MINE"; then
+              echo "::error::${LABEL}が 2 リポジトリ間で乖離している。"
+              echo "::error::どちらが正かを決めて両リポジトリを同時に直すこと。"
+              return 1
             fi
-            echo "::warning::相手リポに $PEER が無い (両リポへの導入が完了していない)。突合をスキップ。"
-            exit 0
-          fi
-          if ! diff -u "$PEER" "$MINE"; then
-            echo "::error::銘柄コード共有テストベクタが 2 リポジトリ間で乖離している。"
-            echo "::error::どちらが正かを決めて両リポジトリを同時に直すこと。"
-            exit 1
-          fi
-          echo "共有テストベクタは両リポジトリで一致している。"
+            echo "${LABEL}は両リポジトリで一致している。"
+          }
+          compare_contract tests/fixtures/contracts/stock-code-vectors.json "銘柄コード共有テストベクタ"
+          compare_contract tests/fixtures/contracts/d1-license-map.json "D1 列単位ライセンス地図の契約"

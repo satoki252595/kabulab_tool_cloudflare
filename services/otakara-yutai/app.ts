@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
 import { createMiddleware } from "hono/factory";
@@ -37,6 +37,20 @@ import { activeEquityCondition } from "../../src/shared/db/active-equity.js";
 export const BASE_PATH = "/otakara-yutai";
 const BP = BASE_PATH;
 
+/**
+ * 権利月・ジャンルの絞り込み述語 (L-51)。
+ *
+ * 旧形は `yutai_benefits` (8,295 行) を引く IN 副問合せで、rows と count の
+ * 2 回打っていた (≈2.8 万 rows_read/表示)。月次 rebuild が銘柄ごとに集計した
+ * `otakara_stock_scores.yutai_months` / `yutai_genre_ids` (昇順 JSON 配列) を
+ * `json_each` で引く。NULL・空配列の銘柄はヒットしない (副問合せと同値)。
+ * バインド変数は 1 個 (D1 上限 100 を食わない)。
+ */
+const hasYutaiMonth = (month: number) =>
+  sql`EXISTS (SELECT 1 FROM json_each(${stockScores.yutaiMonths}) WHERE value = ${month})`;
+const hasYutaiGenre = (genreId: number) =>
+  sql`EXISTS (SELECT 1 FROM json_each(${stockScores.yutaiGenreIds}) WHERE value = ${genreId})`;
+
 // ===== Types =====
 type AppEnv = {
   Bindings: { DB: D1Database };
@@ -50,11 +64,11 @@ const dbMiddleware = createMiddleware<AppEnv>(async (c, next) => {
 });
 
 // ===== Error Handler =====
-function onError(err: Error, c: any): Response {
+function onError(err: Error, c: Context): Response {
   console.error(`[Error] ${err.message}`);
   return c.html(layout("エラー", `<div class="container"><h2>エラーが発生しました</h2><p style="color:#888">予期しないエラーが発生しました。</p><a href="${BP}/" class="back">← ホームに戻る</a></div>`), 500);
 }
-function onNotFound(c: any): Response {
+function onNotFound(c: Context): Response {
   return c.html(layout("Not Found", `<div class="container"><h2>ページが見つかりません</h2><p style="color:#888">${c.req.path} は存在しません</p><a href="${BP}/" class="back">← ホームに戻る</a></div>`), 404);
 }
 
@@ -91,15 +105,7 @@ export function publicSummaries(rows: { shortSummary: string | null }[]): string
 /** スクリーニング1ページの件数。SSR 初期表示と /api/screening の既定 limit で共有する。 */
 export const SCREENING_PAGE_SIZE = 50;
 
-/**
- * /api/screening の limit 上限。
- *
- * 上限そのものは D1 の1レスポンス肥大を抑えるために残すが、以前は
- * **これがそのまま閲覧可能件数の上限**だった (offset が無かったため)。
- * 優待銘柄の母集団は 1,616、権利月3月だけで 848 件あり、どう絞り込んでも
- * 101 件目以降に到達する手段が無かった。offset 追加後は 1 ページの大きさに
- * すぎない。
- */
+/** /api/screening の limit 上限 (1 レスポンスの肥大抑止。offset とは別に 1 ページの大きさ)。 */
 export const SCREENING_MAX_LIMIT = 100;
 
 /**
@@ -143,7 +149,7 @@ async function loadCardBenefits(
 const app = new Hono<AppEnv>({ strict: false });
 
 // PWA 用静的ファイル (manifest.json / sw.js / icons) は
-// ルート repo の public/otakara-yutai/ に配置し、Vercel が直接配信する。
+// ルート repo の public/otakara-yutai/ に配置し、Worker の [assets] が直接配信する。
 // サブアプリ側のルート定義は不要。
 
 app.use("*", logger());
@@ -169,10 +175,8 @@ app.get("/api/screening", async (c) => {
   const sort = c.req.query("sort") ?? "total";
   const order = c.req.query("order") ?? "desc";
   const limit = Math.min(SCREENING_MAX_LIMIT, Math.max(1, parseInt(c.req.query("limit") ?? String(SCREENING_PAGE_SIZE), 10) || SCREENING_PAGE_SIZE));
-  // ページ送り。OFFSET の走査コストは実測で平坦 (同一条件で OFFSET 0 と 1550 が
-  // どちらも rows_read 6,947) なので、keyset ページングではなく素直な OFFSET を採る。
-  // 上限は母集団 (優待銘柄 1,616) を十分に超える値で、桁を間違えた URL で
-  // 無意味な走査をさせないための歯止め。
+  // ページ送り。OFFSET の走査コストは平坦なので keyset ではなく素直な OFFSET を採る。
+  // 上限は桁を間違えた URL で無意味な走査をさせないための歯止め。
   const offset = Math.max(0, Math.min(100_000, parseInt(c.req.query("offset") ?? "0", 10) || 0));
   // 総件数を返すか。既定 false ＝ 打たない (理由は下の COUNT 付近を参照)。
   const withTotal = c.req.query("withTotal") === "1";
@@ -181,25 +185,16 @@ app.get("/api/screening", async (c) => {
   // otakara は優待サービスなので、その中の is_yutai=true に限定する。
   const whereClauses: unknown[] = [activeEquityCondition(), eq(stocks.isYutai, true)];
 
-  // ジャンル/権利月フィルター。
-  // 該当 stockId を JS 配列へ展開して inArray に渡すと、件数の多いジャンル
-  // (QUOカード/金券/ポイント/その他) で ID 数が D1 のバインド変数上限 (1クエリ
-  // 100個) を超えクエリが reject され 500 になる。そのため ID 配列を materialize
-  // せず、yutai_benefits を引くサブクエリを inArray に渡す (IN リストが D1 内で
-  // 完結し、バインド変数は genreId/month の各1個のみ)。ジャンル∩権利月は
-  // 2つの IN を AND で重ねることで表現する。
+  // ジャンル/権利月フィルター (L-51)。月次 rebuild の集計列を引く。
+  // ジャンル∩権利月は 2 つの述語を AND で重ねることで表現する。
   if (genre) {
     const genreRow = await db.select({ id: yutaiGenres.id }).from(yutaiGenres)
       .where(eq(yutaiGenres.slug, genre)).limit(1);
     if (genreRow.length === 0) return c.json({ items: [], total: withTotal ? 0 : null, offset, limit });
-    whereClauses.push(inArray(stocks.id,
-      db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
-        .where(eq(yutaiBenefits.genreId, genreRow[0].id))));
+    whereClauses.push(hasYutaiGenre(genreRow[0].id));
   }
   if (month >= 1 && month <= 12) {
-    whereClauses.push(inArray(stocks.id,
-      db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
-        .where(eq(yutaiBenefits.recordMonth, month))));
+    whereClauses.push(hasYutaiMonth(month));
   }
   if (perMax > 0) whereClauses.push(lte(stockFinancials.per, perMax));
   if (pbrMax > 0) whereClauses.push(lte(stockFinancials.pbr, pbrMax));
@@ -222,14 +217,9 @@ app.get("/api/screening", async (c) => {
     ? sql`${col} ASC NULLS LAST`
     : sql`${col} DESC NULLS LAST`;
 
-  // 総件数。同一 WHERE の COUNT は**データ取得と同額の走査を払う** (実測 rows_read:
-  // 無フィルタ 6,947 / 権利月フィルタ 13,725 / 全条件 13,412)。D1 は走査行課金なので
-  // 毎リクエストで打つと権利月フィルタ時に 13,725 → 27,450 と倍になる。
-  // そこで「絞り込み条件を変えた最初の1回だけクライアントが withTotal=1 を付ける」
-  // 方式にした (ページ送りとソート変更では総件数は変わらないのでキャッシュを使う)。
-  // 採らなかった案: (a) 毎回 COUNT — 上記のとおり課金が倍。(b) limit+1 件だけ引いて
-  // 「100件以上」と曖昧に出す — 権利月3月で 848 件という規模では「848件中」と
-  // 正確に出せる価値の方が大きい。
+  // 総件数。同一 WHERE の COUNT はデータ取得と同額の走査を払うため、
+  // 「絞り込み条件を変えた最初の1回だけクライアントが withTotal=1 を付ける」方式
+  // (ページ送りとソート変更ではキャッシュを使う)。
   let total: number | null = null;
   if (withTotal) {
     // 財務列の絞り込みが無いときは LEFT JOIN を落とす。LEFT JOIN は行を減らさず、
@@ -237,11 +227,27 @@ app.get("/api/screening", async (c) => {
     // → join 無しの count(*) と同値でありながら走査行が大幅に減る。
     // 財務列を WHERE で参照するときは落とせないので、その場合だけ join する。
     const financialFiltered = perMax > 0 || pbrMax > 0 || yieldMin > 0 || rsiMax > 0;
-    const countRow = financialFiltered
-      ? await db.select({ c: sql<number>`count(distinct ${stocks.id})` }).from(stocks)
+    // 月/ジャンル条件は scores の集計列を参照する (L-51) ので、その場合だけ
+    // scores を join する。join 先は UNIQUE だが、旧形どおり count(distinct)。
+    const scoresFiltered = genre !== "" || (month >= 1 && month <= 12);
+    const joined = scoresFiltered || financialFiltered;
+    const countSel = joined
+      ? { c: sql<number>`count(distinct ${stocks.id})` }
+      : { c: sql<number>`count(*)` };
+    const countRow = await (scoresFiltered && financialFiltered
+      ? db.select(countSel).from(stocks)
+          .leftJoin(stockScores, eq(stockScores.stockId, stocks.id))
           .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
           .where(whereCondition)
-      : await db.select({ c: sql<number>`count(*)` }).from(stocks).where(whereCondition);
+      : scoresFiltered
+        ? db.select(countSel).from(stocks)
+            .leftJoin(stockScores, eq(stockScores.stockId, stocks.id))
+            .where(whereCondition)
+        : financialFiltered
+          ? db.select(countSel).from(stocks)
+              .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
+              .where(whereCondition)
+          : db.select(countSel).from(stocks).where(whereCondition));
     total = Number(countRow[0]?.c ?? 0);
   }
 
@@ -866,8 +872,7 @@ function sortOptions(current = "total-desc"): string {
 app.get("/", async (c) => {
   const db = c.get("db");
   const genres = await db.select().from(yutaiGenres).orderBy(yutaiGenres.name);
-  // 銘柄数は一覧 (/screening と /api/screening) の母集団と同じ述語で数える。
-  // 以前は is_yutai だけを見ており、上場廃止した優待銘柄まで数えていた。
+  // 銘柄数は一覧の母集団と同じ述語で数える。
   const [{ count: totalStocks }] = await db.select({ count: count() }).from(stocks)
     .where(and(activeEquityCondition(), eq(stocks.isYutai, true)));
 
@@ -912,11 +917,11 @@ app.get("/genres/:slug", async (c) => {
   if (!genre) return c.html(layout("Not Found", `<div class="container"><h2>ジャンルが見つかりません</h2><a href="${BP}/" class="back">← ホームに戻る</a></div>`), 404);
 
   const page = Math.max(1, Math.min(parseInt(c.req.query("page") ?? "1", 10) || 1, 500));
-  // ソートは "<列>-<昇降>" の複合値 (sortOptions と同形式)。旧 ?sort=&order= 形式も後方互換で受理。
+  // ソートは "<列>-<昇降>" の複合値 (sortOptions と同形式)。旧 ?sort=&order= 形式は K1c で打ち切り。
   const sortRaw = c.req.query("sort") ?? "total-desc";
-  let gSort: string, gOrder: string;
-  if (sortRaw.includes("-")) { const [col, ord] = sortRaw.split("-"); gSort = col; gOrder = ord; }
-  else { gSort = sortRaw; gOrder = c.req.query("order") ?? "desc"; }
+  const [col, ord] = sortRaw.split("-");
+  let gSort: string = col;
+  let gOrder: string = ord;
   if (!["total", "fundamental", "technical", "dividend", "pbr", "yutai"].includes(gSort)) gSort = "total";
   if (gOrder !== "asc") gOrder = "desc";
   const PAGE_SIZE = 20;
@@ -931,17 +936,13 @@ app.get("/genres/:slug", async (c) => {
   const fRsiMax = parseFloat(c.req.query("rsiMax") ?? "") || 0;
   const activeFilters = [fMonth, fPerMax, fPbrMax, fYieldMin, fRsiMax].filter(v => v > 0).length;
 
-  // WHERE: ジャンル該当 (サブクエリ) + 母集団 (active かつ equity) + 絞り込み。ID 配列を JS 展開せず
-  // サブクエリを inArray に渡し D1 のバインド変数上限 (1クエリ100個) を回避する。
+  // WHERE: ジャンル該当 (集計列) + 母集団 (active かつ equity) + 絞り込み。
+  // ID 配列の JS 展開は D1 のバインド上限 (100) で 500 になるため採らない。
   const gWhere: unknown[] = [
-    inArray(stocks.id,
-      db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
-        .where(eq(yutaiBenefits.genreId, genre.id))),
+    hasYutaiGenre(genre.id),
     activeEquityCondition(),
   ];
-  if (fMonth) gWhere.push(inArray(stocks.id,
-    db.select({ stockId: yutaiBenefits.stockId }).from(yutaiBenefits)
-      .where(eq(yutaiBenefits.recordMonth, fMonth))));
+  if (fMonth) gWhere.push(hasYutaiMonth(fMonth));
   if (fPerMax > 0) gWhere.push(lte(stockFinancials.per, fPerMax));
   if (fPbrMax > 0) gWhere.push(lte(stockFinancials.pbr, fPbrMax));
   if (fYieldMin > 0) gWhere.push(gte(stockFinancials.dividendYield, fYieldMin));
@@ -949,9 +950,11 @@ app.get("/genres/:slug", async (c) => {
   const gWhereCond = and(...(gWhere as Parameters<typeof and>));
 
   // 絞り込み後の件数 (= ページ数)。財務列フィルタのため stockFinancials を join し、
-  // count(distinct) で行転送なしに正確な件数を得る。
+  // count(distinct) で行転送なしに正確な件数を得る。ジャンル条件は scores の
+  // 集計列を参照する (L-51) ので scores も join する (UNIQUE なので行は増えない)。
   const cntRow = await db.select({ c: sql<number>`count(distinct ${stocks.id})` }).from(stocks)
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
+    .leftJoin(stockScores, eq(stockScores.stockId, stocks.id))
     .where(gWhereCond);
   const matchedCount = Number(cntRow[0]?.c ?? 0);
 
@@ -987,18 +990,9 @@ app.get("/genres/:slug", async (c) => {
     .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
     .where(gWhereCond)
     .orderBy(gSortExpr, asc(stocks.id))
-    // 1 銘柄 1 行であることは JOIN 先の UNIQUE 制約が保証する
-    // (otakara_stock_financials / _scores の stock_id は UNIQUE。本番 D1 にも
-    // 同名の unique index が実在する)。だから limit を PAGE_SIZE より大きく取る
-    // 必要は無い。
-    //
-    // **ただし rows_read は減らない。** 本番実測 (2026-09-13, genre_id=110 /
-    // 373 銘柄): limit 20 / 60 / 200 のいずれでも rows_read は 5,568 で同値。
-    // EXPLAIN が `USE TEMP B-TREE FOR ORDER BY` を出すとおり、ORDER BY のために
-    // 一致集合を全部並べ替えてから LIMIT を適用するので、LIMIT は**返却行数
-    // だけ**を変える。3 倍にしていた分の実害は行転送量と SSR 側の処理で、
-    // 走査行課金には出ない。索引でもコストが下がらないのと同じ構図なので、
-    // ここを「コスト削減」と書かないこと。
+    // 1 銘柄 1 行は JOIN 先の UNIQUE 制約が保証する (limit を大きく取る必要は無い)。
+    // ただし rows_read は減らない: ORDER BY の TEMP B-TREE ソートが一致集合を
+    // 全部並べ替えてから LIMIT を適用するため。ここを「コスト削減」と書かないこと。
     .limit(PAGE_SIZE).offset(offset);
 
   // JS 側の重複除去も外した。上の UNIQUE が成り立つ限り一度も仕事をせず、
@@ -1437,8 +1431,8 @@ app.get("/stocks/:code", async (c) => {
         },
         with: { genre: true },
       },
-      financials: { orderBy: (f: any, { desc: d }: any) => [d(f.fetchedAt)], limit: 1 },
-      scores: { orderBy: (s: any, { desc: d }: any) => [d(s.scoredAt)], limit: 1 },
+      financials: { orderBy: (f, { desc: d }) => [d(f.fetchedAt)], limit: 1 },
+      scores: { orderBy: (s, { desc: d }) => [d(s.scoredAt)], limit: 1 },
     },
   });
 
@@ -1455,7 +1449,7 @@ app.get("/stocks/:code", async (c) => {
   // 行ごと元データから削除する。削除後、その 9 コードは上の `!stockData` で 404 になる。
   const fin = stockData.financials[0] ?? null;
   const score = stockData.scores[0] ?? null;
-  const genreSlugs = [...new Set(stockData.benefits.map((b: any) => b.genre?.slug).filter(Boolean))];
+  const genreSlugs = [...new Set(stockData.benefits.map((b) => b.genre?.slug).filter(Boolean))];
   const fromScreening = c.req.query("from") === "screening";
 
   return c.html(layout(`${stockData.name} (${code})`, `
@@ -1501,10 +1495,8 @@ app.get("/stocks/:code", async (c) => {
           recordMonth: b.recordMonth,
           summary: publicSummary(b),
           estimatedValue: b.estimatedValue,
-          // drizzle/d1/0005 を 2026-09-12 に本番 D1 へ適用済み。それ以前は列が
-          // 無く、SQLite が解決できない二重引用符付き識別子を**文字列リテラル**
-          // として返すため、この2つに "estimate_value_source" という列名の文字列が
-          // 入っていた (= WEB推定バッジが恒久的に出ない状態だった)。
+          // 列が無い時代は SQLite が識別子を文字列リテラルとして返していた
+          // (0005 で解消)。
           estimateValueSource: b.estimateValueSource,
           estimateSourceUrl: b.estimateSourceUrl,
         }))

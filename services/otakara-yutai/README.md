@@ -1,95 +1,22 @@
 # お宝優待 (otakara-yutai)
 
-日本株の株主優待において、ファンダメンタルズ及びテクニカルの観点から割安な銘柄を優待ジャンル毎に紹介するWebサービス。
+日本株の株主優待において、ファンダメンタルズ及びテクニカルの観点から割安な
+銘柄を優待ジャンル毎に紹介する Web サービス。
 
-> **本サービスは [kabulab](../../README.md) mono-repo の 002 サブアプリ**。`https://kabulab-cf.satoki252595.workers.dev/otakara-yutai/` で公開され、コマンドは全て **リポジトリルート**から実行する。実装規約の正本は [CLAUDE.md](./CLAUDE.md)。
+> **本サービスは [kabulab](../../README.md) mono-repo の 002 サブアプリ**。
+> `https://kabulab-cf.satoki252595.workers.dev/otakara-yutai/` で公開。
+> 仕様の正本は [docs/002-otakara-yutai.md](../../docs/002-otakara-yutai.md)、
+> 実装規約は [CLAUDE.md](./CLAUDE.md)。
 
-## 技術スタック
+## 開発
 
-| カテゴリ | 技術 |
-|----------|------|
-| Backend | Hono v4 (`new Hono({ strict: false })`) |
-| Deploy | Cloudflare Workers (単一 Worker kabulab-cf。Workers Builds の Git 連携で自動デプロイ) |
-| Database | Cloudflare D1 (SQLite) — 単一 DB `kabulab-cf` に `yutai_*`/`otakara_*` 接頭辞テーブル + 共有 `core_*` を参照 |
-| ORM | Drizzle ORM (`drizzle-orm/d1` + sqlite-core) |
-| Validation | Zod + @hono/zod-validator |
-| Frontend | Hono SSR — **HTML は `app.ts` 内の template literal で生成 (JSX 不可)** |
-| Test | Vitest + @vitest/coverage-v8 |
-| External API | **なし** (Yahoo は統一 daily sync が `core`/`swing` を更新し間接反映。本サービス独自の Yahoo 呼び出しはゼロ) |
-
-## セットアップ
-
-### 前提条件
-
-- Node.js 22 / pnpm 9 (リポジトリルートの **Nix Flake** で固定。`nix develop` 推奨)
-- Cloudflare アカウント (D1 `kabulab-cf` + Workers)
-- `wrangler` CLI (D1 操作・デプロイ)
-
-### インストール
+コマンドは全て **リポジトリルート** から (詳細は root README):
 
 ```bash
-git clone <repo-url> kabulab_tool
-cd kabulab_tool
 nix develop               # Node 22 + pnpm 9 の dev shell
-pnpm install              # mono-repo ルートで一括インストール
+pnpm install && pnpm dev  # 依存導入 + ローカル開発サーバー
+pnpm sync:monthly:core    # 手動月次 rebuild (通常は GitHub Actions が実行)
 ```
-
-### 環境変数
-
-`.env.example` をコピーして `.env` を作成:
-
-```bash
-cp .env.example .env
-```
-
-| 変数名 | 説明 | 必須 |
-|--------|------|------|
-| `CLOUDFLARE_API_TOKEN` | 取込 (Node / GitHub Actions) が D1 REST 書込に使う API トークン (D1 edit 権限) | 取込時 |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare アカウント ID (D1 REST 用) | 取込時 |
-| `D1_DATABASE_ID` | D1 データベース `kabulab-cf` の ID (D1 REST 用) | 取込時 |
-
-> Worker の読取経路は D1 バインディング `c.env.DB` を使うため接続文字列は不要。
-> 上記 `CLOUDFLARE_*` / `D1_DATABASE_ID` は **書込 (取込)** を行う Node 側でのみ参照する。
-
-### データベースセットアップ
-
-スキーマ操作は **ルートからコマンド**で行う。シード投入は無く、データは統一 sync + 優待取込パイプラインで投入する。
-
-```bash
-pnpm db:generate:d1        # drizzle/d1/*.sql を生成
-wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<生成SQL>  # D1 に適用
-pnpm sync:universe         # 東証内国普通株・共有4文字コード ~3,700 を seed
-pnpm sync:monthly:core     # is_yutai 銘柄のスコア再計算
-```
-
-## 開発コマンド (全てリポジトリルートから)
-
-| コマンド | 説明 |
-|----------|------|
-| `pnpm dev` | ローカル開発サーバー起動 (wrangler dev) |
-| `pnpm run deploy` | Cloudflare Workers 手動デプロイ (wrangler deploy)。通常は main push の自動デプロイで足りる |
-| `pnpm test` / `pnpm test:coverage` | テスト / カバレッジ付き |
-| `pnpm typecheck` | TypeScript 型チェック |
-| `pnpm lint` | ESLint 実行 |
-| `pnpm db:generate:d1` | D1 マイグレーション SQL 生成 (`drizzle/d1/*.sql`)。適用は `wrangler d1 execute kabulab-cf --remote --file=...` |
-| `pnpm yutai:summary:export` | 要約タスクを書き出す (要約はリポジトリ外のクラウド LLM。`--violations-only` で契約違反だけ) |
-| `pnpm yutai:summary:import` | クラウド LLM の結果を検証し、通った行だけ D1 に書く (既定 dry-run、`--apply` で書き込み) |
-
-優待データ取込パイプライン (fetch → export → 要約タスク書き出し → クラウド LLM → 取り込み) の詳細は [CLAUDE.md](./CLAUDE.md)・[要約作業仕様書](./docs/llm-summary-task.md)・ [ルート README](../../README.md#優待データ取込パイプライン-002-otakara-data-scriptscron-非対象) を参照。
-
-## デプロイ
-
-kabulab は **単一 Cloudflare Worker** (`kabulab-cf`)。`git push origin main` で Workers Builds (Git 連携) の **無料**自動デプロイが発火する (手動は `pnpm run deploy` = `wrangler deploy`)。ビルド/ルーティング設定は `wrangler.toml` に集約し、D1 (`binding=DB`) / R2 (`binding=BUCKET`) / 静的アセット (`binding=ASSETS`) のバインディングを定義する。取込用シークレット (`CLOUDFLARE_API_TOKEN` 等) は GitHub Actions Secrets で管理する。
-
-本サービスは root app が `app.route("/otakara-yutai", otakaraYutaiApp)` で mount する。`app.ts` のルート:
-
-| パス (mount 後は `/otakara-yutai` 配下) | 内容 |
-|------|--------|
-| `/` | ホーム (SSR) |
-| `/screening` | スクリーニング (SSR) |
-| `/genres/:slug` | ジャンル別 (SSR) |
-| `/stocks/:code` | 銘柄詳細 (SSR) |
-| `/api/screening` | スクリーニング用フィルター検索 (内部利用) |
 
 ## 内部API
 
@@ -120,55 +47,9 @@ kabulab は **単一 Cloudflare Worker** (`kabulab-cf`)。`git push origin main`
 ```
 
 - `total` は `withTotal=1` のときだけ数値、それ以外は `null`。
-  同一 WHERE の `COUNT(*)` は**データ取得クエリと同額の走査を払う** (実測 rows_read:
-  無フィルタ 6,947 / 権利月フィルタ 13,725)。D1 は走査行課金なので毎リクエストでは打たない。
-  ページ送りとソート変更では総件数が変わらないため、クライアントは取得済みの値を使い回す。
-- 以前は裸の配列を返していた。offset が無く limit が 100 で打ち止めだったため、
-  優待銘柄 1,616 件 (権利月3月だけで 848 件) に対して 101 件目以降へ到達できなかった。
-
-## 自動化 (GitHub Actions)
-
-データ取込 (書込) は Node で動く **GitHub Actions 3 本**が担う (Workers Cron / Workers Paid は使わない)。02 優待の LLM 解釈のみローカル手動。
-
-### stock-sync.yml — 銘柄データ同期 (002 に直接関係)
-
-- **トリガー**: 平日 21:00 UTC (日次 core/rsi/swing sync) + 毎月10日 01:30 UTC (母集団同期 + otakara rebuild) + 手動
-- **内容**: 日次は `sync:daily:core`、月次は `sync:universe` → `sync:monthly:core` を実行し D1 を REST 経由で更新。is_yutai 銘柄の `otakara_stock_scores` も月次で再計算
-- **デプロイは Workers Builds が別途担当** (このワークフローは取込専用)
-
-### vwap-ingest.yml — VWAP 時系列取込 (007)
-
-- **トリガー**: 平日 08:00 UTC (日足10年 + 5分足) + 土 09:00 UTC (信用残高 週次) + 手動
-- **内容**: Yahoo データを R2 (`vwap-data`) へ書込
-
-### catchup.yml — 開示取込 (005 / 006)
-
-- **トリガー**: 平日 11:00 UTC + 手動
-- **内容**: EDINET 有報 (005) / TDnet 適時開示 (006) を取り込み
-
-> 優待データ取込パイプライン (fetch → export → 要約タスク書き出し → クラウド LLM → 取り込み) は GitHub Actions 非対象・ローカル手動。詳細は [CLAUDE.md](./CLAUDE.md)。
-
-## ディレクトリ構成
-
-```
-services/otakara-yutai/
-├── app.ts                       # ★本番ビルドの単一ファイル — 全 HTML を template literal で生成 + 全ルート
-├── src/
-│   ├── db/
-│   │   ├── client.ts            # createDb(c.env.DB) — D1 + Drizzle クライアント
-│   │   └── schema.ts            # yutai_*/otakara_* 接頭辞テーブル定義 (single source of truth)
-│   ├── services/
-│   │   ├── yutai-scraper.ts         # 優待データ取込 (HTML/CSV/JSON)
-│   │   └── yutai-data-provider.ts   # ファイルベースインポート
-│   └── (index.ts / pages-app.ts / routes/ / views/ / middleware/ 等は dead code — 本番は app.ts)
-└── data-scripts/                # GitHub Actions 非対象・ローカル手動実行の優待取込パイプライン
-    ├── fetch-yutai-full.ts          # 1. minkabu → yutai_benefits + is_yutai
-    ├── export-benefit-descriptions.ts # 2. → data/benefit-descriptions.jsonl
-    ├── export-summary-tasks.ts      # 3. 要約タスク → data/summary-tasks/ (要約は外部のクラウド LLM)
-    └── import-summary-results.ts    # 4. 結果を検証 → DB short_summary / estimated_value (既定 dry-run)
-```
-
-> Worker エントリは **ルートの `worker/entry.ts`** 1 つ。root app (`src/index.ts`) が本サービスを `/otakara-yutai` に mount する。
+  同一 WHERE の `COUNT(*)` はデータ取得と同額の走査を払う (D1 は走査行課金)
+  ため、ページ送り・ソート変更では取得済みの値を使い回す。
+  設計の詳細は docs/002 の「スクリーニングのページングと総件数」を参照。
 
 ## ライセンス
 

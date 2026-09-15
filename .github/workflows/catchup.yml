@@ -81,16 +81,7 @@ jobs:
       # （既に open があれば重複を作らずコメントを足す）。
       - name: 失敗したら Issue を立てる
         if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WF: ${{ github.workflow }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          TITLE="[ジョブ失敗] $WF"
-          EXISTING=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
-          BODY="$WF が失敗しました。%0A%0A実行: $RUN_URL%0A検知: $(date -u '+%Y-%m-%d %H:%M UTC')"
-          if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body "$(printf '%b' "${BODY//%0A/\\n}")"
-          else
-            gh issue create --title "$TITLE" --label "" --body "$(printf '%b' "${BODY//%0A/\\n}")"
-          fi
+        uses: ./.github/actions/notify-failure
+        with:
+          title: "[ジョブ失敗] ${{ github.workflow }}"
+          summary: "${{ github.workflow }} が失敗しました。"

@@ -70,8 +70,7 @@ CREATE TABLE yutai_benefits (
   updated_at integer NOT NULL DEFAULT (unixepoch())
 );
 CREATE TABLE otakara_stock_financials (
-  id integer PRIMARY KEY AUTOINCREMENT,
-  stock_id integer NOT NULL UNIQUE REFERENCES core_stocks(id),
+  stock_id integer PRIMARY KEY NOT NULL REFERENCES core_stocks(id),
   price real, per real, pbr real, dividend_yield real, eps real, bps real,
   roe real, roa real, market_cap real,
   ma_5 real, ma_25 real, ma_75 real, rsi_14 real, macd real, macd_signal real,
@@ -80,11 +79,12 @@ CREATE TABLE otakara_stock_financials (
   data_date text NOT NULL
 );
 CREATE TABLE otakara_stock_scores (
-  id integer PRIMARY KEY AUTOINCREMENT,
-  stock_id integer NOT NULL UNIQUE REFERENCES core_stocks(id),
+  stock_id integer PRIMARY KEY NOT NULL REFERENCES core_stocks(id),
   fundamental_score real NOT NULL,
   technical_score real NOT NULL,
   total_score real NOT NULL,
+  yutai_months text,
+  yutai_genre_ids text,
   scored_at integer NOT NULL DEFAULT (unixepoch())
 );
 `;

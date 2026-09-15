@@ -10,8 +10,11 @@
  * services/otakara-yutai/src/tests/stock-detail-license.test.ts が
  * 番兵値を DB に入れて見ている。ここはその手前の純関数の契約。
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  PERSONAL_ONLY_COLUMNS,
   PUBLISH_JPX_DERIVED_COLUMNS,
   publicStockMetaFromRow,
   publicStockMetaLabel,
@@ -76,5 +79,64 @@ describe("publicStockMetaLabel", () => {
 
   it("区切り文字を差し替えられる (面ごとに表記が違う)", () => {
     expect(publicStockMetaLabel(["7203", "電気機器"], " · ")).toBe("7203 · 電気機器");
+  });
+});
+
+/**
+ * 公開面の列ガードが列単位ライセンス地図から離れないようにする。
+ *
+ * 正本の地図は共有契約ファイル
+ * `tests/fixtures/contracts/d1-license-map.json` の `column_license`。
+ * 同一バイト列のファイルを stockStock (Python) 側のテストも読む
+ * (CI の cross-repo-contract ジョブが両リポの JSON を diff する)。
+ *
+ * 突合の向きは「地図 ⊆ ガード」の片側だけにする。ガード
+ * (`PERSONAL_ONLY_COLUMNS`) は drizzle の両綴り (camelCase / snake_case) を
+ * 持ち、判断そのものの 3 列 (`license_tag` / `src_source` / `quality`) を
+ * 地図のタグ (commercial-ok) より保守的に personal-only 扱いする。
+ * 余分の 3 列はちょうど固定し、増減したら人が判断する。
+ */
+const MAP_PATH = fileURLToPath(
+  new URL("../../../tests/fixtures/contracts/d1-license-map.json", import.meta.url)
+);
+const contract = JSON.parse(readFileSync(MAP_PATH, "utf8")) as {
+  column_license: Record<string, Record<string, string>>;
+};
+
+/** drizzle のプロパティ綴りを列名綴りへ (instrumentType → instrument_type)。 */
+function toColumnName(name: string): string {
+  return name.replace(/([A-Z])/g, (c) => `_${c.toLowerCase()}`);
+}
+
+describe("PERSONAL_ONLY_COLUMNS は列単位ライセンス地図と対応する", () => {
+  it("地図の personal-only 列をガードが全部持つ", () => {
+    const columns = contract.column_license.core_stocks;
+    if (columns === undefined) {
+      throw new Error("地図に core_stocks が無い");
+    }
+    const restricted = Object.entries(columns)
+      .filter(([, tag]) => tag === "personal-only")
+      .map(([column]) => column)
+      .sort();
+    const guarded = new Set([...PERSONAL_ONLY_COLUMNS].map(toColumnName));
+    for (const column of restricted) {
+      expect(guarded.has(column)).toBe(true);
+    }
+  });
+
+  it("ガードの余分は判断そのものの 3 列ちょうど", () => {
+    const columns = contract.column_license.core_stocks;
+    if (columns === undefined) {
+      throw new Error("地図に core_stocks が無い");
+    }
+    const restricted = new Set(
+      Object.entries(columns)
+        .filter(([, tag]) => tag === "personal-only")
+        .map(([column]) => column)
+    );
+    const extra = [...new Set([...PERSONAL_ONLY_COLUMNS].map(toColumnName))]
+      .filter((column) => !restricted.has(column))
+      .sort();
+    expect(extra).toEqual(["license_tag", "quality", "src_source"]);
   });
 });

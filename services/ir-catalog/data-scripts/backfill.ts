@@ -102,7 +102,7 @@ async function main(): Promise<void> {
   // 母集団は日次キャッチアップ (src/cron/ir-catalog-tdnet.ts) と同じ取込の母集団。
   // 非普通株と、区分が NULL の active 行の開示は取り込まない。is_active=0 の銘柄 (東証の
   // 上場廃止。地域取引所にだけ上場を続ける会社を含む) の開示は取り込む
-  // (理由は src/shared/db/active-equity.ts の ingestUniverseCondition)。
+  // (理由は src/shared/db/active-equity.ts の disclosureIngestCondition)。
   const codeToId = await loadIngestCodeToId(db);
   console.info(
     `[ir:backfill] core_stocks (取込の母集団) ${codeToId.size} 社 / ${pad(from.m)}/${from.y}〜${pad(

@@ -186,10 +186,9 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
     expect(savedRows(TODAY).map((r) => r.sector)).toEqual(["情報・通信業"]);
   });
 
-  it("当日分だけを書き直し、過去日の行 (切り替え前 = JPX キー) には触らない", async () => {
-    // 切り替え前の日付の行は JPX キーのまま残る。公開面がそれを読まないのは
-    // SECTOR_DAILY_PUBLIC_KEY_SINCE の役目で、ここは「cron が過去日を
-    // 書き直さない」= 残ることの方を固定する。
+  it("当日分だけを書き直し、保持期間内の過去日には触らない", async () => {
+    // ここは「cron が過去日を書き直さない」= 残ることの方を固定する。
+    // 30 日より古い行の破棄は別テスト (L-53)。
     sqlite
       .prepare(
         "INSERT INTO swing_sector_daily (date, sector, pct_1d, stock_count, rank_1d) VALUES ('2026-09-11', '番兵JPX業種A', 0.5, 10, 1)"
@@ -201,6 +200,29 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
 
     expect(savedRows("2026-09-11").map((r) => r.sector)).toEqual(["番兵JPX業種A"]);
     expect(savedRows(TODAY).map((r) => r.sector)).toEqual(["情報・通信業"]);
+  });
+
+  it("30 日より古い行は破棄し、30 日以内の過去日は残す (L-53)", async () => {
+    sqlite
+      .prepare(
+        "INSERT INTO swing_sector_daily (date, sector, pct_1d, stock_count, rank_1d) VALUES ('2026-08-01', '古い行', 0.1, 10, 1)"
+      )
+      .run();
+    sqlite
+      .prepare(
+        "INSERT INTO swing_sector_daily (date, sector, pct_1d, stock_count, rank_1d) VALUES ('2026-09-11', '新しい行', 0.5, 10, 1)"
+      )
+      .run();
+    seedStock({ id: 1, jpxSector: "番兵JPX業種A", sector33: "情報・通信業", pct1d: 1 });
+
+    await aggregateSectorDaily(db(), TODAY);
+
+    const dates = (
+      sqlite.prepare("SELECT DISTINCT date AS d FROM swing_sector_daily").all() as Array<{ d: string }>
+    ).map((r) => r.d);
+    expect(dates).not.toContain("2026-08-01");
+    expect(dates).toContain("2026-09-11");
+    expect(dates).toContain(TODAY);
   });
 
   it("カバレッジ 90% 未満なら書かず、同じ日付の前回値を残す", async () => {

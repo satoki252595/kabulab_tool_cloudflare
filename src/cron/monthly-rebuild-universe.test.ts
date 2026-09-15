@@ -140,3 +140,29 @@ describe("runMonthlyRebuild の母集団 (active かつ equity かつ is_yutai)"
     expect(equity).toEqual({ dataDate: today });
   });
 });
+
+describe("runMonthlyRebuild の権利月・ジャンル集計 (L-51)", () => {
+  it("scores に昇順・重複なし JSON を書く (金額換算不能の行も含む)", async () => {
+    // 金額換算不能 (estimated NULL) の 9 月・別ジャンルの優待を追加。
+    // 利回り用の fetch はこれを落とすが、集計は全行から引く。
+    sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (2, '金券', 'kinken')");
+    sqlite
+      .prepare(
+        "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month, estimated_value) VALUES (?, 2, '掲載文2', '優待券', 100, 9, NULL)"
+      )
+      .run(EQUITY_ID);
+    // 重複月・重複ジャンルの行 (集計で潰れる)。
+    sqlite
+      .prepare(
+        "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month, estimated_value) VALUES (?, 1, '掲載文3', '500円相当', 200, 3, 500)"
+      )
+      .run(EQUITY_ID);
+
+    await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db);
+
+    const scores = sqlite
+      .prepare("SELECT yutai_months AS months, yutai_genre_ids AS genres FROM otakara_stock_scores WHERE stock_id = ?")
+      .get(EQUITY_ID) as { months: string; genres: string };
+    expect(scores).toEqual({ months: "[3,9]", genres: "[1,2]" });
+  });
+});

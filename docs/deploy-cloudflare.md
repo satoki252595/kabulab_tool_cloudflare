@@ -2,20 +2,21 @@
 
 `main` への push で Worker 本体 (`kabulab-cf`) を自動デプロイする手順。
 Cloudflare ネイティブの **Workers Builds**(Git 連携)を使う。GitHub に API トークンを
-置く必要がなく、repo に CI ファイルも不要(Cloudflare の GitHub App が認証を持つ)。
+置く必要がない(Cloudflare の GitHub App が認証を持つ)。取込・CI は別に
+GitHub Actions 4 本 (`.github/workflows/` の stock-sync / vwap-ingest / catchup / ci) がある。
 
 > ⚠️ 自動デプロイは **Worker 本体の `wrangler deploy` のみ**を実行する。
-> D1 スキーマ適用 (`drizzle/d1/*.sql`) と cutover は **手動のまま**
-> (`wrangler d1 execute kabulab-cf --remote --file=...`)。自動経路は本番データを触らない。
+> D1 スキーマ適用 (`drizzle/d1/*.sql`) は **手動のまま**
+> (`wrangler d1 execute kabulab-cf --remote --file=...`。番号順・詳細は
+> `drizzle/d1/README.md`)。自動経路は本番データを触らない。
 
 ## 前提
 
-1. **Workers Paid は不要(無料プランで OK)**。取込は GitHub Actions(Node)で行うため
-   Worker は配信 + 取込プロキシのみ。`wrangler.toml` に `[triggers]`/`[limits]` は無い。
+1. **Workers Paid は不要(無料プラン想定。要アカウント確認)**。取込は GitHub Actions(Node)で行うため
+   Worker は配信 + 取込プロキシ + 005/006 の `/admin/catchup` のみ。`wrangler.toml` に `[triggers]`/`[limits]` は無い。
 2. **Worker secrets は設定済み**で deploy をまたいで保持される
    (`CRON_SECRET` / `EDINET_API_KEY` / `NOTION_TOKEN` 等)。Workers Builds は secrets を触らない。
-3. **production ブランチ = `main`**。作業ブランチ `feat/d1-r2-migration` は
-   PR #1 を `main` にマージしてから自動デプロイ対象になる。
+3. **production ブランチ = `main`**。`main` への push で自動デプロイされる。
 
 ## 設定手順 (Cloudflare ダッシュボード)
 
@@ -46,19 +47,20 @@ Cloudflare ネイティブの **Workers Builds**(Git 連携)を使う。GitHub �
 ## 取込の定期実行 (GitHub Actions)
 
 取込(株価 日次/月次 + VWAP)はすべて GitHub Actions(Node)で定期実行する。Yahoo は
-`YAHOO_PROXY_BASE`(Worker エッジの `/api/ingest/yahoo` / VWAP は `/vwap-analysis/api/ingest-fetch`)
-経由で叩くため、ランナー IP の 429 を回避する → **Workers Paid 不要・private repo のままで OK**。
+`YAHOO_PROXY_BASE`(Worker エッジの `/api/ingest/yahoo` に一本化。旧
+`/vwap-analysis/api/ingest-fetch` は K4c-1 で廃止)
+経由で叩くため、ランナー IP の 429 を回避する → **Workers Paid 不要**。
 
 | ワークフロー | 内容 | スケジュール (UTC) |
 |---|---|---|
 | `.github/workflows/stock-sync.yml` | 日次 stock(core/rsi/swing) / 月次 universe + otakara rebuild | 平日 21:00 / 10 日 01:30 |
-| `.github/workflows/vwap-ingest.yml` | 日足10年 + 5分足 / 信用残高週次 → R2 | 平日 08:00 / 土 09:00 |
+| `.github/workflows/vwap-ingest.yml` | 日足10年 + 5分足 / 信用残高週次 → R2 | 月水金 08:00 / 土 09:00 |
 | `.github/workflows/catchup.yml` | 005 有報(EDINET) + 006 適時開示(TDnet) キャッチアップ | 平日 11:00 |
+| `.github/workflows/ci.yml` | 型・lint・単体テスト + 地図突合 + D1 generate 差分 (push/PR) | — (cron なし) |
 
-- 手動実行は Actions タブの「Run workflow」(stock: daily/monthly/all、vwap: daily-intra/margin/all)。
-- **schedule は default ブランチ(main)のワークフローのみ発火**。PR #1 を main にマージで有効化。
-- 無料枠(private 2,000 min/月)目安: 日次 stock(~40-50分)+ VWAP(~30-40分)×平日 ≈ 月 1,700-1,900 分。
-  枠が厳しければ stock-sync を Mon/Wed/Fri 等へ間引く。
+- 手動実行は Actions タブの「Run workflow」(stock: daily/monthly/all、vwap: daily-intra/intra/margin/all、catchup: all/tdnet/edinet)。
+- **schedule は default ブランチ(main)のワークフローのみ発火**。
+- 実行時間の目安 (public repo のため Actions 分課金は無し): 日次 stock(~40-50分)×平日 + VWAP(月水金。差分時は数十分、バックフィル時は 2-3h 域。timeout 300 分) ≈ 月 1,300-1,600 分(バックフィル除く)。
 
 ### 必要な GitHub Secrets
 

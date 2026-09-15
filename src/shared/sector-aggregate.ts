@@ -9,13 +9,11 @@
 export interface StockChangeInput {
   sector: string | null;
   pct1d: number | null;
-  pct5d: number | null;
 }
 
 export interface SectorAggregate {
   sector: string;
   pct1d: number;
-  pct5d: number | null;
   stockCount: number;
   rank1d: number;
 }
@@ -23,25 +21,18 @@ export interface SectorAggregate {
 export function aggregateSectors(
   stocks: ReadonlyArray<StockChangeInput>
 ): SectorAggregate[] {
-  const buckets = new Map<
-    string,
-    { sum1d: number; sum5d: number; count1d: number; count5d: number }
-  >();
+  const buckets = new Map<string, { sum1d: number; count1d: number }>();
 
   for (const s of stocks) {
     if (s.pct1d === null || !Number.isFinite(s.pct1d)) continue;
     const key = s.sector ?? "未分類";
     let bucket = buckets.get(key);
     if (!bucket) {
-      bucket = { sum1d: 0, sum5d: 0, count1d: 0, count5d: 0 };
+      bucket = { sum1d: 0, count1d: 0 };
       buckets.set(key, bucket);
     }
     bucket.sum1d += s.pct1d;
     bucket.count1d += 1;
-    if (s.pct5d !== null && Number.isFinite(s.pct5d)) {
-      bucket.sum5d += s.pct5d;
-      bucket.count5d += 1;
-    }
   }
 
   const aggregates: Omit<SectorAggregate, "rank1d">[] = [];
@@ -50,7 +41,6 @@ export function aggregateSectors(
     aggregates.push({
       sector,
       pct1d: b.sum1d / b.count1d,
-      pct5d: b.count5d > 0 ? b.sum5d / b.count5d : null,
       stockCount: b.count1d,
     });
   }
