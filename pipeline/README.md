@@ -1,6 +1,6 @@
 # jp-stock-data-pipeline
 
-日本株のファンダメンタルズ・テクニカル情報を無料ソースから継続収集し、Notion「株式情報」配下に銘柄コード単位で構造化格納するパイプライン。設計の正本は [docs/DESIGN.md](docs/DESIGN.md)。
+日本株のファンダメンタルズ・テクニカル情報を無料ソースから継続収集し、Notion「株式情報」配下に銘柄コード単位で構造化格納するパイプライン。設計の正本は [docs/DESIGN.md](../docs/DESIGN.md)。
 
 ## 開発環境 (nix 必須)
 
@@ -90,7 +90,7 @@ curl -H "X-API-Key: $LOCAL_API_KEY" "http://192.168.1.50:8000/facts/search?q=為
 サーバ上で PostgreSQL + FastAPI を常駐させ、収集は GitHub Actions（cloud 経路）から
 **Tailscale 経由**で dual-write する構成。systemd ユニット・PostgreSQL 初期化・日次
 バックアップ・Tailscale 接続・GitHub Secrets 配線の手順は
-**[deploy/README.md](deploy/README.md)** にまとめてある。
+**[deploy/README.md](https://github.com/satoki252595/stockStock/blob/main/deploy/README.md)**（端末 B 用サーバ手順。`deploy/` は stockStock 側に残置）にまとめてある。
 
 ## kabuMCPへの原本引渡し（2026-09-05追加・任意）
 

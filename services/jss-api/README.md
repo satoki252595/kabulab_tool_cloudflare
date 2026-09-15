@@ -1,7 +1,7 @@
 # jss-api — 配信 Worker
 
 正本（R2 + D1）を REST と MCP で読むための Cloudflare Worker。**読み取り専用**
-（唯一の例外は内部面の鮮度 upsert）。設計は [docs/CF-CANONICAL-DESIGN.md](../docs/CF-CANONICAL-DESIGN.md)。
+（唯一の例外は内部面の鮮度 upsert）。設計は [docs/CF-CANONICAL-DESIGN.md](../../docs/CF-CANONICAL-DESIGN.md)。
 
 ## Worker は2本
 
