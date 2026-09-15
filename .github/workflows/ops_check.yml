@@ -51,8 +51,10 @@
 name: ops_check
 
 on:
-  # schedule は Wave 5（週末カットオーバー）で有効化する。
-  # 元: cron: "30 14 * * *"（日次ジョブ出揃い後。14:30 UTC = 23:30 JST）
+  schedule:
+    # 日次ジョブ（edinet_daily 12:00 UTC）が出揃った後。
+    # 14:30 UTC = 23:30 JST
+    - cron: "30 14 * * *"
   workflow_dispatch:
 
 concurrency:
