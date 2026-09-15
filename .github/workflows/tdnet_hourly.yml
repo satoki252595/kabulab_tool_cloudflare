@@ -1,0 +1,62 @@
+# 平日 9:00-19:00 JST 毎時 (DESIGN.md §8.2)。cron は UTC 表記
+name: tdnet_hourly
+
+on:
+  # schedule は Wave 5（週末カットオーバー）で有効化する。元: cron: "0 0-10 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "対象日 YYYY-MM-DD。空なら定期実行と同じく当日"
+        required: false
+        default: ""
+
+concurrency:
+  group: tdnet_hourly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write  # 失敗時に Issue を立てるため
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Sync dependencies
+        run: nix develop -c bash -c 'cd pipeline && uv sync --frozen'
+      - name: Run tdnet_hourly
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+          NOTION_DB_STOCK_MASTER: ${{ secrets.NOTION_DB_STOCK_MASTER }}
+          NOTION_DB_FINANCIALS: ${{ secrets.NOTION_DB_FINANCIALS }}
+          NOTION_DB_DISCLOSURES: ${{ secrets.NOTION_DB_DISCLOSURES }}
+          NOTION_DB_RAW_FILES: ${{ secrets.NOTION_DB_RAW_FILES }}
+          # Cloudflare 正本 (R2 + D1)。未設定なら enabled()=False で何も書かない。
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+          # 手動実行で日付を指定したときだけ使う。inputs をシェルへ直接展開しない
+          # （値は環境変数で渡し、下で形式を検査する）。定期実行では空。
+          TARGET_DATE: ${{ inputs.date }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "${TARGET_DATE:-}" ]; then
+            [[ "$TARGET_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "::error::date は YYYY-MM-DD で指定する"; exit 1; }
+            args=(--date "$TARGET_DATE")
+          fi
+          nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.tdnet_hourly "${args[@]}"'
+
+      - name: 失敗したら Issue を立てる
+        if: failure()
+        uses: ./.github/actions/notify-failure
+        with:
+          title: "[ジョブ失敗] ${{ github.workflow }}"
+          summary: "${{ github.workflow }} が失敗しました。"

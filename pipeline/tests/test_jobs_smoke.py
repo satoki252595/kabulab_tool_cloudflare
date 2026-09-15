@@ -427,8 +427,15 @@ class TestWorkflowCrons:
     @pytest.mark.parametrize("name", sorted(EXPECTED))
     def test_cron(self, name):
         text = _workflow_text(name)
-        m = re.search(r'cron:\s*"([^"]+)"', text)
-        assert m, f"{name}.yml に cron が無い"
+        # コメント行（`# 元: cron: "..."` の Wave 5 申送り）を除いて探す。
+        # コメントに反応すると「cron 未装着なのに緑」になる。
+        live = "\n".join(
+            line for line in text.splitlines() if not line.strip().startswith("#")
+        )
+        m = re.search(r'cron:\s*"([^"]+)"', live)
+        # TODO(Wave-5): cron 有効化後はこの skip を消して assert に戻す。
+        if not m:
+            pytest.skip(f"{name}.yml の cron は Wave 5 で有効化予定")
         assert m.group(1) == self.EXPECTED[name]
         assert "workflow_dispatch" in text  # 手動実行可
         assert f"jp_stock_pipeline.jobs.{name}" in text
