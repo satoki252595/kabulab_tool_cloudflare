@@ -12,6 +12,11 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["services/**/*.test.ts", "src/**/*.test.ts"],
+    // services/jss-api/** は standalone (独自 lock・vitest 2 設定) のため
+    // ルートの vitest 4 では走らせない。jss-api 自身の `pnpm test`
+    // (CI の python-pipeline ジョブ) が所有する。exclude を書くと既定値が
+    // 置き換わるため、node_modules/dist の既定もここに残す。
+    exclude: ["**/node_modules/**", "**/dist/**", "services/jss-api/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],

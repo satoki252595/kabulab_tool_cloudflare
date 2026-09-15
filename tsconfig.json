@@ -36,7 +36,14 @@
   // 後から足したファイルまで自動的に死角へ入る)。
   "exclude": [
     "node_modules",
-    "dist"
+    "dist",
+    // services/jss-api/** は除外ではなく所有権の委譲。jss-api は独自 lock・
+    // 独自 tsconfig (types: workers-types) を持つ standalone の配信 Worker で、
+    // ルート設定 (DOM lib・types: node) では R2Bucket 等が解決できず誤検出が出る。
+    // 配下の src/test は jss-api 自身の `pnpm typecheck` (CI の python-pipeline
+    // ジョブ) が見るので死角にはならない。詳細は
+    // docs/ci-typecheck-blind-spots.md の「委譲」節。
+    "services/jss-api/**/*"
     // ここは空 (借金残高ゼロ)。**新しい除外を足すときは規模と実行経路を
     // docs/ci-typecheck-blind-spots.md に必ず書くこと**。
   ]
