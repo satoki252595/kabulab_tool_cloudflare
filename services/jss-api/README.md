@@ -54,7 +54,7 @@ kabuMCP の `edinet_*` とは分けてある（クライアントに両方登録
 |---|---|
 | `jp_supply_latest` | 需給の最新断面 |
 | `jp_supply_series` | 1銘柄の需給時系列 |
-| `jp_ohlcv_range` | 日足 OHLCV（全系列調整済み） |
+| `jp_ohlcv_range` | 日足 OHLCV（全系列調整済み。REST と束ねた edge キャッシュ、TTL 6h） |
 | `jp_dataset_freshness` | 各データセットの鮮度 |
 | `jp_xbrl_elements` | XBRL 勘定科目の語彙（前方一致） |
 | `jp_raw_file` | ⑤原本のメタを SHA256 で引く |
