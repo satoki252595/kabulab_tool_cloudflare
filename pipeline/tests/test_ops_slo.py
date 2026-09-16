@@ -418,20 +418,43 @@ class TestBusinessDayAging:
             row_count=4351, now=friday_night,
         ) == "green"
 
-    def test_営業日が1日抜けると黄_2日で赤(self) -> None:
-        """検知力が落ちていないこと（緑に寄せすぎない）。"""
-        # 火曜 23:30 に基準日が金曜 = 月・火の 2 営業日欠落
-        tuesday = datetime(2026, 9, 15, 23, 30, tzinfo=slo.JST)
-        assert slo.judge_observation(
-            "d1_core_stock_financials", latest_data_date="2026-09-11", source_epoch=None,
-            row_count=100, now=tuesday,
-        ) == "red"
-        # 月曜 23:30 なら 1 営業日欠落 = 黄
+    def test_前営業日基準で1日抜けると黄_2日で赤(self) -> None:
+        """検知力が落ちていないこと（緑に寄せすぎない）。
+
+        writer（stock-sync 21:00 UTC = 翌 06:00 JST）は前営業日の EOD を
+        書くので data_date は常に T-1（lag_days=1）。旧テストは「金曜基準日
+        at 月曜 = 1 営業日欠落」と数えていたが、月曜朝の run 自体が無い
+        （cron は火〜土曜朝 JST）ため金曜分が最新なのは平常運転である。
+        欠落の数え方を writer の実スケジュールに合わせた。
+        """
+        # 月曜 23:30 に基準日が金曜 = 平常（土曜朝に金曜分を書いたばかり）
         monday = datetime(2026, 9, 14, 23, 30, tzinfo=slo.JST)
         assert slo.judge_observation(
             "d1_core_stock_financials", latest_data_date="2026-09-11", source_epoch=None,
             row_count=100, now=monday,
+        ) == "green"
+        # 火曜 23:30 に基準日が金曜 = 1 営業日欠落（火曜朝の月曜分が無い）
+        tuesday = datetime(2026, 9, 15, 23, 30, tzinfo=slo.JST)
+        assert slo.judge_observation(
+            "d1_core_stock_financials", latest_data_date="2026-09-11", source_epoch=None,
+            row_count=100, now=tuesday,
         ) == "yellow"
+        # 水曜 23:30 に基準日が金曜 = 2 営業日欠落（月・火分が無い）
+        wednesday = datetime(2026, 9, 16, 23, 30, tzinfo=slo.JST)
+        assert slo.judge_observation(
+            "d1_core_stock_financials", latest_data_date="2026-09-11", source_epoch=None,
+            row_count=100, now=wednesday,
+        ) == "red"
+
+    def test_前営業日の基準日は平常運転で緑(self) -> None:
+        """2026-09-16 本番再現。水曜の ops_check で基準日が火曜なのは
+        「火曜 EOD を水曜朝に書いた」平常運転であり、赤にしてはならない。
+        """
+        wednesday = datetime(2026, 9, 16, 23, 30, tzinfo=slo.JST)
+        assert slo.judge_observation(
+            "d1_core_stock_financials", latest_data_date="2026-09-15", source_epoch=None,
+            row_count=3756, now=wednesday,
+        ) == "green"
 
 
 class TestAcceptedRed:
