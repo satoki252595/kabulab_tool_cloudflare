@@ -99,8 +99,10 @@ _DAY = 24.0
 SLOS: tuple[FreshnessSlo, ...] = (
     FreshnessSlo(
         "d1_core_stock_financials", 30, 48,
-        "日次。実測 2.4h。営業日翌朝までに入っていれば緑",
+        "日次。実測 2.4h。writer（stock-sync 21:00 UTC = 翌 06:00 JST）が"
+        "前営業日の EOD を書くので data_date は常に T-1（lag_days=1）",
         business_days=True,
+        lag_days=1,
     ),
     FreshnessSlo(
         "tdnet_disclosures", 30, 48,
