@@ -17,6 +17,7 @@ export const ATTRIBUTION: Record<string, string> = {
   TDnet: "出典: TDnet（東京証券取引所 適時開示情報閲覧サービス）。原文は各社開示資料。",
   JPX: "出典: 日本取引所グループ（JPX）統計情報。私的利用に限定し再配布しない。",
   日証金: "出典: 日本証券金融（JSF）貸借取引情報。私的利用に限定し第三者へ提供しない。",
+  Yahoo: "出典: Yahoo Finance。私的利用に限定し再配布しない。",
 };
 
 export function envelope<T>(

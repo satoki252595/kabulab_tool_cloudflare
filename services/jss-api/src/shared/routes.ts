@@ -2,6 +2,7 @@ import { Hono } from "hono";
 
 import { envelope, errorBody } from "./envelope";
 import { isPublishableInFull, redactColumns } from "./license";
+import { fetchAdjustedOhlcv } from "./ohlcv";
 import type { AnyEnv, PrivateEnv } from "./types";
 
 /** D1 の COUNT 等で 1 行だけ欲しいときの薄いヘルパ。 */
@@ -11,10 +12,10 @@ async function first<T>(stmt: D1PreparedStatement): Promise<T | null> {
 
 const MAX_LIMIT = 500;
 
-export function parseLimit(raw: string | undefined, fallback = 100): number {
+export function parseLimit(raw: string | undefined, fallback = 100, max = MAX_LIMIT): number {
   const n = Number.parseInt(raw ?? "", 10);
   if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(n, MAX_LIMIT);
+  return Math.min(n, max);
 }
 
 /**
@@ -197,6 +198,28 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
         sources: ["日証金"],
         licenses: ["personal-only"],
       }),
+    );
+  });
+
+  // 日足 OHLCV（全系列調整済み）。Yahoo 由来＝personal-only のため内部面のみ。
+  // 10年分 ≈ 2500 バーのため上限は 3000。from/to は YYYY-MM-DD のみ受け、
+  // 書式違いは索引に載らない述語になるので 400 で拒否する。
+  app.get("/v1/ohlcv/:code", async (c) => {
+    const code = c.req.param("code");
+    if (!isValidCode(code)) {
+      return c.json(errorBody("銘柄コードは4桁", "invalid_code"), 400);
+    }
+    const from = c.req.query("from") || undefined;
+    const to = c.req.query("to") || undefined;
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    if ((from && !dateRe.test(from)) || (to && !dateRe.test(to))) {
+      return c.json(errorBody("from/to は YYYY-MM-DD", "invalid_range"), 400);
+    }
+    const limit = parseLimit(c.req.query("limit"), 250, 3000);
+    const result = await fetchAdjustedOhlcv(c.env.DB, code, { from, to, limit });
+    if (!result) return c.json(errorBody("見つからない", "not_found"), 404);
+    return c.json(
+      envelope(result, { sources: ["Yahoo"], licenses: ["personal-only"] }),
     );
   });
 
