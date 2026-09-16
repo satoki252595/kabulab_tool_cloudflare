@@ -10,6 +10,7 @@
  * クライアントに登録できるので統合しなくてよい）。
  */
 import { envelope } from "./envelope";
+import { fetchAdjustedOhlcv } from "./ohlcv";
 import { isValidCode, parseLimit } from "./routes";
 import type { PrivateEnv } from "./types";
 
@@ -46,6 +47,22 @@ export const TOOLS = [
         series: { type: "string", enum: ["jsf_zandaka", "jsf_shina"] },
         from: { type: "string", description: "YYYY-MM-DD" },
         to: { type: "string", description: "YYYY-MM-DD" },
+      },
+      required: ["code"],
+    },
+  },
+  {
+    name: "jp_ohlcv_range",
+    description:
+      "1銘柄の日足 OHLCV を返す。分割・配当調整済みの全系列（adj_*）付き。" +
+      "Yahoo 由来＝personal-only のため私的利用限定。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        code: { type: "string", description: "4桁の銘柄コード" },
+        from: { type: "string", description: "YYYY-MM-DD" },
+        to: { type: "string", description: "YYYY-MM-DD" },
+        limit: { type: "integer", minimum: 1, maximum: 3000 },
       },
       required: ["code"],
     },
@@ -129,6 +146,24 @@ async function callTool(
       return envelope({ code, updated: payload.updated, series: filtered }, {
         sources: ["日証金"], licenses: ["personal-only"],
       });
+    }
+    case "jp_ohlcv_range": {
+      const code = String(args.code ?? "");
+      if (!isValidCode(code)) throw new Error("銘柄コードは4桁");
+      const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+      const from = args.from ? String(args.from) : undefined;
+      const to = args.to ? String(args.to) : undefined;
+      if ((from && !dateRe.test(from)) || (to && !dateRe.test(to))) {
+        throw new Error("from/to は YYYY-MM-DD");
+      }
+      const limit = parseLimit(
+        args.limit === undefined ? undefined : String(args.limit),
+        250,
+        3000,
+      );
+      const result = await fetchAdjustedOhlcv(env.DB, code, { from, to, limit });
+      if (!result) throw new Error(`見つからない: ${code}`);
+      return envelope(result, { sources: ["Yahoo"], licenses: ["personal-only"] });
     }
     case "jp_xbrl_elements": {
       const limit = parseLimit(String(args.limit ?? ""), 100);
