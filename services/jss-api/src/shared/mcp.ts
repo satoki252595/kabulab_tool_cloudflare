@@ -10,7 +10,7 @@
  * クライアントに登録できるので統合しなくてよい）。
  */
 import { envelope } from "./envelope";
-import { fetchAdjustedOhlcv } from "./ohlcv";
+import { fetchAdjustedOhlcvCached } from "./ohlcv-cache";
 import { isValidCode, parseLimit } from "./routes";
 import type { PrivateEnv } from "./types";
 
@@ -161,7 +161,11 @@ async function callTool(
         250,
         3000,
       );
-      const result = await fetchAdjustedOhlcv(env.DB, code, { from, to, limit });
+      const { result } = await fetchAdjustedOhlcvCached(env.DB, code, {
+        from,
+        to,
+        limit,
+      });
       if (!result) throw new Error(`見つからない: ${code}`);
       return envelope(result, { sources: ["Yahoo"], licenses: ["personal-only"] });
     }

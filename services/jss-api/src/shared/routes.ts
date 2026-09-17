@@ -2,7 +2,10 @@ import { Hono } from "hono";
 
 import { envelope, errorBody } from "./envelope";
 import { isPublishableInFull, redactColumns } from "./license";
-import { fetchAdjustedOhlcv } from "./ohlcv";
+import {
+  OHLCV_CACHE_TTL_SECS,
+  fetchAdjustedOhlcvCached,
+} from "./ohlcv-cache";
 import type { AnyEnv, PrivateEnv } from "./types";
 
 /** D1 の COUNT 等で 1 行だけ欲しいときの薄いヘルパ。 */
@@ -216,8 +219,14 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
       return c.json(errorBody("from/to は YYYY-MM-DD", "invalid_range"), 400);
     }
     const limit = parseLimit(c.req.query("limit"), 250, 3000);
-    const result = await fetchAdjustedOhlcv(c.env.DB, code, { from, to, limit });
+    const { result, hit } = await fetchAdjustedOhlcvCached(c.env.DB, code, {
+      from,
+      to,
+      limit,
+    });
     if (!result) return c.json(errorBody("見つからない", "not_found"), 404);
+    c.header("X-Cache", hit ? "HIT" : "MISS");
+    c.header("Cache-Control", `private, max-age=${OHLCV_CACHE_TTL_SECS}`);
     return c.json(
       envelope(result, { sources: ["Yahoo"], licenses: ["personal-only"] }),
     );
