@@ -24,6 +24,7 @@ import logging
 
 from ..cloud_store import slo
 from ..cloud_store.d1 import D1Error, D1Store
+from .freshness_probe import CAPACITY_DATASET
 from .runner import STATUS_SUCCESS, JobContext, build_parser, main_exit, run_job
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,13 @@ IDLE_RUN_THRESHOLD = 3
 # 観測ジョブが日次なので、2 日黙ったら止まっていると見る（祝日でも cron は動く）。
 PROBE_MAX_SILENCE_HOURS = 48.0
 
+# D1 容量の赤の閾値。D1 の 10GB 上限は**引き上げ不可**なので、残り 2GB の
+# 8GB で落とす (DB 分割か R2 退避の対応を取る猶予を残す)。Cloudflare の
+# GB 表記に合わせて 10 進 (1GB = 1,000,000,000 bytes) で割る。
+D1_CAPACITY_RED_BYTES = 8_000_000_000
+
+CAPACITY_SQL = "SELECT bytes FROM jss_dataset_freshness WHERE dataset = ?"
+
 
 def _check_freshness(ctx: JobContext, store: D1Store, problems: list[str]) -> None:
     """鮮度表を判定する。宣言済みの赤は警告に落とす。"""
@@ -101,6 +109,12 @@ def _check_freshness(ctx: JobContext, store: D1Store, problems: list[str]) -> No
 
     for row in rows:
         dataset = str(row.get("dataset") or "")
+        if dataset == CAPACITY_DATASET:
+            # 容量行は加齢判定の対象外。測った瞬間が as_of なので「古い」に
+            # 意味が無く、素直に判定すると未知データセット = unknown で毎日鳴る。
+            # 容量の判定は _check_capacity が bytes_ で行う。
+            logger.info("%s: 容量行のため鮮度判定をスキップ", dataset)
+            continue
         latest_data_date = row.get("latest_data_date")
         source_epoch = row.get("updated_at")
         row_count = row.get("row_or_object_count")
@@ -199,6 +213,30 @@ def _check_idle_runs(store: D1Store, problems: list[str]) -> None:
         )
 
 
+def _check_capacity(store: D1Store, problems: list[str]) -> None:
+    """D1 全体の容量を判定する。読み取りのみ。"""
+    try:
+        rows = store.query(CAPACITY_SQL, [CAPACITY_DATASET])
+    except D1Error as exc:
+        logger.warning("容量行を読めない: %s", exc)
+        return
+    size = rows[0].get("bytes") if rows else None
+    if not isinstance(size, int) or isinstance(size, bool):
+        # 行が無い・bytes が NULL・型が変のいずれも警告に留める。観測ジョブが
+        # 同じ workflow で直前に走っており、測れなければ観測側が既に赤なので、
+        # ここで落とすと同一原因で二重に鳴る (単独実行時のみ警告が出る)。
+        logger.warning("D1 容量が記録されていない (bytes=%r)", size)
+        return
+    gb = size / 1_000_000_000
+    if size >= D1_CAPACITY_RED_BYTES:
+        problems.append(
+            f"D1 容量 {gb:.1f}GB/10GB (上限・引き上げ不可)。"
+            "DB 分割か R2 退避の対応が必要"
+        )
+        return
+    logger.info("D1 容量 %.1fGB/10GB", gb)
+
+
 def execute(ctx: JobContext) -> None:
     # `ctx.cloud` は runner が `if not settings.dry_run:` の中でしか作らないため
     # 参照すると --dry-run が必ず即失敗する。設定から直接 D1Store を組む
@@ -216,6 +254,7 @@ def execute(ctx: JobContext) -> None:
         return
     _check_probe_alive(store, problems)
     _check_idle_runs(store, problems)
+    _check_capacity(store, problems)
 
     if problems:
         for p in problems:

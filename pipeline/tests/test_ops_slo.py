@@ -25,7 +25,7 @@ from jp_stock_pipeline.jobs import freshness_probe, ops_check, runner
 #
 # 限界: ここは本番の DDL のコピーではないので、本番側の列名変更や列名のタイプミスは
 # このテストでは検出できない（検出できるのは本番で実クエリを投げたときだけ）。
-# だから PR では「マージ後に freshness_probe を手動実行して 7 行入ることを確認する」
+# だから PR では「マージ後に freshness_probe を手動実行して 8 行入ることを確認する」
 # を必須手順にしている。
 _LEGACY_DDL: tuple[str, ...] = (
     "CREATE TABLE core_stock_financials"
@@ -67,6 +67,9 @@ def _wire(monkeypatch, store: _FakeStore, *modules) -> None:
     # runner は関数内で d1 を import するのでモジュール属性を差し替える
     monkeypatch.setattr(d1_module, "D1Store", factory)
     monkeypatch.setattr(runner, "connect_local_store", lambda *a, **k: None)
+    # 容量観測は database API を叩くので小さな値で差し替える (個別テストで上書き可)。
+    # 入れないと probe のテストが本物の HTTP を出す。
+    store.database_file_size = lambda: {"file_size": 1_000_000_000, "num_tables": 32}
 
 
 def _jst_today() -> date:
@@ -660,7 +663,8 @@ class TestFreshnessProbe:
             row_count=row["n"],
         ) == "red"
 
-    def test_7件すべて記録される(self, monkeypatch) -> None:
+    def test_8件すべて記録される(self, monkeypatch) -> None:
+        """7 鮮度 + 1 容量。容量行は鮮度データセットではないので等号から分ける。"""
         store = _FakeStore()
         self._seed_all(store, prices_fetched_at=_epoch_days_ago(0.1))
         _wire(monkeypatch, store, freshness_probe)
@@ -668,10 +672,15 @@ class TestFreshnessProbe:
         freshness_probe.execute(ctx)
         assert ctx.failed == 0
         rows = store.query("SELECT dataset, license_tag FROM jss_dataset_freshness")
-        assert {r["dataset"] for r in rows} == _OBSERVED
-        assert all(r["license_tag"] for r in rows)
+        assert {r["dataset"] for r in rows} == _OBSERVED | {freshness_probe.CAPACITY_DATASET}
+        # 容量行は運用メタデータで対象データではないため license_tag は None のまま。
+        assert all(r["license_tag"] for r in rows if r["dataset"] in _OBSERVED)
+        assert [
+            r["license_tag"] for r in rows
+            if r["dataset"] == freshness_probe.CAPACITY_DATASET
+        ] == [None]
 
-    def test_1表が壊れても他6件は記録されジョブは失敗する(self, monkeypatch) -> None:
+    def test_1表が壊れても他7件は記録されジョブは失敗する(self, monkeypatch) -> None:
         """runner は failed>0 & processed>0 を exit 0 にするので、素直に書くと
 
         表名のタイプミスで 1 件落ちても Issue が立たず、凍結した行が SLO を
@@ -686,7 +695,7 @@ class TestFreshnessProbe:
             r["dataset"]
             for r in store.query("SELECT dataset FROM jss_dataset_freshness")
         }
-        assert recorded == _OBSERVED - {"core_stocks"}
+        assert recorded == (_OBSERVED - {"core_stocks"}) | {freshness_probe.CAPACITY_DATASET}
         assert code == 1, "1 件でも測れなければジョブ全体を失敗にする"
 
     def test_dry_runは1文も書き込まない(self, monkeypatch) -> None:
@@ -941,3 +950,110 @@ class TestOpsCheck:
         ops_check.main([], env=dict(_D1_ENV))
         after = [s for s in store.write_sql if "jss_dataset_freshness" in s]
         assert len(after) == before, after[before:]
+
+
+class TestD1Capacity:
+    """D1 全体容量の観測 (probe) と判定 (judge)。10GB 上限は引き上げ不可。"""
+
+    def _seed_capacity(self, store: _FakeStore, *, size, updated_at=None) -> None:
+        if updated_at is None:
+            updated_at = int(datetime.now(UTC).timestamp())
+        ops.record_freshness(
+            store, dataset=freshness_probe.CAPACITY_DATASET, store_name="D1",
+            location="正本DB全体", writer="file_size API",
+            latest_data_date=_jst_today(), row_or_object_count=32,
+            bytes_=size, license_tag=None, updated_at=updated_at,
+        )
+
+    def test_容量行にfile_sizeとテーブル数が記録される(self, monkeypatch) -> None:
+        probe = TestFreshnessProbe()
+        store = _FakeStore()
+        probe._seed_all(store, prices_fetched_at=_epoch_days_ago(0.1))
+        _wire(monkeypatch, store, freshness_probe)
+        store.database_file_size = lambda: {"file_size": 871_886_848, "num_tables": 32}
+        ctx = probe._ctx()
+        freshness_probe.execute(ctx)
+        assert ctx.failed == 0
+        row = store.query(
+            "SELECT bytes AS b, row_or_object_count AS n FROM jss_dataset_freshness"
+            " WHERE dataset = ?",
+            [freshness_probe.CAPACITY_DATASET],
+        )[0]
+        assert row["b"] == 871_886_848
+        assert row["n"] == 32
+
+    def test_容量が測れなくても7鮮度は記録されジョブは失敗する(self, monkeypatch) -> None:
+        """容量の欠測で 7 件全滅させない。ただし黙らない (exit 1)。"""
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        probe = TestFreshnessProbe()
+        store = _FakeStore()
+        probe._seed_all(store, prices_fetched_at=_epoch_days_ago(0.1))
+        _wire(monkeypatch, store, freshness_probe)
+
+        def _boom():
+            raise D1Error("テスト: API 停止")
+
+        store.database_file_size = _boom
+        code = freshness_probe.main([], env=dict(_D1_ENV))
+        recorded = {
+            r["dataset"] for r in store.query("SELECT dataset FROM jss_dataset_freshness")
+        }
+        assert recorded == _OBSERVED
+        assert code == 1
+
+    def test_容量行は鮮度の加齢判定を素通りする(self, monkeypatch) -> None:
+        """測った瞬間が as_of の行を加齢判定すると unknown で毎日鳴る。
+
+        updated_at を古代にしても exit 0 のままなら、加齢を見ていない証拠。
+        """
+        judge = TestOpsCheck()
+        store = _FakeStore()
+        judge._seed_freshness(store)
+        self._seed_capacity(store, size=1_000_000_000, updated_at=1)
+        judge._seed_probe_ok(store)
+        _wire(monkeypatch, store, ops_check)
+        assert ops_check.main([], env=dict(_D1_ENV)) == 0
+
+    def test_8GB以上でexit1(self, monkeypatch) -> None:
+        judge = TestOpsCheck()
+        store = _FakeStore()
+        judge._seed_freshness(store)
+        self._seed_capacity(store, size=8_500_000_000)
+        judge._seed_probe_ok(store)
+        _wire(monkeypatch, store, ops_check)
+        assert ops_check.main([], env=dict(_D1_ENV)) == 1
+
+    def test_8GB未満でexit0(self, monkeypatch) -> None:
+        judge = TestOpsCheck()
+        store = _FakeStore()
+        judge._seed_freshness(store)
+        self._seed_capacity(store, size=7_999_999_999)
+        judge._seed_probe_ok(store)
+        _wire(monkeypatch, store, ops_check)
+        assert ops_check.main([], env=dict(_D1_ENV)) == 0
+
+    def test_容量行が無くてもexit0(self, monkeypatch) -> None:
+        """観測側が既に赤なので判定側は警告に留め二重に鳴らさない。"""
+        judge = TestOpsCheck()
+        store = _FakeStore()
+        judge._seed_freshness(store)
+        judge._seed_probe_ok(store)
+        _wire(monkeypatch, store, ops_check)
+        assert ops_check.main([], env=dict(_D1_ENV)) == 0
+
+    def test_容量の赤は対処を書く(self) -> None:
+        store = _FakeStore()
+        self._seed_capacity(store, size=9_000_000_000)
+        problems: list[str] = []
+        ops_check._check_capacity(store, problems)
+        assert len(problems) == 1
+        assert "9.0GB/10GB" in problems[0]
+        assert "引き上げ不可" in problems[0]
+
+    def test_容量のbytesが変なら警告のみ(self) -> None:
+        store = _FakeStore()
+        self._seed_capacity(store, size="x")
+        problems: list[str] = []
+        ops_check._check_capacity(store, problems)
+        assert problems == []

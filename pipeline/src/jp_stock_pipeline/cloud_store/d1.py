@@ -47,9 +47,13 @@ class D1Store:
 
     @property
     def _url(self) -> str:
+        return f"{self._meta_url}/query"
+
+    @property
+    def _meta_url(self) -> str:
         return (
             f"https://api.cloudflare.com/client/v4/accounts/{self.settings.cf_account_id}"
-            f"/d1/database/{self.database_id}/query"
+            f"/d1/database/{self.database_id}"
         )
 
     def query(
@@ -92,6 +96,36 @@ class D1Store:
         if not result:
             return []
         return result[0].get("results") or []
+
+    def database_file_size(self) -> dict[str, int]:
+        """DB 全体の file_size (bytes) とテーブル数を返す (database API)。
+
+        D1 の 10GB 上限は引き上げ不可なので、容量の観測は行の走査ではなく
+        メタデータ API で行う (rows_read を消費しない。観測経路は
+        `jobs/freshness_probe.py` の容量行、判定は `jobs/ops_check.py`)。
+        """
+        try:
+            resp = http.fetch(
+                self._meta_url,
+                headers={"Authorization": f"Bearer {self.settings.cf_api_token}"},
+            )
+        except http.FetchError as exc:
+            raise D1Error(f"D1 容量を取得できない: {exc}") from exc
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise D1Error("D1 容量の応答が JSON でない") from exc
+        if not body.get("success"):
+            errors = body.get("errors") or body.get("messages")
+            raise D1Error(f"D1 容量エラー: {errors!r}")
+        result = body.get("result") or {}
+        size = result.get("file_size")
+        tables = result.get("num_tables")
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise D1Error(f"D1 容量の file_size が読めない: {size!r}")
+        if not isinstance(tables, int) or isinstance(tables, bool) or tables < 0:
+            raise D1Error(f"D1 容量の num_tables が読めない: {tables!r}")
+        return {"file_size": size, "num_tables": tables}
 
     def rows_per_request(self, column_count: int) -> int:
         """1 リクエストに詰められる行数。バインドパラメータ上限から逆算する。
