@@ -25,11 +25,11 @@ import {
 function row(partial: Partial<EdinetCsvRow> & { value: string }): EdinetCsvRow {
   return {
     elementId: "jpcrp_cor:BusinessRisksTextBlock",
-    itemName: "事業等のリスク",
-    contextId: "CurrentYearDuration",
-    relativeYear: "CurrentYearDuration",
-    consolidatedOrNonConsolidated: "連結",
-    periodOrInstant: "期間",
+    itemName: "事業等のリスク [テキストブロック]",
+    contextId: "提出日時点",
+    relativeYear: "提出日時点",
+    consolidatedOrNonConsolidated: "その他",
+    periodOrInstant: "時点",
     unitId: "",
     unit: "",
     ...partial,
@@ -58,6 +58,11 @@ describe("normalizeTitle", () => {
       normalizeTitle("セグメント情報")
     );
   });
+  it("末尾の [テキストブロック] を剥がす (CSV 実測形)", () => {
+    expect(normalizeTitle("事業等のリスク [テキストブロック]")).toBe(
+      normalizeTitle("事業等のリスク")
+    );
+  });
 });
 
 describe("TEXT_SECTIONS", () => {
@@ -84,7 +89,7 @@ describe("extractTextSections", () => {
     );
     expect(got[0]!.text).toBe("事業の内容の本文0");
     expect(got[0]!.charCount).toBe("事業の内容の本文0".length);
-    expect(got[0]!.contextId).toBe("CurrentYearDuration");
+    expect(got[0]!.contextId).toBe("提出日時点");
   });
 
   it("TextBlock でない要素は同名でも拾わない", () => {
@@ -98,25 +103,13 @@ describe("extractTextSections", () => {
     expect(got).toEqual([]);
   });
 
-  it("当期・連結を優先し、同点は先勝ち (決定的)", () => {
+  it("当期を優先する (前期・当期の両行がある注記)", () => {
     const got = extractTextSections([
-      row({
-        itemName: "配当政策",
-        relativeYear: "Prior1YearDuration",
-        consolidatedOrNonConsolidated: "個別",
-        contextId: "Prior1YearDuration",
-        value: "<p>前期個別</p>",
-      }),
-      row({
-        itemName: "配当政策",
-        relativeYear: "CurrentYearDuration",
-        consolidatedOrNonConsolidated: "連結",
-        contextId: "CurrentYearDuration",
-        value: "<p>当期連結</p>",
-      }),
+      row({ itemName: "配当政策 [テキストブロック]", relativeYear: "前期", value: "<p>前期</p>" }),
+      row({ itemName: "配当政策 [テキストブロック]", relativeYear: "当期", value: "<p>当期</p>" }),
     ]);
     expect(got).toHaveLength(1);
-    expect(got[0]!.text).toBe("当期連結");
+    expect(got[0]!.text).toBe("当期");
     expect(got[0]!.sectionKey).toBe("dividend_policy");
   });
 
