@@ -9,7 +9,14 @@ const BASE = "https://www.jpx.co.jp";
 const PAGE = `${BASE}/markets/statistics-equities/margin/05.html`;
 
 export interface MarginRow { code: string; sell: number; buy: number; sell_chg: number; buy_chg: number; }
-export interface MarginData { week: string; rows: MarginRow[] }
+export interface MarginData {
+  week: string;
+  rows: MarginRow[];
+  /** 取得した PDF の実体 (ルール6: Notion 一次データへの実体アップロード用) */
+  pdfBytes: Uint8Array;
+  /** 取得元 PDF の URL (来歴用) */
+  pdfUrl: string;
+}
 
 // 一覧ページから最新の syumatsu*.pdf の URL を得る。
 export async function latestMarginPdfUrl(): Promise<string> {
@@ -22,7 +29,9 @@ export async function latestMarginPdfUrl(): Promise<string> {
 
 const toInt = (s: string) => parseInt(s.replace(/,/g, "").replace(/▲/g, "-").replace(/\s/g, ""), 10) || 0;
 
-export function parseMarginText(text: string): MarginData {
+export function parseMarginText(
+  text: string
+): Pick<MarginData, "week" | "rows"> {
   const wk = text.match(/(\d{4})\/(\d{1,2})\/(\d{1,2})\s*申込/);
   const week = wk ? `${wk[1]}-${wk[2].padStart(2, "0")}-${wk[3].padStart(2, "0")}` : "";
   const num = "(?:▲\\s*)?[\\d,]+";
@@ -50,7 +59,38 @@ export function parseMarginText(text: string): MarginData {
 export async function fetchMargin(): Promise<MarginData> {
   const url = await latestMarginPdfUrl();
   const buf = await (await fetch(url, { headers: { "User-Agent": UA } })).arrayBuffer();
-  const pdf = await getDocumentProxy(new Uint8Array(buf));
+  const bytes = new Uint8Array(buf);
+  const pdf = await getDocumentProxy(bytes);
   const { text } = await extractText(pdf, { mergePages: true });
-  return parseMarginText(text);
+  return { ...parseMarginText(text), pdfBytes: bytes, pdfUrl: url };
+}
+
+/**
+ * ルール6: Notion 一次データ記録の入力を組み立てる純関数。
+ * キーは週次で冪等 (`jpx-margin-YYYY-MM-DD`)。ファイルは PDF 実体。
+ */
+export function marginArchiveInput(data: MarginData): {
+  service: string;
+  key: string;
+  source: string;
+  metadata: Record<string, unknown>;
+  files: Array<{ bytes: Uint8Array; filename: string; contentType: string }>;
+} {
+  return {
+    service: "vwap-analysis",
+    key: `jpx-margin-${data.week}`,
+    source: data.pdfUrl,
+    metadata: {
+      week: data.week,
+      rowCount: data.rows.length,
+      bytes: data.pdfBytes.byteLength,
+    },
+    files: [
+      {
+        bytes: data.pdfBytes,
+        filename: `margin-${data.week}.pdf`,
+        contentType: "application/pdf",
+      },
+    ],
+  };
 }

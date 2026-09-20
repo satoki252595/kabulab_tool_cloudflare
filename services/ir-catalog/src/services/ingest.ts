@@ -47,6 +47,13 @@ export interface IngestOptions {
    *  未指定 = 無制限 (backfill。再開可能) */
   notionByStockDeadlineMs?: number;
   /**
+   * 二次データ投入の相対予算 (ms)。二次フェーズ開始時点から測る。
+   * 絶対 deadline と違い D1 upsert 所要に食われない。両方指定時は
+   * 早い方で打ち切る。日次 cron 用 (2026-06 以降、開始起点の絶対予算
+   * 50s が D1 フェーズに食われて二次投入が常時 0 件だった問題の修正)。
+   */
+  notionByStockBudgetMs?: number;
+  /**
    * code→id マップ (バックフィルで再取得を避けるため注入可)。注入するなら
    * src/shared/db/active-equity.ts の `loadIngestCodeToId` で作ること
    * (省略時もそれで作る。TDnet と EDINET の取込で母集団を揃えるため)。
@@ -403,12 +410,23 @@ export async function ingestBatch(
     // onPagePersisted を呼ぶので、ここで Map に貯めて末尾でバルク UPDATE。
     const pageIdMap = new Map<string, string>();
     const pdfMap = new Map<string, PdfClassification>();
+    // 相対予算はこのフェーズ開始から測る (D1 フェーズの所要に依らない)。
+    // 絶対 deadline 併用時は早い方を採用する。
+    const phaseDeadline =
+      opts.notionByStockBudgetMs !== undefined
+        ? opts.notionByStockDeadlineMs !== undefined
+          ? Math.min(
+              Date.now() + opts.notionByStockBudgetMs,
+              opts.notionByStockDeadlineMs
+            )
+          : Date.now() + opts.notionByStockBudgetMs
+        : opts.notionByStockDeadlineMs;
     try {
       const r = await upsertDisclosuresByStock({
         service: "ir-catalog",
         tagOptions: notionTagOptions(),
         rows: byStockRows,
-        deadlineMs: opts.notionByStockDeadlineMs,
+        deadlineMs: phaseDeadline,
         onPagePersisted: (key, pageId) => pageIdMap.set(key, pageId),
         // PDF 本文を OSS 軽量実装 (数値ルール + 東北大極性辞書) で判定し、
         // Notion 列 + PG 4 列に反映。失敗時は呼ばれた側で unknown を返す

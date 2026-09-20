@@ -10,7 +10,7 @@
  * 衝突 6 組すべてで普通株が先)。
  */
 import { describe, expect, it } from "vitest";
-import { parseMarginText } from "./margin.js";
+import { marginArchiveInput, parseMarginText } from "./margin.js";
 
 const SYNTHETIC_TEXT = `2026/9/4 申込み現在 End-of-week outstanding margin trading by issue
 B 合成食品\u3000普通株式 25930 JP0000000011 1,000 ▲ 100 2,000 200 0 0 1,000 ▲ 100 0 0 2,000 200
@@ -55,5 +55,24 @@ describe("parseMarginText の 5 桁コード規則", () => {
     const rows = parseMarginText(SYNTHETIC_TEXT).rows;
     expect(rows.find((r) => r.code === "2593")?.sell).toBe(1000);
     expect(rows.find((r) => r.code === "9434")?.sell).toBe(3000);
+  });
+});
+
+describe("marginArchiveInput (ルール6)", () => {
+  it("週次冪等キー + PDF 実体で記録入力を組む", () => {
+    const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+    const input = marginArchiveInput({
+      week: "2026-09-18",
+      rows: [{ code: "1001", sell: 1, buy: 2, sell_chg: 0, buy_chg: 0 }],
+      pdfBytes: bytes,
+      pdfUrl: "https://www.jpx.co.jp/x/syumatsu20260918.pdf",
+    });
+    expect(input.service).toBe("vwap-analysis");
+    expect(input.key).toBe("jpx-margin-2026-09-18");
+    expect(input.source).toBe("https://www.jpx.co.jp/x/syumatsu20260918.pdf");
+    expect(input.metadata).toMatchObject({ week: "2026-09-18", rowCount: 1 });
+    expect(input.files).toHaveLength(1);
+    expect(input.files[0]!.filename).toBe("margin-2026-09-18.pdf");
+    expect(input.files[0]!.bytes).toBe(bytes);
   });
 });

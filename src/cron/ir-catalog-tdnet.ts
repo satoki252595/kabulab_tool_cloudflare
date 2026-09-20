@@ -25,12 +25,16 @@ import { ingestBatch } from "../../services/ir-catalog/src/services/ingest.js";
 
 const WINDOW_DAYS = 7;
 /**
- * 二次データ Notion 投入の実時間上限。Worker 実行時間に収まるよう Notion 投入を
- * この予算で必ず打ち切る。打ち切った残りは WINDOW_DAYS の重なりと TDnet ID 冪等で
- * 次回が回収する (D1 が正本なので Notion 未投入分も失われない)。常態的に
- * reachedDeadline=true なら過去ギャップが大きい合図 → backfill を回す。
+ * 二次データ Notion 投入の実時間上限。**二次フェーズ開始から測る**
+ * (D1 upsert 所要に食われない。開始起点の 50s では 2026-06 以降ほぼ
+ * 0 件投入だった)。1 行 ≈ PDF 取得 + Notion 3 要求 (~3req/s 直列) +
+ * 本文判定で 2〜5s、日次 ≈ 120〜260 行なので 12 分あれば平日分を
+ * さばける。多すぎる日は WINDOW_DAYS の重なりと TDnet ID 冪等で
+ * 次回が回収する (D1 が正本なので Notion 未投入分も失われない)。
+ * 常態的に reachedDeadline=true なら backfill を回す合図。
+ * catchup.yml の timeout (30 分、yuho と共有) 内に収まること。
  */
-const NOTION_BUDGET_MS = 50_000;
+const NOTION_BUDGET_MS = 12 * 60_000;
 
 export interface IrCatalogResult {
   ran: boolean;
@@ -87,7 +91,7 @@ export async function runIrCatalogCatchup(
     source: `yanoshin TDnet WebAPI /tdnet/list/{YYYYMMDD}.json 日次キャッチアップ 1日ずつ全件 (範囲 ${range})`,
     archiveToNotion: true,
     notionByStock: true,
-    notionByStockDeadlineMs: started + NOTION_BUDGET_MS,
+    notionByStockBudgetMs: NOTION_BUDGET_MS,
     codeToId,
   });
 
