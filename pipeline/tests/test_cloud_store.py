@@ -332,6 +332,91 @@ class TestD1Store:
         assert "last_fetched_at = excluded.last_fetched_at" in sql
 
 
+class TestDatabaseFileSize:
+    """容量観測は database API の file_size を読む (行を走査しない)。"""
+
+    def _store(self, monkeypatch, captured: list, response):
+        from jp_stock_pipeline import http
+        from jp_stock_pipeline.cloud_store.d1 import D1Store
+        from jp_stock_pipeline.config import CloudStoreSettings
+
+        class _Resp:
+            def json(self):
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        def fake_get(url, *, params=None, headers, **kwargs):
+            captured.append({"url": url, "headers": headers})
+            return _Resp()
+
+        monkeypatch.setattr(http, "fetch", fake_get)
+        settings = CloudStoreSettings(
+            cf_account_id="acct", cf_api_token="tok", d1_database_id="db"
+        )
+        return D1Store(settings, writer="stockStock")
+
+    def test_parses_file_size_and_table_count(self, monkeypatch):
+        captured: list = []
+        store = self._store(
+            monkeypatch, captured,
+            {"success": True, "result": {"file_size": 871_886_848, "num_tables": 32}},
+        )
+        assert store.database_file_size() == {"file_size": 871_886_848, "num_tables": 32}
+        assert captured[0]["url"].endswith("/d1/database/db")
+        assert captured[0]["headers"] == {"Authorization": "Bearer tok"}
+
+    def test_success_false_is_an_error(self, monkeypatch):
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        captured: list = []
+        store = self._store(
+            monkeypatch, captured, {"success": False, "errors": ["boom"]}
+        )
+        with pytest.raises(D1Error, match="D1 容量エラー"):
+            store.database_file_size()
+
+    def test_fetch_failure_is_wrapped(self, monkeypatch):
+        from jp_stock_pipeline import http
+        from jp_stock_pipeline.cloud_store.d1 import D1Error, D1Store
+        from jp_stock_pipeline.config import CloudStoreSettings
+
+        def fake_get(url, *, params=None, headers, **kwargs):
+            raise http.FetchError("取得失敗: boom")
+
+        monkeypatch.setattr(http, "fetch", fake_get)
+        store = D1Store(
+            CloudStoreSettings(cf_account_id="a", cf_api_token="t", d1_database_id="d"),
+            writer="w",
+        )
+        with pytest.raises(D1Error, match="D1 容量を取得できない"):
+            store.database_file_size()
+
+    def test_non_json_response_is_an_error(self, monkeypatch):
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        captured: list = []
+        store = self._store(monkeypatch, captured, ValueError("no json"))
+        with pytest.raises(D1Error, match="JSON でない"):
+            store.database_file_size()
+
+    @pytest.mark.parametrize("result", [
+        {"num_tables": 32},
+        {"file_size": "871886848", "num_tables": 32},
+        {"file_size": True, "num_tables": 32},
+        {"file_size": -1, "num_tables": 32},
+        {"file_size": 10, "num_tables": None},
+    ])
+    def test_invalid_payload_is_an_error(self, monkeypatch, result):
+        """型を外した値を容量として記録しない (推測で埋めない)。"""
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        captured: list = []
+        store = self._store(monkeypatch, captured, {"success": True, "result": result})
+        with pytest.raises(D1Error, match="読めない"):
+            store.database_file_size()
+
+
 class TestD1BatchUpsert:
     """複数行を1文にまとめて往復を減らす。
 

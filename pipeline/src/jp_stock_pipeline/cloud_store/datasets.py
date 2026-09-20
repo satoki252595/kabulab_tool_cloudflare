@@ -43,6 +43,11 @@ writer の自己申告は「今さっき更新した」になる（実際には1
 `bytes_` は全件 None。`r2.py` に list API が無く R2 の総量を測る手段が無い
 ため、埋めるには推測しかない（§3-1 推測しない）。R2 の列挙を足すのは別の
 変更にする。
+
+ただし容量行 (`jobs/freshness_probe.py` の `CAPACITY_DATASET`) だけは例外で、
+マニフェスト外で probe が直接記録し `bytes_` に D1 の file_size を持つ
+(D1 には database API があり推測が要らない)。鮮度の加齢判定はその行を
+スキップし、容量判定 (`jobs/ops_check.py`) だけが読む。
 """
 
 from __future__ import annotations

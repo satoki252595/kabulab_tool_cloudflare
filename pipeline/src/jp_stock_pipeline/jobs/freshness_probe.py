@@ -24,7 +24,7 @@ processed=0 で「成功」していた）。だから**観測ジョブが実表
   `D1Store(ctx.settings.cloud_store, writer=JOB_NAME)` を直接作る。
 - **1 件でも測れなければジョブ全体を失敗させる。** `runner._status` は
   failed>0 かつ processed>0 を「一部失敗」＝ **exit 0** にするので、素直に書くと
-  表名のタイプミスで 7 件中 1 件が落ちても Issue が立たない。凍結した 1 行が SLO を
+  表名のタイプミスで 8 件中 1 件が落ちても Issue が立たない。凍結した 1 行が SLO を
   超えるまで（優待なら最長 50 日）気づけないので、最後に例外を投げて
   STATUS_FAILURE へ落とす。
 - **`updated_at` に記録時刻を入れない。** 入れると翌日から恒久的に緑になる
@@ -43,12 +43,18 @@ from ..cloud_store.d1 import D1Error, D1Store
 from ..cloud_store.datasets import DATASET_SOURCES, DatasetSource
 from ..cloud_store.ops import safe_record_freshness
 from ..config import CloudStoreSettings
-from ..models import JST
+from ..models import JST, now_jst
 from .runner import JobContext, build_parser, main_exit, run_job
 
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "freshness_probe"
+
+# D1 全体の容量を記録する行の dataset キー。鮮度データセットではなく
+# `DATASET_SOURCES` には入れない (tests がキー集合の等号を検証するため)。
+# 判定は `jobs/ops_check.py` の容量判定が bytes_ を読む。鮮度の加齢判定は
+# この行をスキップする (測った瞬間が as_of なので加齢に意味が無い)。
+CAPACITY_DATASET = "d1_capacity"
 
 # 取得時刻が測れなかったときに書く値。`jss_dataset_freshness.updated_at` は
 # NOT NULL なので NULL を書けない。0 を「不明」として扱うのは既存の
@@ -120,6 +126,62 @@ def _observe(store: D1Store, source: DatasetSource) -> dict[str, Any]:
     }
 
 
+def _observe_capacity(store: D1Store) -> dict[str, Any]:
+    """DB 全体の容量を測る。行の走査ではなく database API の file_size を読む。
+
+    `updated_at` に観測時刻を入れるのは、鮮度データセットの「記録時刻を入れるな」
+    と逆に見えるが意図的である: 容量の as_of は測った瞬間そのものであり、
+    判定側はこの行の加齢を見ない (`ops_check` がスキップする) ため、
+    偽の緑を作らない。`license_tag` は運用メタデータであり対象データでは
+    ないので None (governance の _operational と同じ扱い)。
+    """
+    info = store.database_file_size()
+    now = now_jst()
+    return {
+        "dataset": CAPACITY_DATASET,
+        "store_name": "D1",
+        "location": "正本DB全体",
+        "writer": "file_size API",
+        "latest_data_date": now.date(),
+        "row_or_object_count": info["num_tables"],
+        "bytes_": info["file_size"],
+        "license_tag": None,
+        "updated_at": int(now.timestamp()),
+    }
+
+
+def _record_observed(
+    ctx: JobContext, store: D1Store, observed: dict[str, Any], *, dry_run: bool
+) -> None:
+    """観測済みの 1 行を記録する (dry-run では書かず内容を出すだけ)。"""
+    dataset = str(observed["dataset"])
+    if dry_run:
+        # dry-run は 1 バイトも書かない。代わりに書こうとした内容を全項目出す。
+        logger.info(
+            "dry-run: %s へ記録しない内容 dataset=%s store=%s location=%s writer=%s"
+            " latest_data_date=%s row_or_object_count=%s bytes=%s license_tag=%s"
+            " updated_at=%s",
+            "jss_dataset_freshness",
+            observed["dataset"], observed["store_name"], observed["location"],
+            observed["writer"], observed["latest_data_date"],
+            observed["row_or_object_count"], observed["bytes_"],
+            observed["license_tag"], observed["updated_at"],
+        )
+        ctx.add_success()
+        return
+
+    # 記録先は必ず正本（jss_dataset_freshness は stockStock 所有）。
+    if not safe_record_freshness(store, **observed):
+        ctx.add_failure(dataset, "鮮度を記録できない（D1 への書き込みが失敗）")
+        return
+    logger.info(
+        "%s: latest_data_date=%s rows=%s updated_at=%s",
+        observed["dataset"], observed["latest_data_date"],
+        observed["row_or_object_count"], observed["updated_at"],
+    )
+    ctx.add_success()
+
+
 def execute(ctx: JobContext) -> None:
     settings = ctx.settings.cloud_store
     if not settings.d1_enabled():
@@ -134,41 +196,23 @@ def execute(ctx: JobContext) -> None:
         try:
             observed = _observe(store, source)
         except D1Error as exc:
-            # 1 表の欠損で 7 件全滅させない。ここは当該データセットだけ失敗にして次へ。
+            # 1 表の欠損で全滅させない。ここは当該データセットだけ失敗にして次へ。
             ctx.add_failure(source.dataset, f"実表を測れない ({source.location}): {exc}")
             continue
+        _record_observed(ctx, store, observed, dry_run=dry_run)
 
-        if dry_run:
-            # dry-run は 1 バイトも書かない。代わりに書こうとした内容を全項目出す。
-            logger.info(
-                "dry-run: %s へ記録しない内容 dataset=%s store=%s location=%s writer=%s"
-                " latest_data_date=%s row_or_object_count=%s bytes=%s license_tag=%s"
-                " updated_at=%s",
-                "jss_dataset_freshness",
-                observed["dataset"], observed["store_name"], observed["location"],
-                observed["writer"], observed["latest_data_date"],
-                observed["row_or_object_count"], observed["bytes_"],
-                observed["license_tag"], observed["updated_at"],
-            )
-            ctx.add_success()
-            continue
-
-        # 記録先は必ず正本（jss_dataset_freshness は stockStock 所有）。
-        if not safe_record_freshness(store, **observed):
-            ctx.add_failure(source.dataset, "鮮度を記録できない（D1 への書き込みが失敗）")
-            continue
-        logger.info(
-            "%s: latest_data_date=%s rows=%s updated_at=%s",
-            observed["dataset"], observed["latest_data_date"],
-            observed["row_or_object_count"], observed["updated_at"],
-        )
-        ctx.add_success()
+    try:
+        capacity = _observe_capacity(store)
+    except D1Error as exc:
+        ctx.add_failure(CAPACITY_DATASET, f"DB 容量を測れない: {exc}")
+    else:
+        _record_observed(ctx, store, capacity, dry_run=dry_run)
 
     if ctx.failed:
         # runner は failed>0 かつ processed>0 を exit 0 にするので、ここで例外を投げて
-        # 失敗に落とす。落とさないと「7 件中 1 件だけ凍結」が誰にも見えない。
+        # 失敗に落とす。落とさないと「8 件中 1 件だけ凍結」が誰にも見えない。
         raise ProbeIncomplete(
-            f"{ctx.failed}/{len(DATASET_SOURCES)} データセットを測れなかった:"
+            f"{ctx.failed}/{len(DATASET_SOURCES) + 1} 件を測れなかった:"
             f" {ctx.failed_codes}"
         )
 
