@@ -21,7 +21,25 @@ export type TextSectionKey =
   | "management_policy"
   | "dividend_policy"
   | "mda"
-  | "rnd";
+  | "rnd"
+  | "major_shareholders"
+  | "share_status"
+  | "treasury_stock"
+  | "subsidiaries"
+  | "employees"
+  | "history"
+  | "material_contracts"
+  | "officers"
+  | "governance"
+  | "sustainability"
+  | "facilities"
+  | "capex"
+  | "securities_schedule"
+  | "investment_securities_schedule"
+  | "securities_note"
+  | "fixed_assets_schedule"
+  | "rental_property"
+  | "segment_info";
 
 export interface TextSectionDef {
   key: TextSectionKey;
@@ -30,8 +48,15 @@ export interface TextSectionDef {
 }
 
 /**
- * 投資判断に使う定性 6 項目。項目の追加はこの表に 1 行足すだけで済み、
+ * 投資判断に使う開示テキスト項目。項目の追加はこの表に 1 行足すだけで済み、
  * DDL 変更は不要 (section_key 列に新キーが入るだけ)。
+ *
+ * 第1バッチ (定性 6): 事業の内容・リスク・経営方針・配当政策・MD&A・研究開発。
+ * 第2バッチ (株主・資産・体制): 大株主・株式・自己株・関係会社・従業員・
+ * 沿革・重要契約・役員・ガバナンス・サステナ・設備・設備投資・有価証券
+ * 明細・有価証券注記・固定資産明細・賃貸不動産・セグメント情報。
+ * 明細表系の項目名は実データでのマッチ率を見て見直す (当たらなければ
+ * 行なし = 正直な欠損として残り、バックフィルの tally で可視化される)。
  */
 export const TEXT_SECTIONS: readonly TextSectionDef[] = [
   { key: "business", title: "事業の内容" },
@@ -43,6 +68,24 @@ export const TEXT_SECTIONS: readonly TextSectionDef[] = [
     title: "経営者による財政状態、経営成績及びキャッシュ・フローの状況の分析",
   },
   { key: "rnd", title: "研究開発活動" },
+  { key: "major_shareholders", title: "大株主の状況" },
+  { key: "share_status", title: "株式等の状況" },
+  { key: "treasury_stock", title: "自己株式の取得等の状況" },
+  { key: "subsidiaries", title: "関係会社の状況" },
+  { key: "employees", title: "従業員の状況" },
+  { key: "history", title: "沿革" },
+  { key: "material_contracts", title: "重要な契約等" },
+  { key: "officers", title: "役員の状況" },
+  { key: "governance", title: "コーポレート・ガバナンスの状況等" },
+  { key: "sustainability", title: "サステナビリティに関する考え方及び取組" },
+  { key: "facilities", title: "主要な設備の状況" },
+  { key: "capex", title: "設備投資等の概要" },
+  { key: "securities_schedule", title: "有価証券明細表" },
+  { key: "investment_securities_schedule", title: "投資有価証券明細表" },
+  { key: "securities_note", title: "有価証券関係" },
+  { key: "fixed_assets_schedule", title: "有形固定資産等明細表" },
+  { key: "rental_property", title: "賃貸等不動産関係" },
+  { key: "segment_info", title: "セグメント情報等" },
 ];
 
 export type TextParseStatus = "ok" | "no_text_sections" | "parse_error";
@@ -57,9 +100,14 @@ export interface ExtractedSection {
   contextId: string;
 }
 
-/** 項目名の正規化: 空白・句読点の有無を吸収する (同一意味の表記ゆれ) */
+/**
+ * 項目名の正規化: 空白・句読点・「等」の有無を吸収する (同一意味の表記ゆれ)。
+ * allowlist 側も同規則で正規化して完全一致させる (「セグメント情報」と
+ * 「セグメント情報等」を同一視する等)。正規化後に衝突する allowlist 項目が
+ * あれば起動時ではなくテストで検出する (下の TEXT_SECTIONS 固定テスト)。
+ */
 export function normalizeTitle(s: string): string {
-  return s.replace(/[\s、。．，,.]+/g, "");
+  return s.replace(/[\s、。．，,.・等]+/g, "");
 }
 
 const NORMALIZED_TITLES = new Map<TextSectionKey, string>(

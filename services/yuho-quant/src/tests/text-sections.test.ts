@@ -53,10 +53,24 @@ describe("normalizeTitle", () => {
       normalizeTitle("経営方針 経営環境及び対処すべき課題等")
     );
   });
+  it("「等」の有無を吸収する (セグメント情報系の表記ゆれ)", () => {
+    expect(normalizeTitle("セグメント情報等")).toBe(
+      normalizeTitle("セグメント情報")
+    );
+  });
+});
+
+describe("TEXT_SECTIONS", () => {
+  it("キー重複なし・正規化タイトル衝突なし", () => {
+    const keys = TEXT_SECTIONS.map((d) => d.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    const titles = TEXT_SECTIONS.map((d) => normalizeTitle(d.title));
+    expect(new Set(titles).size).toBe(titles.length);
+  });
 });
 
 describe("extractTextSections", () => {
-  it("定性 6 項目を各 1 行で抜く", () => {
+  it("allowlist 全項目を各 1 行で抜く", () => {
     const rows = TEXT_SECTIONS.map((d, i) =>
       row({
         elementId: `jpcrp_cor:Section${i}TextBlock`,
