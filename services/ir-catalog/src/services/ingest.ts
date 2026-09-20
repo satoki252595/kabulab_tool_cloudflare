@@ -28,11 +28,11 @@ import {
   type PdfClassification,
 } from "../../../../src/shared/notion-archive/index.js";
 import type { Database } from "../db/client.js";
-import { disclosures } from "../db/schema.js";
+import { disclosures, disclosureTexts } from "../db/schema.js";
 import { loadIngestCodeToId } from "../../../../src/shared/db/active-equity.js";
 import { classify, notionTagOptions, buffettCodeUrl } from "./classify.js";
 import { companyCodeToTicker, type TdnetItemRaw } from "./tdnet/types.js";
-import { classifyPdfSentiment } from "./pdf-sentiment/index.js";
+import { classifyPdfSentimentWithText } from "./pdf-sentiment/index.js";
 
 export interface IngestOptions {
   /** Notion 一次データの冪等キー (例 "tdnet-2024-04" / "tdnet-daily-2026-05-18") */
@@ -138,6 +138,69 @@ async function persistPdfSentiments(
         pdfSentimentAt: now,
       })
       .where(eq(disclosures.tdnetId, tdnetId));
+  }
+}
+
+/**
+ * (tdnet_id → 抽出テキスト) を `ir_disclosure_texts` へ冪等保存する。
+ * テキストあり → upsert + pdf_text_status=ok。テキストなし (画像化/
+ * 暗号化等で抽出 0 文字) → 行なし + pdf_text_status=no_text。
+ * 1 行の保存失敗でバッチを落とさず error を記録して継続する
+ * (rowErrors の流儀 — ルール2)。
+ */
+async function persistPdfTexts(
+  db: Database,
+  pdfMap: Map<string, PdfClassification>
+): Promise<void> {
+  const entries = [...pdfMap.entries()].filter(
+    ([k]) => typeof k === "string" && k.length > 0
+  );
+  if (entries.length === 0) return;
+  for (const [tdnetId, c] of entries) {
+    try {
+      if (c.text === null || c.text === undefined || c.text.length === 0) {
+        await db
+          .update(disclosures)
+          .set({ pdfTextStatus: "no_text" })
+          .where(eq(disclosures.tdnetId, tdnetId));
+        continue;
+      }
+      const hit = await db
+        .select({ id: disclosures.id })
+        .from(disclosures)
+        .where(eq(disclosures.tdnetId, tdnetId))
+        .limit(1);
+      if (hit.length === 0) continue; // D1 行なし (あり得ないが捏造しない)
+      const disclosureId = hit[0]!.id;
+      await db
+        .insert(disclosureTexts)
+        .values({
+          disclosureId,
+          tdnetId,
+          text: c.text,
+          charCount: c.text.length,
+        })
+        .onConflictDoUpdate({
+          target: disclosureTexts.disclosureId,
+          set: { text: c.text, charCount: c.text.length, tdnetId },
+        });
+      await db
+        .update(disclosures)
+        .set({ pdfTextStatus: "ok" })
+        .where(eq(disclosures.id, disclosureId));
+    } catch (e) {
+      console.error(
+        `[ir-catalog] pdf_text 保存失敗 ${tdnetId}: ${(e as Error).message}`
+      );
+      try {
+        await db
+          .update(disclosures)
+          .set({ pdfTextStatus: "error" })
+          .where(eq(disclosures.tdnetId, tdnetId));
+      } catch {
+        // 状態記録自体に失敗したら諦める (NULL のまま = 未処理扱い)
+      }
+    }
   }
 }
 
@@ -349,9 +412,15 @@ export async function ingestBatch(
         onPagePersisted: (key, pageId) => pageIdMap.set(key, pageId),
         // PDF 本文を OSS 軽量実装 (数値ルール + 東北大極性辞書) で判定し、
         // Notion 列 + PG 4 列に反映。失敗時は呼ばれた側で unknown を返す
-        // (バッチを止めない — ルール2)。
-        classifyPdf: (bytes, primaryTag) =>
-          classifyPdfSentiment(bytes, primaryTag),
+        // (バッチを止めない — ルール2)。抽出テキストも添えて返し、D1 の
+        // `ir_disclosure_texts` へ保存する (同じ bytes を使い回し二重取得なし)。
+        classifyPdf: async (bytes, primaryTag) => {
+          const { result, text } = await classifyPdfSentimentWithText(
+            bytes,
+            primaryTag
+          );
+          return { ...result, text };
+        },
         onPdfClassified: (key, c) => pdfMap.set(key, c),
         rejudgePdf: opts.rejudgePdfSentiment ?? false,
       });
@@ -387,6 +456,13 @@ export async function ingestBatch(
       } catch (e) {
         console.error(
           `[ir-catalog] pdf_sentiment 反映失敗 ${opts.batchKey}: ${(e as Error).message}`
+        );
+      }
+      try {
+        await persistPdfTexts(db, pdfMap);
+      } catch (e) {
+        console.error(
+          `[ir-catalog] pdf_text 反映失敗 ${opts.batchKey}: ${(e as Error).message}`
         );
       }
     }

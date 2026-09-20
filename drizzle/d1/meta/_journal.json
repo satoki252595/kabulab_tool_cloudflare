@@ -141,6 +141,13 @@
       "when": 1789906754378,
       "tag": "0019_talented_zemo",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1789913341940,
+      "tag": "0020_massive_enchantress",
+      "breakpoints": true
     }
   ]
 }

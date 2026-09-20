@@ -23,6 +23,7 @@ import {
   text,
   real,
   index,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 import { stocks } from "../../../../src/shared/db/core-schema.js";
 import { HIGH_SIGNAL_TAG_LIST_SQL } from "../services/classify.js";
@@ -65,6 +66,12 @@ export const disclosures = sqliteTable(
     pdfSentimentScore: real("pdf_sentiment_score"),
     /** 判定時刻 (再判定/version 移行検出用) */
     pdfSentimentAt: integer("pdf_sentiment_at", { mode: "timestamp" }),
+    /**
+     * PDF 本文テキストの保存結果。ok | no_text (PDF はあるが抽出 0 文字:
+     * 画像化/暗号化等) | error (保存失敗)。未処理は NULL。
+     * テキスト本体は `ir_disclosure_texts` に置く (一覧クエリを重くしない)。
+     */
+    pdfTextStatus: text("pdf_text_status"),
     ingestedAt: integer("ingested_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),
@@ -82,5 +89,32 @@ export const disclosures = sqliteTable(
     index("ir_disclosures_high_signal_pubdate")
       .on(sql`"pubdate" DESC`)
       .where(sql.raw(`"primary_tag" IN (${HIGH_SIGNAL_TAG_LIST_SQL})`)),
+  ]
+);
+
+/**
+ * 開示 PDF の本文テキスト = 1 開示 1 行。センチメント判定用に取得済みの
+ * PDF バイト列を使い回す (二重取得なし)。抽出テキストは原文のまま保存し、
+ * 要約・言い換えはしない (ルール1)。
+ * TDnet は PDF を ~31 日で purge するため、古い開示の本文は取得不能 =
+ * 行なし (欠損は欠損のまま。ルール2)。
+ */
+export const disclosureTexts = sqliteTable(
+  "ir_disclosure_texts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    disclosureId: integer("disclosure_id")
+      .references(() => disclosures.id, { onDelete: "cascade" })
+      .notNull(),
+    /** 高速クエリ用の非正規化 (tdnet_id でも引ける) */
+    tdnetId: text("tdnet_id").notNull(),
+    /** 抽出テキスト全文 */
+    text: text("text").notNull(),
+    /** text の文字数 (UTF-16 単位) */
+    charCount: integer("char_count").notNull(),
+  },
+  (t) => [
+    uniqueIndex("ir_texts_disclosure_uq").on(t.disclosureId),
+    index("ir_texts_tdnet_idx").on(t.tdnetId),
   ]
 );

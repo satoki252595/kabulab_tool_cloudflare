@@ -28,11 +28,32 @@ export async function classifyPdfSentiment(
   bytes: Uint8Array,
   primaryTag: string | null
 ): Promise<PdfSentimentResult> {
+  const { result } = await classifyPdfSentimentWithText(bytes, primaryTag);
+  return result;
+}
+
+export interface PdfSentimentWithText {
+  result: PdfSentimentResult;
+  /** 抽出テキスト。抽出失敗時は null (判定は unknown になる) */
+  text: string | null;
+}
+
+/**
+ * 判定結果と抽出テキストの両方を返す。D1 への本文保存
+ * (`ir_disclosure_texts`) 用。抽出は 1 回だけで二重に読まない。
+ */
+export async function classifyPdfSentimentWithText(
+  bytes: Uint8Array,
+  primaryTag: string | null
+): Promise<PdfSentimentWithText> {
   const text = await extractPdfText(bytes);
   if (text === null) {
-    return unknown("PDF テキスト抽出失敗 (画像化/暗号化/破損/timeout)");
+    return {
+      result: unknown("PDF テキスト抽出失敗 (画像化/暗号化/破損/timeout)"),
+      text: null,
+    };
   }
-  return dispatchClassify(text, primaryTag);
+  return { result: await dispatchClassify(text, primaryTag), text };
 }
 
 /**

@@ -172,6 +172,11 @@ TABLE_LICENSE: dict[str, TableLicense] = {
         "TDnet（東証 適時開示）",
         f"{_CHILD} / datasets.py の tdnet_disclosures も factual-cite",
     ),
+    "ir_disclosure_texts": _uniform(
+        LicenseTag.FACTUAL_CITE,
+        "TDnet（東証 適時開示）PDF 本文の原文テキスト",
+        _CHILD,
+    ),
     # みんかぶ掲載文を含む。設計書 §8.3 は 3 タグでは足りないとして `no-store` の
     # 新設を挙げているが、現行の `licensing.LicenseTag` は 3 値なので最も厳しい
     # personal-only へ倒す。`services/jss-api/src/shared/license.ts` は description /
