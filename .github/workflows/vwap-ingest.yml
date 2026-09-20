@@ -20,6 +20,7 @@
 #   YAHOO_PROXY_BASE      … デプロイ済み Worker の URL 例 https://kabulab-cf.<sub>.workers.dev
 #   CRON_SECRET           … Worker secret と同値 (プロキシ認証)
 #   R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET … R2 書込 (S3 互換)
+#   NOTION_TOKEN / NOTION_BACKUP_PAGE_ID / NOTION_TRASH_PAGE_ID … 信用残 PDF の一次データ記録 (ルール6)
 name: vwap-ingest
 
 on:
@@ -69,6 +70,10 @@ jobs:
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      # 信用残 PDF の Notion 一次データ記録 (ルール6) 用
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_BACKUP_PAGE_ID: ${{ secrets.NOTION_BACKUP_PAGE_ID }}
+      NOTION_TRASH_PAGE_ID: ${{ secrets.NOTION_TRASH_PAGE_ID }}
     steps:
       - uses: actions/checkout@v4
 

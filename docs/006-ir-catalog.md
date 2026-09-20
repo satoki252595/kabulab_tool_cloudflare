@@ -181,9 +181,11 @@ TDnet ID[rich_text=冪等キー]。子DB行は銘柄が文脈で確定するた�
 > 方針は「直近 ~1ヶ月」。過去 5 年は不要)。
 
 日次キャッチアップの二次データ投入は GitHub Actions 実行を軽量に保つため
-`NOTION_BUDGET_MS`(50s) で必ず打ち切り、残りは WINDOW_DAYS の重なりと
+`NOTION_BUDGET_MS`(12分) で必ず打ち切り、残りは WINDOW_DAYS の重なりと
 TDnet ID 冪等で翌日以降が回収する (常態的に打ち切るなら過去ギャップ大
-= backfill を回す合図)。backfill は無制限 (再開可能)。Notion 通信は
+= backfill を回す合図)。予算は二次フェーズ開始から測る (D1 フェーズの
+所要に食われない。開始起点の 50s では 2026-06 以降ほぼ 0 件投入だった)。
+backfill は無制限 (再開可能)。Notion 通信は
 全て共有 `notion-archive` のレート制御クライアント経由
 (api.notion.com を直叩きしない)。`一次データ｜ir-catalog` の `.json`
 バッチ archive は従来どおり不変。
