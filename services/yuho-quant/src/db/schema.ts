@@ -187,8 +187,7 @@ export const overseasSalesFacts = sqliteTable(
 
 /**
  * 定性セクション = (有報, セクション) 粒度。有報の開示テキスト項目
- * (定性 6 + 株主・資産・体制 18 = 24 項目。TEXT_SECTIONS が正本) の
- * 本文テキストを保持する。
+ * (39 項目。TEXT_SECTIONS が正本) の本文テキストを保持する。
  * 抽出は CSV (type=5) のみ・追加ダウンロードなし。原文の語句は変えず
  * HTML タグ除去・実体参照復号・空白畳み込みだけを行う（要約・言い換えは
  * しない。ルール1）。
@@ -207,7 +206,7 @@ export const textSections = sqliteTable(
       .notNull(),
     /** この行が属する会計期末 */
     fiscalYearEnd: text("fiscal_year_end").notNull(),
-    /** TextSectionKey (24 項目。edinet/text-sections.ts の TEXT_SECTIONS が正本) */
+    /** TextSectionKey (39 項目。edinet/text-sections.ts の TEXT_SECTIONS が正本) */
     sectionKey: text("section_key").notNull(),
     /** プレーンテキスト化した本文 (欠損セクションは行自体を作らない) */
     text: text("text").notNull(),

@@ -32,10 +32,12 @@ const WINDOW_DAYS = 60;
 /**
  * 1 実行あたりの取込上限。Workers のサブリクエスト上限 (Paid は 2026-02 に
  * 1,000→10,000/invocation へ増加。Free は外部 50) に対し、1 doc で最悪 ~14 req
- * (EDINET 2 + Notion 数〜十数) を要する。40 件 × ~14 ≈ 560 req と、時間予算 +
+ * (EDINET 2 + Notion 数〜十数) を要する。60 件 × ~14 ≈ 840 req と、時間予算 +
  * Notion レート (~3 req/s) の両面から安全側に抑える。残りは次回が docId 冪等で拾う。
+ * ピーク期 (6 月の 3 月決算等) の大量流入は日次だけでは捌き切れないため、
+ * `pnpm yuho:backfill:missing` で期間指定回収する (無制限・再開可能)。
  */
-const MAX_INGEST = 40;
+const MAX_INGEST = 60;
 /**
  * 実時間の上限。Workers の CPU 時間制限 (Paid 既定 30s, 最大 5 分まで引上可) と
  * は別に、fetch/sleep 主体の本処理は壁時計でこの予算に達したら打ち切る。
@@ -43,7 +45,7 @@ const MAX_INGEST = 40;
  * (cron 並走 or 連続実行) 合算で全件をカバーし、打ち切った残りも次回が docId
  * 冪等で拾う (取りこぼさない)。
  */
-const TIME_BUDGET_MS = 90_000;
+const TIME_BUDGET_MS = 300_000;
 
 export interface ShardOpts {
   part: number;
@@ -102,8 +104,10 @@ export async function runYuhoEdinetCatchup(
 
   const overBudget = () => Date.now() - startedAt > TIME_BUDGET_MS;
 
+  // 古い日から走査する (FIFO)。新しい日優先だと流入過多期に古い未取込が
+  // 残り続け、窓を過ぎて永久に拾われなくなる (2026-06 ピークの取りこぼし)。
   const today = new Date();
-  for (let i = 0; i < WINDOW_DAYS; i++) {
+  for (let i = WINDOW_DAYS - 1; i >= 0; i--) {
     if (ingested >= MAX_INGEST || overBudget()) {
       reachedCap = true;
       break;

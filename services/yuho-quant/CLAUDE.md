@@ -4,9 +4,9 @@
 「**受注高 / 受注残高**」(セグメント別 + 全社合計) と
 「**海外（地域別）売上高 / 海外売上高比率**」を構造化し、最大 5 年の推移を
 可視化する定量情報検索サービス。**同じ有報 1 通**から受注・海外売上に加え
-投資判断用の**開示テキスト 24 項目**（定性 6 + 株主・資産・体制 18。
-`edinet/text-sections.ts` の TEXT_SECTIONS が正本）を並行抽出する
-（XBRL は 1 回だけ取得、開示テキストは CSV のみ）。
+投資判断用の**開示テキスト 39 項目**（定性 6 + 株主・資本・資産・体制の細目。
+`edinet/text-sections.ts` の TEXT_SECTIONS が正本。項目名は CSV 実測値）を
+並行抽出する（XBRL は 1 回だけ取得、開示テキストは CSV のみ）。
 
 仕様の正本は [docs/005-yuho-quant.md](../../docs/005-yuho-quant.md)。
 本ファイルは実装時の規約のみを持つ。
@@ -79,7 +79,7 @@ services/yuho-quant/
     │   └── projection.ts         # L2 投影 p_yuho_growth の再生成
     ├── views/                    # layout/home/stock-detail/screening/overseas-*
     └── tests/                    # parser/order/projection/universe テスト + fixtures
-└── data-scripts/{backfill,backfill-overseas,backfill-text-sections,audit-overseas}.ts
+└── data-scripts/{backfill,backfill-overseas,backfill-text-sections,backfill-missing-docs,audit-overseas}.ts
 ```
 
 ## コマンド
@@ -89,7 +89,8 @@ services/yuho-quant/
 ```bash
 pnpm ingest:yuho-edinet     # Worker /yuho-quant/admin/catchup を叩く (要 WORKER_BASE_URL + CRON_SECRET)
 pnpm backfill:overseas      # 既存有報の海外埋め戻し (D1 HTTP)
-pnpm yuho:backfill:text     # 既存有報の定性 6 項目埋め戻し (CSV のみ・D1 HTTP)
+pnpm yuho:backfill:text     # 既存有報の開示テキスト埋め戻し (CSV のみ・D1 HTTP)
+pnpm yuho:backfill:missing  # 期間指定の取りこぼし回収 (日次上限で欠けた分。無制限・再開可能)
 pnpm audit:overseas         # 全銘柄の取りこぼし署名を集計
 pnpm test / pnpm typecheck / pnpm lint
 ```
