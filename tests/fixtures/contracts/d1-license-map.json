@@ -53,6 +53,10 @@
       "kind": "uniform",
       "tag": "factual-cite"
     },
+    "ir_disclosure_texts": {
+      "kind": "uniform",
+      "tag": "factual-cite"
+    },
     "jss_column_license": {
       "kind": "operational",
       "tag": "commercial-ok"

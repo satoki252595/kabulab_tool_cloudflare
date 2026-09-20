@@ -71,6 +71,7 @@ M&A・資本提携 / 月次・速報 / 重要事象(調査等) / 上場・市場
 - 出力: `positive` / `negative` / `mixed` / `unknown` / `skipped`、`score` (-1.0〜+1.0)、`method` (rule_v1/dict_v1)。
 - **表題で方向確定済**のタグ (上方修正 / 下方修正 / 増配 / 減配・無配 / 自社株買い / 自己株式の消却 等) や判定不要タグ・未分類は `skipped`。PDF が画像化/抽出 0 文字なら `unknown`。**架空の positive/negative で埋めない** (ルール1/2)。
 - ingest 経路 (`ingest.ts`) で算出し DB の `pdf_sentiment*` 4 列へ保存。既存行の再判定は `pnpm ir:backfill -- --rejudge-pdf-sentiment` (terminal でない行を再評価)。
+- 判定用に抽出した本文テキストは同じバイト列を使い回して `ir_disclosure_texts` へ原文保存する (二重取得なし。要約・言い換えなし)。`pdf_text_status` (ok / no_text / error、未処理 NULL) で保存結果を追う。再埋め戻しも `--rejudge-pdf-sentiment` で回収する (ただし TDnet は PDF を ~31 日で purge するため古い開示の本文は取得不能 = 行なし)。
 
 ## DB スキーマ (`ir_disclosures`)
 
@@ -88,6 +89,10 @@ ir_disclosures   1 適時開示 = 1 行 (tdnet_id 一意 = 冪等キー)
   pdf_sentiment_method text(nullable)  -- rule_v1 / dict_v1
   pdf_sentiment_score real(nullable)   -- -1.0〜+1.0
   pdf_sentiment_at integer(nullable)   -- epoch (SQLite timestamp)
+  pdf_text_status text(nullable)       -- ok / no_text / error (本文保存結果。未処理 NULL)
+ir_disclosure_texts  1 開示の PDF 本文 = 1 行 (disclosure_id 一意 = 冪等キー)
+  disclosure_id → ir_disclosures(id) / tdnet_id (非正規化)
+  text (原文全文) / char_count
 ```
 
 > ⚠️ スキーマ正本は `services/ir-catalog/src/db/schema.ts` (sqlite-core。

@@ -78,6 +78,12 @@ export interface PdfClassification {
   method: string | null;
   /** -1.0 〜 +1.0 (rule_v1 は 1.0 or null) */
   score: number | null;
+  /**
+   * 抽出テキスト (呼び出し側が D1 保存用に添える任意 field)。
+   * dataset 側は中身を見ず `onPdfClassified` へ素通しする。
+   * null/省略 = テキストなし (抽出失敗など。本文保存対象外)。
+   */
+  text?: string | null;
 }
 
 export interface ByStockInput {

@@ -21,7 +21,9 @@ TDnet) を全量取得し、表題から決定論的にタグ分類して色分�
 > **PDF 本文のセンチメント (ポジ/ネガ)** を `src/services/pdf-sentiment/` の
 > OSS 軽量実装 (数値ルール + kuromoji 形態素解析 + 東北大極性辞書) で判定し、
 > `pdf_sentiment*` 4 列へ保存する (クラウド AI API 不使用)。判定不能・対象外は
-> `unknown`/`skipped` を正直記録 (捏造しない)。詳細は docs/006-ir-catalog.md。
+> `unknown`/`skipped` を正直記録 (捏造しない)。判定用に抽出した本文テキストは
+> 同じバイト列を使い回して `ir_disclosure_texts` へ原文保存する
+> (二重取得なし。要約・言い換えなし)。詳細は docs/006-ir-catalog.md。
 
 ### 方向を捏造しない
 
@@ -73,6 +75,7 @@ services/ir-catalog/
     │   ├── tdnet/{client,types}.ts
     │   ├── classify.ts           # 決定論的タグ分類 (UI/Notion 共通色)
     │   ├── ingest.ts             # バッチ取込 (backfill/cron 共用)
+    │   ├── disclosure-text-query.ts  # PDF 本文読み (tdnet_id 指定)
     │   ├── query.ts              # UI クエリ
     │   ├── sentiment.ts          # センチメント表示ヘルパ
     │   └── pdf-sentiment/        # OSS 軽量判定 (rule_v1/dict_v1)
