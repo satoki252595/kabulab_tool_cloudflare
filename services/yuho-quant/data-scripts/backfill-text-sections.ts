@@ -41,6 +41,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const db = createD1HttpDb(yuhoSchema);
 const { yuhoDocuments, textSections } = yuhoSchema;
 
+/** D1 の bind 変数上限 (100) 対策: 9 列/行 → 8 行/文で分割 */
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 const all = await db
   .select({
     id: yuhoDocuments.id,
@@ -61,45 +68,51 @@ console.info(
 const tally: Record<string, number> = {};
 let n = 0;
 for (const r of targets) {
-  let status: string;
-  let sections: ReturnType<typeof extractTextSections> = [];
+  // 1 通の失敗で全体を落とさない (残りは次回実行で回収。再開可能)。
   try {
-    const zip = await downloadDocument(r.docId, 5);
-    const rows = parseEdinetCsvZip(zip);
-    sections = extractTextSections(rows);
-    status = sections.length > 0 ? "ok" : "no_text_sections";
-  } catch (e) {
-    if (e instanceof EdinetNotFoundError) {
-      status = "parse_error"; // type=5 未提供 → 抽出不能を正直に記録
-    } else {
-      status = "parse_error";
-      console.warn(`[text-backfill] ${r.docId} ${r.filerName}: ${(e as Error).message}`);
+    let status: string;
+    let sections: ReturnType<typeof extractTextSections> = [];
+    try {
+      const zip = await downloadDocument(r.docId, 5);
+      const rows = parseEdinetCsvZip(zip);
+      sections = extractTextSections(rows);
+      status = sections.length > 0 ? "ok" : "no_text_sections";
+    } catch (e) {
+      if (e instanceof EdinetNotFoundError) {
+        status = "parse_error"; // type=5 未提供 → 抽出不能を正直に記録
+      } else {
+        status = "parse_error";
+        console.warn(`[text-backfill] ${r.docId} ${r.filerName}: ${(e as Error).message}`);
+      }
     }
-  }
-  tally[status] = (tally[status] ?? 0) + 1;
+    tally[status] = (tally[status] ?? 0) + 1;
 
-  // text 列を更新 (受注・海外の列・ファクトには触れない)
-  await db
-    .update(yuhoDocuments)
-    .set({ textParseStatus: status })
-    .where(eq(yuhoDocuments.id, r.id));
+    // text 列を更新 (受注・海外の列・ファクトには触れない)
+    await db
+      .update(yuhoDocuments)
+      .set({ textParseStatus: status })
+      .where(eq(yuhoDocuments.id, r.id));
 
-  // 定性セクションを置換 (delete → insert)。sqlite-proxy は batch 非対応なので逐次。
-  await db.delete(textSections).where(eq(textSections.documentId, r.id));
-  if (sections.length > 0) {
-    await db.insert(textSections).values(
-      sections.map((s) => ({
-        documentId: r.id,
-        stockId: r.stockId,
-        fiscalYearEnd: r.periodEnd,
-        sectionKey: s.sectionKey,
-        text: s.text,
-        elementId: s.elementId,
-        itemName: s.itemName,
-        contextId: s.contextId,
-        charCount: s.charCount,
-      }))
-    );
+    // 定性セクションを置換 (delete → insert)。sqlite-proxy は batch 非対応
+    // なので逐次 + 8 行ずつに分割 (D1 bind 上限 100: 8×9=72)。
+    await db.delete(textSections).where(eq(textSections.documentId, r.id));
+    const sectionRows = sections.map((s) => ({
+      documentId: r.id,
+      stockId: r.stockId,
+      fiscalYearEnd: r.periodEnd,
+      sectionKey: s.sectionKey,
+      text: s.text,
+      elementId: s.elementId,
+      itemName: s.itemName,
+      contextId: s.contextId,
+      charCount: s.charCount,
+    }));
+    for (const part of chunk(sectionRows, 8)) {
+      await db.insert(textSections).values(part);
+    }
+  } catch (e) {
+    tally.error = (tally.error ?? 0) + 1;
+    console.warn(`[text-backfill] 失敗 ${r.docId}: ${(e as Error).message}`);
   }
 
   n++;
