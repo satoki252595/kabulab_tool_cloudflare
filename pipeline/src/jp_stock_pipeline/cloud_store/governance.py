@@ -187,6 +187,7 @@ TABLE_LICENSE: dict[str, TableLicense] = {
     ),
     "yuho_order_facts": _uniform(LicenseTag.COMMERCIAL_OK, "EDINET（金融庁）", _CHILD),
     "yuho_overseas_facts": _uniform(LicenseTag.COMMERCIAL_OK, "EDINET（金融庁）", _CHILD),
+    "yuho_text_sections": _uniform(LicenseTag.COMMERCIAL_OK, "EDINET（金融庁）", _CHILD),
     # --- stockStock 所有（jss_*）------------------------------------------
     "jss_raw_files": _row_tag(
         "ソース別に混在（EDINET / TDnet / JPX / JSF / Yahoo）",

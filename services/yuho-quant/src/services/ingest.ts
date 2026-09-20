@@ -1,9 +1,11 @@
 /**
  * 有価証券報告書 1 通を取り込む共通ロジック (backfill と daily cron が共用)。
  *
- * 流れ: 書類取得 API type=5(CSV)/type=1(XBRL) ZIP → parseOrderData で受注を
- *       構造化 → yuho_quant.documents / order_facts に冪等 upsert →
- *       (archiveToNotion 時) 物理 ZIP とメタを Notion へ冪等記録 (ルール6)。
+ * 流れ: 書類取得 API type=5(CSV)/type=1(XBRL) ZIP → 受注・海外売上を
+ *       構造化 + CSV 行から定性セクション (事業の内容・リスク等) を抽出 →
+ *       yuho_documents / order_facts / overseas_facts / text_sections に
+ *       冪等 upsert → (archiveToNotion 時) 物理 ZIP とメタを Notion へ
+ *       冪等記録 (ルール6)。
  *
  * CLAUDE.md ルール準拠:
  *   - docId 一意で冪等 (再実行・再シャードでも二重計上しない)
@@ -16,7 +18,12 @@
  */
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { yuhoDocuments, orderFacts, overseasSalesFacts } from "../db/schema.js";
+import {
+  yuhoDocuments,
+  orderFacts,
+  overseasSalesFacts,
+  textSections,
+} from "../db/schema.js";
 import {
   recordPrimaryData,
   isArchived,
@@ -33,6 +40,10 @@ import {
   RX_OVERSEAS_KEYWORD,
   type OverseasParseStatus,
 } from "./overseas-parser.js";
+import {
+  extractTextSections,
+  type TextParseStatus,
+} from "./edinet/text-sections.js";
 import { resolveReportPeriodEnd, type EdinetDoc } from "./edinet/types.js";
 
 // 受注開示判定の語はパーサと単一定義を共有 (RX_ORDER_KEYWORD)。CSV(type=5)
@@ -57,6 +68,9 @@ export interface IngestResult {
   /** 海外売上の構造化結果 (同じ有報から並行構造化)。 */
   overseasParseStatus: OverseasParseStatus | "parse_error";
   overseasFactCount: number;
+  /** 定性セクションの抽出結果 (CSV のみ・追加ダウンロードなし)。 */
+  textParseStatus: TextParseStatus | "parse_error";
+  textSectionCount: number;
   /** 確定した会計期末 (訂正有報は docDescription から導出)。不明時 null */
   periodEnd: string | null;
 }
@@ -134,8 +148,10 @@ export async function ingestDocument(
       outcome: "skipped_existing",
       parseStatus: "no_order_table",
       overseasParseStatus: "no_overseas_table",
+      textParseStatus: "no_text_sections",
       factCount: 0,
       overseasFactCount: 0,
+      textSectionCount: 0,
       periodEnd: doc.periodEnd ?? null,
     };
   }
@@ -155,8 +171,10 @@ export async function ingestDocument(
       outcome: "skipped_invalid_meta",
       parseStatus: "no_order_table",
       overseasParseStatus: "no_overseas_table",
+      textParseStatus: "no_text_sections",
       factCount: 0,
       overseasFactCount: 0,
+      textSectionCount: 0,
       periodEnd: null,
     };
   }
@@ -171,8 +189,10 @@ export async function ingestDocument(
       outcome: "skipped_no_period",
       parseStatus: "no_order_table",
       overseasParseStatus: "no_overseas_table",
+      textParseStatus: "no_text_sections",
       factCount: 0,
       overseasFactCount: 0,
+      textSectionCount: 0,
       periodEnd: null,
     };
   }
@@ -191,8 +211,10 @@ export async function ingestDocument(
   let hasOrderKeyword = false;
   let hasOverseasKeyword = false;
   let csvError = false;
+  let csvRows: ReturnType<typeof parseEdinetCsvZip> | null = null;
   try {
     const rows = parseEdinetCsvZip(csvZip);
+    csvRows = rows;
     hasOrderKeyword = rows.some(
       (r) => RX_ORDER_KEYWORD.test(r.itemName) || RX_ORDER_KEYWORD.test(r.value)
     );
@@ -279,6 +301,25 @@ export async function ingestDocument(
     }
   }
 
+  // 2'') CSV 行から定性セクション (事業の内容・リスク等) を並行抽出する。
+  // CSV は既に取得済みで追加ダウンロードは一切ない。XBRL の有無に依らない。
+  let textParseStatus: TextParseStatus | "parse_error";
+  let sections: ReturnType<typeof extractTextSections> = [];
+  if (csvError || !csvRows) {
+    textParseStatus = "parse_error";
+  } else {
+    try {
+      sections = extractTextSections(csvRows);
+      textParseStatus = sections.length > 0 ? "ok" : "no_text_sections";
+    } catch (e) {
+      textParseStatus = "parse_error";
+      sections = [];
+      console.warn(
+        `[ingest] text parse_error docID=${doc.docID} ${doc.filerName}: ${(e as Error).message}`
+      );
+    }
+  }
+
   // 安全弁: 同一 (会計期末, セグメント名) の重複は order_facts の一意制約に
   // 反し 1 件でもあると企業全体の insert が落ちる。万一パーサが重複を出して
   // も会社単位で取りこぼさないよう、先頭を採用し重複は警告して落とす
@@ -329,6 +370,7 @@ export async function ingestDocument(
         honbunFile,
         overseasParseStatus,
         overseasHonbunFile,
+        textParseStatus,
       })
       .onConflictDoUpdate({
         target: yuhoDocuments.docId,
@@ -337,6 +379,7 @@ export async function ingestDocument(
           honbunFile,
           overseasParseStatus,
           overseasHonbunFile,
+          textParseStatus,
           submittedAt: parseSubmitDateTime(doc.submitDateTime),
           periodStart: doc.periodStart,
           periodEnd,
@@ -386,6 +429,21 @@ export async function ingestDocument(
       pattern: overseasPatternOf(overseasParseStatus),
     }));
 
+    // 定性セクションファクト (yuho_text_sections) も同じ docRow を親に
+    // 置換する。9 列/行 → D1 bind 上限 100 に対し 8 行/文 (8×9=72)。
+    // 抽出器が 1 セクション 1 行に確定済みなので重複は出ない。
+    const sectionRows = sections.map((s) => ({
+      documentId: docRow.id,
+      stockId,
+      fiscalYearEnd: periodEnd,
+      sectionKey: s.sectionKey,
+      text: s.text,
+      elementId: s.elementId,
+      itemName: s.itemName,
+      contextId: s.contextId,
+      charCount: s.charCount,
+    }));
+
     await db.batch([
       db.delete(orderFacts).where(eq(orderFacts.documentId, docRow.id)),
       ...chunk(factRows, MAX_FACT_ROWS_PER_STMT).map((rows) =>
@@ -396,6 +454,10 @@ export async function ingestDocument(
         .where(eq(overseasSalesFacts.documentId, docRow.id)),
       ...chunk(overseasRows, MAX_FACT_ROWS_PER_STMT).map((rows) =>
         db.insert(overseasSalesFacts).values(rows)
+      ),
+      db.delete(textSections).where(eq(textSections.documentId, docRow.id)),
+      ...chunk(sectionRows, MAX_FACT_ROWS_PER_STMT).map((rows) =>
+        db.insert(textSections).values(rows)
       ),
     ]);
   }
@@ -441,6 +503,8 @@ export async function ingestDocument(
         overseasParseStatus,
         overseasHonbunFile,
         overseasFactCount: overseasDeduped.length,
+        textParseStatus,
+        textSectionCount: sections.length,
         xbrlUnavailable,
       },
       files,
@@ -454,6 +518,8 @@ export async function ingestDocument(
     factCount: deduped.length,
     overseasParseStatus,
     overseasFactCount: overseasDeduped.length,
+    textParseStatus,
+    textSectionCount: sections.length,
     periodEnd,
   };
 }

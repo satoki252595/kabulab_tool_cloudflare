@@ -149,6 +149,10 @@
       "kind": "uniform",
       "tag": "commercial-ok"
     },
+    "yuho_text_sections": {
+      "kind": "uniform",
+      "tag": "commercial-ok"
+    },
     "yutai_benefits": {
       "kind": "uniform",
       "tag": "personal-only"

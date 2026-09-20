@@ -3,8 +3,9 @@
 **kabulab** プロジェクト群の 005 番。金融庁 **EDINET** の有価証券報告書から
 「**受注高 / 受注残高**」(セグメント別 + 全社合計) と
 「**海外（地域別）売上高 / 海外売上高比率**」を構造化し、最大 5 年の推移を
-可視化する定量情報検索サービス。**同じ有報 1 通**から受注と海外売上を並行して
-構造化する（XBRL を 1 回だけ取得）。
+可視化する定量情報検索サービス。**同じ有報 1 通**から受注・海外売上に加え
+投資判断用の**定性 6 項目**（事業の内容・リスク・経営方針・配当政策・MD&A・
+研究開発活動）を並行抽出する（XBRL は 1 回だけ取得、定性は CSV のみ）。
 
 仕様の正本は [docs/005-yuho-quant.md](../../docs/005-yuho-quant.md)。
 本ファイルは実装時の規約のみを持つ。
@@ -69,14 +70,15 @@ services/yuho-quant/
     ├── db/{client,schema}.ts     # yuho_* 接頭辞テーブル + Drizzle(d1)
     ├── routes/{pages,admin}.ts   # SSR + JSON API / 認証取込ルート
     ├── services/
-    │   ├── edinet/{client,types,zip,csv,html-table,order-parser}.ts
+    │   ├── edinet/{client,types,zip,csv,html-table,order-parser,text-sections}.ts
     │   ├── ingest.ts             # 1 通取り込み (catchup 共用)
+    │   ├── text-sections-query.ts  # 定性セクション読み (銘柄最新)
     │   ├── order-query.ts / overseas-query.ts  # UI クエリ (L2 投影読み)
     │   ├── overseas-parser.ts    # 海外売上の構造化
     │   └── projection.ts         # L2 投影 p_yuho_growth の再生成
     ├── views/                    # layout/home/stock-detail/screening/overseas-*
     └── tests/                    # parser/order/projection/universe テスト + fixtures
-└── data-scripts/{backfill,backfill-overseas,audit-overseas}.ts
+└── data-scripts/{backfill,backfill-overseas,backfill-text-sections,audit-overseas}.ts
 ```
 
 ## コマンド
@@ -86,6 +88,7 @@ services/yuho-quant/
 ```bash
 pnpm ingest:yuho-edinet     # Worker /yuho-quant/admin/catchup を叩く (要 WORKER_BASE_URL + CRON_SECRET)
 pnpm backfill:overseas      # 既存有報の海外埋め戻し (D1 HTTP)
+pnpm yuho:backfill:text     # 既存有報の定性 6 項目埋め戻し (CSV のみ・D1 HTTP)
 pnpm audit:overseas         # 全銘柄の取りこぼし署名を集計
 pnpm test / pnpm typecheck / pnpm lint
 ```

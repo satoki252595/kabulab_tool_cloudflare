@@ -70,6 +70,13 @@ export const yuhoDocuments = sqliteTable(
     overseasParseStatus: text("overseas_parse_status"),
     /** 海外売上 抽出元の本文 iXBRL ファイル名（調査・監査用）。未取込は NULL */
     overseasHonbunFile: text("overseas_honbun_file"),
+    /**
+     * 定性セクション (事業の内容・リスク等) の抽出結果。ok |
+     * no_text_sections | parse_error。CSV (type=5) のみから抽出するので
+     * XBRL の有無に依らない。未取込は NULL（後方互換: 既存レコードは
+     * バックフィルまで NULL のまま）。
+     */
+    textParseStatus: text("text_parse_status"),
     ingestedAt: integer("ingested_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),
@@ -173,6 +180,53 @@ export const overseasSalesFacts = sqliteTable(
     index("overseas_facts_kind_stock_idx").on(
       t.regionKind,
       t.stockId,
+      t.fiscalYearEnd
+    ),
+  ]
+);
+
+/**
+ * 定性セクション = (有報, セクション) 粒度。事業の内容・事業等のリスク・
+ * 経営方針・配当政策・MD&A・研究開発活動の本文テキストを保持する。
+ * 抽出は CSV (type=5) のみ・追加ダウンロードなし。原文の語句は変えず
+ * HTML タグ除去・実体参照復号・空白畳み込みだけを行う（要約・言い換えは
+ * しない。ルール1）。
+ * セクション種の追加は TEXT_SECTIONS に 1 行足すだけで DDL 不要。
+ */
+export const textSections = sqliteTable(
+  "yuho_text_sections",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    documentId: integer("document_id")
+      .references(() => yuhoDocuments.id, { onDelete: "cascade" })
+      .notNull(),
+    /** 高速クエリ用の非正規化 (銘柄単位で最新期を引く) */
+    stockId: integer("stock_id")
+      .references(() => stocks.id, { onDelete: "cascade" })
+      .notNull(),
+    /** この行が属する会計期末 */
+    fiscalYearEnd: text("fiscal_year_end").notNull(),
+    /** business | risks | management_policy | dividend_policy | mda | rnd */
+    sectionKey: text("section_key").notNull(),
+    /** プレーンテキスト化した本文 (欠損セクションは行自体を作らない) */
+    text: text("text").notNull(),
+    /** 抽出元の要素 ID (例 jpcrp_cor:BusinessRisksTextBlock。監査用) */
+    elementId: text("element_id").notNull(),
+    /** 抽出元の項目名 (表記ゆれ前の原文ラベル。監査用) */
+    itemName: text("item_name").notNull(),
+    /** 抽出元のコンテキスト ID (当期・連結の来歴。監査用) */
+    contextId: text("context_id").notNull(),
+    /** text の文字数 (UTF-16 単位) */
+    charCount: integer("char_count").notNull(),
+  },
+  (t) => [
+    uniqueIndex("text_sections_doc_section_uq").on(
+      t.documentId,
+      t.sectionKey
+    ),
+    index("text_sections_stock_section_period_idx").on(
+      t.stockId,
+      t.sectionKey,
       t.fiscalYearEnd
     ),
   ]
