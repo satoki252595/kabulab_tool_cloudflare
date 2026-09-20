@@ -172,6 +172,9 @@ export async function runYuhoEdinetCatchup(
         // 海外売上も同じ有報から並行構造化される。運用可視化のため prefix 付きで計上。
         const ok = `oseas:${r.overseasParseStatus}`;
         byStatus[ok] = (byStatus[ok] ?? 0) + 1;
+        // 定性セクション (CSV のみ抽出) も同様に計上。
+        const tx = `text:${r.textParseStatus}`;
+        byStatus[tx] = (byStatus[tx] ?? 0) + 1;
         if (r.outcome === "ingested") ingested++;
         else skippedExisting++;
       } catch (e) {

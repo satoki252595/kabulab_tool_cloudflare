@@ -29,6 +29,7 @@
     "yutai:summary:export": "tsx services/otakara-yutai/data-scripts/export-summary-tasks.ts",
     "yutai:summary:import": "tsx services/otakara-yutai/data-scripts/import-summary-results.ts",
     "yuho:backfill": "tsx services/yuho-quant/data-scripts/backfill.ts",
+    "yuho:backfill:text": "tsx services/yuho-quant/data-scripts/backfill-text-sections.ts",
     "ir:backfill": "tsx services/ir-catalog/data-scripts/backfill.ts"
   },
   "dependencies": {

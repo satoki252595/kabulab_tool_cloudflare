@@ -1,10 +1,16 @@
 # 005 yuho-quant — 有報定量検索
 
 金融庁 **EDINET** の有価証券報告書 (有報) から「**受注高 / 受注残高**」(セグメント別
-+ 全社合計) と「**海外（地域別）売上高 / 海外売上高比率**」を構造化し、最大 5 年の
-推移を可視化するサービス。**同じ有報 1 通**から受注と海外売上を並行構造化し
-（XBRL を 1 回だけ取得）、個別銘柄ページで両方を、スクリーニングで「受注の成長性」
-⇄「海外売上高比率（中国/米州 等の地域別エクスポージャ）」をトグルで切替表示する。
++ 全社合計)と「**海外（地域別）売上高 / 海外売上高比率**」を構造化し、最大 5 年の
+推移を可視化するサービス。**同じ有報 1 通**から受注・海外売上に加え、投資判断に
+使う**開示テキスト 24 項目**（定性 6: 事業の内容・リスク・経営方針・配当政策・
+MD&A・研究開発 + 株主・資産・体制 18: 大株主・株式・自己株・関係会社・
+従業員・沿革・重要契約・役員・ガバナンス・サステナ・設備・設備投資・
+有価証券明細・有価証券注記・固定資産明細・賃貸不動産・セグメント情報）を
+並行抽出する（XBRL は 1 回だけ取得、開示テキストは CSV のみで追加
+ダウンロードなし）。個別銘柄ページで受注と海外売上を、スクリーニングで
+「受注の成長性」⇄「海外売上高比率（中国/米州 等の地域別エクスポージャ）」を
+トグルで切替表示する。開示テキストはテーマ判定等の下流が D1 から読む。
 
 > kabulab mono-repo (`services/yuho-quant/`) として配置され、
 > `https://kabulab-cf.satoki252595.workers.dev/yuho-quant/*` で公開される。
@@ -15,8 +21,9 @@
 
 - 有報の **受注に関する開示は非構造化** (会社ごとに表の作りが違う)。これを
   ローカルで実データ精査 → 決定論的パーサで構造化 → DB 化して横断検索。
-- 取得範囲はユーザ要件により **「受注 + 海外売上 + 書類メタのみ」**。
-  全 XBRL ファクトは D1 容量逼迫リスクのため取り込まない。
+- 取得範囲はユーザ要件により **「受注 + 海外売上 + 開示テキスト 24 項目 + 書類メタのみ」**。
+  全 XBRL ファクトは D1 容量逼迫リスクのため取り込まない（ファクト本体の
+  所在索引は pipeline 側の `jss_xbrl_documents` が持つ）。
 - EDINET で取得できる過去分 (本サービスは最大 5 年表示)。
 
 ## EDINET API v2 (使用エンドポイント)
@@ -102,6 +109,11 @@ yuho_order_facts      (有報, 会計期末, セグメント) 粒度
 yuho_overseas_facts     (有報, 会計期末, 地域) 粒度
   document_id → yuho_documents(id) / stock_id → core_stocks(id)
   fiscal_year_end / region_name / overseas_sales_yen / overseas_ratio
+yuho_text_sections      (有報, セクション) 粒度。開示テキスト 24 項目の本文
+  document_id → yuho_documents(id) / stock_id → core_stocks(id)
+  fiscal_year_end / section_key (TextSectionKey 24 項目。TEXT_SECTIONS が正本) /
+    text / element_id / item_name / context_id / char_count
+  UNIQUE(document_id, section_key)  -- 冪等 upsert
 p_yuho_growth           L2 投影 (K4b)。EDINET catchup の末尾で再生成
   stock_id / 受注 CAGR・YoY / 海外比率 (screening の読取専用)
 ```
@@ -117,8 +129,11 @@ p_yuho_growth           L2 投影 (K4b)。EDINET catchup の末尾で再生成
 1. `ingestDocument`: docId 既存ならスキップ → CSV(type=5) 取得 → 全文に
    受注語が無ければ `no_order_table` 確定 (XBRL を落とさない) → 有れば
    XBRL(type=1) を取得し `parseOrderData` で構造化 → `documents` /
-   `order_facts` を冪等 upsert。訂正報告書 (130) は提出日時が新しい方を
-   UI 採用。
+   `order_facts` を冪等 upsert。同じ XBRL から海外売上も並行構造化し、
+   CSV 行からは開示テキスト 24 項目を `extractTextSections` で並行抽出
+   (XBRL 不要・追加ダウンロードなし) → `text_sections` を冪等 upsert。
+   訂正報告書 (130) は提出日時が新しい方を UI 採用。既存有報の定性
+   埋め戻しは `pnpm yuho:backfill:text` (CSV のみ再取得)。
 2. **初回 5 年バックフィル**: 旧 `pnpm yuho:backfill` CLI は D1 移行に伴い
    無効化 (fail-fast。`assertYuhoBackfillSupported()`。理由は同関数の
    docstring と `d1-http-batch-boundary.test.ts` を参照:
