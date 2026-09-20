@@ -318,6 +318,21 @@ pnpm yutai:summary:import --tasks <タスク> --results <結果> --apply        
 | Yahoo rate limit で失敗多発 | crumb 期限切れ or 上限超過 | 並列度を下げる (`CONC` / `DELAY_MS`)、翌日再試行 |
 | 005 yuho-quant が空表示 | D1 へ未投入 | `pnpm ingest:yuho-edinet` で EDINET から取込 (要 `WORKER_BASE_URL` + `CRON_SECRET`) |
 
+### クラウドコスト監視と休止中のサービス
+
+- **Workers AI (RTN) の超過課金 (2026-09-21 確認)**: 31 日で 609k Neurons 使用
+  (込み 310k を超過した 299k 分が課金対象・約 $3.30)。平均 約19.6k Neurons/日で
+  無料枠 (10k/日) の約2倍。
+- **原因**: kabuMCP (本リポジトリ外の別サービス。同一 Cloudflare アカウント) の
+  管理者チャットが `@cf/openai/gpt-oss-120b` を AI Gateway (`.../ai/v1`) 経由で
+  呼び出し、1 質問で財務ツールを複数回回すため Neurons が膨らむ。
+  kabulab-cf 自体は Workers AI を使っておらず Neurons を消費しない。
+- **対応**: kabuMCP を休止する (2026-09-21 決定)。Cloudflare に Worker の
+  一時停止ボタンは無いため、確実な休止 = kabuMCP 側での Worker 削除
+  (再開は再デプロイ) または管理者チャットの無効化。実施後に本節の状態を更新する。
+- **再開条件**: AI Gateway キャッシュ・小型モデル化・Neurons 予算アラートの
+  いずれかで日次使用量が無料枠内に収まる見込みが立つこと。
+
 ## 新サービスの追加
 
 [docs/new-project-template.md](./docs/new-project-template.md) を参照。要点:
