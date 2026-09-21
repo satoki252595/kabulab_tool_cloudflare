@@ -84,7 +84,7 @@ const DB_PROPERTIES = {
   "Origin Page": { url: {} },
 } as const;
 
-async function findChildDatabase(
+export async function findChildDatabase(
   pageId: string,
   title: string
 ): Promise<string | null> {

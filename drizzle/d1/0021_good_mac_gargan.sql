@@ -1,0 +1,1 @@
+ALTER TABLE `yuho_documents` ADD `notion_doc_page_id` text;
