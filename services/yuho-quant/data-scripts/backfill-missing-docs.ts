@@ -31,8 +31,10 @@ import {
 } from "../src/services/edinet/client.js";
 import {
   resolveReportPeriodEnd,
+  secCodeToTicker,
   type EdinetDoc,
 } from "../src/services/edinet/types.js";
+import { backupDocTextToNotion } from "../src/services/text-backup.js";
 import { parseEdinetCsvZip } from "../src/services/edinet/csv.js";
 import { selectMissingDocs } from "../src/services/edinet/missing.js";
 import {
@@ -346,6 +348,36 @@ for (const date of eachDay(fromArg, toArg)) {
             : []),
         ],
       });
+      // 定性テキスト本文の Notion 保管 (D1 には索引 + 行 ID のみ)。
+      // 失敗は当該通の警告に留める (ポインタ NULL の通は P3 が回収)。
+      if (sections.length > 0) {
+        try {
+          const ticker = secCodeToTicker(doc.secCode);
+          if (ticker === null) {
+            console.warn(`[missing] notion text skip(コード不明) docID=${doc.docID}`);
+            tally.notion_text_no_code = (tally.notion_text_no_code ?? 0) + 1;
+          } else {
+            const r = await backupDocTextToNotion({
+              stockCode: ticker,
+              docId: doc.docID,
+              d1DocumentId: docRowId,
+              fiscalYearEnd: periodEnd,
+              textParseStatus,
+              sections,
+              force,
+            });
+            if (r.rowPageId) {
+              await db
+                .update(yuhoSchema.yuhoDocuments)
+                .set({ notionDocPageId: r.rowPageId })
+                .where(eq(yuhoSchema.yuhoDocuments.id, docRowId));
+            }
+          }
+        } catch (e) {
+          console.warn(`[missing] notion text backup 失敗 ${tag}: ${(e as Error).message}`);
+          tally.notion_text_error = (tally.notion_text_error ?? 0) + 1;
+        }
+      }
       tally.ingested = (tally.ingested ?? 0) + 1;
     } catch (e) {
       tally.error = (tally.error ?? 0) + 1;

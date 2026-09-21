@@ -229,6 +229,7 @@ async function main(): Promise<void> {
         try {
           const r = await ingestDocument(db, {
             stockId,
+            stockCode: ticker,
             doc,
             force,
             archiveToNotion,

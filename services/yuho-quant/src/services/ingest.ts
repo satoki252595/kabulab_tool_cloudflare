@@ -28,6 +28,7 @@ import {
   recordPrimaryData,
   isArchived,
 } from "../../../../src/shared/notion-archive/index.js";
+import { backupDocTextToNotion } from "./text-backup.js";
 import { downloadDocument, EdinetNotFoundError } from "./edinet/client.js";
 import { parseEdinetCsvZip } from "./edinet/csv.js";
 import {
@@ -120,12 +121,14 @@ export async function ingestDocument(
   db: Database,
   args: {
     stockId: number;
+    /** 証券コード4桁 (例 "7203") — Notion 銘柄親ページのキー */
+    stockCode: string;
     doc: EdinetDoc;
     force?: boolean;
     archiveToNotion?: boolean;
   }
 ): Promise<IngestResult> {
-  const { stockId, doc, force = false, archiveToNotion = false } = args;
+  const { stockId, stockCode, doc, force = false, archiveToNotion = false } = args;
 
   const existing = await db
     .select({ id: yuhoDocuments.id })
@@ -354,6 +357,7 @@ export async function ingestDocument(
     overseasDeduped.push(f);
   }
 
+  let docRowId: number | null = null;
   if (needDbWork) {
     const [docRow] = await db
       .insert(yuhoDocuments)
@@ -386,6 +390,7 @@ export async function ingestDocument(
         },
       })
       .returning({ id: yuhoDocuments.id });
+    docRowId = docRow?.id ?? null;
 
     // 再取り込み (force) 時は当該書類の旧 facts を破棄してから入れ直す。
     // D1 の bind 上限 (100) を超えないよう insert を 8 行ずつに分割し、
@@ -510,6 +515,50 @@ export async function ingestDocument(
       files,
       force,
     });
+  }
+
+  // 定性テキスト本文の Notion 保管 (D1 10GB 上限対策。D1 には索引 + 行 ID)。
+  // needDbWork の有無に依らず手元の本文があれば保管し、行 ID を D1 へ
+  // 書き戻す。失敗は当該通の警告に留める (ポインタ NULL の通は P3 移行
+  // スクリプトが回収する)。セクション 0 件は保管対象外 (textParseStatus
+  // が D1 に残り「未保管」と区別できる)。
+  if (sections.length > 0) {
+    try {
+      let id = docRowId;
+      if (id === null) {
+        const found = await db
+          .select({ id: yuhoDocuments.id })
+          .from(yuhoDocuments)
+          .where(eq(yuhoDocuments.docId, doc.docID))
+          .limit(1);
+        id = found[0]?.id ?? null;
+      }
+      if (id === null) {
+        console.warn(
+          `[ingest] notion text backup skip(行なし) docID=${doc.docID}`
+        );
+      } else {
+        const r = await backupDocTextToNotion({
+          stockCode,
+          docId: doc.docID,
+          d1DocumentId: id,
+          fiscalYearEnd: periodEnd,
+          textParseStatus,
+          sections,
+          force,
+        });
+        if (r.rowPageId) {
+          await db
+            .update(yuhoDocuments)
+            .set({ notionDocPageId: r.rowPageId })
+            .where(eq(yuhoDocuments.id, id));
+        }
+      }
+    } catch (e) {
+      console.warn(
+        `[ingest] notion text backup 失敗 docID=${doc.docID}: ${(e as Error).message}`
+      );
+    }
   }
 
   return {
