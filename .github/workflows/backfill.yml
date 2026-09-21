@@ -20,6 +20,7 @@ on:
         options:
           - yuho-missing
           - yuho-text
+          - yuho-notion-text
           - ir
       from:
         description: "開始 (yuho-missing: YYYY-MM-DD / ir: YYYY-MM)"
@@ -37,7 +38,7 @@ on:
         default: ""
         type: string
       offset:
-        description: "スキップ件数 (yuho-text の sharding 用)"
+        description: "スキップ件数 (yuho-text / yuho-notion-text の sharding 用)"
         required: false
         default: ""
         type: string
@@ -88,6 +89,13 @@ jobs:
           [ -n "${{ inputs.limit }}" ] && args="$args --limit=${{ inputs.limit }}"
           [ -n "${{ inputs.offset }}" ] && args="$args --offset=${{ inputs.offset }}"
           pnpm yuho:backfill:text -- $args
+      - name: yuho-notion-text (全文の Notion 移行)
+        if: inputs.job == 'yuho-notion-text'
+        run: |
+          args=""
+          [ -n "${{ inputs.limit }}" ] && args="$args --limit=${{ inputs.limit }}"
+          [ -n "${{ inputs.offset }}" ] && args="$args --offset=${{ inputs.offset }}"
+          pnpm yuho:backfill:notion-text -- $args
       - name: ir (TDnet backfill)
         if: inputs.job == 'ir'
         run: |
