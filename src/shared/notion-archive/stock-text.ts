@@ -13,13 +13,18 @@
  *         │  会計期末・セクション件数・文字数合計・抽出状態)
  *         └─ 本文: heading_2 目印 + セクション毎に heading_3 + code block 群
  *
- * 非機能制約 (Notion API):
+ * 非機能制約 (Notion API 公式 /reference/request-limits 準拠):
  *   - 全リクエストは client.ts の単一キュー (~2.6 req/s) を通る。
+ *     公式上限は Business 以上 600 req/min・それ以外 180 req/min +
+ *     ワークスペース共有枠。380ms ペーシングは全プランで安全側。
  *     移行 2.4 万通 ≒ 3.2 万コール ≒ 3〜4 時間が下限。並列化しても
  *     レート上限は変わらないため、移行はシャード分割 + 再開可能にする。
- *   - 1 追記 100 ブロック・1 ブロック rich_text 2000 文字。1 通あたり平均
- *     83 ブロック (実測) のため、ページ作成時の children 直付け + 超過分の
- *     分割追記で収める。
+ *   - 1 追記 100 ブロック・1 ブロック rich_text 2000 文字・1 要求 500KB。
+ *     1 通あたり平均 83 ブロック (実測) のため、ページ作成時の children
+ *     直付け + 超過分の分割追記で収める。100 ブロック ≒ 最大 260KB で
+ *     500KB 上限の内側。
+ *   - ブロック数は有料 WS = 無制限 (Free 複数人は生涯 1,000)。本設計は
+ *     有料 WS 前提 (2026-09-21 ユーザ確認)。Free では移行自体が不可。
  *   - 親ページ探索は DB クエリが使えない (子ページは children 列挙のみ) ため、
  *     プロセス内で BACKUP 配下を 1 回だけ全走査して写像を保持する。
  *     3,700 銘柄 ≒ 38 コール ≒ 15 秒の前払い。以降の探索は 0 コール。
@@ -211,7 +216,7 @@ async function ensureStockParent(stockCode: string): Promise<string> {
   const cached = parentCache.get(stockCode);
   if (cached) return cached;
   const created = await notionRequest<{ id: string }>("POST", "/pages", {
-    parent: { page_id: notionEnv.NOTION_BACKUP_PAGE_ID() },
+    parent: { type: "page_id", page_id: notionEnv.NOTION_BACKUP_PAGE_ID() },
     properties: {
       title: [{ type: "text", ...richText(stockCode) }],
     },
