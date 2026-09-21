@@ -1,12 +1,17 @@
 /**
  * Notion REST クライアント (依存ゼロ・fetch 直叩き)。
  *
- * Notion のハードリミットを尊重する設計 (CLAUDE.md ルール6):
- *   - レート制限: 平均 ~3 req/s。プロセス内で全リクエストを単一キューに直列化し
- *     最小間隔 380ms (~2.6 req/s) を強制。429 は Retry-After を必ず尊重。
- *   - 一過性失敗 (429 / 5xx / ネットワーク) は指数バックオフで再試行。
- *     恒久的失敗 (4xx) は throw して呼び出し側に判断を委ねる (ルール2:
- *     既定値で握りつぶさない)。
+ * Notion のハードリミットを尊重する設計 (CLAUDE.md ルール6。
+ * 値の根拠は公式 /reference/request-limits):
+ *   - レート制限: 接続あたり Business 以上 600 req/min・それ以外 180 req/min
+ *     (平均 10/s・3/s) + ワークスペース共有枠。プロセス内で全リクエストを
+ *     単一キューに直列化し最小間隔 380ms (~2.6 req/s) を強制 (全プラン安全側)。
+ *     429/529 は Retry-After を必ず尊重。
+ *   - 一過性失敗 (429 / 529 / 5xx / ネットワーク) は指数バックオフで再試行。
+ *     恒久的失敗 (4xx。ただし 403 はブロック上限の可能性あり) は throw して
+ *     呼び出し側に判断を委ねる (ルール2: 既定値で握りつぶさない)。
+ *   - 要求サイズ: 100 ブロック/追記・rich_text 2000 文字・1 要求 500KB。
+ *     呼び出し側 (archive.ts / stock-text.ts) が事前に分割する。
  *
  * file_uploads の送信 (multipart/form-data) もこのキューを通し、レート枠を
  * 共有する。`@notionhq/client` は使わない — リポジトリ方針 (自前 ZIP リーダ
@@ -113,12 +118,18 @@ async function doFetch(
     }
     if (res.ok) return res;
 
-    if (res.status === 429) {
-      const ra = Number(res.headers.get("Retry-After") ?? "1");
-      const waitMs = (Number.isFinite(ra) ? ra : 1) * 1000 + 250;
+    // 429 (rate_limited) と 529 (service_overload) は公式通り Retry-After を
+    // 尊重して再試行 (/reference/request-limits)。529 に Retry-After が無い
+    // 場合は指数バックオフに倒す。
+    if (res.status === 429 || res.status === 529) {
+      const header = res.headers.get("Retry-After");
+      const ra = header === null ? NaN : Number(header);
+      const waitMs = Number.isFinite(ra)
+        ? ra * 1000 + 250
+        : Math.min(30_000, 500 * 2 ** attempt);
       if (attempt > MAX_RETRY) {
         throw new Error(
-          `Notion レート制限 (${label}) ${MAX_RETRY} 回再試行後も 429`
+          `Notion レート制限/過負荷 (${label}) ${MAX_RETRY} 回再試行後も ${res.status}`
         );
       }
       await sleep(waitMs);

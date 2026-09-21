@@ -77,6 +77,12 @@ export const yuhoDocuments = sqliteTable(
      * バックフィルまで NULL のまま）。
      */
     textParseStatus: text("text_parse_status"),
+    /**
+     * Notion 側の全文保管行 ID (銘柄親ページ配下「有報テキスト」DB の行)。
+     * 有報テキスト本文は D1 に置かず Notion のみ (D1 10GB 上限対策) のため、
+     * D1→Notion の追跡はこの ID で行う。未保管は NULL。
+     */
+    notionDocPageId: text("notion_doc_page_id"),
     ingestedAt: integer("ingested_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),

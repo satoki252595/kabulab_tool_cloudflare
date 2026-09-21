@@ -12,6 +12,20 @@
  *   });
  */
 export { recordPrimaryData, moveToTrash, isArchived } from "./archive.js";
+export {
+  ensureStockTextDb,
+  findStockTextRowId,
+  readStockTextRow,
+  upsertStockTextRow,
+  buildTextBodyBlocks,
+  STOCK_TEXT_DB_TITLE,
+  TEXT_BODY_MARKER,
+} from "./stock-text.js";
+export type {
+  StockTextDoc,
+  StockTextSection,
+  UpsertStockTextRowResult,
+} from "./stock-text.js";
 export type {
   RecordPrimaryDataInput,
   RecordResult,
