@@ -113,6 +113,9 @@ ir_disclosure_texts  1 開示の PDF 本文 = 1 行 (disclosure_id 一意 = 冪�
    月単位で新しい順に遡り、空月が 12 連続したらデータ開始点に到達と
    判断して停止 (推測でなく事実で止める)。tdnet_id / Notion key 冪等で
    **再開可能**。確定済み過去月は API を叩かずスキップ。
+   遡及下限は **少なくとも 2010-06** (2026-09-21 に単月プローブで検証:
+   2020-06・2015-06・2010-06 のメタデータ取得に成功。コード想定は
+   2008-01)。ただし PDF・本文は purge のため直近約 1 ヶ月分のみ。
 2. **日次キャッチアップ**: GitHub Actions `catchup.yml` が平日に
    `pnpm ingest:ir-tdnet` (`scripts/sync/ir-tdnet.ts`) を実行。PDF
    センチメントが kuromoji (Node 専用) 依存のため **Node で実行**し、
