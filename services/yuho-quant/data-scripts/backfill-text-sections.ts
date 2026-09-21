@@ -4,9 +4,9 @@
  * 受注・海外売上は既に取込済み (yuho_documents + *_facts) なので、本スクリプトは
  * **定性セクションだけを追加**する: text_parse_status が NULL の有報 (= 未処理) を
  * 対象に type=5(CSV) を取得 → extractTextSections で抽出 → yuho_documents の
- * text_parse_status 列を更新 + yuho_text_sections へ冪等 upsert する
- * (P4 で text 列が落ちるまで D1 へも書く二重書き) + 全文を Notion 保管し
- * notion_doc_page_id を書き戻す。
+ * text_parse_status 列を更新 + yuho_text_sections 索引へ冪等 upsert する
+ * (本文は Notion のみ。P4) + 全文を Notion 保管し notion_doc_page_id を
+ * 書き戻す。将来のギャップ修復 (ポインタ NULL) も本スクリプト --force で行う。
  * 受注・海外の列・ファクトには一切触れない。日次キャッチアップ (ingestDocument)
  * は 3 系統を同時に書くので、本スクリプトは「統合前に取り込んだ既存有報」の
  * 定性埋め戻し用。CSV のみで XBRL は落とさない (軽量)。
@@ -101,15 +101,15 @@ for (const r of targets) {
       .set({ textParseStatus: status })
       .where(eq(yuhoDocuments.id, r.id));
 
-    // 定性セクションを置換 (delete → insert)。sqlite-proxy は batch 非対応
-    // なので逐次 + 8 行ずつに分割 (D1 bind 上限 100: 8×9=72)。
+    // 定性セクション索引を置換 (delete → insert)。sqlite-proxy は batch 非対応
+    // なので逐次 + 8 行ずつに分割 (D1 bind 上限 100: 8×8=64)。
+    // 本文は Notion のみ (P4)。以下で backupDocTextToNotion が保管する。
     await db.delete(textSections).where(eq(textSections.documentId, r.id));
     const sectionRows = sections.map((s) => ({
       documentId: r.id,
       stockId: r.stockId,
       fiscalYearEnd: r.periodEnd,
       sectionKey: s.sectionKey,
-      text: s.text,
       elementId: s.elementId,
       itemName: s.itemName,
       contextId: s.contextId,

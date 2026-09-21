@@ -31,7 +31,6 @@
     "yuho:backfill": "tsx services/yuho-quant/data-scripts/backfill.ts",
     "yuho:backfill:text": "tsx services/yuho-quant/data-scripts/backfill-text-sections.ts",
     "yuho:backfill:missing": "tsx services/yuho-quant/data-scripts/backfill-missing-docs.ts",
-    "yuho:backfill:notion-text": "tsx services/yuho-quant/data-scripts/backfill-notion-text.ts",
     "ir:backfill": "tsx services/ir-catalog/data-scripts/backfill.ts"
   },
   "dependencies": {

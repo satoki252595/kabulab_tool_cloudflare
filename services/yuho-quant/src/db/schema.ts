@@ -214,8 +214,9 @@ export const textSections = sqliteTable(
     fiscalYearEnd: text("fiscal_year_end").notNull(),
     /** TextSectionKey (39 項目。edinet/text-sections.ts の TEXT_SECTIONS が正本) */
     sectionKey: text("section_key").notNull(),
-    /** プレーンテキスト化した本文 (欠損セクションは行自体を作らない) */
-    text: text("text").notNull(),
+    // 本テーブルは索引のみ (D1 10GB 上限対策。P4 で text 列を DROP)。
+    // 本文は Notion (銘柄親ページ配下「有報テキスト」DB) に置き、
+    // D1→Notion 追跡は yuho_documents.notion_doc_page_id で行う。
     /** 抽出元の要素 ID (例 jpcrp_cor:BusinessRisksTextBlock。監査用) */
     elementId: text("element_id").notNull(),
     /** 抽出元の項目名 (表記ゆれ前の原文ラベル。監査用) */

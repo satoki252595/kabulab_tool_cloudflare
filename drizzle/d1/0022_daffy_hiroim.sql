@@ -1,0 +1,1 @@
+ALTER TABLE `yuho_text_sections` DROP COLUMN `text`;

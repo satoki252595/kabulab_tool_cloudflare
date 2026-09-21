@@ -319,9 +319,10 @@ for (const date of eachDay(fromArg, toArg)) {
       }
       await db.delete(textSections).where(eq(textSections.documentId, docRowId));
       for (const s of sections) {
+        // 索引のみ。本文は Notion (backupDocTextToNotion で保管済み)。
         await db.insert(textSections).values({
           documentId: docRowId, stockId, fiscalYearEnd: periodEnd,
-          sectionKey: s.sectionKey, text: s.text, elementId: s.elementId,
+          sectionKey: s.sectionKey, elementId: s.elementId,
           itemName: s.itemName, contextId: s.contextId, charCount: s.charCount,
         });
       }
