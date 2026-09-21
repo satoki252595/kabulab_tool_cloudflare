@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Database } from "../db/client.js";
 import type { EdinetCsvRow } from "../services/edinet/csv.js";
 import {
@@ -181,13 +181,14 @@ function seedDoc(
   id: number,
   stockId: number,
   fy: string,
-  submittedAt: number
+  submittedAt: number,
+  notionDocPageId: string | null = null
 ): void {
   sqlite
     .prepare(
-      "INSERT INTO yuho_documents (id, stock_id, edinet_code, doc_id, doc_type_code, filer_name, period_end, submitted_at, parse_status) VALUES (?, ?, ?, ?, '120', ?, ?, ?, 'ok_pattern_a')"
+      "INSERT INTO yuho_documents (id, stock_id, edinet_code, doc_id, doc_type_code, filer_name, period_end, submitted_at, parse_status, notion_doc_page_id) VALUES (?, ?, ?, ?, '120', ?, ?, ?, 'ok_pattern_a', ?)"
     )
-    .run(id, stockId, `E${id}`, `S100T${id}`, `テスト${stockId}`, fy, submittedAt);
+    .run(id, stockId, `E${id}`, `S100T${id}`, `テスト${stockId}`, fy, submittedAt, notionDocPageId);
 }
 
 function seedSection(
@@ -205,21 +206,85 @@ function seedSection(
 }
 
 describe("text-sections-query", () => {
+  const ORIG_ENV = { ...process.env };
+  const ORIG_FETCH = globalThis.fetch;
+  const ORIG_NOW = Date.now;
+  // 行 ID → Notion 子ブロック列
+  let notionRows: Map<string, unknown[]>;
+  // ペーシング待ちを消す単調増加時刻。client モジュールはテスト間で
+  // 使い回すため、beforeEach 毎に巻き戻すと待ち時間が爆発する (実測で
+  // タイムアウト)。ファイル内で単調に進める。
+  let mockNow = 1_000_000;
+
   beforeEach(() => {
     sqlite = new DatabaseSync(":memory:");
     applyD1Migrations(sqlite);
     seedStock(1, "1001");
     seedStock(2, "1002");
+    notionRows = new Map();
+    process.env.NOTION_TOKEN = "dummy-token";
+    process.env.NOTION_BACKUP_PAGE_ID = "b".repeat(32);
+    process.env.NOTION_TRASH_PAGE_ID = "c".repeat(32);
+    Date.now = (() => (mockNow += 10_000)) as typeof Date.now;
+    globalThis.fetch = (async (url: unknown) => {
+      const m = /\/blocks\/([^/]+)\/children/.exec(String(url));
+      const blocks = m ? (notionRows.get(m[1]!) ?? null) : null;
+      if (!blocks) throw new Error(`テスト: 未定義行への fetch: ${String(url)}`);
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: async () => ({
+          results: blocks,
+          has_more: false,
+          next_cursor: null,
+        }),
+        text: async () => "{}",
+      } as Response;
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = ORIG_FETCH;
+    Date.now = ORIG_NOW;
+    process.env = { ...ORIG_ENV };
+  });
+
+  const h2 = (text: string) => ({
+    id: "m",
+    type: "heading_2",
+    heading_2: { rich_text: [{ plain_text: text }] },
+  });
+  const h3 = (id: string, text: string) => ({
+    id,
+    type: "heading_3",
+    heading_3: { rich_text: [{ plain_text: text }] },
+  });
+  const code = (id: string, text: string) => ({
+    id,
+    type: "code",
+    code: { rich_text: [{ plain_text: text }] },
   });
 
   it("セクションごとに最新期を返し、重複期は提出が新しい書類を採る", async () => {
-    seedDoc(1, 1, "2024-03-31", 1750000000);
-    seedDoc(2, 1, "2025-03-31", 1760000000);
-    seedDoc(3, 1, "2025-03-31", 1770000000); // 同一期末の訂正 (後発)
-    seedSection(1, 1, "2024-03-31", "business", "旧期の事業");
-    seedSection(2, 1, "2025-03-31", "business", "当期の事業");
-    seedSection(3, 1, "2025-03-31", "business", "訂正後の事業");
-    seedSection(2, 1, "2025-03-31", "risks", "当期のリスク");
+    seedDoc(1, 1, "2024-03-31", 1750000000, "row-1");
+    seedDoc(2, 1, "2025-03-31", 1760000000, "row-2");
+    seedDoc(3, 1, "2025-03-31", 1770000000, "row-3"); // 同一期末の訂正 (後発)
+    // D1 残存テキストは読まないことの証明: Notion と変えておく
+    seedSection(1, 1, "2024-03-31", "business", "D1の旧文");
+    seedSection(2, 1, "2025-03-31", "business", "D1の当期文");
+    seedSection(3, 1, "2025-03-31", "business", "D1の訂正文");
+    seedSection(2, 1, "2025-03-31", "risks", "D1のリスク文");
+    notionRows.set("row-3", [
+      h2("抽出テキスト全文 (1項目)"),
+      h3("b1", "事業の内容 (business)"),
+      code("b2", "訂正後の事業"),
+    ]);
+    notionRows.set("row-2", [
+      h2("抽出テキスト全文 (1項目)"),
+      h3("b1", "リスク (risks)"),
+      code("b2", "当期のリスク"),
+    ]);
     db = createDb(createD1(sqlite) as unknown as D1Database);
 
     const got = await getLatestTextSections(db, 1);
@@ -231,8 +296,13 @@ describe("text-sections-query", () => {
   });
 
   it("getTextSection は 1 件または null", async () => {
-    seedDoc(4, 2, "2025-03-31", 1760000000);
-    seedSection(4, 2, "2025-03-31", "dividend_policy", "配当方針文");
+    seedDoc(4, 2, "2025-03-31", 1760000000, "row-4");
+    seedSection(4, 2, "2025-03-31", "dividend_policy", "D1の配当文");
+    notionRows.set("row-4", [
+      h2("抽出テキスト全文 (1項目)"),
+      h3("b1", "配当政策 (dividend_policy)"),
+      code("b2", "配当方針文"),
+    ]);
     db = createDb(createD1(sqlite) as unknown as D1Database);
 
     const hit = await getTextSection(db, 2, "dividend_policy");
@@ -240,5 +310,14 @@ describe("text-sections-query", () => {
     expect(hit!.docId).toBe("S100T4");
     expect(await getTextSection(db, 2, "risks")).toBeNull();
     expect(await getLatestTextSections(db, 9999)).toEqual([]);
+  });
+
+  it("ポインタ無しの通は D1 残存テキストがあっても落とす", async () => {
+    // フォールバック無しの証明: D1 に文があっても返さない
+    seedDoc(5, 2, "2025-03-31", 1760000000, null);
+    seedSection(5, 2, "2025-03-31", "business", "D1にだけある文");
+    db = createDb(createD1(sqlite) as unknown as D1Database);
+
+    expect(await getLatestTextSections(db, 2)).toEqual([]);
   });
 });

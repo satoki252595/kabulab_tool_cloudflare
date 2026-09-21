@@ -4,7 +4,9 @@
  * 受注・海外売上は既に取込済み (yuho_documents + *_facts) なので、本スクリプトは
  * **定性セクションだけを追加**する: text_parse_status が NULL の有報 (= 未処理) を
  * 対象に type=5(CSV) を取得 → extractTextSections で抽出 → yuho_documents の
- * text_parse_status 列を更新 + yuho_text_sections へ冪等 upsert する。
+ * text_parse_status 列を更新 + yuho_text_sections へ冪等 upsert する
+ * (P4 で text 列が落ちるまで D1 へも書く二重書き) + 全文を Notion 保管し
+ * notion_doc_page_id を書き戻す。
  * 受注・海外の列・ファクトには一切触れない。日次キャッチアップ (ingestDocument)
  * は 3 系統を同時に書くので、本スクリプトは「統合前に取り込んだ既存有報」の
  * 定性埋め戻し用。CSV のみで XBRL は落とさない (軽量)。
@@ -23,12 +25,14 @@
 import "dotenv/config";
 import { eq, isNull } from "drizzle-orm";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
 } from "../src/services/edinet/client.js";
 import { parseEdinetCsvZip } from "../src/services/edinet/csv.js";
 import { extractTextSections } from "../src/services/edinet/text-sections.js";
+import { backupDocTextToNotion } from "../src/services/text-backup.js";
 import * as yuhoSchema from "../src/db/schema.js";
 
 const arg = (n: string) =>
@@ -40,6 +44,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const db = createD1HttpDb(yuhoSchema);
 const { yuhoDocuments, textSections } = yuhoSchema;
+// stock_id → 証券コード (Notion 銘柄親ページのキー。無ければ当該通を飛ばす)
+const idToCode = new Map(
+  [...(await loadIngestCodeToId(db))].map(([code, id]) => [id, code] as const)
+);
 
 /** D1 の bind 変数上限 (100) 対策: 9 列/行 → 8 行/文で分割 */
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -109,6 +117,37 @@ for (const r of targets) {
     }));
     for (const part of chunk(sectionRows, 8)) {
       await db.insert(textSections).values(part);
+    }
+
+    // 定性テキスト本文の Notion 保管 (D1 には索引 + 行 ID のみ)。
+    // 失敗は当該通の警告に留める (ポインタ NULL の通は P3 が回収)。
+    if (sections.length > 0) {
+      try {
+        const stockCode = idToCode.get(r.stockId) ?? null;
+        if (stockCode === null) {
+          console.warn(`[text-backfill] notion text skip(コード不明) ${r.docId}`);
+          tally.notion_text_no_code = (tally.notion_text_no_code ?? 0) + 1;
+        } else {
+          const nb = await backupDocTextToNotion({
+            stockCode,
+            docId: r.docId,
+            d1DocumentId: r.id,
+            fiscalYearEnd: r.periodEnd,
+            textParseStatus: status,
+            sections,
+            force,
+          });
+          if (nb.rowPageId) {
+            await db
+              .update(yuhoDocuments)
+              .set({ notionDocPageId: nb.rowPageId })
+              .where(eq(yuhoDocuments.id, r.id));
+          }
+        }
+      } catch (e) {
+        console.warn(`[text-backfill] notion text backup 失敗 ${r.docId}: ${(e as Error).message}`);
+        tally.notion_text_error = (tally.notion_text_error ?? 0) + 1;
+      }
     }
   } catch (e) {
     tally.error = (tally.error ?? 0) + 1;

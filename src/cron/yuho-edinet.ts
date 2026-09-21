@@ -150,7 +150,8 @@ export async function runYuhoEdinetCatchup(
         break;
       }
       matched++;
-      const stockId = codeToId.get(secCodeToTicker(doc.secCode)!)!;
+      const stockCode = secCodeToTicker(doc.secCode)!;
+      const stockId = codeToId.get(stockCode)!;
 
       // 既取込なら EDINET を叩かずスキップ (冪等・帯域節約)
       const exists = await db
@@ -169,6 +170,7 @@ export async function runYuhoEdinetCatchup(
         // 打ち切られ、打ち切った残りは翌日以降が docId/Notion 冪等で回収する。
         const r = await ingestDocument(db, {
           stockId,
+          stockCode,
           doc,
           archiveToNotion: true,
         });
