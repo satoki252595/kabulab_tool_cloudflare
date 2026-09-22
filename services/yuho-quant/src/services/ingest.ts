@@ -434,15 +434,14 @@ export async function ingestDocument(
       pattern: overseasPatternOf(overseasParseStatus),
     }));
 
-    // 定性セクションファクト (yuho_text_sections) も同じ docRow を親に
-    // 置換する。9 列/行 → D1 bind 上限 100 に対し 8 行/文 (8×9=72)。
-    // 抽出器が 1 セクション 1 行に確定済みなので重複は出ない。
+    // 定性セクション索引 (yuho_text_sections) も同じ docRow を親に
+    // 置換する。本文は Notion のみ (P4)。8 列/行 → D1 bind 上限 100 に対し
+    // 8 行/文 (8×8=64)。抽出器が 1 セクション 1 行に確定済みなので重複は出ない。
     const sectionRows = sections.map((s) => ({
       documentId: docRow.id,
       stockId,
       fiscalYearEnd: periodEnd,
       sectionKey: s.sectionKey,
-      text: s.text,
       elementId: s.elementId,
       itemName: s.itemName,
       contextId: s.contextId,

@@ -110,11 +110,14 @@ yuho_order_facts      (有報, 会計期末, セグメント) 粒度
 yuho_overseas_facts     (有報, 会計期末, 地域) 粒度
   document_id → yuho_documents(id) / stock_id → core_stocks(id)
   fiscal_year_end / region_name / overseas_sales_yen / overseas_ratio
-yuho_text_sections      (有報, セクション) 粒度。開示テキスト 39 項目の本文
+yuho_text_sections      (有報, セクション) 粒度。開示テキスト 39 項目の索引
+  (本文は D1 10GB 上限対策で Notion のみ。P4 で text 列を DROP)
   document_id → yuho_documents(id) / stock_id → core_stocks(id)
   fiscal_year_end / section_key (TextSectionKey 39 項目。TEXT_SECTIONS が正本) /
-    text / element_id / item_name / context_id / char_count
+    element_id / item_name / context_id / char_count
   UNIQUE(document_id, section_key)  -- 冪等 upsert
+  本文追跡: yuho_documents.notion_doc_page_id → 銘柄親ページ配下
+  「有報テキスト」DB の行 (1 行 = 1 通。本文は見出し + code block)
 p_yuho_growth           L2 投影 (K4b)。EDINET catchup の末尾で再生成
   stock_id / 受注 CAGR・YoY / 海外比率 (screening の読取専用)
 ```

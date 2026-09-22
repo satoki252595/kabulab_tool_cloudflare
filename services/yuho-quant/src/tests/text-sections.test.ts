@@ -196,13 +196,14 @@ function seedSection(
   stockId: number,
   fy: string,
   key: string,
-  text: string
+  charCount: number
 ): void {
+  // P4: 索引のみ (text 列なし)。本文は Notion モック (notionRows) に置く。
   sqlite
     .prepare(
-      "INSERT INTO yuho_text_sections (document_id, stock_id, fiscal_year_end, section_key, text, element_id, item_name, context_id, char_count) VALUES (?, ?, ?, ?, ?, 'jpcrp_cor:XTextBlock', '項目名', 'CurrentYearDuration', ?)"
+      "INSERT INTO yuho_text_sections (document_id, stock_id, fiscal_year_end, section_key, element_id, item_name, context_id, char_count) VALUES (?, ?, ?, ?, 'jpcrp_cor:XTextBlock', '項目名', 'CurrentYearDuration', ?)"
     )
-    .run(docId, stockId, fy, key, text, text.length);
+    .run(docId, stockId, fy, key, charCount);
 }
 
 describe("text-sections-query", () => {
@@ -270,11 +271,10 @@ describe("text-sections-query", () => {
     seedDoc(1, 1, "2024-03-31", 1750000000, "row-1");
     seedDoc(2, 1, "2025-03-31", 1760000000, "row-2");
     seedDoc(3, 1, "2025-03-31", 1770000000, "row-3"); // 同一期末の訂正 (後発)
-    // D1 残存テキストは読まないことの証明: Notion と変えておく
-    seedSection(1, 1, "2024-03-31", "business", "D1の旧文");
-    seedSection(2, 1, "2025-03-31", "business", "D1の当期文");
-    seedSection(3, 1, "2025-03-31", "business", "D1の訂正文");
-    seedSection(2, 1, "2025-03-31", "risks", "D1のリスク文");
+    seedSection(1, 1, "2024-03-31", "business", 5);
+    seedSection(2, 1, "2025-03-31", "business", 5);
+    seedSection(3, 1, "2025-03-31", "business", 5);
+    seedSection(2, 1, "2025-03-31", "risks", 6);
     notionRows.set("row-3", [
       h2("抽出テキスト全文 (1項目)"),
       h3("b1", "事業の内容 (business)"),
@@ -297,7 +297,7 @@ describe("text-sections-query", () => {
 
   it("getTextSection は 1 件または null", async () => {
     seedDoc(4, 2, "2025-03-31", 1760000000, "row-4");
-    seedSection(4, 2, "2025-03-31", "dividend_policy", "D1の配当文");
+    seedSection(4, 2, "2025-03-31", "dividend_policy", 5);
     notionRows.set("row-4", [
       h2("抽出テキスト全文 (1項目)"),
       h3("b1", "配当政策 (dividend_policy)"),
@@ -312,10 +312,10 @@ describe("text-sections-query", () => {
     expect(await getLatestTextSections(db, 9999)).toEqual([]);
   });
 
-  it("ポインタ無しの通は D1 残存テキストがあっても落とす", async () => {
-    // フォールバック無しの証明: D1 に文があっても返さない
+  it("ポインタ無しの通は索引があっても落とす", async () => {
+    // フォールバック無しの証明: 索引行があっても本文は Notion にしか無い
     seedDoc(5, 2, "2025-03-31", 1760000000, null);
-    seedSection(5, 2, "2025-03-31", "business", "D1にだけある文");
+    seedSection(5, 2, "2025-03-31", "business", 8);
     db = createDb(createD1(sqlite) as unknown as D1Database);
 
     expect(await getLatestTextSections(db, 2)).toEqual([]);
