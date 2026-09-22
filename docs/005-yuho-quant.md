@@ -118,6 +118,12 @@ yuho_text_sections      (有報, セクション) 粒度。開示テキスト 39
   UNIQUE(document_id, section_key)  -- 冪等 upsert
   本文追跡: yuho_documents.notion_doc_page_id → 銘柄親ページ配下
   「有報テキスト」DB の行 (1 行 = 1 通。本文は見出し + code block)
+  fidelity 注記 (2026-09-22 検証済み):
+  - Notion は U+200B (ZERO WIDTH SPACE) を書込時に除去する。
+    200 通監査で 1 通 28 文字のみ差分・他は完全一致。不可視文字の
+    ため表示・意味は同一。将来の監査は D1 側から U+200B を除いて比較する。
+  - 本番 D1 の text 列除去は DROP COLUMN が D1 制限 (7500) で不可の
+    ため再構築スワップで実施 (旧テーブルは P6 通過まで _bak 温存)。
 p_yuho_growth           L2 投影 (K4b)。EDINET catchup の末尾で再生成
   stock_id / 受注 CAGR・YoY / 海外比率 (screening の読取専用)
 ```
