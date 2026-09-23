@@ -32,7 +32,8 @@
     "yuho:backfill:text": "tsx services/yuho-quant/data-scripts/backfill-text-sections.ts",
     "yuho:backfill:missing": "tsx services/yuho-quant/data-scripts/backfill-missing-docs.ts",
     "yuho:repair:zip": "tsx services/yuho-quant/data-scripts/repair-zip-archive.ts",
-    "ir:backfill": "tsx services/ir-catalog/data-scripts/backfill.ts"
+    "ir:backfill": "tsx services/ir-catalog/data-scripts/backfill.ts",
+    "notion:update-index": "tsx scripts/notion/update-index.ts"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.7.6",

@@ -44,3 +44,7 @@ export type {
 } from "./dataset.js";
 export { fetchPageFileUrl } from "./page-file.js";
 export type { PageFileRef } from "./page-file.js";
+export { ensureIndexPage, replacePageChildren } from "./index-page.js";
+export type { EnsureIndexPageOptions, EnsureIndexPageResult } from "./index-page.js";
+export { ARCHIVE_SECTIONS, INDEX_PAGE_TITLE, buildIndexBlocks } from "./map.js";
+export type { IndexBullet, IndexSection } from "./map.js";

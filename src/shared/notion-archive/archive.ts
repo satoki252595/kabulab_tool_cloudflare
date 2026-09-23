@@ -112,21 +112,18 @@ function searchResultTitle(
 }
 
 /**
- * BACKUP/TRASH 直下の子ページ・子 DB を Search API で完全一致検索する。
+ * BACKUP/TRASH 直下の子ページ・子 DB を Search API で完全一致検索し、
+ * 全ヒットを返す (重複整理など「最古以外も要る」用途向け)。
  *
- * 経緯 (P6 重複事件 2026-09-24): block children のページ送りは約1万件で
- * 打ち切られる実測があり、全走査では見落とした銘柄親を重複作成した
- * (2086 タイトル以上が重複)。Search は件数制限を受けないため正本発見に使う。
- * 複数ヒット時は最古 (最初に作られた正本) を返し、以後はそこへ収束させる。
- * Search index 遅延 (作成直後を見落とす) への保険として、未ヒット時は
- * children の先頭 500 件だけ走査してから諦める。並列プロセスの同時作成
- * レース自体は防げない (現行の並列度では無視可能。監査で検出する)。
+ * フィルタ条件は findBackupChildByTitle と同一 (非アーカイブ・親一致・
+ * タイトル完全一致)。Search index 遅延への保険走査は含まない
+ * (保険走査は「1 件発見」用で全件列挙を保証しないため)。
  */
-export async function findBackupChildByTitle(args: {
+export async function findAllBackupChildrenByTitle(args: {
   parentPageId: string;
   title: string;
   kind: "page" | "database";
-}): Promise<string | null> {
+}): Promise<BackupChildHit[]> {
   const { parentPageId, title, kind } = args;
   const wantParent = parentPageId.replace(/-/g, "");
   const hits: BackupChildHit[] = [];
@@ -153,9 +150,28 @@ export async function findBackupChildByTitle(args: {
     if (!res.has_more || !res.next_cursor) break;
     cursor = res.next_cursor;
   }
-  const oldest = selectOldestPageId(hits);
+  return hits;
+}
+
+/**
+ * BACKUP/TRASH 直下の子ページ・子 DB を Search API で完全一致検索する。
+ *
+ * 経緯 (P6 重複事件 2026-09-24): block children のページ送りは約1万件で
+ * 打ち切られる実測があり、全走査では見落とした銘柄親を重複作成した
+ * (2086 タイトル以上が重複)。Search は件数制限を受けないため正本発見に使う。
+ * 複数ヒット時は最古 (最初に作られた正本) を返し、以後はそこへ収束させる。
+ * Search index 遅延 (作成直後を見落とす) への保険として、未ヒット時は
+ * children の先頭 500 件だけ走査してから諦める。並列プロセスの同時作成
+ * レース自体は防げない (現行の並列度では無視可能。監査で検出する)。
+ */
+export async function findBackupChildByTitle(args: {
+  parentPageId: string;
+  title: string;
+  kind: "page" | "database";
+}): Promise<string | null> {
+  const oldest = selectOldestPageId(await findAllBackupChildrenByTitle(args));
   if (oldest) return oldest;
-  return scanFirstChildrenForTitle(parentPageId, title, kind);
+  return scanFirstChildrenForTitle(args.parentPageId, args.title, args.kind);
 }
 
 /** children 先頭の bounded 走査 (Search index 遅延の保険) */
