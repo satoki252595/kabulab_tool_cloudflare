@@ -21,9 +21,12 @@
  *               D1_DATABASE_ID。
  *
  * 実行: D1_DATABASE_ID=<id> pnpm yuho:backfill:text [--limit=N] [--offset=N] [--force]
+ *       P6 ギャップ修復: pnpm yuho:backfill:text -- --doc=S100XXXX,S100YYYY --force
+ *       (--doc 指定時はその通だけを EDINET 再抽出+索引置換+Notion 再保管する。
+ *       --force 無しの --doc は未処理 (NULL) の通だけに効く)
  */
 import "dotenv/config";
-import { eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
 import {
@@ -40,6 +43,17 @@ const arg = (n: string) =>
 const force = process.argv.includes("--force");
 const limit = arg("limit") ? Number(arg("limit")) : Infinity;
 const offset = arg("offset") ? Number(arg("offset")) : 0;
+/** P6 ギャップ修復用の通指定 (--doc=S100XXXX,S100YYYY)。未指定なら全件走査 */
+const docFilter = arg("doc")
+  ? arg("doc")!
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+  : null;
+if (arg("doc") !== undefined && (docFilter === null || docFilter.length === 0)) {
+  console.error("usage: --doc=DOCID[,DOCID...] (空は不可)");
+  process.exit(2);
+}
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const db = createD1HttpDb(yuhoSchema);
@@ -56,6 +70,19 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
+if (docFilter !== null) {
+  const existRows = await db
+    .select({ docId: yuhoDocuments.docId })
+    .from(yuhoDocuments)
+    .where(inArray(yuhoDocuments.docId, docFilter));
+  const found = new Set(existRows.map((r) => r.docId));
+  const unknown = docFilter.filter((d) => !found.has(d));
+  if (unknown.length > 0) {
+    console.error(`[text-backfill] D1に無い文書ID: ${unknown.join(",")}`);
+    process.exit(2);
+  }
+}
+
 const all = await db
   .select({
     id: yuhoDocuments.id,
@@ -66,11 +93,23 @@ const all = await db
     textParseStatus: yuhoDocuments.textParseStatus,
   })
   .from(yuhoDocuments)
-  .where(force ? undefined : isNull(yuhoDocuments.textParseStatus));
+  .where(
+    docFilter !== null
+      ? force
+        ? inArray(yuhoDocuments.docId, docFilter)
+        : and(
+            isNull(yuhoDocuments.textParseStatus),
+            inArray(yuhoDocuments.docId, docFilter)
+          )
+      : force
+        ? undefined
+        : isNull(yuhoDocuments.textParseStatus)
+  );
 
 const targets = all.slice(offset, offset + (limit === Infinity ? all.length : limit));
 console.info(
-  `[text-backfill] 定性未処理=${all.length} 今回=${targets.length} force=${force}`
+  `[text-backfill] 定性未処理=${all.length} 今回=${targets.length} force=${force}` +
+    (docFilter !== null ? ` doc=${docFilter.join(",")}` : "")
 );
 
 const tally: Record<string, number> = {};
