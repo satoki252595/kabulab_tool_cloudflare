@@ -138,7 +138,11 @@ export async function findBackupChildByTitle(args: {
       page_size: 100,
     };
     if (cursor) body.start_cursor = cursor;
-    const res = await notionRequest<SearchResponse>("POST", "/search", body);
+    const res: SearchResponse = await notionRequest<SearchResponse>(
+      "POST",
+      "/search",
+      body
+    );
     for (const r of res.results) {
       if (r.archived === true || r.in_trash === true) continue;
       if (r.parent?.type !== "page_id") continue;
@@ -163,11 +167,11 @@ async function scanFirstChildrenForTitle(
 ): Promise<string | null> {
   let cursor: string | null = null;
   for (let p = 0; p < maxPages; p++) {
-    const qs =
+    const qs: string =
       cursor !== null
         ? `?start_cursor=${cursor}&page_size=100`
         : "?page_size=100";
-    const res = await notionRequest<BlockChildren>(
+    const res: BlockChildren = await notionRequest<BlockChildren>(
       "GET",
       `/blocks/${parentPageId}/children${qs}`
     );
