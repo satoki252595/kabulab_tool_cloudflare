@@ -54,9 +54,147 @@ interface BlockChildren {
     id: string;
     type: string;
     child_database?: { title: string };
+    child_page?: { title?: string };
   }>;
   has_more: boolean;
   next_cursor: string | null;
+}
+
+/** /search 応答のうち使う部分だけの形状 */
+interface SearchResponse {
+  results: Array<{
+    id: string;
+    archived?: boolean;
+    in_trash?: boolean;
+    created_time?: string;
+    parent?: { type?: string; page_id?: string };
+    properties?: {
+      title?: {
+        type?: string;
+        title?: Array<{ plain_text?: string }>;
+      };
+    };
+    /** database オブジェクトはトップレベルに title を持つ */
+    title?: string | Array<{ plain_text?: string }>;
+  }>;
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+export interface BackupChildHit {
+  id: string;
+  createdTime: string;
+}
+
+/** 完全一致ヒットから最古 (正本) を選ぶ。純粋関数。 */
+export function selectOldestPageId(
+  hits: ReadonlyArray<BackupChildHit>
+): string | null {
+  let best: BackupChildHit | null = null;
+  for (const h of hits) {
+    if (!best || h.createdTime < best.createdTime) best = h;
+  }
+  return best?.id ?? null;
+}
+
+function searchResultTitle(
+  r: SearchResponse["results"][number],
+  kind: "page" | "database"
+): string {
+  if (kind === "page") {
+    const t = r.properties?.title;
+    if (t?.type !== "title" || !Array.isArray(t.title)) return "";
+    return t.title.map((x) => x.plain_text ?? "").join("");
+  }
+  if (typeof r.title === "string") return r.title;
+  if (!Array.isArray(r.title)) return "";
+  return r.title.map((x) => x.plain_text ?? "").join("");
+}
+
+/**
+ * BACKUP/TRASH 直下の子ページ・子 DB を Search API で完全一致検索する。
+ *
+ * 経緯 (P6 重複事件 2026-09-24): block children のページ送りは約1万件で
+ * 打ち切られる実測があり、全走査では見落とした銘柄親を重複作成した
+ * (2086 タイトル以上が重複)。Search は件数制限を受けないため正本発見に使う。
+ * 複数ヒット時は最古 (最初に作られた正本) を返し、以後はそこへ収束させる。
+ * Search index 遅延 (作成直後を見落とす) への保険として、未ヒット時は
+ * children の先頭 500 件だけ走査してから諦める。並列プロセスの同時作成
+ * レース自体は防げない (現行の並列度では無視可能。監査で検出する)。
+ */
+export async function findBackupChildByTitle(args: {
+  parentPageId: string;
+  title: string;
+  kind: "page" | "database";
+}): Promise<string | null> {
+  const { parentPageId, title, kind } = args;
+  const wantParent = parentPageId.replace(/-/g, "");
+  const hits: BackupChildHit[] = [];
+  let cursor: string | null = null;
+  for (;;) {
+    const body: Record<string, unknown> = {
+      query: title,
+      filter: { property: "object", value: kind },
+      page_size: 100,
+    };
+    if (cursor) body.start_cursor = cursor;
+    const res: SearchResponse = await notionRequest<SearchResponse>(
+      "POST",
+      "/search",
+      body
+    );
+    for (const r of res.results) {
+      if (r.archived === true || r.in_trash === true) continue;
+      if (r.parent?.type !== "page_id") continue;
+      if ((r.parent.page_id ?? "").replace(/-/g, "") !== wantParent) continue;
+      if (searchResultTitle(r, kind) !== title) continue;
+      hits.push({ id: r.id, createdTime: r.created_time ?? "\uffff" });
+    }
+    if (!res.has_more || !res.next_cursor) break;
+    cursor = res.next_cursor;
+  }
+  const oldest = selectOldestPageId(hits);
+  if (oldest) return oldest;
+  return scanFirstChildrenForTitle(parentPageId, title, kind);
+}
+
+/** children 先頭の bounded 走査 (Search index 遅延の保険) */
+async function scanFirstChildrenForTitle(
+  parentPageId: string,
+  title: string,
+  kind: "page" | "database",
+  maxPages = 5
+): Promise<string | null> {
+  let cursor: string | null = null;
+  for (let p = 0; p < maxPages; p++) {
+    const qs: string =
+      cursor !== null
+        ? `?start_cursor=${cursor}&page_size=100`
+        : "?page_size=100";
+    const res: BlockChildren = await notionRequest<BlockChildren>(
+      "GET",
+      `/blocks/${parentPageId}/children${qs}`
+    );
+    for (const b of res.results) {
+      if (
+        kind === "database" &&
+        b.type === "child_database" &&
+        b.child_database?.title === title
+      ) {
+        return b.id;
+      }
+      if (
+        kind === "page" &&
+        b.type === "child_page" &&
+        b.child_page?.title === title
+      ) {
+        return b.id;
+      }
+    }
+    if (!res.has_more || !res.next_cursor) return null;
+    cursor = res.next_cursor;
+  }
+  return null;
 }
 
 /** プロセス内 DB ID キャッシュ ("backup:service" / "trash:service") */
@@ -105,8 +243,9 @@ export async function findChildDatabase(
   }
 }
 
-/** 親ページ配下にサービス別 DB を確保 (無ければ作成)。block children で
- *  即時整合に発見 (search index 遅延を避ける)。 */
+/** 親ページ配下にサービス別 DB を確保 (無ければ作成)。Search 完全一致で
+ *  発見する (block children 全走査は約1万件で打ち切られる実測があるため)。
+ *  Search index 遅延への保険は findBackupChildByTitle 内の bounded 走査。 */
 async function ensureDatabase(
   parentPageId: string,
   dbTitle: string,
@@ -115,7 +254,11 @@ async function ensureDatabase(
   const cached = dbCache.get(cacheKey);
   if (cached) return cached;
 
-  const existing = await findChildDatabase(parentPageId, dbTitle);
+  const existing = await findBackupChildByTitle({
+    parentPageId,
+    title: dbTitle,
+    kind: "database",
+  });
   if (existing) {
     dbCache.set(cacheKey, existing);
     return existing;

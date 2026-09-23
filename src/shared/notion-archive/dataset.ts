@@ -28,6 +28,7 @@
 import { notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
+import { findBackupChildByTitle } from "./archive.js";
 
 export type NotionSelectColor =
   | "default"
@@ -253,7 +254,8 @@ function childProperties(
   };
 }
 
-/** 親「銘柄一覧」DB を確保 (無ければ作成)。 */
+/** 親「銘柄一覧」DB を確保 (無ければ作成)。BACKUP 直下の探索は
+ *  Search 完全一致で行う (children 全走査は約1万件で打ち切られる実測)。 */
 async function ensureParentDb(
   service: string,
   tagOptions: ByStockInput["tagOptions"]
@@ -263,7 +265,11 @@ async function ensureParentDb(
 
   const backup = notionEnv.NOTION_BACKUP_PAGE_ID();
   const title = parentTitle(service);
-  const existing = await findChildDatabase(backup, title);
+  const existing = await findBackupChildByTitle({
+    parentPageId: backup,
+    title,
+    kind: "database",
+  });
   if (existing) {
     parentDbCache.set(service, existing);
     return existing;

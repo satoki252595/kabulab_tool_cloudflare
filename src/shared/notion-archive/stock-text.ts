@@ -25,16 +25,18 @@
  *     500KB 上限の内側。
  *   - ブロック数は有料 WS = 無制限 (Free 複数人は生涯 1,000)。本設計は
  *     有料 WS 前提 (2026-09-21 ユーザ確認)。Free では移行自体が不可。
- *   - 親ページ探索は DB クエリが使えない (子ページは children 列挙のみ) ため、
- *     プロセス内で BACKUP 配下を 1 回だけ全走査して写像を保持する。
- *     3,700 銘柄 ≒ 38 コール ≒ 15 秒の前払い。以降の探索は 0 コール。
+ *   - 親ページ探索は Search API の完全一致 + 最古優先
+ *     (findBackupChildByTitle)。block children の全走査は約1万件で
+ *     打ち切られる実測があり、見落としが重複親を生んだ (P6 重複事件)。
+ *     未ヒット時のみ children 先頭 500 件を保険走査する。プロセス内
+ *     キャッシュにより 2 回目以降の探索は 0 コール。
  *   - 有報テキストは不変 (訂正は別 docID の新規通)。読みの Cache は P2 側。
  *
  * 冪等: 行の有無 = DB クエリ (文書完全一致) で判定し、既存ならスキップ。
  * force 時のみ旧行を archived して作り直す (ブロックの選択削除 API が無い
  * ため。archived 行は残るが非表示で、移行は write-once のため通常出ない)。
  */
-import { findChildDatabase } from "./archive.js";
+import { findBackupChildByTitle, findChildDatabase } from "./archive.js";
 import { notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 
@@ -70,19 +72,6 @@ export interface StockTextDoc {
   textParseStatus: string;
 }
 
-interface BlockChild {
-  id: string;
-  type: string;
-  child_page?: { title: string };
-  child_database?: { title: string };
-}
-
-interface BlockChildrenResponse {
-  results: BlockChild[];
-  has_more: boolean;
-  next_cursor: string | null;
-}
-
 interface HeadingBlock {
   id: string;
   type: string;
@@ -101,8 +90,7 @@ interface ChildrenResponse {
 const parentCache = new Map<string, string>();
 /** プロセス内キャッシュ: 銘柄コード → 有報テキスト DB ID */
 const dbCache = new Map<string, string>();
-/** BACKUP 配下の全走査が済んだか (済めば parentCache が完全) */
-let parentScanDone = false;
+
 
 const TEXT_PARSE_STATUS_OPTIONS = [
   { name: "ok", color: "green" },
@@ -183,38 +171,20 @@ export function buildTextBodyBlocks(sections: StockTextSection[]): unknown[] {
   return blocks;
 }
 
-/** BACKUP 配下の子ページを全走査して コード→ページID 写像を作る (1 回だけ) */
-async function scanStockParents(): Promise<void> {
-  if (parentScanDone) return;
-  const backupPageId = notionEnv.NOTION_BACKUP_PAGE_ID();
-  let cursor: string | null = null;
-  for (;;) {
-    const qs: string =
-      cursor !== null
-        ? `?start_cursor=${cursor}&page_size=100`
-        : "?page_size=100";
-    const res: BlockChildrenResponse = await notionRequest<BlockChildrenResponse>(
-      "GET",
-      `/blocks/${backupPageId}/children${qs}`
-    );
-    for (const b of res.results) {
-      if (b.type === "child_page" && b.child_page?.title) {
-        if (!parentCache.has(b.child_page.title)) {
-          parentCache.set(b.child_page.title, b.id);
-        }
-      }
-    }
-    if (!res.has_more || res.next_cursor === null) break;
-    cursor = res.next_cursor;
-  }
-  parentScanDone = true;
-}
-
-/** 銘柄親ページを確保 (無ければ作成) */
+/** 銘柄親ページを確保 (無ければ作成)。Search 完全一致 + 最古優先で、
+ *  重複がある銘柄は正本 (最初に作られた親) へ収束させる */
 async function ensureStockParent(stockCode: string): Promise<string> {
-  await scanStockParents();
   const cached = parentCache.get(stockCode);
   if (cached) return cached;
+  const found = await findBackupChildByTitle({
+    parentPageId: notionEnv.NOTION_BACKUP_PAGE_ID(),
+    title: stockCode,
+    kind: "page",
+  });
+  if (found) {
+    parentCache.set(stockCode, found);
+    return found;
+  }
   const created = await notionRequest<{ id: string }>("POST", "/pages", {
     parent: { type: "page_id", page_id: notionEnv.NOTION_BACKUP_PAGE_ID() },
     properties: {
