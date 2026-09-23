@@ -131,11 +131,25 @@ describe("notion-archive stock-text", () => {
   });
 
   describe("ensureStockTextDb", () => {
+    const searchHit = (id: string, title: string, created: string) => ({
+      id,
+      archived: false,
+      in_trash: false,
+      created_time: created,
+      parent: { type: "page_id", page_id: "b".repeat(32) },
+      properties: {
+        title: { type: "title", title: [{ plain_text: title }] },
+      },
+    });
+    const searchPage = (results: unknown[]) => ({
+      results,
+      has_more: false,
+      next_cursor: null,
+    });
+
     it("親もDBも既存なら作成しない。2 回目は 0 コール", async () => {
-      route("GET", `/v1/blocks/${"b".repeat(32)}/children`, [
-        childrenPage([
-          { id: "parent-7203", type: "child_page", child_page: { title: "7203" } },
-        ]),
+      route("POST", "/v1/search", [
+        searchPage([searchHit("parent-7203", "7203", "2026-09-21T00:00:00.000Z")]),
       ]);
       route("GET", "/v1/blocks/parent-7203/children", [
         childrenPage([
@@ -156,6 +170,7 @@ describe("notion-archive stock-text", () => {
     });
 
     it("親もDBも無ければ作る", async () => {
+      route("POST", "/v1/search", [searchPage([])]);
       route("GET", `/v1/blocks/${"b".repeat(32)}/children`, [
         childrenPage([]),
       ]);
@@ -165,11 +180,11 @@ describe("notion-archive stock-text", () => {
       const { ensureStockTextDb } = await load();
       const got = await ensureStockTextDb("9999");
       expect(got).toEqual({ parentPageId: "parent-new", dbId: "db-new" });
-      const pageBody = JSON.parse(String(calls[1]?.init.body)) as {
+      const pageBody = JSON.parse(String(calls[2]?.init.body)) as {
         properties: { title: Array<{ text: { content: string } }> };
       };
       expect(pageBody.properties.title[0]?.text.content).toBe("9999");
-      const dbBody = JSON.parse(String(calls[3]?.init.body)) as {
+      const dbBody = JSON.parse(String(calls[4]?.init.body)) as {
         properties: Record<string, unknown>;
       };
       expect(Object.keys(dbBody.properties).sort()).toEqual(
@@ -185,21 +200,17 @@ describe("notion-archive stock-text", () => {
       );
     });
 
-    it("親走査はページネーションを辿る", async () => {
-      route("GET", `/v1/blocks/${"b".repeat(32)}/children`, [
-        childrenPage(
-          [{ id: "p1", type: "child_page", child_page: { title: "1000" } }],
-          true,
-          "cur1"
-        ),
-        childrenPage([
-          { id: "p2", type: "child_page", child_page: { title: "7203" } },
+    it("親が重複していれば最古を使う (正本へ収束)", async () => {
+      route("POST", "/v1/search", [
+        searchPage([
+          searchHit("p-new", "7203", "2026-09-22T00:00:00.000Z"),
+          searchHit("p-old", "7203", "2026-09-21T00:00:00.000Z"),
         ]),
       ]);
-      route("GET", "/v1/blocks/p2/children", [
+      route("GET", "/v1/blocks/p-old/children", [
         childrenPage([
           {
-            id: "db2",
+            id: "db-old",
             type: "child_database",
             child_database: { title: "有報テキスト" },
           },
@@ -207,10 +218,15 @@ describe("notion-archive stock-text", () => {
       ]);
       const { ensureStockTextDb } = await load();
       const got = await ensureStockTextDb("7203");
-      expect(got.parentPageId).toBe("p2");
-      // 走査 2 + DB 探索 1。作成系は呼ばない
+      expect(got).toEqual({ parentPageId: "p-old", dbId: "db-old" });
+      // search + DB 探索のみ。作成系 (/v1/pages・/v1/databases) は呼ばない
+      expect(calls).toHaveLength(2);
       expect(
-        calls.filter((c) => (c.init.method ?? "GET") !== "GET")
+        calls.filter(
+          (c) =>
+            new URL(String(c.url)).pathname === "/v1/pages" ||
+            new URL(String(c.url)).pathname === "/v1/databases"
+        )
       ).toHaveLength(0);
     });
   });
