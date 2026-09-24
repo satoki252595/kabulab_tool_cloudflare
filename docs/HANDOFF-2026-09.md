@@ -58,7 +58,7 @@
 | L-67 | サービス別 CLAUDE.md / README / docs/00N の三重化を 1 本に。CLAUDE.md ルール4（`.claude/agents` 不在）削除、ルール5 を「PR を作る」に。`AGENTS.md` の `.claude/agents` 参照も書換 | — | — | 実施 |
 | L-68 | 経緯コメント約 1,000 行を現在形に圧縮。実装と食い違うコメント 6 箇所（`monthly.ts` 冒頭、`/api/cron/sync-*` 参照ほか）と死 URL の User-Agent 3 箇所を訂正 | — | — | 実施 |
 
-台帳外（残タスク精査由来、本体 §5.8）: X-01 `yutai_benefits.estimate_value_source` / `estimate_source_url`（本番 0 行）と「WEB推定」UI の削除（DROP COLUMN は K2）、X-05 `ingestUniverseCondition` の命名、X-06 地図の `core_stocks.name` 出所と `universe.ts` の不一致、X-07 ライセンス系テストが `public/` を走査しない穴、X-10 `swing_sector_daily` 2026-09-11 の「機械」行欠落（不具合確認）。
+台帳外（残タスク精査由来、本体 §5.8）: X-01 `yutai_benefits.estimate_value_source` / `estimate_source_url`（本番 0 行）と「WEB推定」UI の削除（DROP COLUMN は K2）、X-05 `ingestUniverseCondition` の命名、X-06 地図の `core_stocks.name` 出所と `universe.ts` の不一致、X-07 ライセンス系テストが `public/` を走査しない穴、X-10 `swing_sector_daily` 2026-09-11 の「機械」行欠落（不具合確認）。**2026-09-25 訂正**: X-01 の「本番 0 行」は `estimate_source_url` のみ正しい。`estimate_value_source` は 50 行が非 NULL の現役列と判明したため DROP せず、DROP したのは `estimate_source_url` だけ（詳細は HANDOFF-2026-09-stock.md の X-01 行）。
 
 先行 PR（2026-09-14 01:19〜01:20 UTC に squash マージ済み）: #32 要約取込 dry-run の掲載文断片漏れ、#33 wrangler ログを既定で書かない、#34 共有テストの実在コードを合成コードへ置換（stockStock #57 と §3 K6 の順でマージ。両 main の共有ベクタは blob sha 一致、両 CI 緑）。
 

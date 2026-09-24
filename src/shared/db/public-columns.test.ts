@@ -93,9 +93,12 @@ describe("publicStockMetaLabel", () => {
  *
  * 突合の向きは「地図 ⊆ ガード」の片側だけにする。ガード
  * (`PERSONAL_ONLY_COLUMNS`) は drizzle の両綴り (camelCase / snake_case) を
- * 持ち、判断そのものの 3 列 (`license_tag` / `src_source` / `quality`) を
- * 地図のタグ (commercial-ok) より保守的に personal-only 扱いする。
- * 余分の 3 列はちょうど固定し、増減したら人が判断する。
+ * 持つ。
+ *
+ * 2026-09-25: 判断そのものの3列 (`license_tag` / `src_source` / `quality`)
+ * を地図のタグ (commercial-ok) より保守的に personal-only 扱いする「余分」の
+ * 仕組みがあったが、core_stocks の列自体を DROP したので `PERSONAL_ONLY_COLUMNS`
+ * から外した。余分は無く (`[]`)、増減したら人が判断する点は変わらない。
  */
 const MAP_PATH = fileURLToPath(
   new URL("../../../tests/fixtures/contracts/d1-license-map.json", import.meta.url)
@@ -125,7 +128,7 @@ describe("PERSONAL_ONLY_COLUMNS は列単位ライセンス地図と対応する
     }
   });
 
-  it("ガードの余分は判断そのものの 3 列ちょうど", () => {
+  it("ガードに余分は無い (2026-09-25: 判断そのものの3列は core_stocks から DROP 済み)", () => {
     const columns = contract.column_license.core_stocks;
     if (columns === undefined) {
       throw new Error("地図に core_stocks が無い");
@@ -138,6 +141,6 @@ describe("PERSONAL_ONLY_COLUMNS は列単位ライセンス地図と対応する
     const extra = [...new Set([...PERSONAL_ONLY_COLUMNS].map(toColumnName))]
       .filter((column) => !restricted.has(column))
       .sort();
-    expect(extra).toEqual(["license_tag", "quality", "src_source"]);
+    expect(extra).toEqual([]);
   });
 });

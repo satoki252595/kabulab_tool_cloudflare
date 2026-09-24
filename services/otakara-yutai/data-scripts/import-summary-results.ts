@@ -2,8 +2,10 @@
  * クラウド LLM の要約結果を検証し、通った行だけを D1 に書く。**既定は dry-run。**
  *
  * 検証の中身は `summary-import.ts` (契約・金額ガード・taskId と今の D1 の一致)。
- * D1 の `short_summary` / `estimated_value` / `estimate_value_source` /
- * `estimate_source_url` を書くのはこのコマンドだけ。
+ * D1 の `short_summary` / `estimated_value` / `estimate_value_source` を
+ * 書くのはこのコマンドだけ。
+ * (`estimate_source_url` は 2026-09-25 に DROP した。writer が常に null を
+ * 書くだけの死に列だったため — X-01)。
  *
  * 実行:
  *   pnpm yutai:summary:import --tasks <タスクファイル> --results <結果ファイル>          # dry-run
@@ -93,7 +95,6 @@ async function main(): Promise<void> {
           shortSummary: v.shortSummary,
           estimatedValue: v.estimatedValue,
           estimateValueSource: v.estimateValueSource,
-          estimateSourceUrl: v.estimateSourceUrl,
         })
         .where(inArray(yutaiBenefits.id, ids));
     },

@@ -190,14 +190,16 @@ DATASET_SOURCES: tuple[DatasetSource, ...] = (
         # 無いので、厳しい側への倒しをここに書く（理由は下の note）。
         license_tag=LicenseTag.PERSONAL_ONLY.value,
         note=(
-            "データ基準日の列が無い（src_data_date は実測で全行 NULL）ので"
-            "`updated_at` しか手が無い。ただしこの列は**行を書いた時刻**で"
-            "（kabulab-cf の universe.ts が `updated_at = (unixepoch())` を置く。"
-            "stockStock の sector33 充填は `updated_at` を進めない）、"
-            "データ自身の as_of ではない。writer が古い値を書き直すだけでも進むので"
+            "データ基準日の専用列 (`src_data_date`) は無い（`updated_at` しか"
+            "手が無い）。この列は**行を書いた時刻**で（kabulab-cf の"
+            "universe.ts が `updated_at = (unixepoch())` を置く。stockStock の"
+            "sector33 充填は `updated_at` を進めない）、データ自身の as_of では"
+            "ない。writer が古い値を書き直すだけでも進むので"
             "「取得はできたが中身が更新されていない」は検知できない。"
-            "`src_fetched_at` が埋まったらそちらへ寄せる（P4a 直後は全行 NULL で、"
-            "今これを使うと恒久的に unknown = 毎日鳴る）。"
+            "2026-09-25: `src_data_date` / `src_fetched_at` へ寄せる計画は"
+            "D-14-1 で中止し、両列自体を DROP した（P4a 直後から全行 NULL の"
+            "まま writer が実装されなかったため）。この鮮度判定は今後も"
+            "`updated_at` のまま。"
             "EDINET由来(commercial-ok)と JPX由来(personal-only)が1行に"
             "混在するため、行としては最も厳しい personal-only へ倒す。"
             "commercial-ok にすると JPX 由来の断面メタが公開 API に出る"

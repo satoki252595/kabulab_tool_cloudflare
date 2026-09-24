@@ -36,10 +36,7 @@ CREATE TABLE core_stocks (
   -- 移行 P4a が本番へ足した 12 列。全 nullable / default なし (本番 PRAGMA と同じ)。
   -- このテストは列を明示した生 INSERT なので今は使わないが、DDL が
   -- core-schema.ts と「対応」していると書いてある以上、片方だけ古いのは残さない。
-  instrument_type text, sector33 text, edinet_code text,
-  listing_status text, listing_date text, delisting_date text,
-  license_tag text, src_source text, src_data_date text,
-  src_fetched_at integer, quality text
+  instrument_type text, sector33 text
 );
 CREATE TABLE yutai_genres (
   id integer PRIMARY KEY AUTOINCREMENT,
@@ -58,7 +55,6 @@ CREATE TABLE yutai_benefits (
   record_month integer NOT NULL,
   estimated_value integer,
   estimate_value_source text,
-  estimate_source_url text,
   created_at integer NOT NULL DEFAULT (unixepoch()),
   updated_at integer NOT NULL DEFAULT (unixepoch())
 );

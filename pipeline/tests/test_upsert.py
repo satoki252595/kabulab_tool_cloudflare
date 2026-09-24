@@ -87,7 +87,6 @@ class TestStockMasterPayload:
         """None は明示クリア: update 時に前回値が残らない (§3-1)。"""
         rec = StockMasterRecord(code="7203", name="トヨタ自動車", provenance=prov())
         props = upsert.stock_master_properties(rec)
-        assert props[S.MASTER_PROP_MARKET] == {"select": None}
         assert props[S.MASTER_PROP_SECTOR33] == {"select": None}
         assert props[S.MASTER_PROP_EDINET_CODE] == {"rich_text": []}
 
@@ -96,7 +95,6 @@ class TestStockMasterPayload:
             code="7203",
             name="トヨタ自動車",
             provenance=prov(),
-            market="プライム",
             sector33="輸送用機器",
             edinet_code="E02144",
             listed=True,
@@ -104,19 +102,26 @@ class TestStockMasterPayload:
         props = upsert.stock_master_properties(rec)
         assert props[S.MASTER_PROP_NAME]["title"][0]["text"]["content"] == "トヨタ自動車"
         assert props[S.MASTER_PROP_CODE]["rich_text"][0]["text"]["content"] == "7203"
-        assert props[S.MASTER_PROP_MARKET]["select"]["name"] == "プライム"
         assert props[S.MASTER_PROP_LISTED]["checkbox"] is True
         # Provenance 必須 (§3-3)
         assert props[S.PROP_SOURCE]["select"]["name"] == "EDINET"
         assert props[S.PROP_RAW_RELATION]["relation"] == [{"id": "raw-page-id-123"}]
+        # 市場区分 (MASTER_PROP_MARKET) は 2026-09-25 に Notion 書込を廃止した
+        # (本番実測で全行空)。props に含まれない。
+        assert "市場区分" not in props
 
     def test_lifecycle_fields(self):
-        """状態/上場日/上場廃止日 (§ Phase3)。未設定は明示クリア (§3-1)。"""
+        """状態 (§ Phase3)。未設定は明示クリア (§3-1)。
+
+        上場日/上場廃止日への書込は 2026-09-25 に廃止した
+        (`MASTER_PROP_LISTING_DATE`/`MASTER_PROP_DELISTING_DATE` を削除。
+        本番 Notion 実測で全行空)。
+        """
         rec = StockMasterRecord(code="7203", name="トヨタ自動車", provenance=prov())
         props = upsert.stock_master_properties(rec)
         assert props[S.MASTER_PROP_STATUS] == {"select": None}
-        assert props[S.MASTER_PROP_LISTING_DATE] == {"date": None}
-        assert props[S.MASTER_PROP_DELISTING_DATE] == {"date": None}
+        assert "上場日" not in props
+        assert "上場廃止日" not in props
 
         rec2 = StockMasterRecord(
             code="9999", name="廃止予定", provenance=prov(),
@@ -125,7 +130,6 @@ class TestStockMasterPayload:
         props2 = upsert.stock_master_properties(rec2)
         assert props2[S.MASTER_PROP_LISTED]["checkbox"] is False
         assert props2[S.MASTER_PROP_STATUS]["select"]["name"] == "上場廃止"
-        assert props2[S.MASTER_PROP_DELISTING_DATE]["date"]["start"] == "2026-07-01"
 
 
 def _read_page(code="7203", **overrides):
@@ -150,7 +154,6 @@ def _read_page(code="7203", **overrides):
         S.MASTER_PROP_NAME: title("トヨタ自動車"),
         S.MASTER_PROP_CODE: text(code),
         S.MASTER_PROP_LISTED: {"checkbox": True},
-        S.MASTER_PROP_MARKET: select("プライム"),
         S.MASTER_PROP_SECTOR33: select("輸送用機器"),
         S.MASTER_PROP_EDINET_CODE: text("E02144"),
         # 時刻系は古いまま（同値 skip では見ないので一致しなくてよい）。
@@ -203,7 +206,6 @@ class TestStockMasterMatchesPage:
         [
             (S.MASTER_PROP_NAME, {"title": [{"plain_text": "別名"}]}),
             (S.MASTER_PROP_LISTED, {"checkbox": False}),
-            (S.MASTER_PROP_MARKET, {"select": {"name": "スタンダード"}}),
             (S.MASTER_PROP_SECTOR33, {"select": None}),
             (S.MASTER_PROP_EDINET_CODE, {"rich_text": []}),
         ],
@@ -215,7 +217,7 @@ class TestStockMasterMatchesPage:
         """欠損より二重 PATCH がまし（書く側に倒す）。"""
         assert upsert.stock_master_matches_page({}, _master_rec()) is False
         props = _read_page()
-        props[S.MASTER_PROP_MARKET] = {"select": {"id": "xxx"}}
+        props[S.MASTER_PROP_SECTOR33] = {"select": {"id": "xxx"}}
         assert upsert.stock_master_matches_page(props, _master_rec()) is False
 
     def test_エントリは最古勝ちで_properties_を保持する(self):
@@ -441,15 +443,15 @@ class TestLifecycleUpdates:
         assert page_id == "m-7203"
         props = self._updates(dry_client)[-1].payload["properties"]
         assert props[S.MASTER_PROP_STATUS]["select"]["name"] == "上場廃止"
-        assert props[S.MASTER_PROP_DELISTING_DATE]["date"]["start"] == "2026-08-31"
+        # 上場廃止日への書込は 2026-09-25 に廃止した (MASTER_PROP_DELISTING_DATE
+        # を削除。本番 Notion 実測で全行空だったため)。effective_date が判明して
+        # いても日付は送らない。
+        assert "上場廃止日" not in props
         # 発表時点では listed は触らない（効力発生まで取得継続。停止は消失検知が担う §3-1）
         assert S.MASTER_PROP_LISTED not in props
 
-    def test_apply_lifecycle_delisting_without_date_preserves_existing(
-        self, dry_client, monkeypatch
-    ):
-        """効力発生日を持たない後続の上場廃止開示は状態のみ更新し、上場廃止日を
-        消さない（先行開示で取り込んだ確定日付を {date:None} で上書きしない §3-1）。"""
+    def test_apply_lifecycle_delisting_without_date(self, dry_client, monkeypatch):
+        """効力発生日が無い上場廃止開示でも状態だけを書く。"""
         monkeypatch.setattr(dry_client, "query_database", lambda *a, **k: [{"id": "m-7203"}])
         rec = DisclosureRecord(
             doc_id="d5", title="上場廃止後の当社株式の取り扱いに関するお知らせ",
@@ -460,8 +462,7 @@ class TestLifecycleUpdates:
         upsert.apply_disclosure_lifecycle(dry_client, make_settings(), rec)
         props = self._updates(dry_client)[-1].payload["properties"]
         assert props[S.MASTER_PROP_STATUS]["select"]["name"] == "上場廃止"
-        # 日付キーは送らない = Notion 側の既存「上場廃止日」を保持する
-        assert S.MASTER_PROP_DELISTING_DATE not in props
+        assert "上場廃止日" not in props
 
     def test_apply_lifecycle_new_listing(self, dry_client, monkeypatch):
         monkeypatch.setattr(dry_client, "query_database", lambda *a, **k: [{"id": "m-300A"}])
@@ -474,13 +475,11 @@ class TestLifecycleUpdates:
         upsert.apply_disclosure_lifecycle(dry_client, make_settings(), rec)
         props = self._updates(dry_client)[-1].payload["properties"]
         assert props[S.MASTER_PROP_STATUS]["select"]["name"] == "上場"
-        # 効力発生日が取れないときは上場日キーを送らない (発表日を流用しない §3-1。
-        # かつ先行開示で取り込んだ既存の確定日付を {date:None} で消さない)
-        assert S.MASTER_PROP_LISTING_DATE not in props
+        assert "上場日" not in props
         assert S.MASTER_PROP_LISTED not in props  # listed は codelist 所有
 
-    def test_apply_lifecycle_new_listing_with_date(self, dry_client, monkeypatch):
-        """効力発生日が判明している場合は上場日キーを書く(取れた時のみ設定)。"""
+    def test_apply_lifecycle_new_listing_with_date_still_omits_date(self, dry_client, monkeypatch):
+        """効力発生日が判明していても上場日は書かない (2026-09-25 に廃止)。"""
         monkeypatch.setattr(dry_client, "query_database", lambda *a, **k: [{"id": "m-300A"}])
         rec = DisclosureRecord(
             doc_id="d6", title="新規上場（効力発生日 2026年4月1日）に関するお知らせ",
@@ -491,16 +490,14 @@ class TestLifecycleUpdates:
         upsert.apply_disclosure_lifecycle(dry_client, make_settings(), rec)
         props = self._updates(dry_client)[-1].payload["properties"]
         assert props[S.MASTER_PROP_STATUS]["select"]["name"] == "上場"
-        assert props[S.MASTER_PROP_LISTING_DATE]["date"]["start"] == "2026-04-01"
+        assert "上場日" not in props
 
     def test_codelist_sync_does_not_clobber_lifecycle(self):
-        """master_sync は include_lifecycle=False で 状態/日付 を payload に含めない
+        """master_sync は include_lifecycle=False で 状態 を payload に含めない
         （開示・消失が設定した値を月次同期が消さない §Phase3 二重所有回避）。"""
         rec = StockMasterRecord(code="7203", name="トヨタ自動車", provenance=prov())
         props = upsert.stock_master_properties(rec, include_lifecycle=False)
         assert S.MASTER_PROP_STATUS not in props
-        assert S.MASTER_PROP_LISTING_DATE not in props
-        assert S.MASTER_PROP_DELISTING_DATE not in props
         # codelist 所有フィールドは常に書く
         assert S.MASTER_PROP_LISTED in props
         assert S.MASTER_PROP_NAME in props

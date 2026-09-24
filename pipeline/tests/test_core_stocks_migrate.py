@@ -2,8 +2,10 @@
 
 P4a の列追加は適用済みで、DDL 発行コード（`--apply` / `plan_ddl` /
 `build_column_update`）は削除した（D-14-1）。このファイルが固定するのは
-「本番 PRAGMA が正で 20 列」の地図と、検証用 SQL の形だけである
-（`sector17` は 2026-09-24 に本番から DROP COLUMN した）。
+「本番 PRAGMA が正で 11 列」の地図と、検証用 SQL の形だけである
+（`sector17` は 2026-09-24 に、残る `edinet_code` 等の9列は 2026-09-25 に
+本番から DROP COLUMN した。どちらも P4b の充填計画自体が D-14-1 で中止済みで
+書込経路が最後まで実装されなかったため）。
 
 `PROD_DDL` と `set_targets` と `APPLIED_DDL` は他のテストからも使う
 （`test_core_stocks_job.py` / `test_core_stocks_sector33.py` /
@@ -88,10 +90,10 @@ class TestSetTargetExtractor:
 
 
 class TestAppliedDdl:
-    def test_11列と2索引の適用内容である(self) -> None:
-        assert len(APPLIED_DDL) == 13
-        assert sum(1 for s in APPLIED_DDL if s.startswith("ALTER")) == 11
-        assert sum(1 for s in APPLIED_DDL if s.startswith("CREATE INDEX")) == 2
+    def test_2列と1索引の適用内容である(self) -> None:
+        assert len(APPLIED_DDL) == 3
+        assert sum(1 for s in APPLIED_DDL if s.startswith("ALTER")) == 2
+        assert sum(1 for s in APPLIED_DDL if s.startswith("CREATE INDEX")) == 1
 
     def test_追加列は全て_nullable(self) -> None:
         for sql in APPLIED_DDL:
@@ -99,7 +101,7 @@ class TestAppliedDdl:
                 assert "NOT NULL" not in sql.upper()
                 assert "UNIQUE" not in sql.upper()
 
-    def test_適用すると本番の20列になる(self) -> None:
+    def test_適用すると本番の11列になる(self) -> None:
         con = sqlite3.connect(":memory:")
         con.executescript(PROD_DDL)
         for sql in APPLIED_DDL:
@@ -109,17 +111,22 @@ class TestAppliedDdl:
 
 
 class TestExpectedColumns:
-    """E7: `core_stocks` の列定義の地図。本番 PRAGMA が正で 20 列。
+    """E7: `core_stocks` の列定義の地図。本番 PRAGMA が正で 11 列。
 
-    地図は両リポジトリに散っている（本番 PRAGMA 20 列 / kabulab-cf の
-    `core-schema.ts` 9 列 / drizzle `0008_snapshot.json` 9 列 / ここ 20 列）。
+    地図は両リポジトリに散っている（本番 PRAGMA 11 列 / kabulab-cf の
+    `core-schema.ts` 11 列（drizzle `0024` で追随済み）/ ここ 11 列）。
     ここが古くなると `--verify` の superset 方向が意味を失うので、
     **実装定数ではなくリテラルで列挙する**（定数から要素を削る変異を
     テストが追随してしまうと検出できない）。
 
     `sector17` は 2026-09-12 実測時点では本番に存在したが（当時 21 列）、
     どの collector からも書かれず全行 NULL だったため 2026-09-24 に
-    `DROP COLUMN` した。以下の `PROD_COLUMNS` は DROP 後の 20 列である。
+    `DROP COLUMN` した（20列）。残る `edinet_code` / `listing_status` /
+    `listing_date` / `delisting_date` / `license_tag` / `src_source` /
+    `src_data_date` / `src_fetched_at` / `quality` の9列も同じ理由（P4b の
+    充填計画自体が D-14-1 で中止済み）で 2026-09-25 に `DROP COLUMN` した
+    （kabulab-cf drizzle `0024`）。以下の `PROD_COLUMNS` は DROP 後の 11 列
+    である。
     """
 
     PROD_COLUMNS = {
@@ -133,22 +140,14 @@ class TestExpectedColumns:
         "is_yutai",
         "created_at",
         "updated_at",
-        # P4a で足した 11 列（`sector17` は 2026-09-24 に DROP 済み）
+        # P4a で足した列のうち今も残る 2 列（他 10 列は sector17=0023 /
+        # 残り9列=0024 で DROP 済み）
         "instrument_type",
         "sector33",
-        "edinet_code",
-        "listing_status",
-        "listing_date",
-        "delisting_date",
-        "license_tag",
-        "src_source",
-        "src_data_date",
-        "src_fetched_at",
-        "quality",
     }
 
-    def test_期待する列集合は本番の_20_列と一致する(self) -> None:
-        assert len(self.PROD_COLUMNS) == 20
+    def test_期待する列集合は本番の_11_列と一致する(self) -> None:
+        assert len(self.PROD_COLUMNS) == 11
         assert cs.EXPECTED_COLUMNS == self.PROD_COLUMNS
 
     def test_BASE_COLUMNS_と_PROTECTED_COLUMNS_が食い違わない(self) -> None:

@@ -152,13 +152,17 @@ def stock_master_properties(
 ) -> dict:
     """① 銘柄マスタ。None 項目は明示的な空値で送信し前回値をクリア (§3-1 完全置換)。
 
-    include_lifecycle=False のとき 状態/上場日/上場廃止日 を payload に含めない。
-    これらは「開示イベント (apply_disclosure_lifecycle) とコードリスト消失
+    include_lifecycle=False のとき 状態 を payload に含めない。これは
+    「開示イベント (apply_disclosure_lifecycle) とコードリスト消失
     (mark_master_absent_from_codelist) が所有する」フィールドであり、月次の
     codelist 同期 (master_sync) が上書き・消去してはならない (§ Phase3 二重所有の回避)。
-    名称/市場/業種/EDINETコード/listed は codelist 所有なので常に完全置換する。
+    名称/業種/EDINETコード/listed は codelist 所有なので常に完全置換する。
     現行履歴DB ID / 履歴シャード番号 / 履歴行数（本番DBに残る廃止済み列）は
     この payload に含めない（月次同期で既存値を消さない）。
+
+    `市場区分` / `上場日` / `上場廃止日` の書込は 2026-09-25 に廃止した
+    (本番 Notion 実測で全行空。書込元の `record.market` は常に None、
+    上場日/上場廃止日は開示イベントが一度も発火せず空のまま)。
     """
     props = {
         S.MASTER_PROP_NAME: title_prop(record.name),
@@ -167,13 +171,10 @@ def stock_master_properties(
         S.MASTER_PROP_LAST_UPDATED: date_prop(record.provenance.fetched_at),
         **provenance_properties(record.provenance),
     }
-    _set(props, S.MASTER_PROP_MARKET, select_prop, record.market)
     _set(props, S.MASTER_PROP_SECTOR33, select_prop, record.sector33)
     _set(props, S.MASTER_PROP_EDINET_CODE, text_prop, record.edinet_code)
     if include_lifecycle:
         _set(props, S.MASTER_PROP_STATUS, select_prop, record.status)
-        _set(props, S.MASTER_PROP_LISTING_DATE, date_prop, record.listing_date)
-        _set(props, S.MASTER_PROP_DELISTING_DATE, date_prop, record.delisting_date)
     return props
 
 
@@ -729,7 +730,7 @@ def stock_master_matches_page(
     """① の既存行が record と同値か（L-19。月次 3,841 PATCH → 差分のみ）。
 
     比較するのは codelist 所有の意味フィールド（名称/コード/上場状態/
-    市場/33業種/EDINETコード）だけ。次は見ない:
+    33業種/EDINETコード）だけ。次は見ない:
 
     - 時刻系（最終データ更新日/取得日時/データ基準日）: 毎 run 変わるので
       見ると skip が永遠に発火しない。意味が変わった run の PATCH で更新される
@@ -747,10 +748,7 @@ def stock_master_matches_page(
         record.listed
     ):
         return False
-    for prop, want in (
-        (S.MASTER_PROP_MARKET, record.market),
-        (S.MASTER_PROP_SECTOR33, record.sector33),
-    ):
+    for prop, want in ((S.MASTER_PROP_SECTOR33, record.sector33),):
         if _read_select_name(properties, prop) != want:
             return False
     want_edinet = record.edinet_code or ""
@@ -1033,19 +1031,20 @@ def apply_disclosure_lifecycle(
     銘柄なし」を意味し、従来同様 None を返して何もしない（事前マップが正なので
     per-record 検索へは戻らない）。
 
-    - 上場廃止(発表): 状態=上場廃止 / 上場廃止日=effective_date(判明時のみ)。
-      **listed は触らない**: 効力発生まで売買は継続するため取得も継続する
-      (§3-1 取得可能なデータを自動で止めない)。確定的な listed=False は
-      コードリスト消失 (mark_master_absent_from_codelist) が担う。
-    - 新規上場: 状態=上場 / 上場日=effective_date(判明時のみ)。
-      listed は codelist 同期が所有するため触らない。
+    - 上場廃止(発表): 状態=上場廃止。**listed は触らない**: 効力発生まで売買は
+      継続するため取得も継続する (§3-1 取得可能なデータを自動で止めない)。
+      確定的な listed=False はコードリスト消失
+      (mark_master_absent_from_codelist) が担う。
+    - 新規上場: 状態=上場。listed は codelist 同期が所有するため触らない。
 
-    開示日(発表日) ≠ 効力発生日のため、日付は effective_date がタイトルから取れた
-    場合のみ書き、発表日を流用しない (§3-1)。**効力発生日が取れないときは日付キーを
-    payload に含めない**（真の部分更新）: 先行開示で取り込んだ確定日付を、効力発生日を
-    持たない後続の同種開示（例「上場廃止後の取り扱いに関するお知らせ」）が {date:None}
-    で黙って消去しないようにする。状態(select)は確定値なので常に設定する。
-    ① に該当銘柄が無ければ何もしない (None を返す)。部分更新。
+    状態(select)は確定値なので常に設定する。① に該当銘柄が無ければ何もしない
+    (None を返す)。部分更新。
+
+    2026-09-25: 上場日/上場廃止日 (effective_date) の書込は廃止した
+    (`MASTER_PROP_LISTING_DATE`/`MASTER_PROP_DELISTING_DATE` を削除。本番
+    Notion 実測で全行空 — この関数は発火していたが、対象開示 (上場廃止/
+    新規上場) が実運用でまだ一度も来ていなかった)。`record.effective_date`
+    は現在この関数では使わない。
     """
     if record.doc_type not in LIFECYCLE_DOC_TYPES or not record.code:
         return None
@@ -1054,16 +1053,8 @@ def apply_disclosure_lifecycle(
     )
     if not page_id:
         return None
-    if record.doc_type == STATUS_DELISTED:
-        props = {S.MASTER_PROP_STATUS: select_prop(STATUS_DELISTED)}
-        date_prop_name = S.MASTER_PROP_DELISTING_DATE
-    else:  # 新規上場
-        props = {S.MASTER_PROP_STATUS: select_prop(STATUS_LISTED)}
-        date_prop_name = S.MASTER_PROP_LISTING_DATE
-    # 効力発生日は取れた時のみ書く（None で既存の確定日付を上書き消去しない）
-    if record.effective_date is not None:
-        props[date_prop_name] = date_prop(record.effective_date)
-    client.update_page(page_id, props)
+    status = STATUS_DELISTED if record.doc_type == STATUS_DELISTED else STATUS_LISTED
+    client.update_page(page_id, {S.MASTER_PROP_STATUS: select_prop(status)})
     return page_id
 
 

@@ -119,46 +119,29 @@ CREATE TABLE IF NOT EXISTS jss_financials (
 )
 """
 
-# ⑧ファクトの所在索引。**ファクト本体は1行も D1 に入れない**（年883万行）。
-_XBRL_DOCUMENTS = """
-CREATE TABLE IF NOT EXISTS jss_xbrl_documents (
-  doc_id           TEXT PRIMARY KEY,
-  code             TEXT,
-  source           TEXT NOT NULL,
-  doc_type_code    TEXT,
-  period_start     TEXT,
-  period_end       TEXT,
-  fiscal_year      INTEGER,
-  submitted_at     INTEGER,
-  fact_count       INTEGER NOT NULL,
-  text_block_count INTEGER NOT NULL,
-  raw_sha256       TEXT NOT NULL,
-  parquet_key      TEXT NOT NULL,
-  parquet_bytes    INTEGER NOT NULL,
-  license_tag      TEXT NOT NULL
-)
-"""
-
-# 勘定科目の語彙表。(element, doc_id) の逆引き(年883万ペア)は置かない。
-_XBRL_ELEMENTS = """
-CREATE TABLE IF NOT EXISTS jss_xbrl_elements (
-  element       TEXT PRIMARY KEY,
-  namespace     TEXT,
-  doc_count     INTEGER NOT NULL,
-  first_seen    TEXT,
-  last_seen     TEXT,
-  is_text_block INTEGER NOT NULL DEFAULT 0
-)
-"""
+# `jss_xbrl_documents` / `jss_xbrl_elements` は 2026-09-25 に地図
+# (governance.TABLE_LICENSE) から退役させた（本番 0 行・writer 不在。設計書
+# B-3/B-4 の想定実装は着手されなかった）。この DDL 定数と `SCHEMA_STATEMENTS`
+# への登録も同時に外した（新規 DB がこの 2 表を作らないようにするため。
+# `CREATE TABLE IF NOT EXISTS` なので既存の本番表には影響しない）。
+# 本番の物理 DROP は別途手順で流す:
+#   DROP TABLE jss_xbrl_documents;
+#   DROP TABLE jss_xbrl_elements;
+# (SQLite は表の DROP で従属する索引も同時に消す。index_jss_xbrl_code_period /
+# idx_jss_xbrl_fy を個別に DROP INDEX する必要はない)。
 
 # ⑧'需給の最新断面。履歴は R2 supply/{code}.json のみ。
 # 空欄・マスク値を 0 に潰さない（NULL のまま。§3-1 推測しない）。
+# `isin` は 2026-09-25 に列ごと DROP した（日証金 CSV に ISIN が無く、
+# SupplyRecord.isin は常に None のままだった。本番 4,357 行で非 NULL 0 件を
+# 実測済み）。この DDL は `CREATE TABLE IF NOT EXISTS` なので既存の本番表には
+# 効かない。本番へは `ALTER TABLE jss_supply_latest DROP COLUMN isin;` を
+# 別途手動で流す。
 _SUPPLY_LATEST = """
 CREATE TABLE IF NOT EXISTS jss_supply_latest (
   code        TEXT NOT NULL,
   data_type   TEXT NOT NULL,
   data_date   TEXT NOT NULL,
-  isin        TEXT,
   loan_bal    INTEGER,
   loan_chg    INTEGER,
   stock_bal   INTEGER,
@@ -173,15 +156,19 @@ CREATE TABLE IF NOT EXISTS jss_supply_latest (
 )
 """
 
+# `last_date` / `updated_at` は 2026-09-25 に DROP した。`seed_index_symbols()`
+# は元々 slug/yahoo_symbol/name_ja/r2_key/license_tag の 5 列しか upsert しておらず
+# (本番 6 行で両列とも非 NULL 0 件を実測)、書込経路も参照経路も無かった。
+# この DDL は `CREATE TABLE IF NOT EXISTS` なので既存の本番表には効かない。
+# 本番へは `ALTER TABLE jss_index_symbols DROP COLUMN last_date;` /
+# `ALTER TABLE jss_index_symbols DROP COLUMN updated_at;` を別途手動で流す。
 _INDEX_SYMBOLS = """
 CREATE TABLE IF NOT EXISTS jss_index_symbols (
   slug         TEXT PRIMARY KEY,
   yahoo_symbol TEXT NOT NULL,
   name_ja      TEXT,
   r2_key       TEXT NOT NULL,
-  license_tag  TEXT NOT NULL,
-  last_date    TEXT,
-  updated_at   INTEGER
+  license_tag  TEXT NOT NULL
 )
 """
 
@@ -280,11 +267,6 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_jss_fin_stock "
     "ON jss_financials(stock_id, fiscal_period_end DESC)",
     "CREATE INDEX IF NOT EXISTS idx_jss_fin_disclosed ON jss_financials(disclosed_at DESC)",
-    _XBRL_DOCUMENTS,
-    "CREATE INDEX IF NOT EXISTS idx_jss_xbrl_code_period "
-    "ON jss_xbrl_documents(code, period_end DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_jss_xbrl_fy ON jss_xbrl_documents(fiscal_year, source)",
-    _XBRL_ELEMENTS,
     _SUPPLY_LATEST,
     "CREATE INDEX IF NOT EXISTS idx_jss_supply_date "
     "ON jss_supply_latest(data_type, data_date DESC)",
@@ -343,27 +325,17 @@ MIXED_LICENSE_COLUMNS: dict[str, dict[str, LicenseTag]] = {
         # EDINET コードリスト由来 → commercial-ok
         "code": LicenseTag.COMMERCIAL_OK,
         "name": LicenseTag.COMMERCIAL_OK,
-        "edinet_code": LicenseTag.COMMERCIAL_OK,
         "sector33": LicenseTag.COMMERCIAL_OK,  # EDINET「提出者業種」。`sector` と混同しない
         # JPX data_j.xlsx 由来 → personal-only
         "market": LicenseTag.PERSONAL_ONLY,
         "sector": LicenseTag.PERSONAL_ONLY,  # kabulab-cf が JPX 33業種を書く既存列
         "instrument_type": LicenseTag.PERSONAL_ONLY,
-        # 一次開示で判明したライフサイクル。設計書 §A-1 の追加列表が
-        # commercial-ok と決めている（EDINET・TDnet の開示が一次ソース）。
-        "listing_status": LicenseTag.COMMERCIAL_OK,
-        "listing_date": LicenseTag.COMMERCIAL_OK,
-        "delisting_date": LicenseTag.COMMERCIAL_OK,
-        # 来歴メタ。第三者由来の値を 1 バイトも含まない（どのソースから・いつ
-        # 取ったか、という stockStock 自身の記録）。設計書 §A-1 は「メタ」と
-        # 書いているが、タグは 3 値しかないので最も緩い側で明示する。
-        # **タグは「値が第三者の著作物・データセットを含むか」を答える列**で、
-        # 「公開 API が出すべきか」ではない（後者は API 設計の判断）。
-        "license_tag": LicenseTag.COMMERCIAL_OK,
-        "src_source": LicenseTag.COMMERCIAL_OK,
-        "src_data_date": LicenseTag.COMMERCIAL_OK,
-        "src_fetched_at": LicenseTag.COMMERCIAL_OK,
-        "quality": LicenseTag.COMMERCIAL_OK,
+        # 2026-09-25: `edinet_code` / `listing_status` / `listing_date` /
+        # `delisting_date` / `license_tag` / `src_source` / `src_data_date` /
+        # `src_fetched_at` / `quality` の9列はここから削除した。P4b の充填
+        # 計画が D-14-1 で中止済みで、どの collector からも書かれず本番全行
+        # NULL のまま推移していたため、kabulab-cf 側 drizzle `0024` で列ごと
+        # DROP する（cloud_store/core_stocks.py の NEW_COLUMNS コメント参照）。
         # 宣言しない 5 列: `id` / `is_active` / `is_yutai` / `created_at` /
         # `updated_at`。いずれも kabulab-cf が書く既存列で、タグを決めるには
         # 派生元の判断が要る（`is_active` は JPX data_j に載っているかで決まる

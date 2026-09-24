@@ -35,8 +35,10 @@ JOB_NAME = "supply_daily"
 R2_WRITE_WORKERS = 16
 
 # D1 の断面。data_type ごとに 1 銘柄 1 行。
+# `isin` は 2026-09-25 に DROP した (JSF CSV に ISIN が無く、SupplyRecord.isin は
+# 常に None のままだったため。本番実測: jss_supply_latest 4,357 行で非 NULL 0 件)。
 _LATEST_COLUMNS = (
-    "code", "data_type", "data_date", "isin", "loan_bal", "loan_chg",
+    "code", "data_type", "data_date", "loan_bal", "loan_chg",
     "stock_bal", "stock_chg", "ratio", "turn_days", "r2_key",
     "license_tag", "fetched_at", "quality",
 )
@@ -60,19 +62,32 @@ def _fetch_and_store(ctx: JobContext, name: str, datatype: str):
     return artifact, content
 
 
+def _zandaka_chg(row: jsf.ZandakaRow) -> tuple[int | None, int | None]:
+    """融資・貸株それぞれの「新規-返済」増減。どちらか欠ければ None。
+
+    `_zandaka_points` (R2 の時系列) と `execute()` の `SupplyRecord` 構築
+    (D1 `jss_supply_latest` の断面) の両方がこの 1 定義を使う。以前は
+    `SupplyRecord` 側がこの計算を呼ばずに `loan_chg`/`stock_chg` を省略しており
+    (デフォルトの None のまま)、R2 には増減が入るのに D1 の断面には常に NULL が
+    書かれるバグがあった。
+    """
+    loan_chg = (
+        row.loan_new - row.loan_repaid
+        if row.loan_new is not None and row.loan_repaid is not None
+        else None
+    )
+    stock_chg = (
+        row.stock_new - row.stock_repaid
+        if row.stock_new is not None and row.stock_repaid is not None
+        else None
+    )
+    return loan_chg, stock_chg
+
+
 def _zandaka_points(rows: list[jsf.ZandakaRow]) -> dict[str, list[dict]]:
     out: dict[str, list[dict]] = {}
     for row in rows:
-        loan_chg = (
-            row.loan_new - row.loan_repaid
-            if row.loan_new is not None and row.loan_repaid is not None
-            else None
-        )
-        stock_chg = (
-            row.stock_new - row.stock_repaid
-            if row.stock_new is not None and row.stock_repaid is not None
-            else None
-        )
+        loan_chg, stock_chg = _zandaka_chg(row)
         point = {
             "d": row.apply_date.isoformat(),
             "ex": row.exchange,
@@ -134,7 +149,7 @@ def pick_primary_rows(records: list[SupplyRecord]) -> list[SupplyRecord]:
 
 def _latest_row(record: SupplyRecord, r2_key: str) -> list:
     return [
-        record.code, record.data_type, record.data_date.isoformat(), record.isin,
+        record.code, record.data_type, record.data_date.isoformat(),
         record.loan_bal, record.loan_chg, record.stock_bal, record.stock_chg,
         record.ratio, record.turn_days, r2_key,
         record.provenance.license_tag.value,
@@ -156,9 +171,11 @@ def execute(ctx: JobContext) -> None:
         for code, points in _zandaka_points(rows).items():
             by_code.setdefault(code, {})["jsf_zandaka"] = points
         for row in rows:
+            loan_chg, stock_chg = _zandaka_chg(row)
             latest.append(SupplyRecord(
                 code=row.code, data_type="jsf_zandaka", data_date=row.apply_date,
-                exchange=row.exchange, loan_bal=row.loan_bal, stock_bal=row.stock_bal,
+                exchange=row.exchange, loan_bal=row.loan_bal, loan_chg=loan_chg,
+                stock_bal=row.stock_bal, stock_chg=stock_chg,
                 ratio=row.ratio, turn_days=row.turn_days_total,
                 provenance=Provenance(
                     source=Source.JSF, license_tag=LicenseTag.PERSONAL_ONLY,

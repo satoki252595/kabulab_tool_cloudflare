@@ -127,6 +127,21 @@ class TestJobPointBuilders:
         expected = row.loan_new - row.loan_repaid
         assert points["1306"][0]["loan_chg"] == expected
 
+    def test_zandaka_chg_matches_zandaka_points(self):
+        """`_zandaka_chg` (D1 の SupplyRecord 用) と `_zandaka_points` (R2 の
+        時系列用) が同じ計算を返すこと。以前は execute() が `_zandaka_chg`
+        相当の計算を SupplyRecord へ渡し忘れており、R2 には増減が入るのに
+        D1 の断面は常に NULL になるバグがあった。
+        """
+        rows = self._rows()
+        points = supply_daily._zandaka_points(rows)
+        for row in rows:
+            loan_chg, stock_chg = supply_daily._zandaka_chg(row)
+            point = next((p for p in points[row.code] if p["d"] == row.apply_date.isoformat()), None)
+            assert point is not None
+            assert point.get("loan_chg") == loan_chg
+            assert point.get("stock_chg") == stock_chg
+
     def test_none_values_are_omitted_not_zeroed(self):
         """欠測をキーの不在で表す。0 と混同しない (§3-1)。"""
         rows = jsf.parse_shina(fixture_path("jsf/shina.csv").read_bytes())
@@ -282,6 +297,46 @@ class TestR2ClientIsPerThread:
         sentinel = object()
         store._s3 = sentinel  # noqa: SLF001
         assert store.s3 is sentinel
+
+
+class TestLatestRowCarriesChgAndDropsIsin:
+    """D1 `jss_supply_latest` へ渡す行 (`_latest_row`) の回帰テスト。
+
+    - `isin` は 2026-09-25 に列ごと DROP した（日証金 CSV に ISIN が無く常に
+      None のままだったため）。`_LATEST_COLUMNS` に残っていないこと。
+    - `execute()` の zandaka ループと同じ組み立て方 (`_zandaka_chg` →
+      `SupplyRecord(loan_chg=..., stock_chg=...)`) で作った行の `loan_chg` /
+      `stock_chg` が NULL のままにならないこと（バグの再発防止）。
+    """
+
+    def test_isin_is_not_a_column(self):
+        assert "isin" not in supply_daily._LATEST_COLUMNS
+
+    def test_latest_row_carries_nonnull_chg_when_computable(self):
+        from datetime import datetime, timezone
+
+        from jp_stock_pipeline.licensing import LicenseTag
+        from jp_stock_pipeline.models import Provenance, Source, SupplyRecord
+
+        rows = jsf.parse_zandaka(fixture_path("jsf/zandaka.csv").read_bytes())
+        row = next(r for r in rows if r.code == "1306")
+        loan_chg, stock_chg = supply_daily._zandaka_chg(row)
+        assert loan_chg is not None  # このフィクスチャ行は計算可能な前提
+
+        record = SupplyRecord(
+            code=row.code, data_type="jsf_zandaka", data_date=row.apply_date,
+            exchange=row.exchange, loan_bal=row.loan_bal, loan_chg=loan_chg,
+            stock_bal=row.stock_bal, stock_chg=stock_chg,
+            ratio=row.ratio, turn_days=row.turn_days_total,
+            provenance=Provenance(
+                source=Source.JSF, license_tag=LicenseTag.PERSONAL_ONLY,
+                data_date=row.apply_date,
+                fetched_at=datetime(2026, 9, 11, tzinfo=timezone.utc),
+            ),
+        )
+        by_column = dict(zip(supply_daily._LATEST_COLUMNS, supply_daily._latest_row(record, "supply/1306.json")))
+        assert by_column["loan_chg"] == row.loan_new - row.loan_repaid
+        assert by_column["stock_chg"] == stock_chg
 
 
 class TestPrimaryExchangeSelection:

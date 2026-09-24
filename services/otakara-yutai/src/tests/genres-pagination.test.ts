@@ -34,10 +34,7 @@ CREATE TABLE core_stocks (
   is_yutai integer NOT NULL DEFAULT 0,
   created_at integer NOT NULL DEFAULT (unixepoch()),
   updated_at integer NOT NULL DEFAULT (unixepoch()),
-  instrument_type text, sector33 text, edinet_code text,
-  listing_status text, listing_date text, delisting_date text,
-  license_tag text, src_source text, src_data_date text,
-  src_fetched_at integer, quality text
+  instrument_type text, sector33 text
 );
 CREATE TABLE yutai_genres (
   id integer PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +53,6 @@ CREATE TABLE yutai_benefits (
   record_month integer NOT NULL,
   estimated_value integer,
   estimate_value_source text,
-  estimate_source_url text,
   created_at integer NOT NULL DEFAULT (unixepoch()),
   updated_at integer NOT NULL DEFAULT (unixepoch())
 );

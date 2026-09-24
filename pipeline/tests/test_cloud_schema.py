@@ -38,11 +38,12 @@ class TestSchemaShape:
             assert table.startswith("jss_"), table
 
     def test_expected_tables_exist(self):
+        # `jss_xbrl_documents` / `jss_xbrl_elements` は 2026-09-25 に地図から
+        # 退役させ、この DDL 定数も削除した（本番 0 行・writer 不在。物理
+        # DROP は別途手順で本番へ流す。§ cloud_store/schema.py 冒頭コメント）。
         assert _tables() == {
             "jss_raw_files",
             "jss_financials",
-            "jss_xbrl_documents",
-            "jss_xbrl_elements",
             "jss_supply_latest",
             "jss_index_symbols",
             "jss_job_runs",
@@ -61,13 +62,6 @@ class TestSchemaShape:
         ddl = "\n".join(S.SCHEMA_STATEMENTS)
         for banned in ("jss_daily_ohlcv", "jss_xbrl_facts", "jss_supply_history", "jss_prices"):
             assert banned not in ddl, f"時系列テーブル {banned} が D1 に混入している"
-
-    def test_xbrl_documents_holds_counts_not_facts(self):
-        """ファクト本体ではなく所在と件数だけを持つ。"""
-        ddl = next(s for s in S.SCHEMA_STATEMENTS if "jss_xbrl_documents" in s)
-        assert "fact_count" in ddl
-        assert "parquet_key" in ddl  # 本体は R2 の Parquet
-        assert "element" not in ddl  # ファクトの明細列を持たない
 
     def test_financials_pk_includes_the_consolidation_flag(self):
         """連結と単体は同一期末の**別の測定範囲**。キーで分けないと後勝ちになる。
@@ -133,7 +127,7 @@ class TestColumnLicense:
         """行の license_tag 1列では表現できないので列単位で持つ。"""
         rows = S.column_license_rows()
         by_column = {c: tag for t, c, tag in rows if t == "core_stocks"}
-        assert by_column["edinet_code"] == LicenseTag.COMMERCIAL_OK.value
+        assert by_column["sector33"] == LicenseTag.COMMERCIAL_OK.value
         assert by_column["market"] == LicenseTag.PERSONAL_ONLY.value
 
     def test_sector_and_sector33_are_tagged_by_provenance_not_by_name(self):

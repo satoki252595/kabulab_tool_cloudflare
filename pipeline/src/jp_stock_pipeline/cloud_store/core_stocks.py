@@ -5,7 +5,15 @@
 （12 列 + 2 索引）は適用済みで、DDL 発行コード（`--apply` / `plan_ddl` /
 `build_column_update`）は削除した（D-14-1）。P4a の12列のうち `sector17` は
 どの collector からも書かれず全行 NULL のままだったため、2026-09-24 に
-`NEW_COLUMNS` から削除し本番からも `DROP COLUMN` した（現在の追跡列は11列）。
+`NEW_COLUMNS` から削除し本番からも `DROP COLUMN` した。
+
+2026-09-25: 残る10列のうち `edinet_code` / `listing_status` / `listing_date` /
+`delisting_date` / `license_tag` / `src_source` / `src_data_date` /
+`src_fetched_at` / `quality` の9列も同じ理由（充填計画 P4b 自体が D-14-1 で
+中止済みで、どの collector からも書かれないまま本番全行 NULL）で
+`NEW_COLUMNS` / `NEW_INDEXES`（`idx_core_stocks_edinet`）から削除し、
+kabulab-cf 側 drizzle `0024` で本番からも `DROP COLUMN` する（現在の追跡列は
+`instrument_type` / `sector33` の2列のみ）。
 残る stockStock の書込は `sector33` の充填（`build_sector33_updates`）だけである。
 
 `D1Store.upsert()` は conflict 以外の全列を `c = excluded.c` に機械展開する
@@ -55,7 +63,8 @@ EDINET 側の取得時刻で測ると「kabulab-cf の同期が止まった」�
 `UPDATE core_stocks SET sector33 = NULL`（`updated_at` を進めない）と
 `jss_writer_claims` の `('core_stocks', 'enrich')` 行の削除。`instrument_type` は
 kabulab-cf #27（P4b 第 1 段）から `universe.ts` が埋め、claim は `base` に数える
-（`governance` の注記）。残りの P4a 列の充填は引き続き P4b。
+（`governance` の注記）。残りの P4a 列は P4b の中止 (D-14-1) を受けて
+2026-09-25 に DROP した（本ファイル冒頭コメント参照）。
 """
 
 from __future__ import annotations
@@ -109,6 +118,13 @@ BASE_COLUMNS: tuple[str, ...] = (
 
 # P4a で追加した列（適用済み）。すべて nullable（SQLite の ALTER は既定値の無い
 # NOT NULL も UNIQUE も付けられない。実測で両方エラーになることを確認済み）。
+#
+# 2026-09-25: `edinet_code` / `listing_status` / `listing_date` /
+# `delisting_date` / `license_tag` / `src_source` / `src_data_date` /
+# `src_fetched_at` / `quality` の9列はここから削除した（P4b の充填計画が
+# D-14-1 で中止済みで、どの collector からも書かれず本番 3,810 行で非 NULL
+# 0 件のまま推移していたため。kabulab-cf 側 drizzle `0024` で本番からも
+# 同時に `DROP COLUMN` する）。
 NEW_COLUMNS: dict[str, str] = {
     "instrument_type": "TEXT",  # equity/etf/... JPX 由来 → personal-only
     # EDINET コードリストの「提出者業種」(33業種相当) → commercial-ok。
@@ -116,28 +132,14 @@ NEW_COLUMNS: dict[str, str] = {
     # 値は master_sync が東証33業種の名称へ正規化して埋める
     # （`build_sector33_updates`。updated_at を進めない）。
     "sector33": "TEXT",
-    "edinet_code": "TEXT",  # EDINETコード → commercial-ok
-    "listing_status": "TEXT",  # 上場/監理/整理/上場廃止
-    "listing_date": "TEXT",  # YYYY-MM-DD
-    "delisting_date": "TEXT",  # YYYY-MM-DD
-    "license_tag": "TEXT",  # 行としての代表タグ
-    "src_source": "TEXT",  # EDINET / JPX
-    "src_data_date": "TEXT",  # データ基準日
-    "src_fetched_at": "INTEGER",  # epoch 秒
-    "quality": "TEXT",  # 正常/要確認/欠損あり
 }
 
-# 追加索引。`idx_core_stocks_edinet` は P4a 時点で全行 NULL なので部分索引にし、
-# エントリ0でサイズを食わないようにする。実測で `WHERE edinet_code = ?` が
-# COVERING INDEX 走査になることを確認済み。
+# 追加索引。`idx_core_stocks_active_market` のみ (2026-09-25: `idx_core_stocks_edinet`
+# は `edinet_code` 列ごと DROP した。上の NEW_COLUMNS のコメント参照)。
 NEW_INDEXES: dict[str, str] = {
     "idx_core_stocks_active_market": (
         f"CREATE INDEX IF NOT EXISTS idx_core_stocks_active_market"
         f" ON {TABLE} (is_active, market)"
-    ),
-    "idx_core_stocks_edinet": (
-        f"CREATE INDEX IF NOT EXISTS idx_core_stocks_edinet"
-        f" ON {TABLE} (edinet_code) WHERE edinet_code IS NOT NULL"
     ),
 }
 
@@ -147,12 +149,13 @@ NEW_INDEXES: dict[str, str] = {
 # `core_stocks` の列定義は両リポジトリに散っており、**本番の PRAGMA が正**。
 # 2026-09-12 実測で 21 列（当時は `sector17` を含む）。`sector17` はどの
 # collector からも書かれず全行 NULL だったため、2026-09-24 に本番から
-# `DROP COLUMN` した。現在の正は 20 列。他の「地図」はすべて古い:
+# `DROP COLUMN` した（20列）。2026-09-25、残る9列（`edinet_code` 等。上の
+# `NEW_COLUMNS` コメント参照）も同じ理由で kabulab-cf 側 drizzle `0024` で
+# 本番から `DROP COLUMN` する。現在の正は 11 列。他の「地図」はすべて古い:
 #
-#   本番 PRAGMA (2026-09-24 以降)                  20 列 ← 正
-#   kabulab-cf `src/shared/db/core-schema.ts`      9 列（P4a の列を知らない）
-#   kabulab-cf drizzle `0008_snapshot.json`        9 列（同上）
-#   stockStock `BASE_COLUMNS` + `NEW_COLUMNS`     20 列 ← ここ
+#   本番 PRAGMA (0024 適用後)                       11 列 ← 正
+#   kabulab-cf `src/shared/db/core-schema.ts`      11 列（0024 で追随済み）
+#   stockStock `BASE_COLUMNS` + `NEW_COLUMNS`     11 列 ← ここ
 #
 # `EXPECTED_COLUMNS` は「stockStock が知っている全列」であり、
 # `jobs/core_stocks_migrate.py --verify` が本番 PRAGMA と**両方向**で突き合わせる。

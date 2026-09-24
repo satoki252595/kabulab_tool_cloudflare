@@ -72,18 +72,9 @@ export const TOOLS = [
     description: "各データセットの最新基準日・件数・格納先を返す。取り込みの鮮度確認用。",
     inputSchema: { type: "object", properties: {} },
   },
-  {
-    name: "jp_xbrl_elements",
-    description:
-      "XBRL の勘定科目（element）の語彙表を前方一致で引く。どの科目が存在するかの確認用。",
-    inputSchema: {
-      type: "object",
-      properties: {
-        prefix: { type: "string" },
-        limit: { type: "integer", minimum: 1, maximum: 500 },
-      },
-    },
-  },
+  // `jp_xbrl_elements` (jss_xbrl_elements) は 2026-09-25 に削除した。
+  // jss_xbrl_documents / jss_xbrl_elements は本番 0 行・writer 不在のまま
+  // 退役させた (pipeline/src/jp_stock_pipeline/cloud_store/schema.py 参照)。
   {
     name: "jp_raw_file",
     description:
@@ -168,21 +159,6 @@ async function callTool(
       });
       if (!result) throw new Error(`見つからない: ${code}`);
       return envelope(result, { sources: ["Yahoo"], licenses: ["personal-only"] });
-    }
-    case "jp_xbrl_elements": {
-      const limit = parseLimit(String(args.limit ?? ""), 100);
-      const prefix = args.prefix ? String(args.prefix) : null;
-      const stmt = prefix
-        ? env.DB.prepare(
-            "SELECT element, namespace, doc_count, is_text_block FROM jss_xbrl_elements" +
-              " WHERE element >= ?1 AND element < ?1 || CHAR(0x10FFFF) ORDER BY element LIMIT ?2",
-          ).bind(prefix, limit)
-        : env.DB.prepare(
-            "SELECT element, namespace, doc_count, is_text_block FROM jss_xbrl_elements" +
-              " ORDER BY element LIMIT ?",
-          ).bind(limit);
-      const { results } = await stmt.all();
-      return envelope(results);
     }
     case "jp_raw_file": {
       const sha = String(args.sha256 ?? "");

@@ -2,12 +2,16 @@
  * `core_stocks` のライセンス境界ガード。
  *
  * `core_stocks` は 1 行に出所の違う列を混ぜている。JPX「東証上場銘柄一覧
- * (data_j.xls)」由来の `market` / `sector` / `instrument_type` と、
- * 判断そのものである `license_tag` / `src_source` / `quality` は
+ * (data_j.xls)」由来の `market` / `sector` / `instrument_type` は
  * **personal-only** で、公開面 (無認証の HTML / JSON) へ出してはいけない。
- * EDINET コードリスト由来の `code` / `name` / `edinet_code` / `sector33` は
- * commercial-ok。行の `license_tag` 1 列では表現できないので、判定は列単位になる。
+ * EDINET コードリスト由来の `code` / `name` / `sector33` は commercial-ok。
  *
+ * ⚠️ 2026-09-25: `license_tag` / `src_source` / `quality`（判断そのものの3列）
+ * と `edinet_code`（EDINET 由来の commercial-ok 列）は書込経路が無く全行 NULL
+ * だったため列ごと DROP した（本番実測。core-schema.ts 参照）。列が存在しない
+ * ので、以下のガードは `market` / `sector` / `instrument_type` の3列だけを見る。
+ *
+
  * ## 2026-09-13 に検査範囲を変えた
  *
  * それまで `market` は「以前から公開しているので、止めるのはこのガードの
@@ -471,11 +475,13 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
     expect(findQualifiedPersonalOnlyRefs("coreSchema.stocks.sector")).toEqual(["stocks.sector"]);
     // 別名 import。この書き方はリポジトリに実在するので、拾えないと無効化される。
     expect(findQualifiedPersonalOnlyRefs("coreStocks.market")).toEqual(["coreStocks.market"]);
-    expect(findQualifiedPersonalOnlyRefs("schema.coreStocks.quality")).toEqual([
-      "coreStocks.quality",
+    expect(findQualifiedPersonalOnlyRefs("schema.coreStocks.instrumentType")).toEqual([
+      "coreStocks.instrumentType",
     ]);
     // 改行・空白を挟んだ形
-    expect(findQualifiedPersonalOnlyRefs("stocks\n  .quality")).toEqual(["stocks.quality"]);
+    expect(findQualifiedPersonalOnlyRefs("stocks\n  .instrumentType")).toEqual([
+      "stocks.instrumentType",
+    ]);
 
     // **拾ってはいけないもの**。裸の識別子 grep にすると全部誤検出になり、
     // 検査が常時赤 → 無意味に緩める、という道をたどる。
@@ -510,7 +516,7 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
     // yutai_benefits の `description` は別のライセンス境界で、この検査の対象外。
     expect(
       findPersonalOnlyRelationalColumns(
-        "db.query.stocks.findFirst({ columns: { id: true }, with: { benefits: { columns: { quality: true } } } })",
+        "db.query.stocks.findFirst({ columns: { id: true }, with: { benefits: { columns: { market: true } } } })",
       ),
     ).toEqual([]);
     // 他表の関係クエリは対象外

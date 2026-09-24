@@ -43,10 +43,7 @@ CREATE TABLE core_stocks (
   is_yutai integer NOT NULL DEFAULT 0,
   created_at integer NOT NULL DEFAULT (unixepoch()),
   updated_at integer NOT NULL DEFAULT (unixepoch()),
-  instrument_type text, sector33 text, edinet_code text,
-  listing_status text, listing_date text, delisting_date text,
-  license_tag text, src_source text, src_data_date text,
-  src_fetched_at integer, quality text
+  instrument_type text, sector33 text
 );
 CREATE TABLE yutai_genres (
   id integer PRIMARY KEY AUTOINCREMENT,
@@ -65,7 +62,6 @@ CREATE TABLE yutai_benefits (
   record_month integer NOT NULL,
   estimated_value integer,
   estimate_value_source text,
-  estimate_source_url text,
   created_at integer NOT NULL DEFAULT (unixepoch()),
   updated_at integer NOT NULL DEFAULT (unixepoch())
 );
@@ -132,9 +128,6 @@ const SENTINELS = {
   market: "ZZ_MARKET_SENTINEL",
   sector: "ZZ_SECTOR_JPX_SENTINEL",
   instrument_type: "ZZ_INSTRUMENT_TYPE_SENTINEL",
-  license_tag: "ZZ_LICENSE_TAG_SENTINEL",
-  src_source: "ZZ_SRC_SOURCE_SENTINEL",
-  quality: "ZZ_QUALITY_SENTINEL",
 } as const;
 
 /**
@@ -162,8 +155,8 @@ beforeAll(() => {
   const insertStock = sqlite.prepare(
     `INSERT INTO core_stocks
        (id, code, name, market, sector, is_active, is_yutai,
-        instrument_type, sector33, license_tag, src_source, quality)
-     VALUES (?, ?, 'テスト銘柄', ?, ?, 1, 1, ?, ?, ?, ?, ?)`,
+        instrument_type, sector33)
+     VALUES (?, ?, 'テスト銘柄', ?, ?, 1, 1, ?, ?)`,
   );
   insertStock.run(
     1,
@@ -172,9 +165,6 @@ beforeAll(() => {
     SENTINELS.sector,
     SENTINELS.instrument_type,
     PUBLISHED_SECTOR33,
-    SENTINELS.license_tag,
-    SENTINELS.src_source,
-    SENTINELS.quality,
   );
   // sector33 が NULL でも JPX の sector へ落ちないことを見るための 2 件目。
   insertStock.run(
@@ -184,9 +174,6 @@ beforeAll(() => {
     SENTINELS.sector,
     SENTINELS.instrument_type,
     null,
-    SENTINELS.license_tag,
-    SENTINELS.src_source,
-    SENTINELS.quality,
   );
   insertStock.run(
     3,
@@ -195,9 +182,6 @@ beforeAll(() => {
     SENTINELS.sector,
     "equity",
     PUBLISHED_SECTOR33,
-    SENTINELS.license_tag,
-    SENTINELS.src_source,
-    SENTINELS.quality,
   );
   sqlite
     .prepare(

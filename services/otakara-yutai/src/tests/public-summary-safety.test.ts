@@ -161,7 +161,6 @@ describe("groupBenefits", () => {
     summary: "3,000円相当",
     estimatedValue: 3000,
     estimateValueSource: null,
-    estimateSourceUrl: null,
     ...over,
   });
 

@@ -136,17 +136,12 @@ class TestSpecificProperties:
         props = _props_by_title(client)[DB_REGISTRY["stock_master"][1]]
         assert props[schema.MASTER_PROP_NAME] == {"title": {}}
         assert "rich_text" in props[schema.MASTER_PROP_CODE]
-        for name in (
-            schema.MASTER_PROP_MARKET,
-            schema.MASTER_PROP_SECTOR33,
-        ):
-            assert "select" in props[name]
+        assert "select" in props[schema.MASTER_PROP_SECTOR33]
         assert "checkbox" in props[schema.MASTER_PROP_LISTED]
-        # ライフサイクル (§ Phase3): 状態 select(選択肢一致) + 上場日/上場廃止日 date
+        # ライフサイクル (§ Phase3): 状態 select(選択肢一致)。
+        # 上場日/上場廃止日 (date) は 2026-09-25 に廃止した (本番実測で全行空)。
         status_opts = [o["name"] for o in props[schema.MASTER_PROP_STATUS]["select"]["options"]]
         assert status_opts == list(schema.LISTING_STATUS_OPTIONS)
-        assert "date" in props[schema.MASTER_PROP_LISTING_DATE]
-        assert "date" in props[schema.MASTER_PROP_DELISTING_DATE]
 
     def test_financials_specific(self, ensured):
         client, _settings, _db_ids = ensured

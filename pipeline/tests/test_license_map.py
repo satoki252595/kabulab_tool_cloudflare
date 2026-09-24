@@ -41,9 +41,9 @@ class _FakeStore(SqliteD1):
 
     def __init__(self) -> None:
         super().__init__(ddl=S.SCHEMA_STATEMENTS)
-        # `core_stocks` は本番の実 DDL + P4a の 11 列（`sector17` は 2026-09-24 に
-        # DROP 済み）。地図が本番の 20 列すべてを見るので、ここを削ると網羅性の
-        # 検査が意味を失う。
+        # `core_stocks` は本番の実 DDL + P4a で今も残る 2 列（`sector17` は
+        # 2026-09-24、残る9列は 2026-09-25 に DROP 済み）。地図が本番の 11 列
+        # すべてを見るので、ここを削ると網羅性の検査が意味を失う。
         self.con.executescript(PROD_DDL)
         for stmt in APPLIED_DDL:
             self.con.execute(stmt)
@@ -219,9 +219,12 @@ class TestDoesNotScanRows:
             assert any(name in sql for name in allowed), sql
 
     def test_日次で_DDL_を流さない(self, monkeypatch) -> None:
-        """`apply_schema` の 20 文を毎日 no-op で投げると往復時間だけ増える。"""
-        # 文数は docstring の「20 文」と一致させる（ずれたら書き換え忘れ）。
-        assert len(S.SCHEMA_STATEMENTS) == 20, len(S.SCHEMA_STATEMENTS)
+        """`apply_schema` の 16 文を毎日 no-op で投げると往復時間だけ増える。
+
+        2026-09-25 に `jss_xbrl_documents` / `jss_xbrl_elements` の CREATE TABLE
+        2 文 + CREATE INDEX 2 文を退役させ、20 文から 16 文になった。
+        """
+        assert len(S.SCHEMA_STATEMENTS) == 16, len(S.SCHEMA_STATEMENTS)
         store = _FakeStore()
         _wire(monkeypatch, store)
         assert license_map.main([], env=dict(_D1_ENV)) == 0

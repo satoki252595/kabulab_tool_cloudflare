@@ -82,22 +82,10 @@ export function mountCommon(app: Hono<{ Bindings: AnyEnv }>) {
     return c.json(envelope(results));
   });
 
-  app.get("/v1/xbrl/elements", async (c) => {
-    const limit = parseLimit(c.req.query("limit"));
-    const prefix = c.req.query("prefix");
-    // 前方一致のみ。'%...%' は索引が効かず全走査になるので受けない。
-    const stmt = prefix
-      ? c.env.DB.prepare(
-          "SELECT element, namespace, doc_count, is_text_block FROM jss_xbrl_elements" +
-            " WHERE element >= ?1 AND element < ?1 || CHAR(0x10FFFF) ORDER BY element LIMIT ?2",
-        ).bind(prefix, limit)
-      : c.env.DB.prepare(
-          "SELECT element, namespace, doc_count, is_text_block FROM jss_xbrl_elements" +
-            " ORDER BY element LIMIT ?",
-        ).bind(limit);
-    const { results } = await stmt.all<Record<string, unknown>>();
-    return c.json(envelope(results));
-  });
+  // `/v1/xbrl/elements` (jss_xbrl_elements) は 2026-09-25 に削除した。
+  // jss_xbrl_documents / jss_xbrl_elements は本番 0 行・writer 不在のまま
+  // 退役させた (pipeline/src/jp_stock_pipeline/cloud_store/schema.py 参照)。
+  // 物理 DROP は別途手順で本番へ流す。
 
   // ⑤原本のメタ。公開面は commercial-ok の行だけ返す。
   // メタだけでも日証金 CSV や JPX PDF の所在が漏れるため「メタは全行公開可」としない。

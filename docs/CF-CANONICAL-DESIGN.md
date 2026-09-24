@@ -814,6 +814,15 @@ D4 はその手動同期を 1 回ぶん増やしている。契約ファイル�
 
 `sector17` は 2026-09-24 に削除した（writer/reader が一度も存在せず、本番 `core_stocks` は全行 NULL のままだったため。D1 列・パイプラインのモデル・Notion 17業種の書込経路をすべて撤去）。
 
+`edinet_code` / `listing_status` / `listing_date` / `delisting_date` /
+`license_tag` / `src_source` / `src_data_date` / `src_fetched_at` / `quality`
+の残り9列 (+ `idx_core_stocks_edinet`) も同じ理由 (writer 不在・本番全行 NULL)
+で 2026-09-25 に DROP した (`drizzle/d1/0024`。本番適用は未了)。P4b で
+充填する計画自体が D-14-1 で中止済みだったため、書込経路が実装される見込みは
+無かった。適用後 `core_stocks` は `id` / `code` / `name` / `market` /
+`sector` / `is_active` / `is_yutai` / `created_at` / `updated_at` /
+`instrument_type` / `sector33` の 11 列になる。
+
 **既存 `sector` 列との関係（出所は 2026-09-13 に確定、統合は未着手）**: 値はほぼ同じだが**出所が違う別の列**である。`sector` は kabulab-cf `src/cron/universe.ts` が JPX `data_j.xlsx` の33業種を書く既存列（**personal-only**）、`sector33` は stockStock `collectors/edinet_codelist.py` が EDINET コードリストの「提出者業種」を書く新設列（**commercial-ok**）。本仕様は「**既存 `sector` を触らない・`sector33` を別列として足す**」に留める。**タグが違うので統合してはいけない**（1列にまとめた瞬間に、公開してよい EDINET 由来の値と公開できない JPX 由来の値が同じ列に同居し、列単位の地図で区別できなくなる）。公開面で業種を出すなら `sector33` を使う（**2026-09-13 に充填済み・公開面も切替済み**。下記 E7・「sector33 の充填」節を参照）。既存 consumer（001 のスクリーニング、`株ラボ-Youtube/data/d1.py` の `stocks()`）は `sector` を読み続けるので私用面に留める。
 
 **ライセンスが列単位で混在する点の帰結**: ① は「EDINETコードリスト由来=commercial-ok / JPX由来=personal-only」で1行に混在するため、**行の `license_tag` 1列では公開可否を表現できない**。判定は列単位の地図（`jss_column_license`）に従う必要がある。
@@ -990,7 +999,7 @@ D4 はその手動同期を 1 回ぶん増やしている。契約ファイル�
 **確定規約**
 1. `record_months: list[int]` を既存の `record_month INTEGER NOT NULL`（単数）へ**行展開**する（既存粒度を維持し 002 の権利月絞込を壊さない）。PK は `(stock_id, item_name, record_month)`。
 2. ジャンル名 → `yutai_genres.slug`（16種固定）のマッピング表をコード側に持つ。未知ジャンルは `other`。**`yutai_genres` テーブル自体は stockStock が触らない**。
-3. **`estimated_value` / `short_summary` / `estimate_value_source` / `estimate_source_url` を UPDATE の SET 句に含めない**（列単位排他）。これらは kabulab-cf のローカルLLM（node-llama-cpp）+ 楽天市場API による推定で**再取得不能な資産**。`monthly.ts:83-89` が `isNotNull(estimatedValue)` でフィルタして `yutai_yield` → `otakara_stock_scores` を作っているため、消えると 002 の並びが変わる。
+3. **`estimated_value` / `short_summary` / `estimate_value_source` を UPDATE の SET 句に含めない**（列単位排他）。これらは kabulab-cf のローカルLLM（node-llama-cpp）+ 楽天市場API による推定で**再取得不能な資産**。`monthly.ts:83-89` が `isNotNull(estimatedValue)` でフィルタして `yutai_yield` → `otakara_stock_scores` を作っているため、消えると 002 の並びが変わる。
 4. **`DELETE` を1回も発行しない**。現行 `fetch-yutai-full.ts` は「既存削除 → クリーンインポート」方式だが、これを踏襲すると LLM 資産が全滅する。`ON CONFLICT … DO UPDATE` のみ。
 5. **保護ガード**: 「`estimated_value` が非 NULL の行数」を毎回 `jss_dataset_freshness` に記録し、**減ったら異常終了**する（事後に気づく手段が手動比較しかないため）。
 6. `description` 列は残す（`license_tag='personal-only'`）。**公開面から外すのは kabulab-cf 側の責務**で、D1 のスキーマ設計の範囲外。
@@ -1092,6 +1101,14 @@ CREATE INDEX idx_jss_fin_disclosed ON jss_financials(disclosed_at DESC);
 
 行数: 年約2万 → 5年10万行。1行 **350 B**。保持: 無期限。
 
+⚠️ **2026-09-25: `jss_xbrl_documents`（B-3）/ `jss_xbrl_elements`（B-4）は
+未着手のまま地図 (`governance.TABLE_LICENSE`) から退役させた。** 本番は
+どちらも 0 行・writer 未実装のまま推移し、下記の REST (`/v1/xbrl/*`) /
+MCP (`jp_list_xbrl_documents` / `jp_list_xbrl_elements` /
+`jp_xbrl_elements`) も結局実装されなかった（jss-api に実在するのは
+`jp_xbrl_elements` の REST 版 `/v1/xbrl/elements` のみで、これも同時に
+削除した）。以下は「着手されなかった設計案」として記録のみ残す。
+
 #### B-3. `jss_xbrl_documents` — ⑧ファクトの所在索引
 
 ```sql
@@ -1143,7 +1160,6 @@ CREATE TABLE jss_supply_latest (
   code        TEXT NOT NULL,
   data_type   TEXT NOT NULL,   -- 'jsf_zandaka' | 'jsf_shina' | 'jpx_margin'
   data_date   TEXT NOT NULL,
-  isin        TEXT,
   loan_bal    INTEGER, loan_chg  INTEGER,
   stock_bal   INTEGER, stock_chg INTEGER,
   ratio       REAL,            -- 信用倍率（計算値）
@@ -1161,6 +1177,11 @@ CREATE INDEX idx_jss_supply_date ON jss_supply_latest(data_type, data_date DESC)
 
 行数: 4,400 × 3 = 約13,200（増えない）。1行 250 B。
 
+⚠️ 2026-09-25: `isin` 列は DROP した。日証金 CSV に ISIN が無く
+`SupplyRecord.isin` が常に None のままだったため（本番 4,357 行で非 NULL
+0 件を実測）。同日、`SupplyRecord` 構築が `loan_chg`/`stock_chg` を渡し
+忘れていたバグも修正した (`jobs/supply_daily.py` の `_zandaka_chg`)。
+
 #### B-6. `jss_index_symbols` — 指数・為替のシンボル対応表
 
 ```sql
@@ -1169,13 +1190,14 @@ CREATE TABLE jss_index_symbols (
   yahoo_symbol TEXT NOT NULL,      -- '^N225' 等
   name_ja      TEXT,
   r2_key       TEXT NOT NULL,      -- index/{slug}.json
-  license_tag  TEXT NOT NULL,
-  last_date    TEXT,
-  updated_at   INTEGER
+  license_tag  TEXT NOT NULL
 );
 ```
 
 **slug は7つ**（旧設計は6つで、`finmath_daily_ohlcv` の7シンボル目が欠けていた）。`nkvi`（日経VI）の Yahoo シンボルは**要確認**。行数: 7。
+
+⚠️ 2026-09-25: `last_date` / `updated_at` 列は DROP した。`seed_index_symbols()`
+は元々この2列を upsert しておらず、本番 6 行で両列とも非 NULL 0 件を実測した。
 
 #### B-7. `jss_job_runs` — ⑦収集ジョブログ
 
@@ -1850,7 +1872,7 @@ persist(record, notion_write, *, dataset, label)
 | テーブル | 行の作成 + 基本列 | enrich 列（既存行の UPDATE のみ・INSERT/DELETE 禁止） |
 |---|---|---|
 | `ir_disclosures` | stockStock（第6波以降） | kabulab-cf: `tags` / `primary_tag` / `pdf_sentiment*` |
-| `yutai_benefits` | stockStock | kabulab-cf: `estimated_value` / `short_summary` / `estimate_value_source` / `estimate_source_url` |
+| `yutai_benefits` | stockStock | kabulab-cf: `estimated_value` / `short_summary` / `estimate_value_source`（2026-09-25 に `estimate_source_url` を DROP。X-01） |
 
 stockStock 側の UPSERT は `SET` 句を**ホワイトリストで列挙**する。`SELECT *` 起点の動的 UPSERT を禁止する（列が増えた瞬間に他 writer の列を潰す）。
 
@@ -2052,7 +2074,7 @@ cron 根拠: `zandaka` の確報が 10:50、`shina` が 10:30。40分の余裕�
 **書込規約**
 1. `record_months: list[int]` を単数 `record_month` へ**行展開**する（既存粒度を維持し 002 の権利月絞込を壊さない）。キーは `(stock_id, item_name, record_month)`。
 2. ジャンル名 → `yutai_genres.slug`（16種固定）のマッピング表をコード側に持つ。未知は `other`。**`yutai_genres` テーブル自体は触らない。**
-3. **`estimated_value` / `short_summary` / `estimate_value_source` / `estimate_source_url` を UPDATE の SET 句に含めない。** ローカルLLM（node-llama-cpp）+ 楽天市場API による**再取得不能な資産**で、`monthly.ts:83-89` が `isNotNull(estimatedValue)` でフィルタして `yutai_yield` → `otakara_stock_scores` を作っている。上書きすると 002 の並びが変わる。切替前に全件を JSON で R2 へ退避し、**`estimated_value` 非 NULL の行数を `jss_dataset_freshness` に毎回記録して、減ったら異常終了する**ガードを入れる（事後に気づく仕組みが手動比較しかないため）。
+3. **`estimated_value` / `short_summary` / `estimate_value_source` を UPDATE の SET 句に含めない。** ローカルLLM（node-llama-cpp）+ 楽天市場API による**再取得不能な資産**で、`monthly.ts:83-89` が `isNotNull(estimatedValue)` でフィルタして `yutai_yield` → `otakara_stock_scores` を作っている。上書きすると 002 の並びが変わる。切替前に全件を JSON で R2 へ退避し、**`estimated_value` 非 NULL の行数を `jss_dataset_freshness` に毎回記録して、減ったら異常終了する**ガードを入れる（事後に気づく仕組みが手動比較しかないため）。
 4. **`DELETE` を1回も発行しない。** 現行 kabulab-cf の `fetch-yutai-full.ts` は「既存削除 → クリーンインポート」だが踏襲しない。取得に出てこなくなった行は `data_date` が古いまま残す。優待廃止の断定は一次開示（TDnet「株主優待制度の廃止」）が所有する。差分（新規/更新/stale 件数）を `jss_job_runs` に記録する。
 5. `core_stocks.is_yutai` の再導出は kabulab-cf の `monthly.ts` に残す（責務を1つに絞って二重 writer を作らない）。
 6. `description`（掲載文）は D1 に書くが `license_tag='personal-only'` を必ず付ける。**公開面から外すのは kabulab-cf 側 `app.ts:680` の是正**であり stockStock の責務ではないが、**writer 切替と同じ工程でやらないと規約違反（S2）を新基盤へ引き継ぐ**ので依存タスクとして管理する。
@@ -2496,9 +2518,10 @@ converted CSV を600件サンプルした平均は 1,061行/doc・359 KB/doc。3
 | `GET /v1/stocks/{code}/disclosures` | `from` `primary_tag` `limit` `cursor` | (stock_id, pubdate) | ≤数百 | 1h |
 | `GET /v1/disclosures/latest` | `primary_tag` `source` `limit` `cursor` | (primary_tag, pubdate DESC) | LIMIT分 | 5m |
 | `GET /v1/disclosures/{doc_id}` | — | doc_id索引 + raw索引 | 2 | 1h |
-| `GET /v1/xbrl/documents` | `code` `fiscal_year` `limit` `cursor` | (code, period_end) | ≤30 | 1h |
-| `GET /v1/xbrl/documents/{doc_id}` | — | PK | 1 | 1h |
-| `GET /v1/xbrl/elements` | `prefix` `limit` `cursor` | PK前方一致 | ≤500 | 1d |
+
+`GET /v1/xbrl/documents`（`/{doc_id}` 含む）は未実装のまま構想を撤回した
+（B-3 参照）。`GET /v1/xbrl/elements` は実装されたが 2026-09-25 に削除した
+（B-4 参照。jss-api `services/jss-api/src/shared/routes.ts`）。
 | `GET /v1/files/{sha256}` | — | PK | 1 | 1y |
 | `GET /v1/files/{sha256}/content` | `derived=1` | — | 1 | 1y immutable |
 | `GET /v1/bulk/exports` | — | — | 0 | 1h |
@@ -2606,8 +2629,6 @@ GET /v1/files/{sha256}/content?derived=1
 | `jp_get_financials` | `code` `disclosure_type?` `limit≤30` | 決算期別の主要勘定 + doc_id + raw_sha256 + source_url | 公開 |
 | `jp_list_disclosures` | `code?` `primary_tag?` `from?` `limit≤50` | 開示メタ（本文は返さない） | 公開 |
 | `jp_get_disclosure` | `doc_id` | 上記1件 + files:{raw, derived} | 公開 |
-| `jp_list_xbrl_documents` | `code` `limit≤30` | doc_id / 期間 / ファクト件数 / Parquet の所在とサイズ | 公開 |
-| `jp_list_xbrl_elements` | `prefix?` `limit≤100` | 勘定科目の語彙 | 公開 |
 | `jp_get_file_link` | `sha256?` `doc_id?` `derived?` | url / bytes / content_type / license_tag / attribution。**本文は返さない** | タグ依存 |
 | `jp_get_freshness` | — | データセット別の鮮度と writer | 公開 |
 | `jp_get_prices_daily` | `code` `from?` `to?` `limit≤500` | 日足 | **内部のみ** |
@@ -3080,7 +3101,7 @@ kabulab-cf は `pnpm typecheck` 通過、本番 11 経路がすべて 200。
 （素の SQLite の既定は 500）。15 表の孤児検査を 1 文にまとめると必ず失敗するので
 3 文に分割している（`cloud_store/d1.MAX_COMPOUND_SELECT_TERMS`）。
 
-**P4a の範囲外にしたもの**: `instrument_type` / `sector33` / `sector17` の値の充填（`sector33` は 2026-09-13 に下記「sector33 の充填」で解消。`instrument_type` は 2026-09-13 に kabulab-cf #27 が `universe.ts` で充填して解消済み。`sector17` は writer が最後まで実装されず本番全行 NULL のまま 2026-09-24 に列ごと削除。残る `edinet_code`/`listing_status`/`listing_date`/`delisting_date`/`license_tag`/`src_source`/`src_data_date`/`src_fetched_at`/`quality` は P4b）。
+**P4a の範囲外にしたもの**: `instrument_type` / `sector33` / `sector17` の値の充填（`sector33` は 2026-09-13 に下記「sector33 の充填」で解消。`instrument_type` は 2026-09-13 に kabulab-cf #27 が `universe.ts` で充填して解消済み。`sector17` は writer が最後まで実装されず本番全行 NULL のまま 2026-09-24 に列ごと削除。残る `edinet_code`/`listing_status`/`listing_date`/`delisting_date`/`license_tag`/`src_source`/`src_data_date`/`src_fetched_at`/`quality` の充填計画=P4b は D-14-1 で中止済みで、2026-09-25 に9列とも列ごと DROP した。P4b という段階名自体がもう存在しない）。
 
 着手時点では供給源の JPX data_j が旧 URL (`.../data_j.xls`) で **HTTP 404** を返し、
 一次データを正規に取得できなかった（`core_stocks.MAX(updated_at)` は 2026-08-10 で、
