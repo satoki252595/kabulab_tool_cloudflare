@@ -42,11 +42,10 @@ export const RESTRICTED_COLUMNS: Record<string, readonly string[]> = {
   // 正本は `cloud_store/schema.py` の MIXED_LICENSE_COLUMNS と
   // `tests/fixtures/contracts/d1-license-map.json`。
   //
-  // ただし `core_stocks.sector33` は 2026-09-13 時点で本番 3,818 行すべて NULL。
-  // 伏せるのをやめても今は何も出ない代わりに、**公開面の業種を `sector` から
-  // `sector33` へ切り替えてよいのは P4b の充填が済んだ後**（切り替えを先に
-  // 入れると業種が全件空欄になる）。
-  core_stocks: ["market", "sector", "sector17", "instrument_type"],
+  // `core_stocks.sector33` は stockStock の master_sync (EDINET, 2026-09-13〜) が
+  // 充填済み (2026-09-24 時点で現役普通株 3,700 件は NULL 0 件)。公開面の業種は
+  // 既に `sector` から `sector33` へ切替済み (src/shared/db/public-columns.ts)。
+  core_stocks: ["market", "sector", "instrument_type"],
   // みんかぶ掲載文。規約上、取得も公開も不可（TDnet 由来へ移行済み）。
   yutai_benefits: ["description", "short_summary", "estimated_value"],
 };

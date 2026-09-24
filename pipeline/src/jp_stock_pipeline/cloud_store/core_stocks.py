@@ -3,8 +3,10 @@
 `core_stocks` は移行元 kabulab-cf が所有する既存表で、**14個の子テーブル**が
 `stock_id` で参照している（設計書は12個としているが実測は14個）。P4a の列追加
 （12 列 + 2 索引）は適用済みで、DDL 発行コード（`--apply` / `plan_ddl` /
-`build_column_update`）は削除した（D-14-1）。残る stockStock の書込は
-`sector33` の充填（`build_sector33_updates`）だけである。
+`build_column_update`）は削除した（D-14-1）。P4a の12列のうち `sector17` は
+どの collector からも書かれず全行 NULL のままだったため、2026-09-24 に
+`NEW_COLUMNS` から削除し本番からも `DROP COLUMN` した（現在の追跡列は11列）。
+残る stockStock の書込は `sector33` の充填（`build_sector33_updates`）だけである。
 
 `D1Store.upsert()` は conflict 以外の全列を `c = excluded.c` に機械展開する
 設計なので、この表には使えない（`id` を渡せば `id = excluded.id` が生まれる）。
@@ -18,7 +20,9 @@ core_stocks.name`）。書込は UPDATE 一択で、ここではその関数を�
 commercial-ok。`collectors/edinet_codelist.py` の `_COL_SECTOR`）。2026-09-13 に
 ユーザが「公開面の業種を33業種で表示する」と決め、公開面（kabulab-cf
 `src/shared/db/public-columns.ts`）は既に `core_stocks.sector33` を読んでいる。
-本番は全行 NULL で「—」表示だったので、`master_sync` がこの列を埋める。
+当時の本番は全行 NULL で「—」表示だったため、`master_sync` がこの列を埋める
+ようにした。2026-09-13 の充填開始以降、稼働中の普通株式行の欠損は 0 件
+（2026-09-24 実測）。
 
 当初この充填を P4b に置いた理由は 3 つあった。それぞれ次のように解いた。
 
@@ -112,7 +116,6 @@ NEW_COLUMNS: dict[str, str] = {
     # 値は master_sync が東証33業種の名称へ正規化して埋める
     # （`build_sector33_updates`。updated_at を進めない）。
     "sector33": "TEXT",
-    "sector17": "TEXT",  # 17業種 JPX 由来 → personal-only
     "edinet_code": "TEXT",  # EDINETコード → commercial-ok
     "listing_status": "TEXT",  # 上場/監理/整理/上場廃止
     "listing_date": "TEXT",  # YYYY-MM-DD
@@ -142,12 +145,14 @@ NEW_INDEXES: dict[str, str] = {
 # --- ドリフト検出の期待値（E7）----------------------------------------------
 #
 # `core_stocks` の列定義は両リポジトリに散っており、**本番の PRAGMA が正**。
-# 2026-09-12 実測で 21 列。他の「地図」はすべて古い:
+# 2026-09-12 実測で 21 列（当時は `sector17` を含む）。`sector17` はどの
+# collector からも書かれず全行 NULL だったため、2026-09-24 に本番から
+# `DROP COLUMN` した。現在の正は 20 列。他の「地図」はすべて古い:
 #
-#   本番 PRAGMA                                   21 列 ← 正
-#   kabulab-cf `src/shared/db/core-schema.ts`      9 列（P4a の 12 列を知らない）
+#   本番 PRAGMA (2026-09-24 以降)                  20 列 ← 正
+#   kabulab-cf `src/shared/db/core-schema.ts`      9 列（P4a の列を知らない）
 #   kabulab-cf drizzle `0008_snapshot.json`        9 列（同上）
-#   stockStock `BASE_COLUMNS` + `NEW_COLUMNS`     21 列 ← ここ
+#   stockStock `BASE_COLUMNS` + `NEW_COLUMNS`     20 列 ← ここ
 #
 # `EXPECTED_COLUMNS` は「stockStock が知っている全列」であり、
 # `jobs/core_stocks_migrate.py --verify` が本番 PRAGMA と**両方向**で突き合わせる。

@@ -41,8 +41,9 @@ class _FakeStore(SqliteD1):
 
     def __init__(self) -> None:
         super().__init__(ddl=S.SCHEMA_STATEMENTS)
-        # `core_stocks` は本番の実 DDL + P4a の 12 列。地図が本番の 21 列すべてを
-        # 見るので、ここを削ると網羅性の検査が意味を失う。
+        # `core_stocks` は本番の実 DDL + P4a の 11 列（`sector17` は 2026-09-24 に
+        # DROP 済み）。地図が本番の 20 列すべてを見るので、ここを削ると網羅性の
+        # 検査が意味を失う。
         self.con.executescript(PROD_DDL)
         for stmt in APPLIED_DDL:
             self.con.execute(stmt)

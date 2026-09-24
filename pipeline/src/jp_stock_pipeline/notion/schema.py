@@ -71,7 +71,6 @@ MASTER_PROP_NAME = "銘柄名"  # title
 MASTER_PROP_CODE = "銘柄コード"
 MASTER_PROP_MARKET = "市場区分"
 MASTER_PROP_SECTOR33 = "33業種"
-MASTER_PROP_SECTOR17 = "17業種"
 MASTER_PROP_EDINET_CODE = "EDINETコード"
 MASTER_PROP_LISTED = "上場状態"  # checkbox: 現在上場しているか
 MASTER_PROP_STATUS = "状態"  # select: 上場/監理/整理/上場廃止
@@ -80,6 +79,13 @@ MASTER_PROP_DELISTING_DATE = "上場廃止日"
 MASTER_PROP_LAST_UPDATED = "最終データ更新日"
 # ① の履歴ポインタ列（現行履歴DB ID / 履歴シャード番号 / 履歴行数）と
 # ②株価テクニカル履歴子DBは廃止した。本番DBの列は放置する（無害）。
+# 2026-09-24: `MASTER_PROP_SECTOR17`（"17業種"）も同様の理由で削除した
+# （collector が誰も値を書かず全行 NULL だったため。core_stocks.sector17 と
+# 同時に廃止）。`ensure_database` は `missing_properties` で desired−existing
+# の差分しか update_database に渡さない（既存プロパティの削除・型変更はしない
+# 設計）ため、この定数を消しても既存 Notion DB の「17業種」列は削除されず
+# 残る。以後 upsert.py がこの列に値を書かなくなるだけの orphan プロパティになる
+# （実害は無いが、手動で消したい場合は Notion 側で直接削除する）。
 
 # ③ 財務サマリ (§6.4)
 FIN_PROP_TITLE = "タイトル"  # title 例: 7203 2026/03期 本決算
@@ -251,7 +257,6 @@ def stock_master_schema(raw_db_id: str) -> dict:
         MASTER_PROP_CODE: _RICH_TEXT,
         MASTER_PROP_MARKET: _select_schema(),
         MASTER_PROP_SECTOR33: _select_schema(),
-        MASTER_PROP_SECTOR17: _select_schema(),
         MASTER_PROP_EDINET_CODE: _RICH_TEXT,
         MASTER_PROP_LISTED: _CHECKBOX,
         MASTER_PROP_STATUS: _select_schema(LISTING_STATUS_OPTIONS),
@@ -457,7 +462,7 @@ _CATALOG_DICTIONARY: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         (
             "銘柄名 (title)",
             "銘柄コード (text): 証券コード4桁。ユニークキー",
-            "市場区分 / 33業種 / 17業種 (select)",
+            "市場区分 / 33業種 (select)",
             "EDINETコード (text)",
             "上場状態 (checkbox): チェック=上場中 (master_sync=コードリスト所有)",
             "状態 (select: 上場/監理/整理/上場廃止) / 上場日 (date) / 上場廃止日 (date)"

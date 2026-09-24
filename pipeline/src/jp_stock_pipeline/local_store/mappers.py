@@ -169,7 +169,6 @@ def stock_master_upsert(
         "name": record.name,
         "market": record.market,
         "sector33": record.sector33,
-        "sector17": record.sector17,
         "edinet_code": record.edinet_code,
         "listed": record.listed,
         **_prov(record.provenance),

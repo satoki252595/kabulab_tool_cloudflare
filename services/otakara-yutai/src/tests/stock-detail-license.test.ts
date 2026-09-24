@@ -22,9 +22,9 @@
  * 判断の根拠と戻し方 (フラグ 1 つ) は src/shared/db/public-columns.ts。
  *
  * 併せて `sector33` が NULL のときに **JPX の `sector` へフォールバック
- * しない**ことも見る。フォールバックを書くと、`sector33` が充填されるまで
- * ずっと JPX の値が公開面に出続け、直したことにならない。本番の `sector33`
- * は 2026-09-13 時点で全行 NULL なので、これは「当面の実際の挙動」の検査。
+ * しない**ことも見る。フォールバックを書くと、`sector33` が NULL の行
+ * (EDINET コードリスト未収載の新規上場など) だけ JPX の値が公開面に出て、
+ * 直したことにならない。
  *
  * D1 シムは screening-pagination.test.ts と同じ方式 (node:sqlite に被せた最小シム)。
  */
@@ -43,7 +43,7 @@ CREATE TABLE core_stocks (
   is_yutai integer NOT NULL DEFAULT 0,
   created_at integer NOT NULL DEFAULT (unixepoch()),
   updated_at integer NOT NULL DEFAULT (unixepoch()),
-  instrument_type text, sector33 text, sector17 text, edinet_code text,
+  instrument_type text, sector33 text, edinet_code text,
   listing_status text, listing_date text, delisting_date text,
   license_tag text, src_source text, src_data_date text,
   src_fetched_at integer, quality text
@@ -132,7 +132,6 @@ const SENTINELS = {
   market: "ZZ_MARKET_SENTINEL",
   sector: "ZZ_SECTOR_JPX_SENTINEL",
   instrument_type: "ZZ_INSTRUMENT_TYPE_SENTINEL",
-  sector17: "ZZ_SECTOR17_SENTINEL",
   license_tag: "ZZ_LICENSE_TAG_SENTINEL",
   src_source: "ZZ_SRC_SOURCE_SENTINEL",
   quality: "ZZ_QUALITY_SENTINEL",
@@ -163,8 +162,8 @@ beforeAll(() => {
   const insertStock = sqlite.prepare(
     `INSERT INTO core_stocks
        (id, code, name, market, sector, is_active, is_yutai,
-        instrument_type, sector33, sector17, license_tag, src_source, quality)
-     VALUES (?, ?, 'テスト銘柄', ?, ?, 1, 1, ?, ?, ?, ?, ?, ?)`,
+        instrument_type, sector33, license_tag, src_source, quality)
+     VALUES (?, ?, 'テスト銘柄', ?, ?, 1, 1, ?, ?, ?, ?, ?)`,
   );
   insertStock.run(
     1,
@@ -173,7 +172,6 @@ beforeAll(() => {
     SENTINELS.sector,
     SENTINELS.instrument_type,
     PUBLISHED_SECTOR33,
-    SENTINELS.sector17,
     SENTINELS.license_tag,
     SENTINELS.src_source,
     SENTINELS.quality,
@@ -186,7 +184,6 @@ beforeAll(() => {
     SENTINELS.sector,
     SENTINELS.instrument_type,
     null,
-    SENTINELS.sector17,
     SENTINELS.license_tag,
     SENTINELS.src_source,
     SENTINELS.quality,
@@ -198,7 +195,6 @@ beforeAll(() => {
     SENTINELS.sector,
     "equity",
     PUBLISHED_SECTOR33,
-    SENTINELS.sector17,
     SENTINELS.license_tag,
     SENTINELS.src_source,
     SENTINELS.quality,
@@ -298,8 +294,8 @@ describe("GET /stocks/:code のライセンス境界", () => {
   });
 
   it("sector33 が NULL のとき JPX の sector へフォールバックしない", async () => {
-    // 本番の sector33 は全行 NULL。ここでフォールバックを書くと、充填が
-    // 終わるまでずっと JPX の値が公開面に出続ける (= 直っていない)。
+    // sector33 が NULL の行 (EDINET コードリスト未収載の新規上場など) で
+    // フォールバックを書くと、その行だけ JPX の値が公開面に出る (= 直っていない)。
     const html = await detailHtml(CODE_NO_SECTOR33);
     expect(html).not.toContain(SENTINELS.sector);
     expect(html).not.toContain(SENTINELS.market);

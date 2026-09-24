@@ -39,6 +39,7 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 | `0018` | 1 銘柄 1 行 4 表のサロゲート id 撤去 (stock_id を PK に作り直し) + `rsi_percentile.operating_margin_ttm` と `swing_sector_daily.pct_5d` の DROP COLUMN (L-53/K5d) | 未適用 (P4: マージ後に手動適用) |
 | `0019` | `yuho_text_sections` の CREATE TABLE + 索引 2 本 + `yuho_documents.text_parse_status` の ADD (開示テキスト 39 項目) | **適用済み** (09-20 に手動適用) |
 | `0020` | `ir_disclosure_texts` の CREATE TABLE + 索引 2 本 + `ir_disclosures.pdf_text_status` の ADD (開示 PDF 本文) | **適用済み** (09-20 に手動適用) |
+| `0023` | `core_stocks.sector17` の DROP COLUMN。書込経路も参照も無く、本番 3,810 行で非 NULL 0 件と実測済み (2026-09-24) | 未適用 |
 
 0013〜0016 は本番 `sqlite_master` で適用状態を確かめてから、未適用のものだけ
 番号順に流す。0012 と同じく stockStock の地図 (`TABLE_LICENSE` /
@@ -74,7 +75,9 @@ JSONL）か、30 日以内なら D1 Time Travel を使う。
 `edinet_code` / `listing_status` / `listing_date` / `delisting_date` /
 `license_tag` / `src_source` / `src_data_date` / `src_fetched_at` / `quality`) と
 2 索引 (`idx_core_stocks_active_market` / `idx_core_stocks_edinet`) は、
-stockStock 側の移行 P4a (2026-09-12) が本番 D1 へ**直接 ALTER で**入れた。
+stockStock 側の移行 P4a (2026-09-12) が本番 D1 へ**直接 ALTER で**入れた
+（このうち `sector17` は書込経路も参照も無かったため `0023` で DROP する
+未適用のマイグレーションがある。以下は 0010 生成当時の記録）。
 drizzle 側は 9 列・索引 1 本の snapshot のまま取り残され、本番 (21 列・索引 3 本)
 と乖離していた。
 

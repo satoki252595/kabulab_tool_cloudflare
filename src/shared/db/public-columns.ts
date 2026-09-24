@@ -101,7 +101,6 @@ export function publicStockMetaLabel(
 export const PERSONAL_ONLY_COLUMNS = [
   "market",
   "sector",
-  "sector17",
   "instrumentType",
   "instrument_type",
   "licenseTag",

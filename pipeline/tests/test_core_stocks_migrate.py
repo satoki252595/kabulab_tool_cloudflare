@@ -2,7 +2,8 @@
 
 P4a の列追加は適用済みで、DDL 発行コード（`--apply` / `plan_ddl` /
 `build_column_update`）は削除した（D-14-1）。このファイルが固定するのは
-「本番 PRAGMA が正で 21 列」の地図と、検証用 SQL の形だけである。
+「本番 PRAGMA が正で 20 列」の地図と、検証用 SQL の形だけである
+（`sector17` は 2026-09-24 に本番から DROP COLUMN した）。
 
 `PROD_DDL` と `set_targets` と `APPLIED_DDL` は他のテストからも使う
 （`test_core_stocks_job.py` / `test_core_stocks_sector33.py` /
@@ -87,9 +88,9 @@ class TestSetTargetExtractor:
 
 
 class TestAppliedDdl:
-    def test_12列と2索引の適用内容である(self) -> None:
-        assert len(APPLIED_DDL) == 14
-        assert sum(1 for s in APPLIED_DDL if s.startswith("ALTER")) == 12
+    def test_11列と2索引の適用内容である(self) -> None:
+        assert len(APPLIED_DDL) == 13
+        assert sum(1 for s in APPLIED_DDL if s.startswith("ALTER")) == 11
         assert sum(1 for s in APPLIED_DDL if s.startswith("CREATE INDEX")) == 2
 
     def test_追加列は全て_nullable(self) -> None:
@@ -98,7 +99,7 @@ class TestAppliedDdl:
                 assert "NOT NULL" not in sql.upper()
                 assert "UNIQUE" not in sql.upper()
 
-    def test_適用すると本番の21列になる(self) -> None:
+    def test_適用すると本番の20列になる(self) -> None:
         con = sqlite3.connect(":memory:")
         con.executescript(PROD_DDL)
         for sql in APPLIED_DDL:
@@ -108,16 +109,19 @@ class TestAppliedDdl:
 
 
 class TestExpectedColumns:
-    """E7: `core_stocks` の列定義の地図。本番 PRAGMA が正で 21 列。
+    """E7: `core_stocks` の列定義の地図。本番 PRAGMA が正で 20 列。
 
-    地図は両リポジトリに散っている（本番 PRAGMA 21 列 / kabulab-cf の
-    `core-schema.ts` 9 列 / drizzle `0008_snapshot.json` 9 列 / ここ 21 列）。
+    地図は両リポジトリに散っている（本番 PRAGMA 20 列 / kabulab-cf の
+    `core-schema.ts` 9 列 / drizzle `0008_snapshot.json` 9 列 / ここ 20 列）。
     ここが古くなると `--verify` の superset 方向が意味を失うので、
     **実装定数ではなくリテラルで列挙する**（定数から要素を削る変異を
     テストが追随してしまうと検出できない）。
+
+    `sector17` は 2026-09-12 実測時点では本番に存在したが（当時 21 列）、
+    どの collector からも書かれず全行 NULL だったため 2026-09-24 に
+    `DROP COLUMN` した。以下の `PROD_COLUMNS` は DROP 後の 20 列である。
     """
 
-    # 2026-09-12 に本番 D1 の PRAGMA table_info(core_stocks) から取得した 21 列。
     PROD_COLUMNS = {
         # P4a より前からある 9 列
         "id",
@@ -129,10 +133,9 @@ class TestExpectedColumns:
         "is_yutai",
         "created_at",
         "updated_at",
-        # P4a で足した 12 列
+        # P4a で足した 11 列（`sector17` は 2026-09-24 に DROP 済み）
         "instrument_type",
         "sector33",
-        "sector17",
         "edinet_code",
         "listing_status",
         "listing_date",
@@ -144,8 +147,8 @@ class TestExpectedColumns:
         "quality",
     }
 
-    def test_期待する列集合は本番の_21_列と一致する(self) -> None:
-        assert len(self.PROD_COLUMNS) == 21
+    def test_期待する列集合は本番の_20_列と一致する(self) -> None:
+        assert len(self.PROD_COLUMNS) == 20
         assert cs.EXPECTED_COLUMNS == self.PROD_COLUMNS
 
     def test_BASE_COLUMNS_と_PROTECTED_COLUMNS_が食い違わない(self) -> None:

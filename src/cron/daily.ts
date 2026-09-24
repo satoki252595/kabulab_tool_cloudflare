@@ -799,7 +799,7 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
  *   (EDINET 提出者業種 / commercial-ok)。戻すときもフラグ 1 箇所。
  * - `sector33` が NULL の銘柄は `aggregateSectors` が `未分類` にまとめる。
  *   EDINET の提出者業種を持たない REIT・インフラファンド等は、下の母集団の述語で
- *   先に外れる (本番 2026-09-13: active かつ equity で `sector33` が NULL は 1 銘柄)。
+ *   先に外れる (本番 2026-09-24: active かつ equity で `sector33` が NULL は 0 銘柄)。
  *   **JPX の `sector` へフォールバックしない** —— フォールバックすると
  *   `sector33` に値が無い銘柄の分だけ JPX の業種名が表に保存され、公開面に出る。
  *

@@ -68,9 +68,9 @@ export interface StockDetail {
  */
 export async function getStockDetail(db: Database, code: string): Promise<StockDetail | null> {
   // 列を明示する。`select()` (列指定なし) は core_stocks の全列 = `personal-only` の
-  // sector33 / sector17 / instrument_type / license_tag / src_source / quality まで
-  // 公開面のプロセスへ載せてしまう。今は本番で全行 NULL だが、移行 P4b が値を入れた
-  // 時点で漏れうる。詰め替え漏れではなくクエリで落とす。
+  // sector33 / instrument_type / license_tag / src_source / quality まで
+  // 公開面のプロセスへ載せてしまう。sector33 は stockStock の master_sync が
+  // 既に値を埋めているため、詰め替え漏れではなくクエリで落とす必要が現に有効。
   // (src/shared/db/core-stocks-license-boundary.test.ts が列指定なしを禁じている)
   const stock = await db
     .select({

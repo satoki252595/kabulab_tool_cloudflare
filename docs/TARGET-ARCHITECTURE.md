@@ -64,6 +64,8 @@ D1 jss_column_license: core_stocks の market / sector33 / sector17 / instrument
       /vwap-analysis/api/daily?code=7203 が Yahoo 日足 223,430 バイトを無認証で返す
 ```
 
+上記は 2026-09-12 実測時点のスナップショット。**2026-09-24 時点の現状**: `sector33` は 2026-09-13 に充填済み・公開面も切替済み（非NULL 3,757/3,810、active equity 行の NULL は 0）。`instrument_type` も 2026-09-13 に kabulab-cf #27 で充填済み（3,700 行）。`sector17` は writer/reader が一度も実装されず本番全行 NULL のままだったため、2026-09-24 に D1 列・パイプライン・Notion 書込経路ごと削除した。
+
 一方 stockStock の `wrangler.public.jsonc` は「personal-only の R2 を意図的に bind しない。コードにバグがあっても物理的に到達できないようにするための第0層の防御」と書いている。**同一 D1 を共有する2リポジトリで方針が正面から矛盾している。**
 
 ### 2.5 1つ足すのに触る場所が多すぎる
@@ -502,6 +504,8 @@ jss_column_license が宣言する edinet_code / sector33 / sector17 / instrumen
   （加えて sector33 のタグが personal-only で誤っていた。出所は EDINET「提出者業種」= commercial-ok。
    実際に JPX 由来なのは地図に無かった sector 列 → 2026-09-13 に 2 列同時に修正）
 ```
+
+上記も 2026-09-12 実測時点のスナップショット。`sector33` / `instrument_type` は 2026-09-13 に充填済み（2026-09-24 実測: `sector33` 非NULL 3,757/3,810、`instrument_type` 3,700 行）。`edinet_code` は 2026-09-24 時点でも 0 件のまま（P4b 未着手）。`sector17` は writer/reader 不在のまま全行 NULL が続いたため 2026-09-24 に列ごと削除した。
 
 ### 8.2 4 層で守る（上ほど強い）
 

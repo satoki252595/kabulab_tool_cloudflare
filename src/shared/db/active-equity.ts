@@ -7,7 +7,7 @@
  *
  * 規則 (ライセンス判断 D-13-6 済み。経緯は git 履歴):
  * - `instrument_type` は personal-only のまま。述語に使うことは認めるが、
- *   値は select しない (`market` / `sector` / `sector17` を述語に使うことも禁止)。
+ *   値は select しない (`market` / `sector` を述語に使うことも禁止)。
  *   使ってよいのは WHERE と JOIN の ON だけ (`select` / `orderBy` / `groupBy` /
  *   関係クエリの `columns` に出さない)。
  * - この helper 1 箇所を経由する場合に限る

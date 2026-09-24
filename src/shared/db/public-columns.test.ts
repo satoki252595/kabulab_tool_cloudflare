@@ -3,8 +3,9 @@
  *
  * ここで固定したいのは**既定 (`PUBLISH_JPX_DERIVED_COLUMNS = false`) の挙動**。
  * とくに「`sector33` が NULL のとき JPX の `sector` へ落ちない」は、書き足すのが
- * 自然に見えてしまう 1 行 (`?? row.sector`) で壊れる。壊れても型は通り、本番の
- * `sector33` が全行 NULL なので**公開面が JPX の値に戻ったことに誰も気づかない**。
+ * 自然に見えてしまう 1 行 (`?? row.sector`) で壊れる。壊れても型は通り、`sector33`
+ * が NULL の行 (EDINET コードリスト未収載の新規上場など) だけこっそり
+ * JPX の値に戻っても**公開面を見ただけでは誰も気づかない**。
  *
  * 出力に実際に出る / 出ないことは
  * services/otakara-yutai/src/tests/stock-detail-license.test.ts が
@@ -46,8 +47,8 @@ describe("publicStockMetaFromRow", () => {
   });
 
   it("sector33 が NULL のとき JPX の sector へフォールバックしない", () => {
-    // ここが `?? row.sector` になると、sector33 の充填が終わるまでずっと
-    // JPX の値が公開面に出続ける。本番は全行 NULL なので常にそうなる。
+    // ここが `?? row.sector` になると、sector33 が NULL の行 (EDINET コードリスト
+    // 未収載の新規上場など) だけ JPX の値が公開面に出てしまう。
     expect(publicStockMetaFromRow({ sector: "輸送用機器", sector33: null }).sector).toBeNull();
     expect(publicStockMetaFromRow({ sector: "輸送用機器" }).sector).toBeNull();
   });

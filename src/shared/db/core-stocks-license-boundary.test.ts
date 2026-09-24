@@ -2,7 +2,7 @@
  * `core_stocks` のライセンス境界ガード。
  *
  * `core_stocks` は 1 行に出所の違う列を混ぜている。JPX「東証上場銘柄一覧
- * (data_j.xls)」由来の `market` / `sector` / `sector17` / `instrument_type` と、
+ * (data_j.xls)」由来の `market` / `sector` / `instrument_type` と、
  * 判断そのものである `license_tag` / `src_source` / `quality` は
  * **personal-only** で、公開面 (無認証の HTML / JSON) へ出してはいけない。
  * EDINET コードリスト由来の `code` / `name` / `edinet_code` / `sector33` は
@@ -34,7 +34,7 @@
  * 判断の根拠と承認待ちであることは src/shared/db/active-equity.ts §2)。よって
  * src/shared/db/public-columns.ts の「値を載せない・出さない」方針に反しない。
  * ただし述語は src/shared/db/active-equity.ts の 1 箇所を経由する場合に限る。
- * 値の select と、`market` / `sector` / `sector17` を述語に使うことは引き続き禁止。
+ * 値の select と、`market` / `sector` を述語に使うことは引き続き禁止。
  * 下の「instrument_type を書くのは universe sync だけ」のテストが、`instrumentType`
  * を修飾つきで参照するファイルを universe.ts (書き手) と active-equity.ts (述語) の
  * 2 つに固定している。
@@ -475,7 +475,7 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
       "coreStocks.quality",
     ]);
     // 改行・空白を挟んだ形
-    expect(findQualifiedPersonalOnlyRefs("stocks\n  .sector17")).toEqual(["stocks.sector17"]);
+    expect(findQualifiedPersonalOnlyRefs("stocks\n  .quality")).toEqual(["stocks.quality"]);
 
     // **拾ってはいけないもの**。裸の識別子 grep にすると全部誤検出になり、
     // 検査が常時赤 → 無意味に緩める、という道をたどる。
