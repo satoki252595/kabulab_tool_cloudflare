@@ -98,7 +98,6 @@ class TestStockMasterPayload:
             provenance=prov(),
             market="プライム",
             sector33="輸送用機器",
-            sector17="自動車・輸送機",
             edinet_code="E02144",
             listed=True,
         )
@@ -153,7 +152,6 @@ def _read_page(code="7203", **overrides):
         S.MASTER_PROP_LISTED: {"checkbox": True},
         S.MASTER_PROP_MARKET: select("プライム"),
         S.MASTER_PROP_SECTOR33: select("輸送用機器"),
-        S.MASTER_PROP_SECTOR17: select("自動車・輸送機"),
         S.MASTER_PROP_EDINET_CODE: text("E02144"),
         # 時刻系は古いまま（同値 skip では見ないので一致しなくてよい）。
         S.MASTER_PROP_LAST_UPDATED: {"date": {"start": "2026-06-10"}},
@@ -170,7 +168,6 @@ def _master_rec(**overrides):
         provenance=prov(),
         market="プライム",
         sector33="輸送用機器",
-        sector17="自動車・輸送機",
         edinet_code="E02144",
         listed=True,
     )

@@ -19,7 +19,7 @@ import {
 /**
  * 銘柄マスタ（共有）
  *
- * ⚠️ **ライセンス境界**: `market` / `sector` / `sector17` / `instrument_type` /
+ * ⚠️ **ライセンス境界**: `market` / `sector` / `instrument_type` /
  * `license_tag` / `src_source` / `quality` は `personal-only`。公開面 (HTML /
  * JSON API) へ出してはいけない。drizzle の既定 select は**全列返し**なので、
  * `db.select().from(stocks)` (列指定なし) はこれらを必ず含んだ行を返す。
@@ -66,11 +66,15 @@ export const stocks = sqliteTable(
       .notNull(),
 
     // -------------------------------------------------------------------------
-    // 以下 12 列は stockStock 側の移行 P4a (2026-09-12) が本番 D1 へ直接 ALTER で
+    // 以下 11 列は stockStock 側の移行 P4a (2026-09-12) が本番 D1 へ直接 ALTER で
     // 足したもの。**本番の PRAGMA に合わせて全列 nullable / default なし**。
     // 型を勝手に notNull や default 付きにすると、この宣言から生成した DDL で
     // 作った非本番 DB だけが本番と違う形になる。
-    // 2026-09-12 時点ではいずれも本番で全行 NULL (値を入れるのは P4b)。
+    // 2026-09-24 時点: instrument_type は src/cron/universe.ts (JPX, #27〜)、
+    // sector33 は stockStock の master_sync (EDINET, 2026-09-13〜) が充填済み
+    // (sector33 は現役普通株 3,700 件で NULL 0 件)。
+    // edinet_code / listing_status / listing_date / delisting_date / license_tag /
+    // src_source / src_data_date / src_fetched_at / quality はまだ全行 NULL。
     // -------------------------------------------------------------------------
 
     /** `personal-only`。内国普通株 / ETF / REIT 等の区分。 */
@@ -79,23 +83,16 @@ export const stocks = sqliteTable(
      * **公開面が業種として読む列** (src/shared/db/public-columns.ts)。値を書くのは
      * stockStock の `collectors/edinet_codelist.py` だけで、そこは EDINET
      * コードリストの「提出者業種」を `license_tag=commercial-ok` として取る。
-     * 2026-09-13 時点で本番は全行 NULL (充填は stockStock 側の P4b)。
+     * 2026-09-24 時点: stockStock の master_sync (2026-09-13〜) が充填済み
+     * (現役普通株 3,700 件で NULL 0 件、全体 3,810 件中 3,757 件が非 NULL)。
      *
      * ⚠️ **この列へ JPX (data_j.xls) の 33業種区分を書いてはいけない。** 名前が
      * `sector33` なので上の `sector` と同じ値を入れたくなるが、この列は公開面に
      * 出ているため、JPX の値を入れると無認証の HTML / JSON が personal-only を
      * 返す状態に**テストが全部緑のまま**戻る。この禁止は
      * src/shared/db/core-stocks-license-boundary.test.ts が機械的に見ている。
-     *
-     * ⚠️ **未了**: stockStock 側の宣言 (`MIXED_LICENSE_COLUMNS` /
-     * `worker/src/shared/license.ts` の `RESTRICTED_COLUMNS`) は今もこの列を
-     * personal-only としており、`cloud_store/core_stocks.py` は「出自は §8-2 で
-     * 未決」と書いている。公開してよい根拠は現在の書き込み元 (EDINET) であって
-     * 宣言ではない。宣言を直すか公開を止めるかは stockStock 側のレーンの判断。
      */
     sector33: text("sector33"),
-    /** `personal-only`。JPX 17業種。33業種と違い `sector` に相当する既存列は無い。 */
-    sector17: text("sector17"),
     /** EDINET コード。部分索引 idx_core_stocks_edinet が NOT NULL 行のみを張る。 */
     edinetCode: text("edinet_code"),
     /** 上場状態 (上場 / 上場廃止 等)。`is_active` とは別で、JPX 側の区分を保つ。 */

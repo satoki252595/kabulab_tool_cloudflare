@@ -333,8 +333,9 @@ INDEX_SYMBOLS: tuple[tuple[str, str | None, str], ...] = (
 # いなかった**。片方だけ直すと「JPX 由来の業種が commercial-ok として公開面に
 # 出る」に反転するので、2 列は必ず同時に扱う。
 #
-# `sector33` は 2026-09-13 まで本番 3,818 行すべて NULL で、同日から
-# `master_sync` が埋める（`cloud_store/core_stocks.build_sector33_updates`）。
+# `sector33` は 2026-09-13 まで本番 3,818 行すべて NULL だったが、同日から
+# `master_sync` が埋めており（`cloud_store/core_stocks.build_sector33_updates`）、
+# 2026-09-24 実測では稼働中の普通株式行の欠損は 0 件。
 # EDINET の業種は提出者の申告なので `sector` と約 4% の銘柄で分類が違うが、
 # `sector` へ寄せてはいけない（寄せた値は JPX 由来 = personal-only になる）。
 MIXED_LICENSE_COLUMNS: dict[str, dict[str, LicenseTag]] = {
@@ -347,7 +348,6 @@ MIXED_LICENSE_COLUMNS: dict[str, dict[str, LicenseTag]] = {
         # JPX data_j.xlsx 由来 → personal-only
         "market": LicenseTag.PERSONAL_ONLY,
         "sector": LicenseTag.PERSONAL_ONLY,  # kabulab-cf が JPX 33業種を書く既存列
-        "sector17": LicenseTag.PERSONAL_ONLY,
         "instrument_type": LicenseTag.PERSONAL_ONLY,
         # 一次開示で判明したライフサイクル。設計書 §A-1 の追加列表が
         # commercial-ok と決めている（EDINET・TDnet の開示が一次ソース）。

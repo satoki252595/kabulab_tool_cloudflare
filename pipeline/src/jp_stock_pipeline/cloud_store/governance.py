@@ -377,7 +377,8 @@ def ddl_columns(sql: str | None) -> list[str]:
 # 瞬間に `universe.ts` が毎回 throw して **JPX 母集団同期が止まる**。だから
 # `base` は `kabulab-cf` のまま動かさない。
 #
-# `enrich` 群（P4a で足した 12 列のうち `instrument_type` を除く 11 列）は、
+# `enrich` 群（P4a で足した 12 列のうち、書かれずに終わった `sector17`
+# （2026-09-24 に削除）と `instrument_type` を除く 10 列）は、
 # `jobs/master_sync.py` が `sector33` を既存行への UPDATE だけで埋め始めたので
 # `stockStock` で宣言する。設計どおり同一 PR で (1) `core_stocks/enrich` を
 # `stockStock` で足す (2) 充填ジョブを有効にする、の順に入れた。
@@ -397,7 +398,7 @@ def ddl_columns(sql: str | None) -> list[str]:
 # kabulab-cf で INSERT も発行するので `base` と分ける理由が無く、PK の行を
 # 増やすほど後の統合が破壊的書換になる。
 #
-# `enrich` の 11 列のうち今日書くのは `sector33` だけで、残り 10 列は P4b。
+# `enrich` の 10 列のうち今日書くのは `sector33` だけで、残り 9 列は P4b。
 # 群を列ごとに割らないのは、PK が `(dataset, column_group)` なので細かく割るほど
 # 後の統合が破壊的書換になるからである（writer が別になる列が出たら割る）。
 #

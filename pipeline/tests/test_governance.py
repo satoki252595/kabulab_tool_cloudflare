@@ -29,10 +29,11 @@ from jp_stock_pipeline.licensing import LicenseTag
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = REPO_ROOT / "tests" / "fixtures" / "contracts" / "d1-license-map.json"
 
-# 本番 `core_stocks` の実 DDL（P4a 適用後の 21 列）。`sqlite_master` は
-# `ALTER TABLE ADD COLUMN` のときに保存済みの CREATE TABLE 文を書き換えるので、
-# ALTER で足した 12 列もここに現れる。この前提が崩れると `ddl_columns` を
-# 使う設計そのものが成立しない。
+# 本番 `core_stocks` の実 DDL（P4a 適用後・`sector17` DROP COLUMN 後の 20 列。
+# `sector17` はどの collector からも書かれず全行 NULL だったため 2026-09-24 に
+# 削除した）。`sqlite_master` は `ALTER TABLE ADD COLUMN` のときに保存済みの
+# CREATE TABLE 文を書き換えるので、ALTER で足した列もここに現れる。この前提が
+# 崩れると `ddl_columns` を使う設計そのものが成立しない。
 CORE_STOCKS_DDL = (
     "CREATE TABLE `core_stocks` ("
     "`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL, `code` text NOT NULL,"
@@ -41,7 +42,7 @@ CORE_STOCKS_DDL = (
     " `is_yutai` integer DEFAULT false NOT NULL,"
     " `created_at` integer DEFAULT (unixepoch()) NOT NULL,"
     " `updated_at` integer DEFAULT (unixepoch()) NOT NULL,"
-    " `instrument_type` TEXT, `sector33` TEXT, `sector17` TEXT, `edinet_code` TEXT,"
+    " `instrument_type` TEXT, `sector33` TEXT, `edinet_code` TEXT,"
     " `listing_status` TEXT, `listing_date` TEXT, `delisting_date` TEXT,"
     " `license_tag` TEXT, `src_source` TEXT, `src_data_date` TEXT,"
     " `src_fetched_at` INTEGER, `quality` TEXT)"
@@ -64,7 +65,7 @@ class TestDdlColumnParser:
     def test_ALTER_で足した列も読める(self) -> None:
         """`PRAGMA table_info` を 30 回投げずに済む根拠。"""
         columns = G.ddl_columns(CORE_STOCKS_DDL)
-        assert len(columns) == 21
+        assert len(columns) == 20
         assert set(cs.NEW_COLUMNS) <= set(columns)
         assert columns[0] == "id"
 

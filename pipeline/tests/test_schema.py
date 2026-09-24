@@ -139,7 +139,6 @@ class TestSpecificProperties:
         for name in (
             schema.MASTER_PROP_MARKET,
             schema.MASTER_PROP_SECTOR33,
-            schema.MASTER_PROP_SECTOR17,
         ):
             assert "select" in props[name]
         assert "checkbox" in props[schema.MASTER_PROP_LISTED]

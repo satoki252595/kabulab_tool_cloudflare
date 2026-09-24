@@ -169,7 +169,6 @@ def stock_master_properties(
     }
     _set(props, S.MASTER_PROP_MARKET, select_prop, record.market)
     _set(props, S.MASTER_PROP_SECTOR33, select_prop, record.sector33)
-    _set(props, S.MASTER_PROP_SECTOR17, select_prop, record.sector17)
     _set(props, S.MASTER_PROP_EDINET_CODE, text_prop, record.edinet_code)
     if include_lifecycle:
         _set(props, S.MASTER_PROP_STATUS, select_prop, record.status)
@@ -730,7 +729,7 @@ def stock_master_matches_page(
     """① の既存行が record と同値か（L-19。月次 3,841 PATCH → 差分のみ）。
 
     比較するのは codelist 所有の意味フィールド（名称/コード/上場状態/
-    市場/33業種/17業種/EDINETコード）だけ。次は見ない:
+    市場/33業種/EDINETコード）だけ。次は見ない:
 
     - 時刻系（最終データ更新日/取得日時/データ基準日）: 毎 run 変わるので
       見ると skip が永遠に発火しない。意味が変わった run の PATCH で更新される
@@ -751,7 +750,6 @@ def stock_master_matches_page(
     for prop, want in (
         (S.MASTER_PROP_MARKET, record.market),
         (S.MASTER_PROP_SECTOR33, record.sector33),
-        (S.MASTER_PROP_SECTOR17, record.sector17),
     ):
         if _read_select_name(properties, prop) != want:
             return False

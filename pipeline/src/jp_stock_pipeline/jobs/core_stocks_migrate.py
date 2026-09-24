@@ -15,7 +15,8 @@
 - 追加列・追加索引の有無（適用済みの確認）と型・nullability
 - E7: 本番にあって stockStock の定義に無い列・索引（superset 方向）。
   `core_stocks` の列定義は両リポジトリに散っていて**本番の PRAGMA が正**
-  （21 列）なので、kabulab-cf 側が列を足した瞬間に stockStock の地図が古くなる。
+  （20 列。`sector17` は書かれずに終わり 2026-09-24 に DROP COLUMN した）なので、
+  kabulab-cf 側が列を足した瞬間に stockStock の地図が古くなる。
   気づけるのはこの向きの検査だけ
 
 なお「1 文も書かない」ではない: 他の全ジョブと同じく `jobs.runner.run_job` が

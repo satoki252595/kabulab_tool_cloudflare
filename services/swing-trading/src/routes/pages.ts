@@ -302,9 +302,9 @@ pagesRoute.get("/stock/:code", zValidator("param", stockParamSchema), async (c) 
   const db = createDb(c.env.DB);
 
   // 列を明示する。`select()` (列指定なし) は core_stocks の全列 = `personal-only` の
-  // sector33 / sector17 / instrument_type / license_tag / src_source / quality まで
-  // SSR プロセスへ載せてしまう。今は本番で全行 NULL だが、移行 P4b が値を入れた
-  // 時点で漏れうる。詰め替え漏れではなくクエリで落とす。
+  // sector33 / instrument_type / license_tag / src_source / quality まで
+  // SSR プロセスへ載せてしまう。sector33 は stockStock の master_sync が
+  // 既に値を埋めているため、詰め替え漏れではなくクエリで落とす必要が現に有効。
   // (src/shared/db/core-stocks-license-boundary.test.ts が列指定なしを禁じている)
   const [stock] = await db
     .select({

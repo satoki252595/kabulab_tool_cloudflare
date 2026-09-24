@@ -152,7 +152,7 @@
 
 | # | データ | 粒度 | 年間量（確定値） | 格納先 | 形式 | 正本か | ライセンス区分 |
 |---|---|---|---:|---|---|---|---|
-| **①** | 銘柄マスタ | 銘柄 | 4,445行（増分ほぼ0） | **D1** `core_stocks`（列追加） | 行 | **○正本** | EDINETコードリスト由来列（`code`/`name`/`edinet_code`/**`sector33`**）=commercial-ok ／ JPX data_j.xlsx 由来列（`market`/**`sector`**/`sector17`/`instrument_type`）=**personal-only**（列単位で混在） |
+| **①** | 銘柄マスタ | 銘柄 | 4,445行（増分ほぼ0） | **D1** `core_stocks`（列追加） | 行 | **○正本** | EDINETコードリスト由来列（`code`/`name`/`edinet_code`/**`sector33`**）=commercial-ok ／ JPX data_j.xlsx 由来列（`market`/**`sector`**/`instrument_type`）=**personal-only**（列単位で混在。`sector17` は writer/reader 不在・本番全行 NULL のため 2026-09-24 に削除） |
 | **②** | 株価 日足OHLCV（10年） | 銘柄×営業日 | 約95.5万行 / +0.07 GB | **R2** `vwap-data/daily/{code}.json` | JSON（per-code） | **○正本** | personal-only（yfinance） |
 | **②** | 株価 指数・為替・先物 | シンボル×営業日 | **7シンボル**×245 | **R2** `vwap-data/index/{slug}.json` | JSON（per-slug） | **○正本** | personal-only |
 | **②** | 株価 5分足 | 銘柄×5分 | （**未実測**・仮2 GB/5年） | **R2** `vwap-data/intra/{code}.json` | JSON（per-code） | ○正本 | personal-only |
@@ -800,7 +800,6 @@ D4 はその手動同期を 1 回ぶん増やしている。契約ファイル�
 |---|---|---|---|
 | `instrument_type` | TEXT | `equity/foreign/pro_market/etf_etn/reit_fund/investment_certificate`。分類できない行は NULL。母集団を 3,818 → 4,445 へ拡張するために必須。2026-09-13 に実装へ合わせて訂正した（正本は kabulab-cf `src/shared/jpx/instrument-type.ts`）。当初の `equity/etf/etn/reit/pro/foreign/preferred` は、data_j の「市場・商品区分」から 1:1 に導けない（P4a 実施記録） | **personal-only**（JPX data_j.xls 由来） |
 | `sector33` | TEXT | 33業種（EDINET コードリストの「提出者業種」） | **commercial-ok**（EDINET 由来。既存 `sector` と出所が違う → E7） |
-| `sector17` | TEXT | 17業種 | **personal-only**（同上） |
 | `edinet_code` | TEXT | EDINETコード | commercial-ok |
 | `listing_status` | TEXT | 上場/監理/整理/上場廃止 | commercial-ok |
 | `listing_date` | TEXT | YYYY-MM-DD。一次開示で判明した場合のみ | commercial-ok |
@@ -813,7 +812,9 @@ D4 はその手動同期を 1 回ぶん増やしている。契約ファイル�
 
 追加索引: `idx_core_stocks_active_market (is_active, market)` / `idx_core_stocks_edinet (edinet_code)`。既存の `code` UNIQUE は維持。
 
-**既存 `sector` 列との関係（出所は 2026-09-13 に確定、統合は未着手）**: 値はほぼ同じだが**出所が違う別の列**である。`sector` は kabulab-cf `src/cron/universe.ts` が JPX `data_j.xlsx` の33業種を書く既存列（**personal-only**）、`sector33` は stockStock `collectors/edinet_codelist.py` が EDINET コードリストの「提出者業種」を書く新設列（**commercial-ok**）。本仕様は「**既存 `sector` を触らない・`sector33` を別列として足す**」に留める。**タグが違うので統合してはいけない**（1列にまとめた瞬間に、公開してよい EDINET 由来の値と公開できない JPX 由来の値が同じ列に同居し、列単位の地図で区別できなくなる）。公開面で業種を出すなら `sector33` を使う（ただし充填は P4b 以降。それまで全行 NULL）。既存 consumer（001 のスクリーニング、`株ラボ-Youtube/data/d1.py` の `stocks()`）は `sector` を読み続けるので私用面に留める。
+`sector17` は 2026-09-24 に削除した（writer/reader が一度も存在せず、本番 `core_stocks` は全行 NULL のままだったため。D1 列・パイプラインのモデル・Notion 17業種の書込経路をすべて撤去）。
+
+**既存 `sector` 列との関係（出所は 2026-09-13 に確定、統合は未着手）**: 値はほぼ同じだが**出所が違う別の列**である。`sector` は kabulab-cf `src/cron/universe.ts` が JPX `data_j.xlsx` の33業種を書く既存列（**personal-only**）、`sector33` は stockStock `collectors/edinet_codelist.py` が EDINET コードリストの「提出者業種」を書く新設列（**commercial-ok**）。本仕様は「**既存 `sector` を触らない・`sector33` を別列として足す**」に留める。**タグが違うので統合してはいけない**（1列にまとめた瞬間に、公開してよい EDINET 由来の値と公開できない JPX 由来の値が同じ列に同居し、列単位の地図で区別できなくなる）。公開面で業種を出すなら `sector33` を使う（**2026-09-13 に充填済み・公開面も切替済み**。下記 E7・「sector33 の充填」節を参照）。既存 consumer（001 のスクリーニング、`株ラボ-Youtube/data/d1.py` の `stocks()`）は `sector` を読み続けるので私用面に留める。
 
 **ライセンスが列単位で混在する点の帰結**: ① は「EDINETコードリスト由来=commercial-ok / JPX由来=personal-only」で1行に混在するため、**行の `license_tag` 1列では公開可否を表現できない**。判定は列単位の地図（`jss_column_license`）に従う必要がある。
 
@@ -877,9 +878,7 @@ D4 はその手動同期を 1 回ぶん増やしている。契約ファイル�
 本節の上の `:150`（①の行） / B-10 `jss_column_license` の「新設の根拠」。
 （当初ここに書いていた `:1078` は誤り。その行は B-5 `jss_supply_latest` で無関係。）
 
-**`core_stocks.sector33` は本番 3,818 行すべて NULL のまま**なので、タグが公開可に
-なっても今は 1 件も出ない。**公開面の業種を `sector` → `sector33` へ切り替えて
-よいのは P4b の充填が済んだ後**（切り替えだけ先に入れると業種が全件空欄になる）。
+**2026-09-13 決着時点では `core_stocks.sector33` は本番 3,818 行すべて NULL** だったため、タグが公開可になっても当時は 1 件も出なかった。**その後 2026-09-13 中に下記「sector33 の充填」で充填し、公開面の業種も `sector` → `sector33` へ切替済み**（2026-09-24 実測: 非NULL 3,757/3,810、active equity 行の NULL は 0）。
 統合（2 列を 1 列に寄せる）は**してはいけない**: タグが違う値が同じ列に同居すると
 列単位の地図で区別できなくなる。
 
@@ -1286,7 +1285,7 @@ CREATE TABLE jss_column_license (
 );
 ```
 
-**新設の根拠**: `core_stocks` は「EDINETコードリスト由来（`code`/`name`/`edinet_code`/`sector33`）=commercial-ok / JPX data_j.xlsx 由来（`market`/`sector`/`sector17`/`instrument_type`）=personal-only」で**1行に混在**する。行の `license_tag` 1列では表現できないため、判定は列単位でなければならない。`licensing.py` から生成し、手書きの二重定義を作らない。**`sector` と `sector33` は名前が似ているだけで writer も一次ソースも違う**（E7 を読むこと。取り違えると公開面へ JPX 由来の業種が出る）。
+**新設の根拠**: `core_stocks` は「EDINETコードリスト由来（`code`/`name`/`edinet_code`/`sector33`）=commercial-ok / JPX data_j.xlsx 由来（`market`/`sector`/`instrument_type`）=personal-only」で**1行に混在**する（`sector17` は 2026-09-24 に削除）。行の `license_tag` 1列では表現できないため、判定は列単位でなければならない。`licensing.py` から生成し、手書きの二重定義を作らない。**`sector` と `sector33` は名前が似ているだけで writer も一次ソースも違う**（E7 を読むこと。取り違えると公開面へ JPX 由来の業種が出る）。
 
 行数: 約300。
 
@@ -1526,7 +1525,7 @@ D1 の課金軸は**走査行数**で `LIMIT` では下がらない。自由な 
 
 #### ① 銘柄マスタ `stock_master` — 4,445行・月次
 
-既存維持: 銘柄名(title) / 銘柄コード(rich_text・冪等キー) / 市場区分 / 33業種 / 17業種 / EDINETコード / 上場状態(checkbox) / 状態(select) / 上場日 / 上場廃止日 / 最終データ更新日。
+既存維持: 銘柄名(title) / 銘柄コード(rich_text・冪等キー) / 市場区分 / 33業種 / EDINETコード / 上場状態(checkbox) / 状態(select) / 上場日 / 上場廃止日 / 最終データ更新日（`17業種` は 2026-09-24 に廃止。writer が存在しなかった）。
 
 | 追加 | 型 | 備考 |
 |---|---|---|
@@ -1872,7 +1871,7 @@ stockStock 側の UPSERT は `SET` 句を**ホワイトリストで列挙**す�
 | ① | Notion ① / ローカルPG `stock_master` | サブ |
 | 鮮度・ジョブログ | D1 `jss_dataset_freshness` / `jss_job_runs` | 正 |
 
-**新規要件: 母集団拡張。** 現行は EDINET コードリストのみで、ETF/ETN/REIT/PRO/出資証券/外国株を含まない。R2 `daily/` の母集団 4,445 を供給するには JPX `data_j.xls` が必須。新コレクタ `collectors/jpx_universe.py` を追加し、「市場・商品区分」→ `instrument_type` へ写像する。**未知の区分は `None` にしてログに出す**（`equity` に倒さない）。`sector33` / `sector17` は data_j.xls 由来、`edinet_code` は EDINET 由来で、code でマージする。片方にしか無い銘柄は欠けた列を `None` にする（推定禁止）。
+**新規要件: 母集団拡張。** 現行は EDINET コードリストのみで、ETF/ETN/REIT/PRO/出資証券/外国株を含まない。R2 `daily/` の母集団 4,445 を供給するには JPX `data_j.xls` が必須。新コレクタ `collectors/jpx_universe.py` を追加し、「市場・商品区分」→ `instrument_type` へ写像する。**未知の区分は `None` にしてログに出す**（`equity` に倒さない）。`edinet_code` / `sector33` は EDINET 由来、`sector` は data_j.xls 由来で、code でマージする（`sector33` の出所は E7 決着を参照。`sector17` は 2026-09-24 に削除済みでこの節の対象外）。片方にしか無い銘柄は欠けた列を `None` にする（推定禁止）。
 
 **ガード（`src/cron/universe.ts:82-120` の `assertUniverseCoverage` から移植。`cloud_store/universe_guards.py`）**: (a) JPX raw 行数 < 4,000 で中止、(b) 内国株式 < 3,000 で中止、(c) 既存 active の被覆率 < 98% で中止、(d) 1 run の対象外化が既存 active の 2% 超で中止。**(c)(d) の分母は `core_stocks` の total ではなく is_active=1 の件数**（実測 3,715）。
 
@@ -3081,7 +3080,7 @@ kabulab-cf は `pnpm typecheck` 通過、本番 11 経路がすべて 200。
 （素の SQLite の既定は 500）。15 表の孤児検査を 1 文にまとめると必ず失敗するので
 3 文に分割している（`cloud_store/d1.MAX_COMPOUND_SELECT_TERMS`）。
 
-**P4a の範囲外にしたもの**: `instrument_type` / `sector33` / `sector17` の値の充填（`sector33` は 2026-09-13 に下記「sector33 の充填」で解消。残りは P4b。うち `instrument_type` は 2026-09-13 に kabulab-cf #27 が `universe.ts` で充填して解消済み）。
+**P4a の範囲外にしたもの**: `instrument_type` / `sector33` / `sector17` の値の充填（`sector33` は 2026-09-13 に下記「sector33 の充填」で解消。`instrument_type` は 2026-09-13 に kabulab-cf #27 が `universe.ts` で充填して解消済み。`sector17` は writer が最後まで実装されず本番全行 NULL のまま 2026-09-24 に列ごと削除。残る `edinet_code`/`listing_status`/`listing_date`/`delisting_date`/`license_tag`/`src_source`/`src_data_date`/`src_fetched_at`/`quality` は P4b）。
 
 着手時点では供給源の JPX data_j が旧 URL (`.../data_j.xls`) で **HTTP 404** を返し、
 一次データを正規に取得できなかった（`core_stocks.MAX(updated_at)` は 2026-08-10 で、
@@ -3124,7 +3123,7 @@ kabulab-cf は `pnpm typecheck` 通過、本番 11 経路がすべて 200。
 
 この 2 つの事実（鮮度の基準が `updated_at` である / 充填が `updated_at` を進める）は `pipeline/tests/test_core_stocks_migrate.py` の `TestFillWouldBlindTheFreshnessMonitor` が固定してあり、`build_column_update` を `jobs/` から呼び始めた時点で落ちる（AST の Call ノードで検出する）。
 
-なお `sector33` が全行 NULL のままなので、**kabulab-cf 側が公開面の業種を `sector` → `sector33` へ切り替えてよいのは充填の後**である（切り替えだけ先に入れると業種が全件空欄になる）。タグの修正（commercial-ok）と充填は別物であることに注意。
+充填前は `sector33` が全行 NULL だったため、公開面の業種切替は充填後まで待つ必要があった。実際には直後の「sector33 の充填」で解消し、kabulab-cf 側も切替済み（2026-09-24 実測: 非NULL 3,757/3,810）。タグの修正（commercial-ok）と充填は別物であることに注意。
 
 ##### sector33 の充填（2026-09-13 ユーザ承認）
 
@@ -3584,7 +3583,7 @@ D1 の内訳で従来試算とのずれが大きい2点: 原本索引は R2 キ�
 | # | リスク | 影響 | 緩和 |
 |---|---|---|---|
 | S-1 | **新しい公開面を立てる前に、既存の公開面が personal-only を無認証で配っている**（007 の日足・5分足・信用残、002 の優待スクリーニングと掲載文。全て実読で確定） | 同一アカウント・同一データで厳格な面と緩い面が並存し、規約上の説明がつかない | 公開層 S1 より**前**に是正を切替工程へ組み込む（承認 A24）。少なくとも読取キーを掛けるか内部ホストへ移す |
-| S-2 | **公開できる①の列が薄い**。市場区分・33業種・17業種・銘柄種別は JPX data_j.xls 由来＝personal-only | 公開 API の実用性が大きく落ちる。「東証プライムの高ROE」のような最も自然なクエリが公開面で成立しない | (a) EDINET コードリストの提出者業種で代替（commercial-ok）、(b) JPX の市場区分に編集著作物性があるかは**要法務確認**、(c) 当面は EDINET 由来の業種のみで公開 |
+| S-2 | **公開できる①の列が薄い**。市場区分・`sector`（JPX 33業種）・銘柄種別は JPX data_j.xls 由来＝personal-only（`sector17` は 2026-09-24 に削除済みで対象外） | 公開 API の実用性が大きく落ちる。「東証プライムの高ROE」のような最も自然なクエリが公開面で成立しない | (a) EDINET コードリストの提出者業種 `sector33` で代替（commercial-ok・**2026-09-13 に充填し公開面へ切替済み**）、(b) JPX の市場区分に編集著作物性があるかは**要法務確認**、(c) 当面は EDINET 由来の業種のみで公開 |
 | S-3 | 開示メタの感情スコア列の扱いが未決。kabulab-cf の自前計算だが入力が factual-cite なので継承則では factual-cite になる | 公開面の列選定が決まらない | 「原文の要約・感情スコアは原文の派生でメタデータの範囲を超えうる」として**既定では公開しない** |
 | S-4 | APIキー表と使用量計上表は**確定した D1 配置表に無い新規テーブル** | 配置表からの逸脱 | 数十〜数千行で 10GB 上限への影響は無視できる。D1 配置の判定基準3条件は満たすので**追加提案**として扱う |
 | S-5 | 公開 Worker のソースが PUBLIC リポジトリに載るため、述語・レート制限値が全部公開される | 攻撃者が最も高コストな述語を狙える | 述語を固定パラメータに限っているので「高コストな述語」自体が存在しない設計。走査行上限とレート制限が最後の防御 |

@@ -71,7 +71,6 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         name            TEXT NOT NULL,
         market          TEXT,
         sector33        TEXT,
-        sector17        TEXT,
         edinet_code     TEXT,
         listed          BOOLEAN NOT NULL DEFAULT TRUE,
         status          TEXT,

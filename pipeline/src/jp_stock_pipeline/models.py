@@ -133,7 +133,6 @@ class StockMasterRecord:
     provenance: Provenance
     market: str | None = None  # 市場区分
     sector33: str | None = None  # 33業種
-    sector17: str | None = None  # 17業種
     edinet_code: str | None = None
     listed: bool = True  # 上場状態 (checkbox: 現在上場しているか)
     # ライフサイクル (§: コーポレートアクション対応)。日付は一次開示で判明した場合のみ

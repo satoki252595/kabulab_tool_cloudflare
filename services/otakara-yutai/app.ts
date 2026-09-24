@@ -1410,9 +1410,10 @@ app.get("/stocks/:code", async (c) => {
   const stockData = await db.query.stocks.findFirst({
     // core_stocks も**列ごと引かない**。`db.query` の関係クエリは `columns` を
     // 省くと全列返しなので、移行 P4a が足した `personal-only` 列
-    // (sector33 / sector17 / instrument_type / license_tag / src_source / quality)
-    // まで SSR プロセスへ載る。2026-09-12 時点は全行 NULL だが P4b が値を入れた
-    // 時点で経路が開く。`.select()` 側の禁止だけでは関係クエリは塞げないので、
+    // (sector33 / instrument_type / license_tag / src_source / quality)
+    // まで SSR プロセスへ載る。sector33 は 2026-09-13 以降 stockStock の
+    // master_sync が値を埋めており、他の列も P4b で埋まり次第この経路が開く。
+    // `.select()` 側の禁止だけでは関係クエリは塞げないので、
     // ここは `columns` で塞ぐ (禁止は core-stocks-license-boundary.test.ts、
     // 出力が漏れないことは src/tests/stock-detail-license.test.ts が見ている)。
     columns: { id: true, name: true, ...publicStockRelationalColumns },
