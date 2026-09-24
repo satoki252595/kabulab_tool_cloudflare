@@ -79,7 +79,6 @@ class SupplyRecord:
     data_date: date
     provenance: Provenance
     exchange: str = ""        # 取引所区分名 (同一銘柄が複数取引所に出るため断面のキーの一部)
-    isin: str | None = None
     loan_bal: int | None = None     # 融資残高株数
     loan_chg: int | None = None     # 融資の新規-返済
     stock_bal: int | None = None    # 貸株残高株数

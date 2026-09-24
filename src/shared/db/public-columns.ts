@@ -97,15 +97,14 @@ export function publicStockMetaLabel(
  * personal-only 列 (両綴りで拾う)。`sector33` は EDINET 由来で入れない。
  * 消す前に公開面が直接読み始めていないか確かめること
  * (`public-columns.test.ts` が固定)。
+ *
+ * 2026-09-25: `licenseTag` / `license_tag` / `srcSource` / `src_source` /
+ * `quality` は core_stocks の列自体を DROP したため外した (core-schema.ts)。
+ * 列が存在しない以上、公開面がこれを読んで漏らす経路も物理的に無くなった。
  */
 export const PERSONAL_ONLY_COLUMNS = [
   "market",
   "sector",
   "instrumentType",
   "instrument_type",
-  "licenseTag",
-  "license_tag",
-  "srcSource",
-  "src_source",
-  "quality",
 ] as const;

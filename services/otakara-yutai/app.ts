@@ -480,11 +480,6 @@ td{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-weight:50
 .product-value-unknown{color:var(--text-muted);border-style:dashed;font-weight:600}
 /* --bg-soft の上に載るので --text-muted (4.16:1) では AA を満たさない */
 .product-desc-empty{color:var(--text-secondary)}
-/* WEB推定: 企業公表額より確度が低い参考値。warning 系で視覚的に区別 (ルール1)。
-   グロー/影は付けない (Editorial Swiss Grid)。*/
-.product-value-web{color:var(--warning);border-color:var(--warning);background:var(--warning-soft)}
-/* 出典リンクは隣の値バッジと同寸のタップ可能チップにする (高齢層のタップ成功率)。*/
-.product-value-src{display:inline-flex;align-items:center;font-family:var(--font-mono);font-size:11px;font-weight:700;color:var(--text-muted);margin-left:4px;padding:2px 8px;border:1.5px solid var(--border-soft);border-radius:var(--radius)}
 .product-months{font-family:var(--font-mono);font-size:11px;color:var(--text-muted);background:var(--bg-pure);border:1.5px dashed var(--border-soft);padding:2px 8px;border-radius:var(--radius);font-weight:600}
 @media(max-width:560px){
   .benefit-tier{grid-template-columns:1fr;gap:10px;padding:14px 16px}
@@ -581,7 +576,6 @@ export const TIPS = {
   recordmonth: "権利確定月。この月末時点で株を保有していると株主優待がもらえます。権利付最終日（月末2営業日前）までに購入が必要。",
   minshares: "最低必要株数。優待をもらうために最低限保有しなければならない株の数。通常100株単位です。",
   value_unknown: "この優待は商品名から金額を機械的に推定できません。自社製品・体験型・割引券・カタログギフトの一部などが該当します。「分からない=ダメ」ではなく、金額換算が難しいので投資判断はご自身で行ってください。",
-  web_estimate: "企業が金額を公表していない自社商品について、楽天市場で同等品の実勢価格を調べて推定した参考値です。企業公表の「○○円相当」より確度は低めです。あくまで目安として、投資判断はご自身で行ってください（「出典」から実際の商品ページを確認できます）。",
 } as const;
 
 function tip(key: keyof typeof TIPS, label: string): string {
@@ -602,10 +596,13 @@ export type BenefitRow = {
    */
   summary: string;
   estimatedValue: number | null;
-  /** 推定額の出典 (ルール1): "company"=企業公表/確定額, "web"=楽天由来の参考推定, null */
+  /**
+   * 推定額の出典 (ルール1): "company"=企業公表/確定額, null=推定不能。
+   * "web"(楽天由来の参考推定)は 2026-09-25 に enrich-from-web を作り直さない
+   * 決定 (U5-(A)) で廃止し、出典 URL 列 `estimate_source_url` も DROP した
+   * (X-01)。以後この値は "company" か null のいずれかになる見込み。
+   */
   estimateValueSource: string | null;
-  /** "web" 推定時の出典 URL */
-  estimateSourceUrl: string | null;
 };
 
 /** 優待をジャンル → 保有段階 → 商品 の3階層にまとめる */
@@ -614,7 +611,6 @@ type ProductGroup = {
   summary: string;
   estimatedValue: number | null;
   estimateValueSource: string | null;
-  estimateSourceUrl: string | null;
   months: number[];
 };
 type TierGroup = {
@@ -655,19 +651,17 @@ export function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
           summary: b.summary,
           estimatedValue: b.estimatedValue,
           estimateValueSource: b.estimateValueSource,
-          estimateSourceUrl: b.estimateSourceUrl,
           months: [],
         });
       }
       const p = productMap.get(key)!;
       p.months.push(b.recordMonth);
       // 最大の推定価値を残す（同一商品が月ごとに別値を持つ場合の保険）。
-      // 値を差し替えるときは出典 (source/url) も一緒に差し替える (ルール1: 値と
+      // 値を差し替えるときは出典区分も一緒に差し替える (ルール1: 値と
       // 出典の対応を崩さない)。
       if (b.estimatedValue != null && (p.estimatedValue == null || b.estimatedValue > p.estimatedValue)) {
         p.estimatedValue = b.estimatedValue;
         p.estimateValueSource = b.estimateValueSource;
-        p.estimateSourceUrl = b.estimateSourceUrl;
       }
     }
     const tiers: TierGroup[] = [...tierMap.entries()]
@@ -678,7 +672,6 @@ export function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
           summary: p.summary,
           estimatedValue: p.estimatedValue,
           estimateValueSource: p.estimateValueSource,
-          estimateSourceUrl: p.estimateSourceUrl,
           months: [...new Set(p.months)].sort((a, b) => a - b),
         })),
       }));
@@ -802,21 +795,13 @@ function renderBenefitGroups(groups: GenreGroup[]): string {
               // を区別できなくしていたため、明示バッジ + バルーンヘルプ
               // (ルール7) で「分からないからこそ慎重に」のトーンを補う。
               //
-              // 値があるとき、出典 (estimateValueSource) で表示を分ける (ルール1:
-              // 推定値と企業公表値を機械可読/視覚的に分離):
-              //   "web" = 楽天市場の実勢価格からの参考推定。「WEB推定」バッジ +
-              //           バルーンヘルプ + 出典リンクを付け、企業公表額と混同
-              //           させない。company / それ以外は従来通り「推定 N円」。
+              // 値があるときは常に「推定 N円」(企業公表 = estimateValueSource
+              // "company")。楽天由来の "WEB推定" 表示・出典リンクは
+              // enrich-from-web を作り直さない決定 (U5-(A)、2026-09-25) で
+              // 廃止し、出典 URL 列 `estimate_source_url` も DROP した (X-01)。
               let valueNote: string;
               if (p.estimatedValue == null) {
                 valueNote = `<span class="product-value product-value-unknown">${tip("value_unknown", "金額換算が難しい優待")}</span>`;
-              } else if (p.estimateValueSource === "web") {
-                const srcLink = p.estimateSourceUrl
-                  ? `<a class="product-value-src" href="${h(p.estimateSourceUrl)}" target="_blank" rel="noopener noreferrer nofollow">商品ページ↗</a>`
-                  : "";
-                // 説明対象の語「WEB推定」自体を点線下線トリガにして先頭へ置く
-                // (ルール7: 語=トリガ)。金額はその後ろに続け語の重複を避ける。
-                valueNote = `<span class="product-value product-value-web">${tip("web_estimate", "WEB推定")} ${p.estimatedValue.toLocaleString()}円</span>${srcLink}`;
               } else {
                 valueNote = `<span class="product-value">推定 ${p.estimatedValue.toLocaleString()}円</span>`;
               }
@@ -1428,7 +1413,6 @@ app.get("/stocks/:code", async (c) => {
           shortSummary: true,
           estimatedValue: true,
           estimateValueSource: true,
-          estimateSourceUrl: true,
         },
         with: { genre: true },
       },
@@ -1489,7 +1473,6 @@ app.get("/stocks/:code", async (c) => {
           shortSummary: string | null;
           estimatedValue: number | null;
           estimateValueSource: string | null;
-          estimateSourceUrl: string | null;
         }) => ({
           genre: b.genre ? { name: b.genre.name, slug: b.genre.slug } : null,
           minShares: b.minShares,
@@ -1499,7 +1482,6 @@ app.get("/stocks/:code", async (c) => {
           // 列が無い時代は SQLite が識別子を文字列リテラルとして返していた
           // (0005 で解消)。
           estimateValueSource: b.estimateValueSource,
-          estimateSourceUrl: b.estimateSourceUrl,
         }))
       ))}
     </div>

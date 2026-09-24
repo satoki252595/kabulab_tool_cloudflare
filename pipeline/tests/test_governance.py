@@ -29,11 +29,12 @@ from jp_stock_pipeline.licensing import LicenseTag
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = REPO_ROOT / "tests" / "fixtures" / "contracts" / "d1-license-map.json"
 
-# 本番 `core_stocks` の実 DDL（P4a 適用後・`sector17` DROP COLUMN 後の 20 列。
-# `sector17` はどの collector からも書かれず全行 NULL だったため 2026-09-24 に
-# 削除した）。`sqlite_master` は `ALTER TABLE ADD COLUMN` のときに保存済みの
-# CREATE TABLE 文を書き換えるので、ALTER で足した列もここに現れる。この前提が
-# 崩れると `ddl_columns` を使う設計そのものが成立しない。
+# 本番 `core_stocks` の実 DDL（P4a 適用後・`sector17`（0023）と残る9列
+# （`edinet_code` 等。0024）の DROP COLUMN 後の 11 列。どちらもどの collector
+# からも書かれず全行 NULL のままだったため削除した。`sqlite_master` は
+# `ALTER TABLE ADD COLUMN` のときに保存済みの CREATE TABLE 文を書き換えるので、
+# ALTER で足した列もここに現れる。この前提が崩れると `ddl_columns` を使う
+# 設計そのものが成立しない。
 CORE_STOCKS_DDL = (
     "CREATE TABLE `core_stocks` ("
     "`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL, `code` text NOT NULL,"
@@ -42,10 +43,7 @@ CORE_STOCKS_DDL = (
     " `is_yutai` integer DEFAULT false NOT NULL,"
     " `created_at` integer DEFAULT (unixepoch()) NOT NULL,"
     " `updated_at` integer DEFAULT (unixepoch()) NOT NULL,"
-    " `instrument_type` TEXT, `sector33` TEXT, `edinet_code` TEXT,"
-    " `listing_status` TEXT, `listing_date` TEXT, `delisting_date` TEXT,"
-    " `license_tag` TEXT, `src_source` TEXT, `src_data_date` TEXT,"
-    " `src_fetched_at` INTEGER, `quality` TEXT)"
+    " `instrument_type` TEXT, `sector33` TEXT)"
 )
 
 
@@ -65,7 +63,7 @@ class TestDdlColumnParser:
     def test_ALTER_で足した列も読める(self) -> None:
         """`PRAGMA table_info` を 30 回投げずに済む根拠。"""
         columns = G.ddl_columns(CORE_STOCKS_DDL)
-        assert len(columns) == 20
+        assert len(columns) == 11
         assert set(cs.NEW_COLUMNS) <= set(columns)
         assert columns[0] == "id"
 
@@ -137,7 +135,7 @@ class TestFailOpenClosedBoundary:
 
     def test_列地図にあって本番に無い列は失敗させる(self) -> None:
         observed = dict(_observed())
-        observed["core_stocks"] = CORE_STOCKS_DDL.replace("`sector33` TEXT, ", "")
+        observed["core_stocks"] = CORE_STOCKS_DDL.replace(", `sector33` TEXT", "")
         report = G.coverage(observed)
         assert report.failures != ()
         assert any("sector33" in f for f in report.failures)
@@ -155,7 +153,7 @@ class TestFailOpenClosedBoundary:
         for column in ("id", "is_active", "is_yutai", "created_at", "updated_at"):
             assert column in undeclared[0], column
         # 決めた列が「未宣言」に混ざっていないこと
-        for column in ("sector33", "sector", "listing_status", "quality"):
+        for column in ("sector33", "sector", "instrument_type", "market"):
             assert f"'{column}'" not in undeclared[0], column
 
     def test_2_つの地図が食い違ったら失敗させる(self, monkeypatch) -> None:
@@ -177,6 +175,13 @@ class TestFailOpenClosedBoundary:
 # K4b の `p_yuho_growth` CREATE（kabulab-cf 0017 予定）を足した 30 件。
 # `TABLE_LICENSE` の登録漏れを検出するために**宣言とは独立した観測値**として
 # 置く（宣言から導くとテストが自明になる）。
+#
+# 2026-09-25: `jss_xbrl_documents` / `jss_xbrl_elements` を外した（本番 0 行・
+# writer 不在で地図から退役。物理 DROP は別途手順で本番へ流す）。物理 DROP が
+# 適用されるまでの間、本番の実 sqlite_master にはまだこの 2 表が残るが、
+# `coverage()` は「地図に無い表 = warning」（vanished=failure の逆方向）なので
+# 日次 ops_check を落とさない（p_yuho_growth を CREATE 前に地図へ先に足した
+# ときと対称の状況）。
 PROD_TABLE_NAMES: frozenset[str] = frozenset(
     {
         "core_stock_annual_financials", "core_stock_financials", "core_stocks",
@@ -184,7 +189,7 @@ PROD_TABLE_NAMES: frozenset[str] = frozenset(
         "jss_column_license", "jss_dataset_freshness", "jss_financials",
         "jss_index_symbols", "jss_job_runs", "jss_notion_pages", "jss_raw_files",
         "jss_supply_latest",
-        "jss_writer_claims", "jss_xbrl_documents", "jss_xbrl_elements",
+        "jss_writer_claims",
         "otakara_stock_financials", "otakara_stock_scores", "p_momentum", "p_yuho_growth",
         "rsi_percentile",
         "swing_daily_ohlcv", "swing_entry_signals", "swing_market_context",
@@ -196,7 +201,8 @@ PROD_TABLE_NAMES: frozenset[str] = frozenset(
 
 
 class TestProductionSnapshot:
-    """観測した本番 30 表すべてに区分があること。
+    """地図が持つべき 28 表すべてに区分があること（2026-09-25 に 30→28。
+    `jss_xbrl_documents` / `jss_xbrl_elements` の退役。詳細は上のコメント）。
 
     当初は「本番 PRAGMA を読めないので 27 表しか登録できない」としていたが、
     読み取り専用の `sqlite_master` 照会で残り 3 表（`swing_market_context` /

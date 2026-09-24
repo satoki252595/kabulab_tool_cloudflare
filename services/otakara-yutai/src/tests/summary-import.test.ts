@@ -123,8 +123,8 @@ describe("planSummaryImport", () => {
     );
     expect(p.rejections).toEqual([]);
     expect(p.updates).toEqual([
-      { taskId: K_CATALOG, ids: [11, 12], shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, estimateValueSource: "company", estimateSourceUrl: null },
-      { taskId: K_NEW, ids: [21], shortSummary: "新米 5kg", estimatedValue: null, estimateValueSource: null, estimateSourceUrl: null },
+      { taskId: K_CATALOG, ids: [11, 12], shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, estimateValueSource: "company" },
+      { taskId: K_NEW, ids: [21], shortSummary: "新米 5kg", estimatedValue: null, estimateValueSource: null },
     ]);
     expect(p.unansweredTaskIds).toEqual([]);
   });
@@ -345,7 +345,6 @@ describe("applySummaryImport", () => {
       shortSummary: "カタログギフト 3,000円相当",
       estimatedValue: 3000,
       estimateValueSource: "company",
-      estimateSourceUrl: null,
     });
     expect(res.written).toBe(true);
   });

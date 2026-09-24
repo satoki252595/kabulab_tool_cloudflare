@@ -19,20 +19,11 @@
   "column_license": {
     "core_stocks": {
       "code": "commercial-ok",
-      "delisting_date": "commercial-ok",
-      "edinet_code": "commercial-ok",
       "instrument_type": "personal-only",
-      "license_tag": "commercial-ok",
-      "listing_date": "commercial-ok",
-      "listing_status": "commercial-ok",
       "market": "personal-only",
       "name": "commercial-ok",
-      "quality": "commercial-ok",
       "sector": "personal-only",
-      "sector33": "commercial-ok",
-      "src_data_date": "commercial-ok",
-      "src_fetched_at": "commercial-ok",
-      "src_source": "commercial-ok"
+      "sector33": "commercial-ok"
     }
   },
   "table_license": {
@@ -48,11 +39,11 @@
       "kind": "column-map",
       "tag": null
     },
-    "ir_disclosures": {
+    "ir_disclosure_texts": {
       "kind": "uniform",
       "tag": "factual-cite"
     },
-    "ir_disclosure_texts": {
+    "ir_disclosures": {
       "kind": "uniform",
       "tag": "factual-cite"
     },
@@ -90,14 +81,6 @@
     },
     "jss_writer_claims": {
       "kind": "operational",
-      "tag": "commercial-ok"
-    },
-    "jss_xbrl_documents": {
-      "kind": "row-tag",
-      "tag": null
-    },
-    "jss_xbrl_elements": {
-      "kind": "uniform",
       "tag": "commercial-ok"
     },
     "otakara_stock_financials": {
@@ -222,18 +205,6 @@
     },
     {
       "dataset": "jss_writer_claims",
-      "column_group": "all",
-      "writer": "stockStock",
-      "declared": "2026-09-13"
-    },
-    {
-      "dataset": "jss_xbrl_documents",
-      "column_group": "all",
-      "writer": "stockStock",
-      "declared": "2026-09-13"
-    },
-    {
-      "dataset": "jss_xbrl_elements",
       "column_group": "all",
       "writer": "stockStock",
       "declared": "2026-09-13"

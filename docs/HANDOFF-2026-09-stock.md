@@ -178,7 +178,7 @@ kabulab-cf 側の対応版は同リポジトリの `docs/HANDOFF-2026-09.md`（�
 
 ### H. 公開 Worker / MCP
 - **H1** `jss-api-public` は D1 + `jp-stock-raw` のみ bind、GET/HEAD 以外 405、personal-only は null 化。private は `JSS_API_KEYS` 未設定で 503。
-- **H2** MCP `jp_supply_latest` / `jp_supply_series` / `jp_dataset_freshness` / `jp_xbrl_elements` / `jp_raw_file` は稼働中。ツール名・封筒を変えない。
+- **H2** MCP `jp_supply_latest` / `jp_supply_series` / `jp_dataset_freshness` / `jp_xbrl_elements` / `jp_raw_file` は稼働中。ツール名・封筒を変えない。**2026-09-25 訂正**: `jp_xbrl_elements`（と REST `/v1/xbrl/elements`）は `jss_xbrl_documents` / `jss_xbrl_elements` の退役（本番 0 行・writer 不在のまま推移）に伴い削除した。稼働中なのは残り4本。
 - **H3** kabulab-cf の `/api/ingest/yahoo` は `CRON_SECRET` + ホスト allowlist、Node 同期は `YAHOO_PROXY_BASE` 必須。Yahoo 429 サーキットブレーカ。
 
 ### I. Notion
@@ -320,7 +320,7 @@ kabulab-cf 側の対応版は同リポジトリの `docs/HANDOFF-2026-09.md`（�
 
 | 仮 ID | リポ | 内容 | 出典 |
 |---|---|---|---|
-| X-01 | kabulab-cf | `yutai_benefits.estimate_value_source` / `estimate_source_url`（本番 0 行）と `app.ts` の「WEB推定」UI、import 側の同フィールドを削除。DROP COLUMN は §7 の手順（enrich-from-web を作り直さない前提、§8.2 U5） | 精査 (2) |
+| X-01 | kabulab-cf | `yutai_benefits.estimate_value_source` / `estimate_source_url`（本番 0 行）と `app.ts` の「WEB推定」UI、import 側の同フィールドを削除。DROP COLUMN は §7 の手順（enrich-from-web を作り直さない前提、§8.2 U5）。**2026-09-25 訂正**: 本番実測で `estimate_value_source` は 8,295 行中 50 行が非 NULL（"company"。summary-import.ts が今も条件付きで書く現役列）で「本番 0 行」は誤り。**DROP したのは `estimate_source_url` のみ**（非 NULL 0 件を確認）。`estimate_value_source` と「WEB推定」バッジの `estimateValueSource === "web"` 分岐は保持（"web" は今後も付かない見込みだが値自体は生きているため） | 精査 (2) |
 | X-02 | stockStock | `first_fetched_at` の上書き（`d1.py` の upsert が conflict 以外の全列を更新）。**完了**: #56 で `D1Store.upsert(keep=[...])` を足し `first_fetched_at` を保つようにした | 精査 D1、#56 |
 | X-03 | stockStock | `schema.py` 「R2 カスタムメタデータ」のコメントと `r2.py put_bytes`（Metadata 無し）のドリフト、`sink.py` / `governance.py` / TARGET の実測値ハードコード（176 行・420 MB は 2026-09-14 実測） | 精査 D1 |
 | X-04 | stockStock | `cloud_store/yutai.py` の `BASELINE_*` 定数を索引の最新エントリから取る（L-05 で job ごと消すなら不要） | 精査 (3) |

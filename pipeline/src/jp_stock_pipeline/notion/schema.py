@@ -69,23 +69,31 @@ PROP_MASTER_RELATION = "銘柄マスタ"
 # ① 銘柄マスタ (§6.4)
 MASTER_PROP_NAME = "銘柄名"  # title
 MASTER_PROP_CODE = "銘柄コード"
-MASTER_PROP_MARKET = "市場区分"
 MASTER_PROP_SECTOR33 = "33業種"
 MASTER_PROP_EDINET_CODE = "EDINETコード"
 MASTER_PROP_LISTED = "上場状態"  # checkbox: 現在上場しているか
 MASTER_PROP_STATUS = "状態"  # select: 上場/監理/整理/上場廃止
-MASTER_PROP_LISTING_DATE = "上場日"
-MASTER_PROP_DELISTING_DATE = "上場廃止日"
 MASTER_PROP_LAST_UPDATED = "最終データ更新日"
 # ① の履歴ポインタ列（現行履歴DB ID / 履歴シャード番号 / 履歴行数）と
-# ②株価テクニカル履歴子DBは廃止した。本番DBの列は放置する（無害）。
-# 2026-09-24: `MASTER_PROP_SECTOR17`（"17業種"）も同様の理由で削除した
-# （collector が誰も値を書かず全行 NULL だったため。core_stocks.sector17 と
-# 同時に廃止）。`ensure_database` は `missing_properties` で desired−existing
-# の差分しか update_database に渡さない（既存プロパティの削除・型変更はしない
-# 設計）ため、この定数を消しても既存 Notion DB の「17業種」列は削除されず
-# 残る。以後 upsert.py がこの列に値を書かなくなるだけの orphan プロパティになる
-# （実害は無いが、手動で消したい場合は Notion 側で直接削除する）。
+# ②株価テクニカル履歴子DB・⑥時系列エクスポート・⑦収集ジョブログは廃止した。
+# 本番 Notion DB に残る列はどれも orphan（値を書かなくなっただけ）で放置する
+# （`ensure_database` は `missing_properties` で desired−existing の差分しか
+# update_database に渡さないため、既存プロパティは削除・型変更されない設計。
+# 手動で消したい場合は Notion 側で直接削除する）。
+#
+# 2026-09-24: `MASTER_PROP_SECTOR17`（"17業種"）を同じ理由（collector が
+# 誰も値を書かず全行 NULL。core_stocks.sector17 と同時に廃止）で削除した。
+# **「17業種」プロパティ自体は 2026-09-25 に Notion 側で手動削除済み**
+# （このコード側の `ensure_database` は列を消さないため、削除は別途手で
+# 行った。以後この列は存在しない。他の orphan 列との違いに注意）。
+#
+# 2026-09-25: `MASTER_PROP_MARKET`（"市場区分"）/ `MASTER_PROP_LISTING_DATE`
+# （"上場日"）/ `MASTER_PROP_DELISTING_DATE`（"上場廃止日"）も削除した
+# （本番 Notion を実測で確認: 全行で空。市場区分は書込元
+# `StockMasterRecord.market` が常に None、上場日/上場廃止日は
+# `apply_disclosure_lifecycle` が上場廃止/新規上場の一次開示を検知した時だけ
+# 書く設計だが、該当開示が一度も来ておらず全行 空のまま。ユーザー承認済み）。
+# これら 3 列も既存 Notion DB には orphan として残る。
 
 # ③ 財務サマリ (§6.4)
 FIN_PROP_TITLE = "タイトル"  # title 例: 7203 2026/03期 本決算
@@ -255,13 +263,10 @@ def stock_master_schema(raw_db_id: str) -> dict:
     return {
         MASTER_PROP_NAME: _TITLE,
         MASTER_PROP_CODE: _RICH_TEXT,
-        MASTER_PROP_MARKET: _select_schema(),
         MASTER_PROP_SECTOR33: _select_schema(),
         MASTER_PROP_EDINET_CODE: _RICH_TEXT,
         MASTER_PROP_LISTED: _CHECKBOX,
         MASTER_PROP_STATUS: _select_schema(LISTING_STATUS_OPTIONS),
-        MASTER_PROP_LISTING_DATE: _DATE,
-        MASTER_PROP_DELISTING_DATE: _DATE,
         MASTER_PROP_LAST_UPDATED: _DATE,
         **common_properties_schema(raw_db_id),
     }
@@ -462,11 +467,13 @@ _CATALOG_DICTIONARY: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         (
             "銘柄名 (title)",
             "銘柄コード (text): 証券コード4桁。ユニークキー",
-            "市場区分 / 33業種 (select)",
+            "33業種 (select)",
             "EDINETコード (text)",
             "上場状態 (checkbox): チェック=上場中 (master_sync=コードリスト所有)",
-            "状態 (select: 上場/監理/整理/上場廃止) / 上場日 (date) / 上場廃止日 (date)"
-            "。一次開示由来 (tdnet_hourly が所有) で listed と二重所有を回避 (§3-7)",
+            "状態 (select: 上場/監理/整理/上場廃止)。一次開示由来 (tdnet_hourly が"
+            "所有) で listed と二重所有を回避 (§3-7)。"
+            "市場区分 / 上場日 / 上場廃止日 は 2026-09-25 に削除した"
+            "(本番 Notion 実測で全行空。writer 未発火のまま)",
             "最終データ更新日 (date)",
             "③④⑤への relation は dual_property により自動生成 (銘柄ページから全情報を辿れる)",
         ),

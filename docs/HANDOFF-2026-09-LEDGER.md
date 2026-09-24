@@ -662,7 +662,7 @@ USER_DECISIONS 節の 22 件も同じ理由で、§3 の決定と §8.2 で上�
 
 ## H. 公開 Worker / MCP
 - H1 jss-api-public は D1 + jp-stock-raw のみ bind、GET/HEAD 以外 405、personal-only は null 化。private は JSS_API_KEYS 未設定で 503。
-- H2 MCP jp_supply_latest/jp_supply_series/jp_dataset_freshness/jp_xbrl_elements/jp_raw_file は稼働中（本セッションで応答）。ツール名・封筒を変えない。
+- H2 MCP jp_supply_latest/jp_supply_series/jp_dataset_freshness/jp_xbrl_elements/jp_raw_file は稼働中（本セッションで応答）。ツール名・封筒を変えない。**2026-09-25 訂正**: jp_xbrl_elements（と REST /v1/xbrl/elements）は jss_xbrl_documents/jss_xbrl_elements の退役（本番0行・writer不在のまま推移）に伴い削除した。稼働中なのは残り4本。
 - H3 kabulab-cf の /api/ingest/yahoo は CRON_SECRET + ホスト allowlist、Node 同期は YAHOO_PROXY_BASE 必須。Yahoo 429 サーキットブレーカと stockStartGate。
 
 ## I. Notion

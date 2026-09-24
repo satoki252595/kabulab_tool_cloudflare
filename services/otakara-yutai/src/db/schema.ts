@@ -55,12 +55,16 @@ export const yutaiBenefits = sqliteTable(
      *     カタログ交換ポイント等、本文から確定できる額)。従来の解釈経路の値。
      *   - "web": 金額表記が無い自社商品について、外部 EC (楽天市場 API) の
      *     実勢価格から推定した参考値。確度は company より低く、UI で「WEB推定」
-     *     バッジを必ず付ける。出典は estimate_source_url に残す。
+     *     バッジを必ず付ける。
+     *     ⚠️ 2026-09-25 時点: 出典 URL の保持列 `estimate_source_url` は
+     *     X-01 で DROP した (writer が常に `null` を書くだけの死に列だった)。
+     *     "web" 推定の再構築 (enrich-from-web) は決定 U5-(A) で行わない方針
+     *     なので、"web" は今後も付かない見込み。"company" は
+     *     `estimated_value` が非 null のときの唯一の実値 (2026-09-25 時点で
+     *     本番 8,295 行中 50 行が非 null)。
      * null は estimated_value 自体が null (推定不能) のとき。
      */
     estimateValueSource: text("estimate_value_source"),
-    /** "web" 推定時の出典 URL (楽天商品ページ等)。company / null では未設定。 */
-    estimateSourceUrl: text("estimate_source_url"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .default(sql`(unixepoch())`)
       .notNull(),

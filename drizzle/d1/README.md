@@ -40,10 +40,21 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 | `0019` | `yuho_text_sections` の CREATE TABLE + 索引 2 本 + `yuho_documents.text_parse_status` の ADD (開示テキスト 39 項目) | **適用済み** (09-20 に手動適用) |
 | `0020` | `ir_disclosure_texts` の CREATE TABLE + 索引 2 本 + `ir_disclosures.pdf_text_status` の ADD (開示 PDF 本文) | **適用済み** (09-20 に手動適用) |
 | `0023` | `core_stocks.sector17` の DROP COLUMN。書込経路も参照も無く、本番 3,810 行で非 NULL 0 件と実測済み (2026-09-24) | **適用済み** (09-24 に手動適用。PRAGMA で 20 列を確認、`jss_column_license` の sector17 行も削除) |
+| `0024` | `core_stocks` の 9 列 (`edinet_code` / `listing_status` / `listing_date` / `delisting_date` / `license_tag` / `src_source` / `src_data_date` / `src_fetched_at` / `quality`) + 部分索引 `idx_core_stocks_edinet` の DROP。書込経路・参照経路とも無く、本番 3,810 行で非 NULL 0 件と実測済み (2026-09-25)。同じファイルで `yutai_benefits.estimate_source_url` の DROP も行う (本番 8,295 行で非 NULL 0 件。`estimate_value_source` は 50 行が非 NULL の現役列なので DROP しない) | **未適用**。pipeline 側 `cloud_store/core_stocks.py` の `NEW_COLUMNS`/`NEW_INDEXES`、`schema.py` の `MIXED_LICENSE_COLUMNS["core_stocks"]`、関連テスト、共有契約 `tests/fixtures/contracts/d1-license-map.json` は**同じ PR で追随済み**。適用はマージ直後に (sector17 と同じ運用: `core_stocks_migrate.py --verify` が両方向 failure なので、SQL 適用がずれた場合の窓は次の daily ops_check(14:30 UTC) より前に閉じること。ファイル冒頭コメント参照) |
 
 0013〜0016 は本番 `sqlite_master` で適用状態を確かめてから、未適用のものだけ
-番号順に流す。0012 と同じく stockStock の地図 (`TABLE_LICENSE` /
-`RETIRED_TABLES`) との突合 (P6) が前提。0017 は適用済みなので流さない。
+番号順に流す。0012 と同じく stockStock の地図 (`TABLE_LICENSE`) との突合 (P6)
+が前提。0017 は適用済みなので流さない。
+
+> `RETIRED_TABLES`（表を退役させる間だけ地図の「無い表 = failure」を止める
+> 仕組み）は、finmath 2 表の DROP 完了後に不要になった死コードとして
+> `governance.py` から既に削除されている（2026-09-25 に本書の記述漏れとして
+> 発覚。ledger L-13 参照）。以後の表retirement は `coverage()` の
+> fail-open/fail-closed の非対称性（「地図に無い表 = warning」「地図にあって
+> 無い表 = failure」）を使い、**宣言を先に外してから**物理 DROP する順序で
+> 代替する（`jss_xbrl_documents` / `jss_xbrl_elements` の退役で採った方法。
+> `pipeline/src/jp_stock_pipeline/cloud_store/governance.py` の
+> `TABLE_LICENSE` 冒頭コメント参照）。
 
 ### 0012（finmath の 2 表の DROP）は順序と事前確認がある
 

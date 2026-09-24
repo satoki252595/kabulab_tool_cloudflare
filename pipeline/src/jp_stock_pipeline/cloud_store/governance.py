@@ -202,19 +202,15 @@ TABLE_LICENSE: dict[str, TableLicense] = {
         "EDINET（commercial-ok）と TDnet 短信（factual-cite）が行ごとに違う",
         "license_tag NOT NULL。本番 0 行（writer 未実装）だが列は存在する",
     ),
-    "jss_xbrl_documents": _row_tag(
-        "EDINET / TDnet", "license_tag NOT NULL。本番 0 行"
-    ),
+    # `jss_xbrl_documents` / `jss_xbrl_elements` は 2026-09-25 に地図から外した
+    # (writer 不在・本番 0 行を実測。設計書 B-3/B-4 の想定実装は着手されなかった)。
+    # 表そのものの DROP は物理側の手順 (drizzle 相当の SQL) を PR 本文で示す。
+    # 宣言を先に外すことで、DROP までの間は「地図に無い表」= warning に留める
+    # (coverage() は「地図にあって本番に無い」だけを failure にする)。
     "jss_supply_latest": _row_tag(
         "日証金（JSF）", "license_tag NOT NULL DEFAULT 'personal-only'。本番 4,351 行"
     ),
     "jss_index_symbols": _row_tag("Yahoo Finance", "license_tag NOT NULL。本番 6 行"),
-    # 勘定科目の語彙表。EDINET/TDnet のタクソノミ要素名だけを持ち、値を持たない。
-    "jss_xbrl_elements": _uniform(
-        LicenseTag.COMMERCIAL_OK,
-        "EDINET タクソノミの要素名",
-        "license_tag 列を持たない語彙表。ファクトの値は 1 行も入らない（設計書 B-4）",
-    ),
     "jss_job_runs": _operational("ジョブ実行履歴。第三者由来の値を持たない"),
     # `license_tag` 列を持つが、それは**他のデータセットを説明する値**で
     # この行自身のタグではない。ROW_TAG と取り違えないこと。
@@ -272,7 +268,12 @@ ROW_TAG_COLUMN = "license_tag"
 # K4b で `p_yuho_growth` を足して 30 表（kabulab-cf 0017 で CREATE 予定）。
 # 表を足す側も stockStock の地図を先に main へ（B2）。CREATE までの間は地図の
 # 余剰分が「未知の表 = warning」で出るだけ（failure ではない）。
-OBSERVED_TABLE_COUNT = 30
+#
+# 2026-09-25: `jss_xbrl_documents` / `jss_xbrl_elements`（本番 0 行・writer
+# 不在）を地図から外し 28 表にした。物理 DROP は別途手順で本番へ流す。
+# それまでの間、本番にはまだ 30 表あるが「地図に無い表 = warning」に留まる
+# （declared 側を先に減らしたことで vanished=failure 方向にはならない）。
+OBSERVED_TABLE_COUNT = 28
 
 # 本番 `sqlite_master` から除く名前。SQLite と D1 の内部表。
 _INTERNAL_PREFIXES = ("sqlite_", "_cf_", "d1_", "__drizzle")
@@ -383,6 +384,12 @@ def ddl_columns(sql: str | None) -> list[str]:
 # `stockStock` で宣言する。設計どおり同一 PR で (1) `core_stocks/enrich` を
 # `stockStock` で足す (2) 充填ジョブを有効にする、の順に入れた。
 #
+# 2026-09-25: `enrich` の残り 9 列（`edinet_code` 等。下の注記も参照）は
+# 一度も書かれないまま P4b の充填計画自体が D-14-1 で中止済みだったため列ごと
+# DROP した。`enrich` に現存するのは `sector33` だけになったが、claim
+# (`core_stocks`, `enrich`) 自体は writer (`stockStock`) が変わらないので
+# 宣言はそのまま残す（DELETE は不要）。
+#
 # ## `instrument_type` は `base` に数える（2026-09-13、kabulab-cf #27）
 #
 # kabulab-cf #27（P4b 第 1 段）から、`universe.ts` が JPX data_j の区分で
@@ -398,7 +405,8 @@ def ddl_columns(sql: str | None) -> list[str]:
 # kabulab-cf で INSERT も発行するので `base` と分ける理由が無く、PK の行を
 # 増やすほど後の統合が破壊的書換になる。
 #
-# `enrich` の 10 列のうち今日書くのは `sector33` だけで、残り 9 列は P4b。
+# `enrich` は元は 10 列宣言していたが、今日書くのは `sector33` だけで、
+# 残り 9 列は 2026-09-25 に列ごと DROP した（上の注記参照）。
 # 群を列ごとに割らないのは、PK が `(dataset, column_group)` なので細かく割るほど
 # 後の統合が破壊的書換になるからである（writer が別になる列が出たら割る）。
 #
@@ -468,7 +476,8 @@ WRITER_CLAIMS: tuple[WriterClaim, ...] = tuple(
             COLUMN_GROUP_ENRICH,
             WRITER_STOCKSTOCK,
             "stockStock master_sync が sector33 を既存行の UPDATE だけで埋める"
-            "（updated_at は進めない）。instrument_type は base。残りの P4a 列は P4b",
+            "（updated_at は進めない）。instrument_type は base。残りの P4a 列は"
+            " 2026-09-25 に DROP 済み",
         ),
         _claim(
             "core_stock_financials",

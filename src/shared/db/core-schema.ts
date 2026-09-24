@@ -19,16 +19,28 @@ import {
 /**
  * 銘柄マスタ（共有）
  *
- * ⚠️ **ライセンス境界**: `market` / `sector` / `instrument_type` /
- * `license_tag` / `src_source` / `quality` は `personal-only`。公開面 (HTML /
- * JSON API) へ出してはいけない。drizzle の既定 select は**全列返し**なので、
- * `db.select().from(stocks)` (列指定なし) はこれらを必ず含んだ行を返す。
- * 公開面で列指定なし select を使う場合は、必要フィールドだけを詰め替えること
- * (行の spread / JSON.stringify はしない)。
+ * ⚠️ **ライセンス境界**: `market` / `sector` / `instrument_type` は
+ * `personal-only`。公開面 (HTML / JSON API) へ出してはいけない。drizzle の
+ * 既定 select は**全列返し**なので、`db.select().from(stocks)` (列指定なし)
+ * はこれらを必ず含んだ行を返す。公開面で列指定なし select を使う場合は、
+ * 必要フィールドだけを詰め替えること (行の spread / JSON.stringify はしない)。
  * この約束は src/shared/db/core-stocks-license-boundary.test.ts が機械的に見ている。
  *
  * `sector` は JPX 由来 (personal-only)。`sector33` 列は EDINET の「提出者業種」で
  * 別物。公開面が読むのは `sector33` 側で、切替は public-columns.ts が 1 箇所で決める。
+ *
+ * ⚠️ 2026-09-25: `edinet_code` / `listing_status` / `listing_date` /
+ * `delisting_date` / `license_tag` / `src_source` / `src_data_date` /
+ * `src_fetched_at` / `quality` の 9 列 (+ 部分索引 `idx_core_stocks_edinet`)
+ * を DROP した。本番 3,810 行で非 NULL 0 件・書込経路無しと実測済み
+ * (D-14-1 で P4b〜P8 計画自体が中止済み。sector17 の DROP (0023) と同じ理由)。
+ * pipeline 側 (`pipeline/src/jp_stock_pipeline/cloud_store/core_stocks.py` の
+ * `NEW_COLUMNS` / `NEW_INDEXES`、`schema.py` の
+ * `MIXED_LICENSE_COLUMNS["core_stocks"]`) も**同じ PR で同時に**この 9 列を
+ * 削除済み。`core_stocks_migrate.py --verify` (E7) は「本番にあって定義に
+ * 無い列」も「定義にあって本番に無い列」も両方向 failure にするため、
+ * `drizzle/d1/0024` の適用はこの PR のマージ直後に行うこと
+ * (`drizzle/d1/0024_careless_cammi.sql` 冒頭コメント参照)。
  */
 export const stocks = sqliteTable(
   "core_stocks",
@@ -66,15 +78,18 @@ export const stocks = sqliteTable(
       .notNull(),
 
     // -------------------------------------------------------------------------
-    // 以下 11 列は stockStock 側の移行 P4a (2026-09-12) が本番 D1 へ直接 ALTER で
+    // 以下 2 列は stockStock 側の移行 P4a (2026-09-12) が本番 D1 へ直接 ALTER で
     // 足したもの。**本番の PRAGMA に合わせて全列 nullable / default なし**。
     // 型を勝手に notNull や default 付きにすると、この宣言から生成した DDL で
     // 作った非本番 DB だけが本番と違う形になる。
     // 2026-09-24 時点: instrument_type は src/cron/universe.ts (JPX, #27〜)、
     // sector33 は stockStock の master_sync (EDINET, 2026-09-13〜) が充填済み
     // (sector33 は現役普通株 3,700 件で NULL 0 件)。
-    // edinet_code / listing_status / listing_date / delisting_date / license_tag /
-    // src_source / src_data_date / src_fetched_at / quality はまだ全行 NULL。
+    // P4a が同時に足した他の 10 列 (sector17 / edinet_code / listing_status /
+    // listing_date / delisting_date / license_tag / src_source / src_data_date /
+    // src_fetched_at / quality) は書込経路が無く全行 NULL のまま推移し、
+    // sector17 は 0023 (2026-09-24)、残り 9 列は今回 DROP した (上のクラス doc
+    // comment 参照)。
     // -------------------------------------------------------------------------
 
     /** `personal-only`。内国普通株 / ETF / REIT 等の区分。 */
@@ -93,37 +108,14 @@ export const stocks = sqliteTable(
      * src/shared/db/core-stocks-license-boundary.test.ts が機械的に見ている。
      */
     sector33: text("sector33"),
-    /** EDINET コード。部分索引 idx_core_stocks_edinet が NOT NULL 行のみを張る。 */
-    edinetCode: text("edinet_code"),
-    /** 上場状態 (上場 / 上場廃止 等)。`is_active` とは別で、JPX 側の区分を保つ。 */
-    listingStatus: text("listing_status"),
-    /** 上場日 'YYYY-MM-DD'。ADR-0001 §4 に従い date は text。 */
-    listingDate: text("listing_date"),
-    /** 上場廃止日 'YYYY-MM-DD'。 */
-    delistingDate: text("delisting_date"),
-    /** `personal-only`。出所のライセンス区分。公開可否の判断そのものなので公開面に出さない。 */
-    licenseTag: text("license_tag"),
-    /** `personal-only`。取得元の識別子。 */
-    srcSource: text("src_source"),
-    /** 出所データの基準日 'YYYY-MM-DD'。 */
-    srcDataDate: text("src_data_date"),
-    /**
-     * 取得時刻。本番は **epoch 秒** の INTEGER なので `mode: "timestamp"`。
-     * `timestamp_ms` にすると読み書きが 1000 倍ずれる (1970年台 / 遠未来の日付になる)。
-     */
-    srcFetchedAt: integer("src_fetched_at", { mode: "timestamp" }),
-    /** `personal-only`。行の品質区分。 */
-    quality: text("quality"),
   },
   (table) => [
-    // 本番に実在する 2 索引。以前は「drizzle 管理外」として宣言していなかったが、
+    // 本番に実在する索引。以前は「drizzle 管理外」として宣言していなかったが、
     // それだと snapshot が索引 1 本のままで、ドリフト検査 (CI の db:generate:d1 +
     // git status) が「列は合っているが索引は嘘」の状態を緑と判定してしまう。
+    // `idx_core_stocks_edinet` (edinet_code の部分索引) は列ごと DROP した
+    // 2026-09-25 に一緒に外した。
     index("idx_core_stocks_active_market").on(table.isActive, table.market),
-    // 部分索引。本番の定義は `WHERE edinet_code IS NOT NULL`。
-    index("idx_core_stocks_edinet")
-      .on(table.edinetCode)
-      .where(sql`${table.edinetCode} is not null`),
   ]
 );
 

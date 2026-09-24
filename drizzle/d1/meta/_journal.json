@@ -169,6 +169,13 @@
       "when": 1790257288525,
       "tag": "0023_spooky_sue_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1790266364273,
+      "tag": "0024_careless_cammi",
+      "breakpoints": true
     }
   ]
 }

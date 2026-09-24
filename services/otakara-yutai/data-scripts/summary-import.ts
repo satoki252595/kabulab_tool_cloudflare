@@ -97,7 +97,6 @@ export type PlannedUpdate = {
   shortSummary: string;
   estimatedValue: number | null;
   estimateValueSource: "company" | null;
-  estimateSourceUrl: null;
 };
 
 export type ImportPlan = {
@@ -265,7 +264,6 @@ export function planSummaryImport(input: {
       shortSummary: summary,
       estimatedValue: result.estimatedValue,
       estimateValueSource: result.estimatedValue !== null ? "company" : null,
-      estimateSourceUrl: null,
     });
   }
 
@@ -278,7 +276,7 @@ export function planSummaryImport(input: {
 export interface SummaryWriter {
   update(
     ids: number[],
-    values: Pick<PlannedUpdate, "shortSummary" | "estimatedValue" | "estimateValueSource" | "estimateSourceUrl">,
+    values: Pick<PlannedUpdate, "shortSummary" | "estimatedValue" | "estimateValueSource">,
   ): Promise<void>;
 }
 
@@ -305,7 +303,6 @@ export async function applySummaryImport(
         shortSummary: u.shortSummary,
         estimatedValue: u.estimatedValue,
         estimateValueSource: u.estimateValueSource,
-        estimateSourceUrl: u.estimateSourceUrl,
       });
     }
   }
