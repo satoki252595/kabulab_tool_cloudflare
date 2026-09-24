@@ -42,6 +42,12 @@ function normalizeId(id: string): string {
   return hex;
 }
 
+function optionalId(key: string): string | undefined {
+  const v = process.env[key];
+  if (!v || v.trim() === "") return undefined;
+  return normalizeId(v.trim());
+}
+
 export const notionEnv = {
   /** Notion Internal Integration トークン (ntn_ で始まる) */
   NOTION_TOKEN: () => required("NOTION_TOKEN"),
@@ -49,4 +55,6 @@ export const notionEnv = {
   NOTION_BACKUP_PAGE_ID: () => normalizeId(required("NOTION_BACKUP_PAGE_ID")),
   /** 不要化した元データの退避先「ごみ」ページ ID */
   NOTION_TRASH_PAGE_ID: () => normalizeId(required("NOTION_TRASH_PAGE_ID")),
+  /** 索引ページ ID (設定時は Search を使わず直接更新。未設定時は自動発見) */
+  NOTION_INDEX_PAGE_ID: () => optionalId("NOTION_INDEX_PAGE_ID"),
 };

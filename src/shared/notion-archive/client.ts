@@ -154,9 +154,9 @@ async function doFetch(
   }
 }
 
-/** JSON API 呼び出し (GET/POST/PATCH)。非 2xx は throw (ルール2)。 */
+/** JSON API 呼び出し (GET/POST/PATCH/DELETE)。非 2xx は throw (ルール2)。 */
 export async function notionRequest<T = unknown>(
-  method: "GET" | "POST" | "PATCH",
+  method: "GET" | "POST" | "PATCH" | "DELETE",
   path: string,
   body?: unknown
 ): Promise<T> {
