@@ -21,8 +21,9 @@ kabulab-cf 側の実装が変わっても、本ページに書いた**列名・�
     （data source `3e6d74ff-84cd-81ca-8fd7-000b2a03c8fd`）
   kabulab-cf は `NOTION_STOCK_SUPPLEMENT_DB_ID` / `NOTION_BIZTAG_LEDGER_DB_ID` でこの ID に
   固定しているので、途中で作り直されることはない（作り直す場合は §9 の告知対象）。
-- アクセス権: kabulabAgents が使う Notion 連携（インテグレーション）に、「株式情報」ページ
-  （またはこの 2 つの DB）への接続を運営が付与する必要がある。
+- アクセス権: kabulabAgents が使う Notion 連携（インテグレーション「kabulabAgent」）に、
+  この 2 つの DB への接続が要る。2026-09-25 に Notion 画面で両 DB とも「アクティブな接続」に
+  kabulabAgent があることを確認済み（運営が追加で付与する作業は無い）。
 - 参考: ID が分からなくなったら、Notion の Search で `銘柄マスタ（補足）` を完全一致検索し、
   親が「株式情報」のものを取る（複数該当時は最古）。
 
