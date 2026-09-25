@@ -153,7 +153,15 @@ describe("GET /vocabulary/review-packet", () => {
 
     const res = await request("/vocabulary/review-packet", { headers: authHeaders() });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(packet);
+    // 見直し材料そのもの + サーバーが計算した見直し期間 (Automation は open=false なら終える)
+    const body = (await res.json()) as Record<string, unknown> & {
+      reviewWindow: { todayJst: string; start: string; deadline: string; open: boolean };
+    };
+    const { reviewWindow, ...rest } = body;
+    expect(rest).toEqual(packet);
+    expect(reviewWindow.todayJst).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(reviewWindow.start).toMatch(/^\d{4}-08-0[1-7]$/);
+    expect(typeof reviewWindow.open).toBe("boolean");
     expect(readLedgerJson).toHaveBeenCalledWith(latest);
   });
 

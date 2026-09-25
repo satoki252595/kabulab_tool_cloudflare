@@ -271,7 +271,10 @@ Cursor Automation（年 1 回・8 月）
 ### 6.1 Automation「kabulab-cf 単語帳の年次見直し」
 
 - cursor.com/automations・No Repository・モデル Grok 4.7。
-- 頻度: 年 1 回。8 月第 1 月曜 06:00 JST（cron は UTC で日曜 21:00）。
+- 頻度: 年 1 回。8 月第 1 月曜 06:00 JST。「第 1 月曜」は cron で正確に書けないので、Automation は
+  **7〜8 月の毎週月曜 06:00 JST（cron `0 21 * 7,8 0`、UTC の日曜 21:00）**に起動し、review-packet の
+  `reviewWindow.open`（Worker が JST で計算。8 月第 1 月曜〜その 7 日後だけ true。`review-window.ts`）が
+  false なら何もせず終える。7 月も入れるのは、8 月 1 日が月曜の年は起動が UTC の 7 月 31 日になるため。
 - 秘密（Cursor の My Secrets）: `KABULAB_APP_ORIGIN`、`KABULAB_VOCAB_TOKEN`。
 - 指示文: [`scripts/biztag-automation/vocabulary-review.md`](../scripts/biztag-automation/vocabulary-review.md)。
   1. `GET {ORIGIN}/yuho-quant/vocabulary/review-packet` を読む（今の単語帳・語ごとのタグ数・
@@ -390,8 +393,9 @@ CLI は全て `pnpm biztag <subcommand>`（リポジトリルートから。実�
 6. **Cursor Automation を作る**: cursor.com/automations で「No repository」の Automation
    （名前例: 「kabulab-cf 単語帳の年次見直し」）を作り、
    [`scripts/biztag-automation/vocabulary-review.md`](../scripts/biztag-automation/vocabulary-review.md)
-   の instructions 部分をそのまま貼り付け、モデルを指定し、頻度を**年1回・8月第1月曜
-   06:00 JST**（cron は UTC で日曜21:00）に設定する。secrets 欄に
+   の instructions 部分をそのまま貼り付け、モデル **Grok 4.7** を指定し、スケジュールを
+   **cron `0 21 * 7,8 0`（UTC。7〜8 月の毎週月曜 06:00 JST）**にする（実際に見直すのは
+   `reviewWindow.open` が true の 8 月第 1 月曜からの 7 日間だけ。§6.1）。secrets 欄に
    `KABULAB_APP_ORIGIN`（Worker の本番 URL）と `KABULAB_VOCAB_TOKEN`（手順5の `$TOKEN`）を
    登録する。
 
