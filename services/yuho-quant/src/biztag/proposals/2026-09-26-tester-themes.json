@@ -1,0 +1,111 @@
+{
+  "baseVersion": "v2",
+  "noChange": false,
+  "reason": "v2 で追加した半導体テスタ・検査装置 (B.SEMI.TEST_EQUIPMENT) を半導体製造装置・半導体バリューチェーンの構成語に加える。T.SEMI_EQUIPMENT の定義は既に検査装置を含む (「露光・成膜・エッチング・洗浄・検査・後工程実装など」) が、構成語に検査の語が無くアドバンテストがテーマ 0 件になっていたため。",
+  "sourcesChecked": [
+    {
+      "title": "経済安全保障推進法に基づく重要物資の安定的な供給の確保(サプライチェーン強靱化)に関する制度全般や技術流出防止について",
+      "url": "https://www.cao.go.jp/keizai_anzen_hosho/suishinhou/supply_chain/doc/sc_gaiyou.pdf",
+      "date": "2026-08-01"
+    },
+    {
+      "title": "日本標準産業分類 分類項目名、説明及び内容例示(令和5年7月告示 第14回改定)",
+      "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+      "date": "2023-07-01"
+    },
+    {
+      "title": "戦略17分野における「主要な製品・技術等」の官民投資ロードマップ",
+      "url": "https://www.cas.go.jp/jp/seisaku/nipponseichosenryaku/pdf/rm2026.pdf",
+      "date": "2026-07-21"
+    }
+  ],
+  "exampleCompanies": {
+    "B.SEMI.TEST_EQUIPMENT": [
+      "6857"
+    ]
+  },
+  "changes": [
+    {
+      "op": "update",
+      "id": "T.SEMI_EQUIPMENT",
+      "patch": {
+        "members": [
+          "B.SEMI.LITHOGRAPHY_EQUIPMENT",
+          "B.SEMI.ETCHING_EQUIPMENT",
+          "B.SEMI.DEPOSITION_EQUIPMENT",
+          "B.SEMI.CLEANING_EQUIPMENT",
+          "B.SEMI.BACKEND_ASSEMBLY_EQUIPMENT",
+          "B.SEMI.EQUIPMENT_PARTS",
+          "B.SEMI.INSPECTION_METROLOGY_EQUIPMENT",
+          "B.SEMI.TEST_EQUIPMENT"
+        ]
+      },
+      "evidence": [
+        {
+          "title": "経済安全保障推進法に基づく重要物資の安定的な供給の確保(サプライチェーン強靱化)に関する制度全般や技術流出防止について",
+          "url": "https://www.cao.go.jp/keizai_anzen_hosho/suishinhou/supply_chain/doc/sc_gaiyou.pdf",
+          "date": "2026-08-01",
+          "section": "特定重要物資の安定供給確保の取組(半導体)対象品目内訳(PAGE 3)",
+          "quote": "・半導体製造装置(部素材含む)"
+        },
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示(令和5年7月告示 第14回改定)",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07-01",
+          "section": "細分類2671 半導体製造装置製造業",
+          "quote": "主として半導体（半導体集積回路、半導体素子）の製造に利用される"
+        }
+      ]
+    },
+    {
+      "op": "update",
+      "id": "T.SEMICONDUCTOR",
+      "patch": {
+        "members": [
+          "B.SEMI.SILICON_WAFER",
+          "B.SEMI.COMPOUND_WAFER",
+          "B.SEMI.PHOTOMASK",
+          "B.SEMI.PHOTORESIST",
+          "B.SEMI.SPECIALTY_GAS_CHEMICAL",
+          "B.SEMI.CMP_SLURRY",
+          "B.SEMI.SPUTTERING_TARGET",
+          "B.SEMI.PACKAGE_SUBSTRATE",
+          "B.SEMI.ENCAPSULANT",
+          "B.SEMI.GLASS_CORE_SUBSTRATE",
+          "B.SEMI.LEAD_FRAME",
+          "B.SEMI.LITHOGRAPHY_EQUIPMENT",
+          "B.SEMI.ETCHING_EQUIPMENT",
+          "B.SEMI.DEPOSITION_EQUIPMENT",
+          "B.SEMI.CLEANING_EQUIPMENT",
+          "B.SEMI.BACKEND_ASSEMBLY_EQUIPMENT",
+          "B.SEMI.EQUIPMENT_PARTS",
+          "B.SEMI.INSPECTION_METROLOGY_EQUIPMENT",
+          "B.SEMI.LOGIC_DEVICE",
+          "B.SEMI.MEMORY_DEVICE",
+          "B.SEMI.MICROCONTROLLER",
+          "B.SEMI.ANALOG_IC",
+          "B.SEMI.IMAGE_SENSOR",
+          "B.SEMI.MAGNETIC_SENSOR",
+          "B.SEMI.OPTICAL_DEVICE",
+          "B.SEMI.SILICON_PHOTONICS",
+          "B.SEMI.CHIPLET_PACKAGING",
+          "B.SEMI.POWER_SEMICONDUCTOR",
+          "B.SEMI.WIDE_BANDGAP_POWER",
+          "B.SEMI.AI_ACCELERATOR",
+          "B.ICT.SEMICONDUCTOR_DESIGN_EDA_IP",
+          "B.SEMI.PACKAGE_MATERIAL",
+          "B.SEMI.TEST_EQUIPMENT"
+        ]
+      },
+      "evidence": [
+        {
+          "title": "戦略17分野における「主要な製品・技術等」の官民投資ロードマップ",
+          "url": "https://www.cas.go.jp/jp/seisaku/nipponseichosenryaku/pdf/rm2026.pdf",
+          "date": "2026-07-21",
+          "section": "目次(AI・半導体分野)②フィジカル・インテリジェント・システムの中核を担う半導体(p.9)",
+          "quote": "②フィジカル・インテリジェント・システムの中核を担う半導体"
+        }
+      ]
+    }
+  ]
+}
