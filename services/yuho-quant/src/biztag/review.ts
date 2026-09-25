@@ -28,7 +28,7 @@ export const OFFICIAL_ROOT_SOURCES: readonly string[] = [
 export interface TermStat {
   id: string;
   label: string;
-  column: "upstream" | "downstream" | "theme";
+  column: "upstream" | "downstream" | "distribution" | "theme";
   tagCount: number;
   uncertainCount: number;
 }
@@ -94,7 +94,7 @@ export function buildReviewPacket(rows: SupplementRow[], vocab: Vocabulary, gene
   const tagCount = new Map<string, number>();
   const uncertainCount = new Map<string, number>();
   for (const row of judgedRows) {
-    for (const label of [...row.upstream, ...row.downstream, ...row.themes]) {
+    for (const label of [...row.upstream, ...row.downstream, ...row.distribution, ...row.themes]) {
       tagCount.set(label, (tagCount.get(label) ?? 0) + 1);
     }
     for (const label of parseUncertainLabels(row.uncertain)) {

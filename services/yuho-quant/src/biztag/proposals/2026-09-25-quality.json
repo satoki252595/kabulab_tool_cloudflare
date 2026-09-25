@@ -1,0 +1,696 @@
+{
+  "baseVersion": "v1",
+  "noChange": false,
+  "reason": "2026-09-25 精度診断 (3,606件中1,229件がタグ0件) の是正。原因(1) JSICの複合語をそのまま keywords にしたため実際の有報の平易な言い回し(『タイヤ事業』『セダン、ミニバン…等の自動車』等)に当たらない語を add_keywords で補強。原因(2) 半導体テスタ(ATE)がJSIC上『半導体製造装置(2671)』とは別区分(検査用装置=電気計測器2971)であるにもかかわらず単語帳に語が無くAdvantestが0候補になっていたため add_business で追加。原因(3) 人材・教育・総合商社・小売業態・ホテル旅行・自動車ディーラー・食品/包装機械・金属加工・住設建材が単語帳に一語も無かったため add_business で追加(小売・人材・商社・宿泊・旅行・自動車販売は既存 upstream/downstream に当てはまらないため新設した notionColumn=distribution / family=SVC で受ける)。出典はすべて日本標準産業分類(総務省 R5)のみを使用し、GICS・株探等の民間分類は使用していない。",
+  "sourcesChecked": [
+    {
+      "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+      "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+      "date": "2023-07"
+    }
+  ],
+  "exampleCompanies": {
+    "B.SEMI.TEST_EQUIPMENT": [
+      "6857"
+    ],
+    "B.SVC.GENERAL_TRADING": [
+      "8058",
+      "8001",
+      "8031",
+      "2768",
+      "8015"
+    ],
+    "B.MOBI.TIRE": [
+      "5108"
+    ],
+    "B.MOBI.AUTO_OEM": [
+      "7203"
+    ]
+  },
+  "changes": [
+    {
+      "op": "add_keywords",
+      "id": "B.MOBI.TIRE",
+      "keywords": [
+        "タイヤ事業",
+        "タイヤ・チューブ事業",
+        "タイヤの製造",
+        "乗用車用タイヤ",
+        "低燃費タイヤ",
+        "スタッドレスタイヤ",
+        "サマータイヤ",
+        "オールシーズンタイヤ",
+        "新車用タイヤ"
+      ],
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類1911 自動車タイヤ・チューブ製造業 定義文(p.219)",
+          "quote": "主としてトラック、バス、乗用車、小型トラック、二輪自動車、産業"
+        }
+      ]
+    },
+    {
+      "op": "add_keywords",
+      "id": "B.MOBI.AUTO_OEM",
+      "keywords": [
+        "自動車の製造",
+        "自動車の設計",
+        "自動車事業",
+        "セダン",
+        "ミニバン",
+        "コンパクトカー",
+        "軽自動車",
+        "SUV",
+        "自動車の生産"
+      ],
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類3111 自動車製造業（二輪自動車を含む） 定義文(p.296)",
+          "quote": "主として各種自動車（二輪自動車を含む）の完成品及び自動車シャシ"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SEMI.TEST_EQUIPMENT",
+        "layer": "business",
+        "family": "SEMI",
+        "subfamily": "test_equipment",
+        "notionColumn": "upstream",
+        "labelJa": "半導体テスタ・検査装置",
+        "definitionJa": "半導体デバイス(ロジックIC・メモリ・SoC・アナログ・パワー半導体等)の電気的特性を検査するテスタ(ATE: Automatic Test Equipment)、およびテストハンドラ等の周辺装置を製造する事業。ウェーハ加工・成膜・露光・組立等を行う半導体製造装置(前工程・後工程装置)は別区分(半導体製造装置)とする。",
+        "definitionEn": "Manufacture of automatic test equipment (ATE) that inspects the electrical characteristics of semiconductor devices (logic ICs, memory, SoC, analog, power semiconductors, etc.), and related peripheral equipment such as test handlers. Distinct from front-end (wafer processing, deposition, lithography) and back-end assembly semiconductor manufacturing equipment, which is a separate term.",
+        "keywords": [
+          "半導体テスタ",
+          "半導体試験装置",
+          "半導体検査装置",
+          "SoCテストシステム",
+          "メモリテストシステム",
+          "テストハンドラ",
+          "ATEソリューション",
+          "テストシステム事業"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類2671 半導体製造装置製造業 定義文(除外規定)(p.263)",
+            "quote": "検査用 装置（電気計測器）を製造する事業所は中分類 29［2971］に"
+          },
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "小分類297/細分類2971 電気計測器製造業（別掲を除く） 内容例示(p.283)",
+            "quote": "総合試験装置・附属品製造業（搬 送機器用試験装置、無線機器用試験装置、有線機器用試験装置など）"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類2671 半導体製造装置製造業 定義文(除外規定)(p.263)",
+          "quote": "検査用 装置（電気計測器）を製造する事業所は中分類 29［2971］に"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.STAFFING",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "staffing",
+        "notionColumn": "distribution",
+        "labelJa": "人材紹介・派遣",
+        "definitionJa": "求職者に職業をあっせんする有料・無料職業紹介業、および雇用した労働者を派遣先の指揮命令の下で働かせる労働者派遣業を、自社の事業として行う事業。求人メディア・HRテック(SaaS等)の運営単体で、許可を要する職業紹介・労働者派遣行為を伴わないものは含まない。",
+        "definitionEn": "Operating a licensed employment placement (job referral) business and/or a worker-dispatching (staffing) business, where the company itself refers job seekers to employers or dispatches its own employees to work under a client company's direction. Does not include operating a job-listing media platform or HR SaaS alone without the licensed placement/dispatching activity itself.",
+        "keywords": [
+          "職業紹介事業",
+          "有料職業紹介",
+          "労働者派遣事業",
+          "人材派遣事業",
+          "人材紹介事業",
+          "再就職支援事業"
+        ],
+        "excludeKeywords": [
+          "求人広告事業",
+          "求人メディア"
+        ],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類9111 職業紹介業 定義文(p.504)",
+            "quote": "主として労働者に職業をあっせんする事業所をいう。"
+          },
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類9121 労働者派遣業 定義文(p.505)",
+            "quote": "派遣先事業所からその業 務の遂行等に関する指揮命令を受けてその事業所のための労働に従事さ せることを業とする事業所をいう。"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類9111 職業紹介業 定義文(p.504)",
+          "quote": "主として労働者に職業をあっせんする事業所をいう。"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.EDUCATION",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "education",
+        "notionColumn": "distribution",
+        "labelJa": "学習塾・教育サービス",
+        "definitionJa": "小学生・中学生・高校生等を対象に、学校教育の補習教育・進学指導・学習指導を行う学習塾・予備校を自社の事業として運営する事業。学校教育法上の学校(大学・専修学校等)の設置・運営や、単発の教材・書籍の出版のみは含まない。",
+        "definitionEn": "Operating supplementary tutorial schools (juku) or preparatory schools that provide after-school remedial or exam-prep instruction to elementary, junior-high, or high-school students. Does not include operating a school under the School Education Act (universities, vocational colleges, etc.) or merely publishing textbooks/workbooks.",
+        "keywords": [
+          "学習塾事業",
+          "進学塾",
+          "予備校事業",
+          "個別指導塾",
+          "教育サービス事業"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類8231 学習塾 定義文(p.474)",
+            "quote": "小学生、中学生、高校生などを対象として学校教育の補習教育又は学 習指導を行う事業所をいう。"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類8231 学習塾 定義文(p.474)",
+          "quote": "小学生、中学生、高校生などを対象として学校教育の補習教育又は学 習指導を行う事業所をいう。"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.GENERAL_TRADING",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "general_trading",
+        "notionColumn": "distribution",
+        "labelJa": "総合商社",
+        "definitionJa": "エネルギー・金属・機械・化学品・食料・繊維・生活資材等、相互に関連の薄い複数の商品分野を横断して自ら仕入・卸売(トレーディング)を行い、加えて出資先の事業投資・経営を手掛ける総合商社としての事業。特定の単一商品分野のみを扱う専門商社は含まない。",
+        "definitionEn": "Operating as a general trading company (sogo shosha) that itself buys and wholesales goods across multiple, largely unrelated product categories (energy, metals, machinery, chemicals, food, textiles, daily necessities, etc.) and also makes and manages business investments in portfolio companies. Does not include a specialty trading company that only handles a single product category.",
+        "keywords": [
+          "総合商社",
+          "総合商社機能",
+          "トレーディング事業"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類5011 各種商品卸売業（従業者が常時100人以上のもの） 内容例示(p.349)",
+            "quote": "総合商社（従業者が常時 100 人以上のもの）"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類5011 各種商品卸売業（従業者が常時100人以上のもの） 内容例示(p.349)",
+          "quote": "総合商社（従業者が常時 100 人以上のもの）"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.CONVENIENCE_STORE",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "retail",
+        "notionColumn": "distribution",
+        "labelJa": "コンビニエンスストア",
+        "definitionJa": "各種最寄り品を扱う店舗設備を備え、主として飲食料品を中心とした商品を小売するコンビニエンスストア事業を、自社のフランチャイズ本部・直営店運営として行う事業。他の小売業態(百貨店・スーパー・専門店等)のみを営む事業は含まない。",
+        "definitionEn": "Operating convenience stores (either as franchisor/chain headquarters or directly) that mainly retail daily necessities and food/beverages in small-format stores. Does not include operating other retail formats (department stores, supermarkets, specialty stores) only.",
+        "keywords": [
+          "コンビニエンスストア事業",
+          "コンビニエンスストア"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類5631 コンビニエンスストア 定義文(p.376)",
+            "quote": "各種代金の支払等のサービスを提供し、主として飲食料品を小売する業 態の事業所をいう。"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類5631 コンビニエンスストア 定義文(p.376)",
+          "quote": "各種代金の支払等のサービスを提供し、主として飲食料品を小売する業 態の事業所をいう。"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.DRUGSTORE",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "retail",
+        "notionColumn": "distribution",
+        "labelJa": "ドラッグストア",
+        "definitionJa": "各種商品を扱う店舗設備を備え、主として医薬品・化粧品を取り扱い、家庭用品・加工食品等の最寄り品も併せて小売するドラッグストア事業を自社で運営する事業。医薬品の製造(製薬)や、調剤薬局単体の運営のみは含まない。",
+        "definitionEn": "Operating drugstores that mainly sell pharmaceuticals and cosmetics while also retailing household goods and processed foods. Does not include manufacturing pharmaceuticals, or operating a dispensing (prescription-only) pharmacy alone.",
+        "keywords": [
+          "ドラッグストア事業",
+          "ドラッグストア"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類5641 ドラッグストア 定義文(p.376)",
+            "quote": "主として医 薬品や化粧品を取り扱い、家庭用品や加工食品などの各種最寄り品も小 売する業態の事業所をいう。"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類5641 ドラッグストア 定義文(p.376)",
+          "quote": "主として医 薬品や化粧品を取り扱い、家庭用品や加工食品などの各種最寄り品も小 売する業態の事業所をいう。"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.ELECTRONICS_RETAIL",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "retail",
+        "notionColumn": "distribution",
+        "labelJa": "家電量販店",
+        "definitionJa": "テレビ・冷蔵庫・洗濯機・パソコン・携帯電話等の家庭用電気機械器具を中心に小売する家電量販店事業を自社で運営する事業。家電製品の製造のみ、または他社経営の家電量販店に商品を卸売するのみの事業は含まない。",
+        "definitionEn": "Operating consumer-electronics mass-retail stores that mainly retail household electrical appliances such as TVs, refrigerators, washing machines, PCs, and mobile phones. Does not include only manufacturing electronics, or only wholesaling to independently operated electronics retailers.",
+        "keywords": [
+          "家電量販店事業",
+          "家電量販店",
+          "家電販売事業"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類5931 電気機械器具小売業（中古品を除く） 定義文(p.388)",
+            "quote": "主としてテレビジョン受信機、ラジオ受信機、電気冷蔵庫、電熱器、 電気アイロン、電球など各種の家庭用電気機械器具及びその部分品を小 売する事業所をいう。"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類5931 電気機械器具小売業（中古品を除く） 定義文(p.388)",
+          "quote": "主としてテレビジョン受信機、ラジオ受信機、電気冷蔵庫、電熱器、 電気アイロン、電球など各種の家庭用電気機械器具及びその部分品を小 売する事業所をいう。"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.DEPARTMENT_STORE",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "retail",
+        "notionColumn": "distribution",
+        "labelJa": "百貨店",
+        "definitionJa": "衣食住にわたる各種商品を扱う設備・接客要員を備え、衣料品・宝飾品・インテリア用品等の高単価商品を中心に小売する百貨店(デパートメントストア)事業を自社で運営する事業。総合スーパー(セルフサービス方式の食品・日用品中心業態)単独の運営は含まない。",
+        "definitionEn": "Operating a full-service department store that retails high-unit-price goods (apparel, jewelry, interior goods, etc.) across food, clothing and household categories with sales staff assistance. Does not include operating only a general (self-service) supermarket format.",
+        "keywords": [
+          "百貨店事業",
+          "デパートメントストア",
+          "百貨店"
+        ],
+        "excludeKeywords": [
+          "総合スーパー"
+        ],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類5611 百貨店 定義文(p.375)",
+            "quote": "階別に異なる主要商品の展示を基本に"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類5611 百貨店 定義文(p.375)",
+          "quote": "階別に異なる主要商品の展示を基本に"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.HOTEL",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "hospitality",
+        "notionColumn": "distribution",
+        "labelJa": "ホテル・旅館",
+        "definitionJa": "短期間(通例、日を単位とする)宿泊等を一般公衆に提供する営利的なホテル・旅館事業を自社(直営・運営受託)で行う事業。ホテル物件の保有(不動産賃貸のみ)や、簡易宿所単独の運営は含まない。",
+        "definitionEn": "Operating a for-profit hotel or Japanese-style inn (ryokan) that provides short-term (typically nightly) lodging to the general public, either directly or under an operating contract. Does not include merely owning/leasing the hotel property, or operating only simple lodging houses.",
+        "keywords": [
+          "ホテル事業",
+          "旅館事業",
+          "宿泊事業",
+          "ホテル運営"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類7511 旅館、ホテル 定義文(p.442)",
+            "quote": "主として短期間（通例、日を単位とする）宿泊等を一般公衆に提供す る営利的な事業所をいう。"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類7511 旅館、ホテル 定義文(p.442)",
+          "quote": "主として短期間（通例、日を単位とする）宿泊等を一般公衆に提供す る営利的な事業所をいう。"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.TRAVEL_AGENCY",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "travel",
+        "notionColumn": "distribution",
+        "labelJa": "旅行業",
+        "definitionJa": "運送・宿泊等のサービスの提供について、提供者又は旅行者を代理して契約を締結する旅行業(旅行業者代理業を含む)を自社の事業として行う事業。運送(鉄道・航空・バス等)そのものの提供や、宿泊施設そのものの運営のみは含まない。",
+        "definitionEn": "Operating a travel agency business (including as a sub-agent) that arranges and contracts for transportation and lodging services on behalf of the service provider or the traveler. Does not include directly operating the transportation service itself (rail, air, bus, etc.) or operating the lodging facility itself.",
+        "keywords": [
+          "旅行業事業",
+          "旅行代理店事業",
+          "旅行事業"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類7911 旅行業（旅行業者代理業を除く） 定義文(p.455)",
+            "quote": "運送又は宿泊等のサービスの提供について、提供者又は旅行者を代理 して契約を締結する等の行為を行う事業所をいう。"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類7911 旅行業（旅行業者代理業を除く） 定義文(p.455)",
+          "quote": "運送又は宿泊等のサービスの提供について、提供者又は旅行者を代理 して契約を締結する等の行為を行う事業所をいう。"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.AUTO_DEALER",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "auto_retail",
+        "notionColumn": "distribution",
+        "labelJa": "自動車販売ディーラー",
+        "definitionJa": "自動車メーカーの正規販売店(ディーラー)として新車を小売する事業、または中古車小売事業を自社で運営する事業。自動車そのものの製造(完成車メーカー)は含まない。",
+        "definitionEn": "Operating as an authorized new-car dealership that retails newly manufactured vehicles to end customers, or operating a used-car retail business. Does not include manufacturing the vehicles themselves.",
+        "keywords": [
+          "自動車販売店事業",
+          "新車販売事業",
+          "カーディーラー事業",
+          "自動車ディーラー",
+          "中古車販売事業"
+        ],
+        "excludeKeywords": [
+          "自動車製造業"
+        ],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類5911 自動車（新車）小売業 定義文(p.387)",
+            "quote": "主として自動車（新車）を小売する事業所をいう。"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類5911 自動車（新車）小売業 定義文(p.387)",
+          "quote": "主として自動車（新車）を小売する事業所をいう。"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.MACH.FOOD_PACKAGING_MACHINERY",
+        "layer": "business",
+        "family": "MACH",
+        "subfamily": "food_packaging_machinery",
+        "notionColumn": "upstream",
+        "labelJa": "食品機械・包装機械",
+        "definitionJa": "農産物・畜産物・水産物を原料として食品・飲料・調味料等に加工する工程で使う食品機械、および商品を包装・荷造りする包装機械(充てん機・製袋機・シール機等)を製造する事業。",
+        "definitionEn": "Manufacture of food-processing machinery used to turn agricultural, livestock, or marine raw materials into food, beverages, or seasonings, and/or packaging machinery (fillers, bag-making machines, sealers, etc.) used to package and pack goods.",
+        "keywords": [
+          "食品機械",
+          "食品加工機械",
+          "包装機械",
+          "荷造機械",
+          "充てん機",
+          "製袋機",
+          "食品プラント"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類2641 食品機械・同装置製造業 定義文(p.259)",
+            "quote": "多種多様な食品、飲料、調味料等に調理精製するための工程におい て使用される食品機械・器具及び装置を製造する事業所をいう。"
+          },
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類2645 包装・荷造機械製造業 定義文(p.260)",
+            "quote": "主として包装（充てんを含む）及び荷造りする機械装置及び同部分品、 附属品などを製造する事業所をいう。"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類2641 食品機械・同装置製造業 定義文(p.259)",
+          "quote": "多種多様な食品、飲料、調味料等に調理精製するための工程におい て使用される食品機械・器具及び装置を製造する事業所をいう。"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.MAT.METAL_STAMPING_PARTS",
+        "layer": "business",
+        "family": "MAT",
+        "subfamily": "metal_parts_processing",
+        "notionColumn": "upstream",
+        "labelJa": "金属プレス加工・部品加工",
+        "definitionJa": "金属の打抜き・プレス加工により自動車車体部品・機械部分品等を製造する金属加工・部品加工事業(受託加工を含む)。建設用・建築用の金属製品(サッシ・鉄骨等)の製造は別区分とする。",
+        "definitionEn": "Manufacture (including as a contract processor) of automotive body parts, machine parts, and similar components via metal stamping/pressing. Excludes construction/building metal products (sashes, steel frames, etc.), which are tagged separately.",
+        "keywords": [
+          "金属プレス加工",
+          "プレス加工品",
+          "精密板金",
+          "金属部品加工",
+          "精密プレス部品",
+          "打抜き加工"
+        ],
+        "excludeKeywords": [
+          "建築用金属製品",
+          "建設用金属製品"
+        ],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類2452 金属プレス製品製造業（アルミニウム・同合金を除く） 定義文(p.246-247)",
+            "quote": "打抜き又はプレス加工された自動車車体あるいは機械 部分品などを製造する事業所をいう。"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類2452 金属プレス製品製造業（アルミニウム・同合金を除く） 定義文(p.246-247)",
+          "quote": "打抜き又はプレス加工された自動車車体あるいは機械 部分品などを製造する事業所をいう。"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.RE.BUILDING_MATERIALS",
+        "layer": "business",
+        "family": "RE",
+        "subfamily": "building_materials",
+        "notionColumn": "upstream",
+        "labelJa": "建材（窯業系外装材等）",
+        "definitionJa": "木材セメント製・窯業系サイディング等の外装材、コンクリート製品等、建築物の建材(部材)を製造する事業。建材の卸売・小売のみを行う事業は含まない。",
+        "definitionEn": "Manufacture of building materials for structures, such as ceramic/fiber-cement siding, wood-cement or other cement-based exterior wall panels, and concrete products. Does not include wholesaling or retailing building materials without manufacturing them.",
+        "keywords": [
+          "窯業系サイディング",
+          "建材事業",
+          "セメント製品製造",
+          "セメント板",
+          "窯業系外装材",
+          "窯業外装材製造業"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類2129 その他のセメント製品製造業 定義文(p.224)",
+            "quote": "主として木材セメント製、セメントモルタル製、気泡コンクリート製 の板、ブロックなどの各種セメント製品を製造する事業所をいう。"
+          },
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類2129 その他のセメント製品製造業 内容例示(p.224)",
+            "quote": "気泡コンクリート製品製造業；スラグせっこう板製造業；窯業外 装材製造業"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類2129 その他のセメント製品製造業 内容例示(p.224)",
+          "quote": "気泡コンクリート製品製造業；スラグせっこう板製造業；窯業外 装材製造業"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.RE.HOUSING_EQUIPMENT",
+        "layer": "business",
+        "family": "RE",
+        "subfamily": "housing_equipment",
+        "notionColumn": "downstream",
+        "labelJa": "住宅設備機器（衛生陶器等）",
+        "definitionJa": "浴槽・洗面手洗器・便器等の衛生陶器、およびその配管用取付品・附属品を製造する住宅設備機器事業。住宅そのものの建築・分譲は別区分(住宅)とする。",
+        "definitionEn": "Manufacture of housing/building equipment such as sanitary ware (bathtubs, wash basins, toilets) and their plumbing fittings/accessories. Does not include building or selling the house itself, which is a separate term.",
+        "keywords": [
+          "衛生陶器",
+          "住宅設備機器",
+          "水まわり機器",
+          "便器の製造",
+          "洗面台の製造"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "細分類2141 衛生陶器製造業 内容例示(p.225)",
+            "quote": "主な製品は、浴槽、洗面手洗器、便器、水槽など及びこれらの附属品 である。"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類2141 衛生陶器製造業 内容例示(p.225)",
+          "quote": "主な製品は、浴槽、洗面手洗器、便器、水槽など及びこれらの附属品 である。"
+        }
+      ]
+    }
+  ]
+}

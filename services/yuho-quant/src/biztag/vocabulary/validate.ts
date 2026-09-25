@@ -12,6 +12,7 @@
 import {
   BUSINESS_ID_PATTERN,
   LABEL_MAX_CHARS,
+  NOTION_COLUMNS,
   NOTION_OPTIONS_PER_COLUMN_MAX,
   VocabularySchema,
   type BusinessTerm,
@@ -128,7 +129,7 @@ export function validateVocabulary(v: Vocabulary): VocabIssue[] {
   }
 
   // 4. Notion 選択肢数の上限 (非廃止のみ)。
-  for (const column of ["upstream", "downstream"] as const) {
+  for (const column of NOTION_COLUMNS) {
     const count = v.business.filter((t) => t.notionColumn === column && !t.deprecated).length;
     if (count > NOTION_OPTIONS_PER_COLUMN_MAX) {
       issues.push({

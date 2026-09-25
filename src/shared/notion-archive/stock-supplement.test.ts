@@ -62,6 +62,24 @@ describe("stock-supplement (純粋関数)", () => {
       expect(props["投資テーマ"]).toEqual({ multi_select: [] });
     });
 
+    it("事業タグ（流通・サービス）列も multi_select として書ける (第3列)", () => {
+      const props = buildSupplementProperties({ distribution: ["人材紹介・派遣"] });
+      expect(props["事業タグ（流通・サービス）"]).toEqual({
+        multi_select: [{ name: "人材紹介・派遣" }],
+      });
+    });
+
+    it("事業タグの根拠文は rich_text。null は明示的にクリアする(タグ再判定時)", () => {
+      const withText = buildSupplementProperties({
+        evidenceText: "核酸医薬（はい 0.93）：「テスト引用文」— 事業の内容",
+      });
+      expect(withText["事業タグの根拠文"]).toEqual({
+        rich_text: [{ type: "text", text: { content: "核酸医薬（はい 0.93）：「テスト引用文」— 事業の内容" } }],
+      });
+      const cleared = buildSupplementProperties({ evidenceText: null });
+      expect(cleared["事業タグの根拠文"]).toEqual({ rich_text: [] });
+    });
+
     it("multi_select が 100 件を超えると throw", () => {
       const many = Array.from({ length: 101 }, (_, i) => `語${i}`);
       expect(() => buildSupplementProperties({ upstream: many })).toThrow("100 件");
@@ -281,6 +299,7 @@ describe("stock-supplement (Notion 通信)", () => {
     textColumns: ["事業の内容", "対処すべき課題"],
     upstreamOptions: ["半導体パッケージ・基板材料"],
     downstreamOptions: ["自動車"],
+    distributionOptions: ["人材紹介・派遣"],
     themeOptions: ["半導体サプライチェーン"],
     versionOptions: ["v1"],
     sector33Options: ["輸送用機器"],
@@ -465,8 +484,10 @@ describe("stock-supplement (Notion 通信)", () => {
           本文の状態: { select: { name: "取得済" } },
           "事業タグ（素材・部品・装置）": { multi_select: [{ name: "半導体パッケージ・基板材料" }] },
           "事業タグ（製品・サービス）": { multi_select: [] },
+          "事業タグ（流通・サービス）": { multi_select: [{ name: "人材紹介・派遣" }] },
           投資テーマ: { multi_select: [] },
           要確認タグ: { rich_text: [] },
+          事業タグの根拠文: { rich_text: [{ plain_text: "核酸医薬（はい 0.93）：「テスト引用文」— 事業の内容" }] },
           事業タグの状態: { select: { name: "判定済" } },
           事業タグの根拠書類: { rich_text: [{ plain_text: "S100TEST 2025年3月期" }] },
           単語帳の版: { select: { name: "v1" } },
@@ -503,6 +524,8 @@ describe("stock-supplement (Notion 通信)", () => {
         nextRetryAt: null,
         masterLinked: true,
         upstream: ["半導体パッケージ・基板材料"],
+        distribution: ["人材紹介・派遣"],
+        evidenceText: "核酸医薬（はい 0.93）：「テスト引用文」— 事業の内容",
         texts: { 事業の内容: "自動車を製造する。" },
       });
       expect(rows[0]?.texts).not.toHaveProperty("対処すべき課題");
@@ -712,8 +735,10 @@ function allColumnNames(): string[] {
     "本文の状態",
     "事業タグ（素材・部品・装置）",
     "事業タグ（製品・サービス）",
+    "事業タグ（流通・サービス）",
     "投資テーマ",
     "要確認タグ",
+    "事業タグの根拠文",
     "事業タグの状態",
     "事業タグの根拠書類",
     "単語帳の版",

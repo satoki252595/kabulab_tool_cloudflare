@@ -104,6 +104,9 @@ function buildSchemaSpec(vocab: Vocabulary, sector33Options: string[]): Suppleme
     downstreamOptions: vocab.business
       .filter((t) => !t.deprecated && t.notionColumn === "downstream")
       .map((t) => t.labelJa),
+    distributionOptions: vocab.business
+      .filter((t) => !t.deprecated && t.notionColumn === "distribution")
+      .map((t) => t.labelJa),
     themeOptions: vocab.themes.filter((t) => !t.deprecated).map((t) => t.labelJa),
     versionOptions: [vocab.version],
     sector33Options,

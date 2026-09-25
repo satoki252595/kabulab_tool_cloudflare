@@ -77,8 +77,10 @@ Cursor Automation（年 1 回・8 月）
 | 本文の状態 | select | 取得済／本文なし／読込失敗 |
 | 事業タグ（素材・部品・装置） | multi_select | 単語帳 business 層・`notionColumn=upstream` の「はい」 |
 | 事業タグ（製品・サービス） | multi_select | 同 `notionColumn=downstream` の「はい」 |
-| 投資テーマ | multi_select | theme 層。上の 2 列の語から**決定的に導く**（判定しない） |
+| 事業タグ（流通・サービス） | multi_select | 同 `notionColumn=distribution` の「はい」（2026-09-25 追加。小売・卸・商社・人材・教育・ホテル旅行・ディーラー等、川上素材でも自社製品でもない事業） |
+| 投資テーマ | multi_select | theme 層。上の 3 列の語から**決定的に導く**（判定しない） |
 | 要確認タグ | rich_text | 「確認不能」の語（名前と確率） |
+| 事業タグの根拠文 | rich_text | 「はい」「要確認」の語ごとに `タグ名（はい 0.93）：「原文1〜2文」— 節名` を1行。§3.1「ページ本文（根拠）」と同じ内容を行プロパティからも読めるようにしたもの（2026-09-25 追加） |
 | 事業タグの状態 | select | 判定済／本文なし／読込失敗／判定不能／未判定 |
 | 事業タグの根拠書類 | rich_text | `S100XXXX 2025年3月期` |
 | 単語帳の版 | select | `v1` など |
@@ -92,6 +94,13 @@ Cursor Automation（年 1 回・8 月）
 
 - 本文列は `TEXT_SECTIONS`（`services/yuho-quant/src/services/edinet/text-sections.ts`）が正本。
   列名 = `title`。その書類に無い項目は空（＝非開示。捏造しない）。
+- 「事業タグの根拠文」は 2,000字/要素 の rich_text（`splitRichText` で分割。コードポイント
+  境界＝サロゲートペアを割らない）。行全体で 190,000字（安全マージンを見た Notion の
+  rich_text 実務上限 200,000字未満）を超える場合は、超過分を切り詰め、末尾に
+  「…（文字数上限のため以下省略。全語の根拠はページ本文の根拠トグルを参照）」と明記する
+  （黙って削らない・ルール2）。切り詰めが起きたときは「判定入力」列にもその事実を追記する。
+  ページ本文の根拠トグル（下記）には全語が残るため、情報そのものは失われない。
+  タグが空になる／再判定される時はこの列も明示的に `null` へ戻す。
 - 実測（2026-09-25・全 37,945 通）: 1 項目の最大 30,000 字・1 通合計の最大 211,899 字。
   1 列は rich_text 2,000 字 × 最大 15 要素で収まる。1 要求 500KB を超える分は
   列単位で複数の PATCH に分ける（行の上限 2.5MB の内側）。
@@ -143,17 +152,19 @@ Cursor Automation（年 1 回・8 月）
 型は `services/yuho-quant/src/biztag/vocabulary/schema.ts`（zod）。
 
 - 2 層: **business（事業・製品。判定対象）** と **theme（投資テーマ。business 語の集合）**。
-- business の語は `notionColumn` で 2 列に分かれる（upstream＝素材・部品・装置、
-  downstream＝製品・サービス）。各列・テーマ列とも **100 語以内**（Notion の
-  選択肢の上限を安全側で守る）。
+- business の語は `notionColumn` で 3 列に分かれる（upstream＝素材・部品・装置、
+  downstream＝製品・サービス、distribution＝流通・サービス。2026-09-25 追加。
+  小売・卸・商社・人材・教育・ホテル旅行・自動車ディーラー等、川上の素材・部品でも
+  自社が製造する製品・サービスでもない事業を受ける）。各列・テーマ列とも
+  **100 語以内**（Notion の選択肢の上限を安全側で守る）。
 - 1 語のレコード:
 
 | フィールド | 規則 |
 |---|---|
 | `id` | `B.<FAMILY>.<UPPER_SNAKE>` / `T.<UPPER_SNAKE>`。**変えない・使い回さない**（廃止しても欠番） |
 | `layer` | `business` / `theme` |
-| `family` | business のみ。`SEMI` `ELEC` `ENERGY` `MAT` `MED` `MACH` `MOBI` `DEF` `ICT` `FOOD` `FIN` `RE` `LOGI` `CONT` |
-| `notionColumn` | business のみ。`upstream` / `downstream` |
+| `family` | business のみ。`SEMI` `ELEC` `ENERGY` `MAT` `MED` `MACH` `MOBI` `DEF` `ICT` `FOOD` `FIN` `RE` `LOGI` `CONT` `SVC`（`SVC`=流通・サービス。2026-09-25 追加。人材・教育・総合商社・小売業態・ホテル旅行・自動車ディーラー等、既存系統に当てはまらない非製造業の受け皿） |
+| `notionColumn` | business のみ。`upstream` / `downstream` / `distribution` |
 | `labelJa` | Notion の選択肢名。カンマ（`,` `、`）禁止・40 字以内・大文字小文字を無視して一意 |
 | `definitionJa` / `definitionEn` | 判定の指示文に使う（En を jev へ渡す） |
 | `keywords[]` | 有報に実際に出る表記（同義語・略語）。絞り込みに使う |
