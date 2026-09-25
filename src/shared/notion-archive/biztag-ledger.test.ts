@@ -300,61 +300,52 @@ describe("notion-archive biztag-ledger", () => {
       });
     });
 
-    it("replaceLedgerJson: 既存 children を全削除してから新本文を追記しメタを更新する", async () => {
-      route("GET", "/v1/blocks/entry-1/children", [childrenPage([{ id: "old-1" }, { id: "old-2" }])]);
-      route("DELETE", "/v1/blocks/old-1", [{}]);
-      route("DELETE", "/v1/blocks/old-2", [{}]);
-      route("PATCH", "/v1/blocks/entry-1/children", [{}]);
+    const packetEntry = {
+      pageId: "entry-1",
+      name: "見直し材料",
+      kind: "見直し材料" as const,
+      state: "最新" as const,
+      version: "v1",
+      hash: "old-hash",
+      recordedAt: "2026-01-01",
+      reason: "自動生成",
+      diff: "",
+      rollbackFrom: null,
+    };
+
+    it("replaceLedgerJson: 同じ属性で新しい行を作ってから古い行をアーカイブする (ブロックを 1 つずつ消さない)", async () => {
+      route("GET", "/v1/pages/entry-1", [{ id: "entry-1", parent: { type: "database_id", database_id: "ledger-db" } }]);
+      route("POST", "/v1/pages", [{ id: "entry-2" }]);
       route("PATCH", "/v1/pages/entry-1", [{}]);
       const { replaceLedgerJson } = await load();
       const newJson = { version: "v2" };
-      const updated = await replaceLedgerJson(
-        {
-          pageId: "entry-1",
-          name: "見直し材料",
-          kind: "見直し材料",
-          state: "最新",
-          version: null,
-          hash: "old-hash",
-          recordedAt: "2026-01-01",
-          reason: "",
-          diff: "",
-          rollbackFrom: null,
-        },
-        newJson,
-        "2026-09-25"
-      );
+      const updated = await replaceLedgerJson(packetEntry, newJson, "2026-09-25");
+      expect(updated.pageId).toBe("entry-2");
       expect(updated.hash).toBe(await sha256Hex(JSON.stringify(newJson)));
       expect(updated.recordedAt).toBe("2026-09-25");
+      expect(updated.state).toBe("最新");
       const methods = calls.map((c) => `${c.init.method} ${new URL(c.url).pathname}`);
-      expect(methods).toEqual([
-        "GET /v1/blocks/entry-1/children",
-        "DELETE /v1/blocks/old-1",
-        "DELETE /v1/blocks/old-2",
-        "PATCH /v1/blocks/entry-1/children",
-        "PATCH /v1/pages/entry-1",
-      ]);
+      expect(methods).toEqual(["GET /v1/pages/entry-1", "POST /v1/pages", "PATCH /v1/pages/entry-1"]);
+      // 新しい行は同じ DB・同じ種別/状態で作り、古い行は archived にする (作ってから消す順)
+      const created = JSON.parse(String(calls[1]?.init.body)) as { parent: { database_id: string } };
+      expect(created.parent.database_id).toBe("ledger-db");
+      expect(JSON.parse(String(calls[2]?.init.body))).toEqual({ archived: true });
+    });
+
+    it("replaceLedgerJson: 親が DB でない行は throw する (黙ってどこかに作らない)", async () => {
+      route("GET", "/v1/pages/entry-1", [{ id: "entry-1", parent: { type: "page_id", page_id: "x" } }]);
+      const { replaceLedgerJson } = await load();
+      await expect(replaceLedgerJson(packetEntry, { version: "v2" }, "2026-09-25")).rejects.toThrow("親 DB");
     });
 
     it("replaceLedgerJson: 種別=版なら正規化JSONでハッシュを取る (createLedgerEntry と同じ規則)", async () => {
-      route("GET", "/v1/blocks/entry-ver/children", [childrenPage([])]);
-      route("PATCH", "/v1/blocks/entry-ver/children", [{}]);
+      route("GET", "/v1/pages/entry-ver", [{ id: "entry-ver", parent: { type: "database_id", database_id: "ledger-db" } }]);
+      route("POST", "/v1/pages", [{ id: "entry-ver-2" }]);
       route("PATCH", "/v1/pages/entry-ver", [{}]);
       const { replaceLedgerJson } = await load();
       const newVocabJson = { version: "v2", business: [{ id: "B.SEMI.TEST" }] };
       const updated = await replaceLedgerJson(
-        {
-          pageId: "entry-ver",
-          name: "版",
-          kind: "版",
-          state: "有効",
-          version: "v1",
-          hash: "old-hash",
-          recordedAt: "2026-01-01",
-          reason: "",
-          diff: "",
-          rollbackFrom: null,
-        },
+        { ...packetEntry, pageId: "entry-ver", name: "版", kind: "版", state: "有効" },
         newVocabJson,
         "2026-09-25"
       );

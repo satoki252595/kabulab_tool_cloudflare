@@ -412,32 +412,40 @@ export async function updateLedgerEntry(
 }
 
 /**
- * 記録本文 (JSON) を丸ごと差し替える (例: 見直し材料の再生成)。
- * 既存の子ブロックを全削除してから新しい本文を追記し、ハッシュ・記録日を更新する。
+ * 記録の本文 JSON を差し替える (「見直し材料」の日次更新で使う)。
+ *
+ * 同じページの本文ブロックを 1 つずつ削除して書き直すと、単語帳を含む数十万字の
+ * JSON (200 ブロック前後) で毎回 200 回近い DELETE になる (2026-09-25 実測で固定費
+ * 約 180 リクエスト)。そこで「同じ属性で新しい行を作る → 古い行をアーカイブする」
+ * にする (数リクエスト)。作ってからアーカイブする順なので、途中で止まっても本文が
+ * 消えた行は残らない (同じ種別・状態の行が一時的に 2 件になるだけで、次回の更新か
+ * 運営が気付ける — 読み手は 2 件以上を異常として throw する)。
+ * 戻り値は新しい行 (pageId が変わる)。
  */
 export async function replaceLedgerJson(
   entry: LedgerEntry,
   json: unknown,
   recordedAt: string
 ): Promise<LedgerEntry> {
-  const existing = await loadChildren(entry.pageId);
-  for (const b of existing) {
-    await notionRequest("DELETE", `/blocks/${b.id}`);
+  const page = await notionRequest<{ parent?: { type?: string; database_id?: string } }>(
+    "GET",
+    `/pages/${entry.pageId}`
+  );
+  const dbId = page.parent?.type === "database_id" ? page.parent.database_id : undefined;
+  if (dbId === undefined) {
+    throw new Error(`replaceLedgerJson: 台帳の行 ${entry.pageId} の親 DB が分かりません`);
   }
-
-  const text = serializeForHash(entry.kind, json);
-  const hash = await sha256Hex(text);
-  const blocks = jsonBodyBlocks(text);
-  const parts = chunkArray(blocks, 100);
-  for (const part of parts) {
-    await notionRequest("PATCH", `/blocks/${entry.pageId}/children`, { children: part });
-  }
-  await notionRequest("PATCH", `/pages/${entry.pageId}`, {
-    properties: {
-      [PROP.hash]: { rich_text: splitRichText(hash) },
-      [PROP.recordedAt]: { date: { start: recordedAt } },
-    },
+  const created = await createLedgerEntry(dbId, {
+    name: entry.name,
+    kind: entry.kind,
+    state: entry.state,
+    version: entry.version,
+    reason: entry.reason,
+    diff: entry.diff,
+    rollbackFrom: entry.rollbackFrom,
+    json,
+    recordedAt,
   });
-
-  return { ...entry, hash, recordedAt };
+  await notionRequest("PATCH", `/pages/${entry.pageId}`, { archived: true });
+  return created;
 }
