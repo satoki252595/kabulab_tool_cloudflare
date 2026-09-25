@@ -8,6 +8,9 @@
 # 必要 secrets: EDINET_API_KEY / CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID /
 #   D1_DATABASE_ID / NOTION_TOKEN / NOTION_BACKUP_PAGE_ID / NOTION_TRASH_PAGE_ID
 #   (ir のみ) YANOSHIN_* 不要 (TDnet 鍵不要)
+#   (biztag* のみ) TYPESAFE_API_KEY / NOTION_STOCK_INFO_PAGE_ID / NOTION_DB_STOCK_MASTER /
+#     NOTION_STOCK_SUPPLEMENT_DB_ID / NOTION_BIZTAG_LEDGER_DB_ID
+#     (docs/005-yuho-quant-business-tags.md §7・§8)
 name: backfill
 
 on:
@@ -21,18 +24,21 @@ on:
           - yuho-missing
           - yuho-text
           - ir
+          - biztag
+          - biztag-golden
+          - biztag-rollback
       from:
         description: "開始 (yuho-missing: YYYY-MM-DD / ir: YYYY-MM)"
         required: false
         default: ""
         type: string
       to:
-        description: "終了 (yuho-missing: YYYY-MM-DD / ir: YYYY-MM)"
+        description: "終了 (yuho-missing: YYYY-MM-DD / ir: YYYY-MM) / biztag-rollback: 巻き戻し先の版 (例 v1)"
         required: false
         default: ""
         type: string
       limit:
-        description: "上限件数 (yuho 系のみ。空=無制限)"
+        description: "上限件数 (yuho 系・biztag のみ。空=無制限)"
         required: false
         default: ""
         type: string
@@ -51,6 +57,11 @@ on:
         required: false
         default: false
         type: boolean
+      reason:
+        description: "biztag-rollback: 巻き戻す理由 (台帳の理由列に記録される。必須)"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   backfill:
@@ -67,6 +78,11 @@ jobs:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NOTION_BACKUP_PAGE_ID: ${{ secrets.NOTION_BACKUP_PAGE_ID }}
       NOTION_TRASH_PAGE_ID: ${{ secrets.NOTION_TRASH_PAGE_ID }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      NOTION_STOCK_INFO_PAGE_ID: ${{ secrets.NOTION_STOCK_INFO_PAGE_ID }}
+      NOTION_DB_STOCK_MASTER: ${{ secrets.NOTION_DB_STOCK_MASTER }}
+      NOTION_STOCK_SUPPLEMENT_DB_ID: ${{ secrets.NOTION_STOCK_SUPPLEMENT_DB_ID }}
+      NOTION_BIZTAG_LEDGER_DB_ID: ${{ secrets.NOTION_BIZTAG_LEDGER_DB_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -95,6 +111,23 @@ jobs:
           [ -n "${{ inputs.ticker }}" ] && args="$args --ticker=${{ inputs.ticker }}"
           [ "${{ inputs.rejudge_pdf }}" = "true" ] && args="$args --rejudge-pdf-sentiment"
           pnpm ir:backfill -- $args
+      - name: biztag (事業タグ全件バックフィル)
+        if: inputs.job == 'biztag'
+        run: |
+          args="--budget-min=340"
+          [ -n "${{ inputs.limit }}" ] && args="$args --limit=${{ inputs.limit }}"
+          pnpm biztag run -- $args
+      - name: biztag-golden (ゴールデンセットで精度測定)
+        if: inputs.job == 'biztag-golden'
+        run: pnpm biztag golden
+      - name: biztag-rollback (単語帳を過去の版へ巻き戻す)
+        if: inputs.job == 'biztag-rollback'
+        run: |
+          if [ -z "${{ inputs.to }}" ] || [ -z "${{ inputs.reason }}" ]; then
+            echo "biztag-rollback には to (巻き戻し先の版) と reason (理由) の両方が必須です" >&2
+            exit 1
+          fi
+          pnpm biztag rollback -- --to="${{ inputs.to }}" --reason="${{ inputs.reason }}"
       - name: 失敗したら Issue を立てる
         if: failure()
         uses: ./.github/actions/notify-failure

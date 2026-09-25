@@ -16,6 +16,14 @@
 > 旧 008 overseas-sales（独立サービス）は元ネタが同じ有報のため本サービスへ統合
 > （取得・パーサ・コーパスを共有して二重取得を避ける）。
 
+> **事業タグ（業種）は別ドキュメント**: 同じ有報の「事業の内容」「セグメント情報」
+> から単語帳（語彙）に沿って業種タグを判定し、Notion「銘柄マスタ（補足）」DB へ
+> 記録する機能（`src/biztag/`）の設計は
+> [005-yuho-quant-business-tags.md](./005-yuho-quant-business-tags.md)、
+> kabulabAgents 向け契約は
+> [005-yuho-quant-business-tags-contract.md](./005-yuho-quant-business-tags-contract.md)
+> を参照（**D1 には何も書かない**別系統の機能）。
+
 ## コンセプト
 
 - 有報の **受注に関する開示は非構造化** (会社ごとに表の作りが違う)。これを

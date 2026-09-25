@@ -82,6 +82,10 @@ services/otakara-yutai/data-scripts/data/
 .wrangler/
 .dev.vars
 
+# Claude Code のマシン/セッションローカル状態 (settings.json やスキルは追跡する)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
 # 一度きりの cutover データダンプ (本番データ。コミットしない)
 # _cutover-data.sql (yuho/ir) / _cutover-cluster.sql (001-004) /
 # _cutover-swing-ohlcv.part*.sql (337k 行 OHLCV) など、生成物は全て除外。

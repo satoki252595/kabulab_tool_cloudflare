@@ -124,6 +124,9 @@ pnpm ingest:ir-tdnet      # /ir-catalog/admin/catchup を CRON_SECRET 認証で 
 
 # データ取得 (005 EDINET → D1。Worker 取込ルートを叩く)
 pnpm ingest:yuho-edinet   # WORKER_BASE_URL の /yuho-quant/admin/catchup を CRON_SECRET 認証で POST
+
+# 事業タグ (005 EDINET 取込の次に実行。D1 は読むだけ・書込は Notion のみ)
+pnpm biztag run           # 事業タグ判定 (差分処理。詳細は docs/005-yuho-quant-business-tags.md §11)
 ```
 
 > **母集団**: JPX `data_j.xlsx` に載る東証プライム／スタンダード／グロースの
@@ -160,7 +163,7 @@ D1 へは `createD1HttpDb`(D1 REST)で書き込む。
 |---|---|---|
 | `.github/workflows/stock-sync.yml` | 日次=core/rsi/swing 取得+指標+**増分 OHLCV** / 月次=東証母集団同期 + otakara rebuild | 平日 21:00 / 10 日 01:30 |
 | `.github/workflows/vwap-ingest.yml` | 日足10年 + **5分足** → R2 / 信用残高(週次) | 月水金 08:00 / 土 09:00 |
-| `.github/workflows/catchup.yml` | 005 有報(EDINET) + 006 適時開示(TDnet) キャッチアップ(TDnet=Node, EDINET=Worker ルート) | 平日 11:00 |
+| `.github/workflows/catchup.yml` | 005 有報(EDINET) + 006 適時開示(TDnet) キャッチアップ(TDnet=Node, EDINET=Worker ルート) + 005 事業タグ(biztag。Node → Notion) | 平日 11:00 |
 | `.github/workflows/ci.yml` | 型・lint・単体テスト + 地図突合 + D1 generate 差分 | push/PR 毎 (cron なし) |
 
 Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキシ + 005/006 の

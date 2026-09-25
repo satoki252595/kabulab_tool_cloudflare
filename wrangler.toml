@@ -27,3 +27,16 @@ database_id = "639c0315-0d41-4345-95ab-aec5906224ed"
 
 # CRON_SECRET は取込プロキシ/取込ルートの認証 secret（`wrangler secret put CRON_SECRET`）。
 # EDINET_API_KEY / NOTION_TOKEN も Worker 取込ルートで参照する secret（ローカルは .env）。
+
+# 005 yuho-quant — 事業タグ単語帳の年次見直し受付 (/yuho-quant/vocabulary/*)。
+# docs/005-yuho-quant-business-tags.md §6.2・§11.1。secret ではなく通常の値
+# (ハッシュ・公開ページ ID) なので [vars] に平文で置いてよい。
+[vars]
+# 「株式情報」ページ ID (Python パイプラインの ① 銘柄マスタ 等と同じ親。
+# pipeline/src/jp_stock_pipeline/config.py の DEFAULT_PARENT_PAGE_ID と同値)。
+NOTION_STOCK_INFO_PAGE_ID = "205d74ff84cd809e92b4dd1adc5cf186"
+# Cursor Automation の合言葉 (openssl rand -hex 32) の SHA-256。合言葉そのものは
+# .env の VOCAB_REVIEW_TOKEN と Cursor の My Secrets にだけ置く (2026-09-25 発行)。
+# 未設定なら Worker は /vocabulary/* を常に 401 にする (fail-closed)。
+VOCAB_REVIEW_TOKEN_SHA256 = "387c3bb94f45ea1d28f48843260965cc70e238926c77945f733ea7bcad526fe5"
+# NOTION_BIZTAG_LEDGER_DB_ID は台帳 DB を作った後 (§11.1 手順3) に設定する。

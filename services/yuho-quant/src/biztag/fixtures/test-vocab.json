@@ -1,0 +1,294 @@
+{
+  "version": "v1",
+  "business": [
+    {
+      "id": "B.MAT.SEMICON_PACKAGE_SUBSTRATE",
+      "layer": "business",
+      "family": "MAT",
+      "subfamily": "電子材料",
+      "notionColumn": "upstream",
+      "labelJa": "半導体パッケージ基板・封止材",
+      "definitionJa": "半導体の後工程で使うパッケージ基板(FC-BGA基板等)やABF等の封止材そのものを自社で製造している場合に該当する。パッケージ基板を仕入れて半導体チップを実装・組み立てるだけの半導体メーカーや電子機器メーカーは対象外。",
+      "definitionEn": "Applies to companies that manufacture semiconductor back-end packaging substrates (e.g., FC-BGA substrates) or encapsulation/build-up materials (e.g., ABF) themselves. Does not apply to semiconductor makers or electronics makers that merely purchase these substrates to mount and assemble chips.",
+      "keywords": [
+        "パッケージ基板",
+        "封止材",
+        "FC-BGA基板",
+        "ABF",
+        "半導体後工程部素材",
+        "ビルドアップ基板",
+        "半導体パッケージ材料",
+        "バッファーコート"
+      ],
+      "excludeKeywords": [
+        "パッケージ基板を購入して実装",
+        "半導体チップの設計のみ"
+      ],
+      "sources": [
+        {
+          "title": "半導体・デジタル産業戦略 改訂版（案）（第16回半導体・デジタル産業戦略検討会議 資料４）",
+          "url": "https://www.meti.go.jp/policy/mono_info_service/joho/conference/semicon_digital/0016/handeji16-4.pdf",
+          "date": "2026-06-23",
+          "section": "Ⅳ.半導体設計・開発・供給基盤の強化（p.19）",
+          "quote": "とりわけ、後工程製造や、後工程で用いられるパッケージ基板、封止材等の部素材は、先端・"
+        },
+        {
+          "title": "基礎資料集（第16回半導体・デジタル産業戦略検討会議 資料５）",
+          "url": "https://www.meti.go.jp/policy/mono_info_service/joho/conference/semicon_digital/0016/handeji16-5.pdf",
+          "date": "2026-06-23",
+          "section": "先端パッケージ関係の取組",
+          "quote": "我が国はAI半導体等に用いるハイエンドのパッケージ基板についてトップシェアを有しており、最先端"
+        },
+        {
+          "title": "経済安全保障推進法に基づく重要物資の安定的な供給の確保（サプライチェーン強靱化）に向けた各特定重要物資に関するサプライチェーンの分析と取組内容",
+          "url": "https://www.cao.go.jp/keizai_anzen_hosho/suishinhou/supply_chain/doc/sc_gaiyou2.pdf",
+          "date": "2026-04",
+          "section": "半導体のサプライチェーン上の課題及び取組の方向性（後工程部素材 図）",
+          "quote": "パッケージ基板 封止材"
+        }
+      ],
+      "addedIn": "v1",
+      "deprecated": false
+    },
+    {
+      "id": "B.MED.NUCLEIC_ACID_DRUG",
+      "layer": "business",
+      "family": "MED",
+      "subfamily": "核酸医薬",
+      "notionColumn": "downstream",
+      "labelJa": "核酸医薬",
+      "definitionJa": "DNAやRNAを基本骨格とし、標的遺伝子・mRNAに作用して発現を抑制・修復する医薬品医療機器等法上の「医薬品」(アンチセンス核酸、siRNA、mRNA医薬品、アプタマー等)の研究開発・製造事業。低分子医薬品やタンパク質(抗体)医薬品とは作用機序が異なるため区別する。ウイルスベクター等を用いて人の細胞へ導入して使用し、薬機法上「再生医療等製品」に分類される遺伝子治療用製品は含めない(該当する場合は再生医療・細胞医療に区分)。",
+      "definitionEn": "R&D and manufacture of nucleic-acid-based therapeutics regulated as ordinary \"drugs\" under Japan's Pharmaceuticals and Medical Devices Act (antisense oligonucleotides/ASO, siRNA, mRNA drugs, aptamers) — mechanistically distinct from small-molecule and protein/antibody drugs. Excludes gene-therapy products introduced into human cells via viral vectors etc. that are separately regulated as \"regenerative medicine products\" (tagged as Regenerative/Cell Medicine).",
+      "keywords": [
+        "核酸医薬",
+        "核酸医薬品",
+        "アンチセンス核酸",
+        "ASO",
+        "siRNA",
+        "mRNA医薬品",
+        "アプタマー",
+        "オリゴヌクレオチド",
+        "核酸原薬",
+        "ヘテロ核酸",
+        "デコイ核酸"
+      ],
+      "excludeKeywords": [],
+      "sources": [
+        {
+          "title": "核酸医薬品の品質の担保と評価において考慮すべき事項について（薬生薬審発0927第３号）｜厚生労働省医薬・生活衛生局医薬品審査管理課長通知",
+          "url": "https://www.pmda.go.jp/files/000228569.pdf",
+          "date": "2018-09-27",
+          "section": "別添 用語・略語の定義 ＜核酸医薬＞",
+          "quote": "化学合成されるオリゴヌクレオチド（DNA、RNA 及びそれらの誘導体）及びそのコ"
+        }
+      ],
+      "addedIn": "v1",
+      "deprecated": false
+    },
+    {
+      "id": "B.MED.INNOVATOR_DRUG",
+      "layer": "business",
+      "family": "MED",
+      "subfamily": "医薬品(新薬・先発品)",
+      "notionColumn": "downstream",
+      "labelJa": "医療用医薬品(新薬・先発品)",
+      "definitionJa": "特許期間中の新規有効成分を自社で創製・保有し、医師の処方箋を必要とする先発医薬品(新薬)として製造販売する事業。「ファーストインクラス」(全く新しい作用機序で世界初承認)や「ベストインクラス」(同一作用の中で最も有用性が高い)と呼ばれる新薬開発を含み、後発医薬品(ジェネリック)専業や他社創製品のみの受託製造は含めない。",
+      "definitionEn": "A business that discovers/owns and markets prescription pharmaceuticals containing a novel, patent-protected active ingredient (branded/innovator drugs), including \"first-in-class\" (first approved with a wholly new mechanism) and \"best-in-class\" (most effective among drugs sharing a mechanism) candidates. Excludes generic-only businesses and pure contract manufacturing of another company's drug.",
+      "keywords": [
+        "新薬",
+        "先発医薬品",
+        "創薬",
+        "ファーストインクラス",
+        "ベストインクラス",
+        "新薬候補",
+        "治験",
+        "第Ⅲ相試験",
+        "承認申請",
+        "特許医薬品",
+        "希少疾病用医薬品",
+        "オーファンドラッグ",
+        "創薬ベンチャー",
+        "自社創製",
+        "医薬品パイプライン"
+      ],
+      "excludeKeywords": [
+        "後発医薬品",
+        "ジェネリック医薬品"
+      ],
+      "sources": [
+        {
+          "title": "戦略17分野における「主要な製品・技術等」の官民投資ロードマップ",
+          "url": "https://www.cas.go.jp/jp/seisaku/nipponseichosenryaku/pdf/rm2026.pdf",
+          "date": "2026-07-21",
+          "section": "創薬・先端医療 ①ファーストインクラス製品・ベストインクラス製品（医薬品、再生医療等製品）",
+          "quote": "米国等では、ファーストインクラス※1製品・ベストインクラス※2製品の開発に当たり、開"
+        },
+        {
+          "title": "戦略17分野における「主要な製品・技術等」の官民投資ロードマップ",
+          "url": "https://www.cas.go.jp/jp/seisaku/nipponseichosenryaku/pdf/rm2026.pdf",
+          "date": "2026-07-21",
+          "section": "創薬・先端医療 ①ファーストインクラス製品・ベストインクラス製品（脚注）",
+          "quote": "※1 全く新しい作用で世界で初めて承認されるもの ／ ※2 同じ作用の製品の中で有用性が最も優れるもの"
+        }
+      ],
+      "addedIn": "v1",
+      "deprecated": false
+    },
+    {
+      "id": "B.MED.VACCINE",
+      "layer": "business",
+      "family": "MED",
+      "subfamily": "ワクチン・血液製剤",
+      "notionColumn": "downstream",
+      "labelJa": "ワクチン・血液製剤",
+      "definitionJa": "ワクチン、血清、毒素、抗毒素及びこれらに類似する製剤並びに血液製剤(血漿分画製剤・免疫グロブリン等)を製造する事業。パンデミック対応の国家備蓄・安定供給確保の対象となる感染症対応医薬品の中核をなす。診断薬や抗菌薬など治療薬は別区分とする。",
+      "definitionEn": "Manufacture of vaccines, sera, toxins/antitoxins and similar biological preparations, plus blood-derived products (plasma fractionation products, e.g., immunoglobulin). Core category of pandemic-preparedness medicines subject to national stockpiling policy. Diagnostics and antibiotics are tagged separately.",
+      "keywords": [
+        "ワクチン",
+        "血液製剤",
+        "血漿分画製剤",
+        "血清",
+        "抗毒素",
+        "免疫グロブリン",
+        "パンデミックワクチン",
+        "mRNAワクチン",
+        "不活化ワクチン",
+        "生ワクチン",
+        "トキソイド",
+        "ワクチン製造"
+      ],
+      "excludeKeywords": [],
+      "sources": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07-01",
+          "section": "中分類16化学工業 小分類165医薬品製造業 細分類1653生物学的製剤製造業 (page 201)",
+          "quote": "○ワクチン製造業；血液製剤製造業"
+        },
+        {
+          "title": "戦略17分野における「主要な製品・技術等」の官民投資ロードマップ",
+          "url": "https://www.cas.go.jp/jp/seisaku/nipponseichosenryaku/pdf/rm2026.pdf",
+          "date": "2026-07-21",
+          "section": "創薬・先端医療 感染症対応製品 ①現状認識と目指す姿",
+          "quote": "次なる感染症危機において、全国民分（約"
+        }
+      ],
+      "addedIn": "v1",
+      "deprecated": true
+    },
+    {
+      "id": "B.SEMI.SILICON_WAFER",
+      "layer": "business",
+      "family": "SEMI",
+      "subfamily": "front_end_materials",
+      "notionColumn": "upstream",
+      "labelJa": "シリコンウエハ",
+      "definitionJa": "半導体デバイスの基板となる単結晶シリコンウエハ、およびその原料となる多結晶シリコン・金属シリコンを製造する事業。ウエハという中間素材の供給が対象で、完成した半導体デバイス(ロジック・メモリ等)自体の設計・製造は該当しない。",
+      "definitionEn": "Manufacture of single-crystal silicon wafers used as substrates for semiconductor devices, and of the upstream polysilicon/metallurgical-grade silicon feedstock. Does not include designing or fabricating the finished chip itself.",
+      "keywords": [
+        "シリコンウエハ",
+        "シリコンウェハ",
+        "ウエハ",
+        "単結晶シリコン",
+        "多結晶シリコン",
+        "金属シリコン",
+        "ポリシリコン",
+        "エピタキシャルウエハ",
+        "エピウエハ",
+        "半導体用シリコン",
+        "シリコンインゴット"
+      ],
+      "excludeKeywords": [
+        "太陽電池用ウエハ",
+        "太陽光パネル"
+      ],
+      "sources": [
+        {
+          "title": "経済安全保障推進法に基づく重要物資の安定的な供給の確保に向けた各特定重要物資に関するサプライチェーンの分析と取組内容",
+          "url": "https://www.cao.go.jp/keizai_anzen_hosho/suishinhou/supply_chain/doc/sc_gaiyou2.pdf",
+          "date": "2026-04",
+          "section": "半導体（サプライチェーン上の課題）ウエハ・部素材図（p.12）",
+          "quote": "ウエハシリコンウエハ 化合物ウエハ"
+        }
+      ],
+      "addedIn": "v1",
+      "deprecated": false
+    }
+  ],
+  "themes": [
+    {
+      "id": "T.SEMICONDUCTOR",
+      "layer": "theme",
+      "labelJa": "半導体バリューチェーン",
+      "definitionJa": "シリコンウエハーから製造装置・部素材、ロジック/メモリ/パワー半導体、先端パッケージングまで、半導体産業チェーン全体に関わる企業群。日本成長戦略が「フィジカル・インテリジェント・システムの中核」と位置付ける最重点分野。",
+      "definitionEn": "Companies across the semiconductor value chain—wafers, equipment, materials, packaging, and logic/memory/power devices—identified by Japan's growth strategy as the core enabler of physical AI systems.",
+      "members": [
+        "B.MAT.SEMICON_PACKAGE_SUBSTRATE",
+        "B.SEMI.SILICON_WAFER"
+      ],
+      "sources": [
+        {
+          "title": "戦略17分野における「主要な製品・技術等」の官民投資ロードマップ",
+          "url": "https://www.cas.go.jp/jp/seisaku/nipponseichosenryaku/pdf/rm2026.pdf",
+          "date": "2026-07-21",
+          "section": "目次(AI・半導体分野)②フィジカル・インテリジェント・システムの中核を担う半導体(p.9)",
+          "quote": "②フィジカル・インテリジェント・システムの中核を担う半導体"
+        }
+      ],
+      "addedIn": "v1",
+      "deprecated": false
+    },
+    {
+      "id": "T.DRUG_DISCOVERY",
+      "layer": "theme",
+      "labelJa": "創薬・新薬開発",
+      "definitionJa": "ファーストインクラス/ベストインクラスの新薬・バイオ医薬品・核酸医薬・原薬(API)・受託製造(CDMO)を手掛ける企業群。日本成長戦略「創薬・先端医療」分野の筆頭項目。",
+      "definitionEn": "Innovator-drug developers spanning first-in-class/best-in-class medicines, biologics, nucleic-acid drugs, active pharmaceutical ingredients, and CDMOs—the leading item of the growth strategy's drug-discovery field.",
+      "members": [
+        "B.MED.NUCLEIC_ACID_DRUG",
+        "B.MED.INNOVATOR_DRUG",
+        "B.MED.VACCINE"
+      ],
+      "sources": [
+        {
+          "title": "戦略17分野における「主要な製品・技術等」の官民投資ロードマップ",
+          "url": "https://www.cas.go.jp/jp/seisaku/nipponseichosenryaku/pdf/rm2026.pdf",
+          "date": "2026-07-21",
+          "section": "目次(創薬・先端医療分野)①ファーストインクラス製品・ベストインクラス製品(p.194)",
+          "quote": "①ファーストインクラス製品・ベストインクラス製品"
+        }
+      ],
+      "addedIn": "v1",
+      "deprecated": false
+    },
+    {
+      "id": "T.SEMI_ADVANCED_PACKAGING",
+      "layer": "theme",
+      "labelJa": "半導体先端パッケージング",
+      "definitionJa": "パッケージ基板・封止材・ガラスコア基板・リードフレーム・チップレット実装など、半導体の後工程・先端パッケージングを担う企業群。AI半導体の性能を左右する工程として経済産業省の半導体戦略でも強靱化対象とされる。",
+      "definitionEn": "Companies in advanced semiconductor packaging—package substrates, encapsulants, glass-core substrates, lead frames, chiplet integration—identified by METI as critical to AI-chip performance and supply resilience.",
+      "members": [
+        "B.MAT.SEMICON_PACKAGE_SUBSTRATE"
+      ],
+      "sources": [
+        {
+          "title": "半導体・デジタル産業戦略 改訂版(案)",
+          "url": "https://www.meti.go.jp/policy/mono_info_service/joho/conference/semicon_digital/0016/handeji16-4.pdf",
+          "date": "2026-06-23",
+          "section": "④製造装置・部素材・後工程を含む供給基盤の強化(p.19)",
+          "quote": "後工程で用いられるパッケージ基板、封止材等の部素材"
+        },
+        {
+          "title": "半導体・デジタル産業戦略 改訂版(案)",
+          "url": "https://www.meti.go.jp/policy/mono_info_service/joho/conference/semicon_digital/0016/handeji16-4.pdf",
+          "date": "2026-06-23",
+          "section": "コンピューティング・アーキテクチャの潮流(p.4)",
+          "quote": "チップレット、先端パッケージング、光電融合"
+        }
+      ],
+      "addedIn": "v1",
+      "deprecated": true
+    }
+  ]
+}

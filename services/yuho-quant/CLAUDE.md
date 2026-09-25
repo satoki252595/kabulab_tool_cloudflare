@@ -60,6 +60,37 @@ UI で「未対応」と出す（ルール1/2）。**海外売上高 = 開示さ
 > 取込は **Worker の認証ルート + GitHub Actions トリガ**。
 > 旧 `pnpm yuho:backfill` CLI は D1 移行で無効化（fail-fast）し、Worker バルク取込へ再実装予定。
 
+### 事業タグ(biztag)固有のルール
+
+有報の「事業の内容」「セグメント情報」から単語帳(語彙)に沿って業種タグを付ける
+`src/biztag/` 配下の機能。設計の正本は
+[docs/005-yuho-quant-business-tags.md](../../docs/005-yuho-quant-business-tags.md)、
+kabulabAgents 向け契約は
+[docs/005-yuho-quant-business-tags-contract.md](../../docs/005-yuho-quant-business-tags-contract.md)。
+mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反は commit 前に直す):
+
+- **AI に事業内容を作文させない・LLM の生文を保存しない**。Notion へ書くのは
+  「単語帳の語(ID・名前)」「判定の確率と帯」「有報からコードで抜き出した原文の文
+  (書類ID・会計期末つき)」の3つだけ。jev(判定モデル)の応答からそれ以外の自由文を
+  そのまま保存する経路を作らない。
+- **状態は正直に記録する**(ルール2の帰結)。`未判定`・`本文なし`・`読込失敗`・
+  `判定不能` を「該当なし」や既定のタグで埋めない。タグ列が空でも
+  `事業タグの状態 = 判定済` でなければ「業種の該当が無い」と確定させない
+  (契約書 §4)。
+- **しきい値・モデルは `calibration.json` からのみ読む**
+  (`services/yuho-quant/src/biztag/thresholds.ts` の `loadCalibration()`)。
+  未較正のマジックナンバーをコードに埋め込まない。`calibration.json` はゴールデン
+  セット(`src/biztag/golden/`)で精度を測ってから運営が用意する(このリポジトリの
+  ソースにダミー値を先置きしない)。
+- **単語帳(語彙)の変更経路は2つだけ**: (1) Cursor Automation の提案 →
+  `pnpm biztag gate` の自動審査(形式・出典実在・jev ゴールデンセット再評価・変更量
+  上限)を通した版の更新、(2) `pnpm biztag rollback`。**それ以外の方法で
+  `v1.json` 以降の版データを手で書き換えない**(台帳 DB が正本。手で作った版は
+  ハッシュ照合で弾かれる)。単語帳の型(`vocabulary/schema.ts`)自体を変える場合のみ
+  通常の PR(ルール5)で良い。
+- Notion への書込は `src/shared/notion-archive/` 経由のみ(ルール6)。
+  `api.notion.com` を biztag から直接叩かない。
+
 ## ディレクトリ
 
 ```
@@ -92,5 +123,13 @@ pnpm backfill:overseas      # 既存有報の海外埋め戻し (D1 HTTP)
 pnpm yuho:backfill:text     # 既存有報の開示テキスト埋め戻し (CSV のみ・D1 HTTP)
 pnpm yuho:backfill:missing  # 期間指定の取りこぼし回収 (日次上限で欠けた分。無制限・再開可能)
 pnpm audit:overseas         # 全銘柄の取りこぼし署名を集計
+pnpm biztag run             # 事業タグ判定 (差分処理。catchup.yml が平日実行)
+pnpm biztag gate            # 単語帳の見直し提案の審査 (通常は run の冒頭が呼ぶ)
+pnpm biztag golden          # ゴールデンセットで精度測定 (しきい値較正用)
+pnpm biztag rollback        # 単語帳を過去の版へ巻き戻す (--to=vN --reason=...)
 pnpm test / pnpm typecheck / pnpm lint
 ```
+
+事業タグ(biztag)のコマンド詳細・運用手順は
+[docs/005-yuho-quant-business-tags.md](../../docs/005-yuho-quant-business-tags.md) §11
+「運用手順(runbook)」を参照。
