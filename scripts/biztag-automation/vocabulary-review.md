@@ -4,7 +4,7 @@
 instructions 欄に貼り付ける（設計: [docs/005-yuho-quant-business-tags.md](../../docs/005-yuho-quant-business-tags.md) §6.1）。
 
 **プレースホルダ以外の値（実際のトークン・URL）はここには書かない。** Automation 自身の
-secrets/env（`KABULAB_APP_ORIGIN`・`KABULAB_VOCAB_TOKEN`）から読む。
+secrets/env（`KABULAB_CF_ORIGIN`・`KABULAB_CF_VOCAB_TOKEN`）から読む。
 
 ---
 
@@ -15,8 +15,8 @@ secrets/env（`KABULAB_APP_ORIGIN`・`KABULAB_VOCAB_TOKEN`）から読む。
 
 ### 前提
 
-- 環境変数（Automation の secrets）に `KABULAB_APP_ORIGIN`（例:
-  `https://kabulab-cf.satoki252595.workers.dev`）と `KABULAB_VOCAB_TOKEN`（見直し API の
+- 環境変数（Automation の secrets）に `KABULAB_CF_ORIGIN`（例:
+  `https://kabulab-cf.satoki252595.workers.dev`）と `KABULAB_CF_VOCAB_TOKEN`（見直し API の
   合言葉）が設定されています。これらの実際の値をログ・出力・コミット・提案 JSON に
   一切書き出さないでください（`Authorization` ヘッダに使う以外の用途で参照しない）。
 - 作業用ファイルは一時ディレクトリに置いてください（このリポジトリへの commit や push は
@@ -28,8 +28,8 @@ secrets/env（`KABULAB_APP_ORIGIN`・`KABULAB_VOCAB_TOKEN`）から読む。
 
 ```bash
 curl -sS -o packet.json -w '\n%{http_code}\n' \
-  -H "Authorization: Bearer ${KABULAB_VOCAB_TOKEN}" \
-  "${KABULAB_APP_ORIGIN}/yuho-quant/vocabulary/review-packet"
+  -H "Authorization: Bearer ${KABULAB_CF_VOCAB_TOKEN}" \
+  "${KABULAB_CF_ORIGIN}/yuho-quant/vocabulary/review-packet"
 ```
 
 - ステータス `200`: `packet.json` を読みます。中身は
@@ -200,10 +200,10 @@ curl -sS -o packet.json -w '\n%{http_code}\n' \
 ```bash
 curl -sS -o response.json -w '\n%{http_code}\n' \
   -X POST \
-  -H "Authorization: Bearer ${KABULAB_VOCAB_TOKEN}" \
+  -H "Authorization: Bearer ${KABULAB_CF_VOCAB_TOKEN}" \
   -H "Content-Type: application/json" \
   --data-binary @proposal.json \
-  "${KABULAB_APP_ORIGIN}/yuho-quant/vocabulary/proposals"
+  "${KABULAB_CF_ORIGIN}/yuho-quant/vocabulary/proposals"
 ```
 
 - ステータス `202`: 受理されました(`response.json` に `{ id, state }`)。以降の審査(関門)は
@@ -227,7 +227,7 @@ curl -sS -o response.json -w '\n%{http_code}\n' \
 - 手順に書かれていない追加の判断・裁量(しきい値の変更、語彙の独自解釈の拡大等)を
   行わないでください。
 - エラーが起きた手順を、指示された以上の回数リトライしないでください。
-- `KABULAB_VOCAB_TOKEN` の値そのものをログ・報告・提案 JSON に含めないでください。
+- `KABULAB_CF_VOCAB_TOKEN` の値そのものをログ・報告・提案 JSON に含めないでください。
 - GICS・株探・みんかぶ・指数構成銘柄一覧を根拠に使わないでください。
 
 ---
@@ -239,5 +239,5 @@ curl -sS -o response.json -w '\n%{http_code}\n' \
   の「運用手順(runbook)」節を参照。
 - 送られた提案の審査(形式・出典実在・jev ゴールデンセット再評価・変更量の上限)は
   `pnpm biztag gate`(catchup.yml 内)が自動で行う。Automation 側では審査結果を待たない。
-- `KABULAB_APP_ORIGIN`・`KABULAB_VOCAB_TOKEN` の実際の値はこのファイルに書かず、
+- `KABULAB_CF_ORIGIN`・`KABULAB_CF_VOCAB_TOKEN` の実際の値はこのファイルに書かず、
   Automation の secrets 欄に別途登録する。

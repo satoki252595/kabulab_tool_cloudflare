@@ -275,7 +275,9 @@ Cursor Automation（年 1 回・8 月）
   **7〜8 月の毎週月曜 06:00 JST（cron `0 21 * 7,8 0`、UTC の日曜 21:00）**に起動し、review-packet の
   `reviewWindow.open`（Worker が JST で計算。8 月第 1 月曜〜その 7 日後だけ true。`review-window.ts`）が
   false なら何もせず終える。7 月も入れるのは、8 月 1 日が月曜の年は起動が UTC の 7 月 31 日になるため。
-- 秘密（Cursor の My Secrets）: `KABULAB_APP_ORIGIN`、`KABULAB_VOCAB_TOKEN`。
+- 秘密（Cursor の My Secrets）: `KABULAB_CF_ORIGIN`（Environment Variable）、`KABULAB_CF_VOCAB_TOKEN`（Runtime Secret）。
+  My Secrets はアカウント全体で共有される。kabulabAgents の Automation が既に `KABULAB_APP_ORIGIN`
+  （kabulabAgents の URL）を使っているため、名前に `CF` を入れて衝突を避けている（2026-09-25 設定済み）。
 - 指示文: [`scripts/biztag-automation/vocabulary-review.md`](../scripts/biztag-automation/vocabulary-review.md)。
   1. `GET {ORIGIN}/yuho-quant/vocabulary/review-packet` を読む（今の単語帳・語ごとのタグ数・
      「語なし」の多い業種・確認不能の多い語・見直しに使う公的資料の URL）。
@@ -385,7 +387,7 @@ CLI は全て `pnpm biztag <subcommand>`（リポジトリルートから。実�
    TOKEN=$(openssl rand -hex 32)
    echo -n "$TOKEN" | shasum -a 256   # ハッシュだけを wrangler.toml へ
    ```
-   実際のトークン（`$TOKEN`）は Cursor Automation の secrets 欄（`KABULAB_VOCAB_TOKEN`）に、
+   実際のトークン（`$TOKEN`）は Cursor Automation の secrets 欄（`KABULAB_CF_VOCAB_TOKEN`）に、
    ハッシュ（`shasum` の出力）は `wrangler.toml` の `[vars]` の `VOCAB_REVIEW_TOKEN_SHA256`
    に設定する（ハッシュは公開リポジトリに置いてよい。未設定なら Worker は常に 401）。
    `NOTION_STOCK_INFO_PAGE_ID` と `NOTION_BIZTAG_LEDGER_DB_ID` も同じ `[vars]` に足す
@@ -396,7 +398,7 @@ CLI は全て `pnpm biztag <subcommand>`（リポジトリルートから。実�
    の instructions 部分をそのまま貼り付け、モデル **Grok 4.7** を指定し、スケジュールを
    **cron `0 21 * 7,8 0`（UTC。7〜8 月の毎週月曜 06:00 JST）**にする（実際に見直すのは
    `reviewWindow.open` が true の 8 月第 1 月曜からの 7 日間だけ。§6.1）。secrets 欄に
-   `KABULAB_APP_ORIGIN`（Worker の本番 URL）と `KABULAB_VOCAB_TOKEN`（手順5の `$TOKEN`）を
+   `KABULAB_CF_ORIGIN`（Worker の本番 URL）と `KABULAB_CF_VOCAB_TOKEN`（手順5の `$TOKEN`）を
    登録する。
 
 ### 11.2 日次運用
