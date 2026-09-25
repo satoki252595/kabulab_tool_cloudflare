@@ -42,7 +42,6 @@ describe("text-backup", () => {
 
   it("DB 確保→行 upsert の順に呼び、行 ID を返す", async () => {
     vi.mocked(ensureStockTextDb).mockResolvedValue({
-      parentPageId: "parent",
       dbId: "db-7203",
     });
     vi.mocked(upsertStockTextRow).mockResolvedValue({
@@ -51,7 +50,7 @@ describe("text-backup", () => {
     });
     const got = await backupDocTextToNotion({ ...doc, sections });
     expect(got).toEqual({ rowPageId: "row-new", outcome: "recorded" });
-    expect(ensureStockTextDb).toHaveBeenCalledWith("7203");
+    expect(ensureStockTextDb).toHaveBeenCalledWith();
     expect(upsertStockTextRow).toHaveBeenCalledWith({
       dbId: "db-7203",
       doc,
@@ -62,7 +61,6 @@ describe("text-backup", () => {
 
   it("force を透過する", async () => {
     vi.mocked(ensureStockTextDb).mockResolvedValue({
-      parentPageId: "parent",
       dbId: "db-7203",
     });
     vi.mocked(upsertStockTextRow).mockResolvedValue({

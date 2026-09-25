@@ -90,3 +90,22 @@ export {
   replaceLedgerJson,
 } from "./biztag-ledger.js";
 export type { LedgerKind, LedgerState, LedgerEntry } from "./biztag-ledger.js";
+
+// 2026-09-25 「一次データ保管」再配置 — scripts/notion/relocate-archive.ts 専用
+// (通常のサービスコードは使わない。ルール6 の窓口をここでも保つための再輸出)
+export {
+  movePage,
+  moveDatabase,
+  findDatabasesByTitlePrefix,
+  getDatabaseParentPageId,
+  getPageParent,
+  listDirectChildren,
+} from "./relocate.js";
+export type {
+  MovePageParent,
+  FoundDatabase,
+  PageParent,
+  RemainingChild,
+} from "./relocate.js";
+export { findAllBackupChildrenByTitle } from "./archive.js";
+export type { BackupChildHit } from "./archive.js";

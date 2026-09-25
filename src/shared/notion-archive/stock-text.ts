@@ -1,42 +1,43 @@
 /**
- * 銘柄別・有報テキストの Notion 保管 (D1 スリム化の受け皿)。
+ * 有報テキストの Notion 保管 (D1 スリム化の受け皿)。
  *
  * D1 の 10GB 上限 (引き上げ不可) に対し、有報の非構造化テキスト
  * (約80万セクション・約3.5GB) を Notion へ移す。D1 には索引
  * (キー・項目名・文字数) と本モジュールが返す行 ID だけを残す。
  *
- * 構造 (銘柄コードキー):
- *   BACKUP_PAGE
- *   └─ <証券コード> (子ページ。例 "7203")
- *      └─ 有報テキスト (子 DB。1 行 = 1 通)
- *         ├─ プロパティ: D1 構造の鏡像 (文書・D1文書ID・銘柄コード・
- *         │  会計期末・セクション件数・文字数合計・抽出状態)
- *         └─ 本文: heading_2 目印 + セクション毎に heading_3 + code block 群
+ * 構造 (2026-09-25 再配置。全銘柄共通の単一 DB — 銘柄別の子ページ/子DB は
+ * 作らない):
+ *   NOTION_ARCHIVE_PAGE_ID ページ ("一次データ保管")
+ *   └─ 有報テキスト (単一 DB。ID = NOTION_YUHO_TEXT_DB_ID。1 行 = 1 通)
+ *      ├─ プロパティ: D1 構造の鏡像 (文書・D1文書ID・銘柄コード・
+ *      │  会計期末・セクション件数・文字数合計・抽出状態)
+ *      └─ 本文: heading_2 目印 + セクション毎に heading_3 + code block 群
+ *
+ * 旧設計は証券コード毎に子ページ+子DB を作っていたが、数千件の子ページが
+ * 累積して親ページ (旧「バックアップ」) が Notion 上で開けなくなり、
+ * ユーザが該当ページをトラッシュする事態になった (2026-09-25)。以後は
+ * 銘柄コードを行の1プロパティとして持つだけにし、親ページ配下に大量の
+ * 子ページ/子DBを作らない (CLAUDE.md ルール6 に明記)。
  *
  * 非機能制約 (Notion API 公式 /reference/request-limits 準拠):
  *   - 全リクエストは client.ts の単一キュー (~2.6 req/s) を通る。
  *     公式上限は Business 以上 600 req/min・それ以外 180 req/min +
  *     ワークスペース共有枠。380ms ペーシングは全プランで安全側。
- *     移行 2.4 万通 ≒ 3.2 万コール ≒ 3〜4 時間が下限。並列化しても
- *     レート上限は変わらないため、移行はシャード分割 + 再開可能にする。
  *   - 1 追記 100 ブロック・1 ブロック rich_text 2000 文字・1 要求 500KB。
  *     1 通あたり平均 83 ブロック (実測) のため、ページ作成時の children
  *     直付け + 超過分の分割追記で収める。100 ブロック ≒ 最大 260KB で
  *     500KB 上限の内側。
  *   - ブロック数は有料 WS = 無制限 (Free 複数人は生涯 1,000)。本設計は
  *     有料 WS 前提 (2026-09-21 ユーザ確認)。Free では移行自体が不可。
- *   - 親ページ探索は Search API の完全一致 + 最古優先
- *     (findBackupChildByTitle)。block children の全走査は約1万件で
- *     打ち切られる実測があり、見落としが重複親を生んだ (P6 重複事件)。
- *     未ヒット時のみ children 先頭 500 件を保険走査する。プロセス内
- *     キャッシュにより 2 回目以降の探索は 0 コール。
+ *   - DB は `NOTION_YUHO_TEXT_DB_ID` で固定 ID 参照する (Search/children
+ *     走査をしない。P6 重複事件の教訓 — 大量行の子ページ走査は約1万件で
+ *     打ち切られる実測があるため、そもそも走査しない設計にする)。
  *   - 有報テキストは不変 (訂正は別 docID の新規通)。読みの Cache は P2 側。
  *
  * 冪等: 行の有無 = DB クエリ (文書完全一致) で判定し、既存ならスキップ。
  * force 時のみ旧行を archived して作り直す (ブロックの選択削除 API が無い
  * ため。archived 行は残るが非表示で、移行は write-once のため通常出ない)。
  */
-import { findBackupChildByTitle, findChildDatabase } from "./archive.js";
 import { notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 
@@ -45,7 +46,11 @@ const RICH_TEXT_MAX = 2000;
 /** 1 リクエストで付けられる children 上限 (作成・追記共通) */
 const CHILDREN_PER_REQUEST = 100;
 
-/** 銘柄親ページ直下の子 DB 名 (固定。全銘柄共通) */
+/**
+ * 有報テキスト DB のタイトル (固定・全銘柄共通の単一 DB)。移行スクリプトが
+ * 旧配置 (証券コード毎の子ページ配下に同名で作られていた子 DB) を見つける
+ * ためにも使う。
+ */
 export const STOCK_TEXT_DB_TITLE = "有報テキスト";
 /** 本文先頭の目印 (読みの構造検証用) */
 export const TEXT_BODY_MARKER = "抽出テキスト全文";
@@ -62,7 +67,7 @@ export interface StockTextSection {
 export interface StockTextDoc {
   /** EDINET 書類 ID (例 S100W6XE) — 行の冪等キー */
   docId: string;
-  /** 証券コード4桁 (例 "7203") — 親ページのタイトル */
+  /** 証券コード4桁 (例 "7203") — 行の「銘柄コード」列 */
   stockCode: string;
   /** 会計期末 (YYYY-MM-DD) */
   fiscalYearEnd: string;
@@ -86,10 +91,8 @@ interface ChildrenResponse {
   next_cursor: string | null;
 }
 
-/** プロセス内キャッシュ: 銘柄コード → 親ページ ID */
-const parentCache = new Map<string, string>();
-/** プロセス内キャッシュ: 銘柄コード → 有報テキスト DB ID */
-const dbCache = new Map<string, string>();
+/** プロセス内キャッシュ: 有報テキスト DB ID (単一 DB のため銘柄コード不要) */
+let cachedDbId: string | null = null;
 
 
 const TEXT_PARSE_STATUS_OPTIONS = [
@@ -171,57 +174,36 @@ export function buildTextBodyBlocks(sections: StockTextSection[]): unknown[] {
   return blocks;
 }
 
-/** 銘柄親ページを確保 (無ければ作成)。Search 完全一致 + 最古優先で、
- *  重複がある銘柄は正本 (最初に作られた親) へ収束させる */
-async function ensureStockParent(stockCode: string): Promise<string> {
-  const cached = parentCache.get(stockCode);
-  if (cached) return cached;
-  const found = await findBackupChildByTitle({
-    parentPageId: notionEnv.NOTION_BACKUP_PAGE_ID(),
-    title: stockCode,
-    kind: "page",
-  });
-  if (found) {
-    parentCache.set(stockCode, found);
-    return found;
-  }
-  const created = await notionRequest<{ id: string }>("POST", "/pages", {
-    parent: { type: "page_id", page_id: notionEnv.NOTION_BACKUP_PAGE_ID() },
-    properties: {
-      title: [{ type: "text", ...richText(stockCode) }],
-    },
-  });
-  parentCache.set(stockCode, created.id);
-  return created.id;
+interface DbSchemaResponse {
+  properties: Record<string, { type: string }>;
 }
 
 /**
- * 銘柄の親ページ + 有報テキスト子 DB を確保する。
+ * 有報テキスト DB (単一・固定 ID) を確保する。`NOTION_YUHO_TEXT_DB_ID` を
+ * 正のソースとして直接 GET し、足りない列だけ非破壊 PATCH する
+ * (`stock-supplement.ts` の `ensureSupplementDb` と同じ流儀)。Search や
+ * children 走査は行わない (ID 固定のため不要)。DB が見つからない
+ * (ID 誤り・削除等) は config エラーとして throw し、黙って新規 DB を
+ * 作らない (誤った ID を握りつぶすと孤立 DB が増える — ルール2)。
  * 2 回目以降はプロセス内キャッシュのみで 0 コール。
  */
-export async function ensureStockTextDb(
-  stockCode: string
-): Promise<{ parentPageId: string; dbId: string }> {
-  const cachedDb = dbCache.get(stockCode);
-  if (cachedDb) {
-    const parentPageId = parentCache.get(stockCode);
-    if (parentPageId) return { parentPageId, dbId: cachedDb };
-    // あり得ない (DB があるなら親もある) が、捏造せず作り直す
-    dbCache.delete(stockCode);
+export async function ensureStockTextDb(): Promise<{ dbId: string }> {
+  if (cachedDbId) return { dbId: cachedDbId };
+  const dbId = notionEnv.NOTION_YUHO_TEXT_DB_ID();
+  const schema = await notionRequest<DbSchemaResponse>(
+    "GET",
+    `/databases/${dbId}`
+  );
+  const missing = Object.entries(TEXT_DB_PROPERTIES).filter(
+    ([name]) => !(name in schema.properties)
+  );
+  if (missing.length > 0) {
+    await notionRequest("PATCH", `/databases/${dbId}`, {
+      properties: Object.fromEntries(missing),
+    });
   }
-  const parentPageId = await ensureStockParent(stockCode);
-  const existing = await findChildDatabase(parentPageId, STOCK_TEXT_DB_TITLE);
-  if (existing) {
-    dbCache.set(stockCode, existing);
-    return { parentPageId, dbId: existing };
-  }
-  const created = await notionRequest<{ id: string }>("POST", "/databases", {
-    parent: { type: "page_id", page_id: parentPageId },
-    title: [{ type: "text", ...richText(STOCK_TEXT_DB_TITLE) }],
-    properties: TEXT_DB_PROPERTIES,
-  });
-  dbCache.set(stockCode, created.id);
-  return { parentPageId, dbId: created.id };
+  cachedDbId = dbId;
+  return { dbId };
 }
 
 /** 子 DB 内の文書行を探す (文書タイトル完全一致) */

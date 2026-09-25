@@ -34,7 +34,8 @@
     "yuho:repair:zip": "tsx services/yuho-quant/data-scripts/repair-zip-archive.ts",
     "biztag": "tsx services/yuho-quant/data-scripts/biztag.ts",
     "ir:backfill": "tsx services/ir-catalog/data-scripts/backfill.ts",
-    "notion:update-index": "tsx scripts/notion/update-index.ts"
+    "notion:update-index": "tsx scripts/notion/update-index.ts",
+    "notion:relocate-archive": "tsx scripts/notion/relocate-archive.ts"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.7.6",

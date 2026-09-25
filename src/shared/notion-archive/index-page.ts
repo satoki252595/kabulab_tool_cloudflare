@@ -1,5 +1,5 @@
 /**
- * Notion アーカイブ索引ページの確保・更新 (BACKUP 直下の「アーカイブ索引」)。
+ * Notion アーカイブ索引ページの確保・更新 (「一次データ保管」直下の「アーカイブ索引」)。
  *
  * 重複を作らないための多層防御 (2026-09-24 に Search index 遅延で重複作成
  * した実績があるため):
@@ -146,7 +146,7 @@ export async function ensureIndexPage(
 ): Promise<EnsureIndexPageResult> {
   const at = generatedAtISO ?? new Date().toISOString();
   const blocks = buildIndexBlocks(at);
-  const backup = notionEnv.NOTION_BACKUP_PAGE_ID();
+  const backup = notionEnv.NOTION_ARCHIVE_PAGE_ID();
   const pinned = notionEnv.NOTION_INDEX_PAGE_ID();
   const archivedDuplicates: string[] = [];
   let outcome: "created" | "updated" = "updated";

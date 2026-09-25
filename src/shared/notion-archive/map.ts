@@ -2,15 +2,21 @@
  * Notion アーカイブの配置定義 (正本) と索引ページブロックの生成。
  *
  * Notion 側に「何がどこにあるか」を一発で分かる索引ページ
- * (BACKUP 直下の「アーカイブ索引」) を置く。その内容はこのモジュールが
- * 唯一の正本。配置を変えたらここを直して `pnpm notion:update-index` で
- * 再生成する (索引ページの手編集は禁止 — 再生成で消える)。
+ * (「一次データ保管」直下の「アーカイブ索引」) を置く。その内容はこの
+ * モジュールが唯一の正本。配置を変えたらここを直して
+ * `pnpm notion:update-index` で再生成する (索引ページの手編集は禁止 —
+ * 再生成で消える)。
  *
  * 全記述はコードの事実のみ (実測数値・推測は書かない。ルール1)。
  * 各エントリの根拠コードを writer に残し、配置と実装の対応を追えるようにする。
+ *
+ * (2026-09-25 再配置: 旧「バックアップ」ページは per-stock 子ページ+子DB が
+ * 数千件累積して開けなくなった。「一次データ保管」ページ 1 つに、一次データ
+ * DB・銘柄別 DB・ごみ DB の全てを集約する — 命名 prefix (`一次データ｜`/
+ * `銘柄一覧｜`/`ごみ｜`) で見分けが付くため物理的に分けない判断)。
  */
 
-/** BACKUP 直下の索引ページのタイトル (固定) */
+/** 「一次データ保管」直下の索引ページのタイトル (固定) */
 export const INDEX_PAGE_TITLE = "アーカイブ索引";
 
 export interface IndexBullet {
@@ -28,7 +34,7 @@ export interface IndexSection {
 /** 索引の全節。順序 = ページ上の表示順。 */
 export const ARCHIVE_SECTIONS: IndexSection[] = [
   {
-    heading: "一次データ — バックアップ直下のサービス別 DB",
+    heading: "一次データ — 一次データ保管 直下のサービス別 DB",
     bullets: [
       {
         title: "一次データ｜yuho-quant",
@@ -58,7 +64,7 @@ export const ARCHIVE_SECTIONS: IndexSection[] = [
     ],
   },
   {
-    heading: "銘柄別データ — バックアップ直下",
+    heading: "銘柄別データ — 一次データ保管 直下",
     bullets: [
       {
         title: "銘柄一覧｜ir-catalog (DB)",
@@ -66,14 +72,14 @@ export const ARCHIVE_SECTIONS: IndexSection[] = [
           "1 銘柄 = 1 ページ。配下に子 DB「適時開示｜<ticker>」(1 IR = 1 行)。書き手: dataset.ts upsertDisclosuresByStock",
       },
       {
-        title: "<証券コード> (ページ)",
+        title: "有報テキスト (単一 DB)",
         detail:
-          "銘柄コード名の子ページ。配下に子 DB「有報テキスト」(1 行 = 1 通、本文=抽出テキスト全文)。書き手: stock-text.ts",
+          "全銘柄共通の単一 DB。1 行 = 1 通 (本文=抽出テキスト全文)。銘柄別の子ページ/子DB は作らない (2026-09-25 再配置。DB ID は `NOTION_YUHO_TEXT_DB_ID` で固定)。書き手: stock-text.ts",
       },
     ],
   },
   {
-    heading: "ごみ — 不要化データの退避先 (ごみページ直下)",
+    heading: "ごみ — 不要化データの退避先 (一次データ保管 直下)",
     bullets: [
       {
         title: "ごみ｜<service> (DB)",
@@ -94,6 +100,11 @@ export const ARCHIVE_SECTIONS: IndexSection[] = [
         title: "発見は Search 完全一致 + 最古優先",
         detail:
           "children 全走査は約1万件で打ち切られる実測があるため、findBackupChildByTitle で正本へ収束させる。重複があっても最古 (正本) を使う",
+      },
+      {
+        title: "銘柄別の子ページ/子DBを大量に作らない",
+        detail:
+          "1 ページ配下に数千件の子ページ/子DBを作ると Notion 側でページが開けなくなる (2026-09-25 実際に発生し「バックアップ」ページをトラッシュする事態になった)。銘柄別データは単一 DB の行として持つ (有報テキストの教訓)",
       },
       {
         title: "このページは自動生成",

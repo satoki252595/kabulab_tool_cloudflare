@@ -126,8 +126,10 @@ yuho_text_sections      (有報, セクション) 粒度。開示テキスト 39
   fiscal_year_end / section_key (TextSectionKey 39 項目。TEXT_SECTIONS が正本) /
     element_id / item_name / context_id / char_count
   UNIQUE(document_id, section_key)  -- 冪等 upsert
-  本文追跡: yuho_documents.notion_doc_page_id → 銘柄親ページ配下
-  「有報テキスト」DB の行 (1 行 = 1 通。本文は見出し + code block)
+  本文追跡: yuho_documents.notion_doc_page_id → 全銘柄共通の単一
+  「有報テキスト」DB (NOTION_YUHO_TEXT_DB_ID) の行 (1 行 = 1 通。本文は
+  見出し + code block。2026-09-25 再配置: 旧は銘柄コード毎の子ページ+子DB
+  だったが、数千件累積して親ページが開けなくなったため単一 DB へ統合)
   fidelity 注記 (2026-09-22 検証済み):
   - Notion は U+200B (ZERO WIDTH SPACE) を書込時に除去する。
     200 通監査で 1 通 28 文字のみ差分・他は完全一致。不可視文字の

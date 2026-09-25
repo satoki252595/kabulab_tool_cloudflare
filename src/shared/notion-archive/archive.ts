@@ -2,9 +2,14 @@
  * 一次データ Notion アーカイブの高レベル API (CLAUDE.md ルール6)。
  *
  *   recordPrimaryData() : API/ファイル取得時にメタデータ + 物理ファイルを
- *                         「バックアップ」配下のサービス別 DB に冪等記録
- *   moveToTrash()       : input 変更等で不要化した元データを「ごみ」配下へ
- *                         物理ファイルごと退避し、元レコードは Notion ゴミ箱へ
+ *                         「一次データ保管」配下のサービス別 DB に冪等記録
+ *   moveToTrash()       : input 変更等で不要化した元データを同ページ直下の
+ *                         「ごみ｜<service>」DB へ物理ファイルごと退避し、
+ *                         元レコードは Notion ゴミ箱へ
+ *
+ * (2026-09-25 再配置: 旧「バックアップ」ページは per-stock 子ページ+子DB が
+ * 数千件累積して開けなくなり trash 事件が起きた教訓から、「一次データ保管」
+ * ページ 1 つに統合。`NOTION_ARCHIVE_PAGE_ID` が正のソース)。
  *
  * 設計 (CLAUDE.md):
  *   - 冪等: 同一 key の再記録はスキップ (5 年バックフィルが再開可能)。
@@ -298,14 +303,17 @@ function trashDbTitle(service: string): string {
 
 function ensureBackupDb(service: string): Promise<string> {
   return ensureDatabase(
-    notionEnv.NOTION_BACKUP_PAGE_ID(),
+    notionEnv.NOTION_ARCHIVE_PAGE_ID(),
     backupDbTitle(service),
     `backup:${service}`
   );
 }
 function ensureTrashDb(service: string): Promise<string> {
+  // 「ごみ｜<service>」も「一次データ保管」ページ直下に置く (2026-09-25
+  // 再配置でバックアップ/ごみの 2 ページ運用を 1 ページへ統合。命名 prefix
+  // で見分けが付くため物理的に分けない判断)。
   return ensureDatabase(
-    notionEnv.NOTION_TRASH_PAGE_ID(),
+    notionEnv.NOTION_ARCHIVE_PAGE_ID(),
     trashDbTitle(service),
     `trash:${service}`
   );

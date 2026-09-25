@@ -38,8 +38,8 @@ describe("notion-archive stock-text", () => {
     calls = [];
     routes = new Map();
     process.env.NOTION_TOKEN = "dummy-token";
-    process.env.NOTION_BACKUP_PAGE_ID = "b".repeat(32);
-    process.env.NOTION_TRASH_PAGE_ID = "c".repeat(32);
+    process.env.NOTION_ARCHIVE_PAGE_ID = "b".repeat(32);
+    process.env.NOTION_YUHO_TEXT_DB_ID = "d".repeat(32);
     // ペーシング待ちを消す (単調増加時刻)
     let t = 1_000_000;
     Date.now = (() => (t += 10_000)) as typeof Date.now;
@@ -131,103 +131,51 @@ describe("notion-archive stock-text", () => {
   });
 
   describe("ensureStockTextDb", () => {
-    const searchHit = (id: string, title: string, created: string) => ({
-      id,
-      archived: false,
-      in_trash: false,
-      created_time: created,
-      parent: { type: "page_id", page_id: "b".repeat(32) },
-      properties: {
-        title: { type: "title", title: [{ plain_text: title }] },
-      },
-    });
-    const searchPage = (results: unknown[]) => ({
-      results,
-      has_more: false,
-      next_cursor: null,
-    });
-
-    it("親もDBも既存なら作成しない。2 回目は 0 コール", async () => {
-      route("POST", "/v1/search", [
-        searchPage([searchHit("parent-7203", "7203", "2026-09-21T00:00:00.000Z")]),
-      ]);
-      route("GET", "/v1/blocks/parent-7203/children", [
-        childrenPage([
-          {
-            id: "db-7203",
-            type: "child_database",
-            child_database: { title: "有報テキスト" },
+    it("既存 DB のスキーマが揃っていれば PATCH しない。2 回目は 0 コール", async () => {
+      route("GET", `/v1/databases/${"d".repeat(32)}`, [
+        {
+          properties: {
+            文書: { type: "title" },
+            D1文書ID: { type: "number" },
+            銘柄コード: { type: "rich_text" },
+            会計期末: { type: "date" },
+            セクション件数: { type: "number" },
+            文字数合計: { type: "number" },
+            抽出状態: { type: "select" },
           },
-        ]),
+        },
       ]);
       const { ensureStockTextDb } = await load();
-      const first = await ensureStockTextDb("7203");
-      expect(first).toEqual({ parentPageId: "parent-7203", dbId: "db-7203" });
-      expect(calls).toHaveLength(2);
-      const second = await ensureStockTextDb("7203");
+      const first = await ensureStockTextDb();
+      expect(first).toEqual({ dbId: "d".repeat(32) });
+      expect(calls).toHaveLength(1);
+      const second = await ensureStockTextDb();
       expect(second).toEqual(first);
-      expect(calls).toHaveLength(2);
+      expect(calls).toHaveLength(1);
     });
 
-    it("親もDBも無ければ作る", async () => {
-      route("POST", "/v1/search", [searchPage([])]);
-      route("GET", `/v1/blocks/${"b".repeat(32)}/children`, [
-        childrenPage([]),
+    it("列が足りなければ非破壊 PATCH で足す", async () => {
+      route("GET", `/v1/databases/${"d".repeat(32)}`, [
+        { properties: { 文書: { type: "title" } } },
       ]);
-      route("POST", "/v1/pages", [{ id: "parent-new" }]);
-      route("GET", "/v1/blocks/parent-new/children", [childrenPage([])]);
-      route("POST", "/v1/databases", [{ id: "db-new" }]);
+      route("PATCH", `/v1/databases/${"d".repeat(32)}`, [{}]);
       const { ensureStockTextDb } = await load();
-      const got = await ensureStockTextDb("9999");
-      expect(got).toEqual({ parentPageId: "parent-new", dbId: "db-new" });
-      const pageBody = JSON.parse(String(calls[2]?.init.body)) as {
-        properties: { title: Array<{ text: { content: string } }> };
-      };
-      expect(pageBody.properties.title[0]?.text.content).toBe("9999");
-      const dbBody = JSON.parse(String(calls[4]?.init.body)) as {
+      const got = await ensureStockTextDb();
+      expect(got).toEqual({ dbId: "d".repeat(32) });
+      expect(calls).toHaveLength(2);
+      const patchBody = JSON.parse(String(calls[1]?.init.body)) as {
         properties: Record<string, unknown>;
       };
-      expect(Object.keys(dbBody.properties).sort()).toEqual(
+      expect(Object.keys(patchBody.properties).sort()).toEqual(
         [
           "D1文書ID",
           "セクション件数",
           "抽出状態",
           "会計期末",
-          "文書",
           "文字数合計",
           "銘柄コード",
         ].sort()
       );
-    });
-
-    it("親が重複していれば最古を使う (正本へ収束)", async () => {
-      route("POST", "/v1/search", [
-        searchPage([
-          searchHit("p-new", "7203", "2026-09-22T00:00:00.000Z"),
-          searchHit("p-old", "7203", "2026-09-21T00:00:00.000Z"),
-        ]),
-      ]);
-      route("GET", "/v1/blocks/p-old/children", [
-        childrenPage([
-          {
-            id: "db-old",
-            type: "child_database",
-            child_database: { title: "有報テキスト" },
-          },
-        ]),
-      ]);
-      const { ensureStockTextDb } = await load();
-      const got = await ensureStockTextDb("7203");
-      expect(got).toEqual({ parentPageId: "p-old", dbId: "db-old" });
-      // search + DB 探索のみ。作成系 (/v1/pages・/v1/databases) は呼ばない
-      expect(calls).toHaveLength(2);
-      expect(
-        calls.filter(
-          (c) =>
-            new URL(String(c.url)).pathname === "/v1/pages" ||
-            new URL(String(c.url)).pathname === "/v1/databases"
-        )
-      ).toHaveLength(0);
     });
   });
 

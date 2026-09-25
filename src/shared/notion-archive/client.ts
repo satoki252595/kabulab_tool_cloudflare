@@ -72,10 +72,10 @@ function schedule<T>(task: () => Promise<T>): Promise<T> {
   return run;
 }
 
-function authHeaders(): Record<string, string> {
+function authHeaders(version: string = NOTION_VERSION): Record<string, string> {
   return {
     Authorization: `Bearer ${notionEnv.NOTION_TOKEN()}`,
-    "Notion-Version": NOTION_VERSION,
+    "Notion-Version": version,
   };
 }
 
@@ -185,11 +185,22 @@ async function doFetch(
   }
 }
 
+export interface NotionRequestOptions {
+  /**
+   * この呼び出しだけ既定 (`NOTION_VERSION` = 2022-06-28) と異なる
+   * Notion-Version を使う。ページ/DB 移動 API 等、新しいデータソース
+   * モデル (2025-09-03 以降) でのみ提供される機能を叩くときに使う。
+   * 通常呼び出しは省略して既定バージョンのまま (挙動を変えない)。
+   */
+  notionVersion?: string;
+}
+
 /** JSON API 呼び出し (GET/POST/PATCH/DELETE)。非 2xx は throw (ルール2)。 */
 export async function notionRequest<T = unknown>(
   method: "GET" | "POST" | "PATCH" | "DELETE",
   path: string,
-  body?: unknown
+  body?: unknown,
+  opts?: NotionRequestOptions
 ): Promise<T> {
   return schedule(async () => {
     const res = await doFetch(
@@ -197,7 +208,7 @@ export async function notionRequest<T = unknown>(
       () => ({
         method,
         headers: {
-          ...authHeaders(),
+          ...authHeaders(opts?.notionVersion),
           "Content-Type": "application/json",
         },
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -206,6 +217,68 @@ export async function notionRequest<T = unknown>(
     );
     return (await res.json()) as T;
   });
+}
+
+/**
+ * ページ/データベース移動 API (POST /v1/pages/{id}/move, PATCH
+ * /v1/databases/{id} の parent 変更) 用の Notion-Version。
+ *
+ * 2025-09-03 でデータソースモデルが導入され、ページ移動 API
+ * (`/pages/{id}/move`) が追加された。本値はユーザが実 API で
+ * 動作確認済み (2026-09-25。ページ移動で 1 リクエスト完結・page id/
+ * プロパティ/本文ブロック保持を確認)。データベース側の `parent`
+ * 変更 (PATCH /databases/{id}) が同バージョンで有効かは公式ドキュメント
+ * 記載を根拠にした未検証の推測 — 呼び出し側 (移行スクリプト) は
+ * 失敗を握りつぶさず「API 非対応 → 手動移動が必要」と正直に報告すること。
+ */
+const MOVE_NOTION_VERSION = "2025-09-03";
+
+export type MovePageParent =
+  | { type: "page_id"; page_id: string }
+  | { type: "data_source_id"; data_source_id: string };
+
+interface MoveResult {
+  id: string;
+  parent?: unknown;
+}
+
+/**
+ * ページを別の親 (ページ or データソース=DB) へ移動する。ページ ID・
+ * プロパティ・本文ブロックは維持される (D1 の notion_doc_page_id 等の
+ * 外部参照が壊れない — ルール6 の窓口。api.notion.com を
+ * notion-archive/ 外から直叩きしない)。
+ */
+export async function movePage(
+  pageId: string,
+  parent: MovePageParent
+): Promise<MoveResult> {
+  return notionRequest<MoveResult>(
+    "POST",
+    `/pages/${pageId}/move`,
+    { parent },
+    { notionVersion: MOVE_NOTION_VERSION }
+  );
+}
+
+/**
+ * データベースを別の親ページへ移動する。公式ドキュメント (2026-03-11 時点の
+ * Update a database リファレンス) は PATCH /v1/databases/{id} の `parent`
+ * フィールドでページ間移動をサポートすると記載しているが、本リポジトリでは
+ * 実 API での動作は未検証 (`ページ移動` は検証済・`DB 移動` は未検証)。
+ * 恒久的 4xx (未対応 API 等) は notionRequest がそのまま throw するので
+ * 握りつぶさず、呼び出し側 (移行スクリプト) が「手動で移動してください」と
+ * 正直に報告すること (ルール2)。
+ */
+export async function moveDatabase(
+  databaseId: string,
+  targetPageId: string
+): Promise<MoveResult> {
+  return notionRequest<MoveResult>(
+    "PATCH",
+    `/databases/${databaseId}`,
+    { parent: { type: "page_id", page_id: targetPageId } },
+    { notionVersion: MOVE_NOTION_VERSION }
+  );
 }
 
 /**

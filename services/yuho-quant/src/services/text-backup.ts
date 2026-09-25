@@ -2,7 +2,7 @@
  * 有報テキスト 1 通分の Notion 保管ヘルパー (3 書込経路で共用)。
  *
  * D1 の 10GB 上限 (引き上げ不可) 対策として、有報テキスト本文は Notion
- * (銘柄親ページ配下「有報テキスト」DB) にのみ置く。D1 には索引と行 ID
+ * (全銘柄共通の単一「有報テキスト」DB) にのみ置く。D1 には索引と行 ID
  * (`yuho_documents.notion_doc_page_id`) を残す。呼び出し側は戻り値の行 ID
  * を D1 へ書き戻すこと。
  *
@@ -53,7 +53,7 @@ export async function backupDocTextToNotion(args: {
   if (sections.length === 0) {
     return { rowPageId: null, outcome: "skipped_empty" };
   }
-  const { dbId } = await ensureStockTextDb(stockCode);
+  const { dbId } = await ensureStockTextDb();
   const { rowPageId, outcome } = await upsertStockTextRow({
     dbId,
     doc: { docId, stockCode, fiscalYearEnd, d1DocumentId, textParseStatus },
