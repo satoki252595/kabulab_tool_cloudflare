@@ -22,6 +22,8 @@ import {
   readLedgerJson,
 } from "../../../../src/shared/notion-archive/index.js";
 import { sha256Hex, timingSafeEqualHex } from "../../../../src/shared/sha256.js";
+import { todayJst } from "../biztag/date-jst.js";
+import { reviewWindowOf } from "../biztag/review-window.js";
 import { ProposalSchema } from "../biztag/vocabulary/index.js";
 import { yuhoEnv } from "../env.js";
 
@@ -95,7 +97,9 @@ vocabularyRoute.get("/review-packet", async (c) => {
     return c.json({ error: "見直し材料がまだありません" }, 404);
   }
   const packet = await readLedgerJson(latest);
-  return c.json(packet as Record<string, unknown>);
+  // Automation は reviewWindow.open が false なら提案を作らずに終える (日付計算を
+  // LLM にさせない。毎週月曜に起動しても 8 月第 1 月曜の週だけ実際に見直す)。
+  return c.json({ ...(packet as Record<string, unknown>), reviewWindow: reviewWindowOf(todayJst()) });
 });
 
 /**

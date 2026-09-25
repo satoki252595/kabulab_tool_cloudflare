@@ -33,7 +33,11 @@ curl -sS -o packet.json -w '\n%{http_code}\n' \
 ```
 
 - ステータス `200`: `packet.json` を読みます。中身は
-  `{ version, vocab, termStats, noHitSectors, uncertainHeavy, officialSources, generatedAt }`。
+  `{ version, vocab, termStats, noHitSectors, uncertainHeavy, officialSources, generatedAt, reviewWindow }`。
+  - **最初に `reviewWindow.open` を見てください。`false` なら見直し期間外です。** 提案を作らず、
+    「見直し期間外（`reviewWindow.start`〜`reviewWindow.deadline`）のため何もしなかった」とだけ報告して
+    終了してください（この Automation は毎週月曜に起動しますが、実際に見直すのは 8 月第 1 月曜から
+    7 日間だけです。日付の計算は自分でせず、必ずこの値に従ってください）。
   - `vocab.version` を基準版（`baseVersion`）として控えます。**この値は後の提案 JSON の
     `baseVersion` に一字一句そのまま使います**（自分で版番号を計算・類推しない）。
   - `termStats`（語ごとのタグ数）・`noHitSectors`（「語なし」の多い業種）・

@@ -11,7 +11,7 @@ import {
   type LedgerKind,
   type LedgerState,
 } from "../../../../src/shared/notion-archive/index.js";
-import { addDaysJst } from "./date-jst.js";
+import { firstMondayOfAugust, reviewDeadline } from "./review-window.js";
 import type { GoldenMetrics } from "./golden.js";
 import type { SourceCheckIssue } from "./sources-verify.js";
 import { changeStats, diffVocabularies, type VocabDiff } from "./vocabulary/diff.js";
@@ -189,19 +189,8 @@ export async function evaluateProposal(
 
 // ── 見直し期限の検査 (§6.3 末尾) ──────────────────────────────────────────
 
-/** 8月第1月曜 (YYYY-MM-DD)。設計例の「提案 2027-08-02」と一致する計算式。 */
-export function firstMondayOfAugust(year: number): string {
-  const aug1 = Date.UTC(year, 7, 1);
-  const weekday = new Date(aug1).getUTCDay();
-  const offsetDays = (8 - weekday) % 7;
-  const d = new Date(aug1 + offsetDays * 24 * 60 * 60 * 1000);
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-}
-
-/** 見直し提案の期限 = 8月第1月曜 + 7日。 */
-export function reviewDeadline(year: number): string {
-  return addDaysJst(firstMondayOfAugust(year), 7);
-}
+// 期間の計算は review-window.ts (Worker とも共有)。既存の呼び出し元のため再公開する。
+export { firstMondayOfAugust, reviewDeadline } from "./review-window.js";
 
 export interface DeadlineCheckResult {
   shouldNotify: boolean;
