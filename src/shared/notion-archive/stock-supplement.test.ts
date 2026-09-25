@@ -73,6 +73,15 @@ describe("stock-supplement (純粋関数)", () => {
       );
     });
 
+    it("読点「、」はカンマではないので通す (33業種「証券、商品先物取引業」の実例)", () => {
+      const props = buildSupplementProperties({ sector33: "証券、商品先物取引業" });
+      expect(props["33業種"]).toEqual({ select: { name: "証券、商品先物取引業" } });
+    });
+
+    it("全角カンマ「，」は throw", () => {
+      expect(() => buildSupplementProperties({ sector33: "電気機器，精密機器" })).toThrow("カンマ");
+    });
+
     it("選択肢名にカンマがあると throw (multi_select)", () => {
       expect(() => buildSupplementProperties({ upstream: ["A,B"] })).toThrow("カンマ");
     });

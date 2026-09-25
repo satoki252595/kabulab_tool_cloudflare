@@ -545,8 +545,15 @@ const ROW_MULTI_SELECT_MAX = 100;
 /** 1 プロパティの rich_text 要素数上限 (超える = 200,000 字超。実測上あり得ない) */
 const ROW_RICH_TEXT_SEGMENTS_MAX = 100;
 
+/**
+ * Notion は select/multi_select の選択肢名にカンマを許さない (公式: "Commas are not
+ * allowed")。半角「,」と全角「，」を弾く。読点「、」はカンマではなく、Notion も受け付ける
+ * (実例: 33業種「証券、商品先物取引業」。① 銘柄マスタもこの名前の選択肢を持つ)。
+ * 2026-09-25 の全件処理で「、」まで弾いて証券会社 33 社が失敗したため直した。
+ * 単語帳のラベルで「、」も禁止しているのは単語帳側の規則 (validate.ts) で、こことは別。
+ */
 function assertNoComma(name: string, columnLabel: string): void {
-  if (name.includes(",") || name.includes("，") || name.includes("、")) {
+  if (name.includes(",") || name.includes("，")) {
     throw new Error(
       `buildSupplementProperties: 選択肢名にカンマは使えません (${columnLabel}): ${name}`
     );
