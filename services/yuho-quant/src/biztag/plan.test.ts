@@ -68,8 +68,10 @@ function rowOf(overrides: Partial<SupplementRow> = {}): SupplementRow {
     error: null,
     upstream: [],
     downstream: [],
+    distribution: [],
     themes: [],
     uncertain: null,
+    evidenceText: null,
     masterLinked: true,
     texts: allTextColumnsLoadedEmpty(),
     ...overrides,
@@ -180,6 +182,25 @@ describe("planWork (§5.2 状態遷移表)", () => {
     };
     const item = planSingle(latestOf(), row, { vocabDiff: () => diff });
     expect(item.kind).toBe("version_bump");
+  });
+
+  it("distribution 列(第3列)のラベルも影響判定の対象になる (今の単語帳に無ければ retag)", () => {
+    const row = rowOf({
+      docId: "S100AAAA",
+      textStatus: "取得済",
+      tagStatus: "判定済",
+      vocabVersion: "v0",
+      distribution: ["もう存在しない流通ラベル"],
+    });
+    const diff: VocabDiff = {
+      added: [],
+      deprecated: ["B.SOME.GONE_DISTRIBUTION"],
+      changed: [],
+      renamed: [],
+      changedTermIds: ["B.SOME.GONE_DISTRIBUTION"],
+    };
+    const item = planSingle(latestOf(), row, { vocabDiff: () => diff });
+    expect(item.kind).toBe("retag");
   });
 
   it("同じ書類・判定済・版が違う・今の単語帳に無いラベル (廃止/改名) → 影響ありとして retag", () => {

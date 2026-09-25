@@ -35,8 +35,10 @@ export const SUPPLEMENT_PROPS = {
   textStatus: "本文の状態",
   upstream: "事業タグ（素材・部品・装置）",
   downstream: "事業タグ（製品・サービス）",
+  distribution: "事業タグ（流通・サービス）",
   themes: "投資テーマ",
   uncertain: "要確認タグ",
+  evidenceText: "事業タグの根拠文",
   tagStatus: "事業タグの状態",
   tagDoc: "事業タグの根拠書類",
   vocabVersion: "単語帳の版",
@@ -67,6 +69,7 @@ export interface SupplementSchemaSpec {
   textColumns: string[];
   upstreamOptions: string[];
   downstreamOptions: string[];
+  distributionOptions: string[];
   themeOptions: string[];
   versionOptions: string[];
   sector33Options: string[];
@@ -120,10 +123,14 @@ function buildDbProperties(spec: SupplementSchemaSpec): Record<string, unknown> 
     [SUPPLEMENT_PROPS.downstream]: {
       multi_select: { options: toOptions(spec.downstreamOptions) },
     },
+    [SUPPLEMENT_PROPS.distribution]: {
+      multi_select: { options: toOptions(spec.distributionOptions) },
+    },
     [SUPPLEMENT_PROPS.themes]: {
       multi_select: { options: toOptions(spec.themeOptions) },
     },
     [SUPPLEMENT_PROPS.uncertain]: { rich_text: {} },
+    [SUPPLEMENT_PROPS.evidenceText]: { rich_text: {} },
     [SUPPLEMENT_PROPS.tagStatus]: { select: { options: TAG_STATUS_OPTIONS } },
     [SUPPLEMENT_PROPS.tagDoc]: { rich_text: {} },
     [SUPPLEMENT_PROPS.vocabVersion]: {
@@ -299,8 +306,10 @@ export interface SupplementRow {
   error: string | null;
   upstream: string[];
   downstream: string[];
+  distribution: string[];
   themes: string[];
   uncertain: string | null;
+  evidenceText: string | null;
   masterLinked: boolean;
   /** 要求した開示テキスト列だけ (呼び出し側が `opts.textColumns` で指定した分) */
   texts: Record<string, string>;
@@ -379,8 +388,10 @@ function parseSupplementRow(page: NotionPage, textColumns: string[]): Supplement
     error: readRich(p[SUPPLEMENT_PROPS.error]) || null,
     upstream: readMultiSelect(p[SUPPLEMENT_PROPS.upstream]),
     downstream: readMultiSelect(p[SUPPLEMENT_PROPS.downstream]),
+    distribution: readMultiSelect(p[SUPPLEMENT_PROPS.distribution]),
     themes: readMultiSelect(p[SUPPLEMENT_PROPS.themes]),
     uncertain: readRich(p[SUPPLEMENT_PROPS.uncertain]) || null,
+    evidenceText: readRich(p[SUPPLEMENT_PROPS.evidenceText]) || null,
     masterLinked: (p[SUPPLEMENT_PROPS.master]?.relation ?? []).length > 0,
     texts,
   };
@@ -527,8 +538,11 @@ export interface SupplementRowInput {
   texts?: Record<string, string | null>;
   upstream?: string[];
   downstream?: string[];
+  distribution?: string[];
   themes?: string[];
   uncertain?: string | null;
+  /** 「はい」「要確認」タグごとの根拠文 (§3.1)。タグが空/再判定でクリアされる時は null。 */
+  evidenceText?: string | null;
   tagStatus?: TagStatus;
   tagDoc?: string | null;
   vocabVersion?: string | null;
@@ -664,6 +678,12 @@ export function buildSupplementProperties(
       input.downstream
     );
   }
+  if (input.distribution !== undefined) {
+    props[SUPPLEMENT_PROPS.distribution] = multiSelectValue(
+      SUPPLEMENT_PROPS.distribution,
+      input.distribution
+    );
+  }
   if (input.themes !== undefined) {
     props[SUPPLEMENT_PROPS.themes] = multiSelectValue(SUPPLEMENT_PROPS.themes, input.themes);
   }
@@ -671,6 +691,12 @@ export function buildSupplementProperties(
     props[SUPPLEMENT_PROPS.uncertain] = clearableRichText(
       input.uncertain,
       SUPPLEMENT_PROPS.uncertain
+    );
+  }
+  if (input.evidenceText !== undefined) {
+    props[SUPPLEMENT_PROPS.evidenceText] = clearableRichText(
+      input.evidenceText,
+      SUPPLEMENT_PROPS.evidenceText
     );
   }
   if (input.candidateCount !== undefined) {

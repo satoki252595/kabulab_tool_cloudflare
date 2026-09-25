@@ -30,10 +30,17 @@ export const FAMILIES = [
   "RE",
   "LOGI",
   "CONT",
+  "SVC",
 ] as const;
 export type Family = (typeof FAMILIES)[number];
 
-/** 系統の日本語名（見直し材料・設計書の表示用） */
+/**
+ * 系統の日本語名（見直し材料・設計書の表示用）。
+ * `SVC`（流通・サービス）は 2026-09-25 追加。人材・教育・総合商社・
+ * 小売業態・ホテル旅行・自動車ディーラー等、既存系統(製造業由来の分類)に
+ * 当てはまらない「モノを作らない事業」の受け皿として新設した
+ * (docs/005-yuho-quant-business-tags.md §4)。
+ */
 export const FAMILY_LABEL_JA: Record<Family, string> = {
   SEMI: "半導体",
   ELEC: "電子部品",
@@ -49,10 +56,16 @@ export const FAMILY_LABEL_JA: Record<Family, string> = {
   RE: "不動産・建設・インフラ",
   LOGI: "物流・港湾",
   CONT: "コンテンツ",
+  SVC: "流通・サービス",
 };
 
-/** Notion のマルチセレクト列（business 層の振り分け先） */
-export const NOTION_COLUMNS = ["upstream", "downstream"] as const;
+/**
+ * Notion のマルチセレクト列（business 層の振り分け先）。
+ * `upstream`=素材・部品・装置／`downstream`=製品・サービス／
+ * `distribution`=流通・サービス（小売・卸・人材・教育・ホテル旅行 等の
+ * 「川上でも自社製品でもない」事業を受ける第 3 の列。2026-09-25 追加）。
+ */
+export const NOTION_COLUMNS = ["upstream", "downstream", "distribution"] as const;
 export type NotionColumn = (typeof NOTION_COLUMNS)[number];
 
 /** business 語の ID: B.<FAMILY>.<UPPER_SNAKE> */

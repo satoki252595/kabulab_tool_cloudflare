@@ -153,8 +153,10 @@ export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<P
           textStatus: "本文なし",
           upstream: [],
           downstream: [],
+          distribution: [],
           themes: [],
           uncertain: null,
+          evidenceText: null,
           tagStatus: "本文なし",
           tagDoc: null,
           vocabVersion: null,
@@ -197,8 +199,10 @@ export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<P
           texts: allTextColumnsCleared(),
           upstream: [],
           downstream: [],
+          distribution: [],
           themes: [],
           uncertain: null,
+          evidenceText: null,
           tagStatus: "本文なし",
           tagDoc: null,
           vocabVersion: null,
@@ -225,7 +229,11 @@ export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<P
       if (item.row === null || item.doc === null) {
         throw new Error(`processStock: version_bump に必要な行/書類が無い (${item.stockCode})`);
       }
-      const tagIds = idsFromActiveLabels(deps.vocab, [...item.row.upstream, ...item.row.downstream]);
+      const tagIds = idsFromActiveLabels(deps.vocab, [
+        ...item.row.upstream,
+        ...item.row.downstream,
+        ...item.row.distribution,
+      ]);
       const themes = deriveThemes(deps.vocab, tagIds).map((t) => t.labelJa);
       await deps.updateSupplementRow(item.row.pageId, {
         themes,
@@ -320,8 +328,10 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         ...baseInput,
         upstream: [],
         downstream: [],
+        distribution: [],
         themes: [],
         uncertain: null,
+        evidenceText: null,
         tagStatus: "判定済",
         tagDoc,
         vocabVersion: deps.vocab.version,
@@ -371,6 +381,12 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
             items: evidenceItems,
           })
         : null;
+    // 根拠文が Notion の rich_text 上限で切り詰められたときは、判定入力欄に
+    // その事実を明記する(切り詰めを黙って残さない・ルール2)。ページ本文の
+    // 根拠トグル(evidenceBlock)には全語が残るので情報は失われない。
+    const judgeInputSummary = tagOutcome.evidenceTextTruncated
+      ? `${judgeInput.inputSummary}／事業タグの根拠文は文字数上限のため一部省略(全語はページ本文の根拠トグル参照)`
+      : judgeInput.inputSummary;
     await writeRowWithEvidence(
       item,
       deps,
@@ -378,14 +394,16 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         ...baseInput,
         upstream: tagOutcome.upstream,
         downstream: tagOutcome.downstream,
+        distribution: tagOutcome.distribution,
         themes: tagOutcome.themes,
         uncertain: tagOutcome.uncertainText,
+        evidenceText: tagOutcome.evidenceText,
         tagStatus: "判定済",
         tagDoc,
         vocabVersion: deps.vocab.version,
         judgedAt: deps.today,
         candidateCount,
-        judgeInput: judgeInput.inputSummary,
+        judgeInput: judgeInputSummary,
         error: null,
         attempts: 0,
         nextRetryAt: null,
@@ -450,8 +468,10 @@ async function recordFailure(item: WorkItem, deps: ProcessDeps, args: FailureArg
     textStatus: args.textStatus,
     upstream: [],
     downstream: [],
+    distribution: [],
     themes: [],
     uncertain: null,
+    evidenceText: null,
     tagStatus: args.tagStatus,
     tagDoc: null,
     vocabVersion: null,

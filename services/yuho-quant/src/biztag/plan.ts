@@ -103,7 +103,12 @@ function isImpacted(vocab: Vocabulary, row: SupplementRow, diff: VocabDiff): boo
   if (result.candidates.some((c) => changed.has(c.term.id))) return true;
 
   const labelToId = buildActiveLabelIndex(vocab);
-  const labels = [...row.upstream, ...row.downstream, ...parseUncertainLabels(row.uncertain)];
+  const labels = [
+    ...row.upstream,
+    ...row.downstream,
+    ...row.distribution,
+    ...parseUncertainLabels(row.uncertain),
+  ];
   for (const label of labels) {
     const id = labelToId.get(label.toLowerCase());
     if (id === undefined || changed.has(id)) return true;

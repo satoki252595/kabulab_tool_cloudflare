@@ -9,8 +9,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prefilter, type PrefilterResult } from "./prefilter.js";
-import { summarizeJudgments } from "./row.js";
+import { buildEvidenceText, EVIDENCE_TEXT_MAX_CHARS, summarizeJudgments } from "./row.js";
 import type { TermJudgment } from "./judge.js";
+import type { EvidenceBlockInput } from "../../../../src/shared/notion-archive/index.js";
+import type { BusinessTerm } from "./vocabulary/schema.js";
 import rawVocab from "./fixtures/test-vocab.json" with { type: "json" };
 import { VocabularySchema, type Vocabulary } from "./vocabulary/schema.js";
 
@@ -73,7 +75,84 @@ describe("summarizeJudgments", () => {
 
   it("判定が無い語(未判定)は何も残さない", () => {
     const outcome = summarizeJudgments(vocab, result.candidates, []);
-    expect(outcome).toEqual({ upstream: [], downstream: [], themes: [], uncertainText: null, evidence: [] });
+    expect(outcome).toEqual({
+      upstream: [],
+      downstream: [],
+      distribution: [],
+      themes: [],
+      uncertainText: null,
+      evidence: [],
+      evidenceText: null,
+      evidenceTextTruncated: false,
+    });
+  });
+
+  it("『はい』は事業タグの根拠文列にタグ名・確率・原文1〜2文・節名をまとめる", () => {
+    const judgments: TermJudgment[] = [
+      { termId: "B.MED.NUCLEIC_ACID_DRUG", probability: 0.95, band: "yes" },
+    ];
+    const outcome = summarizeJudgments(vocab, result.candidates, judgments);
+    expect(outcome.evidenceTextTruncated).toBe(false);
+    expect(outcome.evidenceText).not.toBeNull();
+    expect(outcome.evidenceText).toContain("核酸医薬（はい 0.95）：「");
+    expect(outcome.evidenceText).toContain("」— 事業の内容");
+  });
+
+  it("notionColumn=distribution の『はい』は事業タグ（流通・サービス）列に入る", () => {
+    const distributionTerm: BusinessTerm = {
+      id: "B.ICT.STAFFING",
+      layer: "business",
+      family: "ICT",
+      subfamily: "人材サービス",
+      notionColumn: "distribution",
+      labelJa: "人材紹介・派遣",
+      definitionJa: "テスト用の第3列(流通・サービス)語。",
+      definitionEn: "Test-only distribution-column term.",
+      keywords: ["人材紹介"],
+      excludeKeywords: [],
+      sources: [
+        {
+          title: "テスト出典",
+          url: "https://example.test/staffing",
+          date: "2026-01",
+          section: "テスト項",
+          quote: "テスト用の引用文です",
+        },
+      ],
+      addedIn: "v1",
+      deprecated: false,
+    };
+    const candidates: PrefilterResult["candidates"] = [
+      {
+        term: distributionTerm,
+        hits: [
+          {
+            termId: distributionTerm.id,
+            sectionKey: "business",
+            sentence: { index: 0, start: 0, end: 6, text: "人材紹介を行う。" },
+            keyword: "人材紹介",
+          },
+        ],
+      },
+    ];
+    const judgments: TermJudgment[] = [{ termId: distributionTerm.id, probability: 0.9, band: "yes" }];
+    const outcome = summarizeJudgments(
+      { version: "v1", business: [distributionTerm], themes: [] },
+      candidates,
+      judgments
+    );
+    expect(outcome.upstream).toEqual([]);
+    expect(outcome.downstream).toEqual([]);
+    expect(outcome.distribution).toEqual(["人材紹介・派遣"]);
+    expect(outcome.evidenceText).toContain("人材紹介・派遣（はい 0.90）");
+  });
+
+  it("『確認不能』は事業タグの根拠文列に「要確認」として残る", () => {
+    const judgments: TermJudgment[] = [
+      { termId: "B.MED.NUCLEIC_ACID_DRUG", probability: 0.55, band: "uncertain" },
+    ];
+    const outcome = summarizeJudgments(vocab, result.candidates, judgments);
+    expect(outcome.evidenceText).toContain("核酸医薬（要確認 0.55）：「");
   });
 
   it("候補に無い語の判定結果が渡されたら呼び出し側のバグとして throw する", () => {
@@ -83,5 +162,53 @@ describe("summarizeJudgments", () => {
     expect(() => summarizeJudgments(vocab, result.candidates, judgments)).toThrow(
       /候補に無い語/
     );
+  });
+});
+
+describe("buildEvidenceText", () => {
+  it("語が無ければ null", () => {
+    expect(buildEvidenceText([])).toEqual({ text: null, truncated: false });
+  });
+
+  it("上限内なら全語ぶんそのまま結合し、切り詰めフラグは立たない", () => {
+    const items: EvidenceBlockInput["items"] = [
+      {
+        labelJa: "核酸医薬",
+        band: "yes",
+        probability: 0.93,
+        sentences: [{ text: "核酸医薬を製造する。", sectionTitle: "事業の内容" }],
+      },
+      {
+        labelJa: "新薬",
+        band: "uncertain",
+        probability: 0.55,
+        sentences: [
+          { text: "新薬開発に取り組んでいる。", sectionTitle: "研究開発活動" },
+          { text: "治験を進めている。", sectionTitle: "研究開発活動" },
+        ],
+      },
+    ];
+    const { text, truncated } = buildEvidenceText(items);
+    expect(truncated).toBe(false);
+    expect(text).toBe(
+      "核酸医薬（はい 0.93）：「核酸医薬を製造する。」— 事業の内容\n" +
+        "新薬（要確認 0.55）：「新薬開発に取り組んでいる。治験を進めている。」— 研究開発活動"
+    );
+  });
+
+  it("上限を超えたら切り詰め、末尾に正直な省略メモを残す(黙って削らない)", () => {
+    const items: EvidenceBlockInput["items"] = Array.from({ length: 5000 }, (_, i) => ({
+      labelJa: `語${i}`,
+      band: "yes" as const,
+      probability: 0.9,
+      sentences: [{ text: "あ".repeat(50), sectionTitle: "事業の内容" }],
+    }));
+    const { text, truncated } = buildEvidenceText(items);
+    expect(truncated).toBe(true);
+    expect(text).not.toBeNull();
+    expect(text!.length).toBeLessThanOrEqual(EVIDENCE_TEXT_MAX_CHARS);
+    expect(text).toContain("文字数上限のため以下省略");
+    // 切り詰めても先頭の語は欠落しない
+    expect(text!.startsWith("語0（はい 0.90）")).toBe(true);
   });
 });
