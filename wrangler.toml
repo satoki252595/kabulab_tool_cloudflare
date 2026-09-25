@@ -39,4 +39,5 @@ NOTION_STOCK_INFO_PAGE_ID = "205d74ff84cd809e92b4dd1adc5cf186"
 # .env の VOCAB_REVIEW_TOKEN と Cursor の My Secrets にだけ置く (2026-09-25 発行)。
 # 未設定なら Worker は /vocabulary/* を常に 401 にする (fail-closed)。
 VOCAB_REVIEW_TOKEN_SHA256 = "387c3bb94f45ea1d28f48843260965cc70e238926c77945f733ea7bcad526fe5"
-# NOTION_BIZTAG_LEDGER_DB_ID は台帳 DB を作った後 (§11.1 手順3) に設定する。
+# 「事業タグ単語帳（台帳）」DB の ID (2026-09-25 初回実行で作成)。Worker は Search を使わずこれを読む。
+NOTION_BIZTAG_LEDGER_DB_ID = "3e6d74ff84cd818a91fbe8000056747c"

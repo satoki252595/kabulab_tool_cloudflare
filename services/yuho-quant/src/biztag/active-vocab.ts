@@ -57,12 +57,22 @@ function loadSeedVocabularyV1(): Vocabulary {
  * 今の有効な単語帳を解決する。台帳に「版」が 1 件も無ければ v1 を初回投入する。
  * `recordedAt` は台帳に新規投入する場合の「記録日」(JST, YYYY-MM-DD)。
  */
-export async function resolveActiveVocabulary(recordedAt: string): Promise<ActiveVocabularyResult> {
+export async function resolveActiveVocabulary(
+  recordedAt: string,
+  opts?: { dryRun?: boolean }
+): Promise<ActiveVocabularyResult> {
   const dbId = await ensureLedgerDb();
   let versions = await listLedgerEntries(dbId, { kind: "版" });
   let seeded = false;
 
   if (versions.length === 0) {
+    if (opts?.dryRun) {
+      // dry-run は台帳に書かない約束なので、初回投入もしない (黙って投入せずに
+      // 進めると「書かない」はずの実行で台帳が変わる)。先に通常実行で投入すること。
+      throw new Error(
+        "resolveActiveVocabulary: 台帳に単語帳の版がまだありません。dry-run では初回投入 (v1) をしないため、先に通常実行してください。"
+      );
+    }
     const seed = loadSeedVocabularyV1();
     await createLedgerEntry(dbId, {
       name: "版 v1",

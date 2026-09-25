@@ -85,6 +85,8 @@ function outcomeKindOf(item: WorkItem): "created" | "updated" {
  * 「最新有報が無い／本文が読めない」→「本文列は空」(設計 §状態遷移表) を
  * 実際に成立させるには、旧書類の本文をこれで明示的に上書きする必要がある。
  */
+const TITLE_BY_SECTION_KEY = new Map<string, string>(TEXT_SECTIONS.map((d) => [d.key, d.title]));
+
 function allTextColumnsCleared(): Record<string, string | null> {
   const out: Record<string, string | null> = {};
   for (const s of TEXT_SECTIONS) out[s.title] = null;
@@ -256,9 +258,17 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
   }
 
   const sectionMap: Partial<Record<PrefilterSectionKey, string>> = {};
-  const textsByColumn: Record<string, string> = {};
+  // 補足 DB の本文列名は TEXT_SECTIONS の項目名 (有報テキスト行の itemName は CSV の
+  // 生の項目名「事業の内容 [テキストブロック]」なので使わない)。39 列すべてを明示し、
+  // この書類に無い項目は null で空にする (前の書類の本文を残さない)。知らない節キーは
+  // 形式の変化なので throw する (黙って捨てない)。
+  const textsByColumn: Record<string, string | null> = allTextColumnsCleared();
   for (const s of sections) {
-    textsByColumn[s.itemName] = s.text;
+    const title = TITLE_BY_SECTION_KEY.get(s.sectionKey);
+    if (title === undefined) {
+      throw new Error(`有報テキスト行に未知の節キー「${s.sectionKey}」があります (${item.stockCode} ${doc.docId})`);
+    }
+    textsByColumn[title] = s.text;
     if (isPrefilterSection(s.sectionKey)) {
       sectionMap[s.sectionKey] = s.text;
     }

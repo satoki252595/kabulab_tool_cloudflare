@@ -35,7 +35,7 @@ const notionMocks = vi.hoisted(() => ({
   ensureLedgerDb: vi.fn(async () => "ledger-db-id"),
   ensureSupplementDb: vi.fn(async () => ({ dbId: "supplement-db-id", created: false, propertyIds: {} })),
   loadSupplementRows: vi.fn(async () => []),
-  loadStockMasterIndex: vi.fn(async () => new Map<string, string>()),
+  loadStockMasterIndex: vi.fn(async () => ({ index: new Map<string, string>(), duplicates: new Map<string, string[]>() })),
   createSupplementRow: vi.fn(async () => "new-page"),
   updateSupplementRow: vi.fn(async () => {}),
   replaceEvidenceBlock: vi.fn(async () => {}),

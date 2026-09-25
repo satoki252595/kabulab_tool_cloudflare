@@ -239,13 +239,19 @@ Cursor Automation（年 1 回・8 月）
   ドットを含む質問 ID が通ること、`jev-latest` が `jev-1.13.0` に解決されることを確認）。
 - 指示（英語。`definitionEn` を埋める。`judge.ts` の `buildQuestion` が正本）:
   "Answer only from the excerpt of this company's annual securities report. Does this company itself
-  (including its consolidated subsidiaries) currently operate {definitionEn} as a business segment,
-  product line, commercially sold product or service, or explicitly stated business? Answer false if it
-  is only its customers' industry or a demand driver, a supplier, partner or lender, research and
-  development without current sales, a future plan, or an incidental mention."
+  (including its consolidated subsidiaries) currently conduct the business defined below, as a business
+  segment, product line, or explicitly stated business? Definition: {definitionEn} Answer false if the
+  excerpt mentions it only as its customers' industry or a demand driver, a supplier, partner or lender,
+  research and development without current sales, a future plan, or an incidental mention. When the
+  definition is about making a product, trading or distributing products made by other companies does not count."
+  最後の一文は、ゴールデンセットの予備測定で総合商社が製造の語（建設機械・工作機械など）で
+  「はい」になる誤判定が多かったため足した。この一文・2 語の追加・原子力と核酸医薬の定義の明確化を
+  合わせて、yesMin=0.50 での精度が 0.923 → 0.962 になった（それぞれの寄与は分けて測っていない）。
 - しきい値: 共通の `yesMin` / `noMax` を 1 組持ち、全 `bt.*` に割り当てる。値はゴールデンセットで
   精度を測ってから `calibration.json`（`{model, yesMin, noMax, …測定値}`）に置く（§11.4）。
-  指示文を変えたら測り直す。
+  指示文や定義を変えたら測り直す。**v1 の較正（2026-09-25）: `jev-1.13.0`・yesMin=0.50・noMax=0.25**
+  （87 社・858 組で「はい」の精度 0.962・再現率 0.760・当てたい例の再現率 0.905・「はい」286 /
+  要確認 74 / いいえ 497）。
 - 1 往復で候補を最大 20 問まとめる。モデルは版を固定（`calibration.json` の `model`。別名 `jev-latest` は使わない）。
 - 429/529/5xx・通信失敗は指数バックオフで有界リトライ。最後まで失敗したら**判定不能**（既定の答えを入れない）。
 - 費用: 入力 $0.042/100 万トークン・出力無料。実行ごとにトークン数と費用の見積もりをサマリに出す。

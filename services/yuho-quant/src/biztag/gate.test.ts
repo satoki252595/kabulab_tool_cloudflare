@@ -307,37 +307,54 @@ function ledgerEntry(overrides: Partial<LedgerEntry>): LedgerEntry {
 }
 
 describe("checkDeadline", () => {
+  // 2026-09 に稼働した (台帳の最初の版) 前提。2027 年からが見直しの対象年。
+  const v1 = ledgerEntry({ kind: "版", state: "有効", recordedAt: "2026-09-25" });
+
   it("期限前は通知不要", () => {
-    const result = checkDeadline("2027-08-01", []);
+    const result = checkDeadline("2027-08-01", [v1]);
     expect(result.shouldNotify).toBe(false);
   });
 
   it("期限を過ぎて提案が無ければ通知が必要", () => {
-    const result = checkDeadline("2027-08-10", []);
+    const result = checkDeadline("2027-08-10", [v1]);
     expect(result.shouldNotify).toBe(true);
     expect(result.year).toBe(2027);
     expect(result.deadline).toBe("2027-08-09");
+    expect(result.notApplicable).toBeUndefined();
   });
 
   it("8/1以降に提案 (変更なしの提案含む) が記録済みなら通知不要", () => {
-    const entries = [ledgerEntry({ kind: "提案", state: "変更なし", recordedAt: "2027-08-03" })];
+    const entries = [v1, ledgerEntry({ kind: "提案", state: "変更なし", recordedAt: "2027-08-03" })];
     const result = checkDeadline("2027-08-10", entries);
     expect(result.shouldNotify).toBe(false);
   });
 
   it("今年分の通知が既にあれば再通知しない (毎日は鳴らさない)", () => {
-    const entries = [ledgerEntry({ kind: "通知", state: "送信済", recordedAt: "2027-08-10" })];
+    const entries = [v1, ledgerEntry({ kind: "通知", state: "送信済", recordedAt: "2027-08-10" })];
     const result = checkDeadline("2027-08-15", entries);
     expect(result.shouldNotify).toBe(false);
   });
 
   it("去年の提案・通知は今年の判定に影響しない", () => {
     const entries = [
+      ledgerEntry({ kind: "版", state: "有効", recordedAt: "2025-09-01" }),
       ledgerEntry({ kind: "提案", state: "変更なし", recordedAt: "2026-08-03" }),
       ledgerEntry({ kind: "通知", state: "送信済", recordedAt: "2026-08-11" }),
     ];
     const result = checkDeadline("2027-08-10", entries);
     expect(result.shouldNotify).toBe(true);
+  });
+
+  it("稼働した年 (見直し開始日の後に最初の版) は対象外で鳴らさない", () => {
+    const result = checkDeadline("2026-09-25", [v1]);
+    expect(result.shouldNotify).toBe(false);
+    expect(result.notApplicable).toContain("2026-08-03");
+  });
+
+  it("台帳に版が無い (初回投入前) なら鳴らさない", () => {
+    const result = checkDeadline("2027-08-10", []);
+    expect(result.shouldNotify).toBe(false);
+    expect(result.notApplicable).toBeDefined();
   });
 });
 

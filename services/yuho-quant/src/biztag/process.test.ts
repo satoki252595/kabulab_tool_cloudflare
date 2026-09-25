@@ -197,6 +197,26 @@ describe("processStock", () => {
       expect(evidenceCalls[0]?.block).not.toBeNull();
     });
 
+    it("本文列は TEXT_SECTIONS の項目名で書く (有報テキスト行の生の項目名「… [テキストブロック]」を列名にしない)", async () => {
+      // 2026-09-25 本番試験で発覚: Notion の有報テキスト行の itemName は CSV の生の項目名
+      // (「事業の内容 [テキストブロック]」) で、そのまま列名にすると Notion が 400 を返した。
+      const jevClient = jevAnswering({ "bt.B.MACH.MACHINE_TOOL": 0.95 });
+      const { deps, created } = makeDeps({
+        jevClient,
+        readStockTextRow: () =>
+          Promise.resolve([
+            { itemName: "事業の内容 [テキストブロック]", sectionKey: "business", text: OKUMA_BUSINESS_TEXT },
+          ]),
+      });
+      await processStock(itemOf(), deps);
+      const texts = created[0]?.input.texts;
+      expect(texts?.["事業の内容"]).toBe(OKUMA_BUSINESS_TEXT);
+      expect(Object.keys(texts ?? {}).some((k) => k.includes("[テキストブロック]"))).toBe(false);
+      // 書類に無い項目も 39 列すべてを明示的に空にする (前の書類の本文を残さない)
+      expect(Object.keys(texts ?? {})).toHaveLength(39);
+      expect(texts?.["事業等のリスク"]).toBeNull();
+    });
+
     it("候補語 0 件 (極洋): 判定済のまま該当タグ無し・根拠は無し", async () => {
       const jevClient: JevClient = { askNoul: () => Promise.reject(new Error("候補が無ければ jev を呼ばない")) };
       const { deps, created, evidenceCalls } = makeDeps({

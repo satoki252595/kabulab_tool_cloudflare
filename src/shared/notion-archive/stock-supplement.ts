@@ -428,10 +428,21 @@ export async function loadSupplementRows(
 
 /**
  * ① 銘柄マスタ (`NOTION_DB_STOCK_MASTER`) から 銘柄コード → ページ ID の
- * 索引を作る (`銘柄マスタ（補足）` の relation 先解決用)。重複コードは
- * どれかを黙って選ばず throw する (ルール2)。
+ * 索引を作る (`銘柄マスタ（補足）` の relation 先解決用)。
+ *
+ * 同じ銘柄コードの行が複数あるコード (① 側のデータ不備。2026-09-25 実測で 7129・3681)
+ * は、どれかを黙って選ばず (ルール2) 索引から外して `duplicates` に返す。呼び出し側は
+ * その銘柄の relation を空のままにし、件数を運営に見せる。relation は閲覧用の
+ * つながりなので、1 件の不備で全銘柄の処理を止めない。
  */
-export async function loadStockMasterIndex(): Promise<Map<string, string>> {
+export interface StockMasterIndex {
+  /** 一意に決まる銘柄コード → ① のページ ID */
+  index: Map<string, string>;
+  /** 複数行ある銘柄コード → 該当する ① のページ ID 群 */
+  duplicates: Map<string, string[]>;
+}
+
+export async function loadStockMasterIndex(): Promise<StockMasterIndex> {
   const dbId = notionEnv.NOTION_DB_STOCK_MASTER();
   const schema = await notionRequest<DbSchemaResponse>("GET", `/databases/${dbId}`);
   const entry = Object.entries(schema.properties).find(([name]) => name === "銘柄コード");
@@ -443,8 +454,7 @@ export async function loadStockMasterIndex(): Promise<Map<string, string>> {
   const [, propDef] = entry;
   const qs = `filter_properties=${encodeURIComponent(propDef.id)}`;
 
-  const map = new Map<string, string>();
-  const dupCodes = new Set<string>();
+  const pagesByCode = new Map<string, string[]>();
   let cursor: string | undefined;
   for (;;) {
     const body: Record<string, unknown> = { page_size: 100 };
@@ -458,21 +468,20 @@ export async function loadStockMasterIndex(): Promise<Map<string, string>> {
       const prop = page.properties["銘柄コード"];
       const code = readRich(prop) || readTitle(prop);
       if (!code) continue;
-      if (map.has(code)) {
-        dupCodes.add(code);
-        continue;
-      }
-      map.set(code, page.id);
+      const pages = pagesByCode.get(code);
+      if (pages) pages.push(page.id);
+      else pagesByCode.set(code, [page.id]);
     }
     if (!res.has_more || !res.next_cursor) break;
     cursor = res.next_cursor;
   }
-  if (dupCodes.size > 0) {
-    throw new Error(
-      `loadStockMasterIndex: 銘柄コードが重複しています (${[...dupCodes].join(", ")})`
-    );
+  const index = new Map<string, string>();
+  const duplicates = new Map<string, string[]>();
+  for (const [code, pages] of pagesByCode) {
+    if (pages.length === 1) index.set(code, pages[0]);
+    else duplicates.set(code, pages);
   }
-  return map;
+  return { index, duplicates };
 }
 
 export interface SupplementRowInput {

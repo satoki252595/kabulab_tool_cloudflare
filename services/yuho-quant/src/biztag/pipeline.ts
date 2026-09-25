@@ -88,6 +88,8 @@ export interface RunSummary {
   gate: GateRunResult;
   deadline: DeadlineCheckResult;
   failures: Array<{ stockCode: string; message: string }>;
+  /** ① 銘柄マスタに同じ銘柄コードの行が複数あり、relation を付けなかった銘柄コード */
+  masterDuplicates: string[];
 }
 
 function buildSchemaSpec(vocab: Vocabulary, sector33Options: string[]): SupplementSchemaSpec {
@@ -232,8 +234,14 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     ? makeDryRunLedgerWrites()
     : { createLedgerEntry, updateLedgerEntry, replaceLedgerJson };
 
-  // 1. 単語帳の関門 + 見直し期限の検査。
+  // 1. 今の有効な単語帳 (台帳が空なら v1 を初回投入)。関門は有効な版を基準に審査する
+  //    ので、先に解決しておく。
   const ledgerDbId = await ensureLedgerDb();
+  const initial = await resolveActiveVocabulary(today, { dryRun: opts.dryRun });
+  const seeded = initial.seeded;
+  let vocab = initial.vocab;
+
+  // 2. 単語帳の関門 + 見直し期限の検査。
   const gate = await runGate({
     ledgerDbId,
     listLedgerEntries,
@@ -260,8 +268,10 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     });
   }
 
-  // 2. 今の有効な単語帳。
-  const { vocab, seeded } = await resolveActiveVocabulary(today);
+  // 関門が新しい版を採用したら、その版で以降を処理する (dry-run は採用を書かないので不要)。
+  if (gate.adopted.length > 0 && !opts.dryRun) {
+    ({ vocab } = await resolveActiveVocabulary(today));
+  }
 
   // 3. D1 の最新有報 (対象母集団)。
   let latest = await loadLatestDocs(db);
@@ -291,14 +301,21 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const items = planWork(latest, rows, vocab, vocabDiffFromRowVersion, today);
 
   // 6. 銘柄マスタ (relation 先) の索引。
+  // ① 側で同じ銘柄コードが複数行ある銘柄は relation を空のままにする (どれかを選ばない)。
   const masterIndex = await loadStockMasterIndex();
+  const masterDuplicates = [...masterIndex.duplicates.keys()].sort();
+  if (masterDuplicates.length > 0) {
+    console.warn(
+      `[biztag] ① 銘柄マスタに同じ銘柄コードの行が複数あるため relation を付けない: ${masterDuplicates.join(", ")}`
+    );
+  }
 
   const realDeps: ProcessDeps = {
     vocab,
     thresholds: opts.thresholds,
     jevClient,
     today,
-    resolveMasterPageId: (code) => masterIndex.get(code) ?? null,
+    resolveMasterPageId: (code) => masterIndex.index.get(code) ?? null,
     readStockTextRow,
     createSupplementRow: (input, evidence) => createSupplementRow(supplementDbId, input, evidence),
     updateSupplementRow,
@@ -374,6 +391,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     notion: notionStats(),
     vocabVersion: vocab.version,
     vocabSeeded: seeded,
+    masterDuplicates,
     gate,
     deadline,
     failures,

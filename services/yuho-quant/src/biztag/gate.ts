@@ -195,6 +195,8 @@ export interface DeadlineCheckResult {
   shouldNotify: boolean;
   year: number;
   deadline: string;
+  /** その年は見直しの対象外だった理由 (仕組みの稼働前など)。対象年なら undefined */
+  notApplicable?: string;
 }
 
 /**
@@ -207,6 +209,24 @@ export function checkDeadline(todayJst: string, entries: readonly LedgerEntry[])
   const deadline = reviewDeadline(year);
   if (todayJst <= deadline) {
     return { shouldNotify: false, year, deadline };
+  }
+  // 仕組みが動き始めた (台帳に最初の「版」を記録した) のがその年の見直し開始日
+  // (8 月第 1 月曜) より後なら、その年は Automation がまだ無かったので対象外。
+  // 初年度 (2026-09 稼働) に「提案が来ていない」と誤って鳴らさないため。
+  const firstVersionRecordedAt = entries
+    .filter((e) => e.kind === "版")
+    .map((e) => e.recordedAt)
+    .sort()[0];
+  if (firstVersionRecordedAt === undefined) {
+    return { shouldNotify: false, year, deadline, notApplicable: "台帳に版がまだ無い (初回投入前)" };
+  }
+  if (firstVersionRecordedAt > firstMondayOfAugust(year)) {
+    return {
+      shouldNotify: false,
+      year,
+      deadline,
+      notApplicable: `${year} 年の見直し開始日 (${firstMondayOfAugust(year)}) の後に稼働した (最初の版 ${firstVersionRecordedAt})`,
+    };
   }
   const aug1 = `${year}-08-01`;
   const hasProposalSinceAug1 = entries.some(

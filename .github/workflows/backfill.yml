@@ -122,12 +122,16 @@ jobs:
         run: pnpm biztag golden
       - name: biztag-rollback (単語帳を過去の版へ巻き戻す)
         if: inputs.job == 'biztag-rollback'
+        # 手入力の値はシェルに直接埋め込まず環境変数で渡す (引用符等で壊れない・注入されない)
+        env:
+          ROLLBACK_TO: ${{ inputs.to }}
+          ROLLBACK_REASON: ${{ inputs.reason }}
         run: |
-          if [ -z "${{ inputs.to }}" ] || [ -z "${{ inputs.reason }}" ]; then
+          if [ -z "$ROLLBACK_TO" ] || [ -z "$ROLLBACK_REASON" ]; then
             echo "biztag-rollback には to (巻き戻し先の版) と reason (理由) の両方が必須です" >&2
             exit 1
           fi
-          pnpm biztag rollback -- --to="${{ inputs.to }}" --reason="${{ inputs.reason }}"
+          pnpm biztag rollback -- --to="$ROLLBACK_TO" --reason="$ROLLBACK_REASON"
       - name: 失敗したら Issue を立てる
         if: failure()
         uses: ./.github/actions/notify-failure

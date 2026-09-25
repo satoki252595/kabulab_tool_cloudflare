@@ -11,9 +11,12 @@ import { STOCK_CODE_REGEX } from "../../../../src/shared/jpx/stock-code.js";
 import { DOC_TYPE_CODES, docTypeLabelOf } from "./doc-type.js";
 import { buildJudgeInput, type DocMeta } from "./excerpt.js";
 import { bandOf, judgeCandidates, type Band, type BtThresholds } from "./judge.js";
-import { PREFILTER_SECTIONS, prefilter, type PrefilterSectionKey } from "./prefilter.js";
+import { TEXT_SECTIONS, type TextSectionKey } from "../services/edinet/text-sections.js";
+import { prefilter, type PrefilterSectionKey } from "./prefilter.js";
 import { VERSION_PATTERN, type Vocabulary } from "./vocabulary/schema.js";
 import type { JevClient } from "../../../../src/shared/jev/index.js";
+
+const TEXT_SECTION_KEYS = TEXT_SECTIONS.map((d) => d.key) as [TextSectionKey, ...TextSectionKey[]];
 
 const nonEmpty = () => z.string().check(z.minLength(1));
 /** 日付 (YYYY-MM-DD)。ゴールデンセットを作った日 (`createdAt`) の形式。 */
@@ -23,7 +26,8 @@ export const GoldenExpectSchema = z.strictObject({
   termId: nonEmpty(),
   label: z.boolean(),
   quote: nonEmpty(),
-  sectionKey: z.enum(PREFILTER_SECTIONS),
+  /** 引用 (ラベルの根拠) を取った有報の項目。判定の入力節に限らない (子会社の状況等も可) */
+  sectionKey: z.enum(TEXT_SECTION_KEYS),
   /** 運営の依頼文で「当てたい例」に挙がった組 (label は必ず true。loadGoldenSet が検査) */
   mustHit: z.optional(z.boolean()),
   /** 運営の依頼文で「外したい例」に挙がった組 (label は必ず false。loadGoldenSet が検査) */

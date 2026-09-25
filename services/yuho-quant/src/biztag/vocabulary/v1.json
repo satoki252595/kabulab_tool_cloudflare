@@ -875,8 +875,7 @@
         "有機ビルドアップ基板",
         "ABF基板",
         "フリップチップ用基板",
-        "ビルドアップ基板",
-        "ABF"
+        "ビルドアップ基板"
       ],
       "excludeKeywords": [
         "家電用プリント基板",
@@ -2116,8 +2115,8 @@
       "subfamily": "nuclear",
       "notionColumn": "upstream",
       "labelJa": "原子力機器・核燃料",
-      "definitionJa": "原子力発電所向けの主要機器や、金属ウラン・酸化ウランなど核燃料物質を成形加工(濃縮・再処理を含む)する事業を指す。次世代革新炉(SMR・高速炉・高温ガス炉・革新軽水炉等)向けの機器・技術開発を含む。発電した電気の小売販売や送配電網の運用単体は含めない。",
-      "definitionEn": "Manufacture of major equipment for nuclear power plants, and fabrication/processing (including enrichment and reprocessing) of nuclear fuel materials such as metallic/oxide uranium. Includes equipment and technology development for next-generation reactors (SMR, fast reactors, high-temperature gas reactors, innovative light-water reactors). Excludes electricity retail sales and standalone grid/transmission operation.",
+      "definitionJa": "原子力発電所向けの主要機器（原子炉圧力容器用の鍛鋼品など主要部材を含む）や、金属ウラン・酸化ウランなど核燃料物質を成形加工(濃縮・再処理を含む)する事業を指す。次世代革新炉(SMR・高速炉・高温ガス炉・革新軽水炉等)向けの機器・技術開発を含む。発電した電気の小売販売や送配電網の運用単体は含めない。",
+      "definitionEn": "Manufacture of major equipment for nuclear power plants (including major components such as reactor pressure vessel forgings), and fabrication/processing (including enrichment and reprocessing) of nuclear fuel materials such as metallic/oxide uranium. Includes equipment and technology development for next-generation reactors (SMR, fast reactors, high-temperature gas reactors, innovative light-water reactors). Excludes electricity retail sales and standalone grid/transmission operation.",
       "keywords": [
         "核燃料",
         "核燃料製造業",
@@ -3393,8 +3392,8 @@
       "subfamily": "nucleic_acid_drugs",
       "notionColumn": "downstream",
       "labelJa": "核酸医薬",
-      "definitionJa": "DNAやRNAを基本骨格とし、標的遺伝子・mRNAに作用して発現を抑制・修復する医薬品医療機器等法上の「医薬品」(アンチセンス核酸、siRNA、mRNA医薬品、アプタマー等)、および脂質ナノ粒子(LNP)等の薬物送達システム(DDS)による核酸送達技術の研究開発・製造事業。低分子医薬品やタンパク質(抗体)医薬品とは作用機序が異なるため区別する。ウイルスベクター等を用いて人の細胞へ導入して使用し、薬機法上「再生医療等製品」に分類される遺伝子治療用製品は含めない(該当する場合は再生医療・細胞医療に区分)。",
-      "definitionEn": "R&D and manufacture of nucleic-acid-based therapeutics regulated as ordinary \"drugs\" under Japan's Pharmaceuticals and Medical Devices Act (antisense oligonucleotides/ASO, siRNA, mRNA drugs, aptamers), and of nucleic-acid delivery technology such as lipid nanoparticle (LNP) drug delivery systems (DDS) — mechanistically distinct from small-molecule and protein/antibody drugs. Excludes gene-therapy products introduced into human cells via viral vectors etc. that are separately regulated as \"regenerative medicine products\" (tagged as Regenerative/Cell Medicine).",
+      "definitionJa": "DNAやRNAを基本骨格とし、標的遺伝子・mRNAに作用して発現を抑制・修復する医薬品医療機器等法上の「医薬品」(アンチセンス核酸、siRNA、mRNA医薬品、アプタマー等)、および脂質ナノ粒子(LNP)等の薬物送達システム(DDS)による核酸送達技術の研究開発・製造事業（核酸原薬の受託開発・製造（CDMO）を含む）。低分子医薬品やタンパク質(抗体)医薬品とは作用機序が異なるため区別する。ウイルスベクター等を用いて人の細胞へ導入して使用し、薬機法上「再生医療等製品」に分類される遺伝子治療用製品は含めない(該当する場合は再生医療・細胞医療に区分)。",
+      "definitionEn": "R&D, manufacture, or contract development and manufacturing (CDMO) of nucleic-acid-based therapeutics and oligonucleotide APIs regulated as ordinary \"drugs\" under Japan's Pharmaceuticals and Medical Devices Act (antisense oligonucleotides/ASO, siRNA, mRNA drugs, aptamers), and of nucleic-acid delivery technology such as lipid nanoparticle (LNP) drug delivery systems (DDS) — mechanistically distinct from small-molecule and protein/antibody drugs. Excludes gene-therapy products introduced into human cells via viral vectors etc. that are separately regulated as \"regenerative medicine products\" (tagged as Regenerative/Cell Medicine).",
       "keywords": [
         "核酸医薬",
         "核酸医薬品",
@@ -8368,6 +8367,82 @@
       ],
       "addedIn": "v1",
       "deprecated": false
+    },
+    {
+      "id": "B.SEMI.PACKAGE_MATERIAL",
+      "layer": "business",
+      "family": "SEMI",
+      "subfamily": "back_end_materials",
+      "notionColumn": "upstream",
+      "labelJa": "半導体パッケージ・基板材料",
+      "definitionJa": "半導体パッケージ・パッケージ基板の製造に使われる部素材(ビルドアップフィルム(ABF等の層間絶縁材料)、アンダーフィル、ダイアタッチ材、ボンディングワイヤ、はんだ・バンプ材料、コア材・銅張積層板等)を製造する事業。完成品としてのパッケージ基板(B.SEMI.PACKAGE_SUBSTRATE)、モールド封止材(B.SEMI.ENCAPSULANT)、リードフレーム(B.SEMI.LEAD_FRAME)は含めない。",
+      "definitionEn": "Manufacture of materials used to build semiconductor packages and package substrates: build-up insulating films (e.g. ABF and other interlayer insulation materials), underfill, die-attach materials, bonding wires, solder/bump materials, and substrate core/copper-clad laminate materials. Excludes the finished package substrate itself (B.SEMI.PACKAGE_SUBSTRATE), mold encapsulant (B.SEMI.ENCAPSULANT), and lead frames (B.SEMI.LEAD_FRAME).",
+      "keywords": [
+        "ABF",
+        "ビルドアップ層",
+        "層間絶縁膜",
+        "パッケージ材料",
+        "ボンディングワイヤ"
+      ],
+      "excludeKeywords": [
+        "ABF基板"
+      ],
+      "sources": [
+        {
+          "title": "経済安全保障推進法に基づく重要物資の安定的な供給の確保に向けた各特定重要物資に関するサプライチェーンの分析と取組内容",
+          "url": "https://www.cao.go.jp/keizai_anzen_hosho/suishinhou/supply_chain/doc/sc_gaiyou2.pdf",
+          "date": "2026-04",
+          "section": "半導体（サプライチェーン上の課題）後工程部素材図（p.12）",
+          "quote": "パッケージ基板 封止材"
+        },
+        {
+          "title": "半導体・デジタル産業戦略 検討会議（第16回）資料５ 基礎資料集",
+          "url": "https://www.meti.go.jp/policy/mono_info_service/joho/conference/semicon_digital/0016/handeji16-5.pdf",
+          "date": "2026-06-23",
+          "section": "後工程の動向（p.65）",
+          "quote": "加えて、こうした大型かつ高性能なパッケージ基板の需要が高まっており、その製造必要となる部素材も含めた生産"
+        }
+      ],
+      "addedIn": "v1",
+      "deprecated": false
+    },
+    {
+      "id": "B.DEF.DEFENSE_EQUIPMENT",
+      "layer": "business",
+      "family": "DEF",
+      "subfamily": "defense_equipment_general",
+      "notionColumn": "downstream",
+      "labelJa": "防衛装備品（防衛関連機器）",
+      "definitionJa": "自社が防衛省・自衛隊向けの防衛装備品(防衛関連機器)を自ら開発・製造・保守する事業。本文が「防衛関連機器」「防衛装備品」「防衛事業」等と一般的に言及するのみで、他のB.DEF語(小火器・装甲車両・弾薬・魚雷/機雷・防衛用無人機・艦艇等)が指す個別品目に該当しない場合に用いる。防衛関連企業向けに一般的な素材・部品を供給するだけの事業者や、防衛予算の動向を市場環境として言及するだけの記述は含めない。",
+      "definitionEn": "The company itself develops, manufactures, or maintains defense equipment (防衛関連機器・防衛装備品) for Japan's Ministry of Defense/Self-Defense Forces, used when the text refers generally to defense equipment/defense business without naming a more specific item already covered by another B.DEF term (small arms, armored vehicles, ammunition, torpedoes/mines, military UAVs, naval vessels, etc.). Excludes firms merely supplying general materials/parts to defense contractors, or that merely mention defense-budget trends as a market environment factor.",
+      "keywords": [
+        "防衛関連機器",
+        "防衛装備品",
+        "防衛装備",
+        "防衛関連製品",
+        "防衛事業",
+        "防衛・宇宙",
+        "防衛省向け"
+      ],
+      "excludeKeywords": [],
+      "sources": [
+        {
+          "title": "防衛省が調達する装備品等の開発及び生産のための基盤の強化に関する法律（令和五年法律第五十四号）",
+          "url": "https://laws.e-gov.go.jp/law/505AC0000000054",
+          "date": "2023-06-14",
+          "section": "第二条（定義）第一項",
+          "quote": "自衛隊が使用する装備品、船舶、航空機及び食糧その他の需品"
+        },
+        {
+          "title": "戦略17分野における「主要な製品・技術等」の官民投資ロードマップ",
+          "url": "https://www.cas.go.jp/jp/seisaku/nipponseichosenryaku/pdf/rm2026.pdf",
+          "date": "2026-07-21",
+          "section": "防衛産業③デュアルユース技術（p.91）",
+          "quote": "された生産・技術基盤を防衛装備品の質と量"
+        }
+      ],
+      "addedIn": "v1",
+      "deprecated": false
     }
   ],
   "themes": [
@@ -8408,7 +8483,8 @@
         "B.SEMI.POWER_SEMICONDUCTOR",
         "B.SEMI.WIDE_BANDGAP_POWER",
         "B.SEMI.AI_ACCELERATOR",
-        "B.ICT.SEMICONDUCTOR_DESIGN_EDA_IP"
+        "B.ICT.SEMICONDUCTOR_DESIGN_EDA_IP",
+        "B.SEMI.PACKAGE_MATERIAL"
       ],
       "sources": [
         {
@@ -8494,7 +8570,8 @@
         "B.SEMI.ENCAPSULANT",
         "B.SEMI.GLASS_CORE_SUBSTRATE",
         "B.SEMI.LEAD_FRAME",
-        "B.SEMI.CHIPLET_PACKAGING"
+        "B.SEMI.CHIPLET_PACKAGING",
+        "B.SEMI.PACKAGE_MATERIAL"
       ],
       "sources": [
         {
@@ -8774,7 +8851,8 @@
         "B.DEF.NAVAL_ORDNANCE",
         "B.DEF.MILITARY_UAV",
         "B.DEF.NAVAL_VESSEL",
-        "B.DEF.DUAL_USE_TECH"
+        "B.DEF.DUAL_USE_TECH",
+        "B.DEF.DEFENSE_EQUIPMENT"
       ],
       "sources": [
         {

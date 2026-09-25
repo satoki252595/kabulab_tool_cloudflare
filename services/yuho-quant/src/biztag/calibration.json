@@ -1,0 +1,22 @@
+{
+  "model": "jev-1.13.0",
+  "yesMin": 0.5,
+  "noMax": 0.25,
+  "calibratedAt": "2026-09-25",
+  "basis": {
+    "goldenSet": "services/yuho-quant/src/biztag/golden/v1.json (87社・858組・実在の有報の原文で二者独立ラベル+第三者裁定)",
+    "vocabulary": "v1",
+    "command": "pnpm biztag golden --yes-min=0.6 --no-max=0.3 --model=jev-1.13.0 --vocab-file=services/yuho-quant/src/biztag/vocabulary/v1.json (スイープ表から選定)",
+    "atChosenThresholds": {
+      "precisionYes": 0.962,
+      "recallYes": 0.760,
+      "mustHitRecall": 0.905,
+      "mustNotViolations": 0,
+      "filterMissRate": 0,
+      "yes": 286,
+      "uncertain": 74,
+      "no": 497
+    },
+    "why": "「はい」の精度 0.9 以上 (依頼の目標) を余裕を持って満たす中で再現率が最大の yesMin=0.50。noMax=0.25 は、いいえに落ちる正解を約7%に抑えつつ要確認を 74 件に収める点。"
+  }
+}

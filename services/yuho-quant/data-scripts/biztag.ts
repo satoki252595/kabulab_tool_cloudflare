@@ -10,7 +10,7 @@
  * サブコマンド: run / gate / golden / rollback / packet / stats。
  */
 import "dotenv/config";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import {
   createLedgerEntry,
@@ -33,6 +33,7 @@ import { rollback } from "../src/biztag/rollback.js";
 import { type BiztagSourceDb } from "../src/biztag/source.js";
 import { verifySources } from "../src/biztag/sources-verify.js";
 import { loadCalibration } from "../src/biztag/thresholds.js";
+import { parseVocabulary } from "../src/biztag/vocabulary/load.js";
 import { TEXT_SECTIONS } from "../src/services/edinet/text-sections.js";
 import * as yuhoSchema from "../src/db/schema.js";
 
@@ -196,7 +197,13 @@ async function goldenCommand(): Promise<void> {
   }
 
   const goldenSet = loadGoldenSet();
-  const { vocab } = await resolveActiveVocabulary(todayJst());
+  // --vocab-file= を渡すと台帳を読まずにそのファイルの単語帳で測る (台帳へ v1 を投入する
+  // 前の最初の較正や、提案前の試算で使う。台帳には何も書かない)。無ければ台帳の有効な版。
+  const vocabFile = arg("vocab-file");
+  const vocab =
+    vocabFile !== undefined
+      ? parseVocabulary(JSON.parse(readFileSync(vocabFile, "utf-8")))
+      : (await resolveActiveVocabulary(todayJst())).vocab;
   const jevClient = createJevClient({ apiKey: jevEnv.TYPESAFE_API_KEY(), model });
   const db = createD1HttpDb(yuhoSchema) as unknown as BiztagSourceDb;
   const texts = await fetchGoldenTexts(db, goldenSet.items);

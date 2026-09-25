@@ -468,11 +468,12 @@ describe("stock-supplement (Notion 通信)", () => {
         },
       ]);
       const { loadStockMasterIndex } = await load();
-      const map = await loadStockMasterIndex();
-      expect(map.get("7203")).toBe("p-7203");
+      const { index, duplicates } = await loadStockMasterIndex();
+      expect(index.get("7203")).toBe("p-7203");
+      expect(duplicates.size).toBe(0);
     });
 
-    it("loadStockMasterIndex: 重複コードは throw する", async () => {
+    it("loadStockMasterIndex: 重複コードはどれも選ばず duplicates に分ける", async () => {
       route("GET", `/v1/databases/${MASTER_DB}`, [
         { id: MASTER_DB, properties: { 銘柄コード: { id: "code-prop-id", type: "title" } } },
       ]);
@@ -481,13 +482,17 @@ describe("stock-supplement (Notion 通信)", () => {
           results: [
             { id: "p-1", properties: { 銘柄コード: { title: [{ plain_text: "7203" }] } } },
             { id: "p-2", properties: { 銘柄コード: { title: [{ plain_text: "7203" }] } } },
+            { id: "p-3", properties: { 銘柄コード: { title: [{ plain_text: "6758" }] } } },
           ],
           has_more: false,
           next_cursor: null,
         },
       ]);
       const { loadStockMasterIndex } = await load();
-      await expect(loadStockMasterIndex()).rejects.toThrow("7203");
+      const { index, duplicates } = await loadStockMasterIndex();
+      expect(index.has("7203")).toBe(false);
+      expect(duplicates.get("7203")).toEqual(["p-1", "p-2"]);
+      expect(index.get("6758")).toBe("p-3");
     });
   });
 

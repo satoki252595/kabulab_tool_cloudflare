@@ -46,17 +46,22 @@ export function questionIdFor(termId: string): string {
  * しきい値を測り直すこと (calibration.json)。
  */
 export function buildQuestion(term: BusinessTerm): JevNoulQuestion {
+  // 「他社製品の売買は数えない」を足した理由 (2026-09-25 ゴールデンセット予備測定):
+  // 総合商社が「建設機械」「工作機械」等の製造の語で「はい」になる誤判定が多かった。
   return {
     instructions:
       "Answer only from the excerpt of this company's annual securities report. " +
-      `Does this company itself (including its consolidated subsidiaries) currently operate ${term.definitionEn} ` +
-      "as a business segment, product line, commercially sold product or service, or explicitly stated business? " +
-      "Answer false if it is only its customers' industry or a demand driver, a supplier, partner or lender, " +
-      "research and development without current sales, a future plan, or an incidental mention.",
+      "Does this company itself (including its consolidated subsidiaries) currently conduct the business defined below, " +
+      "as a business segment, product line, or explicitly stated business? " +
+      `Definition: ${term.definitionEn} ` +
+      "Answer false if the excerpt mentions it only as its customers' industry or a demand driver, a supplier, partner or lender, " +
+      "research and development without current sales, a future plan, or an incidental mention. " +
+      "When the definition is about making a product, trading or distributing products made by other companies does not count.",
     criteria: {
-      true: "The excerpt states that the company itself currently makes, sells or provides this.",
+      true: "The excerpt states that the company itself currently conducts this business as defined.",
       false:
-        "The excerpt mentions this only as a customer's industry, demand driver, supplier, partner, lender, R&D without sales, plan, or in passing.",
+        "The excerpt mentions this only as a customer's industry, demand driver, supplier, partner, lender, R&D without sales, plan, " +
+        "trading of other companies' products (for a manufacturing definition), or in passing.",
     },
   };
 }

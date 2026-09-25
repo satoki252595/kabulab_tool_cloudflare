@@ -75,6 +75,7 @@ export type {
   SupplementSchemaSpec,
   SupplementRow,
   SupplementRowInput,
+  StockMasterIndex,
   EvidenceItem,
   EvidenceBlockInput,
 } from "./stock-supplement.js";
