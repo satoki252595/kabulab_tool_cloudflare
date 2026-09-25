@@ -35,6 +35,7 @@ import {
   type SupplementSchemaSpec,
 } from "../../../../src/shared/notion-archive/index.js";
 import { createJevClient, estimateCostUsd, jevEnv, type JevClient } from "../../../../src/shared/jev/index.js";
+import { createMemoizedJevClient } from "../../../../src/shared/jev/memo.js";
 import * as yuhoSchema from "../db/schema.js";
 import { resolveActiveVocabulary } from "./active-vocab.js";
 import { todayJst } from "./date-jst.js";
@@ -194,10 +195,14 @@ export function makeEvaluateGoldenForVocab(
   jevClient: JevClient,
   thresholds: BtThresholds
 ): (vocab: Vocabulary) => Promise<GoldenMetrics> {
+  // 関門は今の版と提案の版をこの関数で続けて測る。jev はしきい値付近で回答が
+  // 揺れるので、入力 (抜粋・質問) が同じ問いは 1 回の関門の中で同じ回答を使い、
+  // 比較の差を提案で入力が変わった項目だけに限る (memo.ts 参照)。
+  const memoClient = createMemoizedJevClient(jevClient);
   return async (vocab: Vocabulary): Promise<GoldenMetrics> => {
     const goldenSet = loadGoldenSet();
     const texts = await fetchGoldenTexts(db, goldenSet.items);
-    const evaluation = await evaluateGolden(goldenSet, vocab, texts, jevClient, thresholds);
+    const evaluation = await evaluateGolden(goldenSet, vocab, texts, memoClient, thresholds);
     return {
       precisionYes: evaluation.precisionYes,
       recallYes: evaluation.recallYes,
