@@ -28,7 +28,7 @@
 
 ```
 EDINET ──(既存) Worker /yuho-quant/admin/catchup──> D1 yuho_documents(索引)
-                                                   └> Notion バックアップ「有報テキスト」(本文)
+                                                   └> Notion「一次データ保管」の単一DB「有報テキスト」(本文)
                      │ 平日 catchup.yml の次のステップ (J1: 新 workflow を足さない)
                      ▼
      pnpm biztag run  (GitHub Actions / Node)

@@ -13,7 +13,7 @@
  *   - ネットワーク等の一過性失敗は throw して上位でリトライ判断 (握りつぶさない)
  *   - 金額欠損は NULL のまま (0 で埋めない)。filer_name/period_end が無い
  *     有報は異常データとして throw
- *   - ルール6: API/ファイル取得物は Notion「バックアップ」配下の一次データ
+ *   - ルール6: API/ファイル取得物は Notion「一次データ保管」配下の一次データ
  *     DB に冪等記録し、物理ファイルは実体アップロードする
  */
 import { eq } from "drizzle-orm";
@@ -113,7 +113,7 @@ const MAX_FACT_ROWS_PER_STMT = 8;
 /**
  * @param force          true なら既存 docId でも再取得・再構造化して上書き
  * @param archiveToNotion true なら有報の物理ファイル(XBRL+CSV ZIP)とメタを
- *        Notion「バックアップ」配下の一次データ DB に冪等記録 (CLAUDE.md
+ *        Notion「一次データ保管」配下の一次データ DB に冪等記録 (CLAUDE.md
  *        ルール6)。Notion 記録は docId 一意で冪等・再開可能。DB 取込済でも
  *        Notion 未記録なら本関数はファイルを取得して Notion へ記録する。
  */

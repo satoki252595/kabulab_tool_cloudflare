@@ -41,8 +41,7 @@ describe("notion-archive index-page", () => {
     calls = [];
     routes = new Map();
     process.env.NOTION_TOKEN = "dummy-token";
-    process.env.NOTION_BACKUP_PAGE_ID = BACKUP;
-    process.env.NOTION_TRASH_PAGE_ID = "c".repeat(32);
+    process.env.NOTION_ARCHIVE_PAGE_ID = BACKUP;
     delete process.env.NOTION_INDEX_PAGE_ID;
     let t = 1_000_000;
     Date.now = (() => (t += 10_000)) as typeof Date.now;

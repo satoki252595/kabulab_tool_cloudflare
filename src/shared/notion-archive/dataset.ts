@@ -12,7 +12,7 @@
  * **二次データ**。Notion 通信窓口を分散させない (= レート制御一元化) ため
  * 本モジュールも notion-archive 配下に置き、必ず rate-limited な
  * `notionRequest` を通す (ルール6: api.notion.com を直叩きしない)。DB は
- * 「バックアップ」(`NOTION_BACKUP_PAGE_ID`) 配下の子 DB として自動生成
+ * 「一次データ保管」(`NOTION_ARCHIVE_PAGE_ID`) 配下の子 DB として自動生成
  * (一次データ DB の命名規約 `一次データ｜`/`ごみ｜` とは別 prefix で衝突なし)。
  *
  * 注意 (ルール6 境界の明示的逸脱): 「1 IR = 1 Notion 行」を全銘柄で行うのは
@@ -263,7 +263,7 @@ async function ensureParentDb(
   const cached = parentDbCache.get(service);
   if (cached) return cached;
 
-  const backup = notionEnv.NOTION_BACKUP_PAGE_ID();
+  const backup = notionEnv.NOTION_ARCHIVE_PAGE_ID();
   const title = parentTitle(service);
   const existing = await findBackupChildByTitle({
     parentPageId: backup,

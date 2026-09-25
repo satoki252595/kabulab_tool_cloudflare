@@ -43,7 +43,7 @@ describe("notion-archive map", () => {
   it("銘柄別・ごみ・運用メモの節がある", () => {
     const titles = ARCHIVE_SECTIONS.flatMap((s) => s.bullets.map((b) => b.title));
     expect(titles).toContain("銘柄一覧｜ir-catalog (DB)");
-    expect(titles).toContain("<証券コード> (ページ)");
+    expect(titles).toContain("有報テキスト (単一 DB)");
     expect(titles).toContain("ごみ｜<service> (DB)");
   });
 

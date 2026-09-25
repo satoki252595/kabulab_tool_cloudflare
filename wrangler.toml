@@ -41,3 +41,10 @@ NOTION_STOCK_INFO_PAGE_ID = "205d74ff84cd809e92b4dd1adc5cf186"
 VOCAB_REVIEW_TOKEN_SHA256 = "387c3bb94f45ea1d28f48843260965cc70e238926c77945f733ea7bcad526fe5"
 # 「事業タグ単語帳（台帳）」DB の ID (2026-09-25 初回実行で作成)。Worker は Search を使わずこれを読む。
 NOTION_BIZTAG_LEDGER_DB_ID = "3e6d74ff84cd818a91fbe8000056747c"
+# 一次データ Notion アーカイブ (ルール6)。「一次データ保管」ページ (「株式情報」配下。
+# 2026-09-25 に旧「バックアップ」ページのトラッシュ事件を機に作成) と、
+# 全銘柄共通の単一「有報テキスト」DB。Worker の /yuho-quant/admin/catchup 取込
+# ルートが recordPrimaryData()/backupDocTextToNotion() 経由で使う。ID自体は秘密
+# ではないため [vars] に置く (Workers Builds のデプロイで自動反映される)。
+NOTION_ARCHIVE_PAGE_ID = "3e6d74ff84cd81538392df63d269eb93"
+NOTION_YUHO_TEXT_DB_ID = "3e6d74ff84cd813b92a9c1443e09df26"

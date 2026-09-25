@@ -230,11 +230,15 @@ Cloudflare D1 (kabulab-cf, SQLite)
 | 関数 | 役割 |
 |---|---|
 | `recordPrimaryData()` | 冪等 key (EDINET docId 等) 付きでメタ + **物理ファイル実体** をアップロード |
-| `moveToTrash()` | input 変更で不要化した元データを `Obsoleted At/Reason/Origin` 付きで「ごみ」へ退避 |
+| `moveToTrash()` | input 変更で不要化した元データを `Obsoleted At/Reason/Origin` 付きで「ごみ｜<service>」へ退避 |
 | `isArchived()` | 記録済み判定 (バックフィルの再開に使う) |
 
-- 記録先は「バックアップ」ページ配下の `一次データ｜<service>` DB (自動生成。
-  区切りは全角縦棒 U+FF5C)。退避先は「ごみ」配下の `ごみ｜<service>`。
+- 記録先は「一次データ保管」ページ配下の `一次データ｜<service>` DB (自動生成。
+  区切りは全角縦棒 U+FF5C)。退避先も同ページ配下の `ごみ｜<service>`
+  (2026-09-25 に「バックアップ」「ごみ」の2ページ運用から統合)。
+- 銘柄別データ (有報テキスト等) は全銘柄共通の**単一 DB**に持つ。銘柄コード
+  毎の子ページ/子DBは作らない (2026-09-25: per-stock 子ページが数千件
+  累積して旧「バックアップ」ページが開けなくなった教訓)。
 - `client.ts` が全通信をプロセス内直列化 (~3req/s)、429 は Retry-After 尊重、
   5xx は指数バックオフ。**他モジュールから `api.notion.com` を直叩きしない**。
 - 高頻度ポーリング由来の派生データ (per-stock 日次 JSON 等) はミラーしない —

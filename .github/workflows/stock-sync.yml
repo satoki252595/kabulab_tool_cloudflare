@@ -10,7 +10,7 @@
 #   CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID / D1_DATABASE_ID … D1 REST 書込
 #   YAHOO_PROXY_BASE … デプロイ済み Worker の URL (例 https://kabulab-cf.<sub>.workers.dev)
 #   CRON_SECRET      … Worker secret と同値 (取込プロキシ認証)
-#   NOTION_TOKEN / NOTION_BACKUP_PAGE_ID / NOTION_TRASH_PAGE_ID … 月次 universe の
+#   NOTION_TOKEN / NOTION_ARCHIVE_PAGE_ID / NOTION_YUHO_TEXT_DB_ID … 月次 universe の
 #     JPX XLS 一次データ Notion アーカイブ(ルール6)用
 #
 # 日次 ~3,700 銘柄は ~40-50 分/回 (public repo のため Actions 分課金は無し)。
@@ -53,8 +53,8 @@ jobs:
       YAHOO_PROXY_BASE: ${{ secrets.YAHOO_PROXY_BASE }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-      NOTION_BACKUP_PAGE_ID: ${{ secrets.NOTION_BACKUP_PAGE_ID }}
-      NOTION_TRASH_PAGE_ID: ${{ secrets.NOTION_TRASH_PAGE_ID }}
+      NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
+      NOTION_YUHO_TEXT_DB_ID: ${{ secrets.NOTION_YUHO_TEXT_DB_ID }}
     steps:
       - uses: actions/checkout@v4
 

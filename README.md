@@ -227,8 +227,8 @@ Secret が正のソース。
 CRON_SECRET=your-cron-secret-here                                      # 取込ルート/cron 認証
 EDINET_API_KEY=your-edinet-subscription-key-here                       # 005 yuho-quant
 NOTION_TOKEN=ntn_xxx                                                   # 一次データ Notion アーカイブ (ルール6)
-NOTION_BACKUP_PAGE_ID=<notion-backup-page-id>                          # 「バックアップ」ページ ID
-NOTION_TRASH_PAGE_ID=<notion-trash-page-id>                            # 「ごみ」ページ ID
+NOTION_ARCHIVE_PAGE_ID=<notion-archive-page-id>                        # 「一次データ保管」ページ ID (一次データ/銘柄別/ごみ 全部)
+NOTION_YUHO_TEXT_DB_ID=<notion-yuho-text-db-id>                        # 有報テキスト (単一DB) ID
 R2_ACCOUNT_ID=<cloudflare-account-id>                                  # 007 VWAP の R2 書込 (S3互換)
 R2_ACCESS_KEY_ID=<r2-access-key-id>
 R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
@@ -304,12 +304,15 @@ pnpm yutai:summary:import --tasks <タスク> --results <結果> --apply        
 
 外部 API / スクレイピングで取得した一次データ (EDINET 有報 ZIP、JPX 上場銘柄 XLS、優待スクレイプの
 確定 JSONL 等) は、構造化保存とは別に **[`src/shared/notion-archive/`](./src/shared/notion-archive/)**
-経由で Notion「バックアップ」ページ配下へ物理ファイルごと冪等記録する。
+経由で Notion「一次データ保管」ページ配下へ物理ファイルごと冪等記録する。
 
 - 唯一の窓口は `recordPrimaryData()` / `moveToTrash()` / `isArchived()`。**`api.notion.com` を直接
   叩かない** — `client.ts` が ~3req/s 直列化・429/5xx リトライを一元管理。
-- ページ配下に `一次データ｜<service>` / `ごみ｜<service>` のサービス別 DB を自動生成 (区切りは全角縦棒 U+FF5C)。
-- 環境変数 `NOTION_TOKEN` / `NOTION_BACKUP_PAGE_ID` / `NOTION_TRASH_PAGE_ID` (上記「環境変数」参照)。
+- ページ配下に `一次データ｜<service>` / `銘柄一覧｜<service>` / `ごみ｜<service>` のサービス別 DB を
+  自動生成 (区切りは全角縦棒 U+FF5C)。**銘柄別の子ページ/子DBを大量に作らない**
+  (2026-09-25 に per-stock 子ページが数千件累積して旧「バックアップ」ページが開けなくなった教訓。
+  有報テキストは全銘柄共通の単一 DB — `stock-text.ts`)。
+- 環境変数 `NOTION_TOKEN` / `NOTION_ARCHIVE_PAGE_ID` / `NOTION_YUHO_TEXT_DB_ID` (上記「環境変数」参照)。
 
 ### よくある障害と対処
 
