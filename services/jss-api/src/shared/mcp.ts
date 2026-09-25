@@ -84,7 +84,7 @@ export const TOOLS = [
     name: "jp_indicators_latest",
     description:
       "日本株の株価テクニカルの最新断面を銘柄コードで返す（旧 Notion『②株価テクニカル』の代替）。" +
-      "終値・前日比・移動平均(5/20/25/60/75)・RSI(14)・MACD・ATR(14)・出来高比率・20日レンジを含む。" +
+      "終値・出来高・前日比・移動平均(5/20/25/60/75)・RSI(14)・MACD・ATR(14)・出来高比率・20日レンジを含む。" +
       "codes は最大 " + MAX_BATCH_CODES + " 件。見つからない code は data.not_found に列挙する" +
       "（未知コードか未計算かは区別しない。欠損値を埋めて返すことはしない）。" +
       "Yahoo 由来＝personal-only のため私的利用限定。",

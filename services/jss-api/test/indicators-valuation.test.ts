@@ -22,6 +22,7 @@ const INDICATOR_ROWS: Record<string, unknown>[] = [
     code: "7203",
     name: "トヨタ自動車",
     latest_close: 3000,
+    latest_volume: 12_000_000,
     latest_date: "2026-09-25",
     pct_change_1d: 1.2,
     sma_5: 2950,

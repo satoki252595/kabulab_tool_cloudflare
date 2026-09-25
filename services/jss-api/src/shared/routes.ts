@@ -85,7 +85,7 @@ export async function fetchIndicatorsByCodes(
   codes: string[],
 ): Promise<Record<string, unknown>[]> {
   const { results } = await db.prepare(
-    "SELECT s.code, s.name, i.latest_close, i.latest_date, i.pct_change_1d," +
+    "SELECT s.code, s.name, i.latest_close, i.latest_volume, i.latest_date, i.pct_change_1d," +
       " i.sma_5, i.sma_20, i.sma_25, i.sma_60, i.sma_75," +
       " i.rsi_14, i.macd, i.macd_signal, i.macd_hist," +
       " i.atr_14, i.atr_pct, i.volume_ratio, i.avg_turnover_20d," +
