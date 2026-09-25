@@ -11,7 +11,15 @@
  */
 import { envelope } from "./envelope";
 import { fetchAdjustedOhlcvCached } from "./ohlcv-cache";
-import { isValidCode, parseLimit } from "./routes";
+import {
+  MAX_BATCH_CODES,
+  fetchIndicatorsByCodes,
+  fetchLatestJobRuns,
+  fetchValuationByCodes,
+  isValidCode,
+  parseCodes,
+  parseLimit,
+} from "./routes";
 import type { PrivateEnv } from "./types";
 
 interface JsonRpcRequest {
@@ -71,6 +79,62 @@ export const TOOLS = [
     name: "jp_dataset_freshness",
     description: "各データセットの最新基準日・件数・格納先を返す。取り込みの鮮度確認用。",
     inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "jp_indicators_latest",
+    description:
+      "日本株の株価テクニカルの最新断面を銘柄コードで返す（旧 Notion『②株価テクニカル』の代替）。" +
+      "終値・前日比・移動平均(5/20/25/60/75)・RSI(14)・MACD・ATR(14)・出来高比率・20日レンジを含む。" +
+      "codes は最大 " + MAX_BATCH_CODES + " 件。見つからない code は data.not_found に列挙する" +
+      "（未知コードか未計算かは区別しない。欠損値を埋めて返すことはしない）。" +
+      "Yahoo 由来＝personal-only のため私的利用限定。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        codes: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: MAX_BATCH_CODES,
+          description: "4桁の銘柄コードの配列",
+        },
+      },
+      required: ["codes"],
+    },
+  },
+  {
+    name: "jp_valuation",
+    description:
+      "日本株のバリュエーションの最新断面を銘柄コードで返す（旧 Notion『②株価テクニカル』の" +
+      "バリュエーション欄の代替）。株価・PER・PBR・配当利回り・EPS・BPS・ROE・ROA・時価総額と、" +
+      "その基準日(data_date)・取得時刻(fetched_at)を含む。codes は最大 " + MAX_BATCH_CODES + " 件。" +
+      "見つからない code は data.not_found に列挙する。Yahoo 由来＝personal-only のため私的利用限定。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        codes: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: MAX_BATCH_CODES,
+          description: "4桁の銘柄コードの配列",
+        },
+      },
+      required: ["codes"],
+    },
+  },
+  {
+    name: "jp_job_runs",
+    description:
+      "収集ジョブの最新実行状況をジョブ名ごとに1件返す（旧 Notion『⑦収集ジョブログ』の代替。" +
+      "鮮度ガード用途）。job_name を省略すると全ジョブの最新1件ずつを返す。" +
+      "`/v1/meta/jobs` は直近N件の履歴列挙だが、こちらは「各ジョブの最新1件」に畳んで返す。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        job_name: { type: "string" },
+      },
+    },
   },
   // `jp_xbrl_elements` (jss_xbrl_elements) は 2026-09-25 に削除した。
   // jss_xbrl_documents / jss_xbrl_elements は本番 0 行・writer 不在のまま
@@ -159,6 +223,31 @@ async function callTool(
       });
       if (!result) throw new Error(`見つからない: ${code}`);
       return envelope(result, { sources: ["Yahoo"], licenses: ["personal-only"] });
+    }
+    case "jp_indicators_latest": {
+      const codes = parseCodes(args.codes);
+      const rows = await fetchIndicatorsByCodes(env.DB, codes);
+      const found = new Set(rows.map((r) => String(r.code)));
+      const notFound = codes.filter((c) => !found.has(c));
+      return envelope(
+        { results: rows, not_found: notFound },
+        { sources: ["Yahoo"], licenses: ["personal-only"] },
+      );
+    }
+    case "jp_valuation": {
+      const codes = parseCodes(args.codes);
+      const rows = await fetchValuationByCodes(env.DB, codes);
+      const found = new Set(rows.map((r) => String(r.code)));
+      const notFound = codes.filter((c) => !found.has(c));
+      return envelope(
+        { results: rows, not_found: notFound },
+        { sources: ["Yahoo"], licenses: ["personal-only"] },
+      );
+    }
+    case "jp_job_runs": {
+      const jobName = args.job_name ? String(args.job_name) : null;
+      const rows = await fetchLatestJobRuns(env.DB, jobName);
+      return envelope(rows);
     }
     case "jp_raw_file": {
       const sha = String(args.sha256 ?? "");

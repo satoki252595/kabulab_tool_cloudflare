@@ -55,5 +55,17 @@ kabuMCP の `edinet_*` とは分けてある（クライアントに両方登録
 | `jp_supply_latest` | 需給の最新断面 |
 | `jp_supply_series` | 1銘柄の需給時系列 |
 | `jp_ohlcv_range` | 日足 OHLCV（全系列調整済み。REST と束ねた edge キャッシュ、TTL 6h） |
+| `jp_indicators_latest` | 株価テクニカルの最新断面（複数銘柄可、旧 Notion「②株価テクニカル」の代替） |
+| `jp_valuation` | バリュエーションの最新断面（複数銘柄可、旧 Notion「②株価テクニカル」バリュエーション欄の代替） |
 | `jp_dataset_freshness` | 各データセットの鮮度 |
+| `jp_job_runs` | 収集ジョブの最新実行状況（ジョブごとに1件、旧 Notion「⑦収集ジョブログ」の代替） |
 | `jp_raw_file` | ⑤原本のメタを SHA256 で引く |
+
+`jp_indicators_latest` / `jp_valuation` は `codes` (配列、最大50件) で複数銘柄を
+まとめて引ける。見つからない銘柄コードは結果を捏造せず `data.not_found` に列挙する
+(ルール2: 欠損は欠損のまま返す)。REST 側は1銘柄ずつ `GET /v1/indicators/:code` /
+`GET /v1/valuation/:code`（いずれも内部面のみ、Yahoo 由来＝personal-only）。
+
+`jp_job_runs` は `/v1/meta/jobs`（直近N件の履歴列挙）と違い、ジョブ名ごとに
+最新1件へ畳んで返す。頻度の高いジョブに埋もれて低頻度ジョブの最新行が見えなくなる
+問題を避けるため、鮮度確認 (freshness guard) にはこちらを使う。
