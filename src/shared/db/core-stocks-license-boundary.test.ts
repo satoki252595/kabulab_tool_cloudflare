@@ -131,11 +131,15 @@ const PUBLIC_SURFACE = [
   "services/ir-catalog/src/services/query.ts",
   "services/yuho-quant/src/services/order-query.ts",
   "services/yuho-quant/src/services/overseas-query.ts",
-  // 以下 2 件は Worker の中で `core_stocks` を引くが、レスポンスを直接
+  // 以下 3 件は Worker の中で `core_stocks` を引くが、レスポンスを直接
   // 組み立てるのではなく取込 / キャッシュ充填の層。除外する理由を書き分けるより
   // 検査を受けさせた方が安い (現状どれも識別子を参照していない)。
   "services/financial-math/src/services/price-cache.ts",
   "services/ir-catalog/src/services/ingest.ts",
+  // 事業タグ (biztag) の読み取り専用データソース。select する列は
+  // id/code/name/sector33 の 4 つだけ (services/yuho-quant/src/biztag/source.ts
+  // 冒頭コメント参照)。personal-only 列は識別子としても一度も出てこない。
+  "services/yuho-quant/src/biztag/source.ts",
 ];
 
 // 明示リスト (PUBLIC_SURFACE) が本当に公開面を網羅しているかの下支え。

@@ -1,17 +1,25 @@
-# 005 EDINET(有報) + 006 TDnet(適時開示) の日次キャッチアップを GitHub Actions で実行。
+# 005 EDINET(有報) + 006 TDnet(適時開示) + 005 biztag(事業タグ) の日次キャッチアップを
+# GitHub Actions で実行。
 #
 # - TDnet(006): PDF センチメントが kuromoji(Node 専用)依存のため Node で実行し
 #   D1 へ HTTP API で書く。取込元 TDnet はホストが異なり 429 されないのでプロキシ不要。
 # - EDINET(005): Worker の認証ルート POST /yuho-quant/admin/catchup を叩くだけの薄い
 #   トリガ(EDINET fetch + Notion アーカイブ + D1 書込は Worker 側が時間予算内で実行)。
+# - biztag(005): EDINET 取込の**次**に実行する Node CLI。銘柄マスタ（補足）の
+#   同期・事業タグ判定・単語帳の見直し関門を行う(docs/005-yuho-quant-business-tags.md §7)。
+#   D1 は読むだけ・書込は Notion のみ。
 #
-# どちらも時間予算付きで軽量(~数分)。default ブランチ(main)から発火。
+# どちらも時間予算付きで軽量(~数分。biztag は budget-min=20 で打ち切り、続きは翌日の
+# 差分処理で再開)。default ブランチ(main)から発火。
 #
 # 必要な GitHub Secrets:
 #   CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID / D1_DATABASE_ID … TDnet の D1 REST 書込
 #   NOTION_TOKEN / NOTION_BACKUP_PAGE_ID / NOTION_TRASH_PAGE_ID  … 一次データ Notion アーカイブ(ルール6)
 #   WORKER_BASE_URL … デプロイ済み Worker の URL(EDINET トリガが叩く)
 #   CRON_SECRET     … Worker 認証ルートの Bearer
+#   TYPESAFE_API_KEY … biztag の事業タグ判定(jev / TypeSafe System One)
+#   NOTION_STOCK_INFO_PAGE_ID / NOTION_DB_STOCK_MASTER
+#     / NOTION_STOCK_SUPPLEMENT_DB_ID / NOTION_BIZTAG_LEDGER_DB_ID … biztag の Notion 先
 name: catchup
 
 on:
@@ -27,6 +35,7 @@ on:
           - all
           - tdnet
           - edinet
+          - biztag
 
 concurrency:
   group: catchup
@@ -39,7 +48,7 @@ permissions:
 jobs:
   catchup:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -74,6 +83,7 @@ jobs:
           (github.event_name == 'workflow_dispatch' &&
             (github.event.inputs.target == 'edinet' || github.event.inputs.target == 'all'))
         run: pnpm ingest:yuho-edinet
+
       # 定期ジョブの失敗に気づく唯一の経路。これまで 14 workflow に
       # `if: failure()` も webhook も 0 行で、JPX の 404 で母集団同期が
       # 1 ヶ月止まっていたことに誰も気づかなかった。
@@ -85,3 +95,79 @@ jobs:
         with:
           title: "[ジョブ失敗] ${{ github.workflow }}"
           summary: "${{ github.workflow }} が失敗しました。"
+
+  # 005 biztag 事業タグ (EDINET 取込の次に実行。D1 は読むだけ・書込は Notion のみ)。
+  # 単語帳の見直し関門・期限切れ検査もここで行う (docs/005-yuho-quant-business-tags.md §7)。
+  #
+  # `catchup` ジョブと分けているのは、Notion「銘柄マスタ（補足）」
+  # 「事業タグ単語帳（台帳）」を read-check-write で更新する処理だけを
+  # `backfill.yml` の biztag/biztag-golden/biztag-rollback ジョブと同じ
+  # `biztag-notion` concurrency グループで直列化するため
+  # (job 単位の concurrency はワークフローをまたいで効く)。同時実行だと
+  # 「有効な版がちょうど1件」等の check-then-act 前提が壊れ、二重作成・
+  # 台帳不整合を起こす (この分割の前は catchup.yml と backfill.yml の
+  # biztag 系ジョブが何の制約も無く同時に走りえた)。
+  biztag:
+    needs: catchup
+    # 対象外の dispatch (target=tdnet/edinet 単体) では checkout/install すら
+    # 走らせない (ステップ側の if だけだと、このジョブ自体は毎回 checkout・
+    # pnpm install するだけの無駄な実行になる)。`needs:` に明示 if を足すと
+    # 既定の `success()` 判定が上書きされるため、ここで明示する。
+    # catchup が失敗しても (TDnet 等の無関係な失敗でも) 取消でなければ走らせる:
+    # 事業タグは D1 に既にある有報を差分で処理するだけで、その日の取込の成否に
+    # 依存しない (catchup の失敗は catchup 側の Issue で別に気付ける)。
+    if: >-
+      always() && needs.catchup.result != 'cancelled' &&
+      (github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' &&
+          (github.event.inputs.target == 'biztag' || github.event.inputs.target == 'all')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: biztag-notion
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_BACKUP_PAGE_ID: ${{ secrets.NOTION_BACKUP_PAGE_ID }}
+      NOTION_TRASH_PAGE_ID: ${{ secrets.NOTION_TRASH_PAGE_ID }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      NOTION_STOCK_INFO_PAGE_ID: ${{ secrets.NOTION_STOCK_INFO_PAGE_ID }}
+      NOTION_DB_STOCK_MASTER: ${{ secrets.NOTION_DB_STOCK_MASTER }}
+      NOTION_STOCK_SUPPLEMENT_DB_ID: ${{ secrets.NOTION_STOCK_SUPPLEMENT_DB_ID }}
+      NOTION_BIZTAG_LEDGER_DB_ID: ${{ secrets.NOTION_BIZTAG_LEDGER_DB_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: biztag 事業タグ (銘柄マスタ（補足）)
+        id: biztag
+        if: >-
+          github.event_name == 'schedule' ||
+          (github.event_name == 'workflow_dispatch' &&
+            (github.event.inputs.target == 'biztag' || github.event.inputs.target == 'all'))
+        run: pnpm biztag run --budget-min=20
+
+      # 判定失敗ではなく「運営が判断すべきこと」(単語帳の関門停止・提案期限切れ・
+      # 再試行上限到達の残件 等) の通知。ジョブ自体は成功のままなので if: failure() では
+      # 拾えない。biztag が上記の target 条件で実行されなかった回は outputs も空なので
+      # notify は 'true' にならず、この step は何もしない。
+      - name: biztag の通知 (関門停止・期限切れ・要確認の残件)
+        if: steps.biztag.outputs.notify == 'true'
+        uses: ./.github/actions/notify-failure
+        with:
+          title: ${{ steps.biztag.outputs.notify_title }}
+          summary: ${{ steps.biztag.outputs.notify_summary }}
+      - name: 失敗したら Issue を立てる
+        if: failure()
+        uses: ./.github/actions/notify-failure
+        with:
+          title: "[ジョブ失敗] ${{ github.workflow }} (biztag)"
+          summary: "${{ github.workflow }} (biztag) が失敗しました。"

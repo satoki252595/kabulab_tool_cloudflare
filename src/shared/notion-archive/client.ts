@@ -30,6 +30,32 @@ let lastStart = 0;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+export interface NotionStats {
+  /** 実際に発行した fetch() の総数 (再試行を含む累積) */
+  requests: number;
+  /** 429 (rate_limited) / 529 (service_overload) の応答を受けた回数 */
+  rateLimited: number;
+  /** それ以外の一過性失敗 (5xx・非JSON 4xx・ネットワーク例外) で再試行した回数 */
+  transientRetries: number;
+}
+
+/**
+ * 実行サマリ用の通信カウンタ (設計書 §9「Notion のリクエスト数と 429 回数」)。
+ * プロセス起動 (モジュール初期化) からの累積で、`resetNotionStats()` を呼ぶ
+ * まで保持する。挙動は一切変えない計測専用の追加 (副作用なし)。
+ */
+let stats: NotionStats = { requests: 0, rateLimited: 0, transientRetries: 0 };
+
+/** 現在までの累積カウンタのコピーを返す (呼び出し側からの変更で汚染されない) */
+export function notionStats(): NotionStats {
+  return { ...stats };
+}
+
+/** カウンタを 0 に戻す (実行単位でサマリを取りたい CLI が呼ぶ) */
+export function resetNotionStats(): void {
+  stats = { requests: 0, rateLimited: 0, transientRetries: 0 };
+}
+
 /** 全 Notion 通信を直列化 + 最小間隔を強制するゲート */
 function schedule<T>(task: () => Promise<T>): Promise<T> {
   const run = chain.then(async () => {
@@ -101,7 +127,9 @@ async function doFetch(
     attempt++;
     let res: Response;
     try {
-      res = await fetch(url, makeInit());
+      const init = makeInit();
+      stats.requests++;
+      res = await fetch(url, init);
     } catch (e) {
       // 設定起因 (env 未設定/ID 不正) は恒久エラー。一過性扱いで backoff
       // すると 1 リクエストで ~61 秒固まる (過去事例: kabulab に NOTION_TOKEN
@@ -113,6 +141,7 @@ async function doFetch(
           { cause: e }
         );
       }
+      stats.transientRetries++;
       await sleep(Math.min(30_000, 500 * 2 ** attempt));
       continue;
     }
@@ -122,6 +151,7 @@ async function doFetch(
     // 尊重して再試行 (/reference/request-limits)。529 に Retry-After が無い
     // 場合は指数バックオフに倒す。
     if (res.status === 429 || res.status === 529) {
+      stats.rateLimited++;
       const header = res.headers.get("Retry-After");
       const ra = header === null ? NaN : Number(header);
       const waitMs = Number.isFinite(ra)
@@ -149,6 +179,7 @@ async function doFetch(
         `Notion API エラー (${label}) status=${res.status} code=${parsed?.code ?? "?"} message=${parsed?.message ?? text.slice(0, 300)}`
       );
     }
+    stats.transientRetries++;
     // 5xx および 非JSON(エッジ遮断)4xx は一過性とみなし指数バックオフ再試行
     await sleep(Math.min(30_000, 500 * 2 ** attempt));
   }

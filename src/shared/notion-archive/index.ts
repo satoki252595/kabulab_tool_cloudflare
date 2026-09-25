@@ -48,3 +48,45 @@ export { ensureIndexPage, replacePageChildren } from "./index-page.js";
 export type { EnsureIndexPageOptions, EnsureIndexPageResult } from "./index-page.js";
 export { ARCHIVE_SECTIONS, INDEX_PAGE_TITLE, buildIndexBlocks } from "./map.js";
 export type { IndexBullet, IndexSection } from "./map.js";
+export { notionStats, resetNotionStats } from "./client.js";
+export type { NotionStats } from "./client.js";
+export { RICH_TEXT_MAX, splitRichText, joinRichText } from "./rich-text.js";
+export type { RichTextChunk } from "./rich-text.js";
+
+// 005 yuho-quant 事業タグ (docs/005-yuho-quant-business-tags.md §3)
+export {
+  SUPPLEMENT_DB_TITLE,
+  SUPPLEMENT_PROPS,
+  ensureSupplementDb,
+  loadSupplementRows,
+  loadStockMasterIndex,
+  buildSupplementProperties,
+  chunkPropertiesByBytes,
+  createSupplementRow,
+  updateSupplementRow,
+  EVIDENCE_TITLE_PREFIX,
+  buildEvidenceBlock,
+  replaceEvidenceBlock,
+} from "./stock-supplement.js";
+export type {
+  TextStatus,
+  TagStatus,
+  DocTypeLabel,
+  SupplementSchemaSpec,
+  SupplementRow,
+  SupplementRowInput,
+  StockMasterIndex,
+  EvidenceItem,
+  EvidenceBlockInput,
+} from "./stock-supplement.js";
+export {
+  LEDGER_DB_TITLE,
+  LedgerIntegrityError,
+  ensureLedgerDb,
+  listLedgerEntries,
+  readLedgerJson,
+  createLedgerEntry,
+  updateLedgerEntry,
+  replaceLedgerJson,
+} from "./biztag-ledger.js";
+export type { LedgerKind, LedgerState, LedgerEntry } from "./biztag-ledger.js";

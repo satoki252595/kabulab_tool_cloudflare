@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { createErrorHandler } from "../../../src/shared/error-handler.js";
 import { pagesRoute } from "./routes/pages.js";
 import { adminRoute } from "./routes/admin.js";
+import { vocabularyRoute } from "./routes/vocabulary.js";
 
 /**
  * 005 yuho-quant — Hono サブアプリ本体
@@ -15,6 +16,8 @@ const errorHandler = createErrorHandler("yuho-quant");
 
 // 取込トリガ（Worker 側・CRON_SECRET 認証）。SSR より先に登録する。
 app.route("/admin", adminRoute);
+// 単語帳(事業タグ語彙)の年次見直し受付（合言葉認証）。SSR (catch-all) より先に登録する。
+app.route("/vocabulary", vocabularyRoute);
 app.route("/", pagesRoute);
 
 app.onError(errorHandler);

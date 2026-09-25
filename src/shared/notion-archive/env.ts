@@ -57,4 +57,22 @@ export const notionEnv = {
   NOTION_TRASH_PAGE_ID: () => normalizeId(required("NOTION_TRASH_PAGE_ID")),
   /** 索引ページ ID (設定時は Search を使わず直接更新。未設定時は自動発見) */
   NOTION_INDEX_PAGE_ID: () => optionalId("NOTION_INDEX_PAGE_ID"),
+  /**
+   * 「株式情報」ページ ID (005 yuho-quant 事業タグ)。Python パイプラインの
+   * ① 銘柄マスタ 等と同じ親ページ。「銘柄マスタ（補足）」「事業タグ単語帳
+   * （台帳）」DB をこの直下に作る (docs/005-yuho-quant-business-tags.md §3)。
+   */
+  NOTION_STOCK_INFO_PAGE_ID: () =>
+    normalizeId(required("NOTION_STOCK_INFO_PAGE_ID")),
+  /**
+   * ① 銘柄マスタ DB ID (`銘柄マスタ（補足）` からの relation 先)。
+   * `.env.example` の pipeline ブロックに同値がコメントで残る Python 側の値と
+   * 同じもの (値は一致させること)。
+   */
+  NOTION_DB_STOCK_MASTER: () => normalizeId(required("NOTION_DB_STOCK_MASTER")),
+  /** 「銘柄マスタ（補足）」DB ID を固定 (任意。未設定なら Search で自動発見) */
+  NOTION_STOCK_SUPPLEMENT_DB_ID: () =>
+    optionalId("NOTION_STOCK_SUPPLEMENT_DB_ID"),
+  /** 「事業タグ単語帳（台帳）」DB ID を固定 (任意。未設定なら Search で自動発見) */
+  NOTION_BIZTAG_LEDGER_DB_ID: () => optionalId("NOTION_BIZTAG_LEDGER_DB_ID"),
 };
