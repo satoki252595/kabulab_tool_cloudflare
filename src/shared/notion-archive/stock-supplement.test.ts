@@ -81,6 +81,51 @@ describe("stock-supplement (純粋関数)", () => {
       const huge = "あ".repeat(2000 * 101);
       expect(() => buildSupplementProperties({ error: huge })).toThrow("100");
     });
+
+    it("docId/tagStatus/tagDoc/vocabVersion (書類の同定+判定結果) は他の列より後ろに置かれ、同じ最終チャンクにまとまる", () => {
+      // 中断安全性の回帰テスト: 本文列 (39列・最大 30,000字/列) が大きいときに
+      // 複数 PATCH へ分割されても、「有報書類ID」が確定するのと同じチャンクで
+      // 「事業タグの状態」「事業タグの根拠書類」「単語帳の版」も確定しないと、
+      // 中断時に「docId は新しいのにタグは古い」という不変条件違反が起きうる
+      // (docs §3.1)。
+      // 実測 (docs §3.1): 本文列 1 項目の最大は 30,000字。5 列分足すと
+      // 既定の 400,000B 上限を超える (複数チャンクに分割される)。
+      const bigText = "あ".repeat(30_000);
+      const props = buildSupplementProperties({
+        companyName: "テスト株式会社",
+        stockCode: "0000",
+        texts: {
+          事業の内容: bigText,
+          "セグメント情報等、財務諸表": bigText,
+          対処すべき課題: bigText,
+          事業等のリスク: bigText,
+          研究開発活動: bigText,
+        },
+        upstream: ["半導体パッケージ・基板材料"],
+        docId: "S100NEW",
+        docType: "有報",
+        periodEnd: "2026-03-31",
+        submittedAt: "2026-06-25",
+        tagStatus: "判定済",
+        tagDoc: "S100NEW 2026年3月期",
+        vocabVersion: "v1",
+      });
+      const chunks = chunkPropertiesByBytes(props);
+      expect(chunks.length).toBeGreaterThan(1);
+
+      const completionKeys = ["有報書類ID", "書類種別", "会計期末", "提出日", "事業タグの状態", "事業タグの根拠書類", "単語帳の版"];
+      const lastChunk = chunks[chunks.length - 1];
+      for (const key of completionKeys) {
+        expect(lastChunk).toHaveProperty(key);
+      }
+      // どの列も最終チャンクより前には現れない (中断されたらこのグループは
+      // まるごと未送信のまま = 前回の値がそのまま残る)。
+      for (const chunk of chunks.slice(0, -1)) {
+        for (const key of completionKeys) {
+          expect(chunk).not.toHaveProperty(key);
+        }
+      }
+    });
   });
 
   describe("chunkPropertiesByBytes", () => {
@@ -323,6 +368,37 @@ describe("stock-supplement (Notion 通信)", () => {
       // 既存の選択肢「情報・通信業」を含んだまま「輸送用機器」を追加している
       const names = patchBody.properties["33業種"]?.select?.options.map((o) => o.name);
       expect(names).toEqual(["情報・通信業", "輸送用機器"]);
+    });
+
+    it("累積選択肢数が上限(100)を超えるパッチは送らず throw する (廃止済み語の選択肢が Notion 側に残り続けて肥大化する対策)", async () => {
+      const searchHit = {
+        id: "db-exist",
+        archived: false,
+        in_trash: false,
+        created_time: "2026-01-01T00:00:00.000Z",
+        parent: { type: "page_id", page_id: STOCK_INFO },
+        title: [{ plain_text: "銘柄マスタ（補足）" }],
+      };
+      route("POST", "/v1/search", [{ results: [searchHit], has_more: false, next_cursor: null }]);
+      const existingSchema = buildFullSchema();
+      // 33業種 に既に99件の選択肢がある想定 (廃止済み語の分も含め蓄積した状態)。
+      const existingOptions = Array.from({ length: 99 }, (_, i) => ({ id: `opt-${i}`, name: `業種${i}` }));
+      existingSchema["33業種"] = {
+        id: "sector-id",
+        type: "select",
+        select: { options: existingOptions },
+      };
+      route("GET", "/v1/databases/db-exist", [{ id: "db-exist", properties: existingSchema }]);
+      const { ensureSupplementDb } = await load();
+      // spec の sector33Options には既存に無い「輸送用機器」が1件あるだけだが、
+      // 99 (既存) + 1 (追加) = 100 なのでまだ収まる。「業種X」「業種Y」の2件を
+      // 追加する spec に変えると 99+2=101 で上限超過になる。
+      await expect(
+        ensureSupplementDb({ ...spec, sector33Options: ["輸送用機器", "新業種A"] })
+      ).rejects.toThrow(/累積選択肢数が上限/);
+      // 上限超過を検知したら PATCH 自体を送らない (Notion 側のスキーマを
+      // 汚さない)。
+      expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(0);
     });
 
     it("スキーマが既に全て揃っていれば PATCH しない", async () => {

@@ -207,6 +207,46 @@ describe("POST /vocabulary/proposals", () => {
     expect(ensureLedgerDb).not.toHaveBeenCalled();
   });
 
+  it("Content-Length が無い (ストリーム) 本文でも、読みながら上限超過で 413 にする", async () => {
+    // レビュー指摘の回帰: 旧実装は `c.req.text()` で本文を全部バッファして
+    // から `TextEncoder` でバイト数を数えていたため、Content-Length を
+    // 付けない (または信頼できない) リクエストは MAX_PROPOSAL_BODY_BYTES を
+    // 大幅に超えるバイト列でも最後まで読み切ってからようやく 413 にしていた。
+    // ここでは Content-Length を持たない ReadableStream 本文を渡し、
+    // `hono/body-limit` がストリームを見ながら中断することを確かめる。
+    const CHUNK = "a".repeat(100_000);
+    let sent = 0;
+    let pulls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls++;
+        // 512KB (MAX_PROPOSAL_BODY_BYTES) を大幅に超えるまで送り続ける。
+        // ストリームを見ながら中断されていれば、途中で読み止めた分だけ
+        // pull が呼ばれ、全 20 チャンク (2MB) を送り切る前に応答が返る。
+        if (sent >= 2_000_000) {
+          controller.close();
+          return;
+        }
+        sent += CHUNK.length;
+        controller.enqueue(new TextEncoder().encode(CHUNK));
+      },
+    });
+    const res = await request("/vocabulary/proposals", {
+      method: "POST",
+      headers: authHeaders(),
+      body: stream,
+      // Node の fetch (undici) は ReadableStream 本文に duplex: "half" を要求する。
+      // 標準 RequestInit の型定義にはまだ無いフィールドなのでキャストする
+      // (テスト目的のみ。本番コードはこのオプションを使わない)。
+      ...({ duplex: "half" } as Record<string, unknown>),
+    });
+    expect(res.status).toBe(413);
+    expect(ensureLedgerDb).not.toHaveBeenCalled();
+    // ストリームを見ながら中断していれば、全チャンクを読み切る前に打ち切られる
+    // (= pull 回数が全チャンク数 (20) より少ない)。
+    expect(pulls).toBeLessThan(20);
+  });
+
   it("JSON として壊れていれば 400", async () => {
     const res = await request("/vocabulary/proposals", {
       method: "POST",
@@ -295,17 +335,22 @@ describe("POST /vocabulary/proposals", () => {
     expect(call.recordedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
-  it("noChange:true の提案は状態「変更なし」で台帳に置く", async () => {
+  it("noChange:true の提案も、他の提案と同じく状態「未審査」で台帳に置く (関門を必ず通す)", async () => {
+    // docs §2/§6.2: 提案は常に「提案（未審査）」で台帳に置かれ、`pnpm biztag
+    // gate` (runGate) が審査してから状態を確定する。ここで「変更なし」に
+    // 直接確定させてしまうと関門の対象 (state: 未審査) から外れ、`理由` 列
+    // (コードが作る文の契約・§3.2) に提出者の自由記述がそのまま残ってしまう
+    // (レビュー指摘の回帰テスト)。
     vi.mocked(listLedgerEntries).mockResolvedValue([{ version: "v1" } as never]);
     vi.mocked(createLedgerEntry).mockResolvedValue({
       pageId: "proposal-page-2",
       name: "提案 2026-08-03 06:00 JST",
       kind: "提案",
-      state: "変更なし",
+      state: "未審査",
       version: "v1",
       hash: "dummy-hash-from-mock",
       recordedAt: "2026-08-03",
-      reason: noChangeProposal().reason ?? "",
+      reason: "",
       diff: "",
       rollbackFrom: null,
     });
@@ -317,10 +362,10 @@ describe("POST /vocabulary/proposals", () => {
     });
 
     expect(res.status).toBe(202);
-    expect(await res.json()).toEqual({ id: "proposal-page-2", state: "変更なし" });
+    expect(await res.json()).toEqual({ id: "proposal-page-2", state: "未審査" });
     expect(createLedgerEntry).toHaveBeenCalledWith(
       "ledger-db-id",
-      expect.objectContaining({ state: "変更なし", reason: noChangeProposal().reason })
+      expect.objectContaining({ state: "未審査", reason: "", json: noChangeProposal() })
     );
   });
 });

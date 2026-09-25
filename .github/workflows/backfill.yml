@@ -70,6 +70,16 @@ jobs:
     permissions:
       contents: read
       issues: write # 失敗通知 (notify-failure) のため
+    # biztag* (biztag/biztag-golden/biztag-rollback) は Notion「銘柄マスタ
+    # （補足）」「事業タグ単語帳（台帳）」に read-check-write で書き込むため、
+    # catchup.yml の biztag ジョブおよびこのジョブの他の biztag* 起動と同じ
+    # グループで直列化する (同時実行だと「有効な版がちょうど1件」等の
+    # check-then-act 前提が壊れ、二重作成・台帳不整合を起こす)。それ以外の
+    # job (yuho-missing 等) は biztag の Notion DB に触れないため直列化不要
+    # (実行ごとに一意なグループにして事実上の制約無しにする)。
+    concurrency:
+      group: ${{ contains(fromJson('["biztag","biztag-golden","biztag-rollback"]'), inputs.job) && 'biztag-notion' || format('backfill-other-{0}', github.run_id) }}
+      cancel-in-progress: false
     env:
       EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -112,11 +122,31 @@ jobs:
           [ "${{ inputs.rejudge_pdf }}" = "true" ] && args="$args --rejudge-pdf-sentiment"
           pnpm ir:backfill -- $args
       - name: biztag (事業タグ全件バックフィル)
+        id: biztag
         if: inputs.job == 'biztag'
+        # 手入力の値 (limit) はシェルに直接埋め込まず環境変数で渡す
+        # (biztag-rollback と同じ注入対策。値も数字のみに限定する)。
+        env:
+          BIZTAG_LIMIT: ${{ inputs.limit }}
         run: |
+          if [ -n "$BIZTAG_LIMIT" ] && ! [[ "$BIZTAG_LIMIT" =~ ^[0-9]+$ ]]; then
+            echo "limit は数字のみ指定できます: $BIZTAG_LIMIT" >&2
+            exit 1
+          fi
           args="--budget-min=340"
-          [ -n "${{ inputs.limit }}" ] && args="$args --limit=${{ inputs.limit }}"
+          [ -n "$BIZTAG_LIMIT" ] && args="$args --limit=$BIZTAG_LIMIT"
           pnpm biztag run -- $args
+      # 判定失敗ではなく「運営が判断すべきこと」(単語帳の関門停止・提案期限切れ・
+      # 再試行上限到達の残件 等) の通知。ジョブ自体は成功のままなので if: failure() では
+      # 拾えない (catchup.yml の同名ステップと同じ理由)。job=biztag 以外の
+      # dispatch では steps.biztag は生成されず outputs も空なので、この
+      # step は何もしない。
+      - name: biztag の通知 (関門停止・期限切れ・要確認の残件)
+        if: steps.biztag.outputs.notify == 'true'
+        uses: ./.github/actions/notify-failure
+        with:
+          title: ${{ steps.biztag.outputs.notify_title }}
+          summary: ${{ steps.biztag.outputs.notify_summary }}
       - name: biztag-golden (ゴールデンセットで精度測定)
         if: inputs.job == 'biztag-golden'
         run: pnpm biztag golden

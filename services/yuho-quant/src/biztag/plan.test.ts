@@ -225,7 +225,7 @@ describe("planWork (§5.2 状態遷移表)", () => {
     expect(item.kind).toBe("retry");
   });
 
-  it("判定不能・再試行期日が未到来 → skip", () => {
+  it("判定不能・再試行期日が未到来 → skip (再試行上限フラグは立てない)", () => {
     const row = rowOf({
       docId: "S100AAAA",
       tagStatus: "判定不能",
@@ -234,9 +234,12 @@ describe("planWork (§5.2 状態遷移表)", () => {
     });
     const item = planSingle(latestOf(), row);
     expect(item.kind).toBe("skip");
+    // 「再試行期日が来ていないだけ」の skip と、下の「上限到達」の skip は
+    // 運営への通知 (docs §11.6) で区別する必要があるため、ここでは立たない。
+    expect(item.retryExhausted).toBeUndefined();
   });
 
-  it("再試行回数が上限に到達 → skip (触らない)", () => {
+  it("再試行回数が上限に到達 → skip (触らない・再試行上限フラグを立てる)", () => {
     const row = rowOf({
       docId: "S100AAAA",
       tagStatus: "判定不能",
@@ -246,6 +249,9 @@ describe("planWork (§5.2 状態遷移表)", () => {
     const item = planSingle(latestOf(), row);
     expect(item.kind).toBe("skip");
     expect(item.reason).toContain("上限");
+    // 運営への通知 (docs §11.6「再試行上限（5回）に達したまま残っている銘柄」)
+    // に使う専用フラグ。
+    expect(item.retryExhausted).toBe(true);
   });
 
   it("同じ書類だが未判定 (部分失敗からの回復) → sync_and_tag", () => {

@@ -67,12 +67,29 @@ function nextRetryDate(today: string, attemptsAfter: number): string {
   return addDaysJst(today, 2 ** (attemptsAfter - 1));
 }
 
-async function writeRow(item: WorkItem, deps: ProcessDeps, input: SupplementRowInput): Promise<string> {
+/**
+ * 行を書き込む(プロパティ + 根拠ブロック)。
+ *
+ * 既存行は**根拠ブロックを先に置き換えてから**プロパティを更新する。
+ * 逆順(プロパティ→根拠)だと、途中で中断されたとき「事業タグの状態=判定済
+ * (新しい書類を指す) なのにページ本文の根拠は古い書類のまま/消えている」
+ * という、外からは判定済に見えるのに根拠が壊れている状態が生まれる
+ * (§3.1 不変条件はプロパティ間の話だが、根拠ブロックとの整合もここで守る)。
+ * 新規行は 1 回の POST に根拠を `children` として同梱するため、そもそも
+ * 非atomicな2段階書込みが発生しない。
+ */
+async function writeRowWithEvidence(
+  item: WorkItem,
+  deps: ProcessDeps,
+  input: SupplementRowInput,
+  evidenceBlock: unknown | null
+): Promise<string> {
   if (item.row) {
+    await deps.replaceEvidenceBlock(item.row.pageId, evidenceBlock);
     await deps.updateSupplementRow(item.row.pageId, input);
     return item.row.pageId;
   }
-  return deps.createSupplementRow(input, null);
+  return deps.createSupplementRow(input, evidenceBlock);
 }
 
 function outcomeKindOf(item: WorkItem): "created" | "updated" {
@@ -164,32 +181,36 @@ export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<P
       if (item.row === null) {
         throw new Error(`processStock: no_text だが既存行が無い (${item.stockCode})`);
       }
-      const pageId = await writeRow(item, deps, {
-        companyName: item.companyName,
-        stockCode: item.stockCode,
-        masterPageId: deps.resolveMasterPageId(item.stockCode),
-        sector33: item.sector33,
-        docId: item.doc?.docId ?? null,
-        docType: item.doc ? docTypeLabelOf(item.doc.docTypeCode) : null,
-        periodEnd: item.doc?.periodEnd ?? null,
-        submittedAt: item.doc?.submittedAt ?? null,
-        textStatus: "本文なし",
-        texts: allTextColumnsCleared(),
-        upstream: [],
-        downstream: [],
-        themes: [],
-        uncertain: null,
-        tagStatus: "本文なし",
-        tagDoc: null,
-        vocabVersion: null,
-        judgedAt: null,
-        candidateCount: null,
-        judgeInput: null,
-        error: null,
-        attempts: 0,
-        nextRetryAt: null,
-      });
-      await deps.replaceEvidenceBlock(pageId, null);
+      await writeRowWithEvidence(
+        item,
+        deps,
+        {
+          companyName: item.companyName,
+          stockCode: item.stockCode,
+          masterPageId: deps.resolveMasterPageId(item.stockCode),
+          sector33: item.sector33,
+          docId: item.doc?.docId ?? null,
+          docType: item.doc ? docTypeLabelOf(item.doc.docTypeCode) : null,
+          periodEnd: item.doc?.periodEnd ?? null,
+          submittedAt: item.doc?.submittedAt ?? null,
+          textStatus: "本文なし",
+          texts: allTextColumnsCleared(),
+          upstream: [],
+          downstream: [],
+          themes: [],
+          uncertain: null,
+          tagStatus: "本文なし",
+          tagDoc: null,
+          vocabVersion: null,
+          judgedAt: null,
+          candidateCount: null,
+          judgeInput: null,
+          error: null,
+          attempts: 0,
+          nextRetryAt: null,
+        },
+        null
+      );
       return {
         stockCode: item.stockCode,
         kind: item.kind,
@@ -292,23 +313,27 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
 
   if (result.candidates.length === 0) {
     // 候補語 0 件でも「判定済」(判定はした。該当が無かっただけ。§5.6)。
-    const pageId = await writeRow(item, deps, {
-      ...baseInput,
-      upstream: [],
-      downstream: [],
-      themes: [],
-      uncertain: null,
-      tagStatus: "判定済",
-      tagDoc,
-      vocabVersion: deps.vocab.version,
-      judgedAt: deps.today,
-      candidateCount: 0,
-      judgeInput: "候補語なし (絞り込みで該当語なし)",
-      error: null,
-      attempts: 0,
-      nextRetryAt: null,
-    });
-    await deps.replaceEvidenceBlock(pageId, null);
+    await writeRowWithEvidence(
+      item,
+      deps,
+      {
+        ...baseInput,
+        upstream: [],
+        downstream: [],
+        themes: [],
+        uncertain: null,
+        tagStatus: "判定済",
+        tagDoc,
+        vocabVersion: deps.vocab.version,
+        judgedAt: deps.today,
+        candidateCount: 0,
+        judgeInput: "候補語なし (絞り込みで該当語なし)",
+        error: null,
+        attempts: 0,
+        nextRetryAt: null,
+      },
+      null
+    );
     return {
       stockCode: item.stockCode,
       kind: item.kind,
@@ -336,22 +361,6 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       deps.thresholds
     );
     const tagOutcome = summarizeJudgments(deps.vocab, result.candidates, judgments);
-    const pageId = await writeRow(item, deps, {
-      ...baseInput,
-      upstream: tagOutcome.upstream,
-      downstream: tagOutcome.downstream,
-      themes: tagOutcome.themes,
-      uncertain: tagOutcome.uncertainText,
-      tagStatus: "判定済",
-      tagDoc,
-      vocabVersion: deps.vocab.version,
-      judgedAt: deps.today,
-      candidateCount,
-      judgeInput: judgeInput.inputSummary,
-      error: null,
-      attempts: 0,
-      nextRetryAt: null,
-    });
     const evidenceItems: EvidenceBlockInput["items"] = tagOutcome.evidence;
     const evidenceBlock =
       evidenceItems.length > 0
@@ -362,7 +371,27 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
             items: evidenceItems,
           })
         : null;
-    await deps.replaceEvidenceBlock(pageId, evidenceBlock);
+    await writeRowWithEvidence(
+      item,
+      deps,
+      {
+        ...baseInput,
+        upstream: tagOutcome.upstream,
+        downstream: tagOutcome.downstream,
+        themes: tagOutcome.themes,
+        uncertain: tagOutcome.uncertainText,
+        tagStatus: "判定済",
+        tagDoc,
+        vocabVersion: deps.vocab.version,
+        judgedAt: deps.today,
+        candidateCount,
+        judgeInput: judgeInput.inputSummary,
+        error: null,
+        attempts: 0,
+        nextRetryAt: null,
+      },
+      evidenceBlock
+    );
     return {
       stockCode: item.stockCode,
       kind: item.kind,
@@ -437,8 +466,7 @@ async function recordFailure(item: WorkItem, deps: ProcessDeps, args: FailureArg
   };
   if (args.texts !== undefined) input.texts = args.texts;
 
-  const pageId = await writeRow(item, deps, input);
-  await deps.replaceEvidenceBlock(pageId, null);
+  await writeRowWithEvidence(item, deps, input, null);
   return {
     stockCode: item.stockCode,
     kind: item.kind,

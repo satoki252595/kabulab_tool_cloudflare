@@ -172,10 +172,30 @@ function optionsOf(
 }
 
 /**
+ * select/multi_select 列に累積してよい選択肢数の安全上限。
+ *
+ * 単語帳側の `validateVocabulary`(`NOTION_OPTIONS_PER_COLUMN_MAX=100`)は
+ * **廃止していない語だけ**を数えて列ごと 100 語以内かを検査するが、この
+ * `buildMissingPatch` は既存の選択肢を絶対に消さない設計 (運用者が Notion 上で
+ * 使っている値を壊さないため) のため、廃止済みの語の選択肢名も Notion の
+ * スキーマには永久に残り続ける。つまり年次見直しで語を廃止して入れ替える
+ * たびに、Notion 側の実際の選択肢数は「非廃止のみ 100 件以内」という単語帳側の
+ * 検査をすり抜けて増え続ける (廃止 0 件の v1 時点で upstream/downstream は
+ * 既に 96/100 まで来ており、次の見直しでの入れ替えでほぼ確実に超過する)。
+ * ここで累積数そのものに同じ 100 を安全上限として課し、超えるパッチは
+ * 送らずに throw する (Notion 側の実スキーマが黙って肥大化する/次回の
+ * PATCH が Notion 側で拒否されるのを未然に防ぐ — ルール2: 運営が気づける
+ * 形で早期に失敗する)。
+ */
+const SELECT_OPTIONS_CUMULATIVE_MAX = 100;
+
+/**
  * 「足りない列だけ足す」差分パッチを作る。
  * - 列自体が無ければ丸ごと追加。
  * - select/multi_select は既存の選択肢を保ったまま、無い選択肢だけ追加する
  *   (既存の選択肢は絶対に消さない — 運用者が Notion 上で使っている値を壊さない)。
+ *   ただし追加後の累積選択肢数が `SELECT_OPTIONS_CUMULATIVE_MAX` を超える
+ *   ときは、その列へのパッチを送らず throw する (上のコメント参照)。
  * - それ以外の型 (rich_text/date/number/title/relation) は既存があれば触らない。
  */
 function buildMissingPatch(
@@ -196,6 +216,15 @@ function buildMissingPatch(
       const curNames = new Set(curOptions.map((o) => o.name));
       const missingOptions = wantOptions.filter((o) => !curNames.has(o.name));
       if (missingOptions.length > 0) {
+        const cumulative = curOptions.length + missingOptions.length;
+        if (cumulative > SELECT_OPTIONS_CUMULATIVE_MAX) {
+          throw new Error(
+            `buildMissingPatch: 列「${name}」の累積選択肢数が上限 ${SELECT_OPTIONS_CUMULATIVE_MAX} を超えます ` +
+              `(既存 ${curOptions.length} 件 + 追加 ${missingOptions.length} 件 = ${cumulative} 件)。` +
+              `廃止済みの語の選択肢は既存値保護のため自動では削除しない設計のため、運営判断で` +
+              `Notion 側の不要な選択肢を手動整理するか、単語帳の廃止方針を見直してください。`
+          );
+        }
         patch[name] = { [kind]: { options: [...curOptions, ...missingOptions] } };
       }
     }
@@ -575,6 +604,21 @@ function relationValue(pageId: string | null | undefined): { relation: Array<{ i
  * `undefined` のフィールドはペイロードから省略 (既存値を変えない)。
  * `null` は明示的にクリアする (ルール2: 黙って既定値で埋めない代わりに、
  * 「値が無い」という事実を明示的に書く)。
+ *
+ * **フィールドの並び順が壊れやすい不変条件を守っている**: `chunkPropertiesByBytes`
+ * は `Object.entries(props)` の順に貪欲に詰めるため、1 要求 (400KB) に収まらない
+ * ときは並び順どおりに複数の PATCH に分割される (§3.1「本文列は…複数の PATCH に
+ * 分ける」)。途中の PATCH で中断される (GH Actions の強制終了等) と、それより前の
+ * 並びのプロパティだけが確定した状態になりうる。`有報書類ID`(docId) が
+ * `事業タグの状態`(tagStatus)/`事業タグの根拠書類`(tagDoc)/`単語帳の版`
+ * (vocabVersion) より先に確定すると、「docId は新しい書類を指すのに tagStatus/
+ * tagDoc は古い書類のまま」という**不変条件違反の状態**が生まれ、かつ
+ * `docId` が最新と一致してしまうため `planWork` の差分検知(`row.docId !==
+ * doc.docId`)が二度と拾えず、恒久的に取り残される (docs §3.1 不変条件)。
+ * そのため `docId`/`docType`/`periodEnd`/`submittedAt` は、この書類に関する
+ * 判定結果一式 (`tagStatus`/`tagDoc`/`vocabVersion` および判定メタ情報) と
+ * まとめて **最後** に書く。中断が起きても「書類の入れ替わりだけが先に見える」
+ * 状態を作らない (中断前の状態のまま = 次回の `planWork` が正しく再処理する)。
  */
 export function buildSupplementProperties(
   input: SupplementRowInput
@@ -592,18 +636,6 @@ export function buildSupplementProperties(
   }
   if (input.sector33 !== undefined) {
     props[SUPPLEMENT_PROPS.sector33] = selectValue(SUPPLEMENT_PROPS.sector33, input.sector33);
-  }
-  if (input.docId !== undefined) {
-    props[SUPPLEMENT_PROPS.docId] = clearableRichText(input.docId, SUPPLEMENT_PROPS.docId);
-  }
-  if (input.docType !== undefined) {
-    props[SUPPLEMENT_PROPS.docType] = selectValue(SUPPLEMENT_PROPS.docType, input.docType);
-  }
-  if (input.periodEnd !== undefined) {
-    props[SUPPLEMENT_PROPS.periodEnd] = dateValue(input.periodEnd);
-  }
-  if (input.submittedAt !== undefined) {
-    props[SUPPLEMENT_PROPS.submittedAt] = dateValue(input.submittedAt);
   }
   if (input.textStatus !== undefined) {
     props[SUPPLEMENT_PROPS.textStatus] = selectValue(
@@ -634,6 +666,29 @@ export function buildSupplementProperties(
       SUPPLEMENT_PROPS.uncertain
     );
   }
+  if (input.candidateCount !== undefined) {
+    props[SUPPLEMENT_PROPS.candidateCount] = numberValue(input.candidateCount);
+  }
+  if (input.judgeInput !== undefined) {
+    props[SUPPLEMENT_PROPS.judgeInput] = clearableRichText(
+      input.judgeInput,
+      SUPPLEMENT_PROPS.judgeInput
+    );
+  }
+  // ここから下 (書類の同定 + 判定結果の確定) は、途中で中断されても不変条件を
+  // 壊さないよう常に最後の 1 グループとしてまとめて書く (コメント参照)。
+  if (input.docId !== undefined) {
+    props[SUPPLEMENT_PROPS.docId] = clearableRichText(input.docId, SUPPLEMENT_PROPS.docId);
+  }
+  if (input.docType !== undefined) {
+    props[SUPPLEMENT_PROPS.docType] = selectValue(SUPPLEMENT_PROPS.docType, input.docType);
+  }
+  if (input.periodEnd !== undefined) {
+    props[SUPPLEMENT_PROPS.periodEnd] = dateValue(input.periodEnd);
+  }
+  if (input.submittedAt !== undefined) {
+    props[SUPPLEMENT_PROPS.submittedAt] = dateValue(input.submittedAt);
+  }
   if (input.tagStatus !== undefined) {
     props[SUPPLEMENT_PROPS.tagStatus] = selectValue(SUPPLEMENT_PROPS.tagStatus, input.tagStatus);
   }
@@ -648,15 +703,6 @@ export function buildSupplementProperties(
   }
   if (input.judgedAt !== undefined) {
     props[SUPPLEMENT_PROPS.judgedAt] = dateValue(input.judgedAt);
-  }
-  if (input.candidateCount !== undefined) {
-    props[SUPPLEMENT_PROPS.candidateCount] = numberValue(input.candidateCount);
-  }
-  if (input.judgeInput !== undefined) {
-    props[SUPPLEMENT_PROPS.judgeInput] = clearableRichText(
-      input.judgeInput,
-      SUPPLEMENT_PROPS.judgeInput
-    );
   }
   if (input.error !== undefined) {
     props[SUPPLEMENT_PROPS.error] = clearableRichText(input.error, SUPPLEMENT_PROPS.error);

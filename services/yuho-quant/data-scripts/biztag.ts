@@ -27,11 +27,11 @@ import { resolveActiveVocabulary } from "../src/biztag/active-vocab.js";
 import { todayJst } from "../src/biztag/date-jst.js";
 import { checkDeadline, runGate } from "../src/biztag/gate.js";
 import { evaluateAtThresholds, evaluateGolden, loadGoldenSet, type GoldenPerItemResult } from "../src/biztag/golden.js";
-import { fetchGoldenTexts, makeEvaluateGoldenForVocab, runBiztag } from "../src/biztag/pipeline.js";
+import { composeRunNotify, fetchGoldenTexts, makeEvaluateGoldenForVocab, runBiztag } from "../src/biztag/pipeline.js";
 import { buildReviewPacket, refreshReviewPacketLedger } from "../src/biztag/review.js";
 import { rollback } from "../src/biztag/rollback.js";
 import { type BiztagSourceDb } from "../src/biztag/source.js";
-import { verifySources } from "../src/biztag/sources-verify.js";
+import { makeBudgetedVerifySources } from "../src/biztag/sources-verify.js";
 import { loadCalibration } from "../src/biztag/thresholds.js";
 import { parseVocabulary } from "../src/biztag/vocabulary/load.js";
 import { TEXT_SECTIONS } from "../src/services/edinet/text-sections.js";
@@ -96,28 +96,20 @@ async function runCommand(): Promise<void> {
       `- Notion: ${summary.notion.requests}リクエスト (429 ${summary.notion.rateLimited}回)`,
       `- 単語帳: ${summary.vocabVersion}${summary.vocabSeeded ? " (初回投入)" : ""}`,
       `- 失敗: ${summary.failures.length}件`,
+      `- 再試行上限到達 (5回): ${summary.retryExhausted.length}件${summary.retryExhausted.length > 0 ? ` (${summary.retryExhausted.slice(0, 10).join(", ")}${summary.retryExhausted.length > 10 ? " 他" : ""})` : ""}`,
+      `- ① 銘柄マスタ重複 (relation 未設定): ${summary.masterDuplicates.length}件${summary.masterDuplicates.length > 0 ? ` (${summary.masterDuplicates.slice(0, 10).join(", ")}${summary.masterDuplicates.length > 10 ? " 他" : ""})` : ""}`,
     ].join("\n")
   );
 
-  const failureNote =
-    summary.failures.length > 0
-      ? `\n失敗した銘柄 (最大10件): ${summary.failures
-          .slice(0, 10)
-          .map((f) => `${f.stockCode}: ${f.message}`)
-          .join(" / ")}`
-      : "";
-
-  const gateNotify = summary.gate.notify;
-  const deadlineNotify = summary.deadline.shouldNotify
-    ? { title: "[biztag] 単語帳の見直しが期限切れです", summary: `期限 (${summary.deadline.deadline}) までに提案が届きませんでした` }
-    : null;
-  const notify = gateNotify ?? deadlineNotify;
-
-  if (notify) {
+  // 通知条件・組み立ては pipeline.ts の composeRunNotify (純粋関数・単体テスト
+  // 済み) が正本。関門停止・見直し期限切れ・再試行上限到達のいずれか (docs
+  // §11.6) に加え、失敗銘柄・① 銘柄マスタ重複も summary に書き足す。
+  const notify = composeRunNotify(summary);
+  if (notify.notify && notify.title !== undefined && notify.summary !== undefined) {
     writeGithubOutput({
       notify: "true",
       notify_title: notify.title,
-      notify_summary: `${notify.summary}${failureNote}`,
+      notify_summary: notify.summary,
     });
   } else {
     writeGithubOutput({ notify: "false" });
@@ -137,7 +129,10 @@ async function gateCommand(): Promise<void> {
     readLedgerJson,
     createLedgerEntry,
     updateLedgerEntry,
-    verifySources,
+    // `pnpm biztag gate` 単体実行にも出典検査の時間予算を課す (pipeline.ts の
+    // runBiztag と同じ理由。こちらは budgetMs の概念が無いサブコマンドなので
+    // 既定値をそのまま使う)。
+    verifySources: makeBudgetedVerifySources(),
     evaluateGoldenForVocab: makeEvaluateGoldenForVocab(db, jevClient, thresholds),
     recordedAt: today,
   });

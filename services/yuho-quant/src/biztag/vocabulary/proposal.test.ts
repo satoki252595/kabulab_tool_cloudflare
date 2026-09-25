@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 import { MINI_VOCAB } from "./__fixtures__/mini-vocab.js";
 import type { BusinessTerm, Source, ThemeTerm } from "./schema.js";
-import { applyProposal, ProposalSchema, type Change, type Proposal } from "./proposal.js";
+import { applyProposal, MAX_PROPOSAL_SOURCE_REFS, ProposalSchema, type Change, type Proposal } from "./proposal.js";
 
 /** fixture 内の実在の出典を 1 件借りる (evidence/sourcesChecked のダミー捏造を避ける)。 */
 const REAL_SOURCE: Source = structuredClone(MINI_VOCAB.business[0].sources[0]);
@@ -220,5 +220,50 @@ describe("applyProposal", () => {
     t.deprecated = true;
     const p = changeProposal([{ op: "deprecate", id: "B.SEMI.SILICON_WAFER", evidence: [REAL_SOURCE] }]);
     expect(() => applyProposal(base, p, "v2")).toThrow();
+  });
+});
+
+/**
+ * レビュー指摘の回帰: 出典検査 (`sources-verify.ts`) の逐次 fetch が
+ * 長時間化しないよう、schema の時点で (url, quote) の合計に上限を課す。
+ */
+describe("ProposalSchema — 出典・根拠の量的上限 (関門の出典検査の長時間化対策)", () => {
+  it("1つの変更の evidence が21件 (上限20件超) だと落ちる", () => {
+    const evidence = Array.from({ length: 21 }, () => structuredClone(REAL_SOURCE));
+    const p = changeProposal([{ op: "deprecate", id: "B.SEMI.SILICON_WAFER", evidence }]);
+    expect(ProposalSchema.safeParse(p).success).toBe(false);
+  });
+
+  it("1つの変更の evidence が20件 (上限ちょうど) までは通る", () => {
+    const evidence = Array.from({ length: 20 }, () => structuredClone(REAL_SOURCE));
+    const p = changeProposal([{ op: "deprecate", id: "B.SEMI.SILICON_WAFER", evidence }]);
+    expect(ProposalSchema.safeParse(p).success).toBe(true);
+  });
+
+  it(`(url, quote) の合計が ${MAX_PROPOSAL_SOURCE_REFS + 1} 件 (上限超過) だと落ちる`, () => {
+    // changes を複数に分けて集める (1変更あたり evidence 20件までのため)。
+    const perChange = 20;
+    const numChanges = Math.ceil((MAX_PROPOSAL_SOURCE_REFS + 1) / perChange);
+    const changes: Change[] = Array.from({ length: numChanges }, (_, i) => ({
+      op: "deprecate" as const,
+      id: i % 2 === 0 ? "B.SEMI.SILICON_WAFER" : "B.MACH.MACHINE_TOOL",
+      evidence: Array.from({ length: perChange }, () => structuredClone(REAL_SOURCE)),
+    }));
+    const p = changeProposal(changes);
+    const total = changes.reduce((sum, c) => sum + (c.op === "deprecate" ? c.evidence.length : 0), 0);
+    expect(total).toBeGreaterThan(MAX_PROPOSAL_SOURCE_REFS);
+    expect(ProposalSchema.safeParse(p).success).toBe(false);
+  });
+
+  it(`(url, quote) の合計がちょうど ${MAX_PROPOSAL_SOURCE_REFS} 件までは通る`, () => {
+    const perChange = 20;
+    const numChanges = Math.floor(MAX_PROPOSAL_SOURCE_REFS / perChange);
+    const changes: Change[] = Array.from({ length: numChanges }, (_, i) => ({
+      op: "deprecate" as const,
+      id: i % 2 === 0 ? "B.SEMI.SILICON_WAFER" : "B.MACH.MACHINE_TOOL",
+      evidence: Array.from({ length: perChange }, () => structuredClone(REAL_SOURCE)),
+    }));
+    const p = changeProposal(changes);
+    expect(ProposalSchema.safeParse(p).success).toBe(true);
   });
 });

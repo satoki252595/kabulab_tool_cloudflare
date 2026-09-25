@@ -33,7 +33,10 @@ function isCalibrationFileShape(v: unknown): v is CalibrationFileShape {
 
 /**
  * `services/yuho-quant/src/biztag/calibration.json` を読む。
- * このファイルはリポジトリに未同梱 (意図的。運営が較正後に用意する)。
+ * v1 の較正値はコミット済み (2026-09-25 較正・§5.5 参照。committed-data.test.ts
+ * が読み込みを保証する)。将来モデル/しきい値を変えて未較正の状態に戻る間は、
+ * このファイルを削除して次の較正が済むまで意図的に起動を止められる
+ * (下の catch が既定値へフォールバックしない設計はそのまま活かす)。
  */
 export function loadCalibration(): Calibration {
   const path = new URL("./calibration.json", import.meta.url);

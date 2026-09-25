@@ -97,6 +97,9 @@ function makeDeps(overrides: Partial<ProcessDeps> = {}) {
   const created: RecordedWrite[] = [];
   const updated: RecordedWrite[] = [];
   const evidenceCalls: Array<{ pageId: string; block: unknown }> = [];
+  // 呼び出し順序を横断で確認するための共有ログ (findings: 既存行は
+  // 根拠ブロックの置き換え → プロパティ更新の順で呼ばれる必要がある)。
+  const callOrder: Array<"createSupplementRow" | "updateSupplementRow" | "replaceEvidenceBlock"> = [];
   const deps: ProcessDeps = {
     vocab: MINI_VOCAB,
     thresholds: THRESHOLDS,
@@ -104,21 +107,25 @@ function makeDeps(overrides: Partial<ProcessDeps> = {}) {
     today: TODAY,
     resolveMasterPageId: () => "master-page-1",
     readStockTextRow: () => Promise.reject(new Error("readStockTextRow は呼ばれない想定")),
-    createSupplementRow: (input) => {
+    createSupplementRow: (input, evidence) => {
+      callOrder.push("createSupplementRow");
       created.push({ pageId: "created", input });
+      if (evidence !== undefined) evidenceCalls.push({ pageId: "new-page-id", block: evidence });
       return Promise.resolve("new-page-id");
     },
     updateSupplementRow: (pageId, input) => {
+      callOrder.push("updateSupplementRow");
       updated.push({ pageId, input });
       return Promise.resolve();
     },
     replaceEvidenceBlock: (pageId, block) => {
+      callOrder.push("replaceEvidenceBlock");
       evidenceCalls.push({ pageId, block });
       return Promise.resolve();
     },
     ...overrides,
   };
-  return { deps, created, updated, evidenceCalls };
+  return { deps, created, updated, evidenceCalls, callOrder };
 }
 
 function jevAnswering(answers: Record<string, number>): JevClient {
@@ -160,8 +167,19 @@ describe("processStock", () => {
     });
   });
 
+  it("新規行では根拠ブロックを別リクエストで置き換えず、作成の1回に同梱する (非atomicな2段階書込を作らない)", async () => {
+    const jevClient = jevAnswering({ "bt.B.MACH.MACHINE_TOOL": 0.95 });
+    const { deps, callOrder } = makeDeps({
+      jevClient,
+      readStockTextRow: () =>
+        Promise.resolve([{ itemName: "事業の内容", sectionKey: "business", text: OKUMA_BUSINESS_TEXT }]),
+    });
+    await processStock(itemOf(), deps); // row: null (デフォルト) → 新規作成
+    expect(callOrder).toEqual(["createSupplementRow"]);
+  });
+
   it("no_text: 既存行を本文なし状態に更新し、根拠ブロックを削除する", async () => {
-    const { deps, updated, evidenceCalls } = makeDeps();
+    const { deps, updated, evidenceCalls, callOrder } = makeDeps();
     const row = rowOf({ docId: "S100OLD", tagStatus: "判定済", upstream: ["工作機械"] });
     const outcome = await processStock(itemOf({ kind: "no_text", doc: null, row }), deps);
     expect(outcome.tagStatus).toBe("本文なし");
@@ -169,6 +187,7 @@ describe("processStock", () => {
     // 旧書類の39本文列が残らず、明示的に全て空になる (設計の状態遷移表)。
     expectAllTextColumnsCleared(updated[0]?.input.texts);
     expect(evidenceCalls).toEqual([{ pageId: row.pageId, block: null }]);
+    expect(callOrder).toEqual(["replaceEvidenceBlock", "updateSupplementRow"]);
   });
 
   describe("sync_and_tag (実データ: オークマ 工作機械)", () => {
@@ -238,7 +257,7 @@ describe("processStock", () => {
 
     it("書類が変わったとき、古い書類のタグを引き継がず新しい書類のタグで置き換える (不変条件)", async () => {
       const jevClient = jevAnswering({ "bt.B.MACH.MACHINE_TOOL": 0.95 });
-      const { deps, updated } = makeDeps({
+      const { deps, updated, callOrder } = makeDeps({
         jevClient,
         readStockTextRow: () =>
           Promise.resolve([{ itemName: "事業の内容", sectionKey: "business", text: OKUMA_BUSINESS_TEXT }]),
@@ -259,10 +278,13 @@ describe("processStock", () => {
       expect(write?.downstream).toEqual([]); // 古い「小火器・火砲」は残らない
       expect(write?.upstream).toEqual(["工作機械"]);
       expect(write?.tagDoc).toBe("S100YFQC 2026年3月期");
+      // 既存行は根拠ブロックを先に置き換えてから (中断されても「判定済なのに
+      // 根拠は古い書類のまま」を作らない)、プロパティを更新する。
+      expect(callOrder).toEqual(["replaceEvidenceBlock", "updateSupplementRow"]);
     });
 
     it("読込失敗: Notion 読取が例外を投げたら 読込失敗 + attempts+1 + 次回再試行日", async () => {
-      const { deps, updated, evidenceCalls } = makeDeps({
+      const { deps, updated, evidenceCalls, callOrder } = makeDeps({
         readStockTextRow: () => Promise.reject(new Error("Notion API error: 500")),
       });
       const row = rowOf({ attempts: 1 });
@@ -278,6 +300,7 @@ describe("processStock", () => {
       // 本文の読込自体に失敗しているので、旧書類の39本文列を残さず明示的に空にする。
       expectAllTextColumnsCleared(write?.texts);
       expect(evidenceCalls).toEqual([{ pageId: row.pageId, block: null }]);
+      expect(callOrder).toEqual(["replaceEvidenceBlock", "updateSupplementRow"]);
     });
 
     it("jev 判定不能: JevUnavailableError なら 判定不能 + attempts+1 + 次回再試行日 (テキストは保存する)", async () => {

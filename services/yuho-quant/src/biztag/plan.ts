@@ -39,6 +39,13 @@ export interface WorkItem {
   row: SupplementRow | null;
   /** 人間可読の判定理由 (ログ・テスト用) */
   reason: string;
+  /**
+   * `kind === "skip"` のうち、再試行上限 (`MAX_RETRY_ATTEMPTS`) に到達したため
+   * 触らずに残っている銘柄かどうか (docs §11.6 の 3 番目の通知条件)。他の
+   * skip 理由 (同じ書類・判定済・同じ版 / 再試行期日未到来 等) と区別するための
+   * 専用フラグ (`reason` の文字列パースに頼らない)。
+   */
+  retryExhausted?: boolean;
 }
 
 
@@ -165,7 +172,7 @@ function planOne(
   if (row.tagStatus === "判定不能" || row.tagStatus === "読込失敗") {
     const attempts = row.attempts ?? 0;
     if (attempts >= MAX_RETRY_ATTEMPTS) {
-      return { ...base, kind: "skip", reason: `再試行上限 (${MAX_RETRY_ATTEMPTS}回) に到達` };
+      return { ...base, kind: "skip", retryExhausted: true, reason: `再試行上限 (${MAX_RETRY_ATTEMPTS}回) に到達` };
     }
     const dueForRetry = row.nextRetryAt !== null && row.nextRetryAt <= today;
     return dueForRetry

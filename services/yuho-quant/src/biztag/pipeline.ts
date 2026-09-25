@@ -31,6 +31,7 @@ import {
   updateSupplementRow,
   type LedgerEntry,
   type NotionStats,
+  type SupplementRow,
   type SupplementSchemaSpec,
 } from "../../../../src/shared/notion-archive/index.js";
 import { createJevClient, estimateCostUsd, jevEnv, type JevClient } from "../../../../src/shared/jev/index.js";
@@ -40,11 +41,11 @@ import { todayJst } from "./date-jst.js";
 import { checkDeadline, runGate, type DeadlineCheckResult, type GateRunResult } from "./gate.js";
 import { evaluateGolden, goldenItemKey, loadGoldenSet, type GoldenMetrics } from "./golden.js";
 import type { BtThresholds } from "./judge.js";
-import { planWork, type WorkItem } from "./plan.js";
+import { MAX_RETRY_ATTEMPTS, planWork, type WorkItem } from "./plan.js";
 import { processStock, type ProcessDeps } from "./process.js";
 import { PREFILTER_SECTIONS, PREFILTER_SECTION_TITLE, isPrefilterSection, type PrefilterSectionKey } from "./prefilter.js";
 import { buildReviewPacket, refreshReviewPacketLedger } from "./review.js";
-import { verifySources } from "./sources-verify.js";
+import { DEFAULT_VERIFY_SOURCES_BUDGET_MS, makeBudgetedVerifySources } from "./sources-verify.js";
 import { loadLatestDocs, type BiztagSourceDb } from "./source.js";
 import { diffVocabularies } from "./vocabulary/diff.js";
 import { parseVocabulary } from "./vocabulary/load.js";
@@ -90,6 +91,8 @@ export interface RunSummary {
   failures: Array<{ stockCode: string; message: string }>;
   /** ① 銘柄マスタに同じ銘柄コードの行が複数あり、relation を付けなかった銘柄コード */
   masterDuplicates: string[];
+  /** 再試行上限 (`MAX_RETRY_ATTEMPTS`) に到達したまま残っている銘柄コード (docs §11.6) */
+  retryExhausted: string[];
 }
 
 function buildSchemaSpec(vocab: Vocabulary, sector33Options: string[]): SupplementSchemaSpec {
@@ -136,19 +139,35 @@ async function buildVocabDiffResolver(
   };
 }
 
+/**
+ * D1 の bind 変数上限 (1クエリ100。memory: D1 bound param limit) を超えないよう、
+ * 配列を安全な件数ごとに分ける (source.ts のサブクエリ方式と同じ制約への対処だが、
+ * ここでの docIds はゴールデンセットの JSON ファイル由来の文字列リテラルであり、
+ * D1 上の別テーブルからサブクエリで作れる母集団ではないため、チャンク分割で対処する)。
+ */
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 /** ゴールデンセットの各項目に必要な本文 (絞り込みの対象節) を D1+Notion から読む。 */
 export async function fetchGoldenTexts(
   db: BiztagSourceDb,
   items: ReturnType<typeof loadGoldenSet>["items"]
 ): Promise<Map<string, Partial<Record<PrefilterSectionKey, string>>>> {
   const docIds = [...new Set(items.map((i) => i.docId))];
-  const rows = (await db
-    .select({ docId: yuhoSchema.yuhoDocuments.docId, notionDocPageId: yuhoSchema.yuhoDocuments.notionDocPageId })
-    .from(yuhoSchema.yuhoDocuments)
-    .where(inArray(yuhoSchema.yuhoDocuments.docId, docIds))) as Array<{
-    docId: string;
-    notionDocPageId: string | null;
-  }>;
+  const rows: Array<{ docId: string; notionDocPageId: string | null }> = [];
+  for (const docIdBatch of chunk(docIds, 90)) {
+    const batchRows = (await db
+      .select({ docId: yuhoSchema.yuhoDocuments.docId, notionDocPageId: yuhoSchema.yuhoDocuments.notionDocPageId })
+      .from(yuhoSchema.yuhoDocuments)
+      .where(inArray(yuhoSchema.yuhoDocuments.docId, docIdBatch))) as Array<{
+      docId: string;
+      notionDocPageId: string | null;
+    }>;
+    rows.push(...batchRows);
+  }
   const pageIdByDocId = new Map(rows.map((r) => [r.docId, r.notionDocPageId] as const));
 
   const map = new Map<string, Partial<Record<PrefilterSectionKey, string>>>();
@@ -242,13 +261,19 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   let vocab = initial.vocab;
 
   // 2. 単語帳の関門 + 見直し期限の検査。
+  // 出典検査 (verifySources) は提案内の URL を実際に fetch するため、
+  // opts.budgetMs から一部を専用予算として切り出す (opts.budgetMs をそのまま
+  // 使うと、後続の銘柄処理ループの予算が丸ごと出典検査に消費されうる)。
+  // 予算を使い切っても、審査自体 (runGate) は打ち切らず「その提案を
+  // 不採用にする」形で正直に終わらせる (sources-verify.ts 参照)。
+  const verifySourcesBudgetMs = Math.min(DEFAULT_VERIFY_SOURCES_BUDGET_MS, opts.budgetMs);
   const gate = await runGate({
     ledgerDbId,
     listLedgerEntries,
     readLedgerJson,
     createLedgerEntry: ledgerWrites.createLedgerEntry,
     updateLedgerEntry: ledgerWrites.updateLedgerEntry,
-    verifySources,
+    verifySources: makeBudgetedVerifySources(verifySourcesBudgetMs),
     evaluateGoldenForVocab,
     recordedAt: today,
   });
@@ -283,13 +308,33 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
 
   // 4. 補足 DB を確保し、既存行を読む。
   const { dbId: supplementDbId, propertyIds } = await ensureSupplementDb(buildSchemaSpec(vocab, sector33Options));
-  // 本文列は重い (1 行平均数万字) ので、版の影響判定が要る (= 版が違う判定済の行が
-  // ある) ときだけ読み直す。普段の日次は状態の列だけを読む。
+  // 本文列は重い (1 行平均数万字) ので、版の影響判定が要る行 (= 版が違う判定済の
+  // 行) だけ本文列つきで読み直す。普段の日次はほぼ全行が「同じ版」で状態の列
+  // だけ読めば足りるが、版を上げた直後は「版が違う判定済」の行が数千件残る
+  // 移行期間 (§7 の日次予算では数日〜数週間かかる) が続くため、その間**毎日**
+  // 全行ぶんの本文列を読み直すと (`loadSupplementRows` の全件取得コストが
+  // 版の影響判定を受ける行の数に関わらず一定になり) 20分の日次予算を圧迫する。
+  // ここでは実際に影響判定が必要な行 (stale) の銘柄コードだけを絞って本文列を
+  // 読み直し、残りは状態の列だけの行のまま使う (`loadSupplementRows` の
+  // `codes` フィルタを利用)。
   let rows = await loadSupplementRows(supplementDbId, propertyIds);
-  if (rows.some((r) => r.tagStatus === "判定済" && r.vocabVersion !== null && r.vocabVersion !== vocab.version)) {
-    rows = await loadSupplementRows(supplementDbId, propertyIds, {
-      textColumns: PREFILTER_SECTIONS.map((k) => PREFILTER_SECTION_TITLE[k]),
-    });
+  const staleCodes = rows
+    .filter((r) => r.tagStatus === "判定済" && r.vocabVersion !== null && r.vocabVersion !== vocab.version)
+    .map((r) => r.stockCode);
+  if (staleCodes.length > 0) {
+    const textColumns = PREFILTER_SECTIONS.map((k) => PREFILTER_SECTION_TITLE[k]);
+    const staleRowsByCode = new Map<string, SupplementRow>();
+    // Notion の compound filter (`codes` は or フィルタに展開される) は
+    // 1 クエリあたりの条件数に上限があるため、安全側でチャンクに分けて
+    // 問い合わせる (`loadSupplementRows` 自身は codes を分割しない)。
+    for (const codeBatch of chunk(staleCodes, 90)) {
+      const staleRows = await loadSupplementRows(supplementDbId, propertyIds, {
+        codes: codeBatch,
+        textColumns,
+      });
+      for (const r of staleRows) staleRowsByCode.set(r.stockCode, r);
+    }
+    rows = rows.map((r) => staleRowsByCode.get(r.stockCode) ?? r);
   }
 
   // 5. 版の違いの影響判定に必要な過去の単語帳を解決する。
@@ -299,6 +344,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const vocabDiffFromRowVersion = await buildVocabDiffResolver(ledgerDbId, neededVersions, vocab);
 
   const items = planWork(latest, rows, vocab, vocabDiffFromRowVersion, today);
+  const retryExhausted = items.filter((i) => i.retryExhausted === true).map((i) => i.stockCode).sort();
 
   // 6. 銘柄マスタ (relation 先) の索引。
   // ① 側で同じ銘柄コードが複数行ある銘柄は relation を空のままにする (どれかを選ばない)。
@@ -392,8 +438,82 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     vocabVersion: vocab.version,
     vocabSeeded: seeded,
     masterDuplicates,
+    retryExhausted,
     gate,
     deadline,
     failures,
   };
+}
+
+export interface RunNotifyResult {
+  notify: boolean;
+  title?: string;
+  summary?: string;
+}
+
+/**
+ * 実行サマリから運営向け GitHub Issue 通知 (docs §11.6) を組み立てる (純粋関数)。
+ *
+ * §11.6 が約束する通知条件は 3 つ: (1) 関門で提案が不採用、(2) 見直しの期限切れ、
+ * (3) 再試行上限に達したまま残っている銘柄がある。この3つのうちどれかが
+ * 該当すれば notify:true とし、優先順位 (1) > (2) > (3) で「主要因」の
+ * title/summary を使う。個別銘柄の失敗 (`summary.failures`) と ① 銘柄マスタの
+ * 重複 (`summary.masterDuplicates`) は §11.6 の独立した通知条件ではないが、
+ * 見落とすと運営が気づけない情報 (実行サマリ中の JSON にしか残らない) なので、
+ * 上の3条件のどれかで通知が上がる/失敗単独でも通知が要る場合はどちらも
+ * 必ず summary に書き足す (findings: 旧実装は gate/deadline が両方 null だと
+ * failures の一覧ごと notify:false にして落としていた)。
+ */
+export function composeRunNotify(summary: RunSummary): RunNotifyResult {
+  const notes: string[] = [];
+  if (summary.failures.length > 0) {
+    notes.push(
+      `失敗した銘柄 (最大10件): ${summary.failures
+        .slice(0, 10)
+        .map((f) => `${f.stockCode}: ${f.message}`)
+        .join(" / ")}`
+    );
+  }
+  if (summary.retryExhausted.length > 0) {
+    notes.push(
+      `再試行上限 (${MAX_RETRY_ATTEMPTS}回) に達したまま残っている銘柄: ${summary.retryExhausted.length}件 (${summary.retryExhausted
+        .slice(0, 10)
+        .join(", ")}${summary.retryExhausted.length > 10 ? " 他" : ""})`
+    );
+  }
+  if (summary.masterDuplicates.length > 0) {
+    notes.push(
+      `① 銘柄マスタ重複 (relation 未設定): ${summary.masterDuplicates.length}件 (${summary.masterDuplicates
+        .slice(0, 10)
+        .join(", ")}${summary.masterDuplicates.length > 10 ? " 他" : ""})`
+    );
+  }
+  const extraNote = notes.length > 0 ? `\n${notes.join("\n")}` : "";
+
+  const deadlineNotify = summary.deadline.shouldNotify
+    ? {
+        title: "[biztag] 単語帳の見直しが期限切れです",
+        summary: `期限 (${summary.deadline.deadline}) までに提案が届きませんでした`,
+      }
+    : null;
+  const retryExhaustedNotify =
+    summary.retryExhausted.length > 0
+      ? {
+          title: "[biztag] 再試行上限に達したまま残っている銘柄があります",
+          summary: `再試行上限 (${MAX_RETRY_ATTEMPTS}回) に達した銘柄が ${summary.retryExhausted.length} 件あります (詳細は下記)。`,
+        }
+      : null;
+  // 上の3条件のいずれにも該当しないが、失敗銘柄や① 銘柄マスタ重複だけは
+  // ある場合も、運営が気づける経路を残す (fallback)。
+  const fallbackNotify =
+    notes.length > 0
+      ? {
+          title: "[biztag] 実行結果に確認が必要な項目があります",
+          summary: "実行サマリに運営が確認すべき項目があります (詳細は下記)。",
+        }
+      : null;
+
+  const primary = summary.gate.notify ?? deadlineNotify ?? retryExhaustedNotify ?? fallbackNotify;
+  if (!primary) return { notify: false };
+  return { notify: true, title: primary.title, summary: `${primary.summary}${extraNote}` };
 }

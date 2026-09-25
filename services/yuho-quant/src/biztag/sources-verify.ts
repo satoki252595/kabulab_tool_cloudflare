@@ -11,7 +11,7 @@ import { normalizeForMatch } from "./text.js";
 import type { Change, Proposal } from "./vocabulary/proposal.js";
 
 export interface SourceCheckIssue {
-  code: "fetch_failed" | "quote_not_found" | "disallowed_host";
+  code: "fetch_failed" | "quote_not_found" | "disallowed_host" | "verification_timed_out";
   url: string;
   quote: string;
   label: string;
@@ -45,6 +45,21 @@ export function isAllowedSourceHost(url: string): boolean {
 export const MAX_SOURCE_RESPONSE_BYTES = 20 * 1024 * 1024;
 /** 出典取得のタイムアウト (dataset.ts の外部 fetch と同水準)。 */
 const FETCH_TIMEOUT_MS = 15_000;
+
+/**
+ * `verifySources` 全体 (逐次 fetch のループ) に許す時間予算の既定値。
+ *
+ * `MAX_PROPOSAL_SOURCE_REFS` (schema 側の合計件数上限) だけでは、
+ * 「上限いっぱいの正当そうな提案」が実際に fetch されるとどれだけ時間が
+ * かかるかまでは縛れない (1件最大 `FETCH_TIMEOUT_MS`=15秒・同じ URL は
+ * キャッシュされるが、異なる URL を大量に挙げれば依然として長時間化しうる)。
+ * ここで検査ループ自体にも独立した壁時計の予算を持たせ、超えたら残りを
+ * 「検査タイムアウト」として正直に報告し打ち切る (黙って続行しない・
+ * ルール2)。これにより関門 (`evaluateProposal`) は該当提案を不採用にでき、
+ * `pnpm biztag run` 全体 (catchup.yml 60分・backfill.yml 355分のジョブ
+ * タイムアウトがある) を道連れにしない。
+ */
+export const DEFAULT_VERIFY_SOURCES_BUDGET_MS = 5 * 60_000;
 
 interface CollectedSource {
   url: string;
@@ -168,19 +183,42 @@ async function fetchAndNormalize(url: string, fetchImpl: typeof fetch): Promise<
   return normalizeForMatch(raw);
 }
 
+export interface VerifySourcesOptions {
+  /**
+   * この時刻 (epoch ms, `Date.now()` 基準) を過ぎたら、以降の未検査分は
+   * 実際には fetch せず `verification_timed_out` として報告し打ち切る。
+   * 省略時は無期限 (既存呼び出し元・テストの後方互換のため)。
+   */
+  deadlineAt?: number;
+}
+
 /**
  * 提案の出典 URL を検査する。同じ URL は 1 回だけ取得する (提案内で使い回している場合が多い)。
  * 見つかった問題を全て返す (0 件 = 問題なし)。
  */
 export async function verifySources(
   proposal: Proposal,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  opts: VerifySourcesOptions = {}
 ): Promise<SourceCheckIssue[]> {
   const items = collectSources(proposal);
   const cache = new Map<string, string | null>();
   const issues: SourceCheckIssue[] = [];
 
   for (const item of items) {
+    if (opts.deadlineAt !== undefined && Date.now() > opts.deadlineAt) {
+      // 残り (この item を含む) は正直に「時間切れで未検査」と報告して打ち切る
+      // (黙って続行しない・黙って「問題なし」にもしない — ルール2)。1 件でも
+      // 出ればこの提案は不採用になる (evaluateProposal のステップ2)。
+      issues.push({
+        code: "verification_timed_out",
+        url: item.url,
+        quote: item.quote,
+        label: item.label,
+        message: `出典検査の時間予算 (${DEFAULT_VERIFY_SOURCES_BUDGET_MS}ms 相当) を超えたため、これ以降 (${item.label} を含む) の検査を打ち切りました`,
+      });
+      break;
+    }
     if (!isAllowedSourceHost(item.url)) {
       // 許可ホスト外は取得すらしない (SSRF・任意ドメインへの出典なりすまし対策)。
       issues.push({
@@ -219,4 +257,20 @@ export async function verifySources(
     }
   }
   return issues;
+}
+
+/**
+ * `runGate`(`GateChecks.verifySources`)にそのまま渡せる、時間予算つきの
+ * `verifySources` を作る。呼び出しのたびに `Date.now() + budgetMs` を締切に
+ * するため、審査する提案が複数あっても合計の壁時計予算は 1 回ぶんに固定される
+ * (提案ごとにリセットしない — 1 提案が予算を使い切ったら、以降の提案は
+ * ほぼ即座に `verification_timed_out` になり不採用として処理が進む。
+ * 「1 回の実行全体を止めない」という目的に対してはこれで十分)。
+ */
+export function makeBudgetedVerifySources(
+  budgetMs: number = DEFAULT_VERIFY_SOURCES_BUDGET_MS,
+  fetchImpl: typeof fetch = fetch
+): (proposal: Proposal) => Promise<SourceCheckIssue[]> {
+  const deadlineAt = Date.now() + budgetMs;
+  return (proposal: Proposal) => verifySources(proposal, fetchImpl, { deadlineAt });
 }

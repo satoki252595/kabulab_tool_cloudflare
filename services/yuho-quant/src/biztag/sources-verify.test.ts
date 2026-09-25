@@ -6,7 +6,7 @@
  * NFKC・空白正規化の部分一致に絞って検証する (タスク指示どおりの縮退)。
  */
 import { describe, expect, it, vi } from "vitest";
-import { verifySources, type SourceCheckIssue } from "./sources-verify.js";
+import { makeBudgetedVerifySources, verifySources, type SourceCheckIssue } from "./sources-verify.js";
 import type { Proposal } from "./vocabulary/proposal.js";
 
 const EVIDENCE = {
@@ -183,6 +183,71 @@ describe("verifySources", () => {
       const issues = await verifySources(proposal, fetchMock as unknown as typeof fetch);
       expect(issues).toEqual([expect.objectContaining({ code: "fetch_failed" })]);
       expect(textSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("時間予算 (deadlineAt) — レビュー指摘の回帰: 大量の出典を持つ提案が検査ループを長時間化させない", () => {
+    it("締切を既に過ぎていれば、1件も fetch せず全件 verification_timed_out を返す", async () => {
+      const proposal = addKeywordsProposal("https://www.soumu.go.jp/page.html", "工作機械");
+      const fetchMock = vi.fn(async () => htmlResponse("<p>工作機械の説明</p>"));
+      const issues = await verifySources(proposal, fetchMock as unknown as typeof fetch, {
+        deadlineAt: Date.now() - 1,
+      });
+      expect(issues).toEqual([expect.objectContaining({ code: "verification_timed_out" })]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("締切が途中の項目で来たら、それより前は通常どおり検査し、以降は timed_out として打ち切る (残りを黙って「問題なし」にしない)", async () => {
+      const url1 = "https://www.soumu.go.jp/first.html";
+      const url2 = "https://www.soumu.go.jp/second.html";
+      const url3 = "https://www.soumu.go.jp/third.html";
+      const proposal: Proposal = {
+        baseVersion: "v1",
+        noChange: false,
+        sourcesChecked: [{ title: EVIDENCE.title, url: EVIDENCE.url, date: EVIDENCE.date }],
+        changes: [
+          { op: "add_keywords", id: "B.MACH.MACHINE_TOOL", keywords: ["a"], evidence: [{ ...EVIDENCE, url: url1, quote: "工作機械" }] },
+          { op: "add_keywords", id: "B.MACH.INDUSTRIAL_ROBOT", keywords: ["b"], evidence: [{ ...EVIDENCE, url: url2, quote: "産業用ロボット" }] },
+          { op: "deprecate", id: "B.DEF.SMALL_ARMS", evidence: [{ ...EVIDENCE, url: url3, quote: "小火器" }] },
+        ],
+      };
+      const fetchMock = vi.fn(async () => htmlResponse("<p>工作機械の説明</p>"));
+      // ループは項目ごとに1回ずつ Date.now() で締切を見る (3項目 → 最大3回)。
+      // 1回目 (url1 の検査前) は締切前、2回目 (url2 の検査前) 以降は締切後を
+      // 返すよう固定し、「1件目は通常どおり検査され、2件目以降は timed_out で
+      // 打ち切られる」を決定的に再現する。
+      const originalNow = Date.now;
+      let call = 0;
+      Date.now = () => {
+        call++;
+        return call === 1 ? 1_000 : 2_000;
+      };
+      try {
+        const issues = await verifySources(proposal, fetchMock as unknown as typeof fetch, { deadlineAt: 1_500 });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(issues).toHaveLength(1);
+        expect(issues[0]).toMatchObject({ code: "verification_timed_out", url: url2 });
+      } finally {
+        Date.now = originalNow;
+      }
+    });
+
+    it("makeBudgetedVerifySources: 予算が負 (既に過ぎている) なら即座に timed_out (fetch しない)", async () => {
+      const proposal = addKeywordsProposal("https://www.soumu.go.jp/page.html", "工作機械");
+      const fetchMock = vi.fn(async () => htmlResponse("<p>工作機械の説明</p>"));
+      const budgeted = makeBudgetedVerifySources(-60_000, fetchMock as unknown as typeof fetch);
+      const issues = await budgeted(proposal);
+      expect(issues).toEqual([expect.objectContaining({ code: "verification_timed_out" })]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("makeBudgetedVerifySources: 十分な予算があれば通常どおり検査する", async () => {
+      const proposal = addKeywordsProposal("https://www.soumu.go.jp/page.html", "工作機械");
+      const fetchMock = vi.fn(async () => htmlResponse("<p>工作機械の説明</p>"));
+      const budgeted = makeBudgetedVerifySources(60_000, fetchMock as unknown as typeof fetch);
+      const issues = await budgeted(proposal);
+      expect(issues).toEqual([]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });
 });

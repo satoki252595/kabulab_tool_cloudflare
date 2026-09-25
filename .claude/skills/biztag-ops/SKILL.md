@@ -104,7 +104,14 @@ gh run watch <run-id>
   対象銘柄数 × 平均候補語数 ÷ 20(バッチサイズ) が呼び出し回数の目安)。月次のコスト
   増が大きい([`~/.claude/CLAUDE.md`](~/.claude/CLAUDE.md) のグローバル運用ルールが
   定める「月1000円以上のコスト増」の目安)場合は、運営の承認を先に取る。
-- **Notion への同時書込**: 他の biztag* ジョブや `backfill.yml` の他 job と同時に
-  複数走らせない(共有の notion-archive クライアントが 429 を再試行して壊れはしないが、
-  スループットが落ちるだけ損)。`backfill.yml` の同時起動は3系統以内という既存の運用
-  目安に従う。
+- **Notion への同時書込 (biztag 系は GitHub Actions の concurrency で強制直列化済み)**:
+  `catchup.yml` の `biztag` job と `backfill.yml` の `biztag`/`biztag-golden`/
+  `biztag-rollback` job は、いずれも `biztag-notion` という同じ concurrency
+  グループに入っており、同時に走らせようとしても GitHub Actions 側が自動的に
+  キューイングする(2026-09-25 レビュー指摘対応。台帳の「有効な版はちょうど1件」
+  等の check-then-act 前提が同時実行で壊れ、二重作成・台帳不整合を起こしうる
+  ため、"壊れずにスループットが落ちるだけ" では済まない実害があった)。手動で
+  `gh workflow run` する場合も、この2ワークフローの biztag 系は安心して連続実行
+  してよい(先に走っている方が終わるまで自動的に待たされる)。biztag 系以外の
+  `backfill.yml` job (`yuho-missing`/`yuho-text`/`ir`) はこの制約の対象外なので、
+  従来どおり同時起動は3系統以内という運用目安に従う。

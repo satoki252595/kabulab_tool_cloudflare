@@ -38,8 +38,14 @@ const SourcesCheckedItemSchema = z.strictObject({
   date: z.string().check(z.regex(SOURCE_DATE_PATTERN)),
 });
 
+/**
+ * 1 変更あたりの `evidence[]` の上限。`MAX_PROPOSAL_SOURCE_REFS`
+ * (提案全体での合計上限) と合わせた多層防御 (下のコメント参照)。
+ */
+const EVIDENCE_PER_CHANGE_MAX = 20;
+
 /** 語ごとの根拠 (出典 + 該当箇所 + 引用)。形は `Source` と同じ。 */
-const EvidenceSchema = z.array(SourceSchema).check(z.minLength(1));
+const EvidenceSchema = z.array(SourceSchema).check(z.minLength(1), z.maxLength(EVIDENCE_PER_CHANGE_MAX));
 
 const AddBusinessChangeSchema = z.strictObject({
   op: z.literal("add_business"),
@@ -68,7 +74,7 @@ const UpdatePatchSchema = z.partial(
     definitionEn: nonEmpty(),
     keywords: z.array(nonEmpty()).check(z.minLength(1)),
     excludeKeywords: z.array(nonEmpty()),
-    sources: z.array(SourceSchema).check(z.minLength(1)),
+    sources: z.array(SourceSchema).check(z.minLength(1), z.maxLength(EVIDENCE_PER_CHANGE_MAX)),
     subfamily: nonEmpty(),
     notionColumn: z.enum(NOTION_COLUMNS),
     members: z.array(z.string().check(z.regex(BUSINESS_ID_PATTERN))).check(z.minLength(1)),
@@ -106,6 +112,40 @@ export const ChangeSchema = z.union([
 ]);
 export type Change = z.infer<typeof ChangeSchema>;
 
+/**
+ * 1 つの変更が持つ (url, quote) の組の数。関門の出典検査
+ * (`sources-verify.ts` の `collectSources`) が実際に集める組と対応させる
+ * (どちらも同じ `Change` の判別共用体を網羅するので、型を変えれば両方が
+ * コンパイルエラーで気づける)。
+ */
+function sourceRefCountOfChange(change: Change): number {
+  switch (change.op) {
+    case "add_business":
+    case "add_theme":
+      return change.term.sources.length + change.evidence.length;
+    case "update":
+      return (change.patch.sources?.length ?? 0) + change.evidence.length;
+    case "add_keywords":
+    case "deprecate":
+      return change.evidence.length;
+  }
+}
+
+/**
+ * 1 提案に含められる (url, quote) の組 (出典 + 根拠) の合計上限。
+ *
+ * `changes` は最大 200 件・`sources`/`evidence` は語/変更あたり最大 20 件まで
+ * (`SOURCES_PER_TERM_MAX`/`EVIDENCE_PER_CHANGE_MAX`) だが、その積 (最大
+ * 8,000件) をそのまま許すと、関門の出典検査 (`sources-verify.ts`) が
+ * 実在する `.go.jp` URL を大量に逐次 fetch (1件最大15秒) する羽目になり、
+ * `pnpm biztag run` (catchup.yml は 60 分・backfill.yml でも 355 分の
+ * ジョブタイムアウトがある) を実質ハングさせる。ここで合計にも上限を課し、
+ * 悪意/不注意な大量提案をスキーマの時点で 400 として弾く (出典検査に到達する
+ * 前に止める。到達後の時間予算の保護は `sources-verify.ts` の
+ * `DEFAULT_VERIFY_SOURCES_BUDGET_MS` 側で行う — 多層防御)。
+ */
+export const MAX_PROPOSAL_SOURCE_REFS = 300;
+
 export const ProposalSchema = z
   .strictObject({
     /** 提案が前提とした単語帳の版。今の有効な版と一致しないと `applyProposal` が throw する。 */
@@ -128,6 +168,12 @@ export const ProposalSchema = z
       {
         message:
           "noChange:true は changes が空かつ reason 必須、noChange:false は changes が 1 件以上である必要があります",
+      }
+    ),
+    z.refine(
+      (p) => p.changes.reduce((sum, c) => sum + sourceRefCountOfChange(c), 0) <= MAX_PROPOSAL_SOURCE_REFS,
+      {
+        message: `1つの提案に含められる出典・根拠 (url, quote) の合計は ${MAX_PROPOSAL_SOURCE_REFS} 件までです (関門の出典検査が長時間化するのを防ぐため)`,
       }
     )
   );

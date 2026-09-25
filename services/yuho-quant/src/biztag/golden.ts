@@ -87,8 +87,9 @@ export function assertGoldenSetInvariants(goldenSet: GoldenSet): void {
 
 /**
  * `services/yuho-quant/src/biztag/golden/v1.json` を読む。
- * このファイルは意図的にリポジトリへ未同梱 (実在する有報の文だけで作る運用
- * データのため、このタスクでは捏造しない。運営が用意する — ルール1)。
+ * v1 はコミット済み (実在する有報の文だけで作った較正用データ。
+ * committed-data.test.ts が読み込みを保証する)。中身は実在する有報の文だけで
+ * 作り、確かめられないものは入れない (ルール1。§10 参照)。
  */
 export function loadGoldenSet(): GoldenSet {
   const path = new URL("./golden/v1.json", import.meta.url);

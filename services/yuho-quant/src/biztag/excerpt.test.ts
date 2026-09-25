@@ -183,6 +183,44 @@ describe("buildJudgeInput", () => {
     expect(input.state).toContain("【経営者による財政状態、経営成績及びキャッシュ・フローの状況の分析（該当段落）】");
   });
 
+  it("語ごとの文脈保証(複数候補が予算を分け合う場合): 先に処理された候補の保証段落が予算の大半を使っても、後続候補にも切り詰めてでも文脈を付ける", () => {
+    // 実測(2026-09-25)で見つかったギャップ: 旧実装は「保証段落が予算に収まらない
+    // とき、既に1つでも確保済みなら諦めて0段落にする」動作だったため、処理順で
+    // 後になった候補だけ文脈ゼロになりえた(冒頭コメントの保証に違反)。
+    // ここでは「単独では SUPPORT_MAX(8,000字) に収まるが、2 候補分を足すと
+    // 超える」実文の組み合わせで再現する: セグメント情報にリボミックの実文
+    // (アプタマー・創薬等でヒット、4,500字)、MD&A に composite-farhit-business
+    // (味の素の実際の ABF 言及を含む合成テキスト、末尾4,500字)を割り当てる
+    // (どちらも既存テストで使っている実文の別範囲の転用)。
+    const segment_info = `${fx("4591-ribomic-business.txt").slice(0, 4500)}\n`;
+    const compositeText = fx("composite-farhit-business.txt");
+    const mda = `${compositeText.slice(compositeText.length - 4500)}\n`;
+    const sections = { segment_info, mda };
+    const result = prefilter(vocab, sections);
+    // セグメント情報 (核酸医薬・新薬系 2 語) と MD&A (ABF 1 語) で候補語が分かれ、
+    // かつそれぞれの保証段落 (4,500字) は単独では SUPPORT_MAX に収まるが、
+    // 先に処理される語の分と合わせると 8,000字 を超える。
+    expect(result.candidates.map((c) => c.term.id).sort()).toEqual(
+      ["B.MAT.SEMICON_PACKAGE_SUBSTRATE", "B.MED.INNOVATOR_DRUG", "B.MED.NUCLEIC_ACID_DRUG"].sort()
+    );
+
+    const input = buildJudgeInput(meta, sections, result);
+
+    // 両方の節に段落が付く(旧実装はセグメント情報側が丸ごと 0 段落になっていた)。
+    expect(input.state).toContain("【セグメント情報等、財務諸表（該当段落）】");
+    expect(input.state).toContain("【経営者による財政状態、経営成績及びキャッシュ・フローの状況の分析（該当段落）】");
+    // MD&A の ABF 言及はそのまま含まれる。
+    expect(input.state).toContain("ABF");
+    // セグメント情報側は予算を使い切ったため切り詰められるが、「…」で
+    // 打ち切ったことを明示し、空にはしない(ルール2: 黙って0件にしない)。
+    const segBlock = /【セグメント情報等、財務諸表（該当段落）】\n([\s\S]*?)\n\n【/.exec(input.state);
+    expect(segBlock).not.toBeNull();
+    expect(segBlock?.[1].endsWith("…")).toBe(true);
+    expect(segBlock?.[1].length).toBeGreaterThan(0);
+    // 合計は SUPPORT_MAX を超えない。
+    expect(input.supportParagraphsUsed).toBe(2);
+  });
+
   it("該当節が無いときは 0字・該当なしとして正直に扱う(データを埋めない)", () => {
     const emptyResult = prefilter(vocab, {});
     const input = buildJudgeInput(meta, {}, emptyResult);

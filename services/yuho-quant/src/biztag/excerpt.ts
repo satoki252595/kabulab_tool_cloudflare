@@ -163,28 +163,51 @@ function buildSupportExcerpt(
 
   const chosen = new Map<SupportParagraph, SupportParagraph>(); // 元 → 採用形(切り詰め後)
   let charsUsed = 0;
+  /**
+   * ステップ2 (残り予算での追加) 用。予算が尽きていれば何もしない
+   * (こちらは「保証」ではなく「残りで足せるだけ足す」だけなので、
+   * 収まらない段落は黙って見送ってよい)。
+   */
   const tryAdd = (p: SupportParagraph): void => {
     if (chosen.has(p)) return;
     const remaining = SUPPORT_MAX - charsUsed;
     if (remaining <= 0) return;
-    if (p.text.length <= remaining) {
+    if (p.text.length > remaining) return;
+    chosen.set(p, p);
+    charsUsed += p.text.length;
+  };
+  /**
+   * ステップ1 (候補語ごとの文脈保証) 用。予算がどれだけ残っていても、
+   * 先に処理された候補が予算を使い切っていても、この候補の段落は必ず
+   * 1 つ登録する(収まらなければ `clampParagraph` で切り詰める。予算が
+   * 既に 0 でも「…」だけは残す)。処理順で後になった候補ほど不利になる
+   * (finding: 先着の候補が予算を独占して後続候補の保証を潰す) のを防ぐための
+   * 唯一の防御であり、ここを「収まらなければ諦める」にしてはいけない。
+   */
+  const addGuaranteed = (p: SupportParagraph): void => {
+    if (chosen.has(p)) return;
+    const remaining = SUPPORT_MAX - charsUsed;
+    if (remaining > 0 && p.text.length <= remaining) {
       chosen.set(p, p);
       charsUsed += p.text.length;
-    } else if (chosen.size === 0) {
-      const clamped = clampParagraph(p, remaining);
-      chosen.set(p, clamped);
-      charsUsed += clamped.text.length;
+      return;
     }
+    const clamped = clampParagraph(p, Math.max(0, remaining));
+    chosen.set(p, clamped);
+    charsUsed += clamped.text.length;
   };
 
-  // 1) 候補語ごとに最初の 1 段落(節の優先順 → 文書順)。matched は既にその順。
+  // 1) 候補語ごとに最初の 1 段落(節の優先順 → 文書順)を必ず確保する
+  //    (予算超過でも切り詰めて確保する。どの候補語にも最低 1 つは文脈が
+  //    付くという冒頭の保証を、処理順に関わらず満たすため)。
   for (const c of result.candidates) {
     const covered = [...chosen.keys()].some((p) => p.termIds.has(c.term.id));
     if (covered) continue;
     const first = matched.find((p) => p.termIds.has(c.term.id));
-    if (first !== undefined) tryAdd(first);
+    if (first !== undefined) addGuaranteed(first);
   }
-  // 2) 残りの予算で、残りの段落を節の優先順・文書順に。
+  // 2) 残りの予算で、残りの段落を節の優先順・文書順に(こちらは保証ではないので
+  //    収まらなければ見送ってよい)。
   for (const p of matched) tryAdd(p);
 
   const blocks: SupportExcerpt["blocks"] = [];

@@ -67,7 +67,19 @@ export async function evaluateProposal(
   checks: GateChecks
 ): Promise<GateDecision> {
   if (proposal.noChange) {
-    return { decision: "no_change", reason: proposal.reason ?? "変更なしの提案" };
+    // `理由` 列は「関門の判定理由（コードが作る文。提案者の作文は入れない）」
+    // という契約 (docs §3.2 の表)。提出者の申告理由をそのまま `理由` に
+    // 入れてしまうとこの契約に反するため、コードが組み立てた文の中に
+    // 引用として埋め込む(提案者の作文をそのまま判定理由の顔で残さない)。
+    // `reason` は ProposalSchema の refine で noChange:true のとき必須と
+    // 検査済みのはずなので、無ければ検査漏れとして throw する (フォールバック
+    // で埋めない — ルール2)。
+    if (proposal.reason === undefined) {
+      throw new Error(
+        "evaluateProposal: noChange:true の提案に reason がありません (ProposalSchema の refine 漏れ)"
+      );
+    }
+    return { decision: "no_change", reason: `変更なしとして受理 (提出者の申告理由: ${proposal.reason})` };
   }
 
   // 1. 形: 基にした版 = 今の有効な版であり (`applyProposal` 内で検査)、

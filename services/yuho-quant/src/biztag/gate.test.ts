@@ -106,9 +106,31 @@ describe("evaluateProposal", () => {
     };
     const decision = await evaluateProposal(MINI_VOCAB, getBaseline, proposal, checks);
     expect(decision.decision).toBe("no_change");
+    // 理由列 (docs §3.2「関門の判定理由。コードが作る文。提案者の作文は
+    // 入れない」) はコードが組み立てた文で始まり、提出者の申告理由は
+    // 引用として埋め込む (提案者の作文をそのまま判定理由の顔で残さない)。
+    expect(decision.reason).toBe("変更なしとして受理 (提出者の申告理由: 今年は変更なし)");
     expect(checks.verifySources).not.toHaveBeenCalled();
     expect(checks.evaluateGoldenForVocab).not.toHaveBeenCalled();
     expect(getBaseline).not.toHaveBeenCalled();
+  });
+
+  it("noChange:true なのに reason が無ければ throw する (ProposalSchema の refine 漏れの防御)", async () => {
+    const checks = baseChecks({
+      verifySources: vi.fn(noIssues),
+      evaluateGoldenForVocab: vi.fn(() => Promise.resolve(OK_GOLDEN)),
+    });
+    // 型上は reason?: string だが、schema の refine で noChange:true のとき
+    // 必須になる。ここでは「refine をすり抜けた」不正な値を意図的に作る。
+    const proposal = {
+      baseVersion: MINI_VOCAB.version,
+      noChange: true,
+      sourcesChecked: [
+        { title: "日本標準産業分類", url: "https://www.soumu.go.jp/main_content/000941216.pdf", date: "2023-07" },
+      ],
+      changes: [],
+    } as unknown as Proposal;
+    await expect(evaluateProposal(MINI_VOCAB, vi.fn(), proposal, checks)).rejects.toThrow("reason");
   });
 
   it("① 形の検査: baseVersion が今の版と違えば rejected (getBaseline は呼ばない)", async () => {
