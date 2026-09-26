@@ -83,7 +83,7 @@ pnpm install              # 依存インストール
 └── package.json
 ```
 
-詳細は [docs/overview.md](./docs/overview.md) を参照。
+詳細は [docs/overview.md](./docs/overview.md) を参照。変更履歴は [docs/release-notes.md](./docs/release-notes.md)。
 
 ## 主要コマンド
 

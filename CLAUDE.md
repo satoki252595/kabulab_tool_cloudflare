@@ -143,6 +143,7 @@ main への直接 push はしない。ユーザに次の指示を仰ぐ前に以
 4. **コミットメッセージ** は変更の "why" を1-2文で記述。Conventional Commits 風の prefix (`feat:`, `fix:`, `refactor:`, `chore:`, `docs:`, `perf:`, `test:`) を使う
 5. `git commit` (デフォルト Co-Authored-By トレーラー付与で OK) → `git push -u origin <branch>`
 6. `gh pr create` で main 宛ての PR を作る。題名は `type(scope): 日本語の要約`
+   - 利用者・運用から見て変化がある PR は、同じ PR で [`docs/release-notes.md`](./docs/release-notes.md) の該当日付に1〜2行追記する（新しい順。本番に対して行った作業も「本番作業」として書く）
 7. CI が緑になるまで見届ける。レビュー指摘・CI 失敗は直して push (PR 上で反証レビュー)
 8. 緑になったら `gh pr merge --squash` でマージする (ユーザが「マージして」と明示した場合を除き、マージ自体はユーザ判断に委ねてもよい)
 9. **失敗** (pre-commit hook / lint / push reject) した場合: 原因を解析して直す。`--no-verify` で hook をバイパスしない。`--force` も禁止 (組織の運用規程で明示許可されている場合のみ例外)
