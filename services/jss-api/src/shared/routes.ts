@@ -22,6 +22,33 @@ export function parseLimit(raw: string | undefined, fallback = 100, max = MAX_LI
 }
 
 /**
+ * 1回の MCP 呼び出しで受ける銘柄コードの上限。
+ *
+ * D1 は1クエリ100バインド変数までなので (memory: d1-bound-param-limit)、
+ * `code IN (?, ?, ...)` に codes をそのまま展開しても安全な余裕を持たせる。
+ */
+export const MAX_BATCH_CODES = 50;
+
+/**
+ * 需給・OHLCV と違い、銘柄テクニカル・バリュエーションは複数銘柄をまとめて
+ * 引きたい呼び手 (kabulab スキル等) が多いため、MCP 側だけ codes[] を受ける。
+ * 空・上限超過・不正コード混入は早期に throw する (ルール2: 無効値で埋めて続行しない)。
+ */
+export function parseCodes(raw: unknown, max = MAX_BATCH_CODES): string[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error("codes は1件以上の銘柄コード配列で指定する");
+  }
+  if (raw.length > max) {
+    throw new Error(`codes は最大 ${max} 件まで`);
+  }
+  const codes = raw.map((c) => String(c));
+  for (const code of codes) {
+    if (!isValidCode(code)) throw new Error(`銘柄コードは4桁: ${code}`);
+  }
+  return codes;
+}
+
+/**
  * 4文字の銘柄コードだけ受ける。索引が効かない述語を外から作らせない。
  *
  * パターンは銘柄コード契約の正準形 (docs/CONTRACTS.md 不変条件9)。
@@ -38,6 +65,77 @@ export function parseLimit(raw: string | undefined, fallback = 100, max = MAX_LI
  */
 export function isValidCode(code: string): boolean {
   return /^[0-9]{3}[0-9A-Z]$/.test(code);
+}
+
+/** `code IN (?, ?, ...)` のプレースホルダを codes.length 個作る。 */
+function inPlaceholders(count: number): string {
+  return Array.from({ length: count }, () => "?").join(", ");
+}
+
+/**
+ * 旧 Notion「②株価テクニカル」の代替。`swing_stock_indicators` を
+ * `core_stocks.code` で引く。1銘柄1行 upsert なので、行があれば最新断面。
+ *
+ * 見つからなかった code は結果に含めない（呼び出し側が `not_found` として
+ * 明示する。未知コードか、コードは実在するが未計算かは区別しない — どちらも
+ * 「今この時点で技術指標を返せない」という点では同じ事実）。
+ */
+export async function fetchIndicatorsByCodes(
+  db: D1Database,
+  codes: string[],
+): Promise<Record<string, unknown>[]> {
+  const { results } = await db.prepare(
+    "SELECT s.code, s.name, i.latest_close, i.latest_volume, i.latest_date, i.pct_change_1d," +
+      " i.sma_5, i.sma_20, i.sma_25, i.sma_60, i.sma_75," +
+      " i.rsi_14, i.macd, i.macd_signal, i.macd_hist," +
+      " i.atr_14, i.atr_pct, i.volume_ratio, i.avg_turnover_20d," +
+      " i.range_20d_high, i.range_20d_low, i.range_width, i.computed_at" +
+      " FROM swing_stock_indicators i JOIN core_stocks s ON s.id = i.stock_id" +
+      ` WHERE s.code IN (${inPlaceholders(codes.length)}) ORDER BY s.code`,
+  ).bind(...codes).all<Record<string, unknown>>();
+  return results;
+}
+
+/**
+ * 旧 Notion「②株価テクニカル」のバリュエーション欄の代替。
+ * `otakara_stock_financials` を `core_stocks.code` で引く。
+ */
+export async function fetchValuationByCodes(
+  db: D1Database,
+  codes: string[],
+): Promise<Record<string, unknown>[]> {
+  const { results } = await db.prepare(
+    "SELECT s.code, s.name, f.price, f.per, f.pbr, f.dividend_yield, f.eps, f.bps," +
+      " f.roe, f.roa, f.market_cap, f.data_date, f.fetched_at" +
+      " FROM otakara_stock_financials f JOIN core_stocks s ON s.id = f.stock_id" +
+      ` WHERE s.code IN (${inPlaceholders(codes.length)}) ORDER BY s.code`,
+  ).bind(...codes).all<Record<string, unknown>>();
+  return results;
+}
+
+/**
+ * 旧 Notion「⑦収集ジョブログ」の鮮度ガード用途の代替。
+ * `jss_job_runs` を job_name ごとに最新1件へ畳んで返す
+ * (`/v1/meta/jobs` は履歴の直近N件で、頻度の高いジョブが少ないジョブの
+ * 最新行を limit の外へ押し出しうるため、鮮度確認には向かない)。
+ */
+export async function fetchLatestJobRuns(
+  db: D1Database,
+  jobName: string | null,
+): Promise<Record<string, unknown>[]> {
+  const stmt = jobName
+    ? db.prepare(
+        "SELECT job_name, status, processed, failed, run_url, duration_secs, finished_at" +
+          " FROM jss_job_runs WHERE id IN (SELECT MAX(id) FROM jss_job_runs" +
+          " WHERE job_name = ? GROUP BY job_name) ORDER BY job_name",
+      ).bind(jobName)
+    : db.prepare(
+        "SELECT job_name, status, processed, failed, run_url, duration_secs, finished_at" +
+          " FROM jss_job_runs WHERE id IN (SELECT MAX(id) FROM jss_job_runs" +
+          " GROUP BY job_name) ORDER BY job_name",
+      );
+  const { results } = await stmt.all<Record<string, unknown>>();
+  return results;
 }
 
 /**
@@ -218,6 +316,28 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
     return c.json(
       envelope(result, { sources: ["Yahoo"], licenses: ["personal-only"] }),
     );
+  });
+
+  // 旧 Notion「②株価テクニカル」の代替。Yahoo 由来＝personal-only のため内部面のみ。
+  app.get("/v1/indicators/:code", async (c) => {
+    const code = c.req.param("code");
+    if (!isValidCode(code)) {
+      return c.json(errorBody("銘柄コードは4桁", "invalid_code"), 400);
+    }
+    const [row] = await fetchIndicatorsByCodes(c.env.DB, [code]);
+    if (!row) return c.json(errorBody("見つからない（未知コード、または未計算）", "not_found"), 404);
+    return c.json(envelope(row, { sources: ["Yahoo"], licenses: ["personal-only"] }));
+  });
+
+  // 旧 Notion「②株価テクニカル」のバリュエーション欄の代替。
+  app.get("/v1/valuation/:code", async (c) => {
+    const code = c.req.param("code");
+    if (!isValidCode(code)) {
+      return c.json(errorBody("銘柄コードは4桁", "invalid_code"), 400);
+    }
+    const [row] = await fetchValuationByCodes(c.env.DB, [code]);
+    if (!row) return c.json(errorBody("見つからない（未知コード、または未取得）", "not_found"), 404);
+    return c.json(envelope(row, { sources: ["Yahoo"], licenses: ["personal-only"] }));
   });
 
   app.get("/v1/yutai/:code", async (c) => {
