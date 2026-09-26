@@ -146,6 +146,62 @@ describe("planWork (§5.2 状態遷移表)", () => {
     expect(item.kind).toBe("skip");
   });
 
+  it("同じ書類・判定済・同じ版・タグあり・根拠文が空 → retag (PR#108 の書き戻し漏れ回収)", () => {
+    const row = rowOf({
+      docId: "S100AAAA",
+      textStatus: "取得済",
+      tagStatus: "判定済",
+      vocabVersion: MINI_VOCAB.version,
+      upstream: ["シリコンウエハ"],
+      evidenceText: null,
+    });
+    const item = planSingle(latestOf(), row);
+    expect(item.kind).toBe("retag");
+    expect(item.reason).toContain("根拠文");
+  });
+
+  it("同じ書類・判定済・同じ版・要確認タグあり・根拠文が空 → retag", () => {
+    const row = rowOf({
+      docId: "S100AAAA",
+      textStatus: "取得済",
+      tagStatus: "判定済",
+      vocabVersion: MINI_VOCAB.version,
+      uncertain: "何か（0.55）",
+      evidenceText: null,
+    });
+    const item = planSingle(latestOf(), row);
+    expect(item.kind).toBe("retag");
+  });
+
+  it("同じ書類・判定済・同じ版・タグも要確認も無く根拠文が空 → skip (該当なしが正しい判定)", () => {
+    const row = rowOf({
+      docId: "S100AAAA",
+      textStatus: "取得済",
+      tagStatus: "判定済",
+      vocabVersion: MINI_VOCAB.version,
+      upstream: [],
+      downstream: [],
+      distribution: [],
+      uncertain: null,
+      evidenceText: null,
+    });
+    const item = planSingle(latestOf(), row);
+    expect(item.kind).toBe("skip");
+  });
+
+  it("同じ書類・判定済・同じ版・タグあり・根拠文もあり → skip", () => {
+    const row = rowOf({
+      docId: "S100AAAA",
+      textStatus: "取得済",
+      tagStatus: "判定済",
+      vocabVersion: MINI_VOCAB.version,
+      upstream: ["シリコンウエハ"],
+      evidenceText: "シリコンウエハ（はい 0.93）：「…」— 事業の内容",
+    });
+    const item = planSingle(latestOf(), row);
+    expect(item.kind).toBe("skip");
+  });
+
   it("同じ書類・判定済・版が違う・影響あり → retag", () => {
     const row = rowOf({
       docId: "S100AAAA",

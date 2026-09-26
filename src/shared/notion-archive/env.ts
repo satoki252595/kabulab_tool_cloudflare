@@ -108,4 +108,11 @@ export const notionEnv = {
     optionalId("NOTION_STOCK_SUPPLEMENT_DB_ID"),
   /** 「事業タグ単語帳（台帳）」DB ID を固定 (任意。未設定なら Search で自動発見) */
   NOTION_BIZTAG_LEDGER_DB_ID: () => optionalId("NOTION_BIZTAG_LEDGER_DB_ID"),
+  /**
+   * 「株価の日次同期」DB ID を固定 (任意。未設定なら Search で自動発見)。
+   * 日次株価 sync (`pnpm sync:daily:core`) の完了記録
+   * (`src/shared/notion-archive/price-sync-log.ts`)。「株式情報」ページ
+   * (`NOTION_STOCK_INFO_PAGE_ID`) 直下に置く単一 DB (ルール6: 1 取引日 1 行)。
+   */
+  NOTION_PRICE_SYNC_DB_ID: () => optionalId("NOTION_PRICE_SYNC_DB_ID"),
 };

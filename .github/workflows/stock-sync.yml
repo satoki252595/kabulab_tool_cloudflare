@@ -12,6 +12,9 @@
 #   CRON_SECRET      … Worker secret と同値 (取込プロキシ認証)
 #   NOTION_TOKEN / NOTION_ARCHIVE_PAGE_ID / NOTION_YUHO_TEXT_DB_ID … 月次 universe の
 #     JPX XLS 一次データ Notion アーカイブ(ルール6)用
+#   NOTION_STOCK_INFO_PAGE_ID … 日次 sync 完了を「株価の日次同期」DB へ記録する
+#     ための親ページ (005 yuho-quant の「株式情報」ページと共通。契約書参照)
+#   NOTION_PRICE_SYNC_DB_ID … 上記 DB を ID 固定する場合のみ (任意。未設定なら自動発見/作成)
 #
 # 日次 ~3,700 銘柄は ~40-50 分/回 (public repo のため Actions 分課金は無し)。
 #    平日毎日 + VWAP と合わせると枠に近づくため、必要なら cron を Mon/Wed/Fri 等へ間引く。
@@ -55,6 +58,8 @@ jobs:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
       NOTION_YUHO_TEXT_DB_ID: ${{ secrets.NOTION_YUHO_TEXT_DB_ID }}
+      NOTION_STOCK_INFO_PAGE_ID: ${{ secrets.NOTION_STOCK_INFO_PAGE_ID }}
+      NOTION_PRICE_SYNC_DB_ID: ${{ secrets.NOTION_PRICE_SYNC_DB_ID }}
     steps:
       - uses: actions/checkout@v4
 

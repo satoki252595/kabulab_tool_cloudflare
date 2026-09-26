@@ -4,9 +4,25 @@ import {
   isDailySyncIncomplete,
   isMondayUtc,
   isTransientDailySyncFailure,
+  priceSyncStatusOf,
   prioritizeDailyRecoveryFailures,
   recoverTransientDailyFailures,
 } from "./daily.js";
+
+describe("priceSyncStatusOf (「株価の日次同期」記録の状態)", () => {
+  it("取引日が導出できなければ、失敗銘柄数に関わらず必ず「失敗」", () => {
+    expect(priceSyncStatusOf({ tradingDate: null, failedStocks: 0 })).toBe("失敗");
+    expect(priceSyncStatusOf({ tradingDate: null, failedStocks: 100 })).toBe("失敗");
+  });
+
+  it("取引日が分かり失敗銘柄が0なら「完了」", () => {
+    expect(priceSyncStatusOf({ tradingDate: "2026-09-25", failedStocks: 0 })).toBe("完了");
+  });
+
+  it("取引日が分かり失敗銘柄が1件以上なら「一部失敗」", () => {
+    expect(priceSyncStatusOf({ tradingDate: "2026-09-25", failedStocks: 3 })).toBe("一部失敗");
+  });
+});
 
 describe("createDailyStockStartGate", () => {
   it("既存の待機量のまま5 workerの開始を30msずつ平準化する", async () => {

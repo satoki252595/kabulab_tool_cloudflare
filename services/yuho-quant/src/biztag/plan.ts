@@ -158,6 +158,21 @@ function planOne(
   // ここから row.docId === doc.docId (同じ書類)。
   if (row.tagStatus === "判定済") {
     if (row.vocabVersion === vocab.version) {
+      // PR #108 で「事業タグの根拠文」列を追加した際、版が上がっただけで
+      // 影響なし (version_bump) だった行は根拠文を書き戻さずに素通りしたため、
+      // タグ/要確認はあるのに根拠文が空のまま残っている行がある。「タグ (3列
+      // いずれか) か要確認タグが 1 つでもあるのに根拠文が空」は判定のやり直し
+      // 漏れ (黙って空のまま skip しない — ルール2)。タグも要確認も無い行は
+      // 該当なしが正しい判定結果であり、根拠文が空でも正常なので skip のまま。
+      const hasTagOrUncertain =
+        row.upstream.length > 0 ||
+        row.downstream.length > 0 ||
+        row.distribution.length > 0 ||
+        (row.uncertain !== null && row.uncertain.length > 0);
+      const evidenceMissing = row.evidenceText === null || row.evidenceText.length === 0;
+      if (hasTagOrUncertain && evidenceMissing) {
+        return { ...base, kind: "retag", reason: "根拠文が未記録" };
+      }
       return { ...base, kind: "skip", reason: "同じ書類・判定済・同じ版" };
     }
     if (row.vocabVersion === null) {

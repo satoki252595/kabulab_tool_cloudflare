@@ -48,6 +48,19 @@ export const sharedEnv = {
   CLOUDFLARE_API_TOKEN: () => required("CLOUDFLARE_API_TOKEN"),
   CLOUDFLARE_ACCOUNT_ID: () => required("CLOUDFLARE_ACCOUNT_ID"),
   D1_DATABASE_ID: () => required("D1_DATABASE_ID"),
+  /**
+   * この実行の GitHub Actions run URL。GitHub Actions が自動で注入する
+   * `GITHUB_SERVER_URL`/`GITHUB_REPOSITORY`/`GITHUB_RUN_ID` から組み立てる
+   * (シークレットではないため .env / GitHub Secrets への登録は不要。ローカル
+   * 実行では未設定 = `undefined`)。「株価の日次同期」記録の実行URL列に使う。
+   */
+  GITHUB_RUN_URL: (): string | undefined => {
+    const server = optional("GITHUB_SERVER_URL");
+    const repo = optional("GITHUB_REPOSITORY");
+    const runId = optional("GITHUB_RUN_ID");
+    if (!server || !repo || !runId) return undefined;
+    return `${server}/${repo}/actions/runs/${runId}`;
+  },
 };
 
 /**
