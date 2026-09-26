@@ -96,7 +96,11 @@ export interface RunSummary {
   retryExhausted: string[];
 }
 
-function buildSchemaSpec(vocab: Vocabulary, sector33Options: string[]): SupplementSchemaSpec {
+/**
+ * competitors パイプライン (`competitors/pipeline.ts`) からも再利用する
+ * (「銘柄マスタ（補足）」の dbId/propertyIds 解決はここが正本。重複させない)。
+ */
+export function buildSchemaSpec(vocab: Vocabulary, sector33Options: string[]): SupplementSchemaSpec {
   return {
     textColumns: TEXT_SECTIONS.map((t) => t.title),
     upstreamOptions: vocab.business

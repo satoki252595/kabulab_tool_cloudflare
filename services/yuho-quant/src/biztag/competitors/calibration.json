@@ -1,0 +1,24 @@
+{
+  "model": "jev-1.13.0",
+  "yesMin": 0.5,
+  "noMax": 0.25,
+  "candidateTopK": 50,
+  "candidateWeights": { "tag": 0.55, "sector": 0.15, "text": 0.3 },
+  "candidatePostingCaps": { "tag": 60, "ngram": 120 },
+  "candidateVersion": "cand-v1",
+  "calibratedAt": "2026-09-26",
+  "basis": {
+    "evalSet": "services/yuho-quant/src/biztag/competitors/evalset/v1.json (79社・122組。実在の有報「事業の内容」原文からの引用つき手動キュレーション。同一クラスタ内の全組を正例、仕入先・販売先/同業種異製品/周辺事業重複/無関係を負例としてカテゴリ付け)",
+    "command": "pnpm biztag competitors-eval -- --yes-min=0.6 --no-max=0.3 --model=jev-1.13.0 (しきい値スイープ表から選定)",
+    "atChosenThresholds": {
+      "precisionYes": 1.0,
+      "recallYes": 0.928,
+      "truePositive": 90,
+      "falsePositive": 0,
+      "trueNegative": 25,
+      "falseNegative": 7
+    },
+    "why": "評価セット中の全ての負例 (25組) の確率が0.46以下だった一方、正例の多くは0.48以上に分布しており(境界例外6組は0.16〜0.27で候補生成前の絞り込みでも拾えない性質のもの)、yesMin=0.50で精度(はいの正解率)1.0を保ったまま再現率0.928を得た。0.47まで下げると正例をもう1組拾えるが(最大負例0.46との差がわずか0.02しかなく、jevはしきい値付近で回答が揺れる — biztag本体のcalibration.jsonと同じ既知の性質 — ため、境界からの安全マージンを優先しbiztag本体と同じ丸めの良いyesMin=0.50を採用した。noMax=0.25はbiztag本体と同じ値(本モジュールでは「要確認」帯を別列に保存しないため、しきい値の妥当性0<noMax<yesMin<1を満たす以外の実運用上の影響は無いが、一貫性のため揃えた)。",
+    "candidateRecall": "候補生成 (buildCandidates) を本番全数 (3,607社) の母集団で実行し、較正セットの正例97組が実際に相手の上位K候補に入っているかを測定した (docs §12.2)。K=18: 0.680 (66/97) / K=30: 0.825 (80/97) / K=50: 0.959 (93/97)。依頼で示唆されたK≈15-20では再現率不足と判明したため、jev呼び出し費用が無視できる水準であることを踏まえK=50を採用した。"
+  }
+}

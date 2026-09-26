@@ -91,6 +91,24 @@ mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反
 - Notion への書込は `src/shared/notion-archive/` 経由のみ(ルール6)。
   `api.notion.com` を biztag から直接叩かない。
 
+### 競合他社(competitors)固有のルール
+
+事業タグ・「事業の内容」から他銘柄との競合関係を jev で判定し、
+`銘柄マスタ（補足）` の自己参照 relation 列「競合他社」へ書く機能
+(`src/biztag/competitors/`)。設計の正本は
+[docs/005-yuho-quant-business-tags.md](../../docs/005-yuho-quant-business-tags.md)
+「12. 競合他社」節。以下は biztag 本体と共通のルール1/2/3/6 に加えた要点:
+
+- 候補生成 (`competitors/candidates.ts`) は**密な N×N 類似度行列を作らない**
+  (転置索引 + posting 数上限。§12.2 の実測を参照)。
+- 会社Bの説明はコード (`competitors/summary.ts`) が機械的に組み立てる。
+  **LLM に会社の説明文を作文させない** (ルール1)。
+- しきい値・候補パラメータ (K・重み・posting上限) は
+  `competitors/calibration.json` からのみ読む (`competitors/calibration.ts` の
+  `loadCompetitorCalibration()`)。未較正の値をコードに埋め込まない。
+- A→B の relation は**片方向のみ** (自動でミラーしない。§12.5)。
+- `NOTION_BIZTAG_LEDGER_DB_ID`(単語帳台帳)には触れない (D1 も読まない)。
+
 ## ディレクトリ
 
 ```
@@ -110,6 +128,7 @@ services/yuho-quant/
     │   └── projection.ts         # L2 投影 p_yuho_growth の再生成
     ├── views/                    # layout/home/stock-detail/screening/overseas-*
     └── tests/                    # parser/order/projection/universe テスト + fixtures
+├── src/biztag/competitors/       # 競合他社 (candidates/summary/question/process/pipeline/evalset/calibration)
 └── data-scripts/{backfill,backfill-overseas,backfill-text-sections,backfill-missing-docs,audit-overseas}.ts
 ```
 
@@ -127,6 +146,8 @@ pnpm biztag run             # 事業タグ判定 (差分処理。catchup.yml が
 pnpm biztag gate            # 単語帳の見直し提案の審査 (通常は run の冒頭が呼ぶ)
 pnpm biztag golden          # ゴールデンセットで精度測定 (しきい値較正用)
 pnpm biztag rollback        # 単語帳を過去の版へ巻き戻す (--to=vN --reason=...)
+pnpm biztag competitors     # 競合他社の判定・relation書込 (差分方式。--dry-run/--codes/--limit/--budget-min)
+pnpm biztag competitors-eval # 競合他社の評価セットで精度測定 (しきい値較正用)
 pnpm test / pnpm typecheck / pnpm lint
 ```
 

@@ -36,6 +36,15 @@ import { loadCalibration } from "../src/biztag/thresholds.js";
 import { parseVocabulary } from "../src/biztag/vocabulary/load.js";
 import { TEXT_SECTIONS } from "../src/services/edinet/text-sections.js";
 import * as yuhoSchema from "../src/db/schema.js";
+import { loadCompetitorCalibration } from "../src/biztag/competitors/calibration.js";
+import {
+  evaluateCompetitorsAtThresholds,
+  evaluateCompetitorEvalSet,
+  type EvalCompanyInput,
+  type EvalPerPairResult,
+} from "../src/biztag/competitors/evaluate.js";
+import { loadCompetitorEvalSet } from "../src/biztag/competitors/evalset.js";
+import { runCompetitors } from "../src/biztag/competitors/pipeline.js";
 
 const [, , subcommand, ...rest] = process.argv;
 
@@ -216,6 +225,144 @@ async function goldenCommand(): Promise<void> {
   console.info(formatThresholdSweep(evaluation.perItem, noMax));
 }
 
+async function competitorsCommand(): Promise<void> {
+  const budgetMin = arg("budget-min") ? Number(arg("budget-min")) : 20;
+  const limit = arg("limit") ? Number(arg("limit")) : undefined;
+  const codes = arg("codes")
+    ?.split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  const dryRun = hasFlag("dry-run");
+
+  const summary = await runCompetitors({
+    budgetMs: budgetMin * 60_000,
+    limit,
+    codes,
+    dryRun,
+  });
+
+  console.info(JSON.stringify(summary, null, 2));
+  writeGithubStepSummary(
+    [
+      `## biztag competitors`,
+      `- 候補生成の母集団: ${summary.corpusSize} 銘柄 (事業タグの状態=判定済)`,
+      `- 対象 (増分方式): ${summary.totalTargets} 銘柄 (処理 ${summary.processed} / 残 ${summary.remaining})`,
+      `- jev: ${summary.jev.calls}回 / 入力 ${summary.jev.inputTokens}tok / 概算 $${summary.jev.estimatedCostUsd.toFixed(4)}`,
+      `- 失敗: ${summary.failures.length}件`,
+      summary.dryRun ? "- dry-run (Notion への書込なし)" : "",
+    ]
+      .filter((l) => l.length > 0)
+      .join("\n")
+  );
+}
+
+/** yesMin を 0.50〜0.95 (0.05刻み) で振ったときの表 (競合他社版。golden.ts のスイープと同じ形)。 */
+function formatCompetitorThresholdSweep(perPair: EvalPerPairResult[], noMax: number): string {
+  const fmt = (v: number | null): string => (v === null ? "—" : v.toFixed(3));
+  const lines = [
+    "yesMin | noMax | precisionYes | recallYes",
+    "---|---|---|---",
+  ];
+  for (let i = 0; i <= 9; i++) {
+    const yesMin = Math.round((0.5 + i * 0.05) * 100) / 100;
+    if (!(noMax > 0 && noMax < yesMin && yesMin < 1)) {
+      lines.push(`${yesMin.toFixed(2)} | ${noMax} | (noMax >= yesMin のため対象外) |`);
+      continue;
+    }
+    const m = evaluateCompetitorsAtThresholds(perPair, { yesMin, noMax });
+    lines.push(`${yesMin.toFixed(2)} | ${noMax} | ${fmt(m.precisionYes)} | ${fmt(m.recallYes)}`);
+  }
+  return lines.join("\n");
+}
+
+async function competitorsEvalCommand(): Promise<void> {
+  const yesMinArg = arg("yes-min");
+  const noMaxArg = arg("no-max");
+  const modelArg = arg("model");
+  const outPath = arg("out");
+
+  let yesMin: number;
+  let noMax: number;
+  let model: string;
+  if (yesMinArg !== undefined && noMaxArg !== undefined) {
+    yesMin = Number(yesMinArg);
+    noMax = Number(noMaxArg);
+    if (modelArg === undefined) {
+      console.error(
+        "usage: calibration.json が無い状態で --yes-min= と --no-max= を指定する場合、--model=<jev モデル名> も必須です。"
+      );
+      process.exit(2);
+    }
+    model = modelArg;
+  } else {
+    const calibration = loadCompetitorCalibration();
+    yesMin = yesMinArg !== undefined ? Number(yesMinArg) : calibration.thresholds.yesMin;
+    noMax = noMaxArg !== undefined ? Number(noMaxArg) : calibration.thresholds.noMax;
+    model = modelArg ?? calibration.model;
+  }
+
+  const evalSet = loadCompetitorEvalSet();
+  const codes = Object.keys(evalSet.companies);
+  const { vocab } = await resolveActiveVocabulary(todayJst());
+  const { dbId, propertyIds } = await ensureSupplementDb({
+    textColumns: TEXT_SECTIONS.map((t) => t.title),
+    upstreamOptions: vocab.business.filter((t) => !t.deprecated && t.notionColumn === "upstream").map((t) => t.labelJa),
+    downstreamOptions: vocab.business
+      .filter((t) => !t.deprecated && t.notionColumn === "downstream")
+      .map((t) => t.labelJa),
+    distributionOptions: vocab.business
+      .filter((t) => !t.deprecated && t.notionColumn === "distribution")
+      .map((t) => t.labelJa),
+    themeOptions: vocab.themes.filter((t) => !t.deprecated).map((t) => t.labelJa),
+    versionOptions: [vocab.version],
+    sector33Options: [],
+  });
+  const rows = await loadSupplementRows(dbId, propertyIds, { codes, textColumns: ["事業の内容"] });
+  const rowByCode = new Map(rows.map((r) => [r.stockCode, r] as const));
+  const staleDocIds: string[] = [];
+  const companyOf = (code: string): EvalCompanyInput => {
+    const r = rowByCode.get(code);
+    if (!r) {
+      throw new Error(`competitors-eval: 銘柄マスタ（補足）に ${code} の行が見つかりません`);
+    }
+    const expected = evalSet.companies[code];
+    if (expected !== undefined && expected.docId !== r.docId) {
+      staleDocIds.push(`${code} (評価セット作成時=${expected.docId} 現在=${r.docId ?? "無し"})`);
+    }
+    return {
+      stockCode: r.stockCode,
+      companyName: r.companyName,
+      sector33: r.sector33,
+      tags: [...r.upstream, ...r.downstream, ...r.distribution],
+      businessText: r.texts["事業の内容"] ?? "",
+    };
+  };
+
+  const jevClient = createJevClient({ apiKey: jevEnv.TYPESAFE_API_KEY(), model });
+  const { perPair, jevCalls, inputTokens, outputTokens } = await evaluateCompetitorEvalSet(
+    evalSet,
+    companyOf,
+    jevClient,
+    { yesMin, noMax }
+  );
+  const metrics = evaluateCompetitorsAtThresholds(perPair, { yesMin, noMax });
+  const out = {
+    model,
+    thresholds: { yesMin, noMax },
+    metrics,
+    jev: { calls: jevCalls, inputTokens, outputTokens },
+    staleDocIds,
+  };
+  console.info(JSON.stringify(out, null, 2));
+  if (outPath) {
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(outPath, JSON.stringify({ ...out, perPair }, null, 2), "utf-8");
+  }
+
+  console.info("\n## しきい値スイープ (yesMin 0.50〜0.95, noMax 固定, jev 再呼び出しなし)\n");
+  console.info(formatCompetitorThresholdSweep(perPair, noMax));
+}
+
 async function rollbackCommand(): Promise<void> {
   const to = arg("to");
   const reason = arg("reason");
@@ -289,9 +436,14 @@ async function main(): Promise<void> {
       return packetCommand();
     case "stats":
       return statsCommand();
+    case "competitors":
+      return competitorsCommand();
+    case "competitors-eval":
+      return competitorsEvalCommand();
     default:
       console.error(
-        "usage: pnpm biztag <run|gate|golden|rollback|packet|stats> [options] (docs/005-yuho-quant-business-tags.md §11)"
+        "usage: pnpm biztag <run|gate|golden|rollback|packet|stats|competitors|competitors-eval> [options] " +
+          "(docs/005-yuho-quant-business-tags.md §11・「競合他社」節)"
       );
       process.exit(2);
   }
