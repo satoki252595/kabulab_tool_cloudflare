@@ -1,0 +1,83 @@
+{
+  "baseVersion": "v4",
+  "noChange": false,
+  "reason": "利用者からの指摘 (9987 スズケン: 中核事業の医薬品卸売が付かず、周辺事業の物流受託から誤って投資テーマ「港湾ロジスティクス」が付く) を受けた是正。全銘柄横断で2点の系統的な問題を特定した。(1) テーマの構成語が汎用的すぎる: T.PORT_LOGISTICS(港湾ロジスティクス)の定義は成長戦略ロードマップの港湾ロジスティクス分野が挙げる項目(港湾荷役機械・次世代型倉庫)に限られるが、単語帳では構成語に B.LOGI.WAREHOUSING_3PL(倉庫・3PL。定義自体が『常温・常圧の普通倉庫』全般を指し港湾に限定されない)と B.MACH.MATERIAL_HANDLING(物流機器・マテハン。定義自体が『工場、倉庫、鉱山』向けの搬送機器で港湾を含まない)という、それ自体の定義に港湾との関連が無い2語を含めていた。実データでは145社が本テーマを持つうち116社(倉庫・3PL単独90社+マテハン単独26社)がこの2語だけを根拠にテーマ付けされており、佐川急便グループ(SGホールディングス)やハマキョウレックスのような陸運会社にまで『港湾ロジスティクス』が付いていた。港湾で船舶への荷役・コンテナターミナル運営を行う B.LOGI.PORT_OPERATIONS(港湾運送・港湾荷役)のみを構成語として残す。(2) 単語帳のキーワードが有報の実際の言い回しに当たらない: B.SVC.SPECIALTY_WHOLESALE(専門商社・卸売業)の keywords は『卸売業』『卸売販売』等だが、有報の事業区分表は『医薬品卸売事業』『水産物卸売事業』のように『卸売事業』という言い回しを使うことが多く(実測: 事業の内容に『◯◯卸売事業』という表記がある59社中46社が候補にすらならなかった)、卸売業界最大手であるメディパルホールディングス・アルフレッサホールディングス・東邦ホールディングス・バイタルケーエスケーホールディングス・スズケンの医療用医薬品卸売の中核事業が軒並み候補にならず、周辺事業だけがタグ付けされる原因になっていた。『卸売事業』を add_keywords で補強する(漢字の複合語のため境界規則の影響を受けず、既存の『卸売業』と同様に安全に当たる)。さらに add_keywords だけでは jev の判定文(definitionEn)が挙げる例示商品分野(産業機械・電子部品・鉄鋼・化学・建材・繊維・食品)に医薬品が無いため、キーワードで候補になっても医薬品卸売各社(スズケン・アルフレッサ・東邦HD・バイタルケーエスケー)が『確認不能』止まりになることをドライランで確認した(定義文の例示不足が原因。日本標準産業分類でも卸売業の中分類55『その他の卸売業』552『医薬品・化粧品等卸売業』5521『医薬品卸売業』として卸売業の一区分に明記されている)。definitionJa/definitionEn の例示に『医薬品・医療用品』を追加する update を併せて提案する。出典はすべて日本標準産業分類(総務省 R5)・日本成長戦略(2026年7月21日閣議決定)・戦略17分野ロードマップ(2026-07-21)の既存出典を再利用する(新規の公的資料は使わない)。",
+  "sourcesChecked": [
+    {
+      "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+      "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+      "date": "2023-07"
+    },
+    {
+      "title": "戦略17分野における「主要な製品・技術等」の官民投資ロードマップ",
+      "url": "https://www.cas.go.jp/jp/seisaku/nipponseichosenryaku/pdf/rm2026.pdf",
+      "date": "2026-07-21"
+    }
+  ],
+  "exampleCompanies": {
+    "B.SVC.SPECIALTY_WHOLESALE": ["9987", "7459", "2784", "8129", "3151"]
+  },
+  "changes": [
+    {
+      "op": "update",
+      "id": "T.PORT_LOGISTICS",
+      "patch": {
+        "members": ["B.LOGI.PORT_OPERATIONS"]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類2533 物流運搬設備製造業（小分類253）p.260",
+          "quote": "主として工場、倉庫、鉱山、その他産業用のコンベヤ及び荷役運搬設"
+        },
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07-27",
+          "section": "中分類47 倉庫業 > 471 倉庫業（冷蔵倉庫業を除く） > 4711 倉庫業（冷蔵倉庫業を除く）",
+          "quote": "倉庫（冷蔵倉庫を除く）に物品を保管することを業とする"
+        },
+        {
+          "title": "戦略17分野における「主要な製品・技術等」の官民投資ロードマップ",
+          "url": "https://www.cas.go.jp/jp/seisaku/nipponseichosenryaku/pdf/rm2026.pdf",
+          "date": "2026-07-21",
+          "section": "目次(港湾ロジスティクス分野)①港湾荷役機械 ③次世代型倉庫(p.264-274)",
+          "quote": "③次世代型倉庫"
+        }
+      ]
+    },
+    {
+      "op": "add_keywords",
+      "id": "B.SVC.SPECIALTY_WHOLESALE",
+      "keywords": ["卸売事業"],
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "大分類Ｉ－卸売業，小売業 総説(p.353)",
+          "quote": "有体的商品を購入して販売する事業所が分類される"
+        }
+      ]
+    },
+    {
+      "op": "update",
+      "id": "B.SVC.SPECIALTY_WHOLESALE",
+      "patch": {
+        "definitionJa": "産業機械・電子部品、鉄鋼・非鉄金属、化学製品、建築材料、繊維、食品、医薬品・医療用品などの特定の商品分野を専門に仕入れて他の事業者や法人顧客に販売する卸売事業(専門商社)。自社で製造した製品を自社ブランドで販売する製造業や、個人向けの小売業は含まない。",
+        "definitionEn": "Wholesale trading business that purchases goods in a specific product category (such as industrial machinery and electronic components, steel and non-ferrous metals, chemicals, building materials, textiles, food, or pharmaceuticals and medical supplies) from other manufacturers and resells them to other businesses or corporate customers, i.e. a specialty trading company (senmon shosha). Does not include manufacturing its own branded products or retail sales to individual consumers."
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "中分類55 その他の卸売業 > 552 医薬品・化粧品等卸売業 > 5521 医薬品卸売業",
+          "quote": "医薬品・化粧品等卸売業"
+        }
+      ]
+    }
+  ]
+}
