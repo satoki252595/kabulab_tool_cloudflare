@@ -1,0 +1,1494 @@
+{
+  "version": "v1",
+  "createdAt": "2026-09-26",
+  "companies": {
+    "7203": {
+      "name": "トヨタ自動車",
+      "sector33": "輸送用機器",
+      "docId": "S100Y8NY",
+      "periodEnd": "2026-03-31",
+      "group": "auto",
+      "quote": "セダン、ミニバン、コンパクト、SUV、トラック等の自動車とその関連部品・用品の設計、製造および販売を行っています"
+    },
+    "7267": {
+      "name": "本田技研工業",
+      "sector33": "輸送用機器",
+      "docId": "S100YDD9",
+      "periodEnd": "2026-03-31",
+      "group": "auto",
+      "quote": "事業別には、二輪事業、四輪事業、金融サービス事業およびパワープロダクツ事業及びその他の事業からなっています"
+    },
+    "7201": {
+      "name": "日産自動車",
+      "sector33": "輸送用機器",
+      "docId": "S100YH2B",
+      "periodEnd": "2026-03-31",
+      "group": "auto",
+      "quote": "自動車及び部品の製造と販売を主な事業内容とし、さらに上記事業における販売活動を支援するために販売金融事業を行っている"
+    },
+    "7269": {
+      "name": "スズキ",
+      "sector33": "輸送用機器",
+      "docId": "S100YYB1",
+      "periodEnd": "2026-03-31",
+      "group": "auto",
+      "quote": "四輪車、二輪車、船外機及び電動車いす他の製造販売を主な内容とし"
+    },
+    "7270": {
+      "name": "ＳＵＢＡＲＵ",
+      "sector33": "輸送用機器",
+      "docId": "S100YFKZ",
+      "periodEnd": "2026-03-31",
+      "group": "auto",
+      "quote": "自動車ならびにその部品の製造、販売および修理を行っています"
+    },
+    "5108": {
+      "name": "ブリヂストン",
+      "sector33": "ゴム製品",
+      "docId": "S100XRPR",
+      "periodEnd": "2025-12-31",
+      "group": "tire",
+      "quote": "「日本」「アジア・大洋州・インド・中国」「米州」「欧州・中近東・アフリカ」の報告セグメント及びその他のセグメント区分で以下の事業を行っております"
+    },
+    "5110": {
+      "name": "住友ゴム工業",
+      "sector33": "ゴム製品",
+      "docId": "S100XT7A",
+      "periodEnd": "2025-12-31",
+      "group": "tire",
+      "quote": "タイヤ事業、スポーツ事業及び産業品他事業のほか、各事業に付帯・関連するサービス等の事業を国内及び海外で展開しております"
+    },
+    "5105": {
+      "name": "ＴＯＹＯ　ＴＩＲＥ",
+      "sector33": "ゴム製品",
+      "docId": "S100XTYE",
+      "periodEnd": "2025-12-31",
+      "group": "tire",
+      "quote": "タイヤ事業（タイヤの製造販売）及び自動車部品事業（自動車用部品の製造販売）を主として行っており"
+    },
+    "5101": {
+      "name": "横浜ゴム",
+      "sector33": "ゴム製品",
+      "docId": "S100XV3S",
+      "periodEnd": "2025-12-31",
+      "group": "tire",
+      "quote": "タイヤ乗用車用、トラック・バス用、小型トラック用、農業機械用、産業車両用、鉱山・建設車両用、林業機械用などの各種タイヤ、チューブ、アルミホイール、自動車関連用品"
+    },
+    "7459": {
+      "name": "メディパルホールディングス",
+      "sector33": "卸売業",
+      "docId": "S100YI1C",
+      "periodEnd": "2026-03-31",
+      "group": "pharma_wholesale",
+      "quote": "医薬品、化粧品・日用品、動物用医薬品等の販売やサービスの提供を主とする事業活動を展開しております"
+    },
+    "2784": {
+      "name": "アルフレッサ　ホールディングス",
+      "sector33": "卸売業",
+      "docId": "S100YH29",
+      "periodEnd": "2026-03-31",
+      "group": "pharma_wholesale",
+      "quote": "医療用医薬品、医療用検査試薬、医療機器・材料等の卸販売"
+    },
+    "8129": {
+      "name": "東邦ホールディングス",
+      "sector33": "卸売業",
+      "docId": "S100YHSN",
+      "periodEnd": "2026-03-31",
+      "group": "pharma_wholesale",
+      "quote": "製薬会社等から医薬品及び医療関連商品を仕入れ、病院・診療所・調剤薬局等へ販売しております"
+    },
+    "3151": {
+      "name": "バイタルケーエスケー・ホールディングス",
+      "sector33": "卸売業",
+      "docId": "S100YDSN",
+      "periodEnd": "2026-03-31",
+      "group": "pharma_wholesale",
+      "quote": "医薬品卸売事業、薬局事業、動物用医薬品卸売事業、製薬事業、介護レンタルその他事業の５部門に関係する事業を主として行っており"
+    },
+    "9987": {
+      "name": "スズケン",
+      "sector33": "卸売業",
+      "docId": "S100YFRU",
+      "periodEnd": "2026-03-31",
+      "group": "pharma_wholesale",
+      "quote": "医薬品等の販売、医薬品・医療機器等の製造販売、保険薬局・介護サービス、スペシャリティ医薬品流通受託、医薬品メーカー支援サービス及びこれらに付随する事業を営んでおります"
+    },
+    "8058": {
+      "name": "三菱商事",
+      "sector33": "卸売業",
+      "docId": "S100YB25",
+      "periodEnd": "2026-03-31",
+      "group": "trading_house",
+      "quote": "当社は取扱商品又はサービスの内容に応じて事業を複数の営業グループに区分しており"
+    },
+    "8001": {
+      "name": "伊藤忠商事",
+      "sector33": "卸売業",
+      "docId": "S100YA6H",
+      "periodEnd": "2026-03-31",
+      "group": "trading_house",
+      "quote": "多種多様な商品のトレーディング、ファイナンス、物流及びプロジェクト案件の企画・調整等を行う他、資源開発投資・事業投資等の実行を通して各種機能・ノウハウ等を培い、かつ保有しております"
+    },
+    "8031": {
+      "name": "三井物産",
+      "sector33": "卸売業",
+      "docId": "S100YAVT",
+      "periodEnd": "2026-03-31",
+      "group": "trading_house",
+      "quote": "金属資源、エネルギー、機械・インフラ、化学品、鉄鋼製品、生活産業、次世代・機能推進等の各分野において、総合商社である当社を中心として全世界に広がる事業拠点とその情報力を活用し、多種多様な商品の売買、製造、輸送、ファイナンス等各種事業を多角的に行っています"
+    },
+    "8053": {
+      "name": "住友商事",
+      "sector33": "卸売業",
+      "docId": "S100YARD",
+      "periodEnd": "2026-03-31",
+      "group": "trading_house",
+      "quote": "ビジネス創出力、ロジスティクス構築力、金融サービス提供力、IT活用力、リスク管理力、情報収集・分析力といった機能を統合することにより、顧客の多様なニーズに応え、多角的な事業活動をグローバル連結ベースで展開しております"
+    },
+    "8002": {
+      "name": "丸紅",
+      "sector33": "卸売業",
+      "docId": "S100YAY4",
+      "periodEnd": "2026-03-31",
+      "group": "trading_house",
+      "quote": "ライフスタイル、食料・アグリ、金属、エネルギー・化学品、電力・インフラサービス、金融・リース・不動産、エアロスペース・モビリティ、情報ソリューション"
+    },
+    "8015": {
+      "name": "豊田通商",
+      "sector33": "卸売業",
+      "docId": "S100YOTT",
+      "periodEnd": "2026-03-31",
+      "group": "trading_house",
+      "quote": "国内及び海外における各種商品の売買等を主要事業とし、これらの商品の製造・加工・販売、事業投資、サービスの提供などの事業に携わっております"
+    },
+    "8306": {
+      "name": "三菱ＵＦＪフィナンシャル・グループ",
+      "sector33": "銀行業",
+      "docId": "S100YJQO",
+      "periodEnd": "2026-03-31",
+      "group": "megabank",
+      "quote": "銀行業務、信託銀行業務、証券業務を中心に、クレジットカード・貸金業務、リース業務、資産運用業務、その他業務を行っております"
+    },
+    "8316": {
+      "name": "三井住友フィナンシャルグループ",
+      "sector33": "銀行業",
+      "docId": "S100YERK",
+      "periodEnd": "2026-03-31",
+      "group": "megabank",
+      "quote": "銀行業務を中心に、リース業務、証券業務、コンシューマーファイナンス業務、システム開発・情報処理業務などの金融サービスに係る事業を行っております"
+    },
+    "8411": {
+      "name": "みずほフィナンシャルグループ",
+      "sector33": "銀行業",
+      "docId": "S100YF8Y",
+      "periodEnd": "2026-03-31",
+      "group": "megabank",
+      "quote": "銀行業務、信託業務、証券業務、その他の金融サービスに係る業務を行っております"
+    },
+    "9432": {
+      "name": "ＮＴＴ",
+      "sector33": "情報・通信業",
+      "docId": "S100YCP3",
+      "periodEnd": "2026-03-31",
+      "group": "telecom",
+      "quote": "総合ICT事業、グローバル・ソリューション事業、地域通信事業を主な事業内容としています"
+    },
+    "9433": {
+      "name": "ＫＤＤＩ",
+      "sector33": "情報・通信業",
+      "docId": "S100YKG2",
+      "periodEnd": "2026-03-31",
+      "group": "telecom",
+      "quote": "「パーソナル事業」、「ビジネス事業」を主な事業としております"
+    },
+    "9434": {
+      "name": "ソフトバンク",
+      "sector33": "情報・通信業",
+      "docId": "S100YE76",
+      "periodEnd": "2026-03-31",
+      "group": "telecom",
+      "quote": "ソフトウエアの卸販売、ブロードバ"
+    },
+    "8233": {
+      "name": "高島屋",
+      "sector33": "小売業",
+      "docId": "S100Y4X5",
+      "periodEnd": "2026-02-28",
+      "group": "department_store",
+      "quote": "国内百貨店業、海外百貨店業を主要業務として、国内商業開発業、海外商業開発業、金融業及び建装業等を営んでおります"
+    },
+    "3086": {
+      "name": "Ｊ．フロント　リテイリング",
+      "sector33": "小売業",
+      "docId": "S100Y6K0",
+      "periodEnd": "2026-02-28",
+      "group": "department_store",
+      "quote": "百貨店事業を中心としてショッピングセンター事業（以下、ＳＣ事業）、デベロッパー事業、決済・金融事業、卸売業、事務処理業務受託業、駐車場業及びリース業などの事業を展開しております"
+    },
+    "8242": {
+      "name": "エイチ・ツー・オー　リテイリング",
+      "sector33": "小売業",
+      "docId": "S100YDD0",
+      "periodEnd": "2026-03-31",
+      "group": "department_store",
+      "quote": "百貨店事業……………………子会社㈱阪急阪神百貨店が百貨店業を展開しております"
+    },
+    "5233": {
+      "name": "太平洋セメント",
+      "sector33": "ガラス・土石製品",
+      "docId": "S100YJYE",
+      "periodEnd": "2026-03-31",
+      "group": "cement",
+      "quote": "セメント事業、資源事業、環境事業、建材・建築土木事業、その他に不動産、エンジニアリング、情報処理、金融、運輸・倉庫、化学製品、スポーツ、電力供給等の事業を営み"
+    },
+    "5232": {
+      "name": "住友大阪セメント",
+      "sector33": "ガラス・土石製品",
+      "docId": "S100YH1Y",
+      "periodEnd": "2026-03-31",
+      "group": "cement",
+      "quote": "セメント事業については、セメントの製造・販売を中心とし、生コンクリートの製造・販売、セメント工場における電力の販売やリサイクル原燃料の受入処理、電設・営繕工事、各種品質試験サービス等の事業を行っております"
+    },
+    "5262": {
+      "name": "日本ヒューム",
+      "sector33": "ガラス・土石製品",
+      "docId": "S100YL8F",
+      "periodEnd": "2026-03-31",
+      "group": "cement",
+      "quote": "コンクリートパイルの製造・販売、杭打工事などを行っております"
+    },
+    "5401": {
+      "name": "日本製鉄",
+      "sector33": "鉄鋼",
+      "docId": "S100YF8E",
+      "periodEnd": "2026-03-31",
+      "group": "steel",
+      "quote": "製鉄事業、エンジニアリング事業、ケミカル＆マテリアル事業及びシステムソリューション事業です"
+    },
+    "5411": {
+      "name": "ＪＦＥホールディングス",
+      "sector33": "鉄鋼",
+      "docId": "S100YCUD",
+      "periodEnd": "2026-03-31",
+      "group": "steel",
+      "quote": "「ＪＦＥスチール㈱」、「ＪＦＥエンジニアリング㈱」、「ＪＦＥ商事㈱」の３つの事業会社により、事業分野ごとの特性に応じた最適な業務執行体制の構築を図っております"
+    },
+    "5406": {
+      "name": "神戸製鋼所",
+      "sector33": "鉄鋼",
+      "docId": "S100YCDA",
+      "periodEnd": "2026-03-31",
+      "group": "steel",
+      "quote": "線材条鋼（線材、棒鋼）、薄板（熱延、冷延、表面処理）、厚板、アルミ板、その他（鋼片、鋳物用銑、製鋼用銑、スラグ製品）"
+    },
+    "2502": {
+      "name": "アサヒグループホールディングス",
+      "sector33": "食料品",
+      "docId": "S100YVTZ",
+      "periodEnd": "2025-12-31",
+      "group": "beer",
+      "quote": "アサヒビール㈱は全国でビール類、低アルコール飲料等の製造・販売及び焼酎、洋酒、ワイン等の販売を行っております"
+    },
+    "2503": {
+      "name": "キリンホールディングス",
+      "sector33": "食料品",
+      "docId": "S100YT3M",
+      "periodEnd": "2025-12-31",
+      "group": "beer",
+      "quote": "麒麟麦酒㈱を中心に、ビール類、低アルコール飲料等の製造・販売を行っております"
+    },
+    "9064": {
+      "name": "ヤマトホールディングス",
+      "sector33": "陸運業",
+      "docId": "S100YAYL",
+      "periodEnd": "2026-03-31",
+      "group": "logistics",
+      "quote": "「エクスプレス事業」「コントラクト・ロジスティクス事業」「グローバル事業」「モビリティ事業」を主な事業としているほか"
+    },
+    "9143": {
+      "name": "ＳＧホールディングス",
+      "sector33": "陸運業",
+      "docId": "S100Y9P7",
+      "periodEnd": "2026-03-31",
+      "group": "logistics",
+      "quote": "「デリバリー事業」、「ロジスティクス事業」、「グローバル物流事業」、「不動産事業」等の事業を営んでおります"
+    },
+    "9147": {
+      "name": "ＮＩＰＰＯＮ　ＥＸＰＲＥＳＳホールディングス",
+      "sector33": "陸運業",
+      "docId": "S100XTG8",
+      "periodEnd": "2025-12-31",
+      "group": "logistics",
+      "quote": "貨物自動車運送業、鉄道利用運送業、航空利用運送業、海上運送業、港湾運送業、倉庫業等を行っている「ロジスティクス事業」を主軸とし"
+    },
+    "6752": {
+      "name": "パナソニック　ホールディングス",
+      "sector33": "電気機器",
+      "docId": "S100YETA",
+      "periodEnd": "2026-03-31",
+      "group": "electric_conglomerate",
+      "quote": "総合エレクトロニクスメーカーとして関連する事業分野について国内外のグループ各社との緊密な連携のもとに、開発・生産・販売・サービス活動を展開しています"
+    },
+    "6503": {
+      "name": "三菱電機",
+      "sector33": "電気機器",
+      "docId": "S100YD3V",
+      "periodEnd": "2026-03-31",
+      "group": "electric_conglomerate",
+      "quote": "インフラ、インダストリー・モビリティ、ライフ、デジタルイノベーション、セミコンダクター・デバイス、その他の6セグメントに関係する事業を行っており"
+    },
+    "6501": {
+      "name": "日立製作所",
+      "sector33": "電気機器",
+      "docId": "S100YGBO",
+      "periodEnd": "2026-03-31",
+      "group": "electric_conglomerate",
+      "quote": "「デジタルシステム＆サービス」「エナジー」「モビリティ」「コネクティブインダストリーズ」の４つのセクターを成長分野として位置付け"
+    },
+    "9201": {
+      "name": "日本航空",
+      "sector33": "空運業",
+      "docId": "S100YFIO",
+      "periodEnd": "2026-03-31",
+      "group": "airline",
+      "quote": "「フルサービスキャリア事業」、「LCC事業」、「マイル／金融・コマース事業」および「その他」を営んでおり"
+    },
+    "9202": {
+      "name": "ＡＮＡホールディングス",
+      "sector33": "空運業",
+      "docId": "S100YKL4",
+      "periodEnd": "2026-03-31",
+      "group": "airline",
+      "quote": "「航空事業」をはじめ、「航空関連事業」、「旅行事業」、「商社事業」及び「その他」を営んでいます"
+    },
+    "9101": {
+      "name": "日本郵船",
+      "sector33": "海運業",
+      "docId": "S100YBT6",
+      "periodEnd": "2026-03-31",
+      "group": "shipping",
+      "quote": "定期船事業、物流事業、自動車事業、ドライバルク事業、エネルギー事業、その他事業の６部門に属する事業を行っています"
+    },
+    "9104": {
+      "name": "商船三井",
+      "sector33": "海運業",
+      "docId": "S100YI2T",
+      "periodEnd": "2026-03-31",
+      "group": "shipping",
+      "quote": "ドライバルク事業、エネルギー事業、製品輸送事業、ウェルビーイングライフ事業、関連事業及びその他の６セグメントに分類されており"
+    },
+    "9107": {
+      "name": "川崎汽船",
+      "sector33": "海運業",
+      "docId": "S100YC6B",
+      "periodEnd": "2026-03-31",
+      "group": "shipping",
+      "quote": "「ドライバルク」、「エネルギー資源」及び「製品物流」の３区分を報告セグメントとしています"
+    },
+    "8750": {
+      "name": "第一ライフグループ",
+      "sector33": "保険業",
+      "docId": "S100YC7A",
+      "periodEnd": "2026-03-31",
+      "group": "life_insurance",
+      "quote": "当社グループは2026年３月31日現在、当社(保険持株会社）及び当社の関係会社（子会社198社及び関連会社255社）によって構成されております"
+    },
+    "8795": {
+      "name": "Ｔ＆Ｄホールディングス",
+      "sector33": "保険業",
+      "docId": "S100YZ3S",
+      "periodEnd": "2026-03-31",
+      "group": "life_insurance",
+      "quote": "生命保険業を中心に、以下の業務を行っております"
+    },
+    "6857": {
+      "name": "アドバンテスト",
+      "sector33": "電気機器",
+      "docId": "S100YKTA",
+      "periodEnd": "2026-03-31",
+      "group": null,
+      "quote": "テストシステム製品群とテストハンドラやデバイスインタフェース等のメカトロニクス関連製品群の製造・販売を主な事業内容とし"
+    },
+    "8035": {
+      "name": "東京エレクトロン",
+      "sector33": "電気機器",
+      "docId": "S100YEOO",
+      "periodEnd": "2026-03-31",
+      "group": null,
+      "quote": "エレクトロニクス技術を利用した半導体製造装置の開発・製造・販売・保守サービスを主な事業の内容としております"
+    },
+    "7735": {
+      "name": "ＳＣＲＥＥＮホールディングス",
+      "sector33": "電気機器",
+      "docId": "S100YK9N",
+      "periodEnd": "2026-03-31",
+      "group": null,
+      "quote": "半導体製造装置、印刷関連機器、ディスプレー製造装置、成膜装置およびプリント基板関連機器の製造・販売を主な事業内容とし"
+    },
+    "6920": {
+      "name": "レーザーテック",
+      "sector33": "電気機器",
+      "docId": "S100WQ7F",
+      "periodEnd": "2025-06-30",
+      "group": null,
+      "quote": "光応用技術を用いた半導体関連及びその他の検査・測定装置等の設計、製造、販売並びにこれらに係るサービスを主な事業内容としております"
+    },
+    "6723": {
+      "name": "ルネサスエレクトロニクス",
+      "sector33": "電気機器",
+      "docId": "S100XR06",
+      "periodEnd": "2025-12-31",
+      "group": null,
+      "quote": "半導体専業メーカーとして、各種半導体に関する研究、開発、設計、製造、販売およびサービスを行っております"
+    },
+    "4004": {
+      "name": "レゾナック・ホールディングス",
+      "sector33": "化学",
+      "docId": "S100XTT8",
+      "periodEnd": "2025-12-31",
+      "group": "chemicals_diversified",
+      "quote": "各事業区分における主要製品・商品等と当社及び主な関係会社の当該事業に係る位置づけは次のとおりであります"
+    },
+    "4005": {
+      "name": "住友化学",
+      "sector33": "化学",
+      "docId": "S100YAUO",
+      "periodEnd": "2026-03-31",
+      "group": "chemicals_diversified",
+      "quote": "農薬、肥料、農業資材、家庭用・防疫用殺虫剤、熱帯感染症対策資材、飼料添加物等の製造・販売を行っております"
+    },
+    "4188": {
+      "name": "三菱ケミカルグループ",
+      "sector33": "化学",
+      "docId": "S100YFSR",
+      "periodEnd": "2026-03-31",
+      "group": "chemicals_diversified",
+      "quote": "スペシャリティマテリアルズ、MMA＆デリバティブズ、ベーシックマテリアルズ＆ポリマーズ、産業ガスの４つのセグメント"
+    },
+    "4183": {
+      "name": "三井化学",
+      "sector33": "化学",
+      "docId": "S100YGUI",
+      "periodEnd": "2026-03-31",
+      "group": "chemicals_diversified",
+      "quote": "ライフ＆ヘルスケア・ソリューション、モビリティソリューション、ICTソリューション及びベーシック＆グリーン・マテリアルズの製造・販売を主な事業内容とし"
+    },
+    "1925": {
+      "name": "大和ハウス工業",
+      "sector33": "建設業",
+      "docId": "S100YAZ5",
+      "periodEnd": "2026-03-31",
+      "group": "homebuilder",
+      "quote": "戸建住宅、賃貸住宅、マンション、商業施設、事業施設、環境エネルギー及びその他の７事業を主として行っており"
+    },
+    "1928": {
+      "name": "積水ハウス",
+      "sector33": "建設業",
+      "docId": "S100XZ22",
+      "periodEnd": "2026-01-31",
+      "group": "homebuilder",
+      "quote": "戸建住宅事業、賃貸・事業用建物事業、建築・土木事業、賃貸住宅管理事業、リフォーム事業、開発事業、国際事業等に関連する事業活動を行っています"
+    },
+    "1801": {
+      "name": "大成建設",
+      "sector33": "建設業",
+      "docId": "S100YDJC",
+      "periodEnd": "2026-03-31",
+      "group": "general_contractor",
+      "quote": "土木事業、建築事業及び開発事業を主な事業とし"
+    },
+    "1802": {
+      "name": "大林組",
+      "sector33": "建設業",
+      "docId": "S100YITC",
+      "periodEnd": "2026-03-31",
+      "group": "general_contractor",
+      "quote": "建設事業（国内建築事業、海外建築事業、国内土木事業及び海外土木事業）及び不動産事業であり"
+    },
+    "1803": {
+      "name": "清水建設",
+      "sector33": "建設業",
+      "docId": "S100YDXD",
+      "periodEnd": "2026-03-31",
+      "group": "general_contractor",
+      "quote": "建設事業、開発事業及び各事業に附帯関連する事業を営んでおります"
+    },
+    "1812": {
+      "name": "鹿島建設",
+      "sector33": "建設業",
+      "docId": "S100YGGI",
+      "periodEnd": "2026-03-31",
+      "group": "general_contractor",
+      "quote": "土木事業、建築事業、開発事業等の事業活動を展開するとともに"
+    },
+    "4502": {
+      "name": "武田薬品工業",
+      "sector33": "医薬品",
+      "docId": "S100YB5L",
+      "periodEnd": "2026-03-31",
+      "group": "pharma_manufacturer",
+      "quote": "幅広い医薬品のポートフォリオを有し、研究、開発、製造およびグローバルでの販売を行っています"
+    },
+    "4503": {
+      "name": "アステラス製薬",
+      "sector33": "医薬品",
+      "docId": "S100YBPK",
+      "periodEnd": "2026-03-31",
+      "group": "pharma_manufacturer",
+      "quote": "医薬品の研究開発、製造及び販売を主要な事業としています"
+    },
+    "4568": {
+      "name": "第一三共",
+      "sector33": "医薬品",
+      "docId": "S100YZB3",
+      "periodEnd": "2026-03-31",
+      "group": "pharma_manufacturer",
+      "quote": "医薬品等の製造販売を主な事業内容としております"
+    },
+    "4519": {
+      "name": "中外製薬",
+      "sector33": "医薬品",
+      "docId": "S100XTBJ",
+      "periodEnd": "2025-12-31",
+      "group": "pharma_manufacturer",
+      "quote": "当社が製造した医薬品を、全国の特約店を通じて販売しております"
+    },
+    "4523": {
+      "name": "エーザイ",
+      "sector33": "医薬品",
+      "docId": "S100YB05",
+      "periodEnd": "2026-03-31",
+      "group": "pharma_manufacturer",
+      "quote": "医療用医薬品、一般用医薬品等の研究開発・製造・販売を行っており"
+    },
+    "4911": {
+      "name": "資生堂",
+      "sector33": "化学",
+      "docId": "S100XSCU",
+      "periodEnd": "2025-12-31",
+      "group": "cosmetics",
+      "quote": "化粧品、化粧用具、美容食品および医薬品の販売を主な事業内容とし"
+    },
+    "4922": {
+      "name": "コーセーホールディングス",
+      "sector33": "化学",
+      "docId": "S100XSUW",
+      "periodEnd": "2025-12-31",
+      "group": "cosmetics",
+      "quote": "化粧品製造連結子会社"
+    },
+    "8601": {
+      "name": "大和証券グループ本社",
+      "sector33": "証券、商品先物取引業",
+      "docId": "S100YCMP",
+      "periodEnd": "2026-03-31",
+      "group": "securities",
+      "quote": "有価証券及びデリバティブ商品の売買等及び売買等の委託の媒介、有価証券の引受け及び売出し、有価証券の募集及び売出しの取扱い、有価証券の私募の取扱いその他有価証券関連業並びに銀行業その他の金融業等を営んでおります"
+    },
+    "8604": {
+      "name": "野村ホールディングス",
+      "sector33": "証券、商品先物取引業",
+      "docId": "S100YC5C",
+      "periodEnd": "2026-03-31",
+      "group": "securities",
+      "quote": "有価証券の売買等および売買等の委託の媒介、有価証券の引受けおよび売出し、有価証券の募集および売出しの取扱い、有価証券の私募の取扱い、自己資金投資業、アセット・マネジメント業、銀行業、その他の証券業および金融業等を営んでおります"
+    },
+    "8801": {
+      "name": "三井不動産",
+      "sector33": "不動産業",
+      "docId": "S100YHUO",
+      "periodEnd": "2026-03-31",
+      "group": "real_estate_developer",
+      "quote": "三井不動産㈱はオフィスビルおよび商業施設等の賃貸を行っています"
+    },
+    "8802": {
+      "name": "三菱地所",
+      "sector33": "不動産業",
+      "docId": "S100YBLA",
+      "periodEnd": "2026-03-31",
+      "group": "real_estate_developer",
+      "quote": "ビルや商業施設などの開発・賃貸を中心とするコマーシャル不動産事業、大手町・丸の内・有楽町地区におけるビルなどの開発・賃貸を中心とする丸の内事業、マンション・戸建住宅の販売を中心とする住宅事業"
+    },
+    "8830": {
+      "name": "住友不動産",
+      "sector33": "不動産業",
+      "docId": "S100YI5D",
+      "periodEnd": "2026-03-31",
+      "group": "real_estate_developer",
+      "quote": "当社は、主としてオフィスビルならびに高級賃貸マンション等の開発・賃貸事業を行っております"
+    },
+    "6902": {
+      "name": "デンソー",
+      "sector33": "輸送用機器",
+      "docId": "S100Y9T1",
+      "periodEnd": "2026-03-31",
+      "group": null,
+      "quote": "サーマルシステム[エアコンシステム]HVAC、ベルト駆動コンプレッサ、キャビンエアフィルタ、シート空調"
+    },
+    "3382": {
+      "name": "セブン＆アイ・ホールディングス",
+      "sector33": "小売業",
+      "docId": "S100Y4VB",
+      "periodEnd": "2026-02-28",
+      "group": null,
+      "quote": "主として国内コンビニエンスストア事業、海外コンビニエンスストア事業を行っております"
+    }
+  },
+  "pairs": [
+    {
+      "a": "7201",
+      "b": "7203",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are auto operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "7201",
+      "b": "7267",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are auto operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "7201",
+      "b": "7269",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are auto operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "7201",
+      "b": "7270",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are auto operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "7203",
+      "b": "7267",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are auto operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "7203",
+      "b": "7269",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are auto operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "7203",
+      "b": "7270",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are auto operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "7267",
+      "b": "7269",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are auto operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "7267",
+      "b": "7270",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are auto operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "7269",
+      "b": "7270",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are auto operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "5101",
+      "b": "5105",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are tire operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "5101",
+      "b": "5108",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are tire operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "5101",
+      "b": "5110",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are tire operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "5105",
+      "b": "5108",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are tire operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "5105",
+      "b": "5110",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are tire operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "5108",
+      "b": "5110",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are tire operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "2784",
+      "b": "3151",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_wholesale operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "2784",
+      "b": "7459",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_wholesale operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "2784",
+      "b": "8129",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_wholesale operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "2784",
+      "b": "9987",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_wholesale operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "3151",
+      "b": "7459",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_wholesale operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "3151",
+      "b": "8129",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_wholesale operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "3151",
+      "b": "9987",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_wholesale operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "7459",
+      "b": "8129",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_wholesale operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "7459",
+      "b": "9987",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_wholesale operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8129",
+      "b": "9987",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_wholesale operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8001",
+      "b": "8002",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8001",
+      "b": "8015",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8001",
+      "b": "8031",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8001",
+      "b": "8053",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8001",
+      "b": "8058",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8002",
+      "b": "8015",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8002",
+      "b": "8031",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8002",
+      "b": "8053",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8002",
+      "b": "8058",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8015",
+      "b": "8031",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8015",
+      "b": "8053",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8015",
+      "b": "8058",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8031",
+      "b": "8053",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8031",
+      "b": "8058",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8053",
+      "b": "8058",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are trading_house operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8306",
+      "b": "8316",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are megabank operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8306",
+      "b": "8411",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are megabank operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8316",
+      "b": "8411",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are megabank operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "9432",
+      "b": "9433",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are telecom operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "9432",
+      "b": "9434",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are telecom operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "9433",
+      "b": "9434",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are telecom operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "3086",
+      "b": "8233",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are department_store operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "3086",
+      "b": "8242",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are department_store operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8233",
+      "b": "8242",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are department_store operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "5232",
+      "b": "5233",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are cement operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "5232",
+      "b": "5262",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are cement operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "5233",
+      "b": "5262",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are cement operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "5401",
+      "b": "5406",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are steel operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "5401",
+      "b": "5411",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are steel operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "5406",
+      "b": "5411",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are steel operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "2502",
+      "b": "2503",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are beer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "9064",
+      "b": "9143",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are logistics operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "9064",
+      "b": "9147",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are logistics operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "9143",
+      "b": "9147",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are logistics operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "6501",
+      "b": "6503",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are electric_conglomerate operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "6501",
+      "b": "6752",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are electric_conglomerate operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "6503",
+      "b": "6752",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are electric_conglomerate operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "9201",
+      "b": "9202",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are airline operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "9101",
+      "b": "9104",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are shipping operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "9101",
+      "b": "9107",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are shipping operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "9104",
+      "b": "9107",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are shipping operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8750",
+      "b": "8795",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are life_insurance operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4004",
+      "b": "4005",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are chemicals_diversified operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4004",
+      "b": "4183",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are chemicals_diversified operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4004",
+      "b": "4188",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are chemicals_diversified operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4005",
+      "b": "4183",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are chemicals_diversified operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4005",
+      "b": "4188",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are chemicals_diversified operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4183",
+      "b": "4188",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are chemicals_diversified operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "1925",
+      "b": "1928",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are homebuilder operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "1801",
+      "b": "1802",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are general_contractor operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "1801",
+      "b": "1803",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are general_contractor operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "1801",
+      "b": "1812",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are general_contractor operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "1802",
+      "b": "1803",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are general_contractor operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "1802",
+      "b": "1812",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are general_contractor operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "1803",
+      "b": "1812",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are general_contractor operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4502",
+      "b": "4503",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_manufacturer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4502",
+      "b": "4519",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_manufacturer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4502",
+      "b": "4523",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_manufacturer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4502",
+      "b": "4568",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_manufacturer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4503",
+      "b": "4519",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_manufacturer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4503",
+      "b": "4523",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_manufacturer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4503",
+      "b": "4568",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_manufacturer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4519",
+      "b": "4523",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_manufacturer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4519",
+      "b": "4568",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_manufacturer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4523",
+      "b": "4568",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are pharma_manufacturer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "4911",
+      "b": "4922",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are cosmetics operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8601",
+      "b": "8604",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are securities operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8801",
+      "b": "8802",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are real_estate_developer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8801",
+      "b": "8830",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are real_estate_developer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "8802",
+      "b": "8830",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "both are real_estate_developer operators — the same customer segment/market for substitutable products or services"
+    },
+    {
+      "a": "6902",
+      "b": "7203",
+      "label": false,
+      "category": "supplier_customer",
+      "reason": "Denso manufactures automotive parts (e.g. thermal/air-conditioning systems) supplied to automakers; Toyota assembles and sells finished vehicles — a supplier-customer relationship, not two sellers competing for the same buyers"
+    },
+    {
+      "a": "5401",
+      "b": "7203",
+      "label": false,
+      "category": "supplier_customer",
+      "reason": "Nippon Steel manufactures steel products used as automotive input material; Toyota is a downstream buyer/assembler of finished vehicles"
+    },
+    {
+      "a": "8035",
+      "b": "6723",
+      "label": false,
+      "category": "supplier_customer",
+      "reason": "Tokyo Electron sells semiconductor manufacturing equipment; Renesas is a chip manufacturer that buys such equipment as capital equipment — supplier and customer, not substitutes"
+    },
+    {
+      "a": "9987",
+      "b": "4568",
+      "label": false,
+      "category": "supplier_customer",
+      "reason": "Suzuken is a pharmaceutical wholesaler/distributor; Daiichi Sankyo is a drug manufacturer whose products Suzuken distributes — distributor vs. manufacturer, not substitutable sellers to the same buyers"
+    },
+    {
+      "a": "1801",
+      "b": "5233",
+      "label": false,
+      "category": "supplier_customer",
+      "reason": "Taisei is a general contractor that purchases cement as a construction material; Taiheiyo Cement manufactures and sells cement — supplier and customer"
+    },
+    {
+      "a": "1801",
+      "b": "8801",
+      "label": false,
+      "category": "supplier_customer",
+      "reason": "Taisei sells construction services (often contracted by developers); Mitsui Fudosan develops and leases/sells real estate as principal — a contractor/developer relationship, not the same product to the same buyers"
+    },
+    {
+      "a": "6857",
+      "b": "8035",
+      "label": false,
+      "category": "same_sector_different_product",
+      "reason": "Advantest makes semiconductor test systems (post-fabrication testing); Tokyo Electron makes deposition/etch/coater equipment (wafer processing) — both sell capital equipment to chip fabs but the tools are different, non-substitutable product categories"
+    },
+    {
+      "a": "6857",
+      "b": "6920",
+      "label": false,
+      "category": "same_sector_different_product",
+      "reason": "Advantest makes semiconductor test systems; Lasertec makes photomask/wafer inspection equipment using optical technology — different equipment categories serving different steps of chip production"
+    },
+    {
+      "a": "8306",
+      "b": "8750",
+      "label": false,
+      "category": "same_sector_different_product",
+      "reason": "Mitsubishi UFJ is a bank holding company centered on banking/trust/securities; Dai-ichi Life is a life insurance holding company — both are financial institutions but sell non-substitutable products (deposits/loans vs life insurance policies) to different underwriting/purchase decisions"
+    },
+    {
+      "a": "8306",
+      "b": "8601",
+      "label": false,
+      "category": "same_sector_different_product",
+      "reason": "MUFG is centered on commercial banking; Daiwa Securities is centered on securities brokerage/underwriting — both financial services but different core products (banking vs. securities intermediation)"
+    },
+    {
+      "a": "5401",
+      "b": "5233",
+      "label": false,
+      "category": "same_sector_different_product",
+      "reason": "Nippon Steel manufactures steel products; Taiheiyo Cement manufactures cement — both heavy materials manufacturers but wholly different products/customers"
+    },
+    {
+      "a": "9987",
+      "b": "9064",
+      "label": false,
+      "category": "peripheral_overlap",
+      "reason": "Suzuken's disclosed segments are pharmaceutical wholesale, healthcare product manufacturing, pharmacy/nursing-care and logistics-support services for its own drug distribution; Yamato's core business is third-party parcel delivery/contract logistics for the general market — any overlap is limited to Suzuken's own internal/peripheral logistics function, not a competing offer to the same customers as Yamato"
+    },
+    {
+      "a": "3382",
+      "b": "9064",
+      "label": false,
+      "category": "unrelated",
+      "reason": "Seven & i's disclosed segments are domestic/overseas convenience-store retailing; Yamato's core business is parcel delivery and contract logistics — different products for different customers"
+    },
+    {
+      "a": "7203",
+      "b": "8306",
+      "label": false,
+      "category": "unrelated",
+      "reason": "Toyota manufactures and sells automobiles; MUFG is a bank holding company — no overlapping product or customer market"
+    },
+    {
+      "a": "9432",
+      "b": "5401",
+      "label": false,
+      "category": "unrelated",
+      "reason": "NTT provides ICT/telecommunications services; Nippon Steel manufactures steel — no overlapping product or customer market"
+    },
+    {
+      "a": "4502",
+      "b": "7459",
+      "label": false,
+      "category": "supplier_customer",
+      "reason": "Takeda manufactures ethical drugs; Medipal is a pharmaceutical wholesaler that distributes manufacturers' drugs to hospitals/pharmacies — distributor vs. manufacturer"
+    },
+    {
+      "a": "4503",
+      "b": "2784",
+      "label": false,
+      "category": "supplier_customer",
+      "reason": "Astellas manufactures ethical drugs; Alfresa is a pharmaceutical wholesaler distributing manufacturers' products — distributor vs. manufacturer"
+    },
+    {
+      "a": "6857",
+      "b": "6723",
+      "label": false,
+      "category": "supplier_customer",
+      "reason": "Advantest sells semiconductor test systems; Renesas is a chip manufacturer that buys such test equipment — supplier and customer, not substitutes"
+    },
+    {
+      "a": "7735",
+      "b": "6723",
+      "label": false,
+      "category": "supplier_customer",
+      "reason": "SCREEN sells semiconductor manufacturing equipment (cleaning/coating/etc.); Renesas is a chip manufacturer that buys such equipment — supplier and customer"
+    },
+    {
+      "a": "6920",
+      "b": "6723",
+      "label": false,
+      "category": "supplier_customer",
+      "reason": "Lasertec sells photomask/wafer inspection equipment; Renesas is a chip manufacturer that buys such equipment — supplier and customer"
+    },
+    {
+      "a": "5108",
+      "b": "2502",
+      "label": false,
+      "category": "unrelated",
+      "reason": "Bridgestone makes tires; Asahi brews beer — no overlapping product or customer market"
+    },
+    {
+      "a": "9987",
+      "b": "7267",
+      "label": false,
+      "category": "unrelated",
+      "reason": "Suzuken is a pharmaceutical wholesaler; Honda manufactures motorcycles/automobiles — no overlapping product or customer market"
+    },
+    {
+      "a": "8058",
+      "b": "9432",
+      "label": false,
+      "category": "unrelated",
+      "reason": "Mitsubishi Corp is a diversified trading house; NTT is a telecom carrier — no overlapping product or customer market (Mitsubishi Corp does not sell telecom services as a reporting segment)"
+    },
+    {
+      "a": "6857",
+      "b": "7203",
+      "label": false,
+      "category": "unrelated",
+      "reason": "Advantest makes semiconductor test equipment; Toyota manufactures automobiles — no overlapping product or customer market"
+    },
+    {
+      "a": "4911",
+      "b": "1801",
+      "label": false,
+      "category": "unrelated",
+      "reason": "Shiseido sells cosmetics; Taisei is a general contractor — no overlapping product or customer market"
+    },
+    {
+      "a": "8035",
+      "b": "7735",
+      "label": true,
+      "category": "same_market_substitute",
+      "reason": "Tokyo Electron and SCREEN both develop, manufacture and sell semiconductor production equipment (Tokyo Electron: deposition/etch/coater tools; SCREEN: cleaning/coating and other wafer-processing tools) as capital equipment sold to the same chip-fab customers"
+    }
+  ]
+}

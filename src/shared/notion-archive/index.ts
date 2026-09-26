@@ -103,6 +103,14 @@ export type {
   PriceSyncLogInput,
   RecordPriceSyncLogResult,
 } from "./price-sync-log.js";
+// 005 yuho-quant 競合他社 (docs/005-yuho-quant-business-tags.md「競合他社」節 §4)
+export {
+  COMPETITOR_PROPS,
+  ensureCompetitorColumns,
+  loadCompetitorMeta,
+  writeCompetitorRelation,
+} from "./stock-competitors.js";
+export type { CompetitorMeta, WriteCompetitorRelationInput } from "./stock-competitors.js";
 
 // 2026-09-25 「一次データ保管」再配置 — scripts/notion/relocate-archive.ts 専用
 // (通常のサービスコードは使わない。ルール6 の窓口をここでも保つための再輸出)
