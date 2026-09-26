@@ -1,0 +1,270 @@
+{
+  "baseVersion": "v3",
+  "noChange": false,
+  "reason": "2026-09-26 集計 (v3 再判定後、判定済3,606社中1,128社がタグ0件) の是正 (ラウンド2)。銘柄マスタ（補足）から空タグ・判定済の1,130社の「事業の内容」を精査した結果、最大クラスタは卸売業(127社)で、いずれも鉄鋼・化学品・機械・電子部品・食品等の特定商品を専門に仕入れて他社へ販売する専門商社だった。これらの会社は候補語自体は挙がる(候補語数中央値4件)が、その中身は「取引商品」(鉄鋼・化学品・防衛装備品等)を表す既存の upstream/downstream 語であり、jev が正しく「他社製品の卸売は製造の語に数えない」と判定して「いいえ」になっていた(判定不能ではなく語彙の欠落)。単語帳に卸売・商社そのものを表す語が1つも無かったため、B.SVC.SPECIALTY_WHOLESALE を新設した。同様の理由で、小売業(78社。衣料品・靴・スポーツ用品・眼鏡・中古品等の専門店)、サービス業のうち経営コンサルティング・広告代理業も語彙が皆無だったため追加した。加えて、輸送用機器・電気機器・金属製品等で「自動車部品」という平易な表記が実データで132件出現するのに B.MOBI.AUTO_PARTS の keywords がJSICの複合語(「自動車部分品・附属品製造業」等)のみで平易な表記に当たっていなかったため add_keywords で補強した(2026-09-25 quality.json のタイヤ・自動車完成車と同種の是正)。出典はすべて日本標準産業分類(総務省 R5)のみ。新設5語はすべて distribution 列(現行10/100)に収め、upstream(100/100・満杯)・downstream(97/100)の上限は一切変更していない。",
+  "sourcesChecked": [
+    {
+      "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+      "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+      "date": "2023-07"
+    }
+  ],
+  "exampleCompanies": {
+    "B.SVC.SPECIALTY_WHOLESALE": ["8078", "9934", "8098", "9869", "8014"],
+    "B.SVC.APPAREL_FOOTWEAR_RETAIL": ["8227", "2670"],
+    "B.SVC.LIFESTYLE_SPECIALTY_RETAIL": ["3046", "2681"],
+    "B.SVC.MANAGEMENT_CONSULTING": ["6532"],
+    "B.SVC.ADVERTISING_AGENCY": ["2433"],
+    "B.MOBI.AUTO_PARTS": ["3116", "6584"]
+  },
+  "changes": [
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.SPECIALTY_WHOLESALE",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "specialty_wholesale",
+        "notionColumn": "distribution",
+        "labelJa": "専門商社・卸売業",
+        "definitionJa": "産業機械・電子部品、鉄鋼・非鉄金属、化学製品、建築材料、繊維、食品などの特定の商品分野を専門に仕入れて他の事業者や法人顧客に販売する卸売事業(専門商社)。自社で製造した製品を自社ブランドで販売する製造業や、個人向けの小売業は含まない。",
+        "definitionEn": "Wholesale trading business that purchases goods in a specific product category (such as industrial machinery and electronic components, steel and non-ferrous metals, chemicals, building materials, textiles, or food) from other manufacturers and resells them to other businesses or corporate customers, i.e. a specialty trading company (senmon shosha). Does not include manufacturing its own branded products or retail sales to individual consumers.",
+        "keywords": [
+          "卸売業",
+          "商社",
+          "専門商社",
+          "卸販売",
+          "卸売販売",
+          "機器販売",
+          "電設資材",
+          "機械工具",
+          "ＦＡ機器",
+          "FA機器",
+          "電子部品の販売",
+          "機械・器具・部品の販売"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "大分類Ｉ－卸売業，小売業 総説(p.353)",
+            "quote": "有体的商品を購入して販売する事業所が分類される"
+          },
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "中分類５４－機械器具卸売業 総説(p.370)",
+            "quote": "産業機械器具、自動車、電気機械器具などを卸売する事業所"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "中分類５３－建築材料，鉱物・金属材料等卸売業 総説(p.365)",
+          "quote": "建築材料、化学製品、鉱物・金属材料、再生資源を仕入卸売"
+        },
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "中分類５２－飲食料品卸売業 総説(p.361)",
+          "quote": "農畜産物、水産物、食料品、飲料を仕入卸売する事業所"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.APPAREL_FOOTWEAR_RETAIL",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "apparel_footwear_retail",
+        "notionColumn": "distribution",
+        "labelJa": "衣料品・靴の小売専門店",
+        "definitionJa": "衣料品、靴、服飾雑貨など特定の商品を専門に小売する店舗事業(洋品店、靴店、チェーンストア等)。総合スーパーや百貨店のような多種商品を扱う業態は含まない。",
+        "definitionEn": "Specialty retail stores that sell clothing, footwear, and fashion accessories as their main line of merchandise (e.g., apparel shops, shoe stores, chain stores). Does not include general merchandise formats such as department stores or supermarkets that carry many unrelated product categories.",
+        "keywords": [
+          "衣料品を主とした",
+          "衣料品の小売",
+          "衣料・服飾雑貨",
+          "服飾雑貨",
+          "靴小売",
+          "靴専門店",
+          "靴を中心とした",
+          "衣料品及び"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "中分類５７－織物・衣服・身の回り品小売業 総説(p.384)",
+            "quote": "呉服、服地、衣服、靴、帽子、洋品雑貨、小間物などの商品を小売す"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "中分類５７－織物・衣服・身の回り品小売業 総説(p.384)",
+          "quote": "呉服、服地、衣服、靴、帽子、洋品雑貨、小間物などの商品を小売す"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.LIFESTYLE_SPECIALTY_RETAIL",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "lifestyle_specialty_retail",
+        "notionColumn": "distribution",
+        "labelJa": "生活雑貨・趣味用品の小売専門店",
+        "definitionJa": "スポーツ用品、眼鏡、書籍、自転車、日用雑貨、中古品などを専門に小売する店舗事業(ホームセンター、100円ショップ、リユース店、専門量販店等)。総合スーパーや百貨店、および家電量販店・ドラッグストアなど別語彙で扱う業態は含まない。",
+        "definitionEn": "Specialty retail stores selling sporting goods, eyewear, books, bicycles, everyday household goods, or secondhand goods as their main line of merchandise (e.g., home centers, 100-yen shops, resale/reuse shops, specialty superstores). Does not include general merchandise formats such as department stores/supermarkets, or formats already covered by a separate term such as electronics retail chains or drugstores.",
+        "keywords": [
+          "スポーツ用品の販売",
+          "眼鏡小売",
+          "100円ショップ",
+          "１００円ショップ",
+          "中古品の買取販売",
+          "リユース事業",
+          "古本",
+          "ホームセンター事業",
+          "自転車及びパーツ・アクセサリー"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "中分類５９－機械器具小売業 総説(p.393)",
+            "quote": "主として自動車、自転車、電気機械器具など"
+          },
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "中分類６０－その他の小売業 総説(p.396)",
+            "quote": "文房具、時計、楽器、たばこ、中古品などの他に分類されない商品を小売する事業所"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "中分類５９－機械器具小売業 総説(p.393)",
+          "quote": "主として自動車、自転車、電気機械器具など"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.MANAGEMENT_CONSULTING",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "management_consulting",
+        "notionColumn": "distribution",
+        "labelJa": "経営コンサルティング",
+        "definitionJa": "企業のマネジメント(経営戦略、業務改善、DX推進など)に関する診断・指導・助言を行う専門サービス事業。会計監査や税務代理などの独立した専門職業(公認会計士・税理士業等)は含まない。",
+        "definitionEn": "Professional services business that provides diagnosis, guidance, and advice on corporate management, such as business strategy, operational improvement, or digital transformation. Does not include separately licensed professions such as statutory audit or tax filing services (certified public accountants, tax agents, etc.).",
+        "keywords": [
+          "コンサルティングファーム",
+          "マネジメントコンサルティング",
+          "経営コンサルティング"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "中分類７２－専門サービス業（他に分類されないもの）小分類728 経営コンサルタント業 定義文(p.439)",
+            "quote": "マネジメントに関する診断、指導、教育訓練、調査研究などを行う"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "中分類７２－専門サービス業（他に分類されないもの）小分類728 経営コンサルタント業 定義文(p.439)",
+          "quote": "マネジメントに関する診断、指導、教育訓練、調査研究などを行う"
+        }
+      ]
+    },
+    {
+      "op": "add_business",
+      "term": {
+        "id": "B.SVC.ADVERTISING_AGENCY",
+        "layer": "business",
+        "family": "SVC",
+        "subfamily": "advertising_agency",
+        "notionColumn": "distribution",
+        "labelJa": "広告代理店",
+        "definitionJa": "依頼主のために広告の企画立案、広告媒体の選択、コンテンツ制作など広告に関する総合的なサービスを提供する事業(広告代理業)。広告を出す側の企業が自ら行う販促活動(附随的な広告)は含まない。",
+        "definitionEn": "Business that provides comprehensive advertising services on behalf of a client, such as campaign planning, media buying and selection, and content production, i.e. an advertising agency. Does not include a company's own incidental promotional activities as the advertiser rather than the agency.",
+        "keywords": [
+          "広告代理業",
+          "広告代理店",
+          "広告事業",
+          "マーケティングソリューション",
+          "統合マーケティングソリューション"
+        ],
+        "excludeKeywords": [],
+        "sources": [
+          {
+            "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+            "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+            "date": "2023-07",
+            "section": "中分類７３－広告業 細分類7311 広告業 定義文(p.441)",
+            "quote": "広告に係る企画立案、マーケティング"
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "中分類７３－広告業 細分類7311 広告業 定義文(p.441)",
+          "quote": "広告に係る企画立案、マーケティング"
+        }
+      ]
+    },
+    {
+      "op": "add_keywords",
+      "id": "B.MOBI.AUTO_PARTS",
+      "keywords": [
+        "自動車部品",
+        "自動車用部品",
+        "自動車関連部品",
+        "機構部品",
+        "車両部品"
+      ],
+      "evidence": [
+        {
+          "title": "日本標準産業分類 分類項目名、説明及び内容例示（令和５年７月告示 第14回改定）",
+          "url": "https://www.soumu.go.jp/main_content/000941216.pdf",
+          "date": "2023-07",
+          "section": "細分類3113 自動車部分品・附属品製造業(p.297)",
+          "quote": "3113 自動車部分品・附属品製造業"
+        }
+      ]
+    }
+  ]
+}
