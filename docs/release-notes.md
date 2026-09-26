@@ -7,6 +7,13 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ---
 
+## 2026-09-27
+
+### 追加
+- **競合他社判定のローカル代替判定 (`judge=semif`)** (#PR): jev のクレジット枯渇で中断した競合他社判定の残り銘柄を、Apple Silicon ローカル PC 上の SemIf (Qwen3.5-4B, MLX) で代替判定できるようにした。`pnpm biztag competitors -- --judge=semif` / `competitors-eval -- --judge=semif` で切替。評価セットで精度 0.909・再現率 0.928 を確認（`--only-unjudged` で既判定分は再判定しない）。
+
+---
+
 ## 2026-09-26
 
 ### 追加

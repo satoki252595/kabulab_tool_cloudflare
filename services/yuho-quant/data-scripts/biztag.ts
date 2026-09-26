@@ -22,7 +22,7 @@ import {
   replaceLedgerJson,
   updateLedgerEntry,
 } from "../../../src/shared/notion-archive/index.js";
-import { createJevClient, jevEnv } from "../../../src/shared/jev/index.js";
+import { createJevClient, jevEnv, type JevClient } from "../../../src/shared/jev/index.js";
 import { resolveActiveVocabulary } from "../src/biztag/active-vocab.js";
 import { todayJst } from "../src/biztag/date-jst.js";
 import { checkDeadline, runGate } from "../src/biztag/gate.js";
@@ -36,7 +36,8 @@ import { loadCalibration } from "../src/biztag/thresholds.js";
 import { parseVocabulary } from "../src/biztag/vocabulary/load.js";
 import { TEXT_SECTIONS } from "../src/services/edinet/text-sections.js";
 import * as yuhoSchema from "../src/db/schema.js";
-import { loadCompetitorCalibration } from "../src/biztag/competitors/calibration.js";
+import { createSemifClient, SEMIF_MODEL } from "../../../src/shared/semif/index.js";
+import { loadCompetitorCalibration, type CompetitorJudge } from "../src/biztag/competitors/calibration.js";
 import {
   evaluateCompetitorsAtThresholds,
   evaluateCompetitorEvalSet,
@@ -53,6 +54,21 @@ function arg(name: string): string | undefined {
 }
 function hasFlag(name: string): boolean {
   return rest.includes(`--${name}`);
+}
+
+/** `--judge=jev|semif` を解釈する。省略時は "jev"。それ以外の値は実装ミスとして即 throw (ルール2)。 */
+function judgeArg(): CompetitorJudge {
+  const v = arg("judge") ?? "jev";
+  if (v !== "jev" && v !== "semif") {
+    throw new Error(`--judge には jev か semif のみ指定できます (指定値: ${v})`);
+  }
+  return v;
+}
+
+/** 判定に使うクライアントを judge から作る (jev は API キー必須・semif はローカル常駐プロセス)。 */
+function createJudgeClient(judge: CompetitorJudge, model: string): JevClient {
+  if (judge === "semif") return createSemifClient({});
+  return createJevClient({ apiKey: jevEnv.TYPESAFE_API_KEY(), model });
 }
 
 function writeGithubOutput(pairs: Record<string, string>): void {
@@ -233,21 +249,33 @@ async function competitorsCommand(): Promise<void> {
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
   const dryRun = hasFlag("dry-run");
+  const judge = judgeArg();
+  const onlyUnjudged = hasFlag("only-unjudged");
+  const concurrency = arg("concurrency") ? Number(arg("concurrency")) : undefined;
 
   const summary = await runCompetitors({
     budgetMs: budgetMin * 60_000,
     limit,
     codes,
     dryRun,
+    judge,
+    onlyUnjudged,
+    concurrency,
   });
 
   console.info(JSON.stringify(summary, null, 2));
+  const costLine =
+    summary.jev.costMetering === "not_metered_local"
+      ? `- ${summary.judge} (${summary.model}): ${summary.jev.calls}回 ` +
+        "（ローカル推論のため実費用0円。トークン数はAPI従量課金が無く該当なし — 「計測して0だった」わけではない）"
+      : `- ${summary.judge} (${summary.model}): ${summary.jev.calls}回 / 入力 ${summary.jev.inputTokens}tok / ` +
+        `概算 $${summary.jev.estimatedCostUsd.toFixed(4)}`;
   writeGithubStepSummary(
     [
       `## biztag competitors`,
       `- 候補生成の母集団: ${summary.corpusSize} 銘柄 (事業タグの状態=判定済)`,
-      `- 対象 (増分方式): ${summary.totalTargets} 銘柄 (処理 ${summary.processed} / 残 ${summary.remaining})`,
-      `- jev: ${summary.jev.calls}回 / 入力 ${summary.jev.inputTokens}tok / 概算 $${summary.jev.estimatedCostUsd.toFixed(4)}`,
+      `- 対象 (増分方式${onlyUnjudged ? "・未判定行のみ" : ""}): ${summary.totalTargets} 銘柄 (処理 ${summary.processed} / 残 ${summary.remaining})`,
+      costLine,
       `- 失敗: ${summary.failures.length}件`,
       summary.dryRun ? "- dry-run (Notion への書込なし)" : "",
     ]
@@ -280,6 +308,9 @@ async function competitorsEvalCommand(): Promise<void> {
   const noMaxArg = arg("no-max");
   const modelArg = arg("model");
   const outPath = arg("out");
+  const judge = judgeArg();
+  const concurrency = arg("concurrency") ? Number(arg("concurrency")) : undefined;
+  const batchSize = arg("batch-size") ? Number(arg("batch-size")) : undefined;
 
   let yesMin: number;
   let noMax: number;
@@ -287,15 +318,18 @@ async function competitorsEvalCommand(): Promise<void> {
   if (yesMinArg !== undefined && noMaxArg !== undefined) {
     yesMin = Number(yesMinArg);
     noMax = Number(noMaxArg);
-    if (modelArg === undefined) {
+    if (modelArg === undefined && judge === "jev") {
       console.error(
-        "usage: calibration.json が無い状態で --yes-min= と --no-max= を指定する場合、--model=<jev モデル名> も必須です。"
+        "usage: calibration.json が無い状態で --yes-min= と --no-max= を指定する場合、--model=<jev モデル名> も必須です " +
+          "(--judge=semif の場合は semif 側が model を固定して返すため不要)。"
       );
       process.exit(2);
     }
-    model = modelArg;
+    // judge=semif は createSemifClient が返す model (Qwen3.5-4B@851bf6e/semif-mlx)
+    // をそのまま使う。ここでの model は jev 呼び出し・出力表示にのみ使う。
+    model = modelArg ?? SEMIF_MODEL;
   } else {
-    const calibration = loadCompetitorCalibration();
+    const calibration = loadCompetitorCalibration(judge);
     yesMin = yesMinArg !== undefined ? Number(yesMinArg) : calibration.thresholds.yesMin;
     noMax = noMaxArg !== undefined ? Number(noMaxArg) : calibration.thresholds.noMax;
     model = modelArg ?? calibration.model;
@@ -338,19 +372,26 @@ async function competitorsEvalCommand(): Promise<void> {
     };
   };
 
-  const jevClient = createJevClient({ apiKey: jevEnv.TYPESAFE_API_KEY(), model });
+  const client = createJudgeClient(judge, model);
   const { perPair, jevCalls, inputTokens, outputTokens } = await evaluateCompetitorEvalSet(
     evalSet,
     companyOf,
-    jevClient,
-    { yesMin, noMax }
+    client,
+    { yesMin, noMax },
+    { batchSize, concurrency }
   );
   const metrics = evaluateCompetitorsAtThresholds(perPair, { yesMin, noMax });
   const out = {
+    judge,
     model,
     thresholds: { yesMin, noMax },
     metrics,
-    jev: { calls: jevCalls, inputTokens, outputTokens },
+    jev: {
+      calls: jevCalls,
+      inputTokens,
+      outputTokens,
+      costMetering: judge === "semif" ? ("not_metered_local" as const) : ("metered" as const),
+    },
     staleDocIds,
   };
   console.info(JSON.stringify(out, null, 2));
@@ -450,3 +491,8 @@ async function main(): Promise<void> {
 }
 
 await main();
+// `--judge=semif` は常駐 Python プロセス (services/yuho-quant/scripts/semif_server.py)
+// を子プロセスとして持ち続ける。標準出力は上の各コマンドで既に同期的に
+// flush 済みのため、ここで明示的に終了してよい (child プロセスは標準入力の
+// EOF で自発的に終了する)。
+process.exit(0);

@@ -103,9 +103,14 @@ mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反
   (転置索引 + posting 数上限。§12.2 の実測を参照)。
 - 会社Bの説明はコード (`competitors/summary.ts`) が機械的に組み立てる。
   **LLM に会社の説明文を作文させない** (ルール1)。
-- しきい値・候補パラメータ (K・重み・posting上限) は
-  `competitors/calibration.json` からのみ読む (`competitors/calibration.ts` の
-  `loadCompetitorCalibration()`)。未較正の値をコードに埋め込まない。
+- しきい値・候補パラメータ (K・重み・posting上限) は judge ごとに別ファイル
+  (`competitors/calibration.json`=jev / `calibration.semif.json`=semif) からのみ
+  読む (`competitors/calibration.ts` の `loadCompetitorCalibration(judge)`)。
+  未較正の値をコードに埋め込まない。
+- 判定モデル (judge) は `jev` (既定) と `semif` (ローカル MLX 推論。
+  jev のクレジット枯渇時の代替。`src/shared/semif/`) を選べる
+  (`--judge=`)。どちらも `JevClient.askNoul` を実装するだけの差し替えで、
+  候補生成・しきい値判定・relation書込のロジックは共通 (§12.9)。
 - A→B の relation は**片方向のみ** (自動でミラーしない。§12.5)。
 - `NOTION_BIZTAG_LEDGER_DB_ID`(単語帳台帳)には触れない (D1 も読まない)。
 
@@ -146,8 +151,9 @@ pnpm biztag run             # 事業タグ判定 (差分処理。catchup.yml が
 pnpm biztag gate            # 単語帳の見直し提案の審査 (通常は run の冒頭が呼ぶ)
 pnpm biztag golden          # ゴールデンセットで精度測定 (しきい値較正用)
 pnpm biztag rollback        # 単語帳を過去の版へ巻き戻す (--to=vN --reason=...)
-pnpm biztag competitors     # 競合他社の判定・relation書込 (差分方式。--dry-run/--codes/--limit/--budget-min)
-pnpm biztag competitors-eval # 競合他社の評価セットで精度測定 (しきい値較正用)
+pnpm biztag competitors     # 競合他社の判定・relation書込 (差分方式。--dry-run/--codes/--limit/--budget-min/
+                            #   --judge=jev|semif/--only-unjudged/--concurrency)
+pnpm biztag competitors-eval # 競合他社の評価セットで精度測定 (しきい値較正用。--judge=jev|semif)
 pnpm test / pnpm typecheck / pnpm lint
 ```
 
