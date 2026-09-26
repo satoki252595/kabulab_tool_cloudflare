@@ -42,6 +42,12 @@ import { sql, eq, and, or, gte, lte, lt } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
+import { sharedEnv } from "../shared/env.js";
+import {
+  ensurePriceSyncDb,
+  recordPriceSyncLog,
+  type PriceSyncStatus,
+} from "../shared/notion-archive/index.js";
 
 // core スキーマ (共有。日次 sync が更新)
 import * as coreSchema from "../shared/db/core-schema.js";
@@ -99,6 +105,13 @@ export interface DailySyncResult {
   marketContextOk: boolean;
   elapsedSec: number;
   failures: { code: string; error: string }[];
+  /**
+   * 取引日 (この run が実際に書き込んだ最新バーの日付。
+   * `swing_daily_ohlcv` の MAX(date) から導出。§Phase 6)。
+   * 導出できなかった (Phase 3 が実質全滅) 場合は `null`
+   * (「株価の日次同期」記録は推測せず状態=失敗にする — ルール2)。
+   */
+  tradingDate: string | null;
 }
 
 /** 銘柄ごとの処理結果 (in-memory) */
@@ -551,11 +564,86 @@ export async function loadDailyTargets(db: Db) {
 }
 
 /**
+ * 日次 sync が「株価の日次同期」記録 (Notion) に使う状態を決める (純粋関数)。
+ * 取引日を導出できない = 実質全滅なので、失敗件数に関わらず必ず「失敗」にする
+ * (取引日不明を「完了」「一部失敗」の顔で見せない — ルール2)。
+ */
+export function priceSyncStatusOf(args: {
+  tradingDate: string | null;
+  failedStocks: number;
+}): PriceSyncStatus {
+  if (args.tradingDate === null) return "失敗";
+  return args.failedStocks > 0 ? "一部失敗" : "完了";
+}
+
+/**
+ * 「株価の日次同期」DB へ今回の実行結果を記録する (docs/005-yuho-quant-business-tags-contract.md
+ * 「株価の日次同期」節)。取引日で冪等 upsert。Notion 書込自体の失敗はここでは
+ * 握りつぶさない (呼び出し側 = `runDailySync` が成功パス/失敗パスそれぞれで
+ * ハンドリングする)。
+ */
+async function recordPriceSyncCompletion(args: {
+  tradingDate: string | null;
+  targetStocks: number | null;
+  updatedStocks: number | null;
+  failedStocks: number | null;
+  reason: string | null;
+}): Promise<void> {
+  const status = priceSyncStatusOf({
+    tradingDate: args.tradingDate,
+    failedStocks: args.failedStocks ?? 0,
+  });
+  const { dbId } = await ensurePriceSyncDb();
+  await recordPriceSyncLog(dbId, {
+    tradingDate: args.tradingDate,
+    status,
+    completedAt: new Date().toISOString(),
+    targetStocks: args.targetStocks,
+    updatedStocks: args.updatedStocks,
+    failedStocks: args.failedStocks,
+    runUrl: sharedEnv.GITHUB_RUN_URL() ?? null,
+    reason: args.reason,
+  });
+}
+
+/**
+ * run 全体が例外で落ちたときの失敗記録。件数 (対象/更新/失敗銘柄数) は
+ * 例外がどの段階で起きたか次第で分からないため `null` (0 件だったと偽らない)。
+ * 記録そのもの (Notion 書込) が失敗しても、元の例外を握りつぶさずログに残すだけに
+ * とどめる (呼び出し側は必ず元の例外を rethrow する)。
+ */
+async function recordPriceSyncFailureSafely(cause: unknown): Promise<void> {
+  try {
+    await recordPriceSyncCompletion({
+      tradingDate: null,
+      targetStocks: null,
+      updatedStocks: null,
+      failedStocks: null,
+      reason: `日次 sync が例外で中断しました: ${rootCauseMessage(cause)}`,
+    });
+  } catch (recordError) {
+    console.error(
+      "[sync-daily] 「株価の日次同期」への失敗記録 (Notion) 自体にも失敗しました:",
+      recordError
+    );
+  }
+}
+
+/**
  * 日次 sync 本体
  *
  * @param db createDailyDb() の戻り (Node→D1 HTTP)
  */
 export async function runDailySync(db: Db): Promise<DailySyncResult> {
+  try {
+    return await runDailySyncAndRecord(db);
+  } catch (e) {
+    await recordPriceSyncFailureSafely(e);
+    throw e;
+  }
+}
+
+async function runDailySyncAndRecord(db: Db): Promise<DailySyncResult> {
   const startedAt = Date.now();
 
   // -----------------------------------------------------------------
@@ -770,6 +858,19 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
     `[sync-daily] 完了: 成功=${succeeded} 失敗=${failures.length} 所要=${elapsedSec.toFixed(1)}s`
   );
 
+  const tradingDate = projected.sourceMaxDate;
+  await recordPriceSyncCompletion({
+    tradingDate,
+    targetStocks: targets.length,
+    updatedStocks: succeeded,
+    failedStocks: failures.length,
+    reason:
+      tradingDate === null
+        ? `取引日 (swing_daily_ohlcv の MAX(date)) を導出できませんでした ` +
+          `(対象 ${targets.length} 銘柄中 成功 ${succeeded} 件・投影仕上げが 0 行でした)`
+        : null,
+  });
+
   return {
     totalStocks: targets.length,
     successStocks: succeeded,
@@ -777,6 +878,7 @@ export async function runDailySync(db: Db): Promise<DailySyncResult> {
     marketContextOk,
     elapsedSec,
     failures,
+    tradingDate,
   };
 }
 

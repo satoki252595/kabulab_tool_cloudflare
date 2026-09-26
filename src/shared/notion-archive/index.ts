@@ -91,6 +91,19 @@ export {
 } from "./biztag-ledger.js";
 export type { LedgerKind, LedgerState, LedgerEntry } from "./biztag-ledger.js";
 
+// 株価の日次同期の完了記録 (取引日つき。CLAUDE.md ルール6: 1 取引日 1 行の単一 DB)
+export {
+  PRICE_SYNC_DB_TITLE,
+  PRICE_SYNC_PROPS,
+  ensurePriceSyncDb,
+  recordPriceSyncLog,
+} from "./price-sync-log.js";
+export type {
+  PriceSyncStatus,
+  PriceSyncLogInput,
+  RecordPriceSyncLogResult,
+} from "./price-sync-log.js";
+
 // 2026-09-25 「一次データ保管」再配置 — scripts/notion/relocate-archive.ts 専用
 // (通常のサービスコードは使わない。ルール6 の窓口をここでも保つための再輸出)
 export {
