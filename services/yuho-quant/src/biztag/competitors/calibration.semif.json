@@ -1,0 +1,27 @@
+{
+  "model": "Qwen3.5-4B@851bf6e/semif-mlx",
+  "yesMin": 0.25,
+  "noMax": 0.09,
+  "candidateTopK": 50,
+  "candidateWeights": { "tag": 0.55, "sector": 0.15, "text": 0.3 },
+  "candidatePostingCaps": { "tag": 60, "ngram": 120 },
+  "candidateVersion": "cand-v1",
+  "batchSize": 50,
+  "calibratedAt": "2026-09-27",
+  "basis": {
+    "evalSet": "services/yuho-quant/src/biztag/competitors/evalset/v1.json (79社・122組。jev較正と同じ評価セットを流用)",
+    "command": "pnpm biztag competitors-eval -- --judge=semif --yes-min=0.5 --no-max=0.25 --batch-size=50 --out=/tmp/semif-eval-out.json (しきい値スイープ表と生の確率(perPair)から選定)",
+    "judge": "semif (SemIf https://github.com/TheoLeeCJ/SemIf, MLX バックエンド, Qwen/Qwen3.5-4B@851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a, ローカル推論・Apple M5 Max)",
+    "atChosenThresholds": {
+      "precisionYes": 0.9091,
+      "recallYes": 0.9278,
+      "truePositive": 90,
+      "falsePositive": 9,
+      "trueNegative": 16,
+      "falseNegative": 7
+    },
+    "why": "jev較正時 (yesMin=0.50) と同じ手順でしきい値を振った結果、jevより低いyesMin=0.50でも既にprecisionYes=0.940 (>=0.9) を満たしていた。生の確率 (perPair) を全て並べ、precisionYes>=0.9を満たす中で最良のrecallYesを探索したところ、yesMin=0.20 (thr=0.2018) がrecall=0.948で最良だったが、直下 (thr=0.1824) に正例・負例が同値で並ぶ密集帯があり境界の余裕が薄い (jev較正のnoteにある「しきい値付近で回答が揺れる」既知の性質と同じ)。yesMin=0.25はその密集帯から明確に離れており (次の実測値は0.2689で、0.1824からの差分は0.0676と、0.20の場合の0.0176より4倍近い余裕)、precisionYes=0.909を保ったままrecallYes=0.928を得られる。境界からの安全マージンを優先しyesMin=0.25を採用した(jev較正で0.47ではなく0.50を選んだのと同じ判断)。noMax=0.09は実測負例の最大値0.0851から実測正例の最小値0.0953の間に収まる値として選定 (境界の判定が「うっかり要確認/no帯に落ちる」ことを避けつつ、biztag本体・競合他社jev較正と同じ0<noMax<yesMin<1の妥当性検査を満たす)。本モジュールでは「要確認」帯を別列に保存しないため実運用上の影響は薄いが一貫性のため揃えた。",
+    "note": "全ての負例(25組)がprecisionYes>=0.9を満たすどのしきい値でも0件にはならない — 8306(三菱UFJFG)↔8601(大和証券G) の1組がsame_sector_different_productにも関わらずp=0.9526と非常に高く判定され、しきい値をどれだけ上げてもFPとして残り続ける(yesMin=0.90でもprecisionYes=0.977で1.0には届かない)。§12.8 のjevドライラン実測で報告されたメガバンク×地方銀行の「要確認」事例と同種の、銀行・証券業界の候補生成シグナルが単一タグに集約されがちで候補間の差別化が弱いという既知の限界であり、semif固有の欠陷ではない。",
+    "throughput": "8000字の会社Aの状態 + 候補50社/バッチのウォームアップ後の定常状態で約0.9秒/バッチ (M5 Max, MLXバックエンド, 実測)。詳細はdocs §12.9参照。"
+  }
+}

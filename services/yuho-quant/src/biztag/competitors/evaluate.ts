@@ -87,7 +87,7 @@ export async function evaluateCompetitorEvalSet(
   companyOf: EvalCompanyLookup,
   jev: JevClient,
   thresholds: BtThresholds,
-  opts?: { batchSize?: number }
+  opts?: { batchSize?: number; concurrency?: number }
 ): Promise<{ perPair: EvalPerPairResult[]; jevCalls: number; inputTokens: number; outputTokens: number }> {
   const pairsByA = new Map<string, typeof evalSet.pairs>();
   for (const pair of evalSet.pairs) {
@@ -95,45 +95,59 @@ export async function evaluateCompetitorEvalSet(
     list.push(pair);
     pairsByA.set(pair.a, list);
   }
+  const entries = [...pairsByA.entries()];
 
   const perPair: EvalPerPairResult[] = [];
   let jevCalls = 0;
   let inputTokens = 0;
   let outputTokens = 0;
 
-  for (const [aCode, pairs] of pairsByA) {
-    const a = companyOf(aCode);
-    const state = buildCompetitorState(a);
-    const candidates = pairs.map((p) => companyOf(p.b));
-    const { judgments, calls, inputTokens: it, outputTokens: ot } = await judgeCompetitorCandidates(
-      jev,
-      state,
-      candidates,
-      thresholds,
-      opts
-    );
-    jevCalls += calls;
-    inputTokens += it;
-    outputTokens += ot;
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const idx = cursor;
+      if (idx >= entries.length) return;
+      cursor++;
+      const [aCode, pairs] = entries[idx];
 
-    const judgmentByCode = new Map(judgments.map((j) => [j.stockCode, j] as const));
-    for (const pair of pairs) {
-      const j = judgmentByCode.get(pair.b);
-      if (j === undefined) {
-        throw new Error(`evaluateCompetitorEvalSet: ${pair.b} の判定結果が無い (a=${aCode})`);
+      const a = companyOf(aCode);
+      const state = buildCompetitorState(a);
+      const candidates = pairs.map((p) => companyOf(p.b));
+      const { judgments, calls, inputTokens: it, outputTokens: ot } = await judgeCompetitorCandidates(
+        jev,
+        state,
+        candidates,
+        thresholds,
+        opts !== undefined ? { batchSize: opts.batchSize } : undefined
+      );
+      jevCalls += calls;
+      inputTokens += it;
+      outputTokens += ot;
+
+      const judgmentByCode = new Map(judgments.map((j) => [j.stockCode, j] as const));
+      for (const pair of pairs) {
+        const j = judgmentByCode.get(pair.b);
+        if (j === undefined) {
+          throw new Error(`evaluateCompetitorEvalSet: ${pair.b} の判定結果が無い (a=${aCode})`);
+        }
+        const predictedYes = j.band === "yes";
+        perPair.push({
+          a: aCode,
+          b: pair.b,
+          expectedLabel: pair.label,
+          category: pair.category,
+          probability: j.probability,
+          band: j.band,
+          correct: predictedYes === pair.label,
+        });
       }
-      const predictedYes = j.band === "yes";
-      perPair.push({
-        a: aCode,
-        b: pair.b,
-        expectedLabel: pair.label,
-        category: pair.category,
-        probability: j.probability,
-        band: j.band,
-        correct: predictedYes === pair.label,
-      });
     }
   }
+
+  // concurrency>1 は semif (常駐プロセス1本に複数リクエストを投げる) 向けの
+  // 較正高速化。既定1=逐次 (既存の jev 較正コマンドと完全に同じ挙動を保つ)。
+  const concurrency = Math.max(1, Math.trunc(opts?.concurrency ?? 1));
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
   return { perPair, jevCalls, inputTokens, outputTokens };
 }
