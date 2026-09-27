@@ -608,6 +608,33 @@ function findRowCodeColumn(sheet: XLSX.WorkSheet, posRow: number): number {
 }
 
 /**
+ * page2 側の行コード列 (右端付近、末尾に部門コードとは別に行コードが繰り返される)
+ * の列番号を探す。
+ *
+ * シートの !ref (ワークシート次元) は印刷用の空白列を含んで実データより広く
+ * 確保されていることがあり、単純に最終列 (range.e.c) を行コード列とみなすと
+ * 常に空白のセルを指してしまいうる (実データで確認: ストック表(金融資産・
+ * 負債残高表) page2 シートの最終列は常に空白で、真の行コード列はその1つ左)。
+ * この誤検出は「page1/page2で行コードが一致しません」という突き合わせ検証を
+ * 恒久的に無効化してしまう (行コード2が常に空文字列になるため) ので、
+ * findRowCodeColumn と同じ「サンプル行のセル値が行コードの形
+ * (ROW_CODE_PATTERN) に一致する列を探す」方式を、右から左へ走査する形で使う。
+ */
+function findRowCodeColumnFromRight(sheet: XLSX.WorkSheet, posRow: number): number {
+  const range = XLSX.utils.decode_range(sheet["!ref"] ?? "A1:A1");
+  const sampleRow = posRow + 2;
+  for (let c = range.e.c; c >= range.s.c; c--) {
+    const cell = sheet[XLSX.utils.encode_cell({ r: sampleRow, c })];
+    if (cell && typeof cell.v === "string" && ROW_CODE_PATTERN.test(cell.v.trim())) {
+      return c;
+    }
+  }
+  throw new Error(
+    "BOJ資金循環統計: page2側の行コード列が見つかりません(表の様式が変わった可能性)"
+  );
+}
+
+/**
  * page1/page2 の2シート (同一表が列方向に分割されたもの) から生レコードを作る。
  * 行番号は page1/page2 で一致している前提で、page1 の行コード列を正とし、
  * page2 側の末尾コード列と一致することを突き合わせて検証する。
@@ -616,12 +643,13 @@ function parseSectorTablePages(page1: XLSX.WorkSheet, page2: XLSX.WorkSheet): Ra
   const posRow1 = findPositionRow(page1);
   // page2 側にも「資産(A)」見出しが存在すること自体を検証する (無ければ throw)。
   // 実際の列対応は buildColumnAssignments(page2) が内部で再計算する。
-  findPositionRow(page2);
+  const posRow2 = findPositionRow(page2);
   const rowCodeCol1 = findRowCodeColumn(page1, posRow1);
   const range1 = XLSX.utils.decode_range(page1["!ref"] ?? "A1:A1");
   const range2 = XLSX.utils.decode_range(page2["!ref"] ?? "A1:A1");
-  // page2 の行コード列は最終列 (末尾に部門コードとは別に行コードが繰り返される)。
-  const rowCodeCol2 = range2.e.c;
+  // page2 の行コード列は右端付近 (末尾に部門コードとは別に行コードが繰り返される)。
+  // 最終列決め打ちだと空白の余剰列を指すことがあるため、実データを見て探す。
+  const rowCodeCol2 = findRowCodeColumnFromRight(page2, posRow2);
 
   const colMap1 = buildColumnAssignments(page1);
   const colMap2 = buildColumnAssignments(page2);

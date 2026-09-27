@@ -208,6 +208,55 @@ describe("parseBojFlowOfFunds: 様式異常の検出", () => {
       /全体表シートが見つかりません/
     );
   });
+
+  // 回帰テスト: ストック表(金融資産・負債残高表) page2 シートの行コード列は
+  // 右端付近にあるが、シートの !ref (ワークシート次元) は実データより1列広く
+  // 確保されており、最終列は常に空白 (実データで確認)。この余剰列を行コード
+  // 列と誤認すると、page1/page2の行対応チェック (「page1とpage2で行コードが
+  // 一致しません」の throw) が常に不発になり、行がズレても例外を投げずに
+  // 誤った値を黙って返してしまう (CLAUDE.md ルール2違反)。実データの
+  // ストックpage2シート内でE行・F行の内容を丸ごと入れ替えて行ズレを再現し、
+  // 必ずthrowすることを保証する。
+  it("ストック表page2側で行がズレると(E行/F行を入替)、必ずthrowする", () => {
+    const bytes = readFixtureBytes("boj-sjpre-2026q2.xlsx");
+    const workbook = XLSX.read(bytes, { type: "array" });
+    const stockPage2 = workbook.Sheets["20"];
+    const range = XLSX.utils.decode_range(stockPage2["!ref"]!);
+
+    // Q列(行コード列)の値が "E"/"F" となっている行を実データから特定する
+    // (ハードコードの行番号ではなく、その場で探す。表の版が変わっても
+    // このテスト自体が意図せず無効化されないようにするため)。
+    const qCol = XLSX.utils.decode_col("Q");
+    let rowE = -1;
+    let rowF = -1;
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      const cell = stockPage2[XLSX.utils.encode_cell({ r, c: qCol })];
+      const v = cell && typeof cell.v === "string" ? cell.v.trim() : "";
+      if (v === "E") rowE = r;
+      if (v === "F") rowF = r;
+    }
+    expect(rowE).toBeGreaterThanOrEqual(0);
+    expect(rowF).toBeGreaterThanOrEqual(0);
+
+    // page2 (stockPage2) のE行とF行を丸ごと入れ替える。page1は無改変のまま
+    // なので、page1側の行コード("E"/"F")とpage2側の行コード("F"/"E")が
+    // 一致しなくなる。
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cellE = stockPage2[XLSX.utils.encode_cell({ r: rowE, c })];
+      const cellF = stockPage2[XLSX.utils.encode_cell({ r: rowF, c })];
+      const addrE = XLSX.utils.encode_cell({ r: rowE, c });
+      const addrF = XLSX.utils.encode_cell({ r: rowF, c });
+      if (cellF) stockPage2[addrE] = cellF;
+      else delete stockPage2[addrE];
+      if (cellE) stockPage2[addrF] = cellE;
+      else delete stockPage2[addrF];
+    }
+
+    const corruptedBuf = XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+    expect(() => parseBojFlowOfFunds(new Uint8Array(corruptedBuf))).toThrow(
+      /page1とpage2で行コードが一致しません/
+    );
+  });
 });
 
 describe("toObservations", () => {
