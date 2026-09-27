@@ -114,6 +114,24 @@ describe("investorTurnoverStatus (公社債投資家別売買高の終了判定)
       investorTurnoverStatus("<html><body>投資家別売買高 最終更新日：2026.9.1</body></html>")
     ).toThrow("見当たりません");
   });
+
+  it("解説PDF等の付随資料の「最終更新日」は拾わず、実データ(.xls)の日付だけを見る (回帰)", () => {
+    // 実ページには解説PDF (files/tkb.pdf 等) の更新日 (2015.8.20/2016.3.22) が
+    // 実データxlsの更新日 (2018.5.21) と混在している。ここでは解説PDF側に
+    // 実データより新しい日付 (2099.1.1) を仕込んでも、xls側の日付だけが
+    // 採用されることを検証する — 将来解説PDFだけが更新されても、統計本体の
+    // 「最終更新日」として誤報告しないことの担保。
+    const html = [
+      "<html><body>",
+      "発表様式の再編等について",
+      '<li><a href="files/tkb.pdf">解説資料</a>（最終更新日：2099.1.1）</li>',
+      '<li><a href="tkb/files/koushasai1804.xls">公社債投資家別売買高</a>(最終更新日：2018.5.21）</li>',
+      '<a href="/shiryoshitsu/toukei/tentoubaibai/index.html">公社債店頭売買高</a>',
+      "</body></html>",
+    ].join("\n");
+    const status = investorTurnoverStatus(html);
+    expect(status.lastUpdatedOn).toBe("2018.5.21");
+  });
 });
 
 describe("parseIssuanceRedemptionWorkbook (実 xlsx フィクスチャ)", () => {
@@ -150,6 +168,18 @@ describe("parseIssuanceRedemptionWorkbook (実 xlsx フィクスチャ)", () => 
     // 原本を目視確認した合計シートの値。
     expect(total!.issuance).toBe(18_459_539_000_000);
     expect(total!.redemption).toBe(10_634_271_000_000);
+  });
+
+  it("転換社債(CB)の償還額(合計b)には株式への転換額も合算される — 現金償還のみを表す値ではない (原本で確認)", () => {
+    // 原本 (転換社債（CB）シート 2026.07 行) を目視確認した内訳:
+    //   満期償還額=0・定時償還額=0・買入消却額=0・転換額=600 (百万円)
+    //   → 合計(b)=600 百万円 は全額が株式への転換によるもので、
+    //     現金による償還は0円だった。jsda_bond_redemption の説明文
+    //     (「償還期日到来による現金償還」ではない旨) の裏付けとなる回帰。
+    const { rows } = parseIssuanceRedemptionWorkbook(HAKKOU_XLSX, "2026-07");
+    const cb = rows.find((r) => r.bondType === "転換社債（CB）");
+    expect(cb).toBeDefined();
+    expect(cb!.redemption).toBe(600_000_000);
   });
 
   it("まだ公表されていない月 (値が空/シートにより0が先埋め) は throw する", () => {
