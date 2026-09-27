@@ -142,6 +142,7 @@ export {
   MONEYFLOW_RUNLOG_PROPS,
   ensureIndicatorDefsDb,
   upsertIndicatorDef,
+  indicatorDefRowMatches,
   ensureObservationsDb,
   upsertObservation,
   observationExists,

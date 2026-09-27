@@ -123,6 +123,28 @@ function buildMissingPatch(
 }
 
 // ---------------------------------------------------------------------------
+// 共通: query 応答のページプロパティを「書こうとしている値」と比べる
+// (同値なら PATCH を省き、再実行時の Notion 書込を減らす)
+// ---------------------------------------------------------------------------
+
+/** Notion の query 応答に載るページプロパティ (行の比較に必要な型だけ)。 */
+type NotionPagePropertyValue = {
+  type?: string;
+  title?: Array<{ plain_text?: string }>;
+  rich_text?: Array<{ plain_text?: string }>;
+  relation?: Array<{ id: string }>;
+  date?: { start?: string | null } | null;
+  select?: { name?: string } | null;
+  number?: number | null;
+  checkbox?: boolean;
+  url?: string | null;
+};
+
+const normalizeId = (id: string): string => id.replace(/-/g, "").toLowerCase();
+const plainOf = (parts: Array<{ plain_text?: string }> | undefined): string | undefined =>
+  parts === undefined ? undefined : parts.map((p) => p.plain_text ?? "").join("");
+
+// ---------------------------------------------------------------------------
 // 1. 資金フロー｜指標定義
 // ---------------------------------------------------------------------------
 
@@ -304,16 +326,40 @@ export interface IndicatorDefInput {
   limitations: string;
 }
 
-interface QueryResponse {
-  results: Array<{ id: string }>;
+interface DefRowHit {
+  id: string;
+  properties?: Record<string, NotionPagePropertyValue>;
 }
 
-async function findDefRowByKey(dbId: string, key: string): Promise<string | null> {
-  const res = await notionRequest<QueryResponse>("POST", `/databases/${dbId}/query`, {
+async function findDefRowByKey(dbId: string, key: string): Promise<DefRowHit | null> {
+  const res = await notionRequest<{ results: DefRowHit[] }>("POST", `/databases/${dbId}/query`, {
     filter: { property: MONEYFLOW_DEFS_PROPS.key, title: { equals: key } },
     page_size: 1,
   });
-  return res.results[0]?.id ?? null;
+  return res.results[0] ?? null;
+}
+
+/**
+ * 既存の指標定義行が今回の定義と完全一致するか (純関数)。読めない・形が違う
+ * ときは不一致扱いで上書きへ倒す (古い定義文を黙って残さない)。
+ */
+export function indicatorDefRowMatches(
+  existing: Record<string, NotionPagePropertyValue> | undefined,
+  input: IndicatorDefInput
+): boolean {
+  if (!existing) return false;
+  const p = MONEYFLOW_DEFS_PROPS;
+  return [
+    plainOf(existing[p.key]?.title) === input.key,
+    plainOf(existing[p.displayName]?.rich_text) === input.displayName,
+    existing[p.requirement]?.select?.name === input.requirement,
+    existing[p.flowType]?.select?.name === input.flowType,
+    plainOf(existing[p.description]?.rich_text) === input.description,
+    existing[p.sourceUrl]?.url === input.sourceUrl,
+    existing[p.license]?.select?.name === input.license,
+    existing[p.frequency]?.select?.name === input.frequency,
+    plainOf(existing[p.limitations]?.rich_text) === input.limitations,
+  ].every(Boolean);
 }
 
 function buildDefRowProperties(input: IndicatorDefInput): Record<string, unknown> {
@@ -332,10 +378,10 @@ function buildDefRowProperties(input: IndicatorDefInput): Record<string, unknown
 
 export interface UpsertIndicatorDefResult {
   pageId: string;
-  outcome: "created" | "updated";
+  outcome: "created" | "updated" | "unchanged";
 }
 
-/** 指標キーで upsert する (`indicators.ts` のカタログを起動時に同期する用)。 */
+/** 指標キーで upsert する (取込の起動時にカタログを同期する用。同一定義なら書き込まない)。 */
 export async function upsertIndicatorDef(
   dbId: string,
   input: IndicatorDefInput
@@ -343,8 +389,11 @@ export async function upsertIndicatorDef(
   const props = buildDefRowProperties(input);
   const existing = await findDefRowByKey(dbId, input.key);
   if (existing) {
-    await notionRequest("PATCH", `/pages/${existing}`, { properties: props });
-    return { pageId: existing, outcome: "updated" };
+    if (indicatorDefRowMatches(existing.properties, input)) {
+      return { pageId: existing.id, outcome: "unchanged" };
+    }
+    await notionRequest("PATCH", `/pages/${existing.id}`, { properties: props });
+    return { pageId: existing.id, outcome: "updated" };
   }
   const created = await notionRequest<{ id: string }>("POST", "/pages", {
     parent: { database_id: dbId },
@@ -571,17 +620,6 @@ function buildObsRowProperties(input: ObservationInput): Record<string, unknown>
   };
 }
 
-/** Notion の query 応答に載るページプロパティ (観測ログ行の比較に必要な型だけ)。 */
-type NotionPagePropertyValue = {
-  type?: string;
-  title?: Array<{ plain_text?: string }>;
-  rich_text?: Array<{ plain_text?: string }>;
-  relation?: Array<{ id: string }>;
-  date?: { start?: string | null } | null;
-  select?: { name?: string } | null;
-  number?: number | null;
-  checkbox?: boolean;
-};
 interface ObsRowHit {
   id: string;
   properties?: Record<string, NotionPagePropertyValue>;
@@ -599,10 +637,6 @@ async function findObsRowByKey(dbId: string, key: string): Promise<ObsRowHit | n
 export async function observationExists(dbId: string, key: string): Promise<boolean> {
   return (await findObsRowByKey(dbId, key)) !== null;
 }
-
-const normalizeId = (id: string): string => id.replace(/-/g, "").toLowerCase();
-const plainOf = (parts: Array<{ plain_text?: string }> | undefined): string | undefined =>
-  parts === undefined ? undefined : parts.map((p) => p.plain_text ?? "").join("");
 
 /**
  * 既存行のプロパティが今回書こうとしている値と完全に一致するか (純関数)。

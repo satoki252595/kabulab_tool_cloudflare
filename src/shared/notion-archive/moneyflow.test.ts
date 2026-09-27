@@ -140,6 +140,48 @@ describe("notion-archive moneyflow", () => {
     });
   });
 
+  describe("upsertIndicatorDef (同値スキップ)", () => {
+    const def = {
+      key: "sector_turnover",
+      displayName: "業種別売買代金",
+      requirement: "R1" as const,
+      flowType: "売買代金" as const,
+      description: "説明文",
+      sourceUrl: "https://example.jp/",
+      license: "personal-only" as const,
+      frequency: "週次" as const,
+      limitations: "限界の文",
+    };
+    const props = (over: Record<string, unknown> = {}) => ({
+      指標キー: { type: "title", title: [{ plain_text: "sector_turnover" }] },
+      表示名: { type: "rich_text", rich_text: [{ plain_text: "業種別売買代金" }] },
+      要件: { type: "select", select: { name: "R1" } },
+      何を測るか: { type: "select", select: { name: "売買代金" } },
+      説明: { type: "rich_text", rich_text: [{ plain_text: "説明" }, { plain_text: "文" }] },
+      出典URL: { type: "url", url: "https://example.jp/" },
+      利用条件: { type: "select", select: { name: "personal-only" } },
+      頻度: { type: "select", select: { name: "週次" } },
+      限界: { type: "rich_text", rich_text: [{ plain_text: "限界の文" }] },
+      ...over,
+    });
+
+    it("既存定義と完全一致なら PATCH しない (分割された rich_text も連結して比較)", async () => {
+      route("POST", "/v1/databases/defs/query", [{ results: [{ id: "def-1", properties: props() }] }]);
+      const { upsertIndicatorDef } = await load();
+      expect(await upsertIndicatorDef("defs", def)).toEqual({ pageId: "def-1", outcome: "unchanged" });
+      expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(0);
+    });
+
+    it("説明文が変われば上書きする", async () => {
+      route("POST", "/v1/databases/defs/query", [
+        { results: [{ id: "def-1", properties: props({ 説明: { type: "rich_text", rich_text: [{ plain_text: "旧" }] } }) }] },
+      ]);
+      route("PATCH", "/v1/pages/def-1", [{ id: "def-1" }]);
+      const { upsertIndicatorDef } = await load();
+      expect(await upsertIndicatorDef("defs", def)).toEqual({ pageId: "def-1", outcome: "updated" });
+    });
+  });
+
   describe("ensureObservationsDb", () => {
     it("「一次データ｜moneyflow」DB が無ければ throw する (relation 先が無いまま作らない)", async () => {
       const dbId = "d".repeat(32);

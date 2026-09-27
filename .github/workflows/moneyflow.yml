@@ -9,10 +9,20 @@
 #   - 上記を Notion「資金フロー｜観測ログ」へ upsert、実行結果を
 #     「資金フロー｜取込ログ」へ記録
 #
-# 必要な GitHub Secrets (既存名を流用。新規は NOTION_MONEYFLOW_PAGE_ID のみ):
+#   - Phase 2〜5 の取得元 (scripts/moneyflow/sources.ts に登録した 17 取得元の spec) を
+#     共通フロー (scripts/moneyflow/lib/run-spec.ts) で実行。月次・四半期等の取得元は
+#     公表済みの最新期間が取込済みなら取得元へ行かずにスキップする (大半の日は数分で終わる)
+#
+# 必要な GitHub Secrets (既存名を流用。新規は NOTION_MONEYFLOW_PAGE_ID と任意の CoinGecko キー):
 #   NOTION_TOKEN            … 既存 (vwap-ingest.yml 等と共通)
 #   NOTION_MONEYFLOW_PAGE_ID … 新規。ユーザーが作成した「資金フロー（個人用）」ページ ID
 #   WORKER_BASE_URL / CRON_SECRET … 既存 (yuho-quant 等の内部エンドポイント認証と共通)
+#   YAHOO_PROXY_BASE        … 既存 (stock-sync.yml と共通)。世界の主要指数 (global-indices) が
+#                             共有 Yahoo クライアント経由で使う
+#   COINGECKO_DEMO_API_KEY  … 新規・任意。未設定でも動くが匿名アクセスは 429 が出やすい
+#
+# 初回 (Notion が空の状態) は全取得元の最新期間を一度に書くため時間がかかる。
+# タイムアウトしても次回実行が「保管済み・観測ログ途中」から再開する (同値行は書き込まない)。
 #
 # 信用残 (日次) は今回のワークフローに含めない (TODO: docs/moneyflow.md 参照。
 # 2026-09-28 の JPX 日次化を確認してから別途追加する)。
@@ -43,7 +53,7 @@ permissions:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NOTION_MONEYFLOW_PAGE_ID: ${{ secrets.NOTION_MONEYFLOW_PAGE_ID }}
@@ -51,6 +61,8 @@ jobs:
       NOTION_STOCK_INFO_PAGE_ID: ${{ secrets.NOTION_STOCK_INFO_PAGE_ID }}
       WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      YAHOO_PROXY_BASE: ${{ secrets.YAHOO_PROXY_BASE }}
+      COINGECKO_DEMO_API_KEY: ${{ secrets.COINGECKO_DEMO_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
