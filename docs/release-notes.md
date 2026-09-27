@@ -11,7 +11,8 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ### 追加
 - **競合他社判定のローカル代替判定 (`judge=semif`)** (#118): jev のクレジット枯渇で中断した競合他社判定の残り銘柄を、Apple Silicon ローカル PC 上の SemIf (Qwen3.5-4B, MLX) で代替判定できるようにした。`pnpm biztag competitors -- --judge=semif` / `competitors-eval -- --judge=semif` で切替。評価セットで精度 0.909・再現率 0.928 を確認（`--only-unjudged` で既判定分は再判定しない）。
-- **008 moneyflow (個人用「お金の流れ」ダッシュボード) Phase 0/1** (#PR): 東証33業種別の売買代金・シェア・上昇/下落日売買代金 (既存D1)・業種別時価総額 (JPX月次PDF)・業種別空売り比率 (JPX日次PDF→月次集計) を Notion「株式情報」直下の「資金フロー｜観測ログ」等の DB へ記録する取込を追加した (`pnpm ingest:moneyflow`、平日17:30 JST cron)。個人利用限定・近似値であることを指標定義に明記。信用残の日次化 (9/28〜) は別途対応 (docs/moneyflow.md の TODO参照)。
+- **008 moneyflow (個人用「お金の流れ」ダッシュボード) Phase 0/1** (#121): 東証33業種別の売買代金・シェア・上昇/下落日売買代金 (既存D1)・業種別時価総額 (JPX月次PDF)・業種別空売り比率 (JPX日次PDF→月次集計) を Notion「株式情報」直下の「資金フロー｜観測ログ」等の DB へ記録する取込を追加した (`pnpm ingest:moneyflow`、平日17:30 JST cron)。個人利用限定・近似値であることを指標定義に明記。信用残の日次化 (9/28〜) は別途対応 (docs/moneyflow.md の TODO参照)。
+- **008 moneyflow Phase 2〜5 (取得元 17 件)** (#121): 投資部門別 (株式・ETF/REIT・先物オプション)、財務省の対外対内証券売買、国際収支 (地域別)、投信・REIT の資金増減、公社債の発行償還、日銀資金循環、店頭FX・くりっく365、暗号資産 (JVCEA・CoinGecko)、CFTC COT、IMF CPIS・BIS・World Bank、世界の主要指数を同じ Notion DB へ週次/月次/四半期で記録する取込を追加した (`pnpm ingest:moneyflow -- --only=<spec名>` で個別実行可。一覧は docs/moneyflow.md)。あわせて Phase 1 の不具合 (業種別時価総額・空売りの PDF が 0 バイトで一次データ保管に失敗する、売買代金 0 のとき比率を 0 と記録する) を修正。
 
 
 ### 本番作業

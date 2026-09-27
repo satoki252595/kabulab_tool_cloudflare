@@ -5,8 +5,8 @@
 ③先物・FX・商品・暗号資産を含む資産クラス比較 (R3) ④日本⇔各国＋世界の概況 (R4)。
 
 ユーザー決定 (2026-09-27): 自分だけが見る個人利用・無料データのみ・近似でよいが
-何を測っているか明記する。**今回実装したのは Phase 0 (準備) と Phase 1 (R1
-33業種が見える。ただし信用残の日次化は含まない)** まで。設計の詳細な経緯は
+何を測っているか明記する。Phase 0/1 (R1 33業種) に続き、2026-09-27 に Phase 2〜5 の
+取得元 17 件を実装した (信用残の日次化は未実装)。設計の詳細な経緯は
 承認済み計画 `notion-velvet-goose.md` を参照 (このファイルは取得元の恒久的な
 インベントリと実装状況の記録)。
 
@@ -186,13 +186,80 @@ JPX 告知 (2026-07-06)「信用取引残高の公表情報の変更日及び今
 - `scripts/moneyflow/ingest.ts` — 取込 CLI (`pnpm ingest:moneyflow`)
 - `.github/workflows/moneyflow.yml` — 平日 17:30 JST 実行
 
+## Phase 2〜5 取得元 (2026-09-27 実装)
+
+計画書の Phase 2〜5 の取得元 17 件を、共通の取込フロー (`MoneyflowSourceSpec`) に載せた。
+各取得元は「取得・解析 (`services/moneyflow/lib/sources/<key>.ts`)」と「Phase 1 の Notion
+DB へのつなぎ (`services/moneyflow/lib/adapters/<key>.ts`)」の 2 層で、取込 CLI への登録は
+`scripts/moneyflow/sources.ts`。統一規約 (単位・期間ラベル・区分表記・行数上限) は
+`services/moneyflow/lib/adapters/README.md`。
+
+### 取込の流れ (`scripts/moneyflow/lib/run-spec.ts`)
+
+1. `resolve()` で公表済みの最新バッチの冪等キーを決める (一覧ページ等の軽い取得)
+2. 未保管のキー → 本体を取得 → **先に** `recordPrimaryData()` で原ファイルを実体保管
+   (解析が様式変更で失敗しても原本は残る) → 解析・検証 (`validateDrafts`) → 観測ログへ upsert
+3. 保管済みのキー → 取得元へは行かず、Notion の保管ファイルから再解析。最後の行が観測ログに
+   あれば「未更新」でスキップ、無ければ (前回途中で失敗等) 全行を再送 (同値の行は書かない)
+
+平日の定時実行では、大半の取得元が 2〜3 リクエストでスキップになる。**初回だけ** 全取得元の
+最新期間 (合計 約 5,300 行) を書くため 1 時間強かかり、ワークフローがタイムアウトしても次回が
+途中から再開する。
+
+### 取得元一覧 (spec 名 = `--only=` に指定する名前)
+
+| 取得元 | spec 名 | 要件 | 頻度 | 1回の行数 | 利用条件 |
+|---|---|---|---|---|---|
+| JPX 投資部門別売買状況 (株式) | `jpx-investor-equity-weekly` / `-monthly` | R1/R4 | 週次/月次 | 240 | personal-only |
+| JPX 投資部門別売買状況 (ETF・REIT) | `jpx-investor-etf-reit-etf` / `-reit` | R2 | 月次 | 29 | personal-only |
+| JPX 先物・オプション投資部門別 / 指数先物建玉 | `jpx-derivatives-investor-weekly` / `-futures-oi` | R3 | 週次 | 484 / 上位建玉 | personal-only |
+| 財務省 対外及び対内証券売買 | `mof-portfolio-flows-weekly` / `-monthly` | R4 | 週次/月次 | 286 / 264 | attribution-required |
+| 国際収支統計 地域別 (日銀) | `bop-regional` | R4 | 四半期 | 最大470 | attribution-required (商用は日銀へ事前相談) |
+| 資産運用業協会 公募投信・REIT 資産増減 | `imaj-fund-flows` / `-reit` | R2 | 月次 | 120 / 24 | 要確認 |
+| JSDA 公社債発行額・償還額 | `jsda-bonds` | R2 | 月次 | 240 | 要確認 |
+| 日銀 資金循環統計 (速報) | `boj-flow-of-funds` | R2/R3 | 四半期 | 282 (上限432) | attribution-required (商用は日銀へ事前相談) |
+| FFAJ 店頭FX月次速報 | `ffaj-otc-fx` | R3 | 月次 | 384 | 要確認 |
+| TFX くりっく365 / くりっく株365 | `tfx-click365-fx` / `-fx-annual` / `-cfd` / `-cfd-annual` | R3 | 月次/年次 | 462 / 186 / 154 / 22 | 要確認 (personal-only 運用。公開面へは出さない) |
+| JVCEA 会員統計 (暗号資産) | `jvcea-crypto` | R3 | 月次 | 156 | 要確認 |
+| CoinGecko グローバル | `coingecko-global` | R3 | 日次 (取込日) | 13 | 要確認 (表示時「Powered by CoinGecko」必須) |
+| CFTC COT 円・日経平均先物 | `cftc-cot-jpy` | R3/R4 | 週次 | 10 | public-domain |
+| IMF CPIS (DBnomics 経由) | `imf-cpis` | R4 | 半期 | 最大396 | attribution-required |
+| BIS 国際銀行統計 (所在地ベース) | `bis-banking` | R4 | 四半期 | 約450 | attribution-required |
+| World Bank 上場企業時価総額 | `worldbank-marketcap` | R4 | 年次 | 127 (最大154) | attribution-required (CC BY 4.0) |
+| 世界の主要指数・為替・金利・金・原油 (Yahoo) | `global-indices` | R4 | 週次 | 最大221 | personal-only |
+
+IMF CPIS・BIS・World Bank・日銀ストック表は **残高 (ストック)** であり、流れそのものではない
+(指標定義の「限界」に近似であることを明記)。各指標の定義・限界の全文は Notion「資金フロー｜指標定義」。
+
+### 検証の記録 (2026-09-27)
+
+前任セッションの実データ照合で見つかった 35 件の問題について、17 取得元それぞれで
+「検証 → 反証」の 2 段で再検証した。全取得元でテスト・型検査・lint が通り、当日取得した
+実ファイル (取得元サイトへの接続は作業環境のネットワーク制限で不可だったため、同日取得済みの
+ファイル) との突き合わせは延べ約 500 項目で一致した (不一致として記録されたものは、修正前後の
+差を示す回帰検証)。再検証で新たに見つかった不具合 (冪等キーの衝突、黙った取りこぼし、単位・
+列ずれの素通り、定義文の誤り等) も修正済み。
+
+### 運用上の注意・未解決事項
+
+- **JPX 様式変更**: 投資部門別 (株式) は週次 2026-09-29・月次 2026-10-08 掲載分から 1 ファイルの
+  新様式 (`stock_1_w_*.xlsx` / `stock_1_mYYYYMM.xlsx`) になる。新様式の実ファイルで桁 (JPX 公式
+  サンプルは見出しが千円なのに値が円単位) を確かめるまで、該当 spec は取込を止める (失敗として
+  取込ログに出る)。ETF・REIT は 2026-10-13 掲載分から新様式で、原本の保管までは行い解析で止まる。
+  実ファイルが出たらパーサを対応させること。
+- **JPX 先物・オプション**: 投資部門別 CSV・指数先物建玉 xlsx の実ファイルが作業環境に無く、
+  実値での照合が未実施 (テスト 10 件が skip)。**本番の初回実行前に `--dry-run` で解析結果を確認する**。
+- **IMF CPIS**: DBnomics が欠損を文字列 "NA" で返す場合は取込全体が止まる (黙った誤値にはならない)。
+  初回 `--dry-run` で確認する。DBnomics 側のミラーは 2024-H1 で止まっている。
+- **JSDA**: 「発行額は払込日ベース」の根拠 PDF (hako.pdf) は未取得。負値 (△表記) が現れると解析が止まる
+  (現状のデータには無い)。
+- **財務省**: 指標定義の「速報値で確報改定を反映しない」の記述は一次資料で未確認。
+- **利用条件「要確認」** の取得元 (TFX・FFAJ・JVCEA・資産運用業協会・JSDA・CoinGecko) と
+  日銀 (商用は事前相談) は、個人利用の Notion に限って使い、公開面へは出さない。
+- 実データのフィクスチャは `services/moneyflow/lib/sources/fixtures/{private,public}/` (このリポジトリは
+  PUBLIC のため private/ は commit しない。一覧・取得元・sha256 は同ディレクトリの README.md)。
+
 ## Phase 2 以降の予定 (計画書どおり)
 
-- **Phase 2 (誰が買ったか・日本⇔海外)**: JPX 投資部門別 (株式・ETF・REIT)、
-  財務省の対外・対内証券売買 (週次、日本全体)。
-- **Phase 3 (国別・株以外・日本全体)**: 国際収支統計 (国・地域別)、投信・REIT
-  の資金増減、公社債の発行・償還、日銀の資金循環統計。
-- **Phase 4 (資産クラス横断)**: 先物・オプション (建玉・投資部門別)、店頭FX・
-  くりっく365、暗号資産 (JVCEA＋CoinGecko推定)。
-- **Phase 5 (世界の概況・任意)**: IMF CPIS・BIS・World Bank・主要指数。着手前に
-  要否を確認する (すべて残高ベースの近似にとどまるため)。
+Phase 2〜5 は上記のとおり 2026-09-27 に実装した。残りは信用残の日次化 (上記 TODO) と、
+JPX 新様式への追従、JPX 業種別指数の過去値 (見送り中) の再判断。
