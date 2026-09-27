@@ -144,6 +144,8 @@ export {
   upsertIndicatorDef,
   ensureObservationsDb,
   upsertObservation,
+  observationExists,
+  observationRowMatches,
   observationKey,
   ensureRunLogDb,
   recordRunLog,

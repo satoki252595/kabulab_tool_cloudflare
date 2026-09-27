@@ -40,11 +40,8 @@ import {
   notionEnv,
   type MoneyflowRunStatus,
 } from "../../src/shared/notion-archive/index.js";
-import { notionRequest } from "../../src/shared/notion-archive/client.js";
-import { findBackupChildByTitle } from "../../src/shared/notion-archive/archive.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { rootCauseMessage } from "../../src/shared/errors.js";
-import { MONEYFLOW_SECTOR_CATEGORY_OPTIONS } from "../../services/moneyflow/lib/sector-names.js";
 import { MONEYFLOW_INDICATORS } from "../../services/moneyflow/lib/indicators.js";
 import {
   fetchSectorMarketCap,
@@ -63,26 +60,81 @@ import {
   type ShortSellingData,
 } from "../../services/moneyflow/lib/jpx-short-selling.js";
 import { isoWeekLabelOf, mostRecentMondayOf } from "../../services/moneyflow/lib/iso-week.js";
+import type { IndicatorDefInput } from "../../src/shared/notion-archive/index.js";
 import { extractText, getDocumentProxy } from "unpdf";
+import {
+  downloadArchivedFile,
+  findArchivedRecordByKey,
+  listArchivedRecordsByPrefix,
+  requirePrimaryDataDbId,
+  type ArchivedRecord,
+} from "./lib/archived-files.js";
+import { runSpec } from "./lib/run-spec.js";
+import { SPEC_SOURCES } from "./sources.js";
 
-export const SOURCES = ["jpx-sector-marketcap", "jpx-short-selling", "sector-turnover"] as const;
-type Source = (typeof SOURCES)[number];
+/** Phase 1 (R1 東証33業種) の取得元。個別の runner 関数で実装している。 */
+export const PHASE1_SOURCES = ["jpx-sector-marketcap", "jpx-short-selling", "sector-turnover"] as const;
+type Phase1Source = (typeof PHASE1_SOURCES)[number];
+
+/** Phase 1 の各取得元が書く指標キー (指標定義の同期範囲を実行対象に絞るため)。 */
+const PHASE1_INDICATOR_KEYS: Record<Phase1Source, readonly string[]> = {
+  "jpx-sector-marketcap": ["sector_market_cap"],
+  "jpx-short-selling": ["sector_short_selling_ratio"],
+  "sector-turnover": ["sector_turnover", "sector_turnover_share", "sector_up_turnover", "sector_down_turnover"],
+};
+
+/** `--only=` に使える全取得元名 (Phase 1 + Phase 2〜5 の spec)。 */
+export const SOURCES: readonly string[] = [...PHASE1_SOURCES, ...SPEC_SOURCES.map((s) => s.name)];
+
+function isPhase1Source(name: string): name is Phase1Source {
+  return (PHASE1_SOURCES as readonly string[]).includes(name);
+}
 
 /**
  * `--only=a,b` を解析する純関数。`sources` に含まれない値があれば throw する
  * (推測でその場をしのがない — ルール2)。未指定なら `sources` 全件を返す。
  */
-export function parseOnlyArg(argv: readonly string[], sources: readonly Source[]): Source[] {
+export function parseOnlyArg(argv: readonly string[], sources: readonly string[]): string[] {
   const prefix = "--only=";
   const a = argv.find((x) => x.startsWith(prefix));
   if (!a) return [...sources];
   const requested = a.slice(prefix.length).split(",").map((s) => s.trim());
   for (const r of requested) {
-    if (!(sources as readonly string[]).includes(r)) {
+    if (!sources.includes(r)) {
       throw new Error(`--only: 不明な取得元です: ${r} (使える値: ${sources.join(", ")})`);
     }
   }
-  return requested as Source[];
+  return requested;
+}
+
+/**
+ * 実行対象の取得元が使う指標定義を集める純関数 (Phase 1 + spec)。
+ * 同じ指標キーが別定義で重複していたら throw する (観測ログの relation 先が
+ * どちらの定義か曖昧になるため)。
+ */
+export function indicatorsForSources(selected: readonly string[]): IndicatorDefInput[] {
+  const byKey = new Map<string, IndicatorDefInput>();
+  const add = (ind: IndicatorDefInput, owner: string) => {
+    const prev = byKey.get(ind.key);
+    if (prev && JSON.stringify(prev) !== JSON.stringify(ind)) {
+      throw new Error(`指標キー「${ind.key}」が複数の取得元で異なる定義になっています (${owner})`);
+    }
+    byKey.set(ind.key, ind);
+  };
+  for (const name of selected) {
+    if (isPhase1Source(name)) {
+      for (const k of PHASE1_INDICATOR_KEYS[name]) {
+        const ind = MONEYFLOW_INDICATORS.find((i) => i.key === k);
+        if (!ind) throw new Error(`Phase 1 の指標キー「${k}」が MONEYFLOW_INDICATORS にありません`);
+        add(ind, name);
+      }
+      continue;
+    }
+    const spec = SPEC_SOURCES.find((s) => s.name === name);
+    if (!spec) throw new Error(`取得元「${name}」の定義が見つかりません`);
+    for (const ind of spec.indicators) add(ind, name);
+  }
+  return [...byKey.values()];
 }
 
 /** 成功/失敗件数から実行ステータスを分類する純関数。 */
@@ -92,10 +144,10 @@ export function classifyRunStatus(successCount: number, failedCount: number): Mo
 }
 
 const DRY_RUN = process.argv.includes("--dry-run");
-const ONLY: readonly Source[] = parseOnlyArg(process.argv, SOURCES);
+const ONLY: readonly string[] = parseOnlyArg(process.argv, SOURCES);
 
 interface RunOutcome {
-  source: Source;
+  source: string;
   ok: boolean;
   detail: string;
 }
@@ -103,9 +155,10 @@ interface RunOutcome {
 /** 指標キー→Notion ページ ID のキャッシュ (1 実行内で使い回す)。 */
 const indicatorPageIds = new Map<string, string>();
 
-async function syncIndicatorCatalog(): Promise<void> {
+/** 実行対象の取得元が使う指標だけを「資金フロー｜指標定義」へ同期する。 */
+async function syncIndicatorCatalog(selected: readonly string[]): Promise<void> {
   const { dbId } = await ensureIndicatorDefsDb();
-  for (const ind of MONEYFLOW_INDICATORS) {
+  for (const ind of indicatorsForSources(selected)) {
     const { pageId } = await upsertIndicatorDef(dbId, ind);
     indicatorPageIds.set(ind.key, pageId);
   }
@@ -123,60 +176,13 @@ function firstDayOfMonth(yyyyMm: string): string {
   return `${yyyyMm}-01`;
 }
 
-/**
- * 「一次データ｜moneyflow」DB の ID を取得する (無ければ throw。
- * recordPrimaryData を先に呼んでいることが前提 — 推測で relation 先を作らない、ルール2)。
- */
-async function requirePrimaryDataDbId(context: string): Promise<string> {
-  const primaryDbId = await findBackupChildByTitle({
-    parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID(),
-    title: "一次データ｜moneyflow",
-    kind: "database",
-  });
-  if (!primaryDbId) {
-    throw new Error(`${context}: 「一次データ｜moneyflow」DB が見つかりません (recordPrimaryData 直後のはず)`);
+/** Notion に実体アップロード済みの PDF (1 ファイル) を取り直し、テキスト抽出する (JPX への再取得はしない)。 */
+async function fetchArchivedPdfText(ref: ArchivedRecord, context: string): Promise<string> {
+  const file = ref.files[0];
+  if (!file || ref.files.length !== 1) {
+    throw new Error(`${context}: ${ref.key} の保管ファイルが ${ref.files.length} 件です (PDF 1 件であるべき)`);
   }
-  return primaryDbId;
-}
-
-interface ArchivedFileRef {
-  pageId: string;
-  key: string;
-  fileUrl: string;
-}
-
-/** 「一次データ｜moneyflow」から key 完全一致の 1 件を探す (無ければ null)。 */
-async function findArchivedFileByKey(primaryDbId: string, key: string): Promise<ArchivedFileRef | null> {
-  const res = await notionRequest<{
-    results: Array<{
-      id: string;
-      properties: {
-        Key?: { title?: Array<{ plain_text?: string }> };
-        Files?: { files?: Array<{ name: string; file?: { url: string }; external?: { url: string } }> };
-      };
-    }>;
-  }>("POST", `/databases/${primaryDbId}/query`, {
-    filter: { property: "Key", title: { equals: key } },
-    page_size: 1,
-  });
-  const r = res.results[0];
-  if (!r) return null;
-  const foundKey = (r.properties.Key?.title ?? []).map((t) => t.plain_text ?? "").join("");
-  const file = r.properties.Files?.files?.[0];
-  const fileUrl = file?.file?.url ?? file?.external?.url;
-  if (!fileUrl) {
-    throw new Error(`findArchivedFileByKey: page ${r.id} (key=${foundKey}) にファイル URL がありません`);
-  }
-  return { pageId: r.id, key: foundKey, fileUrl };
-}
-
-/** Notion に実体アップロード済みの PDF を取り直し、テキスト抽出する (JPX への再取得はしない)。 */
-async function fetchArchivedPdfText(ref: ArchivedFileRef, context: string): Promise<string> {
-  const res = await fetch(ref.fileUrl);
-  if (!res.ok) {
-    throw new Error(`${context}: ${ref.key} の再取得に失敗 status=${res.status}`);
-  }
-  const bytes = new Uint8Array(await res.arrayBuffer());
+  const bytes = await downloadArchivedFile(file, `${context} (${ref.key})`);
   const pdf = await getDocumentProxy(bytes);
   const { text } = await extractText(pdf, { mergePages: true });
   return text;
@@ -196,7 +202,7 @@ export function sectorMarketCapSkipDetail(period: string): string {
 }
 
 async function reparseArchivedSectorMarketCap(
-  ref: ArchivedFileRef
+  ref: ArchivedRecord
 ): Promise<Pick<SectorMarketCapData, "asOfDate" | "sectors" | "segments">> {
   const text = await fetchArchivedPdfText(ref, "reparseArchivedSectorMarketCap");
   return parseSectorMarketCapText(text);
@@ -223,7 +229,7 @@ async function runSectorMarketCap(): Promise<RunOutcome> {
     // 月次未更新: JPX への PDF 本体の再取得はせず、Notion に実体保管済みの
     // PDF を取り直して観測ログを再送する (アーカイブ済み ≠ 観測ログ書込済み)。
     const primaryDbId = await requirePrimaryDataDbId("runSectorMarketCap");
-    const ref = await findArchivedFileByKey(primaryDbId, key);
+    const ref = await findArchivedRecordByKey(primaryDbId, key);
     if (!ref) {
       throw new Error(
         `runSectorMarketCap: isArchived("${key}")=true なのにアーカイブ済みページが見つかりません (整合性エラー)`
@@ -250,7 +256,7 @@ async function runSectorMarketCap(): Promise<RunOutcome> {
   // (upsertObservation は「期間|指標キー|区分」で冪等なので再実行しても安全・安価。
   // ここを archive の outcome で条件分岐すると、途中で失敗した月が Notion 側の
   // アーカイブ済み判定により以後ずっと欠落する — レビュー指摘の再発防止)。
-  const { dbId: obsDbId } = await ensureObservationsDb(MONEYFLOW_SECTOR_CATEGORY_OPTIONS);
+  const { dbId: obsDbId } = await ensureObservationsDb();
   const indicatorPageId = requireIndicatorPageId("sector_market_cap");
   for (const row of sectors) {
     await upsertObservation(obsDbId, {
@@ -276,47 +282,8 @@ async function runSectorMarketCap(): Promise<RunOutcome> {
 // jpx-short-selling (日次archive + 当月の月次集計)
 // ---------------------------------------------------------------------------
 
-/** 「一次データ｜moneyflow」から今月分の空売り日次 PDF アーカイブ済みページを列挙する。 */
-async function listArchivedShortSellingFiles(month: string, primaryDbId: string): Promise<ArchivedFileRef[]> {
-  const prefix = `jpx-short-selling-sector-${month}`;
-  const out: ArchivedFileRef[] = [];
-  let cursor: string | null = null;
-  for (;;) {
-    const body: Record<string, unknown> = {
-      filter: { property: "Key", title: { starts_with: prefix } },
-      page_size: 100,
-    };
-    if (cursor) body.start_cursor = cursor;
-    const res = await notionRequest<{
-      results: Array<{
-        id: string;
-        properties: {
-          Key?: { title?: Array<{ plain_text?: string }> };
-          Files?: { files?: Array<{ name: string; file?: { url: string }; external?: { url: string } }> };
-        };
-      }>;
-      has_more: boolean;
-      next_cursor: string | null;
-    }>("POST", `/databases/${primaryDbId}/query`, body);
-    for (const r of res.results) {
-      const key = (r.properties.Key?.title ?? []).map((t) => t.plain_text ?? "").join("");
-      const file = r.properties.Files?.files?.[0];
-      const fileUrl = file?.file?.url ?? file?.external?.url;
-      if (!fileUrl) {
-        throw new Error(`listArchivedShortSellingFiles: page ${r.id} (key=${key}) にファイル URL がありません`);
-      }
-      out.push({ pageId: r.id, key, fileUrl });
-    }
-    if (!res.has_more || !res.next_cursor) break;
-    cursor = res.next_cursor;
-  }
-  // key (= jpx-short-selling-sector-YYYY-MM-DD) の日付昇順で処理する。
-  out.sort((a, b) => a.key.localeCompare(b.key));
-  return out;
-}
-
 async function reparseArchivedShortSelling(
-  ref: ArchivedFileRef
+  ref: ArchivedRecord
 ): Promise<Omit<ShortSellingData, "pdfBytes" | "pdfUrl">> {
   const text = await fetchArchivedPdfText(ref, "reparseArchivedShortSelling");
   return parseShortSellingSectorText(text);
@@ -342,11 +309,12 @@ async function runShortSelling(): Promise<RunOutcome> {
   // 月が進むほど正確になる)。
   const month = data.date.slice(0, 7);
   const primaryDbId = await requirePrimaryDataDbId("runShortSelling");
-  const files = await listArchivedShortSellingFiles(month, primaryDbId);
+  // key (= jpx-short-selling-sector-YYYY-MM-DD) の日付昇順
+  const files = await listArchivedRecordsByPrefix(primaryDbId, `jpx-short-selling-sector-${month}`);
   const dailyRows = await Promise.all(files.map(reparseArchivedShortSelling));
   const monthly = aggregateMonthlyShortSellingRatio(dailyRows);
 
-  const { dbId: obsDbId } = await ensureObservationsDb(MONEYFLOW_SECTOR_CATEGORY_OPTIONS);
+  const { dbId: obsDbId } = await ensureObservationsDb();
   const indicatorPageId = requireIndicatorPageId("sector_short_selling_ratio");
   for (const row of monthly.sectors) {
     await upsertObservation(obsDbId, {
@@ -418,7 +386,7 @@ async function runSectorTurnover(): Promise<RunOutcome> {
     return { source: "sector-turnover", ok: true, detail: `dry-run ${from}〜${to}` };
   }
 
-  const { dbId: obsDbId } = await ensureObservationsDb(MONEYFLOW_SECTOR_CATEGORY_OPTIONS);
+  const { dbId: obsDbId } = await ensureObservationsDb();
   const period = isoWeekLabelOf(today);
   const turnoverPageId = requireIndicatorPageId("sector_turnover");
   const sharePageId = requireIndicatorPageId("sector_turnover_share");
@@ -477,22 +445,31 @@ async function runSectorTurnover(): Promise<RunOutcome> {
 // main
 // ---------------------------------------------------------------------------
 
-const RUNNERS: Record<Source, () => Promise<RunOutcome>> = {
+const RUNNERS: Record<Phase1Source, () => Promise<RunOutcome>> = {
   "jpx-sector-marketcap": runSectorMarketCap,
   "jpx-short-selling": runShortSelling,
   "sector-turnover": runSectorTurnover,
 };
 
+async function runSource(source: string, now: Date): Promise<RunOutcome> {
+  if (isPhase1Source(source)) return RUNNERS[source]();
+  const spec = SPEC_SOURCES.find((s) => s.name === source);
+  if (!spec) throw new Error(`取得元「${source}」の定義が見つかりません`);
+  const detail = await runSpec(spec, { dryRun: DRY_RUN, now, indicatorPageId: requireIndicatorPageId });
+  return { source, ok: true, detail };
+}
+
 export async function main(): Promise<void> {
   if (!DRY_RUN) {
-    await syncIndicatorCatalog();
+    await syncIndicatorCatalog(ONLY);
   }
 
+  const now = new Date();
   const outcomes: RunOutcome[] = [];
   const failures: string[] = [];
   for (const source of ONLY) {
     try {
-      outcomes.push(await RUNNERS[source]());
+      outcomes.push(await runSource(source, now));
     } catch (error) {
       const message = rootCauseMessage(error);
       console.error(`[moneyflow:${source}] エラー: ${message}`);

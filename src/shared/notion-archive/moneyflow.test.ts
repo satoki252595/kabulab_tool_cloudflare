@@ -149,10 +149,10 @@ describe("notion-archive moneyflow", () => {
       route("POST", "/v1/search", [searchEmpty()]);
       route("GET", `/v1/blocks/${MONEYFLOW_PAGE}/children`, [childrenPage()]);
       const { ensureObservationsDb } = await load();
-      await expect(ensureObservationsDb(["電気機器"])).rejects.toThrow(/一次データ｜moneyflow/);
+      await expect(ensureObservationsDb()).rejects.toThrow(/一次データ｜moneyflow/);
     });
 
-    it("指標定義 DB・一次データ DB が揃っていれば作成し、区分の選択肢を積む", async () => {
+    it("指標定義 DB・一次データ DB が揃っていれば作成し、区分は rich_text 列にする", async () => {
       const defsDbId = "d".repeat(32);
       process.env.NOTION_MONEYFLOW_DEFS_DB_ID = defsDbId;
       route("GET", `/v1/databases/${defsDbId}`, [{ id: defsDbId, properties: {} }]);
@@ -179,21 +179,49 @@ describe("notion-archive moneyflow", () => {
       route("POST", "/v1/databases", [{ id: "obs-new" }]);
 
       const { ensureObservationsDb } = await load();
-      const result = await ensureObservationsDb(["電気機器", "銀行業"]);
+      const result = await ensureObservationsDb();
       expect(result.dbId).toBe("obs-new");
       const created = JSON.parse(
         String(calls.find((c) => new URL(c.url).pathname === "/v1/databases")?.init.body)
       ) as {
         title: Array<{ text: { content: string } }>;
-        properties: Record<string, { select?: { options?: Array<{ name: string }> }; relation?: { database_id: string } }>;
+        properties: Record<string, { rich_text?: object; relation?: { database_id: string } }>;
       };
       expect(created.title[0]?.text.content).toBe("資金フロー｜観測ログ");
       expect(created.properties["指標"]?.relation?.database_id).toBe(defsDbId);
       expect(created.properties["一次データ"]?.relation?.database_id).toBe("primary-db-1");
-      expect(created.properties["区分"]?.select?.options?.map((o) => o.name)).toEqual([
-        "電気機器",
-        "銀行業",
+      // 区分値は国・商品・通貨まで含めると 100 種を超えるため select にしない
+      expect(created.properties["区分"]).toEqual({ rich_text: {} });
+    });
+
+    it("既存 DB の列の型が期待と違えば (旧スキーマの select 区分など) throw し、黙って書き込まない", async () => {
+      const defsDbId = "d".repeat(32);
+      const obsDbId = "e".repeat(32);
+      process.env.NOTION_MONEYFLOW_DEFS_DB_ID = defsDbId;
+      process.env.NOTION_MONEYFLOW_OBS_DB_ID = obsDbId;
+      route("GET", `/v1/databases/${defsDbId}`, [{ id: defsDbId, properties: {} }]);
+      route("PATCH", `/v1/databases/${defsDbId}`, [{}]);
+      route("POST", "/v1/search", [
+        {
+          results: [
+            {
+              id: "primary-db-1",
+              object: "database",
+              created_time: "2026-01-01T00:00:00.000Z",
+              parent: { type: "page_id", page_id: MONEYFLOW_PAGE },
+              title: [{ plain_text: "一次データ｜moneyflow" }],
+            },
+          ],
+          has_more: false,
+          next_cursor: null,
+        },
       ]);
+      route("GET", `/v1/databases/${obsDbId}`, [
+        { id: obsDbId, properties: { 区分: { id: "x", type: "select", select: { options: [] } } } },
+      ]);
+      const { ensureObservationsDb } = await load();
+      await expect(ensureObservationsDb()).rejects.toThrow(/列「区分」の型が select/);
+      expect(calls.filter((c) => c.init.method === "PATCH" && c.url.includes(obsDbId))).toHaveLength(0);
     });
   });
 
@@ -279,6 +307,73 @@ describe("notion-archive moneyflow", () => {
         primaryDataPageId: null,
       });
       expect(result).toEqual({ pageId: "obs-existing", outcome: "updated" });
+    });
+
+    const sameInput = {
+      period: "2026-08",
+      periodStart: "2026-08-01",
+      periodEnd: "2026-08-31",
+      indicatorKey: "sector_market_cap",
+      indicatorPageId: "0000aaaa-1111-2222-3333-444455556666",
+      category: "電気機器",
+      categoryKind: "業種" as const,
+      value: 123_000_000,
+      unit: "円" as const,
+      changeFromPrev: null,
+      approximate: true,
+      measureKind: "実測" as const,
+      primaryDataPageId: "9999bbbb888877776666555544443333",
+    };
+    const existingProps = (overrides: Record<string, unknown> = {}) => ({
+      キー: { type: "title", title: [{ plain_text: "2026-08|sector_market_cap|電気機器" }] },
+      指標: { type: "relation", relation: [{ id: "0000aaaa111122223333444455556666" }] },
+      対象期間: { type: "rich_text", rich_text: [{ plain_text: "2026-08" }] },
+      期間開始: { type: "date", date: { start: "2026-08-01" } },
+      期間終了: { type: "date", date: { start: "2026-08-31" } },
+      区分: { type: "rich_text", rich_text: [{ plain_text: "電気機器" }] },
+      区分種別: { type: "select", select: { name: "業種" } },
+      値: { type: "number", number: 123_000_000 },
+      単位: { type: "select", select: { name: "円" } },
+      前期比: { type: "number", number: null },
+      近似フラグ: { type: "checkbox", checkbox: true },
+      実測推定: { type: "select", select: { name: "実測" } },
+      一次データ: { type: "relation", relation: [{ id: "9999bbbb-8888-7777-6666-555544443333" }] },
+      ...overrides,
+    });
+
+    it("既存行と値が完全一致なら PATCH せず unchanged を返す (ID のハイフン有無は同一視)", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [{ id: "obs-same", properties: existingProps() }] }]);
+      const { upsertObservation } = await load();
+      const result = await upsertObservation(dbId, sameInput);
+      expect(result).toEqual({ pageId: "obs-same", outcome: "unchanged" });
+      expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(0);
+    });
+
+    it("値が 1 つでも違えば上書きする", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+      ]);
+      route("PATCH", "/v1/pages/obs-diff", [{ id: "obs-diff" }]);
+      const { upsertObservation } = await load();
+      const result = await upsertObservation(dbId, sameInput);
+      expect(result).toEqual({ pageId: "obs-diff", outcome: "updated" });
+    });
+
+    it("observationRowMatches: プロパティが読めない行は一致扱いにしない (古い値を黙って残さない)", async () => {
+      const { observationRowMatches } = await load();
+      expect(observationRowMatches(undefined, sameInput)).toBe(false);
+      expect(observationRowMatches({}, sameInput)).toBe(false);
+      expect(observationRowMatches(existingProps(), sameInput)).toBe(true);
+      expect(
+        observationRowMatches(existingProps({ 一次データ: { type: "relation", relation: [] } }), sameInput)
+      ).toBe(false);
+    });
+
+    it("observationExists はキー完全一致の行の有無を返す", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [{ id: "x" }] }, { results: [] }]);
+      const { observationExists } = await load();
+      expect(await observationExists(dbId, "2026-08|k|c")).toBe(true);
+      expect(await observationExists(dbId, "2026-08|k|d")).toBe(false);
     });
   });
 

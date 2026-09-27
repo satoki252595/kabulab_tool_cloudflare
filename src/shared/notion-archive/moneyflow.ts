@@ -22,8 +22,13 @@
  *
  * select 列の選択肢は既存を消さず追加のみ・累積 100 件で throw する
  * (`stock-supplement.ts` の `buildMissingPatch`/`SELECT_OPTIONS_CUMULATIVE_MAX`
- * と同じ設計。「区分」列は Phase 2 以降で投資部門・資産クラス・国地域の値が
- * 積み上がるため、この安全弁を最初から持たせる)。
+ * と同じ設計)。
+ *
+ * 観測ログの「区分」列は select ではなく rich_text にする (Phase 2〜5 統合時に
+ * 変更)。33業種・投資部門・通貨・デリバティブ商品・国地域 (IMF CPIS / BIS /
+ * World Bank は数十〜百数十か国) を合わせると区分値は 100 種を確実に超え、
+ * select の累積上限に当たって取込が止まるため。区分の大分類は「区分種別」
+ * (select・値は固定の少数) で絞り込む。
  */
 import { findBackupChildByTitle } from "./archive.js";
 import { notionRequest } from "./client.js";
@@ -85,6 +90,16 @@ function buildMissingPatch(
       patch[name] = wantDef;
       continue;
     }
+    const wantType = Object.keys(wantDef as Record<string, unknown>)[0];
+    if (cur.type !== wantType) {
+      // 既存列の型が期待と違う (例: 旧スキーマで select だった「区分」) まま
+      // 書き込むと Notion が 400 を返すか値が黙って欠落する。型変更は既存値の
+      // 変換を伴うため自動ではやらず、運用者に判断を委ねる (ルール2)。
+      throw new Error(
+        `moneyflow buildMissingPatch: 列「${name}」の型が ${cur.type} ですが ${wantType} を期待しています。` +
+          `Notion 上で列の型を ${wantType} に変更するか、列を削除してから再実行してください。`
+      );
+    }
     const kind = optionKindOf(wantDef);
     if (kind && cur.type === kind) {
       const curOptions = optionsOf(cur, kind);
@@ -107,15 +122,21 @@ function buildMissingPatch(
   return patch;
 }
 
-function toOptions(names: readonly string[]): Array<{ name: string }> {
-  return names.map((name) => ({ name }));
-}
-
 // ---------------------------------------------------------------------------
 // 1. 資金フロー｜指標定義
 // ---------------------------------------------------------------------------
 
 /** 何を測るか (フロー/ストックの種別)。誤解を招かないよう指標定義の説明文と対で使う。 */
+/**
+ * 「何を測るか」(フロー/ストック等の種別)。
+ *   - 純買い越し: 買い-売り (ネット)。資金の向きを表す
+ *   - 売買代金: 売り+買いのグロス。注目度であって資金の向きではない
+ *   - 残高 / 建玉: ある時点のストック (期間の流れではない)
+ *   - 設定解約: 投信・REIT の設定額-解約額 (純流入に近いフロー)
+ *   - 損益: 取引の損益 (例: 店頭FXの預託証拠金の増減のうち損益要因)。資金流入ではない
+ *   - 価格: 価格・指数の水準や騰落。取引額そのものではない
+ *   - 推定: 他の統計から推計した値
+ */
 export type MoneyflowFlowType =
   | "純買い越し"
   | "売買代金"
@@ -124,9 +145,16 @@ export type MoneyflowFlowType =
   | "建玉"
   | "設定解約"
   | "比率"
+  | "損益"
+  | "価格"
   | "推定";
-export type MoneyflowFrequency = "日次" | "週次" | "月次" | "不定期";
-export type MoneyflowLicense = "personal-only" | "attribution-required" | "public-domain";
+export type MoneyflowFrequency = "日次" | "週次" | "月次" | "四半期" | "半期" | "年次" | "不定期";
+/**
+ * 利用条件。「要確認」は利用規約・商用可否が取得元で明示されておらず未確認のもの
+ * (本機能は個人利用のみのため取り込むが、公開面へは出さない)。personal-only に
+ * 丸めず未確認であることをそのまま残す (ルール1: 由来を曖昧にしない)。
+ */
+export type MoneyflowLicense = "personal-only" | "attribution-required" | "public-domain" | "要確認";
 export type MoneyflowRequirement = "R1" | "R2" | "R3" | "R4";
 
 const FLOW_TYPE_VALUES: readonly MoneyflowFlowType[] = [
@@ -137,13 +165,16 @@ const FLOW_TYPE_VALUES: readonly MoneyflowFlowType[] = [
   "建玉",
   "設定解約",
   "比率",
+  "損益",
+  "価格",
   "推定",
 ];
-const FREQUENCY_VALUES: readonly MoneyflowFrequency[] = ["日次", "週次", "月次", "不定期"];
+const FREQUENCY_VALUES: readonly MoneyflowFrequency[] = ["日次", "週次", "月次", "四半期", "半期", "年次", "不定期"];
 const LICENSE_VALUES: readonly MoneyflowLicense[] = [
   "personal-only",
   "attribution-required",
   "public-domain",
+  "要確認",
 ];
 const REQUIREMENT_VALUES: readonly MoneyflowRequirement[] = ["R1", "R2", "R3", "R4"];
 
@@ -155,18 +186,24 @@ const FLOW_TYPE_OPTIONS: Array<{ name: MoneyflowFlowType; color: NotionSelectCol
   { name: "建玉", color: "gray" },
   { name: "設定解約", color: "purple" },
   { name: "比率", color: "default" },
+  { name: "損益", color: "red" },
+  { name: "価格", color: "brown" },
   { name: "推定", color: "orange" },
 ];
 const FREQUENCY_OPTIONS: Array<{ name: MoneyflowFrequency; color: NotionSelectColor }> = [
   { name: "日次", color: "green" },
   { name: "週次", color: "blue" },
   { name: "月次", color: "purple" },
+  { name: "四半期", color: "pink" },
+  { name: "半期", color: "orange" },
+  { name: "年次", color: "brown" },
   { name: "不定期", color: "gray" },
 ];
 const LICENSE_OPTIONS: Array<{ name: MoneyflowLicense; color: NotionSelectColor }> = [
   { name: "personal-only", color: "red" },
   { name: "attribution-required", color: "orange" },
   { name: "public-domain", color: "green" },
+  { name: "要確認", color: "gray" },
 ];
 const REQUIREMENT_OPTIONS: Array<{ name: MoneyflowRequirement; color: NotionSelectColor }> = [
   { name: "R1", color: "blue" },
@@ -320,12 +357,44 @@ export async function upsertIndicatorDef(
 // 2. 資金フロー｜観測ログ
 // ---------------------------------------------------------------------------
 
-export type MoneyflowCategoryKind = "業種" | "投資部門" | "資産クラス" | "国地域";
-export type MoneyflowUnit = "円" | "比率" | "件" | "社";
+/**
+ * 区分の大分類。「区分」列 (rich_text) の値がどの軸の値かを表す。
+ *   - 市場: 取引所の市場区分・商品市場 (例: プライム、ETF市場)
+ *   - 通貨: 通貨・通貨ペア
+ *   - 商品: 個別の金融商品・契約 (例: 日経225先物、ビットコイン)
+ *   - 全体: 区分を持たない合計値 (例: 暗号資産市場全体の時価総額)
+ */
+export type MoneyflowCategoryKind = "業種" | "投資部門" | "資産クラス" | "国地域" | "市場" | "通貨" | "商品" | "全体";
+/**
+ * 観測値の単位。金額は取得元の単位 (千円・百万円・億円) から **円** に換算して
+ * 保存する (取得元をまたいだ比較で桁を取り違えないため)。米ドル建ては米ドルの
+ * まま (為替換算は推定を混ぜるためしない)。比率は 0〜1 の小数 (0.123 = 12.3%)、
+ * 「%ポイント」は金利等の差 (0.05 = 0.05%ポイント) をそのままの数で持つ。
+ */
+export type MoneyflowUnit =
+  | "円"
+  | "米ドル"
+  | "株"
+  | "枚"
+  | "口座"
+  | "比率"
+  | "%ポイント"
+  | "ポイント"
+  | "件"
+  | "社";
 export type MoneyflowMeasureKind = "実測" | "推定";
 
-const CATEGORY_KIND_VALUES: readonly MoneyflowCategoryKind[] = ["業種", "投資部門", "資産クラス", "国地域"];
-const UNIT_VALUES: readonly MoneyflowUnit[] = ["円", "比率", "件", "社"];
+const CATEGORY_KIND_VALUES: readonly MoneyflowCategoryKind[] = [
+  "業種",
+  "投資部門",
+  "資産クラス",
+  "国地域",
+  "市場",
+  "通貨",
+  "商品",
+  "全体",
+];
+const UNIT_VALUES: readonly MoneyflowUnit[] = ["円", "米ドル", "株", "枚", "口座", "比率", "%ポイント", "ポイント", "件", "社"];
 const MEASURE_KIND_VALUES: readonly MoneyflowMeasureKind[] = ["実測", "推定"];
 
 const CATEGORY_KIND_OPTIONS: Array<{ name: MoneyflowCategoryKind; color: NotionSelectColor }> = [
@@ -333,13 +402,15 @@ const CATEGORY_KIND_OPTIONS: Array<{ name: MoneyflowCategoryKind; color: NotionS
   { name: "投資部門", color: "purple" },
   { name: "資産クラス", color: "pink" },
   { name: "国地域", color: "yellow" },
+  { name: "市場", color: "green" },
+  { name: "通貨", color: "orange" },
+  { name: "商品", color: "brown" },
+  { name: "全体", color: "gray" },
 ];
-const UNIT_OPTIONS: Array<{ name: MoneyflowUnit; color: NotionSelectColor }> = [
-  { name: "円", color: "default" },
-  { name: "比率", color: "default" },
-  { name: "件", color: "default" },
-  { name: "社", color: "default" },
-];
+const UNIT_OPTIONS: Array<{ name: MoneyflowUnit; color: NotionSelectColor }> = UNIT_VALUES.map((name) => ({
+  name,
+  color: "default",
+}));
 const MEASURE_KIND_OPTIONS: Array<{ name: MoneyflowMeasureKind; color: NotionSelectColor }> = [
   { name: "実測", color: "green" },
   { name: "推定", color: "orange" },
@@ -372,11 +443,7 @@ export const MONEYFLOW_OBS_PROPS = {
   primaryData: "一次データ",
 } as const;
 
-function buildObsDbProperties(args: {
-  defsDbId: string;
-  primaryDataDbId: string;
-  categoryOptions: readonly string[];
-}): Record<string, unknown> {
+function buildObsDbProperties(args: { defsDbId: string; primaryDataDbId: string }): Record<string, unknown> {
   return {
     [MONEYFLOW_OBS_PROPS.key]: { title: {} },
     [MONEYFLOW_OBS_PROPS.indicator]: {
@@ -385,7 +452,7 @@ function buildObsDbProperties(args: {
     [MONEYFLOW_OBS_PROPS.period]: { rich_text: {} },
     [MONEYFLOW_OBS_PROPS.periodStart]: { date: {} },
     [MONEYFLOW_OBS_PROPS.periodEnd]: { date: {} },
-    [MONEYFLOW_OBS_PROPS.category]: { select: { options: toOptions(args.categoryOptions) } },
+    [MONEYFLOW_OBS_PROPS.category]: { rich_text: {} },
     [MONEYFLOW_OBS_PROPS.categoryKind]: { select: { options: CATEGORY_KIND_OPTIONS } },
     [MONEYFLOW_OBS_PROPS.value]: { number: {} },
     [MONEYFLOW_OBS_PROPS.unit]: { select: { options: UNIT_OPTIONS } },
@@ -403,17 +470,12 @@ let cachedObsDbId: string | null = null;
 /**
  * 「資金フロー｜観測ログ」DB を確保する。
  *
- * @param categoryOptions 「区分」列に事前登録しておく選択肢 (例: JPX 33 業種名)。
- *   既存の選択肢は消さず追加のみ (累積 100 件で throw)。
- *
  * @throws 「一次データ｜moneyflow」DB がまだ存在しない場合 (この DB の
  *   「一次データ」relation 列の作成に必要。呼び出し順序として、その回の
  *   取込で `recordPrimaryData({ service: "moneyflow", ... })` を先に
  *   呼んでいることが前提 — 推測で relation 先を作らない、ルール2)。
  */
-export async function ensureObservationsDb(
-  categoryOptions: readonly string[]
-): Promise<{ dbId: string }> {
+export async function ensureObservationsDb(): Promise<{ dbId: string }> {
   const { dbId: defsDbId } = await ensureIndicatorDefsDb();
 
   const primaryDataDbId = await findBackupChildByTitle({
@@ -430,18 +492,9 @@ export async function ensureObservationsDb(
     );
   }
 
-  const want = buildObsDbProperties({ defsDbId, primaryDataDbId, categoryOptions });
+  if (cachedObsDbId) return { dbId: cachedObsDbId };
 
-  if (cachedObsDbId) {
-    // 既にキャッシュ済みでも「区分」の新規選択肢だけは毎回追いつかせる
-    // (Phase 2 以降で投資部門/資産クラス/国地域の値が増える前提)。
-    const schema = await notionRequest<DbSchemaResponse>("GET", `/databases/${cachedObsDbId}`);
-    const patch = buildMissingPatch(schema.properties, want);
-    if (Object.keys(patch).length > 0) {
-      await notionRequest("PATCH", `/databases/${cachedObsDbId}`, { properties: patch });
-    }
-    return { dbId: cachedObsDbId };
-  }
+  const want = buildObsDbProperties({ defsDbId, primaryDataDbId });
 
   let dbId = notionEnv.NOTION_MONEYFLOW_OBS_DB_ID() ?? null;
   if (!dbId) {
@@ -505,7 +558,7 @@ function buildObsRowProperties(input: ObservationInput): Record<string, unknown>
     [MONEYFLOW_OBS_PROPS.period]: { rich_text: splitRichText(input.period) },
     [MONEYFLOW_OBS_PROPS.periodStart]: { date: { start: input.periodStart } },
     [MONEYFLOW_OBS_PROPS.periodEnd]: { date: { start: input.periodEnd } },
-    [MONEYFLOW_OBS_PROPS.category]: { select: { name: input.category } },
+    [MONEYFLOW_OBS_PROPS.category]: { rich_text: splitRichText(input.category) },
     [MONEYFLOW_OBS_PROPS.categoryKind]: { select: { name: input.categoryKind } },
     [MONEYFLOW_OBS_PROPS.value]: { number: input.value },
     [MONEYFLOW_OBS_PROPS.unit]: { select: { name: input.unit } },
@@ -518,20 +571,77 @@ function buildObsRowProperties(input: ObservationInput): Record<string, unknown>
   };
 }
 
-async function findObsRowByKey(dbId: string, key: string): Promise<string | null> {
-  const res = await notionRequest<QueryResponse>("POST", `/databases/${dbId}/query`, {
+/** Notion の query 応答に載るページプロパティ (観測ログ行の比較に必要な型だけ)。 */
+type NotionPagePropertyValue = {
+  type?: string;
+  title?: Array<{ plain_text?: string }>;
+  rich_text?: Array<{ plain_text?: string }>;
+  relation?: Array<{ id: string }>;
+  date?: { start?: string | null } | null;
+  select?: { name?: string } | null;
+  number?: number | null;
+  checkbox?: boolean;
+};
+interface ObsRowHit {
+  id: string;
+  properties?: Record<string, NotionPagePropertyValue>;
+}
+
+async function findObsRowByKey(dbId: string, key: string): Promise<ObsRowHit | null> {
+  const res = await notionRequest<{ results: ObsRowHit[] }>("POST", `/databases/${dbId}/query`, {
     filter: { property: MONEYFLOW_OBS_PROPS.key, title: { equals: key } },
     page_size: 1,
   });
-  return res.results[0]?.id ?? null;
+  return res.results[0] ?? null;
+}
+
+/** 冪等キー `期間|指標|区分` の行が観測ログに既にあるか (取込完了判定に使う)。 */
+export async function observationExists(dbId: string, key: string): Promise<boolean> {
+  return (await findObsRowByKey(dbId, key)) !== null;
+}
+
+const normalizeId = (id: string): string => id.replace(/-/g, "").toLowerCase();
+const plainOf = (parts: Array<{ plain_text?: string }> | undefined): string | undefined =>
+  parts === undefined ? undefined : parts.map((p) => p.plain_text ?? "").join("");
+
+/**
+ * 既存行のプロパティが今回書こうとしている値と完全に一致するか (純関数)。
+ * 一致すれば PATCH を省く (再実行時の Notion 書込を 2 req→1 req/行に減らす。
+ * 値が 1 つでも違えば従来どおり上書きする)。プロパティが読めない・形が想定外の
+ * ときは「一致しない」扱いにして上書きへ倒す (黙って古い値を残さない)。
+ */
+export function observationRowMatches(
+  existing: Record<string, NotionPagePropertyValue> | undefined,
+  input: ObservationInput
+): boolean {
+  if (!existing) return false;
+  const p = MONEYFLOW_OBS_PROPS;
+  const rel = (name: string): string[] | undefined => existing[name]?.relation?.map((r) => normalizeId(r.id));
+  const wantPrimary = input.primaryDataPageId ? [normalizeId(input.primaryDataPageId)] : [];
+  const checks: boolean[] = [
+    plainOf(existing[p.key]?.title) === observationKey(input),
+    JSON.stringify(rel(p.indicator)) === JSON.stringify([normalizeId(input.indicatorPageId)]),
+    plainOf(existing[p.period]?.rich_text) === input.period,
+    existing[p.periodStart]?.date?.start === input.periodStart,
+    existing[p.periodEnd]?.date?.start === input.periodEnd,
+    plainOf(existing[p.category]?.rich_text) === input.category,
+    existing[p.categoryKind]?.select?.name === input.categoryKind,
+    existing[p.value]?.number === input.value,
+    existing[p.unit]?.select?.name === input.unit,
+    existing[p.changeFromPrev]?.number === input.changeFromPrev,
+    existing[p.approximate]?.checkbox === input.approximate,
+    existing[p.measureKind]?.select?.name === input.measureKind,
+    JSON.stringify(rel(p.primaryData)) === JSON.stringify(wantPrimary),
+  ];
+  return checks.every(Boolean);
 }
 
 export interface UpsertObservationResult {
   pageId: string;
-  outcome: "created" | "updated";
+  outcome: "created" | "updated" | "unchanged";
 }
 
-/** 冪等キー `期間|指標|区分` で upsert する。 */
+/** 冪等キー `期間|指標|区分` で upsert する (既存行と値が同一なら書き込まない)。 */
 export async function upsertObservation(
   dbId: string,
   input: ObservationInput
@@ -540,8 +650,11 @@ export async function upsertObservation(
   const props = buildObsRowProperties(input);
   const existing = await findObsRowByKey(dbId, key);
   if (existing) {
-    await notionRequest("PATCH", `/pages/${existing}`, { properties: props });
-    return { pageId: existing, outcome: "updated" };
+    if (observationRowMatches(existing.properties, input)) {
+      return { pageId: existing.id, outcome: "unchanged" };
+    }
+    await notionRequest("PATCH", `/pages/${existing.id}`, { properties: props });
+    return { pageId: existing.id, outcome: "updated" };
   }
   const created = await notionRequest<{ id: string }>("POST", "/pages", {
     parent: { database_id: dbId },

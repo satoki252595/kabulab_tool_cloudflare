@@ -50,23 +50,11 @@ export const JPX_33_SECTORS: readonly string[] = [
 /**
  * `core_stocks.sector` が NULL の銘柄をまとめる区分ラベル (`moneyflow-sector.ts`
  * が使う)。JPX 側に無い架空の業種名で埋めるフォールバックではなく、「業種未設定」
- * という区分そのものを明示するラベル。Notion「区分」select 列の選択肢としても
- * `MONEYFLOW_SECTOR_CATEGORY_OPTIONS` 経由で事前登録し、
- * `buildMissingPatch`/`SELECT_OPTIONS_CUMULATIVE_MAX` の管理下に置く
- * (自動生成された未登録の select 値として上限チェックを迂回させない)。
+ * という区分そのものを明示するラベル。
+ * (観測ログの「区分」列は Phase 2〜5 統合時に select から rich_text へ変えたため、
+ * 選択肢の事前登録は不要になった — `src/shared/notion-archive/moneyflow.ts` 冒頭参照。)
  */
 export const MONEYFLOW_UNCLASSIFIED_SECTOR = "未分類";
-
-/**
- * `ensureObservationsDb()` の「区分」列に事前登録する選択肢一覧。
- * JPX 33 業種 + `MONEYFLOW_UNCLASSIFIED_SECTOR`。`JPX_33_SECTORS` 自体は
- * PDF パーサの様式検証 (`assertExactly33Sectors`、必ず33件ぴったり) に使うため
- * 33件のまま保つ (ここに混ぜない)。
- */
-export const MONEYFLOW_SECTOR_CATEGORY_OPTIONS: readonly string[] = [
-  ...JPX_33_SECTORS,
-  MONEYFLOW_UNCLASSIFIED_SECTOR,
-];
 
 /**
  * 抽出済みの業種名配列が `JPX_33_SECTORS` と過不足なく一致するか検証する。
