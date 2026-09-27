@@ -149,6 +149,22 @@ describe("parseMarketCapResponse (実 fixture)", () => {
     expect(() => parseMarketCapResponse(bad)).toThrow(/value/);
   });
 
+  it("country.value (entityName) が空文字列なら throw する (黙って空欄のまま通さない)", () => {
+    const bad = [
+      { page: 1, pages: 1, per_page: 1, total: 1 },
+      [
+        {
+          indicator: { id: "CM.MKT.LCAP.CD", value: "x" },
+          country: { id: "JP", value: "" },
+          countryiso3code: "JPN",
+          date: "2023",
+          value: 1,
+        },
+      ],
+    ];
+    expect(() => parseMarketCapResponse(bad)).toThrow(/country\.value/);
+  });
+
   it("複数ページに分割されたレスポンスは throw する (黙って1ページ目だけ使わない)", () => {
     const bad = [
       { page: 1, pages: 2, per_page: 1, total: 2 },
@@ -203,6 +219,14 @@ describe("parseCountryMetaResponse (実 fixture)", () => {
       [{ id: "JPN", iso2Code: "JP", name: "Japan", region: "not-an-object" }],
     ];
     expect(() => parseCountryMetaResponse(bad)).toThrow();
+  });
+
+  it("region.value が空文字列なら throw する (isAggregate=false へ静かに倒さない)", () => {
+    const bad = [
+      { page: 1, pages: 1, per_page: 1, total: 1 },
+      [{ id: "JPN", iso2Code: "JP", name: "Japan", region: { id: "", value: "" } }],
+    ];
+    expect(() => parseCountryMetaResponse(bad)).toThrow(/region\.value/);
   });
 });
 

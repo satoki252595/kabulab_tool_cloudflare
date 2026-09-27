@@ -306,8 +306,10 @@ export function parseMarketCapResponse(json: unknown): WorldBankMarketCapRow[] {
     const country = asRecord(row.country, `rows[${i}].country`);
     const entityId = String(country.id ?? "");
     const entityName = String(country.value ?? "");
-    if (!entityId) {
-      throw new Error(`World Bank API: rows[${i}] の国/地域コード (country.id) が取得できません`);
+    if (!entityId || !entityName) {
+      throw new Error(
+        `World Bank API: rows[${i}] の国/地域コード (country.id) または名称 (country.value) が取得できません`
+      );
     }
     // countryiso3code は一部の所得階層集計で空文字列になる (実データで確認済み。
     // WorldBankMarketCapRow.iso3 のコメント参照)。これは欠損ではなく「この
@@ -364,8 +366,10 @@ export function parseCountryMetaResponse(json: unknown): WorldBankCountryMetaRow
     const name = String(row.name ?? "");
     const region = asRecord(row.region, `country[${i}].region`);
     const regionValue = String(region.value ?? "");
-    if (!iso3 || !entityId || !name) {
-      throw new Error(`World Bank API: country[${i}] の id/iso2Code/name が取得できません`);
+    if (!iso3 || !entityId || !name || !regionValue) {
+      throw new Error(
+        `World Bank API: country[${i}] の id/iso2Code/name/region.value が取得できません`
+      );
     }
     return { entityId, iso3, name, isAggregate: regionValue === "Aggregates" };
   });
