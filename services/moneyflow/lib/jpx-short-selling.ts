@@ -34,7 +34,8 @@ export interface ShortSellingRow {
   /** 合計売買代金 (d = a+b+c、百万円) */
   total: number;
   /** 空売り比率 = (b+c)/d。0〜1。 */
-  shortRatio: number;
+  /** 空売り比率 (0〜1)。売買代金が 0 の日は比率が定義できないため null (0 で埋めない — ルール2)。 */
+  shortRatio: number | null;
 }
 
 export interface ShortSellingData {
@@ -69,7 +70,7 @@ function toRow(r: RawRow): ShortSellingRow {
     restrictedShort: r.restrictedShort,
     unrestrictedShort: r.unrestrictedShort,
     total: r.total,
-    shortRatio: r.total > 0 ? shortAmount / r.total : 0,
+    shortRatio: r.total > 0 ? shortAmount / r.total : null,
   };
 }
 
@@ -186,7 +187,11 @@ export function shortSellingArchiveInput(data: ShortSellingData): {
  */
 export function aggregateMonthlyShortSellingRatio(
   dailyRows: readonly Omit<ShortSellingData, "pdfBytes" | "pdfUrl">[]
-): { month: string; sectors: Array<{ sector: string; shortRatio: number; totalTurnover: number; tradingDays: number }> } {
+): {
+  month: string;
+  /** shortRatio は当月の売買代金合計が 0 の業種だけ null (比率が定義できない。0 で埋めない — ルール2)。 */
+  sectors: Array<{ sector: string; shortRatio: number | null; totalTurnover: number; tradingDays: number }>;
+} {
   if (dailyRows.length === 0) {
     throw new Error("aggregateMonthlyShortSellingRatio: 集計対象の日次データが 0 件です");
   }
@@ -216,7 +221,7 @@ export function aggregateMonthlyShortSellingRatio(
     }
     return {
       sector,
-      shortRatio: agg.total > 0 ? agg.shortAmount / agg.total : 0,
+      shortRatio: agg.total > 0 ? agg.shortAmount / agg.total : null,
       totalTurnover: agg.total,
       tradingDays: agg.tradingDays,
     };

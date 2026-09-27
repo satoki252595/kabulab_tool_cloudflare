@@ -316,7 +316,14 @@ async function runShortSelling(): Promise<RunOutcome> {
 
   const { dbId: obsDbId } = await ensureObservationsDb();
   const indicatorPageId = requireIndicatorPageId("sector_short_selling_ratio");
+  // 当月の売買代金合計が 0 の業種は比率が定義できない (null)。0 で埋めて
+  // 書かず、行自体を書かない (取込ログの詳細に業種名を残す — ルール2)。
+  const undefinedRatioSectors: string[] = [];
   for (const row of monthly.sectors) {
+    if (row.shortRatio === null) {
+      undefinedRatioSectors.push(row.sector);
+      continue;
+    }
     await upsertObservation(obsDbId, {
       period: monthly.month,
       periodStart: firstDayOfMonth(monthly.month),
@@ -338,7 +345,11 @@ async function runShortSelling(): Promise<RunOutcome> {
   return {
     source: "jpx-short-selling",
     ok: true,
-    detail: `日次 ${data.date} (${archivedNote})・月次 ${monthly.month} を ${monthly.sectors.length}日分で集計`,
+    detail:
+      `日次 ${data.date} (${archivedNote})・月次 ${monthly.month} を ${dailyRows.length}日分で集計` +
+      (undefinedRatioSectors.length > 0
+        ? ` (売買代金0で比率を定義できず未記録: ${undefinedRatioSectors.join("・")})`
+        : ""),
   };
 }
 
@@ -349,7 +360,8 @@ async function runShortSelling(): Promise<RunOutcome> {
 interface MoneyflowSectorApiRow {
   sector: string;
   turnover: number;
-  turnoverShare: number;
+  /** 全業種の売買代金合計が 0 なら null (Worker 側 moneyflow-sector.ts)。 */
+  turnoverShare: number | null;
   upTurnover: number;
   downTurnover: number;
   stockCount: number;
@@ -386,6 +398,19 @@ async function runSectorTurnover(): Promise<RunOutcome> {
     return { source: "sector-turnover", ok: true, detail: `dry-run ${from}〜${to}` };
   }
 
+  // 全業種の売買代金合計が 0 (= D1 に対象週の日足がまだ無い等) ならシェアが
+  // 定義できない。0% として書かず失敗させる (取込ログに残る — ルール2)。
+  const zeroTotalError = () =>
+    new Error(
+      `sector-turnover: ${result.from}〜${result.to} の売買代金合計が 0 のためシェアを計算できません ` +
+        `(業種数=${result.sectors.length}。D1 の日足が未取込の可能性)`
+    );
+  if (result.sectors.length === 0) throw zeroTotalError();
+  const rows = result.sectors.map((r) => {
+    if (r.turnoverShare === null) throw zeroTotalError();
+    return { ...r, turnoverShare: r.turnoverShare };
+  });
+
   const { dbId: obsDbId } = await ensureObservationsDb();
   const period = isoWeekLabelOf(today);
   const turnoverPageId = requireIndicatorPageId("sector_turnover");
@@ -393,7 +418,7 @@ async function runSectorTurnover(): Promise<RunOutcome> {
   const upPageId = requireIndicatorPageId("sector_up_turnover");
   const downPageId = requireIndicatorPageId("sector_down_turnover");
 
-  for (const row of result.sectors) {
+  for (const row of rows) {
     const common = {
       period,
       periodStart: result.from,

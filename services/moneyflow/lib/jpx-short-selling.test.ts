@@ -92,6 +92,18 @@ describe("aggregateMonthlyShortSellingRatio", () => {
     expect(denki?.shortRatio).not.toBeCloseTo(simpleAverage, 3);
   });
 
+  it("当月の売買代金合計が 0 の業種は比率を 0 ではなく null にする", () => {
+    const zero = makeDay("2026-09-01", { realOrder: 0, restrictedShort: 0, unrestrictedShort: 0, total: 0 });
+    // makeDay は shortRatio を 0/0 で作るので、日次側の定義 (null) に合わせる
+    const day = {
+      ...zero,
+      sectors: zero.sectors.map((s) => (s.sector === "電気機器" ? { ...s, shortRatio: null } : s)),
+    };
+    const result = aggregateMonthlyShortSellingRatio([day]);
+    expect(result.sectors.find((s) => s.sector === "電気機器")?.shortRatio).toBeNull();
+    expect(result.sectors.find((s) => s.sector === "銀行業")?.shortRatio).toBeCloseTo(20 / 120, 10);
+  });
+
   it("空配列は throw する (0 件を 0 として返さない)", () => {
     expect(() => aggregateMonthlyShortSellingRatio([])).toThrow(/0 件/);
   });

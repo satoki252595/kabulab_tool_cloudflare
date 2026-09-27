@@ -145,6 +145,15 @@ describe("aggregateMoneyflowSector", () => {
     expect(result.marketCapAsOf).toBe("snapshot_at_fetch");
   });
 
+  it("期間内の売買代金合計が 0 (日足未取込) ならシェアは 0 ではなく null", async () => {
+    // 時価総額はあるが期間内の日足が無い → 業種行はできるが売買代金は 0
+    seedStock({ id: 1, sector: "電気機器", marketCap: 1_000_000 });
+    const result = await aggregateMoneyflowSector(db(), { from: "2026-09-14", to: "2026-09-14" });
+    const denki = result.sectors.find((s) => s.sector === "電気機器");
+    expect(denki?.turnover).toBe(0);
+    expect(denki?.turnoverShare).toBeNull();
+  });
+
   it("非アクティブ・非普通株は turnover にも時価総額にも入らない", async () => {
     seedStock({ id: 1, sector: "電気機器", marketCap: 1_000_000 });
     seedOhlcv(1, "2026-09-14", 100, 1000);

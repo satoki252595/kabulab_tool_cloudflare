@@ -33,7 +33,8 @@ export interface SectorTurnoverRow {
   /** 売買代金合計 (close × volume の合計。円)。 */
   turnover: number;
   /** 全業種合計に占めるシェア (0〜1)。 */
-  turnoverShare: number;
+  /** 全業種合計に占める割合 (0〜1)。全業種の売買代金合計が 0 (対象週のデータ未取込等) なら null。 */
+  turnoverShare: number | null;
   /** 前日比で上昇した日の売買代金合計。前日値が無い日は含まない。 */
   upTurnover: number;
   /** 前日比で下落した日の売買代金合計。前日値が無い日は含まない。 */
@@ -178,7 +179,7 @@ export async function aggregateMoneyflowSector(
     .map(([sector, a]) => ({
       sector,
       turnover: a.turnover,
-      turnoverShare: totalTurnover > 0 ? a.turnover / totalTurnover : 0,
+      turnoverShare: totalTurnover > 0 ? a.turnover / totalTurnover : null,
       upTurnover: a.upTurnover,
       downTurnover: a.downTurnover,
       stockCount: a.stockIds.size,
