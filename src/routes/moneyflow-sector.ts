@@ -21,6 +21,7 @@ import { activeEquityCondition } from "../shared/db/active-equity.js";
 import * as coreSchema from "../shared/db/core-schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import { isoWeekToDateRange } from "../../services/moneyflow/lib/iso-week.js";
+import { MONEYFLOW_UNCLASSIFIED_SECTOR } from "../../services/moneyflow/lib/sector-names.js";
 
 export { isoWeekToDateRange };
 
@@ -148,7 +149,7 @@ export async function aggregateMoneyflowSector(
     const rowTurnover = row.close !== null && row.volume !== null ? row.close * row.volume : null;
 
     if (row.date >= range.from && row.date <= range.to) {
-      const sector = row.sector ?? "未分類";
+      const sector = row.sector ?? MONEYFLOW_UNCLASSIFIED_SECTOR;
       const agg = ensure(sector);
       agg.stockIds.add(row.stockId);
       if (rowTurnover !== null) {
@@ -165,7 +166,7 @@ export async function aggregateMoneyflowSector(
 
   for (const cap of capRows) {
     if (cap.marketCap === null) continue;
-    const sector = cap.sector ?? "未分類";
+    const sector = cap.sector ?? MONEYFLOW_UNCLASSIFIED_SECTOR;
     const agg = ensure(sector);
     agg.marketCap += cap.marketCap;
     agg.marketCapStockCount += 1;

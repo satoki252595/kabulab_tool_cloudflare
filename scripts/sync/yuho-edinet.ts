@@ -6,6 +6,7 @@
 //
 // 必要env(.env): WORKER_BASE_URL（例 https://kabulab-cf.<sub>.workers.dev）, CRON_SECRET
 import "dotenv/config";
+import { sharedEnv } from "../../src/shared/env.js";
 
 function arg(key: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${key}=`));
@@ -13,9 +14,8 @@ function arg(key: string): string | undefined {
 }
 
 async function main(): Promise<void> {
-  const base = process.env.WORKER_BASE_URL;
-  const secret = process.env.CRON_SECRET;
-  if (!base) throw new Error("WORKER_BASE_URL が設定されていません (.env)");
+  const base = sharedEnv.WORKER_BASE_URL();
+  const secret = sharedEnv.CRON_SECRET();
   if (!secret) throw new Error("CRON_SECRET が設定されていません (.env)");
 
   const u = new URL(`${base.replace(/\/$/, "")}/yuho-quant/admin/catchup`);

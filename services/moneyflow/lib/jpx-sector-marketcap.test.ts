@@ -7,9 +7,14 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { extractText, getDocumentProxy } from "unpdf";
-import { parseSectorMarketCapText } from "./jpx-sector-marketcap.js";
+import {
+  parseSectorMarketCapText,
+  latestSectorMarketCapPdfUrl,
+  sectorMarketCapPeriodFromYearMonth,
+  sectorMarketCapKey,
+} from "./jpx-sector-marketcap.js";
 
 const FIXTURE_PATH = fileURLToPath(
   new URL("../tests/fixtures/jpx-sector-marketcap-202608.pdf", import.meta.url)
@@ -57,5 +62,40 @@ describe("parseSectorMarketCapText (様式検証)", () => {
   it("業種が33件に満たなければ throw する (様式変更の疑い)", () => {
     const text = "(2026年8月31日現在) 電気機器 123 279,083,685 プライム 1 1 スタンダード 1 1 グロース 1 1 TOKYO PRO Market 1 1 合 計 1 1";
     expect(() => parseSectorMarketCapText(text)).toThrow(/33/);
+  });
+});
+
+describe("sectorMarketCapPeriodFromYearMonth / sectorMarketCapKey", () => {
+  it("YYYYMM を YYYY-MM に変換し、アーカイブキーを組み立てる", () => {
+    expect(sectorMarketCapPeriodFromYearMonth("202608")).toBe("2026-08");
+    expect(sectorMarketCapKey("2026-08")).toBe("jpx-sector-marketcap-2026-08");
+  });
+});
+
+describe("latestSectorMarketCapPdfUrl (一覧ページの解析)", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("複数の年月のリンクから文字列比較で最新のものを選ぶ", async () => {
+    const html = `
+      <a href="/markets/statistics-equities/misc/202606.pdf">2026年6月分</a>
+      <a href="/markets/statistics-equities/misc/202608.pdf">2026年8月分</a>
+      <a href="/markets/statistics-equities/misc/202607.pdf">2026年7月分</a>
+    `;
+    globalThis.fetch = vi.fn().mockResolvedValue({ text: async () => html }) as unknown as typeof fetch;
+
+    const result = await latestSectorMarketCapPdfUrl();
+    expect(result).toEqual({
+      url: "https://www.jpx.co.jp/markets/statistics-equities/misc/202608.pdf",
+      yearMonth: "202608",
+    });
+  });
+
+  it("リンクが1件も無ければ throw する", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ text: async () => "<html>no links here</html>" }) as unknown as typeof fetch;
+    await expect(latestSectorMarketCapPdfUrl()).rejects.toThrow(/PDF リンクが見つかりません/);
   });
 });

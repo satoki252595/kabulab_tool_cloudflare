@@ -6,11 +6,12 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { extractText, getDocumentProxy } from "unpdf";
 import { JPX_33_SECTORS } from "./sector-names.js";
 import {
   aggregateMonthlyShortSellingRatio,
+  latestShortSellingSectorPdfUrl,
   parseShortSellingSectorText,
 } from "./jpx-short-selling.js";
 
@@ -105,5 +106,34 @@ describe("aggregateMonthlyShortSellingRatio", () => {
     const dayA = makeDay("2026-09-01", { realOrder: 100, restrictedShort: 30, unrestrictedShort: 10, total: 140 });
     const incomplete = { ...dayA, sectors: dayA.sectors.filter((s) => s.sector !== "銀行業") };
     expect(() => aggregateMonthlyShortSellingRatio([incomplete])).toThrow(/銀行業/);
+  });
+});
+
+describe("latestShortSellingSectorPdfUrl (一覧ページの解析)", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("「業種別集計」列 (-g.pdf) のリンクから文字列比較で最新のものを選ぶ (「空売り集計」列 -m.pdf は無視する)", async () => {
+    const html = `
+      <a href="/markets/statistics-equities/short-selling/260924-m.pdf">空売り集計</a>
+      <a href="/markets/statistics-equities/short-selling/260924-g.pdf">業種別集計</a>
+      <a href="/markets/statistics-equities/short-selling/260925-g.pdf">業種別集計</a>
+    `;
+    globalThis.fetch = vi.fn().mockResolvedValue({ text: async () => html }) as unknown as typeof fetch;
+
+    const result = await latestShortSellingSectorPdfUrl();
+    expect(result).toEqual({
+      url: "https://www.jpx.co.jp/markets/statistics-equities/short-selling/260925-g.pdf",
+      date: "2026-09-25",
+    });
+  });
+
+  it("「業種別集計」リンクが1件も無ければ throw する", async () => {
+    const html = `<a href="/markets/statistics-equities/short-selling/260925-m.pdf">空売り集計のみ</a>`;
+    globalThis.fetch = vi.fn().mockResolvedValue({ text: async () => html }) as unknown as typeof fetch;
+    await expect(latestShortSellingSectorPdfUrl()).rejects.toThrow(/業種別集計 PDF リンクが見つかりません/);
   });
 });

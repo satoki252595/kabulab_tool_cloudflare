@@ -144,6 +144,16 @@ export function parseSectorMarketCapText(
   };
 }
 
+/** 一覧ページの PDF ファイル名 (`YYYYMM.pdf`) の形式を観測期間表記 (`YYYY-MM`) へ変換する。 */
+export function sectorMarketCapPeriodFromYearMonth(yearMonth: string): string {
+  return `${yearMonth.slice(0, 4)}-${yearMonth.slice(4, 6)}`;
+}
+
+/** ルール6 の冪等キー (`recordPrimaryData`/`isArchived` の key)。月次で一意。 */
+export function sectorMarketCapKey(period: string): string {
+  return `jpx-sector-marketcap-${period}`;
+}
+
 /** 一覧ページから対象月の PDF URL を得る (未指定なら最新月)。 */
 export async function latestSectorMarketCapPdfUrl(): Promise<{ url: string; yearMonth: string }> {
   const html = await (await fetch(LISTING_PAGE, { headers: { "User-Agent": UA } })).text();
@@ -178,7 +188,7 @@ export function sectorMarketCapArchiveInput(data: SectorMarketCapData): {
   const ym = data.asOfDate.slice(0, 7);
   return {
     service: "moneyflow",
-    key: `jpx-sector-marketcap-${ym}`,
+    key: sectorMarketCapKey(ym),
     source: data.pdfUrl,
     metadata: {
       asOfDate: data.asOfDate,

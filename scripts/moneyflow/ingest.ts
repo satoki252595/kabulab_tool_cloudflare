@@ -17,27 +17,43 @@ import "dotenv/config";
  *
  * --dry-run: 取得・解析はするが Notion には一切書かず、JSON を標準出力へ出す。
  * --only=<source,...>: 指定した取得元だけ実行する。
+ *
+ * 月次資料 (jpx-sector-marketcap) の再取得方針: 平日 cron (週5回) に対し月次PDFは
+ * 月1回しか更新されないため、毎回 JPX へ実体PDFを取りに行くと過剰アクセスになる。
+ * 一覧ページの軽量GETで対象年月を先に特定し、`isArchived()` で当月分が既に
+ * アーカイブ済みなら PDF 本体の GET はスキップする。ただし「アーカイブ済み」と
+ * 「観測ログへの書込済み」は別概念として扱う (観測ログ書込がその後失敗しても
+ * 次回以降ずっと欠落させない) — 既にアーカイブ済みの場合も Notion 側に保管済みの
+ * PDF を再取得・再パースして観測ログの upsert を毎回試みる (JPX への再取得は
+ * しない。upsertObservation は「期間|指標キー|区分」で冪等なので再実行しても安全)。
  */
+import { fileURLToPath } from "node:url";
 import {
   ensureIndicatorDefsDb,
   ensureObservationsDb,
   ensureRunLogDb,
-  isMoneyflowRunStatus,
+  isArchived,
   recordPrimaryData,
   recordRunLog,
   upsertIndicatorDef,
   upsertObservation,
   notionEnv,
+  type MoneyflowRunStatus,
 } from "../../src/shared/notion-archive/index.js";
 import { notionRequest } from "../../src/shared/notion-archive/client.js";
 import { findBackupChildByTitle } from "../../src/shared/notion-archive/archive.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { rootCauseMessage } from "../../src/shared/errors.js";
-import { JPX_33_SECTORS } from "../../services/moneyflow/lib/sector-names.js";
+import { MONEYFLOW_SECTOR_CATEGORY_OPTIONS } from "../../services/moneyflow/lib/sector-names.js";
 import { MONEYFLOW_INDICATORS } from "../../services/moneyflow/lib/indicators.js";
 import {
   fetchSectorMarketCap,
   sectorMarketCapArchiveInput,
+  sectorMarketCapKey,
+  sectorMarketCapPeriodFromYearMonth,
+  latestSectorMarketCapPdfUrl,
+  parseSectorMarketCapText,
+  type SectorMarketCapData,
 } from "../../services/moneyflow/lib/jpx-sector-marketcap.js";
 import {
   aggregateMonthlyShortSellingRatio,
@@ -49,25 +65,34 @@ import {
 import { isoWeekLabelOf, mostRecentMondayOf } from "../../services/moneyflow/lib/iso-week.js";
 import { extractText, getDocumentProxy } from "unpdf";
 
-const SOURCES = ["jpx-sector-marketcap", "jpx-short-selling", "sector-turnover"] as const;
+export const SOURCES = ["jpx-sector-marketcap", "jpx-short-selling", "sector-turnover"] as const;
 type Source = (typeof SOURCES)[number];
 
-function arg(key: string): string | undefined {
-  const a = process.argv.find((x) => x.startsWith(`--${key}=`));
-  return a ? a.slice(key.length + 3) : undefined;
-}
-const DRY_RUN = process.argv.includes("--dry-run");
-const ONLY: readonly Source[] = (() => {
-  const only = arg("only");
-  if (!only) return SOURCES;
-  const requested = only.split(",").map((s) => s.trim());
+/**
+ * `--only=a,b` を解析する純関数。`sources` に含まれない値があれば throw する
+ * (推測でその場をしのがない — ルール2)。未指定なら `sources` 全件を返す。
+ */
+export function parseOnlyArg(argv: readonly string[], sources: readonly Source[]): Source[] {
+  const prefix = "--only=";
+  const a = argv.find((x) => x.startsWith(prefix));
+  if (!a) return [...sources];
+  const requested = a.slice(prefix.length).split(",").map((s) => s.trim());
   for (const r of requested) {
-    if (!(SOURCES as readonly string[]).includes(r)) {
-      throw new Error(`--only: 不明な取得元です: ${r} (使える値: ${SOURCES.join(", ")})`);
+    if (!(sources as readonly string[]).includes(r)) {
+      throw new Error(`--only: 不明な取得元です: ${r} (使える値: ${sources.join(", ")})`);
     }
   }
   return requested as Source[];
-})();
+}
+
+/** 成功/失敗件数から実行ステータスを分類する純関数。 */
+export function classifyRunStatus(successCount: number, failedCount: number): MoneyflowRunStatus {
+  if (failedCount === 0) return "完了";
+  return successCount > 0 ? "一部失敗" : "失敗";
+}
+
+const DRY_RUN = process.argv.includes("--dry-run");
+const ONLY: readonly Source[] = parseOnlyArg(process.argv, SOURCES);
 
 interface RunOutcome {
   source: Source;
@@ -98,37 +123,140 @@ function firstDayOfMonth(yyyyMm: string): string {
   return `${yyyyMm}-01`;
 }
 
+/**
+ * 「一次データ｜moneyflow」DB の ID を取得する (無ければ throw。
+ * recordPrimaryData を先に呼んでいることが前提 — 推測で relation 先を作らない、ルール2)。
+ */
+async function requirePrimaryDataDbId(context: string): Promise<string> {
+  const primaryDbId = await findBackupChildByTitle({
+    parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID(),
+    title: "一次データ｜moneyflow",
+    kind: "database",
+  });
+  if (!primaryDbId) {
+    throw new Error(`${context}: 「一次データ｜moneyflow」DB が見つかりません (recordPrimaryData 直後のはず)`);
+  }
+  return primaryDbId;
+}
+
+interface ArchivedFileRef {
+  pageId: string;
+  key: string;
+  fileUrl: string;
+}
+
+/** 「一次データ｜moneyflow」から key 完全一致の 1 件を探す (無ければ null)。 */
+async function findArchivedFileByKey(primaryDbId: string, key: string): Promise<ArchivedFileRef | null> {
+  const res = await notionRequest<{
+    results: Array<{
+      id: string;
+      properties: {
+        Key?: { title?: Array<{ plain_text?: string }> };
+        Files?: { files?: Array<{ name: string; file?: { url: string }; external?: { url: string } }> };
+      };
+    }>;
+  }>("POST", `/databases/${primaryDbId}/query`, {
+    filter: { property: "Key", title: { equals: key } },
+    page_size: 1,
+  });
+  const r = res.results[0];
+  if (!r) return null;
+  const foundKey = (r.properties.Key?.title ?? []).map((t) => t.plain_text ?? "").join("");
+  const file = r.properties.Files?.files?.[0];
+  const fileUrl = file?.file?.url ?? file?.external?.url;
+  if (!fileUrl) {
+    throw new Error(`findArchivedFileByKey: page ${r.id} (key=${foundKey}) にファイル URL がありません`);
+  }
+  return { pageId: r.id, key: foundKey, fileUrl };
+}
+
+/** Notion に実体アップロード済みの PDF を取り直し、テキスト抽出する (JPX への再取得はしない)。 */
+async function fetchArchivedPdfText(ref: ArchivedFileRef, context: string): Promise<string> {
+  const res = await fetch(ref.fileUrl);
+  if (!res.ok) {
+    throw new Error(`${context}: ${ref.key} の再取得に失敗 status=${res.status}`);
+  }
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const pdf = await getDocumentProxy(bytes);
+  const { text } = await extractText(pdf, { mergePages: true });
+  return text;
+}
+
 // ---------------------------------------------------------------------------
 // jpx-sector-marketcap (月次)
 // ---------------------------------------------------------------------------
 
+/**
+ * 月次PDFの本体取得をスキップした場合の実行ログ用メッセージ (純関数)。
+ * 「アーカイブ済み」であって「観測ログ書込済み」ではない点に注意 — 呼び出し元は
+ * この分岐でも Notion 保管済みファイルから観測ログの upsert を毎回試みる。
+ */
+export function sectorMarketCapSkipDetail(period: string): string {
+  return `月次未更新のためPDF再取得なし (${period} は取得済み・Notion保管ファイルから観測ログを再送)`;
+}
+
+async function reparseArchivedSectorMarketCap(
+  ref: ArchivedFileRef
+): Promise<Pick<SectorMarketCapData, "asOfDate" | "sectors" | "segments">> {
+  const text = await fetchArchivedPdfText(ref, "reparseArchivedSectorMarketCap");
+  return parseSectorMarketCapText(text);
+}
+
 async function runSectorMarketCap(): Promise<RunOutcome> {
-  const data = await fetchSectorMarketCap();
   if (DRY_RUN) {
+    const data = await fetchSectorMarketCap();
     console.info(JSON.stringify({ source: "jpx-sector-marketcap", dryRun: true, data }, null, 2));
     return { source: "jpx-sector-marketcap", ok: true, detail: `dry-run asOfDate=${data.asOfDate}` };
   }
 
-  const archive = await recordPrimaryData({
-    ...sectorMarketCapArchiveInput(data),
-    parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID(),
-  });
-  if (archive.outcome === "skipped_existing") {
-    return {
-      source: "jpx-sector-marketcap",
-      ok: true,
-      detail: `月次未更新のためスキップ (${data.asOfDate.slice(0, 7)} は取得済み)`,
-    };
+  const { yearMonth } = await latestSectorMarketCapPdfUrl();
+  const period = sectorMarketCapPeriodFromYearMonth(yearMonth);
+  const key = sectorMarketCapKey(period);
+  const alreadyArchived = await isArchived("moneyflow", key, notionEnv.NOTION_MONEYFLOW_PAGE_ID());
+
+  let asOfDate: string;
+  let sectors: SectorMarketCapData["sectors"];
+  let primaryDataPageId: string;
+  let detail: string;
+
+  if (alreadyArchived) {
+    // 月次未更新: JPX への PDF 本体の再取得はせず、Notion に実体保管済みの
+    // PDF を取り直して観測ログを再送する (アーカイブ済み ≠ 観測ログ書込済み)。
+    const primaryDbId = await requirePrimaryDataDbId("runSectorMarketCap");
+    const ref = await findArchivedFileByKey(primaryDbId, key);
+    if (!ref) {
+      throw new Error(
+        `runSectorMarketCap: isArchived("${key}")=true なのにアーカイブ済みページが見つかりません (整合性エラー)`
+      );
+    }
+    const parsed = await reparseArchivedSectorMarketCap(ref);
+    asOfDate = parsed.asOfDate;
+    sectors = parsed.sectors;
+    primaryDataPageId = ref.pageId;
+    detail = sectorMarketCapSkipDetail(period);
+  } else {
+    const data = await fetchSectorMarketCap();
+    const archive = await recordPrimaryData({
+      ...sectorMarketCapArchiveInput(data),
+      parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID(),
+    });
+    asOfDate = data.asOfDate;
+    sectors = data.sectors;
+    primaryDataPageId = archive.pageId;
+    detail = `${data.sectors.length}業種を記録 (${period})`;
   }
 
-  const { dbId: obsDbId } = await ensureObservationsDb(JPX_33_SECTORS);
+  // アーカイブの成否とは無関係に、観測ログへは常に upsert を試みる
+  // (upsertObservation は「期間|指標キー|区分」で冪等なので再実行しても安全・安価。
+  // ここを archive の outcome で条件分岐すると、途中で失敗した月が Notion 側の
+  // アーカイブ済み判定により以後ずっと欠落する — レビュー指摘の再発防止)。
+  const { dbId: obsDbId } = await ensureObservationsDb(MONEYFLOW_SECTOR_CATEGORY_OPTIONS);
   const indicatorPageId = requireIndicatorPageId("sector_market_cap");
-  const period = data.asOfDate.slice(0, 7);
-  for (const row of data.sectors) {
+  for (const row of sectors) {
     await upsertObservation(obsDbId, {
       period,
       periodStart: firstDayOfMonth(period),
-      periodEnd: data.asOfDate,
+      periodEnd: asOfDate,
       indicatorKey: "sector_market_cap",
       indicatorPageId,
       category: row.sector,
@@ -138,21 +266,15 @@ async function runSectorMarketCap(): Promise<RunOutcome> {
       changeFromPrev: null,
       approximate: true,
       measureKind: "実測",
-      primaryDataPageId: archive.pageId,
+      primaryDataPageId,
     });
   }
-  return { source: "jpx-sector-marketcap", ok: true, detail: `${data.sectors.length}業種を記録 (${period})` };
+  return { source: "jpx-sector-marketcap", ok: true, detail };
 }
 
 // ---------------------------------------------------------------------------
 // jpx-short-selling (日次archive + 当月の月次集計)
 // ---------------------------------------------------------------------------
-
-interface ArchivedFileRef {
-  pageId: string;
-  key: string;
-  fileUrl: string;
-}
 
 /** 「一次データ｜moneyflow」から今月分の空売り日次 PDF アーカイブ済みページを列挙する。 */
 async function listArchivedShortSellingFiles(month: string, primaryDbId: string): Promise<ArchivedFileRef[]> {
@@ -196,13 +318,7 @@ async function listArchivedShortSellingFiles(month: string, primaryDbId: string)
 async function reparseArchivedShortSelling(
   ref: ArchivedFileRef
 ): Promise<Omit<ShortSellingData, "pdfBytes" | "pdfUrl">> {
-  const res = await fetch(ref.fileUrl);
-  if (!res.ok) {
-    throw new Error(`reparseArchivedShortSelling: ${ref.key} の再取得に失敗 status=${res.status}`);
-  }
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  const pdf = await getDocumentProxy(bytes);
-  const { text } = await extractText(pdf, { mergePages: true });
+  const text = await fetchArchivedPdfText(ref, "reparseArchivedShortSelling");
   return parseShortSellingSectorText(text);
 }
 
@@ -225,19 +341,12 @@ async function runShortSelling(): Promise<RunOutcome> {
   // 持たない設計上の帰結。運用開始直後は月初からの日数分しか無いため、
   // 月が進むほど正確になる)。
   const month = data.date.slice(0, 7);
-  const primaryDbId = await findBackupChildByTitle({
-    parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID(),
-    title: "一次データ｜moneyflow",
-    kind: "database",
-  });
-  if (!primaryDbId) {
-    throw new Error("runShortSelling: 「一次データ｜moneyflow」DB が見つかりません (recordPrimaryData 直後のはず)");
-  }
+  const primaryDbId = await requirePrimaryDataDbId("runShortSelling");
   const files = await listArchivedShortSellingFiles(month, primaryDbId);
   const dailyRows = await Promise.all(files.map(reparseArchivedShortSelling));
   const monthly = aggregateMonthlyShortSellingRatio(dailyRows);
 
-  const { dbId: obsDbId } = await ensureObservationsDb(JPX_33_SECTORS);
+  const { dbId: obsDbId } = await ensureObservationsDb(MONEYFLOW_SECTOR_CATEGORY_OPTIONS);
   const indicatorPageId = requireIndicatorPageId("sector_short_selling_ratio");
   for (const row of monthly.sectors) {
     await upsertObservation(obsDbId, {
@@ -284,9 +393,8 @@ interface MoneyflowSectorApiResponse {
 }
 
 async function fetchSectorTurnoverFromWorker(from: string, to: string): Promise<MoneyflowSectorApiResponse> {
-  const base = process.env.WORKER_BASE_URL;
-  const secret = process.env.CRON_SECRET;
-  if (!base) throw new Error("WORKER_BASE_URL が設定されていません (.env)");
+  const base = sharedEnv.WORKER_BASE_URL();
+  const secret = sharedEnv.CRON_SECRET();
   if (!secret) throw new Error("CRON_SECRET が設定されていません (.env)");
   const u = new URL(`${base.replace(/\/$/, "")}/api/ingest/moneyflow-sector`);
   u.searchParams.set("from", from);
@@ -310,7 +418,7 @@ async function runSectorTurnover(): Promise<RunOutcome> {
     return { source: "sector-turnover", ok: true, detail: `dry-run ${from}〜${to}` };
   }
 
-  const { dbId: obsDbId } = await ensureObservationsDb(JPX_33_SECTORS);
+  const { dbId: obsDbId } = await ensureObservationsDb(MONEYFLOW_SECTOR_CATEGORY_OPTIONS);
   const period = isoWeekLabelOf(today);
   const turnoverPageId = requireIndicatorPageId("sector_turnover");
   const sharePageId = requireIndicatorPageId("sector_turnover_share");
@@ -375,7 +483,7 @@ const RUNNERS: Record<Source, () => Promise<RunOutcome>> = {
   "sector-turnover": runSectorTurnover,
 };
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   if (!DRY_RUN) {
     await syncIndicatorCatalog();
   }
@@ -399,8 +507,7 @@ async function main(): Promise<void> {
 
   const successCount = outcomes.filter((o) => o.ok).length;
   const failedCount = outcomes.filter((o) => !o.ok).length;
-  const status = failedCount === 0 ? "完了" : successCount > 0 ? "一部失敗" : "失敗";
-  if (!isMoneyflowRunStatus(status)) throw new Error(`unreachable: 不正な status ${status}`);
+  const status = classifyRunStatus(successCount, failedCount);
 
   const { dbId: runLogDbId } = await ensureRunLogDb();
   await recordRunLog(runLogDbId, {
@@ -416,7 +523,11 @@ async function main(): Promise<void> {
   if (failedCount > 0) process.exitCode = 1;
 }
 
-main().catch((e) => {
-  console.error("[moneyflow] 致命的エラー:", e);
-  process.exit(1);
-});
+// CLI として直接実行された場合のみ main() を走らせる (import だけでは走らない —
+// テストがこのモジュールを安全に import できるようにするためのガード)。
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((e) => {
+    console.error("[moneyflow] 致命的エラー:", e);
+    process.exit(1);
+  });
+}

@@ -41,6 +41,13 @@ export const sharedEnv = {
    */
   YAHOO_PROXY_BASE: () => optional("YAHOO_PROXY_BASE"),
   /**
+   * デプロイ済み Worker のベース URL (例 https://kabulab-cf.<sub>.workers.dev)。
+   * Node ローカルの CLI (scripts/moneyflow/ingest.ts・scripts/sync/yuho-edinet.ts 等)
+   * が Worker の内部認証付きルートを `CRON_SECRET` 付きで叩くために使う。
+   * 未設定は required で throw (同じ変数を複数箇所で process.env 直参照しない — ルール3)。
+   */
+  WORKER_BASE_URL: () => required("WORKER_BASE_URL"),
+  /**
    * Node 取込から D1 へ書くための Cloudflare D1 HTTP API 認証 (ADR-0001)。
    * Worker の読取はバインディングで完結するため不要。Node 取込 (ir-catalog /
    * otakara / sync) でのみ参照するので未設定は required で throw。

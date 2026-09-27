@@ -44,4 +44,20 @@ describe("MONEYFLOW_INDICATORS", () => {
       expect(text).toMatch(/ではない|ではなく|を意味しない/);
     }
   });
+
+  it("「出典URL」列は url 型プロパティのため、全指標で実際にリンクできる https:// URL のみを持つ (自由記述の由来説明を混ぜない)", () => {
+    for (const ind of MONEYFLOW_INDICATORS) {
+      expect(ind.sourceUrl).toMatch(/^https:\/\/\S+$/);
+      expect(() => new URL(ind.sourceUrl)).not.toThrow();
+    }
+  });
+
+  it("D1由来 (既存 swing_daily_ohlcv 集計) の指標は、取得元の説明を limitations 側に持つ", () => {
+    const d1Derived = ["sector_turnover", "sector_turnover_share", "sector_up_turnover", "sector_down_turnover"];
+    for (const key of d1Derived) {
+      const ind = MONEYFLOW_INDICATORS.find((i) => i.key === key);
+      expect(ind).toBeDefined();
+      expect(ind?.limitations).toMatch(/取得元/);
+    }
+  });
 });

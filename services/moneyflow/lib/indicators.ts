@@ -27,6 +27,15 @@ const R1: MoneyflowRequirement = "R1";
 const WEEKLY: MoneyflowFrequency = "週次";
 const MONTHLY: MoneyflowFrequency = "月次";
 
+/**
+ * 既存 D1 (`swing_daily_ohlcv` × `core_stocks.sector`) 由来の指標の出典。
+ * 「出典URL」は Notion 側で url 型プロパティのため、実際にリンクできる値のみを
+ * 入れる (ルール1: 由来の説明文を URL 型の列に混ぜない)。取得元の説明は各指標の
+ * `limitations` に平文で書く。
+ */
+const D1_SECTOR_TURNOVER_SOURCE_URL =
+  "https://github.com/satoki252595/kabulab_tool_cloudflare/blob/main/docs/moneyflow.md";
+
 export const MONEYFLOW_INDICATORS: readonly IndicatorDefInput[] = [
   {
     key: "sector_turnover",
@@ -40,10 +49,11 @@ export const MONEYFLOW_INDICATORS: readonly IndicatorDefInput[] = [
       "同額を取引するため、業種全体で見た「純流入額」は理屈のうえで常にゼロになる。" +
       "例: A業種の売買代金が先週の2倍になっても、それは「A業種にお金が流れ込んだ」" +
       "のではなく「A業種の株の売り買いが活発になった」ことを意味する。",
-    sourceUrl: "https://swing-trading (既存 D1 swing_daily_ohlcv) × JPX 33業種区分",
+    sourceUrl: D1_SECTOR_TURNOVER_SOURCE_URL,
     license: JPX_PERSONAL_ONLY,
     frequency: WEEKLY,
     limitations:
+      "取得元: 既存 D1 (swing_daily_ohlcv) × JPX 33業種区分 (core_stocks.sector)。" +
       "対象は東証の内国普通株のみ(ETF/REIT/外国株は含まない)。同じ株を1日に何度も" +
       "売買すると回転売買の分だけ売買代金が膨らむため、実際の投資額より大きく出る" +
       "ことがある。",
@@ -59,10 +69,12 @@ export const MONEYFLOW_INDICATORS: readonly IndicatorDefInput[] = [
       "買い越し/売り越しではない。例: 電気機器のシェアが15%から20%に増えても、それは" +
       "他の業種と比べて電気機器の売買がより活発になったことを示すだけで、電気機器に" +
       "「お金が入ってきた」ことの証明にはならない。",
-    sourceUrl: "既存 D1 swing_daily_ohlcv × JPX 33業種区分 (sector_turnover の派生)",
+    sourceUrl: D1_SECTOR_TURNOVER_SOURCE_URL,
     license: JPX_PERSONAL_ONLY,
     frequency: WEEKLY,
-    limitations: "sector_turnover と同じ限界を引き継ぐ。",
+    limitations:
+      "取得元: 既存 D1 swing_daily_ohlcv × JPX 33業種区分 (sector_turnover の派生)。" +
+      "sector_turnover と同じ限界を引き継ぐ。",
   },
   {
     key: "sector_up_turnover",
@@ -74,10 +86,11 @@ export const MONEYFLOW_INDICATORS: readonly IndicatorDefInput[] = [
       "足し合わせた額。上昇日の売買代金が下落日より大きければ「買いの勢いが強かった" +
       "目安」と読めるが、これも個別銘柄ごとの前日比による按分であり、業種全体の" +
       "資金の純流入を意味しない(取引には必ず売り手がいる)。",
-    sourceUrl: "既存 D1 swing_daily_ohlcv (前日終値との比較) × JPX 33業種区分",
+    sourceUrl: D1_SECTOR_TURNOVER_SOURCE_URL,
     license: JPX_PERSONAL_ONLY,
     frequency: WEEKLY,
     limitations:
+      "取得元: 既存 D1 swing_daily_ohlcv (前日終値との比較) × JPX 33業種区分。" +
       "前の取引日のデータが無い銘柄(新規上場直後等)はどちらにも数えない。前日と" +
       "同値の日もどちらにも数えない。",
   },
@@ -90,10 +103,12 @@ export const MONEYFLOW_INDICATORS: readonly IndicatorDefInput[] = [
       "その業種の銘柄のうち、前の取引日より株価(終値)が下がった日の売買代金だけを" +
       "足し合わせた額。sector_up_turnover と対で見て「買いと売りどちらの勢いが" +
       "強かったか」の目安にする指標で、業種全体の資金の純流入/純流出そのものではない。",
-    sourceUrl: "既存 D1 swing_daily_ohlcv (前日終値との比較) × JPX 33業種区分",
+    sourceUrl: D1_SECTOR_TURNOVER_SOURCE_URL,
     license: JPX_PERSONAL_ONLY,
     frequency: WEEKLY,
-    limitations: "sector_up_turnover と同じ限界を引き継ぐ。",
+    limitations:
+      "取得元: 既存 D1 swing_daily_ohlcv (前日終値との比較) × JPX 33業種区分。" +
+      "sector_up_turnover と同じ限界を引き継ぐ。",
   },
   {
     key: "sector_market_cap",
