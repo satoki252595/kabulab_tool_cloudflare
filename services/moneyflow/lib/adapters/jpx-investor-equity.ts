@@ -1,0 +1,495 @@
+/**
+ * moneyflow アダプタ: JPX「投資部門別売買状況」(株式、週次・月次)。
+ *
+ * 取得・解析・様式検証は取得元モジュール `../sources/jpx-investor-equity.ts` が担い、
+ * ここでは Phase 1 の Notion 3 DB (指標定義 / 観測ログ / 取込ログ) へつなぐ
+ * `MoneyflowSourceSpec` を 2 つ (週次・月次。公表タイミングも一覧ページも別) export する。
+ *
+ *   - `jpx-investor-equity-weekly`  … 冪等キー `jpx-investor-equity-weekly-YYYY-Www`
+ *     (期間終了日の ISO 週。一覧ページの行ラベル「2026年9月第2週(9月7日～9月11日)」の
+ *     終了日から決め、toObservations でファイル内の期間終了日と突き合わせる)
+ *   - `jpx-investor-equity-monthly` … 冪等キー `jpx-investor-equity-monthly-YYYY-MM`
+ *     (JPX がその月次ファイルを帰属させている年月。集計期間は週単位で区切られ暦月と
+ *     一致しないため、期間開始・終了はファイルに書かれた実際の集計期間を使う)
+ *
+ * 冪等キーに版は含めない。JPX は定期的な改訂 (速報→確報) をしないが、誤りがあれば
+ * 公表後に訂正することがある (週次一覧ページに「訂正情報（2024年9月10日）」の掲載あり)。
+ * 訂正後のファイルは同じキーのため自動では取り直さない — この限界は指標定義の「限界」に明記する。
+ *
+ * 1 バッチの行数: 4 市場 × 15 投資部門 × (金額/株数) × (買い越し/売買合計) = 240 行。
+ *
+ * 様式変更: 週次は 2026-09-29 掲載分から、月次は 2026-10-08 掲載分から単一ファイルの
+ * 新様式に変わる予告がある。取得元モジュールの一覧ページ解析は新様式のリンクを見た
+ * 時点で throw し、本アダプタも新様式 (unified_single_file) のレコードは受け付けずに
+ * throw する (新様式は JPX 公式サンプルでしか検証できておらず、サンプルの値の桁が
+ * 見出しの単位「千株/千円」と合わない疑いがあるため。実ファイルでの再検証後に対応する)。
+ */
+import {
+  MONTHLY_INDEX_URL,
+  WEEKLY_INDEX_URL,
+  jpxInvestorEquityArchiveInput,
+  latestWeeklyEntry,
+  parseInvestorEquityWorkbook,
+  parseMonthlyIndexHtml,
+  parseWeeklyIndexHtml,
+  pickLatestPublishedMonth,
+  type FetchedInvestorEquity,
+  type InvestorEquityMarket,
+  type InvestorEquityPeriodType,
+  type InvestorEquityRecord,
+} from "../sources/jpx-investor-equity.js";
+import { isoWeekLabelOf } from "../iso-week.js";
+import {
+  requireSpecFile,
+  type FetchedBatch,
+  type MoneyflowSourceSpec,
+  type ObservationDraft,
+  type SpecFile,
+} from "../source-spec.js";
+import type { IndicatorDefInput, MoneyflowFrequency } from "../../../../src/shared/notion-archive/index.js";
+
+// 取得元モジュールと同一のブラウザ相当 UA (モジュールは UA 定数も「一覧ページだけ取る」
+// 関数も export していないため、resolve で一覧ページだけを軽く取るのに同じ値を使う。
+// UA を付けない fetch は JPX の WAF に 403 で弾かれる — モジュールの注記参照)。
+const UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
+const WEEKLY_SPEC_NAME = "jpx-investor-equity-weekly";
+const MONTHLY_SPEC_NAME = "jpx-investor-equity-monthly";
+
+/** 一次データのファイル名の接頭辞 (`jpxInvestorEquityArchiveInput` の命名と同じ)。 */
+const VALUE_FILE_PREFIX = "investor-equity-value-";
+const VOLUME_FILE_PREFIX = "investor-equity-volume-";
+
+async function fetchOk(url: string): Promise<Response> {
+  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  if (!res.ok) {
+    throw new Error(`JPX 投資部門別売買状況: HTTP エラー ${res.status} ${res.statusText} (${url})`);
+  }
+  return res;
+}
+
+function urlBasename(url: string): string {
+  const name = url.split("/").pop();
+  if (!name) throw new Error(`JPX 投資部門別売買状況: URL からファイル名を取得できません: "${url}"`);
+  return name;
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+// ---------------------------------------------------------------------------
+// 指標定義
+// ---------------------------------------------------------------------------
+
+const SOURCE_NOTE =
+  "出典: JPX「投資部門別売買状況」(資本金30億円以上の取引参加者経由の取引を集計した値。" +
+  "全取引の網羅ではない)。";
+
+const COMMON_LIMITATIONS =
+  "集計対象は資本金30億円以上の取引参加者経由の取引のみで、全取引の網羅ではない" +
+  "(そのため「総計」でも売りと買いは一致せず、総計の買い越しはゼロにならない)。内国普通株式が" +
+  "対象で ETF・REIT・優先株式等は含まない。ToSTNeT (立会外) 取引を含む。東証33業種別の" +
+  "内訳は JPX 公式統計に存在しない (市場区分別のみ)。区分は「市場 / 投資部門」で、市場は" +
+  "東証プライム・東証スタンダード・東証グロース・二市場 (東京・名古屋の合算)。投資部門には" +
+  "他の部門の合計行も含む (総計=自己計+委託計、委託計=法人+個人+海外投資家+証券会社、" +
+  "法人=投資信託+事業法人+その他法人等+金融機関、金融機関=生保・損保+都銀・地銀等+" +
+  "信託銀行+その他金融機関)。合計行と内訳を足し合わせると二重計上になる。表下の" +
+  "「自己・個人の現金/信用」「海外投資家の法人/個人」の内訳は取り込んでいない。" +
+  "前期比は記録しない (空欄)。" +
+  "公表後の訂正: JPX は誤りがあれば公表済みの値を訂正することがある (一覧ページの「訂正情報」で" +
+  "告知。例: 2024年9月10日)。この取込は同じ期間を1回しか取得しないため、訂正は自動では" +
+  "反映されない (反映するには保管済みの一次データをごみへ退避してから取り込み直す)。" +
+  "様式変更: 週次は 2026-09-29 掲載分、月次は 2026-10-08 掲載分から単一ファイルの新様式に" +
+  "変わる予告があり、新様式は実ファイルで検証するまで取込を停止する (失敗として記録される)。" +
+  "新様式では投資部門の区分 (自己現金/自己信用/個人現金/海外投資家法人 等) が変わり、" +
+  "旧様式の系列と直接つながらない。";
+
+const WEEKLY_LIMITATIONS =
+  COMMON_LIMITATIONS +
+  "公表: 毎週第4営業日 (通常木曜、祝日で後ろ倒しあり) 午後3時30分に前週分。" +
+  "対象期間ラベルは期間終了日の ISO 週 (YYYY-Www) で、JPX の「◯月第n週」とは数え方が違う。" +
+  "月をまたぐ週を JPX がどちらの月に数えるかの規則は公表資料で確認できていない" +
+  " (確認できた例は 2026年9月第1週 = 8/31〜9/4 のみ)。終了日が翌月に入る週" +
+  " (例: 9/28〜10/2) は月の帰属を推測せず取込失敗として止める。";
+
+const MONTHLY_LIMITATIONS =
+  COMMON_LIMITATIONS +
+  "公表: 翌月、前月最終週の週次発表と同日の午後3時30分。" +
+  "対象期間ラベル (YYYY-MM) は JPX がその月次に帰属させた年月で、集計期間は週単位で" +
+  "区切られ暦月と一致しない (例: 2026年8月 = 8/3〜8/28。8/31 は9月分に入る)。" +
+  "期間開始・終了にはファイルに書かれた実際の集計期間を記録する。";
+
+type IndicatorKind = "net_flow_value" | "gross_turnover_value" | "net_flow_volume" | "gross_turnover_volume";
+
+const KIND_TEXT: Record<IndicatorKind, { displayName: string; flowType: IndicatorDefInput["flowType"]; description: string }> = {
+  net_flow_value: {
+    displayName: "投資部門別 買い越し額 (株式)",
+    flowType: "純買い越し",
+    description:
+      "個人・海外投資家・証券会社・投資信託などの投資部門ごとに、期間中に株を「買った金額」" +
+      "から「売った金額」を引いた値 (期間中の流れ=フロー。保有残高=ストックではない)。" +
+      "プラスなら買い越し、マイナスなら売り越し。単位は円 (JPX の千円表示を円に換算)。" +
+      "例: 海外投資家が +3,000億円なら、その期間に海外投資家は売った額より 3,000億円多く" +
+      "日本株を買った。ただし取引には必ず売り手がいるため、ほぼ同じ額をほかの部門 (個人など)" +
+      "が売り越しており、「株式市場全体にお金が流れ込んだ額」ではない。" +
+      "定義: 投資部門別の株式売買代金について 買付金額 − 売付金額。市場区分別。" +
+      SOURCE_NOTE,
+  },
+  gross_turnover_value: {
+    displayName: "投資部門別 売買代金 (株式)",
+    flowType: "売買代金",
+    description:
+      "ある投資部門が期間中に売った金額と買った金額を足し合わせた値で、その部門がどれだけ" +
+      "活発に売買したかを示す (期間中のフロー)。プラス・マイナスの向きは無く、買い越し/" +
+      "売り越し (お金が正味どちら向きに動いたか) ではない。単位は円 (千円表示を円に換算)。" +
+      "例: 個人の売買代金が 23兆円でも、それは売りと買いの合計であり、個人が 23兆円を" +
+      "株に投じたという意味ではない。定義: 売付金額 + 買付金額。市場区分別。" +
+      SOURCE_NOTE,
+  },
+  net_flow_volume: {
+    displayName: "投資部門別 買い越し株数 (株式)",
+    flowType: "純買い越し",
+    description:
+      "買い越し額と同じ考え方を、金額ではなく株数で見たもの: 期間中に買った株数 − 売った株数" +
+      " (期間中のフロー)。プラスなら買い越し、マイナスなら売り越し。単位は株 (JPX の千株表示を" +
+      "株に換算)。株価の高い株と安い株では同じ株数でも金額が大きく違うため、金額版と" +
+      "併せて見る。定義: 投資部門別の株式売買高について 買付株数 − 売付株数。市場区分別。" +
+      SOURCE_NOTE,
+  },
+  gross_turnover_volume: {
+    displayName: "投資部門別 売買高 (株式)",
+    flowType: "売買代金",
+    description:
+      "ある投資部門が期間中に売った株数と買った株数を足し合わせた値 (売買代金の株数版。" +
+      "期間中のフロー)。取引の活発さを示し、買い越し/売り越しの向きは表さない。" +
+      "単位は株 (千株表示を株に換算)。定義: 売付株数 + 買付株数。市場区分別。" +
+      SOURCE_NOTE,
+  },
+};
+
+const KINDS: readonly IndicatorKind[] = [
+  "net_flow_value",
+  "gross_turnover_value",
+  "net_flow_volume",
+  "gross_turnover_volume",
+];
+
+/**
+ * 指標キー。取得元モジュールのキー (`jpx_investor_equity_<kind>`) に頻度の接尾辞を付ける。
+ * 週次と月次は指標定義の「頻度」が異なるため、同じキーを共有できない
+ * (取込 CLI は同じキーの異なる定義を throw する)。
+ */
+function indicatorKey(kind: IndicatorKind, periodType: InvestorEquityPeriodType): string {
+  return `jpx_investor_equity_${kind}_${periodType}`;
+}
+
+function buildIndicators(periodType: InvestorEquityPeriodType): IndicatorDefInput[] {
+  const frequency: MoneyflowFrequency = periodType === "weekly" ? "週次" : "月次";
+  const label = periodType === "weekly" ? "週次" : "月次";
+  return KINDS.map((kind) => ({
+    key: indicatorKey(kind, periodType),
+    displayName: `${KIND_TEXT[kind].displayName} ${label}`,
+    requirement: "R1",
+    flowType: KIND_TEXT[kind].flowType,
+    description: KIND_TEXT[kind].description,
+    sourceUrl: periodType === "weekly" ? WEEKLY_INDEX_URL : MONTHLY_INDEX_URL,
+    license: "personal-only",
+    frequency,
+    limitations: periodType === "weekly" ? WEEKLY_LIMITATIONS : MONTHLY_LIMITATIONS,
+  }));
+}
+
+export const JPX_INVESTOR_EQUITY_WEEKLY_INDICATORS: readonly IndicatorDefInput[] = buildIndicators("weekly");
+export const JPX_INVESTOR_EQUITY_MONTHLY_INDICATORS: readonly IndicatorDefInput[] = buildIndicators("monthly");
+
+// ---------------------------------------------------------------------------
+// 区分 (市場 / 投資部門)
+// ---------------------------------------------------------------------------
+
+/** 市場の日本語表記 (JPX のシート見出し「東証プライム」「二市場」等そのまま)。 */
+const MARKET_JA: Readonly<Record<InvestorEquityMarket, string>> = {
+  "TSE Prime": "東証プライム",
+  "TSE Standard": "東証スタンダード",
+  "TSE Growth": "東証グロース",
+  "Tokyo & Nagoya": "二市場",
+};
+
+/** 旧様式の主表の投資部門 (これ以外の名前は様式変更として throw する)。 */
+const INVESTOR_CATEGORIES: ReadonlySet<string> = new Set([
+  "自己計",
+  "委託計",
+  "総計",
+  "法人",
+  "個人",
+  "海外投資家",
+  "証券会社",
+  "投資信託",
+  "事業法人",
+  "その他法人等",
+  "金融機関",
+  "生保・損保",
+  "都銀・地銀等",
+  "信託銀行",
+  "その他金融機関",
+]);
+
+function categoryOf(rec: InvestorEquityRecord): string {
+  const market = MARKET_JA[rec.market];
+  if (market === undefined) {
+    throw new Error(`JPX 投資部門別売買状況: 未知の市場です: "${rec.market}"`);
+  }
+  if (!INVESTOR_CATEGORIES.has(rec.investorCategory)) {
+    throw new Error(`JPX 投資部門別売買状況: 未知の投資部門です: "${rec.investorCategory}" (様式変更の可能性)`);
+  }
+  return `${market} / ${rec.investorCategory}`;
+}
+
+// ---------------------------------------------------------------------------
+// 冪等キー
+// ---------------------------------------------------------------------------
+
+// 週次一覧ページの行ラベル: "2026年9月第2週(9月7日～9月11日)" / "2026年9月第1週(8月31日～9月4日)"
+const WEEKLY_INDEX_LABEL_RE = /^(\d{4})年(\d{1,2})月第(\d)週\((\d{1,2})月(\d{1,2})日[～〜~](\d{1,2})月(\d{1,2})日\)$/;
+
+/**
+ * 週次一覧ページの行ラベルから冪等キーを作る (期間終了日の ISO 週)。
+ * 終了日の月がラベルの月と違う (例: 9/28〜10/2 を「9月第5週」とする) 場合は、
+ * 年の帰属を推測せず throw する (取得元モジュールのタイトル検証と同じ方針)。
+ */
+export function weeklyKeyFromIndexLabel(label: string): string {
+  const m = WEEKLY_INDEX_LABEL_RE.exec(label.trim());
+  if (!m) throw new Error(`JPX 投資部門別売買状況 (週次一覧): 行ラベルの様式が想定外です: "${label}"`);
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const endMonth = Number(m[6]);
+  const endDay = Number(m[7]);
+  if (endMonth !== month) {
+    throw new Error(
+      `JPX 投資部門別売買状況 (週次一覧): ラベルの月 (${month}) と期間終了日の月 (${endMonth}) が一致しません: "${label}"`
+    );
+  }
+  const periodEnd = `${year}-${pad2(endMonth)}-${pad2(endDay)}`;
+  const d = new Date(`${periodEnd}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== periodEnd) {
+    throw new Error(`JPX 投資部門別売買状況 (週次一覧): 期間終了日が暦日として不正です: "${label}"`);
+  }
+  return `${WEEKLY_SPEC_NAME}-${isoWeekLabelOf(d)}`;
+}
+
+function periodFromKey(key: string, periodType: InvestorEquityPeriodType): string {
+  const re =
+    periodType === "weekly"
+      ? new RegExp(`^${WEEKLY_SPEC_NAME}-(\\d{4}-W\\d{2})$`)
+      : new RegExp(`^${MONTHLY_SPEC_NAME}-(\\d{4}-\\d{2})$`);
+  const m = re.exec(key);
+  if (!m) throw new Error(`JPX 投資部門別売買状況: 冪等キーの様式が想定外です (${periodType}): "${key}"`);
+  return m[1];
+}
+
+// ---------------------------------------------------------------------------
+// 解析 (純関数)
+// ---------------------------------------------------------------------------
+
+// レコードの periodLabel: "2026年9月第2週" / "2026年8月"
+const RECORD_LABEL_RE = /^(\d{4})年(\d{1,2})月(?:第\d週)?$/;
+
+interface ParsedBatch {
+  period: string;
+  periodStart: string;
+  periodEnd: string;
+  records: InvestorEquityRecord[];
+}
+
+/**
+ * 金額ファイル・株数ファイルを解析し、1 バッチ (同じ期間・旧様式) であることを確かめる。
+ * 期間ラベル (週次 YYYY-Www / 月次 YYYY-MM) はファイルの中身から決める。
+ */
+function parseBatch(files: readonly SpecFile[], periodType: InvestorEquityPeriodType): ParsedBatch {
+  const valueFile = requireSpecFile(files, (n) => n.startsWith(VALUE_FILE_PREFIX), "JPX 投資部門別 金額ファイル");
+  const volumeFile = requireSpecFile(files, (n) => n.startsWith(VOLUME_FILE_PREFIX), "JPX 投資部門別 株数ファイル");
+  const valueRecords = parseInvestorEquityWorkbook(valueFile.bytes, valueFile.filename.slice(VALUE_FILE_PREFIX.length));
+  const volumeRecords = parseInvestorEquityWorkbook(
+    volumeFile.bytes,
+    volumeFile.filename.slice(VOLUME_FILE_PREFIX.length)
+  );
+  const unified = [...valueRecords, ...volumeRecords].find((r) => r.formatVersion !== "legacy_split_files");
+  if (unified) {
+    throw new Error(
+      `JPX 投資部門別売買状況: 新様式 (${unified.formatVersion}) のファイルです。新様式は JPX 公式サンプルでしか` +
+        "検証しておらず値の単位 (千株/千円) の確認が済んでいないため、実ファイルで検証するまで取り込みません"
+    );
+  }
+  if (valueRecords.length === 0 || valueRecords.some((r) => r.metric !== "value")) {
+    throw new Error(`JPX 投資部門別売買状況: ${valueFile.filename} が金額 (value) のファイルではありません`);
+  }
+  if (volumeRecords.length === 0 || volumeRecords.some((r) => r.metric !== "volume")) {
+    throw new Error(`JPX 投資部門別売買状況: ${volumeFile.filename} が株数 (volume) のファイルではありません`);
+  }
+  const records = [...valueRecords, ...volumeRecords];
+  const first = records[0] as InvestorEquityRecord;
+  const signature = (r: InvestorEquityRecord): string =>
+    `${r.formatVersion}|${r.periodType}|${r.periodLabel}|${r.periodStart}|${r.periodEnd}`;
+  const mismatched = records.find((r) => signature(r) !== signature(first));
+  if (mismatched) {
+    throw new Error(
+      `JPX 投資部門別売買状況: 金額/株数ファイルの期間・様式が食い違っています (${signature(first)} と ${signature(mismatched)})`
+    );
+  }
+  if (first.periodType !== periodType) {
+    throw new Error(`JPX 投資部門別売買状況: ${periodType} のはずが ${first.periodType} のファイルでした`);
+  }
+  if (first.periodStart === null || first.periodEnd === null) {
+    throw new Error(`JPX 投資部門別売買状況: ${first.periodLabel} の集計期間 (開始/終了) が不明です`);
+  }
+  let period: string;
+  if (periodType === "weekly") {
+    period = isoWeekLabelOf(new Date(`${first.periodEnd}T00:00:00Z`));
+  } else {
+    const m = RECORD_LABEL_RE.exec(first.periodLabel);
+    if (!m) throw new Error(`JPX 投資部門別売買状況: 月次の期間表題が想定外です: "${first.periodLabel}"`);
+    period = `${m[1]}-${pad2(Number(m[2]))}`;
+  }
+  return { period, periodStart: first.periodStart, periodEnd: first.periodEnd, records };
+}
+
+function toDrafts(key: string, files: readonly SpecFile[], periodType: InvestorEquityPeriodType): ObservationDraft[] {
+  const keyPeriod = periodFromKey(key, periodType);
+  const batch = parseBatch(files, periodType);
+  if (batch.period !== keyPeriod) {
+    throw new Error(
+      `JPX 投資部門別売買状況: 冪等キー ${key} とファイルの期間 (${batch.period}: ${batch.periodStart}〜${batch.periodEnd}) が一致しません`
+    );
+  }
+  const drafts: ObservationDraft[] = [];
+  for (const rec of batch.records) {
+    let unit: ObservationDraft["unit"];
+    if (rec.unit === "thousand_yen") unit = "円";
+    else if (rec.unit === "thousand_shares") unit = "株";
+    else throw new Error(`JPX 投資部門別売買状況: 未知の単位です: "${String(rec.unit)}"`);
+    const suffix = rec.metric === "value" ? "value" : "volume";
+    const common = {
+      period: batch.period,
+      periodStart: batch.periodStart,
+      periodEnd: batch.periodEnd,
+      category: categoryOf(rec),
+      categoryKind: "投資部門" as const,
+      unit,
+      changeFromPrev: null,
+      approximate: false,
+      measureKind: "実測" as const,
+    };
+    // 千円 → 円、千株 → 株 (いずれも ×1,000。値は整数なので誤差なし)
+    drafts.push({ ...common, indicatorKey: indicatorKey(`net_flow_${suffix}`, periodType), value: rec.net * 1000 });
+    drafts.push({
+      ...common,
+      indicatorKey: indicatorKey(`gross_turnover_${suffix}`, periodType),
+      value: rec.total * 1000,
+    });
+  }
+  return drafts;
+}
+
+// ---------------------------------------------------------------------------
+// 取得
+// ---------------------------------------------------------------------------
+
+async function fetchBatch(args: {
+  key: string;
+  periodType: InvestorEquityPeriodType;
+  indexUrl: string;
+  indexLabel: string;
+  valueUrl: string;
+  volumeUrl: string;
+}): Promise<FetchedBatch> {
+  // JPX 規約の「高頻度・高負荷の自動取得の自粛」に合わせ、2 本を順に取る。
+  const valueBytes = new Uint8Array(await (await fetchOk(args.valueUrl)).arrayBuffer());
+  const volumeBytes = new Uint8Array(await (await fetchOk(args.volumeUrl)).arrayBuffer());
+  const valueRecords = parseInvestorEquityWorkbook(valueBytes, urlBasename(args.valueUrl));
+  const volumeRecords = parseInvestorEquityWorkbook(volumeBytes, urlBasename(args.volumeUrl));
+  const fetched: FetchedInvestorEquity = {
+    periodType: args.periodType,
+    valueUrl: args.valueUrl,
+    volumeUrl: args.volumeUrl,
+    valueBytes,
+    volumeBytes,
+    records: [...valueRecords, ...volumeRecords],
+  };
+  const archive = jpxInvestorEquityArchiveInput(fetched);
+  const files = archive.files.map((f) => ({ ...f }));
+  // resolve で決めたキーとファイルの中身が一致することを、保管前に確かめる
+  // (一覧ページとリンク先の食い違い・様式変更を一次データとして誤ったキーで保管しない)。
+  toDrafts(args.key, files, args.periodType);
+  return {
+    key: args.key,
+    source: archive.source,
+    metadata: {
+      ...archive.metadata,
+      indexUrl: args.indexUrl,
+      indexLabel: args.indexLabel,
+    },
+    files,
+  };
+}
+
+export const JPX_INVESTOR_EQUITY_WEEKLY_SPEC: MoneyflowSourceSpec = {
+  name: WEEKLY_SPEC_NAME,
+  indicators: JPX_INVESTOR_EQUITY_WEEKLY_INDICATORS,
+  async resolve() {
+    const html = await (await fetchOk(WEEKLY_INDEX_URL)).text();
+    const latest = latestWeeklyEntry(parseWeeklyIndexHtml(html));
+    const key = weeklyKeyFromIndexLabel(latest.label);
+    return {
+      key,
+      fetch: () =>
+        fetchBatch({
+          key,
+          periodType: "weekly",
+          indexUrl: WEEKLY_INDEX_URL,
+          indexLabel: latest.label,
+          valueUrl: latest.valueXlsUrl,
+          volumeUrl: latest.volumeXlsUrl,
+        }),
+    };
+  },
+  toObservations({ key, files }) {
+    return toDrafts(key, files, "weekly");
+  },
+};
+
+export const JPX_INVESTOR_EQUITY_MONTHLY_SPEC: MoneyflowSourceSpec = {
+  name: MONTHLY_SPEC_NAME,
+  indicators: JPX_INVESTOR_EQUITY_MONTHLY_INDICATORS,
+  async resolve() {
+    const html = await (await fetchOk(MONTHLY_INDEX_URL)).text();
+    const latest = pickLatestPublishedMonth(parseMonthlyIndexHtml(html));
+    const { valueXlsUrl, volumeXlsUrl } = latest;
+    if (valueXlsUrl === null || volumeXlsUrl === null) {
+      // pickLatestPublishedMonth が保証する。型を絞るための検査
+      throw new Error(`JPX 投資部門別売買状況 (月次): ${latest.year}年${latest.month}月のファイル URL が揃っていません`);
+    }
+    const key = `${MONTHLY_SPEC_NAME}-${latest.year}-${pad2(latest.month)}`;
+    return {
+      key,
+      fetch: () =>
+        fetchBatch({
+          key,
+          periodType: "monthly",
+          indexUrl: MONTHLY_INDEX_URL,
+          indexLabel: `${latest.year}年${latest.month}月`,
+          valueUrl: valueXlsUrl,
+          volumeUrl: volumeXlsUrl,
+        }),
+    };
+  },
+  toObservations({ key, files }) {
+    return toDrafts(key, files, "monthly");
+  },
+};
+
+export const JPX_INVESTOR_EQUITY_SPECS: readonly MoneyflowSourceSpec[] = [
+  JPX_INVESTOR_EQUITY_WEEKLY_SPEC,
+  JPX_INVESTOR_EQUITY_MONTHLY_SPEC,
+];
