@@ -101,6 +101,21 @@ describe("parseCoinGeckoCoinMarkets (実フィクスチャ: coins-markets-jpy-20
     delete broken[0]!.current_price;
     expect(() => parseCoinGeckoCoinMarkets(JSON.stringify(broken))).toThrow(/current_price/);
   });
+
+  it("要求した coin id の一部が応答から丸ごと欠けていれば throw する (件数だけ減るデータ欠損を検知)", () => {
+    const rows = JSON.parse(MARKETS_RAW) as Array<{ id: string }>;
+    // bitcoin 自体は様式的に正しいまま、行ごと欠落している状況を再現する。
+    const missingBitcoin = rows.filter((r) => r.id !== "bitcoin");
+    expect(missingBitcoin.length).toBeGreaterThan(0);
+    expect(() => parseCoinGeckoCoinMarkets(JSON.stringify(missingBitcoin))).toThrow(/missing=bitcoin/);
+  });
+
+  it("expectedIds を明示すれば、その集合だけで欠落チェックする", () => {
+    const rows = JSON.parse(MARKETS_RAW) as Array<{ id: string }>;
+    const onlyBitcoin = rows.filter((r) => r.id === "bitcoin");
+    expect(() => parseCoinGeckoCoinMarkets(JSON.stringify(onlyBitcoin), ["bitcoin"])).not.toThrow();
+    expect(parseCoinGeckoCoinMarkets(JSON.stringify(onlyBitcoin), ["bitcoin"])).toHaveLength(1);
+  });
 });
 
 describe("parseCoinGeckoStablecoinCategory (実フィクスチャ: categories-stablecoins-2026-09-27.json)", () => {
@@ -161,6 +176,27 @@ describe("resolveObservationPeriod / isPeriodObservable", () => {
     expect(result.observable).toBe(true);
     expect(result.reason).toBeUndefined();
   });
+
+  it("day: 当日は取得した瞬間に observable=true (リアルタイムAPIで公表ラグが無く、月/週のような『期間途中』の概念が無いため)", () => {
+    const now = new Date("2026-09-27T05:00:00Z");
+    const period = resolveObservationPeriod("day", now);
+    const result = isPeriodObservable(period, now);
+    expect(result.observable).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+
+  it("day: 過去の日付も observable=true", () => {
+    const period = resolveObservationPeriod("day", new Date("2026-09-20T00:00:00Z"));
+    const result = isPeriodObservable(period, new Date("2026-09-27T00:00:00Z"));
+    expect(result.observable).toBe(true);
+  });
+
+  it("day: まだ来ていない未来の日付は observable=false", () => {
+    const period = resolveObservationPeriod("day", new Date("2026-10-01T00:00:00Z"));
+    const result = isPeriodObservable(period, new Date("2026-09-27T00:00:00Z"));
+    expect(result.observable).toBe(false);
+    expect(result.reason).toMatch(/まだ来ていない/);
+  });
 });
 
 describe("toCoinGeckoObservationRows", () => {
@@ -220,6 +256,14 @@ describe("COINGECKO_GLOBAL_INDICATORS (指標定義)", () => {
   it("キーが重複していない", () => {
     const keys = COINGECKO_GLOBAL_INDICATORS.map((i) => i.key);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("usageTerms は attribution 義務を『商用利用時のみ』と誤って条件付けていない (CoinGecko API Terms 本文で" +
+    "『regardless of the usage plan』と一般義務であることを 2026-09-27 に確認済み)", () => {
+    for (const indicator of COINGECKO_GLOBAL_INDICATORS) {
+      expect(indicator.usageTerms).toMatch(/Powered by CoinGecko/);
+      expect(indicator.usageTerms).not.toMatch(/商用利用・再配布には/);
+    }
   });
 });
 

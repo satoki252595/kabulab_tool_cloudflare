@@ -18,9 +18,16 @@
  *   `COINGECKO_DEMO_API_KEY` が設定されていれば付与し、無ければ無ヘッダで
  *   呼ぶ (無ヘッダでも技術的には動くため、フォールバックではなく「認証任意の
  *   API仕様どおりの分岐」)。
- * - 商用利用・再配布には attribution (出典表示) が必要
- *   (https://www.coingecko.com/en/api_terms)。kabulab は個人利用の Notion
- *   ダッシュボードだが、指標定義に出典 URL を必ず持たせている。
+ * - attribution (「Powered by CoinGecko」の表示、Arial 相当・10pt 以上、
+ *   CoinGecko Brand Guidelines 準拠) は個人/商用の別を問わず API 利用時の
+ *   一般的な義務として API Terms (https://www.coingecko.com/en/api_terms)
+ *   に明記されている ("regardless of the usage plan that you select, you
+ *   will still need to comply with the provisions of this API Terms" +
+ *   「Powered by CoinGecko」表示の義務条項を 2026-09-27 に本文で確認済み。
+ *   「商用利用のみ必須」ではない)。本モジュールはデータ取得層のみで画面を
+ *   持たないため、実際の「Powered by CoinGecko」表示は moneyflow の画面
+ *   実装時に別途対応が必要 (TODO、指標定義の usageTerms に出典 URL は
+ *   必ず持たせている)。
  * - ブラウザ相当 UA を偽装する必要は無い (JPX 等と異なり、CoinGecko の 429 は
  *   UA ではなく呼び出し頻度で決まることを実機確認済み)。代わりに、リポジトリの
  *   ドメインを含む自己申告 UA を送る (biz 側での bot 判定に資するため)。
@@ -238,8 +245,19 @@ export interface CoinGeckoCoinSnapshot {
   lastUpdated: string;
 }
 
-/** `GET /coins/markets` の生レスポンス (配列) から型付きレコード配列を作る。 */
-export function parseCoinGeckoCoinMarkets(raw: string): CoinGeckoCoinSnapshot[] {
+/**
+ * `GET /coins/markets` の生レスポンス (配列) から型付きレコード配列を作る。
+ *
+ * `expectedIds` (既定: `COINGECKO_MAJOR_COIN_IDS`、`fetchCoinGeckoCoinMarkets`
+ * の既定値と揃えている) の全件が応答に含まれているかも検証する。配列自体は
+ * 空でなくとも、要求した銘柄の一部だけが欠けているケース (様式は正しいまま
+ * 件数だけ減る CoinGecko 側の一時的なデータ欠損等) を素通りさせない
+ * (ルール2: 想定外を黙って通さない)。
+ */
+export function parseCoinGeckoCoinMarkets(
+  raw: string,
+  expectedIds: readonly string[] = COINGECKO_MAJOR_COIN_IDS
+): CoinGeckoCoinSnapshot[] {
   const json = parseJson(raw, "CoinGecko /coins/markets");
   if (!Array.isArray(json)) {
     throw new Error(
@@ -249,7 +267,7 @@ export function parseCoinGeckoCoinMarkets(raw: string): CoinGeckoCoinSnapshot[] 
   if (json.length === 0) {
     throw new Error("CoinGecko /coins/markets: レスポンスが空配列です (指定した coin id が存在しない可能性)");
   }
-  return json.map((entry, i) => {
+  const result = json.map((entry, i) => {
     const e = asRecord(entry, `CoinGecko /coins/markets[${i}]`);
     return {
       id: asString(e.id, `[${i}].id`),
@@ -265,6 +283,17 @@ export function parseCoinGeckoCoinMarkets(raw: string): CoinGeckoCoinSnapshot[] 
       lastUpdated: asString(e.last_updated, `[${i}].last_updated`),
     };
   });
+
+  const resultIds = new Set(result.map((c) => c.id));
+  const missingIds = expectedIds.filter((id) => !resultIds.has(id));
+  if (missingIds.length > 0) {
+    throw new Error(
+      `CoinGecko /coins/markets: 要求した coin id の一部が応答に含まれていません ` +
+        `(様式は正しいまま件数だけ減るデータ欠損の可能性): missing=${missingIds.join(",")}`
+    );
+  }
+
+  return result;
 }
 
 export interface CoinGeckoCategorySnapshot {
@@ -408,8 +437,30 @@ export interface PeriodObservability {
  * 対象期間が「まだ公表されていない」かどうかを判定する。CoinGecko はリアル
  * タイム API で公表ラグが無いため、判定基準は「対象期間の終了日を過ぎて
  * いるか」のみ (JPX の月次 PDF のような『翌月第n営業日』という追加ラグは無い)。
+ *
+ * `granularity === "day"` は特別扱いする: week/month/quarter/year は
+ * 「期間の途中で取得したスナップショットはその期間の確定値として扱えない
+ * (期間が終わるまで待つ)」という意味を持つが、day 自体には「1日の途中か
+ * どうか」という概念がない — 1日1回、取得した瞬間の値がそのままその日の
+ * 観測値になる設計 (本モジュールの日次実行の前提)。そのため day では
+ * 「対象日がまだ来ていない (未来の日付) か」だけを判定する。ここを他の
+ * 粒度と同じ「期間終了を過ぎたか」で判定すると、`resolveObservationPeriod
+ * ("day", now)` の結果をそのまま渡した場合に常に observable=false になって
+ * しまう (period.end は常に「今日」であり、"今日の23:59:59.999" を過ぎる
+ * ことは通常無いため)。
  */
 export function isPeriodObservable(period: ObservationPeriod, now: Date): PeriodObservability {
+  if (period.granularity === "day") {
+    const todayKey = toDateKey(now);
+    if (period.start > todayKey) {
+      return {
+        observable: false,
+        reason: `期間 ${period.label} はまだ来ていない未来の日付です。`,
+      };
+    }
+    return { observable: true };
+  }
+
   const periodEnd = new Date(`${period.end}T23:59:59.999Z`);
   if (Number.isNaN(periodEnd.getTime())) {
     throw new Error(`isPeriodObservable: 不正な period.end です: ${period.end}`);
@@ -456,6 +507,19 @@ export interface MoneyflowIndicatorDefinition {
   limitations: string;
 }
 
+/**
+ * 全指標共通の利用条件文言。CoinGecko API Terms
+ * (https://www.coingecko.com/en/api_terms) を 2026-09-27 に本文で直接確認
+ * した内容に合わせている: attribution (「Powered by CoinGecko」表示) は
+ * 選択したプラン (無料/Demo/有料) を問わず一律の義務であり、「商用利用の
+ * ときだけ必要」ではない。本モジュール (データ取得層) 自体は画面を持たない
+ * ため、表示自体は moneyflow の画面実装側の対応が別途必要。
+ */
+const COINGECKO_USAGE_TERMS =
+  "CoinGecko 公開 API (キー無しまたは無料 Demo キー)。個人/商用いずれの利用でも" +
+  `「Powered by CoinGecko」の表示 (CoinGecko Brand Guidelines 準拠) が義務 (${COINGECKO_API_TERMS_URL})。` +
+  "本モジュール(データ層)では未実装 — 画面表示側で別途対応が必要。";
+
 export const COINGECKO_GLOBAL_INDICATORS: readonly MoneyflowIndicatorDefinition[] = [
   {
     key: "coingecko_price_jpy",
@@ -469,9 +533,7 @@ export const COINGECKO_GLOBAL_INDICATORS: readonly MoneyflowIndicatorDefinition[
       "ない点に注意 (値上がりしただけでも数値は増える)。",
     unit: "円/単位",
     sourceUrl: COINGECKO_DOCS_URL,
-    usageTerms:
-      "CoinGecko 公開 API (キー無しまたは無料 Demo キー)。個人利用は無料。再配布・" +
-      `ホワイトラベル提供には attribution (出典表示) が必要 (${COINGECKO_API_TERMS_URL})。`,
+    usageTerms: COINGECKO_USAGE_TERMS,
     frequency: "リアルタイム (リクエスト時点の最新値)",
     limitations:
       "日本国内の暗号資産交換業者の実勢価格ではなく、CoinGecko が集計するグローバル" +
@@ -490,9 +552,7 @@ export const COINGECKO_GLOBAL_INDICATORS: readonly MoneyflowIndicatorDefinition[
       "前期比の増減額をそのまま『資金の純流入』と読まないこと。",
     unit: "円",
     sourceUrl: COINGECKO_DOCS_URL,
-    usageTerms:
-      "CoinGecko 公開 API (キー無しまたは無料 Demo キー)。個人利用は無料。再配布・" +
-      `ホワイトラベル提供には attribution が必要 (${COINGECKO_API_TERMS_URL})。`,
+    usageTerms: COINGECKO_USAGE_TERMS,
     frequency: "リアルタイム",
     limitations:
       "供給量 (circulating supply) の推計方法は銘柄ごとに異なり、CoinGecko 独自の" +
@@ -509,9 +569,7 @@ export const COINGECKO_GLOBAL_INDICATORS: readonly MoneyflowIndicatorDefinition[
       "限定した数値ではない。",
     unit: "米ドル",
     sourceUrl: COINGECKO_DOCS_URL,
-    usageTerms:
-      "CoinGecko 公開 API (キー無しまたは無料 Demo キー)。個人利用は無料。再配布・" +
-      `ホワイトラベル提供には attribution が必要 (${COINGECKO_API_TERMS_URL})。`,
+    usageTerms: COINGECKO_USAGE_TERMS,
     frequency: "リアルタイム",
     limitations:
       "国別・地域別の内訳は提供されない (グローバル合算のみ)。『流通量』の算定基準が" +
@@ -529,9 +587,7 @@ export const COINGECKO_GLOBAL_INDICATORS: readonly MoneyflowIndicatorDefinition[
       "(=資金流入) ・償還 (=資金流出) を反映するが、完全な純流入額ではない近似値。",
     unit: "米ドル",
     sourceUrl: COINGECKO_DOCS_URL,
-    usageTerms:
-      "CoinGecko 公開 API (キー無しまたは無料 Demo キー)。個人利用は無料。再配布・" +
-      `ホワイトラベル提供には attribution が必要 (${COINGECKO_API_TERMS_URL})。`,
+    usageTerms: COINGECKO_USAGE_TERMS,
     frequency: "リアルタイム",
     limitations:
       "CoinGecko の『stablecoins』カテゴリ分類に依存する (新規銘柄の分類反映に" +
@@ -550,9 +606,7 @@ export const COINGECKO_GLOBAL_INDICATORS: readonly MoneyflowIndicatorDefinition[
       "資金の流出入そのものではない。",
     unit: "%",
     sourceUrl: COINGECKO_DOCS_URL,
-    usageTerms:
-      "CoinGecko 公開 API (キー無しまたは無料 Demo キー)。個人利用は無料。再配布・" +
-      `ホワイトラベル提供には attribution が必要 (${COINGECKO_API_TERMS_URL})。`,
+    usageTerms: COINGECKO_USAGE_TERMS,
     frequency: "リアルタイム",
     limitations:
       "アルトコインの急騰・急落だけでもドミナンスは動くため、『資金がBTCに逃避した』" +
