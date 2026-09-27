@@ -1,0 +1,97 @@
+[
+  {
+    "id": "stablecoins",
+    "name": "Stablecoins",
+    "market_cap": 292862711888.5375,
+    "market_cap_change_24h": 0.1276211462433631,
+    "content": "A stablecoin is a type of cryptocurrency that is designed to maintain a stable value by being pegged to an external reference, such as a fiat currency.",
+    "top_3_coins_id": [
+      "tether",
+      "usd-coin",
+      "usds"
+    ],
+    "top_3_coins": [
+      "https://coin-images.coingecko.com/coins/images/325/small/Tether.png",
+      "https://coin-images.coingecko.com/coins/images/6319/small/USDC.png",
+      "https://coin-images.coingecko.com/coins/images/39926/small/usds.webp"
+    ],
+    "volume_24h": 44696086650.94833,
+    "updated_at": "2026-09-27T02:25:38.000Z"
+  },
+  {
+    "id": "usd-stablecoin",
+    "name": "USD Stablecoin",
+    "market_cap": 290060688345.69025,
+    "market_cap_change_24h": -0.040875345289263156,
+    "content": "A USD stablecoin is a type of cryptocurrency that is designed to maintain a stable value by being pegged to the United States dollar.",
+    "top_3_coins_id": [
+      "tether",
+      "usd-coin",
+      "usds"
+    ],
+    "top_3_coins": [
+      "https://coin-images.coingecko.com/coins/images/325/small/Tether.png",
+      "https://coin-images.coingecko.com/coins/images/6319/small/USDC.png",
+      "https://coin-images.coingecko.com/coins/images/39926/small/usds.webp"
+    ],
+    "volume_24h": 44662457730.540955,
+    "updated_at": "2026-09-27T02:25:38.000Z"
+  },
+  {
+    "id": "jpy-stablecoin",
+    "name": "JPY Stablecoin",
+    "market_cap": 157766206.73121262,
+    "market_cap_change_24h": -0.5760694936998775,
+    "content": "A JPY stablecoin is a type of cryptocurrency that is designed to maintain a stable value by being pegged to the Japanese yen.",
+    "top_3_coins_id": [
+      "jpycoin",
+      "jpysc",
+      "jpy-coin"
+    ],
+    "top_3_coins": [
+      "https://coin-images.coingecko.com/coins/images/70314/small/JPYC_400x400.jpg",
+      "https://coin-images.coingecko.com/coins/images/102174247/small/jpysc_200.png",
+      "https://coin-images.coingecko.com/coins/images/25971/small/JPYC_Prepaid.png"
+    ],
+    "volume_24h": 1036511.3816746977,
+    "updated_at": "2026-09-27T02:25:38.000Z"
+  },
+  {
+    "id": "smart-contract-platform",
+    "name": "Smart Contract Platform",
+    "market_cap": 2521887113690.816,
+    "market_cap_change_24h": 0.378031400119149,
+    "content": "Smart contract platforms are usually blockchains that host smart contracts or decentralized applications. Users can interact with different smart contracts on these platforms to perform various actions such as lending and borrowing funds, staking their assets or minting NFTs. Smart contracts are programs that are stored on the blockchain and are automatically executed when certain conditions are met.",
+    "top_3_coins_id": [
+      "bitcoin",
+      "ethereum",
+      "binancecoin"
+    ],
+    "top_3_coins": [
+      "https://coin-images.coingecko.com/coins/images/1/small/bitcoin.png",
+      "https://coin-images.coingecko.com/coins/images/279/small/ethereum.png",
+      "https://coin-images.coingecko.com/coins/images/825/small/bnb-icon2_2x.png"
+    ],
+    "volume_24h": 41850992331.62859,
+    "updated_at": "2026-09-27T02:25:38.000Z"
+  },
+  {
+    "id": "layer-1",
+    "name": "Layer 1 (L1)",
+    "market_cap": 2482083896077.005,
+    "market_cap_change_24h": 0.38001234728998706,
+    "content": "Layer 1 serves as the primary and autonomous chain on which transactions are directly executed and confirmed, as well as providing the essential infrastructure for the blockchain network.",
+    "top_3_coins_id": [
+      "bitcoin",
+      "ethereum",
+      "binancecoin"
+    ],
+    "top_3_coins": [
+      "https://coin-images.coingecko.com/coins/images/1/small/bitcoin.png",
+      "https://coin-images.coingecko.com/coins/images/279/small/ethereum.png",
+      "https://coin-images.coingecko.com/coins/images/825/small/bnb-icon2_2x.png"
+    ],
+    "volume_24h": 38602123494.20417,
+    "updated_at": "2026-09-27T02:25:38.000Z"
+  }
+]
