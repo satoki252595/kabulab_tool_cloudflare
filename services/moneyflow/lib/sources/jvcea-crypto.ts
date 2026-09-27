@@ -149,6 +149,40 @@ export interface JvceaCryptoRow {
 const NUM_FIELD_COUNT = 19;
 const ROW_LINE_RE = /^(\d{4})\s+(\d{1,2})\s+(.*)$/;
 
+/**
+ * 全会員合算表 (本パーサの対象) のページにのみ現れる列見出し行。
+ * PDF 3 ページ目以降 (銘柄別内訳: BTC/XRP/ETH/…) は列構成が全く異なる別表
+ * (例: 2026-09-27 実データでは「売建 買建 合計 売建 買建 合計」の6列見出しで
+ * 8 個の数値列しか持たない) であり、この見出しは現れない。
+ */
+const AGGREGATE_TABLE_HEADER_MARKER =
+  "数量 金額 数量 金額 数量 金額 売建数 買建数 合計 売建額 買建額 合計 設定口座 稼働口座 設定口座 稼働口座";
+
+/**
+ * unpdf `extractText({ mergePages: false })` の全ページ分テキストから、
+ * 全会員合算表 (本パーサの対象、1〜2 ページ目相当) を含むページだけを
+ * 絞り込む。
+ *
+ * ページ番号のハードコード (例: 先頭2ページ) ではなく列見出しの内容で
+ * 判定する。理由: 合算表は 2018年9月分から毎月1行ずつ増える累積表であり、
+ * 将来行数が増えれば何ページ目に収まるかが変わりうる (2026-09-27 時点で
+ * 95か月・2ページ)。ページ数を仮定せず、対象の表が実際にどのページに
+ * あるかを内容から判定することで、3ページ目以降にある銘柄別内訳表
+ * (列構成が異なる) を誤って合算表として解釈しないようにする。
+ *
+ * @throws 全ページを見てもこの見出しを含むページが1件も無い場合
+ *   (様式変更で見出し文言自体が変わった疑い)
+ */
+export function selectAggregateTablePages(pageTexts: string[]): string[] {
+  const pages = pageTexts.filter((t) => t.includes(AGGREGATE_TABLE_HEADER_MARKER));
+  if (pages.length === 0) {
+    throw new Error(
+      "JVCEA 会員統計 PDF: 全会員合算表の列見出し行が見つかりません。様式が変わった可能性があります。"
+    );
+  }
+  return pages;
+}
+
 function toInt(token: string, context: string): number {
   if (!/^\d{1,3}(,\d{3})*$/.test(token) && !/^\d+$/.test(token)) {
     throw new Error(
@@ -300,7 +334,7 @@ export async function fetchJvceaCrypto(): Promise<JvceaCryptoData> {
   const pdfBytes = new Uint8Array(await res.arrayBuffer());
   const pdf = await getDocumentProxy(pdfBytes);
   const { text } = await extractText(pdf, { mergePages: false });
-  const rows = parseJvceaCryptoText(text);
+  const rows = parseJvceaCryptoText(selectAggregateTablePages(text));
   if (!rows.some((r) => r.period === latestMonth)) {
     throw new Error(
       `JVCEA 会員統計: 統計情報ページが示す最新月 ${latestMonth} の行が PDF 本文に` +
@@ -346,11 +380,37 @@ const JVCEA_USAGE_TERMS =
   "JVCEA サイト利用規約に商用利用可否の明記なし (2026-09-27 調査時点 unknown)。" +
   "本プロジェクトは個人利用・非公開の範囲に限定する運用のため追加の許諾確認は" +
   "行っていないが、公開・商用転用する場合は JVCEA へ利用可否を確認すること。";
-const JVCEA_LIMITATIONS_COMMON =
+/**
+ * PDF 原本の脚注 (注1〜注3) は「他の交換業者等への取次ぎ」分の扱いが
+ * 指標カテゴリごとに逆方向であることを明記している (2026-09-27 実データで
+ * 本文確認済み):
+ *   注1 取引高       には取次ぎ利用者取引分を「含みます」
+ *   注2 利用者残高    (預託金残高・証拠金取引建玉残高) には取次ぎ利用者分を「含みません」
+ *   注3 利用者口座数  には取次ぎに用いる口座数を「含みます」
+ * カテゴリを跨いで同一の注記文を使い回すと注1/注2で向きが逆になり誤りに
+ * なる (実際に旧実装はこの逆転を見落としていた) ため、カテゴリ別に分ける。
+ */
+const JVCEA_LIMITATIONS_BASE =
   "会員 (登録暗号資産交換業者) の合算値であり、個社別の内訳は非公表。" +
-  "一部会員の都合により当該会員のデータを除いた月がある (脚注記載)。" +
-  "他の交換業者等への取次ぎを行った利用者取引分を含むため、最終投資家ベースの" +
+  "一部会員の都合により当該会員のデータを除いた月がある (脚注記載)。";
+
+/** 取引高 (現物・証拠金取引の月間取引金額) 向け。原本注1。 */
+const JVCEA_LIMITATIONS_TURNOVER =
+  JVCEA_LIMITATIONS_BASE +
+  "他の交換業者等への取次ぎを行った利用者取引分を含むため (原本注1)、最終投資家ベースの" +
   "実額より大きく出うる (取引高の二重計上の可能性)。";
+
+/** 利用者残高 (預託金残高・証拠金取引建玉残高) 向け。原本注2。 */
+const JVCEA_LIMITATIONS_BALANCE =
+  JVCEA_LIMITATIONS_BASE +
+  "利用者残高には、他の交換業者等への取次ぎを行った利用者分を含まない (原本注2)。" +
+  "取引高とは逆に、この値は取次ぎ経由の分だけ最終投資家ベースの実額より小さく出うる。";
+
+/** 利用者口座数向け。原本注3。 */
+const JVCEA_LIMITATIONS_ACCOUNTS =
+  JVCEA_LIMITATIONS_BASE +
+  "利用者口座数には、他の交換業者等への取次ぎに用いる口座数を含む (原本注3)。" +
+  "同一投資家が複数の取次ぎ経路を持つ場合、口座単位で重複計上されうる。";
 
 export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
   {
@@ -370,7 +430,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     sourceUrl: JVCEA_SOURCE_URL,
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
-    limitations: JVCEA_LIMITATIONS_COMMON,
+    limitations: JVCEA_LIMITATIONS_TURNOVER,
   },
   {
     key: "jvcea_crypto_margin_turnover_jpy",
@@ -387,7 +447,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     sourceUrl: JVCEA_SOURCE_URL,
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
-    limitations: JVCEA_LIMITATIONS_COMMON,
+    limitations: JVCEA_LIMITATIONS_TURNOVER,
   },
   {
     key: "jvcea_crypto_deposits_crypto_jpy",
@@ -407,7 +467,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
     limitations:
-      JVCEA_LIMITATIONS_COMMON +
+      JVCEA_LIMITATIONS_BALANCE +
       " 価格変動と資金の入出金を切り分けた「推定純増減」は本指標には含まれない" +
       "(別途、時価データとの突合が必要)。",
   },
@@ -423,7 +483,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     sourceUrl: JVCEA_SOURCE_URL,
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
-    limitations: JVCEA_LIMITATIONS_COMMON,
+    limitations: JVCEA_LIMITATIONS_BALANCE,
   },
   {
     key: "jvcea_crypto_deposits_total_jpy",
@@ -436,7 +496,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     sourceUrl: JVCEA_SOURCE_URL,
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
-    limitations: JVCEA_LIMITATIONS_COMMON,
+    limitations: JVCEA_LIMITATIONS_BALANCE,
   },
   {
     key: "jvcea_crypto_deposits_margin_jpy",
@@ -449,7 +509,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     sourceUrl: JVCEA_SOURCE_URL,
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
-    limitations: JVCEA_LIMITATIONS_COMMON,
+    limitations: JVCEA_LIMITATIONS_BALANCE,
   },
   {
     key: "jvcea_crypto_margin_position_sell_jpy",
@@ -466,7 +526,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     sourceUrl: JVCEA_SOURCE_URL,
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
-    limitations: JVCEA_LIMITATIONS_COMMON,
+    limitations: JVCEA_LIMITATIONS_BALANCE,
   },
   {
     key: "jvcea_crypto_margin_position_buy_jpy",
@@ -483,7 +543,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     sourceUrl: JVCEA_SOURCE_URL,
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
-    limitations: JVCEA_LIMITATIONS_COMMON,
+    limitations: JVCEA_LIMITATIONS_BALANCE,
   },
   {
     key: "jvcea_crypto_margin_position_total_jpy",
@@ -498,7 +558,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     sourceUrl: JVCEA_SOURCE_URL,
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
-    limitations: JVCEA_LIMITATIONS_COMMON,
+    limitations: JVCEA_LIMITATIONS_BALANCE,
   },
   {
     key: "jvcea_crypto_accounts_total_established",
@@ -513,7 +573,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     sourceUrl: JVCEA_SOURCE_URL,
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
-    limitations: JVCEA_LIMITATIONS_COMMON,
+    limitations: JVCEA_LIMITATIONS_ACCOUNTS,
   },
   {
     key: "jvcea_crypto_accounts_total_active",
@@ -526,7 +586,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     sourceUrl: JVCEA_SOURCE_URL,
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
-    limitations: JVCEA_LIMITATIONS_COMMON,
+    limitations: JVCEA_LIMITATIONS_ACCOUNTS,
   },
   {
     key: "jvcea_crypto_accounts_margin_established",
@@ -541,7 +601,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     sourceUrl: JVCEA_SOURCE_URL,
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
-    limitations: JVCEA_LIMITATIONS_COMMON,
+    limitations: JVCEA_LIMITATIONS_ACCOUNTS,
   },
   {
     key: "jvcea_crypto_accounts_margin_active",
@@ -554,7 +614,7 @@ export const JVCEA_CRYPTO_INDICATORS: MoneyflowIndicatorDef[] = [
     sourceUrl: JVCEA_SOURCE_URL,
     usageTerms: JVCEA_USAGE_TERMS,
     frequency: "月次",
-    limitations: JVCEA_LIMITATIONS_COMMON,
+    limitations: JVCEA_LIMITATIONS_ACCOUNTS,
   },
 ];
 

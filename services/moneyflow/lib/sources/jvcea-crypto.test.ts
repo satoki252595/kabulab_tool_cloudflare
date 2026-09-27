@@ -6,6 +6,12 @@
  *       元URL: https://jvcea.or.jp/cms2026/wp-content/uploads/2026/08/202607-KOUKAI-01-FINAL.pdf
  *       (全8ページ中、本パーサが対象とする1〜2ページ目 [合算表] のみを
  *        pymupdf で抽出したもの。3ページ目以降は銘柄別内訳でスコープ外)
+ *   - jvcea-crypto-202607-koukai-01-full-8p.pdf
+ *       同URL の全8ページそのまま (トリミング無し)。本番の fetchJvceaCrypto()
+ *       が実際に受け取るのと同じ形。3ページ目以降 (銘柄別内訳、列構成が
+ *       異なる) を含めても合算表だけを正しく取り出せることを検証するために
+ *       使う (このトリミング無し版が無いと、本番が壊れていても
+ *       p1-2 版だけのテストは全て pass してしまう)。
  *   - jvcea-statistics-information-20260927.html
  *       元URL: https://jvcea.or.jp/statistics/information/ (2026-09-27 時点)
  *
@@ -24,16 +30,22 @@ import {
   jvceaCryptoRowToObservations,
   parseJvceaCryptoText,
   parseLatestJvceaCryptoPdfUrl,
+  selectAggregateTablePages,
   type JvceaCryptoRow,
 } from "./jvcea-crypto.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(__dirname, "fixtures");
 
-async function loadFixtureRows(): Promise<JvceaCryptoRow[]> {
-  const bytes = readFileSync(join(FIXTURES, "jvcea-crypto-202607-koukai-01-p1-2.pdf"));
+async function extractPageTexts(filename: string): Promise<string[]> {
+  const bytes = readFileSync(join(FIXTURES, filename));
   const pdf = await getDocumentProxy(new Uint8Array(bytes));
   const { text } = await extractText(pdf, { mergePages: false });
+  return text;
+}
+
+async function loadFixtureRows(): Promise<JvceaCryptoRow[]> {
+  const text = await extractPageTexts("jvcea-crypto-202607-koukai-01-p1-2.pdf");
   return parseJvceaCryptoText(text);
 }
 
@@ -110,6 +122,44 @@ describe("parseJvceaCryptoText (様式異常時は throw する)", () => {
 
   it("表の行が1件も抽出できなければ throw する", () => {
     expect(() => parseJvceaCryptoText(["見出しだけの本文で数値行が無い"])).toThrow(/1件も抽出/);
+  });
+});
+
+describe("selectAggregateTablePages (実フィクスチャ、本番と同じ全8ページ入力の回帰テスト)", () => {
+  // 回帰テスト: 本番の fetchJvceaCrypto() は unpdf extractText の結果 (実際に
+  // 取得した全8ページぶんのテキスト、うち3ページ目以降は銘柄別内訳表で
+  // 列構成が異なる) をそのまま parseJvceaCryptoText に渡していたため、
+  // 3ページ目 (BTC 保有状況表、「年 月 ...」パターンにマッチしつつ列数が
+  // 19 と異なる行を含む) で必ず throw していた (2026-09-27 実データで確認)。
+  // フィクスチャをあらかじめ1〜2ページ目だけにトリミングしたテスト
+  // (loadFixtureRows 系) だけでは、この本番専用の壊れ方を検知できない。
+
+  it("全8ページの生テキストをそのまま渡すと (旧実装相当)、銘柄別内訳表の列数不一致で throw する", async () => {
+    const pageTexts = await extractPageTexts("jvcea-crypto-202607-koukai-01-full-8p.pdf");
+    expect(pageTexts).toHaveLength(8);
+    expect(() => parseJvceaCryptoText(pageTexts)).toThrow(/数値列数/);
+  });
+
+  it("全8ページから合算表のページだけを絞り込むと2ページに絞られ、以後は解析可能", async () => {
+    const pageTexts = await extractPageTexts("jvcea-crypto-202607-koukai-01-full-8p.pdf");
+    const aggregatePages = selectAggregateTablePages(pageTexts);
+    expect(aggregatePages).toHaveLength(2);
+    const rows = parseJvceaCryptoText(aggregatePages);
+    expect(rows).toHaveLength(95);
+    const row2607 = rows.find((r) => r.period === "2026-07");
+    expect(row2607).toBeDefined();
+    // p1-2 版フィクスチャ (loadFixtureRows) のテストと同じ目視確認値。
+    expect(row2607!.spotTurnoverJpy).toBe(674_240);
+    expect(row2607!.marginPositionTotalJpy).toBe(18_477);
+    const row1809 = rows.find((r) => r.period === "2018-09");
+    expect(row1809).toBeDefined();
+    expect(row1809!.spotTurnoverJpy).toBe(813_446);
+  });
+
+  it("見出し行が1件も見つからなければ throw する (様式変更の疑い)", () => {
+    expect(() => selectAggregateTablePages(["見出しの無い本文", "別の本文"])).toThrow(
+      /列見出し行が見つかりません/
+    );
   });
 });
 
@@ -202,6 +252,59 @@ describe("jvceaCryptoRowToObservations / JVCEA_CRYPTO_INDICATORS", () => {
   it("指標定義は全てR3(資産クラス横断)要件を持つ", () => {
     for (const d of JVCEA_CRYPTO_INDICATORS) {
       expect(d.requirements).toContain("R3");
+    }
+  });
+
+  // 回帰テスト: PDF 原本の脚注 (注1〜注3、2026-09-27 実データで本文確認済み)
+  // は「他の交換業者等への取次ぎ」分の扱いがカテゴリごとに逆方向であることを
+  // 明記している。
+  //   注1 取引高      (現物・証拠金取引高)               → 含む   (二重計上の可能性)
+  //   注2 利用者残高   (預託金残高・証拠金取引建玉残高)     → 含まない (過小に出うる)
+  //   注3 利用者口座数 (設定/稼働、全体/証拠金)            → 含む   (口座単位の重複計上)
+  // 単一の注記文を全指標に一律適用すると注1/注2で向きが逆になる。
+  it("取引高系(2指標)の limitations は「含む・二重計上」(原本注1)", () => {
+    const turnoverKeys = ["jvcea_crypto_spot_turnover_jpy", "jvcea_crypto_margin_turnover_jpy"];
+    for (const key of turnoverKeys) {
+      const def = JVCEA_CRYPTO_INDICATORS.find((d) => d.key === key);
+      expect(def).toBeDefined();
+      expect(def!.limitations).toContain("含むため");
+      expect(def!.limitations).toContain("二重計上");
+    }
+  });
+
+  it("預託金残高・建玉残高系(7指標)の limitations は「含まない」(原本注2、取引高とは逆方向)", () => {
+    const balanceKeys = [
+      "jvcea_crypto_deposits_crypto_jpy",
+      "jvcea_crypto_deposits_cash_jpy",
+      "jvcea_crypto_deposits_total_jpy",
+      "jvcea_crypto_deposits_margin_jpy",
+      "jvcea_crypto_margin_position_sell_jpy",
+      "jvcea_crypto_margin_position_buy_jpy",
+      "jvcea_crypto_margin_position_total_jpy",
+    ];
+    for (const key of balanceKeys) {
+      const def = JVCEA_CRYPTO_INDICATORS.find((d) => d.key === key);
+      expect(def).toBeDefined();
+      expect(def!.limitations).toContain("含まない");
+      // 取引高向けの「二重計上」文言をそのまま使い回していないこと。
+      expect(def!.limitations).not.toContain("二重計上");
+    }
+  });
+
+  it("利用者口座数系(4指標)の limitations は「含む」(原本注3、取引高とは別文言)", () => {
+    const accountsKeys = [
+      "jvcea_crypto_accounts_total_established",
+      "jvcea_crypto_accounts_total_active",
+      "jvcea_crypto_accounts_margin_established",
+      "jvcea_crypto_accounts_margin_active",
+    ];
+    for (const key of accountsKeys) {
+      const def = JVCEA_CRYPTO_INDICATORS.find((d) => d.key === key);
+      expect(def).toBeDefined();
+      expect(def!.limitations).toContain("含む");
+      expect(def!.limitations).not.toContain("含まない");
+      // 取引高向けの「取引高の二重計上」という的外れな文言を流用していないこと。
+      expect(def!.limitations).not.toContain("取引高の二重計上");
     }
   });
 });
