@@ -1,0 +1,39 @@
+{
+  "key": "tfx-click365",
+  "phase": 4,
+  "build": {
+    "branch": "feat/moneyflow-src-tfx-click365",
+    "commit": "9a3e4acd427a029c786cf77ab5850275a7b70680",
+    "worktree_path": "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-10",
+    "status": "implemented",
+    "files": [
+      "services/moneyflow/lib/sources/tfx-click365.ts",
+      "services/moneyflow/lib/sources/tfx-click365.test.ts",
+      "services/moneyflow/lib/sources/fixtures/tfx-click365-fx-2026-09.html",
+      "services/moneyflow/lib/sources/fixtures/tfx-clickkabu365-cfd-2026-09.html"
+    ],
+    "indicators": [
+      "tfx-click365-fx-turnover (gross_turnover, 単位:枚, 月次/年次)",
+      "tfx-click365-fx-turnover-daily-avg (gross_turnover, 単位:枚/日)",
+      "tfx-click365-fx-open-interest (positions, 単位:枚, 月末/年末)",
+      "tfx-clickkabu365-cfd-turnover (gross_turnover, 単位:枚)",
+      "tfx-clickkabu365-cfd-turnover-daily-avg (gross_turnover, 単位:枚/日)",
+      "tfx-clickkabu365-cfd-open-interest (positions, 単位:枚)"
+    ],
+    "license": "TFX(東京金融取引所)サイト利用規約: 無断複製・転用禁止。商用利用可否を明記した個別条項は見当たらず(unknown, /tmp/claude-moneyflow-compact.json sources[35] commercial_use=\"prohibited\")。計画書(notion-velvet-goose.md)の判断に合わせ LICENSE_TAG=\"personal-only\" として扱う(既存 core_stocks.license_tag と同じ運用)。公開Webサービスでの二次配布・商用データセット化にはTFXへの個別確認が必要 — 統合担当が本番投入前に要再確認。",
+    "schedule": "サイト(くりっく365 https://www.tfx.co.jp/historical/fx/transit_fx.html / くりっく株365 https://www.tfx.co.jp/historical/cfd/transit_cfd.html)はURL固定・自動的に直近7ヶ月分(月次)+直近3年分(年次)へ更新される表示のため「最新ファイルの解決」は不要(定数URL)。ページ自体に更新日時の記載がなくlatencyは不明(要問い合わせ)。そのため「まだ公表されていない」の判定は暦日からの推測をせず、実際に取得したデータに対象期間が含まれるかどうか(isTfxPeriodPublished)のみで判定する設計にした。expectedMonthlyPeriod/expectedAnnualPeriod は「本来対象にすべき前月/前年」を返す純粋なカレンダー計算に限定し、公表判定そのものには使わないよう関数を分離・コメントで明記(ingest側は両方を組み合わせ、対象期間が実データに無ければスキップする運用を想定)。",
+    "verified_values": "フィクスチャは2026-09-27にUA(margin.ts/sectors.tsと同一のブラウザ相当UA文字列)で本番URLから実際に取得したHTML全文(tfx-click365-fx-2026-09.html 57,643B / tfx-clickkabu365-cfd-2026-09.html 31,381B)。同日にhttps://www.tfx.co.jp/historical/fx/transit_fx.html および .../cfd/transit_cfd.html を目視確認して一致を確認した値: (1) くりっく365 月次出来高 2026-08 米ドル／円=376,532枚・1日平均17,930枚, (2) くりっく365 年次出来高 2025 米ドル／円=6,003,872枚・1日平均23,092枚, (3) くりっく365 月末建玉 2026-08 米ドル／円=347,485枚, (4) くりっく株365 月次出来高 2026-08 日経225リセット付証拠金取引=728,991枚・1日平均34,714枚, (5) くりっく株365 月末建玉 2026-08 同銘柄=34,495枚, (6) くりっく株365 年末建玉 2025 同銘柄=17,837枚。加えて実データの欠測ケース(中国オフショア人民元／円の2024年次総量=空欄→undefined、日経225の2024年末建玉=空欄→undefined、英ポンド／日本円(ラージ)2026-03の1日平均=\"(-)\"表示→null)もテストで固定し、いずれも0で埋めていないことを確認した。",
+    "notes": "実装内容: services/moneyflow/lib/sources/tfx-click365.ts に (1) 市場種別(click365_fx/clickkabu365_cfd)ごとの固定URL解決+取得関数 fetchTfxClick365Page (2) HTML→型付きレコードの純関数パーサ parseTfxClick365Html (3) 期間判定 isTfxPeriodPublished/tfxAvailablePeriods/latestTfxPublishedPeriod/expectedMonthlyPeriod/expectedAnnualPeriod (4) 指標定義配列 TFX_CLICK365_METRICS (6件、measures/description/definition/unit/sourceUrl/usageTerms/frequency/limitations/requirements=\"R3\"を保持) (5) 縦長観測ログへの変換 toMoneyflowObservations、を実装。パーサは「表の並び順」ではなく「1日平均行の有無」×「期間ラベルが月次/年次か」の組み合わせで4表(月次出来高/年次出来高/月末建玉/年末建玉)を自己識別する設計にし、様式が想定外(table数不一致・期間見出し形式不一致・数量セル形式不一致・1日平均セル形式不一致)なら明示的にthrowする(テストで4パターン確認)。新規依存追加なし(HTML tableは正規表現ベースの自前パーサで抽出、既存のunpdf/xlsx等は本取得元には不要)。Notion書き込み・D1書き込みは一切行っていない(統合担当の領分)。push/マージも未実施(ローカルbranch commitのみ、worktree内)。\n\n保留・注意事項: (a) TFXの商用利用可否がunknownのため、本番投入前に統合担当または利用者がTFXへの確認要否を判断すること(現状はpersonal-only運用を仮定)。(b) latency(月次更新タイミング)が未確認のため、ingest側のスケジュール設計はisTfxPeriodPublishedによる実データ照合を必須にすること(expectedMonthlyPeriod等の暦計算だけで公表済みとみなさないこと、コード内コメントに明記済み)。(c) UAは既存の margin.ts/sectors.ts と同じ値を使ったが、リポジトリに再利用可能な「共有UA定数」がまだ存在しない(Phase 0待ち)ため、値を合わせる形での再現に留めた — 共有定数が用意され次第、本ファイルもそちらへ差し替えるべき。(d) 新規上場銘柄(FXの中国オフショア人民元／円等、CFDのラッセル2000/DAX/FTSE100/貴金属・原油ETF等)は過去年で欠測が起きる実データ仕様であることをテストで固定した。(e) root の pnpm typecheck / pnpm lint / pnpm test はすべて通過(test: 140ファイル/1698件全パス、既存分含め regressionなし)。"
+  },
+  "verify": {
+    "ok": true,
+    "checked": "TFX くりっく365/くりっく株365 パーサ (services/moneyflow/lib/sources/tfx-click365.ts, commit 9a3e4ac) を、curlで自前取得したライブHTML(フィクスチャとbyte-identicalであることを確認済み)に対しtsxでparseTfxClick365Htmlを実行し、独自regexで抽出した原本値と突き合わせて反証検証した。9件の数値突合(月次/年次出来高・建玉、FX/CFD双方、欠測ケース・(-)表示ケース含む)が全て一致。単位(枚)・非net_flowの指標定義・4表の自己識別ロジック・isTfxPeriodPublishedの公表前スキップ判定を、いずれも実データで独立確認した。テスト28件はvitestで全pass。ワークツリーは無変更(git status clean)。",
+    "problems": [
+      {
+        "severity": "low",
+        "summary": "TFXサイトの商用利用可否が未確定(unknown)のまま personal-only 運用を仮定している",
+        "fix": "パーサ自体のバグではなく統合前に解消すべき事項。公開Webサービス(kabulab)への本番投入前に、統合担当がTFXへ商用利用可否を個別確認するか、既存のJPX由来データ(otakara-yutai/yuho-quant等)と同様に personal-only タグを公開経路から明示的に除外する設計であることをレビューで確認してからマージすること。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "key": "worldbank-marketcap",
+  "phase": 5,
+  "build": {
+    "status": "implemented",
+    "branch": "feat/moneyflow-src-worldbank-marketcap",
+    "worktree_path": "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-16",
+    "commit": "d07420574be99e20bd35413bb36c12f328be9099",
+    "files": [
+      "services/moneyflow/lib/sources/worldbank-marketcap.ts",
+      "services/moneyflow/lib/sources/worldbank-marketcap.test.ts",
+      "services/moneyflow/lib/sources/fixtures/worldbank-marketcap-2020-2026.json",
+      "services/moneyflow/lib/sources/fixtures/worldbank-country-meta.json"
+    ],
+    "indicators": [
+      "worldbank_marketcap (flowType=holdings_stock, requirements=[R4], frequency=annual)"
+    ],
+    "schedule": "年次(annual)。固定の「今年-1年」決め打ちはせず、defaultFetchWindow(now) が直近7年分(今年-6〜今年)を毎回取得し、実データから isYearPublished(observations, entityId, year) / latestPublishedYear(observations, entityId) で「その国/地域についてどの年まで公表済みか」を判定する(国ごとに公表ラグが異なるため)。統合側は latestPublishedYear が前回取込時から進んでいれば新規行として書けばよい。月内に何度実行しても、まだ新しい年が出ていなければ差分なし=実質スキップになる(明示的な曜日/時刻スケジュールは無く、この判定自体がスキップ判定を兼ねる)。",
+    "verified_values": "2026-09-27に実際にAPIから取得したfixtureの値を、data.worldbank.org/indicator/CM.MKT.LCAP.CD?locations=JP のHTML埋め込みデータ(独立した別チャネル)とも突合して目視確認した:\n- 日本 2023年: 6,149,200,180,000 USD (API・HTML埋め込み双方で一致確認)\n- 日本 2025年: 7,610,543,670,000 USD (同上)\n- アメリカ 2023年: 48,979,397,700,000 USD\n- ドイツ 2023年: 2,178,052,520,000 USD\n- World(集計) 2023年: 102,946,352,260,000 USD\n- 所得階層集計 High income (entityId=XD) 2024年: 93,057,441,170,000 USD\nいずれも services/moneyflow/lib/sources/fixtures/worldbank-marketcap-2020-2026.json (2026-09-27取得の実レスポンス、365万件規模ではなく1,590行・398,531バイト) 内に検証済みとして残っている。原本ページ: https://data.worldbank.org/indicator/CM.MKT.LCAP.CD",
+    "license": "CC BY-4.0 (https://datacatalog.worldbank.org/int/public-licenses#cc-by)。出典表示(attribution)を条件に商用利用・改変・再配布とも許諾。JPX系ソースと異なりpersonal-only制約は無い。指標定義オブジェクト内に `attribution` 文字列として出典表示テキストを同梱済み。",
+    "notes": "実装したのは services/moneyflow/lib/sources/worldbank-marketcap.ts 1ファイル(+test+fixture2件)のみ。他の取得元ファイル・共有moneyflowスキャフォールディング(Notion DB ensure・ingest.ts等、Phase 0以降の担当)には一切触れていない。services/moneyflow ディレクトリ自体がmain上に存在しなかったため新規作成した。\n\n主なエクスポート:\n- 取得: buildMarketCapUrl/buildCountryMetaUrl(URL解決)、defaultFetchWindow、fetchMarketCapWindow/fetchCountryMeta(実fetch)\n- パーサ: parseMarketCapResponse/parseCountryMetaResponse (unknown→型付き配列。indicator.id不一致・date形式不正・value型不正・複数ページ分割・0件はすべてthrow)\n- 統合: toObservations (時価総額行×国メタデータ→前年比つき観測)\n- 判定: isYearPublished/latestPublishedYear (実データからのみ判定、決め打ちしない)\n- 指標定義: WORLDBANK_MARKETCAP_INDICATOR (key/label/requirements/flowType/measures/plainDescription/unit/sourceUrl/license/attribution/frequency/limitations)\n- 縦長出力: toObservationRecords (期間・指標・区分・値・単位・前期比・近似フラグ・実測/推定を持つMoneyflowObservationRecord[])\n- ルール6準備: worldBankMarketCapArchiveInput/worldBankCountryMetaArchiveInput (recordPrimaryDataへ渡す入力を組むだけで、Notion書込自体はしない。統合担当が呼ぶ想定)\n\n実装中に発見した重要な実データ挙動: World Bank の indicator エンドポイント(`/v2/country/all/indicator/CM.MKT.LCAP.CD`)は、一部の所得階層集計(例: entityId \"XD\" = High income)で `countryiso3code` を空文字列で返す(実fixtureで確認)。これを ISO3 前提で country メタデータエンドポイントの `id` と結合すると30行が結合不能になりthrowした。原因調査の結果、両エンドポイント間で常に一致する信頼できる結合キーは `country.id`(indicator側)⇔`iso2Code`(country メタデータ側)であることを実データで検証し(重複無し・欠落無しを確認済み)、そちらを主キー(`entityId`)に採用。ISO3 (`iso3`)は表示用の補助フィールドとして残し、割当が無い場合は捏造せず `undefined` にした(ルール2)。この発見を反映したテストケースを追加済み(「所得階層集計はcountryiso3codeが空でもentityIdで結合できる」等)。\n\n制約・保留事項:\n- Notion書込(観測ログ/指標定義DB/一次データDBへの実書込)は本タスクの範囲外(統合担当が担当)。\n- 集計行(World/地域/所得階層、78件)と個別国(217件)を isAggregate で区別しているが、これを観測ログにどちらも入れるか個別国のみに絞るかは統合側の設計判断(このモジュールは両方を出力する)。\n- per_page=20000固定で1ページに収まる前提(現状国・地域計265件×最大7年=1,590行で余裕)。仮に将来ページ分割される事態になれば明示的にthrowする(黙って1ページ目だけ使わない)。\n- User-Agentはリポジトリ内に共有定数が無かったため本ファイル内で自己完結させた(JPX系の既存ファイルも同様に個別リテラルを持つ現状の慣例に合わせた)。個人のメールアドレス等PIIは含めていない。\n- 新規npm依存の追加なし(package.json/pnpm-lock.yaml 差分ゼロ。fetch/URLSearchParams/node:fs/node:path/node:url のみ使用)。\n\n検証: `pnpm typecheck && pnpm lint && pnpm test` を root で実行し、全てグリーン(test: 140ファイル/1698件全て成功、うち本モジュールは28件)。コミットのみ、pushはしていない。"
+  },
+  "verify": {
+    "ok": true,
+    "checked": "services/moneyflow/lib/sources/worldbank-marketcap.ts と同ディレクトリのtest/fixtureを、実際のWorld Bank API(現在のライブレスポンス)と突合して反証的に検証。fixture中の8値(JP2023/2024/2025, US2023, DE2023, World2023, XD2024/2025)をライブ再取得と完全一致確認。さらにworktree内の実装コードをtsxでimportし、fetch→parse→toObservations→toObservationRecordsの実パイプラインを現在のAPIに対して実行し、fixtureベースのテスト結果と一致することを確認(一時ファイルは/tmpに作成し検証後削除、worktreeは無変更)。指標定義(sourceNote/sourceOrganization)とCC BY-4.0ライセンス文言も公式ページで裏取り。単位・符号・期間の取り違えなし。isYearPublished/latestPublishedYearは『年が丸ごとレスポンスから欠落するケース』と『行はあるがvalue:nullのケース』の両方を実データで再現し正しく動作することを確認。vitest 28件全パス、pnpm-lock.yaml/package.json差分なしも確認済み。",
+    "problems": [
+      {
+        "severity": "low",
+        "summary": "parseCountryMetaResponse の regionValue が空文字列でも throw されず isAggregate=false に静かに倒れる",
+        "fix": "region.value が欠落・空文字列なら throw する検証を追加(entityId/iso3/name と同じ非空チェックパターンに揃える)。現状の実データ(fixture・ライブ再取得とも295行全件)には該当ケースなし。"
+      },
+      {
+        "severity": "low",
+        "summary": "parseMarketCapResponse の entityName が空文字列でも throw されず素通りする",
+        "fix": "実害は現状ゼロ(toObservationsは行レベルのentityNameでなくmeta.nameを採用するため最終出力には使われない)。同ファイル内の検証一貫性のためentityIdと同様の非空検証を追加するか、表示に使わない値である旨をコメントで明示する。"
+      }
+    ]
+  }
+}

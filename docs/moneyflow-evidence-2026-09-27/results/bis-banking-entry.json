@@ -1,0 +1,45 @@
+{
+  "key": "bis-banking",
+  "phase": 5,
+  "build": {
+    "status": "implemented",
+    "branch": "feat/moneyflow-src-bis-banking",
+    "worktree_path": "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-15",
+    "commit": "90050215f14e310c071a32fbb171fae44c3b675b",
+    "files": [
+      "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-15/services/moneyflow/lib/sources/bis-banking.ts",
+      "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-15/services/moneyflow/lib/sources/bis-banking.test.ts",
+      "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-15/services/moneyflow/lib/sources/fixtures/bis-lbs-claims-jp.csv",
+      "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-15/services/moneyflow/lib/sources/fixtures/bis-lbs-liabilities-jp.csv"
+    ],
+    "indicators": [
+      "bis_lbs_cross_border_claims_jp — 対外与信残高（日本所在銀行→相手国、BIS所在地ベース、国別、四半期、holdings_stock、要件R4）",
+      "bis_lbs_cross_border_liabilities_jp — 対外負債残高（日本所在銀行→相手国、BIS所在地ベース、国別、四半期、holdings_stock、要件R4）"
+    ],
+    "schedule": "BISのLocational Banking Statisticsは四半期公表、公表ラグは四半期末から約1四半期(3〜4か月)。mostRecentEndedQuarter()が暦上「直近に終わった四半期」を計算し、resolvePublicationStatus()が取得データの実際の最新四半期(latestQuarterFromRows、全世界合計行=5Jを錨に判定)と突き合わせてisCaughtUpを返す。ラグ長を推測でハードコードせず、実データとの突合のみで判定する設計。2026-09-27時点でBISへ2026-Q2を直接問い合わせ「該当なし(HTTP 404)」を実機確認済みで、latestは2026-Q1・isCaughtUp=falseになることをテストで固定化した(通常のラグであり異常ではない)。",
+    "verified_values": "フィクスチャ(実データ、2026-09-27取得、加工なし)に対する既知値検証6件(テストで固定):\nclaims 2026-Q1: US=2,379,304.268 / GB=458,048.538 / DE=128,644.097 (百万米ドル)\nliabilities 2026-Q1: US=525,905.198 / GB=473,663.377 / DE=40,403.103 (百万米ドル)\nいずれも fixtures/bis-lbs-{claims,liabilities}-jp.csv 内の該当行そのものと一致することをテストで確認(services/moneyflow/lib/sources/bis-banking.test.ts の「既知値」テスト群)。加えて全世界合計行(L_CP_COUNTRY=5J)2026-Q1のclaims=5,257,195.619も別テストで確認。原本はBIS Data Portal SDMX API (https://stats.bis.org/api/v2/data/dataflow/BIS/WS_LBS_D_PUB/1.0/Q.S.{C|L}.A.TO1.A.5J.A.JP.A..N?format=csv&lastNObservations=2) から直接取得したもの。",
+    "license": "BIS「Terms of permitted use of BIS statistics」(2026-09-27にhttps://data.bis.org/help/legalの実文言を取得して確認): 出典(BIS)を明記すれば商用利用を含め無償・無許諾で再利用可能(JPX系ソースの多くがcommercial_use=prohibitedなのと対照的)。条件: (a)翻訳時は非公式訳と明記, (b)BISの推奨・提携を示唆しない, (c)商用製品組込みで追加課金しない, (d)投資助言と解釈されうる記載をしない。API自体はas-is提供でBISはIPアドレス単位のアクセス制限・停止を予告なく行う権利を留保(公開されたレート制限数値は無し)。個人利用のライセンスタグ(personal-only)は不要な数少ない取得元。",
+    "notes": "実装範囲: services/moneyflow/lib/sources/bis-banking.ts に (1) URL解決+fetch関数(bisBankingUrl/fetchBisBankingCsv/fetchBisBanking, 1回の実行でclaims+liabilitiesの計2リクエストのみ), (2) 純関数パーサ(parseBisBankingCsv, 様式異常はthrow), (3) 期間判定(latestQuarterFromRows/mostRecentEndedQuarter/resolvePublicationStatus), (4) 指標定義(BIS_BANKING_INDICATORS)を実装。縦長レコード変換関数(toMoneyflowObservations)も実装。新規npm依存は追加していない(fetch標準APIとCSVの手動split、BISはJSON/CSVを直接返す公開APIでunpdf/xlsxは不要)。Notion書込(recordPrimaryData呼び出し)は指示通り実施していない(統合担当の担当範囲)。\n\n設計上の判断・偏差:\n- 取得元インベントリ(compact.json)はこの取得元をrequirements=[\"R1\",\"R4\"]とタグ付けしていたが、R1(東証33業種)は国別の国際銀行統計と論理的な対応関係が無いため、指標定義ではR4のみを付与した(架空の関連付けを避けるルール1の趣旨)。統合側で別解釈が必要ならこの点を確認してほしい。\n- SDMX次元のうちL_PARENT_CTY(報告銀行の国籍)=5J(全国籍集計)を固定した。実データ確認の結果、相手国別の内訳はこの値でのみ公表されており、JP単独(日系銀行のみ)は全世界合計行にしか存在しない。\n- L_CP_SECTOR(相手部門)=A(全部門合算)に固定。相手部門別(非銀行部門のみ等)の内訳も一部の国では取得可能だが、今回はスコープ外とした(将来の拡張余地として関数コメントに残していない — 必要なら別PRで追加を検討)。\n- L_POS_TYPE=N(Cross-border)に固定し、Local(R)は除外(相手国が居住国と一致するため国別内訳の意味が無い)。\n- UAはブラウザ偽装ではなく「kabulab-cf-moneyflow/1.0」という識別可能なUser-Agentを送る設計にした。理由: BISは2026-09-27の実機確認でUA無しでも200を返す公開APIであり(JPXのようなbot対策は未検出)、利用規約がAPIのas-is提供・IP単位アクセス制限の留保を明記しているため、素性を偽るより名乗る方が誠実と判断した(JPX系ソースのブラウザUA共有パターンとは意図的に方針を分けた — 既存の共通UA定数モジュールはリポジトリに存在せず、各ソースファイルへの重複定義が既存パターンだったため、それに倣いローカル定義とした)。\n- フィクスチャはlastNObservations=2で取得した実データ全量(各262行、間引きなし)。歴史的に消滅した国・地域コード(AN/CS/DD/SU/YU等)のNaN行も実データのまま残っており、parseBisBankingCsv/toMoneyflowObservationsがこれらを0で埋めずに除外する挙動をテストで確認している。\n\n保留事項: root権限操作(push/PR作成/Notion本番書込)は指示通り未実施。他の並行エージェント(feat/moneyflow-src-imf-cpis, feat/moneyflow-src-worldbank-marketcap, feat/moneyflow-src-bop-regional, feat/moneyflow-src-mof-portfolio-flows, feat/moneyflow-src-jsda-bonds, feat/moneyflow-phase1)が同時に別ブランチ・別worktreeでPhase 0/Phase 5の他ソースを実装中と推測されるが、それらのファイルには一切触れていない(services/moneyflow/lib/sources/bis-banking.{ts,test.ts}とそのfixturesのみ新規作成)。統合担当がPhase 0の共通基盤(Notion DB ensure、archive.tsのparentPageId対応等)とマージする際、本ファイルの型定義(MoneyflowObservation/MoneyflowIndicatorDefinition)が他ソースの出力形式と一致するか要すり合わせ。"
+  },
+  "verify": {
+    "ok": false,
+    "checked": "services/moneyflow/lib/sources/bis-banking.ts / bis-banking.test.ts / fixtures (worktree wf_a6c4999f-a98-15, branch feat/moneyflow-src-bis-banking, commit 90050215f14e310c071a32fbb171fae44c3b675b) — BIS国際銀行統計(所在地ベース、国別残高、四半期)パーサの反証検証。今回のセッションでBIS Data Portal SDMX API (stats.bis.org) から実際にclaims/liabilities CSVを独自取得し(bisBankingUrl/fetchBisBanking実行、/tmp/bis_claims_live.csv・/tmp/bis_liab_live.csv・/tmp/verify_bis_banking.ts)、フィクスチャとバイト完全一致を確認。実装の parseBisBankingCsv/toMoneyflowObservations/latestQuarterFromRows/resolvePublicationStatus を通し、US/GB/DE のclaims/liabilities 2026-Q1既知値6件+世界合計行(5J)1件、計7件の突合成功。BISの2026-Q2データが実際にHTTP 404であることも直接クエリで再確認。BISのSDMX構造定義(datastructure/BIS/BIS_LBS_DISS)を取得しL_POSITION(C=Total claims/L=Total liabilities)・L_POS_TYPE(N=Cross-border)・L_MEASURE(S=Amounts outstanding/Stocks)・UNIT_MULT(6=Millions)・reference area codelist(JP/US/GB/DE等)の定義がコードの前提・指標定義文言と一致することを確認。data.bis.org/help/legalのライセンス文言も引用一致を確認。vitest run で27件全テストpass。worktreeへの変更・コミットは行っていない(git status clean)。",
+    "problems": [
+      {
+        "severity": "medium",
+        "summary": "toMoneyflowObservations が「相手国」区分から国際機関コード(1C)を除外していない",
+        "fix": "toMoneyflowObservations 内の除外条件 `row.counterpartyCountry === ALL_COUNTRIES_CODE` に加えて `1C`(International organisations、BISのCL_BIS_IF_REF_AREA参照)も除外するか、category とは別に isInternationalOrg 等のフラグ/別カテゴリで明示区分する。実データで2026-Q1にclaims=14,873.514・liabilities=890.125(百万USD)の非ゼロ値が存在し、5Jのような欠測にならず素通りすることを実機で確認済み。"
+      },
+      {
+        "severity": "medium",
+        "summary": "isCaughtUp はBISのこの系列に対し構造的にほぼ恒常的にfalseになり、統合層が素朴にスキップ判定へ使うと指標が永久に取込まれない懸念",
+        "fix": "統合実装(このPRの範囲外)に着手する前に、resolvePublicationStatus/isCaughtUp の用途(取込スキップの可否判定か、単なる情報記録か)を実装者と確認する。少なくとも「前回取込時のlatestAvailableQuarterから進んだか」を比較する仕組みを別途設け、isCaughtUp単体を取込ゲートに使わない設計にする。"
+      },
+      {
+        "severity": "low",
+        "summary": "L_PARENT_CTY=5J固定の根拠コメント(「JP単独は全世界合計行にしか出てこない」)が実機確認と食い違う",
+        "fix": "コメントを「L_REP_CTY=JP × L_PARENT_CTY=JP の系列はいかなる L_CP_COUNTRY(5J含む)でも公表されていない(実機確認: 404)」に修正する。挙動(常にL_PARENT_CTY=5Jを使う)自体は変更不要。"
+      }
+    ]
+  }
+}

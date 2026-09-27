@@ -1,0 +1,49 @@
+{
+  "key": "cftc-cot-jpy",
+  "phase": 4,
+  "build": {
+    "status": "implemented",
+    "branch": "feat/moneyflow-src-cftc-cot-jpy",
+    "worktree_path": "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-13",
+    "commit": "1b1319f92e4d8a4a8cd12553754ae6ddc68b0f8e",
+    "files": [
+      "services/moneyflow/lib/sources/cftc-cot-jpy.ts",
+      "services/moneyflow/lib/sources/cftc-cot-jpy.test.ts",
+      "services/moneyflow/lib/sources/fixtures/cftc-cot-jpy-legacy-futures-only.json"
+    ],
+    "indicators": [
+      "cftc_cot_jpy_noncomm_net",
+      "cftc_cot_jpy_noncomm_long",
+      "cftc_cot_jpy_noncomm_short",
+      "cftc_cot_jpy_comm_net",
+      "cftc_cot_jpy_open_interest",
+      "cftc_cot_nikkei225_yen_noncomm_net",
+      "cftc_cot_nikkei225_yen_noncomm_long",
+      "cftc_cot_nikkei225_yen_noncomm_short",
+      "cftc_cot_nikkei225_yen_comm_net",
+      "cftc_cot_nikkei225_yen_open_interest"
+    ],
+    "schedule": "週次。CFTC は毎週金曜 米国東部時間(ET) 15:30 に、直前火曜終値時点のデータを公表する(Legacy Futures Only report)。determineExpectedCftcCotPeriod(now) が「今の時点で公表済みのはずの直前火曜」を計算し、determineCftcCotAvailability(now, 実測の最新基準日) が「実測 < 期待」なら status:\"not_yet_published\" を返す(throw しない)。実測が期待より新しい場合(米国祝日等で前後した場合)は published 側に倒れる安全設計。resolveCftcCotJpy() がこれらを統合し、未公表時は throw せず not_yet_published を返す。",
+    "verified_values": "2026-09-27 に取得した実データ(fixtures/cftc-cot-jpy-legacy-futures-only.json、Socrata API 直近8週×2契約=16行)のうち、2026-09-22時点分を一次レポートページ https://www.cftc.gov/dea/futures/deacmesf.htm (人間向けHTML、Socrata APIとは独立の同一原本の別レンダリング) を目視して突合済み: JAPANESE YEN(コード097741) OPEN INTEREST=378,701 / NON-COMMERCIAL LONG=192,274 / SHORT=120,292 / COMMERCIAL LONG=143,954 / SHORT=220,368。NIKKEI STOCK AVERAGE YEN DENOM(コード240743) OPEN INTEREST=21,974 / NON-COMMERCIAL LONG=4,199 / SHORT=2,654 / COMMERCIAL LONG=11,364 / SHORT=6,758。いずれもSocrata JSON値と一致することを確認済み(計10個の実測値をテストでアサート、要求の3個以上を満たす)。",
+    "license": "CFTC(米国連邦政府機関)の統計はパブリックドメイン。商用利用可、ログイン・APIキー不要。出典明記が望ましいが必須ではない。Socrata App Token は任意(大量バックフィル時のレート制限緩和のみに有効、今回の週次1回取得では不要と判断し未実装)。個人利用限定ではない(JPX等とは異なりkabulabの公開Web掲載に制約なし)。",
+    "notes": "実装範囲: services/moneyflow/lib/sources/cftc-cot-jpy.ts 1ファイルとそのテスト・フィクスチャのみ。他の取得元ファイル・共通統合基盤(scripts/moneyflow/ingest.ts 等)には一切触れていない。Notion書込コードは含めていない(recordPrimaryData の入力を組む純関数 cftcCotJpyArchiveInput のみ export。実際の呼び出しは統合担当のingestスクリプトが行う)。新規npm依存の追加なし(fetch・Intl.DateTimeFormat・URLSearchParamsのみ、いずれもNode/Workers標準)。\n\n設計上の判断・保留事項:\n1. 日経平均先物はCMEに米ドル建て(コード240741)と円建て(コード240743)の2種類が上場しているが、米ドル建ては出来高が薄く最低トレーダー数などの報告基準を満たさない週は公表対象から除外され、実測では2026-03-03を最後に約半年間データが欠落している(確認済み)。そのため毎週安定して公表される円建て(240743)のみを追跡対象とした。米ドル建て版を追加観測するかは統合担当の判断に委ねる(欠測が多く定期観測に不向きなため今回は対象外とした)。\n2. レポート種別はLegacy(Futures Only、Non-Commercial/Commercial/Nonreportableの伝統的3区分)を採用した。タスク文言の「非商業筋ネット等」という言い回しに最も直接対応する区分のため。Disaggregated/TFF(dealer/asset manager/leveraged funds/other reportables)への切替や追加は将来の拡張として可能(同じSocrata基盤・同じ様式検証パターンを流用できる)。\n3. isApproximate=true / isEstimated=false とした。CFTC COTの数値自体はCFTC集計の実測値(推定ではない)だが、「日本のお金の流れ」を測るという計画上の目的に対しては米国上場市場のポジション(ストック)による参考指標であり、真の資金フローの近似にすぎないため。\n4. 「まだ公表されていない」判定はET(America/New_York)のIntl.DateTimeFormatで実装し、暦日演算はUTC正午に固定したDateで行うことでDST境界のバグを回避した。テストで金曜15:30の境界(前後30分)・日曜・火曜0時のケースを固定日時で検証済み。\n5. root の pnpm typecheck / pnpm lint / pnpm test をすべて実行し、既存140テストファイル・1700テスト(新規30テスト含む)がグリーンであることを確認した。push・PR作成はしていない(指示通りworktree内でコミットまでで停止)。\n6. 統合担当への申し送り: 観測ログ(MoneyflowObservationRecord)の period/indicatorKey/category/value/unit/isApproximate/isEstimated の型は本ファイル内で自己完結して定義した(他ソースとの共有型モジュールが存在しなかったため)。複数取得元を1つの観測ログDBへ書く際は、この型を共通モジュールへ引き上げる調整が必要になる可能性がある。"
+  },
+  "verify": {
+    "ok": false,
+    "checked": "worktree .claude/worktrees/wf_a6c4999f-a98-13 (branch feat/moneyflow-src-cftc-cot-jpy, commit 1b1319f) の services/moneyflow/lib/sources/cftc-cot-jpy.ts / .test.ts / fixtures を読み、以下を実施:\n(1) 数値突合: /tmp から CFTC Socrata API (6dca-aqww) を自分で fetch (2026-09-27 UTC 02:39 実行) し、fixture と bit-for-bit 一致することを確認 (diff終了コード0)。さらに一次レポートページ https://www.cftc.gov/dea/futures/deacmesf.htm を自分でも fetch し、JAPANESE YEN (097741) と NIKKEI STOCK AVERAGE YEN DENOM (240743) の 2026-09-22 分の OPEN INTEREST / NON-COMMERCIAL LONG・SHORT / COMMERCIAL LONG・SHORT (計10値) を目視突合、全て一致。contract_units の実データも expectedContractUnitsSubstring と一致確認。\n(2) 単位・符号・期間: noncommLong/Short, commLong/Short ↔ API フィールド名の対応を全項目チェックし取り違えなし。ネット=買い-売りの符号規約はJPY先物について「買い越し=円高方向」で経済学的に正しい (CME上場JPY先物buy=ロングJPY)。8週分のasOfDateが全てTue曜日であることをPythonで検証。determineExpectedCftcCotPeriodを月火水木金(前後)日曜の全曜日分岐について手動トレースし、テストケース含め妥当性を確認。\n(3) 指標定義の実態整合性: buildIndicatorDefinitions()の出力を実際にtsxで実行し10指標全ての plainDescription/definitionを出力・精査 → 下記の重大な不整合を発見(バグ1)。\n(4) 公表前スキップ判定: resolveCftcCotJpy()を実際にnow=現在時刻・実APIで実行し、published/asOfDate=2026-09-22が正しく返ることを確認。USD建て日経平均先物(240741)が2026-03-03以降半年公表されていないという実装者の主張もSocrata APIへの直接クエリで独立に確認済み(除外判断は妥当)。\nその他: npx vitest run で既存30テスト全て pass を確認。CFTC_COT_HUMAN_REPORT_URL / CFTC_COT_PORTAL_URL / Socrata endpoint はいずれもHTTP 200で到達可能。",
+    "problems": [
+      {
+        "severity": "high",
+        "summary": "METRIC_SPECS の plainDescription がJPY先物固有の数値例(19.2万枚/12.0万枚/+7.2万枚/37.9万枚)と「円高方向への強気」という通貨方向の解釈を全契約共通でハードコードしており、buildIndicatorDefinitions()のループでこれをnikkei225_yen契約にもそのまま適用しているため、cftc_cot_nikkei225_yen_noncomm_net / _noncomm_long / _noncomm_short / _open_interest の4指標のバルーンヘルプに、実際は無関係なJPY先物の数値と「円高」という誤った方向解釈がそのまま表示される(comm_netのみ具体例が無いため無事)。実際にworktree内でCFTC_COT_JPY_INDICATORSを出力して確認済み: 例えばcftc_cot_nikkei225_yen_noncomm_netのplainDescriptionは『CME上場の日経平均先物 円建て...について...例えば2026-09-22時点の円先物では買い建玉19.2万枚・売り建玉12.0万枚でネット+7.2万枚の「買い越し」(円高方向への強気)』となっているが、日経平均先物(円建て)の2026-09-22実測値は買い4,199枚・売り2,654枚・ネット+1,545枚・OI21,974枚であり、しかも日経平均先物のネットロングは『株価指数の先高観』を示すのであって『円高方向』とは無関係。open_interest指標でも同様に日経平均のOIツールチップに『約37.9万枚』というJPY先物の値が出る。",
+        "failure_scenario": "投資初心者(ルール7の想定ユーザー)が本番UIでCFTC COT日経平均先物(円建て)の非商業筋ネットポジション/買い建玉/売り建玉/建玉残高のいずれかにマウスオーバーまたはタップすると、実際の日経平均先物の数値(4,199/2,654/1,545/21,974枚)ではなくJPY先物の数値(192,274/120,292/71,982/378,701枚)が桁違いに表示され、さらに『円高方向への強気』という誤った経済的解釈(実際は株価指数の強気を示す)を読んでしまい、誤った投資判断材料を与える。ルール7『定義は財務的に正確に』およびタスク項目(3)『指標定義の「何を測るかが実態と合っているか」』に反する。",
+        "fix": "METRIC_SPECS.plainDescription (特にnoncomm_net/noncomm_long/noncomm_short/open_interestの4つ)を、埋め込む数値例と方向解釈の両方についてcontract(引数c、実質c.key)ごとに分岐させる。JPY契約用には現状の円先物の実測値と『円高方向』解釈を残し、nikkei225_yen契約用には日経平均先物の実測値(買い4,199/売り2,654/ネット+1,545/OI21,974)と、通貨方向とは無関係な正しい経済解釈(例:『株価指数の先高観を示す投機的ポジションで、円相場の方向とは無関係』)を新たに用意する。再発防止として、cftc-cot-jpy.test.tsのCFTC_COT_JPY_INDICATORSのテスト(現状はplainDescription.length > 10のみ)に、各契約のplainDescriptionが他契約のdisplayNameや数値を含まないことを検証するアサーションを追加する。"
+      },
+      {
+        "severity": "low",
+        "summary": "既存テスト(cftc-cot-jpy.test.ts)は10指標それぞれのplainDescription/definitionについて『10文字より長いか』『sourceUrlがhttps://で始まるか』程度しか検証しておらず、契約ごとに内容が正しく作り分けられているかを検証していない。そのため上記のnikkei225_yen向けplainDescriptionの内容バグ(JPY先物の数値・解釈の混入)がテストで検出されずに『140テストファイル・1700テストがグリーン』の報告に含まれてしまった。",
+        "failure_scenario": "今回と同種の『METRIC_SPECS/契約横断のテンプレートに特定契約専用の文言をハードコードする』バグが将来別の指標や別の取得元で再発しても、現行のテスト(文字数・URL形式のみのチェック)ではグリーンのまま見逃される。",
+        "fix": "CFTC_COT_JPY_INDICATORSのテストに、各indicatorのplainDescriptionが自分のcontract.displayNameを含み他方のcontract.displayNameを含まないこと、および埋め込み数値例がその契約の実測値(fixtureのrows)と整合すること(またはハードコード数値例を排除して契約の実測値から動的生成すること)を検証するケースを追加する。"
+      }
+    ]
+  }
+}

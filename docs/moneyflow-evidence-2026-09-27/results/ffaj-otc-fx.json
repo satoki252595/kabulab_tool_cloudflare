@@ -1,0 +1,56 @@
+{
+  "key": "ffaj-otc-fx",
+  "phase": 4,
+  "build": {
+    "status": "implemented",
+    "branch": "feat/moneyflow-src-ffaj-otc-fx",
+    "worktree_path": "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-9",
+    "commit": "c2ebdbf (feat(moneyflow): FFAJ 店頭FX月次速報の取得元パーサを追加) — 未push・未マージ。origin/main には services/moneyflow/ 自体がまだ無い(Phase0が未マージ)ため、このディレクトリはこのコミットで新規作成。",
+    "files": [
+      "services/moneyflow/lib/sources/ffaj-otc-fx.ts",
+      "services/moneyflow/lib/sources/ffaj-otc-fx.test.ts",
+      "services/moneyflow/lib/sources/__fixtures__/ffaj-otc-fx/README.md",
+      "services/moneyflow/lib/sources/__fixtures__/ffaj-otc-fx/index-page.sample.html"
+    ],
+    "indicators": [
+      "ffaj_otc_fx_turnover (gross_turnover, 百万円, 市場全体の月間取引金額)",
+      "ffaj_otc_fx_short_position (positions, 百万円, 月末売建玉)",
+      "ffaj_otc_fx_long_position (positions, 百万円, 月末買建玉)",
+      "ffaj_otc_fx_open_position_total (positions, 百万円, 建玉合計)",
+      "ffaj_otc_fx_net_long_position (positions, 百万円, 通貨別ネット買い越し=買建-売建, 区分=JPY/USD/EUR/GBP/AUD/NZD/CHF/CAD/ZARの9通貨)",
+      "ffaj_otc_fx_customer_deposit_net_change (fund_flow, 円, 顧客預託証拠金の月間純増減=原資料の定義そのまま「③-前月③-①+②」)",
+      "ffaj_otc_fx_deposit_required_balance (holdings_stock, 円, 顧客区分管理必要額の月末残高)",
+      "ffaj_otc_fx_deposit_trust_balance (holdings_stock, 円, 顧客区分管理信託額の月末残高)"
+    ],
+    "schedule": "月次速報のみ(週/四半期/年次版は無い)。資料室ページ (https://www.ffaj.or.jp/library/performance/fx_flash/) を毎回1回取得し、ページの「更新日」と「YYYY年M月」見出しから最新公表月を実測(推測・計算では出さない)。resolveFfajOtcFxPeriodStatus(targetMonth, latestPublishedMonth) が target<=latest なら {status:\"published\"}、target>latest なら {status:\"not_yet_published\", latestPublishedMonth} を返す型で明示。2026-09-27時点の実測: 更新日2026-09-14、最新公表月2026-08(2026-09分はnot_yet_published)。公表ラグは月末から約2週間。",
+    "verified_values": "2026-09-27に実ファイル4本(index HTML + trading_vol_and_position.xls + open_position_with_mc.xls + deposit_amount_information.xls)を実際にダウンロードし、production パーサ(xlsxパッケージ経由)で解析、以下がページ本文の記載および xls セル値と一致することを確認(詳細と検証手順は services/moneyflow/lib/sources/__fixtures__/ffaj-otc-fx/README.md): 2026年8月分で 取引金額825,716,490百万円(=8,257,164.9億円、ページ表示「出来高8,257,164億円」と一致)/ 売建4,786,850百万円(ページ「売建玉47,868億円」)/ 買建7,377,326百万円(ページ「買建玉73,773億円」)/ 建玉計12,164,177百万円(ページ「建玉合計121,641億円」)/ JPY通貨ブロックの取引金額803,019,386・売建6,831,441・買建3,954,300・買越額-2,877,141(買建-売建と一致)/ 預託証拠金: 入金額264,885,433,584円・出金額263,339,509,817円・必要額1,920,655,895,456円・正味増減額67,271,782,392円・信託額1,985,850,459,013円・信託保全率103.39%。原本の所在: https://www.ffaj.or.jp/library/performance/fx_flash/ (2026年9月14日更新, 2026年8月分)。全214ヶ月(trading_vol_and_position)・137ヶ月(deposit)分を実ファイルに対して通しでパースし、様式崩れなしを確認。唯一の実データの癖として、正味増減額が系列先頭の2015-04だけ原資料が文字列\"na\"(計算不能、前月データなし)であることを発見し、null型で明示的に表現するよう実装・回帰テスト済み(0埋め・throwのどちらもしない)。",
+    "license": "commercial_use: unknown(未確認)。FFAJサイトの著作権表示(/exception/matters/, 2026-09-27確認)は「原則として協会が著作権を有する。著作権法を遵守すること」という一般的な文言のみで、JPX統計のような「商用目的のデータ収集・二次利用・再配信を許諾なく禁止する」明文条項は確認できなかった(JPX/くりっく365ほど明確な禁止ではない)。ただし商用可否自体は明記されていないため、個人利用の範囲に留め、公開経路(Notion含む)へ出す前に協会へ確認するか出典明記の範囲に限定することを各指標定義のusageTermsに明記した。bot対策・ログイン・CAPTCHAは無く、ブラウザ相当UAでの直接GETがHTTP 200で成功する(1回の実行でindex 1回+xls 3回=計4リクエストのみ)。",
+    "notes": "実装範囲: 資料室ページの4xlsのうち3つ(取引状況/主要通貨建玉/預託額情報)のみ対応。「通貨ペア別取引金額(trading_vol_by_cp.xls)」は対象外(全体・主要通貨別は他2ファイルで既に取れる、かつ2008年分まで並ぶ1.6MB超の巨大アーカイブで「最新月」中心の本取得元の範囲を超えるため)。新規npm依存は追加していない(xlsxパッケージのみ使用、src/shared/jpx/sectors.tsと同一)。ブラウザ相当UAはこのリポジトリに共有定数モジュールが存在しない(2026-09-27時点、複数ファイルが同じ文字列をそれぞれローカル複製)ため、本ファイルもローカル定義にした(他Phase4担当との衝突回避、統合時の共有化は妨げない)。\n\n重要な判断(要ユーザー確認): xls実ファイル3本の生バイト列はリポジトリにコミットしていない。理由はこのリポジトリがPUBLIC(gh repo viewで確認)であり、pipeline/tests/fixtures/(JPX・日証金)で「personal-onlyライセンスの実データをコミットしたこと自体が問題」として2026-09-12に履歴ごと除去された前例があるため、同じリスクを避けた。代わりにxlsxパッケージ自身でFFAJ実ファイルと同一のシート名・ヘッダー・列レイアウトを組み立て、そこに2026-09-27時点で実ファイル・ページ本文の両方で確認した実測値を埋め込んだテストにしている(README.mdに実測値と原本の場所を明記)。資料室ページのHTMLは値・タグ構造を改変しない実抜粋を委託してコミット済み(著作権リスクが低いと判断)。この判断はユーザー/統合担当が上書き可能で、実ファイルをコミットする方針にするならこのファイルだけ差し替えればよい。\n\n未実施: Notion書込(recordPrimaryData呼び出しは統合担当の役割、本モジュールはffajOtcFxArchiveInput()で入力を組み立てるだけ)、push、PR作成、他フェーズ(1-3, 5)との統合。root で pnpm typecheck && pnpm lint && pnpm test は全てPASS(140 test files / 1700 tests)。worktreeの一時検証スクリプト(inspect_xls*.mjs, verify_real.ts, diag.mjs)は削除済みでコミットに含まれていない。"
+  },
+  "verify": {
+    "ok": false,
+    "checked": "worktree /Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-9 (branch feat/moneyflow-src-ffaj-otc-fx, commit c2ebdbf) の services/moneyflow/lib/sources/ffaj-otc-fx.ts と ffaj-otc-fx.test.ts。2026-09-27に自分でFFAJ資料室ページ(https://www.ffaj.or.jp/library/performance/fx_flash/)と3xls(trading_vol_and_position.xls / open_position_with_mc.xls / deposit_amount_information.xls, 計4リクエスト)を/tmpへ独立取得し、tsx(/tmp/verify_ffaj.ts, worktreeの本番パーサ関数を直接import)で通し、原本(ページ本文・xlsセル・xlsハイパーリンク先の公式解説ページ・著作権ページ)と突合。worktreeへのコミット・ファイル変更は行っていない(git status clean)。npx vitest run で該当テスト30件もPASS確認。",
+    "problems": [
+      {
+        "severity": "high",
+        "summary": "指標 ffaj_otc_fx_customer_deposit_net_change の定義(plainExplanation/preciseDefinition/flowType)がFFAJ公式解説と実態が逆(資金フローではなくトレーディング損益)",
+        "fix": "FFAJ公式解説(https://www.ffaj.or.jp/library/performance/deposit/)に沿って『月間の実現損益+評価損益増減+スワップ損益の合計』へ定義を書き換え、flowTypeも'fund_flow'以外へ見直す"
+      },
+      {
+        "severity": "medium",
+        "summary": "fetchLatestFfajOtcFx()がindexページのlatestPublishedMonthと実際にダウンロードした3xlsの先頭行の月が一致することを検証していない",
+        "fix": "page.latestPublishedMonth === marketTotal[0].month === deposits[0].month をassertし、不一致ならthrowする"
+      },
+      {
+        "severity": "low",
+        "summary": "ヘッダー検証が列ラベルのみで、各xlsの「単位」表示行(百万円/円)を検証していない",
+        "fix": "単位表示セルを読み取りassertするか、単位をファイルから動的取得する"
+      },
+      {
+        "severity": "low",
+        "summary": "resolveFfajOtcFxPeriodStatus()は上限(未公表)判定のみで、各系列の実データ開始月より前を指定した場合の下限判定が無い",
+        "fix": "docstringに下限は別途データ有無で判定する旨を明記するか、seriesStartMonth引数で下限もカバーする"
+      }
+    ]
+  }
+}

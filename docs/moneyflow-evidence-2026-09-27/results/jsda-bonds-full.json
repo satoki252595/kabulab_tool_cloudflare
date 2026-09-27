@@ -1,0 +1,51 @@
+{
+  "key": "jsda-bonds",
+  "phase": 3,
+  "build": {
+    "status": "implemented",
+    "branch": "feat/moneyflow-src-jsda-bonds",
+    "worktree_path": "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-6",
+    "commit": "b8b373561b78feefc95990e18b2a84e17a5bd272",
+    "files": [
+      "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-6/services/moneyflow/lib/sources/jsda-bonds.ts",
+      "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-6/services/moneyflow/lib/sources/jsda-bonds.test.ts",
+      "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-6/services/moneyflow/lib/sources/fixtures/jsda-hakkou-2026-07.xlsx",
+      "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-6/services/moneyflow/lib/sources/fixtures/jsda-hakkou-index-2026-09-27.html",
+      "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-6/services/moneyflow/lib/sources/fixtures/jsda-toushika-index-discontinued-2026-09-27.html"
+    ],
+    "indicators": [
+      "jsda_bond_issuance (公社債発行額。種類別・月次。gross_turnover)",
+      "jsda_bond_redemption (公社債償還額。種類別・月次。gross_turnover)"
+    ],
+    "schedule": "公社債発行額・償還額: 月次。実測では対象月の約1.3〜2ヶ月後 (2026年7月分 → 2026-09-10掲載)。`resolveLatestIssuanceRedemption()` が一覧ページから最新の対象月・掲載日を都度解決するため固定スケジュールを決め打ちしない。`issuanceRedemptionPublicationStatus(latest, targetMonth)` が対象月が公表済みか (published/not_yet_published) を判定する。公社債投資家別売買高: 2018年6月発表分から発表様式が再編されこの粒度では終了しており、`investorTurnoverStatus(html)` は常に discontinued を返す (後継: 公社債店頭売買高 tentoubaibai/index.html、投資家別条件付売買(現先)月末残高 jyouken/index.html)。",
+    "verified_values": "実際に取得した fixtures/jsda-hakkou-2026-07.xlsx (JSDA一覧ページ https://www.jsda.or.jp/shiryoshitsu/toukei/hakkou/index.html が指す実ファイル) をNodeで直接開いて目視確認: (1) 国債（JGB）シート2026.07行 発行額(a)=14,524,109百万円→14,524,109,000,000円 (2) 同 償還合計(b)=8,048,861百万円→8,048,861,000,000円 (3) 非居住者債シート2026.07行 償還合計(b)=241,900百万円 (「転換額」列で列幅が変わるシートでも正しい列を読めることの検証) (4) 9種類の発行額・償還額の合計がそれぞれ「合計（Total）」シートの18,459,539百万円・10,634,271百万円と完全一致 (パーサの列特定ロジックの独立した裏取り)。加えて index.html フィクスチャから対象月=2026-07・掲載日=2026-09-10・ファイル名=hakkougakushoukanngaku.xlsxを、toushika index.html フィクスチャから「公社債投資家別売買高」全掲載ファイルの最終更新日が例外なく2018.5.21であることを検証。単体テスト14件は全て実フィクスチャに基づき、原本を目視確認していない値は一切使っていない。",
+    "license": "JSDA公社債発行額・償還額: 無料・ログイン不要で誰でも閲覧・ダウンロード可能。ただし高頻度アクセスへのレート制限(HTTP 429、Retry-Afterなし)を実地で確認済み(通常のバックオフ60/120/240秒では解消せず、10分待ってようやく解消)。商用の二次利用可否はJSDAサイト上で明記が見つからず不明(unknown)。既存のJPX由来データ(license_tag=personal-only)と同じ扱いとし、kabulabでは個人利用・非公開の範囲に限定して使う設計にした(indicator defのusageTermsに明記)。",
+    "notes": "担当取得元: 日本証券業協会(JSDA)。services/moneyflow/lib/sources/jsda-bonds.ts と .test.ts、実フィクスチャ3点を作成しコミット済み(push・マージ・Notion/D1書込はしていない)。新規npm依存は追加していない(xlsxパースは既存のxlsxパッケージ、PDFは不要だったのでunpdfは未使用)。\n\n【実装した内容】\n1. 公社債発行額・償還額(月次): resolveLatestIssuanceRedemption()で一覧ページから最新ファイルURL・対象月・掲載日を解決 → fetchFromJsda()で長めのバックオフ(30/90/240秒)付き取得 → parseIssuanceRedemptionWorkbook(bytes, targetMonth)で公社債10種類(合計含む)×指定月の発行額・償還額を円換算して抽出する純関数パーサ。シートごとに単位表記(百万円等)を都度検出し決め打ちしない設計、かつシートによってブロック幅が異なる(非居住者債は「転換額」列が挟まる)実際の様式差異をラベル駆動の列特定で吸収し、9種類の合計が「合計」シートと完全一致することまで検証した。\n2. issuanceRedemptionPublicationStatus()で「まだ公表されていない」を判定(一覧ページの掲載月と比較する設計。実ファイル内の空セル/0セルはシートによって不統一(先埋めありなし)で信頼できないと実データで判明したため、そちらは判定根拠に使わない設計にした)。\n3. JSDA_BONDS_INDICATORS に2指標(jsda_bond_issuance/jsda_bond_redemption)をキー・要件(R2)・測るもの・平易な説明・単位・出典・利用条件・頻度・限界つきでexport。toIssuanceRedemptionObservations()で縦長の観測レコードに変換する純関数もexport。\n4. issuanceRedemptionArchiveInput()でルール6用のNotionアーカイブ入力(service/key/source/metadata/files)を組み立てる純関数のみ用意(margin.tsと同じ設計方針で、実際のrecordPrimaryData()呼び出しは統合スクリプト側に委ねており、本モジュールではNotion書込をしていない)。\n\n【重要な発見・訂正】当初のタスク定義にあった「公社債投資家別売買高(月次xlsx)」を実地確認したところ、該当ページ(toushika/index.html)は2018年5月21日以降更新が止まっており(掲載ファイル全ての最終更新日が2018.5.21)、ページ本文に「平成30年6月発表分から発表様式を再編した」との明記があった。つまり投資家部門別×現物売買高という粒度は今日では存在しない。investorTurnoverStatus(html)はこの事実を実データ(ページ本文の再編告知テキスト)から検証し、discontinued状態と後継2統計(公社債店頭売買高=銘柄種類別のみで投資家別なし、投資家別条件付売買(現先)月末残高=投資家別だがレポ残高であり現物売買高ではない)のURLを型で返す設計にした。後継2統計自体のxlsxパーサは実装していない(元タスクが求めていたものと概念が異なる別統計であり、スコープ外と判断)。\n\n【429対応】JSDA一覧ページ・xlsxとも取得は成功しているが、途中で60/120/240秒の通常バックオフでは解消しない429ブロックを実地で複数回確認した(Anthropic自身のWebFetch経由でも同じ429)。10分待って再試行したところ200で成功し、その実体をフィクスチャにした。この経験を反映し、fetchFromJsda()の既定バックオフはNotionクライアントの上限(30秒)より意図的に長い[30秒,90秒,240秒]にし、使い切ったら明示的にthrowする設計にしている(呼び出し側=統合スクリプトが翌日以降の実行に持ち越す前提)。\n\nroot で pnpm typecheck && pnpm lint && pnpm test はいずれも成功(140ファイル/1684テスト全通過、うちjsda-bonds.test.tsは14件)。.env はシンボリックリンクのままコミットしていない。"
+  },
+  "verify": {
+    "ok": true,
+    "checked": "services/moneyflow/lib/sources/jsda-bonds.ts (b8b3735, worktree wf_a6c4999f-a98-6, ブランチ feat/moneyflow-src-jsda-bonds) を、コミット済みフィクスチャに加え自分で今しがた再取得した実データ（JSDA一覧ページ・xlsx本体、SHA-256でフィクスチャとバイト一致を確認）に対し、実モジュールの parseIssuanceRedemptionWorkbook/parseHakkouIndexHtml/issuanceRedemptionPublicationStatus を tsx で直接実行して反証検証した。加えて tsc --noEmit・eslint(対象2ファイル)・vitest(該当14件)を実行、いずれも成功。",
+    "problems": [
+      {
+        "severity": "medium",
+        "summary": "jsda_bond_redemption の説明文「その月に償還期日を迎えた公社債の金額」が、実際に読んでいる合計(b)列の中身（買入消却額に加え、転換社債・非居住者債では転換額=株式転換分も合算されている）と厳密には一致しない。実データ(2026.07、転換社債シート)で確認したところ、その月の当該シートの償還額600百万円は全額が転換額であり、現金償還は0円だった。",
+        "fix": "description/limitations に「買入消却・(CB等の)転換による減少分も合算されており、償還期日到来による現金償還のみではない」旨を明記するか、可能ならbondType別に転換額を合計(b)から除外して別項目にする。"
+      },
+      {
+        "severity": "medium",
+        "summary": "JSDA_BONDS_INDICATORS が定義するローカル型 MoneyflowIndicatorDef（label/requirements:string[]/measureKind/usageTerms/自由文frequency）が、同じmoneyflowサービスの正準スキーマ IndicatorDefInput（src/shared/notion-archive/moneyflow.ts、displayName/requirement単数/flowType/license:3値enum/frequency:4値enum、feat/moneyflow-phase1ブランチにのみ存在）と構造的に非互換。jsda-bondsブランチは phase1マージ前のコミットから分岐しているため気づけなかったのは無理もないが、マージ時に手動変換が必要で不整合バグの温床になりうる。",
+        "fix": "feat/moneyflow-phase1 を取り込んだ後、JSDA_BONDS_INDICATORS を IndicatorDefInput 形式に合わせて書き直す（requirements[0]→requirement、label→displayName、measureKind→flowType、usageTermsの文章とfrequencyの実測メモをlicense/frequencyの固定値+limitationsへ振り分け）。"
+      },
+      {
+        "severity": "low",
+        "summary": "investorTurnoverStatus() の lastUpdatedOn は「最終更新日：」を含む全アンカーを対象に文字列としての最大値を取るが、実フィクスチャには実データファイル(2018.5.21)以外に解説PDF等の古い日付(2015.8.20/2016.3.22)も同じ形式で混在している。今回はたまたま辞書式順序でデータファイルの日付が最大になるため正しい値を返すが、解説PDF側が将来更新されると無関係な日付を「統計の最終更新日」として誤報告しうる。",
+        "fix": "正規表現を実データファイル(tkb/配下のxls)へのリンクに限定するか、少なくともコード/テストのコメントで「全ファイル例外なく2018.5.21」という言い切りを「実データxlsファイルは全て2018.5.21（解説PDF等の付随資料を除く）」に修正する。"
+      },
+      {
+        "severity": "low",
+        "summary": "「発行額」が払込日(決済)ベースで集計されているという description の前提を、原典の解説PDF(files/hako.pdf)で確認しようとしたが、curl・WebFetch のいずれでも HTTP 429 (JSDA側のレート制限、Retry-Afterなし) が返り一次情報での裏取りができなかった。実装側の429対応方針の正しさ自体はこの429発生で逆に裏付けられたが、この一点の定義的正確さは今回未確認。",
+        "fix": "後日(429が解消するタイミングで) files/hako.pdf を取得し、発行額の集計基準(払込日/発行日)を確認して description の記述と突き合わせる。問題なければ対応不要。"
+      }
+    ]
+  }
+}

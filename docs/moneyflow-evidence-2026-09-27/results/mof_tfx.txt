@@ -1,0 +1,68 @@
+===== 取引所為替証拠金取引(くりっく365)/取引所CFD(くりっく株365) 過去データ・出来高推移
+{
+  "name": "取引所為替証拠金取引(くりっく365)/取引所CFD(くりっく株365) 過去データ・出来高推移",
+  "provider": "株式会社東京金融取引所(TFX)",
+  "url": "https://www.tfx.co.jp/historical/fx/transit_fx.html (くりっく株365側は https://www.tfx.co.jp/historical/cfd/transit_cfd.html)",
+  "measures": "取引所上場FX『くりっく365』の通貨ペア別月次出来高(枚数、1日平均併記)、月末建玉。姉妹サイトのくりっく株365(株価指数CFD)は同形式で別ページ(https://www.tfx.co.jp/historical/cfd/transit_cfd.html)。取引所取引のためFFAJの店頭FXとは別母集団(取引所清算 vs 相対)。",
+  "flow_type": "mixed",
+  "granularity": "通貨ペア別/銘柄別",
+  "frequency": "月次(ページ表示は直近7ヶ月分)、年次(過去3年分)",
+  "latency": "unknown(月次更新のタイミング未確認)",
+  "history": "ページ上表示は月次7ヶ月+年次3年分のみ。それ以前の『取引所月報(PDF)』は2021年12月版で終了しており、それ以降は本ページのHTML表示のみに一本化されている。",
+  "format": "HTML表(ダウンロード用CSV/Excelの有無は未確認、unknown)",
+  "access": "free_download",
+  "cost": "無料",
+  "commercial_use": "prohibited",
+  "automation_blockers": "実際に curl (ログイン無し・通常UAのみ) で両ページとも HTTP 200 で全文取得でき、robots.txt も `Allow:/` で全許可。テーブルはJS描画ではなくサーバー側で静的にレンダリングされた<table>要素4つ(月次出来高/年次出来高/月末建玉/年末建玉)としてHTMLソースに直接含まれており、ヘッドレスブラウザ不要・単純なHTMLパース(BeautifulSoup/cheerio等)で機械取得可能。ログイン壁・CAPTCHA・bot対策の類は確認できなかった。技術的な取得障害は事実上無いが、(1)表示が直近7ヶ月分+3年分のみのため長期系列化には定期取得の継続実施が必須、(2)無断複製・転用が規約で禁止されているため、取得した生データを社外/公開物として再配布・加工公開する前にTFXへの許諾確認が必要(内部分析用途に留めるか許諾を得るかの判断が要る)。",
+  "verdict": "verified",
+  "requirements": [
+    "R3"
+  ]
+}
+
+===== 対外及び対内証券売買契約等の状況(指定報告機関ベース)
+{
+  "name": "対外及び対内証券売買契約等の状況(指定報告機関ベース)",
+  "provider": "財務省国際局為替市場課",
+  "url": "https://www.mof.go.jp/policy/international_policy/reference/itn_transactions_in_securities/index.htm",
+  "measures": "指定報告機関(銀行等・金融商品取引業者・保険会社・投資信託委託会社・資産運用会社)経由の居住者⇔非居住者間の証券売買契約を集計。「取得-処分」の差引(プラス=取得超/マイナス=処分超)で公表され、投資家部門別・商品別(株式・投資ファンド持分/中長期債/短期債)にCSV(montha1.csv等)で細分化。海外投資家が日本株・日本国債をネットで買っているか売っているかが分かる代表的な指標(日次ニュースの「外国人買い越し」の元データ)。",
+  "flow_type": "net_flow",
+  "granularity": "商品別(株式等/中長期債/短期債)×投資家部門別(銀行等・投信・生保・その他機関投資家等)×居住者/非居住者",
+  "frequency": "週次(旬)＋月次",
+  "latency": "週次:翌週第4営業日、月次:翌月",
+  "history": "月次CSVは2005年1月分から確認(旧様式は別リンクでさらに遡れる可能性あり、未確認)",
+  "format": "CSV(ページ内に直接リンク)、e-Statでも統計表ID経由で提供(https://www.e-stat.go.jp/stat-search?layout=normal&toukei=00350505)",
+  "access": "free_download",
+  "cost": null,
+  "commercial_use": "attribution_required",
+  "automation_blockers": "ログイン・認証・CAPTCHA等のbot対策は一切確認されなかった。index.htm/data.htm/schedule.htmおよび各CSV(week.csv, montha1.csv, montha2.csv, monthb1〜4.csv, si.csv)は全てWebFetchで認証なし・直リンクで取得できた。ファイル名は固定(montha1.csv等)で更新の都度中身が差し替わる方式のため、cronでの定期取得に適する。唯一の留意点はschedule.htmに明記の通り公表時刻が毎回午前8:50であること、および『予定は変更される場合がある』旨の免責がある点(自動取得はこの時刻以降に走らせるべき)。e-Stat側(toukei=00350505)も同じ統計をAPI/CSV経由で提供しており代替取得経路として機能する。",
+  "verdict": "partially_verified",
+  "requirements": [
+    "R2",
+    "R4"
+  ]
+}
+
+===== 政府統計の総合窓口 e-Stat / e-Stat API機能
+{
+  "name": "政府統計の総合窓口 e-Stat / e-Stat API機能",
+  "provider": "総務省統計局・独立行政法人統計センター",
+  "url": "https://www.e-stat.go.jp/api/",
+  "measures": "財務省・金融庁等が公表する政府統計を横断的に検索・取得できる共通ポータル兼API基盤(データそのものではなく取得チャネル)。対外及び対内証券売買契約等の状況(統計表ID 00350505)などが実際にここから取得できることを確認済み。",
+  "flow_type": "mixed",
+  "granularity": "統合先の統計表による",
+  "frequency": "統合先の統計表による",
+  "latency": null,
+  "history": null,
+  "format": "XML/JSON/CSV(API)、ブラウザからのファイルダウンロードも可",
+  "access": "free_api_key",
+  "cost": "無料",
+  "commercial_use": "attribution_required",
+  "automation_blockers": "ログイン障壁やbot対策自体は見当たらないが、事例に挙げられた統計表(統計表ID 00350505「対外及び対内証券売買契約等の状況」/財務省)はe-Stat上で「データベース」検索では0件、「ファイル」検索でのみヒットする=e-Stat内部で「ファイル」登録区分。構造化クエリ用の統計データ取得機能(getStatsData、統計表ID+地域コード等を指定してJSON/XML/CSVを返す)はデータベース化された表が対象であり、ファイル区分の表には使えない可能性が高い。この区分の表はデータカタログ情報取得機能(getDataCatalog)でファイルのダウンロードURL(リンク情報)を取得し、財務省が上げた原本ファイル(CSV)をそのままHTTP取得する2段階の経路になる。また本表は国際/業務統計であり「地域コード」という次元自体が該当しない。財務省の一次公表ページURLは今回アクセスする",
+  "verdict": "partially_verified",
+  "requirements": [
+    "R2",
+    "R4"
+  ]
+}
+

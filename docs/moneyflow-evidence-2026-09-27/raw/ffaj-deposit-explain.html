@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8" />
+    <title>顧客預託金の増減額および増減口座数の割合に関する情報について（解説） | 一般社団法人金融先物取引業協会</title>
+    <!-- Global site tag (gtag.js) - Google Analytics -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=UA-143268327-1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'UA-143268327-1');
+</script>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css?family=Noto+Serif+JP:400,500" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css?family=Noto+Sans+JP:300,400,700" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+
+<link rel="stylesheet" href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/css/main.css?20230616">
+<meta name="viewport" content="width=device-width">
+
+
+
+
+
+
+
+
+
+<link rel="stylesheet" href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/css/utility.css?20230616">
+<script type="module" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/js/main.module.bundle.js" crossorigin></script>
+
+<script>
+  window.addEventListener('DOMContentLoaded', () => {
+    var vw = document.body.clientWidth;
+    document.documentElement.style.setProperty('--vw', vw + 'px');
+    
+    const vh = window.innerHeight * 0.01;
+    document.documentElement.style.setProperty("--vh", `${vh}px`);
+
+    //var vh = document.querySelector('html').clientHeight;
+    //document.documentElement.style.setProperty('--vh', vh + 'px');
+  });
+  window.addEventListener('resize', () => {
+    var vw = document.body.clientWidth;
+    document.documentElement.style.setProperty('--vw', vw + 'px');
+
+    const vh = window.innerHeight * 0.01;
+    document.documentElement.style.setProperty("--vh", `${vh}px`);
+
+    //var vh = document.body.clientHeight;
+    //var vh = document.querySelector('html').clientHeight;
+    //document.documentElement.style.setProperty('--vh', vw + 'px');
+  });
+</script></head>
+<body>
+    <header class="FFAJ-header">
+    <div class="FFAJ-header-masthead">
+        <div class="FFAJ-header__container">
+            <div class="FFAJ-header__identity"><a href="/"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/header_identity.png" alt="一般社団法人金融先物取引業協会"></a></div>
+            <div class="flex-grow">
+                <div class="display-flex justify-content-flex-end stretched large-unstretched align-items-center large-margin-vert-10px relative">
+                    <form class="FFAJ-header__search" action="https://www.google.co.jp/search" method="get"><input class="FFAJ-header__search__input" type="text" name="q" value="" placeholder="Googleで検索"><input type="hidden" name="domains" value="https://www.ffaj.or.jp/"><input type="hidden" name="sitesearch" value="https://www.ffaj.or.jp/"><input type="hidden" name="hl" value="ja"></form>
+                    <div class="FFAJ-header__text-size-menu">
+                        <button class="FFAJ-header__text-size-menu-button" data-toggle="menu" data-target="#textSizeMenuPanel">文字サイズ<span class="FFAJ-header__text-size-menu-button__arrow"></span></button>
+                        <div class="FFAJ-header__text-size-menu-panel" id="textSizeMenuPanel" data-menu>
+                            <div class="FAJ-header__text-size-menu__item"><button class="FAJ-header__text-size-menu__item-button" data-toggle="fontSize" data-size="small">小</button></div>
+                            <div class="FAJ-header__text-size-menu__item"><button class="FAJ-header__text-size-menu__item-button" data-toggle="fontSize" data-size="medium">中</button></div>
+                            <div class="FAJ-header__text-size-menu__item"><button class="FAJ-header__text-size-menu__item-button" data-toggle="fontSize" data-size="large">大</button></div>
+                        </div>
+                    </div>
+                    <div class="FFAJ-header__region-switcher">
+                        <ul class="FFAJ-header__region-switcher-list">
+                            <li class="FFAJ-header__region-switcher-list-item"><a class="FFAJ-header__region-switcher-list-item-alink active" href="/">JP</a></li>
+                            <li class="FFAJ-header__region-switcher-list-item"><a class="FFAJ-header__region-switcher-list-item-alink" href="/en/">EN</a></li>
+                        </ul>
+                    </div>
+                    <button class="FFAJ-header__toggle-button" data-toggle="drawer" data-target="#drawer">
+                        <div class="FFAJ-header__toggle-button-hamburger">
+                            <div class="FFAJ-header__toggle-button-bar"></div>
+                            <div class="FFAJ-header__toggle-button-bar"></div>
+                            <div class="FFAJ-header__toggle-button-bar"></div>
+                        </div>
+                        <div class="FFAJ-header__toggle-button-text">Menu</div>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="FFAJ-drawer fade" id="drawer">
+        <div class="FFAJ-drawer-content">
+            <div class="FFAJ-drawer__utility ">
+                <div class="display-flex align-items-center">
+                    <form class="FFAJ-drawer__search" action="https://www.google.co.jp/search" method="get"><input class="FFAJ-drawer__search__input" type="text" name="q" value="" placeholder="Googleで検索"><input type="hidden" name="domains" value="https://www.ffaj.or.jp/"><input type="hidden" name="sitesearch" value="https://www.ffaj.or.jp/"><input type="hidden" name="hl" value="ja"></form>
+                    <div class="FFAJ-drawer__region-switcher margin-left-auto">
+                        <ul class="FFAJ-drawer__region-switcher-list">
+                            <li class="FFAJ-drawer__region-switcher-list-item"><a class="FFAJ-drawer__region-switcher-list-item-alink active" href="/">JP</a></li>
+                            <li class="FFAJ-drawer__region-switcher-list-item"><a class="FFAJ-drawer__region-switcher-list-item-alink" href="/en/">EN</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <nav class="FFAJ-drawer-gnav">
+                <ul class="FFAJ-drawer-gnav__firstlayer-list">
+                                            <li class="FFAJ-drawer-gnav__firstlayer-item">
+                            <span class="FFAJ-drawer-gnav__firstlayer-term collapsed" data-toggle="collapse" data-target="#collapseDrawerMenu0">
+                                投資者の皆さま                                <svg class="FFAJ-drawer-gnav__firstlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                    <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-down"></use>
+                                </svg>
+                            </span>
+                            <ul class="FFAJ-drawer-gnav__secondlayer-list collapse" data-collapse id="collapseDrawerMenu0">
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="/investors/fx/" target="">
+                                            FX取引を行おうとする個人投資家の<br class='display-none large-display-inline'>皆さまへ                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                                                            <ul class="FFAJ-drawer-gnav__thirdlayer-list">
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="https://www.ffaj.or.jp/files/pdf/pages/binaryoption.pdf" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">学生の皆さまへ</a></li>
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/investors/movie-corner/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">見て分かる！ 動画コーナー</a></li>
+                                                                                    </ul>
+                                    
+                                                                                                            <span class="FFAJ-drawer-gnav__secondlayer-term">
+                                            投資教育                                            <!--<svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>-->
+                                        </span>
+                                    
+                                                                            <ul class="FFAJ-drawer-gnav__thirdlayer-list">
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/investors/education/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">Futures & Option</a></li>
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/investors/publications/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">書籍の紹介（通貨オプション入門）</a></li>
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/library/performance/survey_report/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">外為証拠金取引市場の動向</a></li>
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/investors/emerging_currency/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">新興国通貨等の基礎知識</a></li>
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="https://www.ffaj.or.jp/learning/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">FFAJの学ぼう！FX</a></li>
+                                                                                    </ul>
+                                    
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="/investors/complaint/" target="">
+                                            苦情・あっせんについて                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                    
+                                                            </ul>
+                        </li>
+                                            <li class="FFAJ-drawer-gnav__firstlayer-item">
+                            <span class="FFAJ-drawer-gnav__firstlayer-term collapsed" data-toggle="collapse" data-target="#collapseDrawerMenu1">
+                                協会について                                <svg class="FFAJ-drawer-gnav__firstlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                    <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-down"></use>
+                                </svg>
+                            </span>
+                            <ul class="FFAJ-drawer-gnav__secondlayer-list collapse" data-collapse id="collapseDrawerMenu1">
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="/about/outline/" target="">
+                                            協会の概要                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                    
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="/about/business/" target="">
+                                            協会の組織・業務                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                    
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="/about/rules/" target="">
+                                            定款・諸規則等                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                    
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="/about/publication/" target="">
+                                            刊行物のご案内                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                    
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="/about/material/" target="">
+                                            業務および財務等に関する資料                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                    
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="/about/access/" target="">
+                                            アクセス                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                    
+                                                            </ul>
+                        </li>
+                                            <li class="FFAJ-drawer-gnav__firstlayer-item">
+                            <span class="FFAJ-drawer-gnav__firstlayer-term collapsed" data-toggle="collapse" data-target="#collapseDrawerMenu2">
+                                会員情報                                <svg class="FFAJ-drawer-gnav__firstlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                    <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-down"></use>
+                                </svg>
+                            </span>
+                            <ul class="FFAJ-drawer-gnav__secondlayer-list collapse" data-collapse id="collapseDrawerMenu2">
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="/members/register/" target="">
+                                            会員・特別参加者名簿                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                    
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="/members/admission/" target="">
+                                            入退会について                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                    
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="/members/document/" target="">
+                                            登録業者一覧<br><span class='text-weight-400 large-text-xsmall'>（店頭FX取引、取引所FX取引、店頭バイナリーオプション取引）</span>                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                    
+                                                                                                            <span class="FFAJ-drawer-gnav__secondlayer-term">
+                                            会員・外務員処分                                            <!--<svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>-->
+                                        </span>
+                                    
+                                                                            <ul class="FFAJ-drawer-gnav__thirdlayer-list">
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/memers/reprimand-member/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">会員の処分</a></li>
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/members/reprimand-staff/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">外務員の処分</a></li>
+                                                                                    </ul>
+                                    
+                                                            </ul>
+                        </li>
+                                            <li class="FFAJ-drawer-gnav__firstlayer-item">
+                            <span class="FFAJ-drawer-gnav__firstlayer-term collapsed" data-toggle="collapse" data-target="#collapseDrawerMenu3">
+                                資料室                                <svg class="FFAJ-drawer-gnav__firstlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                    <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-down"></use>
+                                </svg>
+                            </span>
+                            <ul class="FFAJ-drawer-gnav__secondlayer-list collapse" data-collapse id="collapseDrawerMenu3">
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="/library/performance/" target="">
+                                            統計資料                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                                                            <ul class="FFAJ-drawer-gnav__thirdlayer-list">
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/library/performance/quarter_total/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">四半期統計</a></li>
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/library/performance/fx_flash/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">店頭FX月次速報</a></li>
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/library/performance/binary_monthly/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">個人向け店頭バイナリーオプション取引月次速報</a></li>
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/library/performance/survey_report/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">その他調査レポート等</a></li>
+                                                                                    </ul>
+                                    
+                                                                                                            <span class="FFAJ-drawer-gnav__secondlayer-term">
+                                            モニタリング関連資料                                            <!--<svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>-->
+                                        </span>
+                                    
+                                                                            <ul class="FFAJ-drawer-gnav__thirdlayer-list">
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/library/monitoring/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">ロスカット等未収金発生状況</a></li>
+                                                                                            <li class="FFAJ-drawer-gnav__thirdlayer-item"><a href="/library/monitoring/account/" class="FFAJ-drawer-gnav__thirdlayer-item-alink" target="">ロスカット等未収金発生口座数（月次・速報）</a></li>
+                                                                                    </ul>
+                                    
+                                                                                                            <a class="FFAJ-drawer-gnav__secondlayer-term" href="http://www.shouken-toukei.jp/" target="">
+                                            証券統計ポータルサイト                                            <svg class="FFAJ-drawer-gnav__secondlayer-term-angle-right-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#angle-right"></use>
+                                            </svg>
+                                        </a>
+                                    
+                                    
+                                                            </ul>
+                        </li>
+                                    </ul>
+            </nav>
+        </div>
+    </div>
+    <div class="FFAJ-navigation">
+        <div class="FFAJ-global">
+            <div class="FFAJ-global__container">
+                <nav class="FFAJ-global-nav">
+                    <ul class="FFAJ-global-nav-list">
+                                                    <li class="FFAJ-global-nav-item">
+                                <a href="/investors/" class="FFAJ-global-nav-item-alink">
+                                    <span class="FFAJ-global-nav-item-alink-text">投資者の皆さま</span>
+                                    <img class="FFAJ-global-nav-item-alink-icon" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/investors.svg" alt="" srcset="">
+                                                                            <img class="FFAJ-global-nav-item-alink-arrow" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/arrow.png" alt="" srcset="">
+                                                                        <span class="FFAJ-global-nav-item-alink-border"></span>
+                                </a>
+                            </li>
+                                                    <li class="FFAJ-global-nav-item">
+                                <a href="/about/" class="FFAJ-global-nav-item-alink">
+                                    <span class="FFAJ-global-nav-item-alink-text">協会について</span>
+                                    <img class="FFAJ-global-nav-item-alink-icon" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/about.svg" alt="" srcset="">
+                                                                            <img class="FFAJ-global-nav-item-alink-arrow" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/arrow.png" alt="" srcset="">
+                                                                        <span class="FFAJ-global-nav-item-alink-border"></span>
+                                </a>
+                            </li>
+                                                    <li class="FFAJ-global-nav-item">
+                                <a href="/members/" class="FFAJ-global-nav-item-alink">
+                                    <span class="FFAJ-global-nav-item-alink-text">会員情報</span>
+                                    <img class="FFAJ-global-nav-item-alink-icon" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/members.svg" alt="" srcset="">
+                                                                            <img class="FFAJ-global-nav-item-alink-arrow" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/arrow.png" alt="" srcset="">
+                                                                        <span class="FFAJ-global-nav-item-alink-border"></span>
+                                </a>
+                            </li>
+                                                    <li class="FFAJ-global-nav-item">
+                                <a href="/library/" class="FFAJ-global-nav-item-alink">
+                                    <span class="FFAJ-global-nav-item-alink-text">資料室</span>
+                                    <img class="FFAJ-global-nav-item-alink-icon" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/library.svg" alt="" srcset="">
+                                                                            <img class="FFAJ-global-nav-item-alink-arrow" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/arrow.png" alt="" srcset="">
+                                                                        <span class="FFAJ-global-nav-item-alink-border"></span>
+                                </a>
+                            </li>
+                                            </ul>
+                </nav>
+            </div>
+        </div>
+        <div class="FFAJ-menu">
+                            <div class="FFAJ-menu-item">
+                    <div class="FFAJ-menu-item__container">
+                        <div class="medium-row-gutter-50px">
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/investors_thumb_01.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="/investors/fx/" target="">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        FX取引を行おうとする個人投資家の<br class='display-none large-display-inline'>皆さまへ                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                                    <div class="FFAJ-menu-item__contents-item__content">
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="https://www.ffaj.or.jp/files/pdf/pages/binaryoption.pdf" target="_blank">学生の皆さまへ</a>
+                                                                                                                    <span class="FFAJ-menu-item__contents-item__contents-item-subtext">バイナリーオプションをかたった詐欺的行為にご注意ください。</span>
+                                                                                                            </div>
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/investors/movie-corner/" target="">見て分かる！ 動画コーナー</a>
+                                                                                                            </div>
+                                                                                            </div>
+                                                                            </div>
+                                </div>
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/investors_thumb_02.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がない場合 -->
+                                                <span data-mh class="FFAJ-menu-item__contents-item__header__alink">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        投資教育                                                    </div>
+                                                    <!--<div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>-->
+                                                </span>
+                                                                                    </div>
+                                                                                    <div class="FFAJ-menu-item__contents-item__content">
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/investors/education/" target="">Futures & Option</a>
+                                                                                                            </div>
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/investors/publications/" target="">書籍の紹介（通貨オプション入門）</a>
+                                                                                                            </div>
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/library/performance/survey_report/" target="">外為証拠金取引市場の動向</a>
+                                                                                                            </div>
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/investors/emerging_currency/" target="">新興国通貨等の基礎知識</a>
+                                                                                                            </div>
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="https://www.ffaj.or.jp/learning/" target="_blank">FFAJの学ぼう！FX</a>
+                                                                                                            </div>
+                                                                                            </div>
+                                                                            </div>
+                                </div>
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/investors_thumb_03.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="/investors/complaint/" target="">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        苦情・あっせんについて                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                            </div>
+                                </div>
+                                                    </div>
+                    </div>
+                </div>
+                            <div class="FFAJ-menu-item">
+                    <div class="FFAJ-menu-item__container">
+                        <div class="medium-row-gutter-50px">
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/about_thumb_01.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="/about/outline/" target="">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        協会の概要                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                            </div>
+                                </div>
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/about_thumb_02.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="/about/business/" target="">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        協会の組織・業務                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                            </div>
+                                </div>
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/about_thumb_03.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="/about/rules/" target="">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        定款・諸規則等                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                            </div>
+                                </div>
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/about_thumb_04.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="/about/publication/" target="">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        刊行物のご案内                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                            </div>
+                                </div>
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/about_thumb_05.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="/about/material/" target="">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        業務および財務等に関する資料                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                            </div>
+                                </div>
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/about_thumb_06.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="/about/access/" target="">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        アクセス                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                            </div>
+                                </div>
+                                                    </div>
+                    </div>
+                </div>
+                            <div class="FFAJ-menu-item">
+                    <div class="FFAJ-menu-item__container">
+                        <div class="medium-row-gutter-50px">
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/members_thumb_01.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="/members/register/" target="">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        会員・特別参加者名簿                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                            </div>
+                                </div>
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/members_thumb_02.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="/members/admission/" target="">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        入退会について                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                            </div>
+                                </div>
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/members_thumb_03.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="/members/document/" target="">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        登録業者一覧<br><span class='text-weight-400 large-text-xsmall'>（店頭FX取引、取引所FX取引、店頭バイナリーオプション取引）</span>                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                            </div>
+                                </div>
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/members_thumb_04.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がない場合 -->
+                                                <span data-mh class="FFAJ-menu-item__contents-item__header__alink">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        会員・外務員処分                                                    </div>
+                                                    <!--<div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>-->
+                                                </span>
+                                                                                    </div>
+                                                                                    <div class="FFAJ-menu-item__contents-item__content">
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/memers/reprimand-member/" target="">会員の処分</a>
+                                                                                                            </div>
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/members/reprimand-staff/" target="">外務員の処分</a>
+                                                                                                            </div>
+                                                                                            </div>
+                                                                            </div>
+                                </div>
+                                                    </div>
+                    </div>
+                </div>
+                            <div class="FFAJ-menu-item">
+                    <div class="FFAJ-menu-item__container">
+                        <div class="medium-row-gutter-50px">
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/library_thumb_01.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="/library/performance/" target="">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        統計資料                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                                    <div class="FFAJ-menu-item__contents-item__content">
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/library/performance/quarter_total/" target="">四半期統計</a>
+                                                                                                            </div>
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/library/performance/fx_flash/" target="">店頭FX月次速報</a>
+                                                                                                            </div>
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/library/performance/binary_monthly/" target="">個人向け店頭バイナリーオプション取引月次速報</a>
+                                                                                                            </div>
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/library/performance/survey_report/" target="">その他調査レポート等</a>
+                                                                                                            </div>
+                                                                                            </div>
+                                                                            </div>
+                                </div>
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/library_thumb_02.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がない場合 -->
+                                                <span data-mh class="FFAJ-menu-item__contents-item__header__alink">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        モニタリング関連資料                                                    </div>
+                                                    <!--<div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>-->
+                                                </span>
+                                                                                    </div>
+                                                                                    <div class="FFAJ-menu-item__contents-item__content">
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/library/monitoring/" target="">ロスカット等未収金発生状況</a>
+                                                                                                            </div>
+                                                                                                    <div class="FFAJ-menu-item__contents-item__contents-item">
+                                                        <a href="/library/monitoring/account/" target="">ロスカット等未収金発生口座数（月次・速報）</a>
+                                                                                                            </div>
+                                                                                            </div>
+                                                                            </div>
+                                </div>
+                                                            <div class="medium-col-4of12">
+                                    <div class="FFAJ-menu-item__contents-item">
+                                        <div class="FFAJ-menu-item__contents-item__thumb"><img src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/header/library_thumb_03.png" alt="" srcset=""></div>
+                                        <div class="FFAJ-menu-item__contents-item__header">
+                                                                                            <!-- リンク先がある場合 -->
+                                                <a data-mh class="FFAJ-menu-item__contents-item__header__alink" href="http://www.shouken-toukei.jp/" target="_blank">
+                                                    <div class="FFAJ-menu-item__contents-item__header__content">
+                                                        証券統計ポータルサイト                                                    </div>
+                                                    <div class="FFAJ-menu-item__contents-item__header__circle">
+                                                        <svg class="FFAJ-menu-item__contents-item__header__circle__arrow-svg" viewBox="0 0 64 64" width="16" height="16">
+                                                            <use xlink:href="https://www.ffaj.or.jp/wp-content/themes/ffaj/assets/img/sprite.svg#arrow-right"></use>
+                                                        </svg>
+                                                    </div>
+                                                </a>
+                                                                                    </div>
+                                                                            </div>
+                                </div>
+                                                    </div>
+                    </div>
+                </div>
+                    </div>
+    </div>
+</header>
+    <div class="FFAJ-breadcrumbs">
+        <div class="FFAJ-breadcrumbs-container">
+            <ul class="FFAJ-breadcrumbs-list">
+                <li class="FFAJ-breadcrumbs-list-item"><a class="FFAJ-breadcrumbs-list-item-alink" href="/">ホーム</a></li>
+                <li class="FFAJ-breadcrumbs-list-item"><a class="FFAJ-breadcrumbs-list-item-alink"
+                        href="/library/">資料室</a></li>
+                <li class="FFAJ-breadcrumbs-list-item"><a class="FFAJ-breadcrumbs-list-item-alink"
+                        href="/library/performance/">統計資料</a></li>
+                <li class="FFAJ-breadcrumbs-list-item"><span
+                        class="FFAJ-breadcrumbs-list-item-alink">顧客預託金の増減額および増減口座数の割合に関する情報について（解説）</span></li>
+            </ul>
+        </div>
+    </div>
+    <div class="FFAJ-contents">
+    <div class="component-header-A01">
+            <div class="component-header-A01__content">
+                <div class="component-header-A01__header">
+                    <h1 class="component-header-A01__heading">顧客預託金の増減額および増減口座数の割合に関する情報について（解説）</h1>
+                </div>
+            </div>
+        </div>
+        <div class="margin-vert-40px">
+            <div class="container">
+                <p>一般社団法人金融先物取引業協会では、当協会の会員業者が行う店頭外国為替証拠金取引（FX）に関する統計調査項目に、お客様からお預かりする預託金の増減額に関する情報（顧客区分管理必要額関連情報。「預託額情報」と略します。）と預託金が増減した取引口座数の割合に関する情報（個別顧客区分管理金額正味増減口座数割合関連情報。「預託金増減口座数割合情報」と略します。）を定期的に集計し、公表することといたしました。
+                    預託額情報は月次統計、増減口座数割合情報は四半期統計として、ともに2015年度より公表を開始します。</p>
+                <div class="margin-vert-40px">
+                    <p><span class="text-color-0069b6">▼</span> <a href="#depositCategory1">解説へ</a></p>
+                </div>
+                <div class="margin-vert-60px">
+                    <div class="background-color-f5f5f5 padding-vert-50px padding-horizon-50px">
+                        <p class="margin-top-0px"><span
+                                class="text-weight-bold">【本統計情報をご覧いただくにあたり、以下の点について、ご留意ください】</span></p>
+                        <ol class="component-ordered-list-A01 large-text-small">
+                            <li class="component-ordered-list-A01__item">
+                                当協会が公表する預託額情報と預託金増減口座数割合情報は、会員各社と店頭外国為替証拠金取引（FX）を行うお客様全体の過去の状況を示すものです。したがって、お客様がFXに期待される今後の投資成果などを示すものではありません。
+                            </li>
+                            <li class="component-ordered-list-A01__item">預託額情報のうち、「顧客区分管理必要額正味増減額」の値は、FX業者の損益額とは異なります。
+                                また、預託金増減口座数割合情報のうち、「減少口座割合」の値が、「増加口座割合」の値を上回っていても、FX業者が利益を得ているとは限りません。</li>
+                            <li class="component-ordered-list-A01__item">
+                                FX業者が自社顧客の預託額情報や預託金増減口座数割合情報に関する内容を公表する場合があります。お客様それぞれの運用成果の差は、お客様ご自身の投資判断などによっても生じることから、FX業者が示す値と当協会が公表する値との差のみをもって、お客様にとって、その業者と取引を行うことが有利か不利かを判断することはできません。同様に、それぞれのFX業者が示すこれらの値のみを互いに比較して、各業者のお客様による運用成果に順位を付けることも、正しい方法とは言えません。
+                            </li>
+                            <li class="component-ordered-list-A01__item">
+                                FX業者がお客様に提供する取引の内容や方法はそれぞれ異なります。FX業者とお取引いただく場合には、あらかじめ取引の内容や方法などを十分に確認し、ご理解いただきますよう、お願いします。
+                            </li>
+                            <li class="component-ordered-list-A01__item">
+                                証拠金倍率の高いお取引は損失リスクも高く、お客様が予期せぬ損失を被ることもありますので、実際のお取引については、十分慎重にご検討いただき、お客様ご自身の判断により投資を行ってください。
+                            </li>
+                            <li class="component-ordered-list-A01__item">
+                                日本国内においては、外国為替証拠金取引によりお客様が得た利益は課税の対象となります。お取引を行うお客様は、適切にご申告いただき、納税してください。</li>
+                            <li class="component-ordered-list-A01__item">
+                                会員とのお取引に対する苦情、トラブルにつきましては「証券・金融商品あっせん相談センター（FINMAC）」にご連絡ください。</li>
+                        </ol>
+                        <p class="large-text-small margin-vert-40px margin-bottom-0px"><span
+                                class="component-note-A02"><span
+                                    class="component-note-A02__bullet">＊</span>FINMACの連絡先は<a
+                                    href="http://www.finmac.or.jp/" target="_blank">こちら</a>をご覧ください。</span></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="component-header-B01" id="depositCategory1">
+            <div class="container component-header-B01__container">
+                <div class="component-header-B01__inner">
+                    <h2 class="component-header-B01__heading">Ⅰ.顧客区分管理必要額関連情報（預託額情報）の説明</h2>
+                </div>
+            </div>
+        </div>
+        <div class="container">
+            <p>預託額情報は、下表の形式で毎月公表します。 <!--下図をクリックすると拡大表示されます。--></p>
+            <div class="margin-vert-40px"><a href="/"><img class="img-responsive center-block"
+                        src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/pages/library/performance/deposit/figure_01.png"></a>
+                <p class="large-text-small text-right">※データファイルは<a href="/library/performance/fx_flash/">こちら</a></p>
+            </div>
+            <div class="margin-vert-40px">
+                <ul class="component-list">
+                    <li><span class="component-note-A02"><span
+                                class="component-note-A02__bullet text-color-0069b6">●</span>「顧客区分管理必要額」とは、法令により、FX業者が、お客様から預託された金銭として信託会社に金銭信託しなければならない金額のことです。この金額は、お客様がFX業者に直接にお振込みになった金銭のほか、お客様が保有するFXの建玉の評価損益額やスワップポイント損益額を合計した額となります。建玉の評価損益額やスワップポイントの損益額は、金融商品取引業者によって日々計算され、顧客区分管理必要額に反映されます。</span>
+                    </li>
+                    <li><span class="component-note-A02"><span
+                                class="component-note-A02__bullet text-color-0069b6">●</span>「①当月顧客入金額」とは、1か月の間に、お客様が会員業者のFX口座に新たに預託した金銭の合計額です。</span>
+                    </li>
+                    <li><span class="component-note-A02"><span
+                                class="component-note-A02__bullet text-color-0069b6">●</span>「②当月顧客出金額」とは、1か月の間に、お客様が会員業者のFX口座から払い出した金額の合計額です。</span>
+                    </li>
+                    <li><span class="component-note-A02"><span
+                                class="component-note-A02__bullet text-color-0069b6">●</span>「③当月末必要額」とは、各月末日時点の顧客区分管理必要額です。</span>
+                    </li>
+                    <li><span class="component-note-A02"><span
+                                class="component-note-A02__bullet text-color-0069b6">●</span>「顧客区分管理必要額正味増減額」とは、当月末必要額から前月末必要額と当月顧客入金額を差し引き、当月顧客出金額を加えた値です。1か月間のFXによる実現損益額、評価損益増減額、スワップポイント損益額の合計値に相当し、増加（プラス）の値を示す月はお客様の資産が実質的に増加したことを意味し、減少（マイナス）の値を示す月は、お客様の資産が実質的に減少したことを意味します。</span>
+                    </li>
+                    <li><span class="component-note-A02"><span
+                                class="component-note-A02__bullet text-color-0069b6">●</span>「④顧客区分管理信託額」とは、各月末日時点において、金融商品取引業者が実際に顧客区分管理必要額相当額として信託会社に預託している金額のことです。</span>
+                    </li>
+                    <li><span class="component-note-A02"><span
+                                class="component-note-A02__bullet text-color-0069b6">●</span>「信託保全率」とは、「④顧客区分管理信託額」を「③当月末必要額」で割り、百分率とした値で、各月末日時点で当月末必要額に対して実際に信託会社に預託された額がどの程度の割合となっているのかを示す値です。金融商品取引業者は、法令に従い、顧客区分管理必要額を毎日計算し、信託会社への信託額が不足する場合には、2日以内に信託額を追加します。このため、会員が、適切に顧客区分管理必要額の信託保全を行った場合においても、計算日と信託額の調整日が異なるため、信託保全率が100％を下回ることがあります。</span>
+                    </li>
+                </ul>
+                <p class="large-text-small text-right">※顧客区分管理必要額の説明は<a href="/regulation/trust/">こちら</a></p>
+            </div>
+        </div>
+        <div class="component-header-B01">
+            <div class="container component-header-B01__container">
+                <div class="component-header-B01__inner">
+                    <h2 class="component-header-B01__heading">Ⅱ.個別顧客区分管理金額正味増減口座数割合関連情報（預託金増減口座数割合情報）</h2>
+                </div>
+            </div>
+        </div>
+        <div class="container">
+            <p>増減口座割合は、下表の形式で四半期ごとに公表します。</p>
+            <div class="margin-vert-40px"><img class="img-responsive center-block"
+                    src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/pages/library/performance/deposit/figure_02.png">
+                <p class="large-text-small text-right">※データファイルは<a href="/library/performance/quarter_total/quarterly_data/">こちら</a></p>
+            </div>
+            <div class="margin-vert-40px">
+                <ul class="component-list">
+                    <li><span class="component-note-A02"><span
+                                class="component-note-A02__bullet text-color-0069b6">●</span>「個別顧客区分管理金額」とは、顧客区分管理必要額の計算の基となる、個々のお客様の口座における区分管理必要額のことです。</span>
+                    </li>
+                    <li><span class="component-note-A02"><span
+                                class="component-note-A02__bullet text-color-0069b6">●</span>「減少口座割合」とは、四半期において個別顧客区分管理金額が実質的に減少した口座数をお客様の口座総数で割り、百分率とした値です。ただし、お客様の口座総数からは、実質的な増減がなかった口座数を除いています。</span>
+                    </li>
+                    <li><span class="component-note-A02"><span
+                                class="component-note-A02__bullet text-color-0069b6">●</span>「増加口座割合」とは、四半期において個別顧客区分管理金額が実質的に増加した口座数をお客様の口座総数で割り、百分率とした値です。ただし、お客様の口座総数からは、実質的な増減のなかった口座数を除いています。</span>
+                    </li>
+                    <li><span class="component-note-A02"><span
+                                class="component-note-A02__bullet text-color-0069b6">●</span>各口座の実質的な増減は、当四半期末個別顧客区分管理金額－前四半期末個別顧客区分管理金額－当四半期中顧客入金額+当四半期中顧客出金額　により計算して判定します。この計算式による値は、各お客様口座の四半期中の実現損益、評価損益の増減額、スワップポイント損益額の合計値に相当します。</span>
+                    </li>
+                </ul>
+                <p class="large-text-small text-right">※個別顧客区分管理金額の説明は<a href="/regulation/trust/">こちら</a></p>
+            </div>
+        </div>
+
+        <div class="margin-vert-40px large-margin-vert-80px">
+    <div class="container">
+        <div class="medium-row-gutter-20px">
+            <div class="medium-col-6of12">
+                <div class="feature-contents-item"><a href="/regulation/"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/contents/feature_contents_regulation_banner.png" alt="FX取引の規制について"></a></div>
+            </div>
+            <div class="medium-col-6of12">
+                <div class="feature-contents-item"><a href="https://marginratio.ffaj.or.jp/jp/" target="_blank"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/contents/feature_contents_margin-ratio_banner.png" alt="為替リスク想定比率の公表"></a></div>
+            </div>
+            <div class="medium-col-6of12">
+                <div class="feature-contents-item"><a href="/binaryoption/"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/contents/feature_contents_binary-option_banner.png" alt="個人向け通貨関連店頭バイナリーオプション規制について"></a></div>
+            </div>
+            <div class="medium-col-6of12">
+                <div class="feature-contents-item"><a href="/investors/education/"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/contents/feature_contents_futures-options_banner.png" alt="Futures & Options"></a></div>
+            </div>
+            <div class="medium-col-6of12">
+                <div class="feature-contents-item"><a href="https://www.ffaj.or.jp/learning/" target="_blank"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/contents/feature_contents_learningfx_banner.png" alt="FFAJの学ぼう！FX"></a></div>
+            </div>
+            <div class="medium-col-6of12">
+                <div class="feature-contents-item"><a href="/investors/movie-corner/" target="_blank"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/contents/feature_contents_movie-corner_banner.png" alt="見て分かる！動画コーナー"></a></div>
+            </div>
+            <div class="medium-col-6of12">
+                <div class="feature-contents-item"><a href="/attention/"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/contents/feature_contents_attention_banner.png" alt="注意喚起"></a></div>
+            </div>
+        </div>
+    </div>
+</div>    </div>
+
+    <footer class="FFAJ-footer">
+            <div class="FFAJ-lower-footer-upper ">
+            <div class="overflow-hidden">
+                <div class="margin-vert-40px large-margin-vert-50px">
+                    <div class="container">
+                        <div class="related-banners">
+    <div class="related-banners-row">
+        <div class="related-banners-col">
+            <div class="related-banner"><a href="/mynumber/"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/pages/index/footer_bnr_02.png" alt="マイナンバー社会保障・税番号制度"></a></div>
+        </div>
+        <div class="related-banners-col">
+            <div class="related-banner"><a href="/files/pdf/pages/binaryoption.pdf" target="_blank"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/pages/index/footer_bnr_03.png" alt="学生の皆さまへバイナリーオプションをかたった詐欺的行為にご注意ください。"></a></div>
+        </div>
+        <div class="related-banners-col">
+            <div class="related-banner"><a href="/attention/"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/pages/index/footer_bnr_06.png" alt="注意喚起"></a></div>
+        </div>
+        <div class="related-banners-col">
+            <div class="related-banner"><a href="https://www.caa.go.jp/policies/policy/consumer_education/consumer_education/lower_the_age_of_adulthood/" target="_blank"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/pages/index/footer_bnr_05.png" alt="18歳から大人！"></a></div>
+        </div>
+        <div class="related-banners-col">
+            <div class="related-banner"><a href="https://www.youtube.com/channel/UCDIigbcfERZUtmkySH7zjHw" target="_blank"><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/pages/index/footer_bnr_04.png" alt="金融先物取引業協会YouTubeチャンネル"></a></div>
+        </div>
+    </div>
+</div>                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="overflow-hidden">
+    <div class="background-color-ffffff overflow-hidden">
+        <div class="margin-vert-20px large-margin-vert-40px">
+            <div class="container">
+                <ul class="FFAJ-footer__utility-nav-list">
+                    <li class="FFAJ-footer__utility-nav-list-item"><a class="FFAJ-footer__utility-nav-list-item-alink" href="/observer/">証券取引等監視委員会＜情報提供窓口＞</a></li>
+                    <li class="FFAJ-footer__utility-nav-list-item"><a class="FFAJ-footer__utility-nav-list-item-alink" href="/files/pdf/pages/information_security_policy.pdf" target="_blank">情報セキュリティ基本方針</a></li>
+                    <li class="FFAJ-footer__utility-nav-list-item"><a class="FFAJ-footer__utility-nav-list-item-alink" href="/privacy/">プライバシーポリシー</a></li>
+                    <li class="FFAJ-footer__utility-nav-list-item"><a class="FFAJ-footer__utility-nav-list-item-alink" href="/privacy-association/">認定個人情報保護団体の業務について</a></li>
+                    <li class="FFAJ-footer__utility-nav-list-item"><a class="FFAJ-footer__utility-nav-list-item-alink" href="/public-comments/">パブリックコメント</a>
+                    </li>
+                    <li class="FFAJ-footer__utility-nav-list-item"><a class="FFAJ-footer__utility-nav-list-item-alink" href="/contact/">お問い合わせ</a></li>
+                    <li class="FFAJ-footer__utility-nav-list-item"><a class="FFAJ-footer__utility-nav-list-item-alink" href="/exception/matters/">免責／著作権について</a></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <div class="FFAJ-footer__bottom overflow-hidden">
+        <div class="margin-vert-20px large-margin-vert-30px">
+            <div class="FFAJ-footer__copyright">
+                <p class="FFAJ-footer__copyright-text">Copyright &copy; The Financial Futures Association of
+                    Japan All Rights Reserved.</p>
+            </div>
+        </div>
+    </div><button class="FFAJ-footer-pageTop" data-scroll><img class="img-responsive" src="https://www.ffaj.or.jp/wp-content/themes/ffaj/static_assets/images/footer/pagetop.png"></button>
+</div></footer>  </body>
+</html>

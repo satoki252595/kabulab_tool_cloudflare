@@ -1,0 +1,70 @@
+{
+  "key": "global-indices",
+  "phase": 5,
+  "build": {
+    "status": "implemented",
+    "branch": "feat/moneyflow-src-global-indices",
+    "worktree_path": "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-17",
+    "commit": "5f4a6c24b2b673c6fbc69a1a52ac65fa3c4c820f",
+    "files": [
+      "services/moneyflow/lib/sources/global-indices.ts",
+      "services/moneyflow/lib/sources/global-indices.test.ts",
+      "services/moneyflow/lib/sources/fixtures/global-indices-gspc-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-ixic-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-stoxx50e-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-ftse-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-gdaxi-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-hsi-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-sse-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-ks11-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-bsesn-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-n225-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-topix-etf-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-jpy-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-eurusd-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-gold-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-crudeoil-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-tnx-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/global-indices-symbol-not-found-2026-09-27.json"
+    ],
+    "indicators": [
+      "global_gspc_weekly_change_pct (S&P500, 米国)",
+      "global_ixic_weekly_change_pct (NASDAQ総合指数, 米国)",
+      "global_stoxx50e_weekly_change_pct (ユーロ・ストックス50, ユーロ圏)",
+      "global_ftse_weekly_change_pct (FTSE100, 英国)",
+      "global_gdaxi_weekly_change_pct (DAX, ドイツ)",
+      "global_hsi_weekly_change_pct (ハンセン指数, 香港)",
+      "global_sse_weekly_change_pct (上海総合指数, 中国本土)",
+      "global_ks11_weekly_change_pct (KOSPI総合指数, 韓国)",
+      "global_bsesn_weekly_change_pct (SENSEX, インド)",
+      "global_n225_weekly_change_pct (日経平均株価, 日本)",
+      "global_topix-etf_weekly_change_pct (TOPIX連動ETF=1306.T代替, 日本, isApproximate=true)",
+      "global_jpy_weekly_change_pct (ドル円 USD/JPY)",
+      "global_eurusd_weekly_change_pct (ユーロドル EUR/USD)",
+      "global_gold_weekly_change_pct (金先物COMEX)",
+      "global_crudeoil_weekly_change_pct (WTI原油先物)",
+      "global_tnx_weekly_change_pct (米10年国債利回り, 相対%変化)",
+      "global_tnx_weekly_change_pt (米10年国債利回り, ポイント/bp差)"
+    ],
+    "schedule": "週次 (取引週の終値ベース、取得自体はYahoo Chart APIでリアルタイム・公表ラグなし)。isPeriodObservable(period, now) が「対象ISO週の終了(日曜23:59:59.999Z、取引所ローカル暦日ベースの近似)を過ぎているか」で判定し、まだ終わっていなければ resolveLatestWeeklyChange は status:\"not_yet_published\" を返す(throwしない、正常系)。toGlobalIndexObservationRows はnot_yet_publishedの銘柄の行を出さない(黙って空値で埋めない)。",
+    "verified_values": "2026-09-27にYAHOO_PROXY_BASE経由でfetchYahooChartRaw(symbol,\"3mo\",\"1wk\",false)を実際に16銘柄+エラー確認1件、実機取得。原本で目視確認しテストに反映した値(抜粋): ^GSPC meta.regularMarketPrice=7743.41 / longName=\"S&P 500\" / gmtoffset=-14400、直近2週close=7650.5→7743.41015625(週次+92.91pt/+1.214%)。^N225はJSTタイムゾーン境界のバグ回帰テストとして採用: 修正前はUTC日付のままISO週判定し、未確定週の2バー(ともにclose=66364.203125)が別の週に誤分類されて前週比が誤って0になっていたが、gmtoffsetSec(+32400)で現地暦日に補正後は正しい前週close=65018.94921875と比較(+1345.25pt/+2.069%)。GC=F(金)はlongNameがnull(null許容を確認)、regularMarketPrice=4321.2、週次-103.70pt/-2.344%。^TNX(米10年債利回り)はclose値がそのまま利回り%(5.184)であることを確認、週次+0.186pt(%pt)/相対+3.721%。000001.SS(上海)longName=\"SSE Composite Index\"。1306.T(TOPIX連動ETF)regularMarketPrice=430.3。^TOPX(TOPIX指数そのもの)は複数候補(^TPX/998405.T/^TOPIX/TOPX等)全て実機404 \"No data found, symbol may be delisted\"を確認し、その実物404レスポンスをfixtures/global-indices-symbol-not-found-2026-09-27.jsonとして保存、parseGlobalIndexWeeklyChartのthrow経路のテストに使用。原本(生JSON)は各fixtureファイルそのもの。",
+    "license": "Yahoo Finance公開Chart API(ログイン・APIキー不要、既存の統合Yahooクライアント経由、個人利用)。新規の環境変数・APIキーは追加していない(.env.example変更なし)。TOPIXのみ実データが存在しないため1306.T(国内上場の代表的TOPIX連動ETF)の基準価額で近似代替し、指標定義のlimitations/proxyNoteに明記(isApproximate=true)。",
+    "notes": "実施内容: git fetch → checkout -b feat/moneyflow-src-global-indices origin/main → .envシンボリックリンク(コミットせず) → pnpm install --frozen-lockfile → services/moneyflow/lib/sources/global-indices.ts(+テスト+17フィクスチャ)を新規作成 → root で pnpm typecheck / pnpm lint / pnpm test (全140ファイル1697件pass) を確認 → コミット(push・マージ・Notion/D1書込はしていない)。\n\n設計は既存の統合Yahooクライアント(src/shared/yahoo/client.ts)のfetchYahooChartRawをそのまま再利用し、新しい取得先・新しいnpm依存は追加していない。実装中に本物のバグを1件発見し修正した: 週次バーのISO週判定を素朴にUTC日付で行うと、JST等UTC+の取引所でタイムゾーン境界の誤分類が起き(実機で^N225にて再現)、前週比較が常に0になる不具合があったため、meta.gmtoffsetで現地暦日に補正するgroupBarsByWeekを実装し、回帰テストとして明示的にテストに残した。\n\n保留・制約:\n1. TOPIX指数そのものはYahoo Finance Chart APIに存在しない(実機確認済み、複数候補で404)。1306.T(TOPIX連動ETF)で近似代替し、型(isApproximate)と指標定義本文の両方で明示。計画書の例示記号(^TOPX)通りには実装できていない点を明記。\n2. isPeriodObservableの週末判定はUTC日境界(23:59:59.999Z)を使う近似で、取引所ローカルの正確な週末とは最大数時間ずれうる(週の「帰属」自体はgmtoffset補正で正しい)。ドキュメント内に明記済み。\n3. Notion書込・観測ログへの実際のupsert・recordPrimaryData()呼び出しは本モジュールの範囲外(統合担当が行う設計、コメントに明記)。globalIndicesArchiveInput/toGlobalIndexObservationRowsは統合担当が使う純関数の入力を返すのみ。\n4. .env.exampleへの追記は不要(新規env変数なし、既存のYAHOO_PROXY_BASE/CRON_SECRETをそのまま再利用)。"
+  },
+  "verify": {
+    "ok": false,
+    "checked": "services/moneyflow/lib/sources/global-indices.ts (+テスト+17フィクスチャ) を worktree /Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-17 (branch feat/moneyflow-src-global-indices, commit 5f4a6c2) で反証的に検証した。\n\n実施した検証:\n1. 原本突合(3件以上): 既存Yahooクライアント(fetchYahooChartRaw, YAHOO_PROXY_BASE経由)を使い、gspc/n225/jpy/gold/tnx/sse/topix-etf/ftseの8銘柄を今この場でライブ取得しparseGlobalIndexWeeklyChart/resolveLatestWeeklyChangeに通した(/tmp/verify-global-indices/live-check.ts)。構造・値ともコミット済みfixtureと一致し、実際のnow(2026-09-27T02:56 UTC)では正しくnot_yet_publishedを返した。さらに全17 fixtureの生バイトからPythonでgroupBarsByWeek+週次騰落ロジックを独立再実装し、テストファイルにハードコードされた期待値(gspc: close=7743.41015625/prev=7650.5/Δ=92.91015625/+1.2144…%、n225(JSTタイムゾーン回帰): close=66364.203125/prev=65018.94921875/Δ=1345.25390625/+2.069…%、gold: Δ=-103.6997…/-2.3435…%、tnx: Δpt=0.18599987…)を全て完全一致で再現できた。^TOPX/998405.T/^TPX/^TOPIXの4候補もライブで再確認しすべて実物404(No data found, symbol may be delisted)を確認、fixtureの主張(TOPIX指数はYahoo Chart APIに存在しない)を裏付けた。\n2. 単位・符号・期間: changeAbsolute=close-previousClose、changePercent=changeAbsolute/previousClose*100の計算に誤りなし。^TNXのみ相対%指標(global_tnx_weekly_change_pct)とポイント差指標(global_tnx_weekly_change_pt)を分離しており、説明文で両者の混同(4.00%→4.20%は+5%だが実務上は+20bp)を明示的に否定している点も正確。ISO週境界計算(isoWeekInfo/resolveObservationPeriod)をPython標準ライブラリのdatetime.isocalendar()と15日付(年境界のW53ケース3件=2020/21,2024/25,2026/27を含む)で突合し完全一致を確認、週の取り違えは無い。「買い越し/売り越し」の符号概念は本取得元には存在せず(flowType=\"price_only\"で明示的に資金フローではないと注記)、該当なし。\n3. 指標定義の実態整合性: 【問題あり、下記参照】。それ以外の指数/商品/金利カテゴリの説明文は一般論として妥当で、TOPIX代替(1306.T)のisApproximate=trueは行(MoneyflowObservationRow)まで正しく伝播することを確認した(rows-check.tsで実測)。\n4. 公表前スキップ判定: ライブのnow(週の終了前)でresolveLatestWeeklyChangeがstatus:\"not_yet_published\"を返しthrowしないことを実地確認、境界値テスト(23:59:59.998→false / .999→true)も正しい。toGlobalIndexObservationRowsがnot_yet_publishedの銘柄行を出さないことも確認済み(既存テストと整合)。\n\nworktreeへの変更は行っていない(git status clean)。一時検証スクリプトは /tmp/verify-global-indices/ に配置、コミット・pushはしていない。",
+    "problems": [
+      {
+        "severity": "medium",
+        "summary": "global_eurusd_weekly_change_pct の指標定義(description)が、EUR/USDと無関係な「円安/円高」という日本円の説明文をそのまま含んでいる(実態と不一致)。",
+        "fix": "global-indices.ts の indicatorDescription() 内、category==='fx' の説明文が jpy(JPY=X)向けの「円が対象通貨に対して...円安が1%進んだ」という円建て解釈をテンプレートとして eurusd(EURUSD=X)にも共有適用している。実際に GLOBAL_INDEX_INDICATORS.find(k=>k.key==='global_eurusd_weekly_change_pct').description を出力すると『ユーロドル(EUR/USD)相場の週次終値の前週比騰落率。例えば円が対象通貨に対して週間で+1%なら「その通貨に対して円安が1%進んだ」という意味...』となるが、EURUSD=Xは円を一切含まないEUR/USDレートであり「円安」という表現は完全に誤り(実態と不一致)。CLAUDE.mdルール7(初心者向け説明は財務的に正確であること)・ルール1の精神(誤った定義を実データパスに混在させない)に抵触する。indicatorDescription() を entry.key ごとに分岐させるか、汎用フレーズを「基準通貨に対して対象通貨が高くなった/安くなった」のような通貨非依存の表現に書き換え、jpy固有の「円安/円高」表現は jpy エントリだけに限定すること。テストにも description の内容(通貨名の整合)を検査するケースを追加すべき(現状は description.length>10 の存在チェックのみで、この不整合を検出できていない)。"
+      },
+      {
+        "severity": "low",
+        "summary": "requirements: [\"R4\"] や MoneyflowSegmentType(「国地域」「資産クラス」等)の分類・命名が、moneyflowサービス全体で使われる正式スキーマと整合しているか、リポジトリ内から独立に確認できなかった。",
+        "fix": "このブランチ時点で services/moneyflow 配下にはこのファイルしか存在せず(他のsourcesファイルやdocs/*moneyflow*が見当たらない)、R1〜R4の定義やsegmentTypeの命名規約を定めた一次ドキュメントを参照できなかった。統合担当が既存のR1〜R3実装や計画書(このタスクの一次情報)と照合し、'R4'タグ付けおよび「国地域」/「資産クラス」というsegmentType命名が他のmoneyflow指標定義と矛盾しないことを確認してからマージすること。コード自体に矛盾は見つかっていないため、あくまで参照材料不足による未検証事項として記載する。"
+      }
+    ]
+  }
+}

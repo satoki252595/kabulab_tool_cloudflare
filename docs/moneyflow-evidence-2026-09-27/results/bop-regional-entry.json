@@ -1,0 +1,43 @@
+{
+  "key": "bop-regional",
+  "phase": 3,
+  "build": {
+    "status": "implemented",
+    "branch": "feat/moneyflow-src-bop-regional",
+    "worktree_path": "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-4",
+    "commit": "fce84d8b8e25262accff9191b5ecc1cbe4833682",
+    "files": [
+      "services/moneyflow/lib/sources/bop-regional.ts",
+      "services/moneyflow/lib/sources/bop-regional.test.ts",
+      "services/moneyflow/lib/sources/fixtures/regbp-q-jp-sample.zip",
+      "services/moneyflow/lib/sources/fixtures/boj-dload-excerpt.html"
+    ],
+    "indicators": [
+      "bop_regional_direct_investment_net",
+      "bop_regional_direct_investment_asset",
+      "bop_regional_direct_investment_liability",
+      "bop_regional_portfolio_investment_net",
+      "bop_regional_portfolio_investment_asset",
+      "bop_regional_portfolio_investment_liability",
+      "bop_regional_portfolio_investment_equity_asset",
+      "bop_regional_portfolio_investment_equity_liability",
+      "bop_regional_portfolio_investment_debt_asset",
+      "bop_regional_portfolio_investment_debt_liability"
+    ],
+    "schedule": "四半期(年4回)。対象四半期の最終月から数えて5か月後に公表(例: 1〜3月期分→8月に公表、確認済み: 2026Q1は2026-08-10に公表)。翌年・翌々年5月に年次改訂(遡及改定)あり。スキップ判定は「事前予測(expectedBopRegionalPublicationMonth、公式ルールをそのまま計算するだけの参考値)」と「実データの有無による最終判定(isPeriodObserved、その四半期のセルが1件でも観測されたか)」の2段構えにした——公式スケジュール通りに公表されるとは限らない(遅延・延期がありうる)ため、最終判断は必ず実データを見て行う設計にした。",
+    "verified_values": "2026-09-27にBOJ「時系列統計データ検索サイト」一括ダウンロード(https://www.stat-search.boj.or.jp/info/regbp_q_jp.zip、元ファイルはhttps://www.stat-search.boj.or.jp/info/dload.html の「地域別国際収支（四半期）」行、最終更新2026-08-10)を実際に取得し、原本CSVを目視確認した2026Q1(列'202601')の実測値: (1) 中華人民共和国・直接投資ネット(BPBP6QFBCN1) = -1631.38201514億円, (2) アメリカ合衆国・証券投資ネット(BPBP6QFBUS2) = -3214.85204568億円, (3) アメリカ合衆国・証券投資[株式・投資ファンド持分]資産(BPBP6QFAUS21) = 18925.53442億円, (4) ドイツ・証券投資[債券]資産(BPBP6QFADE22) = -2983.81395215億円, (5) アジア計・直接投資ネット(BPBP6QFBAS1) = 7230.99152397億円, (6) 地域別合計(世界計)・直接投資ネット(BPBP6QFB1) = 40673.64563458億円。これら全てbop-regional.test.tsでフィクスチャ(regbp-q-jp-sample.zip、実データを19地域×10指標×直近9四半期に絞って再構成した実バイト列そのもの)から再現し一致することを確認済み(toBeCloseTo)。加えて実データ特有の仕様として「NA」(統計的秘匿・非開示。同一行内で他四半期は実数値というケースが原本全体で714行あることを確認)を発見し、空文字と同様nullとして扱う(0で埋めない)実装・テストを追加した。",
+    "license": "財務省・日本銀行共同作成の国際収支統計。統計数値自体の利用を妨げる明文の禁止はないが、日本銀行サイトからの転載・公開サービスでの掲載には日本銀行調査統計局への事前通知と指定クレジット文言の掲示が求められる(同サイトの利用上の注意)。今回はプロジェクトの決定(個人利用・非公開)の範囲内。財務省側の統計数値自体は公共データ利用規約(出典明記で商用利用・改変・再配布が自由)の対象。JPXのような二次利用禁止規約は無い。bot対策は確認されず、UAは名乗り程度で足りる。",
+    "notes": "作業はscopeどおりbop-regional.ts/test/fixturesの4ファイルのみ追加(他取得元ファイルには触れていない)。新規npm依存は追加せず、既存のnode:zlib(inflateRawSync)を使ってservices/yuho-quant/src/services/edinet/zip.tsと同型の最小ZIPリーダーを本ファイル内にインライン実装した(依存追加なし、他サービスへのimportもしていない)。CSVデコードはNode/Workers双方の標準TextDecoder('shift_jis')を使い、cp932等の追加ライブラリも不要だった。地域区分は47種を実データから洗い出しworld_total/country/continent_group/cross_cutting_group/otherに分類してexportし、未知の地域名が出たら(様式変更とみなし)throwするようにした。root `pnpm typecheck && pnpm lint && pnpm test`はすべて成功(lintはmax-warnings=0込みでクリア、testはリポジトリ全体140ファイル1711件成功)。git commitはローカルのみ(push・PR作成・マージはしていない)。証券投資の地域別内訳は財務省(mof.go.jp)サイト単体では公表されておらず(経常収支・金融収支合計のCSVのみ)、日本銀行の一括ダウンロードでしか機械可読に取得できないことを実地調査で確認したため、こちらを正の取得元とした。保留事項: (1) 本番運用時、BOJの一括ダウンロードURL自体は固定名だが将来変わる可能性があるためresolveBopRegionalZipUrl()で毎回dload.htmlから解決する設計にした(URLをハードコードしていない)。(2) 「NA」の意味(統計的秘匿によるものか、単なる制度上の非対象か)はBOJ側の注釈に明記が見当たらず、確定的な説明は得られていない——観測ログからは単純に欠落として扱う(捏造しない)方針で統一した。(3) 大陸区分(アジア計等)とクロスカッティング区分(EU/ASEAN/OECD諸国/東欧・ロシア等)は個別国と重複するため単純合算は二重計上になる旨を指標定義のlimitationsに明記したが、実際のNotion観測ログ設計(統合担当の作業範囲)側でもこの重複を意識した集計・表示にする必要がある。(4) Notionへの一次データ記録(recordPrimaryData呼び出し)は指示どおり行っておらず、bopRegionalArchiveInput()が入力(ZIP実体バイト列込み)を組み立てる純関数のみを提供した。"
+  },
+  "verify": {
+    "ok": true,
+    "checked": "services/moneyflow/lib/sources/bop-regional.ts (+bop-regional.test.ts, fixtures) at commit fce84d8, worktree /Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-4 (branch feat/moneyflow-src-bop-regional). 反証検証は同一環境で pnpm exec tsx により一時スクリプト(/tmp/verify-bop-regional.ts, /tmp/verify-fixture-vs-real.ts)を実行し、日銀サイトから実データを新規に取得して照合(コミット・ファイル変更なし、一時ファイルは全て/tmpに配置)。",
+    "problems": [
+      {
+        "severity": "medium",
+        "summary": "埋め込みライセンス説明(COMMON_LICENSE・ファイル先頭コメント)が、参照元とする日銀サイト自身の「ご利用上の留意点」ページの実文言と食い違っている。",
+        "fix": "https://www.stat-search.boj.or.jp/info/notice.html を実際に取得して確認したところ、①転載・複製の事前相談窓口は「日本銀行情報サービス局」であり、コード内が書く「日本銀行調査統計局」ではない(調査統計局はサイト利用に関する一般問い合わせ窓口であり、著作権/転載相談の窓口ではない)。②事前相談が要るのは「商用目的」「無断転載禁止の注記がある部分」「写真・イラスト・画像データ」の3ケースのみで、それ以外(非商用の統計数値の掲載)は『出所を明記』すれば足りる — コード内の「公開サービスでの掲載には…事前通知と指定クレジット文言の掲示が求められる」という一般化(かつ「指定クレジット文言」という要求は notice.html のどこにも存在しない)は誤り、または少なくとも未検証の誇張。この文言は BopRegionalIndicatorDef.license としてUIにいずれ露出しうるため(現時点ではまだどこからもimportされていないが)、事実と異なる第三者の法的要件を機械可読フラグ無しに事実として記述している点はルール1(架空値・由来不明確な値の混入禁止)の精神に反する。COMMON_LICENSE の文言を notice.html の実際の記載(相談窓口=情報サービス局、要件=非商用かつ非画像なら出所明記のみで足り、商用/画像/転載禁止注記時のみ情報サービス局へ事前相談)に合わせて修正するか、未確認である旨を明示する。"
+      }
+    ]
+  }
+}

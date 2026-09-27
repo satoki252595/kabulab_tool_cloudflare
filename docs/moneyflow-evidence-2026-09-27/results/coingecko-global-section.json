@@ -1,0 +1,50 @@
+{
+  "key": "coingecko-global",
+  "phase": 4,
+  "build": {
+    "status": "implemented",
+    "branch": "feat/moneyflow-src-coingecko-global",
+    "worktree_path": "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-12",
+    "commit": "f6166da (feat(moneyflow): CoinGecko グローバル取得元を追加 (Phase 4 資産クラス横断・暗号資産)) — 1 commit ahead of origin/main, not pushed",
+    "files": [
+      "services/moneyflow/lib/sources/coingecko-global.ts",
+      "services/moneyflow/lib/sources/coingecko-global.test.ts",
+      "services/moneyflow/lib/sources/fixtures/global-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/coins-markets-jpy-2026-09-27.json",
+      "services/moneyflow/lib/sources/fixtures/categories-stablecoins-2026-09-27.json",
+      ".env.example (COINGECKO_DEMO_API_KEY を追記、値はコメントアウト)"
+    ],
+    "indicators": [
+      "coingecko_price_jpy (price_only, R3) — 主要暗号資産の価格(円建て)",
+      "coingecko_market_cap_jpy (holdings_stock, R3) — 主要暗号資産の時価総額(円建て)",
+      "coingecko_global_market_cap_usd (holdings_stock, R3) — 暗号資産市場全体の時価総額(ドル建て世界合計)",
+      "coingecko_stablecoin_market_cap_usd (holdings_stock, R3) — ステーブルコイン合計時価総額(ドル建て)",
+      "coingecko_btc_dominance_pct (holdings_stock, R3) — ビットコイン・ドミナンス(%)"
+    ],
+    "schedule": "CoinGecko はリアルタイムAPI・公表ラグ無し(JPXの月次PDF等と違い「翌月n営業日に公表」という概念が無い)。そのため resolveObservationPeriod()/isPeriodObservable() は「対象期間(週/月/四半期/年)の終了日を過ぎているか」だけを判定基準にした: 例えば month 期間なら period.end (月末) の23:59:59 UTCを過ぎるまでは observable=false (「まだ終わっていません」理由付き)、過ぎれば即 observable=true。日次実行では常に day 粒度で取得し、月次/四半期/年次の比較は蓄積した観測ログ側(統合担当)で行う設計とした(CoinGecko自体の過去特定時点取得エンドポイントは本モジュール未実装、その旨を指標定義のlimitationsに明記)。",
+    "verified_values": "2026-09-27にAPIを実際にcurlで叩いて取得したフィクスチャから、テストで9つの実測値を検証(coingecko-global.test.tsの「原本確認値1〜9」コメント参照): (1) totalMarketCapUsd=2906523550432.045 (2) totalMarketCapJpy=457152556629704.2 (3) btcDominancePct=58.28026279528517 (4) ethDominancePct=11.330688036389803 (5) asOf(updated_at 1790475594 → ISO)=\"2026-09-27T02:19:54.000Z\" (6) bitcoin.priceJpy=13289426 (7) bitcoin.marketCapJpy=266969122134522 (8) ethereum.marketCapJpy=51897511333033 (9) stablecoins.marketCapUsd=292862711888.5375。原本の場所: フィクスチャ自体が原本の生レスポンス(無編集、categories のみ769件→5件に絞った部分集合)であり、https://api.coingecko.com/api/v3/global, /coins/markets?vs_currency=jpy&ids=bitcoin,ethereum,ripple,solana,dogecoin&order=market_cap_desc&price_change_percentage=24h, /coins/categories?order=market_cap_desc を2026-09-27 02:19〜02:25 UTCに直接取得したもの(このセッションのBashツールから直接curl検証、ブラウザでの目視ではなくAPI応答そのものの直接確認)。様式違反時のthrowも4パターン(data欠落・型不一致・空配列・カテゴリ欠落・JSON破損)をテスト済み。",
+    "license": "CoinGecko 公開API: api.coingecko.com はAPIキー無しでも200を返すが、匿名アクセスは共有プールで非常に厳しいレート制限(実測: 数回連続呼び出しでHTTP 429、Retry-After:60)。無料のDemo APIキー(coingecko.com/en/developers/dashboardでメール登録のみ、審査なし)を`x-cg-demo-api-key`ヘッダで送ると公式値で月10,000コール/100コール分に緩和される。商用利用・再配布にはattribution(出典表示)が必要(https://www.coingecko.com/en/api_terms)。kabulabは個人利用のNotionダッシュボードだが、5指標すべてにsourceUrl/usageTermsを持たせ出典明記した。ログイン画面スクレイピングやbot対策・PDF限定などの障害は無く、ブラウザ偽装UAは不要と実機確認(429はUAでなく呼出頻度起因)。",
+    "notes": "実装範囲: services/moneyflow/lib/sources/coingecko-global.ts 1ファイルのみ(他の取得元ファイルには一切触れていない)。新規npm依存は追加していない(package.json/pnpm-lock.yaml差分ゼロ、fetch/JSON.parse等のNode組込みのみ使用)。API キーは任意(coinGeckoEnv.DEMO_API_KEY()が唯一のprocess.env.COINGECKO_DEMO_API_KEY参照点、未設定ならヘッダ無しで呼ぶ — これはrule2のフォールバックではなくCoinGecko自身が公式にサポートする「キー任意」の呼び出し仕様に沿った分岐)。ルール1(架空値なし・全フィクスチャは実取得)・ルール2(??禁止・全パーサが様式不一致でthrow、catchでdefault返却なし)・ルール3(env型付きアクセサ集約)を満たす設計。Notion書込(recordPrimaryData呼出)は本タスクの範囲外のため実施しておらず、代わりにmargin.tsのmarginArchiveInput相当のcoinGeckoArchiveInput()という純関数(IO無し)を用意し、統合担当がそのままrecordPrimaryData()に渡せる形にした。pnpm typecheck / pnpm lint / pnpm test は全てroot(このworktree)で実行し全てグリーン(typecheck: エラー0、lint: eslint services/moneyflow含めエラー0、test: 140ファイル1691テスト全passed、うち新規21テストは本ソース分)。push・マージ・本番Notion/D1書込は一切行っていない(ローカルコミットのみ、origin/mainより1コミット先行)。保留事項: (a) 「暗号資産の推定純資金増減」自体の算出ロジック(JVCEA月次預り資産×価格変動寄与の差引計算)はJVCEA取得元と組み合わせる統合担当の作業であり本モジュールのスコープ外(タスク指示通り)。(b) 過去の特定月末時点のCoinGecko値を取得する専用エンドポイント(/coins/{id}/history等)は未実装 — 日次実行で自前に観測ログを蓄積し、月次/四半期比較はその蓄積データ側で行う設計を選んだ(limitationsに明記)。(c) COINGECKO_DEMO_API_KEYはこのセッションでは未取得・未検証(キー無しの公開エンドポイントで全機能を実装・検証済みなのでブロッカーではない)。"
+  },
+  "verify": {
+    "ok": false,
+    "checked": "worktree /Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-12 (branch feat/moneyflow-src-coingecko-global, commit f6166da) の services/moneyflow/lib/sources/coingecko-global.ts + .test.ts を反証的に検証した。(1) 突合: 2026-09-27 02:38 UTC に自分で /global・/coins/markets?vs_currency=jpy&ids=bitcoin,ethereum,ripple,solana,dogecoin・/coins/categories を直接curl取得し(/tmp/cgcheck/*.json)、tsx (/tmp/cgcheck/verify.ts) でパーサに実際に通した。totalMarketCapUsd/Jpy, btcDominancePct, ethDominancePct, updated_at→asOf変換, bitcoin/ethereumの価格・時価総額, stablecoins.market_cap の9値すべてで生JSONの値とパーサ出力が完全一致(フィールドパスの取り違え無し)。categories は769件中5件抜粋というフィクスチャの主張も自分の取得(769件、同じ5カテゴリが先頭)と整合。/coins/categories に vs_currency=jpy を付けても market_cap が変わらないことを実測し、'米ドル'固定という単位表記が正しいことを確認。vitest(21 tests)・tsc --noEmit・eslint をこのworktreeで実行し全てグリーン(報告と一致)。(2) 単位/符号/期間: JPY建て(価格・銘柄別時価総額)とUSD建て(世界合計・ステーブルコイン計)の混同なし、%スケールも実測(58.28...)で妥当。買い越し/売り越しの符号は本ソースに存在せず(holdings_stock/price_onlyのみでnet_flowを名乗る指標が無い)、それ自体は設計として妥当。ただし resolveObservationPeriod/isPeriodObservable の day 粒度での相互作用に疑義あり(下記problem)。(3) 指標定義: 5指標とも「何を測るか」の説明はストック(残高)とフロー(資金流出入)の混同を明示的に否定しており実態と整合。(4) 公表前スキップ判定: month/quarter/week/year では『期間終了を過ぎるまでobservable=false』というロジック自体は自然だが、本モジュールの主目的である『日次実行でday粒度を毎日記録する』設計とisPeriodObservableを組み合わせた場合の整合性が未検証・未テストで、疑わしい実装パターンを検出した(下記)。CoinGecko API利用規約は https://www.coingecko.com/en/api_terms を自分でcurl取得し生HTMLから帰属条項を直接引用して確認した。",
+    "problems": [
+      {
+        "severity": "medium",
+        "summary": "isPeriodObservable を day 粒度に適用すると、その日のうちは常に observable=false になり、『日次実行で当日分を day 粒度のまま記録する』という本モジュールの主要な運用設計(実装者の報告に明記)と矛盾しうる。テストも week/month のみで day+observability の組合せは未検証。",
+        "fix": "isPeriodObservable(resolveObservationPeriod('day', now), now) を統合側が日次バッチのゲートとして呼ぶ運用になるのか、それとも day は常に無条件で記録し isPeriodObservable は『蓄積済みの day 行から週/月/四半期/年の比較値を統合側が確定させてよいか』の判定にのみ使うのか、設計意図をコード上に明記(JSDocに一言追記+ day 粒度でのテストケース追加)する。もし前者(日次ゲートに使う設計)であれば、day 粒度は『リアルタイムAPIで公表ラグ無し=取得した瞬間がそのまま確定値』という他の指標定義の説明と整合するよう isPeriodObservable 自体を day では常時 observable=true にする特別扱いへ修正する。"
+      },
+      {
+        "severity": "medium",
+        "summary": "コード内コメント/usageTerms は『商用利用・再配布には attribution が必要』と条件付きで書いているが、CoinGecko API Terms (https://www.coingecko.com/en/api_terms) を直接取得して原文を確認したところ『you undertake that in your usage of the CoinGecko API, you shall duly attribute ownership... by displaying prominently the message \"Powered by CoinGecko\"』は利用形態(個人/商用)を区別せず『API を使う際は』という一般義務として書かれている。また実装は sourceUrl/usageTerms という内部メタデータを持つのみで、コード全体を検索しても『Powered by CoinGecko』という文字列・UI表示は一切存在しない(このPRの範囲がデータ層のみで画面が未実装なのは理解できるが、コメントの法的性格づけ自体が原文とずれている)。",
+        "fix": "コード冒頭コメントと usageTerms の文言を『個人/商用を問わずAPI利用時は「Powered by CoinGecko」(Arial相当・10pt以上)の表示が必要』という原文どおりの記述に修正する。加えて、今後 moneyflow の画面にこのデータを表示するフェーズで、実際に視認可能な『Powered by CoinGecko』表示を出す作業をTODOとして残す(現状は内部メタデータのみで規約上の表示義務を満たしていない)。"
+      },
+      {
+        "severity": "low",
+        "summary": "parseCoinGeckoCoinMarkets は『配列であること』『空配列でないこと』しか検証しておらず、要求した COINGECKO_MAJOR_COIN_IDS (5銘柄) のうち一部だけがレスポンスに欠けているケース(CoinGecko側の一時的なデータ欠損等)を検知できない。様式(配列・各フィールドの型)は正しいまま件数だけ減るケースが素通りしてしまう。",
+        "fix": "パース後に ids の全件が結果に含まれているか(ids.every(id => result.some(c => c.id === id)))を検査し、欠けていれば throw する一行を追加する(ルール2『想定外を黙って通さない』の徹底)。"
+      }
+    ]
+  }
+}

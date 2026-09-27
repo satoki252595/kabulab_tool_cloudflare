@@ -1,0 +1,426 @@
+### 0 業種別時価総額
+URL: https://www.jpx.co.jp/markets/statistics-equities/misc/07.html
+measures: 東証33業種別の月末時点の時価総額。「資金の純流入額」ではなく残高(ストック)。2022年4月の市場区分再編以降はプライム市場ベースの数値になっている点に注意(区分変更で系列が不連続になりうる)。
+format: Webページ表示+Excelファイル(直近分を都度差し替え)
+cost: サイト上の閲覧は無料。商用の二次利用(kabulabのような公開Webへの加工転記)は下記利用規約により別途JPXとの許諾/契約が必要と読める。
+
+### 1 統計月報・売買代金/売買高(市場別)
+URL: https://www.jpx.co.jp/markets/statistics-equities/monthly/index.html
+measures: 市場別・銘柄区分別の月間/年間売買高・売買代金。売買代金は総取引額(グロス)であり、買い越し/売り越し(純流入)を意味しない。33業種別の同等の内訳が同一ページ体系に存在するかは、直接ページ取得が403で拒否されたため未確認。
+format: unknown(Excel/PDF想定だが未確認)
+cost: None
+
+### 2 空売り集計(業種別空売り比率)
+URL: https://www.jpx.co.jp/markets/statistics-equities/short-selling/index.html (日次集計。実在・200 OK), https://www.jpx.co.jp/markets/statistics-equities/short-selling/01.html (月間集計。実在・200 OK)
+measures: 立会市場の株式・ETF・REIT・新株予約権証券について、市場全体および東証33業種別に『空売りの売買代金 ÷ 総売買代金』の比率を日次公表。金額そのものの純流入指標ではなく比率(ratio)である点に注意。
+format: PDF(実サンプル確認: 単位百万円の表形式、例 260422-m.pdf)
+cost: None
+
+### 3 投資部門別売買状況(株式)
+URL: https://www.jpx.co.jp/markets/statistics-equities/investor-type/index.html
+measures: 投資部門(個人、外国法人等、証券会社、信託銀行等)別の買い金額・売り金額・差引(=純売買代金)。東証公式統計の中で『純流入出(net flow)』概念に最も近いもの。ただし粒度は市場合算・商品種別(株式全体/ETF/REIT/海外投資家地域別)であり、33業種別の内訳は提供されていない。
+format: unknown(Excel/CSV想定、直接ページ確認は403で不可)
+cost: None
+
+### 4 東証33業種別株価指数・TOPIX-17シリーズ
+URL: https://www.jpx.co.jp/markets/indices/line-up/files/cal2_13_sector.pdf
+measures: 33業種別および17業種(TOPIX-17)の時価総額加重株価指数(騰落率)。価格・パフォーマンス指標であり、資金の流入出額そのものではない。
+format: Web表示、算出要領・ファクトシートPDF、有償ではAPI/CSV配信(データベンダー経由)
+cost: None
+
+### 5 J-Quants API(個人向け)
+URL: https://jpx-jquants.com/
+measures: 上場銘柄一覧(33業種コード付き)+株価四本値(売買代金含む)をAPI取得でき、これを自前で33業種集計すれば『業種別売買代金(グロス)』や『業種別時価総額の再計算』を独自算出できる。投資部門別売買状況相当のデータ(trades_spec)もLight以上のプランで取得可能(ただし業種別ではなく市場全体粒度)。
+format: REST API(JSON)
+cost: Free(無料)/Light 1,650円/月/Standard 3,300円/月/Premium 16,500円/月(2026年時点の公表価格として確認)。ただし上記の通り商用利用不可のためkabulabでは採用できない。
+
+### 6 J-Quants Pro(法人向け)
+URL: https://www.jpx.co.jp/markets/other-data-services/j-quants-pro/index.html
+measures: J-Quants APIと同種のデータ(上場銘柄一覧・株価四本値・投資部門別売買状況・売買内訳データ等)を法人向けライセンスで提供。売買内訳データ(breakdown)は信用取引/空売りフラグ付きの銘柄別日次売買代金・出来高で、業種集計すれば『業種別の信用取引由来売買代金』等も算出できる可能性がある。
+format: API/CSV/Snowflake
+cost: 確認できた価格例: 財務情報データセットが単一法人契約で150,000円/月、関連法人利用は230,000円/月(2025年のJPXニュースリリースより)。他データセットの価格は unknown。
+
+### 7 東証上場銘柄一覧(銘柄マスタ, data_j.xls)
+URL: https://www.jpx.co.jp/markets/statistics-equities/misc/01.html （直接ファイルURL: https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx）
+measures: 全上場銘柄のコード・銘柄名・市場区分・33業種コード/名称・規模区分のマスタ一覧。資金フローの実データではなく、他の銘柄別データ(株価・売買代金・信用残など)を33業種別に自前集計するための必須の対応表(結合キー)。
+format: Excel(.xls)
+cost: None
+
+### 8 銘柄別信用取引週末残高
+URL: https://www.jpx.co.jp/markets/statistics-equities/margin/05.html
+measures: 全上場銘柄の週末時点の信用取引買い残高・売り残高(株数・金額)。銘柄別なので、上記の33業種マスタと結合すれば『業種別信用買い残/売り残』を自前集計できる。
+format: unknown(CSV/Excel想定、直接ページ確認は403で不可)
+cost: None
+
+### 9 投資部門別売買状況(株式)【週間・月間・年間】
+URL: https://www.jpx.co.jp/markets/statistics-equities/investor-type/index.html
+measures: 東証(プライム/スタンダード/グロース)における株式の投資部門別(海外投資家/個人/証券会社/事業法人/信託銀行/都銀・地銀等/生保・損保/その他金融機関/投資信託 等)の「売り」「買い」(売買代金・株数)と「差引(買い越し・売り越し)」。差引がいわゆる純流入出(net flow)に相当し、売り・買いはgross turnoverに相当するため実質mixed。REIT(不動産投資信託証券)についても同枠組みで別ページ(投資部門別売買状況
+format: PDF、Excel(xlsx)。CSVも別途あり(2026年4月23日にファイル名・フォーマット変更、Tousi_DV_W_YYYYMMDD_YYYYMMDD形式)。2026年9月29日公表分からファイル構成が単一化(株数・金額の別ファイルを統合し直近週のみ収録)される予定との情報あり(要継続確認)。
+cost: 無料(統計ページの通常閲覧・ダウンロードは無償)。ヒストリカルの大量データや個別銘柄粒度が必要ならJ-Quants ProやJPXの有料データ配信を要検討。
+
+### 10 投資部門別取引状況(先物・オプション)【週間・月間】
+URL: https://www.jpx.co.jp/markets/statistics-derivatives/sector/index.html
+measures: 日経225先物・TOPIX先物・各種オプション等、デリバティブ商品ごとの投資部門別(海外投資家/個人/証券会社/事業法人等)売買高・取組高(建玉)。株式現物の投資部門別売買状況と対になる、先物・オプション版の投資主体別フロー。
+format: PDF、CSV。
+cost: 無料(統計ページ)。
+
+### 11 海外投資家地域別株券売買状況【月間・年間】
+URL: https://www.jpx.co.jp/markets/statistics-equities/investor-type/04.html
+measures: 海外投資家の株式売買を北米・欧州・アジア・中東・オセアニア・中南米等の地域別に分解した株数・金額(月間・年間)。「投資部門別売買状況」の海外投資家カテゴリをさらに地域分解したもの。
+format: PDF、Excel。
+cost: 無料。
+
+### 12 信用取引残高等(信用取引現在高/銘柄別信用取引週末残高)
+URL: https://www.jpx.co.jp/markets/statistics-equities/margin/04.html
+measures: 信用取引の買い残・売り残(制度信用/一般信用別)の残高(ストック)。個別銘柄単位の週末残高も別途あり(05.html)。レバレッジ・ポジションの積み上がり/巻き戻しの代理指標。
+format: PDF、Excel。J-Quants Pro経由ではweekly_margin_interestというAPIエンドポイントで銘柄別週次データを取得可能。
+cost: 無料(統計ページ)。銘柄別×長期ヒストリカルが必要ならJ-Quants Pro等の有料契約を検討。
+
+### 13 指数連動型上場投資信託受益権等買入等(日銀ETFオペレーション結果)
+URL: https://www.boj.or.jp/statistics/boj/fm/ope/index.htm (実績ZIP一覧: pastetfreit.zip=ETF・J-REIT買入実績, pastetf.zip=ETF貸付残高, pastetflending.zip=ETF貸付結果) / 保有残高(簿価)の定例開示は https://www.boj.or.jp/statistics/boj/other/acmai/index.htm (営業毎旬報告、勘定科目「金銭の信託(信託財産指数連動型上場投資信託)」)
+measures: 日銀による株価指数連動型ETF(および従来はJ-REIT)の買入実績(簿価ベース)・保有残高。2024年3月19日付けで新規買入は終了し、2025年9月19日の金融政策決定会合以降は市場売却の方針が決定されている。
+format: unknown(過去言及からZIPファイル配布との情報あり、要検証)。
+cost: 無料。
+
+### 14 自社株買いデータ(QUICK Data Factory)
+URL: https://corporate.quick.co.jp/data-factory/product/data029/
+measures: 上場企業の自己株式取得(自社株買い)について、取締役会決議日・公表日・開始日・取得株式数・取得総額・取得方法等を適時開示情報から独自に集計・構造化したデータ。買戻し進捗やシーズナリティが分析可能。
+format: unknown(QUICK Data Factory製品群は通常API/CSV/ファイル配信)。
+cost: unknown(要問い合わせ。QUICK Data Factoryは法人向け有償データ商品で価格は個別見積りが通例)。
+
+### 15 J-Quants API / J-Quants Pro (trades_spec, weekly_margin_interest)
+URL: https://jpx-jquants.com/
+measures: 個人向けJ-Quants API(無料〜Light以上の有料プラン)と法人向けJ-Quants Pro(有償)を通じ、上記の投資部門別売買状況(trades_spec)、銘柄別信用取引週次残高(weekly_margin_interest)等をプログラム経由(REST API/CSV/Snowflake)で取得可能。JPXの一次統計データをAPI化した二次配信サービスという位置づけ。
+format: JSON API(REST)。J-Quants Proはさらに CSV/Snowflake経由配信にも対応。
+cost: 個人向けJ-Quants APIは無料プランありだが、trades_spec(投資部門別売買状況)・weekly_margin_interest等はLightプラン以上が必要(価格は公式サイトで別途確認要、本調査では金額未取得=unknown)。法人向けJ-Quants Proは完全に個別見積り(jquants-pro@jpx.co.jpへの問い合わせ制、価格非公開)。
+
+### 16 JPX ETF月間売買状況（売買高・売買代金）
+URL: https://www.jpx.co.jp/equities/products/etfs/data/01.html
+measures: 上場ETF全銘柄の月間・年間の売買高（口数）・売買代金の合計値。あくまで市場で成立した取引の出来高であり、ファンドへの純資金流入出（設定・解約）ではない。銘柄別月間相場表（始値・高値・安値・終値・売買高・売買代金）も別ファイルであり2009年分から遡れる。
+format: xls/xlsx（Excelブック）
+cost: 無料（サイト掲載分）
+
+### 17 JPX 投資部門別売買状況（ETF）
+URL: https://www.jpx.co.jp/markets/statistics-equities/investor-type/02.html
+measures: ETF市場における投資部門別（個人・海外投資家・証券会社・事業法人・信託銀行等）の買付・売付の口数・金額と、その差引（買い越し/売り越し）。市場内での『誰が誰から買ったか』のネットポジション変化に最も近い統計。
+format: xls（2026/10/13掲載分からxlsxに変更、PDF版も同時提供予定と告知あり）
+cost: 無料
+
+### 18 JPX REIT月間売買状況・投資部門別売買状況（REIT）
+URL: https://www.jpx.co.jp/markets/statistics-equities/investor-type/03.html
+measures: J-REIT市場の投資部門別買付・売付の口数・金額と差引。REIT月間売買状況（売買代金・売買高）も別ページで提供。
+format: xls/xlsx + PDF（2026/10/13以降はExcelは1シートに統合）
+cost: 無料
+
+### 19 JPX インフラファンド 月次レポート・銘柄一覧
+URL: https://www.jpx.co.jp/equities/products/infrastructure/reports/index.html (実データPDFは https://www.jpx.co.jp/equities/products/infrastructure/reports/nlsgeu000004p6cc-att/INFRA.pdf 、URLは固定で毎月上書きされる方式)
+measures: 東証インフラファンド指数の推移、上場インフラファンド全体の時価総額合計、1日平均売買代金、予想年間分配金利回り。ETF/REITと異なり投資部門別売買状況（投資家別ネット売買）の専用統計は探した範囲では見当たらなかった（investor-typeページの区分は『株式・ETF・REIT・海外投資家地域別株券』のみで、インフラファンドの投資部門別区分は無し＝unknown/未提供の可能性）。
+format: PDF（Excel提供の有無は未確認）
+cost: 無料
+
+### 20 投資信託協会（現・一般社団法人資産運用業協会）統計データ／契約型公募投資信託の投資信託会社別資産増減状況（実額）
+URL: https://www.toushin.or.jp/statistics/statistics/data/backno_I01114_pub/
+measures: 実ファイルをダウンロードし列構成を確認済み。投資信託会社別に月次で『設定額(A)・解約額(B)・償還額(C)・資金増減額(D=A-(B+C))・収益分配額(E)・運用増減額(F)・純資産増減額・純資産総額（月末残高）』を提供。D列＝資金増減額が最も『純粋な資金流入出』に近い指標。総合計シートは株式投信＋公社債投信の合算だが、統計データ一覧ページには公募投信全体を商品分類別（株式投信/公社債投信/ETFを含む18項目）に分けた表（B区分）
+format: xlsx（旧年度分はxls）
+cost: 無料
+
+### 21 投資信託協会 統計データ／D区分（公募・私募不動産投資信託の月末資産増減状況）
+URL: https://www.toushin.or.jp/statistics/statistics/index.html
+measures: J-REIT（公募・私募）についても投資信託と同一フォーマットの資産増減状況（設定額・解約額・資金増減額・純資産総額）をD-1/D-2として提供。加えてD-3（組入不動産の保有状況）、D-4（資産売買状況＝不動産の取得・売却実績）、D-5（募集・売出し状況）、D-6（分配状況）まで細分化。
+format: xlsx/xls
+cost: 無料
+
+### 22 投資信託の主要統計等ファクトブック（Factbook of Japanese Investment Trusts）
+URL: https://www.imaj.or.jp/statistics/factbook/
+measures: 公募株式投信の商品分類別純資産総額推移、ETFを含む主要区分の残高推移など、月次統計を集計・グラフ化したサマリーPDF。生データではなく編集済みの解説資料。
+format: PDF
+cost: 無料
+
+### 23 QUICK 資金流出入データ（投信モニタリングサービス／資産運用研究所）
+URL: https://corporate.quick.co.jp/products/fund-db/
+measures: 国内公募投信全体（ETFを含む）を対象に、日次・週次・月次の資金流出入額の推計値（当月累計・年初来・3ヶ月・6ヶ月・1年・3年等の期間集計）を提供。QUICK独自の推計モデルによる値であり、投信協会の確定値とは算出方法が異なる可能性がある点に留意（未確認＝不明瞭）。
+format: CSV（ダウンロード可能なファイル形式との記載あり）
+cost: unknown（法人向け個別見積もりで、公開ページに価格表記なし。日経テレコン経由のQUICK Asset Design Pro等関連製品も価格は問い合わせベース）
+
+### 24 ARES J-REIT Databook（不動産証券化協会）
+URL: https://j-reit.jp/statistics/
+measures: J-REIT市場の時価総額、指数、資金調達実績、不動産取得・売却実績などの月次集計値。
+format: Excel
+cost: unknown
+
+### 25 公社債投資家別売買高（公社債店頭売買高のうち投資家別集計）
+URL: https://www.jsda.or.jp/shiryoshitsu/toukei/toushika/index.html
+measures: 協会員（証券会社・特別会員）から集めた店頭売買報告に基づき、投資家部門別（都市銀行・地方銀行・信託銀行・農林系金融機関・生保損保・投資信託・事業法人・外国人・個人・その他等）に、国債（年限区分別）・地方債・政府保証債・財投機関債・普通社債・CB・金融債・短期社債等の月次売買高を集計。同じExcel内に(1)売買高(売付+買付)、(2)売付額、(3)買付額、(4)差引(売付額－買付額。メディアの「買越額」とは符号が逆)の各シートがあり、差
+format: Excel（1ファイル26シート）＋解説PDF
+cost: 無料
+
+### 26 公社債発行額・償還額等
+URL: https://www.jsda.or.jp/shiryoshitsu/toukei/hakkou/index.html
+measures: 国内公募公社債（国債・地方債・政府保証債・財投機関債・普通社債・CB・金融債等）の種類別・月次の発行額（払込日ベース）・償還額（償還日ベース）。株式以外の上場・公募金融商品の『新規供給フロー』の規模を国債と比較できる。
+format: Excel／PDF
+cost: 無料
+
+### 27 資金循環統計（Flow of Funds Accounts）
+URL: https://www.boj.or.jp/statistics/sj/index.htm
+measures: 家計・民間非金融法人企業・一般政府・金融機関（業態別）・海外という制度部門別に、現金預金・貸出・国債財投債・事業債（社債）・株式等・投資信託受益証券・対外証券投資等、金融商品ごとの残高（ストック）と、四半期の取引による増減（フロー、評価損益を除く）を集計。財務省『国債等の保有者別内訳』の原データでもあり、株・債券・投信・対外証券投資を横断的に比較できる唯一の公的マクロ統計。
+format: PDF（参考図表）／Excel（xlsx）／時系列データ検索サイトでCSV・JSON取得可
+cost: 無料
+
+### 28 国債等の保有者別内訳
+URL: https://www.mof.go.jp/jgbs/reference/appendix/index.htm
+measures: 日銀資金循環統計を用いて、国債＋国庫短期証券（T-Bill）の保有者を日本銀行・銀行等・生損保等・年金基金・公的年金・海外・家計・その他に区分した残高構成比を、財務省が四半期ごとにPDFで再整理・公表。（例：令和8年3月末速報で国債合計1,013兆7,559億円、日銀47.9%等）
+format: PDF
+cost: 無料
+
+### 29 個人向け国債発行額の推移
+URL: https://www.mof.go.jp/jgbs/reference/appendix/kojin_suii.xls
+measures: 個人向け国債（変動10年・固定5年・固定3年）の回号（発行月）別の発行額（募集・販売実績）の推移。個人投資家が国債に新規投入した資金のグロス規模を示す。
+format: Excel
+cost: 無料
+
+### 30 投資部門別取引状況(先物・オプション)
+URL: https://www.jpx.co.jp/markets/statistics-derivatives/sector/index.html
+measures: 日経225先物・TOPIX先物・JPX日経400先物・国債(長期国債)先物・各種オプション等の投資部門別(自己/委託の別、委託はさらに海外投資家・証券会社・個人・その他法人等)売買高・売買代金。あくまで『誰が売買したか』の内訳付き売買代金(gross)であり、業種別ではなく『指数・限月ごとの先物/オプション商品単位』の集計。東証33業種別の資金流出入そのものは出せない(それは現物株の投資部門別売買状況の担当領域)。
+format: CSV, PDF
+cost: 無料(サイト掲載分)
+
+### 31 取引総括表・月間統計資料(先物・オプション、商品先物含む)
+URL: https://www.jpx.co.jp/markets/statistics-derivatives/trading-volume/index.html
+measures: 株価指数先物・国債先物・オプションに加え、貴金属(金standard/金ミニ/白金/銀)・農産物・ゴム等の商品先物(旧TOCOM上場商品、2020年にJPX/大阪取引所へ統合)の商品別売買高(出来高)・建玉残高の推移。資金の『流入出』ではなく取引量・残高。
+format: PDF中心(CSVの有無は商品により異なる、要個別確認)
+cost: 無料(サイト掲載分)
+
+### 32 取引参加者別建玉残高一覧
+URL: https://www.jpx.co.jp/markets/derivatives/open-interest/index.html
+measures: 先物・オプション全銘柄の取引参加者(証券会社等)別の建玉残高(前週末営業日の日中取引終了時点)。ポジションのストックであり資金の流入出そのものではないが、週次の残高増減から資金の方向性を近似できる。
+format: PDF/CSV(要確認、unknown)
+cost: None
+
+### 33 有料情報(先物・オプション関連)/JPXデータクラウドサービス
+URL: https://www.jpx.co.jp/markets/paid-info-derivatives/index.html (存在確認済み。有料情報の案内ページで、実データ購入窓口は https://dc.jpx-jquants.com/ja 「J-Quants DataCube」)
+measures: 先物・オプションのヒストリカル相場・統計情報を、商用利用・外部配信可能なライセンス付きで有償提供するサービス。無償版統計の『商用二次利用・第三者提供』を行いたい場合の正規窓口。
+format: unknown
+cost: 先物・オプション版の具体的料金は未確認(unknown)。類似の株式版料金表(https://db-ec.jpx.co.jp/client_info/JPX_DLSITE/html/price.pdf)では『東証株式四本値・全銘柄・月額』が自己使用21,395円/外部配信64,185円という例があり、『提供料』に加え第三者への外部配信には別途『外部配信ライセンス料』が課金される料金構造。デリバティブ版はこれと同様の構造だが金額は個別見積り(要問合せ)と推測。
+
+### 34 店頭FX月次速報
+URL: https://www.ffaj.or.jp/library/performance/fx_flash/
+measures: FFAJ会員(店頭FX取扱業者)各社合算の店頭FX月次取引高(想定元本ベース)、建玉(売建玉・買建玉、通貨別)、預託証拠金額。個人/法人の内訳は限定的(会員社合算ベースが基本、要個別確認)。取引高は名目ベースでありレバレッジを考慮した実資金とは別。
+format: Excel(XLS)、Word(DOC)
+cost: 無料
+
+### 35 取引所為替証拠金取引(くりっく365)/取引所CFD(くりっく株365) 過去データ・出来高推移
+URL: https://www.tfx.co.jp/historical/fx/transit_fx.html (くりっく株365側は https://www.tfx.co.jp/historical/cfd/transit_cfd.html)
+measures: 取引所上場FX『くりっく365』の通貨ペア別月次出来高(枚数、1日平均併記)、月末建玉。姉妹サイトのくりっく株365(株価指数CFD)は同形式で別ページ(https://www.tfx.co.jp/historical/cfd/transit_cfd.html)。取引所取引のためFFAJの店頭FXとは別母集団(取引所清算 vs 相対)。
+format: HTML表(ダウンロード用CSV/Excelの有無は未確認、unknown)
+cost: 無料
+
+### 36 商品先物市場に関する統計データ
+URL: https://www.jcfia.gr.jp/study/statistics/statistics.html
+measures: 商品先物市場(旧TOCOM系・大阪取引所商品部門)の出来高・建玉等の統計と見られるが、ページの表データが画像(img001.png〜img010.png形式)として掲載されており機械可読な形式ではない。ページの最終更新表示が『2019/5/13』となっており、更新が止まっている可能性が高い。
+format: 画像(PNG)埋め込みのHTML — CSV/Excel等の機械可読形式は確認できず
+cost: 無料(閲覧のみ)
+
+### 37 Commitments of Traders (COT) Report — Japanese Yen Futures (CME)
+URL: https://www.cftc.gov/MarketReports/CommitmentsofTraders/index.htm （実在・データにたどり着ける。API窓口: https://publicreporting.cftc.gov/stories/s/r4w3-av2u も実在確認済み）
+measures: シカゴ・マーカンタイル取引所(CME)上場の円先物(契約コード097741、円125,000単位)について、トレーダー区分別(非商業的=投機筋/商業的=実需筋/非報告)、細分類版(Disaggregated: dealer/asset manager/leveraged funds/other reportables)の建玉(ポジション)残高。日本国内の取引ではなく、米ドル建て・米国上場市場における『円』への海外投機筋のポジション。資金
+format: HTML、CSV、TSV、XML、RSS。Public Reporting Environment(Socrata系API)経由でのクエリ・API取得も可(https://publicreporting.cftc.gov/stories/s/r4w3-av2u)。
+cost: 無料
+
+### 38 JVCEA 会員統計情報(月次: 現物取引高・証拠金取引建玉・口座数)
+URL: https://jvcea.or.jp/statistics/information/ (統計情報ページ、実在・アクセス可能。例示PDF https://jvcea.or.jp/cms/wp-content/themes/jvcea/images/pdf/statistics/202504-KOUKAI-01-FINAL.pdf も実在・ダウンロード可能を実機で確認済み)
+measures: JVCEA会員(登録暗号資産交換業者)合算の月次現物取引高(暗号資産銘柄別の数量・金額)、証拠金取引の売建/買建数量・金額(建玉)、口座数(証拠金取引口座は現物との内数)。個社別の内訳は非公表。例: https://jvcea.or.jp/cms/wp-content/themes/jvcea/images/pdf/statistics/202504-KOUKAI-01-FINAL.pdf
+format: PDF(CSV/Excel提供なし)
+cost: 無料
+
+### 39 JVCEA 参考価格
+URL: https://jvcea.or.jp/statistics/refer_rate/
+measures: 国内暗号資産交換業者(取引所・販売所)の約定レートに基づく参考価格。対象: BTC/JPY, BCH/JPY, ETH/JPY, LTC/JPY, MONA/JPY, XRP/JPY, XYM/JPY, DOGE/JPY, SOL/JPY, XEM。金額・出来高データは含まない価格のみ。
+format: HTML(銘柄別ページ、CSV/API提供なし)
+cost: 無料
+
+### 40 JVCEA 暗号資産取引についての年間報告
+URL: https://jvcea.or.jp/information/statistics-reports/20250930-001/
+measures: 年度(4月〜翌3月)集計の現物/証拠金取引高、口座数推移、取扱銘柄数等の年次サマリ。例: 2022年度版 https://jvcea.or.jp/cms/wp-content/themes/jvcea/images/pdf/tokei_20230929.pdf 、2020年度版 https://jvcea.or.jp/cms/wp-content/themes/jvcea/images/pdf/tokei_20211119.pdf
+format: PDF
+cost: 無料
+
+### 41 金融庁 暗号資産交換業者登録一覧
+URL: https://www.fsa.go.jp/menkyo/menkyoj/kasoutuka.pdf
+measures: 登録済み暗号資産交換業者の社数・商号・登録番号・登録年月日・取扱暗号資産銘柄一覧(2026年9月1日時点で全27社)。取引金額・預かり資産等の金額データは含まない(=市場の「構成プレイヤー」の把握用)。
+format: PDF
+cost: 無料
+
+### 42 金融庁 金融審議会「暗号資産制度に関するワーキング・グループ」資料(業界集計値: 口座数・預り資産)
+URL: https://www.fsa.go.jp/singi/singi_kinyu/tosin/20251210/01.pdf
+measures: 国内暗号資産交換業者の累計口座開設数・顧客預り資産合計等の業界集計値。WebSearchのAI要約経由で『2025年10月時点で累計口座数1300万超、顧客預り資産合計5兆円超』を把握したが、本調査ではPDF本文の直接抽出(テキスト層抽出)に失敗しており、該当箇所・脚注・算出方法の一次確認はできていない(要検証)。関連の事務局説明資料: https://www.fsa.go.jp/singi/singi_kinyu/angoshisan
+format: PDF
+cost: 無料
+
+### 43 bitFlyer Lightning API (Public API: Ticker/Board/Executions)
+URL: https://lightning.bitflyer.com/docs
+measures: BTC/JPY等の気配値(Ticker: 24時間出来高・高値安値・最終気配)、板情報(Board)、公開約定履歴(Executions)。認証不要の公開マーケットデータ。
+format: API(JSON)
+cost: 無料(利用制限は個別ドキュメント参照、詳細レート制限値は本調査では未確認)
+
+### 44 Coincheck Exchange API (Public API: Ticker/Trades/Order Book)
+URL: https://coincheck.com/documents/exchange/api
+measures: Ticker(最終気配・bid/ask・高値安値・出来高)、Public Trades(約定ID・金額・レート・売買種別・タイムスタンプ)、Order Book(板情報)。
+format: API(JSON)
+cost: 無料(Public APIは認証不要。新規注文APIは4req/s、注文詳細は1req/sという制限記載があるがPublic系の明示的なレート制限は未確認)
+
+### 45 CoinGecko API (Demo/無料ティア)
+URL: https://www.coingecko.com/en/api (紹介ページ) / https://www.coingecko.com/en/api_terms (規約) / https://www.coingecko.com/en/api/pricing (プラン比較表)
+measures: 銘柄別の価格・時価総額・24h出来高、供給量(サーキュレーティング/トータル)、グローバル時価総額・出来高・ドミナンス推移、ステーブルコインのカテゴリ別合計供給量など。日本国内限定のデータは無く、グローバル/銘柄単位の集計。
+format: API(JSON)
+cost: Demo無料(月10,000コール、100コール/分)。商用ライセンス付きBasicプランは月$35(年払いで$29相当)から。再配布・ホワイトラベルにはEnterprise契約が必要。
+
+### 46 CoinMarketCap API (Basic/無料ティア)
+URL: https://coinmarketcap.com/api/pricing/
+measures: 銘柄別の価格・時価総額・24h出来高・供給量、グローバル時価総額指標、カテゴリ別(ステーブルコイン等)集計。国別/日本限定の切り口は無い。
+format: API(JSON)
+cost: Basic(無料): 月15,000クレジット、30以上のエンドポイント。上位プランの正確な価格帯は本調査では確定できず(要確認、$29〜規模との情報あり)。
+
+### 47 資金循環統計 (Flow of Funds Accounts)
+URL: https://www.boj.or.jp/statistics/sj/index.htm
+measures: 「金融取引表(フロー)」は四半期中に部門間でどれだけ資金が動いたか(まさに資金の流れ)、「金融資産・負債残高表(ストック)」は期末時点の保有残高を、部門別(家計/民間非金融法人企業/一般政府/金融機関/海外)×金融商品別(現金・預金/貸出/債務証券/株式等・投資信託受益証券/保険・年金・定型保証等)に記録。家計の「現預金・株式・投信・保険」への資金配分を見るのに最適。
+format: 本体はExcel(XLSX)配布。時系列統計データ検索サイト(stat-search.boj.or.jp)ではCSV/JSON形式でも取得可、2026年2月からAPI機能(JSON/CSV)提供開始
+cost: 無料
+
+### 48 対外及び対内証券売買契約等の状況(指定報告機関ベース)
+URL: https://www.mof.go.jp/policy/international_policy/reference/itn_transactions_in_securities/index.htm
+measures: 指定報告機関(銀行等・金融商品取引業者・保険会社・投資信託委託会社・資産運用会社)経由の居住者⇔非居住者間の証券売買契約を集計。「取得-処分」の差引(プラス=取得超/マイナス=処分超)で公表され、投資家部門別・商品別(株式・投資ファンド持分/中長期債/短期債)にCSV(montha1.csv等)で細分化。海外投資家が日本株・日本国債をネットで買っているか売っているかが分かる代表的な指標(日次ニュースの「外国人買い越し」の元データ)。
+format: CSV(ページ内に直接リンク)、e-Statでも統計表ID経由で提供(https://www.e-stat.go.jp/stat-search?layout=normal&toukei=00350505)
+cost: None
+
+### 49 国際収支統計 (Balance of Payments, IMF国際収支マニュアル第6版ベース)
+URL: https://www.mof.go.jp/policy/international_policy/reference/balance_of_payments/data.htm
+measures: 経常収支・資本移転等収支・金融収支(直接投資/証券投資[株式・投資ファンド持分と負債性証券(債券)を区別]/金融派生商品/その他投資/外貨準備増減)を月次で計上。「対外・対内直接投資(地域別・業種別)」「対外・対内証券投資」の内訳表で、日本から見てどの国・地域にどれだけ資金が流出入しているかが分かる、R4(世界の各市場への資金の流れ)に最も直接答えられる統計。
+format: CSV(財務省)、時系列統計データ検索サイトのCSV/JSON API(日本銀行、https://www.boj.or.jp/statistics/br/bop_06/index.htm)
+cost: None
+
+### 50 NISA口座の利用状況に関する調査結果
+URL: https://www.fsa.go.jp/policy/nisa2/survey/ (最新四半期の実データ例: https://www.fsa.go.jp/policy/nisa/20250924.html, 集計表: https://www.fsa.go.jp/policy/nisa/20250924/2506.xlsx)
+measures: NISA制度(2024年以降は成長投資枠・つみたて投資枠、旧一般NISA・つみたてNISA・ジュニアNISAの経過措置分含む)の口座数・買付額を、年代別・都道府県別・金融機関業態別(全国銀行/地方銀行/証券会社等)に集計。個人の新規投資資金がどこへ向かっているかの代理指標。
+format: PDF(グラフ・表)が中心。集計表がExcel/CSVで別途提供されているかは本調査では未確認
+cost: None
+
+### 51 投資信託の資産増減状況統計
+URL: https://www.toushin.or.jp/statistics/statistics/index.html (imaj.or.jp/statistics/index.html からリンクされている現役ページ) → B-1「資産増減状況」月次時系列: https://www.toushin.or.jp/tws/toukei_dw/I0112B_pub_m.xlsx (公募, 420KB) / 私募版: https://www.toushin.or.jp/tws/toukei_dw/I0112B_pri_m.xlsx
+measures: 国内公募投資信託を株式投信・公社債投信等に分類し、設定額・解約額・資金増減額(設定-解約=まさにファンドへの純資金流入出)・運用増減額(市場変動による評価増減、資金の流れとは区別)・純資産総額・解約率を月次で集計。
+format: Excel(XLSX)
+cost: None
+
+### 52 政府統計の総合窓口 e-Stat / e-Stat API機能
+URL: https://www.e-stat.go.jp/api/
+measures: 財務省・金融庁等が公表する政府統計を横断的に検索・取得できる共通ポータル兼API基盤(データそのものではなく取得チャネル)。対外及び対内証券売買契約等の状況(統計表ID 00350505)などが実際にここから取得できることを確認済み。
+format: XML/JSON/CSV(API)、ブラウザからのファイルダウンロードも可
+cost: 無料
+
+### 53 IMF CPIS (Coordinated Portfolio Investment Survey)
+URL: https://db.nomics.world/IMF/CPIS
+measures: 国別・相手国別の対外証券投資「残高」(ストック)。株式・投資信託受益証券と長期/短期債務証券に分けて、どの国の投資家がどの国の証券をどれだけ保有しているかを二国間マトリクスで示す。フローではなく残高なので、期間差分を取って自前で純増減(近似フロー)を計算する必要がある。
+format: SDMX API(JSON/XML/CSV)、Webポータルからの手動ダウンロード(CSV/Excel)。DBnomics(db.nomics.world/IMF/CPIS)経由でも取得可
+cost: 無料
+
+### 54 IMF COFER (Currency Composition of Official Foreign Exchange Reserves)
+URL: https://data.imf.org/en/datasets/IMF.STA:COFER
+measures: 世界の中央銀行が保有する外貨準備の通貨別構成比・残高(ドル・ユーロ・円・人民元等)。個別国のデータは秘匿され、世界計・先進国計・新興国計のみ公表。
+format: SDMX API、CSV/Excelダウンロード
+cost: 無料
+
+### 55 BIS International Banking Statistics(Locational/Consolidated)と Debt Securities Statistics
+URL: https://data.bis.org/ (トップページ・LBS/CBS/IDSともに到達可能。一括DLは https://data.bis.org/bulkdownload 、API文書は https://stats.bis.org/api-doc/v2/ 、統計データ専用の利用規約は https://data.bis.org/help/legal)
+measures: 国際的な銀行の対外債権・債務(Locational/Consolidated Banking Statistics)、および自国外で発行された国際債券の発行残高(International Debt Securities)。いずれも「残高」ベースで、報告国×相手国×通貨×部門で銀行与信・証券発行の国際的な分布を把握できる。
+format: BIS Data Portal(SDMX REST v2.1、JSON/XML/CSV)、トピック単位のzip CSV一括ダウンロード(data.bis.org/bulkdownload)
+cost: 無料(BIS Data Portalは登録不要で公開)
+
+### 56 米財務省 TIC (Treasury International Capital) データ
+URL: https://home.treasury.gov/data/treasury-international-capital-tic-system-home-page (現行の正規URLは https://home.treasury.gov/data/treasury-international-capital-tic-system へ集約されているが、提示URLも200で直接到達可能)
+measures: 海外投資家による米国証券(国債・社債・株式等)の月次「純購入額(net purchase/sale)」、および米銀行・金融機関の対外負債。数少ない「真の月次フロー(売買代金の純額)」を公表する一次統計。
+format: CSV/Excel/HTMLでの一括ダウンロード、data.govからも配布(https://catalog.data.gov/dataset?q=treasury+international+capital)
+cost: 無料
+
+### 57 WFE Statistics Database(世界取引所連合)
+URL: https://statistics.world-exchanges.org/ (統計ポータル、要ログイン登録) / https://www.world-exchanges.org/our-work/statistics (概要・規約ページ、登録不要)
+measures: 世界の証券取引所の株式時価総額、株式売買代金(出来高)、上場企業数、ETF/債券/デリバティブの上場・売買統計など350以上の指標。「資金流入出」そのものではなく「時価総額」「売買代金」という規模・活況度の指標。
+format: 統計ポータル(statistics.world-exchanges.org)からのオンライン検索・CSV/Excelエクスポート
+cost: 無料(非会員でも Statistics Portal に登録すれば閲覧・エクスポート可。会員はより詳細なデータにアクセス可)
+
+### 58 ICI (Investment Company Institute) Weekly/Combined Estimated Long-Term Fund Flows & ETF Net Issuance
+URL: https://www.ici.org/research/stats/combined_flows
+measures: 米国拠点の長期(株式・債券・複合)投資信託とETFへの「推定純資金流入出」を週次で公表。地域別(国内株式/世界株式=先進国・新興国/課税対象債券等)のカテゴリ別内訳あり。
+format: Excel(.xls)ファイル配布(例: https://www.ici.org/etf_flows_data_2026.xls )、datahub.io にも同種データセット(自動更新)あり
+cost: 無料
+
+### 59 CFTC Commitments of Traders (COT) レポート
+URL: https://publicreporting.cftc.gov/stories/s/Commitments-of-Traders/r4w3-av2u/
+measures: 米国の先物・オプション市場における建玉(オープンインタレスト)の投資主体別内訳(商業筋/非商業筋(投機筋)/その他)。株価指数先物、金利先物、通貨先物(FX)、商品先物、ビットコイン先物なども含む。
+format: Socrata Open Data API(JSON/CSV/XML/RDF)、publicreporting.cftc.gov上のダッシュボード、cftc.gov上の固定長テキスト/Excel過去ファイル
+cost: 無料
+
+### 60 DefiLlama Stablecoins API / TVL API
+URL: https://stablecoins.llama.fi/stablecoins (ステーブルコイン残高API、200で実データ確認) / https://api.llama.fi/protocols (TVL API、プロトコル別TVL、200で実データ確認)
+measures: 世界のステーブルコイン発行残高(時価総額)の推移、チェーン別内訳、DeFiプロトコル別のTVL(預け入れ資産総額)。ネット発行増減(mint/burn差分)を日次残高の差分として近似計算できる。
+format: REST API(JSON)。無料版(api.llama.fi)と有料Pro版(pro-api.llama.fi、月額300ドルで高頻度枠・追加エンドポイント)
+cost: 無料(基本API)。Pro: 300ドル/月
+
+### 61 EPFR Global Fund Flows & Asset Allocation Data
+URL: https://isimarkets.com/epfr/ (https://epfr.com/ は現在も生きているが 301 で isimarkets.com/epfr/ へ転送される)
+measures: 世界の株式・債券ファンド(投資信託・ETF・機関投資家ファンド)の国別・地域別・セクター別「推定純資金フロー」。ヘッジファンドフローや資産配分(アロケーション)データも提供。まさに「世界のどこにお金が流れているか」の業界標準データだが有料。
+format: SFTP/Email/UIエクスポートでCSV/TXT形式配信
+cost: 公開されている価格表はなく個別見積り。Datarade等の業界情報では契約規模が年間約1万ドル〜65万ドル以上と幅広いレンジが紹介されている(現行の正確な価格は要問い合わせで確認できず、unknown寄り)。
+
+### 62 IIF Capital Flows Tracker / Capital Flows to Emerging Markets Report
+URL: https://www.iif.com/Products/Capital-Flows-Tracker
+measures: 新興国向けの月次ポートフォリオ資金フロー(株式・債券別)の推定値と、年2回発行の予測付きレポート(Capital Flows Report)。
+format: PDF/Web記事
+cost: Capital Flows Tracker本体はIIF会員限定(サイト上で「Members-Only-Content」の表示を確認。具体的な会費は非公開)。会員でない場合は個別のPDFレポート(例: 半期の Capital Flows Report)のみ無料公開されることがある。
+
+### 63 FRB Z.1 Financial Accounts of the United States(資金循環統計)
+URL: https://fred.stlouisfed.org/release?rid=52
+measures: 米国内の家計・企業・政府・金融機関・海外部門(Rest of the World)間の資産・負債の残高と、四半期ごとの取得・処分(フロー)を部門別・商品別(株式/債券/投信/預金等)に網羅する米国版資金循環統計。海外部門(ROW)のセクターを見ることで「海外→米国」「米国→海外」の資産クラス別フローが分かる。
+format: FRED REST API(JSON/XML/CSV)、Fed本体のData Download Program(DDP、将来的にFREDへ統合予定)
+cost: 無料(FRED APIキーは無料発行)
+
+### 64 ECB Statistical Data Warehouse / ECB Data Portal
+URL: https://data.ecb.europa.eu/ (ポータル) / https://data-api.ecb.europa.eu/service/data (SDMX REST API本体)
+measures: ユーロ圏の資金循環統計(Euro area accounts)、投資信託統計、国際収支・対外ポジション統計など。EU域内の資産クラス別資金フローの把握に使える。
+format: SDMX 2.1 RESTful API(旧SDW、2024年に data-api.ecb.europa.eu へ移行)、JSON/XML/CSV
+cost: 無料
+
+### 65 Eurostat(EU統計局)統計データベース
+URL: https://ec.europa.eu/eurostat/web/main/data/database ; https://ec.europa.eu/eurostat/help/copyright-notice
+measures: EU加盟国の金融資産・負債統計、国際収支、対外ポジション等(ECBデータの一部と重複するがEurostat側は財政・実体経済統計も豊富)。
+format: SDMX 3.0 API(JSON/XML/CSV)、Eurostat Data Browser経由の手動ダウンロード
+cost: 無料
+
+### 66 上場企業の時価総額(国別、World Federation of Exchanges原典の再配布)
+URL: https://data.worldbank.org/indicator/CM.MKT.LCAP.CD
+measures: 各国証券取引所に上場する国内企業の時価総額(米ドル建て、年次スナップショット)。原データはWFE(世界取引所連合)加盟取引所からの集計。
+format: CSV/XML/Excel一括ダウンロード、World Bank API(JSON)
+cost: 無料
+
+### 67 e-Stat API(政府統計の総合窓口 API機能)
+URL: https://www.e-stat.go.jp/api/
+measures: 資金循環統計・国際収支統計を含む政府統計データを統計表ID単位でJSON/XML取得するためのアクセス層(データそのものの一次発表元は日本銀行・財務省等)。
+format: API(JSON/XML)、CSV
+cost: 無料(利用にはe-Statユーザ登録とアプリケーションID取得が必要)
+
+### 68 BIS Data Portal (SDMX API v2)
+URL: https://data.bis.org/
+measures: 国際与信統計(Locational/Consolidated Banking Statistics)・債務証券統計(Debt Securities Statistics)等、国別・部門別の残高統計。
+format: API(SDMX)、CSV一括ダウンロード
+cost: None
+
+### 69 一般社団法人資産運用業協会(IMAJ)統計データ(旧・投資信託協会)
+URL: https://www.imaj.or.jp/statistics/index.html
+measures: 契約型公募投資信託の投資信託会社別資産増減状況(実額)、投資信託の世界統計、投資信託の主要統計等ファクトブック等。
+format: Excel(XLS)、PDF
+cost: None
+
+### 70 J-Quants API 利用規約(再配布・商用利用に関する制約の確認)
+URL: https://jpx-jquants.com/
+measures: 投資部門別売買状況(trades_spec)・信用取引週末残高(weekly_margin_interest)等、既存調査で挙げたJ-Quants APIの実際の利用規約文言。
+format: -
+cost: None
+

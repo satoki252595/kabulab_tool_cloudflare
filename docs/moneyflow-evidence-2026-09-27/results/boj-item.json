@@ -1,0 +1,58 @@
+{
+  "key": "boj-flow-of-funds",
+  "phase": 3,
+  "build": {
+    "status": "implemented",
+    "branch": "feat/moneyflow-src-boj-flow-of-funds",
+    "worktree_path": "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-7",
+    "commit": "8355102f6eff13c716ad3865228587aa32960c68",
+    "files": [
+      "services/moneyflow/lib/sources/boj-flow-of-funds.ts",
+      "services/moneyflow/lib/sources/boj-flow-of-funds.test.ts",
+      "services/moneyflow/lib/sources/fixtures/boj-sjpre-2026q2.xlsx",
+      "services/moneyflow/lib/sources/fixtures/boj-sj-index-2026-09-27.html"
+    ],
+    "indicators": [
+      "boj_ffa_cash_and_deposits_flow [R2]",
+      "boj_ffa_cash_and_deposits_stock [R2]",
+      "boj_ffa_loans_flow [R2]",
+      "boj_ffa_loans_stock [R2]",
+      "boj_ffa_debt_securities_flow [R2]",
+      "boj_ffa_debt_securities_stock [R2]",
+      "boj_ffa_jgb_and_filp_bonds_flow [R2]",
+      "boj_ffa_jgb_and_filp_bonds_stock [R2]",
+      "boj_ffa_corporate_bonds_flow [R2]",
+      "boj_ffa_corporate_bonds_stock [R2]",
+      "boj_ffa_equity_and_investment_fund_shares_flow [R2,R3]",
+      "boj_ffa_equity_and_investment_fund_shares_stock [R2,R3]",
+      "boj_ffa_equities_flow [R2,R3]",
+      "boj_ffa_equities_stock [R2,R3]",
+      "boj_ffa_listed_shares_flow [R2,R3]",
+      "boj_ffa_listed_shares_stock [R2,R3]",
+      "boj_ffa_investment_fund_shares_flow [R2,R3]",
+      "boj_ffa_investment_fund_shares_stock [R2,R3]",
+      "boj_ffa_insurance_and_pensions_flow [R2]",
+      "boj_ffa_insurance_and_pensions_stock [R2]",
+      "boj_ffa_outward_direct_investment_flow [R4]",
+      "boj_ffa_outward_direct_investment_stock [R4]",
+      "boj_ffa_outward_portfolio_investment_flow [R4,R3]",
+      "boj_ffa_outward_portfolio_investment_stock [R4,R3]"
+    ],
+    "schedule": "四半期のみ(週/月次データではない)。速報Excel(sjpre.xlsx)は日銀サイトの固定URLを毎回上書き配布(JPX等と同じ「固定URL上書き」運用)。実測: 2026年第2四半期(4〜6月)分は四半期末(6/30)の約2.5か月後、2026-09-17に速報公表。BOJは公表日そのものは確約していない(「概ね2〜3か月後」とのみ案内)。isPeriodAlreadyPublished(target, latestPublished)で実際に取得したファイルの申告期と比較して判定し、estimateNextReleaseWindow()は次回公表の「近似の目安」(四半期末+2〜4か月の窓)を返すのみで、これ単体で公表判定はしない設計にした。",
+    "verified_values": "2026-09-27にhttps://www.boj.or.jp/statistics/sj/sjpre.xlsx (速報, 2026年Q2)とhttps://www.boj.or.jp/statistics/sj/index.htmを実際に取得し、フィクスチャとして同梱。原本を目視確認し、以下6件の実測値でテストしている(services/moneyflow/lib/sources/boj-flow-of-funds.test.ts): (1)フロー[金融取引表・全体表]E行(株式等・投資信託受益証券)・資産側・家計=37,452億円 (2)同・海外=100,506億円 (3)同・地方公共団体=78億円 (4)同・社会保障基金=-30,449億円 (5)ストック[金融資産・負債残高表・全体表]E行・資産側・家計(2026年6月末)=6,789,608億円 (6)同・海外=5,528,421億円。独立した裏取りとして、同日取得した長期時系列ファイル(sjlong.xlsx シート\"18\"/\"43\"、リポジトリには同梱せず本セッションで確認のみ)の2026/2Q(P)列でも同じ6値が一致することを確認済み。",
+    "license": "access=free_api(実装はExcel配布経由のみ使用)、cost=無料、commercial_use=attribution_required(二次利用時は出典「日本銀行『資金循環統計』」の明記が必要)。時系列統計データ検索サイト(stat-search.boj.or.jp)のAPI利用規約(api_notice.pdf)は「短時間における高頻度のアクセス…を禁止」と明記しているため、本アダプタはそのAPIを一切使わず、index.htm経由のExcel取得(1回の実行でindex.htm+xlsx本体の計2リクエストのみ、ブラウザ相当UA)に限定した。",
+    "notes": "実装範囲: services/moneyflow/lib/sources/boj-flow-of-funds.ts に(1)resolveLatestBojFlowOfFundsFile/fetchLatestBojFlowOfFunds(URL解決+取得)、(2)parseBojFlowOfFunds(純関数パーサ、Excelの「（１）全体表」を制度部門×金融商品×資産/負債で解析)、(3)parseFlowPeriodLabel/parseStockPeriodLabel/isPeriodAlreadyPublished/estimateNextReleaseWindow(期間判定)、(4)BOJ_FLOW_OF_FUNDS_INDICATORS(24件の指標定義: キー・要件R1-R4・何を測るか・正確な定義・単位・出典URL・利用条件・頻度・限界)、(5)toObservations(縦長の観測レコード生成)、(6)buildArchiveInput(ルール6準拠のNotionアーカイブ入力を組み立てる純関数。実際のrecordPrimaryData()呼び出しはしていない=統合担当の領分)を実装。新規npm依存は追加していない(xlsxのみ使用、既存依存)。R1(東証33業種)はこのデータに業種別内訳が存在しないため、どの指標にも付与していない(inventoryの粗い[\"R1\",\"R2\",\"R3\"]タグより厳密化)。パースは列位置をハードコードせず、「資産(A)/負債(L)」見出し行とその直上の部門コード行から動的に列対応表を構築する方式にしたため、実データで見つかった「シート末尾セルへの次表見出し文字列の混入」という実在の書式クセにも、行コードの正規表現(大文字1字+小文字0-2字)で正しく対処できている。pnpm typecheck / pnpm lint / pnpm test(140ファイル・1700件全て)を通してコミット済み(push・マージ・Notion/D1書込は未実施、指示通り)。制約: (a)stat-search.boj.or.jpの正式API(2026-02提供開始)は規約上の高頻度アクセス禁止に配慮し未使用、Excel配布のみに限定。(b)sjlong.xlsx(長期時系列)は本アダプタの対象外(sjpre.xlsxの最新四半期のみを扱う設計。四半期ごとに実行してobservationを積み上げる運用を想定)。(c)K/L(対外直接投資/対外証券投資)は国・地域別内訳を持たない(R4の「国別」要件は財務省国際収支統計側が担当)。(d)家計以外の主体の負債側や、非上場株式の時価評価などいくつかの限界をBOJ_INSTRUMENTSのlimitationsフィールドに明記した。"
+  },
+  "verify": {
+    "ok": false,
+    "checked": "worktree /Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-7 (branch feat/moneyflow-src-boj-flow-of-funds, commit 8355102) の services/moneyflow/lib/sources/boj-flow-of-funds.ts + boj-flow-of-funds.test.ts を、実データと突き合わせて反証的に検証した。\n\n(1) 実データ突合: 2026-09-27に自分でhttps://www.boj.or.jp/statistics/sj/sjpre.xlsx とindex.htmを再取得(User-Agent=ブラウザ相当、計2リクエストのみ)。sjpre.xlsxはSHA-256が同梱フィクスチャと完全一致(=最新かつ改変なし)、index.htmもdiff差分ゼロで完全一致。フィクスチャに依存せず、この新規取得バイト列を実パーサ(parseBojFlowOfFunds)に通し、報告された6値すべて(フロー: 家計37,452/海外100,506/地方公共団体78/社会保障基金-30,449、ストック: 家計6,789,608/海外5,528,421、いずれもE行=株式等・投資信託受益証券・資産側)が一致することを確認。さらにパーサのロジックを経由せず、xlsxライブラリでセルを直接読む独立コードでも同じ6値・同じシート(1,2=フロー全体表 / 19,20=ストック全体表)を再現し、二重に裏取りした。\n\n(2) 単位・符号・期間: ヘッダの「資産(A)」「負債(L)」は原本の明示ラベルをそのまま読んでいるだけで反転リスクなし。列→部門コードの対応(資産列=同列コード、負債列=左隣列コード)を実データの列見出し行(row9/10)から手動で再現し、全12部門コード分一致を確認。単位表記「単位　億円」の実在、期間見出し「2026年 4～6月期(速報)」「2026年 6月末(速報)」→2026Q2/preliminaryへの変換も実データで確認。index.htmの「掲載日」抽出も、実際のテーブル構造(掲載日→速報(2026年第2四半期)→[XLSX 216KB]、ダウンロードした実ファイルサイズ216KB相当と一致)から一意に正しく2026-09-17を拾えることを確認。ページ内で最初に出現する\"[XLSX\"がまさにsjpre.xlsxへのリンクであることも確認済み(誤ヒットのリスクなし)。\n\n(3) 指標定義の正確性: BOJ_INSTRUMENTS内の全定義文(A=現金・預金、C=貸出、D=債務証券、E=株式等・投資信託受益証券)を、実データの子項目ラベル(Aa..Ag、Ca..Cg、Da..Dj、Ea/Eaa/Eab/Eac/Eb)と1件ずつ突合し、定義文の列挙が実データの内訳と完全一致することを確認(捏造・誤解説なし)。\n\n(4) 公表前スキップ判定: isPeriodAlreadyPublished()は単純な四半期順序比較で正しい。estimateNextReleaseWindow()は単体で公表判定に使われない設計であることをコードとテストで確認。現時点でservices/moneyflow内にこのアダプタを呼び出す統合コードは存在せず(grep結果0件)、実運用での誤用リスクは未評価(統合時に要再確認)。\n\n反証実験として、実際にダウンロードしたバイト列のSTOCKページ2(シート\"20\")内でE行とF行のセルを丸ごと入れ替える(page1側は無改変)人為的破壊を行い、parseBojFlowOfFundsに通したところ、例外を投げず家計のストック値が6,789,608→5,858,334という誤った値へ黙って変わった(details参照)。原因はparseSectorTablePages内のrowCodeCol2 = range2.e.c(page2シートの「最終列」を行コード列とみなす実装)。実データではSTOCKページ2(シート20)の実際のワークシート次元(!ref)がB1:R71まで伸びているが、列R(index17)はシート全体で常に空(実際の行コード文字列は1列左の列Q(index16)にある)。この結果rowCode2は常に空文字列となり、`if (rowCode2 !== \"\" && rowCode2 !== rowCode) throw`のガードが恒久的に不発になる。対照的に、FLOWページ2(シート\"2\")では最終列が実際に行コード列と一致しており、そちらは正しく機能する(検証済み)。現在配布されているファイルではpage1/page2の行はズレていない(手順(1)で6値とも一致)ため今すぐ数値が壊れているわけではないが、コード自身のコメントが名指しする「将来この表の様式がズレる」リスクに対して、まさにこのチェックが存在する目的そのものが、ストック系12指標(24件中半分)で無効化されている。これはCLAUDE.mdルール2(想定外は早期にthrowし、黙って別の値で埋めない)の趣旨に反する潜在バグであり、修正すべき。",
+    "problems": [
+      {
+        "severity": "high",
+        "summary": "STOCK表(金融資産・負債残高表)のpage1/page2行コード突合チェックが実質無効(no-op)になっている。rowCodeCol2 = range2.e.c が、実データではワークシート次元(!ref)上の恒久的に空白の余剰列(STOCK page2シート'20'の列R)を指してしまい、真の行コード列(1つ左の列Q)を見ていない。結果としてrowCode2が常に空文字列になり、`if (rowCode2 !== '' && rowCode2 !== rowCode) throw` のガードが発火しない。再現実験(page2内のE行とF行のセルをpage1は無改変のまま入れ替え)で、例外なしに家計のストック値が6,789,608→5,858,334という誤値へ黙って書き換わることを確認した。現行配布ファイルでは行ズレ自体は起きていないため今のデータは正しいが、コード自身のコメントが想定する『将来この様式がズレる』シナリオに対して、まさにこのために作られた安全装置がSTOCK系12指標(24件中半分)で機能しない状態であり、CLAUDE.mdルール2(想定外の状態は早期にthrowし、黙って別の値で継続しない)に反する。",
+        "failure_scenario": "将来BOJがSTOCK表(金融資産・負債残高表)全体表のpage1またはpage2で行の追加・削除・並び替えを行った場合(コード中のコメントが既知の実例として言及する『次表見出し文字列の混入』のような様式のクセが今回とは別の形で再発した場合など)、parseBojFlowOfFundsは例外を投げず、ズレた行の数値をそのままstock系(boj_ffa_*_stock)の全12指標としてtoObservations()経由でNotion/DBに記録してしまう。",
+        "fix": "parseSectorTablePages内でpage2の行コード列を決める際、range2.e.c(最終列決め打ち)をやめ、findRowCodeColumn(page1相当)と同様にサンプル行のセル値がROW_CODE_PATTERNに一致する列を右から走査して探す実装に変更する。加えて、テストに『STOCK表のpage2側で行コードが実際に検証で使われている(=わざと崩したら必ずthrowする)』ことを保証する回帰テストを追加する(現状のテストは正常系の値一致のみで、この突合ロジック自体が機能しているかは検証していない)。"
+      }
+    ]
+  }
+}

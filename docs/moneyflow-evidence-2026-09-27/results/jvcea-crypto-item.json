@@ -1,0 +1,51 @@
+{
+  "key": "jvcea-crypto",
+  "phase": 4,
+  "build": {
+    "status": "implemented",
+    "notes": "・新規npm依存の追加なし(unpdfのみ使用、既存devDependenciesに存在)。\n・他の取得元ファイルには一切触れていない(origin/main比でdiffは対象4ファイルのみ)。共有インフラ(env.ts, notion-archive, package.json等)も無変更。\n・パーサ対象はPDF1-2ページ目の「全会員合算・月次」表のみ(現物取引高/証拠金取引建玉/預り資産/口座数の4カテゴリを網羅)。3-8ページ目の銘柄別内訳(BTC/XRP/ETH等の保有状況)はスコープ外とし、コード冒頭コメントに明記(必要なら別取得元として追加可能)。\n・「数量」列(複数暗号資産の通貨単位を単純合算した値)は経済的に意味を持たない(BTC枚数+XRP枚数の合算に意味がないため)ため、rawなJvceaCryptoRowには保持しつつ、指標定義・観測ログ変換からは意図的に除外し円建て(金額)列のみを指標化(ルール1: 誤解を招く合成値を指標として提示しない)。\n・計画書が言う「価格変動を除いた推定純増減」(CoinGeckoとの突合)はこの取得元単体では実施していない(isEstimated=falseで生値をそのまま返す)。推定計算は別のCoinGecko系取得元と統合する工程の責務。\n・Notion書込(recordPrimaryData呼び出し)は行っていない。jvceaCryptoArchiveInput()で統合担当が使う入力(service/key/source/metadata/files)の組み立てのみ実装(既存のmargin.tsのmarginArchiveInput()と同型)。\n・UAは既存箇所(src/shared/jpx/sectors.ts, services/vwap-analysis/lib/margin.ts)と同一のブラウザ相当UA文字列をローカル定数として直書き(共有exportされたUA定数はリポジトリ内に存在しないことをgrepで確認済み)。\n・root で pnpm typecheck / pnpm lint / pnpm test すべて成功(typecheck 0エラー、lint 0警告、test 140ファイル/1689件全pass)。\n・push・マージ・本番Notion/D1書込は一切行っていない。ブランチはローカルコミットのみで停止。",
+    "branch": "feat/moneyflow-src-jvcea-crypto",
+    "commit": "a804890 (feat(moneyflow): JVCEA会員統計(現物/証拠金/預り資産/口座数)の取得元を追加) — committed only, NOT pushed",
+    "worktree_path": "/Users/satoki252595/projects/kabulab-cf/.claude/worktrees/wf_a6c4999f-a98-11",
+    "files": [
+      "services/moneyflow/lib/sources/jvcea-crypto.ts",
+      "services/moneyflow/lib/sources/jvcea-crypto.test.ts",
+      "services/moneyflow/lib/sources/fixtures/jvcea-crypto-202607-koukai-01-p1-2.pdf",
+      "services/moneyflow/lib/sources/fixtures/jvcea-statistics-information-20260927.html"
+    ],
+    "indicators": [
+      "jvcea_crypto_spot_turnover_jpy (gross_turnover, 百万円/月)",
+      "jvcea_crypto_margin_turnover_jpy (gross_turnover, 百万円/月)",
+      "jvcea_crypto_deposits_crypto_jpy (holdings_stock, 百万円/月末)",
+      "jvcea_crypto_deposits_cash_jpy (holdings_stock, 百万円/月末)",
+      "jvcea_crypto_deposits_total_jpy (holdings_stock, 百万円/月末)",
+      "jvcea_crypto_deposits_margin_jpy (holdings_stock, 百万円/月末)",
+      "jvcea_crypto_margin_position_sell_jpy (positions, 百万円/月末)",
+      "jvcea_crypto_margin_position_buy_jpy (positions, 百万円/月末)",
+      "jvcea_crypto_margin_position_total_jpy (positions, 百万円/月末)",
+      "jvcea_crypto_accounts_total_established (holdings_stock, 口座/月末)",
+      "jvcea_crypto_accounts_total_active (holdings_stock, 口座/月末)",
+      "jvcea_crypto_accounts_margin_established (holdings_stock, 口座/月末)",
+      "jvcea_crypto_accounts_margin_active (holdings_stock, 口座/月末)"
+    ],
+    "schedule": "頻度=月次 (JVCEA_CRYPTO_FREQUENCY定数)。「まだ公表されていない」判定はカレンダー推測をせず、fetchJvceaCryptoLatestInfo()が統計情報ページから実際に読み取った最新公表月と対象月をisJvceaCryptoMonthPublished()で比較する方式(ルール2: 公表日の憶測禁止)。2026-09-27時点で確認した実際の最新公表月は2026-07(2026-08分は未公表)。",
+    "verified_values": "実フィクスチャ(2026-09-27取得の実ファイル、pymupdfで1-2ページ目のみに切り出し)をPDFレンダリングして目視確認した値をテストでアサート: 2026-07行=現物取引金額674,240百万円/証拠金取引金額(取引高)627,529百万円/預託金残高合計2,872,363百万円/証拠金取引建玉合計金額18,477百万円/全体設定口座14,280,598/うち証拠金稼働口座1,015,983。2018-09行(最古月)=現物取引金額813,446百万円/全体設定口座2,838,620/うち証拠金稼働口座439,694。原本: https://jvcea.or.jp/cms2026/wp-content/uploads/2026/08/202607-KOUKAI-01-FINAL.pdf (「会員の暗号資産取引状況表(月次)」1-2ページ目)。様式異常(列数不足・非数値トークン・月重複・月次不連続)時にthrowすることも5件のテストで確認。全19テストpass。",
+    "license": "commercial_use=unknown(JVCEA利用規約に商用可否の明記なし、2026-09-27調査時点)。本プロジェクトの個人利用・非公開方針の範囲では追加確認不要だが、公開/商用転用前にJVCEAへの確認を推奨(各指標定義のusageTermsフィールドに明記)。"
+  },
+  "verify": {
+    "ok": false,
+    "checked": "services/moneyflow/lib/sources/jvcea-crypto.ts と jvcea-crypto.test.ts (worktree wf_a6c4999f-a98-11, branch feat/moneyflow-src-jvcea-crypto, commit a804890)。2026-09-27に実際にJVCEA統計情報ページと最新PDF(202607-KOUKAI-01-FINAL.pdf, 8ページ)を自分で取得し、本番と同じ抽出経路(unpdf extractText mergePages:false → parseJvceaCryptoText)で実行して検証。原本PDFをレンダリングして目視した値とパーサ/テストの期待値を11項目突合、列順序(売建/買建含む)をヘッダー拡大画像で確認、公表前スキップ判定を本日時点の実サイトで再確認。",
+    "problems": [
+      {
+        "severity": "high",
+        "summary": "本番の fetchJvceaCrypto() は実際のPDF(全8ページ)に対して必ず例外を投げ、一度も成功しない",
+        "fix": "実際にライブ取得した202607-KOUKAI-01-FINAL.pdf(8ページ)を unpdf extractText(mergePages:false) → parseJvceaCryptoText に本番と同じ経路で通したところ、3ページ目(銘柄別内訳表)の行が「年 月 ...」パターンにマッチしつつ列数が19と異なる(実測8列)ため、行の数値列数チェックで即 throw することを直接確認した。parseJvceaCryptoText はページを絞らず pageTexts の全要素を走査する設計になっているが、実際の唯一の呼び出し元 fetchJvceaCrypto() は extractText の結果(全ページ)をそのまま渡しており、どこにもページ1-2への絞り込みがない(grepで確認)。ユニットテスト19件が全てpassするのは、フィクスチャが人手(pymupdf)で1-2ページ目だけに事前トリミングされているためで、本番が実際に受け取る形(全8ページ)を一度もテストしていない。fetchJvceaCrypto()内でparseJvceaCryptoTextに渡す前にページを絞り込む(単純なslice(0,2)は将来月数が増えて表が3ページ目に溢れると再発しうるため、ページの見出し文字列や列数で合算表ページを動的に判定する方が望ましい)。あわせて、事前トリミングしていない生の全ページPDFを使う統合テストを追加すべき。"
+      },
+      {
+        "severity": "medium",
+        "summary": "指標定義のlimitations文言(二重計上リスク注記)が預託金残高・建玉残高・口座数の8指標でPDF原本の脚注と逆の内容になっている",
+        "fix": "JVCEA_LIMITATIONS_COMMONの「他の交換業者等への取次ぎを行った利用者取引分を含むため、最終投資家ベースの実額より大きく出うる」という注記が13指標全て(jvcea_crypto_spot/margin_turnover_jpyだけでなく、deposits_*、margin_position_*、accounts_*まで)に一律適用されている。しかし実際にPDF原本の脚注(注1〜注3)を読むと、注1(取引高)は『含みます』だが、注2(利用者残高=預託金残高・建玉残高)は『含みません』、注3(口座数)も『含みません』と明記されており、取引高系の2指標以外では注記の向きが逆。二重計上リスクの注記はjvcea_crypto_spot_turnover_jpy/jvcea_crypto_margin_turnover_jpyのlimitationsにのみ残し、それ以外の11指標(預託金・建玉・口座数系)には『他の交換業者等への取次ぎを行った利用者分/口座は含まれない』という正しい注記に差し替えるべき。"
+      }
+    ]
+  }
+}
