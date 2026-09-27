@@ -512,10 +512,22 @@ export function parseJpxInvestorWorkbook(
 // 判定する (=一次情報そのものを見て判断する。休日計算による予測はしない)。
 // ---------------------------------------------------------------------------
 
-/** 基準日から見て「本来ならもう公表されているはず」の対象月 (基準日の前月)。 */
+/**
+ * 基準日から見て「本来ならもう公表されているはず」の対象月 (基準日の前月)。
+ *
+ * JPXの公表基準は JST (日本時間) の暦月。`now.getUTCMonth()` をそのまま
+ * 使うと UTC の暦日で「前月」を判定してしまい、月末境界の約9時間
+ * (JST 00:00〜09:00 = 前日 UTC 15:00〜24:00) でずれる
+ * (例: JST 2026-10-01 05:00 = UTC 2026-09-30 20:00 を渡すと、
+ * UTC 暦では「まだ9月」なので前月=8月と誤判定してしまう)。
+ * `now` を +9時間シフトしてから UTC 暦フィールドを読むことで、
+ * JST の暦日として「前月」を計算する。
+ */
 export function expectedJpxInvestorYearMonth(now: Date): string {
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth(); // 0-indexed
+  const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+  const jstNow = new Date(now.getTime() + JST_OFFSET_MS);
+  const y = jstNow.getUTCFullYear();
+  const m = jstNow.getUTCMonth(); // 0-indexed (JST 暦)
   const prevMonth = new Date(Date.UTC(y, m - 1, 1));
   return `${prevMonth.getUTCFullYear()}-${String(prevMonth.getUTCMonth() + 1).padStart(2, "0")}`;
 }
@@ -576,11 +588,32 @@ export interface JpxInvestorIndicatorDefinition {
   limitations: string;
 }
 
+const FORMAT_CHANGE_NOTE =
+  "JPXは2026年10月13日掲載分からExcel様式を1シートへ統合すると告知しており、" +
+  "本パーサは現行様式 (〜2026年9月分掲載) のみ対応。";
+
 const COMMON_LIMITATIONS =
   "集計対象は資本金30億円以上の取引参加者のみ (全数調査ではない)。" +
   "個人/自己内の現金・信用取引別、海外投資家内の法人/個人別の内訳は原本には" +
-  "存在するが本パーサでは未抽出。JPXは2026年10月13日掲載分からExcel様式を" +
-  "1シートへ統合すると告知しており、本パーサは現行様式 (〜2026年9月分掲載) のみ対応。" +
+  "存在するが本パーサでは未抽出。" +
+  FORMAT_CHANGE_NOTE +
+  "外国ETF/私募REIT等は集計対象外 (ETFの場合)。";
+
+/**
+ * 市場全体 総売買代金/総売買高 (marketTotal) 専用の limitations。
+ * COMMON_LIMITATIONS と異なり「資本金30億円以上の取引参加者のみ」という
+ * 制約は当てはまらない (marketTotal は市場参加者全体の実測合計であり、
+ * むしろ投資部門別の内訳の方が資本金30億円以上の参加者に限定されている)。
+ * 実データで確認済み: ETF 2026年8月は marketTotal=14,633,061,770 千円に対し
+ * 投資部門別「総計」=14,556,190,891 千円 (母集団が異なるため約0.53%小さい)。
+ */
+const MARKET_TOTAL_LIMITATIONS =
+  "資本金30億円未満の取引参加者を含む市場参加者全体の実測合計 (全数)。" +
+  "投資部門別の内訳 (本取得元の他4指標・「総計」を含む) は資本金30億円以上の" +
+  "取引参加者に限定した集計であり母集団が異なるため、本指標とは一致しない " +
+  "(実測ではおおむね0.5%前後、本指標の方が大きい)。両者を突き合わせて" +
+  "「不一致」と扱わないこと。" +
+  FORMAT_CHANGE_NOTE +
   "外国ETF/私募REIT等は集計対象外 (ETFの場合)。";
 
 const USAGE_CONDITIONS = "personal-only" as const;
@@ -673,26 +706,32 @@ export function jpxInvestorIndicatorDefinitions(
       plainDescription:
         `その月に${label}市場全体で成立した売買の金額の合計 (自己・委託、売り・買いの` +
         `すべてを合算した値)。市場がどれだけ活発だったかの目安。`,
-      preciseDefinition: `シート冒頭の「総売買代金 (売り買い合計)」の値。全カテゴリのSales+Purchasesの総和と一致する。`,
+      preciseDefinition:
+        `シート冒頭の「総売買代金 (売り買い合計)」の値。資本金30億円未満の取引参加者を` +
+        `含む市場参加者全体の実測合計であり、投資部門別の内訳 (本取得元の他4指標・` +
+        `「総計」) が対象とする資本金30億円以上の取引参加者限定の集計とは母集団が異なる` +
+        `ため一致しない (実測ではおおむね0.5%前後の差)。`,
       unit: "thousand_yen",
       sourceUrl,
       usageConditions: USAGE_CONDITIONS,
       usageNote: USAGE_NOTE,
       frequency: "monthly",
-      limitations: COMMON_LIMITATIONS,
+      limitations: MARKET_TOTAL_LIMITATIONS,
     },
     {
       key: `jpx-${product}-market-turnover-volume`,
       displayName: `${label} 市場全体 総売買高`,
       flowType: "gross_turnover",
       plainDescription: `${label} 市場全体 総売買代金と同じ考え方を口数で示したもの。`,
-      preciseDefinition: `シート冒頭の「総売買高 (売り買い合計)」の値。`,
+      preciseDefinition:
+        `シート冒頭の「総売買高 (売り買い合計)」の値。市場参加者全体の実測合計であり、` +
+        `投資部門別の内訳 (総計) とは母集団が異なるため一致しない。`,
       unit: volumeUnit,
       sourceUrl,
       usageConditions: USAGE_CONDITIONS,
       usageNote: USAGE_NOTE,
       frequency: "monthly",
-      limitations: COMMON_LIMITATIONS,
+      limitations: MARKET_TOTAL_LIMITATIONS,
     },
   ];
 }
@@ -710,7 +749,10 @@ export interface JpxInvestorObservationRow {
   value: number;
   unit: JpxInvestorUnit;
   /** 集計対象が資本金30億円以上の取引参加者に限られる等の理由で、市場全体の
-   * 完全な実測ではなく近似であることを示す (定義は常にtrue: 本取得元は全数調査ではない) */
+   * 完全な実測ではなく近似であることを示す。市場全体 (category="市場全体") の
+   * 総売買代金/総売買高は資本金30億円未満の参加者も含む実測合計なので false、
+   * 投資部門別の各カテゴリ (海外投資家・個人 等) は資本金30億円以上の取引参加者
+   * 限定の集計なので true。 */
   isApproximate: boolean;
   /** モデル推定値か (本取得元はJPXの実測集計そのものなので常にfalse) */
   isEstimated: boolean;
@@ -725,7 +767,8 @@ export function toJpxInvestorObservationRows(
     indicatorKey: string,
     category: string,
     value: number,
-    unit: JpxInvestorUnit
+    unit: JpxInvestorUnit,
+    isApproximate: boolean
   ): void => {
     rows.push({
       period: report.yearMonth,
@@ -733,7 +776,7 @@ export function toJpxInvestorObservationRows(
       category,
       value,
       unit,
-      isApproximate: true,
+      isApproximate,
       isEstimated: false,
     });
   };
@@ -742,10 +785,12 @@ export function toJpxInvestorObservationRows(
     const netKey = `jpx-${report.product}-investor-net-flow-${sheet.metric}`;
     const turnoverKey = `jpx-${report.product}-investor-turnover-${sheet.metric}`;
     const marketKey = `jpx-${report.product}-market-turnover-${sheet.metric}`;
-    push(marketKey, "市場全体", sheet.marketTotal, sheet.unit);
+    // 市場全体の総売買代金/総売買高は資本金30億円未満の参加者も含む実測合計
+    // (投資部門別の内訳とは異なり全数に近い) — isApproximate=false。
+    push(marketKey, "市場全体", sheet.marketTotal, sheet.unit, false);
     for (const category of sheet.categories) {
-      push(netKey, category.category, category.balance, sheet.unit);
-      push(turnoverKey, category.category, category.total, sheet.unit);
+      push(netKey, category.category, category.balance, sheet.unit, true);
+      push(turnoverKey, category.category, category.total, sheet.unit, true);
     }
   }
   return rows;

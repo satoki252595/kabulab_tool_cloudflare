@@ -87,6 +87,19 @@ describe("parseJpxInvestorWorkbook — ETF (実ファイル etf_m2608.xls, 2026�
       expect(c.balance).toBe(c.purchases - c.sales);
     }
   });
+
+  it("marketTotal は投資部門別「総計」(資本金30億円以上の参加者限定) とは母集団が異なり一致しない", () => {
+    // 総計 = 自己計 + 委託計 (資本金30億円以上の取引参加者のみを対象とした投資部門別集計)。
+    // marketTotal (シート冒頭の総売買代金) はそれより広い市場参加者全体の実測合計であり、
+    // 同じ値にはならない (実測ではおおむね0.5%前後 marketTotal の方が大きい)。
+    const total = report.value.categories.find((c) => c.group === null && c.category === "総計");
+    expect(total).toBeDefined();
+    expect(total?.total).not.toBe(report.value.marketTotal);
+    expect(report.value.marketTotal).toBeGreaterThan(total!.total);
+    const diffRatio = (report.value.marketTotal - total!.total) / report.value.marketTotal;
+    expect(diffRatio).toBeGreaterThan(0);
+    expect(diffRatio).toBeLessThan(0.01); // 差はおおむね0.5%前後 (1%未満)
+  });
 });
 
 describe("parseJpxInvestorWorkbook — REIT (実ファイル reit_m2608.xls, 2026年8月)", () => {
@@ -209,6 +222,17 @@ describe("expectedJpxInvestorYearMonth / resolveJpxInvestorPublicationStatus", (
     expect(status.expectedYearMonth).toBe("2026-09");
     expect(status.isExpectedMonthPublished).toBe(false);
   });
+
+  it("月末境界はJST (UTC+9) で判定する — UTC暦だけで見ると1ヶ月ずれる時刻でも正しい月を返す", () => {
+    // 2026-09-30T20:00:00Z は JST では既に 2026-10-01T05:00 (10月)。
+    // UTC の暦フィールドだけで「前月」を計算すると誤って "2026-08" を返してしまう
+    // (UTC暦ではまだ9月なので前月=8月と誤判定する) バグの回帰テスト。
+    // JST基準で正しくは、この瞬間の前月である "2026-09" を返すべき。
+    expect(expectedJpxInvestorYearMonth(new Date("2026-09-30T20:00:00Z"))).toBe("2026-09");
+    // 逆に UTC ではもう10月だが JST ではまだ9月、という向きのズレも無いことを確認。
+    // 2026-09-30T14:00:00Z は JST では 2026-09-30T23:00 (まだ9月)。
+    expect(expectedJpxInvestorYearMonth(new Date("2026-09-30T14:00:00Z"))).toBe("2026-08");
+  });
 });
 
 describe("jpxInvestorIndicatorDefinitions", () => {
@@ -227,6 +251,30 @@ describe("jpxInvestorIndicatorDefinitions", () => {
       }
     }
   });
+
+  it("市場全体 総売買代金/総売買高 は投資部門別カテゴリ集計と母集団が異なる (資本金30億円未満の参加者を含む)", () => {
+    for (const product of ["etf", "reit"] as const) {
+      const defs = jpxInvestorIndicatorDefinitions(product);
+      const marketValueDef = defs.find((d) => d.key === `jpx-${product}-market-turnover-value`);
+      const marketVolumeDef = defs.find((d) => d.key === `jpx-${product}-market-turnover-volume`);
+      const categoryDef = defs.find((d) => d.key === `jpx-${product}-investor-net-flow-value`);
+      expect(marketValueDef).toBeDefined();
+      expect(marketVolumeDef).toBeDefined();
+      expect(categoryDef).toBeDefined();
+
+      // 誤り (実データで反証済み) だった「全カテゴリのSales+Purchasesの総和と一致する」
+      // という主張がpreciseDefinitionに残っていないこと。
+      expect(marketValueDef?.preciseDefinition).not.toContain("総和と一致する");
+      // 母集団が異なり一致しないことを明示していること。
+      expect(marketValueDef?.preciseDefinition).toContain("一致しない");
+
+      // 市場全体系は「資本金30億円以上の取引参加者のみ」という限定が掛からない
+      // (投資部門別カテゴリ系とは異なる limitations であること)。
+      expect(marketValueDef?.limitations).not.toContain("資本金30億円以上の取引参加者のみ");
+      expect(marketVolumeDef?.limitations).not.toContain("資本金30億円以上の取引参加者のみ");
+      expect(categoryDef?.limitations).toContain("資本金30億円以上の取引参加者のみ");
+    }
+  });
 });
 
 describe("toJpxInvestorObservationRows", () => {
@@ -239,7 +287,16 @@ describe("toJpxInvestorObservationRows", () => {
     expect(rows.length).toBe((1 + 14 * 2) * 2);
     expect(rows.every((r) => r.period === "2026-08")).toBe(true);
     expect(rows.every((r) => r.isEstimated === false)).toBe(true);
-    expect(rows.every((r) => r.isApproximate === true)).toBe(true);
+
+    // 市場全体 (資本金30億円未満の参加者も含む実測合計) は近似ではない。
+    const marketRows = rows.filter((r) => r.category === "市場全体");
+    expect(marketRows.length).toBe(2); // value + volume
+    expect(marketRows.every((r) => r.isApproximate === false)).toBe(true);
+
+    // 投資部門別の各カテゴリ (資本金30億円以上の取引参加者限定の集計) は近似。
+    const categoryRows = rows.filter((r) => r.category !== "市場全体");
+    expect(categoryRows.length).toBe(14 * 2 * 2);
+    expect(categoryRows.every((r) => r.isApproximate === true)).toBe(true);
 
     const foreignersNet = rows.find(
       (r) => r.indicatorKey === "jpx-etf-investor-net-flow-value" && r.category === "海外投資家"
