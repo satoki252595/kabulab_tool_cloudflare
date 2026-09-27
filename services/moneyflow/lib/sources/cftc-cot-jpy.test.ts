@@ -209,6 +209,72 @@ describe("CFTC_COT_JPY_INDICATORS", () => {
       expect(def.measures).toBe("positions");
     }
   });
+
+  it("各契約のバルーンヘルプ(plainDescription)は自契約の表示名のみを含み、他契約の表示名を含まない", () => {
+    // METRIC_SPECS は2契約で共有するテンプレートなので、契約ごとの具体例
+    // (実測値・方向解釈) を取り違えて使い回すと、他契約の displayName が
+    // 紛れ込むことはないが、文中の数値例が他契約の値になっている場合は
+    // displayName チェックだけでは検出できない。そのため数値例も別途検証する。
+    for (const def of CFTC_COT_JPY_INDICATORS) {
+      const ownContract = CFTC_TRACKED_CONTRACTS.find((c) => def.key.startsWith(`cftc_cot_${c.key}_`));
+      expect(ownContract).toBeDefined();
+      const otherContracts = CFTC_TRACKED_CONTRACTS.filter((c) => c.key !== ownContract!.key);
+      expect(def.plainDescription).toContain(ownContract!.displayName);
+      for (const other of otherContracts) {
+        expect(def.plainDescription).not.toContain(other.displayName);
+      }
+    }
+  });
+
+  it("noncomm_net/noncomm_long/noncomm_short/open_interest の数値例は、その契約自身の実測値(fixture)と一致し、もう一方の契約の数値は含まない", () => {
+    const rows = parseCftcCotJpyRows(FIXTURE_RAW);
+    const byContract: Record<string, CftcCotJpyRow> = {};
+    for (const contract of CFTC_TRACKED_CONTRACTS) {
+      const row = rows.find((r) => r.contractCode === contract.code && r.asOfDate === "2026-09-22");
+      expect(row).toBeDefined();
+      byContract[contract.key] = row!;
+    }
+
+    for (const contract of CFTC_TRACKED_CONTRACTS) {
+      const ownRow = byContract[contract.key]!;
+      const otherContract = CFTC_TRACKED_CONTRACTS.find((c) => c.key !== contract.key)!;
+      const otherRow = byContract[otherContract.key]!;
+
+      const netDef = CFTC_COT_JPY_INDICATORS.find((d) => d.key === `cftc_cot_${contract.key}_noncomm_net`)!;
+      const longDef = CFTC_COT_JPY_INDICATORS.find((d) => d.key === `cftc_cot_${contract.key}_noncomm_long`)!;
+      const shortDef = CFTC_COT_JPY_INDICATORS.find((d) => d.key === `cftc_cot_${contract.key}_noncomm_short`)!;
+      const oiDef = CFTC_COT_JPY_INDICATORS.find((d) => d.key === `cftc_cot_${contract.key}_open_interest`)!;
+
+      const ownNet = ownRow.noncommLong - ownRow.noncommShort;
+      expect(netDef.plainDescription).toContain(ownRow.noncommLong.toLocaleString("ja-JP"));
+      expect(netDef.plainDescription).toContain(ownRow.noncommShort.toLocaleString("ja-JP"));
+      expect(netDef.plainDescription).toContain(ownNet.toLocaleString("ja-JP"));
+
+      expect(longDef.plainDescription).toContain(ownRow.noncommLong.toLocaleString("ja-JP"));
+      expect(shortDef.plainDescription).toContain(ownRow.noncommShort.toLocaleString("ja-JP"));
+      expect(oiDef.plainDescription).toContain(ownRow.openInterestAll.toLocaleString("ja-JP"));
+
+      // もう一方の契約の建玉数(桁が被らない値)が紛れ込んでいないことも確認する。
+      if (otherRow.noncommLong !== ownRow.noncommLong) {
+        expect(longDef.plainDescription).not.toContain(otherRow.noncommLong.toLocaleString("ja-JP"));
+      }
+      if (otherRow.openInterestAll !== ownRow.openInterestAll) {
+        expect(oiDef.plainDescription).not.toContain(otherRow.openInterestAll.toLocaleString("ja-JP"));
+      }
+    }
+  });
+
+  it("日経平均先物(円建て)のネットポジション説明は、通貨方向('円高'/'円安')ではなく株価指数の方向で解釈する", () => {
+    const def = CFTC_COT_JPY_INDICATORS.find((d) => d.key === "cftc_cot_nikkei225_yen_noncomm_net")!;
+    expect(def.plainDescription).not.toContain("円高");
+    expect(def.plainDescription).not.toContain("円安");
+    expect(def.plainDescription).toContain("日経平均");
+  });
+
+  it("円先物のネットポジション説明は、通貨の方向(円高/円安)で解釈する", () => {
+    const def = CFTC_COT_JPY_INDICATORS.find((d) => d.key === "cftc_cot_jpy_noncomm_net")!;
+    expect(def.plainDescription).toMatch(/円高|円安/);
+  });
 });
 
 describe("toCftcCotObservationRecords", () => {

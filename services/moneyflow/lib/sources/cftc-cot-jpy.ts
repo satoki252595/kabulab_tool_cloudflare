@@ -400,16 +400,63 @@ interface CftcCotMetricSpec {
   value: (row: CftcCotJpyRow) => number;
 }
 
-// 2026-09-22 時点の実測値 (本ファイルの fixture でも検証済み) を具体例として使う。
+/** バルーンヘルプの具体例に使う、契約ごとの実測値 (2026-09-22 時点、本ファイルの fixture でも検証済み)。 */
+interface CftcCotExampleSnapshot {
+  asOfDate: string;
+  noncommLong: number;
+  noncommShort: number;
+  openInterestAll: number;
+  /** 非商業筋の買い越し(ネットロング)が何を意味するかの、契約種別ごとに正しい方向解釈。 */
+  netLongInterpretation: string;
+}
+
+// 通貨先物(円)と株価指数先物(日経平均)とでは「買い越し」が示す意味が全く異なる
+// (前者は為替の方向、後者は指数の方向) ため、契約ごとに別々の実測値・解釈を持たせる。
+// 単一のテンプレート文に数値だけ埋め込むと、片方の契約の実測値・解釈がもう片方にも
+// そのまま出力されてしまう (契約間の使い回しバグ) ため、必ずこの Map 経由で参照する。
+const CFTC_COT_EXAMPLE_SNAPSHOTS: Readonly<Record<CftcCotContractKey, CftcCotExampleSnapshot>> = {
+  jpy: {
+    asOfDate: "2026-09-22",
+    noncommLong: 192_274,
+    noncommShort: 120_292,
+    openInterestAll: 378_701,
+    netLongInterpretation: "円高方向への強気(円先物を買う=将来の円高・ドル安を見込むポジション)",
+  },
+  nikkei225_yen: {
+    asOfDate: "2026-09-22",
+    noncommLong: 4_199,
+    noncommShort: 2_654,
+    openInterestAll: 21_974,
+    netLongInterpretation:
+      "日経平均の先高観を示す強気ポジション(株価指数先物のため、円相場の方向とは無関係)",
+  },
+};
+
+function cftcCotExampleFor(c: CftcCotContractInfo): CftcCotExampleSnapshot {
+  return CFTC_COT_EXAMPLE_SNAPSHOTS[c.key];
+}
+
+/** 建玉数を「1,234枚」形式で表記する (万単位への丸めはしない=正確な実測値をそのまま示す)。 */
+function formatContractCount(n: number): string {
+  return `${n.toLocaleString("ja-JP")}枚`;
+}
+
 const METRIC_SPECS: readonly CftcCotMetricSpec[] = [
   {
     key: "noncomm_net",
     labelSuffix: "非商業筋(投機筋)ネットポジション",
-    plainDescription: (c) =>
-      `CME上場の${c.displayName}について、投機目的の大口トレーダー(非商業筋)の買い建玉から売り` +
-      `建玉を差し引いたネット値。例えば2026-09-22時点の円先物では買い建玉19.2万枚・売り建玉12.0万枚で` +
-      `ネット+7.2万枚の「買い越し」(円高方向への強気)。実際のお金の出入りではなく、その週時点の建玉` +
-      `(ポジション)残高の差にすぎない点に注意。`,
+    plainDescription: (c) => {
+      const ex = cftcCotExampleFor(c);
+      const net = ex.noncommLong - ex.noncommShort;
+      const direction = net >= 0 ? "買い越し" : "売り越し";
+      const netLabel = `${net >= 0 ? "+" : ""}${formatContractCount(net)}`;
+      return (
+        `CME上場の${c.displayName}について、投機目的の大口トレーダー(非商業筋)の買い建玉から売り` +
+        `建玉を差し引いたネット値。例えば${ex.asOfDate}時点では買い建玉${formatContractCount(ex.noncommLong)}・` +
+        `売り建玉${formatContractCount(ex.noncommShort)}でネット${netLabel}の「${direction}」(${ex.netLongInterpretation})。` +
+        `実際のお金の出入りではなく、その週時点の建玉(ポジション)残高の差にすぎない点に注意。`
+      );
+    },
     definition: (c) =>
       `CFTC(米国先物取引委員会)が毎週金曜(米国東部時間15:30)に、直前火曜終値時点の建玉を集計・公表` +
       `する Commitments of Traders (Legacy, Futures Only) レポートのうち、${c.displayName}の非商業筋` +
@@ -422,9 +469,14 @@ const METRIC_SPECS: readonly CftcCotMetricSpec[] = [
   {
     key: "noncomm_long",
     labelSuffix: "非商業筋 買い建玉",
-    plainDescription: (c) =>
-      `CME上場の${c.displayName}について、投機目的の大口トレーダー(非商業筋)が保有する買い建玉の枚数` +
-      `そのもの(2026-09-22時点の円先物で約19.2万枚)。売り建玉と合わせて見ることでネット方向が分かる。`,
+    plainDescription: (c) => {
+      const ex = cftcCotExampleFor(c);
+      return (
+        `CME上場の${c.displayName}について、投機目的の大口トレーダー(非商業筋)が保有する買い建玉の枚数` +
+        `そのもの(${ex.asOfDate}時点で約${formatContractCount(ex.noncommLong)})。売り建玉と合わせて見ることで` +
+        `ネット方向が分かる。`
+      );
+    },
     definition: (c) =>
       `${c.displayName}の Legacy Futures Only レポートにおける非商業筋区分の買い建玉` +
       `(noncomm_positions_long_all)。直前火曜終値時点の残高(ストック)。`,
@@ -433,9 +485,14 @@ const METRIC_SPECS: readonly CftcCotMetricSpec[] = [
   {
     key: "noncomm_short",
     labelSuffix: "非商業筋 売り建玉",
-    plainDescription: (c) =>
-      `CME上場の${c.displayName}について、投機目的の大口トレーダー(非商業筋)が保有する売り建玉の枚数` +
-      `そのもの(2026-09-22時点の円先物で約12.0万枚)。買い建玉と合わせて見ることでネット方向が分かる。`,
+    plainDescription: (c) => {
+      const ex = cftcCotExampleFor(c);
+      return (
+        `CME上場の${c.displayName}について、投機目的の大口トレーダー(非商業筋)が保有する売り建玉の枚数` +
+        `そのもの(${ex.asOfDate}時点で約${formatContractCount(ex.noncommShort)})。買い建玉と合わせて見ることで` +
+        `ネット方向が分かる。`
+      );
+    },
     definition: (c) =>
       `${c.displayName}の Legacy Futures Only レポートにおける非商業筋区分の売り建玉` +
       `(noncomm_positions_short_all)。直前火曜終値時点の残高(ストック)。`,
@@ -456,9 +513,13 @@ const METRIC_SPECS: readonly CftcCotMetricSpec[] = [
   {
     key: "open_interest",
     labelSuffix: "建玉残高合計",
-    plainDescription: (c) =>
-      `CME上場の${c.displayName}の、全トレーダー区分(非商業筋+商業筋+未報告)を合計した建玉残高` +
-      `そのもの(2026-09-22時点の円先物で約37.9万枚)。市場全体の参加度合いの目安。`,
+    plainDescription: (c) => {
+      const ex = cftcCotExampleFor(c);
+      return (
+        `CME上場の${c.displayName}の、全トレーダー区分(非商業筋+商業筋+未報告)を合計した建玉残高` +
+        `そのもの(${ex.asOfDate}時点で約${formatContractCount(ex.openInterestAll)})。市場全体の参加度合いの目安。`
+      );
+    },
     definition: (c) =>
       `${c.displayName}の Legacy Futures Only レポートにおける open_interest_all の値そのもの。` +
       `直前火曜終値時点の建玉残高合計。`,
