@@ -24,9 +24,11 @@
  *   - L_INSTR=A        (全商品)
  *   - L_DENOM=TO1      (全通貨合算)
  *   - L_CURR_TYPE=A    (全通貨タイプ合算)
- *   - L_PARENT_CTY=5J  (報告銀行の親会社国籍を問わない集計値。実際に公表
- *     されている系列はこの値のみで、JP 単独 (日系銀行のみ) は集計行にしか
- *     出てこない — 個別相手国別の内訳は 5J でしか取れないことを実機確認済み)
+ *   - L_PARENT_CTY=5J  (報告銀行の親会社国籍を問わない集計値。L_REP_CTY=JP ×
+ *     L_PARENT_CTY=JP (日系銀行のみへの絞り込み) の系列は、5J を含むいかなる
+ *     L_CP_COUNTRY を指定しても存在しない (2026-09-27 実機確認: 常に404
+ *     "No results for query")。個別相手国別の内訳が取れるのは L_PARENT_CTY=5J
+ *     の場合のみ)
  *   - L_REP_BANK_TYPE=A (全報告銀行タイプ)
  *   - L_REP_CTY=JP     (日本に所在する報告銀行 = 「所在地ベース」の主体)
  *   - L_CP_SECTOR=A    (相手方は全部門合算)
@@ -70,6 +72,17 @@ const INDICATOR_KEY_BY_POSITION: Record<BisBankingPosition, string> = {
 
 /** 全世界合計を表す BIS の擬似コード (CL_BIS_IF_REF_AREA)。国別内訳ではないので除外対象。 */
 const ALL_COUNTRIES_CODE = "5J";
+
+/**
+ * 「国際機関」を表す BIS の擬似コード (CL_BIS_IF_REF_AREA: 1C =
+ * "International organisations")。2026-09-27 に BIS のコードリスト API
+ * (`stats.bis.org/api/v2/structure/codelist/BIS/CL_BIS_IF_REF_AREA/+`) で
+ * 実機確認済み。ALL_COUNTRIES_CODE (5J) と同様に「相手国・地域」の実体では
+ * ないため、国別内訳 (toMoneyflowObservations) からは除外する。
+ * (実データで claims/liabilities とも非ゼロ値が存在することを確認済み —
+ * 2026-Q1: claims=14,873.514 / liabilities=890.125 百万米ドル)
+ */
+const INTERNATIONAL_ORGANISATIONS_CODE = "1C";
 
 /** SDMX v2.1 key を組み立てる (BIS_LBS_DISS の 12 次元、ドット区切り)。 */
 function buildKey(position: BisBankingPosition): string {
@@ -321,8 +334,16 @@ export function latestQuarterFromRows(rows: BisBankingRawRow[]): string {
  * "2026-Q2" (4-6月期、6/30 に終了済み) になるが、BIS 側の実際の最新は
  * "2026-Q1" だった (2026-Q2 を明示的にクエリすると 404/該当なし)。
  * つまり `isCaughtUp: false` が実データと整合する — これは異常ではなく
- * BIS の通常の公表ラグ (四半期末から約1四半期) の帰結であり、呼び出し側は
- * これを「取込をスキップしてよい」判定に使う。
+ * BIS の通常の公表ラグ (四半期末から約1四半期(3〜4か月)) の帰結である。
+ *
+ * 注意 (統合実装者向け): この公表ラグ (3〜4か月) は「暦上、直近に終わった
+ * 四半期」の長さ (3か月) より長い。そのため `isCaughtUp` は BIS のこの
+ * 系列に対して構造的にほぼ恒常的に false になる — 「false=まだ公表され
+ * ていない」という値自体は正しいが、これを単純に「取込をスキップして
+ * よい」ゲートとして使うと、この指標は事実上永久に取込まれなくなる。
+ * 呼び出し側で取込要否を判断する際は `isCaughtUp` 単体ではなく、
+ * `latestAvailableQuarter` を前回取込時の値と比較し「新しい四半期の
+ * データが増えたか」で判定すること。
  */
 export function mostRecentEndedQuarter(asOf: Date): string {
   const year = asOf.getUTCFullYear();
@@ -339,7 +360,13 @@ export interface BisBankingPublicationStatus {
   latestAvailableQuarter: string;
   /** 暦上、直近に終わった四半期 (公表ラグを考慮しない基準値)。 */
   mostRecentEndedQuarter: string;
-  /** 暦上の直近四半期まで公表が追いついているか。false でもエラーではない (通常の公表ラグ)。 */
+  /**
+   * 暦上の直近四半期まで公表が追いついているか。false でもエラーではない
+   * (通常の公表ラグ)。BIS のこの系列は公表ラグ (3〜4か月) が四半期の長さ
+   * (3か月) より長いため、この値は構造的にほぼ常に false になる —
+   * 取込要否の判定に単体で使わないこと (詳細は mostRecentEndedQuarter の
+   * JSDoc を参照)。
+   */
   isCaughtUp: boolean;
 }
 
@@ -492,6 +519,9 @@ export interface MoneyflowObservation {
  * 変換する純関数。
  *
  * - 全世界合計行 (L_CP_COUNTRY=5J) は「国別」の内訳ではないので除外する。
+ * - 国際機関行 (L_CP_COUNTRY=1C) も同様に「相手国・地域」の実体ではない
+ *   ため除外する (国別ではなく国際機関向けの与信・負債であり、国名の列に
+ *   紛れ込ませると「1C」という架空の国が実在するかのように見えてしまう)。
  * - 欠測 (valueUsdMillion === null) の行は作らない (0 で埋めない。ルール2)。
  */
 export function toMoneyflowObservations(
@@ -500,6 +530,7 @@ export function toMoneyflowObservations(
   const out: MoneyflowObservation[] = [];
   for (const row of rows) {
     if (row.counterpartyCountry === ALL_COUNTRIES_CODE) continue;
+    if (row.counterpartyCountry === INTERNATIONAL_ORGANISATIONS_CODE) continue;
     if (row.valueUsdMillion === null) continue;
     out.push({
       period: row.quarter,

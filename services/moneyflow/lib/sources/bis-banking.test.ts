@@ -227,6 +227,17 @@ describe("toMoneyflowObservations (縦長レコードへの変換)", () => {
     expect(observations.some((o) => o.category === "5J")).toBe(false);
   });
 
+  it("国際機関行 (1C) は「相手国」ではないため除外する", () => {
+    // フィクスチャに 1C (International organisations) の非欠測行が実在する
+    // 前提の確認 (この前提が崩れたら本テストは何も検証していないことになる)。
+    const rawAnchor = claimsRows.find(
+      (r) => r.counterpartyCountry === "1C" && r.quarter === "2026-Q1"
+    );
+    expect(rawAnchor?.valueUsdMillion).toBe(14873.514);
+
+    expect(observations.some((o) => o.category === "1C")).toBe(false);
+  });
+
   it("欠測 (NaN) 行を 0 で埋めずに除外する", () => {
     const nanRows = claimsRows.filter((r) => r.valueUsdMillion === null);
     expect(nanRows.length).toBeGreaterThan(0); // フィクスチャに欠測行が実在する前提の確認
