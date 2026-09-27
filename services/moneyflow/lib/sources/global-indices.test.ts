@@ -278,6 +278,24 @@ describe("GLOBAL_INDEX_INDICATORS", () => {
     );
     expect(topixIndicator?.limitations).toMatch(/ETF|連動/);
   });
+
+  it("EUR/USD の説明文は円を含まず、ユーロ/ドルの向きで正確に説明する (jpy用テンプレの誤用を回帰検知)", () => {
+    const eurusdIndicator = GLOBAL_INDEX_INDICATORS.find(
+      (i) => i.key === "global_eurusd_weekly_change_pct"
+    );
+    expect(eurusdIndicator).toBeDefined();
+    // 円は一切登場しない通貨ペアなので「円安/円高」を含んではいけない
+    expect(eurusdIndicator?.description).not.toMatch(/円安|円高/);
+    expect(eurusdIndicator?.description).toMatch(/ユーロ/);
+    expect(eurusdIndicator?.description).toMatch(/ドル/);
+  });
+
+  it("USD/JPY の説明文は円安/円高の説明を保持する (JPY=X のみに適用されるべき表現)", () => {
+    const jpyIndicator = GLOBAL_INDEX_INDICATORS.find(
+      (i) => i.key === "global_jpy_weekly_change_pct"
+    );
+    expect(jpyIndicator?.description).toMatch(/円安/);
+  });
 });
 
 describe("toGlobalIndexObservationRows", () => {

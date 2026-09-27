@@ -590,18 +590,41 @@ function indicatorDescription(entry: GlobalIndexCatalogEntry): {
           `価格変動だけを表し、資金の純流出入額は測れない。休場日の違いにより各国で対象週の` +
           `最終取引日がずれる(比較は週次ラベル基準の近似)。${proxySuffix}`,
       };
-    case "fx":
-      return {
-        description:
-          `${entry.displayName}相場の週次終値の前週比騰落率。例えば円が対象通貨に対して` +
-          `週間で+1%なら「その通貨に対して円安が1%進んだ」という意味 (このモジュールの` +
-          `シンボル定義では JPY=X は1米ドル=何円か、EURUSD=X は1ユーロ=何米ドルかを表す)。` +
-          `為替の売買代金(フロー)ではなく、レート水準の変化率。`,
-        unit: "%",
-        limitations:
-          "為替は土日を除きほぼ24時間取引されるため、株式市場ほど明確な『週の区切り』が" +
-          "ない近似 (ISO週=月曜〜日曜UTCで区切って集計)。",
-      };
+    case "fx": {
+      const FX_LIMITATIONS =
+        "為替は土日を除きほぼ24時間取引されるため、株式市場ほど明確な『週の区切り』が" +
+        "ない近似 (ISO週=月曜〜日曜UTCで区切って集計)。";
+      // 通貨ペアごとに換算方向が異なる (「円安/円高」は円を含むペアにしか
+      // 使えない表現) ため、円を含まないペア (EURUSD=X 等) にまで同じ説明文を
+      // 使い回さない (ルール1・ルール7: 誤った定義を初心者向け説明に混在
+      // させない)。未対応のペアが増えたら、ここに明示的な分岐を追加すること
+      // (default で吸収しない: ルール2)。
+      if (entry.key === "jpy") {
+        return {
+          description:
+            `${entry.displayName}相場 (JPY=X, 1米ドル=何円か) の週次終値の前週比騰落率。` +
+            `例えば週間で+1%なら「対ドルで円安が1%進んだ」という意味 (数値が上がる=` +
+            `1ドルを買うのに必要な円が増える=円の価値が下がる)。為替の売買代金(フロー)` +
+            `ではなく、レート水準の変化率。`,
+          unit: "%",
+          limitations: FX_LIMITATIONS,
+        };
+      }
+      if (entry.key === "eurusd") {
+        return {
+          description:
+            `${entry.displayName}相場 (EURUSD=X, 1ユーロ=何米ドルか) の週次終値の前週比` +
+            `騰落率。例えば週間で+1%なら「ユーロがドルに対して1%値上がりした(ドル安・` +
+            `ユーロ高が進んだ)」という意味 — このペアに日本円は含まれない。為替の売買` +
+            `代金(フロー)ではなく、レート水準の変化率。`,
+          unit: "%",
+          limitations: FX_LIMITATIONS,
+        };
+      }
+      throw new Error(
+        `indicatorDescription: 未対応の fx カタログキーです (説明文の分岐が未実装): ${entry.key}`
+      );
+    }
     case "commodity":
       return {
         description:
