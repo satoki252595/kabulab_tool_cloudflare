@@ -61,6 +61,10 @@ describe("main() の --dry-run 契約", () => {
   });
 
   it("--dry-run では Notion 書込系関数を一切呼ばない (JPX からの取得・解析はするが永続化しない)", async () => {
+    // ファイル先頭の静的 import で ingest.js は DRY_RUN=false のまま評価・キャッシュ
+    // 済み。ここでキャッシュを捨てないと動的 import が同じインスタンスを返し、
+    // argv 差し替えも doMock も効かない (dry-run なのに Notion を叩きに行く)。
+    vi.resetModules();
     process.argv = [...ORIGINAL_ARGV, "--dry-run", "--only=jpx-sector-marketcap"];
 
     const fixture = {
