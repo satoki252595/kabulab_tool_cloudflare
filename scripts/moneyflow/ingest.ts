@@ -61,7 +61,7 @@ import {
 } from "../../services/moneyflow/lib/jpx-short-selling.js";
 import { isoWeekLabelOf, mostRecentMondayOf } from "../../services/moneyflow/lib/iso-week.js";
 import type { IndicatorDefInput } from "../../src/shared/notion-archive/index.js";
-import { extractText, getDocumentProxy } from "unpdf";
+import { extractPdfText } from "../../services/moneyflow/lib/pdf-text.js";
 import {
   downloadArchivedFile,
   findArchivedRecordByKey,
@@ -183,9 +183,7 @@ async function fetchArchivedPdfText(ref: ArchivedRecord, context: string): Promi
     throw new Error(`${context}: ${ref.key} の保管ファイルが ${ref.files.length} 件です (PDF 1 件であるべき)`);
   }
   const bytes = await downloadArchivedFile(file, `${context} (${ref.key})`);
-  const pdf = await getDocumentProxy(bytes);
-  const { text } = await extractText(pdf, { mergePages: true });
-  return text;
+  return extractPdfText(bytes);
 }
 
 // ---------------------------------------------------------------------------

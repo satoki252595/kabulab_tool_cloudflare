@@ -170,6 +170,24 @@ describe("runSpec", () => {
     info.mockRestore();
   });
 
+  it("解析にはバイト列のコピーを渡す (解析側が detach しても保管用のバイト列は壊れない)", async () => {
+    const { runSpec } = await import("./run-spec.js");
+    const { spec, fetchImpl } = makeSpec();
+    let seen: Uint8Array | undefined;
+    const detaching: MoneyflowSourceSpec = {
+      ...spec,
+      toObservations: (input) => {
+        seen = input.files[0]?.bytes;
+        return spec.toObservations(input);
+      },
+    };
+    await runSpec(detaching, ctx());
+    const fetched = (await fetchImpl.mock.results[0]?.value) as { files: Array<{ bytes: Uint8Array }> };
+    expect(seen).toBeDefined();
+    expect(seen).not.toBe(fetched.files[0]?.bytes);
+    expect(Array.from(seen ?? [])).toEqual(Array.from(fetched.files[0]?.bytes ?? []));
+  });
+
   it("解析結果が検証に通らなければ (0 行等) 観測ログへ書かない", async () => {
     const { runSpec } = await import("./run-spec.js");
     const { spec } = makeSpec();

@@ -75,7 +75,10 @@ function parseAndValidate(
   key: string,
   files: readonly SpecFile[]
 ): ObservationDraft[] {
-  const drafts = spec.toObservations({ key, files });
+  // 解析側がバイト列を detach しても (unpdf 等 — services/moneyflow/lib/pdf-text.ts)
+  // 保管・再利用するバイト列を壊さないよう、コピーを渡す。
+  const copies = files.map((f) => ({ filename: f.filename, bytes: f.bytes.slice() }));
+  const drafts = spec.toObservations({ key, files: copies });
   validateDrafts(spec.name, drafts, spec.indicators);
   return drafts;
 }

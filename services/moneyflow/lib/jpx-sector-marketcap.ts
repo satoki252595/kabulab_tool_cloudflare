@@ -11,7 +11,7 @@
  * (recordPrimaryData の service="moneyflow" 経由で Notion へのみ保管し、
  * 公開 API・エクスポートへは流さない)。
  */
-import { extractText, getDocumentProxy } from "unpdf";
+import { extractPdfText } from "./pdf-text.js";
 import { assertExactly33Sectors, JPX_33_SECTORS } from "./sector-names.js";
 
 /** ブラウザ相当 UA (src/shared/jpx/sectors.ts / vwap-analysis margin.ts と同じ配慮)。 */
@@ -171,8 +171,8 @@ export async function fetchSectorMarketCap(): Promise<SectorMarketCapData> {
     throw new Error(`jpx-sector-marketcap: PDF 取得失敗 status=${res.status} url=${url}`);
   }
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const pdf = await getDocumentProxy(bytes);
-  const { text } = await extractText(pdf, { mergePages: true });
+  // bytes は一次データとして保管するため、解析にはコピーを渡す (pdf-text.ts 参照)
+  const text = await extractPdfText(bytes);
   const parsed = parseSectorMarketCapText(text);
   return { ...parsed, pdfBytes: bytes, pdfUrl: url };
 }

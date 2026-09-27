@@ -14,7 +14,7 @@
  *
  * ライセンス: JPX サイト統計は personal-only。moneyflow の Notion 保管のみに使う。
  */
-import { extractText, getDocumentProxy } from "unpdf";
+import { extractPdfText } from "./pdf-text.js";
 import { assertExactly33Sectors, JPX_33_SECTORS } from "./sector-names.js";
 
 const UA =
@@ -142,8 +142,8 @@ export async function fetchShortSellingSector(): Promise<ShortSellingData> {
     throw new Error(`jpx-short-selling: PDF 取得失敗 status=${res.status} url=${url}`);
   }
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const pdf = await getDocumentProxy(bytes);
-  const { text } = await extractText(pdf, { mergePages: true });
+  // bytes は一次データとして保管するため、解析にはコピーを渡す (pdf-text.ts 参照)
+  const text = await extractPdfText(bytes);
   const parsed = parseShortSellingSectorText(text);
   return { ...parsed, pdfBytes: bytes, pdfUrl: url };
 }
