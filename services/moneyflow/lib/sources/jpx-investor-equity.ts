@@ -153,6 +153,16 @@ function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
+/** URL の最終パスセグメント (ファイル名) を取り出す。取れなければ throw する
+ *  (アーカイブ入力のファイル名を "value.xls" 等の作り物で埋めない)。 */
+function urlBasename(url: string): string {
+  const name = url.split("/").pop();
+  if (!name) {
+    throw new Error(`JPX 投資部門別売買状況: URL からファイル名を取得できません: "${url}"`);
+  }
+  return name;
+}
+
 // ---------------------------------------------------------------------------
 // 旧様式 (legacy_split_files): 市場別4シート (TSE Prime/Standard/Growth/Tokyo & Nagoya)
 // 各シート内に「今週」「前週(または前月)」の2ブロック (無い方は空欄)。
@@ -729,8 +739,8 @@ export async function fetchLatestJpxInvestorEquityWeekly(): Promise<FetchedInves
     fetchBytes(latest.volumeXlsUrl),
   ]);
 
-  const valueFilename = latest.valueXlsUrl.split("/").pop();
-  const volumeFilename = latest.volumeXlsUrl.split("/").pop();
+  const valueFilename = urlBasename(latest.valueXlsUrl);
+  const volumeFilename = urlBasename(latest.volumeXlsUrl);
   const records = [
     ...parseInvestorEquityWorkbook(valueBytes, valueFilename),
     ...parseInvestorEquityWorkbook(volumeBytes, volumeFilename),
@@ -762,8 +772,8 @@ export async function fetchLatestJpxInvestorEquityMonthly(): Promise<FetchedInve
   ]);
 
   const records = [
-    ...parseInvestorEquityWorkbook(valueBytes, valueXlsUrl.split("/").pop()),
-    ...parseInvestorEquityWorkbook(volumeBytes, volumeXlsUrl.split("/").pop()),
+    ...parseInvestorEquityWorkbook(valueBytes, urlBasename(valueXlsUrl)),
+    ...parseInvestorEquityWorkbook(volumeBytes, urlBasename(volumeXlsUrl)),
   ];
 
   return {
@@ -804,8 +814,8 @@ export function jpxInvestorEquityArchiveInput(
     fetched.periodType === "weekly"
       ? (first.periodEnd ?? first.periodLabel)
       : (first.periodStart?.slice(0, 7) ?? first.periodLabel);
-  const valueFilename = fetched.valueUrl.split("/").pop() ?? "value.xls";
-  const volumeFilename = fetched.volumeUrl.split("/").pop() ?? "volume.xls";
+  const valueFilename = urlBasename(fetched.valueUrl);
+  const volumeFilename = urlBasename(fetched.volumeUrl);
   const contentType = valueFilename.endsWith(".xlsx")
     ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     : "application/vnd.ms-excel";
