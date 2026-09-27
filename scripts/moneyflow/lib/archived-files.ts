@@ -12,12 +12,12 @@ import { findBackupChildByTitle } from "../../../src/shared/notion-archive/archi
 import { MONEYFLOW_PRIMARY_DB_TITLE } from "../../../src/shared/notion-archive/moneyflow.js";
 
 /**
- * 「一次データ｜moneyflow」DB の ID を取得する (無ければ throw。
+ * 「一次データ保管」配下の「一次データ｜moneyflow」DB の ID を取得する (無ければ throw。
  * recordPrimaryData を先に呼んでいることが前提 — 推測で relation 先を作らない、ルール2)。
  */
 export async function requirePrimaryDataDbId(context: string): Promise<string> {
   const primaryDbId = await findBackupChildByTitle({
-    parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID(),
+    parentPageId: notionEnv.NOTION_ARCHIVE_PAGE_ID(),
     title: MONEYFLOW_PRIMARY_DB_TITLE,
     kind: "database",
   });

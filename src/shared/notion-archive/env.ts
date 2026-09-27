@@ -116,41 +116,12 @@ export const notionEnv = {
    */
   NOTION_PRICE_SYNC_DB_ID: () => optionalId("NOTION_PRICE_SYNC_DB_ID"),
   /**
-   * 「資金フロー（個人用）」ページ ID (計画: notion-velvet-goose.md「構成」節)。
-   * ユーザーが Notion 上で新規作成し、kabulab-cf のインテグレーションのみを
-   * 接続する (kabulabAgent は接続しない — API ではトップレベルページを
-   * 作れず接続確認も API ではできないため、ユーザー作成が前提)。
-   * 「資金フロー｜指標定義」「資金フロー｜観測ログ」「資金フロー｜取込ログ」の
-   * 3 DB と、`recordPrimaryData()` の一次データ (「一次データ｜moneyflow」) を
-   * この直下に置く。
-   *
-   * `NOTION_ARCHIVE_PAGE_ID` / `NOTION_STOCK_INFO_PAGE_ID` と同じ ID を設定
-   * してしまうと、moneyflow の DB 群が既存ページの子として紛れ込み、既存
-   * ページ側の「子ページ/子DB を量産しない」運用 (ルール6) を壊す。誤設定に
-   * 気づけるよう、値が正規化して一致したら起動時に throw する (ルール2: 黙って
-   * 「たまたま動く」状態にしない)。
+   * 「資金フロー｜指標定義」DB ID を固定 (任意。未設定なら Search で自動発見)。
+   * moneyflow の 3 DB (指標定義/観測ログ/取込ログ) は他サービスと同じく「株式情報」
+   * ページ (`NOTION_STOCK_INFO_PAGE_ID`) 直下、一次データは「一次データ保管」
+   * (`NOTION_ARCHIVE_PAGE_ID`) 配下の「一次データ｜moneyflow」に置く
+   * (2026-09-27 ユーザー決定。当初の別ページ「資金フロー（個人用）」案は廃止)。
    */
-  NOTION_MONEYFLOW_PAGE_ID: (): string => {
-    const id = normalizeId(required("NOTION_MONEYFLOW_PAGE_ID"));
-    const archiveId = normalizeId(required("NOTION_ARCHIVE_PAGE_ID"));
-    if (id === archiveId) {
-      throw new NotionConfigError(
-        "NOTION_MONEYFLOW_PAGE_ID が NOTION_ARCHIVE_PAGE_ID と同じ ID です。" +
-          "「資金フロー（個人用）」は既存の「一次データ保管」ページとは別に" +
-          "作成し、別の ID を .env に設定してください。"
-      );
-    }
-    const stockInfoId = normalizeId(required("NOTION_STOCK_INFO_PAGE_ID"));
-    if (id === stockInfoId) {
-      throw new NotionConfigError(
-        "NOTION_MONEYFLOW_PAGE_ID が NOTION_STOCK_INFO_PAGE_ID と同じ ID です。" +
-          "「資金フロー（個人用）」は既存の「株式情報」ページとは別に作成し、" +
-          "別の ID を .env に設定してください。"
-      );
-    }
-    return id;
-  },
-  /** 「資金フロー｜指標定義」DB ID を固定 (任意。未設定なら Search で自動発見) */
   NOTION_MONEYFLOW_DEFS_DB_ID: () => optionalId("NOTION_MONEYFLOW_DEFS_DB_ID"),
   /** 「資金フロー｜観測ログ」DB ID を固定 (任意。未設定なら Search で自動発見) */
   NOTION_MONEYFLOW_OBS_DB_ID: () => optionalId("NOTION_MONEYFLOW_OBS_DB_ID"),

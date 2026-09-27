@@ -14,14 +14,16 @@
 
 - 保存先は **Notion のみ** (D1 表・R2 は増やさない)。一次ファイル (PDF/xlsx/CSV)
   は `recordPrimaryData()` で実体アップロードする (ルール6)。
-- 置き場所はユーザーが Notion で作成した「資金フロー（個人用）」ページ
-  (`NOTION_MONEYFLOW_PAGE_ID`)。kabulabAgent は接続しない (API ではトップレベル
-  ページを作れない・接続確認もできないため、ユーザー作成が前提)。
+- 置き場所は他サービスと同じ (2026-09-27 ユーザー決定。当初の専用ページ
+  「資金フロー（個人用）」案は廃止): 「バックアップ / 株式情報」ページ
+  (`NOTION_STOCK_INFO_PAGE_ID`) の直下に DB 3 つ、原ファイルは「一次データ保管」
+  (`NOTION_ARCHIVE_PAGE_ID`) 配下の「一次データ｜moneyflow」。
 - Notion DB は 4 つ:
-  1. 「資金フロー｜指標定義」— 指標ごとの定義 (`services/moneyflow/lib/indicators.ts`)
+  1. 「資金フロー｜指標定義」— 指標ごとの定義 (Phase 1 は `services/moneyflow/lib/indicators.ts`、
+     Phase 2〜5 は各アダプタ `services/moneyflow/lib/adapters/*.ts`)
   2. 「資金フロー｜観測ログ」— 縦長の事実テーブル。冪等キー `期間|指標|区分`
   3. 「資金フロー｜取込ログ」— 1 回の実行につき 1 行
-  4. 「一次データ｜moneyflow」— 取得した原ファイル (`recordPrimaryData` が生成)
+  4. 「一次データ｜moneyflow」— 取得した原ファイル (`recordPrimaryData` が記録)
 - 業種全体の「純流入」は二次市場では原理的にゼロ (買い手と売り手が同額)。
   そのため各指標の定義文で「純流入額ではない」ことを明示する
   (`services/moneyflow/lib/indicators.ts` 参照)。
@@ -171,8 +173,8 @@ JPX 告知 (2026-07-06)「信用取引残高の公表情報の変更日及び今
 ## 実装ファイル一覧 (Phase 0/1)
 
 - `src/shared/notion-archive/archive.ts` — `parentPageId` 対応 (親ページを
-  「一次データ保管」以外にも切替可能に)
-- `src/shared/notion-archive/env.ts` — `NOTION_MONEYFLOW_PAGE_ID` 等
+  「一次データ保管」以外にも切替可能に。moneyflow 自体は既定の「一次データ保管」を使う)
+- `src/shared/notion-archive/env.ts` — `NOTION_MONEYFLOW_*_DB_ID` (任意の DB ID 固定)
 - `src/shared/notion-archive/moneyflow.ts` — 3 DB (指標定義/観測ログ/取込ログ)
 - `src/routes/ingest-proxy.ts` (`GET /api/ingest/moneyflow-sector`)
 - `src/routes/moneyflow-sector.ts` — D1 集計ロジック

@@ -1,5 +1,5 @@
 /**
- * 「資金フロー（個人用）」Notion 保管のテスト。
+ * moneyflow (個人用「お金の流れ」) の Notion 保管のテスト。
  * fetch のモック方式は price-sync-log.test.ts と同じ (route map + vi.resetModules())。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,7 +16,6 @@ function jsonResponse(body: unknown): Response {
   } as Response;
 }
 
-const MONEYFLOW_PAGE = "f".repeat(32);
 const ARCHIVE_PAGE = "a".repeat(32);
 const STOCK_INFO_PAGE = "b".repeat(32);
 
@@ -37,7 +36,6 @@ describe("notion-archive moneyflow", () => {
     calls = [];
     routes = new Map();
     process.env.NOTION_TOKEN = "dummy-token";
-    process.env.NOTION_MONEYFLOW_PAGE_ID = MONEYFLOW_PAGE;
     process.env.NOTION_ARCHIVE_PAGE_ID = ARCHIVE_PAGE;
     process.env.NOTION_STOCK_INFO_PAGE_ID = STOCK_INFO_PAGE;
     delete process.env.NOTION_MONEYFLOW_DEFS_DB_ID;
@@ -77,8 +75,8 @@ describe("notion-archive moneyflow", () => {
       expect(Object.keys(patchBody.properties)).toContain("何を測るか");
     });
 
-    it("固定 DB ID が無ければ Search (親一致) → 新規作成し、親ページは NOTION_MONEYFLOW_PAGE_ID", async () => {
-      route("GET", `/v1/blocks/${MONEYFLOW_PAGE}/children`, [childrenPage()]);
+    it("固定 DB ID が無ければ Search (親一致) → 新規作成し、親ページは「株式情報」(NOTION_STOCK_INFO_PAGE_ID)", async () => {
+      route("GET", `/v1/blocks/${STOCK_INFO_PAGE}/children`, [childrenPage()]);
       route("POST", "/v1/search", [searchEmpty()]);
       route("POST", "/v1/databases", [{ id: "defs-new" }]);
       const { ensureIndicatorDefsDb } = await load();
@@ -88,7 +86,7 @@ describe("notion-archive moneyflow", () => {
         String(calls.find((c) => new URL(c.url).pathname === "/v1/databases")?.init.body)
       ) as { title: Array<{ text: { content: string } }>; parent: { page_id: string } };
       expect(created.title[0]?.text.content).toBe("資金フロー｜指標定義");
-      expect(created.parent.page_id).toBe(MONEYFLOW_PAGE);
+      expect(created.parent.page_id).toBe(STOCK_INFO_PAGE);
     });
   });
 
@@ -189,7 +187,7 @@ describe("notion-archive moneyflow", () => {
       route("GET", `/v1/databases/${dbId}`, [{ id: dbId, properties: {} }]);
       route("PATCH", `/v1/databases/${dbId}`, [{}]);
       route("POST", "/v1/search", [searchEmpty()]);
-      route("GET", `/v1/blocks/${MONEYFLOW_PAGE}/children`, [childrenPage()]);
+      route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [childrenPage()]);
       const { ensureObservationsDb } = await load();
       await expect(ensureObservationsDb()).rejects.toThrow(/一次データ｜moneyflow/);
     });
@@ -208,7 +206,7 @@ describe("notion-archive moneyflow", () => {
               id: "primary-db-1",
               object: "database",
               created_time: "2026-01-01T00:00:00.000Z",
-              parent: { type: "page_id", page_id: MONEYFLOW_PAGE },
+              parent: { type: "page_id", page_id: ARCHIVE_PAGE },
               title: [{ plain_text: "一次データ｜moneyflow" }],
             },
           ],
@@ -217,7 +215,7 @@ describe("notion-archive moneyflow", () => {
         },
         searchEmpty(),
       ]);
-      route("GET", `/v1/blocks/${MONEYFLOW_PAGE}/children`, [childrenPage()]);
+      route("GET", `/v1/blocks/${STOCK_INFO_PAGE}/children`, [childrenPage()]);
       route("POST", "/v1/databases", [{ id: "obs-new" }]);
 
       const { ensureObservationsDb } = await load();
@@ -250,7 +248,7 @@ describe("notion-archive moneyflow", () => {
               id: "primary-db-1",
               object: "database",
               created_time: "2026-01-01T00:00:00.000Z",
-              parent: { type: "page_id", page_id: MONEYFLOW_PAGE },
+              parent: { type: "page_id", page_id: ARCHIVE_PAGE },
               title: [{ plain_text: "一次データ｜moneyflow" }],
             },
           ],
@@ -421,7 +419,7 @@ describe("notion-archive moneyflow", () => {
 
   describe("ensureRunLogDb / recordRunLog", () => {
     it("固定 DB ID が無ければ新規作成し、実行ごとに新規行を作る (upsert しない)", async () => {
-      route("GET", `/v1/blocks/${MONEYFLOW_PAGE}/children`, [childrenPage()]);
+      route("GET", `/v1/blocks/${STOCK_INFO_PAGE}/children`, [childrenPage()]);
       route("POST", "/v1/search", [searchEmpty()]);
       route("POST", "/v1/databases", [{ id: "runlog-new" }]);
       route("POST", "/v1/pages", [{ id: "run-1" }, { id: "run-2" }]);

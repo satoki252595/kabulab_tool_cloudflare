@@ -12,7 +12,6 @@
 import {
   ensureObservationsDb,
   isArchived,
-  notionEnv,
   observationExists,
   observationKey,
   recordPrimaryData,
@@ -114,9 +113,7 @@ export async function runSpec(spec: MoneyflowSourceSpec, ctx: SpecRunContext): P
     return `dry-run key=${key} ${drafts.length}行`;
   }
 
-  const parentPageId = notionEnv.NOTION_MONEYFLOW_PAGE_ID();
-
-  if (await isArchived("moneyflow", key, parentPageId)) {
+  if (await isArchived("moneyflow", key)) {
     const primaryDbId = await requirePrimaryDataDbId(spec.name);
     const rec = await findArchivedRecordByKey(primaryDbId, key);
     if (!rec) {
@@ -155,7 +152,6 @@ export async function runSpec(spec: MoneyflowSourceSpec, ctx: SpecRunContext): P
     source: batch.source,
     metadata: batch.metadata,
     files: batch.files,
-    parentPageId,
   });
   const drafts = parseAndValidate(spec, key, batch.files);
   const counts = await writeObservations(drafts, archive.pageId, ctx);

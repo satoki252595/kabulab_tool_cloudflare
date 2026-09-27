@@ -48,9 +48,9 @@ export interface RecordPrimaryDataInput {
   /**
    * 「一次データ｜<service>」DB を置く親ページ ID。省略時は従来どおり
    * `notionEnv.NOTION_ARCHIVE_PAGE_ID()` (「一次データ保管」ページ)。
-   * moneyflow 等、個人用の別ページ (`NOTION_MONEYFLOW_PAGE_ID`) 配下に
-   * 一次データを置きたいサービスが明示的に渡す (`dbCache` のキーは親ページ
-   * ID を含めるため、既定と明示指定が同じ service 名でも取り違えない)。
+   * 既定以外のページ配下に一次データを置きたいサービスが明示的に渡す
+   * (`dbCache` のキーは親ページ ID を含めるため、既定と明示指定が同じ
+   * service 名でも取り違えない)。
    */
   parentPageId?: string;
 }

@@ -9,7 +9,6 @@ import type { MoneyflowSourceSpec, ObservationDraft } from "../../../services/mo
 const notion = {
   ensureObservationsDb: vi.fn(async () => ({ dbId: "obs-db" })),
   isArchived: vi.fn(async (_s: string, _k: string, _p?: string) => false),
-  notionEnv: { NOTION_MONEYFLOW_PAGE_ID: () => "mf-page" },
   observationExists: vi.fn(async (_db: string, _k: string) => false),
   observationKey: (d: { period: string; indicatorKey: string; category: string }) =>
     `${d.period}|${d.indicatorKey}|${d.category}`,
@@ -102,9 +101,11 @@ describe("runSpec", () => {
     const { spec, fetchImpl } = makeSpec();
     const detail = await runSpec(spec, ctx());
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    // 一次データは他サービスと同じ既定の「一次データ保管」配下 (parentPageId を渡さない)
     expect(notion.recordPrimaryData).toHaveBeenCalledWith(
-      expect.objectContaining({ service: "moneyflow", key: "src-2026-08", parentPageId: "mf-page" })
+      expect.objectContaining({ service: "moneyflow", key: "src-2026-08" })
     );
+    expect(notion.recordPrimaryData.mock.calls[0]?.[0]).not.toHaveProperty("parentPageId");
     const written = notion.upsertObservation.mock.calls.map((c) => (c[1] as { category: string; primaryDataPageId: string }));
     expect(written.map((w) => w.category)).toEqual(["fresh-A", "fresh-B"]);
     expect(written.every((w) => w.primaryDataPageId === "primary-1")).toBe(true);

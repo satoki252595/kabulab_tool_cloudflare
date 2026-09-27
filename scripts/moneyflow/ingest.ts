@@ -5,7 +5,8 @@ import "dotenv/config";
  * 実行: npx tsx scripts/moneyflow/ingest.ts [--dry-run] [--only=jpx-sector-marketcap,jpx-short-selling,sector-turnover]
  *
  * 必要 env (.env):
- *   NOTION_TOKEN / NOTION_MONEYFLOW_PAGE_ID (--dry-run 以外)
+ *   NOTION_TOKEN / NOTION_STOCK_INFO_PAGE_ID (3 DB の親「株式情報」) /
+ *   NOTION_ARCHIVE_PAGE_ID (一次データの親「一次データ保管」) (--dry-run 以外)
  *   WORKER_BASE_URL / CRON_SECRET (sector-turnover が Worker の内部読取
  *   エンドポイントを叩くため。D1 は Node から直接読めない — ADR-0001)
  *
@@ -37,7 +38,6 @@ import {
   recordRunLog,
   upsertIndicatorDef,
   upsertObservation,
-  notionEnv,
   type MoneyflowRunStatus,
 } from "../../src/shared/notion-archive/index.js";
 import { sharedEnv } from "../../src/shared/env.js";
@@ -216,7 +216,7 @@ async function runSectorMarketCap(): Promise<RunOutcome> {
   const { yearMonth } = await latestSectorMarketCapPdfUrl();
   const period = sectorMarketCapPeriodFromYearMonth(yearMonth);
   const key = sectorMarketCapKey(period);
-  const alreadyArchived = await isArchived("moneyflow", key, notionEnv.NOTION_MONEYFLOW_PAGE_ID());
+  const alreadyArchived = await isArchived("moneyflow", key);
 
   let asOfDate: string;
   let sectors: SectorMarketCapData["sectors"];
@@ -240,10 +240,7 @@ async function runSectorMarketCap(): Promise<RunOutcome> {
     detail = sectorMarketCapSkipDetail(period);
   } else {
     const data = await fetchSectorMarketCap();
-    const archive = await recordPrimaryData({
-      ...sectorMarketCapArchiveInput(data),
-      parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID(),
-    });
+    const archive = await recordPrimaryData(sectorMarketCapArchiveInput(data));
     asOfDate = data.asOfDate;
     sectors = data.sectors;
     primaryDataPageId = archive.pageId;
@@ -294,10 +291,7 @@ async function runShortSelling(): Promise<RunOutcome> {
     return { source: "jpx-short-selling", ok: true, detail: `dry-run date=${data.date}` };
   }
 
-  const archive = await recordPrimaryData({
-    ...shortSellingArchiveInput(data),
-    parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID(),
-  });
+  const archive = await recordPrimaryData(shortSellingArchiveInput(data));
   const archivedNote =
     archive.outcome === "skipped_existing" ? "既取得PDFを再利用" : "新規PDFを記録";
 

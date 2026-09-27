@@ -1,24 +1,26 @@
 /**
- * 「資金フロー（個人用）」の Notion 保管 (計画: notion-velvet-goose.md「構成」節)。
+ * moneyflow (個人用「お金の流れ」ダッシュボード) の Notion 保管
+ * (計画: notion-velvet-goose.md「構成」節)。
  *
- * 親ページは `NOTION_MONEYFLOW_PAGE_ID` (ユーザーが作成し、kabulab-cf の
- * インテグレーションのみを接続する個人用ページ)。この直下に 3 つの単一 DB を
- * 置く (CLAUDE.md ルール6: 銘柄/業種ごとの子ページ・子DBは量産しない):
+ * 他サービスと同じく「株式情報」ページ (`NOTION_STOCK_INFO_PAGE_ID`) の直下に
+ * 3 つの単一 DB を置く (CLAUDE.md ルール6: 銘柄/業種ごとの子ページ・子DBは量産しない):
  *
  *   1. 「資金フロー｜指標定義」 … 指標ごとの定義 (何を測るか・出典・利用条件・
- *      頻度・限界)。1 指標 1 行。`indicators.ts` のカタログを起動時に upsert する。
+ *      頻度・限界)。1 指標 1 行。取込の起動時にカタログを upsert する。
  *   2. 「資金フロー｜観測ログ」 … 縦長の事実テーブル。冪等キーは
  *      `期間|指標|区分`。「指標」は 1. への relation。
  *   3. 「資金フロー｜取込ログ」 … 1 回の取込実行につき 1 行 (`price-sync-log.ts`
  *      と同じ「1 実行 1 行」の形。upsert キーを持たず常に新規作成する)。
  *
- * 一次データ (取得した原ファイル) は本モジュールではなく
- * `recordPrimaryData({ service: "moneyflow", parentPageId: NOTION_MONEYFLOW_PAGE_ID() })`
- * で「一次データ｜moneyflow」へ記録する (呼び出し元は `services/moneyflow/`)。
+ * 一次データ (取得した原ファイル) は本モジュールではなく、他サービスと同じ
+ * `recordPrimaryData({ service: "moneyflow", ... })` で「一次データ保管」
+ * (`NOTION_ARCHIVE_PAGE_ID`) 配下の「一次データ｜moneyflow」へ記録する。
  * 「観測ログ」の「一次データ」列はその記録済みページへの relation で、
  * `ensureObservationsDb()` は **「一次データ｜moneyflow」DB が既に存在する
- * こと** (= 呼び出し順序として recordPrimaryData を先に呼んでいること) を
- * 前提にする。無ければ throw する (推測で relation 先を作らない — ルール2)。
+ * こと** を前提にする。無ければ throw する (推測で relation 先を作らない — ルール2)。
+ *
+ * (2026-09-27: 当初は専用ページ「資金フロー（個人用）」(`NOTION_MONEYFLOW_PAGE_ID`)
+ * の直下に置く設計だったが、ユーザー決定で既存サービスと同じ配置に変更した。)
  *
  * select 列の選択肢は既存を消さず追加のみ・累積 100 件で throw する
  * (`stock-supplement.ts` の `buildMissingPatch`/`SELECT_OPTIONS_CUMULATIVE_MAX`
@@ -287,7 +289,7 @@ export async function ensureIndicatorDefsDb(): Promise<{ dbId: string }> {
   let dbId = notionEnv.NOTION_MONEYFLOW_DEFS_DB_ID() ?? null;
   if (!dbId) {
     dbId = await findBackupChildByTitle({
-      parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID(),
+      parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
       title: MONEYFLOW_DEFS_DB_TITLE,
       kind: "database",
     });
@@ -295,7 +297,7 @@ export async function ensureIndicatorDefsDb(): Promise<{ dbId: string }> {
 
   if (!dbId) {
     const created = await notionRequest<DbSchemaResponse>("POST", "/databases", {
-      parent: { type: "page_id", page_id: notionEnv.NOTION_MONEYFLOW_PAGE_ID() },
+      parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
       title: [{ type: "text", text: { content: MONEYFLOW_DEFS_DB_TITLE } }],
       properties: want,
     });
@@ -528,14 +530,14 @@ export async function ensureObservationsDb(): Promise<{ dbId: string }> {
   const { dbId: defsDbId } = await ensureIndicatorDefsDb();
 
   const primaryDataDbId = await findBackupChildByTitle({
-    parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID(),
+    parentPageId: notionEnv.NOTION_ARCHIVE_PAGE_ID(),
     title: MONEYFLOW_PRIMARY_DB_TITLE,
     kind: "database",
   });
   if (!primaryDataDbId) {
     throw new Error(
       `ensureObservationsDb: 「${MONEYFLOW_PRIMARY_DB_TITLE}」DB がまだ存在しません。` +
-        `recordPrimaryData({ service: "moneyflow", parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID() }) を` +
+        `recordPrimaryData({ service: "moneyflow", ... }) を` +
         `先に呼んで一次データを記録してください (観測ログの「一次データ」列は relation のため、` +
         `関連先 DB が実在しないと作成できません)。`
     );
@@ -548,7 +550,7 @@ export async function ensureObservationsDb(): Promise<{ dbId: string }> {
   let dbId = notionEnv.NOTION_MONEYFLOW_OBS_DB_ID() ?? null;
   if (!dbId) {
     dbId = await findBackupChildByTitle({
-      parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID(),
+      parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
       title: MONEYFLOW_OBS_DB_TITLE,
       kind: "database",
     });
@@ -556,7 +558,7 @@ export async function ensureObservationsDb(): Promise<{ dbId: string }> {
 
   if (!dbId) {
     const created = await notionRequest<DbSchemaResponse>("POST", "/databases", {
-      parent: { type: "page_id", page_id: notionEnv.NOTION_MONEYFLOW_PAGE_ID() },
+      parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
       title: [{ type: "text", text: { content: MONEYFLOW_OBS_DB_TITLE } }],
       properties: want,
     });
@@ -749,7 +751,7 @@ export async function ensureRunLogDb(): Promise<{ dbId: string }> {
   let dbId = notionEnv.NOTION_MONEYFLOW_RUNLOG_DB_ID() ?? null;
   if (!dbId) {
     dbId = await findBackupChildByTitle({
-      parentPageId: notionEnv.NOTION_MONEYFLOW_PAGE_ID(),
+      parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
       title: MONEYFLOW_RUNLOG_DB_TITLE,
       kind: "database",
     });
@@ -757,7 +759,7 @@ export async function ensureRunLogDb(): Promise<{ dbId: string }> {
 
   if (!dbId) {
     const created = await notionRequest<DbSchemaResponse>("POST", "/databases", {
-      parent: { type: "page_id", page_id: notionEnv.NOTION_MONEYFLOW_PAGE_ID() },
+      parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
       title: [{ type: "text", text: { content: MONEYFLOW_RUNLOG_DB_TITLE } }],
       properties: want,
     });

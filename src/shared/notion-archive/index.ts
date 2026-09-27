@@ -131,7 +131,7 @@ export type {
 export { findAllBackupChildrenByTitle } from "./archive.js";
 export type { BackupChildHit } from "./archive.js";
 
-// 「資金フロー（個人用）」— Phase 0/1 (計画: notion-velvet-goose.md)
+// moneyflow (個人用「お金の流れ」) — 「株式情報」直下の 3 DB (計画: notion-velvet-goose.md)
 export {
   MONEYFLOW_DEFS_DB_TITLE,
   MONEYFLOW_OBS_DB_TITLE,
