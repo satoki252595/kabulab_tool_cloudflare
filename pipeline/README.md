@@ -32,6 +32,28 @@ uv run pytest        # テスト
 
 全ジョブ `--dry-run` 対応（Notion に書き込まない）。
 
+### ③財務サマリの既存行を D1 へ補完
+
+`scripts/backfill_financials_from_notion.py` は Notion ③の全件を月ごとに読み、
+`jss_financials` に未登録のキーだけを挿入する一度きりの移行です。既定は
+**Notion の読み取り検証だけ**で、D1 には接続しません。同じ `--apply` を再実行しても
+既存行の数値・出典を上書きしません。円・円/株・% の値、開示種別、連結/単体、
+ソースとライセンスタグを Notion のまま運びます。③に無い文書ID・URL・SHA256は
+推測せず空欄にします。
+
+```bash
+nix develop -c uv run --project pipeline python pipeline/scripts/backfill_financials_from_notion.py --verify-code 8154
+# PRの検証・マージと本番手順の確認後、NOTION_TOKEN / CF_ACCOUNT_ID /
+# CF_API_TOKEN / CF_D1_DATABASE_ID を環境へ設定して明示的に実行する:
+nix develop -c uv run --project pipeline python pipeline/scripts/backfill_financials_from_notion.py --apply --verify-code 8154
+```
+
+Notion の 10,000 件/クエリ上限に対して決算期末を月で区切り、途中で失敗したら停止します。
+最後に Notion の全行数・一意キー数・銘柄数、D1 の前後行数を表示します。
+`--verify-code` で指定した銘柄は期別行の件数と値も表示します。
+2026-09-28 の読み取り検証では Notion ③は 34,663 行・一意キー 34,663 件、
+D1 は実行前 322 行・8154 は 0 行でした。実行後の値は本番実行のログで確認してください。
+
 ### EDINETの対象日（2026-09-11）
 
 `edinet_daily` の既定の対象日は **cron の予定日**であり、起動時刻の JST 日付ではない。予定は毎営業日 21:00 JST（`cron: "0 12 * * 1-5"`）なので、21:00 JST より前に始まった実行は「前日分の遅延実行」として前日を対象にする。GitHub Actions のスケジュール遅延（実測 +3.5h〜+9.5h）で起動が翌日 JST へずれても、対象日はずれない。任意の日を処理するには `--date YYYY-MM-DD` を渡す。
