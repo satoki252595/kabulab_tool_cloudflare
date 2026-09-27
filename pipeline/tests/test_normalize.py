@@ -64,6 +64,50 @@ class TestParseNumeric:
 
 
 class TestSelectionLogic:
+    @pytest.mark.parametrize("revenue_element,income_element,revenue,income", [
+        ("RevenueIFRSSummaryOfBusinessResults", "ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults", "5937000000", "841000000"),
+        ("Revenue2IFRSSummaryOfBusinessResults", "ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults", "17734000000", "7467000000"),
+        ("RevenuesUSGAAPSummaryOfBusinessResults", "NetIncomeLossAttributableToOwnersOfParentUSGAAPSummaryOfBusinessResults", "625860000000", "41364000000"),
+    ])
+    def test_ifrs_and_us_gaap_summary_elements(self, revenue_element, income_element, revenue, income):
+        # Notion⑤でSHA照合済みの7198/4819/4901、2022/06期原本の実在要素と値。
+        tidy = tidy_frame([
+            {"element": revenue_element, "context_ref": "CurrentYTDDuration", "consolidated": "連結", "unit": "円", "value": revenue},
+            {"element": income_element, "context_ref": "CurrentYTDDuration", "consolidated": "連結", "unit": "円", "value": income},
+            {"element": "jpdei_cor:CurrentPeriodEndDateDEI", "context_ref": "FilingDateInstant", "value": "2022-06-30"},
+        ])
+        record = tidy_to_financial_record(tidy, "7203", prov(), disclosure_type="1Q")
+        assert record is not None
+        assert record.consolidated == "連結"
+        assert record.net_sales == float(revenue)
+        assert record.net_income == float(income)
+        assert record.operating_income is None  # 事業利益/税引前利益で穴埋めしない
+
+    def test_consolidated_record_does_not_mix_parent_aliases(self):
+        tidy = tidy_frame([
+            {"element": "NetSales", "context_ref": "CurrentYearDuration_NonConsolidatedMember", "consolidated": "単体", "value": "500", "period_end": "2026-03-31"},
+            {"element": "RevenueIFRSSummaryOfBusinessResults", "context_ref": "CurrentYearDuration", "consolidated": "連結", "value": "1000", "period_end": "2026-03-31"},
+            {"element": "NetIncome", "context_ref": "CurrentYearDuration_NonConsolidatedMember", "consolidated": "単体", "value": "100"},
+            {"element": "ProfitLossAttributableToOwnersOfParentIFRS", "context_ref": "CurrentYearDuration", "consolidated": "連結", "value": "200"},
+            {"element": "CashFlowsFromOperatingActivities", "context_ref": "CurrentYearDuration_NonConsolidatedMember", "consolidated": "単体", "value": "300"},
+        ])
+        record = tidy_to_financial_record(tidy, "7203", prov())
+        assert record is not None
+        assert record.net_sales == 1000.0
+        assert record.net_income == 200.0
+        assert record.cf_operating is None
+
+    def test_ifrs_headline_revenue_is_not_replaced_by_broader_income(self):
+        # 8253の2022/06期原本: 売上収益と広い収益は別の勘定項目。
+        tidy = tidy_frame([
+            {"element": "RevenueIFRSSummaryOfBusinessResults", "context_ref": "CurrentYTDDuration", "consolidated": "連結", "value": "77802000000"},
+            {"element": "Revenue2IFRS", "context_ref": "CurrentYTDDuration", "consolidated": "連結", "value": "91842000000"},
+            {"element": "jpdei_cor:CurrentPeriodEndDateDEI", "context_ref": "FilingDateInstant", "value": "2022-06-30"},
+        ])
+        record = tidy_to_financial_record(tidy, "7203", prov(), disclosure_type="1Q")
+        assert record is not None
+        assert record.net_sales == 77_802_000_000
+
     def test_actual_vs_forecast_contexts(self):
         tidy = tidy_frame([
             {"element": "tse-ed-t:NetSales", "context_ref": "CurrentYearDuration_ConsolidatedMember_ResultMember", "consolidated": "連結", "value": "1000", "period_end": "2026-03-31"},
@@ -74,6 +118,27 @@ class TestSelectionLogic:
         assert record is not None
         assert record.net_sales == 1000.0  # 実績は Forecast コンテキストを拾わない
         assert record.forecast_net_sales == 1100.0  # 来期予想
+
+    def test_future_annual_result_does_not_become_quarter_actual_dividend(self):
+        tidy = tidy_frame([
+            {"element": "NetSales", "context_ref": "CurrentAccumulatedQ1Duration_ConsolidatedMember_ResultMember", "consolidated": "連結", "value": "1000", "period_end": "2026-06-30"},
+            {"element": "DividendPerShare", "context_ref": "CurrentYearDuration_AnnualMember_ResultMember", "consolidated": "単体", "value": "100", "period_end": "2027-03-31"},
+            {"element": "DividendPerShare", "context_ref": "CurrentYearDuration_AnnualMember_ForecastMember", "consolidated": "単体", "value": "120", "period_end": "2027-03-31"},
+        ])
+        record = tidy_to_financial_record(tidy, "7203", prov())
+        assert record is not None
+        assert record.dps_actual is None
+        assert record.dps_forecast == 120
+
+    def test_zero_next_year_forecast_is_not_replaced_by_current_forecast(self):
+        tidy = tidy_frame([
+            {"element": "NetSales", "context_ref": "CurrentYearDuration_ConsolidatedMember_ResultMember", "consolidated": "連結", "value": "1000", "period_end": "2026-03-31"},
+            {"element": "NetSales", "context_ref": "NextYearDuration_ConsolidatedMember_ForecastMember", "consolidated": "連結", "value": "0"},
+            {"element": "NetSales", "context_ref": "CurrentYearDuration_ConsolidatedMember_ForecastMember", "consolidated": "連結", "value": "100"},
+        ])
+        record = tidy_to_financial_record(tidy, "7203", prov())
+        assert record is not None
+        assert record.forecast_net_sales == 0
 
     def test_forecast_range_is_not_actual(self):
         tidy = tidy_frame([

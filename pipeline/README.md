@@ -73,6 +73,8 @@ nix develop -c uv run --env-file .env --project pipeline python pipeline/scripts
 上限とし、超過・ハッシュ不一致・期末/連結区分未確定は失敗をjournalへ残します。
 期限付きファイルURLはログやjournalへ出しません。原本をSHA名でcacheし、同じ
 journalで再実行すると成功済みを省略し、失敗だけ再試行します。
+parserのSHAも記録し、parserが変わった場合は旧成功を省略せず全件を再解析します。
+原本cacheを使うため同じファイルを再ダウンロードする必要はありません。
 
 全件の原本再解析・差分の確認とPR/CIを終えてから、`--apply-journal` を付けた同じ
 コマンドで **Notion③だけ**を更新できます。新しい開示を守り、正しい行の再読が

@@ -43,6 +43,18 @@ def test_resumed_success_supersedes_error_without_erasing_history(tmp_path):
     assert len(journal.read_text().splitlines()) == 2
 
 
+def test_stale_parser_journal_is_rejected_before_notion_connection(tmp_path, monkeypatch):
+    journal = tmp_path / "audit.jsonl"
+    journal.write_text(
+        json.dumps({"page_id": "p", "parser_sha256": "old-parser", "changes": {}}) + "\n"
+    )
+    monkeypatch.setattr(
+        reparse, "NotionClient", lambda *args, **kwargs: pytest.fail("未検証のparserで接続しない")
+    )
+    with pytest.raises(ValueError, match="parserが監査後に変わりました"):
+        reparse.apply_journal(journal)
+
+
 def test_old_key_is_not_archived_until_corrected_value_is_read_back(monkeypatch):
     old = reparse.notion_financial(_page())
     corrected = replace(old, consolidated="単体")

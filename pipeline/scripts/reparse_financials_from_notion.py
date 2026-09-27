@@ -28,10 +28,12 @@ from jp_stock_pipeline.notion.upsert import (
     financial_summary_filter,
     financial_summary_properties,
 )
+from jp_stock_pipeline.transform import normalize as normalize_module
 from jp_stock_pipeline.transform.normalize import derive_disclosure_type, tidy_to_financial_record
 
 MAX_RAW_BYTES = 64 * 1024 * 1024
 MAX_EXPANDED_BYTES = 128 * 1024 * 1024
+PARSER_SHA256 = hashlib.sha256(Path(normalize_module.__file__).read_bytes()).hexdigest()
 
 
 def _text(props: dict, name: str, kind: str = "rich_text") -> str:
@@ -144,7 +146,12 @@ def reparse_record(
         for key, value in after.items()
         if before[key] != value
     }
-    return new, {"raw_sha256": digest, "raw_url": props[S.RAW_PROP_URL]["url"], "changes": changes}
+    return new, {
+        "parser_sha256": PARSER_SHA256,
+        "raw_sha256": digest,
+        "raw_url": props[S.RAW_PROP_URL]["url"],
+        "changes": changes,
+    }
 
 
 def apply_reparsed(
@@ -214,7 +221,11 @@ def audit(*, source, future_after, limit, journal: Path, cache_dir: Path, codes=
     client = NotionClient(settings.notion_token, rps=settings.notion_rps)
     cache_dir.mkdir(parents=True, exist_ok=True)
     journal.parent.mkdir(parents=True, exist_ok=True)
-    done = {page_id for page_id, item in _journal_items(journal).items() if "error" not in item}
+    done = {
+        page_id
+        for page_id, item in _journal_items(journal).items()
+        if "error" not in item and item.get("parser_sha256") == PARSER_SHA256
+    }
     groups = defaultdict(list)
     scanned = 0
     for page in _financial_pages(client, settings.db_id("financials"), source, future_after, codes):
@@ -310,11 +321,13 @@ def audit(*, source, future_after, limit, journal: Path, cache_dir: Path, codes=
 
 
 def apply_journal(journal: Path):
-    settings = load_settings()
-    client = NotionClient(settings.notion_token, rps=settings.notion_rps)
     items = list(_journal_items(journal).values())
     if any("error" in item for item in items):
         raise ValueError("失敗を含むjournalは反映できません。確認・再解析が必要です")
+    if any(item.get("parser_sha256") != PARSER_SHA256 for item in items):
+        raise ValueError("parserが監査後に変わりました。同じjournalで全件を再解析してください")
+    settings = load_settings()
+    client = NotionClient(settings.notion_token, rps=settings.notion_rps)
     for item in items:
         if not item["changes"]:
             continue
