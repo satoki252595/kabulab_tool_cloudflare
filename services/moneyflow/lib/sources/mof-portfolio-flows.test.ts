@@ -228,6 +228,21 @@ describe("MOF_PORTFOLIO_FLOWS_INDICATORS (指標定義)", () => {
       expect(def.limitations.length).toBeGreaterThan(0);
     }
   });
+
+  it("2014年1月の資産クラス区分変更 (原本備考①) が3指標すべての limitations に明記されている", () => {
+    // 原本 (week.csv/montha1.csv 末尾の備考①、および英語版 Note 1) の実際の注記:
+    //   「①平成26年1月より、投資ファンドに係る取引については、それまで中長期債に
+    //     含まれた契約型投資信託（オープンエンド型）も含め、「株式・投資ファンド持分」
+    //     に計上される。」
+    // ("Transactions related to investment funds will be recorded under the new
+    //   items "Equity and investment fund shares" starting from January 2014.")
+    // equity/long_term_bond 単体の時系列比較がこの境界をまたぐと連続しないため、
+    // 3指標(net/acquisition/disposition)いずれの limitations にも明記が必要。
+    for (const def of MOF_PORTFOLIO_FLOWS_INDICATORS) {
+      expect(def.limitations).toMatch(/2014年1月/);
+      expect(def.limitations).toMatch(/区分変更/);
+    }
+  });
 });
 
 describe("toMofObservationRows (縦長の観測ログ形式への変換)", () => {
