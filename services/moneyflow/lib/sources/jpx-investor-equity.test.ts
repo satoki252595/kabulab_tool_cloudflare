@@ -172,6 +172,57 @@ describe("旧様式パーサ: 月次 (2026年8月, 実ファイル)", () => {
     const total = find(records, "Tokyo & Nagoya", "総計");
     expect(total.total).toBe(407516356670);
   });
+
+  it("isAggregateCategory が15投資部門すべてで正しい (法人・金融機関も集計行)", () => {
+    // 実ファイル (monthly-value-2026-08.xls, TSE Prime シート) を目視確認した実測値で、
+    // 「法人」が「金融機関」と全く同じ構造 (自分の子カテゴリの合算) の集計行であることを
+    // 検証する。isAggregateCategory=false の行だけを合算して市場合計を作るような
+    // 下流集計コードが、法人とその子を二重計上しないための回帰テスト。
+    const byLabel = (label: string) => find(records, "TSE Prime", label);
+    const aggregateLabels = ["自己計", "委託計", "総計", "法人", "金融機関"];
+    const leafLabels = [
+      "個人",
+      "海外投資家",
+      "証券会社",
+      "投資信託",
+      "事業法人",
+      "その他法人等",
+      "生保・損保",
+      "都銀・地銀等",
+      "信託銀行",
+      "その他金融機関",
+    ];
+    for (const label of aggregateLabels) {
+      expect(byLabel(label).isAggregateCategory).toBe(true);
+    }
+    for (const label of leafLabels) {
+      expect(byLabel(label).isAggregateCategory).toBe(false);
+    }
+    // 全15投資部門を網羅していることの確認 (4市場×15=60レコードは既存テストで検証済み)
+    expect(aggregateLabels.length + leafLabels.length).toBe(15);
+  });
+
+  it("委託計=法人+個人+海外投資家+証券会社、法人=投資信託+事業法人+その他法人等+金融機関、" +
+    "金融機関=生保・損保+都銀・地銀等+信託銀行+その他金融機関、総計=自己計+委託計 (sum恒等式)", () => {
+    const byLabel = (label: string) => find(records, "TSE Prime", label);
+    const sumSellBuy = (labels: string[]) =>
+      labels.reduce(
+        (acc, l) => ({ sell: acc.sell + byLabel(l).sell, buy: acc.buy + byLabel(l).buy }),
+        { sell: 0, buy: 0 }
+      );
+
+    const brokerageParts = sumSellBuy(["法人", "個人", "海外投資家", "証券会社"]);
+    expect(brokerageParts).toEqual({ sell: byLabel("委託計").sell, buy: byLabel("委託計").buy });
+
+    const institutionParts = sumSellBuy(["投資信託", "事業法人", "その他法人等", "金融機関"]);
+    expect(institutionParts).toEqual({ sell: byLabel("法人").sell, buy: byLabel("法人").buy });
+
+    const financialParts = sumSellBuy(["生保・損保", "都銀・地銀等", "信託銀行", "その他金融機関"]);
+    expect(financialParts).toEqual({ sell: byLabel("金融機関").sell, buy: byLabel("金融機関").buy });
+
+    const totalParts = sumSellBuy(["自己計", "委託計"]);
+    expect(totalParts).toEqual({ sell: byLabel("総計").sell, buy: byLabel("総計").buy });
+  });
 });
 
 describe("新様式パーサ (JPX公式サンプルファイル。実データではない仕様サンプル)", () => {
@@ -203,6 +254,18 @@ describe("新様式パーサ (JPX公式サンプルファイル。実データ�
 
   it("14カテゴリ × 4市場 × 2指標 = 112レコード", () => {
     expect(records.length).toBe(14 * 4 * 2);
+  });
+});
+
+describe("月次専用の新様式サンプル (2026-10-08 掲載分から予告。週次の新様式(2026-09-29)とは" +
+  "別建てのJPX公式サンプル。実データではなく仕様サンプル)", () => {
+  it("ヘッダ行が「年月週」ではなく「年月」で始まる別レイアウトのため、現行の" +
+    "parseUnifiedSheet(週次新様式用)はヘッダ行を検知できず throw する " +
+    "(フォールバックして誤った値を返さない。ルール2)", () => {
+    const bytes = loadBytes("monthly-unified-sample-jpx-official.xlsx");
+    expect(() => parseInvestorEquityWorkbook(bytes, "stock_1_mYYYYMM.xlsx")).toThrow(
+      /ヘッダ行/
+    );
   });
 });
 
