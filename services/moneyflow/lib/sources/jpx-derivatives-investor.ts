@@ -130,17 +130,28 @@ export interface InvestorTypeCsvLink {
   periodTo: string;
 }
 
+// アンカータグ全体 (href + 中身のテキスト) を捕捉する。一覧ページの「フォーマット
+// 変更等のお知らせ」欄には、実データの週次テーブルとは別に、様式変更の告知に添付された
+// 「サンプルファイル（ＣＳＶ版）」という恒久的なリンクが同じ `Tousi_DV_W_<from>_<to>.csv`
+// 命名で残り続ける（2026-09-27 実機確認: 2026年4月13日の様式変更告知に添付された
+// `Tousi_DV_W_20260413_20260417.csv` が本稿執筆時点でも一覧ページに残存している）。
+// 実データの週次リンクはアイコン画像 (`<img ...>`) のみでリンクテキストを持たないのに対し、
+// このサンプルリンクは「…サンプルファイル（ＣＳＶ版）」という可視テキストを持つため、
+// アンカー内テキストで判別できる。
 const CSV_LINK_RE =
-  /href="(\/markets\/statistics-derivatives\/sector\/[^"]*?Tousi_DV_W_(\d{8})_(\d{8})\.csv)"/g;
+  /<a\s+href="(\/markets\/statistics-derivatives\/sector\/[^"]*?Tousi_DV_W_(\d{8})_(\d{8})\.csv)"[^>]*>([\s\S]*?)<\/a>/g;
 
 /**
  * 一覧ページ HTML から投資部門別取引状況(週間)CSV のリンクを抽出する純関数。
- * 対象週の終了日 (periodTo) 降順で返す。1 件も見つからなければ様式変更を
- * 疑って throw する（黙って空配列を返さない）。
+ * 対象週の終了日 (periodTo) 降順で返す。様式変更告知に添付された「サンプルファイル」
+ * リンク（実データではない）はリンクテキストで判別して除外する。1 件も見つからなければ
+ * 様式変更を疑って throw する（黙って空配列を返さない）。
  */
 export function extractInvestorTypeCsvLinks(html: string): InvestorTypeCsvLink[] {
   const byPeriodTo = new Map<string, InvestorTypeCsvLink>();
   for (const m of html.matchAll(CSV_LINK_RE)) {
+    const linkText = m[4]!;
+    if (linkText.includes("サンプル")) continue; // 様式変更告知の恒久的なサンプルリンクを除外
     const periodTo = isoFromCompactDate(m[3]!);
     byPeriodTo.set(periodTo, {
       url: JPX_BASE + m[1]!,
@@ -749,11 +760,12 @@ export const INDICATOR_DEFINITIONS: readonly MoneyflowIndicatorDefinition[] = [
       "8,343枚分、買いが売りより多かったという意味。",
     definition:
       "JPX 投資部門別取引状況(先物・オプション)の「買-差引」「売-差引」列を合算した値。" +
-      "定義上、買-差引=買取引高(代金)-その基準値、売-差引=売取引高(代金)-その基準値であり、" +
-      "実測では常にどちらか一方のみが非ゼロで、非ゼロ側が (買-売) の差にちょうど一致する " +
-      "(合計12列・1,760行全件で検証済み)。先物・オプションはゼロサム取引 (誰かの買いは" +
-      "必ず別の誰かの売り) のため、ある投資部門の買い越しは市場全体の資金の純増を意味しない " +
-      "— あくまで投資部門間の資金の「向き」の指標。",
+      "JPX 自身のガイド (guide_20260413.xls) は「売-差引」を『売取引高又は売代金の差引き』、" +
+      "「買-差引」を『買取引高又は買代金の差引き』とのみ説明しており、実測では常にどちらか" +
+      "一方のみが非ゼロで、その値は (買取引高又は買代金) − (売取引高又は売代金) に厳密に" +
+      "一致する (合計12列・1,760行全件で検証済み)。先物・オプションはゼロサム取引 (誰かの" +
+      "買いは必ず別の誰かの売り) のため、ある投資部門の買い越しは市場全体の資金の純増を" +
+      "意味しない — あくまで投資部門間の資金の「向き」の指標。",
     unit: "商品の数量金額区分により「枚」(数量) または「円」(代金) のいずれか。",
     sourceUrl: "https://www.jpx.co.jp/markets/statistics-derivatives/sector/index.html",
     usageTerms: USAGE_TERMS_PERSONAL_ONLY,

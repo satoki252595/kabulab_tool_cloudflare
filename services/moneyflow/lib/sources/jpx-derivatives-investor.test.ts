@@ -155,6 +155,29 @@ describe("extractInvestorTypeCsvLinks (一覧ページ HTML からのリンク�
   it("リンクが1件も無ければ throw する (様式変更の可能性を握り潰さない)", () => {
     expect(() => extractInvestorTypeCsvLinks("<html></html>")).toThrow(/様式変更の可能性/);
   });
+
+  it("様式変更告知に添付された恒久的な「サンプルファイル」リンクは実データの週次リンクと" +
+    "区別して除外する (periodTo が実データより新しくても最新週として選ばれない)", () => {
+    // 実ページの構造を再現: 実データの週次テーブル行はアイコン画像のみ (リンクテキスト無し)、
+    // 様式変更のお知らせに添付されたサンプルは「…サンプルファイル（ＣＳＶ版）」という
+    // 可視テキストを持つ (2026-09-27 実機確認: 一覧ページに2026年4月13日告知添付の
+    // Tousi_DV_W_20260413_20260417.csv が今も残存している)。
+    const html = `
+      <html><body>
+        <table class="overtable fixedhead">
+          <tr>
+            <td><a href="/markets/statistics-derivatives/sector/t13vrt000001yi1d-att/Tousi_DV_W_20260907_20260911.csv" rel="external"><img src="icon-csv.png" alt="icon-csv" /></a></td>
+          </tr>
+        </table>
+        <div class="component-column-important">
+          <a href="/markets/statistics-derivatives/sector/tvdivq00000020o8-att/Tousi_DV_W_20261001_20261005.csv" class="link-csv" rel="external">「投資部門別取引状況」サンプルファイル（ＣＳＶ版）</a>
+        </div>
+      </body></html>
+    `;
+    const links = extractInvestorTypeCsvLinks(html);
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatchObject({ periodFrom: "2026-09-07", periodTo: "2026-09-11" });
+  });
 });
 
 // ---------------------------------------------------------------------------
