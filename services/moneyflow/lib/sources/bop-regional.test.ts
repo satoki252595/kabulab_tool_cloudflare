@@ -298,6 +298,23 @@ describe("BOP_REGIONS / BOP_REGIONAL_INDICATORS (定義の健全性)", () => {
       expect(def.unit).toBe("億円");
     }
   });
+
+  /**
+   * https://www.stat-search.boj.or.jp/info/notice.html (2026-09-27 取得) の
+   * 実文言に合わせた回帰テスト (ルール1: 由来不明確な第三者要件を事実として
+   * 書かない)。転載・複製の事前相談窓口は「日本銀行情報サービス局」であり
+   * 「調査統計局」ではない (調査統計局は同ページ末尾のサイト利用一般問合せ
+   * 窓口)。事前相談が要るのは商用目的・無断転載禁止注記・画像データの3件
+   * のみで、それ以外は出所明記だけで足りる。「指定クレジット文言」の掲示
+   * 要件は notice.html のどこにも存在しない。
+   */
+  it("利用条件の記述が日本銀行サイトの実文言と一致する (転載相談窓口・要件)", () => {
+    for (const def of BOP_REGIONAL_INDICATORS) {
+      expect(def.license).toContain("情報サービス局");
+      expect(def.license).not.toContain("調査統計局");
+      expect(def.license).not.toMatch(/指定クレジット文言.*(求め|必要)/);
+    }
+  });
 });
 
 describe("bopRegionalArchiveInput (ルール6: 一次データ記録の入力を組む純関数)", () => {
