@@ -135,6 +135,12 @@ export interface FfajOtcFxRawFiles {
 /**
  * 最新の 3 ファイルを取得する。1 回の実行で index ページ 1 回 + xls 3 回、
  * 計 4 リクエストのみ (JPX 等と同様、実行あたり必要最小限のアクセスに絞る)。
+ *
+ * 取得直後に、資料室ページが宣言する最新公表月 (`page.latestPublishedMonth`) と、
+ * 実際にダウンロードした 3 ファイルの内容 (先頭行の月) が一致するかを検証する
+ * (`assertFfajOtcFxMonthConsistency`)。ページと xls の間にキャッシュ遅延・様式変更
+ * などによるズレが生じていないかをその場で確かめ、不一致なら throw する
+ * (ルール2: 不整合を無視して処理を続けない)。
  */
 export async function fetchLatestFfajOtcFx(): Promise<FfajOtcFxRawFiles> {
   const { page } = await fetchFfajIndexPage();
@@ -143,6 +149,8 @@ export async function fetchLatestFfajOtcFx(): Promise<FfajOtcFxRawFiles> {
     fetchBytes(page.openPositionWithMcUrl),
     fetchBytes(page.depositAmountInformationUrl),
   ]);
+  const parsed = parseFfajOtcFxFiles({ tradingVolAndPosition, openPositionWithMc, depositAmountInformation });
+  assertFfajOtcFxMonthConsistency(page, parsed);
   return { page, tradingVolAndPosition, openPositionWithMc, depositAmountInformation };
 }
 
@@ -179,6 +187,25 @@ function isBlankRow(row: unknown[] | undefined): boolean {
 }
 
 const MONTHLY_DATA_START_ROW = 10;
+/** trading_vol_and_position.xls / open_position_with_mc.xls 共通: 「単位: 百万円」行の位置。 */
+const UNIT_LABEL_ROW = 6;
+
+/**
+ * シート冒頭の「単位: ○○」表示行に、期待する単位の文字列 (例: "百万円") が
+ * 含まれているかを検証する。ヘッダー列のラベル (取引金額/売建/買建 等) が変わらない
+ * まま単位だけが変更された場合、列名の一致検証だけでは気づけず、値を誤った桁で
+ * 読み違えたまま処理が進んでしまう (ルール2: 想定外の状態を無視して続行しない)。
+ */
+function assertUnitLabel(rows: unknown[][], rowIndex: number, expectedUnit: string, where: string): void {
+  const row = rows[rowIndex];
+  const ok = Array.isArray(row) && row.some((cell) => typeof cell === "string" && cell.includes(expectedUnit));
+  if (!ok) {
+    throw new Error(
+      `FFAJ ${where}: 単位表示 ("${expectedUnit}") が見つかりません（単位変更・様式変更の可能性）: ` +
+        `${JSON.stringify(row)}`
+    );
+  }
+}
 
 export interface FfajMarketTotalRow {
   /** YYYY-MM */
@@ -411,6 +438,31 @@ export function parseFfajOtcFxFiles(files: {
   };
 }
 
+/**
+ * 資料室ページが宣言する最新公表月 (`page.latestPublishedMonth`) と、実際にパースした
+ * 3 ファイルの先頭行 (各パーサが新しい月を先頭に返す実データの並び順により、最新月の行) の
+ * 月が一致するかを検証する。一致しなければ throw する (キャッシュ遅延・様式変更などで
+ * ページと実ファイルの間にズレが生じた可能性があり、黙って処理を続けない — ルール2)。
+ */
+export function assertFfajOtcFxMonthConsistency(page: FfajIndexPage, parsed: FfajOtcFxParsed): void {
+  const marketMonth = parsed.marketTotal[0]?.month;
+  const currencyMonth = parsed.currencyPositions[0]?.month;
+  const depositMonth = parsed.deposits[0]?.month;
+  if (
+    marketMonth !== page.latestPublishedMonth ||
+    currencyMonth !== page.latestPublishedMonth ||
+    depositMonth !== page.latestPublishedMonth
+  ) {
+    throw new Error(
+      `FFAJ: 資料室ページの最新公表月 (${page.latestPublishedMonth}) と取得したファイルの先頭行の月が` +
+        `一致しません (trading_vol_and_position=${marketMonth ?? "データなし"}, ` +
+        `open_position_with_mc=${currencyMonth ?? "データなし"}, ` +
+        `deposit_amount_information=${depositMonth ?? "データなし"})。` +
+        "取得タイミングのズレ (CDN キャッシュ等)・様式変更のいずれかの可能性があります。"
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // (3) 期間 (月次) と「まだ公表されていない」の判定
 // ---------------------------------------------------------------------------
@@ -455,6 +507,12 @@ export type FfajFlowType =
   | "holdings_stock"
   | "positions"
   | "fund_flow"
+  /**
+   * 損益 (実現損益・評価損益増減・スワップ損益等の合計)。資金の入出金 (fund_flow) では
+   * ない値をここに区別して分類する。moneyflow プロジェクト全体で「資金フロー」指標群に
+   * 混ぜて集計してはいけない値、という意味を持つ。
+   */
+  | "pnl"
   | "estimated"
   | "price_only";
 
@@ -564,24 +622,30 @@ export const FFAJ_OTC_FX_INDICATORS: readonly FfajOtcFxIndicatorDefinition[] = [
   },
   {
     key: "ffaj_otc_fx_customer_deposit_net_change",
-    displayName: "店頭FX 顧客預託証拠金 純増減額（月間）",
+    displayName: "店頭FX 顧客区分管理必要額 正味増減額（月間、実質損益相当）",
     requirements: ["R3"],
-    flowType: "fund_flow",
+    flowType: "pnl",
     plainExplanation:
-      "その月に顧客がFX口座へ新たに入金した額から、出金した額(と残高変動分の調整)を差し引いた、実質的な" +
-      "資金の出入りの純額。プラスなら口座への資金流入が超過している。",
+      "名前は「増減額」だが、中身は入出金の差額ではない。その月に顧客全体が確定させた損益(決済損益)・" +
+      "まだ決済していない含み損益の増減・スワップ(金利差)損益、この3つを合わせた合計。FFAJ自身が" +
+      "「実現損益額・評価損益増減額・スワップポイント損益額の合計値に相当する」と説明している。プラスなら" +
+      "その月に顧客全体の資産が実質的に増えた、マイナスなら減ったことを意味する。",
     preciseDefinition:
-      "当月末の顧客区分管理必要額(③)から前月末の値を差し引き、当月の入金額(①)を控除、出金額(②)を" +
-      "加算した値(原資料の定義: =③-前月③-①+②)。顧客資産の分別管理(信託)規制における「必要額」ベースの" +
-      "近似であり、簿記上の入出金そのものの直接集計ではない。",
+      "当月末の顧客区分管理必要額(③)から前月末の値を差し引き、当月の顧客入金額(①)を控除、当月の顧客" +
+      "出金額(②)を加算した値(原資料の定義: =③-前月③-①+②)。FFAJ公式解説" +
+      "(https://www.ffaj.or.jp/library/performance/deposit/) は、この計算式による値が" +
+      "「1か月間のFXによる実現損益額、評価損益増減額、スワップポイント損益額の合計値に相当」すると" +
+      "明記しており、資金の入出金そのもの(資金フロー)ではなく顧客全体の運用損益を表す統計である。",
     unit: "円",
     sourceUrl: FFAJ_INDEX_URL,
     usageTerms: USAGE_TERMS,
     frequency: "月次",
     limitations:
-      "相場変動でポジションの評価額が動くと必要額も動くため、評価損益による変動を含みうる。『純粋な" +
-      "入出金』とは完全には一致しない近似値。また前月データが無く計算できない月は原資料が \"na\" を" +
-      "記載する (系列先頭の2015-04で実測確認済み) — この場合は値を作らず観測ログへ記録しない。",
+      "資金フロー(純粋な入出金)の指標ではない。式に入出金額(①②)を含むが、その目的は「入出金による" +
+      "見かけ上の増減」を取り除いて損益部分だけを取り出すことにあり、値そのものは損益(実現損益+評価損益" +
+      "増減+スワップ損益)である。他の資金フロー系指標(fund_flow)と合算・混同してはならない。また前月" +
+      "データが無く計算できない月は原資料が \"na\" を記載する (系列先頭の2015-04で実測確認済み) — この" +
+      "場合は値を作らず観測ログへ記録しない。",
   },
   {
     key: "ffaj_otc_fx_deposit_required_balance",
@@ -595,8 +659,9 @@ export const FFAJ_OTC_FX_INDICATORS: readonly FfajOtcFxIndicatorDefinition[] = [
     usageTerms: USAGE_TERMS,
     frequency: "月次",
     limitations:
-      "残高(ストック)。前月比較には ffaj_otc_fx_customer_deposit_net_change を使うこと" +
-      "(単純な差分だけでは評価損益分が混ざる)。",
+      "残高(ストック)。前月末残高との単純な差分には当月の顧客入出金額(①②)も混ざってしまうため、" +
+      "入出金を除いた損益部分(実現損益+評価損益増減+スワップ損益相当)だけを見たい場合は" +
+      "ffaj_otc_fx_customer_deposit_net_change を使うこと。",
   },
   {
     key: "ffaj_otc_fx_deposit_trust_balance",
@@ -702,7 +767,9 @@ export function toFfajOtcFxObservations(data: FfajOtcFxParsed): FfajOtcFxObserva
         segment: "market",
         value: row.netChangeYen,
         unit: "円",
-        isApproximate: true,
+        // flowType は "pnl" (資金フローではない、実現+評価損益+スワップ損益相当の値)。
+        // FFAJ公式解説の計算式そのままの厳密値であり、概念上の近似ではない。
+        isApproximate: false,
         isEstimated: false,
       });
     }
