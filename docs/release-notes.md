@@ -11,6 +11,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ### 追加
 - **競合他社判定のローカル代替判定 (`judge=semif`)** (#118): jev のクレジット枯渇で中断した競合他社判定の残り銘柄を、Apple Silicon ローカル PC 上の SemIf (Qwen3.5-4B, MLX) で代替判定できるようにした。`pnpm biztag competitors -- --judge=semif` / `competitors-eval -- --judge=semif` で切替。評価セットで精度 0.909・再現率 0.928 を確認（`--only-unjudged` で既判定分は再判定しない）。
+- **008 moneyflow (個人用「お金の流れ」ダッシュボード) Phase 0/1** (#PR): 東証33業種別の売買代金・シェア・上昇/下落日売買代金 (既存D1)・業種別時価総額 (JPX月次PDF)・業種別空売り比率 (JPX日次PDF→月次集計) を Notion「資金フロー（個人用）」ページへ記録する取込を追加した (`pnpm ingest:moneyflow`、平日17:30 JST cron)。個人利用限定・近似値であることを指標定義に明記。信用残の日次化 (9/28〜) は別途対応 (docs/moneyflow.md の TODO参照)。
 
 
 ### 本番作業

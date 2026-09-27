@@ -128,3 +128,7 @@ pipeline/tests/fixtures/transform/*.json
 # 下の例外が上書きされないよう、EDINET の追跡対象は明示的に除外解除する
 !pipeline/tests/fixtures/edinet/Edinetcode.zip
 !pipeline/tests/fixtures/edinet/documents_error_401.json
+
+# 008 moneyflow — 上と同じ理由 (JPX は personal-only)。
+# 取得は README.md の手順。未取得の環境ではフィクスチャテストが skip する。
+services/moneyflow/tests/fixtures/*.pdf

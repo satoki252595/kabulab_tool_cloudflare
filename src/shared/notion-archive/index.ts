@@ -130,3 +130,44 @@ export type {
 } from "./relocate.js";
 export { findAllBackupChildrenByTitle } from "./archive.js";
 export type { BackupChildHit } from "./archive.js";
+
+// 「資金フロー（個人用）」— Phase 0/1 (計画: notion-velvet-goose.md)
+export {
+  MONEYFLOW_DEFS_DB_TITLE,
+  MONEYFLOW_OBS_DB_TITLE,
+  MONEYFLOW_RUNLOG_DB_TITLE,
+  MONEYFLOW_PRIMARY_DB_TITLE,
+  MONEYFLOW_DEFS_PROPS,
+  MONEYFLOW_OBS_PROPS,
+  MONEYFLOW_RUNLOG_PROPS,
+  ensureIndicatorDefsDb,
+  upsertIndicatorDef,
+  ensureObservationsDb,
+  upsertObservation,
+  observationKey,
+  ensureRunLogDb,
+  recordRunLog,
+  isMoneyflowFlowType,
+  isMoneyflowFrequency,
+  isMoneyflowLicense,
+  isMoneyflowRequirement,
+  isMoneyflowCategoryKind,
+  isMoneyflowUnit,
+  isMoneyflowMeasureKind,
+  isMoneyflowRunStatus,
+} from "./moneyflow.js";
+export type {
+  MoneyflowFlowType,
+  MoneyflowFrequency,
+  MoneyflowLicense,
+  MoneyflowRequirement,
+  IndicatorDefInput,
+  UpsertIndicatorDefResult,
+  MoneyflowCategoryKind,
+  MoneyflowUnit,
+  MoneyflowMeasureKind,
+  ObservationInput,
+  UpsertObservationResult,
+  MoneyflowRunStatus,
+  RunLogInput,
+} from "./moneyflow.js";
