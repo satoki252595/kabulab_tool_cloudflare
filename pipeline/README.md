@@ -54,6 +54,32 @@ Notion の 10,000 件/クエリ上限に対して決算期末を月で区切り�
 2026-09-28 の読み取り検証では Notion ③は 34,663 行・一意キー 34,663 件、
 D1 は実行前 322 行・8154 は 0 行でした。実行後の値は本番実行のログで確認してください。
 
+### 原本から財務の期末・連結区分・中間期を再検証
+
+2026-09-28 に、年度末 DEI を四半期末として使う経路、配当/メタ情報の既定連結が
+単体実績を上書きする経路、EDINET `InterimDuration` を当期実績に含めない経路を
+確認しました。③をそのまま運ぶだけではこの誤値は直りません。
+`scripts/reparse_financials_from_notion.py` は③から⑤の原本をたどり、source・銘柄コード・
+SHA256を照合して共有parserで再生成します。既定は **Notion/D1 とも読み取りだけ**です。
+
+```bash
+nix develop -c uv run --env-file .env --project pipeline python pipeline/scripts/reparse_financials_from_notion.py --journal /tmp/financial-audit.jsonl
+# 先行確認だけなら --code 8154 / --future-after 2026-09-28 / --limit N
+# を追加する。サンプルは全件合格として扱わない。
+```
+
+⑤をsource/データ基準日/原本種別で一括queryし、Notion APIは既定2.5rps、
+保存済みファイルは4並列で取得します。ファイルはstreamで圧縮64MiB、展開128MiBを
+上限とし、超過・ハッシュ不一致・期末/連結区分未確定は失敗をjournalへ残します。
+期限付きファイルURLはログやjournalへ出しません。原本をSHA名でcacheし、同じ
+journalで再実行すると成功済みを省略し、失敗だけ再試行します。
+
+全件の原本再解析・差分の確認とPR/CIを終えてから、`--apply-journal` を付けた同じ
+コマンドで **Notion③だけ**を更新できます。新しい開示を守り、正しい行の再読が
+一致した後に旧誤キーをarchiveします。D1には書き込みません。既存D1 322行にも
+同根の誤値があり得るため、未登録だけを挿入する旧backfillを品質修正の代わりに
+実行してはいけません。正Notion再読→既存キーを含むD1同期→stagingを別途検証します。
+
 ### EDINETの対象日（2026-09-11）
 
 `edinet_daily` の既定の対象日は **cron の予定日**であり、起動時刻の JST 日付ではない。予定は毎営業日 21:00 JST（`cron: "0 12 * * 1-5"`）なので、21:00 JST より前に始まった実行は「前日分の遅延実行」として前日を対象にする。GitHub Actions のスケジュール遅延（実測 +3.5h〜+9.5h）で起動が翌日 JST へずれても、対象日はずれない。任意の日を処理するには `--date YYYY-MM-DD` を渡す。

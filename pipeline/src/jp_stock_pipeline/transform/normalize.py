@@ -10,6 +10,7 @@
 実績/予想の判別は決算短信サマリ XBRL (tse-ed-t) の contextRef 規則で行う:
 - contextRef に "ForecastMember" を含む → 会社予想
 - "NextYear...ForecastMember" → 来期予想 (forecast_* フィールド)
+- UpperMember/LowerMember は会社予想の範囲（実績・点予想に変えない）
 - それ以外の CurrentYear/CurrentQuarter/CurrentAccumulated 系 → 当期実績
 """
 
@@ -222,7 +223,16 @@ def _is_next_year(context_ref: str) -> bool:
 
 
 def _is_current(context_ref: str) -> bool:
-    return context_ref.startswith("Current") or "CurrentYear" in context_ref
+    return context_ref.startswith(("Current", "Interim")) or "CurrentYear" in context_ref
+
+
+def _is_actual_current(context_ref: str) -> bool:
+    return (
+        _is_current(context_ref)
+        and not _is_forecast(context_ref)
+        and "UpperMember" not in context_ref
+        and "LowerMember" not in context_ref
+    )
 
 
 def _pick_value(
@@ -239,7 +249,7 @@ def _pick_value(
         if forecast:
             rows = rows[mask_fc & (mask_ny if next_year else ~mask_ny)]
         else:
-            rows = rows[~mask_fc & rows["context_ref"].map(_is_current)]
+            rows = rows[rows["context_ref"].map(_is_actual_current)]
         if rows.empty:
             continue
         # 連結優先 ("連結" > "" > "単体")
@@ -273,8 +283,24 @@ def _pick_date(df: pd.DataFrame, candidates: tuple[str, ...]) -> date | None:
         return None
 
 
+def _current_actual_flows(tidy: pd.DataFrame) -> pd.DataFrame:
+    flow_elements = {
+        element
+        for field in ("net_sales", "operating_income", "ordinary_income", "net_income")
+        for element in ELEMENT_CANDIDATES[field]
+    }
+    return tidy[
+        tidy["element"].map(_local_name).isin(flow_elements)
+        & tidy["context_ref"].map(_is_actual_current)
+        & tidy["value"].map(parse_numeric).notna()
+    ]
+
+
 def derive_fiscal_period_end(tidy: pd.DataFrame) -> date | None:
-    """決算期末の導出: DEI 要素 → 無ければ当期 Duration コンテキストの最大 period_end。"""
+    """実績損益の対象期末を優先する。TDnet の年度末 DEI は四半期末とは限らない。"""
+    ends = pd.to_datetime(_current_actual_flows(tidy)["period_end"], errors="coerce").dropna()
+    if not ends.empty:
+        return ends.max().date()
     explicit = _pick_date(
         tidy,
         (
@@ -286,9 +312,7 @@ def derive_fiscal_period_end(tidy: pd.DataFrame) -> date | None:
     )
     if explicit:
         return explicit
-    current = tidy[
-        tidy["context_ref"].map(lambda c: "CurrentYear" in c and not _is_forecast(c))
-    ]
+    current = tidy[tidy["context_ref"].map(_is_actual_current)]
     ends = pd.to_datetime(current["period_end"], errors="coerce").dropna()
     if ends.empty:
         return None
@@ -298,6 +322,14 @@ def derive_fiscal_period_end(tidy: pd.DataFrame) -> date | None:
 def derive_disclosure_type(tidy: pd.DataFrame) -> str | None:
     """開示種別の導出: tse-ed-t TypeOfCurrentPeriodDETAIL (FY/1Q/...) /
     jpdei TypeOfCurrentPeriodDEI (Q1/Q2/Q3/HY/FY) / QuarterlyPeriodDEI (1/2/3)。"""
+    contexts = _current_actual_flows(tidy)["context_ref"]
+    quarters = {
+        f"{quarter}Q"
+        for quarter in (1, 2, 3)
+        if contexts.str.startswith(f"CurrentAccumulatedQ{quarter}Duration").any()
+    }
+    if len(quarters) == 1:
+        return quarters.pop()
     text = _pick_text(
         tidy,
         (
@@ -368,10 +400,12 @@ def tidy_to_financial_record(
     dps_actual = _pick_value(tidy, ELEMENT_CANDIDATES["dps"], forecast=False)
     dps_forecast = _pick_value(tidy, ELEMENT_CANDIDATES["dps"], forecast=True)
 
-    # 連結/単体: 実績値が連結コンテキストから取れたか
+    # 連結/単体: 実績損益のコンテキストから判断する。年度末・配当メタ情報の
+    # 既定連結を、単体の実績値へ付けてはいけない。
     consolidated = None
-    if not tidy.empty:
-        cons_values = set(tidy["consolidated"].unique())
+    actual_flows = _current_actual_flows(tidy)
+    if not actual_flows.empty:
+        cons_values = set(actual_flows["consolidated"].unique())
         if "連結" in cons_values:
             consolidated = "連結"
         elif cons_values == {"単体"}:
