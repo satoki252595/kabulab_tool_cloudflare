@@ -128,3 +128,13 @@ pipeline/tests/fixtures/transform/*.json
 # 下の例外が上書きされないよう、EDINET の追跡対象は明示的に除外解除する
 !pipeline/tests/fixtures/edinet/Edinetcode.zip
 !pipeline/tests/fixtures/edinet/documents_error_401.json
+
+# 008 moneyflow — 上と同じ理由 (JPX は personal-only)。
+# 取得は README.md の手順。未取得の環境ではフィクスチャテストが skip する。
+services/moneyflow/tests/fixtures/*.pdf
+
+# 008 moneyflow Phase 2〜5 の取得元フィクスチャ (実ファイル)。このリポジトリは PUBLIC。
+# personal-only・利用条件要確認・再配布不可の取得元の実ファイルは private/ に置き commit しない
+# (再配布が明示的に許される取得元だけ public/ に置く)。一覧・取得手順は
+# services/moneyflow/lib/sources/fixtures/README.md。未取得の環境ではテストが skip する。
+services/moneyflow/lib/sources/fixtures/private/

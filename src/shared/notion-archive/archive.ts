@@ -45,6 +45,14 @@ export interface RecordPrimaryDataInput {
   files?: PrimaryFile[];
   /** true なら既存 key でも上書き再アップロード (既定 false = 冪等スキップ) */
   force?: boolean;
+  /**
+   * 「一次データ｜<service>」DB を置く親ページ ID。省略時は従来どおり
+   * `notionEnv.NOTION_ARCHIVE_PAGE_ID()` (「一次データ保管」ページ)。
+   * 既定以外のページ配下に一次データを置きたいサービスが明示的に渡す
+   * (`dbCache` のキーは親ページ ID を含めるため、既定と明示指定が同じ
+   * service 名でも取り違えない)。
+   */
+  parentPageId?: string;
 }
 
 export interface RecordResult {
@@ -218,7 +226,12 @@ async function scanFirstChildrenForTitle(
   return null;
 }
 
-/** プロセス内 DB ID キャッシュ ("backup:service" / "trash:service") */
+/**
+ * プロセス内 DB ID キャッシュ。キーは `"backup:<parentPageId>:<service>"` /
+ * `"trash:<parentPageId>:<service>"`。親ページ ID をキーへ含めるのは、既定
+ * (「一次データ保管」) と明示指定 (moneyflow 等の別ページ) が同じ service 名を
+ * 使っても DB を取り違えないため (2026-09-27 `parentPageId` 対応)。
+ */
 const dbCache = new Map<string, string>();
 
 // Status は運用者の最重要シグナル。色を固定し、要手当ての file_too_large を
@@ -301,22 +314,17 @@ function trashDbTitle(service: string): string {
   return `ごみ｜${service}`;
 }
 
-function ensureBackupDb(service: string): Promise<string> {
-  return ensureDatabase(
-    notionEnv.NOTION_ARCHIVE_PAGE_ID(),
-    backupDbTitle(service),
-    `backup:${service}`
-  );
+function ensureBackupDb(service: string, parentPageId?: string): Promise<string> {
+  const parent = parentPageId ?? notionEnv.NOTION_ARCHIVE_PAGE_ID();
+  return ensureDatabase(parent, backupDbTitle(service), `backup:${parent}:${service}`);
 }
-function ensureTrashDb(service: string): Promise<string> {
-  // 「ごみ｜<service>」も「一次データ保管」ページ直下に置く (2026-09-25
+function ensureTrashDb(service: string, parentPageId?: string): Promise<string> {
+  // 「ごみ｜<service>」も一次データ本体と同じ親ページ直下に置く (2026-09-25
   // 再配置でバックアップ/ごみの 2 ページ運用を 1 ページへ統合。命名 prefix
-  // で見分けが付くため物理的に分けない判断)。
-  return ensureDatabase(
-    notionEnv.NOTION_ARCHIVE_PAGE_ID(),
-    trashDbTitle(service),
-    `trash:${service}`
-  );
+  // で見分けが付くため物理的に分けない判断。`parentPageId` 省略時は既定どおり
+  // 「一次データ保管」ページ)。
+  const parent = parentPageId ?? notionEnv.NOTION_ARCHIVE_PAGE_ID();
+  return ensureDatabase(parent, trashDbTitle(service), `trash:${parent}:${service}`);
 }
 
 /** key 完全一致の既存ページを 1 件返す (冪等判定用) */
@@ -335,12 +343,17 @@ async function findByKey(
 /**
  * 指定 key の一次データが既に Notion に記録済みかを軽量判定する
  * (バイト列を取得せずに済むため、再開可能なバックフィルで再 DL を避ける)。
+ *
+ * @param parentPageId 省略時は既定どおり `NOTION_ARCHIVE_PAGE_ID()` (「一次データ
+ *   保管」ページ)。moneyflow 等、別ページ配下の「一次データ｜<service>」を見る
+ *   ときに明示する。
  */
 export async function isArchived(
   service: string,
-  key: string
+  key: string,
+  parentPageId?: string
 ): Promise<boolean> {
-  const dbId = await ensureBackupDb(service);
+  const dbId = await ensureBackupDb(service, parentPageId);
   return (await findByKey(dbId, key)) !== null;
 }
 
@@ -378,7 +391,7 @@ function metadataBodyBlocks(json: string): unknown[] {
 export async function recordPrimaryData(
   input: RecordPrimaryDataInput
 ): Promise<RecordResult> {
-  const dbId = await ensureBackupDb(input.service);
+  const dbId = await ensureBackupDb(input.service, input.parentPageId);
 
   if (!input.force) {
     const existing = await findByKey(dbId, input.key);
@@ -461,6 +474,13 @@ export async function moveToTrash(args: {
   originPageId: string;
   /** 不要化の理由 (運用者が後から追える説明) */
   reason: string;
+  /**
+   * 「ごみ｜<service>」DB を置く親ページ ID。省略時は既定どおり
+   * `NOTION_ARCHIVE_PAGE_ID()`。`originPageId` の一次データを記録した際に
+   * 使った `parentPageId` と同じ値を渡すこと (別ページの「ごみ」に迷子で
+   * 退避されるのを防ぐ)。
+   */
+  parentPageId?: string;
 }): Promise<{ trashPageId: string }> {
   const origin = await notionRequest<{
     id: string;
@@ -505,7 +525,7 @@ export async function moveToTrash(args: {
     fileRefs.push({ name: fe.name, type: "file_upload", file_upload: { id } });
   }
 
-  const trashDb = await ensureTrashDb(args.service);
+  const trashDb = await ensureTrashDb(args.service, args.parentPageId);
   const created = await notionRequest<{ id: string }>("POST", "/pages", {
     parent: { database_id: trashDb },
     properties: {

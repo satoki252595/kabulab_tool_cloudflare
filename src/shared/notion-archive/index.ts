@@ -130,3 +130,47 @@ export type {
 } from "./relocate.js";
 export { findAllBackupChildrenByTitle } from "./archive.js";
 export type { BackupChildHit } from "./archive.js";
+
+// moneyflow (個人用「お金の流れ」) — 「株式情報」直下の 3 DB (計画: notion-velvet-goose.md)
+export {
+  MONEYFLOW_DEFS_DB_TITLE,
+  MONEYFLOW_OBS_DB_TITLE,
+  MONEYFLOW_RUNLOG_DB_TITLE,
+  MONEYFLOW_PRIMARY_DB_TITLE,
+  MONEYFLOW_DEFS_PROPS,
+  MONEYFLOW_OBS_PROPS,
+  MONEYFLOW_RUNLOG_PROPS,
+  ensureIndicatorDefsDb,
+  upsertIndicatorDef,
+  indicatorDefRowMatches,
+  ensureObservationsDb,
+  upsertObservation,
+  observationExists,
+  observationRowMatches,
+  observationKey,
+  ensureRunLogDb,
+  recordRunLog,
+  isMoneyflowFlowType,
+  isMoneyflowFrequency,
+  isMoneyflowLicense,
+  isMoneyflowRequirement,
+  isMoneyflowCategoryKind,
+  isMoneyflowUnit,
+  isMoneyflowMeasureKind,
+  isMoneyflowRunStatus,
+} from "./moneyflow.js";
+export type {
+  MoneyflowFlowType,
+  MoneyflowFrequency,
+  MoneyflowLicense,
+  MoneyflowRequirement,
+  IndicatorDefInput,
+  UpsertIndicatorDefResult,
+  MoneyflowCategoryKind,
+  MoneyflowUnit,
+  MoneyflowMeasureKind,
+  ObservationInput,
+  UpsertObservationResult,
+  MoneyflowRunStatus,
+  RunLogInput,
+} from "./moneyflow.js";

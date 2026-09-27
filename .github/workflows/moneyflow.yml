@@ -1,0 +1,94 @@
+# 008 moneyflow の日次取込 (計画: notion-velvet-goose.md)。
+#
+# 平日 08:30 UTC (17:30 JST・JPX 空売り集計 16:00 公表の後) に実行する。
+# `scripts/moneyflow/ingest.ts` が:
+#   - JPX 業種別時価総額 (月次PDF)・空売り業種別集計 (日次PDF+当月の月次集計)
+#     を取得し、一次データとして Notion「一次データ｜moneyflow」へ記録
+#   - 既存 D1 (swing_daily_ohlcv×core_stocks.sector) の週次売買代金等を
+#     デプロイ済み Worker の内部読取エンドポイント経由で取得
+#   - 上記を Notion「資金フロー｜観測ログ」へ upsert、実行結果を
+#     「資金フロー｜取込ログ」へ記録
+#
+#   - Phase 2〜5 の取得元 (scripts/moneyflow/sources.ts に登録した 17 取得元の spec) を
+#     共通フロー (scripts/moneyflow/lib/run-spec.ts) で実行。月次・四半期等の取得元は
+#     公表済みの最新期間が取込済みなら取得元へ行かずにスキップする (大半の日は数分で終わる)
+#
+# 必要な GitHub Secrets (既存名を流用。新規は任意の CoinGecko キーのみ):
+#   NOTION_TOKEN            … 既存 (vwap-ingest.yml 等と共通)
+#   NOTION_STOCK_INFO_PAGE_ID … 既存。「株式情報」ページ。直下の「資金フロー｜指標定義/観測ログ/取込ログ」を使う
+#   NOTION_ARCHIVE_PAGE_ID  … 既存。「一次データ保管」ページ。配下の「一次データ｜moneyflow」に原ファイルを保管
+#   WORKER_BASE_URL / CRON_SECRET … 既存 (yuho-quant 等の内部エンドポイント認証と共通)
+#   YAHOO_PROXY_BASE        … 既存 (stock-sync.yml と共通)。世界の主要指数 (global-indices) が
+#                             共有 Yahoo クライアント経由で使う
+#   COINGECKO_DEMO_API_KEY  … 新規・任意。未設定でも動くが匿名アクセスは 429 が出やすい
+#
+# 初回 (Notion が空の状態) は全取得元の最新期間を一度に書くため時間がかかる。
+# タイムアウトしても次回実行が「保管済み・観測ログ途中」から再開する (同値行は書き込まない)。
+#
+# 信用残 (日次) は今回のワークフローに含めない (TODO: docs/moneyflow.md 参照。
+# 2026-09-28 の JPX 日次化を確認してから別途追加する)。
+name: moneyflow
+
+on:
+  schedule:
+    - cron: "30 8 * * 1-5" # 平日 08:30 UTC = 17:30 JST
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Notion に書かず JSON を出力するだけにする"
+        type: boolean
+        default: false
+      only:
+        description: "実行する取得元 (カンマ区切り。空なら全部)"
+        type: string
+        default: ""
+
+concurrency:
+  group: moneyflow-ingest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write # 失敗時に Issue を立てるため
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
+      NOTION_STOCK_INFO_PAGE_ID: ${{ secrets.NOTION_STOCK_INFO_PAGE_ID }}
+      WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      YAHOO_PROXY_BASE: ${{ secrets.YAHOO_PROXY_BASE }}
+      COINGECKO_DEMO_API_KEY: ${{ secrets.COINGECKO_DEMO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # packageManager (pnpm@9.15.9) を読む
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: moneyflow ingest
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ -n "${{ github.event.inputs.only }}" ]; then
+            ARGS="$ARGS --only=${{ github.event.inputs.only }}"
+          fi
+          pnpm ingest:moneyflow -- $ARGS
+
+      - name: 失敗したら Issue を立てる
+        if: failure()
+        uses: ./.github/actions/notify-failure
+        with:
+          title: "[ジョブ失敗] ${{ github.workflow }}"
+          summary: "${{ github.workflow }} が失敗しました。"

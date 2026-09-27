@@ -11,7 +11,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["services/**/*.test.ts", "src/**/*.test.ts"],
+    // scripts/** は Node 側の取込スクリプト (scripts/moneyflow/ingest.ts 等) の
+    // 純関数テスト用。tsconfig は scripts/**/*.ts を型検査しているのに vitest が
+    // 拾わないと「書いたテストが CI で一度も走らない」死角になるため含める。
+    include: ["services/**/*.test.ts", "src/**/*.test.ts", "scripts/**/*.test.ts"],
     // services/jss-api/** は standalone (独自 lock・vitest 2 設定) のため
     // ルートの vitest 4 では走らせない。jss-api 自身の `pnpm test`
     // (CI の python-pipeline ジョブ) が所有する。exclude を書くと既定値が

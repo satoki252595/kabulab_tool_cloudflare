@@ -161,7 +161,7 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 | `/yuho-quant/*` | 005 サブアプリ ([services/yuho-quant/app.ts](../services/yuho-quant/app.ts))。`/yuho-quant/admin/catchup` は EDINET 取込の認証ルート (GitHub Actions catchup が叩く) |
 | `/ir-catalog/*` | 006 サブアプリ ([services/ir-catalog/app.ts](../services/ir-catalog/app.ts)) |
 | `/vwap-analysis/*` | 007 サブアプリ ([services/vwap-analysis/app.ts](../services/vwap-analysis/app.ts))。R2 時系列を `c.env.BUCKET` 経由で読取 |
-| `/api/ingest/*` | Yahoo 取込プロキシ ([src/routes/ingest-proxy.ts](../src/routes/ingest-proxy.ts)) — GitHub Actions(Node) の Yahoo 取得を Cloudflare エッジ経由にして 429 を回避。`CRON_SECRET` で認証 |
+| `/api/ingest/*` | 内部認証付きルート群 ([src/routes/ingest-proxy.ts](../src/routes/ingest-proxy.ts))。`/yahoo` は GitHub Actions(Node) の Yahoo 取得を Cloudflare エッジ経由にして 429 を回避。`/moneyflow-sector` (008) は既存 D1 (`swing_daily_ohlcv`×`core_stocks.sector`) を週単位に集計して返す (personal-only 列を使うため内部限定)。いずれも `CRON_SECRET` で認証 |
 
 トレーリングスラッシュの有無を吸収するため、ルートおよびサブアプリは `new Hono({ strict: false })` で生成している。日次/月次の指標計算・VWAP 取込は Worker 上の cron ではなく **GitHub Actions(Node)** が担い、D1 へは `createD1HttpDb` (D1 REST) で直接書き込む (Workers Paid / Workers Cron を使わない無料運用)。
 
@@ -301,6 +301,7 @@ stock-sync の月次ジョブは次の順に別コマンドとして実行する
 - **007 VWAP** ([`.github/workflows/vwap-ingest.yml`](../.github/workflows/vwap-ingest.yml)): 月・水・金 08:00 UTC に日足10年 + 5分足、土 09:00 UTC に信用残高 (週次) を取得し **R2** (`vwap-data` バケット、`daily/{code}.json` / `intra/{code}.json` / `margin/{week}.json`) へ書き込む。Yahoo は `YAHOO_PROXY_BASE` (Worker エッジ `/api/ingest/yahoo`) 経由。
 - **005 EDINET + 006 TDnet** ([`.github/workflows/catchup.yml`](../.github/workflows/catchup.yml)): 平日 11:00 UTC に当日の開示をキャッチアップ。006 TDnet は kuromoji (Node 専用) のセンチメント判定込みで Node 実行 → D1 HTTP 書込。005 EDINET は Worker の認証ルート `/yuho-quant/admin/catchup` を叩く薄いトリガ (EDINET fetch + Notion アーカイブ + D1 書込は Worker 側が時間予算内で実行)。
 - **002 優待の LLM 要約**はリポジトリ外のクラウド LLM (Cursor Automations 等) で行う。このリポジトリのコマンドはタスク書き出し (`pnpm yutai:summary:export`) と取り込み (`pnpm yutai:summary:import`、既定 dry-run) だけ ([作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md))。
+- **008 moneyflow** ([`.github/workflows/moneyflow.yml`](../.github/workflows/moneyflow.yml)): 平日 08:30 UTC (17:30 JST) に JPX 業種別時価総額 (月次PDF)・空売り業種別集計 (日次PDF+当月の月次集計)・既存 D1 の週次売買代金等に加え、Phase 2〜5 の取得元 17 件 (投資部門別・対外対内証券・国際収支・投信/公社債・資金循環・FX・暗号資産・CFTC・IMF/BIS/World Bank・世界の主要指数) を取得し、Notion「株式情報」直下の「資金フロー｜観測ログ」等 (個人利用) へ記録する ([docs/moneyflow.md](./moneyflow.md))。公開面のサブアプリは持たず (Notion で閲覧)、内部読取エンドポイントは `/api/ingest/moneyflow-sector`。信用残の日次化 (2026-09-28〜) は未実装 (docs/moneyflow.md の TODO)。
 
 ## 認証
 

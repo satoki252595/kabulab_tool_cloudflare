@@ -97,3 +97,53 @@ describe("GET /yahoo", () => {
     expect(log).not.toContain("secret-cookie");
   });
 });
+
+describe("GET /moneyflow-sector", () => {
+  it("認証が無ければ 401 を返す (D1 バインディングへは触れない)", async () => {
+    const response = await ingestProxyRoute.request(
+      "https://proxy.example.test/moneyflow-sector?week=2026-W38",
+      { headers: {} }
+    );
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "unauthorized" });
+  });
+
+  it("誤った Bearer token でも 401 を返す", async () => {
+    const response = await ingestProxyRoute.request(
+      "https://proxy.example.test/moneyflow-sector?week=2026-W38",
+      { headers: { Authorization: "Bearer wrong-secret" } }
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it("week も from/to も無ければ 400 を返す (どちらを既定にするか黙って決めない)", async () => {
+    const response = await ingestProxyRoute.request("https://proxy.example.test/moneyflow-sector", {
+      headers: { Authorization: "Bearer test-secret" },
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("week と from/to を同時指定すると 400 を返す", async () => {
+    const response = await ingestProxyRoute.request(
+      "https://proxy.example.test/moneyflow-sector?week=2026-W38&from=2026-09-14&to=2026-09-20",
+      { headers: { Authorization: "Bearer test-secret" } }
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it("実在しない ISO 週番号は 400 を返す", async () => {
+    const response = await ingestProxyRoute.request(
+      "https://proxy.example.test/moneyflow-sector?week=2025-W53",
+      { headers: { Authorization: "Bearer test-secret" } }
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it("from が to より後なら 400 を返す", async () => {
+    const response = await ingestProxyRoute.request(
+      "https://proxy.example.test/moneyflow-sector?from=2026-09-20&to=2026-09-14",
+      { headers: { Authorization: "Bearer test-secret" } }
+    );
+    expect(response.status).toBe(400);
+  });
+});
