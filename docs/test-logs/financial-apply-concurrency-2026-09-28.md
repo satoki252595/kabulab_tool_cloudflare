@@ -62,3 +62,26 @@ journal/原本/parserのSHAは変更しない。ほかの3キー合流にも同�
   原本本文・全財務値は公開repoへ保存しない。
 - 関連79件・Python全体1,262 pass / 58 skip、ruff / diff check合格。
   parser SHAは前節と同じ。通常PR/CI/merge後に同journal/receiptから再開する。
+
+## 全件D1同期前の独立契約確認
+
+全件のNotion修復を継続しながら、D1へ渡す既存経路を別エージェントが読み取りで確認した。
+通常のapplyでは生じない証跡混入も、境界で拒否するため次の条件を追加した。
+
+- receiptの原本SHA/parser SHAだけでなく、財務キーが当該原本の訂正後キーと一致すること。
+  同じキーの新しい監査済み原本へ合流したreceiptは従来どおり認める。
+- D1直前の新鮮なNotionまとめ再読でも対象キーが各1ページであること。
+  元のtargetが不変でも、同じキーの別ページが追加された状態は反映しない。
+- 旧書類IDの保持は同じsource/開示日時に加え、旧原本SHAが不明または今回と一致する場合だけ。
+  既知SHAが異なる書類IDを新原本の値へ引き継がない。通常writerのNULL完全置換は維持する。
+
+commercial-okの実EDINET fixtureを無変更で使い、証跡の別キー混入、同値/後発の重複ページ、
+既知の別原本SHAだけを障害注入した。修正前は新回帰4件すべて失敗し、修正後は合格。
+関連3ファイル100 pass / 3 skip、ruff合格。3 skipは既存のlocal-only TDnet原本未取得であり、
+新回帰は全件実行した。parser SHA・最終journal・進行中Notion writerは変更しない。
+Python全体1,266 pass / 58 skip、diff check合格。
+
+私有の全件検証helperも、隔離D1へ二度同期した後の全33列とsource反映後の全33列が完全一致し、
+source開始前のbaselineと隔離開始前のbaselineが不変であることを要求する。
+選定SQLのSHAが現在の下流SQLと異なる場合は、差分証跡を作り直すまでsource同期しない。
+原本・全財務値・秘密は公開Gitに保存しない。全Notion/D1反映の完了は別に記録する。

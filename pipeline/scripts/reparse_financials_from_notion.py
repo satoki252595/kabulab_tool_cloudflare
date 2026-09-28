@@ -583,7 +583,8 @@ def _repair_sql() -> str:
                    and c not in ("doc_id", "license_tag")]
     assignments.append("doc_id = CASE WHEN excluded.doc_id IS NOT NULL THEN excluded.doc_id "
                        f"WHEN excluded.source = {TABLE}.source AND excluded.disclosed_at IS "
-                       f"{TABLE}.disclosed_at THEN {TABLE}.doc_id ELSE NULL END")
+                       f"{TABLE}.disclosed_at AND ({TABLE}.raw_sha256 IS NULL OR "
+                       f"{TABLE}.raw_sha256 = excluded.raw_sha256) THEN {TABLE}.doc_id ELSE NULL END")
     assignments.append("license_tag = " + stricter_tag_sql(
         "excluded.license_tag", f"{TABLE}.license_tag"
     ))
@@ -628,6 +629,8 @@ def sync_d1(journal: Path, receipts: Path) -> None:
                 or receipt.get("raw_sha256") != item["raw_sha256"]):
             raise ValueError(f"{page_id}: 原本監査と一致するNotion再読成功の記録が必要です")
         key = _financial_key(_record_from_dict(receipt["record"]))
+        if key != _financial_key(_record_from_dict(item["new"])):
+            raise ValueError("Notion再読成功の記録が元原本の財務キーと一致しません")
         matches = [candidate for candidate in canonical[key] if candidate["new"] == receipt["record"]]
         if not matches:
             raise ValueError(f"{page_id}: 原本監査と一致するNotion再読成功の記録が必要です")
@@ -644,6 +647,9 @@ def sync_d1(journal: Path, receipts: Path) -> None:
     for offset in range(0, len(codes), 50):
         for page in _live_pages(client, settings.db_id("financials"), codes[offset:offset + 50]):
             live[page["id"]] = _record_dict(_page_record(page))
+    fresh_keys = Counter(_financial_key(_record_from_dict(record)) for record in live.values())
+    if any(fresh_keys[key] != 1 for key in verified):
+        raise ValueError("Notion正本の財務キーが一意ではありません。D1書込を止めます")
     if any(live.get(receipt["target_page_id"]) != item["new"]
            for item, receipt in verified.values()):
         raise ValueError("Notion正本が再読成功後に変わりました。D1書込を止めます")
