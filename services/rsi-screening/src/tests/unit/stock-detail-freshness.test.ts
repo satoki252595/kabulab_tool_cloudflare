@@ -47,7 +47,9 @@ function detail(computedAt: Date): StockDetail {
       percentileSampleBars: 1223,
       computedAt,
     },
-    annualFinancials: [{ fiscalYear: 2026, revenue: 1.0e11 }],
+    annualFinancials: [
+      { fiscalYear: 2026, fiscalPeriodEnd: "2026-03-31", consolidated: "連結", revenue: 1.0e11 },
+    ],
   };
 }
 

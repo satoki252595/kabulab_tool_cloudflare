@@ -13,7 +13,7 @@ import type { StockDetail } from "../../services/stock-detail-service.js";
  * 仕様として固定する。
  */
 function detailWith(
-  annual: Array<{ fiscalYear: number; revenue: number | null }>,
+  annual: StockDetail["annualFinancials"],
   revenueTrend: number | null
 ): StockDetail {
   return {
@@ -47,9 +47,9 @@ describe("stockDetailPage: 年度売上テーブルの段差注記", () => {
     const html = stockDetailPage({
       detail: detailWith(
         [
-          { fiscalYear: 2024, revenue: 17.58e12 },
-          { fiscalYear: 2025, revenue: 18.28e12 },
-          { fiscalYear: 2026, revenue: 50.68e12 },
+          { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 17.58e12 },
+          { fiscalYear: 2025, fiscalPeriodEnd: "2025-03-31", consolidated: "連結", revenue: 18.28e12 },
+          { fiscalYear: 2026, fiscalPeriodEnd: "2026-03-31", consolidated: "連結", revenue: 50.68e12 },
         ],
         null
       ),
@@ -62,9 +62,9 @@ describe("stockDetailPage: 年度売上テーブルの段差注記", () => {
     const html = stockDetailPage({
       detail: detailWith(
         [
-          { fiscalYear: 2024, revenue: 100e8 },
-          { fiscalYear: 2025, revenue: 115e8 },
-          { fiscalYear: 2026, revenue: 130e8 },
+          { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 100e8 },
+          { fiscalYear: 2025, fiscalPeriodEnd: "2025-03-31", consolidated: "連結", revenue: 115e8 },
+          { fiscalYear: 2026, fiscalPeriodEnd: "2026-03-31", consolidated: "連結", revenue: 130e8 },
         ],
         1
       ),
@@ -79,10 +79,10 @@ describe("stockDetailPage: 年度売上テーブルの段差注記", () => {
     const html = stockDetailPage({
       detail: detailWith(
         [
-          { fiscalYear: 2022, revenue: 1.6e12 },
-          { fiscalYear: 2023, revenue: 45.1e12 },
-          { fiscalYear: 2024, revenue: 48.0e12 },
-          { fiscalYear: 2025, revenue: 50.7e12 },
+          { fiscalYear: 2022, fiscalPeriodEnd: "2022-03-31", consolidated: "連結", revenue: 1.6e12 },
+          { fiscalYear: 2023, fiscalPeriodEnd: "2023-03-31", consolidated: "連結", revenue: 45.1e12 },
+          { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 48.0e12 },
+          { fiscalYear: 2025, fiscalPeriodEnd: "2025-03-31", consolidated: "連結", revenue: 50.7e12 },
         ],
         1
       ),

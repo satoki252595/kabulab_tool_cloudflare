@@ -38,10 +38,16 @@
  *   - マクロ 4 指数のどれかが取れない場合も null で通す
  */
 
-import { sql, eq, and, or, gte, lte, lt } from "drizzle-orm";
+import { sql, eq, and, or, gte, lte, lt, asc } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
+import {
+  jssFinancials,
+  pickAnnualSeries,
+  PUBLISHABLE_LICENSE_TAG,
+  type JssAnnualRow,
+} from "../shared/db/jss-financials.js";
 import { sharedEnv } from "../shared/env.js";
 import {
   ensurePriceSyncDb,
@@ -565,6 +571,50 @@ export async function loadDailyTargets(db: Db) {
 }
 
 /**
+ * 優良株選定の入力にする正本の年次実績を一括で読む。
+ *
+ * `jss_financials` の本決算 × 公開可 (commercial-ok) だけを 1 文で引き、
+ * 銘柄コードごとに束ねる (数百行。全銘柄 × 毎日の per-stock SELECT にしない)。
+ * 系列への整形 (最新期の区分単一化・未来期/短期決算の除外) は共有 gate
+ * (`pickAnnualSeries`) が銘柄ごとに行う。TTM 営業利益率は Yahoo のまま
+ * (単年 jss 値への置換は定義を変えるのでしない)。
+ */
+export async function loadJssAnnualMap(
+  db: Db
+): Promise<Map<string, JssAnnualRow[]>> {
+  const rows = await db
+    .select({
+      code: jssFinancials.code,
+      fiscalPeriodEnd: jssFinancials.fiscalPeriodEnd,
+      consolidated: jssFinancials.consolidated,
+      revenue: jssFinancials.netSales,
+    })
+    .from(jssFinancials)
+    .where(
+      and(
+        eq(jssFinancials.disclosureType, "本決算"),
+        eq(jssFinancials.licenseTag, PUBLISHABLE_LICENSE_TAG)
+      )
+    )
+    .orderBy(asc(jssFinancials.code), asc(jssFinancials.fiscalPeriodEnd));
+  const byCode = new Map<string, JssAnnualRow[]>();
+  for (const r of rows) {
+    const list = byCode.get(r.code);
+    const row: JssAnnualRow = {
+      fiscalPeriodEnd: r.fiscalPeriodEnd,
+      consolidated: r.consolidated,
+      revenue: r.revenue,
+    };
+    if (list === undefined) {
+      byCode.set(r.code, [row]);
+    } else {
+      list.push(row);
+    }
+  }
+  return byCode;
+}
+
+/**
  * 日次 sync が「株価の日次同期」記録 (Notion) に使う状態を決める (純粋関数)。
  * 取引日を導出できない = 実質全滅なので、失敗件数に関わらず必ず「失敗」にする
  * (取引日不明を「完了」「一部失敗」の顔で見せない — ルール2)。
@@ -672,6 +722,11 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   await assertDailySchema(db);
   const targets = await loadDailyTargets(db);
   console.info(`[sync-daily]   対象: ${targets.length} 銘柄 (active かつ equity)`);
+  // 優良株選定の入力にする正本の年次実績を 1 文で先読みする。
+  // jss_financials が無い DB ではここで落ちる (無いまま走ると全銘柄の
+  // is_blue_chip が偽で上書きされるので、黙って空扱いにしない)。
+  const jssAnnualByCode = await loadJssAnnualMap(db);
+  console.info(`[sync-daily]   正本年次: ${jssAnnualByCode.size} 銘柄ぶんを読込`);
 
   // 増分判定の既存日付は Phase 1 の targets に載っている (latest_date JOIN)。
   // NULL/未登録は初回 backfill (6mo 全 upsert)。
@@ -725,7 +780,8 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
       try {
         await stockStartGate.wait();
         const snap = await buildSnapshot(target.id, target.code, target.sector,
-          stocksOnly ? targetDate : undefined);
+          stocksOnly ? targetDate : undefined,
+          jssAnnualByCode.get(target.code) ?? []);
         pending.push({
           target,
           snap,
@@ -778,7 +834,8 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
         const target = recoveryTarget.target;
         await stockStartGate.wait();
         const snap = await buildSnapshot(target.id, target.code, target.sector,
-          stocksOnly ? targetDate : undefined);
+          stocksOnly ? targetDate : undefined,
+          jssAnnualByCode.get(target.code) ?? []);
         await writeStockSnapshot(db, snap, latestDateByStock.get(target.id), {
           writeAnnual,
           runStartedSec,
@@ -1056,6 +1113,7 @@ async function buildSnapshot(
   code: string,
   sector: string | null,
   expectedDate?: string,
+  jssAnnualRows: JssAnnualRow[] = [],
 ): Promise<StockSnapshot> {
   // 1 回の Chart(5y) + QuoteSummary で全指標を賄う
   const raw = await fetchStockRawData(code, "5y");
@@ -1072,7 +1130,14 @@ async function buildSnapshot(
     .filter((c): c is number => c !== null);
   const rsiSeries = calculateAllRsiSeries(closes5y);
   const rsiPercentile = computeRsiPercentileSnapshot(rsiSeries);
-  const blueChip = evaluateBlueChip(raw.annualFinancials, raw.operatingMarginTtm);
+  // 優良株選定の年度売上は正本の年次系列 (001 銘柄詳細と共用の gate で整形)。
+  // Yahoo 年次 (raw.annualFinancials) は旧表の writer にだけ残す。
+  // TTM 営業利益率は Yahoo のまま (単年 jss 値に置き換えると定義が変わる)。
+  const annualSeries = pickAnnualSeries(
+    jssAnnualRows,
+    expectedDate ?? raw.dataDate
+  );
+  const blueChip = evaluateBlueChip(annualSeries, raw.operatingMarginTtm);
 
   // -- 6mo スライス → swing 用指標 —— adjclose ベースで分割歪みを除去 --
   const ohlcv6mo = raw.ohlcv.slice(-130);
@@ -1152,6 +1217,9 @@ async function buildSnapshot(
     marketCap: raw.marketCap,
     operatingMarginTtm: raw.operatingMarginTtm,
     dataDate: raw.dataDate,
+    // 旧表 (core_stock_annual_financials) の writer 用に Yahoo 年次を残す。
+    // 優良株選定は上の annualSeries (正本) を使う。旧表は外部 consumer
+    // (YouTube/新高値検証) が残るので書き続け、DROP は宣言しない。
     annualFinancials: raw.annualFinancials,
     rsiPercentile,
     blueChip,
