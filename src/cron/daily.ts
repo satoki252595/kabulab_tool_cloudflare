@@ -267,6 +267,8 @@ type MarketContextTarget =
 interface MarketContextChartValue {
   price: number | null;
   prevClose: number | null;
+  /** 最新バーの日付 ('YYYY-MM-DD')。N225 の実バー日が行キーの照合に使う。 */
+  date: string | null;
 }
 interface MarketContextDraft {
   charts: Record<MarketContextChartSymbol, MarketContextChartValue>;
@@ -986,8 +988,17 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   // Phase 5: セクター集計 (当日更新済 indicators から・90% カバレッジ guard)
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 5: セクター集計");
-  // 日付キーは run 開始日の targetDate (Phase 実行時刻だと日跨ぎでずれる。F-05 同型)。
-  await aggregateSectorDaily(db, targetDate);
+  // 行キーは実データの取引日 (MAX(latest_date))。実行日キーだと再実行・
+  // 休場日に重複 snapshot が増える (F-06)。曜日の推測もカレンダーも使わない。
+  const sectorTradingDate = await loadIndicatorsMaxLatestDate(db);
+  if (sectorTradingDate === null) {
+    console.warn(
+      "[sync-daily]   セクター集計スキップ: indicators が空です。" +
+        "sector_daily は前回値を保持します。"
+    );
+  } else {
+    await aggregateSectorDaily(db, sectorTradingDate);
+  }
 
   // -----------------------------------------------------------------
   // Phase 6: L2 投影 (p_momentum) の仕上げ
@@ -1067,8 +1078,25 @@ export async function runMarketContextSync(db: Db): Promise<boolean> {
 }
 
 /**
+ * indicators の MAX(latest_date) を 1 文で引く (Phase 5 の行キー用)。
+ *
+ * 集計対象の実データ日付そのもの。休場日・再実行でも実データの取引日に
+ * 揃うため、実行日キーで起きる重複 snapshot (F-06) にならない。
+ * Phase 3 が全滅なら前回値の日付が返り、カバレッジ guard が skip する。
+ * indicators が空なら null (呼び出し側が skip する)。
+ */
+export async function loadIndicatorsMaxLatestDate(db: Db): Promise<string | null> {
+  const rows = await db
+    .select({ maxDate: sql<string | null>`MAX(${swingSchema.stockIndicators.latestDate})` })
+    .from(swingSchema.stockIndicators);
+  return rows[0]?.maxDate ?? null;
+}
+
+/**
  * Phase 5: 業種騰落ランキング (`swing_sector_daily`) を `today` の日付で書き直す。
  *
+ * `today` には実データの取引日 (MAX(latest_date)) を渡す。実行日を渡すと
+ * 再実行・休場日に重複 snapshot が増える (F-06)。
  * 当日更新済みの indicators だけを集計し、カバレッジが 90% 未満なら書かない
  * (大量失敗の日に一部銘柄だけの平均で前日分を上書きしないため)。
  *
@@ -2168,10 +2196,10 @@ export async function rebuildMomentumProjection(
 function createMarketContextDraft(): MarketContextDraft {
   return {
     charts: {
-      "^N225": { price: null, prevClose: null },
-      "^VIX": { price: null, prevClose: null },
-      "^GSPC": { price: null, prevClose: null },
-      "NIY=F": { price: null, prevClose: null },
+      "^N225": { price: null, prevClose: null, date: null },
+      "^VIX": { price: null, prevClose: null, date: null },
+      "^GSPC": { price: null, prevClose: null, date: null },
+      "NIY=F": { price: null, prevClose: null, date: null },
     },
     nikkeiVi: null,
   };
@@ -2191,6 +2219,7 @@ async function fetchMarketContextTarget(
   draft.charts[target] = {
     price: chart.price,
     prevClose: chart.previousClose,
+    date: chart.ohlcv.at(-1)?.date ?? null,
   };
 }
 
@@ -2226,6 +2255,17 @@ async function persistMarketContext(
   runDate: string
 ): Promise<boolean> {
   // 日付キーは呼び出し側が run 開始日から決める (実行時刻だと日跨ぎでずれる。F-05 同型)。
+  // 書くのは N225 の実バー日と一致するときだけ (F-06)。不一致 (休場・取得
+  // 遅延・N225 取得失敗) は書かず前回値を残す。日付の一致で判定し、曜日の
+  // 推測もカレンダーも使わない。一致するとき run 日≡取引日になる。
+  const n225BarDate = draft.charts["^N225"].date;
+  if (n225BarDate === null || n225BarDate !== runDate) {
+    console.warn(
+      `[sync-daily]   マクロ保存スキップ: N225 実日足=${n225BarDate ?? "未取得"} が ` +
+        `run 日 ${runDate} と不一致 (休場または取得遅延)。前回値を保持します。`
+    );
+    return false;
+  }
   const today = runDate;
   const n225 = draft.charts["^N225"];
   const vix = draft.charts["^VIX"];

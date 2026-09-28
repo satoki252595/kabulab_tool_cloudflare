@@ -122,22 +122,29 @@ base `origin/main` = `e5e80c6` (#157)、branch `fix/market-storage-root-causes-2
   （各 fetch が自証明。真正「分割なし」は空のまま誠実に残す）＋
   R2 条件付き PUT＋物理退避。実行は writer 枠・Yahoo 負荷配慮で別途計画。
 
-## 6. prune 飢餓/休日 sector 重複（F-05/F-06）— run 開始時刻への固定
+## 6. prune 飢餓/休日 sector 重複（F-05/F-06）— 取引日キーと N225 照合
 
-- 根因：週1ゲート（prune・年次）と market/sector 表の日付キーを Phase 実行時刻
-  （`new Date()`）で評価していた。旧 21:00 UTC 日程の開始遅延で Phase 4 が
-  火曜に落ち、月曜限定 prune が毎週 skip されて 3,689 銘柄が 90 本超過まで飢餓。
-- 修正：`runDateKeys(startedAt)` に一本化し、writeAnnual・prune ゲート・
-  Phase 5 日付・market persist 日付の同型 4 箇所を run 開始時刻に固定。
-  `isMondayUtc` の本番呼出は当該 helper のみに収束（rg 確認）。
-- 休日行：既存の 9/22・9/23 sector 重複は旧無 guard run 由来。現行は
-  stocksOnly の N225 実日足 gate＋90% カバレッジ gate で防ぐ。証拠なしの
-  休日行 DELETE はしない。全 ingest rerun も代用にしない。
-- 隔離検証：`runDateKeys` の日跨ぎ 2 件（月曜 23:59 開始→月曜維持・
-  火曜 00:00 開始→非月曜）。既存 cron 58 件相当の退行なし。
+- 根因（2 段）：(a) 週1ゲート（prune・年次）の月曜判定を Phase 実行時刻で
+  評価していた。旧 21:00 UTC 日程の開始遅延で Phase 4 が火曜に落ち、
+  月曜限定 prune が毎週 skip されて 3,689 銘柄が 90 本超過まで飢餓。
+  (b) sector/market 表の行キーが実行日で、休場・再実行のたびに重複 snapshot
+  が増えた（9/22・9/23 sector 行が 9/18 集計の複製）。run 開始日への固定だけ
+  では休場 snapshot の根因は残る（GPT-sol review 指摘）。
+- 修正：(a) `runDateKeys(startedAt)` に一本化し、writeAnnual・prune ゲートを
+  run 開始時刻に固定（scheduling 系。キー系と独立）。
+  (b) sector 行キーは `loadIndicatorsMaxLatestDate`（実データの取引日）。
+  再実行は同一取引日キーへ畳まれ、実行日キーで増えない。
+  (c) market 行は N225 の実バー日と run 日が一致するときだけ書く。
+  不一致（休場・取得遅延・N225 取得失敗）は書かず前回値を残す。
+  曜日の推測もカレンダーも使わない。一致するとき run 日≡取引日。
+- 休日行：既存の 9/22・9/23 sector 重複は旧無 guard run 由来で削除しない。
+  全 ingest rerun も代用にしない。
+- 隔離検証：`runDateKeys` の日跨ぎ 2 件、loader MAX/空/再実行畳み込み 3 件、
+  N225 不一致 skip 1 件。既存 cron の退行なし。
 - 次 normal job の成功基準：月曜 run で prune が実行され（prunedStocks>0）、
-  90 本超過銘柄が 0 へ収束すること。market/sector 行の日付が run 開始日と
-  一致すること。非月曜は skip ログのみ。
+  90 本超過銘柄が 0 へ収束すること。sector/market 行の日付が実データの
+  取引日と一致し、休場日は skip ログのみで前回値を残すこと。
+  非月曜は prune skip ログのみ。
 
 ## 7. 旧 Yahoo 年次 writer（daily.ts 1236/1584 付近）— 維持の確定
 
@@ -160,6 +167,6 @@ base `origin/main` = `e5e80c6` (#157)、branch `fix/market-storage-root-causes-2
 
 ## 検証
 
-- 全 203 files 2898 件が緑（386 skipped・0 failed。対象回帰＋audit render 含む）。
+- 全 203 files 2902 件が緑（386 skipped・0 failed。対象回帰＋audit render 含む）。
 - `tsc --noEmit` clean、`eslint src services --max-warnings=0` clean。
 - 本番 D1/R2/Notion への書込 0（D1 SELECT 12 文・R2 GET 約4.4k＋LIST・Yahoo 2 GET のみ）。
