@@ -365,6 +365,74 @@ def test_d1_repair_rejects_missing_notion_read_proof_before_connecting(
         reparse.sync_d1(journal, receipts)
 
 
+def test_d1_repair_rejects_receipt_from_another_original_key(tmp_path, monkeypatch):
+    cases = EDINET_CASES[:2]
+    records = [tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+               for case in cases]
+    journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
+    journal.write_text("\n".join(json.dumps({
+        "page_id": case["code"], "old": reparse._record_dict(record),
+        "new": reparse._record_dict(record), "parser_sha256": reparse.PARSER_SHA256,
+        "raw_sha256": case["raw_sha256"],
+    }) for case, record in zip(cases, records, strict=True)) + "\n")
+    receipts.write_text("\n".join(json.dumps({
+        "page_id": case["code"], "target_page_id": cases[1]["code"],
+        "record": reparse._record_dict(records[1]), "parser_sha256": reparse.PARSER_SHA256,
+        "raw_sha256": case["raw_sha256"],
+    }) for case in cases) + "\n")
+    monkeypatch.setattr(reparse, "load_settings", lambda: pytest.fail("別原本キーなら接続しない"))
+    with pytest.raises(ValueError, match="元原本の財務キー"):
+        reparse.sync_d1(journal, receipts)
+
+
+@pytest.mark.parametrize("newer", [False, True])
+def test_d1_repair_rejects_duplicate_live_key_before_d1_write(tmp_path, monkeypatch, newer):
+    case = EDINET_CASES[0]
+    record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+    journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
+    journal.write_text(json.dumps({
+        "page_id": "original", "old": reparse._record_dict(record),
+        "new": reparse._record_dict(record), "parser_sha256": reparse.PARSER_SHA256,
+        "raw_sha256": case["raw_sha256"],
+    }) + "\n")
+    receipts.write_text(json.dumps({
+        "page_id": "original", "target_page_id": "original",
+        "record": reparse._record_dict(record), "parser_sha256": reparse.PARSER_SHA256,
+        "raw_sha256": case["raw_sha256"],
+    }) + "\n")
+    # 実原本の値は不変。後発の重複ページというメタ情報だけを障害注入する。
+    duplicate = replace(record, disclosed_at=record.provenance.fetched_at + timedelta(days=1)) if newer else record
+
+    class Client:
+        def query_database(self, *args, **kwargs):
+            return [{"id": "original", "record": record}, {"id": "duplicate", "record": duplicate}]
+
+    monkeypatch.setattr(reparse, "NotionClient", lambda *args, **kwargs: Client())
+    monkeypatch.setattr(reparse, "_page_record", lambda page: page["record"])
+    monkeypatch.setattr(reparse, "load_settings", lambda: SimpleNamespace(
+        notion_token="test-token", notion_rps=2.5, db_id=lambda key: "db",
+        cloud_store=SimpleNamespace(d1_enabled=lambda: True),
+    ))
+    monkeypatch.setattr(reparse, "D1Store", lambda *args, **kwargs: pytest.fail("重複ならD1接続しない"))
+    with pytest.raises(ValueError, match="財務キーが一意"):
+        reparse.sync_d1(journal, receipts)
+
+
+def test_d1_repair_does_not_keep_document_id_from_a_known_different_raw_sha():
+    case = EDINET_CASES[0]
+    record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+    conn = sqlite3.connect(":memory:")
+    conn.execute(_FINANCIALS)
+    row = record_to_row(record, stock_id=None, doc_id="previous-document", raw_sha256="a" * 64)
+    conn.execute(reparse._repair_sql(), [json.dumps([row])])
+    row[COLUMNS.index("doc_id")] = None
+    row[COLUMNS.index("raw_sha256")] = case["raw_sha256"]
+    conn.execute(reparse._repair_sql(), [json.dumps([row])])
+    assert conn.execute("SELECT doc_id,raw_sha256 FROM jss_financials").fetchone() == (
+        None, case["raw_sha256"],
+    )
+
+
 @pytest.mark.parametrize("read_back_net_sales", [547_779_000_000, 547_779_000_000.0])
 @pytest.mark.parametrize("archive_parser", ["current", "previous-parser"])
 @pytest.mark.parametrize("target_old_replaced", [False, True])
