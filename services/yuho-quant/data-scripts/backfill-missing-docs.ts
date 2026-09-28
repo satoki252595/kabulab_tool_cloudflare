@@ -216,12 +216,14 @@ for (const date of eachDay(fromArg, toArg)) {
       let overseasParseStatus: OverseasParseStatus | "parse_error" = "no_overseas_table";
       let overseasHonbunFile: string | null = null;
       let overseasFacts: OverseasFact[] = [];
+      let overseasProof: ReturnType<typeof parseOverseasData>["proof"];
       if (!csvError && hasOverseas && xbrlZip) {
         try {
           const o = parseOverseasData(xbrlZip, periodEnd);
           overseasParseStatus = o.status;
           overseasHonbunFile = o.honbunFile;
           overseasFacts = o.facts;
+          overseasProof = o.proof;
         } catch (e) {
           overseasParseStatus = "parse_error";
           console.warn(`[missing] overseas parse_error ${tag}: ${(e as Error).message}`);
@@ -248,7 +250,7 @@ for (const date of eachDay(fromArg, toArg)) {
       // 海外売上ファクトは保存前検証を通す。違反があれば parse_error + 空保存
       // (先頭行 dedup で回復させない = aggregate-before-dedup の再発防止)。
       try {
-        validateOverseasSaveSet(overseasFacts);
+        validateOverseasSaveSet(overseasFacts, overseasProof);
       } catch (e) {
         console.warn(
           `[missing] overseas save-set invalid; downgrade to parse_error docID=${doc.docID}: ${(e as Error).message}`

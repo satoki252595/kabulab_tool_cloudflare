@@ -74,12 +74,14 @@ for (const r of targets) {
   let status = "no_xbrl";
   let honbunFile: string | null = null;
   let facts: ReturnType<typeof parseOverseasData>["facts"] = [];
+  let proof: ReturnType<typeof parseOverseasData>["proof"];
   try {
     const zip = await downloadDocument(r.docId, 1);
     const ex = parseOverseasData(zip, r.periodEnd);
     status = ex.status;
     honbunFile = ex.honbunFile;
     facts = ex.facts;
+    proof = ex.proof;
   } catch (e) {
     if (e instanceof EdinetNotFoundError) {
       status = "parse_error"; // type=1 未提供 → 構造化不能を正直に記録
@@ -91,7 +93,7 @@ for (const r of targets) {
   // 保存前検証を通す。違反があれば parse_error + 空保存
   // (先頭行 dedup で回復させない = aggregate-before-dedup の再発防止)。
   try {
-    validateOverseasSaveSet(facts);
+    validateOverseasSaveSet(facts, proof);
   } catch (e) {
     console.warn(
       `[oseas-backfill] save-set invalid; downgrade to parse_error ${r.docId}: ${(e as Error).message}`

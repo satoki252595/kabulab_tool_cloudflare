@@ -210,6 +210,7 @@ export async function ingestDocument(
   let overseasParseStatus: OverseasParseStatus | "parse_error";
   let overseasHonbunFile: string | null = null;
   let overseasFacts: ReturnType<typeof parseOverseasData>["facts"] = [];
+  let overseasProof: ReturnType<typeof parseOverseasData>["proof"];
 
   const csvZip = await downloadDocument(doc.docID, 5);
   let hasOrderKeyword = false;
@@ -295,6 +296,7 @@ export async function ingestDocument(
       overseasParseStatus = ex.status;
       overseasHonbunFile = ex.honbunFile;
       overseasFacts = ex.facts;
+      overseasProof = ex.proof;
     } catch (e) {
       overseasParseStatus = "parse_error";
       overseasHonbunFile = null;
@@ -346,7 +348,7 @@ export async function ingestDocument(
   // 海外売上ファクトは保存前検証を通す。違反があれば parse_error + 空保存
   // (先頭行 dedup で回復させない = aggregate-before-dedup の再発防止)。
   try {
-    validateOverseasSaveSet(overseasFacts);
+    validateOverseasSaveSet(overseasFacts, overseasProof);
   } catch (e) {
     console.warn(
       `[ingest] overseas save-set invalid; downgrade to parse_error docID=${doc.docID}: ${(e as Error).message}`
