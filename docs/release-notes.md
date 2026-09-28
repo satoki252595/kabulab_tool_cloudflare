@@ -10,7 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-29
 
 ### 変更
-- 年次preflightに銘柄active/区分のCASを追加し凍結破りを境界で止め、適用runnerの完了キーは種別つき必須+重複検査にした (#166)。データ変更なし。
+- 年次preflightと優待の共通保存経路に親銘柄active/区分・同一性CASを追加し凍結破りを境界で止め、適用runnerの完了キーは種別つき必須+重複検査にした (#166)。データ変更なし。
 - 本番作業: 市場Source D1修復を適用 (ATR 1679行・年次 1490行のactive行のみ。非active 36行は凍結維持のため適用後に復元)。送信前fresh全一致・適用後全new一致・再計算write0・保護一致を確認 (#166)。
 - 市場Source修復の共通input CAS preflight (ATR全入力6+銘柄同一性/年次系列全点+TTM+日付のNULL-safe同一batch検証) と優待全文境界のdescription CAS (行ごと旧文CAS) ビルダーを追加 (#165)。データ適用はまだ。
 - 本番作業: Yahoo実測9件 (N225は9/28終値未取得で厳密STOP確定・fake8は404不在で除去VOID) とD1変更前スナップショット2件をNotion一次データへ物理記録 (再DL全SHA一致・unknown0)。境界テスト31件+全文2件PASS。
