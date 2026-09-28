@@ -23,9 +23,10 @@ import {
   type SummaryViolation,
 } from "./summary-contract.js";
 
-/** D1 から読む 1 行 (yutai_benefits × core_stocks)。 */
+/** D1 から読む 1 行 (yutai_benefits × core_stocks。タスク化 + preimage 用)。 */
 export type BenefitRow = {
   id: number;
+  stockId: number;
   stockCode: string;
   stockName: string;
   description: string;
@@ -33,6 +34,10 @@ export type BenefitRow = {
   estimatedValue: number | null;
   /** `estimate_value_source`。同値判定 (再送の省略) に使う。 */
   estimateValueSource: string | null;
+  minShares: number;
+  recordMonth: number;
+  /** 更新時刻 (unix 秒)。 */
+  updatedAt: number;
 };
 
 const VIOLATION_RULES = ["annotation", "too_long", "prose", "empty"] as const satisfies readonly SummaryViolation["rule"][];

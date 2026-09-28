@@ -35,12 +35,15 @@ import { stocks, yutaiBenefits } from "../src/db/schema.js";
 import {
   applyAtomicBatches,
   planAtomicBatches,
+  snapshotStockPreimages,
   type AtomicBatchSender,
 } from "./atomic-apply.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
 import { assertNotCommittable } from "./private-path.js";
 import {
+  computeYieldEntries,
+  fetchYieldInputs,
   formatRecomputeReport,
   planYieldRecompute,
   type RecomputeYieldsDb,
@@ -233,6 +236,9 @@ async function reportYieldPreview(
  * 利回り・スコアを先に計算し (dry-run の先見せと同一の overlay 方式・同一関数)、
  * 同一銘柄の要約・推定値・利回り・スコアの全 UPDATE を D1 REST `{batch}`
  * 1 リクエストで送る (銘柄単位の原子単位。要約だけ書いて中断する形は無い)。
+ * batch 先頭の preflight が full preimage を検証し、不一致は SQL エラーで
+ * batch 全体 rollback (ドリフト行の除外はしない。不一致銘柄は全体 STOP)。
+ * ガードの snapshot は利回り計算と同一読取 (`fetchYieldInputs` 1 回)。
  * `data_date` は月次のまま。銘柄間の失敗は止めて同引数の再実行で回復する
  * (適用済み銘柄は無変更・冪等。`resolveTargetIds` の和集合で混合再開に対応)。
  * 送信口は差し替え可能にし、テストでは D1 なしで束ね方を固定する。
@@ -260,8 +266,15 @@ export async function applyImportAtomically(
   const { stockIds, codeOf, stockOf } = await resolveTouchedStocks(db, [...input.targetIds]);
   const overlay = new Map<number, number | null>();
   for (const u of input.updates) for (const id of u.ids) overlay.set(id, u.estimatedValue);
-  const yieldPlan = await planYieldRecompute(db, stockIds, overlay);
-  const batches = planAtomicBatches({ updates: input.updates, yieldPlan, stockOfBenefit: stockOf });
+  // 計算とガードは同一読取の snapshot から (別 fresh 読みの代用は drift の見逃し)。
+  const yieldInputs = await fetchYieldInputs(db, stockIds);
+  const yieldPlan = computeYieldEntries(stockIds, yieldInputs, overlay);
+  const batches = planAtomicBatches({
+    updates: input.updates,
+    yieldPlan,
+    stockOfBenefit: stockOf,
+    preimages: snapshotStockPreimages(yieldInputs, stockIds),
+  });
   await applyAtomicBatches(sender, batches);
   return { groups, rows, yieldPlan, codeOf };
 }

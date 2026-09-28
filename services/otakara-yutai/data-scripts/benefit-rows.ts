@@ -19,16 +19,21 @@ export function openOtakaraD1(): OtakaraD1 {
 }
 
 export async function loadBenefitRows(db: OtakaraD1): Promise<BenefitRow[]> {
-  return db
+  const rows = await db
     .select({
       id: yutaiBenefits.id,
+      stockId: yutaiBenefits.stockId,
       stockCode: stocks.code,
       stockName: stocks.name,
       description: yutaiBenefits.description,
       shortSummary: yutaiBenefits.shortSummary,
       estimatedValue: yutaiBenefits.estimatedValue,
       estimateValueSource: yutaiBenefits.estimateValueSource,
+      minShares: yutaiBenefits.minShares,
+      recordMonth: yutaiBenefits.recordMonth,
+      updatedAt: yutaiBenefits.updatedAt,
     })
     .from(yutaiBenefits)
     .innerJoin(stocks, eq(yutaiBenefits.stockId, stocks.id));
+  return rows.map((r) => ({ ...r, updatedAt: Math.floor(r.updatedAt.getTime() / 1000) }));
 }

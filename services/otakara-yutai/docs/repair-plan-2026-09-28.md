@@ -96,21 +96,37 @@ token) が渡されるまで何も書かない。** コード側の再発防止�
 
 ## 実行順序 (同銘柄 A+C+B 原子適用。旧 A→B→C 逐次から置換)
 
-1. fresh 再読 + 全列 CAS 確認 (A430 の id/旧値/出典/updated_at/sha、C65 の
-   現タプル)。9/28 時点で A430 は drift 0・C45 キー安定を確認済み。
-   ドリフト行は除外して root へ報告。
-2. 同銘柄原子 batch を 110 銘柄へ順次適用 (A93 ∪ C20)。1 銘柄 = D1 REST
-   `{batch}` 1 リクエスト: [A-null UPDATE 群 (CASつき)] + [C 要約・推定値
-   UPDATE 群 (CASつき)] + [利回り・スコア UPDATE (変わる 69 銘柄のみ:
-   B58 + C-only 11)]。A∩C 重なり 4 行 (8508×2・9854×2) は null + 新要約の
-   1 文に統合。銘柄間の失敗は止めて同引数の再実行で回復 (冪等)。
+1. fresh 再読 + 全列 preimage 確認 (A430 の id/旧値/出典/updated_at/sha、
+   C65 の現タプル、利回り・スコアの旧入力/旧値、銘柄別受益行集合)。
+   9/28 時点で A430 は drift 0・C45 キー安定を確認済み。
+   preimage 不一致はドリフト行の除外ではなく同銘柄全体を STOP
+   (A/C 片欠けの利回り適用を防ぐ)。STOP 銘柄は root へ報告。
+2. 同銘柄ガード batch を 110 銘柄へ順次適用 (A93 ∪ C20)。1 銘柄 = D1 REST
+   `{batch}` 1 リクエスト。先頭に preflight 文 (full preimage 一致を
+   `SELECT json(CASE WHEN ... THEN 'null' ELSE '' END)` で検証。
+   不一致は SQL エラー → batch 全体 rollback。changes() 0 放置はしない)。
+   続けて [A-null UPDATE 群] + [C 要約・推定値 UPDATE 群] + [利回り・スコア
+   UPDATE (変わる 69 銘柄のみ: B58 + C-only 11)]。A∩C 重なり 4 行
+   (8508×2・9854×2) は null + 新要約の 1 文に統合。銘柄間の失敗は止めて
+   同引数の再実行で回復 (冪等)。
+   APPLY 前提: P3 マスタ normal-complete/fresh-mapping + root writer 枠。
 3. 検証クエリ (下)。不一致があれば中断し root へ報告。
 4. 再実行で changes() = 0 (冪等) + 未回答・はじき 0 の確認。
 5. Stage D (root 判断。孤児行の扱い)。
 
-## CAS つき原子 batch (雛形。1 銘柄 1 batch。旧 1 行 1 文から置換)
+## CAS つきガード batch (雛形。1 銘柄 1 batch。旧 1 行 1 文から置換)
+
+実装は `data-scripts/atomic-apply.ts` の `buildStockPreflightStatement` +
+`snapshotStockPreimages` が正 (通常 import と ABC の両経路が同一 builder。
+`planAtomicBatches` が非空 batch の先頭に必ず prepend する)。
 
 ```sql
+-- preflight (例: stock_id=73。full preimage 不一致なら json('') が throw し batch 全体 rollback)
+-- 実 SQL は builder が生成 (snapshot JSON 1 + stockId 5 の計 6 bind)。
+SELECT json(CASE WHEN <優待行全集合の件数+双方向EXCEPT> AND <財務行の有無+全列IS照合> AND <スコア行の有無+全列IS照合> THEN 'null' ELSE '' END);
+-- 優待行: id/stock/株数/月/全文/要約/値/出典/updated_at + 集合の count/IDs。
+-- 財務: yutai_yield/data_date/price/fetched_at。スコア: 3 列。行の不在も preimage。
+
 -- A-null (例: benefit_id=35231, 旧値 16000000, 出典 null, updated_at=1782134927)
 UPDATE yutai_benefits
 SET estimated_value = NULL, estimate_value_source = NULL, updated_at = (unixepoch())
@@ -708,12 +724,17 @@ no-delete 設計に従い残す。削除は root 判断の別件とする。
 # Stage C: 要約の作り直し (rework)
 
 実施結果 (2026-09-28, codegate lane): 45 群すべて契約 2026-09-28.2 で生成・
-原文人手確認・`import` dry-run (45 タスク / 65 行・はじき 0・未回答 0)。
+保存掲載文の人手確認・`import` dry-run (45 タスク / 65 行・はじき 0・未回答 0)。
 19 群は月 sibling で現在 2 行 (計 65 行。表の行 id は 46 件のみ列挙。
 総行数 8,295 は一致し再取得なし)。人手確定: 8173 購入条件 4 群 null、
 3447 切詰め端点の非根拠 40,000 除去、最長 tier 適用、8508/7075 人数率分離。
-根拠テキスト・原文 SHA・CAS 証跡は private (root 経路で報告)。実 apply は
-writer 枠待ち (同銘柄 A+C+B 原子適用に統合。B8173 行は統合値を反映済み)。
+現完了は保存掲載文の審査まで。上流原文との対応 (正式 capture + download
+SHA) は apply 前必須 (未実施。正式 capture は root 別 grant)。
+限定 READ (15 銘柄・221 行): exact 151、切詰め証明 33 (500字 12 + 注記 21)、
+drift/不一致 37。3447 は現 upstream が drift (LCP 22%) のため現 fetch から
+再 task しない。共通 producer の切詰めは本 branch で除去済み (全文保存)。
+根拠テキスト・保存文 SHA・CAS 証跡は private (root 経路で報告)。実 apply は
+writer 枠待ち (同銘柄ガード batch 適用に統合。B8173 行は統合値を反映済み)。
 
 | code | taskId(内容キー) | 群の行id | 現値 | 理由 |
 |---|---|---|---|---|

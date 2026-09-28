@@ -13,7 +13,125 @@
  */
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { buildBenefitUpdateStatements, type PlannedUpdate } from "./summary-import.js";
-import { buildYieldScoreStatements, type YieldRecomputePlan } from "./recompute-yields.js";
+import {
+  buildYieldScoreStatements,
+  type YieldInputs,
+  type YieldRecomputePlan,
+} from "./recompute-yields.js";
+
+/**
+ * 同銘柄ガード batch の先頭 preflight が検証する full preimage。
+ *
+ * REST batch は changes() 0 を放置すると部分適用になるため、batch 内の
+ * 先頭文で「計画時と 1 列も違わない」ことを SQL エラー化する
+ * (不一致 → `json('')` が throw → batch 全体 rollback)。
+ * 通常 import と ABC (A+C 統合) の両経路がこの同一 builder を使う。
+ */
+export type StockBenefitPreimage = {
+  id: number;
+  stockId: number;
+  minShares: number;
+  recordMonth: number;
+  description: string;
+  shortSummary: string | null;
+  estimatedValue: number | null;
+  estimateValueSource: string | null;
+  /** 更新時刻 (unix 秒)。 */
+  updatedAt: number;
+};
+
+export type StockPreimage = {
+  stockId: number;
+  /** 同銘柄の優待行の全集合 (追加・削除の検知を含む)。 */
+  benefits: StockBenefitPreimage[];
+  /** 財務行 (利回り計算の入力 + 行の同一性)。行が無ければ null。 */
+  financial: {
+    yutaiYield: number | null;
+    dataDate: string;
+    price: number | null;
+    fetchedAt: number;
+  } | null;
+  /** スコア行。行が無ければ null。 */
+  scores: {
+    fundamentalScore: number;
+    technicalScore: number;
+    totalScore: number;
+  } | null;
+};
+
+/**
+ * 利回り再計算と同じ読み (`fetchYieldInputs` の結果) から preimage を切る。
+ * ガードの snapshot は計画の計算入力と同一読取でなければならない
+ * (別 fresh 読みの代用は drift の見逃しになる)。
+ */
+export function snapshotStockPreimages(
+  inputs: YieldInputs,
+  stockIds: readonly number[]
+): Map<number, StockPreimage> {
+  const out = new Map<number, StockPreimage>();
+  for (const stockId of [...new Set(stockIds)]) {
+    const fin = inputs.prices.get(stockId);
+    out.set(stockId, {
+      stockId,
+      benefits: (inputs.benefits.get(stockId) ?? [])
+        .map((b) => ({
+          id: b.rowId,
+          stockId,
+          minShares: b.minShares,
+          recordMonth: b.recordMonth,
+          description: b.description,
+          shortSummary: b.shortSummary,
+          estimatedValue: b.estimatedValue,
+          estimateValueSource: b.estimateValueSource,
+          updatedAt: b.updatedAt,
+        }))
+        .sort((a, b) => a.id - b.id),
+      financial: fin
+        ? {
+            yutaiYield: fin.yutaiYield,
+            dataDate: fin.dataDate,
+            price: fin.price,
+            fetchedAt: fin.fetchedAt,
+          }
+        : null,
+      scores: inputs.scores.get(stockId) ?? null,
+    });
+  }
+  return out;
+}
+
+/**
+ * 1 銘柄の full preimage 検証文を作る (純関数・副作用なし)。
+ *
+ * 仕組み: snapshot 全体を 1 bound JSON で渡し (`$.benefits` 配列 +
+ * `$.financial` + `$.scores`)、`json_each` CTE で期待集合を起こして現行と
+ * 突き合わせる。優待行は件数 + 双方向 EXCEPT (NULL は集合意味で等価。
+ * 追加・削除も検知)。財務・スコアは行の有無 + 全列の NULL-safe (`IS`) 照合。
+ * 1 列でも違えば `json('')` が throw し、D1 REST batch 全体が rollback する
+ * (SQLite 公式: 不正 JSON への `json()` はエラー)。
+ * bind は snapshot JSON 1 + stockId 5 の計 6 (D1 上限 100/文に収まる)。
+ */
+export function buildStockPreflightStatement(snapshot: StockPreimage): D1BatchStatement {
+  const sql = [
+    "-- preflight: 同銘柄の full preimage が計画時と一致しなければ SQL エラーで batch 全体 rollback",
+    "WITH snap(j) AS (VALUES (?)),",
+    "exp_ben(id, stock_id, min_shares, record_month, description, short_summary, estimated_value, estimate_value_source, updated_at) AS (",
+    "  SELECT json_extract(value, '$.id'), json_extract(value, '$.stockId'), json_extract(value, '$.minShares'), json_extract(value, '$.recordMonth'), json_extract(value, '$.description'), json_extract(value, '$.shortSummary'), json_extract(value, '$.estimatedValue'), json_extract(value, '$.estimateValueSource'), json_extract(value, '$.updatedAt') FROM json_each(json_extract((SELECT j FROM snap), '$.benefits'))",
+    "),",
+    "act_ben(id, stock_id, min_shares, record_month, description, short_summary, estimated_value, estimate_value_source, updated_at) AS (",
+    "  SELECT id, stock_id, min_shares, record_month, description, short_summary, estimated_value, estimate_value_source, updated_at FROM yutai_benefits WHERE stock_id = ?",
+    "),",
+    "fin_ok(ok) AS (",
+    "  SELECT CASE WHEN json_extract((SELECT j FROM snap), '$.financial') IS NULL THEN (SELECT count(*) = 0 FROM otakara_stock_financials WHERE stock_id = ?) ELSE EXISTS (SELECT 1 FROM otakara_stock_financials WHERE stock_id = ? AND yutai_yield IS json_extract((SELECT j FROM snap), '$.financial.yutaiYield') AND data_date IS json_extract((SELECT j FROM snap), '$.financial.dataDate') AND price IS json_extract((SELECT j FROM snap), '$.financial.price') AND fetched_at IS json_extract((SELECT j FROM snap), '$.financial.fetchedAt')) END",
+    "),",
+    "sco_ok(ok) AS (",
+    "  SELECT CASE WHEN json_extract((SELECT j FROM snap), '$.scores') IS NULL THEN (SELECT count(*) = 0 FROM otakara_stock_scores WHERE stock_id = ?) ELSE EXISTS (SELECT 1 FROM otakara_stock_scores WHERE stock_id = ? AND fundamental_score IS json_extract((SELECT j FROM snap), '$.scores.fundamentalScore') AND technical_score IS json_extract((SELECT j FROM snap), '$.scores.technicalScore') AND total_score IS json_extract((SELECT j FROM snap), '$.scores.totalScore')) END",
+    ")",
+    "SELECT json(CASE WHEN (SELECT count(*) FROM act_ben) = (SELECT count(*) FROM exp_ben) AND NOT EXISTS (SELECT * FROM act_ben EXCEPT SELECT * FROM exp_ben) AND NOT EXISTS (SELECT * FROM exp_ben EXCEPT SELECT * FROM act_ben) AND (SELECT ok FROM fin_ok) AND (SELECT ok FROM sco_ok) THEN 'null' ELSE '' END)",
+  ].join("\n");
+  const sid = snapshot.stockId;
+  return { sql, params: [JSON.stringify(snapshot), sid, sid, sid, sid, sid] };
+}
 
 /** batch 1 件分の送信口。本番は `createD1HttpBatchSender()`、テストでは差し替える。 */
 export type AtomicBatchSender = (
@@ -28,15 +146,20 @@ export type StockBatch = {
 
 /**
  * 銘柄単位の batch 計画 (副作用なし・決定的な順序)。
+ * 非空 batch の先頭に必ず preflight 文を置く (full preimage 不一致は
+ * SQL エラー → batch 全体 rollback。ドリフト行の除外はしない。
+ * 不一致の銘柄は batch を作らず止めるため、呼び出し側で除外せず STOP する)。
  * 要約の文を先に、利回り・スコアの文を後に並べる (従来の逐次順序と同じ)。
- * `stockOfBenefit` で解決できない優待行があれば書く前に throw する
- * (黙って落とさない。並行する再取得で ID が振り直された疑い)。
+ * `stockOfBenefit` で解決できない優待行・preimage が無い銘柄があれば
+ * 書く前に throw する (黙って落とさない)。
  * 文が 0 件の銘柄は含めない (再実行で 0 件・冪等)。
  */
 export function planAtomicBatches(input: {
   updates: readonly PlannedUpdate[];
   yieldPlan: YieldRecomputePlan;
   stockOfBenefit: (benefitId: number) => number | undefined;
+  /** 同銘柄の full preimage (必須。計算入力と同一読取の snapshot)。 */
+  preimages: ReadonlyMap<number, StockPreimage>;
 }): StockBatch[] {
   const benefitByStock = new Map<number, D1BatchStatement[]>();
   for (const u of input.updates) {
@@ -71,7 +194,16 @@ export function planAtomicBatches(input: {
       stockId,
       statements: [...(benefitByStock.get(stockId) ?? []), ...(yieldByStock.get(stockId) ?? [])],
     }))
-    .filter((b) => b.statements.length > 0);
+    .filter((b) => b.statements.length > 0)
+    .map((b) => {
+      const snap = input.preimages.get(b.stockId);
+      if (!snap) {
+        throw new Error(
+          `銘柄 ${b.stockId} の preimage がありません (ガード無しの batch は作らない)`
+        );
+      }
+      return { stockId: b.stockId, statements: [buildStockPreflightStatement(snap), ...b.statements] };
+    });
 }
 
 /**

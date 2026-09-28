@@ -22,6 +22,8 @@ import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js"
 import { calcYutaiYield } from "../../../src/cron/monthly.js";
 import { scoreStock, type ScoringInput } from "../../../src/shared/scoring.js";
 import { stockFinancials, stockScores, yutaiBenefits } from "../src/db/schema.js";
+// NOTE: atomic-apply.ts と相互 import (関数本体でのみ使い合うため ESM live binding で成立)。
+import { buildStockPreflightStatement, type StockPreimage } from "./atomic-apply.js";
 
 /**
  * 利回りの読み書きができれば足りる drizzle db 型。Node の D1 HTTP 版
@@ -61,8 +63,23 @@ export type YieldRecomputePlan = {
 };
 
 export type YieldInputs = {
-  prices: Map<number, { price: number | null; yutaiYield: number | null }>;
-  benefits: Map<number, { rowId: number; minShares: number; estimatedValue: number | null }[]>;
+  prices: Map<
+    number,
+    { price: number | null; yutaiYield: number | null; dataDate: string; fetchedAt: number }
+  >;
+  benefits: Map<
+    number,
+    {
+      rowId: number;
+      minShares: number;
+      recordMonth: number;
+      description: string;
+      shortSummary: string | null;
+      estimatedValue: number | null;
+      estimateValueSource: string | null;
+      updatedAt: number;
+    }[]
+  >;
   /** スコア入力 (財務行の現値。月次 rebuild が写した core 値)。 */
   scoreInputs: Map<number, ScoringInput>;
   scores: Map<number, ScoreTriple>;
@@ -93,11 +110,18 @@ export async function fetchYieldInputs(
         macd: stockFinancials.macd,
         macdSignal: stockFinancials.macdSignal,
         yutaiYield: stockFinancials.yutaiYield,
+        dataDate: stockFinancials.dataDate,
+        fetchedAt: stockFinancials.fetchedAt,
       })
       .from(stockFinancials)
       .where(inArray(stockFinancials.stockId, chunk));
     for (const f of finRows) {
-      prices.set(f.stockId, f);
+      prices.set(f.stockId, {
+        price: f.price,
+        yutaiYield: f.yutaiYield,
+        dataDate: f.dataDate,
+        fetchedAt: Math.floor(f.fetchedAt.getTime() / 1000),
+      });
       // yutaiYield だけ後で差し替える (他は行の現値のまま)
       scoreInputs.set(f.stockId, { ...f, yutaiYield: f.yutaiYield });
     }
@@ -116,14 +140,20 @@ export async function fetchYieldInputs(
         rowId: yutaiBenefits.id,
         stockId: yutaiBenefits.stockId,
         minShares: yutaiBenefits.minShares,
+        recordMonth: yutaiBenefits.recordMonth,
+        description: yutaiBenefits.description,
+        shortSummary: yutaiBenefits.shortSummary,
         estimatedValue: yutaiBenefits.estimatedValue,
+        estimateValueSource: yutaiBenefits.estimateValueSource,
+        updatedAt: yutaiBenefits.updatedAt,
       })
       .from(yutaiBenefits)
       .where(inArray(yutaiBenefits.stockId, chunk));
     for (const b of benRows) {
+      const row = { ...b, updatedAt: Math.floor(b.updatedAt.getTime() / 1000) };
       const list = benefits.get(b.stockId);
-      if (list) list.push(b);
-      else benefits.set(b.stockId, [b]);
+      if (list) list.push(row);
+      else benefits.set(b.stockId, [row]);
     }
   }
   return { prices, benefits, scoreInputs, scores };
@@ -204,18 +234,24 @@ export async function planYieldRecompute(
  * 計画のうち変わる行だけ `yutai_yield` (+ `fetched_at`) とスコア 3 列を書く。
  * `data_date` には触らない (月次の作り直し日を保つ)。
  * 1 銘柄の利回り・スコアは 1 送信 (`{batch}` 1 リクエスト) で送る原子単位。
+ * 先頭に必ず preflight 文を置く (preimage 不一致は SQL エラー → rollback)。
  * 送信口は呼び出し側が渡す (本番は `createD1HttpBatchSender`)。
  */
 export async function applyYieldRecomputeAtomically(
   sender: (statements: readonly D1BatchStatement[]) => Promise<void>,
-  plan: YieldRecomputePlan
+  plan: YieldRecomputePlan,
+  preimages: ReadonlyMap<number, StockPreimage>
 ): Promise<{ updated: number; scoresUpdated: number }> {
   let updated = 0;
   let scoresUpdated = 0;
   for (const e of plan.entries) {
     const statements = buildYieldScoreStatements(e);
     if (statements.length === 0) continue;
-    await sender(statements);
+    const snap = preimages.get(e.stockId);
+    if (!snap) {
+      throw new Error(`銘柄 ${e.stockId} の preimage がありません (ガード無しでは書かない)`);
+    }
+    await sender([buildStockPreflightStatement(snap), ...statements]);
     if (e.changed) updated++;
     if (e.scoreChanged) scoresUpdated++;
   }
