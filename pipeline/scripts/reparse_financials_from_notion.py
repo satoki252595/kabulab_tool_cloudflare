@@ -534,7 +534,7 @@ def apply_journal(journal: Path, receipts: Path | None = None):
 
 
 def _repair_sql() -> str:
-    # 監査済みの欠損はNULLで上書きする。通常取込のCOALESCEでは誤値が残る。
+    # 監査済みの欠損もNULLで上書きする。通常取込と同じ正本完全置換。
     values = ", ".join(f"json_extract(j.value, '$[{i}]')" for i in range(len(COLUMNS)))
     assignments = [f"{c} = excluded.{c}" for c in COLUMNS if c not in FINANCIALS_PK
                    and c not in ("doc_id", "license_tag")]

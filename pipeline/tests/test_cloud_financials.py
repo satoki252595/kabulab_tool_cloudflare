@@ -7,7 +7,7 @@
 
 守るべき不変条件:
 - 連結行と単体行が**共存する**（旧 PK の後勝ちの回帰テスト）
-- 訂正開示が完全な行を NULL で潰さない
+- 訂正の未取得項目もNULLとしてNotion正本へ一致する
 - 緩いライセンスタグが厳しいタグを洗わない
 - 古い開示が新しい開示を巻き戻さない
 - `fin is None` のとき writer を呼ばない / dry-run で 1 文も書かない
@@ -16,11 +16,14 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, datetime, timezone
+from dataclasses import replace
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
 from _doubles import SqliteD1
+from test_financial_context_units import EDINET_CASES, fixture_provenance, fixture_tidy
+from test_local_store import _FinancialsDb
 
 from jp_stock_pipeline.cloud_store import financials as F
 from jp_stock_pipeline.cloud_store import schema as S
@@ -32,6 +35,8 @@ from jp_stock_pipeline.models import (
     Provenance,
     Source,
 )
+from jp_stock_pipeline.notion.upsert import _FIN_FIELD_TO_PROP, financial_summary_properties
+from jp_stock_pipeline.transform.normalize import tidy_to_financial_record
 
 JST = timezone.utc
 
@@ -116,12 +121,11 @@ class TestColumns:
         """分類漏れの列は SET 句から落ちて「永久に更新されない列」になる。"""
         classified = (
             set(S.FINANCIALS_PK)
-            | set(F.MERGE_COLUMNS)
             | set(F.OVERWRITE_COLUMNS)
             | {F.LICENSE_COLUMN}
         )
         assert classified == set(F.COLUMNS)
-        assert len(S.FINANCIALS_PK) + len(F.MERGE_COLUMNS) + len(
+        assert len(S.FINANCIALS_PK) + len(
             F.OVERWRITE_COLUMNS
         ) + 1 == len(F.COLUMNS)
 
@@ -143,10 +147,11 @@ class TestSql:
         for column in S.FINANCIALS_PK:
             assert f"{column} = excluded.{column}" not in sql
 
-    def test_value_columns_are_merged_with_coalesce(self) -> None:
+    def test_value_columns_are_replaced_including_null(self) -> None:
         sql = F.build_upsert_sql(1)
-        assert "net_sales = COALESCE(excluded.net_sales, jss_financials.net_sales)" in sql
-        assert "eps = COALESCE(excluded.eps, jss_financials.eps)" in sql
+        assert "net_sales = excluded.net_sales" in sql
+        assert "eps = excluded.eps" in sql
+        assert "COALESCE" not in sql
 
     def test_guard_prevents_an_older_disclosure_from_winning(self) -> None:
         sql = F.build_upsert_sql(1)
@@ -205,13 +210,9 @@ class TestConsolidatedCoexistence:
         assert len(store.fin_rows()) == 2
 
 
-class TestCorrectionMerge:
-    def test_a_partial_correction_does_not_null_out_a_complete_row(self) -> None:
-        """`edinet_daily` は 120(有報) と 130(訂正有報) を同じ '本決算' に落とす。
-
-        訂正は訂正した項目だけを載せるので、無条件の `excluded.c` 上書きだと
-        完全な行の残りの列が全部 NULL になる。
-        """
+class TestCorrectionReplacement:
+    def test_a_sparse_correction_clears_old_values_as_notion_does(self) -> None:
+        """Notion正本の欠損を古い原本値で埋めない。"""
         store = FakeStore()
         _write(
             store,
@@ -229,9 +230,41 @@ class TestCorrectionMerge:
         )
         row = store.fin_rows()[0]
         assert row["net_sales"] == 1100.0  # 訂正が載せた値は反映される
-        assert row["eps"] == 120.5  # 載せていない値は残る
-        assert row["cf_operating"] == 333.0
-        assert row["dps_actual"] == 60.0
+        assert row["eps"] is None
+        assert row["cf_operating"] is None
+        assert row["dps_actual"] is None
+
+    def test_real_edinet_values_clear_when_the_later_record_is_sparse(self) -> None:
+        case = next(case for case in EDINET_CASES if case["code"] == "7384")
+        record = tidy_to_financial_record(
+            fixture_tidy(case), case["code"], fixture_provenance(case),
+            disclosed_at=datetime.fromisoformat("2024-11-21T10:06:00+09:00"),
+        )
+        assert record.bps == 5918.24
+        assert record.equity_ratio_pct == pytest.approx(2.81)
+        # 市場値は原文のまま。1秒後は更新順だけの構造条件であり、実在訂正の主張ではない。
+        sparse = replace(
+            record, bps=None, equity_ratio_pct=None,
+            disclosed_at=record.disclosed_at + timedelta(seconds=1),
+        )
+        store, local = FakeStore(), _FinancialsDb()
+        _write(store, record, doc_id="S100UTIN", raw_sha256=case["raw_sha256"])
+        local.write(record)
+        _write(store, sparse, doc_id=None, raw_sha256=None)
+        local.write(sparse)
+        notion = financial_summary_properties(sparse)
+        row, local_row = store.fin_rows()[0], local.row()
+        for field, prop in _FIN_FIELD_TO_PROP.items():
+            assert row[field] == local_row[field] == notion[prop]["number"]
+        assert row["bps"] is None and row["equity_ratio_pct"] is None
+        assert row["doc_id"] is None and row["raw_sha256"] is None
+        # 疎な新しい開示を、古い完全な原本の再取得で復元しない。
+        _write(store, record, doc_id="S100UTIN", raw_sha256=case["raw_sha256"])
+        local.write(record)
+        assert store.fin_rows()[0] == row and local.row() == local_row
+        _write(store, sparse, doc_id=None, raw_sha256=None)
+        local.write(sparse)
+        assert store.fin_rows()[0] == row and local.row() == local_row
 
     def test_an_older_disclosure_cannot_roll_back_a_correction(self) -> None:
         store = FakeStore()
@@ -253,7 +286,7 @@ class TestCorrectionMerge:
         assert len(rows) == 1
         assert (rows[0]["net_sales"], rows[0]["eps"]) == (1000.0, 120.5)
 
-    def test_stock_id_is_not_erased_when_it_cannot_be_resolved(self) -> None:
+    def test_unresolved_stock_id_is_explicitly_missing(self) -> None:
         store = FakeStore()
         _write(store, _record(net_sales=1000.0))
         assert store.fin_rows()[0]["stock_id"] == 11
@@ -271,7 +304,7 @@ class TestCorrectionMerge:
                 )
             ],
         )
-        assert store.fin_rows()[0]["stock_id"] == 11
+        assert store.fin_rows()[0]["stock_id"] is None
 
 
 class TestLicenseTag:

@@ -1,29 +1,12 @@
-"""③財務サマリ `jss_financials` への書込 SQL の組み立て (移行 P5)。
-
-器は 33 列あるのに本番 0 行で、writer がどちらのリポジトリにも無かった。
-`slo.ACCEPTED_RED` の `financials` はその「器だけある」状態の宣言である。
+"""③財務サマリ `jss_financials` への書込 SQL の組み立て。
 
 ## なぜ `D1Store.upsert()` を使わないか
 
-`D1Store.upsert()` は conflict 以外の**全列を機械的に `c = excluded.c`** へ
-展開する。③ ではそれが 2 つの事故を起こす。
-
-1. **訂正開示が完全な行を NULL で潰す。** `jobs/edinet_daily.py` は doc_type_code
-   120（有報）と **130（訂正有報）の両方**を `disclosure_type='本決算'` へ落とす
-   （同一 PK に着地する）。訂正報告書は訂正した項目だけを載せるのが常で、
-   `transform/normalize.tidy_to_financial_record` は決算期末が導出できれば
-   残りが None でもレコードを返す。無条件に `excluded.c` を入れると、
-   売上だけ訂正した開示が EPS・CF・配当を全部 NULL にする。
-   → 値の列は `COALESCE(excluded.c, jss_financials.c)` でマージする。
-   「今回運ばれてこなかった項目は前回の値を残す」であって、値の捏造ではない。
-   ただし**訂正が本当に値を消した場合**（項目そのものが取り下げられた）と
-   「今回は運んでいない」は XBRL からは区別できない。既知の値を残す側へ倒す。
-2. **ライセンスの洗浄。** EDINET 由来行(commercial-ok)へ TDnet 由来の訂正
-   (factual-cite)が1項目だけ入ると、行の値は混在するのに `license_tag` は
-   最後に書いた側になる。逆向き（factual-cite の行へ EDINET が入る）だと
-   **厳しいタグが緩いタグに洗われる**。
-   → `license_tag` は `licensing._STRICTNESS` と同じ順序を SQL で再現し、
-   **厳しい側を残す**。未知のタグは最も厳しい扱いにする（fail-safe）。
+Notion③と同じ完全置換で、NoneもNULLとして反映する。旧COALESCEは、正本で
+消えた値をD1に残し、現在の原本に無い数値を新しいsourceで表示する原因だった。
+疎な訂正原本でも未取得は未取得とし、以前の値で補わない。
+専用SQLは、開示日時ガードとlicense_tagの厳しい側を維持するために使う。
+未知のタグは最も厳しい扱いにする（fail-safe）。
 
 ## `disclosed_at` ガード
 
@@ -70,8 +53,8 @@
 ## 1 行に 1 つしか持てない来歴
 
 `source` / `fetched_at` / `quality` は NOT NULL なので必ず上書きになる。
-つまりこの表は「最後に書いた一次ソース」しか表現できず、値ごとの出自は
-持てない。列単位の来歴が要るなら `docs/TARGET-ARCHITECTURE.md` §4.2 の
+値を完全置換するため、数値は今回の一次ソースだけを表す。列単位の過去の来歴が要るなら
+`docs/TARGET-ARCHITECTURE.md` §4.2 の
 追記専用（PK に `disclosed_at` を含める）へ進む必要があり、それは断面を読む
 側の書き換えを伴うので本レーンの範囲外。
 """
@@ -142,21 +125,17 @@ COLUMNS: tuple[str, ...] = (
     "quality",
 )
 
-# NOT NULL の来歴列。COALESCE しても必ず excluded 側が残るので明示的に上書きする。
-OVERWRITE_COLUMNS: tuple[str, ...] = ("source", "fetched_at", "quality")
-
 # 厳しい側を残す列。
 LICENSE_COLUMN = "license_tag"
 
 # 巻き戻し防止に使う列。
 GUARD_COLUMN = "disclosed_at"
 
-# 上の3分類に入らない列は COALESCE でマージする（訂正開示の NULL 潰し対策）。
-MERGE_COLUMNS: tuple[str, ...] = tuple(
+# 正本と同じ完全置換。PKと厳格license以外のNULLもそのまま反映する。
+OVERWRITE_COLUMNS: tuple[str, ...] = tuple(
     c
     for c in COLUMNS
     if c not in FINANCIALS_PK
-    and c not in OVERWRITE_COLUMNS
     and c != LICENSE_COLUMN
 )
 
@@ -179,10 +158,7 @@ def build_upsert_sql(row_count: int) -> str:
     if row_count <= 0:
         raise D1Error("financials: 0 行の upsert は組み立てない")
     placeholders = "(" + ", ".join("?" for _ in COLUMNS) + ")"
-    assignments = [
-        f"{c} = COALESCE(excluded.{c}, {TABLE}.{c})" for c in MERGE_COLUMNS
-    ]
-    assignments += [f"{c} = excluded.{c}" for c in OVERWRITE_COLUMNS]
+    assignments = [f"{c} = excluded.{c}" for c in OVERWRITE_COLUMNS]
     assignments.append(
         f"{LICENSE_COLUMN} = "
         + stricter_tag_sql(f"excluded.{LICENSE_COLUMN}", f"{TABLE}.{LICENSE_COLUMN}")
@@ -374,7 +350,6 @@ __all__ = [
     "COLUMNS",
     "GUARD_COLUMN",
     "LICENSE_COLUMN",
-    "MERGE_COLUMNS",
     "OVERWRITE_COLUMNS",
     "STOCK_ID_BATCH",
     "STOCK_ID_SQL",

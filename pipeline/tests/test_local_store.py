@@ -2,8 +2,7 @@
 
 実 PostgreSQL は不要。SQL 文・パラメータの正しさ（PK・完全置換・ライフサイクル
 出し分け・SQL インジェクション安全な %()s 形式）と、sink の data_date None 省略を検証。
-③ のマージ意味論だけは文字列一致では確かめられないので、ローカルの本物の DDL を
-sqlite に流して生成 SQL をそのまま実行する（`TestFinancialUpsertMerge`）。
+③の完全置換/開示日/licenseは本物のDDLと生成SQLをsqliteで実行して検証する。
 """
 
 from __future__ import annotations
@@ -164,32 +163,14 @@ class TestFinancialUpsert:
         assert params["disclosed_at"] == datetime(2026, 6, 10, tzinfo=JST)
 
 
-class TestBuildUpsertMergeCols:
-    """_build_upsert の merge_cols / merge_scope / license_column（③ のための例外）。"""
+class TestBuildUpsertLicense:
+    """完全置換と厳格licenseの生成を確認。"""
 
     def test_default_is_full_replacement(self):
         """指定しなければ従来どおり完全置換（①②④⑤ の仕様を一律に変えない）。"""
         sql, _ = mappers._build_upsert("t", {"pk": 1, "v": 2}, ["pk"])
         assert "v = EXCLUDED.v" in sql
         assert "COALESCE" not in sql
-
-    def test_merge_cols_coalesce_only_the_listed_columns(self):
-        sql, _ = mappers._build_upsert(
-            "t", {"pk": 1, "a": None, "b": None}, ["pk"], merge_cols=("a",)
-        )
-        assert "a = COALESCE(EXCLUDED.a, t.a)" in sql
-        assert "b = EXCLUDED.b," in sql
-
-    def test_merge_scope_limits_the_coalesce_to_the_same_scope(self):
-        sql, _ = mappers._build_upsert(
-            "t", {"pk": 1, "s": "連結", "a": None}, ["pk"],
-            merge_cols=("a",), merge_scope="s",
-        )
-        assert (
-            "a = CASE WHEN EXCLUDED.s IS NOT DISTINCT FROM t.s"
-            " THEN COALESCE(EXCLUDED.a, t.a) ELSE EXCLUDED.a END" in sql
-        )
-        assert "s = EXCLUDED.s," in sql
 
     def test_license_column_keeps_the_stricter_tag(self):
         sql, _ = mappers._build_upsert(
@@ -201,27 +182,17 @@ class TestBuildUpsertMergeCols:
     @pytest.mark.parametrize(
         "kw",
         [
-            {"merge_cols": ("nope",)},
-            {"merge_cols": ("pk",)},
-            {"merge_cols": ("a",), "merge_scope": "nope"},
             {"license_column": "nope"},
+            {"license_column": "pk"},
         ],
     )
     def test_column_that_is_not_a_non_pk_param_is_rejected(self, kw):
-        """タイポを黙って完全置換にすると、③ の NULL 潰しが列単位で再発する。"""
+        """license列のタイポを黙って無視しない。"""
         with pytest.raises(ValueError, match="nope|pk"):
             mappers._build_upsert("t", {"pk": 1, "a": None}, ["pk"], **kw)
 
-    @pytest.mark.parametrize("kw", [{"merge_scope": "a"}, {"license_column": "a"}])
-    def test_overlapping_roles_are_rejected(self, kw):
-        with pytest.raises(ValueError, match="重ねられない"):
-            mappers._build_upsert(
-                "t", {"pk": 1, "a": None}, ["pk"], merge_cols=("a",), **kw
-            )
-
-
-class TestOnlyFinancialsMerge:
-    """③ 以外は完全置換のまま（冒頭 docstring が意図された仕様として宣言している）。"""
+class TestOtherTablesReplacement:
+    """③以外も既存の完全置換を維持する。"""
 
     @pytest.mark.parametrize(
         "build",
@@ -262,18 +233,14 @@ class TestFinancialUpsertAssignments:
         assigned = re.findall(r"(?:^|, )(\w+) = ", set_clause)
         assert assigned == [c for c in params if c not in mappers.FIN_PK] + ["updated_at"]
 
-    def test_value_columns_merge(self):
-        """連結区分が PK に入ったので、衝突するのは同じ測定範囲の行だけ。
-
-        以前は PK に無く、連結区分が一致するときだけ COALESCE する CASE で
-        「単体の訂正値 + 前回の連結値」の混在を防いでいた。今は無条件に COALESCE する。
-        """
+    def test_value_columns_are_replaced_including_null(self):
         sql, _ = self._sql()
         for c in (
             "net_sales", "eps", "cf_operating", "dps_actual", "forecast_eps",
             "accounting_standard", "disclosed_at", "data_date",
         ):
-            assert f"{c} = COALESCE(EXCLUDED.{c}, financials.{c})" in sql
+            assert f"{c} = EXCLUDED.{c}" in sql
+        assert "COALESCE" not in sql
         assert "CASE WHEN EXCLUDED.consolidated" not in sql
 
     def test_not_null_provenance_is_overwritten_and_license_is_not(self):
@@ -285,12 +252,11 @@ class TestFinancialUpsertAssignments:
         assert "license_tag = CASE WHEN CASE EXCLUDED.license_tag" in sql
 
 
-# --- ③ のマージ意味論を実際に実行する ---------------------------------------
+# --- ③ の完全置換を実際に実行する -----------------------------------------
 #
 # CI に PostgreSQL は無いので、local_store/schema.py の本物の DDL を sqlite に流し、
 # financial_upsert が生成した SQL をそのまま実行する。使っている構文
-# （ON CONFLICT DO UPDATE ... WHERE / EXCLUDED / COALESCE / CASE /
-# IS NOT DISTINCT FROM）は PostgreSQL と sqlite(>=3.39) で同じ意味を持つ。
+# （ON CONFLICT DO UPDATE ... WHERE / EXCLUDED / CASE）はPostgreSQLとsqliteで同じ意味。
 # 方言差は機械的な 2 点だけ吸収する: プレースホルダ %(name)s → :name と now()。
 # 日時は同じタイムゾーンの ISO 文字列で渡すので、文字列の >= が時刻順と一致する。
 
@@ -337,12 +303,8 @@ class _FinancialsDb:
         return only
 
 
-class TestFinancialUpsertMerge:
-    def test_a_partial_correction_does_not_null_out_a_complete_row(self):
-        """edinet_daily は 120(有報) と 130(訂正有報) を同じ '本決算' に落とす。
-
-        訂正は訂正した項目だけを載せるので、完全置換だと完全な行の残りが全部 NULL になる。
-        """
+class TestFinancialUpsertReplacement:
+    def test_a_partial_correction_clears_missing_values_as_notion_does(self):
         db = _FinancialsDb()
         db.write(
             _fin(
@@ -353,8 +315,8 @@ class TestFinancialUpsertMerge:
         db.write(_fin(net_sales=1100.0, disclosed_at=_CORRECTION_AT))  # 訂正: 売上だけ
         row = db.row()
         assert row["net_sales"] == 1100.0  # 訂正が載せた値は反映される
-        assert (row["eps"], row["cf_operating"], row["dps_actual"]) == (120.5, 333.0, 60.0)
-        assert row["accounting_standard"] == "日本基準"
+        assert (row["eps"], row["cf_operating"], row["dps_actual"]) == (None, None, None)
+        assert row["accounting_standard"] is None
         assert row["disclosed_at"] == _CORRECTION_AT.isoformat()
         assert row["fetched_at"] == _CORRECTION_AT.isoformat()  # NOT NULL の来歴は上書き
 
@@ -364,7 +326,7 @@ class TestFinancialUpsertMerge:
         db.write(_fin(net_sales=1100.0, disclosed_at=_CORRECTION_AT))
         db.write(_fin(net_sales=1000.0, eps=99.0))  # 6/25 の原報告を再取得
         row = db.row()
-        assert (row["net_sales"], row["eps"]) == (1100.0, 120.5)
+        assert (row["net_sales"], row["eps"]) == (1100.0, None)
         assert row["disclosed_at"] == _CORRECTION_AT.isoformat()
 
     def test_reprocessing_the_same_disclosure_is_idempotent(self):
@@ -396,7 +358,7 @@ class TestFinancialUpsertMerge:
         )
         db.write(_fin(net_sales=1100.0, disclosed_at=_CORRECTION_AT))
         row = db.row()
-        assert (row["net_sales"], row["eps"]) == (1100.0, 50.0)  # eps は TDnet 由来のまま
+        assert (row["net_sales"], row["eps"]) == (1100.0, None)
         assert row["license_tag"] == LicenseTag.FACTUAL_CITE.value
         assert row["source"] == Source.EDINET.value  # 来歴は最後に書いた側
 
@@ -412,16 +374,16 @@ class TestFinancialUpsertMerge:
         rows = {r["consolidated"]: (r["net_sales"], r["eps"]) for r in db.rows()}
         assert rows == {"連結": (1000.0, 120.5), "単体": (50.0, None)}
 
-    def test_undetermined_consolidation_merges_with_itself(self):
+    def test_undetermined_consolidation_replaces_the_same_key(self):
         """normalize は単体のみの会社で consolidated=None を返しうる。
 
-        None 同士は同じ測定範囲とみなしてマージする（D1 の '不明' 同士と同じ）。
+        None同士は同じ不明キーを完全置換する（D1の「不明」同士と同じ）。
         """
         db = _FinancialsDb()
         db.write(_fin(consolidated=None, net_sales=1000.0, eps=120.5))
         db.write(_fin(consolidated=None, net_sales=1100.0, disclosed_at=_CORRECTION_AT))
         row = db.row()
-        assert (row["net_sales"], row["eps"]) == (1100.0, 120.5)
+        assert (row["net_sales"], row["eps"]) == (1100.0, None)
         assert row["consolidated"] == "不明"
 
 
