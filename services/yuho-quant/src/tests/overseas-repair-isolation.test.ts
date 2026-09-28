@@ -24,6 +24,7 @@ import {
   validateOverseasSaveSet,
   type OverseasFact,
   type OverseasParseStatus,
+  type OverseasProof,
 } from "../services/overseas-parser.js";
 import { getOverseasTrendByCode } from "../services/overseas-query.js";
 
@@ -129,10 +130,11 @@ async function repairSave(
   stockId: number,
   status: OverseasParseStatus | "parse_error",
   honbunFile: string | null,
-  facts: OverseasFact[]
+  facts: OverseasFact[],
+  proof: OverseasProof | undefined
 ): Promise<void> {
   try {
-    validateOverseasSaveSet(facts);
+    validateOverseasSaveSet(facts, proof);
   } catch {
     status = "parse_error";
     facts = [];
@@ -204,7 +206,7 @@ describe("隔離修復 S100OE0P: 不一致保存行 → 販売実績の正しい
     expect(r.status).toBe("ok_geo_rows");
 
     // 保存: 取込save path等価の置換
-    await repairSave(100, 1, r.status, "test-honbun.htm", r.facts);
+    await repairSave(100, 1, r.status, "test-honbun.htm", r.facts, r.proof);
     const after = await readFacts(100);
     expect(after).toEqual([
       "2022-03-31|中国|overseas|5209000000|null",
@@ -239,7 +241,7 @@ describe("隔離修復 S100OE0P: 不一致保存行 → 販売実績の正しい
     ]);
 
     // 再実行で不変 (2nd run 0 changes)
-    await repairSave(100, 1, r.status, "test-honbun.htm", r.facts);
+    await repairSave(100, 1, r.status, "test-honbun.htm", r.facts, r.proof);
     expect(await readFacts(100)).toEqual(after);
     const [doc2] = await db
       .select({ s: yuhoDocuments.overseasParseStatus })
@@ -266,7 +268,7 @@ describe("隔離修復 S100J2E7: 不一致保存行 → 品目合算の正しい
     expect(r.status).toBe("ok_geo_rows");
 
     // 保存: 取込save path等価の置換。地域行は合算値、ot/total は源泉値を保持。
-    await repairSave(200, 2, r.status, "test-honbun.htm", r.facts);
+    await repairSave(200, 2, r.status, "test-honbun.htm", r.facts, r.proof);
     const after = await readFacts(200);
     expect(after).toEqual([
       "2020-03-31|アジア|overseas|16963000000|null",
@@ -297,7 +299,7 @@ describe("隔離修復 S100J2E7: 不一致保存行 → 品目合算の正しい
     ]);
 
     // 再実行で不変 (2nd run 0 changes)
-    await repairSave(200, 2, r.status, "test-honbun.htm", r.facts);
+    await repairSave(200, 2, r.status, "test-honbun.htm", r.facts, r.proof);
     expect(await readFacts(200)).toEqual(after);
   });
 });
@@ -319,7 +321,7 @@ describe("隔離修復 S100T6Q9: 誤保存行 → 売上表なしへ (真 unsupp
     expect(r.facts).toHaveLength(0);
 
     // 保存: status更新 + facts削除 (0 inserts)
-    await repairSave(300, 3, r.status, "test-honbun.htm", r.facts);
+    await repairSave(300, 3, r.status, "test-honbun.htm", r.facts, r.proof);
     expect(await readFacts(300)).toEqual([]);
     const [doc] = await db
       .select({ s: yuhoDocuments.overseasParseStatus })
@@ -336,7 +338,7 @@ describe("隔離修復 S100T6Q9: 誤保存行 → 売上表なしへ (真 unsupp
     expect(trend!.documents[0].overseasParseStatus).toBe("no_overseas_table");
 
     // 再実行で不変
-    await repairSave(300, 3, r.status, "test-honbun.htm", r.facts);
+    await repairSave(300, 3, r.status, "test-honbun.htm", r.facts, r.proof);
     expect(await readFacts(300)).toEqual([]);
   });
 });

@@ -1407,7 +1407,7 @@ function tryGeoCols(
  */
 export function validateOverseasSaveSet(
   facts: OverseasFact[],
-  proof?: OverseasProof
+  proof: OverseasProof | undefined
 ): void {
   const keys = facts.map((f) => `${f.fiscalYearEnd} ${f.regionName}`);
   if (new Set(keys).size !== keys.length) {
@@ -1441,9 +1441,13 @@ export function validateOverseasSaveSet(
   if (!ot || ot.salesAmount === null || ot.salesAmount !== overseasSum) {
     throw new Error("保存集合の海外売上高が地域合計と一致しません。");
   }
-  const adjusted = regionSum + (proof?.reconciliationAdjustment ?? 0);
-  // proof 欠損時の fallback は表示脚数のみ (隠れ子数は不明のため厳しめ=fail-closed)。
-  const bound = proof?.roundingBound ?? roundingBoundFor(regions.length);
+  // proof は必須。facts-only 呼出し (fallback 丸め) は STOP (parse_error へ)。
+  // 3 caller (ingest/backfill-overseas/backfill-missing) は proof を渡す。
+  if (!proof) {
+    throw new Error("保存集合の proof がありません。");
+  }
+  const adjusted = regionSum + proof.reconciliationAdjustment;
+  const bound = proof.roundingBound;
   if (total && total.salesAmount !== null && total.salesAmount < adjusted - bound) {
     throw new Error("保存集合の連結売上高が地域合計を下回ります。");
   }
@@ -1661,7 +1665,8 @@ function normPeriodEnd(pe: string): string {
 
 export interface SourceFiscal {
   side: "T" | "Z";
-  date: string;
+  /** 実終期日 (ISO)。単一年号軸など日付を確定できないときは null (side のみ)。 */
+  date: string | null;
 }
 
 /**
@@ -1746,10 +1751,12 @@ export function unanimousFlatFiscal(
 
 /**
  * 値軸 fiscal: pick した値列/値行の見出しから期を確定する。
- * ranged 表題の全会一致があればそれを使い、なければ単一年号で判定する
- * (単一年==pe年→T、単一年<pe年→Z。和暦は西暦化)。複数年/0年は null。
+ * ranged 表題の全会一致があればそれを使い、なければ単一「年月」で判定する。
+ * 年月→月末日は暦で一意に定まる (2025年3月期→2025-03-31) ため印刷由来の日付
+ * として pe 照合する。年のみ (月なし) は単一年で side のみ確定し date=null
+ * (pe 日付への補完捏造はしない)。複数年/0年は null。
  * LVA5 級の2期比較表は値列頭の当連結@pe で T 確定する (表外交互表題の
- * stale Z より値列頭が強い)。
+ * stale Z より値軸が強い)。
  */
 export function axisFiscal(
   axisHeader: string,
@@ -1758,10 +1765,31 @@ export function axisFiscal(
   const ranged = unanimousFlatFiscal(axisHeader, reportPeriodEnd);
   if (ranged) return ranged;
   const w = toHalfWidthDigits(axisHeader).replace(/[\s\u3000]/g, "");
-  const years = new Set<number>();
+  const ends = new Set<string>();
   for (const m of w.matchAll(
-    /(明治|大正|昭和|平成|令和)?(\d+|元)年/g
+    /(明治|大正|昭和|平成|令和)?(\d+|元)年(\d+)月/g
   )) {
+    const y = m[2] === "元" ? 1 : Number(m[2]);
+    const western = m[1] ? ERA_START_YEAR[m[1]] + y - 1 : y;
+    const month = Number(m[3]);
+    if (!Number.isFinite(western) || month < 1 || month > 12) continue;
+    const lastDay = new Date(western, month, 0).getDate();
+    ends.add(
+      `${western}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`
+    );
+  }
+  if (ends.size === 1) {
+    const date = [...ends][0];
+    const pe = normPeriodEnd(reportPeriodEnd);
+    if (date === pe) return { side: "T", date };
+    if (date < pe) return { side: "Z", date };
+    return null;
+  }
+  if (ends.size > 1) return null;
+  // 年月なし→単一年で side のみ (date=null)。値列がその年の値であることは
+  // 確定するが日付は印刷されていない (億円シリーズ: 年列の前期値を Z 除外)。
+  const years = new Set<number>();
+  for (const m of w.matchAll(/(明治|大正|昭和|平成|令和)?(\d+|元)年/g)) {
     const y = m[2] === "元" ? 1 : Number(m[2]);
     const western = m[1] ? ERA_START_YEAR[m[1]] + y - 1 : y;
     if (Number.isFinite(western)) years.add(western);
@@ -1769,8 +1797,8 @@ export function axisFiscal(
   if (years.size !== 1) return null;
   const peY = Number(normPeriodEnd(reportPeriodEnd).slice(0, 4));
   const y = [...years][0];
-  if (y === peY) return { side: "T", date: normPeriodEnd(reportPeriodEnd) };
-  if (y < peY) return { side: "Z", date: `${y}-12-31` };
+  if (y === peY) return { side: "T", date: null };
+  if (y < peY) return { side: "Z", date: null };
   return null;
 }
 
@@ -1794,13 +1822,13 @@ export function resolveCandidateFiscal(
 }
 
 /**
- * 候補の sourceFiscal キー。継承できれば T/Z、できなければ期表示語クラス
- * (pw:T/Z/TZ/-) で group 化する。TZ 汚染ペア・同期間ペアは同 group 内の
- * キー不一致→STOP に流れる。
+ * 候補の sourceFiscal キー。継承できれば実終期日 (ISO。T/Z へ潰さない)、
+ * できなければ期表示語クラス (pw:T/Z/TZ/-) で group 化する。TZ 汚染ペア・
+ * 同期間ペアは同 group 内のキー不一致→STOP に流れる。
  */
 function sourceFiscalKey(c: PeriodPairCand, pe: string): string {
   const inh = resolveCandidateFiscal(c.axis, c.flat, c.wide, pe);
-  if (inh) return inh.side;
+  if (inh) return inh.date ?? inh.side;
   return `pw:${periodWordClassOf(c.heading, c.flat)}`;
 }
 

@@ -357,3 +357,41 @@ LEX回復 26 + round-1合計のみ是正 32 + 旧来不一致 80 (59違反を含
   proof (quantum/mode/寄与者の proof 保持。現行は切捨て最悪計算の統一包摂。
   端数 note は別ファイル配置が多く parseOverseasHtml 単体では検出不能のため
   parseOverseasData 層の設計が必要)。単一行 geocols 新構造も継続。
+
+## 13. 正式レビュー対応: 年月末日・実終期キー・proof 必須化 (同一ブランチ継続)
+
+### 13-1. axisFiscal の年月末日化 (pe 補完の廃止。msg_461e-1)
+- 単一年→pe 日付の補完捏造を廃止。単一年月→月末日 (暦で一意。うるう年対応)
+  の印刷由来日付で pe 照合。年のみは side のみ確定 (date=null)。
+- SourceFiscal.date を string|null 化。group キーは date ?? side。
+- 億円シリーズ 10件 (年列の前期値) は Z-side 除外で prior 除去を維持。
+  year-only→null の中間形では 10件が復活 (prior 保存) したため side-only で確定。
+
+### 13-2. group キーの実終期日化 (msg_461e-2 の前半)
+- sourceFiscalKey を T/Z 潰しから実終期日 (ISO) へ。R98H は 2022-03-31 /
+  2023-03-31 で分離 (従来と同値の grouping)。後半の sales-contract 次元は
+  quoted-followup のまま (TA7H 級の分離不能を確認済み)。
+
+### 13-3. 保存検証の proof 必須化 (msg_504f-4/msg_461e-4)
+- 1430 fallback (proof 欠損時の脚数 bound) を廃止し proof 欠損は throw。
+  シグネチャを (facts, proof: OverseasProof | undefined) に厳格化。
+- 3 caller (ingest/backfill-overseas/backfill-missing) は workdir で proof 渡し
+  済み (他 lane の未 commit 変更。LaneA は parser 側のみ。取込なし)。
+- テスト修正: overseas-parser.test.ts の facts-only 呼出しに proof 付与 +
+  proof-欠損-throw の回帰追加。repair-isolation.test.ts の repairSave helper
+  に proof pass-through を機械的追加 (cross-lane のため receipt で flag)。
+
+### 13-4. 3675 全母集団 rescan (BASE=HEAD vs NEW)
+- 198 diffs (§12 と同値: 年月末日+実終期キーで変動なし。億円 10 件の除外維持)。
+- oracle-255: nWin 206・loserWin 1 (G9KL artifact)・proven-wrong 0。
+- viol-59: 59/59 不変。
+
+### 13-5. 検証ゲート (最終 head)
+- `overseas-parser.test.ts`: **97 tests green** (96 + proof-欠損-throw 1)。
+- repair-isolation: 4 tests green (proof pass-through 後も維持)。
+- `services/yuho-quant`: 44 files green。repo 全体: **3064 passed**
+  (363 skipped) / 0 failed。
+- `tsc --noEmit` clean。`eslint src services --max-warnings=0` clean。
+  `render-data-audit.ts --check` OK。
+- 本番書込なし (D1/R2/Notion/job-apply 未実行。writer grant 待ち)。
+  原本 ZIP は `/tmp/overseas_laneA_raw/` (未 archive のまま正直に記録)。

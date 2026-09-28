@@ -312,46 +312,51 @@ describe("P-2D/P-hier/P-metric: 証明できる重複は正しく読む", () => 
 
 describe("保存前検証: caller 共通境界は壊れた集合を保存させない", () => {
   // 実 parse 出力への破壊注入 (negative)。正常系は各回復テストで通す。
+  // proof は必須 (facts-only は STOP)。正常系は parse 出力の proof を渡す。
   const real = () =>
-    parseOverseasHtml(fx("georows-dup-region-ambiguous-S100J2E7.html"), "2020-03-31").facts;
+    parseOverseasHtml(fx("georows-dup-region-ambiguous-S100J2E7.html"), "2020-03-31");
 
   it("正常集合は通る (J2E7 回復値・VI7V の total 欠損・空集合)", () => {
-    expect(() => validateOverseasSaveSet(real())).not.toThrow();
-    const metric = parseOverseasHtml(fx("georows-metricpair-S100VI7V.html"), "2022-12-31").facts;
-    expect(() => validateOverseasSaveSet(metric)).not.toThrow();
-    expect(() => validateOverseasSaveSet([])).not.toThrow();
+    expect(() => validateOverseasSaveSet(real().facts, real().proof)).not.toThrow();
+    const metric = parseOverseasHtml(fx("georows-metricpair-S100VI7V.html"), "2022-12-31");
+    expect(() => validateOverseasSaveSet(metric.facts, metric.proof)).not.toThrow();
+    expect(() => validateOverseasSaveSet([], undefined)).not.toThrow();
+  });
+
+  it("proof 欠損は throw (facts-only fallback は廃止)", () => {
+    expect(() => validateOverseasSaveSet(real().facts, undefined)).toThrow();
   });
 
   it("重複地域・単位混在・期末混在・連結混在は throw", () => {
-    const dup = [...real(), { ...real()[0]! }];
-    expect(() => validateOverseasSaveSet(dup)).toThrow();
-    const unitMix = real().map((f, i) =>
+    const dup = [...real().facts, { ...real().facts[0]! }];
+    expect(() => validateOverseasSaveSet(dup, real().proof)).toThrow();
+    const unitMix = real().facts.map((f, i) =>
       i === 0 ? { ...f, unitYenFactor: 1000 } : f
     );
-    expect(() => validateOverseasSaveSet(unitMix)).toThrow();
-    const fyMix = real().map((f, i) =>
+    expect(() => validateOverseasSaveSet(unitMix, real().proof)).toThrow();
+    const fyMix = real().facts.map((f, i) =>
       i === 0 ? { ...f, fiscalYearEnd: "2019-03-31" } : f
     );
-    expect(() => validateOverseasSaveSet(fyMix)).toThrow();
-    const consolMix = real().map((f, i) =>
+    expect(() => validateOverseasSaveSet(fyMix, real().proof)).toThrow();
+    const consolMix = real().facts.map((f, i) =>
       i === 0 ? { ...f, isConsolidated: false } : f
     );
-    expect(() => validateOverseasSaveSet(consolMix)).toThrow();
+    expect(() => validateOverseasSaveSet(consolMix, real().proof)).toThrow();
   });
 
   it("集計不一致・比率不一致・総額不足は throw", () => {
-    const otBad = real().map((f) =>
+    const otBad = real().facts.map((f) =>
       f.regionKind === "overseas_total" ? { ...f, salesAmount: 99999 } : f
     );
-    expect(() => validateOverseasSaveSet(otBad)).toThrow();
-    const ratioBad = real().map((f) =>
+    expect(() => validateOverseasSaveSet(otBad, real().proof)).toThrow();
+    const ratioBad = real().facts.map((f) =>
       f.regionKind === "overseas_total" ? { ...f, ratioPct: 99.9 } : f
     );
-    expect(() => validateOverseasSaveSet(ratioBad)).toThrow();
-    const totalShort = real().map((f) =>
+    expect(() => validateOverseasSaveSet(ratioBad, real().proof)).toThrow();
+    const totalShort = real().facts.map((f) =>
       f.regionKind === "total" ? { ...f, salesAmount: 100 } : f
     );
-    expect(() => validateOverseasSaveSet(totalShort)).toThrow();
+    expect(() => validateOverseasSaveSet(totalShort, real().proof)).toThrow();
   });
 });
 
@@ -990,11 +995,16 @@ describe("HOLD-gate: fiscal 確定鎖 (値軸→表内→表外)", () => {
       axisFiscal("前連結会計年度（自2019年４月１日 至2020年３月31日）", "2021-03-31")
     ).toEqual({ side: "Z", date: "2020-03-31" });
   });
-  it("axisFiscal: 単一年号で判定する (単一年==pe年→T、<pe年→Z、複数年→null)", () => {
+  it("axisFiscal: 単一年月→月末日で判定する (印刷由来。pe への補完はしない)", () => {
     expect(axisFiscal("2025年3月期 売上高", "2025-03-31")).toEqual({ side: "T", date: "2025-03-31" });
-    expect(axisFiscal("2024年3月期 売上高", "2025-03-31")?.side).toBe("Z");
+    expect(axisFiscal("2024年3月期 売上高", "2025-03-31")).toEqual({ side: "Z", date: "2024-03-31" });
     expect(axisFiscal("令和7年3月期", "2025-03-31")).toEqual({ side: "T", date: "2025-03-31" });
+    expect(axisFiscal("2024年2月期", "2025-03-31")).toEqual({ side: "Z", date: "2024-02-29" });
+    // 年のみは side のみ (date=null)。複数・年月なしは null
+    expect(axisFiscal("2025年 売上高", "2025-03-31")).toEqual({ side: "T", date: null });
+    expect(axisFiscal("2024年 売上高", "2025-03-31")).toEqual({ side: "Z", date: null });
     expect(axisFiscal("2024年 2025年 比較", "2025-03-31")).toBeNull();
+    expect(axisFiscal("2024年3月期 2025年3月期", "2025-03-31")).toBeNull();
     expect(axisFiscal("合計", "2025-03-31")).toBeNull();
   });
   it("resolveCandidateFiscal: 値軸→表内→表外の順に確定する", () => {
