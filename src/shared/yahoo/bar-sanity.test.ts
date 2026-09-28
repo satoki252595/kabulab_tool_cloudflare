@@ -187,14 +187,33 @@ describe("assertResponsePriceCoherent — 同一応答の meta 価格との整�
 
   it.each([
     ["最新有効終値なし", { latestUsedClose: null, latestVolume: 0, metaPrice: 3700 }],
-    ["meta 価格なし", { latestUsedClose: 16280000512, latestVolume: 0, metaPrice: null }],
-    ["終値が非正", { latestUsedClose: 0, latestVolume: 0, metaPrice: 3700 }],
-    ["meta が非正", { latestUsedClose: 16280000512, latestVolume: 0, metaPrice: -1 }],
-    ["終値が非有限", { latestUsedClose: Number.NaN, latestVolume: 0, metaPrice: 3700 }],
-  ])("%s は判定不能として通す（拒否の根拠がない）", (_l, over) => {
+    ["meta 価格なし", { latestUsedClose: 3700, latestVolume: 0, metaPrice: null }],
+    ["最新有効終値 undefined", { latestUsedClose: undefined, latestVolume: 0, metaPrice: 3700 }],
+  ])("%s は判定不能として通す（欠損の扱いは日次 gate）", (_l, over) => {
     expect(() =>
       assertResponsePriceCoherent({ symbol: "1909", ...over }),
     ).not.toThrow();
+  });
+
+  it.each([
+    ["終値が 0", { latestUsedClose: 0, latestVolume: 0, metaPrice: 3700 }],
+    ["終値が負", { latestUsedClose: -5, latestVolume: 0, metaPrice: 3700 }],
+    ["終値が非有限", { latestUsedClose: Number.NaN, latestVolume: 0, metaPrice: 3700 }],
+    ["meta が非正", { latestUsedClose: 3700, latestVolume: 0, metaPrice: -1 }],
+    ["meta が非有限", { latestUsedClose: 3700, latestVolume: 0, metaPrice: Number.NaN }],
+  ])("%s は実数値の無効として応答全体を拒否する", (_l, over) => {
+    expect(() =>
+      assertResponsePriceCoherent({ symbol: "1909", ...over }),
+    ).toThrow(/応答全体を採用しません/);
+  });
+
+  it.each([
+    ["終値なし + meta が非有限", { latestUsedClose: null, latestVolume: 0, metaPrice: Number.NaN }],
+    ["終値が負 + meta なし", { latestUsedClose: -5, latestVolume: 0, metaPrice: null }],
+  ])("%s は片側 missing でも逆側の実在 invalid を拒否する", (_l, over) => {
+    expect(() =>
+      assertResponsePriceCoherent({ symbol: "1909", ...over }),
+    ).toThrow(/応答全体を採用しません/);
   });
 });
 

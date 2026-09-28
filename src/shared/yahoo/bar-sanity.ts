@@ -84,12 +84,12 @@ export type SanitizeResult = {
  */
 export interface ResponseCoherenceInput {
   symbol: string;
-  /** 最新の有効な使用終値。null は判定不能 (呼び出し側が別 gate で扱う)。 */
-  latestUsedClose: number | null;
+  /** 最新の有効な使用終値。欠落 (null/undefined) は判定不能 (日次 gate に委ねる)。 */
+  latestUsedClose: number | null | undefined;
   /** そのバーの出来高。null/0 と価格乖離の組合せが事故の形。 */
   latestVolume: number | null;
-  /** 同一応答の meta.regularMarketPrice。null は判定不能。 */
-  metaPrice: number | null;
+  /** 同一応答の meta.regularMarketPrice。欠落 (null/undefined) は判定不能。 */
+  metaPrice: number | null | undefined;
 }
 
 /**
@@ -105,21 +105,42 @@ export interface ResponseCoherenceInput {
  * - 全履歴と meta の比較 (長期高騰を誤って弾くため最新 1 本のみ見る)
  * - 巨大 split イベント単独 (フロントは splits 未使用。F-09)
  *
- * 判定不能 (終値/meta の欠落・非正・非有限) は通す。ここで落とすのは
- * 「乖離の根拠がある」場合だけで、欠損の扱いは日次 gate に委ねる。
+ * 各側の実在 invalid (非正・非有限) は、逆側の欠落有無に関わらず先に
+ * 独立検査して信頼境界で拒否する。片側 missing の早期 return より先に
+ * 検査し、壊れた実値を欠落と混ぜて通さない (F-01 再発防止の穴)。
+ * 両側とも有効な実数でなければ、片側欠落は比較不能として通す。
+ * 欠損の扱いは日次 gate に委ねる。
  */
 export function assertResponsePriceCoherent(
   input: ResponseCoherenceInput
 ): void {
   const { symbol, latestUsedClose, latestVolume, metaPrice } = input;
   if (
-    latestUsedClose === null ||
-    !Number.isFinite(latestUsedClose) ||
-    latestUsedClose <= 0
+    latestUsedClose !== null &&
+    latestUsedClose !== undefined &&
+    (!Number.isFinite(latestUsedClose) || latestUsedClose <= 0)
   ) {
-    return;
+    throw new Error(
+      `${symbol}: 最新有効終値が無効 (${String(latestUsedClose)}) のため` +
+        `応答全体を採用しません。`
+    );
   }
-  if (metaPrice === null || !Number.isFinite(metaPrice) || metaPrice <= 0) {
+  if (
+    metaPrice !== null &&
+    metaPrice !== undefined &&
+    (!Number.isFinite(metaPrice) || metaPrice <= 0)
+  ) {
+    throw new Error(
+      `${symbol}: meta 価格が無効 (${String(metaPrice)}) のため` +
+        `応答全体を採用しません。`
+    );
+  }
+  if (
+    latestUsedClose === null ||
+    latestUsedClose === undefined ||
+    metaPrice === null ||
+    metaPrice === undefined
+  ) {
     return;
   }
   const ratio = latestUsedClose / metaPrice;

@@ -706,13 +706,17 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
     if (utcMinutes < 390 || utcMinutes >= 1260) {
       throw new Error("株式専用同期は東証15:30 JST終了後から翌06:00 JST基準までに実行してください");
     }
-    // 日本祝日カレンダーを推測しない。実日足がUTC対象日でなければ全書込を止める。
+    // 日本祝日カレンダーを推測しない。対象日の実日足 (日付 + 実終値) が
+    // なければ全書込を止める。日付だけの gate では対象日の fresh null bar が
+    // 通過し、古い終値で計算した指標を対象日付で保存してしまう (F-01)。
     const session = await fetchChart("^N225", "1mo");
-    const actualDate = session.ohlcv.at(-1)?.date;
-    if (actualDate !== targetDate) {
+    const sessionLatest = session.ohlcv.at(-1);
+    const sessionFresh = checkFreshClose(sessionLatest, targetDate);
+    if (!sessionFresh.ok) {
+      const sessionUsedClose = sessionLatest?.adj ?? sessionLatest?.close ?? null;
       throw new Error(
         `株式同期の対象 ${targetDate} の日足を確認できません ` +
-        `(日経225実日足=${actualDate === undefined ? "未取得" : actualDate})。休場または取得遅延のため書込みを止めます。`
+        `(日経225実日足=${sessionLatest?.date ?? "未取得"}・実終値=${sessionUsedClose ?? "未取得"})。休場または取得遅延のため書込みを止めます。`
       );
     }
   }
@@ -1120,6 +1124,19 @@ async function buildSnapshot(
   // 1 回の Chart(5y) + QuoteSummary で全指標を賄う
   const raw = await fetchStockRawData(code, "5y");
 
+  // -- 6mo スライス (swing 用指標の入力。fresh gate の対象もここ) --
+  const ohlcv6mo = raw.ohlcv.slice(-130);
+  if (expectedDate !== undefined) {
+    // 日付一致だけでなく対象日の実終値 (adj ?? close) も要求する。
+    // 対象日の fresh null bar を日付だけで合格にすると、古い終値で計算した
+    // 指標を対象日付で保存してしまう (F-01)。正当な欠損は未取得扱いにし、
+    // 値の補完はしない (ルール2)。RSI を含む全 technical 計算の前に落とす。
+    const fresh = checkFreshClose(ohlcv6mo.at(-1), expectedDate);
+    if (!fresh.ok) {
+      throw new Error(`${code}: 対象 ${expectedDate} の実日足が未取得です。古い日の指標を書き直しません。`);
+    }
+  }
+
   // -- RSI 時系列 (5y 全量) → percentile —— adjclose ベースで分割歪みを除去 --
   //
   // ここで null を落とすのは、RSI が「欠損なしの終値列」を要求するため
@@ -1142,17 +1159,7 @@ async function buildSnapshot(
   const blueChip = evaluateBlueChip(annualSeries, raw.operatingMarginTtm);
 
   // -- 6mo スライス → swing 用指標 —— adjclose ベースで分割歪みを除去 --
-  const ohlcv6mo = raw.ohlcv.slice(-130);
-  if (expectedDate !== undefined) {
-    // 日付一致だけでなく対象日の実終値 (adj ?? close) も要求する。
-    // 対象日の fresh null bar を日付だけで合格にすると、古い終値で計算した
-    // 指標を対象日付で保存してしまう (F-01)。正当な欠損は未取得扱いにし、
-    // 値の補完はしない (ルール2)。
-    const fresh = checkFreshClose(ohlcv6mo.at(-1), expectedDate);
-    if (!fresh.ok) {
-      throw new Error(`${code}: 対象 ${expectedDate} の実日足が未取得です。古い日の指標を書き直しません。`);
-    }
-  }
+  // (ohlcv6mo と fresh gate は fetch 直後へ移動済み。全 technical 計算の前)
   const closes6mo = ohlcv6mo.map((r) => r.adj ?? r.close);
 
   const sma5Val = sma(closes6mo, 5);

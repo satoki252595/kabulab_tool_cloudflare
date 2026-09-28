@@ -212,11 +212,23 @@ describe("fetchDaily", () => {
       chartCoherent({
         closes: [1000, 30000],
         volumes: [10000, 500000],
-        metaPrice: 30000,
+        metaPrice: 1000,
       })
     );
     const { bars } = await fetchDaily("7203.T");
     expect(bars).toHaveLength(2);
+  });
+
+  it("最新 close が負 (-5) の応答全体を拒否する (実数値の無効は欠落と別扱い)", async () => {
+    useProxy();
+    stubChart(
+      chartCoherent({
+        closes: [1000, -5],
+        volumes: [10000, 500000],
+        metaPrice: 1000,
+      })
+    );
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/応答全体を採用しません/);
   });
 });
 
