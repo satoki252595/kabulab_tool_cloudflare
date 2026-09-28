@@ -167,6 +167,15 @@ pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c
     activeEquityCondition()
   );
 
+  // 通過総数は表示 LIMIT とは別に同一 where で数える (F-07)。
+  // `rows.length` を総数に見せると LIMIT 200 が頭打ちに見えない。
+  const [{ matchedCount }] = await db
+    .select({ matchedCount: sql<number>`count(*)` })
+    .from(stockIndicators)
+    // INNER JOIN にしない理由は whereCondition の上のコメント (結合順の固定)。
+    .crossJoin(stocks)
+    .where(whereCondition);
+
   const rows = await db
     .select({
       code: stocks.code,
@@ -208,7 +217,9 @@ pagesRoute.get("/screening", zValidator("query", screeningQuerySchema), async (c
     trendOk: direction === "long" ? r.trendOkLong : r.trendOkShort,
   }));
 
-  return c.html(screeningPage({ direction, rows: mapped, totalCount: rows.length }));
+  return c.html(
+    screeningPage({ direction, rows: mapped, totalCount: matchedCount ?? 0 })
+  );
 });
 
 // -----------------------------------------------------------------------------
@@ -254,22 +265,26 @@ pagesRoute.get("/signals", zValidator("query", signalsQuerySchema), async (c) =>
     .crossJoin(stocks);
 
   const joinStocks = eq(stocks.id, entrySignals.stockId);
-  const rows =
+  const signalsWhere =
     pattern === "all"
-      ? await base
-          .where(and(activeEquityCondition(), joinStocks))
-          .orderBy(desc(entrySignals.signalStrength))
-          .limit(200)
-      : await base
-          .where(
-            and(
-              activeEquityCondition(),
-              joinStocks,
-              eq(entrySignals.pattern, pattern)
-            )
-          )
-          .orderBy(desc(entrySignals.signalStrength))
-          .limit(200);
+      ? and(activeEquityCondition(), joinStocks)
+      : and(
+          activeEquityCondition(),
+          joinStocks,
+          eq(entrySignals.pattern, pattern)
+        );
+
+  // シグナル総数は表示 LIMIT とは別に同一 where で数える (F-07 同型)。
+  const [{ matchedCount }] = await db
+    .select({ matchedCount: sql<number>`count(*)` })
+    .from(entrySignals)
+    .crossJoin(stocks)
+    .where(signalsWhere);
+
+  const rows = await base
+    .where(signalsWhere)
+    .orderBy(desc(entrySignals.signalStrength))
+    .limit(200);
 
   const mapped = rows.map((r) => ({
     code: r.code,
@@ -286,7 +301,9 @@ pagesRoute.get("/signals", zValidator("query", signalsQuerySchema), async (c) =>
     note: r.note ?? "",
   }));
 
-  return c.html(signalsPage({ pattern, rows: mapped, totalCount: rows.length }));
+  return c.html(
+    signalsPage({ pattern, rows: mapped, totalCount: matchedCount ?? 0 })
+  );
 });
 
 // -----------------------------------------------------------------------------
