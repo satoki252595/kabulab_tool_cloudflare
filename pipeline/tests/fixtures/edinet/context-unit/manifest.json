@@ -1,0 +1,61 @@
+[
+  {
+    "file": "5918.tsv",
+    "datatype": "csv",
+    "code": "5918",
+    "page_id": "38fd74ff-84cd-811a-9ba2-c27441a710b1",
+    "raw_sha256": "06b965075a2140b557d4fe41d0a70353dc6dbd919a5fb646260656af0777682b",
+    "raw_url": "https://api.edinet-fsa.go.jp/api/v2/documents/S100P04Q?type=5",
+    "fiscal_period_end": "2022-06-30",
+    "disclosure_type": "1Q",
+    "accounting_standard": "日本基準",
+    "expected": {
+      "net_sales": 4422000000
+    }
+  },
+  {
+    "file": "6269.tsv",
+    "datatype": "csv",
+    "code": "6269",
+    "page_id": "38fd74ff-84cd-8161-9d54-d33eccf20e59",
+    "raw_sha256": "a7a7c342ee21fbecc6b03476b27169951252b1f59f59e7c330c7f5af57531063",
+    "raw_url": "https://api.edinet-fsa.go.jp/api/v2/documents/S100OZB8?type=5",
+    "fiscal_period_end": "2022-06-30",
+    "disclosure_type": "2Q",
+    "accounting_standard": "IFRS",
+    "expected": {
+      "net_sales": 187951000000,
+      "eps": 36.71
+    }
+  },
+  {
+    "file": "6269-ratio.tsv",
+    "datatype": "csv",
+    "code": "6269",
+    "page_id": "393d74ff-84cd-81f9-9e0e-eee610ad4617",
+    "raw_sha256": "84dc5abdb18f3e4281b5aeffe8950fb9b2878bf87fc8b95c3a1d0c82f30963da",
+    "raw_url": "https://api.edinet-fsa.go.jp/api/v2/documents/S100T4HC?type=5",
+    "fiscal_period_end": "2023-12-31",
+    "disclosure_type": "本決算",
+    "accounting_standard": "IFRS",
+    "expected": {
+      "equity_ratio_pct": 25.5,
+      "bps": 2061.45
+    }
+  },
+  {
+    "file": "7951.tsv",
+    "datatype": "csv",
+    "code": "7951",
+    "page_id": "38fd74ff-84cd-81b4-aa66-d0c4843cdb9a",
+    "raw_sha256": "0f6b5f202ef792d2c4355b95fe985de5115527c32853af7c4cb9e7b11c276595",
+    "raw_url": "https://api.edinet-fsa.go.jp/api/v2/documents/S100OXDE?type=5",
+    "fiscal_period_end": "2022-06-30",
+    "disclosure_type": "1Q",
+    "accounting_standard": "IFRS",
+    "expected": {
+      "equity_ratio_pct": 74.4,
+      "bps": 2499.74
+    }
+  }
+]

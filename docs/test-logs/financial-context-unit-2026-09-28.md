@@ -28,13 +28,16 @@ TDnetの本表には見出しと異なる未来の期間を持つ原本もある
 
 ## 回帰検証
 
-`pipeline/tests/fixtures/transform/context-unit/` に実原本7件の数値・DEI・context/unit
-抜粋と原公開URL/SHA256を保存した。iXBRLのファイル境界を維持する。
+`pipeline/tests/fixtures/edinet/context-unit/` にcommercial-okのEDINET実原本4件の
+抜粋・原公開URL/SHA256を保存した。TDnet原本3件は公開repoの既存ポリシーを維持し、
+ローカルのignored ZIPだけで検証する。取得ポインタとSHA照合cache複製スクリプトを保存し、
+未取得のCIではこの3件だけをskipする。初回CIで禁止fixtureの追跡を検出し、HEADから除去した。
 当初6件の回帰は修正前parserで6件すべて失敗し、修正後は合格。
 未知unit、隠れたdimension、複数値、使えない翌期値を当期で埋めないこと、共有unit不一致、
 cache欠損/SHA不一致で停止することも検証する。市場数値を生成したfixtureは使用しない。
+年間配当・予想年度・共有resourcesの構造回帰は原本の未取得にかかわらずCIで実行する。
 
-- `nix develop -c uv run --project pipeline pytest pipeline/tests -q`: **1,256 pass / 55 skip**（既存の未取得原本fixture）。
+- `nix develop -c uv run --project pipeline pytest pipeline/tests -o addopts='-rs' -q`: **1,261 pass / 55 skip**（既存の未取得原本fixture）。TDnet local-only原本を除いたCI同等の関連回帰は **43 pass / 3 skip**。
 - `nix develop -c uv run --project pipeline ruff check pipeline`: 合格。
 - converterとnormalizer両方を監査fingerprintに含める。今回のparser SHA256は
   `d82afc2d0ff05eb257b0f9c75383bb27ce562be8c5052b873f5067d25471087e`。
@@ -63,6 +66,16 @@ cache欠損/SHA不一致で停止することも検証する。市場数値を�
 反映はPRのCI→Notion更新/再読receipt→既存行を含む実隔離D1の差分・冪等検証→source D1の順。
 旧archive receiptは退避先のリンク証拠にのみ使い、数値は必ず今回のparser原本と
 新鮮な正本再読で照合する。古いparserの数値を新しい検証済み値として流用しない。
+
+## 全件反映のAPI削減
+
+各PATCH後の個別GETを既存50コードまとめqueryによる新鮮な再読へ置換した。
+PATCH応答を再読証拠として扱わず、batchの全対象数値・旧退避ページ・新キー一意性が
+一致してからarchive/receiptを許す。不一致時はどの旧ページも退避せず、receiptを出さない。
+途中更新済みの値は次回の新鮮queryで再確認して再開できる。未変更batchは最初の
+新鮮queryを使い、再PATCH/個別GETは行わない。
+2.5rpsを維持したまま、再読約3万件を数百queryへ減らせる。約7〜8時間のAPI待ちを
+約4時間へ短縮する計画であり、実所要・件数は全件完了後に固定する。
 
 ## 公開仕様
 

@@ -31,6 +31,15 @@ ALLOWED: frozenset[str] = frozenset(
         # EDINET は commercial-ok（公共データ利用規約準拠 §2.1）
         "pipeline/tests/fixtures/edinet/Edinetcode.zip",
         "pipeline/tests/fixtures/edinet/documents_error_401.json",
+        # EDINET原本の数値・context・unit抜粋（commercial-ok）。TDnetは
+        # 公開URL/SHA等の取得ポインタだけで、ZIP・値ファクトは追跡しない。
+        "pipeline/tests/fixtures/edinet/context-unit/5918.tsv",
+        "pipeline/tests/fixtures/edinet/context-unit/6269.tsv",
+        "pipeline/tests/fixtures/edinet/context-unit/6269-ratio.tsv",
+        "pipeline/tests/fixtures/edinet/context-unit/7951.tsv",
+        "pipeline/tests/fixtures/edinet/context-unit/manifest.json",
+        "pipeline/tests/fixtures/edinet/context-unit/tdnet.source.txt",
+        "pipeline/tests/fixtures/edinet/context-unit/README.md",
         # 銘柄コード契約の言語横断テストベクタ（kabulab-cf と同一バイト列で共有）。
         # 取得物ではなく手書きの契約定義で、収録しているのは境界値のコード文字列
         # （大半は "07203" / "A130" / "1234567" のような合成値）と説明文だけ。
@@ -132,6 +141,7 @@ SKIP_ALLOWED: frozenset[str] = frozenset(
         "tdnet/tanshin_xbrl_2751_20260610.zip",
         "tdnet/yanoshin_list_20260610.json",
         "tdnet/yanoshin_list_recent.json",
+        "tdnet/context-unit/{…}.zip",
     }
 )
 

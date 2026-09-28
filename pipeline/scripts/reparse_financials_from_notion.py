@@ -9,7 +9,7 @@ import json
 import re
 import time
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from datetime import date, datetime
@@ -243,7 +243,7 @@ def reparse_cached(source_journal: Path, journal: Path, cache_dir: Path):
 
 def apply_reparsed(
     client: NotionClient, database_id: str, page: dict, record: FinancialSummaryRecord,
-    *, targets: list[dict] | None = None,
+    *, targets: list[dict] | None = None, defer_readback: bool = False,
 ) -> tuple[str, dict]:
     """開示日時ガードで新しい原本を守る。修正先の再読検証後だけ旧キーをarchiveする。"""
     if targets is None:
@@ -258,9 +258,9 @@ def apply_reparsed(
         raise ValueError(f"{record.code}: 修正先の財務キーが重複しています")
     target = targets[0] if targets else page
     allowed = financial_overwrite_allowed(target, record)
-    if allowed:
-        client.update_page(target["id"], financial_summary_properties(record))
-    saved = client.get_page(target["id"])
+    saved = client.update_page(target["id"], financial_summary_properties(record)) if allowed else target
+    if not defer_readback:
+        saved = client.get_page(target["id"])
     actual = _page_record(saved)
     if allowed and actual != record:
         raise ValueError(f"{record.code}: Notion再読値が原本再解析値と一致しません")
@@ -272,7 +272,7 @@ def apply_reparsed(
         or financial_overwrite_allowed(saved, record)
     ):
         raise ValueError(f"{record.code}: 新しい開示を保持したことを確認できません")
-    if target["id"] != page["id"]:
+    if not defer_readback and target["id"] != page["id"]:
         client.archive_page(page["id"])
     return ("reparsed" if allowed else "newer_disclosure_preserved"), saved
 
@@ -467,6 +467,7 @@ def apply_journal(journal: Path, receipts: Path | None = None):
             by_key = defaultdict(list)
             for page in pages:
                 by_key[_financial_key(_page_record(page))].append(page)
+            pending = []
             for code in batch_codes:
                 for item in grouped[code]:
                     record = _record_from_dict(item["new"])
@@ -480,7 +481,6 @@ def apply_journal(journal: Path, receipts: Path | None = None):
                         if page is not None and page["id"] != saved["id"]:
                             if _record_dict(_page_record(page)) != item["old"]:
                                 raise ValueError(f"{code}: 監査後に旧正本が変わりました")
-                            client.archive_page(page["id"])
                     elif (page is None and targets and item["page_id"] in previous
                           and previous[item["page_id"]].get("raw_sha256") == item["raw_sha256"]
                           and previous[item["page_id"]]["target_page_id"] == targets[0]["id"]
@@ -493,7 +493,7 @@ def apply_journal(journal: Path, receipts: Path | None = None):
                         if page is None or _record_dict(_page_record(page)) != item["old"]:
                             raise ValueError(f"{code}: 監査後に正本が変わりました。再監査してください")
                         action, saved = apply_reparsed(
-                            client, database_id, page, record, targets=targets
+                            client, database_id, page, record, targets=targets, defer_readback=True
                         )
                     if page is not None:
                         old_key = _financial_key(_page_record(page))
@@ -501,14 +501,36 @@ def apply_journal(journal: Path, receipts: Path | None = None):
                         by_id.pop(page["id"], None)
                     by_id[saved["id"]] = saved
                     by_key[key] = [saved]
-                    receipt = {
-                        "page_id": item["page_id"], "target_page_id": saved["id"],
-                        "parser_sha256": PARSER_SHA256, "raw_sha256": item["raw_sha256"],
-                        "action": action, "record": _record_dict(_page_record(saved)),
-                    }
-                    output.write(_json(receipt) + "\n")
-                    output.flush()
-                    print(_json({"page_id": item["page_id"], "action": action}), flush=True)
+                    pending.append((item, saved, action, page))
+            # PATCH応答だけを再読証拠にしない。変更/退避があるbatchは必ず新鮮な
+            # まとめqueryを再発行し、全対象と旧ページの一致後にだけ退避/receiptを許す。
+            if any(action == "reparsed" or (page and page["id"] != saved["id"])
+                   for _, saved, action, page in pending):
+                fresh = {p["id"]: p for p in _live_pages(client, database_id, batch_codes)}
+            else:
+                fresh = by_id  # 未変更batchは最初の新鮮queryがそのまま再読証拠。
+            fresh_keys = Counter(_financial_key(_page_record(p)) for p in fresh.values())
+            for item, saved, action, page in pending:
+                actual = fresh.get(saved["id"])
+                if actual is None or _record_dict(_page_record(actual)) != _record_dict(_page_record(saved)):
+                    raise ValueError(f"{item['old']['code']}: Notionまとめ再読値が原本再解析値と一致しません")
+                if fresh_keys[_financial_key(_page_record(actual))] != 1:
+                    raise ValueError(f"{item['old']['code']}: 再読した新正本キーが重複しています")
+                if page and page["id"] != saved["id"]:
+                    old = fresh.get(page["id"])
+                    if old is None or _record_dict(_page_record(old)) != item["old"]:
+                        raise ValueError(f"{item['old']['code']}: 退避前の旧正本が変わりました")
+            for item, saved, action, page in pending:
+                if page and page["id"] != saved["id"]:
+                    client.archive_page(page["id"])
+                receipt = {
+                    "page_id": item["page_id"], "target_page_id": saved["id"],
+                    "parser_sha256": PARSER_SHA256, "raw_sha256": item["raw_sha256"],
+                    "action": action, "record": _record_dict(_page_record(fresh[saved["id"]])),
+                }
+                output.write(_json(receipt) + "\n")
+                output.flush()
+                print(_json({"page_id": item["page_id"], "action": action}), flush=True)
 
 
 def _repair_sql() -> str:

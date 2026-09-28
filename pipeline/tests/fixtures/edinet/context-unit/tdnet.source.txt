@@ -1,0 +1,35 @@
+[
+  {
+    "file": "8154-document-set",
+    "datatype": "tdnet_xbrl",
+    "code": "8154",
+    "page_id": "3bbd74ff-84cd-8192-b72d-e39575174899",
+    "raw_sha256": "e85427d72ef56e91d8d9521eb9437c884a0b6880d1e5e4f4fc5896e852fb6621",
+    "raw_url": "https://www.release.tdnet.info/inbs/081220260813519369.zip",
+    "fiscal_period_end": "2026-06-30",
+    "disclosure_type": "1Q",
+    "accounting_standard": "日本基準"
+  },
+  {
+    "file": "7699-document-set",
+    "datatype": "tdnet_xbrl",
+    "code": "7699",
+    "page_id": "3bcd74ff-84cd-8125-8584-e965e9a31c71",
+    "raw_sha256": "7650a5ba2a6123e041620c1a27e31da953590dd2f1b94f36a32794a71e8bb119",
+    "raw_url": "https://www.release.tdnet.info/inbs/081220260810516587.zip",
+    "fiscal_period_end": "2026-06-30",
+    "disclosure_type": "1Q",
+    "accounting_standard": null
+  },
+  {
+    "file": "3463-document-set",
+    "datatype": "tdnet_xbrl",
+    "code": "3463",
+    "page_id": "3ded74ff-84cd-81db-938c-f6ee2df818e7",
+    "raw_sha256": "6b69fa4fdbe2a11d24f2c647154c731172f7f1a06a89b6862c58a9f10af61163",
+    "raw_url": "https://www.release.tdnet.info/inbs/081220260917537640.zip",
+    "fiscal_period_end": "2026-07-31",
+    "disclosure_type": "本決算",
+    "accounting_standard": "日本基準"
+  }
+]
