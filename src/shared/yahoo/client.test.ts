@@ -363,7 +363,7 @@ describe("fetchChart — 応答整合 guard (F-01 1909 再発防止)", () => {
       chartNormal({
         closes: [1000, 30000],
         volumes: [10000, 500000],
-        metaPrice: 30000,
+        metaPrice: 1000,
       })
     );
     const res = await fetchChart("7203", "5y");

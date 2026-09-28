@@ -9,7 +9,9 @@ moneyflow はC担当 (Yahoo quoteSummary 断面は §0 役割分担のとおり 
 
 - branch: `audit/market-2026-09-28` (基点 `origin/main` = `18d5939` #145、
   追補時点で #147 `c84b6a4`・#148 `bde6b03`・#136 `5b792e9` を通常 merge 済み。
-  #136 の `src/cron/daily.ts` 差分 (正本年次 reader) は保持)。
+  #136 の `src/cron/daily.ts` 差分 (正本年次 reader) は保持。
+  review 修正時に #150 `5b54a74` を通常 merge (海外 parser + 監査報告。
+  #136 reader・#150 code とも保持)。
 - 観測窓: 2026-09-28 17:00–19:30 JST (初回) + 同日 19:00–19:25 JST (追補:
   D1 SELECT のべ 42 文 (F-02 preview 9 文を内訳追加のため 3 回・
   例外断面 4 文・cap 分布 2 文・2180 signals 2 文・RSI 3 銘柄 2 文・
@@ -18,8 +20,12 @@ moneyflow はC担当 (Yahoo quoteSummary 断面は §0 役割分担のとおり 
   いずれも read-only、rows_written=0)。D1/R2/公開面の読取は同日 17:13 UTC
   (stock-sync) および 08:00 UTC (vwap-ingest daily-intra) の当日 run の反映前。
   R2 の最終更新は 9/25、D1 市場系の最終更新は 9/26 10:55 UTC (9/25 取引分)。
-- 最新確定営業日: **2026-09-25 (金)**。9/21–9/23 は休場
+- 最新確定営業日: **2026-09-28(月)**。保存系列の最新日は2026-09-25で、9/28営業日分は未反映。9/21–9/23 は休場
   (敬老の日・国民の休日・秋分の日)、9/26–9/27 は週末。
+  保存系列の最新も 9/25 (D1 市場系・R2 daily/intra とも)。
+  9/28 営業日分は未反映: 当日 run (9/28 17:13 UTC stock-sync・
+  08:00 UTC vwap-ingest) の予定時刻と実成功を混同しない。
+  本監査の snapshot 時点ではいずれも反映前である。
 - 境界: D1/R2 は SELECT / List / Get のみ。
   取込・ranking・master apply・新 DB/endpoint の起動なし。新規 install なし。
   本番 D1/R2/Notion への write・archive・ingest・dry-run・ranking refresh・
@@ -44,7 +50,7 @@ moneyflow はC担当 (Yahoo quoteSummary 断面は §0 役割分担のとおり 
 | `core_stocks` active+equity / 全体 | 3,700 / 3,810 | — | 非 active 110 (delist 等) |
 | `swing_daily_ohlcv` | 361,284 行 / 3,756 銘柄 | 2026-09-25 | 9/25: 3,698 行 |
 | `swing_stock_indicators` | 3,756 行 | 9/25 が 3,698 行 | 非 9/25 は 58 行 = 非 active 凍結 56 + active 2 (9914: 9/18・7426: 9/15)。ただし 9/25 行にも破損値あり (1909・2180。F-01) |
-| `rsi_percentile` | 3,756 行 | computed 9/26 10:55 UTC | 1909 は bars=40 の破損 RSI。2180 は bars=1217 だが corrupt-tail 由来の沈黙型 (§3.3 F-01) |
+| `rsi_percentile` | 3,756 行 | computed 9/26 10:55 UTC | 1909 は bars=40 の破損 RSI。2180 は bars=1217 だが RSI 破損由来は未証明 (§3.3 F-01) |
 | `p_momentum` | 3,700 行 | as_of 9/25 が 3,695 行 | 行数=active で sweep 正常。ただし as_of 例外 5 件 (9914: 9/18・1909: 9/14・2180/7426: 9/15・3480: 9/01)。「latest 全件」は撤回 |
 | `core_stock_financials` | 3,756 行 | data 9/25 | market_cap 分布: 1000億+ 963・1000億未満 2763・10億未満 19・NULL 5・100万未満 6 (内 active 破損 3: 1909/2180/7426 + 非 active 凍結 3)。F-15 |
 | `swing_market_context` | 最新 9/26 (B) | run 日付キー | §3-6 |
@@ -135,10 +141,11 @@ RSI14/MACD/Fib・screening・全 7 pattern・momentum 行)。
   9/16 以降 null、偽 split 1:1440960、meta 1309 は正常。D1 は
   sma_5=1886167168・momentum as_of 9/15 bars=85 が破損値、公開詳細ページに
   `SMA5 1,886,167,168` と表示中 (実測)。rsi 行は bars=1217・rsi10=56.2 と
-  一見正常だが、9/26 run の応答 tail (7/17–9/15) が破損水準のため破損由来
-  (平坦な破損 tail 上の RSI は 50 付近に張り付く。沈黙型の汚染)。
-  なお 9/26 応答は 1217 本 (full) だったが現応答は 47 本に切詰められており、
-  Yahoo 側の 2180 データは進行性に劣化している。
+  一見正常。保存 RSI 使用本数 1217 に対し現在 raw は 47 本だが、9/26 run
+  時の応答 raw artifact がなく過去 raw 全文比較は未確認のため、RSI 破損由来は
+  未証明 (9/26 応答 full 1217・進行性劣化・corrupt-tail 由来の断定はしない)。
+  D1 の giant SMA (sma_5=1886167168)・p_momentum 保存 closes の bad
+  (as_of 9/15・bars=85) は確認済み (保存値の直接確認)。
   sanitizeBars は 10 倍 jump のみ棄却し持続的異常レベルは素通りする
   (実関数 replay で rejected=[] を確認。§14)。
   sector 汚染はなし (pct≈0)。
@@ -235,8 +242,8 @@ RSI14/MACD/Fib・screening・全 7 pattern・momentum 行)。
   (syumatsu リンク 0 件・tvdivq 集計のみ)。実関数 replay
   (`latestMarginPdfUrl()` に保存 HTML を stub 経由で投入) で
   `margin pdf link not found` の throw を確認 (§10-3・§15)。
-  05.html は 19:12 JST の再取得でも同一 SHA (cd27…。02–04 の同一 SHA b125…
-  を含め §15) で条件が持続し、保存 capture が 05.html 自身であることも確定した。
+  05.html は 19:12 JST の再取得でも同一 SHA (full SHA は §15) で条件が
+  持続し、保存 capture が 05.html 自身であることも確定した。
   **次回 margin run (土曜 09:00 UTC) が同状況なら同エラーで失敗する**
   (将来の JPX 側変化は断定しない)。R2 既存週は保全。
   外部 2 リポジトリはキー直接列挙のため現週分は読めるが、将来週の欠落が
@@ -460,9 +467,11 @@ SHA 一致 (再掲 §15) で変化なし。
 
 ### 優先対応 3 件 (親 review・merge 後の follow-up)
 
-1. **破損値の隔離と表示止め (F-01/F-15)**: 1909・2180 の派生 3 表
-   (indicators・rsi_percentile・p_momentum) + 1909/2180/7426 の financials
-   破損列 (cap/PER/EPS) が公開表示中。隔離候補は §14 に限定済み。
+1. **破損値の隔離と表示止め (F-01/F-15)**: 1909 の派生 3 表
+   (indicators・rsi_percentile・p_momentum)、2180 は indicators・p_momentum の
+   2 表のみ。2180 の RSI は破損由来が未証明のため隔離保留 +
+   1909/2180/7426 の financials 破損列 (cap/PER/EPS) が公開表示中。
+   隔離候補は §14 に限定済み。
    本番 apply は writer 返却後の別対応 (本 PR では preview のみ)。
 2. **F-02 stale bool の解消**: 次回 run の再計算で治る見込みだが確認待ち。
    run 前に直す場合は §14 の preview 適用 (3 列のみ・冪等確認済み)。
@@ -484,10 +493,15 @@ pattern 15 + skip 1) + delist 4 件の 404 整合 + 前週比 12,669 行 (内部
   `src/cron/daily.ts` の日次 gate から呼ぶ (#136 差分は保持)。
 - 述語: 同一応答の最新有効終値と `meta.regularMarketPrice` が 10 倍超乖離
   (`MAX_DAILY_RATIO` reuse) しかつ出来高なし (0/null) の場合のみ応答全体を
-  throw。薄商い 0・出来高を伴う急変 (正規分割)・全履歴比較・巨大 split 単独・
-  判定不能 (欠落・非正・非有限) は拒否しない。
+  throw。薄商い 0・出来高を伴う急変 (正規分割。30 倍乖離 + 出来高ありで
+  受理を確認)・全履歴比較・巨大 split 単独・判定不能 (欠落: null/undefined)
+  は拒否しない。実在する数値の無効 (非正・非有限) は欠落と別扱いで拒否する
+  (各側を先に独立検査し、逆側 missing 時も通さない)。
 - 日次 gate: expectedDate の一致に加え使用値 (`adj ?? close`) の正の有限値を
-  要求。正当な欠損は未取得扱い (throw) で値補完なし。
+  要求。共有 helper `checkFreshClose` を N225 session gate と
+  `buildSnapshot` の両方で再利用 (rg 全追跡済み)。正当な欠損は未取得扱い
+  (throw) で値補完なし。`buildSnapshot` の gate は fetch 直後・
+  RSI を含む全 technical 計算の前 (年次 #136 の pick/evaluate は保持)。
 - 呼出 trace (rg 全件): `fetchChart` ← `fetchStockRawData` ← `buildSnapshot`
   (+ 日経セッション確認・マクロ文脈の 2 経路も同一 guard 下)。
   `fetchDaily` ← `scripts/vwap/ingest-daily.ts` (R2 daily 書込の手前)。
@@ -495,11 +509,13 @@ pattern 15 + skip 1) + delist 4 件の 404 整合 + 前週比 12,669 行 (内部
 - 実関数 replay (§15): guard 前は 1909 全 capture が 3 fetcher で解決
   (47 bar・40 破損受理・書込到達可)。guard 後は 1909/2180 が全 fetcher で
   拒否・書込到達 0、7203/3600/9984 が受理、9914 stub は日次 gate へ委譲
-  (stale で fail-safe)。
-- durable test: `bar-sanity.test.ts` (述語 15 件 + sanitize 素通しの記録 1 件)、
-  `client.test.ts` (fetchChart 3 件)、`chart-bars.test.ts` (fetchDaily 3 件)。
-  focused 53 件 + cron 57 件が緑。typecheck・lint 通過 (全 852 suite の再実行は
-  CI に委譲)。
+  (stale で fail-safe)。review 修正後の offline 再 run は保存結果と
+  byte 一致 (非 target 受理を保持)。writer 0。
+- durable test: `bar-sanity.test.ts` (述語 20 件 + sanitize 素通しの記録 1 件)、
+  `client.test.ts` (fetchChart 3 件)、`chart-bars.test.ts` (fetchDaily 4 件)、
+  `daily-mode.test.ts` (session gate 1 件追加)。
+  focused Yahoo 59 件 + cron 58 件 = 117 件が緑。typecheck・lint 通過
+  (全 suite の再実行は CI に委譲)。
 
 ### 14.2 F-02 の offline preview (本番 apply なし)
 
@@ -513,48 +529,131 @@ pattern 15 + skip 1) + delist 4 件の 404 整合 + 前週比 12,669 行 (内部
 ### 14.3 1909/2180 の quarantine preview (本番 apply なし)
 
 - 隔離候補 (破損由来が確定した行のみ): 1909 の
-  `swing_stock_indicators`・`rsi_percentile` (bars=40)・`p_momentum`
-  (as_of 9/14・bars=40)、2180 の同 3 表
-  (rsi は bars=1217 だが corrupt-tail 由来の沈黙型)。
+  `swing_stock_indicators` (giant SMA 保存値)・`rsi_percentile` (bars=40。
+  bad raw full-40 replay で確定)・`p_momentum` (as_of 9/14・bars=40)、
+  2180 の `swing_stock_indicators` (giant SMA 保存値)・`p_momentum`
+  (as_of 9/15・bars=85。保存 bad 値で確定)。
+  2180 の `rsi_percentile` (bars=1217) は保留: corrupt-tail 由来が未証明
+  (§3.3) のため確定候補に入れず、限定 predicate から除外する。
   R2 は `daily/1909.json`・`daily/2180.json` の末尾 22 本 + 偽 split
   (§4)。financials 破損列 (F-15) の列単位隔離は範囲外・要 follow-up。
 - 除外 (証拠付き): `swing_entry_signals` は 1909/2180 とも 0 行。
   otakara は 1909 が 5 月由来の clean 値 (ma25=2892.8・dataDate 5/17)、
   2180 は行なし。7426/3480 の派生行は stale だが正常値。
-  正常な core_financials 日次断面・daily ohlcv・master は維持。
+  正常な daily ohlcv・master は維持。core_financials の「正常」とは
+  F-15 未破損 column (pbr/bps/roe/roa/配当/営業利益率) の意味に限り、
+  F-15 の bad cap/PER/EPS (1909/2180/7426) は未修復のまま保持する。
   推定補正 (正しい current raw がない) は禁止どおり行わない。
 - 消費契約 (code 確認): swing 詳細は indicator 欠落を null/— 表示
   (`pages.ts` の `?.` + view の fmt ガード)、rsi 詳細は `rsi: null` で判定不能
   表示 (`stock-detail-service.ts` + view)、screening 一覧は行不在で除外
   (FROM 派生表)、EMH momentum は投影行不在で除外。
   snapshot→missing 表示→冪等の preview は私的 sqlite で実施済み
-  (2nd run 差分 0)。本番 apply なし。
+  (2nd run 差分 0)。review 修正時は guard replay の offline 再 run で
+  1909/2180 拒否・非 target (7203/3600/9984) 受理を保持し、F-02 preview
+  結果は不変 (screenStock・保存入力とも本修正の対象外。2nd run 0 を維持)。
+  本番 apply なし。
 
 ## 15. 私的 script・capture の inventory (再利用・使い捨て禁止)
 
 `/tmp/audit-b/` 配下 (0600 等)。repo には path・SHA・command・要約のみ記録し、
 secret・署名 URL・raw 全体・private Notion ID は含まない。
+SHA は省略形ではなく 64 桁全文を既存 artifact から記録する。
 
-| # | path | SHA256 (先頭 12) | 実行 command | 出力要約 |
-|---|---|---|---|---|
-| S-01 | `replay-1909-guard.mjs` | `1786418f7f21` | `<worktree>/node_modules/.bin/tsx /tmp/audit-b/replay-1909-guard.mjs` | 実 fetcher replay。guard 前: 1909 解決 (47 bar・40 破損)。guard 後: 1909/2180 全拒否・書込 0、7203/3600/9984 受理、9914 委譲 |
-| S-02 | `preview-repair.mjs` | `6751028188e0` | 同 tsx で実行 (D1 SELECT 9 文。非 SELECT は機械的に拒否) | F-02 全件再計算 (3 列のみ・1678/33/32+3/1/0・2nd run 0) + quarantine 候補 + 例外 5 件の分類 |
-| S-03 | `replay-jpx-margin.mjs` | `3c26f79c2de8` | 同 tsx で実行 (引数に HTML) | 実 `latestMarginPdfUrl()` が保存/ fresh 05.html で throw |
-| S-04 | `compare.mjs` (= part1+part2。既存) | `cc88b4bb970f` | `node /tmp/audit-b/compare.mjs` | 層別 20 の独立再計算。rerun で母数確定 (§3.2)。rerun log `c5cced61…` |
-| S-05 | `fetch-qs.mjs` (既存) | `023f206ee48f` | `node /tmp/audit-b/fetch-qs.mjs <code>` | quoteSummary 観測。1909/7426/2180 で shares 1 桁を確認 |
-| S-06 | `fetch-yahoo-one.mjs` (新規単発) | `c0eb8c68bcc1` | `node /tmp/audit-b/fetch-yahoo-one.mjs 2180` | 2180 chart 47 bar の観測 (全再 fetch 回避) |
-| S-07 | `fetch-public3.mjs` (新規) | `01eb3fbc5db8` | `node /tmp/audit-b/fetch-public3.mjs` (≤1rps) | EMH 2 tab + otk/ir/yuho root の GET |
-| S-08 | `follow-exceptions.mjs` 他 5 件 (新規) | `7f2a6da74a03` 他 (`capdist` `ddfc7ceb741a`・`sig2180` `dae5f0006048`・`rsi3` `fa8f1171cbc6`・`prov` `95bda6aac214`・`indts` `ee58e11b65e0`) | 同 tsx で実行 (各 2–4 SELECT。非 SELECT は機械的に拒否) | 例外断面・cap 分布・provenance の確定 |
-| S-09 | `r2read.mjs` (既存) | `f7d6c08c6488` | `node /tmp/audit-b/r2read.mjs get daily/<code>.json <dest>` | R2 daily の 1909/2180 破損 tail 確認 (§4) |
+私的再現制約: script・capture は私的配布なし (`/tmp/audit-b/` にのみ存在)。
+replay/preview 系は監査 worktree の path を hardcode しているため、
+第三者がそのまま実行できるとは言わない。command・保存 inputs・
+full SHA の整合は下記のとおり。
 
-capture SHA (全文ではなく SHA のみ): `yahoo-5y/1909.json` `259c2581…`、
-`7203.json` `0db61a25…`、`3600.json` `f16d885b…`、`9984.json` `06b44e79…`、
-`9914.json` `18287074…`、`2180.json` `77a8c1c3…`、`qs-1909.json` `c811d931…`、
-`qs-7426.json` `a6bdbfe7…`、`qs-2180.json` `f4118552…`、`jpx-m02/03/04.html`
-`b1254746…` (同一) 、`jpx-margin-page.html` = `jpx-05-fresh.html` `cd2748a5…`、
-`r2/daily-1909.json` `c16fa151…`、`r2/daily-2180.json` `7f3cb7ac…`、
-`replay-post-guard.json` `862bfe8a…`、`preview-repair.json` `1d25cd63…`、
-`preview-repair.sqlite` (私的 snapshot)。
+### script (S-01–S-09)
+
+- S-01 `replay-1909-guard.mjs`
+  SHA256: `1786418f7f211598e5c91cb18b56b72d4a53aee4923a014b3bec2d08b4979e93`
+  実行: `<worktree>/node_modules/.bin/tsx /tmp/audit-b/replay-1909-guard.mjs`
+  要約: 実 fetcher replay。guard 前: 1909 解決 (47 bar・40 破損)。
+  guard 後: 1909/2180 全拒否・書込 0、7203/3600/9984 受理、9914 委譲。
+- S-02 `preview-repair.mjs`
+  SHA256: `6751028188e074762ccc7b2a199915bec9bc3adc6e47d6ee30e1926a5d39971b`
+  実行: 同 tsx で実行 (D1 SELECT 9 文。非 SELECT は機械的に拒否)
+  要約: F-02 全件再計算 (3 列のみ・1678/33/32+3/1/0・2nd run 0) +
+  quarantine 候補 + 例外 5 件の分類。
+- S-03 `replay-jpx-margin.mjs`
+  SHA256: `3c26f79c2de8ef935c545c9c8a5989d59bf3cf0753cd48586c2656ab2f52d035`
+  実行: 同 tsx で実行 (引数に HTML)
+  要約: 実 `latestMarginPdfUrl()` が保存/ fresh 05.html で throw。
+- S-04 `compare.mjs` (= part1+part2。既存)
+  SHA256: `cc88b4bb970f4797bb9c200ba6b75885b614f34d4d4672cfa34cf94570986ef2`
+  実行: `node /tmp/audit-b/compare.mjs`
+  要約: 層別 20 の独立再計算。rerun で母数確定 (§3.2)。
+  rerun log `compare-rerun.log`
+  SHA256: `c5cced611e3fde5e5794593df5fe491ab1d1e5bee30bd0e56435381f18f52891`
+- S-05 `fetch-qs.mjs` (既存)
+  SHA256: `023f206ee48f9b5219fbd181b6537482a5e4a9c7d8ed9e9065139a4ff0d16a74`
+  実行: `node /tmp/audit-b/fetch-qs.mjs <code>`
+  要約: quoteSummary 観測。1909/7426/2180 で shares 1 桁を確認。
+- S-06 `fetch-yahoo-one.mjs` (新規単発)
+  SHA256: `c0eb8c68bcc173c98e59d5297e6cddff33ec2f7e1e8cfa2bd520c61759746d4d`
+  実行: `node /tmp/audit-b/fetch-yahoo-one.mjs 2180`
+  要約: 2180 chart 47 bar の観測 (全再 fetch 回避)。
+- S-07 `fetch-public3.mjs` (新規)
+  SHA256: `01eb3fbc5db8d4e5742749178f771c2b58b70b2717894df6df18e218bba822b9`
+  実行: `node /tmp/audit-b/fetch-public3.mjs` (≤1rps)
+  要約: EMH 2 tab + otk/ir/yuho root の GET。
+- S-08 `follow-exceptions.mjs` 他 5 件 (新規)
+  SHA256: `follow-exceptions.mjs`
+  `7f2a6da74a0361b48c7f146506a530c580ac4a6934a51f3ccd78a8810a44c0fc`・
+  `follow-capdist.mjs`
+  `ddfc7ceb741aaf0a0f06874bc8572dfa426bc43c4e5edfdfa1bba4cef123759e`・
+  `follow-sig2180.mjs`
+  `dae5f000604855644fde9e7cf410610569406b6fdbb2e476082bcbcab676d5a3`・
+  `follow-rsi3.mjs`
+  `fa8f1171cbc6eb73b6a547a9b0218f27f3f2dae82017a5299e1469f0d3b2f31a`・
+  `follow-prov.mjs`
+  `95bda6aac2147efe1ae9967026f66dca8c2d3cae903a69c93dd9e9d7dcf3c710`・
+  `follow-indts.mjs`
+  `ee58e11b65e094baf73e7a7d12ae8a19b5fa545bbd19ad89b1f468dd3af56742`
+  実行: 同 tsx で実行 (各 2–4 SELECT。非 SELECT は機械的に拒否)
+  要約: 例外断面・cap 分布・provenance の確定。
+- S-09 `r2read.mjs` (既存)
+  SHA256: `f7d6c08c64889d80229e23db8d58192feb9d43ce44cf727db2e7a7b55819e3e0`
+  実行: `node /tmp/audit-b/r2read.mjs get daily/<code>.json <dest>`
+  要約: R2 daily の 1909/2180 破損 tail 確認 (§4)。
+
+### capture・result (全文ではなく SHA のみ)
+
+- `yahoo-5y/1909.json`
+  `259c2581532d1ac046352c4660851a52e57d5ece74ca06370caf6dab50115e03`
+- `yahoo-5y/7203.json`
+  `0db61a252127532d33ae2c486836fd7e5aad5adf17c223903c9e2c36d3a0f023`
+- `yahoo-5y/3600.json`
+  `f16d885bd1525c6fdabad4755513baca14376433b7203640cd08ebb1d9f77104`
+- `yahoo-5y/9984.json`
+  `06b44e798fdbc669a618f6f5f64d59ec86fe2bb4b916674c34f6e518ac01234f`
+- `yahoo-5y/9914.json`
+  `18287074fae72a50c16881c481fa9996b4d273143f3afa0860247747c53b1c64`
+- `yahoo-5y/2180.json`
+  `77a8c1c34ea551b53a62b2fd8434cb3f68553f2c5ae8a22020a409b1d97590d2`
+- `qs-1909.json`
+  `c811d931660dfd77c37c8a05b1a009376f0d47a134495623bdfd35ddcb40dc19`
+- `qs-7426.json`
+  `a6bdbfe798af6757fb890a9590afdc4109f5ffbf3d5dcd2a2cb3e665848a9d9d`
+- `qs-2180.json`
+  `f411855281ecd8009a09afc4750d1d0aece3ab7ecdb081f743406d6ad7d483e2`
+- `jpx-m02.html` = `jpx-m03.html` = `jpx-m04.html` (同一)
+  `b125474612e15be33c0ba12fd3b0fc0a826a3047c415e19b885be21fdd99eff9`
+- `jpx-margin-page.html` = `jpx-05-fresh.html`
+  `cd2748a59334903ba08e24bf05965680317404afeb054ef41d755f12b3366493`
+- `r2/daily-1909.json`
+  `c16fa1514e7e4639e8a74f1f422a9dffb114248c74c4f3034ad07f22c2f2f5a4`
+- `r2/daily-2180.json`
+  `7f3cb7ac7126ca07a2011783211215d384e6036c19f30ee0e2b47077288507c8`
+- `replay-post-guard.json`
+  `862bfe8a8b456d4c2cfdc4831581b95a37a1a4d8044eed7fb6444ec99222c92c`
+- `preview-repair.json`
+  `1d25cd638ea5f4f3a615911048a56f35724e14662368dfbd388af09a33f5763c`
+- `preview-repair.sqlite` (私的 snapshot)
+  `ed55af31d432dce3353caa43c01ff095345d829cd95ed0efce8fce67f3485d24`
+
 原本 URL 形: `https://query1.finance.yahoo.com/v8/finance/chart/<code>.T?range=5y&interval=1d&events=split%2Cdiv`
 (中継経由)、`https://www.jpx.co.jp/markets/statistics-equities/margin/05.html`
 (直 GET)。
