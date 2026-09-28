@@ -2,7 +2,7 @@ import "dotenv/config";
 /**
  * moneyflow (008・計画 notion-velvet-goose.md) の日次取込 CLI。
  *
- * 実行: npx tsx scripts/moneyflow/ingest.ts [--dry-run] [--only=jpx-sector-marketcap,jpx-short-selling,sector-turnover]
+ * 実行: npx tsx scripts/moneyflow/ingest.ts [--dry-run] [--only=jpx-sector-marketcap,jpx-short-selling,sector-turnover] [--as-of=YYYY-MM-DD]
  *
  * 必要 env (.env):
  *   NOTION_TOKEN / NOTION_STOCK_INFO_PAGE_ID (3 DB の親「株式情報」) /
@@ -143,8 +143,40 @@ export function classifyRunStatus(successCount: number, failedCount: number): Mo
   return successCount > 0 ? "一部失敗" : "失敗";
 }
 
+/**
+ * `--as-of=YYYY-MM-DD` を解析する純関数。未指定なら null (呼出側が当日 UTC を使う)。
+ * producer (stock-sync) の実 tradingDate を固定入力するための窓口 (#160)。
+ * 形式・実在しない日付は throw する (推測でその場をしのがない — ルール2)。
+ */
+export function parseAsOfArg(argv: readonly string[]): string | null {
+  const prefix = "--as-of=";
+  const a = argv.find((x) => x.startsWith(prefix));
+  if (!a) return null;
+  const v = a.slice(prefix.length);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    throw new Error(`--as-of は YYYY-MM-DD 形式で指定してください: ${v}`);
+  }
+  const d = new Date(`${v}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== v) {
+    throw new Error(`--as-of に実在しない日付は指定できません: ${v}`);
+  }
+  return v;
+}
+
+/**
+ * sector-turnover の要求範囲を as-of 日から決める純関数。
+ * from=as-of 週の月曜・to=as-of・period=ISO 週ラベル (N225 session guard と
+ * 同じ UTC 日付契約。midnight の today 再計算はしない)。
+ */
+export function sectorTurnoverRange(asOfYmd: string): { from: string; to: string; period: string } {
+  const asOf = new Date(`${asOfYmd}T00:00:00.000Z`);
+  return { from: mostRecentMondayOf(asOf), to: asOfYmd, period: isoWeekLabelOf(asOf) };
+}
+
 const DRY_RUN = process.argv.includes("--dry-run");
 const ONLY: readonly string[] = parseOnlyArg(process.argv, SOURCES);
+/** producer の実 tradingDate の固定入力 (--as-of)。未指定は当日 UTC (手動実行の既存挙動)。 */
+const AS_OF: string | null = parseAsOfArg(process.argv);
 
 interface RunOutcome {
   source: string;
@@ -379,17 +411,20 @@ async function fetchSectorTurnoverFromWorker(from: string, to: string): Promise<
   return JSON.parse(body) as MoneyflowSectorApiResponse;
 }
 
-async function runSectorTurnover(): Promise<RunOutcome> {
-  const today = new Date();
-  const to = today.toISOString().slice(0, 10);
-  const from = mostRecentMondayOf(today);
-  const result = await fetchSectorTurnoverFromWorker(from, to);
-
-  if (DRY_RUN) {
-    console.info(JSON.stringify({ source: "sector-turnover", dryRun: true, result }, null, 2));
-    return { source: "sector-turnover", ok: true, detail: `dry-run ${from}〜${to}` };
+/**
+ * sector-turnover の結果を厳密検証する純関数 (strict actual source coverage/result gate)。
+ * 要求範囲の echo 照合 + 全業種の share 定義 + 全業種の日足存在 (stockCount>0) +
+ * 全業種の売買代金 (>0) を要求し、部分週・未取込を 0 扱いで書かず失敗させる。
+ */
+export function verifySectorTurnoverResult(
+  req: { from: string; to: string },
+  result: MoneyflowSectorApiResponse
+): Array<MoneyflowSectorApiRow & { turnoverShare: number }> {
+  if (result.from !== req.from || result.to !== req.to) {
+    throw new Error(
+      `sector-turnover: 要求範囲と応答範囲が不一致です req=${req.from}〜${req.to} got=${result.from}〜${result.to}`
+    );
   }
-
   // 全業種の売買代金合計が 0 (= D1 に対象週の日足がまだ無い等) ならシェアが
   // 定義できない。0% として書かず失敗させる (取込ログに残る — ルール2)。
   const zeroTotalError = () =>
@@ -398,13 +433,40 @@ async function runSectorTurnover(): Promise<RunOutcome> {
         `(業種数=${result.sectors.length}。D1 の日足が未取込の可能性)`
     );
   if (result.sectors.length === 0) throw zeroTotalError();
-  const rows = result.sectors.map((r) => {
+  return result.sectors.map((r) => {
     if (r.turnoverShare === null) throw zeroTotalError();
+    if (!(r.stockCount > 0)) {
+      throw new Error(
+        `sector-turnover: ${result.from}〜${result.to} の業種「${r.sector}」に日足がありません ` +
+          `(stockCount=${r.stockCount}。部分週の可能性があるため書きません)`
+      );
+    }
+    if (!(r.turnover > 0)) {
+      throw new Error(
+        `sector-turnover: ${result.from}〜${result.to} の業種「${r.sector}」の売買代金が 0 です ` +
+          `(部分週・欠損の可能性があるため書きません)`
+      );
+    }
     return { ...r, turnoverShare: r.turnoverShare };
   });
+}
+
+async function runSectorTurnover(): Promise<RunOutcome> {
+  // as-of 固定入力があればそれを使い、無ければ当日 UTC (手動実行の既存挙動)。
+  // 連鎖実行では producer の実 tradingDate が入る。midnight の today 再計算はしない。
+  const asOf = AS_OF ?? new Date().toISOString().slice(0, 10);
+  const { from, to, period } = sectorTurnoverRange(asOf);
+  const asOfProvenance = AS_OF === null ? "today(UTC)" : "fixed";
+  const result = await fetchSectorTurnoverFromWorker(from, to);
+
+  if (DRY_RUN) {
+    console.info(JSON.stringify({ source: "sector-turnover", dryRun: true, asOf, asOfProvenance, result }, null, 2));
+    return { source: "sector-turnover", ok: true, detail: `dry-run ${from}〜${to} (asOf=${asOf} ${asOfProvenance})` };
+  }
+
+  const rows = verifySectorTurnoverResult({ from, to }, result);
 
   const { dbId: obsDbId } = await ensureObservationsDb();
-  const period = isoWeekLabelOf(today);
   const turnoverPageId = requireIndicatorPageId("sector_turnover");
   const sharePageId = requireIndicatorPageId("sector_turnover_share");
   const upPageId = requireIndicatorPageId("sector_up_turnover");
@@ -454,7 +516,7 @@ async function runSectorTurnover(): Promise<RunOutcome> {
   return {
     source: "sector-turnover",
     ok: true,
-    detail: `${result.sectors.length}業種 × 4指標を記録 (${period}, ${result.from}〜${result.to})`,
+    detail: `${result.sectors.length}業種 × 4指標を記録 (${period}, ${result.from}〜${result.to}, asOf=${asOf} ${asOfProvenance})`,
   };
 }
 

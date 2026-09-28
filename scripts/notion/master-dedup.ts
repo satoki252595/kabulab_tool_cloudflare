@@ -73,6 +73,12 @@ export const TARGETS: MasterTarget[] = [
 export const ARCHIVE_SERVICE = "master-dedup-102";
 /** 確定 snapshot の冪等キー (recordPrimaryData の key)。 */
 export const SNAPSHOT_KEY = "master-dedup-3681-7129/snapshot/v1";
+/**
+ * 完全 proof 版 snapshot (v2。本文全 capture + 添付 inventory + physical 添付)
+ * の冪等キー。v1 レコードは不変のまま残し、v2 は別レコードとして保存する
+ * (v1 の skipped_existing を new full proof として採用しない)。
+ */
+export const SNAPSHOT_KEY_V2 = "master-dedup-3681-7129/snapshot/v2";
 
 /**
  * relation プロパティ名。pipeline の `notion/schema.py` 定数
@@ -498,6 +504,23 @@ export interface DedupReceipt {
   };
   /** snapshot 非冪等 create の発行マーカー (helper 呼出前に atomic 保存)。 */
   snapshotIssued?: { key: string; snapshotHash: string; issuedAt: string };
+  /**
+   * v2 snapshot の保管記録 (v1 `snapshot` とは別枠。混在したら gate が停止)。
+   * attachmentShas は保管レコードの添付名 → 実バイト列 SHA。
+   */
+  snapshotV2?: {
+    file: string;
+    sha256: string;
+    archivePageId: string;
+    archiveVerifiedAt: string;
+    snapshotBytesSha256?: string;
+    zipSha256?: string;
+    htmlSha256?: string;
+    attachmentShas?: Record<string, string>;
+    fileNames?: string[];
+  };
+  /** v2 snapshot 非冪等 create の発行マーカー (v1 marker とは別枠)。 */
+  snapshotV2Issued?: { key: string; snapshotHash: string; issuedAt: string };
   lifecycle3681?: { patchedAt: string; verifiedAt: string };
   migrated: Record<
     string,
@@ -540,6 +563,8 @@ export function hasSnapshotProgress(receipt: DedupReceipt): boolean {
   return (
     receipt.snapshot !== undefined ||
     receipt.snapshotIssued !== undefined ||
+    receipt.snapshotV2 !== undefined ||
+    receipt.snapshotV2Issued !== undefined ||
     receipt.lifecycle3681 !== undefined ||
     Object.keys(receipt.migrated).length > 0 ||
     receipt.supplement7129 !== undefined ||
@@ -565,6 +590,13 @@ export interface IncomingSchemaEvidence {
   enumeratedAt: string;
   dbCount: number;
   hits: IncomingSchemaHit[];
+  /**
+   * schema の取得経路の内訳 (search 応答の schema 再利用 + 不足分のみ GET)。
+   * 旧証拠には無いため optional。v2 snapshot では必須とし、
+   * searchSchemaUsed + getSchemaUsed === dbCount を gate が要求する
+   * (schema の省略を許さない)。
+   */
+  schemaProvenance?: { searchSchemaUsed: number; getSchemaUsed: number };
 }
 
 /**

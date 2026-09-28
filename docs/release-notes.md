@@ -11,6 +11,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ### 変更
 - 優待掲載文を切り詰めず全文保存し、同一銘柄の保存前 preimage が変化していたら batch 全体を STOP するガードを追加 (#161)。保存済みデータの修復自体は未適用。
+- ①マスタ重複の snapshot を完全 proof 化 (本文全 capture+添付 inventory+別キー v2 保管。全 apply 入口に共通 gate)。moneyflow を stock-sync 成功後の連鎖実行に変更し独立 cron を廃止、sector-turnover は実 tradingDate 固定+厳密 coverage gate (#160)。実データ適用は後続。
 
 ## 2026-09-28
 

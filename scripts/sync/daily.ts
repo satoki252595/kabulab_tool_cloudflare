@@ -91,6 +91,18 @@ async function main(): Promise<void> {
       `[sync-daily] 許容内失敗: ${result.failures.length} 件 (失敗率 1% 以下のため成功扱い)`
     );
   }
+
+  // 実 tradingDate (D1 MAX(date) 由来。N225 session guard 通過済み) を
+  // 後続 moneyflow の固定入力として GITHUB_OUTPUT へ出す (#160)。
+  // null (Phase 3 実質全滅) なら出さない — 後続は空出力で起動しない (推測しない)。
+  if (result.tradingDate !== null) {
+    const out = process.env.GITHUB_OUTPUT;
+    if (out !== undefined) {
+      const { appendFileSync } = await import("node:fs");
+      appendFileSync(out, `trade_date=${result.tradingDate}\n`);
+    }
+    console.info(`[sync-daily] 取引日: ${result.tradingDate}`);
+  }
 }
 
 main().catch((e) => {

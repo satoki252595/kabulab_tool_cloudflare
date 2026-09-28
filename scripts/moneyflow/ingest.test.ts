@@ -9,7 +9,7 @@
  * (src/shared/notion-archive/moneyflow.test.ts の env 差し替えパターンと同じ)。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SOURCES, classifyRunStatus, parseOnlyArg, sectorMarketCapSkipDetail } from "./ingest.js";
+import { SOURCES, classifyRunStatus, parseAsOfArg, parseOnlyArg, sectorMarketCapSkipDetail, sectorTurnoverRange, verifySectorTurnoverResult } from "./ingest.js";
 
 describe("parseOnlyArg", () => {
   it("--only 未指定なら全取得元を返す", () => {
@@ -39,6 +39,83 @@ describe("classifyRunStatus", () => {
 
   it("成功0件・失敗のみなら「失敗」", () => {
     expect(classifyRunStatus(0, 3)).toBe("失敗");
+  });
+});
+
+describe("parseAsOfArg", () => {
+  it("--as-of 未指定なら null", () => {
+    expect(parseAsOfArg([])).toBeNull();
+    expect(parseAsOfArg(["node", "ingest.js", "--dry-run"])).toBeNull();
+  });
+
+  it("--as-of=YYYY-MM-DD をそのまま返す", () => {
+    expect(parseAsOfArg(["--as-of=2026-09-28"])).toBe("2026-09-28");
+  });
+
+  it("形式違い・実在しない日付は throw する", () => {
+    expect(() => parseAsOfArg(["--as-of=2026-9-28"])).toThrow(/YYYY-MM-DD/);
+    expect(() => parseAsOfArg(["--as-of=2026-13-01"])).toThrow(/実在しない日付/);
+    expect(() => parseAsOfArg(["--as-of=2026-02-30"])).toThrow(/実在しない日付/);
+  });
+});
+
+describe("sectorTurnoverRange", () => {
+  it("as-of 週の月曜〜as-of・ISO 週ラベルを返す", () => {
+    // 2026-09-28 は月曜。to=as-of・from=同日・period=W40。
+    expect(sectorTurnoverRange("2026-09-28")).toEqual({ from: "2026-09-28", to: "2026-09-28", period: "2026-W40" });
+    // 2026-09-30 は水曜。from=週の月曜。
+    expect(sectorTurnoverRange("2026-09-30")).toEqual({ from: "2026-09-28", to: "2026-09-30", period: "2026-W40" });
+  });
+});
+
+describe("verifySectorTurnoverResult", () => {
+  const row = (overrides: Record<string, unknown> = {}) => ({
+    sector: "電気機器",
+    turnover: 100,
+    turnoverShare: 0.5,
+    upTurnover: 60,
+    downTurnover: 40,
+    stockCount: 10,
+    ...overrides,
+  });
+
+  it("正常な結果は行を返す", () => {
+    const out = verifySectorTurnoverResult(
+      { from: "2026-09-28", to: "2026-09-28" },
+      { from: "2026-09-28", to: "2026-09-28", sectors: [row()] }
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].turnoverShare).toBe(0.5);
+  });
+
+  it("範囲 echo 不一致・空・share 未定義は throw する", () => {
+    expect(() =>
+      verifySectorTurnoverResult({ from: "2026-09-28", to: "2026-09-28" }, { from: "2026-09-28", to: "2026-09-29", sectors: [row()] })
+    ).toThrow(/応答範囲が不一致/);
+    expect(() =>
+      verifySectorTurnoverResult({ from: "2026-09-28", to: "2026-09-28" }, { from: "2026-09-28", to: "2026-09-28", sectors: [] })
+    ).toThrow(/売買代金合計が 0/);
+    expect(() =>
+      verifySectorTurnoverResult(
+        { from: "2026-09-28", to: "2026-09-28" },
+        { from: "2026-09-28", to: "2026-09-28", sectors: [row({ turnoverShare: null })] }
+      )
+    ).toThrow(/売買代金合計が 0/);
+  });
+
+  it("日足なし・売買代金 0 の業種は部分週として throw する", () => {
+    expect(() =>
+      verifySectorTurnoverResult(
+        { from: "2026-09-28", to: "2026-09-28" },
+        { from: "2026-09-28", to: "2026-09-28", sectors: [row({ stockCount: 0 })] }
+      )
+    ).toThrow(/日足がありません/);
+    expect(() =>
+      verifySectorTurnoverResult(
+        { from: "2026-09-28", to: "2026-09-28" },
+        { from: "2026-09-28", to: "2026-09-28", sectors: [row({ turnover: 0 })] }
+      )
+    ).toThrow(/売買代金が 0/);
   });
 });
 
