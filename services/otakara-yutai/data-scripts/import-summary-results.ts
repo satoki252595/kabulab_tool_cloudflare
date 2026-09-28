@@ -34,13 +34,18 @@ import { createD1HttpBatchSender } from "../../../src/shared/db/d1-http-client.j
 import { stocks, yutaiBenefits } from "../src/db/schema.js";
 import {
   applyAtomicBatches,
+  assertVerifiedBenefitsMatch,
   planAtomicBatches,
+  snapshotStockPreimages,
   type AtomicBatchSender,
+  type VerifiedBenefitTuple,
 } from "./atomic-apply.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
 import { assertNotCommittable } from "./private-path.js";
 import {
+  computeYieldEntries,
+  fetchYieldInputs,
   formatRecomputeReport,
   planYieldRecompute,
   type RecomputeYieldsDb,
@@ -143,9 +148,14 @@ async function main(): Promise<void> {
     await reportYieldPreview(db, targetIds, plan.updates);
     return;
   }
+  const verifiedBenefits = new Map<number, VerifiedBenefitTuple>();
+  for (const r of currentRows) {
+    if (targetIds.includes(r.id)) verifiedBenefits.set(r.id, r);
+  }
   const atomic = await applyImportAtomically(db, createD1HttpBatchSender(), {
     targetIds,
     updates: plan.updates,
+    verifiedBenefits,
   });
   console.info(`[summary:import] 書き込み完了: ${atomic.groups} タスク / ${atomic.rows} 行`);
   if (plan.rejections.length > 0) {
@@ -233,14 +243,26 @@ async function reportYieldPreview(
  * 利回り・スコアを先に計算し (dry-run の先見せと同一の overlay 方式・同一関数)、
  * 同一銘柄の要約・推定値・利回り・スコアの全 UPDATE を D1 REST `{batch}`
  * 1 リクエストで送る (銘柄単位の原子単位。要約だけ書いて中断する形は無い)。
+ * その前に、検証時の対象タプル (`verifiedBenefits`) と適用時の再読を突き合わせ、
+ * 検証→再読の間に変わっていたら batch を作らず送らず全体 STOP する
+ * (再読の採用で旧 plan の上書きを許さない。ドリフト行の除外はしない)。
+ * batch 先頭の preflight が full preimage を検証し、不一致は SQL エラーで
+ * batch 全体 rollback。
+ * ガードの snapshot は利回り計算と同一読取 (`fetchYieldInputs` 1 回)。
  * `data_date` は月次のまま。銘柄間の失敗は止めて同引数の再実行で回復する
  * (適用済み銘柄は無変更・冪等。`resolveTargetIds` の和集合で混合再開に対応)。
  * 送信口は差し替え可能にし、テストでは D1 なしで束ね方を固定する。
+ * ABC (A+C 統合) の適用もこの同一関数を通す (/tmp だけのガードは不可)。
  */
 export async function applyImportAtomically(
   db: RecomputeYieldsDb,
   sender: AtomicBatchSender,
-  input: { targetIds: readonly number[]; updates: readonly PlannedUpdate[] }
+  input: {
+    targetIds: readonly number[];
+    updates: readonly PlannedUpdate[];
+    /** 検証時に読んだ対象行の全タプル (対象 id の全覆盖が必須)。 */
+    verifiedBenefits: ReadonlyMap<number, VerifiedBenefitTuple>;
+  }
 ): Promise<{
   groups: number;
   rows: number;
@@ -260,8 +282,23 @@ export async function applyImportAtomically(
   const { stockIds, codeOf, stockOf } = await resolveTouchedStocks(db, [...input.targetIds]);
   const overlay = new Map<number, number | null>();
   for (const u of input.updates) for (const id of u.ids) overlay.set(id, u.estimatedValue);
-  const yieldPlan = await planYieldRecompute(db, stockIds, overlay);
-  const batches = planAtomicBatches({ updates: input.updates, yieldPlan, stockOfBenefit: stockOf });
+  // 計算とガードは同一読取の snapshot から (別 fresh 読みの代用は drift の見逃し)。
+  const yieldInputs = await fetchYieldInputs(db, stockIds);
+  // 検証→再読の間の改変は、計算も batch も作らず全体 STOP (再読の採用で
+  // 旧 plan の上書きを許さない。ガードは一致した入力 snapshot の側)。
+  assertVerifiedBenefitsMatch({
+    verified: input.verifiedBenefits,
+    targetIds: input.targetIds,
+    reread: yieldInputs.benefits,
+    codeOf,
+  });
+  const yieldPlan = computeYieldEntries(stockIds, yieldInputs, overlay);
+  const batches = planAtomicBatches({
+    updates: input.updates,
+    yieldPlan,
+    stockOfBenefit: stockOf,
+    preimages: snapshotStockPreimages(yieldInputs, stockIds),
+  });
   await applyAtomicBatches(sender, batches);
   return { groups, rows, yieldPlan, codeOf };
 }

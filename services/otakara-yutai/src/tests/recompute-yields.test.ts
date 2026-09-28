@@ -22,9 +22,11 @@ import { scoreStock } from "../../../../src/shared/scoring.js";
 import {
   applyYieldRecomputeAtomically,
   computeYieldEntries,
+  fetchYieldInputs,
   planYieldRecompute,
   type RecomputeYieldsDb,
 } from "../../data-scripts/recompute-yields.js";
+import { snapshotStockPreimages } from "../../data-scripts/atomic-apply.js";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 
 function applyD1Migrations(target: DatabaseSync): void {
@@ -174,8 +176,24 @@ describe("planYieldRecompute", () => {
     const entries = computeYieldEntries(
       [STOCK_C],
       {
-        prices: new Map([[STOCK_C, { price: 1000, yutaiYield: 1.0 }]]),
-        benefits: new Map([[STOCK_C, [{ rowId: 7, minShares: 100, estimatedValue: 1000 }]]]),
+        prices: new Map([[STOCK_C, { price: 1000, yutaiYield: 1.0, dataDate: "2026-09-13", fetchedAt: 1 }]]),
+        benefits: new Map([
+          [
+            STOCK_C,
+            [
+              {
+                rowId: 7,
+                minShares: 100,
+                recordMonth: 3,
+                description: "架空",
+                shortSummary: null,
+                estimatedValue: 1000,
+                estimateValueSource: null,
+                updatedAt: 1,
+              },
+            ],
+          ],
+        ]),
         scoreInputs: new Map(),
         scores: new Map(),
       },
@@ -213,13 +231,17 @@ function makeAtomicSender() {
 
 describe("applyYieldRecomputeAtomically", () => {
   it("変わる行だけ yutai_yield とスコアを 1 銘柄 1 送信で書き、data_date は据え置く。再実行は 0 件", async () => {
-    const plan = await planYieldRecompute(db, [STOCK_A, STOCK_B, STOCK_C]);
+    // 計算とガードは同一読取の snapshot から (本番の applyImportAtomically と同じ形)。
+    const inputs = await fetchYieldInputs(db, [STOCK_A, STOCK_B, STOCK_C]);
+    const plan = computeYieldEntries([STOCK_A, STOCK_B, STOCK_C], inputs);
+    const preimages = snapshotStockPreimages(inputs, [STOCK_A, STOCK_B, STOCK_C]);
     const { calls, sender } = makeAtomicSender();
-    const { updated, scoresUpdated } = await applyYieldRecomputeAtomically(sender, plan);
+    const { updated, scoresUpdated } = await applyYieldRecomputeAtomically(sender, plan, preimages);
     expect(updated).toBe(1);
     expect(scoresUpdated).toBe(1);
-    // A の利回り・スコアの 2 文が 1 送信。B (対象外)・C (無変更) には送らない。
-    expect(calls.map((c) => c.length)).toEqual([2]);
+    // 先頭 preflight + A の利回り・スコアの 2 文が 1 送信。B (対象外)・C (無変更) には送らない。
+    expect(calls.map((c) => c.length)).toEqual([3]);
+    expect(calls[0][0].sql.startsWith("-- preflight")).toBe(true);
     expect(finOf(STOCK_A).yutai_yield).toBeCloseTo(5.0352467, 6);
     expect(finOf(STOCK_A).data_date).toBe("2026-09-13");
     expect(finOf(STOCK_C).yutai_yield).toBe(1.0);
@@ -236,10 +258,15 @@ describe("applyYieldRecomputeAtomically", () => {
     // 対象外の銘柄には触らない
     expect(finOf(STOCK_D).yutai_yield).toBe(1.0);
 
-    const again = await planYieldRecompute(db, [STOCK_A, STOCK_C]);
+    const againInputs = await fetchYieldInputs(db, [STOCK_A, STOCK_C]);
+    const again = computeYieldEntries([STOCK_A, STOCK_C], againInputs);
     expect(again.entries.every((e) => !e.changed && !e.scoreChanged)).toBe(true);
     const redoSender = makeAtomicSender();
-    const redo = await applyYieldRecomputeAtomically(redoSender.sender, again);
+    const redo = await applyYieldRecomputeAtomically(
+      redoSender.sender,
+      again,
+      snapshotStockPreimages(againInputs, [STOCK_A, STOCK_C])
+    );
     expect(redo).toEqual({ updated: 0, scoresUpdated: 0 });
     expect(redoSender.calls).toEqual([]);
   });
@@ -250,12 +277,18 @@ describe("applyYieldRecomputeAtomically", () => {
       .prepare("UPDATE otakara_stock_financials SET yutai_yield = ? WHERE stock_id = ?")
       .run((5000 / (993 * 100)) * 100, STOCK_A);
     // 利回りは新しいがスコアは旧利回りのまま = 部分状態
-    const partial = await planYieldRecompute(db, [STOCK_A]);
+    const partialInputs = await fetchYieldInputs(db, [STOCK_A]);
+    const partial = computeYieldEntries([STOCK_A], partialInputs);
     expect(partial.entries.map((e) => [e.changed, e.scoreChanged])).toEqual([[false, true]]);
     const { calls, sender } = makeAtomicSender();
-    const healed = await applyYieldRecomputeAtomically(sender, partial);
+    const healed = await applyYieldRecomputeAtomically(
+      sender,
+      partial,
+      snapshotStockPreimages(partialInputs, [STOCK_A])
+    );
     expect(healed).toEqual({ updated: 0, scoresUpdated: 1 });
-    expect(calls.map((c) => c.length)).toEqual([1]);
+    expect(calls.map((c) => c.length)).toEqual([2]);
+    expect(calls[0][0].sql.startsWith("-- preflight")).toBe(true);
     const expectA = scoreStock({
       price: 993, per: 10, pbr: 1.0, dividendYield: 2.0, roe: 8.0,
       ma25: null, rsi14: null, macd: null, macdSignal: null, yutaiYield: finOf(STOCK_A).yutai_yield,

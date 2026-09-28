@@ -35,12 +35,16 @@ const DESC_NEW = "架空農園の新米 5kg";
 
 const row = (over: Partial<BenefitRow>): BenefitRow => ({
   id: 1,
+  stockId: 9001,
   stockCode: "9990",
   stockName: "架空ホールディングス",
   description: DESC_CATALOG,
   shortSummary: "カタログギフト 3,000円相当",
   estimatedValue: 3000,
   estimateValueSource: null,
+  minShares: 100,
+  recordMonth: 3,
+  updatedAt: 1,
   ...over,
 });
 

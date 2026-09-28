@@ -146,17 +146,22 @@ export type YutaiFullImportResult = {
   failedCodes: string[];
 };
 
-/** 1 銘柄の取得結果から作る優待行 (権利月 × 株数条件)。掲載文の組み立てと切り詰めは以前のまま。 */
+/**
+ * 1 銘柄の取得結果から作る優待行 (権利月 × 株数条件)。掲載文は全文保存する。
+ *
+ * 旧 notes[:200]/desc[:500] の切り詰めは 3447 の 3 群で末尾の tier 条件を
+ * 落とした (保存文が文の途中で切断。要約の根拠消失)。D1 の description 列は
+ * TEXT 型で長さ制限が無いため、切り詰める理由は無い。以降の similar source も
+ * この共通経路 (切り詰め無し) を使うこと。
+ */
 function benefitRowsOf(
   data: StockYutaiData,
 ): { recordMonth: number; minShares: number; description: string }[] {
   const rows: { recordMonth: number; minShares: number; description: string }[] = [];
   for (const month of data.recordMonths) {
     for (const benefit of data.benefits) {
-      const desc = benefit.notes
-        ? `${benefit.description}\n${benefit.notes.substring(0, 200)}`
-        : benefit.description;
-      rows.push({ recordMonth: month, minShares: benefit.minShares, description: desc.substring(0, 500) });
+      const desc = benefit.notes ? `${benefit.description}\n${benefit.notes}` : benefit.description;
+      rows.push({ recordMonth: month, minShares: benefit.minShares, description: desc });
     }
   }
   return rows;
