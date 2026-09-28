@@ -3,6 +3,7 @@ import "dotenv/config";
 // 実行: npx tsx scripts/ingest-daily.ts [--codes=7203,6758] [--limit=50]
 import { fetchDaily } from "../../src/shared/yahoo/client.js";
 import { r2Get, r2Put, mapLimit, sleep, retry } from "./lib/r2.js";
+import { mergeDailySplits } from "./lib/daily-merge.js";
 import { loadCodes, arg } from "./lib/codes.js";
 
 // 既定は低負荷 (逐次・約1.5s間隔 + ジッタ)。速度優先なら CONC / DELAY_MS で上書き。
@@ -29,13 +30,23 @@ async function main() {
       consecRL = 0;                                        // 成功で連続カウントをリセット
       if (!bars.length) { empty++; return; }
       let merged = bars;
+      // 初回 (10y backfill) は応答の全履歴が正。差分更新は窓マージする。
+      let mergedSplits = splits;
       if (existing) {
         const old = JSON.parse(existing);
         const map = new Map<string, any>((old.bars || []).map((b: any) => [b.date, b]));
         for (const b of bars) map.set(b.date, b);
         merged = [...map.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
+        // splits だけ全置換すると窓外の分割履歴が消える (F-09)。bars と同じ
+        // 日付キーで窓マージする (窓外保持・窓内は fresh が正)。
+        mergedSplits = mergeDailySplits(
+          old.splits ?? [],
+          splits,
+          bars[0].date,
+          bars[bars.length - 1].date
+        );
       }
-      await r2Put(`daily/${code}.json`, JSON.stringify({ code, updated: new Date().toISOString(), bars: merged, splits }));
+      await r2Put(`daily/${code}.json`, JSON.stringify({ code, updated: new Date().toISOString(), bars: merged, splits: mergedSplits }));
       written++;
     } catch (e) {
       // レート制限は「これ以上叩くな」のシグナル。即リトライせず連続数を数え、

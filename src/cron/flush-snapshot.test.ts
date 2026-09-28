@@ -189,3 +189,75 @@ describe("flushSnapshots (L-56)", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("flushSnapshots の NULL 訂正再送 (F-04)", () => {
+  // makeSnap の ohlcv6mo は 9/08・9/09・9/10 (いずれも実終値あり)。
+  function ohlcvDates(calls: RecordedCall[]): string[] {
+    const pattern = /insert into "swing_daily_ohlcv"/i;
+    return calls
+      .filter((c) => pattern.test(c.sql))
+      .flatMap((c) => c.params)
+      .filter((p): p is string => typeof p === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p));
+  }
+
+  it("保存済み NULL 日は fresh に実終値があれば再送する", async () => {
+    const { db, calls } = makeRecordingDb();
+    const failed = await flushSnapshots(
+      db,
+      [
+        {
+          target: { stockId: 1 },
+          snap: makeSnap(1),
+          existingMaxDate: "2026-09-10",
+          correctionDates: new Set(["2026-09-08"]),
+        },
+      ],
+      { runStartedSec: 1 }
+    );
+    expect(failed).toEqual([]);
+    // 9/08 (訂正) だけ再送。9/09・9/10 (保存済み有効値) は触らない。
+    expect(ohlcvDates(calls)).toEqual(["2026-09-08"]);
+  });
+
+  it("訂正対象なしでは既存日を再送しない", async () => {
+    const { db, calls } = makeRecordingDb();
+    const failed = await flushSnapshots(
+      db,
+      [{ target: { stockId: 1 }, snap: makeSnap(1), existingMaxDate: "2026-09-10" }],
+      { runStartedSec: 1 }
+    );
+    expect(failed).toEqual([]);
+    expect(ohlcvDates(calls)).toEqual([]);
+  });
+
+  it("fresh も null の訂正日は再送しない (NULL のまま正直に残す)", async () => {
+    const { db, calls } = makeRecordingDb();
+    const snap = makeSnap(1);
+    snap.ohlcv6mo = snap.ohlcv6mo.map((b) =>
+      b.date === "2026-09-08" ? { ...b, close: null, adj: null } : b
+    );
+    const failed = await flushSnapshots(
+      db,
+      [
+        {
+          target: { stockId: 1 },
+          snap,
+          existingMaxDate: "2026-09-10",
+          correctionDates: new Set(["2026-09-08"]),
+        },
+      ],
+      { runStartedSec: 1 }
+    );
+    expect(failed).toEqual([]);
+    expect(ohlcvDates(calls)).toEqual([]);
+  });
+
+  it("1 行 flush は options.correctionDates を引き継ぐ (回収パス)", async () => {
+    const { db, calls } = makeRecordingDb();
+    await writeStockSnapshot(db, makeSnap(1), "2026-09-10", {
+      runStartedSec: 1,
+      correctionDates: new Set(["2026-09-09"]),
+    });
+    expect(ohlcvDates(calls)).toEqual(["2026-09-09"]);
+  });
+});

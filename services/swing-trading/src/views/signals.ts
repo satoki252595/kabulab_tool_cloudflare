@@ -1,4 +1,5 @@
 import { BASE_PATH } from "../../base-path.js";
+import { termTip } from "../../../../src/shared/term-tip.js";
 import { h, fmtNum, layout } from "./layout.js";
 
 export interface SignalRow {
@@ -48,6 +49,12 @@ const PATTERN_ORDER = [
 
 export function signalsPage(props: SignalsPageProps): string {
   const { pattern, rows, totalCount } = props;
+  // 総数は route が同一 where の COUNT で数えた全件。表示は先頭 200 件に
+  // 限られるので、途切れているときは事実を明記する (F-07 同型)。
+  const truncatedNote =
+    rows.length < totalCount
+      ? `<div class="sub">先頭${fmtNum(rows.length, 0)}件を表示（全${fmtNum(totalCount, 0)}件）</div>`
+      : "";
 
   const chipsHtml = `
     <div class="chip-row">
@@ -115,8 +122,9 @@ export function signalsPage(props: SignalsPageProps): string {
 
   <div class="stats-row">
     <div class="stat-cell">
-      <div class="lbl">シグナル数</div>
+      <div class="lbl">${termTip("シグナル数", "買い時・売り時を知らせる合図の数。このページでは株価の形から自動検出したパターンだけを数える。")}</div>
       <div class="val">${fmtNum(totalCount, 0)}</div>
+      ${truncatedNote}
     </div>
   </div>
 

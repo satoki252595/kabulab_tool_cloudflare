@@ -33,7 +33,7 @@ import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as projectionSchema from "../shared/db/projection-schema.js";
 import { PUBLISH_JPX_DERIVED_COLUMNS } from "../shared/db/public-columns.js";
-import { aggregateSectorDaily } from "./daily.js";
+import { aggregateSectorDaily, loadIndicatorsMaxLatestDate } from "./daily.js";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const TODAY = "2026-09-14";
@@ -86,6 +86,8 @@ function seedStock(opts: {
   active?: boolean;
   /** 既定は `equity` (日次の処理対象)。`null` は未分類。 */
   instrumentType?: string | null;
+  /** indicators.latest_date。省略時は NULL (行キーのテストで指定する)。 */
+  latestDate?: string;
 }): void {
   sqlite
     .prepare(
@@ -104,8 +106,10 @@ function seedStock(opts: {
   if (opts.pct1d !== undefined) {
     // computed_at は既定 unixepoch() = 「本日更新済み」
     sqlite
-      .prepare("INSERT INTO swing_stock_indicators (stock_id, pct_change_1d) VALUES (?, ?)")
-      .run(opts.id, opts.pct1d);
+      .prepare(
+        "INSERT INTO swing_stock_indicators (stock_id, pct_change_1d, latest_date) VALUES (?, ?, ?)"
+      )
+      .run(opts.id, opts.pct1d, opts.latestDate ?? null);
   }
 }
 
@@ -269,5 +273,31 @@ describe("aggregateSectorDaily の集約キー (PUBLISH_JPX_DERIVED_COLUMNS = fa
 
     expect(written).toBe(1);
     expect(savedRows(TODAY).map((r) => [r.sector, r.stockCount])).toEqual([["情報・通信業", 9]]);
+  });
+});
+
+describe("行キーは実データの取引日 (F-06)", () => {
+  it("loader は indicators の MAX(latest_date) を返す", async () => {
+    seedStock({ id: 1, jpxSector: null, sector33: "情報・通信業", pct1d: 1, latestDate: "2026-09-10" });
+    seedStock({ id: 2, jpxSector: null, sector33: "銀行業", pct1d: 2, latestDate: "2026-09-11" });
+
+    expect(await loadIndicatorsMaxLatestDate(db())).toBe("2026-09-11");
+  });
+
+  it("indicators が空なら loader は null (呼び出し側が skip する)", async () => {
+    expect(await loadIndicatorsMaxLatestDate(db())).toBeNull();
+  });
+
+  it("再実行は取引日キーに畳まれ、実行日キーで重複 snapshot を増やさない", async () => {
+    // 実行日は TODAY (9/14) だが、集計対象の実データは 9/11 のもの
+    // (週末再実行の形)。9/11 キーに書かれ、9/14 キーは増えない。
+    seedStock({ id: 1, jpxSector: null, sector33: "情報・通信業", pct1d: 1, latestDate: "2026-09-11" });
+
+    const key = await loadIndicatorsMaxLatestDate(db());
+    expect(key).toBe("2026-09-11");
+    await aggregateSectorDaily(db(), key!);
+
+    expect(savedRows("2026-09-11").map((r) => r.sector)).toEqual(["情報・通信業"]);
+    expect(savedRows(TODAY)).toEqual([]);
   });
 });

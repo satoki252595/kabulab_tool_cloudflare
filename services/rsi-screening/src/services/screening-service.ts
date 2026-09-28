@@ -42,9 +42,17 @@ export interface ScreeningRow {
   computedAt: Date;
 }
 
-/** スクリーニング結果 (行 + 鮮度で落とした件数) */
+/** スクリーニング結果 (行 + 総数 + 鮮度で落とした件数) */
 export interface ScreeningResult {
   rows: ScreeningRow[];
+  /**
+   * 条件に合致した全対象件数 (鮮度条件込み、limit/offset 適用前)。
+   *
+   * `rows.length` は表示件数にすぎないため、総数をそれで代用すると
+   * limit/offset の頭打ちが全件数に見える (F-07 同型)。行クエリと
+   * 同一の FROM/JOIN/WHERE の別 COUNT が正。
+   */
+  totalMatched: number;
   /**
    * 鮮度条件だけで除外した行数。
    *
@@ -176,6 +184,15 @@ export async function screenStocks(
     .limit(query.limit)
     .offset(query.offset);
 
+  // 全対象件数。行クエリと同一の FROM/JOIN/WHERE で数え、limit/offset は
+  // 掛けない (F-07 同型。`rows.length` を総数に見せると頭打ちが全件数に見える)。
+  const [{ totalMatched }] = await db
+    .select({ totalMatched: count() })
+    .from(stockRsiPercentile)
+    .crossJoin(stocks)
+    .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
+    .where(and(...conditions));
+
   // 鮮度だけで落ちた件数。limit/offset は掛けない (ページ内の件数ではなく
   // 「条件には合うが古い」総数を読者に見せたい)。
   const [{ staleExcluded }] = await db
@@ -186,7 +203,7 @@ export async function screenStocks(
       and(...baseConditions, lt(stockRsiPercentile.computedAt, freshnessCutoff))
     );
 
-  return { rows, staleExcluded, maxAgeDays: PERCENTILE_MAX_AGE_DAYS };
+  return { rows, totalMatched, staleExcluded, maxAgeDays: PERCENTILE_MAX_AGE_DAYS };
 }
 
 /** period → パーセンタイルカラム */

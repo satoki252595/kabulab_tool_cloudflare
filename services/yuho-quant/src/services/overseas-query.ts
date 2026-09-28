@@ -7,7 +7,7 @@
  * (docTypeCode 130) 等で同一会計期末が重複する場合は提出日時が新しい書類の
  * 値を採用する (黙って先頭を選ばない — 明示的に最新を選ぶ)。
  */
-import { and, desc, eq, gt, gte, isNotNull, lte, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, isNotNull, lte, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
@@ -301,10 +301,24 @@ export interface ScreenRow {
  * - データが minYears 未満の銘柄は「データ不足」として除外 (架空値を作らない)。
  *   並び替えは直近海外売上高比率の高い順 (固定)。
  */
+/** スクリーニング結果 (返却行 + 全対象件数) */
+export interface ScreenResult {
+  /** limit 適用後の返却行 */
+  rows: ScreenRow[];
+  /**
+   * 条件に合致した全対象件数 (limit 適用前。地域絞り込み時は地域条件込み)。
+   *
+   * `rows.length` を総数に見せると limit の頭打ちが全件数に見える
+   * (F-07 同型)。地域絞り込みなしは行クエリと同一の WHERE/JOIN の別
+   * COUNT、地域絞り込みありは JS で確定した絞り込み後の全件が正。
+   */
+  totalMatched: number;
+}
+
 export async function screenOverseasGrowth(
   db: Database,
   opts: ScreenOpts
-): Promise<ScreenRow[]> {
+): Promise<ScreenResult> {
   const p = yuhoGrowthProjection;
   const bucket = opts.region ? REGION_BUCKETS[opts.region] : undefined;
 
@@ -439,7 +453,20 @@ export async function screenOverseasGrowth(
       regionRatioPct: regionRatio,
     });
   }
-  return needsRegionFilter ? out.slice(0, opts.limit) : out;
+  if (needsRegionFilter) {
+    // 地域絞り込み時は JS で確定した絞り込み後の全件 (limit 適用前) が総数。
+    // 地域比率は JS の丸め (`+(yen/total*100).toFixed(1)`) で確定するため、
+    // 総数も同じ値で数える (SQL の ROUND には寄せない。丸めの一致を構造で保証)。
+    return { rows: out.slice(0, opts.limit), totalMatched: out.length };
+  }
+  // 地域絞り込みなし: 全対象件数は同一 WHERE/JOIN の別 COUNT (F-07 同型)。
+  const [{ totalMatched }] = await db
+    .select({ totalMatched: count() })
+    .from(p)
+    .innerJoin(stocks, eq(p.stockId, stocks.id))
+    .leftJoin(fin, eq(fin.stockId, p.stockId))
+    .where(and(...conds));
+  return { rows: out, totalMatched };
 }
 
 /**

@@ -1,4 +1,5 @@
 import { BASE_PATH } from "../../base-path.js";
+import { termTip } from "../../../../src/shared/term-tip.js";
 import { h, fmtNum, fmtYen, pctCell, layout } from "./layout.js";
 
 export interface ScreeningRow {
@@ -29,8 +30,20 @@ function ok(b: boolean, label: string): string {
     : `<span class="badge badge-neutral">${h(label)} —</span>`;
 }
 
+const DIRECTION_TIP: Record<"long" | "short", string> = {
+  long: "値上がりを狙う買い方。安く買って高く売り、その差額を利益にする。例: 1,000円で買った株が1,100円になれば1株あたり100円の利益。",
+  short:
+    "値下がりを狙う売り方。先に売って後で安く買い戻し、その差額を利益にする。信用取引など借りた株を売る仕組みが必要。",
+};
+
 export function screeningPage(props: ScreeningPageProps): string {
   const { direction, rows, totalCount } = props;
+  // 総数は route が同一 where の COUNT で数えた全件。表示は先頭 200 件に
+  // 限られるので、途切れているときは事実を明記する (F-07)。
+  const truncatedNote =
+    rows.length < totalCount
+      ? `<div class="sub">先頭${fmtNum(rows.length, 0)}件を表示（全${fmtNum(totalCount, 0)}件）</div>`
+      : "";
   const chipsHtml = `
     <div class="chip-row">
       <a class="chip ${direction === "long" ? "active" : ""}" href="${BASE_PATH}/screening?direction=long">LONG 候補</a>
@@ -95,8 +108,9 @@ export function screeningPage(props: ScreeningPageProps): string {
 
   <div class="stats-row">
     <div class="stat-cell">
-      <div class="lbl">通過銘柄 (${direction.toUpperCase()})</div>
+      <div class="lbl">通過銘柄 (${termTip(direction.toUpperCase(), DIRECTION_TIP[direction])})</div>
       <div class="val">${fmtNum(totalCount, 0)}</div>
+      ${truncatedNote}
     </div>
   </div>
 

@@ -90,4 +90,18 @@ describe("株式とマクロの日次分離", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain('insert into "swing_market_context"');
   });
+
+  it("N225 の実バー日が run 日と違えば書かず前回値を残す (F-06)", async () => {
+    // 休場日 (N225 は金曜バー) の run は、米指数が新しくても書かない。
+    // 異なる取引日の脚を混ぜた行キーで残さない。曜日もカレンダーも見ない。
+    vi.setSystemTime(new Date("2026-09-28T21:00:00Z"));
+    vi.mocked(fetchChart).mockImplementation(async (symbol: string) =>
+      symbol === "^N225" ? chart("2026-09-25") : chart("2026-09-28")
+    );
+    vi.mocked(fetchNikkeiVi).mockResolvedValue({ price: 20, previousClose: 19,
+      change: 1, changePct: 100 / 19, date: "2026-09-28", latestTimestamp: null });
+    const { db, calls } = recordingDb();
+    expect(await runMarketContextSync(db)).toBe(false);
+    expect(calls).toEqual([]);
+  });
 });

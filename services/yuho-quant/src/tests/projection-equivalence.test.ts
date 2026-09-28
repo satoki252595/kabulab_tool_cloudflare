@@ -13,6 +13,8 @@ import {
   screenOverseasGrowth,
 } from "../services/overseas-query.js";
 import { rebuildYuhoGrowthProjection } from "../services/projection.js";
+import { screeningPage } from "../views/screening.js";
+import { overseasScreeningPage } from "../views/overseas-screening.js";
 
 /**
  * L-51/K4b: L2 投影 `p_yuho_growth` の再生成と画面読みの等価性。
@@ -270,7 +272,7 @@ describe("p_yuho_growth の再生成 (L-51/K4b)", () => {
 
 describe("投影読みの画面は旧実装と同じ行を返す", () => {
   it("受注: 年率・欠落・並び順", async () => {
-    const rows = await screenOrderGrowth(db, {
+    const { rows } = await screenOrderGrowth(db, {
       metric: "orders",
       minYears: 2,
       limit: 100,
@@ -289,14 +291,14 @@ describe("投影読みの画面は旧実装と同じ行を返す", () => {
   });
 
   it("受注: minYears 未満は除外、metric null も除外", async () => {
-    const y3 = await screenOrderGrowth(db, {
+    const { rows: y3 } = await screenOrderGrowth(db, {
       metric: "orders",
       minYears: 3,
       limit: 100,
     });
     expect(y3.map((r) => r.code)).toEqual(["7203"]);
     // backlog 基準: B は backlog null で順位付け不能 → 除外
-    const bl = await screenOrderGrowth(db, {
+    const { rows: bl } = await screenOrderGrowth(db, {
       metric: "backlog",
       minYears: 2,
       limit: 100,
@@ -305,14 +307,14 @@ describe("投影読みの画面は旧実装と同じ行を返す", () => {
   });
 
   it("受注: 年率・業種・ファンダ絞り込み", async () => {
-    const cagr = await screenOrderGrowth(db, {
+    const { rows: cagr } = await screenOrderGrowth(db, {
       metric: "orders",
       minYears: 2,
       minOrdersCagrPct: 15,
       limit: 100,
     });
     expect(cagr.map((r) => r.code)).toEqual(["1001"]);
-    const sector = await screenOrderGrowth(db, {
+    const { rows: sector } = await screenOrderGrowth(db, {
       metric: "orders",
       minYears: 2,
       sector: "情報・通信業",
@@ -320,7 +322,7 @@ describe("投影読みの画面は旧実装と同じ行を返す", () => {
     });
     expect(sector).toEqual([]);
     // B は operating_margin null → 条件を満たせず除外
-    const funda = await screenOrderGrowth(db, {
+    const { rows: funda } = await screenOrderGrowth(db, {
       metric: "orders",
       minYears: 2,
       minOpMarginPct: 5,
@@ -330,7 +332,7 @@ describe("投影読みの画面は旧実装と同じ行を返す", () => {
   });
 
   it("海外: 比率・年率・並び順", async () => {
-    const rows = await screenOverseasGrowth(db, { minYears: 3, limit: 100 });
+    const { rows } = await screenOverseasGrowth(db, { minYears: 3, limit: 100 });
     // A も C も直近 20%。同率は code 昇順で確定
     expect(rows.map((r) => r.code)).toEqual(["1002", "7203"]);
     const a = rows[1];
@@ -347,7 +349,7 @@ describe("投影読みの画面は旧実装と同じ行を返す", () => {
   });
 
   it("海外: 地域選択時は円貨と比率を復元する", async () => {
-    const rows = await screenOverseasGrowth(db, {
+    const { rows } = await screenOverseasGrowth(db, {
       minYears: 3,
       region: "china",
       limit: 100,
@@ -363,7 +365,7 @@ describe("投影読みの画面は旧実装と同じ行を返す", () => {
   });
 
   it("海外: 地域レンジは未開示を除外し、未選択時は無視する", async () => {
-    const withRange = await screenOverseasGrowth(db, {
+    const { rows: withRange } = await screenOverseasGrowth(db, {
       minYears: 3,
       region: "china",
       minRegionRatioPct: 1,
@@ -371,7 +373,7 @@ describe("投影読みの画面は旧実装と同じ行を返す", () => {
     });
     expect(withRange.map((r) => r.code)).toEqual(["7203"]);
     // 地域未選択でレンジだけ入力 → 無視して全件
-    const ignored = await screenOverseasGrowth(db, {
+    const { rows: ignored } = await screenOverseasGrowth(db, {
       minYears: 3,
       minRegionRatioPct: 99,
       limit: 100,
@@ -387,5 +389,107 @@ describe("投影読みの画面は旧実装と同じ行を返す", () => {
       "情報・通信業",
       "輸送用機器",
     ]);
+  });
+});
+
+describe("総数と表示件数の分離 (F-07 同型)", () => {
+  it("受注: limit を超える一致は rows が頭打ちでも totalMatched が全件を数える", async () => {
+    // fixture は B (+21%) と A (+10%) の 2 件一致。limit=1 で先頭だけ返す。
+    const { rows, totalMatched } = await screenOrderGrowth(db, {
+      metric: "orders",
+      minYears: 2,
+      limit: 1,
+    });
+    expect(rows.map((r) => r.code)).toEqual(["1001"]);
+    expect(totalMatched).toBe(2);
+  });
+
+  it("海外: limit を超える一致は rows が頭打ちでも totalMatched が全件を数える", async () => {
+    // A も C も直近 20%。同率は code 昇順で C が先頭。
+    const { rows, totalMatched } = await screenOverseasGrowth(db, {
+      minYears: 3,
+      limit: 1,
+    });
+    expect(rows.map((r) => r.code)).toEqual(["1002"]);
+    expect(totalMatched).toBe(2);
+  });
+
+  it("海外: 地域絞り込み時は地域条件込みの全件を totalMatched に数える", async () => {
+    // 中国を開示するのは A のみ (C は未開示で除外)。
+    const { rows, totalMatched } = await screenOverseasGrowth(db, {
+      minYears: 3,
+      region: "china",
+      minRegionRatioPct: 1,
+      limit: 100,
+    });
+    expect(rows.map((r) => r.code)).toEqual(["7203"]);
+    expect(totalMatched).toBe(1);
+  });
+
+  it("海外: 地域絞り込み後の全件に limit を掛ける (絞り込み前に切らない)", async () => {
+    // F=1005 を追加: 直近比率 30%・中国比率 15%。地域条件の一致は
+    // F と A の 2 件。limit=1 は絞り込み後の先頭 (F) だけ返す。
+    seedStock(6, "1005", "equity", "輸送用機器");
+    seedFin(6, 0.1);
+    const docF = seedDoc(6, 1750000000);
+    ["2023-03-31", "2024-03-31", "2025-03-31"].forEach((fy) => {
+      seedOverseas(docF, 6, fy, "海外売上高", "overseas_total", 300);
+      seedOverseas(docF, 6, fy, "連結売上高", "total", 1000);
+    });
+    seedOverseas(docF, 6, "2025-03-31", "中国", "overseas", 150);
+    await rebuildYuhoGrowthProjection(db);
+
+    const { rows, totalMatched } = await screenOverseasGrowth(db, {
+      minYears: 3,
+      region: "china",
+      minRegionRatioPct: 1,
+      limit: 1,
+    });
+    expect(rows.map((r) => r.code)).toEqual(["1005"]);
+    expect(rows[0].regionRatioPct).toBe(15);
+    expect(totalMatched).toBe(2);
+  });
+
+  it("受注/海外の画面は全件数を出し、途切れるときは先頭件数を明記する", async () => {
+    const order = await screenOrderGrowth(db, {
+      metric: "orders",
+      minYears: 2,
+      limit: 1,
+    });
+    const orderHtml = screeningPage({
+      opts: { metric: "orders", minYears: 2, limit: 1 },
+      sectors: ["輸送用機器"],
+      rows: order.rows,
+      totalMatched: order.totalMatched,
+    });
+    expect(orderHtml).toContain("RESULT — 2 件");
+    expect(orderHtml).toContain("先頭1件を表示（全2件）");
+
+    const overseas = await screenOverseasGrowth(db, { minYears: 3, limit: 1 });
+    const overseasHtml = overseasScreeningPage({
+      opts: { minYears: 3, limit: 1 },
+      sectors: ["情報・通信業", "輸送用機器"],
+      rows: overseas.rows,
+      totalMatched: overseas.totalMatched,
+    });
+    expect(overseasHtml).toContain("RESULT — 2 件");
+    expect(overseasHtml).toContain("先頭1件を表示（全2件）");
+  });
+
+  it("途切れなしでは注記を出さない", async () => {
+    const order = await screenOrderGrowth(db, {
+      metric: "orders",
+      minYears: 2,
+      limit: 100,
+    });
+    const html = screeningPage({
+      opts: { metric: "orders", minYears: 2, limit: 100 },
+      sectors: ["輸送用機器"],
+      rows: order.rows,
+      totalMatched: order.totalMatched,
+    });
+    expect(html).toContain("RESULT — 2 件");
+    // 「先頭」は CSS コメントにも出るため注記断片で判定する。
+    expect(html).not.toContain("件を表示（全");
   });
 });

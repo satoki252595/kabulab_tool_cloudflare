@@ -48,6 +48,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - 監査レポートの正準数値（分類・合計・日付・隔離/保留・full SHA）を `docs/test-logs/data-audit-2026-09-28.results.json` からの生成ブロックに一本化し、本文要約層の重複転記を集計ID参照へ置換。`pnpm audit:report:check`（内訳不一致・保留混入・SHA省略・手編集の検出）をCIへ組込 (#153)。
 - 保存運用の根本原因修正 (証跡 `docs/test-logs/storage-operations-root-causes-2026-09-28.md`): Notion 単一行照会の重複時・先頭選択を共通 helper `queryUniqueRow` で保全停止化 (moneyflow 指標/観測・価格同期・有報テキスト・銘柄別データ・保管読取の全6経路)、moneyflow 取込のカタログ失敗を取込ログへ記録、週次信用残の発見先を JPX 01.html へ移転+`--week` 補修と欠落週検出、①マスタ重複の退避を moveToTrash から直接 archive へ契約修正。review 対応で結果不明 DB 回収を厳密化 (同名複数は保全停止・回収前の GET 型検証・通常探索の最古収束は維持) し、重複エラーの private ID 出力を除去。本番適用 (初回保存・再保管・退避) は writer 枠待ち。
 - moneyflow の IMF 取得元をミラー (DBnomics) 経由から IMF 公式 SDMX API (pip) 直接へ移行。報告資産と Derived 負債の意味同一を実測で証明した範囲だけ指標キーを維持し、報告負債との混同・ミラーとの混在・無視される期間クエリを止める検証付き。週次信用残の公開 API は旧取込の種類株崩壊週を値無しで除外週として明示し、正常な週・銘柄の表示は不変。本番適用は writer 枠待ち。
+- 市場系保存の根本原因修正 (証跡 `docs/test-logs/market-storage-repair-2026-09-28.md`): 一覧の通過数が LIMIT 200 で頭打ちに見えたのを同一条件の総数と先頭表示に分離、OHLCV の保存済み NULL 日を通常日次で訂正再送、R2 日足の分割履歴が 1mo 更新で消えるのを窓マージ化、週1 prune/年次の日跨ぎ飢餓を run 開始時刻固定で、sector/market 表の休場・再実行の重複 snapshot を実データ取引日キー＋N225 照合で解消。ATR bool・優良株判定の stale は正規再計算経路を選定し、旧 Yahoo 年次 writer は外部契約のため維持。本番適用は writer 枠・次回 normal job 待ち。
 
 ### 本番作業
 - F-01/F-15の監査済み派生5行を削除し、1909/2180/7426の財務3列だけNULL化。R2の1909/2180は各22本の破損末尾と偽分割1件だけを除去した。Notion物理原本退避・SHA再読、native D1変更8/R2 PUT2、再実行の実変更0、独立した正常対照・財務履歴・2180 RSI・原本ファイルの保全確認まで完了。guardはmain `bdaa217` / Version `8df9edc3` の100%配備で確認（証跡: `docs/test-logs/market-corruption-repair-2026-09-28.md`、#152）。
