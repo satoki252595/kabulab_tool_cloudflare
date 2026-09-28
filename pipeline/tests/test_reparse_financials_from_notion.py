@@ -367,8 +367,9 @@ def test_d1_repair_rejects_missing_notion_read_proof_before_connecting(
 
 @pytest.mark.parametrize("read_back_net_sales", [547_779_000_000, 547_779_000_000.0])
 @pytest.mark.parametrize("archive_parser", ["current", "previous-parser"])
+@pytest.mark.parametrize("target_old_replaced", [False, True])
 def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
-    tmp_path, monkeypatch, read_back_net_sales, archive_parser,
+    tmp_path, monkeypatch, read_back_net_sales, archive_parser, target_old_replaced,
 ):
     older = replace(reparse.notion_financial(_page()), fiscal_period_end=reparse.date(2027, 3, 31))
     older_new = replace(older, fiscal_period_end=reparse.date(2025, 3, 31))
@@ -380,17 +381,25 @@ def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
         return {"page_id": page_id, "old": reparse._record_dict(old),
                 "new": reparse._record_dict(new), "changes": {"net_sales": {}},
                 "parser_sha256": reparse.PARSER_SHA256, "raw_sha256": digest}
-    journal.write_text("\n".join(map(json.dumps, [
+    originals = [
         item("archived", older, older_new, "a" * 64),
         item("target", newer_old, newer_new, "b" * 64),
-    ])) + "\n")
+    ]
+    if target_old_replaced:
+        # 後日原本の誤キーを古い原本の正しいキーへ合流済み。数値は同じ実fixture。
+        originals = [
+            item("archived", replace(newer_old, fiscal_period_end=older.fiscal_period_end),
+                 newer_new, "b" * 64),
+            item("target", older_new, older_new, "a" * 64),
+        ]
+    journal.write_text("\n".join(map(json.dumps, originals)) + "\n")
     receipts.write_text(json.dumps({
         "page_id": "archived", "target_page_id": "target",
         "record": reparse._record_dict(newer_old),
         "parser_sha256": reparse.PARSER_SHA256 if archive_parser == "current" else archive_parser,
-        "raw_sha256": "a" * 64, "action": "newer_disclosure_preserved",
+        "raw_sha256": originals[0]["raw_sha256"], "action": "newer_disclosure_preserved",
     }) + "\n")
-    page, events = {"id": "target", "record": newer_old}, []
+    page, events = {"id": "target", "record": read_back if target_old_replaced else newer_old}, []
     class Client:
         def query_database(self, *args, **kwargs):
             return [page.copy()]
@@ -409,14 +418,19 @@ def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
     monkeypatch.setattr(reparse, "financial_overwrite_allowed",
                         lambda page, record: page["record"].disclosed_at <= record.disclosed_at)
     reparse.apply_journal(journal, receipts)
-    assert events == ["update_latest"]
+    assert events == ([] if target_old_replaced else ["update_latest"])
     proof = reparse._journal_items(receipts)
     assert proof["archived"]["record"] == reparse._record_dict(newer_new)
-    assert proof["archived"]["raw_sha256"] == "a" * 64
-    assert proof["target"]["raw_sha256"] == "b" * 64
+    assert proof["archived"]["raw_sha256"] == originals[0]["raw_sha256"]
+    assert proof["target"]["raw_sha256"] == originals[1]["raw_sha256"]
     events.clear()
     reparse.apply_journal(journal, receipts)
     assert events == []
+    if target_old_replaced:
+        page["record"] = replace(read_back, net_sales=None)
+        with pytest.raises(ValueError, match="監査後に正本が変わりました"):
+            reparse.apply_journal(journal, receipts)
+        assert events == []  # 未検証の欠損をcanonical最新版として認めない。
 
 
 @pytest.mark.parametrize("stored_hash,source", [(None, "EDINET"), ("b" * 64, "EDINET"),

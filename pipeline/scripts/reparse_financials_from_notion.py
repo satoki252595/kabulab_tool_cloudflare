@@ -493,9 +493,13 @@ def apply_journal(journal: Path, receipts: Path | None = None, *, workers: int =
                         if page is not None and page["id"] != saved["id"]:
                             if _record_dict(_page_record(page)) != item["old"]:
                                 raise ValueError(f"{code}: 監査後に旧正本が変わりました")
-                    elif (page is None and targets and item["page_id"] in previous
-                          and previous[item["page_id"]].get("raw_sha256") == item["raw_sha256"]
-                          and previous[item["page_id"]]["target_page_id"] == targets[0]["id"]
+                    elif (targets and (
+                            # 後日の誤キー修正で、この原本自身のページが最新版の
+                            # 修正先になる場合。新鮮なcanonical全項目一致だけを許す。
+                            (page is not None and page["id"] == targets[0]["id"])
+                            or (page is None and item["page_id"] in previous
+                                and previous[item["page_id"]].get("raw_sha256") == item["raw_sha256"]
+                                and previous[item["page_id"]]["target_page_id"] == targets[0]["id"]))
                           # 旧receiptはarchive先のリンク証拠だけ。数値は必ず今回の
                           # parserで再解析したcanonical原本と新鮮な正本読取で再検証する。
                           and _record_dict(_page_record(targets[0])) in canonical_values[key]
