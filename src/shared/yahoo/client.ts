@@ -415,6 +415,19 @@ function extractRawValue(
   return field && typeof field.raw === "number" ? field.raw : null;
 }
 
+/** 正finiteな同一材料の総額/1株額だけを株数尺度の照合に使う。欠損から株数を補完しない。 */
+function impliedShareCount(total: number | null, perShare: number | null): number | null {
+  if (total === null || perShare === null || total <= 0 || perShare <= 0 ||
+    !Number.isFinite(total) || !Number.isFinite(perShare)) return null;
+  const shares = total / perShare;
+  return Number.isFinite(shares) && shares > 0 ? shares : null;
+}
+
+// TTM/現時点の差は厳密一致で検証できない。独立2尺度が一致しても発行株数と双方10倍超なら
+// 基準未確認として降りる。価格の前日比 MAX_DAILY_RATIO とは別の保守的な尺度判定であり、
+// この境界から正しい株数・EPS・時価総額を推定してはならない。
+const MAX_SHARE_BASIS_RATIO = 10;
+
 /** Unix タイムスタンプ (秒) → `YYYY-MM-DD` */
 function toDateString(timestampSec: number): string {
   return new Date(timestampSec * 1000).toISOString().split("T")[0];
@@ -789,6 +802,28 @@ export async function fetchQuoteSummary(code: string): Promise<QuoteSummaryResul
   const roa = extractRawValue(financialData?.returnOnAssets);
   const operatingMarginTtm = extractRawValue(financialData?.operatingMargins);
 
+  const reportedShares = extractRawValue(keyStats?.sharesOutstanding);
+  const floatShares = extractRawValue(keyStats?.floatShares);
+  const cashShares = impliedShareCount(
+    extractRawValue(financialData?.totalCash),
+    extractRawValue(financialData?.totalCashPerShare)
+  );
+  const revenueShares = impliedShareCount(
+    extractRawValue(financialData?.totalRevenue),
+    extractRawValue(financialData?.revenuePerShare)
+  );
+  const shareBasisUnconfirmed = reportedShares !== null && reportedShares > 0 &&
+    Number.isFinite(reportedShares) && (
+      (floatShares !== null && Number.isFinite(floatShares) && floatShares > reportedShares) ||
+      (cashShares !== null && revenueShares !== null &&
+        Math.max(cashShares, revenueShares) / Math.min(cashShares, revenueShares) <= MAX_SHARE_BASIS_RATIO &&
+        Math.max(cashShares, reportedShares) / Math.min(cashShares, reportedShares) > MAX_SHARE_BASIS_RATIO &&
+        Math.max(revenueShares, reportedShares) / Math.min(revenueShares, reportedShares) > MAX_SHARE_BASIS_RATIO)
+    );
+  if (shareBasisUnconfirmed) {
+    console.warn(`[yahoo] ${code}: 株数の尺度が応答内で不整合のため EPS/PER/時価総額を採用しません`);
+  }
+
   // Yahoo の配当利回りは 0.0234 (小数) で返ってくる → % に直して 2 桁丸め
   const rawDividendYield = extractRawValue(summaryDetail?.dividendYield);
   const dividendYield =
@@ -825,14 +860,14 @@ export async function fetchQuoteSummary(code: string): Promise<QuoteSummaryResul
     .sort((a, b) => a.fiscalYear - b.fiscalYear);
 
   return {
-    per,
+    per: shareBasisUnconfirmed ? null : per,
     pbr,
     dividendYield,
-    eps,
+    eps: shareBasisUnconfirmed ? null : eps,
     bps,
     roe,
     roa,
-    marketCap,
+    marketCap: shareBasisUnconfirmed ? null : marketCap,
     operatingMarginTtm,
     annualFinancials,
   };

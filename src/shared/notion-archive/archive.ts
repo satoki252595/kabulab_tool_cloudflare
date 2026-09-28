@@ -328,7 +328,7 @@ function ensureTrashDb(service: string, parentPageId?: string): Promise<string> 
 }
 
 /** key 完全一致の既存ページを 1 件返す (冪等判定用) */
-async function findByKey(
+export async function findByKey(
   databaseId: string,
   key: string
 ): Promise<string | null> {
