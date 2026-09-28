@@ -8,12 +8,14 @@
 - 実行窓口: `pnpm notion:master-dedup-3681-7129`
   (`scripts/notion/master-dedup-3681-7129.ts`、純粋ロジックは
   `scripts/notion/master-dedup.ts`、回帰は `scripts/notion/master-dedup.test.ts`
-  55 件 + `scripts/notion/master-dedup-flow.test.ts` 17 件)
+  55 件 + `scripts/notion/master-dedup-flow.test.ts` 20 件)
 - 共有 Notion 窓口は最小 2 点のみ: `client.ts` の POST /pages 結果不明再送禁止
   (GET/query・明示 429 retry は維持) と `page-file.ts` の全件取得 `listPageFiles`
-  (実ダウンロード検証用)。pipeline writer への変更なし。Notion 要求は全て
-  `notionRequest` / `recordPrimaryData` / `moveToTrash` / `updateSupplementRow`
-  の既存窓口経由 (直 fetch 迂回なし。署名 S3 URL の GET のみ素 fetch)
+  (実ダウンロード検証用)。既存 `fetchPageFileUrl` の先頭/null 挙動は維持する
+  (URL 無し先頭で 2 番目へ fallback しない)。pipeline writer への変更なし。
+  Notion 要求は全て `notionRequest` / `recordPrimaryData` / `moveToTrash` /
+  `updateSupplementRow` の既存窓口経由 (直 fetch 迂回なし。署名 S3 URL の GET
+  のみ素 fetch)
 - 親 Issue: #132 (JPX 切替以外の残作業)。JPX 切替自体は対象外
 
 ## 対象 (2026-09-28 preflight 実測)
@@ -81,17 +83,21 @@ nix develop -c pnpm notion:master-dedup-3681-7129 -- --apply --window-confirmed
    ガードでは resume 不能になるため)。D1 `jss_notion_pages` は 2 コードのみ
    照合し、未 fixed の candidate は fresh 原値 (snapshot.d1 が保持) を前提に
    許可して candidate→keep 修復へ進める (入口で keep 必須にすると修復分岐が
-   dead になる)。現状は保持先を指しており no-op の見込み
+   dead になる)。現状は保持先を指しており no-op の見込み。fresh 証拠の再確認
+   は一時領域のみで行い、初回のみ snapshotDir へ保存する (再開で原本 3 件を
+   上書きすると hash が変わり旧 snapshot 確認が STOP になるため)
 2. snapshot: 4 ページ全文・全ブロック、移行対象 incoming 行の全 relation
    配列 (⑤ は全ページ送り)・全 properties・子ブロック像、補足行、D1 の 2 行、
    証拠、incoming schema 証拠を確定 JSON + SHA-256 で `tmp/` に保存し、
-   `recordPrimaryData` で物理保管する。保存後・再開時とも Notion から
-   snapshot/公式 ZIP/HTML の 3 件を実ダウンロードし各元バイト列 SHA が一致
-   してから移行する (`verifyArchiveDownload`。Metadata 文字列+Files 3 件だけ
-   ではすり替えを検出できないため)。署名 URL 等の一時認証は残さない。
-   非冪等 create 前に key+snapshotHash+issuedAt を atomic 保存し (marker)、
-   再開時は full 検索で 0=結果不明 STOP (自動解除・再 create 禁止)/1=回収/
-   複数=STOP (`decideSnapshotAction`)
+   `recordPrimaryData` で物理保管する。再開時は marker hash 対応の既存 local
+   snapshot を再利用して固定し (`loadSnapshotForResume`)、新規作成で hash が
+   ずれて回収停止するのを防ぐ。保存後・再開時とも Notion から snapshot/公式
+   ZIP/HTML の 3 件を実ダウンロードし各元バイト列 SHA が一致してから移行する
+   (`verifyArchiveDownload`。Metadata 文字列+Files 3 件だけではすり替えを検出
+   できないため)。署名 URL 等の一時認証は残さない。非冪等 create 前に
+   key+snapshotHash+issuedAt を atomic 保存し (marker)、再開時は full 検索で
+   0=結果不明 STOP (自動解除・再 create 禁止)/1=回収/複数=STOP
+   (`decideSnapshotAction`)
 3. lifecycle: 3681 保持先の状態だけ「上場廃止」へ部分更新 (listed 不変)→再読
 4. 移行: 各行の実配列 (全 pagination。preview 25 では ⑤ の 3818 件を誤判定)
    内の退避 ID だけ保持 ID へ置換し重複除去。他銘柄 ID を全て保つ (⑤ の
@@ -116,14 +122,15 @@ nix develop -c pnpm notion:master-dedup-3681-7129 -- --apply --window-confirmed
    archived を再読する。非冪等 create 前に marker を atomic 保存し、再開時は
    full 検索で 0=結果不明 STOP/1=回収/複数=STOP (`decideRetireAction`)
 7. 最終検証: コード絞込 (全件) で各 1 有効行、旧 2 行 archived、原本・子 DB・
-   補足の保持。同じ apply 再実行で書込 0。完了済み receipt があっても最終
-   検証の失敗・省略は必ず非 0 で止める (検証なしの 0 終了はサイレント成功の
-   ため禁止)。`loadStockMasterIndex` の重複 0 は全読取が要るため通常の次
-   biztag run で確認し #102 へ run リンクする。共有 `client.ts` は POST /pages
-   (非冪等 create) の結果不明再送 (network/5xx/529・非 JSON 4xx) を禁止し、
-   明示 429 (拒否・未作成確定) のみ再送する (公式 `/reference/request-limits`。
-   GET/query・PATCH の retry は維持)。marker だけでは同一 helper 内の内部再送
-   を防げないため両方で守る
+   補足の保持。同じ apply 再実行で書込 0。適用済み分岐も D1 修正前に保存
+   snapshot/receipt で物理 archive の実 DL+SHA 再検証を通す (bypass しない)。
+   完了済み receipt があっても最終検証の失敗・省略は必ず非 0 で止める (検証
+   なしの 0 終了はサイレント成功のため禁止)。`loadStockMasterIndex` の重複 0
+   は全読取が要るため通常の次 biztag run で確認し #102 へ run リンクする。
+   共有 `client.ts` は POST /pages (非冪等 create) の結果不明再送
+   (network/5xx/529・非 JSON 4xx) を禁止し、明示 429 (拒否・未作成確定) のみ
+   再送する (公式 `/reference/request-limits`。GET/query・PATCH の retry は
+   維持)。marker だけでは同一 helper 内の内部再送を防げないため両方で守る
 
 ## 受入
 
@@ -131,8 +138,9 @@ nix develop -c pnpm notion:master-dedup-3681-7129 -- --apply --window-confirmed
 - 不要元の実体 snapshot・退避・理由の再読、再実行無変更、次 biztag で重複 0
 - 現 wave (本 PR): 実 snapshot での plan/diff/中断再開の回帰
   (`scripts/notion/master-dedup.test.ts` 55 件 +
-  `scripts/notion/master-dedup-flow.test.ts` 17 件の実 flow 回帰 +
-  `client-retry.test.ts` 10 件の POST /pages 再送禁止)、nix typecheck/lint/vitest 緑、
+  `scripts/notion/master-dedup-flow.test.ts` 20 件の実 flow 回帰 +
+  `client-retry.test.ts` 10 件の POST /pages 再送禁止 +
+  `page-file.test.ts` 1 件の先頭/null 維持)、nix typecheck/lint/vitest 緑、
   plan 実実行のガード合格。データ適用は writer 解放後の後続 dispatch (実 apply 保留)
 
 ## 残る作業 (後続 dispatch)

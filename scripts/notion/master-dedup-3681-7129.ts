@@ -631,12 +631,11 @@ export interface FreshState {
   d1: Record<string, string>;
   evidence: EvidenceResult;
   incomingSchema: IncomingSchemaEvidence;
+  /** fresh 証拠バイト列 (再開時は一時領域のみ。snapshotDir の原本を上書きしない)。 */
+  evidenceBytes?: { zipBytes: Uint8Array; htmlBytes: Uint8Array };
 }
 
-async function readFreshState(
-  paceMs: number,
-  opts: { evidenceKeepDir: string | null }
-): Promise<FreshState> {
+async function readFreshState(paceMs: number): Promise<FreshState> {
   const views: Record<string, MasterPageView> = {};
   const pages: Record<string, NotionPage> = {};
   for (const t of TARGETS) {
@@ -690,7 +689,10 @@ async function readFreshState(
     }
   }
   const d1 = await readD1MasterMap();
-  const { result: evidence } = await collectEvidence({ keepDir: opts.evidenceKeepDir });
+  // fresh 証拠は一時領域のみ (snapshotDir の原本 3 ファイルを上書きしない。
+  // 再開でも fresh ZIP は hash が変わるため、上書きすると旧 snapshot SHA 確認が
+  // STOP になり元原本も失われる。初回のみ呼出側が snapshotDir へ保存する)。
+  const { result: evidence, zipBytes, htmlBytes } = await collectEvidence({ keepDir: null });
   const incomingSchema = await enumerateMasterIncoming(paceMs);
   return {
     views,
@@ -700,7 +702,18 @@ async function readFreshState(
     d1,
     evidence,
     incomingSchema,
+    evidenceBytes: { zipBytes, htmlBytes },
   };
+}
+
+/** 初回 apply のみ fresh 証拠バイト列を snapshotDir へ保存する (再開時は呼ばない)。 */
+export function saveFreshEvidence(
+  snapshotDir: string,
+  evidenceBytes: { zipBytes: Uint8Array; htmlBytes: Uint8Array } | undefined
+): void {
+  if (!evidenceBytes) throw new Error("fresh 証拠バイト列がありません (手動確認が必要)");
+  fs.writeFileSync(path.join(snapshotDir, "Edinetcode.zip"), evidenceBytes.zipBytes);
+  fs.writeFileSync(path.join(snapshotDir, "jpx-delisted.html"), evidenceBytes.htmlBytes);
 }
 
 interface GuardReport {
@@ -1009,7 +1022,7 @@ function tsTag(): string {
 }
 
 async function runPlan(opts: CliOptions): Promise<number> {
-  const state = await readFreshState(opts.paceMs, { evidenceKeepDir: null });
+  const state = await readFreshState(opts.paceMs);
   const { problems, alreadyApplied, d1PendingFix } = guardFreshState(state);
   const preview = TARGETS.map((t) => {
     const retire = state.views[`${t.code}:retire`];
@@ -1969,6 +1982,10 @@ function loadLatestSnapshot(snapshotDir: string): { snapshot: SnapshotDoc; file:
     .sort();
   if (files.length === 0) throw new Error(`snapshot がありません: ${snapshotDir}`);
   const file = path.join(snapshotDir, files[files.length - 1]);
+  return loadSnapshotFile(file);
+}
+
+function loadSnapshotFile(file: string): { snapshot: SnapshotDoc; file: string } {
   const snapshot = JSON.parse(fs.readFileSync(file, "utf8")) as SnapshotDoc;
   const rehash = sha256HexUtf8(stableStringify(snapshotWithoutHash(snapshot)));
   if (rehash !== snapshot.sha256) throw new Error(`snapshot の hash が一致しません: ${file}`);
@@ -1984,12 +2001,52 @@ function loadLatestSnapshot(snapshotDir: string): { snapshot: SnapshotDoc; file:
   return { snapshot, file };
 }
 
+/**
+ * 再開用の snapshot 固定。receipt の確定 hash (snapshot/marker) に対応する
+ * 既存 local snapshot を再利用し、新規作成で hash がずれて回収停止するのを防ぐ。
+ * snapshotIssued-only (POST 結果不明) の再開では marker hash のファイルを探す。
+ */
+export function loadSnapshotForResume(
+  snapshotDir: string,
+  receipt: DedupReceipt
+): { snapshot: SnapshotDoc; file: string } {
+  const want =
+    receipt.snapshot?.sha256 ??
+    receipt.snapshotIssued?.snapshotHash ??
+    Object.values(receipt.retireIssued ?? {})[0]?.snapshotHash;
+  if (!want) {
+    throw new Error("再開に必要な snapshot hash が receipt にありません (手動確認が必要)");
+  }
+  // 全 marker の hash が一致すること (混在は手動確認)。
+  const hashes = new Set<string>();
+  if (receipt.snapshot) hashes.add(receipt.snapshot.sha256);
+  if (receipt.snapshotIssued) hashes.add(receipt.snapshotIssued.snapshotHash);
+  for (const m of Object.values(receipt.retireIssued ?? {})) hashes.add(m.snapshotHash);
+  if (hashes.size > 1) {
+    throw new Error("receipt 内の snapshot hash が混在しています (手動確認が必要)");
+  }
+  const files = fs
+    .readdirSync(snapshotDir)
+    .filter((f) => f.startsWith("snapshot-") && f.endsWith(".json"))
+    .sort();
+  for (let i = files.length - 1; i >= 0; i--) {
+    const file = path.join(snapshotDir, files[i]);
+    try {
+      const loaded = loadSnapshotFile(file);
+      if (loaded.snapshot.sha256 === want) return loaded;
+    } catch {
+      continue;
+    }
+  }
+  throw new Error(`marker 対応の snapshot ファイルがありません want=${want.slice(0, 12)}… (手動確認が必要)`);
+}
+
 async function runApply(opts: CliOptions): Promise<number> {
   let receipt = loadReceipt(opts.snapshotDir);
   if (receipt.completedAt) {
     console.log("receipt は完了済みです。再検証のみ行います (書込なし)。");
   }
-  const state = await readFreshState(opts.paceMs, { evidenceKeepDir: opts.snapshotDir });
+  const state = await readFreshState(opts.paceMs);
   if (isAlreadyAppliedViews(state.views)) {
     // 適用済み状態では master/補足の事前ガードは走らず、problems は D1・証拠・schema のみ。
     const { problems } = guardFreshState(state);
@@ -1997,11 +2054,16 @@ async function runApply(opts: CliOptions): Promise<number> {
       console.log(JSON.stringify({ alreadyApplied: true, problems }, null, 2));
       return 2;
     }
-    // D1 の遅れ (退避候補指し) だけは直してから再検証する (apply 許可域の書込)。
-    receipt = await applyD1Check(opts.snapshotDir, receipt);
     try {
-      const { snapshot } = loadLatestSnapshot(opts.snapshotDir);
-      const verifyProblems = await finalVerify(opts.paceMs, snapshot, receipt);
+      // 保存 snapshot/receipt で物理 archive の実 DL+SHA 再検証を D1 修正前に通す
+      // (再開でも元原本再読を必須とする。bypass しない)。
+      const loaded = hasSnapshotProgress(receipt)
+        ? loadSnapshotForResume(opts.snapshotDir, receipt)
+        : loadLatestSnapshot(opts.snapshotDir);
+      receipt = await archiveSnapshot(opts.paceMs, opts.snapshotDir, loaded.file, loaded.snapshot, receipt);
+      // D1 の遅れ (退避候補指し) だけは直してから再検証する (apply 許可域の書込)。
+      receipt = await applyD1Check(opts.snapshotDir, receipt);
+      const verifyProblems = await finalVerify(opts.paceMs, loaded.snapshot, receipt);
       if (verifyProblems.length > 0) {
         console.log(JSON.stringify({ alreadyApplied: true, verifyProblems }, null, 2));
         return 2;
@@ -2025,18 +2087,9 @@ async function runApply(opts: CliOptions): Promise<number> {
   let snapshot: SnapshotDoc;
   let snapshotFile: string;
   if (hasSnapshotProgress(receipt)) {
-    const loaded = loadLatestSnapshot(opts.snapshotDir);
-    if (receipt.snapshot && loaded.snapshot.sha256 !== receipt.snapshot.sha256) {
-      throw new Error("receipt の snapshot sha と最新の snapshot が一致しません (手動確認が必要)");
-    }
-    if (receipt.snapshotIssued && loaded.snapshot.sha256 !== receipt.snapshotIssued.snapshotHash) {
-      throw new Error("snapshot marker の hash と最新の snapshot が一致しません (手動確認が必要)");
-    }
-    for (const [retireId, m] of Object.entries(receipt.retireIssued ?? {})) {
-      if (loaded.snapshot.sha256 !== m.snapshotHash) {
-        throw new Error(`退避 marker の hash と snapshot が一致しません retire=${retireId} (手動確認が必要)`);
-      }
-    }
+    // marker hash 対応の既存 local snapshot を再利用して固定する (新規作成で
+    // hash がずれると 1hit 回収が停止するため)。既存原本 3 ファイルも保持する。
+    const loaded = loadSnapshotForResume(opts.snapshotDir, receipt);
     snapshot = loaded.snapshot;
     snapshotFile = loaded.file;
     const opsForGuard = buildMigrationOps(snapshot);
@@ -2053,6 +2106,8 @@ async function runApply(opts: CliOptions): Promise<number> {
       console.log("ガード不一致のため書込せず停止します。");
       return 2;
     }
+    // 初回のみ fresh 証拠を snapshotDir へ保存する (再開時は既存原本を保持)。
+    saveFreshEvidence(opts.snapshotDir, state.evidenceBytes);
     const taken = await takeSnapshot(opts.paceMs, opts.snapshotDir, state);
     snapshot = taken.snapshot;
     snapshotFile = taken.file;

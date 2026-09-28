@@ -6,11 +6,16 @@
  * Notion/D1 への live I/O は持たない。ダウンロード検証のみ fetch を mock する。
  * テストが参照する 4 ページ ID は `TARGETS` 定数と同じ運用 ID のみ。
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectedArchiveFileNames,
   guardIntermediateState,
   isAlreadyAppliedViews,
+  loadSnapshotForResume,
+  saveFreshEvidence,
   verifyArchiveDownload,
   verifyArchivePage,
   verifyRetirePreimage,
@@ -31,6 +36,8 @@ import {
   TARGETS,
   emptyReceipt,
   sha256HexBytes,
+  sha256HexUtf8,
+  stableStringify,
   type MasterPageView,
 } from "./master-dedup.js";
 
@@ -552,6 +559,71 @@ describe("master-dedup 実 flow 回帰", () => {
           freshChildDbs: [],
         })
       ).toThrow();
+    });
+  });
+
+  describe("loadSnapshotForResume / saveFreshEvidence (再開固定・原本保持)", () => {
+    function writeSnapshotFile(dir: string, name: string, takenAt: string): string {
+      const doc = {
+        version: 1,
+        takenAt,
+        masters: {},
+        incoming: {},
+        supplement: {},
+        d1: {},
+        evidence: baseEvidence(),
+        incomingSchema: { enumeratedAt: takenAt, dbCount: 0, hits: [] },
+        sha256: "",
+      };
+      const { sha256: _drop, ...rest } = doc;
+      void _drop;
+      doc.sha256 = sha256HexUtf8(stableStringify(rest));
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+      return doc.sha256;
+    }
+
+    it("marker hash の既存 snapshot を再利用する (最新でなくても固定)", () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dedup-resume-"));
+      try {
+        const shaOld = writeSnapshotFile(dir, "snapshot-2026-09-28T00-00-00-000Z.json", "2026-09-28T00:00:00.000Z");
+        writeSnapshotFile(dir, "snapshot-2026-09-28T01-00-00-000Z.json", "2026-09-28T01:00:00.000Z");
+        const receipt = emptyReceipt();
+        receipt.snapshotIssued = { key: "k", snapshotHash: shaOld, issuedAt: "2026-09-28T00:00:00.000Z" };
+        const loaded = loadSnapshotForResume(dir, receipt);
+        expect(loaded.snapshot.sha256).toBe(shaOld);
+        expect(loaded.file).toContain("snapshot-2026-09-28T00-00-00-000Z.json");
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("hash 混在・対応なしは throw (手動確認)", () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dedup-resume-"));
+      try {
+        const sha = writeSnapshotFile(dir, "snapshot-2026-09-28T00-00-00-000Z.json", "2026-09-28T00:00:00.000Z");
+        const mixed = emptyReceipt();
+        mixed.snapshot = { file: "s.json", sha256: sha, archivePageId: "a", archiveVerifiedAt: "2026-09-28T00:00:00.000Z" };
+        mixed.snapshotIssued = { key: "k", snapshotHash: "0".repeat(64), issuedAt: "2026-09-28T00:00:00.000Z" };
+        expect(() => loadSnapshotForResume(dir, mixed)).toThrow();
+        const missing = emptyReceipt();
+        missing.snapshotIssued = { key: "k", snapshotHash: "f".repeat(64), issuedAt: "2026-09-28T00:00:00.000Z" };
+        expect(() => loadSnapshotForResume(dir, missing)).toThrow();
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("初回のみ fresh 証拠を保存する (bytes なしは throw)", () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dedup-evidence-"));
+      try {
+        saveFreshEvidence(dir, { zipBytes: new Uint8Array([1, 2]), htmlBytes: new Uint8Array([3]) });
+        expect(new Uint8Array(fs.readFileSync(path.join(dir, "Edinetcode.zip")))).toEqual(new Uint8Array([1, 2]));
+        expect(new Uint8Array(fs.readFileSync(path.join(dir, "jpx-delisted.html")))).toEqual(new Uint8Array([3]));
+        expect(() => saveFreshEvidence(dir, undefined)).toThrow();
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 });

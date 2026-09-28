@@ -74,7 +74,11 @@ financial#124 が Notion/D1 writer を保持中のため、実 apply・Notion �
 - create marker + POST 再送禁止: snapshot/退避の helper 呼出前に marker を
   atomic 保存。共有 `client.ts` は POST /pages の結果不明再送 (network/5xx/
   529・非 JSON 4xx) を禁止し明示 429 のみ再送 (GET/query・PATCH 維持)。
-  回帰は `master-dedup.test.ts` 55 件 + `master-dedup-flow.test.ts` 17 件 +
-  `client-retry.test.ts` 10 件で全 pass、`pnpm typecheck`/`pnpm lint` 緑。
-  `pnpm test` 全体: 188 ファイル・2645 pass・383 skip・0 fail で緑。
-  実 apply は保留のまま明記して ready 化する
+  既存 `fetchPageFileUrl` の先頭/null 挙動は維持 (`page-file.test.ts` 1 件)
+- 追補 (親レビュー 3 件): 再開時は marker hash 対応の既存 snapshot を再利用
+  (`loadSnapshotForResume`)、fresh 証拠は一時領域のみで初回のみ保存 (再開の
+  原本上書き防止)、適用済み分岐も D1 前に archive 実 DL+SHA 再検証を通す。
+  回帰は `master-dedup.test.ts` 55 件 + `master-dedup-flow.test.ts` 20 件 +
+  `client-retry.test.ts` 10 件 + `page-file.test.ts` 1 件で全 pass、
+  `pnpm typecheck`/`pnpm lint` 緑。`pnpm test` 全体: 189 ファイル・2649 pass・
+  383 skip・0 fail で緑。実 apply は保留のまま明記して ready 化する
