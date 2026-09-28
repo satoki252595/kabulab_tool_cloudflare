@@ -327,16 +327,19 @@ function ensureTrashDb(service: string, parentPageId?: string): Promise<string> 
   return ensureDatabase(parent, trashDbTitle(service), `trash:${parent}:${service}`);
 }
 
-/** key 完全一致の既存ページを 1 件返す (冪等判定用) */
+/** key 完全一致の既存ページを返す。複数なら保全物を勝手に選ばず停止する。 */
 async function findByKey(
   databaseId: string,
   key: string
 ): Promise<string | null> {
-  const res = await notionRequest<{ results: Array<{ id: string }> }>(
+  const res = await notionRequest<{ results: Array<{ id: string }>; has_more?: boolean }>(
     "POST",
     `/databases/${databaseId}/query`,
-    { filter: { property: "Key", title: { equals: key } }, page_size: 1 }
+    { filter: { property: "Key", title: { equals: key } }, page_size: 2 }
   );
+  if (res.results.length > 1 || res.has_more) {
+    throw new Error(`Notion archive: 同一 Key の重複を選ばず保全停止 database=${databaseId}`);
+  }
   return res.results[0]?.id ?? null;
 }
 
@@ -466,7 +469,8 @@ interface NotionFileEntry {
  *
  * Notion は DB 間のページ移動を直接サポートしないため「ごみ DB に複製
  * (物理ファイルは元ページから取得し再アップロードして実体保持) → 元ページを
- * archived」で実現する。元ページが見つからなければ throw (黙って継続しない)。
+ * archived」で実現する。POST成功後のPATCH失敗は同じ退避先を再利用して完了する。
+ * 元ページ・退避先の対応を確認できなければ throw (黙って継続しない)。
  */
 export async function moveToTrash(args: {
   service: string;
@@ -485,6 +489,8 @@ export async function moveToTrash(args: {
   const origin = await notionRequest<{
     id: string;
     url: string;
+    archived?: unknown;
+    in_trash?: unknown;
     properties: Record<string, unknown>;
   }>("GET", `/pages/${args.originPageId}`);
 
@@ -497,35 +503,102 @@ export async function moveToTrash(args: {
   const key = readTitle(props.Key as never) || origin.id;
   const source = readRich(props.Source as never);
   const metadata = readRich(props.Metadata as never);
+  const fileEntries = (props.Files as { files?: NotionFileEntry[] } | undefined)?.files;
+  const normalizeId = (id: string): string => id.replace(/-/g, "").toLowerCase();
+  const readTrashState = (page: { archived?: unknown; in_trash?: unknown }): boolean => {
+    if ((Object.hasOwn(page, "archived") && typeof page.archived !== "boolean") ||
+      (Object.hasOwn(page, "in_trash") && typeof page.in_trash !== "boolean") ||
+      (typeof page.archived !== "boolean" && typeof page.in_trash !== "boolean")) {
+      throw new Error("moveToTrash: trash状態が未確認のため保全停止");
+    }
+    return page.archived === true || page.in_trash === true;
+  };
+  if (typeof origin.id !== "string" || normalizeId(origin.id) !== normalizeId(args.originPageId) ||
+    (props.Service as { select?: { name?: string } } | undefined)?.select?.name !== args.service || !origin.url ||
+    !Array.isArray(fileEntries)) {
+    throw new Error("moveToTrash: 元ページのID・Service・URL・Filesが不一致のため保全停止");
+  }
+  const originTrashed = readTrashState(origin);
 
   // 元ページの物理ファイルを取得し直し、ごみ側へ再アップロードして実体保持
-  const fileEntries =
-    ((props.Files as { files?: NotionFileEntry[] } | undefined)?.files) ?? [];
-  const fileRefs: Array<{ name: string; type: "file_upload"; file_upload: { id: string } }> = [];
-  for (const fe of fileEntries) {
+  const trashDb = await ensureTrashDb(args.service, args.parentPageId);
+  const existing = await findByKey(trashDb, key);
+  if (originTrashed && !existing) {
+    throw new Error("moveToTrash: 元はtrashですが退避先が見つからないため保全停止");
+  }
+
+  const readFile = async (fe: NotionFileEntry): Promise<{ bytes: Uint8Array<ArrayBuffer>; contentType: string }> => {
     const url = fe.file?.url ?? fe.external?.url;
-    if (!url) {
-      throw new Error(
-        `moveToTrash: ファイル URL を取得できません name=${fe.name} (原本欠損 — 黙って継続しない)`
-      );
-    }
+    if (!url) throw new Error(`moveToTrash: 物理ファイルURL欠損のため保全停止 name=${fe.name}`);
     const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(
-        `moveToTrash: 元ファイル取得失敗 ${fe.name} status=${res.status}`
-      );
+    if (!res.ok) throw new Error(`moveToTrash: 物理ファイル取得失敗 name=${fe.name} status=${res.status}`);
+    return { bytes: new Uint8Array(await res.arrayBuffer()), contentType: res.headers.get("content-type") ?? "application/octet-stream" };
+  };
+  // 全ファイルのbytesを保持せず1件ずつ取得し、小さいSHAだけを保持する。
+  const fileHashes = async (files: NotionFileEntry[]): Promise<ArrayBuffer[]> => {
+    const hashes: ArrayBuffer[] = [];
+    for (const file of files) {
+      const { bytes } = await readFile(file);
+      hashes.push(await crypto.subtle.digest("SHA-256", bytes));
     }
-    const bytes = new Uint8Array(await res.arrayBuffer());
+    return hashes;
+  };
+  const verifyBytes = async (files: NotionFileEntry[], expected: ArrayBuffer[]): Promise<void> => {
+    const actual = await fileHashes(files);
+    if (actual.length !== expected.length || actual.some((hash, i) => {
+      const known = new Uint8Array(expected[i]);
+      return new Uint8Array(hash).some((byte, j) => byte !== known[j]);
+    })) {
+      throw new Error("moveToTrash: 退避先の物理ファイルSHA不一致のため元原本を保持して保全停止");
+    }
+  };
+  // 再読した退避先のownershipと実体を確認してから元ページをtrashする。
+  const verifyTrash = async (pageId: string): Promise<NotionFileEntry[]> => {
+    const trash = await notionRequest<typeof origin>("GET", `/pages/${pageId}`);
+    const tp = trash.properties as typeof props;
+    const files = (tp.Files as { files?: NotionFileEntry[] } | undefined)?.files;
+    if (typeof trash.id !== "string" || normalizeId(trash.id) !== normalizeId(pageId) || readTrashState(trash) ||
+      readTitle(tp.Key as never) !== key ||
+      (tp.Service as { select?: { name?: string } } | undefined)?.select?.name !== args.service ||
+      (tp["Origin Page"] as { url?: string } | undefined)?.url !== origin.url ||
+      (tp.Status as { select?: { name?: string } } | undefined)?.select?.name !== "obsoleted" ||
+      readRich(tp.Source as never) !== source || readRich(tp.Metadata as never) !== metadata ||
+      !files || files.length !== fileEntries.length ||
+      files.some((f, i) => f.name !== fileEntries[i].name || f.type !== "file" || !f.file?.url)) {
+      throw new Error("moveToTrash: 退避先の所有元・原本材料・添付が不一致のため保全停止");
+    }
+    return files;
+  };
+  const finishOrigin = async (): Promise<void> => {
+    if (originTrashed) return;
+    // source client の固定API版は2022-06-28。現行app版のin_trash要求とは異なる。
+    await notionRequest("PATCH", `/pages/${args.originPageId}`, { archived: true });
+    const retired = await notionRequest<typeof origin>("GET", `/pages/${args.originPageId}`);
+    if (typeof retired.id !== "string" || normalizeId(retired.id) !== normalizeId(args.originPageId) || !readTrashState(retired)) {
+      throw new Error("moveToTrash: 元ページのtrash完了を再読確認できず保全停止");
+    }
+  };
+  if (existing) {
+    const files = await verifyTrash(existing);
+    if (!originTrashed) await verifyBytes(files, await fileHashes(fileEntries));
+    // 既にtrashの元は再退避しない。元ファイルの再DL不能を考慮し、既知原本SHAは呼出元で再検証する。
+    await finishOrigin();
+    return { trashPageId: existing };
+  }
+
+  const fileRefs: Array<{ name: string; type: "file_upload"; file_upload: { id: string } }> = [];
+  const expectedHashes: ArrayBuffer[] = [];
+  for (const fe of fileEntries) {
+    const { bytes, contentType } = await readFile(fe);
+    expectedHashes.push(await crypto.subtle.digest("SHA-256", bytes));
     const id = await uploadFile({
       bytes,
       filename: fe.name,
-      contentType:
-        res.headers.get("content-type") ?? "application/octet-stream",
+      contentType,
     });
     fileRefs.push({ name: fe.name, type: "file_upload", file_upload: { id } });
   }
 
-  const trashDb = await ensureTrashDb(args.service, args.parentPageId);
   const created = await notionRequest<{ id: string }>("POST", "/pages", {
     parent: { database_id: trashDb },
     properties: {
@@ -541,10 +614,8 @@ export async function moveToTrash(args: {
     },
   });
 
-  // 元ページを Notion ゴミ箱へ (DB から除去・物理ファイルは複製済)
-  await notionRequest("PATCH", `/pages/${args.originPageId}`, {
-    archived: true,
-  });
+  await verifyBytes(await verifyTrash(created.id), expectedHashes);
+  await finishOrigin();
 
   return { trashPageId: created.id };
 }

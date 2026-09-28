@@ -55,6 +55,11 @@ export const sharedEnv = {
   CLOUDFLARE_API_TOKEN: () => required("CLOUDFLARE_API_TOKEN"),
   CLOUDFLARE_ACCOUNT_ID: () => required("CLOUDFLARE_ACCOUNT_ID"),
   D1_DATABASE_ID: () => required("D1_DATABASE_ID"),
+  R2_ACCOUNT_ID: () => required("R2_ACCOUNT_ID"),
+  R2_ACCESS_KEY_ID: () => required("R2_ACCESS_KEY_ID"),
+  R2_SECRET_ACCESS_KEY: () => required("R2_SECRET_ACCESS_KEY"),
+  R2_BUCKET: () => required("R2_BUCKET"),
+  LOCAL_OUT: () => optional("LOCAL_OUT"),
   /**
    * この実行の GitHub Actions run URL。GitHub Actions が自動で注入する
    * `GITHUB_SERVER_URL`/`GITHUB_REPOSITORY`/`GITHUB_RUN_ID` から組み立てる
