@@ -523,3 +523,31 @@ LEX回復 26 + round-1合計のみ是正 32 + 旧来不一致 80 (59違反を含
 - 実 raw 9 文書で status/値が不変 (truncate 2 含む)。全面再走なし。
 - single-row は §14-4 の分類 (source-unknown 未読・採用値維持) を Root へ
   原因別報告済み。caption 証拠 route の可否は Sol が限定読取で確認中。
+
+## 16. 厳密(b) pre-score STOP + 単一行 geocols 限定分岐 (Sol確定。HOLD 解除申請用)
+
+- 厳密(b): provenance-曖昧 STOP を tops 確定後から score 選定前へ移設
+  (ORDER)。T 証明済みと fiscal-unknown の共存は候補全体で STOP。
+  SLOPE (T 優先 + unknown-gate) との現物比較: OJV9-TTUY splice は
+  SLOPE 下で TTUY 当期 (total 7261065) を採用するが (3db8bc1 の期待値)、
+  ORDER 下では STOP (当期証明のない同種競合の存在下で T を採るのは推測
+  採用のため)。正しい側 = ORDER を残す。tops→pre-score の強化は
+  74 fixture 差分で挙動不変 (below-tops unknown 例は corpus になし)。
+- 単一行 geocols 限定分岐 (Sol route (b)+): 地域 header + 無ラベル数値行が
+  唯一の表で、表間 caption (当該表と直前表の間の原文。別表の語は構造的に
+  含まない。新窓 `caption` を tablesWithHeading に追加) に sales metric +
+  FY の原文証拠がある場合だけ値行として受理し、以降は通常の raw
+  quantum・総額照合・候補競合 guard へ流す。R98H 実表 81/83 が受理形、
+  82/84 は FY なしで不受理 (R1 資産 veto とは独立の箍)。
+- R98H 実 zip E2E: 従来 ok_geo_rows (segment 切り domestic 100383) から
+  ok_geo_cols (地域注記切り domestic 100547・海外 72261・総額 172811、
+  fiscal T=2023-03-31) へ反転。Δ164 は segment 切りと地域注記切りの差で、
+  原本の segment 脚注 (セグメント間取引消去・調整額) が別切りであることを
+  明示。地域注記が共存すれば勝つ既存 +4 正準設計どおりの解決。
+  74 fixture 差分で新 fixture のみの変化 (既存 73 不変)。
+- EDINET body-stall 境界: header 後停滞を文脈付き TimeoutError 化する
+  rethrowTimeoutOnly を list/download の共通境界へ (握りつぶしなし)。
+- 回帰 6 追加 (海外 parser 111: E2E 2 + 受理形/FY 箍/sales 箍/形状箍 4)。
+  対象 gate: vitest 120 (海外 111+隔離 3+EDINET 期限 6)・tsc・eslint・
+  render-data-audit・python 32・ruff check。全面 3152/3675/59 は不実行
+  (Root 禁止)。本番書込なし (writer grant 待ち)。

@@ -42,6 +42,24 @@ export interface EdinetRequestOpts {
   timeoutMs?: number;
 }
 
+/**
+ * fetch 失敗を期限切れだけ文脈付きで投げ直す (握りつぶさない — ルール2)。
+ * cause は timer 由来の TimeoutError で秘密を含まない。それ以外の失敗は
+ * 素通しし、呼び出し側の既存の分類を変えない。header 到着後の body 読取
+ * (json/text/arrayBuffer) も同じ signal の期限内にあり、停滞はここで
+ * 文脈付きになる。
+ */
+function rethrowTimeoutOnly(
+  signal: AbortSignal,
+  e: unknown,
+  message: string
+): never {
+  if (signal.aborted) {
+    throw new Error(message, { cause: e });
+  }
+  throw e;
+}
+
 /** EDINET が当該書類タイプを保持していない (404) ことを表す型付きエラー */
 export class EdinetNotFoundError extends Error {
   constructor(
@@ -75,6 +93,7 @@ export async function listDocuments(
 
   const timeoutMs = opts.timeoutMs ?? EDINET_LIST_TIMEOUT_MS;
   const signal = AbortSignal.timeout(timeoutMs);
+  const timeoutMessage = `EDINET 書類一覧 API タイムアウト date=${date} timeoutMs=${timeoutMs}`;
   let res: Response;
   try {
     res = await fetch(url, {
@@ -82,23 +101,19 @@ export async function listDocuments(
       signal,
     });
   } catch (e) {
-    // 期限切れだけ文脈を付けて投げ直す (握りつぶさない — ルール2。cause は
-    // timer 由来の TimeoutError で秘密を含まない)。それ以外の fetch 失敗は
-    // 従来どおり素通しし、呼び出し側の既存の分類を変えない。
-    if (signal.aborted) {
-      throw new Error(
-        `EDINET 書類一覧 API タイムアウト date=${date} timeoutMs=${timeoutMs}`,
-        { cause: e }
-      );
-    }
-    throw e;
+    rethrowTimeoutOnly(signal, e, timeoutMessage);
   }
   if (!res.ok) {
     throw new Error(
       `EDINET 書類一覧 API エラー date=${date} status=${res.status} ${res.statusText}`
     );
   }
-  const json: unknown = await res.json();
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch (e) {
+    rethrowTimeoutOnly(signal, e, timeoutMessage);
+  }
   const parsed = edinetListResponseSchema.parse(json);
   if (parsed.metadata.status !== "200") {
     throw new Error(
@@ -126,18 +141,12 @@ export async function downloadDocument(
 
   const timeoutMs = opts.timeoutMs ?? EDINET_DOWNLOAD_TIMEOUT_MS;
   const signal = AbortSignal.timeout(timeoutMs);
+  const timeoutMessage = `EDINET 書類取得 API タイムアウト docID=${docId} type=${docType} timeoutMs=${timeoutMs}`;
   let res: Response;
   try {
     res = await fetch(url, { signal });
   } catch (e) {
-    // 期限切れだけ文脈を付けて投げ直す (listDocuments と同一方針)。
-    if (signal.aborted) {
-      throw new Error(
-        `EDINET 書類取得 API タイムアウト docID=${docId} type=${docType} timeoutMs=${timeoutMs}`,
-        { cause: e }
-      );
-    }
-    throw e;
+    rethrowTimeoutOnly(signal, e, timeoutMessage);
   }
   if (res.status === 404) {
     throw new EdinetNotFoundError(docId, docType);
@@ -150,12 +159,23 @@ export async function downloadDocument(
   const ct = res.headers.get("content-type") ?? "";
   // 正常時は application/octet-stream (ZIP)。JSON が返るのは API エラー応答。
   if (ct.includes("application/json")) {
-    const body = await res.text();
+    let body: string;
+    try {
+      body = await res.text();
+    } catch (e) {
+      rethrowTimeoutOnly(signal, e, timeoutMessage);
+    }
     throw new Error(
       `EDINET 書類取得が JSON エラーを返しました docID=${docId} type=${docType}: ${body.slice(0, 300)}`
     );
   }
-  const buf = Buffer.from(await res.arrayBuffer());
+  let raw: ArrayBuffer;
+  try {
+    raw = await res.arrayBuffer();
+  } catch (e) {
+    rethrowTimeoutOnly(signal, e, timeoutMessage);
+  }
+  const buf = Buffer.from(raw);
   if (buf.length === 0) {
     throw new Error(
       `EDINET 書類取得が空応答 docID=${docId} type=${docType}`

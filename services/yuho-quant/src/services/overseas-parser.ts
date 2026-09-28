@@ -1298,11 +1298,45 @@ function resolveDupEntries(
 // GEO_COLS: 地域 = 列
 // ---------------------------------------------------------------------------
 
+/**
+ * 単一行 geocols の値行特定 (Sol確定の限定分岐)。完全な地域 header +
+ * 無ラベル数値行が唯一で、caption (当該表と直前表の間の原文のみ) に
+ * sales metric + FY の原文証拠があるときだけ行 index を返し、さもなくば
+ * -1。別表の語は構造的に含まない (R98H 82/84 は FY なしで -1)。
+ * ラベルつき非売上行 (資産等) は無ラベルではないため受理しない。
+ * FY の値は wide 継承 + 期首フィルタが通常経路で検証する (ここでは存在のみ)。
+ */
+export function singleUnlabeledValueRow(
+  gridX: string[][],
+  headerIdx: number,
+  width: number,
+  colRole: RegionRole[],
+  totalCol: number,
+  caption: string
+): number {
+  if (totalCol < 0) return -1;
+  if (gridX.length - headerIdx - 1 !== 1) return -1;
+  const ri = headerIdx + 1;
+  // col0 は数値 (無ラベル)。非数値ラベルつき行は対象外。
+  if (parseJpNumber(gridX[ri][0] ?? "") === null) return -1;
+  for (let ci = 0; ci < width; ci++) {
+    if (colRole[ci] !== "domestic" && colRole[ci] !== "overseas" && ci !== totalCol)
+      continue;
+    if (parseJpNumber(gridX[ri][ci] ?? "") === null) return -1;
+  }
+  const salesish =
+    /売上高|売上収益|営業収益|顧客との契約|外部顧客/.test(caption);
+  const fiscal = /(当|前)(連結会計年度|事業年度|会計年度)/.test(caption);
+  if (!salesish || !fiscal) return -1;
+  return ri;
+}
+
 function tryGeoCols(
   gridX: string[][],
   fiscalYearEnd: string,
   heading: string,
-  mode: RoundingMode
+  mode: RoundingMode,
+  caption: string = ""
 ): ParsedTable | null {
   const flat = gridX.map((r) => r.join("")).join("");
   const unit = detectUnitOrNull(flat) ?? detectUnitOrNull(heading);
@@ -1349,7 +1383,15 @@ function tryGeoCols(
       }
     }
   }
-  if (valueRow < 0) return null;
+  if (valueRow < 0) {
+    // 単一行 geocols の限定分岐 (Sol確定): 地域 header + 無ラベル数値行が
+    // 唯一で、表間 caption (当該表のみ。別表の語は構造的に含まない) に
+    // sales metric + FY の原文証拠がある場合だけ値行として受理する
+    // (R98H 81/83 級)。以降は通常 cols と同一の raw quantum・総額照合・
+    // 候補競合 guard へ流す。資産/生産/受注は既存 R1 veto が先に弾く。
+    valueRow = singleUnlabeledValueRow(gridX, headerIdx, width, colRole, totalCol, caption);
+    if (valueRow < 0) return null;
+  }
 
   // 集計列 (連結/合計) と消去列 (調整額/消去) を収集。行パスと同型に、
   // 地域合計 (+消去) がいずれかの集計列と一致することを要求する
@@ -1676,11 +1718,18 @@ export function validateOverseasSaveSet(
  */
 function tablesWithHeading(
   html: string
-): Array<{ table: string; heading: string; wide: string; start: number }> {
+): Array<{
+  table: string;
+  heading: string;
+  wide: string;
+  caption: string;
+  start: number;
+}> {
   const out: Array<{
     table: string;
     heading: string;
     wide: string;
+    caption: string;
     start: number;
   }> = [];
   const re = /<\/?table\b[^>]*>/gi;
@@ -1692,6 +1741,8 @@ function tablesWithHeading(
       .replace(/&[a-zA-Z#0-9]+;/g, " ")
       .replace(/[\s\u3000]+/g, " ")
       .trim();
+  // 直前に閉じたトップレベル表の終端 (表間 caption の起点)。
+  let prevTopEnd = 0;
   while ((m = re.exec(html)) !== null) {
     if (m[0][1] === "/") {
       const start = stack.pop();
@@ -1705,7 +1756,15 @@ function tablesWithHeading(
       // 照合で保護される (不一致→unknown)。Z 側は pe 以前で確定。
       const wideBefore = html.slice(Math.max(0, start - 60000), start);
       const wide = strip(wideBefore);
-      out.push({ table, heading, start, wide });
+      // caption: 当該表と直前の表の間の原文 (表ローカル。別表の語を含まない)。
+      // 単一行 geocols の限定分岐だけが使う (Sol確定: heading 窄窓 160字には
+      // FY 表題が入らず、wide は別表の売上語を含むため両方とも不適)。
+      // 入れ子内側表は外側表開始からの断片 (狭く取る = 安全側)。
+      const capFrom =
+        stack.length > 0 ? stack[stack.length - 1] : Math.min(prevTopEnd, start);
+      const caption = strip(html.slice(capFrom, start)).slice(-4000);
+      if (stack.length === 0) prevTopEnd = re.lastIndex;
+      out.push({ table, heading, start, wide, caption });
     } else {
       stack.push(m.index);
     }
@@ -2190,7 +2249,7 @@ export function parseOverseasHtml(
     wide: string;
   }[] = [];
 
-  for (const { table, heading, wide, start } of tables) {
+  for (const { table, heading, wide, caption, start } of tables) {
     const rawGrid = tableToGridExpanded(table);
     if (rawGrid.length < 2) continue;
     // 全角数字・ラテンの半角化 (全パス共通)。S1009XV6 の「その他 ５」等、
@@ -2249,7 +2308,7 @@ export function parseOverseasHtml(
         };
     }
     if (!cand) {
-      const cols = tryGeoCols(grid, reportPeriodEnd, heading, mode);
+      const cols = tryGeoCols(grid, reportPeriodEnd, heading, mode, caption);
       if (cols)
         cand = {
           status: "ok_geo_cols",
@@ -2271,11 +2330,11 @@ export function parseOverseasHtml(
   // の表だけ候補にしない (明確な前期/矛盾のみ除外)。facts.fiscalYearEnd は
   // pe 固定のため、前期表を残すと単独 best・score 差 best で前期値が当期
   // として保存される (tie 時の継承だけでは防げない)。T は終期=pe 検証済み。
-  // unknown は比較前に落とさず残す (Solレビュー1)。最高点に unknown が
-  // 残り明示候補と共存したら provenance 曖昧として後段で STOP する
-  // (score だけでの unknown 採用も、highest-unknown を削っての T 都合採用
-  // もしない)。明示表示が文書内に皆無のときは report header provenance
-  // (当該有報=pe 期の開示) で unknown 単独採用し得る。
+  // unknown は比較前に落とさず残す (Solレビュー1)。当期証明済み (T) と
+  // unknown の共存は score 選定の前に provenance 曖昧として STOP する
+  // (Sol確定(b)。unknown 高 score は当期証明にならず、highest-unknown を
+  // 削っての T 都合採用もしない)。明示が皆無の文書では unknown が
+  // report header provenance (当該有報=pe 期の開示) で採用され得る。
   // 確定鎖は値軸→表内→表外 (stale な表外表題より値軸/表内が強い)。
   // 除外で候補が尽きても sawGeoSignal が STOP (未構造化) へ流す。
   {
@@ -2303,6 +2362,18 @@ export function parseOverseasHtml(
     }
   }
 
+  // 当期証明済み (T) と fiscal-unknown の共存は score 選定の前に STOP する
+  // (Sol確定(b))。unknown 高 score は当期証明にならない。全 unknown の文書は
+  // 既存扱い (report header provenance) のまま後段へ進む。
+  if (candidates.length > 1) {
+    const fiscals = candidates.map((c) =>
+      resolveCandidateFiscal(c.axis, c.flat, c.wide, reportPeriodEnd)
+    );
+    if (fiscals.some((f) => f !== null) && fiscals.some((f) => f === null)) {
+      return { status: "geo_present_unstructured", facts: [], tablesScanned };
+    }
+  }
+
   if (candidates.length > 0) {
     // 当期・連結・地域注記に最も近い候補を採用。同点は文書の早い方 (連結注記は
     // 個別注記より前に出る) を優先する。ただし同点 top が同一期間/scope の売上
@@ -2311,20 +2382,6 @@ export function parseOverseasHtml(
     candidates.sort((a, b) => b.score - a.score || a.start - b.start);
     const best = candidates[0];
     const tops = candidates.filter((c) => c.score === best.score);
-    // provenance 曖昧の STOP (Solレビュー1の(b)): 最高点に fiscal-unknown が
-    // 残り、明示 (T/side-only) 候補と共存したら STOP する。unknown を score
-    // だけで採用することも、highest-unknown を削って T を都合採用することも
-    // しない。明示が皆無の文書では unknown 単独が report header provenance
-    // で採用され得る (後段の既存経路)。
-    {
-      const fiscalOf = (c: Cand): FiscalResolution =>
-        resolveCandidateFiscal(c.axis, c.flat, c.wide, reportPeriodEnd);
-      const topsHasUnknown = tops.some((c) => fiscalOf(c) === null);
-      const survivorsHasExplicit = candidates.some((c) => fiscalOf(c) !== null);
-      if (topsHasUnknown && survivorsHasExplicit) {
-        return { status: "geo_present_unstructured", facts: [], tablesScanned };
-      }
-    }
     if (tops.length > 1) {
       // 不明/混在の contract で競合する候補は STOP (Gate2。曖昧な表の中から
       // 都合の良い候補を選ばない。単独候補の unknown は report header

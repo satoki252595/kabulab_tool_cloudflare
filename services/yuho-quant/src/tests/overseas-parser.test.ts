@@ -22,6 +22,7 @@ import {
   axisFiscal,
   resolveCandidateFiscal,
   contractOf,
+  singleUnlabeledValueRow,
   type OverseasFact,
 } from "../services/overseas-parser.js";
 import { REGION_BUCKETS } from "../services/overseas-query.js";
@@ -1160,5 +1161,78 @@ describe("HOLD-gate: fiscal 確定鎖 (値軸→表内→表外)", () => {
         "2025-03-31"
       )
     ).toBe("mismatch");
+  });
+});
+
+describe("単一行 geocols 限定分岐: 表間 caption の sales+FY 原文証拠 (S100R98H 81/83)", () => {
+  // 表間 caption は R98H 原本の表81→82・表82→83 間の原文を strip した逐語
+  // (E00766 有報 2023-03-31 期。表81=前連結売上高 152536 / 表82=前連結
+  // 有形固定資産 67165 / 表83=当連結売上高 172811 / 表84=当連結有形固定資産 62019)。
+  const CAP83 =
+    "３．主要な顧客ごとの情報 外部顧客への売上高のうち、連結損益計算書の売上高の10％以上を占める相手先がないため、記載はありません。 当連結会計年度（自2022年４月１日 至2023年３月31日） １．製品及びサービスごとの情報 セグメント情報に同様の情報を開示しているため、記載を省略しております。 ２．地域ごとの情報 (1）売上高";
+  const CAP82 =
+    "（注）売上高は顧客の所在地を基礎とし、国又は地域に分類しております。 (2）有形固定資産";
+  type Roles = Parameters<typeof singleUnlabeledValueRow>[3];
+  const grid83 = [
+    ["（単位：百万円）", "", "", ""],
+    ["", "日本", "アジア地域", "合計"],
+    ["100,547", "18,455", "7,954", "172,811"],
+  ];
+  const roles: Roles = ["other", "domestic", "overseas", "aggregate"];
+
+  it("E2E: 表83 (当連結・売上高) のみ採用し、表81 (前期)・表82/84 (資産) は混入しない", () => {
+    const r = parseOverseasHtml(fx("geocols-singlerow-S100R98H.html"), "2023-03-31");
+    expect(r.status).toBe("ok_geo_cols");
+    expect(r.facts).toHaveLength(7);
+    expect(region(r.facts, "日本")!.salesAmount).toBe(100547);
+    expect(region(r.facts, "アジア地域")!.salesAmount).toBe(18455);
+    expect(region(r.facts, "欧州地域")!.salesAmount).toBe(31945);
+    expect(region(r.facts, "北米地域")!.salesAmount).toBe(13907);
+    expect(region(r.facts, "その他の地域")!.salesAmount).toBe(7954);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(72261);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(172811);
+    expect(pick(r.facts, "domestic")!.fiscalYearEnd).toBe("2023-03-31");
+    // 資産表 (フランス列) の値は混入しない
+    expect(r.facts.some((f) => f.regionName === "フランス")).toBe(false);
+    expect(() => validateOverseasSaveSet(r.facts, r.proof)).not.toThrow();
+  });
+
+  it("受理形: 地域 header + 唯一の無ラベル数値行 + caption の sales+FY → 値行", () => {
+    expect(singleUnlabeledValueRow(grid83, 1, 4, roles, 3, CAP83)).toBe(2);
+  });
+
+  it("FY 箍: 売上脚注があっても caption に FY がなければ -1 (表82/84 級)", () => {
+    expect(singleUnlabeledValueRow(grid83, 1, 4, roles, 3, CAP82)).toBe(-1);
+  });
+
+  it("E2E: FY 証拠なし単一行表 (表82 級の切出し) は候補を作らない", () => {
+    const r = parseOverseasHtml(fx("geocols-singlerow-nofy-S100R98H.html"), "2023-03-31");
+    expect(r.status).toBe("geo_present_unstructured");
+    expect(r.facts).toHaveLength(0);
+  });
+
+  it("sales 箍: caption に sales metric がなければ -1", () => {
+    expect(
+      singleUnlabeledValueRow(
+        grid83,
+        1,
+        4,
+        roles,
+        3,
+        "当連結会計年度（自2022年４月１日 至2023年３月31日） (2）有形固定資産"
+      )
+    ).toBe(-1);
+  });
+
+  it("形状箍: 値行が2行以上・col0 ラベルつき・非数値セル・総額列なしは -1", () => {
+    const two = [...grid83, ["1", "2", "3", "6"]];
+    expect(singleUnlabeledValueRow(two, 1, 4, roles, 3, CAP83)).toBe(-1);
+    const labeled = grid83.map((r) => [...r]);
+    labeled[2][0] = "有形固定資産";
+    expect(singleUnlabeledValueRow(labeled, 1, 4, roles, 3, CAP83)).toBe(-1);
+    const dash = grid83.map((r) => [...r]);
+    dash[2][2] = "－";
+    expect(singleUnlabeledValueRow(dash, 1, 4, roles, 3, CAP83)).toBe(-1);
+    expect(singleUnlabeledValueRow(grid83, 1, 4, roles, -1, CAP83)).toBe(-1);
   });
 });

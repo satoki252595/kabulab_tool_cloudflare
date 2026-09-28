@@ -93,6 +93,30 @@ describe("EDINET 要求期限", () => {
     expect(zip.subarray(0, 2)).toEqual(Buffer.from([0x50, 0x4b]));
   });
 
+  it("境界: header 到着後の body 停滞も期限で打ち切り docID 入りで throw する", async () => {
+    useTestKey();
+    // header は即応答するが arrayBuffer が signal 中断まで戻らない EDINET。
+    globalThis.fetch = (async (_url: unknown, init?: { signal?: AbortSignal | null }) => {
+      const signal = init?.signal;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => "application/octet-stream" },
+        arrayBuffer: () =>
+          new Promise<never>((_resolve, reject) => {
+            signal?.addEventListener("abort", () => {
+              reject(signal?.reason ?? new Error("aborted"));
+            });
+          }),
+      };
+    }) as unknown as typeof fetch;
+    const started = Date.now();
+    await expect(
+      downloadDocument("S100J2E7", 1, { timeoutMs: 50 })
+    ).rejects.toThrow(/書類取得 API タイムアウト docID=S100J2E7 type=1 timeoutMs=50/);
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
   it("非タイムアウトの fetch 失敗は包まず素通しする", async () => {
     useTestKey();
     const failure = new TypeError("fetch failed");
