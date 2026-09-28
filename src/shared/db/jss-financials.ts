@@ -76,16 +76,6 @@ export interface AnnualSeriesPoint {
  */
 const SCOPE_PRIORITY = ["連結", "単体", "不明"] as const;
 
-/**
- * 短期決算とみなす最大の期末間隔 (日)。正規の事業年度は 354〜378 日
- * (53 週決算を含む) なので、330 日 (11 ヶ月) 未満の間隔で来た期は
- * 決算期変更の端数期として年次比較から外す。外した期は欠落として残し、
- * 他の期で埋めない。15 ヶ月級の延長型移行期 (400〜600 日の窓) は
- * ここでは検出しない (未対応の残件。2 倍超の段差は従来の
- * hasDefinitionBreak が判定不能に倒す)。
- */
-const SHORT_PERIOD_MAX_GAP_DAYS = 330;
-
 /** 'YYYY-MM-DD' を UTC epoch ミリ秒へ。形式が壊れていたら投げる */
 function periodEndMs(value: string, what: string): number {
   const ms = Date.parse(`${value}T00:00:00Z`);
@@ -115,8 +105,11 @@ function fiscalYearOf(fiscalPeriodEnd: string): number {
  *    最新期に不明しか無ければ不明のまま (古い既知区分で埋めない)。
  *    全履歴の連結有無で永久優先すると、最新 FY で単体化した企業の
  *    最新年度を捨てる事故になる。
- * 3. 直前 kept 期との間隔が 330 日未満の期は短期決算 (決算期変更の端数期)
- *    として落とす。年欠落 (gap) と null は保持し、補完しない。
+ * 3. 短期決算の推測除外はしない。期末間隔から期間を推定すると期首も
+ *    期間も持たない現状では最新の実績を捨てる事故になるため、kept 行は
+ *    実績期末・連結区分・売上 (null 含む) を原文のまま全て保持する。
+ *    年次比較できる並びかは `evaluateBlueChip` が判定し、欠年・決算期変更・
+ *    不明区分・未取得があれば年率化や穴埋めをせず判定不能に倒す。
  *
  * 訂正は writer が disclosed_at ガード付き完全置換 (#131。NULL を含めて
  * Notion 正本をそのまま反映) で同一 PK 行へ反映済みなので、'本決算' 行を
@@ -152,16 +145,8 @@ export function pickAnnualSeries(
   const points: AnnualSeriesPoint[] = [];
   for (const r of sorted) {
     if (r.consolidated !== scope) continue;
-    const prev = points[points.length - 1];
-    if (
-      prev !== undefined &&
-      (periodEndMs(r.fiscalPeriodEnd, "fiscal_period_end") -
-        periodEndMs(prev.fiscalPeriodEnd, "fiscal_period_end")) /
-        86400000 <
-        SHORT_PERIOD_MAX_GAP_DAYS
-    ) {
-      continue;
-    }
+    // 形式が壊れていたら投げる。間隔からの期間推定はしない。
+    periodEndMs(r.fiscalPeriodEnd, "fiscal_period_end");
     points.push({
       fiscalYear: fiscalYearOf(r.fiscalPeriodEnd),
       fiscalPeriodEnd: r.fiscalPeriodEnd,

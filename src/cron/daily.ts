@@ -575,8 +575,9 @@ export async function loadDailyTargets(db: Db) {
  *
  * `jss_financials` の本決算 × 公開可 (commercial-ok) だけを 1 文で引き、
  * 銘柄コードごとに束ねる (数百行。全銘柄 × 毎日の per-stock SELECT にしない)。
- * 系列への整形 (最新期の区分単一化・未来期/短期決算の除外) は共有 gate
- * (`pickAnnualSeries`) が銘柄ごとに行う。TTM 営業利益率は Yahoo のまま
+ * 系列への整形 (最新期の区分単一化・未来期の除外。短期決算の推測除外は
+ * しない) は共有 gate (`pickAnnualSeries`) が銘柄ごとに行う。年次比較の
+ * 可否は `evaluateBlueChip` が判定不能に倒す。TTM 営業利益率は Yahoo のまま
  * (単年 jss 値への置換は定義を変えるのでしない)。
  */
 export async function loadJssAnnualMap(

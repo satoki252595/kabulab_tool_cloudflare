@@ -198,10 +198,12 @@ describe("getStockDetail の年度売上 (jss_financials)", () => {
     ]);
   });
 
-  it("未来期と短期決算は年次系列に入れない (gap は保持)", async () => {
+  it("未来期は年次系列に入れないが決算期変更の端数期は原文のまま残す", async () => {
     await seedStock("1004");
     seedJss("1004", "2021-03-31", "本決算", "連結", 20_000_000_000);
-    // 決算期変更の端数期 (9 ヶ月)。前 kept 期との間隔 275 日 < 330 日で除外。
+    // 決算期変更の端数期。期末間隔からの期間推定はしないので落とさず、
+    // 実績期末・区分・売上を原文のまま保持する。年次比較の可否は
+    // `evaluateBlueChip` が判定不能に倒す (blue-chip-filter.test.ts)。
     seedJss("1004", "2021-12-31", "本決算", "連結", 15_000_000_000);
     seedJss("1004", "2022-12-31", "本決算", "連結", 22_000_000_000);
     // 未来の本決算は実績比較に入れない。
@@ -214,6 +216,12 @@ describe("getStockDetail の年度売上 (jss_financials)", () => {
         fiscalPeriodEnd: "2021-03-31",
         consolidated: "連結",
         revenue: 20_000_000_000,
+      },
+      {
+        fiscalYear: 2021,
+        fiscalPeriodEnd: "2021-12-31",
+        consolidated: "連結",
+        revenue: 15_000_000_000,
       },
       {
         fiscalYear: 2022,

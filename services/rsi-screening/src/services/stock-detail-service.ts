@@ -61,7 +61,8 @@ export interface StockDetail {
   /**
    * 年度売上系列 (古い→新しい順)。正本 `jss_financials` の本決算実績。
    * 選定は共有 gate (`pickAnnualSeries`) が行う: 公開可 (commercial-ok) のみ、
-   * 最新期の連結区分に単一化、未来期・短期決算を除外、欠損は保持。
+   * 最新期の連結区分に単一化、未来期のみ除外。短期決算の推測除外はせず、
+   * 決算期変更の端数期も欠損 (null・年欠落) と同じく原文のまま保持する。
    */
   annualFinancials: AnnualSeriesPoint[];
 }
