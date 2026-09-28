@@ -123,12 +123,18 @@ const ANNUAL_SNAP: AnnualPreimage = {
     { fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 110.0 },
     { fiscalPeriodEnd: "2025-03-31", consolidated: "連結", revenue: 125.0 },
   ],
+  eligible: [
+    { fiscalPeriodEnd: "2023-03-31", consolidated: "連結", revenue: 100.0 },
+    { fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 110.0 },
+    { fiscalPeriodEnd: "2025-03-31", consolidated: "連結", revenue: 125.0 },
+    { fiscalPeriodEnd: "2025-03-31", consolidated: "単体", revenue: 90.0 },
+  ],
   isBlueChip: true,
   revenueTrend: 1,
 };
 
 describe("年次 preflight", () => {
-  it("一致すれば通り (scope 外・未来期は選定外で一致)", () => {
+  it("一致すれば通り (未来期・他 license は入力範囲外で一致)", () => {
     const db = setupAnnual();
     const s = buildAnnualPreflightStatement(ANNUAL_SNAP);
     const row = runPreflight(db, s.sql, s.params) as Record<string, unknown>;
@@ -157,15 +163,31 @@ describe("年次 preflight", () => {
     expect(() => runPreflight(db, s.sql, s.params)).toThrow();
   });
 
-  it("選定外 (別 scope・未来期・他 license) の増減では落ちない", () => {
+  it("入力範囲外 (未来期・他 license) の増減では落ちない", () => {
     const db = setupAnnual();
     db.exec(`
-      INSERT INTO jss_financials VALUES ('9101', '2022-03-31', '本決算', '単体', 80.0, 'commercial-ok');
       INSERT INTO jss_financials VALUES ('9101', '2027-03-31', '本決算', '連結', 130.0, 'commercial-ok');
       INSERT INTO jss_financials VALUES ('9101', '2024-03-31', '本決算', '連結', 110.0, 'factual-cite');
+      INSERT INTO jss_financials VALUES ('9101', '2024-03-31', '1Q', '連結', 50.0, 'commercial-ok');
     `);
     const s = buildAnnualPreflightStatement(ANNUAL_SNAP);
     const row = runPreflight(db, s.sql, s.params) as Record<string, unknown>;
     expect(Object.values(row)).toEqual(['null']);
+  });
+
+  it("非選定 scope への過去期追加でも落ちる (入力範囲の protected)", () => {
+    const db = setupAnnual();
+    db.exec("INSERT INTO jss_financials VALUES ('9101', '2022-03-31', '本決算', '単体', 80.0, 'commercial-ok')");
+    const s = buildAnnualPreflightStatement(ANNUAL_SNAP);
+    expect(() => runPreflight(db, s.sql, s.params)).toThrow();
+  });
+
+  it("非選定 scope への最新期追加で STOP する (scope 選定が動く)", () => {
+    const db = setupAnnual();
+    // 最新期末 (2025-03-31) より新しい単体の期が来ると最新期末が動き、
+    // scope 選定自体が変わりうる。選定済み scope だけの照合では見逃す。
+    db.exec("INSERT INTO jss_financials VALUES ('9101', '2026-03-31', '本決算', '単体', 140.0, 'commercial-ok')");
+    const s = buildAnnualPreflightStatement(ANNUAL_SNAP);
+    expect(() => runPreflight(db, s.sql, s.params)).toThrow();
   });
 });

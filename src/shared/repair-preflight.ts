@@ -76,10 +76,17 @@ export function buildAtrPreflightStatement(snap: AtrPreimage): D1BatchStatement 
 }
 
 /**
- * 年次 2 列修復の full preimage。`pickAnnualSeries` が選んだ系列の全点 +
- * `evaluateBlueChip` の TTM 入力 + 行の per-row 日付 + 選定条件 (asof・scope) +
- * 保存出力 2 列。系列は点の集合として件数 + 双方向 EXCEPT で照合する
- * (追加・削除・値の書き換えを全て検知。NULL は集合意味で等価)。
+ * 年次 2 列修復の full preimage。選定の入力範囲は `pickAnnualSeries` と同一:
+ * asof 以前の commercial-ok 本決算の**全 scope** (`eligible`) +
+ * `evaluateBlueChip` の TTM 入力 + 行の per-row 日付 + 選定結果の記録
+ * (asof・scope・series) + 保存出力 2 列。
+ *
+ * 選定済み scope だけを照合してはならない: 非選定 scope に最新期が追加
+ * されると最新期末が動き scope 選定自体が変わるため、入力範囲の不一致に
+ * なる。eligible 全集合を件数 + 双方向 EXCEPT で照合し (追加・削除・値の
+ * 書き換えを全て検知。NULL は集合意味で等価)、選定外 scope への最新期
+ * 追加も STOP する。集合が一致すれば選定の導出入力が同一なので scope も
+ * 固定される (`scope`/`series` は選定結果の記録として保持する)。
  */
 export type AnnualPreimage = {
   stockId: number;
@@ -90,28 +97,33 @@ export type AnnualPreimage = {
   operatingMargin: number | null;
   /** 系列選定の基準日。 */
   asof: string;
-  /** 選定 scope (連結/単体/不明。系列なしは "(no-series)")。 */
+  /** 選定 scope (連結/単体/不明。系列なしは "(no-series)")。選定結果の記録。 */
   scope: string;
-  /** 選定済み系列 (古い→新しい順)。 */
+  /** 選定済み系列 (古い→新しい順)。選定結果の記録。 */
   series: { fiscalPeriodEnd: string; consolidated: string; revenue: number | null }[];
+  /**
+   * 選定の入力範囲の全集合: asof 以前の commercial-ok 本決算の全 scope。
+   * preflight が集合照合する対象。順序は問わない (集合比較のため)。
+   */
+  eligible: { fiscalPeriodEnd: string; consolidated: string; revenue: number | null }[];
   isBlueChip: boolean;
   revenueTrend: number | null;
 };
 
 /**
  * 1 銘柄の年次 preflight 文を作る (純関数・副作用なし)。
- * jss 系列の集合照合 (snapshot JSON 1 bind) + 財務行・rsi 行・銘柄対応の
- * `IS` 照合。bind は snapshot JSON 1 + 値 9 の計 10。
+ * eligible 全集合の照合 (snapshot JSON 1 bind) + 財務行・rsi 行・銘柄対応の
+ * `IS` 照合。bind は snapshot JSON 1 + 値 8 の計 9。
  */
 export function buildAnnualPreflightStatement(snap: AnnualPreimage): D1BatchStatement {
   const sql = [
-    "-- preflight: 年次選定の系列全点+TTM+日付+銘柄対応+保存2列が計画時と一致しなければ SQL エラーで batch 全体 rollback",
+    "-- preflight: 年次選定の入力全集合(全scope)+TTM+日付+銘柄対応+保存2列が計画時と一致しなければ SQL エラーで batch 全体 rollback",
     "WITH snap(j) AS (VALUES (?)),",
     "exp_ben(fiscal_period_end, consolidated, revenue) AS (",
-    "  SELECT json_extract(value, '$.fiscalPeriodEnd'), json_extract(value, '$.consolidated'), json_extract(value, '$.revenue') FROM json_each(json_extract((SELECT j FROM snap), '$.series'))",
+    "  SELECT json_extract(value, '$.fiscalPeriodEnd'), json_extract(value, '$.consolidated'), json_extract(value, '$.revenue') FROM json_each(json_extract((SELECT j FROM snap), '$.eligible'))",
     "),",
     "act_ben(fiscal_period_end, consolidated, revenue) AS (",
-    "  SELECT fiscal_period_end, consolidated, net_sales FROM jss_financials WHERE code = ? AND disclosure_type = '本決算' AND license_tag = 'commercial-ok' AND fiscal_period_end <= ? AND consolidated = ?",
+    "  SELECT fiscal_period_end, consolidated, net_sales FROM jss_financials WHERE code = ? AND disclosure_type = '本決算' AND license_tag = 'commercial-ok' AND fiscal_period_end <= ?",
     ")",
     "SELECT json(CASE WHEN (SELECT count(*) FROM act_ben) = (SELECT count(*) FROM exp_ben) AND NOT EXISTS (SELECT * FROM act_ben EXCEPT SELECT * FROM exp_ben) AND NOT EXISTS (SELECT * FROM exp_ben EXCEPT SELECT * FROM act_ben)",
     "  AND EXISTS (SELECT 1 FROM core_stocks WHERE id = ? AND code IS ?)",
@@ -122,10 +134,9 @@ export function buildAnnualPreflightStatement(snap: AnnualPreimage): D1BatchStat
   return {
     sql,
     params: [
-      JSON.stringify({ series: snap.series }),
+      JSON.stringify({ eligible: snap.eligible }),
       snap.code,
       snap.asof,
-      snap.scope,
       snap.stockId,
       snap.code,
       snap.stockId,
