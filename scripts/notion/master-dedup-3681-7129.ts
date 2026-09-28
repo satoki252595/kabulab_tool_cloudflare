@@ -1902,7 +1902,12 @@ export async function loadKeeperBaseline(
     );
   }
   const listed = await listPageFiles(hits[0].id, "Files");
-  const snaps = listed.filter((f) => f.name.startsWith("snapshot-") && f.name.endsWith(".json"));
+  if (listed.length !== 3) {
+    throw new Error(
+      `v1 snapshot の Files が 3 件でありません got=[${listed.map((f) => f.name).join(",")}] page=${hits[0].id}`
+    );
+  }
+  const snaps = listed.filter((f) => f.name.endsWith(".json"));
   if (snaps.length !== 1) {
     throw new Error(
       `v1 snapshot JSON が一意に定まりません got=[${listed.map((f) => f.name).join(",")}] page=${hits[0].id}`
