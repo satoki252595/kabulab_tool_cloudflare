@@ -283,9 +283,12 @@ APPLY のみ writer 枠待ち (read-only plan 自体に grant 不要)。
 - 正常成功 criteria: `master_sync.yml` (no inputs) の通常 run 成功 →
   `catchup.yml target=biztag` の通常 run 成功 + fresh 保存の重複 0。
   #102 の旧 failed close は実 normal 成功の後に行う。
-- 待条件 (concrete): APPLY の writer 解放のみ。解放時は対象 writer の
-  実行中 0・queued 0 を root が fresh 確認すること (本記録の読取は grant 不要で
-  完了済み)。承認済み main (156 反映) 上の master-only 適用であり、
+- 待条件 (concrete): APPLY は (a) writer 解放 (解放時は対象 writer の
+  実行中 0・queued 0 を root が fresh 確認すること。本記録の読取は grant 不要で
+  完了済み) + (b) 共通 snapshot/all-apply 根因コードの main 反映 (未実装。
+  全 apply 入口の完全 proof/CAS gate を含む) + (c) #160 moneyflow 依存の修正
+  適用 (未適用。独立 cron gap + producer 実成功/source-date coverage 担保) が
+  全て揃うまで HOLD。承認済み main (156 反映) 上の master-only 適用であり、
   IMF 未承認コードの apply は含まない。
 - full plan (incoming-schema 全列挙つき) は `master-dedup-3681-7129.ts` の plan
   モードで試行したが、workspace の DB schema 列挙が 60 分を超えても終わらず
