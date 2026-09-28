@@ -2,7 +2,7 @@
 
 入力 tidy 形式は docs/CONTRACTS.md の列定義
 (code, doc_id, element, context_ref, period_start, period_end, instant_date,
- consolidated, unit, value[文字列]) に従う。
+ consolidated, unit, dimensions, value[文字列]) に従う。
 
 不変条件 (§3-1): 値の数値化に失敗した項目・存在しない項目は None のまま。
 推定・補間はしない。
@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime
 
@@ -99,6 +100,9 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
         "EquityAttributableToOwnersOfParentPerShareIFRS",
         "NetAssetsPerShareSummaryOfBusinessResults",
         "EquityAttributableToOwnersOfParentPerShareIFRSSummaryOfBusinessResults",
+        # 名称にRatioがあるが、EDINET原本は「1株当たり親会社所有者帰属持分」
+        # (JPYPerShares)。自己資本比率の要素ではない。
+        "EquityToAssetRatioIFRSSummaryOfBusinessResults",
     ),
     "equity_ratio_pct": (
         "CapitalAdequacyRatio",
@@ -106,7 +110,7 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
         "RatioOfOwnersEquityToTotalAssets",
         "EquityAttributableToOwnersOfParentToTotalAssetsRatioIFRS",
         "EquityToAssetRatioSummaryOfBusinessResults",
-        "EquityToAssetRatioIFRSSummaryOfBusinessResults",
+        "RatioOfOwnersEquityToGrossAssetsIFRSSummaryOfBusinessResults",
     ),
     # EDINETの原本に直接ある比率だけを使う。利益/自己資本から推計しない。
     "roe_pct": ("RateOfReturnOnEquitySummaryOfBusinessResults",),
@@ -140,7 +144,14 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
 
 # 比率系要素は XBRL 上は小数 (例 0.582 = 58.2%)。% への換算は単位の確定的変換
 # であり推定ではない (§3-4。docstring とカタログに明示)
-_RATIO_FIELDS = frozenset({"equity_ratio_pct"})
+_RATIO_FIELDS = frozenset({"equity_ratio_pct", "roe_pct"})
+_PER_SHARE_FIELDS = frozenset({"eps", "bps", "dps"})
+_SUMMARY_AXES = {
+    "ConsolidatedNonconsolidatedAxis": frozenset({"ConsolidatedMember", "NonConsolidatedMember"}),
+    "ConsolidatedOrNonConsolidatedAxis": frozenset({"ConsolidatedMember", "NonConsolidatedMember"}),
+    "ResultForecastAxis": frozenset({"ResultMember", "ForecastMember"}),
+}
+_SUMMARY_MEMBERS = frozenset(member for members in _SUMMARY_AXES.values() for member in members)
 
 # 来期予想として forecast_* フィールドへ写すもの
 _FORECAST_FIELDS: dict[str, str] = {
@@ -252,10 +263,45 @@ def _is_actual_current(context_ref: str) -> bool:
     )
 
 
+def _company_wide(row: pd.Series, field: str) -> bool:
+    """事業/地域/商品等のdimensionを財務全体へ混ぜない。配当は年間だけ。"""
+    allowed = _SUMMARY_MEMBERS | {"AnnualMember"} if field == "dps" else _SUMMARY_MEMBERS
+    if any(part not in allowed for part in row["context_ref"].split("_")[1:]):
+        return False
+    dimensions = row.get("dimensions", "")
+    if not dimensions:
+        return True
+    for axis, member in json.loads(dimensions):
+        axis, member = _local_name(axis), _local_name(member)
+        if field == "dps" and axis == "AnnualDividendPaymentScheduleAxis" and member == "AnnualMember":
+            continue
+        if member not in _SUMMARY_AXES.get(axis, ()):
+            return False
+    return True
+
+
+def _unit_allowed(unit: str, field: str) -> bool:
+    if field in _RATIO_FIELDS:
+        return unit == "pure"
+    if field in _PER_SHARE_FIELDS:
+        return unit in ("JPY/shares", "JPYPerShares")
+    return unit in ("JPY", "円")
+
+
 def _pick_value(
-    df: pd.DataFrame, candidates: tuple[str, ...], *, forecast: bool, next_year: bool = False
+    df: pd.DataFrame, candidates: tuple[str, ...], *, field: str,
+    forecast: bool, next_year: bool = False
 ) -> float | None:
-    """候補要素から優先順に値を選ぶ。連結優先・当期コンテキスト優先 (§4)。"""
+    """会社全体・円建て・適切な単位だけを選ぶ。多義的な数値は欠損にする。"""
+    if df.empty:
+        return None
+    df = df[df["element"].map(_local_name).isin(candidates)]
+    if df.empty:
+        return None
+    df = df[
+        df.apply(lambda row: _company_wide(row, field), axis=1)
+        & df["unit"].map(lambda unit: _unit_allowed(unit, field))
+    ]
     local = df["element"].map(_local_name)
     for cand in candidates:
         rows = df[local == cand]
@@ -265,6 +311,8 @@ def _pick_value(
         mask_ny = rows["context_ref"].map(_is_next_year)
         if forecast:
             rows = rows[mask_fc & (mask_ny if next_year else ~mask_ny)]
+            # forecast_*は通期会社予想。半期予想やnilのQ2で通期を代用/消去しない。
+            rows = rows[rows["context_ref"].str.startswith(("CurrentYearDuration", "NextYearDuration"))]
         else:
             rows = rows[rows["context_ref"].map(_is_actual_current)]
         if rows.empty:
@@ -272,10 +320,22 @@ def _pick_value(
         # 連結優先 ("連結" > "" > "単体")
         for consolidated in ("連結", "", "単体"):
             sel = rows[rows["consolidated"] == consolidated]
-            for _, row in sel.iterrows():
-                num = parse_numeric(row["value"])
-                if num is not None:
-                    return num
+            # 四半期損益は累計を使う。単独3か月と同じ勘定でも混ぜない。
+            if not forecast:
+                accumulated = sel[sel["context_ref"].str.startswith(("CurrentYTD", "CurrentAccumulated", "InterimDuration"))]
+                if not accumulated.empty:
+                    same_start = sel["period_start"].ne("") & sel["period_start"].isin(accumulated["period_start"])
+                    sel = sel[sel.index.isin(accumulated.index) | same_start]
+                # 円・期間・dimensionを確認できた財務本表を、百万円丸めの短信見出しより優先。
+                statements = sel[~sel["context_ref"].str.contains("_ResultMember")]
+                if not statements.empty:
+                    sel = statements
+            numbers = set(sel["value"].map(parse_numeric).dropna())
+            if len(numbers) == 1:
+                return numbers.pop()
+            if len(numbers) > 1:
+                logger.warning("財務値が複数あり採用しない (field=%s element=%s)", field, cand)
+                return None
     return None
 
 
@@ -306,16 +366,28 @@ def _current_actual_flows(tidy: pd.DataFrame) -> pd.DataFrame:
         for field in ("net_sales", "operating_income", "ordinary_income", "net_income")
         for element in ELEMENT_CANDIDATES[field]
     }
-    return tidy[
+    if tidy.empty:
+        return tidy
+    flows = tidy[
         tidy["element"].map(_local_name).isin(flow_elements)
         & tidy["context_ref"].map(_is_actual_current)
         & tidy["value"].map(parse_numeric).notna()
+        & (tidy["unit"].isin(("JPY", "円")) | tidy["unit"].str.fullmatch(r"[A-Z]{3}"))
     ]
+    if flows.empty:
+        return flows
+    return flows[flows.apply(lambda row: _company_wide(row, "net_sales"), axis=1)]
 
 
 def derive_fiscal_period_end(tidy: pd.DataFrame) -> date | None:
     """実績損益の対象期末を優先する。TDnet の年度末 DEI は四半期末とは限らない。"""
-    ends = pd.to_datetime(_current_actual_flows(tidy)["period_end"], errors="coerce").dropna()
+    flows = _current_actual_flows(tidy)
+    results = flows[flows["context_ref"].str.contains("_ResultMember")]
+    if not results.empty:
+        # 本表のCurrentYear context自体が未来期を指す原本もある。
+        # 明示された短信実績期を使い、別期の本表を当該実績へ推定割当しない。
+        flows = results
+    ends = pd.to_datetime(flows["period_end"], errors="coerce").dropna()
     if not ends.empty:
         return ends.max().date()
     explicit = _pick_date(
@@ -422,27 +494,33 @@ def tidy_to_financial_record(
     for field, candidates in ELEMENT_CANDIDATES.items():
         if field == "dps":
             continue
-        num = _pick_value(actual, candidates, forecast=False)
-        if num is not None and field == "roe_pct":
-            num *= 100.0  # 当該EDINET要素は比率。1超(ROE100%超)でも%へ確定変換。
-        elif num is not None and field in _RATIO_FIELDS and abs(num) <= 1.0:
-            num *= 100.0  # 小数表記の比率 → % (確定的な単位変換 §3-4)
+        num = _pick_value(actual, candidates, field=field, forecast=False)
+        if num is not None and field in _RATIO_FIELDS:
+            num *= 100.0  # pure比率だけを%へ確定変換。perShare等の誤unitを採らない。
         values[field] = num
 
-    # 来期予想 (ForecastMember + NextYear)。当期予想しか無い短信では None のまま
+    # 来期の通期予想があれば全forecast_*を同じ対象年度へ揃える。
+    # 未知unit/多値/nil/項目欠損を当期予想で埋めず、予想期間を混ぜない。
+    forecast_elements = {element for field in _FORECAST_FIELDS for element in ELEMENT_CANDIDATES[field]}
+    next_year_present = not tidy[
+        tidy["context_ref"].str.startswith("NextYearDuration")
+        & tidy["element"].map(_local_name).isin(forecast_elements)
+    ].empty
     for src_field, dst_field in _FORECAST_FIELDS.items():
-        next_forecast = _pick_value(
-            scoped, ELEMENT_CANDIDATES[src_field], forecast=True, next_year=True
-        )
-        values[dst_field] = (
-            next_forecast if next_forecast is not None
-            else _pick_value(scoped, ELEMENT_CANDIDATES[src_field], forecast=True)
+        values[dst_field] = _pick_value(
+            scoped, ELEMENT_CANDIDATES[src_field], field=src_field, forecast=True,
+            next_year=next_year_present,
         )
 
     # 1株配当は発行会社の値なので連結区分で除外せず、実績の対象期だけ守る。
     issuer_actual = tidy[tidy["period_end"].isin(("", period)) & tidy["instant_date"].isin(("", period))]
-    dps_actual = _pick_value(issuer_actual, ELEMENT_CANDIDATES["dps"], forecast=False)
-    dps_forecast = _pick_value(tidy, ELEMENT_CANDIDATES["dps"], forecast=True)
+    dps_actual = _pick_value(issuer_actual, ELEMENT_CANDIDATES["dps"], field="dps", forecast=False)
+    next_dps_present = not tidy[
+        tidy["context_ref"].str.startswith("NextYearDuration")
+        & tidy["element"].map(_local_name).isin(ELEMENT_CANDIDATES["dps"])
+    ].empty
+    dps_forecast = _pick_value(tidy, ELEMENT_CANDIDATES["dps"], field="dps", forecast=True,
+                               next_year=next_dps_present)
 
     return FinancialSummaryRecord(
         code=code,

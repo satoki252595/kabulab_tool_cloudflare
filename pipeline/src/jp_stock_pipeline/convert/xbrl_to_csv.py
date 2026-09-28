@@ -2,7 +2,7 @@
 
 tidy 列（CSV/Parquet 共通・この順・全列文字列）:
     code, doc_id, element, context_ref, period_start, period_end,
-    instant_date, consolidated, unit, value
+    instant_date, consolidated, unit, dimensions, value
 
 不変条件:
 - 変換は値を一切変更しない (§5.2)。value は原文の文字列をそのまま保持し、
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 import re
 import zipfile
@@ -37,11 +38,13 @@ TIDY_COLUMNS: list[str] = [
     "instant_date",
     "consolidated",
     "unit",
+    "dimensions",
     "value",
 ]
 
 _XBRLI_NS = "http://www.xbrl.org/2003/instance"
 _XSI_NS = "http://www.w3.org/2001/XMLSchema-instance"
+_XBRLDI_NS = "http://xbrl.org/2006/xbrldi"
 
 # EDINET の標準コンテキストID（メンバー無し）パターン:
 # CurrentYearDuration / Prior1YearInstant / InterimDuration / CurrentYTDDuration 等。
@@ -53,6 +56,7 @@ _CSV_COL_ELEMENT = "要素ID"
 _CSV_COL_CONTEXT = "コンテキストID"
 _CSV_COL_CONSOLIDATED = "連結・個別"
 _CSV_COL_UNIT = "単位"
+_CSV_COL_UNIT_ID = "ユニットID"
 _CSV_COL_VALUE = "値"
 
 
@@ -77,20 +81,14 @@ def consolidated_from_context(context_ref: str) -> str:
 # ------------------------------------------------------------------
 
 
-def _contexts(root: etree._Element) -> dict[str, tuple[str, str, str]]:
-    """context id → (period_start, period_end, instant_date)。ISO 日付文字列。"""
-    out: dict[str, tuple[str, str, str]] = {}
-    for ctx in root.findall(f"{{{_XBRLI_NS}}}context"):
+def _contexts(root: etree._Element) -> dict[str, tuple[str, str, str, str]]:
+    """context id → 期間・実dimension。ID名だけではセグメントを識別できない。"""
+    out: dict[str, tuple[str, str, str, str]] = {}
+    for ctx in root.iter(f"{{{_XBRLI_NS}}}context"):
         ctx_id = ctx.get("id")
         if not ctx_id:
             continue
-        period = ctx.find(f"{{{_XBRLI_NS}}}period")
-        start = end = instant = ""
-        if period is not None:
-            start = (period.findtext(f"{{{_XBRLI_NS}}}startDate") or "").strip()
-            end = (period.findtext(f"{{{_XBRLI_NS}}}endDate") or "").strip()
-            instant = (period.findtext(f"{{{_XBRLI_NS}}}instant") or "").strip()
-        out[ctx_id] = (start, end, instant)
+        out[ctx_id] = _context_period(ctx)
     return out
 
 
@@ -105,7 +103,7 @@ def _measure_local(measure: str) -> str:
 def _units(root: etree._Element) -> dict[str, str]:
     """unit id → 単位表記。divide は "分子/分母"（例 JPY/shares）。"""
     out: dict[str, str] = {}
-    for unit in root.findall(f"{{{_XBRLI_NS}}}unit"):
+    for unit in root.iter(f"{{{_XBRLI_NS}}}unit"):
         unit_id = unit.get("id")
         if not unit_id:
             continue
@@ -143,7 +141,7 @@ def _facts_from_instance(xml_bytes: bytes, code: str, doc_id: str) -> list[dict[
             continue  # contextRef を持つ要素のみがファクト（タプルは持たない）
         if etree.QName(el).namespace == _XBRLI_NS:
             continue  # xbrli:context 等のインフラ要素は除外
-        start, end, instant = contexts.get(context_ref, ("", "", ""))
+        start, end, instant, dimensions = contexts.get(context_ref, ("", "", "", ""))
         unit_ref = el.get("unitRef")
         if el.get(f"{{{_XSI_NS}}}nil") == "true":
             value = ""  # nil ファクトは欠損のまま (§3-1)
@@ -160,6 +158,7 @@ def _facts_from_instance(xml_bytes: bytes, code: str, doc_id: str) -> list[dict[
                 "instant_date": instant,
                 "consolidated": consolidated_from_context(context_ref),
                 "unit": units.get(unit_ref, "") if unit_ref else "",
+                "dimensions": dimensions,
                 "value": value,
             }
         )
@@ -204,7 +203,10 @@ def _decode_ix_value(text: str, sign: str | None, scale: str | None) -> str:
     return format(value.normalize(), "f")
 
 
-def _facts_from_inline(html_bytes: bytes, code: str, doc_id: str) -> list[dict[str, str]]:
+def _facts_from_inline(
+    html_bytes: bytes, code: str, doc_id: str, *,
+    shared_contexts: dict | None = None, shared_units: dict | None = None,
+) -> list[dict[str, str]]:
     """1つのインラインXBRL文書 (ixbrl.htm) から全ファクトを tidy 行に展開する。
 
     - context/unit は ix:header/ix:resources 内の xbrli 要素から収集
@@ -215,16 +217,8 @@ def _facts_from_inline(html_bytes: bytes, code: str, doc_id: str) -> list[dict[s
     root = etree.fromstring(html_bytes, parser=parser)
     if root is None:
         return []
-    contexts = {
-        ctx.get("id"): _context_period(ctx)
-        for ctx in root.iter(f"{{{_XBRLI_NS}}}context")
-        if ctx.get("id")
-    }
-    units = {}
-    for unit in root.iter(f"{{{_XBRLI_NS}}}unit"):
-        if unit.get("id"):
-            measure = unit.findtext(f"{{{_XBRLI_NS}}}measure")
-            units[unit.get("id")] = _measure_local(measure or "")
+    contexts = _contexts(root) if shared_contexts is None else shared_contexts
+    units = _units(root) if shared_units is None else shared_units
 
     rows: list[dict[str, str]] = []
     fact_tags = [
@@ -246,7 +240,7 @@ def _facts_from_inline(html_bytes: bytes, code: str, doc_id: str) -> list[dict[s
                     value = _decode_ix_value(text, el.get("sign"), el.get("scale"))
                 else:
                     value = text.strip()  # 原文そのまま (§5.2)
-            start, end, instant = contexts.get(context_ref, ("", "", ""))
+            start, end, instant, dimensions = contexts.get(context_ref, ("", "", "", ""))
             unit_ref = el.get("unitRef")
             rows.append(
                 {
@@ -259,20 +253,28 @@ def _facts_from_inline(html_bytes: bytes, code: str, doc_id: str) -> list[dict[s
                     "instant_date": instant,
                     "consolidated": consolidated_from_context(context_ref),
                     "unit": units.get(unit_ref, "") if unit_ref else "",
+                    "dimensions": dimensions,
                     "value": value,
                 }
             )
     return rows
 
 
-def _context_period(ctx: etree._Element) -> tuple[str, str, str]:
+def _context_period(ctx: etree._Element) -> tuple[str, str, str, str]:
+    members = [
+        [member.get("dimension", ""), (member.text or "").strip()]
+        for tag in ("explicitMember", "typedMember")
+        for member in ctx.iter(f"{{{_XBRLDI_NS}}}{tag}")
+    ]
+    dimensions = json.dumps(sorted(members), ensure_ascii=False) if members else ""
     period = ctx.find(f"{{{_XBRLI_NS}}}period")
     if period is None:
-        return ("", "", "")
+        return ("", "", "", dimensions)
     return (
         (period.findtext(f"{{{_XBRLI_NS}}}startDate") or "").strip(),
         (period.findtext(f"{{{_XBRLI_NS}}}endDate") or "").strip(),
         (period.findtext(f"{{{_XBRLI_NS}}}instant") or "").strip(),
+        dimensions,
     )
 
 
@@ -294,9 +296,23 @@ def xbrl_zip_to_tidy(zip_bytes: bytes, code: str, doc_id: str) -> pd.DataFrame:
             except etree.XMLSyntaxError:
                 logger.exception("XBRL インスタンスのパース失敗（スキップ）: %s", name)
         if not instance_names:
-            for name in (n for n in names if n.lower().endswith("-ixbrl.htm")):
+            inline_names = [n for n in names if n.lower().endswith("-ixbrl.htm")]
+            contexts, units = {}, {}
+            # iXBRL Document Setは別ファイルのcontext/unitを参照する。全体の定義を
+            # 先に集約し、同IDの不一致は止める。DOMを全ファイル分保持しない。
+            for name in inline_names:
+                root = etree.fromstring(zf.read(name), parser=etree.XMLParser(recover=True, huge_tree=True))
+                if root is None:
+                    raise ValueError(f"iXBRL resourcesを読めません: {name}")
+                for incoming, shared in ((_contexts(root), contexts), (_units(root), units)):
+                    for resource_id, value in incoming.items():
+                        if resource_id in shared and shared[resource_id] != value:
+                            raise ValueError(f"iXBRL同IDのcontext/unitが不一致です: {resource_id}")
+                        shared[resource_id] = value
+            for name in inline_names:
                 try:
-                    rows.extend(_facts_from_inline(zf.read(name), code, doc_id))
+                    rows.extend(_facts_from_inline(zf.read(name), code, doc_id,
+                                                   shared_contexts=contexts, shared_units=units))
                 except Exception:
                     logger.exception("インラインXBRL のパース失敗（スキップ）: %s", name)
     return _as_tidy_frame(rows)
@@ -372,7 +388,10 @@ def _rows_from_edinet_csv(text: str, code: str, doc_id: str, name: str) -> list[
                 "period_end": "",
                 "instant_date": "",
                 "consolidated": _csv_consolidated(cell(row, _CSV_COL_CONSOLIDATED), context_ref),
-                "unit": cell(row, _CSV_COL_UNIT).strip(),
+                # 「単位」はperShare/pure/外貨で空になる。原本のユニットIDを失わない。
+                "unit": cell(row, _CSV_COL_UNIT_ID).strip() or cell(row, _CSV_COL_UNIT).strip(),
+                # CSVはdimension定義を持たない。transformでcontext IDのMemberを判定する。
+                "dimensions": "",
                 "value": cell(row, _CSV_COL_VALUE),  # 原文そのまま (§5.2)
             }
         )

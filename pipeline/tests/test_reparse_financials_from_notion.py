@@ -221,8 +221,9 @@ def test_d1_repair_rejects_missing_notion_read_proof_before_connecting(
 
 
 @pytest.mark.parametrize("read_back_net_sales", [547_779_000_000, 547_779_000_000.0])
+@pytest.mark.parametrize("archive_parser", ["current", "previous-parser"])
 def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
-    tmp_path, monkeypatch, read_back_net_sales,
+    tmp_path, monkeypatch, read_back_net_sales, archive_parser,
 ):
     older = replace(reparse.notion_financial(_page()), fiscal_period_end=reparse.date(2027, 3, 31))
     older_new = replace(older, fiscal_period_end=reparse.date(2025, 3, 31))
@@ -240,7 +241,8 @@ def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
     ])) + "\n")
     receipts.write_text(json.dumps({
         "page_id": "archived", "target_page_id": "target",
-        "record": reparse._record_dict(newer_old), "parser_sha256": reparse.PARSER_SHA256,
+        "record": reparse._record_dict(newer_old),
+        "parser_sha256": reparse.PARSER_SHA256 if archive_parser == "current" else archive_parser,
         "raw_sha256": "a" * 64, "action": "newer_disclosure_preserved",
     }) + "\n")
     page, events = {"id": "target", "record": newer_old}, []

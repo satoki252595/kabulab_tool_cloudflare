@@ -168,9 +168,20 @@ period_start   : str  ISO日付 or 空
 period_end     : str  ISO日付 or 空
 instant_date   : str  ISO日付 or 空（instant型のとき）
 consolidated   : str  "連結"/"単体"/""（コンテキストから判別できた場合のみ）
-unit           : str  単位（原文のまま 例 JPY, shares。無ければ空）
+unit           : str  XBRLのmeasure（例JPY, JPY/shares, pure）またはEDINET CSVのユニットID（例JPYPerShares）。CSV「単位」はperShare/外貨で空になるため、非空ユニットIDを優先して保持する
+dimensions     : str  XBRLの実dimensionを[[axis,member],...]のJSONで原文保持。無し/CSVは空。CSVのMemberはcontext_refから判定する
 value          : str  値（**原文の文字列をそのまま**。数値化は transform 側で行う）
 ```
+
+財務サマリの金額は円、EPS/BPS/配当は円/株、比率はpureのみ採用する。
+セグメント/地域/商品のdimensionを会社全体へ混ぜず、年間配当はAnnualMemberだけを採用する。
+forecast_*はCurrent/NextYearDurationの通期予想だけを採用する。四半期/半期予想を代用しない。
+NextYearの通期予想が存在する場合、全forecast_*の対象年度をNextYearへ揃え、nil/不明単位/多値/欠損項目をCurrentYearで埋めない。配当予想もNextYearが存在すれば同じ規則で年間値を使う。
+iXBRL Document Setのcontext/unitはZIP全体で共有定義を解決し、不一致IDは失敗とする。
+同じ実績範囲の本表と丸めた短信見出しが共存するときは、範囲/単位を確認できた本表を優先する。
+実績期末は明示ResultMemberの会社全体損益を優先する。本表のCurrentYearが未来/別期を指す原本を、現在実績へ推定割当しない。
+単位不明/外貨のみ/原本内で同じ範囲の値が競合する項目はNone（欠損）とする。為替換算や推定はしない。
+ユニット定義: [金融庁 EDINET設定規約](https://disclosure2dl.edinet-fsa.go.jp/guide/static/disclosure/download/ESE140303.pdf) §4-1（JPY, JPYPerShares, pure）。
 
 ## transform → upsert の受け渡し
 

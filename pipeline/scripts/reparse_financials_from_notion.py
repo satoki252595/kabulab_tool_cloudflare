@@ -26,6 +26,7 @@ from jp_stock_pipeline.cloud_store.financials import (
 )
 from jp_stock_pipeline.cloud_store.schema import FINANCIALS_PK
 from jp_stock_pipeline.convert.xbrl_to_csv import edinet_csv_zip_to_tidy, xbrl_zip_to_tidy
+from jp_stock_pipeline.convert import xbrl_to_csv as convert_module
 from jp_stock_pipeline.licensing import LicenseTag, strictness_rank, stricter_tag_sql
 from jp_stock_pipeline.models import DataQuality, FinancialSummaryRecord, Provenance, Source
 from jp_stock_pipeline.notion import schema as S
@@ -40,7 +41,9 @@ from jp_stock_pipeline.transform.normalize import derive_disclosure_type, tidy_t
 
 MAX_RAW_BYTES = 64 * 1024 * 1024
 MAX_EXPANDED_BYTES = 128 * 1024 * 1024
-PARSER_SHA256 = hashlib.sha256(Path(normalize_module.__file__).read_bytes()).hexdigest()
+PARSER_SHA256 = hashlib.sha256(
+    Path(convert_module.__file__).read_bytes() + b"\0" + Path(normalize_module.__file__).read_bytes()
+).hexdigest()
 
 
 def _text(props: dict, name: str, kind: str = "rich_text") -> str:
@@ -137,6 +140,11 @@ def reparse_record(
         tidy = xbrl_zip_to_tidy(content, old.code, raw_page["id"])
     else:
         raise ValueError(f"{old.code}: 未対応の原本種別 {datatype}")
+    new, details = _from_tidy(old, tidy, digest, props[S.RAW_PROP_URL]["url"])
+    return new, {**details, "raw_datatype": datatype}
+
+
+def _from_tidy(old, tidy, digest, raw_url):
     new = tidy_to_financial_record(
         tidy,
         old.code,
@@ -158,9 +166,79 @@ def reparse_record(
     return new, {
         "parser_sha256": PARSER_SHA256,
         "raw_sha256": digest,
-        "raw_url": props[S.RAW_PROP_URL]["url"],
+        "raw_url": raw_url,
         "changes": changes,
     }
+
+
+def _cached_item(item: dict, cache_dir: Path) -> dict:
+    """検証済みjournalの原本を再使用する。欠損時にHTTPで埋めない。"""
+    old = _record_from_dict(item["old"])
+    digest = item["raw_sha256"]
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise ValueError(f"{old.code}: 原本cache SHA256が不正です")
+    cached = cache_dir / f"{digest}.zip"
+    if not cached.exists() or cached.stat().st_size > MAX_RAW_BYTES:
+        raise ValueError(f"{old.code}: 原本cache欠損/64MiB上限超過")
+    content = cached.read_bytes()
+    if hashlib.sha256(content).hexdigest() != digest:
+        raise ValueError(f"{old.code}: 原本cache SHA256が一致しません")
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        if sum(entry.file_size for entry in archive.infolist()) > MAX_EXPANDED_BYTES:
+            raise ValueError(f"{old.code}: 原本展開後が128MiB上限を超えました")
+        names = archive.namelist()
+    csv_format = any(name.lower().endswith(".csv") for name in names)
+    xbrl_format = any(name.lower().endswith((".xbrl", "-ixbrl.htm")) for name in names)
+    if csv_format == xbrl_format or (csv_format and old.provenance.source is not Source.EDINET):
+        raise ValueError(f"{old.code}: 原本cacheの形式を一意に確定できません")
+    if not old.provenance.raw_page_id:
+        raise ValueError(f"{old.code}: 原本page IDがありません")
+    if csv_format:
+        tidy = edinet_csv_zip_to_tidy(content, old.code, old.provenance.raw_page_id)
+        datatype = "csv"
+    else:
+        tidy = xbrl_zip_to_tidy(content, old.code, old.provenance.raw_page_id)
+        datatype = "tdnet_xbrl" if old.provenance.source is Source.TDNET else "xbrl"
+    new, details = _from_tidy(old, tidy, digest, item["raw_url"])
+    return {"page_id": item["page_id"], "old": item["old"], "new": _record_dict(new),
+            "raw_datatype": datatype, **details}
+
+
+def reparse_cached(source_journal: Path, journal: Path, cache_dir: Path):
+    """Notionへ再queryせず全cacheを再解析。apply時には正本を再読して一致を要求する。"""
+    started = time.monotonic()
+    items = list(_journal_items(source_journal).values())
+    if not items or any("error" in item for item in items):
+        raise ValueError("元journalに未検証の原本があります")
+    previous = _journal_items(journal)
+    done = {item["page_id"] for item in items
+            if item["page_id"] in previous
+            and previous[item["page_id"]].get("parser_sha256") == PARSER_SHA256
+            and previous[item["page_id"]].get("raw_sha256") == item["raw_sha256"]
+            and previous[item["page_id"]].get("old") == item["old"]}
+    pending = [item for item in items if item["page_id"] not in done]
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    checked = changed = failed = 0
+    with journal.open("a") as output, ThreadPoolExecutor(max_workers=4) as pool:
+        for offset in range(0, len(pending), 100):
+            futures = [(item, pool.submit(_cached_item, item, cache_dir))
+                       for item in pending[offset:offset + 100]]
+            for original, future in futures:
+                checked += 1
+                try:
+                    item = future.result()
+                    changed += bool(item["changes"])
+                except (ValueError, zipfile.BadZipFile) as exc:
+                    failed += 1
+                    item = {"page_id": original["page_id"], "error": str(exc)}
+                output.write(_json(item) + "\n")
+                output.flush()
+            print(_json({"checked": checked, "changed": changed, "failed": failed}), flush=True)
+    print(_json({"scanned": len(items), "resumed": len(done), "checked": checked,
+                 "changed": changed, "failed": failed, "notion_requests": 0,
+                 "elapsed_seconds": round(time.monotonic() - started, 1)}), flush=True)
+    if failed:
+        raise RuntimeError(f"原本cache再解析に{failed}件失敗しました。journalを確認してください")
 
 
 def apply_reparsed(
@@ -404,12 +482,11 @@ def apply_journal(journal: Path, receipts: Path | None = None):
                                 raise ValueError(f"{code}: 監査後に旧正本が変わりました")
                             client.archive_page(page["id"])
                     elif (page is None and targets and item["page_id"] in previous
-                          and previous[item["page_id"]].get("parser_sha256") == PARSER_SHA256
                           and previous[item["page_id"]].get("raw_sha256") == item["raw_sha256"]
                           and previous[item["page_id"]]["target_page_id"] == targets[0]["id"]
-                          and (previous[item["page_id"]]["record"] ==
-                               _record_dict(_page_record(targets[0])) or
-                               _record_dict(_page_record(targets[0])) in canonical_values[key])
+                          # 旧receiptはarchive先のリンク証拠だけ。数値は必ず今回の
+                          # parserで再解析したcanonical原本と新鮮な正本読取で再検証する。
+                          and _record_dict(_page_record(targets[0])) in canonical_values[key]
                           and not financial_overwrite_allowed(targets[0], record)):
                         saved, action = targets[0], "newer_disclosure_preserved"
                     else:
@@ -589,6 +666,7 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, help="サンプル監査の件数。全件検証とは扱わない")
     parser.add_argument("--journal", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path, default=Path("/tmp/kabulab-financial-raw-cache"))
+    parser.add_argument("--reparse-cached-from", type=Path, help="検証済み原本cacheを再解析（API呼出なし）")
     parser.add_argument(
         "--apply-journal", action="store_true", help="監査済みjournalをNotion③だけへ反映"
     )
@@ -597,9 +675,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit は正数が必要です")
-    if args.apply_journal and args.sync_d1:
+    if sum(bool(mode) for mode in (args.apply_journal, args.sync_d1, args.reparse_cached_from)) > 1:
         parser.error("Notion修復とD1同期は再読成功の記録を確認して別々に実行してください")
-    if args.sync_d1:
+    if args.reparse_cached_from:
+        reparse_cached(args.reparse_cached_from, args.journal, args.cache_dir)
+    elif args.sync_d1:
         if args.receipts is None:
             parser.error("--sync-d1 は --receipts が必要です")
         sync_d1(args.journal, args.receipts)

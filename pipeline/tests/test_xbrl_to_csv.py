@@ -31,6 +31,7 @@ CONTRACT_COLUMNS = [
     "instant_date",
     "consolidated",
     "unit",
+    "dimensions",
     "value",
 ]
 

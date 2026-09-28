@@ -1,0 +1,32 @@
+要素ID	項目名	コンテキストID	相対年度	連結・個別	期間・時点	ユニットID	単位	値
+jpcrp_cor:RevenueIFRSSummaryOfBusinessResults	売上収益（IFRS）、経営指標等	CurrentYearDuration	当期	その他	期間	USD		3574924000
+jpcrp_cor:ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults	当期利益又は当期損失（△）：親会社の所有者に帰属（IFRS）、経営指標等	CurrentYearDuration	当期	その他	期間	USD		96536000
+jpcrp_cor:EquityToAssetRatioIFRSSummaryOfBusinessResults	１株当たり親会社所有者帰属持分（IFRS）、経営指標等	CurrentYearInstant	当期末	その他	時点	USDPerShares		14.53
+jpcrp_cor:BasicEarningsLossPerShareIFRSSummaryOfBusinessResults	基本的１株当たり利益又は損失（△）（IFRS）、経営指標等	CurrentYearDuration	当期	その他	期間	USDPerShares		1.55
+jpcrp_cor:RatioOfOwnersEquityToGrossAssetsIFRSSummaryOfBusinessResults	親会社所有者帰属持分比率（IFRS）、経営指標等	CurrentYearInstant	当期末	その他	時点	pure		0.255
+jpcrp_cor:CashFlowsFromUsedInInvestingActivitiesIFRSSummaryOfBusinessResults	投資活動によるキャッシュ・フロー（IFRS）、経営指標等	CurrentYearDuration	当期	その他	期間	USD		-210542000
+jpcrp_cor:ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults	当期利益又は当期損失（△）：親会社の所有者に帰属（IFRS）、経営指標等	CurrentYearDuration	当期	その他	期間	JPY	円	13691000000
+jpcrp_cor:EquityToAssetRatioIFRSSummaryOfBusinessResults	１株当たり親会社所有者帰属持分（IFRS）、経営指標等	CurrentYearInstant	当期末	その他	時点	JPYPerShares		2061.45
+jpcrp_cor:BasicEarningsLossPerShareIFRSSummaryOfBusinessResults	基本的１株当たり利益又は損失（△）（IFRS）、経営指標等	CurrentYearDuration	当期	その他	期間	JPYPerShares		219.35
+jpcrp_cor:CashFlowsFromUsedInInvestingActivitiesIFRSSummaryOfBusinessResults	投資活動によるキャッシュ・フロー（IFRS）、経営指標等	CurrentYearDuration	当期	その他	期間	JPY	円	-29861000000
+jpcrp_cor:NetAssetsPerShareSummaryOfBusinessResults	１株当たり純資産額、経営指標等	CurrentYearInstant_NonConsolidatedMember	当期末	その他	時点	JPYPerShares		583.99
+jpcrp_cor:DividendPaidPerShareSummaryOfBusinessResults	１株当たり配当額、経営指標等	CurrentYearDuration_NonConsolidatedMember	当期	その他	期間	JPYPerShares		20.00
+jpcrp_cor:BasicEarningsLossPerShareSummaryOfBusinessResults	１株当たり当期純利益又は当期純損失（△）、経営指標等	CurrentYearDuration_NonConsolidatedMember	当期	その他	期間	JPYPerShares		52.38
+jpcrp_cor:EquityToAssetRatioSummaryOfBusinessResults	自己資本比率、経営指標等	CurrentYearInstant_NonConsolidatedMember	当期末	その他	時点	pure		0.132
+jpcrp_cor:RateOfReturnOnEquitySummaryOfBusinessResults	自己資本利益率、経営指標等	CurrentYearDuration_NonConsolidatedMember	当期	その他	期間	pure		0.106
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	CurrentYearDuration	当期	その他	期間	USD		3574924000
+jpigp_cor:OperatingProfitLossIFRS	営業利益（△損失）（IFRS）	CurrentYearDuration	当期	その他	期間	USD		192938000
+jpigp_cor:ProfitLossAttributableToOwnersOfParentIFRS	親会社の所有者、当期利益（△損失）（IFRS）	CurrentYearDuration	当期	その他	期間	USD		96536000
+jpigp_cor:BasicEarningsLossPerShareIFRS	基本的１株当たり当期利益（△損失）（IFRS）	CurrentYearDuration	当期	その他	期間	USDPerShares		1.55
+jppfs_cor:NetSales	売上高	CurrentYearDuration_NonConsolidatedMember	当期	個別	期間	JPY	円	406179000000
+jppfs_cor:OperatingIncome	営業利益又は営業損失（△）	CurrentYearDuration_NonConsolidatedMember	当期	個別	期間	JPY	円	6005000000
+jppfs_cor:OrdinaryIncome	経常利益又は経常損失（△）	CurrentYearDuration_NonConsolidatedMember	当期	個別	期間	JPY	円	6557000000
+jppfs_cor:ProfitLoss	当期純利益又は当期純損失（△）（平成26年3月28日財規等改正後）	CurrentYearDuration_NonConsolidatedMember	当期	個別	期間	JPY	円	3269000000
+jppfs_cor:ProfitLoss	当期純利益又は当期純損失（△）（平成26年3月28日財規等改正後）	CurrentYearDuration_NonConsolidatedMember_RetainedEarningsBroughtForwardMember	当期	個別	期間	JPY	円	3269000000
+jppfs_cor:ProfitLoss	当期純利益又は当期純損失（△）（平成26年3月28日財規等改正後）	CurrentYearDuration_NonConsolidatedMember_RetainedEarningsMember	当期	個別	期間	JPY	円	3269000000
+jppfs_cor:ProfitLoss	当期純利益又は当期純損失（△）（平成26年3月28日財規等改正後）	CurrentYearDuration_NonConsolidatedMember_ShareholdersEquityMember	当期	個別	期間	JPY	円	3269000000
+jppfs_cor:ProfitLoss	当期純利益又は当期純損失（△）（平成26年3月28日財規等改正後）	CurrentYearDuration_NonConsolidatedMember	当期	個別	期間	JPY	円	3269000000
+jpdei_cor:AccountingStandardsDEI	会計基準、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	IFRS
+jpdei_cor:CurrentPeriodEndDateDEI	当会計期間終了日、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	2023-12-31
+jpdei_cor:TypeOfCurrentPeriodDEI	当会計期間の種類、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	FY
+jpdei_cor:CurrentFiscalYearEndDateDEI	当事業年度終了日、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	2023-12-31

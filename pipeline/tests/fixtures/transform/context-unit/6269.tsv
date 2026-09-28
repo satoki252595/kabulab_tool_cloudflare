@@ -1,0 +1,28 @@
+要素ID	項目名	コンテキストID	相対年度	連結・個別	期間・時点	ユニットID	単位	値
+jpcrp_cor:RevenueIFRSSummaryOfBusinessResults	売上収益（IFRS）、経営指標等	CurrentYTDDuration	当四半期累計期間	その他	期間	USD		1375521000
+jpcrp_cor:RevenueIFRSSummaryOfBusinessResults	売上収益（IFRS）、経営指標等	CurrentQuarterDuration	当四半期会計期間	その他	期間	USD		711273000
+jpcrp_cor:ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults	当期利益又は当期損失（△）：親会社の所有者に帰属（IFRS）、経営指標等	CurrentYTDDuration	当四半期累計期間	その他	期間	USD		15142000
+jpcrp_cor:ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults	当期利益又は当期損失（△）：親会社の所有者に帰属（IFRS）、経営指標等	CurrentQuarterDuration	当四半期会計期間	その他	期間	USD		31800000
+jpcrp_cor:BasicEarningsLossPerShareIFRSSummaryOfBusinessResults	基本的１株当たり利益又は損失（△）（IFRS）、経営指標等	CurrentYTDDuration	当四半期累計期間	その他	期間	USDPerShares		0.27
+jpcrp_cor:BasicEarningsLossPerShareIFRSSummaryOfBusinessResults	基本的１株当たり利益又は損失（△）（IFRS）、経営指標等	CurrentQuarterDuration	当四半期会計期間	その他	期間	USDPerShares		0.56
+jpcrp_cor:RatioOfOwnersEquityToGrossAssetsIFRSSummaryOfBusinessResults	親会社所有者帰属持分比率（IFRS）、経営指標等	CurrentQuarterInstant	当四半期会計期間末	その他	時点	pure		0.213
+jpcrp_cor:CashFlowsFromUsedInInvestingActivitiesIFRSSummaryOfBusinessResults	投資活動によるキャッシュ・フロー（IFRS）、経営指標等	CurrentYTDDuration	当四半期累計期間	その他	期間	USD		-2955000
+jpcrp_cor:RevenueIFRSSummaryOfBusinessResults	売上収益（IFRS）、経営指標等	CurrentYTDDuration	当四半期累計期間	その他	期間	JPY	円	187951000000
+jpcrp_cor:RevenueIFRSSummaryOfBusinessResults	売上収益（IFRS）、経営指標等	CurrentQuarterDuration	当四半期会計期間	その他	期間	JPY	円	97188000000
+jpcrp_cor:ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults	当期利益又は当期損失（△）：親会社の所有者に帰属（IFRS）、経営指標等	CurrentYTDDuration	当四半期累計期間	その他	期間	JPY	円	2069000000
+jpcrp_cor:ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults	当期利益又は当期損失（△）：親会社の所有者に帰属（IFRS）、経営指標等	CurrentQuarterDuration	当四半期会計期間	その他	期間	JPY	円	4345000000
+jpcrp_cor:BasicEarningsLossPerShareIFRSSummaryOfBusinessResults	基本的１株当たり利益又は損失（△）（IFRS）、経営指標等	CurrentYTDDuration	当四半期累計期間	その他	期間	JPYPerShares		36.71
+jpcrp_cor:BasicEarningsLossPerShareIFRSSummaryOfBusinessResults	基本的１株当たり利益又は損失（△）（IFRS）、経営指標等	CurrentQuarterDuration	当四半期会計期間	その他	期間	JPYPerShares		77.09
+jpcrp_cor:CashFlowsFromUsedInInvestingActivitiesIFRSSummaryOfBusinessResults	投資活動によるキャッシュ・フロー（IFRS）、経営指標等	CurrentYTDDuration	当四半期累計期間	その他	期間	JPY	円	-403000000
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	CurrentYTDDuration	当四半期累計期間	その他	期間	USD		1375521000
+jpigp_cor:OperatingProfitLossIFRS	営業利益（△損失）（IFRS）	CurrentYTDDuration	当四半期累計期間	その他	期間	USD		38980000
+jpigp_cor:ProfitLossAttributableToOwnersOfParentIFRS	親会社の所有者、当期利益（△損失）（IFRS）	CurrentYTDDuration	当四半期累計期間	その他	期間	USD		15142000
+jpigp_cor:BasicEarningsLossPerShareIFRS	基本的１株当たり当期利益（△損失）（IFRS）	CurrentYTDDuration	当四半期累計期間	その他	期間	USDPerShares		0.27
+jpigp_cor:RevenueIFRS	売上収益（IFRS）	CurrentQuarterDuration	当四半期会計期間	その他	期間	USD		711273000
+jpigp_cor:OperatingProfitLossIFRS	営業利益（△損失）（IFRS）	CurrentQuarterDuration	当四半期会計期間	その他	期間	USD		51706000
+jpigp_cor:ProfitLossAttributableToOwnersOfParentIFRS	親会社の所有者、当期利益（△損失）（IFRS）	CurrentQuarterDuration	当四半期会計期間	その他	期間	USD		31800000
+jpigp_cor:BasicEarningsLossPerShareIFRS	基本的１株当たり当期利益（△損失）（IFRS）	CurrentQuarterDuration	当四半期会計期間	その他	期間	USDPerShares		0.56
+jpdei_cor:AccountingStandardsDEI	会計基準、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	IFRS
+jpdei_cor:CurrentPeriodEndDateDEI	当会計期間終了日、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	2022-06-30
+jpdei_cor:TypeOfCurrentPeriodDEI	当会計期間の種類、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	Q2
+jpdei_cor:CurrentFiscalYearEndDateDEI	当事業年度終了日、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	2022-12-31
