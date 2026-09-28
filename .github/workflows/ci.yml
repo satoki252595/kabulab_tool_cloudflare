@@ -38,6 +38,10 @@ jobs:
         run: pnpm lint
       - name: test
         run: pnpm test
+      # 監査レポートの正準数値は results.json からの生成物。内訳不一致・
+      # 隔離/保留の混入・SHA省略・生成ブロックの手編集を落とす (Issue #151)。
+      - name: audit report check
+        run: pnpm audit:report:check
       # スキーマ宣言と drizzle スナップショットの乖離を落とす。
       #
       # 実際に起きた形: 本番 core_stocks は 21 列・索引 3 本なのに

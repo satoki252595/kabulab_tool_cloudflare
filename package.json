@@ -22,6 +22,7 @@
     "ingest:yuho-edinet": "tsx scripts/sync/yuho-edinet.ts",
     "backfill:overseas": "tsx services/yuho-quant/data-scripts/backfill-overseas.ts",
     "audit:overseas": "tsx services/yuho-quant/data-scripts/audit-overseas.ts",
+    "audit:report:check": "tsx scripts/audit/render-data-audit.ts --check",
     "ingest:ir-tdnet": "tsx scripts/sync/ir-tdnet.ts",
     "ingest:vwap-daily": "tsx scripts/vwap/ingest-daily.ts",
     "ingest:vwap-intra": "tsx scripts/vwap/ingest-intra.ts",

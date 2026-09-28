@@ -5,6 +5,92 @@ Issue [#146](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/146)
 財務 (EDINET/Notion 正本)・銘柄マスタ・TDnet/優待の値照合はA担当、
 moneyflow はC担当 (Yahoo quoteSummary 断面は §0 役割分担のとおり B)。
 
+<!-- audit-report:BEGIN market -->
+## 生成集計ブロック: market（機械生成・手編集禁止）
+
+生成元 `docs/test-logs/data-audit-2026-09-28.results.json`（contract v1・Issue #151）。本文の要約層は数値を再入力せず集計ID参照にすること。
+自動 checker は語義・源泉の正確性を保証しない。原因解釈は本文と証拠項目IDで人がレビューすること。
+
+監査スナップショット日 2026-09-28 / 最新確定営業日 2026-09-28 / 保存系列最新 2026-09-25
+日付注: 最新確定営業日09-28（月）に対し保存系列の最新は09-25（D1市場系・R2 daily/intraとも）。9/21–23休場・9/26–27週末。当日run（9/28 17:13 UTC stock-sync・08:00 UTC vwap-ingest）の反映前スナップショット。予定時刻と実成功を混同しない。
+
+### 母集団
+
+| 項目ID | 内容 | n | 備考 |
+|---|---|---:|---|
+| B-core-active | core_stocks active+equity | 3700 | — |
+| B-core-all | core_stocks 全体 | 3810 | — |
+| B-indicators | swing_stock_indicators 行数 | 3756 | — |
+| B-momentum | p_momentum 行数 | 3700 | 行数=activeでsweep正常。ただしas_of例外5件あり |
+| B-ohlcv-20d | 直近20営業日のohlcv行数 | 74072 | — |
+
+### 内訳集計（合計は内訳から計算）
+
+| 項目ID | 内訳 | 合計 | 状態 | 出所 | 備考 |
+|---|---|---:|---|---|---|
+| F02-vol | 9/25行1678＋凍結行3 | 1681 | 不一致あり | 既存dumpから再導出 | 値（atr_pct）は正しくboolのみstale。次回runの再計算を確認するまで未確認 |
+| F02-long | 9/25行33＋凍結行（8963・非active）1 | 34 | 不一致あり | 既存dumpから再導出 | — |
+| F02-short | 9/25行32＋凍結行0 | 32 | 不一致あり | 既存dumpから再導出 | — |
+| F02-fresh-unique | long33＋short32 | 65 | 不一致あり | 既存dumpから再導出 | 33/32は集計ID:F02-long・集計ID:F02-shortの9/25分。long/short反転集合の重なり0を検証済み |
+| F02-all-unique | long34＋short32 | 66 | 不一致あり | 既存dumpから再導出 | 34/32は集計ID:F02-long・集計ID:F02-shortの合計。long/short反転集合の重なり0を検証済み |
+| F15-tinycap | active破損3（1909/2180/7426）3＋非active凍結33 | 6 | 不一致あり | 報告書記載値 | active 3はF15の破損（集計ID:F15-quote）。残り3は非active凍結で表示対象外 |
+| PUB-routes | 値join23＋200-only（値合格に数えない）9＋境界（値合格に数えない）6 | 38 | 不一致あり | 報告書記載値 | 23値join≠23正常。誤表示の証拠route（F-01/F-15）・エラー契約・表示照合を含む。route別の証拠範囲・findingは§9の生成表（pubRoutes配列から生成・byte検査対象）を維持 |
+| PUB-requests | 旧capture23＋jss6＋新規11 | 40 | 確認済み | 報告書記載値 | rsi/swing rootの重複確認2を除きunique 38（集計ID:PUB-routes） |
+
+### 照合カバレッジ
+
+| 項目ID | 内容 | 一致/母数 | 状態 | 備考 |
+|---|---|---:|---|---|
+| F15-quote | F15 quoteSummary破損の確認（sharesOutstanding 1桁の3銘柄） | 3/3 | 確認済み | 1909/2180/7426のcap/PER/EPSが破損。writer素通しでD1忠実転記。chart guardの対象外でguard未実装・要follow-up。未修復 |
+
+### 隔離候補・保留
+
+- 候補 Q-1909-indicators: 1909×swing_stock_indicators（証拠: §3.3 giant SMA保存値（sma_5=16278437478.4））
+- 候補 Q-1909-rsi: 1909×rsi_percentile（証拠: §3.3 bad raw full-40 replayで確定（bars=40））
+- 候補 Q-1909-momentum: 1909×p_momentum（証拠: §3.3 as_of 9/14・bars=40の破損値）
+- 候補 Q-2180-indicators: 2180×swing_stock_indicators（証拠: §3.3 giant SMA保存値（sma_5=1886167168））
+- 候補 Q-2180-momentum: 2180×p_momentum（証拠: §3.3 as_of 9/15・bars=85の保存bad値）
+- 保留 H-2180-rsi: 2180×rsi_percentile（保存bars=1217に対し現在raw47本だが9/26 run時応答artifactなし。corrupt-tail由来は未証明のため保留。1217barsで破損確定不可（§3.3））
+注: 本番applyはwriter返却後の別対応（本PRではpreviewのみ）
+
+### 証拠
+
+| 項目ID | path | sha256 | bytes | 時刻state | 備考 |
+|---|---|---|---|---|---|
+| EV-b-preview-script | `/tmp/audit-b/preview-repair.mjs` | 6751028188e074762ccc7b2a199915bec9bc3adc6e47d6ee30e1926a5d39971b | 11403 | ファイルmtimeのみ（観測時刻ではない） | F02全件再計算＋quarantine候補＋例外分類。D1 SELECT 9文。SHAは記録値と一致 |
+| EV-b-preview-result | `/tmp/audit-b/preview-repair.json` | 1d25cd638ea5f4f3a615911048a56f35724e14662368dfbd388af09a33f5763c | 7282 | ファイルmtimeのみ（観測時刻ではない） | F02 fresh1678/33/32＋frozen3/1/0・overlap0・2nd run 0。SHAは記録値と一致 |
+| EV-b-replay-guard | `/tmp/audit-b/replay-1909-guard.mjs` | 1786418f7f211598e5c91cb18b56b72d4a53aee4923a014b3bec2d08b4979e93 | 5144 | ファイルmtimeのみ（観測時刻ではない） | 実fetcher replay（guard前後）。SHAは記録値と一致 |
+| EV-b-replay-post | `/tmp/audit-b/replay-post-guard.json` | 862bfe8a8b456d4c2cfdc4831581b95a37a1a4d8044eed7fb6444ec99222c92c | 2342 | ファイルmtimeのみ（観測時刻ではない） | guard後：1909/2180全拒否・書込0。SHAは記録値と一致 |
+| EV-b-compare | `/tmp/audit-b/compare.mjs` | cc88b4bb970f4797bb9c200ba6b75885b614f34d4d4672cfa34cf94570986ef2 | 19309 | ファイルmtimeのみ（観測時刻ではない） | 層別20の独立再計算。SHAは記録値と一致 |
+| EV-b-fetch-qs | `/tmp/audit-b/fetch-qs.mjs` | 023f206ee48f9b5219fbd181b6537482a5e4a9c7d8ed9e9065139a4ff0d16a74 | 1116 | ファイルmtimeのみ（観測時刻ではない） | quoteSummary観測（F15）。SHAは記録値と一致 |
+| EV-b-fetch-yahoo-one | `/tmp/audit-b/fetch-yahoo-one.mjs` | c0eb8c68bcc173c98e59d5297e6cddff33ec2f7e1e8cfa2bd520c61759746d4d | 1177 | ファイルmtimeのみ（観測時刻ではない） | 2180 chart 47barの単発観測。SHAは記録値と一致 |
+| EV-b-yahoo-1909 | `/tmp/audit-b/yahoo-5y/1909.json` | 259c2581532d1ac046352c4660851a52e57d5ece74ca06370caf6dab50115e03 | 5229 | ファイルmtimeのみ（観測時刻ではない） | 47bar・7/17–9/14破損・9/15以降null。正確な取得時刻は未保存（当初18:05記載は10分過大で訂正）。SHAは記録値と一致 |
+| EV-b-yahoo-2180 | `/tmp/audit-b/yahoo-5y/2180.json` | 77a8c1c34ea551b53a62b2fd8434cb3f68553f2c5ae8a22020a409b1d97590d2 | 4945 | ファイルmtimeのみ（観測時刻ではない） | 47bar・7/17–9/15破損・9/16以降null。取得は19:05–19:10 JST帯（正確な時刻は未保存）。SHAは記録値と一致 |
+| EV-b-yahoo-7203 | `/tmp/audit-b/yahoo-5y/7203.json` | 0db61a252127532d33ae2c486836fd7e5aad5adf17c223903c9e2c36d3a0f023 | 80488 | ファイルmtimeのみ（観測時刻ではない） | 正常対照。SHAは記録値と一致 |
+| EV-b-yahoo-3600 | `/tmp/audit-b/yahoo-5y/3600.json` | f16d885bd1525c6fdabad4755513baca14376433b7203640cd08ebb1d9f77104 | 74212 | ファイルmtimeのみ（観測時刻ではない） | 正常対照。SHAは記録値と一致 |
+| EV-b-yahoo-9984 | `/tmp/audit-b/yahoo-5y/9984.json` | 06b44e798fdbc669a618f6f5f64d59ec86fe2bb4b916674c34f6e518ac01234f | 82384 | ファイルmtimeのみ（観測時刻ではない） | 正常対照。SHAは記録値と一致 |
+| EV-b-yahoo-9914 | `/tmp/audit-b/yahoo-5y/9914.json` | 18287074fae72a50c16881c481fa9996b4d273143f3afa0860247747c53b1c64 | 1197 | ファイルmtimeのみ（観測時刻ではない） | 1-bar stub。SHAは記録値と一致 |
+| EV-b-qs-1909 | `/tmp/audit-b/qs-1909.json` | c811d931660dfd77c37c8a05b1a009376f0d47a134495623bdfd35ddcb40dc19 | 9482 | ファイルmtimeのみ（観測時刻ではない） | F15 sharesOutstanding=6。SHAは記録値と一致 |
+| EV-b-qs-7426 | `/tmp/audit-b/qs-7426.json` | a6bdbfe798af6757fb890a9590afdc4109f5ffbf3d5dcd2a2cb3e665848a9d9d | 9188 | ファイルmtimeのみ（観測時刻ではない） | F15 sharesOutstanding=2。SHAは記録値と一致 |
+| EV-b-qs-2180 | `/tmp/audit-b/qs-2180.json` | f411855281ecd8009a09afc4750d1d0aece3ab7ecdb081f743406d6ad7d483e2 | 9386 | ファイルmtimeのみ（観測時刻ではない） | F15 sharesOutstanding=10。SHAは記録値と一致 |
+| EV-b-jpx-05 | `/tmp/audit-b/jpx-05-fresh.html` | cd2748a59334903ba08e24bf05965680317404afeb054ef41d755f12b3366493 | 27631 | ファイルmtimeのみ（観測時刻ではない） | jpx-margin-page.htmlと同一SHA。19:12再取得でも同一で条件持続。SHAは記録値と一致 |
+| EV-b-r2-1909 | `/tmp/audit-b/r2/daily-1909.json` | c16fa1514e7e4639e8a74f1f422a9dffb114248c74c4f3034ad07f22c2f2f5a4 | 215962 | ファイルmtimeのみ（観測時刻ではない） | 末尾22本破損＋偽split 1:4400000。SHAは記録値と一致 |
+| EV-b-r2-2180 | `/tmp/audit-b/r2/daily-2180.json` | 7f3cb7ac7126ca07a2011783211215d384e6036c19f30ee0e2b47077288507c8 | 198589 | ファイルmtimeのみ（観測時刻ではない） | 末尾22本破損＋偽split 1:1440960。SHAは記録値と一致 |
+
+### 未検証範囲（合格に数えない）
+
+- Notion未読（信用PDFの保管状態は#117 OPEN＋既存logのみで判定）
+- rsi/swing root重複再GETのSHA一致は未確認（対応HTML capture SHA未収録・§15に該当なし。重複2の根拠は原報告記載まで）
+- jss-api private面のlive検証なし（JSS_API_KEYS不在のため到達不能）
+- 9/18 PDFのSHA照合なし（fixture不在・Notion未保管）
+- R2 daily/intraの全銘柄網羅は未検証（内容突合せは7203/9984/3600＋1909/2180のみ）
+- 5y RSIの全銘柄再計算は未実施（20標本＋追補1）
+- 当日run反映前のスナップショット（F-02/F-05の自己修復は次回run確認まで未確認）
+- 破損保存runのmode未確認（stocksOnly/fullの両経路ともguardで塞ぐ）
+- 2180の30field独立再計算・w≤40のEMH momentum・#136適用後の表示値・small-cap/post-earnings件数のD1再集計は未実施
+- F-15のguard未実装（照合相手のない設計が要検討）
+<!-- audit-report:END market -->
+
 ## 0. 監査条件
 
 - branch: `audit/market-2026-09-28` (基点 `origin/main` = `18d5939` #145、
@@ -20,12 +106,15 @@ moneyflow はC担当 (Yahoo quoteSummary 断面は §0 役割分担のとおり 
   いずれも read-only、rows_written=0)。D1/R2/公開面の読取は同日 17:13 UTC
   (stock-sync) および 08:00 UTC (vwap-ingest daily-intra) の当日 run の反映前。
   R2 の最終更新は 9/25、D1 市場系の最終更新は 9/26 10:55 UTC (9/25 取引分)。
+<!-- audit-report:BEGIN market-freshness -->
 - 最新確定営業日: **2026-09-28(月)**。保存系列の最新日は2026-09-25で、9/28営業日分は未反映。9/21–9/23 は休場
   (敬老の日・国民の休日・秋分の日)、9/26–9/27 は週末。
   保存系列の最新も 9/25 (D1 市場系・R2 daily/intra とも)。
   9/28 営業日分は未反映: 当日 run (9/28 17:13 UTC stock-sync・
   08:00 UTC vwap-ingest) の予定時刻と実成功を混同しない。
   本監査の snapshot 時点ではいずれも反映前である。
+<!-- audit-report:END market-freshness -->
+
 - 境界: D1/R2 は SELECT / List / Get のみ。
   取込・ranking・master apply・新 DB/endpoint の起動なし。新規 install なし。
   本番 D1/R2/Notion への write・archive・ingest・dry-run・ranking refresh・
@@ -329,10 +418,11 @@ unique route 単位に再定義し全件列挙する。分類: **値join** (D1/R
 | 006 IR | `/ir-catalog/` | 200 | 9/24–9/25 (B 対象外。値未検証) |
 | 007 VWAP | `/vwap-analysis/` | 200 | なし (app shell) |
 
-URL は portal card の href 実測。rsi/swing の root は旧 capture と新 GET が
-SHA 一致 (再掲 §15) で変化なし。
+URL は portal card の href 実測。rsi/swing の root の重複再GETは原報告記載。
+対応 HTML capture SHA は未収録のため、SHA 一致は未確認 (§15 に該当 SHA なし)。
 
-### 9.2 値join 23 件 (旧 19 + 新 4)
+<!-- audit-report:BEGIN market-pub-valuejoin -->
+### 9.2 値join 23 件
 
 | # | URL | 結果 |
 |---|---|---|
@@ -360,25 +450,49 @@ SHA 一致 (再掲 §15) で変化なし。
 | 22 | `/swing-trading/stock/2180` (新) | **SMA5 1,886,167,168 を表示中** (F-01 の user-visible 証拠) |
 | 23 | `/rsi-screening/stocks/1909` (新) | 時価総額 `0億円`・PER `0倍`・EPS `846,560,000円`・母数 40 を表示中 (F-15 の証拠) |
 
-### 9.3 200-only 9 件 (旧 4 + 新 5。値合格に数えない)
+23値join≠23正常（誤表示/エラー契約/表示照合を含む。集計ID:PUB-routes）
+<!-- audit-report:END market-pub-valuejoin -->
 
-`/rsi-screening/` (root 表示。値突合せなし)、finmath POST echo 3 件
-(dcf/capm/bs-post。各 200)、`/financial-math/`・`/vwap-analysis/`・
-`/otakara-yutai/`・`/ir-catalog/`・`/yuho-quant/` (各 200。新)。
+<!-- audit-report:BEGIN market-pub-httponly -->
+### 9.3 200-only 9 件 (値合格に数えない)
 
+| # | route | 確認 |
+|---|---|---|
+| 1 | `/rsi-screening/` | root 表示。値突合せなし |
+| 2 | finmath POST dcf echo | POST echo 200 (値合格に数えない) |
+| 3 | finmath POST capm echo | POST echo 200 (値合格に数えない) |
+| 4 | finmath POST bs-post echo | POST echo 200 (値合格に数えない) |
+| 5 | `/financial-math/` | 200 (新。値合格に数えない) |
+| 6 | `/vwap-analysis/` | 200 (新。値合格に数えない) |
+| 7 | `/otakara-yutai/` | 200 (新。値合格に数えない) |
+| 8 | `/ir-catalog/` | 200 (新。値合格に数えない) |
+| 9 | `/yuho-quant/` | 200 (新。値合格に数えない) |
+
+到達の証明。値合格に数えない（集計ID:PUB-routes）
+<!-- audit-report:END market-pub-httponly -->
+
+<!-- audit-report:BEGIN market-pub-boundary -->
 ### 9.4 境界 6 件 (値合格に数えない) + 未確認
 
-- jss-api-public `/health`・`/v1/meta/freshness`: 200 (meta のみ)。
-- jss-api-public `/v1/ohlcv|indicators|valuation|supply/*`: **404 で非公開**
-  (personal-only の第 0 層防御が live で成立。値の証明ではない)。
+| # | route | 確認 |
+|---|---|---|
+| 1 | jss-api-public `/health` | 200 (meta のみ) |
+| 2 | jss-api-public `/v1/meta/freshness` | 200 (meta のみ) |
+| 3 | jss-api-public `/v1/ohlcv/*` | **404 で非公開** (personal-only の第 0 層防御が live で成立。値の証明ではない) |
+| 4 | jss-api-public `/v1/indicators/*` | **404 で非公開** (personal-only の第 0 層防御が live で成立。値の証明ではない) |
+| 5 | jss-api-public `/v1/valuation/*` | **404 で非公開** (personal-only の第 0 層防御が live で成立。値の証明ではない) |
+| 6 | jss-api-public `/v1/supply/*` | **404 で非公開** (personal-only の第 0 層防御が live で成立。値の証明ではない) |
+
+防御・契約の証明。値合格に数えない（集計ID:PUB-routes）
+<!-- audit-report:END market-pub-boundary -->
+
 - **未確認**: jss-api-private の値 (`JSS_API_KEYS` が `.env` に不在のため
   到達不能。fail-closed のコード確認まで。キー名のみ確認し値は触れず)。
   w≤40 の EMH momentum (1909 破損 closes 混入の可能性)。
   #136 適用後の表示値 (§8)。
 
-合計: request 40 (旧 capture 23 + jss 6 + 新 11)、unique 38
-(値join 23 + 200-only 9 + 境界 6。rsi/swing root の重複確認 2 を除く)
-+ 未確認 3 項目。
+合計: request（集計ID:PUB-requests）、unique（集計ID:PUB-routes。
+rsi/swing root の重複確認 2 を除く）+ 未確認 3 項目。
 
 ## 10. 最小再現手順 (read-only)
 
@@ -455,8 +569,8 @@ SHA 一致 (再掲 §15) で変化なし。
 | ID | 重要度 | 内容 | 状態 |
 |---|---|---|---|
 | F-01 | 高→対応中 | Yahoo chart 破損の取込済み (1909 + 2180 同型)・公開表示中 | 本 PR で guard 実装 (§14)。修復は preview のみ、writer 未起動 |
-| F-15 | 高→対応中 | Yahoo quoteSummary 破損の取込済み (1909/2180/7426 の cap/PER/EPS)・公開表示中 | 忠実転記を確認。guard 未実装・要 follow-up |
-| F-02 | 中 | volatility_ok が旧閾値 (9/25 行 1678 件・誤通過 unique 65 件 + 凍結行 3/1 件) | 次回 run の再計算を確認するまで未確認。preview 済み (§14) |
+| F-15 | 高→対応中 | Yahoo quoteSummary 破損の取込済み（集計ID:F15-quote・集計ID:F15-tinycap）・公開表示中 | 忠実転記を確認。guard 未実装・要 follow-up |
+| F-02 | 中 | volatility_ok が旧閾値（集計ID:F02-vol・集計ID:F02-long・集計ID:F02-short・集計ID:F02-fresh-unique・集計ID:F02-all-unique） | 次回 run の再計算を確認するまで未確認。preview 済み (§14) |
 | F-03 | 中 | JPX syumatsu 発見不能 (次回同状況なら margin 失敗) | 実関数 replay で確認。R2 保全。新様式は 9/29 |
 | F-04 | 低 | D1 OHLCV の凍結暫定/NULL (13 日・先勝ち書込) | 誤りリスクとして残す (指標無事とは書かない) |
 | F-05 | 低 | prune 飢餓 (3,689 銘柄 >90 行) | 次回 run の再計算を確認するまで未確認 |
@@ -465,13 +579,22 @@ SHA 一致 (再掲 §15) で変化なし。
 | F-08 | 低 | 旧信用週の種類株重複 + 7/03・7/10 週欠落 | 9/11 以降は clean |
 | F-09–F-14 | 情報 | splits 空・auction 除外・σ 流儀・3853・run 日付ラベル・CAPM 市場ファクト | 記録のみ |
 
+<!-- audit-report:BEGIN market-priority-heading -->
 ### 優先対応 3 件 (親 review・merge 後の follow-up)
+<!-- audit-report:END market-priority-heading -->
 
-1. **破損値の隔離と表示止め (F-01/F-15)**: 1909 の派生 3 表
-   (indicators・rsi_percentile・p_momentum)、2180 は indicators・p_momentum の
-   2 表のみ。2180 の RSI は破損由来が未証明のため隔離保留 +
-   1909/2180/7426 の financials 破損列 (cap/PER/EPS) が公開表示中。
-   隔離候補は §14 に限定済み。
+<!-- audit-report:BEGIN market-priority-summary -->
+**優先対応キュー（機械生成・手編集禁止）**
+
+- 修復優先1 (F-01/F-15 破損隔離): 候補 5 件・保留 1 件（集計ID:Q-1909-indicators・集計ID:Q-1909-rsi・集計ID:Q-1909-momentum・集計ID:Q-2180-indicators・集計ID:Q-2180-momentum＋集計ID:H-2180-rsi）
+- 修復優先2: F-02 stale bool（集計ID:F02-fresh-unique・集計ID:F02-all-unique）
+- 修復優先3: F-03 JPX発見不能
+<!-- audit-report:END market-priority-summary -->
+
+1. **破損値の隔離と表示止め (F-01/F-15)**: 隔離候補（集計ID:Q-1909-indicators・
+   集計ID:Q-1909-rsi・集計ID:Q-1909-momentum・集計ID:Q-2180-indicators・
+   集計ID:Q-2180-momentum）＋保留（集計ID:H-2180-rsi）＋ financials 破損列
+   （集計ID:F15-quote）が公開表示中。候補・保留の対応は生成ブロック参照（導出は §14.3）。
    本番 apply は writer 返却後の別対応 (本 PR では preview のみ)。
 2. **F-02 stale bool の解消**: 次回 run の再計算で治る見込みだが確認待ち。
    run 前に直す場合は §14 の preview 適用 (3 列のみ・冪等確認済み)。
@@ -480,7 +603,7 @@ SHA 一致 (再掲 §15) で変化なし。
 
 独立再計算の実証件数: 観測 16 (RSI 15/15・指標 11 全一致+4 vol・momentum 15/15・
 pattern 15 + skip 1) + delist 4 件の 404 整合 + 前週比 12,669 行 (内部一致) +
-公開 38 route (値join 23・200-only 9・境界 6)。詳細は §3.2・§9。
+公開 route（集計ID:PUB-routes）。詳細は §3.2・§9。
 丸め・定義差 (F-09–F-14) は記録のみ。
 
 ## 14. 再発防止 guard と offline 修復 preview (本 PR の実装)
@@ -535,6 +658,9 @@ pattern 15 + skip 1) + delist 4 件の 404 整合 + 前週比 12,669 行 (内部
   (as_of 9/15・bars=85。保存 bad 値で確定)。
   2180 の `rsi_percentile` (bars=1217) は保留: corrupt-tail 由来が未証明
   (§3.3) のため確定候補に入れず、限定 predicate から除外する。
+  上記の候補・保留の対応は生成ブロック（集計ID:Q-1909-indicators・集計ID:Q-1909-rsi・
+  集計ID:Q-1909-momentum・集計ID:Q-2180-indicators・集計ID:Q-2180-momentum・
+  集計ID:H-2180-rsi）と一致する。
   R2 は `daily/1909.json`・`daily/2180.json` の末尾 22 本 + 偽 split
   (§4)。financials 破損列 (F-15) の列単位隔離は範囲外・要 follow-up。
 - 除外 (証拠付き): `swing_entry_signals` は 1909/2180 とも 0 行。
