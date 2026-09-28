@@ -433,6 +433,60 @@ def test_d1_repair_does_not_keep_document_id_from_a_known_different_raw_sha():
     )
 
 
+@pytest.mark.parametrize("relation_changed", [False, True])
+def test_verified_repair_carries_only_the_same_fresh_original_relation(
+    tmp_path, monkeypatch, relation_changed,
+):
+    from uuid import UUID
+
+    case = EDINET_CASES[0]
+    record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+    item = {"page_id": "original", "old": reparse._record_dict(record),
+            "new": reparse._record_dict(record), "parser_sha256": reparse.PARSER_SHA256,
+            "raw_sha256": case["raw_sha256"], "raw_url": case["raw_url"]}
+    journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
+    journal.write_text(json.dumps(item) + "\n")
+    receipts.write_text(json.dumps({"page_id": "original", "target_page_id": "original",
+                                   "record": item["new"], "parser_sha256": reparse.PARSER_SHA256,
+                                   "raw_sha256": case["raw_sha256"]}) + "\n")
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(_FINANCIALS)
+    conn.execute("CREATE TABLE core_stocks(id INTEGER,code TEXT)")
+    conn.execute("INSERT INTO core_stocks VALUES(1,?)", [record.code])
+    unknown = replace(record, provenance=replace(record.provenance, raw_page_id=None))
+    conn.execute(reparse._repair_sql(), [json.dumps([record_to_row(
+        unknown, stock_id=1, doc_id=reparse._doc_id(item), raw_sha256=case["raw_sha256"],
+    )])])
+    before = dict(conn.execute("SELECT * FROM jss_financials").fetchone())
+    fresh = replace(record, provenance=replace(record.provenance, raw_page_id=EDINET_CASES[1]["page_id"])) if relation_changed else record
+
+    class Store:
+        def query(self, sql, params=None):
+            return [dict(row) for row in conn.execute(sql, params or []).fetchall()]
+
+    class Client:
+        def query_database(self, *args, **kwargs):
+            return [{"id": "original", "record": fresh}]
+
+    monkeypatch.setattr(reparse, "NotionClient", lambda *args, **kwargs: Client())
+    monkeypatch.setattr(reparse, "_page_record", lambda page: page["record"])
+    monkeypatch.setattr(reparse, "load_settings", lambda: SimpleNamespace(
+        notion_token="test-token", notion_rps=2.5, db_id=lambda key: "db",
+        cloud_store=SimpleNamespace(d1_enabled=lambda: True),
+    ))
+    monkeypatch.setattr(reparse, "D1Store", lambda *args, **kwargs: Store())
+    if relation_changed:
+        with pytest.raises(ValueError, match="正本が再読成功後に変わりました"):
+            reparse.sync_d1(journal, receipts)
+        assert dict(conn.execute("SELECT * FROM jss_financials").fetchone()) == before
+    else:
+        reparse.sync_d1(journal, receipts)
+        after = dict(conn.execute("SELECT * FROM jss_financials").fetchone())
+        assert after["raw_page_id"] == str(UUID(case["page_id"]))
+        assert {c: after[c] for c in COLUMNS[:-1]} == {c: before[c] for c in COLUMNS[:-1]}
+
+
 @pytest.mark.parametrize("read_back_net_sales", [547_779_000_000, 547_779_000_000.0])
 @pytest.mark.parametrize("archive_parser", ["current", "previous-parser"])
 @pytest.mark.parametrize("target_old_replaced", [False, True])
