@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchChart, yahooHttpErrorMessage } from "./client.js";
+import { fetchChart, fetchQuoteSummary, yahooHttpErrorMessage } from "./client.js";
 
 const ORIGINAL_PROXY_BASE = process.env.YAHOO_PROXY_BASE;
 const ORIGINAL_CRON_SECRET = process.env.CRON_SECRET;
@@ -17,6 +17,150 @@ afterEach(() => {
   } else {
     process.env.CRON_SECRET = ORIGINAL_CRON_SECRET;
   }
+});
+
+describe("fetchQuoteSummary — 株数の尺度 guard (F-15)", () => {
+  // 9/28 観測原本の必要な数値だけ。全生 JSON・銘柄別の補正値は持ち込まない。
+  const observed = [
+    {
+      code: "1909", shares: 6, float: null,
+      cash: 11077999616, cashPerShare: 413.132,
+      revenue: 60949000192, revenuePerShare: 2273.075,
+      eps: 846560000, per: 4.3706295e-6, cap: 22200,
+      bps: 1203.929, pbr: 3.073271, roe: 0.16937, roa: 0.10295,
+      margin: 0.15317, dividend: 0.0061000003,
+      annualEnd: 1774915200, annualRevenue: 60518000000, annualYear: 2026,
+    },
+    {
+      code: "2180", shares: 10, float: null,
+      cash: 3905999872, cashPerShare: 263.717,
+      revenue: 26229000192, revenuePerShare: 1777.867,
+      eps: -36968876, per: null, cap: 13090,
+      bps: 252.577, pbr: 5.182578, roe: -0.08184, roa: 0.13363,
+      margin: -0.028859999, dividend: 0.0199,
+      annualEnd: 1751241600, annualRevenue: 19587000000, annualYear: 2025,
+    },
+    {
+      code: "7426", shares: 2, float: 152510,
+      cash: 661000000, cashPerShare: 595.164,
+      revenue: 3988000000, revenuePerShare: 3592.971,
+      eps: -140379024, per: null, cap: 1182,
+      bps: 1549.586, pbr: 0.38139218, roe: null, roa: null,
+      margin: -0.14673, dividend: 0.060599998,
+      annualEnd: 1774915200, annualRevenue: 4102000000, annualYear: 2026,
+    },
+    {
+      code: "3853", shares: 16985943, float: 12446789,
+      cash: 3395898880, cashPerShare: 199.924,
+      revenue: 3442726912, revenuePerShare: 206.868,
+      eps: 48.11, per: 22.739555, cap: 18582622208,
+      bps: 557.144, pbr: 1.9635857, roe: 0.31483, roa: 0.16213,
+      margin: 2.9758801, dividend: 0.009,
+      annualEnd: 1774915200, annualRevenue: 3389000000, annualYear: 2026,
+    },
+  ];
+
+  function summaryShape(row: (typeof observed)[number]) {
+    const raw = (value: number | null) => value === null ? null : { raw: value };
+    return {
+      quoteSummary: {
+        result: [{
+          defaultKeyStatistics: {
+            sharesOutstanding: raw(row.shares), floatShares: raw(row.float),
+            trailingEps: raw(row.eps), bookValue: raw(row.bps), priceToBook: raw(row.pbr),
+          },
+          financialData: {
+            totalCash: raw(row.cash), totalCashPerShare: raw(row.cashPerShare),
+            totalRevenue: raw(row.revenue), revenuePerShare: raw(row.revenuePerShare),
+            returnOnEquity: raw(row.roe), returnOnAssets: raw(row.roa),
+            operatingMargins: raw(row.margin),
+          },
+          summaryDetail: {
+            trailingPE: raw(row.per), marketCap: raw(row.cap), dividendYield: raw(row.dividend),
+          },
+          incomeStatementHistory: { incomeStatementHistory: [{
+            endDate: raw(row.annualEnd), totalRevenue: raw(row.annualRevenue),
+          }] },
+        }],
+        error: null,
+      },
+    };
+  }
+
+  async function readSummary(json: unknown, code: string) {
+    process.env.YAHOO_PROXY_BASE = "https://kabulab.example.test";
+    process.env.CRON_SECRET = "test-secret";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(json), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+    return fetchQuoteSummary(code);
+  }
+
+  it.each(observed)("$code: EPS/PER/時価総額だけを検証し、他の原数値を保持する", async (row) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await readSummary(summaryShape(row), row.code);
+      const rejected = row.code !== "3853";
+      expect(result).toEqual({
+        eps: rejected ? null : row.eps,
+        per: rejected ? null : row.per,
+        marketCap: rejected ? null : row.cap,
+        bps: row.bps, pbr: row.pbr, roe: row.roe, roa: row.roa,
+        operatingMarginTtm: row.margin,
+        dividendYield: Math.round(row.dividend * 10000) / 100,
+        annualFinancials: [{ fiscalYear: row.annualYear, revenue: row.annualRevenue }],
+      });
+      expect(warn).toHaveBeenCalledTimes(rejected ? 1 : 0);
+      if (rejected) expect(warn).toHaveBeenCalledWith(expect.stringContaining("株数の尺度"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each(["株数欠損", "株数0", "分母欠損", "分母0", "分母非finite", "分母不一致"])(
+    "%s: 2つの正finiteな独立分母で裏づけられなければ推定補正・拒否しない",
+    async (kind) => {
+      const row = observed[0];
+      const json = summaryShape(row);
+      const item = json.quoteSummary.result[0];
+      if (kind === "株数欠損") item.defaultKeyStatistics.sharesOutstanding = null;
+      if (kind === "株数0") item.defaultKeyStatistics.sharesOutstanding = { raw: 0 };
+      if (kind === "分母欠損") item.financialData.totalCashPerShare = null;
+      if (kind === "分母0") item.financialData.totalCashPerShare = { raw: 0 };
+      if (kind === "分母非finite") {
+        // raw文字列の既存coerce契約でも非finiteを証拠にしない。
+        Object.assign(item.financialData, { totalCashPerShare: { raw: "Infinity" } });
+      }
+      if (kind === "分母不一致") item.financialData.totalCashPerShare = { raw: 413132000 };
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const result = await readSummary(json, row.code);
+        expect({ eps: result.eps, per: result.per, cap: result.marketCap })
+          .toEqual({ eps: row.eps, per: row.per, cap: row.cap });
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    }
+  );
+
+  it("原本の浮動株数>発行株数は、独立分母が欠損でも3項目を採用しない", async () => {
+    const row = observed[2];
+    const json = summaryShape(row);
+    json.quoteSummary.result[0].financialData.totalCashPerShare = null;
+    json.quoteSummary.result[0].financialData.revenuePerShare = null;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await readSummary(json, row.code);
+      expect({ eps: result.eps, per: result.per, cap: result.marketCap })
+        .toEqual({ eps: null, per: null, cap: null });
+      expect(result.bps).toBe(row.bps);
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe("yahooHttpErrorMessage", () => {

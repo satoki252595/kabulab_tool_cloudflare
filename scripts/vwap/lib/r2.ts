@@ -5,44 +5,60 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { sharedEnv } from "../../../src/shared/env.js";
+import { createHash } from "node:crypto";
 
-const LOCAL_OUT = process.env.LOCAL_OUT;
-const BUCKET = process.env.R2_BUCKET || "vwap-data";
+const LOCAL_OUT = sharedEnv.LOCAL_OUT();
 
 let s3: S3Client | null = null;
 function client(): S3Client {
   if (!s3) {
     s3 = new S3Client({
       region: "auto",
-      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      endpoint: `https://${sharedEnv.R2_ACCOUNT_ID()}.r2.cloudflarestorage.com`,
       credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY_ID || "",
-        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "",
+        accessKeyId: sharedEnv.R2_ACCESS_KEY_ID(),
+        secretAccessKey: sharedEnv.R2_SECRET_ACCESS_KEY(),
       },
     });
   }
   return s3;
 }
 
-export async function r2Put(key: string, body: string): Promise<void> {
+export async function r2Put(key: string, body: string, ifMatch?: string): Promise<void> {
   if (LOCAL_OUT) {
+    // Repair CAS is an R2 server guarantee; local files are only a read-only preview.
+    if (ifMatch !== undefined) throw new Error("conditional R2 write requires remote R2");
     const p = path.join(LOCAL_OUT, key);
     await fs.mkdir(path.dirname(p), { recursive: true });
     await fs.writeFile(p, body);
     return;
   }
-  await client().send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: body, ContentType: "application/json" }));
+  await client().send(new PutObjectCommand({ Bucket: sharedEnv.R2_BUCKET(), Key: key, Body: body, ContentType: "application/json", IfMatch: ifMatch }));
 }
 
 export async function r2Get(key: string): Promise<string | null> {
+  const result = await r2GetVersion(key);
+  return result === null ? null : result.body;
+}
+
+export async function r2GetVersion(key: string): Promise<{ body: string; etag: string } | null> {
   if (LOCAL_OUT) {
-    try { return await fs.readFile(path.join(LOCAL_OUT, key), "utf8"); } catch { return null; }
+    try {
+      const body = await fs.readFile(path.join(LOCAL_OUT, key), "utf8");
+      return { body, etag: createHash("sha256").update(body).digest("hex") };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw e;
+    }
   }
   try {
-    const r = await client().send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
-    return await (r.Body as any).transformToString();
-  } catch (e: any) {
-    if (e?.name === "NoSuchKey" || e?.$metadata?.httpStatusCode === 404) return null;
+    const r = await client().send(new GetObjectCommand({ Bucket: sharedEnv.R2_BUCKET(), Key: key }));
+    if (!r.Body || !r.ETag) throw new Error("R2 object body or ETag missing");
+    return { body: await r.Body.transformToString(), etag: r.ETag };
+  } catch (e) {
+    const error = e as { name?: string; $metadata?: { httpStatusCode?: number } };
+    if (error?.name === "NoSuchKey" || error?.$metadata?.httpStatusCode === 404) return null;
     throw e;
   }
 }
