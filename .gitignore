@@ -134,6 +134,10 @@ pipeline/tests/fixtures/transform/*.json
 # 取得は README.md の手順。未取得の環境ではフィクスチャテストが skip する。
 services/moneyflow/tests/fixtures/*.pdf
 
+# 007 vwap-analysis — 上と同じ理由 (JPX 信用残 PDF は personal-only)。
+# 取得は README.md の手順。未取得の環境ではフィクスチャテストが skip する。
+services/vwap-analysis/tests/fixtures/*.pdf
+
 # 008 moneyflow Phase 2〜5 の取得元フィクスチャ (実ファイル)。このリポジトリは PUBLIC。
 # personal-only・利用条件要確認・再配布不可の取得元の実ファイルは private/ に置き commit しない
 # (再配布が明示的に許される取得元だけ public/ に置く)。一覧・取得手順は

@@ -9,8 +9,14 @@
  * 種類株が普通株の直後に並ぶ並びは実 PDF と同じ (2026-08-28 / 09-04 の実測では
  * 衝突 6 組すべてで普通株が先)。
  */
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { marginArchiveInput, parseMarginText } from "./margin.js";
+import { marginArchiveInput, parseMarginPdf, parseMarginText } from "./margin.js";
+
+const sha256 = (b: Uint8Array): string =>
+  createHash("sha256").update(b).digest("hex");
 
 const SYNTHETIC_TEXT = `2026/9/4 申込み現在 End-of-week outstanding margin trading by issue
 B 合成食品\u3000普通株式 25930 JP0000000011 1,000 ▲ 100 2,000 200 0 0 1,000 ▲ 100 0 0 2,000 200
@@ -55,6 +61,100 @@ describe("parseMarginText の 5 桁コード規則", () => {
     const rows = parseMarginText(SYNTHETIC_TEXT).rows;
     expect(rows.find((r) => r.code === "2593")?.sell).toBe(1000);
     expect(rows.find((r) => r.code === "9434")?.sell).toBe(3000);
+  });
+});
+
+/**
+ * テスト入力用の最小 PDF (1 ページ・Helvetica で 1 行) をその場で組み立てる。
+ * moneyflow の pdf-text.test.ts と同じ作り (信用残の様式は含まない)。
+ */
+function tinyPdf(text: string): Uint8Array {
+  const content = `BT /F1 12 Tf 20 100 Td (${text}) Tj ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let out = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  objects.forEach((body, i) => {
+    offsets.push(out.length);
+    out += `${i + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xrefAt = out.length;
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const o of offsets) out += `${String(o).padStart(10, "0")} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefAt}\n%%EOF\n`;
+  return new TextEncoder().encode(out);
+}
+
+describe("parseMarginPdf のバイト列不変性 (#117)", () => {
+  it("解析後も入力バイト列が nonzero かつ SHA 不変 (unpdf の detach 対策)", async () => {
+    const bytes = tinyPdf("margin detach check");
+    const before = { len: bytes.byteLength, sha: sha256(bytes) };
+    expect(before.len).toBeGreaterThan(0);
+    // 様式外 PDF なので解析結果は空でよい。重要なのは入力の不変性。
+    const parsed = await parseMarginPdf(bytes);
+    expect(parsed.week).toBe("");
+    expect(parsed.rows).toEqual([]);
+    // 旧実装 (getDocumentProxy へ直渡し) では 0 になる。コピーを渡すので不変。
+    expect(bytes.byteLength).toBe(before.len);
+    expect(sha256(bytes)).toBe(before.sha);
+  });
+
+  it("Notion アップロード引数は解析後も原本そのもの (空判定を通過できる)", async () => {
+    const bytes = tinyPdf("margin upload arg check");
+    const parsed = await parseMarginPdf(bytes);
+    // fetchMargin と同じ組み立て (pdfBytes には解析に使った bytes を渡す)。
+    const input = marginArchiveInput({
+      ...parsed,
+      week: "2026-09-18",
+      pdfBytes: bytes,
+      pdfUrl: "https://www.jpx.co.jp/markets/statistics-equities/margin/05.html",
+    });
+    expect(input.files[0]!.filename).toBe("margin-2026-09-18.pdf");
+    expect(input.files[0]!.bytes).toBe(bytes);
+    expect(input.files[0]!.bytes.byteLength).toBeGreaterThan(0);
+  });
+});
+
+// 実 PDF (2026-09-18 週 = #117 で落ちた週そのもの) をフィクスチャに使う。
+// services/vwap-analysis/tests/fixtures/README.md 参照。personal-only のため
+// repo には commit しない。未取得の環境では skip する。
+const FIXTURE_PATH = fileURLToPath(
+  new URL("../tests/fixtures/jpx-margin-weekly-20260918.pdf", import.meta.url)
+);
+const hasFixture = existsSync(FIXTURE_PATH);
+
+describe.skipIf(!hasFixture)("parseMarginPdf (実 PDF: 2026-09-18 週 #117)", () => {
+  // 下の数値は実 PDF の実測値 (2026-09-28 確認)。フィクスチャを差し替えたら更新すること。
+  const FIXTURE_BYTES = 873311;
+  const FIXTURE_SHA256 =
+    "21c99f4e06641cae0270bd8151c41d45559e28a08f165a829726b9601c52131d";
+
+  it("実原本が解析後も nonzero かつ SHA 不変で、アップロード引数と一致する", async () => {
+    const bytes = new Uint8Array(readFileSync(FIXTURE_PATH));
+    expect(bytes.byteLength).toBe(FIXTURE_BYTES);
+    expect(sha256(bytes)).toBe(FIXTURE_SHA256);
+
+    const parsed = await parseMarginPdf(bytes);
+    expect(parsed.week).toBe("2026-09-18");
+    expect(parsed.rows.length).toBe(4230);
+
+    expect(bytes.byteLength).toBe(FIXTURE_BYTES);
+    expect(sha256(bytes)).toBe(FIXTURE_SHA256);
+
+    const input = marginArchiveInput({
+      ...parsed,
+      pdfBytes: bytes,
+      pdfUrl: "https://www.jpx.co.jp/markets/statistics-equities/margin/05.html",
+    });
+    expect(input.key).toBe("jpx-margin-2026-09-18");
+    expect(input.files[0]!.filename).toBe("margin-2026-09-18.pdf");
+    expect(input.files[0]!.bytes).toBe(bytes);
+    expect(input.files[0]!.bytes.byteLength).toBe(FIXTURE_BYTES);
   });
 });
 
