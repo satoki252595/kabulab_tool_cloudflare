@@ -27,7 +27,31 @@
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-09-13.1";
+export const SUMMARY_CONTRACT_VERSION = "2026-09-28.2";
+
+/**
+ * 要約の % 表現が掲載文に裏づけられているか。
+ *
+ * 別群の割引要約が貼り付いた行 (2026-09-28 監査の 8508・7075: 抽選や定額の
+ * 掲載文に「○○の20%割引」の要約) は、% が掲載文のどこにも無い。要約の %
+ * (`%` `％`) は掲載文の % で裏づけられていなければならず、そうでない結果は
+ * 取り込まない。raw の人数 (20 名) で要約の率 (20%) を根拠づけられないのと
+ * 同じく、単位の意味が違うものは根拠にならない。さらに数値も一致すること:
+ * 掲載文の「10%」で要約の「20%」は根拠づけられない (単位つき数値の一致)。
+ * 2026-09-28 時点の % 要約 621 行で検証し、数値一致 615 行・不一致 0 行・
+ * 掲載文に % なし 6 行 (既知の 8508・7075 群で修復計画に収録済み)。
+ * 割表記 (2割→20%) の読み替えはしない — 実在 0 行のため。
+ */
+export function isSummaryPercentGrounded(description: string, shortSummary: string): boolean {
+  const percents = (s: string): number[] =>
+    [...s.normalize("NFKC").matchAll(/([0-9]+(?:\.[0-9]+)?)\s*%/g)].map((m) =>
+      Number(m[1])
+    );
+  const wanted = percents(shortSummary);
+  if (wanted.length === 0) return true;
+  const have = percents(description);
+  return wanted.every((w) => have.some((h) => h === w));
+}
 
 /**
  * `contractVersion` の形式 (日付 + 連番)。結果ファイル側のスキーマ検証に使う —
