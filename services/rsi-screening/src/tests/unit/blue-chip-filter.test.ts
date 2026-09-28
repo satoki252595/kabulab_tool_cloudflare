@@ -49,9 +49,9 @@ describe("evaluateBlueChip", () => {
 
   it("売上が3年で増加 AND TTM 営業利益率が閾値以上 → 優良株", () => {
     const financials: AnnualFinancial[] = [
-      { fiscalYear: 2022, revenue: 100 },
-      { fiscalYear: 2023, revenue: 115 },
-      { fiscalYear: 2024, revenue: 130 },
+      { fiscalYear: 2022, fiscalPeriodEnd: "2022-03-31", consolidated: "連結", revenue: 100 },
+      { fiscalYear: 2023, fiscalPeriodEnd: "2023-03-31", consolidated: "連結", revenue: 115 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 130 },
     ];
     const result = evaluateBlueChip(financials, 0.12);
     expect(result.isBlueChip).toBe(true);
@@ -61,9 +61,9 @@ describe("evaluateBlueChip", () => {
 
   it("売上が増加でも TTM 営業利益率が閾値未満なら非優良", () => {
     const financials: AnnualFinancial[] = [
-      { fiscalYear: 2022, revenue: 100 },
-      { fiscalYear: 2023, revenue: 115 },
-      { fiscalYear: 2024, revenue: 130 },
+      { fiscalYear: 2022, fiscalPeriodEnd: "2022-03-31", consolidated: "連結", revenue: 100 },
+      { fiscalYear: 2023, fiscalPeriodEnd: "2023-03-31", consolidated: "連結", revenue: 115 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 130 },
     ];
     const result = evaluateBlueChip(financials, 0.03);
     expect(result.isBlueChip).toBe(false);
@@ -73,9 +73,9 @@ describe("evaluateBlueChip", () => {
 
   it("TTM 営業利益率が高くても売上が下降なら非優良", () => {
     const financials: AnnualFinancial[] = [
-      { fiscalYear: 2022, revenue: 130 },
-      { fiscalYear: 2023, revenue: 115 },
-      { fiscalYear: 2024, revenue: 100 },
+      { fiscalYear: 2022, fiscalPeriodEnd: "2022-03-31", consolidated: "連結", revenue: 130 },
+      { fiscalYear: 2023, fiscalPeriodEnd: "2023-03-31", consolidated: "連結", revenue: 115 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 100 },
     ];
     const result = evaluateBlueChip(financials, 0.20);
     expect(result.isBlueChip).toBe(false);
@@ -84,9 +84,9 @@ describe("evaluateBlueChip", () => {
 
   it("TTM 営業利益率が null なら非優良", () => {
     const financials: AnnualFinancial[] = [
-      { fiscalYear: 2022, revenue: 100 },
-      { fiscalYear: 2023, revenue: 115 },
-      { fiscalYear: 2024, revenue: 130 },
+      { fiscalYear: 2022, fiscalPeriodEnd: "2022-03-31", consolidated: "連結", revenue: 100 },
+      { fiscalYear: 2023, fiscalPeriodEnd: "2023-03-31", consolidated: "連結", revenue: 115 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 130 },
     ];
     const result = evaluateBlueChip(financials, null);
     expect(result.isBlueChip).toBe(false);
@@ -96,9 +96,9 @@ describe("evaluateBlueChip", () => {
 
   it("閾値ちょうど (5%) は優良に含まれる", () => {
     const financials: AnnualFinancial[] = [
-      { fiscalYear: 2022, revenue: 100 },
-      { fiscalYear: 2023, revenue: 115 },
-      { fiscalYear: 2024, revenue: 130 },
+      { fiscalYear: 2022, fiscalPeriodEnd: "2022-03-31", consolidated: "連結", revenue: 100 },
+      { fiscalYear: 2023, fiscalPeriodEnd: "2023-03-31", consolidated: "連結", revenue: 115 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 130 },
     ];
     const result = evaluateBlueChip(financials, OPERATING_MARGIN_TTM_THRESHOLD);
     expect(result.isBlueChip).toBe(true);
@@ -139,9 +139,9 @@ describe("evaluateBlueChip: 連結/単体混在のガード", () => {
   // 素通りさせると直近3年が +188% と算出されるが、実際の連結は +12.4% (45.1→48.0→50.7兆)。
   it("判定窓に2倍超のジャンプがあれば revenueTrend は null (7203 の実データ)", () => {
     const financials: AnnualFinancial[] = [
-      { fiscalYear: 2024, revenue: 17.58e12 },
-      { fiscalYear: 2025, revenue: 18.28e12 },
-      { fiscalYear: 2026, revenue: 50.68e12 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 17.58e12 },
+      { fiscalYear: 2025, fiscalPeriodEnd: "2025-03-31", consolidated: "連結", revenue: 18.28e12 },
+      { fiscalYear: 2026, fiscalPeriodEnd: "2026-03-31", consolidated: "連結", revenue: 50.68e12 },
     ];
     const result = evaluateBlueChip(financials, 0.12);
     expect(result.revenueTrend).toBeNull();
@@ -151,9 +151,9 @@ describe("evaluateBlueChip: 連結/単体混在のガード", () => {
 
   it("判定窓に半減があれば revenueTrend は null (2340 相当の V 字)", () => {
     const financials: AnnualFinancial[] = [
-      { fiscalYear: 2024, revenue: 12.8e9 },
-      { fiscalYear: 2025, revenue: 0.865e9 },
-      { fiscalYear: 2026, revenue: 15.2e9 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 12.8e9 },
+      { fiscalYear: 2025, fiscalPeriodEnd: "2025-03-31", consolidated: "連結", revenue: 0.865e9 },
+      { fiscalYear: 2026, fiscalPeriodEnd: "2026-03-31", consolidated: "連結", revenue: 15.2e9 },
     ];
     const result = evaluateBlueChip(financials, 0.12);
     expect(result.revenueTrend).toBeNull();
@@ -162,28 +162,94 @@ describe("evaluateBlueChip: 連結/単体混在のガード", () => {
 
   it("正常な系列は従来どおり +1 のまま (ガードで巻き込まない)", () => {
     const financials: AnnualFinancial[] = [
-      { fiscalYear: 2022, revenue: 100 },
-      { fiscalYear: 2023, revenue: 115 },
-      { fiscalYear: 2024, revenue: 130 },
+      { fiscalYear: 2022, fiscalPeriodEnd: "2022-03-31", consolidated: "連結", revenue: 100 },
+      { fiscalYear: 2023, fiscalPeriodEnd: "2023-03-31", consolidated: "連結", revenue: 115 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 130 },
     ];
     const result = evaluateBlueChip(financials, 0.12);
     expect(result.revenueTrend).toBe(1);
     expect(result.isBlueChip).toBe(true);
   });
 
-  // 止血の限界を仕様として固定する。
-  // このガードが見ているのは「定義が切り替わった瞬間」だけなので、判定窓3期が
-  // すべて単体売上に揃っている銘柄は段差を持たず、単体の成長率で優良株になる。
-  // 持株会社 464 銘柄中 296 が系列内に 10 倍超のスパンを持つのだから、
-  // 窓が単体側に揃った銘柄は必ず存在する。これは是正ではなく止血である。
-  it("窓が単体側に揃っている系列は素通りする (検出できない — 既知の限界)", () => {
+  // 区分が単体で揃っている窓は単体として判定する (表示も「単体」と出す)。
+  // 旧 Yahoo 年次には区分が無かったため、窓が単体側に揃って連結並みの
+  // 扱いになる混在は段差ガードでは検出できない既知の限界だった。
+  // 正本 jss 由来の系列は gate が最新期の区分に単一化し、表示に区分を出すので、
+  // ここでは「単一の既知区分で揃った窓はその区分で判定する」を固定する。
+  it("窓が単体で揃っていれば単体として判定する (区分は表示で明示)", () => {
     // 7203 の単体水準だけで窓が埋まったケース (連結なら 45〜50 兆の規模)
     const allParentOnly: AnnualFinancial[] = [
-      { fiscalYear: 2023, revenue: 16.5e12 },
-      { fiscalYear: 2024, revenue: 17.58e12 },
-      { fiscalYear: 2025, revenue: 18.28e12 },
+      { fiscalYear: 2023, fiscalPeriodEnd: "2023-03-31", consolidated: "単体", revenue: 16.5e12 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "単体", revenue: 17.58e12 },
+      { fiscalYear: 2025, fiscalPeriodEnd: "2025-03-31", consolidated: "単体", revenue: 18.28e12 },
     ];
     const result = evaluateBlueChip(allParentOnly, 0.12);
+    expect(result.revenueTrend).toBe(1);
+    expect(result.isBlueChip).toBe(true);
+  });
+});
+
+describe("evaluateBlueChip: 年次比較の可否ガード", () => {
+  // FY2022/FY2024/FY2026 は 3 年連続ではない。数値が伸びていても
+  // 欠年を挟んだ成長率は主張できないので判定不能に倒す。
+  it("年欠落があれば revenueTrend は null (飛び年は比較しない)", () => {
+    const financials: AnnualFinancial[] = [
+      { fiscalYear: 2022, fiscalPeriodEnd: "2022-03-31", consolidated: "連結", revenue: 100 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 115 },
+      { fiscalYear: 2026, fiscalPeriodEnd: "2026-03-31", consolidated: "連結", revenue: 130 },
+    ];
+    const result = evaluateBlueChip(financials, 0.12);
+    expect(result.revenueTrend).toBeNull();
+    expect(result.isBlueChip).toBe(false);
+  });
+
+  // 決算期変更の端数期 (2021-12-31) は表示に残るが、年次比較の窓には
+  // 入れない。12 ヶ月換算などの年率化もしない。
+  it("決算期変更があれば revenueTrend は null (端数期は表示のみ)", () => {
+    const financials: AnnualFinancial[] = [
+      { fiscalYear: 2021, fiscalPeriodEnd: "2021-03-31", consolidated: "連結", revenue: 20e9 },
+      { fiscalYear: 2021, fiscalPeriodEnd: "2021-12-31", consolidated: "連結", revenue: 15e9 },
+      { fiscalYear: 2022, fiscalPeriodEnd: "2022-12-31", consolidated: "連結", revenue: 22e9 },
+    ];
+    const result = evaluateBlueChip(financials, 0.12);
+    expect(result.revenueTrend).toBeNull();
+    expect(result.isBlueChip).toBe(false);
+  });
+
+  // 最新期の区分が不明の系列は表示に「不明」と出すが、区分を保証できない
+  // ため既知区分の優良株にはしない。
+  it("区分が不明なら revenueTrend は null (不明のまま判定しない)", () => {
+    const financials: AnnualFinancial[] = [
+      { fiscalYear: 2023, fiscalPeriodEnd: "2023-03-31", consolidated: "不明", revenue: 100 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "不明", revenue: 115 },
+      { fiscalYear: 2025, fiscalPeriodEnd: "2025-03-31", consolidated: "不明", revenue: 130 },
+    ];
+    const result = evaluateBlueChip(financials, 0.12);
+    expect(result.revenueTrend).toBeNull();
+    expect(result.isBlueChip).toBe(false);
+  });
+
+  // 窓の中に未取得 (null) があれば、残り 2 期だけで成長率は主張しない。
+  it("窓の中に未取得があれば revenueTrend は null (穴埋めしない)", () => {
+    const financials: AnnualFinancial[] = [
+      { fiscalYear: 2022, fiscalPeriodEnd: "2022-03-31", consolidated: "連結", revenue: 100 },
+      { fiscalYear: 2023, fiscalPeriodEnd: "2023-03-31", consolidated: "連結", revenue: null },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-03-31", consolidated: "連結", revenue: 130 },
+    ];
+    const result = evaluateBlueChip(financials, 0.12);
+    expect(result.revenueTrend).toBeNull();
+    expect(result.isBlueChip).toBe(false);
+  });
+
+  // 2 月末決算の通常系列はうるう年跨ぎで月日がずれる (02-28→02-29→02-28)。
+  // 暦年 +1・同月・両端とも実暦の月末なら年次連続として比較する。
+  it("2月末の年次系列はうるう年を挟んでも比較する (02-28→02-29→02-28)", () => {
+    const financials: AnnualFinancial[] = [
+      { fiscalYear: 2023, fiscalPeriodEnd: "2023-02-28", consolidated: "連結", revenue: 100 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-02-29", consolidated: "連結", revenue: 115 },
+      { fiscalYear: 2025, fiscalPeriodEnd: "2025-02-28", consolidated: "連結", revenue: 130 },
+    ];
+    const result = evaluateBlueChip(financials, 0.12);
     expect(result.revenueTrend).toBe(1);
     expect(result.isBlueChip).toBe(true);
   });
