@@ -119,6 +119,39 @@ LEX回復 26 + round-1合計のみ是正 32 + 旧来不一致 80 (59違反を含
   HTTP/要求エラー→自己回収 or 手動 dispatch)。保存再読は Worker 応答 JSON と
   D1 `yuho_documents` + Notion key=docId 照会で確認。
 
+## 5.1 post-#134 の catchup 期限切れの実証と EDINET 要求期限 (同一ブランチ継続)
+
+- run 36465347557 (9/28 18:27Z, #134 merge 後): `yuho-quant EDINET catchup`
+  が `期限切れ (600000ms) までに応答が完了しませんでした` で失敗 (biztag は
+  success)。9/24 (HeadersTimeoutError)・9/25 (fetch failed) と 3 連続で
+  「Worker がトリガ予算内に応答しない」の同型。#134 の可視失敗化は設計通り
+  動作 (silent reset ではないことを実証)。
+- D1 read-only で停滞を特定: 9/28 は 15 件を ~20s/件で 18:47:52 まで進めた後、
+  18:53:15 のトリガ打ち切りまで書込ゼロ (5 分超の停滞)。9/24 は 3 件で停滞。
+  すなわち特定の 1 await の hang であり、 gradual な鈍化ではない。
+- 機構 (code 実証): `src/cron/yuho-edinet.ts` の TIME_BUDGET 検査は await 間で
+  しか発火しない。一方 `edinet/client.ts` の fetch (list/download) に期限が
+  無く、全 8 caller (cron + ingest + backfill×5 + audit) が共通で hang し得る。
+  停滞した 1 件が予算検査を迂回し、run 全体をトリガ期限切れへ道連れにする。
+  停滞箇所が EDINET/Notion/D1 のいずれかは Worker 側の可観測性が無く未特定
+  (Notion/D1 側は lane C/共有の領域のため root へ申送り。本修正は EDINET 側
+  の hang vector を塞ぐ)。
+- 修正 (共通境界・最小): `listDocuments`/`downloadDocument` に
+  `AbortSignal.timeout` を付与 (一覧 15s=社内先例、取得 60s=実測最大 5.1MB@
+  100KB/s + Worker 300s 予算の 1/5)。期限切れだけ文脈付きで throw し
+  (ルール2)、他の fetch 失敗の形は不変。in-client 再試行はしない
+  (60 日窓 + docId 冪等が既存の再試行機構)。全 caller は per-day/per-doc で
+  既に継続するため、hang→skip 化で TIME_BUDGET が発火し run が完走する。
+- 回帰: `edinet-client-timeout.test.ts` 5 tests (外部通信なし。hang 再現・正常
+  signal・素通し・定数 pin)。
+- 正規 job 再実行手順 (root 渡し): 次回平日 11:00Z 定期実行が 60 日窓で未完了
+  分を自己回収する (手動 dispatch 不要。shard なしの通常 run でよい)。
+  所要は backlog 量次第だが TIME_BUDGET 300s + 投影で完走するはず。
+  保存再読 criteria: Worker 応答 JSON (`ingested`/`reachedCap`/`elapsedSec`) +
+  D1 `yuho_documents` の `ingested_at` 連続 + Notion key=docId 照会。
+  期限切れが再発したら Worker 応答なし=EDINET 以外 (Notion/D1/投影) の hang
+  を疑い、shard (`--part= --of=`) 分割 or 予算内完走の切り分けへ。
+
 ## 6. 修復適用計画 (writer gate 後の root 承認実行用。書込なし準備)
 
 対象: §4.2 の804文書 (59違反を含む)。方針は「全件を現 parser の reparse 値へ」
@@ -388,7 +421,7 @@ LEX回復 26 + round-1合計のみ是正 32 + 旧来不一致 80 (59違反を含
 
 ### 13-5. 検証ゲート (最終 head)
 - `overseas-parser.test.ts`: **97 tests green** (96 + proof-欠損-throw 1)。
-- repair-isolation: 4 tests green (proof pass-through 後も維持)。
+- repair-isolation: 3 tests green (proof pass-through 後も維持)。
 - `services/yuho-quant`: 44 files green。repo 全体: **3064 passed**
   (363 skipped) / 0 failed。
 - `tsc --noEmit` clean。`eslint src services --max-warnings=0` clean。
