@@ -43,8 +43,11 @@ export const SummaryTask = z.strictObject({
     /** `benefitKey(stockCode, description)`。結果の突き合わせキー。 */
     taskId: z.string().check(z.regex(TASK_ID_PATTERN)),
     contractVersion: z.string().check(z.minLength(1)),
-    /** missing = 要約が無い / contract_violation = 今の要約が契約違反。 */
-    reason: z.enum(["missing", "contract_violation"]),
+    /**
+     * missing = 要約が無い / contract_violation = 今の要約が契約違反 /
+     * rework = 契約上有効だが内容が誤り (別群の要約・tier 違い) の作り直し。
+     */
+    reason: z.enum(["missing", "contract_violation", "rework"]),
     violations: z.array(z.enum(VIOLATION_RULES)),
     stockCode: z.string().check(z.minLength(1)),
     stockName: z.string(),
@@ -59,6 +62,13 @@ export type SelectOptions = {
   violationsOnly?: boolean;
   /** 先頭から n 件 (試走用)。 */
   limit?: number;
+  /**
+   * 指定した内容キー (taskId) の群を理由 `rework` で task 化する。
+   * 契約上は有効だが内容が別群のもの・ tier を取り違えた要約 (idx 時代の
+   * 貼り付け破損の残存) の作り直し用。キー自体は掲載文を含まないので、
+   * 修復計画に列挙して運用者が指定できる。
+   */
+  retaskKeys?: ReadonlySet<string>;
 };
 
 /** 現行行から要約タスクを選ぶ。順序は (銘柄コード, 掲載文) で決定的。 */
@@ -93,6 +103,7 @@ export function selectSummaryTasks(
       }
       if (rules.size > 0) reason = "contract_violation";
     }
+    if (reason === null && opts.retaskKeys?.has(taskId)) reason = "rework";
     if (reason === null) continue;
     if (opts.violationsOnly && reason !== "contract_violation") continue;
     tasks.push({

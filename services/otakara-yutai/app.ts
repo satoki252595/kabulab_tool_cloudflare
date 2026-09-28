@@ -777,6 +777,19 @@ function renderFinGrid(fin: FinForGrid): string {
 }
 
 /** 優待ブロックをHTMLに描画 */
+/**
+ * 推定額バッジ。null は「金額推定不能」の正直表示 (ルール1/2)。
+ * 0 は仕様上あり得ない値 (旧 LLM 経路が「推定不能」を 0 で書いた残存)。
+ * 「推定 0円」と出すと価値ゼロの断定になるので、null と同じ推定不能表示に
+ * する (値は修復計画で null 化する)。
+ */
+export function renderValueNote(estimatedValue: number | null): string {
+  if (estimatedValue == null || estimatedValue === 0) {
+    return `<span class="product-value product-value-unknown">${tip("value_unknown", "金額換算が難しい優待")}</span>`;
+  }
+  return `<span class="product-value">推定 ${estimatedValue.toLocaleString()}円</span>`;
+}
+
 function renderBenefitGroups(groups: GenreGroup[]): string {
   if (groups.length === 0) return `<p style="color:var(--text-muted);margin:16px 0">優待情報がありません</p>`;
   return groups
@@ -799,12 +812,7 @@ function renderBenefitGroups(groups: GenreGroup[]): string {
               // "company")。楽天由来の "WEB推定" 表示・出典リンクは
               // enrich-from-web を作り直さない決定 (U5-(A)、2026-09-25) で
               // 廃止し、出典 URL 列 `estimate_source_url` も DROP した (X-01)。
-              let valueNote: string;
-              if (p.estimatedValue == null) {
-                valueNote = `<span class="product-value product-value-unknown">${tip("value_unknown", "金額換算が難しい優待")}</span>`;
-              } else {
-                valueNote = `<span class="product-value">推定 ${p.estimatedValue.toLocaleString()}円</span>`;
-              }
+              const valueNote = renderValueNote(p.estimatedValue);
               // 公開してよいのは short_summary 由来の要約だけ (publicSummary 参照)。
               // 要約が無い場合は出典掲載文で埋めず、一次情報へ誘導する。
               const descHtml = p.summary

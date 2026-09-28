@@ -27,7 +27,22 @@
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-09-13.1";
+export const SUMMARY_CONTRACT_VERSION = "2026-09-28.1";
+
+/**
+ * 要約の % 表現が掲載文に裏づけられているか。
+ *
+ * 別群の割引要約が貼り付いた行 (2026-09-28 監査の 8508・7075: 抽選や定額の
+ * 掲載文に「○○の20%割引」の要約) は、% が掲載文のどこにも無い。要約の %
+ * (`%` `％`) は掲載文の % で裏づけられていなければならず、そうでない結果は
+ * 取り込まない。raw の人数 (20 名) で要約の率 (20%) を根拠づけられないのと
+ * 同じく、単位の意味が違うものは根拠にならない。
+ */
+export function isSummaryPercentGrounded(description: string, shortSummary: string): boolean {
+  const hasPercent = (s: string): boolean => s.includes("%") || s.includes("％");
+  if (!hasPercent(shortSummary)) return true;
+  return hasPercent(description);
+}
 
 /**
  * `contractVersion` の形式 (日付 + 連番)。結果ファイル側のスキーマ検証に使う —

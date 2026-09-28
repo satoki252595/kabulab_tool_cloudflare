@@ -41,6 +41,7 @@ import {
   SUMMARY_CONTRACT_VERSION,
   checkSummary,
   formatViolations,
+  isSummaryPercentGrounded,
   isVerbatimCopy,
   normalizeSummary,
 } from "./summary-contract.js";
@@ -71,6 +72,7 @@ export type RejectReason =
   | "stale"
   | "contract"
   | "verbatim"
+  | "summary_ungrounded"
   | "value_guard"
   | "value_ungrounded";
 
@@ -242,6 +244,11 @@ export function planSummaryImport(input: {
     }
     if (isVerbatimCopy(summary, row.description)) {
       reject("verbatim", `掲載文の ${summary.length} 字の逐語コピー`);
+      continue;
+    }
+    // 要約の % は掲載文の % で裏づけられていること (別群の割引要約の貼り付け)
+    if (!isSummaryPercentGrounded(row.description, summary)) {
+      reject("summary_ungrounded", "要約の % が掲載文に無い (別群の割引要約の疑い)");
       continue;
     }
     if (sanitizeEstimatedValue(row.description, result.estimatedValue) !== result.estimatedValue) {

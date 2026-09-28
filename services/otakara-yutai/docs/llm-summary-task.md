@@ -4,7 +4,7 @@
 （Cursor Automations などのクラウド上の LLM）向けの仕様書です。この文書と
 タスクファイルがあれば作業できるように書いてあります。
 
-- 契約の版: **`2026-09-13.1`**（`services/otakara-yutai/data-scripts/summary-contract.ts` の `SUMMARY_CONTRACT_VERSION`）
+- 契約の版: **`2026-09-28.1`**（`services/otakara-yutai/data-scripts/summary-contract.ts` の `SUMMARY_CONTRACT_VERSION`）
 - 書き出し: `pnpm yutai:summary:export`（`--violations-only` で契約違反の既存要約だけ）
 - 取り込み: `pnpm yutai:summary:import --tasks <タスク> --results <結果>`（既定は dry-run、`--apply` で書き込み）
 
@@ -59,7 +59,7 @@
   "properties": {
     "taskId": { "type": "string", "pattern": "^[0-9a-f]{16}$", "description": "結果に必ずそのまま書き戻す ID" },
     "contractVersion": { "type": "string", "description": "この文書の版。結果にもそのまま書く" },
-    "reason": { "enum": ["missing", "contract_violation"], "description": "missing=要約が無い / contract_violation=今の要約が契約違反" },
+    "reason": { "enum": ["missing", "contract_violation", "rework"], "description": "missing=要約が無い / contract_violation=今の要約が契約違反 / rework=契約上有効だが内容が誤り (別群の要約・tier 違い) の作り直し" },
     "violations": {
       "type": "array",
       "items": { "enum": ["annotation", "too_long", "prose", "empty"] },
@@ -109,6 +109,7 @@
 | `annotation` | 注記記号 **`※` `■` `◆` `◇`** のどれかを含む |
 | `prose` | **`です。` `ます。` `ください` `いたします`** のどれかを含む（説明文調） |
 | `verbatim` | 40 字以上あり、その全体が掲載文にそのまま含まれている（掲載文の書き写し） |
+| `summary_ungrounded` | 要約に `%` があるのに掲載文に `%` が無い（別群の割引要約の貼り付け） |
 
 全角の英数字は取り込み時に半角へ揃えるので、どちらで書いても構いません。
 
@@ -129,6 +130,10 @@
 優待利回りの計算に使われます。**過大評価は利用者を誤誘導するので、迷ったら `null`** です。
 `0` や `1` などの「とりあえずの値」は不可（スキーマで `1` 以上に制限しています。0 円相当なら `null`）。
 
+金額は**保有しているだけで確実に受け取れる価値**だけを入れます。確実に受け取れる
+か分からないもの（人数限定で割当方法の明示が無い、購入・契約などの対価条件が
+ある）は金額が書いてあっても `null` です（要約には特典の内容を書いて構いません）。
+
 ### 金額を入れるもの
 
 - 企業が **「○○円相当」「○○円分」と明示している**もの。金券・カタログギフト・自社商品・食品のどれでも、その額面を使う。
@@ -144,7 +149,8 @@
 - **割引・値引き**（`○%割引` `○円引き` `優待価格`）。受け取る金銭ではないため。割引券であっても額面の金券表現が無ければ `null`。
 - **会員権・施設利用・サービス利用などの権利**（「○○円相当」と書いてあっても `null`）。
 - 買い物で貯まる / 付与される**販促ポイント**、`ポイント○倍`、`○○ポイント還元`。
-- 寄付・社会貢献・抽選。
+- 寄付・社会貢献・抽選。抽選の賞品額・最高賞品額・賞金総額は入れない（固定の特典との併記なら固定分だけ入れる）。
+- **外貨建て**（`USD` `米ドル` など）。円換算のレート・基準日・出典の保存場所が無いため、換算せず `null`。為替レートの推定で円換算しない。
 - **掲載文に金額（`○円` `○千円` `○万円` `○ポイント`）が 1 つも出てこないもの**。自社商品の相場を常識で見積もって入れない（取り込んだ金額は公開面で企業が示した額として表示されるため）。
 
 ### 取り込みで機械的にはじかれる金額
@@ -152,6 +158,8 @@
 - 掲載文が割引・値引きで、金券の表現（`円分` `円相当` `円券` `QUO` `ギフトカード` `商品券` `カタログギフト` など）が無いのに、金額を入れた。
 - 掲載文に金額（`○円` `○千円` `○万円` `○ポイント`）が 1 つも無いのに、金額を入れた（`value_ungrounded`）。
 - **50,000 円以上**なのに、掲載文に出てくる金額（`○円` `○千円` `○万円` `○ポイント`）そのもの、それに掲載文の数量（`○枚` `○個` `×○` など）を掛けた値、あるいは金額の合計のどれとも（±2% で）一致しない。
+- 抽選の賞品表記なのに、金額を入れた（`value_guard`）。「抽選」を含む掲載文で、金額が当選人数つき（`各○名` `○名に` `○○円相当:○名`）か、賞品表つきの「総額○○円」と一致するもの。固定の特典との併記で固定分の金額なら通る。
+- 外貨額面（`USD` `USドル` `米ドル`）と一致し、円の金額表現と一致しない値を入れた（`value_guard`）。低額でも見る。
 
 金額でひっかかった行は、要約も含めて行ごとはじかれます（要約側も読み違えている疑いが強いため）。
 
@@ -162,7 +170,7 @@
 入力（1 行、読みやすく改行しています）:
 
 ```json
-{"taskId":"0123456789abcdef","contractVersion":"2026-09-13.1","reason":"missing","violations":[],
+{"taskId":"0123456789abcdef","contractVersion":"2026-09-28.1","reason":"missing","violations":[],
  "stockCode":"9990","stockName":"架空ホールディングス",
  "description":"【1年未満】架空ギフトカタログ 2,000円相当\n【1年以上】架空ギフトカタログ 5,000円相当\n■贈呈時期\n毎年7月下旬に発送予定\n※保有株式数の確認は3月末時点","rowCount":2}
 ```
@@ -170,7 +178,7 @@
 出力:
 
 ```json
-{"taskId":"0123456789abcdef","contractVersion":"2026-09-13.1","shortSummary":"【1年以上】カタログギフト 5,000円相当","estimatedValue":5000}
+{"taskId":"0123456789abcdef","contractVersion":"2026-09-28.1","shortSummary":"【1年以上】カタログギフト 5,000円相当","estimatedValue":5000}
 ```
 
 ### 例 2: 割引券（金額は null）
@@ -178,7 +186,7 @@
 入力の `description`: `架空レストラン全店で使えるお食事代20%割引券を2枚\n※1回の会計につき1枚まで`
 
 ```json
-{"taskId":"fedcba9876543210","contractVersion":"2026-09-13.1","shortSummary":"食事代 20%割引券 2枚","estimatedValue":null}
+{"taskId":"fedcba9876543210","contractVersion":"2026-09-28.1","shortSummary":"食事代 20%割引券 2枚","estimatedValue":null}
 ```
 
 ### 例 3: 複数の選択肢から 1 つ
@@ -186,7 +194,7 @@
 入力の `description`: `次のいずれか1点\n①架空農園のお米 5kg\n②架空製菓の焼き菓子セット\n③寄付（架空財団へ1,000円）`
 
 ```json
-{"taskId":"00ff00ff00ff00ff","contractVersion":"2026-09-13.1","shortSummary":"お米 5kg (3点から選択)","estimatedValue":null}
+{"taskId":"00ff00ff00ff00ff","contractVersion":"2026-09-28.1","shortSummary":"お米 5kg (3点から選択)","estimatedValue":null}
 ```
 
 （お米 5kg は掲載文に金額が無いので `null`。相場を見積もって入れると取り込みではじかれる。）
@@ -196,16 +204,16 @@
 入力の `violations`: `["annotation","prose"]`、`description`: `架空トラベルの宿泊優待券 10,000円券×2枚\n■有効期限\n翌年6月末まで`
 
 ```json
-{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-09-13.1","shortSummary":"宿泊優待券 10,000円×2枚","estimatedValue":20000}
+{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-09-28.1","shortSummary":"宿泊優待券 10,000円×2枚","estimatedValue":20000}
 ```
 
 ### はじかれる出力の例
 
 ```json
-{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-09-13.1","shortSummary":"宿泊券をご利用いただけます。","estimatedValue":20000}
-{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-09-13.1","shortSummary":"宿泊優待券 ※有効期限あり","estimatedValue":20000}
-{"taskId":"fedcba9876543210","contractVersion":"2026-09-13.1","shortSummary":"食事代 20%割引券 2枚","estimatedValue":2000}
-{"taskId":"0123456789abcdef","contractVersion":"2026-09-13.1","shortSummary":"カタログギフト 5,000円相当","estimatedValue":5000,"description":"…"}
+{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-09-28.1","shortSummary":"宿泊券をご利用いただけます。","estimatedValue":20000}
+{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-09-28.1","shortSummary":"宿泊優待券 ※有効期限あり","estimatedValue":20000}
+{"taskId":"fedcba9876543210","contractVersion":"2026-09-28.1","shortSummary":"食事代 20%割引券 2枚","estimatedValue":2000}
+{"taskId":"0123456789abcdef","contractVersion":"2026-09-28.1","shortSummary":"カタログギフト 5,000円相当","estimatedValue":5000,"description":"…"}
 ```
 
 1 行目は `prose`、2 行目は `annotation`、3 行目は割引を金額にしたので金額ガード、4 行目は余計なキーでスキーマ違反です。
@@ -230,5 +238,6 @@ Issue / PR / チャット等の公開・共有される場所に貼らないで�
 | `stale` | タスク発行後に掲載文が変わった | 新しくタスクを書き出して作り直す |
 | `contract` | 5 章の規則違反 | 規則に沿って短く書き直す |
 | `verbatim` | 掲載文の 40 字以上の書き写し | 自分の言葉で短くする |
+| `summary_ungrounded` | 要約の `%` が掲載文に無い (別群の割引要約の疑い) | その掲載文の割引率で書き直す |
 | `value_guard` | 6 章の金額ガードに該当 | 金額を見直すか `null` にする |
 | `value_ungrounded` | 掲載文に金額表現が無いのに金額を入れた | `null` にする |

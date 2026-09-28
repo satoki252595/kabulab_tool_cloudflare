@@ -9,6 +9,7 @@ import {
   SUMMARY_MAX_CHARS,
   checkSummary,
   formatViolations,
+  isSummaryPercentGrounded,
   isVerbatimCopy,
 } from "../../data-scripts/summary-contract.js";
 
@@ -90,5 +91,21 @@ describe("isVerbatimCopy", () => {
   it("空文字は判定しない", () => {
     expect(isVerbatimCopy("", "なにか")).toBe(false);
     expect(isVerbatimCopy("なにか", "")).toBe(false);
+  });
+});
+
+describe("isSummaryPercentGrounded — 要約の % は掲載文の % で裏づける", () => {
+  it("% の無い要約は判定しない", () => {
+    expect(isSummaryPercentGrounded("なにか", "QUOカード 1,000円相当")).toBe(true);
+  });
+
+  it("掲載文に % があれば通す (半角・全角)", () => {
+    expect(isSummaryPercentGrounded("系列店で使える20%割引券 2枚", "系列店の20%割引券 2枚")).toBe(true);
+    expect(isSummaryPercentGrounded("系列店で使える２０％割引券", "系列店の20%割引券")).toBe(true);
+  });
+
+  it("掲載文に % が無ければ落とす (別群の割引要約の貼り付け)", () => {
+    // 8508 型: 抽選の掲載文に割引率の要約
+    expect(isSummaryPercentGrounded("応募口数で抽選招待", "美容施設の20%割引")).toBe(false);
   });
 });
