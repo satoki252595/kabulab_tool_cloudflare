@@ -21,6 +21,17 @@ export interface DailyOhlcv {
 export interface AnnualFinancial {
   fiscalYear: number;
   revenue: number | null;
+  /**
+   * 実績期末 'YYYY-MM-DD'。正本 jss 由来の系列 (`AnnualSeriesPoint`) のみが
+   * 持つ。Yahoo 年次には無い。`evaluateBlueChip` は 3 期ぶん揃っている
+   * ときだけ年次連続を検証し、無い入力は比較不能として判定不能に倒す。
+   */
+  fiscalPeriodEnd?: string;
+  /**
+   * 連結/単体/不明。jss 由来の系列のみが持つ。Yahoo 年次には無い。
+   * `evaluateBlueChip` は既知 (連結/単体) かつ 3 期同一のときだけ比較する。
+   */
+  consolidated?: string;
 }
 
 /** Yahoo から取得した 1 銘柄分の生データ (chart + quoteSummary を統合) */
