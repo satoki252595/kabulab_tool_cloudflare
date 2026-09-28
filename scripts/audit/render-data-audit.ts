@@ -19,7 +19,7 @@
  *   E_SHA         sha256 の全文64桁hex以外 (省略形の混入防止)
  *   E_SHA_STATE   sha256 未記録なのに時刻 state が exact
  *   E_DATE        日付形式・前後関係の破れ、snapshot 未来の確定時刻
- *   E_QUARANTINE  隔離候補と保留の重なり (未証明項目の候補混入防止)
+ *   E_QUARANTINE  隔離候補と保留の重なり (銘柄×表キー。未証明項目の候補混入防止)
  *   E_DUPID       項目IDの重複
  *   E_BLOCK       レポート内ブロックの欠落・重複・手編集 (byte 不一致)
  *   E_REF         本文の集計ID参照の未解決
@@ -76,12 +76,15 @@ const CoverageSchema = z.object({
 
 const CandidateSchema = z.object({
   id: z.string(),
-  scope: z.string(),
-  tables: z.array(z.string()),
+  stock: z.string(),
+  table: z.string(),
+  evidence: z.string(),
 });
 
 const HoldSchema = z.object({
   id: z.string(),
+  stock: z.string(),
+  table: z.string(),
   reason: z.string(),
 });
 
@@ -122,7 +125,7 @@ const ManifestSchema = z.object({
   sections: z.object({
     fundamentals: SectionSchema,
     moneyflow: SectionSchema,
-    market: z.optional(SectionSchema),
+    market: SectionSchema,
   }),
 });
 
@@ -240,16 +243,36 @@ export function validateManifest(manifest: Manifest): string[] {
       if (cov.label.trim() === "") errors.push(`E_NUM: ${cov.id} のラベルが空です`);
     }
 
-    const holdIds = new Set(section.quarantines.holds.map((h) => h.id));
+    // 隔離の照合キーは銘柄×表。id を変えた別名候補化でも拒否する。
+    const pairKey = (stock: string, table: string) => JSON.stringify([stock, table]);
+    const holdPairs = new Set(section.quarantines.holds.map((h) => pairKey(h.stock, h.table)));
+    const candPairs = new Set<string>();
     for (const cand of section.quarantines.candidates) {
       claimId(cand.id, `${where}.quarantines.candidates`);
-      if (holdIds.has(cand.id)) {
-        errors.push(`E_QUARANTINE: ${cand.id} が隔離候補と保留の両方に入っています`);
+      const key = pairKey(cand.stock, cand.table);
+      if (holdPairs.has(key)) {
+        errors.push(`E_QUARANTINE: ${cand.stock}×${cand.table} が隔離候補と保留の両方に入っています`);
       }
-      if (cand.tables.length === 0) errors.push(`E_QUARANTINE: ${cand.id} の tables が空です`);
+      if (candPairs.has(key)) {
+        errors.push(`E_QUARANTINE: ${cand.stock}×${cand.table} が隔離候補に重複しています`);
+      }
+      candPairs.add(key);
+      if (cand.stock.trim() === "" || cand.table.trim() === "") {
+        errors.push(`E_QUARANTINE: ${cand.id} の stock/table が空です`);
+      }
+      if (cand.evidence.trim() === "") errors.push(`E_QUARANTINE: ${cand.id} の evidence が空です`);
     }
+    const seenHoldPairs = new Set<string>();
     for (const hold of section.quarantines.holds) {
       claimId(hold.id, `${where}.quarantines.holds`);
+      const key = pairKey(hold.stock, hold.table);
+      if (seenHoldPairs.has(key)) {
+        errors.push(`E_QUARANTINE: ${hold.stock}×${hold.table} が保留に重複しています`);
+      }
+      seenHoldPairs.add(key);
+      if (hold.stock.trim() === "" || hold.table.trim() === "") {
+        errors.push(`E_QUARANTINE: ${hold.id} の stock/table が空です`);
+      }
       if (hold.reason.trim() === "") errors.push(`E_QUARANTINE: ${hold.id} の reason が空です`);
     }
 
@@ -338,10 +361,10 @@ export function renderBlock(manifest: Manifest, sectionKey: string): string {
   lines.push("");
   lines.push("### 母集団");
   lines.push("");
-  lines.push("| 項目ID | 内容 | n |");
-  lines.push("|---|---|---:|");
+  lines.push("| 項目ID | 内容 | n | 備考 |");
+  lines.push("|---|---|---:|---|");
   for (const pop of section.populations) {
-    lines.push(`| ${pop.id} | ${pop.label} | ${pop.n} |`);
+    lines.push(`| ${pop.id} | ${pop.label} | ${pop.n} | ${pop.note ?? "—"} |`);
   }
   lines.push("");
   lines.push("### 内訳集計（合計は内訳から計算）");
@@ -370,10 +393,10 @@ export function renderBlock(manifest: Manifest, sectionKey: string): string {
     lines.push(`隔離候補・保留ともに該当なし。${section.quarantines.note ?? ""}`.trimEnd());
   } else {
     for (const cand of section.quarantines.candidates) {
-      lines.push(`- 候補 ${cand.id}: ${cand.scope}（${cand.tables.join("・")}）`);
+      lines.push(`- 候補 ${cand.id}: ${cand.stock}×${cand.table}（証拠: ${cand.evidence}）`);
     }
     for (const hold of section.quarantines.holds) {
-      lines.push(`- 保留 ${hold.id}: ${hold.reason}`);
+      lines.push(`- 保留 ${hold.id}: ${hold.stock}×${hold.table}（${hold.reason}）`);
     }
   }
   lines.push("");
@@ -437,6 +460,12 @@ export function checkFiles(manifest: Manifest, rootDir: string): string[] {
     for (const cand of section.quarantines.candidates) idIndex.add(cand.id);
     for (const hold of section.quarantines.holds) idIndex.add(hold.id);
     for (const ev of section.evidence) idIndex.add(ev.id);
+  }
+
+  // manifest 自身の note 内相互参照も解決を強制する (改名時の置き忘れ防止)。
+  const manifestText = readFileSync(join(rootDir, MANIFEST_PATH), "utf8");
+  for (const ref of collectRefs(manifestText)) {
+    if (!idIndex.has(ref)) errors.push(`E_REF: 未解決の集計ID参照です: ${MANIFEST_PATH} の集計ID:${ref}`);
   }
 
   for (const [sectionKey, section] of Object.entries(manifest.sections)) {
@@ -516,7 +545,7 @@ function runWrite(rootDir: string): string[] {
     const expected = renderBlock(manifest, sectionKey);
     const head = text.slice(0, first);
     const tail = text.slice(endPos + end.length);
-    const tailNormalized = tail.startsWith("\n") ? tail.slice(1) : tail;
+    const tailNormalized = tail.replace(/^\n+/, "");
     writeFileSync(reportPath, `${head}${expected}\n${tailNormalized}`);
     updated.push(section.report);
   }

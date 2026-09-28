@@ -25,11 +25,11 @@ global独立再計算・JVCEA独立再読・代表標本再現表を追加した
 
 ### 母集団
 
-| 項目ID | 内容 | n |
-|---|---|---:|
-| MF-specs | moneyflow検査spec数 | 25 |
-| MF-r1-universe | R1母集団（active×内国普通株） | 3700 |
-| MF-notion-dbs | Notion確認DB数 | 4 |
+| 項目ID | 内容 | n | 備考 |
+|---|---|---:|---|
+| MF-specs | moneyflow検査spec数 | 25 | — |
+| MF-r1-universe | R1母集団（active×内国普通株） | 3700 | — |
+| MF-notion-dbs | Notion確認DB数 | 4 | — |
 
 ### 内訳集計（合計は内訳から計算）
 
@@ -90,8 +90,6 @@ global独立再計算・JVCEA独立再読・代表標本再現表を追加した
 - IMF原典最新期との照合未実施（鏡のfreshnessのみ主張）
 - 訂正版の重複事例未観測（保管0件）
 <!-- audit-report:END moneyflow -->
-
-
 
 ## 検査の境界 (必読)
 

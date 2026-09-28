@@ -15,22 +15,22 @@ Issue [#146](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/146)
 
 ### 母集団
 
-| 項目ID | 内容 | n |
-|---|---|---:|
-| FIN-d1-rows | 財務 source D1 jss_financials 行数（34列） | 34659 |
-| FIN-journal-rows | 財務 journal 行数（#144 proof） | 34663 |
-| FIN-cache-zips | 財務 raw cache ZIP 数 | 34663 |
-| YUHO-docs | 有報 yuho_documents 文書数 | 37974 |
-| YUHO-order-facts | 有報 yuho_order_facts 行数 | 41368 |
-| YUHO-overseas-facts | 有報 yuho_overseas_facts 行数 | 21258 |
-| YUHO-overseas-ok | 有報海外ok文書数（geo_rows/cols） | 3675 |
-| IR-all | IR ir_disclosures 全行数 | 48319 |
-| IR-30d | IR 直近30日行数 | 2909 |
-| YUTAI-benefits | 優待 yutai_benefits 行数 | 8295 |
-| YUTAI-brands | 優待銘柄数 | 1661 |
-| OTAKARA-fin | otakara_stock_financials 行数 | 1636 |
-| F5-fx-row | F5 外貨未換算 census 該当行（147A） | 1 |
-| FIN-543A-cell | 543A 原表対照セル（源泉異常値と確定） | 1 |
+| 項目ID | 内容 | n | 備考 |
+|---|---|---:|---|
+| FIN-d1-rows | 財務 source D1 jss_financials 行数（34列） | 34659 | — |
+| FIN-journal-rows | 財務 journal 行数（#144 proof） | 34663 | — |
+| FIN-cache-zips | 財務 raw cache ZIP 数 | 34663 | — |
+| YUHO-docs | 有報 yuho_documents 文書数 | 37974 | — |
+| YUHO-order-facts | 有報 yuho_order_facts 行数 | 41368 | — |
+| YUHO-overseas-facts | 有報 yuho_overseas_facts 行数 | 21258 | — |
+| YUHO-overseas-ok | 有報海外ok文書数（geo_rows/cols） | 3675 | — |
+| IR-all | IR ir_disclosures 全行数 | 48319 | — |
+| IR-30d | IR 直近30日行数 | 2909 | — |
+| YUTAI-benefits | 優待 yutai_benefits 行数 | 8295 | — |
+| YUTAI-brands | 優待銘柄数 | 1661 | — |
+| OTAKARA-fin | otakara_stock_financials 行数 | 1636 | — |
+| F5-fx-row | F5 外貨未換算 census 該当行（147A） | 1 | spec判断待ちの候補 |
+| FIN-543A-cell | 543A 原表対照セル（源泉異常値と確定） | 1 | 当該1セルのみ。全件の原表対照ではない |
 
 ### 内訳集計（合計は内訳から計算）
 
@@ -53,8 +53,8 @@ Issue [#146](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/146)
 | F4-lottery | 純抽選（spec違反）14＋境界（7791・断定不可）1＋適正併記23 | 38 | 不一致あり | 証拠を見た人手判定 |
 > F4-lottery: 純抽選/境界/併記の分離は原文を読んだ人手判定。38違反ではない
 | F4-codes | 純抽選銘柄5＋境界銘柄1＋併記銘柄11 | 17 | 不一致あり | 証拠を見た人手判定 |
-| SPOT-3x3 | テキスト索引/doc期3＋IR sentiment本文方向3＋優待要約条件3 | 9 | 確認済み | 報告書記載値 |
-> SPOT-3x3: 3例超の一般化はしない
+| SPOT-verify9 | テキスト索引/doc期（3例一致）3＋IR sentiment本文方向（3例一致）3＋優待要約・一致（1783）1＋優待要約・不一致の観測（8508）1＋優待要約・保留（147A・F5候補）1 | 9 | 不一致あり | 報告書記載値 |
+> SPOT-verify9: 件数は実施数であり全件合格ではない。優待3例の内訳は一致1・不一致の観測1・保留1。3例超の一般化はしない
 | IR-0928-catchup | 取込済み0＋未取込197 | 197 | 未検証 | 報告書記載値 |
 > IR-0928-catchup: catchup前のためD1未取込。未確認は合格に数えない
 
@@ -105,8 +105,6 @@ Issue [#146](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/146)
 - EDINET訂正報告書と元報告書の対応評価
 <!-- audit-report:END fundamentals -->
 
-
-
 ## 0. 要旨
 
 - 監査ブランチ `audit/fundamentals-2026-09-28`（`origin/main` 18d5939 = #145 から分岐、開始時 clean）。
@@ -145,7 +143,7 @@ Issue [#146](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/146)
   - 有報定量: 受注は標本・構造とも PASS。海外は Finding 2 の誤り（集計ID:F2-docs。原因の内訳は集計ID:F2-cause）。
     テキスト索引・事業タグ・競合は最小検証で PASS（集計ID:text-index。ただし根拠文の結合表示に観測 1 件。§4.4）。
   - IR: 直近 30 日の構造（集計ID:IR-30d）・2 日分の全件突合（集計ID:IR-day-0924・集計ID:IR-day-0925）・タグ再計算は PASS。sentiment の本文方向は一致（集計ID:ir-sentiment。§5.2）。軽微な観測 2 件（§5.3）。
-  - 優待/配当: 構造・スコア再計算・銘柄対応は PASS。Finding 3・4・5 が誤り/候補（派生値・推定値・単位）。要約条件の最小検証（集計ID:yutai-summary）のうち 1 件に不一致の観測（§6.5）。
+  - 優待/配当: 構造・スコア再計算・銘柄対応は PASS。Finding 3・4・5 が誤り/候補（派生値・推定値・単位）。要約条件の最小検証（集計ID:SPOT-verify9）に不一致の観測あり（集計ID:yutai-mismatch。§6.5）。
 
 ## 1. 監査条件
 

@@ -28,7 +28,7 @@ function loadRealManifest(): Manifest {
   return parseManifest(JSON.parse(readFileSync(join(ROOT, MANIFEST_REL), "utf8")) as unknown);
 }
 
-function aggregateOf(manifest: Manifest, section: "fundamentals" | "moneyflow", id: string) {
+function aggregateOf(manifest: Manifest, section: "fundamentals" | "moneyflow" | "market", id: string) {
   const agg = manifest.sections[section].aggregates.find((a) => a.id === id);
   if (agg === undefined) throw new Error(`missing aggregate ${id}`);
   return agg;
@@ -75,16 +75,29 @@ describe("audit-report", () => {
     const rows = aggregateOf(manifest, "moneyflow", "MF-rows-total");
     expect(rows.parts).toHaveLength(25);
     expect(rows.parts.reduce((acc, p) => acc + p.n, 0)).toBe(5121);
+    // B: F02は日別内訳（1678/3・33/1・32/0）とunique（65/66）を区別する
+    expect(aggregateOf(manifest, "market", "F02-vol").parts.map((p) => p.n)).toEqual([1678, 3]);
+    expect(aggregateOf(manifest, "market", "F02-fresh-unique").total).toBe(65);
+    expect(aggregateOf(manifest, "market", "F02-all-unique").total).toBe(66);
+    // B: 公開routeは38=23+9+6（23値join≠23正常はnoteで明示）
+    expect(aggregateOf(manifest, "market", "PUB-routes").parts.map((p) => p.n)).toEqual([23, 9, 6]);
+    // B: 隔離は1909×3表・2180×2表、2180×RSIは保留
+    const bq = manifest.sections.market.quarantines;
+    expect(bq.candidates).toHaveLength(5);
+    expect(bq.holds).toHaveLength(1);
+    expect([bq.holds[0].stock, bq.holds[0].table]).toEqual(["2180", "rsi_percentile"]);
     // 全証拠のSHAは全文64桁か未記録（省略形なし）
     for (const section of Object.values(manifest.sections)) {
       if (section === undefined) continue;
       for (const ev of section.evidence) {
         expect(ev.sha256 === null || /^[0-9a-f]{64}$/.test(ev.sha256)).toBe(true);
       }
-      // 隔離候補と保留は重ならない
-      const holds = new Set(section.quarantines.holds.map((h) => h.id));
+      // 隔離候補と保留は銘柄×表キーで重ならない
+      const holds = new Set(
+        section.quarantines.holds.map((h) => JSON.stringify([h.stock, h.table])),
+      );
       for (const cand of section.quarantines.candidates) {
-        expect(holds.has(cand.id)).toBe(false);
+        expect(holds.has(JSON.stringify([cand.stock, cand.table]))).toBe(false);
       }
     }
     // 確定営業日と保存最新の区別（9/28と9/25の混同を防ぐ）
@@ -99,21 +112,38 @@ describe("audit-report", () => {
     expect(errors.some((e) => e.startsWith("E_TOTAL") && e.includes("F4-lottery"))).toBe(true);
   });
 
-  it("保留項目の隔離候補化を却下する（2180-RSI形）", () => {
-    // B所掌の実例（2180 rsi_percentile の保留）は market section が PR149 merge 後に
-    // 持つ。ここでは規則自体を合成入力で固定する。
+  it("保留ペアの別名候補化を却下する（2180×RSIの実形）", () => {
+    // 保留中の 2180×rsi_percentile を別idで候補へ混ぜる誤変更。id 一致ではなく
+    // 銘柄×表キーで照合するため別名でも拒否する。
     const manifest = loadRealManifest();
-    manifest.sections.fundamentals.quarantines.holds.push({
-      id: "2180-rsi-percentile",
-      reason: "破損由来が未証明のため隔離保留",
-    });
-    manifest.sections.fundamentals.quarantines.candidates.push({
-      id: "2180-rsi-percentile",
-      scope: "2180 の rsi_percentile 行",
-      tables: ["rsi_percentile"],
+    manifest.sections.market.quarantines.candidates.push({
+      id: "Q-2180-rsi-alt",
+      stock: "2180",
+      table: "rsi_percentile",
+      evidence: "誤った追加",
     });
     const errors = validateManifest(manifest);
-    expect(errors.some((e) => e.startsWith("E_QUARANTINE"))).toBe(true);
+    expect(errors.some((e) => e.startsWith("E_QUARANTINE") && e.includes("2180"))).toBe(true);
+  });
+
+  it("隔離候補の銘柄×表の重複登録を却下する", () => {
+    const manifest = loadRealManifest();
+    manifest.sections.market.quarantines.candidates.push({
+      id: "Q-1909-rsi-dup",
+      stock: "1909",
+      table: "rsi_percentile",
+      evidence: "誤った重複",
+    });
+    const errors = validateManifest(manifest);
+    expect(errors.some((e) => e.startsWith("E_QUARANTINE") && e.includes("1909"))).toBe(true);
+  });
+
+  it("market section の欠落を却下する", () => {
+    const raw = JSON.parse(readFileSync(join(ROOT, MANIFEST_REL), "utf8")) as {
+      sections: Record<string, unknown>;
+    };
+    delete raw.sections.market;
+    expect(() => parseManifest(raw)).toThrow(/E_SCHEMA/);
   });
 
   it("SHA省略形を却下する", () => {
@@ -154,7 +184,7 @@ describe("audit-report", () => {
     const second = renderBlock(manifest, "fundamentals");
     expect(second).toBe(first);
     // 38は内訳14＋1＋23から計算された表示（手入力totalの転写ではない）
-    expect(first).toContain("純抽選14＋境界1＋適正併記23 | 38 |");
+    expect(first).toContain("純抽選（spec違反）14＋境界（7791・断定不可）1＋適正併記23 | 38 |");
     // 時刻・乱数を含まない（2回生成の同一byteを構造で保証）
     expect(/\d{2}:\d{2}:\d{2}/.test(first)).toBe(false);
   });
