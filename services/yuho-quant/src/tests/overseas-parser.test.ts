@@ -868,13 +868,10 @@ describe("海外59根因: 全角・語彙・集計変種・消去適用範囲・
     expect(() => validateOverseasSaveSet(r.facts, r.proof)).not.toThrow();
   });
 
-  it("Gate1 S100OJV9-TTUY 文書内に明示の期表示があれば dateless 候補は除外する (OJV9 単独では高得点で勝つが TTUY-T@pe が証明済みのため T を採る。A/B 実証済み)", () => {
+  it("Solレビュー1 S100OJV9-TTUY 最高点 unknown と明示 T の共存は STOP する (OJV9 は score で勝つが score だけでは採用せず、削っての T 都合採用もしない。単独時は OJV9/TTUY 各テストが採用を pin)", () => {
     const r = parseOverseasHtml(fx("georows-unknown-gated-S100OJV9-TTUY.html"), "2024-03-31");
-    expect(r.status).toBe("ok_geo_rows");
-    expect(region(r.facts, "日本")!.salesAmount).toBe(5295526);
-    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(1965538);
-    expect(pick(r.facts, "total")!.salesAmount).toBe(7261065);
-    expect(() => validateOverseasSaveSet(r.facts, r.proof)).not.toThrow();
+    expect(r.status).toBe("geo_present_unstructured");
+    expect(r.facts).toHaveLength(0);
   });
 
   it("S100LVA5 2期比較表は値列頭の当連結@pe で T 確定する (表外の交互節表題は直前=前期の stale。値軸が表外より強い)", () => {
@@ -990,6 +987,13 @@ describe("Gate3: per-cell 区間照合 (universal-L 廃止)", () => {
   });
   it("J2E7 合法差 1 は受理する (2-D 合算 51336 と開示 51337 の区間重なり)", () => {
     expect(cellsConsistent(intCells(4, 12834), { value: 51337, quantum: 1 }, "unknown")).toBe(true);
+  });
+  it("Solレビュー2: 葉の実 quantum を使う (12.0 は q=0.1 であり 1 に置換しない)", () => {
+    // 100(q=1) + 12.0(q=0.1): 和区間 [111.45, 113.1]。総額 113 は重なり受理、
+    // 総額 114 は区間外で却下 (q=1 置換なら幅 2 で 114 も受理してしまう)。
+    const leaves = [{ value: 100, quantum: 1 }, { value: 12, quantum: 0.1 }];
+    expect(cellsConsistent(leaves, { value: 113, quantum: 1 }, "unknown")).toBe(true);
+    expect(cellsConsistent(leaves, { value: 114, quantum: 1 }, "unknown")).toBe(false);
   });
 });
 
@@ -1120,10 +1124,12 @@ describe("HOLD-gate: fiscal 確定鎖 (値軸→表内→表外)", () => {
     // 境界1: pe 翌日 (pe+1) の印刷日は T ではなく mismatch
     expect(axisFiscal("2023年4月1日現在 売上高", "2023-03-31")).toBe("mismatch");
   });
-  it("Gate1 axisFiscal: 素の年月は月末化せず年 side のみ (補作しない)", () => {
-    expect(axisFiscal("2025年3月 売上高", "2025-03-31")).toEqual({ side: "T", date: null });
-    expect(axisFiscal("2024年3月 売上高", "2025-03-31")).toEqual({ side: "Z", date: null });
-    // 明示の期末表記つきは従来どおり月末化する
+  it("Gate1 axisFiscal: 素の年月は unknown のまま年 side へ落とさない (Solレビュー)", () => {
+    expect(axisFiscal("2025年3月 売上高", "2025-03-31")).toBeNull();
+    expect(axisFiscal("2024年3月 売上高", "2025-03-31")).toBeNull();
+    // マーカーつきとの混在も unknown (fail-closed)
+    expect(axisFiscal("2025年3月期 2024年3月", "2025-03-31")).toBeNull();
+    // 明示の期末表記つきは月末化する
     expect(axisFiscal("2025年3月末現在 売上高", "2025-03-31")).toEqual({
       side: "T",
       date: "2025-03-31",
@@ -1132,6 +1138,8 @@ describe("HOLD-gate: fiscal 確定鎖 (値軸→表内→表外)", () => {
       side: "Z",
       date: "2024-03-31",
     });
+    // 年のみ (年月なし) は side-only のまま
+    expect(axisFiscal("2025年 売上高", "2025-03-31")).toEqual({ side: "T", date: null });
   });
   it("Gate1: 強い側の mismatch は弱い側の確定で上書きしない (推測採用に戻らない)", () => {
     // 値軸の明示矛盾 + 表内の当連結@pe → mismatch (表内の T を採用しない)

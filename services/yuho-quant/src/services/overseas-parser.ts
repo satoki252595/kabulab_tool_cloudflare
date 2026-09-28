@@ -844,7 +844,10 @@ function tryGeoRows(
             .replace(/\(単位[^)]*\)/g, "") +
           "|" +
           useEntries
-            .map((e) => String(parseJpNumber(gridX[e.idx][ci] ?? "")))
+            .map((e) => {
+              const c = parseJpNumberCell(gridX[e.idx][ci] ?? "");
+              return c === null ? "null" : `${c.value}/${c.quantum}`;
+            })
             .join(",");
         if (!seen.has(sig)) {
           seen.add(sig);
@@ -855,10 +858,14 @@ function tryGeoRows(
     };
     leafSets[0] = dedupCols(leafSets[0]);
     leafSets[1] = dedupCols(leafSets[1]);
-    // 葉→開示小計の edge 検証 (Gate3)。feeder 葉セル (整数) の区間の和と
-    // 開示小計セル自身の区間の重なりで照合する (独立印刷 subtotal は自身の
-    // cell precision で照合)。採用するのは小計セル自身であり、feeder 葉は
-    // 和区間に再加算しない (親採用時子再加算なし)。
+    // 葉→開示小計の edge 検証 (Gate3)。feeder 葉セルの区間の和と開示小計
+    // セル自身の区間の重なりで照合する (独立印刷 subtotal は自身の cell
+    // precision で照合)。葉の quantum は raw cell 由来の実値
+    // (parseJpNumberCell。"12.0" は q=0.1 であり 1 に置換しない。
+    // Number("12.0") は整数に見える罠に注意)。% 列は leafSets 側で
+    // header により除外済みのため値での整数 filter はしない。
+    // 採用するのは小計セル自身であり、feeder 葉は和区間に再加算しない
+    // (親採用時子再加算なし)。
     const verify = (leafCols: number[]): boolean => {
       if (
         !leafCols.some((ci) =>
@@ -868,12 +875,12 @@ function tryGeoRows(
         return false;
       for (const e of useEntries) {
         const cells = leafCols
-          .map((ci) => parseJpNumber(gridX[e.idx][ci] ?? ""))
-          .filter((x): x is number => x !== null && Number.isInteger(x));
+          .map((ci) => parseJpNumberCell(gridX[e.idx][ci] ?? ""))
+          .filter((x): x is CellAmount => x !== null);
         if (cells.length === 0) continue;
         if (
           !cellsConsistent(
-            cells.map((v) => ({ value: v, quantum: 1 })),
+            cells,
             { value: e.value, quantum: e.quantum },
             mode
           )
@@ -1376,8 +1383,8 @@ function tryGeoCols(
     name: string;
     kind: "domestic" | "overseas";
     value: number | null;
-    /** 合算前の leaf 列数 (丸め許容用。grouping で合算したら子の数) */
-    n: number;
+    /** 子印刷セルの quantum 合計幅 (grouping で合算したら子の合計。件数n ではない) */
+    qw: number;
   }
   const cols: Col[] = [];
   for (let ci = 0; ci < width; ci++) {
@@ -1408,14 +1415,14 @@ function tryGeoCols(
     const role = colRole[ci];
     if (role !== "domestic" && role !== "overseas") continue;
     if (EXCL.test(h)) continue;
-    const v = parseJpNumber(gridX[valueRow][ci] ?? "");
-    if (v !== null && !Number.isInteger(v)) return null;
+    const vcell = parseJpNumberCell(gridX[valueRow][ci] ?? "");
+    if (vcell !== null && !Number.isInteger(vcell.value)) return null;
     cols.push({
       index: ci,
       name: cleanLabel(gridX[headerIdx][ci] ?? ""),
       kind: role,
-      value: v,
-      n: 1,
+      value: vcell?.value ?? null,
+      qw: vcell?.quantum ?? 0,
     });
   }
   // P-hier-cols: 親ラベル重複は子階層 (次行) で grouping する。複数列の親は
@@ -1430,7 +1437,7 @@ function tryGeoCols(
     for (const c of cols) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
     const groups = new Map<
       string,
-      { kind: "domestic" | "overseas"; sum: number; n: number; subs: string[] }
+      { kind: "domestic" | "overseas"; sum: number; qw: number; subs: string[] }
     >();
     for (const c of cols) {
       const rawSub = child[c.index] ?? "";
@@ -1449,27 +1456,27 @@ function tryGeoCols(
       if (g) {
         if (c.value !== null) {
           g.sum += c.value;
-          g.n++;
+          g.qw += c.qw;
         }
         g.subs.push(sub);
       } else {
         groups.set(c.name, {
           kind: c.kind,
           sum: c.value ?? 0,
-          n: c.value !== null ? 1 : 0,
+          qw: c.value !== null ? c.qw : 0,
           subs: [sub],
         });
       }
     }
     // 全 leaf 欠損の親は落とす (0 で埋めない。検証が守る)
     useCols = [...groups]
-      .filter(([, g]) => g.n > 0)
+      .filter(([, g]) => g.qw > 0)
       .map(([name, g]) => ({
         index: -1,
         name,
         kind: g.kind,
         value: g.sum as number | null,
-        n: g.n,
+        qw: g.qw,
       }));
   }
   const facts: OverseasFact[] = [];
@@ -1495,11 +1502,11 @@ function tryGeoCols(
   // 同一表内の重複地域名は曖昧表 (aggregate-before-dedup の原因) として却下
   if (hasDuplicateRegionNames(facts)) return null;
 
-  // grouping 済み列は整数子セル n 個の合算 (q=1 のため {sum, n} が exact)。
+  // 列セルの quantum は raw cell 由来の実値 (grouping 済みは子の合計幅)。
   const colCells: CellAmount[] = [];
   for (const c of useCols) {
     if (c.value === null) continue;
-    colCells.push({ value: c.value, quantum: c.n });
+    colCells.push({ value: c.value, quantum: c.qw });
   }
   const adjCells: CellAmount[] = [...elimCells, ...nonGeoSegCells];
   const matched = aggregates.find((a) =>
@@ -2032,6 +2039,15 @@ export function axisFiscal(
     return "mismatch";
   }
   if (days.size > 1) return null;
+  // 素の年月 (明示の期末表記なし) がある軸は unknown のまま年 side へ
+  // 落とさない (Solレビュー: 裸年月がある場合「年のみ」分岐へ落とさず
+  // unknown を維持)。年月日は上で処理済みのため、年月+非マーカーの有無
+  // だけを見る (マーカーつきとの混在も unknown。fail-closed)。
+  if (
+    /(明治|大正|昭和|平成|令和)?(\d+|元)年(\d+)月(?!期末|期|末日|末現在|現在|末)/.test(w)
+  ) {
+    return null;
+  }
   // 年月は明示の期末表記に限り月末化する (2025年3月期→2025-03-31)。
   // 年月日 (…月…日) は上で処理済みのためここでは拾わない。
   const ends = new Set<string>();
@@ -2252,27 +2268,24 @@ export function parseOverseasHtml(
 
   // 期首フィルタ (全候補共通・Gate1): 各候補の印刷 provenance を report header
   // (pe) と照合する。printed 期が Z (前期) と確定した表・明示矛盾 (mismatch)
-  // の表は候補にしない。facts.fiscalYearEnd は pe 固定のため、前期表を残すと
-  // 単独 best・score 差 best で前期値が当期として保存される (tie 時の継承
-  // だけでは防げない)。T は終期=pe 検証済み。
-  // unknown は文書内に明示の期表示を持つ候補が1つでもあれば除外する
-  // (当期と証明できない表を残さない)。明示表示が文書内に皆無のときだけ
-  // report header provenance (当該有報=pe 期の開示) で残す。
+  // の表だけ候補にしない (明確な前期/矛盾のみ除外)。facts.fiscalYearEnd は
+  // pe 固定のため、前期表を残すと単独 best・score 差 best で前期値が当期
+  // として保存される (tie 時の継承だけでは防げない)。T は終期=pe 検証済み。
+  // unknown は比較前に落とさず残す (Solレビュー1)。最高点に unknown が
+  // 残り明示候補と共存したら provenance 曖昧として後段で STOP する
+  // (score だけでの unknown 採用も、highest-unknown を削っての T 都合採用
+  // もしない)。明示表示が文書内に皆無のときは report header provenance
+  // (当該有報=pe 期の開示) で unknown 単独採用し得る。
   // 確定鎖は値軸→表内→表外 (stale な表外表題より値軸/表内が強い)。
   // 除外で候補が尽きても sawGeoSignal が STOP (未構造化) へ流す。
   {
     const inhs = buffered.map((b) =>
       resolveCandidateFiscal(b.axis, b.flat, b.wide, reportPeriodEnd)
     );
-    const docHasExplicitFiscal = inhs.some((inh) => inh !== null);
     for (let i = 0; i < buffered.length; i++) {
       const b = buffered[i];
       const inh = inhs[i];
       if (inh === "mismatch" || (inh && inh.side === "Z")) {
-        sawGeoSignal = true;
-        continue;
-      }
-      if (inh === null && docHasExplicitFiscal) {
         sawGeoSignal = true;
         continue;
       }
@@ -2298,6 +2311,20 @@ export function parseOverseasHtml(
     candidates.sort((a, b) => b.score - a.score || a.start - b.start);
     const best = candidates[0];
     const tops = candidates.filter((c) => c.score === best.score);
+    // provenance 曖昧の STOP (Solレビュー1の(b)): 最高点に fiscal-unknown が
+    // 残り、明示 (T/side-only) 候補と共存したら STOP する。unknown を score
+    // だけで採用することも、highest-unknown を削って T を都合採用することも
+    // しない。明示が皆無の文書では unknown 単独が report header provenance
+    // で採用され得る (後段の既存経路)。
+    {
+      const fiscalOf = (c: Cand): FiscalResolution =>
+        resolveCandidateFiscal(c.axis, c.flat, c.wide, reportPeriodEnd);
+      const topsHasUnknown = tops.some((c) => fiscalOf(c) === null);
+      const survivorsHasExplicit = candidates.some((c) => fiscalOf(c) !== null);
+      if (topsHasUnknown && survivorsHasExplicit) {
+        return { status: "geo_present_unstructured", facts: [], tablesScanned };
+      }
+    }
     if (tops.length > 1) {
       // 不明/混在の contract で競合する候補は STOP (Gate2。曖昧な表の中から
       // 都合の良い候補を選ばない。単独候補の unknown は report header

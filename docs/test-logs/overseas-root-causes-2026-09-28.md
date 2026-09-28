@@ -503,3 +503,23 @@ LEX回復 26 + round-1合計のみ是正 32 + 旧来不一致 80 (59違反を含
   ruff check/format clean。
 - 本番書込なし (D1 は SELECT 読取のみ。R2/Notion 書込・job 起動・apply
   未実行。writer grant 待ち)。
+
+## 15. Solレビュー残件3点の対応 (43e83c6 → 新 head。HOLD 解除申請用)
+
+- (1) unknown 事前 drop の撤廃 + provenance-曖昧 STOP (b): 期首フィルタは
+  Z/mismatch のみ除外に戻し、最高点に fiscal-unknown が残り明示候補と
+  共存したら STOP する guard を tops 確定直後に追加 (score だけでの
+  unknown 採用も highest-unknown 削りの T 都合採用もしない)。
+  OJV9-TTUY splice E2E は STOP へ変更し、A/B (guard なしでは OJV9 採用)
+  で発火を実証。単独時の OJV9/TTUY 採用 pin は維持。
+- (2) 実 quantum の保持: feeder 葉の `quantum: 1` 置換を
+  parseJpNumberCell の実 quantum へ (% 列は header 除外済みのため値
+  filter を廃止。"12.0" は q=0.1)。cols の件数 n を quantum 幅 qw へ
+  (Col/qw・grouping 合算・colCells)。dedup 署名にも quantum を含めた。
+  境界 pin: 100(q1)+12.0(q0.1) で総額 113 受理・114 却下。
+- (3) 裸年月は unknown 維持: marker なし年月がある軸は年 side へ落とさず
+  null (マーカー混在も unknown)。年「のみ」は side-only のまま。
+  既存テストを新契約へ更新 (E2E flip なし)。
+- 実 raw 9 文書で status/値が不変 (truncate 2 含む)。全面再走なし。
+- single-row は §14-4 の分類 (source-unknown 未読・採用値維持) を Root へ
+  原因別報告済み。caption 証拠 route の可否は Sol が限定読取で確認中。
