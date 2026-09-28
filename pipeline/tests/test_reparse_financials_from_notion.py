@@ -261,9 +261,11 @@ def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(tmp_
     assert events == []
 
 
-@pytest.mark.parametrize("stored_hash", [None, "b" * 64])
-def test_notion_verified_d1_repair_retires_only_matching_old_key(tmp_path, monkeypatch, stored_hash):
+@pytest.mark.parametrize("stored_hash,source", [(None, "EDINET"), ("b" * 64, "EDINET"),
+                                               ("a" * 64, "TDnet")])
+def test_notion_verified_d1_repair_retires_only_matching_old_key(tmp_path, monkeypatch, stored_hash, source):
     old = replace(reparse.notion_financial(_page()), fiscal_period_end=reparse.date(2027, 3, 31))
+    old = replace(old, provenance=replace(old.provenance, source=reparse.Source(source)))
     corrected = replace(old, fiscal_period_end=reparse.date(2025, 3, 31),
                         consolidated="単体", net_sales=117_513_000_000)
     item = {"page_id": "p", "old": reparse._record_dict(old),
@@ -279,7 +281,9 @@ def test_notion_verified_d1_repair_retires_only_matching_old_key(tmp_path, monke
     conn.row_factory = sqlite3.Row
     conn.execute(_FINANCIALS)
     conn.execute(reparse._repair_sql(), [json.dumps([
-        record_to_row(old, stock_id=None, doc_id=None, raw_sha256=stored_hash)
+        record_to_row(old, stock_id=None,
+                      doc_id="140120260917537640" if source == "TDnet" else None,
+                      raw_sha256=stored_hash)
     ])])
     conn.execute("CREATE TABLE core_stocks (id INTEGER, code TEXT)")
     conn.execute("INSERT INTO core_stocks VALUES (1,'8154')")
@@ -305,5 +309,6 @@ def test_notion_verified_d1_repair_retires_only_matching_old_key(tmp_path, monke
         "SELECT fiscal_period_end,consolidated,net_sales,stock_id,doc_id FROM jss_financials "
         "ORDER BY fiscal_period_end"
     )]
-    assert result[0] == ("2025-03-31", "単体", 117_513_000_000, 1, "S100YNQJ")
-    assert len(result) == (1 if stored_hash is None else 2)
+    doc_id = "140120260917537640" if source == "TDnet" else "S100YNQJ"
+    assert result[0] == ("2025-03-31", "単体", 117_513_000_000, 1, doc_id)
+    assert len(result) == (2 if stored_hash == "b" * 64 else 1)
