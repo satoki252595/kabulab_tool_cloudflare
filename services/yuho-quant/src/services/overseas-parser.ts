@@ -93,13 +93,23 @@ const RX_AGGREGATE =
 /** 「その他」系 (地域ブロック内なら overseas, 収益/事業文脈なら除外) */
 const RX_OTHER_REGIONISH = /^(その他|その他の地域|その他地域|その他海外|外国|諸外国|直接輸出|輸出)$/;
 /**
- * 生産実績表の見出し語。生産高は売上高ではないため、この語を見出しに持つ表は
- * 海外売上高の候補にしない。S100OE0P 等 (5013) で実証: セグメント別の生産実績表と
- * 販売実績表が同点で並び、文書順のタイブレークで生産実績表が勝って生産高を
- * 海外売上高として誤採用していた。実績つきの表題語に限定しているため
- * 「生産、受注及び販売の状況」のような節見出しの表は影響を受けない。
+ * 実績系の表題語。見出し window (表直前400字→末尾160字) は表題そのものではなく
+ * 前表の説明文を含み得るため、単純な含有ではなく **最寄り (最後) の表題語** で
+ * 判定する (例: 「生産実績と同様、販売実績は…」と書かれた販売表を誤って落とさない)。
  */
-const RX_PRODUCTION_RESULT = /生産実績/;
+const RX_RESULT_CAPTION = /(生産実績|販売実績|受注実績)/g;
+/**
+ * 生産実績表か (生産高は売上高ではないので候補にしない)。S100OE0P 等 (5013) で
+ * 実証: セグメント別の生産実績表と販売実績表が同点で並び、文書順のタイブレークで
+ * 生産実績表が勝って生産高を海外売上高として誤採用していた。最寄り表題語が
+ * 生産実績のときだけ落とし、「生産、受注及び販売の状況」のような節見出し
+ * (実績つき表題語なし) や販売実績表には発火しない。
+ */
+function isProductionTable(heading: string): boolean {
+  let last: string | null = null;
+  for (const m of heading.matchAll(RX_RESULT_CAPTION)) last = m[1];
+  return last === "生産実績";
+}
 
 function norm(s: string): string {
   return s.replace(/[\s\u3000]/g, "");
@@ -623,7 +633,7 @@ export function parseOverseasHtml(
     const flat = grid.map((r) => r.join("")).join("");
     // 生産実績表は売上高の開示ではないので候補にしない (監査の取りこぼし集計にも
     // 入れない = sawGeoSignal を立てない。販売実績表など正規の売上表は別 fixture で固定)。
-    if (RX_PRODUCTION_RESULT.test(heading)) continue;
+    if (isProductionTable(heading)) continue;
     const regionish =
       RX_OVERSEAS_REGION.test(flat) || /本邦|日本|海外売上高/.test(flat);
     if (!regionish) continue;

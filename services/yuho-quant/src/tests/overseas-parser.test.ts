@@ -276,6 +276,17 @@ describe("B2 根因修正: 生産実績表は売上高の開示ではないの�
     // 生産実績の値 (日本 15706 / 海外売上高 21830) が混入していないこと
     expect(region(saved, "日本")!.salesAmount).toBe(16163);
   });
+
+  it("S100OE0P 原文書区間 (a)表〜(c)表・表間テキスト付きでも販売実績表が選ばれる", () => {
+    // 切出し連結ではなく原文書の区間 (生産表の表題〜販売表の終端。表間の (注)・
+    // (b)受注状況キャプションを含む) で判定する。見出し window は表題そのもの
+    // ではなく前表の説明文を含み得るため、最寄り表題語で判定する。
+    const r = parseOverseasHtml(fx("georows-production-vs-sales-fullsection-S100OE0P.html"), "2022-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(21520);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(37686);
+    expect(region(r.facts, "日本")!.salesAmount).toBe(16163);
+  });
 });
 
 describe("ルール1/2: 構造化できない/開示なしは数値を作らない", () => {
