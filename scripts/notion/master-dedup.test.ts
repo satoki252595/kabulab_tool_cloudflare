@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   FWD_PROP_RAW,
   LIFECYCLE_PATCH_3681_STATUS,
+  type KeeperRowProof,
   type MasterPageView,
   type MasterTarget,
   type MigrationOp,
@@ -29,6 +30,7 @@ import {
   decideSnapshotAction,
   emptyReceipt,
   guardIncomingSchema,
+  guardKeeperIncomingIds,
   guardMasterView,
   guardSupplement,
   hasSnapshotProgress,
@@ -230,8 +232,6 @@ describe("master-dedup (純粋関数)", () => {
       ["最終更新のずれ", { last_edited_time: "2026-09-16T00:00:00.000Z" }],
       ["作成日時のずれ", { created_time: "2026-06-29T02:34:00.000Z" }],
       ["archived", { archived: true }],
-      ["逆 relation 件数のずれ", { relations: { ...view3681Keep().relations, [REVERSE_PROP_DISCLOSURES]: rel(["x"]) } }],
-      ["has_more", { relations: { ...view3681Keep().relations, [REVERSE_PROP_FINANCIALS]: { ids: [], has_more: true } } }],
       ["⑧への参照", { relations: { ...view3681Keep().relations, [REVERSE_PROP_JUKYU]: rel(["x"]) } }],
       ["原本 0 件", { rawIds: [] }],
       ["原本 2 件", { rawIds: ["a", "b"] }],
@@ -271,6 +271,170 @@ describe("master-dedup (純粋関数)", () => {
       expect(
         guardMasterView(t7129, "keep", { ...base, childDatabases: [] }).length
       ).toBeGreaterThan(0);
+    });
+
+    it("keep の ④③ 件数は問わない (集合ガードへ委譲。10→11 valid-addition 対応)", () => {
+      const t7129 = TARGETS[1];
+      const withEleven = {
+        ...view3681Keep(),
+        id: t7129.keepId,
+        code: "7129",
+        created_time: t7129.keepCreated,
+        last_edited_time: t7129.keepEdited,
+        listed: true,
+        status: null,
+        relations: {
+          [REVERSE_PROP_DISCLOSURES]: rel(Array.from({ length: 11 }, (_, i) => `kd${i}`)),
+          [REVERSE_PROP_FINANCIALS]: rel(Array.from({ length: 8 }, (_, i) => `kf${i}`)),
+          [REVERSE_PROP_JUKYU]: rel([]),
+          [REVERSE_PROP_YUTAI]: rel([]),
+        },
+        rawIds: ["raw-keep-7129"],
+        blockCount: 1,
+        childDatabases: ["株価テクニカル履歴"],
+      };
+      expect(guardMasterView(t7129, "keep", withEleven)).toEqual([]);
+    });
+
+    it("retire の ④③ 件数・has_more は引き続き縛る", () => {
+      const t3681 = TARGETS[0];
+      const base = view3681Retire();
+      expect(guardMasterView(t3681, "retire", base)).toEqual([]);
+      expect(
+        guardMasterView(t3681, "retire", {
+          ...base,
+          relations: { ...base.relations, [REVERSE_PROP_DISCLOSURES]: rel(["only-one"]) },
+        }).length
+      ).toBeGreaterThan(0);
+      expect(
+        guardMasterView(t3681, "retire", {
+          ...base,
+          relations: { ...base.relations, [REVERSE_PROP_FINANCIALS]: { ids: [], has_more: true } },
+        }).length
+      ).toBeGreaterThan(0);
+    });
+  });
+
+  describe("guardKeeperIncomingIds (保持先の ID 集合ガード)", () => {
+    const TAG = "7129/keep/開示書類";
+    function proof(rowPageId: string, overrides: Partial<KeeperRowProof> = {}): KeeperRowProof {
+      return {
+        rowPageId,
+        issuerCode: "7129",
+        originHasMore: false,
+        originCount: 1,
+        masterIdsFull: [KEEP_7129],
+        ...overrides,
+      };
+    }
+
+    it("完全一致は合格 (順序・表記ゆれを吸収)", () => {
+      expect(
+        guardKeeperIncomingIds({
+          tag: TAG,
+          code: "7129",
+          keepId: KEEP_7129,
+          liveIds: ["AA-11", "bb22"],
+          baselineIds: ["bb22", "aa11"],
+          addedProofs: [],
+        })
+      ).toBeNull();
+    });
+
+    it("空集合どうしは合格 (3681 keep 形)", () => {
+      expect(
+        guardKeeperIncomingIds({
+          tag: "3681/keep/開示書類",
+          code: "3681",
+          keepId: KEEP_3681,
+          liveIds: [],
+          baselineIds: [],
+          addedProofs: [],
+        })
+      ).toBeNull();
+    });
+
+    it("baseline 喪失は STOP する", () => {
+      const p = guardKeeperIncomingIds({
+        tag: TAG,
+        code: "7129",
+        keepId: KEEP_7129,
+        liveIds: ["kd0"],
+        baselineIds: ["kd0", "kd-vanished"],
+        addedProofs: [],
+      });
+      expect(p).toMatch(/喪失/);
+      expect(p).toContain("kd-vanished");
+    });
+
+    it("完全証明つきの追加行は許可する (valid-addition 形)", () => {
+      expect(
+        guardKeeperIncomingIds({
+          tag: TAG,
+          code: "7129",
+          keepId: KEEP_7129,
+          liveIds: ["kd0", "kd-new"],
+          baselineIds: ["kd0"],
+          addedProofs: [proof("kd-new")],
+        })
+      ).toBeNull();
+    });
+
+    it("未証明の追加行は STOP する", () => {
+      expect(
+        guardKeeperIncomingIds({
+          tag: TAG,
+          code: "7129",
+          keepId: KEEP_7129,
+          liveIds: ["kd0", "kd-new"],
+          baselineIds: ["kd0"],
+          addedProofs: [],
+        })
+      ).toMatch(/未証明の追加行/);
+    });
+
+    it("追加行の誤 issuer・原本なし・原本未完は STOP する", () => {
+      const base = {
+        tag: TAG,
+        code: "7129" as const,
+        keepId: KEEP_7129,
+        liveIds: ["kd0", "kd-new"],
+        baselineIds: ["kd0"],
+      };
+      expect(
+        guardKeeperIncomingIds({ ...base, addedProofs: [proof("kd-new", { issuerCode: "3681" })] })
+      ).toMatch(/発行者が不一致/);
+      expect(
+        guardKeeperIncomingIds({ ...base, addedProofs: [proof("kd-new", { issuerCode: null })] })
+      ).toMatch(/発行者が不一致/);
+      expect(
+        guardKeeperIncomingIds({ ...base, addedProofs: [proof("kd-new", { originCount: 0 })] })
+      ).toMatch(/原本が無い/);
+      expect(
+        guardKeeperIncomingIds({ ...base, addedProofs: [proof("kd-new", { originHasMore: true })] })
+      ).toMatch(/未完/);
+    });
+
+    it("追加行が keep-only でなければ STOP する", () => {
+      const base = {
+        tag: TAG,
+        code: "7129" as const,
+        keepId: KEEP_7129,
+        liveIds: ["kd0", "kd-new"],
+        baselineIds: ["kd0"],
+      };
+      expect(
+        guardKeeperIncomingIds({
+          ...base,
+          addedProofs: [proof("kd-new", { masterIdsFull: [KEEP_7129, RETIRE_7129] })],
+        })
+      ).toMatch(/keep-only でない/);
+      expect(
+        guardKeeperIncomingIds({ ...base, addedProofs: [proof("kd-new", { masterIdsFull: ["other"] })] })
+      ).toMatch(/keep-only でない/);
+      expect(
+        guardKeeperIncomingIds({ ...base, addedProofs: [proof("kd-new", { masterIdsFull: [] })] })
+      ).toMatch(/keep-only でない/);
     });
   });
 

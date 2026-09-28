@@ -82,3 +82,28 @@ financial#124 が Notion/D1 writer を保持中のため、実 apply・Notion �
   `client-retry.test.ts` 10 件 + `page-file.test.ts` 1 件で全 pass、
   `pnpm typecheck`/`pnpm lint` 緑。`pnpm test` 全体: 189 ファイル・2649 pass・
   383 skip・0 fail で緑。実 apply は保留のまま明記して ready 化する
+
+## keeper 集合ガード wave (同日・オフラインのみ。10→11 valid-addition 対応)
+
+live keeper 7129 の開示が 11 (v1・live の 11 集合完全一致・全行 keep-only・
+第11 は当日 TDnet 主要株主異動) のため、保持先の件数固定
+(`keepIncoming` + `guardMasterView` の ④③ 件数) を廃止し、証明済み ID 集合
+ガードへ置換した。10→11 の単純 bump ではない。
+
+- baseline は実行時読取 (`loadKeeperBaseline`): snapshotDir の keep11 実
+  receipt (private 0600・verdict/membership/issuer/原本を熟読検証) +
+  一次データ保管の v1 snapshot (readonly DL・CAS 自己検証・receipt v1 SHA
+  照合)。開示集合の突合せ不一致・v1 重複・JSON 非一意は STOP。
+  ID 一覧をコード・Git 証跡に埋め込まない
+- `guardKeeperIncomingIds` (純粋): baseline 喪失は STOP、追加行は
+  issuer/原本 (完全件数)/keep-only membership の live 実証があるものだけ
+  許可。未完 pagination は `readRelationFull` 側で throw
+- take は保持先全 ID を `keeperIncoming` へ固定し直後再読で完全一致を要求
+  (不一致は同時変更として STOP)。`finalVerify` の keepBefore は固定集合
+  を使用 (preview 由来をやめる)。retire 側の件数・D1・schema・本文添付・
+  already-applied の各 gate は不変
+- 回帰は `master-dedup.test.ts` 66 件 + `master-dedup-flow.test.ts` 51 件で
+  全 pass (集合一致/喪失/追加証明の境界 + receipt/v1 解析の純粋検証を追加)。
+  実 receipt 11 行の parse もオフライン確認 (code・件数・SHA 先頭のみ表示)。
+  `pnpm typecheck`/`pnpm lint` 緑。`pnpm test` 全体: 207 ファイル・
+  3089 pass・347 skip・0 fail で緑。live take・実 apply は grant 待ち

@@ -27,8 +27,13 @@ export interface MasterTarget {
   keepStatus: string | null;
   retireListed: boolean;
   retireStatus: string | null;
-  /** 逆 relation の期待件数 (④開示書類 / ③財務サマリ)。⑧⑨ は両行とも 0。 */
-  keepIncoming: { disclosures: number; financials: number };
+  /**
+   * 退避候補の逆 relation 期待件数 (④開示書類 / ③財務サマリ。移行前形状)。
+   * ⑧⑨ は両行とも 0。
+   * 保持先の件数期待は持たない — 件数固定は陳腐化した (7129 keep の
+   * 開示 10→11 valid-addition)。保持先は証明済み ID 集合ガード
+   * (`guardKeeperIncomingIds`) で保護する。
+   */
   retireIncoming: { disclosures: number; financials: number };
   /** 保持先に残る子 DB の title (退避しない。増減したら停止)。 */
   keepChildDatabases: string[];
@@ -47,7 +52,6 @@ export const TARGETS: MasterTarget[] = [
     keepStatus: null,
     retireListed: true,
     retireStatus: "上場廃止",
-    keepIncoming: { disclosures: 0, financials: 0 },
     retireIncoming: { disclosures: 12, financials: 8 },
     keepChildDatabases: [],
   },
@@ -63,7 +67,6 @@ export const TARGETS: MasterTarget[] = [
     keepStatus: null,
     retireListed: true,
     retireStatus: null,
-    keepIncoming: { disclosures: 10, financials: 8 },
     retireIncoming: { disclosures: 0, financials: 0 },
     keepChildDatabases: ["株価テクニカル履歴"],
   },
@@ -229,6 +232,9 @@ function relOf(
 /**
  * 1 ページ分のガード。不一致の説明を返す (空 = 合格)。
  * has_more=true (25 件超の省略) があれば件数を信用せず不一致にする。
+ * 保持先 (keep) の ④③ 逆 relation はここでは見ない —
+ * 件数固定は陳腐化するため、live 全 ID 集合ガード
+ * (`guardKeeperIncomingIds` + take 固定 + 直後再読) が担当する。
  */
 export function guardMasterView(
   t: MasterTarget,
@@ -264,12 +270,14 @@ export function guardMasterView(
   if (v.status !== wantStatus) {
     problems.push(`${tag}: 状態不一致 got=${v.status} want=${wantStatus}`);
   }
-  const wantIncoming = role === "keep" ? t.keepIncoming : t.retireIncoming;
   const disc = relOf(v, REVERSE_PROP_DISCLOSURES);
   const fin = relOf(v, REVERSE_PROP_FINANCIALS);
   if (!disc || !fin) {
     problems.push(`${tag}: 逆 relation プロパティが見つかりません (スキーマ変化の疑い)`);
-  } else {
+  } else if (role === "retire") {
+    // 退避候補のみ件数で縛る (移行前形状。take 候補はこの preview から採る
+    // ため has_more の打切りもここで止める)。keep は集合ガードへ委譲。
+    const wantIncoming = t.retireIncoming;
     if (disc.has_more || fin.has_more) {
       problems.push(`${tag}: 逆 relation に has_more=true (件数を信用できない)`);
     }
@@ -344,6 +352,90 @@ export function guardSupplement(v: SupplementView): string[] {
     );
   }
   return problems;
+}
+
+// ---------------------------------------------------------------------------
+// 保持先 incoming の ID 集合ガード (件数 baseline の置換)
+// ---------------------------------------------------------------------------
+
+/**
+ * 保持先 incoming 1 行の membership 証明 (live 観測値)。
+ * baseline 外の追加行はこの 3 点が揃うものだけ許可する。
+ * 欠測は null/未完フラグのまま渡し、ここで停止理由にする (推測で埋めない)。
+ */
+export interface KeeperRowProof {
+  rowPageId: string;
+  /** 行の「銘柄コード」実値 (rich_text 連結。欠測・型違いは null)。 */
+  issuerCode: string | null;
+  /** 原本 relation の打切り (true なら未完として停止)。 */
+  originHasMore: boolean;
+  /** 原本 relation の完全件数。 */
+  originCount: number;
+  /** master relation 全 ID (readRelationFull 実配列)。 */
+  masterIdsFull: string[];
+}
+
+/** 保持先 incoming の既知 baseline (実証跡由来の証明済み ID 集合)。 */
+export interface KeeperIncomingBaseline {
+  disclosures: string[];
+  financials: string[];
+}
+
+/**
+ * 保持先 incoming の集合ガード。live 全 ID と既知 baseline を集合比較する。
+ * - baseline 喪失 (既知 ID の消失) → 理由を返す (STOP)
+ * - 追加行 (live−baseline) → issuer/原本/keep-only membership の実証が
+ *   `addedProofs` に揃うものだけ許可。1 行でも欠ければ理由を返す (STOP)
+ * - 未完 pagination は呼出側 readRelationFull が throw する前提
+ *   (ここには完全配列だけが来る)
+ * 戻りは verifyReverseUnion と同じ成功=null 規約。
+ */
+export function guardKeeperIncomingIds(args: {
+  tag: string;
+  code: "3681" | "7129";
+  keepId: string;
+  liveIds: string[];
+  baselineIds: string[];
+  addedProofs: KeeperRowProof[];
+}): string | null {
+  const live = new Map(args.liveIds.map((id) => [normalizePageId(id), id]));
+  const baseline = new Map(args.baselineIds.map((id) => [normalizePageId(id), id]));
+  const missing = [...baseline.keys()].filter((k) => !live.has(k));
+  if (missing.length > 0) {
+    const ids = missing.map((k) => baseline.get(k) as string);
+    return (
+      `${args.tag}: 既知 baseline の喪失を検出 (n=${missing.length} 行が live にありません): ` +
+      `${ids.join(",")}`
+    );
+  }
+  const added = [...live.keys()].filter((k) => !baseline.has(k));
+  if (added.length === 0) return null;
+  const proofOf = new Map(args.addedProofs.map((p) => [normalizePageId(p.rowPageId), p]));
+  const keepNorm = normalizePageId(args.keepId);
+  for (const k of added) {
+    const id = live.get(k) as string;
+    const proof = proofOf.get(k);
+    if (!proof) {
+      return `${args.tag}: 未証明の追加行があるため停止します row=${id} (issuer/原本/membership の実証なし)`;
+    }
+    if (proof.issuerCode !== args.code) {
+      return `${args.tag}: 追加行の発行者が不一致のため停止します row=${id} got=${proof.issuerCode} want=${args.code}`;
+    }
+    if (proof.originHasMore) {
+      return `${args.tag}: 追加行の原本 relation が未完のため停止します row=${id} (has_more)`;
+    }
+    if (proof.originCount < 1) {
+      return `${args.tag}: 追加行に原本が無いため停止します row=${id} (原本 0 件)`;
+    }
+    const masters = proof.masterIdsFull.map(normalizePageId).sort();
+    if (masters.length !== 1 || masters[0] !== keepNorm) {
+      return (
+        `${args.tag}: 追加行の membership が keep-only でないため停止します row=${id} ` +
+        `masters=[${proof.masterIdsFull.join(",")}]`
+      );
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
