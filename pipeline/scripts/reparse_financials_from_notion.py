@@ -476,16 +476,20 @@ def sync_d1(journal: Path, receipts: Path) -> None:
     if not items or any("error" in i or i.get("parser_sha256") != PARSER_SHA256
                         for i in items.values()):
         raise ValueError("最新parserの成功監査だけをD1へ同期できます")
-    canonical = {_json(item["new"]): item for item in items.values()}
+    canonical = defaultdict(list)
+    for item in items.values():
+        canonical[_financial_key(_record_from_dict(item["new"]))].append(item)
     verified = {}
     for page_id, item in items.items():
         receipt = applied.get(page_id)
         if (receipt is None or receipt.get("parser_sha256") != PARSER_SHA256
-                or receipt.get("raw_sha256") != item["raw_sha256"]
-                or _json(receipt.get("record")) not in canonical):
+                or receipt.get("raw_sha256") != item["raw_sha256"]):
             raise ValueError(f"{page_id}: 原本監査と一致するNotion再読成功の記録が必要です")
-        proved = canonical[_json(receipt["record"])]
-        key = _financial_key(_record_from_dict(proved["new"]))
+        key = _financial_key(_record_from_dict(receipt["record"]))
+        matches = [candidate for candidate in canonical[key] if candidate["new"] == receipt["record"]]
+        if not matches:
+            raise ValueError(f"{page_id}: 原本監査と一致するNotion再読成功の記録が必要です")
+        proved = matches[0]
         if key in verified and verified[key][0]["new"] != proved["new"]:
             raise ValueError("同じ財務キーの正本が一意ではありません")
         verified[key] = (proved, receipt)
