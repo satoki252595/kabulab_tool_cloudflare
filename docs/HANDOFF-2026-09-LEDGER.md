@@ -621,7 +621,7 @@ USER_DECISIONS 節の 22 件も同じ理由で、§3 の決定と §8.2 で上�
 - B3 WRITER_CLAIMS 18 件。column_group 語彙 all/base/enrich は改名不可。core_stocks/base = kabulab-cf は動かさない。照合は投入→読み直し→照合の順。CLAIM_MISMATCH_IS_FAILURE=True。
 - B4 jobs/license_map.py が seed_reference_tables の唯一の入口。孤児 column_license は削除、index_symbols の孤児は削除しない。apply_schema を毎日呼ばない。
 - B5 LicenseTag 3 値、inherit() は厳しい側、_STRICTNESS の順序は financials.py の SQL でも再現。
-- B6 jss_financials PK=(code, fiscal_period_end, disclosure_type, consolidated)、consolidated NOT NULL('不明' 番兵)、値列 COALESCE、disclosed_at ガード、FINANCIALS_PK はリテラル二重持ち（test_cloud_schema）。
+- B6 jss_financials PK=(code, fiscal_period_end, disclosure_type, consolidated)、consolidated NOT NULL('不明' 番兵)、disclosed_at ガード、FINANCIALS_PK はリテラル二重持ち（test_cloud_schema）。9/28の正本修復で旧値列COALESCEを廃止し、Notion③と同じNULL込みの完全置換へ変更。ローカルfinancialsも共通契約、licenseの厳格化は維持。
 - B7 cloud_store/r2.py に delete_object を実装しない。mutable JSON は check_no_regression。
 
 ## C. ライセンス境界（実効防御 = kabulab-cf）

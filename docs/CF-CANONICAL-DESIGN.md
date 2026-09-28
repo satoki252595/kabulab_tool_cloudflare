@@ -2152,7 +2152,7 @@ read-merge-write（既存 JSON を GET → `date`/`ts`/`d` をキーにした Ma
 
 - `core_stocks` → `ON CONFLICT(code)`。**`id` を SET 句に絶対に入れない**。`TRUNCATE` / `DELETE` / `DROP` を発行しない（**14個**の子テーブル、うち cascade 11 本が消える）
 - `core_stock_financials` → `ON CONFLICT(stock_id)`
-- `jss_financials` → `ON CONFLICT(code, fiscal_period_end, disclosure_type, consolidated)`。**`SET` 句は `excluded.c` の機械展開にしない**。`edinet_daily` は doc_type_code 120(有報) と 130(訂正有報) の両方を `disclosure_type='本決算'` に落とすので同一 PK に着地し、訂正が載せていない項目を全部 NULL で潰す。値の列は `COALESCE(excluded.c, jss_financials.c)`、`license_tag` は厳しい側を残す `CASE`、上書き可否は `WHERE excluded.disclosed_at >= jss_financials.disclosed_at OR jss_financials.disclosed_at IS NULL` のガード付き（実装は `cloud_store/financials.py`）
+- `jss_financials` → `ON CONFLICT(code, fiscal_period_end, disclosure_type, consolidated)`。Notion③と同じ完全置換で、値・来歴の `None` も `NULL` にする。疎な訂正原本でも以前の値を補わない。旧 `COALESCE` は原本で消えた値を新しいsourceへ混ぜるため廃止。`license_tag` は厳しい側を残す `CASE`、上書き可否は `WHERE excluded.disclosed_at >= jss_financials.disclosed_at OR jss_financials.disclosed_at IS NULL` のガードを維持する。ローカルfinancialsも同じ契約（実装は `cloud_store/financials.py` / `local_store/mappers.py`）。
 - `jss_raw_files` → `ON CONFLICT(sha256)`
 - `jss_supply_latest` → `ON CONFLICT(code, data_type)`
 - `yutai_benefits` → `ON CONFLICT(stock_id, item_name, record_month)`。保護4列を SET 句から除外

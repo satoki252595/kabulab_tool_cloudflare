@@ -1,51 +1,10 @@
 """正規化レコード → (SQL, params) の純粋関数群。
 
-副作用を持たず DB 接続も要らないため、SQL 文・パラメータの正しさを単体テスト
-できる。Notion 側 (notion/upsert.py) と挙動を対称に保つ（③ を除く。下記）:
-- 完全置換: ON CONFLICT DO UPDATE で非PK列を EXCLUDED 上書き（None も含め前回値を
-  残さない §3-1）。①②④⑤ は 1 回の書き込みがその時点の行の全項目を運ぶデータ
-  なので、None は「その値が無い」を意味し、前回値を残す方が嘘になる。
-- ① のライフサイクル列 (status/上場日/上場廃止日) は二重所有を避けるため
-  include_lifecycle で出し分け、確定は一次開示の lifecycle_update が担う (§ Phase3)。
-
-## ③ 財務サマリだけが完全置換の例外である理由
-
-③ は**一部の項目しか運ばない書き込み**が同じ PK に着地するデータである。
-`jobs/edinet_daily.py` は doc_type_code 120（有報）と 130（訂正有報）の両方を
-`disclosure_type="本決算"` に落とし、訂正報告書は訂正した項目だけを載せる。
-`transform/normalize.tidy_to_financial_record` は決算期末さえ導出できれば残りが
-None でもレコードを返す。ここでの None は「値が無い」ではなく「今回は運んでいない」
-なので完全置換の前提が成り立たず、完全置換のままだと「売上だけ訂正した開示」が
-EPS・CF・配当を全部 NULL にする。
-
-そこで financial_upsert は D1 側 (`cloud_store/financials.py`) と同じ意味論にする:
-- 値の列は `COALESCE(EXCLUDED.c, financials.c)` でマージする（今回運ばれなかった
-  項目は前回値を残す。値の捏造ではない）。「訂正が値を取り下げた」と「今回は運んで
-  いない」は XBRL から区別できないので、既知の値を残す側へ倒す。
-- `license_tag` は厳しい側を残す（EDINET 行へ TDnet の訂正が入る／その逆で、
-  値は混在するのにタグだけ緩い側へ洗われるのを防ぐ）。
-- `source` / `fetched_at` / `quality` は NOT NULL なので上書きする（行が表せる
-  来歴は最後の書き手だけ）。
-- `disclosed_at` ガードは維持する（古い開示の再取得が新しい訂正を巻き戻さない）。
-
-**PK に連結区分を含める**（D1 は PR #39。既存のローカル DB は `local_store/schema.py`
-の FINANCIALS_PK_MIGRATION が接続時に PK を張り替える）。連結と単体が別行になるので、
-COALESCE のマージは必ず同じ測定範囲の中で起き、「単体の訂正値 + 前回の連結値」が
-1 行に混ざらない。PK に無かった頃は、連結区分が一致するときだけマージする
-`merge_scope` で防いでいたが、PK に入ったので ③ では使わなくなった。
-判定できなかったレコードの連結区分は D1 と同じ '不明' (UNKNOWN_CONSOLIDATED) にする。
-PostgreSQL の PK 列は NULL を許さないため。
-
-連結区分が '不明' の既存行を、後から来た連結/単体のレコードが採用することはしない
-（D1 と同じく別行にする）。Notion ③ は採用する (notion/upsert.pick_financial_page) が、
-ローカルは本番で未構成で、Notion ③ 34,551 行に連結単体が空の行は 0 件だった
-(2026-09-13 監査)。採用のために ON CONFLICT の前に条件付き UPDATE を足すと、
-開示日時ガードと完全置換の順序まで SQL で揃える必要があり、利益に見合わない。
-
-Notion ③ (notion/upsert.py) は完全置換のままで、③ に限りここと対称ではない。
-
-値はプレースホルダ (%(name)s) で渡し、文字列連結しない（SQL インジェクション対策）。
-SQL へ埋め込むリテラルはライセンスタグ enum の定数だけ（licensing.stricter_tag_sql）。
+Notion と同じ完全置換でNoneも明示反映する。③の旧COALESCEは正本で消えた
+数値を残すため廃止。財務の古い開示による巻き戻しとlicenseの緩和は防ぐ。
+PKの連結区分を保持し、連結/単体/判定不明を混ぜない。
+①のライフサイクル列は二重所有を避けるためinclude_lifecycleで出し分ける。
+値はプレースホルダ (%(name)s) で渡し、文字列連結しない。
 """
 
 from __future__ import annotations
@@ -92,8 +51,6 @@ def _build_upsert(
     *,
     exclude_cols: tuple[str, ...] = (),
     guard_column: str | None = None,
-    merge_cols: tuple[str, ...] = (),
-    merge_scope: str | None = None,
     license_column: str | None = None,
 ) -> tuple[str, dict]:
     """INSERT ... ON CONFLICT (pk) DO UPDATE を生成する。
@@ -101,14 +58,8 @@ def _build_upsert(
     params の挿入順がそのまま列順になる（dict は挿入順を保持）。
     exclude_cols は params から除外（INSERT 列にも UPDATE にも含めない）。
 
-    既定は完全置換（非PK列を `c = EXCLUDED.c`）。以下の 3 つは ③ のように一部の
-    項目しか運ばない書き込みのための例外で、指定した列だけが変わる（冒頭 docstring）:
-    - merge_cols: `c = COALESCE(EXCLUDED.c, <table>.c)`。今回 None の列は前回値を残す。
-    - merge_scope: merge_cols の COALESCE を `EXCLUDED.<s> IS NOT DISTINCT FROM
-      <table>.<s>` のときに限り、一致しなければその列も完全置換にする
-      （PK に無い測定範囲の違う値を 1 行に混ぜない）。
-    - license_column: 厳しい側のタグを残す（licensing.stricter_tag_sql）。
-    どれも params の非PK列でなければ ValueError（タイポを黙って完全置換にしない）。
+    完全置換（非PK列を `c = EXCLUDED.c`）。license_columnを指定した列だけ
+    厳しい側のタグを残す。paramsの非PK列でなければValueError。
 
     guard_column を指定すると DO UPDATE に WHERE 句を付け、
     `EXCLUDED.<col> >= <table>.<col> OR <table>.<col> IS NULL` を満たすときだけ
@@ -123,22 +74,12 @@ def _build_upsert(
     col_list = ", ".join(columns)
     placeholders = ", ".join(f"%({c})s" for c in columns)
     update_cols = [c for c in columns if c not in pk]
-    for name in (*merge_cols, merge_scope, license_column):
-        if name is not None and name not in update_cols:
-            raise ValueError(f"{name!r} が params の非PK列に無い: {table}")
-    if merge_scope in merge_cols or license_column in merge_cols:
-        raise ValueError(f"merge_scope / license_column を merge_cols と重ねられない: {table}")
+    if license_column is not None and license_column not in update_cols:
+        raise ValueError(f"{license_column!r} が params の非PK列に無い: {table}")
     assignments = []
     for c in update_cols:
         if c == license_column:
             value = stricter_tag_sql(f"EXCLUDED.{c}", f"{table}.{c}")
-        elif c in merge_cols:
-            value = f"COALESCE(EXCLUDED.{c}, {table}.{c})"
-            if merge_scope is not None:
-                value = (
-                    f"CASE WHEN EXCLUDED.{merge_scope} IS NOT DISTINCT FROM"
-                    f" {table}.{merge_scope} THEN {value} ELSE EXCLUDED.{c} END"
-                )
         else:
             value = f"EXCLUDED.{c}"
         assignments.append(f"{c} = {value}")
@@ -223,10 +164,8 @@ def price_upsert(record: PriceTechnicalRecord) -> tuple[str, dict]:
     return _build_upsert("prices", params, ["code", "data_date"])
 
 
-# ③ の列の役割（冒頭 docstring「③ 財務サマリだけが完全置換の例外である理由」）。
+# ③のPKと厳格license列。
 FIN_PK: tuple[str, ...] = ("code", "fiscal_period_end", "disclosure_type", "consolidated")
-# NOT NULL の来歴列。COALESCE しても必ず EXCLUDED 側が残るので明示的に上書きする。
-FIN_OVERWRITE_COLUMNS: tuple[str, ...] = ("source", "fetched_at", "quality")
 FIN_LICENSE_COLUMN = "license_tag"
 # 連結区分を判定できなかったレコードの PK 値。D1 (cloud_store/financials.py) と同じ値。
 UNKNOWN_CONSOLIDATED = "不明"
@@ -235,9 +174,7 @@ UNKNOWN_CONSOLIDATED = "不明"
 def financial_upsert(record: FinancialSummaryRecord) -> tuple[str, dict]:
     """③ 財務サマリ。(code, 決算期末, 開示種別, 連結区分) を主キー。
 
-    完全置換ではなくマージする（冒頭 docstring）。上の分類に入らない列はすべて
-    COALESCE マージになるので、列を足しても訂正開示の NULL 潰しは再発しない
-    （完全置換を既定にすると、足した列だけが黙って潰れる）。
+    Notion③と同じ完全置換。未取得を前回値で補わず、開示日/licenseガードを維持する。
     """
     params = {
         "code": record.code,
@@ -267,11 +204,9 @@ def financial_upsert(record: FinancialSummaryRecord) -> tuple[str, dict]:
         "disclosed_at": record.disclosed_at,
         **_prov(record.provenance),
     }
-    fixed = {*FIN_PK, *FIN_OVERWRITE_COLUMNS, FIN_LICENSE_COLUMN}
     return _build_upsert(
         "financials", params, list(FIN_PK),
         guard_column="disclosed_at",
-        merge_cols=tuple(c for c in params if c not in fixed),
         license_column=FIN_LICENSE_COLUMN,
     )
 
