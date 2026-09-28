@@ -210,6 +210,21 @@ describe("aggregateMoneyflowSector", () => {
     expect(result.sectors[0]?.sector).toBe("大きい業種");
     expect(result.sectors[1]?.sector).toBe("小さい業種");
   });
+
+  it("as-of 日の実日足 coverage を返す (母集団=active かつ equity・実 close+volume)", async () => {
+    // 母集団 3 (id 1・2・4)。id 3 は非アクティブで母集団外。
+    seedStock({ id: 1, sector: "電気機器" });
+    seedOhlcv(1, "2026-09-14", 100, 10); // as-of 実日足あり
+    seedStock({ id: 2, sector: "電気機器" });
+    seedOhlcv(2, "2026-09-13", 100, 10); // 前日のみ (as-of は欠損)
+    seedStock({ id: 3, sector: "電気機器", active: false });
+    seedOhlcv(3, "2026-09-14", 100, 10); // 非対象 (数えない)
+    seedStock({ id: 4, sector: "銀行業" });
+    seedOhlcv(4, "2026-09-14", null, null); // NULL 日足 (covered に数えない)
+
+    const result = await aggregateMoneyflowSector(db(), { from: "2026-09-14", to: "2026-09-14" });
+    expect(result.coverage).toEqual({ date: "2026-09-14", universe: 3, covered: 1 });
+  });
 });
 
 describe("isoWeekToDateRange との組み合わせ (週指定の実データ集計)", () => {

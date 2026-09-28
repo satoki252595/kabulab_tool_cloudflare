@@ -18,6 +18,10 @@
 #
 # 日次 ~3,700 銘柄は ~40-50 分/回 (public repo のため Actions 分課金は無し)。
 #    平日毎日 + VWAP と合わせると枠に近づくため、必要なら cron を Mon/Wed/Fri 等へ間引く。
+#
+# 株式 sync の実成功後は moneyflow を workflow_call で連鎖する (#160)。
+# 実 tradingDate を固定入力し、許容内失敗ありは受け入れない。失敗 producer の
+# 時は moneyflow を起動しない (needs の成功要求 + 下記の outputs 条件)。
 name: stock-sync
 
 on:
@@ -52,6 +56,10 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # 株式 step の実成功出力 (後続 moneyflow の起動条件)。step skip 時は空。
+    outputs:
+      trade_date: ${{ steps.daily.outputs.trade_date }}
+      tolerated_failures: ${{ steps.daily.outputs.tolerated_failures }}
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -114,3 +122,18 @@ jobs:
         with:
           title: "[ジョブ失敗] ${{ github.workflow }}"
           summary: "${{ github.workflow }} は成功扱い (失敗率 1% 以下) ですが、許容内失敗が ${{ steps.daily.outputs.tolerated_failures }} 件ありました。"
+
+  # moneyflow 連鎖 (#160): 株式 sync の実成功時のみ後続する。
+  # trade_date 空 (context-only/macro・monthly の run で daily step が skip) や
+  # 許容内失敗あり (tolerated false-green) では起動しない。週次集計は冪等
+  # upsert のため、skip 日の分は次回成功日の連鎖で週累積として書かれる。
+  moneyflow:
+    needs: sync
+    if: needs.sync.outputs.trade_date != '' && needs.sync.outputs.tolerated_failures == ''
+    uses: ./.github/workflows/moneyflow.yml
+    with:
+      trade_date: ${{ needs.sync.outputs.trade_date }}
+    secrets: inherit
+    permissions:
+      contents: read
+      issues: write

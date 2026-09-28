@@ -184,7 +184,7 @@ JPX 告知 (2026-07-06)「信用取引残高の公表情報の変更日及び今
 - `services/moneyflow/lib/indicators.ts` — 指標定義カタログ (Phase 1: 6指標)
 - `services/moneyflow/lib/iso-week.ts` — ISO週番号ユーティリティ
 - `scripts/moneyflow/ingest.ts` — 取込 CLI (`pnpm ingest:moneyflow`)
-- `.github/workflows/moneyflow.yml` — 平日 17:30 JST 実行
+- `.github/workflows/moneyflow.yml` — stock-sync の株式 sync 成功後に workflow_call 連鎖 (独立 cron は #160 で廃止)。`trade_date` 固定入力で sector-turnover の as-of を pin 留めする
 
 ## Phase 2〜5 取得元 (2026-09-27 実装)
 

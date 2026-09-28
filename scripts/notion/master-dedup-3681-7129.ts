@@ -30,6 +30,7 @@ import {
 import { notionRequest } from "../../src/shared/notion-archive/client.js";
 import { notionEnv } from "../../src/shared/notion-archive/env.js";
 import { listPageFiles } from "../../src/shared/notion-archive/page-file.js";
+import { joinRichText } from "../../src/shared/notion-archive/rich-text.js";
 import {
   SUPPLEMENT_PROPS,
   updateSupplementRow,
@@ -48,6 +49,7 @@ import {
   REVERSE_PROP_JUKYU,
   REVERSE_PROP_YUTAI,
   SNAPSHOT_KEY,
+  SNAPSHOT_KEY_V2,
   SUPPLEMENT_7129_PAGE_ID,
   TARGETS,
   allMigrated,
@@ -59,6 +61,7 @@ import {
   guardMasterView,
   guardSupplement,
   hasSnapshotProgress,
+  incomingRelationProblems,
   nonRelationPropsEqual,
   normalizePageId,
   planMigration,
@@ -73,6 +76,7 @@ import {
   verifyReverseUnion,
   type DedupReceipt,
   type IncomingDb,
+  type IncomingOrigin,
   type IncomingSchemaEvidence,
   type IncomingSchemaHit,
   type SupplementView,
@@ -241,7 +245,10 @@ async function readFullRelation(
       )
     );
     for (const r of res.results) ids.push(r.id);
-    if (!res.has_more || !res.next_cursor) break;
+    if (!res.has_more) break;
+    if (!res.next_cursor) {
+      throw new Error(`relation 列挙が欠落のため停止します page=${pageId} (has_more なのに next_cursor なし)`);
+    }
     cursor = res.next_cursor;
   }
   return ids;
@@ -283,7 +290,10 @@ export async function queryDbAll(
       notionRequest<QueryResponse>("POST", `/databases/${dbId}/query`, body)
     );
     out.push(...res.results);
-    if (!res.has_more || !res.next_cursor) break;
+    if (!res.has_more) break;
+    if (!res.next_cursor) {
+      throw new Error(`DB query 列挙が欠落のため停止します db=${dbId} (has_more なのに next_cursor なし)`);
+    }
     cursor = res.next_cursor;
   }
   return out;
@@ -298,6 +308,377 @@ export async function downloadNotionFileBytes(url: string, label: string): Promi
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${label} の実ダウンロード失敗 status=${res.status}`);
   return new Uint8Array(await res.arrayBuffer());
+}
+
+// ---------------------------------------------------------------------------
+// 本文・添付の完全 capture (v2 snapshot の proof。本文の打切り・添付の欠落禁止)
+// ---------------------------------------------------------------------------
+
+/** block children の生要素 (text/file 抽出に要る最小限以外は opaque)。 */
+export interface RawBlock {
+  id: string;
+  type: string;
+  has_children?: boolean;
+  [k: string]: unknown;
+}
+
+interface ChildrenListResponse {
+  results: RawBlock[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+/** file/image 系の 1 添付の inventory (安定 origin + 名前 + 実バイト列 SHA)。 */
+export interface CapturedFileRef {
+  /** files プロパティ名 (本文ブロックの添付は CapturedBlock.file 側に保持)。 */
+  where: string;
+  name: string;
+  /** 安定 origin。Notion ホストは "hosted"、外部は外部 URL そのもの (署名 URL は揮発のため保持しない)。 */
+  origin: string;
+  bytesSha256: string;
+}
+
+/** 1 ブロックの capture (原構造 + 全文 + 添付 + 同 raw digest)。 */
+export interface CapturedBlock {
+  id: string;
+  type: string;
+  hasChildren: boolean;
+  /** rich_text/caption/title の結合平文 (構造ブロックは "")。 */
+  text: string;
+  /** 原 block 構造 (annotations/link/checked 等を保持。揮発 URL のみ除去)。 */
+  raw: unknown;
+  file?: { name: string; origin: string; bytesSha256: string };
+  /** child_page/child_database の安定参照 (中身には踏み込まない)。 */
+  refTitle?: string;
+  children?: CapturedBlock[];
+  /** raw と同一正規化の digest (構造変化の検出用)。 */
+  digest: string;
+}
+
+export interface BodyCapture {
+  fullCapture: true;
+  blocks: CapturedBlock[];
+  sha256: string;
+}
+
+export interface FilesCapture {
+  complete: true;
+  files: CapturedFileRef[];
+  sha256: string;
+}
+
+/**
+ * 子ブロックの全ページ送り (100 件超も欠落させない)。
+ * has_more なのに next_cursor が無ければ STOP (欠落を full と誤称しない)。
+ */
+export async function listAllBlocks(paceMs: number, blockId: string): Promise<RawBlock[]> {
+  const out: RawBlock[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const qs = cursor ? `?start_cursor=${cursor}&page_size=100` : "?page_size=100";
+    const res = await paced(paceMs, () =>
+      notionRequest<ChildrenListResponse>("GET", `/blocks/${blockId}/children${qs}`)
+    );
+    out.push(...res.results);
+    if (!res.has_more) break;
+    if (!res.next_cursor) {
+      throw new Error(`子ブロック列挙が欠落のため停止します block=${blockId} (has_more なのに next_cursor なし)`);
+    }
+    cursor = res.next_cursor;
+  }
+  return out;
+}
+
+/** rich_text/caption 様の配列を平文へ (形が違えば ""。digest が raw を pin するため text は補助)。 */
+function richArrayText(v: unknown): string {
+  if (!Array.isArray(v)) return "";
+  return joinRichText(v as Array<{ plain_text?: string; text?: { content: string } }>);
+}
+
+/** ブロックの平文 (既知の rich_text/caption/title 位置のみ。未知形状は digest が pin)。 */
+export function blockTextOf(block: RawBlock): string {
+  const payload = block[block.type] as Record<string, unknown> | undefined;
+  if (block.type === "child_page" || block.type === "child_database") {
+    const title = payload?.["title"];
+    return typeof title === "string" ? title : "";
+  }
+  if (!payload || typeof payload !== "object") return "";
+  return richArrayText(payload["rich_text"]) + richArrayText(payload["caption"]);
+}
+
+/**
+ * digest 用の正規化 raw。揮発する署名 URL/expiry だけを除き、他は全文 pin する
+ * (注釈・checked・言語・時刻・ユーザ等の構造変化も検出できる)。
+ * 外部 URL は利用者指定の安定値のため残す。
+ */
+export function normalizedBlockForDigest(block: RawBlock): unknown {
+  const clone = JSON.parse(JSON.stringify(block)) as Record<string, unknown>;
+  const payload = clone[clone["type"] as string];
+  if (payload && typeof payload === "object") {
+    const file = (payload as Record<string, unknown>)["file"];
+    if (file && typeof file === "object") {
+      delete (file as Record<string, unknown>)["url"];
+      delete (file as Record<string, unknown>)["expiry_time"];
+    }
+  }
+  return clone;
+}
+
+/** file/image 系ブロックの添付参照 (URL なしは STOP。欠落を黙って飛ばさない)。 */
+export function blockFileRefOf(block: RawBlock): { name: string; origin: string; url: string } | null {
+  switch (block.type) {
+    case "image":
+    case "file":
+    case "video":
+    case "pdf":
+    case "audio":
+      break;
+    default:
+      return null;
+  }
+  const payload = block[block.type] as Record<string, unknown> | undefined;
+  const kind = payload?.["type"];
+  const nameRaw = payload?.["name"];
+  const name = typeof nameRaw === "string" && nameRaw !== "" ? nameRaw : block.id;
+  if (kind === "external") {
+    const url = (payload?.["external"] as { url?: unknown } | undefined)?.url;
+    if (typeof url !== "string" || url === "") {
+      throw new Error(`添付の外部 URL が無いため停止します block=${block.id}`);
+    }
+    return { name, origin: url, url };
+  }
+  const url = (payload?.["file"] as { url?: unknown } | undefined)?.url;
+  if (typeof url !== "string" || url === "") {
+    throw new Error(`添付の実体 URL が無いため停止します block=${block.id}`);
+  }
+  return { name, origin: "hosted", url };
+}
+
+/** files プロパティの全エントリの添付参照 (URL なしは STOP)。 */
+export function pageFilesRefsOf(page: NotionPage): Array<{ prop: string; name: string; origin: string; url: string }> {
+  const out: Array<{ prop: string; name: string; origin: string; url: string }> = [];
+  for (const [prop, pv] of Object.entries(page.properties)) {
+    if (pv["type"] !== "files") continue;
+    const files = pv["files"];
+    if (!Array.isArray(files)) {
+      throw new Error(`files プロパティの形が不正のため停止します page=${page.id} prop=${prop}`);
+    }
+    for (const f of files) {
+      const e = f as { name?: unknown; type?: unknown; file?: { url?: unknown }; external?: { url?: unknown } };
+      const name = typeof e.name === "string" && e.name !== "" ? e.name : `${prop}/${out.length}`;
+      if (e.type === "external") {
+        if (typeof e.external?.url !== "string" || e.external.url === "") {
+          throw new Error(`添付の外部 URL が無いため停止します page=${page.id} prop=${prop} name=${name}`);
+        }
+        out.push({ prop, name, origin: e.external.url, url: e.external.url });
+      } else {
+        if (typeof e.file?.url !== "string" || e.file.url === "") {
+          throw new Error(`添付の実体 URL が無いため停止します page=${page.id} prop=${prop} name=${name}`);
+        }
+        out.push({ prop, name, origin: "hosted", url: e.file.url });
+      }
+    }
+  }
+  return out;
+}
+
+/** 添付バイト列の snapshotDir 上の固定パス (SHA 決定論的・同 bytes は重複保存しない)。 */
+export function attachmentDiskName(sha256: string): string {
+  return `attachment-${sha256}.bin`;
+}
+
+/**
+ * 添付 1 件の実ダウンロード + SHA + snapshotDir へ pin 留め。
+ * 既存同名ファイルは SHA 再検証して再利用 (不一致はすり替えとして STOP)。
+ */
+async function pinAttachmentBytes(
+  paceMs: number,
+  snapshotDir: string,
+  url: string,
+  label: string
+): Promise<{ bytes: Uint8Array; sha256: string }> {
+  const bytes = await paced(paceMs, () => downloadNotionFileBytes(url, label));
+  const sha256 = sha256HexBytes(bytes);
+  const diskPath = path.join(snapshotDir, attachmentDiskName(sha256));
+  if (fs.existsSync(diskPath)) {
+    const existing = new Uint8Array(fs.readFileSync(diskPath));
+    if (sha256HexBytes(existing) !== sha256) {
+      throw new Error(`添付の既存 pin が SHA 不一致のため停止します (すり替えの疑い): ${label}`);
+    }
+    return { bytes: existing, sha256 };
+  }
+  fs.writeFileSync(diskPath, bytes);
+  return { bytes, sha256 };
+}
+
+/** 1 ブロックの capture (has_children は再帰。child_page/child_database は安定参照のみ)。 */
+async function captureBlock(
+  paceMs: number,
+  snapshotDir: string,
+  block: RawBlock
+): Promise<CapturedBlock> {
+  if (block.type === "unsupported") {
+    throw new Error(`未対応ブロックがあるため full capture できません block=${block.id} (STOP)`);
+  }
+  const hasChildren = block.has_children === true;
+  const raw = normalizedBlockForDigest(block);
+  const out: CapturedBlock = {
+    id: block.id,
+    type: block.type,
+    hasChildren,
+    text: blockTextOf(block),
+    raw,
+    digest: sha256HexUtf8(stableStringify(raw)),
+  };
+  if (block.type === "child_page" || block.type === "child_database") {
+    // 子 DB/子ページの中身 (業務行) には踏み込まない。全 walk は不要。
+    // ID + type + title の安定参照だけ保持する (7129 技術履歴の ID/ref 維持)。
+    out.refTitle = blockTextOf(block);
+    return out;
+  }
+  const fileRef = blockFileRefOf(block);
+  if (fileRef) {
+    const pinned = await pinAttachmentBytes(paceMs, snapshotDir, fileRef.url, `block ${block.id} (${fileRef.name})`);
+    out.file = { name: fileRef.name, origin: fileRef.origin, bytesSha256: pinned.sha256 };
+  }
+  if (hasChildren) {
+    // 子 body が取得できなければ例外が飛び STOP する (full と誤称しない)。
+    const kids = await listAllBlocks(paceMs, block.id);
+    out.children = [];
+    for (const k of kids) out.children.push(await captureBlock(paceMs, snapshotDir, k));
+  }
+  return out;
+}
+
+/**
+ * incoming 候補の membership 判定 (純粋関数)。
+ * 対応 retire への完全 membership で判定する。FWD-only 由来の absence
+ * (full 配列で証明済み) は no-op evidence として snapshot に保持する
+ * (ops 除外は retire 絞りで成立)。reverse 由来の absence は DB 種別に
+ * かかわらず同時変更として STOP (kind raw というだけの許容はしない)。
+ * membership 未取得・不完全 cursor は到達前に readRelationFull が STOP する。
+ */
+export function classifyIncomingMembership(
+  origin: IncomingOrigin,
+  hasCorrespondingRetire: boolean,
+  rowPageId: string
+): "linked" | "detached-fwd-evidence" {
+  if (hasCorrespondingRetire) return "linked";
+  if (origin === "fwd") return "detached-fwd-evidence";
+  throw new Error(`incoming 行に対応退避 ID がありません (同時変更の疑い): ${rowPageId}`);
+}
+
+/**
+ * 1 ページの完全 proof (本文全 capture + files 添付 inventory)。
+ * 全ページ送り・再帰・実ダウンロードを通し、欠落があれば STOP する。
+ */
+export async function capturePageProof(
+  paceMs: number,
+  snapshotDir: string,
+  pageId: string,
+  page: NotionPage
+): Promise<{ body: BodyCapture; files: FilesCapture }> {
+  const blocks = await listAllBlocks(paceMs, pageId);
+  const captured: CapturedBlock[] = [];
+  for (const b of blocks) captured.push(await captureBlock(paceMs, snapshotDir, b));
+  const body: BodyCapture = {
+    fullCapture: true,
+    blocks: captured,
+    sha256: sha256HexUtf8(stableStringify(captured)),
+  };
+  const refs = pageFilesRefsOf(page);
+  const files: CapturedFileRef[] = [];
+  for (const r of refs) {
+    const pinned = await pinAttachmentBytes(paceMs, snapshotDir, r.url, `page ${pageId} prop ${r.prop} (${r.name})`);
+    files.push({ where: r.prop, name: r.name, origin: r.origin, bytesSha256: pinned.sha256 });
+  }
+  files.sort((a, b) => (a.where < b.where ? -1 : a.where > b.where ? 1 : a.name < b.name ? -1 : 1));
+  return { body, files: { complete: true, files, sha256: sha256HexUtf8(stableStringify(files)) } };
+}
+
+/**
+ * snapshot proof と fresh proof の内容一致 (純粋比較)。
+ * 本文は原構造込み SHA、添付は inventory SHA で比べ、同数の内容変更も検出する。
+ */
+export function pageProofsEqual(
+  snap: { body?: BodyCapture | undefined; files?: FilesCapture | undefined },
+  fresh: { body: BodyCapture; files: FilesCapture }
+): boolean {
+  if (!snap.body || !snap.files) return false;
+  return snap.body.sha256 === fresh.body.sha256 && snap.files.sha256 === fresh.files.sha256;
+}
+
+/**
+ * 更新直前の fresh proof 照合。fresh を取り直して snapshot proof と比べ、
+ * 不一致なら同時変更として STOP する (全 mutation/recovery の直前・直後に接続)。
+ */
+export async function verifyFreshPageProof(
+  paceMs: number,
+  snapshotDir: string,
+  pageId: string,
+  page: NotionPage,
+  label: string,
+  snapBody: BodyCapture | undefined,
+  snapFiles: FilesCapture | undefined
+): Promise<void> {
+  const fresh = await capturePageProof(paceMs, snapshotDir, pageId, page);
+  if (!pageProofsEqual({ body: snapBody, files: snapFiles }, fresh)) {
+    throw new Error(`${label}が snapshot と不一致です (同時変更の疑い): ${pageId}`);
+  }
+}
+
+/**
+ * entry 共通の fresh proof 再検証 (resume/already-applied の D1 前に接続)。
+ * master 全ページ + 補足全ページ + incoming 全件の fresh を取り直し、
+ * snapshot proof と照合する。relation の増減は proof 対象外 (本文・添付のみ)
+ * のため、移行中間状態でも比較できる。
+ */
+async function verifyEntryFreshProofs(
+  paceMs: number,
+  snapshotDir: string,
+  snapshot: SnapshotDoc,
+  state: FreshState,
+  receipt: DedupReceipt
+): Promise<void> {
+  for (const id of Object.keys(snapshot.masters)) {
+    const freshPage = state.pages[id];
+    if (!freshPage) {
+      throw new Error(`fresh master が無いため照合できません (STOP): ${id}`);
+    }
+    const m = snapshot.masters[id];
+    await verifyFreshPageProof(paceMs, snapshotDir, id, freshPage, "master の本文・添付", m.body, m.files);
+  }
+  for (const id of Object.keys(snapshot.supplement)) {
+    const freshPage = state.supplementPages[id];
+    if (!freshPage) {
+      throw new Error(`fresh 補足行が無いため照合できません (STOP): ${id}`);
+    }
+    const p = snapshot.supplementProof?.[id];
+    await verifyFreshPageProof(paceMs, snapshotDir, id, freshPage, "補足の本文・添付", p?.body, p?.files);
+  }
+  // incoming 全件の fresh proof + relation/properties CAS 照合。
+  // relation は移行で変わるが、意図済みの before/after 差だけ許容する。
+  const ops = buildMigrationOps(snapshot);
+  const opByRow = new Map(ops.map((o) => [o.rowPageId, o]));
+  for (const rowId of Object.keys(snapshot.incoming)) {
+    const freshPage = await getPage(paceMs, rowId);
+    const e = snapshot.incoming[rowId];
+    await verifyFreshPageProof(paceMs, snapshotDir, rowId, freshPage, "incoming の本文・添付", e.body, e.files);
+    // 非対象 properties 不変 (既存 helper)。
+    if (!propertiesEqualExcept(e.prop, e.page.properties, freshPage.properties)) {
+      throw new Error(`incoming の移行対象外プロパティが snapshot と不一致です: ${rowId}`);
+    }
+    // target relation 完全配列の照合 (full pagination。不完全は STOP)。
+    const freshFull = await readRelationFull(paceMs, rowId, freshPage, e.prop);
+    const problems = incomingRelationProblems({
+      rowPageId: rowId,
+      snapRelationFull: e.relationFull,
+      freshFull,
+      op: opByRow.get(rowId),
+      recorded: receipt.migrated[rowId],
+    });
+    if (problems.length > 0) throw new Error(problems.join(" / "));
+  }
 }
 
 function toMasterView(page: NotionPage, children: ChildrenResponse): MasterPageView {
@@ -332,12 +713,20 @@ function toMasterView(page: NotionPage, children: ChildrenResponse): MasterPageV
 // incoming スキーマ列挙 (/search→accessible DB schema→master 向け検出)
 // ---------------------------------------------------------------------------
 
+interface DbPropDef {
+  id: string;
+  type: string;
+  relation?: { database_id?: string; type?: string };
+}
+
 interface SearchDbResponse {
   results: Array<{
     id: string;
     archived?: boolean;
     in_trash?: boolean;
     title?: string | Array<{ plain_text?: string }>;
+    /** /search が database の schema を返す場合に保持する (返さない場合もある)。 */
+    properties?: Record<string, DbPropDef>;
   }>;
   has_more: boolean;
   next_cursor: string | null;
@@ -346,14 +735,7 @@ interface SearchDbResponse {
 interface DbSchemaResponse {
   id: string;
   title?: Array<{ plain_text?: string }>;
-  properties: Record<
-    string,
-    {
-      id: string;
-      type: string;
-      relation?: { database_id?: string; type?: string };
-    }
-  >;
+  properties: Record<string, DbPropDef>;
 }
 
 function dbTitleOf(
@@ -365,16 +747,72 @@ function dbTitleOf(
 }
 
 /**
+ * schema が incoming 判定に使える完全形か (純粋判定)。
+ * 全 def が id+type を持ち、全 relation def が target database_id を持つこと。
+ * /search 応答の schema がこの形なら GET を省略し、欠ければ GET する。
+ */
+export function isSearchSchemaUsable(properties: unknown): properties is Record<string, DbPropDef> {
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return false;
+  const entries = Object.entries(properties as Record<string, unknown>);
+  if (entries.length === 0) return false;
+  for (const [, def] of entries) {
+    if (!def || typeof def !== "object") return false;
+    const d = def as { id?: unknown; type?: unknown; relation?: { database_id?: unknown } };
+    if (typeof d.id !== "string" || d.id === "" || typeof d.type !== "string" || d.type === "") {
+      return false;
+    }
+    if (d.type === "relation") {
+      if (typeof d.relation?.database_id !== "string" || d.relation.database_id === "") return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * 1 DB の schema から master 向け relation を抽出する (純粋関数)。
+ * target の無い relation 定義は黙って飛ばさず STOP する (master 向けか
+ * 判定不能なまま進む schema 省略を禁止。fail closed)。
+ */
+export function extractMasterHits(
+  dbId: string,
+  dbTitle: string,
+  properties: Record<string, DbPropDef>,
+  masterDb: string
+): IncomingSchemaHit[] {
+  const hits: IncomingSchemaHit[] = [];
+  for (const [propName, def] of Object.entries(properties)) {
+    if (def.type !== "relation") continue;
+    const target = def.relation?.database_id;
+    if (!target) {
+      throw new Error(
+        `incoming 判定不能のため停止します: db=${dbTitle} (${dbId}) prop=${propName} の relation target が不明です (schema 省略禁止)`
+      );
+    }
+    if (normalizePageId(target) !== normalizePageId(masterDb)) continue;
+    const relType =
+      def.relation?.type === "single_property"
+        ? "single_property"
+        : def.relation?.type === "dual_property"
+          ? "dual_property"
+          : "unknown";
+    hits.push({ dbId, dbTitle, propName, relType });
+  }
+  return hits;
+}
+
+/**
  * integration が見える全 DB の schema を列挙し、master 向け relation を検出する。
  * single_property (逆向きに現れない片方向) の未知 incoming を止めるための
  * 一度だけの列挙。全 DB 全行 scan は不要 (schema のみ)。
+ * /search 応答が完全 schema を含む DB はそのまま使い、含まない・不完全な DB
+ * だけ GET する (旧 id/title のみ保持 + 全 DB GET の繰返しをやめる)。
  * 呼び出し側は `guardIncomingSchema` で未知を STOP し、証拠を snapshot に残す。
  */
 export async function enumerateMasterIncoming(
   paceMs: number
 ): Promise<IncomingSchemaEvidence> {
   const masterDb = normalizePageId(notionEnv.NOTION_DB_STOCK_MASTER());
-  const dbIds: Array<{ id: string; title: string }> = [];
+  const dbIds: Array<{ id: string; title: string; properties: unknown }> = [];
   let cursor: string | null = null;
   for (;;) {
     const body: Record<string, unknown> = {
@@ -387,35 +825,45 @@ export async function enumerateMasterIncoming(
     );
     for (const r of res.results) {
       if (r.archived === true || r.in_trash === true) continue;
-      dbIds.push({ id: r.id, title: dbTitleOf(r.title) });
+      dbIds.push({ id: r.id, title: dbTitleOf(r.title), properties: r.properties });
     }
-    if (!res.has_more || !res.next_cursor) break;
+    if (!res.has_more) break;
+    if (!res.next_cursor) {
+      throw new Error("DB schema 列挙が欠落のため停止します (search の has_more なのに next_cursor なし)");
+    }
     cursor = res.next_cursor;
   }
   const hits: IncomingSchemaHit[] = [];
+  let searchSchemaUsed = 0;
+  let getSchemaUsed = 0;
   for (const db of dbIds) {
+    if (isSearchSchemaUsable(db.properties)) {
+      hits.push(...extractMasterHits(db.id, db.title, db.properties, masterDb));
+      searchSchemaUsed++;
+      continue;
+    }
+    // search が schema を返さない・不完全な DB だけ GET する (必要 GET)。
     const schema = await paced(paceMs, () =>
       notionRequest<DbSchemaResponse>("GET", `/databases/${db.id}`)
     );
-    const title = dbTitleOf(schema.title) || db.title;
-    for (const [propName, def] of Object.entries(schema.properties)) {
-      if (def.type !== "relation") continue;
-      const target = def.relation?.database_id;
-      if (!target) continue;
-      if (normalizePageId(target) !== masterDb) continue;
-      const relType =
-        def.relation?.type === "single_property"
-          ? "single_property"
-          : def.relation?.type === "dual_property"
-            ? "dual_property"
-            : "unknown";
-      hits.push({ dbId: db.id, dbTitle: title, propName, relType });
+    if (!isSearchSchemaUsable(schema.properties)) {
+      throw new Error(
+        `incoming 判定不能のため停止します: db=${db.id} の schema が GET でも不完全です (schema 省略禁止)`
+      );
     }
+    const title = dbTitleOf(schema.title) || db.title;
+    hits.push(...extractMasterHits(db.id, title, schema.properties, masterDb));
+    getSchemaUsed++;
   }
   hits.sort((a, b) =>
     a.dbTitle < b.dbTitle ? -1 : a.dbTitle > b.dbTitle ? 1 : a.propName < b.propName ? -1 : 1
   );
-  return { enumeratedAt: new Date().toISOString(), dbCount: dbIds.length, hits };
+  return {
+    enumeratedAt: new Date().toISOString(),
+    dbCount: dbIds.length,
+    hits,
+    schemaProvenance: { searchSchemaUsed, getSchemaUsed },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1097,9 +1545,20 @@ function saveReceipt(snapshotDir: string, receipt: DedupReceipt): void {
 }
 
 export interface SnapshotDoc {
-  version: 1;
+  /** 1=旧 (props+子 first/count/name のみ) / 2=完全 proof (本文全 capture+添付 inventory)。v1 ファイルは不変のまま読めるが apply 駆動は v2 のみ。 */
+  version: 1 | 2;
   takenAt: string;
-  masters: Record<string, { code: string; role: "keep" | "retire"; page: NotionPage; children: ChildrenResponse }>;
+  masters: Record<
+    string,
+    {
+      code: string;
+      role: "keep" | "retire";
+      page: NotionPage;
+      children: ChildrenResponse;
+      body?: BodyCapture;
+      files?: FilesCapture;
+    }
+  >;
   incoming: Record<
     string,
     {
@@ -1109,9 +1568,13 @@ export interface SnapshotDoc {
       relationFull: string[];
       blockCount: number;
       childDatabases: string[];
+      body?: BodyCapture;
+      files?: FilesCapture;
     }
   >;
   supplement: Record<string, NotionPage>;
+  /** v2 の補足 proof (v1 ファイルには無い。page 自体は supplement 側)。 */
+  supplementProof?: Record<string, { body: BodyCapture; files: FilesCapture }>;
   d1: Record<string, string>;
   evidence: EvidenceResult;
   incomingSchema: IncomingSchemaEvidence;
@@ -1140,7 +1603,9 @@ async function takeSnapshot(
       if (children.has_more) {
         throw new Error(`snapshot 中止: 子ブロックが打ち切られました page=${id} (has_more)`);
       }
-      masters[id] = { code: t.code, role, page, children };
+      // v2: 本文全 capture + 添付 inventory (打切り・欠落は capture 側で STOP)。
+      const proof = await capturePageProof(paceMs, snapshotDir, id, page);
+      masters[id] = { code: t.code, role, page, children, body: proof.body, files: proof.files };
       freshViews[`${t.code}:${role}`] = toMasterView(page, children);
     }
   }
@@ -1155,21 +1620,35 @@ async function takeSnapshot(
   }
   // 移行対象の incoming 行 (退避候補の逆 relation + 原本)。
   const incoming: SnapshotDoc["incoming"] = {};
-  const expectRetireLink: Array<{ rowPageId: string; db: IncomingDb; prop: string }> = [];
+  // 候補 Map: 対応 retireID + 由来 (reverse/fwd) を保持。同一行の重複は
+  // reverse 優先 (FWD では上書きしない。DB kind だけの判定をしない)。
+  const candidates = new Map<
+    string,
+    { db: IncomingDb; prop: string; origin: IncomingOrigin; retireId: string }
+  >();
   for (const t of TARGETS) {
     const retireView = freshViews[`${t.code}:retire`];
     for (const rowId of retireView.relations[REVERSE_PROP_DISCLOSURES]?.ids ?? []) {
-      expectRetireLink.push({ rowPageId: rowId, db: "disclosures", prop: REL_PROP_MASTER });
+      if (!candidates.has(rowId)) {
+        candidates.set(rowId, { db: "disclosures", prop: REL_PROP_MASTER, origin: "reverse", retireId: t.retireId });
+      }
     }
     for (const rowId of retireView.relations[REVERSE_PROP_FINANCIALS]?.ids ?? []) {
-      expectRetireLink.push({ rowPageId: rowId, db: "financials", prop: REL_PROP_MASTER });
+      if (!candidates.has(rowId)) {
+        candidates.set(rowId, { db: "financials", prop: REL_PROP_MASTER, origin: "reverse", retireId: t.retireId });
+      }
     }
+  }
+  for (const t of TARGETS) {
     for (const rawId of readRelationIds(masters[t.retireId].page.properties[FWD_PROP_RAW])) {
-      expectRetireLink.push({ rowPageId: rawId, db: "raw_files", prop: REL_PROP_RELATED });
+      if (!candidates.has(rawId)) {
+        candidates.set(rawId, { db: "raw_files", prop: REL_PROP_RELATED, origin: "fwd", retireId: t.retireId });
+      }
     }
   }
   // 決定論的順序 (DB 種別→page id)。
   const dbOrder: Record<IncomingDb, number> = { disclosures: 0, financials: 1, raw_files: 2 };
+  const expectRetireLink = [...candidates.entries()].map(([rowPageId, c]) => ({ rowPageId, ...c }));
   expectRetireLink.sort(
     (a, b) => dbOrder[a.db] - dbOrder[b.db] || (a.rowPageId < b.rowPageId ? -1 : 1)
   );
@@ -1187,19 +1666,22 @@ async function takeSnapshot(
       if (!propId) throw new Error(`snapshot 中止: relation プロパティ ID 不明 row=${exp.rowPageId}`);
       relationFull = await readFullRelation(paceMs, exp.rowPageId, propId);
     }
-    const hasRetire = relationFull.some((id) =>
-      TARGETS.some((t) => normalizePageId(id) === normalizePageId(t.retireId))
+    // 対応 retire への完全 membership で判定する (どちらかの retire ではない)。
+    const hasCorresponding = relationFull.some(
+      (id) => normalizePageId(id) === normalizePageId(exp.retireId)
     );
-    if (!hasRetire) {
-      throw new Error(
-        `snapshot 中止: row=${exp.rowPageId} の実配列に退避 ID がありません (同時変更の疑い)`
-      );
-    }
+    // FWD-only 由来の absence (実配列で証明済み。preview のみでは到達しない)
+    // は no-op evidence として snapshot に保持する (本文・添付は complete
+    // 取得。全履歴・別 stock refs も relationFull に保存)。
+    // reverse 由来の absence は DB 種別にかかわらず STOP。
+    classifyIncomingMembership(exp.origin, hasCorresponding, exp.rowPageId);
     // 非対象 body の後判定用に子ブロック像も物理 snapshot する。
     const children = await listChildrenFirst(paceMs, exp.rowPageId);
     if (children.has_more) {
       throw new Error(`snapshot 中止: 子ブロックが打ち切られました row=${exp.rowPageId} (has_more)`);
     }
+    // v2: 本文全 capture + 添付 inventory (Files hosted 等の physical は pin 留め)。
+    const proof = await capturePageProof(paceMs, snapshotDir, exp.rowPageId, page);
     incoming[exp.rowPageId] = {
       db: exp.db,
       prop: exp.prop,
@@ -1209,18 +1691,24 @@ async function takeSnapshot(
       childDatabases: children.results
         .filter((b) => b.type === "child_database")
         .map((b) => b.child_database?.title ?? ""),
+      body: proof.body,
+      files: proof.files,
     };
   }
   const supplement: SnapshotDoc["supplement"] = {};
+  const supplementProof: NonNullable<SnapshotDoc["supplementProof"]> = {};
   for (const [id, page] of Object.entries(state.supplementPages)) {
     supplement[id] = page;
+    // v2: 補足行も本文・添付の完全 proof (全 page 対象)。
+    supplementProof[id] = await capturePageProof(paceMs, snapshotDir, id, page);
   }
   const doc: SnapshotDoc = {
-    version: 1,
+    version: 2,
     takenAt: new Date().toISOString(),
     masters,
     incoming,
     supplement,
+    supplementProof,
     d1: state.d1,
     evidence: state.evidence,
     incomingSchema: state.incomingSchema,
@@ -1235,7 +1723,8 @@ async function takeSnapshot(
   return { snapshot: doc, file };
 }
 
-function buildMigrationOps(snapshot: SnapshotDoc): MigrationOp[] {
+/** snapshot.incoming から移行 ops を導出する。退避を含まない行 (no-op evidence) は ops 対象外。 */
+export function buildMigrationOps(snapshot: SnapshotDoc): MigrationOp[] {
   const ops: MigrationOp[] = [];
   for (const t of TARGETS) {
     // このコードの退避候補にぶら下がる行だけを対象にする。
@@ -1309,12 +1798,12 @@ export function expectedArchiveFileNames(dateTag: string): [string, string, stri
  */
 export async function verifyArchiveDownload(
   archivePageId: string,
-  expected: { names: [string, string, string]; shas: Record<string, string> }
+  expected: { names: string[]; shas: Record<string, string> }
 ): Promise<void> {
   const listed = await listPageFiles(archivePageId, "Files");
-  if (listed.length !== 3) {
+  if (listed.length !== expected.names.length) {
     throw new Error(
-      `一次データ保管の実ダウンロード: Files が 3 件でありません got=${listed.length} page=${archivePageId}`
+      `一次データ保管の実ダウンロード: Files が ${expected.names.length} 件でありません got=${listed.length} page=${archivePageId}`
     );
   }
   for (const name of expected.names) {
@@ -1468,14 +1957,245 @@ export async function archiveSnapshot(
   return receipt;
 }
 
-export function verifyArchivePage(page: NotionPage, wantSha: string): void {
+/** v2 snapshot JSON の保管名 (v1 と同日でも別名。混同しない)。 */
+export function v2SnapshotArchiveName(dateTag: string): string {
+  return `master-dedup-snapshot-v2-${dateTag}.json`;
+}
+
+/** snapshot 全体から添付 inventory を集める (純粋抽出。本文ブロックは再帰)。 */
+export function collectAttachmentInventory(
+  snapshot: SnapshotDoc
+): Array<{ name: string; origin: string; bytesSha256: string }> {
+  const out: Array<{ name: string; origin: string; bytesSha256: string }> = [];
+  const walkBlocks = (blocks: CapturedBlock[]): void => {
+    for (const b of blocks) {
+      if (b.file) out.push({ name: b.file.name, origin: b.file.origin, bytesSha256: b.file.bytesSha256 });
+      if (b.children) walkBlocks(b.children);
+    }
+  };
+  for (const m of Object.values(snapshot.masters)) {
+    for (const f of m.files?.files ?? []) {
+      out.push({ name: f.name, origin: f.origin, bytesSha256: f.bytesSha256 });
+    }
+    if (m.body) walkBlocks(m.body.blocks);
+  }
+  for (const e of Object.values(snapshot.incoming)) {
+    for (const f of e.files?.files ?? []) {
+      out.push({ name: f.name, origin: f.origin, bytesSha256: f.bytesSha256 });
+    }
+    if (e.body) walkBlocks(e.body.blocks);
+  }
+  for (const p of Object.values(snapshot.supplementProof ?? {})) {
+    for (const f of p.files.files) {
+      out.push({ name: f.name, origin: f.origin, bytesSha256: f.bytesSha256 });
+    }
+    walkBlocks(p.body.blocks);
+  }
+  return out;
+}
+
+/**
+ * 添付の保管名を決める (純粋関数)。同名同 SHA は 1 件に畳み重複保管しない。
+ * 同名異 SHA・base 3 名との衝突は黙って改名せず STOP する (ルール2)。
+ */
+export function mapAttachmentArchiveNames(
+  baseNames: string[],
+  inventory: Array<{ name: string; bytesSha256: string }>
+): Array<{ archiveName: string; sha256: string }> {
+  const byName = new Map<string, string>();
+  for (const e of inventory) {
+    const prev = byName.get(e.name);
+    if (prev === undefined) {
+      byName.set(e.name, e.bytesSha256);
+    } else if (prev !== e.bytesSha256) {
+      throw new Error(`添付名の衝突のため停止します (同名異 SHA。改名しません): ${e.name}`);
+    }
+  }
+  for (const n of byName.keys()) {
+    if (baseNames.includes(n)) {
+      throw new Error(`添付名が snapshot/証拠名と衝突のため停止します (改名しません): ${n}`);
+    }
+  }
+  return [...byName.entries()]
+    .map(([archiveName, sha256]) => ({ archiveName, sha256 }))
+    .sort((a, b) => (a.archiveName < b.archiveName ? -1 : 1));
+}
+
+/**
+ * v2 snapshot を一次データ保管へ記録し、実ダウンロードで検証する。
+ * v1 レコード (SNAPSHOT_KEY) は触らず、別キー (SNAPSHOT_KEY_V2) の
+ * 別レコードに snapshot JSON + 証拠 2 件 + 添付 physical 全件を入れる。
+ * v1 の skipped_existing を new full proof として採用しない。
+ */
+export async function archiveSnapshotV2(
+  paceMs: number,
+  snapshotDir: string,
+  file: string,
+  snapshot: SnapshotDoc,
+  receipt: DedupReceipt
+): Promise<DedupReceipt> {
+  if (snapshot.version !== 2) {
+    throw new Error("v2 保管に v1 snapshot を渡さないでください (完全 proof なし)");
+  }
+  const dateTag = snapshot.takenAt.slice(0, 10);
+  const baseNames = [v2SnapshotArchiveName(dateTag), `Edinetcode-${dateTag}.zip`, `jpx-delisted-${dateTag}.html`];
+  const inventory = collectAttachmentInventory(snapshot);
+  const attachments = mapAttachmentArchiveNames(baseNames, inventory);
+  const names = [...baseNames, ...attachments.map((a) => a.archiveName)];
+  const snapshotBytes = new Uint8Array(fs.readFileSync(file));
+  const zipBytes = new Uint8Array(fs.readFileSync(path.join(snapshotDir, "Edinetcode.zip")));
+  const htmlBytes = new Uint8Array(fs.readFileSync(path.join(snapshotDir, "jpx-delisted.html")));
+  const localShas: Record<string, string> = {
+    [names[0]]: sha256HexBytes(snapshotBytes),
+    [names[1]]: sha256HexBytes(zipBytes),
+    [names[2]]: sha256HexBytes(htmlBytes),
+  };
+  const attachmentFiles: Array<{ bytes: Uint8Array; filename: string; contentType: string }> = [];
+  for (const a of attachments) {
+    const diskPath = path.join(snapshotDir, attachmentDiskName(a.sha256));
+    if (!fs.existsSync(diskPath)) {
+      throw new Error(`添付の pin が無いため停止します (capture 時の実バイト列が必須): ${a.archiveName}`);
+    }
+    const bytes = new Uint8Array(fs.readFileSync(diskPath));
+    if (sha256HexBytes(bytes) !== a.sha256) {
+      throw new Error(`添付の pin が SHA 不一致のため停止します (すり替えの疑い): ${a.archiveName}`);
+    }
+    localShas[a.archiveName] = a.sha256;
+    attachmentFiles.push({ bytes, filename: a.archiveName, contentType: "application/octet-stream" });
+  }
+  if (localShas[names[1]] !== snapshot.evidence.edinet.sha256) {
+    throw new Error("Edinetcode.zip の SHA が snapshot 証拠と不一致 (すり替えの疑い)");
+  }
+  if (localShas[names[2]] !== snapshot.evidence.jpx.sha256) {
+    throw new Error("jpx-delisted.html の SHA が snapshot 証拠と不一致 (すり替えの疑い)");
+  }
+  if (receipt.snapshotV2) {
+    // 再開時も実ダウンロードで元バイト列一致を確認してから移行する。
+    const page = await notionRequest<NotionPage>("GET", `/pages/${receipt.snapshotV2.archivePageId}`);
+    verifyArchivePage(page, receipt.snapshotV2.sha256, names.length);
+    const wantShas: Record<string, string> = {};
+    for (const n of names) {
+      wantShas[n] =
+        n === names[0]
+          ? (receipt.snapshotV2.snapshotBytesSha256 ?? localShas[n])
+          : n === names[1]
+            ? (receipt.snapshotV2.zipSha256 ?? localShas[n])
+            : n === names[2]
+              ? (receipt.snapshotV2.htmlSha256 ?? localShas[n])
+              : (receipt.snapshotV2.attachmentShas?.[n] ?? localShas[n]);
+    }
+    await verifyArchiveDownload(receipt.snapshotV2.archivePageId, { names, shas: wantShas });
+    if (!receipt.snapshotV2.snapshotBytesSha256) {
+      receipt.snapshotV2.snapshotBytesSha256 = localShas[names[0]];
+      receipt.snapshotV2.zipSha256 = localShas[names[1]];
+      receipt.snapshotV2.htmlSha256 = localShas[names[2]];
+      receipt.snapshotV2.attachmentShas = Object.fromEntries(attachments.map((a) => [a.archiveName, a.sha256]));
+      receipt.snapshotV2.fileNames = [...names];
+      receipt.snapshotV2.archiveVerifiedAt = new Date().toISOString();
+      saveReceipt(snapshotDir, receipt);
+    }
+    return receipt;
+  }
+  // 非冪等 create 前に full 検索で既存を確認する (findByKey page_size 1 依存禁止)。
+  const dbIds = await findAllArchiveDbIds(ARCHIVE_SERVICE, "backup");
+  const hits = dbIds.length === 0 ? [] : await queryArchiveByKeyAll(paceMs, dbIds, SNAPSHOT_KEY_V2);
+  const decision = decideSnapshotAction({
+    backupHits: hits.length,
+    hasMarker: receipt.snapshotV2Issued !== undefined,
+  });
+  if (decision === "stop") {
+    if (hits.length >= 2) {
+      throw new Error(
+        `一次データ保管に v2 snapshot が ${hits.length} 件重複しています (二重作成の疑い)。どれが正か決めず停止します ids=${hits.map((h) => h.id).join(",")}`
+      );
+    }
+    throw new Error(
+      "v2 snapshot の create 結果不明のため停止します (marker あり・full query 0 件)。自動解除・再 create しません。後日 Notion を再読してください"
+    );
+  }
+  if (decision === "recover") {
+    const hit = hits[0];
+    verifyArchivePage(hit, snapshot.sha256, names.length);
+    await verifyArchiveDownload(hit.id, { names, shas: localShas });
+    receipt.snapshotV2 = {
+      file: path.basename(file),
+      sha256: snapshot.sha256,
+      archivePageId: hit.id,
+      archiveVerifiedAt: new Date().toISOString(),
+      snapshotBytesSha256: localShas[names[0]],
+      zipSha256: localShas[names[1]],
+      htmlSha256: localShas[names[2]],
+      attachmentShas: Object.fromEntries(attachments.map((a) => [a.archiveName, a.sha256])),
+      fileNames: [...names],
+    };
+    saveReceipt(snapshotDir, receipt);
+    return receipt;
+  }
+  // create: helper 呼出前に key+snapshotHash+issuedAt を atomic 保存する。
+  receipt.snapshotV2Issued = {
+    key: SNAPSHOT_KEY_V2,
+    snapshotHash: snapshot.sha256,
+    issuedAt: new Date().toISOString(),
+  };
+  saveReceipt(snapshotDir, receipt);
+  const res = await recordPrimaryData({
+    service: ARCHIVE_SERVICE,
+    key: SNAPSHOT_KEY_V2,
+    source: "Notion ①③④⑤ + D1 jss_notion_pages + JPX/EDINET 公開取得 + 添付 physical (Issue #102 単発解消 v2)",
+    fetchedAt: snapshot.takenAt,
+    metadata: {
+      snapshotSha256: snapshot.sha256,
+      snapshotFile: path.basename(file),
+      snapshotVersion: 2,
+      masters: Object.keys(snapshot.masters).length,
+      incomingRows: Object.keys(snapshot.incoming).length,
+      supplementRows: Object.keys(snapshot.supplement).length,
+      attachments: attachments.map((a) => ({ name: a.archiveName, sha256: a.sha256 })),
+      decisions: {
+        keep3681: TARGETS[0].keepId,
+        retire3681: TARGETS[0].retireId,
+        keep7129: TARGETS[1].keepId,
+        retire7129: TARGETS[1].retireId,
+        lifecycle3681: { listedStaysFalse: true, statusAfter: LIFECYCLE_PATCH_3681_STATUS },
+      },
+      evidence: snapshot.evidence,
+    },
+    files: [
+      { bytes: snapshotBytes, filename: names[0], contentType: "application/json" },
+      { bytes: zipBytes, filename: names[1], contentType: "application/zip" },
+      { bytes: htmlBytes, filename: names[2], contentType: "text/html" },
+      ...attachmentFiles,
+    ],
+  });
+  if (res.fileTooLarge) {
+    throw new Error("一次データ保管に上限超過ファイルあり。正直に停止します (v2 snapshot 未確定)");
+  }
+  const page = await notionRequest<NotionPage>("GET", `/pages/${res.pageId}`);
+  verifyArchivePage(page, snapshot.sha256, names.length);
+  await verifyArchiveDownload(res.pageId, { names, shas: localShas });
+  receipt.snapshotV2 = {
+    file: path.basename(file),
+    sha256: snapshot.sha256,
+    archivePageId: res.pageId,
+    archiveVerifiedAt: new Date().toISOString(),
+    snapshotBytesSha256: localShas[names[0]],
+    zipSha256: localShas[names[1]],
+    htmlSha256: localShas[names[2]],
+    attachmentShas: Object.fromEntries(attachments.map((a) => [a.archiveName, a.sha256])),
+    fileNames: [...names],
+  };
+  saveReceipt(snapshotDir, receipt);
+  return receipt;
+}
+
+export function verifyArchivePage(page: NotionPage, wantSha: string, expectedCount = 3): void {
   const status = (page.properties["Status"]?.["select"] as { name?: string } | null)?.name;
   if (status !== "recorded") {
     throw new Error(`一次データ保管の再読: Status=${status} (recorded でない) page=${page.id}`);
   }
   const files = page.properties["Files"]?.["files"];
-  if (!Array.isArray(files) || files.length !== 3) {
-    throw new Error(`一次データ保管の再読: Files が 3 件でありません page=${page.id}`);
+  if (!Array.isArray(files) || files.length !== expectedCount) {
+    throw new Error(`一次データ保管の再読: Files が ${expectedCount} 件でありません page=${page.id}`);
   }
   const meta = readTitleText(page.properties["Metadata"]);
   if (!meta.includes(wantSha)) {
@@ -1491,15 +2211,19 @@ async function applyLifecycle3681(
 ): Promise<DedupReceipt> {
   const keepId = TARGETS[0].keepId;
   const before = snapshot.masters[keepId].page.properties as Record<string, unknown>;
+  const snapKeep = snapshot.masters[keepId];
   const checkRemote = async (): Promise<"done" | "todo" | "diverged"> => {
     const fresh = await getPage(paceMs, keepId);
     const props = fresh.properties as Record<string, unknown>;
+    // 更新前後の fresh proof 照合 (同数の内容変更も検出。不一致は diverged)。
+    const freshProof = await capturePageProof(paceMs, snapshotDir, keepId, fresh);
+    const proofOk = pageProofsEqual({ body: snapKeep?.body, files: snapKeep?.files }, freshProof);
     const status = (fresh.properties["状態"]?.["select"] as { name?: string } | null)?.name ?? null;
     if (status === LIFECYCLE_PATCH_3681_STATUS && propertiesEqualExcept("状態", before, props)) {
       const listed = fresh.properties["上場状態"]?.["checkbox"] === true;
-      return !listed ? "done" : "diverged";
+      return !listed && proofOk ? "done" : "diverged";
     }
-    if (status === null && propertiesEqualExcept("状態", before, props)) return "todo";
+    if (status === null && propertiesEqualExcept("状態", before, props)) return proofOk ? "todo" : "diverged";
     return "diverged";
   };
   const remote = await checkRemote();
@@ -1549,18 +2273,9 @@ export async function applyMigrations(
     const fresh = await getPage(paceMs, op.rowPageId);
     // 実配列で比較する (preview 25 では ⑤ の 3818 件を誤判定する)。
     const freshFull = await readRelationFull(paceMs, op.rowPageId, fresh, op.prop);
-    const freshChildren = await listChildrenFirst(paceMs, op.rowPageId);
-    if (freshChildren.has_more) {
-      throw new Error(`子ブロックの列挙が打ち切られました row=${op.rowPageId} (has_more)`);
-    }
-    const freshChildDbs = freshChildren.results
-      .filter((b) => b.type === "child_database")
-      .map((b) => b.child_database?.title ?? "")
-      .sort();
-    const snapChildDbs = [...snapEntry.childDatabases].sort();
-    const bodyUnchanged =
-      freshChildren.results.length === snapEntry.blockCount &&
-      JSON.stringify(freshChildDbs) === JSON.stringify(snapChildDbs);
+    // 更新直前の fresh proof 照合 (同数の内容変更も検出。打切りは capture 側で STOP)。
+    const freshProof = await capturePageProof(paceMs, snapshotDir, op.rowPageId, fresh);
+    const bodyUnchanged = pageProofsEqual(snapEntry, freshProof);
     const propsUnchanged = propertiesEqualExcept(op.prop, snapProps, fresh.properties);
     const decision = decideMigrationAction({
       recorded: recorded ? { before: recorded.before, after: recorded.after } : undefined,
@@ -1603,20 +2318,16 @@ export async function applyMigrations(
     if (!propertiesEqualExcept(op.prop, snapProps, reread.properties)) {
       throw new Error(`移行対象外のプロパティが変化しました row=${op.rowPageId}`);
     }
-    const rereadChildren = await listChildrenFirst(paceMs, op.rowPageId);
-    if (rereadChildren.has_more) {
-      throw new Error(`移行後の子ブロック列挙が打ち切られました row=${op.rowPageId} (has_more)`);
-    }
-    const rereadChildDbs = rereadChildren.results
-      .filter((b) => b.type === "child_database")
-      .map((b) => b.child_database?.title ?? "")
-      .sort();
-    if (
-      rereadChildren.results.length !== snapEntry.blockCount ||
-      JSON.stringify(rereadChildDbs) !== JSON.stringify(snapChildDbs)
-    ) {
-      throw new Error(`移行対象外の本文が変化しました row=${op.rowPageId}`);
-    }
+    // 移行直後の fresh proof 照合 (同数の内容変更も検出)。
+    await verifyFreshPageProof(
+      paceMs,
+      snapshotDir,
+      op.rowPageId,
+      reread,
+      "移行対象外の本文・添付",
+      snapEntry.body,
+      snapEntry.files
+    );
     receipt.migrated[op.rowPageId] = {
       db: op.db,
       prop: op.prop,
@@ -1639,7 +2350,18 @@ async function applySupplement7129(
   const snapPage = snapshot.supplement[SUPPLEMENT_7129_PAGE_ID];
   if (!snapPage) throw new Error("snapshot に 7129 補足行がありません");
   const snapProps = snapPage.properties as Record<string, unknown>;
+  const snapProof = snapshot.supplementProof?.[SUPPLEMENT_7129_PAGE_ID];
   const fresh = await getPage(paceMs, SUPPLEMENT_7129_PAGE_ID);
+  // 更新直前の fresh proof 照合 (同数の内容変更も検出)。
+  await verifyFreshPageProof(
+    paceMs,
+    snapshotDir,
+    SUPPLEMENT_7129_PAGE_ID,
+    fresh,
+    "7129 補足の本文・添付",
+    snapProof?.body,
+    snapProof?.files
+  );
   const current = await readRelationFull(paceMs, SUPPLEMENT_7129_PAGE_ID, fresh, SUPPLEMENT_PROPS.master);
   const isDone =
     current.length === 1 &&
@@ -1661,6 +2383,16 @@ async function applySupplement7129(
   if (afterIds.length !== 1 || normalizePageId(afterIds[0]) !== normalizePageId(keepId)) {
     throw new Error("7129 補足の master 修復の再読検証に失敗しました");
   }
+  // 修復直後の fresh proof 照合 (同数の内容変更も検出)。
+  await verifyFreshPageProof(
+    paceMs,
+    snapshotDir,
+    SUPPLEMENT_7129_PAGE_ID,
+    reread,
+    "7129 補足の本文・添付",
+    snapProof?.body,
+    snapProof?.files
+  );
   if (!propertiesEqualExcept(SUPPLEMENT_PROPS.master, snapProps, reread.properties)) {
     throw new Error("7129 補足の対象外プロパティが変化しました");
   }
@@ -1721,9 +2453,10 @@ export function verifyArchivedPage(page: NotionPage, retireId: string): void {
 }
 
 /**
- * 退避直前の原像突合。fresh の非 relation props + body (blockCount/子 DB) が
+ * 退避直前の原像突合。fresh の非 relation props + body/添付 proof が
  * 物理 snapshot と一致しなければ同時変更として停止する。
  * 逆 relation は移行後に空になるため比較対象外 (relation 除外)。
+ * proofs 付きの場合は内容一致 (同数の変更も検出) を要求する。
  */
 export function verifyRetirePreimage(args: {
   retireId: string;
@@ -1733,6 +2466,12 @@ export function verifyRetirePreimage(args: {
   freshProps: Record<string, unknown>;
   freshBlockCount: number;
   freshChildDbs: string[];
+  proofs?: {
+    snapBody: BodyCapture | undefined;
+    snapFiles: FilesCapture | undefined;
+    freshBody: BodyCapture;
+    freshFiles: FilesCapture;
+  };
 }): void {
   if (!nonRelationPropsEqual(args.snapProps, args.freshProps)) {
     throw new Error(`退避直前に元ページが変化しています (非 relation 不一致): ${args.retireId}`);
@@ -1744,6 +2483,12 @@ export function verifyRetirePreimage(args: {
     JSON.stringify(freshSorted) !== JSON.stringify(snapSorted)
   ) {
     throw new Error(`退避直前に元ページの本文が変化しています: ${args.retireId}`);
+  }
+  if (args.proofs) {
+    const p = args.proofs;
+    if (!pageProofsEqual({ body: p.snapBody, files: p.snapFiles }, { body: p.freshBody, files: p.freshFiles })) {
+      throw new Error(`退避直前に元ページの本文・添付が変化しています: ${args.retireId}`);
+    }
   }
 }
 
@@ -1767,8 +2512,9 @@ export async function applyRetire(
       continue;
     }
     // 順序の強制: snapshot 確定・移行・補足・lifecycle・D1 が全て完了後のみ退避する。
-    if (!receipt.snapshot?.archiveVerifiedAt) {
-      throw new Error("snapshot なしで退避しません (archive 前に一次データ保管が必須)");
+    // v2 の一次データ保管が必須 (v1 保管済みは new full proof にならない)。
+    if (!receipt.snapshotV2?.archiveVerifiedAt) {
+      throw new Error("v2 snapshot なしで退避しません (archive 前に一次データ保管が必須)");
     }
     if (!allMigrated(ops, receipt) || !receipt.lifecycle3681 || !receipt.supplement7129 || !receipt.d1) {
       throw new Error("移行・補足・lifecycle・D1 の完了前に退避しません");
@@ -1776,11 +2522,12 @@ export async function applyRetire(
     const snapMasters = snapshot.masters[t.retireId];
     if (!snapMasters) throw new Error(`snapshot に退避元がありません: ${t.retireId}`);
     const origin = await getPage(paceMs, t.retireId);
-    const originChildren = await listChildrenFirst(paceMs, t.retireId);
-    if (originChildren.has_more) {
-      throw new Error(`子ブロックの列挙が打ち切られました page=${t.retireId} (has_more)`);
-    }
-    // 退避直前の原像突合 (非 relation + body)。変化があれば同時変更として停止。
+    // 退避直前の fresh proof capture (打切りは capture 側で STOP)。
+    const originProof = await capturePageProof(paceMs, snapshotDir, t.retireId, origin);
+    const originChildDbs = originProof.body.blocks
+      .filter((b) => b.type === "child_database")
+      .map((b) => b.refTitle ?? "");
+    // 退避直前の原像突合 (非 relation + body/添付 proof)。変化があれば同時変更として停止。
     verifyRetirePreimage({
       retireId: t.retireId,
       snapProps: snapMasters.page.properties as Record<string, unknown>,
@@ -1789,10 +2536,14 @@ export async function applyRetire(
         .filter((b) => b.type === "child_database")
         .map((b) => b.child_database?.title ?? ""),
       freshProps: origin.properties as Record<string, unknown>,
-      freshBlockCount: originChildren.results.length,
-      freshChildDbs: originChildren.results
-        .filter((b) => b.type === "child_database")
-        .map((b) => b.child_database?.title ?? ""),
+      freshBlockCount: originProof.body.blocks.length,
+      freshChildDbs: originChildDbs,
+      proofs: {
+        snapBody: snapMasters.body,
+        snapFiles: snapMasters.files,
+        freshBody: originProof.body,
+        freshFiles: originProof.files,
+      },
     });
     const decision = decideRetireAction({
       originArchived: origin.archived === true || origin.in_trash === true,
@@ -1936,7 +2687,9 @@ function loadSnapshotFile(file: string): { snapshot: SnapshotDoc; file: string }
   const snapshot = JSON.parse(fs.readFileSync(file, "utf8")) as SnapshotDoc;
   const rehash = sha256HexUtf8(stableStringify(snapshotWithoutHash(snapshot)));
   if (rehash !== snapshot.sha256) throw new Error(`snapshot の hash が一致しません: ${file}`);
-  if (snapshot.version !== 1) throw new Error(`snapshot の version が不正です: ${file}`);
+  if (snapshot.version !== 1 && snapshot.version !== 2) {
+    throw new Error(`snapshot の version が不正です: ${file}`);
+  }
   if (!snapshot.incomingSchema || !Array.isArray(snapshot.incomingSchema.hits)) {
     throw new Error(`旧 snapshot のため再開できません (incomingSchema なし・手動確認が必要): ${file}`);
   }
@@ -1958,6 +2711,8 @@ export function loadSnapshotForResume(
   receipt: DedupReceipt
 ): { snapshot: SnapshotDoc; file: string } {
   const want =
+    receipt.snapshotV2?.sha256 ??
+    receipt.snapshotV2Issued?.snapshotHash ??
     receipt.snapshot?.sha256 ??
     receipt.snapshotIssued?.snapshotHash ??
     Object.values(receipt.retireIssued ?? {})[0]?.snapshotHash;
@@ -1966,6 +2721,8 @@ export function loadSnapshotForResume(
   }
   // 全 marker の hash が一致すること (混在は手動確認)。
   const hashes = new Set<string>();
+  if (receipt.snapshotV2) hashes.add(receipt.snapshotV2.sha256);
+  if (receipt.snapshotV2Issued) hashes.add(receipt.snapshotV2Issued.snapshotHash);
   if (receipt.snapshot) hashes.add(receipt.snapshot.sha256);
   if (receipt.snapshotIssued) hashes.add(receipt.snapshotIssued.snapshotHash);
   for (const m of Object.values(receipt.retireIssued ?? {})) hashes.add(m.snapshotHash);
@@ -1988,6 +2745,83 @@ export function loadSnapshotForResume(
   throw new Error(`marker 対応の snapshot ファイルがありません want=${want.slice(0, 12)}… (手動確認が必要)`);
 }
 
+/**
+ * 完全 proof/CAS gate (全 apply 入口の共通関門。一箇所)。
+ * 初期・resume・already-applied の全 entry が snapshot 確定後に必ず通す。
+ * 不完全な body/schema/attachment proof・CAS drift があれば STOP する。
+ * v1 snapshot (props+子 first/count/name のみ) は proof 不完全として STOP し、
+ * v1 の保管済みを new full proof として採用しない。
+ */
+export function requireCompleteSnapshotProof(snapshot: SnapshotDoc, receipt: DedupReceipt): void {
+  if (snapshot.version !== 2) {
+    throw new Error(
+      `旧 v${snapshot.version} snapshot のため停止します (body/files proof なし)。` +
+        "新規 snapshot-dir で fresh v2 を取得してください (v1 ファイル自体は不変)"
+    );
+  }
+  const rehash = sha256HexUtf8(stableStringify(snapshotWithoutHash(snapshot)));
+  if (rehash !== snapshot.sha256) {
+    throw new Error("snapshot の CAS 自己検証に失敗しました (hash 不一致・すり替えの疑い)");
+  }
+  // receipt↔snapshot の CAS 対応。v1 系の記録があれば混在として STOP する。
+  if (receipt.snapshot !== undefined || receipt.snapshotIssued !== undefined) {
+    throw new Error(
+      "v1 系の receipt 記録があるため停止します (v1/v2 混在不可)。新規 snapshot-dir で fresh v2 から始めてください"
+    );
+  }
+  if (receipt.snapshotV2 !== undefined && receipt.snapshotV2.sha256 !== snapshot.sha256) {
+    throw new Error("receipt の v2 snapshot hash が snapshot と不一致です (CAS drift のため停止)");
+  }
+  if (receipt.snapshotV2Issued !== undefined && receipt.snapshotV2Issued.snapshotHash !== snapshot.sha256) {
+    throw new Error("receipt の v2 marker hash が snapshot と不一致です (CAS drift のため停止)");
+  }
+  for (const m of Object.values(receipt.retireIssued ?? {})) {
+    if (m.snapshotHash !== snapshot.sha256) {
+      throw new Error("receipt の退避 marker hash が snapshot と不一致です (CAS drift のため停止)");
+    }
+  }
+  const needPageProof = (label: string, body: BodyCapture | undefined, files: FilesCapture | undefined): void => {
+    if (body?.fullCapture !== true || typeof body.sha256 !== "string" || body.sha256 === "") {
+      throw new Error(`body proof が不完全のため停止します: ${label}`);
+    }
+    if (files?.complete !== true || typeof files.sha256 !== "string" || files.sha256 === "") {
+      throw new Error(`attachment proof が不完全のため停止します: ${label}`);
+    }
+    for (const f of files.files) {
+      if (typeof f.bytesSha256 !== "string" || f.bytesSha256 === "") {
+        throw new Error(`attachment proof (実バイト列 SHA) が不完全のため停止します: ${label} ${f.name}`);
+      }
+    }
+  };
+  for (const [id, m] of Object.entries(snapshot.masters)) {
+    needPageProof(`master ${id}`, m.body, m.files);
+  }
+  for (const [rowId, e] of Object.entries(snapshot.incoming)) {
+    needPageProof(`incoming ${rowId}`, e.body, e.files);
+  }
+  for (const id of Object.keys(snapshot.supplement)) {
+    const p = snapshot.supplementProof?.[id];
+    needPageProof(`supplement ${id}`, p?.body, p?.files);
+  }
+  // schema proof: 既知のみ + 取得経路の完全会計 (省略なし)。
+  if (!snapshot.incomingSchema || !Array.isArray(snapshot.incomingSchema.hits)) {
+    throw new Error("schema proof が無いため停止します (incomingSchema なし)");
+  }
+  const unknown = guardIncomingSchema(snapshot.incomingSchema.hits);
+  if (unknown.length > 0) {
+    throw new Error(`未知 incoming のため停止します: ${unknown.join(" / ")}`);
+  }
+  const prov = snapshot.incomingSchema.schemaProvenance;
+  if (
+    !prov ||
+    !Number.isInteger(prov.searchSchemaUsed) ||
+    !Number.isInteger(prov.getSchemaUsed) ||
+    prov.searchSchemaUsed + prov.getSchemaUsed !== snapshot.incomingSchema.dbCount
+  ) {
+    throw new Error("schema proof の取得経路が不完全のため停止します (provenance 欠落・不一致)");
+  }
+}
+
 async function runApply(opts: CliOptions): Promise<number> {
   let receipt = loadReceipt(opts.snapshotDir);
   if (receipt.completedAt) {
@@ -2007,7 +2841,9 @@ async function runApply(opts: CliOptions): Promise<number> {
       const loaded = hasSnapshotProgress(receipt)
         ? loadSnapshotForResume(opts.snapshotDir, receipt)
         : loadLatestSnapshot(opts.snapshotDir);
-      receipt = await archiveSnapshot(opts.paceMs, opts.snapshotDir, loaded.file, loaded.snapshot, receipt);
+      requireCompleteSnapshotProof(loaded.snapshot, receipt);
+      await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, loaded.snapshot, state, receipt);
+      receipt = await archiveSnapshotV2(opts.paceMs, opts.snapshotDir, loaded.file, loaded.snapshot, receipt);
       // D1 の遅れ (退避候補指し) だけは直してから再検証する (apply 許可域の書込)。
       receipt = await applyD1Check(opts.snapshotDir, receipt);
       const verifyProblems = await finalVerify(opts.paceMs, loaded.snapshot, receipt);
@@ -2046,6 +2882,8 @@ async function runApply(opts: CliOptions): Promise<number> {
       console.log("中間状態ガード不一致のため書込せず停止します。");
       return 2;
     }
+    requireCompleteSnapshotProof(snapshot, receipt);
+    await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, snapshot, state, receipt);
   } else {
     const { problems } = guardFreshState(state);
     if (problems.length > 0) {
@@ -2058,6 +2896,7 @@ async function runApply(opts: CliOptions): Promise<number> {
     const taken = await takeSnapshot(opts.paceMs, opts.snapshotDir, state);
     snapshot = taken.snapshot;
     snapshotFile = taken.file;
+    requireCompleteSnapshotProof(snapshot, receipt);
   }
   const ops = buildMigrationOps(snapshot);
   console.log(
@@ -2067,7 +2906,7 @@ async function runApply(opts: CliOptions): Promise<number> {
       2
     )
   );
-  receipt = await archiveSnapshot(opts.paceMs, opts.snapshotDir, snapshotFile, snapshot, receipt);
+  receipt = await archiveSnapshotV2(opts.paceMs, opts.snapshotDir, snapshotFile, snapshot, receipt);
   receipt = await applyLifecycle3681(opts.paceMs, opts.snapshotDir, snapshot, receipt);
   receipt = await applyMigrations(opts.paceMs, opts.snapshotDir, snapshot, ops, receipt);
   receipt = await applySupplement7129(opts.paceMs, opts.snapshotDir, snapshot, receipt);

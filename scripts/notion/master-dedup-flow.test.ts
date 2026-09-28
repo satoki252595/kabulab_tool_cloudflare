@@ -11,17 +11,36 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  attachmentDiskName,
+  blockFileRefOf,
+  blockTextOf,
+  buildMigrationOps,
+  classifyIncomingMembership,
+  collectAttachmentInventory,
   expectedArchiveFileNames,
+  extractMasterHits,
   guardIntermediateState,
   isAlreadyAppliedViews,
+  isSearchSchemaUsable,
   loadSnapshotForResume,
+  mapAttachmentArchiveNames,
+  normalizedBlockForDigest,
+  pageFilesRefsOf,
+  pageProofsEqual,
+  queryDbAll,
+  readRelationFull,
+  requireCompleteSnapshotProof,
   saveFreshEvidence,
+  v2SnapshotArchiveName,
   verifyArchiveDownload,
   verifyArchivePage,
   verifyArchivedPage,
   verifyRetirePreimage,
+  type BodyCapture,
+  type FilesCapture,
   type FreshState,
   type NotionPage,
+  type RawBlock,
   type SnapshotDoc,
 } from "./master-dedup-3681-7129.js";
 import {
@@ -46,7 +65,15 @@ vi.mock("../../src/shared/notion-archive/page-file.js", () => ({
   fetchPageFileUrl: vi.fn(),
 }));
 
+vi.mock("../../src/shared/notion-archive/client.js", () => ({
+  notionRequest: vi.fn(),
+  NotionUnknownResultError: class NotionUnknownResultError extends Error {},
+  notionStats: vi.fn(),
+  resetNotionStats: vi.fn(),
+}));
+
 import { listPageFiles } from "../../src/shared/notion-archive/page-file.js";
+import { notionRequest } from "../../src/shared/notion-archive/client.js";
 
 const KEEP_3681 = TARGETS[0].keepId;
 const RETIRE_3681 = TARGETS[0].retireId;
@@ -606,6 +633,500 @@ describe("master-dedup 実 flow 回帰", () => {
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe("requireCompleteSnapshotProof (完全 proof/CAS gate)", () => {
+    function bodyProof(): BodyCapture {
+      return { fullCapture: true, blocks: [], sha256: "b".repeat(64) };
+    }
+    function filesProof(): FilesCapture {
+      return { complete: true, files: [], sha256: "f".repeat(64) };
+    }
+    /** gate の CAS 自己検証を通すため sha を再計算した v2 snapshot。 */
+    function validV2Snapshot(): SnapshotDoc {
+      const s = baseSnapshot(baseViews());
+      s.version = 2;
+      for (const m of Object.values(s.masters)) {
+        m.body = bodyProof();
+        m.files = filesProof();
+      }
+      s.incoming["d0"] = {
+        db: "disclosures",
+        prop: REL_PROP_MASTER,
+        page: pageFromView(baseViews()["3681:retire"]),
+        relationFull: [RETIRE_3681],
+        blockCount: 0,
+        childDatabases: [],
+        body: bodyProof(),
+        files: filesProof(),
+      };
+      s.supplement["supp1"] = pageFromView(baseViews()["7129:keep"]);
+      s.supplementProof = { supp1: { body: bodyProof(), files: filesProof() } };
+      s.incomingSchema = {
+        enumeratedAt: "2026-09-28T00:00:00.000Z",
+        dbCount: 12,
+        hits: knownSchemaHits(),
+        schemaProvenance: { searchSchemaUsed: 12, getSchemaUsed: 0 },
+      };
+      const { sha256: _drop, ...rest } = s;
+      void _drop;
+      s.sha256 = sha256HexUtf8(stableStringify(rest));
+      return s;
+    }
+
+    it("完全 proof の v2 は許可する", () => {
+      expect(() => requireCompleteSnapshotProof(validV2Snapshot(), emptyReceipt())).not.toThrow();
+    });
+
+    it("v1 は proof 不完全として STOP する", () => {
+      const s = validV2Snapshot();
+      s.version = 1;
+      const { sha256: _drop, ...rest } = s;
+      void _drop;
+      s.sha256 = sha256HexUtf8(stableStringify(rest));
+      expect(() => requireCompleteSnapshotProof(s, emptyReceipt())).toThrow(/旧 v1 snapshot/);
+    });
+
+    it("body/files proof の欠落は STOP する", () => {
+      const noBody = validV2Snapshot();
+      delete noBody.masters[KEEP_3681].body;
+      const { sha256: _d1, ...r1 } = noBody;
+      void _d1;
+      noBody.sha256 = sha256HexUtf8(stableStringify(r1));
+      expect(() => requireCompleteSnapshotProof(noBody, emptyReceipt())).toThrow(/body proof が不完全/);
+
+      const noFiles = validV2Snapshot();
+      delete noFiles.incoming["d0"].files;
+      const { sha256: _d2, ...r2 } = noFiles;
+      void _d2;
+      noFiles.sha256 = sha256HexUtf8(stableStringify(r2));
+      expect(() => requireCompleteSnapshotProof(noFiles, emptyReceipt())).toThrow(/attachment proof が不完全/);
+
+      const noSupp = validV2Snapshot();
+      delete noSupp.supplementProof;
+      const { sha256: _d3, ...r3 } = noSupp;
+      void _d3;
+      noSupp.sha256 = sha256HexUtf8(stableStringify(r3));
+      expect(() => requireCompleteSnapshotProof(noSupp, emptyReceipt())).toThrow(/body proof が不完全/);
+    });
+
+    it("実バイト列 SHA の欠落は STOP する", () => {
+      const s = validV2Snapshot();
+      s.masters[KEEP_3681].files = {
+        complete: true,
+        files: [{ where: "Files", name: "a.pdf", origin: "hosted", bytesSha256: "" }],
+        sha256: "f".repeat(64),
+      };
+      const { sha256: _drop, ...rest } = s;
+      void _drop;
+      s.sha256 = sha256HexUtf8(stableStringify(rest));
+      expect(() => requireCompleteSnapshotProof(s, emptyReceipt())).toThrow(/実バイト列 SHA/);
+    });
+
+    it("CAS drift (receipt/snapshot hash 不一致・v1 混在) は STOP する", () => {
+      const s = validV2Snapshot();
+      const drifted = emptyReceipt();
+      drifted.snapshotV2 = {
+        file: "s.json",
+        sha256: "0".repeat(64),
+        archivePageId: "a1",
+        archiveVerifiedAt: "2026-09-28T00:00:00.000Z",
+      };
+      expect(() => requireCompleteSnapshotProof(s, drifted)).toThrow(/CAS drift/);
+
+      const mixed = emptyReceipt();
+      mixed.snapshot = {
+        file: "s.json",
+        sha256: s.sha256,
+        archivePageId: "a1",
+        archiveVerifiedAt: "2026-09-28T00:00:00.000Z",
+      };
+      expect(() => requireCompleteSnapshotProof(s, mixed)).toThrow(/v1 系/);
+    });
+
+    it("未知 incoming・provenance 不完全は STOP する", () => {
+      const unknownHit = validV2Snapshot();
+      unknownHit.incomingSchema = {
+        ...unknownHit.incomingSchema,
+        hits: [...knownSchemaHits(), { dbId: "dx", dbTitle: "新規DB", propName: "銘柄マスタ", relType: "single_property" as const }],
+      };
+      const { sha256: _d1, ...r1 } = unknownHit;
+      void _d1;
+      unknownHit.sha256 = sha256HexUtf8(stableStringify(r1));
+      expect(() => requireCompleteSnapshotProof(unknownHit, emptyReceipt())).toThrow(/未知 incoming/);
+
+      const noProv = validV2Snapshot();
+      delete noProv.incomingSchema.schemaProvenance;
+      const { sha256: _d2, ...r2 } = noProv;
+      void _d2;
+      noProv.sha256 = sha256HexUtf8(stableStringify(r2));
+      expect(() => requireCompleteSnapshotProof(noProv, emptyReceipt())).toThrow(/取得経路が不完全/);
+    });
+  });
+
+  describe("incoming schema 抽出 (search 再利用・省略禁止)", () => {
+    const MASTER = "aa".repeat(16);
+
+    it("完全 schema は usable・不完全は unusable", () => {
+      expect(
+        isSearchSchemaUsable({
+          "銘柄マスタ": { id: "p1", type: "relation", relation: { database_id: MASTER, type: "dual_property" } },
+          "名前": { id: "p2", type: "title" },
+        })
+      ).toBe(true);
+      expect(isSearchSchemaUsable(undefined)).toBe(false);
+      expect(isSearchSchemaUsable({})).toBe(false);
+      expect(isSearchSchemaUsable({ "x": { id: "p1", type: "relation", relation: {} } })).toBe(false);
+      expect(isSearchSchemaUsable({ "x": { id: "", type: "title" } })).toBe(false);
+    });
+
+    it("master 向け relation を抽出し、非向けは無視する", () => {
+      const hits = extractMasterHits(
+        "db1",
+        "④ 開示書類",
+        {
+          "銘柄マスタ": { id: "p1", type: "relation", relation: { database_id: MASTER, type: "dual_property" } },
+          "他": { id: "p2", type: "relation", relation: { database_id: "bb".repeat(16), type: "dual_property" } },
+          "名前": { id: "p3", type: "title" },
+        },
+        MASTER
+      );
+      expect(hits).toEqual([{ dbId: "db1", dbTitle: "④ 開示書類", propName: "銘柄マスタ", relType: "dual_property" }]);
+    });
+
+    it("target 不明の relation は黙殺せず STOP する", () => {
+      expect(() =>
+        extractMasterHits("db1", "怪しいDB", { "r": { id: "p1", type: "relation" } }, MASTER)
+      ).toThrow(/判定不能/);
+    });
+  });
+
+  describe("添付 inventory・保管名 (v2)", () => {
+    it("v2 保管名と disk 名は決定論的", () => {
+      expect(v2SnapshotArchiveName("2026-09-28")).toBe("master-dedup-snapshot-v2-2026-09-28.json");
+      expect(attachmentDiskName("a".repeat(64))).toBe(`attachment-${"a".repeat(64)}.bin`);
+    });
+
+    it("同名同 SHA は畳み、同名異 SHA・base 衝突は STOP する", () => {
+      expect(
+        mapAttachmentArchiveNames(["base.json"], [
+          { name: "a.pdf", bytesSha256: "1".repeat(64) },
+          { name: "a.pdf", bytesSha256: "1".repeat(64) },
+          { name: "b.pdf", bytesSha256: "2".repeat(64) },
+        ])
+      ).toEqual([
+        { archiveName: "a.pdf", sha256: "1".repeat(64) },
+        { archiveName: "b.pdf", sha256: "2".repeat(64) },
+      ]);
+      expect(() =>
+        mapAttachmentArchiveNames(["base.json"], [
+          { name: "a.pdf", bytesSha256: "1".repeat(64) },
+          { name: "a.pdf", bytesSha256: "2".repeat(64) },
+        ])
+      ).toThrow(/同名異 SHA/);
+      expect(() =>
+        mapAttachmentArchiveNames(["a.pdf"], [{ name: "a.pdf", bytesSha256: "1".repeat(64) }])
+      ).toThrow(/衝突/);
+    });
+
+    it("snapshot 全体から添付を集める (props+本文再帰)", () => {
+      const s = baseSnapshot(baseViews());
+      s.masters[KEEP_3681].files = {
+        complete: true,
+        files: [{ where: "Files", name: "p.pdf", origin: "hosted", bytesSha256: "1".repeat(64) }],
+        sha256: "f".repeat(64),
+      };
+      s.masters[KEEP_3681].body = {
+        fullCapture: true,
+        blocks: [
+          {
+            id: "b1",
+            type: "image",
+            hasChildren: false,
+            text: "",
+            raw: { id: "b1", type: "image" },
+            file: { name: "i.png", origin: "hosted", bytesSha256: "2".repeat(64) },
+            digest: "d".repeat(64),
+          },
+        ],
+        sha256: "b".repeat(64),
+      };
+      expect(collectAttachmentInventory(s)).toEqual([
+        { name: "p.pdf", origin: "hosted", bytesSha256: "1".repeat(64) },
+        { name: "i.png", origin: "hosted", bytesSha256: "2".repeat(64) },
+      ]);
+    });
+
+    it("v2 件数の verifyArchivePage (3 以外も検証)", () => {
+      const sha = "a".repeat(64);
+      const page = {
+        id: "archive-v2",
+        created_time: "2026-09-28T00:00:00.000Z",
+        last_edited_time: "2026-09-28T00:00:00.000Z",
+        properties: {
+          Status: { select: { name: "recorded" } },
+          Files: { files: [{ name: "a" }, { name: "b" }, { name: "c" }, { name: "d" }] },
+          Metadata: { rich_text: [{ plain_text: `sha=${sha}` }] },
+        },
+      } as unknown as NotionPage;
+      expect(() => verifyArchivePage(page, sha, 4)).not.toThrow();
+      expect(() => verifyArchivePage(page, sha, 3)).toThrow();
+    });
+  });
+
+  describe("block/files 抽出 (text・ref・digest)", () => {
+    it("rich_text/caption/子 DB title を平文にする", () => {
+      expect(
+        blockTextOf({
+          id: "b1",
+          type: "paragraph",
+          paragraph: { rich_text: [{ plain_text: "あ" }, { plain_text: "い" }] },
+        } as unknown as RawBlock)
+      ).toBe("あい");
+      expect(
+        blockTextOf({
+          id: "b2",
+          type: "child_database",
+          child_database: { title: "株価テクニカル履歴" },
+        } as unknown as RawBlock)
+      ).toBe("株価テクニカル履歴");
+      expect(blockTextOf({ id: "b3", type: "divider", divider: {} } as unknown as RawBlock)).toBe("");
+    });
+
+    it("file 系の参照 (hosted/外部) と URL 欠落 STOP", () => {
+      expect(
+        blockFileRefOf({
+          id: "b1",
+          type: "image",
+          image: { type: "file", name: "i.png", file: { url: "https://signed.invalid/x", expiry_time: "t" } },
+        } as unknown as RawBlock)
+      ).toEqual({ name: "i.png", origin: "hosted", url: "https://signed.invalid/x" });
+      expect(
+        blockFileRefOf({
+          id: "b2",
+          type: "paragraph",
+          paragraph: { rich_text: [] },
+        } as unknown as RawBlock)
+      ).toBeNull();
+      expect(() =>
+        blockFileRefOf({ id: "b3", type: "file", file: { type: "file", file: {} } } as unknown as RawBlock)
+      ).toThrow(/実体 URL が無い/);
+    });
+
+    it("files プロパティの全エントリを抽出し、URL 欠落は STOP する", () => {
+      const page = {
+        id: "p1",
+        properties: {
+          Files: {
+            type: "files",
+            files: [
+              { name: "h.pdf", type: "file", file: { url: "https://signed.invalid/h" } },
+              { name: "e.pdf", type: "external", external: { url: "https://example.invalid/e.pdf" } },
+            ],
+          },
+          名前: { type: "title", title: [] },
+        },
+      } as unknown as NotionPage;
+      expect(pageFilesRefsOf(page)).toEqual([
+        { prop: "Files", name: "h.pdf", origin: "hosted", url: "https://signed.invalid/h" },
+        { prop: "Files", name: "e.pdf", origin: "https://example.invalid/e.pdf", url: "https://example.invalid/e.pdf" },
+      ]);
+      const bad = {
+        id: "p2",
+        properties: { Files: { type: "files", files: [{ name: "x.pdf", type: "file", file: {} }] } },
+      } as unknown as NotionPage;
+      expect(() => pageFilesRefsOf(bad)).toThrow(/実体 URL が無い/);
+    });
+
+    it("digest 正規化は署名 URL だけ除き外部 URL は残す", () => {
+      const block = {
+        id: "b1",
+        type: "image",
+        image: {
+          type: "file",
+          file: { url: "https://signed.invalid/x", expiry_time: "t" },
+          caption: [{ plain_text: "c" }],
+        },
+      } as unknown as RawBlock;
+      const norm = normalizedBlockForDigest(block) as Record<string, Record<string, Record<string, unknown>>>;
+      expect(norm["image"]["file"]).toEqual({});
+      expect(norm["image"]["caption"]).toEqual([{ plain_text: "c" }]);
+    });
+
+    it("正規化は annotations/link/checked の原構造を保持する", () => {
+      const block = {
+        id: "b1",
+        type: "to_do",
+        to_do: {
+          rich_text: [
+            {
+              plain_text: "やる",
+              annotations: { bold: true, italic: false, code: false },
+              text: { content: "やる", link: { url: "https://example.invalid/todo" } },
+            },
+          ],
+          checked: true,
+        },
+      } as unknown as RawBlock;
+      const norm = normalizedBlockForDigest(block) as {
+        to_do: { rich_text: Array<Record<string, unknown>>; checked: boolean };
+      };
+      expect(norm.to_do.checked).toBe(true);
+      expect(norm.to_do.rich_text[0]?.["annotations"]).toEqual({ bold: true, italic: false, code: false });
+      expect(norm.to_do.rich_text[0]?.["text"]).toEqual({
+        content: "やる",
+        link: { url: "https://example.invalid/todo" },
+      });
+    });
+  });
+
+  describe("fresh proof 照合 (更新直前の内容一致)", () => {
+    const snap = {
+      body: { fullCapture: true as const, blocks: [], sha256: "b".repeat(64) },
+      files: { complete: true as const, files: [], sha256: "f".repeat(64) },
+    };
+
+    it("両 SHA 一致で真・いずれか不一致/欠落で偽", () => {
+      expect(pageProofsEqual(snap, { body: snap.body, files: snap.files })).toBe(true);
+      expect(
+        pageProofsEqual(snap, {
+          body: { ...snap.body, sha256: "c".repeat(64) },
+          files: snap.files,
+        })
+      ).toBe(false);
+      expect(
+        pageProofsEqual(snap, {
+          body: snap.body,
+          files: { ...snap.files, sha256: "d".repeat(64) },
+        })
+      ).toBe(false);
+      expect(pageProofsEqual({ body: undefined, files: snap.files }, { body: snap.body, files: snap.files })).toBe(false);
+    });
+
+    it("退避原像は proofs 付きで内容一致を要求する", () => {
+      const snapProps = { "上場状態": { type: "checkbox", checkbox: true } };
+      const base = {
+        retireId: RETIRE_3681,
+        snapProps,
+        snapBlockCount: 0,
+        snapChildDbs: [] as string[],
+        freshProps: { ...snapProps },
+        freshBlockCount: 0,
+        freshChildDbs: [] as string[],
+      };
+      expect(() =>
+        verifyRetirePreimage({ ...base, proofs: { snapBody: snap.body, snapFiles: snap.files, freshBody: snap.body, freshFiles: snap.files } })
+      ).not.toThrow();
+      expect(() =>
+        verifyRetirePreimage({
+          ...base,
+          proofs: {
+            snapBody: snap.body,
+            snapFiles: snap.files,
+            freshBody: { ...snap.body, sha256: "c".repeat(64) },
+            freshFiles: snap.files,
+          },
+        })
+      ).toThrow(/本文・添付が変化/);
+    });
+  });
+
+  describe("FWD-only 剥離の no-op evidence (membership)", () => {
+    it("linked・FWD 剥離 evidence・reverse 欠落 STOP を判定する", () => {
+      expect(classifyIncomingMembership("reverse", true, "d0")).toBe("linked");
+      expect(classifyIncomingMembership("fwd", true, "r0")).toBe("linked");
+      expect(classifyIncomingMembership("fwd", false, "r1")).toBe("detached-fwd-evidence");
+      expect(() => classifyIncomingMembership("reverse", false, "d9")).toThrow(/対応退避 ID がありません/);
+    });
+
+    it("剥離 FWD 行は snapshot に保持し ops から除外する", () => {
+      const views = baseViews();
+      const s = baseSnapshot(views);
+      s.incoming["d0"] = {
+        db: "disclosures",
+        prop: REL_PROP_MASTER,
+        page: pageFromView(views["3681:retire"]),
+        relationFull: [RETIRE_3681],
+        blockCount: 0,
+        childDatabases: [],
+      };
+      s.incoming["r-detached"] = {
+        db: "raw_files",
+        prop: "関連銘柄マスタ",
+        page: pageFromView(views["3681:retire"]),
+        relationFull: ["ff".repeat(16)],
+        blockCount: 0,
+        childDatabases: [],
+      };
+      const ops = buildMigrationOps(s);
+      expect(ops.map((o) => o.rowPageId)).toEqual(["d0"]);
+      // snapshot 自体は剥離行を証拠として保持する。
+      expect(Object.keys(s.incoming).sort()).toEqual(["d0", "r-detached"]);
+    });
+
+    it("incoming entry の CAS negative (改竄・再 hash なし) は gate が STOP する", () => {
+      const s = baseSnapshot(baseViews());
+      s.version = 2;
+      for (const m of Object.values(s.masters)) {
+        m.body = { fullCapture: true, blocks: [], sha256: "b".repeat(64) };
+        m.files = { complete: true, files: [], sha256: "f".repeat(64) };
+      }
+      s.incoming["d0"] = {
+        db: "disclosures",
+        prop: REL_PROP_MASTER,
+        page: pageFromView(baseViews()["3681:retire"]),
+        relationFull: [RETIRE_3681],
+        blockCount: 0,
+        childDatabases: [],
+        body: { fullCapture: true, blocks: [], sha256: "b".repeat(64) },
+        files: { complete: true, files: [], sha256: "f".repeat(64) },
+      };
+      s.supplementProof = {};
+      s.incomingSchema = {
+        enumeratedAt: "2026-09-28T00:00:00.000Z",
+        dbCount: 12,
+        hits: knownSchemaHits(),
+        schemaProvenance: { searchSchemaUsed: 12, getSchemaUsed: 0 },
+      };
+      const { sha256: _drop, ...rest } = s;
+      void _drop;
+      s.sha256 = sha256HexUtf8(stableStringify(rest));
+      // entry 改竄 (再 hash なし) → CAS 自己検証で STOP。
+      s.incoming["d0"].files = {
+        complete: true,
+        files: [{ where: "Files", name: "x.pdf", origin: "hosted", bytesSha256: "9".repeat(64) }],
+        sha256: "f".repeat(64),
+      };
+      expect(() => requireCompleteSnapshotProof(s, emptyReceipt())).toThrow(/CAS 自己検証/);
+    });
+  });
+
+  describe("ページ送りの has_more/cursor 欠落は STOP する", () => {
+    beforeEach(() => {
+      vi.mocked(notionRequest).mockReset();
+    });
+
+    it("queryDbAll は has_more なのに cursor なしで STOP する", async () => {
+      vi.mocked(notionRequest).mockResolvedValueOnce({ results: [], has_more: true, next_cursor: null });
+      await expect(queryDbAll(0, "db1", {})).rejects.toThrow(/next_cursor なし/);
+    });
+
+    it("queryDbAll の正常ページ送りは全件返す (誤 STOP しない)", async () => {
+      vi.mocked(notionRequest)
+        .mockResolvedValueOnce({ results: [{ id: "r1" }], has_more: true, next_cursor: "c1" })
+        .mockResolvedValueOnce({ results: [{ id: "r2" }], has_more: false, next_cursor: null });
+      const out = await queryDbAll(0, "db1", {});
+      expect(out.map((r) => (r as unknown as { id: string }).id)).toEqual(["r1", "r2"]);
+    });
+
+    it("readRelationFull は has_more なのに cursor なしで STOP する", async () => {
+      const page = {
+        id: "p1",
+        properties: { rel: { type: "relation", id: "prop-1", relation: [], has_more: true } },
+      } as unknown as NotionPage;
+      vi.mocked(notionRequest).mockResolvedValueOnce({ results: [], has_more: true, next_cursor: null });
+      await expect(readRelationFull(0, "p1", page, "rel")).rejects.toThrow(/next_cursor なし/);
     });
   });
 });

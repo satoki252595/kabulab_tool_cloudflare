@@ -73,6 +73,12 @@ export const TARGETS: MasterTarget[] = [
 export const ARCHIVE_SERVICE = "master-dedup-102";
 /** 確定 snapshot の冪等キー (recordPrimaryData の key)。 */
 export const SNAPSHOT_KEY = "master-dedup-3681-7129/snapshot/v1";
+/**
+ * 完全 proof 版 snapshot (v2。本文全 capture + 添付 inventory + physical 添付)
+ * の冪等キー。v1 レコードは不変のまま残し、v2 は別レコードとして保存する
+ * (v1 の skipped_existing を new full proof として採用しない)。
+ */
+export const SNAPSHOT_KEY_V2 = "master-dedup-3681-7129/snapshot/v2";
 
 /**
  * relation プロパティ名。pipeline の `notion/schema.py` 定数
@@ -345,6 +351,8 @@ export function guardSupplement(v: SupplementView): string[] {
 // ---------------------------------------------------------------------------
 
 export type IncomingDb = "financials" | "disclosures" | "raw_files";
+/** incoming 候補の発見由来。同一行の重複は reverse 優先。 */
+export type IncomingOrigin = "reverse" | "fwd";
 
 export interface MigrationOp {
   rowPageId: string;
@@ -498,6 +506,23 @@ export interface DedupReceipt {
   };
   /** snapshot 非冪等 create の発行マーカー (helper 呼出前に atomic 保存)。 */
   snapshotIssued?: { key: string; snapshotHash: string; issuedAt: string };
+  /**
+   * v2 snapshot の保管記録 (v1 `snapshot` とは別枠。混在したら gate が停止)。
+   * attachmentShas は保管レコードの添付名 → 実バイト列 SHA。
+   */
+  snapshotV2?: {
+    file: string;
+    sha256: string;
+    archivePageId: string;
+    archiveVerifiedAt: string;
+    snapshotBytesSha256?: string;
+    zipSha256?: string;
+    htmlSha256?: string;
+    attachmentShas?: Record<string, string>;
+    fileNames?: string[];
+  };
+  /** v2 snapshot 非冪等 create の発行マーカー (v1 marker とは別枠)。 */
+  snapshotV2Issued?: { key: string; snapshotHash: string; issuedAt: string };
   lifecycle3681?: { patchedAt: string; verifiedAt: string };
   migrated: Record<
     string,
@@ -540,6 +565,8 @@ export function hasSnapshotProgress(receipt: DedupReceipt): boolean {
   return (
     receipt.snapshot !== undefined ||
     receipt.snapshotIssued !== undefined ||
+    receipt.snapshotV2 !== undefined ||
+    receipt.snapshotV2Issued !== undefined ||
     receipt.lifecycle3681 !== undefined ||
     Object.keys(receipt.migrated).length > 0 ||
     receipt.supplement7129 !== undefined ||
@@ -565,6 +592,13 @@ export interface IncomingSchemaEvidence {
   enumeratedAt: string;
   dbCount: number;
   hits: IncomingSchemaHit[];
+  /**
+   * schema の取得経路の内訳 (search 応答の schema 再利用 + 不足分のみ GET)。
+   * 旧証拠には無いため optional。v2 snapshot では必須とし、
+   * searchSchemaUsed + getSchemaUsed === dbCount を gate が要求する
+   * (schema の省略を許さない)。
+   */
+  schemaProvenance?: { searchSchemaUsed: number; getSchemaUsed: number };
 }
 
 /**
@@ -667,6 +701,52 @@ export function verifyIntermediateUnion(args: {
  */
 export type MigrationDecision = "skip" | "patch" | "repatch" | "recover" | "stop";
 
+/**
+ * relation 実配列の一致 (正規化 ID の順序つき比較。既存判定と同一意味)。
+ * 順序まで含めるのは decideMigrationAction と同じ契約 (preview/walk の
+ * 決定論的順序を前提にする)。
+ */
+export function relationArraysEqual(a: string[], b: string[]): boolean {
+  return JSON.stringify(a.map(normalizePageId)) === JSON.stringify(b.map(normalizePageId));
+}
+
+/**
+ * entry 照合の incoming relation CAS (純粋判定。空=合格)。
+ * - noop 行 (ops 対象外): target relation 実配列が snapshot と完全一致。
+ * - linked 行: fresh が original-before または expected-after のどちらか
+ *   (receipt に沿う。意図済みの target relation 差だけ許容)。
+ * - receipt.migrated がある行は receipt の before/after が op と一致すること
+ *   (別 snapshot 由来の stale 記録の混入を止める)。
+ */
+export function incomingRelationProblems(args: {
+  rowPageId: string;
+  snapRelationFull: string[];
+  freshFull: string[];
+  op: { before: string[]; after: string[] } | undefined;
+  recorded: { before: string[]; after: string[] } | undefined;
+}): string[] {
+  if (!args.op) {
+    if (!relationArraysEqual(args.freshFull, args.snapRelationFull)) {
+      return [`incoming ${args.rowPageId} の relation が snapshot と不一致です (noop 行は不変のはず)`];
+    }
+    return [];
+  }
+  if (
+    !relationArraysEqual(args.freshFull, args.op.before) &&
+    !relationArraysEqual(args.freshFull, args.op.after)
+  ) {
+    return [`incoming ${args.rowPageId} の relation が before/after のどちらでもありません (同時変更の疑い)`];
+  }
+  if (
+    args.recorded &&
+    (!relationArraysEqual(args.recorded.before, args.op.before) ||
+      !relationArraysEqual(args.recorded.after, args.op.after))
+  ) {
+    return [`incoming ${args.rowPageId} の receipt が op と不一致です (stale 記録の疑い)`];
+  }
+  return [];
+}
+
 export function decideMigrationAction(args: {
   recorded: { before: string[]; after: string[] } | undefined;
   opBefore: string[];
@@ -674,8 +754,7 @@ export function decideMigrationAction(args: {
   freshFull: string[];
   nonTargetUnchanged: boolean;
 }): MigrationDecision {
-  const eq = (a: string[], b: string[]) =>
-    JSON.stringify(a.map(normalizePageId)) === JSON.stringify(b.map(normalizePageId));
+  const eq = relationArraysEqual;
   if (args.recorded) {
     if (eq(args.freshFull, args.recorded.after) && args.nonTargetUnchanged) return "skip";
     if (eq(args.freshFull, args.recorded.before) && args.nonTargetUnchanged) return "repatch";
