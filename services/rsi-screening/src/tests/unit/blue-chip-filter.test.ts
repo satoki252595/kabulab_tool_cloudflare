@@ -240,4 +240,17 @@ describe("evaluateBlueChip: 年次比較の可否ガード", () => {
     expect(result.revenueTrend).toBeNull();
     expect(result.isBlueChip).toBe(false);
   });
+
+  // 2 月末決算の通常系列はうるう年跨ぎで月日がずれる (02-28→02-29→02-28)。
+  // 暦年 +1・同月・両端とも実暦の月末なら年次連続として比較する。
+  it("2月末の年次系列はうるう年を挟んでも比較する (02-28→02-29→02-28)", () => {
+    const financials: AnnualFinancial[] = [
+      { fiscalYear: 2023, fiscalPeriodEnd: "2023-02-28", consolidated: "連結", revenue: 100 },
+      { fiscalYear: 2024, fiscalPeriodEnd: "2024-02-29", consolidated: "連結", revenue: 115 },
+      { fiscalYear: 2025, fiscalPeriodEnd: "2025-02-28", consolidated: "連結", revenue: 130 },
+    ];
+    const result = evaluateBlueChip(financials, 0.12);
+    expect(result.revenueTrend).toBe(1);
+    expect(result.isBlueChip).toBe(true);
+  });
 });

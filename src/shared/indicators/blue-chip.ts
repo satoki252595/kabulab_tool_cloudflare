@@ -126,10 +126,29 @@ export function hasDefinitionBreak(values: (number | null)[]): boolean {
 }
 
 /**
- * 2 つの実績期末が「年次の連続」か。暦年がちょうど +1 かつ月日が同一の
- * ときだけ真。欠年 (FY2022→FY2024)・決算期変更の端数期 (03-31→12-31)・
- * 移行に伴う月日のずれはここで弾く。期首/期間を持たない現状では
- * 同一月日の連続でも各期の正確な長さを証明できない (上場年初年度の
+ * 'YYYY-MM-DD' が実暦の月末日か。標準 Date で当月末日を算出して比較する
+ * (うるう年の 02-29 は月末、平年の 02-29 のような非実在日は偽)。
+ * 形式チェックは呼び出し側で行う。
+ */
+function isCalendarMonthEnd(date: string): boolean {
+  const month = Number(date.slice(5, 7));
+  const day = Number(date.slice(8, 10));
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const lastDay = new Date(
+    Date.UTC(Number(date.slice(0, 4)), month, 0)
+  ).getUTCDate();
+  return day === lastDay;
+}
+
+/**
+ * 2 つの実績期末が「年次の連続」か。暦年がちょうど +1 かつ
+ * (a) 月日が同一、または (b) 同月かつ両端が実暦の月末、のときだけ真。
+ * (b) は 2 月末決算のうるう年跨ぎ (2023-02-28→2024-02-29→2025-02-28)
+ * を通常の年次系列として比較するためのもので、月末は標準 Date で
+ * 実暦から算出する。うるう年も 02-28 で固定する系列は (a) で従来どおり真。
+ * 欠年 (FY2022→FY2024)・決算期変更の端数期 (03-31→12-31)・
+ * 同年内の短い端数期はここで弾く。期首/期間を持たない現状では
+ * 連続に見える 3 期でも各期の正確な長さを証明できない (上場年初年度の
  * 短い第 1 期など) が、推測で弾くことはせず残件として docs に明記する。
  * 形式が 'YYYY-MM-DD' でない入力は投げずに偽 (判定不能に倒すだけ)。
  */
@@ -137,10 +156,12 @@ function isNextAnnualEnd(prev: string, curr: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(prev) || !/^\d{4}-\d{2}-\d{2}$/.test(curr)) {
     return false;
   }
-  return (
-    Number(curr.slice(0, 4)) === Number(prev.slice(0, 4)) + 1 &&
-    curr.slice(5) === prev.slice(5)
-  );
+  if (Number(curr.slice(0, 4)) !== Number(prev.slice(0, 4)) + 1) {
+    return false;
+  }
+  if (curr.slice(5) === prev.slice(5)) return true;
+  if (curr.slice(5, 7) !== prev.slice(5, 7)) return false;
+  return isCalendarMonthEnd(prev) && isCalendarMonthEnd(curr);
 }
 
 /**
