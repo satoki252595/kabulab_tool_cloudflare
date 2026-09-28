@@ -27,7 +27,8 @@ export interface BlueChipEvaluation {
   /**
    * 売上高トレンド: +1=上昇 / 0=横ばい / -1=下降 / null=判定不能
    *
-   * null は「3 期分のデータが無い」だけでなく「連結/単体の混在で判定できない」も含む。
+   * null は「3 期分のデータが無い」だけでなく「連結/単体の混在で判定できない」、
+   * 「年欠落・決算期変更・不明区分・未取得で年次比較できない」も含む。
    */
   revenueTrend: number | null;
 }
@@ -125,10 +126,79 @@ export function hasDefinitionBreak(values: (number | null)[]): boolean {
 }
 
 /**
+ * 'YYYY-MM-DD' が実暦の月末日か。標準 Date で当月末日を算出して比較する
+ * (うるう年の 02-29 は月末、平年の 02-29 のような非実在日は偽)。
+ * 形式チェックは呼び出し側で行う。
+ */
+function isCalendarMonthEnd(date: string): boolean {
+  const month = Number(date.slice(5, 7));
+  const day = Number(date.slice(8, 10));
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const lastDay = new Date(
+    Date.UTC(Number(date.slice(0, 4)), month, 0)
+  ).getUTCDate();
+  return day === lastDay;
+}
+
+/**
+ * 2 つの実績期末が「年次の連続」か。暦年がちょうど +1 かつ
+ * (a) 月日が同一、または (b) 同月かつ両端が実暦の月末、のときだけ真。
+ * (b) は 2 月末決算のうるう年跨ぎ (2023-02-28→2024-02-29→2025-02-28)
+ * を通常の年次系列として比較するためのもので、月末は標準 Date で
+ * 実暦から算出する。うるう年も 02-28 で固定する系列は (a) で従来どおり真。
+ * 欠年 (FY2022→FY2024)・決算期変更の端数期 (03-31→12-31)・
+ * 同年内の短い端数期はここで弾く。期首/期間を持たない現状では
+ * 連続に見える 3 期でも各期の正確な長さを証明できない (上場年初年度の
+ * 短い第 1 期など) が、推測で弾くことはせず残件として docs に明記する。
+ * 形式が 'YYYY-MM-DD' でない入力は投げずに偽 (判定不能に倒すだけ)。
+ */
+function isNextAnnualEnd(prev: string, curr: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(prev) || !/^\d{4}-\d{2}-\d{2}$/.test(curr)) {
+    return false;
+  }
+  if (Number(curr.slice(0, 4)) !== Number(prev.slice(0, 4)) + 1) {
+    return false;
+  }
+  if (curr.slice(5) === prev.slice(5)) return true;
+  if (curr.slice(5, 7) !== prev.slice(5, 7)) return false;
+  return isCalendarMonthEnd(prev) && isCalendarMonthEnd(curr);
+}
+
+/**
+ * 判定窓の 3 期が年次比較できる並びか。
+ *
+ * 1. 3 期とも売上が確定値 (null・非有限は比較できない)
+ * 2. 連結区分が既知 (連結/単体) かつ 3 期同一。'不明' は区分を保証できず、
+ *    混在・欠落も比較できない
+ * 3. 実績期末が年次で連続 (暦年 +1 かつ同月日)。実績期末を持たない入力
+ *    (旧 Yahoo 年次) は連続を証明できないので比較しない
+ *
+ * 偽のとき呼び出し側は年率化・穴埋め・他データでの代替をせず、
+ * revenueTrend を null (判定不能) に倒す。無い期の行は作らない。
+ */
+function isComparableAnnualWindow(window: AnnualFinancial[]): boolean {
+  for (const f of window) {
+    if (f.revenue === null || !Number.isFinite(f.revenue)) return false;
+  }
+  const [first, second, third] = window.map((f) => f.consolidated);
+  if (first !== "連結" && first !== "単体") return false;
+  if (second !== first || third !== first) return false;
+  const [prev2, prev1, latest] = window.map((f) => f.fiscalPeriodEnd);
+  if (prev2 === undefined || prev1 === undefined || latest === undefined) {
+    return false;
+  }
+  return isNextAnnualEnd(prev2, prev1) && isNextAnnualEnd(prev1, latest);
+}
+
+/**
  * 優良株判定
  *
+ * 判定窓は直近 3 期。`isComparableAnnualWindow` を通った並びだけを
+ * 数値比較し、通らない並びは revenueTrend を null (判定不能) に倒す。
+ * FY2022/FY2024/FY2026 のような飛び年は 3 年連続ではない。
+ *
  * @param annualFinancials - 年度財務 (古い→新しい順)
- * @param operatingMarginTtm - TTM 営業利益率
+ * @param operatingMarginTtm - TTM 営業利益率 (Yahoo TTM の定義のまま)
  */
 export function evaluateBlueChip(
   annualFinancials: AnnualFinancial[],
@@ -137,6 +207,10 @@ export function evaluateBlueChip(
   const recent = annualFinancials.slice(-3);
 
   if (recent.length < 3) {
+    return { isBlueChip: false, operatingMarginTtm, revenueTrend: null };
+  }
+
+  if (!isComparableAnnualWindow(recent)) {
     return { isBlueChip: false, operatingMarginTtm, revenueTrend: null };
   }
 

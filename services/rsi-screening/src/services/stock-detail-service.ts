@@ -1,10 +1,15 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import {
   stocks,
   stockFinancials,
-  stockAnnualFinancials,
 } from "../../../../src/shared/db/core-schema.js";
+import {
+  jssFinancials,
+  pickAnnualSeries,
+  PUBLISHABLE_LICENSE_TAG,
+  type AnnualSeriesPoint,
+} from "../../../../src/shared/db/jss-financials.js";
 import { stockRsiPercentile } from "../db/schema.js";
 import {
   publicMarketColumn,
@@ -53,10 +58,18 @@ export interface StockDetail {
     /** パーセンタイルの算出時刻 (鮮度) */
     computedAt: Date;
   } | null;
-  annualFinancials: Array<{
-    fiscalYear: number;
-    revenue: number | null;
-  }>;
+  /**
+   * 年度売上系列 (古い→新しい順)。正本 `jss_financials` の本決算実績。
+   * 選定は共有 gate (`pickAnnualSeries`) が行う: 公開可 (commercial-ok) のみ、
+   * 最新期の連結区分に単一化、未来期のみ除外。短期決算の推測除外はせず、
+   * 決算期変更の端数期も欠損 (null・年欠落) と同じく原文のまま保持する。
+   */
+  annualFinancials: AnnualSeriesPoint[];
+}
+
+/** 基準日 (UTC 当日 'YYYY-MM-DD')。未来期の除外に使う */
+function todayUtc(): string {
+  return new Date().toISOString().split("T")[0];
 }
 
 /**
@@ -64,9 +77,14 @@ export interface StockDetail {
  *
  * @param db - Drizzleクライアント
  * @param code - 銘柄コード
+ * @param asOf - 基準日 'YYYY-MM-DD' (既定は UTC 当日。未来期の除外境界)
  * @returns 銘柄詳細。存在しない場合はnull
  */
-export async function getStockDetail(db: Database, code: string): Promise<StockDetail | null> {
+export async function getStockDetail(
+  db: Database,
+  code: string,
+  asOf: string = todayUtc()
+): Promise<StockDetail | null> {
   // 列を明示する。`select()` (列指定なし) は core_stocks の全列 = `personal-only` の
   // sector33 / instrument_type / license_tag / src_source / quality まで
   // 公開面のプロセスへ載せてしまう。sector33 は stockStock の master_sync が
@@ -99,11 +117,29 @@ export async function getStockDetail(db: Database, code: string): Promise<StockD
       .from(stockRsiPercentile)
       .where(eq(stockRsiPercentile.stockId, stockRow.id))
       .limit(1),
+    // 年度売上は正本 `jss_financials` の本決算実績から読む。旧
+    // `core_stock_annual_financials` (Yahoo 派生・連結/単体混在・暦年丸め) は
+    // 001 の表示ではもう読まない (writer は外部 consumer が残るので維持)。
+    // 四半期 (1Q/2Q/中間/3Q)・修正・予想は年度実績に混ぜない。
+    // 公開可 (commercial-ok。EDINET) の行だけを SQL で絞る。TDnet 短信由来
+    // (factual-cite) を公開面に出さない — 来歴列を select しないだけでは
+    // 公開制限にならないので WHERE で落とす。
     db
-      .select()
-      .from(stockAnnualFinancials)
-      .where(eq(stockAnnualFinancials.stockId, stockRow.id))
-      .orderBy(asc(stockAnnualFinancials.fiscalYear)),
+      .select({
+        fiscalPeriodEnd: jssFinancials.fiscalPeriodEnd,
+        consolidated: jssFinancials.consolidated,
+        revenue: jssFinancials.netSales,
+      })
+      .from(jssFinancials)
+      .where(
+        and(
+          eq(jssFinancials.code, stockRow.code),
+          eq(jssFinancials.disclosureType, "本決算"),
+          eq(jssFinancials.licenseTag, PUBLISHABLE_LICENSE_TAG)
+        )
+      )
+      // fiscal_period_end は 'YYYY-MM-DD' 固定なので TEXT 順 = 時系列順。
+      .orderBy(asc(jssFinancials.fiscalPeriodEnd)),
   ]);
 
   const fin = financialsRow[0];
@@ -145,9 +181,6 @@ export async function getStockDetail(db: Database, code: string): Promise<StockD
           computedAt: pct.computedAt,
         }
       : null,
-    annualFinancials: annualRows.map((r) => ({
-      fiscalYear: r.fiscalYear,
-      revenue: r.revenue,
-    })),
+    annualFinancials: pickAnnualSeries(annualRows, asOf),
   };
 }

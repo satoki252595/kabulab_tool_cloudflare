@@ -39,7 +39,7 @@ function fmtMarketCap(n: number | null | undefined): string {
  * (ツールチップ文と部分一致してしまわないよう、独立した一文にしてある)。
  */
 export const ANNUAL_BREAK_NOTE =
-  "※ この系列には前年比 2 倍超の段差があります。取得元 (Yahoo) が連結売上と親会社単体の売上高を期ごとに混在させるため、年度間の増減は企業の成長を表していません。";
+  "※ この系列には前年比 2 倍超の段差があります。年度間の増減は企業の成長を表していない可能性があります。";
 
 function trendLabel(t: number | null): { label: string; cls: string } {
   if (t === 1) return { label: "上昇基調", cls: "trend-up" };
@@ -195,6 +195,7 @@ export function stockDetailPage(props: {
       (f) => `
         <tr>
           <td>${h(String(f.fiscalYear))}</td>
+          <td>${h(f.fiscalPeriodEnd)}</td>
           <td class="num">${fmtMarketCap(f.revenue)}</td>
         </tr>`
     )
@@ -217,12 +218,14 @@ export function stockDetailPage(props: {
     ? `<p style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);margin-top:10px;line-height:1.6">${ANNUAL_BREAK_NOTE}</p>`
     : "";
 
+  // 系列内の連結区分は単一 (stock-detail-service が揃えている) なので、
+  // 見出しに 1 回だけ出す。連結か単体かを隠すと、読者は何を見ているか分からない。
   const annualTable =
     detail.annualFinancials.length > 0
       ? `<table>
           <thead>
             <tr>
-              <th>年度</th><th class="num">売上高</th>
+              <th>年度</th><th>期末</th><th class="num">売上高（${h(detail.annualFinancials[0].consolidated)}）</th>
             </tr>
           </thead>
           <tbody>${annualRows}</tbody>
