@@ -111,6 +111,25 @@ describe("isLotteryPrizeAmount (抽選賞品の機械判定)", () => {
     const desc = "※抽選で20名に商品を提供。\n◇契約の際に50万円相当の商品券を贈呈。";
     expect(isLotteryPrizeAmount(desc, 500000)).toBe(false);
   });
+
+  it("R1 は文境界を跨がない (別文の固定分+抽選は弾かない)", () => {
+    // gap「。抽選で」= 5 文字。文境界カット前は誤って弾く形
+    expect(isLotteryPrizeAmount("架空ギフト1,000円相当。抽選で5名に旅行券", 1000)).toBe(false);
+    expect(isLotteryPrizeAmount("架空ギフト1,000円相当\n抽選で5名に旅行券", 1000)).toBe(false);
+  });
+
+  it("R1 は同一文内の隣接を弾く (純抽選の実形 4 行の形)", () => {
+    // 賞品表「金額:人数」+ 別文の抽選 (実命中 2 行の形)
+    expect(isLotteryPrizeAmount("80,000円相当:40名。抽選で付与", 80000)).toBe(true);
+    // 当選配布 (実命中 1 行の形)
+    expect(isLotteryPrizeAmount("抽選で8名に15万円相当", 150000)).toBe(true);
+  });
+
+  it("別文の当選人数つき賞品は対象外と固定する (機械判定の既知の見逃し)", () => {
+    // 純抽選だが金額と当選人数が別文。文境界カットで通す側に倒れる。
+    // 離隔抽選 (7578/7791 型) と同じく生成仕様 + 人手確認の対象。
+    expect(isLotteryPrizeAmount("賞品は8万円相当。30名に抽選で贈呈", 80000)).toBe(false);
+  });
 });
 
 describe("sanitizeEstimatedValue (抽選賞品の統合)", () => {

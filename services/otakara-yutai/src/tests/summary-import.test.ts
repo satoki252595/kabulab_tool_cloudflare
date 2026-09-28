@@ -298,6 +298,19 @@ describe("planSummaryImport", () => {
     expect(p2.updates).toHaveLength(1);
   });
 
+  it("要約の % の数値が掲載文と違えばはじく (単位つき数値の一致)", () => {
+    // 掲載文 10% に対する 20% の要約。% の有無だけでは通ってしまう形
+    const discount = "系列店で使える10%割引券 2枚。";
+    const rows = [row({ id: 66, stockCode: "9997", description: discount, shortSummary: null })];
+    const kd = keyOf("9997", discount);
+    const p = planSummaryImport({
+      tasks: selectSummaryTasks(rows),
+      resultsText: result({ taskId: kd, shortSummary: "系列店の20%割引券 2枚", estimatedValue: null }),
+      currentRows: rows,
+    });
+    expect(p.rejections.map((r) => r.reason)).toEqual(["summary_ungrounded"]);
+  });
+
   it("掲載文の 40 字以上の逐語コピーははじく", () => {
     const sentence = "架空テーマパークの一日入場券と園内レストランで使える食事券のセット、年に二回まで家族全員で利用可能";
     expect(sentence.length).toBeGreaterThanOrEqual(40);

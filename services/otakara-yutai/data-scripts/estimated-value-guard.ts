@@ -133,8 +133,15 @@ export const HIGH_VALUE_THRESHOLD = 50000;
 /**
  * 当選人数トークンと金額表現の隣接 window (文字数)。抽選賞品の判定に使う。
  * 固定値で、確率も閾値調整もない (販促ポイント除外の「直後 6 文字」と同じ流儀)。
+ * 文境界 (。、改行) を跨ぐ隣接は数えない — 固定分と抽選の別文併記
+ * (「ギフト1,000円相当。抽選で5名に旅行券」) を誤って弾かないため。
+ * 純抽選の実命中 4 行の金額↔人数は同一文内 (gap「相当:」「に」) なので、
+ * 文境界で切っても取り逃がさない (2026-09-28 全 5,331 行で確認)。
  */
 export const LOTTERY_ADJACENCY_CHARS = 8;
+
+/** R1 の隣接 window を区切る文境界。読点 (、) は同一文として扱う。 */
+const LOTTERY_SENTENCE_END = /[。．！？!?\n]/;
 
 /**
  * 値が抽選賞品の金額か (仕様書 §6「寄付・社会貢献・抽選」→ null の機械判定)。
@@ -150,11 +157,11 @@ export const LOTTERY_ADJACENCY_CHARS = 8;
  *
  * 「抽選」は文を区切らず全文で見る。賞品表と抽選記述が別文の純抽選
  * (「80,000円相当:40名 … 抽選で付与」) が実在するため、同一文縛りにすると
- * 取り逃がす。逆に金額と当選人数の隣接は緩めない: 離れた抽選記述だけで弾くと
- * 固定分との併記 (「ギフト1,000円相当。抽選で旅行券」) を誤って落とす。
- * window を文境界で切らないのも同じ理由 (純抽選の取り逃がしより、
- * 人手再確認つきの却下の方が害が小さい)。2026-09-28 時点の全 5,331 行で
- * 検証し、的中は真の純抽選 4 行のみ・誤検出 0。
+ * 取り逃がす。逆に金額と当選人数の隣接は同一文内に限る: 文境界を跨いで弾くと
+ * 固定分との別文併記 (「ギフト1,000円相当。抽選で5名に旅行券」。gap「。抽選で」
+ * = 5 文字) を誤って落とす。純抽選の実命中 4 行の金額↔人数は同一文内なので
+ * 取り逃がさない。2026-09-28 時点の全 5,331 行で検証し、的中は真の純抽選
+ * 4 行のみ・誤検出 0 (文境界カット後も同一の 4 行)。
  *
  * 除外 (固定分との併記を誤って弾かないため):
  *   - 「各株主」配下の人数 (株主持分ごとの付与 = 固定)。「1名義」「名前」の
@@ -212,13 +219,15 @@ export function isLotteryPrizeAmount(descRaw: string, value: number): boolean {
     }
   }
 
-  // R1: 値と一致する金額表現に当選人数が隣接する
+  // R1: 値と一致する金額表現に当選人数が同一文内で隣接する
   const spans = extractYenSpans(descRaw);
   for (const s of spans) {
     if (!near(value, s.value)) continue;
     for (const w of winnerSpans) {
-      const gap = w.index >= s.end ? w.index - s.end : s.index - w.end;
-      if (gap >= 0 && gap <= LOTTERY_ADJACENCY_CHARS) return true;
+      const gapStr = w.index >= s.end ? desc.slice(s.end, w.index) : desc.slice(w.end, s.index);
+      if (gapStr.length <= LOTTERY_ADJACENCY_CHARS && !LOTTERY_SENTENCE_END.test(gapStr)) {
+        return true;
+      }
     }
   }
   return false;
