@@ -16,6 +16,7 @@ import { SUMMARY_CONTRACT_VERSION } from "../../data-scripts/summary-contract.js
 import {
   MAX_IDS_PER_UPDATE,
   applySummaryImport,
+  buildDescriptionUpdateStatements,
   formatPlanReport,
   planSummaryImport,
   type SummaryWriter,
@@ -485,6 +486,28 @@ describe("applySummaryImport", () => {
     const update = vi.fn<SummaryWriter["update"]>().mockResolvedValue(undefined);
     await applySummaryImport(bigPlan, { update }, { apply: true });
     expect(update.mock.calls.map((c) => c[0].length)).toEqual([MAX_IDS_PER_UPDATE, MAX_IDS_PER_UPDATE, 1]);
+  });
+});
+
+describe("buildDescriptionUpdateStatements (全文修復の description 書き換え)", () => {
+  it("1 行 1 文で旧文と更新時刻を CAS する (IN 束めしない)", () => {
+    const stmts = buildDescriptionUpdateStatements(
+      [
+        { id: 11, oldDescription: "旧文A", updatedAt: 100 },
+        { id: 12, oldDescription: "旧文B", updatedAt: 200 },
+      ],
+      "新全文"
+    );
+    expect(stmts).toHaveLength(2);
+    expect(stmts[0].sql).toBe(
+      "UPDATE yutai_benefits SET description = ?, updated_at = (unixepoch()) WHERE id = ? AND description = ? AND updated_at = ?"
+    );
+    expect(stmts[0].params).toEqual(["新全文", 11, "旧文A", 100]);
+    expect(stmts[1].params).toEqual(["新全文", 12, "旧文B", 200]);
+  });
+
+  it("空なら文を作らない", () => {
+    expect(buildDescriptionUpdateStatements([], "新全文")).toEqual([]);
   });
 });
 
