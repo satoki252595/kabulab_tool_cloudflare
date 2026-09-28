@@ -97,6 +97,9 @@ describe("isDailySyncIncomplete", () => {
         marketContextOk: true,
       })
     ).toBe(false);
+    expect(isDailySyncIncomplete({
+      totalStocks: 3_716, successStocks: 3_716, failedStocks: 0, marketContextOk: null,
+    })).toBe(false); // 株式専用の対象外は成功/失敗と取り違えない。
   });
 
   it("失敗率 1% 超・マクロ失敗・空母集団を監視上の失敗にする", () => {
@@ -412,8 +415,8 @@ describe("isMondayUtc", () => {
     expect(isMondayUtc(new Date("2026-09-14T23:59:59Z"))).toBe(true);
     expect(isMondayUtc(new Date("2026-09-15T00:00:00Z"))).toBe(false);
     expect(isMondayUtc(new Date("2026-09-13T23:59:59Z"))).toBe(false);
-    // 週の最初の run は UTC 月曜 21:00 (= JST 火曜 06:00)。JST で見ると
+    // 週の最初の run は UTC 月曜 17:13 (= JST 火曜 02:13)。JST で見ると
     // run は火〜土曜にしか無いので、JST 曜日では「月曜」を拾えない。
-    expect(isMondayUtc(new Date("2026-09-14T21:00:00Z"))).toBe(true);
+    expect(isMondayUtc(new Date("2026-09-14T17:13:00Z"))).toBe(true);
   });
 });
