@@ -33,25 +33,21 @@ global独立再計算・JVCEA独立再読・代表標本再現表を追加した
 
 ### 内訳集計（合計は内訳から計算）
 
-| 項目ID | 内訳 | 合計 | 状態 | 出所 |
-|---|---|---:|---|---|
-| MF-rows-total | coingecko-global13＋jpx-investor-equity-weekly240＋mof-portfolio-flows-weekly286＋jpx-derivatives-investor-weekly484＋jpx-derivatives-investor-futures-oi134＋cftc-cot-jpy10＋global-indices221＋jpx-investor-equity-monthly240＋jpx-investor-etf-reit-etf29＋jpx-investor-etf-reit-reit29＋mof-portfolio-flows-monthly264＋imaj-fund-flows120＋imaj-fund-flows-reit24＋jsda-bonds240＋ffaj-otc-fx384＋tfx-click365-fx462＋tfx-click365-cfd154＋jvcea-crypto156＋bop-regional174＋boj-flow-of-funds282＋bis-banking453＋imf-cpis387＋tfx-click365-fx-annual186＋tfx-click365-cfd-annual22＋worldbank-marketcap127 | 5121 | 確認済み | 報告書記載値 |
-> MF-rows-total: 旧版ヘッダの5633は集計誤記。正は内訳合計5121
-| MF-notion-rows | 一次データ｜moneyflow0＋資金フロー｜指標定義0＋資金フロー｜観測ログ0＋資金フロー｜取込ログ0 | 0 | 未検証 | 報告書記載値 |
-> MF-notion-rows: 一次実体・観測とも未保管のため保存値との突合せは不能。対象なしではなく未確認
-| MF-r1-cap | 非NULL3695＋欠損（不算入）5 | 3700 | 確認済み | 報告書記載値 |
-> MF-r1-cap: 欠損5は不算入（0埋めなし）
-| MF-r1-range | 9/25行あり3698＋9/25行なし2 | 3700 | 確認済み | 報告書記載値 |
+| 項目ID | 内訳 | 合計 | 状態 | 出所 | 備考 |
+|---|---|---:|---|---|---|
+| MF-rows-total | coingecko-global13＋jpx-investor-equity-weekly240＋mof-portfolio-flows-weekly286＋jpx-derivatives-investor-weekly484＋jpx-derivatives-investor-futures-oi134＋cftc-cot-jpy10＋global-indices221＋jpx-investor-equity-monthly240＋jpx-investor-etf-reit-etf29＋jpx-investor-etf-reit-reit29＋mof-portfolio-flows-monthly264＋imaj-fund-flows120＋imaj-fund-flows-reit24＋jsda-bonds240＋ffaj-otc-fx384＋tfx-click365-fx462＋tfx-click365-cfd154＋jvcea-crypto156＋bop-regional174＋boj-flow-of-funds282＋bis-banking453＋imf-cpis387＋tfx-click365-fx-annual186＋tfx-click365-cfd-annual22＋worldbank-marketcap127 | 5121 | 確認済み | 報告書記載値 | 旧版ヘッダの5633は集計誤記。正は内訳合計5121 |
+| MF-notion-rows | 一次データ｜moneyflow0＋資金フロー｜指標定義0＋資金フロー｜観測ログ0＋資金フロー｜取込ログ0 | 0 | 未検証 | 報告書記載値 | 一次実体・観測とも未保管のため保存値との突合せは不能。対象なしではなく未確認 |
+| MF-r1-cap | 非NULL3695＋欠損（不算入）5 | 3700 | 確認済み | 報告書記載値 | 欠損5は不算入（0埋めなし） |
+| MF-r1-range | 9/25行あり3698＋9/25行なし2 | 3700 | 確認済み | 報告書記載値 | — |
 
 ### 照合カバレッジ
 
-| 項目ID | 内容 | 一致/母数 | 状態 |
-|---|---|---:|---|
-| MF-r1-sectors | R1業種集計の独立再計算＋API照合（turnover/share/up/down/cap・差分0） | 33/33 | 確認済み |
-| MF-global-idx | global-indices W39・17指標の独立再計算（差分0） | 17/17 | 確認済み |
-| MF-jvcea-cells | JVCEA 2026-07行のpdftotext独立再読（5値一致） | 5/5 | 確認済み |
-| MF-imf-official | IMF原典最新期との照合 | 0/1 | 未検証 |
-> MF-imf-official: 原典直結は到達不可。鏡（DBnomics・2024-H1）のfreshnessのみ主張
+| 項目ID | 内容 | 一致/母数 | 状態 | 備考 |
+|---|---|---:|---|---|
+| MF-r1-sectors | R1業種集計の独立再計算＋API照合（turnover/share/up/down/cap・差分0） | 33/33 | 確認済み | — |
+| MF-global-idx | global-indices W39・17指標の独立再計算（差分0） | 17/17 | 確認済み | — |
+| MF-jvcea-cells | JVCEA 2026-07行のpdftotext独立再読（5値一致） | 5/5 | 確認済み | — |
+| MF-imf-official | IMF原典最新期との照合 | 0/1 | 未検証 | 原典直結は到達不可。鏡（DBnomics・2024-H1）のfreshnessのみ主張 |
 
 ### 隔離候補・保留
 
@@ -173,6 +169,10 @@ public-domain=CFTC、attribution-required=MOF/BOJ/BIS/IMF/WB、
 要確認=IMAJ/JSDA/FFAJ/JVCEA/CoinGecko (非公開Notion限り・公開面へ出さない)。
 
 ## 全件構造検査 (レベルA・母集団=各バッチ全行・合計は集計ID:MF-rows-total)
+
+<!-- audit-report:BEGIN moneyflow-totals-summary -->
+**全件要約（機械生成・手編集禁止）**: 全25spec（集計ID:MF-specs）構造検査合格・合計5121行（集計ID:MF-rows-total）
+<!-- audit-report:END moneyflow-totals-summary -->
 
 方法: 保存済み原本 (commit済みpublic 7 + worktree private 5 + /tmp履歴
 32・いずれもsha256照合済み) またはbounded fresh取得 (4spec) の

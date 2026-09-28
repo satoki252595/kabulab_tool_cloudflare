@@ -34,38 +34,30 @@ Issue [#146](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/146)
 
 ### 内訳集計（合計は内訳から計算）
 
-| 項目ID | 内訳 | 合計 | 状態 | 出所 |
-|---|---|---:|---|---|
-| FIN-journal-reconcile | D1行34659＋同一キー合流（3911/5035/6071中間・7509 1Q）4 | 34663 | 確認済み | 既存dumpから再導出 |
-| FIN-d1-journal-values | 全field完全一致34619＋license_tagのみ差40 | 34659 | 確認済み | 報告書記載値 |
-> FIN-d1-journal-values: 40行はlicense_tagのみ差（stricter維持の設計どおり・数値影響なし）
-| FIN-samples | EDINET標本15＋TDnet標本12 | 27 | 確認済み | 証拠を見た人手判定 |
-> FIN-samples: 層別構成は人手選定。27/27 PASSは保存dumpから再確認
-| FIN-nohistory | 種類株5桁（契約外）6＋正規4桁missing4 | 10 | 確認済み | 証拠を見た人手判定 |
-> FIN-nohistory: 正規4桁4は未取込の観測。種類株6は契約外（欠落ではない）
-| F2-docs | ok_geo_rows文書51＋ok_geo_cols文書8 | 59 | 不一致あり | 既存dumpから再導出 |
-| F2-facts | geo_rows行283＋geo_cols行44 | 327 | 不一致あり | 既存dumpから再導出 |
-| F2-bands | 1〜5%22＋5〜10%6＋10〜50%17＋50〜100%（最大99.4% S100T6Q9）14 | 59 | 不一致あり | 既存dumpから再導出 |
-| F2-cause | aggregate-before-dedup確定1＋原因未確認58 | 59 | 不一致あり | 報告書記載値 |
-> F2-cause: 確定はS100J2E7の純replayのみ。残りは候補であり一般化しない
-| F3-yield | 旧日付frozen行25＋fresh（09-13）行7 | 32 | 不一致あり | 既存dumpから再導出 |
-> F3-yield: frozen 25行のうち2行は丸め級（実害なし）。原因の内容・時期は未確認
-| F4-lottery | 純抽選（spec違反）14＋境界（7791・断定不可）1＋適正併記23 | 38 | 不一致あり | 証拠を見た人手判定 |
-> F4-lottery: 純抽選/境界/併記の分離は原文を読んだ人手判定。38違反ではない
-| F4-codes | 純抽選銘柄5＋境界銘柄1＋併記銘柄11 | 17 | 不一致あり | 証拠を見た人手判定 |
-| SPOT-verify9 | テキスト索引/doc期（3例一致）3＋IR sentiment本文方向（3例一致）3＋優待要約・一致（1783）1＋優待要約・不一致の観測（8508）1＋優待要約・保留（147A・F5候補）1 | 9 | 不一致あり | 報告書記載値 |
-> SPOT-verify9: 件数は実施数であり全件合格ではない。優待3例の内訳は一致1・不一致の観測1・保留1。3例超の一般化はしない
-| IR-0928-catchup | 取込済み0＋未取込197 | 197 | 未検証 | 報告書記載値 |
-> IR-0928-catchup: catchup前のためD1未取込。未確認は合格に数えない
+| 項目ID | 内訳 | 合計 | 状態 | 出所 | 備考 |
+|---|---|---:|---|---|---|
+| FIN-journal-reconcile | D1行34659＋同一キー合流（3911/5035/6071中間・7509 1Q）4 | 34663 | 確認済み | 既存dumpから再導出 | — |
+| FIN-d1-journal-values | 全field完全一致34619＋license_tagのみ差40 | 34659 | 確認済み | 報告書記載値 | 40行はlicense_tagのみ差（stricter維持の設計どおり・数値影響なし） |
+| FIN-samples | EDINET標本15＋TDnet標本12 | 27 | 確認済み | 証拠を見た人手判定 | 層別構成は人手選定。27/27 PASSは保存dumpから再確認 |
+| FIN-nohistory | 種類株5桁（契約外）6＋正規4桁missing4 | 10 | 確認済み | 証拠を見た人手判定 | 正規4桁4は未取込の観測。種類株6は契約外（欠落ではない） |
+| F2-docs | ok_geo_rows文書51＋ok_geo_cols文書8 | 59 | 不一致あり | 既存dumpから再導出 | — |
+| F2-facts | geo_rows行283＋geo_cols行44 | 327 | 不一致あり | 既存dumpから再導出 | — |
+| F2-bands | 1〜5%22＋5〜10%6＋10〜50%17＋50〜100%（最大99.4% S100T6Q9）14 | 59 | 不一致あり | 既存dumpから再導出 | — |
+| F2-cause | aggregate-before-dedup確定1＋原因未確認58 | 59 | 不一致あり | 報告書記載値 | 確定はS100J2E7の純replayのみ。残りは候補であり一般化しない |
+| F3-yield | 旧日付frozen行25＋fresh（09-13）行7 | 32 | 不一致あり | 既存dumpから再導出 | frozen 25行のうち2行は丸め級（実害なし）。原因の内容・時期は未確認 |
+| F4-lottery | 純抽選（spec違反）14＋境界（7791・断定不可）1＋適正併記23 | 38 | 不一致あり | 証拠を見た人手判定 | 純抽選/境界/併記の分離は原文を読んだ人手判定。38違反ではない |
+| F4-codes | 純抽選銘柄5＋境界銘柄1＋併記銘柄11 | 17 | 不一致あり | 証拠を見た人手判定 | — |
+| SPOT-verify9 | テキスト索引/doc期（3例一致）3＋IR sentiment本文方向（3例一致）3＋優待要約・一致（1783）1＋優待要約・不一致の観測（8508）1＋優待要約・保留（147A・F5候補）1 | 9 | 不一致あり | 報告書記載値 | 件数は実施数であり全件合格ではない。優待3例の内訳は一致1・不一致の観測1・保留1。3例超の一般化はしない |
+| IR-0928-catchup | 取込済み0＋未取込197 | 197 | 未検証 | 報告書記載値 | catchup前のためD1未取込。未確認は合格に数えない |
 
 ### 照合カバレッジ
 
-| 項目ID | 内容 | 一致/母数 | 状態 |
-|---|---|---:|---|
-| FIN-rawpage | F1 raw_page_id反映（解消後09:30再読・journal一致） | 34659/34659 | 確認済み |
-| FIN-samples-pass | 財務27標本の独立再導出PASS | 27/27 | 確認済み |
-| IR-day-0924 | IR 09-24の日次突合（集合・title・pubdate・code一致） | 138/138 | 確認済み |
-| IR-day-0925 | IR 09-25の日次突合（集合・title・pubdate・code一致） | 202/202 | 確認済み |
+| 項目ID | 内容 | 一致/母数 | 状態 | 備考 |
+|---|---|---:|---|---|
+| FIN-rawpage | F1 raw_page_id反映（解消後09:30再読・journal一致） | 34659/34659 | 確認済み | — |
+| FIN-samples-pass | 財務27標本の独立再導出PASS | 27/27 | 確認済み | — |
+| IR-day-0924 | IR 09-24の日次突合（集合・title・pubdate・code一致） | 138/138 | 確認済み | — |
+| IR-day-0925 | IR 09-25の日次突合（集合・title・pubdate・code一致） | 202/202 | 確認済み | — |
 
 ### 隔離候補・保留
 
@@ -527,6 +519,14 @@ S100YG9I `4a507aae555f695c9c9028e2768a22397803905727297a4d630b44a812283a93`・S1
 
 ## 7. Findings 一覧（repro・重要度・影響集合）
 
+<!-- audit-report:BEGIN fundamentals-findings-summary -->
+**Finding件数サマリ（機械生成・手編集禁止）**
+
+- F2: 海外売上合計不一致 59 文書（集計ID:F2-docs・集計ID:F2-cause）
+- F3: 優待利回り不一致 32 行（fresh 7 行。集計ID:F3-yield）
+- F4: 純抽選 14 行（5 銘柄。集計ID:F4-lottery・集計ID:F4-codes）
+<!-- audit-report:END fundamentals-findings-summary -->
+
 ### F1（解消済み）raw_page_id 未反映 → 反映確認
 
 - repro: `SELECT COUNT(*), COUNT(raw_page_id) FROM jss_financials`。
@@ -534,7 +534,9 @@ S100YG9I `4a507aae555f695c9c9028e2768a22397803905727297a4d630b44a812283a93`・S1
 - 値を journal provenance と照合し全件一致（同ID。mismatch 0・UUID 不良 0）。
 - 重要度: 中（D1→Notion 原本導線が NULL）。影響集合: 全財務行（一時的）。監査側の書込なし。
 
+<!-- audit-report:BEGIN fundamentals-F2-heading -->
 ### F2（未修復）海外売上の合計不一致 59 文書
+<!-- audit-report:END fundamentals-F2-heading -->
 
 - repro: §9 の SQL（文書単位）＋ fullkey 再集計（`document_id`＋期＋scope＋pattern。group＝文書で 1:1、全群違反。集計ID:F2-docs）。
 - 重要度: 高（対象行）。影響集合: 集計ID:F2-docs（ok 集計ID:YUHO-overseas-ok の 1.6%。7203×11・2802×7・9147×7 他 16 コード。
@@ -542,14 +544,18 @@ S100YG9I `4a507aae555f695c9c9028e2768a22397803905727297a4d630b44a812283a93`・S1
 - 原因: S100J2E7 は aggregate-before-dedup と確定（純 replay で保存 5 行を完全再現。§4.3）。残りは候補・未確認（集計ID:F2-cause）。
   旧判定「現行 code 生成不能/stale」は撤回。再取込だけでは再発するため remedy は code fix＋force 再取込。owner 対応。
 
+<!-- audit-report:BEGIN fundamentals-F3-heading -->
 ### F3（未修復）優待利回りの stale 32 行（fresh 7 行）
+<!-- audit-report:END fundamentals-F3-heading -->
 
 - repro: §9 の `calcYutaiYield` 再計算 CTE（Python port と一致。±1e-9）。
 - 重要度: 低〜中。影響集合: 集計ID:F3-yield（2683: 画面 1.01% vs 現入力再計算 5.04%。5.04 は企業一次確定値でない。丸め級 2 行は実害なし）。
 - 原因: 候補（rebuild 後の入力変化。「現入力≠rebuild 入力」は確定、内容・時期は未確認。確定手段は import 履歴突合せ）。
   remedy は owner の rebuild/process fix。
 
+<!-- audit-report:BEGIN fundamentals-F4-heading -->
 ### F4（未修復）純抽選優待の推定金額 14 行（5 銘柄）
+<!-- audit-report:END fundamentals-F4-heading -->
 
 - repro: §9 の keyword 抽出は候補母集団（集計ID:F4-lottery）。原文分離の内訳は同ID（純抽選の銘柄別内訳は 3189×2/3903/3939/7578×8/8508×2）＋境界 7791。銘柄数は集計ID:F4-codes。3903 は画面「推定 16,000,000円」。
 - 重要度: 中。影響集合: per-benefit 表示の誤誘導（純抽選行）。ranking は純抽選値が入っていないが、
