@@ -1,14 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { yahooHttpErrorMessage } from "./client.js";
+import { fetchChart, yahooHttpErrorMessage } from "./client.js";
 
 const ORIGINAL_PROXY_BASE = process.env.YAHOO_PROXY_BASE;
+const ORIGINAL_CRON_SECRET = process.env.CRON_SECRET;
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   if (ORIGINAL_PROXY_BASE === undefined) {
     delete process.env.YAHOO_PROXY_BASE;
   } else {
     process.env.YAHOO_PROXY_BASE = ORIGINAL_PROXY_BASE;
+  }
+  if (ORIGINAL_CRON_SECRET === undefined) {
+    delete process.env.CRON_SECRET;
+  } else {
+    process.env.CRON_SECRET = ORIGINAL_CRON_SECRET;
   }
 });
 
@@ -88,5 +95,134 @@ describe("yahooHttpErrorMessage", () => {
     expect(message).toContain("source=ingest-proxy");
     expect(message).toContain("cf-ray=abc123-NRT");
     expect(message).toContain('body="worker internal error"');
+  });
+});
+
+describe("fetchChart — 応答整合 guard (F-01 1909 再発防止)", () => {
+  /**
+   * 最小合成 fixture。9/28 観測の 1909 応答の形だけを写す
+   * (先頭から持続する異常水準 1.6e10・出来高 0・末尾 null・meta 正常)。
+   * 原本 JSON そのものは commit しない (全生データの持込禁止)。
+   */
+  function chart1909Shape() {
+    const day = (s: string) => Date.parse(`${s}T00:00:00Z`) / 1000;
+    const lv = [16280000512, 16280000512, 16280000512, null];
+    return {
+      chart: {
+        result: [
+          {
+            meta: {
+              symbol: "1909.T",
+              regularMarketPrice: 3700,
+              chartPreviousClose: 16234051600,
+              currency: "JPY",
+            },
+            timestamp: [
+              day("2026-09-10"),
+              day("2026-09-11"),
+              day("2026-09-14"),
+              day("2026-09-15"),
+            ],
+            indicators: {
+              quote: [
+                {
+                  open: [...lv],
+                  high: [...lv],
+                  low: [...lv],
+                  close: [...lv],
+                  volume: [0, 0, 0, null],
+                },
+              ],
+              adjclose: [{ adjclose: [...lv] }],
+            },
+            events: {
+              splits: {
+                "1789344000": {
+                  date: 1789344000,
+                  numerator: 1,
+                  denominator: 4400000,
+                },
+              },
+            },
+          },
+        ],
+        error: null,
+      },
+    };
+  }
+
+  function chartNormal(over: {
+    closes: (number | null)[];
+    volumes: (number | null)[];
+    metaPrice: number;
+  }) {
+    const day = (s: string) => Date.parse(`${s}T00:00:00Z`) / 1000;
+    const dates = ["2026-09-24", "2026-09-25"].slice(0, over.closes.length);
+    return {
+      chart: {
+        result: [
+          {
+            meta: {
+              symbol: "7203.T",
+              regularMarketPrice: over.metaPrice,
+              currency: "JPY",
+            },
+            timestamp: dates.map(day),
+            indicators: {
+              quote: [
+                {
+                  open: [...over.closes],
+                  high: [...over.closes],
+                  low: [...over.closes],
+                  close: [...over.closes],
+                  volume: [...over.volumes],
+                },
+              ],
+              adjclose: [{ adjclose: [...over.closes] }],
+            },
+          },
+        ],
+        error: null,
+      },
+    };
+  }
+
+  function useProxyStub(json: unknown) {
+    process.env.YAHOO_PROXY_BASE = "https://kabulab.example.test";
+    process.env.CRON_SECRET = "test-secret";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify(json), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+    );
+  }
+
+  it("1909 形の応答全体を拒否する (sanitize 素通り後の最終境界)", async () => {
+    useProxyStub(chart1909Shape());
+    await expect(fetchChart("1909", "5y")).rejects.toThrow(
+      /応答全体を採用しません/
+    );
+  });
+
+  it("薄商い (出来高0・乖離なし) は受理する", async () => {
+    useProxyStub(
+      chartNormal({ closes: [1000, 1000], volumes: [10000, 0], metaPrice: 1000 })
+    );
+    const res = await fetchChart("3600", "5y");
+    expect(res.ohlcv).toHaveLength(2);
+  });
+
+  it("出来高を伴う急変 (正規分割) は受理する", async () => {
+    useProxyStub(
+      chartNormal({
+        closes: [1000, 30000],
+        volumes: [10000, 500000],
+        metaPrice: 30000,
+      })
+    );
+    const res = await fetchChart("7203", "5y");
+    expect(res.ohlcv).toHaveLength(2);
   });
 });

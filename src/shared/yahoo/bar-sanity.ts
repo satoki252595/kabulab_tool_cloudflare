@@ -77,6 +77,91 @@ export type SanitizeResult = {
 };
 
 /**
+ * 同一応答の最新有効終値と meta 価格の整合検査の入力。
+ *
+ * fetchChart は sanitize 後の `adj ?? close`、fetchDaily は整形後の `c` を
+ * 最新有効終値に使う (どちらも下流が実際に使う値)。
+ */
+export interface ResponseCoherenceInput {
+  symbol: string;
+  /** 最新の有効な使用終値。null は判定不能 (呼び出し側が別 gate で扱う)。 */
+  latestUsedClose: number | null;
+  /** そのバーの出来高。null/0 と価格乖離の組合せが事故の形。 */
+  latestVolume: number | null;
+  /** 同一応答の meta.regularMarketPrice。null は判定不能。 */
+  metaPrice: number | null;
+}
+
+/**
+ * 応答レベルの価格整合を検査する (F-01 1909 再発防止)。
+ *
+ * sanitizeBars は「直前に採用したバー」との前日比しか見ないため、先頭から
+ * 持続する異常水準は素通りする (1909: 40 本が全て 1.6e10・出来高 0 で採用)。
+ * 同一応答内の最新有効終値が meta 価格と 10 倍超乖離し、かつ出来高がない
+ * 場合に限り応答全体を拒否する。以下は拒否しない:
+ *
+ * - 出来高 0 でも乖離なし (薄商いの正当な 0。本番 479 行)
+ * - 出来高を伴う乖離 (正規分割・TOB・急騰)
+ * - 全履歴と meta の比較 (長期高騰を誤って弾くため最新 1 本のみ見る)
+ * - 巨大 split イベント単独 (フロントは splits 未使用。F-09)
+ *
+ * 判定不能 (終値/meta の欠落・非正・非有限) は通す。ここで落とすのは
+ * 「乖離の根拠がある」場合だけで、欠損の扱いは日次 gate に委ねる。
+ */
+export function assertResponsePriceCoherent(
+  input: ResponseCoherenceInput
+): void {
+  const { symbol, latestUsedClose, latestVolume, metaPrice } = input;
+  if (
+    latestUsedClose === null ||
+    !Number.isFinite(latestUsedClose) ||
+    latestUsedClose <= 0
+  ) {
+    return;
+  }
+  if (metaPrice === null || !Number.isFinite(metaPrice) || metaPrice <= 0) {
+    return;
+  }
+  const ratio = latestUsedClose / metaPrice;
+  const diverged =
+    ratio > MAX_DAILY_RATIO || ratio < 1 / MAX_DAILY_RATIO;
+  if (!diverged) return;
+  if (latestVolume !== null && latestVolume !== 0) return;
+  throw new Error(
+    `${symbol}: 最新終値 ${latestUsedClose} が meta 価格 ${metaPrice} と` +
+      `10倍超乖離し出来高がありません。応答全体を採用しません。`
+  );
+}
+
+export type FreshCloseReason = "stale_date" | "missing_fresh_close";
+
+export type FreshCloseCheck =
+  | { ok: true }
+  | { ok: false; reason: FreshCloseReason };
+
+/**
+ * 日次 writer 前提: 対象日の実終値があること。
+ *
+ * 日付だけの gate では、対象日の fresh null bar が「一致」で通過し、古い
+ * 終値で計算した指標を対象日付で保存してしまう (1909 の 9/28 null bar が
+ * expectedDate と一致して通過した形)。使用値 (`adj ?? close`) が正の有限値
+ * でない対象日は未取得扱いにし、値の補完はしない (ルール2)。
+ */
+export function checkFreshClose(
+  latest: Bar | undefined,
+  expectedDate: string
+): FreshCloseCheck {
+  if (latest === undefined || latest.date !== expectedDate) {
+    return { ok: false, reason: "stale_date" };
+  }
+  const used = latest.adj ?? latest.close;
+  if (used === null || !Number.isFinite(used) || used <= 0) {
+    return { ok: false, reason: "missing_fresh_close" };
+  }
+  return { ok: true };
+}
+
+/**
  * 日付昇順のバー列から、採用できないバーを取り除く。
  *
  * 比較の基準は「直前に**採用した**バー」。壊れたバーを基準にすると
