@@ -87,6 +87,20 @@ interface NotionErrorBody {
 }
 
 /**
+ * 非冪等 create (POST /pages・POST /databases) の結果不明エラー。
+ * network 例外・529・5xx・非JSON 4xx は送信成否が不明のため内部再送せず、
+ * この型で即 throw する。呼び出し側は full query で確認し、あれば回収
+ * (adopt)、無ければ停止する (自動再 create しない)。型で識別するため
+ * message ではなく instanceof で判定すること。
+ */
+export class NotionUnknownResultError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "NotionUnknownResultError";
+  }
+}
+
+/**
  * その 4xx が「恒久的エラー」か判定する。
  *
  * Notion API 本体の 4xx は必ず JSON エラー (`{object:"error",code,...}`) を
@@ -136,11 +150,12 @@ async function doFetch(
       // すると 1 リクエストで ~61 秒固まる (過去事例: kabulab に NOTION_TOKEN
       // 未設定のまま /file proxy を踏んで 63 秒応答)。型で識別して即 throw。
       if (e instanceof NotionConfigError) throw e;
-      // 非冪等 create (POST /pages) は結果不明のまま内部再送すると同一 helper
-      // 内で二重作成し得る。network 例外は送信成否不明のため再送せず即 throw
-      // し、呼び出し側の full query 回収 (0=STOP/1=回収/複数=STOP) に委ねる。
+      // 非冪等 create (POST /pages・POST /databases) は結果不明のまま内部
+      // 再送すると同一 helper 内で二重作成し得る。network 例外は送信成否不明
+      // のため再送せず即 throw し、呼び出し側の full query 回収 (0=STOP/
+      // 1=回収/複数=STOP) に委ねる。
       if (isNonIdempotentCreate) {
-        throw new Error(
+        throw new NotionUnknownResultError(
           `Notion 非冪等create (${label}) の結果不明のため再送しません (network): ${(e as Error).message}。full query で確認してください`,
           { cause: e }
         );
@@ -164,7 +179,7 @@ async function doFetch(
     // のため再送しない。明示 429 は拒否 (未作成確定) のため create でも再送可。
     if (res.status === 429 || res.status === 529) {
       if (isNonIdempotentCreate && res.status === 529) {
-        throw new Error(
+        throw new NotionUnknownResultError(
           `Notion 非冪等create (${label}) の結果不明のため再送しません (529)。full query で確認してください`
         );
       }
@@ -187,7 +202,7 @@ async function doFetch(
     // 非冪等 create の 5xx・非JSON 4xx (エッジ遮断) は結果不明のため再送禁止。
     // 真正 JSON 4xx (恒久・未作成確定) は下の既存分岐で即 throw する。
     if (isNonIdempotentCreate && !isPermanent(res.status, text)) {
-      throw new Error(
+      throw new NotionUnknownResultError(
         `Notion 非冪等create (${label}) の結果不明のため再送しません (status=${res.status})。full query で確認してください`
       );
     }
@@ -226,10 +241,10 @@ export async function notionRequest<T = unknown>(
   body?: unknown,
   opts?: NotionRequestOptions
 ): Promise<T> {
-  // POST /pages (ページ作成) のみ非冪等 create として結果不明再送を禁止する。
-  // POST /databases/{id}/query (読取)・PATCH・GET・DELETE・/pages/{id}/move は
-  // 既存 retry を維持する。
-  const isCreate = method === "POST" && path === "/pages";
+  // POST /pages (ページ作成) と POST /databases (DB 作成) を非冪等 create
+  // として結果不明再送を禁止する。POST /databases/{id}/query (読取)・
+  // PATCH・GET・DELETE・/pages/{id}/move は既存 retry を維持する。
+  const isCreate = method === "POST" && (path === "/pages" || path === "/databases");
   return schedule(async () => {
     const res = await doFetch(
       `${API_BASE}${path}`,

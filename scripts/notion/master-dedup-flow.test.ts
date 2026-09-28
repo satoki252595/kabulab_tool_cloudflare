@@ -18,8 +18,8 @@ import {
   saveFreshEvidence,
   verifyArchiveDownload,
   verifyArchivePage,
+  verifyArchivedPage,
   verifyRetirePreimage,
-  verifyTrashPage,
   type FreshState,
   type NotionPage,
   type SnapshotDoc,
@@ -331,7 +331,7 @@ describe("master-dedup 実 flow 回帰", () => {
       const snapshot = baseSnapshot(baseViews());
       const receipt = emptyReceipt();
       receipt.snapshot = { file: "s.json", sha256: snapshot.sha256, archivePageId: "a1", archiveVerifiedAt: "2026-09-28T00:00:00.000Z" };
-      receipt.retired[RETIRE_3681] = { trashPageId: "trash-1", verifiedAt: "2026-09-28T02:00:00.000Z" };
+      receipt.retired[RETIRE_3681] = { archivedAt: "2026-09-28T02:00:00.000Z", verifiedAt: "2026-09-28T02:00:00.000Z" };
       views["3681:retire"].archived = true;
       views["3681:retire"].last_edited_time = "2026-09-28T02:00:00.000Z";
       const state = baseState(views);
@@ -468,46 +468,28 @@ describe("master-dedup 実 flow 回帰", () => {
     });
   });
 
-  describe("verifyTrashPage / verifyRetirePreimage", () => {
+  describe("verifyArchivedPage / verifyRetirePreimage", () => {
     const retireId = RETIRE_3681;
-    const keepId = KEEP_3681;
-    const snapHash = "s".repeat(64);
 
-    function trashPage(overrides: Record<string, unknown> = {}): NotionPage {
+    function archivedPage(overrides: Record<string, unknown> = {}): NotionPage {
       return {
-        id: "trash-1",
-        created_time: "2026-09-28T00:00:00.000Z",
-        last_edited_time: "2026-09-28T00:00:00.000Z",
-        properties: {
-          Status: { select: { name: "obsoleted" } },
-          "Obsoleted At": { date: { start: "2026-09-28T00:00:00.000Z" } },
-          "Obsoleted Reason": { rich_text: [{ plain_text: `keep=${keepId} sha256=${snapHash}` }] },
-          "Origin Page": { url: `https://www.notion.so/x-${retireId.replace(/-/g, "")}` },
-          Key: { title: [{ plain_text: retireId }] },
-          ...overrides,
-        },
+        id: retireId,
+        created_time: "2026-06-28T02:34:00.000Z",
+        last_edited_time: "2026-09-28T02:00:00.000Z",
+        archived: true,
+        in_trash: false,
+        properties: {},
+        ...overrides,
       } as unknown as NotionPage;
     }
 
-    it("内容・hash・Origin・Key が一致すれば合格", () => {
-      expect(() => verifyTrashPage(trashPage(), keepId, snapHash, retireId)).not.toThrow();
+    it("対象 ID 一致 + archived なら合格", () => {
+      expect(() => verifyArchivedPage(archivedPage(), retireId)).not.toThrow();
     });
 
-    it("hash 欠落・Origin 不一致・Key 不一致は throw", () => {
-      expect(() =>
-        verifyTrashPage(
-          trashPage({ "Obsoleted Reason": { rich_text: [{ plain_text: `keep=${keepId}` }] } }),
-          keepId,
-          snapHash,
-          retireId
-        )
-      ).toThrow();
-      expect(() =>
-        verifyTrashPage(trashPage({ "Origin Page": { url: "https://www.notion.so/x-other" } }), keepId, snapHash, retireId)
-      ).toThrow();
-      expect(() =>
-        verifyTrashPage(trashPage({ Key: { title: [{ plain_text: "other" }] } }), keepId, snapHash, retireId)
-      ).toThrow();
+    it("ID 不一致・未 archive は throw", () => {
+      expect(() => verifyArchivedPage(archivedPage({ id: KEEP_3681 }), retireId)).toThrow(/対象 ID/);
+      expect(() => verifyArchivedPage(archivedPage({ archived: false }), retireId)).toThrow(/archived/);
     });
 
     it("非 relation・body が一致すれば合格、不一致は throw", () => {

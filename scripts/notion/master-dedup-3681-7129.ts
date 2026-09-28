@@ -25,7 +25,6 @@ import { promisify } from "node:util";
 import { sharedEnv } from "../../src/shared/env.js";
 import {
   findAllBackupChildrenByTitle,
-  moveToTrash,
   recordPrimaryData,
 } from "../../src/shared/notion-archive/archive.js";
 import { notionRequest } from "../../src/shared/notion-archive/client.js";
@@ -293,7 +292,7 @@ export async function queryDbAll(
 /**
  * Notion files の signed URL (S3) からバイト列を取得する。
  * 署名 URL への GET は api.notion.com ではないため共有 notionRequest ではなく
- * 素の fetch でよい (moveToTrash の既存流儀と同じ)。
+ * 素の fetch でよい (共有 archive.ts の既存流儀と同じ)。
  */
 export async function downloadNotionFileBytes(url: string, label: string): Promise<Uint8Array> {
   const res = await fetch(url);
@@ -849,8 +848,8 @@ export function guardIntermediateState(args: {
             problems.push(`${tag}: 退避済みのはずが有効です`);
           }
         } else if (marked) {
-          // marker ありは active/archived の両方を許す (create→archive 断 or
-          // create→receipt 断)。applyRetire の full 検索が回収を決める。
+          // marker ありは active/archived の両方を許す (PATCH 断 or receipt 断)。
+          // applyRetire が fresh の archived 状態で repatch/recover を決める。
         } else if (fresh.archived || fresh.in_trash) {
           problems.push(`${tag}: receipt/marker なしに archived になっています`);
         }
@@ -1705,52 +1704,19 @@ async function applyD1Check(
   return receipt;
 }
 
-function retireReason(code: "3681" | "7129", keepId: string, receipt: DedupReceipt): string {
-  const basis =
-    code === "3681"
-      ? "JPX 上場廃止 (効力 2026-07-01) 確定・EDINET 該当 0 のため保持先 listed=false 維持・状態=上場廃止を移行"
-      : "保持先 listed=true・状態 null を維持 (退避側は旧原本のみ)";
-  return (
-    `#102 ①重複解消: ${code} の退避候補を保持先 ${keepId} へ統合。` +
-    `snapshot=${receipt.snapshot?.archivePageId} sha256=${receipt.snapshot?.sha256} ` +
-    `(service=${ARCHIVE_SERVICE} key=${SNAPSHOT_KEY})。${basis}。` +
-    `移行 ${Object.keys(receipt.migrated).length} 行・補足7129・lifecycle・D1 を再読済み。`
-  );
-}
-
-export function verifyTrashPage(
-  page: NotionPage,
-  keepId: string,
-  snapshotHash?: string,
-  retireId?: string
-): void {
-  const status = (page.properties["Status"]?.["select"] as { name?: string } | null)?.name;
-  if (status !== "obsoleted") throw new Error(`退避行の Status が obsoleted でありません page=${page.id}`);
-  if (!page.properties["Obsoleted At"]?.["date"]) {
-    throw new Error(`退避行に Obsoleted At がありません page=${page.id}`);
+/**
+ * 退避候補の archive 完了検証。対象 ID の一致と archived/in_trash を確認する。
+ * master ページは一次データ保管のレコードではないため moveToTrash の対象外
+ * (共有 helper が Service 不一致で保全停止する)。pipeline の重複収束
+ * (converge_created_page) と同じく直接 archive し、内容の証拠は snapshot
+ * (一次データ保管・SHA 検証済み) + receipt で保つ。ごみ DB は作らない。
+ */
+export function verifyArchivedPage(page: NotionPage, retireId: string): void {
+  if (normalizePageId(page.id) !== normalizePageId(retireId)) {
+    throw new Error(`archive 検証の対象 ID が退避元と一致しません got=${page.id} want=${retireId}`);
   }
-  const reason = readTitleText(page.properties["Obsoleted Reason"]);
-  if (!reason.includes(keepId)) {
-    throw new Error(`退避行の理由に保持先 ID がありません page=${page.id}`);
-  }
-  if (snapshotHash && !reason.includes(snapshotHash)) {
-    throw new Error(`退避行の理由に snapshot hash がありません page=${page.id}`);
-  }
-  const originUrl = String(
-    (page.properties["Origin Page"] as { url?: unknown } | undefined)?.url ?? ""
-  );
-  if (!originUrl) {
-    throw new Error(`退避行に Origin Page がありません page=${page.id}`);
-  }
-  if (retireId) {
-    const normUrl = originUrl.replace(/-/g, "").toLowerCase();
-    if (!normUrl.includes(normalizePageId(retireId))) {
-      throw new Error(`退避行の Origin が退避元と一致しません page=${page.id}`);
-    }
-  }
-  const key = readTitleText(page.properties["Key"]);
-  if (retireId && key !== retireId) {
-    throw new Error(`退避行の Key が退避元と一致しません got=${key} page=${page.id}`);
+  if (!page.archived && !page.in_trash) {
+    throw new Error(`退避候補が archived になっていません page=${page.id}`);
   }
 }
 
@@ -1791,42 +1757,21 @@ export async function applyRetire(
   for (const t of TARGETS) {
     const recorded = receipt.retired[t.retireId];
     if (recorded) {
-      const trash = await getPage(paceMs, recorded.trashPageId);
-      verifyTrashPage(trash, t.keepId, snapshot.sha256, t.retireId);
-      const origin = await getPage(paceMs, t.retireId);
-      if (!origin.archived && !origin.in_trash) {
-        throw new Error(`退避済みのはずの元ページが有効です: ${t.retireId}`);
+      // 旧形式 (moveToTrash 方式の trashPageId) の receipt は系統が違うため
+      // 引き継がず停止する (当該方式で完了した実行は存在しないはず)。
+      if (typeof recorded.archivedAt !== "string") {
+        throw new Error(`旧形式の退避記録のため停止します (手動確認が必要): ${t.retireId}`);
       }
+      const origin = await getPage(paceMs, t.retireId);
+      verifyArchivedPage(origin, t.retireId);
       continue;
     }
     // 順序の強制: snapshot 確定・移行・補足・lifecycle・D1 が全て完了後のみ退避する。
     if (!receipt.snapshot?.archiveVerifiedAt) {
-      throw new Error("snapshot なしで退避しません (moveToTrash 前に一次データ保管が必須)");
+      throw new Error("snapshot なしで退避しません (archive 前に一次データ保管が必須)");
     }
     if (!allMigrated(ops, receipt) || !receipt.lifecycle3681 || !receipt.supplement7129 || !receipt.d1) {
       throw new Error("移行・補足・lifecycle・D1 の完了前に退避しません");
-    }
-    // original の archived 状態に無関係に、origin/key/snapshotHash で full 検索する。
-    // create 成功→original archive 断で original active のまま trash だけある場合、
-    // 無条件 create すると二重になるため、既存 1 件なら archive だけ完了する。
-    const trashDbIds = await findAllArchiveDbIds(ARCHIVE_SERVICE, "trash");
-    const hits =
-      trashDbIds.length === 0
-        ? []
-        : await queryArchiveByKeyAll(paceMs, trashDbIds, t.retireId);
-    const decision = decideRetireAction({
-      trashHits: hits.length,
-      hasMarker: receipt.retireIssued?.[t.retireId] !== undefined,
-    });
-    if (decision === "stop") {
-      if (hits.length >= 2) {
-        throw new Error(
-          `ごみに退避行が ${hits.length} 件重複しています (二重作成の疑い)。どれが正か決めず停止します retire=${t.retireId} ids=${hits.map((h) => h.id).join(",")}`
-        );
-      }
-      throw new Error(
-        `退避の create 結果不明のため停止します (marker あり・full query 0 件): ${t.retireId}。自動解除・再 create しません。後日 Notion を再読してください`
-      );
     }
     const snapMasters = snapshot.masters[t.retireId];
     if (!snapMasters) throw new Error(`snapshot に退避元がありません: ${t.retireId}`);
@@ -1849,48 +1794,50 @@ export async function applyRetire(
         .filter((b) => b.type === "child_database")
         .map((b) => b.child_database?.title ?? ""),
     });
-    if (decision === "complete") {
-      const hit = hits[0];
-      verifyTrashPage(hit, t.keepId, snapshot.sha256, t.retireId);
-      // original archive だけ完了する (二重 create しない)。
-      if (!origin.archived && !origin.in_trash) {
-        await paced(paceMs, () =>
-          notionRequest("PATCH", `/pages/${t.retireId}`, { archived: true })
-        );
-      }
-      const rereadTrash = await getPage(paceMs, hit.id);
-      verifyTrashPage(rereadTrash, t.keepId, snapshot.sha256, t.retireId);
+    const decision = decideRetireAction({
+      originArchived: origin.archived === true || origin.in_trash === true,
+      hasMarker: receipt.retireIssued?.[t.retireId] !== undefined,
+    });
+    if (decision === "stop") {
+      throw new Error(
+        `退避候補が外部で archived になっています (marker なし)。系統不明のため停止します: ${t.retireId}。人手で確認してください`
+      );
+    }
+    if (decision === "recover") {
+      // marker あり・archived 済み: 終状態は検証済み (原像突合 + archived)。
+      // 再読して記録を回収する。
       const reread = await getPage(paceMs, t.retireId);
-      if (!reread.archived && !reread.in_trash) {
-        throw new Error(`退避後の元ページが archived になっていません: ${t.retireId}`);
-      }
-      receipt.retired[t.retireId] = { trashPageId: hit.id, verifiedAt: new Date().toISOString() };
+      verifyArchivedPage(reread, t.retireId);
+      receipt.retired[t.retireId] = {
+        archivedAt: reread.last_edited_time,
+        verifiedAt: new Date().toISOString(),
+      };
       saveReceipt(snapshotDir, receipt);
       continue;
     }
-    // create: helper 呼出前に key+origin+snapshotHash+issuedAt を atomic 保存する。
-    receipt.retireIssued = {
-      ...(receipt.retireIssued ?? {}),
-      [t.retireId]: {
-        key: t.retireId,
-        origin: t.retireId,
-        snapshotHash: snapshot.sha256,
-        issuedAt: new Date().toISOString(),
-      },
-    };
-    saveReceipt(snapshotDir, receipt);
-    const { trashPageId } = await moveToTrash({
-      service: ARCHIVE_SERVICE,
-      originPageId: t.retireId,
-      reason: retireReason(t.code, t.keepId, receipt),
-    });
-    const trash = await getPage(paceMs, trashPageId);
-    verifyTrashPage(trash, t.keepId, snapshot.sha256, t.retireId);
-    const reread = await getPage(paceMs, t.retireId);
-    if (!reread.archived && !reread.in_trash) {
-      throw new Error(`退避後の元ページが archived になっていません: ${t.retireId}`);
+    // create/repatch: PATCH 呼出前に key+origin+snapshotHash+issuedAt を atomic 保存する。
+    // archive PATCH は冪等 (複製物を作らない) のため、repatch の再送は安全。
+    if (decision === "create") {
+      receipt.retireIssued = {
+        ...(receipt.retireIssued ?? {}),
+        [t.retireId]: {
+          key: t.retireId,
+          origin: t.retireId,
+          snapshotHash: snapshot.sha256,
+          issuedAt: new Date().toISOString(),
+        },
+      };
+      saveReceipt(snapshotDir, receipt);
     }
-    receipt.retired[t.retireId] = { trashPageId, verifiedAt: new Date().toISOString() };
+    await paced(paceMs, () =>
+      notionRequest("PATCH", `/pages/${t.retireId}`, { archived: true })
+    );
+    const reread = await getPage(paceMs, t.retireId);
+    verifyArchivedPage(reread, t.retireId);
+    receipt.retired[t.retireId] = {
+      archivedAt: reread.last_edited_time,
+      verifiedAt: new Date().toISOString(),
+    };
     saveReceipt(snapshotDir, receipt);
   }
   return receipt;

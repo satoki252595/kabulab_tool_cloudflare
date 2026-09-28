@@ -28,7 +28,14 @@
 import { notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
-import { findBackupChildByTitle } from "./archive.js";
+import {
+  assertAdoptedDatabaseSchema,
+  createDatabaseOrAdopt,
+  findBackupChildByTitle,
+  findUniqueBackupChildByTitle,
+  findUniqueChildDatabaseForAdopt,
+  queryUniqueRow,
+} from "./archive.js";
 
 export type NotionSelectColor =
   | "default"
@@ -274,19 +281,34 @@ async function ensureParentDb(
     parentDbCache.set(service, existing);
     return existing;
   }
-  const created = await notionRequest<{ id: string }>("POST", "/databases", {
-    parent: { type: "page_id", page_id: backup },
-    title: [{ type: "text", text: { content: title } }],
-    properties: {
-      銘柄コード: { title: {} },
-      銘柄名: { rich_text: {} },
-      コード: { select: {} },
+  const wantParentProps = {
+    銘柄コード: { title: {} },
+    銘柄名: { rich_text: {} },
+    コード: { select: {} },
+  };
+  const res = await createDatabaseOrAdopt<{ id: string }>(
+    {
+      parent: { type: "page_id", page_id: backup },
+      title: [{ type: "text", text: { content: title } }],
+      properties: wantParentProps,
     },
-  });
+    () => findUniqueBackupChildByTitle({ parentPageId: backup, title, kind: "database" })
+  );
   // tagOptions は子 DB で使う (親では未使用) — 受け取りは API 一貫性のため
   void tagOptions;
-  parentDbCache.set(service, created.id);
-  return created.id;
+  if (res.created) {
+    parentDbCache.set(service, res.id);
+    return res.id;
+  }
+  // adopted → cache 前に必須列の型を検証。型違い・不足は保全停止し、
+  // 既存列を置換しない。
+  const schema = await notionRequest<{ properties: Record<string, { type: string }> }>(
+    "GET",
+    `/databases/${res.id}`
+  );
+  assertAdoptedDatabaseSchema(schema.properties, wantParentProps, `銘柄別親DB「${title}」の回収`);
+  parentDbCache.set(service, res.id);
+  return res.id;
 }
 
 /** 親 DB から ticker の銘柄ページを取得 (無ければ作成) */
@@ -294,15 +316,12 @@ async function ensureStockPage(
   parentDbId: string,
   row: ByStockRow
 ): Promise<string> {
-  const res = await notionRequest<{ results: Array<{ id: string }> }>(
-    "POST",
-    `/databases/${parentDbId}/query`,
-    {
-      filter: { property: "銘柄コード", title: { equals: row.ticker } },
-      page_size: 1,
-    }
+  const existing = await queryUniqueRow<{ id: string }>(
+    parentDbId,
+    { property: "銘柄コード", title: { equals: row.ticker } },
+    `銘柄別データの親ページの重複 ticker=${row.ticker} を選ばず保全停止`
   );
-  if (res.results[0]) return res.results[0].id;
+  if (existing) return existing.id;
 
   const created = await notionRequest<{ id: string }>("POST", "/pages", {
     parent: { database_id: parentDbId },
@@ -333,37 +352,49 @@ async function ensureChildDb(
   tagOptions: ByStockInput["tagOptions"]
 ): Promise<string> {
   const title = childTitle(ticker);
-  const existing = await findChildDatabase(stockPageId, title);
-  if (existing) {
-    const db = await notionRequest<{
-      properties: Record<string, { type: string }>;
-      is_inline?: boolean;
-    }>("GET", `/databases/${existing}`);
-    const want = childProperties(tagOptions);
-    const add: Record<string, unknown> = {};
-    for (const k of Object.keys(want)) {
-      if (!(k in db.properties)) add[k] = want[k];
-    }
-    // インライン化(銘柄ページを開いた瞬間にIR表が直接展開される。リンク
-    // を開く操作が不要)。既存が full-page なら PATCH で inline に切替
-    // (非破壊・冪等)。
-    const patch: Record<string, unknown> = {};
-    if (Object.keys(add).length > 0) patch.properties = add;
-    if (db.is_inline !== true) patch.is_inline = true;
-    if (Object.keys(patch).length > 0) {
-      await notionRequest("PATCH", `/databases/${existing}`, patch);
-    }
-    return existing;
+  let existing = await findChildDatabase(stockPageId, title);
+  let adopted = false;
+  if (!existing) {
+    const res = await createDatabaseOrAdopt<{ id: string }>(
+      {
+        parent: { type: "page_id", page_id: stockPageId },
+        title: [{ type: "text", text: { content: title } }],
+        // is_inline:true で銘柄ページの本文中に展開される (リンク表示でなく
+        // 開いた瞬間に IR テーブルが見える)。
+        is_inline: true,
+        properties: childProperties(tagOptions),
+      },
+      () => findUniqueChildDatabaseForAdopt(stockPageId, title)
+    );
+    if (res.created) return res.id;
+    // adopted → 下の schema 検証へ進む (同名の古い DB かもしれないため)。
+    existing = res.id;
+    adopted = true;
   }
-  const created = await notionRequest<{ id: string }>("POST", "/databases", {
-    parent: { type: "page_id", page_id: stockPageId },
-    title: [{ type: "text", text: { content: title } }],
-    // is_inline:true で銘柄ページの本文中に展開される (リンク表示でなく
-    // 開いた瞬間に IR テーブルが見える)。
-    is_inline: true,
-    properties: childProperties(tagOptions),
-  });
-  return created.id;
+  const db = await notionRequest<{
+    properties: Record<string, { type: string }>;
+    is_inline?: boolean;
+  }>("GET", `/databases/${existing}`);
+  const want = childProperties(tagOptions);
+  if (adopted) {
+    // 回収 DB は PATCH/cache/return 前に必須列の型を検証する。
+    // 型違い・不足は保全停止し、既存列を置換しない。
+    assertAdoptedDatabaseSchema(db.properties, want, `適時開示子DB「${title}」の回収`);
+  }
+  const add: Record<string, unknown> = {};
+  for (const k of Object.keys(want)) {
+    if (!(k in db.properties)) add[k] = want[k];
+  }
+  // インライン化(銘柄ページを開いた瞬間にIR表が直接展開される。リンク
+  // を開く操作が不要)。既存が full-page なら PATCH で inline に切替
+  // (非破壊・冪等)。
+  const patch: Record<string, unknown> = {};
+  if (Object.keys(add).length > 0) patch.properties = add;
+  if (db.is_inline !== true) patch.is_inline = true;
+  if (Object.keys(patch).length > 0) {
+    await notionRequest("PATCH", `/databases/${existing}`, patch);
+  }
+  return existing;
 }
 
 async function resolveStock(
