@@ -85,10 +85,13 @@ export type YieldInputs = {
   scoreInputs: Map<number, ScoringInput>;
   scores: Map<number, ScoreTriple>;
   /**
-   * 親銘柄の同一性 (同一読取で取得)。preflight が銘柄の付け替え・凍結破り・
-   * 区分違いを止める。行が無い銘柄は snapshot で STOP する (縮めない)。
+   * 親銘柄の同一性 (同一読取で取得)。preflight が銘柄の付け替え・凍結破りを
+   * 止める。行が無い銘柄は snapshot で STOP する (縮めない)。
+   * `instrument_type` の値は select しない (personal-only。ライセンス D-13-6)。
+   * 区分の確認は preflight 側で `activeEquityCondition()` と等価の述語
+   * (値は bind) で行う。
    */
-  parents: Map<number, { code: string; isActive: boolean; instrumentType: string | null } | null>;
+  parents: Map<number, { code: string; isActive: boolean } | null>;
 };
 
 /** D1 から利回り・スコア入力を読む。 */
@@ -109,13 +112,12 @@ export async function fetchYieldInputs(
         stockId: coreStocks.id,
         code: coreStocks.code,
         isActive: coreStocks.isActive,
-        instrumentType: coreStocks.instrumentType,
       })
       .from(coreStocks)
       .where(inArray(coreStocks.id, chunk));
     for (const id of chunk) {
       const p = parentRows.find((r) => r.stockId === id);
-      parents.set(id, p ? { code: p.code, isActive: p.isActive, instrumentType: p.instrumentType } : null);
+      parents.set(id, p ? { code: p.code, isActive: p.isActive } : null);
     }
     const finRows = await db
       .select({

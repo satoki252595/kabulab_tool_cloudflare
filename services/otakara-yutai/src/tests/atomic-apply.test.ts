@@ -26,7 +26,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
+import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
+import { stocks as coreStocks } from "../../../../src/shared/db/core-schema.js";
 import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
 import { scoreStock } from "../../../../src/shared/scoring.js";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
@@ -537,6 +540,51 @@ describe("preflight ガード", () => {
     const inputs = await fetchYieldInputs(db, [STOCK_A]);
     expect(inputs.parents.get(STOCK_A)).toBeNull();
     expect(() => snapshotStockPreimages(inputs, [STOCK_A])).toThrow("missing STOP");
+  });
+
+  it("親の適格述語は activeEquityCondition() と等価 (区分の値は select しない)", async () => {
+    // preflight の親脚 (id・コード・active の値 CAS + equity 述語) が、
+    // 正規 helper と同じ行集合を通すことを active×区分の行列で固定する。
+    const { yieldPlan, preimages } = await planA();
+    const batches = planAtomicBatches({
+      updates: [UPDATE_A],
+      yieldPlan,
+      stockOfBenefit: stockOfA,
+      preimages,
+    });
+    const preflight = batches[0].statements[0];
+    const passes = (): boolean => {
+      try {
+        sqlite.prepare(preflight.sql).get(...(preflight.params as []));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const helperPasses = async (): Promise<boolean> => {
+      const rows = await db
+        .select({ id: coreStocks.id })
+        .from(coreStocks)
+        .where(and(eq(coreStocks.id, STOCK_A), activeEquityCondition()));
+      return rows.length > 0;
+    };
+    const matrix: [number, string | null][] = [
+      [1, "equity"],
+      [1, "etf"],
+      [1, null],
+      [0, "equity"],
+      [0, "etf"],
+      [0, null],
+    ];
+    for (const [active, inst] of matrix) {
+      sqlite.prepare("UPDATE core_stocks SET is_active = ?, instrument_type = ? WHERE id = ?").run(active, inst, STOCK_A);
+      // snapshot は active=true で固定 (他列は無変更)。親脚だけが変わる。
+      expect(passes(), `preflight (active=${active}, inst=${inst})`).toBe(await helperPasses());
+    }
+    // 行列の期待値そのものも固定する (helper が equity のみ通すこと)。
+    sqlite.prepare("UPDATE core_stocks SET is_active = 1, instrument_type = 'equity' WHERE id = ?").run(STOCK_A);
+    expect(passes()).toBe(true);
+    expect(await helperPasses()).toBe(true);
   });
 
   it("財務・スコア行が無い銘柄は行の不在を preimage にする", async () => {

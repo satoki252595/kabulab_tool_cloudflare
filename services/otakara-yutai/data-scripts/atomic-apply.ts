@@ -12,6 +12,7 @@
  * 同引数の再実行で回復する (適用済み銘柄は無変更・冪等)。
  */
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
+import { INSTRUMENT_TYPE_EQUITY } from "../../../src/shared/jpx/instrument-type.js";
 import { buildBenefitUpdateStatements, type PlannedUpdate } from "./summary-import.js";
 import {
   buildYieldScoreStatements,
@@ -43,11 +44,15 @@ export type StockBenefitPreimage = {
 export type StockPreimage = {
   stockId: number;
   /**
-   * 親銘柄の同一性 (銘柄 ID・コード・active・区分)。付け替え・凍結破り・
-   * 区分違いを preflight で止める。 snapshot 時に行が無ければ STOP する
+   * 親銘柄の同一性 (銘柄 ID・コード・active)。付け替え・凍結破りを
+   * preflight で止める。snapshot 時に行が無ければ STOP する
    * (null 許容にしない。ガードを縮めないため)。
+   * 区分 (`instrument_type`) の値は保持しない (personal-only)。
+   * preflight は値 CAS (id・コード・active) に加え、正常適格の述語
+   * (`activeEquityCondition()` と等価。値は bind) を要求する。
+   * 非 active・非 equity の銘柄は preimage の値にかかわらず落ちる。
    */
-  parent: { code: string; isActive: boolean; instrumentType: string | null };
+  parent: { code: string; isActive: boolean };
   /** 同銘柄の優待行の全集合 (追加・削除の検知を含む)。 */
   benefits: StockBenefitPreimage[];
   /**
@@ -104,7 +109,7 @@ export function snapshotStockPreimages(
     }
     out.set(stockId, {
       stockId,
-      parent: { code: parent.code, isActive: parent.isActive, instrumentType: parent.instrumentType },
+      parent: { code: parent.code, isActive: parent.isActive },
       benefits: (inputs.benefits.get(stockId) ?? [])
         .map((b) => ({
           id: b.rowId,
@@ -250,12 +255,18 @@ export function buildStockPreflightStatement(snapshot: StockPreimage): D1BatchSt
     "  SELECT CASE WHEN json_extract((SELECT j FROM snap), '$.scores') IS NULL THEN (SELECT count(*) = 0 FROM otakara_stock_scores WHERE stock_id = ?) ELSE EXISTS (SELECT 1 FROM otakara_stock_scores WHERE stock_id = ? AND fundamental_score IS json_extract((SELECT j FROM snap), '$.scores.fundamentalScore') AND technical_score IS json_extract((SELECT j FROM snap), '$.scores.technicalScore') AND total_score IS json_extract((SELECT j FROM snap), '$.scores.totalScore')) END",
     "),",
     "par_ok(ok) AS (",
-    "  SELECT EXISTS (SELECT 1 FROM core_stocks WHERE id = ? AND code IS json_extract((SELECT j FROM snap), '$.parent.code') AND is_active IS json_extract((SELECT j FROM snap), '$.parent.isActive') AND instrument_type IS json_extract((SELECT j FROM snap), '$.parent.instrumentType'))",
+    // 親は値 CAS (id・コード・active) + 正常適格の述語で確認する。
+    // 区分の値は select せず `activeEquityCondition()` と等価の述語
+    // (is_active = 1 AND instrument_type = 'equity'。値は bind) で確認する
+    // (personal-only。ライセンス D-13-6。等価性はテストで固定)。
+    // 非 active・非 equity の銘柄は preimage の値にかかわらず落ちる
+    // (凍結行への適用を境界で止める。fail-closed)。
+    "  SELECT EXISTS (SELECT 1 FROM core_stocks WHERE id = ? AND code IS json_extract((SELECT j FROM snap), '$.parent.code') AND is_active IS json_extract((SELECT j FROM snap), '$.parent.isActive') AND is_active IS 1 AND instrument_type IS ?)",
     ")",
     "SELECT json(CASE WHEN (SELECT count(*) FROM act_ben) = (SELECT count(*) FROM exp_ben) AND NOT EXISTS (SELECT * FROM act_ben EXCEPT SELECT * FROM exp_ben) AND NOT EXISTS (SELECT * FROM exp_ben EXCEPT SELECT * FROM act_ben) AND (SELECT ok FROM fin_ok) AND (SELECT ok FROM sco_ok) AND (SELECT ok FROM par_ok) THEN 'null' ELSE '' END)",
   ].join("\n");
   const sid = snapshot.stockId;
-  return { sql, params: [JSON.stringify(snapshot), sid, sid, sid, sid, sid, sid] };
+  return { sql, params: [JSON.stringify(snapshot), sid, sid, sid, sid, sid, sid, INSTRUMENT_TYPE_EQUITY] };
 }
 
 /** batch 1 件分の送信口。本番は `createD1HttpBatchSender()`、テストでは差し替える。 */
