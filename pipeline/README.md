@@ -69,7 +69,7 @@ nix develop -c uv run --env-file .env --project pipeline python pipeline/scripts
 ```
 
 ⑤をsource/データ基準日/原本種別で一括queryし、Notion APIは既定2.5rps、
-保存済みファイルは4並列で取得します。ファイルはstreamで圧縮64MiB、展開128MiBを
+保存済みファイルは4接続を再利用して並列取得します。ファイルはstreamで圧縮64MiB、展開128MiBを
 上限とし、超過・ハッシュ不一致・期末/連結区分未確定は失敗をjournalへ残します。
 期限付きファイルURLはログやjournalへ出しません。原本をSHA名でcacheし、同じ
 journalで再実行すると成功済みを省略し、失敗だけ再試行します。

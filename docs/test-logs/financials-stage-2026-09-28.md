@@ -112,3 +112,8 @@ NotionのファイルURLは一時S3 URLで、元TDnet/EDINET APIの再取得は�
 
 進行中の原本取得jobは旧parser版の読取baselineであり、最終版の全件再解析が必要。
 journalにparserのSHAを付け、旧版のjournalをNotionへ反映する操作は接続前に拒否する。
+
+実保管原本31,225bytesで接続再利用を比較し、単発HTTPX接続は0.659/0.597秒、
+同一clientは初回0.604秒/再利用0.165秒（全HTTP200）。4接続のpoolを使い、
+新parserの読取jobへ切替えた。旧jobの原本cache6,155件は全SHA一致、再取得を省く。
+HTTPXの[公式client仕様](https://www.python-httpx.org/advanced/clients/)も確認した。

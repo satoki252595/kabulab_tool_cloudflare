@@ -79,9 +79,9 @@ def _journal_items(journal: Path) -> dict[str, dict]:
     return {item["page_id"]: item for item in map(json.loads, journal.read_text().splitlines())}
 
 
-def _download(url: str, code: str) -> bytes:
+def _download(url: str, code: str, client: httpx.Client) -> bytes:
     content = bytearray()
-    with httpx.stream("GET", url, follow_redirects=True, timeout=60) as response:
+    with client.stream("GET", url) as response:
         if response.status_code != 200:
             raise ValueError(f"{code}: 原本取得HTTP {response.status_code}")
         for chunk in response.iter_bytes():
@@ -92,7 +92,7 @@ def _download(url: str, code: str) -> bytes:
 
 
 def reparse_record(
-    old: FinancialSummaryRecord, raw_page: dict, cache_dir: Path
+    old: FinancialSummaryRecord, raw_page: dict, cache_dir: Path, client: httpx.Client
 ) -> tuple[FinancialSummaryRecord, dict]:
     props = raw_page["properties"]
     if props[S.PROP_SOURCE]["select"]["name"] != old.provenance.source.value:
@@ -113,8 +113,10 @@ def reparse_record(
         if len(files) != 1:
             raise ValueError(f"{old.code}: 原本ファイルが一意ではありません")
         file = files[0]
+        if file["type"] != "file":
+            raise ValueError(f"{old.code}: 原本実体がNotion保管ファイルではありません")
         # 期限付きURLはjournal/ログへ出さない。Notion⑤のハッシュで照合する。
-        content = _download(file[file["type"]]["url"], old.code)
+        content = _download(file[file["type"]]["url"], old.code, client)
     if hashlib.sha256(content).hexdigest() != digest:
         raise ValueError(f"{old.code}: 原本SHA256が一致しません")
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
@@ -215,6 +217,7 @@ def _financial_pages(client, database_id, source, future_after, codes):
 
 
 def audit(*, source, future_after, limit, journal: Path, cache_dir: Path, codes=None):
+    started = time.monotonic()
     settings = load_settings()
     if not settings.notion_token:
         raise ValueError("NOTION_TOKEN が必要です")
@@ -239,9 +242,18 @@ def audit(*, source, future_after, limit, journal: Path, cache_dir: Path, codes=
             raise ValueError(f"{old.code}: 原本の取得対象日がありません")
         groups[(old.provenance.source.value, old.provenance.data_date)].append((page["id"], old))
     checked = changed = failed = fallbacks = 0
-    started = time.monotonic()
-    with journal.open("a") as output, ThreadPoolExecutor(max_workers=4) as pool:
-        for (data_source, data_date), rows in sorted(groups.items()):
+    with (
+        journal.open("a") as output,
+        httpx.Client(
+            timeout=60,
+            follow_redirects=True,
+            limits=httpx.Limits(max_connections=4, max_keepalive_connections=4),
+        ) as download_client,
+        ThreadPoolExecutor(max_workers=4) as pool,
+    ):
+        for (data_source, data_date), rows in sorted(
+            groups.items(), key=lambda entry: (entry[0][0] != "TDnet", entry[0][1])
+        ):
             # ⑤を日付・source・種別でまとめてquery。個別GETを100行/reqのページングへ減らす。
             raw_pages = client.query_database(
                 settings.db_id("raw_files"),
@@ -268,7 +280,11 @@ def audit(*, source, future_after, limit, journal: Path, cache_dir: Path, codes=
                     fallbacks += 1
                     raw_page = client.get_page(raw_id)
                 futures.append(
-                    (page_id, old, pool.submit(reparse_record, old, raw_page, cache_dir))
+                    (
+                        page_id,
+                        old,
+                        pool.submit(reparse_record, old, raw_page, cache_dir, download_client),
+                    )
                 )
             for page_id, old, future in futures:
                 checked += 1

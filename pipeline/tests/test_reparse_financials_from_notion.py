@@ -9,6 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -30,9 +31,16 @@ def test_mismatched_archive_hash_stops_before_parsing(tmp_path, monkeypatch):
     }
     parsed = []
     monkeypatch.setattr(reparse, "edinet_csv_zip_to_tidy", lambda *args: parsed.append(args))
-    with pytest.raises(ValueError, match="SHA256が一致しません"):
-        reparse.reparse_record(old, raw, tmp_path)
+    with reparse.httpx.Client() as client, pytest.raises(ValueError, match="SHA256が一致しません"):
+        reparse.reparse_record(old, raw, tmp_path, client)
     assert parsed == []
+
+
+def test_stream_download_rejects_over_limit_before_buffering_more(monkeypatch):
+    monkeypatch.setattr(reparse, "MAX_RAW_BYTES", 3)
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=b"abcd"))
+    with httpx.Client(transport=transport) as client, pytest.raises(ValueError, match="上限"):
+        reparse._download("https://example.invalid/archive", "8154", client)
 
 
 def test_resumed_success_supersedes_error_without_erasing_history(tmp_path):
