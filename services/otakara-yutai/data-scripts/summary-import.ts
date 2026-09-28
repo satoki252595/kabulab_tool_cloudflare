@@ -375,6 +375,24 @@ export function buildBenefitUpdateStatements(
 }
 
 /**
+ * 全文修復の description 書き換えを D1 REST batch 用の UPDATE 文にする
+ * (純関数・副作用なし)。旧掲載文と更新時刻を行ごとに CAS し、計画時と
+ * 違う行には書かない (changes() 0 の放置は呼び出し側が検知する)。
+ * 旧値が行ごとに違うため IN で束ねず 1 行 1 文にする。
+ * 必ず同銘柄 batch の preflight (`buildStockPreflightStatement`) と組にして
+ * 同一 batch で送ること (単独実行はしない)。
+ */
+export function buildDescriptionUpdateStatements(
+  rows: readonly { id: number; oldDescription: string; updatedAt: number }[],
+  newDescription: string,
+): D1BatchStatement[] {
+  return rows.map((r) => ({
+    sql: "UPDATE yutai_benefits SET description = ?, updated_at = (unixepoch()) WHERE id = ? AND description = ? AND updated_at = ?",
+    params: [newDescription, r.id, r.oldDescription, r.updatedAt],
+  }));
+}
+
+/**
  * 計画をログ用の行にする。既定 (`showText` 省略・false) では掲載文由来の文字列を
  * 一切出さない — `Rejection.detail` は規則名・字数・件数だけ、`Rejection.text`
  * (契約違反の要約本体や壊れた行の原文) はそもそも `planSummaryImport` に
