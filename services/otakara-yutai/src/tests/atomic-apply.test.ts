@@ -633,3 +633,28 @@ describe("buildBenefitUpdateStatements / buildYieldScoreStatements", () => {
     expect(buildBenefitUpdateStatements([], { shortSummary: "x", estimatedValue: null, estimateValueSource: null })).toEqual([]);
   });
 });
+
+describe("applyAtomicBatches の StockBatch.key (再開キーの取り違え防止)", () => {
+  it("重複・付け忘れは送らず投げ、同一銘柄の別種別キーは通る", async () => {
+    const sent: D1BatchStatement[][] = [];
+    const sender: AtomicBatchSender = async (statements) => {
+      sent.push([...statements]);
+    };
+    const one = (key?: string) => ({
+      stockId: 291,
+      statements: [{ sql: "SELECT 1", params: [] }],
+      ...(key === undefined ? {} : { key }),
+    });
+    // 市場36復元で実検出: 銘柄 ID だけを完了キーにすると同一銘柄の
+    // 別種別 batch (例: annual:291) が落ちる。重複送信は 0 で修正済み。
+    await expect(applyAtomicBatches(sender, [one("annual:291"), one("annual:291")])).rejects.toThrow("重複");
+    expect(sent).toEqual([]);
+    await expect(applyAtomicBatches(sender, [one("atr:291"), one()])).rejects.toThrow("付け忘れ");
+    expect(sent).toEqual([]);
+    await applyAtomicBatches(sender, [one("atr:291"), one("annual:291")]);
+    expect(sent).toHaveLength(2);
+    // キーなし (従来呼び出し) はそのまま通る
+    await applyAtomicBatches(sender, [one(), one()]);
+    expect(sent).toHaveLength(4);
+  });
+});

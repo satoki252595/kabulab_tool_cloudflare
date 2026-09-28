@@ -251,6 +251,13 @@ export type AtomicBatchSender = (
 export type StockBatch = {
   stockId: number;
   statements: D1BatchStatement[];
+  /**
+   * 呼び出し側の種別つき完了キー (例: `atr:291`)。再送・再開の完了記録に
+   * 使う。銘柄 ID だけをキーにすると同一銘柄の別種別 batch を落とす
+   * (市場36復元で実検出・重複送信0で修正)。キーを付ける場合は全 batch に
+   * 付け、`applyAtomicBatches` が重複を投げる。
+   */
+  key?: string;
 };
 
 /**
@@ -323,6 +330,18 @@ export async function applyAtomicBatches(
   sender: AtomicBatchSender,
   batches: readonly StockBatch[]
 ): Promise<{ stocks: number; statements: number }> {
+  const keys = batches.map((b) => b.key);
+  if (keys.some((k) => k !== undefined)) {
+    const missing = batches.filter((b) => b.key === undefined).map((b) => b.stockId);
+    if (missing.length > 0) {
+      throw new Error(`StockBatch.key の付け忘れ (stocks: ${missing.join(",")})。付ける場合は全 batch に付けること`);
+    }
+    const seen = new Set<string>();
+    for (const k of keys as string[]) {
+      if (seen.has(k)) throw new Error(`StockBatch.key の重複: ${k} (同一銘柄の別種別 batch が落ちる。再開キーは種別つきにすること)`);
+      seen.add(k);
+    }
+  }
   let statements = 0;
   for (const b of batches) {
     await sender(b.statements);
