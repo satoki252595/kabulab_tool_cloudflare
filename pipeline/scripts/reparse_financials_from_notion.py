@@ -369,8 +369,12 @@ def apply_journal(journal: Path, receipts: Path | None = None):
     client = NotionClient(settings.notion_token, rps=settings.notion_rps)
     database_id = settings.db_id("financials")
     grouped = defaultdict(list)
+    canonical_values = {_json(item["new"]) for item in items}
     for item in items:
         grouped[item["old"]["code"]].append(item)
+    for group in grouped.values():
+        # キー変更で複数の開示が合流するとき、最新原本を先に修復する。
+        group.sort(key=lambda item: item["new"]["disclosed_at"] or "", reverse=True)
     codes = sorted(grouped)
     receipts = receipts if receipts is not None else journal.with_suffix(".applied.jsonl")
     receipts.parent.mkdir(parents=True, exist_ok=True)
@@ -401,8 +405,10 @@ def apply_journal(journal: Path, receipts: Path | None = None):
                     elif (page is None and targets and item["page_id"] in previous
                           and previous[item["page_id"]].get("parser_sha256") == PARSER_SHA256
                           and previous[item["page_id"]].get("raw_sha256") == item["raw_sha256"]
-                          and previous[item["page_id"]]["record"] ==
-                          _record_dict(_page_record(targets[0]))
+                          and previous[item["page_id"]]["target_page_id"] == targets[0]["id"]
+                          and (previous[item["page_id"]]["record"] ==
+                               _record_dict(_page_record(targets[0])) or
+                               _json(_record_dict(_page_record(targets[0]))) in canonical_values)
                           and not financial_overwrite_allowed(targets[0], record)):
                         saved, action = targets[0], "newer_disclosure_preserved"
                     else:
@@ -454,6 +460,16 @@ def _doc_id(item: dict) -> str | None:
     return match.group(1)
 
 
+def _d1_rows(store: D1Store, codes: list[str]) -> dict:
+    rows = {}
+    for offset in range(0, len(codes), 50):
+        batch = codes[offset:offset + 50]
+        for row in store.query(f"SELECT {', '.join(COLUMNS)} FROM {TABLE} "
+                               f"WHERE code IN ({', '.join('?' for _ in batch)})", batch):
+            rows[tuple(row[c] for c in FINANCIALS_PK)] = row
+    return rows
+
+
 def sync_d1(journal: Path, receipts: Path) -> None:
     items, applied = _journal_items(journal), _journal_items(receipts)
     if not items or any("error" in i or i.get("parser_sha256") != PARSER_SHA256
@@ -485,19 +501,28 @@ def sync_d1(journal: Path, receipts: Path) -> None:
            for item, receipt in verified.values()):
         raise ValueError("Notion正本が再読成功後に変わりました。D1書込を止めます")
     store = D1Store(settings.cloud_store, writer="financials_verified_repair")
+    existing = _d1_rows(store, codes)
     stock_ids = {}
     prefetch_stock_ids(store, codes, cache=stock_ids)
     rows = [record_to_row(_record_from_dict(item["new"]), stock_id=stock_ids[key[0]],
                           doc_id=_doc_id(item), raw_sha256=item["raw_sha256"])
             for key, (item, receipt) in verified.items()]
+    proof_columns = ("code", "source", "disclosed_at", "raw_sha256")
+    document_ids = defaultdict(set)
+    for old in existing.values():
+        if old["doc_id"] is not None and old["raw_sha256"] is not None:
+            document_ids[tuple(old[c] for c in proof_columns)].add(old["doc_id"])
+    for row in rows:
+        if row[COLUMNS.index("doc_id")] is not None:
+            continue
+        ids = document_ids[tuple(row[COLUMNS.index(c)] for c in proof_columns)]
+        if len(ids) > 1:
+            raise ValueError("同じ原本の既存書類IDが一意ではありません")
+        if ids:
+            [row[COLUMNS.index("doc_id")]] = ids
     for offset in range(0, len(rows), 100):
         store.query(_repair_sql(), [_json(rows[offset:offset + 100])])
-    saved = {}
-    for offset in range(0, len(codes), 50):
-        batch = codes[offset:offset + 50]
-        for row in store.query(f"SELECT {', '.join(COLUMNS)} FROM {TABLE} "
-                               f"WHERE code IN ({', '.join('?' for _ in batch)})", batch):
-            saved[tuple(row[c] for c in FINANCIALS_PK)] = row
+    saved = _d1_rows(store, codes)
     protected = 0
     for values in rows:
         expected = dict(zip(COLUMNS, values, strict=True))

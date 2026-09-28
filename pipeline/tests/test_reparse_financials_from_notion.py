@@ -214,9 +214,58 @@ def test_d1_repair_rejects_missing_notion_read_proof_before_connecting(tmp_path,
         reparse.sync_d1(journal, receipts)
 
 
-@pytest.mark.parametrize("stored_hash", [None, "b" * 64])
-def test_notion_verified_d1_repair_retires_only_matching_old_key(tmp_path, monkeypatch, stored_hash):
+def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(tmp_path, monkeypatch):
+    older = replace(reparse.notion_financial(_page()), fiscal_period_end=reparse.date(2027, 3, 31))
+    older_new = replace(older, fiscal_period_end=reparse.date(2025, 3, 31))
+    newer_old = replace(older_new, disclosed_at=older.disclosed_at + timedelta(days=1), net_sales=None)
+    newer_new = replace(newer_old, net_sales=547_779_000_000)
+    journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
+    def item(page_id, old, new, digest):
+        return {"page_id": page_id, "old": reparse._record_dict(old),
+                "new": reparse._record_dict(new), "changes": {"net_sales": {}},
+                "parser_sha256": reparse.PARSER_SHA256, "raw_sha256": digest}
+    journal.write_text("\n".join(map(json.dumps, [
+        item("archived", older, older_new, "a" * 64),
+        item("target", newer_old, newer_new, "b" * 64),
+    ])) + "\n")
+    receipts.write_text(json.dumps({
+        "page_id": "archived", "target_page_id": "target",
+        "record": reparse._record_dict(newer_old), "parser_sha256": reparse.PARSER_SHA256,
+        "raw_sha256": "a" * 64, "action": "newer_disclosure_preserved",
+    }) + "\n")
+    page, events = {"id": "target", "record": newer_old}, []
+    class Client:
+        def query_database(self, *args, **kwargs):
+            return [page.copy()]
+        def update_page(self, *args):
+            events.append("update_latest")
+            page["record"] = newer_new
+        def get_page(self, *args):
+            events.append("read_latest")
+            return page.copy()
+    monkeypatch.setattr(reparse, "NotionClient", lambda *args, **kwargs: Client())
+    monkeypatch.setattr(reparse, "load_settings", lambda: SimpleNamespace(
+        notion_token="test-token", notion_rps=2.5, db_id=lambda key: "db",
+    ))
+    monkeypatch.setattr(reparse, "_page_record", lambda page: page["record"])
+    monkeypatch.setattr(reparse, "financial_overwrite_allowed",
+                        lambda page, record: page["record"].disclosed_at <= record.disclosed_at)
+    reparse.apply_journal(journal, receipts)
+    assert events == ["update_latest", "read_latest"]
+    proof = reparse._journal_items(receipts)
+    assert proof["archived"]["record"] == reparse._record_dict(newer_new)
+    assert proof["archived"]["raw_sha256"] == "a" * 64
+    assert proof["target"]["raw_sha256"] == "b" * 64
+    events.clear()
+    reparse.apply_journal(journal, receipts)
+    assert events == []
+
+
+@pytest.mark.parametrize("stored_hash,source", [(None, "EDINET"), ("b" * 64, "EDINET"),
+                                               ("a" * 64, "TDnet")])
+def test_notion_verified_d1_repair_retires_only_matching_old_key(tmp_path, monkeypatch, stored_hash, source):
     old = replace(reparse.notion_financial(_page()), fiscal_period_end=reparse.date(2027, 3, 31))
+    old = replace(old, provenance=replace(old.provenance, source=reparse.Source(source)))
     corrected = replace(old, fiscal_period_end=reparse.date(2025, 3, 31),
                         consolidated="単体", net_sales=117_513_000_000)
     item = {"page_id": "p", "old": reparse._record_dict(old),
@@ -232,7 +281,9 @@ def test_notion_verified_d1_repair_retires_only_matching_old_key(tmp_path, monke
     conn.row_factory = sqlite3.Row
     conn.execute(_FINANCIALS)
     conn.execute(reparse._repair_sql(), [json.dumps([
-        record_to_row(old, stock_id=None, doc_id=None, raw_sha256=stored_hash)
+        record_to_row(old, stock_id=None,
+                      doc_id="140120260917537640" if source == "TDnet" else None,
+                      raw_sha256=stored_hash)
     ])])
     conn.execute("CREATE TABLE core_stocks (id INTEGER, code TEXT)")
     conn.execute("INSERT INTO core_stocks VALUES (1,'8154')")
@@ -258,5 +309,6 @@ def test_notion_verified_d1_repair_retires_only_matching_old_key(tmp_path, monke
         "SELECT fiscal_period_end,consolidated,net_sales,stock_id,doc_id FROM jss_financials "
         "ORDER BY fiscal_period_end"
     )]
-    assert result[0] == ("2025-03-31", "単体", 117_513_000_000, 1, "S100YNQJ")
-    assert len(result) == (1 if stored_hash is None else 2)
+    doc_id = "140120260917537640" if source == "TDnet" else "S100YNQJ"
+    assert result[0] == ("2025-03-31", "単体", 117_513_000_000, 1, doc_id)
+    assert len(result) == (2 if stored_hash == "b" * 64 else 1)
