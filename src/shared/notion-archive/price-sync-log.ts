@@ -14,7 +14,7 @@
  * `tradingDate: null` で呼び、本モジュールは必ず `状態=失敗` の行を作る
  * (ルール2: 黙って埋めない)。
  */
-import { findBackupChildByTitle } from "./archive.js";
+import { findBackupChildByTitle, queryUniqueRow } from "./archive.js";
 import { notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import type { NotionSelectColor } from "./dataset.js";
@@ -174,17 +174,14 @@ function unresolvedTitle(completedAt: string): string {
   return `失敗（取引日不明）${completedAt}`;
 }
 
-interface QueryResponse {
-  results: Array<{ id: string }>;
-}
-
 /** タイトル完全一致で既存行を探す (取引日が分かる行のみ冪等キーとして使う)。 */
 async function findRowByTitle(dbId: string, title: string): Promise<string | null> {
-  const res = await notionRequest<QueryResponse>("POST", `/databases/${dbId}/query`, {
-    filter: { property: PRICE_SYNC_PROPS.title, title: { equals: title } },
-    page_size: 1,
-  });
-  return res.results[0]?.id ?? null;
+  const row = await queryUniqueRow<{ id: string }>(
+    dbId,
+    { property: PRICE_SYNC_PROPS.title, title: { equals: title } },
+    `株価の日次同期の重複 title=${title} を選ばず保全停止`
+  );
+  return row?.id ?? null;
 }
 
 export interface RecordPriceSyncLogResult {

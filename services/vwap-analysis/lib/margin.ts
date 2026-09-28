@@ -6,7 +6,13 @@ const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 const BASE = "https://www.jpx.co.jp";
-const PAGE = `${BASE}/markets/statistics-equities/margin/05.html`;
+/**
+ * 銘柄別信用取引週末残高の一覧ページ。
+ * 2026-09-28 実測で週末残高 PDF (syumatsu*.pdf) は 05.html から 01.html
+ * (銘柄別信用取引残高) へ移転した。05.html は信用取引現在高表のみになり
+ * syumatsu リンクが 0 件のため、05.html のままでは発見できない。
+ */
+const PAGE = `${BASE}/markets/statistics-equities/margin/01.html`;
 
 export interface MarginRow { code: string; sell: number; buy: number; sell_chg: number; buy_chg: number; }
 export interface MarginData {
@@ -18,13 +24,76 @@ export interface MarginData {
   pdfUrl: string;
 }
 
+// 一覧ページから syumatsu*.pdf のリンクを抜き出す純関数。
+// stamp は `syumatsu2026091800.pdf` の `2026091800` 部分 (日付 YYYYMMDD + `00`)。
+export function extractMarginPdfLinks(html: string): Array<{ url: string; stamp: string }> {
+  const m = [...html.matchAll(/\/markets\/statistics-equities\/margin\/[^"']*?syumatsu(\d+)\.pdf/g)];
+  return m.map((x) => ({ url: x[0], stamp: x[1] }));
+}
+
+/** 一覧 HTML から最新の syumatsu*.pdf の URL を得る純関数。無ければ throw する。 */
+export function latestMarginPdfUrlFromHtml(html: string): string {
+  const links = extractMarginPdfLinks(html);
+  if (!links.length) throw new Error("margin pdf link not found");
+  links.sort((a, b) => a.stamp.localeCompare(b.stamp));
+  return BASE + links[links.length - 1]!.url;
+}
+
+/**
+ * 一覧 HTML から指定週 (YYYYMMDD) の syumatsu*.pdf の URL を得る純関数。
+ * 欠落週の手動補修 (`--week`) 用。該当が無ければ throw し、最新週で
+ * 代用しない (ルール2: 別週の値を黙って使わない)。
+ */
+export function marginPdfUrlForWeekFromHtml(html: string, yyyymmdd: string): string {
+  if (!/^\d{8}$/.test(yyyymmdd)) {
+    throw new Error(`margin week の形式が不正です (YYYYMMDD): ${yyyymmdd}`);
+  }
+  const links = extractMarginPdfLinks(html).filter((l) => l.stamp.startsWith(yyyymmdd));
+  if (!links.length) {
+    throw new Error(`margin pdf link not found for week=${yyyymmdd} (一覧に該当週がありません)`);
+  }
+  links.sort((a, b) => a.stamp.localeCompare(b.stamp));
+  return BASE + links[links.length - 1]!.url;
+}
+
 // 一覧ページから最新の syumatsu*.pdf の URL を得る。
 export async function latestMarginPdfUrl(): Promise<string> {
   const html = await (await fetch(PAGE, { headers: { "User-Agent": UA } })).text();
-  const m = [...html.matchAll(/\/markets\/statistics-equities\/margin\/[^"']*?syumatsu(\d+)\.pdf/g)];
-  if (!m.length) throw new Error("margin pdf link not found");
-  m.sort((a, b) => a[1].localeCompare(b[1]));
-  return BASE + m[m.length - 1][0];
+  return latestMarginPdfUrlFromHtml(html);
+}
+
+/** 一覧ページから指定週 (YYYYMMDD) の syumatsu*.pdf の URL を得る。 */
+export async function marginPdfUrlForWeek(yyyymmdd: string): Promise<string> {
+  const html = await (await fetch(PAGE, { headers: { "User-Agent": UA } })).text();
+  return marginPdfUrlForWeekFromHtml(html, yyyymmdd);
+}
+
+/**
+ * 保存済み週 (R2 `margin/weeks.json` の内容) と今回の週から、欠落週を列挙する純関数。
+ * 週ラベルは申込金曜 (YYYY-MM-DD)。保存済みの最大週と今回週の間の金曜を返す。
+ * 7/3・7/10 のように土曜 job を落とした週は後続の最新のみ取得で永久に飛ばされる
+ * ため、欠落の検出だけでも明示する (推測補完はしない)。
+ */
+export function weeksMissing(savedWeeks: readonly string[], currentWeek: string): string[] {
+  const fmt = /^\d{4}-\d{2}-\d{2}$/;
+  if (!fmt.test(currentWeek)) {
+    throw new Error(`margin week の形式が不正です (YYYY-MM-DD): ${currentWeek}`);
+  }
+  let max: string | null = null;
+  for (const w of savedWeeks) {
+    if (!fmt.test(w)) throw new Error(`margin weeks.json の週形式が不正です (YYYY-MM-DD): ${w}`);
+    if (max === null || w > max) max = w;
+  }
+  if (max === null || currentWeek <= max) return [];
+  const out: string[] = [];
+  const d = new Date(`${max}T00:00:00Z`);
+  for (;;) {
+    d.setUTCDate(d.getUTCDate() + 7);
+    const w = d.toISOString().slice(0, 10);
+    if (w >= currentWeek) break;
+    out.push(w);
+  }
+  return out;
 }
 
 const toInt = (s: string) => parseInt(s.replace(/,/g, "").replace(/▲/g, "-").replace(/\s/g, ""), 10) || 0;
@@ -73,11 +142,22 @@ export async function parseMarginPdf(
   return parseMarginText(text);
 }
 
-export async function fetchMargin(): Promise<MarginData> {
-  const url = await latestMarginPdfUrl();
+/**
+ * 指定週 (YYYYMMDD) を取得する。省略時は最新週。
+ * 指定週の場合は URL の stamp と PDF 本文の申込週が一致しなければ throw する
+ * (JPX 側の取り違えを別週の値として保存しない)。
+ */
+export async function fetchMargin(requestedWeek?: string): Promise<MarginData> {
+  const url = requestedWeek === undefined ? await latestMarginPdfUrl() : await marginPdfUrlForWeek(requestedWeek);
   const buf = await (await fetch(url, { headers: { "User-Agent": UA } })).arrayBuffer();
   const bytes = new Uint8Array(buf);
-  return { ...(await parseMarginPdf(bytes)), pdfBytes: bytes, pdfUrl: url };
+  const parsed = await parseMarginPdf(bytes);
+  if (requestedWeek !== undefined && parsed.week.replaceAll("-", "") !== requestedWeek) {
+    throw new Error(
+      `margin week 不一致: 要求=${requestedWeek} に対して PDF 本文の申込週=${parsed.week} (URL=${url})`
+    );
+  }
+  return { ...parsed, pdfBytes: bytes, pdfUrl: url };
 }
 
 /**

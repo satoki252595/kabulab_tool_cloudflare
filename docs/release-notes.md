@@ -39,6 +39,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - 有報の海外売上で同一地域名が重複する曖昧な表（地域×品目の2次元表）は数値化せず「未対応」とし、保存後に地域計と合計が乖離する誤取込を防ぐ。実原本の回帰1件付き、既存の正常表の判定は不変。本番の既存59文書は未修復のまま (#150)。
 - 財務・有報・IR・優待/配当の実データ照合レポートを公開（証跡 `docs/test-logs/data-audit-fundamentals-2026-09-28.md`）。発見5件のうち1件は解消確認、残りは owner 対応待ち (#150)。
 - 監査レポートの正準数値（分類・合計・日付・隔離/保留・full SHA）を `docs/test-logs/data-audit-2026-09-28.results.json` からの生成ブロックに一本化し、本文要約層の重複転記を集計ID参照へ置換。`pnpm audit:report:check`（内訳不一致・保留混入・SHA省略・手編集の検出）をCIへ組込 (#153)。
+- 保存運用の根本原因修正 (証跡 `docs/test-logs/storage-operations-root-causes-2026-09-28.md`): Notion 単一行照会の重複時・先頭選択を共通 helper `queryUniqueRow` で保全停止化 (moneyflow 指標/観測・価格同期・有報テキスト・銘柄別データ・保管読取の全6経路)、moneyflow 取込のカタログ失敗を取込ログへ記録、週次信用残の発見先を JPX 01.html へ移転+`--week` 補修と欠落週検出、①マスタ重複の退避を moveToTrash から直接 archive へ契約修正。本番適用 (初回保存・再保管・退避) は writer 枠待ち。
 
 ### 本番作業
 - F-01/F-15の監査済み派生5行を削除し、1909/2180/7426の財務3列だけNULL化。R2の1909/2180は各22本の破損末尾と偽分割1件だけを除去した。Notion物理原本退避・SHA再読、native D1変更8/R2 PUT2、再実行の実変更0、独立した正常対照・財務履歴・2180 RSI・原本ファイルの保全確認まで完了。guardはmain `bdaa217` / Version `8df9edc3` の100%配備で確認（証跡: `docs/test-logs/market-corruption-repair-2026-09-28.md`、#152）。

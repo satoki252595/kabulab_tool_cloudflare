@@ -327,20 +327,38 @@ function ensureTrashDb(service: string, parentPageId?: string): Promise<string> 
   return ensureDatabase(parent, trashDbTitle(service), `trash:${parent}:${service}`);
 }
 
+/**
+ * filter 一致が1件の行を返す。0件なら null。2件以上 (または has_more) なら
+ * どれかを黙って選ばず throw する (ルール2。Notion に一意制約は無いため、
+ * `page_size: 1` + `results[0]` の先頭選択は重複時に行を取り違える)。
+ */
+export async function queryUniqueRow<T extends { id: string }>(
+  databaseId: string,
+  filter: Record<string, unknown>,
+  context: string
+): Promise<T | null> {
+  const res = await notionRequest<{ results: T[]; has_more?: boolean }>(
+    "POST",
+    `/databases/${databaseId}/query`,
+    { filter, page_size: 2 }
+  );
+  if (res.results.length > 1 || res.has_more) {
+    throw new Error(`${context} database=${databaseId}`);
+  }
+  return res.results[0] ?? null;
+}
+
 /** key 完全一致の既存ページを返す。複数なら保全物を勝手に選ばず停止する。 */
 async function findByKey(
   databaseId: string,
   key: string
 ): Promise<string | null> {
-  const res = await notionRequest<{ results: Array<{ id: string }>; has_more?: boolean }>(
-    "POST",
-    `/databases/${databaseId}/query`,
-    { filter: { property: "Key", title: { equals: key } }, page_size: 2 }
+  const row = await queryUniqueRow<{ id: string }>(
+    databaseId,
+    { property: "Key", title: { equals: key } },
+    "Notion archive: 同一 Key の重複を選ばず保全停止"
   );
-  if (res.results.length > 1 || res.has_more) {
-    throw new Error(`Notion archive: 同一 Key の重複を選ばず保全停止 database=${databaseId}`);
-  }
-  return res.results[0]?.id ?? null;
+  return row?.id ?? null;
 }
 
 /**

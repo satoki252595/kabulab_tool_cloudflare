@@ -8,7 +8,7 @@
  */
 import { notionEnv } from "../../../src/shared/notion-archive/index.js";
 import { notionRequest } from "../../../src/shared/notion-archive/client.js";
-import { findBackupChildByTitle } from "../../../src/shared/notion-archive/archive.js";
+import { findBackupChildByTitle, queryUniqueRow } from "../../../src/shared/notion-archive/archive.js";
 import { MONEYFLOW_PRIMARY_DB_TITLE } from "../../../src/shared/notion-archive/moneyflow.js";
 
 /**
@@ -64,11 +64,11 @@ function toArchivedRecord(r: PrimaryRowResponse["results"][number]): ArchivedRec
 
 /** key 完全一致の保管済みレコードを 1 件探す (無ければ null)。 */
 export async function findArchivedRecordByKey(primaryDbId: string, key: string): Promise<ArchivedRecord | null> {
-  const res = await notionRequest<PrimaryRowResponse>("POST", `/databases/${primaryDbId}/query`, {
-    filter: { property: "Key", title: { equals: key } },
-    page_size: 1,
-  });
-  const r = res.results[0];
+  const r = await queryUniqueRow<PrimaryRowResponse["results"][number]>(
+    primaryDbId,
+    { property: "Key", title: { equals: key } },
+    `一次データの保管済みレコードの重複 key=${key} を選ばず保全停止`
+  );
   return r ? toArchivedRecord(r) : null;
 }
 

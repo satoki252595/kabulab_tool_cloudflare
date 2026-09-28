@@ -414,4 +414,42 @@ describe("notion-archive archive (parentPageId)", () => {
       }
     );
   });
+
+  describe("queryUniqueRow", () => {
+    const DB = "db-unique";
+    const FILTER = { property: "Key", title: { equals: "k1" } };
+    const CTX = "moneyflow 観測ログの重複 key=k1 を選ばず保全停止";
+
+    it("0件なら null を返す", async () => {
+      route("POST", `/v1/databases/${DB}/query`, [{ results: [] }]);
+      const { queryUniqueRow } = await load();
+      await expect(queryUniqueRow(DB, FILTER, CTX)).resolves.toBeNull();
+      // 重複検出のため 2 件で問い合わせる (page_size: 1 + 先頭選択は禁止)。
+      const body = JSON.parse(String(calls[0]!.init.body));
+      expect(body.page_size).toBe(2);
+      expect(body.filter).toEqual(FILTER);
+    });
+
+    it("1件ならその行を返す", async () => {
+      route("POST", `/v1/databases/${DB}/query`, [{ results: [{ id: "row-1" }] }]);
+      const { queryUniqueRow } = await load();
+      await expect(queryUniqueRow(DB, FILTER, CTX)).resolves.toEqual({ id: "row-1" });
+    });
+
+    it("2件ならどれも選ばず throw する", async () => {
+      route("POST", `/v1/databases/${DB}/query`, [{ results: [{ id: "row-1" }, { id: "row-2" }] }]);
+      const { queryUniqueRow } = await load();
+      await expect(queryUniqueRow(DB, FILTER, CTX)).rejects.toThrow(
+        /moneyflow 観測ログの重複 key=k1 を選ばず保全停止 database=db-unique/
+      );
+    });
+
+    it("has_more なら 1件表示でも throw する (3件目以降の見落とし防止)", async () => {
+      route("POST", `/v1/databases/${DB}/query`, [
+        { results: [{ id: "row-1" }], has_more: true, next_cursor: "c" },
+      ]);
+      const { queryUniqueRow } = await load();
+      await expect(queryUniqueRow(DB, FILTER, CTX)).rejects.toThrow(/保全停止 database=db-unique/);
+    });
+  });
 });

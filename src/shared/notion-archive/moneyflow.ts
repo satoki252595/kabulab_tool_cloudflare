@@ -32,7 +32,7 @@
  * select の累積上限に当たって取込が止まるため。区分の大分類は「区分種別」
  * (select・値は固定の少数) で絞り込む。
  */
-import { findBackupChildByTitle } from "./archive.js";
+import { findBackupChildByTitle, queryUniqueRow } from "./archive.js";
 import { notionRequest } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
@@ -334,11 +334,11 @@ interface DefRowHit {
 }
 
 async function findDefRowByKey(dbId: string, key: string): Promise<DefRowHit | null> {
-  const res = await notionRequest<{ results: DefRowHit[] }>("POST", `/databases/${dbId}/query`, {
-    filter: { property: MONEYFLOW_DEFS_PROPS.key, title: { equals: key } },
-    page_size: 1,
-  });
-  return res.results[0] ?? null;
+  return queryUniqueRow<DefRowHit>(
+    dbId,
+    { property: MONEYFLOW_DEFS_PROPS.key, title: { equals: key } },
+    `moneyflow 指標定義の重複 key=${key} を選ばず保全停止`
+  );
 }
 
 /**
@@ -628,11 +628,11 @@ interface ObsRowHit {
 }
 
 async function findObsRowByKey(dbId: string, key: string): Promise<ObsRowHit | null> {
-  const res = await notionRequest<{ results: ObsRowHit[] }>("POST", `/databases/${dbId}/query`, {
-    filter: { property: MONEYFLOW_OBS_PROPS.key, title: { equals: key } },
-    page_size: 1,
-  });
-  return res.results[0] ?? null;
+  return queryUniqueRow<ObsRowHit>(
+    dbId,
+    { property: MONEYFLOW_OBS_PROPS.key, title: { equals: key } },
+    `moneyflow 観測ログの重複 key=${key} を選ばず保全停止`
+  );
 }
 
 /** 冪等キー `期間|指標|区分` の行が観測ログに既にあるか (取込完了判定に使う)。 */

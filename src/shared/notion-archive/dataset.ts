@@ -28,7 +28,7 @@
 import { notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
-import { findBackupChildByTitle } from "./archive.js";
+import { findBackupChildByTitle, queryUniqueRow } from "./archive.js";
 
 export type NotionSelectColor =
   | "default"
@@ -294,15 +294,12 @@ async function ensureStockPage(
   parentDbId: string,
   row: ByStockRow
 ): Promise<string> {
-  const res = await notionRequest<{ results: Array<{ id: string }> }>(
-    "POST",
-    `/databases/${parentDbId}/query`,
-    {
-      filter: { property: "銘柄コード", title: { equals: row.ticker } },
-      page_size: 1,
-    }
+  const existing = await queryUniqueRow<{ id: string }>(
+    parentDbId,
+    { property: "銘柄コード", title: { equals: row.ticker } },
+    `銘柄別データの親ページの重複 ticker=${row.ticker} を選ばず保全停止`
   );
-  if (res.results[0]) return res.results[0].id;
+  if (existing) return existing.id;
 
   const created = await notionRequest<{ id: string }>("POST", "/pages", {
     parent: { database_id: parentDbId },

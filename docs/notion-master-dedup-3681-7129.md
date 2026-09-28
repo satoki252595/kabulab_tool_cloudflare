@@ -13,9 +13,11 @@
   (GET/query・明示 429 retry は維持) と `page-file.ts` の全件取得 `listPageFiles`
   (実ダウンロード検証用)。既存 `fetchPageFileUrl` の先頭/null 挙動は維持する
   (URL 無し先頭で 2 番目へ fallback しない)。pipeline writer への変更なし。
-  Notion 要求は全て `notionRequest` / `recordPrimaryData` / `moveToTrash` /
+  Notion 要求は全て `notionRequest` / `recordPrimaryData` /
   `updateSupplementRow` の既存窓口経由 (直 fetch 迂回なし。署名 S3 URL の GET
-  のみ素 fetch)
+  のみ素 fetch)。退避候補 (① マスタページ) は一次データ保管のレコードでは
+  ないため `moveToTrash` の対象外 (共有 helper が Service 不一致で保全停止
+  する)。pipeline の重複収束と同じく直接 archive する
 - 親 Issue: #132 (JPX 切替以外の残作業)。JPX 切替自体は対象外
 
 ## 対象 (2026-09-28 preflight 実測)
@@ -112,15 +114,16 @@ nix develop -c pnpm notion:master-dedup-3681-7129 -- --apply --window-confirmed
    不変、① 逆 relation の和の保存 (中間は `verifyIntermediateUnion`・最終は
    `verifyReverseUnion` とも全 pagination)、D1 照合。7129 補足の空 relation
    は既存補足窓口で保持 ID を設定し他 props 不変を確認する
-6. 退避: snapshot 確定・移行・補足・lifecycle・D1 の完了後に限り、正式窓口
-   `moveToTrash` で退避する (snapshot なし適用禁止)。original の archived
-   状態に無関係に origin/key/snapshotHash で full 検索し、既存 1 件なら
-   original archive だけ完了する (create 成功→archive 断で二重 create する
-   ため。複数は停止)。退避直前に fresh 非 relation props/body と物理 snapshot
-   を突合し変化なら停止する (`verifyRetirePreimage`)。理由に保持先・snapshot
-   保管 page・hash・衝突根拠を含め、退避行 (内容・hash・Origin・Key) と元の
-   archived を再読する。非冪等 create 前に marker を atomic 保存し、再開時は
-   full 検索で 0=結果不明 STOP/1=回収/複数=STOP (`decideRetireAction`)
+6. 退避: snapshot 確定・移行・補足・lifecycle・D1 の完了後に限り、退避候補
+   を直接 archive する (snapshot なし適用禁止。ごみ DB は作らない)。
+   退避直前に fresh 非 relation props/body と物理 snapshot を突合し変化なら
+   停止する (`verifyRetirePreimage`)。fresh の archived 状態と marker で分岐
+   し (`decideRetireAction`): active+marker なしは create、active+marker あり
+   は repatch (archive PATCH は冪等で再送は安全)、archived+marker ありは
+   recover (原像突合の上で記録回収)、archived+marker なしは外部 archive と
+   して停止する。PATCH 呼出前に marker を atomic 保存し、archive 後は再読で
+   ID 一致 + archived を検証する (`verifyArchivedPage`)。内容の証拠は
+   snapshot (一次データ保管・SHA 検証済み) + receipt で保つ
 7. 最終検証: コード絞込 (全件) で各 1 有効行、旧 2 行 archived、原本・子 DB・
    補足の保持。同じ apply 再実行で書込 0。適用済み分岐も D1 修正前に保存
    snapshot/receipt で物理 archive の実 DL+SHA 再検証を通す (bypass しない)。
@@ -135,7 +138,7 @@ nix develop -c pnpm notion:master-dedup-3681-7129 -- --apply --window-confirmed
 ## 受入
 
 - 2 コードの有効マスタ各 1、relations・全情報の保持、7129 補足修復
-- 不要元の実体 snapshot・退避・理由の再読、再実行無変更、次 biztag で重複 0
+- 不要元の実体 snapshot・archive の再読、再実行無変更、次 biztag で重複 0
 - 現 wave (本 PR): 実 snapshot での plan/diff/中断再開の回帰
   (`scripts/notion/master-dedup.test.ts` 55 件 +
   `scripts/notion/master-dedup-flow.test.ts` 20 件の実 flow 回帰 +

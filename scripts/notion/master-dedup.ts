@@ -504,8 +504,15 @@ export interface DedupReceipt {
     { db: IncomingDb; prop: string; before: string[]; after: string[]; verifiedAt: string }
   >;
   supplement7129?: { pageId: string; verifiedAt: string };
-  retired: Record<string, { trashPageId: string; verifiedAt: string }>;
-  /** 退避非冪等 create の発行マーカー (retireId → 発行記録)。自動解除禁止。 */
+  /**
+   * 退避候補の直接 archive 記録 (retireId → 記録)。
+   * master ページは一次データ保管のレコードではないため moveToTrash の対象外
+   * (共有 helper が Service 不一致で保全停止する)。pipeline の重複収束と同じく
+   * 直接 archive し、証拠は snapshot (一次データ保管) + 本記録で保つ。
+   * archivedAt は archive 後の再読 API の last_edited_time (推測値ではない)。
+   */
+  retired: Record<string, { archivedAt: string; verifiedAt: string }>;
+  /** 退避 archive 発行マーカー (retireId → 発行記録)。自動解除禁止。 */
   retireIssued?: Record<string, { key: string; origin: string; snapshotHash: string; issuedAt: string }>;
   d1?: { checkedAt: string; fixed: string[]; verifiedAt: string };
   completedAt?: string;
@@ -680,21 +687,22 @@ export function decideMigrationAction(args: {
 }
 
 /**
- * 退避の実 flow 判定 (純粋決定)。trash の full 検索ヒット数と marker に基づく。
- * - hits>=2 → stop (複数は停止。どれが正か決めない)。
- * - hits==1 → complete (既存があれば original archive だけ完了。二重 create しない)。
- * - hits==0 かつ marker あり → stop (結果不明。自動解除・再 create 禁止)。
- * - hits==0 かつ marker なし → create (新規退避へ進む。呼出前に marker 保存)。
+ * 退避の実 flow 判定 (純粋決定)。fresh の archived 状態と marker に基づく。
+ * archive PATCH は冪等 (何度送っても同じ終状態・複製物を作らない) のため、
+ * 結果不明でも create 系のような二重化は起きない。分岐:
+ * - active かつ marker なし → create (新規 archive へ進む。呼出前に marker 保存)。
+ * - active かつ marker あり → repatch (前回の PATCH が不達と確定。再送は安全)。
+ * - archived かつ marker あり → recover (原像突合の上で記録回収。終状態を検証済み)。
+ * - archived かつ marker なし → stop (外部の archive。系統不明のため人手確認)。
  */
-export type RetireDecision = "complete" | "create" | "stop";
+export type RetireDecision = "create" | "repatch" | "recover" | "stop";
 
 export function decideRetireAction(args: {
-  trashHits: number;
+  originArchived: boolean;
   hasMarker: boolean;
 }): RetireDecision {
-  if (args.trashHits >= 2) return "stop";
-  if (args.trashHits === 1) return "complete";
-  return args.hasMarker ? "stop" : "create";
+  if (!args.originArchived) return args.hasMarker ? "repatch" : "create";
+  return args.hasMarker ? "recover" : "stop";
 }
 
 /**
