@@ -20,7 +20,7 @@ import type {
   StockRawData,
 } from "../types.js";
 import { sharedEnv } from "../env.js";
-import { sanitizeBars } from "./bar-sanity.js";
+import { assertResponsePriceCoherent, sanitizeBars } from "./bar-sanity.js";
 import { STOCK_CODE_REGEX } from "../jpx/stock-code.js";
 
 /**
@@ -495,6 +495,27 @@ export async function fetchChart(
     );
   }
 
+  // 応答レベルの整合 (sanitize は先頭からの持続異常を捕まえられない)。
+  // 最新有効終値と同一応答の meta 価格が乖離 + 出来高なしなら応答全体を拒否。
+  {
+    let latestUsedClose: number | null = null;
+    let latestVolume: number | null = null;
+    for (let i = ohlcv.length - 1; i >= 0; i--) {
+      const used = ohlcv[i].adj ?? ohlcv[i].close;
+      if (used !== null) {
+        latestUsedClose = used;
+        latestVolume = ohlcv[i].volume;
+        break;
+      }
+    }
+    assertResponsePriceCoherent({
+      symbol,
+      latestUsedClose,
+      latestVolume,
+      metaPrice: result.meta.regularMarketPrice ?? null,
+    });
+  }
+
   const closePrices = quote?.close ?? [];
   const price =
     result.meta.regularMarketPrice ??
@@ -575,6 +596,9 @@ export async function fetchYahooChartRaw(
 interface YahooChartJson {
   chart?: {
     result?: Array<{
+      meta?: {
+        regularMarketPrice?: number | null;
+      };
       timestamp?: number[];
       indicators?: {
         quote?: Array<{
@@ -688,6 +712,16 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
   for (const k of Object.keys(ev)) {
     const s = ev[k];
     splits.push({ date: jstDate(s.date), ratio: s.numerator / s.denominator });
+  }
+  // fetchChart と同じ応答整合 (R2 daily への別経路も書込前に拒否する)。
+  {
+    const latest = bars[bars.length - 1];
+    assertResponsePriceCoherent({
+      symbol,
+      latestUsedClose: latest?.c ?? null,
+      latestVolume: latest?.v ?? null,
+      metaPrice: res.meta?.regularMarketPrice ?? null,
+    });
   }
   return { bars, splits };
 }
