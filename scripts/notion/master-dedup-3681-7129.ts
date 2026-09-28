@@ -61,6 +61,7 @@ import {
   guardMasterView,
   guardSupplement,
   hasSnapshotProgress,
+  incomingRelationProblems,
   nonRelationPropsEqual,
   normalizePageId,
   planMigration,
@@ -75,6 +76,7 @@ import {
   verifyReverseUnion,
   type DedupReceipt,
   type IncomingDb,
+  type IncomingOrigin,
   type IncomingSchemaEvidence,
   type IncomingSchemaHit,
   type SupplementView,
@@ -550,19 +552,20 @@ async function captureBlock(
 
 /**
  * incoming 候補の membership 判定 (純粋関数)。
- * FWD-only raw ref (db raw_files) の retire absence は full 配列で証明済みの
- * no-op evidence として snapshot に保持する (ops 除外は retire 絞りで成立)。
- * reverse 発見行 (disclosures/financials) の absence は同時変更として STOP。
+ * 対応 retire への完全 membership で判定する。FWD-only 由来の absence
+ * (full 配列で証明済み) は no-op evidence として snapshot に保持する
+ * (ops 除外は retire 絞りで成立)。reverse 由来の absence は DB 種別に
+ * かかわらず同時変更として STOP (kind raw というだけの許容はしない)。
  * membership 未取得・不完全 cursor は到達前に readRelationFull が STOP する。
  */
 export function classifyIncomingMembership(
-  db: IncomingDb,
-  hasRetire: boolean,
+  origin: IncomingOrigin,
+  hasCorrespondingRetire: boolean,
   rowPageId: string
 ): "linked" | "detached-fwd-evidence" {
-  if (hasRetire) return "linked";
-  if (db === "raw_files") return "detached-fwd-evidence";
-  throw new Error(`incoming ${db} 行に退避 ID がありません (同時変更の疑い): ${rowPageId}`);
+  if (hasCorrespondingRetire) return "linked";
+  if (origin === "fwd") return "detached-fwd-evidence";
+  throw new Error(`incoming 行に対応退避 ID がありません (同時変更の疑い): ${rowPageId}`);
 }
 
 /**
@@ -634,7 +637,8 @@ async function verifyEntryFreshProofs(
   paceMs: number,
   snapshotDir: string,
   snapshot: SnapshotDoc,
-  state: FreshState
+  state: FreshState,
+  receipt: DedupReceipt
 ): Promise<void> {
   for (const id of Object.keys(snapshot.masters)) {
     const freshPage = state.pages[id];
@@ -652,11 +656,28 @@ async function verifyEntryFreshProofs(
     const p = snapshot.supplementProof?.[id];
     await verifyFreshPageProof(paceMs, snapshotDir, id, freshPage, "補足の本文・添付", p?.body, p?.files);
   }
-  // incoming 全件の fresh proof 照合 (移行で relation は変わるが本文・添付は不変のはず)。
+  // incoming 全件の fresh proof + relation/properties CAS 照合。
+  // relation は移行で変わるが、意図済みの before/after 差だけ許容する。
+  const ops = buildMigrationOps(snapshot);
+  const opByRow = new Map(ops.map((o) => [o.rowPageId, o]));
   for (const rowId of Object.keys(snapshot.incoming)) {
     const freshPage = await getPage(paceMs, rowId);
     const e = snapshot.incoming[rowId];
     await verifyFreshPageProof(paceMs, snapshotDir, rowId, freshPage, "incoming の本文・添付", e.body, e.files);
+    // 非対象 properties 不変 (既存 helper)。
+    if (!propertiesEqualExcept(e.prop, e.page.properties, freshPage.properties)) {
+      throw new Error(`incoming の移行対象外プロパティが snapshot と不一致です: ${rowId}`);
+    }
+    // target relation 完全配列の照合 (full pagination。不完全は STOP)。
+    const freshFull = await readRelationFull(paceMs, rowId, freshPage, e.prop);
+    const problems = incomingRelationProblems({
+      rowPageId: rowId,
+      snapRelationFull: e.relationFull,
+      freshFull,
+      op: opByRow.get(rowId),
+      recorded: receipt.migrated[rowId],
+    });
+    if (problems.length > 0) throw new Error(problems.join(" / "));
   }
 }
 
@@ -1599,21 +1620,35 @@ async function takeSnapshot(
   }
   // 移行対象の incoming 行 (退避候補の逆 relation + 原本)。
   const incoming: SnapshotDoc["incoming"] = {};
-  const expectRetireLink: Array<{ rowPageId: string; db: IncomingDb; prop: string }> = [];
+  // 候補 Map: 対応 retireID + 由来 (reverse/fwd) を保持。同一行の重複は
+  // reverse 優先 (FWD では上書きしない。DB kind だけの判定をしない)。
+  const candidates = new Map<
+    string,
+    { db: IncomingDb; prop: string; origin: IncomingOrigin; retireId: string }
+  >();
   for (const t of TARGETS) {
     const retireView = freshViews[`${t.code}:retire`];
     for (const rowId of retireView.relations[REVERSE_PROP_DISCLOSURES]?.ids ?? []) {
-      expectRetireLink.push({ rowPageId: rowId, db: "disclosures", prop: REL_PROP_MASTER });
+      if (!candidates.has(rowId)) {
+        candidates.set(rowId, { db: "disclosures", prop: REL_PROP_MASTER, origin: "reverse", retireId: t.retireId });
+      }
     }
     for (const rowId of retireView.relations[REVERSE_PROP_FINANCIALS]?.ids ?? []) {
-      expectRetireLink.push({ rowPageId: rowId, db: "financials", prop: REL_PROP_MASTER });
+      if (!candidates.has(rowId)) {
+        candidates.set(rowId, { db: "financials", prop: REL_PROP_MASTER, origin: "reverse", retireId: t.retireId });
+      }
     }
+  }
+  for (const t of TARGETS) {
     for (const rawId of readRelationIds(masters[t.retireId].page.properties[FWD_PROP_RAW])) {
-      expectRetireLink.push({ rowPageId: rawId, db: "raw_files", prop: REL_PROP_RELATED });
+      if (!candidates.has(rawId)) {
+        candidates.set(rawId, { db: "raw_files", prop: REL_PROP_RELATED, origin: "fwd", retireId: t.retireId });
+      }
     }
   }
   // 決定論的順序 (DB 種別→page id)。
   const dbOrder: Record<IncomingDb, number> = { disclosures: 0, financials: 1, raw_files: 2 };
+  const expectRetireLink = [...candidates.entries()].map(([rowPageId, c]) => ({ rowPageId, ...c }));
   expectRetireLink.sort(
     (a, b) => dbOrder[a.db] - dbOrder[b.db] || (a.rowPageId < b.rowPageId ? -1 : 1)
   );
@@ -1631,14 +1666,15 @@ async function takeSnapshot(
       if (!propId) throw new Error(`snapshot 中止: relation プロパティ ID 不明 row=${exp.rowPageId}`);
       relationFull = await readFullRelation(paceMs, exp.rowPageId, propId);
     }
-    const hasRetire = relationFull.some((id) =>
-      TARGETS.some((t) => normalizePageId(id) === normalizePageId(t.retireId))
+    // 対応 retire への完全 membership で判定する (どちらかの retire ではない)。
+    const hasCorresponding = relationFull.some(
+      (id) => normalizePageId(id) === normalizePageId(exp.retireId)
     );
-    // FWD-only raw ref の retire absence (実配列で証明済み。preview のみでは
-    // 到達しない) は no-op evidence として snapshot に保持する (本文・添付は
-    // complete 取得。全履歴・別 stock refs も relationFull に保存)。
-    // reverse 発見行の absence は従来通り STOP。
-    classifyIncomingMembership(exp.db, hasRetire, exp.rowPageId);
+    // FWD-only 由来の absence (実配列で証明済み。preview のみでは到達しない)
+    // は no-op evidence として snapshot に保持する (本文・添付は complete
+    // 取得。全履歴・別 stock refs も relationFull に保存)。
+    // reverse 由来の absence は DB 種別にかかわらず STOP。
+    classifyIncomingMembership(exp.origin, hasCorresponding, exp.rowPageId);
     // 非対象 body の後判定用に子ブロック像も物理 snapshot する。
     const children = await listChildrenFirst(paceMs, exp.rowPageId);
     if (children.has_more) {
@@ -2806,7 +2842,7 @@ async function runApply(opts: CliOptions): Promise<number> {
         ? loadSnapshotForResume(opts.snapshotDir, receipt)
         : loadLatestSnapshot(opts.snapshotDir);
       requireCompleteSnapshotProof(loaded.snapshot, receipt);
-      await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, loaded.snapshot, state);
+      await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, loaded.snapshot, state, receipt);
       receipt = await archiveSnapshotV2(opts.paceMs, opts.snapshotDir, loaded.file, loaded.snapshot, receipt);
       // D1 の遅れ (退避候補指し) だけは直してから再検証する (apply 許可域の書込)。
       receipt = await applyD1Check(opts.snapshotDir, receipt);
@@ -2847,7 +2883,7 @@ async function runApply(opts: CliOptions): Promise<number> {
       return 2;
     }
     requireCompleteSnapshotProof(snapshot, receipt);
-    await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, snapshot, state);
+    await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, snapshot, state, receipt);
   } else {
     const { problems } = guardFreshState(state);
     if (problems.length > 0) {

@@ -1034,10 +1034,10 @@ describe("master-dedup 実 flow 回帰", () => {
 
   describe("FWD-only 剥離の no-op evidence (membership)", () => {
     it("linked・FWD 剥離 evidence・reverse 欠落 STOP を判定する", () => {
-      expect(classifyIncomingMembership("disclosures", true, "d0")).toBe("linked");
-      expect(classifyIncomingMembership("raw_files", false, "r1")).toBe("detached-fwd-evidence");
-      expect(() => classifyIncomingMembership("disclosures", false, "d9")).toThrow(/退避 ID がありません/);
-      expect(() => classifyIncomingMembership("financials", false, "f9")).toThrow(/退避 ID がありません/);
+      expect(classifyIncomingMembership("reverse", true, "d0")).toBe("linked");
+      expect(classifyIncomingMembership("fwd", true, "r0")).toBe("linked");
+      expect(classifyIncomingMembership("fwd", false, "r1")).toBe("detached-fwd-evidence");
+      expect(() => classifyIncomingMembership("reverse", false, "d9")).toThrow(/対応退避 ID がありません/);
     });
 
     it("剥離 FWD 行は snapshot に保持し ops から除外する", () => {

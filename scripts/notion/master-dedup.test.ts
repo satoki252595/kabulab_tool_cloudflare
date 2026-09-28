@@ -32,12 +32,14 @@ import {
   guardMasterView,
   guardSupplement,
   hasSnapshotProgress,
+  incomingRelationProblems,
   nonRelationPropsEqual,
   normalizePageId,
   olderSide,
   pendingMigrationOps,
   planMigration,
   propertiesEqualExcept,
+  relationArraysEqual,
   relationPatchBytes,
   replaceRelationId,
   selectKeepId,
@@ -590,6 +592,49 @@ describe("master-dedup (純粋関数)", () => {
       expect(
         decideMigrationAction({ recorded, opBefore: before, opAfter: after, freshFull: ["other"], nonTargetUnchanged: true })
       ).toBe("stop");
+    });
+  });
+
+  describe("incomingRelationProblems (entry 照合の relation CAS)", () => {
+    const R = "aa".repeat(16);
+    const K = "bb".repeat(16);
+    const X = "cc".repeat(16);
+
+    it("noop 行は snapshot と完全一致・差があれば問題", () => {
+      expect(
+        incomingRelationProblems({ rowPageId: "r1", snapRelationFull: [X], freshFull: [X], op: undefined, recorded: undefined })
+      ).toEqual([]);
+      expect(
+        incomingRelationProblems({ rowPageId: "r1", snapRelationFull: [X], freshFull: [X, K], op: undefined, recorded: undefined })
+      ).toHaveLength(1);
+    });
+
+    it("linked 行は before/after のどちらか・それ以外は問題", () => {
+      const op = { before: [R], after: [K] };
+      expect(
+        incomingRelationProblems({ rowPageId: "d0", snapRelationFull: [R], freshFull: [R], op, recorded: undefined })
+      ).toEqual([]);
+      expect(
+        incomingRelationProblems({ rowPageId: "d0", snapRelationFull: [R], freshFull: [K], op, recorded: undefined })
+      ).toEqual([]);
+      expect(
+        incomingRelationProblems({ rowPageId: "d0", snapRelationFull: [R], freshFull: [X], op, recorded: undefined })
+      ).toHaveLength(1);
+    });
+
+    it("receipt の before/after が op と違えば stale として問題", () => {
+      const op = { before: [R], after: [K] };
+      expect(
+        incomingRelationProblems({ rowPageId: "d0", snapRelationFull: [R], freshFull: [K], op, recorded: { before: [R], after: [K] } })
+      ).toEqual([]);
+      expect(
+        incomingRelationProblems({ rowPageId: "d0", snapRelationFull: [R], freshFull: [K], op, recorded: { before: [R], after: [X] } })
+      ).toHaveLength(1);
+    });
+
+    it("relationArraysEqual は正規化 ID の順序つき比較", () => {
+      expect(relationArraysEqual([R], [R.toUpperCase()])).toBe(true);
+      expect(relationArraysEqual([R, K], [K, R])).toBe(false);
     });
   });
 

@@ -351,6 +351,8 @@ export function guardSupplement(v: SupplementView): string[] {
 // ---------------------------------------------------------------------------
 
 export type IncomingDb = "financials" | "disclosures" | "raw_files";
+/** incoming 候補の発見由来。同一行の重複は reverse 優先。 */
+export type IncomingOrigin = "reverse" | "fwd";
 
 export interface MigrationOp {
   rowPageId: string;
@@ -699,6 +701,52 @@ export function verifyIntermediateUnion(args: {
  */
 export type MigrationDecision = "skip" | "patch" | "repatch" | "recover" | "stop";
 
+/**
+ * relation 実配列の一致 (正規化 ID の順序つき比較。既存判定と同一意味)。
+ * 順序まで含めるのは decideMigrationAction と同じ契約 (preview/walk の
+ * 決定論的順序を前提にする)。
+ */
+export function relationArraysEqual(a: string[], b: string[]): boolean {
+  return JSON.stringify(a.map(normalizePageId)) === JSON.stringify(b.map(normalizePageId));
+}
+
+/**
+ * entry 照合の incoming relation CAS (純粋判定。空=合格)。
+ * - noop 行 (ops 対象外): target relation 実配列が snapshot と完全一致。
+ * - linked 行: fresh が original-before または expected-after のどちらか
+ *   (receipt に沿う。意図済みの target relation 差だけ許容)。
+ * - receipt.migrated がある行は receipt の before/after が op と一致すること
+ *   (別 snapshot 由来の stale 記録の混入を止める)。
+ */
+export function incomingRelationProblems(args: {
+  rowPageId: string;
+  snapRelationFull: string[];
+  freshFull: string[];
+  op: { before: string[]; after: string[] } | undefined;
+  recorded: { before: string[]; after: string[] } | undefined;
+}): string[] {
+  if (!args.op) {
+    if (!relationArraysEqual(args.freshFull, args.snapRelationFull)) {
+      return [`incoming ${args.rowPageId} の relation が snapshot と不一致です (noop 行は不変のはず)`];
+    }
+    return [];
+  }
+  if (
+    !relationArraysEqual(args.freshFull, args.op.before) &&
+    !relationArraysEqual(args.freshFull, args.op.after)
+  ) {
+    return [`incoming ${args.rowPageId} の relation が before/after のどちらでもありません (同時変更の疑い)`];
+  }
+  if (
+    args.recorded &&
+    (!relationArraysEqual(args.recorded.before, args.op.before) ||
+      !relationArraysEqual(args.recorded.after, args.op.after))
+  ) {
+    return [`incoming ${args.rowPageId} の receipt が op と不一致です (stale 記録の疑い)`];
+  }
+  return [];
+}
+
 export function decideMigrationAction(args: {
   recorded: { before: string[]; after: string[] } | undefined;
   opBefore: string[];
@@ -706,8 +754,7 @@ export function decideMigrationAction(args: {
   freshFull: string[];
   nonTargetUnchanged: boolean;
 }): MigrationDecision {
-  const eq = (a: string[], b: string[]) =>
-    JSON.stringify(a.map(normalizePageId)) === JSON.stringify(b.map(normalizePageId));
+  const eq = relationArraysEqual;
   if (args.recorded) {
     if (eq(args.freshFull, args.recorded.after) && args.nonTargetUnchanged) return "skip";
     if (eq(args.freshFull, args.recorded.before) && args.nonTargetUnchanged) return "repatch";
