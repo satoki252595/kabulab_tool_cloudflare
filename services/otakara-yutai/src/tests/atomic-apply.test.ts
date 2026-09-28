@@ -26,7 +26,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
+import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
+import { stocks as coreStocks } from "../../../../src/shared/db/core-schema.js";
 import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
 import { scoreStock } from "../../../../src/shared/scoring.js";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
@@ -487,6 +490,15 @@ describe("preflight ガード", () => {
     ["スコアの書き換え", () => sqlite.prepare("UPDATE otakara_stock_scores SET total_score = 0 WHERE stock_id = 101").run()],
     ["財務行の削除", () => sqlite.prepare("DELETE FROM otakara_stock_financials WHERE stock_id = 101").run()],
     ["スコア行の削除", () => sqlite.prepare("DELETE FROM otakara_stock_scores WHERE stock_id = 101").run()],
+    ["親コードの付け替え", () => sqlite.prepare("UPDATE core_stocks SET code = '9102' WHERE id = 101").run()],
+    ["親activeの書き換え (凍結破りの防止)", () => sqlite.prepare("UPDATE core_stocks SET is_active = 0 WHERE id = 101").run()],
+    ["親区分の書き換え", () => sqlite.prepare("UPDATE core_stocks SET instrument_type = 'etf' WHERE id = 101").run()],
+    ["親行の削除", () => {
+      // FK を一時OFFにして dangling 状態を作る (D1 本番は接続毎に FK 無効がありうる)。
+      sqlite.exec("PRAGMA foreign_keys = OFF");
+      sqlite.prepare("DELETE FROM core_stocks WHERE id = 101").run();
+      sqlite.exec("PRAGMA foreign_keys = ON");
+    }],
   ];
 
   it.each(drifts)("preimage の不一致 (%s) は batch 全体を落とし、書きかけを残さない", async (_name, mutate) => {
@@ -519,6 +531,71 @@ describe("preflight ガード", () => {
     // batch の書き込みは 1 文も残らない (drift 自体は batch 外のため残る)。
     expect(stateOf()).toEqual(before);
     expect(before).not.toMatchObject({ benefit: { short_summary: "新要約A" } });
+  });
+
+  it("親行が無い銘柄は snapshot で STOP する (ガードを縮めない)", async () => {
+    sqlite.exec("PRAGMA foreign_keys = OFF");
+    sqlite.prepare("DELETE FROM core_stocks WHERE id = 101").run();
+    sqlite.exec("PRAGMA foreign_keys = ON");
+    const inputs = await fetchYieldInputs(db, [STOCK_A]);
+    expect(inputs.parents.get(STOCK_A)).toBeNull();
+    expect(() => snapshotStockPreimages(inputs, [STOCK_A])).toThrow("missing STOP");
+  });
+
+  it.each([
+    ["非 active", "UPDATE core_stocks SET is_active = 0 WHERE id = 101"],
+    ["非 equity", "UPDATE core_stocks SET instrument_type = 'etf' WHERE id = 101"],
+    ["区分 NULL", "UPDATE core_stocks SET instrument_type = NULL WHERE id = 101"],
+  ])("親の取得は母集団述語で絞る (%sは null → snapshot STOP)", async (_name, mutate) => {
+    sqlite.prepare(mutate).run();
+    const inputs = await fetchYieldInputs(db, [STOCK_A]);
+    expect(inputs.parents.get(STOCK_A)).toBeNull();
+    expect(() => snapshotStockPreimages(inputs, [STOCK_A])).toThrow("missing STOP");
+  });
+
+  it("親の適格述語は activeEquityCondition() と等価 (区分の値は select しない)", async () => {
+    // preflight の親脚 (id・コード・active の値 CAS + equity 述語) が、
+    // 正規 helper と同じ行集合を通すことを active×区分の行列で固定する。
+    const { yieldPlan, preimages } = await planA();
+    const batches = planAtomicBatches({
+      updates: [UPDATE_A],
+      yieldPlan,
+      stockOfBenefit: stockOfA,
+      preimages,
+    });
+    const preflight = batches[0].statements[0];
+    const passes = (): boolean => {
+      try {
+        sqlite.prepare(preflight.sql).get(...(preflight.params as []));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const helperPasses = async (): Promise<boolean> => {
+      const rows = await db
+        .select({ id: coreStocks.id })
+        .from(coreStocks)
+        .where(and(eq(coreStocks.id, STOCK_A), activeEquityCondition()));
+      return rows.length > 0;
+    };
+    const matrix: [number, string | null][] = [
+      [1, "equity"],
+      [1, "etf"],
+      [1, null],
+      [0, "equity"],
+      [0, "etf"],
+      [0, null],
+    ];
+    for (const [active, inst] of matrix) {
+      sqlite.prepare("UPDATE core_stocks SET is_active = ?, instrument_type = ? WHERE id = ?").run(active, inst, STOCK_A);
+      // snapshot は active=true で固定 (他列は無変更)。親脚だけが変わる。
+      expect(passes(), `preflight (active=${active}, inst=${inst})`).toBe(await helperPasses());
+    }
+    // 行列の期待値そのものも固定する (helper が equity のみ通すこと)。
+    sqlite.prepare("UPDATE core_stocks SET is_active = 1, instrument_type = 'equity' WHERE id = ?").run(STOCK_A);
+    expect(passes()).toBe(true);
+    expect(await helperPasses()).toBe(true);
   });
 
   it("財務・スコア行が無い銘柄は行の不在を preimage にする", async () => {
@@ -631,5 +708,30 @@ describe("buildBenefitUpdateStatements / buildYieldScoreStatements", () => {
     ]);
     expect(buildYieldScoreStatements({ ...entry, changed: false, scoreChanged: false })).toEqual([]);
     expect(buildBenefitUpdateStatements([], { shortSummary: "x", estimatedValue: null, estimateValueSource: null })).toEqual([]);
+  });
+});
+
+describe("applyAtomicBatches の StockBatch.key (再開キーの取り違え防止)", () => {
+  it("重複・付け忘れは送らず投げ、同一銘柄の別種別キーは通る", async () => {
+    const sent: D1BatchStatement[][] = [];
+    const sender: AtomicBatchSender = async (statements) => {
+      sent.push([...statements]);
+    };
+    const one = (key?: string) => ({
+      stockId: 291,
+      statements: [{ sql: "SELECT 1", params: [] }],
+      ...(key === undefined ? {} : { key }),
+    });
+    // 市場36復元で実検出: 銘柄 ID だけを完了キーにすると同一銘柄の
+    // 別種別 batch (例: annual:291) が落ちる。重複送信は 0 で修正済み。
+    await expect(applyAtomicBatches(sender, [one("annual:291"), one("annual:291")])).rejects.toThrow("重複");
+    expect(sent).toEqual([]);
+    await expect(applyAtomicBatches(sender, [one("atr:291"), one()])).rejects.toThrow("付け忘れ");
+    expect(sent).toEqual([]);
+    await applyAtomicBatches(sender, [one("atr:291"), one("annual:291")]);
+    expect(sent).toHaveLength(2);
+    // キーなし (従来呼び出し) はそのまま通る
+    await applyAtomicBatches(sender, [one(), one()]);
+    expect(sent).toHaveLength(4);
   });
 });

@@ -94,11 +94,11 @@ describe("ATR preflight", () => {
 function setupAnnual(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   db.exec(`
-    CREATE TABLE core_stocks (id INTEGER PRIMARY KEY, code TEXT NOT NULL);
+    CREATE TABLE core_stocks (id INTEGER PRIMARY KEY, code TEXT NOT NULL, is_active INTEGER NOT NULL, instrument_type TEXT);
     CREATE TABLE core_stock_financials (stock_id INTEGER PRIMARY KEY, data_date TEXT NOT NULL, operating_margin REAL);
     CREATE TABLE rsi_percentile (stock_id INTEGER PRIMARY KEY, is_blue_chip INTEGER NOT NULL, revenue_trend INTEGER);
     CREATE TABLE jss_financials (code TEXT NOT NULL, fiscal_period_end TEXT NOT NULL, disclosure_type TEXT NOT NULL, consolidated TEXT NOT NULL, net_sales REAL, license_tag TEXT NOT NULL);
-    INSERT INTO core_stocks VALUES (9, '9101');
+    INSERT INTO core_stocks VALUES (9, '9101', 1, 'equity');
     INSERT INTO core_stock_financials VALUES (9, '2026-09-25', 0.06);
     INSERT INTO rsi_percentile VALUES (9, 1, 1);
     INSERT INTO jss_financials VALUES
@@ -114,6 +114,8 @@ function setupAnnual(): DatabaseSync {
 const ANNUAL_SNAP: AnnualPreimage = {
   stockId: 9,
   code: "9101",
+  isActive: true,
+  instrumentType: "equity",
   dataDate: "2026-09-25",
   operatingMargin: 0.06,
   asof: "2026-09-25",
@@ -143,6 +145,8 @@ describe("年次 preflight", () => {
 
   const drifts: [string, string][] = [
     ["銘柄対応の付け替え", "UPDATE core_stocks SET code = '9102' WHERE id = 9"],
+    ["active の書き換え (凍結破りの防止)", "UPDATE core_stocks SET is_active = 0 WHERE id = 9"],
+    ["区分の書き換え", "UPDATE core_stocks SET instrument_type = 'etf' WHERE id = 9"],
     ["data_date の書き換え", "UPDATE core_stock_financials SET data_date = '2026-09-24' WHERE stock_id = 9"],
     ["operatingMargin の書き換え", "UPDATE core_stock_financials SET operating_margin = 0.01 WHERE stock_id = 9"],
     ["operatingMargin の消失", "UPDATE core_stock_financials SET operating_margin = NULL WHERE stock_id = 9"],
@@ -189,5 +193,16 @@ describe("年次 preflight", () => {
     db.exec("INSERT INTO jss_financials VALUES ('9101', '2026-03-31', '本決算', '単体', 140.0, 'commercial-ok')");
     const s = buildAnnualPreflightStatement(ANNUAL_SNAP);
     expect(() => runPreflight(db, s.sql, s.params)).toThrow();
+  });
+
+  it("凍結銘柄の preimage は凍結のまま一致する (active 固定の両方向)", () => {
+    const db = setupAnnual();
+    db.exec("UPDATE core_stocks SET is_active = 0, instrument_type = NULL WHERE id = 9");
+    const frozen = buildAnnualPreflightStatement({ ...ANNUAL_SNAP, isActive: false, instrumentType: null });
+    const row = runPreflight(db, frozen.sql, frozen.params) as Record<string, unknown>;
+    expect(Object.values(row)).toEqual(["null"]);
+    // 凍結 preimage に対して active 行は不一致 (逆方向も止める)
+    db.exec("UPDATE core_stocks SET is_active = 1 WHERE id = 9");
+    expect(() => runPreflight(db, frozen.sql, frozen.params)).toThrow();
   });
 });

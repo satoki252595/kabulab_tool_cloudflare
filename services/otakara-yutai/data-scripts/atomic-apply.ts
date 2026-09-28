@@ -12,6 +12,7 @@
  * 同引数の再実行で回復する (適用済み銘柄は無変更・冪等)。
  */
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
+import { INSTRUMENT_TYPE_EQUITY } from "../../../src/shared/jpx/instrument-type.js";
 import { buildBenefitUpdateStatements, type PlannedUpdate } from "./summary-import.js";
 import {
   buildYieldScoreStatements,
@@ -42,6 +43,16 @@ export type StockBenefitPreimage = {
 
 export type StockPreimage = {
   stockId: number;
+  /**
+   * 親銘柄の同一性 (銘柄 ID・コード・active)。付け替え・凍結破りを
+   * preflight で止める。snapshot 時に行が無ければ STOP する
+   * (null 許容にしない。ガードを縮めないため)。
+   * 区分 (`instrument_type`) の値は保持しない (personal-only)。
+   * preflight は値 CAS (id・コード・active) に加え、正常適格の述語
+   * (`activeEquityCondition()` と等価。値は bind) を要求する。
+   * 非 active・非 equity の銘柄は preimage の値にかかわらず落ちる。
+   */
+  parent: { code: string; isActive: boolean };
   /** 同銘柄の優待行の全集合 (追加・削除の検知を含む)。 */
   benefits: StockBenefitPreimage[];
   /**
@@ -90,8 +101,15 @@ export function snapshotStockPreimages(
         `銘柄 ${stockId} の財務行はあるのにスコア入力がありません (ガードを縮めない)`
       );
     }
+    const parent = inputs.parents.get(stockId);
+    if (!parent) {
+      throw new Error(
+        `銘柄 ${stockId} の親銘柄行 (core_stocks) がありません (ガードを縮めない。missing STOP)`
+      );
+    }
     out.set(stockId, {
       stockId,
+      parent: { code: parent.code, isActive: parent.isActive },
       benefits: (inputs.benefits.get(stockId) ?? [])
         .map((b) => ({
           id: b.rowId,
@@ -235,11 +253,20 @@ export function buildStockPreflightStatement(snapshot: StockPreimage): D1BatchSt
     "),",
     "sco_ok(ok) AS (",
     "  SELECT CASE WHEN json_extract((SELECT j FROM snap), '$.scores') IS NULL THEN (SELECT count(*) = 0 FROM otakara_stock_scores WHERE stock_id = ?) ELSE EXISTS (SELECT 1 FROM otakara_stock_scores WHERE stock_id = ? AND fundamental_score IS json_extract((SELECT j FROM snap), '$.scores.fundamentalScore') AND technical_score IS json_extract((SELECT j FROM snap), '$.scores.technicalScore') AND total_score IS json_extract((SELECT j FROM snap), '$.scores.totalScore')) END",
+    "),",
+    "par_ok(ok) AS (",
+    // 親は値 CAS (id・コード・active) + 正常適格の述語で確認する。
+    // 区分の値は select せず `activeEquityCondition()` と等価の述語
+    // (is_active = 1 AND instrument_type = 'equity'。値は bind) で確認する
+    // (personal-only。ライセンス D-13-6。等価性はテストで固定)。
+    // 非 active・非 equity の銘柄は preimage の値にかかわらず落ちる
+    // (凍結行への適用を境界で止める。fail-closed)。
+    "  SELECT EXISTS (SELECT 1 FROM core_stocks WHERE id = ? AND code IS json_extract((SELECT j FROM snap), '$.parent.code') AND is_active IS json_extract((SELECT j FROM snap), '$.parent.isActive') AND is_active IS 1 AND instrument_type IS ?)",
     ")",
-    "SELECT json(CASE WHEN (SELECT count(*) FROM act_ben) = (SELECT count(*) FROM exp_ben) AND NOT EXISTS (SELECT * FROM act_ben EXCEPT SELECT * FROM exp_ben) AND NOT EXISTS (SELECT * FROM exp_ben EXCEPT SELECT * FROM act_ben) AND (SELECT ok FROM fin_ok) AND (SELECT ok FROM sco_ok) THEN 'null' ELSE '' END)",
+    "SELECT json(CASE WHEN (SELECT count(*) FROM act_ben) = (SELECT count(*) FROM exp_ben) AND NOT EXISTS (SELECT * FROM act_ben EXCEPT SELECT * FROM exp_ben) AND NOT EXISTS (SELECT * FROM exp_ben EXCEPT SELECT * FROM act_ben) AND (SELECT ok FROM fin_ok) AND (SELECT ok FROM sco_ok) AND (SELECT ok FROM par_ok) THEN 'null' ELSE '' END)",
   ].join("\n");
   const sid = snapshot.stockId;
-  return { sql, params: [JSON.stringify(snapshot), sid, sid, sid, sid, sid] };
+  return { sql, params: [JSON.stringify(snapshot), sid, sid, sid, sid, sid, sid, INSTRUMENT_TYPE_EQUITY] };
 }
 
 /** batch 1 件分の送信口。本番は `createD1HttpBatchSender()`、テストでは差し替える。 */
@@ -251,6 +278,13 @@ export type AtomicBatchSender = (
 export type StockBatch = {
   stockId: number;
   statements: D1BatchStatement[];
+  /**
+   * 呼び出し側の種別つき完了キー (例: `atr:291`)。再送・再開の完了記録に
+   * 使う。銘柄 ID だけをキーにすると同一銘柄の別種別 batch を落とす
+   * (市場36復元で実検出・重複送信0で修正)。キーを付ける場合は全 batch に
+   * 付け、`applyAtomicBatches` が重複を投げる。
+   */
+  key?: string;
 };
 
 /**
@@ -323,6 +357,18 @@ export async function applyAtomicBatches(
   sender: AtomicBatchSender,
   batches: readonly StockBatch[]
 ): Promise<{ stocks: number; statements: number }> {
+  const keys = batches.map((b) => b.key);
+  if (keys.some((k) => k !== undefined)) {
+    const missing = batches.filter((b) => b.key === undefined).map((b) => b.stockId);
+    if (missing.length > 0) {
+      throw new Error(`StockBatch.key の付け忘れ (stocks: ${missing.join(",")})。付ける場合は全 batch に付けること`);
+    }
+    const seen = new Set<string>();
+    for (const k of keys as string[]) {
+      if (seen.has(k)) throw new Error(`StockBatch.key の重複: ${k} (同一銘柄の別種別 batch が落ちる。再開キーは種別つきにすること)`);
+      seen.add(k);
+    }
+  }
   let statements = 0;
   for (const b of batches) {
     await sender(b.statements);

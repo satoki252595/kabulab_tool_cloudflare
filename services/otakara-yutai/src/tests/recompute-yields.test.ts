@@ -196,6 +196,7 @@ describe("planYieldRecompute", () => {
         ]),
         scoreInputs: new Map(),
         scores: new Map(),
+        parents: new Map(),
       },
       new Map([[7, null]])
     );
