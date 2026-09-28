@@ -78,44 +78,62 @@ describe("verifySectorTurnoverResult", () => {
     stockCount: 10,
     ...overrides,
   });
+  const coverage = (overrides: Record<string, unknown> = {}) => ({
+    date: "2026-09-28",
+    universe: 3700,
+    covered: 3700,
+    ...overrides,
+  });
+  const res = (sectors: ReturnType<typeof row>[], cov: ReturnType<typeof coverage>) => ({
+    from: "2026-09-28",
+    to: "2026-09-28",
+    sectors,
+    coverage: cov,
+  });
 
   it("正常な結果は行を返す", () => {
-    const out = verifySectorTurnoverResult(
-      { from: "2026-09-28", to: "2026-09-28" },
-      { from: "2026-09-28", to: "2026-09-28", sectors: [row()] }
-    );
+    const out = verifySectorTurnoverResult({ from: "2026-09-28", to: "2026-09-28" }, res([row()], coverage()));
     expect(out).toHaveLength(1);
     expect(out[0].turnoverShare).toBe(0.5);
   });
 
   it("範囲 echo 不一致・空・share 未定義は throw する", () => {
     expect(() =>
-      verifySectorTurnoverResult({ from: "2026-09-28", to: "2026-09-28" }, { from: "2026-09-28", to: "2026-09-29", sectors: [row()] })
+      verifySectorTurnoverResult(
+        { from: "2026-09-28", to: "2026-09-28" },
+        { ...res([row()], coverage()), to: "2026-09-29" }
+      )
     ).toThrow(/応答範囲が不一致/);
     expect(() =>
-      verifySectorTurnoverResult({ from: "2026-09-28", to: "2026-09-28" }, { from: "2026-09-28", to: "2026-09-28", sectors: [] })
+      verifySectorTurnoverResult({ from: "2026-09-28", to: "2026-09-28" }, res([], coverage()))
     ).toThrow(/売買代金合計が 0/);
     expect(() =>
       verifySectorTurnoverResult(
         { from: "2026-09-28", to: "2026-09-28" },
-        { from: "2026-09-28", to: "2026-09-28", sectors: [row({ turnoverShare: null })] }
+        res([row({ turnoverShare: null })], coverage())
       )
     ).toThrow(/売買代金合計が 0/);
   });
 
-  it("日足なし・売買代金 0 の業種は部分週として throw する", () => {
+  it("as-of 日 coverage の不一致・母集団空・不足は throw する", () => {
     expect(() =>
       verifySectorTurnoverResult(
         { from: "2026-09-28", to: "2026-09-28" },
-        { from: "2026-09-28", to: "2026-09-28", sectors: [row({ stockCount: 0 })] }
+        res([row()], coverage({ date: "2026-09-27" }))
       )
-    ).toThrow(/日足がありません/);
+    ).toThrow(/coverage がありません/);
     expect(() =>
       verifySectorTurnoverResult(
         { from: "2026-09-28", to: "2026-09-28" },
-        { from: "2026-09-28", to: "2026-09-28", sectors: [row({ turnover: 0 })] }
+        res([row()], coverage({ universe: 0, covered: 0 }))
       )
-    ).toThrow(/売買代金が 0/);
+    ).toThrow(/母集団が空/);
+    expect(() =>
+      verifySectorTurnoverResult(
+        { from: "2026-09-28", to: "2026-09-28" },
+        res([row()], coverage({ covered: 3699 }))
+      )
+    ).toThrow(/実日足が母集団に足りません/);
   });
 });
 
@@ -237,5 +255,64 @@ describe("main() の --dry-run 契約", () => {
     expect(String(recordRunLog.mock.calls[0]![1].reason)).toContain("indicator-catalog");
     expect(process.exitCode).toBe(1);
     process.exitCode = undefined;
+  });
+
+  it("dry-run でも検証を先に通し、不合格は ok:false にする (成功にしない)", async () => {
+    vi.resetModules();
+    process.argv = [...ORIGINAL_ARGV, "--dry-run", "--only=sector-turnover"];
+
+    const prevWorkerBase = process.env.WORKER_BASE_URL;
+    const prevCron = process.env.CRON_SECRET;
+    const prevFetch = globalThis.fetch;
+    process.env.WORKER_BASE_URL = "https://worker.invalid";
+    process.env.CRON_SECRET = "test-secret";
+    // coverage 不足の応答 (from/to は要求に合わせるのですり抜けない)。
+    globalThis.fetch = (async (url: unknown) => {
+      const u = new URL(String(url));
+      const body = {
+        from: u.searchParams.get("from"),
+        to: u.searchParams.get("to"),
+        sectors: [],
+        coverage: { date: u.searchParams.get("to"), universe: 3700, covered: 3699 },
+      };
+      return { ok: true, status: 200, text: async () => JSON.stringify(body) } as Response;
+    }) as typeof fetch;
+
+    const ensureObservationsDb = vi.fn();
+    vi.doMock("../../src/shared/notion-archive/index.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../src/shared/notion-archive/index.js")>();
+      return { ...actual, ensureObservationsDb };
+    });
+
+    try {
+      const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const mod = await import("./ingest.js");
+      await mod.main();
+      const outcomes = consoleInfo.mock.calls
+        .map((c) => {
+          try {
+            return JSON.parse(String(c[0])) as { outcomes?: Array<{ source: string; ok: boolean; detail: string }> };
+          } catch {
+            return {};
+          }
+        })
+        .find((o) => Array.isArray(o.outcomes))?.outcomes;
+      consoleInfo.mockRestore();
+      consoleError.mockRestore();
+
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes?.[0]?.source).toBe("sector-turnover");
+      expect(outcomes?.[0]?.ok).toBe(false);
+      expect(outcomes?.[0]?.detail).toMatch(/実日足が母集団に足りません/);
+      expect(ensureObservationsDb).not.toHaveBeenCalled();
+    } finally {
+      if (prevWorkerBase === undefined) delete process.env.WORKER_BASE_URL;
+      else process.env.WORKER_BASE_URL = prevWorkerBase;
+      if (prevCron === undefined) delete process.env.CRON_SECRET;
+      else process.env.CRON_SECRET = prevCron;
+      globalThis.fetch = prevFetch;
+    }
   });
 });

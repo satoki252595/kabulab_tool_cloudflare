@@ -15,7 +15,7 @@
  * だけで完結させているため、対象銘柄数に関わらずバインド数は一定 (date 2 個 + JOIN
  * 条件の定数)。
  */
-import { and, eq, gte, lte, type SQL } from "drizzle-orm";
+import { and, eq, gte, lte, sql, type SQL } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 import * as coreSchema from "../shared/db/core-schema.js";
@@ -47,12 +47,23 @@ export interface SectorTurnoverRow {
   marketCapStockCount: number;
 }
 
+export interface MoneyflowSectorCoverage {
+  /** coverage の対象日 (= 要求の to。as-of 日)。 */
+  date: string;
+  /** 対象母集団の銘柄数 (active かつ equity。集計と同一述語)。 */
+  universe: number;
+  /** 対象日に実 close+volume の日足を持つ銘柄数。 */
+  covered: number;
+}
+
 export interface MoneyflowSectorResult {
   from: string;
   to: string;
   /** 時価総額は取得時点のスナップショット (対象期間の値ではない)。 */
   marketCapAsOf: "snapshot_at_fetch";
   sectors: SectorTurnoverRow[];
+  /** as-of 日の実日足 coverage (CLI が exact 照合する)。 */
+  coverage: MoneyflowSectorCoverage;
 }
 
 /** 前日比計算のための遡り日数 (カレンダー日。週末・祝日を跨いでも直前の営業日を拾える幅)。 */
@@ -101,6 +112,13 @@ export async function aggregateMoneyflowSector(
     )
     .where(and(gte(swingSchema.dailyOhlcv.date, extendedFrom), lte(swingSchema.dailyOhlcv.date, range.to)))
     .orderBy(swingSchema.dailyOhlcv.stockId, swingSchema.dailyOhlcv.date)) as OhlcvRow[];
+
+  // 1b) 対象母集団の銘柄数 (active かつ equity。分母と分子は同じ述語)。
+  //     別クエリの count(*) でバインドは増えない。
+  const [{ activeCount: universe }] = await db
+    .select({ activeCount: sql<number>`count(*)` })
+    .from(coreSchema.stocks)
+    .where(activeEquityCondition());
 
   // 2) 業種別時価総額 (取得時点のスナップショット。対象期間の値ではない)。
   const capRows = (await db
@@ -188,5 +206,21 @@ export async function aggregateMoneyflowSector(
     }))
     .sort((x, y) => y.turnover - x.turnover);
 
-  return { from: range.from, to: range.to, marketCapAsOf: "snapshot_at_fetch", sectors };
+  // as-of 日 (to) の実日足 coverage。対象母集団のうち対象日に実 close+volume を
+  // 持つ銘柄 (ohlcvRows は集計と同じ active かつ equity 述語済みのため、
+  // 日付と非 NULL だけ数える。追加クエリなし)。
+  const coveredIds = new Set<number>();
+  for (const row of ohlcvRows) {
+    if (row.date === range.to && row.close !== null && row.volume !== null) {
+      coveredIds.add(row.stockId);
+    }
+  }
+
+  return {
+    from: range.from,
+    to: range.to,
+    marketCapAsOf: "snapshot_at_fetch",
+    sectors,
+    coverage: { date: range.to, universe, covered: coveredIds.size },
+  };
 }

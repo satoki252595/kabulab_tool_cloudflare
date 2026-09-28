@@ -24,6 +24,9 @@ import {
   mapAttachmentArchiveNames,
   normalizedBlockForDigest,
   pageFilesRefsOf,
+  pageProofsEqual,
+  queryDbAll,
+  readRelationFull,
   requireCompleteSnapshotProof,
   saveFreshEvidence,
   v2SnapshotArchiveName,
@@ -60,7 +63,15 @@ vi.mock("../../src/shared/notion-archive/page-file.js", () => ({
   fetchPageFileUrl: vi.fn(),
 }));
 
+vi.mock("../../src/shared/notion-archive/client.js", () => ({
+  notionRequest: vi.fn(),
+  NotionUnknownResultError: class NotionUnknownResultError extends Error {},
+  notionStats: vi.fn(),
+  resetNotionStats: vi.fn(),
+}));
+
 import { listPageFiles } from "../../src/shared/notion-archive/page-file.js";
+import { notionRequest } from "../../src/shared/notion-archive/client.js";
 
 const KEEP_3681 = TARGETS[0].keepId;
 const RETIRE_3681 = TARGETS[0].retireId;
@@ -832,6 +843,7 @@ describe("master-dedup 実 flow 回帰", () => {
             type: "image",
             hasChildren: false,
             text: "",
+            raw: { id: "b1", type: "image" },
             file: { name: "i.png", origin: "hosted", bytesSha256: "2".repeat(64) },
             digest: "d".repeat(64),
           },
@@ -938,6 +950,111 @@ describe("master-dedup 実 flow 回帰", () => {
       const norm = normalizedBlockForDigest(block) as Record<string, Record<string, Record<string, unknown>>>;
       expect(norm["image"]["file"]).toEqual({});
       expect(norm["image"]["caption"]).toEqual([{ plain_text: "c" }]);
+    });
+
+    it("正規化は annotations/link/checked の原構造を保持する", () => {
+      const block = {
+        id: "b1",
+        type: "to_do",
+        to_do: {
+          rich_text: [
+            {
+              plain_text: "やる",
+              annotations: { bold: true, italic: false, code: false },
+              text: { content: "やる", link: { url: "https://example.invalid/todo" } },
+            },
+          ],
+          checked: true,
+        },
+      } as unknown as RawBlock;
+      const norm = normalizedBlockForDigest(block) as {
+        to_do: { rich_text: Array<Record<string, unknown>>; checked: boolean };
+      };
+      expect(norm.to_do.checked).toBe(true);
+      expect(norm.to_do.rich_text[0]?.["annotations"]).toEqual({ bold: true, italic: false, code: false });
+      expect(norm.to_do.rich_text[0]?.["text"]).toEqual({
+        content: "やる",
+        link: { url: "https://example.invalid/todo" },
+      });
+    });
+  });
+
+  describe("fresh proof 照合 (更新直前の内容一致)", () => {
+    const snap = {
+      body: { fullCapture: true as const, blocks: [], sha256: "b".repeat(64) },
+      files: { complete: true as const, files: [], sha256: "f".repeat(64) },
+    };
+
+    it("両 SHA 一致で真・いずれか不一致/欠落で偽", () => {
+      expect(pageProofsEqual(snap, { body: snap.body, files: snap.files })).toBe(true);
+      expect(
+        pageProofsEqual(snap, {
+          body: { ...snap.body, sha256: "c".repeat(64) },
+          files: snap.files,
+        })
+      ).toBe(false);
+      expect(
+        pageProofsEqual(snap, {
+          body: snap.body,
+          files: { ...snap.files, sha256: "d".repeat(64) },
+        })
+      ).toBe(false);
+      expect(pageProofsEqual({ body: undefined, files: snap.files }, { body: snap.body, files: snap.files })).toBe(false);
+    });
+
+    it("退避原像は proofs 付きで内容一致を要求する", () => {
+      const snapProps = { "上場状態": { type: "checkbox", checkbox: true } };
+      const base = {
+        retireId: RETIRE_3681,
+        snapProps,
+        snapBlockCount: 0,
+        snapChildDbs: [] as string[],
+        freshProps: { ...snapProps },
+        freshBlockCount: 0,
+        freshChildDbs: [] as string[],
+      };
+      expect(() =>
+        verifyRetirePreimage({ ...base, proofs: { snapBody: snap.body, snapFiles: snap.files, freshBody: snap.body, freshFiles: snap.files } })
+      ).not.toThrow();
+      expect(() =>
+        verifyRetirePreimage({
+          ...base,
+          proofs: {
+            snapBody: snap.body,
+            snapFiles: snap.files,
+            freshBody: { ...snap.body, sha256: "c".repeat(64) },
+            freshFiles: snap.files,
+          },
+        })
+      ).toThrow(/本文・添付が変化/);
+    });
+  });
+
+  describe("ページ送りの has_more/cursor 欠落は STOP する", () => {
+    beforeEach(() => {
+      vi.mocked(notionRequest).mockReset();
+    });
+
+    it("queryDbAll は has_more なのに cursor なしで STOP する", async () => {
+      vi.mocked(notionRequest).mockResolvedValueOnce({ results: [], has_more: true, next_cursor: null });
+      await expect(queryDbAll(0, "db1", {})).rejects.toThrow(/next_cursor なし/);
+    });
+
+    it("queryDbAll の正常ページ送りは全件返す (誤 STOP しない)", async () => {
+      vi.mocked(notionRequest)
+        .mockResolvedValueOnce({ results: [{ id: "r1" }], has_more: true, next_cursor: "c1" })
+        .mockResolvedValueOnce({ results: [{ id: "r2" }], has_more: false, next_cursor: null });
+      const out = await queryDbAll(0, "db1", {});
+      expect(out.map((r) => (r as unknown as { id: string }).id)).toEqual(["r1", "r2"]);
+    });
+
+    it("readRelationFull は has_more なのに cursor なしで STOP する", async () => {
+      const page = {
+        id: "p1",
+        properties: { rel: { type: "relation", id: "prop-1", relation: [], has_more: true } },
+      } as unknown as NotionPage;
+      vi.mocked(notionRequest).mockResolvedValueOnce({ results: [], has_more: true, next_cursor: null });
+      await expect(readRelationFull(0, "p1", page, "rel")).rejects.toThrow(/next_cursor なし/);
     });
   });
 });

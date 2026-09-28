@@ -394,6 +394,7 @@ interface MoneyflowSectorApiResponse {
   from: string;
   to: string;
   sectors: MoneyflowSectorApiRow[];
+  coverage: { date: string; universe: number; covered: number };
 }
 
 async function fetchSectorTurnoverFromWorker(from: string, to: string): Promise<MoneyflowSectorApiResponse> {
@@ -413,8 +414,10 @@ async function fetchSectorTurnoverFromWorker(from: string, to: string): Promise<
 
 /**
  * sector-turnover の結果を厳密検証する純関数 (strict actual source coverage/result gate)。
- * 要求範囲の echo 照合 + 全業種の share 定義 + 全業種の日足存在 (stockCount>0) +
- * 全業種の売買代金 (>0) を要求し、部分週・未取込を 0 扱いで書かず失敗させる。
+ * 要求範囲の echo 照合 + endpoint の as-of 日実日足 coverage の exact 照合
+ * (対象日一致・母集団非空・covered 全数一致) + 全業種の share 定義を要求し、
+ * 部分週・未取込を 0 扱いで書かず失敗させる。週内寄与数 (stockCount) では
+ * as-of 日の取得を証明できないため coverage で照合する。
  */
 export function verifySectorTurnoverResult(
   req: { from: string; to: string },
@@ -423,6 +426,22 @@ export function verifySectorTurnoverResult(
   if (result.from !== req.from || result.to !== req.to) {
     throw new Error(
       `sector-turnover: 要求範囲と応答範囲が不一致です req=${req.from}〜${req.to} got=${result.from}〜${result.to}`
+    );
+  }
+  const coverage = result.coverage;
+  if (!coverage || coverage.date !== req.to) {
+    throw new Error(
+      `sector-turnover: as-of 日の coverage がありません req=${req.to} got=${coverage?.date ?? "なし"} (部分週の可能性があるため書きません)`
+    );
+  }
+  if (!(coverage.universe > 0)) {
+    throw new Error(
+      `sector-turnover: 対象母集団が空です (universe=${coverage.universe}。証明にならないため書きません)`
+    );
+  }
+  if (coverage.covered !== coverage.universe) {
+    throw new Error(
+      `sector-turnover: as-of 日の実日足が母集団に足りません covered=${coverage.covered}/${coverage.universe} (部分週のため書きません)`
     );
   }
   // 全業種の売買代金合計が 0 (= D1 に対象週の日足がまだ無い等) ならシェアが
@@ -435,18 +454,6 @@ export function verifySectorTurnoverResult(
   if (result.sectors.length === 0) throw zeroTotalError();
   return result.sectors.map((r) => {
     if (r.turnoverShare === null) throw zeroTotalError();
-    if (!(r.stockCount > 0)) {
-      throw new Error(
-        `sector-turnover: ${result.from}〜${result.to} の業種「${r.sector}」に日足がありません ` +
-          `(stockCount=${r.stockCount}。部分週の可能性があるため書きません)`
-      );
-    }
-    if (!(r.turnover > 0)) {
-      throw new Error(
-        `sector-turnover: ${result.from}〜${result.to} の業種「${r.sector}」の売買代金が 0 です ` +
-          `(部分週・欠損の可能性があるため書きません)`
-      );
-    }
     return { ...r, turnoverShare: r.turnoverShare };
   });
 }
@@ -459,12 +466,13 @@ async function runSectorTurnover(): Promise<RunOutcome> {
   const asOfProvenance = AS_OF === null ? "today(UTC)" : "fixed";
   const result = await fetchSectorTurnoverFromWorker(from, to);
 
+  // dry-run も保存前と同じ検証を先に通す。不合格は成功にしない。
+  const rows = verifySectorTurnoverResult({ from, to }, result);
+
   if (DRY_RUN) {
     console.info(JSON.stringify({ source: "sector-turnover", dryRun: true, asOf, asOfProvenance, result }, null, 2));
     return { source: "sector-turnover", ok: true, detail: `dry-run ${from}〜${to} (asOf=${asOf} ${asOfProvenance})` };
   }
-
-  const rows = verifySectorTurnoverResult({ from, to }, result);
 
   const { dbId: obsDbId } = await ensureObservationsDb();
   const turnoverPageId = requireIndicatorPageId("sector_turnover");

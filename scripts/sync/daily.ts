@@ -20,7 +20,7 @@ import {
   runDailySync,
   runMarketContextSync,
 } from "../../src/cron/daily.js";
-import { requireYahooProxyForNodeSync } from "../../src/shared/env.js";
+import { requireYahooProxyForNodeSync, sharedEnv } from "../../src/shared/env.js";
 import { rootCauseMessage } from "../../src/shared/errors.js";
 
 const MAX_CODES_PER_ERROR = 50;
@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   // 失敗率 ≤1% の成功扱い (L-57)。成功は成功だが、失敗の trace を残すため
   // workflow が Issue へコメントする。件数を GITHUB_OUTPUT へ出す。
   if (result.failures.length > 0) {
-    const out = process.env.GITHUB_OUTPUT;
+    const out = sharedEnv.GITHUB_OUTPUT();
     if (out !== undefined) {
       const { appendFileSync } = await import("node:fs");
       appendFileSync(out, `tolerated_failures=${result.failures.length}\n`);
@@ -96,7 +96,7 @@ async function main(): Promise<void> {
   // 後続 moneyflow の固定入力として GITHUB_OUTPUT へ出す (#160)。
   // null (Phase 3 実質全滅) なら出さない — 後続は空出力で起動しない (推測しない)。
   if (result.tradingDate !== null) {
-    const out = process.env.GITHUB_OUTPUT;
+    const out = sharedEnv.GITHUB_OUTPUT();
     if (out !== undefined) {
       const { appendFileSync } = await import("node:fs");
       appendFileSync(out, `trade_date=${result.tradingDate}\n`);
