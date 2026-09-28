@@ -212,11 +212,12 @@ describe("地域別バケット (REGION_BUCKETS) — 同義地域語の正規化
   });
 });
 
-describe("F2 根因修正: 重複地域名の曖昧表は ok を出さない (aggregate-before-dedup 防止)", () => {
-  it("S100J2E7 販売実績表 (地域×品目の2次元表) は却下され、取込 pure path でも誤った ok 保存行を生まない", () => {
+describe("F2 根因修正: 未解決の重複地域名は ok を出さない (aggregate-before-dedup 防止)", () => {
+  it("S100T6Q9 減損損失表 (非売上・(地域, 用途) 非一意) は却下され、取込 pure path でも保存行を生まない", () => {
     // raw(実原本の必要表のみ切り出し) → parse → 取込 caller と同一 key の pure dedup
-    const r = parseOverseasHtml(fx("georows-dup-region-ambiguous-S100J2E7.html"), "2020-03-31");
-    // pre-fix は ok_geo_rows で日本/アジアの重複＋海外売上高 19827 を出していた。fix 後は却下。
+    const r = parseOverseasHtml(fx("georows-impairment-unresolved-S100T6Q9.html"), "2023-12-31");
+    // pre-fix (#150 以前) は ok_geo_rows で米国/日本の重複＋集計を出していた。
+    // P-2D/P-hier/P-metric のいずれでも証明できないため却下のまま。
     expect(r.status).toBe("geo_present_unstructured");
     expect(r.facts).toHaveLength(0);
     // ingest.ts / backfill-overseas.ts / backfill-missing-docs.ts と同一の dedup
@@ -229,6 +230,88 @@ describe("F2 根因修正: 重複地域名の曖昧表は ok を出さない (ag
       return true;
     });
     expect(saved).toHaveLength(0);
+  });
+});
+
+describe("P-2D/P-hier/P-metric: 証明できる重複は正しく読む", () => {
+  it("S100J2E7 販売実績表 (地域×品目の2次元表) は品目合算で回復する", () => {
+    // 日本 16698+14814、アジア 5439+11524、北米 2864 (ブレーキ欠損は合計上0)。
+    // 合算 51339 が開示合計 51340 と一致して分割を証明する。
+    const r = parseOverseasHtml(fx("georows-dup-region-ambiguous-S100J2E7.html"), "2020-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(31512);
+    expect(region(r.facts, "アジア")!.salesAmount).toBe(16963);
+    expect(region(r.facts, "北米")!.salesAmount).toBe(2864);
+    // 源泉正の集計は保持する (per-column provenance: 落としたのは地域行だけ)
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(19827);
+    expect(pick(r.facts, "overseas_total")!.ratioPct).toBe(38.6);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(51340);
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("百万円");
+    // 取込 caller と同一の dedup を通しても行は欠落しない (一意化済み)
+    const seen = new Set<string>();
+    const saved = r.facts.filter((f) => {
+      const k = `${f.fiscalYearEnd} ${f.regionName}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    expect(saved).toHaveLength(5);
+  });
+
+  it("S100YBHC 販売実績表 (地域×品目の2次元表) は品目合算で回復する", () => {
+    const r = parseOverseasHtml(fx("georows-2dproduct-sales-S100YBHC.html"), "2026-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(26626847);
+    expect(region(r.facts, "中国")!.salesAmount).toBe(4046665);
+    expect(region(r.facts, "北米")!.salesAmount).toBe(12107628);
+    expect(region(r.facts, "欧州")!.salesAmount).toBe(16776734);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(32931027);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(59557877);
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("千円");
+  });
+
+  it("S100OJV9 2階層行ラベル表は子ラベルで読替える", () => {
+    // 親 (日本/海外) + 子 (日本/アジア/欧州/北米/その他)。leaf 合計 152403 が
+    // 顧客契約 152406 と一致して分割を証明する。
+    const r = parseOverseasHtml(fx("georows-hierchild-S100OJV9.html"), "2022-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(92660);
+    expect(region(r.facts, "アジア")!.salesAmount).toBe(15228);
+    expect(region(r.facts, "欧州")!.salesAmount).toBe(27377);
+    expect(region(r.facts, "北米")!.salesAmount).toBe(12016);
+    expect(region(r.facts, "その他")!.salesAmount).toBe(5122);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(59743);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(152536);
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("百万円");
+  });
+
+  it("S100VI7V 地域×項目対は売上高行だけ読み、合計欠損は null で正直に出す", () => {
+    // 営業利益行を混ぜない。開示合計行がなく事業セグメント (警備輸送等) もある
+    // ため total は欠損 (地域計を総額に捏造しない)。比率も欠損。
+    const r = parseOverseasHtml(fx("georows-metricpair-S100VI7V.html"), "2022-12-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(14572);
+    expect(region(r.facts, "米州")!.salesAmount).toBe(1620);
+    expect(region(r.facts, "欧州")!.salesAmount).toBe(2156);
+    expect(region(r.facts, "東アジア")!.salesAmount).toBe(2420);
+    expect(region(r.facts, "南アジア・オセアニア")!.salesAmount).toBe(2218);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(8414);
+    expect(pick(r.facts, "total")!.salesAmount).toBeNull();
+    expect(pick(r.facts, "overseas_total")!.ratioPct).toBeNull();
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("億円");
+  });
+
+  it("S100VI6W 地域×項目対 (IFRS: 売上収益/事業利益) も売上収益行だけ読む", () => {
+    const r = parseOverseasHtml(fx("georows-metricpair-ifrs-S100VI6W.html"), "2024-12-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(12620);
+    expect(region(r.facts, "米州")!.salesAmount).toBe(1530);
+    expect(region(r.facts, "欧州")!.salesAmount).toBe(5017);
+    expect(region(r.facts, "東アジア")!.salesAmount).toBe(1739);
+    expect(region(r.facts, "南アジア・オセアニア")!.salesAmount).toBe(1576);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(9862);
+    expect(pick(r.facts, "total")!.salesAmount).toBeNull();
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("億円");
   });
 });
 
@@ -286,6 +369,75 @@ describe("B2 根因修正: 生産実績表は売上高の開示ではないの�
     expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(21520);
     expect(pick(r.facts, "total")!.salesAmount).toBe(37686);
     expect(region(r.facts, "日本")!.salesAmount).toBe(16163);
+  });
+});
+
+describe("P-block: 積層 block は売上・地域 block だけ読む (小計・消去・計で検証)", () => {
+  it("S100DA2Y 売上block + 営業利益block → 売上blockのみ (地域計+消去=計)", () => {
+    const r = parseOverseasHtml(fx("georows-salesblock-profitblock-S100DA2Y.html"), "2018-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(16024844);
+    expect(region(r.facts, "北米")!.salesAmount).toBe(10574410);
+    expect(region(r.facts, "欧州")!.salesAmount).toBe(3185224);
+    expect(region(r.facts, "アジア")!.salesAmount).toBe(5148139);
+    expect(region(r.facts, "その他")!.salesAmount).toBe(2453299);
+    // 営業利益blockの値 (日本 1659918 等) が混入していないこと
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(21361072);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(29379510);
+    expect(pick(r.facts, "overseas_total")!.ratioPct).toBe(72.7);
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("百万円");
+  });
+
+  it("S100OE1D 地域市場block + 用途別block → 地域blockのみ", () => {
+    const r = parseOverseasHtml(fx("georows-regionblock-productblock-S100OE1D.html"), "2022-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(13511615);
+    expect(region(r.facts, "アジア")!.salesAmount).toBe(6845842);
+    expect(region(r.facts, "北米")!.salesAmount).toBe(5297522);
+    expect(region(r.facts, "欧州")!.salesAmount).toBe(3369511);
+    // 地域blockのその他 (341247)。用途別blockのその他 (1998616) ではない
+    expect(region(r.facts, "その他")!.salesAmount).toBe(341247);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(15854122);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(29365738);
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("千円");
+  });
+
+  it("S100OH3F 地域市場block + 財サービスblock → 地域blockのみ (中近東を読む)", () => {
+    const r = parseOverseasHtml(fx("georows-regionblock-productblock-nakachinto-S100OH3F.html"), "2022-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(3926667);
+    expect(region(r.facts, "東アジア")!.salesAmount).toBe(316624);
+    expect(region(r.facts, "東南・南アジア")!.salesAmount).toBe(203194);
+    expect(region(r.facts, "中近東")!.salesAmount).toBe(115979);
+    expect(region(r.facts, "その他")!.salesAmount).toBe(15741);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(651538);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(4578208);
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("千円");
+  });
+
+  it("S100YDNF 財block + 地域別block → 地域blockのみ", () => {
+    const r = parseOverseasHtml(fx("georows-zaiblock-regionblock-S100YDNF.html"), "2026-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(26515);
+    expect(region(r.facts, "アジア")!.salesAmount).toBe(18667);
+    expect(region(r.facts, "北米")!.salesAmount).toBe(14327);
+    // 地域blockのその他 (2534)。財blockのその他 (0) ではない
+    expect(region(r.facts, "その他")!.salesAmount).toBe(2534);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(35528);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(62045);
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("百万円");
+  });
+
+  it("S100QIEX 収益2block + 小計 → block合算 (小計A+小計B=外部顧客)", () => {
+    const r = parseOverseasHtml(fx("georows-twoblock-shokei-S100QIEX.html"), "2022-12-31");
+    expect(r.status).toBe("ok_geo_rows");
+    // 日本 1738900+369973、中国 373868+7321 の block 間合算
+    expect(region(r.facts, "日本")!.salesAmount).toBe(2108873);
+    expect(region(r.facts, "中国")!.salesAmount).toBe(381189);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(381189);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(2490064);
+    expect(pick(r.facts, "overseas_total")!.ratioPct).toBe(15.3);
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("千円");
   });
 });
 

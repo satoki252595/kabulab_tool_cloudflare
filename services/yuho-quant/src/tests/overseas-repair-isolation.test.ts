@@ -104,13 +104,14 @@ function seedSavedFact(
   salesYen: number | null,
   ratioPct: number | null,
   isConsolidated: number | null,
-  pattern: string
+  pattern: string,
+  unitLabel = "百万円"
 ): void {
   sqlite
     .prepare(
-      "INSERT INTO yuho_overseas_facts (document_id, stock_id, fiscal_year_end, region_name, region_kind, is_consolidated, unit_label, sales_raw, sales_yen, ratio_pct, pattern) VALUES (?, ?, ?, ?, ?, ?, '百万円', ?, ?, ?, ?)"
+      "INSERT INTO yuho_overseas_facts (document_id, stock_id, fiscal_year_end, region_name, region_kind, is_consolidated, unit_label, sales_raw, sales_yen, ratio_pct, pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
-    .run(docId, stockId, fy, regionName, regionKind, isConsolidated, salesRaw, salesYen, ratioPct, pattern);
+    .run(docId, stockId, fy, regionName, regionKind, isConsolidated, unitLabel, salesRaw, salesYen, ratioPct, pattern);
 }
 
 function toYen(raw: number | null, factor: number): number | null {
@@ -247,9 +248,10 @@ describe("隔離修復 S100OE0P: 不一致保存行 → 販売実績の正しい
   });
 });
 
-describe("隔離修復 S100J2E7: 不一致保存行 → 未構造化へ", () => {
-  it("原本→保存→表示の全経路が正直な未対応になり、再実行で不変", async () => {
-    // 本番の不一致保存行を seed (SUM(overseas)=8303 ≠ overseas_total=19827)
+describe("隔離修復 S100J2E7: 不一致保存行 → 品目合算の正しい行へ", () => {
+  it("原本→保存→表示の全経路が回復値を運び、再実行で不変", async () => {
+    // 本番の不一致保存行を seed (SUM(overseas)=8303 ≠ overseas_total=19827)。
+    // per-column provenance: ot/total は源泉正で保持し、欠落した地域行だけ直す。
     seedStock(2, "7277");
     seedDoc(200, 2, "S100J2E7", "2020-03-31", "ok_geo_rows");
     seedSavedFact(200, 2, "2020-03-31", "日本", "domestic", 16698, 16698000000, null, 1, "geo_rows");
@@ -258,22 +260,74 @@ describe("隔離修復 S100J2E7: 不一致保存行 → 未構造化へ", () => 
     seedSavedFact(200, 2, "2020-03-31", "海外売上高", "overseas_total", 19827, 19827000000, 38.6, 1, "geo_rows");
     seedSavedFact(200, 2, "2020-03-31", "連結売上高", "total", 51340, 51340000000, null, 1, "geo_rows");
 
-    // 原本 (重複地域の曖昧表) は未構造化として却下される
+    // 原本 (地域×品目の2次元表) は品目合算で回復する
     const r = parseOverseasHtml(fx("georows-dup-region-ambiguous-S100J2E7.html"), "2020-03-31");
-    expect(r.status).toBe("geo_present_unstructured");
-    expect(r.facts).toHaveLength(0);
+    expect(r.status).toBe("ok_geo_rows");
 
-    // 保存: status更新 + facts削除 (0 inserts)
+    // 保存: 取込save path等価の置換。地域行は合算値、ot/total は源泉値を保持。
     await repairSave(200, 2, r.status, "test-honbun.htm", r.facts);
-    expect(await readFacts(200)).toEqual([]);
+    const after = await readFacts(200);
+    expect(after).toEqual([
+      "2020-03-31|アジア|overseas|16963000000|null",
+      "2020-03-31|北米|overseas|2864000000|null",
+      "2020-03-31|日本|domestic|31512000000|null",
+      "2020-03-31|海外売上高|overseas_total|19827000000|38.6",
+      "2020-03-31|連結売上高|total|51340000000|null",
+    ]);
     const [doc] = await db
       .select({ s: yuhoDocuments.overseasParseStatus })
       .from(yuhoDocuments)
       .where(eq(yuhoDocuments.id, 200));
+    expect(doc.s).toBe("ok_geo_rows");
+
+    // 表示: 画面queryが回復値を読む
+    const trend = await getOverseasTrendByCode(db, "7277");
+    expect(trend).not.toBeNull();
+    expect(trend!.hasStructuredData).toBe(true);
+    expect(trend!.points).toHaveLength(1);
+    const p = trend!.points[0];
+    expect(p.overseasYen).toBe(19827000000);
+    expect(p.totalYen).toBe(51340000000);
+    expect(p.domesticYen).toBe(31512000000);
+    expect(p.ratioPct).toBe(38.6);
+    expect(p.regions.map((x) => `${x.name}:${x.yen}`)).toEqual([
+      "アジア:16963000000",
+      "北米:2864000000",
+    ]);
+
+    // 再実行で不変 (2nd run 0 changes)
+    await repairSave(200, 2, r.status, "test-honbun.htm", r.facts);
+    expect(await readFacts(200)).toEqual(after);
+  });
+});
+
+describe("隔離修復 S100T6Q9: 誤保存行 → 未構造化へ (真 unsupported)", () => {
+  it("原本→保存→表示の全経路が正直な未対応になり、再実行で不変", async () => {
+    // 本番の誤保存行を seed (減損損失表を売上として誤読した集合)
+    seedStock(3, "3681");
+    seedDoc(300, 3, "S100T6Q9", "2023-12-31", "ok_geo_rows");
+    seedSavedFact(300, 3, "2023-12-31", "日本", "domestic", 422667, 422667000, null, null, "geo_rows", "千円");
+    seedSavedFact(300, 3, "2023-12-31", "米国", "overseas", 2115, 2115000, null, null, "geo_rows", "千円");
+    seedSavedFact(300, 3, "2023-12-31", "シンガポール", "overseas", 16462, 16462000, null, null, "geo_rows", "千円");
+    seedSavedFact(300, 3, "2023-12-31", "海外売上高", "overseas_total", 3248331, 3248331000, 85.9, null, "geo_rows", "千円");
+    seedSavedFact(300, 3, "2023-12-31", "連結売上高", "total", 3779758, 3779758000, null, null, "geo_rows", "千円");
+
+    // 原本 (非売上の減損損失表) は未構造化として却下される
+    const r = parseOverseasHtml(fx("georows-impairment-unresolved-S100T6Q9.html"), "2023-12-31");
+    expect(r.status).toBe("geo_present_unstructured");
+    expect(r.facts).toHaveLength(0);
+
+    // 保存: status更新 + facts削除 (0 inserts)
+    await repairSave(300, 3, r.status, "test-honbun.htm", r.facts);
+    expect(await readFacts(300)).toEqual([]);
+    const [doc] = await db
+      .select({ s: yuhoDocuments.overseasParseStatus })
+      .from(yuhoDocuments)
+      .where(eq(yuhoDocuments.id, 300));
     expect(doc.s).toBe("geo_present_unstructured");
 
     // 表示: 未対応として正直に出る (捏造値なし)
-    const trend = await getOverseasTrendByCode(db, "7277");
+    const trend = await getOverseasTrendByCode(db, "3681");
     expect(trend).not.toBeNull();
     expect(trend!.hasStructuredData).toBe(false);
     expect(trend!.points).toHaveLength(0);
@@ -281,7 +335,7 @@ describe("隔離修復 S100J2E7: 不一致保存行 → 未構造化へ", () => 
     expect(trend!.documents[0].overseasParseStatus).toBe("geo_present_unstructured");
 
     // 再実行で不変
-    await repairSave(200, 2, r.status, "test-honbun.htm", r.facts);
-    expect(await readFacts(200)).toEqual([]);
+    await repairSave(300, 3, r.status, "test-honbun.htm", r.facts);
+    expect(await readFacts(300)).toEqual([]);
   });
 });

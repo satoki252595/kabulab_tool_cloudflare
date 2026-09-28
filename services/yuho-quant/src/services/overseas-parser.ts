@@ -84,7 +84,7 @@ export const RX_OVERSEAS_KEYWORD =
 
 /** 海外地域 (本邦/日本 以外) を表す語 */
 const RX_OVERSEAS_REGION =
-  /北米|南米|中南米|北中米|中米|米州|米大陸|アメリカ大陸|米国|アメリカ|欧州|ヨーロッパ|欧米|アジア|オセアニア|大洋州|アフリカ|中東|中国|中華圏|香港|韓国|台湾|タイ|ベトナム|インド|インドネシア|シンガポール|フィリピン|マレーシア|ドイツ|英国|フランス|イタリア|スペイン|オランダ|メキシコ|ブラジル|カナダ|豪州|オーストラリア|海外/;
+  /北米|南米|中南米|北中米|中米|米州|米大陸|アメリカ大陸|米国|アメリカ|欧州|ヨーロッパ|欧米|アジア|オセアニア|大洋州|アフリカ|中近東|中東|中国|中華圏|香港|韓国|台湾|タイ|ベトナム|インド|インドネシア|シンガポール|フィリピン|マレーシア|ドイツ|英国|フランス|イタリア|スペイン|オランダ|メキシコ|ブラジル|カナダ|豪州|オーストラリア|海外/;
 /** 国内を表す語 (これに完全一致する行/列が domestic) */
 const RX_DOMESTIC = /^(日本|本邦|国内|日本国内|わが国|我が国)$/;
 /** 集計行/列 (地域ではない)。営業収益建て(トヨタ等の地域別営業概況)も含む */
@@ -166,6 +166,38 @@ function classifyRegion(rawLabel: string): RegionRole {
 function totalsConsistent(regionSum: number, disclosedTotal: number): boolean {
   if (disclosedTotal <= 0) return false;
   return Math.abs(regionSum - disclosedTotal) <= disclosedTotal * 0.01;
+}
+
+/** 製品/用途・非売上 metric の section 標識 (この section の行は売上 block ではない) */
+const RX_NON_SALES_SECTION = /営業利益|用途別|財又はサービス/;
+/** 小計行 (block 終端。小計は全体集計ではないので集計検証には使わない) */
+const RX_SHOKEI = /小計/;
+/** 消去/調整行 (地域計に加算して block 合計と照合する) */
+const RX_ELIMINATION = /消去/;
+/** 地域×項目 対の metric 区分 (売上高行だけ読む。利益行は混ぜない) */
+const RX_SALES_METRIC = /売上高|売上収益|営業収益/;
+const RX_PROFIT_METRIC = /営業利益|事業利益/;
+
+type MetricKind = "sales" | "profit" | null;
+
+/** col1 の metric 区分。売上高系/営業利益系のどちらでもなければ null */
+function metricOf(sub: string): MetricKind {
+  const n = norm(sub);
+  if (RX_SALES_METRIC.test(n)) return "sales";
+  if (RX_PROFIT_METRIC.test(n)) return "profit";
+  return null;
+}
+
+/**
+ * section 見出し行か。col0 が地域でも集計でもなく、行全体に数値が無い行。
+ * 例: 売上高 / 営業利益・損失(△) / 主たる地域市場 / 用途別の販売。
+ */
+function sectionLabelOf(row: string[]): string | null {
+  if (classifyRegion(row[0] ?? "") !== "other") return null;
+  const name = cleanLabel(row[0] ?? "");
+  if (name === "") return null;
+  if (row.some((c) => parseJpNumber(c) !== null)) return null;
+  return name;
 }
 
 /**
@@ -295,8 +327,26 @@ function tryGeoRows(
   const unit = detectUnitOrNull(flat) ?? detectUnitOrNull(heading);
   if (!unit) return null;
 
-  // 行ラベルの地域分類
-  const roles = gridX.map((r) => classifyRegion(r[0] ?? ""));
+  // section 分割: 非売上 section (製品/用途・営業利益) の行範囲を除外し、残りを
+  // 売上 block 候補として読む。小計行が残れば block 合算 (B1) を試みる。
+  const labelIdx: Array<{ idx: number; marked: boolean }> = [];
+  gridX.forEach((row, idx) => {
+    const label = sectionLabelOf(row);
+    if (label !== null) {
+      labelIdx.push({ idx, marked: RX_NON_SALES_SECTION.test(norm(label)) });
+    }
+  });
+  const excluded = new Set<number>();
+  labelIdx.forEach((l, li) => {
+    if (!l.marked) return;
+    const end = li + 1 < labelIdx.length ? labelIdx[li + 1].idx : gridX.length;
+    for (let i = l.idx; i < end; i++) excluded.add(i);
+  });
+
+  // 行ラベルの地域分類 (除外範囲は other 扱い)
+  const roles = gridX.map((r, i) =>
+    excluded.has(i) ? "other" : classifyRegion(r[0] ?? "")
+  );
   const hasDomestic = roles.includes("domestic");
   const overseasCount = roles.filter((x) => x === "overseas").length;
   if (!hasDomestic || overseasCount < 1) return null;
@@ -318,25 +368,54 @@ function tryGeoRows(
   if (!pick) return null;
   const vc = pick.col;
 
-  let domesticSum = 0;
-  let regionSum = 0;
-  // 集計行 (顧客との契約から生じる収益 / 外部顧客への売上高 / 合計 / 連結) を
+  // 集計行 (顧客との契約から生じる収益 / 外部顧客への売上高 / 合計 / 連結 / 計) を
   // すべて控える。地域行は「顧客との契約」水準で按分され、「外部顧客への売上高」
   // はそれに非地域分の『その他の収益』を足した広い総額になることがあるため、
   // 検証は「地域合計がいずれかの集計行と一致するか」で行う。
   const aggregates: Array<{ label: string; value: number }> = [];
-  const facts: OverseasFact[] = [];
   const consolidated = detectConsolidated(gridX.flat().join(" "));
+  interface Entry {
+    idx: number;
+    role: "domestic" | "overseas";
+    name: string;
+    /** 曖昧さ解消列 (col1)。2-D 製品軸・階層子ラベル・metric 区分に使う */
+    sub: string;
+    value: number;
+  }
+  const entries: Entry[] = [];
+  const shokei: Array<{ idx: number; value: number }> = [];
+  let elimSum = 0;
+  let hasBusinessRows = false;
 
   for (let i = firstNum; i < gridX.length; i++) {
+    if (excluded.has(i)) continue;
     const row = gridX[i];
     if (row.length <= vc) continue;
-    const role = classifyRegion(row[0] ?? "");
+    const role = roles[i];
     const v = parseJpNumber(row[vc] ?? "");
+    const normLabel = norm(row[0] ?? "");
+    // 非地域の実数行 (事業セグメント等) の有無。P-metric で集計行がない表の
+    // total 欠損判定に使う (地域外の売上がある表で地域計を総額にしない)。
+    if (role === "other" && v !== null && !RX_ELIMINATION.test(normLabel)) {
+      hasBusinessRows = true;
+    }
+    if (RX_SHOKEI.test(normLabel)) {
+      // 小計の値が読めない block 構成は検証不能 → 却下 (fail-closed)
+      if (v === null || !Number.isInteger(v)) return null;
+      shokei.push({ idx: i, value: v });
+      continue;
+    }
     if (role === "aggregate") {
-      if (v !== null && /外部顧客|顧客との契約|合計|連結/.test(norm(row[0]))) {
-        aggregates.push({ label: norm(row[0]), value: v });
+      if (
+        v !== null &&
+        /外部顧客|顧客との契約|合計|連結|^計$/.test(normLabel)
+      ) {
+        aggregates.push({ label: normLabel, value: v });
       }
+      continue;
+    }
+    if (RX_ELIMINATION.test(normLabel)) {
+      if (v !== null) elimSum += v;
       continue;
     }
     if (role !== "domestic" && role !== "overseas") continue;
@@ -344,37 +423,159 @@ function tryGeoRows(
     if (!Number.isInteger(v)) return null; // 小数 = % 列誤認 → 却下
     const name = cleanLabel(row[0] ?? "");
     if (name === "") continue;
-    if (role === "domestic") domesticSum += v;
-    regionSum += v;
-    facts.push({
-      regionName: name,
-      regionKind: role,
-      salesAmount: v,
-      ratioPct: null,
-      unitLabel: unit.label,
-      unitYenFactor: unit.factor,
+    entries.push({ idx: i, role, name, sub: row[1] ?? "", value: v });
+  }
+
+  if (shokei.length > 0) {
+    return finishShokeiBlocks(
+      entries,
+      shokei,
+      aggregates,
+      unit,
       fiscalYearEnd,
-      isConsolidated: consolidated,
-    });
+      consolidated
+    );
+  }
+
+  // 重複地域名の解決: metric 対・2-D 製品軸・階層ラベルのいずれかで証明できなければ
+  // 曖昧表として却下 (aggregate-before-dedup の防止。#150 の guard を弱めない)。
+  let useEntries = entries;
+  let metricPruned = false;
+  const entryNames = entries.map((e) => e.name);
+  if (new Set(entryNames).size !== entryNames.length) {
+    if (elimSum !== 0) return null; // 消去つき重複は未証明の組合せ → 却下
+    const resolved = resolveDupEntries(entries, aggregates);
+    if (!resolved) return null;
+    useEntries = resolved.entries;
+    metricPruned = resolved.metricPruned;
+  }
+
+  const facts: OverseasFact[] = useEntries.map((e) => ({
+    regionName: e.name,
+    regionKind: e.role,
+    salesAmount: e.value,
+    ratioPct: null,
+    unitLabel: unit.label,
+    unitYenFactor: unit.factor,
+    fiscalYearEnd,
+    isConsolidated: consolidated,
+  }));
+  let domesticSum = 0;
+  let regionSum = 0;
+  for (const e of useEntries) {
+    if (e.role === "domestic") domesticSum += e.value;
+    regionSum += e.value;
   }
 
   if (facts.length < 2 || domesticSum <= 0) return null;
   // 同一表内の重複地域名は曖昧表 (aggregate-before-dedup の原因) として却下
   if (hasDuplicateRegionNames(facts)) return null;
-  // 検証: 集計行が開示されているなら、地域合計が **いずれかの集計行** と一致する
-  // こと (= 正しい列を読み地域を取りこぼしていない)。一致が無ければ誤読として却下。
-  const matched = aggregates.find((a) => totalsConsistent(regionSum, a.value));
+  // 検証: 集計行が開示されているなら、地域合計 (+消去) が **いずれかの集計行** と
+  // 一致すること (= 正しい列・正しい block を読み地域を取りこぼしていない)。
+  // 一致が無ければ誤読として却下。
+  const adjustedSum = regionSum + elimSum;
+  const matched = aggregates.find((a) => totalsConsistent(adjustedSum, a.value));
   if (aggregates.length > 0 && !matched) return null;
   // 分母 (連結売上高): 実際の総売上 = 外部顧客への売上高 を最優先。無ければ
-  // 連結/合計、無ければ一致した集計、無ければ地域合計。
+  // 連結/合計、無ければ一致した集計、無ければ地域合計。ただし metric 除去後の
+  // 残りに非地域の実数行 (事業セグメント等) があり集計行がない表は、地域計が
+  // 会社全体を表さないため total を欠損にする (捏造しない。S100VI7V で実証)。
   const total =
     aggregates.find((a) => /外部顧客/.test(a.label))?.value ??
     aggregates.find((a) => /連結|合計/.test(a.label))?.value ??
     matched?.value ??
-    regionSum;
+    (metricPruned && hasBusinessRows ? null : regionSum);
   // 海外売上高 = 開示された海外地域行の合計 (= regionSum − 国内)。total − 国内に
   // すると「その他の収益」等の非地域分を海外に混入させるため使わない (ルール1)。
   const overseasTotal = regionSum - domesticSum;
+  if (overseasTotal <= 0) return null;
+  if (total !== null && total < adjustedSum * 0.99) return null;
+
+  facts.push({
+    regionName: "海外売上高",
+    regionKind: "overseas_total",
+    salesAmount: overseasTotal,
+    ratioPct:
+      total !== null && total > 0
+        ? +((overseasTotal / total) * 100).toFixed(1)
+        : null,
+    unitLabel: unit.label,
+    unitYenFactor: unit.factor,
+    fiscalYearEnd,
+    isConsolidated: consolidated,
+  });
+  facts.push({
+    regionName: "連結売上高",
+    regionKind: "total",
+    salesAmount: total,
+    ratioPct: null,
+    unitLabel: unit.label,
+    unitYenFactor: unit.factor,
+    fiscalYearEnd,
+    isConsolidated: consolidated,
+  });
+  return facts;
+}
+
+/**
+ * B1: 小計終端の複数 block (収益 category 別など) を合算する。各 block が自小計と
+ * 一致し、かつ小計の合計が grand 集計 (開示総額) と一致するときだけ、地域ごとに
+ * block 間合算する (S100QIEX で実証: 小計A 2112769 + 小計B 377295 = 外部顧客
+ * 2490064)。検証に1つでも失敗したら null (捏造合算しない)。
+ */
+function finishShokeiBlocks(
+  entries: Array<{ idx: number; role: "domestic" | "overseas"; name: string; value: number }>,
+  shokei: Array<{ idx: number; value: number }>,
+  aggregates: Array<{ label: string; value: number }>,
+  unit: { label: string; factor: number },
+  fiscalYearEnd: string,
+  consolidated: boolean | null
+): OverseasFact[] | null {
+  const bounds = shokei.map((s) => s.idx).sort((a, b) => a - b);
+  // 最終小計より後の地域行は所属 block 不明 → 却下
+  if (entries.some((e) => e.idx > bounds[bounds.length - 1])) return null;
+  let prev = -1;
+  const groups = new Map<string, { kind: "domestic" | "overseas"; sum: number }>();
+  for (const s of shokei) {
+    const block = entries.filter((e) => e.idx > prev && e.idx < s.idx);
+    prev = s.idx;
+    // 同一 block 内の重複地域名は 2-D 等の未証明構造 → 却下
+    const blockNames = block.map((e) => e.name);
+    if (new Set(blockNames).size !== blockNames.length) return null;
+    const blockSum = block.reduce((a, e) => a + e.value, 0);
+    if (!totalsConsistent(blockSum, s.value)) return null;
+    for (const e of block) {
+      const g = groups.get(e.name);
+      if (g && g.kind !== e.role) return null; // block 間で内外区分が矛盾 → 却下
+      if (g) g.sum += e.value;
+      else groups.set(e.name, { kind: e.role, sum: e.value });
+    }
+  }
+  // grand: 小計の合計が開示総額のいずれかと一致すること (総額の捏造なし)
+  const grandSum = shokei.reduce((a, s) => a + s.value, 0);
+  const grand = aggregates.find((a) => totalsConsistent(grandSum, a.value));
+  if (!grand) return null;
+
+  let domesticSum = 0;
+  let regionSum = 0;
+  const facts: OverseasFact[] = [...groups].map(([name, g]) => {
+    if (g.kind === "domestic") domesticSum += g.sum;
+    regionSum += g.sum;
+    return {
+      regionName: name,
+      regionKind: g.kind,
+      salesAmount: g.sum,
+      ratioPct: null as number | null,
+      unitLabel: unit.label,
+      unitYenFactor: unit.factor,
+      fiscalYearEnd,
+      isConsolidated: consolidated,
+    };
+  });
+  if (facts.length < 2 || domesticSum <= 0) return null;
+  if (hasDuplicateRegionNames(facts)) return null;
+  const overseasTotal = regionSum - domesticSum;
+  const total = grand.value;
   if (overseasTotal <= 0 || total < regionSum * 0.99) return null;
 
   facts.push({
@@ -398,6 +599,105 @@ function tryGeoRows(
     isConsolidated: consolidated,
   });
   return facts;
+}
+
+interface DupEntry {
+  idx: number;
+  role: "domestic" | "overseas";
+  name: string;
+  sub: string;
+  value: number;
+}
+
+/**
+ * 重複地域名の解決。col1 (sub) の形で以下を区別し、証明できる形だけ entries を
+ * 正規化する。どれにも当てはまらなければ null (曖昧表として却下)。
+ * - P-metric: sub が売上高/営業利益の対 → 売上高行だけ残す (S100VI7V で実証)
+ * - P-2D: sub が品目ラベル (非地域・非集計・非数値・非 metric・非空・(地域, sub)
+ *   一意) → 地域ごとに合算し、合算が開示集計と一致すること (S100J2E7 で実証)
+ * - P-hier: sub が子地域ラベル (一意) → 子ラベルで読替え、leaf 合計が開示集計と
+ *   一致すること (S100OJV9 で実証)
+ */
+function resolveDupEntries(
+  entries: DupEntry[],
+  aggregates: Array<{ label: string; value: number }>
+): { entries: DupEntry[]; metricPruned: boolean } | null {
+  // P-metric: 全行の sub が metric 対で、売上/利益の両方があれば利益行を除く
+  const metrics = entries.map((e) => metricOf(e.sub));
+  if (
+    metrics.every((m) => m !== null) &&
+    metrics.includes("sales") &&
+    metrics.includes("profit")
+  ) {
+    const kept = entries.filter((_, i) => metrics[i] === "sales");
+    const names = kept.map((e) => e.name);
+    if (new Set(names).size !== names.length) return null;
+    return { entries: kept, metricPruned: true };
+  }
+  // P-2D: sub が品目ラベル → 地域ごとに合算
+  const subRoles = entries.map((e) => classifyRegion(e.sub));
+  const pairs = entries.map((e) => `${e.name}|${e.sub}`);
+  const pairsUnique = new Set(pairs).size === pairs.length;
+  const isProduct2D =
+    pairsUnique &&
+    entries.every(
+      (e, i) =>
+        cleanLabel(e.sub) !== "" &&
+        parseJpNumber(e.sub) === null &&
+        subRoles[i] !== "domestic" &&
+        subRoles[i] !== "overseas" &&
+        subRoles[i] !== "aggregate" &&
+        metricOf(e.sub) === null
+    );
+  if (isProduct2D) {
+    const groups = new Map<
+      string,
+      { kind: "domestic" | "overseas"; sum: number; idx: number }
+    >();
+    for (const e of entries) {
+      const g = groups.get(e.name);
+      if (g) g.sum += e.value;
+      else groups.set(e.name, { kind: e.role, sum: e.value, idx: e.idx });
+    }
+    const groupedSum = [...groups.values()].reduce((a, g) => a + g.sum, 0);
+    // 分割の証明: 合算が開示集計のいずれかと一致すること
+    if (!aggregates.some((a) => totalsConsistent(groupedSum, a.value))) {
+      return null;
+    }
+    return {
+      entries: [...groups].map(([name, g]) => ({
+        idx: g.idx,
+        role: g.kind,
+        name,
+        sub: "",
+        value: g.sum,
+      })),
+      metricPruned: false,
+    };
+  }
+  // P-hier: sub が子地域ラベル (一意) → 子ラベルで読替え
+  const isHier =
+    pairsUnique &&
+    entries.every(
+      (e, i) => subRoles[i] === "domestic" || subRoles[i] === "overseas"
+    ) &&
+    new Set(entries.map((e) => cleanLabel(e.sub))).size === entries.length;
+  if (isHier) {
+    const leaf = entries.map((e) => ({
+      idx: e.idx,
+      role: (classifyRegion(e.sub) === "domestic"
+        ? "domestic"
+        : "overseas") as "domestic" | "overseas",
+      name: cleanLabel(e.sub),
+      sub: "",
+      value: e.value,
+    }));
+    if (leaf.some((e) => e.name === "")) return null;
+    const leafSum = leaf.reduce((a, e) => a + e.value, 0);
+    if (!aggregates.some((a) => totalsConsistent(leafSum, a.value))) return null;
+    return { entries: leaf, metricPruned: false };
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
