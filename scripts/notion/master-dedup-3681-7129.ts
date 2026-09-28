@@ -53,11 +53,13 @@ import {
   SUPPLEMENT_7129_PAGE_ID,
   TARGETS,
   allMigrated,
+  completedMigrationRowIds,
   decideMigrationAction,
   decideRetireAction,
   decideSnapshotAction,
   emptyReceipt,
   guardIncomingSchema,
+  guardKeeperIncomingIds,
   guardMasterView,
   guardSupplement,
   hasSnapshotProgress,
@@ -73,12 +75,16 @@ import {
   stableStringify,
   verifyIntermediateUnion,
   verifyOpResult,
+  verifyPreD1Union,
   verifyReverseUnion,
   type DedupReceipt,
   type IncomingDb,
   type IncomingOrigin,
   type IncomingSchemaEvidence,
   type IncomingSchemaHit,
+  type KeeperIncomingBaseline,
+  type KeeperRowProof,
+  type MasterTarget,
   type SupplementView,
 } from "./master-dedup.js";
 
@@ -98,6 +104,7 @@ const JPX_DELISTED_URL = "https://www.jpx.co.jp/listing/stocks/delisted/";
 interface CliOptions {
   apply: boolean;
   windowConfirmed: boolean;
+  takeOnly: boolean;
   snapshotDir: string;
   paceMs: number;
 }
@@ -106,12 +113,14 @@ function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     apply: false,
     windowConfirmed: false,
+    takeOnly: false,
     snapshotDir: path.join(REPO_ROOT, "tmp/master-dedup-3681-7129"),
     paceMs: 2000,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--apply") opts.apply = true;
+    else if (a === "--take-only") opts.takeOnly = true;
     else if (a === "--window-confirmed") opts.windowConfirmed = true;
     else if (a === "--snapshot-dir") {
       const v = argv[++i];
@@ -128,6 +137,9 @@ function parseArgs(argv: string[]): CliOptions {
       throw new Error(`不明な引数: ${a} (--help を参照)`);
     }
   }
+  if (opts.takeOnly && opts.apply) {
+    throw new Error("--take-only と --apply は同時に指定できません");
+  }
   return opts;
 }
 
@@ -136,8 +148,11 @@ function printHelp(): void {
     [
       "用法:",
       "  plan (既定・読取のみ):  pnpm notion:master-dedup-3681-7129 [-- --snapshot-dir DIR] [--pace-ms MS]",
+      "  take-only (take のみ):  pnpm notion:master-dedup-3681-7129 -- --take-only --snapshot-dir DIR",
       "  apply (書込・要解放):    pnpm notion:master-dedup-3681-7129 -- --apply --window-confirmed",
       "",
+      "take-only は snapshot 取得まで (保管・移行・退避なし)。schema 列挙は",
+      "再走せず snapshotDir の v2-manifest 証拠を SHA 検証の上で再利用する。",
       "apply は財務 writer の解放が親から通知された後に限り実行する。",
       "snapshot/receipt/plan は --snapshot-dir 配下 (既定 tmp/・git 除外) に置く。",
     ].join("\n")
@@ -628,31 +643,28 @@ export async function verifyFreshPageProof(
 }
 
 /**
- * entry 共通の fresh proof 再検証 (resume/already-applied の D1 前に接続)。
+ * entry 共通の fresh proof 再検証 (D1 前の全経路に接続)。
  * master 全ページ + 補足全ページ + incoming 全件の fresh を取り直し、
  * snapshot proof と照合する。relation の増減は proof 対象外 (本文・添付のみ)
- * のため、移行中間状態でも比較できる。
+ * のため、移行中間状態でも比較できる。master/補足は snapshot 固定 ID から
+ * 取り直す (入口 state の使い回しでは take 後の変化を見逃す)。
+ * 続けて keeper/retire の union 一致 (全 pagination) を意図移行状態と照合する。
  */
 async function verifyEntryFreshProofs(
   paceMs: number,
   snapshotDir: string,
   snapshot: SnapshotDoc,
-  state: FreshState,
   receipt: DedupReceipt
 ): Promise<void> {
+  const freshMasterPages = new Map<string, NotionPage>();
   for (const id of Object.keys(snapshot.masters)) {
-    const freshPage = state.pages[id];
-    if (!freshPage) {
-      throw new Error(`fresh master が無いため照合できません (STOP): ${id}`);
-    }
+    const freshPage = await getPage(paceMs, id);
+    freshMasterPages.set(normalizePageId(id), freshPage);
     const m = snapshot.masters[id];
     await verifyFreshPageProof(paceMs, snapshotDir, id, freshPage, "master の本文・添付", m.body, m.files);
   }
   for (const id of Object.keys(snapshot.supplement)) {
-    const freshPage = state.supplementPages[id];
-    if (!freshPage) {
-      throw new Error(`fresh 補足行が無いため照合できません (STOP): ${id}`);
-    }
+    const freshPage = await getPage(paceMs, id);
     const p = snapshot.supplementProof?.[id];
     await verifyFreshPageProof(paceMs, snapshotDir, id, freshPage, "補足の本文・添付", p?.body, p?.files);
   }
@@ -678,6 +690,52 @@ async function verifyEntryFreshProofs(
       recorded: receipt.migrated[rowId],
     });
     if (problems.length > 0) throw new Error(problems.join(" / "));
+  }
+  // keeper/retire の union 一致 (全 pagination・意図移行状態)。preview の
+  // 同数置換では検出できないため、D1 書込前に実配列で断定する。
+  for (const t of TARGETS) {
+    const snapKeepSets = snapshot.keeperIncoming?.[t.code];
+    if (!snapKeepSets) {
+      throw new Error(`${t.code}: snapshot に keeperIncoming がありません`);
+    }
+    const snapRetireEntry = snapshot.masters[t.retireId];
+    if (!snapRetireEntry) {
+      throw new Error(`snapshot に退避候補がありません: ${t.code}`);
+    }
+    const snapRetireView = toMasterView(snapRetireEntry.page, snapRetireEntry.children);
+    const keepFresh = freshMasterPages.get(normalizePageId(t.keepId));
+    const retireFresh = freshMasterPages.get(normalizePageId(t.retireId));
+    if (!keepFresh || !retireFresh) {
+      throw new Error(`${t.code}: fresh master の再読がありません`);
+    }
+    const retireArchived = retireFresh.archived === true || retireFresh.in_trash === true;
+    const pairs = [
+      { db: "disclosures" as const, prop: REVERSE_PROP_DISCLOSURES },
+      { db: "financials" as const, prop: REVERSE_PROP_FINANCIALS },
+    ];
+    for (const { db, prop } of pairs) {
+      const snapRetireRel = snapRetireView.relations[prop];
+      if (!snapRetireRel) {
+        throw new Error(`${t.code}: snapshot 退避に逆 relation がありません: ${prop}`);
+      }
+      if (snapRetireRel.has_more) {
+        throw new Error(`${t.code}: snapshot 退避の baseline が未完です (has_more): ${prop}`);
+      }
+      const liveKeepFull = await readRelationFull(paceMs, t.keepId, keepFresh, prop);
+      const liveRetireFull = retireArchived
+        ? null
+        : await readRelationFull(paceMs, t.retireId, retireFresh, prop);
+      const p = verifyPreD1Union({
+        label: `${t.code}/${prop}`,
+        snapKeep: snapKeepSets[db],
+        snapRetire: snapRetireRel.ids,
+        liveKeepFull,
+        liveRetireFull,
+        expectedMigrated: completedMigrationRowIds(ops, receipt.migrated, t.retireId, db),
+        retireArchived,
+      });
+      if (p) throw new Error(p);
+    }
   }
 }
 
@@ -1082,7 +1140,15 @@ export interface FreshState {
   evidenceBytes?: { zipBytes: Uint8Array; htmlBytes: Uint8Array };
 }
 
-async function readFreshState(paceMs: number): Promise<FreshState> {
+/**
+ * schemaReuse を渡すと incoming schema の全列挙を省き、その証拠を使う
+ * (take-only が v2-manifest 証拠を再利用する経路。plan/apply は省略して
+ * 毎回 fresh 列挙する)。
+ */
+async function readFreshState(
+  paceMs: number,
+  schemaReuse?: IncomingSchemaEvidence
+): Promise<FreshState> {
   const views: Record<string, MasterPageView> = {};
   const pages: Record<string, NotionPage> = {};
   for (const t of TARGETS) {
@@ -1140,7 +1206,12 @@ async function readFreshState(paceMs: number): Promise<FreshState> {
   // 再開でも fresh ZIP は hash が変わるため、上書きすると旧 snapshot SHA 確認が
   // STOP になり元原本も失われる。初回のみ呼出側が snapshotDir へ保存する)。
   const { result: evidence, zipBytes, htmlBytes } = await collectEvidence({ keepDir: null });
-  const incomingSchema = await enumerateMasterIncoming(paceMs);
+  let incomingSchema: IncomingSchemaEvidence;
+  if (schemaReuse) {
+    incomingSchema = schemaReuse;
+  } else {
+    incomingSchema = await enumerateMasterIncoming(paceMs);
+  }
   return {
     views,
     pages,
@@ -1365,13 +1436,21 @@ export function guardIntermediateState(args: {
     const migratedForCode = opsForCode.filter((op) => receipt.migrated[op.rowPageId] !== undefined);
     if (migratedForCode.length === 0) {
       for (const prop of [REVERSE_PROP_DISCLOSURES, REVERSE_PROP_FINANCIALS]) {
-        const fKeep = freshKeep.relations[prop]?.ids.length ?? -1;
-        const sKeep = snapKeep.relations[prop]?.ids.length ?? -2;
-        const fRetire = freshRetire.relations[prop]?.ids.length ?? -1;
-        const sRetire = snapRetire.relations[prop]?.ids.length ?? -2;
-        if (fKeep !== sKeep || fRetire !== sRetire) {
+        const fKeep = freshKeep.relations[prop]?.ids;
+        const sKeep = snapKeep.relations[prop]?.ids;
+        const fRetire = freshRetire.relations[prop]?.ids;
+        const sRetire = snapRetire.relations[prop]?.ids;
+        // 同数でも ID 置換は止める (件数比較では検出できない)。
+        const norm = (ids: string[]) => ids.map(normalizePageId).sort();
+        const keepSame =
+          fKeep !== undefined && sKeep !== undefined && JSON.stringify(norm(fKeep)) === JSON.stringify(norm(sKeep));
+        const retireSame =
+          fRetire !== undefined &&
+          sRetire !== undefined &&
+          JSON.stringify(norm(fRetire)) === JSON.stringify(norm(sRetire));
+        if (!keepSame || !retireSame) {
           problems.push(
-            `${t.code}/${prop}(中間): 未移行のはずが件数変化 keep ${sKeep}→${fKeep} retire ${sRetire}→${fRetire}`
+            `${t.code}/${prop}(中間): 未移行のはずが集合変化 keep ${sKeep?.length}→${fKeep?.length} retire ${sRetire?.length}→${fRetire?.length}`
           );
         }
       }
@@ -1471,6 +1550,31 @@ function tsTag(): string {
 async function runPlan(opts: CliOptions): Promise<number> {
   const state = await readFreshState(opts.paceMs);
   const { problems, alreadyApplied, d1PendingFix } = guardFreshState(state);
+  let keeperBaseline: Record<string, KeeperIncomingBaseline> | null = null;
+  if (!alreadyApplied) {
+    // 保持先 ④③ は集合ガード (readonly。baseline は実 receipt+v1 から実行時読取)。
+    // 読取失敗も throw せず problems に載せる (plan は報告が仕事)。
+    try {
+      keeperBaseline = await loadKeeperBaseline(opts.paceMs, opts.snapshotDir);
+    } catch (e) {
+      problems.push(`保持先 baseline の読取に失敗: ${(e as Error).message}`);
+    }
+  }
+  if (keeperBaseline) {
+    for (const t of TARGETS) {
+      const b = keeperBaseline[t.code];
+      const keepPage = state.pages[t.keepId];
+      if (!b) {
+        problems.push(`${t.code}: 保持先 baseline がありません`);
+        continue;
+      }
+      if (!keepPage) {
+        problems.push(`${t.code}: 保持先ページの fresh 読取がありません`);
+        continue;
+      }
+      problems.push(...(await guardKeeperIncomingLive(opts.paceMs, t, keepPage, b)));
+    }
+  }
   const preview = TARGETS.map((t) => {
     const retire = state.views[`${t.code}:retire`];
     return {
@@ -1495,6 +1599,14 @@ async function runPlan(opts: CliOptions): Promise<number> {
     takenAt: new Date().toISOString(),
     alreadyApplied,
     problems,
+    keeperBaseline: keeperBaseline
+      ? Object.fromEntries(
+          Object.entries(keeperBaseline).map(([code, b]) => [
+            code,
+            { disclosures: b.disclosures.length, financials: b.financials.length },
+          ])
+        )
+      : null,
     targets: preview,
     supplement: {
       fix7129: { pageId: SUPPLEMENT_7129_PAGE_ID, masterAfter: TARGETS[1].keepId },
@@ -1517,6 +1629,104 @@ async function runPlan(opts: CliOptions): Promise<number> {
     return 2;
   }
   console.log("ガード合格。writer 解放後に --apply --window-confirmed で適用できます。");
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// take-only (snapshot 取得まで。保管・移行・退避なし)
+// ---------------------------------------------------------------------------
+
+/**
+ * take-only: guard → take → self-verify まで。Source への書込は一切しない
+ * (snapshotDir の private ファイルのみ)。schema 全列挙は再走せず
+ * v2-manifest 証拠を SHA 検証の上で使う。添付 pin・receipt 証明は既存の
+ * 再利用経路 (SHA 再検証つき) のため再取得しない。
+ */
+async function runTakeOnly(opts: CliOptions): Promise<number> {
+  for (const name of ["Edinetcode.zip", "jpx-delisted.html"]) {
+    if (fs.existsSync(path.join(opts.snapshotDir, name))) {
+      console.log(JSON.stringify({ takeOnly: true, problem: `証拠ファイルが既存のため上書きしません: ${name}` }, null, 2));
+      console.log("新規 snapshotDir (pin は SHA 再検証つきで再利用) で実行してください。");
+      return 2;
+    }
+  }
+  let manifestSchema: IncomingSchemaEvidence;
+  try {
+    manifestSchema = loadManifestSchema(opts.snapshotDir);
+  } catch (e) {
+    console.log(JSON.stringify({ takeOnly: true, problem: (e as Error).message }, null, 2));
+    return 2;
+  }
+  const state = await readFreshState(opts.paceMs, manifestSchema);
+  const { problems, alreadyApplied } = guardFreshState(state);
+  if (alreadyApplied) {
+    console.log(JSON.stringify({ takeOnly: true, alreadyApplied: true }, null, 2));
+    console.log("すでに適用済みのため take は不要です。");
+    return 2;
+  }
+  if (problems.length > 0) {
+    console.log(JSON.stringify({ takeOnly: true, problems }, null, 2));
+    console.log("ガード不一致のため take せず停止します。");
+    return 2;
+  }
+  let baseline: Record<string, KeeperIncomingBaseline>;
+  try {
+    baseline = await loadKeeperBaseline(opts.paceMs, opts.snapshotDir);
+  } catch (e) {
+    console.log(JSON.stringify({ takeOnly: true, problem: (e as Error).message }, null, 2));
+    return 2;
+  }
+  const keeperProblems: string[] = [];
+  for (const t of TARGETS) {
+    const b = baseline[t.code];
+    const keepPage = state.pages[t.keepId];
+    if (!b) {
+      keeperProblems.push(`${t.code}: 保持先 baseline がありません`);
+      continue;
+    }
+    if (!keepPage) {
+      keeperProblems.push(`${t.code}: 保持先ページの fresh 読取がありません`);
+      continue;
+    }
+    keeperProblems.push(...(await guardKeeperIncomingLive(opts.paceMs, t, keepPage, b)));
+  }
+  if (keeperProblems.length > 0) {
+    console.log(JSON.stringify({ takeOnly: true, keeperProblems }, null, 2));
+    console.log("保持先ガード不一致のため take せず停止します。");
+    return 2;
+  }
+  saveFreshEvidence(opts.snapshotDir, state.evidenceBytes);
+  const taken = await takeSnapshot(opts.paceMs, opts.snapshotDir, state, baseline);
+  requireCompleteSnapshotProof(taken.snapshot, emptyReceipt());
+  const keeperFixed = taken.snapshot.keeperIncoming;
+  if (!keeperFixed) throw new Error("take 直後の keeperIncoming がありません (到達不能のはず)");
+  const keeperCounts = Object.fromEntries(
+    Object.entries(keeperFixed).map(([code, k]) => [
+      code,
+      { disclosures: k.disclosures.length, financials: k.financials.length },
+    ])
+  );
+  console.log(
+    JSON.stringify(
+      {
+        takeOnly: true,
+        snapshot: taken.file,
+        sha256: taken.snapshot.sha256,
+        takenAt: taken.snapshot.takenAt,
+        masters: Object.keys(taken.snapshot.masters).length,
+        incomingRows: Object.keys(taken.snapshot.incoming).length,
+        keeperCounts,
+        evidence: {
+          edinet: { sha256: taken.snapshot.evidence.edinet.sha256, bytes: taken.snapshot.evidence.edinet.bytes },
+          jpx: { sha256: taken.snapshot.evidence.jpx.sha256, bytes: taken.snapshot.evidence.jpx.bytes },
+        },
+        schemaEnumeratedAt: taken.snapshot.incomingSchema.enumeratedAt,
+      },
+      null,
+      2
+    )
+  );
+  console.log("take 完了 (保管・移行なし)。physical grant 申請に進めます。");
   return 0;
 }
 
@@ -1575,6 +1785,11 @@ export interface SnapshotDoc {
   supplement: Record<string, NotionPage>;
   /** v2 の補足 proof (v1 ファイルには無い。page 自体は supplement 側)。 */
   supplementProof?: Record<string, { body: BodyCapture; files: FilesCapture }>;
+  /**
+   * v2 の保持先 incoming 固定集合 (take 時の全 ID + 直後再読一致。v1 には無い)。
+   * key は銘柄コード。件数ではなく ID 集合そのものを固定する。
+   */
+  keeperIncoming?: Record<string, { disclosures: string[]; financials: string[] }>;
   d1: Record<string, string>;
   evidence: EvidenceResult;
   incomingSchema: IncomingSchemaEvidence;
@@ -1587,10 +1802,317 @@ function snapshotWithoutHash(s: SnapshotDoc): Record<string, unknown> {
   return rest as Record<string, unknown>;
 }
 
+// ---------------------------------------------------------------------------
+// 保持先 baseline (v1 snapshot + keep11 実 receipt。件数固定の置換)
+// ---------------------------------------------------------------------------
+
+/** snapshotDir 直下の keep11 実 receipt (private 0600・git 除外)。 */
+const KEEP11_BASELINE_FILE = "keep11-baseline-20260928.json";
+
+/** keep11 実 receipt の検証済み内容 (7129 keep 開示の証明済み集合)。 */
+export interface Keep11ReceiptEvidence {
+  code: string;
+  rowIds: string[];
+  v1sha256: string;
+}
+
+/**
+ * keep11 実 receipt の検証と抽出 (純粋)。
+ * verdict・全行の keep-only membership・issuer・原本を熟読し、1 件でも
+ * 欠ければ throw する (未検証の baseline を使わない。件数は問わない)。
+ */
+export function parseKeep11Receipt(json: unknown): Keep11ReceiptEvidence {
+  const r = json as Record<string, unknown>;
+  if (!r || typeof r !== "object") throw new Error("keep11 receipt の形が不正です (object でない)");
+  if (r["kind"] !== "keep11-investigation") {
+    throw new Error(`keep11 receipt の kind が不正です got=${String(r["kind"])}`);
+  }
+  if (r["verdict"] !== "valid-addition") {
+    throw new Error(`keep11 receipt の verdict が valid-addition でありません got=${String(r["verdict"])}`);
+  }
+  const rows = r["rows"];
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error("keep11 receipt に rows がありません");
+  }
+  const v1 = r["v1baseline"] as { snapshotSha256?: unknown } | undefined;
+  const v1sha256 = v1?.snapshotSha256;
+  if (typeof v1sha256 !== "string" || !/^[0-9a-f]{64}$/.test(v1sha256)) {
+    throw new Error("keep11 receipt の v1baseline.snapshotSha256 が 64hex でありません");
+  }
+  const rowIds: string[] = [];
+  let code: string | null = null;
+  for (const row of rows) {
+    const o = row as Record<string, unknown>;
+    const rowPageId = o["rowPageId"];
+    if (typeof rowPageId !== "string" || rowPageId === "") {
+      throw new Error("keep11 receipt の行に rowPageId がありません");
+    }
+    const m = o["masterMembership"] as Record<string, unknown> | undefined;
+    if (
+      !m ||
+      m["fullComplete"] !== true ||
+      m["hasKeep"] !== true ||
+      m["hasRetire"] !== false ||
+      m["otherCount"] !== 0
+    ) {
+      throw new Error(`keep11 receipt の行の membership 証明が不完全です row=${rowPageId}`);
+    }
+    const props = o["props"] as Record<string, Record<string, unknown>> | undefined;
+    const issuer = props?.["銘柄コード"];
+    const issuerText = typeof issuer?.["text"] === "string" ? (issuer["text"] as string) : null;
+    if (!issuerText) {
+      throw new Error(`keep11 receipt の行に発行者実値がありません row=${rowPageId}`);
+    }
+    if (code === null) code = issuerText;
+    if (issuerText !== code) {
+      throw new Error(`keep11 receipt の行の発行者が混在しています row=${rowPageId} got=${issuerText}`);
+    }
+    const origin = props?.["原本"];
+    if (origin?.["has_more"] !== false || typeof origin?.["count"] !== "number" || (origin["count"] as number) < 1) {
+      throw new Error(`keep11 receipt の行に原本の実証がありません row=${rowPageId}`);
+    }
+    rowIds.push(rowPageId);
+  }
+  return { code: code as string, rowIds, v1sha256 };
+}
+
+/**
+ * v1 snapshot から保持先 baseline 集合を抽出する (純粋)。
+ * v1 バイト列の CAS 自己検証 + receipt の v1 SHA 照合 + 開示集合の突合せを
+ * 通し、1 つでも欠ければ throw する ( baseline のすり替え・欠落を許さない)。
+ */
+export function extractKeeperBaselineFromV1(
+  v1doc: unknown,
+  receipt: Keep11ReceiptEvidence
+): Record<string, KeeperIncomingBaseline> {
+  const v1 = v1doc as SnapshotDoc;
+  if (!v1 || typeof v1 !== "object" || v1.version !== 1) {
+    throw new Error("v1 snapshot の version が 1 でありません");
+  }
+  const rehash = sha256HexUtf8(stableStringify(snapshotWithoutHash(v1)));
+  if (rehash !== v1.sha256) {
+    throw new Error("v1 snapshot の CAS 自己検証に失敗しました (hash 不一致)");
+  }
+  if (v1.sha256 !== receipt.v1sha256) {
+    throw new Error("v1 snapshot が receipt の v1 SHA と不一致です (別 snapshot の疑い)");
+  }
+  const out: Record<string, KeeperIncomingBaseline> = {};
+  for (const t of TARGETS) {
+    const m = v1.masters[t.keepId];
+    if (!m) throw new Error(`v1 snapshot に保持先がありません: ${t.code}`);
+    const view = toMasterView(m.page, m.children);
+    const disc = view.relations[REVERSE_PROP_DISCLOSURES];
+    const fin = view.relations[REVERSE_PROP_FINANCIALS];
+    if (!disc || !fin) {
+      throw new Error(`v1 snapshot の保持先に逆 relation がありません: ${t.code}`);
+    }
+    if (disc.has_more || fin.has_more) {
+      throw new Error(`v1 snapshot の保持先 baseline が未完です (has_more): ${t.code}`);
+    }
+    out[t.code] = { disclosures: [...disc.ids], financials: [...fin.ids] };
+  }
+  // 開示集合の突合せ: v1 と実 receipt の 11 集合が完全一致すること。
+  const v1keep = out[receipt.code];
+  if (!v1keep) {
+    throw new Error(`receipt の code ${receipt.code} が v1 baseline にありません`);
+  }
+  const norm = (ids: string[]) => ids.map(normalizePageId).sort();
+  const v1disc = norm(v1keep.disclosures);
+  const rcDisc = norm(receipt.rowIds);
+  if (JSON.stringify(v1disc) !== JSON.stringify(rcDisc)) {
+    throw new Error(
+      `v1 と実 receipt の開示集合が不一致です (baseline 不一致のため停止): ` +
+        `v1=${v1disc.length}件 receipt=${rcDisc.length}件`
+    );
+  }
+  return out;
+}
+
+/**
+ * 保持先 baseline の実行時読取。snapshotDir の実 receipt (private) と
+ * 一次データ保管の v1 snapshot (readonly DL+CAS 検証) から証明済み集合を
+ * 得る。ID 一覧をコード・Git 証跡に埋め込まない。
+ */
+export async function loadKeeperBaseline(
+  paceMs: number,
+  snapshotDir: string
+): Promise<Record<string, KeeperIncomingBaseline>> {
+  const p = path.join(snapshotDir, KEEP11_BASELINE_FILE);
+  if (!fs.existsSync(p)) {
+    throw new Error(
+      `保持先 baseline 証跡が無いため停止します: ${p} (keep11 実 receipt を snapshotDir へ配置してください)`
+    );
+  }
+  const receipt = parseKeep11Receipt(JSON.parse(fs.readFileSync(p, "utf8")));
+  const dbIds = await findAllArchiveDbIds(ARCHIVE_SERVICE, "backup");
+  const hits = dbIds.length === 0 ? [] : await queryArchiveByKeyAll(paceMs, dbIds, SNAPSHOT_KEY);
+  if (hits.length === 0) {
+    throw new Error("v1 snapshot が一次データ保管にありません (baseline 取得不可のため停止)");
+  }
+  if (hits.length >= 2) {
+    throw new Error(
+      `v1 snapshot が重複しています (どれが正か決めず停止) ids=${hits.map((h) => h.id).join(",")}`
+    );
+  }
+  const listed = await listPageFiles(hits[0].id, "Files");
+  if (listed.length !== 3) {
+    throw new Error(
+      `v1 snapshot の Files が 3 件でありません got=[${listed.map((f) => f.name).join(",")}] page=${hits[0].id}`
+    );
+  }
+  const snaps = listed.filter((f) => f.name.endsWith(".json"));
+  if (snaps.length !== 1) {
+    throw new Error(
+      `v1 snapshot JSON が一意に定まりません got=[${listed.map((f) => f.name).join(",")}] page=${hits[0].id}`
+    );
+  }
+  const bytes = await downloadNotionFileBytes(snaps[0].url, snaps[0].name);
+  const v1doc = JSON.parse(Buffer.from(bytes).toString("utf8")) as SnapshotDoc;
+  return extractKeeperBaselineFromV1(v1doc, receipt);
+}
+
+/**
+ * take-only が再利用する v2-manifest 証拠 (take 準備の readonly capture)。
+ * schema 全列挙 (8378) の再走を避けるため、内部 SHA で自己検証できる
+ * 受入済み実証跡を使う。SHA は Root 受入値に固定。ファイル自体は
+ * snapshotDir の private 証拠 (git 除外)。
+ */
+const TAKE_MANIFEST_FILE = "v2-manifest-20260928.json";
+const TAKE_MANIFEST_SHA256 = "b3f6a5d0e88024b1411fc5e4dbf80b717174b50947e7a526c26fbc141fab1e20";
+
+/**
+ * manifest 文書の検証と incomingSchema 抽出 (純粋)。
+ * 内部 SHA の CAS 自己検証 + 受入 SHA 照合・形状・provenance 会計を通し、
+ * 欠ければ throw する。未知 hit の有無は guard 側 (`guardIncomingSchema`)
+ * が判定する。
+ */
+export function verifyManifestSchema(docText: string, wantSha256: string): IncomingSchemaEvidence {
+  const doc = JSON.parse(docText) as { kind?: unknown; incomingSchema?: unknown; sha256?: unknown };
+  if (doc.kind !== "v2-take-manifest") {
+    throw new Error(`v2-manifest の kind が不正です got=${String(doc.kind)}`);
+  }
+  const { sha256: _drop, ...rest } = doc;
+  void _drop;
+  const rehash = sha256HexUtf8(stableStringify(rest));
+  if (rehash !== doc.sha256) {
+    throw new Error("v2-manifest の CAS 自己検証に失敗しました (hash 不一致)");
+  }
+  if (doc.sha256 !== wantSha256) {
+    throw new Error("v2-manifest が受入 SHA と不一致です (別 manifest の疑い)");
+  }
+  const s = doc.incomingSchema as IncomingSchemaEvidence | undefined;
+  if (!s || typeof s !== "object") throw new Error("v2-manifest に incomingSchema がありません");
+  if (typeof s.enumeratedAt !== "string" || s.enumeratedAt === "") {
+    throw new Error("v2-manifest の incomingSchema.enumeratedAt がありません");
+  }
+  if (!Number.isInteger(s.dbCount) || s.dbCount <= 0 || !Array.isArray(s.hits)) {
+    throw new Error("v2-manifest の incomingSchema の形が不正です");
+  }
+  const prov = s.schemaProvenance;
+  if (
+    !prov ||
+    !Number.isInteger(prov.searchSchemaUsed) ||
+    !Number.isInteger(prov.getSchemaUsed) ||
+    prov.searchSchemaUsed + prov.getSchemaUsed !== s.dbCount
+  ) {
+    throw new Error("v2-manifest の schema provenance が不完全です");
+  }
+  return s;
+}
+
+/** snapshotDir の v2-manifest から incomingSchema を読む (SHA 固定)。 */
+export function loadManifestSchema(snapshotDir: string): IncomingSchemaEvidence {
+  const p = path.join(snapshotDir, TAKE_MANIFEST_FILE);
+  if (!fs.existsSync(p)) {
+    throw new Error(`v2-manifest が無いため停止します: ${p}`);
+  }
+  return verifyManifestSchema(fs.readFileSync(p, "utf8"), TAKE_MANIFEST_SHA256);
+}
+
+/**
+ * 保持先 incoming 1 行の live 証明を取得する (readonly)。
+ * issuer は行の「銘柄コード」実値のみ (title 等の metadata を代用しない)。
+ * master relation は全 pagination。原本の打切り・欠測は証明に載せて
+ * 判定側で止める (ここで握り潰さない)。
+ */
+export async function fetchKeeperRowProof(paceMs: number, rowPageId: string): Promise<KeeperRowProof> {
+  const page = await getPage(paceMs, rowPageId);
+  let issuerCode: string | null = null;
+  const codeProp = page.properties["銘柄コード"];
+  if (codeProp && codeProp["type"] === "rich_text" && Array.isArray(codeProp["rich_text"])) {
+    const text = joinRichText(
+      codeProp["rich_text"] as Array<{ plain_text?: string; text?: { content: string } }>
+    );
+    issuerCode = text === "" ? null : text;
+  }
+  const originProp = page.properties["原本"];
+  if (!originProp || originProp["type"] !== "relation") {
+    throw new Error(`row=${rowPageId} に原本 relation がありません (スキーマ変化)`);
+  }
+  const originHasMore = originProp["has_more"] === true;
+  const originCount = originHasMore
+    ? (await readRelationFull(paceMs, rowPageId, page, "原本")).length
+    : readRelationIds(originProp).length;
+  const masterIdsFull = await readRelationFull(paceMs, rowPageId, page, REL_PROP_MASTER);
+  return { rowPageId, issuerCode, originHasMore, originCount, masterIdsFull };
+}
+
+/**
+ * 保持先 incoming の live 集合ガード (guardMasterView の keep ④③分)。
+ * keeper 頁の逆 relation を全 pagination で読み、baseline と集合比較する。
+ * 追加行だけ live 証明 (issuer/原本/keep-only) を取得して判定する。
+ * 未完 pagination・取得失敗は問題として返す (呼出側が STOP する)。
+ */
+export async function guardKeeperIncomingLive(
+  paceMs: number,
+  t: MasterTarget,
+  keepPage: NotionPage,
+  baseline: KeeperIncomingBaseline
+): Promise<string[]> {
+  const problems: string[] = [];
+  const pairs = [
+    { db: "disclosures", prop: REVERSE_PROP_DISCLOSURES, baselineIds: baseline.disclosures },
+    { db: "financials", prop: REVERSE_PROP_FINANCIALS, baselineIds: baseline.financials },
+  ] as const;
+  for (const { db, prop, baselineIds } of pairs) {
+    let liveIds: string[];
+    try {
+      liveIds = await readRelationFull(paceMs, t.keepId, keepPage, prop);
+    } catch (e) {
+      problems.push(`${t.code}/keep/${db}: live 列挙に失敗: ${(e as Error).message}`);
+      continue;
+    }
+    const baseSet = new Set(baselineIds.map(normalizePageId));
+    const added = liveIds.filter((id) => !baseSet.has(normalizePageId(id)));
+    const addedProofs: KeeperRowProof[] = [];
+    let proofFailed = false;
+    for (const id of added) {
+      try {
+        addedProofs.push(await fetchKeeperRowProof(paceMs, id));
+      } catch (e) {
+        problems.push(`${t.code}/keep/${db}: 追加行の証明取得に失敗: ${(e as Error).message}`);
+        proofFailed = true;
+      }
+    }
+    if (proofFailed) continue;
+    const p = guardKeeperIncomingIds({
+      tag: `${t.code}/keep/${prop}`,
+      code: t.code,
+      keepId: t.keepId,
+      liveIds,
+      baselineIds,
+      addedProofs,
+    });
+    if (p) problems.push(p);
+  }
+  return problems;
+}
+
 async function takeSnapshot(
   paceMs: number,
   snapshotDir: string,
-  state: FreshState
+  state: FreshState,
+  baseline: Record<string, KeeperIncomingBaseline>
 ): Promise<{ snapshot: SnapshotDoc; file: string }> {
   const file = path.join(snapshotDir, `snapshot-${tsTag()}.json`);
   const masters: SnapshotDoc["masters"] = {};
@@ -1610,13 +2132,41 @@ async function takeSnapshot(
     }
   }
   for (const t of TARGETS) {
+    const b = baseline[t.code];
+    if (!b) throw new Error(`snapshot 中止: 保持先 baseline がありません: ${t.code}`);
     const p = [
       ...guardMasterView(t, "keep", freshViews[`${t.code}:keep`]),
       ...guardMasterView(t, "retire", freshViews[`${t.code}:retire`]),
+      ...(await guardKeeperIncomingLive(paceMs, t, masters[t.keepId].page, b)),
     ];
     if (p.length > 0) {
       throw new Error(`snapshot 中止: ガード後の master 変化を検出: ${p.join(" / ")}`);
     }
+  }
+  // 保持先 incoming 全 ID を snapshot へ固定し、直後再読で完全一致を要求する
+  // (固定と再読の間に変われば同時変更として STOP する)。
+  const keeperIncoming: NonNullable<SnapshotDoc["keeperIncoming"]> = {};
+  for (const t of TARGETS) {
+    const first = {
+      disclosures: await readRelationFull(paceMs, t.keepId, masters[t.keepId].page, REVERSE_PROP_DISCLOSURES),
+      financials: await readRelationFull(paceMs, t.keepId, masters[t.keepId].page, REVERSE_PROP_FINANCIALS),
+    };
+    const rereadPage = await getPage(paceMs, t.keepId);
+    const second = {
+      disclosures: await readRelationFull(paceMs, t.keepId, rereadPage, REVERSE_PROP_DISCLOSURES),
+      financials: await readRelationFull(paceMs, t.keepId, rereadPage, REVERSE_PROP_FINANCIALS),
+    };
+    const sortNorm = (ids: string[]) => ids.map(normalizePageId).sort();
+    for (const db of ["disclosures", "financials"] as const) {
+      if (JSON.stringify(sortNorm(first[db])) !== JSON.stringify(sortNorm(second[db]))) {
+        throw new Error(
+          `snapshot 中止: 保持先 incoming が固定と再読で不一致 ${t.code}/keep/${db} (同時変更の疑い)`
+        );
+      }
+    }
+    const byNorm = (ids: string[]) =>
+      [...ids].sort((a, b) => (normalizePageId(a) < normalizePageId(b) ? -1 : 1));
+    keeperIncoming[t.code] = { disclosures: byNorm(first.disclosures), financials: byNorm(first.financials) };
   }
   // 移行対象の incoming 行 (退避候補の逆 relation + 原本)。
   const incoming: SnapshotDoc["incoming"] = {};
@@ -1709,6 +2259,7 @@ async function takeSnapshot(
     incoming,
     supplement,
     supplementProof,
+    keeperIncoming,
     d1: state.d1,
     evidence: state.evidence,
     incomingSchema: state.incomingSchema,
@@ -2621,12 +3172,19 @@ async function finalVerify(
       problems.push(`${t.code}: 保持先の子ブロック列挙が打ち切られました (has_more)`);
       continue;
     }
-    const snapKeep = snapshot.masters[t.keepId];
+    const snapKeepSets = snapshot.keeperIncoming?.[t.code];
+    if (!snapKeepSets) {
+      throw new Error(`${t.code}: snapshot に keeperIncoming がありません (v2 完全 proof なし)`);
+    }
     const snapRetire = snapshot.masters[t.retireId];
     const beforeView = (m: SnapshotDoc["masters"][string]): MasterPageView =>
       toMasterView(m.page, m.children);
     // 最終 reread も実配列 (全 pagination) で検証する。preview 25 では欠落を見逃す。
-    for (const prop of [REVERSE_PROP_DISCLOSURES, REVERSE_PROP_FINANCIALS]) {
+    // keep 側の before は take 固定の全 ID 集合 (preview 由来ではない)。
+    for (const [prop, db] of [
+      [REVERSE_PROP_DISCLOSURES, "disclosures"],
+      [REVERSE_PROP_FINANCIALS, "financials"],
+    ] as const) {
       let keepAfterFull: string[];
       try {
         keepAfterFull = await readRelationFull(paceMs, t.keepId, keepFresh, prop);
@@ -2636,7 +3194,7 @@ async function finalVerify(
       }
       const p = verifyReverseUnion({
         label: `${t.code}/${prop}`,
-        keepBefore: beforeView(snapKeep).relations[prop]?.ids ?? [],
+        keepBefore: snapKeepSets[db],
         retireBefore: beforeView(snapRetire).relations[prop]?.ids ?? [],
         keepAfter: keepAfterFull,
         retireId: t.retireId,
@@ -2803,6 +3361,18 @@ export function requireCompleteSnapshotProof(snapshot: SnapshotDoc, receipt: Ded
     const p = snapshot.supplementProof?.[id];
     needPageProof(`supplement ${id}`, p?.body, p?.files);
   }
+  // keeper proof: take 固定の保持先 incoming 全 ID (両コード・両 DB)。
+  for (const t of TARGETS) {
+    const k = snapshot.keeperIncoming?.[t.code];
+    if (!k || !Array.isArray(k.disclosures) || !Array.isArray(k.financials)) {
+      throw new Error(`keeper proof が不完全のため停止します: ${t.code} (keeperIncoming なし)`);
+    }
+    for (const id of [...k.disclosures, ...k.financials]) {
+      if (typeof id !== "string" || id === "") {
+        throw new Error(`keeper proof が不完全のため停止します: ${t.code} (空 ID)`);
+      }
+    }
+  }
   // schema proof: 既知のみ + 取得経路の完全会計 (省略なし)。
   if (!snapshot.incomingSchema || !Array.isArray(snapshot.incomingSchema.hits)) {
     throw new Error("schema proof が無いため停止します (incomingSchema なし)");
@@ -2842,7 +3412,7 @@ async function runApply(opts: CliOptions): Promise<number> {
         ? loadSnapshotForResume(opts.snapshotDir, receipt)
         : loadLatestSnapshot(opts.snapshotDir);
       requireCompleteSnapshotProof(loaded.snapshot, receipt);
-      await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, loaded.snapshot, state, receipt);
+      await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, loaded.snapshot, receipt);
       receipt = await archiveSnapshotV2(opts.paceMs, opts.snapshotDir, loaded.file, loaded.snapshot, receipt);
       // D1 の遅れ (退避候補指し) だけは直してから再検証する (apply 許可域の書込)。
       receipt = await applyD1Check(opts.snapshotDir, receipt);
@@ -2883,7 +3453,7 @@ async function runApply(opts: CliOptions): Promise<number> {
       return 2;
     }
     requireCompleteSnapshotProof(snapshot, receipt);
-    await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, snapshot, state, receipt);
+    await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, snapshot, receipt);
   } else {
     const { problems } = guardFreshState(state);
     if (problems.length > 0) {
@@ -2891,9 +3461,30 @@ async function runApply(opts: CliOptions): Promise<number> {
       console.log("ガード不一致のため書込せず停止します。");
       return 2;
     }
+    // 保持先 ④③ は集合ガード (baseline は実 receipt+v1 から実行時読取)。
+    const baseline = await loadKeeperBaseline(opts.paceMs, opts.snapshotDir);
+    const keeperProblems: string[] = [];
+    for (const t of TARGETS) {
+      const b = baseline[t.code];
+      const keepPage = state.pages[t.keepId];
+      if (!b) {
+        keeperProblems.push(`${t.code}: 保持先 baseline がありません`);
+        continue;
+      }
+      if (!keepPage) {
+        keeperProblems.push(`${t.code}: 保持先ページの fresh 読取がありません`);
+        continue;
+      }
+      keeperProblems.push(...(await guardKeeperIncomingLive(opts.paceMs, t, keepPage, b)));
+    }
+    if (keeperProblems.length > 0) {
+      console.log(JSON.stringify({ keeperProblems }, null, 2));
+      console.log("保持先ガード不一致のため書込せず停止します。");
+      return 2;
+    }
     // 初回のみ fresh 証拠を snapshotDir へ保存する (再開時は既存原本を保持)。
     saveFreshEvidence(opts.snapshotDir, state.evidenceBytes);
-    const taken = await takeSnapshot(opts.paceMs, opts.snapshotDir, state);
+    const taken = await takeSnapshot(opts.paceMs, opts.snapshotDir, state, baseline);
     snapshot = taken.snapshot;
     snapshotFile = taken.file;
     requireCompleteSnapshotProof(snapshot, receipt);
@@ -2910,6 +3501,8 @@ async function runApply(opts: CliOptions): Promise<number> {
   receipt = await applyLifecycle3681(opts.paceMs, opts.snapshotDir, snapshot, receipt);
   receipt = await applyMigrations(opts.paceMs, opts.snapshotDir, snapshot, ops, receipt);
   receipt = await applySupplement7129(opts.paceMs, opts.snapshotDir, snapshot, receipt);
+  // D1 書込前に entry 共通 gate (proof 再検証 + union 一致) を全経路で通す。
+  await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, snapshot, receipt);
   receipt = await applyD1Check(opts.snapshotDir, receipt);
   receipt = await applyRetire(opts.paceMs, opts.snapshotDir, snapshot, ops, receipt);
   const verifyProblems = await finalVerify(opts.paceMs, snapshot, receipt);
@@ -2950,6 +3543,10 @@ async function main(): Promise<void> {
   if (opts.apply && !opts.windowConfirmed) {
     console.error("apply には --window-confirmed が必要です (writer 解放の通知後に実行)。");
     process.exit(3);
+  }
+  if (opts.takeOnly) {
+    const code = await runTakeOnly(opts);
+    process.exit(code);
   }
   if (opts.apply) {
     const code = await runApply(opts);

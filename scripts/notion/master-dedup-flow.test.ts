@@ -18,6 +18,7 @@ import {
   classifyIncomingMembership,
   collectAttachmentInventory,
   expectedArchiveFileNames,
+  extractKeeperBaselineFromV1,
   extractMasterHits,
   guardIntermediateState,
   isAlreadyAppliedViews,
@@ -27,6 +28,8 @@ import {
   normalizedBlockForDigest,
   pageFilesRefsOf,
   pageProofsEqual,
+  parseKeep11Receipt,
+  verifyManifestSchema,
   queryDbAll,
   readRelationFull,
   requireCompleteSnapshotProof,
@@ -353,6 +356,18 @@ describe("master-dedup 実 flow 回帰", () => {
       expect(problems.length).toBeGreaterThan(0);
     });
 
+    it("未移行で同数ID置換があれば停止する (件数一致では素通りさせない)", () => {
+      const views = baseViews();
+      const snapshot = baseSnapshot(baseViews());
+      const receipt = emptyReceipt();
+      receipt.snapshot = { file: "s.json", sha256: snapshot.sha256, archivePageId: "a1", archiveVerifiedAt: "2026-09-28T00:00:00.000Z" };
+      // 件数は同じ (2 件) だが ID が別物 → 集合比較で止める。
+      views["3681:retire"].relations[REVERSE_PROP_DISCLOSURES] = rel(["dx", "dy"]);
+      const state = baseState(views);
+      const { problems } = guardIntermediateState({ state, snapshot, receipt, ops: [] });
+      expect(problems.join(" / ")).toMatch(/集合変化/);
+    });
+
     it("片方退避後も再開可能 (retired は archived 必須)", () => {
       const views = baseViews();
       const snapshot = baseSnapshot(baseViews());
@@ -663,6 +678,10 @@ describe("master-dedup 実 flow 回帰", () => {
       };
       s.supplement["supp1"] = pageFromView(baseViews()["7129:keep"]);
       s.supplementProof = { supp1: { body: bodyProof(), files: filesProof() } };
+      s.keeperIncoming = {
+        "3681": { disclosures: [], financials: [] },
+        "7129": { disclosures: ["kd0"], financials: ["kf0"] },
+      };
       s.incomingSchema = {
         enumeratedAt: "2026-09-28T00:00:00.000Z",
         dbCount: 12,
@@ -762,6 +781,176 @@ describe("master-dedup 実 flow 回帰", () => {
       void _d2;
       noProv.sha256 = sha256HexUtf8(stableStringify(r2));
       expect(() => requireCompleteSnapshotProof(noProv, emptyReceipt())).toThrow(/取得経路が不完全/);
+    });
+
+    it("keeper 固定集合の欠落は STOP する", () => {
+      const noKeeper = validV2Snapshot();
+      delete noKeeper.keeperIncoming;
+      const { sha256: _d1, ...r1 } = noKeeper;
+      void _d1;
+      noKeeper.sha256 = sha256HexUtf8(stableStringify(r1));
+      expect(() => requireCompleteSnapshotProof(noKeeper, emptyReceipt())).toThrow(/keeper proof が不完全/);
+
+      const partial = validV2Snapshot();
+      partial.keeperIncoming = { "3681": { disclosures: [], financials: [] } };
+      const { sha256: _d2, ...r2 } = partial;
+      void _d2;
+      partial.sha256 = sha256HexUtf8(stableStringify(r2));
+      expect(() => requireCompleteSnapshotProof(partial, emptyReceipt())).toThrow(/keeper proof が不完全/);
+    });
+  });
+
+  describe("保持先 baseline (keep11 receipt + v1)", () => {
+    function receiptRow(rowPageId: string, overrides: Record<string, unknown> = {}) {
+      return {
+        rowPageId,
+        masterMembership: {
+          previewCount: 1,
+          fullCount: 1,
+          fullComplete: true,
+          hasKeep: true,
+          hasRetire: false,
+          otherCount: 0,
+        },
+        props: {
+          "銘柄コード": { type: "rich_text", text: "7129" },
+          "原本": { type: "relation", count: 1, has_more: false },
+          "銘柄マスタ": { type: "relation", count: 1, has_more: false, hasKeep: true, hasRetire: false },
+        },
+        ...overrides,
+      };
+    }
+    function validReceipt() {
+      return {
+        kind: "keep11-investigation",
+        verdict: "valid-addition",
+        rows: [receiptRow("kd0"), receiptRow("kd1")],
+        v1baseline: { snapshotSha256: "a".repeat(64) },
+      };
+    }
+
+    it("完全な receipt は集合と v1 SHA を抽出する", () => {
+      expect(parseKeep11Receipt(validReceipt())).toEqual({
+        code: "7129",
+        rowIds: ["kd0", "kd1"],
+        v1sha256: "a".repeat(64),
+      });
+    });
+
+    it("verdict・membership・issuer・原本・v1 SHA の欠陥は STOP する", () => {
+      const badVerdict = validReceipt();
+      badVerdict.verdict = "unknown";
+      expect(() => parseKeep11Receipt(badVerdict)).toThrow(/verdict/);
+
+      const badMember = validReceipt();
+      badMember.rows = [receiptRow("kd0", {
+        masterMembership: {
+          previewCount: 1, fullCount: 2, fullComplete: true, hasKeep: true, hasRetire: true, otherCount: 0,
+        },
+      })];
+      expect(() => parseKeep11Receipt(badMember)).toThrow(/membership/);
+
+      const mixedIssuer = validReceipt();
+      mixedIssuer.rows = [receiptRow("kd0"), receiptRow("kd1", {
+        props: {
+          "銘柄コード": { type: "rich_text", text: "3681" },
+          "原本": { type: "relation", count: 1, has_more: false },
+        },
+      })];
+      expect(() => parseKeep11Receipt(mixedIssuer)).toThrow(/混在/);
+
+      const noOrigin = validReceipt();
+      noOrigin.rows = [receiptRow("kd0", {
+        props: {
+          "銘柄コード": { type: "rich_text", text: "7129" },
+          "原本": { type: "relation", count: 0, has_more: false },
+        },
+      })];
+      expect(() => parseKeep11Receipt(noOrigin)).toThrow(/原本/);
+
+      const badSha = validReceipt();
+      badSha.v1baseline = { snapshotSha256: "not-hex" };
+      expect(() => parseKeep11Receipt(badSha)).toThrow(/64hex/);
+    });
+
+    it("v1 から baseline 集合を抽出する (CAS+突合せつき)", () => {
+      const v1 = baseSnapshot(baseViews());
+      const { sha256: _drop, ...rest } = v1;
+      void _drop;
+      v1.sha256 = sha256HexUtf8(stableStringify(rest));
+      const baseline = extractKeeperBaselineFromV1(v1, {
+        code: "7129",
+        rowIds: ["kd0"],
+        v1sha256: v1.sha256,
+      });
+      expect(baseline["7129"]).toEqual({ disclosures: ["kd0"], financials: ["kf0"] });
+      expect(baseline["3681"]).toEqual({ disclosures: [], financials: [] });
+    });
+
+    it("v1 改竄・SHA 不一致・集合不一致は STOP する", () => {
+      const v1 = baseSnapshot(baseViews());
+      const { sha256: _drop, ...rest } = v1;
+      void _drop;
+      v1.sha256 = sha256HexUtf8(stableStringify(rest));
+      const receipt = { code: "7129", rowIds: ["kd0"], v1sha256: v1.sha256 };
+      const tampered = structuredClone(v1);
+      tampered.takenAt = "2026-09-29T00:00:00.000Z";
+      expect(() => extractKeeperBaselineFromV1(tampered, receipt)).toThrow(/CAS 自己検証/);
+      expect(() =>
+        extractKeeperBaselineFromV1(v1, { ...receipt, v1sha256: "b".repeat(64) })
+      ).toThrow(/v1 SHA と不一致/);
+      expect(() =>
+        extractKeeperBaselineFromV1(v1, { ...receipt, rowIds: ["kd0", "kd-ghost"] })
+      ).toThrow(/開示集合が不一致/);
+    });
+
+    it("v2-manifest は CAS 自己検証+受入 SHA 照合の上で schema を抽出する", () => {
+      const body = {
+        kind: "v2-take-manifest",
+        incomingSchema: {
+          enumeratedAt: "2026-09-28T19:35:28.707Z",
+          dbCount: 2,
+          hits: knownSchemaHits().slice(0, 2),
+          schemaProvenance: { searchSchemaUsed: 2, getSchemaUsed: 0 },
+        },
+      };
+      const doc = JSON.stringify({ ...body, sha256: sha256HexUtf8(stableStringify(body)) });
+      const s = verifyManifestSchema(doc, sha256HexUtf8(stableStringify(body)));
+      expect(s.dbCount).toBe(2);
+      expect(s.hits.length).toBe(2);
+      const tampered = JSON.stringify({
+        ...body,
+        incomingSchema: { ...body.incomingSchema, dbCount: 3 },
+        sha256: sha256HexUtf8(stableStringify(body)),
+      });
+      expect(() => verifyManifestSchema(tampered, sha256HexUtf8(stableStringify(body)))).toThrow(
+        /CAS 自己検証/
+      );
+      expect(() => verifyManifestSchema(doc, "0".repeat(64))).toThrow(/受入 SHA と不一致/);
+    });
+
+    it("v2-manifest の kind・形状・provenance 不備は STOP する", () => {
+      const withSha = (body: Record<string, unknown>) => {
+        const sha = sha256HexUtf8(stableStringify(body));
+        return { text: JSON.stringify({ ...body, sha256: sha }), sha };
+      };
+      const badKind = withSha({ kind: "other", incomingSchema: {} });
+      expect(() => verifyManifestSchema(badKind.text, badKind.sha)).toThrow(/kind が不正/);
+      const noProv = withSha({
+        kind: "v2-take-manifest",
+        incomingSchema: { enumeratedAt: "2026-09-28T00:00:00.000Z", dbCount: 2, hits: [] },
+      });
+      expect(() => verifyManifestSchema(noProv.text, noProv.sha)).toThrow(/provenance が不完全/);
+      const badSum = withSha({
+        kind: "v2-take-manifest",
+        incomingSchema: {
+          enumeratedAt: "2026-09-28T00:00:00.000Z",
+          dbCount: 2,
+          hits: [],
+          schemaProvenance: { searchSchemaUsed: 1, getSchemaUsed: 0 },
+        },
+      });
+      expect(() => verifyManifestSchema(badSum.text, badSum.sha)).toThrow(/provenance が不完全/);
     });
   });
 
