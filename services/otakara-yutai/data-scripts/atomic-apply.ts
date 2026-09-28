@@ -44,11 +44,24 @@ export type StockPreimage = {
   stockId: number;
   /** 同銘柄の優待行の全集合 (追加・削除の検知を含む)。 */
   benefits: StockBenefitPreimage[];
-  /** 財務行 (利回り計算の入力 + 行の同一性)。行が無ければ null。 */
+  /**
+   * 財務行 (利回り・スコア計算の入力 + 行の同一性)。行が無ければ null。
+   * スコア計算 (`scoreStock`) が読む 8 列も全て保持する。`fetched_at`
+   * だけでは月次 writer 以外の書き換え (8 列の部分更新) を検知できないため、
+   * 代理にしない (実際に計算に使う列をそのまま比べる)。
+   */
   financial: {
     yutaiYield: number | null;
     dataDate: string;
     price: number | null;
+    per: number | null;
+    pbr: number | null;
+    dividendYield: number | null;
+    roe: number | null;
+    ma25: number | null;
+    rsi14: number | null;
+    macd: number | null;
+    macdSignal: number | null;
     fetchedAt: number;
   } | null;
   /** スコア行。行が無ければ null。 */
@@ -71,6 +84,12 @@ export function snapshotStockPreimages(
   const out = new Map<number, StockPreimage>();
   for (const stockId of [...new Set(stockIds)]) {
     const fin = inputs.prices.get(stockId);
+    const scoreInput = inputs.scoreInputs.get(stockId);
+    if (fin && !scoreInput) {
+      throw new Error(
+        `銘柄 ${stockId} の財務行はあるのにスコア入力がありません (ガードを縮めない)`
+      );
+    }
     out.set(stockId, {
       stockId,
       benefits: (inputs.benefits.get(stockId) ?? [])
@@ -86,18 +105,107 @@ export function snapshotStockPreimages(
           updatedAt: b.updatedAt,
         }))
         .sort((a, b) => a.id - b.id),
-      financial: fin
-        ? {
-            yutaiYield: fin.yutaiYield,
-            dataDate: fin.dataDate,
-            price: fin.price,
-            fetchedAt: fin.fetchedAt,
-          }
-        : null,
+      financial:
+        fin && scoreInput
+          ? {
+              yutaiYield: fin.yutaiYield,
+              dataDate: fin.dataDate,
+              price: fin.price,
+              // scoreStock に渡すのと同一オブジェクトの値をそのまま保持する。
+              per: scoreInput.per,
+              pbr: scoreInput.pbr,
+              dividendYield: scoreInput.dividendYield,
+              roe: scoreInput.roe,
+              ma25: scoreInput.ma25,
+              rsi14: scoreInput.rsi14,
+              macd: scoreInput.macd,
+              macdSignal: scoreInput.macdSignal,
+              fetchedAt: fin.fetchedAt,
+            }
+          : null,
       scores: inputs.scores.get(stockId) ?? null,
     });
   }
   return out;
+}
+
+/**
+ * 検証 (plan 作成) 時に読んだ対象優待行のタプル。適用時の再読と突き合わせ、
+ * 検証→再読の間に変わっていたら batch を 1 送信もせず STOP する。
+ * 再読を「正しい新 preimage」に採用すると、検証後の改変を旧 task plan で
+ * 上書きできるため、ガードは一致した入力 snapshot の側に置く。
+ * 通常 import と ABC (A+C 統合) の両経路がこの同一境界を通る
+ * (/tmp だけのガードは不可)。
+ */
+export type VerifiedBenefitTuple = {
+  id: number;
+  stockId: number;
+  stockCode: string;
+  minShares: number;
+  recordMonth: number;
+  description: string;
+  shortSummary: string | null;
+  estimatedValue: number | null;
+  estimateValueSource: string | null;
+  /** 更新時刻 (unix 秒)。 */
+  updatedAt: number;
+};
+
+const VERIFIED_BENEFIT_COLUMNS = [
+  "stockId",
+  "minShares",
+  "recordMonth",
+  "description",
+  "shortSummary",
+  "estimatedValue",
+  "estimateValueSource",
+  "updatedAt",
+] as const;
+
+/**
+ * 検証時タプルと適用時の再読 (`fetchYieldInputs` の benefits) が対象の全行で
+ * 一致することを確認する (純関数)。銘柄コードの対応も検証時の task 側と
+ * 要求する (再読の id→銘柄の引き直しだけでは、行の銘柄付け替えを見逃す)。
+ * 不一致が 1 行でもあれば throw し、呼び出し側は batch を作らず送らず STOP
+ * する (ドリフト行の除外はしない)。値は出さず id・銘柄・列名だけ出す。
+ */
+export function assertVerifiedBenefitsMatch(input: {
+  verified: ReadonlyMap<number, VerifiedBenefitTuple>;
+  targetIds: readonly number[];
+  reread: YieldInputs["benefits"];
+  codeOf: (stockId: number) => string;
+}): void {
+  const rereadById = new Map<number, { stockId: number } & Record<string, unknown>>();
+  for (const [stockId, rows] of input.reread) {
+    for (const r of rows) rereadById.set(r.rowId, { ...r, stockId });
+  }
+  for (const id of [...new Set(input.targetIds)]) {
+    const v = input.verified.get(id);
+    if (!v) {
+      throw new Error(
+        `優待行 ${id} の検証時タプルがありません (呼び出し契約違反: 対象の全タプルを渡すこと)`
+      );
+    }
+    const r = rereadById.get(id);
+    if (!r) {
+      throw new Error(`優待行 ${id} (${v.stockCode}) が検証時から消えました (適用せず STOP)`);
+    }
+    const changed: string[] = [];
+    for (const col of VERIFIED_BENEFIT_COLUMNS) {
+      if (r[col] !== v[col]) changed.push(col);
+    }
+    if (changed.length > 0) {
+      throw new Error(
+        `優待行 ${id} (${v.stockCode}) が検証後に変わりました [${changed.join(", ")}] (適用せず STOP)`
+      );
+    }
+    const actualCode = input.codeOf(r.stockId);
+    if (actualCode !== v.stockCode) {
+      throw new Error(
+        `優待行 ${id} の銘柄が検証時 ${v.stockCode} から ${actualCode} に変わりました (適用せず STOP)`
+      );
+    }
+  }
 }
 
 /**
@@ -106,7 +214,8 @@ export function snapshotStockPreimages(
  * 仕組み: snapshot 全体を 1 bound JSON で渡し (`$.benefits` 配列 +
  * `$.financial` + `$.scores`)、`json_each` CTE で期待集合を起こして現行と
  * 突き合わせる。優待行は件数 + 双方向 EXCEPT (NULL は集合意味で等価。
- * 追加・削除も検知)。財務・スコアは行の有無 + 全列の NULL-safe (`IS`) 照合。
+ * 追加・削除も検知)。財務・スコアは行の有無 + 全列の NULL-safe (`IS`) 照合
+ * (財務は利回り・日付・株価 + スコア計算の実入力 8 列 + 取得時刻)。
  * 1 列でも違えば `json('')` が throw し、D1 REST batch 全体が rollback する
  * (SQLite 公式: 不正 JSON への `json()` はエラー)。
  * bind は snapshot JSON 1 + stockId 5 の計 6 (D1 上限 100/文に収まる)。
@@ -122,7 +231,7 @@ export function buildStockPreflightStatement(snapshot: StockPreimage): D1BatchSt
     "  SELECT id, stock_id, min_shares, record_month, description, short_summary, estimated_value, estimate_value_source, updated_at FROM yutai_benefits WHERE stock_id = ?",
     "),",
     "fin_ok(ok) AS (",
-    "  SELECT CASE WHEN json_extract((SELECT j FROM snap), '$.financial') IS NULL THEN (SELECT count(*) = 0 FROM otakara_stock_financials WHERE stock_id = ?) ELSE EXISTS (SELECT 1 FROM otakara_stock_financials WHERE stock_id = ? AND yutai_yield IS json_extract((SELECT j FROM snap), '$.financial.yutaiYield') AND data_date IS json_extract((SELECT j FROM snap), '$.financial.dataDate') AND price IS json_extract((SELECT j FROM snap), '$.financial.price') AND fetched_at IS json_extract((SELECT j FROM snap), '$.financial.fetchedAt')) END",
+    "  SELECT CASE WHEN json_extract((SELECT j FROM snap), '$.financial') IS NULL THEN (SELECT count(*) = 0 FROM otakara_stock_financials WHERE stock_id = ?) ELSE EXISTS (SELECT 1 FROM otakara_stock_financials WHERE stock_id = ? AND yutai_yield IS json_extract((SELECT j FROM snap), '$.financial.yutaiYield') AND data_date IS json_extract((SELECT j FROM snap), '$.financial.dataDate') AND price IS json_extract((SELECT j FROM snap), '$.financial.price') AND per IS json_extract((SELECT j FROM snap), '$.financial.per') AND pbr IS json_extract((SELECT j FROM snap), '$.financial.pbr') AND dividend_yield IS json_extract((SELECT j FROM snap), '$.financial.dividendYield') AND roe IS json_extract((SELECT j FROM snap), '$.financial.roe') AND ma_25 IS json_extract((SELECT j FROM snap), '$.financial.ma25') AND rsi_14 IS json_extract((SELECT j FROM snap), '$.financial.rsi14') AND macd IS json_extract((SELECT j FROM snap), '$.financial.macd') AND macd_signal IS json_extract((SELECT j FROM snap), '$.financial.macdSignal') AND fetched_at IS json_extract((SELECT j FROM snap), '$.financial.fetchedAt')) END",
     "),",
     "sco_ok(ok) AS (",
     "  SELECT CASE WHEN json_extract((SELECT j FROM snap), '$.scores') IS NULL THEN (SELECT count(*) = 0 FROM otakara_stock_scores WHERE stock_id = ?) ELSE EXISTS (SELECT 1 FROM otakara_stock_scores WHERE stock_id = ? AND fundamental_score IS json_extract((SELECT j FROM snap), '$.scores.fundamentalScore') AND technical_score IS json_extract((SELECT j FROM snap), '$.scores.technicalScore') AND total_score IS json_extract((SELECT j FROM snap), '$.scores.totalScore')) END",

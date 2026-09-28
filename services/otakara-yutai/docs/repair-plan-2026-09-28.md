@@ -119,13 +119,16 @@ token) が渡されるまで何も書かない。** コード側の再発防止�
 実装は `data-scripts/atomic-apply.ts` の `buildStockPreflightStatement` +
 `snapshotStockPreimages` が正 (通常 import と ABC の両経路が同一 builder。
 `planAtomicBatches` が非空 batch の先頭に必ず prepend する)。
+ABC の適用も `applyImportAtomically` の同一関数を通し、fresh 検証時の対象
+タプルを `verifiedBenefits` で渡す (/tmp だけのガードは不可)。検証→再読の
+改変は batch を作らず送らず全体 STOP する。
 
 ```sql
 -- preflight (例: stock_id=73。full preimage 不一致なら json('') が throw し batch 全体 rollback)
 -- 実 SQL は builder が生成 (snapshot JSON 1 + stockId 5 の計 6 bind)。
 SELECT json(CASE WHEN <優待行全集合の件数+双方向EXCEPT> AND <財務行の有無+全列IS照合> AND <スコア行の有無+全列IS照合> THEN 'null' ELSE '' END);
 -- 優待行: id/stock/株数/月/全文/要約/値/出典/updated_at + 集合の count/IDs。
--- 財務: yutai_yield/data_date/price/fetched_at。スコア: 3 列。行の不在も preimage。
+-- 財務: yutai_yield/data_date/price + スコア実入力 8 列 (per/pbr/dividend_yield/roe/ma_25/rsi_14/macd/macd_signal) + fetched_at。スコア: 3 列。行の不在も preimage。
 
 -- A-null (例: benefit_id=35231, 旧値 16000000, 出典 null, updated_at=1782134927)
 UPDATE yutai_benefits
