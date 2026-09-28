@@ -20,7 +20,7 @@ moneyflow はC担当 (Yahoo quoteSummary 断面は §0 役割分担のとおり 
   いずれも read-only、rows_written=0)。D1/R2/公開面の読取は同日 17:13 UTC
   (stock-sync) および 08:00 UTC (vwap-ingest daily-intra) の当日 run の反映前。
   R2 の最終更新は 9/25、D1 市場系の最終更新は 9/26 10:55 UTC (9/25 取引分)。
-- 最新確定営業日: **2026-09-25 (金)**。9/21–9/23 は休場
+- 最新確定営業日: **2026-09-28(月)**。保存系列の最新日は2026-09-25で、9/28営業日分は未反映。9/21–9/23 は休場
   (敬老の日・国民の休日・秋分の日)、9/26–9/27 は週末。
   保存系列の最新も 9/25 (D1 市場系・R2 daily/intra とも)。
   9/28 営業日分は未反映: 当日 run (9/28 17:13 UTC stock-sync・
@@ -467,9 +467,11 @@ SHA 一致 (再掲 §15) で変化なし。
 
 ### 優先対応 3 件 (親 review・merge 後の follow-up)
 
-1. **破損値の隔離と表示止め (F-01/F-15)**: 1909・2180 の派生 3 表
-   (indicators・rsi_percentile・p_momentum) + 1909/2180/7426 の financials
-   破損列 (cap/PER/EPS) が公開表示中。隔離候補は §14 に限定済み。
+1. **破損値の隔離と表示止め (F-01/F-15)**: 1909 の派生 3 表
+   (indicators・rsi_percentile・p_momentum)、2180 は indicators・p_momentum の
+   2 表のみ。2180 の RSI は破損由来が未証明のため隔離保留 +
+   1909/2180/7426 の financials 破損列 (cap/PER/EPS) が公開表示中。
+   隔離候補は §14 に限定済み。
    本番 apply は writer 返却後の別対応 (本 PR では preview のみ)。
 2. **F-02 stale bool の解消**: 次回 run の再計算で治る見込みだが確認待ち。
    run 前に直す場合は §14 の preview 適用 (3 列のみ・冪等確認済み)。
