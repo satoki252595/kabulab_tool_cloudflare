@@ -7,10 +7,13 @@
 
 - 実行窓口: `pnpm notion:master-dedup-3681-7129`
   (`scripts/notion/master-dedup-3681-7129.ts`、純粋ロジックは
-  `scripts/notion/master-dedup.ts`、回帰は `scripts/notion/master-dedup.test.ts`)
-- 共有 Notion 窓口 (`src/shared/notion-archive`)・pipeline writer への変更なし。
-  既存の `notionRequest` / `recordPrimaryData` / `moveToTrash` /
-  `updateSupplementRow` を呼ぶだけ
+  `scripts/notion/master-dedup.ts`、回帰は `scripts/notion/master-dedup.test.ts`
+  55 件 + `scripts/notion/master-dedup-flow.test.ts` 17 件)
+- 共有 Notion 窓口は最小 2 点のみ: `client.ts` の POST /pages 結果不明再送禁止
+  (GET/query・明示 429 retry は維持) と `page-file.ts` の全件取得 `listPageFiles`
+  (実ダウンロード検証用)。pipeline writer への変更なし。Notion 要求は全て
+  `notionRequest` / `recordPrimaryData` / `moveToTrash` / `updateSupplementRow`
+  の既存窓口経由 (直 fetch 迂回なし。署名 S3 URL の GET のみ素 fetch)
 - 親 Issue: #132 (JPX 切替以外の残作業)。JPX 切替自体は対象外
 
 ## 対象 (2026-09-28 preflight 実測)
@@ -32,10 +35,12 @@
 - 補足 DB: 3681 行なし、7129 行 1 件
   (3e6d74ff-84cd-81aa-ab14-e89f1cc47ccf) の master relation 空。
   コード横断の relation contains でも対象 4 ページへの参照なし
-- ⑧需給・⑨株主優待からの参照は 0。株式情報ページ配下の全子 DB
-  (12 件) のスキーマ列挙で、①宛 relation は既知の ③④⑤⑧⑨
-  (dual_property) + 補足 (single_property) のみ。integration 非公開の DB
-  があれば対象外という制約が残る
+- ⑧需給・⑨株主優待からの参照は 0。コードが `/search` で accessible DB を
+  列挙→各 schema の master 向け relation を検出 (`enumerateMasterIncoming`) し、
+  既知の ③④⑤⑧⑨ (dual_property) + 補足 (single_property) 以外が 1 件でもあれば
+  STOP (`guardIncomingSchema`)。証拠は snapshot に保存し再開時に突合する。
+  全 DB 全行 scan は不要 (schema のみ)。integration 非公開の DB があれば
+  対象外という制約が残る
 - 3681 候補の原本 (codelist) の関連銘柄は 3818 件・39 property page。
   移行時は全ページ送りで読み、単一 PATCH (~190KB) で置換する
 
@@ -68,38 +73,67 @@ nix develop -c pnpm notion:master-dedup-3681-7129 -- --apply --window-confirmed
 nix develop -c pnpm notion:master-dedup-3681-7129 -- --apply --window-confirmed
 ```
 
-1. ガード: 4 ページの id・作成・最終更新・listed・状態・逆 relation 件数・
-   子 DB、補足、D1 写し、一次出典の再確認。不一致が 1 件でもあれば書込せず
-   停止する。D1 `jss_notion_pages` は 2 コードのみ照合し、退避候補を指す行
-   だけ更新→再読する (現状は保持先を指しており no-op の見込み)
+1. ガード: 初回は 4 ページの id・作成・最終更新・listed・状態・逆 relation
+   件数・子 DB、補足、D1 写し、一次出典、incoming schema の再確認。不一致が
+   1 件でもあれば書込せず停止する。再開時は receipt+snapshot に基づく中間
+   ガード (`guardIntermediateState`) に分離し、記録された before/after のみ
+   許可する (lifecycle-only・部分 relation・片方退避後も再開可能。固定初期
+   ガードでは resume 不能になるため)。D1 `jss_notion_pages` は 2 コードのみ
+   照合し、未 fixed の candidate は fresh 原値 (snapshot.d1 が保持) を前提に
+   許可して candidate→keep 修復へ進める (入口で keep 必須にすると修復分岐が
+   dead になる)。現状は保持先を指しており no-op の見込み
 2. snapshot: 4 ページ全文・全ブロック、移行対象 incoming 行の全 relation
-   配列 (⑤ は全ページ送り)・全 properties、補足行、D1 の 2 行、証拠を確定
-   JSON + SHA-256 で `tmp/` に保存し、`recordPrimaryData` で物理保管→再読
-   検証する。署名 URL 等の一時認証は残さない
+   配列 (⑤ は全ページ送り)・全 properties・子ブロック像、補足行、D1 の 2 行、
+   証拠、incoming schema 証拠を確定 JSON + SHA-256 で `tmp/` に保存し、
+   `recordPrimaryData` で物理保管する。保存後・再開時とも Notion から
+   snapshot/公式 ZIP/HTML の 3 件を実ダウンロードし各元バイト列 SHA が一致
+   してから移行する (`verifyArchiveDownload`。Metadata 文字列+Files 3 件だけ
+   ではすり替えを検出できないため)。署名 URL 等の一時認証は残さない。
+   非冪等 create 前に key+snapshotHash+issuedAt を atomic 保存し (marker)、
+   再開時は full 検索で 0=結果不明 STOP (自動解除・再 create 禁止)/1=回収/
+   複数=STOP (`decideSnapshotAction`)
 3. lifecycle: 3681 保持先の状態だけ「上場廃止」へ部分更新 (listed 不変)→再読
-4. 移行: 各行の実配列内の退避 ID だけ保持 ID へ置換し重複除去。他銘柄 ID
-   を全て保つ (⑤ の多銘柄配列を全面上書きしない)。③ の数値・期末・開示
-   日時・出典は一切変えない。旧原本の relation も保持先へ付け替え、両原本
-   を辿れるようにする。PATCH 前に実配列を再読し、snapshot と違えば同時変更
-   として停止する。上限超過の配列は切り詰めず停止する
+4. 移行: 各行の実配列 (全 pagination。preview 25 では ⑤ の 3818 件を誤判定)
+   内の退避 ID だけ保持 ID へ置換し重複除去。他銘柄 ID を全て保つ (⑤ の
+   多銘柄配列を全面上書きしない)。③ の数値・期末・開示日時・出典は一切変え
+   ない。旧原本の relation も保持先へ付け替え、両原本を辿れるようにする。
+   PATCH 成功→receipt 断で fresh after の場合は PATCH 再送せず receipt 回収
+   する (非対象 props/body 不変が条件。`decideMigrationAction`)。上限超過の
+   配列は切り詰めず停止する。適用・最終 reread とも全 pagination で行う
+   (公式: relation preview は 25 件・`has_more` 時に `/pages/{id}/properties`
+   で全件取得)
 5. 再読検証: 移行集合が old→canonical 以外不変、③④ の数値・出典・日時
-   不変、① 逆 relation の和の保存、D1 照合。7129 補足の空 relation は既存
-   補足窓口で保持 ID を設定し他 props 不変を確認する
+   不変、① 逆 relation の和の保存 (中間は `verifyIntermediateUnion`・最終は
+   `verifyReverseUnion` とも全 pagination)、D1 照合。7129 補足の空 relation
+   は既存補足窓口で保持 ID を設定し他 props 不変を確認する
 6. 退避: snapshot 確定・移行・補足・lifecycle・D1 の完了後に限り、正式窓口
-   `moveToTrash` で退避する (snapshot なし適用禁止)。理由に保持先・snapshot
-   保管 page・hash・衝突根拠を含め、退避行と元の archived を再読する。
-   receipt 済みは再利用し二重退避しない
-7. 最終検証: コード絞込で各 1 有効行、旧 2 行 archived、原本・子 DB・補足の
-   保持。同じ apply 再実行で書込 0。`loadStockMasterIndex` の重複 0 は全読取
-   が要るため通常の次 biztag run で確認し #102 へ run リンクする
+   `moveToTrash` で退避する (snapshot なし適用禁止)。original の archived
+   状態に無関係に origin/key/snapshotHash で full 検索し、既存 1 件なら
+   original archive だけ完了する (create 成功→archive 断で二重 create する
+   ため。複数は停止)。退避直前に fresh 非 relation props/body と物理 snapshot
+   を突合し変化なら停止する (`verifyRetirePreimage`)。理由に保持先・snapshot
+   保管 page・hash・衝突根拠を含め、退避行 (内容・hash・Origin・Key) と元の
+   archived を再読する。非冪等 create 前に marker を atomic 保存し、再開時は
+   full 検索で 0=結果不明 STOP/1=回収/複数=STOP (`decideRetireAction`)
+7. 最終検証: コード絞込 (全件) で各 1 有効行、旧 2 行 archived、原本・子 DB・
+   補足の保持。同じ apply 再実行で書込 0。完了済み receipt があっても最終
+   検証の失敗・省略は必ず非 0 で止める (検証なしの 0 終了はサイレント成功の
+   ため禁止)。`loadStockMasterIndex` の重複 0 は全読取が要るため通常の次
+   biztag run で確認し #102 へ run リンクする。共有 `client.ts` は POST /pages
+   (非冪等 create) の結果不明再送 (network/5xx/529・非 JSON 4xx) を禁止し、
+   明示 429 (拒否・未作成確定) のみ再送する (公式 `/reference/request-limits`。
+   GET/query・PATCH の retry は維持)。marker だけでは同一 helper 内の内部再送
+   を防げないため両方で守る
 
 ## 受入
 
 - 2 コードの有効マスタ各 1、relations・全情報の保持、7129 補足修復
 - 不要元の実体 snapshot・退避・理由の再読、再実行無変更、次 biztag で重複 0
 - 現 wave (本 PR): 実 snapshot での plan/diff/中断再開の回帰
-  (`scripts/notion/master-dedup.test.ts` 41 件)、nix typecheck/lint/vitest 緑、
-  plan 実実行のガード合格。データ適用は writer 解放後の後続 dispatch
+  (`scripts/notion/master-dedup.test.ts` 55 件 +
+  `scripts/notion/master-dedup-flow.test.ts` 17 件の実 flow 回帰 +
+  `client-retry.test.ts` 10 件の POST /pages 再送禁止)、nix typecheck/lint/vitest 緑、
+  plan 実実行のガード合格。データ適用は writer 解放後の後続 dispatch (実 apply 保留)
 
 ## 残る作業 (後続 dispatch)
 

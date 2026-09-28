@@ -42,7 +42,7 @@ export type {
   PdfClassification,
   PdfSentimentLabel,
 } from "./dataset.js";
-export { fetchPageFileUrl } from "./page-file.js";
+export { fetchPageFileUrl, listPageFiles } from "./page-file.js";
 export type { PageFileRef } from "./page-file.js";
 export { ensureIndexPage, replacePageChildren } from "./index-page.js";
 export type { EnsureIndexPageOptions, EnsureIndexPageResult } from "./index-page.js";

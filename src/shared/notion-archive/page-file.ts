@@ -39,16 +39,31 @@ export async function fetchPageFileUrl(
   pageId: string,
   propertyName: string
 ): Promise<PageFileRef | null> {
+  const all = await listPageFiles(pageId, propertyName);
+  return all[0] ?? null;
+}
+
+/**
+ * 指定ページの指定 files プロパティから全ファイルを取得する。
+ * 複数添付 (一次データ保管の snapshot+証拠 3 件等) の実ダウンロード検証用。
+ * files プロパティ自体が無ければ空配列 (捏造しない・ルール1)。
+ * URL の無いエントリは含めない (欠損を黙って埋めない・ルール2)。
+ */
+export async function listPageFiles(
+  pageId: string,
+  propertyName: string
+): Promise<PageFileRef[]> {
   const page = await notionRequest<PagePropertiesResponse>(
     "GET",
     `/pages/${pageId}`
   );
   const prop = page.properties?.[propertyName];
-  if (!prop || prop.type !== "files") return null;
-  const files = prop.files ?? [];
-  if (files.length === 0) return null;
-  const f = files[0];
-  const url = f.file?.url ?? f.external?.url;
-  if (!url) return null;
-  return { name: f.name, url };
+  if (!prop || prop.type !== "files") return [];
+  const out: PageFileRef[] = [];
+  for (const f of prop.files ?? []) {
+    const url = f.file?.url ?? f.external?.url;
+    if (!url) continue;
+    out.push({ name: f.name, url });
+  }
+  return out;
 }

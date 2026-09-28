@@ -48,3 +48,33 @@ fetch なし (対象 2 コードの絞込読取のみ)。429 なし。
 - `pnpm test` 全体: 187 ファイル・2608 pass・383 skip・0 fail
 - 共有 Notion 窓口・pipeline writer への変更なし (新規 3 ファイル +
   package.json の script 1 行 + docs のみ)
+
+## 7 件補正 wave (同日・オフラインのみ。writer hold のため実 apply 保留)
+
+前 wave の初版に残った 7 件の実 flow 欠陥を同 PR (#137) で補正。
+financial#124 が Notion/D1 writer を保持中のため、実 apply・Notion 作成・
+更新・アーカイブ・D1 更新は一切行わず、ローカル検証のみ。
+
+- 保管の実ダウンロード検証 (`archiveSnapshot`/`verifyArchiveDownload`):
+  保存後・再開時とも snapshot/公式 ZIP/HTML の 3 件を Notion から実 DL し
+  各元バイト列 SHA を突合してから移行する。既存 `listPageFiles` 再利用
+- 中間ガード分離 (`guardIntermediateState`): 初期ガードと分離し、
+  receipt+snapshot の before/after のみ許可 (lifecycle-only・部分 relation・
+  片方退避後も再開可能)。D1 未 fixed の candidate は pendingFix として許可
+- 移行の receipt 回収+全 pagination (`applyMigrations`): PATCH 成功→receipt 断
+  で fresh after なら再送せず回収 (`decideMigrationAction`)。適用・最終 reread
+  とも preview 25 でなく全 pagination (`readRelationFull`)
+- 退避の full 検索 (`applyRetire`): original archived に無関係に full 検索し
+  既存 1 件なら archive だけ完了 (複数は停止)。退避直前の非 relation・body 突合
+  (`verifyRetirePreimage`)、marker (0=結果不明 STOP/1=回収/複数=STOP)
+- 検証省略禁止: 完了済み receipt があっても最終検証の失敗・省略は必ず非 0
+- schema 列挙 (`enumerateMasterIncoming`/`guardIncomingSchema`): `/search`→
+  schema で master 向け single_property を含む未知 incoming を検出し STOP。
+  証拠は snapshot に保存し再開時に突合。全行 scan 不要
+- create marker + POST 再送禁止: snapshot/退避の helper 呼出前に marker を
+  atomic 保存。共有 `client.ts` は POST /pages の結果不明再送 (network/5xx/
+  529・非 JSON 4xx) を禁止し明示 429 のみ再送 (GET/query・PATCH 維持)。
+  回帰は `master-dedup.test.ts` 55 件 + `master-dedup-flow.test.ts` 17 件 +
+  `client-retry.test.ts` 10 件で全 pass、`pnpm typecheck`/`pnpm lint` 緑。
+  `pnpm test` 全体: 188 ファイル・2645 pass・383 skip・0 fail で緑。
+  実 apply は保留のまま明記して ready 化する

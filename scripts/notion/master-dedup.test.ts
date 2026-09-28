@@ -24,9 +24,15 @@ import {
   SUPPLEMENT_7129_PAGE_ID,
   TARGETS,
   allMigrated,
+  decideMigrationAction,
+  decideRetireAction,
+  decideSnapshotAction,
   emptyReceipt,
+  guardIncomingSchema,
   guardMasterView,
   guardSupplement,
+  hasSnapshotProgress,
+  nonRelationPropsEqual,
   normalizePageId,
   olderSide,
   pendingMigrationOps,
@@ -38,6 +44,7 @@ import {
   sha256HexBytes,
   sha256HexUtf8,
   stableStringify,
+  verifyIntermediateUnion,
   verifyOpResult,
   verifyReverseUnion,
 } from "./master-dedup.js";
@@ -453,6 +460,165 @@ describe("master-dedup (純粋関数)", () => {
   describe("lifecycle 決定の定数", () => {
     it("3681 の移行先の状態は上場廃止", () => {
       expect(LIFECYCLE_PATCH_3681_STATUS).toBe("上場廃止");
+    });
+  });
+
+  describe("guardIncomingSchema (未知 incoming は 1 件でも STOP)", () => {
+    it("既知 6 件のみは合格", () => {
+      expect(
+        guardIncomingSchema([
+          { dbId: "d1", dbTitle: "③ 財務サマリ", propName: REL_PROP_MASTER, relType: "dual_property" },
+          { dbId: "d2", dbTitle: "④ 開示書類", propName: REL_PROP_MASTER, relType: "dual_property" },
+          { dbId: "d3", dbTitle: "⑤ 原本ファイル", propName: REL_PROP_RELATED, relType: "dual_property" },
+          { dbId: "d4", dbTitle: "⑧ 需給", propName: REL_PROP_MASTER, relType: "dual_property" },
+          { dbId: "d5", dbTitle: "⑨ 株主優待", propName: REL_PROP_MASTER, relType: "dual_property" },
+          { dbId: "d6", dbTitle: "銘柄マスタ（補足）", propName: "銘柄マスタ", relType: "single_property" },
+        ])
+      ).toEqual([]);
+    });
+
+    it("未知の single_property を検出する", () => {
+      expect(
+        guardIncomingSchema([
+          { dbId: "dx", dbTitle: "新規DB", propName: "銘柄マスタ", relType: "single_property" },
+        ]).length
+      ).toBeGreaterThan(0);
+    });
+
+    it("既知 title でも prop/rel が違えば未知扱い", () => {
+      expect(
+        guardIncomingSchema([
+          { dbId: "d1", dbTitle: "③ 財務サマリ", propName: "新連係", relType: "dual_property" },
+        ]).length
+      ).toBeGreaterThan(0);
+      expect(
+        guardIncomingSchema([
+          { dbId: "d6", dbTitle: "銘柄マスタ（補足）", propName: "銘柄マスタ", relType: "dual_property" },
+        ]).length
+      ).toBeGreaterThan(0);
+    });
+  });
+
+  describe("nonRelationPropsEqual (relation 除外の比較)", () => {
+    it("relation の差は無視し、非 relation の差は検出する", () => {
+      const a = {
+        listed: { type: "checkbox", checkbox: false },
+        rel: { type: "relation", relation: [{ id: "x" }] },
+      };
+      const b = {
+        listed: { type: "checkbox", checkbox: false },
+        rel: { type: "relation", relation: [{ id: "y" }] },
+      };
+      const c = {
+        listed: { type: "checkbox", checkbox: true },
+        rel: { type: "relation", relation: [{ id: "x" }] },
+      };
+      expect(nonRelationPropsEqual(a, b)).toBe(true);
+      expect(nonRelationPropsEqual(a, c)).toBe(false);
+    });
+  });
+
+  describe("verifyIntermediateUnion (部分移行の和の保存)", () => {
+    it("部分移行でも keep∪retire の和が一致すれば合格", () => {
+      expect(
+        verifyIntermediateUnion({
+          label: "3681/開示書類",
+          snapKeep: [],
+          snapRetire: ["d0", "d1", "d2"],
+          freshKeep: ["d0"],
+          freshRetire: ["d1", "d2"],
+        })
+      ).toBeNull();
+    });
+
+    it("欠落・不明があれば検出する", () => {
+      expect(
+        verifyIntermediateUnion({
+          label: "3681/開示書類",
+          snapKeep: [],
+          snapRetire: ["d0", "d1"],
+          freshKeep: ["d0"],
+          freshRetire: [],
+        })
+      ).not.toBeNull();
+      expect(
+        verifyIntermediateUnion({
+          label: "3681/開示書類",
+          snapKeep: [],
+          snapRetire: ["d0"],
+          freshKeep: ["d0", "unknown"],
+          freshRetire: [],
+        })
+      ).not.toBeNull();
+    });
+  });
+
+  describe("decideMigrationAction (PATCH→receipt 断の回収)", () => {
+    const before = [RETIRE_3681];
+    const after = [KEEP_3681];
+
+    it("未記録・fresh before なら patch", () => {
+      expect(
+        decideMigrationAction({ recorded: undefined, opBefore: before, opAfter: after, freshFull: before, nonTargetUnchanged: true })
+      ).toBe("patch");
+    });
+
+    it("未記録・fresh after かつ非対象不変なら recover (再送しない)", () => {
+      expect(
+        decideMigrationAction({ recorded: undefined, opBefore: before, opAfter: after, freshFull: after, nonTargetUnchanged: true })
+      ).toBe("recover");
+    });
+
+    it("未記録・fresh after でも非対象変化なら stop", () => {
+      expect(
+        decideMigrationAction({ recorded: undefined, opBefore: before, opAfter: after, freshFull: after, nonTargetUnchanged: false })
+      ).toBe("stop");
+    });
+
+    it("記録済み・fresh after なら skip、fresh before なら repatch", () => {
+      const recorded = { before, after };
+      expect(
+        decideMigrationAction({ recorded, opBefore: before, opAfter: after, freshFull: after, nonTargetUnchanged: true })
+      ).toBe("skip");
+      expect(
+        decideMigrationAction({ recorded, opBefore: before, opAfter: after, freshFull: before, nonTargetUnchanged: true })
+      ).toBe("repatch");
+    });
+
+    it("記録済み・想定外は stop", () => {
+      const recorded = { before, after };
+      expect(
+        decideMigrationAction({ recorded, opBefore: before, opAfter: after, freshFull: ["other"], nonTargetUnchanged: true })
+      ).toBe("stop");
+    });
+  });
+
+  describe("decideRetireAction / decideSnapshotAction (0/1/複数 + marker)", () => {
+    it("退避: 複数は停止・1 件は complete・0+marker は停止・0 のみ create", () => {
+      expect(decideRetireAction({ trashHits: 2, hasMarker: false })).toBe("stop");
+      expect(decideRetireAction({ trashHits: 1, hasMarker: false })).toBe("complete");
+      expect(decideRetireAction({ trashHits: 1, hasMarker: true })).toBe("complete");
+      expect(decideRetireAction({ trashHits: 0, hasMarker: true })).toBe("stop");
+      expect(decideRetireAction({ trashHits: 0, hasMarker: false })).toBe("create");
+    });
+
+    it("snapshot: 複数は停止・1 件は recover・0+marker は停止・0 のみ create", () => {
+      expect(decideSnapshotAction({ backupHits: 2, hasMarker: false })).toBe("stop");
+      expect(decideSnapshotAction({ backupHits: 1, hasMarker: true })).toBe("recover");
+      expect(decideSnapshotAction({ backupHits: 0, hasMarker: true })).toBe("stop");
+      expect(decideSnapshotAction({ backupHits: 0, hasMarker: false })).toBe("create");
+    });
+  });
+
+  describe("hasSnapshotProgress (再開判定)", () => {
+    it("空 receipt は偽・何らかの進捗で真", () => {
+      expect(hasSnapshotProgress(emptyReceipt())).toBe(false);
+      const r1 = emptyReceipt();
+      r1.snapshotIssued = { key: "k", snapshotHash: "h", issuedAt: "2026-09-28T00:00:00.000Z" };
+      expect(hasSnapshotProgress(r1)).toBe(true);
+      const r2 = emptyReceipt();
+      r2.migrated["x"] = { db: "disclosures", prop: REL_PROP_MASTER, before: [], after: [], verifiedAt: "2026-09-28T00:00:00.000Z" };
+      expect(hasSnapshotProgress(r2)).toBe(true);
     });
   });
 });

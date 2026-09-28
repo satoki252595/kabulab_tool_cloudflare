@@ -490,7 +490,14 @@ export interface DedupReceipt {
     sha256: string;
     archivePageId: string;
     archiveVerifiedAt: string;
+    /** 実ダウンロード検証用の元バイト列 SHA (snapshot ファイル・公式 ZIP/HTML)。 */
+    snapshotBytesSha256?: string;
+    zipSha256?: string;
+    htmlSha256?: string;
+    fileNames?: string[];
   };
+  /** snapshot 非冪等 create の発行マーカー (helper 呼出前に atomic 保存)。 */
+  snapshotIssued?: { key: string; snapshotHash: string; issuedAt: string };
   lifecycle3681?: { patchedAt: string; verifiedAt: string };
   migrated: Record<
     string,
@@ -498,6 +505,8 @@ export interface DedupReceipt {
   >;
   supplement7129?: { pageId: string; verifiedAt: string };
   retired: Record<string, { trashPageId: string; verifiedAt: string }>;
+  /** 退避非冪等 create の発行マーカー (retireId → 発行記録)。自動解除禁止。 */
+  retireIssued?: Record<string, { key: string; origin: string; snapshotHash: string; issuedAt: string }>;
   d1?: { checkedAt: string; fixed: string[]; verifiedAt: string };
   completedAt?: string;
 }
@@ -517,4 +526,188 @@ export function pendingMigrationOps(
 /** 全 op が receipt 済みか。 */
 export function allMigrated(ops: MigrationOp[], receipt: DedupReceipt): boolean {
   return pendingMigrationOps(ops, receipt).length === 0;
+}
+
+/** receipt に何らかの進捗 (snapshot 確定以降) があるか。再開判定用。 */
+export function hasSnapshotProgress(receipt: DedupReceipt): boolean {
+  return (
+    receipt.snapshot !== undefined ||
+    receipt.snapshotIssued !== undefined ||
+    receipt.lifecycle3681 !== undefined ||
+    Object.keys(receipt.migrated).length > 0 ||
+    receipt.supplement7129 !== undefined ||
+    Object.keys(receipt.retired).length > 0 ||
+    (receipt.retireIssued !== undefined && Object.keys(receipt.retireIssued).length > 0) ||
+    receipt.d1 !== undefined
+  );
+}
+
+// ---------------------------------------------------------------------------
+// incoming スキーマ列挙 (未知 incoming の検出。/search→schema のみ。全行 scan 不要)
+// ---------------------------------------------------------------------------
+
+/** master 向け relation を持つ DB の 1 ヒット。 */
+export interface IncomingSchemaHit {
+  dbId: string;
+  dbTitle: string;
+  propName: string;
+  relType: "dual_property" | "single_property" | "unknown";
+}
+
+export interface IncomingSchemaEvidence {
+  enumeratedAt: string;
+  dbCount: number;
+  hits: IncomingSchemaHit[];
+}
+
+/**
+ * 既知の incoming (2026-09-28 preflight 実測 + pipeline 正本)。
+ * ③④⑤ は pipeline `DB_REGISTRY` の title、⑧⑨ は ① 側の逆向き自動生成名
+ * ("Related to ⑧ 需給 (銘柄マスタ)") からの逆算、補足は `SUPPLEMENT_DB_TITLE`。
+ * これ以外が 1 件でもあれば未知 incoming として STOP する (fail closed)。
+ */
+export const KNOWN_MASTER_INCOMING: ReadonlyArray<{
+  title: string;
+  prop: string;
+  rel: IncomingSchemaHit["relType"];
+}> = [
+  { title: "③ 財務サマリ", prop: REL_PROP_MASTER, rel: "dual_property" },
+  { title: "④ 開示書類", prop: REL_PROP_MASTER, rel: "dual_property" },
+  { title: "⑤ 原本ファイル", prop: REL_PROP_RELATED, rel: "dual_property" },
+  { title: "⑧ 需給", prop: REL_PROP_MASTER, rel: "dual_property" },
+  { title: "⑨ 株主優待", prop: REL_PROP_MASTER, rel: "dual_property" },
+  { title: "銘柄マスタ（補足）", prop: "銘柄マスタ", rel: "single_property" },
+];
+
+/**
+ * 列挙ヒットが既知のみか検証する。未知が 1 件でもあれば理由を返す (空=合格)。
+ * 不足 (既知の欠落) はここでは問わない — 逆 relation ガード・補足ガードが
+ * 別途検出する。未知の追加だけを fail closed で止める。
+ */
+export function guardIncomingSchema(hits: IncomingSchemaHit[]): string[] {
+  const problems: string[] = [];
+  for (const h of hits) {
+    const known = KNOWN_MASTER_INCOMING.some(
+      (k) => k.title === h.dbTitle && k.prop === h.propName && k.rel === h.relType
+    );
+    if (!known) {
+      problems.push(
+        `未知の incoming: db=${h.dbTitle} (${h.dbId}) prop=${h.propName} rel=${h.relType}`
+      );
+    }
+  }
+  return problems;
+}
+
+// ---------------------------------------------------------------------------
+// 中間状態ガード (receipt+snapshot に基づく before/after のみ許可)
+// ---------------------------------------------------------------------------
+
+/**
+ * relation 型を除いて properties 全体が等しいか (退避直前の非 relation 比較用)。
+ * 移行後は逆 relation が空になるため、relation は比較対象外とする。
+ */
+export function nonRelationPropsEqual(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>
+): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) {
+    const at = (a[k] as { type?: unknown } | undefined)?.type;
+    const bt = (b[k] as { type?: unknown } | undefined)?.type;
+    if (at === "relation" || bt === "relation") continue;
+    if (stableStringify(a[k]) !== stableStringify(b[k])) return false;
+  }
+  return true;
+}
+
+/**
+ * 中間状態の逆 relation 和の保存を検証する。fresh の keep∪retire が snapshot の
+ * keep∪retire と集合一致しなければ理由を返す (null=合格)。部分移行 (中間件数)
+ * を許しつつ、新規不明 ID・欠落を検出する。順序は問わない (逆向き表示のため)。
+ */
+export function verifyIntermediateUnion(args: {
+  label: string;
+  snapKeep: string[];
+  snapRetire: string[];
+  freshKeep: string[];
+  freshRetire: string[];
+}): string | null {
+  const normSet = (ids: string[]) =>
+    [...new Set(ids.map(normalizePageId))].sort();
+  const want = normSet([...args.snapKeep, ...args.snapRetire]);
+  const got = normSet([...args.freshKeep, ...args.freshRetire]);
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    const wantSet = new Set(want);
+    const gotSet = new Set(got);
+    const missing = want.filter((id) => !gotSet.has(id));
+    const extra = got.filter((id) => !wantSet.has(id));
+    return (
+      `${args.label}: 中間状態の逆 relation 和が保存されていません ` +
+      `(欠落 ${missing.length} 件・不明 ${extra.length} 件)`
+    );
+  }
+  return null;
+}
+
+/**
+ * 移行の 1 行分の実 flow 判定 (純粋決定。I/O 側はこの結果に従うだけ)。
+ * - recorded 済み: fresh==after なら skip、fresh==before なら repatch (PATCH 消失)、
+ *   それ以外は stop (同時変更)。
+ * - 未記録: fresh==before なら patch、fresh==after かつ非対象不変なら recover
+ *   (PATCH 成功→receipt 断の回収。再送しない)、それ以外は stop。
+ * 非対象不変 (props/body) が偽なら after 一致でも stop (同時変更の疑い)。
+ */
+export type MigrationDecision = "skip" | "patch" | "repatch" | "recover" | "stop";
+
+export function decideMigrationAction(args: {
+  recorded: { before: string[]; after: string[] } | undefined;
+  opBefore: string[];
+  opAfter: string[];
+  freshFull: string[];
+  nonTargetUnchanged: boolean;
+}): MigrationDecision {
+  const eq = (a: string[], b: string[]) =>
+    JSON.stringify(a.map(normalizePageId)) === JSON.stringify(b.map(normalizePageId));
+  if (args.recorded) {
+    if (eq(args.freshFull, args.recorded.after) && args.nonTargetUnchanged) return "skip";
+    if (eq(args.freshFull, args.recorded.before) && args.nonTargetUnchanged) return "repatch";
+    return "stop";
+  }
+  if (eq(args.freshFull, args.opBefore) && args.nonTargetUnchanged) return "patch";
+  if (eq(args.freshFull, args.opAfter) && args.nonTargetUnchanged) return "recover";
+  return "stop";
+}
+
+/**
+ * 退避の実 flow 判定 (純粋決定)。trash の full 検索ヒット数と marker に基づく。
+ * - hits>=2 → stop (複数は停止。どれが正か決めない)。
+ * - hits==1 → complete (既存があれば original archive だけ完了。二重 create しない)。
+ * - hits==0 かつ marker あり → stop (結果不明。自動解除・再 create 禁止)。
+ * - hits==0 かつ marker なし → create (新規退避へ進む。呼出前に marker 保存)。
+ */
+export type RetireDecision = "complete" | "create" | "stop";
+
+export function decideRetireAction(args: {
+  trashHits: number;
+  hasMarker: boolean;
+}): RetireDecision {
+  if (args.trashHits >= 2) return "stop";
+  if (args.trashHits === 1) return "complete";
+  return args.hasMarker ? "stop" : "create";
+}
+
+/**
+ * snapshot 保管の実 flow 判定 (純粋決定)。backup の full 検索ヒット数と marker。
+ * 退避と同じ 0/1/複数 + marker の表 (自動解除・再 create 禁止)。
+ */
+export type SnapshotDecision = "recover" | "create" | "stop";
+
+export function decideSnapshotAction(args: {
+  backupHits: number;
+  hasMarker: boolean;
+}): SnapshotDecision {
+  if (args.backupHits >= 2) return "stop";
+  if (args.backupHits === 1) return "recover";
+  return args.hasMarker ? "stop" : "create";
 }
