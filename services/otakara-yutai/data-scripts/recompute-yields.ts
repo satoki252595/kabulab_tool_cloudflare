@@ -18,6 +18,7 @@
  */
 import { inArray, sql } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
+import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { calcYutaiYield } from "../../../src/cron/monthly.js";
 import { scoreStock, type ScoringInput } from "../../../src/shared/scoring.js";
 import { stockFinancials, stockScores, yutaiBenefits } from "../src/db/schema.js";
@@ -223,6 +224,34 @@ export async function applyYieldRecompute(
     }
   }
   return { updated, scoresUpdated };
+}
+
+/**
+ * 1 銘柄の再計算結果を D1 REST batch 用の UPDATE 文にする (純関数・副作用なし)。
+ * `applyYieldRecompute` と同一の意味: 変わる列だけ書く (`yutai_yield` +
+ * `fetched_at`、スコア 3 列)。`data_date` には触らない。
+ * 原子適用 (`atomic-apply.ts`) だけが使う。
+ */
+export function buildYieldScoreStatements(entry: YieldRecomputeEntry): D1BatchStatement[] {
+  const out: D1BatchStatement[] = [];
+  if (entry.changed) {
+    out.push({
+      sql: "UPDATE otakara_stock_financials SET yutai_yield = ?, fetched_at = (unixepoch()) WHERE stock_id = ?",
+      params: [entry.next, entry.stockId],
+    });
+  }
+  if (entry.scoreChanged && entry.scoreNext) {
+    out.push({
+      sql: "UPDATE otakara_stock_scores SET fundamental_score = ?, technical_score = ?, total_score = ? WHERE stock_id = ?",
+      params: [
+        entry.scoreNext.fundamentalScore,
+        entry.scoreNext.technicalScore,
+        entry.scoreNext.totalScore,
+        entry.stockId,
+      ],
+    });
+  }
+  return out;
 }
 
 /** 計画をログ用の行にする。銘柄コードの解決は呼び出し側で行う。 */

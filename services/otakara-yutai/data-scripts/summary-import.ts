@@ -33,6 +33,7 @@
  *   認める「年間額 ÷ 回数」などが一致せず正しい回答まではじくので、金額表現の
  *   有無だけを見る。
  */
+import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { benefitKey } from "./benefit-key.js";
 import { extractYenAmounts, sanitizeEstimatedValue } from "./estimated-value-guard.js";
@@ -314,6 +315,27 @@ export async function applySummaryImport(
     }
   }
   return { rows, groups: plan.updates.length, written: true };
+}
+
+/**
+ * 書き込み計画を D1 REST batch 用の UPDATE 文にする (純関数・副作用なし)。
+ * `makeSummaryWriter` (`import-summary-results.ts`) と同一の意味: 書く 4 列
+ * (要約・推定値・出典・更新日時) と ID 分割幅 (`MAX_IDS_PER_UPDATE`)。
+ * 原子適用 (`atomic-apply.ts`) だけが使う。`ids` が空なら文を作らない。
+ */
+export function buildBenefitUpdateStatements(
+  ids: readonly number[],
+  values: Pick<PlannedUpdate, "shortSummary" | "estimatedValue" | "estimateValueSource">,
+): D1BatchStatement[] {
+  const out: D1BatchStatement[] = [];
+  for (let i = 0; i < ids.length; i += MAX_IDS_PER_UPDATE) {
+    const chunk = ids.slice(i, i + MAX_IDS_PER_UPDATE);
+    out.push({
+      sql: `UPDATE yutai_benefits SET short_summary = ?, estimated_value = ?, estimate_value_source = ?, updated_at = (unixepoch()) WHERE id IN (${chunk.map(() => "?").join(", ")})`,
+      params: [values.shortSummary, values.estimatedValue, values.estimateValueSource, ...chunk],
+    });
+  }
+  return out;
 }
 
 /**

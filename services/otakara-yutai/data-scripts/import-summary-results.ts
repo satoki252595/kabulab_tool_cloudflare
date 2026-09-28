@@ -6,8 +6,10 @@
  * 書くのはこのコマンドだけ (変更日時 `updated_at` も同時に打つ)。
  * (`estimate_source_url` は 2026-09-25 に DROP した。writer が常に null を
  * 書くだけの死に列だったため — X-01)。
- * 書き込んだ銘柄の `yutai_yield` は同一実行で再計算する (`recompute-yields.ts`。
- * 取り込みだけ利回りを置き去りにすると fresh stale が再発するため)。
+ * 書き込んだ銘柄の `yutai_yield` とスコアは同一実行で再計算する
+ * (`recompute-yields.ts`。取り込みだけ利回りを置き去りにすると fresh stale が
+ * 再発するため)。同一銘柄の要約・推定値・利回り・スコアの全 UPDATE は
+ * D1 REST `{batch}` 1 リクエストで送る (銘柄単位の原子単位。`atomic-apply.ts`)。
  *
  * 実行:
  *   pnpm yutai:summary:import --tasks <タスクファイル> --results <結果ファイル>          # dry-run
@@ -28,20 +30,27 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { eq, inArray, sql } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
+import { createD1HttpBatchSender } from "../../../src/shared/db/d1-http-client.js";
 import { stocks, yutaiBenefits } from "../src/db/schema.js";
+import {
+  applyAtomicBatches,
+  planAtomicBatches,
+  type AtomicBatchSender,
+} from "./atomic-apply.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
 import { assertNotCommittable } from "./private-path.js";
 import {
-  applyYieldRecompute,
   formatRecomputeReport,
   planYieldRecompute,
+  type RecomputeYieldsDb,
+  type YieldRecomputePlan,
 } from "./recompute-yields.js";
 import {
   MAX_IDS_PER_UPDATE,
-  applySummaryImport,
   formatPlanReport,
   planSummaryImport,
+  type PlannedUpdate,
   type SummaryWriter,
 } from "./summary-import.js";
 import { parseTaskFile } from "./summary-tasks.js";
@@ -84,8 +93,10 @@ export function parseImportArgs(argv: readonly string[]): ImportArgs {
 }
 
 /**
- * D1 への書き込み口。`main` から切り出してテストで固定する —
- * 書く 4 列 (要約・推定値・出典・更新日時) を D1 なしで検証できる。
+ * D1 への逐次書き込み口。書く 4 列 (要約・推定値・出典・更新日時) の正準。
+ * `--apply` の実経路は銘柄単位の原子 batch (`applyImportAtomically`) を使い、
+ * この writer は直接呼ばない — `buildBenefitUpdateStatements` が同一の 4 列を
+ * 書くことをテストで固定する。
  */
 export function makeSummaryWriter(
   db: BaseSQLiteDatabase<"async", unknown, Record<string, unknown>>
@@ -121,25 +132,35 @@ async function main(): Promise<void> {
   console.info(`[summary:import] タスク ${tasks.length} 件 / D1 の優待行 ${currentRows.length}`);
   for (const line of formatPlanReport(plan, undefined, showText)) console.info(`[summary:import] ${line}`);
 
-  const writer: SummaryWriter = makeSummaryWriter(db);
-  const res = await applySummaryImport(plan, writer, { apply });
   // 利回りの追随対象。書き込み予定があればその行、無ければ (全 reject・前回が
   // 要約書き込み後に中断した場合の再実行) タスク対象の行で再評価する。
   const targetIds = resolveTargetIds(tasks, currentRows, plan.updates);
-  if (!res.written) {
+  if (!apply) {
+    const rows = plan.updates.reduce((s, u) => s + u.ids.length, 0);
     console.info(
-      `[summary:import] dry-run: D1 には書いていません (書く予定 ${res.groups} タスク / ${res.rows} 行)。--apply で書き込みます。`,
+      `[summary:import] dry-run: D1 には書いていません (書く予定 ${plan.updates.length} タスク / ${rows} 行)。--apply で書き込みます。`,
     );
     await reportYieldPreview(db, targetIds, plan.updates);
     return;
   }
-  console.info(`[summary:import] 書き込み完了: ${res.groups} タスク / ${res.rows} 行`);
+  const atomic = await applyImportAtomically(db, createD1HttpBatchSender(), {
+    targetIds,
+    updates: plan.updates,
+  });
+  console.info(`[summary:import] 書き込み完了: ${atomic.groups} タスク / ${atomic.rows} 行`);
   if (plan.rejections.length > 0) {
     console.warn(
       `[summary:import] はじいた ${plan.rejections.length} 行は未反映です。理由を添えて再依頼してください。`,
     );
   }
-  await refreshTouchedYields(db, targetIds);
+  for (const line of formatRecomputeReport(atomic.yieldPlan, atomic.codeOf)) {
+    console.info(`[summary:import] ${line}`);
+  }
+  const updated = atomic.yieldPlan.entries.filter((e) => e.changed).length;
+  const scoresUpdated = atomic.yieldPlan.entries.filter((e) => e.scoreChanged).length;
+  console.info(
+    `[summary:import] 優待利回りを更新: ${updated} 銘柄 / スコアを更新: ${scoresUpdated} 銘柄 (data_date は月次のまま)`
+  );
 }
 
 /**
@@ -165,9 +186,13 @@ export function resolveTargetIds(
 
 /** 対象の優待行 id から (stockId, 銘柄コード) を引く。 */
 async function resolveTouchedStocks(
-  db: ReturnType<typeof openOtakaraD1>,
+  db: RecomputeYieldsDb,
   ids: number[]
-): Promise<{ stockIds: number[]; codeOf: (stockId: number) => string }> {
+): Promise<{
+  stockIds: number[];
+  codeOf: (stockId: number) => string;
+  stockOf: (benefitId: number) => number | undefined;
+}> {
   const unique = [...new Set(ids)];
   const stockById = new Map<number, { stockId: number; code: string }>();
   for (let i = 0; i < unique.length; i += MAX_IDS_PER_UPDATE) {
@@ -183,6 +208,7 @@ async function resolveTouchedStocks(
   return {
     stockIds: [...codeByStock.keys()],
     codeOf: (stockId) => codeByStock.get(stockId) ?? `stock:${stockId}`,
+    stockOf: (benefitId) => stockById.get(benefitId)?.stockId,
   };
 }
 
@@ -203,26 +229,41 @@ async function reportYieldPreview(
 }
 
 /**
- * --apply 後: 書いた銘柄の優待利回り・スコアを現入力で再計算する。
- * 取り込みだけ利回りを置き去りにすると fresh stale (2026-09-28 監査 F3) が
- * 再発するため、同一実行で追随させる。data_date は月次のまま。
- * 要約の書き込みと利回りの更新の間で中断しても、同じ引数の再実行で
- * タスク対象の利回りを再評価するため置き去りは残らない (再実行は冪等)。
+ * `--apply` の実経路: 書き込み予定の推定値を今の D1 の snapshot に仮適用して
+ * 利回り・スコアを先に計算し (dry-run の先見せと同一の overlay 方式・同一関数)、
+ * 同一銘柄の要約・推定値・利回り・スコアの全 UPDATE を D1 REST `{batch}`
+ * 1 リクエストで送る (銘柄単位の原子単位。要約だけ書いて中断する形は無い)。
+ * `data_date` は月次のまま。銘柄間の失敗は止めて同引数の再実行で回復する
+ * (適用済み銘柄は無変更・冪等。`resolveTargetIds` の和集合で混合再開に対応)。
+ * 送信口は差し替え可能にし、テストでは D1 なしで束ね方を固定する。
  */
-async function refreshTouchedYields(
-  db: ReturnType<typeof openOtakaraD1>,
-  targetIds: number[]
-): Promise<void> {
-  if (targetIds.length === 0) return;
-  const { stockIds, codeOf } = await resolveTouchedStocks(db, targetIds);
-  const plan = await planYieldRecompute(db, stockIds);
-  const { updated, scoresUpdated } = await applyYieldRecompute(db, plan);
-  for (const line of formatRecomputeReport(plan, codeOf)) {
-    console.info(`[summary:import] ${line}`);
+export async function applyImportAtomically(
+  db: RecomputeYieldsDb,
+  sender: AtomicBatchSender,
+  input: { targetIds: readonly number[]; updates: readonly PlannedUpdate[] }
+): Promise<{
+  groups: number;
+  rows: number;
+  yieldPlan: YieldRecomputePlan;
+  codeOf: (stockId: number) => string;
+}> {
+  const groups = input.updates.length;
+  const rows = input.updates.reduce((s, u) => s + u.ids.length, 0);
+  if (input.targetIds.length === 0) {
+    return {
+      groups,
+      rows,
+      yieldPlan: { entries: [], skippedNoRow: [], skippedNoScore: [] },
+      codeOf: (stockId) => `stock:${stockId}`,
+    };
   }
-  console.info(
-    `[summary:import] 優待利回りを更新: ${updated} 銘柄 / スコアを更新: ${scoresUpdated} 銘柄 (data_date は月次のまま)`
-  );
+  const { stockIds, codeOf, stockOf } = await resolveTouchedStocks(db, [...input.targetIds]);
+  const overlay = new Map<number, number | null>();
+  for (const u of input.updates) for (const id of u.ids) overlay.set(id, u.estimatedValue);
+  const yieldPlan = await planYieldRecompute(db, stockIds, overlay);
+  const batches = planAtomicBatches({ updates: input.updates, yieldPlan, stockOfBenefit: stockOf });
+  await applyAtomicBatches(sender, batches);
+  return { groups, rows, yieldPlan, codeOf };
 }
 
 // CLI として直接実行されたときだけ動かす。`parseImportArgs` をテストから

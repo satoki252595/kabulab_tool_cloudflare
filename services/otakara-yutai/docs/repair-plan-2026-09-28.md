@@ -41,17 +41,24 @@ token) が渡されるまで何も書かない。** コード側の再発防止�
 - 仕様書 `llm-summary-task.md`: 版 2026-09-28.2。確実性原則・外貨・人数限定・
   抽選賞品の機械判定を追記。要約の % は掲載文の数字をそのまま写す。
 - 回帰テストを追加 (ガード・取込計画・持越・再計算・表示・契約)。サービス 243 件・全体 2,800 件超が緑。
-- 原子性 (実証済み): D1 REST の `{batch:[...]}` と複文 SQL は、途中失敗時に
-  全文ロールバックすることを隔離一時 D1 (`kabulab-yutai-atomic-check-20260928`。
-  実証後に削除済み) で確認した。公式 REST 文書に rollback の明文は無い
-  (binding `DB.batch` には明文あり) ため、観測事実として記録する。
+- 原子性 (接続済み): 通常の `--apply` は同一銘柄の要約・推定値・利回り・
+  スコアの全 UPDATE を D1 REST `{batch}` 1 リクエストで送る (`atomic-apply.ts`
+  + 共有の `createD1HttpBatchSender`。純 recompute も同一銘柄の利回り+スコアで
+  1 リクエスト)。payload は実証時と同一の envelope (`{batch:[{sql,params}]}`)。
+  原子性の根拠は観測事実のまま: 隔離一時 D1
+  (`kabulab-yutai-atomic-check-20260928`。実証後に削除済み) で `{batch}` 形と
+  複文 SQL 形のどちらも途中失敗で全文ロールバック・成功で全適用を確認した。
+  公式 REST 文書に rollback の明文は無い (binding `DB.batch` にだけ明文あり)。
   drizzle の `db.batch()` は Node 経路で実行時エラーのまま
-  (`d1-http-batch-boundary.test.ts` の境界。共有クライアントは lane C 所有)。
-  最小案 (未実装。root 承認後に別途): 同一銘柄の要約・値・利回り・スコアの
-  UPDATE 群を 1 リクエスト `{batch}` で送る銘柄単位の限定窓口。共有の枠組み
-  変更は不要。現行コードは逐次更新 + 中断再開の冪等で担保する (部分状態は
-  同引数の再実行で全て回復。`resolveTargetIds` は予定とタスクの和集合で
-  混合再開に対応)。
+  (`d1-http-batch-boundary.test.ts` の境界)。銘柄間の失敗は止めて同引数の
+  再実行で回復する (適用済み銘柄は無変更・冪等。`resolveTargetIds` の和集合で
+  混合再開に対応)。利回り・スコアの計算は書き込み予定値を同一 snapshot に
+  仮適用する overlay 方式 (dry-run の先見せと同一関数) で、逐次時と同一の値。
+  回帰: 銘柄単位 1 送信・途中失敗の全 preimage・正常成功・builder 等価
+  (`atomic-apply.test.ts`・`d1-http-batch-sender.test.ts`)。
+  なお Stage C (45 群の rework 結果の人手確認・実 apply・fresh 再読・再実行
+  0 件の確認) は本 PR のコード作業では未実施。同許可済み作業の別本番 Task
+  として残す (延期するのは JPX 新様式・信用残日次だけ。C45 の先送りはしない)。
 
 ## 根因の要約 (証拠つき)
 
