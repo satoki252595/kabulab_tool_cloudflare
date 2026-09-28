@@ -6,13 +6,92 @@ at origin/main `18d5939` (#145)。検査日 2026-09-28 (JST)。
 2026-09-28 追補: レビュー指摘5点を反映し、件数訂正・R1独立再計算・
 global独立再計算・JVCEA独立再読・代表標本再現表を追加した。
 
-結論: 全25spec・計5,121行 (旧版の「5,633行」は集計誤記。下記訂正記録)
+結論: 全spec（集計ID:MF-specs）・計行数（集計ID:MF-rows-total。旧版ヘッダの「5,633行」は集計誤記。下記訂正記録）
 の原表→parser→観測行の全件構造検査に合格し、原本標本の照合では
 誤りを検出しなかった (実差分0・許容誤差0。MOF内訳の出典側丸め残差
 1件は注記どおり)。ただし「取得誤りなし」「全件独立差分0」とは断定
-しない — 下表の検証レベルを区別すること。Notion 4 DBは0行
-(一次実体・観測とも未保管) のため、保存値との突合せは不能
+しない — 下表の検証レベルを区別すること。Notion DB（集計ID:MF-notion-rows。
+一次実体・観測とも未保管）のため、保存値との突合せは不能
 (対象なしではなく未確認)。アーカイブ完了ではない。
+
+<!-- audit-report:BEGIN moneyflow -->
+## 生成集計ブロック: moneyflow（機械生成・手編集禁止）
+
+生成元 `docs/test-logs/data-audit-2026-09-28.results.json`（contract v1・Issue #151）。本文の要約層は数値を再入力せず集計ID参照にすること。
+自動 checker は語義・源泉の正確性を保証しない。原因解釈は本文と証拠項目IDで人がレビューすること。
+
+監査スナップショット日 2026-09-28 / 最新確定営業日 2026-09-28 / 保存系列最新 2026-09-25
+日付注: R1の保存最新は09-25。9/28営業日分は未反映（次回日次jobで反映見込み）。
+
+### 母集団
+
+| 項目ID | 内容 | n |
+|---|---|---:|
+| MF-specs | moneyflow検査spec数 | 25 |
+| MF-r1-universe | R1母集団（active×内国普通株） | 3700 |
+| MF-notion-dbs | Notion確認DB数 | 4 |
+
+### 内訳集計（合計は内訳から計算）
+
+| 項目ID | 内訳 | 合計 | 状態 | 出所 |
+|---|---|---:|---|---|
+| MF-rows-total | coingecko-global13＋jpx-investor-equity-weekly240＋mof-portfolio-flows-weekly286＋jpx-derivatives-investor-weekly484＋jpx-derivatives-investor-futures-oi134＋cftc-cot-jpy10＋global-indices221＋jpx-investor-equity-monthly240＋jpx-investor-etf-reit-etf29＋jpx-investor-etf-reit-reit29＋mof-portfolio-flows-monthly264＋imaj-fund-flows120＋imaj-fund-flows-reit24＋jsda-bonds240＋ffaj-otc-fx384＋tfx-click365-fx462＋tfx-click365-cfd154＋jvcea-crypto156＋bop-regional174＋boj-flow-of-funds282＋bis-banking453＋imf-cpis387＋tfx-click365-fx-annual186＋tfx-click365-cfd-annual22＋worldbank-marketcap127 | 5121 | 確認済み | 報告書記載値 |
+> MF-rows-total: 旧版ヘッダの5633は集計誤記。正は内訳合計5121
+| MF-notion-rows | 一次データ｜moneyflow0＋資金フロー｜指標定義0＋資金フロー｜観測ログ0＋資金フロー｜取込ログ0 | 0 | 未検証 | 報告書記載値 |
+> MF-notion-rows: 一次実体・観測とも未保管のため保存値との突合せは不能。対象なしではなく未確認
+| MF-r1-cap | 非NULL3695＋欠損（不算入）5 | 3700 | 確認済み | 報告書記載値 |
+> MF-r1-cap: 欠損5は不算入（0埋めなし）
+| MF-r1-range | 9/25行あり3698＋9/25行なし2 | 3700 | 確認済み | 報告書記載値 |
+
+### 照合カバレッジ
+
+| 項目ID | 内容 | 一致/母数 | 状態 |
+|---|---|---:|---|
+| MF-r1-sectors | R1業種集計の独立再計算＋API照合（turnover/share/up/down/cap・差分0） | 33/33 | 確認済み |
+| MF-global-idx | global-indices W39・17指標の独立再計算（差分0） | 17/17 | 確認済み |
+| MF-jvcea-cells | JVCEA 2026-07行のpdftotext独立再読（5値一致） | 5/5 | 確認済み |
+| MF-imf-official | IMF原典最新期との照合 | 0/1 | 未検証 |
+> MF-imf-official: 原典直結は到達不可。鏡（DBnomics・2024-H1）のfreshnessのみ主張
+
+### 隔離候補・保留
+
+隔離候補・保留ともに該当なし。C所掌に隔離表はない
+
+### 証拠
+
+| 項目ID | path | sha256 | bytes | 時刻state | 備考 |
+|---|---|---|---|---|---|
+| EV-mf-mof-w | `fixtures/public/mof-portfolio-flows/mof-week.csv` | de9ba9847fdc8bebebdb8f7ee2adcc572a899296c5555d540b58a110c0f9744b | 255655 | 未確認 | 一次公開URLは財務省証券売買統計ページ |
+| EV-mf-deriv-w | `fixtures/private/jpx-derivatives-investor/jpx-deriv-investor-week-20260907_20260911.csv` | 6258b0877d10ee68adfd6c50029f6a88014c616efb721a29173b9925adff0244 | 117179 | 未確認 | 一次公開URLはJPXデリバティブ投資部門別ページ |
+| EV-mf-cftc | `fixtures/public/cftc-cot-jpy/cftc-cot-jpy-legacy-futures-only.json` | b813b57d0108c96ec9adc8adb61b259b3b2e12d9605b16f80c8532cf2c692697 | 75209 | 未確認 | 一次公開URLはCFTC publicreporting API |
+| EV-mf-bop | `/tmp/regbp_trimmed.zip` | 0041dcc824a4fc279c6949955fcc0c64dddcd8ca79933d602588975834ce1bcc | 38796 | 未確認 | 一次公開URLは日銀stat-searchダウンロードページ |
+| EV-mf-jvcea | `/tmp/jvcea-full.pdf` | ec16877d5fcce8953c86a350d0a6601a3c12cd02e111804f963ca0a0cda04657 | 1238546 | 未確認 | 一次公開URLはJVCEA統計ページ。PDFバイトとサイト現物の突合せは未実施 |
+| EV-mf-etf | `/tmp/mf-fix-jpx-investor-etf-reit-etf-etf_m2608.xls` | 0ab50183e6fa7b0b4ce94e962a131fb4128789ed9836b76853cb747445affea0 | 52736 | 未確認 | 追補で再取得し同一バイトを確認 |
+| EV-mf-imaj-reit | `/tmp/mf-fix-imaj-fund-flows-reit-imaj-fund-flows-reit-2026-07.xlsx` | 26a5fab03a2cc7a871c498d786fe5c81abc048fc294aaea9a589afbb42ea1122 | 25503 | 未確認 | 追補で再取得し同一バイトを確認 |
+| EV-mf-equity-w-val | `/tmp/stock_val_1_260902.xls` | 0203d8e7cec672fe24a4c12126a38ee395ffdc62db34f2d0d81518a99720f998 | 99840 | 未確認 | 一次公開URLはJPX投資部門別ページ |
+| EV-mf-equity-w-vol | `/tmp/stock_vol_1_260902.xls` | b311878debf0a414820210007bc7a3f7d3f2262a55cec6178d59bd15689bb08f | 97792 | 未確認 | 一次公開URLはJPX投資部門別ページ |
+| EV-mf-imf-01 | `fixtures/private/imf-cpis/imf-cpis-full-20260928-01.json` | 2ec7e974ddbe607bc01f7be9ff1967768f4092250dbbd2506517933ee291a1c0 | 142539 | 未確認 | DBnomics鏡。原典IMF直結は到達不可 |
+| EV-mf-imf-02 | `fixtures/private/imf-cpis/imf-cpis-full-20260928-02.json` | 58f0c10887e867a9bbd4723122cc08d73922522ff81720cfbc417960a4a49582 | 95525 | 未確認 | DBnomics鏡。原典IMF直結は到達不可 |
+| EV-mf-global-gspc | `/tmp/mf-global-raw/global-indices-gspc-2026-W39.json` | ef3467955ce6851ce306430d7b131ee5e934b243246d4922ffa546643d210055 | — | 未確認 | 同一batch再取得物の代表。9/28初回fresh値との突合せはraw未保存のため不能 |
+| EV-mf-global-tnx | `/tmp/mf-global-raw/global-indices-tnx-2026-W39.json` | 098b9f010e6975def5408d031488e1a9ec87db4d65f75f97f0d7396379c4df57 | — | 未確認 | 同一batch再取得物の代表。代表URLはYahoo chart API（^TNX・6mo・1wk） |
+| EV-mf-fix-r1 | `/tmp/mf-fix-r1.mts` | e2a92115d94c642b568fb210f8a3ec0d5e7caa33c6f1eef0e46fb3bf05aabaf9 | 7722 | ファイルmtimeのみ（観測時刻ではない） | R1独立再計算＋API照合（COMPARE mismatched_sectors=0） |
+| EV-mf-fix-etf-reit | `/tmp/mf-fix-etf-reit.mts` | e7702f1539bf2d45493664a70f5b6d90b8abe690f05b9bd73944a59d1020e3e3 | 1588 | ファイルmtimeのみ（観測時刻ではない） | etf/imaj-reitのPARSE-OK再現 |
+| EV-mf-fix-global | `/tmp/mf-fix-global.mts` | 4fccd52c0eec740e471f89e82d8068ffc714579ae0bf188dd289c5d3703f5ee8 | 5236 | ファイルmtimeのみ（観測時刻ではない） | global W39・17指標の独立再計算（MISMATCH=0） |
+
+### 未検証範囲（合格に数えない）
+
+- Notion保存値との突合せ不能（4DB 0行・D1観測未取込）。保存照合の完了とは言わない
+- jpx-equity-W36数量側未検証（原本欠。金額側は前週欄で照合）
+- JVCEA PDFバイトとサイト現物の突合せ未実施
+- 9/28初回fresh値との突合せ不能（raw未保存。再取得batchで代替）
+- coingecko-global当日batchの同一再照合未実施（再取得は別batch）
+- 月次空売り加重平均の実データ集計例未観測（単体テスト境界のみ）
+- R1の9/28当日分未反映（保存最新9/25）
+- IMF原典最新期との照合未実施（鏡のfreshnessのみ主張）
+- 訂正版の重複事例未観測（保管0件）
+<!-- audit-report:END moneyflow -->
+
+
 
 ## 検査の境界 (必読)
 
@@ -95,14 +174,14 @@ global独立再計算・JVCEA独立再読・代表標本再現表を追加した
 public-domain=CFTC、attribution-required=MOF/BOJ/BIS/IMF/WB、
 要確認=IMAJ/JSDA/FFAJ/JVCEA/CoinGecko (非公開Notion限り・公開面へ出さない)。
 
-## 全件構造検査 (レベルA・母集団=各バッチ全行・計5,121行)
+## 全件構造検査 (レベルA・母集団=各バッチ全行・合計は集計ID:MF-rows-total)
 
 方法: 保存済み原本 (commit済みpublic 7 + worktree private 5 + /tmp履歴
 32・いずれもsha256照合済み) またはbounded fresh取得 (4spec) の
 バイト列を `toObservations` に通し `validateDrafts` で全行検証。
 冪等キー `期間|指標|区分` の一意性・有限数・期間順序・単位/区分の
-既知値・0行拒否を全行で確認。結果: 25specすべて合格・行数は上表どおり
-(docs/moneyflow.mdの期待値と一致)。冪等重複0・検証違反0。
+既知値・0行拒否を全行で確認。結果: 全spec（集計ID:MF-specs）合格・行数は上表どおり
+(合計は集計ID:MF-rows-total。docs/moneyflow.mdの期待値と一致)。冪等重複0・検証違反0。
 
 原本バイトの特定 (代表: 名称 bytes sha16):
 
@@ -158,11 +237,11 @@ NAと0・内訳合計・訂正を標本化。結果: 全標本一致 (実差分0
 | tfx-fx-a | 米ドル/円2025 年間売買6,003,872 / 空欄3ペアの2023・2024年は行なし | 枚そのまま | 0 |
 | tfx-cfd | 日経225 2026-08 売買728,991建玉34,495 | 枚そのまま | 0 |
 | tfx-cfd-a | 2025年のみ22行 (2023・2024全空欄は行なし) / 日経225年間2,364,089 | 枚そのまま | 0 |
-| jvcea | 2026-07 現物674,240証拠金627,529預託計2,872,363百万円→円 / 口座14,280,598・1,015,983 (追補: pdftotext独立再読で2026-07行の5値を直接確認。レベルC→Bへ格上げ) | 百万円×1e6・口座 | 0 |
+| jvcea | 2026-07 現物674,240証拠金627,529預託計2,872,363百万円→円 / 口座14,280,598・1,015,983 (追補: pdftotext独立再読で2026-07行の値を直接確認（集計ID:MF-jvcea-cells）。レベルC→Bへ格上げ) | 百万円×1e6・口座 | 0 |
 | bop | 中国直接net 2026Q1 -1,631.38201514億→-163,138,201,514 / 地域別合計 +40,673.64563458億→4,067,364,563,458 / NA16系列は行なし (174=190-16) | 億円×1e8 | 0 |
 | boj | 家計株式等フロー37,452億→3,745,200,000,000 / 家計現預金残高11,315,943億→1,131,594,300,000,000 / 中央政府上場株フロー0は実0 / 対外証券フロー資産合計=負債/海外 -10,738,100,000,000 | 億円×1e8 | 0 |
 | coingecko | BTC 12,977,231円 (再取得で同一値・tol0) / 支配率0.587…比率 | 円・米ドル・比率 | 0 |
-| global-idx | 221=17指標×13週・単位比率/%ポイント・期間W27-W39連続 (fresh) / 追補: W39の17指標を独立再計算し全差分0 (定義は下記) | 比率そのまま | 0 |
+| global-idx | 221=17指標×13週・単位比率/%ポイント・期間W27-W39連続 (fresh) / 追補: W39の全指標を独立再計算し全差分0（集計ID:MF-global-idx。定義は下記） | 比率そのまま | 0 |
 
 前期・訂正・NA: MOF版キー(最終更新日)と原表見出しの一致を実ファイルで
 確認 (W37版2026-09-17・M08版2026-09-08)。訂正版の実例は保管0件のため
@@ -176,15 +255,15 @@ global-indices独立再計算 (追補・レベルB): 9/28 freshのraw bodyは
 素朴JS (現地暦週グルーピング・スナップショット除外・前週比) で独立再計算。
 定義: pct指標は `((c-p)/p*100)/100` を単位「比率」で記録
 (TNXのpctも同様)、TNXのpt指標は `c-p` を単位「%ポイント」で記録。
-結果: 17/17差分0 (例: TNX W39 close 5.184/前週4.998→pt
+結果: 集計ID:MF-global-idx の全指標で差分0 (例: TNX W39 close 5.184/前週4.998→pt
 0.18599987030029297・pct比率0.03721485892470648。GSPC W39比率
 0.012144324717338737)。前週は16銘柄すべてW38と隣接。
 9/28初回fresh値との突合せはraw未保存のため不能 (再取得batchで代替)。
 
 JVCEA独立再読 (追補・レベルB): parser (unpdf/pdfjs系) とは別エンジンの
 pdftotext (poppler 25.10.0・/nix/store既存) で同一PDFを抽出し、
-2026-07行に5標本値 (674,240 / 627,529 / 2,872,363 / 14,280,598 /
-1,015,983) が同一行に存在することを直接確認。PDFバイト自体の真正性は
+2026-07行に標本値（集計ID:MF-jvcea-cells。値は 674,240 / 627,529 / 2,872,363 / 14,280,598 /
+1,015,983）が同一行に存在することを直接確認。PDFバイト自体の真正性は
 index突合せ (URL・ファイル名) の範囲であり、サイト現物とのバイト比較は
 未実施。
 
@@ -236,12 +315,12 @@ sha256突合せ→上記command」の順で再現できる。
 - API照合 (追補): 認証内部API
   `GET /api/ingest/moneyflow-sector?from=2026-09-25&to=2026-09-25`
   (200・marketCapAsOf=snapshot_at_fetch・33sectors) の表示値と突合せ。
-  結果: **33/33sectorで turnover/share/upTurnover/downTurnover/marketCap/
-  stockCount/marketCapStockCount が全一致** (turnover/up/down/capの絶対差分0、
+  結果: 集計ID:MF-r1-sectors で全一致 (turnover/share/upTurnover/downTurnover/marketCap/
+  stockCount/marketCapStockCount の turnover/up/down/cap 絶対差分0、
   share絶対差分0、件数一致)。分母 (全業種売買代金合計) 8,201,126,776,418.613円。
   除外件数: 範囲内NULL行66・sector NULL 0・同値日294・前日なし0。
-  範囲内行3,698 (母集団3,700のうち2銘柄は9/25行なし)。
-  時価総額は取得時点snapshot (非NULL 3,695/3,700・欠損5は不算入)。
+  範囲内行 (集計ID:MF-r1-range)。
+  時価総額は取得時点snapshot (集計ID:MF-r1-cap。欠損は不算入)。
   代表: 電気機器 turnover 3,298,799,326,939.7275・share 0.40223732870768947・
   up 3,097,622,705,839.7275・down 198,644,300,000・cap 276,024,434,793,600
   (API値と桁一致)。
@@ -268,7 +347,7 @@ sha256突合せ→上記command」の順で再現できる。
 ## Notion persist確認 (read-only・1rps以下・2026-09-28)
 
 「一次データ｜moneyflow」「資金フロー｜指標定義」「資金フロー｜観測ログ」
-「資金フロー｜取込ログ」はいずれも0行。一次実体の保管も観測のpersistも
+「資金フロー｜取込ログ」はいずれも行なし（集計ID:MF-notion-rows）。一次実体の保管も観測のpersistも
 未実施 (#133の484/134/387を含む全spec)。raw→parser確認とpersist確認は
 別評価とし、本記録は前者のみを証跡とする。アーカイブ完了ではない。
 後続writer枠での保管・再読・冪等upsertは本検査の範囲外。
@@ -279,7 +358,7 @@ sha256突合せ→上記command」の順で再現できる。
   最新期2024-S1・米国対外合計2,072,394,613,197で不変 (系列再取得で一致)。
   原典IMF直結は到達不可 (data.imf.org該当dataset 404・旧SDMXはDNS不通・
   新APIは登録制。以上はimf-cpis.tsの到達確認記録どおり) のため、
-  鏡のfreshnessのみを主張し、原典最新期との照合は未実施と明記する。
+  鏡のfreshnessのみを主張し、原典最新期との照合は未実施と明記する（集計ID:MF-imf-official）。
 - MOF週次: week.csvが文書記録とバイト同一 (255,655・de9ba984…)・
   最新週2026-W37 (9/6-12)。月次も2026-08が最新 (9/27記録どおり)。
 - JPX投資部門別週次: 一覧が文書記録とバイト同一 (39,782・56aa444f…)・

@@ -4,6 +4,109 @@ Issue [#146](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/146)
 担当A（財務・銘柄対応・有報定量・IR・優待/配当）の実データ検証記録。
 株価/indicators・moneyflow は他 worker の担当で本レポートの対象外。
 
+<!-- audit-report:BEGIN fundamentals -->
+## 生成集計ブロック: fundamentals（機械生成・手編集禁止）
+
+生成元 `docs/test-logs/data-audit-2026-09-28.results.json`（contract v1・Issue #151）。本文の要約層は数値を再入力せず集計ID参照にすること。
+自動 checker は語義・源泉の正確性を保証しない。原因解釈は本文と証拠項目IDで人がレビューすること。
+
+監査スナップショット日 2026-09-28 / 最新確定営業日 2026-09-28 / 保存系列最新 ドメイン別（下記注）
+日付注: ドメイン別に最新が異なるため単一日付にまとめない（財務の実績期末は最大2026-08-31・IR日次は09-25・優待snapshotは09-13）。IR当日09-28分はcatchup前のため未取込。
+
+### 母集団
+
+| 項目ID | 内容 | n |
+|---|---|---:|
+| FIN-d1-rows | 財務 source D1 jss_financials 行数（34列） | 34659 |
+| FIN-journal-rows | 財務 journal 行数（#144 proof） | 34663 |
+| FIN-cache-zips | 財務 raw cache ZIP 数 | 34663 |
+| YUHO-docs | 有報 yuho_documents 文書数 | 37974 |
+| YUHO-order-facts | 有報 yuho_order_facts 行数 | 41368 |
+| YUHO-overseas-facts | 有報 yuho_overseas_facts 行数 | 21258 |
+| YUHO-overseas-ok | 有報海外ok文書数（geo_rows/cols） | 3675 |
+| IR-all | IR ir_disclosures 全行数 | 48319 |
+| IR-30d | IR 直近30日行数 | 2909 |
+| YUTAI-benefits | 優待 yutai_benefits 行数 | 8295 |
+| YUTAI-brands | 優待銘柄数 | 1661 |
+| OTAKARA-fin | otakara_stock_financials 行数 | 1636 |
+| F5-fx-row | F5 外貨未換算 census 該当行（147A） | 1 |
+| FIN-543A-cell | 543A 原表対照セル（源泉異常値と確定） | 1 |
+
+### 内訳集計（合計は内訳から計算）
+
+| 項目ID | 内訳 | 合計 | 状態 | 出所 |
+|---|---|---:|---|---|
+| FIN-journal-reconcile | D1行34659＋同一キー合流（3911/5035/6071中間・7509 1Q）4 | 34663 | 確認済み | 既存dumpから再導出 |
+| FIN-d1-journal-values | 全field完全一致34619＋license_tagのみ差40 | 34659 | 確認済み | 報告書記載値 |
+> FIN-d1-journal-values: 40行はlicense_tagのみ差（stricter維持の設計どおり・数値影響なし）
+| FIN-samples | EDINET標本15＋TDnet標本12 | 27 | 確認済み | 証拠を見た人手判定 |
+> FIN-samples: 層別構成は人手選定。27/27 PASSは保存dumpから再確認
+| FIN-nohistory | 種類株5桁（契約外）6＋正規4桁missing4 | 10 | 確認済み | 証拠を見た人手判定 |
+> FIN-nohistory: 正規4桁4は未取込の観測。種類株6は契約外（欠落ではない）
+| F2-docs | ok_geo_rows文書51＋ok_geo_cols文書8 | 59 | 不一致あり | 既存dumpから再導出 |
+| F2-facts | geo_rows行283＋geo_cols行44 | 327 | 不一致あり | 既存dumpから再導出 |
+| F2-bands | 1〜5%22＋5〜10%6＋10〜50%17＋50〜100%（最大99.4% S100T6Q9）14 | 59 | 不一致あり | 既存dumpから再導出 |
+| F2-cause | aggregate-before-dedup確定1＋原因未確認58 | 59 | 不一致あり | 報告書記載値 |
+> F2-cause: 確定はS100J2E7の純replayのみ。残りは候補であり一般化しない
+| F3-yield | 旧日付frozen行25＋fresh（09-13）行7 | 32 | 不一致あり | 既存dumpから再導出 |
+> F3-yield: frozen 25行のうち2行は丸め級（実害なし）。原因の内容・時期は未確認
+| F4-lottery | 純抽選（spec違反）14＋境界（7791・断定不可）1＋適正併記23 | 38 | 不一致あり | 証拠を見た人手判定 |
+> F4-lottery: 純抽選/境界/併記の分離は原文を読んだ人手判定。38違反ではない
+| F4-codes | 純抽選銘柄5＋境界銘柄1＋併記銘柄11 | 17 | 不一致あり | 証拠を見た人手判定 |
+| SPOT-3x3 | テキスト索引/doc期3＋IR sentiment本文方向3＋優待要約条件3 | 9 | 確認済み | 報告書記載値 |
+> SPOT-3x3: 3例超の一般化はしない
+| IR-0928-catchup | 取込済み0＋未取込197 | 197 | 未検証 | 報告書記載値 |
+> IR-0928-catchup: catchup前のためD1未取込。未確認は合格に数えない
+
+### 照合カバレッジ
+
+| 項目ID | 内容 | 一致/母数 | 状態 |
+|---|---|---:|---|
+| FIN-rawpage | F1 raw_page_id反映（解消後09:30再読・journal一致） | 34659/34659 | 確認済み |
+| FIN-samples-pass | 財務27標本の独立再導出PASS | 27/27 | 確認済み |
+| IR-day-0924 | IR 09-24の日次突合（集合・title・pubdate・code一致） | 138/138 | 確認済み |
+| IR-day-0925 | IR 09-25の日次突合（集合・title・pubdate・code一致） | 202/202 | 確認済み |
+
+### 隔離候補・保留
+
+隔離候補・保留ともに該当なし。A所掌に隔離表はない（remedyはownerの再取込・guard修正・spec判断）
+
+### 証拠
+
+| 項目ID | path | sha256 | bytes | 時刻state | 備考 |
+|---|---|---|---|---|---|
+| EV-journal | `/tmp/kabulab-financial-full-instant-final-audit.jsonl` | 3be26f4dee1db4881ddbce3d478ba4b68cb9e6b9408410b242798db8e954364e | 80645487 | ファイルmtimeのみ（観測時刻ではない） | §2.1 read-only再集計。内訳・SHA prefixは記録値と一致 |
+| EV-d1-dump | `/tmp/d1_fin.jsonl` | bb910db12f012f6b8a550d3b5a74ccc66913ec3858b8d580dce844054c45607d | 31042428 | ファイルmtimeのみ（観測時刻ではない） | D1財務dump 34659行（SELECTのみ） |
+| EV-sample-verify | `/tmp/sample_verify.json` | fbda7e2287802eac8756258a90b4d37c3d88e63f734b2498ac5b57d3469503b5 | 42276 | ファイルmtimeのみ（観測時刻ではない） | 27標本の再導出結果（27/27 PASS） |
+| EV-fullkey-script | `/tmp/overseas_fullkey_reagg.py` | 8f69d715977a4018032f8cc4b9942b0b57e81453e5d5547abcbbe864f2bcbd7b | 2968 | ファイルmtimeのみ（観測時刻ではない） | F2 fullkey再集計。SHAは記録値と一致 |
+| EV-replay-script | `/tmp/overseas_replay_j2e7.mts` | 5b6b7fafb4362aa126bb231946f21f715264a643de81fb223e842e1cb5399dc2 | 2019 | ファイルmtimeのみ（観測時刻ではない） | F2 S100J2E7純replay。SHAは記録値と一致 |
+| EV-yield-script | `/tmp/yield_recompute.py` | 33a11e2e13674e55658e8b984b91e14e8f9c7271faa5ba08fb7f6d51e350d571 | 1860 | ファイルmtimeのみ（観測時刻ではない） | F3 Python純port。SHAは記録値と一致 |
+| EV-viol59-facts | `/tmp/viol59_facts.json` | 7cc3e0098975fa383c944d95b2f2a771238c3c7fac33b6fbb80316a24dd71caf | 114145 | ファイルmtimeのみ（観測時刻ではない） | F2 59群327行の実集合 |
+| EV-viol59-docs | `/tmp/viol59_docs.json` | f6a14c91389f9b1aa8fa3c8695e9a1afb464634e3e28e8b9bf225afcba7ca426 | 11604 | ファイルmtimeのみ（観測時刻ではない） | F2 59文書の文書属性 |
+| EV-lottery38 | `/tmp/lottery38.json` | 4d277140d8dc63b3d3e0bf8d21e173edcc7381d1f60435550d9ed51afdbf34b2 | 32710 | ファイルmtimeのみ（観測時刻ではない） | F4抽選keyword候補母集団38行・17銘柄 |
+| EV-yield-fin | `/tmp/yield_fin.json` | 7c2c8a3506f940448280132c9dd728e37854f93fe2b8bb35e1c4c9f8f0675b5e | 226593 | ファイルmtimeのみ（観測時刻ではない） | F3再計算入力（otakara側1636行） |
+| EV-yield-ben | `/tmp/yield_ben.json` | dc7f54139509b68146ee44c4b29b759f98cdf0d2481bdce16d99d9faeeaa6627 | 543601 | ファイルmtimeのみ（観測時刻ではない） | F3再計算入力（benefits側5331行） |
+| EV-edinet-j2e7 | `/tmp/edinet_S100J2E7_t1.zip` | 770bd1dad6a3d947b812b54b4bb75364f39c1b66389ff38c8a6e1505ed04eb53 | 590189 | ファイルmtimeのみ（観測時刻ではない） | F2 replay用raw。SHAは記録値と一致 |
+| EV-edinet-yk16 | `/tmp/edinet_S100YK16_t1.zip` | b15cb67a6cd6de6c6cb7f69e6f8585ade77c9760f3094c34575a4e18b857fd89 | 744320 | ファイルmtimeのみ（観測時刻ではない） | 543A原表1セル対照用XBRL。SHAは記録値と一致 |
+| EV-edinet-yiex | `/tmp/edinet_S100YIEX_t5.zip` | 1094e3c6360f1aac393ceccb09eed756bb1cc407c1b259aa1aa0cdcc8eb2d4c1 | 125754 | ファイルmtimeのみ（観測時刻ではない） | §4.4原文CSV（8708）。SHAは記録値と一致 |
+| EV-edinet-yg9i | `/tmp/edinet_S100YG9I_t5.zip` | 4a507aae555f695c9c9028e2768a22397803905727297a4d630b44a812283a93 | 90820 | ファイルmtimeのみ（観測時刻ではない） | §4.4原文CSV（8707）。SHAは記録値と一致 |
+| EV-edinet-yeu4 | `/tmp/edinet_S100YEU4_t5.zip` | e50f5f8bb9747621c74f72e1fe4a7e5736b304ce1ba5bb869dbcc25da41860b1 | 112150 | ファイルmtimeのみ（観測時刻ではない） | §4.4原文CSV（8706）。SHAは記録値と一致 |
+
+### 未検証範囲（合格に数えない）
+
+- IR当日09-28の197件（catchup前でD1未取込）
+- F2残り58文書の原因（replayはS100J2E7の1文書のみ。58文書分の再fetchは非実施）
+- F3入力変化の内容・時期（確定手段はsummary:import --apply実行履歴との突合せ）
+- F4境界7791の分類・8508要約不一致の原因
+- F5のspec判断（外貨handlingは未定義）
+- 543A原表対照は1セルのみ（全件の原表対照ではない）
+- 財務の決算期変更51候補の真偽（標本1のみPASS）
+- TDnet doc_id無し2785行のNotion page全件到達（標本3のみ）
+- EDINET訂正報告書と元報告書の対応評価
+<!-- audit-report:END fundamentals -->
+
+
+
 ## 0. 要旨
 
 - 監査ブランチ `audit/fundamentals-2026-09-28`（`origin/main` 18d5939 = #145 から分岐、開始時 clean）。
@@ -17,32 +120,32 @@ Issue [#146](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/146)
 
 | # | 内容 | 重要度 | 状態 |
 |---|---|---|---|
-| 1 | `#145` の `raw_page_id` が source D1 で全件 NULL（朝の観測）→ 09:30 UTC 再読で 34,659/34,659 反映・全件 journal 一致を確認 | 中（解消済み） | owner 同期で解消、再検証 PASS |
-| 2 | 有報海外売上で 59 文書が 1% 合計整合 rule に違反（最大乖離 99.4%、画面の内訳と合計が不一致）。S100J2E7 は現行 code の純 replay で保存行を完全再現（aggregate-before-dedup。他 58 の原因は未確認・候補） | 高（対象行） | 未修復・owner 対応待ち（再取込だけでは再発する。code fix が必要） |
-| 3 | 優待利回り 32 行が現入力再計算と不一致（うち fresh 7 行。2683 は画面 1.01% に対し現入力再計算 5.04%。原因は候補） | 低〜中 | 未修復・owner 対応待ち |
-| 4 | 純抽選 14 行（5 銘柄）に推定金額あり（spec は null。3903 は画面に「推定 16,000,000円」）。抽選 keyword 38 行は候補母集団であり 38 違反ではない | 中 | 未修復・owner 対応待ち |
-| 5 | （候補）147A の `estimated_value=180` は原文 `180USD` の未換算（円建ての列に USD 値。spec の外貨 handling は未定義） | 低 | 未修復・owner の spec 判断待ち |
+| 1 | `#145` の `raw_page_id` が source D1 で全件 NULL（朝の観測）→ 09:30 UTC 再読で全件反映・全件 journal 一致を確認（集計ID:FIN-rawpage） | 中（解消済み） | owner 同期で解消、再検証 PASS |
+| 2 | 有報海外売上の合計不一致（集計ID:F2-docs・集計ID:F2-facts・集計ID:F2-bands。最大乖離 99.4%、画面の内訳と合計が不一致）。S100J2E7 は現行 code の純 replay で保存行を完全再現（aggregate-before-dedup。原因の内訳は集計ID:F2-cause） | 高（対象行） | 未修復・owner 対応待ち（再取込だけでは再発する。code fix が必要） |
+| 3 | 優待利回りが現入力再計算と不一致（集計ID:F3-yield。2683 は画面 1.01% に対し現入力再計算 5.04%。原因は候補） | 低〜中 | 未修復・owner 対応待ち |
+| 4 | 純抽選に推定金額あり（集計ID:F4-lottery・集計ID:F4-codes。spec は null。3903 は画面に「推定 16,000,000円」）。抽選 keyword 行は候補母集団であり全件違反ではない | 中 | 未修復・owner 対応待ち |
+| 5 | （候補）147A の `estimated_value=180` は原文 `180USD` の未換算（円建ての列に USD 値。spec の外貨 handling は未定義。集計ID:F5-fx-row） | 低 | 未修復・owner の spec 判断待ち |
 
 - 観測（Finding 外）: 事業タグ根拠文の 2 文結合（継ぎ目マーカーなし・§4.4）、8508 の要約/掲載文不一致（§6.5）、IR 軽微 2 件（§5.3）。
 - 結論の層別（全件/標本/未確認 × 取得/保存/表示/鮮度。未確認は合格に数えない）:
 
 | Finding | 層 | 全件 | 標本 | 未確認 |
 |---|---|---|---|---|
-| F1（解消済み） | 保存（sync 遅延） | 34,659 全件一致 | 27 原本到達 | なし（§8-3 の relation 側を除く） |
-| F2 | 保存（parser＋dedup）→表示 | 59 文書の違反確定 | 原因確定は 1 文書（replay） | 58 文書の原因 |
-| F3 | 保存（stale）→表示 | 32 行の差分確定 | — | 差分の内容・時期（候補） |
-| F4 | 保存（推定値）→表示 | 候補 38 行の全読＋ranking 全件再計算 | — | 境界 7791 の分類 |
-| F5 | 保存（単位）→表示 | 外貨 census 1 行 | — | spec 判断（候補） |
-| 財務取得 | 取得 | journal↔cache 全件＋D1↔journal 全件 | 27 標本＋原表 1 セル | 全件の原表対照 |
-| IR 当日分 | 鮮度 | — | — | 09-28 の 197 件（catchup 前） |
+| F1（解消済み） | 保存（sync 遅延） | 集計ID:FIN-rawpage 全件一致 | 集計ID:FIN-samples 原本到達 | なし（§8-3 の relation 側を除く） |
+| F2 | 保存（parser＋dedup）→表示 | 集計ID:F2-docs の違反確定 | 集計ID:F2-cause の確定分（replay） | 集計ID:F2-cause の未確認分 |
+| F3 | 保存（stale）→表示 | 集計ID:F3-yield の差分確定 | — | 差分の内容・時期（候補） |
+| F4 | 保存（推定値）→表示 | 集計ID:F4-lottery の全読＋ranking銘柄別再計算 | — | 境界 7791 の分類 |
+| F5 | 保存（単位）→表示 | 外貨 census 集計ID:F5-fx-row | — | spec 判断（候補） |
+| 財務取得 | 取得 | 集計ID:FIN-journal-reconcile＋集計ID:FIN-d1-journal-values | 集計ID:FIN-samples＋集計ID:FIN-543A-cell | 全件の原表対照 |
+| IR 当日分 | 鮮度 | — | — | 集計ID:IR-0928-catchup（catchup 前） |
 - 分野別の結論:
-  - 財務・銘柄対応: 全 34,659 行の D1↔journal 照合は数値完全一致（license 40 行は stricter 維持の設計どおり・証拠あり）。
-    層別 27 標本の独立再導出・Notion 原本到達・公開索引の振る舞いも PASS。543A 異常値は原表表示との 1 セル対照で源泉異常値と確定（§2.5）。
-    財務履歴なし 10 社は種類株 6（契約外）と正規 4 桁 4（正規 missing）に分離（§3）。誤り 0（Finding 1 は解消済み）。
-  - 有報定量: 受注は標本・構造とも PASS。海外は Finding 2 の 59 文書が誤り（原因の確定は 1 文書のみ、残り 58 は候補）。
-    テキスト索引・事業タグ・競合は最小 3 例検証で PASS（ただし根拠文の結合表示に観測 1 件。§4.4）。
-  - IR: 直近 30 日 2,909 行の構造・2 日分の全件突合・タグ再計算は PASS。sentiment の本文方向 3 例は一致（§5.2）。軽微な観測 2 件（§5.3）。
-  - 優待/配当: 構造・スコア再計算・銘柄対応は PASS。Finding 3・4・5 が誤り/候補（派生値・推定値・単位）。要約条件 3 例のうち 1 件に不一致の観測（§6.5）。
+  - 財務・銘柄対応: D1↔journal 照合は数値完全一致（集計ID:FIN-d1-journal-values。license 差は同ID内訳の stricter 維持どおり・証拠あり）。
+    層別標本の独立再導出（集計ID:FIN-samples）・Notion 原本到達・公開索引の振る舞いも PASS。543A 異常値は原表表示との対照（集計ID:FIN-543A-cell）で源泉異常値と確定（§2.5）。
+    財務履歴なし社は分離（集計ID:FIN-nohistory。§3）。誤り 0（Finding 1 は解消済み）。
+  - 有報定量: 受注は標本・構造とも PASS。海外は Finding 2 の誤り（集計ID:F2-docs。原因の内訳は集計ID:F2-cause）。
+    テキスト索引・事業タグ・競合は最小検証で PASS（集計ID:text-index。ただし根拠文の結合表示に観測 1 件。§4.4）。
+  - IR: 直近 30 日の構造（集計ID:IR-30d）・2 日分の全件突合（集計ID:IR-day-0924・集計ID:IR-day-0925）・タグ再計算は PASS。sentiment の本文方向は一致（集計ID:ir-sentiment。§5.2）。軽微な観測 2 件（§5.3）。
+  - 優待/配当: 構造・スコア再計算・銘柄対応は PASS。Finding 3・4・5 が誤り/候補（派生値・推定値・単位）。要約条件の最小検証（集計ID:yutai-summary）のうち 1 件に不一致の観測（§6.5）。
 
 ## 1. 監査条件
 
@@ -429,38 +532,36 @@ S100YG9I `4a507aae555f695c9c9028e2768a22397803905727297a4d630b44a812283a93`・S1
 ### F1（解消済み）raw_page_id 未反映 → 反映確認
 
 - repro: `SELECT COUNT(*), COUNT(raw_page_id) FROM jss_financials`。
-- 観測1: 2026-09-28 朝（08:42Z 以前）→ 34,659 / 0。観測2: 2026-09-28 09:30:53 UTC → 34,659 / 34,659。
-- 34,659 件の値を journal provenance と照合し全件一致（mismatch 0・UUID 不良 0）。
+- 観測1: 2026-09-28 朝（08:42Z 以前）→ 全件 NULL。観測2: 2026-09-28 09:30:53 UTC → 全件反映（集計ID:FIN-rawpage）。
+- 値を journal provenance と照合し全件一致（同ID。mismatch 0・UUID 不良 0）。
 - 重要度: 中（D1→Notion 原本導線が NULL）。影響集合: 全財務行（一時的）。監査側の書込なし。
 
 ### F2（未修復）海外売上の合計不一致 59 文書
 
-- repro: §9 の SQL（文書単位）＋ fullkey 再集計（`document_id`＋期＋scope＋pattern。59 group = 59 文書で 1:1、59/59 違反）。
-- 重要度: 高（対象行）。影響集合: 59 文書（`ok_geo_rows/cols` 3,675 の 1.6%。7203×11・2802×7・9147×7 他 16 コード。
+- repro: §9 の SQL（文書単位）＋ fullkey 再集計（`document_id`＋期＋scope＋pattern。group＝文書で 1:1、全群違反。集計ID:F2-docs）。
+- 重要度: 高（対象行）。影響集合: 集計ID:F2-docs（ok 集計ID:YUHO-overseas-ok の 1.6%。7203×11・2802×7・9147×7 他 16 コード。
   doc_id 清单は private `/tmp/yuho_viol59.json`）。画面の内訳と合計が不一致（最大 99.4%・S100T6Q9）。
-- 原因: S100J2E7 は aggregate-before-dedup と確定（純 replay で保存 5 行を完全再現。§4.3）。残り 58 は候補・未確認。
+- 原因: S100J2E7 は aggregate-before-dedup と確定（純 replay で保存 5 行を完全再現。§4.3）。残りは候補・未確認（集計ID:F2-cause）。
   旧判定「現行 code 生成不能/stale」は撤回。再取込だけでは再発するため remedy は code fix＋force 再取込。owner 対応。
 
 ### F3（未修復）優待利回りの stale 32 行（fresh 7 行）
 
 - repro: §9 の `calcYutaiYield` 再計算 CTE（Python port と一致。±1e-9）。
-- 重要度: 低〜中。影響集合: fresh 7 行（2683: 画面 1.01% vs 現入力再計算 5.04%。5.04 は企業一次確定値でない）+ frozen 25 行
-  （うち 2 行は丸め級で実害なし）。
+- 重要度: 低〜中。影響集合: 集計ID:F3-yield（2683: 画面 1.01% vs 現入力再計算 5.04%。5.04 は企業一次確定値でない。丸め級 2 行は実害なし）。
 - 原因: 候補（rebuild 後の入力変化。「現入力≠rebuild 入力」は確定、内容・時期は未確認。確定手段は import 履歴突合せ）。
   remedy は owner の rebuild/process fix。
 
 ### F4（未修復）純抽選優待の推定金額 14 行（5 銘柄）
 
-- repro: §9 の keyword 抽出は候補母集団 38 行。原文分離で純抽選 14 行（3189×2/3903/3939/7578×8/8508×2）＋境界 1 行（7791）
-  ＋適正併記 23 行。3903 は画面「推定 16,000,000円」。
+- repro: §9 の keyword 抽出は候補母集団（集計ID:F4-lottery）。原文分離の内訳は同ID（純抽選の銘柄別内訳は 3189×2/3903/3939/7578×8/8508×2）＋境界 7791。銘柄数は集計ID:F4-codes。3903 は画面「推定 16,000,000円」。
 - 重要度: 中。影響集合: per-benefit 表示の誤誘導（純抽選行）。ranking は純抽選値が入っていないが、
-  境界 7791（12.15%）は ranking 内のため owner 分類次第で影響が確定する（旧「全 38 影響なし」は撤回）。
+  境界 7791（12.15%）は ranking 内のため owner 分類次第で影響が確定する（旧「候補母集団全件への影響なし」は撤回）。
 - 原因: 09-13 rule 以前の値 + guard の抽選 handling 欠如。remedy は owner の re-import + guard fix。
 
 ### F5（候補・未修復）147A の外貨単位未換算
 
 - repro: §6.4。`estimated_value=180` vs 原文 `180USD`（600 株・4 月）。
-- 重要度: 低。影響集合: 1 行（利回りの過小表示）。spec の外貨 handling が未定義のため owner の spec 判断待ち。
+- 重要度: 低。影響集合: 集計ID:F5-fx-row（利回りの過小表示）。spec の外貨 handling が未定義のため owner の spec 判断待ち。
 
 ## 8. 未検証範囲（明示）
 

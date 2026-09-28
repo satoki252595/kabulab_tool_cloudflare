@@ -1,0 +1,298 @@
+{
+  "contractVersion": 1,
+  "auditDate": "2026-09-28",
+  "issue": 151,
+  "note": "Issue #146 の A/B/C 実データ監査（2026-09-28）の公開可能集約。レポート本文の正準数値はこの JSON からのみ生成する（scripts/audit/render-data-audit.ts）。total は内訳の合計と検査で一致を強制し、手入力の重複転記をしない。人間の原文判定は source=evidence-reviewed として自動計算と分離する。秘密値・raw 全体・private Notion ID・署名 URL を含めない。",
+  "sections": {
+    "fundamentals": {
+      "report": "docs/test-logs/data-audit-fundamentals-2026-09-28.md",
+      "blockId": "fundamentals",
+      "businessDay": "2026-09-28",
+      "snapshotDate": "2026-09-28",
+      "savedLatest": null,
+      "dateNote": "ドメイン別に最新が異なるため単一日付にまとめない（財務の実績期末は最大2026-08-31・IR日次は09-25・優待snapshotは09-13）。IR当日09-28分はcatchup前のため未取込。",
+      "populations": [
+        { "id": "FIN-d1-rows", "label": "財務 source D1 jss_financials 行数（34列）", "n": 34659 },
+        { "id": "FIN-journal-rows", "label": "財務 journal 行数（#144 proof）", "n": 34663 },
+        { "id": "FIN-cache-zips", "label": "財務 raw cache ZIP 数", "n": 34663 },
+        { "id": "YUHO-docs", "label": "有報 yuho_documents 文書数", "n": 37974 },
+        { "id": "YUHO-order-facts", "label": "有報 yuho_order_facts 行数", "n": 41368 },
+        { "id": "YUHO-overseas-facts", "label": "有報 yuho_overseas_facts 行数", "n": 21258 },
+        { "id": "YUHO-overseas-ok", "label": "有報海外ok文書数（geo_rows/cols）", "n": 3675 },
+        { "id": "IR-all", "label": "IR ir_disclosures 全行数", "n": 48319 },
+        { "id": "IR-30d", "label": "IR 直近30日行数", "n": 2909 },
+        { "id": "YUTAI-benefits", "label": "優待 yutai_benefits 行数", "n": 8295 },
+        { "id": "YUTAI-brands", "label": "優待銘柄数", "n": 1661 },
+        { "id": "OTAKARA-fin", "label": "otakara_stock_financials 行数", "n": 1636 },
+        { "id": "F5-fx-row", "label": "F5 外貨未換算 census 該当行（147A）", "n": 1, "note": "spec判断待ちの候補" },
+        { "id": "FIN-543A-cell", "label": "543A 原表対照セル（源泉異常値と確定）", "n": 1, "note": "当該1セルのみ。全件の原表対照ではない" }
+      ],
+      "aggregates": [
+        {
+          "id": "FIN-journal-reconcile", "label": "journal と D1 の行対応（同一キー合流4）",
+          "total": 34663, "state": "verified", "source": "recomputed",
+          "parts": [
+            { "id": "d1-rows", "label": "D1行", "n": 34659 },
+            { "id": "merged-keys", "label": "同一キー合流（3911/5035/6071中間・7509 1Q）", "n": 4 }
+          ]
+        },
+        {
+          "id": "FIN-d1-journal-values", "label": "D1↔journal 全行値照合（27 field）",
+          "total": 34659, "state": "verified", "source": "report-stated",
+          "note": "40行はlicense_tagのみ差（stricter維持の設計どおり・数値影響なし）",
+          "parts": [
+            { "id": "full-27field", "label": "全field完全一致", "n": 34619 },
+            { "id": "license-only", "label": "license_tagのみ差", "n": 40 }
+          ]
+        },
+        {
+          "id": "FIN-samples", "label": "財務層別標本の独立再導出",
+          "total": 27, "state": "verified", "source": "evidence-reviewed",
+          "note": "層別構成は人手選定。27/27 PASSは保存dumpから再確認",
+          "parts": [
+            { "id": "edinet", "label": "EDINET標本", "n": 15 },
+            { "id": "tdnet", "label": "TDnet標本", "n": 12 }
+          ]
+        },
+        {
+          "id": "FIN-nohistory", "label": "財務履歴なしcore 10社の分離",
+          "total": 10, "state": "verified", "source": "evidence-reviewed",
+          "note": "正規4桁4は未取込の観測。種類株6は契約外（欠落ではない）",
+          "parts": [
+            { "id": "kind-stocks", "label": "種類株5桁（契約外）", "n": 6 },
+            { "id": "regular-missing", "label": "正規4桁missing", "n": 4 }
+          ]
+        },
+        {
+          "id": "F2-docs", "label": "F2 海外売上合計不一致の文書内訳",
+          "total": 59, "state": "mismatch", "source": "recomputed",
+          "parts": [
+            { "id": "geo-rows-docs", "label": "ok_geo_rows文書", "n": 51 },
+            { "id": "geo-cols-docs", "label": "ok_geo_cols文書", "n": 8 }
+          ]
+        },
+        {
+          "id": "F2-facts", "label": "F2 59文書の保存行内訳",
+          "total": 327, "state": "mismatch", "source": "recomputed",
+          "parts": [
+            { "id": "geo-rows-facts", "label": "geo_rows行", "n": 283 },
+            { "id": "geo-cols-facts", "label": "geo_cols行", "n": 44 }
+          ]
+        },
+        {
+          "id": "F2-bands", "label": "F2 乖離率分布（1%超のみ）",
+          "total": 59, "state": "mismatch", "source": "recomputed",
+          "parts": [
+            { "id": "band-1-5", "label": "1〜5%", "n": 22 },
+            { "id": "band-5-10", "label": "5〜10%", "n": 6 },
+            { "id": "band-10-50", "label": "10〜50%", "n": 17 },
+            { "id": "band-50-100", "label": "50〜100%（最大99.4% S100T6Q9）", "n": 14 }
+          ]
+        },
+        {
+          "id": "F2-cause", "label": "F2 原因確定の内訳",
+          "total": 59, "state": "mismatch", "source": "report-stated",
+          "note": "確定はS100J2E7の純replayのみ。残りは候補であり一般化しない",
+          "parts": [
+            { "id": "replay-confirmed", "label": "aggregate-before-dedup確定", "n": 1 },
+            { "id": "unconfirmed", "label": "原因未確認", "n": 58 }
+          ]
+        },
+        {
+          "id": "F3-yield", "label": "F3 優待利回りの現入力再計算との不一致",
+          "total": 32, "state": "mismatch", "source": "recomputed",
+          "note": "frozen 25行のうち2行は丸め級（実害なし）。原因の内容・時期は未確認",
+          "parts": [
+            { "id": "frozen", "label": "旧日付frozen行", "n": 25 },
+            { "id": "fresh", "label": "fresh（09-13）行", "n": 7 }
+          ]
+        },
+        {
+          "id": "F4-lottery", "label": "F4 抽選keyword候補母集団の原文分離",
+          "total": 38, "state": "mismatch", "source": "evidence-reviewed",
+          "note": "純抽選/境界/併記の分離は原文を読んだ人手判定。38違反ではない",
+          "parts": [
+            { "id": "pure", "label": "純抽選（spec違反）", "n": 14 },
+            { "id": "boundary", "label": "境界（7791・断定不可）", "n": 1 },
+            { "id": "normal", "label": "適正併記", "n": 23 }
+          ]
+        },
+        {
+          "id": "F4-codes", "label": "F4 候補母集団の銘柄内訳",
+          "total": 17, "state": "mismatch", "source": "evidence-reviewed",
+          "parts": [
+            { "id": "pure-codes", "label": "純抽選銘柄", "n": 5 },
+            { "id": "boundary-codes", "label": "境界銘柄", "n": 1 },
+            { "id": "normal-codes", "label": "併記銘柄", "n": 11 }
+          ]
+        },
+        {
+          "id": "SPOT-3x3", "label": "最小3例検証（原文存在・期一致・code解決の範囲）",
+          "total": 9, "state": "verified", "source": "report-stated",
+          "note": "3例超の一般化はしない",
+          "parts": [
+            { "id": "text-index", "label": "テキスト索引/doc期", "n": 3 },
+            { "id": "ir-sentiment", "label": "IR sentiment本文方向", "n": 3 },
+            { "id": "yutai-summary", "label": "優待要約条件", "n": 3 }
+          ]
+        },
+        {
+          "id": "IR-0928-catchup", "label": "IR当日09-28分の取込状態",
+          "total": 197, "state": "unverified", "source": "report-stated",
+          "note": "catchup前のためD1未取込。未確認は合格に数えない",
+          "parts": [
+            { "id": "ingested", "label": "取込済み", "n": 0 },
+            { "id": "pending", "label": "未取込", "n": 197 }
+          ]
+        }
+      ],
+      "coverages": [
+        { "id": "FIN-rawpage", "label": "F1 raw_page_id反映（解消後09:30再読・journal一致）", "matched": 34659, "total": 34659, "state": "verified" },
+        { "id": "FIN-samples-pass", "label": "財務27標本の独立再導出PASS", "matched": 27, "total": 27, "state": "verified" },
+        { "id": "IR-day-0924", "label": "IR 09-24の日次突合（集合・title・pubdate・code一致）", "matched": 138, "total": 138, "state": "verified" },
+        { "id": "IR-day-0925", "label": "IR 09-25の日次突合（集合・title・pubdate・code一致）", "matched": 202, "total": 202, "state": "verified" }
+      ],
+      "quarantines": { "candidates": [], "holds": [], "note": "A所掌に隔離表はない（remedyはownerの再取込・guard修正・spec判断）" },
+      "evidence": [
+        { "id": "EV-journal", "path": "/tmp/kabulab-financial-full-instant-final-audit.jsonl", "sha256": "3be26f4dee1db4881ddbce3d478ba4b68cb9e6b9408410b242798db8e954364e", "bytes": 80645487, "timeState": "mtime-only", "note": "§2.1 read-only再集計。内訳・SHA prefixは記録値と一致" },
+        { "id": "EV-d1-dump", "path": "/tmp/d1_fin.jsonl", "sha256": "bb910db12f012f6b8a550d3b5a74ccc66913ec3858b8d580dce844054c45607d", "bytes": 31042428, "timeState": "mtime-only", "note": "D1財務dump 34659行（SELECTのみ）" },
+        { "id": "EV-sample-verify", "path": "/tmp/sample_verify.json", "sha256": "fbda7e2287802eac8756258a90b4d37c3d88e63f734b2498ac5b57d3469503b5", "bytes": 42276, "timeState": "mtime-only", "note": "27標本の再導出結果（27/27 PASS）" },
+        { "id": "EV-fullkey-script", "path": "/tmp/overseas_fullkey_reagg.py", "sha256": "8f69d715977a4018032f8cc4b9942b0b57e81453e5d5547abcbbe864f2bcbd7b", "bytes": 2968, "timeState": "mtime-only", "note": "F2 fullkey再集計。SHAは記録値と一致" },
+        { "id": "EV-replay-script", "path": "/tmp/overseas_replay_j2e7.mts", "sha256": "5b6b7fafb4362aa126bb231946f21f715264a643de81fb223e842e1cb5399dc2", "bytes": 2019, "timeState": "mtime-only", "note": "F2 S100J2E7純replay。SHAは記録値と一致" },
+        { "id": "EV-yield-script", "path": "/tmp/yield_recompute.py", "sha256": "33a11e2e13674e55658e8b984b91e14e8f9c7271faa5ba08fb7f6d51e350d571", "bytes": 1860, "timeState": "mtime-only", "note": "F3 Python純port。SHAは記録値と一致" },
+        { "id": "EV-viol59-facts", "path": "/tmp/viol59_facts.json", "sha256": "7cc3e0098975fa383c944d95b2f2a771238c3c7fac33b6fbb80316a24dd71caf", "bytes": 114145, "timeState": "mtime-only", "note": "F2 59群327行の実集合" },
+        { "id": "EV-viol59-docs", "path": "/tmp/viol59_docs.json", "sha256": "f6a14c91389f9b1aa8fa3c8695e9a1afb464634e3e28e8b9bf225afcba7ca426", "bytes": 11604, "timeState": "mtime-only", "note": "F2 59文書の文書属性" },
+        { "id": "EV-lottery38", "path": "/tmp/lottery38.json", "sha256": "4d277140d8dc63b3d3e0bf8d21e173edcc7381d1f60435550d9ed51afdbf34b2", "bytes": 32710, "timeState": "mtime-only", "note": "F4抽選keyword候補母集団38行・17銘柄" },
+        { "id": "EV-yield-fin", "path": "/tmp/yield_fin.json", "sha256": "7c2c8a3506f940448280132c9dd728e37854f93fe2b8bb35e1c4c9f8f0675b5e", "bytes": 226593, "timeState": "mtime-only", "note": "F3再計算入力（otakara側1636行）" },
+        { "id": "EV-yield-ben", "path": "/tmp/yield_ben.json", "sha256": "dc7f54139509b68146ee44c4b29b759f98cdf0d2481bdce16d99d9faeeaa6627", "bytes": 543601, "timeState": "mtime-only", "note": "F3再計算入力（benefits側5331行）" },
+        { "id": "EV-edinet-j2e7", "path": "/tmp/edinet_S100J2E7_t1.zip", "sha256": "770bd1dad6a3d947b812b54b4bb75364f39c1b66389ff38c8a6e1505ed04eb53", "bytes": 590189, "timeState": "mtime-only", "note": "F2 replay用raw。SHAは記録値と一致" },
+        { "id": "EV-edinet-yk16", "path": "/tmp/edinet_S100YK16_t1.zip", "sha256": "b15cb67a6cd6de6c6cb7f69e6f8585ade77c9760f3094c34575a4e18b857fd89", "bytes": 744320, "timeState": "mtime-only", "note": "543A原表1セル対照用XBRL。SHAは記録値と一致" },
+        { "id": "EV-edinet-yiex", "path": "/tmp/edinet_S100YIEX_t5.zip", "sha256": "1094e3c6360f1aac393ceccb09eed756bb1cc407c1b259aa1aa0cdcc8eb2d4c1", "bytes": 125754, "timeState": "mtime-only", "note": "§4.4原文CSV（8708）。SHAは記録値と一致" },
+        { "id": "EV-edinet-yg9i", "path": "/tmp/edinet_S100YG9I_t5.zip", "sha256": "4a507aae555f695c9c9028e2768a22397803905727297a4d630b44a812283a93", "bytes": 90820, "timeState": "mtime-only", "note": "§4.4原文CSV（8707）。SHAは記録値と一致" },
+        { "id": "EV-edinet-yeu4", "path": "/tmp/edinet_S100YEU4_t5.zip", "sha256": "e50f5f8bb9747621c74f72e1fe4a7e5736b304ce1ba5bb869dbcc25da41860b1", "bytes": 112150, "timeState": "mtime-only", "note": "§4.4原文CSV（8706）。SHAは記録値と一致" }
+      ],
+      "unverified": [
+        "IR当日09-28の197件（catchup前でD1未取込）",
+        "F2残り58文書の原因（replayはS100J2E7の1文書のみ。58文書分の再fetchは非実施）",
+        "F3入力変化の内容・時期（確定手段はsummary:import --apply実行履歴との突合せ）",
+        "F4境界7791の分類・8508要約不一致の原因",
+        "F5のspec判断（外貨handlingは未定義）",
+        "543A原表対照は1セルのみ（全件の原表対照ではない）",
+        "財務の決算期変更51候補の真偽（標本1のみPASS）",
+        "TDnet doc_id無し2785行のNotion page全件到達（標本3のみ）",
+        "EDINET訂正報告書と元報告書の対応評価"
+      ]
+    },
+    "moneyflow": {
+      "report": "docs/test-logs/data-audit-moneyflow-2026-09-28.md",
+      "blockId": "moneyflow",
+      "businessDay": "2026-09-28",
+      "snapshotDate": "2026-09-28",
+      "savedLatest": "2026-09-25",
+      "dateNote": "R1の保存最新は09-25。9/28営業日分は未反映（次回日次jobで反映見込み）。",
+      "populations": [
+        { "id": "MF-specs", "label": "moneyflow検査spec数", "n": 25 },
+        { "id": "MF-r1-universe", "label": "R1母集団（active×内国普通株）", "n": 3700 },
+        { "id": "MF-notion-dbs", "label": "Notion確認DB数", "n": 4 }
+      ],
+      "aggregates": [
+        {
+          "id": "MF-rows-total", "label": "25spec全件構造検査の行合計",
+          "total": 5121, "state": "verified", "source": "report-stated",
+          "note": "旧版ヘッダの5633は集計誤記。正は内訳合計5121",
+          "parts": [
+            { "id": "mf-coingecko", "label": "coingecko-global", "n": 13 },
+            { "id": "mf-equity-w", "label": "jpx-investor-equity-weekly", "n": 240 },
+            { "id": "mf-mof-w", "label": "mof-portfolio-flows-weekly", "n": 286 },
+            { "id": "mf-deriv-w", "label": "jpx-derivatives-investor-weekly", "n": 484 },
+            { "id": "mf-deriv-oi", "label": "jpx-derivatives-investor-futures-oi", "n": 134 },
+            { "id": "mf-cftc", "label": "cftc-cot-jpy", "n": 10 },
+            { "id": "mf-global", "label": "global-indices", "n": 221 },
+            { "id": "mf-equity-m", "label": "jpx-investor-equity-monthly", "n": 240 },
+            { "id": "mf-etf", "label": "jpx-investor-etf-reit-etf", "n": 29 },
+            { "id": "mf-reit", "label": "jpx-investor-etf-reit-reit", "n": 29 },
+            { "id": "mf-mof-m", "label": "mof-portfolio-flows-monthly", "n": 264 },
+            { "id": "mf-imaj", "label": "imaj-fund-flows", "n": 120 },
+            { "id": "mf-imaj-reit", "label": "imaj-fund-flows-reit", "n": 24 },
+            { "id": "mf-jsda", "label": "jsda-bonds", "n": 240 },
+            { "id": "mf-ffaj", "label": "ffaj-otc-fx", "n": 384 },
+            { "id": "mf-tfx-fx", "label": "tfx-click365-fx", "n": 462 },
+            { "id": "mf-tfx-cfd", "label": "tfx-click365-cfd", "n": 154 },
+            { "id": "mf-jvcea", "label": "jvcea-crypto", "n": 156 },
+            { "id": "mf-bop", "label": "bop-regional", "n": 174 },
+            { "id": "mf-boj", "label": "boj-flow-of-funds", "n": 282 },
+            { "id": "mf-bis", "label": "bis-banking", "n": 453 },
+            { "id": "mf-imf", "label": "imf-cpis", "n": 387 },
+            { "id": "mf-tfx-fx-a", "label": "tfx-click365-fx-annual", "n": 186 },
+            { "id": "mf-tfx-cfd-a", "label": "tfx-click365-cfd-annual", "n": 22 },
+            { "id": "mf-wb", "label": "worldbank-marketcap", "n": 127 }
+          ]
+        },
+        {
+          "id": "MF-notion-rows", "label": "Notion 4DBの保存行数",
+          "total": 0, "state": "unverified", "source": "report-stated",
+          "note": "一次実体・観測とも未保管のため保存値との突合せは不能。対象なしではなく未確認",
+          "parts": [
+            { "id": "mf-notion-primary", "label": "一次データ｜moneyflow", "n": 0 },
+            { "id": "mf-notion-defs", "label": "資金フロー｜指標定義", "n": 0 },
+            { "id": "mf-notion-obs", "label": "資金フロー｜観測ログ", "n": 0 },
+            { "id": "mf-notion-runlog", "label": "資金フロー｜取込ログ", "n": 0 }
+          ]
+        },
+        {
+          "id": "MF-r1-cap", "label": "R1時価総額snapshotの内訳（取得時点）",
+          "total": 3700, "state": "verified", "source": "report-stated",
+          "note": "欠損5は不算入（0埋めなし）",
+          "parts": [
+            { "id": "cap-nonnull", "label": "非NULL", "n": 3695 },
+            { "id": "cap-null-excluded", "label": "欠損（不算入）", "n": 5 }
+          ]
+        },
+        {
+          "id": "MF-r1-range", "label": "R1範囲内行の内訳（from=to=2026-09-25）",
+          "total": 3700, "state": "verified", "source": "report-stated",
+          "parts": [
+            { "id": "range-present", "label": "9/25行あり", "n": 3698 },
+            { "id": "range-missing", "label": "9/25行なし", "n": 2 }
+          ]
+        }
+      ],
+      "coverages": [
+        { "id": "MF-r1-sectors", "label": "R1業種集計の独立再計算＋API照合（turnover/share/up/down/cap・差分0）", "matched": 33, "total": 33, "state": "verified" },
+        { "id": "MF-global-idx", "label": "global-indices W39・17指標の独立再計算（差分0）", "matched": 17, "total": 17, "state": "verified" },
+        { "id": "MF-jvcea-cells", "label": "JVCEA 2026-07行のpdftotext独立再読（5値一致）", "matched": 5, "total": 5, "state": "verified" },
+        { "id": "MF-imf-official", "label": "IMF原典最新期との照合", "matched": 0, "total": 1, "state": "unverified", "note": "原典直結は到達不可。鏡（DBnomics・2024-H1）のfreshnessのみ主張" }
+      ],
+      "quarantines": { "candidates": [], "holds": [], "note": "C所掌に隔離表はない" },
+      "evidence": [
+        { "id": "EV-mf-mof-w", "path": "fixtures/public/mof-portfolio-flows/mof-week.csv", "sha256": "de9ba9847fdc8bebebdb8f7ee2adcc572a899296c5555d540b58a110c0f9744b", "bytes": 255655, "timeState": "unverified", "note": "一次公開URLは財務省証券売買統計ページ" },
+        { "id": "EV-mf-deriv-w", "path": "fixtures/private/jpx-derivatives-investor/jpx-deriv-investor-week-20260907_20260911.csv", "sha256": "6258b0877d10ee68adfd6c50029f6a88014c616efb721a29173b9925adff0244", "bytes": 117179, "timeState": "unverified", "note": "一次公開URLはJPXデリバティブ投資部門別ページ" },
+        { "id": "EV-mf-cftc", "path": "fixtures/public/cftc-cot-jpy/cftc-cot-jpy-legacy-futures-only.json", "sha256": "b813b57d0108c96ec9adc8adb61b259b3b2e12d9605b16f80c8532cf2c692697", "bytes": 75209, "timeState": "unverified", "note": "一次公開URLはCFTC publicreporting API" },
+        { "id": "EV-mf-bop", "path": "/tmp/regbp_trimmed.zip", "sha256": "0041dcc824a4fc279c6949955fcc0c64dddcd8ca79933d602588975834ce1bcc", "bytes": 38796, "timeState": "unverified", "note": "一次公開URLは日銀stat-searchダウンロードページ" },
+        { "id": "EV-mf-jvcea", "path": "/tmp/jvcea-full.pdf", "sha256": "ec16877d5fcce8953c86a350d0a6601a3c12cd02e111804f963ca0a0cda04657", "bytes": 1238546, "timeState": "unverified", "note": "一次公開URLはJVCEA統計ページ。PDFバイトとサイト現物の突合せは未実施" },
+        { "id": "EV-mf-etf", "path": "/tmp/mf-fix-jpx-investor-etf-reit-etf-etf_m2608.xls", "sha256": "0ab50183e6fa7b0b4ce94e962a131fb4128789ed9836b76853cb747445affea0", "bytes": 52736, "timeState": "unverified", "note": "追補で再取得し同一バイトを確認" },
+        { "id": "EV-mf-imaj-reit", "path": "/tmp/mf-fix-imaj-fund-flows-reit-imaj-fund-flows-reit-2026-07.xlsx", "sha256": "26a5fab03a2cc7a871c498d786fe5c81abc048fc294aaea9a589afbb42ea1122", "bytes": 25503, "timeState": "unverified", "note": "追補で再取得し同一バイトを確認" },
+        { "id": "EV-mf-equity-w-val", "path": "/tmp/stock_val_1_260902.xls", "sha256": "0203d8e7cec672fe24a4c12126a38ee395ffdc62db34f2d0d81518a99720f998", "bytes": 99840, "timeState": "unverified", "note": "一次公開URLはJPX投資部門別ページ" },
+        { "id": "EV-mf-equity-w-vol", "path": "/tmp/stock_vol_1_260902.xls", "sha256": "b311878debf0a414820210007bc7a3f7d3f2262a55cec6178d59bd15689bb08f", "bytes": 97792, "timeState": "unverified", "note": "一次公開URLはJPX投資部門別ページ" },
+        { "id": "EV-mf-imf-01", "path": "fixtures/private/imf-cpis/imf-cpis-full-20260928-01.json", "sha256": "2ec7e974ddbe607bc01f7be9ff1967768f4092250dbbd2506517933ee291a1c0", "bytes": 142539, "timeState": "unverified", "note": "DBnomics鏡。原典IMF直結は到達不可" },
+        { "id": "EV-mf-imf-02", "path": "fixtures/private/imf-cpis/imf-cpis-full-20260928-02.json", "sha256": "58f0c10887e867a9bbd4723122cc08d73922522ff81720cfbc417960a4a49582", "bytes": 95525, "timeState": "unverified", "note": "DBnomics鏡。原典IMF直結は到達不可" },
+        { "id": "EV-mf-global-gspc", "path": "/tmp/mf-global-raw/global-indices-gspc-2026-W39.json", "sha256": "ef3467955ce6851ce306430d7b131ee5e934b243246d4922ffa546643d210055", "bytes": null, "timeState": "unverified", "note": "同一batch再取得物の代表。9/28初回fresh値との突合せはraw未保存のため不能" },
+        { "id": "EV-mf-global-tnx", "path": "/tmp/mf-global-raw/global-indices-tnx-2026-W39.json", "sha256": "098b9f010e6975def5408d031488e1a9ec87db4d65f75f97f0d7396379c4df57", "bytes": null, "timeState": "unverified", "note": "同一batch再取得物の代表。代表URLはYahoo chart API（^TNX・6mo・1wk）" },
+        { "id": "EV-mf-fix-r1", "path": "/tmp/mf-fix-r1.mts", "sha256": "e2a92115d94c642b568fb210f8a3ec0d5e7caa33c6f1eef0e46fb3bf05aabaf9", "bytes": 7722, "timeState": "mtime-only", "note": "R1独立再計算＋API照合（COMPARE mismatched_sectors=0）" },
+        { "id": "EV-mf-fix-etf-reit", "path": "/tmp/mf-fix-etf-reit.mts", "sha256": "e7702f1539bf2d45493664a70f5b6d90b8abe690f05b9bd73944a59d1020e3e3", "bytes": 1588, "timeState": "mtime-only", "note": "etf/imaj-reitのPARSE-OK再現" },
+        { "id": "EV-mf-fix-global", "path": "/tmp/mf-fix-global.mts", "sha256": "4fccd52c0eec740e471f89e82d8068ffc714579ae0bf188dd289c5d3703f5ee8", "bytes": 5236, "timeState": "mtime-only", "note": "global W39・17指標の独立再計算（MISMATCH=0）" }
+      ],
+      "unverified": [
+        "Notion保存値との突合せ不能（4DB 0行・D1観測未取込）。保存照合の完了とは言わない",
+        "jpx-equity-W36数量側未検証（原本欠。金額側は前週欄で照合）",
+        "JVCEA PDFバイトとサイト現物の突合せ未実施",
+        "9/28初回fresh値との突合せ不能（raw未保存。再取得batchで代替）",
+        "coingecko-global当日batchの同一再照合未実施（再取得は別batch）",
+        "月次空売り加重平均の実データ集計例未観測（単体テスト境界のみ）",
+        "R1の9/28当日分未反映（保存最新9/25）",
+        "IMF原典最新期との照合未実施（鏡のfreshnessのみ主張）",
+        "訂正版の重複事例未観測（保管0件）"
+      ]
+    }
+  }
+}
