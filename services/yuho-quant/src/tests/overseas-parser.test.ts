@@ -213,7 +213,7 @@ describe("地域別バケット (REGION_BUCKETS) — 同義地域語の正規化
 });
 
 describe("F2 根因修正: 重複地域名の曖昧表は ok を出さない (aggregate-before-dedup 防止)", () => {
-  it("S100J2E7 生産実績表 (地域×品目の2次元表) は却下され、取込 pure path でも誤った ok 保存行を生まない", () => {
+  it("S100J2E7 販売実績表 (地域×品目の2次元表) は却下され、取込 pure path でも誤った ok 保存行を生まない", () => {
     // raw(実原本の必要表のみ切り出し) → parse → 取込 caller と同一 key の pure dedup
     const r = parseOverseasHtml(fx("georows-dup-region-ambiguous-S100J2E7.html"), "2020-03-31");
     // pre-fix は ok_geo_rows で日本/アジアの重複＋海外売上高 19827 を出していた。fix 後は却下。
@@ -229,6 +229,52 @@ describe("F2 根因修正: 重複地域名の曖昧表は ok を出さない (ag
       return true;
     });
     expect(saved).toHaveLength(0);
+  });
+});
+
+describe("B2 根因修正: 生産実績表は売上高の開示ではないので候補にしない", () => {
+  it("S100OE0P 生産実績表 (a) 単体は採用されない (pre-fix は ok_geo_rows で生産高 21830 を海外売上高にしていた)", () => {
+    const r = parseOverseasHtml(fx("georows-production-results-excluded-S100OE0P.html"), "2022-03-31");
+    expect(r.status).toBe("no_overseas_table");
+    expect(r.facts).toHaveLength(0);
+  });
+
+  it("S100OE0P 販売実績表 (c) 単体は正規の売上表として構造化される", () => {
+    const r = parseOverseasHtml(fx("georows-sales-results-preferred-S100OE0P.html"), "2022-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(16163);
+    expect(region(r.facts, "南北アメリカ")!.salesAmount).toBe(11814);
+    expect(region(r.facts, "中国")!.salesAmount).toBe(5209);
+    expect(region(r.facts, "東南アジア／インド")!.salesAmount).toBe(4497);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(21520);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(37686);
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("百万円");
+  });
+
+  it("S100OE0P 生産→販売の原文書順でも販売実績表が選ばれ、取込 pure path で正しい保存行になる", () => {
+    // 原文書と同じ順序 (生産実績 (a) が先、販売実績 (c) が後)。pre-fix は同点で
+    // 文書順タイブレークにより生産実績表 (海外売上高 21830) を誤採用していた。
+    const html =
+      fx("georows-production-results-excluded-S100OE0P.html") +
+      "\n" +
+      fx("georows-sales-results-preferred-S100OE0P.html");
+    const r = parseOverseasHtml(html, "2022-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(21520);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(37686);
+    // ingest.ts / backfill-overseas.ts / backfill-missing-docs.ts と同一の dedup
+    // ((会計期末, 地域名) 先頭採用) を通した保存行が販売実績の値と一致する
+    const seen = new Set<string>();
+    const saved = r.facts.filter((f) => {
+      const k = `${f.fiscalYearEnd} ${f.regionName}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    expect(saved).toHaveLength(6);
+    expect(pick(saved, "overseas_total")!.salesAmount).toBe(21520);
+    // 生産実績の値 (日本 15706 / 海外売上高 21830) が混入していないこと
+    expect(region(saved, "日本")!.salesAmount).toBe(16163);
   });
 });
 

@@ -92,6 +92,14 @@ const RX_AGGREGATE =
   /^(外部顧客への売上高|外部顧客に対する売上高|外部顧客への売上収益|外部顧客に対する売上収益|外部顧客への営業収益|外部顧客に対する営業収益|顧客との契約から生じる収益|売上高合計|売上収益合計|営業収益合計|営業収益|合計|総合計|総計|計|連結|連結売上高|連結計|連結財務諸表計上額)$/;
 /** 「その他」系 (地域ブロック内なら overseas, 収益/事業文脈なら除外) */
 const RX_OTHER_REGIONISH = /^(その他|その他の地域|その他地域|その他海外|外国|諸外国|直接輸出|輸出)$/;
+/**
+ * 生産実績表の見出し語。生産高は売上高ではないため、この語を見出しに持つ表は
+ * 海外売上高の候補にしない。S100OE0P 等 (5013) で実証: セグメント別の生産実績表と
+ * 販売実績表が同点で並び、文書順のタイブレークで生産実績表が勝って生産高を
+ * 海外売上高として誤採用していた。実績つきの表題語に限定しているため
+ * 「生産、受注及び販売の状況」のような節見出しの表は影響を受けない。
+ */
+const RX_PRODUCTION_RESULT = /生産実績/;
 
 function norm(s: string): string {
   return s.replace(/[\s\u3000]/g, "");
@@ -613,6 +621,9 @@ export function parseOverseasHtml(
     const grid = tableToGridExpanded(table);
     if (grid.length < 2) continue;
     const flat = grid.map((r) => r.join("")).join("");
+    // 生産実績表は売上高の開示ではないので候補にしない (監査の取りこぼし集計にも
+    // 入れない = sawGeoSignal を立てない。販売実績表など正規の売上表は別 fixture で固定)。
+    if (RX_PRODUCTION_RESULT.test(heading)) continue;
     const regionish =
       RX_OVERSEAS_REGION.test(flat) || /本邦|日本|海外売上高/.test(flat);
     if (!regionish) continue;
