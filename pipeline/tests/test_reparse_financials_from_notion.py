@@ -6,8 +6,10 @@ import json
 import sqlite3
 import sys
 from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
+from threading import Barrier, Event, Lock
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +22,95 @@ from test_backfill_financials_from_notion import _page  # noqa: E402
 from jp_stock_pipeline.notion import schema as S  # noqa: E402
 from jp_stock_pipeline.cloud_store.financials import COLUMNS, record_to_row  # noqa: E402
 from jp_stock_pipeline.cloud_store.schema import _FINANCIALS  # noqa: E402
+from test_financial_context_units import EDINET_CASES, fixture_provenance, fixture_tidy  # noqa: E402
+from jp_stock_pipeline.transform.normalize import tidy_to_financial_record  # noqa: E402
+
+
+def test_parallel_repair_drains_inflight_failure_and_reproves_without_repatch(tmp_path, monkeypatch):
+    """実EDINETの値は不変。旧連結欄の欠損・再読ドリフトだけを障害注入する。"""
+    cases = {case["code"]: case for case in EDINET_CASES}
+    records = {code: tidy_to_financial_record(fixture_tidy(case), code, fixture_provenance(case))
+               for code, case in cases.items()}
+    assert len(records) == 4
+    pages = {code: {"id": code, "record": replace(record, consolidated=None)}
+             for code, record in records.items()}
+    journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
+    journal.write_text("\n".join(json.dumps({
+        "page_id": code, "old": reparse._record_dict(pages[code]["record"]),
+        "new": reparse._record_dict(record), "changes": {"consolidated": {}},
+        "parser_sha256": reparse.PARSER_SHA256, "raw_sha256": cases[code]["raw_sha256"],
+    }) for code, record in records.items()) + "\n")
+    lock, simultaneous = Lock(), Barrier(2)
+    failed_reread, release_inflight = Event(), Event()
+    updates, queries, clients = [], [], []
+    stop_signals = []
+    failing = True
+
+    class Client:
+        def query_database(self, *args, **kwargs):
+            code = kwargs["filter"]["or"][0]["rich_text"]["equals"]
+            with lock:
+                queries.append(code)
+                page = pages[code].copy()
+                if failing and code == "5918" and page["record"] == records[code]:
+                    page["record"] = replace(records[code], consolidated=None)
+                    failed_reread.set()
+                return [page]
+
+        def update_page(self, code, *args):
+            with lock:
+                updates.append(code)
+            if failing:
+                simultaneous.wait(timeout=3)
+                if code == "6269":
+                    assert release_inflight.wait(3)
+            with lock:
+                pages[code]["record"] = records[code]
+                return pages[code].copy()
+
+        def archive_page(self, *args):
+            pytest.fail("同じ原ページの修復で退避しない")
+
+    def connect(*args, **kwargs):
+        clients.append(Client())
+        return clients[-1]
+
+    def stopping_event():
+        signal = Event()
+        stop_signals.append(signal)
+        return signal
+
+    monkeypatch.setattr(reparse, "NotionClient", connect)
+    monkeypatch.setattr(reparse, "load_settings", lambda: SimpleNamespace(
+        notion_token="test-token", notion_rps=6, db_id=lambda key: "db"))
+    monkeypatch.setattr(reparse, "_page_record", lambda page: page["record"])
+    monkeypatch.setattr(reparse, "financial_overwrite_allowed", lambda *args: True)
+    monkeypatch.setattr(reparse, "APPLY_BATCH_CODES", 1)
+    monkeypatch.setattr(reparse, "Event", stopping_event)
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        future = caller.submit(reparse.apply_journal, journal, receipts, workers=2)
+        try:
+            assert failed_reread.wait(3)
+            assert stop_signals[-1].wait(3)
+            assert not future.done()  # 先行失敗でも開始済みPATCHの応答をdrainする。
+        finally:
+            release_inflight.set()
+        with pytest.raises(ValueError, match="まとめ再読値"):
+            future.result(timeout=3)
+    assert len(clients) == 1
+    assert set(queries) == set(updates) == {"5918", "6269"}
+    assert receipts.read_text() == ""
+    failing = False
+    queries.clear()
+    reparse.apply_journal(journal, receipts, workers=2)
+    assert len(clients) == 2  # 各runは1 clientだけ。
+    assert updates.count("5918") == updates.count("6269") == 1
+    proved = reparse._journal_items(receipts)
+    assert set(proved) == set(records)
+    for code, record in records.items():
+        assert proved[code]["record"] == reparse._record_dict(record)
+        assert proved[code]["raw_sha256"] == cases[code]["raw_sha256"]
+        assert proved[code]["parser_sha256"] == reparse.PARSER_SHA256
 
 
 def test_mismatched_archive_hash_stops_before_parsing(tmp_path, monkeypatch):
