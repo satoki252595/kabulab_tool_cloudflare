@@ -315,6 +315,34 @@ describe("P-2D/P-hier/P-metric: 証明できる重複は正しく読む", () => 
   });
 });
 
+describe("P-hier-cols: 階層列見出しは親 grouping で合算する", () => {
+  it("S100DDYF 2階層列 (親アジア/米州 + 子) は親合算で回復する", () => {
+    // アジア 118476+182922、米州 161237+81313。leaf 合計 1150205 が
+    // 開示合計 1150209 と一致して分割を証明する。
+    const r = parseOverseasHtml(fx("geocols-hierparent-S100DDYF.html"), "2018-03-31");
+    expect(r.status).toBe("ok_geo_cols");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(505167);
+    expect(region(r.facts, "アジア")!.salesAmount).toBe(301398);
+    expect(region(r.facts, "米州")!.salesAmount).toBe(242550);
+    expect(region(r.facts, "欧州")!.salesAmount).toBe(101090);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(645038);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(1150209);
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("百万円");
+  });
+
+  it("S100Y53G 3階層列 (親国内/海外 + 子) は親合算で回復する", () => {
+    // 国内 236131+92760、海外 35917+102813+101709。leaf 合計 569330 が
+    // 開示連結 569370 と一致して分割を証明する。
+    const r = parseOverseasHtml(fx("geocols-hierparent-S100Y53G.html"), "2026-02-28");
+    expect(r.status).toBe("ok_geo_cols");
+    expect(region(r.facts, "国内")!.salesAmount).toBe(328891);
+    expect(region(r.facts, "海外")!.salesAmount).toBe(240439);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(240439);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(569370);
+    expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("百万円");
+  });
+});
+
 describe("B2 根因修正: 生産実績表は売上高の開示ではないので候補にしない", () => {
   it("S100OE0P 生産実績表 (a) 単体は採用されない (pre-fix は ok_geo_rows で生産高 21830 を海外売上高にしていた)", () => {
     const r = parseOverseasHtml(fx("georows-production-results-excluded-S100OE0P.html"), "2022-03-31");

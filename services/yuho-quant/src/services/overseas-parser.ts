@@ -757,10 +757,14 @@ function tryGeoCols(
   if (valueRow < 0) return null;
 
   const consolidated = detectConsolidated(gridX.flat().join(" "));
-  const facts: OverseasFact[] = [];
-  let domesticSum = 0;
-  let regionSum = 0;
   const EXCL = /調整額?|セグメント間|内部|消去|割合|％|%/;
+  interface Col {
+    index: number;
+    name: string;
+    kind: "domestic" | "overseas";
+    value: number | null;
+  }
+  const cols: Col[] = [];
   for (let ci = 0; ci < width; ci++) {
     if (ci === totalCol) continue;
     const role = colRole[ci];
@@ -768,13 +772,78 @@ function tryGeoCols(
     const h = norm(gridX[headerIdx][ci] ?? "");
     if (EXCL.test(h)) continue;
     const v = parseJpNumber(gridX[valueRow][ci] ?? "");
+    if (v !== null && !Number.isInteger(v)) return null;
+    cols.push({
+      index: ci,
+      name: cleanLabel(gridX[headerIdx][ci] ?? ""),
+      kind: role,
+      value: v,
+    });
+  }
+  // P-hier-cols: 親ラベル重複は子階層 (次行) で grouping する。複数列の親は
+  // 子が非空・非数値・群内一意のときだけ合算できる (S100DDYF/S100Y53G で実証)。
+  // 証明できなければ曖昧表として却下。
+  let useCols = cols.filter((c) => c.value !== null);
+  const colNames = cols.map((c) => c.name);
+  if (new Set(colNames).size !== colNames.length) {
+    const child = gridX[headerIdx + 1];
+    if (!child || totalCol < 0) return null;
+    const counts = new Map<string, number>();
+    for (const c of cols) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
+    const groups = new Map<
+      string,
+      { kind: "domestic" | "overseas"; sum: number; n: number; subs: string[] }
+    >();
+    for (const c of cols) {
+      const rawSub = child[c.index] ?? "";
+      if (EXCL.test(norm(rawSub))) continue; // 子が調整額等 → leaf 除外
+      const sub = cleanLabel(rawSub);
+      if ((counts.get(c.name) ?? 0) > 1) {
+        if (
+          sub === "" ||
+          parseJpNumber(rawSub) !== null ||
+          (groups.get(c.name)?.subs.includes(sub) ?? false)
+        ) {
+          return null;
+        }
+      }
+      const g = groups.get(c.name);
+      if (g) {
+        if (c.value !== null) {
+          g.sum += c.value;
+          g.n++;
+        }
+        g.subs.push(sub);
+      } else {
+        groups.set(c.name, {
+          kind: c.kind,
+          sum: c.value ?? 0,
+          n: c.value !== null ? 1 : 0,
+          subs: [sub],
+        });
+      }
+    }
+    // 全 leaf 欠損の親は落とす (0 で埋めない。検証が守る)
+    useCols = [...groups]
+      .filter(([, g]) => g.n > 0)
+      .map(([name, g]) => ({
+        index: -1,
+        name,
+        kind: g.kind,
+        value: g.sum as number | null,
+      }));
+  }
+  const facts: OverseasFact[] = [];
+  let domesticSum = 0;
+  let regionSum = 0;
+  for (const c of useCols) {
+    const v = c.value;
     if (v === null) continue;
-    if (!Number.isInteger(v)) return null;
-    if (role === "domestic") domesticSum += v;
+    if (c.kind === "domestic") domesticSum += v;
     regionSum += v;
     facts.push({
-      regionName: cleanLabel(gridX[headerIdx][ci] ?? ""),
-      regionKind: role,
+      regionName: c.name,
+      regionKind: c.kind,
       salesAmount: v,
       ratioPct: null,
       unitLabel: unit.label,
