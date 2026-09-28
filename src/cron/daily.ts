@@ -69,6 +69,7 @@ import {
   fetchChart,
   fetchStockRawData,
 } from "../shared/yahoo/client.js";
+import { checkFreshClose } from "../shared/yahoo/bar-sanity.js";
 import { fetchNikkeiVi } from "../shared/yahoo/nikkei-vi.js";
 import { calculateAllRsiSeries } from "../shared/indicators/rsi.js";
 import { computeRsiPercentileSnapshot } from "../shared/indicators/percentile.js";
@@ -1142,8 +1143,15 @@ async function buildSnapshot(
 
   // -- 6mo スライス → swing 用指標 —— adjclose ベースで分割歪みを除去 --
   const ohlcv6mo = raw.ohlcv.slice(-130);
-  if (expectedDate !== undefined && ohlcv6mo.at(-1)?.date !== expectedDate) {
-    throw new Error(`${code}: 対象 ${expectedDate} の実日足が未取得です。古い日の指標を書き直しません。`);
+  if (expectedDate !== undefined) {
+    // 日付一致だけでなく対象日の実終値 (adj ?? close) も要求する。
+    // 対象日の fresh null bar を日付だけで合格にすると、古い終値で計算した
+    // 指標を対象日付で保存してしまう (F-01)。正当な欠損は未取得扱いにし、
+    // 値の補完はしない (ルール2)。
+    const fresh = checkFreshClose(ohlcv6mo.at(-1), expectedDate);
+    if (!fresh.ok) {
+      throw new Error(`${code}: 対象 ${expectedDate} の実日足が未取得です。古い日の指標を書き直しません。`);
+    }
   }
   const closes6mo = ohlcv6mo.map((r) => r.adj ?? r.close);
 
