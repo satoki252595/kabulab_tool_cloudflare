@@ -1,6 +1,7 @@
 // JPX「銘柄別信用取引週末残高」週次PDFを取得・解析（全銘柄・無料）。
 import { extractText, getDocumentProxy } from "unpdf";
 import { marginCodeToKey } from "../../../src/shared/jpx/stock-code.js";
+import { assertDistinctMarginCodes } from "./margin-select.js";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
@@ -34,6 +35,9 @@ export function validateMarginData(data: MarginData): void {
   if (data.pdfBytes.byteLength === 0) {
     throw new Error("margin pdf empty: 原本バイト列が空です (保管できない)");
   }
+  // 種類株崩壊の取込 (同一コードの複数行) は保存しない。崩壊週を R2 に書くと
+  // 利用側が普通株・種類株を区別できなくなる (JSON に ISIN が無いため)。
+  assertDistinctMarginCodes(data.rows);
 }
 
 // 一覧ページから syumatsu*.pdf のリンクを抜き出す純関数。
