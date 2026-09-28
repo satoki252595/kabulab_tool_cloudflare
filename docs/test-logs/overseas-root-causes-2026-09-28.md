@@ -163,3 +163,76 @@ LEX回復 26 + round-1合計のみ是正 32 + 旧来不一致 80 (59違反を含
   保存値の重複検証は lane 外)。
 - `事業収益合計` (YR3G) の集計名詞化は見送り (fallback 合計で読める。改善余地)。
 - 新取得原本の archive-only 計画 (§6-5) は root grant 待ち。
+
+## 10. Round-3: F1–F8 follow-up + FIX-A–H2 (同一ブランチ継続)
+
+### 10-1. 期間29件の全件根因 (fixup8→trace2 CAND)
+- F5-ok/N-ok 値違い 29件を CAND 単位で全件照合: 真の期間勝ち 12
+  (F5=前期表・N=当期表。採点の当期+4/前期-6 が系統的に正しい)、
+  F5-invalid-pick 6 (N=単一正規候補)、同表行parse差 10 (F1 注除去/F4
+  segment-その他除外/連結優先で N が正しい)、F2-EMEA回復 2 (AI6T/ARDL:
+  F5=非流動資産表の誤採用、N=顧客所在地別収益表)。
+- G3BR/G9OV のみ N-miss: 当連結セグメント表 (score 12) が正準の
+  (4)地域に関する情報表 (score 10) に勝ち、非地域その他 7,880 を含む
+  セグメント切りを採用 (domestic+overseas_total≠total の Δ7,881 不整合。
+  c3 は完全整合)。→ FIX-D (正準ブースト)。
+
+### 10-2. FIX-A–H2 (全て実原本で機構実証)
+- FIX-A 総額列検出 (FHUH): 連結列「連結損益計算書 計上額」・計列「計」を
+  拾う共通正規表現 `RX_TOTAL_COL` (cols 2箇所 + rows 値列1箇所)。
+  副作用の複数集計列 (合計+連結併記) は連結優先で解消 (OC7S/R4LB/TSO2
+  の後退を回復。fixture 固定)。
+- FIX-B F7 裁定 (R9AG/PV48): 葉和≠開示小計のとき開示総額を裁定者にし、
+  開示小計が総額と整合すれば葉誤記として採用 (R9AG: アジア 5,793 vs
+  5,973、総額 29,461 と Δ2)、不整合なら却下維持 (PV48: Δ9002)。
+- FIX-C 重複列単位片除去 (YJVF/YTZ3): 結合セル展開ずれの
+  「（単位；千円）種結晶」vs「種結晶」を見逃さず間引く (二重計上→F7誤殺)。
+- FIX-D 正準ブースト (G3BR/G9OV/R173/TNH4/VZ5K/YCXB/VHA9/XTT8):
+  表題窓の地域注記題名に +4。当/前ペアは対称で期間優先を保持。
+- FIX-F R1 拡張 (DCF4/W3QI): 有形固定資産/無形資産の地域別資産表を
+  追加。表題パターン gate (近傍の地域別/内訳/残高 + footnote 語 veto)
+  + joint 表題 abstain (W20H) で QG12/RS6X の誤殺を回避。
+- FIX-G backlog gate (TP3I + E01575系9件): 繰越工事高/受注高の手持ち表を
+  最寄り表題語で除外。販売実績表は保持。
+- FIX-H2 tiebreak (255件回復): 同点2候補・同 status・同注記種・同連結区分・
+  同期表示語・総額相違の gate の下、(a) 片側のみ metric 標識 (移行日/
+  非流動資産/減損/有形/無形) なら clean 側 (CMLA)、(b) 両 clean かつ
+  期表示語なしなら後表=当期 (R98H: 前期表→当期表の開示順。採点解消済み
+  T/Z ペア 1409 件中 1391 件=98.7% が当期後置で裏付け)。[T]/[TZ] の順序
+  解決は禁止 (TA7H: 同期間の収益認識/セグメント対。TZ は売上/非売上混在)。
+- FIX-E (集計後その他橋渡し) は母集団 3675 で発火ゼロのため削除
+  (TODG は cols 側の非地域 bridge で既に正しく保守的)。
+- 副作用ゼロ確認: 3後退 (OC7S/R4LB/TSO2) は連結優先で即回復。
+  TP3I の backlog 誤回復は FIX-G で除去。QG12/RS6X/W20H の R1 誤殺は
+  gate で回避 (全て fixture 固定)。
+
+### 10-3. 母集団検証 (fixup8 N1 → fixup14 N7、全3675)
+- N1→N7 差分 347件を全件帰属: 回復 325 (follow-up 55 + FIX-B 9 [E01264系]
+  + FIX-D 6 + FIX-H2 255)、正 kill 10 (AM9X 資産表 + E01575 backlog 9)、
+  FIX-D 正準入替 6、KEYCHG 6 (FHUH/R9AG/YJVF/YTZ3/VHA9/XTT8)。false-kill 0。
+- tiebreak 255件は経営指標の連結売上高系列で独立検証: 230 一致 +
+  4 検証済み (J3TY joint-fit、T4V8/VGT3/XS5K 同一発行者の連鎖一致) +
+  2 和暦 noparse 抽出一致 + 18 noparse (oracle 範囲外。validated 規約に従う)
+  + 1 曖昧 (G9KL: joint-fit は N 側を支持)。proven-wrong 0。
+  (旧 H1 の loserWin 35件は H2 で解消: TZ/T 順序禁止 + metric-clean 採用)。
+- viol-59 replay: 59/59 (53 同一 + 6 tiebreak 解決。
+  6件とも F5=前期表の誤採用で N7=当期表が正しい。経営指標で確認)。
+- ok-ok (F5-ok かつ N7-ok 値違い) 387件を分類: 期間 233 (tiebreak/採点。
+  oracle 検証済み)、DROP-その他 68 (F4。9QVM 抽出確認)、ADD 9 (F2/F4)、
+  名称のみ 31 (F1 注除去。5件抽出確認)、mixed 18 (期間+F1。4件確認)、
+  total選択 28 (開示例優先。FM6C Δ2 確認)。全 class 処分済み。
+- NONE-8: りそな系6件は銀行有価証券残高表の F5-false-positive で N-correct-kill
+  (集計 proof)。PV48 却下維持・YCP3 回復 (fixture 固定)。
+  7-unsupported は正直 abstain 維持 (root 申送り)。
+- 残 tie 266件は正直に unstructured (TZ/T-clean、3者以上、内訳 tie、両 metric)。
+
+### 10-4. 検証ゲート (最終 head)
+- `overseas-parser.test.ts`: **78 tests green** (69 + FIX 回帰 9:
+  FHUH/R9AG/YJVF/G3BR/OC7S/DCF4/TP3I/R98H/CMLA。実原本 fixture 9表追加)。
+- `services/yuho-quant`: 44 files / **525 tests green**。repo 全体:
+  196 files / **2823 passed** (385 skipped) / 0 failed。
+- `tsc --noEmit` clean。`eslint src services --max-warnings=0` clean。
+  `render-data-audit.ts --check` OK。
+- fixture 計 28表 (F1–F8/follow-up 19 + FIX-A–H2 9)。全て実原本 verbatim。
+- 本番書込なし (D1/R2/Notion/job-apply 未実行。writer grant 待ち)。
+  原本 ZIP は `/tmp/overseas_laneA_raw/` (未 archive のまま正直に記録)。

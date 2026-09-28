@@ -67,11 +67,28 @@ export type OverseasParseStatus =
   | "geo_present_unstructured"
   | "no_overseas_table";
 
+/**
+ * 照合の証明 (DB 保存対象外)。消去・調整を加えた地域合計と開示総額の照合に
+ * 使った調整額と丸め許容を保存前検証へ運ぶ (7203 Toyota 型: 地域合計は消去前
+ * のため調整なしでは総額を上回る。検証側で推測させない)。
+ */
+export interface OverseasProof {
+  reconciliationAdjustment: number;
+  roundingBound: number;
+}
+
 export interface OverseasExtraction {
   status: OverseasParseStatus;
   facts: OverseasFact[];
   honbunFile: string | null;
   tablesScanned: number;
+  proof?: OverseasProof;
+}
+
+/** 1表の構造化結果。facts と照合の証明を対で返す */
+interface ParsedTable {
+  facts: OverseasFact[];
+  proof: OverseasProof;
 }
 
 /**
@@ -84,14 +101,23 @@ export const RX_OVERSEAS_KEYWORD =
 
 /** 海外地域 (本邦/日本 以外) を表す語 */
 const RX_OVERSEAS_REGION =
-  /北米|南米|中南米|北中米|中米|米州|米大陸|アメリカ大陸|米国|アメリカ|欧州|ヨーロッパ|欧米|アジア|オセアニア|大洋州|アフリカ|中近東|中東|中国|中華圏|香港|韓国|台湾|タイ|ベトナム|インド|インドネシア|シンガポール|フィリピン|マレーシア|アセアン|ドイツ|英国|フランス|イタリア|スペイン|オランダ|メキシコ|ブラジル|カナダ|豪州|オーストラリア|海外/;
+  /北米|南米|中南米|北中米|中米|米州|米大陸|アメリカ大陸|米国|アメリカ|欧州|ヨーロッパ|欧米|アジア|オセアニア|大洋州|アフリカ|中近東|中東|中国|中華圏|香港|韓国|台湾|タイ|ベトナム|インド|インドネシア|シンガポール|フィリピン|マレーシア|アセアン|モンゴル|スイス|EMEA|ドイツ|英国|フランス|イタリア|スペイン|オランダ|メキシコ|ブラジル|カナダ|豪州|オーストラリア|海外/;
 /** 国内を表す語 (これに完全一致する行/列が domestic) */
 const RX_DOMESTIC = /^(日本|本邦|国内|日本国内|わが国|我が国)$/;
 /** 集計行/列 (地域ではない)。営業収益建て(トヨタ等の地域別営業概況)も含む */
 const RX_AGGREGATE =
-  /^(外部顧客への売上高|外部顧客に対する売上高|外部顧客への売上収益|外部顧客に対する売上収益|外部顧客への営業収益|外部顧客に対する営業収益|顧客との契約から生じる収益|売上高合計|売上収益合計|営業収益合計|営業収益|合計|総合計|総計|計|連結|連結売上高|連結計|連結財務諸表計上額)$/;
+  /^(外部顧客への売上高|外部顧客に対する売上高|外部顧客への売上収益|外部顧客に対する売上収益|外部顧客への営業収益|外部顧客に対する営業収益|顧客との契約から生じる収益|売上高合計|売上収益合計|営業収益合計|連結収益合計|営業収益|合計|総合計|総計|計|連結|連結売上高|連結計|連結財務諸表計上額)$/;
 /** 「その他」系 (地域ブロック内なら overseas, 収益/事業文脈なら除外) */
 const RX_OTHER_REGIONISH = /^(その他|その他の地域|その他地域|その他海外|外国|諸外国|直接輸出|輸出)$/;
+/**
+ * 総額列の見出し (連結/合計/計)。S100FHUH で実証: 当連結の報告セグメント表は
+ * 連結列が「連結損益計算書 計上額」、小計列が「計」で、旧正規表現
+ * (連結財務諸表計上額|^連結$|^合計$|連結計上額) はどちらにも一致せず
+ * aggregates が空 → total が regionSum に後退し、調整額 +27 を抱えて
+ * total < adjustedSum − bound で当期表を誤殺、前期表に後退していた。
+ * 「連結…計上額」(中間8字まで) と bare-計を拾う。後段の照合が証明する。
+ */
+const RX_TOTAL_COL = /連結.{0,8}計上額|^連結$|^合計$|連結計上額|^計$/;
 /**
  * 実績系の表題語。見出し window (表直前400字→末尾160字) は表題そのものではなく
  * 前表の説明文を含み得るため、単純な含有ではなく **最寄り (最後) の表題語** で
@@ -123,14 +149,73 @@ function isProductionTable(heading: string): boolean {
  * 該当名詞が窓内になければ abstain (現状維持)。
  */
 const RX_METRIC_NOUN =
-  /(売上高|売上収益|販売高|営業収益|外部顧客からの収益|収益|非流動資産|減損損失)/g;
+  /(売上高|売上収益|販売高|営業収益|外部顧客からの収益|収益|非流動資産|減損損失|有形固定資産|無形資産)/g;
 /** 省略宣言文 (中の metric 名詞は不開示であり後続の表を指さない) */
 const RX_OMISSION_CLAUSE = /[^。]*(記載|開示)を省略[^。]*(。|$)/g;
 function isNonSalesMetricTable(heading: string): boolean {
   const affirmed = heading.replace(RX_OMISSION_CLAUSE, " ");
   let last: string | null = null;
-  for (const m of affirmed.matchAll(RX_METRIC_NOUN)) last = m[1];
-  return last === "非流動資産" || last === "減損損失";
+  let lastIdx = -1;
+  for (const m of affirmed.matchAll(RX_METRIC_NOUN)) {
+    last = m[1];
+    lastIdx = m.index ?? -1;
+  }
+  const isClassicAsset = last === "非流動資産" || last === "減損損失";
+  const isTangibleAsset = last === "有形固定資産" || last === "無形資産";
+  if (!isClassicAsset && !isTangibleAsset) return false;
+  // 有形固定資産/無形資産は地域別資産表の表題 (S100DCF4/S100W3QI/S100AM9X) と
+  // セグメント注の調整額 prose (「有形固定資産及び無形固定資産の増加額には…」)
+  // の両方に出る。prose は次表 (当期の売上表) の窓に必ず紛れ込むため、表題
+  // パターン (近傍に地域別/所在地別/内訳/残高/帳簿価額、かつ増加額/調整額/
+  // 償却/含んでを含まない) のときだけ落とす (S100QG12/S100RS6X の売上表を誤殺
+  // しない。S100W20H の joint 表題「売上高ならびに有形固定資産」も近傍に
+  // 地域別がないため abstain)。
+  if (isTangibleAsset) {
+    // 表題尾は資産名詞の後ろに伸びる (…無形資産の帳簿価額の地域別内訳) ので
+    // 後方窓を広げる。前方の所在地別の…にも対応。前後いずれかに footnote 語
+    // (増加額/調整額/償却/含んで) があれば prose として abstain する。
+    const near = affirmed.slice(Math.max(0, lastIdx - 12), lastIdx + 40);
+    if (!/(地域別|所在地別|内訳|残高|帳簿価額)/.test(near)) return false;
+    if (/(増加額|調整額|償却|含んで)/.test(near)) return false;
+    return true;
+  }
+  // 売上+資産の joint 表題 (「売上収益及び非流動資産」) は後続表が売上部・
+  // 資産部のどちらか表題から決められない → abstain して表の内容に決めさせる。
+  // 売上名詞と資産名詞の間が短い接続句 (ならびに/及び/及び) のときだけ
+  // abstain し、凡例を挟んだ別表題は落とす。
+  const RX_SALES = /売上高|売上収益|販売高|営業収益|外部顧客からの収益|収益/g;
+  let salesIdx = -1;
+  for (const m of affirmed.matchAll(RX_SALES)) salesIdx = m.index ?? -1;
+  if (salesIdx >= 0 && salesIdx < lastIdx) {
+    const between = affirmed.slice(salesIdx, lastIdx).replace(/[\s\u3000]/g, "");
+    if (
+      between.length <= 24 &&
+      /(ならびに|並びに|及び|及び)/.test(between)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+/**
+ * 受注・繰越 (手持ち工事) の表か。繰越工事高・受注高は売上高ではなく手持ち
+ * 残高なので候補にしない (S100TP3I: 繰越工事高の国内/海外/計表が ^計$ 総額列
+ * で算術整合し、受注残高 2,198,120 を連結売上高として誤採用していた)。
+ * B2 と同じ最寄り (最後) の表題語で判定する (「受注及び販売の状況」の節見出し
+ * の下の販売実績表は落とさない。販売/売上/収益の表題語が後ろにあれば不発)。
+ */
+const RX_BACKLOG_CAPTION = /(繰越工事高|繰越高|繰越受注高|受注高|受注残高|手持工事高|販売実績|売上高|売上収益|営業収益|収益)/g;
+function isBacklogTable(heading: string): boolean {
+  let last: string | null = null;
+  for (const m of heading.matchAll(RX_BACKLOG_CAPTION)) last = m[1];
+  return (
+    last === "繰越工事高" ||
+    last === "繰越高" ||
+    last === "繰越受注高" ||
+    last === "受注高" ||
+    last === "受注残高" ||
+    last === "手持工事高"
+  );
 }
 
 function norm(s: string): string {
@@ -141,6 +226,20 @@ function norm(s: string): string {
 function toHalfWidthDigits(s: string): string {
   return s.replace(/[０-９]/g, (d) =>
     String.fromCharCode(d.charCodeAt(0) - 0xfee0)
+  );
+}
+
+/** 全角ラテン Ａ-Ｚａ-ｚ を半角へ (Ｓ100ＡＫＥＥ ＥＭＥＡ対策) */
+function toHalfWidthLatin(s: string): string {
+  return s.replace(/[Ａ-Ｚａ-ｚ]/g, (d) =>
+    String.fromCharCode(d.charCodeAt(0) - 0xfee0)
+  );
+}
+
+/** ラベル比較用の正規化: 全角数字・ラテン→半角、全角括弧→半角 */
+function normLabelWidth(s: string): string {
+  return toHalfWidthLatin(toHalfWidthDigits(s)).replace(/[（）]/g, (d) =>
+    d === "（" ? "(" : ")"
   );
 }
 
@@ -161,9 +260,13 @@ function detectConsolidated(headerText: string): boolean | null {
 
 /** 末尾の単位括弧 ((百万円) 等) と注番号を除いた表示用ラベル */
 function cleanLabel(name: string): string {
-  return name
+  // 先に幅正規化: 全角注番号「（注）１」(S100ACAR) が半角専用の注除去を
+  // 素通りして「その他」列の分類を壊すのを防ぐ。末尾 ※類 (脚注参照) も落とす。
+  const w = normLabelWidth(name);
+  return w
+    .replace(/[\s\u3000※＊*☆★]+\s*$/u, "")
     .replace(/[（(](?:単位[:：]?)?(?:百万円|千円|億円|円)[)）]?\s*$/u, "")
-    .replace(/[（(]注[）)0-9]*\s*$/u, "")
+    .replace(/[(]注[)0-9]*\s*$/u, "")
     .replace(/[\s\u3000]+/g, "")
     .trim();
 }
@@ -178,16 +281,38 @@ function classifyRegion(rawLabel: string): RegionRole {
   if (RX_DOMESTIC.test(s)) return "domestic";
   // 「その他の収益」等は集計でも地域でもない → other (除外)
   if (/^その他の収益$/.test(s)) return "other";
+  // 契約小計は接尾辞・動詞つきが多い (を分解した情報/収益合計/注/引用+
+  // 会計基準名/認識した・された/売上収益/主な・経常。S100OJ6E/S100TRBB/
+  // S100TSSV)。含有で集計扱いする。うち内訳は上の除外が先に勝つ。
+  if (
+    /顧客との契約から(の)?(生じ[るた]|認識した|認識された)?(主な|経常)?(収益|売上収益)/.test(
+      s
+    )
+  )
+    return "aggregate";
   if (RX_AGGREGATE.test(s)) return "aggregate";
   if (RX_OTHER_REGIONISH.test(s)) return "overseas"; // 暫定。ブロック検証で確定
   if (RX_OVERSEAS_REGION.test(s)) return "overseas";
   return "other";
 }
 
-/** 地域行の合計と開示総額の整合チェック (1% 許容: 丸め差のみ通す) */
-function totalsConsistent(regionSum: number, disclosedTotal: number): boolean {
+/**
+ * 地域行の合計と開示総額の整合チェック。金額は表示単位の整数に丸め済みで
+ * 1 項あたり最大 0.5 単位の誤差を持つ。許容は 0.5×(項数+4) 単位:
+ * 葉項 + 開示集計 (+1) + 一段の隠れ集約 (+1: その他子列等の二重丸め) +
+ * 発行体側 slop (+2: 小計経由・表示切替の二重丸め。完全読取の差 4 が
+ * S100NRWW・S100OJX1・S100DDYF・S100PUMS の4表で独立に実証)。
+ * 上限は実証済み脱落の最小差で抑える (S1009XV6: その他 5 脱落→差 7、
+ * S100FFET: その他 7 脱落→差 10。葉5項の許容 4.5 は両方より小さい)。
+ * 一律 1% は小規模な地域脱落・重複を見逃すため使わない。
+ */
+function totalsConsistent(
+  regionSum: number,
+  disclosedTotal: number,
+  terms: number
+): boolean {
   if (disclosedTotal <= 0) return false;
-  return Math.abs(regionSum - disclosedTotal) <= disclosedTotal * 0.01;
+  return Math.abs(regionSum - disclosedTotal) <= 0.5 * (terms + 4);
 }
 
 /** 製品/用途・非売上 metric の section 標識 (この section の行は売上 block ではない) */
@@ -196,6 +321,23 @@ const RX_NON_SALES_SECTION = /営業利益|用途別|財又はサービス|製�
 const RX_SHOKEI = /小計/;
 /** 消去/調整行 (地域計に加算して block 合計と照合する) */
 const RX_ELIMINATION = /消去|調整額/;
+/** 収益認識 triplet の非地域脚 (契約小計→外部顧客総額の橋渡し。開示値のみ加算) */
+const RX_OTHER_REVENUE =
+  /^(その他の収益|その他収益|その他の源泉から認識した収益|その他の契約から認識した収益)$/;
+/** セグメント注記の非地域列 (事業単位。地理が定まらないため fact 化しない) */
+const RX_BUSINESS_COL = /事業|サービス/;
+/** 非地域列から除く (計時内訳・metric 列は加算すると二重計上になる) */
+const RX_NONGEO_EXCL =
+  /財又はサービス|一時点|一定の期間|売上|収益|利益|損失|資産|負債|費用|償却|減損|のれん|引当|税|配当/;
+/** 小計・総額列 (葉ではなく和。葉数え・非地域加算の対象外) */
+const RX_AGG_COL =
+  /小計|合計|総計|累計|中計|セグメント計(?![一-龯々〆〤ぁ-んァ-ヶ])|部門計(?![一-龯々〆〤ぁ-んァ-ヶ])|計[（(]|計$|^計(?![一-龯々〆〤ぁ-んァ-ヶ])|連結|外部顧客/;
+/** 全社・本社共通 (地理不明の会社共通分。照合のみに使い fact 化しない) */
+const RX_COMPANY_COMMON = /全社|本社/;
+/** 会社総額スコープの集計 (地域小計と区別する。S100YCID) */
+function isCompanyAggLabel(label: string): boolean {
+  return /連結|外部顧客/.test(label);
+}
 /** 地域×項目 対の metric 区分 (売上高行だけ読む。利益行は混ぜない) */
 const RX_SALES_METRIC = /売上高|売上収益|営業収益/;
 const RX_PROFIT_METRIC = /営業利益|事業利益/;
@@ -302,9 +444,19 @@ function pickValueColForRows(
   for (let ci = 0; ci < width; ci++) {
     const h = colHeader[ci];
     if (EXCL.test(h)) continue;
-    if (/合計$|^合計|連結財務諸表計上額|^連結$|連結計上額/.test(h)) aggCols.push(ci);
+    if (/合計$|^合計|連結.{0,8}計上額|^連結$|連結計上額/.test(h)) aggCols.push(ci);
   }
   if (aggCols.length === 1) return { col: aggCols[0], isAggregateCol: true };
+  // 集計列が複数 (合計 + 連結計上額の併記) のときは会社スコープの連結列を
+  // 優先する (S100OC7S: 合計 40,900 と連結損益計算書計上額 40,900 の併記で
+  // 旧単一条件が不発 → 後段に落ちて値列なし却下になっていた。連結列は通常
+  // 最右だが語で選ぶ。同語重複は従来どおり後段へ)。
+  if (aggCols.length > 1) {
+    const renketsu = aggCols.filter((ci) => /連結/.test(colHeader[ci]));
+    if (renketsu.length === 1) return { col: renketsu[0], isAggregateCol: true };
+    const goukei = aggCols.filter((ci) => /合計/.test(colHeader[ci]));
+    if (goukei.length === 1) return { col: goukei[0], isAggregateCol: true };
+  }
 
   // 2) 当期 (報告対象年) 列。前期列が併記される 2 年表向け。
   const curCols: number[] = [];
@@ -343,7 +495,7 @@ function tryGeoRows(
   gridX: string[][],
   fiscalYearEnd: string,
   heading: string
-): OverseasFact[] | null {
+): ParsedTable | null {
   const flat = gridX.map((r) => r.join("")).join("");
   // 単位は表外の見出し ((単位：百万円) 等) に書かれることが多い → heading も見る
   const unit = detectUnitOrNull(flat) ?? detectUnitOrNull(heading);
@@ -407,7 +559,15 @@ function tryGeoRows(
   const entries: Entry[] = [];
   const shokei: Array<{ idx: number; value: number }> = [];
   let elimSum = 0;
+  let elimCount = 0;
+  let otherRevenueSum = 0;
+  let otherRevenueCount = 0;
+  let companyCommonSum = 0;
+  let companyCommonCount = 0;
   let hasBusinessRows = false;
+  // 最初の集計行より後の地域行は別 block (S100TYYR: 事業 block の「その他」
+  // 4953 を地域に混入させない)。小計は block 終端ではなく block 内区切り。
+  let seenAggRow = false;
 
   for (let i = firstNum; i < gridX.length; i++) {
     if (excluded.has(i)) continue;
@@ -421,6 +581,27 @@ function tryGeoRows(
     if (role === "other" && v !== null && !RX_ELIMINATION.test(normLabel)) {
       hasBusinessRows = true;
     }
+    // 収益認識 triplet の非地域脚 (契約小計→外部顧客総額の橋渡し。S100PUMS)。
+    // 集計にも地域にも数えない (classifyRegion の other 扱いと一致)。
+    if (
+      role === "other" &&
+      v !== null &&
+      RX_OTHER_REVENUE.test(cleanLabel(row[0] ?? ""))
+    ) {
+      otherRevenueSum += v;
+      otherRevenueCount++;
+    }
+    // 全社・本社共通行 (地理不明の会社共通分。S100AGPO: 合計に含まれる 9)。
+    // 集計行より前 (同一 block) のものだけ照合に加え、fact 化はしない。
+    if (
+      role === "other" &&
+      v !== null &&
+      !seenAggRow &&
+      RX_COMPANY_COMMON.test(cleanLabel(row[0] ?? ""))
+    ) {
+      companyCommonSum += v;
+      companyCommonCount++;
+    }
     if (RX_SHOKEI.test(normLabel)) {
       // 小計の値が読めない block 構成は検証不能 → 却下 (fail-closed)
       if (v === null || !Number.isInteger(v)) return null;
@@ -428,6 +609,9 @@ function tryGeoRows(
       continue;
     }
     if (role === "aggregate") {
+      // block 境界は地域行の後でのみ有効。先頭の総額行 (S100APSL の営業収益)
+      // は前 block の尾ではなく表頭なので境界にしない (全地域の誤除外防止)。
+      if (entries.length > 0) seenAggRow = true;
       if (
         v !== null &&
         /外部顧客|顧客との契約|合計|連結|^計$/.test(normLabel)
@@ -437,9 +621,23 @@ function tryGeoRows(
       continue;
     }
     if (RX_ELIMINATION.test(normLabel)) {
-      if (v !== null) elimSum += v;
+      if (v !== null) {
+        elimSum += v;
+        elimCount++;
+      }
       continue;
     }
+    // P/L 表は地域別収益の開示ではない (S100YCP3: 営業収益/費用/利益の損益要約
+    // に日本/海外行があり費用内訳のその他 348 を混入して読めていた)。費用明細
+    // を持つ P/L 型だけ落とす (利益対照の P-metric 表は殺さない)。
+    if (
+      role === "other" &&
+      v !== null &&
+      /^営業費用/.test(cleanLabel(row[0] ?? ""))
+    ) {
+      return null;
+    }
+    if (seenAggRow) continue;
     if (role !== "domestic" && role !== "overseas") continue;
     if (v === null) continue;
     if (!Number.isInteger(v)) return null; // 小数 = % 列誤認 → 却下
@@ -463,6 +661,8 @@ function tryGeoRows(
   // 曖昧表として却下 (aggregate-before-dedup の防止。#150 の guard を弱めない)。
   let useEntries = entries;
   let metricPruned = false;
+  // 丸め許容の葉項数。2-D 等の合算後は group 数ではなく合算前の葉セル数
+  let leafTerms = entries.length;
   const entryNames = entries.map((e) => e.name);
   if (new Set(entryNames).size !== entryNames.length) {
     if (elimSum !== 0) return null; // 消去つき重複は未証明の組合せ → 却下
@@ -470,6 +670,7 @@ function tryGeoRows(
     if (!resolved) return null;
     useEntries = resolved.entries;
     metricPruned = resolved.metricPruned;
+    leafTerms = resolved.leafTerms;
   }
 
   const facts: OverseasFact[] = useEntries.map((e) => ({
@@ -492,26 +693,193 @@ function tryGeoRows(
   if (facts.length < 2 || domesticSum <= 0) return null;
   // 同一表内の重複地域名は曖昧表 (aggregate-before-dedup の原因) として却下
   if (hasDuplicateRegionNames(facts)) return null;
-  // 検証: 集計行が開示されているなら、地域合計 (+消去) が **いずれかの集計行** と
-  // 一致すること (= 正しい列・正しい block を読み地域を取りこぼしていない)。
-  // 一致が無ければ誤読として却下。
-  const adjustedSum = regionSum + elimSum;
-  const matched = aggregates.find((a) => totalsConsistent(adjustedSum, a.value));
+  // 2-D 合計列の葉数え: 値列が合計列なら地域値はセグメント横断の和なので、
+  // 丸め許容は合算前の葉セル数で決める (S100PUMS: 4行×(3〜4列)=13葉)。
+  // 葉和と開示小計が懸け離れた行があれば表が自己矛盾 → 却下 (S100PV48)。
+  // 重複解消済み (grouping 側で葉を数え直し済み) の表には適用しない。
+  if (
+    new Set(entryNames).size === entryNames.length &&
+    /小計|合計|総計|累計|計$|^計/.test(colHeader[vc] ?? "")
+  ) {
+    // 調整額・消去列は表により葉 (合計に和算。S100OH0Q: 合計=葉+調整額) と
+    // メモ (和算外) の両形がある。両方の葉集合で検証し、いずれかで全行が
+    // 通れば採用する (両方通れば広い方。どちらも通らなければ自己矛盾)。
+    const leafSets: number[][] = [[], []];
+    for (let ci = 1; ci < width; ci++) {
+      if (ci === vc) continue;
+      const h = colHeader[ci] ?? "";
+      if (RX_AGG_COL.test(h)) continue;
+      if (
+        /セグメント間|内部売上|内部取引|前年比|増減|構成比|割合|％|%/.test(h)
+      )
+        continue;
+      leafSets[1].push(ci);
+      if (!RX_ELIMINATION.test(h) && !/調整額?|消去/.test(h)) leafSets[0].push(ci);
+    }
+    // 見出しも全地域行の値も同一の列は重複掲示 (S100O7VN の航空宇宙 2 列)。
+    // 二重計上しないよう先勝ちで間引く。見出し比較は単位片を除去して行う:
+    // 結合セルの展開ずれで「（単位；千円）種結晶」と「種結晶」のように単位片の
+    // 有無だけが違う同一列が生じ (S100YJVF)、除去なしでは重複を見逃して
+    // 二重計上 → F7 葉照合の誤殺 (当期表を落として前期表に後退) になる。
+    const dedupCols = (cols: number[]): number[] => {
+      const seen = new Set<string>();
+      const out: number[] = [];
+      for (const ci of cols) {
+        const sig =
+          (colHeader[ci] ?? "")
+            .replace(/（単位[^）]*）/g, "")
+            .replace(/\(単位[^)]*\)/g, "") +
+          "|" +
+          useEntries
+            .map((e) => String(parseJpNumber(gridX[e.idx][ci] ?? "")))
+            .join(",");
+        if (!seen.has(sig)) {
+          seen.add(sig);
+          out.push(ci);
+        }
+      }
+      return out;
+    };
+    leafSets[0] = dedupCols(leafSets[0]);
+    leafSets[1] = dedupCols(leafSets[1]);
+    const verify = (leafCols: number[]): number | null => {
+      if (
+        !leafCols.some((ci) =>
+          useEntries.some((e) => parseJpNumber(gridX[e.idx][ci] ?? "") !== null)
+        )
+      )
+        return null;
+      let leaves = 0;
+      for (const e of useEntries) {
+        const cells = leafCols
+          .map((ci) => parseJpNumber(gridX[e.idx][ci] ?? ""))
+          .filter((x): x is number => x !== null && Number.isInteger(x));
+        if (cells.length === 0) {
+          leaves += 1;
+          continue;
+        }
+        const feederSum = cells.reduce((a, x) => a + x, 0);
+        if (Math.abs(feederSum - e.value) > 0.5 * (cells.length + 4)) {
+          return null;
+        }
+        leaves += cells.length;
+      }
+      return leaves > 0 ? leaves : null;
+    };
+    const leavesNoElim = verify(leafSets[0]);
+    const leavesWithElim = verify(leafSets[1]);
+    // 葉セルを持つ表でどちらの集合も通らなければ自己矛盾で却下する
+    // (S100PV48)。葉列自体がない表は従来どおり行数で数える。
+    const eitherHasFeeder =
+      leafSets[0].some((ci) =>
+        useEntries.some((e) => parseJpNumber(gridX[e.idx][ci] ?? "") !== null)
+      ) ||
+      leafSets[1].some((ci) =>
+        useEntries.some((e) => parseJpNumber(gridX[e.idx][ci] ?? "") !== null)
+      );
+    if (eitherHasFeeder && leavesNoElim === null && leavesWithElim === null) {
+      // 開示小計 vs 葉和の不一致: 開示総額を裁定者にする。地域の開示小計の和が
+      // 会社総額 (外部顧客/連結/合計行) と整合すれば葉セル側の誤記として開示
+      // 小計を信頼し (S100R9AG: アジア葉 5,793 vs 小計 5,973、総額 29,461 とは
+      // 小計側が Δ2 で整合)、整合しなければ自己矛盾で却下する (S100PV48:
+      // 日本小計 7,923,007 vs 葉和 7,932,007、総額 28,965,063 とは葉側が整合し
+      // 開示小計は Δ9002 で不整合 → 却下を維持)。leafTerms は合算前の行数の
+      // まま (後段の許容を狭める fail-closed 側への倒し方)。
+      const regionSumStated = useEntries.reduce((a, e) => a + e.value, 0);
+      const arbiterAgg =
+        aggregates.find((a) => /外部顧客/.test(a.label)) ??
+        aggregates.find((a) => /連結|合計/.test(a.label)) ??
+        null;
+      const arbiterBound =
+        0.5 *
+        (leafTerms + elimCount + otherRevenueCount + companyCommonCount + 4);
+      if (
+        !arbiterAgg ||
+        Math.abs(
+          regionSumStated + elimSum + otherRevenueSum + companyCommonSum -
+            arbiterAgg.value
+        ) > arbiterBound
+      ) {
+        return null;
+      }
+    }
+    const best = [leavesNoElim, leavesWithElim].filter(
+      (x): x is number => x !== null
+    );
+    if (best.length > 0) leafTerms = Math.max(...best);
+  }
+  // 検証: 地域合計が開示集計のいずれかと一致すること (= 正しい列・block を
+  // 読み地域を取りこぼしていない証明)。地域スコープの集計に素の合計で先に
+  // 照合する (S100YCID: 調整額を地域計に巻き込む適用範囲誤りを防ぐ)。
+  // 消去つき照合はフォールバック (7203 Toyota 型: 消去前スコープの地域計)。
+  const companyAgg =
+    aggregates.find((a) => /外部顧客/.test(a.label)) ??
+    aggregates.find((a) => /連結/.test(a.label)) ??
+    null;
+  const matchedRegional = aggregates.find(
+    (a) =>
+      !isCompanyAggLabel(a.label) &&
+      totalsConsistent(
+        regionSum + companyCommonSum,
+        a.value,
+        leafTerms + companyCommonCount
+      )
+  );
+  const matchedElim = aggregates.find((a) =>
+    totalsConsistent(regionSum + elimSum, a.value, leafTerms + elimCount)
+  );
+  let matched = matchedRegional ?? matchedElim ?? null;
+  // 会社総額との橋渡し: 地域小計で完全性が証明済みでも、総額セルが会社
+  // スコープで小計と懸け離れていたら、開示の非地域脚 (その他の収益・調整額・
+  // 消去・全社共通) で橋渡しできなければ却下 (脱落か表違い。推測しない)。
+  let bridged = false;
+  if (matchedRegional && companyAgg && companyAgg !== matchedRegional) {
+    const bridgeTerms =
+      leafTerms + elimCount + otherRevenueCount + companyCommonCount + 1;
+    if (
+      Math.abs(
+        regionSum + elimSum + otherRevenueSum + companyCommonSum - companyAgg.value
+      ) <=
+      0.5 * (bridgeTerms + 4)
+    ) {
+      bridged = true;
+    } else if (matchedElim) {
+      matched = matchedElim;
+    } else {
+      return null;
+    }
+  }
   if (aggregates.length > 0 && !matched) return null;
   // 分母 (連結売上高): 実際の総売上 = 外部顧客への売上高 を最優先。無ければ
   // 連結/合計、無ければ一致した集計、無ければ地域合計。ただし metric 除去後の
   // 残りに非地域の実数行 (事業セグメント等) があり集計行がない表は、地域計が
   // 会社全体を表さないため total を欠損にする (捏造しない。S100VI7V で実証)。
+  const totalAgg =
+    aggregates.find((a) => /外部顧客/.test(a.label)) ??
+    aggregates.find((a) => /連結|合計/.test(a.label)) ??
+    matched ??
+    null;
   const total =
-    aggregates.find((a) => /外部顧客/.test(a.label))?.value ??
-    aggregates.find((a) => /連結|合計/.test(a.label))?.value ??
-    matched?.value ??
-    (metricPruned && hasBusinessRows ? null : regionSum);
+    totalAgg?.value ?? (metricPruned && hasBusinessRows ? null : regionSum);
+  // 照合に一致集計と異なる総額セルを使うときは中間集計の丸めを1項足す。
+  // 証明の調整額は検証済みの脚だけ (消去 + 橋渡し済み非地域収益 + 地域照合済み全社共通)。
+  const intermediate = totalAgg && matched && totalAgg !== matched ? 1 : 0;
+  const reconAdjustment =
+    elimSum +
+    (bridged ? otherRevenueSum : 0) +
+    (matched === matchedRegional ? companyCommonSum : 0);
+  const reconTerms =
+    leafTerms +
+    elimCount +
+    (bridged ? otherRevenueCount : 0) +
+    (matched === matchedRegional ? companyCommonCount : 0) +
+    intermediate;
+  const bound = 0.5 * (reconTerms + 4);
   // 海外売上高 = 開示された海外地域行の合計 (= regionSum − 国内)。total − 国内に
   // すると「その他の収益」等の非地域分を海外に混入させるため使わない (ルール1)。
   const overseasTotal = regionSum - domesticSum;
   if (overseasTotal <= 0) return null;
-  if (total !== null && total < adjustedSum * 0.99) return null;
+  if (total !== null && total < regionSum + reconAdjustment - bound) return null;
 
   facts.push({
     regionName: "海外売上高",
@@ -536,7 +904,10 @@ function tryGeoRows(
     fiscalYearEnd,
     isConsolidated: consolidated,
   });
-  return facts;
+  return {
+    facts,
+    proof: { reconciliationAdjustment: reconAdjustment, roundingBound: bound },
+  };
 }
 
 /**
@@ -552,7 +923,7 @@ function finishShokeiBlocks(
   unit: { label: string; factor: number },
   fiscalYearEnd: string,
   consolidated: boolean | null
-): OverseasFact[] | null {
+): ParsedTable | null {
   const bounds = shokei.map((s) => s.idx).sort((a, b) => a - b);
   // 最終小計より後の地域行は所属 block 不明 → 却下
   if (entries.some((e) => e.idx > bounds[bounds.length - 1])) return null;
@@ -565,7 +936,7 @@ function finishShokeiBlocks(
     const blockNames = block.map((e) => e.name);
     if (new Set(blockNames).size !== blockNames.length) return null;
     const blockSum = block.reduce((a, e) => a + e.value, 0);
-    if (!totalsConsistent(blockSum, s.value)) return null;
+    if (!totalsConsistent(blockSum, s.value, block.length)) return null;
     for (const e of block) {
       const g = groups.get(e.name);
       if (g && g.kind !== e.role) return null; // block 間で内外区分が矛盾 → 却下
@@ -575,7 +946,9 @@ function finishShokeiBlocks(
   }
   // grand: 小計の合計が開示総額のいずれかと一致すること (総額の捏造なし)
   const grandSum = shokei.reduce((a, s) => a + s.value, 0);
-  const grand = aggregates.find((a) => totalsConsistent(grandSum, a.value));
+  const grand = aggregates.find((a) =>
+    totalsConsistent(grandSum, a.value, shokei.length)
+  );
   if (!grand) return null;
 
   let domesticSum = 0;
@@ -598,7 +971,8 @@ function finishShokeiBlocks(
   if (hasDuplicateRegionNames(facts)) return null;
   const overseasTotal = regionSum - domesticSum;
   const total = grand.value;
-  if (overseasTotal <= 0 || total < regionSum * 0.99) return null;
+  const bound = 0.5 * (entries.length + 4);
+  if (overseasTotal <= 0 || total < regionSum - bound) return null;
 
   facts.push({
     regionName: "海外売上高",
@@ -620,7 +994,10 @@ function finishShokeiBlocks(
     fiscalYearEnd,
     isConsolidated: consolidated,
   });
-  return facts;
+  return {
+    facts,
+    proof: { reconciliationAdjustment: 0, roundingBound: bound },
+  };
 }
 
 interface DupEntry {
@@ -643,7 +1020,7 @@ interface DupEntry {
 function resolveDupEntries(
   entries: DupEntry[],
   aggregates: Array<{ label: string; value: number }>
-): { entries: DupEntry[]; metricPruned: boolean } | null {
+): { entries: DupEntry[]; metricPruned: boolean; leafTerms: number } | null {
   // P-metric: 全行の sub が metric 対で、売上/利益の両方があれば利益行を除く
   const metrics = entries.map((e) => metricOf(e.sub));
   if (
@@ -654,7 +1031,7 @@ function resolveDupEntries(
     const kept = entries.filter((_, i) => metrics[i] === "sales");
     const names = kept.map((e) => e.name);
     if (new Set(names).size !== names.length) return null;
-    return { entries: kept, metricPruned: true };
+    return { entries: kept, metricPruned: true, leafTerms: kept.length };
   }
   // P-2D: sub が品目ラベル → 地域ごとに合算
   const subRoles = entries.map((e) => classifyRegion(e.sub));
@@ -682,8 +1059,10 @@ function resolveDupEntries(
       else groups.set(e.name, { kind: e.role, sum: e.value, idx: e.idx });
     }
     const groupedSum = [...groups.values()].reduce((a, g) => a + g.sum, 0);
-    // 分割の証明: 合算が開示集計のいずれかと一致すること
-    if (!aggregates.some((a) => totalsConsistent(groupedSum, a.value))) {
+    // 分割の証明: 合算が開示集計のいずれかと一致すること (許容は合算前 leaf 数)
+    if (
+      !aggregates.some((a) => totalsConsistent(groupedSum, a.value, entries.length))
+    ) {
       return null;
     }
     return {
@@ -695,6 +1074,7 @@ function resolveDupEntries(
         value: g.sum,
       })),
       metricPruned: false,
+      leafTerms: entries.length,
     };
   }
   // P-hier: sub が子地域ラベル (一意) → 子ラベルで読替え
@@ -714,8 +1094,9 @@ function resolveDupEntries(
     }));
     if (leaf.some((e) => e.name === "")) return null;
     const leafSum = leaf.reduce((a, e) => a + e.value, 0);
-    if (!aggregates.some((a) => totalsConsistent(leafSum, a.value))) return null;
-    return { entries: leaf, metricPruned: false };
+    if (!aggregates.some((a) => totalsConsistent(leafSum, a.value, leaf.length)))
+      return null;
+    return { entries: leaf, metricPruned: false, leafTerms: leaf.length };
   }
   return null;
 }
@@ -728,7 +1109,7 @@ function tryGeoCols(
   gridX: string[][],
   fiscalYearEnd: string,
   heading: string
-): OverseasFact[] | null {
+): ParsedTable | null {
   const flat = gridX.map((r) => r.join("")).join("");
   const unit = detectUnitOrNull(flat) ?? detectUnitOrNull(heading);
   if (!unit) return null;
@@ -753,7 +1134,7 @@ function tryGeoCols(
   let totalCol = -1;
   for (let ci = 0; ci < width; ci++) {
     const h = norm(gridX[headerIdx][ci] ?? "");
-    if (/連結財務諸表計上額|^連結$|^合計$|連結計上額/.test(h)) totalCol = ci;
+    if (RX_TOTAL_COL.test(h)) totalCol = ci;
   }
 
   // 値行 = 「外部顧客への売上高 / 外部顧客に対する売上高 / 売上高 / 合計」行
@@ -776,20 +1157,73 @@ function tryGeoCols(
   }
   if (valueRow < 0) return null;
 
+  // 集計列 (連結/合計) と消去列 (調整額/消去) を収集。行パスと同型に、
+  // 地域合計 (+消去) がいずれかの集計列と一致することを要求する
+  // (S100Y53G: 地域 569330 + 調整額 36 ≈ 連結 569370)。
+  const aggregates: Array<{ label: string; value: number }> = [];
+  let elimSum = 0;
+  let elimCount = 0;
+  for (let ci = 0; ci < width; ci++) {
+    const h = norm(gridX[headerIdx][ci] ?? "");
+    const av = parseJpNumber(gridX[valueRow][ci] ?? "");
+    if (av === null) continue;
+    if (RX_TOTAL_COL.test(h)) {
+      aggregates.push({ label: h, value: av });
+    } else if (RX_ELIMINATION.test(h)) {
+      elimSum += av;
+      elimCount++;
+    }
+  }
+
   const consolidated = detectConsolidated(gridX.flat().join(" "));
   const EXCL = /調整額?|セグメント間|内部|消去|割合|％|%/;
+  // セグメント注記か (地域注記を兼ねる。S100ACAR は地域注記を省略し本表参照)。
+  const headText = gridX
+    .slice(0, headerIdx + 1)
+    .map((r) => r.join(""))
+    .join("");
+  const hasKeiCol = gridX[headerIdx].some((c) => /^計$/.test(cleanLabel(c)));
+  const isSegmentNote =
+    /報告セグメント/.test(headText) && (totalCol >= 0 || hasKeiCol);
+  let nonGeoSegSum = 0;
+  let nonGeoSegCount = 0;
   interface Col {
     index: number;
     name: string;
     kind: "domestic" | "overseas";
     value: number | null;
+    /** 合算前の leaf 列数 (丸め許容用。grouping で合算したら子の数) */
+    n: number;
   }
   const cols: Col[] = [];
   for (let ci = 0; ci < width; ci++) {
     if (ci === totalCol) continue;
+    const h = norm(gridX[headerIdx][ci] ?? "");
+    const hClean = cleanLabel(gridX[headerIdx][ci] ?? "");
+    // セグメント注記の非地域列 (その他・事業単位・全社共通) は地理が定まら
+    // ないため fact 化せず照合にだけ加える (S100ACAR その他 1748、
+    // S100IWKH スポーツ施設事業 512497)。海外売上高は地理列のみの下限。
+    // 小計・総額列は和なので除く (報告セグメント計の二重計上防止)。
+    if (
+      isSegmentNote &&
+      !RX_AGG_COL.test(h) &&
+      !RX_ELIMINATION.test(h) &&
+      !EXCL.test(h) &&
+      (RX_OTHER_REGIONISH.test(hClean) ||
+        RX_COMPANY_COMMON.test(hClean) ||
+        RX_BUSINESS_COL.test(hClean)) &&
+      !RX_NONGEO_EXCL.test(hClean)
+    ) {
+      const nv = parseJpNumber(gridX[valueRow][ci] ?? "");
+      if (nv !== null && !Number.isInteger(nv)) return null;
+      if (nv !== null) {
+        nonGeoSegSum += nv;
+        nonGeoSegCount++;
+      }
+      continue;
+    }
     const role = colRole[ci];
     if (role !== "domestic" && role !== "overseas") continue;
-    const h = norm(gridX[headerIdx][ci] ?? "");
     if (EXCL.test(h)) continue;
     const v = parseJpNumber(gridX[valueRow][ci] ?? "");
     if (v !== null && !Number.isInteger(v)) return null;
@@ -798,6 +1232,7 @@ function tryGeoCols(
       name: cleanLabel(gridX[headerIdx][ci] ?? ""),
       kind: role,
       value: v,
+      n: 1,
     });
   }
   // P-hier-cols: 親ラベル重複は子階層 (次行) で grouping する。複数列の親は
@@ -851,16 +1286,19 @@ function tryGeoCols(
         name,
         kind: g.kind,
         value: g.sum as number | null,
+        n: g.n,
       }));
   }
   const facts: OverseasFact[] = [];
   let domesticSum = 0;
   let regionSum = 0;
+  let leafTerms = 0;
   for (const c of useCols) {
     const v = c.value;
     if (v === null) continue;
     if (c.kind === "domestic") domesticSum += v;
     regionSum += v;
+    leafTerms += c.n;
     facts.push({
       regionName: c.name,
       regionKind: c.kind,
@@ -876,12 +1314,21 @@ function tryGeoCols(
   // 同一表内の重複地域名は曖昧表 (aggregate-before-dedup の原因) として却下
   if (hasDuplicateRegionNames(facts)) return null;
 
-  const disclosedTotal =
-    totalCol >= 0 ? parseJpNumber(gridX[valueRow][totalCol] ?? "") : null;
-  const total = disclosedTotal ?? regionSum;
-  if (disclosedTotal !== null && !totalsConsistent(regionSum, disclosedTotal)) {
-    return null;
-  }
+  const adjustedSum = regionSum + elimSum + nonGeoSegSum;
+  const matched = aggregates.find((a) =>
+    totalsConsistent(adjustedSum, a.value, leafTerms + elimCount + nonGeoSegCount)
+  );
+  if (aggregates.length > 0 && !matched) return null;
+  const totalAgg =
+    aggregates.find((a) => /連結/.test(a.label)) ??
+    aggregates.find((a) => /合計/.test(a.label)) ??
+    matched ??
+    null;
+  const total = totalAgg?.value ?? regionSum;
+  const intermediate = totalAgg && matched && totalAgg !== matched ? 1 : 0;
+  const bound =
+    0.5 * (leafTerms + elimCount + nonGeoSegCount + intermediate + 4);
+  if (total < adjustedSum - bound) return null;
   // 海外売上高 = 開示された海外地域列の合計 (= regionSum − 国内)。
   const overseasTotal = regionSum - domesticSum;
   if (overseasTotal <= 0) return null;
@@ -906,7 +1353,13 @@ function tryGeoCols(
     fiscalYearEnd,
     isConsolidated: consolidated,
   });
-  return facts;
+  return {
+    facts,
+    proof: {
+      reconciliationAdjustment: elimSum + nonGeoSegSum,
+      roundingBound: bound,
+    },
+  };
 }
 
 /**
@@ -916,12 +1369,17 @@ function tryGeoCols(
  * - (会計期末, 地域名) の重複なし
  * - 単位・会計期末・連結区分の混在なし
  * - 海外売上高 = 海外地域行の合計 (完全分解の一致要求)
- * - 連結売上高 (開示あり) は地域合計を下回らない。開示なし (9147 系) は
- *   total 欠損を許す (捏造しない)
+ * - 連結売上高 (開示あり) は調整後地域合計を丸め許容より下回らない。開示なし
+ *   (9147 系) は total 欠損を許す (捏造しない)。調整額と許容は parser の証明
+ *   (proof) で受け、なければ調整 0・地域行数からの許容で厳しめに判定する
+ *   (fail-closed。消去つき表は証明なしでは通らない)
  * - 比率は両非欠損のとき海外/連結から再計算一致
  * - 地域行なしの集計のみ/空集合は検証対象外 (pass)。未構造化の空保存は通す。
  */
-export function validateOverseasSaveSet(facts: OverseasFact[]): void {
+export function validateOverseasSaveSet(
+  facts: OverseasFact[],
+  proof?: OverseasProof
+): void {
   const keys = facts.map((f) => `${f.fiscalYearEnd} ${f.regionName}`);
   if (new Set(keys).size !== keys.length) {
     throw new Error("保存集合に重複地域があります。");
@@ -954,7 +1412,9 @@ export function validateOverseasSaveSet(facts: OverseasFact[]): void {
   if (!ot || ot.salesAmount === null || ot.salesAmount !== overseasSum) {
     throw new Error("保存集合の海外売上高が地域合計と一致しません。");
   }
-  if (total && total.salesAmount !== null && total.salesAmount < regionSum * 0.99) {
+  const adjusted = regionSum + (proof?.reconciliationAdjustment ?? 0);
+  const bound = proof?.roundingBound ?? 0.5 * (regions.length + 4);
+  if (total && total.salesAmount !== null && total.salesAmount < adjusted - bound) {
     throw new Error("保存集合の連結売上高が地域合計を下回ります。");
   }
   const ratio =
@@ -1025,6 +1485,20 @@ function scoreCandidate(
   if (hasPrior && !hasCurrent) s -= 6; // 前期のみ = 旧年度の表
   if (/地域ごとの情報|地域別|主たる地域市場|所在地別/.test(ctx)) s += 3;
   if (/外部顧客/.test(flat)) s += 2;
+  // 正準の地理開示 (地域注記) をセグメント注記・販売実績表より優先する。
+  // S100G3BR で実証: 当連結セグメント表 (c2, score 12: 連結+当期+窓汚染の
+  // 外部顧客) が「(4) 地域に関する情報」表 (c3, score 10) に勝ち、セグメント
+  // 切り (日本/北米/アジア/中国 + 非地域その他 7,880) を地域別売上として誤採用
+  // していた (c2 は domestic+overseas_total≠total の Δ7,881 不整合、c3 は完全
+  // 整合)。表題窓に地域注記の題名がある候補を +4 する。当/前ペアは同種注記
+  // なので対称 (期間優先は保たれる)。個別/前期ペナルティより小さく、連結+
+  // 当期 (+10) には単独で勝てない (期間・連結の誤選択は起こさない)。
+  if (
+    /地域ごとの情報|地域に関する情報|地域別に関する情報|地域別情報|地域別の内訳|地域別内訳/.test(
+      heading
+    )
+  )
+    s += 4;
   return s;
 }
 
@@ -1054,6 +1528,105 @@ export function parseOverseasData(
 }
 
 /**
+ * 候補 facts の正規化比較キー。会計期末・連結区分・単位・行区分・地域名・
+ * 値・比率を regionKind/regionName 順に並べて結合する。
+ */
+function normFactsKey(facts: OverseasFact[]): string {
+  return [...facts]
+    .sort((a, b) =>
+      a.regionKind < b.regionKind
+        ? -1
+        : a.regionKind > b.regionKind
+          ? 1
+          : a.regionName < b.regionName
+            ? -1
+            : a.regionName > b.regionName
+              ? 1
+              : 0
+    )
+    .map(
+      (f) =>
+        `${f.fiscalYearEnd}|${String(f.isConsolidated)}|${f.unitLabel}|${f.regionKind}|${f.regionName}|${String(f.salesAmount)}|${String(f.ratioPct)}`
+    )
+    .join(";");
+}
+
+/** 2候補が同一期間・同一 scope (連結区分・単位) か */
+function sameScope(a: OverseasFact[], b: OverseasFact[]): boolean {
+  if (a.length === 0 || b.length === 0) return false;
+  const key = (f: OverseasFact[]) =>
+    `${f[0].fiscalYearEnd}|${String(f[0].isConsolidated)}|${f[0].unitLabel}`;
+  const uniform = (f: OverseasFact[]) => f.every((x) => key([x]) === key(f));
+  return uniform(a) && uniform(b) && key(a) === key(b);
+}
+
+/** 注記種 (正準の地域注記タイトルを先に見る。注 prose 中の報告セグメントに負けない) */
+function noteClassOf(heading: string): "CHIIKI" | "SEG" | "UNK" {
+  if (
+    /地域ごとの情報|地域に関する情報|地域別に関する情報|地域別情報|地域別の内訳|地域別内訳/.test(
+      heading
+    )
+  )
+    return "CHIIKI";
+  if (/報告セグメント|セグメント情報|販売実績/.test(heading)) return "SEG";
+  return "UNK";
+}
+
+/** 期表示語クラス (表題窓+表文面)。T=当期のみ Z=前期のみ TZ=両方 -=なし */
+function periodWordClassOf(heading: string, flat: string): string {
+  const ctx = heading + " " + flat;
+  const t = /当連結会計年度|当事業年度|当期/.test(ctx);
+  const z = /前連結会計年度|前事業年度|前期/.test(ctx);
+  return t && z ? "TZ" : t ? "T" : z ? "Z" : "-";
+}
+
+interface PeriodPairCand {
+  status: OverseasParseStatus;
+  facts: OverseasFact[];
+  proof: OverseasProof;
+  start: number;
+  heading: string;
+  flat: string;
+}
+
+/** 表文面に非売上 metric の標識 (IFRS 移行日列・資産/減損の語) があるか */
+function hasMetricMarkers(flat: string): boolean {
+  return /移行日|非流動資産|減損損失|有形固定資産|無形資産/.test(flat);
+}
+
+/**
+ * 期間ペアの tiebreak: 同点2候補が同 status・同注記種・同連結区分・
+ * 同期表示語クラスで総額のみ違うときだけ発火する。
+ * - 片方だけ表文面に metric 標識 (R1 すり抜けの資産表) があれば clean 側を
+ *   採る (S100CMLA: 後表=非流動資産表に IFRS 移行日列。前表=売上表を採用)。
+ * - 両 clean なら期表示語なし ([-]) のときだけ文書順で後の候補 (= 当期) を
+ *   採る。共に当期 ([T]) は同期間ペア (S100TA7H: 収益認識表とセグメント表) で
+ *   順序に意味がなく、共に混在 ([TZ]) は売上/非売上の混在を多く含むため
+ *   順序では決めない。両 metric は未構造化を維持。
+ * - 1つでも gate を外したら null (未構造化を維持)。
+ */
+function pickLaterOfPeriodPair(tops: PeriodPairCand[]): PeriodPairCand | null {
+  if (tops.length !== 2) return null;
+  const [a, b] = tops;
+  if (a.status !== b.status) return null;
+  if (noteClassOf(a.heading) !== noteClassOf(b.heading)) return null;
+  const pwA = periodWordClassOf(a.heading, a.flat);
+  if (pwA !== periodWordClassOf(b.heading, b.flat)) return null;
+  const consolA = a.facts[0]?.isConsolidated ?? null;
+  const consolB = b.facts[0]?.isConsolidated ?? null;
+  if (consolA !== consolB) return null;
+  const totA = a.facts.find((f) => f.regionKind === "total")?.salesAmount ?? null;
+  const totB = b.facts.find((f) => f.regionKind === "total")?.salesAmount ?? null;
+  if (totA === null || totB === null || totA === totB) return null;
+  const metA = hasMetricMarkers(a.flat);
+  const metB = hasMetricMarkers(b.flat);
+  if (metA !== metB) return metA ? b : a;
+  if (metA && metB) return null;
+  if (pwA !== "-") return null;
+  return a.start < b.start ? b : a;
+}
+
+/**
  * 本文 iXBRL の HTML 文字列から海外（地域別）売上を構造化する。
  * テストは公開済み有報の実テーブル fixture をここへ直接食わせる。
  */
@@ -1068,14 +1641,23 @@ export function parseOverseasHtml(
   interface Cand {
     status: OverseasParseStatus;
     facts: OverseasFact[];
+    proof: OverseasProof;
     score: number;
     start: number;
+    heading: string;
+    flat: string;
   }
   const candidates: Cand[] = [];
 
   for (const { table, heading, start } of tables) {
-    const grid = tableToGridExpanded(table);
-    if (grid.length < 2) continue;
+    const rawGrid = tableToGridExpanded(table);
+    if (rawGrid.length < 2) continue;
+    // 全角数字・ラテンの半角化 (全パス共通)。S1009XV6 の「その他 ５」等、
+    // 全角数字セルが parseJpNumber を素通りして行脱落→総額不一致を起こす。
+    // 括弧・符号類は触らない (注除去・△▲負数判定の現状を変えない)。
+    const grid = rawGrid.map((r) =>
+      r.map((c) => toHalfWidthLatin(toHalfWidthDigits(c)))
+    );
     const flat = grid.map((r) => r.join("")).join("");
     // 生産実績表は売上高の開示ではないので候補にしない (監査の取りこぼし集計にも
     // 入れない = sawGeoSignal を立てない。販売実績表など正規の売上表は別 fixture で固定)。
@@ -1084,32 +1666,41 @@ export function parseOverseasHtml(
     // (S100G2DL/S100J2FF で実証の dup なし live 誤 pick。算術整合するため検証は
     // 通り抜ける。売上表の誤殺防止は S100AJAN ほか全母集団 re-run で固定)。
     if (isNonSalesMetricTable(heading)) continue;
+    // 受注・繰越表も売上高の開示ではないので候補にしない (S100TP3I)。
+    if (isBacklogTable(heading)) continue;
     // R1-grid: 表頭 (先頭2行) に減損損失・非流動資産がある表も非売上表として候補に
     // しない。入れ子の内側表は見出し窓に表題が入らず heading-R1 をすり抜けるため
     // (S100O4SN で実証: 内側表の窓は style 屑+単位のみで abstain し減損表を採用)。
     // 売上表の表頭にこの2語は来ない (セグメント資産等の行は表の下部)。
     const headCells = grid.slice(0, 2).map((r) => r.join("")).join("");
-    if (/減損損失|非流動資産/.test(headCells)) continue;
+    if (/減損損失|非流動資産|有形固定資産|無形資産/.test(headCells)) continue;
     const regionish =
       RX_OVERSEAS_REGION.test(flat) || /本邦|日本|海外売上高/.test(flat);
     if (!regionish) continue;
     tablesScanned++;
 
-    let cand: { status: OverseasParseStatus; facts: OverseasFact[] } | null =
-      null;
+    let cand: {
+      status: OverseasParseStatus;
+      facts: OverseasFact[];
+      proof: OverseasProof;
+    } | null = null;
     {
       const rows = tryGeoRows(grid, reportPeriodEnd, heading);
-      if (rows) cand = { status: "ok_geo_rows", facts: rows };
+      if (rows)
+        cand = { status: "ok_geo_rows", facts: rows.facts, proof: rows.proof };
     }
     if (!cand) {
       const cols = tryGeoCols(grid, reportPeriodEnd, heading);
-      if (cols) cand = { status: "ok_geo_cols", facts: cols };
+      if (cols)
+        cand = { status: "ok_geo_cols", facts: cols.facts, proof: cols.proof };
     }
     if (cand) {
       candidates.push({
         ...cand,
         score: scoreCandidate(heading, flat, cand.status),
         start,
+        heading,
+        flat,
       });
     } else if (/日本|本邦/.test(flat) && RX_OVERSEAS_REGION.test(flat)) {
       // 日本(本邦) + 海外地域 + 数値 はあるが構造化できなかった → 取りこぼし候補
@@ -1119,10 +1710,53 @@ export function parseOverseasHtml(
 
   if (candidates.length > 0) {
     // 当期・連結・地域注記に最も近い候補を採用。同点は文書の早い方 (連結注記は
-    // 個別注記より前に出る) を優先する。
+    // 個別注記より前に出る) を優先する。ただし同点 top が同一期間/scope の売上
+    // metric で値が矛盾する表同士のときは文書順で選ばず未構造化にする (同値は
+    // 代表に収束)。矛盾候補の先頭採用は aggregate-before-dedup と同型の誤り。
     candidates.sort((a, b) => b.score - a.score || a.start - b.start);
     const best = candidates[0];
-    return { status: best.status, facts: best.facts, tablesScanned };
+    const tops = candidates.filter((c) => c.score === best.score);
+    if (tops.length > 1) {
+      const keys = tops.map((c) => normFactsKey(c.facts));
+      const allEqual = keys.every((k) => k === keys[0]);
+      if (!allEqual) {
+        const conflict = tops.some(
+          (c) =>
+            c !== best &&
+            sameScope(c.facts, best.facts) &&
+            normFactsKey(c.facts) !== normFactsKey(best.facts)
+        );
+        if (conflict) {
+          // 期間ペアの tiebreak: 同点2候補が同種注記・同連結区分・同 status で
+          // 期表示語も等しく (共に無し/共に当期/共に前期)、総額のみ違うときは
+          // 文書順で後の表 (= 当期) を採る。地域/セグメント注記は前期表→当期表
+          // の順に開示される (採点で解消した T/Z ペア 1409 件中 1391 件が当期
+          // 後置 = 98.7%、残り 18 件は収益認識/セグメントの cross-note ペア)。
+          // 連結/個別・注記種・期表示語・status のいずれかが違うペア、3 者以上
+          // の tie、総額欠損・同額ペアは対象外 (正直に未構造化を維持)。
+          // S100R98H/S100TU43/S100W4M7/S100YJKO (E00766 の4期連続: 前期表と
+          // 当期表が共に (2)地域別の内訳・期表示語なしで同点)、S100AO7M/
+          // S100TTUY (無題表ペア) で実証。いずれも経営指標の売上高系列で
+          // 後表=当期を確認 (F5 の先頭採用は前期を誤採用していた)。
+          const later = pickLaterOfPeriodPair(tops);
+          if (later) {
+            return {
+              status: later.status,
+              facts: later.facts,
+              tablesScanned,
+              proof: later.proof,
+            };
+          }
+          return { status: "geo_present_unstructured", facts: [], tablesScanned };
+        }
+      }
+    }
+    return {
+      status: best.status,
+      facts: best.facts,
+      tablesScanned,
+      proof: best.proof,
+    };
   }
 
   return {
