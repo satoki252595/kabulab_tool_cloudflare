@@ -41,7 +41,7 @@ source D1・Notion への書込は行わない。コードとローカル検証�
   銘柄ごとに束ねること、絞り込みが SQL の WHERE であることを確認。
 - `src/shared/screener.test.ts`（新規）: ATR% 1.99→不通過 / 2→通過 /
   2.01→通過 / null→不通過の境界のみ。
-- `nix develop -c pnpm test`（全体）: **189 files / 2579 pass / 383 skip / 0 fail**。
+- `nix develop -c pnpm test`（全体）: **188 files / 2575 pass / 383 skip / 0 fail**（ATR の 4 件は独立 PR #135 側で検証）。
 - `nix develop -c pnpm typecheck`: 通過。`nix develop -c pnpm lint`: 通過。
 - `nix develop -c pnpm db:generate:d1`: **No schema changes**
   （読取ミラー `src/shared/db/jss-financials.ts` は generate 対象外。
