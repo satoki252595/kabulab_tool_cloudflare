@@ -296,7 +296,7 @@ const WINDOW_LIMITATION =
 
 const LICENSE_NOTE =
   " 利用条件: FFAJサイトの著作権表示は一般的な文言のみで商用利用の可否が明記されていないため「要確認」" +
-  "として個人利用の範囲に留める (公開経路へ出す前に協会へ確認する)。";
+  "として扱い、公開経路へ出す前に協会へ確認する。";
 
 function toIndicatorDef(def: FfajOtcFxIndicatorDefinition, m: IndicatorMapping): IndicatorDefInput {
   return {

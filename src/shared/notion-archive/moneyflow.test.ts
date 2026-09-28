@@ -1,5 +1,5 @@
 /**
- * moneyflow (個人用「お金の流れ」) の Notion 保管のテスト。
+ * moneyflow (「お金の流れ」) の Notion 保管のテスト。
  * fetch のモック方式は price-sync-log.test.ts と同じ (route map + vi.resetModules())。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

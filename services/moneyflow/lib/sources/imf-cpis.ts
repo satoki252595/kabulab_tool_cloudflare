@@ -174,7 +174,7 @@ export const IMF_CPIS_MAX_SERIES_PER_REQUEST = 60;
 /**
  * 既定で問い合わせる相手国・地域コード。
  *
- * IMF CPIS は 249 の国・地域コードを持つが、個人用ダッシュボードとして毎回
+ * IMF CPIS は 249 の国・地域コードを持つが、本ダッシュボードとして毎回
  * 全件を取得する意味は薄く、計画書が見込む観測ログの行数感 (年間数千行) を
  * 大きく超えてしまう。ここでは実機検証 (2024-S1, JP→World) で確認した
  * 「日本の対外証券投資の相手国として残高が大きい国・地域」を中心に、
@@ -289,7 +289,7 @@ export const IMF_CPIS_INDICATORS: readonly ImfCpisIndicatorDef[] = (
         "無料。IMF (原典) の利用条件を継承し、出典明記が必要 (attribution_required)。" +
         "取得は IMF 直接ではなく DBnomics (CEPREMAP運営の非営利オープンデータプロジェクト) 経由のミラー配信で、" +
         "DBnomics 公式 (db.nomics.world/about) は『配信するデータは元の提供元と同じライセンス・利用条件に従う』と明記している" +
-        " (集約データベース自体は ODbL)。本プロジェクトでは個人利用の範囲に限って使う。",
+        " (集約データベース自体は ODbL)。本プロジェクトでは非公開の範囲に限って使う。",
       frequency: "semiannual",
       limitations:
         "残高 (ストック) であり真の資金フローではない近似指標 (計画書 R4『世界の概況』枠)。" +

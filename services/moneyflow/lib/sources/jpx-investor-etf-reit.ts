@@ -25,7 +25,7 @@
  * 分からせて止める)。新様式への対応は別途この関数を更新すること。
  *
  * 利用条件: JPX利用規約により、無許諾での商用データ収集・二次利用・再配信は
- * 禁止 (`commercial_use: prohibited`)。個人利用の範囲に限る (`personal-only`)。
+ * 禁止 (`commercial_use: prohibited`)。非公開の範囲に限る (`personal-only`)。
  * 規約は「高頻度・高負荷に繋がる可能性のある自動取得等はご遠慮いただいて
  * おります」と明記しており、1 回の実行につき一覧ページ 1 回・ファイル 1 回
  * (月次更新なので月 1 回) に留めること。
@@ -781,7 +781,7 @@ const PRIMARY_FLOW_NOTE: Record<JpxInvestorProduct, string> = {
 
 const USAGE_CONDITIONS = "personal-only" as const;
 const USAGE_NOTE =
-  "JPX利用規約により無許諾での商用データ収集・二次利用・再配信は禁止。個人利用の範囲に限る。";
+  "JPX利用規約により無許諾での商用データ収集・二次利用・再配信は禁止。非公開の範囲に限る。";
 
 /** この取得元 (ETF or REIT) が提供する指標の定義一覧。 */
 export function jpxInvestorIndicatorDefinitions(

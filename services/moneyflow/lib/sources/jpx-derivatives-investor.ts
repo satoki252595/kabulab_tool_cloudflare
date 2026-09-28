@@ -39,7 +39,7 @@
  * 1 回」または「年一覧 JSON 1 回 + 週一覧 JSON 1 回 + 対象ファイル 1 回」のみ叩く
  * （バックフィルで複数週を遡る用途には使わない設計）。
  * kabulab-cf では計画 (`docs/moneyflow.md` 予定) の方針どおり、既存の
- * `license_tag=personal-only` と同じ扱いで **個人利用・非公開の Notion
+ * `license_tag=personal-only` と同じ扱いで **非公開の Notion
  * ダッシュボードのみ** に使う。公開 API・公開 Web には出さない。
  *
  * ## 公表タイミング (実機確認 2026-09-27)
@@ -873,7 +873,7 @@ export const INDICATOR_FUTURES_OI_KEY = "jpx_futures_oi_by_participant";
 
 const USAGE_TERMS_PERSONAL_ONLY =
   "JPX 利用規約により、商用目的のデータ収集・二次利用・再配信は JPX の許諾なしには禁止 " +
-  "(personal-only)。kabulab では個人利用・非公開の Notion ダッシュボードのみに使い、" +
+  "(personal-only)。kabulab では非公開の Notion ダッシュボードのみに使い、" +
   "公開 API・公開 Web ページには出さない。高頻度の自動取得も規約上ご遠慮くださいと明記されて" +
   "いるため、1 回の実行につき最小限の回数のみアクセスする。";
 

@@ -7,7 +7,7 @@
  * `sector33`=EDINET 業種を使う。src/shared/db/core-stocks-license-boundary.test.ts
  * 参照)。本モジュールは Worker 内部の認証付きエンドポイント (`verifyCronSecret`)
  * からのみ呼ばれ、無認証の公開面には出さない。計画書「JPX の業種分類と EDINET の
- * 業種は別の分類。この機能は JPX 側に統一する（個人利用のため personal-only の
+ * 業種は別の分類。この機能は JPX 側に統一する（非公開の内部面のため personal-only の
  * 列を使える）」に基づく明示的な設計判断。
  *
  * D1 は 1 クエリ 100 バインド変数まで (メモリ: d1-bound-param-limit)。本モジュールは

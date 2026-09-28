@@ -24,7 +24,7 @@
  *   - サイト全体の免責事項 (https://www.tfx.co.jp/disclaimer/) は「当サイトの
  *     一部又は全部を無断で転用・複製することはできません」と書く。
  *   - 公開の場での再配布 (転載) や商用利用の可否を明記した条項は無い。
- * よって TFX に個別確認するまでは JPX と同様に **個人利用・非公開の範囲に限る**
+ * よって TFX に個別確認するまでは JPX と同様に **非公開の範囲に限る**
  * (`LICENSE_TAG = "personal-only"`。計画時の調査では「商用利用不可」扱い)。
  * 公開 Web サービス上での二次配布や商用データセットとしての提供、取得した
  * HTML の公開リポジトリへの commit は、TFX への個別確認なしに行わないこと。
@@ -40,7 +40,7 @@ const UA =
 
 /**
  * 公開の場での再配布・商用利用の可否が明記されておらず、サイト全体の免責事項が
- * 無断の転用・複製を禁じているため、TFX に確認するまでは個人利用・非公開の範囲に限る。
+ * 無断の転用・複製を禁じているため、TFX に確認するまでは非公開の範囲に限る。
  */
 export const LICENSE_TAG = "personal-only";
 
@@ -579,7 +579,7 @@ function metricsForMarket(market: TfxMarket): MoneyflowMetricDefinition[] {
     "「著作権は TFX にある」「利用は無料で自由に活用できる」とし、サイト全体の免責事項" +
     " (https://www.tfx.co.jp/disclaimer/) は「当サイトの一部又は全部を無断で転用・複製することは" +
     "できません」とする。公開の場での再配布(転載)や商用利用の可否は明記されていないため、TFX に" +
-    "個別確認するまでは個人利用・非公開の範囲に限る (license_tag=personal-only)。";
+    "個別確認するまでは非公開の範囲に限る (license_tag=personal-only)。";
   const instrumentLabel = isFx ? "通貨ペア" : "銘柄";
   // 1枚の大きさ(取引単位)が商品ごとに違うことを示す例。名前に付く語だけから言える範囲に留める。
   const lotSizeExample = isFx
