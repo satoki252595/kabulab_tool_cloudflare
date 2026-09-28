@@ -302,7 +302,7 @@ describe("隔離修復 S100J2E7: 不一致保存行 → 品目合算の正しい
   });
 });
 
-describe("隔離修復 S100T6Q9: 誤保存行 → 未構造化へ (真 unsupported)", () => {
+describe("隔離修復 S100T6Q9: 誤保存行 → 売上表なしへ (真 unsupported)", () => {
   it("原本→保存→表示の全経路が正直な未対応になり、再実行で不変", async () => {
     // 本番の誤保存行を seed (減損損失表を売上として誤読した集合)
     seedStock(3, "3681");
@@ -313,9 +313,9 @@ describe("隔離修復 S100T6Q9: 誤保存行 → 未構造化へ (真 unsupport
     seedSavedFact(300, 3, "2023-12-31", "海外売上高", "overseas_total", 3248331, 3248331000, 85.9, null, "geo_rows", "千円");
     seedSavedFact(300, 3, "2023-12-31", "連結売上高", "total", 3779758, 3779758000, null, null, "geo_rows", "千円");
 
-    // 原本 (非売上の減損損失表) は未構造化として却下される
+    // 原本 (非売上の減損損失表) は R1 で候補除外され売上表なしとして却下される
     const r = parseOverseasHtml(fx("georows-impairment-unresolved-S100T6Q9.html"), "2023-12-31");
-    expect(r.status).toBe("geo_present_unstructured");
+    expect(r.status).toBe("no_overseas_table");
     expect(r.facts).toHaveLength(0);
 
     // 保存: status更新 + facts削除 (0 inserts)
@@ -325,7 +325,7 @@ describe("隔離修復 S100T6Q9: 誤保存行 → 未構造化へ (真 unsupport
       .select({ s: yuhoDocuments.overseasParseStatus })
       .from(yuhoDocuments)
       .where(eq(yuhoDocuments.id, 300));
-    expect(doc.s).toBe("geo_present_unstructured");
+    expect(doc.s).toBe("no_overseas_table");
 
     // 表示: 未対応として正直に出る (捏造値なし)
     const trend = await getOverseasTrendByCode(db, "3681");
@@ -333,7 +333,7 @@ describe("隔離修復 S100T6Q9: 誤保存行 → 未構造化へ (真 unsupport
     expect(trend!.hasStructuredData).toBe(false);
     expect(trend!.points).toHaveLength(0);
     expect(trend!.documents).toHaveLength(1);
-    expect(trend!.documents[0].overseasParseStatus).toBe("geo_present_unstructured");
+    expect(trend!.documents[0].overseasParseStatus).toBe("no_overseas_table");
 
     // 再実行で不変
     await repairSave(300, 3, r.status, "test-honbun.htm", r.facts);

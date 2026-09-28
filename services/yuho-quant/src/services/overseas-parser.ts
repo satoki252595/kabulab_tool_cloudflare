@@ -84,7 +84,7 @@ export const RX_OVERSEAS_KEYWORD =
 
 /** 海外地域 (本邦/日本 以外) を表す語 */
 const RX_OVERSEAS_REGION =
-  /北米|南米|中南米|北中米|中米|米州|米大陸|アメリカ大陸|米国|アメリカ|欧州|ヨーロッパ|欧米|アジア|オセアニア|大洋州|アフリカ|中近東|中東|中国|中華圏|香港|韓国|台湾|タイ|ベトナム|インド|インドネシア|シンガポール|フィリピン|マレーシア|ドイツ|英国|フランス|イタリア|スペイン|オランダ|メキシコ|ブラジル|カナダ|豪州|オーストラリア|海外/;
+  /北米|南米|中南米|北中米|中米|米州|米大陸|アメリカ大陸|米国|アメリカ|欧州|ヨーロッパ|欧米|アジア|オセアニア|大洋州|アフリカ|中近東|中東|中国|中華圏|香港|韓国|台湾|タイ|ベトナム|インド|インドネシア|シンガポール|フィリピン|マレーシア|アセアン|ドイツ|英国|フランス|イタリア|スペイン|オランダ|メキシコ|ブラジル|カナダ|豪州|オーストラリア|海外/;
 /** 国内を表す語 (これに完全一致する行/列が domestic) */
 const RX_DOMESTIC = /^(日本|本邦|国内|日本国内|わが国|我が国)$/;
 /** 集計行/列 (地域ではない)。営業収益建て(トヨタ等の地域別営業概況)も含む */
@@ -109,6 +109,28 @@ function isProductionTable(heading: string): boolean {
   let last: string | null = null;
   for (const m of heading.matchAll(RX_RESULT_CAPTION)) last = m[1];
   return last === "生産実績";
+}
+/**
+ * 非売上 metric の表か (非流動資産・減損損失の地域別表は売上高ではないので候補に
+ * しない)。S100G2DL 等で実証:「(5) 非流動資産(…)の地域別情報」表 (日本
+ * 1847464/その他 144889/合計 1992354) は算術整合するため検証を通り抜け、約2兆円
+ * の資産額が連結売上高として保存されていた (dup なし・#150 不発・検証も不発)。
+ * S100J2FF/S100L227/S100VYQN では減損損失表 (場所×減損損失) が同様に誤採用。
+ * B2 と同じ最寄り (最後) の metric 名詞で判定する (例: 「売上収益及び非流動資産
+ * の地域別内訳…①外部顧客からの売上収益」と書かれた売上表を誤って落とさない。
+ * S100AJAN で固定)。「記載を省略」文中の名詞は不開示であり後続の表を指さない
+ * ので除外して判定する (S100QHOQ: 省略宣言の後の当期売上表を誤殺しない)。
+ * 該当名詞が窓内になければ abstain (現状維持)。
+ */
+const RX_METRIC_NOUN =
+  /(売上高|売上収益|販売高|営業収益|外部顧客からの収益|収益|非流動資産|減損損失)/g;
+/** 省略宣言文 (中の metric 名詞は不開示であり後続の表を指さない) */
+const RX_OMISSION_CLAUSE = /[^。]*(記載|開示)を省略[^。]*(。|$)/g;
+function isNonSalesMetricTable(heading: string): boolean {
+  const affirmed = heading.replace(RX_OMISSION_CLAUSE, " ");
+  let last: string | null = null;
+  for (const m of affirmed.matchAll(RX_METRIC_NOUN)) last = m[1];
+  return last === "非流動資産" || last === "減損損失";
 }
 
 function norm(s: string): string {
@@ -169,11 +191,11 @@ function totalsConsistent(regionSum: number, disclosedTotal: number): boolean {
 }
 
 /** 製品/用途・非売上 metric の section 標識 (この section の行は売上 block ではない) */
-const RX_NON_SALES_SECTION = /営業利益|用途別|財又はサービス/;
+const RX_NON_SALES_SECTION = /営業利益|用途別|財又はサービス|製品ライン/;
 /** 小計行 (block 終端。小計は全体集計ではないので集計検証には使わない) */
 const RX_SHOKEI = /小計/;
 /** 消去/調整行 (地域計に加算して block 合計と照合する) */
-const RX_ELIMINATION = /消去/;
+const RX_ELIMINATION = /消去|調整額/;
 /** 地域×項目 対の metric 区分 (売上高行だけ読む。利益行は混ぜない) */
 const RX_SALES_METRIC = /売上高|売上収益|営業収益/;
 const RX_PROFIT_METRIC = /営業利益|事業利益/;
@@ -1058,6 +1080,16 @@ export function parseOverseasHtml(
     // 生産実績表は売上高の開示ではないので候補にしない (監査の取りこぼし集計にも
     // 入れない = sawGeoSignal を立てない。販売実績表など正規の売上表は別 fixture で固定)。
     if (isProductionTable(heading)) continue;
+    // R1: 非流動資産・減損損失の地域別表も売上高の開示ではないので候補にしない
+    // (S100G2DL/S100J2FF で実証の dup なし live 誤 pick。算術整合するため検証は
+    // 通り抜ける。売上表の誤殺防止は S100AJAN ほか全母集団 re-run で固定)。
+    if (isNonSalesMetricTable(heading)) continue;
+    // R1-grid: 表頭 (先頭2行) に減損損失・非流動資産がある表も非売上表として候補に
+    // しない。入れ子の内側表は見出し窓に表題が入らず heading-R1 をすり抜けるため
+    // (S100O4SN で実証: 内側表の窓は style 屑+単位のみで abstain し減損表を採用)。
+    // 売上表の表頭にこの2語は来ない (セグメント資産等の行は表の下部)。
+    const headCells = grid.slice(0, 2).map((r) => r.join("")).join("");
+    if (/減損損失|非流動資産/.test(headCells)) continue;
     const regionish =
       RX_OVERSEAS_REGION.test(flat) || /本邦|日本|海外売上高/.test(flat);
     if (!regionish) continue;

@@ -219,7 +219,9 @@ describe("F2 根因修正: 未解決の重複地域名は ok を出さない (ag
     const r = parseOverseasHtml(fx("georows-impairment-unresolved-S100T6Q9.html"), "2023-12-31");
     // pre-fix (#150 以前) は ok_geo_rows で米国/日本の重複＋集計を出していた。
     // P-2D/P-hier/P-metric のいずれでも証明できないため却下のまま。
-    expect(r.status).toBe("geo_present_unstructured");
+    // R1 以後は候補段階で除外されるため no_overseas_table (B2 の生産実績表と同型。
+    // 減損表は売上表ではないので geo signal なしが正しい)。0 facts・保存なしは不変。
+    expect(r.status).toBe("no_overseas_table");
     expect(r.facts).toHaveLength(0);
     // ingest.ts / backfill-overseas.ts / backfill-missing-docs.ts と同一の
     // 保存前検証を通しても保存行は生まれない (空集合は検証対象外で pass)
@@ -518,5 +520,92 @@ describe("ルール1/2: 構造化できない/開示なしは数値を作らな�
       expect(dom + ov).toBeGreaterThanOrEqual(total * 0.98);
       expect(dom + ov).toBeLessThanOrEqual(total);
     }
+  });
+});
+
+describe("語彙: アセアンは海外地域 (S100OIVD ほか10文書で脱落を実証)", () => {
+  it("S100OIVD 主たる地域市場表はアセアンを含めて構造化される (pre-fix はアセアン 11371 を落とし海外売上高を過小にしていた)", () => {
+    const r = parseOverseasHtml(fx("georows-asean-S100OIVD.html"), "2022-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "アセアン")!.salesAmount).toBe(11371);
+    expect(region(r.facts, "日本")!.salesAmount).toBe(34457);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(46330);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(80789);
+    expect(() => validateOverseasSaveSet(r.facts)).not.toThrow();
+  });
+});
+
+describe("P-block: 製品ライン block は売上 block ではない (S100LN1R ほか7文書で混入を実証)", () => {
+  it("S100LN1R 収益分解表は地域市場 block だけ読む (pre-fix は製品blockのその他 12855 を海外に混入し海外売上高 83161/合計 143366 を保存していた)", () => {
+    const r = parseOverseasHtml(fx("georows-productline-block-S100LN1R.html"), "2021-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(r.facts).toHaveLength(5);
+    expect(region(r.facts, "日本")!.salesAmount).toBe(60205);
+    expect(region(r.facts, "アジア・オセアニア")!.salesAmount).toBe(41837);
+    expect(region(r.facts, "欧州・米州等")!.salesAmount).toBe(28469);
+    // 製品 block のその他 (12855) が混入していないこと
+    expect(region(r.facts, "その他")).toBeUndefined();
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(70306);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(130513);
+    expect(() => validateOverseasSaveSet(r.facts)).not.toThrow();
+  });
+
+  it("S100YR3G エリア別製品販売状況表は表題の製品で誤殺されない (標識は製品ラインに限定。エリア別売上表として採用)", () => {
+    const r = parseOverseasHtml(fx("georows-areaproduct-sales-S100YR3G.html"), "2026-04-30");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "米国")!.salesAmount).toBe(6249);
+    expect(region(r.facts, "その他")!.salesAmount).toBe(783);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(9627);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(10883);
+    expect(() => validateOverseasSaveSet(r.facts)).not.toThrow();
+  });
+});
+
+describe("消去/調整: 調整額行は地域計に加算して照合する (S100VYJU で実証)", () => {
+  it("S100VYJU 販売実績表は調整額 1766 を加算して合計と照合する (pre-fix は生産実績表を誤採用。R1・B2 後は本表が読める)", () => {
+    const r = parseOverseasHtml(fx("georows-adjustment-S100VYJU.html"), "2025-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "中華圏")!.salesAmount).toBe(14268);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(53994);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(111050);
+    expect(() => validateOverseasSaveSet(r.facts)).not.toThrow();
+  });
+});
+
+describe("R1 根因修正: 非流動資産・減損損失の地域別表は売上高の開示ではないので候補にしない", () => {
+  it("S100G2DL 非流動資産の地域別情報表 単体は採用されない (pre-fix は ok_geo_rows で資産額 1992354 を連結売上高にしていた。dup なし・検証も通り抜け)", () => {
+    const r = parseOverseasHtml(fx("georows-noncurrent-assets-excluded-S100G2DL.html"), "2019-03-31");
+    expect(r.status).toBe("no_overseas_table");
+    expect(r.facts).toHaveLength(0);
+  });
+
+  it("S100J2FF 減損損失表 (場所×減損損失) 単体は採用されない (pre-fix は ok_geo_rows で減損額 20655 を連結売上高にしていた)", () => {
+    const r = parseOverseasHtml(fx("georows-impairment-excluded-S100J2FF.html"), "2020-03-31");
+    expect(r.status).toBe("no_overseas_table");
+    expect(r.facts).toHaveLength(0);
+  });
+
+  it("S100AJAN 地域別収益表は窓内の減損 prose にもかかわらず採用される (最寄り metric 名詞は収益。R1 の誤殺防止)", () => {
+    const r = parseOverseasHtml(fx("georows-impairment-caption-sales-kept-S100AJAN.html"), "2017-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(2290622);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(3996974);
+    expect(() => validateOverseasSaveSet(r.facts)).not.toThrow();
+  });
+
+  it("S100O4SN 入れ子内側の減損損失表も表頭-R1 で除外される (内側表の窓は表題を含まず heading-R1 をすり抜けた。pre-fix は減損額 476690 を連結売上高にしていた)", () => {
+    const r = parseOverseasHtml(fx("georows-impairment-nested-excluded-S100O4SN.html"), "2022-02-28");
+    expect(r.status).toBe("no_overseas_table");
+    expect(r.facts).toHaveLength(0);
+  });
+
+  it("S100QHOQ 当期売上表は省略宣言文中の非流動資産で誤殺されない (省略文は不開示。P/L 売上収益 90 と一致)", () => {
+    const r = parseOverseasHtml(fx("georows-omission-sales-kept-S100QHOQ.html"), "2022-12-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(63);
+    expect(region(r.facts, "米国")!.salesAmount).toBe(17);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(27);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(90);
+    expect(() => validateOverseasSaveSet(r.facts)).not.toThrow();
   });
 });
