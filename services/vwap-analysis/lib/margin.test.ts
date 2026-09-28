@@ -13,7 +13,16 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { marginArchiveInput, parseMarginPdf, parseMarginText } from "./margin.js";
+import {
+  extractMarginPdfLinks,
+  latestMarginPdfUrlFromHtml,
+  marginArchiveInput,
+  marginPdfUrlForWeekFromHtml,
+  parseMarginPdf,
+  parseMarginText,
+  validateMarginData,
+  weeksMissing,
+} from "./margin.js";
 
 const sha256 = (b: Uint8Array): string =>
   createHash("sha256").update(b).digest("hex");
@@ -155,6 +164,138 @@ describe.skipIf(!hasFixture)("parseMarginPdf (実 PDF: 2026-09-18 週 #117)", ()
     expect(input.files[0]!.filename).toBe("margin-2026-09-18.pdf");
     expect(input.files[0]!.bytes).toBe(bytes);
     expect(input.files[0]!.bytes.byteLength).toBe(FIXTURE_BYTES);
+  });
+});
+
+/**
+ * 一覧ページの発見経路 (2026-09-28 実測)。
+ * 週末残高 PDF は 05.html から 01.html (銘柄別信用取引残高) へ移転し、
+ * 05.html は信用取引現在高表のみ (syumatsu 0 件) になった。
+ * 下の HTML は実ページのリンク構造だけを写した合成断片 (全文ではない)。
+ */
+const HTML_01 = `
+<a href="/markets/statistics-equities/margin/01.html">銘柄別信用取引残高</a>
+<a href="/markets/statistics-equities/margin/tvdivq0000001rnl-att/20260925_mtall.pdf">PDF</a>
+<a href="/markets/statistics-equities/margin/tvdivq0000001rnl-att/syumatsu2026082800.pdf">PDF</a>
+<a href="/markets/statistics-equities/margin/tvdivq0000001rnl-att/syumatsu2026090400.pdf">PDF</a>
+<a href="/markets/statistics-equities/margin/tvdivq0000001rnl-att/syumatsu2026091100.pdf">PDF</a>
+<a href="/markets/statistics-equities/margin/tvdivq0000001rnl-att/syumatsu2026091800.pdf">PDF</a>
+`;
+const HTML_05_RENEWED = `
+<a href="/markets/statistics-equities/margin/05.html">信用取引現在高過去推移表</a>
+<a href="/markets/statistics-equities/margin/tvdivq0000001rq1-att/tvdivq000001597x.pdf">PDF</a>
+<a href="/markets/statistics-equities/margin/tvdivq0000001rq1-att/tvdivq000001595z.xls">XLS</a>
+`;
+
+describe("margin 発見経路 (一覧 HTML→PDF URL)", () => {
+  it("syumatsu リンクだけを抜き出す (現在高表の tvdivq 添付は拾わない)", () => {
+    const links = extractMarginPdfLinks(HTML_01);
+    expect(links.map((l) => l.stamp)).toEqual([
+      "2026082800",
+      "2026090400",
+      "2026091100",
+      "2026091800",
+    ]);
+  });
+
+  it("最新週の URL を返す (01.html 移転後の形)", () => {
+    expect(latestMarginPdfUrlFromHtml(HTML_01)).toBe(
+      "https://www.jpx.co.jp/markets/statistics-equities/margin/tvdivq0000001rnl-att/syumatsu2026091800.pdf"
+    );
+  });
+
+  it("syumatsu が 0 件なら throw する (05.html 移転後の形を検出する)", () => {
+    expect(extractMarginPdfLinks(HTML_05_RENEWED)).toEqual([]);
+    expect(() => latestMarginPdfUrlFromHtml(HTML_05_RENEWED)).toThrow(/margin pdf link not found/);
+  });
+
+  it("指定週の URL を返す (--week の解決)", () => {
+    expect(marginPdfUrlForWeekFromHtml(HTML_01, "20260904")).toBe(
+      "https://www.jpx.co.jp/markets/statistics-equities/margin/tvdivq0000001rnl-att/syumatsu2026090400.pdf"
+    );
+  });
+
+  it("指定週が一覧に無ければ throw し、最新週で代用しない", () => {
+    expect(() => marginPdfUrlForWeekFromHtml(HTML_01, "20260703")).toThrow(/該当週がありません/);
+  });
+
+  it("指定週の形式が違えば throw する", () => {
+    expect(() => marginPdfUrlForWeekFromHtml(HTML_01, "2026-09-04")).toThrow(/形式が不正/);
+  });
+});
+
+describe("weeksMissing (欠落週の検出)", () => {
+  it("末尾の欠落を列挙する", () => {
+    expect(weeksMissing(["2026-06-12", "2026-06-19", "2026-06-26"], "2026-07-17")).toEqual([
+      "2026-07-03",
+      "2026-07-10",
+    ]);
+  });
+
+  it("区間内部の欠落も検出する (7/3・7/10 の実例: 保存済みに挟まれた欠落)", () => {
+    // 実 R2 margin/weeks.json の 13 週 (7/3・7/10 だけ欠落)。
+    const saved13 = [
+      "2026-06-12", "2026-06-19", "2026-06-26", "2026-07-17", "2026-07-24",
+      "2026-07-31", "2026-08-07", "2026-08-14", "2026-08-21", "2026-08-28",
+      "2026-09-04", "2026-09-11", "2026-09-18",
+    ];
+    expect(weeksMissing(saved13, "2026-09-18")).toEqual(["2026-07-03", "2026-07-10"]);
+  });
+
+  it("--week の過去週補修でも内部欠落は報告する (今回週は除く)", () => {
+    expect(weeksMissing(["2026-06-26", "2026-09-18"], "2026-08-28")).toEqual([
+      "2026-07-03",
+      "2026-07-10",
+      "2026-07-17",
+      "2026-07-24",
+      "2026-07-31",
+      "2026-08-07",
+      "2026-08-14",
+      "2026-08-21",
+      "2026-09-04",
+      "2026-09-11",
+    ]);
+  });
+
+  it("連続週・再実行・初回は空", () => {
+    expect(weeksMissing(["2026-09-04", "2026-09-11"], "2026-09-18")).toEqual([]);
+    expect(weeksMissing(["2026-09-18"], "2026-09-18")).toEqual([]);
+    expect(weeksMissing([], "2026-09-18")).toEqual([]);
+  });
+
+  it("形式が違えば throw する", () => {
+    expect(() => weeksMissing(["2026-09-11"], "20260918")).toThrow(/形式が不正/);
+    expect(() => weeksMissing(["2026/09/11"], "2026-09-18")).toThrow(/形式が不正/);
+  });
+});
+
+describe("validateMarginData (保存前の検証)", () => {
+  const good = {
+    week: "2026-09-18",
+    rows: [{ code: "7203", sell: 1, sell_chg: 0, buy: 2, buy_chg: 0 }],
+    pdfBytes: new Uint8Array([1, 2, 3]),
+    pdfUrl: "https://www.jpx.co.jp/x.pdf",
+  };
+
+  it("正常なら何もしない", () => {
+    expect(() => validateMarginData(good)).not.toThrow();
+  });
+
+  it("週・行・原本のいずれかが空なら throw する", () => {
+    expect(() => validateMarginData({ ...good, week: "" })).toThrow(/申込週/);
+    expect(() => validateMarginData({ ...good, rows: [] })).toThrow(/0 件/);
+    expect(() => validateMarginData({ ...good, pdfBytes: new Uint8Array(0) })).toThrow(/原本バイト列/);
+  });
+
+  it("同一コードの複数行 (種類株崩壊の取込) は保存させず throw する", () => {
+    const dup = {
+      ...good,
+      rows: [
+        { code: "2593", sell: 77200, sell_chg: 0, buy: 244500, buy_chg: 0 },
+        { code: "2593", sell: 100, sell_chg: 0, buy: 17500, buy_chg: 0 },
+      ],
+    };
+    expect(() => validateMarginData(dup)).toThrow(/duplicate code.*2593/);
   });
 });
 

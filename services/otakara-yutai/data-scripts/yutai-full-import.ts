@@ -40,6 +40,7 @@ import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
 import { stocks, yutaiBenefits, yutaiGenres } from "../src/db/schema.js";
 import { benefitKey } from "./benefit-key.js";
+import { isCarryableValue } from "./estimated-value-guard.js";
 
 export type BenefitDetail = {
   minShares: number;
@@ -127,6 +128,7 @@ export const YUTAI_GENRES: { name: string; slug: string; description: string }[]
 type CarriedInterpretation = {
   shortSummary: string | null;
   estimatedValue: number | null;
+  estimateValueSource: string | null;
 };
 
 export type YutaiFullImportResult = {
@@ -144,17 +146,22 @@ export type YutaiFullImportResult = {
   failedCodes: string[];
 };
 
-/** 1 銘柄の取得結果から作る優待行 (権利月 × 株数条件)。掲載文の組み立てと切り詰めは以前のまま。 */
+/**
+ * 1 銘柄の取得結果から作る優待行 (権利月 × 株数条件)。掲載文は全文保存する。
+ *
+ * 旧 notes[:200]/desc[:500] の切り詰めは 3447 の 3 群で末尾の tier 条件を
+ * 落とした (保存文が文の途中で切断。要約の根拠消失)。D1 の description 列は
+ * TEXT 型で長さ制限が無いため、切り詰める理由は無い。以降の similar source も
+ * この共通経路 (切り詰め無し) を使うこと。
+ */
 function benefitRowsOf(
   data: StockYutaiData,
 ): { recordMonth: number; minShares: number; description: string }[] {
   const rows: { recordMonth: number; minShares: number; description: string }[] = [];
   for (const month of data.recordMonths) {
     for (const benefit of data.benefits) {
-      const desc = benefit.notes
-        ? `${benefit.description}\n${benefit.notes.substring(0, 200)}`
-        : benefit.description;
-      rows.push({ recordMonth: month, minShares: benefit.minShares, description: desc.substring(0, 500) });
+      const desc = benefit.notes ? `${benefit.description}\n${benefit.notes}` : benefit.description;
+      rows.push({ recordMonth: month, minShares: benefit.minShares, description: desc });
     }
   }
   return rows;
@@ -209,6 +216,7 @@ export async function importYutaiFull(
       description: yutaiBenefits.description,
       shortSummary: yutaiBenefits.shortSummary,
       estimatedValue: yutaiBenefits.estimatedValue,
+      estimateValueSource: yutaiBenefits.estimateValueSource,
     })
     .from(yutaiBenefits)
     .innerJoin(stocks, eq(stocks.id, yutaiBenefits.stockId))
@@ -235,12 +243,25 @@ export async function importYutaiFull(
   // (掲載文 description は公開面に出せないため代わりが無い)。キーは (銘柄コード,
   // description) の内容アドレスなので、文言が変わらない限り作り直した行に戻せる。
   const carried = new Map<string, CarriedInterpretation>();
+  const droppedInvalidKeys = new Set<string>();
   for (const row of existing) {
     if (row.shortSummary == null && row.estimatedValue == null) continue;
     // 同一キーが複数行 (権利月違い) ある。解釈は文言単位なのでどれでも同じ。
-    carried.set(benefitKey(row.code, row.description), {
+    // 推定値は持ち越し前に検証する (旧 idx 時代の 0 値・抽選賞品など、現行
+    // ゲートを通らない値を無検証で温存しない。要約は残し、値は null で戻す)。
+    // 出典も一緒に退避する (従来は落としていて毎 fetch で全行 null になっていた)。
+    const key = benefitKey(row.code, row.description);
+    let estimatedValue = row.estimatedValue;
+    let estimateValueSource = row.estimateValueSource;
+    if (estimatedValue !== null && !isCarryableValue(row.description, estimatedValue)) {
+      estimatedValue = null;
+      estimateValueSource = null;
+      droppedInvalidKeys.add(key);
+    }
+    carried.set(key, {
       shortSummary: row.shortSummary,
-      estimatedValue: row.estimatedValue,
+      estimatedValue,
+      estimateValueSource,
     });
   }
 
@@ -254,6 +275,11 @@ export async function importYutaiFull(
   );
   const droppedInterpretations = [...carried.keys()].filter((k) => !plannedKeys.has(k)).length;
   console.info(`  既存の解釈を退避: ${carried.size}件`);
+  if (droppedInvalidKeys.size > 0) {
+    // 現行ゲートを通らない推定値 (0・抽選賞品・根拠なし) は要約だけ戻し、
+    // 値だけ null で戻す。null は有効な終端状態なので再 task 化は要らない。
+    console.warn(`  検証落ちの推定値を null で戻す (要約は保持): ${droppedInvalidKeys.size}件`);
+  }
   if (droppedInterpretations > 0) {
     // 掲載文が変わった行と、優待行を消す銘柄の分。前者は未解釈で入り、次の要約タスク
     // 書き出し (export-summary-tasks.ts) の対象になる。
@@ -320,6 +346,7 @@ export async function importYutaiFull(
           minShares: r.minShares,
           recordMonth: r.recordMonth,
           estimatedValue: previous === undefined ? null : previous.estimatedValue,
+          estimateValueSource: previous === undefined ? null : previous.estimateValueSource,
         });
         benefitCount++;
       }

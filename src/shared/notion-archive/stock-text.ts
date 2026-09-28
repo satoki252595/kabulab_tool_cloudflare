@@ -38,6 +38,7 @@
  * force 時のみ旧行を archived して作り直す (ブロックの選択削除 API が無い
  * ため。archived 行は残るが非表示で、移行は write-once のため通常出ない)。
  */
+import { queryUniqueRow } from "./archive.js";
 import { notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 
@@ -211,12 +212,12 @@ export async function findStockTextRowId(
   dbId: string,
   docId: string
 ): Promise<string | null> {
-  const res = await notionRequest<{ results: Array<{ id: string }> }>(
-    "POST",
-    `/databases/${dbId}/query`,
-    { filter: { property: "文書", title: { equals: docId } }, page_size: 1 }
+  const row = await queryUniqueRow<{ id: string }>(
+    dbId,
+    { property: "文書", title: { equals: docId } },
+    `有報テキストの重複 docId=${docId} を選ばず保全停止`
   );
-  return res.results[0]?.id ?? null;
+  return row?.id ?? null;
 }
 
 function rowProperties(

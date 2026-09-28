@@ -7,6 +7,7 @@ import {
   priceSyncStatusOf,
   prioritizeDailyRecoveryFailures,
   recoverTransientDailyFailures,
+  runDateKeys,
 } from "./daily.js";
 
 describe("priceSyncStatusOf (「株価の日次同期」記録の状態)", () => {
@@ -418,5 +419,19 @@ describe("isMondayUtc", () => {
     // 週の最初の run は UTC 月曜 17:13 (= JST 火曜 02:13)。JST で見ると
     // run は火〜土曜にしか無いので、JST 曜日では「月曜」を拾えない。
     expect(isMondayUtc(new Date("2026-09-14T17:13:00Z"))).toBe(true);
+  });
+});
+
+describe("runDateKeys (F-05: run 開始時刻に固定)", () => {
+  it("月曜開始の run は Phase が火曜に跨いでも月曜のまま", () => {
+    // run 開始が月曜 23:59 UTC。Phase 実行時刻で評価し直すと火曜になり
+    // prune/年次が skip されて飢餓する。開始時刻の判定を保持する。
+    const keys = runDateKeys(Date.parse("2026-09-14T23:59:59Z"));
+    expect(keys).toEqual({ runDate: "2026-09-14", runMonday: true });
+  });
+
+  it("火曜開始の run は月曜ではない", () => {
+    const keys = runDateKeys(Date.parse("2026-09-15T00:00:01Z"));
+    expect(keys).toEqual({ runDate: "2026-09-15", runMonday: false });
   });
 });

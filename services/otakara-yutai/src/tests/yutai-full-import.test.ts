@@ -77,7 +77,7 @@ const OUTSIDE_IDS: readonly number[] = OUTSIDE.map((s) => s.id);
  */
 const ABSENT_CODE = "1299";
 
-const descOf = (code: string) => `架空優待${code}`;
+const descOf = (code: string) => `架空優待${code} 1,000円相当`;
 
 /** 取得結果 1 銘柄。name / market は core_stocks と違う値にして、上書きすると分かるようにする。 */
 function fetched(code: string, description = descOf(code)): StockYutaiData {
@@ -246,6 +246,28 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
   });
 });
 
+describe("importYutaiFull は掲載文を切り詰めない", () => {
+  it("500字超の掲載文・200字超の注記の末尾 tier 条件を落とさない", async () => {
+    captureConsole();
+    const [target, ...rest] = HELD;
+    // 実 incident: 3447 の 3 群 (taskId 7be55faa/554a7eea/cb002b14) は旧
+    // notes[:200] で保存文が文の途中で切断され、末尾 tier の根拠を失った。
+    // 合成長文で構造を再現する (原文の引用なし)。
+    const longDesc = `架空優待${target.code} ` + "あ".repeat(600);
+    const longNotes = "い".repeat(300) + "【10年以上】10口";
+    const data = fetched(target.code);
+    data.benefits = [{ minShares: 100, description: longDesc, notes: longNotes }];
+
+    await importYutaiFull(db, [data, ...rest.map((s) => fetched(s.code))]);
+
+    const rows = benefitsOf(snapshot().benefits, [target.id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].description).toBe(`${longDesc}\n${longNotes}`);
+    expect(String(rows[0].description).length).toBeGreaterThan(500);
+    expect(String(rows[0].description).endsWith("【10年以上】10口")).toBe(true);
+  });
+});
+
 describe("importYutaiFull は削除の前に止まる", () => {
   it(`優待行を持つ母集団の銘柄のうち今回も取得できたのが ${MIN_YUTAI_COVERAGE_PERCENT}% 未満なら、何も書かない`, async () => {
     const before = snapshot();
@@ -267,6 +289,60 @@ describe("importYutaiFull は削除の前に止まる", () => {
       importYutaiFull(db, [...OUTSIDE.map((s) => fetched(s.code)), fetched(ABSENT_CODE)]),
     ).rejects.toThrow(/取り込み先の銘柄が 1 件もありません/);
     expect(snapshot()).toEqual(before);
+  });
+});
+
+describe("importYutaiFull の解釈の退避", () => {
+  const sourceOf = (stockId: number): unknown[] =>
+    sqlite
+      .prepare("SELECT estimate_value_source FROM yutai_benefits WHERE stock_id = ? ORDER BY id")
+      .all(stockId)
+      .map((r) => (r as { estimate_value_source: unknown }).estimate_value_source);
+
+  it("退避した出典も一緒に戻す (従来は落として毎回 null になっていた)", async () => {
+    const [target, ...rest] = HELD;
+    sqlite
+      .prepare("UPDATE yutai_benefits SET estimate_value_source = 'company' WHERE stock_id = ?")
+      .run(target.id);
+    captureConsole();
+
+    await importYutaiFull(db, HELD.map((s) => fetched(s.code)));
+
+    expect(sourceOf(target.id)).toEqual(["company"]);
+    expect(sourceOf(rest[0].id)).toEqual([null]);
+  });
+
+  it("現行ゲートを通らない推定値は要約だけ戻し、値は null で戻す", async () => {
+    const [zeroRow, lotteryRow, ...rest] = HELD;
+    // 0 値 (旧 LLM 経路の残存)
+    sqlite
+      .prepare("UPDATE yutai_benefits SET estimated_value = 0 WHERE stock_id = ?")
+      .run(zeroRow.id);
+    // 抽選賞品 (当選人数つきの賞品表記)
+    const lotteryDesc = "80,000円相当:40名\n抽選で付与。";
+    sqlite
+      .prepare("UPDATE yutai_benefits SET description = ?, estimated_value = 80000 WHERE stock_id = ?")
+      .run(lotteryDesc, lotteryRow.id);
+    const logs = captureConsole();
+
+    await importYutaiFull(
+      db,
+      HELD.map((s) => (s.id === lotteryRow.id ? fetched(s.code, lotteryDesc) : fetched(s.code)))
+    );
+
+    const after = snapshot();
+    // 要約は保持、値だけ null
+    expect(
+      benefitsOf(after.benefits, [zeroRow.id]).map((b) => [b.short_summary, b.estimated_value])
+    ).toEqual([[`要約${zeroRow.code}`, null]]);
+    expect(
+      benefitsOf(after.benefits, [lotteryRow.id]).map((b) => [b.short_summary, b.estimated_value])
+    ).toEqual([[`要約${lotteryRow.code}`, null]]);
+    // 正常な解釈はそのまま戻る
+    expect(
+      benefitsOf(after.benefits, [rest[0].id]).map((b) => [b.short_summary, b.estimated_value])
+    ).toEqual([[`要約${rest[0].code}`, 1002]]);
+    expect(logs.some((l) => l.includes("検証落ちの推定値") && l.includes("2件"))).toBe(true);
   });
 });
 

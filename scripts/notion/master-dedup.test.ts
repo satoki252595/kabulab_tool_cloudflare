@@ -440,8 +440,8 @@ describe("master-dedup (純粋関数)", () => {
     it("退避 receipt があれば二重退避しない判定ができる", () => {
       const receipt = emptyReceipt();
       expect(receipt.retired[RETIRE_3681]).toBeUndefined();
-      receipt.retired[RETIRE_3681] = { trashPageId: "trash-1", verifiedAt: "2026-09-28T00:00:00.000Z" };
-      expect(receipt.retired[RETIRE_3681]?.trashPageId).toBe("trash-1");
+      receipt.retired[RETIRE_3681] = { archivedAt: "2026-09-28T02:00:00.000Z", verifiedAt: "2026-09-28T02:00:00.000Z" };
+      expect(receipt.retired[RETIRE_3681]?.archivedAt).toBe("2026-09-28T02:00:00.000Z");
     });
   });
 
@@ -593,13 +593,14 @@ describe("master-dedup (純粋関数)", () => {
     });
   });
 
-  describe("decideRetireAction / decideSnapshotAction (0/1/複数 + marker)", () => {
-    it("退避: 複数は停止・1 件は complete・0+marker は停止・0 のみ create", () => {
-      expect(decideRetireAction({ trashHits: 2, hasMarker: false })).toBe("stop");
-      expect(decideRetireAction({ trashHits: 1, hasMarker: false })).toBe("complete");
-      expect(decideRetireAction({ trashHits: 1, hasMarker: true })).toBe("complete");
-      expect(decideRetireAction({ trashHits: 0, hasMarker: true })).toBe("stop");
-      expect(decideRetireAction({ trashHits: 0, hasMarker: false })).toBe("create");
+  describe("decideRetireAction / decideSnapshotAction", () => {
+    it("退避: fresh archived 状態と marker で create/repatch/recover/stop を決める", () => {
+      // active: marker なしは create、ありは repatch (PATCH 冪等で再送は安全)。
+      expect(decideRetireAction({ originArchived: false, hasMarker: false })).toBe("create");
+      expect(decideRetireAction({ originArchived: false, hasMarker: true })).toBe("repatch");
+      // archived: marker ありは recover、なしは外部 archive として stop。
+      expect(decideRetireAction({ originArchived: true, hasMarker: true })).toBe("recover");
+      expect(decideRetireAction({ originArchived: true, hasMarker: false })).toBe("stop");
     });
 
     it("snapshot: 複数は停止・1 件は recover・0+marker は停止・0 のみ create", () => {

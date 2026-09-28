@@ -55,6 +55,7 @@ describe("main() の --dry-run 契約", () => {
 
   afterEach(() => {
     process.argv = [...ORIGINAL_ARGV];
+    process.exitCode = undefined;
     vi.doUnmock("../../services/moneyflow/lib/jpx-sector-marketcap.js");
     vi.doUnmock("../../src/shared/notion-archive/index.js");
     vi.resetModules();
@@ -113,5 +114,51 @@ describe("main() の --dry-run 契約", () => {
     for (const name of Object.keys(spies)) {
       expect(spies[name], `${name} が呼ばれていないこと`).not.toHaveBeenCalled();
     }
+  });
+
+  it("指標カタログの同期に失敗したら取込ログへ「失敗」を記録して exit 1 (無痕跡にしない)", async () => {
+    vi.resetModules();
+    process.argv = [...ORIGINAL_ARGV, "--only=jpx-sector-marketcap"];
+
+    const fetchSectorMarketCap = vi.fn();
+    vi.doMock("../../services/moneyflow/lib/jpx-sector-marketcap.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../services/moneyflow/lib/jpx-sector-marketcap.js")>();
+      return { ...actual, fetchSectorMarketCap };
+    });
+
+    const recordRunLog = vi.fn().mockResolvedValue({ pageId: "runlog-1" });
+    const upsertIndicatorDef = vi.fn();
+    vi.doMock("../../src/shared/notion-archive/index.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../src/shared/notion-archive/index.js")>();
+      return {
+        ...actual,
+        ensureIndicatorDefsDb: vi.fn().mockRejectedValue(new Error("DB down")),
+        upsertIndicatorDef,
+        ensureRunLogDb: vi.fn().mockResolvedValue({ dbId: "runlog-db" }),
+        recordRunLog,
+      };
+    });
+
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const mod = await import("./ingest.js");
+    await mod.main();
+    consoleInfo.mockRestore();
+    consoleError.mockRestore();
+
+    expect(fetchSectorMarketCap).not.toHaveBeenCalled();
+    expect(upsertIndicatorDef).not.toHaveBeenCalled();
+    expect(recordRunLog).toHaveBeenCalledTimes(1);
+    expect(recordRunLog.mock.calls[0]![1]).toMatchObject({
+      status: "失敗",
+      sources: "jpx-sector-marketcap",
+      successCount: 0,
+      failedCount: 1,
+    });
+    expect(String(recordRunLog.mock.calls[0]![1].reason)).toContain("indicator-catalog");
+    expect(process.exitCode).toBe(1);
+    process.exitCode = undefined;
   });
 });

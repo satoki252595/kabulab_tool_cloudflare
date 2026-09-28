@@ -6,14 +6,14 @@
  *   - 未保管のキー: 取得元から本体を取り、先に `recordPrimaryData()` で実体保管
  *     (解析が様式変更で失敗しても一次データは残す — ルール6) → 解析 → 観測ログへ upsert
  *   - 保管済みのキー: 取得元へは取りに行かず、Notion の保管ファイルから再解析し、
- *     最後の観測行が観測ログに既にあれば取込済みとしてスキップ。無ければ (前回が
- *     途中で失敗した等) 全行を upsert し直す (既存行と同値なら書き込まない)
+ *     全 draft を upsert し直す。`upsertObservation` が同値行は書かず
+ *     (unchanged)、途中欠落・値・relation の不一致だけ修復する。
+ *     最後の 1 行の有無で全バッチを skip しない (最後だけある途中欠落を
+ *     見落とすため)。
  */
 import {
   ensureObservationsDb,
   isArchived,
-  observationExists,
-  observationKey,
   recordPrimaryData,
   upsertObservation,
 } from "../../../src/shared/notion-archive/index.js";
@@ -130,12 +130,12 @@ export async function runSpec(spec: MoneyflowSourceSpec, ctx: SpecRunContext): P
       files.push({ filename: f.name, bytes: await downloadArchivedFile(f, spec.name) });
     }
     const drafts = parseAndValidate(spec, key, files);
-    const { dbId } = await ensureObservationsDb();
-    const last = drafts[drafts.length - 1] as ObservationDraft;
-    if (await observationExists(dbId, observationKey(last))) {
-      return `未更新 (${key} は取込済み・取得元への再取得なし)`;
-    }
+    // 最後の 1 行の有無で skip しない。全 draft を upsert し、同値なら
+    // 書かず、途中欠落・値・relation の不一致だけ修復する。
     const counts = await writeObservations(drafts, rec.pageId, ctx);
+    if (counts.created === 0 && counts.updated === 0) {
+      return `未更新 (${key} は取込済み・${drafts.length}行同値確認・取得元への再取得なし)`;
+    }
     return `保管済み ${key} から観測ログを再送 ${describeCounts(drafts.length, counts)}`;
   }
 

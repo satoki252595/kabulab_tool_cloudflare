@@ -122,3 +122,25 @@ describe("GET /signals の JOIN 順序固定 (L-48)", () => {
     expect(codes).toEqual(["7203", "9984"]);
   });
 });
+
+describe("GET /signals の総数と表示件数の区別 (F-07)", () => {
+  it("201 件通過では全201件と先頭200件の両方を示す", async () => {
+    const insStock = sqlite.prepare(
+      "INSERT INTO core_stocks (id, code, name, market, sector33, is_active, instrument_type) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    );
+    const insSig = sqlite.prepare(
+      "INSERT INTO swing_entry_signals (stock_id, pattern, direction, entry_price, stop_loss, signal_strength) VALUES (?, ?, ?, ?, ?, ?)"
+    );
+    // 既存の 3 本 (母集団内) に 198 本を足して 201 本にする。
+    for (let i = 0; i < 198; i++) {
+      const id = 100 + i;
+      insStock.run(id, `9${String(i).padStart(3, "0")}`, `銘柄${id}`, "プライム", "電機", 1, "equity");
+      insSig.run(id, "breakout_long", "long", 1000, 950, 40 - i * 0.1);
+    }
+    const html = await signals("all");
+    // 総数は COUNT の全件、表示は先頭 200 件。両方を明記する。
+    expect(html).toContain("全201件");
+    expect(html).toContain("先頭200件を表示");
+    expect(codesInOrder(html)).toHaveLength(200);
+  });
+});

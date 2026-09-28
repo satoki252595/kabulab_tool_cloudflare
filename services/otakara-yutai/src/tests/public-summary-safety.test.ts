@@ -20,6 +20,7 @@ import {
   groupBenefits,
   publicSummaries,
   publicSummary,
+  renderValueNote,
   type BenefitRow,
 } from "../../app.js";
 
@@ -201,5 +202,25 @@ describe("groupBenefits", () => {
     const [g] = groupBenefits([row({ genre: null })]);
     expect(g.genreName).toBe("その他");
     expect(g.genreSlug).toBeNull();
+  });
+});
+
+describe("renderValueNote", () => {
+  it("正の推定額は「推定 N円」と出す", () => {
+    expect(renderValueNote(3000)).toContain("推定 3,000円");
+  });
+
+  it("null は推定不能の正直表示", () => {
+    const html = renderValueNote(null);
+    expect(html).toContain("product-value-unknown");
+    expect(html).toContain("金額換算が難しい優待");
+  });
+
+  it("0 も推定不能にする (「推定 0円」は価値ゼロの断定になるため)", () => {
+    // 0 は仕様上あり得ない値 (旧 LLM 経路の残存)。値は修復計画で null 化する
+    const html = renderValueNote(0);
+    expect(html).toContain("product-value-unknown");
+    expect(html).toContain("金額換算が難しい優待");
+    expect(html).not.toContain("推定 0円");
   });
 });

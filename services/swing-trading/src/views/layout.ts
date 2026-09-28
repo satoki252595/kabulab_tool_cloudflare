@@ -1,4 +1,5 @@
 import { BASE_PATH } from "../../base-path.js";
+import { TERM_TIP_STYLES } from "../../../../src/shared/term-tip.js";
 
 /**
  * 003 Swing Trading 共通レイアウト
@@ -206,7 +207,7 @@ export function pctCell(value: number | null | undefined, digits = 2): string {
  */
 export function layout(title: string, body: string, activeNav?: string): string {
   const navActive = (path: string) => (activeNav === path ? "active" : "");
-  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"><title>${h(title)}</title><meta name="theme-color" content="#fafafa"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet"><style>${GLOBAL_STYLES}</style></head><body>
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"><title>${h(title)}</title><meta name="theme-color" content="#fafafa"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet"><style>${GLOBAL_STYLES}${TERM_TIP_STYLES}</style></head><body>
 <header class="top-header">
   <div class="inner">
     <a href="${BASE_PATH}/" class="brand">

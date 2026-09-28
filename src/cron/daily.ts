@@ -38,7 +38,7 @@
  *   - マクロ 4 指数のどれかが取れない場合も null で通す
  */
 
-import { sql, eq, and, or, gte, lte, lt, asc } from "drizzle-orm";
+import { sql, eq, and, or, gte, lte, lt, asc, isNull } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
@@ -231,6 +231,26 @@ const TOLERATED_FAILURE_RATE = 0.01;
 export function isMondayUtc(now: Date = new Date()): boolean {
   return now.getUTCDay() === 1;
 }
+
+/**
+ * run 開始 instant から週1ゲートと日付キーを決める (純関数)。
+ *
+ * 週1ジョブ (prune・年次) の月曜判定と market/sector 表の日付キーは
+ * run 開始時刻に固定する。Phase 実行時刻 (`new Date()`) で評価すると、
+ * UTC 日跨ぎの run で月曜判定が外れて prune が飢餓する (F-05)。
+ * 旧 21:00 UTC 日程では開始遅延 2〜3h で Phase 4 が火曜に落ち、
+ * 3,689 銘柄が 90 本超過まで積み上がった。
+ */
+export function runDateKeys(startedAt: number): {
+  runDate: string;
+  runMonday: boolean;
+} {
+  const at = new Date(startedAt);
+  return {
+    runDate: at.toISOString().split("T")[0],
+    runMonday: isMondayUtc(at),
+  };
+}
 /** upstream 指示や診断文字列が異常でも回復待機を30秒で止める。 */
 const MAX_RECOVERY_BACKOFF_MS = 30_000;
 const MARKET_CONTEXT_CHART_SYMBOLS = [
@@ -247,6 +267,8 @@ type MarketContextTarget =
 interface MarketContextChartValue {
   price: number | null;
   prevClose: number | null;
+  /** 最新バーの日付 ('YYYY-MM-DD')。N225 の実バー日が行キーの照合に使う。 */
+  date: string | null;
 }
 interface MarketContextDraft {
   charts: Record<MarketContextChartSymbol, MarketContextChartValue>;
@@ -617,6 +639,36 @@ export async function loadJssAnnualMap(
 }
 
 /**
+ * `swing_daily_ohlcv` の close-NULL 日を銘柄ごとに集める (F-04 修復の対象抽出)。
+ *
+ * 増分フィルタ (`date > existingMaxDate`) は保存済み NULL 日を再送しないため、
+ * 対象日をここで明示する。再送されるのは fresh スライス内に実終値がある日だけ
+ * (`buildOhlcvRows`)。保存済みの有効値は遡及訂正でも自動では書き換えない。
+ * 1 文で全件引く (rows_read は無料枠内。修復が進むほど返る行は減る)。
+ */
+export async function loadNullCloseDates(
+  db: Db
+): Promise<Map<number, Set<string>>> {
+  const rows = await db
+    .select({
+      stockId: swingSchema.dailyOhlcv.stockId,
+      date: swingSchema.dailyOhlcv.date,
+    })
+    .from(swingSchema.dailyOhlcv)
+    .where(isNull(swingSchema.dailyOhlcv.close));
+  const byStock = new Map<number, Set<string>>();
+  for (const r of rows) {
+    const set = byStock.get(r.stockId);
+    if (set === undefined) {
+      byStock.set(r.stockId, new Set([r.date]));
+    } else {
+      set.add(r.date);
+    }
+  }
+  return byStock;
+}
+
+/**
  * 日次 sync が「株価の日次同期」記録 (Notion) に使う状態を決める (純粋関数)。
  * 取引日を導出できない = 実質全滅なので、失敗件数に関わらず必ず「失敗」にする
  * (取引日不明を「完了」「一部失敗」の顔で見せない — ルール2)。
@@ -700,7 +752,9 @@ export async function runDailySync(
 
 async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<DailySyncResult> {
   const startedAt = Date.now();
-  const targetDate = new Date(startedAt).toISOString().split("T")[0];
+  // 日付キーと週1ゲートは run 開始時刻に固定する (F-05。Phase 実行時刻で
+  // 評価し直すと日跨ぎで prune/年次が飢餓し、表の日付がずれる)。
+  const { runDate: targetDate, runMonday } = runDateKeys(startedAt);
   if (stocksOnly) {
     const utcMinutes = new Date(startedAt).getUTCHours() * 60 + new Date(startedAt).getUTCMinutes();
     if (utcMinutes < 390 || utcMinutes >= 1260) {
@@ -741,6 +795,13 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
       t.latestDate === null ? [] : [[t.id, t.latestDate] as const]
     )
   );
+  // 保存済み close-NULL 日の訂正再送対象 (F-04)。増分フィルタは保存済み
+  // NULL 日を再送しないので明示する。fresh に実終値がある日だけ再送され、
+  // 保存済みの有効値は書き換えない。件数は修復が進むほど減る。
+  const nullCloseDatesByStock = await loadNullCloseDates(db);
+  console.info(
+    `[sync-daily]   NULL 訂正対象: ${nullCloseDatesByStock.size} 銘柄`
+  );
 
   // -----------------------------------------------------------------
   // Phase 2: マクロコンテキスト
@@ -754,7 +815,8 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   if (marketContext !== null && !deferMarketContextPersistence) {
     marketContextOk = await persistMarketContextWithDiagnostics(
       db,
-      marketContext.draft
+      marketContext.draft,
+      targetDate
     );
   }
 
@@ -769,8 +831,9 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   let succeeded = 0;
 
   // 年次は月曜 UTC の run でのみ書く (L-49)。年 1 回変わるものに毎日
-  // 15,900 行 upsert していた。
-  const writeAnnual = isMondayUtc();
+  // 15,900 行 upsert していた。曜日の判定は run 開始時刻に固定した
+  // runMonday を使う (Phase 実行時刻だと日跨ぎで外れる。F-05)。
+  const writeAnnual = runMonday;
   // run 開始秒で固定。entry_signals の INSERT 刻みと Phase 3.5 の sweep 境界
   // (L-52)、および Phase 6 の投影掃除の境界に使う。Phase 3 の upsert より
   // 前の時刻でないと、掃除が今回の行まで消す。
@@ -792,6 +855,7 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
           target,
           snap,
           existingMaxDate: latestDateByStock.get(target.id),
+          correctionDates: nullCloseDatesByStock.get(target.id),
         });
       } catch (e) {
         const msg = rootCauseMessage(e);
@@ -845,6 +909,7 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
         await writeStockSnapshot(db, snap, latestDateByStock.get(target.id), {
           writeAnnual,
           runStartedSec,
+          correctionDates: nullCloseDatesByStock.get(target.id),
         });
         recoveredStocks++;
       } catch (error) {
@@ -883,7 +948,8 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   if (marketContext !== null && marketContextOk === undefined) {
     marketContextOk = await persistMarketContextWithDiagnostics(
       db,
-      marketContext.draft
+      marketContext.draft,
+      targetDate
     );
   }
 
@@ -901,7 +967,8 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   // 月曜 UTC の run のみ (L-47)。1 日で増えるのは 1 本/銘柄なので週1で足りる。
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 4: OHLCV 保持期間の prune");
-  if (isMondayUtc()) {
+  // run 開始時刻の曜日で判定する (Phase 実行時刻だと日跨ぎで skip され飢餓する。F-05)。
+  if (runMonday) {
     const pruned = await pruneOhlcvRetention(db);
     if (pruned.prunedStocks > 0) {
       console.info(
@@ -921,7 +988,17 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   // Phase 5: セクター集計 (当日更新済 indicators から・90% カバレッジ guard)
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 5: セクター集計");
-  await aggregateSectorDaily(db, new Date().toISOString().split("T")[0]);
+  // 行キーは実データの取引日 (MAX(latest_date))。実行日キーだと再実行・
+  // 休場日に重複 snapshot が増える (F-06)。曜日の推測もカレンダーも使わない。
+  const sectorTradingDate = await loadIndicatorsMaxLatestDate(db);
+  if (sectorTradingDate === null) {
+    console.warn(
+      "[sync-daily]   セクター集計スキップ: indicators が空です。" +
+        "sector_daily は前回値を保持します。"
+    );
+  } else {
+    await aggregateSectorDaily(db, sectorTradingDate);
+  }
 
   // -----------------------------------------------------------------
   // Phase 6: L2 投影 (p_momentum) の仕上げ
@@ -995,12 +1072,31 @@ export async function runMarketContextSync(db: Db): Promise<boolean> {
   for (const failure of recovery.failures) {
     console.warn(`[sync-context] マクロ未回復 ${failure.target}:`, failure.error);
   }
-  return persistMarketContextWithDiagnostics(db, context.draft);
+  // 日付キーは run 開始日に固定する (F-05 同型)。
+  const runDate = runDateKeys(startedAt).runDate;
+  return persistMarketContextWithDiagnostics(db, context.draft, runDate);
+}
+
+/**
+ * indicators の MAX(latest_date) を 1 文で引く (Phase 5 の行キー用)。
+ *
+ * 集計対象の実データ日付そのもの。休場日・再実行でも実データの取引日に
+ * 揃うため、実行日キーで起きる重複 snapshot (F-06) にならない。
+ * Phase 3 が全滅なら前回値の日付が返り、カバレッジ guard が skip する。
+ * indicators が空なら null (呼び出し側が skip する)。
+ */
+export async function loadIndicatorsMaxLatestDate(db: Db): Promise<string | null> {
+  const rows = await db
+    .select({ maxDate: sql<string | null>`MAX(${swingSchema.stockIndicators.latestDate})` })
+    .from(swingSchema.stockIndicators);
+  return rows[0]?.maxDate ?? null;
 }
 
 /**
  * Phase 5: 業種騰落ランキング (`swing_sector_daily`) を `today` の日付で書き直す。
  *
+ * `today` には実データの取引日 (MAX(latest_date)) を渡す。実行日を渡すと
+ * 再実行・休場日に重複 snapshot が増える (F-06)。
  * 当日更新済みの indicators だけを集計し、カバレッジが 90% 未満なら書かない
  * (大量失敗の日に一部銘柄だけの平均で前日分を上書きしないため)。
  *
@@ -1300,6 +1396,11 @@ export interface WriteStockSnapshotOptions {
    * 時の現在秒 (テスト用。本番は Phase 3 が run 開始秒を渡す)。
    */
   runStartedSec?: number;
+  /**
+   * 保存済み close-NULL 日の訂正再送対象 (F-04)。1 行 flush (回収パス) 用。
+   * 複数行 flush は `FlushItem.correctionDates` を使う。省略時は新規日のみ。
+   */
+  correctionDates?: ReadonlySet<string>;
 }
 
 // -----------------------------------------------------------------------------
@@ -1315,6 +1416,11 @@ export interface FlushItem<T = unknown> {
   target?: T;
   snap: StockSnapshot;
   existingMaxDate: string | undefined;
+  /**
+   * 保存済み close-NULL 日の訂正再送対象 (F-04。`loadNullCloseDates`)。
+   * fresh スライス内に実終値がある日だけ再送する。省略時は新規日のみ。
+   */
+  correctionDates?: ReadonlySet<string>;
 }
 
 export interface FlushFailure<T = unknown> {
@@ -1387,9 +1493,16 @@ function buildRsiRows(item: FlushItem<never>): BuiltRow<Record<string, unknown>>
 function buildOhlcvRows(
   item: FlushItem<never>
 ): BuiltRow<Record<string, unknown>>[] {
-  const { snap, existingMaxDate } = item;
+  const { snap, existingMaxDate, correctionDates } = item;
   const newOhlcv = existingMaxDate
-    ? snap.ohlcv6mo.filter((r) => r.date > existingMaxDate)
+    ? snap.ohlcv6mo.filter(
+        (r) =>
+          r.date > existingMaxDate ||
+          // 保存済み NULL 日の訂正再送 (F-04)。fresh に実終値がある日だけ
+          // (fresh も null の日は NULL のまま正直に残す)。保存済みの有効値は
+          // 遡及訂正でも自動では書き換えない (別途 raw 証跡つき修復)。
+          (r.close !== null && (correctionDates?.has(r.date) ?? false))
+      )
     : snap.ohlcv6mo;
   return newOhlcv.map((r) => ({
     item,
@@ -1801,7 +1914,11 @@ export async function writeStockSnapshot(
   options: WriteStockSnapshotOptions = {}
 ): Promise<void> {
   // 1 行 flush。回収パスとテストが使う。失敗したら throw (旧動作と同じ)。
-  const failed = await flushSnapshots(db, [{ snap, existingMaxDate }], options);
+  const failed = await flushSnapshots(
+    db,
+    [{ snap, existingMaxDate, correctionDates: options.correctionDates }],
+    options
+  );
   if (failed.length > 0) throw new Error(failed[0].error);
 }
 
@@ -2079,10 +2196,10 @@ export async function rebuildMomentumProjection(
 function createMarketContextDraft(): MarketContextDraft {
   return {
     charts: {
-      "^N225": { price: null, prevClose: null },
-      "^VIX": { price: null, prevClose: null },
-      "^GSPC": { price: null, prevClose: null },
-      "NIY=F": { price: null, prevClose: null },
+      "^N225": { price: null, prevClose: null, date: null },
+      "^VIX": { price: null, prevClose: null, date: null },
+      "^GSPC": { price: null, prevClose: null, date: null },
+      "NIY=F": { price: null, prevClose: null, date: null },
     },
     nikkeiVi: null,
   };
@@ -2102,6 +2219,7 @@ async function fetchMarketContextTarget(
   draft.charts[target] = {
     price: chart.price,
     prevClose: chart.previousClose,
+    date: chart.ohlcv.at(-1)?.date ?? null,
   };
 }
 
@@ -2133,9 +2251,22 @@ async function fetchMarketContextDraft(): Promise<{
 
 async function persistMarketContext(
   db: Db,
-  draft: MarketContextDraft
+  draft: MarketContextDraft,
+  runDate: string
 ): Promise<boolean> {
-  const today = new Date().toISOString().split("T")[0];
+  // 日付キーは呼び出し側が run 開始日から決める (実行時刻だと日跨ぎでずれる。F-05 同型)。
+  // 書くのは N225 の実バー日と一致するときだけ (F-06)。不一致 (休場・取得
+  // 遅延・N225 取得失敗) は書かず前回値を残す。日付の一致で判定し、曜日の
+  // 推測もカレンダーも使わない。一致するとき run 日≡取引日になる。
+  const n225BarDate = draft.charts["^N225"].date;
+  if (n225BarDate === null || n225BarDate !== runDate) {
+    console.warn(
+      `[sync-daily]   マクロ保存スキップ: N225 実日足=${n225BarDate ?? "未取得"} が ` +
+        `run 日 ${runDate} と不一致 (休場または取得遅延)。前回値を保持します。`
+    );
+    return false;
+  }
+  const today = runDate;
   const n225 = draft.charts["^N225"];
   const vix = draft.charts["^VIX"];
   const gspc = draft.charts["^GSPC"];
@@ -2207,10 +2338,11 @@ async function persistMarketContext(
 
 async function persistMarketContextWithDiagnostics(
   db: Db,
-  draft: MarketContextDraft
+  draft: MarketContextDraft,
+  runDate: string
 ): Promise<boolean> {
   try {
-    return await persistMarketContext(db, draft);
+    return await persistMarketContext(db, draft, runDate);
   } catch (error) {
     console.warn(
       "[sync-daily]   マクロ保存失敗:",

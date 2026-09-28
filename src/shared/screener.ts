@@ -42,6 +42,42 @@ const VOLUME_SURGE_MULTIPLIER = 3;
  */
 const ATR_PCT_THRESHOLD = 2;
 
+/**
+ * 保存行のうち stale になりうる 3 bool (F-02 修復の対象列)。
+ *
+ * 閾値変更 (#135: ATR% 0.02→2) の影響は `volatilityOk` とその派生
+ * (`allPassedLong` / `allPassedShort`) にだけ出る。`liquidityOk` /
+ * `trendOkLong` / `trendOkShort` と全数値列は修復で触らない。
+ */
+export interface SavedScreeningFlags {
+  volatilityOk: boolean;
+  allPassedLong: boolean;
+  allPassedShort: boolean;
+}
+
+/**
+ * 保存入力から `screenStock` で正規再計算し、stale になりうる 3 bool だけ返す。
+ *
+ * F-02 修復の最小経路: 戻した 3 列だけを更新し、数値列・他 bool は触らない。
+ * `changed=false` の行は書込対象外 (冪等・2nd run 0)。
+ */
+export function diffStaleScreeningFlags(
+  input: ScreeningInput,
+  saved: SavedScreeningFlags
+): { next: SavedScreeningFlags; changed: boolean } {
+  const r = screenStock(input);
+  const next: SavedScreeningFlags = {
+    volatilityOk: r.volatilityOk,
+    allPassedLong: r.allPassedLong,
+    allPassedShort: r.allPassedShort,
+  };
+  const changed =
+    next.volatilityOk !== saved.volatilityOk ||
+    next.allPassedLong !== saved.allPassedLong ||
+    next.allPassedShort !== saved.allPassedShort;
+  return { next, changed };
+}
+
 export function screenStock(input: ScreeningInput): ScreeningResult {
   const liquidityOk =
     input.avgTurnover20d !== null &&

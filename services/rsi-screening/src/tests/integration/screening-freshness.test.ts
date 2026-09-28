@@ -253,6 +253,65 @@ describe("screenStocks の鮮度条件", () => {
   });
 });
 
+describe("screenStocks の総数 (F-07 同型)", () => {
+  // rows.length は limit/offset 適用後の表示件数にすぎない。全対象件数は
+  // 同一 WHERE/JOIN の別 COUNT (totalMatched) が正。201 件 seed で
+  // limit 上限 200 の頭打ちを再現する。
+  it("limit を超える一致は rows が頭打ちでも totalMatched が全件を数える", async () => {
+    const fresh = new Date(NOW.getTime() - DAY_MS);
+    for (let i = 0; i < 201; i++) {
+      await seed({
+        code: String(10000 + i),
+        minPercentile: 1 + (i % 9),
+        computedAt: fresh,
+      });
+    }
+    const q = screeningQuerySchema.parse({ limit: 200, offset: 0 });
+
+    const result = await screenStocks(db, q, NOW);
+
+    expect(result.rows).toHaveLength(200);
+    expect(result.totalMatched).toBe(201);
+    expect(result.staleExcluded).toBe(0);
+  });
+
+  it("offset 適用後も totalMatched は全件を数える", async () => {
+    const fresh = new Date(NOW.getTime() - DAY_MS);
+    for (let i = 0; i < 201; i++) {
+      await seed({
+        code: String(10000 + i),
+        minPercentile: 1 + (i % 9),
+        computedAt: fresh,
+      });
+    }
+    const q = screeningQuerySchema.parse({ limit: 200, offset: 200 });
+
+    const result = await screenStocks(db, q, NOW);
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.totalMatched).toBe(201);
+  });
+
+  it("totalMatched は鮮度条件込み (古い行は数えない)", async () => {
+    await seed({
+      code: "7001",
+      minPercentile: 2,
+      computedAt: new Date(NOW.getTime() - DAY_MS),
+    });
+    await seed({
+      code: "7002",
+      minPercentile: 3,
+      computedAt: new Date("2026-05-15T21:10:00.000Z"),
+    });
+
+    const result = await screenStocks(db, query, NOW);
+
+    expect(result.rows.map((r) => r.code)).toEqual(["7001"]);
+    expect(result.totalMatched).toBe(1);
+    expect(result.staleExcluded).toBe(1);
+  });
+});
+
 describe("GET / (ホーム) の銘柄数", () => {
   // ホームの total は screenStocks と同じ母集団 (active かつ equity) で数える。
   // src/shared/db/active-equity.test.ts の静的検査は `eq(stocks.isActive, true)` の

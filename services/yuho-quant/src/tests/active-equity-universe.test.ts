@@ -141,7 +141,7 @@ describe("yuho-quant の検索・スクリーニング・業種プルダウン�
   });
 
   it("screenOrderGrowth は equity だけを返す", async () => {
-    const rows = await screenOrderGrowth(db, { metric: "orders", minYears: 3, limit: 100 });
+    const { rows } = await screenOrderGrowth(db, { metric: "orders", minYears: 3, limit: 100 });
     expect(rows.map((r) => r.code)).toEqual(["7203"]);
   });
 
@@ -150,7 +150,7 @@ describe("yuho-quant の検索・スクリーニング・業種プルダウン�
   });
 
   it("screenOverseasGrowth は equity だけを返す", async () => {
-    const rows = await screenOverseasGrowth(db, { minYears: 3, limit: 100 });
+    const { rows } = await screenOverseasGrowth(db, { minYears: 3, limit: 100 });
     expect(rows.map((r) => r.code)).toEqual(["7203"]);
   });
 
