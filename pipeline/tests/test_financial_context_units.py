@@ -108,6 +108,25 @@ def test_conflicting_whole_company_values_do_not_pick_first_fact():
     assert record.net_sales is None
 
 
+def test_conflicting_current_interim_instants_remain_missing():
+    case = next(case for case in EDINET_CASES if case["code"] == "7384")
+    tidy = fixture_tidy(case)
+    # 実原本の異なる時点値が同じ当中間期末を名乗る場合は、先頭採用しない。
+    tidy.loc[tidy["context_ref"].eq("CurrentYearInstant"), "context_ref"] = "InterimInstant"
+    record = tidy_to_financial_record(tidy, case["code"], fixture_provenance(case))
+    assert record.bps is None
+    assert record.equity_ratio_pct is None
+
+
+def test_unusable_current_interim_unit_does_not_use_year_end_values():
+    case = next(case for case in EDINET_CASES if case["code"] == "7384")
+    tidy = fixture_tidy(case)
+    tidy.loc[tidy["context_ref"].eq("InterimInstant"), "unit"] = ""
+    record = tidy_to_financial_record(tidy, case["code"], fixture_provenance(case))
+    assert record.bps is None
+    assert record.equity_ratio_pct is None
+
+
 def inline_structure(*, conflicting_unit=False):
     """市場データではない最小XML構造で共有resourcesを検証する。"""
     header = '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:ix="http://www.xbrl.org/2013/inlineXBRL" xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:xbrldi="http://xbrl.org/2006/xbrldi">'

@@ -174,6 +174,7 @@ value          : str  値（**原文の文字列をそのまま**。数値化は
 ```
 
 財務サマリの金額は円、EPS/BPS/配当は円/株、比率はpureのみ採用する。
+中間期のBPS/自己資本比率にInterimInstantがある場合はその当中間期末を採用し、同一原本のCurrentYearInstant年度末値と混ぜない。同じ当中間期末に異なる値があれば欠損を維持する。
 セグメント/地域/商品のdimensionを会社全体へ混ぜず、年間配当はAnnualMemberだけを採用する。
 forecast_*はCurrent/NextYearDurationの通期予想だけを採用する。四半期/半期予想を代用しない。
 NextYearの通期予想が存在する場合、全forecast_*の対象年度をNextYearへ揃え、nil/不明単位/多値/欠損項目をCurrentYearで埋めない。配当予想もNextYearが存在すれば同じ規則で年間値を使う。
