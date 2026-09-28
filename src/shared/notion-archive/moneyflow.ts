@@ -32,7 +32,12 @@
  * select の累積上限に当たって取込が止まるため。区分の大分類は「区分種別」
  * (select・値は固定の少数) で絞り込む。
  */
-import { createDatabaseOrAdopt, findBackupChildByTitle, queryUniqueRow } from "./archive.js";
+import {
+  createDatabaseOrAdopt,
+  findBackupChildByTitle,
+  findUniqueBackupChildByTitle,
+  queryUniqueRow,
+} from "./archive.js";
 import { notionRequest } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
@@ -303,7 +308,7 @@ export async function ensureIndicatorDefsDb(): Promise<{ dbId: string }> {
         properties: want,
       },
       () =>
-        findBackupChildByTitle({
+        findUniqueBackupChildByTitle({
           parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
           title: MONEYFLOW_DEFS_DB_TITLE,
           kind: "database",
@@ -576,7 +581,7 @@ export async function ensureObservationsDb(): Promise<{ dbId: string }> {
         properties: want,
       },
       () =>
-        findBackupChildByTitle({
+        findUniqueBackupChildByTitle({
           parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
           title: MONEYFLOW_OBS_DB_TITLE,
           kind: "database",
@@ -789,7 +794,7 @@ export async function ensureRunLogDb(): Promise<{ dbId: string }> {
         properties: want,
       },
       () =>
-        findBackupChildByTitle({
+        findUniqueBackupChildByTitle({
           parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
           title: MONEYFLOW_RUNLOG_DB_TITLE,
           kind: "database",

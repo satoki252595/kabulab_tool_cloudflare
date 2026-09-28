@@ -275,6 +275,28 @@ R2 GET・公開 HTTP GET) のみ。書込 0。
   (新規 1/同値 1) の 2 件へ更新。
 - 非対象: 未保管 path (取得→保管→upsert は不変)、dry-run (不変)。
 
+### F15. (review 修正・F13 の残り 2 件 + privacy 1 件) 回収の厳密化と型検証
+
+- 原因: (a) 結果不明回収の `refind` が通常探索
+  (`findBackupChildByTitle` の最古選択) のため、同名複数時に古い DB を
+  黙って回収し得る。(b) `archive.ts` の一次/ごみ DB と `dataset.ts` の
+  銘柄別親 DB は回収 DB を schema 検証なしで cache/return し、型違いを
+  通す。子 DB も adopted 時の型検証が無い。(c) `queryUniqueRow` の重複
+  エラーに private な databaseId 全文が載り、通常の GH ログに出る。
+- 修正: (a) 回収専用 `findUniqueBackupChildByTitle` (完全一致
+  0=null停止・1=回収・複数=保全停止。Search 0 件で bounded 保険走査に
+  戻らない) と子 DB 用 `findUniqueChildDatabaseForAdopt` (全走査で多重
+  検出) を追加し、9 箇所の refind を全て移行 (通常探索の最古収束は
+  不変。POST 再送なし)。(b) 共通 `assertAdoptedDatabaseSchema`
+  (必須列の存在+型を検証し、不足・型違いは保全停止。既存列を置換
+  しない) を追加し、archive・dataset 親・dataset 子 (adopted 時のみ)
+  の cache/return 前に GET 検証。(c) 重複エラーから databaseId を除去
+  し公開 key・context のみ (`findByKey` の context に key を追加)。
+- 回帰: `archive.test.ts` +12 (回収 0/1/複数・子 DB 0/1/複数・型検証 3・
+  回収統合 2・privacy 2 更新)。POST 1 回きり・cache 前停止も検証。
+- 非対象: 通常探索の最古収束 (不変)、既存 DB の不足列 PATCH 移行
+  (不変)。本 gate は code のみで本番書込なし (writer 枠待ちは不変)。
+
 ## 2. 変更ファイル (16 + docs)
 
 - `services/vwap-analysis/lib/margin.ts`: 発見先 01.html・発見の純関数化
@@ -285,7 +307,10 @@ R2 GET・公開 HTTP GET) のみ。書込 0。
   guard 追加 (import 時の main 誤実行を抑止)。保存順序を
   「検証 → 原本保管 → R2 PUT」に固定し `main` を export (順序テスト用)。
 - `src/shared/notion-archive/archive.ts`: `queryUniqueRow` 追加・
-  `findByKey` の委譲 (message 不変)・`createDatabaseOrAdopt` 追加。
+  `findByKey` の委譲・`createDatabaseOrAdopt` 追加・回収専用厳密探索
+  (`findUniqueBackupChildByTitle`・`findAllChildDatabases`・
+  `findUniqueChildDatabaseForAdopt`)・`assertAdoptedDatabaseSchema` 追加。
+  重複エラーから private databaseId を除去 (公開 key のみ)。
 - `src/shared/notion-archive/client.ts`: 非冪等 guard を POST /databases へ
   拡張・結果不明を型付き `NotionUnknownResultError` 化 (message 不変)。
 - `src/shared/notion-archive/moneyflow.ts`・`price-sync-log.ts`・
@@ -294,14 +319,15 @@ R2 GET・公開 HTTP GET) のみ。書込 0。
 - `src/shared/notion-archive/moneyflow.ts` (3)・`price-sync-log.ts`・
   `stock-supplement.ts`・`biztag-ledger.ts`・`dataset.ts` (親子)・
   `archive.ts`: DB 作成 9 箇所を `createDatabaseOrAdopt` へ移行
-  (回収時は schema 検証へ進む)。
+  (回収時は schema 検証へ進む。refind は厳密探索へ移行し、
+  dataset 親子は cache 前に GET 型検証)。
 - `scripts/moneyflow/ingest.ts`: カタログ失敗の取込ログ記録 (`writeRunLog`)。
 - `scripts/moneyflow/lib/run-spec.ts`: 保管済み path を全 draft upsert 化
   (最終行 skip を廃止。同値確認の未更新メッセージ付き)。
 - `scripts/notion/master-dedup.ts`・`master-dedup-3681-7129.ts`: 退避の
   直接 archive 化 (決定・検証・receipt・marker 運用)。
 - 回帰 (上記 +): `margin.test.ts` (+13)・`ingest-margin.test.ts`
-  (新・3+順序 2)・`archive.test.ts` (+4+3)・`client-retry.test.ts` (+4)・
+  (新・3+順序 2)・`archive.test.ts` (+4+3+12)・`client-retry.test.ts` (+4)・
   `moneyflow.test.ts` (+2)・`archived-files.test.ts` (新・3)・
   `ingest.test.ts` (+1)・`run-spec.test.ts` (更新・2)・
   `master-dedup.test.ts` / `master-dedup-flow.test.ts` (更新・75)。
@@ -310,9 +336,11 @@ R2 GET・公開 HTTP GET) のみ。書込 0。
 
 ## 3. 検証 (隔離・読取のみ)
 
-- `vitest run`: 197 files・2817 passed・367 skipped・0 failed。
+- `vitest run`: 197 files・2829 passed・367 skipped・0 failed
+  (F15 gate 後に再測定。+12 は回収厳密化・型検証・privacy)。
 - `tsc --noEmit`: clean。`eslint src services --max-warnings=0`: exit 0。
   (`scripts/` の既存 lint error 1 件は gate 外かつ本差分の範囲外のため不変。)
+  `audit:report:check`: OK。本 gate も本番書込 0 (code・隔離 mock のみ)。
 - 読取専用スナップショット (Notion 約 60 req・1400ms 間隔、D1 SELECT 3、
   R2 GET 約 20、公開 HTTP GET 約 30): 全て `/tmp/laneC-*` (0600) に保存。
   本番書込 0 (Notion/D1/R2 の書込・archive・job 起動なし)。

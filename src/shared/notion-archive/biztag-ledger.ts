@@ -7,7 +7,11 @@
  * ハッシュを照合し、一致しなければ throw する (Notion 上で手で書き換えた
  * 値を黙って読み戻さない — ルール2)。
  */
-import { createDatabaseOrAdopt, findBackupChildByTitle } from "./archive.js";
+import {
+  createDatabaseOrAdopt,
+  findBackupChildByTitle,
+  findUniqueBackupChildByTitle,
+} from "./archive.js";
 import { notionRequest } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
@@ -137,7 +141,7 @@ export async function ensureLedgerDb(): Promise<string> {
         properties: LEDGER_PROPERTIES,
       },
       () =>
-        findBackupChildByTitle({
+        findUniqueBackupChildByTitle({
           parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
           title: LEDGER_DB_TITLE,
           kind: "database",

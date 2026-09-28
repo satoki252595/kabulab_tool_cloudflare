@@ -14,7 +14,11 @@
  * 欠損は欠損のまま (ルール2): 判定できていない列は `null`/未設定のまま送る。
  * 架空値・既定値で埋めない。
  */
-import { createDatabaseOrAdopt, findBackupChildByTitle } from "./archive.js";
+import {
+  createDatabaseOrAdopt,
+  findBackupChildByTitle,
+  findUniqueBackupChildByTitle,
+} from "./archive.js";
 import { notionRequest } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
@@ -272,7 +276,7 @@ export async function ensureSupplementDb(
         properties: want,
       },
       () =>
-        findBackupChildByTitle({
+        findUniqueBackupChildByTitle({
           parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
           title: SUPPLEMENT_DB_TITLE,
           kind: "database",

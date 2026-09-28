@@ -439,9 +439,11 @@ describe("notion-archive archive (parentPageId)", () => {
     it("2件ならどれも選ばず throw する", async () => {
       route("POST", `/v1/databases/${DB}/query`, [{ results: [{ id: "row-1" }, { id: "row-2" }] }]);
       const { queryUniqueRow } = await load();
-      await expect(queryUniqueRow(DB, FILTER, CTX)).rejects.toThrow(
-        /moneyflow 観測ログの重複 key=k1 を選ばず保全停止 database=db-unique/
-      );
+      const err = (await queryUniqueRow(DB, FILTER, CTX).catch((e: Error) => e)) as Error;
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toMatch(/moneyflow 観測ログの重複 key=k1 を選ばず保全停止/);
+      // private な databaseId は通常ログに出さない (公開 key・context のみ)。
+      expect(err.message).not.toContain(DB);
     });
 
     it("has_more なら 1件表示でも throw する (3件目以降の見落とし防止)", async () => {
@@ -449,7 +451,10 @@ describe("notion-archive archive (parentPageId)", () => {
         { results: [{ id: "row-1" }], has_more: true, next_cursor: "c" },
       ]);
       const { queryUniqueRow } = await load();
-      await expect(queryUniqueRow(DB, FILTER, CTX)).rejects.toThrow(/保全停止 database=db-unique/);
+      const err = (await queryUniqueRow(DB, FILTER, CTX).catch((e: Error) => e)) as Error;
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toMatch(/保全停止/);
+      expect(err.message).not.toContain(DB);
     });
   });
 
@@ -486,6 +491,220 @@ describe("notion-archive archive (parentPageId)", () => {
       const { createDatabaseOrAdopt } = await load();
       await expect(createDatabaseOrAdopt(BODY, refind)).rejects.toThrow(/結果不明のため再送しません/);
       expect(refind).toHaveBeenCalledTimes(1);
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/databases")).toHaveLength(1);
+    });
+
+    it("結果不明で refind が複数検出なら保全停止を伝え POST は 1 回きり", async () => {
+      const refind = vi.fn(async () => {
+        throw new Error("Notion DB作成の結果不明回収: 同名が2件あり特定できず保全停止 title=一次データ｜x");
+      });
+      const { createDatabaseOrAdopt } = await load();
+      const err = (await createDatabaseOrAdopt(BODY, refind).catch((e: Error) => e)) as Error;
+      expect(err.message).toMatch(/同名が2件あり特定できず保全停止/);
+      expect(refind).toHaveBeenCalledTimes(1);
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/databases")).toHaveLength(1);
+    });
+  });
+
+  describe("findUniqueBackupChildByTitle (回収専用 0/1/複数)", () => {
+    const TITLE = "一次データ｜moneyflow";
+    const dbHit = (id: string, created: string) => ({
+      id,
+      created_time: created,
+      parent: { type: "page_id", page_id: ARCHIVE_PAGE },
+      title: [{ plain_text: TITLE }],
+    });
+
+    it("1件なら回収する (保険走査しない)", async () => {
+      route("POST", "/v1/search", [
+        { results: [dbHit("db-1", "2026-09-28T00:00:00.000Z")], has_more: false, next_cursor: null },
+      ]);
+      const { findUniqueBackupChildByTitle } = await load();
+      const got = await findUniqueBackupChildByTitle({
+        parentPageId: ARCHIVE_PAGE,
+        title: TITLE,
+        kind: "database",
+      });
+      expect(got).toBe("db-1");
+      expect(calls.filter((c) => c.init.method === "GET")).toHaveLength(0);
+    });
+
+    it("複数なら最古を選ばず保全停止する (通常探索の最古収束と分離)", async () => {
+      route("POST", "/v1/search", [
+        {
+          results: [
+            dbHit("db-new", "2026-09-28T00:00:00.000Z"),
+            dbHit("db-old", "2026-09-27T00:00:00.000Z"),
+          ],
+          has_more: false,
+          next_cursor: null,
+        },
+      ]);
+      const { findUniqueBackupChildByTitle } = await load();
+      const err = (await findUniqueBackupChildByTitle({
+        parentPageId: ARCHIVE_PAGE,
+        title: TITLE,
+        kind: "database",
+      }).catch((e: Error) => e)) as Error;
+      expect(err.message).toMatch(/同名が2件あり特定できず保全停止/);
+      expect(err.message).toContain(TITLE);
+      expect(err.message).not.toContain("db-old");
+      expect(err.message).not.toContain("db-new");
+    });
+
+    it("0件なら null を返し保険走査しない (bounded 先頭採用に戻らない)", async () => {
+      route("POST", "/v1/search", [emptySearch()]);
+      const { findUniqueBackupChildByTitle } = await load();
+      const got = await findUniqueBackupChildByTitle({
+        parentPageId: ARCHIVE_PAGE,
+        title: TITLE,
+        kind: "database",
+      });
+      expect(got).toBeNull();
+      // Search のみ。children 保険走査はしない (呼出側が元の結果不明で停止し、
+      // 次回の通常探索で収束する)。
+      expect(calls.filter((c) => c.init.method === "GET")).toHaveLength(0);
+    });
+  });
+
+  describe("findUniqueChildDatabaseForAdopt (子DB回収 0/1/複数)", () => {
+    const TITLE = "適時開示｜7203";
+    const STOCK = "s".repeat(32);
+    const childDb = (id: string) => ({ id, type: "child_database", child_database: { title: TITLE } });
+
+    it("1件なら回収する", async () => {
+      route("GET", `/v1/blocks/${STOCK}/children`, [
+        { results: [childDb("cdb-1")], has_more: false, next_cursor: null },
+      ]);
+      const { findUniqueChildDatabaseForAdopt } = await load();
+      await expect(findUniqueChildDatabaseForAdopt(STOCK, TITLE)).resolves.toBe("cdb-1");
+    });
+
+    it("複数 (次ページ含む全走査) なら保全停止する", async () => {
+      route("GET", `/v1/blocks/${STOCK}/children`, [
+        { results: [childDb("cdb-1")], has_more: true, next_cursor: "cur1" },
+        { results: [childDb("cdb-2")], has_more: false, next_cursor: null },
+      ]);
+      const { findUniqueChildDatabaseForAdopt } = await load();
+      const err = (await findUniqueChildDatabaseForAdopt(STOCK, TITLE).catch((e: Error) => e)) as Error;
+      expect(err.message).toMatch(/同名が2件あり特定できず保全停止/);
+      expect(err.message).not.toContain("cdb-1");
+    });
+
+    it("0件なら null", async () => {
+      route("GET", `/v1/blocks/${STOCK}/children`, [emptyChildren()]);
+      const { findUniqueChildDatabaseForAdopt } = await load();
+      await expect(findUniqueChildDatabaseForAdopt(STOCK, TITLE)).resolves.toBeNull();
+    });
+  });
+
+  describe("assertAdoptedDatabaseSchema (回収前の型検証)", () => {
+    const WANT = { Key: { title: {} }, Status: { select: {} } };
+
+    it("必須列が揃い型一致なら何もしない", async () => {
+      const { assertAdoptedDatabaseSchema } = await load();
+      expect(() =>
+        assertAdoptedDatabaseSchema(
+          { Key: { type: "title" }, Status: { type: "select" } },
+          WANT,
+          "回収テスト"
+        )
+      ).not.toThrow();
+    });
+
+    it("型違いは保全停止する (置換しない)", async () => {
+      const { assertAdoptedDatabaseSchema } = await load();
+      expect(() =>
+        assertAdoptedDatabaseSchema(
+          { Key: { type: "rich_text" }, Status: { type: "select" } },
+          WANT,
+          "回収テスト"
+        )
+      ).toThrow(/列「Key」の型が rich_text ですが title を期待.*置換せず保全停止/);
+    });
+
+    it("必須列の不足も保全停止する", async () => {
+      const { assertAdoptedDatabaseSchema } = await load();
+      expect(() =>
+        assertAdoptedDatabaseSchema({ Key: { type: "title" } }, WANT, "回収テスト")
+      ).toThrow(/必須列「Status」が無いため保全停止/);
+    });
+  });
+
+  describe("ensureDatabase の回収 schema 検証 (cache 前)", () => {
+    beforeEach(() => {
+      // 10 要求前後の pacing を無効化 (moveToTrash と同じ方式)。
+      let now = Date.now();
+      vi.spyOn(Date, "now").mockImplementation(() => (now += 1000));
+    });
+    const TITLE = "一次データ｜moneyflow";
+    const ADOPTED = "adopted-db-id";
+    const dbHit = (id: string) => ({
+      id,
+      created_time: "2026-09-28T00:00:00.000Z",
+      parent: { type: "page_id", page_id: ARCHIVE_PAGE },
+      title: [{ plain_text: TITLE }],
+    });
+    const goodSchema = () => ({
+      id: ADOPTED,
+      properties: {
+        Key: { type: "title" },
+        Service: { type: "select" },
+        Source: { type: "rich_text" },
+        "Fetched At": { type: "date" },
+        Status: { type: "select" },
+        Metadata: { type: "rich_text" },
+        Files: { type: "files" },
+        "Obsoleted At": { type: "date" },
+        "Obsoleted Reason": { type: "rich_text" },
+        "Origin Page": { type: "url" },
+      },
+    });
+    const recordInput = { service: "moneyflow", key: "k1", source: "s", metadata: {} };
+
+    it("回収DBの型違いは記録せず保全停止し cache しない (次回は再探索)", async () => {
+      route("POST", "/v1/search", [
+        emptySearch(),
+        { results: [dbHit(ADOPTED)], has_more: false, next_cursor: null },
+        emptySearch(),
+      ]);
+      route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren(), emptyChildren()]);
+      route("POST", "/v1/databases", [
+        new Response("overload", { status: 500 }),
+        { id: "db-new" },
+      ]);
+      route("GET", `/v1/databases/${ADOPTED}`, [
+        { ...goodSchema(), properties: { ...goodSchema().properties, Key: { type: "rich_text" } } },
+      ]);
+      route("POST", "/v1/databases/db-new/query", [{ results: [] }]);
+      route("POST", "/v1/pages", [{ id: "page-ok" }]);
+
+      const { recordPrimaryData } = await load();
+      const err = (await recordPrimaryData(recordInput).catch((e: Error) => e)) as Error;
+      expect(err.message).toMatch(/列「Key」の型が rich_text ですが title を期待/);
+      expect(err.message).not.toContain(ADOPTED);
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(0);
+
+      // cache していない → 2 回目は Search から再探索し正常に記録できる。
+      const ok = await recordPrimaryData(recordInput);
+      expect(ok).toEqual({ pageId: "page-ok", outcome: "recorded", fileTooLarge: false });
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/search")).toHaveLength(3);
+    });
+
+    it("回収DBの型一致なら記録できる (正当な回収を壊さない)", async () => {
+      route("POST", "/v1/search", [
+        emptySearch(),
+        { results: [dbHit(ADOPTED)], has_more: false, next_cursor: null },
+      ]);
+      route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
+      route("POST", "/v1/databases", [new Response("overload", { status: 500 })]);
+      route("GET", `/v1/databases/${ADOPTED}`, [goodSchema()]);
+      route("POST", `/v1/databases/${ADOPTED}/query`, [{ results: [] }]);
+      route("POST", "/v1/pages", [{ id: "page-adopted" }]);
+
+      const { recordPrimaryData } = await load();
+      const ok = await recordPrimaryData(recordInput);
+      expect(ok).toEqual({ pageId: "page-adopted", outcome: "recorded", fileTooLarge: false });
       expect(calls.filter((c) => new URL(c.url).pathname === "/v1/databases")).toHaveLength(1);
     });
   });

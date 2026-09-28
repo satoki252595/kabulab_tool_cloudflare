@@ -187,6 +187,29 @@ export async function findBackupChildByTitle(args: {
   return scanFirstChildrenForTitle(args.parentPageId, args.title, args.kind);
 }
 
+/**
+ * 結果不明 create の回収専用: 完全一致 0=null停止・1=回収・複数=保全停止。
+ * 通常探索 (`findBackupChildByTitle` の最古収束) とは意図的に分け、
+ * `createDatabaseOrAdopt` の refind にだけ使う。Search 0 件時は保険走査
+ * (先頭 500 件の bounded・一意性を保証できない) に戻らず null を返し、
+ * 呼出側が元の結果不明エラーを投げて停止する (再送しない。次回の通常
+ * 探索で収束する)。エラー文に ID は含めない (通常ログに出るため。
+ * title は公開名のため可)。
+ */
+export async function findUniqueBackupChildByTitle(args: {
+  parentPageId: string;
+  title: string;
+  kind: "page" | "database";
+}): Promise<string | null> {
+  const hits = await findAllBackupChildrenByTitle(args);
+  if (hits.length > 1) {
+    throw new Error(
+      `Notion DB作成の結果不明回収: 同名が${hits.length}件あり特定できず保全停止 title=${args.title}`
+    );
+  }
+  return hits[0]?.id ?? null;
+}
+
 /** children 先頭の bounded 走査 (Search index 遅延の保険) */
 async function scanFirstChildrenForTitle(
   parentPageId: string,
@@ -256,10 +279,12 @@ const DB_PROPERTIES = {
   "Origin Page": { url: {} },
 } as const;
 
-export async function findChildDatabase(
+/** 子 DB の完全一致ヒットを全件返す (全ページ走査。回収の多重検出用)。 */
+export async function findAllChildDatabases(
   pageId: string,
   title: string
-): Promise<string | null> {
+): Promise<string[]> {
+  const hits: string[] = [];
   let cursor: string | null = null;
   for (;;) {
     const qs = cursor ? `?start_cursor=${cursor}&page_size=100` : "?page_size=100";
@@ -269,11 +294,61 @@ export async function findChildDatabase(
     );
     for (const b of res.results) {
       if (b.type === "child_database" && b.child_database?.title === title) {
-        return b.id;
+        hits.push(b.id);
       }
     }
-    if (!res.has_more || !res.next_cursor) return null;
+    if (!res.has_more || !res.next_cursor) return hits;
     cursor = res.next_cursor;
+  }
+}
+
+export async function findChildDatabase(
+  pageId: string,
+  title: string
+): Promise<string | null> {
+  const hits = await findAllChildDatabases(pageId, title);
+  return hits[0] ?? null;
+}
+
+/**
+ * 子 DB の結果不明回収専用: 0=null・1=回収・複数=保全停止。
+ * `dataset.ts` の銘柄子 DB 等、children 直下の回収に使う。
+ */
+export async function findUniqueChildDatabaseForAdopt(
+  pageId: string,
+  title: string
+): Promise<string | null> {
+  const hits = await findAllChildDatabases(pageId, title);
+  if (hits.length > 1) {
+    throw new Error(
+      `Notion 子DB作成の結果不明回収: 同名が${hits.length}件あり特定できず保全停止 title=${title}`
+    );
+  }
+  return hits[0] ?? null;
+}
+
+/**
+ * 回収 DB の必須列の存在と型を検証する (cache/return 前)。
+ * 不足・型違いは保全停止。既存列の置換 (PATCH) はしない。
+ * `moneyflow.ts` の `buildMissingPatch` と同じ型判定流儀。
+ */
+export function assertAdoptedDatabaseSchema(
+  actual: Record<string, { type?: string }>,
+  want: Record<string, unknown>,
+  context: string
+): void {
+  for (const [name, wantDef] of Object.entries(want)) {
+    const wantType = Object.keys(wantDef as Record<string, unknown>)[0];
+    const cur = actual[name];
+    if (!cur) {
+      throw new Error(`${context}: 必須列「${name}」が無いため保全停止`);
+    }
+    if (cur.type !== wantType) {
+      throw new Error(
+        `${context}: 列「${name}」の型が ${cur.type} ですが ${wantType} を期待しています。` +
+          `既存列を置換せず保全停止します。`
+      );
+    }
   }
 }
 
@@ -298,16 +373,27 @@ async function ensureDatabase(
     return existing;
   }
 
-  const created = await createDatabaseOrAdopt<{ id: string }>(
+  const res = await createDatabaseOrAdopt<{ id: string }>(
     {
       parent: { type: "page_id", page_id: parentPageId },
       title: [{ type: "text", text: { content: dbTitle } }],
       properties: DB_PROPERTIES,
     },
-    () => findBackupChildByTitle({ parentPageId, title: dbTitle, kind: "database" })
+    () => findUniqueBackupChildByTitle({ parentPageId, title: dbTitle, kind: "database" })
   );
-  dbCache.set(cacheKey, created.id);
-  return created.id;
+  if (res.created) {
+    dbCache.set(cacheKey, res.id);
+    return res.id;
+  }
+  // adopted → cache 前に必須列の型を検証 (同名の古い DB かもしれないため)。
+  // 型違い・不足は保全停止し、既存列を置換しない。
+  const schema = await notionRequest<{ properties: Record<string, { type: string }> }>(
+    "GET",
+    `/databases/${res.id}`
+  );
+  assertAdoptedDatabaseSchema(schema.properties, DB_PROPERTIES, `一次データDB「${dbTitle}」の回収`);
+  dbCache.set(cacheKey, res.id);
+  return res.id;
 }
 
 function backupDbTitle(service: string): string {
@@ -334,6 +420,8 @@ function ensureTrashDb(service: string, parentPageId?: string): Promise<string> 
  * filter 一致が1件の行を返す。0件なら null。2件以上 (または has_more) なら
  * どれかを黙って選ばず throw する (ルール2。Notion に一意制約は無いため、
  * `page_size: 1` + `results[0]` の先頭選択は重複時に行を取り違える)。
+ * エラー文に databaseId は含めない (通常の GH ログに出るため private。
+ * 公開キー・context のみ。ID は 0600 証跡にだけ残す)。
  */
 export async function queryUniqueRow<T extends { id: string }>(
   databaseId: string,
@@ -346,17 +434,18 @@ export async function queryUniqueRow<T extends { id: string }>(
     { filter, page_size: 2 }
   );
   if (res.results.length > 1 || res.has_more) {
-    throw new Error(`${context} database=${databaseId}`);
+    throw new Error(context);
   }
   return res.results[0] ?? null;
 }
 
 /**
  * DB を作成する。結果不明 (`NotionUnknownResultError`) の場合は内部再送せず、
- * `refind` (full query) で確認し、見つかれば回収 (adopt) して返す。
- * 見つからなければ元のエラーをそのまま throw する (自動再 create しない)。
- * 戻り値の `created` が false の採用時は、呼び出し側が schema 検証へ進むこと
- * (同名の古い DB を拾う可能性があるため)。
+ * `refind` (回収専用の厳密探索: 0=null・1=回収・複数=throw) で確認し、
+ * 見つかれば回収 (adopt) して返す。見つからなければ元のエラーをそのまま
+ * throw する (自動再 create しない)。refind が複数検出で throw した場合は
+ * その保全停止をそのまま伝える。戻り値の `created` が false の採用時は、
+ * 呼び出し側が schema 検証へ進むこと (同名の古い DB を拾う可能性があるため)。
  */
 export async function createDatabaseOrAdopt<T extends { id: string }>(
   body: Record<string, unknown>,
@@ -381,7 +470,7 @@ async function findByKey(
   const row = await queryUniqueRow<{ id: string }>(
     databaseId,
     { property: "Key", title: { equals: key } },
-    "Notion archive: 同一 Key の重複を選ばず保全停止"
+    `Notion archive: 同一 Key の重複 key=${key} を選ばず保全停止`
   );
   return row?.id ?? null;
 }

@@ -14,7 +14,12 @@
  * `tradingDate: null` で呼び、本モジュールは必ず `状態=失敗` の行を作る
  * (ルール2: 黙って埋めない)。
  */
-import { createDatabaseOrAdopt, findBackupChildByTitle, queryUniqueRow } from "./archive.js";
+import {
+  createDatabaseOrAdopt,
+  findBackupChildByTitle,
+  findUniqueBackupChildByTitle,
+  queryUniqueRow,
+} from "./archive.js";
 import { notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import type { NotionSelectColor } from "./dataset.js";
@@ -99,7 +104,7 @@ export async function ensurePriceSyncDb(): Promise<{ dbId: string }> {
         properties: want,
       },
       () =>
-        findBackupChildByTitle({
+        findUniqueBackupChildByTitle({
           parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
           title: PRICE_SYNC_DB_TITLE,
           kind: "database",

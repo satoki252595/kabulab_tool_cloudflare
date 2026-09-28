@@ -28,7 +28,14 @@
 import { notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
-import { createDatabaseOrAdopt, findBackupChildByTitle, queryUniqueRow } from "./archive.js";
+import {
+  assertAdoptedDatabaseSchema,
+  createDatabaseOrAdopt,
+  findBackupChildByTitle,
+  findUniqueBackupChildByTitle,
+  findUniqueChildDatabaseForAdopt,
+  queryUniqueRow,
+} from "./archive.js";
 
 export type NotionSelectColor =
   | "default"
@@ -274,22 +281,34 @@ async function ensureParentDb(
     parentDbCache.set(service, existing);
     return existing;
   }
-  const created = await createDatabaseOrAdopt<{ id: string }>(
+  const wantParentProps = {
+    銘柄コード: { title: {} },
+    銘柄名: { rich_text: {} },
+    コード: { select: {} },
+  };
+  const res = await createDatabaseOrAdopt<{ id: string }>(
     {
       parent: { type: "page_id", page_id: backup },
       title: [{ type: "text", text: { content: title } }],
-      properties: {
-        銘柄コード: { title: {} },
-        銘柄名: { rich_text: {} },
-        コード: { select: {} },
-      },
+      properties: wantParentProps,
     },
-    () => findBackupChildByTitle({ parentPageId: backup, title, kind: "database" })
+    () => findUniqueBackupChildByTitle({ parentPageId: backup, title, kind: "database" })
   );
   // tagOptions は子 DB で使う (親では未使用) — 受け取りは API 一貫性のため
   void tagOptions;
-  parentDbCache.set(service, created.id);
-  return created.id;
+  if (res.created) {
+    parentDbCache.set(service, res.id);
+    return res.id;
+  }
+  // adopted → cache 前に必須列の型を検証。型違い・不足は保全停止し、
+  // 既存列を置換しない。
+  const schema = await notionRequest<{ properties: Record<string, { type: string }> }>(
+    "GET",
+    `/databases/${res.id}`
+  );
+  assertAdoptedDatabaseSchema(schema.properties, wantParentProps, `銘柄別親DB「${title}」の回収`);
+  parentDbCache.set(service, res.id);
+  return res.id;
 }
 
 /** 親 DB から ticker の銘柄ページを取得 (無ければ作成) */
@@ -334,6 +353,7 @@ async function ensureChildDb(
 ): Promise<string> {
   const title = childTitle(ticker);
   let existing = await findChildDatabase(stockPageId, title);
+  let adopted = false;
   if (!existing) {
     const res = await createDatabaseOrAdopt<{ id: string }>(
       {
@@ -344,17 +364,23 @@ async function ensureChildDb(
         is_inline: true,
         properties: childProperties(tagOptions),
       },
-      () => findChildDatabase(stockPageId, title)
+      () => findUniqueChildDatabaseForAdopt(stockPageId, title)
     );
     if (res.created) return res.id;
     // adopted → 下の schema 検証へ進む (同名の古い DB かもしれないため)。
     existing = res.id;
+    adopted = true;
   }
   const db = await notionRequest<{
     properties: Record<string, { type: string }>;
     is_inline?: boolean;
   }>("GET", `/databases/${existing}`);
   const want = childProperties(tagOptions);
+  if (adopted) {
+    // 回収 DB は PATCH/cache/return 前に必須列の型を検証する。
+    // 型違い・不足は保全停止し、既存列を置換しない。
+    assertAdoptedDatabaseSchema(db.properties, want, `適時開示子DB「${title}」の回収`);
+  }
   const add: Record<string, unknown> = {};
   for (const k of Object.keys(want)) {
     if (!(k in db.properties)) add[k] = want[k];
