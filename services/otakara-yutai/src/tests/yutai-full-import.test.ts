@@ -246,6 +246,28 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
   });
 });
 
+describe("importYutaiFull は掲載文を切り詰めない", () => {
+  it("500字超の掲載文・200字超の注記の末尾 tier 条件を落とさない", async () => {
+    captureConsole();
+    const [target, ...rest] = HELD;
+    // 実 incident: 3447 の 3 群 (taskId 7be55faa/554a7eea/cb002b14) は旧
+    // notes[:200] で保存文が文の途中で切断され、末尾 tier の根拠を失った。
+    // 合成長文で構造を再現する (原文の引用なし)。
+    const longDesc = `架空優待${target.code} ` + "あ".repeat(600);
+    const longNotes = "い".repeat(300) + "【10年以上】10口";
+    const data = fetched(target.code);
+    data.benefits = [{ minShares: 100, description: longDesc, notes: longNotes }];
+
+    await importYutaiFull(db, [data, ...rest.map((s) => fetched(s.code))]);
+
+    const rows = benefitsOf(snapshot().benefits, [target.id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].description).toBe(`${longDesc}\n${longNotes}`);
+    expect(String(rows[0].description).length).toBeGreaterThan(500);
+    expect(String(rows[0].description).endsWith("【10年以上】10口")).toBe(true);
+  });
+});
+
 describe("importYutaiFull は削除の前に止まる", () => {
   it(`優待行を持つ母集団の銘柄のうち今回も取得できたのが ${MIN_YUTAI_COVERAGE_PERCENT}% 未満なら、何も書かない`, async () => {
     const before = snapshot();

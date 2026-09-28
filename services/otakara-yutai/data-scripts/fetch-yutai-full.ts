@@ -16,6 +16,7 @@ import {
   type StockYutaiData,
 } from "./yutai-full-import.js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
+import { pathToFileURL } from "node:url";
 import "dotenv/config";
 
 // Schema は src/db/schema.ts に集約済み (D1/SQLite 版 — ADR-0001)。
@@ -70,8 +71,12 @@ async function collectAllStockCodes(): Promise<string[]> {
   return [...allCodes].sort();
 }
 
-/** Phase 2: 個別銘柄ページから詳細データ取得 */
-async function fetchStockDetail(code: string): Promise<StockYutaiData | null> {
+/**
+ * Phase 2: 個別銘柄ページから詳細データ取得。
+ * 限定 READ (切詰め対応の突合せ等) のため export する。呼出側で 400ms 以上の
+ * 間隔を空けること (本ファイル main と同じ rate 制限)。
+ */
+export async function fetchStockDetail(code: string): Promise<StockYutaiData | null> {
   try {
     const html = await fetchPage(`https://minkabu.jp/stock/${code}/yutai`);
 
@@ -241,4 +246,7 @@ async function main() {
   log.info("=".repeat(60));
 }
 
-main().catch(e => { console.error("❌ Fatal:", e); process.exit(1); });
+// CLI として直接実行されたときだけ動かす (限定 READ 再利用のため import 可能にする)。
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(e => { console.error("❌ Fatal:", e); process.exit(1); });
+}
