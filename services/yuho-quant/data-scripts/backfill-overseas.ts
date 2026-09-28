@@ -26,7 +26,10 @@ import {
   downloadDocument,
   EdinetNotFoundError,
 } from "../src/services/edinet/client.js";
-import { parseOverseasData } from "../src/services/overseas-parser.js";
+import {
+  parseOverseasData,
+  validateOverseasSaveSet,
+} from "../src/services/overseas-parser.js";
 import * as yuhoSchema from "../src/db/schema.js";
 
 const arg = (n: string) =>
@@ -85,16 +88,18 @@ for (const r of targets) {
       console.warn(`[oseas-backfill] ${r.docId} ${r.filerName}: ${(e as Error).message}`);
     }
   }
+  // 保存前検証を通す。違反があれば parse_error + 空保存
+  // (先頭行 dedup で回復させない = aggregate-before-dedup の再発防止)。
+  try {
+    validateOverseasSaveSet(facts);
+  } catch (e) {
+    console.warn(
+      `[oseas-backfill] save-set invalid; downgrade to parse_error ${r.docId}: ${(e as Error).message}`
+    );
+    status = "parse_error";
+    facts = [];
+  }
   tally[status] = (tally[status] ?? 0) + 1;
-
-  // dedup (会計期末, 地域名)
-  const seen = new Set<string>();
-  const deduped = facts.filter((f) => {
-    const k = `${f.fiscalYearEnd} ${f.regionName}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
 
   // overseas 列を更新 (受注列・受注ファクトには触れない)
   await db
@@ -106,7 +111,7 @@ for (const r of targets) {
   await db
     .delete(overseasSalesFacts)
     .where(eq(overseasSalesFacts.documentId, r.id));
-  const rows = deduped.map((f) => ({
+  const rows = facts.map((f) => ({
     documentId: r.id,
     stockId: r.stockId,
     fiscalYearEnd: f.fiscalYearEnd,

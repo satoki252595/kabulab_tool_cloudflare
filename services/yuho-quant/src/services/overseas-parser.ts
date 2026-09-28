@@ -678,9 +678,7 @@ function resolveDupEntries(
   // P-hier: sub が子地域ラベル (一意) → 子ラベルで読替え
   const isHier =
     pairsUnique &&
-    entries.every(
-      (e, i) => subRoles[i] === "domestic" || subRoles[i] === "overseas"
-    ) &&
+    subRoles.every((r) => r === "domestic" || r === "overseas") &&
     new Set(entries.map((e) => cleanLabel(e.sub))).size === entries.length;
   if (isHier) {
     const leaf = entries.map((e) => ({
@@ -887,6 +885,63 @@ function tryGeoCols(
     isConsolidated: consolidated,
   });
   return facts;
+}
+
+/**
+ * 保存前検証 (ingest + 全 backfill caller の共通境界)。parser 出力を保存してよい
+ * 集合か検査し、違反があれば throw する。caller は先頭行 dedup で回復させず、
+ * 例外時は parse_error + facts 空で保存する (欠損は欠損のまま)。
+ * - (会計期末, 地域名) の重複なし
+ * - 単位・会計期末・連結区分の混在なし
+ * - 海外売上高 = 海外地域行の合計 (完全分解の一致要求)
+ * - 連結売上高 (開示あり) は地域合計を下回らない。開示なし (9147 系) は
+ *   total 欠損を許す (捏造しない)
+ * - 比率は両非欠損のとき海外/連結から再計算一致
+ * - 地域行なしの集計のみ/空集合は検証対象外 (pass)。未構造化の空保存は通す。
+ */
+export function validateOverseasSaveSet(facts: OverseasFact[]): void {
+  const keys = facts.map((f) => `${f.fiscalYearEnd} ${f.regionName}`);
+  if (new Set(keys).size !== keys.length) {
+    throw new Error("保存集合に重複地域があります。");
+  }
+  if (new Set(facts.map((f) => f.unitYenFactor)).size > 1) {
+    throw new Error("保存集合に単位の混在があります。");
+  }
+  if (new Set(facts.map((f) => f.fiscalYearEnd)).size > 1) {
+    throw new Error("保存集合に会計期末の混在があります。");
+  }
+  if (new Set(facts.map((f) => String(f.isConsolidated))).size > 1) {
+    throw new Error("保存集合に連結区分の混在があります。");
+  }
+  const regions = facts.filter(
+    (f) => f.regionKind === "domestic" || f.regionKind === "overseas"
+  );
+  if (regions.length === 0) return; // 集計のみ/空集合は対象外
+  if (regions.some((f) => f.salesAmount === null)) {
+    throw new Error("保存集合に欠損の地域売上があります。");
+  }
+  let domesticSum = 0;
+  let overseasSum = 0;
+  for (const f of regions) {
+    if (f.regionKind === "domestic") domesticSum += f.salesAmount as number;
+    else overseasSum += f.salesAmount as number;
+  }
+  const regionSum = domesticSum + overseasSum;
+  const ot = facts.find((f) => f.regionKind === "overseas_total");
+  const total = facts.find((f) => f.regionKind === "total");
+  if (!ot || ot.salesAmount === null || ot.salesAmount !== overseasSum) {
+    throw new Error("保存集合の海外売上高が地域合計と一致しません。");
+  }
+  if (total && total.salesAmount !== null && total.salesAmount < regionSum * 0.99) {
+    throw new Error("保存集合の連結売上高が地域合計を下回ります。");
+  }
+  const ratio =
+    total && total.salesAmount !== null && total.salesAmount > 0
+      ? +((overseasSum / total.salesAmount) * 100).toFixed(1)
+      : null;
+  if (ot.ratioPct !== ratio) {
+    throw new Error("保存集合の比率が再計算と一致しません。");
+  }
 }
 
 // ---------------------------------------------------------------------------

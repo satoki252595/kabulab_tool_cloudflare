@@ -45,6 +45,7 @@ import {
 import {
   parseOverseasData,
   RX_OVERSEAS_KEYWORD,
+  validateOverseasSaveSet,
   type OverseasFact,
   type OverseasParseStatus,
 } from "../src/services/overseas-parser.js";
@@ -100,21 +101,6 @@ function dedupeOrders(facts: OrderFact[], docId: string): OrderFact[] {
     const k = `${f.fiscalYearEnd} ${f.segmentName}`;
     if (seen.has(k)) {
       console.warn(`[missing] dup-seg-skip docID=${docId} fy=${f.fiscalYearEnd} seg=${f.segmentName}`);
-      continue;
-    }
-    seen.add(k);
-    out.push(f);
-  }
-  return out;
-}
-
-function dedupeOverseas(facts: OverseasFact[], docId: string): OverseasFact[] {
-  const out: OverseasFact[] = [];
-  const seen = new Set<string>();
-  for (const f of facts) {
-    const k = `${f.fiscalYearEnd} ${f.regionName}`;
-    if (seen.has(k)) {
-      console.warn(`[missing] dup-region-skip docID=${docId} fy=${f.fiscalYearEnd} region=${f.regionName}`);
       continue;
     }
     seen.add(k);
@@ -259,7 +245,17 @@ for (const date of eachDay(fromArg, toArg)) {
       }
 
       const deduped = dedupeOrders(facts, doc.docID);
-      const overseasDeduped = dedupeOverseas(overseasFacts, doc.docID);
+      // 海外売上ファクトは保存前検証を通す。違反があれば parse_error + 空保存
+      // (先頭行 dedup で回復させない = aggregate-before-dedup の再発防止)。
+      try {
+        validateOverseasSaveSet(overseasFacts);
+      } catch (e) {
+        console.warn(
+          `[missing] overseas save-set invalid; downgrade to parse_error docID=${doc.docID}: ${(e as Error).message}`
+        );
+        overseasParseStatus = "parse_error";
+        overseasFacts = [];
+      }
 
       // per-statement 冪等 upsert (sqlite-proxy は batch 非対応)
       const ex = await db
@@ -308,7 +304,7 @@ for (const date of eachDay(fromArg, toArg)) {
         });
       }
       await db.delete(overseasSalesFacts).where(eq(overseasSalesFacts.documentId, docRowId));
-      for (const f of overseasDeduped) {
+      for (const f of overseasFacts) {
         await db.insert(overseasSalesFacts).values({
           documentId: docRowId, stockId, fiscalYearEnd: f.fiscalYearEnd,
           regionName: f.regionName, regionKind: f.regionKind,
@@ -338,7 +334,7 @@ for (const date of eachDay(fromArg, toArg)) {
           docDescription: doc.docDescription, periodStart: doc.periodStart,
           periodEnd, submitDateTime: doc.submitDateTime,
           parseStatus, honbunFile, factCount: deduped.length,
-          overseasParseStatus, overseasHonbunFile, overseasFactCount: overseasDeduped.length,
+          overseasParseStatus, overseasHonbunFile, overseasFactCount: overseasFacts.length,
           textParseStatus, textSectionCount: sections.length,
           xbrlUnavailable,
         },

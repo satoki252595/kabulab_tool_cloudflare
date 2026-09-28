@@ -21,6 +21,7 @@ import {
 } from "../db/schema.js";
 import {
   parseOverseasHtml,
+  validateOverseasSaveSet,
   type OverseasFact,
   type OverseasParseStatus,
 } from "../services/overseas-parser.js";
@@ -119,23 +120,23 @@ function toYen(raw: number | null, factor: number): number | null {
 }
 
 /**
- * backfill-overseas.ts の保存部と同一手順: (会計期末, 地域名) 先頭採用dedup →
- * overseas列update → facts delete→insert。引数は parse の出力そのもの。
+ * backfill-overseas.ts の保存部と同一手順: 保存前検証 → overseas列update →
+ * facts delete→insert。検証違反は parse_error + 空保存 (先頭行 dedup なし)。
+ * 引数は parse の出力そのもの。
  */
 async function repairSave(
   docRowId: number,
   stockId: number,
-  status: OverseasParseStatus,
+  status: OverseasParseStatus | "parse_error",
   honbunFile: string | null,
   facts: OverseasFact[]
 ): Promise<void> {
-  const seen = new Set<string>();
-  const deduped = facts.filter((f) => {
-    const k = `${f.fiscalYearEnd} ${f.regionName}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
+  try {
+    validateOverseasSaveSet(facts);
+  } catch {
+    status = "parse_error";
+    facts = [];
+  }
   await db
     .update(yuhoDocuments)
     .set({ overseasParseStatus: status, overseasHonbunFile: honbunFile })
@@ -144,7 +145,7 @@ async function repairSave(
     .delete(overseasSalesFacts)
     .where(eq(overseasSalesFacts.documentId, docRowId));
   const pattern = status.startsWith("ok_") ? status.replace("ok_", "") : "none";
-  for (const f of deduped) {
+  for (const f of facts) {
     await db.insert(overseasSalesFacts).values({
       documentId: docRowId,
       stockId,

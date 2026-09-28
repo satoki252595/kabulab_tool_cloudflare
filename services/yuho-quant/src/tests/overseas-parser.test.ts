@@ -12,6 +12,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   parseOverseasHtml,
+  validateOverseasSaveSet,
   type OverseasFact,
 } from "../services/overseas-parser.js";
 import { REGION_BUCKETS } from "../services/overseas-query.js";
@@ -214,22 +215,15 @@ describe("地域別バケット (REGION_BUCKETS) — 同義地域語の正規化
 
 describe("F2 根因修正: 未解決の重複地域名は ok を出さない (aggregate-before-dedup 防止)", () => {
   it("S100T6Q9 減損損失表 (非売上・(地域, 用途) 非一意) は却下され、取込 pure path でも保存行を生まない", () => {
-    // raw(実原本の必要表のみ切り出し) → parse → 取込 caller と同一 key の pure dedup
+    // raw(実原本の必要表のみ切り出し) → parse → 取込 caller と同一の保存前検証
     const r = parseOverseasHtml(fx("georows-impairment-unresolved-S100T6Q9.html"), "2023-12-31");
     // pre-fix (#150 以前) は ok_geo_rows で米国/日本の重複＋集計を出していた。
     // P-2D/P-hier/P-metric のいずれでも証明できないため却下のまま。
     expect(r.status).toBe("geo_present_unstructured");
     expect(r.facts).toHaveLength(0);
-    // ingest.ts / backfill-overseas.ts / backfill-missing-docs.ts と同一の dedup
-    // ((会計期末, 地域名) 先頭採用) を通しても保存行は生まれない
-    const seen = new Set<string>();
-    const saved = r.facts.filter((f) => {
-      const k = `${f.fiscalYearEnd} ${f.regionName}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-    expect(saved).toHaveLength(0);
+    // ingest.ts / backfill-overseas.ts / backfill-missing-docs.ts と同一の
+    // 保存前検証を通しても保存行は生まれない (空集合は検証対象外で pass)
+    expect(() => validateOverseasSaveSet(r.facts)).not.toThrow();
   });
 });
 
@@ -247,15 +241,9 @@ describe("P-2D/P-hier/P-metric: 証明できる重複は正しく読む", () => 
     expect(pick(r.facts, "overseas_total")!.ratioPct).toBe(38.6);
     expect(pick(r.facts, "total")!.salesAmount).toBe(51340);
     expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("百万円");
-    // 取込 caller と同一の dedup を通しても行は欠落しない (一意化済み)
-    const seen = new Set<string>();
-    const saved = r.facts.filter((f) => {
-      const k = `${f.fiscalYearEnd} ${f.regionName}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-    expect(saved).toHaveLength(5);
+    // 取込 caller と同一の保存前検証を通る (一意化済み・集計一致)
+    expect(() => validateOverseasSaveSet(r.facts)).not.toThrow();
+    expect(r.facts).toHaveLength(5);
   });
 
   it("S100YBHC 販売実績表 (地域×品目の2次元表) は品目合算で回復する", () => {
@@ -312,6 +300,51 @@ describe("P-2D/P-hier/P-metric: 証明できる重複は正しく読む", () => 
     expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(9862);
     expect(pick(r.facts, "total")!.salesAmount).toBeNull();
     expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("億円");
+  });
+});
+
+describe("保存前検証: caller 共通境界は壊れた集合を保存させない", () => {
+  // 実 parse 出力への破壊注入 (negative)。正常系は各回復テストで通す。
+  const real = () =>
+    parseOverseasHtml(fx("georows-dup-region-ambiguous-S100J2E7.html"), "2020-03-31").facts;
+
+  it("正常集合は通る (J2E7 回復値・VI7V の total 欠損・空集合)", () => {
+    expect(() => validateOverseasSaveSet(real())).not.toThrow();
+    const metric = parseOverseasHtml(fx("georows-metricpair-S100VI7V.html"), "2022-12-31").facts;
+    expect(() => validateOverseasSaveSet(metric)).not.toThrow();
+    expect(() => validateOverseasSaveSet([])).not.toThrow();
+  });
+
+  it("重複地域・単位混在・期末混在・連結混在は throw", () => {
+    const dup = [...real(), { ...real()[0]! }];
+    expect(() => validateOverseasSaveSet(dup)).toThrow();
+    const unitMix = real().map((f, i) =>
+      i === 0 ? { ...f, unitYenFactor: 1000 } : f
+    );
+    expect(() => validateOverseasSaveSet(unitMix)).toThrow();
+    const fyMix = real().map((f, i) =>
+      i === 0 ? { ...f, fiscalYearEnd: "2019-03-31" } : f
+    );
+    expect(() => validateOverseasSaveSet(fyMix)).toThrow();
+    const consolMix = real().map((f, i) =>
+      i === 0 ? { ...f, isConsolidated: false } : f
+    );
+    expect(() => validateOverseasSaveSet(consolMix)).toThrow();
+  });
+
+  it("集計不一致・比率不一致・総額不足は throw", () => {
+    const otBad = real().map((f) =>
+      f.regionKind === "overseas_total" ? { ...f, salesAmount: 99999 } : f
+    );
+    expect(() => validateOverseasSaveSet(otBad)).toThrow();
+    const ratioBad = real().map((f) =>
+      f.regionKind === "overseas_total" ? { ...f, ratioPct: 99.9 } : f
+    );
+    expect(() => validateOverseasSaveSet(ratioBad)).toThrow();
+    const totalShort = real().map((f) =>
+      f.regionKind === "total" ? { ...f, salesAmount: 100 } : f
+    );
+    expect(() => validateOverseasSaveSet(totalShort)).toThrow();
   });
 });
 
@@ -373,19 +406,13 @@ describe("B2 根因修正: 生産実績表は売上高の開示ではないの�
     expect(r.status).toBe("ok_geo_rows");
     expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(21520);
     expect(pick(r.facts, "total")!.salesAmount).toBe(37686);
-    // ingest.ts / backfill-overseas.ts / backfill-missing-docs.ts と同一の dedup
-    // ((会計期末, 地域名) 先頭採用) を通した保存行が販売実績の値と一致する
-    const seen = new Set<string>();
-    const saved = r.facts.filter((f) => {
-      const k = `${f.fiscalYearEnd} ${f.regionName}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-    expect(saved).toHaveLength(6);
-    expect(pick(saved, "overseas_total")!.salesAmount).toBe(21520);
+    // ingest.ts / backfill-overseas.ts / backfill-missing-docs.ts と同一の
+    // 保存前検証を通る (一意化済み・集計一致)
+    expect(() => validateOverseasSaveSet(r.facts)).not.toThrow();
+    expect(r.facts).toHaveLength(6);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(21520);
     // 生産実績の値 (日本 15706 / 海外売上高 21830) が混入していないこと
-    expect(region(saved, "日本")!.salesAmount).toBe(16163);
+    expect(region(r.facts, "日本")!.salesAmount).toBe(16163);
   });
 
   it("S100OE0P 原文書区間 (a)表〜(c)表・表間テキスト付きでも販売実績表が選ばれる", () => {

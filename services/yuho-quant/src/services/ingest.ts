@@ -39,6 +39,7 @@ import {
 import {
   parseOverseasData,
   RX_OVERSEAS_KEYWORD,
+  validateOverseasSaveSet,
   type OverseasParseStatus,
 } from "./overseas-parser.js";
 import {
@@ -342,19 +343,16 @@ export async function ingestDocument(
     deduped.push(f);
   }
 
-  // 海外売上ファクトも同様に (会計期末, 地域名) の重複を落とす。
-  const overseasDeduped: typeof overseasFacts = [];
-  const seenRegion = new Set<string>();
-  for (const f of overseasFacts) {
-    const fk = `${f.fiscalYearEnd} ${f.regionName}`;
-    if (seenRegion.has(fk)) {
-      console.warn(
-        `[ingest] dup-region-skip docID=${doc.docID} fy=${f.fiscalYearEnd} region=${f.regionName}`
-      );
-      continue;
-    }
-    seenRegion.add(fk);
-    overseasDeduped.push(f);
+  // 海外売上ファクトは保存前検証を通す。違反があれば parse_error + 空保存
+  // (先頭行 dedup で回復させない = aggregate-before-dedup の再発防止)。
+  try {
+    validateOverseasSaveSet(overseasFacts);
+  } catch (e) {
+    console.warn(
+      `[ingest] overseas save-set invalid; downgrade to parse_error docID=${doc.docID}: ${(e as Error).message}`
+    );
+    overseasParseStatus = "parse_error";
+    overseasFacts = [];
   }
 
   let docRowId: number | null = null;
@@ -420,7 +418,7 @@ export async function ingestDocument(
 
     // 海外売上ファクト (yuho_overseas_facts) も同じ docRow を親に置換する。
     // 11 列/行 → D1 bind 上限 100 に対し 8 行/文 (8×11=88) で分割。
-    const overseasRows = overseasDeduped.map((f) => ({
+    const overseasRows = overseasFacts.map((f) => ({
       documentId: docRow.id,
       stockId,
       fiscalYearEnd: f.fiscalYearEnd,
@@ -506,7 +504,7 @@ export async function ingestDocument(
         factCount: deduped.length,
         overseasParseStatus,
         overseasHonbunFile,
-        overseasFactCount: overseasDeduped.length,
+        overseasFactCount: overseasFacts.length,
         textParseStatus,
         textSectionCount: sections.length,
         xbrlUnavailable,
@@ -565,7 +563,7 @@ export async function ingestDocument(
     parseStatus,
     factCount: deduped.length,
     overseasParseStatus,
-    overseasFactCount: overseasDeduped.length,
+    overseasFactCount: overseasFacts.length,
     textParseStatus,
     textSectionCount: sections.length,
     periodEnd,
