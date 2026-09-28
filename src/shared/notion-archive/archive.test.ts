@@ -56,11 +56,13 @@ describe("notion-archive archive (parentPageId)", () => {
       const key = `${init?.method ?? "GET"} ${u.pathname}`;
       const q = routes.get(key);
       if (!q || q.length === 0) throw new Error(`テスト: 未定義ルートへの fetch: ${key}`);
-      return jsonResponse(q.shift());
+      const body = q.shift();
+      return body instanceof Response ? body : jsonResponse(body);
     }) as typeof fetch;
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     globalThis.fetch = originalFetch;
     process.env = { ...ORIG_ENV };
     vi.resetModules();
@@ -217,33 +219,57 @@ describe("notion-archive archive (parentPageId)", () => {
   });
 
   describe("moveToTrash", () => {
+    beforeEach(() => {
+      // 再開までの多数API呼出を検証する。本番の380ms pacing実装は変更しない。
+      // 送信開始の時刻だけ進め、5秒のテスト期限を延長せずsleep待ちを除く。
+      let now = Date.now();
+      vi.spyOn(Date, "now").mockImplementation(() => (now += 1000));
+    });
+    const ORIGIN_ID = "11111111-1111-1111-1111-111111111111";
+    const TRASH_ID = "22222222-2222-2222-2222-222222222222";
+    const OTHER_TRASH_ID = "33333333-3333-3333-3333-333333333333";
     const originPageProps = {
-      id: "origin-1",
-      url: "https://notion.so/origin-1",
+      id: ORIGIN_ID,
+      url: `https://notion.so/${ORIGIN_ID.replace(/-/g, "")}`,
+      archived: false,
       properties: {
         Key: { title: [{ plain_text: "k1" }] },
+        Service: { select: { name: "moneyflow" } },
         Source: { rich_text: [{ plain_text: "s" }] },
         Metadata: { rich_text: [{ plain_text: "{}" }] },
         Files: { files: [] },
       },
     };
+    const trashPageProps = {
+      id: TRASH_ID,
+      url: `https://notion.so/${TRASH_ID.replace(/-/g, "")}`,
+      archived: false,
+      properties: {
+        ...originPageProps.properties,
+        Service: { select: { name: "moneyflow" } },
+        "Origin Page": { url: originPageProps.url },
+        Status: { select: { name: "obsoleted" } },
+      },
+    };
 
     it("parentPageId 省略時は既定ページ配下の「ごみ｜<service>」へ退避する", async () => {
-      route("GET", "/v1/pages/origin-1", [originPageProps]);
+      route("GET", `/v1/pages/${ORIGIN_ID}`, [originPageProps, { ...originPageProps, archived: true }]);
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "trash-default" }]);
-      route("POST", "/v1/pages", [{ id: "trash-page-1" }]);
-      route("PATCH", "/v1/pages/origin-1", [{ id: "origin-1" }]);
+      route("POST", "/v1/databases/trash-default/query", [{ results: [] }]);
+      route("POST", "/v1/pages", [{ id: TRASH_ID }]);
+      route("GET", `/v1/pages/${TRASH_ID}`, [trashPageProps]);
+      route("PATCH", `/v1/pages/${ORIGIN_ID}`, [{ id: ORIGIN_ID }]);
 
       const { moveToTrash } = await load();
       const result = await moveToTrash({
         service: "moneyflow",
-        originPageId: "origin-1",
+        originPageId: ORIGIN_ID,
         reason: "テスト",
       });
 
-      expect(result).toEqual({ trashPageId: "trash-page-1" });
+      expect(result).toEqual({ trashPageId: TRASH_ID });
       const createBody = JSON.parse(
         String(calls.find((c) => new URL(c.url).pathname === "/v1/databases")?.init.body)
       ) as { parent: { page_id: string }; title: Array<{ text: { content: string } }> };
@@ -252,26 +278,140 @@ describe("notion-archive archive (parentPageId)", () => {
     });
 
     it("parentPageId 指定時はそのページ配下の「ごみ｜<service>」へ退避する", async () => {
-      route("GET", "/v1/pages/origin-1", [originPageProps]);
+      route("GET", `/v1/pages/${ORIGIN_ID}`, [originPageProps, { ...originPageProps, archived: true }]);
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${OTHER_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "trash-custom" }]);
-      route("POST", "/v1/pages", [{ id: "trash-page-2" }]);
-      route("PATCH", "/v1/pages/origin-1", [{ id: "origin-1" }]);
+      route("POST", "/v1/databases/trash-custom/query", [{ results: [] }]);
+      route("POST", "/v1/pages", [{ id: OTHER_TRASH_ID }]);
+      route("GET", `/v1/pages/${OTHER_TRASH_ID}`, [{ ...trashPageProps, id: OTHER_TRASH_ID }]);
+      route("PATCH", `/v1/pages/${ORIGIN_ID}`, [{ id: ORIGIN_ID }]);
 
       const { moveToTrash } = await load();
       const result = await moveToTrash({
         service: "moneyflow",
-        originPageId: "origin-1",
+        originPageId: ORIGIN_ID,
         reason: "テスト",
         parentPageId: OTHER_PAGE,
       });
 
-      expect(result).toEqual({ trashPageId: "trash-page-2" });
+      expect(result).toEqual({ trashPageId: OTHER_TRASH_ID });
       const createBody = JSON.parse(
         String(calls.find((c) => new URL(c.url).pathname === "/v1/databases")?.init.body)
       ) as { parent: { page_id: string } };
       expect(createBody.parent.page_id).toBe(OTHER_PAGE);
     });
+
+    it("退避POST成功→元PATCH失敗は既存実体を再利用して元のtrashだけ完了する", async () => {
+      const files = [{ name: "snapshot.json", type: "file", file: { url: "https://files.example.test/original.json" } }];
+      const origin = { ...originPageProps, properties: { ...originPageProps.properties, Files: { files } } };
+      const trash = { ...trashPageProps, properties: { ...trashPageProps.properties, Files: { files: [
+        { ...files[0], file: { url: "https://files.example.test/copied.json" } },
+      ] } } };
+      route("GET", `/v1/pages/${ORIGIN_ID}`, [origin, origin, { ...origin, archived: true }]);
+      route("POST", "/v1/search", [emptySearch()]);
+      route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
+      route("POST", "/v1/databases", [{ id: "trash-default" }]);
+      route("POST", "/v1/databases/trash-default/query", [
+        { results: [] }, { results: [{ id: TRASH_ID }] },
+      ]);
+      route("GET", "/original.json", [new Response('{"snapshot":true}', { headers: { "content-type": "application/json" } }), new Response('{"snapshot":true}')]);
+      route("GET", "/copied.json", [new Response('{"snapshot":true}'), new Response('{"snapshot":true}')]);
+      route("GET", "/v1/users/me", [{ bot: { workspace_limits: { max_file_upload_size_in_bytes: 5242880 } } }]);
+      route("POST", "/v1/file_uploads", [{ id: "upload-1", status: "pending" }]);
+      route("POST", "/v1/file_uploads/upload-1/send", [{}]);
+      route("GET", "/v1/file_uploads/upload-1", [{ id: "upload-1", status: "uploaded" }]);
+      route("POST", "/v1/pages", [{ id: TRASH_ID }]);
+      route("GET", `/v1/pages/${TRASH_ID}`, [trash, trash]);
+      route("PATCH", `/v1/pages/${ORIGIN_ID}`, [
+        new Response(JSON.stringify({ object: "error", code: "validation_error", message: "controlled PATCH failure" }), { status: 400 }),
+        { id: ORIGIN_ID, archived: true },
+      ]);
+      const { moveToTrash } = await load();
+      const args = { service: "moneyflow", originPageId: ORIGIN_ID, reason: "テスト" };
+      await expect(moveToTrash(args)).rejects.toThrow(/status=400/);
+      const resumeStart = calls.length;
+      expect(await moveToTrash(args)).toEqual({ trashPageId: TRASH_ID });
+      const resumed = calls.slice(resumeStart);
+      expect(resumed.filter((c) => c.init.method === "POST" && new URL(c.url).pathname === "/v1/pages")).toHaveLength(0);
+      expect(resumed.filter((c) => new URL(c.url).pathname.includes("file_uploads"))).toHaveLength(0);
+      expect(resumed.filter((c) => new URL(c.url).hostname === "files.example.test").map((c) => new URL(c.url).pathname)).toEqual(["/original.json", "/copied.json"]);
+      expect(calls.filter((c) => c.init.method === "POST" && new URL(c.url).pathname === "/v1/pages")).toHaveLength(1);
+      expect(calls.filter((c) => c.init.method === "POST" && new URL(c.url).pathname === "/v1/file_uploads")).toHaveLength(1);
+      const patches = calls.filter((c) => c.init.method === "PATCH");
+      expect(patches).toHaveLength(2);
+      expect(JSON.parse(String(patches[1].init.body))).toEqual({ archived: true });
+      expect((patches[1].init.headers as Record<string, string>)["Notion-Version"]).toBe("2022-06-28");
+      expect(resumed.at(-1)?.init.method).toBe("GET");
+      expect(new URL(resumed.at(-1)!.url).pathname).toBe(`/v1/pages/${ORIGIN_ID}`);
+    });
+
+    it("既存退避の実bytesが違えば元PATCH前に停止し、元原本を保持する", async () => {
+      const files = [{ name: "snapshot.json", type: "file", file: { url: "https://files.example.test/original.json" } }];
+      const origin = { ...originPageProps, properties: { ...originPageProps.properties, Files: { files } } };
+      route("GET", `/v1/pages/${ORIGIN_ID}`, [origin, { ...origin, archived: true }]);
+      route("POST", "/v1/search", [emptySearch()]);
+      route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
+      route("POST", "/v1/databases", [{ id: "trash-default" }]);
+      route("POST", "/v1/databases/trash-default/query", [{ results: [{ id: TRASH_ID }] }]);
+      route("GET", `/v1/pages/${TRASH_ID}`, [{ ...trashPageProps, properties: { ...trashPageProps.properties, Files: { files: [
+        { ...files[0], file: { url: "https://files.example.test/copied.json" } },
+      ] } } }]);
+      route("GET", "/original.json", [new Response('{"snapshot":true}')]);
+      route("GET", "/copied.json", [new Response('{"snapshot":false}')]);
+      route("PATCH", `/v1/pages/${ORIGIN_ID}`, [{ id: ORIGIN_ID, archived: true }]);
+      const { moveToTrash } = await load();
+      await expect(moveToTrash({ service: "moneyflow", originPageId: ORIGIN_ID, reason: "再開" })).rejects.toThrow(/SHA/);
+      expect(calls.filter((c) => c.init.method === "PATCH" || new URL(c.url).pathname === "/v1/pages" || new URL(c.url).pathname.includes("file_uploads"))).toHaveLength(0);
+    });
+
+    it("元が既にtrashなら既存退避をfresh確認し、POST・upload・PATCHを行わない", async () => {
+      const files = [{ name: "snapshot.json", type: "file", file: { url: "https://files.example.test/original.json" } }];
+      route("GET", `/v1/pages/${ORIGIN_ID}`, [{ ...originPageProps, in_trash: true, properties: { ...originPageProps.properties, Files: { files } } }]);
+      route("POST", "/v1/search", [emptySearch()]);
+      route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
+      route("POST", "/v1/databases", [{ id: "trash-default" }]);
+      route("POST", "/v1/databases/trash-default/query", [{ results: [{ id: TRASH_ID }] }]);
+      route("GET", `/v1/pages/${TRASH_ID}`, [{ ...trashPageProps, properties: { ...trashPageProps.properties, Files: { files } } }]);
+      const { moveToTrash } = await load();
+      expect(await moveToTrash({ service: "moneyflow", originPageId: ORIGIN_ID, reason: "再開" })).toEqual({ trashPageId: TRASH_ID });
+      expect(calls.filter((c) => c.init.method === "PATCH" || new URL(c.url).pathname === "/v1/pages" || new URL(c.url).pathname.includes("file_uploads") || new URL(c.url).hostname === "files.example.test")).toHaveLength(0);
+    });
+
+    it.each(["Origin Page", "Service", "Files", "Metadata", "duplicate", "missing", "missingService", "wrongOriginId", "missingState", "invalidState", "missingFiles"])(
+      "%sが不一致・欠損なら新規退避や元trashを行わず保全停止する",
+      async (kind) => {
+        const { archived: _archived, ...withoutState } = originPageProps;
+        const { Service: _service, ...withoutService } = originPageProps.properties;
+        const { Files: _files, ...withoutFiles } = originPageProps.properties;
+        const origin = {
+          ...(kind === "missingState" ? withoutState : originPageProps),
+          ...(kind === "missing" ? { archived: true } : {}),
+          ...(kind === "invalidState" ? { archived: "false" } : {}),
+          ...(kind === "wrongOriginId" ? { id: OTHER_TRASH_ID } : {}),
+          properties: kind === "missingService" ? withoutService : kind === "missingFiles" ? withoutFiles : originPageProps.properties,
+        };
+        route("GET", `/v1/pages/${ORIGIN_ID}`, [origin, { ...origin, archived: true }]);
+        if (kind === "missingFiles") route("PATCH", `/v1/pages/${ORIGIN_ID}`, [{ id: ORIGIN_ID, archived: true }]);
+        route("POST", "/v1/search", [emptySearch()]);
+        route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
+        route("POST", "/v1/databases", [{ id: "trash-default" }]);
+        route("POST", "/v1/databases/trash-default/query", [{ results: kind === "missing" ? [] : kind === "duplicate" ? [{ id: TRASH_ID }, { id: OTHER_TRASH_ID }] : [{ id: TRASH_ID }] }]);
+        route("GET", `/v1/pages/${TRASH_ID}`, [{
+          ...trashPageProps,
+          properties: {
+            ...trashPageProps.properties,
+            ...(kind === "Origin Page" ? { "Origin Page": { url: `https://notion.so/${OTHER_PAGE}` } } : {}),
+            ...(kind === "Service" ? { Service: { select: { name: "other-service" } } } : {}),
+            ...(kind === "Files" ? { Files: { files: [{ name: "unowned.json", type: "file", file: { url: "https://files.example.test/unowned.json" } }] } } : {}),
+            ...(kind === "Metadata" ? { Metadata: { rich_text: [{ plain_text: '{"changed":true}' }] } } : {}),
+          },
+        }]);
+        const { moveToTrash } = await load();
+        await expect(moveToTrash({ service: "moneyflow", originPageId: ORIGIN_ID, reason: "再開" })).rejects.toThrow(/保全|重複/);
+        expect(calls.filter((c) => c.init.method === "PATCH" || new URL(c.url).pathname === "/v1/pages" || new URL(c.url).pathname.includes("file_uploads"))).toHaveLength(0);
+        if (kind === "missingFiles") expect(calls.filter((c) => c.init.method === "POST")).toHaveLength(0);
+      }
+    );
   });
 });

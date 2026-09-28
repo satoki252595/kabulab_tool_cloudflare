@@ -21,6 +21,7 @@ import {
   repairObject,
   sha,
   rowCas,
+  failureMetadata,
   type Plan,
 } from "./repair-market-20260928.js";
 import {
@@ -28,27 +29,83 @@ import {
   moveToTrash,
   recordPrimaryData,
 } from "../../src/shared/notion-archive/index.js";
-import {
-  findByKey,
-  findChildDatabase,
-} from "../../src/shared/notion-archive/archive.js";
 
 vi.mock("../../src/shared/notion-archive/index.js", () => ({
   listPageFiles: vi.fn(),
   moveToTrash: vi.fn(),
   recordPrimaryData: vi.fn(),
 }));
-vi.mock("../../src/shared/notion-archive/archive.js", () => ({
-  findByKey: vi.fn(),
-  findChildDatabase: vi.fn(),
-}));
-vi.mock("../../src/shared/notion-archive/env.js", () => ({
-  notionEnv: { NOTION_ARCHIVE_PAGE_ID: () => "local-archive-parent" },
-}));
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("one-off market quarantine native SQLite", () => {
+  it("private failure metadata retains phase/CAS or API codes without response text or query secrets", () => {
+    expect(
+      failureMetadata(
+        new Error("repair row CAS changed: 1909/rsi"),
+        "d1-row-cas",
+      ),
+    ).toEqual({
+      phase: "d1-row-cas",
+      errorClass: "Error",
+      rootCause: "repair row CAS changed: 1909/rsi",
+    });
+    const sdk = Object.assign(new Error("raw body token=secret"), {
+      name: "PreconditionFailed",
+      $metadata: { httpStatusCode: 412, requestId: "request-123" },
+    });
+    expect(
+      failureMetadata(
+        new Error("query token=secret", { cause: sdk }),
+        "r2-conditional-write/1909",
+      ),
+    ).toEqual({
+      phase: "r2-conditional-write/1909",
+      errorClass: "PreconditionFailed",
+      status: 412,
+      requestId: "request-123",
+    });
+    const notion = failureMetadata(
+      new Error(
+        "Notion API エラー (POST /pages) status=400 code=validation_error message=https://example.test/?token=secret",
+      ),
+      "physical-archive",
+    );
+    expect(notion).toEqual({
+      phase: "physical-archive",
+      errorClass: "Error",
+      status: 400,
+      code: "validation_error",
+    });
+    expect(JSON.stringify(notion)).not.toContain("secret");
+    expect(
+      failureMetadata(
+        Object.assign(new Error("repair archive download failed"), {
+          status: 403,
+        }),
+        "physical-archive",
+      ),
+    ).toEqual({
+      phase: "physical-archive",
+      errorClass: "Error",
+      rootCause: "repair archive download failed",
+      status: 403,
+    });
+    expect(
+      failureMetadata(
+        new Error(
+          "moveToTrash: 物理ファイル取得失敗 name=https://example.test/?token=secret status=403",
+        ),
+        "physical-archive",
+      ),
+    ).toEqual({
+      phase: "physical-archive",
+      errorClass: "Error",
+      rootCause: "archive_file_http_failed",
+      status: 403,
+    });
+  });
+
   it("CAS refuses an intervening change; a partial deletion resumes without touching normal fields/history/outside targets", async () => {
     const sqlite = new DatabaseSync(":memory:");
     const dir = new URL("../../drizzle/d1/", import.meta.url);
@@ -134,6 +191,7 @@ describe("one-off market quarantine native SQLite", () => {
         ["rsi", stockRsiPercentile],
         ["momentum", momentumProjection],
       ] as const) {
+        if (codes[i] === "2180" && kind === "rsi") continue;
         const rows = await db
           .select()
           .from(table)
@@ -147,6 +205,10 @@ describe("one-off market quarantine native SQLite", () => {
     const histories = sqlite
       .prepare("SELECT * FROM swing_daily_ohlcv ORDER BY id")
       .all();
+    const preservedRsi = sqlite
+      .prepare("SELECT * FROM rsi_percentile WHERE stock_id=2")
+      .get();
+    expect(plan.rows).toHaveLength(8);
     const beforeFinancials = sqlite
       .prepare(
         "SELECT * FROM core_stock_financials WHERE stock_id<>4 ORDER BY stock_id",
@@ -184,13 +246,16 @@ describe("one-off market quarantine native SQLite", () => {
         sqlite
           .prepare(`SELECT count(*) n FROM ${table} WHERE stock_id IN(1,2)`)
           .get(),
-      ).toEqual({ n: 0 });
+      ).toEqual({ n: table === "rsi_percentile" ? 1 : 0 });
       expect(
         sqlite
           .prepare(`SELECT count(*) n FROM ${table} WHERE stock_id IN(3,4)`)
           .get(),
       ).toEqual({ n: 2 });
     }
+    expect(
+      sqlite.prepare("SELECT * FROM rsi_percentile WHERE stock_id=2").get(),
+    ).toEqual(preservedRsi);
     for (const original of beforeFinancials) {
       const fresh = sqlite
         .prepare("SELECT * FROM core_stock_financials WHERE stock_id=?")
@@ -219,7 +284,7 @@ describe("one-off market quarantine native SQLite", () => {
     );
   });
 
-  it("archive byte failure stops; lost receipt after trash success resumes from exact key and fresh physical SHA", async () => {
+  it("archive byte failure stops; lost receipt resumes through shared moveToTrash with fresh physical SHA", async () => {
     const directory = mkdtempSync(
       join(tmpdir(), "market-repair-archive-test-"),
     );
@@ -235,7 +300,6 @@ describe("one-off market quarantine native SQLite", () => {
       fileTooLarge: false,
     });
     vi.mocked(moveToTrash).mockResolvedValue({ trashPageId: "trash" });
-    vi.mocked(findChildDatabase).mockResolvedValue(null);
     vi.mocked(listPageFiles).mockImplementation(async (id) => [
       { name: filename, url: `https://files.example.test/${id}` },
     ]);
@@ -268,21 +332,19 @@ describe("one-off market quarantine native SQLite", () => {
         JSON.stringify({ planHash: sha(bytes), originPageId: "origin" }),
         { mode: 0o600 },
       );
-      vi.mocked(findChildDatabase).mockResolvedValue("trash-db");
-      vi.mocked(findByKey).mockResolvedValue("trash");
       vi.mocked(listPageFiles).mockClear();
       phase = "good";
       await archiveOriginals(bytes, receipt);
-      expect(findByKey).toHaveBeenLastCalledWith(
-        "trash-db",
-        `repair-20260928-${sha(bytes)}`,
-      );
-      expect(listPageFiles).toHaveBeenCalledExactlyOnceWith("trash", "Files");
+      expect(listPageFiles).toHaveBeenNthCalledWith(1, "origin", "Files");
+      expect(listPageFiles).toHaveBeenNthCalledWith(2, "trash", "Files");
       expect(recordPrimaryData).toHaveBeenCalledTimes(1);
-      expect(moveToTrash).toHaveBeenCalledTimes(1);
+      expect(moveToTrash).toHaveBeenCalledTimes(2);
       vi.mocked(listPageFiles).mockClear();
       await archiveOriginals(bytes, receipt);
-      expect(listPageFiles).toHaveBeenCalledExactlyOnceWith("trash", "Files");
+      expect(listPageFiles).toHaveBeenCalledTimes(2);
+      expect(listPageFiles).toHaveBeenNthCalledWith(1, "trash", "Files");
+      expect(listPageFiles).toHaveBeenNthCalledWith(2, "trash", "Files");
+      expect(moveToTrash).toHaveBeenCalledTimes(3);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

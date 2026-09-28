@@ -20,11 +20,6 @@ import {
   recordPrimaryData,
 } from "../../src/shared/notion-archive/index.js";
 import { sharedEnv } from "../../src/shared/env.js";
-import {
-  findByKey,
-  findChildDatabase,
-} from "../../src/shared/notion-archive/archive.js";
-import { notionEnv } from "../../src/shared/notion-archive/env.js";
 import { r2GetVersion, r2Put } from "../vwap/lib/r2.js";
 
 const tables = {
@@ -138,6 +133,8 @@ export async function preparePlan(
     plan.rows.push({ code, kind: "financials", before: financial });
     if (code === "7426") continue;
     for (const kind of ["indicators", "rsi", "momentum"] as const) {
+      // 2180 RSI は破損由来未証明。監査済み対象だけを隔離する。
+      if (code === "2180" && kind === "rsi") continue;
       const row = await readRow(db, kind, found[0].id);
       if (!row) throw new Error(`repair derived row missing: ${code}/${kind}`);
       plan.rows.push({ code, kind, before: row });
@@ -166,7 +163,8 @@ export async function inspectPlan(db: Db, plan: Plan): Promise<void> {
     if (
       !(row.code in badCaps) ||
       !(row.kind in tables) ||
-      (row.code === "7426" && row.kind !== "financials")
+      (row.code === "7426" && row.kind !== "financials") ||
+      (row.code === "2180" && row.kind === "rsi")
     )
       throw new Error("repair row target invalid");
     const combination = `${row.code}/${row.kind}`;
@@ -187,7 +185,7 @@ export async function inspectPlan(db: Db, plan: Plan): Promise<void> {
     )
       throw new Error("repair financial original mismatch");
   }
-  if (combinations.size !== 9) throw new Error("repair row targets incomplete");
+  if (combinations.size !== 8) throw new Error("repair row targets incomplete");
   for (const row of plan.rows) {
     const current = await readRow(db, row.kind, Number(row.before.stockId));
     if (!same(current, row.before) && !same(current, expected(row)))
@@ -263,6 +261,90 @@ async function privateWrite(file: string, body: string) {
   await fs.rename(temporary, file);
 }
 
+/** Private sidecar contains fixed comparison labels/API metadata, never response text. */
+export function failureMetadata(error: unknown, phase: string) {
+  const diagnostic: Record<string, unknown> = { phase, errorClass: "Error" };
+  const archiveCauses: Record<string, string> = {
+    "moveToTrash: trash状態が未確認のため保全停止": "archive_state_unknown",
+    "moveToTrash: 元ページのID・Service・URL・Filesが不一致のため保全停止":
+      "archive_origin_mismatch",
+    "moveToTrash: 元はtrashですが退避先が見つからないため保全停止":
+      "archive_copy_missing",
+    "moveToTrash: 退避先の所有元・原本材料・添付が不一致のため保全停止":
+      "archive_copy_mismatch",
+    "moveToTrash: 元ページのtrash完了を再読確認できず保全停止":
+      "archive_origin_not_trashed",
+    "moveToTrash: 退避先の物理ファイルSHA不一致のため元原本を保持して保全停止":
+      "archive_bytes_mismatch",
+  };
+  for (let i = 0; i < 4 && error instanceof Error; i++, error = error.cause) {
+    if (
+      /^(Error|TypeError|SyntaxError|RangeError|NotionConfigError|PreconditionFailed|AccessDenied|NoSuchKey|TimeoutError|AbortError)$/.test(
+        error.name,
+      )
+    )
+      diagnostic.errorClass = error.name;
+    const comparison = error.message.match(
+      new RegExp(
+        "^repair (original changed|tail mismatch|split mismatch|row is not unique|stock missing|financial evidence changed|derived row missing|" +
+          "row target invalid|row target duplicate|stock ownership changed|financial original mismatch|row targets incomplete|row changed|object changed|" +
+          "row schema changed|row CAS changed|row CAS refused|row verify failed|object verify failed|target/plan mismatch|object targets incomplete|" +
+          "plan object mismatch|object disappeared|object CAS changed|object fresh read failed|receipt mismatch|archive file missing or duplicate|" +
+          "archive bytes mismatch|archive download failed|original upload incomplete|receipt missing origin|receipt trash mismatch)(: (1909|2180|7426)(/(indicators|rsi|momentum|financials))?)?$",
+      ),
+    );
+    if (comparison) diagnostic.rootCause = comparison[0];
+    if (Object.hasOwn(archiveCauses, error.message))
+      diagnostic.rootCause = archiveCauses[error.message];
+    if (
+      error.message.startsWith(
+        "Notion archive: 同一 Key の重複を選ばず保全停止 database=",
+      )
+    )
+      diagnostic.rootCause = "archive_key_ambiguous";
+    if (
+      error.message.startsWith(
+        "moveToTrash: 物理ファイルURL欠損のため保全停止 name=",
+      )
+    )
+      diagnostic.rootCause = "archive_file_url_missing";
+    if (error.message.startsWith("moveToTrash: 物理ファイル取得失敗 name="))
+      diagnostic.rootCause = "archive_file_http_failed";
+    const api = error as Error & {
+      code?: string;
+      status?: number;
+      $metadata?: { httpStatusCode?: number; requestId?: string };
+    };
+    const status =
+      api.$metadata?.httpStatusCode ??
+      api.status ??
+      Number(
+        error.message.match(
+          /^(?:D1 HTTP |Notion API エラー .*?status=|moveToTrash: 物理ファイル取得失敗 .*?status=)(\d{3})\b/,
+        )?.[1],
+      );
+    if (Number.isInteger(status) && status >= 100 && status <= 599)
+      diagnostic.status = status;
+    const code =
+      api.code ??
+      error.message.match(/^Notion API エラー .*? code=([a-z_]+)\b/)?.[1];
+    if (
+      code &&
+      /^(ENOENT|EACCES|EEXIST|ENOSPC|ECONNRESET|ETIMEDOUT|PreconditionFailed|AccessDenied|NoSuchKey|validation_error|unauthorized|restricted_resource|object_not_found|conflict_error|rate_limited|internal_server_error|service_unavailable)$/.test(
+        code,
+      )
+    )
+      diagnostic.code = code;
+    const requestId = api.$metadata?.requestId;
+    if (requestId && /^[a-zA-Z0-9_-]{1,128}$/.test(requestId))
+      diagnostic.requestId = requestId;
+  }
+  return diagnostic;
+}
+
+let phase = "arguments";
+let failureFile: string | undefined;
+
 async function verifyArchive(pageId: string, name: string, hash: string) {
   const files = (await listPageFiles(pageId, "Files")).filter(
     (f) => f.name === name,
@@ -270,10 +352,11 @@ async function verifyArchive(pageId: string, name: string, hash: string) {
   if (files.length !== 1)
     throw new Error("repair archive file missing or duplicate");
   const response = await fetch(files[0].url);
-  if (
-    !response.ok ||
-    sha(new Uint8Array(await response.arrayBuffer())) !== hash
-  )
+  if (!response.ok)
+    throw Object.assign(new Error("repair archive download failed"), {
+      status: response.status,
+    });
+  if (sha(new Uint8Array(await response.arrayBuffer())) !== hash)
     throw new Error("repair archive bytes mismatch");
 }
 
@@ -294,10 +377,13 @@ async function main() {
     throw new Error("repair plan must use private /tmp directory outside Git");
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await fs.chmod(directory, 0o700);
+  failureFile = `${planFile}.failure.json`;
+  phase = "configuration";
   const db = createD1HttpDb(tables);
   const databaseId = sharedEnv.D1_DATABASE_ID(),
     bucket = sharedEnv.R2_BUCKET();
   if (!args.includes("--apply") && !args.includes("--verify")) {
+    phase = "prepare";
     const plan = await preparePlan(db, databaseId, bucket);
     // Refuse replacing a previously reviewed snapshot.
     await fs.writeFile(planFile, JSON.stringify(plan), {
@@ -315,11 +401,12 @@ async function main() {
     return;
   }
   const bytes = await fs.readFile(planFile, "utf8");
+  phase = "plan-validation";
   const plan = JSON.parse(bytes) as Plan;
   if (
     plan.databaseId !== databaseId ||
     plan.bucket !== bucket ||
-    plan.rows.length !== 9 ||
+    plan.rows.length !== 8 ||
     plan.objects.length !== 2
   )
     throw new Error("repair target/plan mismatch");
@@ -334,13 +421,14 @@ async function main() {
     )
       throw new Error("repair plan object mismatch");
   if (args.includes("--verify")) {
+    phase = "verification";
     await inspectPlan(db, plan);
     await verifyPlan(db, plan);
     console.info(
       JSON.stringify({
         mode: "verified",
         planHash: sha(bytes),
-        rows: 9,
+        rows: 8,
         objects: 2,
       }),
     );
@@ -348,11 +436,15 @@ async function main() {
   }
   if (sharedEnv.LOCAL_OUT())
     throw new Error("repair apply requires actual R2 conditional writes");
+  phase = "pre-archive-inspection";
   await inspectPlan(db, plan);
+  phase = "physical-archive";
   await archiveOriginals(bytes, `${planFile}.receipt.json`);
   // Recheck after Notion's multi-call archive, then CAS each native target.
+  phase = "post-archive-inspection";
   await inspectPlan(db, plan);
   for (const object of plan.objects) {
+    phase = `r2-conditional-write/${object.code}`;
     const current = await r2GetVersion(object.key);
     if (!current) throw new Error("repair object disappeared");
     if (sha(current.body) === sha(object.after)) continue;
@@ -363,13 +455,15 @@ async function main() {
     if (!fresh || sha(fresh.body) !== sha(object.after))
       throw new Error("repair object fresh read failed");
   }
+  phase = "d1-row-cas";
   await applyRows(db, plan);
+  phase = "final-verification";
   await verifyPlan(db, plan);
   console.info(
     JSON.stringify({
       mode: "applied-verified",
       planHash: sha(bytes),
-      rows: 9,
+      rows: 8,
       objects: 2,
     }),
   );
@@ -393,25 +487,10 @@ export async function archiveOriginals(
   if (receipt.planHash !== sha(bytes))
     throw new Error("repair receipt mismatch");
   const filename = "market-repair-originals-20260928.json";
-  // A completed trash copy is sufficient; the trashed origin may no longer be readable.
+  // Validate the known physical copy first; moveToTrash still completes/rechecks its origin.
   if (receipt.trashPageId) {
     await verifyArchive(receipt.trashPageId, filename, sha(bytes));
-    return;
-  }
-  // Recover moveToTrash success followed by a lost local receipt, using its existing exact key.
-  const trashDb = await findChildDatabase(
-    notionEnv.NOTION_ARCHIVE_PAGE_ID(),
-    "ごみ｜vwap-analysis",
-  );
-  const existingTrash =
-    trashDb === null
-      ? null
-      : await findByKey(trashDb, `repair-20260928-${sha(bytes)}`);
-  if (existingTrash !== null) {
-    await verifyArchive(existingTrash, filename, sha(bytes));
-    receipt.trashPageId = existingTrash;
-    await privateWrite(receiptFile, JSON.stringify(receipt));
-    return;
+    if (!receipt.originPageId) throw new Error("repair receipt missing origin");
   }
   if (!receipt.originPageId) {
     const recorded = await recordPrimaryData({
@@ -421,7 +500,7 @@ export async function archiveOriginals(
         "audited D1 derived rows/core fields and R2 daily original objects",
       metadata: {
         planHash: sha(bytes),
-        rows: 9,
+        rows: 8,
         objects: 2,
         reason:
           "F-01/F-15 corrupt source values; quarantine without inferred replacement",
@@ -439,17 +518,18 @@ export async function archiveOriginals(
     receipt.originPageId = recorded.pageId;
     await privateWrite(receiptFile, JSON.stringify(receipt));
   }
-  await verifyArchive(receipt.originPageId, filename, sha(bytes));
-  if (!receipt.trashPageId) {
-    const moved = await moveToTrash({
-      service: "vwap-analysis",
-      originPageId: receipt.originPageId,
-      reason:
-        "F-01/F-15: remove only audited corrupt derived rows/tails and set corrupt core per/eps/market_cap to NULL; normal history and columns retained",
-    });
-    receipt.trashPageId = moved.trashPageId;
-    await privateWrite(receiptFile, JSON.stringify(receipt));
-  }
+  if (!receipt.trashPageId)
+    await verifyArchive(receipt.originPageId, filename, sha(bytes));
+  const moved = await moveToTrash({
+    service: "vwap-analysis",
+    originPageId: receipt.originPageId,
+    reason:
+      "F-01/F-15: remove only audited corrupt derived rows/tails and set corrupt core per/eps/market_cap to NULL; normal history and columns retained",
+  });
+  if (receipt.trashPageId && receipt.trashPageId !== moved.trashPageId)
+    throw new Error("repair receipt trash mismatch");
+  receipt.trashPageId = moved.trashPageId;
+  await privateWrite(receiptFile, JSON.stringify(receipt));
   await verifyArchive(receipt.trashPageId, filename, sha(bytes));
 }
 
@@ -457,9 +537,19 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 )
-  main().catch(() => {
+  main().catch(async (error: unknown) => {
+    if (failureFile) {
+      try {
+        await privateWrite(
+          failureFile,
+          JSON.stringify(failureMetadata(error, phase)),
+        );
+      } catch {
+        console.error("market repair private diagnostic could not be saved");
+      }
+    }
     console.error(
-      "market repair stopped; no raw diagnostics printed; inspect private plan/receipt and re-run read-only verification",
+      "market repair stopped; no raw diagnostics printed; inspect private plan/receipt/failure sidecar and re-run read-only verification",
     );
     process.exitCode = 1;
   });
