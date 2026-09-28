@@ -213,8 +213,8 @@ class CloudSink:
         """③財務サマリを D1 `jss_financials` へ upsert する。
 
         `raw_sha256` は ⑤原本索引 `jss_raw_files.sha256`（PK）への結合キー。
-        `jss_raw_files.doc_id` は実測で 150 行すべて NULL だが、結合はこの
-        sha256 側で成立するので ③ ↔ ⑤ の辿り直しはできる。
+        歴史的なNotion保管だけの原本にはR2索引が無いので、原本SHA付きの実
+        `provenance.raw_page_id` も保存する。未知はNULLで、R2 keyやPDF IDを推測しない。
 
         `core_stocks.id` の解決も**この try の中**に入れてある。外に出すと
         SELECT の失敗が例外としてここを素通りし、このクラスが宣言している
