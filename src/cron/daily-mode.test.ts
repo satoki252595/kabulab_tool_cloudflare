@@ -53,6 +53,23 @@ describe("株式とマクロの日次分離", () => {
     }));
   });
 
+  it("実日足の日付が対象日でも実終値がなければD1を書かない (fresh null bar)", async () => {
+    // 日付だけの gate では対象日の fresh null bar が通過し、古い終値で計算した
+    // 指標を対象日付で保存してしまう (F-01)。checkFreshClose で実終値も要求する。
+    vi.mocked(fetchChart).mockResolvedValue({
+      symbol: "^N225", price: 100, previousClose: 99, dataDate: "2026-09-28",
+      ohlcv: [{ date: "2026-09-28", open: null, high: null, low: null,
+        close: null, volume: null, adj: null }],
+    });
+    const { db, calls } = recordingDb();
+    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow("日足を確認できません");
+    expect(calls).toEqual([]);
+    expect(fetchStockRawData).not.toHaveBeenCalled();
+    expect(recordPriceSyncLog).toHaveBeenCalledWith("test-db", expect.objectContaining({
+      status: "失敗", tradingDate: null,
+    }));
+  });
+
   it("NY取引中にマクロを朝の値へ書き直さない", async () => {
     const { db, calls } = recordingDb();
     await expect(runMarketContextSync(db)).rejects.toThrow("取引中");

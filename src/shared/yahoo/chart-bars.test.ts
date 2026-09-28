@@ -134,6 +134,102 @@ describe("fetchDaily", () => {
     stubChart(chartJson({ indicators: {} }));
     await expect(fetchDaily("7203.T")).rejects.toThrow(/quote がありません/);
   });
+
+  /**
+   * 最小合成 fixture。9/28 観測の 1909 応答の形だけを写す
+   * (先頭から持続する異常水準・出来高 0・末尾 null・meta 正常)。
+   * fetchChart と同じ guard が R2 daily 経路でも働くことを固定する。
+   */
+  function chart1909Shape() {
+    const day = (s: string) => Date.parse(`${s}T00:00:00Z`) / 1000;
+    const lv = [16280000512, 16280000512, 16280000512, null];
+    return chartJson({
+      meta: { symbol: "1909.T", regularMarketPrice: 3700 },
+      timestamp: [
+        day("2026-09-10"),
+        day("2026-09-11"),
+        day("2026-09-14"),
+        day("2026-09-15"),
+      ],
+      indicators: {
+        quote: [
+          {
+            open: [...lv],
+            high: [...lv],
+            low: [...lv],
+            close: [...lv],
+            volume: [0, 0, 0, null],
+          },
+        ],
+        adjclose: [{ adjclose: [...lv] }],
+      },
+    });
+  }
+
+  function chartCoherent(over: {
+    closes: (number | null)[];
+    volumes: (number | null)[];
+    metaPrice: number;
+  }) {
+    const day = (s: string) => Date.parse(`${s}T00:00:00Z`) / 1000;
+    const dates = ["2026-09-24", "2026-09-25"].slice(0, over.closes.length);
+    return chartJson({
+      meta: { symbol: "7203.T", regularMarketPrice: over.metaPrice },
+      timestamp: dates.map(day),
+      indicators: {
+        quote: [
+          {
+            open: [...over.closes],
+            high: [...over.closes],
+            low: [...over.closes],
+            close: [...over.closes],
+            volume: [...over.volumes],
+          },
+        ],
+        adjclose: [{ adjclose: [...over.closes] }],
+      },
+    });
+  }
+
+  it("1909 形の応答全体を拒否する (R2 daily 書込の手前で落とす)", async () => {
+    useProxy();
+    stubChart(chart1909Shape());
+    await expect(fetchDaily("1909.T")).rejects.toThrow(/応答全体を採用しません/);
+  });
+
+  it("薄商い (出来高0・乖離なし) は受理する", async () => {
+    useProxy();
+    stubChart(
+      chartCoherent({ closes: [1000, 1000], volumes: [10000, 0], metaPrice: 1000 })
+    );
+    const { bars } = await fetchDaily("7203.T");
+    expect(bars).toHaveLength(2);
+  });
+
+  it("出来高を伴う急変 (正規分割) は受理する", async () => {
+    useProxy();
+    stubChart(
+      chartCoherent({
+        closes: [1000, 30000],
+        volumes: [10000, 500000],
+        metaPrice: 1000,
+      })
+    );
+    const { bars } = await fetchDaily("7203.T");
+    expect(bars).toHaveLength(2);
+  });
+
+  it("最新 close が負 (-5) の応答全体を拒否する (実数値の無効は欠落と別扱い)", async () => {
+    useProxy();
+    stubChart(
+      chartCoherent({
+        closes: [1000, -5],
+        volumes: [10000, 500000],
+        metaPrice: 1000,
+      })
+    );
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/応答全体を採用しません/);
+  });
 });
 
 describe("fetchBars5m", () => {
