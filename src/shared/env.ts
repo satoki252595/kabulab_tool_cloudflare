@@ -73,6 +73,11 @@ export const sharedEnv = {
     if (!server || !repo || !runId) return undefined;
     return `${server}/${repo}/actions/runs/${runId}`;
   },
+  /**
+   * GitHub Actions の step 出力ファイル。ローカル実行では未設定 =
+   * `undefined` (呼び出し側が出力を諦める。throw しない)。
+   */
+  GITHUB_OUTPUT: () => optional("GITHUB_OUTPUT"),
 };
 
 /**

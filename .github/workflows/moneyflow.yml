@@ -1,6 +1,10 @@
 # 008 moneyflow の日次取込 (計画: notion-velvet-goose.md)。
 #
-# 平日 08:30 UTC (17:30 JST・JPX 空売り集計 16:00 公表の後) に実行する。
+# stock-sync.yml の株式 sync 成功後に workflow_call で連鎖実行する (#160)。
+# 旧来の独立 cron (平日 08:30 UTC) は stock-sync (17:13 UTC) より先に走り、
+# 当日分の D1 日足が無いまま sector-turnover を要求して失敗した。cron ずらし
+# では再発防止にならない (GitHub の schedule  jitter が数時間ある実測) ため、
+# 独立 cron を廃止し、producer の実 tradingDate を固定入力で受けて走る。
 # `scripts/moneyflow/ingest.ts` が:
 #   - JPX 業種別時価総額 (月次PDF)・空売り業種別集計 (日次PDF+当月の月次集計)
 #     を取得し、一次データとして Notion「一次データ｜moneyflow」へ記録
@@ -30,8 +34,7 @@
 name: moneyflow
 
 on:
-  schedule:
-    - cron: "30 8 * * 1-5" # 平日 08:30 UTC = 17:30 JST
+  # 独立 cron は廃止 (#160)。stock-sync の連鎖 (workflow_call) と手動のみ。
   workflow_dispatch:
     inputs:
       dry_run:
@@ -42,6 +45,39 @@ on:
         description: "実行する取得元 (カンマ区切り。空なら全部)"
         type: string
         default: ""
+      trade_date:
+        description: "sector-turnover の as-of 日 (YYYY-MM-DD。空なら当日 UTC)"
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      trade_date:
+        description: "producer (stock-sync) の実 tradingDate (YYYY-MM-DD。必須)"
+        type: string
+        required: true
+      dry_run:
+        description: "Notion に書かず JSON を出力するだけにする"
+        type: boolean
+        default: false
+      only:
+        description: "実行する取得元 (カンマ区切り。空なら全部)"
+        type: string
+        default: ""
+    secrets:
+      NOTION_TOKEN:
+        required: true
+      NOTION_ARCHIVE_PAGE_ID:
+        required: true
+      NOTION_STOCK_INFO_PAGE_ID:
+        required: true
+      WORKER_BASE_URL:
+        required: true
+      CRON_SECRET:
+        required: true
+      YAHOO_PROXY_BASE:
+        required: true
+      COINGECKO_DEMO_API_KEY:
+        required: false
 
 concurrency:
   group: moneyflow-ingest
@@ -78,11 +114,14 @@ jobs:
       - name: moneyflow ingest
         run: |
           ARGS=""
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
             ARGS="$ARGS --dry-run"
           fi
-          if [ -n "${{ github.event.inputs.only }}" ]; then
-            ARGS="$ARGS --only=${{ github.event.inputs.only }}"
+          if [ -n "${{ inputs.only }}" ]; then
+            ARGS="$ARGS --only=${{ inputs.only }}"
+          fi
+          if [ -n "${{ inputs.trade_date }}" ]; then
+            ARGS="$ARGS --as-of=${{ inputs.trade_date }}"
           fi
           pnpm ingest:moneyflow -- $ARGS
 
