@@ -369,8 +369,12 @@ def apply_journal(journal: Path, receipts: Path | None = None):
     client = NotionClient(settings.notion_token, rps=settings.notion_rps)
     database_id = settings.db_id("financials")
     grouped = defaultdict(list)
+    canonical_values = {_json(item["new"]) for item in items}
     for item in items:
         grouped[item["old"]["code"]].append(item)
+    for group in grouped.values():
+        # キー変更で複数の開示が合流するとき、最新原本を先に修復する。
+        group.sort(key=lambda item: item["new"]["disclosed_at"] or "", reverse=True)
     codes = sorted(grouped)
     receipts = receipts if receipts is not None else journal.with_suffix(".applied.jsonl")
     receipts.parent.mkdir(parents=True, exist_ok=True)
@@ -401,8 +405,10 @@ def apply_journal(journal: Path, receipts: Path | None = None):
                     elif (page is None and targets and item["page_id"] in previous
                           and previous[item["page_id"]].get("parser_sha256") == PARSER_SHA256
                           and previous[item["page_id"]].get("raw_sha256") == item["raw_sha256"]
-                          and previous[item["page_id"]]["record"] ==
-                          _record_dict(_page_record(targets[0]))
+                          and previous[item["page_id"]]["target_page_id"] == targets[0]["id"]
+                          and (previous[item["page_id"]]["record"] ==
+                               _record_dict(_page_record(targets[0])) or
+                               _json(_record_dict(_page_record(targets[0]))) in canonical_values)
                           and not financial_overwrite_allowed(targets[0], record)):
                         saved, action = targets[0], "newer_disclosure_preserved"
                     else:
