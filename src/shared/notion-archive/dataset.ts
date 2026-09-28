@@ -28,7 +28,7 @@
 import { notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
-import { findBackupChildByTitle, queryUniqueRow } from "./archive.js";
+import { createDatabaseOrAdopt, findBackupChildByTitle, queryUniqueRow } from "./archive.js";
 
 export type NotionSelectColor =
   | "default"
@@ -274,15 +274,18 @@ async function ensureParentDb(
     parentDbCache.set(service, existing);
     return existing;
   }
-  const created = await notionRequest<{ id: string }>("POST", "/databases", {
-    parent: { type: "page_id", page_id: backup },
-    title: [{ type: "text", text: { content: title } }],
-    properties: {
-      銘柄コード: { title: {} },
-      銘柄名: { rich_text: {} },
-      コード: { select: {} },
+  const created = await createDatabaseOrAdopt<{ id: string }>(
+    {
+      parent: { type: "page_id", page_id: backup },
+      title: [{ type: "text", text: { content: title } }],
+      properties: {
+        銘柄コード: { title: {} },
+        銘柄名: { rich_text: {} },
+        コード: { select: {} },
+      },
     },
-  });
+    () => findBackupChildByTitle({ parentPageId: backup, title, kind: "database" })
+  );
   // tagOptions は子 DB で使う (親では未使用) — 受け取りは API 一貫性のため
   void tagOptions;
   parentDbCache.set(service, created.id);
@@ -330,37 +333,42 @@ async function ensureChildDb(
   tagOptions: ByStockInput["tagOptions"]
 ): Promise<string> {
   const title = childTitle(ticker);
-  const existing = await findChildDatabase(stockPageId, title);
-  if (existing) {
-    const db = await notionRequest<{
-      properties: Record<string, { type: string }>;
-      is_inline?: boolean;
-    }>("GET", `/databases/${existing}`);
-    const want = childProperties(tagOptions);
-    const add: Record<string, unknown> = {};
-    for (const k of Object.keys(want)) {
-      if (!(k in db.properties)) add[k] = want[k];
-    }
-    // インライン化(銘柄ページを開いた瞬間にIR表が直接展開される。リンク
-    // を開く操作が不要)。既存が full-page なら PATCH で inline に切替
-    // (非破壊・冪等)。
-    const patch: Record<string, unknown> = {};
-    if (Object.keys(add).length > 0) patch.properties = add;
-    if (db.is_inline !== true) patch.is_inline = true;
-    if (Object.keys(patch).length > 0) {
-      await notionRequest("PATCH", `/databases/${existing}`, patch);
-    }
-    return existing;
+  let existing = await findChildDatabase(stockPageId, title);
+  if (!existing) {
+    const res = await createDatabaseOrAdopt<{ id: string }>(
+      {
+        parent: { type: "page_id", page_id: stockPageId },
+        title: [{ type: "text", text: { content: title } }],
+        // is_inline:true で銘柄ページの本文中に展開される (リンク表示でなく
+        // 開いた瞬間に IR テーブルが見える)。
+        is_inline: true,
+        properties: childProperties(tagOptions),
+      },
+      () => findChildDatabase(stockPageId, title)
+    );
+    if (res.created) return res.id;
+    // adopted → 下の schema 検証へ進む (同名の古い DB かもしれないため)。
+    existing = res.id;
   }
-  const created = await notionRequest<{ id: string }>("POST", "/databases", {
-    parent: { type: "page_id", page_id: stockPageId },
-    title: [{ type: "text", text: { content: title } }],
-    // is_inline:true で銘柄ページの本文中に展開される (リンク表示でなく
-    // 開いた瞬間に IR テーブルが見える)。
-    is_inline: true,
-    properties: childProperties(tagOptions),
-  });
-  return created.id;
+  const db = await notionRequest<{
+    properties: Record<string, { type: string }>;
+    is_inline?: boolean;
+  }>("GET", `/databases/${existing}`);
+  const want = childProperties(tagOptions);
+  const add: Record<string, unknown> = {};
+  for (const k of Object.keys(want)) {
+    if (!(k in db.properties)) add[k] = want[k];
+  }
+  // インライン化(銘柄ページを開いた瞬間にIR表が直接展開される。リンク
+  // を開く操作が不要)。既存が full-page なら PATCH で inline に切替
+  // (非破壊・冪等)。
+  const patch: Record<string, unknown> = {};
+  if (Object.keys(add).length > 0) patch.properties = add;
+  if (db.is_inline !== true) patch.is_inline = true;
+  if (Object.keys(patch).length > 0) {
+    await notionRequest("PATCH", `/databases/${existing}`, patch);
+  }
+  return existing;
 }
 
 async function resolveStock(

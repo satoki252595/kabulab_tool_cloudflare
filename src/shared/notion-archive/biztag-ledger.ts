@@ -7,7 +7,7 @@
  * ハッシュを照合し、一致しなければ throw する (Notion 上で手で書き換えた
  * 値を黙って読み戻さない — ルール2)。
  */
-import { findBackupChildByTitle } from "./archive.js";
+import { createDatabaseOrAdopt, findBackupChildByTitle } from "./archive.js";
 import { notionRequest } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
@@ -130,13 +130,25 @@ export async function ensureLedgerDb(): Promise<string> {
   }
 
   if (!dbId) {
-    const created = await notionRequest<{ id: string }>("POST", "/databases", {
-      parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
-      title: [{ type: "text", text: { content: LEDGER_DB_TITLE } }],
-      properties: LEDGER_PROPERTIES,
-    });
-    cachedLedgerDbId = created.id;
-    return created.id;
+    const res = await createDatabaseOrAdopt<{ id: string }>(
+      {
+        parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
+        title: [{ type: "text", text: { content: LEDGER_DB_TITLE } }],
+        properties: LEDGER_PROPERTIES,
+      },
+      () =>
+        findBackupChildByTitle({
+          parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
+          title: LEDGER_DB_TITLE,
+          kind: "database",
+        })
+    );
+    if (res.created) {
+      cachedLedgerDbId = res.id;
+      return res.id;
+    }
+    // adopted → 下の schema 検証へ進む (同名の古い DB かもしれないため)。
+    dbId = res.id;
   }
 
   const schema = await notionRequest<{ properties: Record<string, { id: string }> }>(

@@ -32,7 +32,7 @@
  * select の累積上限に当たって取込が止まるため。区分の大分類は「区分種別」
  * (select・値は固定の少数) で絞り込む。
  */
-import { findBackupChildByTitle, queryUniqueRow } from "./archive.js";
+import { createDatabaseOrAdopt, findBackupChildByTitle, queryUniqueRow } from "./archive.js";
 import { notionRequest } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
@@ -296,13 +296,25 @@ export async function ensureIndicatorDefsDb(): Promise<{ dbId: string }> {
   }
 
   if (!dbId) {
-    const created = await notionRequest<DbSchemaResponse>("POST", "/databases", {
-      parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
-      title: [{ type: "text", text: { content: MONEYFLOW_DEFS_DB_TITLE } }],
-      properties: want,
-    });
-    cachedDefsDbId = created.id;
-    return { dbId: created.id };
+    const res = await createDatabaseOrAdopt<DbSchemaResponse>(
+      {
+        parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
+        title: [{ type: "text", text: { content: MONEYFLOW_DEFS_DB_TITLE } }],
+        properties: want,
+      },
+      () =>
+        findBackupChildByTitle({
+          parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
+          title: MONEYFLOW_DEFS_DB_TITLE,
+          kind: "database",
+        })
+    );
+    if (res.created) {
+      cachedDefsDbId = res.id;
+      return { dbId: res.id };
+    }
+    // adopted → 下の schema 検証へ進む (同名の古い DB かもしれないため)。
+    dbId = res.id;
   }
 
   const schema = await notionRequest<DbSchemaResponse>("GET", `/databases/${dbId}`);
@@ -557,13 +569,25 @@ export async function ensureObservationsDb(): Promise<{ dbId: string }> {
   }
 
   if (!dbId) {
-    const created = await notionRequest<DbSchemaResponse>("POST", "/databases", {
-      parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
-      title: [{ type: "text", text: { content: MONEYFLOW_OBS_DB_TITLE } }],
-      properties: want,
-    });
-    cachedObsDbId = created.id;
-    return { dbId: created.id };
+    const res = await createDatabaseOrAdopt<DbSchemaResponse>(
+      {
+        parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
+        title: [{ type: "text", text: { content: MONEYFLOW_OBS_DB_TITLE } }],
+        properties: want,
+      },
+      () =>
+        findBackupChildByTitle({
+          parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
+          title: MONEYFLOW_OBS_DB_TITLE,
+          kind: "database",
+        })
+    );
+    if (res.created) {
+      cachedObsDbId = res.id;
+      return { dbId: res.id };
+    }
+    // adopted → 下の schema 検証へ進む (同名の古い DB かもしれないため)。
+    dbId = res.id;
   }
 
   const schema = await notionRequest<DbSchemaResponse>("GET", `/databases/${dbId}`);
@@ -758,13 +782,25 @@ export async function ensureRunLogDb(): Promise<{ dbId: string }> {
   }
 
   if (!dbId) {
-    const created = await notionRequest<DbSchemaResponse>("POST", "/databases", {
-      parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
-      title: [{ type: "text", text: { content: MONEYFLOW_RUNLOG_DB_TITLE } }],
-      properties: want,
-    });
-    cachedRunLogDbId = created.id;
-    return { dbId: created.id };
+    const res = await createDatabaseOrAdopt<DbSchemaResponse>(
+      {
+        parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
+        title: [{ type: "text", text: { content: MONEYFLOW_RUNLOG_DB_TITLE } }],
+        properties: want,
+      },
+      () =>
+        findBackupChildByTitle({
+          parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
+          title: MONEYFLOW_RUNLOG_DB_TITLE,
+          kind: "database",
+        })
+    );
+    if (res.created) {
+      cachedRunLogDbId = res.id;
+      return { dbId: res.id };
+    }
+    // adopted → 下の schema 検証へ進む (同名の古い DB かもしれないため)。
+    dbId = res.id;
   }
 
   const schema = await notionRequest<DbSchemaResponse>("GET", `/databases/${dbId}`);

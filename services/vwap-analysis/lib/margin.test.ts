@@ -20,6 +20,7 @@ import {
   marginPdfUrlForWeekFromHtml,
   parseMarginPdf,
   parseMarginText,
+  validateMarginData,
   weeksMissing,
 } from "./margin.js";
 
@@ -224,10 +225,35 @@ describe("margin 発見経路 (一覧 HTML→PDF URL)", () => {
 });
 
 describe("weeksMissing (欠落週の検出)", () => {
-  it("7/3・7/10 のように飛ばされた週を列挙する (実例)", () => {
+  it("末尾の欠落を列挙する", () => {
     expect(weeksMissing(["2026-06-12", "2026-06-19", "2026-06-26"], "2026-07-17")).toEqual([
       "2026-07-03",
       "2026-07-10",
+    ]);
+  });
+
+  it("区間内部の欠落も検出する (7/3・7/10 の実例: 保存済みに挟まれた欠落)", () => {
+    // 実 R2 margin/weeks.json の 13 週 (7/3・7/10 だけ欠落)。
+    const saved13 = [
+      "2026-06-12", "2026-06-19", "2026-06-26", "2026-07-17", "2026-07-24",
+      "2026-07-31", "2026-08-07", "2026-08-14", "2026-08-21", "2026-08-28",
+      "2026-09-04", "2026-09-11", "2026-09-18",
+    ];
+    expect(weeksMissing(saved13, "2026-09-18")).toEqual(["2026-07-03", "2026-07-10"]);
+  });
+
+  it("--week の過去週補修でも内部欠落は報告する (今回週は除く)", () => {
+    expect(weeksMissing(["2026-06-26", "2026-09-18"], "2026-08-28")).toEqual([
+      "2026-07-03",
+      "2026-07-10",
+      "2026-07-17",
+      "2026-07-24",
+      "2026-07-31",
+      "2026-08-07",
+      "2026-08-14",
+      "2026-08-21",
+      "2026-09-04",
+      "2026-09-11",
     ]);
   });
 
@@ -240,6 +266,25 @@ describe("weeksMissing (欠落週の検出)", () => {
   it("形式が違えば throw する", () => {
     expect(() => weeksMissing(["2026-09-11"], "20260918")).toThrow(/形式が不正/);
     expect(() => weeksMissing(["2026/09/11"], "2026-09-18")).toThrow(/形式が不正/);
+  });
+});
+
+describe("validateMarginData (保存前の検証)", () => {
+  const good = {
+    week: "2026-09-18",
+    rows: [{ code: "7203", sell: 1, sell_chg: 0, buy: 2, buy_chg: 0 }],
+    pdfBytes: new Uint8Array([1, 2, 3]),
+    pdfUrl: "https://www.jpx.co.jp/x.pdf",
+  };
+
+  it("正常なら何もしない", () => {
+    expect(() => validateMarginData(good)).not.toThrow();
+  });
+
+  it("週・行・原本のいずれかが空なら throw する", () => {
+    expect(() => validateMarginData({ ...good, week: "" })).toThrow(/申込週/);
+    expect(() => validateMarginData({ ...good, rows: [] })).toThrow(/0 件/);
+    expect(() => validateMarginData({ ...good, pdfBytes: new Uint8Array(0) })).toThrow(/原本バイト列/);
   });
 });
 

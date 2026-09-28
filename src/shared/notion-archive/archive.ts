@@ -17,7 +17,7 @@
  *     という正直なステータスを記録 (捏造値ではなく事実 / 運用者可視)。
  *   - メタデータ全文はページ本文の code block に必ず原文保存し欠落させない。
  */
-import { notionRequest } from "./client.js";
+import { NotionUnknownResultError, notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
 
@@ -298,11 +298,14 @@ async function ensureDatabase(
     return existing;
   }
 
-  const created = await notionRequest<{ id: string }>("POST", "/databases", {
-    parent: { type: "page_id", page_id: parentPageId },
-    title: [{ type: "text", text: { content: dbTitle } }],
-    properties: DB_PROPERTIES,
-  });
+  const created = await createDatabaseOrAdopt<{ id: string }>(
+    {
+      parent: { type: "page_id", page_id: parentPageId },
+      title: [{ type: "text", text: { content: dbTitle } }],
+      properties: DB_PROPERTIES,
+    },
+    () => findBackupChildByTitle({ parentPageId, title: dbTitle, kind: "database" })
+  );
   dbCache.set(cacheKey, created.id);
   return created.id;
 }
@@ -346,6 +349,28 @@ export async function queryUniqueRow<T extends { id: string }>(
     throw new Error(`${context} database=${databaseId}`);
   }
   return res.results[0] ?? null;
+}
+
+/**
+ * DB を作成する。結果不明 (`NotionUnknownResultError`) の場合は内部再送せず、
+ * `refind` (full query) で確認し、見つかれば回収 (adopt) して返す。
+ * 見つからなければ元のエラーをそのまま throw する (自動再 create しない)。
+ * 戻り値の `created` が false の採用時は、呼び出し側が schema 検証へ進むこと
+ * (同名の古い DB を拾う可能性があるため)。
+ */
+export async function createDatabaseOrAdopt<T extends { id: string }>(
+  body: Record<string, unknown>,
+  refind: () => Promise<string | null>
+): Promise<{ id: string; created: boolean; response?: T }> {
+  try {
+    const created = await notionRequest<T>("POST", "/databases", body);
+    return { id: created.id, created: true, response: created };
+  } catch (e) {
+    if (!(e instanceof NotionUnknownResultError)) throw e;
+    const found = await refind();
+    if (!found) throw e;
+    return { id: found, created: false };
+  }
 }
 
 /** key 完全一致の既存ページを返す。複数なら保全物を勝手に選ばず停止する。 */

@@ -24,6 +24,18 @@ export interface MarginData {
   pdfUrl: string;
 }
 
+/**
+ * 保存前の検証 (純関数)。週・行・物理原本のいずれかが空なら throw する。
+ * 全 PUT (R2) より前に呼ぶこと — 保管失敗時の部分保存を防ぐため。
+ */
+export function validateMarginData(data: MarginData): void {
+  if (!data.week) throw new Error("margin parse empty: 申込週が読めません");
+  if (data.rows.length === 0) throw new Error("margin parse empty: 行が 0 件です");
+  if (data.pdfBytes.byteLength === 0) {
+    throw new Error("margin pdf empty: 原本バイト列が空です (保管できない)");
+  }
+}
+
 // 一覧ページから syumatsu*.pdf のリンクを抜き出す純関数。
 // stamp は `syumatsu2026091800.pdf` の `2026091800` 部分 (日付 YYYYMMDD + `00`)。
 export function extractMarginPdfLinks(html: string): Array<{ url: string; stamp: string }> {
@@ -70,7 +82,9 @@ export async function marginPdfUrlForWeek(yyyymmdd: string): Promise<string> {
 
 /**
  * 保存済み週 (R2 `margin/weeks.json` の内容) と今回の週から、欠落週を列挙する純関数。
- * 週ラベルは申込金曜 (YYYY-MM-DD)。保存済みの最大週と今回週の間の金曜を返す。
+ * 週ラベルは申込金曜 (YYYY-MM-DD)。保存済みと今回週の両端を結ぶ 7 日刻みの
+ * 期待週のうち、保存済みになく今回でもない週を返す。末尾の欠落だけでなく
+ * 区間内部の欠落 (7/3・7/10 の実例) も検出する。
  * 7/3・7/10 のように土曜 job を落とした週は後続の最新のみ取得で永久に飛ばされる
  * ため、欠落の検出だけでも明示する (推測補完はしない)。
  */
@@ -79,19 +93,20 @@ export function weeksMissing(savedWeeks: readonly string[], currentWeek: string)
   if (!fmt.test(currentWeek)) {
     throw new Error(`margin week の形式が不正です (YYYY-MM-DD): ${currentWeek}`);
   }
-  let max: string | null = null;
   for (const w of savedWeeks) {
     if (!fmt.test(w)) throw new Error(`margin weeks.json の週形式が不正です (YYYY-MM-DD): ${w}`);
-    if (max === null || w > max) max = w;
   }
-  if (max === null || currentWeek <= max) return [];
+  if (savedWeeks.length === 0) return [];
+  const saved = new Set(savedWeeks);
+  const lo = [...saved].reduce((a, b) => (a < b ? a : b));
+  const hi = [...saved, currentWeek].reduce((a, b) => (a > b ? a : b));
   const out: string[] = [];
-  const d = new Date(`${max}T00:00:00Z`);
+  const d = new Date(`${lo}T00:00:00Z`);
   for (;;) {
-    d.setUTCDate(d.getUTCDate() + 7);
     const w = d.toISOString().slice(0, 10);
-    if (w >= currentWeek) break;
-    out.push(w);
+    if (w >= hi) break;
+    if (w !== lo && !saved.has(w) && w !== currentWeek) out.push(w);
+    d.setUTCDate(d.getUTCDate() + 7);
   }
   return out;
 }

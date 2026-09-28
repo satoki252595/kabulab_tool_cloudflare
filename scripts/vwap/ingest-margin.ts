@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   fetchMargin,
   marginArchiveInput,
+  validateMarginData,
   weeksMissing,
 } from "../../services/vwap-analysis/lib/margin.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
@@ -28,21 +29,28 @@ export function parseWeekArg(argv: readonly string[]): string | undefined {
   return week;
 }
 
-async function main() {
+/**
+ * 週次信用残を 1 週分取り込む。順序は「検証 → 原本保管 → R2 PUT」の固定。
+ * 原本 (Notion 一次データ保管) を先にし、R2 (派生 JSON) は後にする —
+ * 保管に失敗したら何も保存せず終える (R2 だけ残る部分保存を作らない)。
+ * 派生は原本から再生成できるが、逆はできない (7/3・7/10 の実例)。
+ */
+export async function main(): Promise<void> {
   const requestedWeek = parseWeekArg(process.argv);
   const data = await fetchMargin(requestedWeek);
+  validateMarginData(data);
   const { week, rows } = data;
-  if (!week || !rows.length) throw new Error("margin parse empty");
-  await r2Put(`margin/${week}.json`, JSON.stringify({ week, rows }));
+  // 週一覧の読取・検証も全 PUT より前 (壊れた一覧で半端な PUT をしない)。
   const wl = await r2Get("margin/weeks.json");
   const weeks: string[] = wl ? JSON.parse(wl) : [];
   // 最新のみ取得のため土曜 job を落とした週は永久に飛ばされる (7/3・7/10 の実例)。
   // 欠落は推測補完せず、今回の出力に明示して運用者に見せる。
   const missingWeeks = weeksMissing(weeks, week);
+  await recordPrimaryData(marginArchiveInput(data));
+  await r2Put(`margin/${week}.json`, JSON.stringify({ week, rows }));
   if (!weeks.includes(week)) weeks.push(week);
   weeks.sort();
   await r2Put("margin/weeks.json", JSON.stringify(weeks));
-  await recordPrimaryData(marginArchiveInput(data));
   if (missingWeeks.length > 0) {
     console.error(`[margin] 欠落週あり (--week で個別補修可能): ${missingWeeks.join(", ")}`);
   }

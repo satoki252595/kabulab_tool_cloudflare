@@ -452,4 +452,41 @@ describe("notion-archive archive (parentPageId)", () => {
       await expect(queryUniqueRow(DB, FILTER, CTX)).rejects.toThrow(/保全停止 database=db-unique/);
     });
   });
+
+  describe("createDatabaseOrAdopt", () => {
+    const BODY = { parent: { type: "page_id", page_id: "parent-1" }, title: [], properties: {} };
+
+    it("作成成功ならそのまま返す (refind しない)", async () => {
+      route("POST", "/v1/databases", [{ id: "db-new" }]);
+      const refind = vi.fn(async () => "db-other");
+      const { createDatabaseOrAdopt } = await load();
+      await expect(createDatabaseOrAdopt(BODY, refind)).resolves.toEqual({
+        id: "db-new",
+        created: true,
+        response: { id: "db-new" },
+      });
+      expect(refind).not.toHaveBeenCalled();
+    });
+
+    it("結果不明で refind が見つかれば回収する (再 create しない)", async () => {
+      // POST /databases の route を登録しない = fetch が throw (network 不明を模擬)。
+      const refind = vi.fn(async () => "db-found");
+      const { createDatabaseOrAdopt } = await load();
+      await expect(createDatabaseOrAdopt(BODY, refind)).resolves.toEqual({
+        id: "db-found",
+        created: false,
+      });
+      expect(refind).toHaveBeenCalledTimes(1);
+      // POST /databases は 1 回きり (内部再送なし)。
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/databases")).toHaveLength(1);
+    });
+
+    it("結果不明で refind も空なら元のエラーを投げる (自動再 create しない)", async () => {
+      const refind = vi.fn(async () => null);
+      const { createDatabaseOrAdopt } = await load();
+      await expect(createDatabaseOrAdopt(BODY, refind)).rejects.toThrow(/結果不明のため再送しません/);
+      expect(refind).toHaveBeenCalledTimes(1);
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/databases")).toHaveLength(1);
+    });
+  });
 });
