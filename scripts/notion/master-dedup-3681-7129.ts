@@ -102,6 +102,7 @@ const JPX_DELISTED_URL = "https://www.jpx.co.jp/listing/stocks/delisted/";
 interface CliOptions {
   apply: boolean;
   windowConfirmed: boolean;
+  takeOnly: boolean;
   snapshotDir: string;
   paceMs: number;
 }
@@ -110,12 +111,14 @@ function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     apply: false,
     windowConfirmed: false,
+    takeOnly: false,
     snapshotDir: path.join(REPO_ROOT, "tmp/master-dedup-3681-7129"),
     paceMs: 2000,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--apply") opts.apply = true;
+    else if (a === "--take-only") opts.takeOnly = true;
     else if (a === "--window-confirmed") opts.windowConfirmed = true;
     else if (a === "--snapshot-dir") {
       const v = argv[++i];
@@ -132,6 +135,9 @@ function parseArgs(argv: string[]): CliOptions {
       throw new Error(`不明な引数: ${a} (--help を参照)`);
     }
   }
+  if (opts.takeOnly && opts.apply) {
+    throw new Error("--take-only と --apply は同時に指定できません");
+  }
   return opts;
 }
 
@@ -140,8 +146,11 @@ function printHelp(): void {
     [
       "用法:",
       "  plan (既定・読取のみ):  pnpm notion:master-dedup-3681-7129 [-- --snapshot-dir DIR] [--pace-ms MS]",
+      "  take-only (take のみ):  pnpm notion:master-dedup-3681-7129 -- --take-only --snapshot-dir DIR",
       "  apply (書込・要解放):    pnpm notion:master-dedup-3681-7129 -- --apply --window-confirmed",
       "",
+      "take-only は snapshot 取得まで (保管・移行・退避なし)。schema 列挙は",
+      "再走せず snapshotDir の v2-manifest 証拠を SHA 検証の上で再利用する。",
       "apply は財務 writer の解放が親から通知された後に限り実行する。",
       "snapshot/receipt/plan は --snapshot-dir 配下 (既定 tmp/・git 除外) に置く。",
     ].join("\n")
@@ -1086,7 +1095,15 @@ export interface FreshState {
   evidenceBytes?: { zipBytes: Uint8Array; htmlBytes: Uint8Array };
 }
 
-async function readFreshState(paceMs: number): Promise<FreshState> {
+/**
+ * schemaReuse を渡すと incoming schema の全列挙を省き、その証拠を使う
+ * (take-only が v2-manifest 証拠を再利用する経路。plan/apply は省略して
+ * 毎回 fresh 列挙する)。
+ */
+async function readFreshState(
+  paceMs: number,
+  schemaReuse?: IncomingSchemaEvidence
+): Promise<FreshState> {
   const views: Record<string, MasterPageView> = {};
   const pages: Record<string, NotionPage> = {};
   for (const t of TARGETS) {
@@ -1144,7 +1161,12 @@ async function readFreshState(paceMs: number): Promise<FreshState> {
   // 再開でも fresh ZIP は hash が変わるため、上書きすると旧 snapshot SHA 確認が
   // STOP になり元原本も失われる。初回のみ呼出側が snapshotDir へ保存する)。
   const { result: evidence, zipBytes, htmlBytes } = await collectEvidence({ keepDir: null });
-  const incomingSchema = await enumerateMasterIncoming(paceMs);
+  let incomingSchema: IncomingSchemaEvidence;
+  if (schemaReuse) {
+    incomingSchema = schemaReuse;
+  } else {
+    incomingSchema = await enumerateMasterIncoming(paceMs);
+  }
   return {
     views,
     pages,
@@ -1558,6 +1580,104 @@ async function runPlan(opts: CliOptions): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
+// take-only (snapshot 取得まで。保管・移行・退避なし)
+// ---------------------------------------------------------------------------
+
+/**
+ * take-only: guard → take → self-verify まで。Source への書込は一切しない
+ * (snapshotDir の private ファイルのみ)。schema 全列挙は再走せず
+ * v2-manifest 証拠を SHA 検証の上で使う。添付 pin・receipt 証明は既存の
+ * 再利用経路 (SHA 再検証つき) のため再取得しない。
+ */
+async function runTakeOnly(opts: CliOptions): Promise<number> {
+  for (const name of ["Edinetcode.zip", "jpx-delisted.html"]) {
+    if (fs.existsSync(path.join(opts.snapshotDir, name))) {
+      console.log(JSON.stringify({ takeOnly: true, problem: `証拠ファイルが既存のため上書きしません: ${name}` }, null, 2));
+      console.log("新規 snapshotDir (pin は SHA 再検証つきで再利用) で実行してください。");
+      return 2;
+    }
+  }
+  let manifestSchema: IncomingSchemaEvidence;
+  try {
+    manifestSchema = loadManifestSchema(opts.snapshotDir);
+  } catch (e) {
+    console.log(JSON.stringify({ takeOnly: true, problem: (e as Error).message }, null, 2));
+    return 2;
+  }
+  const state = await readFreshState(opts.paceMs, manifestSchema);
+  const { problems, alreadyApplied } = guardFreshState(state);
+  if (alreadyApplied) {
+    console.log(JSON.stringify({ takeOnly: true, alreadyApplied: true }, null, 2));
+    console.log("すでに適用済みのため take は不要です。");
+    return 2;
+  }
+  if (problems.length > 0) {
+    console.log(JSON.stringify({ takeOnly: true, problems }, null, 2));
+    console.log("ガード不一致のため take せず停止します。");
+    return 2;
+  }
+  let baseline: Record<string, KeeperIncomingBaseline>;
+  try {
+    baseline = await loadKeeperBaseline(opts.paceMs, opts.snapshotDir);
+  } catch (e) {
+    console.log(JSON.stringify({ takeOnly: true, problem: (e as Error).message }, null, 2));
+    return 2;
+  }
+  const keeperProblems: string[] = [];
+  for (const t of TARGETS) {
+    const b = baseline[t.code];
+    const keepPage = state.pages[t.keepId];
+    if (!b) {
+      keeperProblems.push(`${t.code}: 保持先 baseline がありません`);
+      continue;
+    }
+    if (!keepPage) {
+      keeperProblems.push(`${t.code}: 保持先ページの fresh 読取がありません`);
+      continue;
+    }
+    keeperProblems.push(...(await guardKeeperIncomingLive(opts.paceMs, t, keepPage, b)));
+  }
+  if (keeperProblems.length > 0) {
+    console.log(JSON.stringify({ takeOnly: true, keeperProblems }, null, 2));
+    console.log("保持先ガード不一致のため take せず停止します。");
+    return 2;
+  }
+  saveFreshEvidence(opts.snapshotDir, state.evidenceBytes);
+  const taken = await takeSnapshot(opts.paceMs, opts.snapshotDir, state, baseline);
+  requireCompleteSnapshotProof(taken.snapshot, emptyReceipt());
+  const keeperFixed = taken.snapshot.keeperIncoming;
+  if (!keeperFixed) throw new Error("take 直後の keeperIncoming がありません (到達不能のはず)");
+  const keeperCounts = Object.fromEntries(
+    Object.entries(keeperFixed).map(([code, k]) => [
+      code,
+      { disclosures: k.disclosures.length, financials: k.financials.length },
+    ])
+  );
+  console.log(
+    JSON.stringify(
+      {
+        takeOnly: true,
+        snapshot: taken.file,
+        sha256: taken.snapshot.sha256,
+        takenAt: taken.snapshot.takenAt,
+        masters: Object.keys(taken.snapshot.masters).length,
+        incomingRows: Object.keys(taken.snapshot.incoming).length,
+        keeperCounts,
+        evidence: {
+          edinet: { sha256: taken.snapshot.evidence.edinet.sha256, bytes: taken.snapshot.evidence.edinet.bytes },
+          jpx: { sha256: taken.snapshot.evidence.jpx.sha256, bytes: taken.snapshot.evidence.jpx.bytes },
+        },
+        schemaEnumeratedAt: taken.snapshot.incomingSchema.enumeratedAt,
+      },
+      null,
+      2
+    )
+  );
+  console.log("take 完了 (保管・移行なし)。physical grant 申請に進めます。");
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // apply (書込。要 --window-confirmed)
 // ---------------------------------------------------------------------------
 
@@ -1791,6 +1911,64 @@ export async function loadKeeperBaseline(
   const bytes = await downloadNotionFileBytes(snaps[0].url, snaps[0].name);
   const v1doc = JSON.parse(Buffer.from(bytes).toString("utf8")) as SnapshotDoc;
   return extractKeeperBaselineFromV1(v1doc, receipt);
+}
+
+/**
+ * take-only が再利用する v2-manifest 証拠 (take 準備の readonly capture)。
+ * schema 全列挙 (8378) の再走を避けるため、内部 SHA で自己検証できる
+ * 受入済み実証跡を使う。SHA は Root 受入値に固定。ファイル自体は
+ * snapshotDir の private 証拠 (git 除外)。
+ */
+const TAKE_MANIFEST_FILE = "v2-manifest-20260928.json";
+const TAKE_MANIFEST_SHA256 = "b3f6a5d0e88024b1411fc5e4dbf80b717174b50947e7a526c26fbc141fab1e20";
+
+/**
+ * manifest 文書の検証と incomingSchema 抽出 (純粋)。
+ * 内部 SHA の CAS 自己検証 + 受入 SHA 照合・形状・provenance 会計を通し、
+ * 欠ければ throw する。未知 hit の有無は guard 側 (`guardIncomingSchema`)
+ * が判定する。
+ */
+export function verifyManifestSchema(docText: string, wantSha256: string): IncomingSchemaEvidence {
+  const doc = JSON.parse(docText) as { kind?: unknown; incomingSchema?: unknown; sha256?: unknown };
+  if (doc.kind !== "v2-take-manifest") {
+    throw new Error(`v2-manifest の kind が不正です got=${String(doc.kind)}`);
+  }
+  const { sha256: _drop, ...rest } = doc;
+  void _drop;
+  const rehash = sha256HexUtf8(stableStringify(rest));
+  if (rehash !== doc.sha256) {
+    throw new Error("v2-manifest の CAS 自己検証に失敗しました (hash 不一致)");
+  }
+  if (doc.sha256 !== wantSha256) {
+    throw new Error("v2-manifest が受入 SHA と不一致です (別 manifest の疑い)");
+  }
+  const s = doc.incomingSchema as IncomingSchemaEvidence | undefined;
+  if (!s || typeof s !== "object") throw new Error("v2-manifest に incomingSchema がありません");
+  if (typeof s.enumeratedAt !== "string" || s.enumeratedAt === "") {
+    throw new Error("v2-manifest の incomingSchema.enumeratedAt がありません");
+  }
+  if (!Number.isInteger(s.dbCount) || s.dbCount <= 0 || !Array.isArray(s.hits)) {
+    throw new Error("v2-manifest の incomingSchema の形が不正です");
+  }
+  const prov = s.schemaProvenance;
+  if (
+    !prov ||
+    !Number.isInteger(prov.searchSchemaUsed) ||
+    !Number.isInteger(prov.getSchemaUsed) ||
+    prov.searchSchemaUsed + prov.getSchemaUsed !== s.dbCount
+  ) {
+    throw new Error("v2-manifest の schema provenance が不完全です");
+  }
+  return s;
+}
+
+/** snapshotDir の v2-manifest から incomingSchema を読む (SHA 固定)。 */
+export function loadManifestSchema(snapshotDir: string): IncomingSchemaEvidence {
+  const p = path.join(snapshotDir, TAKE_MANIFEST_FILE);
+  if (!fs.existsSync(p)) {
+    throw new Error(`v2-manifest が無いため停止します: ${p}`);
+  }
+  return verifyManifestSchema(fs.readFileSync(p, "utf8"), TAKE_MANIFEST_SHA256);
 }
 
 /**
@@ -3305,6 +3483,10 @@ async function main(): Promise<void> {
   if (opts.apply && !opts.windowConfirmed) {
     console.error("apply には --window-confirmed が必要です (writer 解放の通知後に実行)。");
     process.exit(3);
+  }
+  if (opts.takeOnly) {
+    const code = await runTakeOnly(opts);
+    process.exit(code);
   }
   if (opts.apply) {
     const code = await runApply(opts);

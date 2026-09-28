@@ -107,3 +107,7 @@ live keeper 7129 の開示が 11 (v1・live の 11 集合完全一致・全行 k
   実 receipt 11 行の parse もオフライン確認 (code・件数・SHA 先頭のみ表示)。
   `pnpm typecheck`/`pnpm lint` 緑。`pnpm test` 全体: 207 ファイル・
   3089 pass・347 skip・0 fail で緑。live take・実 apply は grant 待ち
+- 追補 `--take-only`: snapshot 取得までの readonly 入口 (保管・移行・退避
+  なし)。schema 全列挙は再走せず v2-manifest 証拠を内部 SHA 自己検証+
+  受入 SHA 照合の上で再利用する。証拠ファイル既存時は上書きせず STOP。
+  回帰 +2 件 (manifest 検証)。全体 3091 pass・0 fail で緑

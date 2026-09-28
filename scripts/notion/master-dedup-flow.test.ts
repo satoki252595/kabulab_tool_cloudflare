@@ -29,6 +29,7 @@ import {
   pageFilesRefsOf,
   pageProofsEqual,
   parseKeep11Receipt,
+  verifyManifestSchema,
   queryDbAll,
   readRelationFull,
   requireCompleteSnapshotProof,
@@ -889,6 +890,55 @@ describe("master-dedup 実 flow 回帰", () => {
       expect(() =>
         extractKeeperBaselineFromV1(v1, { ...receipt, rowIds: ["kd0", "kd-ghost"] })
       ).toThrow(/開示集合が不一致/);
+    });
+
+    it("v2-manifest は CAS 自己検証+受入 SHA 照合の上で schema を抽出する", () => {
+      const body = {
+        kind: "v2-take-manifest",
+        incomingSchema: {
+          enumeratedAt: "2026-09-28T19:35:28.707Z",
+          dbCount: 2,
+          hits: knownSchemaHits().slice(0, 2),
+          schemaProvenance: { searchSchemaUsed: 2, getSchemaUsed: 0 },
+        },
+      };
+      const doc = JSON.stringify({ ...body, sha256: sha256HexUtf8(stableStringify(body)) });
+      const s = verifyManifestSchema(doc, sha256HexUtf8(stableStringify(body)));
+      expect(s.dbCount).toBe(2);
+      expect(s.hits.length).toBe(2);
+      const tampered = JSON.stringify({
+        ...body,
+        incomingSchema: { ...body.incomingSchema, dbCount: 3 },
+        sha256: sha256HexUtf8(stableStringify(body)),
+      });
+      expect(() => verifyManifestSchema(tampered, sha256HexUtf8(stableStringify(body)))).toThrow(
+        /CAS 自己検証/
+      );
+      expect(() => verifyManifestSchema(doc, "0".repeat(64))).toThrow(/受入 SHA と不一致/);
+    });
+
+    it("v2-manifest の kind・形状・provenance 不備は STOP する", () => {
+      const withSha = (body: Record<string, unknown>) => {
+        const sha = sha256HexUtf8(stableStringify(body));
+        return { text: JSON.stringify({ ...body, sha256: sha }), sha };
+      };
+      const badKind = withSha({ kind: "other", incomingSchema: {} });
+      expect(() => verifyManifestSchema(badKind.text, badKind.sha)).toThrow(/kind が不正/);
+      const noProv = withSha({
+        kind: "v2-take-manifest",
+        incomingSchema: { enumeratedAt: "2026-09-28T00:00:00.000Z", dbCount: 2, hits: [] },
+      });
+      expect(() => verifyManifestSchema(noProv.text, noProv.sha)).toThrow(/provenance が不完全/);
+      const badSum = withSha({
+        kind: "v2-take-manifest",
+        incomingSchema: {
+          enumeratedAt: "2026-09-28T00:00:00.000Z",
+          dbCount: 2,
+          hits: [],
+          schemaProvenance: { searchSchemaUsed: 1, getSchemaUsed: 0 },
+        },
+      });
+      expect(() => verifyManifestSchema(badSum.text, badSum.sha)).toThrow(/provenance が不完全/);
     });
   });
 
