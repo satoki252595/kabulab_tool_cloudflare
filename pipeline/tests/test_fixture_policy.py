@@ -37,6 +37,7 @@ ALLOWED: frozenset[str] = frozenset(
         "pipeline/tests/fixtures/edinet/context-unit/6269.tsv",
         "pipeline/tests/fixtures/edinet/context-unit/6269-ratio.tsv",
         "pipeline/tests/fixtures/edinet/context-unit/7951.tsv",
+        "pipeline/tests/fixtures/edinet/context-unit/7384.tsv",
         "pipeline/tests/fixtures/edinet/context-unit/manifest.json",
         "pipeline/tests/fixtures/edinet/context-unit/tdnet.source.txt",
         "pipeline/tests/fixtures/edinet/context-unit/README.md",

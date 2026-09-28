@@ -57,5 +57,20 @@
       "equity_ratio_pct": 74.4,
       "bps": 2499.74
     }
+  },
+  {
+    "file": "7384.tsv",
+    "datatype": "csv",
+    "code": "7384",
+    "page_id": "392d74ff-84cd-8127-96f3-c1a56299ab1e",
+    "raw_sha256": "accadc10764b6eeba6355764e0e1538d855a96546ea7f711a7f1bb24d02af413",
+    "raw_url": "https://api.edinet-fsa.go.jp/api/v2/documents/S100UTIN?type=5",
+    "fiscal_period_end": "2024-09-30",
+    "disclosure_type": "中間",
+    "accounting_standard": "日本基準",
+    "expected": {
+      "bps": 5918.24,
+      "equity_ratio_pct": 2.81
+    }
   }
 ]

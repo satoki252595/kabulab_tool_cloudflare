@@ -290,7 +290,7 @@ def _unit_allowed(unit: str, field: str) -> bool:
 
 def _pick_value(
     df: pd.DataFrame, candidates: tuple[str, ...], *, field: str,
-    forecast: bool, next_year: bool = False
+    forecast: bool, next_year: bool = False, disclosure_type: str | None = None
 ) -> float | None:
     """会社全体・円建て・適切な単位だけを選ぶ。多義的な数値は欠損にする。"""
     if df.empty:
@@ -298,6 +298,10 @@ def _pick_value(
     df = df[df["element"].map(_local_name).isin(candidates)]
     if df.empty:
         return None
+    interim_instant_present = (
+        not forecast and disclosure_type == "中間" and field in ("bps", "equity_ratio_pct")
+        and df["context_ref"].str.startswith("InterimInstant").any()
+    )
     df = df[
         df.apply(lambda row: _company_wide(row, field), axis=1)
         & df["unit"].map(lambda unit: _unit_allowed(unit, field))
@@ -322,6 +326,11 @@ def _pick_value(
             sel = rows[rows["consolidated"] == consolidated]
             # 四半期損益は累計を使う。単独3か月と同じ勘定でも混ぜない。
             if not forecast:
+                # CSVには時点日がない。BS項目は当該期のInstantを使い、
+                # 中間期末と年度末が同じ原本にあっても混ぜない。
+                if interim_instant_present:
+                    # 不明unit/nilで当中間期末を採れなくても年度末で埋めない。
+                    sel = sel[sel["context_ref"].str.startswith("InterimInstant")]
                 accumulated = sel[sel["context_ref"].str.startswith(("CurrentYTD", "CurrentAccumulated", "InterimDuration"))]
                 if not accumulated.empty:
                     same_start = sel["period_start"].ne("") & sel["period_start"].isin(accumulated["period_start"])
@@ -494,7 +503,7 @@ def tidy_to_financial_record(
     for field, candidates in ELEMENT_CANDIDATES.items():
         if field == "dps":
             continue
-        num = _pick_value(actual, candidates, field=field, forecast=False)
+        num = _pick_value(actual, candidates, field=field, forecast=False, disclosure_type=dtype)
         if num is not None and field in _RATIO_FIELDS:
             num *= 100.0  # pure比率だけを%へ確定変換。perShare等の誤unitを採らない。
         values[field] = num
