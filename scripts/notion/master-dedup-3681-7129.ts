@@ -549,6 +549,23 @@ async function captureBlock(
 }
 
 /**
+ * incoming 候補の membership 判定 (純粋関数)。
+ * FWD-only raw ref (db raw_files) の retire absence は full 配列で証明済みの
+ * no-op evidence として snapshot に保持する (ops 除外は retire 絞りで成立)。
+ * reverse 発見行 (disclosures/financials) の absence は同時変更として STOP。
+ * membership 未取得・不完全 cursor は到達前に readRelationFull が STOP する。
+ */
+export function classifyIncomingMembership(
+  db: IncomingDb,
+  hasRetire: boolean,
+  rowPageId: string
+): "linked" | "detached-fwd-evidence" {
+  if (hasRetire) return "linked";
+  if (db === "raw_files") return "detached-fwd-evidence";
+  throw new Error(`incoming ${db} 行に退避 ID がありません (同時変更の疑い): ${rowPageId}`);
+}
+
+/**
  * 1 ページの完全 proof (本文全 capture + files 添付 inventory)。
  * 全ページ送り・再帰・実ダウンロードを通し、欠落があれば STOP する。
  */
@@ -609,8 +626,9 @@ export async function verifyFreshPageProof(
 
 /**
  * entry 共通の fresh proof 再検証 (resume/already-applied の D1 前に接続)。
- * master 全ページ + 補足全ページの fresh を取り直し、snapshot proof と照合する。
- * relation の増減は proof 対象外 (本文・添付のみ) のため、移行中間状態でも比較できる。
+ * master 全ページ + 補足全ページ + incoming 全件の fresh を取り直し、
+ * snapshot proof と照合する。relation の増減は proof 対象外 (本文・添付のみ)
+ * のため、移行中間状態でも比較できる。
  */
 async function verifyEntryFreshProofs(
   paceMs: number,
@@ -633,6 +651,12 @@ async function verifyEntryFreshProofs(
     }
     const p = snapshot.supplementProof?.[id];
     await verifyFreshPageProof(paceMs, snapshotDir, id, freshPage, "補足の本文・添付", p?.body, p?.files);
+  }
+  // incoming 全件の fresh proof 照合 (移行で relation は変わるが本文・添付は不変のはず)。
+  for (const rowId of Object.keys(snapshot.incoming)) {
+    const freshPage = await getPage(paceMs, rowId);
+    const e = snapshot.incoming[rowId];
+    await verifyFreshPageProof(paceMs, snapshotDir, rowId, freshPage, "incoming の本文・添付", e.body, e.files);
   }
 }
 
@@ -1610,11 +1634,11 @@ async function takeSnapshot(
     const hasRetire = relationFull.some((id) =>
       TARGETS.some((t) => normalizePageId(id) === normalizePageId(t.retireId))
     );
-    if (!hasRetire) {
-      throw new Error(
-        `snapshot 中止: row=${exp.rowPageId} の実配列に退避 ID がありません (同時変更の疑い)`
-      );
-    }
+    // FWD-only raw ref の retire absence (実配列で証明済み。preview のみでは
+    // 到達しない) は no-op evidence として snapshot に保持する (本文・添付は
+    // complete 取得。全履歴・別 stock refs も relationFull に保存)。
+    // reverse 発見行の absence は従来通り STOP。
+    classifyIncomingMembership(exp.db, hasRetire, exp.rowPageId);
     // 非対象 body の後判定用に子ブロック像も物理 snapshot する。
     const children = await listChildrenFirst(paceMs, exp.rowPageId);
     if (children.has_more) {
@@ -1663,7 +1687,8 @@ async function takeSnapshot(
   return { snapshot: doc, file };
 }
 
-function buildMigrationOps(snapshot: SnapshotDoc): MigrationOp[] {
+/** snapshot.incoming から移行 ops を導出する。退避を含まない行 (no-op evidence) は ops 対象外。 */
+export function buildMigrationOps(snapshot: SnapshotDoc): MigrationOp[] {
   const ops: MigrationOp[] = [];
   for (const t of TARGETS) {
     // このコードの退避候補にぶら下がる行だけを対象にする。

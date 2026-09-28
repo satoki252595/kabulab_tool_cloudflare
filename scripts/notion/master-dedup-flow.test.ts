@@ -14,6 +14,8 @@ import {
   attachmentDiskName,
   blockFileRefOf,
   blockTextOf,
+  buildMigrationOps,
+  classifyIncomingMembership,
   collectAttachmentInventory,
   expectedArchiveFileNames,
   extractMasterHits,
@@ -1027,6 +1029,76 @@ describe("master-dedup 実 flow 回帰", () => {
           },
         })
       ).toThrow(/本文・添付が変化/);
+    });
+  });
+
+  describe("FWD-only 剥離の no-op evidence (membership)", () => {
+    it("linked・FWD 剥離 evidence・reverse 欠落 STOP を判定する", () => {
+      expect(classifyIncomingMembership("disclosures", true, "d0")).toBe("linked");
+      expect(classifyIncomingMembership("raw_files", false, "r1")).toBe("detached-fwd-evidence");
+      expect(() => classifyIncomingMembership("disclosures", false, "d9")).toThrow(/退避 ID がありません/);
+      expect(() => classifyIncomingMembership("financials", false, "f9")).toThrow(/退避 ID がありません/);
+    });
+
+    it("剥離 FWD 行は snapshot に保持し ops から除外する", () => {
+      const views = baseViews();
+      const s = baseSnapshot(views);
+      s.incoming["d0"] = {
+        db: "disclosures",
+        prop: REL_PROP_MASTER,
+        page: pageFromView(views["3681:retire"]),
+        relationFull: [RETIRE_3681],
+        blockCount: 0,
+        childDatabases: [],
+      };
+      s.incoming["r-detached"] = {
+        db: "raw_files",
+        prop: "関連銘柄マスタ",
+        page: pageFromView(views["3681:retire"]),
+        relationFull: ["ff".repeat(16)],
+        blockCount: 0,
+        childDatabases: [],
+      };
+      const ops = buildMigrationOps(s);
+      expect(ops.map((o) => o.rowPageId)).toEqual(["d0"]);
+      // snapshot 自体は剥離行を証拠として保持する。
+      expect(Object.keys(s.incoming).sort()).toEqual(["d0", "r-detached"]);
+    });
+
+    it("incoming entry の CAS negative (改竄・再 hash なし) は gate が STOP する", () => {
+      const s = baseSnapshot(baseViews());
+      s.version = 2;
+      for (const m of Object.values(s.masters)) {
+        m.body = { fullCapture: true, blocks: [], sha256: "b".repeat(64) };
+        m.files = { complete: true, files: [], sha256: "f".repeat(64) };
+      }
+      s.incoming["d0"] = {
+        db: "disclosures",
+        prop: REL_PROP_MASTER,
+        page: pageFromView(baseViews()["3681:retire"]),
+        relationFull: [RETIRE_3681],
+        blockCount: 0,
+        childDatabases: [],
+        body: { fullCapture: true, blocks: [], sha256: "b".repeat(64) },
+        files: { complete: true, files: [], sha256: "f".repeat(64) },
+      };
+      s.supplementProof = {};
+      s.incomingSchema = {
+        enumeratedAt: "2026-09-28T00:00:00.000Z",
+        dbCount: 12,
+        hits: knownSchemaHits(),
+        schemaProvenance: { searchSchemaUsed: 12, getSchemaUsed: 0 },
+      };
+      const { sha256: _drop, ...rest } = s;
+      void _drop;
+      s.sha256 = sha256HexUtf8(stableStringify(rest));
+      // entry 改竄 (再 hash なし) → CAS 自己検証で STOP。
+      s.incoming["d0"].files = {
+        complete: true,
+        files: [{ where: "Files", name: "x.pdf", origin: "hosted", bytesSha256: "9".repeat(64) }],
+        sha256: "f".repeat(64),
+      };
+      expect(() => requireCompleteSnapshotProof(s, emptyReceipt())).toThrow(/CAS 自己検証/);
     });
   });
 
