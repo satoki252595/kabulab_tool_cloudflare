@@ -118,7 +118,7 @@
 | 対外及び対内証券売買契約等の状況 | mof.go.jp/policy/international_policy | 海外投資家の証券取得-処分(真のネットフローに最も近い) | 週次(旬)+月次 | CSV | 無料 | attribution_required | Phase 2 予定 (R4-a 主軸) |
 | 国際収支統計 | mof.go.jp/policy/international_policy/reference/balance_of_payments | 直接投資・証券投資の地域別内訳 | 月次 | CSV/API | 無料 | attribution_required | Phase 3 予定 |
 | e-Stat API(R2再掲) | 上記 | 政府統計アクセス層 | — | API | 無料 | 不明 | Phase 3 予定 |
-| IMF CPIS | db.nomics.world/IMF/CPIS | 国別対外証券投資残高(ストック) | 四半期 | SDMX API | 無料 | attribution_required | Phase 5 検討 |
+| IMF pip (旧称 CPIS) | data.imf.org/en/datasets/IMF.STA:PIP | 国別対外証券投資残高(ストック) | 半期 | SDMX API | 無料 | attribution_required | Phase 5 検討 |
 | IMF COFER | data.imf.org | 外貨準備通貨構成(世界計のみ) | 四半期 | SDMX API | 無料 | 不明 | Phase 5 検討 |
 | BIS統計(R1再掲) | data.bis.org | 国際与信・国際債券残高 | 四半期 | SDMX API | 無料 | attribution_required | Phase 5 検討 |
 | 米財務省TIC | home.treasury.gov/data/treasury-international-capital | 海外投資家の米国証券月次純購入額(真のフロー) | 月次 | CSV/Excel | 無料 | ok(public domain) | Phase 5 検討 (対米国のみ) |
@@ -223,7 +223,7 @@ DB へのつなぎ (`services/moneyflow/lib/adapters/<key>.ts`)」の 2 層で�
 | JVCEA 会員統計 (暗号資産) | `jvcea-crypto` | R3 | 月次 | 156 | 要確認 |
 | CoinGecko グローバル | `coingecko-global` | R3 | 日次 (取込日) | 13 | 要確認 (表示時「Powered by CoinGecko」必須) |
 | CFTC COT 円・日経平均先物 | `cftc-cot-jpy` | R3/R4 | 週次 | 10 | public-domain |
-| IMF CPIS (DBnomics 経由) | `imf-cpis` | R4 | 半期 | 最大396 | attribution-required |
+| IMF pip (公式API直接) | `imf-cpis` | R4 | 半期 | 最大396 | attribution-required |
 | BIS 国際銀行統計 (所在地ベース) | `bis-banking` | R4 | 四半期 | 約450 | attribution-required |
 | World Bank 上場企業時価総額 | `worldbank-marketcap` | R4 | 年次 | 127 (最大154) | attribution-required (CC BY 4.0) |
 | 世界の主要指数・為替・金利・金・原油 (Yahoo) | `global-indices` | R4 | 週次 | 最大221 | personal-only |
@@ -256,6 +256,8 @@ IMF CPIS・BIS・World Bank・日銀ストック表は **残高 (ストック)**
   確認し (Derived 5系列・計42点)、`null` と同じ欠損として読み飛ばすよう修正
   (0埋めなし・`"NA"` 以外の文字列は従来どおり停止)。387行で成功。
   DBnomics 側のミラーは 2024-S1 (更新日 2025-04-08) で止まったまま。
+  同日、取得元を IMF 公式 SDMX API (pip, 旧称 CPIS) 直接へ移行し、
+  ミラー経由の実装は削除した。改訂差分と系列ごとの最新期のずれは応答の実測で扱う。
 - **JSDA**: 「発行額は払込日ベース」の根拠 PDF (hako.pdf) は未取得。負値 (△表記) が現れると解析が止まる
   (現状のデータには無い)。
 - **財務省**: 指標定義の「速報値で確報改定を反映しない」の記述は一次資料で未確認。

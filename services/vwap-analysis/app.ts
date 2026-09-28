@@ -3,6 +3,7 @@
 // フロント(SPA)は public/vwap-analysis/ を ASSETS が配信。ここは /api/* だけ。
 import { Hono } from "hono";
 import { fetchYahooChartRaw } from "../../src/shared/yahoo/client.js";
+import { selectMarginRows } from "./lib/margin-select.js";
 
 export const BASE_PATH = "/vwap-analysis";
 
@@ -62,16 +63,22 @@ app.get("/api/margin", async (c) => {
   const cached = (o: unknown) =>
     new Response(JSON.stringify(o), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=86400" } });
   const wl = await c.env.BUCKET.get("margin/weeks.json");
-  if (!wl) return cached({ code, weeks: [] });
+  if (!wl) return cached({ code, weeks: [], ambiguousWeeks: [] });
   const weeks: string[] = JSON.parse(await wl.text()).slice(-n);
   const rows = await Promise.all(weeks.map(async (w) => {
     const o = await c.env.BUCKET.get(`margin/${w}.json`);
     if (!o) return null;
     const snap = JSON.parse(await o.text());
-    const row = (snap.rows || []).find((r: { code: string }) => r.code === code);
-    return row ? { week: w, ...row } : null;
+    // 同一コードの複数行 (旧取込の種類株崩壊) はどれが普通株か JSON だけでは
+    // 区別できないため、値無しで除外週として明示する (先頭行の黙った採用をしない)。
+    // 正常な週・銘柄は従来どおり返す (補完・除去・書換えをしない)。
+    const sel = selectMarginRows((snap.rows || []) as Array<{ code: string; sell: number; buy: number; sell_chg: number; buy_chg: number }>, code);
+    if (sel.status === "ambiguous") return { week: w, ambiguous: true as const };
+    if (sel.status === "missing") return null;
+    return { week: w, ...sel.row };
   }));
-  return cached({ code, weeks: rows.filter((r) => r !== null) });
+  const ambiguousWeeks = rows.filter((r): r is { week: string; ambiguous: true } => r !== null && "ambiguous" in r).map((r) => r.week);
+  return cached({ code, weeks: rows.filter((r) => r !== null && !("ambiguous" in r)), ambiguousWeeks });
 });
 
 export default app;
