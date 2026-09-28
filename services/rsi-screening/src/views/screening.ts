@@ -127,12 +127,28 @@ export function screeningPage(props: {
     })
     .join("");
 
+  // 総数は service が同一 WHERE/JOIN の COUNT で数えた全件 (F-07 同型)。
+  // rows.length は limit/offset 適用後の表示件数。途切れているときは
+  // 返却件数と offset を別に明記する (offset が全件を超えた空表示を含む)。
+  const shown = results.length;
+  const total = result.totalMatched;
+  const countNote =
+    shown >= total
+      ? ""
+      : query.offset === 0
+        ? `先頭${shown}件を表示（全${total}件）`
+        : shown > 0
+          ? `${query.offset + 1}〜${query.offset + shown}件目を表示（全${total}件）`
+          : `全${total}件中 ${query.offset + 1}件目以降に表示できる行がありません`;
+
   const tableOrEmpty =
     results.length === 0
       ? `<div class="empty">${
-          result.staleExcluded > 0
-            ? `条件に合致した ${result.staleExcluded} 銘柄はすべて ${result.maxAgeDays} 日超の古い算出値で、鮮度不足として除外しました`
-            : "条件に合致する銘柄が見つかりません"
+          result.totalMatched > 0
+            ? `全${result.totalMatched}件中、${query.offset + 1}件目以降に表示できる行がありません`
+            : result.staleExcluded > 0
+              ? `条件に合致した ${result.staleExcluded} 銘柄はすべて ${result.maxAgeDays} 日超の古い算出値で、鮮度不足として除外しました`
+              : "条件に合致する銘柄が見つかりません"
         }</div>`
       : `<div style="overflow-x:auto"><table>
           <thead>
@@ -193,8 +209,9 @@ export function screeningPage(props: {
         <span class="pill">下位${h(String(query.percentileMax))}%</span>
         <span class="pill">${query.blueChip ? "優良株のみ" : "全銘柄"}</span>
         <span style="font-family:var(--font-mono);font-size:13px;color:var(--text);font-weight:700">
-          ${results.length} HITS
+          ${result.totalMatched} HITS
         </span>
+        ${countNote === "" ? "" : `<span style="font-size:13px;color:var(--text-secondary)">${h(countNote)}</span>`}
         ${
           result.staleExcluded > 0
             ? `<span class="pill" style="border-color:var(--danger);color:var(--danger)">${tip(

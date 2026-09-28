@@ -1,8 +1,10 @@
 # 市場系保存の根本原因修正と隔離検証（2026-09-28）
 
 市場監査（`data-audit-market-2026-09-28.md`）の残存 finding のうち、
-9/29 延期（JPX 新様式・信用残日次化の 2 件）を除く全件の根本原因と全類似を
-確認し、共有境界で修正した。stage は code/隔離のみ。
+本 lane が所有する共有境界（§1〜§7）の根本原因を code/隔離 stage で修正した。
+9/29 延期（JPX 新様式・信用残日次化の 2 件）と、所有外の同型
+（rsi-screening・yuho-quant の COUNT/表示。§3・末尾の依頼節に記録）は
+本 log の対象外。source への適用は未実施（各節の plan どおり、要 writer 枠）。
 本番 D1/R2/Notion への書込・archive・normal job 起動は行わない。
 base `origin/main` = `e5e80c6` (#157)、branch `fix/market-storage-root-causes-20260928`。
 
@@ -58,6 +60,7 @@ base `origin/main` = `e5e80c6` (#157)、branch `fix/market-storage-root-causes-2
 - 同型調査：rsi-screening の `${results.length} HITS`（limit/offset 付き）、
   yuho-quant の `/api/screening*`（`count: rows.length`＋`opts.limit`）も同型。
   いずれも本 lane の所有外のため修正せず、owner 決定を root へ依頼する。
+  （追記 9/28：別 lane が本 branch 上で対応。完了・検証の正は当該 lane の報告）
   financial-math EMH（totalMatched/表示分離）と ir-catalog（別 COUNT）は正形。
   swing dashboard の母集団なし COUNT は意図的（rows_read 抑制・コメント済み）。
 - 隔離検証：view 5 件＋実 SQLite の app-level で 201 件通過→「全201件」＋

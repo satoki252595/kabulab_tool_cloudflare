@@ -43,7 +43,7 @@ describe("screeningPage の鮮度表示", () => {
   it("鮮度不足で除外した件数を出す", () => {
     const html = screeningPage({
       query,
-      result: { rows: [row()], staleExcluded: 49, maxAgeDays: 7 },
+      result: { rows: [row()], totalMatched: 1, staleExcluded: 49, maxAgeDays: 7 },
       now: NOW,
     });
 
@@ -54,7 +54,7 @@ describe("screeningPage の鮮度表示", () => {
   it("除外が無いときは除外表示を出さない", () => {
     const html = screeningPage({
       query,
-      result: { rows: [row()], staleExcluded: 0, maxAgeDays: 7 },
+      result: { rows: [row()], totalMatched: 1, staleExcluded: 0, maxAgeDays: 7 },
       now: NOW,
     });
 
@@ -64,7 +64,7 @@ describe("screeningPage の鮮度表示", () => {
   it("全件が鮮度不足なら空状態でその理由を述べる", () => {
     const html = screeningPage({
       query,
-      result: { rows: [], staleExcluded: 3, maxAgeDays: 7 },
+      result: { rows: [], totalMatched: 0, staleExcluded: 3, maxAgeDays: 7 },
       now: NOW,
     });
 
@@ -75,7 +75,7 @@ describe("screeningPage の鮮度表示", () => {
   it("母数と算出日 (経過日数) を行に出す", () => {
     const html = screeningPage({
       query,
-      result: { rows: [row({ percentileSampleBars: 461 })], staleExcluded: 0, maxAgeDays: 7 },
+      result: { rows: [row({ percentileSampleBars: 461 })], totalMatched: 1, staleExcluded: 0, maxAgeDays: 7 },
       now: NOW,
     });
 
@@ -90,6 +90,7 @@ describe("screeningPage の鮮度表示", () => {
       query,
       result: {
         rows: [row({ percentileSampleBars: null })],
+        totalMatched: 1,
         staleExcluded: 0,
         maxAgeDays: 7,
       },
@@ -97,5 +98,54 @@ describe("screeningPage の鮮度表示", () => {
     });
 
     expect(html).not.toContain(">0</td>");
+  });
+});
+
+describe("screeningPage の総数表示 (F-07 同型)", () => {
+  it("HITS は全件数で、途切れるときは先頭件数を明記する", () => {
+    const html = screeningPage({
+      query,
+      result: { rows: [row()], totalMatched: 201, staleExcluded: 0, maxAgeDays: 7 },
+      now: NOW,
+    });
+
+    expect(html).toContain("201 HITS");
+    expect(html).toContain("先頭1件を表示（全201件）");
+  });
+
+  it("途切れなしでは注記を出さない", () => {
+    const html = screeningPage({
+      query,
+      result: { rows: [row()], totalMatched: 1, staleExcluded: 0, maxAgeDays: 7 },
+      now: NOW,
+    });
+
+    expect(html).toContain("1 HITS");
+    expect(html).not.toContain("件を表示（全");
+    expect(html).not.toContain("件目を表示");
+  });
+
+  it("offset 適用時は表示範囲を件目で明記する", () => {
+    const offsetQuery = screeningQuerySchema.parse({ offset: 200 });
+    const html = screeningPage({
+      query: offsetQuery,
+      result: { rows: [row()], totalMatched: 201, staleExcluded: 0, maxAgeDays: 7 },
+      now: NOW,
+    });
+
+    expect(html).toContain("201 HITS");
+    expect(html).toContain("201〜201件目を表示（全201件）");
+  });
+
+  it("offset が全件を超えた空表示では「該当なし」と言わない", () => {
+    const offsetQuery = screeningQuerySchema.parse({ offset: 201 });
+    const html = screeningPage({
+      query: offsetQuery,
+      result: { rows: [], totalMatched: 201, staleExcluded: 0, maxAgeDays: 7 },
+      now: NOW,
+    });
+
+    expect(html).toContain("全201件中、202件目以降に表示できる行がありません");
+    expect(html).not.toContain("条件に合致する銘柄が見つかりません");
   });
 });

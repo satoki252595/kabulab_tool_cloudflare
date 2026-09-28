@@ -66,10 +66,12 @@ export interface OverseasScreeningView {
   opts: ScreenOpts;
   sectors: string[];
   rows: ScreenRow[] | null;
+  /** 条件に合致した全対象件数 (地域絞り込み時は地域条件込み) */
+  totalMatched: number;
 }
 
 export function overseasScreeningPage(v: OverseasScreeningView): string {
-  const { opts, sectors, rows } = v;
+  const { opts, sectors, rows, totalMatched } = v;
 
   const sectorOpts = ["", ...sectors]
     .map(
@@ -185,8 +187,15 @@ export function overseasScreeningPage(v: OverseasScreeningView): string {
       </tr>`;
         })
         .join("");
+      // 総数はクエリが数えた全件 (地域絞り込み時は地域条件込み、F-07 同型)。
+      // 表示は limit 件に限られるので、途切れているときは事実を明記する。
+      const truncatedNote =
+        rows.length < totalMatched
+          ? `<div style="margin:4px 0 14px;font-size:13px;color:var(--text-secondary)">先頭${rows.length}件を表示（全${totalMatched}件）</div>`
+          : "";
       result = `
-  <div class="section-label">RESULT — ${rows.length} 件 (海外売上高比率の高い順${regionSel ? `・${h(regionSel.label)}比率は別列` : ""})</div>
+  <div class="section-label">RESULT — ${totalMatched} 件 (海外売上高比率の高い順${regionSel ? `・${h(regionSel.label)}比率は別列` : ""})</div>
+  ${truncatedNote}
   <p class="disclaimer" style="margin:4px 0 14px">並び替えは「海外売上高比率」の高い順で固定。背景強調は同列に表示します。比率は直近年度ベース。点線の用語にカーソル/タップで説明が出ます。${flag("※年欠落")}=対象期間に欠落年あり。${regionSel ? `<br><b>「${h(regionSel.label)}比率」</b>列は ${h(regionSel.label)} を<b>明示開示している会社のみ</b>。アジア等にまとめて開示している会社は架空値を作らず除外しています。` : ""}</p>
   <div class="table-wrap"><table>
     <thead><tr>

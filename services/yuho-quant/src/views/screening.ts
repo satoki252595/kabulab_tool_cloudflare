@@ -65,12 +65,14 @@ export interface ScreeningView {
   opts: ScreenOpts;
   sectors: string[];
   rows: ScreenRow[] | null;
+  /** 条件に合致した全対象件数 (クエリが同一 WHERE の COUNT で数えた値) */
+  totalMatched: number;
   /** 廃止された旧 URL パラメータが指定された場合の通知 (ルール2: 黙ったフォールバック禁止) */
   deprecated?: string[];
 }
 
 export function screeningPage(v: ScreeningView): string {
-  const { opts, sectors, rows, deprecated = [] } = v;
+  const { opts, sectors, rows, totalMatched, deprecated = [] } = v;
 
   const sectorOpts = ["", ...sectors]
     .map(
@@ -165,8 +167,15 @@ export function screeningPage(v: ScreeningView): string {
       </tr>`;
         })
         .join("");
+      // 総数はクエリが同一 WHERE の COUNT で数えた全件 (F-07 同型)。
+      // 表示は limit 件に限られるので、途切れているときは事実を明記する。
+      const truncatedNote =
+        rows.length < totalMatched
+          ? `<div style="margin:4px 0 14px;font-size:13px;color:var(--text-secondary)">先頭${rows.length}件を表示（全${totalMatched}件）</div>`
+          : "";
       result = `
-  <div class="section-label">RESULT — ${rows.length} 件 (受注高 年率の高い順)</div>
+  <div class="section-label">RESULT — ${totalMatched} 件 (受注高 年率の高い順)</div>
+  ${truncatedNote}
   <p class="disclaimer" style="margin:4px 0 14px">並び替えは「受注高 年率」の高い順で固定。背景強調と警告フラグは同列に表示します。起点額が僅少だと年率は過大に見えます。必ず「直近受注高(億円)」で規模を確認してください。${flag("※起点僅少")}=起点1億円未満 / ${flag("※年欠落")}=対象期間に欠落年あり。点線の用語にカーソル/タップで説明が出ます。</p>
   <div class="table-wrap"><table>
     <thead><tr>

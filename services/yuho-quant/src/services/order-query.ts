@@ -6,7 +6,7 @@
  * (docTypeCode 130) 等で同一会計期末が重複する場合は提出日時が新しい
  * 書類の値を採用する (黙って先頭を選ばない — 明示的に最新を選ぶ)。
  */
-import { and, desc, eq, gt, gte, isNotNull, like, lte, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, isNotNull, like, lte, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
@@ -298,10 +298,23 @@ export interface ScreenRow {
  * - 同率は code 昇順で確定させる。旧実装は DB 返却順の安定ソートで、順序は
  *   未定義だった (クエリに ORDER BY が無い)。
  */
+/** スクリーニング結果 (返却行 + 全対象件数) */
+export interface ScreenResult {
+  /** limit 適用後の返却行 */
+  rows: ScreenRow[];
+  /**
+   * 条件に合致した全対象件数 (limit 適用前)。
+   *
+   * `rows.length` を総数に見せると limit の頭打ちが全件数に見える
+   * (F-07 同型)。行クエリと同一の WHERE/JOIN の別 COUNT が正。
+   */
+  totalMatched: number;
+}
+
 export async function screenOrderGrowth(
   db: Database,
   opts: ScreenOpts
-): Promise<ScreenRow[]> {
+): Promise<ScreenResult> {
   const p = yuhoGrowthProjection;
   const metricCol =
     opts.metric === "orders" ? p.ordOrdersCagr : p.ordBacklogCagr;
@@ -340,7 +353,7 @@ export async function screenOrderGrowth(
     conds.push(gte(fin.dividendYield, opts.minDivYieldPct));
   }
 
-  return db
+  const rows = await db
     .select({
       code: stocks.code,
       name: stocks.name,
@@ -364,6 +377,16 @@ export async function screenOrderGrowth(
     .where(and(...conds))
     .orderBy(desc(metricCol), stocks.code)
     .limit(opts.limit);
+
+  // 全対象件数。行クエリと同一の WHERE/JOIN で数え、limit は掛けない。
+  const [{ totalMatched }] = await db
+    .select({ totalMatched: count() })
+    .from(p)
+    .innerJoin(stocks, eq(p.stockId, stocks.id))
+    .leftJoin(fin, eq(fin.stockId, p.stockId))
+    .where(and(...conds));
+
+  return { rows, totalMatched };
 }
 
 /**

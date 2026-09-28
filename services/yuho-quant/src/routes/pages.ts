@@ -123,12 +123,14 @@ pagesRoute.get(
   async (c) => {
     const opts = toScreenOpts(c.req.valid("query"));
     const db = createDb(c.env.DB);
-    const [rows, sectors] = await Promise.all([
+    const [result, sectors] = await Promise.all([
       screenOrderGrowth(db, opts),
       listSectorsWithOrders(db),
     ]);
     c.header("Cache-Control", LIST_CACHE);
-    return c.html(screeningPage({ opts, sectors, rows }));
+    return c.html(
+      screeningPage({ opts, sectors, rows: result.rows, totalMatched: result.totalMatched })
+    );
   }
 );
 
@@ -138,9 +140,10 @@ pagesRoute.get(
   async (c) => {
     const opts = toScreenOpts(c.req.valid("query"));
     const db = createDb(c.env.DB);
-    const rows = await screenOrderGrowth(db, opts);
+    const { rows, totalMatched } = await screenOrderGrowth(db, opts);
     c.header("Cache-Control", LIST_CACHE);
-    return c.json({ opts, count: rows.length, rows });
+    // count は返却行数 (既存契約を維持)。全対象件数は totalMatched が正。
+    return c.json({ opts, count: rows.length, totalMatched, rows });
   }
 );
 
@@ -209,12 +212,14 @@ pagesRoute.get(
   async (c) => {
     const opts = toOverseasScreenOpts(c.req.valid("query"));
     const db = createDb(c.env.DB);
-    const [rows, sectors] = await Promise.all([
+    const [result, sectors] = await Promise.all([
       screenOverseasGrowth(db, opts),
       listSectorsWithOverseas(db),
     ]);
     c.header("Cache-Control", SCREEN_CACHE);
-    return c.html(overseasScreeningPage({ opts, sectors, rows }));
+    return c.html(
+      overseasScreeningPage({ opts, sectors, rows: result.rows, totalMatched: result.totalMatched })
+    );
   }
 );
 
@@ -224,9 +229,10 @@ pagesRoute.get(
   async (c) => {
     const opts = toOverseasScreenOpts(c.req.valid("query"));
     const db = createDb(c.env.DB);
-    const rows = await screenOverseasGrowth(db, opts);
+    const { rows, totalMatched } = await screenOverseasGrowth(db, opts);
     c.header("Cache-Control", SCREEN_CACHE);
-    return c.json({ opts, count: rows.length, rows });
+    // count は返却行数 (既存契約を維持)。全対象件数は totalMatched が正。
+    return c.json({ opts, count: rows.length, totalMatched, rows });
   }
 );
 
