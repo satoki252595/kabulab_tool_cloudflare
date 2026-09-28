@@ -542,6 +542,17 @@ describe("preflight ガード", () => {
     expect(() => snapshotStockPreimages(inputs, [STOCK_A])).toThrow("missing STOP");
   });
 
+  it.each([
+    ["非 active", "UPDATE core_stocks SET is_active = 0 WHERE id = 101"],
+    ["非 equity", "UPDATE core_stocks SET instrument_type = 'etf' WHERE id = 101"],
+    ["区分 NULL", "UPDATE core_stocks SET instrument_type = NULL WHERE id = 101"],
+  ])("親の取得は母集団述語で絞る (%sは null → snapshot STOP)", async (_name, mutate) => {
+    sqlite.prepare(mutate).run();
+    const inputs = await fetchYieldInputs(db, [STOCK_A]);
+    expect(inputs.parents.get(STOCK_A)).toBeNull();
+    expect(() => snapshotStockPreimages(inputs, [STOCK_A])).toThrow("missing STOP");
+  });
+
   it("親の適格述語は activeEquityCondition() と等価 (区分の値は select しない)", async () => {
     // preflight の親脚 (id・コード・active の値 CAS + equity 述語) が、
     // 正規 helper と同じ行集合を通すことを active×区分の行列で固定する。

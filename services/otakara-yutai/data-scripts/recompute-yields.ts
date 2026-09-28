@@ -16,11 +16,12 @@
  * もので、行全体の作り直しではないため、日付を進めると株価の鮮度を偽る)。
  * 値が変わらない銘柄には UPDATE を打たない (再実行で 0 件・冪等)。
  */
-import { inArray } from "drizzle-orm";
+import { and, inArray } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { calcYutaiYield } from "../../../src/cron/monthly.js";
 import { scoreStock, type ScoringInput } from "../../../src/shared/scoring.js";
+import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
 import { stocks as coreStocks } from "../../../src/shared/db/core-schema.js";
 import { stockFinancials, stockScores, yutaiBenefits } from "../src/db/schema.js";
 // NOTE: atomic-apply.ts と相互 import (関数本体でのみ使い合うため ESM live binding で成立)。
@@ -86,10 +87,10 @@ export type YieldInputs = {
   scores: Map<number, ScoreTriple>;
   /**
    * 親銘柄の同一性 (同一読取で取得)。preflight が銘柄の付け替え・凍結破りを
-   * 止める。行が無い銘柄は snapshot で STOP する (縮めない)。
-   * `instrument_type` の値は select しない (personal-only。ライセンス D-13-6)。
-   * 区分の確認は preflight 側で `activeEquityCondition()` と等価の述語
-   * (値は bind) で行う。
+   * 止める。取得は正規の母集団述語 (`activeEquityCondition()`) で絞り、
+   * 非 active・非 equity・行無しの銘柄は null になって snapshot で STOP する
+   * (縮めない)。`instrument_type` の値は select しない
+   * (personal-only。ライセンス D-13-6。述語内 bind のみ)。
    */
   parents: Map<number, { code: string; isActive: boolean } | null>;
 };
@@ -107,6 +108,9 @@ export async function fetchYieldInputs(
   const parents: YieldInputs["parents"] = new Map();
   for (let i = 0; i < ids.length; i += ID_CHUNK) {
     const chunk = ids.slice(i, i + ID_CHUNK);
+    // 親の取得は正規の母集団述語 (`activeEquityCondition()`) で絞る。
+    // 非 active・非 equity の銘柄はここで null になり、snapshot が STOP する。
+    // `instrument_type` の値は select しない (述語内 bind のみ)。
     const parentRows = await db
       .select({
         stockId: coreStocks.id,
@@ -114,7 +118,7 @@ export async function fetchYieldInputs(
         isActive: coreStocks.isActive,
       })
       .from(coreStocks)
-      .where(inArray(coreStocks.id, chunk));
+      .where(and(inArray(coreStocks.id, chunk), activeEquityCondition()));
     for (const id of chunk) {
       const p = parentRows.find((r) => r.stockId === id);
       parents.set(id, p ? { code: p.code, isActive: p.isActive } : null);
