@@ -13,7 +13,7 @@ describe("notion-archive client retry", () => {
   let originalFetch: typeof globalThis.fetch;
   let originalNow: typeof Date.now;
   let fetchCount: number;
-  let script: Array<{ status: number; retryAfter?: string; body?: unknown }>;
+  let script: Array<{ status: number; retryAfter?: string; body?: unknown; throwMsg?: string }>;
 
   const mockResponse = (entry: {
     status: number;
@@ -47,6 +47,7 @@ describe("notion-archive client retry", () => {
       fetchCount++;
       const entry = script.shift();
       if (!entry) throw new Error("テスト: 応答スクリプト枯渇");
+      if (entry.throwMsg !== undefined) throw new Error(entry.throwMsg);
       return mockResponse(entry);
     }) as typeof fetch;
     vi.resetModules();
@@ -109,5 +110,69 @@ describe("notion-archive client retry", () => {
       "validation_error"
     );
     expect(fetchCount).toBe(1);
+  });
+
+  it("GET の 500 は再試行する (既存維持)", async () => {
+    script = [
+      { status: 500 },
+      { status: 200, body: { ok: true } },
+    ];
+    const { notionRequest } = await load();
+    const got = await notionRequest<{ ok: boolean }>("GET", "/v1/test");
+    expect(got).toEqual({ ok: true });
+    expect(fetchCount).toBe(2);
+  });
+
+  it("POST /pages の 500 は結果不明のため再送しない (1 コール)", async () => {
+    script = [{ status: 500 }];
+    const { notionRequest } = await load();
+    await expect(notionRequest("POST", "/pages", {})).rejects.toThrow(
+      "結果不明のため再送しません"
+    );
+    expect(fetchCount).toBe(1);
+  });
+
+  it("POST /pages の 529 は結果不明のため再送しない (1 コール)", async () => {
+    script = [{ status: 529, retryAfter: "0" }];
+    const { notionRequest } = await load();
+    await expect(notionRequest("POST", "/pages", {})).rejects.toThrow(
+      "結果不明のため再送しません"
+    );
+    expect(fetchCount).toBe(1);
+  });
+
+  it("POST /pages の network 例外は結果不明のため再送しない (1 コール)", async () => {
+    script = [{ status: 0, throwMsg: "fetch failed" }];
+    const { notionRequest } = await load();
+    await expect(notionRequest("POST", "/pages", {})).rejects.toThrow(
+      "結果不明のため再送しません"
+    );
+    expect(fetchCount).toBe(1);
+  });
+
+  it("POST /pages の明示 429 は拒否 (未作成確定) のため再送可", async () => {
+    script = [
+      { status: 429, retryAfter: "0" },
+      { status: 200, body: { id: "new-page" } },
+    ];
+    const { notionRequest } = await load();
+    const got = await notionRequest<{ id: string }>("POST", "/pages", {});
+    expect(got).toEqual({ id: "new-page" });
+    expect(fetchCount).toBe(2);
+  });
+
+  it("POST /databases/{id}/query の 500 は読取のため再試行する", async () => {
+    script = [
+      { status: 500 },
+      { status: 200, body: { results: [] } },
+    ];
+    const { notionRequest } = await load();
+    const got = await notionRequest<{ results: unknown[] }>(
+      "POST",
+      "/databases/abc/query",
+      {}
+    );
+    expect(got).toEqual({ results: [] });
+    expect(fetchCount).toBe(2);
   });
 });

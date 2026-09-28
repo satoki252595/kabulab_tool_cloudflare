@@ -34,6 +34,8 @@ interface PagePropertiesResponse {
 /**
  * 指定ページの指定 files プロパティから最初のファイルを取得する。
  * 該当ファイルが無い (未添付/別状態) なら null を返す (捏造しない・ルール1)。
+ * 先頭エントリに URL が無ければ null (2 番目へ silent fallback しない —
+ * 既存単一原本 reader が違う添付を掴むのを防ぐための既存挙動維持)。
  */
 export async function fetchPageFileUrl(
   pageId: string,
@@ -51,4 +53,29 @@ export async function fetchPageFileUrl(
   const url = f.file?.url ?? f.external?.url;
   if (!url) return null;
   return { name: f.name, url };
+}
+
+/**
+ * 指定ページの指定 files プロパティから全ファイルを取得する。
+ * 複数添付 (一次データ保管の snapshot+証拠 3 件等) の実ダウンロード検証用。
+ * files プロパティ自体が無ければ空配列 (捏造しない・ルール1)。
+ * URL の無いエントリは含めない (欠損を黙って埋めない・ルール2)。
+ */
+export async function listPageFiles(
+  pageId: string,
+  propertyName: string
+): Promise<PageFileRef[]> {
+  const page = await notionRequest<PagePropertiesResponse>(
+    "GET",
+    `/pages/${pageId}`
+  );
+  const prop = page.properties?.[propertyName];
+  if (!prop || prop.type !== "files") return [];
+  const out: PageFileRef[] = [];
+  for (const f of prop.files ?? []) {
+    const url = f.file?.url ?? f.external?.url;
+    if (!url) continue;
+    out.push({ name: f.name, url });
+  }
+  return out;
 }

@@ -36,6 +36,7 @@
     "ir:backfill": "tsx services/ir-catalog/data-scripts/backfill.ts",
     "notion:update-index": "tsx scripts/notion/update-index.ts",
     "notion:relocate-archive": "tsx scripts/notion/relocate-archive.ts",
+    "notion:master-dedup-3681-7129": "tsx scripts/notion/master-dedup-3681-7129.ts",
     "ingest:moneyflow": "tsx scripts/moneyflow/ingest.ts"
   },
   "dependencies": {
