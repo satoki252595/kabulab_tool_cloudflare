@@ -1,6 +1,9 @@
 """Notion の通信障害注入。財務データではなく再送回数と既存失敗経路を検証する。"""
 
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock
 from unittest.mock import Mock
 
 import httpx
@@ -8,6 +11,48 @@ import pytest
 import requests
 
 from jp_stock_pipeline.notion import client as module
+
+
+def test_concurrent_sends_share_pacing_and_429_529_retry_after(monkeypatch):
+    """金融値を含まないHTTP障害注入。別threadも同じ冷却期限で停止する。"""
+    client = module.NotionClient("test-token-not-a-credential", rps=6)
+    paused, lock, sends = Event(), Lock(), []
+    original_defer = client._throttle.defer
+
+    def defer(seconds):
+        original_defer(seconds)
+        paused.set()
+
+    def send(request):
+        with lock:
+            position = len(sends)
+            sends.append(time.monotonic())
+        if position < 2:
+            status, code = (429, "rate_limited") if position == 0 else (529, "service_overload")
+            return httpx.Response(status, json={"code": code, "message": "wait"},
+                                  headers={"Retry-After": "1"}, request=request)
+        return httpx.Response(200, json={"id": request.url.path.rsplit("/", 1)[-1]}, request=request)
+
+    def read(position):
+        if position:
+            assert paused.wait(3)
+        return client.get_page(f"protocol-{position}")
+
+    monkeypatch.setattr(client._throttle, "defer", defer)
+    monkeypatch.setattr(client._client.client, "send", send)
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(read, i) for i in range(4)]
+            assert {future.result(timeout=6)["id"] for future in futures} == {
+                f"protocol-{i}" for i in range(4)
+            }
+        assert len(sends) == 6  # 4 reads + 429/529再試行。通信先は全て上のdouble。
+        assert sends[1] - sends[0] >= 0.98
+        assert sends[2] - sends[1] >= 0.98
+        assert all(b-a >= 1/6-0.025 for a, b in zip(sends, sends[1:]))
+    finally:
+        client._client.close()
+        client._session.close()
 
 
 @pytest.fixture

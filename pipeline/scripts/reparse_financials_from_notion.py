@@ -10,10 +10,11 @@ import re
 import time
 import zipfile
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, replace
 from datetime import date, datetime
 from pathlib import Path
+from threading import Event, Lock
 from urllib.parse import urlparse
 
 import httpx
@@ -437,7 +438,12 @@ def _live_pages(client: NotionClient, database_id: str, codes: list[str]) -> lis
     )
 
 
-def apply_journal(journal: Path, receipts: Path | None = None):
+APPLY_BATCH_CODES = 50
+
+
+def apply_journal(journal: Path, receipts: Path | None = None, *, workers: int = 1):
+    if not 1 <= workers <= 4:
+        raise ValueError("Notion反映workersは1〜4が必要です")
     items = list(_journal_items(journal).values())
     if not items or any("error" in item for item in items):
         raise ValueError("失敗を含むjournalは反映できません。確認・再解析が必要です")
@@ -458,10 +464,14 @@ def apply_journal(journal: Path, receipts: Path | None = None):
     receipts = receipts if receipts is not None else journal.with_suffix(".applied.jsonl")
     receipts.parent.mkdir(parents=True, exist_ok=True)
     previous = _journal_items(receipts)
-    with receipts.open("a") as output:
-        # 対象コード群の直前の正本をまとめて読む。個別GET/key queryを繰り返さない。
-        for offset in range(0, len(codes), 50):
-            batch_codes = codes[offset:offset + 50]
+    stopping = Event()
+    receipt_lock = Lock()
+
+    def checked_batch(batch_codes):
+        if stopping.is_set():
+            return []
+        try:
+            # 対象コード群の直前の正本をまとめて読む。異なるbatchで同じコードは扱わない。
             pages = _live_pages(client, database_id, batch_codes)
             by_id = {page["id"]: page for page in pages}
             by_key = defaultdict(list)
@@ -470,6 +480,8 @@ def apply_journal(journal: Path, receipts: Path | None = None):
             pending = []
             for code in batch_codes:
                 for item in grouped[code]:
+                    if stopping.is_set():
+                        return []
                     record = _record_from_dict(item["new"])
                     key = _financial_key(record)
                     targets = by_key[key]
@@ -504,6 +516,8 @@ def apply_journal(journal: Path, receipts: Path | None = None):
                     pending.append((item, saved, action, page))
             # PATCH応答だけを再読証拠にしない。変更/退避があるbatchは必ず新鮮な
             # まとめqueryを再発行し、全対象と旧ページの一致後にだけ退避/receiptを許す。
+            if stopping.is_set():
+                return []
             if any(action == "reparsed" or (page and page["id"] != saved["id"])
                    for _, saved, action, page in pending):
                 fresh = {p["id"]: p for p in _live_pages(client, database_id, batch_codes)}
@@ -521,16 +535,41 @@ def apply_journal(journal: Path, receipts: Path | None = None):
                     if old is None or _record_dict(_page_record(old)) != item["old"]:
                         raise ValueError(f"{item['old']['code']}: 退避前の旧正本が変わりました")
             for item, saved, action, page in pending:
-                if page and page["id"] != saved["id"]:
-                    client.archive_page(page["id"])
                 receipt = {
                     "page_id": item["page_id"], "target_page_id": saved["id"],
                     "parser_sha256": PARSER_SHA256, "raw_sha256": item["raw_sha256"],
                     "action": action, "record": _record_dict(_page_record(fresh[saved["id"]])),
                 }
-                output.write(_json(receipt) + "\n")
-                output.flush()
-                print(_json({"page_id": item["page_id"], "action": action}), flush=True)
+                # 1つのstreamへ一元append。退避成功後は停止判定を挟まず即証跡を残す。
+                with receipt_lock:
+                    if stopping.is_set():
+                        return
+                    if page and page["id"] != saved["id"]:
+                        client.archive_page(page["id"])
+                    output.write(_json(receipt) + "\n")
+                    output.flush()
+                    print(_json({"page_id": item["page_id"], "action": action}), flush=True)
+        except BaseException:
+            stopping.set()
+            raise
+
+    with receipts.open("a") as output:
+        batches = [codes[offset:offset + APPLY_BATCH_CODES]
+                   for offset in range(0, len(codes), APPLY_BATCH_CODES)]
+        if workers == 1:
+            for batch in batches:
+                checked_batch(batch)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(checked_batch, batch) for batch in batches]
+                try:
+                    for future in as_completed(futures):
+                        future.result()
+                except BaseException:
+                    stopping.set()
+                    for future in futures:
+                        future.cancel()
+                    raise  # contextの終了で開始済みrequestをdrain。未検証行はreceiptにしない。
 
 
 def _repair_sql() -> str:
@@ -693,12 +732,16 @@ if __name__ == "__main__":
         "--apply-journal", action="store_true", help="監査済みjournalをNotion③だけへ反映"
     )
     parser.add_argument("--receipts", type=Path, help="Notion再読成功の記録先（D1同期の前提）")
+    parser.add_argument("--apply-workers", type=int, choices=range(1, 5), default=1,
+                        help="Notion修復の独立50コードbatch本数。既定1、共有rate上限はNOTION_RPS")
     parser.add_argument("--sync-d1", action="store_true", help="正本再読成功行を設定先D1へ同期")
     args = parser.parse_args()
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit は正数が必要です")
     if sum(bool(mode) for mode in (args.apply_journal, args.sync_d1, args.reparse_cached_from)) > 1:
         parser.error("Notion修復とD1同期は再読成功の記録を確認して別々に実行してください")
+    if args.apply_workers != 1 and not args.apply_journal:
+        parser.error("--apply-workers は --apply-journal と同時に指定してください")
     if args.reparse_cached_from:
         reparse_cached(args.reparse_cached_from, args.journal, args.cache_dir)
     elif args.sync_d1:
@@ -706,7 +749,7 @@ if __name__ == "__main__":
             parser.error("--sync-d1 は --receipts が必要です")
         sync_d1(args.journal, args.receipts)
     elif args.apply_journal:
-        apply_journal(args.journal, args.receipts)
+        apply_journal(args.journal, args.receipts, workers=args.apply_workers)
     else:
         audit(
             source=args.source,
