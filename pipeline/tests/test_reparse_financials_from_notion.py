@@ -201,24 +201,34 @@ def test_verified_repair_clears_wrong_values_and_protects_newer_disclosure():
     )
 
 
-def test_d1_repair_rejects_missing_notion_read_proof_before_connecting(tmp_path, monkeypatch):
+@pytest.mark.parametrize("wrong_value", [False, True])
+def test_d1_repair_rejects_missing_notion_read_proof_before_connecting(
+    tmp_path, monkeypatch, wrong_value,
+):
     old = reparse.notion_financial(_page())
     item = {"page_id": "p", "old": reparse._record_dict(old),
             "new": reparse._record_dict(old), "changes": {},
             "parser_sha256": reparse.PARSER_SHA256, "raw_sha256": "a" * 64}
     journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
     journal.write_text(json.dumps(item) + "\n")
-    receipts.write_text("")
+    receipt = {"page_id": "p", "target_page_id": "p",
+               "record": reparse._record_dict(replace(old, net_sales=old.net_sales + 1)),
+               "parser_sha256": reparse.PARSER_SHA256, "raw_sha256": "a" * 64}
+    receipts.write_text(json.dumps(receipt) + "\n" if wrong_value else "")
     monkeypatch.setattr(reparse, "load_settings", lambda: pytest.fail("未検証なら接続しない"))
     with pytest.raises(ValueError, match="Notion再読成功"):
         reparse.sync_d1(journal, receipts)
 
 
-def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(tmp_path, monkeypatch):
+@pytest.mark.parametrize("read_back_net_sales", [547_779_000_000, 547_779_000_000.0])
+def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
+    tmp_path, monkeypatch, read_back_net_sales,
+):
     older = replace(reparse.notion_financial(_page()), fiscal_period_end=reparse.date(2027, 3, 31))
     older_new = replace(older, fiscal_period_end=reparse.date(2025, 3, 31))
     newer_old = replace(older_new, disclosed_at=older.disclosed_at + timedelta(days=1), net_sales=None)
     newer_new = replace(newer_old, net_sales=547_779_000_000)
+    read_back = replace(newer_new, net_sales=read_back_net_sales)
     journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
     def item(page_id, old, new, digest):
         return {"page_id": page_id, "old": reparse._record_dict(old),
@@ -239,7 +249,7 @@ def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(tmp_
             return [page.copy()]
         def update_page(self, *args):
             events.append("update_latest")
-            page["record"] = newer_new
+            page["record"] = read_back
         def get_page(self, *args):
             events.append("read_latest")
             return page.copy()
@@ -272,7 +282,8 @@ def test_notion_verified_d1_repair_retires_only_matching_old_key(tmp_path, monke
             "new": reparse._record_dict(corrected), "changes": {"fiscal_period_end": {}},
             "parser_sha256": reparse.PARSER_SHA256, "raw_sha256": "a" * 64,
             "raw_url": "https://api.edinet-fsa.go.jp/api/v2/documents/S100YNQJ?type=5"}
-    receipt = {"page_id": "p", "target_page_id": "p", "record": item["new"],
+    read_back = replace(corrected, net_sales=float(corrected.net_sales))
+    receipt = {"page_id": "p", "target_page_id": "p", "record": reparse._record_dict(read_back),
                "parser_sha256": reparse.PARSER_SHA256, "raw_sha256": "a" * 64}
     journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
     journal.write_text(json.dumps(item) + "\n")
@@ -294,7 +305,7 @@ def test_notion_verified_d1_repair_retires_only_matching_old_key(tmp_path, monke
 
     class Client:
         def query_database(self, *args, **kwargs):
-            return [{"id": "p", "record": corrected}]
+            return [{"id": "p", "record": read_back}]
 
     monkeypatch.setattr(reparse, "D1Store", lambda *args, **kwargs: Store())
     monkeypatch.setattr(reparse, "NotionClient", lambda *args, **kwargs: Client())
