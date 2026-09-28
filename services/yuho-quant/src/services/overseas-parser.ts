@@ -150,6 +150,24 @@ function totalsConsistent(regionSum: number, disclosedTotal: number): boolean {
   return Math.abs(regionSum - disclosedTotal) <= disclosedTotal * 0.01;
 }
 
+/**
+ * 同一表から同一地域名が複数値で出ていないか。全取込経路 (ingest.ts /
+ * backfill-overseas.ts / backfill-missing-docs.ts) は (会計期末, 地域名) の
+ * 先頭採用で重複を落とすため、重複があると集計が dedup 前の水増し合計で確定し、
+ * 保存後に地域計≠合計の乖離を生む (aggregate-before-dedup。S100J2E7 で実証)。
+ * 同一表内の重複地域名は 2 次元表 (地域×品目等) を単一値列で読んだ曖昧さの
+ * 徴候であり、捏造補正も任意合算もせず表ごと却下する (ルール1/2)。
+ */
+function hasDuplicateRegionNames(facts: OverseasFact[]): boolean {
+  const seen = new Set<string>();
+  for (const f of facts) {
+    if (f.regionKind !== "domestic" && f.regionKind !== "overseas") continue;
+    if (seen.has(f.regionName)) return true;
+    seen.add(f.regionName);
+  }
+  return false;
+}
+
 interface Honbun {
   name: string;
   html: string;
@@ -323,6 +341,8 @@ function tryGeoRows(
   }
 
   if (facts.length < 2 || domesticSum <= 0) return null;
+  // 同一表内の重複地域名は曖昧表 (aggregate-before-dedup の原因) として却下
+  if (hasDuplicateRegionNames(facts)) return null;
   // 検証: 集計行が開示されているなら、地域合計が **いずれかの集計行** と一致する
   // こと (= 正しい列を読み地域を取りこぼしていない)。一致が無ければ誤読として却下。
   const matched = aggregates.find((a) => totalsConsistent(regionSum, a.value));
@@ -446,6 +466,8 @@ function tryGeoCols(
     });
   }
   if (facts.length < 2 || domesticSum <= 0) return null;
+  // 同一表内の重複地域名は曖昧表 (aggregate-before-dedup の原因) として却下
+  if (hasDuplicateRegionNames(facts)) return null;
 
   const disclosedTotal =
     totalCol >= 0 ? parseJpNumber(gridX[valueRow][totalCol] ?? "") : null;

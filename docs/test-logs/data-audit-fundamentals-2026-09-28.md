@@ -20,7 +20,7 @@ Issue [#146](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/146)
 | 1 | `#145` の `raw_page_id` が source D1 で全件 NULL（朝の観測）→ 09:30 UTC 再読で 34,659/34,659 反映・全件 journal 一致を確認 | 中（解消済み） | owner 同期で解消、再検証 PASS |
 | 2 | 有報海外売上で 59 文書が 1% 合計整合 rule に違反（最大乖離 99.4%、画面の内訳と合計が不一致）。S100J2E7 は現行 code の純 replay で保存行を完全再現（aggregate-before-dedup。他 58 の原因は未確認・候補） | 高（対象行） | 未修復・owner 対応待ち（再取込だけでは再発する。code fix が必要） |
 | 3 | 優待利回り 32 行が現入力再計算と不一致（うち fresh 7 行。2683 は画面 1.01% に対し現入力再計算 5.04%。原因は候補） | 低〜中 | 未修復・owner 対応待ち |
-| 4 | 純抽選 13 行（5 銘柄）に推定金額あり（spec は null。3903 は画面に「推定 16,000,000円」）。抽選 keyword 38 行は候補母集団であり 38 違反ではない | 中 | 未修復・owner 対応待ち |
+| 4 | 純抽選 14 行（5 銘柄）に推定金額あり（spec は null。3903 は画面に「推定 16,000,000円」）。抽選 keyword 38 行は候補母集団であり 38 違反ではない | 中 | 未修復・owner 対応待ち |
 | 5 | （候補）147A の `estimated_value=180` は原文 `180USD` の未換算（円建ての列に USD 値。spec の外貨 handling は未定義） | 低 | 未修復・owner の spec 判断待ち |
 
 - 観測（Finding 外）: 事業タグ根拠文の 2 文結合（継ぎ目マーカーなし・§4.4）、8508 の要約/掲載文不一致（§6.5）、IR 軽微 2 件（§5.3）。
@@ -260,9 +260,12 @@ Issue [#146](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/146)
   合計 19,827 が乖離。すなわち **aggregate-before-dedup** であり、parser 単体の誤読ではない。
 - 旧判定の撤回と限定: 旧版の「現行 code では生成不能な stale 誤 parse」は S100J2E7 については**誤りだった**（現行 code が決定的に再生成する）。
   残り 58 文書の原因は未確認であり、1 原本から 59 全体の原因を一般化しない（候補: 同一機序。同一銘柄の複数年違反が table-shape 起因を示唆するが証明ではない）。
-  取込/backfill（`backfill-overseas.ts`・`backfill.ts` の `--force`）は文書単位 DELETE+INSERT の原子置換のため、
-  stale leftover（旧行の残存）の断定は不可。remedy は「再取込」ではなく code fix（重複地域名の却下 or dedup 前 gate 等）＋ force 再取込。owner 対応。
-  parser code の変更は本監査では行わない（候補を親へ共有済み）。
+  取込/backfill は文書単位の DELETE 後に INSERT して置換するが、原子性は経路で異なる。
+  通常 ingest（`ingest.ts`）は D1 binding の `db.batch()` で delete＋全 insert を原子置換する一方、
+  legacy backfill（`backfill-overseas.ts` 105 行目・`backfill-missing-docs.ts`）は sqlite-proxy が batch 非対応のため
+  delete 後に逐次 insert する（code コメント明記）。backfill 経路は途中失敗で部分残存があり得るが、
+  残存が本 59 の原因かの断定は不可。remedy は「再取込」ではなく code fix（重複地域名の却下 or dedup 前 gate 等）＋ force 再取込。owner 対応。
+  追記: root 承認の最小 code fix（重複地域名の表ごと却下＋回帰 test 1 件）を本 branch で適用。本番 59 行は未修復、残り 58 の原因は未確認のまま。
 - 影響: 株式詳細・海外 screening は保存行をそのまま表示（`overseas-query.ts` に再計算ガードなし）するため、
   対象 59 文書の breakdown 表示が合計と一致しない（59 doc_id 清单は private `/tmp/yuho_viol59.json` 保持）。
   `ratio_pct` は保存合計との再計算で整合するため alarm なし（§4.1）。
@@ -371,7 +374,7 @@ S100YG9I `4a507aae555f695c9c9028e2768a22397803905727297a4d630b44a812283a93`・S1
 
 - 抽選 keyword 38 行（非 NULL かつ description/short_summary に `抽選`。17 銘柄）は**候補母集団**であり、
   38 違反ではない（追検で是正。通常＋抽選の併記があり得る）。原文で分離した結果:
-  - 純抽選（金額が抽選自体を価格付け。spec §6 違反）: 13 行・5 銘柄。
+  - 純抽選（金額が抽選自体を価格付け。spec §6 違反）: 14 行・5 銘柄。
     3189×2（100,000 = 最高賞品額）・3903（16,000,000 = 抽選総額）・3939（200,000）・
     7578×8（500,000 = 条件付き抽選賞品）・8508×2（0 値。§6 は 0 も不可）。
     3903 の画面は「推定 16,000,000円」を抽選文言と並べて表示（保存 HTML で確認済み）。
@@ -443,9 +446,9 @@ S100YG9I `4a507aae555f695c9c9028e2768a22397803905727297a4d630b44a812283a93`・S1
 - 原因: 候補（rebuild 後の入力変化。「現入力≠rebuild 入力」は確定、内容・時期は未確認。確定手段は import 履歴突合せ）。
   remedy は owner の rebuild/process fix。
 
-### F4（未修復）純抽選優待の推定金額 13 行（5 銘柄）
+### F4（未修復）純抽選優待の推定金額 14 行（5 銘柄）
 
-- repro: §9 の keyword 抽出は候補母集団 38 行。原文分離で純抽選 13 行（3189×2/3903/3939/7578×8/8508×2）＋境界 1 行（7791）
+- repro: §9 の keyword 抽出は候補母集団 38 行。原文分離で純抽選 14 行（3189×2/3903/3939/7578×8/8508×2）＋境界 1 行（7791）
   ＋適正併記 23 行。3903 は画面「推定 16,000,000円」。
 - 重要度: 中。影響集合: per-benefit 表示の誤誘導（純抽選行）。ranking は純抽選値が入っていないが、
   境界 7791（12.15%）は ranking 内のため owner 分類次第で影響が確定する（旧「全 38 影響なし」は撤回）。
@@ -495,7 +498,7 @@ $D1 "SELECT COUNT(*) FROM (SELECT document_id FROM yuho_overseas_facts GROUP BY 
 $D1 "WITH b AS (SELECT stock_id, min_shares, estimated_value FROM yutai_benefits WHERE estimated_value IS NOT NULL), m AS (SELECT stock_id, MIN(min_shares) AS minreq FROM b GROUP BY 1), s AS (SELECT b.stock_id AS sid, SUM(b.estimated_value) AS totalv FROM b JOIN m ON m.stock_id=b.stock_id AND b.min_shares<=m.minreq GROUP BY 1), r AS (SELECT f.stock_id AS sid, f.yutai_yield AS saved, f.data_date AS dd, CASE WHEN f.price IS NULL OR f.price<=0 THEN NULL WHEN s.totalv IS NULL OR s.totalv<=0 THEN NULL WHEN (s.totalv*1.0/(f.price*m.minreq))*100>50 THEN NULL ELSE (s.totalv*1.0/(f.price*m.minreq))*100 END AS recomp FROM otakara_stock_financials f LEFT JOIN m ON m.stock_id=f.stock_id LEFT JOIN s ON s.sid=f.stock_id) SELECT COUNT(*) AS ndiff, SUM(CASE WHEN dd='2026-09-13' THEN 1 ELSE 0 END) AS fresh FROM r WHERE NOT (saved IS NULL AND recomp IS NULL) AND NOT (saved IS NOT NULL AND recomp IS NOT NULL AND ABS(saved-recomp)<=1e-9)"
 # F3 python: python3 /tmp/yield_recompute.py（SHA256 33a11e2e…51e350d571。要 /tmp/yield_fin.json + /tmp/yield_ben.json）
 
-# F4: 抽選 keyword（候補母集団 38 行。純抽選 13 行への分離は原文確認による。§6.3）
+# F4: 抽選 keyword（候補母集団 38 行。純抽選 14 行への分離は原文確認による。§6.3）
 $D1 "SELECT COUNT(*) FROM yutai_benefits WHERE estimated_value IS NOT NULL AND (description LIKE '%抽選%' OR short_summary LIKE '%抽選%')"
 
 # 財務の journal↔cache 照合（private 証跡。80MB+1.9GB の read-only 走査）
