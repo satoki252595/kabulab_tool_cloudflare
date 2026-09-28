@@ -33,6 +33,7 @@
  *   認める「年間額 ÷ 回数」などが一致せず正しい回答まではじくので、金額表現の
  *   有無だけを見る。
  */
+import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { benefitKey } from "./benefit-key.js";
 import { extractYenAmounts, sanitizeEstimatedValue } from "./estimated-value-guard.js";
@@ -41,6 +42,7 @@ import {
   SUMMARY_CONTRACT_VERSION,
   checkSummary,
   formatViolations,
+  isSummaryPercentGrounded,
   isVerbatimCopy,
   normalizeSummary,
 } from "./summary-contract.js";
@@ -71,6 +73,7 @@ export type RejectReason =
   | "stale"
   | "contract"
   | "verbatim"
+  | "summary_ungrounded"
   | "value_guard"
   | "value_ungrounded";
 
@@ -105,6 +108,13 @@ export type ImportPlan = {
   /** 結果に 1 行も現れなかったタスク (未回答)。 */
   unansweredTaskIds: string[];
   /**
+   * 通ったが今の D1 と 3 値 (要約・推定値・出典) が全行同値で、書き込み対象から
+   * 外したタスク数。`updated_at` の無意味な書き換えを避け、再実行で書く予定を
+   * 0 にする。利回りの追随は `resolveTargetIds` のタスク和集合で別に見るため、
+   * stale の回収は落ちない。
+   */
+  skippedEquivalent: number;
+  /**
    * 書き込み対象の行で、今の D1 の `estimated_value` がどう変わるか (行数)。
    * 契約違反の要約を直すだけのつもりでも、回答の金額が null なら既存の金額が消えて
    * 優待利回りの計算から外れる。dry-run で人が気付けるように数える。
@@ -125,15 +135,32 @@ export function planSummaryImport(input: {
   includeText?: boolean;
 }): ImportPlan {
   const taskById = new Map(input.tasks.map((t) => [t.taskId, t]));
-  const current = new Map<string, { ids: number[]; description: string; values: (number | null)[] }>();
+  const current = new Map<
+    string,
+    {
+      ids: number[];
+      description: string;
+      summaries: (string | null)[];
+      values: (number | null)[];
+      sources: (string | null)[];
+    }
+  >();
   for (const r of input.currentRows) {
     const key = benefitKey(r.stockCode, r.description);
     const e = current.get(key);
     if (e) {
       e.ids.push(r.id);
+      e.summaries.push(r.shortSummary);
       e.values.push(r.estimatedValue);
+      e.sources.push(r.estimateValueSource);
     } else {
-      current.set(key, { ids: [r.id], description: r.description, values: [r.estimatedValue] });
+      current.set(key, {
+        ids: [r.id],
+        description: r.description,
+        summaries: [r.shortSummary],
+        values: [r.estimatedValue],
+        sources: [r.estimateValueSource],
+      });
     }
   }
 
@@ -199,6 +226,7 @@ export function planSummaryImport(input: {
   }
 
   const updates: PlannedUpdate[] = [];
+  let skippedEquivalent = 0;
   const valueChanges = { toNull: 0, fromNull: 0, changed: 0 };
   for (const { line, result } of parsed) {
     const reject = (reason: RejectReason, detail: string, text?: string) =>
@@ -244,12 +272,28 @@ export function planSummaryImport(input: {
       reject("verbatim", `掲載文の ${summary.length} 字の逐語コピー`);
       continue;
     }
+    // 要約の % は掲載文の % で裏づけられていること (別群の割引要約の貼り付け)
+    if (!isSummaryPercentGrounded(row.description, summary)) {
+      reject("summary_ungrounded", "要約の % が掲載文に無い (別群の割引要約の疑い)");
+      continue;
+    }
     if (sanitizeEstimatedValue(row.description, result.estimatedValue) !== result.estimatedValue) {
       reject("value_guard", `estimatedValue=${result.estimatedValue} が割引の金額化か、本文の金額と桁が合わない`);
       continue;
     }
     if (result.estimatedValue !== null && extractYenAmounts(row.description).length === 0) {
       reject("value_ungrounded", `estimatedValue=${result.estimatedValue} だが掲載文に金額表現 (円・千円・万円・ポイント) が無い`);
+      continue;
+    }
+    const plannedSource = result.estimatedValue !== null ? "company" : null;
+    const alreadyApplied = row.ids.every(
+      (_, i) =>
+        row.summaries[i] === summary &&
+        row.values[i] === result.estimatedValue &&
+        row.sources[i] === plannedSource
+    );
+    if (alreadyApplied) {
+      skippedEquivalent++;
       continue;
     }
     for (const prev of row.values) {
@@ -263,13 +307,13 @@ export function planSummaryImport(input: {
       ids: [...row.ids].sort((a, b) => a - b),
       shortSummary: summary,
       estimatedValue: result.estimatedValue,
-      estimateValueSource: result.estimatedValue !== null ? "company" : null,
+      estimateValueSource: plannedSource,
     });
   }
 
   rejections.sort((a, b) => a.line - b.line);
   const unansweredTaskIds = input.tasks.map((t) => t.taskId).filter((id) => !answered.has(id));
-  return { updates, rejections, unansweredTaskIds, valueChanges };
+  return { updates, rejections, unansweredTaskIds, skippedEquivalent, valueChanges };
 }
 
 /** D1 への書き込み口。テストでは差し替える。 */
@@ -310,6 +354,27 @@ export async function applySummaryImport(
 }
 
 /**
+ * 書き込み計画を D1 REST batch 用の UPDATE 文にする (純関数・副作用なし)。
+ * `makeSummaryWriter` (`import-summary-results.ts`) と同一の意味: 書く 4 列
+ * (要約・推定値・出典・更新日時) と ID 分割幅 (`MAX_IDS_PER_UPDATE`)。
+ * 原子適用 (`atomic-apply.ts`) だけが使う。`ids` が空なら文を作らない。
+ */
+export function buildBenefitUpdateStatements(
+  ids: readonly number[],
+  values: Pick<PlannedUpdate, "shortSummary" | "estimatedValue" | "estimateValueSource">,
+): D1BatchStatement[] {
+  const out: D1BatchStatement[] = [];
+  for (let i = 0; i < ids.length; i += MAX_IDS_PER_UPDATE) {
+    const chunk = ids.slice(i, i + MAX_IDS_PER_UPDATE);
+    out.push({
+      sql: `UPDATE yutai_benefits SET short_summary = ?, estimated_value = ?, estimate_value_source = ?, updated_at = (unixepoch()) WHERE id IN (${chunk.map(() => "?").join(", ")})`,
+      params: [values.shortSummary, values.estimatedValue, values.estimateValueSource, ...chunk],
+    });
+  }
+  return out;
+}
+
+/**
  * 計画をログ用の行にする。既定 (`showText` 省略・false) では掲載文由来の文字列を
  * 一切出さない — `Rejection.detail` は規則名・字数・件数だけ、`Rejection.text`
  * (契約違反の要約本体や壊れた行の原文) はそもそも `planSummaryImport` に
@@ -320,6 +385,9 @@ export function formatPlanReport(plan: ImportPlan, maxRejections = 30, showText 
   const out: string[] = [];
   const rows = plan.updates.reduce((s, u) => s + u.ids.length, 0);
   out.push(`書き込み対象: ${plan.updates.length} タスク / ${rows} 行`);
+  if (plan.skippedEquivalent > 0) {
+    out.push(`同値のため省略: ${plan.skippedEquivalent} タスク (今の値と同じ。再送しても変わらない)`);
+  }
   out.push(`はじいた結果: ${plan.rejections.length} 行`);
   const byReason = new Map<RejectReason, number>();
   for (const r of plan.rejections) byReason.set(r.reason, (byReason.get(r.reason) ?? 0) + 1);

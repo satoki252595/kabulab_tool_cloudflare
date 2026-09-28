@@ -27,6 +27,7 @@ export async function loadBenefitRows(db: OtakaraD1): Promise<BenefitRow[]> {
       description: yutaiBenefits.description,
       shortSummary: yutaiBenefits.shortSummary,
       estimatedValue: yutaiBenefits.estimatedValue,
+      estimateValueSource: yutaiBenefits.estimateValueSource,
     })
     .from(yutaiBenefits)
     .innerJoin(stocks, eq(yutaiBenefits.stockId, stocks.id));

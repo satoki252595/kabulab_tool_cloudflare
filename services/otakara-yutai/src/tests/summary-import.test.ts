@@ -40,6 +40,7 @@ const row = (over: Partial<BenefitRow>): BenefitRow => ({
   description: DESC_CATALOG,
   shortSummary: "カタログギフト 3,000円相当",
   estimatedValue: 3000,
+  estimateValueSource: null,
   ...over,
 });
 
@@ -88,6 +89,31 @@ describe("selectSummaryTasks", () => {
     const tampered = text.replace(K_CATALOG, K_DISCOUNT);
     expect(() => parseTaskFile(tampered)).toThrow(/taskId が銘柄コードと掲載文に一致しません/);
     expect(() => parseTaskFile("{not json")).toThrow(/JSON ではありません/);
+  });
+
+  it("retaskKeys で指定した有効な群だけ理由 rework で選ぶ", () => {
+    // K_DISCOUNT (9992) は契約上有効で通常は選ばれない群
+    const tasks = selectSummaryTasks(ROWS, { retaskKeys: new Set([K_DISCOUNT]) });
+    expect(tasks.map((t) => [t.taskId, t.reason, t.rowCount])).toEqual([
+      [K_CATALOG, "contract_violation", 2],
+      [K_NEW, "missing", 1],
+      [K_DISCOUNT, "rework", 1],
+    ]);
+    expect(tasks[2].violations).toEqual([]);
+  });
+
+  it("rework 指定でも missing / contract_violation が優先し、violations-only では出ない", () => {
+    const tasks = selectSummaryTasks(ROWS, { retaskKeys: new Set([K_CATALOG, K_DISCOUNT]) });
+    expect(tasks.map((t) => [t.taskId, t.reason])).toEqual([
+      [K_CATALOG, "contract_violation"],
+      [K_NEW, "missing"],
+      [K_DISCOUNT, "rework"],
+    ]);
+    const only = selectSummaryTasks(ROWS, {
+      violationsOnly: true,
+      retaskKeys: new Set([K_DISCOUNT]),
+    });
+    expect(only.map((t) => t.taskId)).toEqual([K_CATALOG]);
   });
 
   it("非 JSON 行の内容は例外の message にも cause にも出ない", () => {
@@ -213,6 +239,79 @@ describe("planSummaryImport", () => {
     expect(p2.rejections.map((r) => r.reason)).toEqual(["value_guard"]);
   });
 
+  it("抽選賞品の推定金額ははじく (当選人数つきの賞品表記・総額)", () => {
+    const lottery = "80,000円相当:40名\n30,000円相当:90名\n抽選で付与。";
+    const rows = [row({ id: 61, stockCode: "9995", description: lottery, shortSummary: null })];
+    const kl = keyOf("9995", lottery);
+    const p1 = planSummaryImport({
+      tasks: selectSummaryTasks(rows),
+      resultsText: result({ taskId: kl, shortSummary: "抽選で賞品", estimatedValue: 80000 }),
+      currentRows: rows,
+    });
+    expect(p1.rejections.map((r) => r.reason)).toEqual(["value_guard"]);
+
+    const total = "◇抽選で総額900万円相当の架空ポイントを進呈。\n1、8万円相当 各10名";
+    const rows2 = [row({ id: 62, stockCode: "9996", description: total, shortSummary: null })];
+    const kt = keyOf("9996", total);
+    const p2 = planSummaryImport({
+      tasks: selectSummaryTasks(rows2),
+      resultsText: result({ taskId: kt, shortSummary: "抽選で総額進呈", estimatedValue: 9000000 }),
+      currentRows: rows2,
+    });
+    expect(p2.rejections.map((r) => r.reason)).toEqual(["value_guard"]);
+  });
+
+  it("固定分と抽選の併記は固定分の金額を通す (誤遮断しない)", () => {
+    const mixed = "架空電子マネー 2,000円相当、体験チケット (抽選で各店舗につき1名)";
+    const rows = [row({ id: 63, stockCode: "9997", description: mixed, shortSummary: null })];
+    const km = keyOf("9997", mixed);
+    const p = planSummaryImport({
+      tasks: selectSummaryTasks(rows),
+      resultsText: result({ taskId: km, shortSummary: "電子マネー 2,000円相当", estimatedValue: 2000 }),
+      currentRows: rows,
+    });
+    expect(p.rejections).toEqual([]);
+    expect(p.updates).toHaveLength(1);
+  });
+
+  it("要約の % が掲載文に無い結果ははじく (別群の割引要約の貼り付け)", () => {
+    // 8508 型: 抽選の掲載文に割引率の要約。% の根拠が掲載文に無い
+    const lottery = "応募口数で抽選招待。5年未満1口、5年以上5口。";
+    const rows = [row({ id: 64, stockCode: "9998", description: lottery, shortSummary: null })];
+    const kl = keyOf("9998", lottery);
+    const p1 = planSummaryImport({
+      tasks: selectSummaryTasks(rows),
+      resultsText: result({ taskId: kl, shortSummary: "美容施設の20%割引", estimatedValue: null }),
+      currentRows: rows,
+    });
+    expect(p1.rejections.map((r) => r.reason)).toEqual(["summary_ungrounded"]);
+
+    // 掲載文に % があれば通す
+    const discount = "系列店で使える20%割引券 2枚。";
+    const rows2 = [row({ id: 65, stockCode: "9999", description: discount, shortSummary: null })];
+    const kd = keyOf("9999", discount);
+    const p2 = planSummaryImport({
+      tasks: selectSummaryTasks(rows2),
+      resultsText: result({ taskId: kd, shortSummary: "系列店の20%割引券 2枚", estimatedValue: null }),
+      currentRows: rows2,
+    });
+    expect(p2.rejections).toEqual([]);
+    expect(p2.updates).toHaveLength(1);
+  });
+
+  it("要約の % の数値が掲載文と違えばはじく (単位つき数値の一致)", () => {
+    // 掲載文 10% に対する 20% の要約。% の有無だけでは通ってしまう形
+    const discount = "系列店で使える10%割引券 2枚。";
+    const rows = [row({ id: 66, stockCode: "9997", description: discount, shortSummary: null })];
+    const kd = keyOf("9997", discount);
+    const p = planSummaryImport({
+      tasks: selectSummaryTasks(rows),
+      resultsText: result({ taskId: kd, shortSummary: "系列店の20%割引券 2枚", estimatedValue: null }),
+      currentRows: rows,
+    });
+    expect(p.rejections.map((r) => r.reason)).toEqual(["summary_ungrounded"]);
+  });
+
   it("掲載文の 40 字以上の逐語コピーははじく", () => {
     const sentence = "架空テーマパークの一日入場券と園内レストランで使える食事券のセット、年に二回まで家族全員で利用可能";
     expect(sentence.length).toBeGreaterThanOrEqual(40);
@@ -253,6 +352,33 @@ describe("planSummaryImport", () => {
     const p = plan(result({}));
     expect(p.unansweredTaskIds).toEqual([K_NEW]);
     expect(formatPlanReport(p).join("\n")).toContain("未回答のタスク: 1");
+  });
+
+  it("今の D1 と 3 値が全行同値の結果は書き込み対象から外す (再実行で書く予定 0)", () => {
+    const applied = ROWS.map((r) =>
+      r.stockCode === "9990"
+        ? { ...r, shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, estimateValueSource: "company" }
+        : r
+    );
+    const p = plan(result({}), applied);
+    expect(p.updates).toEqual([]);
+    expect(p.rejections).toEqual([]);
+    expect(p.skippedEquivalent).toBe(1);
+    expect(p.unansweredTaskIds).toEqual([K_NEW]);
+    expect(formatPlanReport(p).join("\n")).toContain("同値のため省略: 1 タスク");
+  });
+
+  it("群の一部の行だけ同値なら群全体を書く (置き去りにしない)", () => {
+    const partial = ROWS.map((r) =>
+      r.id === 11
+        ? { ...r, shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, estimateValueSource: "company" }
+        : r
+    );
+    const p = plan(result({}), partial);
+    expect(p.updates).toEqual([
+      { taskId: K_CATALOG, ids: [11, 12], shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, estimateValueSource: "company" },
+    ]);
+    expect(p.skippedEquivalent).toBe(0);
   });
 });
 
