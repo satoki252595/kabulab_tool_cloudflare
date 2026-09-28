@@ -71,15 +71,22 @@ class _Throttle:
         self._min_interval = 1.0 / rps
         self._lock = threading.Lock()
         self._last = 0.0
+        self._resume_at = 0.0
 
     def wait(self) -> None:
-        with self._lock:
-            now = time.monotonic()
-            delta = self._last + self._min_interval - now
-            if delta > 0:
-                time.sleep(delta)
+        while True:
+            with self._lock:
                 now = time.monotonic()
-            self._last = now
+                delta = max(self._last + self._min_interval, self._resume_at) - now
+                if delta <= 0:
+                    self._last = now
+                    return
+            # 冷却の延長を他threadがすぐ反映できるよう、sleep中はLockを持たない。
+            time.sleep(delta)
+
+    def defer(self, seconds: float) -> None:
+        with self._lock:
+            self._resume_at = max(self._resume_at, time.monotonic() + seconds)
 
 
 def _retry_after_seconds(exc: Exception, attempt: int) -> float:
@@ -145,6 +152,8 @@ class NotionClient:
                     if isinstance(exc, (HTTPResponseError, _RetryableRawError))
                     else min(2.0**attempt, 60.0)
                 )
+                if rate_limited:
+                    self._throttle.defer(delay)
                 logger.warning("Notion %s (attempt %d) — %.1fs 待機", type(exc).__name__, attempt, delay)
                 time.sleep(delay)
                 last_exc = exc
