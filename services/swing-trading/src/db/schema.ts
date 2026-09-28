@@ -78,7 +78,7 @@ export const stockIndicators = sqliteTable(
     // --- ボラティリティ ---
     /** ATR(14) — Wilder's true range average */
     atr14: real("atr_14"),
-    /** ATR14 / 終値 (0.02 以上で条件②充足) */
+    /** ATR14 / 終値 (% 表記。2 以上で条件②充足) */
     atrPct: real("atr_pct"),
 
     // --- トレンド ---
@@ -142,7 +142,7 @@ export const stockIndicators = sqliteTable(
     liquidityOk: integer("liquidity_ok", { mode: "boolean" })
       .default(false)
       .notNull(),
-    /** ② ボラ: atrPct ≧ 0.02 */
+    /** ② ボラ: atrPct ≧ 2 (% 表記で 2%) */
     volatilityOk: integer("volatility_ok", { mode: "boolean" })
       .default(false)
       .notNull(),
