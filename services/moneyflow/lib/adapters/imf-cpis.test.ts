@@ -509,6 +509,43 @@ describe("resolve() / fetch() (合成テストデータを返す fetch スタブ
   });
 });
 
+const FULL_NAMES = ["imf-cpis-full-20260928-01.json", "imf-cpis-full-20260928-02.json"] as const;
+const hasFull = FULL_NAMES.every((n) => existsSync(FIXTURE_DIR + n));
+const FULL_KEY = "imf-cpis-2024-H1-updated-2025-04-08";
+
+describe.skipIf(!hasFull)("toObservations (実ファイル: DBnomics 99系列 2026-09-28 取得)", () => {
+  const fullFiles = (): SpecFile[] =>
+    FULL_NAMES.map((name, i) => ({ filename: imfCpisPartFilename(i + 1), bytes: new Uint8Array(readFileSync(FIXTURE_DIR + name)) }));
+
+  it("検証を通り、387行 (99系列×4期−窓内欠落9)・最新期 2024-H1・ミラー更新日 2025-04-08", () => {
+    const drafts = imfCpisSpec.toObservations({ key: FULL_KEY, files: fullFiles() });
+    expect(() => validateDrafts(imfCpisSpec.name, drafts, imfCpisSpec.indicators)).not.toThrow();
+    expect(drafts).toHaveLength(387);
+    expect([...new Set(drafts.map((d) => d.period))]).toEqual(["2022-H2", "2023-H1", "2023-H2", "2024-H1"]);
+  });
+
+  it("実値: 米国・世界計の対外合計と、AU/SG の窓内欠落は行を作らない (0埋めなし)", () => {
+    const drafts = imfCpisSpec.toObservations({ key: FULL_KEY, files: fullFiles() });
+    expect(find(drafts, "2024-H1", "imf_cpis_jp_assets_total", "米国").value).toBe(2072394613197);
+    expect(find(drafts, "2022-H2", "imf_cpis_jp_assets_total", "世界計").value).toBe(4004702976767.45);
+    // AU は 2023-S1/2024-S1、SG は 2024-S1 のスロット自体が応答に無い (未報告)。行を作らず 0 でも埋めない。
+    expect(
+      drafts.some(
+        (d) =>
+          d.indicatorKey === "imf_cpis_jp_liabilities_total" &&
+          d.category === "オーストラリア" &&
+          (d.period === "2023-H1" || d.period === "2024-H1")
+      )
+    ).toBe(false);
+    expect(
+      drafts.some(
+        (d) => d.indicatorKey === "imf_cpis_jp_liabilities_total" && d.category === "シンガポール" && d.period === "2024-H1"
+      )
+    ).toBe(false);
+    expect(find(drafts, "2023-H2", "imf_cpis_jp_liabilities_total", "オーストラリア").value).toBe(55287719999.9999);
+  });
+});
+
 describe.skipIf(!hasFixtures)("resolve() / fetch() (実ファイルを返す fetch スタブ)", () => {
   it("実応答のバイト列をそのまま保管し、同じキーで toObservations できる", async () => {
     // 1 本目の問い合わせには「対外・合計」、2 本目には「対内・株式/債券」の実応答を返す
