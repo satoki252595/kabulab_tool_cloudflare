@@ -369,9 +369,10 @@ def apply_journal(journal: Path, receipts: Path | None = None):
     client = NotionClient(settings.notion_token, rps=settings.notion_rps)
     database_id = settings.db_id("financials")
     grouped = defaultdict(list)
-    canonical_values = {_json(item["new"]) for item in items}
+    canonical_values = defaultdict(list)
     for item in items:
         grouped[item["old"]["code"]].append(item)
+        canonical_values[_financial_key(_record_from_dict(item["new"]))].append(item["new"])
     for group in grouped.values():
         # キー変更で複数の開示が合流するとき、最新原本を先に修復する。
         group.sort(key=lambda item: item["new"]["disclosed_at"] or "", reverse=True)
@@ -408,7 +409,7 @@ def apply_journal(journal: Path, receipts: Path | None = None):
                           and previous[item["page_id"]]["target_page_id"] == targets[0]["id"]
                           and (previous[item["page_id"]]["record"] ==
                                _record_dict(_page_record(targets[0])) or
-                               _json(_record_dict(_page_record(targets[0]))) in canonical_values)
+                               _record_dict(_page_record(targets[0])) in canonical_values[key])
                           and not financial_overwrite_allowed(targets[0], record)):
                         saved, action = targets[0], "newer_disclosure_preserved"
                     else:

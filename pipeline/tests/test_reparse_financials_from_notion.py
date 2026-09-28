@@ -214,11 +214,15 @@ def test_d1_repair_rejects_missing_notion_read_proof_before_connecting(tmp_path,
         reparse.sync_d1(journal, receipts)
 
 
-def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(tmp_path, monkeypatch):
+@pytest.mark.parametrize("read_back_net_sales", [547_779_000_000, 547_779_000_000.0])
+def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
+    tmp_path, monkeypatch, read_back_net_sales,
+):
     older = replace(reparse.notion_financial(_page()), fiscal_period_end=reparse.date(2027, 3, 31))
     older_new = replace(older, fiscal_period_end=reparse.date(2025, 3, 31))
     newer_old = replace(older_new, disclosed_at=older.disclosed_at + timedelta(days=1), net_sales=None)
     newer_new = replace(newer_old, net_sales=547_779_000_000)
+    read_back = replace(newer_new, net_sales=read_back_net_sales)
     journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
     def item(page_id, old, new, digest):
         return {"page_id": page_id, "old": reparse._record_dict(old),
@@ -239,7 +243,7 @@ def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(tmp_
             return [page.copy()]
         def update_page(self, *args):
             events.append("update_latest")
-            page["record"] = newer_new
+            page["record"] = read_back
         def get_page(self, *args):
             events.append("read_latest")
             return page.copy()
