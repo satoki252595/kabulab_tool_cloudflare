@@ -176,7 +176,7 @@ const COMMON_LIMITATIONS =
   ` 利用条件: CoinGecko API 規約 (${COINGECKO_API_TERMS_URL}) により、利用プランを問わず画面に出すときは` +
   "「Powered by CoinGecko」の表示が必要。無料プラン (キー無し/Demo) は料金表で商用ライセンスの対象外とされ、" +
   "データの保存・複製を制限する規約 6.1/6.2 条を本機能の長期保存 (Notion) に当てはめた可否は未確認のため、" +
-  "利用条件は「要確認」とし個人利用に限る (公開の画面・再配布には使わない)。";
+  "利用条件は「要確認」とし、公開の画面・再配布には使わない。";
 
 const FIXED_COINS_TEXT =
   "追跡するのは固定の 5 銘柄 (CoinGecko の銘柄 ID で bitcoin・ethereum・ripple・solana・dogecoin) だけで、" +

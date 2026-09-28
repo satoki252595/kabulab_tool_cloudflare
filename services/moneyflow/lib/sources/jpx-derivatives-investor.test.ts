@@ -1,7 +1,7 @@
 /**
  * jpx-derivatives-investor.ts のユニットテスト。
  *
- * ## フィクスチャについて (重要: 個人利用限定・PUBLIC リポジトリには commit しない)
+ * ## フィクスチャについて (重要: JPX 由来のため PUBLIC リポジトリには commit しない)
  *
  * `fixtures/private/jpx-derivatives-investor/jpx-deriv-investor-week-20260907_20260911.csv` と
  * `fixtures/private/jpx-derivatives-investor/jpx-futures-oi-20260918-indexfut.xlsx` は 2026-09-27 に JPX から

@@ -510,7 +510,7 @@ const COMMON_TERMS_OF_USE =
   "明記が必要、(b) BIS の推奨・提携を示唆する使い方は不可、(c) 商用製品への" +
   "組込みで追加課金してはならない、(d) 投資助言と解釈されうる記載をしてはい" +
   "けない、との条件付き。API 自体は as-is 提供で、BIS は予告なく IP 単位の" +
-  "アクセス制限・停止を留保している (kabulab は個人利用の平日1回程度の低頻" +
+  "アクセス制限・停止を留保している (kabulab は平日1回程度の低頻" +
   "度バッチのみを想定)。";
 
 export const BIS_BANKING_INDICATORS: MoneyflowIndicatorDefinition[] = [
