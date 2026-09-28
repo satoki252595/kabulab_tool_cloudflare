@@ -153,6 +153,7 @@ def test_bulk_proof_repair_is_read_back_and_resumes_without_rewriting(tmp_path, 
         def update_page(self, *args):
             events.append("update")
             page["record"] = corrected
+            return page.copy()
 
         def get_page(self, *args):
             events.append("read_back")
@@ -165,7 +166,7 @@ def test_bulk_proof_repair_is_read_back_and_resumes_without_rewriting(tmp_path, 
     monkeypatch.setattr(reparse, "_page_record", lambda page: page["record"])
     monkeypatch.setattr(reparse, "financial_overwrite_allowed", lambda *args: True)
     reparse.apply_journal(journal, receipts)
-    assert events == ["bulk_read", "update", "read_back"]
+    assert events == ["bulk_read", "update", "bulk_read"]
     receipt = reparse._journal_items(receipts)["p"]
     assert receipt["record"] == item["new"]
     assert receipt["raw_sha256"] == item["raw_sha256"]
@@ -173,6 +174,59 @@ def test_bulk_proof_repair_is_read_back_and_resumes_without_rewriting(tmp_path, 
     reparse.apply_journal(journal, receipts)
     assert events == ["bulk_read"]
     assert reparse._journal_items(receipts)["p"]["record"] == item["new"]
+
+
+@pytest.mark.parametrize("drift", ["target", "old", "duplicate"])
+def test_batch_reread_drift_blocks_all_archive_and_receipts_then_resumes(tmp_path, monkeypatch, drift):
+    original = reparse.notion_financial(_page())
+    old = replace(original, fiscal_period_end=reparse.date(2027, 3, 31))
+    target_old = replace(original, net_sales=None)
+    pages = {"old": {"id": "old", "record": old},
+             "target": {"id": "target", "record": target_old}}
+    journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
+    item = {"page_id": "old", "old": reparse._record_dict(old),
+            "new": reparse._record_dict(original), "changes": {"fiscal_period_end": {}},
+            "parser_sha256": reparse.PARSER_SHA256, "raw_sha256": "a" * 64}
+    journal.write_text(json.dumps(item) + "\n")
+    events, queries = [], 0
+    mismatch = True
+
+    class Client:
+        def query_database(self, *args, **kwargs):
+            nonlocal queries
+            queries += 1
+            events.append("query")
+            result = {key: page.copy() for key, page in pages.items()}
+            if mismatch and queries == 2:
+                if drift == "duplicate":
+                    result["duplicate"] = {"id": "duplicate", "record": original}
+                else:
+                    result[drift]["record"] = replace(result[drift]["record"], net_sales=1)
+            return list(result.values())
+        def update_page(self, page_id, *args):
+            events.append("update")
+            pages[page_id]["record"] = original
+            return pages[page_id].copy()
+        def get_page(self, *args):
+            pytest.fail("まとめ再読で個別GETを増やさない")
+        def archive_page(self, page_id):
+            events.append("archive")
+            del pages[page_id]
+
+    monkeypatch.setattr(reparse, "NotionClient", lambda *args, **kwargs: Client())
+    monkeypatch.setattr(reparse, "load_settings", lambda: SimpleNamespace(
+        notion_token="test-token", notion_rps=2.5, db_id=lambda key: "db"))
+    monkeypatch.setattr(reparse, "_page_record", lambda page: page["record"])
+    monkeypatch.setattr(reparse, "financial_overwrite_allowed", lambda *args: True)
+    with pytest.raises(ValueError, match="まとめ再読値|旧正本が変わりました|新正本キーが重複"):
+        reparse.apply_journal(journal, receipts)
+    assert events == ["query", "update", "query"]
+    assert receipts.read_text() == "" and "old" in pages
+    mismatch = False
+    events.clear()
+    reparse.apply_journal(journal, receipts)
+    assert events == ["query", "query", "archive"]
+    assert reparse._journal_items(receipts)["old"]["record"] == item["new"]
 
 
 def test_verified_repair_clears_wrong_values_and_protects_newer_disclosure():
@@ -221,8 +275,9 @@ def test_d1_repair_rejects_missing_notion_read_proof_before_connecting(
 
 
 @pytest.mark.parametrize("read_back_net_sales", [547_779_000_000, 547_779_000_000.0])
+@pytest.mark.parametrize("archive_parser", ["current", "previous-parser"])
 def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
-    tmp_path, monkeypatch, read_back_net_sales,
+    tmp_path, monkeypatch, read_back_net_sales, archive_parser,
 ):
     older = replace(reparse.notion_financial(_page()), fiscal_period_end=reparse.date(2027, 3, 31))
     older_new = replace(older, fiscal_period_end=reparse.date(2025, 3, 31))
@@ -240,7 +295,8 @@ def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
     ])) + "\n")
     receipts.write_text(json.dumps({
         "page_id": "archived", "target_page_id": "target",
-        "record": reparse._record_dict(newer_old), "parser_sha256": reparse.PARSER_SHA256,
+        "record": reparse._record_dict(newer_old),
+        "parser_sha256": reparse.PARSER_SHA256 if archive_parser == "current" else archive_parser,
         "raw_sha256": "a" * 64, "action": "newer_disclosure_preserved",
     }) + "\n")
     page, events = {"id": "target", "record": newer_old}, []
@@ -250,6 +306,7 @@ def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
         def update_page(self, *args):
             events.append("update_latest")
             page["record"] = read_back
+            return page.copy()
         def get_page(self, *args):
             events.append("read_latest")
             return page.copy()
@@ -261,7 +318,7 @@ def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
     monkeypatch.setattr(reparse, "financial_overwrite_allowed",
                         lambda page, record: page["record"].disclosed_at <= record.disclosed_at)
     reparse.apply_journal(journal, receipts)
-    assert events == ["update_latest", "read_latest"]
+    assert events == ["update_latest"]
     proof = reparse._journal_items(receipts)
     assert proof["archived"]["record"] == reparse._record_dict(newer_new)
     assert proof["archived"]["raw_sha256"] == "a" * 64

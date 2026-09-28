@@ -121,6 +121,7 @@ pipeline/tests/fixtures/**/*.pdf
 pipeline/tests/fixtures/tdnet/*.zip
 pipeline/tests/fixtures/tdnet/*.json
 pipeline/tests/fixtures/tdnet/*.html
+pipeline/tests/fixtures/tdnet/context-unit/
 pipeline/tests/fixtures/convert/yanoshin_tdnet_recent.json
 pipeline/tests/fixtures/jpx/*.txt
 pipeline/tests/fixtures/jpx/*.json

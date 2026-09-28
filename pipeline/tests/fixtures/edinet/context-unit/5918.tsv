@@ -1,0 +1,32 @@
+要素ID	項目名	コンテキストID	相対年度	連結・個別	期間・時点	ユニットID	単位	値
+jpcrp_cor:BasicEarningsLossPerShareSummaryOfBusinessResults	１株当たり当期純利益又は当期純損失（△）、経営指標等	CurrentYTDDuration	当四半期累計期間	その他	期間	JPYPerShares		271.16
+jpcrp_cor:EquityToAssetRatioSummaryOfBusinessResults	自己資本比率、経営指標等	CurrentQuarterInstant	当四半期会計期間末	その他	時点	pure		0.785
+jppfs_cor:OperatingIncome	営業利益又は営業損失（△）	CurrentYTDDuration	当四半期累計期間	連結	期間	JPY	円	521000000
+jppfs_cor:OrdinaryIncome	経常利益又は経常損失（△）	CurrentYTDDuration	当四半期累計期間	連結	期間	JPY	円	697000000
+jppfs_cor:ProfitLoss	当期純利益又は当期純損失（△）（平成26年3月28日財規等改正後）	CurrentYTDDuration	当四半期累計期間	連結	期間	JPY	円	593000000
+jppfs_cor:ProfitLossAttributableToOwnersOfParent	親会社株主に帰属する当期純利益又は親会社株主に帰属する当期純損失（△）	CurrentYTDDuration	当四半期累計期間	連結	期間	JPY	円	593000000
+jppfs_cor:ProfitLoss	当期純利益又は当期純損失（△）（平成26年3月28日財規等改正後）	CurrentYTDDuration	当四半期累計期間	連結	期間	JPY	円	593000000
+jppfs_cor:NetSales	売上高	CurrentYTDDuration_jpcrp040300-q1r_E01364-000SteelStructureProductionBusinessReportableSegmentsMember	当四半期累計期間	連結	期間	JPY	円	3473000000
+jppfs_cor:NetSales	売上高	CurrentYTDDuration_jpcrp040300-q1r_E01364-000RealEstateLeaseBusinessReportableSegmentsMember	当四半期累計期間	連結	期間	JPY	円	232000000
+jppfs_cor:NetSales	売上高	CurrentYTDDuration_jpcrp040300-q1r_E01364-000MaterialsSaleBusinessMember	当四半期累計期間	連結	期間	JPY	円	815000000
+jppfs_cor:NetSales	売上高	CurrentYTDDuration_jpcrp040300-q1r_E01364-000TransportBusinessMember	当四半期累計期間	連結	期間	JPY	円	53000000
+jppfs_cor:NetSales	売上高	CurrentYTDDuration_jpcrp040300-q1r_E01364-000MachineManufacturingBusinessReportableSegmentsMember	当四半期累計期間	連結	期間	JPY	円	19000000
+jppfs_cor:NetSales	売上高	CurrentYTDDuration_ReportableSegmentsMember	当四半期累計期間	連結	期間	JPY	円	4594000000
+jppfs_cor:NetSales	売上高	CurrentYTDDuration_OperatingSegmentsNotIncludedInReportableSegmentsAndOtherRevenueGeneratingBusinessActivitiesMember	当四半期累計期間	連結	期間	JPY	円	10000000
+jppfs_cor:NetSales	売上高	CurrentYTDDuration_TotalOfReportableSegmentsAndOthersMember	当四半期累計期間	連結	期間	JPY	円	4604000000
+jppfs_cor:NetSales	売上高	CurrentYTDDuration_ReconcilingItemsMember	当四半期累計期間	連結	期間	JPY	円	-182000000
+jppfs_cor:NetSales	売上高	CurrentYTDDuration	当四半期累計期間	連結	期間	JPY	円	4422000000
+jppfs_cor:OperatingIncome	営業利益又は営業損失（△）	CurrentYTDDuration_jpcrp040300-q1r_E01364-000SteelStructureProductionBusinessReportableSegmentsMember	当四半期累計期間	連結	期間	JPY	円	429000000
+jppfs_cor:OperatingIncome	営業利益又は営業損失（△）	CurrentYTDDuration_jpcrp040300-q1r_E01364-000RealEstateLeaseBusinessReportableSegmentsMember	当四半期累計期間	連結	期間	JPY	円	149000000
+jppfs_cor:OperatingIncome	営業利益又は営業損失（△）	CurrentYTDDuration_jpcrp040300-q1r_E01364-000MaterialsSaleBusinessMember	当四半期累計期間	連結	期間	JPY	円	42000000
+jppfs_cor:OperatingIncome	営業利益又は営業損失（△）	CurrentYTDDuration_jpcrp040300-q1r_E01364-000TransportBusinessMember	当四半期累計期間	連結	期間	JPY	円	-13000000
+jppfs_cor:OperatingIncome	営業利益又は営業損失（△）	CurrentYTDDuration_jpcrp040300-q1r_E01364-000MachineManufacturingBusinessReportableSegmentsMember	当四半期累計期間	連結	期間	JPY	円	-6000000
+jppfs_cor:OperatingIncome	営業利益又は営業損失（△）	CurrentYTDDuration_ReportableSegmentsMember	当四半期累計期間	連結	期間	JPY	円	600000000
+jppfs_cor:OperatingIncome	営業利益又は営業損失（△）	CurrentYTDDuration_OperatingSegmentsNotIncludedInReportableSegmentsAndOtherRevenueGeneratingBusinessActivitiesMember	当四半期累計期間	連結	期間	JPY	円	6000000
+jppfs_cor:OperatingIncome	営業利益又は営業損失（△）	CurrentYTDDuration_TotalOfReportableSegmentsAndOthersMember	当四半期累計期間	連結	期間	JPY	円	607000000
+jppfs_cor:OperatingIncome	営業利益又は営業損失（△）	CurrentYTDDuration_ReconcilingItemsMember	当四半期累計期間	連結	期間	JPY	円	-85000000
+jppfs_cor:OperatingIncome	営業利益又は営業損失（△）	CurrentYTDDuration	当四半期累計期間	連結	期間	JPY	円	521000000
+jpdei_cor:AccountingStandardsDEI	会計基準、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	Japan GAAP
+jpdei_cor:CurrentPeriodEndDateDEI	当会計期間終了日、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	2022-06-30
+jpdei_cor:TypeOfCurrentPeriodDEI	当会計期間の種類、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	Q1
+jpdei_cor:CurrentFiscalYearEndDateDEI	当事業年度終了日、DEI	FilingDateInstant	提出日時点	その他	時点	－	－	2023-03-31

@@ -26,13 +26,23 @@ from jp_stock_pipeline.transform.normalize import (
 
 TIDY_COLUMNS = [
     "code", "doc_id", "element", "context_ref", "period_start",
-    "period_end", "instant_date", "consolidated", "unit", "value",
+    "period_end", "instant_date", "consolidated", "unit", "dimensions", "value",
 ]
 
 
 def tidy_frame(rows: list[dict]) -> pd.DataFrame:
     base = {c: "" for c in TIDY_COLUMNS}
-    return pd.DataFrame([{**base, **r} for r in rows], columns=TIDY_COLUMNS)
+    def with_fixture_unit(row):
+        element = row.get("element", "").rsplit(":", 1)[-1]
+        unit = "JPY"
+        for field in ("eps", "bps", "dps"):
+            if element in normalize_mod.ELEMENT_CANDIDATES[field]:
+                unit = "JPY/shares"
+        for field in ("roe_pct", "equity_ratio_pct"):
+            if element in normalize_mod.ELEMENT_CANDIDATES[field]:
+                unit = "pure"
+        return {**base, "unit": unit, **row}
+    return pd.DataFrame([with_fixture_unit(r) for r in rows], columns=TIDY_COLUMNS)
 
 
 def prov() -> Provenance:
