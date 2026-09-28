@@ -551,3 +551,23 @@ LEX回復 26 + round-1合計のみ是正 32 + 旧来不一致 80 (59違反を含
   対象 gate: vitest 120 (海外 111+隔離 3+EDINET 期限 6)・tsc・eslint・
   render-data-audit・python 32・ruff check。全面 3152/3675/59 は不実行
   (Root 禁止)。本番書込なし (writer grant 待ち)。
+
+## 17. Root残gate: 単一行の直接証明化 (直前小見出し + TextBlock + caption 明示日)
+
+- 6877 の caption 判定 (区間内どこかの sales 語 + FY 語) は当該表の証明に
+  ならないため gate を締めた (Root msg_8292f908c0f6)。(a) 囲み TextBlock が
+  RevenuesFromExternalCustomersInformationForEachRegionTextBlock と一致
+  (contract 直接証明。tablesWithHeading が ix:nonNumeric 開閉を追跡)、
+  (b) 直前小見出し (caption 内の最終番号見出し) が sales metric
+  (後続の資産等見出しで失効。CAP82 は売上脚注後の (2）有形固定資産で -1)、
+  (c) 期は caption 最終 ranged 表題の明示日で確定し wide (前表) 禁止。
+  期表示なしは fiscal-unknown STOP (黙殺も wide 継承採用もしない)。
+- 直接証明は SingleRowProof {fiscal, contract: "ext"} として候補 group の
+  contract/FY へ渡し、通常 competition (期首フィルタ・pre-score STOP・
+  group・tiebreak) へ流す。非単一行候補は従来経路と同一 (8 検査点は
+  fiscalOfCand/contractOfCand の共通入口へ集約)。
+- R98H 実 zip E2E は不変 (ok_geo_cols・地域注記切り domestic 100547)。
+  fystop fixture (表83 caption FY 除去 + 完全複製を後置) で STOP を実証:
+  複製は単独で T 採用できる正表のため 0 facts は STOP の証拠。
+  対象 gate: vitest 123 (海外 114+隔離 3+EDINET 期限 6)・tsc・eslint・audit。
+  全面 3152/3675/59/74 は不実行 (Root 禁止)。本番書込なし (writer grant 待ち)。

@@ -102,6 +102,8 @@ interface ParsedTable {
    * stale (交互節表題の直前=前期) でも値列頭の当連結@pe で T 確定する。
    */
   valueAxisHeader?: string;
+  /** 単一行 geocols の直接証明 (分岐受理表のみ。contract/FY を group へ渡す)。 */
+  singleRowProof?: SingleRowProof;
 }
 
 /**
@@ -1298,13 +1300,57 @@ function resolveDupEntries(
 // GEO_COLS: 地域 = 列
 // ---------------------------------------------------------------------------
 
+/** 単一行 geocols を売上表と直接証明する囲み TextBlock (jpcrp 標準名)。 */
+export const SINGLE_ROW_SALES_TEXTBLOCK =
+  "RevenuesFromExternalCustomersInformationForEachRegionTextBlock";
+
 /**
- * 単一行 geocols の値行特定 (Sol確定の限定分岐)。完全な地域 header +
- * 無ラベル数値行が唯一で、caption (当該表と直前表の間の原文のみ) に
- * sales metric + FY の原文証拠があるときだけ行 index を返し、さもなくば
- * -1。別表の語は構造的に含まない (R98H 82/84 は FY なしで -1)。
- * ラベルつき非売上行 (資産等) は無ラベルではないため受理しない。
- * FY の値は wide 継承 + 期首フィルタが通常経路で検証する (ここでは存在のみ)。
+ * caption 内の有効小見出し (当該表の直前小見出し): 最後の番号見出し
+ * (「(1）」「２．」級) から表までの断片。後続の資産等見出しがあればそちらが
+ * 有効になり sales ではないため失効する (R98H 82: 売上脚注の後の
+ * 「(2）有形固定資産」が有効)。番号見出しなしは null。
+ */
+export function effectiveSubheading(caption: string): string | null {
+  const re = /[（(]\s*[０-９0-9]{1,3}\s*[）)]|[０-９0-9]{1,3}[．.]/g;
+  let m: RegExpExecArray | null;
+  let end = -1;
+  while ((m = re.exec(caption)) !== null) end = m.index + m[0].length;
+  if (end < 0) return null;
+  return caption.slice(end).trim();
+}
+
+/**
+ * caption 内の最後の ranged FY 表題の原文 (単一行の期の直接証明)。
+ * inheritSourceFiscal と同一正規表現の最終一致を返す。なければ null。
+ */
+export function lastRangedFiscalTitle(caption: string): string | null {
+  const w = toHalfWidthDigits(caption);
+  const re =
+    /(?:(前|当)(連結会計年度|事業年度|会計年度)?|第\d+期)\s*[（(]\s*自[^）)]{0,60}?至([^）)]{0,60}?)[）)]/g;
+  let m: RegExpExecArray | null;
+  let last: string | null = null;
+  while ((m = re.exec(w)) !== null) last = m[0];
+  return last;
+}
+
+/**
+ * 単一行 geocols の直接証明 (Root残gate)。TextBlock の contract と caption
+ * 明示日の fiscal を候補 group へ渡し、通常の competition guard で競合
+ * させる。fiscal は wide を見ない (前表からの継承禁止)。null (期表示なし)
+ * はここに入らず tryGeoCols が fiscal-unknown STOP を返す。
+ */
+export interface SingleRowProof {
+  fiscal: SourceFiscal | "mismatch";
+  contract: SalesContract;
+}
+
+/**
+ * 単一行 geocols の値行特定 (Sol確定の限定分岐 + Root残gate)。完全な地域
+ * header + 無ラベル数値行が唯一で、(a) 当該表を囲む TextBlock が売上の直接
+ * 証明、(b) 直前小見出し (有効小見出し) が sales metric のときだけ行 index
+ * を返し、さもなくば -1。区間内どこかの sales 語 + FY 語では受理しない
+ * (R98H 82: 前売上脚注 + 現資産表の共存は (b) と TextBlock 不一致で -1)。
+ * 期の確定は呼び出し側が caption 明示日で行い、wide は使わない。
  */
 export function singleUnlabeledValueRow(
   gridX: string[][],
@@ -1312,7 +1358,8 @@ export function singleUnlabeledValueRow(
   width: number,
   colRole: RegionRole[],
   totalCol: number,
-  caption: string
+  caption: string,
+  textBlock: string | null
 ): number {
   if (totalCol < 0) return -1;
   if (gridX.length - headerIdx - 1 !== 1) return -1;
@@ -1324,10 +1371,11 @@ export function singleUnlabeledValueRow(
       continue;
     if (parseJpNumber(gridX[ri][ci] ?? "") === null) return -1;
   }
-  const salesish =
-    /売上高|売上収益|営業収益|顧客との契約|外部顧客/.test(caption);
-  const fiscal = /(当|前)(連結会計年度|事業年度|会計年度)/.test(caption);
-  if (!salesish || !fiscal) return -1;
+  // (a) contract の直接証明: 売上 TextBlock の囲みだけ受理する。
+  if (textBlock !== SINGLE_ROW_SALES_TEXTBLOCK) return -1;
+  // (b) 直前小見出しが sales metric。後続の資産等見出しで失効する。
+  const sub = effectiveSubheading(caption);
+  if (sub === null || !/売上高|売上収益|営業収益/.test(sub)) return -1;
   return ri;
 }
 
@@ -1336,8 +1384,9 @@ function tryGeoCols(
   fiscalYearEnd: string,
   heading: string,
   mode: RoundingMode,
-  caption: string = ""
-): ParsedTable | null {
+  caption: string = "",
+  textBlock: string | null = null
+): ParsedTable | "single_row_fiscal_unknown" | null {
   const flat = gridX.map((r) => r.join("")).join("");
   const unit = detectUnitOrNull(flat) ?? detectUnitOrNull(heading);
   if (!unit) return null;
@@ -1383,14 +1432,34 @@ function tryGeoCols(
       }
     }
   }
+  // 単一行の直接証明 (分岐が受理した表だけ設定する)。
+  let singleRowProof: SingleRowProof | undefined;
+  let singleRowAxis: string | undefined;
   if (valueRow < 0) {
-    // 単一行 geocols の限定分岐 (Sol確定): 地域 header + 無ラベル数値行が
-    // 唯一で、表間 caption (当該表のみ。別表の語は構造的に含まない) に
-    // sales metric + FY の原文証拠がある場合だけ値行として受理する
-    // (R98H 81/83 級)。以降は通常 cols と同一の raw quantum・総額照合・
-    // 候補競合 guard へ流す。資産/生産/受注は既存 R1 veto が先に弾く。
-    valueRow = singleUnlabeledValueRow(gridX, headerIdx, width, colRole, totalCol, caption);
+    // 単一行 geocols の限定分岐 (Sol確定 + Root残gate): 地域 header +
+    // 無ラベル数値行が唯一で、売上 TextBlock の囲み + 直前小見出しの sales
+    // metric がある場合だけ値行として受理する (R98H 81/83 級)。期は
+    // caption 内明示日で確定し、wide (前表の証拠) は使わない。期表示なし
+    // は fiscal-unknown STOP (黙殺も wide 継承採用もしない)。以降は通常
+    // cols と同一の raw quantum・総額照合・候補競合 guard へ流す。
+    // 資産/生産/受注は既存 R1 veto が先に弾く。
+    valueRow = singleUnlabeledValueRow(
+      gridX,
+      headerIdx,
+      width,
+      colRole,
+      totalCol,
+      caption,
+      textBlock
+    );
     if (valueRow < 0) return null;
+    const title = lastRangedFiscalTitle(caption);
+    const inh = title ? inheritSourceFiscal(caption, fiscalYearEnd) : null;
+    if (!title || inh === null) return "single_row_fiscal_unknown";
+    // TextBlock 名の示す外部顧客売上 = Gate2 の "ext" (contractOf の
+    // 外部顧客分岐と同一意味)。group キー・競合 guard は通常経路で使う。
+    singleRowProof = { fiscal: inh, contract: "ext" };
+    singleRowAxis = title;
   }
 
   // 集計列 (連結/合計) と消去列 (調整額/消去) を収集。行パスと同型に、
@@ -1616,7 +1685,8 @@ function tryGeoCols(
       totalLo,
       totalHi,
     },
-    valueAxisHeader: gridX[valueRow]?.join("") ?? "",
+    valueAxisHeader: singleRowAxis ?? gridX[valueRow]?.join("") ?? "",
+    ...(singleRowProof ? { singleRowProof } : {}),
   };
 }
 
@@ -1723,6 +1793,7 @@ function tablesWithHeading(
   heading: string;
   wide: string;
   caption: string;
+  textBlock: string | null;
   start: number;
 }> {
   const out: Array<{
@@ -1730,10 +1801,16 @@ function tablesWithHeading(
     heading: string;
     wide: string;
     caption: string;
+    textBlock: string | null;
     start: number;
   }> = [];
-  const re = /<\/?table\b[^>]*>/gi;
+  // table と ix:nonNumeric (TextBlock 囲み) を同一走査で拾う。ix の開閉は
+  // table スタックと独立に追う (表の内外判定だけに使い、表抽出は不変)。
+  const re = /<(\/?)(table|ix:nonNumeric)\b[^>]*>/gi;
   const stack: number[] = [];
+  // 開いている ix:nonNumeric の内側から見た TextBlock 名 (非 TextBlock は
+  // null の深さ標識)。表を直接囲む TextBlock を contract の直接証明に使う。
+  const ixStack: Array<string | null> = [];
   let m: RegExpExecArray | null;
   const strip = (s: string): string =>
     s
@@ -1744,7 +1821,19 @@ function tablesWithHeading(
   // 直前に閉じたトップレベル表の終端 (表間 caption の起点)。
   let prevTopEnd = 0;
   while ((m = re.exec(html)) !== null) {
-    if (m[0][1] === "/") {
+    const isClose = m[0][1] === "/";
+    const tag = m[2].toLowerCase();
+    if (tag !== "table") {
+      if (isClose) {
+        if (ixStack.length > 0) ixStack.pop();
+      } else if (!/\/>$/.test(m[0])) {
+        const nm = /name\s*=\s*"([^"]+)"/i.exec(m[0]);
+        const local = nm ? nm[1].split(":").pop()! : "";
+        ixStack.push(/TextBlock$/.test(local) ? local : null);
+      }
+      continue;
+    }
+    if (isClose) {
       const start = stack.pop();
       if (start === undefined) continue; // 壊れた HTML 防御
       const table = html.slice(start, re.lastIndex);
@@ -1763,8 +1852,15 @@ function tablesWithHeading(
       const capFrom =
         stack.length > 0 ? stack[stack.length - 1] : Math.min(prevTopEnd, start);
       const caption = strip(html.slice(capFrom, start)).slice(-4000);
+      let textBlock: string | null = null;
+      for (let i = ixStack.length - 1; i >= 0; i--) {
+        if (ixStack[i] !== null) {
+          textBlock = ixStack[i];
+          break;
+        }
+      }
       if (stack.length === 0) prevTopEnd = re.lastIndex;
-      out.push({ table, heading, start, wide, caption });
+      out.push({ table, heading, start, wide, caption, textBlock });
     } else {
       stack.push(m.index);
     }
@@ -1898,6 +1994,7 @@ interface PeriodPairCand {
   flat: string;
   wide: string;
   axis: string;
+  singleRowProof?: SingleRowProof;
 }
 
 /** 表文面に非売上 metric の標識 (IFRS 移行日列・資産/減損の語) があるか */
@@ -1938,6 +2035,38 @@ export function contractOf(
   if (crev) return "contract";
   if (/外部顧客/.test(ctx)) return "ext";
   return "unknown";
+}
+
+/**
+ * 候補の fiscal (期首フィルタ・pre-score STOP・group・tiebreak の共通入口)。
+ * 単一行の直接証明がある候補は caption 明示日の確定値を使い、wide
+ * (前表の証拠) を見ない。それ以外は既存の確定鎖と同一。
+ */
+function fiscalOfCand(
+  c: {
+    singleRowProof?: SingleRowProof;
+    axis: string;
+    flat: string;
+    wide: string;
+  },
+  pe: string
+): FiscalResolution {
+  return (
+    c.singleRowProof?.fiscal ?? resolveCandidateFiscal(c.axis, c.flat, c.wide, pe)
+  );
+}
+
+/**
+ * 候補の contract (競合 guard・group キーの共通入口)。単一行の直接証明が
+ * ある候補は TextBlock 由来の確定値を使い、それ以外は既存の推定と同一。
+ */
+function contractOfCand(c: {
+  singleRowProof?: SingleRowProof;
+  facts: OverseasFact[];
+  heading: string;
+  flat: string;
+}): SalesContract {
+  return c.singleRowProof?.contract ?? contractOf(c.facts, c.heading, c.flat);
 }
 
 /** 和暦の開始西暦 (元年=1)。終期の pe 照合用。 */
@@ -2171,7 +2300,7 @@ export function resolveCandidateFiscal(
  * 同期間ペアは同 group 内のキー不一致→STOP に流れる。
  */
 function sourceFiscalKey(c: PeriodPairCand, pe: string): string {
-  const inh = resolveCandidateFiscal(c.axis, c.flat, c.wide, pe);
+  const inh = fiscalOfCand(c, pe);
   if (inh === "mismatch") return "mm";
   if (inh) return inh.date ?? inh.side;
   return `pw:${periodWordClassOf(c.heading, c.flat)}`;
@@ -2199,11 +2328,10 @@ function pickCurrentOfFiscalPair(
   if (unitA !== unitB) return null;
   // 同一 contract の T/Z ペアに限る (Gate2。違う集計範囲の表同士の
   // 総額比較は無意味なため STOP へ流す)。
-  if (contractOf(a.facts, a.heading, a.flat) !== contractOf(b.facts, b.heading, b.flat))
-    return null;
+  if (contractOfCand(a) !== contractOfCand(b)) return null;
   if (hasMetricMarkers(a.flat) || hasMetricMarkers(b.flat)) return null;
-  const inhA = resolveCandidateFiscal(a.axis, a.flat, a.wide, pe);
-  const inhB = resolveCandidateFiscal(b.axis, b.flat, b.wide, pe);
+  const inhA = fiscalOfCand(a, pe);
+  const inhB = fiscalOfCand(b, pe);
   if (!inhA || !inhB || inhA === "mismatch" || inhB === "mismatch") return null;
   if (inhA.side === inhB.side) return null;
   const totA = a.facts.find((f) => f.regionKind === "total")?.salesAmount ?? null;
@@ -2236,6 +2364,7 @@ export function parseOverseasHtml(
     flat: string;
     wide: string;
     axis: string;
+    singleRowProof?: SingleRowProof;
   }
   const candidates: Cand[] = [];
   const buffered: {
@@ -2247,9 +2376,10 @@ export function parseOverseasHtml(
     heading: string;
     flat: string;
     wide: string;
+    singleRowProof?: SingleRowProof;
   }[] = [];
 
-  for (const { table, heading, wide, caption, start } of tables) {
+  for (const { table, heading, wide, caption, textBlock, start } of tables) {
     const rawGrid = tableToGridExpanded(table);
     if (rawGrid.length < 2) continue;
     // 全角数字・ラテンの半角化 (全パス共通)。S1009XV6 の「その他 ５」等、
@@ -2296,6 +2426,7 @@ export function parseOverseasHtml(
       facts: OverseasFact[];
       proof: OverseasProof;
       axis: string;
+      singleRowProof?: SingleRowProof;
     } | null = null;
     {
       const rows = tryGeoRows(grid, reportPeriodEnd, heading, mode);
@@ -2308,13 +2439,26 @@ export function parseOverseasHtml(
         };
     }
     if (!cand) {
-      const cols = tryGeoCols(grid, reportPeriodEnd, heading, mode, caption);
+      const cols = tryGeoCols(
+        grid,
+        reportPeriodEnd,
+        heading,
+        mode,
+        caption,
+        textBlock
+      );
+      // 単一行の売上直接証明はあるが caption に期表示なし → fiscal-unknown
+      // STOP (Root残gate)。黙殺せず、wide (前表) 継承で採用もしない。
+      if (cols === "single_row_fiscal_unknown") {
+        return { status: "geo_present_unstructured", facts: [], tablesScanned };
+      }
       if (cols)
         cand = {
           status: "ok_geo_cols",
           facts: cols.facts,
           proof: cols.proof,
           axis: cols.valueAxisHeader ?? "",
+          ...(cols.singleRowProof ? { singleRowProof: cols.singleRowProof } : {}),
         };
     }
     if (cand) {
@@ -2338,9 +2482,7 @@ export function parseOverseasHtml(
   // 確定鎖は値軸→表内→表外 (stale な表外表題より値軸/表内が強い)。
   // 除外で候補が尽きても sawGeoSignal が STOP (未構造化) へ流す。
   {
-    const inhs = buffered.map((b) =>
-      resolveCandidateFiscal(b.axis, b.flat, b.wide, reportPeriodEnd)
-    );
+    const inhs = buffered.map((b) => fiscalOfCand(b, reportPeriodEnd));
     for (let i = 0; i < buffered.length; i++) {
       const b = buffered[i];
       const inh = inhs[i];
@@ -2358,6 +2500,7 @@ export function parseOverseasHtml(
         heading: b.heading,
         flat: b.flat,
         wide: b.wide,
+        ...(b.singleRowProof ? { singleRowProof: b.singleRowProof } : {}),
       });
     }
   }
@@ -2366,9 +2509,7 @@ export function parseOverseasHtml(
   // (Sol確定(b))。unknown 高 score は当期証明にならない。全 unknown の文書は
   // 既存扱い (report header provenance) のまま後段へ進む。
   if (candidates.length > 1) {
-    const fiscals = candidates.map((c) =>
-      resolveCandidateFiscal(c.axis, c.flat, c.wide, reportPeriodEnd)
-    );
+    const fiscals = candidates.map((c) => fiscalOfCand(c, reportPeriodEnd));
     if (fiscals.some((f) => f !== null) && fiscals.some((f) => f === null)) {
       return { status: "geo_present_unstructured", facts: [], tablesScanned };
     }
@@ -2388,7 +2529,7 @@ export function parseOverseasHtml(
       // provenance で残す = Gate1 の期首フィルタ)。
       if (
         tops.some((c) => {
-          const k = contractOf(c.facts, c.heading, c.flat);
+          const k = contractOfCand(c);
           return k === "unknown" || k === "mixed";
         })
       ) {
@@ -2405,7 +2546,7 @@ export function parseOverseasHtml(
         const scope = f0
           ? `${String(f0.isConsolidated)}|${f0.unitLabel}`
           : "empty";
-        return `${sourceFiscalKey(c, reportPeriodEnd)}|${scope}|${contractOf(c.facts, c.heading, c.flat)}`;
+        return `${sourceFiscalKey(c, reportPeriodEnd)}|${scope}|${contractOfCand(c)}`;
       };
       const groups = new Map<string, Cand[]>();
       for (const c of tops) {
