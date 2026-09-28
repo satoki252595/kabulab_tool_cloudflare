@@ -64,8 +64,11 @@ Issue [#146](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/146)
     D1 は wrangler OAuth 経路を維持（`.env` token へ置換なし）。
 - 単位・許容誤差: 金額は円・整数完全一致、比率は再計算値との絶対差で評価（財務 ±1e-9、海外比率 ±0.05・1 位丸め、
   優待利回り ±1e-9）。原文引用は最小限（比較に必要な行のみ、全文・署名 URL・秘密値は出さない）。
-- 時刻は UTC。D1 fresh read は 2026-09-28 08:30〜09:35 UTC＋追検 09:45〜10:35 UTC、
-  Notion fresh GET/query は同日 09:00〜09:35 UTC＋追検 10:00〜10:20 UTC（いずれも ≤1rps 厳守）。
+- 時刻は UTC。D1 fresh read は 2026-09-28 08:30〜09:35 UTC、
+  Notion fresh GET/query は同日 09:00〜09:35 UTC（いずれも ≤1rps 厳守）。
+  追検の fresh read（D1＋Notion）は 09:45 UTC 以降に開始し b82591f commit（10:14:57 UTC）前に完了。
+  追検 artifact（§10 の /tmp 再現 script＋dump 12 件）の mtime は 09:45〜09:58 UTC で commit 前と一致する。
+  旧表記の終了時刻（D1 10:35・Notion 10:20）は commit 後の未来時刻のため撤回する。
   EDINET は追検で type=5 CSV 3 通＋type=1 XBRL 1 通のみ取得（3s pacing。SHA は §4.4・§2.5）。
 
 ## 2. 財務・銘柄対応（jss_financials / core_stocks）
