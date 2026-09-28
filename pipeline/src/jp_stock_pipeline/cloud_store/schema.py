@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS jss_financials (
   data_date                 TEXT,
   fetched_at                INTEGER NOT NULL,
   quality                   TEXT NOT NULL,
+  raw_page_id               TEXT,
   PRIMARY KEY (code, fiscal_period_end, disclosure_type, consolidated)
 )
 """

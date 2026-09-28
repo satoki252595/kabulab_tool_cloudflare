@@ -18,6 +18,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -99,14 +100,15 @@ def _write(store: FakeStore, record, *, doc_id="S100AAAA", raw_sha256="a" * 64) 
 
 
 class TestColumns:
-    def test_thirty_three_columns(self) -> None:
-        """レコード+Provenance 30 列 + doc_id + raw_sha256 + stock_id = 33。
+    def test_thirty_four_columns(self) -> None:
+        """元33列を保ち、同原本のNotion page IDを末尾へ追加する。
 
         29 と数えると 1 列落ちる（`roe_pct` / `roa_pct` は常に None だが
         列としては存在する）。
         """
-        assert len(F.COLUMNS) == 33
-        assert len(set(F.COLUMNS)) == 33
+        assert len(F.COLUMNS) == 34
+        assert len(set(F.COLUMNS)) == 34
+        assert F.COLUMNS[-1] == "raw_page_id"
 
     def test_columns_match_the_ddl(self) -> None:
         ddl = next(s for s in S.SCHEMA_STATEMENTS if "jss_financials" in s)
@@ -266,6 +268,54 @@ class TestCorrectionReplacement:
         local.write(sparse)
         assert store.fin_rows()[0] == row and local.row() == local_row
 
+    def test_real_original_relation_is_carried_without_changing_the_existing_33_columns(self) -> None:
+        from uuid import UUID
+
+        case = next(case for case in EDINET_CASES if case["code"] == "7384")
+        record = tidy_to_financial_record(
+            fixture_tidy(case), case["code"], fixture_provenance(case),
+        )
+        without_relation = replace(record, provenance=replace(record.provenance, raw_page_id=None))
+        store = FakeStore()
+        _write(store, without_relation, doc_id="S100UTIN", raw_sha256=case["raw_sha256"])
+        before = store.fin_rows()[0]
+        _write(store, record, doc_id="S100UTIN", raw_sha256=case["raw_sha256"])
+        after = store.fin_rows()[0]
+        assert after["raw_page_id"] == str(UUID(case["page_id"]))
+        assert {c: after[c] for c in F.COLUMNS[:-1]} == {c: before[c] for c in F.COLUMNS[:-1]}
+        # A later unknown relation clears the link; no previous original is borrowed.
+        _write(store, without_relation, doc_id="S100UTIN", raw_sha256=case["raw_sha256"])
+        assert store.fin_rows()[0] == before
+        for raw_id, digest in [(case["page_id"], None), ("dry-run-original", case["raw_sha256"])]:
+            unknown = replace(record, provenance=replace(record.provenance, raw_page_id=raw_id))
+            row = F.record_to_row(unknown, stock_id=None, doc_id=None, raw_sha256=digest)
+            assert row[F.COLUMNS.index("raw_page_id")] is None
+        invalid = replace(record, provenance=replace(record.provenance, raw_page_id="invalid-original"))
+        with pytest.raises(D1Error, match="原本のNotion page ID"):
+            F.record_to_row(invalid, stock_id=None, doc_id=None, raw_sha256=case["raw_sha256"])
+
+    def test_existing_financial_schema_migration_preserves_the_real_original_33_columns(self) -> None:
+        case = next(case for case in EDINET_CASES if case["code"] == "7384")
+        record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+        old_columns = F.COLUMNS[:-1]
+        row = F.record_to_row(record, stock_id=None, doc_id="S100UTIN", raw_sha256=case["raw_sha256"])
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        ddl = next(s for s in S.SCHEMA_STATEMENTS if "CREATE TABLE IF NOT EXISTS jss_financials" in s)
+        db.execute("\n".join(line for line in ddl.splitlines() if not line.strip().startswith("raw_page_id ")))
+        db.execute(
+            f"INSERT INTO jss_financials ({', '.join(old_columns)}) VALUES ({', '.join('?' for _ in old_columns)})",
+            row[:-1],
+        )
+        before = dict(db.execute("SELECT * FROM jss_financials").fetchone())
+        migration = Path(__file__).parents[1] / "scripts/financial_raw_page_id.sql"
+        db.executescript(migration.read_text())
+        after = dict(db.execute("SELECT * FROM jss_financials").fetchone())
+        assert {c: after[c] for c in old_columns} == before
+        assert after["raw_page_id"] is None
+        column = next(row for row in db.execute("PRAGMA table_info(jss_financials)") if row["name"] == "raw_page_id")
+        assert column["type"] == "TEXT" and column["notnull"] == 0
+
     def test_an_older_disclosure_cannot_roll_back_a_correction(self) -> None:
         store = FakeStore()
         _write(
@@ -370,7 +420,7 @@ class TestRowShape:
         assert store.sql_log == []
 
     def test_chunking_respects_the_bind_limit(self) -> None:
-        """33 列 → 3 行/リクエスト。超えると実行時に落ちる。"""
+        """34 列 → 2 行/リクエスト。超えると実行時に落ちる。"""
         store = FakeStore()
         rows = [
             F.record_to_row(
@@ -382,7 +432,7 @@ class TestRowShape:
             for i in range(7)
         ]
         assert F.write(store, rows) == 7
-        assert len(store.sql_log) == 3  # 3 + 3 + 1
+        assert len(store.sql_log) == 4  # 2 + 2 + 2 + 1
         assert len(store.fin_rows()) == 7
 
     def test_empty_rows_is_a_noop(self) -> None:

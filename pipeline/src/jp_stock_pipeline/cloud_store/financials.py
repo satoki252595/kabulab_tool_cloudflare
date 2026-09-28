@@ -64,8 +64,10 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from ..licensing import stricter_tag_sql
+from ..notion.upsert import real_page_id
 from .d1 import MAX_BOUND_PARAMS, D1Error
 from .schema import FINANCIALS_PK
 
@@ -85,8 +87,8 @@ TABLE = "jss_financials"
 # 詳細は `cloud_store/schema.py` の `_FINANCIALS` のコメント。
 UNKNOWN_CONSOLIDATED = "不明"
 
-# `jss_financials` の全 33 列（DDL と同じ順序）。
-# 内訳: レコード + Provenance 由来 30 列 + doc_id + raw_sha256 + stock_id。
+# `jss_financials` の全 34 列（DDL と同じ順序）。
+# 元の33列に、同じ原本を指すNotion⑤ page IDだけを追加する。
 # `roe_pct` はEDINET原本の比率をそのまま%へ変換する。
 # `roa_pct` は未取得のまま（利益/総資産から計算で補わない §3-1）。
 COLUMNS: tuple[str, ...] = (
@@ -123,6 +125,7 @@ COLUMNS: tuple[str, ...] = (
     "data_date",
     "fetched_at",
     "quality",
+    "raw_page_id",
 )
 
 # 厳しい側を残す列。
@@ -198,6 +201,12 @@ def record_to_row(
     if record.fiscal_period_end is None:
         raise D1Error("financials: fiscal_period_end が無いレコードは書かない")
     prov = record.provenance
+    raw_page_id = real_page_id(prov.raw_page_id) if raw_sha256 is not None else None
+    if raw_page_id is not None:
+        try:
+            raw_page_id = str(UUID(raw_page_id))
+        except ValueError as exc:
+            raise D1Error("financials: 原本のNotion page IDが不正です") from exc
     values: dict[str, Any] = {
         "code": record.code,
         "fiscal_period_end": _iso(record.fiscal_period_end),
@@ -232,6 +241,7 @@ def record_to_row(
         "data_date": _iso(prov.data_date),
         "fetched_at": _epoch(prov.fetched_at),
         "quality": prov.quality.value,
+        "raw_page_id": raw_page_id,
     }
     missing = [c for c in COLUMNS if c not in values]
     if missing:
@@ -309,7 +319,7 @@ def prefetch_stock_ids(
 def write(store: "D1Store", rows: list[list[Any]]) -> int:
     """行を D1 へ流す。**投げたチャンクの行数**を返す（反映行数ではない）。
 
-    D1 のバインドパラメータ上限 100 から 33 列 → 3 行/リクエスト。
+    D1 のバインドパラメータ上限 100 から 34 列 → 2 行/リクエスト。
     compound SELECT の 5 項上限（`d1.MAX_COMPOUND_SELECT_TERMS`）は UNION を
     含む文にしか効かないので、複数行 VALUES のこの文には掛からない。
     """
