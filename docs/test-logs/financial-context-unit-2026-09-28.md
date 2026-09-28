@@ -124,3 +124,49 @@ InterimInstantを選ぶ共通修正を行った。自己資本比率はpure 0.02
 全cache再解析をAPI0で進め、d82版からの差分確認・CI・原本確認を終えてから全Notion修復を再開する。
 反映済みの同一数値を再PATCHせず、新鮮なまとめ読取から新receiptを作る。
 全source D1反映は、全Notion再読receiptと実隔離D1の全件差分・選定影響検証後に行う。
+
+## 最終全原本監査（正本修復とは別の完了判定）
+
+7384のInstant優先修正後のparser SHAは
+`fdfa3c89039dfc27e6a0328dff7ccd05fd6ecb250a49019be097e2b090bfb914`。
+全34,663原本をSHA照合cacheから再解析し、失敗0、49分48.6秒、Notion API 0回で完了。
+独立サブエージェントも全件を照合し、旧d82版との差分は7384のBPS
+`None→5,918.24円` と自己資本比率 `None→2.81%` の1原本2項目だけ。
+原本SHA・URL・format・旧断面の変化、許可外差分、未来の実績期末、不明キーは0件。
+
+最終journalはprivate `/tmp/kabulab-financial-full-instant-final-audit.jsonl`
+（80,645,487 bytes、SHA256
+`3be26f4dee1db4881ddbce3d478ba4b68cb9e6b9408410b242798db8e954364e`）。
+原本・全行JSON・引用本文は公開Gitへ保存しない。
+
+| 内訳 | 件数 |
+| --- | ---: |
+| TDnet / EDINET原本 | 2,931 / 31,732 |
+| 連結 / 単体 | 29,827 / 4,836 |
+| 1Q / 2Q / 3Q / 中間 / 本決算 | 5,177 / 3,817 / 4,301 / 8,340 / 13,028 |
+| 旧liveから変更する原本 / 正しい財務キー | 34,407 / 34,659 |
+| 原本context・unit適格性を照合した数値 | 328,365 |
+| 旧liveからの数値復元 / 除去 / 訂正 | 146,567 / 1,727 / 10,418 |
+
+優先26原本・25live行は全項目不変。source D1反映済みの年配当・ROE等は今回も同値。
+隔離D1とsource D1のcore id/code全3,810件は、実読取で完全一致を確認した。
+現行通常writerもNotionと同じNULL完全置換へ修正済み（PR #131）。
+
+追加レンジ監査で543Aの自己資本比率 `-40,758,261,600%` を原本へ戻って確認した。
+EDINET S100YK16のpure値・経営指標本文とも同値で、設立期・発行株1株・単体の値。
+BPS/EPSも原値と一致し、閾値でNULL化したり株式交換後の株数で推定補正しない。
+統合後の連結数値との比較は、範囲・会計基準・1株の基準を確認してから行う。
+原文の詳細証跡はprivate `/tmp/kabulab-financial-543a-independent-raw-proof.json`
+（SHA256 `43fbb7958cb29dc67fc7e3958aec95f66e83d20e857cda84fa63ffe2567c3f30`）。
+
+### 正本修復の再開
+
+2026-09-28 04:10:59 UTCに最終journalから全Notion修復を再開した。
+先行799の実receiptは退避済みページのリンク証跡として保持し、最新parserの証明は
+新鮮なまとめqueryから取り直す。最初の773原本は再PATCHなしで再証明済み。
+sourceの通信上限は既存2.5 rps。既存throttleはmonotonicの送信開始間隔制御なので、
+応答後の固定sleepを追加せず、ネット待ちを含む実時間とRetry-Afterを尊重する。
+
+全原本監査の完了だけで、全Notion修復・全D1同期を完了扱いにしない。
+全fresh receipt→実隔離D1の全件差分・冪等性→現行共通SQL/SHORT権利ゲート差分→
+同じ基準のsource D1同期・再読の順に、後続の実測を記録する。
