@@ -69,12 +69,19 @@ export type OverseasParseStatus =
 
 /**
  * 照合の証明 (DB 保存対象外)。消去・調整を加えた地域合計と開示総額の照合に
- * 使った調整額と丸め許容を保存前検証へ運ぶ (7203 Toyota 型: 地域合計は消去前
- * のため調整なしでは総額を上回る。検証側で推測させない)。
+ * 使った調整額・丸め方式・和区間/総額区間の基数を保存前検証へ運ぶ
+ * (7203 Toyota 型: 地域合計は消去前のため調整なしでは総額を上回る。
+ * 検証側で推測させない)。3 reducer と保存検証は同一の区間照合を使う。
  */
 export interface OverseasProof {
   reconciliationAdjustment: number;
-  roundingBound: number;
+  mode: RoundingMode;
+  /** 和区間 (= 地域印刷セル + 調整脚の区間の和。parse 側で確定)。 */
+  sumLo: number;
+  sumHi: number;
+  /** 総額セルの区間。total 欠損 (9147 系) は null。 */
+  totalLo: number | null;
+  totalHi: number | null;
 }
 
 export interface OverseasExtraction {
@@ -303,38 +310,118 @@ function classifyRegion(rawLabel: string): RegionRole {
 }
 
 /**
- * 表示丸めの許容 (= 表示葉セル数 L)。導出: 開示値は表示単位の整数で、
- * 切捨て表示 (百万円未満の端数を切り捨て。S100NRWW・S100DDYF の会計方針で
- * 明記) の最悪計算では各表示セルは真値より [0, 1) 単位だけ小さい。
- * したがって |Σ表示葉 − 真合計| < L、|開示総額 − 真合計| < 1。
- * 両辺が整数なので |差| < L+1 ⟺ |差| ≤ L。四捨五入表示 (|差| ≤ 0.5(L+1))
- * も L ≥ 1 ではこの中に包まれる。注記なし文書 (S100OJX1: 千円・端数注記
- * なし) も最悪計算=切捨て側で包まれる。隠れ小計の二重丸めは葉セル数に
- * 織り込み済み (親=子表示値の完全和のとき親は誤差を運ばない。S100DDYF:
- * アジア 118476+182922=301398 完全一致。L は底辺の表示セル数=6)。
- * 実証: 差 4 の完全読取 4 表 (NRWW L=5・OJX1 L=5・DDYF L=6・PUMS L=15)
- * を全て受理し、実証済み脱落 (S1009XV6: その他 5 脱落→差 7・L=5、
- * S100FFET: その他 7 脱落→差 10・L=5) を共に却下する。
- * 一律 1% は小規模な地域脱落・重複を見逃すため使わない。
+ * 表示丸めの方式。資料の端数注記 (provenanceつき) でのみ確定し、注記なし・
+ * 矛盾注記は "unknown" (Gate3)。unknown は実 quantum が支持し得る方式
+ * (切捨/四捨五入) の区間を包摂し、任意の追加誤差は足さない。
  */
-export function roundingBoundFor(leafTerms: number): number {
-  return leafTerms <= 0 ? 0 : leafTerms;
+export type RoundingMode = "truncate" | "round" | "unknown";
+
+/** 印刷セル 1 個の値と quantum (表示単位での最小目盛 = 10^-小数桁数)。 */
+export interface CellAmount {
+  value: number;
+  quantum: number;
 }
 
 /**
- * 地域行の合計と開示総額の整合チェック。許容は roundingBoundFor (導出済み)。
- * 保存パスの片側検査 (total < adjusted − bound で却下) が上側を検査しないのは
- * 設計: 開示総額は非地域収益 (その他の収益等。橋渡しされず残ることがある) を
- * 含み得るため上振れは正当。単一候補の脱落 (合計 << 総額) は非地域超過と
- * 算術的に区別不能で、読取完全性 (9XV6/FFET のその他読取) の領域。
+ * parseJpNumber と同一の受理/欠損判定で、値に加え quantum を返す sibling。
+ * 共有の parseJpNumber (受注パスと共用) は触らない。小数セル ("12.5") は
+ * quantum 0.1。整数セルは 1。
  */
-function totalsConsistent(
-  regionSum: number,
-  disclosedTotal: number,
-  terms: number
+export function parseJpNumberCell(raw: string): CellAmount | null {
+  const value = parseJpNumber(raw);
+  if (value === null) return null;
+  const digits = raw
+    .replace(/[\s\u3000]/g, "")
+    .replace(/[△▲＋+−\-,，]/g, "");
+  const m = /\.(\d+)$/.exec(digits);
+  const decimals = m ? m[1].length : 0;
+  return { value, quantum: 10 ** -decimals };
+}
+
+/**
+ * 資料の端数注記から丸め方式を確定する (provenance = 一致箇所の原文)。
+ * - 切捨: 「百万円未満を切り捨てて記載」系 (S100DDYF/S100NRWW の実文言。
+ *   「100株未満は切り捨て」の株数注記は金額単位を要求して除外)。
+ * - 四捨五入: 同形の標準文言。
+ * - 両方検出 (要約/連結で方式が違う等)・検出なし → unknown。
+ */
+export function detectRoundingMode(text: string): {
+  mode: RoundingMode;
+  provenance: string | null;
+} {
+  const trunc = /(百万円|千円|億円|円)未満.{0,12}(切り捨て|切捨)/.exec(text);
+  const round = /(百万円|千円|億円|円)未満.{0,12}四捨五入/.exec(text);
+  if (trunc && round) return { mode: "unknown", provenance: null };
+  if (trunc) return { mode: "truncate", provenance: trunc[0].slice(0, 60) };
+  if (round) return { mode: "round", provenance: round[0].slice(0, 60) };
+  return { mode: "unknown", provenance: null };
+}
+
+/** 区間演算の浮動小数許容 (小数 quantum の 0.1 系誤差のみ吸収する微小値)。 */
+const INTERVAL_EPS = 1e-9;
+
+/**
+ * 印刷セル 1 個の真値区間 (表示単位・閉区間)。切捨は magnitude 側へ片寄り
+ * (負セルは [v-q, v])、四捨五入は対称、unknown は両方式の和包摂。
+ */
+export function cellInterval(
+  value: number,
+  quantum: number,
+  mode: RoundingMode
+): [number, number] {
+  if (mode === "round") return [value - quantum / 2, value + quantum / 2];
+  if (mode === "truncate") {
+    return value >= 0
+      ? [value, value + quantum]
+      : [value - quantum, value];
+  }
+  return value >= 0
+    ? [value - quantum / 2, value + quantum]
+    : [value - quantum, value + quantum / 2];
+}
+
+/** 和の区間 = 区間の和 (線形性。各印刷セルを exactly once だけ入れること)。 */
+export function sumInterval(
+  cells: readonly CellAmount[],
+  mode: RoundingMode
+): [number, number] {
+  let lo = 0;
+  let hi = 0;
+  for (const c of cells) {
+    const [clo, chi] = cellInterval(c.value, c.quantum, mode);
+    lo += clo;
+    hi += chi;
+  }
+  return [lo, hi];
+}
+
+export function intervalsOverlap(
+  a: readonly [number, number],
+  b: readonly [number, number]
 ): boolean {
-  if (disclosedTotal <= 0) return false;
-  return Math.abs(regionSum - disclosedTotal) <= roundingBoundFor(terms);
+  return a[0] <= b[1] + INTERVAL_EPS && b[0] <= a[1] + INTERVAL_EPS;
+}
+
+/**
+ * 地域行の合計と開示総額の整合チェック (Gate3)。印刷セルの区間の和と開示
+ * 総額セルの区間が重なるときだけ一致とみなす。純計算中間値 (regionSum 等)
+ * 自体に quantum は付けない — 区間は印刷セルからのみ組み立てる
+ * (二重算入なし)。親採用時は親セル自身の区間だけを入れ、子は leaf→subtotal
+ * の別照合でのみ使い再加算しない。
+ * 保存パスの片側検査はこの重なりに置換される: 開示総額は非地域収益を含む
+ * 得るため、総額セル区間が和区間を上回る側は開いたまま (橋渡し別途)、
+ * 和区間が総額セル区間を上回る側は丸め物理で閉じる。
+ */
+export function cellsConsistent(
+  sumCells: readonly CellAmount[],
+  totalCell: CellAmount,
+  mode: RoundingMode
+): boolean {
+  if (totalCell.value <= 0) return false;
+  return intervalsOverlap(
+    sumInterval(sumCells, mode),
+    cellInterval(totalCell.value, totalCell.quantum, mode)
+  );
 }
 
 /** 製品/用途・非売上 metric の section 標識 (この section の行は売上 block ではない) */
@@ -516,7 +603,8 @@ function pickValueColForRows(
 function tryGeoRows(
   gridX: string[][],
   fiscalYearEnd: string,
-  heading: string
+  heading: string,
+  mode: RoundingMode
 ): ParsedTable | null {
   const flat = gridX.map((r) => r.join("")).join("");
   // 単位は表外の見出し ((単位：百万円) 等) に書かれることが多い → heading も見る
@@ -568,7 +656,7 @@ function tryGeoRows(
   // すべて控える。地域行は「顧客との契約」水準で按分され、「外部顧客への売上高」
   // はそれに非地域分の『その他の収益』を足した広い総額になることがあるため、
   // 検証は「地域合計がいずれかの集計行と一致するか」で行う。
-  const aggregates: Array<{ label: string; value: number }> = [];
+  const aggregates: Array<{ label: string; value: number; quantum: number }> = [];
   const consolidated = detectConsolidated(gridX.flat().join(" "));
   interface Entry {
     idx: number;
@@ -577,15 +665,14 @@ function tryGeoRows(
     /** 曖昧さ解消列 (col1)。2-D 製品軸・階層子ラベル・metric 区分に使う */
     sub: string;
     value: number;
+    /** 印刷セルの quantum (Gate3。合算出力は子 quantum の合計を持つ)。 */
+    quantum: number;
   }
   const entries: Entry[] = [];
-  const shokei: Array<{ idx: number; value: number }> = [];
-  let elimSum = 0;
-  let elimCount = 0;
-  let otherRevenueSum = 0;
-  let otherRevenueCount = 0;
-  let companyCommonSum = 0;
-  let companyCommonCount = 0;
+  const shokei: Array<{ idx: number; value: number; quantum: number }> = [];
+  const elimCells: CellAmount[] = [];
+  const otherRevenueCells: CellAmount[] = [];
+  const companyCommonCells: CellAmount[] = [];
   let hasBusinessRows = false;
   // 最初の集計行より後の地域行は別 block (S100TYYR: 事業 block の「その他」
   // 4953 を地域に混入させない)。小計は block 終端ではなく block 内区切り。
@@ -596,7 +683,8 @@ function tryGeoRows(
     const row = gridX[i];
     if (row.length <= vc) continue;
     const role = roles[i];
-    const v = parseJpNumber(row[vc] ?? "");
+    const cell = parseJpNumberCell(row[vc] ?? "");
+    const v = cell?.value ?? null;
     const normLabel = norm(row[0] ?? "");
     // 非地域の実数行 (事業セグメント等) の有無。P-metric で集計行がない表の
     // total 欠損判定に使う (地域外の売上がある表で地域計を総額にしない)。
@@ -608,26 +696,29 @@ function tryGeoRows(
     if (
       role === "other" &&
       v !== null &&
+      cell !== null &&
       RX_OTHER_REVENUE.test(cleanLabel(row[0] ?? ""))
     ) {
-      otherRevenueSum += v;
-      otherRevenueCount++;
+      otherRevenueCells.push({ value: cell.value, quantum: cell.quantum });
     }
     // 全社・本社共通行 (地理不明の会社共通分。S100AGPO: 合計に含まれる 9)。
     // 集計行より前 (同一 block) のものだけ照合に加え、fact 化はしない。
     if (
       role === "other" &&
       v !== null &&
+      cell !== null &&
       !seenAggRow &&
+      // 消去行は elim 脚が持つため全社共通に重ねない (S100DA2Y「消去又は
+      // 全社」の二重計上を Gate3 の区間照合が摘出。1行は1脚だけ)。
+      !RX_ELIMINATION.test(normLabel) &&
       RX_COMPANY_COMMON.test(cleanLabel(row[0] ?? ""))
     ) {
-      companyCommonSum += v;
-      companyCommonCount++;
+      companyCommonCells.push({ value: cell.value, quantum: cell.quantum });
     }
     if (RX_SHOKEI.test(normLabel)) {
       // 小計の値が読めない block 構成は検証不能 → 却下 (fail-closed)
-      if (v === null || !Number.isInteger(v)) return null;
-      shokei.push({ idx: i, value: v });
+      if (v === null || cell === null || !Number.isInteger(v)) return null;
+      shokei.push({ idx: i, value: v, quantum: cell.quantum });
       continue;
     }
     if (role === "aggregate") {
@@ -636,16 +727,16 @@ function tryGeoRows(
       if (entries.length > 0) seenAggRow = true;
       if (
         v !== null &&
+        cell !== null &&
         /外部顧客|顧客との契約|合計|連結|^計$/.test(normLabel)
       ) {
-        aggregates.push({ label: normLabel, value: v });
+        aggregates.push({ label: normLabel, value: v, quantum: cell.quantum });
       }
       continue;
     }
     if (RX_ELIMINATION.test(normLabel)) {
-      if (v !== null) {
-        elimSum += v;
-        elimCount++;
+      if (v !== null && cell !== null) {
+        elimCells.push({ value: cell.value, quantum: cell.quantum });
       }
       continue;
     }
@@ -661,11 +752,11 @@ function tryGeoRows(
     }
     if (seenAggRow) continue;
     if (role !== "domestic" && role !== "overseas") continue;
-    if (v === null) continue;
+    if (v === null || cell === null) continue;
     if (!Number.isInteger(v)) return null; // 小数 = % 列誤認 → 却下
     const name = cleanLabel(row[0] ?? "");
     if (name === "") continue;
-    entries.push({ idx: i, role, name, sub: row[1] ?? "", value: v });
+    entries.push({ idx: i, role, name, sub: row[1] ?? "", value: v, quantum: cell.quantum });
   }
 
   if (shokei.length > 0) {
@@ -675,7 +766,8 @@ function tryGeoRows(
       aggregates,
       unit,
       fiscalYearEnd,
-      consolidated
+      consolidated,
+      mode
     );
     if (b1) return { ...b1, valueAxisHeader: colHeader[vc] ?? "" };
     return null;
@@ -685,16 +777,13 @@ function tryGeoRows(
   // 曖昧表として却下 (aggregate-before-dedup の防止。#150 の guard を弱めない)。
   let useEntries = entries;
   let metricPruned = false;
-  // 丸め許容の葉項数。2-D 等の合算後は group 数ではなく合算前の葉セル数
-  let leafTerms = entries.length;
   const entryNames = entries.map((e) => e.name);
   if (new Set(entryNames).size !== entryNames.length) {
-    if (elimSum !== 0) return null; // 消去つき重複は未証明の組合せ → 却下
-    const resolved = resolveDupEntries(entries, aggregates);
+    if (elimCells.some((c) => c.value !== 0)) return null; // 消去つき重複は未証明の組合せ → 却下
+    const resolved = resolveDupEntries(entries, aggregates, mode);
     if (!resolved) return null;
     useEntries = resolved.entries;
     metricPruned = resolved.metricPruned;
-    leafTerms = resolved.leafTerms;
   }
 
   const facts: OverseasFact[] = useEntries.map((e) => ({
@@ -766,37 +855,38 @@ function tryGeoRows(
     };
     leafSets[0] = dedupCols(leafSets[0]);
     leafSets[1] = dedupCols(leafSets[1]);
-    const verify = (leafCols: number[]): number | null => {
+    // 葉→開示小計の edge 検証 (Gate3)。feeder 葉セル (整数) の区間の和と
+    // 開示小計セル自身の区間の重なりで照合する (独立印刷 subtotal は自身の
+    // cell precision で照合)。採用するのは小計セル自身であり、feeder 葉は
+    // 和区間に再加算しない (親採用時子再加算なし)。
+    const verify = (leafCols: number[]): boolean => {
       if (
         !leafCols.some((ci) =>
           useEntries.some((e) => parseJpNumber(gridX[e.idx][ci] ?? "") !== null)
         )
       )
-        return null;
-      let leaves = 0;
+        return false;
       for (const e of useEntries) {
         const cells = leafCols
           .map((ci) => parseJpNumber(gridX[e.idx][ci] ?? ""))
           .filter((x): x is number => x !== null && Number.isInteger(x));
-        if (cells.length === 0) {
-          leaves += 1;
-          continue;
-        }
-        const feederSum = cells.reduce((a, x) => a + x, 0);
-        // 葉→開示小計の edge 検証。許容は表示葉セル数 (roundingBoundFor)。
+        if (cells.length === 0) continue;
         if (
-          Math.abs(feederSum - e.value) > roundingBoundFor(cells.length)
+          !cellsConsistent(
+            cells.map((v) => ({ value: v, quantum: 1 })),
+            { value: e.value, quantum: e.quantum },
+            mode
+          )
         ) {
-          return null;
+          return false;
         }
-        leaves += cells.length;
       }
-      return leaves > 0 ? leaves : null;
+      return true;
     };
     const leavesNoElim = verify(leafSets[0]);
     const leavesWithElim = verify(leafSets[1]);
     // 葉セルを持つ表でどちらの集合も通らなければ自己矛盾で却下する
-    // (S100PV48)。葉列自体がない表は従来どおり行数で数える。
+    // (S100PV48)。
     const eitherHasFeeder =
       leafSets[0].some((ci) =>
         useEntries.some((e) => parseJpNumber(gridX[e.idx][ci] ?? "") !== null)
@@ -804,38 +894,34 @@ function tryGeoRows(
       leafSets[1].some((ci) =>
         useEntries.some((e) => parseJpNumber(gridX[e.idx][ci] ?? "") !== null)
       );
-    if (eitherHasFeeder && leavesNoElim === null && leavesWithElim === null) {
+    if (eitherHasFeeder && !leavesNoElim && !leavesWithElim) {
       // 開示小計 vs 葉和の不一致: 開示総額を裁定者にする。地域の開示小計の和が
       // 会社総額 (外部顧客/連結/合計行) と整合すれば葉セル側の誤記として開示
       // 小計を信頼し (S100R9AG: アジア葉 5,793 vs 小計 5,973、総額 29,461 とは
       // 小計側が Δ2 で整合)、整合しなければ自己矛盾で却下する (S100PV48:
       // 日本小計 7,923,007 vs 葉和 7,932,007、総額 28,965,063 とは葉側が整合し
-      // 開示小計は Δ9002 で不整合 → 却下を維持)。leafTerms は合算前の行数の
-      // まま (後段の許容を狭める fail-closed 側への倒し方)。
-      const regionSumStated = useEntries.reduce((a, e) => a + e.value, 0);
+      // 開示小計は Δ9002 で不整合 → 却下を維持)。
       const arbiterAgg =
         aggregates.find((a) => /外部顧客/.test(a.label)) ??
         aggregates.find((a) => /連結|合計/.test(a.label)) ??
         null;
-      // 総額裁定の許容も表示葉セル数 (roundingBoundFor)。R9AG (葉6・Δ2
-      // 受理)/PV48 (Δ9002 却下) の pin は立つ。
-      const arbiterBound = roundingBoundFor(
-        leafTerms + elimCount + otherRevenueCount + companyCommonCount
-      );
+      // R9AG (Δ2 受理)/PV48 (Δ9002 却下) の pin は立つ。
       if (
         !arbiterAgg ||
-        Math.abs(
-          regionSumStated + elimSum + otherRevenueSum + companyCommonSum -
-            arbiterAgg.value
-        ) > arbiterBound
+        !cellsConsistent(
+          [
+            ...useEntries.map((e) => ({ value: e.value, quantum: e.quantum })),
+            ...elimCells,
+            ...otherRevenueCells,
+            ...companyCommonCells,
+          ],
+          { value: arbiterAgg.value, quantum: arbiterAgg.quantum },
+          mode
+        )
       ) {
         return null;
       }
     }
-    const best = [leavesNoElim, leavesWithElim].filter(
-      (x): x is number => x !== null
-    );
-    if (best.length > 0) leafTerms = Math.max(...best);
   }
   // 検証: 地域合計が開示集計のいずれかと一致すること (= 正しい列・block を
   // 読み地域を取りこぼしていない証明)。地域スコープの集計に素の合計で先に
@@ -845,17 +931,25 @@ function tryGeoRows(
     aggregates.find((a) => /外部顧客/.test(a.label)) ??
     aggregates.find((a) => /連結/.test(a.label)) ??
     null;
+  const entryCells: CellAmount[] = useEntries.map((e) => ({
+    value: e.value,
+    quantum: e.quantum,
+  }));
   const matchedRegional = aggregates.find(
     (a) =>
       !isCompanyAggLabel(a.label) &&
-      totalsConsistent(
-        regionSum + companyCommonSum,
-        a.value,
-        leafTerms + companyCommonCount
+      cellsConsistent(
+        [...entryCells, ...companyCommonCells],
+        { value: a.value, quantum: a.quantum },
+        mode
       )
   );
   const matchedElim = aggregates.find((a) =>
-    totalsConsistent(regionSum + elimSum, a.value, leafTerms + elimCount)
+    cellsConsistent(
+      [...entryCells, ...elimCells],
+      { value: a.value, quantum: a.quantum },
+      mode
+    )
   );
   let matched = matchedRegional ?? matchedElim ?? null;
   // 会社総額との橋渡し: 地域小計で完全性が証明済みでも、総額セルが会社
@@ -863,14 +957,12 @@ function tryGeoRows(
   // 消去・全社共通) で橋渡しできなければ却下 (脱落か表違い。推測しない)。
   let bridged = false;
   if (matchedRegional && companyAgg && companyAgg !== matchedRegional) {
-    // 橋渡し検証の許容も表示葉セル数 (roundingBoundFor)。総額セル側の丸めは
-    // 整数性に折畳済のため +1 は足さない (save-path と同一 proof gate)。
-    const bridgeTerms =
-      leafTerms + elimCount + otherRevenueCount + companyCommonCount;
     if (
-      Math.abs(
-        regionSum + elimSum + otherRevenueSum + companyCommonSum - companyAgg.value
-      ) <= roundingBoundFor(bridgeTerms)
+      cellsConsistent(
+        [...entryCells, ...elimCells, ...otherRevenueCells, ...companyCommonCells],
+        { value: companyAgg.value, quantum: companyAgg.quantum },
+        mode
+      )
     ) {
       bridged = true;
     } else if (matchedElim) {
@@ -891,24 +983,29 @@ function tryGeoRows(
     null;
   const total =
     totalAgg?.value ?? (metricPruned && hasBusinessRows ? null : regionSum);
-  // 証明の調整額は検証済みの脚だけ (消去 + 橋渡し済み非地域収益 + 地域照合済み全社共通)。
-  // 総額セル自体の丸め [0,1) は整数性に折り畳み済み (roundingBoundFor の導出)。
+  // 証明の調整脚は検証済みの脚だけ (消去 + 橋渡し済み非地域収益 + 地域照合済み全社共通)。
+  // 和区間は地域印刷セル + 調整脚の区間の和 (純計算中間値に quantum は付けない)。
   // 一致集計と異なる総額セルを使っても中間項は足さない (総額セルは1表示セル)。
-  const reconAdjustment =
-    elimSum +
-    (bridged ? otherRevenueSum : 0) +
-    (matched === matchedRegional ? companyCommonSum : 0);
-  const reconTerms =
-    leafTerms +
-    elimCount +
-    (bridged ? otherRevenueCount : 0) +
-    (matched === matchedRegional ? companyCommonCount : 0);
-  const bound = roundingBoundFor(reconTerms);
+  const sumOf = (cells: readonly CellAmount[]): number =>
+    cells.reduce((a, c) => a + c.value, 0);
+  const adjCells: CellAmount[] = [
+    ...elimCells,
+    ...(bridged ? otherRevenueCells : []),
+    ...(matched === matchedRegional ? companyCommonCells : []),
+  ];
+  const reconAdjustment = sumOf(adjCells);
+  const proofCells: CellAmount[] = [...entryCells, ...adjCells];
+  const [proofSumLo, proofSumHi] = sumInterval(proofCells, mode);
   // 海外売上高 = 開示された海外地域行の合計 (= regionSum − 国内)。total − 国内に
   // すると「その他の収益」等の非地域分を海外に混入させるため使わない (ルール1)。
   const overseasTotal = regionSum - domesticSum;
   if (overseasTotal <= 0) return null;
-  if (total !== null && total < regionSum + reconAdjustment - bound) return null;
+  const totalCell: CellAmount | null =
+    total !== null && totalAgg
+      ? { value: totalAgg.value, quantum: totalAgg.quantum }
+      : null;
+  if (totalCell && !intervalsOverlap([proofSumLo, proofSumHi], cellInterval(totalCell.value, totalCell.quantum, mode)))
+    return null;
 
   facts.push({
     regionName: "海外売上高",
@@ -933,9 +1030,24 @@ function tryGeoRows(
     fiscalYearEnd,
     isConsolidated: consolidated,
   });
+  // total 欠損 (metric 除去 + 非地域行あり) は null。printed 総額セルなしの
+  // computed total (= regionSum) は和区間自身を運ぶ (重なりは恒真)。
+  const [totalLo, totalHi] =
+    total === null
+      ? [null, null]
+      : totalCell
+        ? cellInterval(totalCell.value, totalCell.quantum, mode)
+        : [proofSumLo, proofSumHi];
   return {
     facts,
-    proof: { reconciliationAdjustment: reconAdjustment, roundingBound: bound },
+    proof: {
+      reconciliationAdjustment: reconAdjustment,
+      mode,
+      sumLo: proofSumLo,
+      sumHi: proofSumHi,
+      totalLo,
+      totalHi,
+    },
     valueAxisHeader: colHeader[vc] ?? "",
   };
 }
@@ -947,12 +1059,13 @@ function tryGeoRows(
  * 2490064)。検証に1つでも失敗したら null (捏造合算しない)。
  */
 function finishShokeiBlocks(
-  entries: Array<{ idx: number; role: "domestic" | "overseas"; name: string; value: number }>,
-  shokei: Array<{ idx: number; value: number }>,
-  aggregates: Array<{ label: string; value: number }>,
+  entries: Array<{ idx: number; role: "domestic" | "overseas"; name: string; value: number; quantum: number }>,
+  shokei: Array<{ idx: number; value: number; quantum: number }>,
+  aggregates: Array<{ label: string; value: number; quantum: number }>,
   unit: { label: string; factor: number },
   fiscalYearEnd: string,
-  consolidated: boolean | null
+  consolidated: boolean | null,
+  mode: RoundingMode
 ): ParsedTable | null {
   const bounds = shokei.map((s) => s.idx).sort((a, b) => a - b);
   // 最終小計より後の地域行は所属 block 不明 → 却下
@@ -965,8 +1078,15 @@ function finishShokeiBlocks(
     // 同一 block 内の重複地域名は 2-D 等の未証明構造 → 却下
     const blockNames = block.map((e) => e.name);
     if (new Set(blockNames).size !== blockNames.length) return null;
-    const blockSum = block.reduce((a, e) => a + e.value, 0);
-    if (!totalsConsistent(blockSum, s.value, block.length)) return null;
+    // block 葉セルの区間の和と小計セル自身の区間の重なり (Gate3)。
+    if (
+      !cellsConsistent(
+        block.map((e) => ({ value: e.value, quantum: e.quantum })),
+        { value: s.value, quantum: s.quantum },
+        mode
+      )
+    )
+      return null;
     for (const e of block) {
       const g = groups.get(e.name);
       if (g && g.kind !== e.role) return null; // block 間で内外区分が矛盾 → 却下
@@ -975,9 +1095,12 @@ function finishShokeiBlocks(
     }
   }
   // grand: 小計の合計が開示総額のいずれかと一致すること (総額の捏造なし)
-  const grandSum = shokei.reduce((a, s) => a + s.value, 0);
   const grand = aggregates.find((a) =>
-    totalsConsistent(grandSum, a.value, shokei.length)
+    cellsConsistent(
+      shokei.map((s) => ({ value: s.value, quantum: s.quantum })),
+      { value: a.value, quantum: a.quantum },
+      mode
+    )
   );
   if (!grand) return null;
 
@@ -1001,8 +1124,15 @@ function finishShokeiBlocks(
   if (hasDuplicateRegionNames(facts)) return null;
   const overseasTotal = regionSum - domesticSum;
   const total = grand.value;
-  const bound = roundingBoundFor(entries.length);
-  if (overseasTotal <= 0 || total < regionSum - bound) return null;
+  // 和区間は全 block 葉印刷セル (合算前の exactly-once)。grand 照合済みの
+  // 小計セルは和に再加算しない (二重算入なし)。
+  const [proofSumLo, proofSumHi] = sumInterval(
+    entries.map((e) => ({ value: e.value, quantum: e.quantum })),
+    mode
+  );
+  const [totalLo, totalHi] = cellInterval(grand.value, grand.quantum, mode);
+  if (overseasTotal <= 0 || !intervalsOverlap([proofSumLo, proofSumHi], [totalLo, totalHi]))
+    return null;
 
   facts.push({
     regionName: "海外売上高",
@@ -1026,7 +1156,14 @@ function finishShokeiBlocks(
   });
   return {
     facts,
-    proof: { reconciliationAdjustment: 0, roundingBound: bound },
+    proof: {
+      reconciliationAdjustment: 0,
+      mode,
+      sumLo: proofSumLo,
+      sumHi: proofSumHi,
+      totalLo,
+      totalHi,
+    },
   };
 }
 
@@ -1036,6 +1173,7 @@ interface DupEntry {
   name: string;
   sub: string;
   value: number;
+  quantum: number;
 }
 
 /**
@@ -1049,8 +1187,9 @@ interface DupEntry {
  */
 function resolveDupEntries(
   entries: DupEntry[],
-  aggregates: Array<{ label: string; value: number }>
-): { entries: DupEntry[]; metricPruned: boolean; leafTerms: number } | null {
+  aggregates: Array<{ label: string; value: number; quantum: number }>,
+  mode: RoundingMode
+): { entries: DupEntry[]; metricPruned: boolean } | null {
   // P-metric: 全行の sub が metric 対で、売上/利益の両方があれば利益行を除く
   const metrics = entries.map((e) => metricOf(e.sub));
   if (
@@ -1061,7 +1200,7 @@ function resolveDupEntries(
     const kept = entries.filter((_, i) => metrics[i] === "sales");
     const names = kept.map((e) => e.name);
     if (new Set(names).size !== names.length) return null;
-    return { entries: kept, metricPruned: true, leafTerms: kept.length };
+    return { entries: kept, metricPruned: true };
   }
   // P-2D: sub が品目ラベル → 地域ごとに合算
   const subRoles = entries.map((e) => classifyRegion(e.sub));
@@ -1081,17 +1220,26 @@ function resolveDupEntries(
   if (isProduct2D) {
     const groups = new Map<
       string,
-      { kind: "domestic" | "overseas"; sum: number; idx: number }
+      { kind: "domestic" | "overseas"; sum: number; width: number; idx: number }
     >();
     for (const e of entries) {
       const g = groups.get(e.name);
-      if (g) g.sum += e.value;
-      else groups.set(e.name, { kind: e.role, sum: e.value, idx: e.idx });
+      if (g) {
+        g.sum += e.value;
+        g.width += e.quantum;
+      } else groups.set(e.name, { kind: e.role, sum: e.value, width: e.quantum, idx: e.idx });
     }
-    const groupedSum = [...groups.values()].reduce((a, g) => a + g.sum, 0);
-    // 分割の証明: 合算が開示集計のいずれかと一致すること (許容は合算前 leaf 数)
+    // 分割の証明: 合算前 leaf セルの区間の和が開示集計のいずれかと重なること。
+    // 合算出力は子 quantum の合計幅を持つ (純計算値への quantum 付与ではなく
+    // 子印刷セルの exactly-once 計上)。
     if (
-      !aggregates.some((a) => totalsConsistent(groupedSum, a.value, entries.length))
+      !aggregates.some((a) =>
+        cellsConsistent(
+          entries.map((e) => ({ value: e.value, quantum: e.quantum })),
+          { value: a.value, quantum: a.quantum },
+          mode
+        )
+      )
     ) {
       return null;
     }
@@ -1102,9 +1250,9 @@ function resolveDupEntries(
         name,
         sub: "",
         value: g.sum,
+        quantum: g.width,
       })),
       metricPruned: false,
-      leafTerms: entries.length,
     };
   }
   // P-hier: sub が子地域ラベル (一意) → 子ラベルで読替え
@@ -1121,12 +1269,20 @@ function resolveDupEntries(
       name: cleanLabel(e.sub),
       sub: "",
       value: e.value,
+      quantum: e.quantum,
     }));
     if (leaf.some((e) => e.name === "")) return null;
-    const leafSum = leaf.reduce((a, e) => a + e.value, 0);
-    if (!aggregates.some((a) => totalsConsistent(leafSum, a.value, leaf.length)))
+    if (
+      !aggregates.some((a) =>
+        cellsConsistent(
+          leaf.map((e) => ({ value: e.value, quantum: e.quantum })),
+          { value: a.value, quantum: a.quantum },
+          mode
+        )
+      )
+    )
       return null;
-    return { entries: leaf, metricPruned: false, leafTerms: leaf.length };
+    return { entries: leaf, metricPruned: false };
   }
   return null;
 }
@@ -1138,7 +1294,8 @@ function resolveDupEntries(
 function tryGeoCols(
   gridX: string[][],
   fiscalYearEnd: string,
-  heading: string
+  heading: string,
+  mode: RoundingMode
 ): ParsedTable | null {
   const flat = gridX.map((r) => r.join("")).join("");
   const unit = detectUnitOrNull(flat) ?? detectUnitOrNull(heading);
@@ -1190,18 +1347,16 @@ function tryGeoCols(
   // 集計列 (連結/合計) と消去列 (調整額/消去) を収集。行パスと同型に、
   // 地域合計 (+消去) がいずれかの集計列と一致することを要求する
   // (S100Y53G: 地域 569330 + 調整額 36 ≈ 連結 569370)。
-  const aggregates: Array<{ label: string; value: number }> = [];
-  let elimSum = 0;
-  let elimCount = 0;
+  const aggregates: Array<{ label: string; value: number; quantum: number }> = [];
+  const elimCells: CellAmount[] = [];
   for (let ci = 0; ci < width; ci++) {
     const h = norm(gridX[headerIdx][ci] ?? "");
-    const av = parseJpNumber(gridX[valueRow][ci] ?? "");
-    if (av === null) continue;
+    const acell = parseJpNumberCell(gridX[valueRow][ci] ?? "");
+    if (acell === null) continue;
     if (RX_TOTAL_COL.test(h)) {
-      aggregates.push({ label: h, value: av });
+      aggregates.push({ label: h, value: acell.value, quantum: acell.quantum });
     } else if (RX_ELIMINATION.test(h)) {
-      elimSum += av;
-      elimCount++;
+      elimCells.push({ value: acell.value, quantum: acell.quantum });
     }
   }
 
@@ -1215,8 +1370,7 @@ function tryGeoCols(
   const hasKeiCol = gridX[headerIdx].some((c) => /^計$/.test(cleanLabel(c)));
   const isSegmentNote =
     /報告セグメント/.test(headText) && (totalCol >= 0 || hasKeiCol);
-  let nonGeoSegSum = 0;
-  let nonGeoSegCount = 0;
+  const nonGeoSegCells: CellAmount[] = [];
   interface Col {
     index: number;
     name: string;
@@ -1244,11 +1398,10 @@ function tryGeoCols(
         RX_BUSINESS_COL.test(hClean)) &&
       !RX_NONGEO_EXCL.test(hClean)
     ) {
-      const nv = parseJpNumber(gridX[valueRow][ci] ?? "");
-      if (nv !== null && !Number.isInteger(nv)) return null;
-      if (nv !== null) {
-        nonGeoSegSum += nv;
-        nonGeoSegCount++;
+      const ncell = parseJpNumberCell(gridX[valueRow][ci] ?? "");
+      if (ncell !== null && !Number.isInteger(ncell.value)) return null;
+      if (ncell !== null) {
+        nonGeoSegCells.push({ value: ncell.value, quantum: ncell.quantum });
       }
       continue;
     }
@@ -1322,13 +1475,11 @@ function tryGeoCols(
   const facts: OverseasFact[] = [];
   let domesticSum = 0;
   let regionSum = 0;
-  let leafTerms = 0;
   for (const c of useCols) {
     const v = c.value;
     if (v === null) continue;
     if (c.kind === "domestic") domesticSum += v;
     regionSum += v;
-    leafTerms += c.n;
     facts.push({
       regionName: c.name,
       regionKind: c.kind,
@@ -1344,9 +1495,19 @@ function tryGeoCols(
   // 同一表内の重複地域名は曖昧表 (aggregate-before-dedup の原因) として却下
   if (hasDuplicateRegionNames(facts)) return null;
 
-  const adjustedSum = regionSum + elimSum + nonGeoSegSum;
+  // grouping 済み列は整数子セル n 個の合算 (q=1 のため {sum, n} が exact)。
+  const colCells: CellAmount[] = [];
+  for (const c of useCols) {
+    if (c.value === null) continue;
+    colCells.push({ value: c.value, quantum: c.n });
+  }
+  const adjCells: CellAmount[] = [...elimCells, ...nonGeoSegCells];
   const matched = aggregates.find((a) =>
-    totalsConsistent(adjustedSum, a.value, leafTerms + elimCount + nonGeoSegCount)
+    cellsConsistent(
+      [...colCells, ...adjCells],
+      { value: a.value, quantum: a.quantum },
+      mode
+    )
   );
   if (aggregates.length > 0 && !matched) return null;
   const totalAgg =
@@ -1355,8 +1516,18 @@ function tryGeoCols(
     matched ??
     null;
   const total = totalAgg?.value ?? regionSum;
-  const bound = roundingBoundFor(leafTerms + elimCount + nonGeoSegCount);
-  if (total < adjustedSum - bound) return null;
+  const [proofSumLo, proofSumHi] = sumInterval([...colCells, ...adjCells], mode);
+  const totalCell: CellAmount | null = totalAgg
+    ? { value: totalAgg.value, quantum: totalAgg.quantum }
+    : null;
+  if (
+    totalCell &&
+    !intervalsOverlap(
+      [proofSumLo, proofSumHi],
+      cellInterval(totalCell.value, totalCell.quantum, mode)
+    )
+  )
+    return null;
   // 海外売上高 = 開示された海外地域列の合計 (= regionSum − 国内)。
   const overseasTotal = regionSum - domesticSum;
   if (overseasTotal <= 0) return null;
@@ -1381,11 +1552,20 @@ function tryGeoCols(
     fiscalYearEnd,
     isConsolidated: consolidated,
   });
+  const sumOf = (cells: readonly CellAmount[]): number =>
+    cells.reduce((a, c) => a + c.value, 0);
+  const [totalLo, totalHi] = totalCell
+    ? cellInterval(totalCell.value, totalCell.quantum, mode)
+    : [proofSumLo, proofSumHi];
   return {
     facts,
     proof: {
-      reconciliationAdjustment: elimSum + nonGeoSegSum,
-      roundingBound: bound,
+      reconciliationAdjustment: sumOf(adjCells),
+      mode,
+      sumLo: proofSumLo,
+      sumHi: proofSumHi,
+      totalLo,
+      totalHi,
     },
     valueAxisHeader: gridX[valueRow]?.join("") ?? "",
   };
@@ -1398,10 +1578,10 @@ function tryGeoCols(
  * - (会計期末, 地域名) の重複なし
  * - 単位・会計期末・連結区分の混在なし
  * - 海外売上高 = 海外地域行の合計 (完全分解の一致要求)
- * - 連結売上高 (開示あり) は調整後地域合計を丸め許容より下回らない。開示なし
- *   (9147 系) は total 欠損を許す (捏造しない)。調整額と許容は parser の証明
- *   (proof) で受け、なければ調整 0・地域行数からの許容で厳しめに判定する
- *   (fail-closed。消去つき表は証明なしでは通らない)
+ * - 連結売上高 (開示あり) は proof の和区間と総額区間の重なりで照合する
+ *   (Gate3。3 reducer と同一関数)。開示なし (9147 系) は total 欠損を許す
+ *   (捏造しない)。facts の地域合計 + 調整額は proof の基数と exact 一致する
+ *   こと (caller の dedup 落ち等の欠損は基数不一致で throw)。
  * - 比率は両非欠損のとき海外/連結から再計算一致
  * - 地域行なしの集計のみ/空集合は検証対象外 (pass)。未構造化の空保存は通す。
  */
@@ -1446,10 +1626,25 @@ export function validateOverseasSaveSet(
   if (!proof) {
     throw new Error("保存集合の proof がありません。");
   }
+  // 基数の一致: facts の地域合計 + 調整額は proof の和区間の中心に exact 一致
+  // すること (caller の dedup 落ち等の欠損・改変はここで throw)。
   const adjusted = regionSum + proof.reconciliationAdjustment;
-  const bound = proof.roundingBound;
-  if (total && total.salesAmount !== null && total.salesAmount < adjusted - bound) {
-    throw new Error("保存集合の連結売上高が地域合計を下回ります。");
+  if (!(proof.sumLo - INTERVAL_EPS <= adjusted && adjusted <= proof.sumHi + INTERVAL_EPS)) {
+    throw new Error("保存集合の地域合計が proof の和区間に収まりません。");
+  }
+  if (total && total.salesAmount !== null) {
+    if (proof.totalLo === null || proof.totalHi === null) {
+      throw new Error("保存集合の連結売上高に対応する proof の総額がありません。");
+    }
+    // 3 reducer と同一の重なり照合 (Gate3)。
+    if (
+      !intervalsOverlap(
+        [proof.sumLo, proof.sumHi],
+        [proof.totalLo, proof.totalHi]
+      )
+    ) {
+      throw new Error("保存集合の連結売上高が地域合計と整合しません。");
+    }
   }
   const ratio =
     total && total.salesAmount !== null && total.salesAmount > 0
@@ -1572,7 +1767,15 @@ export function parseOverseasData(
       tablesScanned: 0,
     };
   }
-  const r = parseOverseasHtml(picked.html, reportPeriodEnd);
+  // 端数注記は有報全体の表示方針のため全文書で確定する (注記が表と別
+  // ファイルでも拾う。DDYF/NRWW で実証)。表だけの fixture 呼びは
+  // parseOverseasHtml 側で当該 html から確定する。
+  const names = [...entries.keys()].filter(
+    (n) => /PublicDoc\//i.test(n) && /\.html?$/i.test(n)
+  );
+  const filingText = names.map((n) => entries.get(n)!.toString("utf8")).join("\n");
+  const { mode } = detectRoundingMode(filingText);
+  const r = parseOverseasHtml(picked.html, reportPeriodEnd, { roundingMode: mode });
   return { ...r, honbunFile: picked.name };
 }
 
@@ -1636,6 +1839,41 @@ function hasMetricMarkers(flat: string): boolean {
   return /移行日|非流動資産|減損損失|有形固定資産|無形資産/.test(flat);
 }
 
+/**
+ * 売上種別/集計範囲 (contract)。採用行ラベル・近接 caption・表文面の明示のみ
+ * から定める (資料にない contract は捏造しない — Gate2):
+ * - "company": セグメント間内部売上/振替を含む全社スコープ (計は全社計)。
+ * - "contract": 顧客との契約から生じる収益の分解スコープ。
+ * - "ext": 外部顧客への売上高ライン (単独)。
+ * - "mixed": 内部と契約の両信号が同表に混在 (競合時は STOP)。
+ * - "unknown": 上記の明示なし。
+ * 外部顧客・顧客との契約・セグメント間を含む売上を混同しない。同一 FY/
+ * scope でも contract が違えば別 group (TA7H: 収益認識 A/B="contract" と
+ * セグメント C/D="company" を分離し、脚同値でも収束させない)。
+ */
+export type SalesContract =
+  | "company"
+  | "contract"
+  | "ext"
+  | "mixed"
+  | "unknown";
+
+export function contractOf(
+  facts: OverseasFact[],
+  heading: string,
+  flat: string
+): SalesContract {
+  const adopted = facts.map((f) => f.regionName).join(" ");
+  const ctx = `${heading} ${flat} ${adopted}`;
+  const internal = /セグメント間/.test(ctx);
+  const crev = /顧客との契約/.test(ctx);
+  if (internal && crev) return "mixed";
+  if (internal) return "company";
+  if (crev) return "contract";
+  if (/外部顧客/.test(ctx)) return "ext";
+  return "unknown";
+}
+
 /** 和暦の開始西暦 (元年=1)。終期の pe 照合用。 */
 const ERA_START_YEAR: Record<string, number> = {
   明治: 1868,
@@ -1670,20 +1908,27 @@ export interface SourceFiscal {
 }
 
 /**
+ * 期の確定結果。`null` = unknown (期表示なし。弱い文脈へ fall through 可)、
+ * `"mismatch"` = 明示の矛盾 (当ラベルなのに終期≠pe・未来日等。弱い文脈の
+ * 推測採用に戻さず候補除外まで sticky に伝播する — Gate1)。
+ */
+export type FiscalResolution = SourceFiscal | "mismatch" | null;
+
+/**
  * 期首継承: 表直前の広窓から最も近い ranged 表題
  * (前|当)(連結会計年度|事業年度|会計年度)(自…至…) を拾い、その表の期
  * (T=当期 / Z=前期) を印刷ラベルから継承する。文書順 proxy ではない。
  * 括弧は全角・半角の両式 (TA7H: 半角 (自 2023年１月21日 至 2024年１月20日))。
  * 期数式 (第27期(自…至…)。TSNG/W7ZO/YHFZ の収益認識ペア) も終期で判定する。
- * - T: 終期が pe と一致するときだけ確定 (不一致=別 section の表題→unknown)。
- * - Z: 終期が pe より前のときだけ確定 (pe 以降=矛盾→unknown)。
+ * - T: 終期が pe と一致するときだけ確定 (不一致=別 section の表題→mismatch)。
+ * - Z: 終期が pe より前のときだけ確定 (pe 以降=矛盾→mismatch)。
  * - ranged 表題なし / 終期パース不能 → null (unknown)。
  * 実証: R98H (前@2022-03-31→Z / 当@2023-03-31=pe→T)、TTUY、AO7M、TA7H。
  */
 export function inheritSourceFiscal(
   wide: string,
   reportPeriodEnd: string
-): SourceFiscal | null {
+): FiscalResolution {
   const w = toHalfWidthDigits(wide);
   const re =
     /(?:(前|当)(連結会計年度|事業年度|会計年度)?|第\d+期)\s*[（(]\s*自[^）)]{0,60}?至([^）)]{0,60}?)[）)]/g;
@@ -1702,10 +1947,10 @@ export function inheritSourceFiscal(
   // 期数式はラベル側がなく終期のみ: 終期=pe→T、終期<pe→Z。
   if (last.side === null) {
     if (date === pe) return { side: "T", date };
-    return date < pe ? { side: "Z", date } : null;
+    return date < pe ? { side: "Z", date } : "mismatch";
   }
-  if (last.side === "T") return date === pe ? { side: "T", date } : null;
-  return date < pe ? { side: "Z", date } : null;
+  if (last.side === "T") return date === pe ? { side: "T", date } : "mismatch";
+  return date < pe ? { side: "Z", date } : "mismatch";
 }
 
 /**
@@ -1717,7 +1962,7 @@ export function inheritSourceFiscal(
 export function unanimousFlatFiscal(
   flat: string,
   reportPeriodEnd: string
-): SourceFiscal | null {
+): FiscalResolution {
   const w = toHalfWidthDigits(flat);
   const re =
     /(?:(前|当)(連結会計年度|事業年度|会計年度)?|第\d+期)\s*[（(]\s*自[^）)]{0,60}?至([^）)]{0,60}?)[）)]/g;
@@ -1733,10 +1978,10 @@ export function unanimousFlatFiscal(
     if (count === 1) firstDate = date;
     const label = m[1] === undefined ? null : m[1] === "当" ? "T" : "Z";
     if (label === "T") {
-      if (date !== pe) return null;
+      if (date !== pe) return "mismatch";
       sides.add("T");
     } else if (label === "Z") {
-      if (!(date < pe)) return null;
+      if (!(date < pe)) return "mismatch";
       sides.add("Z");
     } else {
       if (date === pe) sides.add("T");
@@ -1751,23 +1996,47 @@ export function unanimousFlatFiscal(
 
 /**
  * 値軸 fiscal: pick した値列/値行の見出しから期を確定する。
- * ranged 表題の全会一致があればそれを使い、なければ単一「年月」で判定する。
- * 年月→月末日は暦で一意に定まる (2025年3月期→2025-03-31) ため印刷由来の日付
- * として pe 照合する。年のみ (月なし) は単一年で side のみ確定し date=null
- * (pe 日付への補完捏造はしない)。複数年/0年は null。
+ * ranged 表題の全会一致があればそれを使い、なければ印刷日 (年月日) を保持し、
+ * 年月は明示の期末表記 (期/期末/現在/末日/末) に限り月末化する。素の「年月」
+ * (例: 2025年3月) の一律月末化は補作のためしない (Gate1)。年のみ (月なし)
+ * は単一年で side のみ確定し date=null (pe 日付への補完捏造はしない)。
+ * 印刷日が pe より未来の明示矛盾は "mismatch" (弱文脈へ戻さない)。
  * LVA5 級の2期比較表は値列頭の当連結@pe で T 確定する (表外交互表題の
  * stale Z より値軸が強い)。
  */
 export function axisFiscal(
   axisHeader: string,
   reportPeriodEnd: string
-): SourceFiscal | null {
+): FiscalResolution {
   const ranged = unanimousFlatFiscal(axisHeader, reportPeriodEnd);
   if (ranged) return ranged;
   const w = toHalfWidthDigits(axisHeader).replace(/[\s\u3000]/g, "");
+  const pe = normPeriodEnd(reportPeriodEnd);
+  // 印刷日 (年月日) があればその日を保持する。複数異日付は比較軸で非全会一致。
+  const days = new Set<string>();
+  for (const m of w.matchAll(/(明治|大正|昭和|平成|令和)?(\d+|元)年(\d+)月(\d+)日/g)) {
+    const y = m[2] === "元" ? 1 : Number(m[2]);
+    const western = m[1] ? ERA_START_YEAR[m[1]] + y - 1 : y;
+    const month = Number(m[3]);
+    const day = Number(m[4]);
+    if (!Number.isFinite(western) || month < 1 || month > 12 || day < 1 || day > 31)
+      continue;
+    days.add(
+      `${western}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
+    );
+  }
+  if (days.size === 1) {
+    const date = [...days][0];
+    if (date === pe) return { side: "T", date };
+    if (date < pe) return { side: "Z", date };
+    return "mismatch";
+  }
+  if (days.size > 1) return null;
+  // 年月は明示の期末表記に限り月末化する (2025年3月期→2025-03-31)。
+  // 年月日 (…月…日) は上で処理済みのためここでは拾わない。
   const ends = new Set<string>();
   for (const m of w.matchAll(
-    /(明治|大正|昭和|平成|令和)?(\d+|元)年(\d+)月/g
+    /(明治|大正|昭和|平成|令和)?(\d+|元)年(\d+)月(期末|期|末日|末現在|現在|末)/g
   )) {
     const y = m[2] === "元" ? 1 : Number(m[2]);
     const western = m[1] ? ERA_START_YEAR[m[1]] + y - 1 : y;
@@ -1780,10 +2049,9 @@ export function axisFiscal(
   }
   if (ends.size === 1) {
     const date = [...ends][0];
-    const pe = normPeriodEnd(reportPeriodEnd);
     if (date === pe) return { side: "T", date };
     if (date < pe) return { side: "Z", date };
-    return null;
+    return "mismatch";
   }
   if (ends.size > 1) return null;
   // 年月なし→単一年で side のみ (date=null)。値列がその年の値であることは
@@ -1806,19 +2074,20 @@ export function axisFiscal(
  * 候補 fiscal の確定鎖: 値軸見出し → 表内全会一致 → 表外広窓の最寄り。
  * 値軸 (pick した値列/値行の頭) は候補値そのものの期を示すため最も強い。
  * 表内表題は表自身の期を示し、表外の stale 表題より強い。
- * 全て unknown なら null。
+ * 全て unknown なら null。強い側の "mismatch" は弱い側の確定で上書きせず
+ * そのまま返す (明示矛盾を弱文脈の推測採用に戻さない — Gate1)。
  */
 export function resolveCandidateFiscal(
   axisHeader: string,
   flat: string,
   wide: string,
   reportPeriodEnd: string
-): SourceFiscal | null {
-  return (
-    axisFiscal(axisHeader, reportPeriodEnd) ??
-    unanimousFlatFiscal(flat, reportPeriodEnd) ??
-    inheritSourceFiscal(wide, reportPeriodEnd)
-  );
+): FiscalResolution {
+  const axis = axisFiscal(axisHeader, reportPeriodEnd);
+  if (axis === "mismatch" || axis) return axis;
+  const flatRes = unanimousFlatFiscal(flat, reportPeriodEnd);
+  if (flatRes === "mismatch" || flatRes) return flatRes;
+  return inheritSourceFiscal(wide, reportPeriodEnd);
 }
 
 /**
@@ -1828,6 +2097,7 @@ export function resolveCandidateFiscal(
  */
 function sourceFiscalKey(c: PeriodPairCand, pe: string): string {
   const inh = resolveCandidateFiscal(c.axis, c.flat, c.wide, pe);
+  if (inh === "mismatch") return "mm";
   if (inh) return inh.date ?? inh.side;
   return `pw:${periodWordClassOf(c.heading, c.flat)}`;
 }
@@ -1852,10 +2122,14 @@ function pickCurrentOfFiscalPair(
   const unitA = a.facts[0]?.unitLabel ?? null;
   const unitB = b.facts[0]?.unitLabel ?? null;
   if (unitA !== unitB) return null;
+  // 同一 contract の T/Z ペアに限る (Gate2。違う集計範囲の表同士の
+  // 総額比較は無意味なため STOP へ流す)。
+  if (contractOf(a.facts, a.heading, a.flat) !== contractOf(b.facts, b.heading, b.flat))
+    return null;
   if (hasMetricMarkers(a.flat) || hasMetricMarkers(b.flat)) return null;
   const inhA = resolveCandidateFiscal(a.axis, a.flat, a.wide, pe);
   const inhB = resolveCandidateFiscal(b.axis, b.flat, b.wide, pe);
-  if (!inhA || !inhB) return null;
+  if (!inhA || !inhB || inhA === "mismatch" || inhB === "mismatch") return null;
   if (inhA.side === inhB.side) return null;
   const totA = a.facts.find((f) => f.regionKind === "total")?.salesAmount ?? null;
   const totB = b.facts.find((f) => f.regionKind === "total")?.salesAmount ?? null;
@@ -1869,8 +2143,10 @@ function pickCurrentOfFiscalPair(
  */
 export function parseOverseasHtml(
   html: string,
-  reportPeriodEnd: string
+  reportPeriodEnd: string,
+  opts: { roundingMode?: RoundingMode } = {}
 ): Omit<OverseasExtraction, "honbunFile"> {
+  const mode = opts.roundingMode ?? detectRoundingMode(html).mode;
   const tables = tablesWithHeading(html);
   let tablesScanned = 0;
   let sawGeoSignal = false;
@@ -1887,6 +2163,16 @@ export function parseOverseasHtml(
     axis: string;
   }
   const candidates: Cand[] = [];
+  const buffered: {
+    status: OverseasParseStatus;
+    facts: OverseasFact[];
+    proof: OverseasProof;
+    axis: string;
+    start: number;
+    heading: string;
+    flat: string;
+    wide: string;
+  }[] = [];
 
   for (const { table, heading, wide, start } of tables) {
     const rawGrid = tableToGridExpanded(table);
@@ -1937,7 +2223,7 @@ export function parseOverseasHtml(
       axis: string;
     } | null = null;
     {
-      const rows = tryGeoRows(grid, reportPeriodEnd, heading);
+      const rows = tryGeoRows(grid, reportPeriodEnd, heading, mode);
       if (rows)
         cand = {
           status: "ok_geo_rows",
@@ -1947,7 +2233,7 @@ export function parseOverseasHtml(
         };
     }
     if (!cand) {
-      const cols = tryGeoCols(grid, reportPeriodEnd, heading);
+      const cols = tryGeoCols(grid, reportPeriodEnd, heading, mode);
       if (cols)
         cand = {
           status: "ok_geo_cols",
@@ -1957,27 +2243,50 @@ export function parseOverseasHtml(
         };
     }
     if (cand) {
-      // 期首フィルタ (全候補共通): printed 期が Z (前期) と確定した表は候補に
-      // しない。facts.fiscalYearEnd は pe 固定のため、前期表を残すと単独 best・
-      // score 差 best で前期値が当期として保存される (tie 時の継承だけでは
-      // 防げない)。継承 unknown は残す (abstain)。T は終期=pe 検証済み。
-      // 確定鎖は値軸→表内→表外 (stale な表外表題より値軸/表内が強い)。
-      const inh = resolveCandidateFiscal(cand.axis, flat, wide, reportPeriodEnd);
-      if (inh && inh.side === "Z") {
+      buffered.push({ ...cand, start, heading, flat, wide });
+    } else if (/日本|本邦/.test(flat) && RX_OVERSEAS_REGION.test(flat)) {
+      // 日本(本邦) + 海外地域 + 数値 はあるが構造化できなかった → 取りこぼし候補
+      sawGeoSignal = true;
+    }
+  }
+
+  // 期首フィルタ (全候補共通・Gate1): 各候補の印刷 provenance を report header
+  // (pe) と照合する。printed 期が Z (前期) と確定した表・明示矛盾 (mismatch)
+  // の表は候補にしない。facts.fiscalYearEnd は pe 固定のため、前期表を残すと
+  // 単独 best・score 差 best で前期値が当期として保存される (tie 時の継承
+  // だけでは防げない)。T は終期=pe 検証済み。
+  // unknown は文書内に明示の期表示を持つ候補が1つでもあれば除外する
+  // (当期と証明できない表を残さない)。明示表示が文書内に皆無のときだけ
+  // report header provenance (当該有報=pe 期の開示) で残す。
+  // 確定鎖は値軸→表内→表外 (stale な表外表題より値軸/表内が強い)。
+  // 除外で候補が尽きても sawGeoSignal が STOP (未構造化) へ流す。
+  {
+    const inhs = buffered.map((b) =>
+      resolveCandidateFiscal(b.axis, b.flat, b.wide, reportPeriodEnd)
+    );
+    const docHasExplicitFiscal = inhs.some((inh) => inh !== null);
+    for (let i = 0; i < buffered.length; i++) {
+      const b = buffered[i];
+      const inh = inhs[i];
+      if (inh === "mismatch" || (inh && inh.side === "Z")) {
+        sawGeoSignal = true;
+        continue;
+      }
+      if (inh === null && docHasExplicitFiscal) {
         sawGeoSignal = true;
         continue;
       }
       candidates.push({
-        ...cand,
-        score: scoreCandidate(heading, flat, cand.status),
-        start,
-        heading,
-        flat,
-        wide,
+        status: b.status,
+        facts: b.facts,
+        proof: b.proof,
+        axis: b.axis,
+        score: scoreCandidate(b.heading, b.flat, b.status),
+        start: b.start,
+        heading: b.heading,
+        flat: b.flat,
+        wide: b.wide,
       });
-    } else if (/日本|本邦/.test(flat) && RX_OVERSEAS_REGION.test(flat)) {
-      // 日本(本邦) + 海外地域 + 数値 はあるが構造化できなかった → 取りこぼし候補
-      sawGeoSignal = true;
     }
   }
 
@@ -1990,17 +2299,29 @@ export function parseOverseasHtml(
     const best = candidates[0];
     const tops = candidates.filter((c) => c.score === best.score);
     if (tops.length > 1) {
-      // 最高点群を (sourceFiscal, 連結区分, 単位) で group 化し、各 group 内の
-      // 全 facts を全比較する。best 対他だけの比較では第3者同士の矛盾を
-      // 見逃す。単一 group + 全キー一致→先頭に収束 (metric 標識ありは
-      // R1 すり抜けの証拠なので収束させず STOP)。group 内不一致→STOP。
-      // 複数 group→継承 tiebreak (T/Z のみ) か STOP。
+      // 不明/混在の contract で競合する候補は STOP (Gate2。曖昧な表の中から
+      // 都合の良い候補を選ばない。単独候補の unknown は report header
+      // provenance で残す = Gate1 の期首フィルタ)。
+      if (
+        tops.some((c) => {
+          const k = contractOf(c.facts, c.heading, c.flat);
+          return k === "unknown" || k === "mixed";
+        })
+      ) {
+        return { status: "geo_present_unstructured", facts: [], tablesScanned };
+      }
+      // 最高点群を (sourceFiscal, 連結区分, 単位, contract) で group 化し、
+      // 各 group 内の全 facts を全比較する。best 対他だけの比較では第3者
+      // 同士の矛盾を見逃す。単一 group + 全キー一致→先頭に収束 (metric
+      // 標識ありは R1 すり抜けの証拠なので収束させず STOP)。group 内
+      // 不一致→STOP。複数 group→継承 tiebreak (T/Z のみ) か STOP。
+      // contract (Gate2) が違う表は脚同値でも収束させない (TA7H)。
       const groupOf = (c: Cand): string => {
         const f0 = c.facts[0];
         const scope = f0
           ? `${String(f0.isConsolidated)}|${f0.unitLabel}`
           : "empty";
-        return `${sourceFiscalKey(c, reportPeriodEnd)}|${scope}`;
+        return `${sourceFiscalKey(c, reportPeriodEnd)}|${scope}|${contractOf(c.facts, c.heading, c.flat)}`;
       };
       const groups = new Map<string, Cand[]>();
       for (const c of tops) {

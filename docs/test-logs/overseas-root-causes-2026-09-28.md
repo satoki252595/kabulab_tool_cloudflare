@@ -428,3 +428,78 @@ LEX回復 26 + round-1合計のみ是正 32 + 旧来不一致 80 (59違反を含
   `render-data-audit.ts --check` OK。
 - 本番書込なし (D1/R2/Notion/job-apply 未実行。writer grant 待ち)。
   原本 ZIP は `/tmp/overseas_laneA_raw/` (未 archive のまま正直に記録)。
+
+## 14. 継続spec: 3根因gate + single-row 調査 + 財務 unused cleanup (同一ブランチ継続)
+
+- §13 時点の quoted-followup のうち必須 3 gate (FY年月補作・contract次元・
+  universal-L) を本ブランチで実装した (defer なし)。3675/59 の全面再走なし
+  (Root QA は最小実ケース + 境界1 + type/lint/CI)。
+
+### 14-1. Gate1 FY (年月補作の廃止・provenance gate)
+- `axisFiscal`: ranged → 印刷年月日 (保持。未来日は mismatch) → 年月+明示
+  期末表記 (期/期末/現在/末日/末) のみ月末化 → 年 side の順。素の年月は
+  side-only へ (補作しない)。
+- `inheritSourceFiscal`/`unanimousFlatFiscal`/`axisFiscal`/
+  `resolveCandidateFiscal` は `FiscalResolution` (T/Z | mismatch | null) を
+  返し、強い側の mismatch は弱文脈で上書きしない (sticky)。
+- 候補 gate を 2-pass 化: mismatch/Z を除外し、文書内に明示の期表示が
+  あれば unknown も除外 (皆無のときだけ report header provenance で残す)。
+  除外で尽きても sawGeoSignal が STOP へ流す。
+- 回帰: 年月日保持+未来mismatch・素年月side-only・mismatch-sticky の unit、
+  OJV9-TTUY splice E2E (gate なし A/B では OJV9 が勝つことを実証)、
+  境界1 (pe+1日は mismatch)。既存 E2E の flip なし。
+
+### 14-2. Gate2 contract (売上種別/集計範囲次元 + TA7H)
+- `contractOf` (company/contract/ext/mixed/unknown) を採用ラベル・近接
+  caption・表文面の明示のみから判定 (資料外捏造なし)。group キーに次元
+  追加 + tiebreak に contract 一致 gate + 不明/混在の競合は STOP。
+- TA7H: A/B (収益認識) = contract、C/D (セグメント・内部含む) = company
+  に分離し、脚同値でも収束させず STOP を維持 (outcome は不変、根拠が
+  contract 化)。単独 mixed (W0AF/OC7S 実在表) は採用を維持。
+- 回帰: TA7H E2E (STOP) + contractOf white-box (TA7H/W0AF verbatim 5 分岐)。
+  既存テストの flip なし (TTUY 同一 contract ペアの tiebreak 維持)。
+
+### 14-3. Gate3 精度 (per-cell quantum/mode・universal-L 除去)
+- `roundingBoundFor`/`totalsConsistent` を廃止し、印刷セル {value, quantum}
+  (quantum = 10^-小数桁。共有 parseJpNumber は触らず sibling 追加) +
+  doc-level mode (truncate/round/unknown。端数注記 provenanceつき。
+  DDYF/NRWW 実文言で接地、OJX1 注記なしを確認) の区間照合へ。
+- 3 reducer + 保存 proof は同一の `cellsConsistent`/`intervalsOverlap`。
+  proof は {reconciliationAdjustment, mode, sumLo/Hi, totalLo/Hi}。
+  純計算中間値に quantum なし、親採用時は親セル区間のみ (子再加算なし)、
+  独立印刷 subtotal は leaf→subtotal 照合つき。
+- 副産物 (真陽性): DA2Y「消去又は全社」が elim + 全社共通に二重計上
+  (-16012812) されていたのを区間照合が摘出。共通境界 (収集 loop) で
+  1行1脚化し、調整額は正しい -8006406 に (DA2Y E2E に pin)。
+- J2E7 合法差 1・開示 total・ratio 維持。実 raw 9 文書 (truncate 2 含む)
+  で status/値が Gate3 前後で同一、内部整合を確認。
+- 回帰: 区間/mode の unit (cell/parse/detect/accept4/reject/境界1:
+  unknown 5 葉で差 5 受理・差 6 却下) + DA2Y 調整額 pin。
+
+### 14-4. single-row-geocols (quoted のまま。根拠つき defer)
+- R98H 原本の単一行表 81/82/83/84 (地域 header + 無ラベル1値行) を特定。
+  83 (地域注記切り) の海外/total は採用中 (segment 切り) と完全同値で、
+  差は domestic のみ Δ164 (100383 vs 100547)。
+- 無ラベル行の採用には caption-証拠機構が必要で最小 shared fix の範囲外、
+  かつ非売上単一行表への誤爆リスクが未証明のため、今回は読まない
+  (成功扱いしない。quoted 維持 + 本記録を証拠に添付)。
+
+### 14-5. 財務 unused CLI cleanup (継続specの指定範囲のみ)
+- `pipeline/scripts/backfill_financials_from_notion.py`: 旧 CLI
+  (run/main164-233)・_month_pages・_insert_sql・_unique_records と
+  CLI-only imports/定数を削除 (233→106行)。reparse が使う
+  notion_financial/_next_month/_bounds + helpers を保持。
+- `pipeline/tests/test_backfill_financials_from_notion.py`: SQL-only test
+  を削除し、_page fixture + converter test を保持 (reparse test が _page
+  を使用)。`pipeline/README.md` の旧 CLI 手順 (37-56) を削除。
+- python 32 tests green (backfill + reparse)。ruff check/format clean。
+
+### 14-6. 検証ゲート (最終 head)
+- `overseas-parser.test.ts`: **104 tests green**。repair-isolation: 3 green。
+- `services/yuho-quant`: 45 files green (edinet-timeout 5 含む)。
+- repo 全体: **3111 passed** (363 skipped) / 0 failed。
+  `tsc --noEmit` clean。`eslint src services --max-warnings=0` clean。
+  `render-data-audit.ts --check` OK。python backfill+reparse 32 green、
+  ruff check/format clean。
+- 本番書込なし (D1 は SELECT 読取のみ。R2/Notion 書込・job 起動・apply
+  未実行。writer grant 待ち)。

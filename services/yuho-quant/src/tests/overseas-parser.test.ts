@@ -13,11 +13,15 @@ import { fileURLToPath } from "node:url";
 import {
   parseOverseasHtml,
   validateOverseasSaveSet,
-  roundingBoundFor,
+  cellInterval,
+  cellsConsistent,
+  parseJpNumberCell,
+  detectRoundingMode,
   inheritSourceFiscal,
   unanimousFlatFiscal,
   axisFiscal,
   resolveCandidateFiscal,
+  contractOf,
   type OverseasFact,
 } from "../services/overseas-parser.js";
 import { REGION_BUCKETS } from "../services/overseas-query.js";
@@ -453,6 +457,8 @@ describe("P-block: 積層 block は売上・地域 block だけ読む (小計・
     expect(pick(r.facts, "total")!.salesAmount).toBe(29379510);
     expect(pick(r.facts, "overseas_total")!.ratioPct).toBe(72.7);
     expect(pick(r.facts, "overseas_total")!.unitLabel).toBe("百万円");
+    // Gate3:「消去又は全社」は elim 脚だけに計上し全社共通に重ねない (二重なら -16012812)
+    expect(r.proof!.reconciliationAdjustment).toBe(-8006406);
   });
 
   it("S100OE1D 地域市場block + 用途別block → 地域blockのみ", () => {
@@ -862,6 +868,15 @@ describe("海外59根因: 全角・語彙・集計変種・消去適用範囲・
     expect(() => validateOverseasSaveSet(r.facts, r.proof)).not.toThrow();
   });
 
+  it("Gate1 S100OJV9-TTUY 文書内に明示の期表示があれば dateless 候補は除外する (OJV9 単独では高得点で勝つが TTUY-T@pe が証明済みのため T を採る。A/B 実証済み)", () => {
+    const r = parseOverseasHtml(fx("georows-unknown-gated-S100OJV9-TTUY.html"), "2024-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(5295526);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(1965538);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(7261065);
+    expect(() => validateOverseasSaveSet(r.facts, r.proof)).not.toThrow();
+  });
+
   it("S100LVA5 2期比較表は値列頭の当連結@pe で T 確定する (表外の交互節表題は直前=前期の stale。値軸が表外より強い)", () => {
     const r = parseOverseasHtml(fx("georows-twocol-axis-fiscal-S100LVA5.html"), "2021-03-31");
     expect(r.status).toBe("ok_geo_rows");
@@ -872,10 +887,40 @@ describe("海外59根因: 全角・語彙・集計変種・消去適用範囲・
     expect(() => validateOverseasSaveSet(r.facts, r.proof)).not.toThrow();
   });
 
-  it("S100TA7H 同一 group 内の総額不一致 (全社計 vs 外部顧客計) は未構造化を維持する (Z ペア A/C・T ペア B/D が脚同値・総額不一致。脚のみの収束や順序選択はしない)", () => {
+  it("Gate2 S100TA7H 収益認識 (contract) とセグメント (company) は別 group で未構造化を維持する (Z ペア A/C・T ペア B/D が脚同値・総額不一致。脚のみの収束や順序選択、曖昧からの都合良い選択はしない)", () => {
     const r = parseOverseasHtml(fx("geocols-twopair-tie-S100TA7H.html"), "2024-01-20");
     expect(r.status).toBe("geo_present_unstructured");
     expect(r.facts).toHaveLength(0);
+  });
+  it("Gate2 contractOf: 採用ラベル・caption・表文面の明示のみで判定する (TA7H/W0AF の verbatim)", () => {
+    const noFacts: OverseasFact[] = [];
+    // TA7H-A (収益認識): 顧客との契約 + 外部顧客 → contract
+    expect(
+      contractOf(noFacts, "１．顧客との契約から生じる収益を分解した情報", "顧客との契約から生じる収益 外部顧客への 売上高")
+    ).toBe("contract");
+    // TA7H-C (セグメント): セグメント間内部 → company
+    expect(
+      contractOf(noFacts, "報告セグメントごとの売上高", "外部顧客への売上高 セグメント間の内部売上高又は振替高 計")
+    ).toBe("company");
+    // W0AF/OC7S (実在の混在表): 内部 + 契約 → mixed
+    expect(
+      contractOf(noFacts, "", "顧客との契約から生じる収益 セグメント間の内部売上高又は振替高")
+    ).toBe("mixed");
+    // 外部顧客ライン単独 → ext。採用ラベル由来でも拾う
+    expect(contractOf(noFacts, "", "外部顧客への売上高")).toBe("ext");
+    const extTotal: OverseasFact = {
+      regionName: "外部顧客への売上高",
+      regionKind: "total",
+      salesAmount: 1,
+      ratioPct: null,
+      unitLabel: "千円",
+      unitYenFactor: 1000,
+      fiscalYearEnd: "2024-01-20",
+      isConsolidated: true,
+    };
+    expect(contractOf([extTotal], "", "日本 アジア")).toBe("ext");
+    // 明示なし → unknown (捏造しない)
+    expect(contractOf(noFacts, "", "日本 アジア 売上高")).toBe("unknown");
   });
 
   it("S100CMLA 資産表 (IFRS 移行日列+広窓の最寄り資産名詞) は R1-wide で up-front 除去し売上表のみ残す (tiebreak の metric 分岐は廃止。資産値 34912 の誤採用なし)", () => {
@@ -900,44 +945,70 @@ describe("海外59根因: 全角・語彙・集計変種・消去適用範囲・
   });
 });
 
-describe("HOLD-gate: 導出済み丸め許容 roundingBoundFor", () => {
-  it("許容は表示葉セル数 L そのもの (切捨て最悪計算の導出。旧 0.5*(L+4) ではない)", () => {
-    expect(roundingBoundFor(5)).toBe(5);
-    expect(roundingBoundFor(6)).toBe(6);
-    expect(roundingBoundFor(15)).toBe(15);
-    expect(roundingBoundFor(1)).toBe(1);
+describe("Gate3: per-cell 区間照合 (universal-L 廃止)", () => {
+  const intCells = (n: number, v = 0) =>
+    Array.from({ length: n }, () => ({ value: v, quantum: 1 }));
+  it("cellInterval: 方式別の真値区間 (切捨は片寄り・四捨五入は対称・unknown は包摂)", () => {
+    expect(cellInterval(100, 1, "truncate")).toEqual([100, 101]);
+    expect(cellInterval(100, 1, "round")).toEqual([99.5, 100.5]);
+    expect(cellInterval(100, 1, "unknown")).toEqual([99.5, 101]);
+    expect(cellInterval(-5, 1, "truncate")).toEqual([-6, -5]);
+    expect(cellInterval(12.5, 0.1, "truncate")).toEqual([12.5, 12.6]);
   });
-  it("差 4 の完全読取 4 表を受理する (NRWW L=5・OJX1 L=5・DDYF L=6・PUMS L=15)", () => {
-    expect(4 <= roundingBoundFor(5)).toBe(true);
-    expect(4 <= roundingBoundFor(6)).toBe(true);
-    expect(4 <= roundingBoundFor(15)).toBe(true);
+  it("parseJpNumberCell: 値 + quantum (小数桁から。整数は 1)", () => {
+    expect(parseJpNumberCell("17,750,933")).toEqual({ value: 17750933, quantum: 1 });
+    expect(parseJpNumberCell("12.5")).toEqual({ value: 12.5, quantum: 0.1 });
+    expect(parseJpNumberCell("△ 3,767,119")).toEqual({ value: -3767119, quantum: 1 });
+    expect(parseJpNumberCell("―")).toBeNull();
   });
-  it("実証済み脱落を却下する (9XV6 差 7・FFET 差 10 は L=5 を上回る)", () => {
-    expect(7 <= roundingBoundFor(5)).toBe(false);
-    expect(10 <= roundingBoundFor(5)).toBe(false);
+  it("detectRoundingMode: 実文言の端数注記でのみ確定する (DDYF/NRWW verbatim)", () => {
+    expect(
+      detectRoundingMode("（注）２．百万円未満を切り捨てて記載しております。").mode
+    ).toBe("truncate");
+    expect(
+      detectRoundingMode("要約連結財務諸表については、百万円未満を切捨てて記載しています。").mode
+    ).toBe("truncate");
+    expect(
+      detectRoundingMode("百万円未満の端数は切り捨てております。").mode
+    ).toBe("truncate");
+    // 株数注記は金額丸めではない → unknown
+    expect(detectRoundingMode("ただし、100株未満は切り捨てます。").mode).toBe("unknown");
+    // 注記なし (OJX1 級) → unknown
+    expect(detectRoundingMode("日本 アジア 売上高").mode).toBe("unknown");
   });
-  it("項数 0 以下は fail-closed (許容 0)", () => {
-    expect(roundingBoundFor(0)).toBe(0);
-    expect(roundingBoundFor(-3)).toBe(0);
+  it("差 4 の完全読取は受理する (NRWW/OJX1/DDYF/PUMS 級。unknown 5 葉で差 4)", () => {
+    expect(cellsConsistent(intCells(5, 20), { value: 104, quantum: 1 }, "unknown")).toBe(true);
+    expect(cellsConsistent(intCells(6, 20), { value: 124, quantum: 1 }, "unknown")).toBe(true);
+    expect(cellsConsistent(intCells(15, 20), { value: 304, quantum: 1 }, "unknown")).toBe(true);
+  });
+  it("実証済み脱落は却下する (9XV6 差 7・FFET 差 10 は 5 葉の区間外)", () => {
+    expect(cellsConsistent(intCells(5, 20), { value: 107, quantum: 1 }, "unknown")).toBe(false);
+    expect(cellsConsistent(intCells(5, 20), { value: 110, quantum: 1 }, "unknown")).toBe(false);
+    // 境界1: unknown 5 葉の下側 5.5。差 5 は受理・差 6 は却下
+    expect(cellsConsistent(intCells(5, 20), { value: 105, quantum: 1 }, "unknown")).toBe(true);
+    expect(cellsConsistent(intCells(5, 20), { value: 106, quantum: 1 }, "unknown")).toBe(false);
+  });
+  it("J2E7 合法差 1 は受理する (2-D 合算 51336 と開示 51337 の区間重なり)", () => {
+    expect(cellsConsistent(intCells(4, 12834), { value: 51337, quantum: 1 }, "unknown")).toBe(true);
   });
 });
 
 describe("HOLD-gate: 期首継承 inheritSourceFiscal", () => {
-  it("西暦 ranged 表題: 当期は終期=pe で T 確定、不一致は unknown", () => {
+  it("西暦 ranged 表題: 当期は終期=pe で T 確定、不一致は mismatch (Gate1: unknown へ落とさない)", () => {
     expect(
       inheritSourceFiscal("当連結会計年度（自2022年４月１日 至2023年３月31日）", "2023-03-31")
     ).toEqual({ side: "T", date: "2023-03-31" });
     expect(
       inheritSourceFiscal("当連結会計年度（自2022年４月１日 至2023年３月31日）", "2024-03-31")
-    ).toBeNull();
+    ).toBe("mismatch");
   });
-  it("西暦 ranged 表題: 前期は終期<pe で Z 確定、pe 以降は unknown", () => {
+  it("西暦 ranged 表題: 前期は終期<pe で Z 確定、pe 以降は mismatch (Gate1)", () => {
     expect(
       inheritSourceFiscal("前連結会計年度（自2021年４月１日 至2022年３月31日）", "2023-03-31")
     ).toEqual({ side: "Z", date: "2022-03-31" });
     expect(
       inheritSourceFiscal("前連結会計年度（自2022年４月１日 至2023年３月31日）", "2023-03-31")
-    ).toBeNull();
+    ).toBe("mismatch");
   });
   it("半角括弧の ranged 表題も拾う (TA7H 式)", () => {
     expect(
@@ -1035,5 +1106,51 @@ describe("HOLD-gate: fiscal 確定鎖 (値軸→表内→表外)", () => {
         "2023-03-31"
       )
     ).toEqual({ side: "T", date: "2023-03-31" });
+  });
+  it("Gate1 axisFiscal: 印刷日 (年月日) があればその日を保持し、未来日は mismatch", () => {
+    expect(axisFiscal("2023年3月31日現在 売上高", "2023-03-31")).toEqual({
+      side: "T",
+      date: "2023-03-31",
+    });
+    expect(axisFiscal("2022年3月31日現在 売上高", "2023-03-31")).toEqual({
+      side: "Z",
+      date: "2022-03-31",
+    });
+    expect(axisFiscal("2024年3月31日現在 売上高", "2023-03-31")).toBe("mismatch");
+    // 境界1: pe 翌日 (pe+1) の印刷日は T ではなく mismatch
+    expect(axisFiscal("2023年4月1日現在 売上高", "2023-03-31")).toBe("mismatch");
+  });
+  it("Gate1 axisFiscal: 素の年月は月末化せず年 side のみ (補作しない)", () => {
+    expect(axisFiscal("2025年3月 売上高", "2025-03-31")).toEqual({ side: "T", date: null });
+    expect(axisFiscal("2024年3月 売上高", "2025-03-31")).toEqual({ side: "Z", date: null });
+    // 明示の期末表記つきは従来どおり月末化する
+    expect(axisFiscal("2025年3月末現在 売上高", "2025-03-31")).toEqual({
+      side: "T",
+      date: "2025-03-31",
+    });
+    expect(axisFiscal("2024年3月期末 売上高", "2025-03-31")).toEqual({
+      side: "Z",
+      date: "2024-03-31",
+    });
+  });
+  it("Gate1: 強い側の mismatch は弱い側の確定で上書きしない (推測採用に戻らない)", () => {
+    // 値軸の明示矛盾 + 表内の当連結@pe → mismatch (表内の T を採用しない)
+    expect(
+      resolveCandidateFiscal(
+        "2026年3月31日現在 売上高",
+        "当連結会計年度(自2024年４月１日 至2025年３月31日)",
+        "当連結会計年度（自2024年４月１日 至2025年３月31日）",
+        "2025-03-31"
+      )
+    ).toBe("mismatch");
+    // 表内の明示矛盾 + 表外の当連結@pe → mismatch (表外の T を採用しない)
+    expect(
+      resolveCandidateFiscal(
+        "合計",
+        "当連結会計年度(自2023年４月１日 至2024年３月31日)",
+        "当連結会計年度（自2024年４月１日 至2025年３月31日）",
+        "2025-03-31"
+      )
+    ).toBe("mismatch");
   });
 });

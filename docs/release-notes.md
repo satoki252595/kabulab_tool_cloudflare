@@ -22,6 +22,8 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - 海外売上パーサの 3根因gate 続報 (#155): 残存 0.5*(+4) 3検査点 (feeder/arbiter/bridge) を同一 proof gate へ統一、前期表の候補除外を全候補共通化 (単独 best の前期誤保存を根絶)、fiscal 確定鎖を値軸→表内→表外の3段化 (stale 表外表題の誤除外を修正)。3675文書: 前期-as-当期 14正除去・正反転 9 (W20H は第88期へ)・回復 20、oracle proven-wrong 0 維持・viol-59 59/59 維持。実原本 fixture 2表 (W20H 再 splice・LVA5 新規)・96回帰テスト。本番書込なし (writer grant 待ち)。
 - 海外売上パーサの正式レビュー対応 (#155): 年月→月末日の印刷由来日付 (年は side のみ・pe 補完なし)、group キーを実終期日化、保存検証の proof 必須化 (facts-only fallback 廃止・3 caller は proof 渡し済み)。3675文書 198 diffs・oracle proven-wrong 0・viol-59 59/59 維持。97回帰テスト。本番書込なし (writer grant 待ち)。
 - EDINET 取得に要求期限を付与し catchup の停滞を可視失敗化 (#155): 9/24・9/25・9/28 の定期実行は Worker が応答せず 3 連続失敗 (D1 で 1 await の hang を特定)。一覧 15s・書類取得 60s で打ち切り、未完了分は次回 60 日窓が回収。5回帰テスト。
+- 海外売上の3根因ゲートを実装 (#155): 年月の月末補作を廃止し印刷日/provenance で期を確定、売上種別/集計範囲 (contract) 次元で TA7H を分離して曖昧収束を停止、丸め許容を per-cell 区間照合化 (消去の二重計上も摘出・修正)。J2E7 合法差1維持。7回帰テスト+境界3件。
+- 財務 Notion backfill の旧 CLI を撤去 (#155): reparse が使う共有コンバータのみ残し、手順書の旧 CLI 実行手順を削除。python 32テスト維持。
 - 財務行へ原本のNotion⑤ページIDをnullableメタデータとして渡す。通常保存と監査済み正本の同期で同じ原本関係だけを保持し、未知はNULL、既存33列は不変。原本ZIPとPDFの検証範囲、閲覧権限を分けて扱う。
 - 財務の正本修復→D1同期でも元原本と再読証跡のキー一致・新鮮な正本キー一意性を要求する。既知原本SHAが異なる旧書類IDを新しい値へ引き継がず、未知の重複・証跡混入を反映前に拒否する。
 - ①銘柄マスタ重複3681/7129の単発解消plan/applyを追加 (#137)。既定は読取のみのplan、適用はwriter解放後の明示指定に限定。JPX上場廃止確定で3681はlisted=false維持・状態のみ移行、7129補足の空relation修復、snapshot先行・receipt再開・再実行無変更の回帰付き。7件の実flow補正 (保管実DL検証・中間ガード分離・receipt回収+全pagination・退避full検索・検証省略禁止・schema列挙・create marker+POST再送禁止) を同PRで追加。実データ適用は後続・実apply保留 (Refs #102 #132)。
