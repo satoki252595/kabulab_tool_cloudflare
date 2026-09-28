@@ -297,14 +297,30 @@ function classifyRegion(rawLabel: string): RegionRole {
 }
 
 /**
- * 地域行の合計と開示総額の整合チェック。金額は表示単位の整数に丸め済みで
- * 1 項あたり最大 0.5 単位の誤差を持つ。許容は 0.5×(項数+4) 単位:
- * 葉項 + 開示集計 (+1) + 一段の隠れ集約 (+1: その他子列等の二重丸め) +
- * 発行体側 slop (+2: 小計経由・表示切替の二重丸め。完全読取の差 4 が
- * S100NRWW・S100OJX1・S100DDYF・S100PUMS の4表で独立に実証)。
- * 上限は実証済み脱落の最小差で抑える (S1009XV6: その他 5 脱落→差 7、
- * S100FFET: その他 7 脱落→差 10。葉5項の許容 4.5 は両方より小さい)。
+ * 表示丸めの許容 (= 表示葉セル数 L)。導出: 開示値は表示単位の整数で、
+ * 切捨て表示 (百万円未満の端数を切り捨て。S100NRWW・S100DDYF の会計方針で
+ * 明記) の最悪計算では各表示セルは真値より [0, 1) 単位だけ小さい。
+ * したがって |Σ表示葉 − 真合計| < L、|開示総額 − 真合計| < 1。
+ * 両辺が整数なので |差| < L+1 ⟺ |差| ≤ L。四捨五入表示 (|差| ≤ 0.5(L+1))
+ * も L ≥ 1 ではこの中に包まれる。注記なし文書 (S100OJX1: 千円・端数注記
+ * なし) も最悪計算=切捨て側で包まれる。隠れ小計の二重丸めは葉セル数に
+ * 織り込み済み (親=子表示値の完全和のとき親は誤差を運ばない。S100DDYF:
+ * アジア 118476+182922=301398 完全一致。L は底辺の表示セル数=6)。
+ * 実証: 差 4 の完全読取 4 表 (NRWW L=5・OJX1 L=5・DDYF L=6・PUMS L=15)
+ * を全て受理し、実証済み脱落 (S1009XV6: その他 5 脱落→差 7・L=5、
+ * S100FFET: その他 7 脱落→差 10・L=5) を共に却下する。
  * 一律 1% は小規模な地域脱落・重複を見逃すため使わない。
+ */
+export function roundingBoundFor(leafTerms: number): number {
+  return leafTerms <= 0 ? 0 : leafTerms;
+}
+
+/**
+ * 地域行の合計と開示総額の整合チェック。許容は roundingBoundFor (導出済み)。
+ * 保存パスの片側検査 (total < adjusted − bound で却下) が上側を検査しないのは
+ * 設計: 開示総額は非地域収益 (その他の収益等。橋渡しされず残ることがある) を
+ * 含み得るため上振れは正当。単一候補の脱落 (合計 << 総額) は非地域超過と
+ * 算術的に区別不能で、読取完全性 (9XV6/FFET のその他読取) の領域。
  */
 function totalsConsistent(
   regionSum: number,
@@ -312,7 +328,7 @@ function totalsConsistent(
   terms: number
 ): boolean {
   if (disclosedTotal <= 0) return false;
-  return Math.abs(regionSum - disclosedTotal) <= 0.5 * (terms + 4);
+  return Math.abs(regionSum - disclosedTotal) <= roundingBoundFor(terms);
 }
 
 /** 製品/用途・非売上 metric の section 標識 (この section の行は売上 block ではない) */
@@ -861,9 +877,9 @@ function tryGeoRows(
     null;
   const total =
     totalAgg?.value ?? (metricPruned && hasBusinessRows ? null : regionSum);
-  // 照合に一致集計と異なる総額セルを使うときは中間集計の丸めを1項足す。
   // 証明の調整額は検証済みの脚だけ (消去 + 橋渡し済み非地域収益 + 地域照合済み全社共通)。
-  const intermediate = totalAgg && matched && totalAgg !== matched ? 1 : 0;
+  // 総額セル自体の丸め [0,1) は整数性に折り畳み済み (roundingBoundFor の導出)。
+  // 一致集計と異なる総額セルを使っても中間項は足さない (総額セルは1表示セル)。
   const reconAdjustment =
     elimSum +
     (bridged ? otherRevenueSum : 0) +
@@ -872,9 +888,8 @@ function tryGeoRows(
     leafTerms +
     elimCount +
     (bridged ? otherRevenueCount : 0) +
-    (matched === matchedRegional ? companyCommonCount : 0) +
-    intermediate;
-  const bound = 0.5 * (reconTerms + 4);
+    (matched === matchedRegional ? companyCommonCount : 0);
+  const bound = roundingBoundFor(reconTerms);
   // 海外売上高 = 開示された海外地域行の合計 (= regionSum − 国内)。total − 国内に
   // すると「その他の収益」等の非地域分を海外に混入させるため使わない (ルール1)。
   const overseasTotal = regionSum - domesticSum;
@@ -971,7 +986,7 @@ function finishShokeiBlocks(
   if (hasDuplicateRegionNames(facts)) return null;
   const overseasTotal = regionSum - domesticSum;
   const total = grand.value;
-  const bound = 0.5 * (entries.length + 4);
+  const bound = roundingBoundFor(entries.length);
   if (overseasTotal <= 0 || total < regionSum - bound) return null;
 
   facts.push({
@@ -1325,9 +1340,7 @@ function tryGeoCols(
     matched ??
     null;
   const total = totalAgg?.value ?? regionSum;
-  const intermediate = totalAgg && matched && totalAgg !== matched ? 1 : 0;
-  const bound =
-    0.5 * (leafTerms + elimCount + nonGeoSegCount + intermediate + 4);
+  const bound = roundingBoundFor(leafTerms + elimCount + nonGeoSegCount);
   if (total < adjustedSum - bound) return null;
   // 海外売上高 = 開示された海外地域列の合計 (= regionSum − 国内)。
   const overseasTotal = regionSum - domesticSum;
@@ -1413,7 +1426,8 @@ export function validateOverseasSaveSet(
     throw new Error("保存集合の海外売上高が地域合計と一致しません。");
   }
   const adjusted = regionSum + (proof?.reconciliationAdjustment ?? 0);
-  const bound = proof?.roundingBound ?? 0.5 * (regions.length + 4);
+  // proof 欠損時の fallback は表示脚数のみ (隠れ子数は不明のため厳しめ=fail-closed)。
+  const bound = proof?.roundingBound ?? roundingBoundFor(regions.length);
   if (total && total.salesAmount !== null && total.salesAmount < adjusted - bound) {
     throw new Error("保存集合の連結売上高が地域合計を下回ります。");
   }
@@ -1440,24 +1454,36 @@ export function validateOverseasSaveSet(
  */
 function tablesWithHeading(
   html: string
-): Array<{ table: string; heading: string; start: number }> {
-  const out: Array<{ table: string; heading: string; start: number }> = [];
+): Array<{ table: string; heading: string; wide: string; start: number }> {
+  const out: Array<{
+    table: string;
+    heading: string;
+    wide: string;
+    start: number;
+  }> = [];
   const re = /<\/?table\b[^>]*>/gi;
   const stack: number[] = [];
   let m: RegExpExecArray | null;
+  const strip = (s: string): string =>
+    s
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&[a-zA-Z#0-9]+;/g, " ")
+      .replace(/[\s\u3000]+/g, " ")
+      .trim();
   while ((m = re.exec(html)) !== null) {
     if (m[0][1] === "/") {
       const start = stack.pop();
       if (start === undefined) continue; // 壊れた HTML 防御
       const table = html.slice(start, re.lastIndex);
       const before = html.slice(Math.max(0, start - 400), start);
-      const heading = before
-        .replace(/<[^>]+>/g, " ")
-        .replace(/&[a-zA-Z#0-9]+;/g, " ")
-        .replace(/[\s\u3000]+/g, " ")
-        .trim()
-        .slice(-160);
-      out.push({ table, heading, start });
+      const heading = strip(before).slice(-160);
+      // wide: 期首継承 (inheritSourceFiscal) 専用の広窓。表題近接型
+      // (TTUY/AO7M: 52-791 文字前) に加え、節表題型 (E00766 の(2)地域別の
+      // 内訳ペア: 節表題が 25676-25680 文字前) も拾う。T 側は終期=pe の
+      // 照合で保護される (不一致→unknown)。Z 側は pe 以前で確定。
+      const wideBefore = html.slice(Math.max(0, start - 60000), start);
+      const wide = strip(wideBefore);
+      out.push({ table, heading, start, wide });
     } else {
       stack.push(m.index);
     }
@@ -1493,8 +1519,11 @@ function scoreCandidate(
   // 整合)。表題窓に地域注記の題名がある候補を +4 する。当/前ペアは同種注記
   // なので対称 (期間優先は保たれる)。個別/前期ペナルティより小さく、連結+
   // 当期 (+10) には単独で勝てない (期間・連結の誤選択は起こさない)。
+  // 「(2) 地域別の内訳」はセグメント注記の小題 (R98H: セグメント切り日本
+  // 100383 と地域注記切り日本 100547 が総額同値で脚不一致) のため正準から
+  // 除く。セグメント切りの表は地域注記が共存すれば負け、単独なら残る。
   if (
-    /地域ごとの情報|地域に関する情報|地域別に関する情報|地域別情報|地域別の内訳|地域別内訳/.test(
+    /地域ごとの情報|地域に関する情報|地域別に関する情報|地域別情報/.test(
       heading
     )
   )
@@ -1551,15 +1580,6 @@ function normFactsKey(facts: OverseasFact[]): string {
     .join(";");
 }
 
-/** 2候補が同一期間・同一 scope (連結区分・単位) か */
-function sameScope(a: OverseasFact[], b: OverseasFact[]): boolean {
-  if (a.length === 0 || b.length === 0) return false;
-  const key = (f: OverseasFact[]) =>
-    `${f[0].fiscalYearEnd}|${String(f[0].isConsolidated)}|${f[0].unitLabel}`;
-  const uniform = (f: OverseasFact[]) => f.every((x) => key([x]) === key(f));
-  return uniform(a) && uniform(b) && key(a) === key(b);
-}
-
 /** 注記種 (正準の地域注記タイトルを先に見る。注 prose 中の報告セグメントに負けない) */
 function noteClassOf(heading: string): "CHIIKI" | "SEG" | "UNK" {
   if (
@@ -1587,6 +1607,7 @@ interface PeriodPairCand {
   start: number;
   heading: string;
   flat: string;
+  wide: string;
 }
 
 /** 表文面に非売上 metric の標識 (IFRS 移行日列・資産/減損の語) があるか */
@@ -1594,36 +1615,117 @@ function hasMetricMarkers(flat: string): boolean {
   return /移行日|非流動資産|減損損失|有形固定資産|無形資産/.test(flat);
 }
 
+/** 和暦の開始西暦 (元年=1)。終期の pe 照合用。 */
+const ERA_START_YEAR: Record<string, number> = {
+  明治: 1868,
+  大正: 1912,
+  昭和: 1926,
+  平成: 1989,
+  令和: 2019,
+};
+
+/** 終期 chunk (平成28年3月31日 / 2023年3月31日) を ISO へ。失敗時 null。 */
+function endDateChunkToIso(chunk: string): string | null {
+  const c = toHalfWidthDigits(chunk).replace(/[\s\u3000]/g, "");
+  const m = /(明治|大正|昭和|平成|令和)?(\d+|元)年(\d+)月(\d+)日/.exec(c);
+  if (!m) return null;
+  const y = m[2] === "元" ? 1 : Number(m[2]);
+  const western = m[1] ? ERA_START_YEAR[m[1]] + y - 1 : y;
+  if (!Number.isFinite(western)) return null;
+  return `${western}-${m[3].padStart(2, "0")}-${m[4].padStart(2, "0")}`;
+}
+
+/** pe 引数の ISO 正規化 (YYYY-M-D → YYYY-MM-DD)。 */
+function normPeriodEnd(pe: string): string {
+  const m = /(\d{4})-(\d{1,2})-(\d{1,2})/.exec(pe);
+  if (!m) return pe;
+  return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+}
+
+export interface SourceFiscal {
+  side: "T" | "Z";
+  date: string;
+}
+
 /**
- * 期間ペアの tiebreak: 同点2候補が同 status・同注記種・同連結区分・
- * 同期表示語クラスで総額のみ違うときだけ発火する。
- * - 片方だけ表文面に metric 標識 (R1 すり抜けの資産表) があれば clean 側を
- *   採る (S100CMLA: 後表=非流動資産表に IFRS 移行日列。前表=売上表を採用)。
- * - 両 clean なら期表示語なし ([-]) のときだけ文書順で後の候補 (= 当期) を
- *   採る。共に当期 ([T]) は同期間ペア (S100TA7H: 収益認識表とセグメント表) で
- *   順序に意味がなく、共に混在 ([TZ]) は売上/非売上の混在を多く含むため
- *   順序では決めない。両 metric は未構造化を維持。
- * - 1つでも gate を外したら null (未構造化を維持)。
+ * 期首継承: 表直前の広窓から最も近い ranged 表題
+ * (前|当)(連結会計年度|事業年度|会計年度)(自…至…) を拾い、その表の期
+ * (T=当期 / Z=前期) を印刷ラベルから継承する。文書順 proxy ではない。
+ * 括弧は全角・半角の両式 (TA7H: 半角 (自 2023年１月21日 至 2024年１月20日))。
+ * 期数式 (第27期(自…至…)。TSNG/W7ZO/YHFZ の収益認識ペア) も終期で判定する。
+ * - T: 終期が pe と一致するときだけ確定 (不一致=別 section の表題→unknown)。
+ * - Z: 終期が pe より前のときだけ確定 (pe 以降=矛盾→unknown)。
+ * - ranged 表題なし / 終期パース不能 → null (unknown)。
+ * 実証: R98H (前@2022-03-31→Z / 当@2023-03-31=pe→T)、TTUY、AO7M、TA7H。
  */
-function pickLaterOfPeriodPair(tops: PeriodPairCand[]): PeriodPairCand | null {
+export function inheritSourceFiscal(
+  wide: string,
+  reportPeriodEnd: string
+): SourceFiscal | null {
+  const w = toHalfWidthDigits(wide);
+  const re =
+    /(?:(前|当)(連結会計年度|事業年度|会計年度)?|第\d+期)\s*[（(]\s*自[^）)]{0,60}?至([^）)]{0,60}?)[）)]/g;
+  let m: RegExpExecArray | null;
+  let last: { side: "T" | "Z" | null; chunk: string } | null = null;
+  while ((m = re.exec(w)) !== null) {
+    last = {
+      side: m[1] === undefined ? null : m[1] === "当" ? "T" : "Z",
+      chunk: m[3],
+    };
+  }
+  if (!last) return null;
+  const date = endDateChunkToIso(last.chunk);
+  if (!date) return null;
+  const pe = normPeriodEnd(reportPeriodEnd);
+  // 期数式はラベル側がなく終期のみ: 終期=pe→T、終期<pe→Z。
+  if (last.side === null) {
+    if (date === pe) return { side: "T", date };
+    return date < pe ? { side: "Z", date } : null;
+  }
+  if (last.side === "T") return date === pe ? { side: "T", date } : null;
+  return date < pe ? { side: "Z", date } : null;
+}
+
+/**
+ * 候補の sourceFiscal キー。継承できれば T/Z、できなければ期表示語クラス
+ * (pw:T/Z/TZ/-) で group 化する。TZ 汚染ペア・同期間ペアは同 group 内の
+ * キー不一致→STOP に流れる。
+ */
+function sourceFiscalKey(c: PeriodPairCand, pe: string): string {
+  const inh = inheritSourceFiscal(c.wide, pe);
+  if (inh) return inh.side;
+  return `pw:${periodWordClassOf(c.heading, c.flat)}`;
+}
+
+/**
+ * 継承 tiebreak: 同点2候補が同 status・同注記種・同連結区分・同単位・
+ * 両 metric-clean で、一方が継承 T・他方が継承 Z のときだけ T 側を採る。
+ * 順序も metric-clean 優先も使わない (CMLA 型は R1-grid が up-front 除去、
+ * TA7H 型=共に継承 T はキー不一致→STOP)。1つでも gate を外したら null。
+ */
+function pickCurrentOfFiscalPair(
+  tops: PeriodPairCand[],
+  pe: string
+): PeriodPairCand | null {
   if (tops.length !== 2) return null;
   const [a, b] = tops;
   if (a.status !== b.status) return null;
   if (noteClassOf(a.heading) !== noteClassOf(b.heading)) return null;
-  const pwA = periodWordClassOf(a.heading, a.flat);
-  if (pwA !== periodWordClassOf(b.heading, b.flat)) return null;
   const consolA = a.facts[0]?.isConsolidated ?? null;
   const consolB = b.facts[0]?.isConsolidated ?? null;
   if (consolA !== consolB) return null;
+  const unitA = a.facts[0]?.unitLabel ?? null;
+  const unitB = b.facts[0]?.unitLabel ?? null;
+  if (unitA !== unitB) return null;
+  if (hasMetricMarkers(a.flat) || hasMetricMarkers(b.flat)) return null;
+  const inhA = inheritSourceFiscal(a.wide, pe);
+  const inhB = inheritSourceFiscal(b.wide, pe);
+  if (!inhA || !inhB) return null;
+  if (inhA.side === inhB.side) return null;
   const totA = a.facts.find((f) => f.regionKind === "total")?.salesAmount ?? null;
   const totB = b.facts.find((f) => f.regionKind === "total")?.salesAmount ?? null;
   if (totA === null || totB === null || totA === totB) return null;
-  const metA = hasMetricMarkers(a.flat);
-  const metB = hasMetricMarkers(b.flat);
-  if (metA !== metB) return metA ? b : a;
-  if (metA && metB) return null;
-  if (pwA !== "-") return null;
-  return a.start < b.start ? b : a;
+  return inhA.side === "T" ? a : b;
 }
 
 /**
@@ -1646,10 +1748,11 @@ export function parseOverseasHtml(
     start: number;
     heading: string;
     flat: string;
+    wide: string;
   }
   const candidates: Cand[] = [];
 
-  for (const { table, heading, start } of tables) {
+  for (const { table, heading, wide, start } of tables) {
     const rawGrid = tableToGridExpanded(table);
     if (rawGrid.length < 2) continue;
     // 全角数字・ラテンの半角化 (全パス共通)。S1009XV6 の「その他 ５」等、
@@ -1674,6 +1777,18 @@ export function parseOverseasHtml(
     // 売上表の表頭にこの2語は来ない (セグメント資産等の行は表の下部)。
     const headCells = grid.slice(0, 2).map((r) => r.join("")).join("");
     if (/減損損失|非流動資産|有形固定資産|無形資産/.test(headCells)) continue;
+    // R1-wide: narrow 見出し窓 (160字) に metric 名詞がなく、表頭に移行日列が
+    // あり、広窓 (4000字) の最寄り metric 名詞が資産の表は非売上表として落とす
+    // (S100CMLA 後表: narrow は style 屑+単位で abstain するが wide 末尾の
+    // 小題「非流動資産」が最寄り資産名詞。joint-abstain は近接 joint のみ)。
+    // 表頭の移行日だけでは落とさない: IFRS 移行年の売上表も移行日列を持つ
+    // (S100AI6T: 移行日/前/当の3期比較・地域別売上。wide 最寄りは売上)。
+    if (
+      /移行日/.test(headCells) &&
+      [...heading.matchAll(RX_METRIC_NOUN)].length === 0 &&
+      isNonSalesMetricTable(wide)
+    )
+      continue;
     const regionish =
       RX_OVERSEAS_REGION.test(flat) || /本邦|日本|海外売上高/.test(flat);
     if (!regionish) continue;
@@ -1701,6 +1816,7 @@ export function parseOverseasHtml(
         start,
         heading,
         flat,
+        wide,
       });
     } else if (/日本|本邦/.test(flat) && RX_OVERSEAS_REGION.test(flat)) {
       // 日本(本邦) + 海外地域 + 数値 はあるが構造化できなかった → 取りこぼし候補
@@ -1717,39 +1833,64 @@ export function parseOverseasHtml(
     const best = candidates[0];
     const tops = candidates.filter((c) => c.score === best.score);
     if (tops.length > 1) {
-      const keys = tops.map((c) => normFactsKey(c.facts));
-      const allEqual = keys.every((k) => k === keys[0]);
-      if (!allEqual) {
-        const conflict = tops.some(
-          (c) =>
-            c !== best &&
-            sameScope(c.facts, best.facts) &&
-            normFactsKey(c.facts) !== normFactsKey(best.facts)
-        );
-        if (conflict) {
-          // 期間ペアの tiebreak: 同点2候補が同種注記・同連結区分・同 status で
-          // 期表示語も等しく (共に無し/共に当期/共に前期)、総額のみ違うときは
-          // 文書順で後の表 (= 当期) を採る。地域/セグメント注記は前期表→当期表
-          // の順に開示される (採点で解消した T/Z ペア 1409 件中 1391 件が当期
-          // 後置 = 98.7%、残り 18 件は収益認識/セグメントの cross-note ペア)。
-          // 連結/個別・注記種・期表示語・status のいずれかが違うペア、3 者以上
-          // の tie、総額欠損・同額ペアは対象外 (正直に未構造化を維持)。
-          // S100R98H/S100TU43/S100W4M7/S100YJKO (E00766 の4期連続: 前期表と
-          // 当期表が共に (2)地域別の内訳・期表示語なしで同点)、S100AO7M/
-          // S100TTUY (無題表ペア) で実証。いずれも経営指標の売上高系列で
-          // 後表=当期を確認 (F5 の先頭採用は前期を誤採用していた)。
-          const later = pickLaterOfPeriodPair(tops);
-          if (later) {
-            return {
-              status: later.status,
-              facts: later.facts,
-              tablesScanned,
-              proof: later.proof,
-            };
-          }
-          return { status: "geo_present_unstructured", facts: [], tablesScanned };
+      // 最高点群を (sourceFiscal, 連結区分, 単位) で group 化し、各 group 内の
+      // 全 facts を全比較する。best 対他だけの比較では第3者同士の矛盾を
+      // 見逃す。単一 group + 全キー一致→先頭に収束 (metric 標識ありは
+      // R1 すり抜けの証拠なので収束させず STOP)。group 内不一致→STOP。
+      // 複数 group→継承 tiebreak (T/Z のみ) か STOP。
+      const groupOf = (c: Cand): string => {
+        const f0 = c.facts[0];
+        const scope = f0
+          ? `${String(f0.isConsolidated)}|${f0.unitLabel}`
+          : "empty";
+        return `${sourceFiscalKey(c, reportPeriodEnd)}|${scope}`;
+      };
+      const groups = new Map<string, Cand[]>();
+      for (const c of tops) {
+        const k = groupOf(c);
+        const g = groups.get(k);
+        if (g) g.push(c);
+        else groups.set(k, [c]);
+      }
+      let internalConflict = false;
+      for (const g of groups.values()) {
+        const keys = g.map((c) => normFactsKey(c.facts));
+        if (!keys.every((k) => k === keys[0])) {
+          internalConflict = true;
+          break;
         }
       }
+      if (internalConflict) {
+        return { status: "geo_present_unstructured", facts: [], tablesScanned };
+      }
+      if (groups.size === 1) {
+        // 全 top が同一 group・同一キー。metric 標識つきの収束は
+        // 非売上値の保存になり得るので STOP (fail-closed)。
+        if (tops.some((c) => hasMetricMarkers(c.flat))) {
+          return { status: "geo_present_unstructured", facts: [], tablesScanned };
+        }
+        return {
+          status: best.status,
+          facts: best.facts,
+          tablesScanned,
+          proof: best.proof,
+        };
+      }
+      // 複数 group: 継承 T/Z ペアだけ T 側を採る (S100R98H/S100TU43/
+      // S100W4M7/S100YJKO の E00766 4期連続 + S100AO7M/S100TTUY で実証。
+      // 経営指標の売上高系列で継承 T=当期を確認)。それ以外は STOP。
+      // 文書順 proxy・metric-clean 優先は使わない。TA7H 型 (共に継承 T)・
+      // TZ 汚染ペアは同 group 不一致→STOP に流れる。
+      const current = pickCurrentOfFiscalPair(tops, reportPeriodEnd);
+      if (current) {
+        return {
+          status: current.status,
+          facts: current.facts,
+          tablesScanned,
+          proof: current.proof,
+        };
+      }
+      return { status: "geo_present_unstructured", facts: [], tablesScanned };
     }
     return {
       status: best.status,

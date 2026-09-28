@@ -16,6 +16,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ### 追加
 - 海外売上 (yuho-quant) の地域表パーサを強化 (#155): 総額列の検出漏れ・葉セル誤記・重複列の二重計上・セグメント表の正準注記への優先・受注/繰越表と資産表の除外・同点の前期/当期ペアの解決。3675文書で回復 325・正 kill 10・false-kill 0、viol-59 は 59/59。実原本 fixture 28表・78回帰テスト。本番書込なし (writer grant 待ち)。
+- 海外売上パーサの HOLD-gate 対応 (#155): 丸め許容を切捨て最悪計算から導出 (=葉セル数 L。旧 0.5*(L+4) 廃止)、同点群を (sourceFiscal, 連結, 単位) で全比較、文書順 proxy を印刷ラベル継承 (T=終期pe一致/Z=pe以前。第N期・半角括弧対応) に置換、資産表の tiebreak 分岐を R1-wide up-front 除去へ移設。3675文書: 資産-as-売上 5正 kill (W81W は KEI 正表へ反転)・回復 9・honest-STOP 142、oracle proven-wrong 0・nWin 209→206 (TA7H 級 3件の honest-STOP が cost)、viol-59 59/59 維持。実原本 fixture 3表 (新規 TTUY/TA7H・R98H-nohead 転用)・91回帰テスト。本番書込なし (writer grant 待ち)。
 - 財務行へ原本のNotion⑤ページIDをnullableメタデータとして渡す。通常保存と監査済み正本の同期で同じ原本関係だけを保持し、未知はNULL、既存33列は不変。原本ZIPとPDFの検証範囲、閲覧権限を分けて扱う。
 - 財務の正本修復→D1同期でも元原本と再読証跡のキー一致・新鮮な正本キー一意性を要求する。既知原本SHAが異なる旧書類IDを新しい値へ引き継がず、未知の重複・証跡混入を反映前に拒否する。
 - ①銘柄マスタ重複3681/7129の単発解消plan/applyを追加 (#137)。既定は読取のみのplan、適用はwriter解放後の明示指定に限定。JPX上場廃止確定で3681はlisted=false維持・状態のみ移行、7129補足の空relation修復、snapshot先行・receipt再開・再実行無変更の回帰付き。7件の実flow補正 (保管実DL検証・中間ガード分離・receipt回収+全pagination・退避full検索・検証省略禁止・schema列挙・create marker+POST再送禁止) を同PRで追加。実データ適用は後続・実apply保留 (Refs #102 #132)。

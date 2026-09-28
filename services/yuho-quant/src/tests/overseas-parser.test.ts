@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 import {
   parseOverseasHtml,
   validateOverseasSaveSet,
+  roundingBoundFor,
+  inheritSourceFiscal,
   type OverseasFact,
 } from "../services/overseas-parser.js";
 import { REGION_BUCKETS } from "../services/overseas-query.js";
@@ -836,17 +838,29 @@ describe("海外59根因: 全角・語彙・集計変種・消去適用範囲・
     expect(() => validateOverseasSaveSet(r.facts, r.proof)).not.toThrow();
   });
 
-  it("S100R98H 同点の前期/当期ペアは後表 (当期) を採る (共に(2)地域別の内訳・期表示語なし。経営指標で後表=2023年当期を確認。F5 は前表=前期を誤採用)", () => {
-    const r = parseOverseasHtml(fx("georows-period-pair-later-S100R98H.html"), "2023-03-31");
+  it("S100R98H ranged 表題なしの前期/当期ペアは継承不能で未構造化を維持する (順序 proxy・metric-clean 優先は廃止。原典では節表題 25KB 前方から継承して当期を正採用)", () => {
+    const r = parseOverseasHtml(fx("georows-period-pair-nohead-S100R98H.html"), "2023-03-31");
+    expect(r.status).toBe("geo_present_unstructured");
+    expect(r.facts).toHaveLength(0);
+  });
+
+  it("S100TTUY 同点の前期/当期ペアは印刷ラベルから継承した当期側を採る (前事業年度@2023-03-31→Z / 当事業年度@2024-03-31=pe→T。文書順は使わない)", () => {
+    const r = parseOverseasHtml(fx("georows-fiscal-inherit-S100TTUY.html"), "2024-03-31");
     expect(r.status).toBe("ok_geo_rows");
-    expect(region(r.facts, "日本")!.salesAmount).toBe(100383);
-    expect(region(r.facts, "アジア")!.salesAmount).toBe(18455);
-    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(72261);
-    expect(pick(r.facts, "total")!.salesAmount).toBe(172811);
+    expect(region(r.facts, "日本")!.salesAmount).toBe(5295526);
+    expect(region(r.facts, "東アジア")!.salesAmount).toBe(1149416);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(1965538);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(7261065);
     expect(() => validateOverseasSaveSet(r.facts, r.proof)).not.toThrow();
   });
 
-  it("S100CMLA 同点ペアの片方が資産表 (IFRS 移行日列) なら clean 側を採る (R1 すり抜け。順序 tiebreak が資産値 34912 を誤採用していた)", () => {
+  it("S100TA7H 同一 group 内の総額不一致 (全社計 vs 外部顧客計) は未構造化を維持する (Z ペア A/C・T ペア B/D が脚同値・総額不一致。脚のみの収束や順序選択はしない)", () => {
+    const r = parseOverseasHtml(fx("geocols-twopair-tie-S100TA7H.html"), "2024-01-20");
+    expect(r.status).toBe("geo_present_unstructured");
+    expect(r.facts).toHaveLength(0);
+  });
+
+  it("S100CMLA 資産表 (IFRS 移行日列+広窓の最寄り資産名詞) は R1-wide で up-front 除去し売上表のみ残す (tiebreak の metric 分岐は廃止。資産値 34912 の誤採用なし)", () => {
     const r = parseOverseasHtml(fx("georows-tiebreak-metric-clean-S100CMLA.html"), "2017-12-31");
     expect(r.status).toBe("ok_geo_rows");
     expect(region(r.facts, "日本")!.salesAmount).toBe(14887);
@@ -865,5 +879,79 @@ describe("海外59根因: 全角・語彙・集計変種・消去適用範囲・
     expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(153320);
     expect(pick(r.facts, "total")!.salesAmount).toBe(181264);
     expect(() => validateOverseasSaveSet(r.facts, r.proof)).not.toThrow();
+  });
+});
+
+describe("HOLD-gate: 導出済み丸め許容 roundingBoundFor", () => {
+  it("許容は表示葉セル数 L そのもの (切捨て最悪計算の導出。旧 0.5*(L+4) ではない)", () => {
+    expect(roundingBoundFor(5)).toBe(5);
+    expect(roundingBoundFor(6)).toBe(6);
+    expect(roundingBoundFor(15)).toBe(15);
+    expect(roundingBoundFor(1)).toBe(1);
+  });
+  it("差 4 の完全読取 4 表を受理する (NRWW L=5・OJX1 L=5・DDYF L=6・PUMS L=15)", () => {
+    expect(4 <= roundingBoundFor(5)).toBe(true);
+    expect(4 <= roundingBoundFor(6)).toBe(true);
+    expect(4 <= roundingBoundFor(15)).toBe(true);
+  });
+  it("実証済み脱落を却下する (9XV6 差 7・FFET 差 10 は L=5 を上回る)", () => {
+    expect(7 <= roundingBoundFor(5)).toBe(false);
+    expect(10 <= roundingBoundFor(5)).toBe(false);
+  });
+  it("項数 0 以下は fail-closed (許容 0)", () => {
+    expect(roundingBoundFor(0)).toBe(0);
+    expect(roundingBoundFor(-3)).toBe(0);
+  });
+});
+
+describe("HOLD-gate: 期首継承 inheritSourceFiscal", () => {
+  it("西暦 ranged 表題: 当期は終期=pe で T 確定、不一致は unknown", () => {
+    expect(
+      inheritSourceFiscal("当連結会計年度（自2022年４月１日 至2023年３月31日）", "2023-03-31")
+    ).toEqual({ side: "T", date: "2023-03-31" });
+    expect(
+      inheritSourceFiscal("当連結会計年度（自2022年４月１日 至2023年３月31日）", "2024-03-31")
+    ).toBeNull();
+  });
+  it("西暦 ranged 表題: 前期は終期<pe で Z 確定、pe 以降は unknown", () => {
+    expect(
+      inheritSourceFiscal("前連結会計年度（自2021年４月１日 至2022年３月31日）", "2023-03-31")
+    ).toEqual({ side: "Z", date: "2022-03-31" });
+    expect(
+      inheritSourceFiscal("前連結会計年度（自2022年４月１日 至2023年３月31日）", "2023-03-31")
+    ).toBeNull();
+  });
+  it("半角括弧の ranged 表題も拾う (TA7H 式)", () => {
+    expect(
+      inheritSourceFiscal("当連結会計年度(自 2023年１月21日 至 2024年１月20日)", "2024-01-20")
+    ).toEqual({ side: "T", date: "2024-01-20" });
+  });
+  it("和暦終期は西暦化して pe 照合する (平成28年3月31日=2016-03-31)", () => {
+    expect(
+      inheritSourceFiscal("当事業年度（自平成27年４月１日 至平成28年３月31日）", "2016-03-31")
+    ).toEqual({ side: "T", date: "2016-03-31" });
+    expect(
+      inheritSourceFiscal("前事業年度（自平成26年４月１日 至平成27年３月31日）", "2016-03-31")
+    ).toEqual({ side: "Z", date: "2015-03-31" });
+  });
+  it("最も近い (最後の) ranged 表題を拾う", () => {
+    expect(
+      inheritSourceFiscal(
+        "前連結会計年度（自2021年４月１日 至2022年３月31日） 報告セグメント 当連結会計年度（自2022年４月１日 至2023年３月31日）",
+        "2023-03-31"
+      )
+    ).toEqual({ side: "T", date: "2023-03-31" });
+  });
+  it("期数式も終期で判定する (TSNG: 第27期@2024-03-31=pe→T)", () => {
+    expect(
+      inheritSourceFiscal("第27期（自 2023年４月１日 至 2024年３月31日）", "2024-03-31")
+    ).toEqual({ side: "T", date: "2024-03-31" });
+    expect(
+      inheritSourceFiscal("第26期（自 2022年４月１日 至 2023年３月31日）", "2024-03-31")
+    ).toEqual({ side: "Z", date: "2023-03-31" });
+  });
+  it("ranged 表題なし・終期パース不能は unknown", () => {
+    expect(inheritSourceFiscal("（2）地域別の内訳", "2023-03-31")).toBeNull();
+    expect(inheritSourceFiscal("当期の売上について説明します", "2023-03-31")).toBeNull();
   });
 });

@@ -236,3 +236,69 @@ LEX回復 26 + round-1合計のみ是正 32 + 旧来不一致 80 (59違反を含
 - fixture 計 28表 (F1–F8/follow-up 19 + FIX-A–H2 9)。全て実原本 verbatim。
 - 本番書込なし (D1/R2/Notion/job-apply 未実行。writer grant 待ち)。
   原本 ZIP は `/tmp/overseas_laneA_raw/` (未 archive のまま正直に記録)。
+
+## 11. HOLD-gate 対応: bound 導出・全比較 grouping・期首継承・R1-wide (同一ブランチ継続)
+
+### 11-1. Gate-(a): 丸め許容の導出 (旧 0.5*(L+4) 廃止)
+- 開示値は切捨て表示が明記 (NRWW/DDYF の会計方針「百万円未満の端数を切り捨て」)。
+  最悪計算: 各表示葉セルは真値より [0,1) だけ小さい → |Σ表示葉−真合計| < L、
+  |開示総額−真合計| < 1。両辺整数より |差| ≤ L。四捨五入 (|差| ≤ 0.5(L+1)) も
+  L≥1 で包摂。注記なし文書 (OJX1: 千円) も切捨て側で包摂。隠れ小計の二重丸めは
+  底辺葉セル数に織込済 (DDYF: アジア 118476+182922=301398 完全一致。L=6)。
+- `roundingBoundFor(L)=L` を export + 4 検査点 (totalsConsistent / rows-recon /
+  B1-shokei / cols-adjusted / validate-fallback) を置換。未導出の intermediate
+  +1 は削除 (総額セルは1表示セルで整数性に折畳済)。
+- 実証: 差 4 の完全読取 4 表を受理 (NRWW L=5・OJX1 L=5 (raw-run: 5脚col表)・
+  DDYF L=6・PUMS L=15)、脱落 (9XV6 差 7・FFET 差 10、L=5) を共に却下。
+- 保存パス片側検査の設計根拠を明記: 総額は非地域収益を含み得るため上振れは正当。
+  単一候補の脱落は非地域超過と算術的に区別不能 (読取完全性の領域)。
+
+### 11-2. Gate-(b)+(c): 全比較 grouping + 期首継承 (順序 proxy 廃止)
+- 最高点群を (sourceFiscal, 連結区分, 単位) で group 化し group 内全比較。
+  group 内不一致→STOP、単一 group 全一致→収束 (metric 標識ありは STOP)、
+  複数 group→継承 T/Z ペアのみ T 側、それ以外 STOP。
+- `inheritSourceFiscal(wide, pe)`: 広窓 (60KB-HTML) の最寄り ranged 表題から継承。
+  T=終期pe一致のみ確定、Z=終期pe以前のみ確定。半角括弧 (TA7H)・期数式 (第N期。
+  TSNG/W7ZO/YHFZ)・和暦終期 (西暦化して照合) に対応。順序・metric-clean 優先なし。
+- 正準 boost から「(2) 地域別の内訳」を除外 (セグメント注小題。R98H: セグメント
+  切り日本 100383 vs 地域注記切り日本 100547 の脚不一致を実証)。ablation で
+  flip 0 を確認 (無害)。
+- E00766 4期 (R98H/TU43/W4M7/YJKO) は節表題 25KB 前方から継承して回復 (BASE と
+  同値)。TTUY/AO7M (近接表題)・CMLA (R1-wide)・G9KL (pe 検証 T。cross-period
+  の KEI-loserWin は oracle artifact) も維持/解決。
+
+### 11-3. R1-grid up-front (tiebreak metric 分岐の移設)
+- 表頭の移行日だけでは落とさない: IFRS 移行年の売上表も移行日列を持つ (AI6T:
+  移行日/前/当の3期比較・地域別売上。blind-kill で誤殺を確認→撤回)。
+- R1-wide: narrow 160字に metric 名詞なし + 表頭移行日 + 広窓最寄り名詞が資産
+  (joint-abstain は近接のみ) のときだけ除去。CMLA 後表を除去し売上表のみ残す。
+- 3675 rescan: R1-wide kill 5件は全て真 kill (9B8Y/HLV4・LPBU/PIW4 双子 + W81W 反転。
+  KEI 照合で資産表を確認。W81W は資産 173275→売上 177057=KEI へ正反転)。
+
+### 11-4. 3675 全母集団 rescan (BASE=HEAD vs NEW)
+- 156 diffs: R1-wide 真 kill 4 + W81W 正反転 + 回復 9 (KEI 多重証跡で抽出確認。
+  TNDP/SO25/RA2B は tie 救済) + honest-STOP 142。
+- STOP 142 は順序 proxy 撤廃の cost (ablation: R1-wide-off で回復 4 のみ、
+  canonical-restore で回復 0、残りは tiebreak)。内訳に TA7H 級を含む。
+- oracle-255: nWin 209→206 (−3: TA7H/VLI7/XYFO の同 group-T 総額不一致。
+  全社計 vs 外部顧客計の genuine-conflict で honest-STOP)、loserWin 1 (G9KL
+  artifact 維持)、proven-wrong 0。期数式で TSNG/W7ZO/YHFZ を回復済み。
+- diff histogram (NEW-ok 3148): 0:760/1:1157/2:855/3:280/4:52/5:7 + 上側超過 30
+  (非地域収益。設計どおり)。差 5 の7件は全て旧 bound でも受理 (L≥8)。新規
+  loosening-admission なし。bound 違反 (下側) 0。
+- viol-59: 59/59 不変。ok-ok fact-change: W81W のみ (正反転済み)。
+
+### 11-5. 検証ゲート (最終 head)
+- `overseas-parser.test.ts`: **91 tests green** (78 + HOLD net 13:
+  nohead-STOP/TTUY-T-pick/TA7H-STOP (R98H 置換) + roundingBoundFor 4 +
+  inheritSourceFiscal 7 + CMLA-title 更新。実原本 fixture 3表: TTUY/TA7H 新規 +
+  R98H-nohead 転用、R98H-later 削除)。
+- `services/yuho-quant`: 44 files / **544 tests green**。repo 全体:
+  206 files / **3058 passed** (363 skipped) / 0 failed。
+- `tsc --noEmit` clean。`eslint src services --max-warnings=0` clean。
+  `render-data-audit.ts --check` OK。
+- 本番書込なし (D1/R2/Notion/job-apply 未実行。writer grant 待ち)。
+  原本 ZIP は `/tmp/overseas_laneA_raw/` (未 archive のまま正直に記録)。
+- 残課題 (follow-up): 単一行 geocols (R98H 地域注記ペア等) の新構造対応で
+  E00766 の地域注記切りも読める。TA7H 級 (全社計 vs 外部顧客計) の総額意味
+  選好は gate 外のため STOP 維持。
