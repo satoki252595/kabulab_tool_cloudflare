@@ -8,7 +8,14 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { MAX_DAILY_RATIO, type Bar, checkBarSelf, sanitizeBars } from "./bar-sanity.js";
+import {
+  MAX_DAILY_RATIO,
+  type Bar,
+  assertResponsePriceCoherent,
+  checkBarSelf,
+  checkFreshClose,
+  sanitizeBars,
+} from "./bar-sanity.js";
 
 /** close を指定したら open/high/low/adj もそれに合わせる（明示指定が優先）。 */
 const bar = (over: Partial<Bar> & { date: string }): Bar => {
@@ -118,5 +125,119 @@ describe("sanitizeBars — 本番で起きた事故", () => {
 
   it("空配列でも落ちない", () => {
     expect(sanitizeBars([])).toEqual({ bars: [], rejected: [] });
+  });
+
+  it("先頭から持続する異常水準は素通りする (応答guardが塞ぐ穴の記録)", () => {
+    // 1909 の 2026-07-17 以降: 先頭 bar 自体が 1.6e10 で比較対象がなく、
+    // 後続も比率 ~1 のため 40 本すべて採用された。bar 単位では塞げないため
+    // assertResponsePriceCoherent (meta 価格との応答整合) で拒否する。
+    const bars = [
+      bar({ date: "2026-09-10", open: 1.62e10, high: 1.62e10, low: 1.62e10, close: 1.62e10, volume: 0, adj: 1.62e10 }),
+      bar({ date: "2026-09-11", open: 1.62e10, high: 1.62e10, low: 1.62e10, close: 1.62e10, volume: 0, adj: 1.62e10 }),
+      { date: "2026-09-14", open: null, high: null, low: null, close: null, volume: null, adj: null },
+    ];
+    expect(sanitizeBars(bars).rejected).toEqual([]);
+  });
+});
+
+describe("assertResponsePriceCoherent — 同一応答の meta 価格との整合", () => {
+  it("1909 形 (最新有効終値が meta の10倍超乖離 + 出来高0) は応答全体を拒否する", () => {
+    expect(() =>
+      assertResponsePriceCoherent({
+        symbol: "1909",
+        latestUsedClose: 16280000512,
+        latestVolume: 0,
+        metaPrice: 3700,
+      }),
+    ).toThrow(/応答全体を採用しません/);
+  });
+
+  it("出来高なしでも乖離がなければ通す（薄商い: 本番 volume=0 は 479 行）", () => {
+    expect(() =>
+      assertResponsePriceCoherent({
+        symbol: "3600",
+        latestUsedClose: 1000,
+        latestVolume: 0,
+        metaPrice: 1000,
+      }),
+    ).not.toThrow();
+  });
+
+  it("出来高を伴う乖離は通す（正規分割・急騰を誤って弾かない）", () => {
+    expect(() =>
+      assertResponsePriceCoherent({
+        symbol: "7203",
+        latestUsedClose: 30000,
+        latestVolume: 500000,
+        metaPrice: 1000,
+      }),
+    ).not.toThrow();
+  });
+
+  it("境界: ちょうど MAX_DAILY_RATIO 倍は通す", () => {
+    expect(() =>
+      assertResponsePriceCoherent({
+        symbol: "7203",
+        latestUsedClose: 1000 * MAX_DAILY_RATIO,
+        latestVolume: 0,
+        metaPrice: 1000,
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["最新有効終値なし", { latestUsedClose: null, latestVolume: 0, metaPrice: 3700 }],
+    ["meta 価格なし", { latestUsedClose: 16280000512, latestVolume: 0, metaPrice: null }],
+    ["終値が非正", { latestUsedClose: 0, latestVolume: 0, metaPrice: 3700 }],
+    ["meta が非正", { latestUsedClose: 16280000512, latestVolume: 0, metaPrice: -1 }],
+    ["終値が非有限", { latestUsedClose: Number.NaN, latestVolume: 0, metaPrice: 3700 }],
+  ])("%s は判定不能として通す（拒否の根拠がない）", (_l, over) => {
+    expect(() =>
+      assertResponsePriceCoherent({ symbol: "1909", ...over }),
+    ).not.toThrow();
+  });
+});
+
+describe("checkFreshClose — 日次 writer 前提 (日付 + 実終値)", () => {
+  it("対象日の実終値があれば通す", () => {
+    expect(
+      checkFreshClose(bar({ date: "2026-09-25", close: 2989.5 }), "2026-09-25"),
+    ).toEqual({ ok: true });
+  });
+
+  it("adj がなくても close があれば通す (adj ?? close を使用値にする)", () => {
+    expect(
+      checkFreshClose(
+        bar({ date: "2026-09-25", close: 2989.5, adj: null }),
+        "2026-09-25",
+      ),
+    ).toEqual({ ok: true });
+  });
+
+  it("末尾が古い日なら stale_date (既存 gate と同義)", () => {
+    expect(
+      checkFreshClose(bar({ date: "2026-09-18", close: 2989.5 }), "2026-09-25"),
+    ).toEqual({ ok: false, reason: "stale_date" });
+  });
+
+  it("対象日でも実終値が null なら missing_fresh_close (日付だけ合格にしない)", () => {
+    expect(
+      checkFreshClose(
+        {
+          date: "2026-09-25",
+          open: null, high: null, low: null, close: null, volume: null, adj: null,
+        },
+        "2026-09-25",
+      ),
+    ).toEqual({ ok: false, reason: "missing_fresh_close" });
+  });
+
+  it.each([
+    ["終値が 0", { close: 0, adj: 0 }],
+    ["終値が負", { close: -5, adj: -5 }],
+  ])("対象日でも使用値が%sなら missing_fresh_close", (_l, over) => {
+    expect(
+      checkFreshClose(bar({ date: "2026-09-25", ...over }), "2026-09-25"),
+    ).toEqual({ ok: false, reason: "missing_fresh_close" });
   });
 });
