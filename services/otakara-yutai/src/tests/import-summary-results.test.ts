@@ -76,6 +76,13 @@ describe("resolveTargetIds", () => {
   it("stale (今の D1 に無いキー) は寄与しない", () => {
     expect(resolveTargetIds([{ taskId: "0123456789abcdef" }], rows, [])).toEqual([]);
   });
+
+  it("混合再開: 書き込み予定とタスク対象の和集合 (前回書込・今回 reject の行も追随)", () => {
+    // 前回: 行 1,2 の要約を書いて中断。今回: 行 3 だけ updates (行 1,2 は reject)。
+    // updates だけ見ると行 1,2 の利回りが置き去りになる
+    const tasks = [{ taskId: benefitKey("9101", "架空ギフト 1,000円相当") }];
+    expect(resolveTargetIds(tasks, rows, [{ ids: [3] }])).toEqual([3, 1, 2]);
+  });
 });
 
 describe("makeSummaryWriter", () => {

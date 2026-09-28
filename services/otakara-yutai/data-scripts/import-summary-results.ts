@@ -143,20 +143,24 @@ async function main(): Promise<void> {
 }
 
 /**
- * 利回り追随の対象の優待行 id。書き込み予定があればその行だけ。無ければ
- * タスク対象の行 (中断からの再開・全 reject 時の再評価用)。stale で今の D1 に
- * 無いタスクは寄与しない。
+ * 利回り追随の対象の優待行 id。書き込み予定の行とタスク対象の行の和集合。
+ * 和集合にするのは混合再開のため: 前回が要約書き込み後に中断し、今回の
+ * 結果でそのタスクが reject されると、その行は updates に現れない。
+ * updates だけ見ると前回書いた行の利回りが置き去りになるので、タスク側の
+ * 行も必ず含める (余分に触れても changed のある行だけ書くので無害)。
+ * stale で今の D1 に無いタスクは寄与しない。
  */
 export function resolveTargetIds(
   tasks: { taskId: string }[],
   currentRows: { id: number; stockCode: string; description: string }[],
   updates: { ids: number[] }[]
 ): number[] {
-  if (updates.length > 0) return [...new Set(updates.flatMap((u) => u.ids))];
+  const ids = new Set(updates.flatMap((u) => u.ids));
   const wanted = new Set(tasks.map((t) => t.taskId));
-  return currentRows
-    .filter((r) => wanted.has(benefitKey(r.stockCode, r.description)))
-    .map((r) => r.id);
+  for (const r of currentRows) {
+    if (wanted.has(benefitKey(r.stockCode, r.description))) ids.add(r.id);
+  }
+  return [...ids];
 }
 
 /** 対象の優待行 id から (stockId, 銘柄コード) を引く。 */
