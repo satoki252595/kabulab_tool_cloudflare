@@ -10,6 +10,7 @@
 実績/予想の判別は決算短信サマリ XBRL (tse-ed-t) の contextRef 規則で行う:
 - contextRef に "ForecastMember" を含む → 会社予想
 - "NextYear...ForecastMember" → 来期予想 (forecast_* フィールド)
+- UpperMember/LowerMember は会社予想の範囲（実績・点予想に変えない）
 - それ以外の CurrentYear/CurrentQuarter/CurrentAccumulated 系 → 当期実績
 """
 
@@ -31,8 +32,16 @@ logger = logging.getLogger(__name__)
 
 ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
     "net_sales": (
+        # 主要な経営指標の売上収益を優先する。IFRSの広い「収益」には
+        # 金融収益等を含む原本があり、売上収益の定義と混ぜない。
+        "RevenueIFRSSummaryOfBusinessResults",
+        "Revenue2IFRSSummaryOfBusinessResults",
+        "RevenuesUSGAAPSummaryOfBusinessResults",
         "NetSales",
+        "NetSalesUS",
         "OperatingRevenues",
+        "OperatingRevenuesUS",
+        "TotalRevenuesUS",
         "OperatingRevenue",
         "Revenue",
         "RevenuesIFRS",
@@ -42,6 +51,7 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
     ),
     "operating_income": (
         "OperatingIncome",
+        "OperatingIncomeUS",
         "OperatingProfit",
         "OperatingIncomeIFRS",
         "OperatingProfitIFRS",
@@ -56,7 +66,11 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
     "net_income": (
         "ProfitAttributableToOwnersOfParent",
         "ProfitAttributableToOwnersOfParentIFRS",
+        "ProfitLossAttributableToOwnersOfParentIFRS",
+        "ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults",
+        "NetIncomeLossAttributableToOwnersOfParentUSGAAPSummaryOfBusinessResults",
         "NetIncome",
+        "NetIncomeUS",
         "ProfitLossAttributableToOwnersOfParent",
         "ProfitLoss",
     ),
@@ -73,6 +87,8 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
         "BasicEarningsLossPerShare",
         "BasicEarningsPerShare",
         "BasicNetIncomePerShare",
+        "BasicNetIncomePerShareUS",
+        "NetIncomePerShareUS",
         "BasicEarningsLossPerShareSummaryOfBusinessResults",
         "BasicEarningsLossPerShareIFRSSummaryOfBusinessResults",
         "BasicEarningsLossPerShareIFRS",
@@ -92,6 +108,8 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
         "EquityToAssetRatioSummaryOfBusinessResults",
         "EquityToAssetRatioIFRSSummaryOfBusinessResults",
     ),
+    # EDINETの原本に直接ある比率だけを使う。利益/自己資本から推計しない。
+    "roe_pct": ("RateOfReturnOnEquitySummaryOfBusinessResults",),
     "cf_operating": (
         "CashFlowsFromOperatingActivities",
         "NetCashProvidedByUsedInOperatingActivities",
@@ -222,7 +240,16 @@ def _is_next_year(context_ref: str) -> bool:
 
 
 def _is_current(context_ref: str) -> bool:
-    return context_ref.startswith("Current") or "CurrentYear" in context_ref
+    return context_ref.startswith(("Current", "Interim")) or "CurrentYear" in context_ref
+
+
+def _is_actual_current(context_ref: str) -> bool:
+    return (
+        _is_current(context_ref)
+        and not _is_forecast(context_ref)
+        and "UpperMember" not in context_ref
+        and "LowerMember" not in context_ref
+    )
 
 
 def _pick_value(
@@ -239,7 +266,7 @@ def _pick_value(
         if forecast:
             rows = rows[mask_fc & (mask_ny if next_year else ~mask_ny)]
         else:
-            rows = rows[~mask_fc & rows["context_ref"].map(_is_current)]
+            rows = rows[rows["context_ref"].map(_is_actual_current)]
         if rows.empty:
             continue
         # 連結優先 ("連結" > "" > "単体")
@@ -273,8 +300,24 @@ def _pick_date(df: pd.DataFrame, candidates: tuple[str, ...]) -> date | None:
         return None
 
 
+def _current_actual_flows(tidy: pd.DataFrame) -> pd.DataFrame:
+    flow_elements = {
+        element
+        for field in ("net_sales", "operating_income", "ordinary_income", "net_income")
+        for element in ELEMENT_CANDIDATES[field]
+    }
+    return tidy[
+        tidy["element"].map(_local_name).isin(flow_elements)
+        & tidy["context_ref"].map(_is_actual_current)
+        & tidy["value"].map(parse_numeric).notna()
+    ]
+
+
 def derive_fiscal_period_end(tidy: pd.DataFrame) -> date | None:
-    """決算期末の導出: DEI 要素 → 無ければ当期 Duration コンテキストの最大 period_end。"""
+    """実績損益の対象期末を優先する。TDnet の年度末 DEI は四半期末とは限らない。"""
+    ends = pd.to_datetime(_current_actual_flows(tidy)["period_end"], errors="coerce").dropna()
+    if not ends.empty:
+        return ends.max().date()
     explicit = _pick_date(
         tidy,
         (
@@ -286,9 +329,7 @@ def derive_fiscal_period_end(tidy: pd.DataFrame) -> date | None:
     )
     if explicit:
         return explicit
-    current = tidy[
-        tidy["context_ref"].map(lambda c: "CurrentYear" in c and not _is_forecast(c))
-    ]
+    current = tidy[tidy["context_ref"].map(_is_actual_current)]
     ends = pd.to_datetime(current["period_end"], errors="coerce").dropna()
     if ends.empty:
         return None
@@ -298,6 +339,14 @@ def derive_fiscal_period_end(tidy: pd.DataFrame) -> date | None:
 def derive_disclosure_type(tidy: pd.DataFrame) -> str | None:
     """開示種別の導出: tse-ed-t TypeOfCurrentPeriodDETAIL (FY/1Q/...) /
     jpdei TypeOfCurrentPeriodDEI (Q1/Q2/Q3/HY/FY) / QuarterlyPeriodDEI (1/2/3)。"""
+    contexts = _current_actual_flows(tidy)["context_ref"]
+    quarters = {
+        f"{quarter}Q"
+        for quarter in (1, 2, 3)
+        if contexts.str.startswith(f"CurrentAccumulatedQ{quarter}Duration").any()
+    }
+    if len(quarters) == 1:
+        return quarters.pop()
     text = _pick_text(
         tidy,
         (
@@ -350,32 +399,50 @@ def tidy_to_financial_record(
         disclosure_type or derive_disclosure_type(tidy) or "本決算", fiscal_period_end
     )
 
+    # 実績の連結区分を先に確定し、別区分の要素名が優先されても混ぜない。
+    # IFRSの連結利益と、日本基準名の単体NetIncomeが同じ原本にある場合もある。
+    consolidated = None
+    actual_flows = _current_actual_flows(tidy)
+    period = fiscal_period_end.isoformat()
+    actual_flows = actual_flows[actual_flows["period_end"].isin(("", period))]
+    if not actual_flows.empty:
+        cons_values = set(actual_flows["consolidated"].unique())
+        if "連結" in cons_values:
+            consolidated = "連結"
+        elif cons_values == {"単体"}:
+            consolidated = "単体"
+    scoped = tidy[tidy["consolidated"] == consolidated] if consolidated is not None else tidy
+    # CSVは期間列が空。日付を持つTDnetでは当該実績期だけを使う。
+    # 年間配当のResultMemberが未来年度末でも、四半期実績へ混ぜない。
+    actual = scoped[
+        scoped["period_end"].isin(("", period)) & scoped["instant_date"].isin(("", period))
+    ]
+
     values: dict[str, float | None] = {}
     for field, candidates in ELEMENT_CANDIDATES.items():
         if field == "dps":
             continue
-        num = _pick_value(tidy, candidates, forecast=False)
-        if num is not None and field in _RATIO_FIELDS and abs(num) <= 1.0:
+        num = _pick_value(actual, candidates, forecast=False)
+        if num is not None and field == "roe_pct":
+            num *= 100.0  # 当該EDINET要素は比率。1超(ROE100%超)でも%へ確定変換。
+        elif num is not None and field in _RATIO_FIELDS and abs(num) <= 1.0:
             num *= 100.0  # 小数表記の比率 → % (確定的な単位変換 §3-4)
         values[field] = num
 
     # 来期予想 (ForecastMember + NextYear)。当期予想しか無い短信では None のまま
     for src_field, dst_field in _FORECAST_FIELDS.items():
-        values[dst_field] = _pick_value(
-            tidy, ELEMENT_CANDIDATES[src_field], forecast=True, next_year=True
-        ) or _pick_value(tidy, ELEMENT_CANDIDATES[src_field], forecast=True)
+        next_forecast = _pick_value(
+            scoped, ELEMENT_CANDIDATES[src_field], forecast=True, next_year=True
+        )
+        values[dst_field] = (
+            next_forecast if next_forecast is not None
+            else _pick_value(scoped, ELEMENT_CANDIDATES[src_field], forecast=True)
+        )
 
-    dps_actual = _pick_value(tidy, ELEMENT_CANDIDATES["dps"], forecast=False)
+    # 1株配当は発行会社の値なので連結区分で除外せず、実績の対象期だけ守る。
+    issuer_actual = tidy[tidy["period_end"].isin(("", period)) & tidy["instant_date"].isin(("", period))]
+    dps_actual = _pick_value(issuer_actual, ELEMENT_CANDIDATES["dps"], forecast=False)
     dps_forecast = _pick_value(tidy, ELEMENT_CANDIDATES["dps"], forecast=True)
-
-    # 連結/単体: 実績値が連結コンテキストから取れたか
-    consolidated = None
-    if not tidy.empty:
-        cons_values = set(tidy["consolidated"].unique())
-        if "連結" in cons_values:
-            consolidated = "連結"
-        elif cons_values == {"単体"}:
-            consolidated = "単体"
 
     return FinancialSummaryRecord(
         code=code,
@@ -390,7 +457,7 @@ def tidy_to_financial_record(
         net_income=values["net_income"],
         eps=values["eps"],
         bps=values["bps"],
-        roe_pct=None,  # 短信サマリに直接出る場合のみ将来対応。計算で補わない (§3-1)
+        roe_pct=values["roe_pct"],
         roa_pct=None,
         equity_ratio_pct=values["equity_ratio_pct"],
         cf_operating=values["cf_operating"],

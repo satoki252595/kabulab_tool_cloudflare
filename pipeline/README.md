@@ -32,6 +32,67 @@ uv run pytest        # テスト
 
 全ジョブ `--dry-run` 対応（Notion に書き込まない）。
 
+### ③財務サマリの既存行を D1 へ補完
+
+`scripts/backfill_financials_from_notion.py` は Notion ③の全件を月ごとに読み、
+`jss_financials` に未登録のキーだけを挿入する一度きりの移行です。既定は
+**Notion の読み取り検証だけ**で、D1 には接続しません。同じ `--apply` を再実行しても
+既存行の数値・出典を上書きしません。円・円/株・% の値、開示種別、連結/単体、
+ソースとライセンスタグを Notion のまま運びます。③に無い文書ID・URL・SHA256は
+推測せず空欄にします。
+
+```bash
+nix develop -c uv run --project pipeline python pipeline/scripts/backfill_financials_from_notion.py --verify-code 8154
+# PRの検証・マージと本番手順の確認後、NOTION_TOKEN / CF_ACCOUNT_ID /
+# CF_API_TOKEN / CF_D1_DATABASE_ID を環境へ設定して明示的に実行する:
+nix develop -c uv run --project pipeline python pipeline/scripts/backfill_financials_from_notion.py --apply --verify-code 8154
+```
+
+Notion の 10,000 件/クエリ上限に対して決算期末を月で区切り、途中で失敗したら停止します。
+最後に Notion の全行数・一意キー数・銘柄数、D1 の前後行数を表示します。
+`--verify-code` で指定した銘柄は期別行の件数と値も表示します。
+2026-09-28 の読み取り検証では Notion ③は 34,663 行・一意キー 34,663 件、
+D1 は実行前 322 行・8154 は 0 行でした。実行後の値は本番実行のログで確認してください。
+
+### 原本から財務の期末・連結区分・中間期を再検証
+
+2026-09-28 に、年度末 DEI を四半期末として使う経路、配当/メタ情報の既定連結が
+単体実績を上書きする経路、EDINET `InterimDuration` を当期実績に含めない経路を
+確認しました。③をそのまま運ぶだけではこの誤値は直りません。
+`scripts/reparse_financials_from_notion.py` は③から⑤の原本をたどり、source・銘柄コード・
+SHA256を照合して共有parserで再生成します。既定は **Notion/D1 とも読み取りだけ**です。
+
+```bash
+nix develop -c uv run --env-file .env --project pipeline python pipeline/scripts/reparse_financials_from_notion.py --journal /tmp/financial-audit.jsonl
+# 先行確認だけなら --code 8154 / --future-after 2026-09-28 / --limit N
+# を追加する。サンプルは全件合格として扱わない。
+```
+
+⑤をsource/データ基準日/原本種別で一括queryし、Notion APIは既定2.5rps、
+保存済みファイルは4接続を再利用して並列取得します。ファイルはstreamで圧縮64MiB、展開128MiBを
+上限とし、超過・ハッシュ不一致・期末/連結区分未確定は失敗をjournalへ残します。
+期限付きファイルURLはログやjournalへ出しません。原本をSHA名でcacheし、同じ
+journalで再実行すると成功済みを省略し、失敗だけ再試行します。
+parserのSHAも記録し、parserが変わった場合は旧成功を省略せず全件を再解析します。
+原本cacheを使うため同じファイルを再ダウンロードする必要はありません。
+
+原本再解析・差分確認とPR/CI/マージを終えてから、`--apply-journal` で **Notion③だけ**を
+更新できます。検証済みの部分集合を優先修復する場合も全体合格とは扱いません。
+対象コード群の正本を直前にまとめて読み、監査後の変更を検出してから更新→再読し、
+成功行だけを `--receipts`（省略時はjournal名の `.applied.jsonl`）へ記録します。
+新しい開示を守り、正しい行の再読一致後だけ旧誤キーをarchiveします。
+
+既存D1 322行にも同根の誤値があり得るため、未登録だけを挿入する旧backfillを品質
+修正の代わりに実行してはいけません。再読成功の記録を確認後、`--sync-d1 --receipts FILE`
+を別実行します。正本を再確認し、監査・再読・最新parserが一致する行だけ設定先D1へ
+同期します。監査済みNULLは誤値を消し、新しいD1開示や厳しいライセンスは守ります。
+旧キーは同じsource・開示日時・原本hashの行だけ、正しいキーのD1再読後に除きます。
+原本不一致の旧キーは件数を明示して保持するため、別途再監査が必要です。
+
+Notion修復→再読→**隔離D1**の同期・選定差分→stagingの順で確認してから本番へ進みます。
+`CF_D1_DATABASE_ID` の設定先を必ず確認し、本番の同期は承認済みリリース作業内だけで
+実行します。これらは一度きりの修復用で、日次サービスに処理や保存先を追加しません。
+
 ### EDINETの対象日（2026-09-11）
 
 `edinet_daily` の既定の対象日は **cron の予定日**であり、起動時刻の JST 日付ではない。予定は毎営業日 21:00 JST（`cron: "0 12 * * 1-5"`）なので、21:00 JST より前に始まった実行は「前日分の遅延実行」として前日を対象にする。GitHub Actions のスケジュール遅延（実測 +3.5h〜+9.5h）で起動が翌日 JST へずれても、対象日はずれない。任意の日を処理するには `--date YYYY-MM-DD` を渡す。
