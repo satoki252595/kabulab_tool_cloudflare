@@ -392,6 +392,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  * 欠損値 (IMF が守秘義務で非開示にした組み合わせ) は JSON 上 `null` として
  * 配列に現れることがある。これは「形式違反」ではなく CPIS では正常な状態
  * なので throw せず、そのデータ点だけ読み飛ばす (0 や既定値で埋めない)。
+ * 同じく DBnomics が未報告の期を文字列 `"NA"` で返すことがある (2026-09-28 実機
+ * 確認: Derived 系列の SG/IE/AU の古い期に計 42 点。`null` と同じ欠損として
+ * 読み飛ばす。"NA" 以外の文字列は様式異常として throw する)。
  */
 export function parseImfCpisResponse(json: unknown): ImfCpisRecord[] {
   if (!isRecord(json) || !isRecord(json.series)) {
@@ -493,8 +496,9 @@ export function parseImfCpisResponse(json: unknown): ImfCpisRecord[] {
         // 半期調査の正式開始前の S1 (一部報告国のみの試行分)。上の定数コメント参照。
         continue;
       }
-      if (value === null || value === undefined) {
-        // 守秘義務等による非開示。フォールバックで 0 埋めせず読み飛ばす。
+      if (value === null || value === undefined || value === "NA") {
+        // 守秘義務等による非開示 (null) と DBnomics の未報告マーカー ("NA")。
+        // フォールバックで 0 埋めせず読み飛ばす。
         continue;
       }
       if (typeof value !== "number" || !Number.isFinite(value)) {
