@@ -302,3 +302,58 @@ LEX回復 26 + round-1合計のみ是正 32 + 旧来不一致 80 (59違反を含
 - 残課題 (follow-up): 単一行 geocols (R98H 地域注記ペア等) の新構造対応で
   E00766 の地域注記切りも読める。TA7H 級 (全社計 vs 外部顧客計) の総額意味
   選好は gate 外のため STOP 維持。
+
+## 12. 3根因gate 続報: 残存 bound 統一・全候補 fiscal・確定鎖3段化 (同一ブランチ継続)
+
+### 12-1. 残存 0.5*(+4) の同一 proof gate 統一 (review 指摘対応)
+- review (msg_48b0) 指摘の残存 3検査点を roundingBoundFor へ統一: feeder 検証
+  (葉→開示小計の edge。cells.length)、総額裁定 arbiter (R9AG 葉6 Δ2 受理 /
+  PV48 Δ9002 却下の pin 維持)、橋渡し bridge (総額セル側は折畳済で +1 削除)。
+- rescan で flip 0 (pins stand)。コード内の 0.5 残存なし (導出コメントのみ)。
+
+### 12-2. 全候補 fiscal: 前期表の候補除外 (単独 best の前期誤保存を根絶)
+- policy (msg_10466): tie 時の継承だけでは単独 best/score 差 best の前期表を
+  拒否できない (facts.fiscalYearEnd=pe 固定のため前期値が当期保存される)。
+  候補生成の共通路で printed-Z 確定表を除外 (unknown は abstain 残存)。
+- Z-filter 42件の全件 KEI 検証: 正反転 8 (ok→ok。W20H は第87期 818761→
+  第88期 801753=KEI へ。G145 は500差の丸め改善含む)・回復 20 (tie 救済。
+  TINY/TWZL/W8ZH は oracle-KEI行混同 (提出会社) の artifact で連結 P&L 一致)・
+  前期除去 14 (BASE=KEI-prior! の真 prior 保存。億円 10件含む全件確認)。
+  false 除外・false 回復は 0。(ok→ok 9件目は W81W の R1-wide 反転。)
+
+### 12-3. fiscal 確定鎖の3段化: 値軸→表内→表外 (stale 対策)
+- 素朴な表外継承は交互節表題 (LVA5 級: 直前=前期の stale)・表内表題なし
+  (W92F: 表内に当連結@pe・表外に stale 前) で誤除外した (W92F/J4AK/LVA5級)。
+- 確定鎖: (1) 値軸見出し (pick した値列/値行の頭。ranged 全会一致 or 単一年号。
+  ParsedTable.valueAxisHeader を新設配管) → (2) 表内全会一致
+  (unanimousFlatFiscal。TZ 混在は null) → (3) 表外広窓最寄り
+  (inheritSourceFiscal)。W92F/LVA5/J4AK 級を KEI 正で回復。
+- W20H fixture は第87期/Z表のみの splice だったため第88期/T表を追加再 splice
+  し期待値を当期へ更新 (旧 818761 は前期誤保存)。LVA5 fixture 新規
+  (stale-Z 表題@6666 + 値列頭 T の override 証拠)。
+
+### 12-4. 3675 全母集団 rescan (BASE=HEAD vs NEW)
+- 198 diffs: R1-wide 真 kill 4 + W81W 正反転 + Z-filter 42 (正反転 8・回復 20・
+  前期除去 14) + tiebreak honest-STOP 142。計 4+1+42+142=189、残り 9 は回復
+  9 (§11 の tiebreak 救済分。§11-4 の 156 = 4+1+9+142 と対応)。
+- oracle-255: nWin 206・loserWin 1 (G9KL artifact)・proven-wrong 0。
+- diff histogram (NEW-ok 3154): 0:755/1:1157/2:860/3:286/4:52/5:7 + 上側超過 30
+  (非地域収益。設計どおり)。差 5 は旧 bound でも受理済み (新規 admission なし)。
+- viol-59: 59/59 不変。
+
+### 12-5. 検証ゲート (最終 head)
+- `overseas-parser.test.ts`: **96 tests green** (91 + 確定鎖 5:
+  LVA5-axis/W20H-T + unanimousFlatFiscal/axisFiscal/resolve ×4。実原本 fixture
+  2表: LVA5 新規 + W20H 再 splice)。
+- `services/yuho-quant`: **549 tests green**。repo 全体: **3063 passed**
+  (363 skipped) / 0 failed。
+- `tsc --noEmit` clean。`eslint src services --max-warnings=0` clean。
+  `render-data-audit.ts --check` OK。
+- 本番書込なし (D1/R2/Notion/job-apply 未実行。writer grant 待ち)。
+  原本 ZIP は `/tmp/overseas_laneA_raw/` (未 archive のまま正直に記録)。
+- 残 gate (quoted follow-up): (b2) group への sales-contract 次元
+  (noteClass/総額種。TA7H 級 A/C の全社計 vs 外部顧客計の分離は総額意味の
+  構造情報が必要で単純ラベルでは分離不能を確認)、(b3) per-source precision
+  proof (quantum/mode/寄与者の proof 保持。現行は切捨て最悪計算の統一包摂。
+  端数 note は別ファイル配置が多く parseOverseasHtml 単体では検出不能のため
+  parseOverseasData 層の設計が必要)。単一行 geocols 新構造も継続。

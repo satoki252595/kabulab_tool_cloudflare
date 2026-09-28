@@ -89,6 +89,12 @@ export interface OverseasExtraction {
 interface ParsedTable {
   facts: OverseasFact[];
   proof: OverseasProof;
+  /**
+   * 値列/値行の見出しテキスト (期首確定鎖の第1段)。rows は pick した値列の
+   * colHeader、cols は値行の行テキスト。LVA5 級の2期比較表は表外表題が
+   * stale (交互節表題の直前=前期) でも値列頭の当連結@pe で T 確定する。
+   */
+  valueAxisHeader?: string;
 }
 
 /**
@@ -663,7 +669,7 @@ function tryGeoRows(
   }
 
   if (shokei.length > 0) {
-    return finishShokeiBlocks(
+    const b1 = finishShokeiBlocks(
       entries,
       shokei,
       aggregates,
@@ -671,6 +677,8 @@ function tryGeoRows(
       fiscalYearEnd,
       consolidated
     );
+    if (b1) return { ...b1, valueAxisHeader: colHeader[vc] ?? "" };
+    return null;
   }
 
   // 重複地域名の解決: metric 対・2-D 製品軸・階層ラベルのいずれかで証明できなければ
@@ -775,7 +783,10 @@ function tryGeoRows(
           continue;
         }
         const feederSum = cells.reduce((a, x) => a + x, 0);
-        if (Math.abs(feederSum - e.value) > 0.5 * (cells.length + 4)) {
+        // 葉→開示小計の edge 検証。許容は表示葉セル数 (roundingBoundFor)。
+        if (
+          Math.abs(feederSum - e.value) > roundingBoundFor(cells.length)
+        ) {
           return null;
         }
         leaves += cells.length;
@@ -806,9 +817,11 @@ function tryGeoRows(
         aggregates.find((a) => /外部顧客/.test(a.label)) ??
         aggregates.find((a) => /連結|合計/.test(a.label)) ??
         null;
-      const arbiterBound =
-        0.5 *
-        (leafTerms + elimCount + otherRevenueCount + companyCommonCount + 4);
+      // 総額裁定の許容も表示葉セル数 (roundingBoundFor)。R9AG (葉6・Δ2
+      // 受理)/PV48 (Δ9002 却下) の pin は立つ。
+      const arbiterBound = roundingBoundFor(
+        leafTerms + elimCount + otherRevenueCount + companyCommonCount
+      );
       if (
         !arbiterAgg ||
         Math.abs(
@@ -850,13 +863,14 @@ function tryGeoRows(
   // 消去・全社共通) で橋渡しできなければ却下 (脱落か表違い。推測しない)。
   let bridged = false;
   if (matchedRegional && companyAgg && companyAgg !== matchedRegional) {
+    // 橋渡し検証の許容も表示葉セル数 (roundingBoundFor)。総額セル側の丸めは
+    // 整数性に折畳済のため +1 は足さない (save-path と同一 proof gate)。
     const bridgeTerms =
-      leafTerms + elimCount + otherRevenueCount + companyCommonCount + 1;
+      leafTerms + elimCount + otherRevenueCount + companyCommonCount;
     if (
       Math.abs(
         regionSum + elimSum + otherRevenueSum + companyCommonSum - companyAgg.value
-      ) <=
-      0.5 * (bridgeTerms + 4)
+      ) <= roundingBoundFor(bridgeTerms)
     ) {
       bridged = true;
     } else if (matchedElim) {
@@ -922,6 +936,7 @@ function tryGeoRows(
   return {
     facts,
     proof: { reconciliationAdjustment: reconAdjustment, roundingBound: bound },
+    valueAxisHeader: colHeader[vc] ?? "",
   };
 }
 
@@ -1372,6 +1387,7 @@ function tryGeoCols(
       reconciliationAdjustment: elimSum + nonGeoSegSum,
       roundingBound: bound,
     },
+    valueAxisHeader: gridX[valueRow]?.join("") ?? "",
   };
 }
 
@@ -1608,6 +1624,7 @@ interface PeriodPairCand {
   heading: string;
   flat: string;
   wide: string;
+  axis: string;
 }
 
 /** 表文面に非売上 metric の標識 (IFRS 移行日列・資産/減損の語) があるか */
@@ -1687,12 +1704,102 @@ export function inheritSourceFiscal(
 }
 
 /**
+ * 表内 fiscal: 表文面 (flat) の ranged 表題が全会一致のときだけ確定する。
+ * 表自身の頭に当/前表題を持つ表 (W92F: 表内に当連結@pe) は表題が definitive
+ * で、表外の stale な前期表題 (W92F: 60KB 窓内の前@2024-03-31) より優先する。
+ * 2期比較列 (TZ 混在)・日付不一致は null (非全会一致→表外継承へ)。
+ */
+export function unanimousFlatFiscal(
+  flat: string,
+  reportPeriodEnd: string
+): SourceFiscal | null {
+  const w = toHalfWidthDigits(flat);
+  const re =
+    /(?:(前|当)(連結会計年度|事業年度|会計年度)?|第\d+期)\s*[（(]\s*自[^）)]{0,60}?至([^）)]{0,60}?)[）)]/g;
+  let m: RegExpExecArray | null;
+  const sides = new Set<"T" | "Z">();
+  const pe = normPeriodEnd(reportPeriodEnd);
+  let count = 0;
+  let firstDate = "";
+  while ((m = re.exec(w)) !== null) {
+    count++;
+    const date = endDateChunkToIso(m[3]);
+    if (!date) return null;
+    if (count === 1) firstDate = date;
+    const label = m[1] === undefined ? null : m[1] === "当" ? "T" : "Z";
+    if (label === "T") {
+      if (date !== pe) return null;
+      sides.add("T");
+    } else if (label === "Z") {
+      if (!(date < pe)) return null;
+      sides.add("Z");
+    } else {
+      if (date === pe) sides.add("T");
+      else if (date < pe) sides.add("Z");
+      else return null;
+    }
+  }
+  if (count === 0 || sides.size !== 1) return null;
+  const side = [...sides][0];
+  return { side, date: side === "T" ? pe : firstDate };
+}
+
+/**
+ * 値軸 fiscal: pick した値列/値行の見出しから期を確定する。
+ * ranged 表題の全会一致があればそれを使い、なければ単一年号で判定する
+ * (単一年==pe年→T、単一年<pe年→Z。和暦は西暦化)。複数年/0年は null。
+ * LVA5 級の2期比較表は値列頭の当連結@pe で T 確定する (表外交互表題の
+ * stale Z より値列頭が強い)。
+ */
+export function axisFiscal(
+  axisHeader: string,
+  reportPeriodEnd: string
+): SourceFiscal | null {
+  const ranged = unanimousFlatFiscal(axisHeader, reportPeriodEnd);
+  if (ranged) return ranged;
+  const w = toHalfWidthDigits(axisHeader).replace(/[\s\u3000]/g, "");
+  const years = new Set<number>();
+  for (const m of w.matchAll(
+    /(明治|大正|昭和|平成|令和)?(\d+|元)年/g
+  )) {
+    const y = m[2] === "元" ? 1 : Number(m[2]);
+    const western = m[1] ? ERA_START_YEAR[m[1]] + y - 1 : y;
+    if (Number.isFinite(western)) years.add(western);
+  }
+  if (years.size !== 1) return null;
+  const peY = Number(normPeriodEnd(reportPeriodEnd).slice(0, 4));
+  const y = [...years][0];
+  if (y === peY) return { side: "T", date: normPeriodEnd(reportPeriodEnd) };
+  if (y < peY) return { side: "Z", date: `${y}-12-31` };
+  return null;
+}
+
+/**
+ * 候補 fiscal の確定鎖: 値軸見出し → 表内全会一致 → 表外広窓の最寄り。
+ * 値軸 (pick した値列/値行の頭) は候補値そのものの期を示すため最も強い。
+ * 表内表題は表自身の期を示し、表外の stale 表題より強い。
+ * 全て unknown なら null。
+ */
+export function resolveCandidateFiscal(
+  axisHeader: string,
+  flat: string,
+  wide: string,
+  reportPeriodEnd: string
+): SourceFiscal | null {
+  return (
+    axisFiscal(axisHeader, reportPeriodEnd) ??
+    unanimousFlatFiscal(flat, reportPeriodEnd) ??
+    inheritSourceFiscal(wide, reportPeriodEnd)
+  );
+}
+
+/**
  * 候補の sourceFiscal キー。継承できれば T/Z、できなければ期表示語クラス
  * (pw:T/Z/TZ/-) で group 化する。TZ 汚染ペア・同期間ペアは同 group 内の
  * キー不一致→STOP に流れる。
  */
 function sourceFiscalKey(c: PeriodPairCand, pe: string): string {
-  const inh = inheritSourceFiscal(c.wide, pe);
+  const inh = resolveCandidateFiscal(c.axis, c.flat, c.wide, pe);
   if (inh) return inh.side;
   return `pw:${periodWordClassOf(c.heading, c.flat)}`;
 }
@@ -1718,8 +1825,8 @@ function pickCurrentOfFiscalPair(
   const unitB = b.facts[0]?.unitLabel ?? null;
   if (unitA !== unitB) return null;
   if (hasMetricMarkers(a.flat) || hasMetricMarkers(b.flat)) return null;
-  const inhA = inheritSourceFiscal(a.wide, pe);
-  const inhB = inheritSourceFiscal(b.wide, pe);
+  const inhA = resolveCandidateFiscal(a.axis, a.flat, a.wide, pe);
+  const inhB = resolveCandidateFiscal(b.axis, b.flat, b.wide, pe);
   if (!inhA || !inhB) return null;
   if (inhA.side === inhB.side) return null;
   const totA = a.facts.find((f) => f.regionKind === "total")?.salesAmount ?? null;
@@ -1749,6 +1856,7 @@ export function parseOverseasHtml(
     heading: string;
     flat: string;
     wide: string;
+    axis: string;
   }
   const candidates: Cand[] = [];
 
@@ -1798,18 +1906,39 @@ export function parseOverseasHtml(
       status: OverseasParseStatus;
       facts: OverseasFact[];
       proof: OverseasProof;
+      axis: string;
     } | null = null;
     {
       const rows = tryGeoRows(grid, reportPeriodEnd, heading);
       if (rows)
-        cand = { status: "ok_geo_rows", facts: rows.facts, proof: rows.proof };
+        cand = {
+          status: "ok_geo_rows",
+          facts: rows.facts,
+          proof: rows.proof,
+          axis: rows.valueAxisHeader ?? "",
+        };
     }
     if (!cand) {
       const cols = tryGeoCols(grid, reportPeriodEnd, heading);
       if (cols)
-        cand = { status: "ok_geo_cols", facts: cols.facts, proof: cols.proof };
+        cand = {
+          status: "ok_geo_cols",
+          facts: cols.facts,
+          proof: cols.proof,
+          axis: cols.valueAxisHeader ?? "",
+        };
     }
     if (cand) {
+      // 期首フィルタ (全候補共通): printed 期が Z (前期) と確定した表は候補に
+      // しない。facts.fiscalYearEnd は pe 固定のため、前期表を残すと単独 best・
+      // score 差 best で前期値が当期として保存される (tie 時の継承だけでは
+      // 防げない)。継承 unknown は残す (abstain)。T は終期=pe 検証済み。
+      // 確定鎖は値軸→表内→表外 (stale な表外表題より値軸/表内が強い)。
+      const inh = resolveCandidateFiscal(cand.axis, flat, wide, reportPeriodEnd);
+      if (inh && inh.side === "Z") {
+        sawGeoSignal = true;
+        continue;
+      }
       candidates.push({
         ...cand,
         score: scoreCandidate(heading, flat, cand.status),

@@ -15,6 +15,9 @@ import {
   validateOverseasSaveSet,
   roundingBoundFor,
   inheritSourceFiscal,
+  unanimousFlatFiscal,
+  axisFiscal,
+  resolveCandidateFiscal,
   type OverseasFact,
 } from "../services/overseas-parser.js";
 import { REGION_BUCKETS } from "../services/overseas-query.js";
@@ -89,13 +92,13 @@ describe("GEO_ROWS — 地域=行 (新収益認識基準の地域別収益分解
 });
 
 describe("GEO_COLS — 地域=列", () => {
-  it("S100W20H 横並び地域・連結列が総額", () => {
+  it("S100W20H 横並び地域・連結列が総額 (第87期/Z表は期首フィルタで除外し第88期/T表を採用。旧期待値 818761 は前期値の誤保存だった)", () => {
     const r = parseOverseasHtml(fx("geocols-horizontal-renketsu-total-S100W20H.html"), "2025-03-31");
     expect(r.status).toBe("ok_geo_cols");
-    expect(pick(r.facts, "domestic")!.salesAmount).toBe(348998);
-    expect(region(r.facts, "中華圏")!.salesAmount).toBe(171932);
-    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(469763);
-    expect(pick(r.facts, "total")!.salesAmount).toBe(818761);
+    expect(pick(r.facts, "domestic")!.salesAmount).toBe(355104);
+    expect(region(r.facts, "中華圏")!.salesAmount).toBe(159967);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(446649);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(801753);
     expect(pick(r.facts, "overseas_total")!.isConsolidated).toBe(true);
   });
 
@@ -854,6 +857,16 @@ describe("海外59根因: 全角・語彙・集計変種・消去適用範囲・
     expect(() => validateOverseasSaveSet(r.facts, r.proof)).not.toThrow();
   });
 
+  it("S100LVA5 2期比較表は値列頭の当連結@pe で T 確定する (表外の交互節表題は直前=前期の stale。値軸が表外より強い)", () => {
+    const r = parseOverseasHtml(fx("georows-twocol-axis-fiscal-S100LVA5.html"), "2021-03-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(region(r.facts, "日本")!.salesAmount).toBe(116672);
+    expect(region(r.facts, "欧州")!.salesAmount).toBe(191331);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(382552);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(499224);
+    expect(() => validateOverseasSaveSet(r.facts, r.proof)).not.toThrow();
+  });
+
   it("S100TA7H 同一 group 内の総額不一致 (全社計 vs 外部顧客計) は未構造化を維持する (Z ペア A/C・T ペア B/D が脚同値・総額不一致。脚のみの収束や順序選択はしない)", () => {
     const r = parseOverseasHtml(fx("geocols-twopair-tie-S100TA7H.html"), "2024-01-20");
     expect(r.status).toBe("geo_present_unstructured");
@@ -953,5 +966,64 @@ describe("HOLD-gate: 期首継承 inheritSourceFiscal", () => {
   it("ranged 表題なし・終期パース不能は unknown", () => {
     expect(inheritSourceFiscal("（2）地域別の内訳", "2023-03-31")).toBeNull();
     expect(inheritSourceFiscal("当期の売上について説明します", "2023-03-31")).toBeNull();
+  });
+});
+
+describe("HOLD-gate: fiscal 確定鎖 (値軸→表内→表外)", () => {
+  it("unanimousFlatFiscal: 表内表題の全会一致のみ確定する (W92F: 表内当連結@pe→T)", () => {
+    expect(
+      unanimousFlatFiscal("当連結会計年度(自2024年４月１日 至2025年３月31日) 報告セグメント", "2025-03-31")
+    ).toEqual({ side: "T", date: "2025-03-31" });
+    expect(
+      unanimousFlatFiscal("前連結会計年度（自2023年４月１日 至2024年３月31日）", "2025-03-31")
+    ).toEqual({ side: "Z", date: "2024-03-31" });
+    // TZ 混在 (2期比較列)・日付不一致は非全会一致→null
+    expect(
+      unanimousFlatFiscal("前連結会計年度（自2023年４月１日 至2024年３月31日） 当連結会計年度（自2024年４月１日 至2025年３月31日）", "2025-03-31")
+    ).toBeNull();
+  });
+  it("axisFiscal: 値列頭の ranged 表題で確定する (LVA5: 当連結@pe→T)", () => {
+    expect(
+      axisFiscal("当連結会計年度（自2020年４月１日 至2021年３月31日）", "2021-03-31")
+    ).toEqual({ side: "T", date: "2021-03-31" });
+    expect(
+      axisFiscal("前連結会計年度（自2019年４月１日 至2020年３月31日）", "2021-03-31")
+    ).toEqual({ side: "Z", date: "2020-03-31" });
+  });
+  it("axisFiscal: 単一年号で判定する (単一年==pe年→T、<pe年→Z、複数年→null)", () => {
+    expect(axisFiscal("2025年3月期 売上高", "2025-03-31")).toEqual({ side: "T", date: "2025-03-31" });
+    expect(axisFiscal("2024年3月期 売上高", "2025-03-31")?.side).toBe("Z");
+    expect(axisFiscal("令和7年3月期", "2025-03-31")).toEqual({ side: "T", date: "2025-03-31" });
+    expect(axisFiscal("2024年 2025年 比較", "2025-03-31")).toBeNull();
+    expect(axisFiscal("合計", "2025-03-31")).toBeNull();
+  });
+  it("resolveCandidateFiscal: 値軸→表内→表外の順に確定する", () => {
+    // 値軸 T が表外 stale-Z に勝つ (LVA5 級)
+    expect(
+      resolveCandidateFiscal(
+        "当連結会計年度（自2020年４月１日 至2021年３月31日）",
+        "日本 欧州 北米",
+        "前連結会計年度（自2019年４月１日 至2020年３月31日）",
+        "2021-03-31"
+      )
+    ).toEqual({ side: "T", date: "2021-03-31" });
+    // 値軸 unknown → 表内 T (W92F 級)
+    expect(
+      resolveCandidateFiscal(
+        "外部顧客への売上高",
+        "当連結会計年度(自2024年４月１日 至2025年３月31日)",
+        "前連結会計年度（自2023年４月１日 至2024年３月31日）",
+        "2025-03-31"
+      )
+    ).toEqual({ side: "T", date: "2025-03-31" });
+    // 値軸・表内 unknown → 表外 (R98H 級)
+    expect(
+      resolveCandidateFiscal(
+        "合計",
+        "日本 アジア 欧州",
+        "当連結会計年度（自2022年４月１日 至2023年３月31日）",
+        "2023-03-31"
+      )
+    ).toEqual({ side: "T", date: "2023-03-31" });
   });
 });
