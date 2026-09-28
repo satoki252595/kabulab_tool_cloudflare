@@ -58,44 +58,59 @@ docId 冪等で翌日以降に自己回収されるため、Actions を赤にで
 
 - run36022119851: `TypeError: fetch failed` ＋ `HeadersTimeoutError`。
   要求開始 15:57:20 → 発火 16:02:22（約 302 秒）。Node（undici）の既定
-  headersTimeout 300 秒と一致し、Worker が全 catchup（`TIME_BUDGET_MS`=300 秒の
-  走査＋無制限の投影再生成＋Notion 遅延）を終えて初めて応答するため、
-  作業量の多い日は系統的に発火する。
+  headersTimeout 300 秒と一致する。Worker の `TIME_BUDGET_MS`=300000 は
+  文書の合間でしか確認されず、文書単位の Notion 保管や末尾の投影再生成で
+  超過し得る。応答は全 catchup の完了後に 1 回だけ返るため、作業量の多い
+  日は 300 秒超が正当であり、系統的に発火する。
 - run36156111106: `TypeError: fetch failed` ＋ `read ECONNRESET`。
-  要求開始 15:57:19 → 発火 16:01:28（約 249 秒）。一過性の TCP 切断。
-  トリガに再試行が無いため、そのままジョブ失敗になっていた。
+  要求開始 15:57:19 → 発火 16:01:28（約 249 秒）。peer/ネットワーク側の
+  一過性切断であり、timeout とは別の失敗経路として可視のまま残す。
+  完全復旧は主張しない。
 
-`edinet/client.ts` への GET 再試行は「必要なら」の条件付きだったが、観測された
-失敗経路を直さず、Worker 内の backoff は `TIME_BUDGET_MS` を消費して
-headers timeout を悪化させるため採用しない。再試行は失敗 caller（トリガ）の
-共通 1 点にだけ置く。
+`edinet/client.ts` への GET 再試行は観測された失敗経路を直さず、Worker 内の
+backoff は `TIME_BUDGET_MS` を消費して headers timeout を悪化させるため
+採用しない。
 
-## #98 修正
+## #98 修正（単発要求。再送は撤去）
 
-`postCatchup()` を抽出し、`fetch` 自体の throw（切断・タイムアウト等）に限り
-最大 3 試行（待ち 10 秒・30 秒）で再試行する。catchup は docId/Notion 冪等で
-再開可能であり、部分成果は文書単位で残るため、切り直しは残件から進む。
-HTTP 応答が返った場合（5xx 含む）は再試行せず即 throw（従来どおり）。
-上限到達時は試行回数と元エラーを残して throw（成功化しない）。
-エラー文に URL・認証情報を含めない。CLI の env・引数・終了コードは不変。
-テスト用に `fetchFn` / `sleep` を注入可能にし（jev クライアントと同方式）、
-import 時の誤実行防止ガードは `scripts/moneyflow/ingest.ts` と同方式。
+当初はトリガに限定再試行を入れていたが、レビューで unsafe と判定し撤去した。
+Worker 側に永続リース/要求冪等が無く、docId SELECT→取込・Notion key照会→
+作成は競合し得る。D1 書込が保管より先なので、D1 存在スキップは Notion 完了を
+証明しない。二重 POST は二重取込・二重保管を起こし得る。
 
-回帰（`scripts/sync/yuho-edinet.test.ts`、6 件。CI で常時実行）:
+`postCatchup()` は node:https による単発要求のみ送る。`agent: false`（都度接続）、
+ヘッダ＋本文全体に `AbortSignal.timeout(600000)` の明示期限をかけ、
+本文を最後まで受ける。undici 内部の import・依存追加・global dispatcher の
+変更はしない。非 2xx（3xx の追従なし）・要求エラー・応答中断・不完全切断・
+期限切れはすべて throw（成功化しない — ルール2）。切断は可視のまま残し、
+運用（次回定期実行の 60 日窓による自己回収・手動再実行）に委ねる。
+エラー文に URL・認証情報・ヘッダを含めず、https 層の元エラーはホスト名を
+埋め込むことがあるため cause としても残さない（code/name のみ記録）。
+CLI の env・引数・終了コードは不変。http は非対応（repo に localhost 規約なし）
+で即失敗する。import 時の誤実行防止ガードは `scripts/moneyflow/ingest.ts`
+と同方式。
 
-- 初回 200 は 1 回だけ叩く（従来どおり）。
-- ECONNRESET×2 → 200 で成功（3 呼び出し・待ち `[10000, 30000]`）。
-- HeadersTimeoutError → 200 で成功（2 呼び出し・待ち `[10000]`）。
-- 3 回連続失敗で `3 回試行後も失敗` を throw（可視のまま）。
-- HTTP 500 は再試行せず即 throw（マスクしない）。
-- エラー文に URL・認証情報を含めない。
+回帰（`scripts/sync/yuho-edinet.test.ts`、6 件。実 TLS サーバに対する
+transport チェック。CI で常時実行。openssl で自己署名を生成）：
+
+- 期限内（300ms 遅延・期限 10 秒）の応答に成功し、要求回数が正確に 1。
+- 期限切れ（無応答・期限 300ms）で `期限切れ` を throw し、要求回数が 1。
+- 途中切断（ヘッダ＋部分本文後に destroy）で失敗し、要求回数が 1。
+- HTTP 500 は status のみで失敗し（上流本文は untrusted のため載せない）、要求回数が 1。
+- エラー文・cause に秘密・ホスト・パスを含めない。
+- http URL は要求を送らず即失敗する（要求回数 0）。
+
+陰性対照: 一時的に再送を注入すると要求回数が 2 になり検出されることを確認。
+3 回連続実行で全件安定（flaky なし）。
 
 #98 は後続の同一ジョブ成功と実体保管の再読確認まで open 維持。
+ECONNRESET 系の一過性切断は本修正後も可視のまま失敗し得る（運用残件）。
 
 ## 検証記録
 
 - `nix develop -c pnpm vitest run services/vwap-analysis/lib/margin.test.ts
-  scripts/sync/yuho-edinet.test.ts`: 14 passed（実 PDF 1 件含む）。
+  scripts/sync/yuho-edinet.test.ts`: 14 passed（実 PDF 1 件・transport 6 件含む）。
+  全スイート 187 files / 2576 passed / 0 failed。
 - `nix develop -c pnpm typecheck`: clean。`pnpm lint`: clean。
 - 再現スクリプト（`/tmp/repro-margin-detach.ts`、commit 外）:
   修正前の呼び出し順で `len 873311 → 0` となり `空ファイルはアップロード
