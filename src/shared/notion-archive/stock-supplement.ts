@@ -14,7 +14,11 @@
  * 欠損は欠損のまま (ルール2): 判定できていない列は `null`/未設定のまま送る。
  * 架空値・既定値で埋めない。
  */
-import { findBackupChildByTitle } from "./archive.js";
+import {
+  createDatabaseOrAdopt,
+  findBackupChildByTitle,
+  findUniqueBackupChildByTitle,
+} from "./archive.js";
 import { notionRequest } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
@@ -265,13 +269,25 @@ export async function ensureSupplementDb(
   }
 
   if (!dbId) {
-    const created = await notionRequest<DbSchemaResponse>("POST", "/databases", {
-      parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
-      title: [{ type: "text", text: { content: SUPPLEMENT_DB_TITLE } }],
-      properties: want,
-    });
-    cachedDbId = created.id;
-    return { dbId: created.id, created: true, propertyIds: extractIds(created.properties) };
+    const res = await createDatabaseOrAdopt<DbSchemaResponse>(
+      {
+        parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
+        title: [{ type: "text", text: { content: SUPPLEMENT_DB_TITLE } }],
+        properties: want,
+      },
+      () =>
+        findUniqueBackupChildByTitle({
+          parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
+          title: SUPPLEMENT_DB_TITLE,
+          kind: "database",
+        })
+    );
+    if (res.created && res.response) {
+      cachedDbId = res.id;
+      return { dbId: res.id, created: true, propertyIds: extractIds(res.response.properties) };
+    }
+    // adopted → 下の schema 検証へ進む (同名の古い DB かもしれないため)。
+    dbId = res.id;
   }
 
   cachedDbId = dbId;

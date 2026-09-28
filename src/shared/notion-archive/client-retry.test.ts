@@ -161,6 +161,44 @@ describe("notion-archive client retry", () => {
     expect(fetchCount).toBe(2);
   });
 
+  it("POST /databases の 500 は結果不明のため再送しない (1 コール)", async () => {
+    script = [{ status: 500 }];
+    const { notionRequest } = await load();
+    await expect(notionRequest("POST", "/databases", {})).rejects.toThrow(
+      "結果不明のため再送しません"
+    );
+    expect(fetchCount).toBe(1);
+  });
+
+  it("POST /databases の 529 は結果不明のため再送しない (1 コール)", async () => {
+    script = [{ status: 529, retryAfter: "0" }];
+    const { notionRequest } = await load();
+    await expect(notionRequest("POST", "/databases", {})).rejects.toThrow(
+      "結果不明のため再送しません"
+    );
+    expect(fetchCount).toBe(1);
+  });
+
+  it("POST /databases の network 例外は型付きエラーで再送しない (1 コール)", async () => {
+    script = [{ status: 0, throwMsg: "fetch failed" }];
+    const { notionRequest, NotionUnknownResultError } = await load();
+    await expect(notionRequest("POST", "/databases", {})).rejects.toThrow(
+      NotionUnknownResultError
+    );
+    expect(fetchCount).toBe(1);
+  });
+
+  it("POST /databases の明示 429 は拒否 (未作成確定) のため再送可", async () => {
+    script = [
+      { status: 429, retryAfter: "0" },
+      { status: 200, body: { id: "new-db" } },
+    ];
+    const { notionRequest } = await load();
+    const got = await notionRequest<{ id: string }>("POST", "/databases", {});
+    expect(got).toEqual({ id: "new-db" });
+    expect(fetchCount).toBe(2);
+  });
+
   it("POST /databases/{id}/query の 500 は読取のため再試行する", async () => {
     script = [
       { status: 500 },

@@ -9,11 +9,13 @@ import type { MoneyflowSourceSpec, ObservationDraft } from "../../../services/mo
 const notion = {
   ensureObservationsDb: vi.fn(async () => ({ dbId: "obs-db" })),
   isArchived: vi.fn(async (_s: string, _k: string, _p?: string) => false),
-  observationExists: vi.fn(async (_db: string, _k: string) => false),
-  observationKey: (d: { period: string; indicatorKey: string; category: string }) =>
-    `${d.period}|${d.indicatorKey}|${d.category}`,
   recordPrimaryData: vi.fn(async (_i: unknown) => ({ pageId: "primary-1", outcome: "recorded", fileTooLarge: false })),
-  upsertObservation: vi.fn(async (_db: string, _i: unknown) => ({ pageId: "row", outcome: "created" as const })),
+  upsertObservation: vi.fn(
+    async (_db: string, _i: unknown): Promise<{ pageId: string; outcome: "created" | "updated" | "unchanged" }> => ({
+      pageId: "row",
+      outcome: "created",
+    })
+  ),
 };
 const archived = {
   requirePrimaryDataDbId: vi.fn(async () => "primary-db"),
@@ -112,23 +114,27 @@ describe("runSpec", () => {
     expect(detail).toMatch(/src-2026-08 を記録 2行 \(新規2\/更新0\/同値0\)/);
   });
 
-  it("保管済み・最後の行が観測ログにある: 取得元へ行かずスキップ", async () => {
+  it("保管済み・全行同値: 全 draft を upsert して書かず「未更新」(最後の1行で skip しない)", async () => {
     notion.isArchived.mockResolvedValueOnce(true);
-    notion.observationExists.mockResolvedValueOnce(true);
+    notion.upsertObservation
+      .mockResolvedValueOnce({ pageId: "row-a", outcome: "unchanged" as const })
+      .mockResolvedValueOnce({ pageId: "row-b", outcome: "unchanged" as const });
     const { runSpec } = await import("./run-spec.js");
     const { spec, fetchImpl } = makeSpec();
     const detail = await runSpec(spec, ctx());
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(notion.recordPrimaryData).not.toHaveBeenCalled();
-    expect(notion.upsertObservation).not.toHaveBeenCalled();
-    // 完了判定は最後の行のキーで行う
-    expect(notion.observationExists).toHaveBeenCalledWith("obs-db", "2026-08|k1|archived-B");
-    expect(detail).toMatch(/未更新/);
+    // 全 draft を upsert にかける (同値確認のため照会はする)。
+    expect(notion.upsertObservation).toHaveBeenCalledTimes(2);
+    expect(detail).toMatch(/未更新.*2行同値確認/);
   });
 
-  it("保管済み・観測ログが途中まで: 保管ファイルから再解析して全行を再送 (取得元へは行かない)", async () => {
+  it("保管済み・途中欠落あり: 全 draft を upsert して欠落だけ修復する", async () => {
     notion.isArchived.mockResolvedValueOnce(true);
-    notion.observationExists.mockResolvedValueOnce(false);
+    // 最後の行は同値だが最初の行が欠落 → 最終行 skip では見落とす形。
+    notion.upsertObservation
+      .mockResolvedValueOnce({ pageId: "row-a", outcome: "created" as const })
+      .mockResolvedValueOnce({ pageId: "row-b", outcome: "unchanged" as const });
     const { runSpec } = await import("./run-spec.js");
     const { spec, fetchImpl } = makeSpec();
     const detail = await runSpec(spec, ctx());
@@ -137,7 +143,7 @@ describe("runSpec", () => {
     const written = notion.upsertObservation.mock.calls.map((c) => c[1] as { category: string; primaryDataPageId: string });
     expect(written.map((w) => w.category)).toEqual(["archived-A", "archived-B"]);
     expect(written.every((w) => w.primaryDataPageId === "primary-old")).toBe(true);
-    expect(detail).toMatch(/保管済み src-2026-08 から観測ログを再送/);
+    expect(detail).toMatch(/保管済み src-2026-08 から観測ログを再送 2行 \(新規1\/更新0\/同値1\)/);
   });
 
   it("保管済みなのにレコードが見つからない・ファイルが無いなら throw (整合性エラーを隠さない)", async () => {

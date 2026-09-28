@@ -136,6 +136,28 @@ describe("notion-archive moneyflow", () => {
       });
       expect(result).toEqual({ pageId: "def-existing", outcome: "updated" });
     });
+
+    it("同一キーが2件ならどれも選ばず throw する (先頭選択禁止)", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [{ id: "def-a" }, { id: "def-b" }] },
+      ]);
+      const { upsertIndicatorDef } = await load();
+      await expect(
+        upsertIndicatorDef(dbId, {
+          key: "sector_turnover",
+          displayName: "業種別売買代金",
+          requirement: "R1",
+          flowType: "売買代金",
+          description: "説明",
+          sourceUrl: "https://example.test/source",
+          license: "personal-only",
+          frequency: "週次",
+          limitations: "限界",
+        })
+      ).rejects.toThrow(/指標定義の重複.*sector_turnover.*保全停止/);
+      // 照会1件のみで、PATCH/作成の書込は一切しない。
+      expect(calls).toHaveLength(1);
+    });
   });
 
   describe("upsertIndicatorDef (同値スキップ)", () => {
@@ -347,6 +369,32 @@ describe("notion-archive moneyflow", () => {
         primaryDataPageId: null,
       });
       expect(result).toEqual({ pageId: "obs-existing", outcome: "updated" });
+    });
+
+    it("同一キーが2件ならどれも選ばず throw する (先頭選択禁止)", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [{ id: "obs-a" }, { id: "obs-b" }] },
+      ]);
+      const { upsertObservation } = await load();
+      await expect(
+        upsertObservation(dbId, {
+          period: "2026-W38",
+          periodStart: "2026-09-14",
+          periodEnd: "2026-09-18",
+          indicatorKey: "sector_turnover",
+          indicatorPageId: "def-page-1",
+          category: "電気機器",
+          categoryKind: "業種",
+          value: 99999,
+          unit: "円",
+          changeFromPrev: 100,
+          approximate: true,
+          measureKind: "実測",
+          primaryDataPageId: null,
+        })
+      ).rejects.toThrow(/観測ログの重複.*2026-W38\|sector_turnover\|電気機器.*保全停止/);
+      // 照会1件のみで、PATCH/作成の書込は一切しない。
+      expect(calls).toHaveLength(1);
     });
 
     const sameInput = {

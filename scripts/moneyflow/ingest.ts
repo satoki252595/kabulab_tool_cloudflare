@@ -476,9 +476,44 @@ async function runSource(source: string, now: Date): Promise<RunOutcome> {
   return { source, ok: true, detail };
 }
 
+/** 実行結果を「資金フロー｜取込ログ」へ 1 行記録し、失敗件数を返す。 */
+async function writeRunLog(
+  only: readonly string[],
+  outcomes: readonly RunOutcome[],
+  failures: readonly string[]
+): Promise<number> {
+  const successCount = outcomes.filter((o) => o.ok).length;
+  const failedCount = outcomes.filter((o) => !o.ok).length;
+  const status = classifyRunStatus(successCount, failedCount);
+
+  const { dbId: runLogDbId } = await ensureRunLogDb();
+  await recordRunLog(runLogDbId, {
+    runAt: new Date().toISOString(),
+    status,
+    sources: only.join(","),
+    successCount,
+    failedCount,
+    runUrl: sharedEnv.GITHUB_RUN_URL() ?? null,
+    reason: failures.length > 0 ? failures.join(" / ") : null,
+  });
+  return failedCount;
+}
+
 export async function main(): Promise<void> {
   if (!DRY_RUN) {
-    await syncIndicatorCatalog(ONLY);
+    try {
+      await syncIndicatorCatalog(ONLY);
+    } catch (error) {
+      // 指標カタログの同期失敗は全取得元の失敗として取込ログへ記録する。
+      // ここで記録せず落ちると、DB だけ作って 0 行の無痕跡状態になり、
+      // 後の調査で「未実行」と「失敗」の区別が付かなくなる。
+      const message = rootCauseMessage(error);
+      console.error(`[moneyflow:indicator-catalog] エラー: ${message}`);
+      const outcomes = [{ source: "indicator-catalog", ok: false, detail: message }];
+      await writeRunLog(ONLY, outcomes, [`indicator-catalog: ${message}`]);
+      process.exitCode = 1;
+      return;
+    }
   }
 
   const now = new Date();
@@ -499,21 +534,7 @@ export async function main(): Promise<void> {
 
   if (DRY_RUN) return;
 
-  const successCount = outcomes.filter((o) => o.ok).length;
-  const failedCount = outcomes.filter((o) => !o.ok).length;
-  const status = classifyRunStatus(successCount, failedCount);
-
-  const { dbId: runLogDbId } = await ensureRunLogDb();
-  await recordRunLog(runLogDbId, {
-    runAt: new Date().toISOString(),
-    status,
-    sources: ONLY.join(","),
-    successCount,
-    failedCount,
-    runUrl: sharedEnv.GITHUB_RUN_URL() ?? null,
-    reason: failures.length > 0 ? failures.join(" / ") : null,
-  });
-
+  const failedCount = await writeRunLog(ONLY, outcomes, failures);
   if (failedCount > 0) process.exitCode = 1;
 }
 

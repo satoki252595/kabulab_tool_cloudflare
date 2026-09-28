@@ -14,7 +14,12 @@
  * `tradingDate: null` で呼び、本モジュールは必ず `状態=失敗` の行を作る
  * (ルール2: 黙って埋めない)。
  */
-import { findBackupChildByTitle } from "./archive.js";
+import {
+  createDatabaseOrAdopt,
+  findBackupChildByTitle,
+  findUniqueBackupChildByTitle,
+  queryUniqueRow,
+} from "./archive.js";
 import { notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import type { NotionSelectColor } from "./dataset.js";
@@ -92,13 +97,25 @@ export async function ensurePriceSyncDb(): Promise<{ dbId: string }> {
   }
 
   if (!dbId) {
-    const created = await notionRequest<DbSchemaResponse>("POST", "/databases", {
-      parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
-      title: [{ type: "text", text: { content: PRICE_SYNC_DB_TITLE } }],
-      properties: want,
-    });
-    cachedDbId = created.id;
-    return { dbId: created.id };
+    const res = await createDatabaseOrAdopt<DbSchemaResponse>(
+      {
+        parent: { type: "page_id", page_id: notionEnv.NOTION_STOCK_INFO_PAGE_ID() },
+        title: [{ type: "text", text: { content: PRICE_SYNC_DB_TITLE } }],
+        properties: want,
+      },
+      () =>
+        findUniqueBackupChildByTitle({
+          parentPageId: notionEnv.NOTION_STOCK_INFO_PAGE_ID(),
+          title: PRICE_SYNC_DB_TITLE,
+          kind: "database",
+        })
+    );
+    if (res.created) {
+      cachedDbId = res.id;
+      return { dbId: res.id };
+    }
+    // adopted → 下の schema 検証へ進む (同名の古い DB かもしれないため)。
+    dbId = res.id;
   }
 
   const schema = await notionRequest<DbSchemaResponse>("GET", `/databases/${dbId}`);
@@ -174,17 +191,14 @@ function unresolvedTitle(completedAt: string): string {
   return `失敗（取引日不明）${completedAt}`;
 }
 
-interface QueryResponse {
-  results: Array<{ id: string }>;
-}
-
 /** タイトル完全一致で既存行を探す (取引日が分かる行のみ冪等キーとして使う)。 */
 async function findRowByTitle(dbId: string, title: string): Promise<string | null> {
-  const res = await notionRequest<QueryResponse>("POST", `/databases/${dbId}/query`, {
-    filter: { property: PRICE_SYNC_PROPS.title, title: { equals: title } },
-    page_size: 1,
-  });
-  return res.results[0]?.id ?? null;
+  const row = await queryUniqueRow<{ id: string }>(
+    dbId,
+    { property: PRICE_SYNC_PROPS.title, title: { equals: title } },
+    `株価の日次同期の重複 title=${title} を選ばず保全停止`
+  );
+  return row?.id ?? null;
 }
 
 export interface RecordPriceSyncLogResult {
