@@ -235,7 +235,8 @@ APPLY のみ writer 枠待ち (read-only plan 自体に grant 不要)。
 - 限定 mutation counts (apply 1 枠の見込み): incoming 更新 21 (3681×20 +
   7129-raw×1) + 補足 1 + 3681 lifecycle 1 (下記) + D1 0 + 退役 archive 2。
   snapshot 記録 1 (一次データ保管) は本記録の snapshot-only 枠で完了済み
-  (receipt あり)。変更しない全 normal 列: keep 2 ページの非 relation props・
+  (receipt あり)。変更しない全 normal 列: keep 2 ページの非 relation props
+  (既知の例外: 3681 keep の `状態` 1 件のみ apply で更新)・
   対象外 incoming 行・他コードの補足行・D1 他行 (before/after 比較で不変を証明)。
 - 3681 lifecycle (fresh): keep は `上場状態=false`・`状態=(none)`。
   `上場状態` は false のまま (listedStaysFalse 成立)。
@@ -262,6 +263,14 @@ APPLY のみ writer 枠待ち (read-only plan 自体に grant 不要)。
   不一致時は apply guard が停止する)。
   添付 inventory: 4 masters + 22 incoming + 補足 1 の子に file/image 系 0 件 →
   添付の別途保管・照合は不要 (vacuous)。
+- fully-captured proof (本 snapshot の物理範囲。全文は private):
+  master 4 ページ全文 + 子 (3681 keep 0・3681 retire 0・7129 keep 子DB 1・
+  7129 retire 0) + incoming 22 行全文・全 relation 配列 (has_more は full 読取。
+  最大 3818 件)・子 inventory + 補足 1 行全文 + D1 2 行 + 証拠 2 ファイル
+  (EDINET zip・JPX html)。非対象 (keep 側 19 行・他コード補足・D1 他行) の
+  不変は apply 枠の before/after 比較で証明する (本記録は before 側の確定のみ)。
+  private: `/tmp/p3snap/snap/` (snapshot JSON + 証拠 + receipt。0600)。
+  正常 jobs (master_sync・biztag) の成功は未証明 (予定の成功を推測で書かない)。
 - CAS preimage (current-before 正準 hash): targeted 読取の
   `sha256 = 2b435ecb2f3324074541ea6f4da959d48dd7650274a75443324c90c331d38eb8`
   (master 4 ページ全文 + 子 inventory + incoming 集合 + 補足 + D1 の正準 JSON)。
@@ -274,9 +283,12 @@ APPLY のみ writer 枠待ち (read-only plan 自体に grant 不要)。
 - 正常成功 criteria: `master_sync.yml` (no inputs) の通常 run 成功 →
   `catchup.yml target=biztag` の通常 run 成功 + fresh 保存の重複 0。
   #102 の旧 failed close は実 normal 成功の後に行う。
-- 待条件 (concrete): APPLY の writer 解放のみ。解放時は対象 writer の
-  実行中 0・queued 0 を root が fresh 確認すること (本記録の読取は grant 不要で
-  完了済み)。承認済み main (156 反映) 上の master-only 適用であり、
+- 待条件 (concrete): APPLY は (a) writer 解放 (解放時は対象 writer の
+  実行中 0・queued 0 を root が fresh 確認すること。本記録の読取は grant 不要で
+  完了済み) + (b) 共通 snapshot/all-apply 根因コードの main 反映 (未実装。
+  全 apply 入口の完全 proof/CAS gate を含む) + (c) #160 moneyflow 依存の修正
+  適用 (未適用。独立 cron gap + producer 実成功/source-date coverage 担保) が
+  全て揃うまで HOLD。承認済み main (156 反映) 上の master-only 適用であり、
   IMF 未承認コードの apply は含まない。
 - full plan (incoming-schema 全列挙つき) は `master-dedup-3681-7129.ts` の plan
   モードで試行したが、workspace の DB schema 列挙が 60 分を超えても終わらず
@@ -286,6 +298,18 @@ APPLY のみ writer 枠待ち (read-only plan 自体に grant 不要)。
   として成立している。未知 incoming-DB の完全列挙 (single_property 方向) は
   apply 枠で full plan を再実行して得ること (apply 時の guard が snapshot との
   一致を要求するため、どのみち apply 直前の fresh が要る)。
+- full incoming-schema 列挙 (完了。打切り後の checkpointed 再実行):
+  `enumerateMasterIncoming` と同一の検出ロジック (search + per-DB schema +
+  master-bound relation 検出) を短命 batch に分割して全 DB を走査。
+  `dbCount=8378 hits=6 unknown=0`。`guardIncomingSchema` (承認済み) =
+  known-only OK。6 hits は既知のみ: ③財務サマリ/銘柄マスタ (dual)・
+  ④開示書類/銘柄マスタ (dual)・⑤原本ファイル/関連銘柄 (dual)・
+  ⑧需給/銘柄マスタ (dual)・⑨株主優待/銘柄マスタ (dual)・
+  銘柄マスタ（補足）/銘柄マスタ (single)。未知 single_property incoming は
+  存在しない (上記「打切り・apply 枠で再実行」の未知-有無の問いは closed。
+  apply 直前の fresh 再列挙は guard の一致要求として依然要る)。
+  完了 2026-09-28 19:35 UTC。書込 0 (read-only)。private:
+  `/tmp/p3-full-20260928/` (dblist・hits・evidence・batch logs。0600)。
 
 ### P2. 週次信用残の再保管・修復
 
