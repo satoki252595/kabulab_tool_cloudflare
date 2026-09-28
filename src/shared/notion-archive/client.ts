@@ -120,7 +120,8 @@ function isPermanent(status: number, body: string): boolean {
 async function doFetch(
   url: string,
   makeInit: () => RequestInit,
-  label: string
+  label: string,
+  isNonIdempotentCreate = false
 ): Promise<Response> {
   let attempt = 0;
   for (;;) {
@@ -135,6 +136,15 @@ async function doFetch(
       // すると 1 リクエストで ~61 秒固まる (過去事例: kabulab に NOTION_TOKEN
       // 未設定のまま /file proxy を踏んで 63 秒応答)。型で識別して即 throw。
       if (e instanceof NotionConfigError) throw e;
+      // 非冪等 create (POST /pages) は結果不明のまま内部再送すると同一 helper
+      // 内で二重作成し得る。network 例外は送信成否不明のため再送せず即 throw
+      // し、呼び出し側の full query 回収 (0=STOP/1=回収/複数=STOP) に委ねる。
+      if (isNonIdempotentCreate) {
+        throw new Error(
+          `Notion 非冪等create (${label}) の結果不明のため再送しません (network): ${(e as Error).message}。full query で確認してください`,
+          { cause: e }
+        );
+      }
       if (attempt > MAX_RETRY) {
         throw new Error(
           `Notion 通信失敗 (${label}) ${MAX_RETRY} 回再試行後も失敗: ${(e as Error).message}`,
@@ -150,7 +160,14 @@ async function doFetch(
     // 429 (rate_limited) と 529 (service_overload) は公式通り Retry-After を
     // 尊重して再試行 (/reference/request-limits)。529 に Retry-After が無い
     // 場合は指数バックオフに倒す。
+    // ただし非冪等 create の 529 は結果不明 (過負荷応答でも作成済みの可能性)
+    // のため再送しない。明示 429 は拒否 (未作成確定) のため create でも再送可。
     if (res.status === 429 || res.status === 529) {
+      if (isNonIdempotentCreate && res.status === 529) {
+        throw new Error(
+          `Notion 非冪等create (${label}) の結果不明のため再送しません (529)。full query で確認してください`
+        );
+      }
       stats.rateLimited++;
       const header = res.headers.get("Retry-After");
       const ra = header === null ? NaN : Number(header);
@@ -167,6 +184,13 @@ async function doFetch(
     }
 
     const text = await res.text().catch(() => "");
+    // 非冪等 create の 5xx・非JSON 4xx (エッジ遮断) は結果不明のため再送禁止。
+    // 真正 JSON 4xx (恒久・未作成確定) は下の既存分岐で即 throw する。
+    if (isNonIdempotentCreate && !isPermanent(res.status, text)) {
+      throw new Error(
+        `Notion 非冪等create (${label}) の結果不明のため再送しません (status=${res.status})。full query で確認してください`
+      );
+    }
     if (isPermanent(res.status, text) || attempt > MAX_RETRY) {
       const parsed = ((): NotionErrorBody | null => {
         try {
@@ -202,6 +226,10 @@ export async function notionRequest<T = unknown>(
   body?: unknown,
   opts?: NotionRequestOptions
 ): Promise<T> {
+  // POST /pages (ページ作成) のみ非冪等 create として結果不明再送を禁止する。
+  // POST /databases/{id}/query (読取)・PATCH・GET・DELETE・/pages/{id}/move は
+  // 既存 retry を維持する。
+  const isCreate = method === "POST" && path === "/pages";
   return schedule(async () => {
     const res = await doFetch(
       `${API_BASE}${path}`,
@@ -213,7 +241,8 @@ export async function notionRequest<T = unknown>(
         },
         body: body === undefined ? undefined : JSON.stringify(body),
       }),
-      `${method} ${path}`
+      `${method} ${path}`,
+      isCreate
     );
     return (await res.json()) as T;
   });

@@ -499,7 +499,7 @@ export interface MoneyflowIndicatorDef {
 const JVCEA_SOURCE_URL = STATISTICS_INFO_URL;
 const JVCEA_USAGE_TERMS =
   "JVCEA サイト利用規約に商用利用可否の明記なし (2026-09-27 調査時点 unknown)。" +
-  "本プロジェクトは個人利用・非公開の範囲に限定する運用のため追加の許諾確認は" +
+  "本プロジェクトは非公開の範囲に限定する運用のため追加の許諾確認は" +
   "行っていないが、公開・商用転用する場合は JVCEA へ利用可否を確認すること。";
 /**
  * PDF 原本の脚注 (注1〜注3) は「他の交換業者等への取次ぎ」分の扱いが

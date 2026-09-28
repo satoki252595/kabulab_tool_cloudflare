@@ -42,7 +42,7 @@ export type {
   PdfClassification,
   PdfSentimentLabel,
 } from "./dataset.js";
-export { fetchPageFileUrl } from "./page-file.js";
+export { fetchPageFileUrl, listPageFiles } from "./page-file.js";
 export type { PageFileRef } from "./page-file.js";
 export { ensureIndexPage, replacePageChildren } from "./index-page.js";
 export type { EnsureIndexPageOptions, EnsureIndexPageResult } from "./index-page.js";
@@ -131,7 +131,7 @@ export type {
 export { findAllBackupChildrenByTitle } from "./archive.js";
 export type { BackupChildHit } from "./archive.js";
 
-// moneyflow (個人用「お金の流れ」) — 「株式情報」直下の 3 DB (計画: notion-velvet-goose.md)
+// moneyflow (「お金の流れ」) — 「株式情報」直下の 3 DB (計画: notion-velvet-goose.md)
 export {
   MONEYFLOW_DEFS_DB_TITLE,
   MONEYFLOW_OBS_DB_TITLE,

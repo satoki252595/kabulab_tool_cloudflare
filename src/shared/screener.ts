@@ -33,14 +33,14 @@ const LIQUIDITY_PRIMARY_YEN = 10 * 1e8; // 10 億
 const LIQUIDITY_SECONDARY_YEN = 5 * 1e8; // 5 億 (出来高急増時)
 const VOLUME_SURGE_MULTIPLIER = 3;
 /**
- * ATR% の閾値 (0.02 = 2%)。
+ * ATR% の閾値 (2 = 2%)。
  *
- * 旧 swing-trading/src/services/screener.ts と同じ値を継承する。呼び出し側から
- * atrPct は `ratio × 100` の % 表記で渡ってくるので、この定数と比較すると
- * 事実上「atrPct > 0.02%」という極めて緩い条件になる。既存の運用挙動を維持するため
- * 現状は触らず、別タスクで挙動修正を検討する。
+ * atrPct は呼び出し側 (`src/cron/daily.ts`) から `ratio × 100` の % 表記で
+ * 渡ってくる。旧 swing-trading の `0.02` をそのまま継承していたため、事実上
+ * 「atrPct > 0.02%」という極めて緩い条件になっていた (UI の「ATR% ≧ 2%」表示
+ * とも食い違っていた)。% 表記に合わせて `2` に直す。
  */
-const ATR_PCT_THRESHOLD = 0.02;
+const ATR_PCT_THRESHOLD = 2;
 
 export function screenStock(input: ScreeningInput): ScreeningResult {
   const liquidityOk =

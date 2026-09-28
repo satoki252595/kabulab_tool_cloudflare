@@ -568,7 +568,7 @@ const JSDA_USAGE_TERMS =
   "無料で誰でも閲覧・ダウンロードできる (ログイン不要)。ただし高頻度アクセスは" +
   "サーバ側のレート制限 (429, Retry-After なし) が実際に発生することを確認済み" +
   "— 平日1回程度の低頻度アクセスに限る。商用の二次利用可否は JSDA サイト上で" +
-  "明記が確認できず (unknown)。kabulab は既存の JPX 由来データと同様、個人利用・" +
+  "明記が確認できず (unknown)。kabulab は既存の JPX 由来データと同様、" +
   "非公開の範囲に限定して扱う。";
 
 export const JSDA_BONDS_INDICATORS: MoneyflowIndicatorDef[] = [

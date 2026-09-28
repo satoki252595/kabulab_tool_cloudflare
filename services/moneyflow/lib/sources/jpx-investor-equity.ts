@@ -39,7 +39,7 @@
  * セルを見つけた時点で throw する (ルール2: 古い期間で黙って埋めない)。
  *
  * 利用条件: JPX 利用規約により、許諾なしの商用二次利用・再配信・生成AIによる
- * 学習/解析利用は禁止されている。kabulab では「資金フロー」個人用 Notion ページ
+ * 学習/解析利用は禁止されている。kabulab では「資金フロー」Notion ページ
  * (非公開) にのみ保存し、公開Webへは出さない (license_tag=personal-only 相当)。
  * また規約は「高頻度・高負荷に繋がる可能性のある自動取得」の自粛を求めている。
  * 本モジュールの fetch 系関数は 1 回の呼び出しで一覧ページ 1 回 + 対象ファイル
@@ -1346,7 +1346,7 @@ export interface MoneyflowIndicatorDef {
 
 const USAGE_TERMS_JA =
   "JPX利用規約により、許諾なしの商用二次利用・再配信・生成AIによる学習/解析利用は" +
-  "禁止。kabulabでは個人用Notionページ (非公開) にのみ保存し、公開Webには出さない " +
+  "禁止。kabulabでは非公開のNotionページにのみ保存し、公開Webには出さない " +
   "(personal-only)。";
 
 export const JPX_INVESTOR_EQUITY_INDICATORS: readonly MoneyflowIndicatorDef[] = [

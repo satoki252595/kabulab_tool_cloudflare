@@ -16,7 +16,7 @@
 - BIS Locational Banking Statistics (BIS「Terms of permitted use of BIS statistics」— 出典明記で再利用可)
 
 JPX 先物・オプション投資部門別 CSV と指数先物建玉 xlsx (`private/jpx-derivatives-investor/`) は
-2026-09-27 時点で手元に実ファイルが無く、該当テストは常に skip する (取得方法は
+2026-09-28 に取得 (下表)。置いた手元では該当テストが実行され、CI では skip する (取得方法は
 `services/moneyflow/lib/sources/jpx-derivatives-investor.test.ts` 冒頭)。
 
 ## public/
@@ -72,11 +72,15 @@ commit しない (gitignore)。手元でテストを走らせる場合は下表�
 | `private/imaj-fund-flows/I0112B_pub_m.xlsx` | https://www.toushin.or.jp/tws/toukei_dw/I0112B_pub_m.xlsx | 2026-09-27 | 430,536 | `979ce1515cad3910` |
 | `private/imaj-fund-flows/imaj-fund-flows-b1.xlsx` | https://www.toushin.or.jp/tws/toukei_dw/I0112B_pub_m.xlsx | 2026-09-27 | 50,578 | `3089b5d992a80e56` |
 | `private/imaj-fund-flows/imaj-reit-flows-d1.xlsx` | https://www.toushin.or.jp/tws/toukei_dw/F00B21_pub.xlsx | 2026-09-27 | 24,707 | `4582fb885708336e` |
+| `private/imf-cpis/imf-cpis-full-20260928-01.json` | https://api.db.nomics.world/v22/series (IMF/CPIS 99系列のうち60系列・`observations=1`) | 2026-09-28 | 142,539 | `2ec7e974ddbe607b` |
+| `private/imf-cpis/imf-cpis-full-20260928-02.json` | https://api.db.nomics.world/v22/series (IMF/CPIS 99系列のうち39系列・`observations=1`) | 2026-09-28 | 95,525 | `58f0c10887e867a9` |
 | `private/imf-cpis/imf-cpis-jp-assets-equity-debt.json` | https://api.db.nomics.world/v22/series?series_ids=IMF%2FCPIS%2FB.JP.I_A_E_T_T_BP6_USD.T.T.US%2CIMF%2FCPIS%2FB.JP.I_A_D_T_T_BP6_USD.T.T.US&observations=1 | 2026-09-27 | 24,818 | `e3309cd2e4665a2b` |
 | `private/imf-cpis/imf-cpis-jp-assets-total.json` | https://api.db.nomics.world/v22/series?series_ids=IMF%2FCPIS%2FB.JP.I_A_T_T_T_BP6_USD.T.T.US%2CIMF%2FCPIS%2FB.JP.I_A_T_T_T_BP6_USD.T.T.KY%2CIMF%2FCPIS%2FB.JP.I_A_T_T_T_BP6_USD.T.T.W00&observations=1 | 2026-09-27 | 26,870 | `c6fdda86926811f2` |
 | `private/imf-cpis/imf-cpis-jp-liabilities-equity-debt.json` | https://api.db.nomics.world/v22/series?series_ids=IMF%2FCPIS%2FB.JP.I_L_E_T_T_BP6_DV_USD.T.T.US%2CIMF%2FCPIS%2FB.JP.I_L_D_T_T_BP6_DV_USD.T.T.US&observations=1 | 2026-09-27 | 24,720 | `6a0b93cfd7e2b8b5` |
 | `private/imf-cpis/imf-cpis-jp-liabilities-total.json` | https://api.db.nomics.world/v22/series?series_ids=IMF%2FCPIS%2FB.JP.I_L_T_T_T_BP6_DV_USD.T.T.US%2CIMF%2FCPIS%2FB.JP.I_L_T_T_T_BP6_DV_USD.T.T.KY%2CIMF%2FCPIS%2FB.JP.I_L_T_T_T_BP6_DV_USD.T.T.W00&observations=1 | 2026-09-27 | 26,826 | `a72baf9169993206` |
+| `private/jpx-derivatives-investor/jpx-deriv-investor-week-20260907_20260911.csv` | https://www.jpx.co.jp/markets/statistics-derivatives/sector/t13vrt000001yi1d-att/Tousi_DV_W_20260907_20260911.csv | 2026-09-28 | 117,179 | `6258b0877d10ee68` |
 | `private/jpx-derivatives-investor/jpx-deriv-sector-index-20260927.html` | https://www.jpx.co.jp/markets/statistics-derivatives/sector/index.html | 2026-09-27 | 36,049 | `ce2f85a3fce41273` |
+| `private/jpx-derivatives-investor/jpx-futures-oi-20260918-indexfut.xlsx` | https://www.jpx.co.jp/automation/markets/derivatives/open-interest/files/2026/20260918_indexfut_oi_by_tp.xlsx | 2026-09-28 | 31,425 | `9f1802b3362604d5` |
 | `private/jpx-investor-equity/monthly-index-2026-09-27.html` | https://www.jpx.co.jp/markets/statistics-equities/investor-type/00-01.html | 2026-09-27 | 41,696 | `225914c90ef07b30` |
 | `private/jpx-investor-equity/monthly-unified-sample-jpx-official.xlsx` | (取得元モジュールのテスト冒頭コメント参照) | 2026-09-27 | 15,299 | `65610195e7fdc174` |
 | `private/jpx-investor-equity/monthly-value-2026-08.xls` | https://www.jpx.co.jp/markets/statistics-equities/investor-type/t13vrt000001vcuo-att/stock_val_1_m2608.xls | 2026-09-27 | 89,088 | `806915e62a9fba7d` |

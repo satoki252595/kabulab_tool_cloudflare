@@ -56,13 +56,28 @@ export function parseMarginText(
   return { week, rows };
 }
 
+/**
+ * PDF バイト列から週・全銘柄行を抽出する。引数のバイト列は変更しない。
+ *
+ * unpdf の `getDocumentProxy()` は渡した Uint8Array の ArrayBuffer を worker へ
+ * transfer して detach する (呼び出し後に byteLength が 0 になる。unpdf 1.6.2 /
+ * Node 22 で実 PDF 873,311 bytes → 0 を実測)。原本を直接渡すと後段の Notion
+ * 実体アップロードが「空ファイルはアップロードできません」で落ちる (#117) ため、
+ * コピーを渡す (moneyflow の pdf-text.ts / run-spec.ts と同じ方式)。
+ */
+export async function parseMarginPdf(
+  bytes: Uint8Array
+): Promise<Pick<MarginData, "week" | "rows">> {
+  const pdf = await getDocumentProxy(bytes.slice());
+  const { text } = await extractText(pdf, { mergePages: true });
+  return parseMarginText(text);
+}
+
 export async function fetchMargin(): Promise<MarginData> {
   const url = await latestMarginPdfUrl();
   const buf = await (await fetch(url, { headers: { "User-Agent": UA } })).arrayBuffer();
   const bytes = new Uint8Array(buf);
-  const pdf = await getDocumentProxy(bytes);
-  const { text } = await extractText(pdf, { mergePages: true });
-  return { ...parseMarginText(text), pdfBytes: bytes, pdfUrl: url };
+  return { ...(await parseMarginPdf(bytes)), pdfBytes: bytes, pdfUrl: url };
 }
 
 /**

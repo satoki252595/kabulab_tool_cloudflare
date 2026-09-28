@@ -120,7 +120,7 @@ export const notionEnv = {
    * moneyflow の 3 DB (指標定義/観測ログ/取込ログ) は他サービスと同じく「株式情報」
    * ページ (`NOTION_STOCK_INFO_PAGE_ID`) 直下、一次データは「一次データ保管」
    * (`NOTION_ARCHIVE_PAGE_ID`) 配下の「一次データ｜moneyflow」に置く
-   * (2026-09-27 ユーザー決定。当初の別ページ「資金フロー（個人用）」案は廃止)。
+   * (2026-09-27 ユーザー決定。当初の別ページ「資金フロー」案は廃止)。
    */
   NOTION_MONEYFLOW_DEFS_DB_ID: () => optionalId("NOTION_MONEYFLOW_DEFS_DB_ID"),
   /** 「資金フロー｜観測ログ」DB ID を固定 (任意。未設定なら Search で自動発見) */

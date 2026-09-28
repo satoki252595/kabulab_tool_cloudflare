@@ -26,7 +26,7 @@
  *     らず、ブラウザ相当 UA での単発 GET が 200 で通ることを実測済み。
  *   - 利用規約上の商用可否は原文で明記が見つからず (`commercial_use: unknown`
  *     ～ `prohibited` の記述が資料により分かれる)。本プロジェクトの方針
- *     (2026-09-27 決定: 個人利用限定) に合わせ、既存の `license_tag=
+ *     (2026-09-27 決定: 非公開運用) に合わせ、既存の `license_tag=
  *     personal-only` と同じ扱いとする (下記 `licenseTag` 参照)。
  *   - 1 回の実行につき、この 2 ファイルをそれぞれ 1 回だけ GET する
  *     (`downloadImajFundFlowsXlsx` / `downloadImajReitFlowsXlsx` を 1 回ずつ)。

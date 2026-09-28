@@ -1,5 +1,5 @@
 /**
- * moneyflow (個人用「お金の流れ」ダッシュボード) の Notion 保管
+ * moneyflow (「お金の流れ」ダッシュボード) の Notion 保管
  * (計画: notion-velvet-goose.md「構成」節)。
  *
  * 他サービスと同じく「株式情報」ページ (`NOTION_STOCK_INFO_PAGE_ID`) の直下に
@@ -19,7 +19,7 @@
  * `ensureObservationsDb()` は **「一次データ｜moneyflow」DB が既に存在する
  * こと** を前提にする。無ければ throw する (推測で relation 先を作らない — ルール2)。
  *
- * (2026-09-27: 当初は専用ページ「資金フロー（個人用）」(`NOTION_MONEYFLOW_PAGE_ID`)
+ * (2026-09-27: 当初は専用ページ「資金フロー」(`NOTION_MONEYFLOW_PAGE_ID`)
  * の直下に置く設計だったが、ユーザー決定で既存サービスと同じ配置に変更した。)
  *
  * select 列の選択肢は既存を消さず追加のみ・累積 100 件で throw する
@@ -175,7 +175,7 @@ export type MoneyflowFlowType =
 export type MoneyflowFrequency = "日次" | "週次" | "月次" | "四半期" | "半期" | "年次" | "不定期";
 /**
  * 利用条件。「要確認」は利用規約・商用可否が取得元で明示されておらず未確認のもの
- * (本機能は個人利用のみのため取り込むが、公開面へは出さない)。personal-only に
+ * (本機能は非公開のため取り込むが、公開面へは出さない)。personal-only に
  * 丸めず未確認であることをそのまま残す (ルール1: 由来を曖昧にしない)。
  */
 export type MoneyflowLicense = "personal-only" | "attribution-required" | "public-domain" | "要確認";

@@ -174,7 +174,7 @@ export const IMF_CPIS_MAX_SERIES_PER_REQUEST = 60;
 /**
  * 既定で問い合わせる相手国・地域コード。
  *
- * IMF CPIS は 249 の国・地域コードを持つが、個人用ダッシュボードとして毎回
+ * IMF CPIS は 249 の国・地域コードを持つが、本ダッシュボードとして毎回
  * 全件を取得する意味は薄く、計画書が見込む観測ログの行数感 (年間数千行) を
  * 大きく超えてしまう。ここでは実機検証 (2024-S1, JP→World) で確認した
  * 「日本の対外証券投資の相手国として残高が大きい国・地域」を中心に、
@@ -289,7 +289,7 @@ export const IMF_CPIS_INDICATORS: readonly ImfCpisIndicatorDef[] = (
         "無料。IMF (原典) の利用条件を継承し、出典明記が必要 (attribution_required)。" +
         "取得は IMF 直接ではなく DBnomics (CEPREMAP運営の非営利オープンデータプロジェクト) 経由のミラー配信で、" +
         "DBnomics 公式 (db.nomics.world/about) は『配信するデータは元の提供元と同じライセンス・利用条件に従う』と明記している" +
-        " (集約データベース自体は ODbL)。本プロジェクトでは個人利用の範囲に限って使う。",
+        " (集約データベース自体は ODbL)。本プロジェクトでは非公開の範囲に限って使う。",
       frequency: "semiannual",
       limitations:
         "残高 (ストック) であり真の資金フローではない近似指標 (計画書 R4『世界の概況』枠)。" +
@@ -392,6 +392,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  * 欠損値 (IMF が守秘義務で非開示にした組み合わせ) は JSON 上 `null` として
  * 配列に現れることがある。これは「形式違反」ではなく CPIS では正常な状態
  * なので throw せず、そのデータ点だけ読み飛ばす (0 や既定値で埋めない)。
+ * 同じく DBnomics が未報告の期を文字列 `"NA"` で返すことがある (2026-09-28 実機
+ * 確認: Derived 系列の SG/IE/AU の古い期に計 42 点。`null` と同じ欠損として
+ * 読み飛ばす。"NA" 以外の文字列は様式異常として throw する)。
  */
 export function parseImfCpisResponse(json: unknown): ImfCpisRecord[] {
   if (!isRecord(json) || !isRecord(json.series)) {
@@ -493,8 +496,9 @@ export function parseImfCpisResponse(json: unknown): ImfCpisRecord[] {
         // 半期調査の正式開始前の S1 (一部報告国のみの試行分)。上の定数コメント参照。
         continue;
       }
-      if (value === null || value === undefined) {
-        // 守秘義務等による非開示。フォールバックで 0 埋めせず読み飛ばす。
+      if (value === null || value === undefined || value === "NA") {
+        // 守秘義務等による非開示 (null) と DBnomics の未報告マーカー ("NA")。
+        // フォールバックで 0 埋めせず読み飛ばす。
         continue;
       }
       if (typeof value !== "number" || !Number.isFinite(value)) {

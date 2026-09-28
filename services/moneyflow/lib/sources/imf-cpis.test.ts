@@ -276,6 +276,34 @@ describe("parseImfCpisResponse — 想定外の形状 (手作りの合成デー�
     };
     expect(() => parseImfCpisResponse(bad)).toThrow(/有限の数値ではありません/);
   });
+
+  it('DBnomics の未報告マーカー "NA" は null と同じ欠損として読み飛ばす (0 埋めせず・止めない)', () => {
+    // 2026-09-28 実機確認: Derived 系列 (SG 等) の古い期を DBnomics が "NA" で返す。
+    // 形状は本物の応答と同じ手作り合成データで、値だけ作り物。
+    const withNa = {
+      series: {
+        docs: [
+          {
+            series_code: "B.JP.I_L_T_T_T_BP6_DV_USD.T.T.SG",
+            dimensions: {
+              FREQ: "B",
+              REF_AREA: "JP",
+              INDICATOR: "I_L_T_T_T_BP6_DV_USD",
+              REF_SECTOR: "T",
+              COUNTERPART_SECTOR: "T",
+              COUNTERPART_AREA: "SG",
+            },
+            period: ["2023-S2", "2024-S1"],
+            value: ["NA", 123456789],
+          },
+        ],
+      },
+    };
+    const records = parseImfCpisResponse(withNa);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ period: "2024-S1", valueUsd: 123456789 });
+    expect(records.every((r) => r.valueUsd !== 0)).toBe(true);
+  });
 });
 
 describe("buildImfCpisSeriesCode / buildImfCpisUrl / chunkImfCpisSeriesCodes", () => {

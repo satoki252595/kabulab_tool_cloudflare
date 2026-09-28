@@ -6,8 +6,10 @@ import json
 import sqlite3
 import sys
 from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
+from threading import Barrier, Event, Lock
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +22,95 @@ from test_backfill_financials_from_notion import _page  # noqa: E402
 from jp_stock_pipeline.notion import schema as S  # noqa: E402
 from jp_stock_pipeline.cloud_store.financials import COLUMNS, record_to_row  # noqa: E402
 from jp_stock_pipeline.cloud_store.schema import _FINANCIALS  # noqa: E402
+from test_financial_context_units import EDINET_CASES, fixture_provenance, fixture_tidy  # noqa: E402
+from jp_stock_pipeline.transform.normalize import tidy_to_financial_record  # noqa: E402
+
+
+def test_parallel_repair_drains_inflight_failure_and_reproves_without_repatch(tmp_path, monkeypatch):
+    """実EDINETの値は不変。旧連結欄の欠損・再読ドリフトだけを障害注入する。"""
+    cases = {case["code"]: case for case in EDINET_CASES}
+    records = {code: tidy_to_financial_record(fixture_tidy(case), code, fixture_provenance(case))
+               for code, case in cases.items()}
+    assert len(records) == 4
+    pages = {code: {"id": code, "record": replace(record, consolidated=None)}
+             for code, record in records.items()}
+    journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
+    journal.write_text("\n".join(json.dumps({
+        "page_id": code, "old": reparse._record_dict(pages[code]["record"]),
+        "new": reparse._record_dict(record), "changes": {"consolidated": {}},
+        "parser_sha256": reparse.PARSER_SHA256, "raw_sha256": cases[code]["raw_sha256"],
+    }) for code, record in records.items()) + "\n")
+    lock, simultaneous = Lock(), Barrier(2)
+    failed_reread, release_inflight = Event(), Event()
+    updates, queries, clients = [], [], []
+    stop_signals = []
+    failing = True
+
+    class Client:
+        def query_database(self, *args, **kwargs):
+            code = kwargs["filter"]["or"][0]["rich_text"]["equals"]
+            with lock:
+                queries.append(code)
+                page = pages[code].copy()
+                if failing and code == "5918" and page["record"] == records[code]:
+                    page["record"] = replace(records[code], consolidated=None)
+                    failed_reread.set()
+                return [page]
+
+        def update_page(self, code, *args):
+            with lock:
+                updates.append(code)
+            if failing:
+                simultaneous.wait(timeout=3)
+                if code == "6269":
+                    assert release_inflight.wait(3)
+            with lock:
+                pages[code]["record"] = records[code]
+                return pages[code].copy()
+
+        def archive_page(self, *args):
+            pytest.fail("同じ原ページの修復で退避しない")
+
+    def connect(*args, **kwargs):
+        clients.append(Client())
+        return clients[-1]
+
+    def stopping_event():
+        signal = Event()
+        stop_signals.append(signal)
+        return signal
+
+    monkeypatch.setattr(reparse, "NotionClient", connect)
+    monkeypatch.setattr(reparse, "load_settings", lambda: SimpleNamespace(
+        notion_token="test-token", notion_rps=6, db_id=lambda key: "db"))
+    monkeypatch.setattr(reparse, "_page_record", lambda page: page["record"])
+    monkeypatch.setattr(reparse, "financial_overwrite_allowed", lambda *args: True)
+    monkeypatch.setattr(reparse, "APPLY_BATCH_CODES", 1)
+    monkeypatch.setattr(reparse, "Event", stopping_event)
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        future = caller.submit(reparse.apply_journal, journal, receipts, workers=2)
+        try:
+            assert failed_reread.wait(3)
+            assert stop_signals[-1].wait(3)
+            assert not future.done()  # 先行失敗でも開始済みPATCHの応答をdrainする。
+        finally:
+            release_inflight.set()
+        with pytest.raises(ValueError, match="まとめ再読値"):
+            future.result(timeout=3)
+    assert len(clients) == 1
+    assert set(queries) == set(updates) == {"5918", "6269"}
+    assert receipts.read_text() == ""
+    failing = False
+    queries.clear()
+    reparse.apply_journal(journal, receipts, workers=2)
+    assert len(clients) == 2  # 各runは1 clientだけ。
+    assert updates.count("5918") == updates.count("6269") == 1
+    proved = reparse._journal_items(receipts)
+    assert set(proved) == set(records)
+    for code, record in records.items():
+        assert proved[code]["record"] == reparse._record_dict(record)
+        assert proved[code]["raw_sha256"] == cases[code]["raw_sha256"]
+        assert proved[code]["parser_sha256"] == reparse.PARSER_SHA256
 
 
 def test_mismatched_archive_hash_stops_before_parsing(tmp_path, monkeypatch):
@@ -274,10 +365,133 @@ def test_d1_repair_rejects_missing_notion_read_proof_before_connecting(
         reparse.sync_d1(journal, receipts)
 
 
+def test_d1_repair_rejects_receipt_from_another_original_key(tmp_path, monkeypatch):
+    cases = EDINET_CASES[:2]
+    records = [tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+               for case in cases]
+    journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
+    journal.write_text("\n".join(json.dumps({
+        "page_id": case["code"], "old": reparse._record_dict(record),
+        "new": reparse._record_dict(record), "parser_sha256": reparse.PARSER_SHA256,
+        "raw_sha256": case["raw_sha256"],
+    }) for case, record in zip(cases, records, strict=True)) + "\n")
+    receipts.write_text("\n".join(json.dumps({
+        "page_id": case["code"], "target_page_id": cases[1]["code"],
+        "record": reparse._record_dict(records[1]), "parser_sha256": reparse.PARSER_SHA256,
+        "raw_sha256": case["raw_sha256"],
+    }) for case in cases) + "\n")
+    monkeypatch.setattr(reparse, "load_settings", lambda: pytest.fail("別原本キーなら接続しない"))
+    with pytest.raises(ValueError, match="元原本の財務キー"):
+        reparse.sync_d1(journal, receipts)
+
+
+@pytest.mark.parametrize("newer", [False, True])
+def test_d1_repair_rejects_duplicate_live_key_before_d1_write(tmp_path, monkeypatch, newer):
+    case = EDINET_CASES[0]
+    record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+    journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
+    journal.write_text(json.dumps({
+        "page_id": "original", "old": reparse._record_dict(record),
+        "new": reparse._record_dict(record), "parser_sha256": reparse.PARSER_SHA256,
+        "raw_sha256": case["raw_sha256"],
+    }) + "\n")
+    receipts.write_text(json.dumps({
+        "page_id": "original", "target_page_id": "original",
+        "record": reparse._record_dict(record), "parser_sha256": reparse.PARSER_SHA256,
+        "raw_sha256": case["raw_sha256"],
+    }) + "\n")
+    # 実原本の値は不変。後発の重複ページというメタ情報だけを障害注入する。
+    duplicate = replace(record, disclosed_at=record.provenance.fetched_at + timedelta(days=1)) if newer else record
+
+    class Client:
+        def query_database(self, *args, **kwargs):
+            return [{"id": "original", "record": record}, {"id": "duplicate", "record": duplicate}]
+
+    monkeypatch.setattr(reparse, "NotionClient", lambda *args, **kwargs: Client())
+    monkeypatch.setattr(reparse, "_page_record", lambda page: page["record"])
+    monkeypatch.setattr(reparse, "load_settings", lambda: SimpleNamespace(
+        notion_token="test-token", notion_rps=2.5, db_id=lambda key: "db",
+        cloud_store=SimpleNamespace(d1_enabled=lambda: True),
+    ))
+    monkeypatch.setattr(reparse, "D1Store", lambda *args, **kwargs: pytest.fail("重複ならD1接続しない"))
+    with pytest.raises(ValueError, match="財務キーが一意"):
+        reparse.sync_d1(journal, receipts)
+
+
+def test_d1_repair_does_not_keep_document_id_from_a_known_different_raw_sha():
+    case = EDINET_CASES[0]
+    record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+    conn = sqlite3.connect(":memory:")
+    conn.execute(_FINANCIALS)
+    row = record_to_row(record, stock_id=None, doc_id="previous-document", raw_sha256="a" * 64)
+    conn.execute(reparse._repair_sql(), [json.dumps([row])])
+    row[COLUMNS.index("doc_id")] = None
+    row[COLUMNS.index("raw_sha256")] = case["raw_sha256"]
+    conn.execute(reparse._repair_sql(), [json.dumps([row])])
+    assert conn.execute("SELECT doc_id,raw_sha256 FROM jss_financials").fetchone() == (
+        None, case["raw_sha256"],
+    )
+
+
+@pytest.mark.parametrize("relation_changed", [False, True])
+def test_verified_repair_carries_only_the_same_fresh_original_relation(
+    tmp_path, monkeypatch, relation_changed,
+):
+    from uuid import UUID
+
+    case = EDINET_CASES[0]
+    record = tidy_to_financial_record(fixture_tidy(case), case["code"], fixture_provenance(case))
+    item = {"page_id": "original", "old": reparse._record_dict(record),
+            "new": reparse._record_dict(record), "parser_sha256": reparse.PARSER_SHA256,
+            "raw_sha256": case["raw_sha256"], "raw_url": case["raw_url"]}
+    journal, receipts = tmp_path / "audit.jsonl", tmp_path / "applied.jsonl"
+    journal.write_text(json.dumps(item) + "\n")
+    receipts.write_text(json.dumps({"page_id": "original", "target_page_id": "original",
+                                   "record": item["new"], "parser_sha256": reparse.PARSER_SHA256,
+                                   "raw_sha256": case["raw_sha256"]}) + "\n")
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(_FINANCIALS)
+    conn.execute("CREATE TABLE core_stocks(id INTEGER,code TEXT)")
+    conn.execute("INSERT INTO core_stocks VALUES(1,?)", [record.code])
+    unknown = replace(record, provenance=replace(record.provenance, raw_page_id=None))
+    conn.execute(reparse._repair_sql(), [json.dumps([record_to_row(
+        unknown, stock_id=1, doc_id=reparse._doc_id(item), raw_sha256=case["raw_sha256"],
+    )])])
+    before = dict(conn.execute("SELECT * FROM jss_financials").fetchone())
+    fresh = replace(record, provenance=replace(record.provenance, raw_page_id=EDINET_CASES[1]["page_id"])) if relation_changed else record
+
+    class Store:
+        def query(self, sql, params=None):
+            return [dict(row) for row in conn.execute(sql, params or []).fetchall()]
+
+    class Client:
+        def query_database(self, *args, **kwargs):
+            return [{"id": "original", "record": fresh}]
+
+    monkeypatch.setattr(reparse, "NotionClient", lambda *args, **kwargs: Client())
+    monkeypatch.setattr(reparse, "_page_record", lambda page: page["record"])
+    monkeypatch.setattr(reparse, "load_settings", lambda: SimpleNamespace(
+        notion_token="test-token", notion_rps=2.5, db_id=lambda key: "db",
+        cloud_store=SimpleNamespace(d1_enabled=lambda: True),
+    ))
+    monkeypatch.setattr(reparse, "D1Store", lambda *args, **kwargs: Store())
+    if relation_changed:
+        with pytest.raises(ValueError, match="正本が再読成功後に変わりました"):
+            reparse.sync_d1(journal, receipts)
+        assert dict(conn.execute("SELECT * FROM jss_financials").fetchone()) == before
+    else:
+        reparse.sync_d1(journal, receipts)
+        after = dict(conn.execute("SELECT * FROM jss_financials").fetchone())
+        assert after["raw_page_id"] == str(UUID(case["page_id"]))
+        assert {c: after[c] for c in COLUMNS[:-1]} == {c: before[c] for c in COLUMNS[:-1]}
+
+
 @pytest.mark.parametrize("read_back_net_sales", [547_779_000_000, 547_779_000_000.0])
 @pytest.mark.parametrize("archive_parser", ["current", "previous-parser"])
+@pytest.mark.parametrize("target_old_replaced", [False, True])
 def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
-    tmp_path, monkeypatch, read_back_net_sales, archive_parser,
+    tmp_path, monkeypatch, read_back_net_sales, archive_parser, target_old_replaced,
 ):
     older = replace(reparse.notion_financial(_page()), fiscal_period_end=reparse.date(2027, 3, 31))
     older_new = replace(older, fiscal_period_end=reparse.date(2025, 3, 31))
@@ -289,17 +503,25 @@ def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
         return {"page_id": page_id, "old": reparse._record_dict(old),
                 "new": reparse._record_dict(new), "changes": {"net_sales": {}},
                 "parser_sha256": reparse.PARSER_SHA256, "raw_sha256": digest}
-    journal.write_text("\n".join(map(json.dumps, [
+    originals = [
         item("archived", older, older_new, "a" * 64),
         item("target", newer_old, newer_new, "b" * 64),
-    ])) + "\n")
+    ]
+    if target_old_replaced:
+        # 後日原本の誤キーを古い原本の正しいキーへ合流済み。数値は同じ実fixture。
+        originals = [
+            item("archived", replace(newer_old, fiscal_period_end=older.fiscal_period_end),
+                 newer_new, "b" * 64),
+            item("target", older_new, older_new, "a" * 64),
+        ]
+    journal.write_text("\n".join(map(json.dumps, originals)) + "\n")
     receipts.write_text(json.dumps({
         "page_id": "archived", "target_page_id": "target",
         "record": reparse._record_dict(newer_old),
         "parser_sha256": reparse.PARSER_SHA256 if archive_parser == "current" else archive_parser,
-        "raw_sha256": "a" * 64, "action": "newer_disclosure_preserved",
+        "raw_sha256": originals[0]["raw_sha256"], "action": "newer_disclosure_preserved",
     }) + "\n")
-    page, events = {"id": "target", "record": newer_old}, []
+    page, events = {"id": "target", "record": read_back if target_old_replaced else newer_old}, []
     class Client:
         def query_database(self, *args, **kwargs):
             return [page.copy()]
@@ -318,14 +540,19 @@ def test_newer_collision_is_reparsed_first_and_keeps_original_archive_proof(
     monkeypatch.setattr(reparse, "financial_overwrite_allowed",
                         lambda page, record: page["record"].disclosed_at <= record.disclosed_at)
     reparse.apply_journal(journal, receipts)
-    assert events == ["update_latest"]
+    assert events == ([] if target_old_replaced else ["update_latest"])
     proof = reparse._journal_items(receipts)
     assert proof["archived"]["record"] == reparse._record_dict(newer_new)
-    assert proof["archived"]["raw_sha256"] == "a" * 64
-    assert proof["target"]["raw_sha256"] == "b" * 64
+    assert proof["archived"]["raw_sha256"] == originals[0]["raw_sha256"]
+    assert proof["target"]["raw_sha256"] == originals[1]["raw_sha256"]
     events.clear()
     reparse.apply_journal(journal, receipts)
     assert events == []
+    if target_old_replaced:
+        page["record"] = replace(read_back, net_sales=None)
+        with pytest.raises(ValueError, match="監査後に正本が変わりました"):
+            reparse.apply_journal(journal, receipts)
+        assert events == []  # 未検証の欠損をcanonical最新版として認めない。
 
 
 @pytest.mark.parametrize("stored_hash,source", [(None, "EDINET"), ("b" * 64, "EDINET"),
