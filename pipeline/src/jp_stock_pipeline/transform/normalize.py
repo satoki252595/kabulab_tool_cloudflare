@@ -38,7 +38,10 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
         "Revenue2IFRSSummaryOfBusinessResults",
         "RevenuesUSGAAPSummaryOfBusinessResults",
         "NetSales",
+        "NetSalesUS",
         "OperatingRevenues",
+        "OperatingRevenuesUS",
+        "TotalRevenuesUS",
         "OperatingRevenue",
         "Revenue",
         "RevenuesIFRS",
@@ -48,6 +51,7 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
     ),
     "operating_income": (
         "OperatingIncome",
+        "OperatingIncomeUS",
         "OperatingProfit",
         "OperatingIncomeIFRS",
         "OperatingProfitIFRS",
@@ -66,6 +70,7 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
         "ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults",
         "NetIncomeLossAttributableToOwnersOfParentUSGAAPSummaryOfBusinessResults",
         "NetIncome",
+        "NetIncomeUS",
         "ProfitLossAttributableToOwnersOfParent",
         "ProfitLoss",
     ),
@@ -82,6 +87,8 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
         "BasicEarningsLossPerShare",
         "BasicEarningsPerShare",
         "BasicNetIncomePerShare",
+        "BasicNetIncomePerShareUS",
+        "NetIncomePerShareUS",
         "BasicEarningsLossPerShareSummaryOfBusinessResults",
         "BasicEarningsLossPerShareIFRSSummaryOfBusinessResults",
         "BasicEarningsLossPerShareIFRS",
@@ -101,6 +108,8 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
         "EquityToAssetRatioSummaryOfBusinessResults",
         "EquityToAssetRatioIFRSSummaryOfBusinessResults",
     ),
+    # EDINETの原本に直接ある比率だけを使う。利益/自己資本から推計しない。
+    "roe_pct": ("RateOfReturnOnEquitySummaryOfBusinessResults",),
     "cf_operating": (
         "CashFlowsFromOperatingActivities",
         "NetCashProvidedByUsedInOperatingActivities",
@@ -414,7 +423,9 @@ def tidy_to_financial_record(
         if field == "dps":
             continue
         num = _pick_value(actual, candidates, forecast=False)
-        if num is not None and field in _RATIO_FIELDS and abs(num) <= 1.0:
+        if num is not None and field == "roe_pct":
+            num *= 100.0  # 当該EDINET要素は比率。1超(ROE100%超)でも%へ確定変換。
+        elif num is not None and field in _RATIO_FIELDS and abs(num) <= 1.0:
             num *= 100.0  # 小数表記の比率 → % (確定的な単位変換 §3-4)
         values[field] = num
 
@@ -446,7 +457,7 @@ def tidy_to_financial_record(
         net_income=values["net_income"],
         eps=values["eps"],
         bps=values["bps"],
-        roe_pct=None,  # 短信サマリに直接出る場合のみ将来対応。計算で補わない (§3-1)
+        roe_pct=values["roe_pct"],
         roa_pct=None,
         equity_ratio_pct=values["equity_ratio_pct"],
         cf_operating=values["cf_operating"],

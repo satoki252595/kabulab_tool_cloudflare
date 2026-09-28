@@ -64,6 +64,38 @@ class TestParseNumeric:
 
 
 class TestSelectionLogic:
+    def test_us_gaap_tdnet_elements_are_actual_without_substituting_pretax(self):
+        # 6301 2026/06期の原本要素・値。IncomeBeforeIncomeTaxesUSは経常利益ではない。
+        context = "CurrentAccumulatedQ1Duration_ConsolidatedMember_ResultMember"
+        tidy = tidy_frame([
+            {"element": "NetSalesUS", "context_ref": context, "consolidated": "連結", "period_end": "2026-06-30", "value": "1043143000000"},
+            {"element": "OperatingIncomeUS", "context_ref": context, "consolidated": "連結", "period_end": "2026-06-30", "value": "151553000000"},
+            {"element": "NetIncomeUS", "context_ref": context, "consolidated": "連結", "period_end": "2026-06-30", "value": "96153000000"},
+            {"element": "NetIncomePerShareUS", "context_ref": context, "consolidated": "連結", "period_end": "2026-06-30", "value": "107.2"},
+            {"element": "IncomeBeforeIncomeTaxesUS", "context_ref": context, "consolidated": "連結", "period_end": "2026-06-30", "value": "140036000000"},
+        ])
+        record = tidy_to_financial_record(tidy, "6301", prov())
+        assert record is not None
+        assert record.fiscal_period_end == date(2026, 6, 30)
+        assert record.disclosure_type == "1Q"
+        assert record.net_sales == 1_043_143_000_000
+        assert record.operating_income == 151_553_000_000
+        assert record.net_income == 96_153_000_000
+        assert record.eps == 107.2
+        assert record.ordinary_income is None
+
+    @pytest.mark.parametrize("ratio,expected", [("0.1779", 17.79), ("1.2", 120.0), ("-0.3", -30.0)])
+    def test_direct_edinet_roe_uses_scope_and_fraction_unit(self, ratio, expected):
+        # 0.1779は8154 FY2026連結原本。高ROEと赤字の構造ケースも検証する。
+        tidy = tidy_frame([
+            {"element": "NetSales", "context_ref": "CurrentYearDuration", "consolidated": "連結", "period_end": "2026-03-31", "value": "1000"},
+            {"element": "RateOfReturnOnEquitySummaryOfBusinessResults", "context_ref": "CurrentYearDuration", "consolidated": "連結", "value": ratio},
+            {"element": "RateOfReturnOnEquitySummaryOfBusinessResults", "context_ref": "CurrentYearDuration_NonConsolidatedMember", "consolidated": "単体", "value": "0.2951"},
+        ])
+        record = tidy_to_financial_record(tidy, "8154", prov())
+        assert record is not None
+        assert record.roe_pct == pytest.approx(expected)
+
     @pytest.mark.parametrize("revenue_element,income_element,revenue,income", [
         ("RevenueIFRSSummaryOfBusinessResults", "ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults", "5937000000", "841000000"),
         ("Revenue2IFRSSummaryOfBusinessResults", "ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults", "17734000000", "7467000000"),

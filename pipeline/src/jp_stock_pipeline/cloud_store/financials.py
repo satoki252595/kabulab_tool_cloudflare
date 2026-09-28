@@ -104,8 +104,8 @@ UNKNOWN_CONSOLIDATED = "不明"
 
 # `jss_financials` の全 33 列（DDL と同じ順序）。
 # 内訳: レコード + Provenance 由来 30 列 + doc_id + raw_sha256 + stock_id。
-# `roe_pct` / `roa_pct` は `transform/normalize.py` が常に None を入れる
-# （短信サマリに直接出るときだけ将来対応。計算で補わない §3-1）。
+# `roe_pct` はEDINET原本の比率をそのまま%へ変換する。
+# `roa_pct` は未取得のまま（利益/総資産から計算で補わない §3-1）。
 COLUMNS: tuple[str, ...] = (
     "code",
     "fiscal_period_end",

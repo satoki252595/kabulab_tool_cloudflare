@@ -117,3 +117,14 @@ journalにparserのSHAを付け、旧版のjournalをNotionへ反映する操作
 同一clientは初回0.604秒/再利用0.165秒（全HTTP200）。4接続のpoolを使い、
 新parserの読取jobへ切替えた。旧jobの原本cache6,155件は全SHA一致、再取得を省く。
 HTTPXの[公式client仕様](https://www.python-httpx.org/advanced/clients/)も確認した。
+
+TDnet全2,931原本のうち2,927件が再解析でき、残る4件（6301/8591/4901/8604）は
+原本の `NetSalesUS` / `OperatingRevenuesUS` / `TotalRevenuesUS` と米国基準の
+利益・EPS要素が候補表に無い同根の欠損だった。原本の期末・連結・円単位を確認し、
+共有候補表へ追加した。税引前利益や金融費用控除後収益を別勘定へ代用しない。
+
+8154のEDINET原本にあるROE（FY2025連結10.78%、FY2026連結17.79%）も、
+共有変換が常にnullを入れていた。明示的なROE比率要素のみ確定的に%へ変換し、
+別区分の単体ROEを混ぜず、利益/自己資本から推計しない。100%超・負のROEも検証。
+追加後の全体検査は **1,230 pass/55 skip、ruff合格**。
+全件取得jobの既得原本は最終parserで再計算し、旧journalのまま反映しない。
