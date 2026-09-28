@@ -1,32 +1,30 @@
 /**
- * IMF CPIS 取得元 (imf-cpis.ts) のテスト。
+ * IMF pip 取得元 (imf-cpis.ts。公式 SDMX 3.0 API 専用) のテスト。
  *
- * フィクスチャは `fixtures/private/imf-cpis/imf-cpis-*.json` — 2026-09-27 に
- * `https://api.db.nomics.world/v22/series` (DBnomics 経由の IMF CPIS 再配信)
- * へ実際に発行した GET リクエストの生レスポンスをそのまま保存したもの
- * (合成・改変なし)。参照値は同じ日にこのフィクスチャを目視で読み取って
- * 確認した実測値 (日本→米国, 日本→ケイマン諸島, 日本→世界計の 2024-S1 残高、
- * および米国→日本の Derived 系列)。原本 URL:
- * https://api.db.nomics.world/v22/series?series_ids=IMF%2FCPIS%2FB.JP.I_A_T_T_T_BP6_USD.T.T.US,...
+ * 公式応答の形を真似た **合成テストデータ** (実データではない。値は 1000 の倍数
+ * などの作り物) で対応付けの規則と検証を確かめる。合成応答の骨格
+ * (7 系列次元 + TIME_PERIOD・属性の配置・系列キーの位置指定・観測配列) は
+ * 2026-09-28 の実応答と同じ形にしてある。
  *
- * 「様式が想定と違えば throw する」系のテストだけは、実際の応答ではなく
- * 手作りの不正形状データを使う (その旨を各テスト名に明記)。
- *
- * フィクスチャは personal-only の扱いで `fixtures/private/imf-cpis/`
- * (gitignore 済み) に置き commit しない。未取得の環境 (CI) では
- * フィクスチャを読むテストだけ `describe.skipIf` で skip し、
- * 合成データ・定義・期間判定のテストは常に走らせる。
+ * 実値の意味同一の証明 (旧ミラー 2024-S1 値との突合・改訂差分) は一次証拠
+ * (`/tmp/imf-official-20260928/` の private 0600 captures + 実行計画書の集計) が
+ * 持ち、本ファイルの期待値には使わない。
  */
 import { describe, expect, it } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
+  IMF_CPIS_API_BASE,
+  IMF_CPIS_DATAFLOW_AGENCY,
+  IMF_CPIS_DATAFLOW_ID,
+  IMF_CPIS_DATAFLOW_VERSION,
   IMF_CPIS_DEFAULT_COUNTERPART_AREAS,
+  IMF_CPIS_DSD_ID,
+  IMF_CPIS_DSD_VERSION,
   IMF_CPIS_INDICATORS,
-  buildImfCpisSeriesCode,
+  IMF_CPIS_SOURCE_URL,
+  buildImfCpisBatchKey,
+  buildImfCpisDataKey,
   buildImfCpisUrl,
-  chunkImfCpisSeriesCodes,
+  chunkImfCpisCounterparts,
   compareImfCpisPeriods,
   currentImfCpisPeriodLabel,
   fetchImfCpis,
@@ -36,310 +34,565 @@ import {
   parseImfCpisPeriod,
   parseImfCpisResponse,
   toImfCpisObservationRows,
+  type ImfCpisAssetClass,
+  type ImfCpisDirection,
+  type ImfCpisParseExpected,
 } from "./imf-cpis.js";
 
-const FX = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "private", "imf-cpis");
-const FIXTURE_NAMES = [
-  "imf-cpis-jp-assets-total.json",
-  "imf-cpis-jp-liabilities-total.json",
-  "imf-cpis-jp-assets-equity-debt.json",
-  "imf-cpis-jp-liabilities-equity-debt.json",
-];
-const hasFixtures = FIXTURE_NAMES.every((name) => existsSync(join(FX, name)));
-/** 実フィクスチャを読む。呼び出すテストは全て `describe.skipIf(!hasFixtures)` の中にある。 */
-const fixture = (name: string): unknown => JSON.parse(readFileSync(join(FX, name), "utf8"));
+// ---------------------------------------------------------------------------
+// 合成テストデータの組み立て (実データではない)
+// ---------------------------------------------------------------------------
 
-describe.skipIf(!hasFixtures)("parseImfCpisResponse — 実フィクスチャでの値検証", () => {
-  it("日本→海外 (Assets, Total) の 2024-S1 残高を実測どおりに読む", () => {
-    const records = parseImfCpisResponse(fixture("imf-cpis-jp-assets-total.json"));
-    const at = (area: string) =>
-      records.find((r) => r.counterpartArea === area && r.period === "2024-S1")?.valueUsd;
+interface SynthSeries {
+  /** 公式相手国コード (例: "USA")。 */
+  counterpart: string;
+  /** 観測値 (periods と同じ長さ。文字列は実応答どおりの引用符付き数値)。 */
+  values: Array<string | number | null>;
+}
 
-    // 原本 (DBnomics API, 2026-09-27 取得) を目視確認した実測値。
-    expect(at("US")).toBe(2072394613197.0);
-    expect(at("KY")).toBe(818396287835.949);
-    expect(at("W00")).toBe(4337640482073.52);
+interface SynthOpts {
+  direction: ImfCpisDirection;
+  assetClass: ImfCpisAssetClass;
+  counterparts: readonly string[];
+  periods: readonly string[];
+  series: readonly SynthSeries[];
+  unit?: string;
+  scale?: string;
+  flowStockEntry?: string;
+  derivation?: string;
+  dvType?: string | null;
+  dataflowVersion?: string;
+  dsdVersion?: string;
+  indicatorOverride?: string;
+  accountingOverride?: string;
+  omitLinks?: boolean;
+}
+
+function synthDims(o: {
+  accountingEntry: string;
+  indicator: string;
+  counterparts: readonly string[];
+}): Array<Record<string, unknown>> {
+  const single = (id: string, keyPosition: number, value: string) => ({
+    id,
+    keyPosition,
+    roles: id === "FREQUENCY" ? ["FREQ"] : [],
+    values: [{ id: value }],
   });
+  return [
+    single("COUNTRY", 0, "JPN"),
+    single("ACCOUNTING_ENTRY", 1, o.accountingEntry),
+    single("INDICATOR", 2, o.indicator),
+    single("SECTOR", 3, "S1"),
+    single("COUNTERPART_SECTOR", 4, "S1"),
+    {
+      id: "COUNTERPART_COUNTRY",
+      keyPosition: 5,
+      roles: [],
+      values: o.counterparts.map((id) => ({ id })),
+    },
+    single("FREQUENCY", 6, "S"),
+  ];
+}
 
-  it("海外→日本 (Liabilities, Derived, Total) の 2024-S1 残高を実測どおりに読む", () => {
-    const records = parseImfCpisResponse(fixture("imf-cpis-jp-liabilities-total.json"));
-    const at = (area: string) =>
-      records.find((r) => r.counterpartArea === area && r.period === "2024-S1")?.valueUsd;
+/** 合成テストデータ: 公式 SDMX-JSON の data 応答の最小形。値は作り物。 */
+function synthResponse(o: SynthOpts): Record<string, unknown> {
+  const defs: Record<ImfCpisDirection, Record<ImfCpisAssetClass, { ae: string; ind: string; der: string }>> = {
+    jp_holds_abroad: {
+      total: { ae: "A", ind: "P_TOTINV_P_USD", der: "O" },
+      equity: { ae: "A", ind: "P_F51_P_USD", der: "O" },
+      debt: { ae: "A", ind: "P_F3_P_USD", der: "O" },
+    },
+    world_holds_jp: {
+      total: { ae: "L", ind: "P_TOTINV_P_SCC_USD", der: "SCC" },
+      equity: { ae: "L", ind: "P_F51_P_SCC_USD", der: "SCC" },
+      debt: { ae: "L", ind: "P_F3_P_SCC_USD", der: "SCC" },
+    },
+  };
+  const d = defs[o.direction][o.assetClass];
+  const ae = o.accountingOverride ?? d.ae;
+  const ind = o.indicatorOverride ?? d.ind;
+  const der = o.derivation ?? d.der;
+  // dvType の既定: 資産側は属性値なし、Derived 側は SCC (実測どおり)。
+  const dv = o.dvType === undefined ? (der === "SCC" ? "SCC" : null) : o.dvType;
+  const series: Record<string, unknown> = {};
+  for (const s of o.series) {
+    const pos = o.counterparts.indexOf(s.counterpart);
+    if (pos < 0) throw new Error(`合成テストデータの不整合: ${s.counterpart} が counterparts に無い`);
+    const observations: Record<string, unknown> = {};
+    s.values.forEach((v, i) => {
+      observations[String(i)] = [v, null, 0, null];
+    });
+    series[`0:0:0:0:0:${pos}:0`] = { attributes: [0, null, null], observations };
+  }
+  return {
+    _meta: { note: "合成テストデータ (実データではない)" },
+    meta: {},
+    data: {
+      dataSets: [{ structure: 0, action: "Replace", series }],
+      structures: [
+        {
+          links: o.omitLinks
+            ? []
+            : [
+                {
+                  urn: `urn:sdmx:org.sdmx.infomodel.datastructure.Dataflow=${IMF_CPIS_DATAFLOW_AGENCY}:${IMF_CPIS_DATAFLOW_ID}(${o.dataflowVersion ?? IMF_CPIS_DATAFLOW_VERSION})`,
+                  title: "Dataflow",
+                },
+                {
+                  urn: `urn:sdmx:org.sdmx.infomodel.datastructure.DataStructure=${IMF_CPIS_DATAFLOW_AGENCY}:${IMF_CPIS_DSD_ID}(${o.dsdVersion ?? IMF_CPIS_DSD_VERSION})`,
+                  title: "DataStructureDefinition",
+                },
+              ],
+          dimensions: {
+            series: synthDims({ accountingEntry: ae, indicator: ind, counterparts: o.counterparts }),
+            observation: [{ id: "TIME_PERIOD", keyPosition: 7, values: o.periods.map((value) => ({ value })) }],
+          },
+          measures: { observation: [{ id: "OBS_VALUE", roles: [] }] },
+          attributes: {
+            dimensionGroup: [
+              { id: "INSTR_ASSET", roles: [], values: [{ id: "TOTINV" }] },
+              { id: "FUNCTIONAL_CAT", roles: [], values: [{ id: "P" }] },
+              { id: "FI_MATURITY", roles: [] },
+              { id: "CURRENCY_DENOMINATION", roles: [] },
+              { id: "CURRENCY", roles: [] },
+              { id: "FLOW_STOCK_ENTRY", roles: [], values: [{ id: o.flowStockEntry ?? "P" }] },
+              ...(dv === null ? [{ id: "DV_TYPE", roles: [] }] : [{ id: "DV_TYPE", roles: [], values: [{ id: dv }] }]),
+              { id: "UNIT", roles: [], values: [{ id: o.unit ?? "USD" }] },
+            ],
+            series: [
+              { id: "SCALE", roles: [], values: [{ id: o.scale ?? "6" }] },
+              { id: "DECIMALS_DISPLAYED", roles: [] },
+              { id: "OVERLAP", roles: [] },
+            ],
+            observation: [
+              { id: "PRECISION", roles: [] },
+              { id: "DERIVATION_TYPE", roles: [], values: [{ id: der }] },
+              { id: "STATUS", roles: [] },
+            ],
+          },
+        },
+      ],
+    },
+  };
+}
 
-    expect(at("US")).toBe(1225933000000.0);
-    expect(at("KY")).toBe(202207764972.49);
-    expect(at("W00")).toBe(2806446928109.16);
-  });
+const expectedOf = (
+  direction: ImfCpisDirection,
+  assetClass: ImfCpisAssetClass,
+  counterpartAreas: readonly string[]
+): ImfCpisParseExpected => ({ direction, assetClass, counterpartAreas });
 
-  it("資産クラス (株式/債券) を正しく振り分ける (jp_holds_abroad)", () => {
-    const records = parseImfCpisResponse(fixture("imf-cpis-jp-assets-equity-debt.json"));
-    const equity = records.find((r) => r.assetClass === "equity" && r.period === "2024-S1");
-    const debt = records.find((r) => r.assetClass === "debt" && r.period === "2024-S1");
-    expect(equity?.valueUsd).toBe(927585184508.034);
-    expect(debt?.valueUsd).toBe(1144809428688.97);
-    expect(equity?.indicatorKey).toBe("imf_cpis_jp_assets_equity");
-    expect(debt?.indicatorKey).toBe("imf_cpis_jp_assets_debt");
-    expect(equity?.direction).toBe("jp_holds_abroad");
-  });
+// ---------------------------------------------------------------------------
+// データキー・URL・チャンク
+// ---------------------------------------------------------------------------
 
-  it("資産クラス (株式/債券) を正しく振り分ける (world_holds_jp)", () => {
-    const records = parseImfCpisResponse(fixture("imf-cpis-jp-liabilities-equity-debt.json"));
-    const equity = records.find((r) => r.assetClass === "equity" && r.period === "2024-S1");
-    const debt = records.find((r) => r.assetClass === "debt" && r.period === "2024-S1");
-    expect(equity?.valueUsd).toBe(1027565000000.0);
-    expect(debt?.valueUsd).toBe(198368000000.0);
-    expect(equity?.indicatorKey).toBe("imf_cpis_jp_liabilities_equity");
-    expect(debt?.indicatorKey).toBe("imf_cpis_jp_liabilities_debt");
-    expect(equity?.direction).toBe("world_holds_jp");
-  });
-
-  it("株式+債券 の合計が Total 系列と一致する (フィクスチャ間の内部整合性)", () => {
-    const totalRecords = parseImfCpisResponse(fixture("imf-cpis-jp-assets-total.json"));
-    const splitRecords = parseImfCpisResponse(fixture("imf-cpis-jp-assets-equity-debt.json"));
-    const total = totalRecords.find(
-      (r) => r.counterpartArea === "US" && r.period === "2024-S1"
-    )?.valueUsd;
-    const equity = splitRecords.find(
-      (r) => r.assetClass === "equity" && r.period === "2024-S1"
-    )?.valueUsd;
-    const debt = splitRecords.find(
-      (r) => r.assetClass === "debt" && r.period === "2024-S1"
-    )?.valueUsd;
-    expect(total).toBeDefined();
-    expect(equity! + debt!).toBeCloseTo(total!, 1);
-  });
-
-  it("守秘義務等による欠損 (value=null) は 0 埋めせず読み飛ばす", () => {
-    // 実フィクスチャを複製し、1 点だけ null に差し替えた合成データ (形状は本物のまま)。
-    const base = fixture("imf-cpis-jp-assets-total.json") as {
-      series: { docs: Array<{ value: unknown[] }> };
-    };
-    const mutated = JSON.parse(JSON.stringify(base)) as typeof base;
-    const doc = mutated.series.docs[0]!;
-    const originalLength = (doc.value as unknown[]).length;
-    doc.value[originalLength - 1] = null;
-
-    const records = parseImfCpisResponse(mutated);
-    const seriesCode = (
-      (base.series.docs[0] as unknown) as { series_code: string }
-    ).series_code;
-    const forThisSeries = records.filter((r) => r.seriesCode === seriesCode);
-    // 元は 36 観測、うち 1 点を null にしたので 35 件だけ出てくるはず。0 は混ざらない。
-    expect(forThisSeries).toHaveLength(35);
-    expect(forThisSeries.every((r) => Number.isFinite(r.valueUsd) && r.valueUsd !== 0)).toBe(
-      true
+describe("buildImfCpisDataKey / buildImfCpisBatchKey / buildImfCpisUrl", () => {
+  it("資産側は A + 非SCC 指標、対内側は L + SCC 指標の公式キーを組み立てる", () => {
+    expect(buildImfCpisDataKey({ direction: "jp_holds_abroad", assetClass: "total", counterpartArea: "US" })).toBe(
+      "JPN.A.P_TOTINV_P_USD.S1.S1.USA.S"
+    );
+    expect(buildImfCpisDataKey({ direction: "jp_holds_abroad", assetClass: "equity", counterpartArea: "W00" })).toBe(
+      "JPN.A.P_F51_P_USD.S1.S1.G001.S"
+    );
+    expect(buildImfCpisDataKey({ direction: "jp_holds_abroad", assetClass: "debt", counterpartArea: "KY" })).toBe(
+      "JPN.A.P_F3_P_USD.S1.S1.CYM.S"
+    );
+    expect(buildImfCpisDataKey({ direction: "world_holds_jp", assetClass: "total", counterpartArea: "US" })).toBe(
+      "JPN.L.P_TOTINV_P_SCC_USD.S1.S1.USA.S"
+    );
+    expect(buildImfCpisDataKey({ direction: "world_holds_jp", assetClass: "equity", counterpartArea: "GB" })).toBe(
+      "JPN.L.P_F51_P_SCC_USD.S1.S1.GBR.S"
+    );
+    expect(buildImfCpisDataKey({ direction: "world_holds_jp", assetClass: "debt", counterpartArea: "CN" })).toBe(
+      "JPN.L.P_F3_P_SCC_USD.S1.S1.CHN.S"
     );
   });
-});
 
-describe("parseImfCpisResponse — 想定外の形状 (手作りの合成データ) は throw する", () => {
-  it("series.docs が無ければ throw", () => {
-    expect(() => parseImfCpisResponse({ series: {} })).toThrow(/series\.docs/);
+  it("報告負債 (L + 非SCC 指標) のキーは組み立てられない (対応表に無い概念)", () => {
+    // 対応表にあるのは A + 非SCC と L + SCC の 6 通りのみ。L + 非SCC を要求する
+    // 入口は存在しない (無根拠の同一視を型の段階で防ぐ)。
+    for (const assetClass of ["total", "equity", "debt"] as const) {
+      const key = buildImfCpisDataKey({ direction: "world_holds_jp", assetClass, counterpartArea: "US" });
+      expect(key).toContain(".L.P_");
+      expect(key).toContain("_SCC_USD.");
+    }
   });
 
-  it("series.docs が配列でなければ throw", () => {
-    expect(() => parseImfCpisResponse({ series: { docs: "not-an-array" } })).toThrow(
-      /配列ではありません/
-    );
-  });
-
-  it("FREQ が半期 (B) 以外なら throw (四半期・年次が紛れ込んだ場合の検知)", () => {
-    const bad = {
-      series: {
-        docs: [
-          {
-            series_code: "Q.JP.I_A_T_T_T_BP6_USD.T.T.US",
-            dimensions: {
-              FREQ: "Q",
-              REF_AREA: "JP",
-              INDICATOR: "I_A_T_T_T_BP6_USD",
-              REF_SECTOR: "T",
-              COUNTERPART_SECTOR: "T",
-              COUNTERPART_AREA: "US",
-            },
-            period: ["2024-Q1"],
-            value: [1],
-          },
-        ],
-      },
-    };
-    expect(() => parseImfCpisResponse(bad)).toThrow(/FREQ/);
-  });
-
-  it("REF_AREA が JP 以外なら throw", () => {
-    const bad = {
-      series: {
-        docs: [
-          {
-            series_code: "B.US.I_A_T_T_T_BP6_USD.T.T.JP",
-            dimensions: {
-              FREQ: "B",
-              REF_AREA: "US",
-              INDICATOR: "I_A_T_T_T_BP6_USD",
-              COUNTERPART_AREA: "JP",
-            },
-            period: ["2024-S1"],
-            value: [1],
-          },
-        ],
-      },
-    };
-    expect(() => parseImfCpisResponse(bad)).toThrow(/REF_AREA/);
-  });
-
-  it("未知の INDICATOR コードなら throw (様式変更の検知)", () => {
-    const bad = {
-      series: {
-        docs: [
-          {
-            series_code: "B.JP.I_UNKNOWN_CODE.T.T.US",
-            dimensions: {
-              FREQ: "B",
-              REF_AREA: "JP",
-              INDICATOR: "I_UNKNOWN_CODE",
-              COUNTERPART_AREA: "US",
-            },
-            period: ["2024-S1"],
-            value: [1],
-          },
-        ],
-      },
-    };
-    expect(() => parseImfCpisResponse(bad)).toThrow(/未知の INDICATOR/);
-  });
-
-  it("period と value の長さが違えば throw", () => {
-    const bad = {
-      series: {
-        docs: [
-          {
-            series_code: "B.JP.I_A_T_T_T_BP6_USD.T.T.US",
-            dimensions: {
-              FREQ: "B",
-              REF_AREA: "JP",
-              INDICATOR: "I_A_T_T_T_BP6_USD",
-              REF_SECTOR: "T",
-              COUNTERPART_SECTOR: "T",
-              COUNTERPART_AREA: "US",
-            },
-            period: ["2024-S1", "2024-S2"],
-            value: [1],
-          },
-        ],
-      },
-    };
-    expect(() => parseImfCpisResponse(bad)).toThrow(/長さが一致しません/);
-  });
-
-  it("期間表記が YYYY-S1/S2 形式でなければ throw", () => {
-    const bad = {
-      series: {
-        docs: [
-          {
-            series_code: "B.JP.I_A_T_T_T_BP6_USD.T.T.US",
-            dimensions: {
-              FREQ: "B",
-              REF_AREA: "JP",
-              INDICATOR: "I_A_T_T_T_BP6_USD",
-              REF_SECTOR: "T",
-              COUNTERPART_SECTOR: "T",
-              COUNTERPART_AREA: "US",
-            },
-            period: ["2024"],
-            value: [1],
-          },
-        ],
-      },
-    };
-    expect(() => parseImfCpisResponse(bad)).toThrow(/YYYY-S1\/YYYY-S2/);
-  });
-
-  it("値が数値でなければ (文字列が紛れ込んだら) throw し、無効値で埋めない", () => {
-    const bad = {
-      series: {
-        docs: [
-          {
-            series_code: "B.JP.I_A_T_T_T_BP6_USD.T.T.US",
-            dimensions: {
-              FREQ: "B",
-              REF_AREA: "JP",
-              INDICATOR: "I_A_T_T_T_BP6_USD",
-              REF_SECTOR: "T",
-              COUNTERPART_SECTOR: "T",
-              COUNTERPART_AREA: "US",
-            },
-            period: ["2024-S1"],
-            value: ["N/A"],
-          },
-        ],
-      },
-    };
-    expect(() => parseImfCpisResponse(bad)).toThrow(/有限の数値ではありません/);
-  });
-
-  it('DBnomics の未報告マーカー "NA" は null と同じ欠損として読み飛ばす (0 埋めせず・止めない)', () => {
-    // 2026-09-28 実機確認: Derived 系列 (SG 等) の古い期を DBnomics が "NA" で返す。
-    // 形状は本物の応答と同じ手作り合成データで、値だけ作り物。
-    const withNa = {
-      series: {
-        docs: [
-          {
-            series_code: "B.JP.I_L_T_T_T_BP6_DV_USD.T.T.SG",
-            dimensions: {
-              FREQ: "B",
-              REF_AREA: "JP",
-              INDICATOR: "I_L_T_T_T_BP6_DV_USD",
-              REF_SECTOR: "T",
-              COUNTERPART_SECTOR: "T",
-              COUNTERPART_AREA: "SG",
-            },
-            period: ["2023-S2", "2024-S1"],
-            value: ["NA", 123456789],
-          },
-        ],
-      },
-    };
-    const records = parseImfCpisResponse(withNa);
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({ period: "2024-S1", valueUsd: 123456789 });
-    expect(records.every((r) => r.valueUsd !== 0)).toBe(true);
-  });
-});
-
-describe("buildImfCpisSeriesCode / buildImfCpisUrl / chunkImfCpisSeriesCodes", () => {
-  it("direction/assetClass/相手国から series_code を組み立てる", () => {
-    expect(
-      buildImfCpisSeriesCode({ direction: "jp_holds_abroad", assetClass: "total", counterpartArea: "US" })
-    ).toBe("B.JP.I_A_T_T_T_BP6_USD.T.T.US");
-    expect(
-      buildImfCpisSeriesCode({ direction: "world_holds_jp", assetClass: "debt", counterpartArea: "KY" })
-    ).toBe("B.JP.I_L_D_T_T_BP6_DV_USD.T.T.KY");
-  });
-
-  it("相手国コードの形式が不正なら throw する", () => {
+  it("対応表に無い相手国・未知の direction は throw し、推測で補わない", () => {
     expect(() =>
-      buildImfCpisSeriesCode({ direction: "jp_holds_abroad", assetClass: "total", counterpartArea: "us-1" })
-    ).toThrow(/相手国・地域コード/);
+      buildImfCpisDataKey({ direction: "jp_holds_abroad", assetClass: "total", counterpartArea: "XX" })
+    ).toThrow(/未知の相手国/);
+    expect(() =>
+      buildImfCpisDataKey({
+        direction: "unknown" as unknown as ImfCpisDirection,
+        assetClass: "total",
+        counterpartArea: "US",
+      })
+    ).toThrow(/未知の direction/);
   });
 
-  it("series_ids クエリと observations=1 を含む URL を組み立てる", () => {
-    const url = buildImfCpisUrl(["B.JP.I_A_T_T_T_BP6_USD.T.T.US"]);
-    expect(url.startsWith("https://api.db.nomics.world/v22/series?")).toBe(true);
-    expect(url).toContain("observations=1");
-    expect(decodeURIComponent(url)).toContain("IMF/CPIS/B.JP.I_A_T_T_T_BP6_USD.T.T.US");
+  it("同じ向き×資産クラスの相手国を `+` で束ねる。空なら throw", () => {
+    expect(
+      buildImfCpisBatchKey({ direction: "jp_holds_abroad", assetClass: "total", counterpartAreas: ["US", "KY", "W00"] })
+    ).toBe("JPN.A.P_TOTINV_P_USD.S1.S1.USA+CYM+G001.S");
+    expect(() =>
+      buildImfCpisBatchKey({ direction: "jp_holds_abroad", assetClass: "total", counterpartAreas: [] })
+    ).toThrow(/空です/);
   });
 
-  it("空配列なら throw する", () => {
-    expect(() => buildImfCpisUrl([])).toThrow(/空です/);
+  it("公式 SDMX の data URL を組み立てる。期間クエリは付けない (無視されるため)", () => {
+    const url = buildImfCpisUrl("JPN.A.P_TOTINV_P_USD.S1.S1.USA.S");
+    expect(url).toBe(
+      `${IMF_CPIS_API_BASE}/data/dataflow/IMF.STA/PIP/5.0.0/JPN.A.P_TOTINV_P_USD.S1.S1.USA.S?dimension_at_observation=AllDimensions`
+    );
+    expect(url).not.toContain("startPeriod");
+    expect(url).not.toContain("endPeriod");
+    expect(url).not.toContain("lastNObservations");
+    expect(() => buildImfCpisUrl("")).toThrow(/空です/);
   });
 
-  it("チャンクサイズごとに分割する", () => {
-    const codes = Array.from({ length: 25 }, (_, i) => `code-${i}`);
-    const chunks = chunkImfCpisSeriesCodes(codes, 10);
+  it("相手国をチャンクサイズごとに分割する", () => {
+    const areas = Array.from({ length: 25 }, (_, i) => `A${i}`);
+    const chunks = chunkImfCpisCounterparts(areas, 10);
     expect(chunks).toHaveLength(3);
     expect(chunks[0]).toHaveLength(10);
     expect(chunks[2]).toHaveLength(5);
-    expect(chunks.flat()).toEqual(codes);
+    expect(chunks.flat()).toEqual(areas);
+    expect(() => chunkImfCpisCounterparts(areas, 0)).toThrow(/正の整数/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseImfCpisResponse — 合成の公式応答での値検証
+// ---------------------------------------------------------------------------
+
+describe("parseImfCpisResponse — 合成の公式応答", () => {
+  const PERIODS = ["2024-S1", "2024-S2", "2025-S1"];
+
+  it("資産側 (A・報告値) を指標キー・方向・資産クラス・新旧コード付きで読む", () => {
+    const json = synthResponse({
+      direction: "jp_holds_abroad",
+      assetClass: "total",
+      counterparts: ["USA", "G001"],
+      periods: PERIODS,
+      series: [
+        { counterpart: "USA", values: ["2072394613197.0", "1000.5", 2000] },
+        { counterpart: "G001", values: ["4337640482073.52", "3000", "4000.25"] },
+      ],
+    });
+    const { records, returnedKeys, missingSeriesCodes } = parseImfCpisResponse(
+      json,
+      expectedOf("jp_holds_abroad", "total", ["US", "W00"])
+    );
+    expect(records).toHaveLength(6);
+    expect(missingSeriesCodes).toEqual([]);
+    expect(returnedKeys).toHaveLength(2);
+    const us = records.find((r) => r.counterpartArea === "US" && r.period === "2024-S1")!;
+    expect(us).toMatchObject({
+      indicatorKey: "imf_cpis_jp_assets_total",
+      direction: "jp_holds_abroad",
+      assetClass: "total",
+      counterpartArea: "US",
+      counterpartCountry: "USA",
+      valueUsd: 2072394613197.0,
+      seriesCode: "JPN.A.P_TOTINV_P_USD.S1.S1.USA.S",
+    });
+    // 文字列値・数値値の両方を有限数として読む
+    expect(records.find((r) => r.counterpartArea === "US" && r.period === "2024-S2")?.valueUsd).toBe(1000.5);
+    expect(records.find((r) => r.counterpartArea === "US" && r.period === "2025-S1")?.valueUsd).toBe(2000);
+  });
+
+  it("対内側 (L・Derived) は liabilities 指標キーになり、欠損 (null) は 0 埋めせず読み飛ばす", () => {
+    const json = synthResponse({
+      direction: "world_holds_jp",
+      assetClass: "equity",
+      counterparts: ["USA"],
+      periods: PERIODS,
+      series: [{ counterpart: "USA", values: [null, "1000156000000", "1139116000000"] }],
+    });
+    const { records } = parseImfCpisResponse(json, expectedOf("world_holds_jp", "equity", ["US"]));
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({
+      indicatorKey: "imf_cpis_jp_liabilities_equity",
+      direction: "world_holds_jp",
+      period: "2024-S2",
+      valueUsd: 1000156000000,
+    });
+    expect(records.every((r) => r.valueUsd !== 0)).toBe(true);
+  });
+
+  it("要求したが応答に無い系列 (台湾の Derived など) は missingSeriesCodes で明示する", () => {
+    const json = synthResponse({
+      direction: "world_holds_jp",
+      assetClass: "total",
+      counterparts: ["USA"],
+      periods: PERIODS,
+      series: [{ counterpart: "USA", values: ["1000", "2000", "3000"] }],
+    });
+    const { records, missingSeriesCodes } = parseImfCpisResponse(
+      json,
+      expectedOf("world_holds_jp", "total", ["US", "TW"])
+    );
+    expect(records).toHaveLength(3);
+    expect(missingSeriesCodes).toEqual(["JPN.L.P_TOTINV_P_SCC_USD.S1.S1.TWN.S"]);
+  });
+
+  it("2013 年より前の S1 試行分は取り込まず、S2 年末値と 2013-S1 以降は残す", () => {
+    const json = synthResponse({
+      direction: "world_holds_jp",
+      assetClass: "total",
+      counterparts: ["G001"],
+      periods: ["2009-S1", "2009-S2", "2012-S1", "2012-S2", "2013-S1"],
+      series: [{ counterpart: "G001", values: ["25400000000", "1166000000000", "32100000000", "1150000000000", "1200000000000"] }],
+    });
+    const { records } = parseImfCpisResponse(json, expectedOf("world_holds_jp", "total", ["W00"]));
+    expect(records.map((r) => r.period)).toEqual(["2009-S2", "2012-S2", "2013-S1"]);
+  });
+});
+
+describe("parseImfCpisResponse — 想定外の形状は throw する", () => {
+  const base = (): SynthOpts => ({
+    direction: "jp_holds_abroad",
+    assetClass: "total",
+    counterparts: ["USA"],
+    periods: ["2025-S1"],
+    series: [{ counterpart: "USA", values: ["1000"] }],
+  });
+  const parseOk = (json: unknown) => parseImfCpisResponse(json, expectedOf("jp_holds_abroad", "total", ["US"]));
+
+  it("data/dataSets/structures が無ければ throw (旧ミラー応答もここで拒む)", () => {
+    expect(() => parseOk({ series: { docs: [] } })).toThrow(/data オブジェクト/);
+    expect(() => parseOk({ data: {} })).toThrow(/dataSets/);
+    expect(() => parseOk({ data: { dataSets: [{}], structures: [] } })).toThrow(/structures/);
+  });
+
+  it("dataflow/DSD の URN が想定と違えば throw (版の黙った追従をしない)", () => {
+    expect(() => parseOk(synthResponse({ ...base(), omitLinks: true }))).toThrow(/dataflow の URN/);
+    const bumpedFlow = synthResponse({ ...base(), dataflowVersion: "5.0.1" });
+    expect(() => parseOk(bumpedFlow)).toThrow(/dataflow の URN/);
+    const bumpedDsd = synthResponse({ ...base(), dsdVersion: "6.0.0" });
+    expect(() => parseOk(bumpedDsd)).toThrow(/DSD の URN/);
+  });
+
+  it("系列次元の順序・数・固定値が違えば throw", () => {
+    const json = synthResponse(base()) as { data: { structures: Array<{ dimensions: { series: unknown[] } }> } };
+    json.data.structures[0]!.dimensions.series.pop();
+    expect(() => parseOk(json)).toThrow(/系列次元の数/);
+
+    const swapped = synthResponse(base()) as { data: { structures: Array<{ dimensions: { series: Array<{ id: string }> } }> } };
+    const dims = swapped.data.structures[0]!.dimensions.series;
+    const tmp = dims[0]!;
+    dims[0] = dims[5]!;
+    dims[5] = tmp;
+    expect(() => parseOk(swapped)).toThrow(/系列次元 #0/);
+  });
+
+  it("対内 (L・SCC) の要求に報告負債 (L + 非SCC 指標) が返れば throw (無根拠の同一視を防ぐ)", () => {
+    const json = synthResponse({
+      direction: "world_holds_jp",
+      assetClass: "total",
+      counterparts: ["USA"],
+      periods: ["2025-S1"],
+      series: [{ counterpart: "USA", values: ["1000"] }],
+      indicatorOverride: "P_TOTINV_P_USD",
+    });
+    expect(() =>
+      parseImfCpisResponse(json, expectedOf("world_holds_jp", "total", ["US"]))
+    ).toThrow(/INDICATOR が想定/);
+  });
+
+  it("要求していない相手国・系列キーの混在・観測位置の範囲外は throw", () => {
+    const json = synthResponse({
+      ...base(),
+      counterparts: ["USA", "FRA"],
+      series: [{ counterpart: "FRA", values: ["1000"] }],
+    });
+    expect(() => parseOk(json)).toThrow(/要求していない相手国/);
+
+    const mixed = synthResponse(base()) as { data: { dataSets: Array<{ series: Record<string, unknown> }> } };
+    mixed.data.dataSets[0]!.series = { "0:1:0:0:0:0:0": { observations: { "0": ["1000", null, 0, null] } } };
+    expect(() => parseOk(mixed)).toThrow(/混在スコープ/);
+
+    const badKey = synthResponse(base()) as { data: { dataSets: Array<{ series: Record<string, unknown> }> } };
+    badKey.data.dataSets[0]!.series = { "not-a-key": { observations: { "0": ["1000", null, 0, null] } } };
+    expect(() => parseOk(badKey)).toThrow(/位置指定/);
+
+    const badObs = synthResponse(base()) as { data: { dataSets: Array<{ series: Record<string, unknown> }> } };
+    badObs.data.dataSets[0]!.series = {
+      "0:0:0:0:0:0:0": { attributes: [0, null, null], observations: { "9": ["1000", null, 0, null] } },
+    };
+    expect(() => parseOk(badObs)).toThrow(/範囲外/);
+  });
+
+  it("dataSets/structures が単一でない・structure の参照先が 0 でなければ throw (先頭選択なし)", () => {
+    const multi = synthResponse(base()) as { data: { dataSets: unknown[]; structures: unknown[] } };
+    const ds0 = multi.data.dataSets[0];
+    multi.data.dataSets = [ds0, ds0];
+    expect(() => parseOk(multi)).toThrow(/dataSets が単一/);
+    const multi2 = synthResponse(base()) as { data: { dataSets: unknown[]; structures: unknown[] } };
+    const st0 = multi2.data.structures[0];
+    multi2.data.structures = [st0, st0];
+    expect(() => parseOk(multi2)).toThrow(/structures が単一/);
+    const ref1 = synthResponse(base()) as { data: { dataSets: Array<{ structure: number }> } };
+    ref1.data.dataSets[0]!.structure = 1;
+    expect(() => parseOk(ref1)).toThrow(/structure \(0\) を指していません/);
+  });
+
+  it("系列・観測の属性インデックスが許可カタログの範囲外・長さ不一致なら throw (黙認なし)", () => {
+    // 系列属性の SCALE 位置に範囲外の添字
+    const badSeriesAttr = synthResponse(base()) as { data: { dataSets: Array<{ series: Record<string, { attributes: unknown[] }> }> } };
+    badSeriesAttr.data.dataSets[0]!.series["0:0:0:0:0:0:0"]!.attributes = [5, null, null];
+    expect(() => parseOk(badSeriesAttr)).toThrow(/許可カタログの範囲外/);
+    // 系列属性の長さ不一致 (属性の増減は様式変更)
+    const shortSeriesAttr = synthResponse(base()) as { data: { dataSets: Array<{ series: Record<string, { attributes: unknown[] }> }> } };
+    shortSeriesAttr.data.dataSets[0]!.series["0:0:0:0:0:0:0"]!.attributes = [0, null];
+    expect(() => parseOk(shortSeriesAttr)).toThrow(/属性配列の長さ/);
+    // 観測属性の DERIVATION 位置に範囲外の添字 (未知の導出区分を黙認しない)
+    const badObsAttr = synthResponse(base()) as { data: { dataSets: Array<{ series: Record<string, { observations: Record<string, unknown[]> }> }> } };
+    badObsAttr.data.dataSets[0]!.series["0:0:0:0:0:0:0"]!.observations["0"] = ["1000", null, 3, null];
+    expect(() => parseOk(badObsAttr)).toThrow(/許可カタログの範囲外/);
+    // 値を持たない属性 (PRECISION) に添字が付けば throw
+    const badPrec = synthResponse(base()) as { data: { dataSets: Array<{ series: Record<string, { observations: Record<string, unknown[]> }> }> } };
+    badPrec.data.dataSets[0]!.series["0:0:0:0:0:0:0"]!.observations["0"] = ["1000", 0, 0, null];
+    expect(() => parseOk(badPrec)).toThrow(/許可カタログの範囲外/);
+  });
+
+  it("値なし行の STATUS 'C' リテラル (観測した唯一の例外) は受理して読み飛ばす", () => {
+    const json = synthResponse({
+      ...base(),
+      periods: ["2024-S2", "2025-S1"],
+      series: [{ counterpart: "USA", values: [null, "1000"] }],
+    }) as { data: { dataSets: Array<{ series: Record<string, { observations: Record<string, unknown[]> }> }> } };
+    // 実測形 [null, null, 0, "C"] (f4/f5/f6 の SGP 等 26 件)
+    json.data.dataSets[0]!.series["0:0:0:0:0:0:0"]!.observations["0"] = [null, null, 0, "C"];
+    const { records } = parseOk(json);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.period).toBe("2025-S1");
+  });
+
+  it("値を持つ行の旗・値一覧がある属性への直書き・系列位置の直書きは throw する", () => {
+    type S = { attributes: unknown[]; observations: Record<string, unknown[]> };
+    // 値を持つ行に STATUS 旗が付けば throw (provisional 等を正常として読まない)
+    const flagged = synthResponse(base()) as { data: { dataSets: Array<{ series: Record<string, S> }> } };
+    flagged.data.dataSets[0]!.series["0:0:0:0:0:0:0"]!.observations["0"] = ["1000", null, 0, "C"];
+    expect(() => parseOk(flagged)).toThrow(/直書き値/);
+    // 値一覧がある属性 (DERIVATION_TYPE) への直書きは throw (添字を使わせる)
+    const litDer = synthResponse(base()) as { data: { dataSets: Array<{ series: Record<string, S> }> } };
+    litDer.data.dataSets[0]!.series["0:0:0:0:0:0:0"]!.observations["0"] = [null, null, "O", null];
+    expect(() => parseOk(litDer)).toThrow(/直書き値/);
+    // 系列属性位置の直書きは throw (未観測。止めて再評価させる)
+    const litSer = synthResponse(base()) as { data: { dataSets: Array<{ series: Record<string, S> }> } };
+    litSer.data.dataSets[0]!.series["0:0:0:0:0:0:0"]!.attributes = ["6", null, null];
+    expect(() => parseOk(litSer)).toThrow(/直書き値/);
+    // 値なし行でも他の属性 (PRECISION)・他の文字列 ('P') の直書きは throw する
+    const litPrec = synthResponse(base()) as { data: { dataSets: Array<{ series: Record<string, S> }> } };
+    litPrec.data.dataSets[0]!.series["0:0:0:0:0:0:0"]!.observations["0"] = [null, "X", 0, null];
+    expect(() => parseOk(litPrec)).toThrow(/直書き値/);
+    const litP = synthResponse(base()) as { data: { dataSets: Array<{ series: Record<string, S> }> } };
+    litP.data.dataSets[0]!.series["0:0:0:0:0:0:0"]!.observations["0"] = [null, null, 0, "P"];
+    expect(() => parseOk(litP)).toThrow(/直書き値/);
+  });
+
+  it("単位・スケール・残高区分・導出区分が想定と違えば throw", () => {
+    expect(() => parseOk(synthResponse({ ...base(), unit: "EUR" }))).toThrow(/属性 UNIT/);
+    expect(() => parseOk(synthResponse({ ...base(), scale: "3" }))).toThrow(/属性 SCALE/);
+    expect(() => parseOk(synthResponse({ ...base(), flowStockEntry: "F" }))).toThrow(/FLOW_STOCK_ENTRY/);
+    expect(() => parseOk(synthResponse({ ...base(), derivation: "SCC" }))).toThrow(/DERIVATION_TYPE/);
+    // 資産側に DV_TYPE=SCC が付いたら throw (報告値のはず)
+    expect(() => parseOk(synthResponse({ ...base(), dvType: "SCC" }))).toThrow(/DV_TYPE/);
+    // Derived 側に DV_TYPE が無ければ throw
+    const liab = synthResponse({
+      direction: "world_holds_jp",
+      assetClass: "total",
+      counterparts: ["USA"],
+      periods: ["2025-S1"],
+      series: [{ counterpart: "USA", values: ["1000"] }],
+      dvType: null,
+    });
+    expect(() => parseImfCpisResponse(liab, expectedOf("world_holds_jp", "total", ["US"]))).toThrow(/DV_TYPE/);
+  });
+
+  it("期間表記が YYYY-S1/S2 でない・値が有限数でないなら throw", () => {
+    const badPeriod = synthResponse({ ...base(), periods: ["2025-Q1"] });
+    expect(() => parseOk(badPeriod)).toThrow(/YYYY-S1\/YYYY-S2/);
+    const badValue = synthResponse({
+      ...base(),
+      series: [{ counterpart: "USA", values: ["N/A"] }],
+    });
+    expect(() => parseOk(badValue)).toThrow(/有限の数値ではありません/);
+  });
+
+  it("空・空白の文字列値は 0 として読まず throw する (Number('') は 0 になるため)", () => {
+    for (const blank of ["", "   "]) {
+      const json = synthResponse({
+        ...base(),
+        series: [{ counterpart: "USA", values: [blank] }],
+      });
+      expect(() => parseOk(json)).toThrow(/空・空白の文字列/);
+    }
+  });
+});
+
+describe("fetchImfCpis — 要求と応答の突き合わせ (fetch は差し替え)", () => {
+  const respond = (json: unknown) =>
+    (async () => new Response(JSON.stringify(json), { status: 200 })) as unknown as typeof fetch;
+
+  it("相手国を束ねた 1 リクエストで取り、欠落は missingSeriesCodes で明示する", async () => {
+    const json = synthResponse({
+      direction: "jp_holds_abroad",
+      assetClass: "total",
+      counterparts: ["USA", "G001"],
+      periods: ["2025-S1"],
+      series: [
+        { counterpart: "USA", values: ["1000"] },
+        { counterpart: "G001", values: ["2000"] },
+      ],
+    });
+    const seen: string[] = [];
+    const capture = (async (input: RequestInfo | URL) => {
+      seen.push(String(input));
+      return new Response(JSON.stringify(json), { status: 200 });
+    }) as unknown as typeof fetch;
+    const result = await fetchImfCpis(
+      [{ direction: "jp_holds_abroad", assetClass: "total", counterpartAreas: ["US", "W00", "TW"] }],
+      { fetchImpl: capture }
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("USA+G001+TWN");
+    expect(result.records).toHaveLength(2);
+    expect(result.missingSeriesCodes).toEqual(["JPN.A.P_TOTINV_P_USD.S1.S1.TWN.S"]);
+  });
+
+  it("HTTP エラー・空の要求・空の相手国は throw", async () => {
+    const fail = (async () => new Response("err", { status: 503 })) as unknown as typeof fetch;
+    await expect(
+      fetchImfCpis([{ direction: "jp_holds_abroad", assetClass: "total" }], { fetchImpl: fail })
+    ).rejects.toThrow(/HTTP エラー: 503/);
+    await expect(fetchImfCpis([], { fetchImpl: respond({}) })).rejects.toThrow(/requests が空/);
+    await expect(
+      fetchImfCpis([{ direction: "jp_holds_abroad", assetClass: "total", counterpartAreas: [] }], {
+        fetchImpl: respond({}),
+      })
+    ).rejects.toThrow(/counterpartAreas が空/);
+  });
+
+  it("要求していない相手国の応答は throw (黙って取り込まない)", async () => {
+    const json = synthResponse({
+      direction: "jp_holds_abroad",
+      assetClass: "total",
+      counterparts: ["USA", "FRA"],
+      periods: ["2025-S1"],
+      series: [
+        { counterpart: "USA", values: ["1000"] },
+        { counterpart: "FRA", values: ["2000"] },
+      ],
+    });
+    await expect(
+      fetchImfCpis([{ direction: "jp_holds_abroad", assetClass: "total", counterpartAreas: ["US"] }], {
+        fetchImpl: respond(json),
+      })
+    ).rejects.toThrow(/要求していない相手国/);
   });
 });
 
@@ -376,35 +629,55 @@ describe("期間の判定 (半期)", () => {
     expect(currentImfCpisPeriodLabel(new Date(Date.UTC(2026, 8, 27)))).toBe("2026-S2"); // 9月
   });
 
-  describe.skipIf(!hasFixtures)("実フィクスチャ", () => {
-    it("isImfCpisPeriodPublished は実測データの有無だけで判定する", () => {
-      const records = parseImfCpisResponse(fixture("imf-cpis-jp-assets-total.json"));
-      expect(isImfCpisPeriodPublished(records, "2024-S1")).toBe(true);
-      // フィクスチャ取得時点 (2026-09-27) で DBnomics 側にまだ反映されていない期間。
-      expect(isImfCpisPeriodPublished(records, "2025-S2")).toBe(false);
-    });
+  it("isImfCpisPeriodPublished は実測データの有無だけで判定する", () => {
+    const records = [{ period: "2024-S1" }, { period: "2024-S2" }];
+    expect(isImfCpisPeriodPublished(records, "2024-S1")).toBe(true);
+    expect(isImfCpisPeriodPublished(records, "2025-S2")).toBe(false);
   });
 });
 
-describe.skipIf(!hasFixtures)("toImfCpisObservationRows (観測ログ用の縦持ち変換)", () => {
+describe("toImfCpisObservationRows (観測ログ用の縦持ち変換)", () => {
   it("実測 (jp_holds_abroad) は isEstimated=false、近似フラグは常に true", () => {
-    const records = parseImfCpisResponse(fixture("imf-cpis-jp-assets-total.json"));
-    const rows = toImfCpisObservationRows(records);
-    expect(rows.length).toBe(records.length);
-    for (const row of rows) {
-      expect(row.isApproximate).toBe(true);
-      expect(row.isEstimated).toBe(false);
-      expect(row.unit).toBe("USD");
-    }
-    const usRow = rows.find((r) => r.category === "US" && r.period === "2024-S1");
-    expect(usRow?.value).toBe(2072394613197.0);
-    expect(usRow?.indicatorKey).toBe("imf_cpis_jp_assets_total");
+    const rows = toImfCpisObservationRows([
+      {
+        indicatorKey: "imf_cpis_jp_assets_total",
+        direction: "jp_holds_abroad",
+        assetClass: "total",
+        period: "2025-S1",
+        counterpartArea: "US",
+        counterpartCountry: "USA",
+        valueUsd: 1000,
+        seriesCode: "JPN.A.P_TOTINV_P_USD.S1.S1.USA.S",
+      },
+    ]);
+    expect(rows).toEqual([
+      {
+        period: "2025-S1",
+        indicatorKey: "imf_cpis_jp_assets_total",
+        category: "US",
+        value: 1000,
+        unit: "USD",
+        isApproximate: true,
+        isEstimated: false,
+      },
+    ]);
   });
 
   it("Derived 系 (world_holds_jp) は isEstimated=true", () => {
-    const records = parseImfCpisResponse(fixture("imf-cpis-jp-liabilities-total.json"));
-    const rows = toImfCpisObservationRows(records);
-    expect(rows.every((r) => r.isEstimated === true)).toBe(true);
+    const rows = toImfCpisObservationRows([
+      {
+        indicatorKey: "imf_cpis_jp_liabilities_total",
+        direction: "world_holds_jp",
+        assetClass: "total",
+        period: "2025-S1",
+        counterpartArea: "US",
+        counterpartCountry: "USA",
+        valueUsd: 2000,
+        seriesCode: "JPN.L.P_TOTINV_P_SCC_USD.S1.S1.USA.S",
+      },
+    ]);
+    expect(rows[0]?.isEstimated).toBe(true);
+    expect(rows[0]?.isApproximate).toBe(true);
   });
 });
 
@@ -413,6 +686,15 @@ describe("IMF_CPIS_INDICATORS / IMF_CPIS_DEFAULT_COUNTERPART_AREAS", () => {
     expect(IMF_CPIS_INDICATORS).toHaveLength(6);
     const keys = IMF_CPIS_INDICATORS.map((d) => d.key);
     expect(new Set(keys).size).toBe(6);
+    // 指標キーは旧ミラー時代と同一 (系列の意味同一を証明した範囲で維持)。
+    expect(keys).toEqual([
+      "imf_cpis_jp_assets_total",
+      "imf_cpis_jp_assets_equity",
+      "imf_cpis_jp_assets_debt",
+      "imf_cpis_jp_liabilities_total",
+      "imf_cpis_jp_liabilities_equity",
+      "imf_cpis_jp_liabilities_debt",
+    ]);
   });
 
   it("すべて R4 要件・holdings_stock・USD・semiannual を満たす", () => {
@@ -422,7 +704,16 @@ describe("IMF_CPIS_INDICATORS / IMF_CPIS_DEFAULT_COUNTERPART_AREAS", () => {
       expect(def.unit).toBe("USD");
       expect(def.frequency).toBe("semiannual");
       expect(def.description.length).toBeGreaterThan(10);
-      expect(def.sourceUrl).toMatch(/^https:\/\//);
+      expect(def.sourceUrl).toBe(IMF_CPIS_SOURCE_URL);
+    }
+  });
+
+  it("取得元は公式 (data.imf.org) で、ミラーへの言及が無い", () => {
+    expect(IMF_CPIS_SOURCE_URL).toBe("https://data.imf.org/en/datasets/IMF.STA:PIP");
+    for (const def of IMF_CPIS_INDICATORS) {
+      expect(def.usageTerms).not.toMatch(/DBnomics|ミラー/);
+      expect(def.usageTerms).toMatch(/公式/);
+      expect(def.limitations).not.toMatch(/DBnomics/);
     }
   });
 
@@ -433,7 +724,7 @@ describe("IMF_CPIS_INDICATORS / IMF_CPIS_DEFAULT_COUNTERPART_AREAS", () => {
 });
 
 describe("IMF_CPIS_INDICATORS の定義の正確さ (ルール7)", () => {
-  it("CPIS は外貨準備を対象外とする旨を全指標の説明/限界に明記し、「政府を含むすべて」と誤認させない", () => {
+  it("pip は外貨準備を対象外とする旨を全指標の説明/限界に明記し、「政府を含むすべて」と誤認させない", () => {
     for (const def of IMF_CPIS_INDICATORS) {
       expect(def.limitations).toContain("外貨準備");
       expect(def.description).not.toContain("政府・企業・個人などすべて合計");
@@ -451,77 +742,14 @@ describe("IMF_CPIS_INDICATORS の定義の正確さ (ルール7)", () => {
     for (const def of liab) {
       expect(def.description).not.toContain("日本国内で保有");
       expect(def.description).toContain("発行した証券");
+      expect(def.description).toContain("SCC");
     }
   });
-});
 
-describe.skipIf(!hasFixtures)("半期調査の正式開始 (2013) 前の S1 は取り込まない", () => {
-  it("実フィクスチャの海外→日本 世界計 (W00) で、2009-S1〜2012-S1 の試行分 (約250〜320億ドル) を除外する", () => {
-    const records = parseImfCpisResponse(fixture("imf-cpis-jp-liabilities-total.json"));
-    const w00 = records.filter((r) => r.counterpartArea === "W00");
-    // 生データは 40 期 (うち 2009-S1/2010-S1/2011-S1/2012-S1 が一部報告国のみの 25.4B〜32.1B USD)。
-    expect(w00).toHaveLength(36);
-    expect(w00.some((r) => /^(2009|2010|2011|2012)-S1$/.test(r.period))).toBe(false);
-    // 年次調査時代の年末値 (S2) と、2013-S1 以降は残す。
-    expect(w00.find((r) => r.period === "2008-S2")?.valueUsd).toBe(1166017025941);
-    expect(w00.find((r) => r.period === "2012-S2")?.valueUsd).toBeGreaterThan(1e12);
-    expect(w00.find((r) => r.period === "2013-S1")?.valueUsd).toBeGreaterThan(1e12);
-  });
-});
-
-describe.skipIf(!hasFixtures)("parseImfCpisResponse — 部門 (手作りの合成データ)", () => {
-  it("REF_SECTOR / COUNTERPART_SECTOR が T (合計) 以外なら throw し、合計として誤収載しない", () => {
-    const base = fixture("imf-cpis-jp-assets-total.json") as {
-      series: { docs: Array<{ dimensions: Record<string, string> }> };
-    };
-    const mutated = JSON.parse(JSON.stringify(base)) as typeof base;
-    mutated.series.docs[0]!.dimensions.REF_SECTOR = "CB";
-    expect(() => parseImfCpisResponse(mutated)).toThrow(/部門/);
-    const mutated2 = JSON.parse(JSON.stringify(base)) as typeof base;
-    mutated2.series.docs[0]!.dimensions.COUNTERPART_SECTOR = "GG";
-    expect(() => parseImfCpisResponse(mutated2)).toThrow(/部門/);
-  });
-});
-
-describe.skipIf(!hasFixtures)("fetchImfCpis — 要求系列と応答系列の突き合わせ (fetch は差し替え)", () => {
-  const body = () => fixture("imf-cpis-jp-assets-total.json");
-  const respond = (json: unknown) =>
-    (async () => new Response(JSON.stringify(json), { status: 200 })) as unknown as typeof fetch;
-
-  it("要求したが応答に無い系列は missingSeriesCodes で明示し、黙って欠落させない", async () => {
-    const result = await fetchImfCpis(
-      [{ direction: "jp_holds_abroad", assetClass: "total", counterpartAreas: ["US", "KY", "W00", "TW"] }],
-      { fetchImpl: respond(body()) }
-    );
-    expect(result.missingSeriesCodes).toEqual(["B.JP.I_A_T_T_T_BP6_USD.T.T.TW"]);
-    expect(result.records.some((r) => r.counterpartArea === "US")).toBe(true);
-  });
-
-  it("全系列が返れば missingSeriesCodes は空", async () => {
-    const result = await fetchImfCpis(
-      [{ direction: "jp_holds_abroad", assetClass: "total", counterpartAreas: ["US", "KY", "W00"] }],
-      { fetchImpl: respond(body()) }
-    );
-    expect(result.missingSeriesCodes).toEqual([]);
-  });
-
-  it("要求していない系列が返れば throw", async () => {
-    await expect(
-      fetchImfCpis(
-        [{ direction: "jp_holds_abroad", assetClass: "total", counterpartAreas: ["US", "KY"] }],
-        { fetchImpl: respond(body()) }
-      )
-    ).rejects.toThrow(/要求していない系列/);
-  });
-
-  it("num_found が docs 件数より多い (応答打ち切り) なら throw", async () => {
-    const truncated = JSON.parse(JSON.stringify(body())) as { series: { num_found: number } };
-    truncated.series.num_found = 99;
-    await expect(
-      fetchImfCpis(
-        [{ direction: "jp_holds_abroad", assetClass: "total", counterpartAreas: ["US", "KY", "W00"] }],
-        { fetchImpl: respond(truncated) }
-      )
-    ).rejects.toThrow(/打ち切られています/);
+  it("改訂と系列ごとの最新期のずれを限界に明記する", () => {
+    for (const def of IMF_CPIS_INDICATORS) {
+      expect(def.limitations).toContain("改訂");
+      expect(def.limitations).toContain("最新期は揃わない");
+    }
   });
 });

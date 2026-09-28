@@ -286,6 +286,17 @@ describe("validateMarginData (保存前の検証)", () => {
     expect(() => validateMarginData({ ...good, rows: [] })).toThrow(/0 件/);
     expect(() => validateMarginData({ ...good, pdfBytes: new Uint8Array(0) })).toThrow(/原本バイト列/);
   });
+
+  it("同一コードの複数行 (種類株崩壊の取込) は保存させず throw する", () => {
+    const dup = {
+      ...good,
+      rows: [
+        { code: "2593", sell: 77200, sell_chg: 0, buy: 244500, buy_chg: 0 },
+        { code: "2593", sell: 100, sell_chg: 0, buy: 17500, buy_chg: 0 },
+      ],
+    };
+    expect(() => validateMarginData(dup)).toThrow(/duplicate code.*2593/);
+  });
 });
 
 describe("marginArchiveInput (ルール6)", () => {

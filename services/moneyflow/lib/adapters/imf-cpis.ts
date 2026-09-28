@@ -1,5 +1,6 @@
 /**
- * moneyflow アダプタ: IMF CPIS (国別の対外・対内証券投資「残高」、DBnomics 経由)。
+ * moneyflow アダプタ: IMF pip (国別の対外・対内証券投資「残高」、公式 SDMX API 直接)。
+ * 旧称 CPIS。ミラー (DBnomics) 経由の旧実装は 2026-09-28 に公式口へ移行した。
  *
  * 取得元モジュール `../sources/imf-cpis.ts` (取得・解析・独自の指標定義) を
  * `MoneyflowSourceSpec` (`../source-spec.ts`) に揃える。規約は `./README.md`。
@@ -8,37 +9,42 @@
  * `imf-cpis` の 1 本。日本の「対外 (日本の投資家→海外の証券) / 対内 (海外の投資家→
  * 日本の証券、IMF の Derived 系列)」×「合計 / 株式 / 債券」の 6 指標を、
  * モジュール既定の相手国・地域 (`IMF_CPIS_DEFAULT_COUNTERPART_AREAS`: 16 か国・地域
- * + 世界計 W00) について取る。ただし対内 (Derived) からは台湾 (TW) を除く
- * (台湾は IMF 非加盟で CPIS に報告しないため、「台湾の投資家→日本」の Derived 系列は
- * 作られない。存在しない系列を毎回問い合わせると、DBnomics の返し方次第で
- * 毎回の警告かバッチ全体の失敗になる)。対外 3 × 17 + 対内 3 × 16 = 99 系列を
- * DBnomics へ 60 系列ずつ (= 2 リクエスト) まとめて問い合わせる。
+ * + 世界計) について取る。ただし対内 (Derived) からは台湾 (TW) を除く
+ * (台湾は IMF 非加盟で pip に報告しないため、「台湾の投資家→日本」の Derived 系列は
+ * 公式応答に存在しない。2026-09-28 実機確認: 要求しても応答に含まれない)。
+ * 対外 3 × 17 + 対内 3 × 16 = 99 系列を、向き×資産クラスの 6 バッチ
+ * (相手国を `+` で束ねた 1 リクエストずつ) で問い合わせる。
  *
  * ## 1 バッチの中身 (行数の上限)
  * 応答には各系列の全履歴 (1997年〜) が入っているが、全部を観測ログにすると
- * 99 系列 × 約 36 期 ≒ 3,600 行になり、1 バッチ約 600 行の目安を超える。
- * そのため **DBnomics 上の最新の半期とその前の 3 期 (計 4 期 = 2 年分)** だけを
+ * 99 系列 × 約 38 期 ≒ 3,800 行になり、1 バッチ約 600 行の目安を超える。
+ * そのため **応答の最新の半期とその前の 3 期 (計 4 期 = 2 年分)** だけを
  * 観測行にする (固定の規則。最大 99 × 4 = 396 行)。前の期を毎回含めるのは、
  * IMF が後から前の期を改訂したときに上書きで取り込むため。
+ * 系列ごとに最新期は揃わない (報告遅延の相手国がある) ため、窓は全レコードの
+ * 最大期から決め、遅れている系列の未公表の期は行を作らない (0 で埋めない)。
  *
  * ## 冪等キー
- * `imf-cpis-<最新の半期 YYYY-Hn>-updated-<DBnomics の IMF/CPIS 更新日 YYYY-MM-DD>`。
- * CPIS は後から改訂され、DBnomics のミラーも系列ごとにずれて更新されうるため、
- * ミラーの更新日 (応答の `datasets["IMF/CPIS"].updated_at`) を版として含める
- * (更新日が変われば別バッチとして取り直す)。キーの要素はすべてファイルの中身から
- * 決まるので、`toObservations()` はファイルから同じキーを再計算して一致を確かめる。
+ * `imf-cpis-<最新の半期 YYYY-Hn>-sha-<応答バイト列の sha256 先頭12桁>`。
+ * 公式の data 応答にはミラーの `updated_at` のような版表示が無いため、
+ * 応答バイト列そのもののハッシュを版とする (IMF の改訂でバイト列が変われば
+ * 別バッチとして取り直す)。キーの要素はすべてファイルの中身から決まるので、
+ * `toObservations()` はファイルから同じキーを再計算して一致を確かめる。
  *
  * ## resolve() が本体を取る理由
  * 「最新の半期」は系列の本体を取らないと分からない (モジュールに一覧・目次 API が
- * 無く、DBnomics 側にも半期の公表カレンダーは無い)。そのため resolve() で本体
- * (2 リクエスト・計数百 KB) を取ってキーを決め、fetch() はそのバイト列をそのまま
+ * 無く、公式側にも半期の公表カレンダーは無い)。そのため resolve() で本体
+ * (6 リクエスト・計約 180KB) を取ってキーを決め、fetch() はそのバイト列をそのまま
  * 返す (二重に取りに行かない)。
  *
  * ## 生バイト列の保管 (ルール6)
  * モジュールの `fetchImfCpis()` はパース済みレコードしか返さないため、
- * `fetchImpl` に「応答のコピーを取っておく fetch」を渡して、DBnomics の応答 JSON を
- * 1 リクエスト = 1 ファイル (`imf-cpis-dbnomics-01.json`, `-02.json`, …) として保管する。
+ * `fetchImpl` に「応答のコピーを取っておく fetch」を渡して、公式 SDMX API の応答 JSON を
+ * 1 リクエスト = 1 ファイル (`imf-cpis-imf-01.json` … `-06.json`。向き×資産クラスの順) として保管する。
+ * 旧ミラー名 (`imf-cpis-dbnomics-NN.json`) のファイルが混ざったら throw する
+ * (公式・ミラーの混在スコープを作らない)。
  */
+import { createHash } from "node:crypto";
 import type {
   IndicatorDefInput,
   MoneyflowCategoryKind,
@@ -57,9 +63,14 @@ import {
 } from "../source-spec.js";
 import {
   IMF_CPIS_API_BASE,
+  IMF_CPIS_DATAFLOW_AGENCY,
+  IMF_CPIS_DATAFLOW_ID,
+  IMF_CPIS_DATAFLOW_VERSION,
   IMF_CPIS_DEFAULT_COUNTERPART_AREAS,
+  IMF_CPIS_DSD_ID,
+  IMF_CPIS_DSD_VERSION,
   IMF_CPIS_INDICATORS,
-  buildImfCpisSeriesCode,
+  buildImfCpisDataKey,
   fetchImfCpis,
   latestImfCpisPeriod,
   parseImfCpisPeriod,
@@ -78,18 +89,17 @@ export const IMF_CPIS_SPEC_NAME = "imf-cpis";
 /** 1 バッチに含める半期の数 (最新の半期 + その前の 3 期 = 2 年分)。 */
 export const IMF_CPIS_PERIOD_WINDOW = 4;
 
-/** DBnomics 応答で IMF CPIS データセットのメタデータが入るキー。 */
-const DBNOMICS_DATASET_KEY = "IMF/CPIS";
+const PART_FILE_RE = /^imf-cpis-imf-\d{2}\.json$/;
+/** 旧ミラー名。混ざったら公式・ミラーの混在として止める。 */
+const LEGACY_PART_FILE_RE = /^imf-cpis-dbnomics-\d{2}\.json$/;
+const SHA12_RE = /^[0-9a-f]{12}$/;
 
-const PART_FILE_RE = /^imf-cpis-dbnomics-\d{2}\.json$/;
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** DBnomics 応答 1 本 (= 1 リクエスト) を保管するファイル名。n は 1 始まり。 */
+/** 公式 SDMX 応答 1 本 (= 1 リクエスト) を保管するファイル名。n は 1 始まり。 */
 export function imfCpisPartFilename(n: number): string {
   if (!Number.isInteger(n) || n < 1 || n > 99) {
     throw new Error(`[imf-cpis] 分割ファイルの番号が不正です (1〜99): ${n}`);
   }
-  return `imf-cpis-dbnomics-${String(n).padStart(2, "0")}.json`;
+  return `imf-cpis-imf-${String(n).padStart(2, "0")}.json`;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,10 +116,11 @@ const SERIES_TARGETS: ReadonlyArray<{ direction: ImfCpisDirection; assetClass: I
 ];
 
 /**
- * 対内 (Derived) で問い合わせない相手国・地域。台湾 (TW) は IMF 非加盟で CPIS に
+ * 対内 (Derived) で問い合わせない相手国・地域。台湾 (TW) は IMF 非加盟で pip に
  * 報告しないため、IMF が各国の資産報告を集め直して作る Derived 系列
  * (「台湾の投資家が持つ日本の証券」) は原理的に作られない。対外 (日本が報告する
  * 「日本の投資家が持つ台湾の証券」) には値があるので、そちらでは残す。
+ * 公式応答に TWN の Derived 系列が含まれないことは 2026-09-28 に実機確認した。
  */
 const LIABILITIES_EXCLUDED_AREAS: ReadonlySet<string> = new Set(["TW"]);
 
@@ -133,21 +144,17 @@ const FETCH_REQUESTS: readonly ImfCpisFetchRequest[] = SERIES_TARGETS.map((t) =>
   counterpartAreas: imfCpisCounterpartAreas(t.direction),
 }));
 
-/** 問い合わせる全系列の series_code (DBnomics の応答に含まれてよいのはこの集合だけ)。 */
+/** 問い合わせる全系列の公式データキー (公式 SDMX 応答に含まれてよいのはこの集合だけ)。 */
 export const IMF_CPIS_EXPECTED_SERIES_CODES: readonly string[] = SERIES_TARGETS.flatMap((t) =>
   imfCpisCounterpartAreas(t.direction).map((area) =>
-    buildImfCpisSeriesCode({ direction: t.direction, assetClass: t.assetClass, counterpartArea: area })
+    buildImfCpisDataKey({ direction: t.direction, assetClass: t.assetClass, counterpartArea: area })
   )
 );
 
 /**
- * IMF の相手国・地域コード → 観測ログの「区分」(日本語) と区分種別。
- * IMF (DBnomics) の英語表記: W00=World, US=United States, KY=Cayman Islands,
- * GB=United Kingdom, LU=Luxembourg, IE=Ireland, FR=France, DE=Germany,
- * NL=Netherlands, CH=Switzerland, AU=Australia, CA=Canada, HK=Hong Kong, China,
- * SG=Singapore, KR=Korea, Republic of, TW=Taiwan, Province of China, CN=China
- * (2026-09-27 取得の応答 `dimensions_values_labels.COUNTERPART_AREA` で確認)。
- * 世界計 (W00) は国別の軸ではなく相手国全体の合計なので区分種別を「全体」にする。
+ * IMF の相手国・地域コード (旧来の 2 文字表記) → 観測ログの「区分」(日本語) と区分種別。
+ * 公式 3 文字コードとの対応はモジュールの対応表 (codelist で名称確認済み) による。
+ * 世界計は国別の軸ではなく相手国全体の合計なので区分種別を「全体」にする。
  */
 const AREA_LABELS: ReadonlyMap<string, { category: string; categoryKind: MoneyflowCategoryKind }> = new Map([
   ["W00", { category: "世界計", categoryKind: "全体" }],
@@ -195,13 +202,13 @@ function toFlowType(ft: ImfCpisFlowType): MoneyflowFlowType {
 }
 
 function toRequirement(key: string, reqs: readonly string[]): MoneyflowRequirement {
-  // docs/moneyflow.md の在庫表で IMF CPIS は R4 (日本⇔海外・世界の概況)。
+  // docs/moneyflow.md の在庫表で IMF pip は R4 (日本⇔海外・世界の概況)。
   if (reqs.length === 1 && reqs[0] === "R4") return "R4";
   throw new Error(`[imf-cpis] ${key}: 要件が想定 (R4 のみ) と違います: ${reqs.join(",")}`);
 }
 
 function toUnit(unit: string): MoneyflowUnit {
-  // IMF CPIS は IMF が各国の報告を米ドルに換算した値 (倍率なし = 1 米ドル単位)。
+  // IMF pip は IMF が各国の報告を米ドルに換算した値 (倍率なし = 1 米ドル単位)。
   if (unit === "USD") return "米ドル";
   throw new Error(`[imf-cpis] 対応付けの無い単位です: ${unit}`);
 }
@@ -215,7 +222,7 @@ function directionOfKey(key: string): ImfCpisDirection {
 const COMMON_DESCRIPTION =
   " 値の単位は米ドル (IMF が各国の報告を米ドルに換算した額。1 = 1米ドルで、円には換算していない)。" +
   "値は『保有している額』で、流入 (プラス)・流出 (マイナス) のような向きを表す符号の付いた値ではない。" +
-  "6月末時点の値を『YYYY-H1』、12月末時点の値を『YYYY-H2』として記録する (IMF・DBnomics の表記では YYYY-S1 / YYYY-S2)。" +
+  "6月末時点の値を『YYYY-H1』、12月末時点の値を『YYYY-H2』として記録する (IMF の表記では YYYY-S1 / YYYY-S2)。" +
   "前の期との差にも値上がり・値下がりや為替の動きが混ざるため、差をそのまま『お金が流れ込んだ額』と読むことはできない。";
 
 const ASSETS_DESCRIPTION =
@@ -237,22 +244,23 @@ function commonLimitations(direction: ImfCpisDirection): string {
     ` 区分 (相手国・地域) は実装で固定した${count}か国・地域 (${names}) と世界計のみで、` +
     "IMF が定めた『主要国』ではない (日本の対外証券投資で残高が大きい国・ファンドの設立地・アジアの主要国を選んだもの)。" +
     `世界計は IMF が示す相手国全体の合計で、上の${count}か国・地域を足した値とは一致しない (ほかの国・地域の分を含むため)。` +
-    `1回の取込で記録するのは DBnomics 上の最新の半期とその前の${IMF_CPIS_PERIOD_WINDOW - 1}期 ` +
+    `1回の取込で記録するのは公式 API 応答の最新の半期とその前の${IMF_CPIS_PERIOD_WINDOW - 1}期 ` +
     `(計${IMF_CPIS_PERIOD_WINDOW}期=2年分) だけで、それより古い履歴は取り込まない。` +
-    "IMF の改訂で前の期の値が変わった場合は、DBnomics の更新後の取込で上書きされる。" +
+    "IMF の改訂で前の期の値が変わった場合は、改訂後の応答 (バイト列が変わり別バッチになる) の取込で上書きされる。" +
+    "相手国ごとの最新期は揃わないことがあり、遅れている系列の未公表の期は行を作らない (0 で埋めない)。" +
     "守秘義務による非開示やデータの無い組み合わせは行を作らない (0 で埋めない)。" +
     "前期比は記録しない (空欄)。変化は同じ指標・区分の前の期の行と比べること。" +
     "IMF 自体の公表も基準日 (6月末・12月末) から数か月以上あとになる。" +
-    "取得経路は DBnomics (db.nomics.world) の公開 API で、IMF 本体の新 API は利用登録が必要なため使っていない。" +
-    "利用条件は原典である IMF の規約 (DBnomics 上の記載: http://datahelp.imf.org/tos) に従い、出典 (IMF CPIS) の表示が必要。"
+    "取得経路は IMF 公式 SDMX API (api.imf.org) 直接で、登録・APIキー不要。" +
+    "利用条件は IMF の規約 (http://datahelp.imf.org/tos) に従い、出典 (IMF pip) の表示が必要。"
   );
 }
 
 const LIABILITIES_LIMITATIONS =
-  " 対内の世界計は、CPIS に報告している約80の国・地域の投資家が持つ日本の証券を IMF が足し上げた値で、" +
+  " 対内の世界計は、pip に報告している約80の国・地域の投資家が持つ日本の証券を IMF が足し上げた値で、" +
   "『海外の投資家全体が持つ日本の証券』の全額ではない (報告していない国・地域の投資家や、各国の外貨準備としての保有を含まないため、" +
   "日本の対外資産負債残高 (財務省・日本銀行) の証券投資負債より通常は小さい)。" +
-  "台湾は IMF に加盟しておらず CPIS に報告しないため、『台湾の投資家→日本』の値は作られず、対内の区分には台湾を入れていない" +
+  "台湾は IMF に加盟しておらず pip に報告しないため、『台湾の投資家→日本』の値は作られず、対内の区分には台湾を入れていない" +
   " (台湾の投資家の分は世界計にも含まれない)。";
 
 function toIndicatorDef(def: ImfCpisIndicatorDef): IndicatorDefInput {
@@ -270,8 +278,7 @@ function toIndicatorDef(def: ImfCpisIndicatorDef): IndicatorDefInput {
     flowType: toFlowType(def.flowType),
     description: def.description + COMMON_DESCRIPTION + (isAssets ? ASSETS_DESCRIPTION : LIABILITIES_DESCRIPTION),
     sourceUrl: def.sourceUrl,
-    // IMF CPIS 原典: 無料・出典明記が必要。DBnomics は「配信データは元の提供元と同じ
-    // 利用条件に従う」と明記 (モジュールの usageTerms 参照)。
+    // IMF 原典: 無料・出典明記が必要 (モジュールの usageTerms 参照)。
     license: "attribution-required",
     frequency: "半期",
     limitations: def.limitations + commonLimitations(direction) + (isAssets ? "" : LIABILITIES_LIMITATIONS),
@@ -279,18 +286,12 @@ function toIndicatorDef(def: ImfCpisIndicatorDef): IndicatorDefInput {
 }
 
 // ---------------------------------------------------------------------------
-// ファイル (DBnomics 応答 JSON) → 観測行 (純関数)
+// ファイル (公式 SDMX 応答 JSON) → 観測行 (純関数)
 // ---------------------------------------------------------------------------
-
-function isObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
 
 interface ParsedPart {
   filename: string;
-  /** DBnomics 上の IMF/CPIS データセットの更新日 (YYYY-MM-DD)。 */
-  updatedAt: string;
-  /** 応答に含まれた系列の series_code (観測値が全部欠損の系列も含む)。 */
+  /** 応答に含まれた系列の公式データキー (観測値が全部欠損の系列も含む)。 */
   seriesCodes: string[];
   records: ImfCpisRecord[];
 }
@@ -310,45 +311,21 @@ function decodeJson(file: SpecFile): unknown {
 }
 
 /**
- * DBnomics `/v22/series` 応答 1 本を読む。観測値の解析はモジュールの
- * `parseImfCpisResponse()` に任せ、ここではモジュールが見ない封筒部分
- * (errors・件数・データセット更新日) を確かめる。
+ * 公式 SDMX `/data` 応答 1 本を読む。観測値の解析はモジュールの
+ * `parseImfCpisResponse()` に任せる (dataflow/DSD の URN・次元・属性の検証を含む)。
+ * ファイル番号から向き×資産クラスが決まる (問い合わせ順と対応)。
  */
-function parsePart(file: SpecFile): ParsedPart {
+function parsePart(file: SpecFile, target: { direction: ImfCpisDirection; assetClass: ImfCpisAssetClass }): ParsedPart {
   const json = decodeJson(file);
-  // エラー応答は series を持たないことがあるので、モジュールのパーサより先に見る
-  // (「series が無い」より DBnomics 自身のエラー内容の方が原因の特定に役立つ)。
-  if (isObject(json) && json.errors !== null && json.errors !== undefined) {
-    throw new Error(`[imf-cpis] ${file.filename}: DBnomics がエラーを返しています: ${JSON.stringify(json.errors)}`);
-  }
-  const records = parseImfCpisResponse(json);
-  if (!isObject(json) || !isObject(json.series) || !Array.isArray(json.series.docs)) {
-    // parseImfCpisResponse が先に throw するはずだが、型を絞るために確かめる。
-    throw new Error(`[imf-cpis] ${file.filename}: series.docs がありません`);
-  }
-  const docs: unknown[] = json.series.docs;
-  const numFound = json.series.num_found;
-  if (json.series.offset !== 0 || numFound !== docs.length) {
-    throw new Error(
-      `[imf-cpis] ${file.filename}: 応答が途中で切れています (offset=${String(json.series.offset)}, ` +
-        `num_found=${String(numFound)}, docs=${docs.length})`
-    );
-  }
-  const seriesCodes = docs.map((d) => {
-    if (!isObject(d) || typeof d.series_code !== "string") {
-      throw new Error(`[imf-cpis] ${file.filename}: series_code の無い系列があります`);
-    }
-    return d.series_code;
+  // 公式 API のエラー応答は HTTP 非 2xx で返り、fetch 側で throw する。
+  // ここに data 応答以外の形 (エラー JSON・旧ミラー応答など) が来たら、
+  // モジュールのパーサが data オブジェクト無しとして拒む。
+  const parsed = parseImfCpisResponse(json, {
+    direction: target.direction,
+    assetClass: target.assetClass,
+    counterpartAreas: imfCpisCounterpartAreas(target.direction),
   });
-  const datasets = json.datasets;
-  const meta = isObject(datasets) ? datasets[DBNOMICS_DATASET_KEY] : undefined;
-  const updatedAt = isObject(meta) ? meta.updated_at : undefined;
-  if (typeof updatedAt !== "string" || !ISO_DATE_RE.test(updatedAt)) {
-    throw new Error(
-      `[imf-cpis] ${file.filename}: datasets["${DBNOMICS_DATASET_KEY}"].updated_at (YYYY-MM-DD) がありません: ${String(updatedAt)}`
-    );
-  }
-  return { filename: file.filename, updatedAt, seriesCodes, records };
+  return { filename: file.filename, seriesCodes: parsed.returnedKeys, records: parsed.records };
 }
 
 /** "YYYY-S1"/"YYYY-S2" → 規約の半期ラベル "YYYY-H1"/"YYYY-H2" と基準日 (6/30・12/31)。 */
@@ -369,15 +346,25 @@ function periodWindow(latest: string): string[] {
   return out;
 }
 
-export function imfCpisBatchKey(latestPeriod: string, updatedAt: string): string {
-  if (!ISO_DATE_RE.test(updatedAt)) throw new Error(`[imf-cpis] 更新日が YYYY-MM-DD ではありません: ${updatedAt}`);
-  return `${IMF_CPIS_SPEC_NAME}-${toHalfYear(latestPeriod).label}-updated-${updatedAt}`;
+export function imfCpisBatchKey(latestPeriod: string, contentSha12: string): string {
+  if (!SHA12_RE.test(contentSha12)) {
+    throw new Error(`[imf-cpis] 内容ハッシュが sha256 先頭12桁の16進ではありません: ${contentSha12}`);
+  }
+  return `${IMF_CPIS_SPEC_NAME}-${toHalfYear(latestPeriod).label}-sha-${contentSha12}`;
+}
+
+/** 保管ファイル (ファイル名順に連結) の sha256。 */
+export function imfCpisContentHash(files: readonly SpecFile[]): string {
+  const ordered = [...files].sort((a, b) => (a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0));
+  const h = createHash("sha256");
+  for (const f of ordered) h.update(f.bytes);
+  return h.digest("hex");
 }
 
 interface Analysis {
   key: string;
   latestPeriod: string;
-  updatedAt: string;
+  contentSha256: string;
   windowPeriods: string[];
   presentSeries: ReadonlySet<string>;
   drafts: ObservationDraft[];
@@ -394,23 +381,30 @@ function requireOrder(map: ReadonlyMap<string, number>, key: string, what: strin
 
 function analyzeFiles(files: readonly SpecFile[]): Analysis {
   if (files.length === 0) throw new Error("[imf-cpis] ファイルがありません");
+  const legacy = files.filter((f) => LEGACY_PART_FILE_RE.test(f.filename)).map((f) => f.filename);
+  if (legacy.length > 0) {
+    throw new Error(
+      `[imf-cpis] 旧ミラー名のファイルが混ざっています (公式・ミラーを混ぜない): ${legacy.join(", ")}`
+    );
+  }
   const unexpected = files.filter((f) => !PART_FILE_RE.test(f.filename)).map((f) => f.filename);
   if (unexpected.length > 0) {
     throw new Error(`[imf-cpis] 想定外のファイル名があります: ${unexpected.join(", ")}`);
   }
-  const parts: ParsedPart[] = [];
-  for (let n = 1; n <= files.length; n++) {
-    const name = imfCpisPartFilename(n);
-    parts.push(parsePart(requireSpecFile(files, (f) => f === name, `[imf-cpis] ${name}`)));
-  }
-
-  const updatedAts = [...new Set(parts.map((p) => p.updatedAt))];
-  if (updatedAts.length !== 1) {
+  // 公式口の取得契約は向き×資産クラスの 6 件で固定。欠落したバッチ (01 のみ等) を
+  // 黙って受理せず、6 件ちょうどを要求する。各ファイルの中身はファイル番号に
+  // 対応する要求 (向き×資産クラス・相手国集合) と突き合わせる (parsePart)。
+  if (files.length !== SERIES_TARGETS.length) {
     throw new Error(
-      `[imf-cpis] ファイル間で DBnomics の更新日が一致しません (取得中に更新された可能性): ${updatedAts.join(", ")}`
+      `[imf-cpis] ファイルが ${SERIES_TARGETS.length} 件ちょうどではありません (向き×資産クラスの 6 取得が契約): ${files.length} 件`
     );
   }
-  const updatedAt = updatedAts[0] as string;
+  const parts: ParsedPart[] = [];
+  for (let n = 1; n <= SERIES_TARGETS.length; n++) {
+    const name = imfCpisPartFilename(n);
+    const target = SERIES_TARGETS[n - 1]!;
+    parts.push(parsePart(requireSpecFile(files, (f) => f === name, `[imf-cpis] ${name}`), target));
+  }
 
   const expected = new Set(IMF_CPIS_EXPECTED_SERIES_CODES);
   const seenIn = new Map<string, string>();
@@ -429,7 +423,7 @@ function analyzeFiles(files: readonly SpecFile[]): Analysis {
 
   const records = parts.flatMap((p) => p.records);
   for (const r of records) {
-    const code = buildImfCpisSeriesCode({
+    const code = buildImfCpisDataKey({
       direction: r.direction,
       assetClass: r.assetClass,
       counterpartArea: r.counterpartArea,
@@ -479,10 +473,11 @@ function analyzeFiles(files: readonly SpecFile[]): Analysis {
   });
   keyed.sort((a, b) => a.order[0] - b.order[0] || a.order[1] - b.order[1] || a.order[2] - b.order[2]);
 
+  const contentSha256 = imfCpisContentHash(files);
   return {
-    key: imfCpisBatchKey(latestPeriod, updatedAt),
+    key: imfCpisBatchKey(latestPeriod, contentSha256.slice(0, 12)),
     latestPeriod,
-    updatedAt,
+    contentSha256,
     windowPeriods,
     presentSeries: new Set(seenIn.keys()),
     drafts: keyed.map((k) => k.draft),
@@ -530,19 +525,19 @@ async function resolveImfCpis(now: Date): Promise<{ key: string; fetch(): Promis
   const missing = IMF_CPIS_EXPECTED_SERIES_CODES.filter((c) => !analysis.presentSeries.has(c));
   if (missing.length > 0) {
     console.warn(
-      `[imf-cpis] DBnomics の応答に無かった系列が ${missing.length}/${IMF_CPIS_EXPECTED_SERIES_CODES.length} 件あります ` +
+      `[imf-cpis] 公式 API の応答に無かった系列が ${missing.length}/${IMF_CPIS_EXPECTED_SERIES_CODES.length} 件あります ` +
         `(行は作らない): ${missing.join(", ")}`
     );
   }
 
   const batch: FetchedBatch = {
     key: analysis.key,
-    source: `IMF CPIS (DBnomics 経由の半期データ) ${IMF_CPIS_API_BASE}`,
+    source: `IMF pip (公式半期データ) ${IMF_CPIS_API_BASE}`,
     metadata: {
-      dataset: "IMF/CPIS (DBnomics ミラー)",
-      dbnomicsDatasetUpdatedAt: analysis.updatedAt,
+      dataset: `${IMF_CPIS_DATAFLOW_AGENCY}:${IMF_CPIS_DATAFLOW_ID} ${IMF_CPIS_DATAFLOW_VERSION} (${IMF_CPIS_DSD_ID} ${IMF_CPIS_DSD_VERSION}・公式)`,
+      contentSha256: analysis.contentSha256,
       latestPeriod: latest.label,
-      latestPeriodDbnomics: analysis.latestPeriod,
+      latestPeriodOfficial: analysis.latestPeriod,
       periodsInBatch: analysis.windowPeriods.map((p) => toHalfYear(p).label),
       observationRows: analysis.drafts.length,
       seriesRequested: IMF_CPIS_EXPECTED_SERIES_CODES.length,
@@ -557,7 +552,7 @@ async function resolveImfCpis(now: Date): Promise<{ key: string; fetch(): Promis
 
 export const IMF_CPIS_ADAPTER_INDICATORS: readonly IndicatorDefInput[] = IMF_CPIS_INDICATORS.map(toIndicatorDef);
 
-/** IMF CPIS (日本の対外・対内証券投資残高、国・地域別、半期)。 */
+/** IMF pip (日本の対外・対内証券投資残高、国・地域別、半期。公式 API 直接)。 */
 export const imfCpisSpec: MoneyflowSourceSpec = {
   name: IMF_CPIS_SPEC_NAME,
   indicators: IMF_CPIS_ADAPTER_INDICATORS,

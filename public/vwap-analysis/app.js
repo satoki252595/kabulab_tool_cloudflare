@@ -52,7 +52,7 @@ let range = "all";               // 表示期間: "all" | "3mo" | "1mo" | "2wk"
 
 const apiBase = () => cfg.apiBase || "";
 // 銘柄ごとに取得済みデータをキャッシュ（期間切替で再フェッチしない）。
-let data = null;                 // { code, daily:[...], splits:[...], five:[...], margin:[...], factor:Map, covStart, covEnd, fiveDays, fiveErr, marginErr }
+let data = null;                 // { code, daily:[...], splits:[...], five:[...], margin:[...], factor:Map, covStart, covEnd, fiveDays, fiveErr, marginErr, marginAmbiguous:[...] }
 
 const RANGES = [["2wk", "2週"], ["1mo", "1ヶ月"], ["3mo", "3ヶ月"], ["all", "全期間"]];
 
@@ -268,7 +268,7 @@ async function load(code) {
   // 5分足・日足・信用残高を並列取得。日足が無ければ表示不可、5分足/信用は欠落しても明示して続行(ルール2)。
   const dailyReq = fetch(`${apiBase()}/api/daily?code=${code}`).then((r) => r.json());
   const fiveReq = fetch(`${apiBase()}/api/intra?code=${code}`).then((r) => r.json()).then(parseIntra).then((v) => ({ v })).catch((e) => ({ err: String(e) }));
-  const marginReq = fetch(`${apiBase()}/api/margin?code=${code}&n=104`).then((r) => r.json()).then((j) => ({ v: j.weeks || [] })).catch((e) => ({ err: String(e) }));
+  const marginReq = fetch(`${apiBase()}/api/margin?code=${code}&n=104`).then((r) => r.json()).then((j) => ({ v: j.weeks || [], amb: j.ambiguousWeeks || [] })).catch((e) => ({ err: String(e) }));
 
   let dj, fr, mr;
   try { [dj, fr, mr] = await Promise.all([dailyReq, fiveReq, marginReq]); }
@@ -291,7 +291,7 @@ async function load(code) {
 
   data = {
     code, daily, splits: (dj && dj.splits) || [], five, factor,
-    margin: mr.v || null, marginErr: mr.err || null,
+    margin: mr.v || null, marginErr: mr.err || null, marginAmbiguous: mr.amb || [],
     fiveDays: fiveDates.length, fiveStart: fiveDates[0] || null, fiveErr: fr.err || null,
     covStart, covEnd,
   };
@@ -399,6 +399,11 @@ function renderMeta(shown, mw) {
   } else {
     const note = data.marginErr ? "取得失敗" : "未取得";
     html += `<div class="stat"><span class="k">${tip("信用残高")}</span><span class="v sub">${note}</span></div>`;
+  }
+  // 旧取込の種類株崩壊で普通株・種類株を区別できない週は API が除外する (値は出さない)。
+  // 除外がある銘柄では週数を明示する (正常な週の表示は変えない)。
+  if (data.marginAmbiguous && data.marginAmbiguous.length) {
+    html += `<div class="stat"><span class="k">${tip("信用残高")}（一部週を除外）</span><span class="v sub">${data.marginAmbiguous.length}週を非表示（銘柄統合の不整合）</span></div>`;
   }
   $("meta").innerHTML = html;
 }
