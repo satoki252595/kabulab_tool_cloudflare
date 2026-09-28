@@ -91,6 +91,10 @@ export function buildAtrPreflightStatement(snap: AtrPreimage): D1BatchStatement 
 export type AnnualPreimage = {
   stockId: number;
   code: string;
+  /** 銘柄の凍結状態。非 active 行への誤適用 (凍結破り) を preflight で止める。 */
+  isActive: boolean;
+  /** 銘柄区分 (equity/ETF 等。内国普通株以外への適用も止める)。 */
+  instrumentType: string | null;
   /** `core_stock_financials.data_date` (銘柄の per-row 日付)。 */
   dataDate: string;
   /** 保存済み TTM 営業利益率 (再計算の入力)。 */
@@ -112,12 +116,12 @@ export type AnnualPreimage = {
 
 /**
  * 1 銘柄の年次 preflight 文を作る (純関数・副作用なし)。
- * eligible 全集合の照合 (snapshot JSON 1 bind) + 財務行・rsi 行・銘柄対応の
- * `IS` 照合。bind は snapshot JSON 1 + 値 8 の計 9。
+ * eligible 全集合の照合 (snapshot JSON 1 bind) + 財務行・rsi 行・銘柄対応
+ * (active・区分つき) の `IS` 照合。bind は snapshot JSON 1 + 値 10 の計 11。
  */
 export function buildAnnualPreflightStatement(snap: AnnualPreimage): D1BatchStatement {
   const sql = [
-    "-- preflight: 年次選定の入力全集合(全scope)+TTM+日付+銘柄対応+保存2列が計画時と一致しなければ SQL エラーで batch 全体 rollback",
+    "-- preflight: 年次選定の入力全集合(全scope)+TTM+日付+銘柄対応(active/区分)+保存2列が計画時と一致しなければ SQL エラーで batch 全体 rollback",
     "WITH snap(j) AS (VALUES (?)),",
     "exp_ben(fiscal_period_end, consolidated, revenue) AS (",
     "  SELECT json_extract(value, '$.fiscalPeriodEnd'), json_extract(value, '$.consolidated'), json_extract(value, '$.revenue') FROM json_each(json_extract((SELECT j FROM snap), '$.eligible'))",
@@ -126,7 +130,7 @@ export function buildAnnualPreflightStatement(snap: AnnualPreimage): D1BatchStat
     "  SELECT fiscal_period_end, consolidated, net_sales FROM jss_financials WHERE code = ? AND disclosure_type = '本決算' AND license_tag = 'commercial-ok' AND fiscal_period_end <= ?",
     ")",
     "SELECT json(CASE WHEN (SELECT count(*) FROM act_ben) = (SELECT count(*) FROM exp_ben) AND NOT EXISTS (SELECT * FROM act_ben EXCEPT SELECT * FROM exp_ben) AND NOT EXISTS (SELECT * FROM exp_ben EXCEPT SELECT * FROM act_ben)",
-    "  AND EXISTS (SELECT 1 FROM core_stocks WHERE id = ? AND code IS ?)",
+    "  AND EXISTS (SELECT 1 FROM core_stocks WHERE id = ? AND code IS ? AND is_active IS ? AND instrument_type IS ?)",
     "  AND EXISTS (SELECT 1 FROM core_stock_financials WHERE stock_id = ? AND data_date IS ? AND operating_margin IS ?)",
     "  AND EXISTS (SELECT 1 FROM rsi_percentile WHERE stock_id = ? AND is_blue_chip IS ? AND revenue_trend IS ?)",
     "  THEN 'null' ELSE '' END)",
@@ -139,6 +143,8 @@ export function buildAnnualPreflightStatement(snap: AnnualPreimage): D1BatchStat
       snap.asof,
       snap.stockId,
       snap.code,
+      bit(snap.isActive),
+      snap.instrumentType,
       snap.stockId,
       snap.dataDate,
       snap.operatingMargin,
