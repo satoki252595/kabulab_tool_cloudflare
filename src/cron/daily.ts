@@ -102,7 +102,8 @@ export interface DailySyncResult {
   totalStocks: number;
   successStocks: number;
   failedStocks: number;
-  marketContextOk: boolean;
+  /** null = 株式専用の実行でマクロは対象外。 */
+  marketContextOk: boolean | null;
   elapsedSec: number;
   failures: { code: string; error: string }[];
   /**
@@ -217,8 +218,8 @@ const TOLERATED_FAILURE_RATE = 0.01;
 /**
  * 月曜 (UTC) だけ真。週1ジョブ (prune・年次) の同 run 内分岐用。
  *
- * cron は平日 21:00 UTC なので UTC 曜日で見る。JST で見ると run は
- * 火〜土曜 06:00 になり「月曜」の run が存在しない。UTC 月曜 = 週の最初の run。
+ * 株式cronは平日17:13 UTCなのでUTC曜日で見る。JSTでは火〜土曜02:13。
+ * UTC月曜が週の最初の株式run。
  */
 export function isMondayUtc(now: Date = new Date()): boolean {
   return now.getUTCDay() === 1;
@@ -303,7 +304,7 @@ export function isDailySyncIncomplete(
   if (
     result.totalStocks === 0 ||
     result.successStocks + result.failedStocks !== result.totalStocks ||
-    !result.marketContextOk
+    result.marketContextOk === false
   ) {
     return true;
   }
@@ -634,17 +635,35 @@ async function recordPriceSyncFailureSafely(cause: unknown): Promise<void> {
  *
  * @param db createDailyDb() の戻り (Node→D1 HTTP)
  */
-export async function runDailySync(db: Db): Promise<DailySyncResult> {
+export async function runDailySync(
+  db: Db, options: { stocksOnly?: boolean } = {},
+): Promise<DailySyncResult> {
   try {
-    return await runDailySyncAndRecord(db);
+    return await runDailySyncAndRecord(db, options.stocksOnly === true);
   } catch (e) {
     await recordPriceSyncFailureSafely(e);
     throw e;
   }
 }
 
-async function runDailySyncAndRecord(db: Db): Promise<DailySyncResult> {
+async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<DailySyncResult> {
   const startedAt = Date.now();
+  const targetDate = new Date(startedAt).toISOString().split("T")[0];
+  if (stocksOnly) {
+    const utcMinutes = new Date(startedAt).getUTCHours() * 60 + new Date(startedAt).getUTCMinutes();
+    if (utcMinutes < 390 || utcMinutes >= 1260) {
+      throw new Error("株式専用同期は東証15:30 JST終了後から翌06:00 JST基準までに実行してください");
+    }
+    // 日本祝日カレンダーを推測しない。実日足がUTC対象日でなければ全書込を止める。
+    const session = await fetchChart("^N225", "1mo");
+    const actualDate = session.ohlcv.at(-1)?.date;
+    if (actualDate !== targetDate) {
+      throw new Error(
+        `株式同期の対象 ${targetDate} の日足を確認できません ` +
+        `(日経225実日足=${actualDate === undefined ? "未取得" : actualDate})。休場または取得遅延のため書込みを止めます。`
+      );
+    }
+  }
 
   // -----------------------------------------------------------------
   // Phase 1: スキーマ検証 + 処理対象 (active かつ equity) の取得 + 既存 OHLCV の MAX(date)
@@ -665,13 +684,13 @@ async function runDailySyncAndRecord(db: Db): Promise<DailySyncResult> {
   // -----------------------------------------------------------------
   // Phase 2: マクロコンテキスト
   // -----------------------------------------------------------------
-  console.info("[sync-daily] Phase 2: マクロコンテキスト取得");
-  const marketContext = await fetchMarketContextDraft();
-  const deferMarketContextPersistence = marketContext.failures.some(
+  console.info(`[sync-daily] Phase 2: マクロコンテキスト${stocksOnly ? "対象外" : "取得"}`);
+  const marketContext = stocksOnly ? null : await fetchMarketContextDraft();
+  const deferMarketContextPersistence = marketContext?.failures.some(
     ({ error }) => isTransientDailySyncFailure(error)
   );
-  let marketContextOk: boolean | undefined;
-  if (!deferMarketContextPersistence) {
+  let marketContextOk: boolean | null | undefined = stocksOnly ? null : undefined;
+  if (marketContext !== null && !deferMarketContextPersistence) {
     marketContextOk = await persistMarketContextWithDiagnostics(
       db,
       marketContext.draft
@@ -705,7 +724,8 @@ async function runDailySyncAndRecord(db: Db): Promise<DailySyncResult> {
       if (!target) break;
       try {
         await stockStartGate.wait();
-        const snap = await buildSnapshot(target.id, target.code, target.sector);
+        const snap = await buildSnapshot(target.id, target.code, target.sector,
+          stocksOnly ? targetDate : undefined);
         pending.push({
           target,
           snap,
@@ -738,7 +758,7 @@ async function runDailySyncAndRecord(db: Db): Promise<DailySyncResult> {
   );
 
   const recoveryTargets = prioritizeDailyRecoveryFailures(
-    marketContext.failures,
+    marketContext === null ? [] : marketContext.failures,
     firstPassFailures
   );
   let recoveredStocks = 0;
@@ -747,6 +767,7 @@ async function runDailySyncAndRecord(db: Db): Promise<DailySyncResult> {
     async (recoveryTarget) => {
       try {
         if (recoveryTarget.kind === "macro") {
+          if (marketContext === null) throw new Error("株式専用同期でマクロ回収を要求しました");
           await fetchMarketContextTarget(
             marketContext.draft,
             recoveryTarget.target
@@ -756,7 +777,8 @@ async function runDailySyncAndRecord(db: Db): Promise<DailySyncResult> {
         // 回収は件数が少ないので 1 行 flush のまま (初回パスと行 builder は共有)。
         const target = recoveryTarget.target;
         await stockStartGate.wait();
-        const snap = await buildSnapshot(target.id, target.code, target.sector);
+        const snap = await buildSnapshot(target.id, target.code, target.sector,
+          stocksOnly ? targetDate : undefined);
         await writeStockSnapshot(db, snap, latestDateByStock.get(target.id), {
           writeAnnual,
           runStartedSec,
@@ -795,7 +817,7 @@ async function runDailySyncAndRecord(db: Db): Promise<DailySyncResult> {
     }
   }
 
-  if (marketContextOk === undefined) {
+  if (marketContext !== null && marketContextOk === undefined) {
     marketContextOk = await persistMarketContextWithDiagnostics(
       db,
       marketContext.draft
@@ -854,6 +876,13 @@ async function runDailySyncAndRecord(db: Db): Promise<DailySyncResult> {
   );
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
+  if (marketContextOk === undefined) throw new Error("マクロ同期結果を確認できません");
+  if (stocksOnly && Date.now() > Date.parse(`${targetDate}T21:00:00Z`)) {
+    throw new Error(
+      `株式同期が ${targetDate} の翌06:00 JST基準を超えました。` +
+      "基準後の値は過去レポートに使えません。日次レポートの欠損と同期遅延を確認してください。"
+    );
+  }
   console.info(
     `[sync-daily] 完了: 成功=${succeeded} 失敗=${failures.length} 所要=${elapsedSec.toFixed(1)}s`
   );
@@ -880,6 +909,30 @@ async function runDailySyncAndRecord(db: Db): Promise<DailySyncResult> {
     failures,
     tradingDate,
   };
+}
+
+/** 米国市場の取引終了後にマクロだけ同期。銘柄全量・株価同期完了記録は触らない。 */
+export async function runMarketContextSync(db: Db): Promise<boolean> {
+  const startedAt = Date.now();
+  const ny = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "numeric",
+    hourCycle: "h23",
+  }).formatToParts(new Date(startedAt)).map((part) => [part.type, part.value]));
+  const nyMinutes = Number(ny.hour) * 60 + Number(ny.minute);
+  if (["Mon", "Tue", "Wed", "Thu", "Fri"].includes(ny.weekday) &&
+      nyMinutes >= 570 && nyMinutes < 960) {
+    throw new Error("米国市場の取引中です。マクロ専用同期は通常市場終了後に実行してください");
+  }
+  const context = await fetchMarketContextDraft();
+  const recovery = await recoverTransientDailyFailures(
+    context.failures,
+    (target) => fetchMarketContextTarget(context.draft, target),
+    { deadlineMs: startedAt + RECOVERY_TIME_BUDGET_MS },
+  );
+  for (const failure of recovery.failures) {
+    console.warn(`[sync-context] マクロ未回復 ${failure.target}:`, failure.error);
+  }
+  return persistMarketContextWithDiagnostics(db, context.draft);
 }
 
 /**
@@ -1001,7 +1054,8 @@ export async function aggregateSectorDaily(
 async function buildSnapshot(
   stockId: number,
   code: string,
-  sector: string | null
+  sector: string | null,
+  expectedDate?: string,
 ): Promise<StockSnapshot> {
   // 1 回の Chart(5y) + QuoteSummary で全指標を賄う
   const raw = await fetchStockRawData(code, "5y");
@@ -1022,6 +1076,9 @@ async function buildSnapshot(
 
   // -- 6mo スライス → swing 用指標 —— adjclose ベースで分割歪みを除去 --
   const ohlcv6mo = raw.ohlcv.slice(-130);
+  if (expectedDate !== undefined && ohlcv6mo.at(-1)?.date !== expectedDate) {
+    throw new Error(`${code}: 対象 ${expectedDate} の実日足が未取得です。古い日の指標を書き直しません。`);
+  }
   const closes6mo = ohlcv6mo.map((r) => r.adj ?? r.close);
 
   const sma5Val = sma(closes6mo, 5);

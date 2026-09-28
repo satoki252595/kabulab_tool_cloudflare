@@ -18,6 +18,7 @@ import {
   createDailyDb,
   isDailySyncIncomplete,
   runDailySync,
+  runMarketContextSync,
 } from "../../src/cron/daily.js";
 import { requireYahooProxyForNodeSync } from "../../src/shared/env.js";
 import { rootCauseMessage } from "../../src/shared/errors.js";
@@ -52,10 +53,20 @@ function printFailureSummary(
 }
 
 async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  if (args.length > 1 || (args.length === 1 &&
+      args[0] !== "--stocks-only" && args[0] !== "--context-only")) {
+    throw new Error("指定できる引数は --stocks-only または --context-only です");
+  }
   // Node から Yahoo を直接叩く構成は 429 と全銘柄リトライを招くため、DB 接続前に拒否。
   requireYahooProxyForNodeSync();
   const db = createDailyDb();
-  const result = await runDailySync(db);
+  if (args[0] === "--context-only") {
+    if (!await runMarketContextSync(db)) throw new Error("マクロ同期が不完全です");
+    console.info("[sync-context] 完了 (株式全量同期は対象外)");
+    return;
+  }
+  const result = await runDailySync(db, { stocksOnly: args[0] === "--stocks-only" });
 
   if (result.failures.length > 0) {
     printFailureSummary(result.failures);
@@ -64,7 +75,7 @@ async function main(): Promise<void> {
   if (isDailySyncIncomplete(result)) {
     throw new Error(
       `日次同期が不完全です: 成功=${result.successStocks}/${result.totalStocks}, ` +
-        `失敗=${result.failedStocks}, マクロ=${result.marketContextOk ? "成功" : "失敗"}`
+        `失敗=${result.failedStocks}, マクロ=${result.marketContextOk === null ? "対象外" : result.marketContextOk ? "成功" : "失敗"}`
     );
   }
 

@@ -53,7 +53,7 @@ GitHub Actions 4 本 (`.github/workflows/` の stock-sync / vwap-ingest / catchu
 
 | ワークフロー | 内容 | スケジュール (UTC) |
 |---|---|---|
-| `.github/workflows/stock-sync.yml` | 日次 stock(core/rsi/swing) / 月次 universe + otakara rebuild | 平日 21:00 / 10 日 01:30 |
+| `.github/workflows/stock-sync.yml` | 日次 stock(core/rsi/swing) / マクロ / 月次 universe + otakara rebuild | 平日17:13（株式）・21:00（マクロ） / 10日01:30 |
 | `.github/workflows/vwap-ingest.yml` | 日足10年 + 5分足 / 信用残高週次 → R2 | 月水金 08:00 / 土 09:00 |
 | `.github/workflows/catchup.yml` | 005 有報(EDINET) + 006 適時開示(TDnet) キャッチアップ | 平日 11:00 |
 | `.github/workflows/ci.yml` | 型・lint・単体テスト + 地図突合 + D1 generate 差分 (push/PR) | — (cron なし) |
