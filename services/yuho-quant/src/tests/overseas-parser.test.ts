@@ -212,6 +212,26 @@ describe("地域別バケット (REGION_BUCKETS) — 同義地域語の正規化
   });
 });
 
+describe("F2 根因修正: 重複地域名の曖昧表は ok を出さない (aggregate-before-dedup 防止)", () => {
+  it("S100J2E7 生産実績表 (地域×品目の2次元表) は却下され、取込 pure path でも誤った ok 保存行を生まない", () => {
+    // raw(実原本の必要表のみ切り出し) → parse → 取込 caller と同一 key の pure dedup
+    const r = parseOverseasHtml(fx("georows-dup-region-ambiguous-S100J2E7.html"), "2020-03-31");
+    // pre-fix は ok_geo_rows で日本/アジアの重複＋海外売上高 19827 を出していた。fix 後は却下。
+    expect(r.status).toBe("geo_present_unstructured");
+    expect(r.facts).toHaveLength(0);
+    // ingest.ts / backfill-overseas.ts / backfill-missing-docs.ts と同一の dedup
+    // ((会計期末, 地域名) 先頭採用) を通しても保存行は生まれない
+    const seen = new Set<string>();
+    const saved = r.facts.filter((f) => {
+      const k = `${f.fiscalYearEnd} ${f.regionName}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    expect(saved).toHaveLength(0);
+  });
+});
+
 describe("ルール1/2: 構造化できない/開示なしは数値を作らない", () => {
   it("地域別売上の無いHTML (空テーブル) は no_overseas_table", () => {
     const r = parseOverseasHtml("<html><body><p>本文</p></body></html>", "2025-03-31");
