@@ -265,3 +265,13 @@ D1 raw_sha256→jss_raw_files.sha256→保存済みR2 keyと、既存jss-apiの
 この2,785件すべてのR2索引coverageは今回のfinancial-only proofでは検証していない。
 未確認のkey・新しいendpoint・推測URLを作らず、Notion原本の確認済み範囲と
 PDF番号・閲覧導線の未確認範囲を下流へ区別して伝えた。
+
+
+追記のsource実読取1 query（08:01 UTC）では、doc_id無しTDnet 2,785行に対応する
+jss_raw_filesのSHA索引・r2_key・doc_idはすべて0件だった。
+R2物理オブジェクトの不存在を証明した結果ではなく、既存SHA endpointが必要とする索引が
+未接続であることの確認。下流財務readerはraw SHA/⑤ page_idを渡さず、財務表の出典文字列を
+flattenしているため、この既存Notion原本relationは記事の出典リンクへ継承されていない。
+別経路の開示documentUrlは保持されるが、各財務原本との同一性はこの検査では未証明。
+source修復の成功と原本の画面到達性を混同せず、残る導線gapを下流ownerへ報告した。
+この確認ではsource書込・新しいendpoint・推測URL・下流HEAD変更を行っていない。
