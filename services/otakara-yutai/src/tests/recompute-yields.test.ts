@@ -218,4 +218,28 @@ describe("applyYieldRecompute", () => {
     const redo = await applyYieldRecompute(db, again);
     expect(redo).toEqual({ updated: 0, scoresUpdated: 0 });
   });
+
+  it("中断 (利回りだけ書いてスコア未書込) からの再実行で残りを回復する", async () => {
+    // Node/D1-REST 経路に db.batch() が無いため、利回りとスコアの更新の間で
+    // 中断すると部分状態が残る。同じ計画の再実行で回復することを固定する。
+    sqlite
+      .prepare("UPDATE otakara_stock_financials SET yutai_yield = ? WHERE stock_id = ?")
+      .run((5000 / (993 * 100)) * 100, STOCK_A);
+    // 利回りは新しいがスコアは旧利回りのまま = 部分状態
+    const partial = await planYieldRecompute(db, [STOCK_A]);
+    expect(partial.entries.map((e) => [e.changed, e.scoreChanged])).toEqual([[false, true]]);
+    const healed = await applyYieldRecompute(db, partial);
+    expect(healed).toEqual({ updated: 0, scoresUpdated: 1 });
+    const expectA = scoreStock({
+      price: 993, per: 10, pbr: 1.0, dividendYield: 2.0, roe: 8.0,
+      ma25: null, rsi14: null, macd: null, macdSignal: null, yutaiYield: finOf(STOCK_A).yutai_yield,
+    });
+    expect(scoreOf(STOCK_A)).toEqual({
+      fundamental_score: expectA.fundamentalScore,
+      technical_score: expectA.technicalScore,
+      total_score: expectA.totalScore,
+    });
+    const again = await planYieldRecompute(db, [STOCK_A]);
+    expect(again.entries.every((e) => !e.changed && !e.scoreChanged)).toBe(true);
+  });
 });

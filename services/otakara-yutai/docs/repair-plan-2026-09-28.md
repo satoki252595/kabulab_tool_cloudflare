@@ -53,8 +53,10 @@ token) が渡されるまで何も書かない。** コード側の再発防止�
   書き換え、利回りを置き去りにした。書き手は fetch (06-22) と import の
   2 つに閉じることをコードで確認。保存値は旧入力の整数合計に完全一致
   (6/7 件で一意に復元。7135 のみ 2 解)。
-- F3-frozen 21 行: 06-22 fetch で優待行ごと消滅 (`is_yutai=0`、一覧・詳細
-  とも非表示。実害なし)。保存値は消滅前の利回り。
+- F3-frozen 23 行: 06-22 fetch で優待行ごと消滅 (`is_yutai=0`)。保存値は
+  消滅前の利回り。21 行は Stage B で null 化、2 行 (1909・6678) は既に
+  null でスコアも一致 (再計算で無変更を確認)。公開面への影響は全行なし
+  (Stage D の行別分類で証明)。
 - 6096 (53.35%): 50% cap 制定 (09-12 #13) 前の保存値。行自体は非 active
   (一覧に出ない)。詳細直 URL のみ表示。
 - 4333/6210 (1e-8): Neon 時代の `pg real` (float4) 量子化。
@@ -110,13 +112,51 @@ SELECT COUNT(*) FROM yutai_benefits WHERE estimated_value = 0; -- 0 であるこ
 -- 3. 同一ステージの再実行で changes() = 0 (冪等)
 ```
 
-## Stage D: 孤児行 (root 判断。推奨: 放置)
+## Stage D: 孤児行の行別分類 (23 行。推奨: 行は残す)
 
-F3-frozen 21 銘柄 (`is_yutai=0`) の `otakara_stock_financials` /
-`otakara_stock_scores` 行は非表示のまま残る。月次 rebuild は対象外
-(現設計どおり) のため半永久に frozen。削除もできるが、復活時 (再優待化)
-の履歴が消える。推奨は放置 (Stage B で利回り・スコアは現入力に合わせる
-ため、復活時の不整合もない)。
+`is_yutai=0` かつ派生行 (`otakara_stock_financials` / `_scores`) ありの
+全 23 行を 1 行ずつ分類した (2026-09-28 読取)。親キー (code) は 23 行とも
+`core_stocks` に存在 (付け替えなし)。優待行は全行 0。
+
+| code | 上場 | 派生行 | data_date | Stage B | 現影響 |
+|---|---|---|---|---|---|
+| 1768 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 1909 | active | fin+sco | 2026-05-17 | 対象外 (利回り既にnull・スコア一致) | なし |
+| 2475 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 2686 | 非active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 3121 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 3133 | active | fin+sco | 2026-06-01 | 利回り→null・スコア書換 | なし |
+| 3198 | 非active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 3544 | active | fin+sco | 2026-06-16 | 利回り→null・スコア書換 | なし |
+| 3640 | active | fin+sco | 2026-06-01 | 利回り→null・スコア書換 | なし |
+| 3917 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 3924 | 非active | fin+sco | 2026-05-01 | 利回り→null・スコア書換 | なし |
+| 4381 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 4917 | 非active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 5252 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 5535 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 6364 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 6678 | active | fin+sco | 2026-06-01 | 対象外 (利回り既にnull・スコア一致) | なし |
+| 7164 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 7180 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 7435 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 7490 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 7985 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+| 8005 | active | fin+sco | 2026-05-17 | 利回り→null・スコア書換 | なし |
+
+現影響なしの根拠 (全経路を確認):
+- 画面・API 5 経路: `/api/screening`・`/`・`/screening`・`/stocks/:code` は
+  `is_yutai=true` で除外。`/genres/:slug` は `is_yutai` を直接見ないが、
+  集計 JSON (`yutai_genre_ids`) で絞り、凍結 19 行の JSON は全て空のため
+  1 行も出ない (実測で確認)。
+- `jss-api` の valuation 読取は `yutai_yield`・スコア列を読まない。
+- 月次 rebuild は `is_yutai=0` を作り直さず (Phase 2)、消しもしない
+  (設計どおり)。復活時 (優待行の再出現) は Phase 1 が `is_yutai` を
+  自己修復し、次回 rebuild で作り直す。Stage B 後の値は現入力と一致
+  するため、復活時の不整合もない。
+
+結論: 23 行とも行は残す (削除しない)。非 active の 4 行も月次の
+no-delete 設計に従い残す。削除は root 判断の別件とする。
 
 ## 対象外 (非対象の明示)
 
