@@ -42,6 +42,12 @@ export type StockBenefitPreimage = {
 
 export type StockPreimage = {
   stockId: number;
+  /**
+   * 親銘柄の同一性 (銘柄 ID・コード・active・区分)。付け替え・凍結破り・
+   * 区分違いを preflight で止める。 snapshot 時に行が無ければ STOP する
+   * (null 許容にしない。ガードを縮めないため)。
+   */
+  parent: { code: string; isActive: boolean; instrumentType: string | null };
   /** 同銘柄の優待行の全集合 (追加・削除の検知を含む)。 */
   benefits: StockBenefitPreimage[];
   /**
@@ -90,8 +96,15 @@ export function snapshotStockPreimages(
         `銘柄 ${stockId} の財務行はあるのにスコア入力がありません (ガードを縮めない)`
       );
     }
+    const parent = inputs.parents.get(stockId);
+    if (!parent) {
+      throw new Error(
+        `銘柄 ${stockId} の親銘柄行 (core_stocks) がありません (ガードを縮めない。missing STOP)`
+      );
+    }
     out.set(stockId, {
       stockId,
+      parent: { code: parent.code, isActive: parent.isActive, instrumentType: parent.instrumentType },
       benefits: (inputs.benefits.get(stockId) ?? [])
         .map((b) => ({
           id: b.rowId,
@@ -235,11 +248,14 @@ export function buildStockPreflightStatement(snapshot: StockPreimage): D1BatchSt
     "),",
     "sco_ok(ok) AS (",
     "  SELECT CASE WHEN json_extract((SELECT j FROM snap), '$.scores') IS NULL THEN (SELECT count(*) = 0 FROM otakara_stock_scores WHERE stock_id = ?) ELSE EXISTS (SELECT 1 FROM otakara_stock_scores WHERE stock_id = ? AND fundamental_score IS json_extract((SELECT j FROM snap), '$.scores.fundamentalScore') AND technical_score IS json_extract((SELECT j FROM snap), '$.scores.technicalScore') AND total_score IS json_extract((SELECT j FROM snap), '$.scores.totalScore')) END",
+    "),",
+    "par_ok(ok) AS (",
+    "  SELECT EXISTS (SELECT 1 FROM core_stocks WHERE id = ? AND code IS json_extract((SELECT j FROM snap), '$.parent.code') AND is_active IS json_extract((SELECT j FROM snap), '$.parent.isActive') AND instrument_type IS json_extract((SELECT j FROM snap), '$.parent.instrumentType'))",
     ")",
-    "SELECT json(CASE WHEN (SELECT count(*) FROM act_ben) = (SELECT count(*) FROM exp_ben) AND NOT EXISTS (SELECT * FROM act_ben EXCEPT SELECT * FROM exp_ben) AND NOT EXISTS (SELECT * FROM exp_ben EXCEPT SELECT * FROM act_ben) AND (SELECT ok FROM fin_ok) AND (SELECT ok FROM sco_ok) THEN 'null' ELSE '' END)",
+    "SELECT json(CASE WHEN (SELECT count(*) FROM act_ben) = (SELECT count(*) FROM exp_ben) AND NOT EXISTS (SELECT * FROM act_ben EXCEPT SELECT * FROM exp_ben) AND NOT EXISTS (SELECT * FROM exp_ben EXCEPT SELECT * FROM act_ben) AND (SELECT ok FROM fin_ok) AND (SELECT ok FROM sco_ok) AND (SELECT ok FROM par_ok) THEN 'null' ELSE '' END)",
   ].join("\n");
   const sid = snapshot.stockId;
-  return { sql, params: [JSON.stringify(snapshot), sid, sid, sid, sid, sid] };
+  return { sql, params: [JSON.stringify(snapshot), sid, sid, sid, sid, sid, sid] };
 }
 
 /** batch 1 件分の送信口。本番は `createD1HttpBatchSender()`、テストでは差し替える。 */

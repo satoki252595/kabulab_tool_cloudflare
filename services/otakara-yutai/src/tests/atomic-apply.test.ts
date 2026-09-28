@@ -487,6 +487,15 @@ describe("preflight ガード", () => {
     ["スコアの書き換え", () => sqlite.prepare("UPDATE otakara_stock_scores SET total_score = 0 WHERE stock_id = 101").run()],
     ["財務行の削除", () => sqlite.prepare("DELETE FROM otakara_stock_financials WHERE stock_id = 101").run()],
     ["スコア行の削除", () => sqlite.prepare("DELETE FROM otakara_stock_scores WHERE stock_id = 101").run()],
+    ["親コードの付け替え", () => sqlite.prepare("UPDATE core_stocks SET code = '9102' WHERE id = 101").run()],
+    ["親activeの書き換え (凍結破りの防止)", () => sqlite.prepare("UPDATE core_stocks SET is_active = 0 WHERE id = 101").run()],
+    ["親区分の書き換え", () => sqlite.prepare("UPDATE core_stocks SET instrument_type = 'etf' WHERE id = 101").run()],
+    ["親行の削除", () => {
+      // FK を一時OFFにして dangling 状態を作る (D1 本番は接続毎に FK 無効がありうる)。
+      sqlite.exec("PRAGMA foreign_keys = OFF");
+      sqlite.prepare("DELETE FROM core_stocks WHERE id = 101").run();
+      sqlite.exec("PRAGMA foreign_keys = ON");
+    }],
   ];
 
   it.each(drifts)("preimage の不一致 (%s) は batch 全体を落とし、書きかけを残さない", async (_name, mutate) => {
@@ -519,6 +528,15 @@ describe("preflight ガード", () => {
     // batch の書き込みは 1 文も残らない (drift 自体は batch 外のため残る)。
     expect(stateOf()).toEqual(before);
     expect(before).not.toMatchObject({ benefit: { short_summary: "新要約A" } });
+  });
+
+  it("親行が無い銘柄は snapshot で STOP する (ガードを縮めない)", async () => {
+    sqlite.exec("PRAGMA foreign_keys = OFF");
+    sqlite.prepare("DELETE FROM core_stocks WHERE id = 101").run();
+    sqlite.exec("PRAGMA foreign_keys = ON");
+    const inputs = await fetchYieldInputs(db, [STOCK_A]);
+    expect(inputs.parents.get(STOCK_A)).toBeNull();
+    expect(() => snapshotStockPreimages(inputs, [STOCK_A])).toThrow("missing STOP");
   });
 
   it("財務・スコア行が無い銘柄は行の不在を preimage にする", async () => {
