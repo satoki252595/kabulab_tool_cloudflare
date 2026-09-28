@@ -56,6 +56,11 @@ token) が渡されるまで何も書かない。** コード側の再発防止�
   仮適用する overlay 方式 (dry-run の先見せと同一関数) で、逐次時と同一の値。
   回帰: 銘柄単位 1 送信・途中失敗の全 preimage・正常成功・builder 等価
   (`atomic-apply.test.ts`・`d1-http-batch-sender.test.ts`)。
+  純 recompute の適用も `applyYieldRecomputeAtomically` (1 銘柄 1 送信) に
+  一本化し、逐次の yield→score 別 UPDATE 版は削除した。
+  3 値 (要約・推定値・出典) が全行同値のタスクは書き込み対象から外し
+  (`skippedEquivalent`)、`updated_at` の無意味な書き換えを避ける。
+  タスク和集合は維持するため stale 利回りの回収は落ちない。
   なお Stage C (45 群の rework 結果の人手確認・実 apply・fresh 再読・再実行
   0 件の確認) は本 PR のコード作業では未実施。同許可済み作業の別本番 Task
   として残す (延期するのは JPX 新様式・信用残日次だけ。C45 の先送りはしない)。

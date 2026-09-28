@@ -108,6 +108,13 @@ export type ImportPlan = {
   /** 結果に 1 行も現れなかったタスク (未回答)。 */
   unansweredTaskIds: string[];
   /**
+   * 通ったが今の D1 と 3 値 (要約・推定値・出典) が全行同値で、書き込み対象から
+   * 外したタスク数。`updated_at` の無意味な書き換えを避け、再実行で書く予定を
+   * 0 にする。利回りの追随は `resolveTargetIds` のタスク和集合で別に見るため、
+   * stale の回収は落ちない。
+   */
+  skippedEquivalent: number;
+  /**
    * 書き込み対象の行で、今の D1 の `estimated_value` がどう変わるか (行数)。
    * 契約違反の要約を直すだけのつもりでも、回答の金額が null なら既存の金額が消えて
    * 優待利回りの計算から外れる。dry-run で人が気付けるように数える。
@@ -128,15 +135,32 @@ export function planSummaryImport(input: {
   includeText?: boolean;
 }): ImportPlan {
   const taskById = new Map(input.tasks.map((t) => [t.taskId, t]));
-  const current = new Map<string, { ids: number[]; description: string; values: (number | null)[] }>();
+  const current = new Map<
+    string,
+    {
+      ids: number[];
+      description: string;
+      summaries: (string | null)[];
+      values: (number | null)[];
+      sources: (string | null)[];
+    }
+  >();
   for (const r of input.currentRows) {
     const key = benefitKey(r.stockCode, r.description);
     const e = current.get(key);
     if (e) {
       e.ids.push(r.id);
+      e.summaries.push(r.shortSummary);
       e.values.push(r.estimatedValue);
+      e.sources.push(r.estimateValueSource);
     } else {
-      current.set(key, { ids: [r.id], description: r.description, values: [r.estimatedValue] });
+      current.set(key, {
+        ids: [r.id],
+        description: r.description,
+        summaries: [r.shortSummary],
+        values: [r.estimatedValue],
+        sources: [r.estimateValueSource],
+      });
     }
   }
 
@@ -202,6 +226,7 @@ export function planSummaryImport(input: {
   }
 
   const updates: PlannedUpdate[] = [];
+  let skippedEquivalent = 0;
   const valueChanges = { toNull: 0, fromNull: 0, changed: 0 };
   for (const { line, result } of parsed) {
     const reject = (reason: RejectReason, detail: string, text?: string) =>
@@ -260,6 +285,17 @@ export function planSummaryImport(input: {
       reject("value_ungrounded", `estimatedValue=${result.estimatedValue} だが掲載文に金額表現 (円・千円・万円・ポイント) が無い`);
       continue;
     }
+    const plannedSource = result.estimatedValue !== null ? "company" : null;
+    const alreadyApplied = row.ids.every(
+      (_, i) =>
+        row.summaries[i] === summary &&
+        row.values[i] === result.estimatedValue &&
+        row.sources[i] === plannedSource
+    );
+    if (alreadyApplied) {
+      skippedEquivalent++;
+      continue;
+    }
     for (const prev of row.values) {
       if (prev === result.estimatedValue) continue;
       if (result.estimatedValue === null) valueChanges.toNull++;
@@ -271,13 +307,13 @@ export function planSummaryImport(input: {
       ids: [...row.ids].sort((a, b) => a - b),
       shortSummary: summary,
       estimatedValue: result.estimatedValue,
-      estimateValueSource: result.estimatedValue !== null ? "company" : null,
+      estimateValueSource: plannedSource,
     });
   }
 
   rejections.sort((a, b) => a.line - b.line);
   const unansweredTaskIds = input.tasks.map((t) => t.taskId).filter((id) => !answered.has(id));
-  return { updates, rejections, unansweredTaskIds, valueChanges };
+  return { updates, rejections, unansweredTaskIds, skippedEquivalent, valueChanges };
 }
 
 /** D1 への書き込み口。テストでは差し替える。 */
@@ -349,6 +385,9 @@ export function formatPlanReport(plan: ImportPlan, maxRejections = 30, showText 
   const out: string[] = [];
   const rows = plan.updates.reduce((s, u) => s + u.ids.length, 0);
   out.push(`書き込み対象: ${plan.updates.length} タスク / ${rows} 行`);
+  if (plan.skippedEquivalent > 0) {
+    out.push(`同値のため省略: ${plan.skippedEquivalent} タスク (今の値と同じ。再送しても変わらない)`);
+  }
   out.push(`はじいた結果: ${plan.rejections.length} 行`);
   const byReason = new Map<RejectReason, number>();
   for (const r of plan.rejections) byReason.set(r.reason, (byReason.get(r.reason) ?? 0) + 1);

@@ -17,9 +17,10 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
+import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
 import { scoreStock } from "../../../../src/shared/scoring.js";
 import {
-  applyYieldRecompute,
+  applyYieldRecomputeAtomically,
   computeYieldEntries,
   planYieldRecompute,
   type RecomputeYieldsDb,
@@ -191,12 +192,34 @@ const scoreOf = (stockId: number) =>
     total_score: number;
   };
 
-describe("applyYieldRecompute", () => {
-  it("変わる行だけ yutai_yield とスコアを書き、data_date は据え置く。再実行は 0 件", async () => {
+/** 実証済み REST batch の all-or-nothing を模す送信ダブル (1 送信 = 1 トランザクション)。 */
+function makeAtomicSender() {
+  const calls: D1BatchStatement[][] = [];
+  const sender = async (statements: readonly D1BatchStatement[]): Promise<void> => {
+    calls.push(statements.map((s) => ({ sql: s.sql, params: [...s.params] })));
+    sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      for (const s of statements) {
+        sqlite.prepare(s.sql).run(...(s.params as (null | number | string)[]));
+      }
+      sqlite.exec("COMMIT");
+    } catch (e) {
+      sqlite.exec("ROLLBACK");
+      throw e;
+    }
+  };
+  return { calls, sender };
+}
+
+describe("applyYieldRecomputeAtomically", () => {
+  it("変わる行だけ yutai_yield とスコアを 1 銘柄 1 送信で書き、data_date は据え置く。再実行は 0 件", async () => {
     const plan = await planYieldRecompute(db, [STOCK_A, STOCK_B, STOCK_C]);
-    const { updated, scoresUpdated } = await applyYieldRecompute(db, plan);
+    const { calls, sender } = makeAtomicSender();
+    const { updated, scoresUpdated } = await applyYieldRecomputeAtomically(sender, plan);
     expect(updated).toBe(1);
     expect(scoresUpdated).toBe(1);
+    // A の利回り・スコアの 2 文が 1 送信。B (対象外)・C (無変更) には送らない。
+    expect(calls.map((c) => c.length)).toEqual([2]);
     expect(finOf(STOCK_A).yutai_yield).toBeCloseTo(5.0352467, 6);
     expect(finOf(STOCK_A).data_date).toBe("2026-09-13");
     expect(finOf(STOCK_C).yutai_yield).toBe(1.0);
@@ -215,21 +238,24 @@ describe("applyYieldRecompute", () => {
 
     const again = await planYieldRecompute(db, [STOCK_A, STOCK_C]);
     expect(again.entries.every((e) => !e.changed && !e.scoreChanged)).toBe(true);
-    const redo = await applyYieldRecompute(db, again);
+    const redoSender = makeAtomicSender();
+    const redo = await applyYieldRecomputeAtomically(redoSender.sender, again);
     expect(redo).toEqual({ updated: 0, scoresUpdated: 0 });
+    expect(redoSender.calls).toEqual([]);
   });
 
   it("中断 (利回りだけ書いてスコア未書込) からの再実行で残りを回復する", async () => {
-    // Node/D1-REST 経路に db.batch() が無いため、利回りとスコアの更新の間で
-    // 中断すると部分状態が残る。同じ計画の再実行で回復することを固定する。
+    // 旧逐次経路で残った部分状態も、同じ計画の再実行で回復することを固定する。
     sqlite
       .prepare("UPDATE otakara_stock_financials SET yutai_yield = ? WHERE stock_id = ?")
       .run((5000 / (993 * 100)) * 100, STOCK_A);
     // 利回りは新しいがスコアは旧利回りのまま = 部分状態
     const partial = await planYieldRecompute(db, [STOCK_A]);
     expect(partial.entries.map((e) => [e.changed, e.scoreChanged])).toEqual([[false, true]]);
-    const healed = await applyYieldRecompute(db, partial);
+    const { calls, sender } = makeAtomicSender();
+    const healed = await applyYieldRecomputeAtomically(sender, partial);
     expect(healed).toEqual({ updated: 0, scoresUpdated: 1 });
+    expect(calls.map((c) => c.length)).toEqual([1]);
     const expectA = scoreStock({
       price: 993, per: 10, pbr: 1.0, dividendYield: 2.0, roe: 8.0,
       ma25: null, rsi14: null, macd: null, macdSignal: null, yutaiYield: finOf(STOCK_A).yutai_yield,

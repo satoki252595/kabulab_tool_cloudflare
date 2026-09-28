@@ -31,6 +31,8 @@ export type BenefitRow = {
   description: string;
   shortSummary: string | null;
   estimatedValue: number | null;
+  /** `estimate_value_source`。同値判定 (再送の省略) に使う。 */
+  estimateValueSource: string | null;
 };
 
 const VIOLATION_RULES = ["annotation", "too_long", "prose", "empty"] as const satisfies readonly SummaryViolation["rule"][];

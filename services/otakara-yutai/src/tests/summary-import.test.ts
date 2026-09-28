@@ -40,6 +40,7 @@ const row = (over: Partial<BenefitRow>): BenefitRow => ({
   description: DESC_CATALOG,
   shortSummary: "カタログギフト 3,000円相当",
   estimatedValue: 3000,
+  estimateValueSource: null,
   ...over,
 });
 
@@ -351,6 +352,33 @@ describe("planSummaryImport", () => {
     const p = plan(result({}));
     expect(p.unansweredTaskIds).toEqual([K_NEW]);
     expect(formatPlanReport(p).join("\n")).toContain("未回答のタスク: 1");
+  });
+
+  it("今の D1 と 3 値が全行同値の結果は書き込み対象から外す (再実行で書く予定 0)", () => {
+    const applied = ROWS.map((r) =>
+      r.stockCode === "9990"
+        ? { ...r, shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, estimateValueSource: "company" }
+        : r
+    );
+    const p = plan(result({}), applied);
+    expect(p.updates).toEqual([]);
+    expect(p.rejections).toEqual([]);
+    expect(p.skippedEquivalent).toBe(1);
+    expect(p.unansweredTaskIds).toEqual([K_NEW]);
+    expect(formatPlanReport(p).join("\n")).toContain("同値のため省略: 1 タスク");
+  });
+
+  it("群の一部の行だけ同値なら群全体を書く (置き去りにしない)", () => {
+    const partial = ROWS.map((r) =>
+      r.id === 11
+        ? { ...r, shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, estimateValueSource: "company" }
+        : r
+    );
+    const p = plan(result({}), partial);
+    expect(p.updates).toEqual([
+      { taskId: K_CATALOG, ids: [11, 12], shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, estimateValueSource: "company" },
+    ]);
+    expect(p.skippedEquivalent).toBe(0);
   });
 });
 

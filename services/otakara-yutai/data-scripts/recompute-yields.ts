@@ -16,7 +16,7 @@
  * もので、行全体の作り直しではないため、日付を進めると株価の鮮度を偽る)。
  * 値が変わらない銘柄には UPDATE を打たない (再実行で 0 件・冪等)。
  */
-import { inArray, sql } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { calcYutaiYield } from "../../../src/cron/monthly.js";
@@ -203,34 +203,30 @@ export async function planYieldRecompute(
 /**
  * 計画のうち変わる行だけ `yutai_yield` (+ `fetched_at`) とスコア 3 列を書く。
  * `data_date` には触らない (月次の作り直し日を保つ)。
+ * 1 銘柄の利回り・スコアは 1 送信 (`{batch}` 1 リクエスト) で送る原子単位。
+ * 送信口は呼び出し側が渡す (本番は `createD1HttpBatchSender`)。
  */
-export async function applyYieldRecompute(
-  db: RecomputeYieldsDb,
+export async function applyYieldRecomputeAtomically(
+  sender: (statements: readonly D1BatchStatement[]) => Promise<void>,
   plan: YieldRecomputePlan
 ): Promise<{ updated: number; scoresUpdated: number }> {
   let updated = 0;
   let scoresUpdated = 0;
   for (const e of plan.entries) {
-    if (e.changed) {
-      await db
-        .update(stockFinancials)
-        .set({ yutaiYield: e.next, fetchedAt: sql`(unixepoch())` })
-        .where(inArray(stockFinancials.stockId, [e.stockId]));
-      updated++;
-    }
-    if (e.scoreChanged && e.scoreNext) {
-      await db.update(stockScores).set(e.scoreNext).where(inArray(stockScores.stockId, [e.stockId]));
-      scoresUpdated++;
-    }
+    const statements = buildYieldScoreStatements(e);
+    if (statements.length === 0) continue;
+    await sender(statements);
+    if (e.changed) updated++;
+    if (e.scoreChanged) scoresUpdated++;
   }
   return { updated, scoresUpdated };
 }
 
 /**
  * 1 銘柄の再計算結果を D1 REST batch 用の UPDATE 文にする (純関数・副作用なし)。
- * `applyYieldRecompute` と同一の意味: 変わる列だけ書く (`yutai_yield` +
- * `fetched_at`、スコア 3 列)。`data_date` には触らない。
- * 原子適用 (`atomic-apply.ts`) だけが使う。
+ * 変わる列だけ書く (`yutai_yield` + `fetched_at`、スコア 3 列)。
+ * `data_date` には触らない。`applyYieldRecomputeAtomically` と
+ * 原子適用 (`atomic-apply.ts`) が使う。
  */
 export function buildYieldScoreStatements(entry: YieldRecomputeEntry): D1BatchStatement[] {
   const out: D1BatchStatement[] = [];
