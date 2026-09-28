@@ -53,6 +53,7 @@ import {
   SUPPLEMENT_7129_PAGE_ID,
   TARGETS,
   allMigrated,
+  completedMigrationRowIds,
   decideMigrationAction,
   decideRetireAction,
   decideSnapshotAction,
@@ -74,6 +75,7 @@ import {
   stableStringify,
   verifyIntermediateUnion,
   verifyOpResult,
+  verifyPreD1Union,
   verifyReverseUnion,
   type DedupReceipt,
   type IncomingDb,
@@ -641,31 +643,28 @@ export async function verifyFreshPageProof(
 }
 
 /**
- * entry 共通の fresh proof 再検証 (resume/already-applied の D1 前に接続)。
+ * entry 共通の fresh proof 再検証 (D1 前の全経路に接続)。
  * master 全ページ + 補足全ページ + incoming 全件の fresh を取り直し、
  * snapshot proof と照合する。relation の増減は proof 対象外 (本文・添付のみ)
- * のため、移行中間状態でも比較できる。
+ * のため、移行中間状態でも比較できる。master/補足は snapshot 固定 ID から
+ * 取り直す (入口 state の使い回しでは take 後の変化を見逃す)。
+ * 続けて keeper/retire の union 一致 (全 pagination) を意図移行状態と照合する。
  */
 async function verifyEntryFreshProofs(
   paceMs: number,
   snapshotDir: string,
   snapshot: SnapshotDoc,
-  state: FreshState,
   receipt: DedupReceipt
 ): Promise<void> {
+  const freshMasterPages = new Map<string, NotionPage>();
   for (const id of Object.keys(snapshot.masters)) {
-    const freshPage = state.pages[id];
-    if (!freshPage) {
-      throw new Error(`fresh master が無いため照合できません (STOP): ${id}`);
-    }
+    const freshPage = await getPage(paceMs, id);
+    freshMasterPages.set(normalizePageId(id), freshPage);
     const m = snapshot.masters[id];
     await verifyFreshPageProof(paceMs, snapshotDir, id, freshPage, "master の本文・添付", m.body, m.files);
   }
   for (const id of Object.keys(snapshot.supplement)) {
-    const freshPage = state.supplementPages[id];
-    if (!freshPage) {
-      throw new Error(`fresh 補足行が無いため照合できません (STOP): ${id}`);
-    }
+    const freshPage = await getPage(paceMs, id);
     const p = snapshot.supplementProof?.[id];
     await verifyFreshPageProof(paceMs, snapshotDir, id, freshPage, "補足の本文・添付", p?.body, p?.files);
   }
@@ -691,6 +690,52 @@ async function verifyEntryFreshProofs(
       recorded: receipt.migrated[rowId],
     });
     if (problems.length > 0) throw new Error(problems.join(" / "));
+  }
+  // keeper/retire の union 一致 (全 pagination・意図移行状態)。preview の
+  // 同数置換では検出できないため、D1 書込前に実配列で断定する。
+  for (const t of TARGETS) {
+    const snapKeepSets = snapshot.keeperIncoming?.[t.code];
+    if (!snapKeepSets) {
+      throw new Error(`${t.code}: snapshot に keeperIncoming がありません`);
+    }
+    const snapRetireEntry = snapshot.masters[t.retireId];
+    if (!snapRetireEntry) {
+      throw new Error(`snapshot に退避候補がありません: ${t.code}`);
+    }
+    const snapRetireView = toMasterView(snapRetireEntry.page, snapRetireEntry.children);
+    const keepFresh = freshMasterPages.get(normalizePageId(t.keepId));
+    const retireFresh = freshMasterPages.get(normalizePageId(t.retireId));
+    if (!keepFresh || !retireFresh) {
+      throw new Error(`${t.code}: fresh master の再読がありません`);
+    }
+    const retireArchived = retireFresh.archived === true || retireFresh.in_trash === true;
+    const pairs = [
+      { db: "disclosures" as const, prop: REVERSE_PROP_DISCLOSURES },
+      { db: "financials" as const, prop: REVERSE_PROP_FINANCIALS },
+    ];
+    for (const { db, prop } of pairs) {
+      const snapRetireRel = snapRetireView.relations[prop];
+      if (!snapRetireRel) {
+        throw new Error(`${t.code}: snapshot 退避に逆 relation がありません: ${prop}`);
+      }
+      if (snapRetireRel.has_more) {
+        throw new Error(`${t.code}: snapshot 退避の baseline が未完です (has_more): ${prop}`);
+      }
+      const liveKeepFull = await readRelationFull(paceMs, t.keepId, keepFresh, prop);
+      const liveRetireFull = retireArchived
+        ? null
+        : await readRelationFull(paceMs, t.retireId, retireFresh, prop);
+      const p = verifyPreD1Union({
+        label: `${t.code}/${prop}`,
+        snapKeep: snapKeepSets[db],
+        snapRetire: snapRetireRel.ids,
+        liveKeepFull,
+        liveRetireFull,
+        expectedMigrated: completedMigrationRowIds(ops, receipt.migrated, t.retireId, db),
+        retireArchived,
+      });
+      if (p) throw new Error(p);
+    }
   }
 }
 
@@ -1391,13 +1436,21 @@ export function guardIntermediateState(args: {
     const migratedForCode = opsForCode.filter((op) => receipt.migrated[op.rowPageId] !== undefined);
     if (migratedForCode.length === 0) {
       for (const prop of [REVERSE_PROP_DISCLOSURES, REVERSE_PROP_FINANCIALS]) {
-        const fKeep = freshKeep.relations[prop]?.ids.length ?? -1;
-        const sKeep = snapKeep.relations[prop]?.ids.length ?? -2;
-        const fRetire = freshRetire.relations[prop]?.ids.length ?? -1;
-        const sRetire = snapRetire.relations[prop]?.ids.length ?? -2;
-        if (fKeep !== sKeep || fRetire !== sRetire) {
+        const fKeep = freshKeep.relations[prop]?.ids;
+        const sKeep = snapKeep.relations[prop]?.ids;
+        const fRetire = freshRetire.relations[prop]?.ids;
+        const sRetire = snapRetire.relations[prop]?.ids;
+        // 同数でも ID 置換は止める (件数比較では検出できない)。
+        const norm = (ids: string[]) => ids.map(normalizePageId).sort();
+        const keepSame =
+          fKeep !== undefined && sKeep !== undefined && JSON.stringify(norm(fKeep)) === JSON.stringify(norm(sKeep));
+        const retireSame =
+          fRetire !== undefined &&
+          sRetire !== undefined &&
+          JSON.stringify(norm(fRetire)) === JSON.stringify(norm(sRetire));
+        if (!keepSame || !retireSame) {
           problems.push(
-            `${t.code}/${prop}(中間): 未移行のはずが件数変化 keep ${sKeep}→${fKeep} retire ${sRetire}→${fRetire}`
+            `${t.code}/${prop}(中間): 未移行のはずが集合変化 keep ${sKeep?.length}→${fKeep?.length} retire ${sRetire?.length}→${fRetire?.length}`
           );
         }
       }
@@ -3359,7 +3412,7 @@ async function runApply(opts: CliOptions): Promise<number> {
         ? loadSnapshotForResume(opts.snapshotDir, receipt)
         : loadLatestSnapshot(opts.snapshotDir);
       requireCompleteSnapshotProof(loaded.snapshot, receipt);
-      await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, loaded.snapshot, state, receipt);
+      await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, loaded.snapshot, receipt);
       receipt = await archiveSnapshotV2(opts.paceMs, opts.snapshotDir, loaded.file, loaded.snapshot, receipt);
       // D1 の遅れ (退避候補指し) だけは直してから再検証する (apply 許可域の書込)。
       receipt = await applyD1Check(opts.snapshotDir, receipt);
@@ -3400,7 +3453,7 @@ async function runApply(opts: CliOptions): Promise<number> {
       return 2;
     }
     requireCompleteSnapshotProof(snapshot, receipt);
-    await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, snapshot, state, receipt);
+    await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, snapshot, receipt);
   } else {
     const { problems } = guardFreshState(state);
     if (problems.length > 0) {
@@ -3448,6 +3501,8 @@ async function runApply(opts: CliOptions): Promise<number> {
   receipt = await applyLifecycle3681(opts.paceMs, opts.snapshotDir, snapshot, receipt);
   receipt = await applyMigrations(opts.paceMs, opts.snapshotDir, snapshot, ops, receipt);
   receipt = await applySupplement7129(opts.paceMs, opts.snapshotDir, snapshot, receipt);
+  // D1 書込前に entry 共通 gate (proof 再検証 + union 一致) を全経路で通す。
+  await verifyEntryFreshProofs(opts.paceMs, opts.snapshotDir, snapshot, receipt);
   receipt = await applyD1Check(opts.snapshotDir, receipt);
   receipt = await applyRetire(opts.paceMs, opts.snapshotDir, snapshot, ops, receipt);
   const verifyProblems = await finalVerify(opts.paceMs, snapshot, receipt);

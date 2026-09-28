@@ -784,6 +784,83 @@ export function verifyIntermediateUnion(args: {
 }
 
 /**
+ * receipt 済みの移行 op 行 ID (code+DB 限定)。D1 前 union の意図状態用。
+ * before に退避 ID を含む op のうち receipt.migrated にあるものだけ返す。
+ */
+export function completedMigrationRowIds(
+  ops: MigrationOp[],
+  migrated: DedupReceipt["migrated"],
+  retireId: string,
+  db: IncomingDb
+): string[] {
+  const wantRetire = normalizePageId(retireId);
+  return ops
+    .filter(
+      (op) =>
+        op.db === db &&
+        op.before.some((id) => normalizePageId(id) === wantRetire) &&
+        migrated[op.rowPageId] !== undefined
+    )
+    .map((op) => op.rowPageId);
+}
+
+/**
+ * D1 前の union 一致 (全 pagination 実配列で呼ぶ。preview 不可)。
+ * 期待 keep 集合 = snapshot 固定 keeper ∪ 移行済み、
+ * 期待 retire 集合 = snapshot 退避 − 移行済み と live が完全一致すること。
+ * retire archived 時は retire 側を問わない (終端状態。archived 自体は
+ * 呼出側・最終検証が別途断定する)。戻りは成功=null 規約。
+ */
+export function verifyPreD1Union(args: {
+  label: string;
+  snapKeep: string[];
+  snapRetire: string[];
+  liveKeepFull: string[];
+  liveRetireFull: string[] | null;
+  expectedMigrated: string[];
+  retireArchived: boolean;
+}): string | null {
+  const normSet = (ids: string[]) => [...new Set(ids.map(normalizePageId))].sort();
+  const snapKeepSet = new Set(normSet(args.snapKeep));
+  const snapRetireSet = new Set(normSet(args.snapRetire));
+  const migratedSet = new Set(normSet(args.expectedMigrated));
+  // 移行済みのはずが snapshot 退避に無い = stale 記録。
+  const stale = [...migratedSet].filter((id) => !snapRetireSet.has(id));
+  if (stale.length > 0) {
+    return `${args.label}: 移行済み記録が snapshot 退避にありません (stale ${stale.length} 件)`;
+  }
+  const wantKeep = normSet([...snapKeepSet, ...migratedSet]);
+  const gotKeep = normSet(args.liveKeepFull);
+  if (JSON.stringify(gotKeep) !== JSON.stringify(wantKeep)) {
+    const want = new Set(wantKeep);
+    const got = new Set(gotKeep);
+    const missing = wantKeep.filter((id) => !got.has(id));
+    const extra = gotKeep.filter((id) => !want.has(id));
+    return (
+      `${args.label}: D1 前の keep 集合が意図状態と不一致です ` +
+      `(欠落 ${missing.length} 件・不明 ${extra.length} 件)`
+    );
+  }
+  if (args.retireArchived) return null;
+  if (args.liveRetireFull === null) {
+    return `${args.label}: 退避候補が有効なのに live retire 集合がありません`;
+  }
+  const wantRetire = normSet([...snapRetireSet].filter((id) => !migratedSet.has(id)));
+  const gotRetire = normSet(args.liveRetireFull);
+  if (JSON.stringify(gotRetire) !== JSON.stringify(wantRetire)) {
+    const want = new Set(wantRetire);
+    const got = new Set(gotRetire);
+    const missing = wantRetire.filter((id) => !got.has(id));
+    const extra = gotRetire.filter((id) => !want.has(id));
+    return (
+      `${args.label}: D1 前の retire 集合が意図状態と不一致です ` +
+      `(欠落 ${missing.length} 件・不明 ${extra.length} 件)`
+    );
+  }
+  return null;
+}
+
+/**
  * 移行の 1 行分の実 flow 判定 (純粋決定。I/O 側はこの結果に従うだけ)。
  * - recorded 済み: fresh==after なら skip、fresh==before なら repatch (PATCH 消失)、
  *   それ以外は stop (同時変更)。

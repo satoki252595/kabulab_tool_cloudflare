@@ -356,6 +356,18 @@ describe("master-dedup 実 flow 回帰", () => {
       expect(problems.length).toBeGreaterThan(0);
     });
 
+    it("未移行で同数ID置換があれば停止する (件数一致では素通りさせない)", () => {
+      const views = baseViews();
+      const snapshot = baseSnapshot(baseViews());
+      const receipt = emptyReceipt();
+      receipt.snapshot = { file: "s.json", sha256: snapshot.sha256, archivePageId: "a1", archiveVerifiedAt: "2026-09-28T00:00:00.000Z" };
+      // 件数は同じ (2 件) だが ID が別物 → 集合比較で止める。
+      views["3681:retire"].relations[REVERSE_PROP_DISCLOSURES] = rel(["dx", "dy"]);
+      const state = baseState(views);
+      const { problems } = guardIntermediateState({ state, snapshot, receipt, ops: [] });
+      expect(problems.join(" / ")).toMatch(/集合変化/);
+    });
+
     it("片方退避後も再開可能 (retired は archived 必須)", () => {
       const views = baseViews();
       const snapshot = baseSnapshot(baseViews());

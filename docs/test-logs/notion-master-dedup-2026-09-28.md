@@ -111,3 +111,8 @@ live keeper 7129 の開示が 11 (v1・live の 11 集合完全一致・全行 k
   なし)。schema 全列挙は再走せず v2-manifest 証拠を内部 SHA 自己検証+
   受入 SHA 照合の上で再利用する。証拠ファイル既存時は上書きせず STOP。
   回帰 +2 件 (manifest 検証)。全体 3091 pass・0 fail で緑
+- 追補 D1 前 union gate: entry 共通 gate に keeper/retire の union 一致
+  (全 pagination。期待=固定 keeper ∪ 移行済み/固定退避−移行済み) を追加し
+  初回・resume・適用済みの D1 前全経路へ接続。master/補足は snapshot 固定
+  ID から取り直す (入口 state 使い回し廃止)。中間 gate の未移行比較も
+  件数から集合へ (同数 ID 置換を検出)。回帰 +6 件。全体 3110 pass・0 fail

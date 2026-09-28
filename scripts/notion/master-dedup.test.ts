@@ -25,6 +25,7 @@ import {
   SUPPLEMENT_7129_PAGE_ID,
   TARGETS,
   allMigrated,
+  completedMigrationRowIds,
   decideMigrationAction,
   decideRetireAction,
   decideSnapshotAction,
@@ -50,6 +51,7 @@ import {
   stableStringify,
   verifyIntermediateUnion,
   verifyOpResult,
+  verifyPreD1Union,
   verifyReverseUnion,
 } from "./master-dedup.js";
 
@@ -550,6 +552,69 @@ describe("master-dedup (純粋関数)", () => {
           keepId: KEEP_3681,
         })
       ).not.toBeNull();
+    });
+  });
+
+  describe("verifyPreD1Union (D1 前の union 一致・意図移行状態)", () => {
+    const LABEL = "3681/開示書類";
+    type PreD1Args = Parameters<typeof verifyPreD1Union>[0];
+    function args(overrides: Partial<PreD1Args> = {}): PreD1Args {
+      return {
+        label: LABEL,
+        snapKeep: ["k0"],
+        snapRetire: ["d0", "d1"],
+        liveKeepFull: ["k0", "d0"],
+        liveRetireFull: ["d1"],
+        expectedMigrated: ["d0"],
+        retireArchived: false,
+        ...overrides,
+      };
+    }
+
+    it("意図状態どおり (部分移行・未移行) は合格", () => {
+      expect(verifyPreD1Union(args())).toBeNull();
+      expect(
+        verifyPreD1Union(args({ liveKeepFull: ["k0"], liveRetireFull: ["d0", "d1"], expectedMigrated: [] }))
+      ).toBeNull();
+    });
+
+    it("keep 側の欠落・不明は STOP する", () => {
+      expect(verifyPreD1Union(args({ liveKeepFull: ["d0"] }))).toMatch(/keep 集合/);
+      expect(verifyPreD1Union(args({ liveKeepFull: ["k0", "d0", "ghost"] }))).toMatch(/不明 1 件/);
+    });
+
+    it("stale 移行記録・retire 側 drift は STOP する", () => {
+      expect(verifyPreD1Union(args({ expectedMigrated: ["d0", "stale"] }))).toMatch(/stale/);
+      expect(verifyPreD1Union(args({ liveRetireFull: ["d1", "d0"] }))).toMatch(/retire 集合/);
+      expect(verifyPreD1Union(args({ liveRetireFull: [] }))).toMatch(/retire 集合/);
+    });
+
+    it("retire archived は retire 側を問わない", () => {
+      expect(verifyPreD1Union(args({ retireArchived: true, liveRetireFull: null }))).toBeNull();
+      expect(verifyPreD1Union(args({ liveRetireFull: null }))).toMatch(/live retire 集合がありません/);
+    });
+
+    it("completedMigrationRowIds は code+DB+記録済みで絞る", () => {
+      const ops: MigrationOp[] = [
+        { rowPageId: "d0", db: "disclosures", prop: REL_PROP_MASTER, before: [RETIRE_3681], after: [KEEP_3681] },
+        { rowPageId: "d1", db: "disclosures", prop: REL_PROP_MASTER, before: [RETIRE_3681], after: [KEEP_3681] },
+        { rowPageId: "f0", db: "financials", prop: REL_PROP_MASTER, before: [RETIRE_3681], after: [KEEP_3681] },
+        { rowPageId: "x0", db: "disclosures", prop: REL_PROP_MASTER, before: [RETIRE_7129], after: [KEEP_7129] },
+      ];
+      const receipt = emptyReceipt();
+      const rec = (db: "disclosures" | "financials") => ({
+        db,
+        prop: REL_PROP_MASTER,
+        before: [RETIRE_3681],
+        after: [KEEP_3681],
+        verifiedAt: "2026-09-28T00:00:00.000Z",
+      });
+      receipt.migrated["d0"] = rec("disclosures");
+      receipt.migrated["f0"] = rec("financials");
+      receipt.migrated["x0"] = { ...rec("disclosures"), before: [RETIRE_7129], after: [KEEP_7129] };
+      expect(completedMigrationRowIds(ops, receipt.migrated, RETIRE_3681, "disclosures")).toEqual(["d0"]);
+      expect(completedMigrationRowIds(ops, receipt.migrated, RETIRE_3681, "financials")).toEqual(["f0"]);
+      expect(completedMigrationRowIds(ops, receipt.migrated, RETIRE_7129, "disclosures")).toEqual(["x0"]);
     });
   });
 
