@@ -1039,6 +1039,39 @@ describe.skipIf(!(hasUnifiedW3))("新様式パーサ: 週次実ファイル (202
   });
 });
 
+describe.skipIf(!(hasUnifiedW3))("新様式パーサの厳密整合・見出し検証 (実ファイル W3 の1セルだけを書き換え)", () => {
+  // シート名は原文 (況と Stocks の間は NBSP U+00A0。probe でバイト確認)。
+  // F8 = プライム株数・自己現金の差引 (602,967)、G8 = 同じく合計 (3,380,393)、
+  // D7〜G7 = 自己現金の4列見出し。
+  const SHEET = "投資部門別 株式売買状況\u00A0Stocks by Investor";
+
+  it("差引欄が 買い-売り と1だけ違えば throw する (±1 の許容なし)", () => {
+    const wb = XLSX.read(loadBytes(UNIFIED_W3_XLSX), { type: "array" });
+    const sheet = wb.Sheets[SHEET];
+    if (!sheet) throw new Error("テストフィクスチャにシートがありません");
+    sheet["F8"] = { t: "n", v: 602968 };
+    expect(() => parseInvestorEquityWorkbook(workbookBytes(wb), UNIFIED_W3_ORIGINAL_NAME)).toThrow(/差引欄/);
+  });
+
+  it("合計欄が 売り+買い と1だけ違えば throw する (±1 の許容なし)", () => {
+    const wb = XLSX.read(loadBytes(UNIFIED_W3_XLSX), { type: "array" });
+    const sheet = wb.Sheets[SHEET];
+    if (!sheet) throw new Error("テストフィクスチャにシートがありません");
+    sheet["G8"] = { t: "n", v: 3380394 };
+    expect(() => parseInvestorEquityWorkbook(workbookBytes(wb), UNIFIED_W3_ORIGINAL_NAME)).toThrow(/売買合計の不整合/);
+  });
+
+  it("売り/買いの見出しが入れ替わったら throw する (列ずれの検知)", () => {
+    const bytes = mutateCell(UNIFIED_W3_XLSX, SHEET, "D7", "買 Purchases");
+    expect(() => parseInvestorEquityWorkbook(bytes, UNIFIED_W3_ORIGINAL_NAME)).toThrow(/見出しが想定と異なります/);
+  });
+
+  it("未知の見出しがあれば throw する", () => {
+    const bytes = mutateCell(UNIFIED_W3_XLSX, SHEET, "G7", "数量 Qty");
+    expect(() => parseInvestorEquityWorkbook(bytes, UNIFIED_W3_ORIGINAL_NAME)).toThrow(/見出しが想定と異なります/);
+  });
+});
+
 describe.skipIf(!(hasUnifiedW3Index))("週次一覧ページの解析 (実ページ, 2026-09-29時点: 新旧の行が混在)", () => {
   let entries: ReturnType<typeof parseWeeklyIndexHtml>;
   beforeAll(() => {

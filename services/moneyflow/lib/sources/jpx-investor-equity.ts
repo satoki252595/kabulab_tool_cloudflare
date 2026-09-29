@@ -513,6 +513,10 @@ const UNIFIED_GROUPS: ReadonlyArray<{
   { col: 55, label: "その他金融機関", parent: "法人", guardSubstring: "その他金融機関" },
 ];
 
+/** 新様式の売り/買い/差引/合計の4列見出し (実ファイル・公式サンプル共通の原文そのまま)。
+ *  各投資部門の4列はこの順序で並ぶ。 */
+const UNIFIED_SUB_HEADERS: readonly string[] = ["売 Sales", "買 Purchases", "差引 Balance", "合計 Total"];
+
 /** 新様式の1セル (1市場×1投資部門×1期間の売り/買い/合計) として、見出しの単位
  *  (千円/千株) で読んだときに物理的にありえない大きさ。JPX 公式サンプル (週次・月次) は
  *  見出しが「千株/千円」なのに全数値が 1000 の倍数で、千円として読むと例えば週次の
@@ -612,6 +616,19 @@ function parseUnifiedSheet(
           `(期待: 大分類 "${group.parent}"・小分類 "${group.guardSubstring}", 実際: "${parentText}"・"${guardText}") — 様式変更の可能性`
       );
     }
+    // 売り/買い/差引/合計の4列見出しと並び順も検証する (実ファイル・公式サンプルとも
+    // ["売 Sales", "買 Purchases", "差引 Balance", "合計 Total"]。サンプルは末尾に
+    // 空白があるセルがあるため前後空白は除いて比べる)。列ずれ・未知見出しは
+    // 売買の取り違えに直結するため、1列でも違えば throw する。
+    const subHeaders = [0, 1, 2, 3].map((j) => String(headerRow[group.col + j] ?? "").trim());
+    for (let j = 0; j < UNIFIED_SUB_HEADERS.length; j++) {
+      if (subHeaders[j] !== UNIFIED_SUB_HEADERS[j]) {
+        throw new Error(
+          `JPX 投資部門別売買状況 (新様式): 列${group.col + j}の見出しが想定と異なります ` +
+            `(期待: "${UNIFIED_SUB_HEADERS[j]}", 実際: "${subHeaders[j]}") — 様式変更の可能性`
+        );
+      }
+    }
   }
 
   const filenamePeriod = filename ? parseUnifiedFilenamePeriod(filename) : null;
@@ -706,17 +723,17 @@ function parseUnifiedSheet(
             "値が円/株単位のまま千円/千株と表記されている可能性があり、1000倍の値を保存しないため停止します"
         );
       }
-      const computedTotal = sell + buy;
-      if (Math.abs(computedTotal - total) > 1) {
+      // 公式セルの厳密整合: 売り+買い=表の合計、買い-売り=差引欄。±1 の許容はしない
+      // (実ファイル 112件全件で厳密一致を確認済み。JPX に丸めの文書が無い以上、
+      // 推測の許容は捏造と同様に避ける)。食い違えば throw する。
+      if (sell + buy !== total) {
         throw new Error(
-          `JPX 投資部門別売買状況 (新様式/${group.label}): 売買合計の不整合 (売り+買い=${computedTotal}, 表の合計=${total})`
+          `JPX 投資部門別売買状況 (新様式/${group.label}): 売買合計の不整合 (売り+買い=${sell + buy}, 表の合計=${total})`
         );
       }
-      const net = buy - sell;
-      // 差引 (Balance) 欄で符号の向き (買い-売り) を確認する
-      if (Math.abs(balance - net) > 1) {
+      if (buy - sell !== balance) {
         throw new Error(
-          `JPX 投資部門別売買状況 (新様式/${group.label}): 差引欄 (${balance}) が 買い-売り (${net}) と一致しません`
+          `JPX 投資部門別売買状況 (新様式/${group.label}): 差引欄 (${balance}) が 買い-売り (${buy - sell}) と一致しません`
         );
       }
 
@@ -733,7 +750,8 @@ function parseUnifiedSheet(
         unit,
         sell,
         buy,
-        net,
+        // net は公式の差引欄そのもの (再計算値で置き換えない。派生値との区別のため)。
+        net: balance,
         total,
       });
     }
