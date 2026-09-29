@@ -306,6 +306,8 @@ describe("buildDiagBatch", () => {
       entries: [entry("1380")],
       unattempted: [],
       rawByCode: new Map([["1380", raw]]),
+      stopped: false,
+      stopReason: null,
     });
     expect(batch.key).toBe("price-sync-diag-20260929-run-1");
     expect(batch.metadata["completeness"]).toBe("complete");
@@ -333,9 +335,27 @@ describe("buildDiagBatch", () => {
       entries: [entry("1380")],
       unattempted: [{ code: "1787", reason: "run-stopped(unknown/transient-http)" }],
       rawByCode: new Map([["1380", new TextEncoder().encode("{}")]]),
+      stopped: true,
+      stopReason: "1380:unknown/transient-http",
     });
     expect(batch.metadata["completeness"]).toBe("partial");
     expect(batch.metadata["unattempted"]).toEqual(["1787"]);
+    expect(batch.metadata["stopped"]).toBe(true);
+    expect(batch.metadata["stopReason"]).toBe("1380:unknown/transient-http");
+  });
+
+  it("停止あり・未試行なし (最終コード停止) でも partial にする", () => {
+    const batch = buildDiagBatch({
+      runId: "run-1",
+      fetchedAt: "2026-09-30T00:00:00.000Z",
+      entries: [entry("2180")],
+      unattempted: [],
+      rawByCode: new Map([["2180", new TextEncoder().encode("{}")]]),
+      stopped: true,
+      stopReason: "2180:unknown/transient-http",
+    });
+    expect(batch.metadata["completeness"]).toBe("partial");
+    expect(batch.metadata["stopped"]).toBe(true);
   });
 });
 
@@ -518,6 +538,8 @@ describe("runGapDiagnostic", () => {
     );
     expect(okFetchOne).toHaveBeenCalledTimes(54);
     expect(report.completeness).toBe("complete");
+    expect(report.stopped).toBe(false);
+    expect(report.stopReason).toBeNull();
     expect(report.attempted).toBe(54);
     expect(report.categories.has_real_bar).toBe(54);
     expect(report.unattempted).toHaveLength(0);
@@ -574,12 +596,67 @@ describe("runGapDiagnostic", () => {
     );
     expect(calls).toHaveLength(3);
     expect(report.completeness).toBe("partial");
+    expect(report.stopped).toBe(true);
+    expect(report.stopReason).toBe("1905:unknown/transient-http");
     expect(report.attempted).toBe(3);
     expect(report.categories.unknown).toBe(1);
     expect(report.unattempted).toHaveLength(51);
     expect(seen.current?.metadata["completeness"]).toBe("partial");
     // 取得済み 3 件 (429 本文含む) + manifest の 4 添付。
     expect(seen.current?.files).toHaveLength(4);
+  });
+
+  it("最終 2180 の 429 でも partial + STOP にする (complete 誤判定の回帰)", async () => {
+    process.env.NOTION_TOKEN = "dummy";
+    const fetchOne = vi.fn(async (code: string): Promise<GapDiagFetchResult> => {
+      if (code !== "2180") {
+        const bytes = okBytes();
+        const rawBars = parseCapturedChart(code, bytes);
+        return {
+          capture: { status: 200, bytes },
+          chart: { symbol: code, price: 101, previousClose: 100, dataDate: "2026-09-29", ohlcv: rawBars },
+          error: null,
+        };
+      }
+      return {
+        capture: { status: 429, bytes: new TextEncoder().encode("rate limited") },
+        chart: null,
+        error: "Chart API HTTP エラー [2180]: 429 Too Many Requests; source=ingest-proxy",
+      };
+    });
+    const seen: {
+      current: {
+        metadata: Record<string, unknown>;
+        files: { filename: string; bytes: Uint8Array }[];
+      } | null;
+    } = { current: null };
+    const record = vi.fn(
+      async (input: {
+        metadata: Record<string, unknown>;
+        files: { filename: string; bytes: Uint8Array }[];
+      }) => {
+        seen.current = { metadata: input.metadata, files: input.files };
+        stubVerifyDownloads(seen.current.files);
+        return { pageId: "diag-page", outcome: "recorded", fileTooLarge: false };
+      }
+    );
+    const report = await runGapDiagnostic(
+      [...STOCK_GAP_54_CODES],
+      "run-1",
+      { fetchOne, record: record as never },
+      () => "2026-09-30T00:00:00.000Z"
+    );
+    expect(fetchOne).toHaveBeenCalledTimes(54);
+    // 未試行は空だが停止したので partial (CLI は exit 1)。complete 誤判定しない。
+    expect(report.unattempted).toHaveLength(0);
+    expect(report.completeness).toBe("partial");
+    expect(report.stopped).toBe(true);
+    expect(report.stopReason).toBe("2180:unknown/transient-http");
+    expect(report.attempted).toBe(54);
+    expect(report.categories.unknown).toBe(1);
+    expect(seen.current?.metadata["completeness"]).toBe("partial");
+    expect(seen.current?.metadata["stopReason"]).toBe("2180:unknown/transient-http");
+    expect(seen.current?.files).toHaveLength(55);
   });
 
   it("保管失敗は runner を失敗させる (成功に偽らない)", async () => {

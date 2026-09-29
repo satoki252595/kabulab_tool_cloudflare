@@ -21,8 +21,10 @@
   Chart 5y/1d だけ 54 GET（QuoteSummary なし）。7 分類
   （source_gap/stale/priceguard/http/parse/has_real_bar/unknown）を全件
   無省略で判定。9/29 バーは exact date、sanitize 棄却を source absent と
-  混同しない。429/5xx・無応答・保管失敗は取得済み分を partial 保管して
-  STOP（盲再試行なし）。D1 は SELECT のみ。`--execute` が無いと起動しない。
+  混同しない。429/5xx・無応答は取得済み分を partial 保管して STOP
+  （盲再試行なし）。保管自体の失敗（record/verify の throw）は成功に
+  偽らず例外のまま STOP し、部分保管は行わない。D1 は SELECT のみ。
+  `--execute` が無いと起動しない。
 - custody: 診断バッチ 1 行を service "stock-sync"・冪等 key
   `price-sync-diag-20260929-{runId}` で記録。コード別 Chart 原文 +
   manifest（code/HTTP 状態/SHA/未取得理由）添付。記録後は現 main の
@@ -34,11 +36,13 @@
 
 ## 検証（nix、Yahoo/Notion/D1 live ゼロ）
 
+- 停止信号の complete 判定混入（最終 2180 停止でも partial + exit 1。
+  stopped/stopReason を判定・report・manifest/metadata・CLI ログへ配線）
 - 新規 focused: `src/shared/yahoo/raw-capture.test.ts`（3 件）+
-  `scripts/sync/stock-gap-diagnostic.test.ts`（23 件: 7 分類 12・drift・
-  batch・record・readback・runner 完走/partial/保管失敗）
-- 近傍含む 7 files / 153 passed
-- `nix develop -c npm test` → 224 files / 3555 passed / 281 skipped / 0 failed
+  `scripts/sync/stock-gap-diagnostic.test.ts`（25 件: 7 分類 13・drift・
+  batch・record・readback・runner 完走/partial/最終停止/保管失敗）
+- 近傍含む 7 files / 155 passed
+- `nix develop -c npm test` → 224 files / 3557 passed / 281 skipped / 0 failed
 - `nix develop -c npm run typecheck` → exit 0
 - `nix develop -c npm run lint` → exit 0
 

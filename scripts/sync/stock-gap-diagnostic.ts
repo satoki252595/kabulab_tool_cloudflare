@@ -331,6 +331,12 @@ export function buildDiagBatch(args: {
   entries: readonly DiagCodeEntry[];
   unattempted: readonly { code: string; reason: string }[];
   rawByCode: ReadonlyMap<string, Uint8Array>;
+  /**
+   * 停止の有無。最終コードで止まった場合は unattempted が空でも
+   * partial にする (unattempted のみ判定では complete に誤る)。
+   */
+  stopped: boolean;
+  stopReason: string | null;
 }): {
   key: string;
   source: string;
@@ -338,7 +344,7 @@ export function buildDiagBatch(args: {
   files: DiagBatchFile[];
 } {
   const key = diagBatchKey(args.runId);
-  const completeness = args.unattempted.length === 0 ? "complete" : "partial";
+  const completeness = args.stopped || args.unattempted.length > 0 ? "partial" : "complete";
   const manifest = {
     service: SERVICE,
     kind: "price-sync-diag-batch",
@@ -356,6 +362,8 @@ export function buildDiagBatch(args: {
       reason: e.reason,
     })),
     unattempted: args.unattempted.map((u) => ({ code: u.code, reason: u.reason })),
+    stopped: args.stopped,
+    stopReason: args.stopReason,
     priorRunCausesUndetermined: true,
     note: "旧 run の失敗理由は本診断では断定しない。次回通常 run の PR180 batch と照合すること。",
   };
@@ -378,6 +386,8 @@ export function buildDiagBatch(args: {
       date: STOCK_GAP_DIAG_DATE,
       runId: args.runId,
       completeness,
+      stopped: args.stopped,
+      stopReason: args.stopReason,
       codes: STOCK_GAP_54_CODES,
       perCode: args.entries.map((e) => ({
         code: e.code,
@@ -474,6 +484,9 @@ export interface GapDiagReport {
   runId: string;
   key: string;
   completeness: "complete" | "partial";
+  /** 停止の有無・理由。CLI exit code は completeness 経由で必ず反映する。 */
+  stopped: boolean;
+  stopReason: string | null;
   total: number;
   attempted: number;
   categories: Record<GapCategory, number>;
@@ -550,14 +563,25 @@ export async function runGapDiagnostic(
           reason: `run-stopped(${stopReason})`,
         }));
   const fetchedAt = nowIso();
-  const batch = buildDiagBatch({ runId, fetchedAt, entries, unattempted, rawByCode });
+  const stopped = stoppedAt !== -1;
+  const batch = buildDiagBatch({
+    runId,
+    fetchedAt,
+    entries,
+    unattempted,
+    rawByCode,
+    stopped,
+    stopReason: stopped ? `${entries[stoppedAt].code}:${stopReason}` : null,
+  });
   const { pageId, key } = await recordDiagBatch(batch, fetchedAt, deps.record);
   await verifyDiagBatchAttachments(pageId, batch.files);
   return {
     date: STOCK_GAP_DIAG_DATE,
     runId,
     key,
-    completeness: unattempted.length === 0 ? "complete" : "partial",
+    completeness: stopped || unattempted.length > 0 ? "partial" : "complete",
+    stopped,
+    stopReason: stopped ? `${entries[stoppedAt].code}:${stopReason}` : null,
     total: STOCK_GAP_54_CODES.length,
     attempted: entries.length,
     categories,
@@ -626,7 +650,8 @@ async function main(): Promise<void> {
   console.info(JSON.stringify(report, null, 2));
   console.info(
     `[stock-gap-diagnostic] 完了: ${report.completeness} ` +
-      `(試行 ${report.attempted}/${report.total}, 保管 ${report.key})`
+      `(試行 ${report.attempted}/${report.total}, 保管 ${report.key}` +
+      `${report.stopped ? `, STOP(${report.stopReason})` : ""})`
   );
   if (report.completeness !== "complete") {
     process.exitCode = 1;
