@@ -10,9 +10,12 @@ read-only で精査した記録。結論: **10/10 MATCH** (364 section 全一致
   raw (values 証跡の pin) を GET し、現行の共有コントラクト
   (`parseEdinetCsvZip` → `extractTextSections`) で expected 全文を再生成。
 - actual: D1 `yuho_documents` (SELECT) の pointer → `readStockTextRow` で
-  Notion 保存行を全読し、D1 `yuho_text_sections` 索引 (sectionKey/itemName/
-  charCount=UTF-16 length 順序付き) と突合。
-- 比較: section 全文 SHA256 の厳密一致 + D1 索引件数・重複キー 0 の交差確認。
+  Notion 保存行を全読する。children 応答は guard 内で clone 実観測し、
+  最終頁 `has_more=false` を全通で証明する (malformed は即 HOLD)。
+- 比較: expected/Notion の section 列を順序厳密 (位置比較 + 順序列の全文
+  SHA256 一致) で照合する。D1 `yuho_text_sections` 索引との突合は件数 +
+  per-key (sectionKey/itemName/charCount=UTF-16 length) のみで、D1 側に
+  orderBy/ordinal 比較はない。順序の厳密性は expected/Notion 側が担う。
 - transport guard: Notion GET/read-query・R2/Notion-hosted 原文 GET・D1 SELECT
   のみ許可し、それ以外は deny (mutation 0)。
 
@@ -36,7 +39,10 @@ read-only で精査した記録。結論: **10/10 MATCH** (364 section 全一致
 - 全文 SHA は expected=actual の完全一致 (上表は prefix。完全値は私的証跡のみ)。
 - guard 実績: requests 53 / denied 0
   (notionGet 13・notionQuery 10・fileGet 10・d1Select 20)。HTTP mutation 0。
-- 監査実行: 2026-09-29T22:53Z。私的証跡 (0600、集計+SHA のみ) は別保管。
+- pagination proof: 最終頁 `has_more=false` を 10 通全通で実観測
+  (malformed 0)。頁メタの所在は私的証跡のみ。
+- 監査実行: 2026-09-29T23:11Z (pagination proof 厳密化の再監査。全文 SHA は
+  初回と同一)。私的証跡 (0600、集計+SHA のみ) は別保管。
 
 laneA wrap SHA (監査入力の pin):
 
