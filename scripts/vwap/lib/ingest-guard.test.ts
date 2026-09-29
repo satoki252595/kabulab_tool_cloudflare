@@ -59,6 +59,12 @@ describe("shouldSkipPut", () => {
     { date: "2026-09-25", o: 100, h: 110, l: 90, c: 105, v: 1000, adj: 104 },
   ];
   const splits: unknown[] = [];
+  const fresh = (): Record<string, unknown> => ({
+    code: "7203",
+    updated: "2026-09-29T02:00:00.000Z",
+    bars,
+    splits,
+  });
   const stored = (over: object = {}) =>
     JSON.stringify({
       code: "7203",
@@ -68,53 +74,50 @@ describe("shouldSkipPut", () => {
       ...over,
     });
 
-  it("内容同一なら skip (updated の差は無視する)", () => {
-    expect(
-      shouldSkipPut(stored(), { code: "7203", bars, splits })
-    ).toBe(true);
+  it("updated 差だけなら skip (内容同一)", () => {
+    expect(shouldSkipPut(stored(), fresh())).toBe(true);
   });
 
-  it("bars/splits/code の実変化は PUT する", () => {
+  it("JSON key 順だけの差は skip (不必要 PUT しない)", () => {
+    const reordered = JSON.stringify({
+      splits,
+      bars,
+      updated: "2026-09-28T00:00:00.000Z",
+      code: "7203",
+    });
+    expect(shouldSkipPut(reordered, fresh())).toBe(true);
+  });
+
+  it("同 bars でも schema field 差 (余分/欠落) なら PUT する", () => {
+    expect(shouldSkipPut(stored({ extra: 1 }), fresh())).toBe(false);
+    const missing = { code: "7203", updated: "2026-09-28T00:00:00.000Z", bars };
+    expect(shouldSkipPut(JSON.stringify(missing), fresh())).toBe(false);
+  });
+
+  it("不正 splits は [] 扱いせず PUT する (default 補完禁止)", () => {
+    expect(shouldSkipPut(stored({ splits: "xx" }), fresh())).toBe(false);
+    expect(shouldSkipPut(stored({ splits: null }), fresh())).toBe(false);
+  });
+
+  it("bars/splits/code の実変化・剪定は PUT する", () => {
     expect(
       shouldSkipPut(stored(), {
-        code: "7203",
+        ...fresh(),
         bars: [{ ...bars[0], c: 106 }],
-        splits,
       })
     ).toBe(false);
-    expect(
-      shouldSkipPut(stored(), {
-        code: "7203",
-        bars,
-        splits: [{ date: "2026-09-25", numerator: 2, denominator: 1 }],
-      })
-    ).toBe(false);
-    expect(shouldSkipPut(stored(), { code: "7204", bars, splits })).toBe(
-      false
-    );
-  });
-
-  it("剪定で集合が変われば PUT する (skip しない)", () => {
     expect(
       shouldSkipPut(
         stored({ bars: [...bars, { ...bars[0], date: "2026-09-24" }] }),
-        { code: "7203", bars, splits }
+        fresh()
       )
     ).toBe(false);
   });
 
-  it("既存なし・parse不能・形状不正は PUT する", () => {
-    expect(shouldSkipPut(null, { code: "7203", bars, splits })).toBe(false);
-    expect(shouldSkipPut("not-json", { code: "7203", bars, splits })).toBe(
-      false
-    );
-    expect(
-      shouldSkipPut(JSON.stringify({ code: "7203" }), {
-        code: "7203",
-        bars,
-        splits,
-      })
-    ).toBe(false);
+  it("既存なし・parse不能・object以外は PUT する", () => {
+    expect(shouldSkipPut(null, fresh())).toBe(false);
+    expect(shouldSkipPut("not-json", fresh())).toBe(false);
+    expect(shouldSkipPut(JSON.stringify([1, 2]), fresh())).toBe(false);
   });
 });
 

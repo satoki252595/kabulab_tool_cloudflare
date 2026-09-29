@@ -59,8 +59,10 @@ async function main() {
         );
       }
       // same-cached-input 2回目は内容同一で PUT skip (updated 不変)。
-      if (shouldSkipPut(existing, { code, bars: merged, splits: mergedSplits })) { skipped++; return; }
-      await r2Put(`daily/${code}.json`, JSON.stringify({ code, updated: new Date().toISOString(), bars: merged, splits: mergedSplits }));
+      // 比較対象は保存 object そのもの (Sol HOLD1: code/bars/splits 抜粋禁止)。
+      const payload = { code, updated: new Date().toISOString(), bars: merged, splits: mergedSplits };
+      if (shouldSkipPut(existing, payload)) { skipped++; return; }
+      await r2Put(`daily/${code}.json`, JSON.stringify(payload));
       written++;
     } catch (e) {
       // レート制限は「これ以上叩くな」のシグナル。即リトライせず連続数を数え、

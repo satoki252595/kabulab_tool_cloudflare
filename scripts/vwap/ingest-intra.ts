@@ -57,8 +57,10 @@ async function main() {
       const bars = [...map.values()].filter((b) => b.ts >= cutoffTs).sort((a, b) => a.ts - b.ts);
       // same-cached-input 2回目は内容同一で PUT skip (updated 不変)。
       // keep 剪定で集合が変われば内容が変わるため PUT する。
-      if (shouldSkipPut(existing, { code, bars })) { skipped++; return; }
-      await r2Put(`intra/${code}.json`, JSON.stringify({ code, updated: new Date().toISOString(), bars }));
+      // 比較対象は保存 object そのもの (Sol HOLD1: code/bars/splits 抜粋禁止)。
+      const payload = { code, updated: new Date().toISOString(), bars };
+      if (shouldSkipPut(existing, payload)) { skipped++; return; }
+      await r2Put(`intra/${code}.json`, JSON.stringify(payload));
       written++;
     } catch (e) {
       // レート制限は即リトライせず連続数を数え、しきい値で全体を中断する。
