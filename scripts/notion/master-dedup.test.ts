@@ -626,6 +626,85 @@ describe("master-dedup (純粋関数)", () => {
       expect(propertiesEqualExcept("other", a, b)).toBe(false);
     });
 
+    function hostedFile(name: string, key: string, sig: string, expiry: string) {
+      return {
+        name,
+        type: "file",
+        file: { url: `https://prod-files-secure.invalid/${key}/${name}?X-Amz-Signature=${sig}`, expiry_time: expiry },
+      };
+    }
+
+    it("Files の署名 rotation (同 object 再署名) は同一判定する", () => {
+      const a = { ファイル: { type: "files", files: [hostedFile("a.zip", "key1", "sig-old", "2026-09-28T23:00:00.000Z")] } };
+      const b = { ファイル: { type: "files", files: [hostedFile("a.zip", "key1", "sig-new", "2026-09-29T01:00:00.000Z")] } };
+      expect(propertiesEqualExcept("other", a, b)).toBe(true);
+    });
+
+    it("Files の resource/name/type 変化は不一致にする", () => {
+      const base = { ファイル: { type: "files", files: [hostedFile("a.zip", "key1", "s1", "2026-09-28T23:00:00.000Z")] } };
+      const diffPath = { ファイル: { type: "files", files: [hostedFile("a.zip", "key2", "s1", "2026-09-28T23:00:00.000Z")] } };
+      expect(propertiesEqualExcept("other", base, diffPath)).toBe(false);
+      const diffName = { ファイル: { type: "files", files: [hostedFile("b.zip", "key1", "s1", "2026-09-28T23:00:00.000Z")] } };
+      expect(propertiesEqualExcept("other", base, diffName)).toBe(false);
+      const toExternal = { ファイル: { type: "files", files: [{ name: "a.zip", type: "external", external: { url: "https://example.invalid/a.zip" } }] } };
+      expect(propertiesEqualExcept("other", base, toExternal)).toBe(false);
+      const dropped = { ファイル: { type: "files", files: [] } };
+      expect(propertiesEqualExcept("other", base, dropped)).toBe(false);
+    });
+
+    it("外部 URL の query 変化・未知形状は無差別 strip せず不一致にする", () => {
+      const a = { ファイル: { type: "files", files: [{ name: "e", type: "external", external: { url: "https://example.invalid/f?v=1" } }] } };
+      const b = { ファイル: { type: "files", files: [{ name: "e", type: "external", external: { url: "https://example.invalid/f?v=2" } }] } };
+      expect(propertiesEqualExcept("other", a, b)).toBe(false);
+      const unknown = { ファイル: { type: "files", files: [{ name: "x", type: "file" }] } };
+      const known = { ファイル: { type: "files", files: [hostedFile("x", "k", "s", "2026-09-28T23:00:00.000Z")] } };
+      expect(propertiesEqualExcept("other", unknown, known)).toBe(false);
+      expect(propertiesEqualExcept("other", unknown, unknown)).toBe(false);
+    });
+
+    it("非署名 query (versionId) の差は除去せず不一致にする", () => {
+      const f = (versionId: string, sig: string) => ({
+        name: "a.zip",
+        type: "file",
+        file: {
+          url: `https://prod-files-secure.invalid/key/a.zip?versionId=${versionId}&X-Amz-Signature=${sig}`,
+          expiry_time: sig,
+        },
+      });
+      const a = { ファイル: { type: "files", files: [f("v1", "s1")] } };
+      const rotatedSameVersion = { ファイル: { type: "files", files: [f("v1", "s2")] } };
+      const diffVersion = { ファイル: { type: "files", files: [f("v2", "s2")] } };
+      expect(propertiesEqualExcept("other", a, rotatedSameVersion)).toBe(true);
+      expect(propertiesEqualExcept("other", a, diffVersion)).toBe(false);
+    });
+
+    it("未知 field の差は drop せず不一致にする", () => {
+      const f = (flag: boolean) => ({
+        name: "a.zip",
+        type: "file",
+        file: {
+          url: "https://prod-files-secure.invalid/key/a.zip?X-Amz-Signature=s",
+          expiry_time: "t",
+          future_flag: flag,
+        },
+      });
+      const a = { ファイル: { type: "files", files: [f(true)] } };
+      const b = { ファイル: { type: "files", files: [f(false)] } };
+      expect(propertiesEqualExcept("other", a, b)).toBe(false);
+    });
+
+    it("rotation と同時に他 props が変われば不一致にする", () => {
+      const a = {
+        タイトル: { type: "title", title: [{ plain_text: "t" }] },
+        ファイル: { type: "files", files: [hostedFile("a.zip", "key1", "s1", "2026-09-28T23:00:00.000Z")] },
+      };
+      const b = {
+        タイトル: { type: "title", title: [{ plain_text: "changed" }] },
+        ファイル: { type: "files", files: [hostedFile("a.zip", "key1", "s2", "2026-09-29T01:00:00.000Z")] },
+      };
+      expect(propertiesEqualExcept("other", a, b)).toBe(false);
+    });
+
     it("stableStringify はキー順に依らない", () => {
       expect(stableStringify({ b: 1, a: { d: 4, c: 3 } })).toBe(stableStringify({ a: { c: 3, d: 4 }, b: 1 }));
     });
@@ -746,6 +825,19 @@ describe("master-dedup (純粋関数)", () => {
       };
       expect(nonRelationPropsEqual(a, b)).toBe(true);
       expect(nonRelationPropsEqual(a, c)).toBe(false);
+    });
+
+    it("Files の署名 rotation は同一・resource 変化は不一致にする", () => {
+      const f = (sig: string, key: string) => ({
+        name: "a.zip",
+        type: "file",
+        file: { url: `https://prod-files-secure.invalid/${key}/a.zip?X-Amz-Signature=${sig}`, expiry_time: sig },
+      });
+      const a = { ファイル: { type: "files", files: [f("s1", "key1")] } };
+      const rotated = { ファイル: { type: "files", files: [f("s2", "key1")] } };
+      const moved = { ファイル: { type: "files", files: [f("s1", "key2")] } };
+      expect(nonRelationPropsEqual(a, rotated)).toBe(true);
+      expect(nonRelationPropsEqual(a, moved)).toBe(false);
     });
   });
 
