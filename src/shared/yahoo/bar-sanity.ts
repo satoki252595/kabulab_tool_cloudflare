@@ -306,10 +306,13 @@ export function sanitizeBars(bars: readonly Bar[]): SanitizeResult {
 }
 
 /**
- * Chart 応答の全履歴 guard (sanitize + 応答整合) を一括適用する共有関数。
- * `fetchChart` 本体と修復 replay が同じ判定を使う。guard は対象日の切断
- * より前・全履歴に対して行う (sanitize は直前採用バー比較、coherence は
- * 最新有効終値を見るため、切断後の適用では判定が変わる)。
+ * Chart 応答の全履歴 guard (raw 実在値検査 + sanitize + 応答整合) を
+ * 一括適用する共有関数。`fetchChart` 本体と修復 replay が同じ判定を使う。
+ * guard は対象日の切断より前・全履歴に対して行う (sanitize は直前採用バー
+ * 比較、coherence は最新有効終値を見るため、切断後の適用では判定が変わる)。
+ * 冒頭の raw 検査は fetchDaily/fetchBars5m と同一 (filter 前の全行検証。
+ * null・adj null・volume 0 は許容。非有限・OHLC 非正・出来高負・adj 非正・
+ * 高安逆転は応答全体を拒否)。sanitize 側に新規 RejectReason は増やさない。
  * ログは出さない (呼び出し側が必要なら rejected を報告する)。
  */
 export function guardChartBars(
@@ -317,6 +320,11 @@ export function guardChartBars(
   metaPrice: number | null | undefined,
   symbol: string
 ): SanitizeResult {
+  assertRawBarsSane(
+    symbol,
+    rawBars.map((b) => ({ o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume })),
+    rawBars.map((b) => b.adj)
+  );
   const { bars: ohlcv, rejected } = sanitizeBars(rawBars);
   let latestUsedClose: number | null = null;
   let latestVolume: number | null = null;

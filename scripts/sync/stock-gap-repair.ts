@@ -25,7 +25,10 @@
  *     Notion 共有窓口へ 1 件記録する (曖昧 POST の再送禁止)。
  *
  * 本番 INSERT は Root 最終 review + gate まで行わない (PREP のみ)。
- * `--execute` が無いと起動しない。
+ * `--execute --eligible-file <pinned-grant.json>` が無いと起動しない。
+ * receipt POST 前に 0600 証拠を persist し、ack 後は添付 readback で
+ * 物理完了を確認する。`resume-receipt --run-id` は既存 key の一意照会 +
+ * hosted readback のみ (再 POST なし・D1 不使用)。
  */
 import { and, eq, inArray } from "drizzle-orm";
 import {
@@ -288,14 +291,28 @@ export type RepairDisposition =
   | { kind: "write0"; code: string }
   | { kind: "held"; code: string; reason: string };
 
+/** POST 前に 0600 persist する receipt 証拠 (resume の照合原器)。 */
+export interface ReceiptProof {
+  key: string;
+  runId: string;
+  sha256: string;
+  bytes: Uint8Array;
+}
+
 export interface GapRepairDeps {
   loadCustody: () => Promise<RepairCustody>;
   /** active equity の code→id (drift 検出用。既定は loadDailyTargets)。 */
   loadTargets: () => Promise<{ id: number; code: string }[]>;
   /** 指定 (stockId, date) の既存 7 値 (行なしは欠番)。readback で再利用。 */
   readRows: (stockIds: readonly number[], date: string) => Promise<Map<number, OhlcvSeven>>;
+  /** 同 runId proof の事前存在確認 (D1 送信前。既存なら resume-only 誘導で HOLD)。 */
+  probeProofAbsent: (runId: string) => Promise<void>;
   sendBatch: (statements: readonly D1BatchStatement[]) => Promise<void>;
   record: typeof recordPrimaryData;
+  /** receipt POST 前の 0600 persist (既定は repo tmp/ へ 0600 書込)。 */
+  persistProof: (proof: ReceiptProof) => Promise<string>;
+  /** receipt ack 後の物理 readback (既定は verifyReceiptAttachment)。 */
+  verifyReceipt: (pageId: string, filename: string, bytes: Uint8Array) => Promise<void>;
 }
 
 export interface GapRepairReport {
@@ -303,7 +320,16 @@ export interface GapRepairReport {
   runId: string;
   diagKey: string;
   receiptKey: string | null;
+  /** readback の exact-match で確定した適用数 (応答成功だけでは数えない)。 */
   applied: number;
+  /**
+   * readback の非確定 (0 としない。HOLD 扱い。再送なし)。
+   * SELECT 時点の不存在は rollback 確定にしない (切断 POST の遅延 commit が
+   * あり得るため observed-absent-at-readback として HOLD する)。
+   * この sender は明示 rollback 応答を型で区別できないため、rollback 確定の
+   * 区分は持たない。
+   */
+  unknown: { code: string; reason: string }[];
   write0: string[];
   held: { code: string; reason: string }[];
   excluded: { code: string; reason: string }[];
@@ -316,15 +342,68 @@ export interface GapRepairReport {
  * CAS 競合・readback 不一致は全 STOP (盲再送なし)。stdout 報告に
  * 価格値は含めない (値は Notion receipt の custody にだけ残す)。
  */
+/** Root grant の eligible 入力 (pinned file。bare list は受けない)。 */
+export interface EligibleGrant {
+  codes: ReadonlySet<string>;
+  /** grant file 自体の SHA256 (receipt へ残す証拠)。 */
+  fileSha256: string;
+  source: string;
+  sourceSha256: string;
+  archivePins: readonly string[];
+}
+
+/**
+ * eligible grant file の strict parse (fail-closed)。
+ * 必須: date 一致・source・sourceSha256(hex64)・archivePins 非空・
+ * codes 非空一意。資格の意味は grant が決める (コードは推測しない)。
+ */
+export function parseEligibleFile(text: string): Omit<EligibleGrant, "fileSha256"> {
+  const fail = (why: string): never => {
+    throw new Error(`eligible file の検証に失敗したため STOP: ${why}`);
+  };
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    fail("JSON ではない");
+  }
+  if (!json || typeof json !== "object") fail("object ではない");
+  const o = json as Record<string, unknown>;
+  if (o["date"] !== REPAIR_DATE) fail(`date 不一致 (${String(o["date"])})`);
+  if (typeof o["source"] !== "string" || o["source"].length === 0) fail("source なし");
+  if (typeof o["sourceSha256"] !== "string" || !/^[0-9a-f]{64}$/.test(o["sourceSha256"])) {
+    fail("sourceSha256 が hex64 ではない");
+  }
+  if (!Array.isArray(o["archivePins"]) || o["archivePins"].length === 0) fail("archivePins なし");
+  for (const p of o["archivePins"] as unknown[]) {
+    if (typeof p !== "string" || p.length === 0) fail("archivePins 要素が空");
+  }
+  if (!Array.isArray(o["codes"]) || o["codes"].length === 0) fail("codes が空");
+  const codes = new Set<string>();
+  for (const c of o["codes"] as unknown[]) {
+    if (typeof c !== "string" || c.length === 0) fail("codes 要素が空");
+    const code = c as string;
+    if (codes.has(code)) fail(`codes 重複 (${code})`);
+    codes.add(code);
+  }
+  return {
+    codes,
+    source: o["source"] as string,
+    sourceSha256: o["sourceSha256"] as string,
+    archivePins: (o["archivePins"] as string[]).slice(),
+  };
+}
+
 export async function runGapRepair(
   runId: string,
-  eligibleCodes: ReadonlySet<string>,
+  eligible: EligibleGrant,
   deps: GapRepairDeps,
   nowIso: () => string = () => new Date().toISOString()
 ): Promise<GapRepairReport> {
   // 保存対象は eligible (date-effective 資格検証済み。Root が grant 時に支給)
   // に属する has_real_bar のみ。暫定 denylist を埋め込まず、active flag や
   // 欠落データから資格を推測しない。空・未知・非 has_real_bar は即 STOP。
+  const eligibleCodes = eligible.codes;
   if (eligibleCodes.size === 0) {
     throw new Error("修復 STOP: eligible 集合が空です (Root が grant 時に支給すること)");
   }
@@ -399,11 +478,16 @@ export async function runGapRepair(
     }
   }
 
-  // chunk batch 送信。競合・失敗は全 STOP (後続 chunk を送らない)。
-  let applied = 0;
+  // D1 送信前: 同 runId proof の存在確認。再実行の二重送信を防ぐ。
+  // 既存があればここで HOLD (resume-only へ誘導)。原器の上書きはしない。
+  await deps.probeProofAbsent(runId);
+
+  // chunk batch 送信。応答不明 (throw) の chunk は attempted として残し、
+  // 後続を送らず STOP する (再 POST なし)。適用数は readback 確定まで数えない。
+  const confirmed: OhlcvInsertRow[] = [];
+  const attempted: OhlcvInsertRow[] = [];
   let aborted = false;
   let abortReason: string | null = null;
-  const sent: OhlcvInsertRow[] = [];
   for (let i = 0; i < inserts.length; i += OHLCV_REPAIR_CHUNK_ROWS) {
     const chunk = inserts.slice(i, i + OHLCV_REPAIR_CHUNK_ROWS);
     try {
@@ -415,35 +499,71 @@ export async function runGapRepair(
     } catch (e) {
       aborted = true;
       abortReason = `chunk-${Math.floor(i / OHLCV_REPAIR_CHUNK_ROWS)}:${rootCauseMessage(e).slice(0, 200)}`;
+      attempted.push(...chunk);
       break;
     }
-    applied += chunk.length;
-    sent.push(...chunk);
+    confirmed.push(...chunk);
   }
 
-  // readback: 送信分を再 SELECT して 7 値照合。
-  let readbackOk = true;
-  let readbackDetail = "not-applicable";
-  if (sent.length > 0) {
-    const reread = await deps.readRows(
-      sent.map((r) => r.stockId),
-      REPAIR_DATE
-    );
-    const bad: string[] = [];
-    for (const s of sent) {
-      const row = reread.get(s.stockId);
-      if (!row || !ohlcvSevenEqual(row, s)) bad.push(s.code);
-    }
-    readbackOk = bad.length === 0;
-    readbackDetail = readbackOk ? `matched:${sent.length}` : `mismatch:[${bad.join(",")}]`;
-    if (!readbackOk) {
+  // readback: 応答成功 + 応答不明の全対象を再 SELECT する。
+  // raw 全 tuple の exact-match だけを observed-committed (適用確定) とする。
+  // SELECT 時点の不存在は rollback の証明にならない (fetch 切断・invalid
+  // response 時に server transaction の終了証明はなく、元 POST の遅延 commit
+  // があり得る) ため observed-absent-at-readback として unknown/HOLD に残す。
+  // different は drift、SELECT 失敗は unobserved。適用 0 の断定・再送はしない。
+  const appliedCodes: string[] = [];
+  const unknown: { code: string; reason: string }[] = [];
+  const verifyTargets = [...confirmed, ...attempted];
+  let reread: Map<number, OhlcvSeven> | null = null;
+  if (verifyTargets.length > 0) {
+    try {
+      reread = await deps.readRows(
+        verifyTargets.map((r) => r.stockId),
+        REPAIR_DATE
+      );
+    } catch (e) {
+      for (const t of verifyTargets) {
+        unknown.push({ code: t.code, reason: `readback-unobserved:${rootCauseMessage(e).slice(0, 120)}` });
+      }
       aborted = true;
-      abortReason = `readback:${readbackDetail}`;
+      abortReason = `readback-unobserved:${rootCauseMessage(e).slice(0, 120)}`;
     }
   }
+  if (reread !== null) {
+    for (const s of confirmed) {
+      const row = reread.get(s.stockId);
+      if (row !== undefined && ohlcvSevenEqual(row, s)) {
+        appliedCodes.push(s.code);
+      } else if (row === undefined) {
+        unknown.push({ code: s.code, reason: "observed-absent-at-readback" });
+      } else {
+        unknown.push({ code: s.code, reason: "confirmed-row-drift" });
+      }
+    }
+    for (const s of attempted) {
+      const row = reread.get(s.stockId);
+      if (row !== undefined && ohlcvSevenEqual(row, s)) {
+        appliedCodes.push(s.code);
+      } else if (row === undefined) {
+        unknown.push({ code: s.code, reason: "observed-absent-at-readback" });
+      } else {
+        unknown.push({ code: s.code, reason: "attempted-row-drift" });
+      }
+    }
+    if (unknown.length > 0 && !aborted) {
+      aborted = true;
+      abortReason = `readback-unknown:[${unknown.map((u) => u.code).join(",")}]`;
+    }
+  }
+  const readbackDetail =
+    verifyTargets.length === 0 ? "not-applicable" : `applied:${appliedCodes.length}/unknown:${unknown.length}`;
 
-  // receipt 記録 (値は custody にだけ残す)。曖昧 POST は再送しない。
+  // receipt 記録 (値は custody にだけ残す)。POST 前に 0600 persist し、
+  // ack 後は readback (件数・名前・hosted・bytes SHA) で物理完了を確認する。
+  // 曖昧 POST は再送しない (resume-receipt で readonly 回復)。
   const receiptKey = `price-sync-repair-20260929-${runId}`;
+  const applied = appliedCodes.length;
+  const byVerifyCode = new Map(verifyTargets.map((r) => [r.code, r]));
   const receipt = {
     service: SERVICE,
     kind: "price-sync-repair-receipt",
@@ -452,8 +572,16 @@ export async function runGapRepair(
     runId,
     diagKey: REPAIR_DIAG_KEY,
     diagManifestSha256: REPAIR_DIAG_MANIFEST_SHA256,
+    eligible: {
+      fileSha256: eligible.fileSha256,
+      source: eligible.source,
+      sourceSha256: eligible.sourceSha256,
+      archivePins: [...eligible.archivePins],
+      codes: [...eligibleCodes],
+    },
     generatedAt: nowIso(),
     applied,
+    unknown,
     write0,
     held,
     excluded,
@@ -461,12 +589,18 @@ export async function runGapRepair(
     abortReason,
     readback: readbackDetail,
     // 監査用の行値 (Notion custody 内のみ。stdout/Git には出さない)。
-    writes: sent.map((s) => ({
-      code: s.code,
-      stockId: s.stockId,
-      row: { date: s.date, open: s.open, high: s.high, low: s.low, close: s.close, volume: s.volume, adj: s.adj },
-    })),
+    writes: appliedCodes.map((code) => {
+      const s = byVerifyCode.get(code) as OhlcvInsertRow;
+      return {
+        code: s.code,
+        stockId: s.stockId,
+        row: { date: s.date, open: s.open, high: s.high, low: s.low, close: s.close, volume: s.volume, adj: s.adj },
+      };
+    }),
   };
+  const receiptBytes = new TextEncoder().encode(JSON.stringify(receipt));
+  const receiptSha = await sha256HexBytes(Uint8Array.from(receiptBytes));
+  const proofPath = await deps.persistProof({ key: receiptKey, runId, sha256: receiptSha, bytes: receiptBytes });
   let recordedReceiptKey: string | null = null;
   try {
     const res = await deps.record({
@@ -478,7 +612,10 @@ export async function runGapRepair(
         date: REPAIR_DATE,
         runId,
         diagKey: REPAIR_DIAG_KEY,
+        eligibleFileSha256: eligible.fileSha256,
+        eligibleCount: eligibleCodes.size,
         applied,
+        unknownCount: unknown.length,
         write0Count: write0.length,
         heldCount: held.length,
         excludedCount: excluded.length,
@@ -489,7 +626,7 @@ export async function runGapRepair(
       files: [
         {
           filename: `${receiptKey}.json`,
-          bytes: new TextEncoder().encode(JSON.stringify(receipt)),
+          bytes: receiptBytes,
           contentType: "application/json",
         },
       ],
@@ -501,11 +638,21 @@ export async function runGapRepair(
     if (res.outcome !== "recorded") {
       throw new Error(`修復 receipt 保管が不完全 (outcome=${res.outcome}): ${receiptKey}`);
     }
+    await deps.verifyReceipt(res.pageId, `${receiptKey}.json`, receiptBytes);
     recordedReceiptKey = receiptKey;
   } catch (e) {
-    // Unknown を含め再送しない (単発呼出)。元の成否は abortReason に残す。
-    if (e instanceof NotionUnknownResultError) throw e;
-    throw new Error(`修復 receipt の記録に失敗: ${rootCauseMessage(e)}`);
+    // Unknown を含め再送しない (単発呼出)。
+    // 同一 runId の再 POST は禁止。原実行の回収は readonly のみ:
+    // `resume-receipt --run-id=${runId}` で既存 key + 0600 証拠 bytes を照合し、
+    // 不在/読取失敗は HOLD。別 runId で同 receipt を書き直さない
+    // (独立した後日の通常実行と原 Unknown 解消を混同しない)。
+    const resumeHint = `同一runIdの再POST禁止。resume-receipt --run-id=${runId} で既存key+0600証拠のreadonly回収のみ。不在/読取失敗はHOLD (receiptKey=${receiptKey} proof=${proofPath})`;
+    if (e instanceof NotionUnknownResultError) {
+      const u = e as Error;
+      u.message = `${u.message} (${resumeHint})`;
+      throw u;
+    }
+    throw new Error(`修復 receipt の記録に失敗: ${rootCauseMessage(e)} (${resumeHint})`);
   }
 
   return {
@@ -514,6 +661,7 @@ export async function runGapRepair(
     diagKey: REPAIR_DIAG_KEY,
     receiptKey: recordedReceiptKey,
     applied,
+    unknown,
     write0,
     held,
     excluded,
@@ -522,8 +670,219 @@ export async function runGapRepair(
   };
 }
 
+/**
+ * receipt 添付 1 件の readback (ack だけでは物理完了を宣言しない)。
+ * 件数・名前・hosted・全 bytes (長さ+SHA256) を照合する。
+ */
+export async function verifyReceiptAttachment(
+  pageId: string,
+  filename: string,
+  expected: Uint8Array
+): Promise<void> {
+  const fail = (why: string): never => {
+    throw new Error(`修復 receipt の readback 照合に失敗したため HOLD: ${why}`);
+  };
+  const hosted = await listPageFiles(pageId, "Files");
+  if (hosted.length !== 1) fail(`添付 ${hosted.length} 件 ≠ 期待 1 件`);
+  const got = hosted[0];
+  if (got.name !== filename) fail(`添付名不一致「${got.name}」`);
+  if (got.kind !== "file") fail("receipt が Notion-hosted 添付ではありません");
+  const res = await fetch(got.url);
+  if (!res.ok) fail(`再取得に失敗 status=${res.status}`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.length !== expected.length) fail(`バイト長 ${bytes.length} ≠ ${expected.length}`);
+  const [gotSha, wantSha] = await Promise.all([
+    sha256HexBytes(Uint8Array.from(bytes)),
+    sha256HexBytes(Uint8Array.from(expected)),
+  ]);
+  if (gotSha !== wantSha) fail("SHA256 不一致");
+}
+
 // ---------------------------------------------------------------------------
-// live 配線 + CLI (手動実行。`--execute --eligible-codes ...` が無いと起動しない)
+// receipt 証拠の 0600 persist + readonly resume
+// ---------------------------------------------------------------------------
+
+/** 0600 証拠の既定 dir (repo tmp/ 配下。git 管理外)。 */
+export const RECEIPT_PROOF_DIR = "tmp/stock-gap-repair";
+
+export function receiptProofPath(dir: string, runId: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(runId) || runId.includes("..")) {
+    throw new Error(`runId が証拠パスに使えません: ${runId}`);
+  }
+  return `${dir.replace(/\/+$/, "")}/receipt-${runId}.json`;
+}
+
+/**
+ * 同 runId proof の事前存在確認 (D1 送信より前に呼ぶ)。
+ * 既存があれば新規送信せず resume-only へ誘導して HOLD する
+ * (Actions 再実行・同 run.attempt の二重送信防止。原器の上書きはしない)。
+ */
+export async function probeReceiptProofAbsent(dir: string, runId: string): Promise<void> {
+  const { stat } = await import("node:fs/promises");
+  const path = receiptProofPath(dir, runId);
+  try {
+    await stat(path);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw e;
+  }
+  throw new Error(
+    `修復の開始を HOLD: 同 runId の receipt 証拠が既にあります (path=${path})。` +
+      `D1 送信前に停止します。新規送信はせず resume-receipt --run-id=${runId} で readonly 回収すること`
+  );
+}
+
+function proofBytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * receipt 証拠の persist。原器の無条件 truncate はしない。
+ * - 新規のみ `wx` 排他作成 (0600)。競合 (EEXIST) は HOLD。
+ * - 既存があれば key/SHA/bytes 完全一致のときだけ再利用する。
+ *   不一致・parse 不可・mode 非 0600 は D1/POST 前 HOLD とし、原器は
+ *   一切変更しない (自動 chmod なし、信用もしない)。
+ * 再実行で write0/時刻が変わっても Unknown 元の expected bytes を壊さない。
+ */
+export async function persistReceiptProofFile(dir: string, proof: ReceiptProof): Promise<string> {
+  const { mkdir, writeFile, readFile, stat } = await import("node:fs/promises");
+  await mkdir(dir, { recursive: true });
+  const path = receiptProofPath(dir, proof.runId);
+  const resumeOnly =
+    `原器は変更しません。新規送信はせず resume-receipt --run-id=${proof.runId} で readonly 回収すること`;
+  // 書込開始前の既存確認 (原器保護が先、書込は後)。
+  let existing: string | null = null;
+  try {
+    existing = await readFile(path, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  if (existing !== null) {
+    const st = await stat(path);
+    if ((st.mode & 0o777) !== 0o600) {
+      throw new Error(
+        `receipt 証拠の再利用を HOLD: 既存 proof の mode が 0600 ではありません (path=${path})。` +
+          `${resumeOnly} (自動 chmod はしません)`
+      );
+    }
+    let o: unknown;
+    try {
+      o = JSON.parse(existing);
+    } catch {
+      throw new Error(`receipt 証拠の再利用を HOLD: 既存 proof の parse に失敗 (path=${path})。${resumeOnly}`);
+    }
+    const prev = o as { key: string; runId: string; sha256: string; bytesBase64: string };
+    const prevBytes =
+      typeof prev?.bytesBase64 === "string" ? new Uint8Array(Buffer.from(prev.bytesBase64, "base64")) : null;
+    const prevSha = prevBytes ? await sha256HexBytes(Uint8Array.from(prevBytes)) : null;
+    const identical =
+      prev?.key === proof.key &&
+      prev?.runId === proof.runId &&
+      typeof prev?.sha256 === "string" &&
+      prev.sha256 === proof.sha256 &&
+      prevSha === proof.sha256 &&
+      prevBytes !== null &&
+      proofBytesEqual(prevBytes, proof.bytes);
+    if (!identical) {
+      throw new Error(
+        `receipt 証拠の再利用を HOLD: 既存 proof と内容不一致 (key/SHA/bytes のいずれかが相違 path=${path})。` +
+          `${resumeOnly}`
+      );
+    }
+    return path;
+  }
+  const body = JSON.stringify({
+    key: proof.key,
+    runId: proof.runId,
+    sha256: proof.sha256,
+    bytesBase64: Buffer.from(proof.bytes).toString("base64"),
+  });
+  try {
+    await writeFile(path, body, { mode: 0o600, flag: "wx" });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`receipt 証拠の作成を HOLD: 同 runId の proof が既にあります (path=${path})。${resumeOnly}`);
+    }
+    throw e;
+  }
+  return path;
+}
+
+export async function loadReceiptProofFile(dir: string, runId: string): Promise<ReceiptProof | null> {
+  const { readFile } = await import("node:fs/promises");
+  let text: string;
+  try {
+    text = await readFile(receiptProofPath(dir, runId), "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+  const o = JSON.parse(text) as { key: string; runId: string; sha256: string; bytesBase64: string };
+  if (o.key === undefined || o.runId !== runId || typeof o.sha256 !== "string" || typeof o.bytesBase64 !== "string") {
+    throw new Error(`receipt 証拠ファイルの形式不正: ${runId}`);
+  }
+  const bytes = new Uint8Array(Buffer.from(o.bytesBase64, "base64"));
+  const sha = await sha256HexBytes(Uint8Array.from(bytes));
+  if (sha !== o.sha256) {
+    throw new Error(`receipt 証拠ファイルの SHA 不一致 (改ざん疑い): ${runId}`);
+  }
+  return { key: o.key, runId: o.runId, sha256: o.sha256, bytes };
+}
+
+export interface ResumeResult {
+  status: "adopted" | "absent";
+  key: string;
+  runId: string;
+  pageId: string | null;
+  detail: string;
+}
+
+/**
+ * receipt の readonly resume。新規 mutation なし (D1・Notion 書込ゼロ、
+ * receipt 再 POST なし)。0600 証拠と既存 key の一意照会 + hosted 全件
+ * readback のみで回復可否を決める。不在/読取失敗は HOLD (再 POST しない。
+ * 別 runId での書直しはしない。独立した後日の通常実行と原 Unknown 解消は
+ * 別に扱う)。
+ */
+export async function resumeReceiptProof(
+  runId: string,
+  opts?: { dir?: string }
+): Promise<ResumeResult> {
+  const dir = opts?.dir ?? RECEIPT_PROOF_DIR;
+  const proof = await loadReceiptProofFile(dir, runId);
+  if (!proof) {
+    throw new Error(
+      `resume HOLD: 0600 証拠なし (dir=${dir} runId=${runId})。` +
+        `同一マシンの証拠で再実行すること。再 POST・別 runId での書直しはしない`
+    );
+  }
+  const dbId = await findBackupChildByTitle({
+    parentPageId: notionEnv.NOTION_ARCHIVE_PAGE_ID(),
+    title: "一次データ｜stock-sync",
+    kind: "database",
+  });
+  if (!dbId) {
+    throw new Error("resume STOP: 「一次データ｜stock-sync」DB なし");
+  }
+  const row = await queryUniqueRow<{ id: string }>(
+    dbId,
+    { property: "Key", title: { equals: proof.key } },
+    `resume の重複 key=${proof.key} を選ばず保全停止`
+  );
+  if (!row) {
+    return { status: "absent", key: proof.key, runId, pageId: null, detail: "key なし (未記録のため HOLD。再 POST しない)" };
+  }
+  await verifyReceiptAttachment(row.id, `${proof.key}.json`, proof.bytes);
+  return { status: "adopted", key: proof.key, runId, pageId: row.id, detail: "既存記録と 0600 証拠が一致" };
+}
+
+// ---------------------------------------------------------------------------
+// live 配線 + CLI
+// (修復実行は `--execute --eligible-file ...` が無いと起動しない)
 // ---------------------------------------------------------------------------
 
 /** 既存 7 値の読取 (99 stockId/chunk + date の 100 bind/文)。 */
@@ -568,8 +927,9 @@ function printScopeAndExit(): never {
     [
       "[stock-gap-repair] Issue #163 9/29 欠損の保管原文 replay 修復 (PREP 実装)。",
       `入力 custody: ${REPAIR_DIAG_KEY} (55 添付・Notion hosted のみ。Yahoo 追加 GET 0)。`,
-      "保存対象は --eligible-codes で支給された date-effective 資格集合のみ。",
+      "保存対象は --eligible-file の pinned grant のみ (bare list は受けない)。",
       "live 実行 (D1 INSERT + Notion receipt) には --execute が必要です。",
+      "resume-receipt --run-id <id>: 0600 証拠と既存 key の readonly 照合のみ (再 POST なし)。",
       "本番 INSERT は Root 最終 review + gate まで行いません。",
     ].join("\n")
   );
@@ -577,21 +937,35 @@ function printScopeAndExit(): never {
   throw new Error("unreachable");
 }
 
-function parseEligibleCodes(args: readonly string[]): ReadonlySet<string> | null {
-  const flag = args.find((a) => a.startsWith("--eligible-codes="));
-  if (!flag) return null;
-  const codes = flag
-    .slice("--eligible-codes=".length)
-    .split(",")
-    .map((c) => c.trim())
-    .filter((c) => c.length > 0);
-  return new Set(codes);
+function flagValue(args: readonly string[], name: string): string | null {
+  const flag = args.find((a) => a.startsWith(`${name}=`));
+  return flag ? flag.slice(name.length + 1) : null;
 }
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const eligible = parseEligibleCodes(args);
-  if (!args.includes("--execute") || eligible === null) printScopeAndExit();
+  if (args[0] === "resume-receipt") {
+    const runId = flagValue(args, "--run-id");
+    if (!runId) {
+      console.error("[stock-gap-repair] resume-receipt には --run-id=<id> が必要です");
+      process.exit(2);
+    }
+    const dir = flagValue(args, "--receipt-dir") ?? RECEIPT_PROOF_DIR;
+    const r = await resumeReceiptProof(runId, { dir });
+    console.info(JSON.stringify(r, null, 2));
+    if (r.status !== "adopted") process.exitCode = 1;
+    return;
+  }
+  const eligiblePath = flagValue(args, "--eligible-file");
+  if (!args.includes("--execute") || eligiblePath === null) printScopeAndExit();
+  const { readFile } = await import("node:fs/promises");
+  const eligibleText = await readFile(eligiblePath, "utf8");
+  const eligibleBytes = new TextEncoder().encode(eligibleText);
+  const eligibleParsed = parseEligibleFile(eligibleText);
+  const eligible: EligibleGrant = {
+    ...eligibleParsed,
+    fileSha256: await sha256HexBytes(Uint8Array.from(eligibleBytes)),
+  };
   const startedAt = Date.now();
   const db = createDailyDb();
   const sendBatch = createD1HttpBatchSender();
@@ -605,6 +979,9 @@ async function main(): Promise<void> {
     readRows: (stockIds, date) => readExistingRows(db, stockIds, date),
     sendBatch: (statements) => sendBatch(statements),
     record: recordPrimaryData,
+    persistProof: (proof) => persistReceiptProofFile(RECEIPT_PROOF_DIR, proof),
+    verifyReceipt: (pageId, filename, bytes) => verifyReceiptAttachment(pageId, filename, bytes),
+    probeProofAbsent: (probeRunId) => probeReceiptProofAbsent(RECEIPT_PROOF_DIR, probeRunId),
   });
   // 価格値は出さない (集計のみ。値は Notion receipt の custody のみ)。
   console.info(
@@ -615,6 +992,7 @@ async function main(): Promise<void> {
         diagKey: report.diagKey,
         receiptKey: report.receiptKey,
         applied: report.applied,
+        unknown: report.unknown,
         write0: report.write0,
         held: report.held,
         excluded: report.excluded,
@@ -626,11 +1004,12 @@ async function main(): Promise<void> {
     )
   );
   console.info(
-    `[stock-gap-repair] 完了: 適用 ${report.applied} / write0 ${report.write0.length} / ` +
-      `held ${report.held.length} / 除外 ${report.excluded.length}` +
+    `[stock-gap-repair] 完了: 適用 ${report.applied} / ` +
+      `unknown ${report.unknown.length} / write0 ${report.write0.length} / held ${report.held.length} / ` +
+      `除外 ${report.excluded.length}` +
       `${report.aborted ? ` ABORT(${report.abortReason})` : ""} (receipt ${report.receiptKey})`
   );
-  if (report.aborted || report.held.length > 0) {
+  if (report.aborted || report.held.length > 0 || report.unknown.length > 0) {
     process.exitCode = 1;
   }
 }
