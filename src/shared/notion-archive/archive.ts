@@ -519,9 +519,37 @@ interface BackupRowQuery {
 }
 
 /**
+ * 保管行 OR 照会の1回取得上限。呼び出し側は 40 key/回に収めるため
+ * 41 (=40+余白1) を超えることはない。has_more 真は重複暴走等の異常で
+ * あり、次照会で続きを取らず保全停止する (cursor 追跡しない)。
+ */
+const BACKUP_ROWS_QUERY_PAGE_SIZE = 41;
+
+/**
+ * Files プロパティ中の実ホスト添付だけを数える。外部参照
+ * (`type: "external"`) は物理保管の証明にならないため除外する。
+ * hosted 添付は schema (type/file/url/name) を検証する。
+ */
+function countHostedFiles(files: unknown[] | undefined): number {
+  if (!files) return 0;
+  return files.filter((f) => {
+    if (typeof f !== "object" || f === null) return false;
+    const e = f as { type?: unknown; name?: unknown; file?: { url?: unknown } };
+    return (
+      e.type === "file" &&
+      typeof e.name === "string" &&
+      e.name.length > 0 &&
+      typeof e.file?.url === "string" &&
+      e.file.url.length > 0
+    );
+  }).length;
+}
+
+/**
  * 指定 key 群の保管行を OR 一括で取得する (完成判定用)。
  * key 存在だけでなく実 Files 添付数・Status・Metadata を返す。
- * chunk は呼び出し側で複合フィルタ上限内に収めること。
+ * chunk は呼び出し側で 40 key/回に収めること。41 件超 (has_more 真)
+ * は異常として次照会せず保全停止する。重複行は呼び出し側で検知する。
  */
 export async function findBackupRowsByKeys(
   service: string,
@@ -533,41 +561,35 @@ export async function findBackupRowsByKeys(
   const filter = {
     or: keys.map((key) => ({ property: "Key", title: { equals: key } })),
   };
-  const out: BackupRowState[] = [];
-  let cursor: string | null = null;
-  for (;;) {
-    const res: BackupRowQuery = await notionRequest<BackupRowQuery>(
-      "POST",
-      `/databases/${dbId}/query`,
-      {
-        filter,
-        page_size: 100,
-        ...(cursor !== null ? { start_cursor: cursor } : {}),
-      }
+  const res: BackupRowQuery = await notionRequest<BackupRowQuery>(
+    "POST",
+    `/databases/${dbId}/query`,
+    { filter, page_size: BACKUP_ROWS_QUERY_PAGE_SIZE }
+  );
+  if (res.has_more) {
+    throw new Error(
+      `保全停止: 保管行照会が上限 ${BACKUP_ROWS_QUERY_PAGE_SIZE} 件超過 (重複暴走の疑い。次照会で続きを取らず停止) service=${service} keys=${keys.length}`
     );
-    for (const row of res.results) {
-      const key =
-        row.properties.Key?.title?.map((t) => t.plain_text ?? "").join("") ?? "";
-      const metaText =
-        row.properties.Metadata?.rich_text?.map((t) => t.plain_text ?? "").join("") ?? "";
-      let metadata: Record<string, unknown> = {};
-      try {
-        const parsed: unknown = JSON.parse(metaText === "" ? "{}" : metaText);
-        if (typeof parsed === "object" && parsed !== null) metadata = parsed as Record<string, unknown>;
-      } catch {
-        metadata = {};
-      }
-      out.push({
-        key,
-        fileCount: row.properties.Files?.files?.length ?? 0,
-        status: row.properties.Status?.select?.name ?? null,
-        metadata,
-      });
-    }
-    if (!res.has_more || res.next_cursor === null) break;
-    cursor = res.next_cursor;
   }
-  return out;
+  return res.results.map((row) => {
+    const key =
+      row.properties.Key?.title?.map((t) => t.plain_text ?? "").join("") ?? "";
+    const metaText =
+      row.properties.Metadata?.rich_text?.map((t) => t.plain_text ?? "").join("") ?? "";
+    let metadata: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(metaText === "" ? "{}" : metaText);
+      if (typeof parsed === "object" && parsed !== null) metadata = parsed as Record<string, unknown>;
+    } catch {
+      metadata = {};
+    }
+    return {
+      key,
+      fileCount: countHostedFiles(row.properties.Files?.files),
+      status: row.properties.Status?.select?.name ?? null,
+      metadata,
+    };
+  });
 }
 
 /** 文字列を rich_text 上限で分割 (欠落させない) */

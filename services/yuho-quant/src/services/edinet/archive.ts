@@ -47,25 +47,40 @@ export interface DocCustody {
   t5: TypeCustody;
 }
 
-/** 1 回の OR 照会に入れる最大通数 (2 key/通。複合フィルタ上限内に収める)。 */
-const CUSTODY_CHUNK_DOCS = 40;
+/** 1 回の OR 照会に入れる最大通数 (2 key/通で 40 key。照会上限 41 内)。 */
+const CUSTODY_CHUNK_DOCS = 20;
 
 function custodyOf(
   rows: Map<string, { fileCount: number; metadata: Record<string, unknown> }>,
-  docID: string,
-  type: EdinetArchiveDocType
-): TypeCustody {
-  const row = rows.get(edinetArchiveKey(docID, type));
-  if (!row) return "missing";
-  if (row.fileCount > 0) return "complete";
-  if (type === 1 && row.metadata["xbrlUnavailable"] === true) return "not-applicable";
-  return "metadata-only";
+  docID: string
+): DocCustody {
+  const t1 = rows.get(edinetArchiveKey(docID, 1));
+  const t5 = rows.get(edinetArchiveKey(docID, 5));
+  // T1 行不在 + T5 実体あり + 同通 T5 行の xbrlUnavailable=true (producer が
+  // 公式未提供を文書化) → not-applicable。producer は T1 行自体を書かない
+  // ため、T1 行の有無だけでは未提供を判定できない。
+  const t1c: TypeCustody =
+    t1 === undefined
+      ? t5 !== undefined &&
+        t5.fileCount > 0 &&
+        t5.metadata["xbrlUnavailable"] === true
+        ? "not-applicable"
+        : "missing"
+      : t1.fileCount > 0
+        ? "complete"
+        : t1.metadata["xbrlUnavailable"] === true
+          ? "not-applicable"
+          : "metadata-only";
+  const t5c: TypeCustody =
+    t5 === undefined ? "missing" : t5.fileCount > 0 ? "complete" : "metadata-only";
+  return { t1: t1c, t5: t5c };
 }
 
 /**
  * 複数通の type 保管完成を OR 一括で取得する (run/日ごとの再利用用)。
- * 1 通あたり 2 key を束ね、40 通ずつに chunk する。見つからない通は
+ * 1 通あたり 2 key を束ね、20 通ずつに chunk する。見つからない通は
  * t1/t5 とも missing で埋める (呼び出し側で存在チェック不要)。
+ * 同一 key の重複行は正本不明のため保全停止する (後勝ちで黙殺しない)。
  */
 export async function checkDocsCustody(
   service: string,
@@ -80,11 +95,17 @@ export async function checkDocsCustody(
       edinetArchiveKey(docID, 1),
       edinetArchiveKey(docID, 5),
     ]);
-    const rows = new Map(
-      (await findBackupRowsByKeys(service, keys)).map((r) => [r.key, r] as const)
-    );
+    const rows = new Map<string, { fileCount: number; metadata: Record<string, unknown> }>();
+    for (const r of await findBackupRowsByKeys(service, keys)) {
+      if (rows.has(r.key)) {
+        throw new Error(
+          `archive custody: 同一 key の重複行のため STOP (監査・整理が必要) key=${r.key}`
+        );
+      }
+      rows.set(r.key, r);
+    }
     for (const docID of chunk) {
-      out.set(docID, { t1: custodyOf(rows, docID, 1), t5: custodyOf(rows, docID, 5) });
+      out.set(docID, custodyOf(rows, docID));
     }
   }
   return out;
@@ -187,5 +208,36 @@ export async function recordEdinetZip(args: {
       `recordEdinetZip: 実ファイルが Notion 上限超過で未添付です (metadata のみ記録扱いにしない): ${edinetArchiveKey(docID, type)}`
     );
   }
+  if (result.outcome === "skipped_existing") {
+    await assertExistingRowPhysical(service, docID, type);
+  }
   return result;
+}
+
+/**
+ * 直接呼び出し対策の共有 guard。recordPrimaryData の key 存在判定は
+ * 行有無しか見ないため、既存行を再照会して実体を検証する。
+ * metadata-only 行 (実 Files なし) と同一 key 重複行は保全停止し、
+ * 無断で作り直さない (再照会の続き取得・恒久リトライもしない)。
+ */
+async function assertExistingRowPhysical(
+  service: string,
+  docID: string,
+  type: EdinetArchiveDocType
+): Promise<void> {
+  const key = edinetArchiveKey(docID, type);
+  const rows = (await findBackupRowsByKeys(service, [key])).filter(
+    (r) => r.key === key
+  );
+  if (rows.length > 1) {
+    throw new Error(
+      `recordEdinetZip: 同一 key の重複行のため STOP (監査・整理が必要) key=${key} rows=${rows.length}`
+    );
+  }
+  const first = rows[0];
+  if (!first || first.fileCount === 0) {
+    throw new Error(
+      `recordEdinetZip: 既存行に実ファイルなしのため STOP (metadata-only 行の成功扱い・無断再作成をしない) key=${key}`
+    );
+  }
 }

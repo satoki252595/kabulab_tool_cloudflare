@@ -708,4 +708,69 @@ describe("notion-archive archive (parentPageId)", () => {
       expect(calls.filter((c) => new URL(c.url).pathname === "/v1/databases")).toHaveLength(1);
     });
   });
+
+  describe("findBackupRowsByKeys (完成判定用 OR 照会)", () => {
+    const dbHit = (id: string) => ({
+      id,
+      created_time: "2026-09-28T00:00:00.000Z",
+      parent: { type: "page_id", page_id: ARCHIVE_PAGE },
+      title: [{ plain_text: "一次データ｜moneyflow" }],
+    });
+    const rowPage = (key: string, files: unknown[]) => ({
+      properties: {
+        Key: { title: [{ plain_text: key }] },
+        Files: { files },
+        Status: { select: { name: "recorded" } },
+        Metadata: { rich_text: [{ plain_text: "{}" }] },
+      },
+    });
+
+    it("has_more 真は次照会せず保全停止する (cursor 追跡しない)", async () => {
+      route("POST", "/v1/search", [
+        { results: [dbHit("db-x")], has_more: false, next_cursor: null },
+      ]);
+      route("POST", "/v1/databases/db-x/query", [
+        { results: [], has_more: true, next_cursor: null },
+      ]);
+      const { findBackupRowsByKeys } = await load();
+      await expect(findBackupRowsByKeys("moneyflow", ["k1"])).rejects.toThrow(
+        "保全停止"
+      );
+      expect(
+        calls.filter(
+          (c) => new URL(c.url).pathname === "/v1/databases/db-x/query"
+        )
+      ).toHaveLength(1);
+    });
+
+    it("外部参照は数えず実ホスト添付だけ fileCount にする", async () => {
+      route("POST", "/v1/search", [
+        { results: [dbHit("db-x")], has_more: false, next_cursor: null },
+      ]);
+      route("POST", "/v1/databases/db-x/query", [
+        {
+          results: [
+            rowPage("k-ext", [
+              { type: "external", name: "x", external: { url: "https://example.test/x" } },
+            ]),
+            rowPage("k-host", [
+              {
+                type: "file",
+                name: "k-host.zip",
+                file: { url: "https://example.test/signed", expiry_time: "2026-09-28T01:00:00.000Z" },
+              },
+            ]),
+          ],
+          has_more: false,
+          next_cursor: null,
+        },
+      ]);
+      const { findBackupRowsByKeys } = await load();
+      const rows = await findBackupRowsByKeys("moneyflow", ["k-ext", "k-host"]);
+      expect(rows).toEqual([
+        { key: "k-ext", fileCount: 0, status: "recorded", metadata: {} },
+        { key: "k-host", fileCount: 1, status: "recorded", metadata: {} },
+      ]);
+    });
+  });
 });
