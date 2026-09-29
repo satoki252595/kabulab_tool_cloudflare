@@ -11,8 +11,10 @@ Cloudflare ダッシュボードの kabulab-cf Workers Observability が無効�
 - 全 inbound ルート (portal `/`、001〜007 サービス、`/api/ingest/*`) の
   query 引数は絞込・ページング・コード・日付のみ。認証はすべて
   `Authorization: Bearer` ヘッダ (`CRON_SECRET` / `VOCAB_REVIEW_TOKEN`)。
-- `/api/ingest/yahoo` の `u` は allowlist 済み Yahoo API URL のみ
-  (crumb/cookie はエッジ側で付与。Node 側は素の URL を渡す)。
+- 唯一の例外は `/api/ingest/yahoo` の `u` で、外部 URL (Yahoo API の素の
+  URL) を取る。受理ホストは query1/2.finance.yahoo.com に allowlist され、
+  crumb/cookie はエッジ側 (`yahooFetchDirect`) で付与するため `u` 自体に
+  秘密は含まれない。
 - Worker 到達の console 出力は docID/ticker/tdnetId/件数・時刻のみ。
   Yahoo 系エラー経路は `redactYahooDiagnostic` で redact 済み (既存テストあり)。
   EDINET エラー文にキーは含まれない。
