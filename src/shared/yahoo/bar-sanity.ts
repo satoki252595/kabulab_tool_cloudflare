@@ -50,6 +50,107 @@ export function checkBarSelf(bar: Bar): BarCheck {
   return { ok: true };
 }
 
+/** filter 前 raw 行 (欠落 null と実値が混在)。 */
+export type RawBarLike = {
+  o: unknown;
+  h: unknown;
+  l: unknown;
+  c: unknown;
+  v: unknown;
+};
+
+const REFUSE = "応答全体を採用しません";
+
+/**
+ * 全 raw 行の実在値検査 (filter 前)。他行・他列の欠落があっても異常を隠さない。
+ *
+ * - 実数 (number) の非有限 → 異常として拒否 (欠落 null とは別扱い)。
+ * - 実在 OHLC ≤ 0、実在出来高 < 0 → 異常として拒否。
+ * - 実在 o/h/l/c 4 点揃いでの h<l → 異常として拒否。終値の高安レンジ外は
+ *   checkBarSelf と同じく見ない (Yahoo の丸め・取引時間差の正当例あり)。
+ * - adj 配列つきの場合、実在 adj の非有限・非正も拒否する。adj null は
+ *   欠落 (c 代用) であり異常ではない。
+ */
+export function assertRawBarsSane(
+  symbol: string,
+  rows: readonly RawBarLike[],
+  adj?: readonly unknown[]
+): void {
+  rows.forEach((r, i) => {
+    for (const [k, val] of Object.entries(r)) {
+      if (typeof val === "number" && !Number.isFinite(val)) {
+        throw new Error(
+          `${symbol}: raw ${k}[${i}] が非有限のため${REFUSE}。`
+        );
+      }
+    }
+    for (const k of ["o", "h", "l", "c"] as const) {
+      const val = r[k];
+      if (typeof val === "number" && val <= 0) {
+        throw new Error(
+          `${symbol}: raw ${k}[${i}] が非正 (${val}) のため${REFUSE}。`
+        );
+      }
+    }
+    if (typeof r.v === "number" && r.v < 0) {
+      throw new Error(
+        `${symbol}: raw volume[${i}] が負 (${r.v}) のため${REFUSE}。`
+      );
+    }
+    const { o, h, l, c } = r;
+    if (
+      typeof o === "number" &&
+      typeof h === "number" &&
+      typeof l === "number" &&
+      typeof c === "number" &&
+      Number.isFinite(o) &&
+      Number.isFinite(h) &&
+      Number.isFinite(l) &&
+      Number.isFinite(c) &&
+      h < l
+    ) {
+      throw new Error(
+        `${symbol}: raw bar[${i}] の高安逆転のため${REFUSE}。`
+      );
+    }
+    if (adj !== undefined) {
+      const a = adj[i];
+      if (typeof a === "number" && !Number.isFinite(a)) {
+        throw new Error(
+          `${symbol}: raw adj[${i}] が非有限のため${REFUSE}。`
+        );
+      }
+      if (typeof a === "number" && a <= 0) {
+        throw new Error(
+          `${symbol}: raw adj[${i}] が非正 (${a}) のため${REFUSE}。`
+        );
+      }
+    }
+  });
+}
+
+/**
+ * meta 価格時刻と bar interval の同時点証明。両者とも有限実数で、meta 時刻が
+ * その bar の interval [ts, ts+intervalSec) 内にある時のみ true。
+ * 旧 session・split 前 bar と現 meta の誤比較を防ぐ。時刻根拠が未知
+ * (欠落・非有限・interval 外) なら false を返し、呼び出し側は比較を
+ * 明示 skip する (同値と仮定して比較しない)。
+ */
+export function isProvenSamePoint(
+  metaTime: number | null | undefined,
+  barTs: number,
+  intervalSec: number
+): boolean {
+  if (
+    typeof metaTime !== "number" ||
+    !Number.isFinite(metaTime) ||
+    !Number.isFinite(barTs)
+  ) {
+    return false;
+  }
+  return metaTime >= barTs && metaTime < barTs + intervalSec;
+}
+
 /**
  * 直前のバーと比べて採用してよいか。
  *

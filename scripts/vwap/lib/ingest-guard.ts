@@ -13,6 +13,8 @@ export type PricedBar = {
   l: number;
   c: number;
   v: number;
+  /** 日足のみ。使用/保存する adj の実値も検査する (5m には無い)。 */
+  adj?: number | null;
 };
 
 export type InvalidBar = { index: number; reasons: string[] };
@@ -28,14 +30,17 @@ export function findInvalidBars(bars: readonly PricedBar[]): InvalidBar[] {
     }
     if (!Number.isFinite(b.v)) reasons.push("v:non-finite");
     else if (b.v < 0) reasons.push("v:negative");
-    if (
-      Number.isFinite(b.h) &&
-      Number.isFinite(b.l) &&
-      Number.isFinite(b.o) &&
-      Number.isFinite(b.c) &&
-      (b.h < b.l || b.h < b.o || b.h < b.c || b.l > b.o || b.l > b.c)
-    ) {
+    // 高安逆転のみ見る。終値の高安レンジ外は checkBarSelf と同じく正当
+    // (Yahoo の丸め・取引時間差。7112 の high 700/low 698/close 697 例)。
+    if (Number.isFinite(b.h) && Number.isFinite(b.l) && b.h < b.l) {
       reasons.push("range:inverted");
+    }
+    // adj: 実在値の非有限・非正を検査する。欠落 null は c 代用の対象で
+    // あり異常ではないが、保存直前の整形済みバーに null が残るのは異常。
+    if (b.adj !== undefined) {
+      if (b.adj === null) reasons.push("adj:missing");
+      else if (!Number.isFinite(b.adj)) reasons.push("adj:non-finite");
+      else if (b.adj <= 0) reasons.push("adj:non-positive");
     }
     if (reasons.length > 0) out.push({ index, reasons });
   });

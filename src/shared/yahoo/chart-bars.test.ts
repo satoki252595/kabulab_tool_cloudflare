@@ -256,6 +256,51 @@ describe("fetchDaily", () => {
     );
     await expect(fetchDaily("7203.T")).rejects.toThrow(/非有限/);
   });
+
+  it("実在 adj の非正は拒否し、adj 欠落は c 代用で通す", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "7203.T", regularMarketPrice: 105 },
+        indicators: {
+          quote: [
+            {
+              open: [100, 101],
+              high: [110, 111],
+              low: [90, 91],
+              close: [105, 106],
+              volume: [1000, 2000],
+            },
+          ],
+          adjclose: [{ adjclose: [104, -2] }],
+        },
+      })
+    );
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/raw adj\[1\] が非正/);
+  });
+
+  it("adj 欠落 (null) は c 代用であり異常ではない", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "7203.T", regularMarketPrice: 105 },
+        indicators: {
+          quote: [
+            {
+              open: [100, 101],
+              high: [110, 111],
+              low: [90, 91],
+              close: [105, 106],
+              volume: [1000, 2000],
+            },
+          ],
+          adjclose: [{ adjclose: [104, null] }],
+        },
+      })
+    );
+    const { bars } = await fetchDaily("7203.T");
+    expect(bars[1].adj).toBe(106);
+  });
 });
 
 describe("fetchBars5m", () => {
@@ -300,7 +345,11 @@ describe("fetchBars5m", () => {
     useProxy();
     stubChart(
       chartJson({
-        meta: { symbol: "1909.T", regularMarketPrice: 3700 },
+        meta: {
+          symbol: "1909.T",
+          regularMarketPrice: 3700,
+          regularMarketTime: 1757635260,
+        },
         indicators: {
           quote: [
             {
@@ -315,10 +364,33 @@ describe("fetchBars5m", () => {
       })
     );
     // volume filter は無出来高異常を消すため、整合は未 filter の raw 最新で
-    // 見る。乖離+出来高0 → 拒否 (filter 後に見ると常に受理になる欠落)。
+    // 見る。meta 時刻が最新 interval 内 (同時点証明) + 乖離+出来高0 → 拒否。
     await expect(fetchBars5m("1909.T")).rejects.toThrow(
       /応答全体を採用しません/
     );
+  });
+
+  it("時刻根拠が未知 (meta 時刻欠落) なら誤比較せず明示 skip する", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "1909.T", regularMarketPrice: 3700 },
+        indicators: {
+          quote: [
+            {
+              open: [16280000512, 16280000512],
+              high: [16280000512, 16280000512],
+              low: [16280000512, 16280000512],
+              close: [16280000512, 16280000512],
+              volume: [0, 0],
+            },
+          ],
+        },
+      })
+    );
+    // 同時点が証明できないため比較しない。volume 0 行は filter で落ちる。
+    const bars = await fetchBars5m("1909.T");
+    expect(bars).toHaveLength(0);
   });
 
   it("出来高つき乖離は正規変動として受理する (daily と同一規則)", async () => {

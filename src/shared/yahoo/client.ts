@@ -20,7 +20,12 @@ import type {
   StockRawData,
 } from "../types.js";
 import { sharedEnv } from "../env.js";
-import { assertResponsePriceCoherent, sanitizeBars } from "./bar-sanity.js";
+import {
+  assertRawBarsSane,
+  assertResponsePriceCoherent,
+  isProvenSamePoint,
+  sanitizeBars,
+} from "./bar-sanity.js";
 import { STOCK_CODE_REGEX } from "../jpx/stock-code.js";
 
 /**
@@ -611,6 +616,7 @@ interface YahooChartJson {
     result?: Array<{
       meta?: {
         regularMarketPrice?: number | null;
+        regularMarketTime?: number | null;
       };
       timestamp?: number[];
       indicators?: {
@@ -669,24 +675,34 @@ export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]
   // quote 欠落は仕様変更の疑い。空で黙殺せず落とす (旧実装は TypeError)。
   const q = res.indicators?.quote?.[0];
   if (!q) throw new Error(`Chart API エラー [${symbol}]: quote がありません`);
-  // raw-first 検査 (filter 前)。volume filter は無出来高異常を消すため、
-  // 最新 bar の整合は未 filter の実値で見る。NaN は欠落ではなく異常。
+  // raw-first 全行検査 (filter 前)。volume filter は無出来高異常を消すため、
+  // 実在値の異常は欠落除去の前に見る (他欠落で隠さない)。
+  assertRawBarsSane(
+    symbol,
+    res.timestamp.map((_, i) => ({
+      o: q.open?.[i],
+      h: q.high?.[i],
+      l: q.low?.[i],
+      c: q.close?.[i],
+      v: q.volume?.[i],
+    }))
+  );
+  // meta 価格との整合は同時点証明時のみ。時刻根拠が未知 (欠落・interval外)
+  // なら旧 session/split 前 bar との誤比較になるため明示 skip する。
+  // 形成中 5m bar に daily 完了日 gate は転用しない。
   {
     const li = res.timestamp.length - 1;
-    const rc = q.close?.[li] ?? null;
-    const rv = q.volume?.[li] ?? null;
-    if (typeof rc === "number" && !Number.isFinite(rc)) {
-      throw new Error(`Chart API エラー [${symbol}]: 最新 close が非有限`);
+    if (
+      li >= 0 &&
+      isProvenSamePoint(res.meta?.regularMarketTime, res.timestamp[li], 300)
+    ) {
+      assertResponsePriceCoherent({
+        symbol,
+        latestUsedClose: q.close?.[li] ?? null,
+        latestVolume: q.volume?.[li] ?? null,
+        metaPrice: res.meta?.regularMarketPrice ?? null,
+      });
     }
-    if (typeof rv === "number" && !Number.isFinite(rv)) {
-      throw new Error(`Chart API エラー [${symbol}]: 最新 volume が非有限`);
-    }
-    assertResponsePriceCoherent({
-      symbol,
-      latestUsedClose: rc,
-      latestVolume: rv,
-      metaPrice: res.meta?.regularMarketPrice ?? null,
-    });
   }
   const out: Bar5m[] = [];
   for (let i = 0; i < res.timestamp.length; i++) {
@@ -695,16 +711,6 @@ export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]
       l = q.low?.[i],
       c = q.close?.[i],
       v = q.volume?.[i];
-    for (const [k, val] of Object.entries({ o, h, l, c, v }) as [
-      string,
-      unknown,
-    ][]) {
-      if (typeof val === "number" && !Number.isFinite(val)) {
-        throw new Error(
-          `Chart API エラー [${symbol}]: ${k}[${i}] が非有限 (${String(val)})`
-        );
-      }
-    }
     if (o == null || h == null || l == null || c == null || !v) continue;
     out.push({
       ts: res.timestamp[i],
@@ -730,6 +736,18 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
   const q = res.indicators?.quote?.[0];
   if (!q) throw new Error(`Chart API エラー [${symbol}]: quote がありません`);
   const adj = res.indicators?.adjclose?.[0]?.adjclose || [];
+  // raw-first 全行検査 (filter 前)。使用/保存する adj の実値もここで見る。
+  assertRawBarsSane(
+    symbol,
+    res.timestamp.map((_, i) => ({
+      o: q.open?.[i],
+      h: q.high?.[i],
+      l: q.low?.[i],
+      c: q.close?.[i],
+      v: q.volume?.[i],
+    })),
+    adj
+  );
   const bars: DailyBar[] = [];
   for (let i = 0; i < res.timestamp.length; i++) {
     const o = q.open?.[i],
@@ -737,18 +755,8 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
       l = q.low?.[i],
       c = q.close?.[i],
       v = q.volume?.[i];
-    // NaN は欠落ではなく異常 (filter 前に落とす)。null出来高は欠落として
-    // 落とし、0 には化けない (missing≠実0)。
-    for (const [k, val] of Object.entries({ o, h, l, c, v }) as [
-      string,
-      unknown,
-    ][]) {
-      if (typeof val === "number" && !Number.isFinite(val)) {
-        throw new Error(
-          `Chart API エラー [${symbol}]: ${k}[${i}] が非有限 (${String(val)})`
-        );
-      }
-    }
+    // null は欠落として落とす。null 出来高は 0 に化けない (missing≠実0)。
+    // adj null のみ c 代用 (欠落時の代用であり、実在 adj の異常とは別扱い)。
     if (o == null || h == null || l == null || c == null || v == null) continue;
     const a = adj[i];
     bars.push({

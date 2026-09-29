@@ -29,6 +29,27 @@ describe("findInvalidBars", () => {
   it("出来高0は薄商いの正当値で落とさない", () => {
     expect(findInvalidBars([{ ...good, v: 0 }])).toEqual([]);
   });
+
+  it("終値のレンジ外は正当 (7112 丸め・checkBarSelf parity)", () => {
+    expect(
+      findInvalidBars([{ o: 699, h: 700, l: 698, c: 697, v: 100 }])
+    ).toEqual([]);
+  });
+
+  it("使用する adj の実値を検査し、欠落と代用を混ぜない", () => {
+    expect(findInvalidBars([{ ...good, adj: 104 }])).toEqual([]);
+    expect(findInvalidBars([{ ...good }])).toEqual([]);
+    const bad = findInvalidBars([
+      { ...good, adj: Number.NaN },
+      { ...good, adj: -1 },
+      { ...good, adj: null },
+    ]);
+    expect(bad.map((b) => b.reasons)).toEqual([
+      ["adj:non-finite"],
+      ["adj:non-positive"],
+      ["adj:missing"],
+    ]);
+  });
 });
 
 describe("resolveRunId", () => {
