@@ -5,6 +5,8 @@ import { fetchDaily } from "../../src/shared/yahoo/client.js";
 import { r2Get, r2Put, mapLimit, sleep, retry } from "./lib/r2.js";
 import { mergeDailySplits } from "./lib/daily-merge.js";
 import { loadCodes, arg } from "./lib/codes.js";
+import { buildIngestSummary, findInvalidBars } from "./lib/ingest-guard.js";
+import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 
 // 既定は低負荷 (逐次・約1.5s間隔 + ジッタ)。速度優先なら CONC / DELAY_MS で上書き。
 const CONC = Number(process.env.CONC || 1);
@@ -17,7 +19,8 @@ async function main() {
   const only = arg("codes"); if (only) codes = only.split(",");
   const limit = arg("limit"); if (limit) codes = codes.slice(0, Number(limit));
 
-  let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0;
+  const startedAt = new Date().toISOString();
+  let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0, invalid = 0;
   let consecRL = 0, aborted = false;
   await mapLimit(codes, CONC, async (code) => {
     if (aborted) return;                                   // ブロック検知後は残りを叩かない
@@ -29,6 +32,13 @@ async function main() {
       const { bars, splits } = await retry(() => fetchDaily(`${code}.T`, range), 3);
       consecRL = 0;                                        // 成功で連続カウントをリセット
       if (!bars.length) { empty++; return; }
+      // 保存前 invalid-price STOP: 壊れた実値は書かず数える (欠落と混同しない)。
+      const bad = findInvalidBars(bars);
+      if (bad.length > 0) {
+        invalid++;
+        if (invalid <= 5) console.error(`  ${code}: invalid bars ${JSON.stringify(bad.slice(0, 3))}`);
+        return;
+      }
       let merged = bars;
       // 初回 (10y backfill) は応答の全履歴が正。差分更新は窓マージする。
       let mergedSplits = splits;
@@ -62,7 +72,16 @@ async function main() {
       errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
     }
   });
-  console.log(JSON.stringify({ codes: codes.length, written, empty, errors, rateLimited, backfilled, aborted }));
+  const finishedAt = new Date().toISOString();
+  console.log(JSON.stringify({ codes: codes.length, written, empty, errors, invalid, rateLimited, backfilled, aborted }));
+  // run 粒度バッチ保管 (per-stock 鏡像は作らない)。新物理 key のため
+  // VWAP_ARCHIVE_SUMMARY=1 の明示指定時のみ記録し、既定では出さない。
+  const summary = buildIngestSummary({ kind: "daily", range: "1mo-diff/10y-backfill", codes: codes.length, written, empty, errors, invalid, rateLimited, backfilled, aborted, startedAt, finishedAt });
+  if (process.env.VWAP_ARCHIVE_SUMMARY === "1") {
+    await recordPrimaryData({ ...summary, force: false });
+  } else {
+    console.log(JSON.stringify({ archive: "skipped", key: summary.key }));
+  }
   if (aborted) process.exitCode = 2;
 }
 main();

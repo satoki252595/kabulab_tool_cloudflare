@@ -269,6 +269,78 @@ describe("fetchBars5m", () => {
     const bars = await fetchBars5m("7203.T");
     expect(bars.map((b) => b.ts)).toEqual([1757635200]);
   });
+
+  it("出来高なし乖離バーは先に落ち、残なしは guard を素通しして空で返す", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "1909.T", regularMarketPrice: 3700 },
+        indicators: {
+          quote: [
+            {
+              open: [16280000512, 16280000512],
+              high: [16280000512, 16280000512],
+              low: [16280000512, 16280000512],
+              close: [16280000512, 16280000512],
+              volume: [0, 0],
+            },
+          ],
+        },
+      })
+    );
+    // 出来高 0 のバーは整形で先に落ちる。残バーなし → latest null で
+    // guard は比較不能として通し、空を返す (欠落扱い・補完なし)。
+    const bars = await fetchBars5m("1909.T");
+    expect(bars).toHaveLength(0);
+  });
+
+  it("出来高つき乖離は正規変動として受理する (daily と同一規則)", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "1909.T", regularMarketPrice: 3700 },
+        indicators: {
+          quote: [
+            {
+              open: [100, 16280000512],
+              high: [110, 16280000512],
+              low: [90, 16280000512],
+              close: [105, 16280000512],
+              volume: [1000, 0],
+            },
+          ],
+        },
+      })
+    );
+    // 2 本目は volume 0 で落ち、最新は 1 本目 (105 vs meta 3700、
+    // 10倍超乖離・出来高あり) → 出来高を伴う乖離は受理する。
+    const bars = await fetchBars5m("1909.T");
+    expect(bars).toHaveLength(1);
+  });
+
+  it("最新バーの終値が無効 (非正) なら応答全体を拒否する", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "7203.T", regularMarketPrice: 3000 },
+        indicators: {
+          quote: [
+            {
+              open: [100, 0],
+              high: [110, 0],
+              low: [90, 0],
+              close: [105, 0],
+              volume: [1000, 2000],
+            },
+          ],
+        },
+      })
+    );
+    // 0 終値は falsy ではなく null でもないため残り、guard が非正で拒否する。
+    await expect(fetchBars5m("7203.T")).rejects.toThrow(
+      /応答全体を採用しません/
+    );
+  });
 });
 
 describe("レート制限の投げ分け (旧 ensureOk と同一)", () => {

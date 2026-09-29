@@ -687,6 +687,16 @@ export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]
     });
   }
   out.sort((a, b) => a.ts - b.ts);
+  // fetchDaily と同じ応答整合 (R2 intra への別経路も書込前に拒否する)。
+  {
+    const latest = out[out.length - 1];
+    assertResponsePriceCoherent({
+      symbol,
+      latestUsedClose: latest?.c ?? null,
+      latestVolume: latest?.v ?? null,
+      metaPrice: res.meta?.regularMarketPrice ?? null,
+    });
+  }
   return out;
 }
 
