@@ -575,3 +575,172 @@ class TestEdinetLargeHolding:
             "properties": {S.MASTER_PROP_CODE: {"rich_text": [{"plain_text": "7203"}]}},
         }]
         assert upsert._edinet_map_from_pages(pages) == {}
+
+
+class TestCommonStrictCustody:
+    """本番共通 strict: Notion ⑤ 未保管で取得単位を中止する (全 caller)。
+
+    共有 `upload_raw` の契約は test_local_store.TestUploadRawFailover が担い、
+    ここでは各 caller (edinet 財務系/master/supply。tdnet は test_tdnet_hourly)
+    の失敗/NULL 配線だけを最小検証する。dry-run の分離も同所で検証する。
+    """
+
+    def _ctx(self, tmp_path, *, local_ok=True, dry_run=False):
+        from types import SimpleNamespace
+
+        from jp_stock_pipeline.config import load_settings
+        from jp_stock_pipeline.jobs.runner import JobContext
+
+        settings = load_settings(dry_run=dry_run, env=_env(tmp_path))
+        local = SimpleNamespace(
+            upsert_raw_artifact=lambda artifact: (
+                None if local_ok else (_ for _ in ()).throw(RuntimeError("テスト: ローカル失敗"))
+            )
+        )
+        return JobContext(settings=settings, client=None, args=None, local=local)
+
+    def _artifact(self, tmp_path):
+        settings_dir = tmp_path / "raw"
+        return save_raw(
+            fixture_path("edinet/Edinetcode.zip").read_bytes(),
+            source=Source.EDINET,
+            datatype="csv",
+            scope="7203",
+            data_date=date(2026, 6, 10),
+            url="fixture://edinet/Edinetcode.zip",
+            ext="zip",
+            license_tag=source_license(Source.EDINET),
+            base_dir=settings_dir,
+        )
+
+    def _process_kwargs(self):
+        return dict(
+            master_map={},
+            master_map_ok=False,
+            edinet_map={},
+            disc_map={},
+            disc_map_ok=False,
+            target_date=date(2026, 9, 10),
+            sha_map=None,
+        )
+
+    def test_edinet_financial_tidy_failure_stops_before_pdf_and_structured(
+        self, monkeypatch, tmp_path
+    ):
+        """財務系: tidy 保管失敗 → PDF 試行より前に書類単位を中止 (③④を書かない)。"""
+        from jp_stock_pipeline.jobs.runner import JobContext
+
+        ctx = self._ctx(tmp_path, local_ok=True)
+        persisted: list = []
+        monkeypatch.setattr(
+            JobContext,
+            "persist",
+            lambda self, record, notion_write, **kw: persisted.append(record) or True,
+        )
+        monkeypatch.setattr(
+            file_upload,
+            "upload_raw_artifact",
+            lambda *a, **k: (_ for _ in ()).throw(
+                file_upload.RawUploadError("テスト: tidy 保管失敗")
+            ),
+        )
+        monkeypatch.setattr(
+            edinet_daily,
+            "_fetch_financial_tidy",
+            lambda ctx_, doc_id, code, data_date: (self._artifact(tmp_path), None),
+        )
+        pdf_calls: list = []
+        monkeypatch.setattr(edinet, "fetch_document", lambda *a, **k: pdf_calls.append(a) or None)
+        doc = dict(TestEdinetLargeHolding.REAL_120)
+        with pytest.raises(file_upload.RawUploadError):
+            edinet_daily._process_document(ctx, doc, "list-page", **self._process_kwargs())
+        assert persisted == []  # ④③ ともに書かない
+        assert pdf_calls == []  # PDF 試行より前に止まる
+
+    def test_edinet_financial_pdf_page_does_not_fill_record_pointer(self, monkeypatch, tmp_path):
+        """財務系: ④ 原本ポインタは tidy のみ。PDF 成功でも指し先にしない。"""
+        from jp_stock_pipeline.jobs.runner import JobContext
+
+        ctx = self._ctx(tmp_path, local_ok=True)
+        persisted: list = []
+        monkeypatch.setattr(
+            JobContext,
+            "persist",
+            lambda self, record, notion_write, **kw: persisted.append(record) or True,
+        )
+        tidy_artifact = self._artifact(tmp_path)
+        pages = iter(["tidy-page", "pdf-page"])
+        monkeypatch.setattr(ctx, "upload_raw", lambda artifact, **kw: next(pages))
+        monkeypatch.setattr(
+            edinet_daily,
+            "_fetch_financial_tidy",
+            lambda ctx_, doc_id, code, data_date: (tidy_artifact, None),
+        )
+        monkeypatch.setattr(edinet, "fetch_document", lambda *a, **k: tidy_artifact)
+        monkeypatch.setattr(edinet_daily.json_to_parquet, "convert_artifact", lambda *a: None)
+        doc = dict(TestEdinetLargeHolding.REAL_120)
+        edinet_daily._process_document(ctx, doc, "list-page", **self._process_kwargs())
+        assert [r.provenance.raw_page_id for r in persisted] == ["tidy-page"]
+
+    def test_master_sync_notion_failure_aborts_before_upsert(self, monkeypatch, tmp_path):
+        """master: 原本保管失敗 → parse/① upsert より前に中止する。"""
+        ctx = self._ctx(tmp_path, local_ok=True)
+        artifact = self._artifact(tmp_path)
+        monkeypatch.setattr(edinet_codelist, "fetch_codelist", lambda settings: artifact)
+        monkeypatch.setattr(edinet_codelist, "convert_codelist", lambda a: a)
+        monkeypatch.setattr(
+            file_upload,
+            "upload_raw_artifact",
+            lambda *a, **k: (_ for _ in ()).throw(
+                file_upload.RawUploadError("テスト: 原本保管失敗")
+            ),
+        )
+        upsert_calls: list = []
+        monkeypatch.setattr(
+            master_sync.upsert,
+            "load_stock_master_entries",
+            lambda *a, **k: upsert_calls.append(True) or {},
+        )
+        with pytest.raises(file_upload.RawUploadError):
+            master_sync.execute(ctx)
+        assert upsert_calls == []  # ① 側に一切触れない
+
+    def test_supply_fetch_notion_failure_raises(self, monkeypatch, tmp_path):
+        """supply: 原本保管失敗 → 取得単位を中止する (structured 前)。"""
+        from jp_stock_pipeline.jobs import supply_daily
+
+        ctx = self._ctx(tmp_path, local_ok=True)
+        monkeypatch.setattr(supply_daily.jsf, "fetch_csv", lambda name: b"a,b\n1,2\n")
+        monkeypatch.setattr(
+            file_upload,
+            "upload_raw_artifact",
+            lambda *a, **k: (_ for _ in ()).throw(
+                file_upload.RawUploadError("テスト: 原本保管失敗")
+            ),
+        )
+        with pytest.raises(file_upload.RawUploadError):
+            supply_daily._fetch_and_store(ctx, "zandaka", "jsf_zandaka")
+
+
+class TestWorkflowManualDate:
+    """手動実行の --date が子 bash へ位置引数で届く (親配列の黙殺防止)。
+
+    `nix develop -c bash -c '... "${args[@]}"'` は単一引用符内のため親配列が
+    展開されず、内側 bash の未定義配列として黙って落ちていた。`"$@"` +
+    `_ "${args[@]}"` の位置渡しに統一する。
+    """
+
+    @pytest.mark.parametrize("name", ["edinet_daily", "tdnet_hourly"])
+    def test_manual_date_forwarded_positionally(self, name):
+        live = "\n".join(
+            line for line in _workflow_text(name).splitlines() if not line.strip().startswith("#")
+        )
+        m = re.search(r"bash -c '[^']*\"\$\@\"[^']*' _ \"\$\{args\[@\]\}\"", live)
+        assert m, f'{name}.yml: "$@" 位置渡しが無い (手動 --date が黙殺される)'
+        assert '"${args[@]}"\'' not in live  # 旧: 単一引用符内の未展開
+
+    def test_date_option_parses_yyyymmdd(self):
+        parser = runner.build_parser("test")
+        assert parser.parse_args(["--date", "2026-01-05"]).date == date(2026, 1, 5)
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--date", "2026/01/05"])
