@@ -289,10 +289,33 @@ describe("notion-archive moneyflow", () => {
 
   describe("upsertObservation", () => {
     const dbId = "obs-db";
+    const ackPage = (id: string, properties: Record<string, unknown>, overrides: Record<string, unknown> = {}) => ({
+      id,
+      archived: false,
+      in_trash: false,
+      properties,
+      ...overrides,
+    });
 
     it("観測キー (期間|指標|区分) が新規なら作成する", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
-      route("POST", "/v1/pages", [{ id: "obs-row-1" }]);
+      route("POST", "/v1/pages", [
+        ackPage("obs-row-1", {
+          キー: { type: "title", title: [{ plain_text: "2026-W38|sector_turnover|電気機器" }] },
+          指標: { type: "relation", relation: [{ id: "def-page-1" }] },
+          対象期間: { type: "rich_text", rich_text: [{ plain_text: "2026-W38" }] },
+          期間開始: { type: "date", date: { start: "2026-09-14" } },
+          期間終了: { type: "date", date: { start: "2026-09-18" } },
+          区分: { type: "rich_text", rich_text: [{ plain_text: "電気機器" }] },
+          区分種別: { type: "select", select: { name: "業種" } },
+          値: { type: "number", number: 12345 },
+          単位: { type: "select", select: { name: "円" } },
+          前期比: { type: "number", number: null },
+          近似フラグ: { type: "checkbox", checkbox: true },
+          実測推定: { type: "select", select: { name: "実測" } },
+          一次データ: { type: "relation", relation: [{ id: "primary-page-1" }] },
+        }),
+      ]);
       const { upsertObservation, observationKey } = await load();
       const input = {
         period: "2026-W38",
@@ -326,7 +349,23 @@ describe("notion-archive moneyflow", () => {
 
     it("primaryDataPageId が null なら一次データ relation は空にする", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
-      route("POST", "/v1/pages", [{ id: "obs-row-2" }]);
+      route("POST", "/v1/pages", [
+        ackPage("obs-row-2", {
+          キー: { type: "title", title: [{ plain_text: "2026-W38|sector_turnover_share|電気機器" }] },
+          指標: { type: "relation", relation: [{ id: "def-page-2" }] },
+          対象期間: { type: "rich_text", rich_text: [{ plain_text: "2026-W38" }] },
+          期間開始: { type: "date", date: { start: "2026-09-14" } },
+          期間終了: { type: "date", date: { start: "2026-09-18" } },
+          区分: { type: "rich_text", rich_text: [{ plain_text: "電気機器" }] },
+          区分種別: { type: "select", select: { name: "業種" } },
+          値: { type: "number", number: 0.1234 },
+          単位: { type: "select", select: { name: "比率" } },
+          前期比: { type: "number", number: 0.01 },
+          近似フラグ: { type: "checkbox", checkbox: true },
+          実測推定: { type: "select", select: { name: "実測" } },
+          一次データ: { type: "relation", relation: [] },
+        }),
+      ]);
       const { upsertObservation } = await load();
       await upsertObservation(dbId, {
         period: "2026-W38",
@@ -351,7 +390,23 @@ describe("notion-archive moneyflow", () => {
 
     it("既存キーがあれば更新する", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [{ results: [{ id: "obs-existing" }] }]);
-      route("PATCH", "/v1/pages/obs-existing", [{ id: "obs-existing" }]);
+      route("PATCH", "/v1/pages/obs-existing", [
+        ackPage("obs-existing", {
+          キー: { type: "title", title: [{ plain_text: "2026-W38|sector_turnover|電気機器" }] },
+          指標: { type: "relation", relation: [{ id: "def-page-1" }] },
+          対象期間: { type: "rich_text", rich_text: [{ plain_text: "2026-W38" }] },
+          期間開始: { type: "date", date: { start: "2026-09-14" } },
+          期間終了: { type: "date", date: { start: "2026-09-18" } },
+          区分: { type: "rich_text", rich_text: [{ plain_text: "電気機器" }] },
+          区分種別: { type: "select", select: { name: "業種" } },
+          値: { type: "number", number: 99999 },
+          単位: { type: "select", select: { name: "円" } },
+          前期比: { type: "number", number: 100 },
+          近似フラグ: { type: "checkbox", checkbox: true },
+          実測推定: { type: "select", select: { name: "実測" } },
+          一次データ: { type: "relation", relation: [] },
+        }),
+      ]);
       const { upsertObservation } = await load();
       const result = await upsertObservation(dbId, {
         period: "2026-W38",
@@ -441,10 +496,72 @@ describe("notion-archive moneyflow", () => {
       route("POST", `/v1/databases/${dbId}/query`, [
         { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
       ]);
-      route("PATCH", "/v1/pages/obs-diff", [{ id: "obs-diff" }]);
+      route("PATCH", "/v1/pages/obs-diff", [ackPage("obs-diff", existingProps())]);
       const { upsertObservation } = await load();
       const result = await upsertObservation(dbId, sameInput);
       expect(result).toEqual({ pageId: "obs-diff", outcome: "updated" });
+    });
+
+    it("作成応答の書込値が不一致なら保全停止し、再送しない", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", "/v1/pages", [
+        ackPage("obs-row-9", existingProps({ 値: { type: "number", number: 1 } })),
+      ]);
+      const { upsertObservation } = await load();
+      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(
+        /作成応答が不正のため保全停止.*書込値不一致.*2026-08\|sector_market_cap\|電気機器/
+      );
+      expect(calls).toHaveLength(2);
+    });
+
+    it("作成応答に properties がなければ保全停止し、成功にしない", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", "/v1/pages", [{ id: "obs-row-9", archived: false, in_trash: false }]);
+      const { upsertObservation } = await load();
+      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/作成応答が不正.*propertiesなし/);
+      expect(calls).toHaveLength(2);
+    });
+
+    it("更新応答の書込値が不一致なら保全停止し、再送しない", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+      ]);
+      route("PATCH", "/v1/pages/obs-diff", [
+        ackPage("obs-diff", existingProps({ 値: { type: "number", number: 2 } })),
+      ]);
+      const { upsertObservation } = await load();
+      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(
+        /更新応答が不正のため保全停止.*書込値不一致/
+      );
+      expect(calls).toHaveLength(2);
+    });
+
+    it("更新応答に properties がなければ保全停止する", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+      ]);
+      route("PATCH", "/v1/pages/obs-diff", [{ id: "obs-diff", archived: false, in_trash: false }]);
+      const { upsertObservation } = await load();
+      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/更新応答が不正.*propertiesなし/);
+      expect(calls).toHaveLength(2);
+    });
+
+    it("更新応答が別ページの id なら保全停止する (同ページ要求)", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+      ]);
+      route("PATCH", "/v1/pages/obs-diff", [ackPage("obs-other", existingProps())]);
+      const { upsertObservation } = await load();
+      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/更新応答が不正.*別ページの応答/);
+      expect(calls).toHaveLength(2);
+    });
+
+    it("応答行が archived なら作成・更新とも成功にしない (明示active要求)", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", "/v1/pages", [ackPage("obs-row-9", existingProps(), { archived: true })]);
+      const { upsertObservation } = await load();
+      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/作成応答が不正.*非active行への応答/);
+      expect(calls).toHaveLength(2);
     });
 
     it("observationRowMatches: プロパティが読めない行は一致扱いにしない (古い値を黙って残さない)", async () => {

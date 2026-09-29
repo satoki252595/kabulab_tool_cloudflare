@@ -778,6 +778,43 @@ export interface UpsertObservationResult {
   outcome: "created" | "updated" | "unchanged";
 }
 
+/** POST/PATCH 応答 (Notion page) の ack 検証に使う最小面。 */
+interface ObsWriteAck {
+  id?: unknown;
+  archived?: unknown;
+  in_trash?: unknown;
+  properties?: Record<string, NotionPagePropertyValue>;
+}
+
+/**
+ * 書込応答の ack を検証する。不正・不完全なら unknown として throw
+ * (再送しない・成功数に加えない。呼出側の counts は戻り後の加算のみ)。
+ * エラー文に ID は含めない (公開キー・context のみ。ルール2)。
+ */
+function assertObservationAck(
+  ack: ObsWriteAck | null | undefined,
+  input: ObservationInput,
+  context: { op: "作成" | "更新"; wantPageId?: string }
+): string {
+  const key = observationKey(input);
+  const bad = (why: string): never => {
+    throw new Error(
+      `moneyflow 観測ログの${context.op}応答が不正のため保全停止 (再送しない・成功数に加えない): ${why} key=${key}`
+    );
+  };
+  const page: ObsWriteAck = ack && typeof ack === "object" ? ack : bad("応答なし");
+  const pageId: string = typeof page.id === "string" && page.id !== "" ? page.id : bad("応答idなし");
+  if (context.wantPageId && normalizeId(pageId) !== normalizeId(context.wantPageId)) {
+    bad("別ページの応答");
+  }
+  if (page.archived !== false || page.in_trash !== false) bad("非active行への応答");
+  const props: Record<string, NotionPagePropertyValue> =
+    page.properties && typeof page.properties === "object" ? page.properties : bad("propertiesなし");
+  if (plainOf(props[MONEYFLOW_OBS_PROPS.key]?.title) !== key) bad("キー不一致");
+  if (!observationRowMatches(props, input)) bad("書込値不一致");
+  return pageId;
+}
+
 /** 冪等キー (observationKey) で upsert する (既存行と値が同一なら書き込まない)。 */
 export async function upsertObservation(
   dbId: string,
@@ -790,14 +827,18 @@ export async function upsertObservation(
     if (observationRowMatches(existing.properties, input)) {
       return { pageId: existing.id, outcome: "unchanged" };
     }
-    await notionRequest("PATCH", `/pages/${existing.id}`, { properties: props });
-    return { pageId: existing.id, outcome: "updated" };
+    const acked = await notionRequest<ObsWriteAck>("PATCH", `/pages/${existing.id}`, {
+      properties: props,
+    });
+    const pageId = assertObservationAck(acked, input, { op: "更新", wantPageId: existing.id });
+    return { pageId, outcome: "updated" };
   }
-  const created = await notionRequest<{ id: string }>("POST", "/pages", {
+  const created = await notionRequest<ObsWriteAck>("POST", "/pages", {
     parent: { database_id: dbId },
     properties: props,
   });
-  return { pageId: created.id, outcome: "created" };
+  const pageId = assertObservationAck(created, input, { op: "作成" });
+  return { pageId, outcome: "created" };
 }
 
 // ---------------------------------------------------------------------------
