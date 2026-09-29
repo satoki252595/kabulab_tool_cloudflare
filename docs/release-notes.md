@@ -10,7 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 本番作業
-- 352 sector-margin rows newly saved, final 461 rows full19 exact; #110 POST outcome unknown/held, 462 not claimed.
+- 業種別信用残を352行新規保存し、既存分を含む安全対象461行の全19項目一致を再読確認。#110はPOST結果不明のため保留し、462行すべて完了とは扱わない。
 
 ---
 
