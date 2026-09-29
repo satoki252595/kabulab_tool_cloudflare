@@ -4,12 +4,15 @@
  * 用途: 事業タグ単語帳・台帳の JSON の改ざん検知（docs/005-yuho-quant-business-tags.md §3.2）、
  * Automation の合言葉の照合（ハッシュ同士を比べる）。
  */
-export async function sha256Hex(text: string): Promise<string> {
-  const bytes = new TextEncoder().encode(text);
+export async function sha256HexBytes(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)]
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+export async function sha256Hex(text: string): Promise<string> {
+  return sha256HexBytes(new TextEncoder().encode(text));
 }
 
 /**
