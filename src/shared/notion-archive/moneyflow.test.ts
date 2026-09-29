@@ -757,6 +757,52 @@ describe("notion-archive moneyflow", () => {
       expect(await observationExists(dbId, "2026-08|k|c")).toBe(true);
       expect(await observationExists(dbId, "2026-08|k|d")).toBe(false);
     });
+
+    it("POST の Unknown は同型・cause 保持で obsKey context を先頭に残し、再送しない", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      const harnessFetch = globalThis.fetch;
+      let postAttempts = 0;
+      globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+        const u = new URL(String(url));
+        if ((init?.method ?? "GET") === "POST" && u.pathname === "/v1/pages") {
+          postAttempts++;
+          throw new Error("network boom");
+        }
+        return (harnessFetch as typeof fetch)(url as string, init);
+      }) as typeof fetch;
+      const { upsertObservation } = await load();
+      const { NotionUnknownResultError } = await import("./client.js");
+      const { rootCauseMessage } = await import("../errors.js");
+      const err = (await upsertObservation(dbId, sameInput).then(
+        () => null,
+        (e: Error) => e
+      )) as Error | null;
+      expect(err).toBeInstanceOf(NotionUnknownResultError);
+      expect(err?.cause).toBeInstanceOf(NotionUnknownResultError);
+      expect(err?.message).toContain("資金フロー｜観測ログ");
+      expect(err?.message).toContain("2026-08|sector_market_cap|電気機器");
+      expect(err?.message).not.toContain(dbId);
+      const chained = rootCauseMessage(err);
+      expect(chained).toContain("2026-08|sector_market_cap|電気機器");
+      expect(chained).toContain("network boom");
+      expect(postAttempts).toBe(1);
+    });
+
+    it("POST の非 Unknown エラーは同一 throw し、context を付けず再送しない", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", "/v1/pages", [
+        new Response(JSON.stringify({ object: "error", code: "validation_error", message: "bad" }), { status: 400 }),
+      ]);
+      const { upsertObservation } = await load();
+      const { NotionUnknownResultError } = await import("./client.js");
+      const err = (await upsertObservation(dbId, sameInput).then(
+        () => null,
+        (e: Error) => e
+      )) as Error | null;
+      expect(err).not.toBeInstanceOf(NotionUnknownResultError);
+      expect(err?.message).not.toContain("観測の作成");
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(1);
+    });
   });
 
   describe("observationKey (新内訳キー)", () => {

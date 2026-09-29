@@ -901,19 +901,36 @@ export async function recordPrimaryData(
       : "recorded_partial_file"
     : "recorded";
 
-  const created = await notionRequest<{ id: string }>("POST", "/pages", {
-    parent: { database_id: dbId },
-    properties: {
-      Key: { title: [{ text: { content: input.key } }] },
-      Service: { select: { name: input.service } },
-      Source: { rich_text: splitRichText(input.source) },
-      "Fetched At": { date: { start: fetchedAt } },
-      Status: { select: { name: status } },
-      Metadata: { rich_text: splitRichText(metaJson) },
-      Files: { files: fileRefs },
-    },
-    children: metadataBodyBlocks(metaJson),
-  });
+  // key ハッシュは POST 前に固定する (Unknown 発生時の catch 内で計算すると
+  // hash 失敗が Unknown 型を置換する窓口になるため)。
+  const keySha256 = await sha256Hex(input.key);
+
+  let created: { id: string };
+  try {
+    created = await notionRequest<{ id: string }>("POST", "/pages", {
+      parent: { database_id: dbId },
+      properties: {
+        Key: { title: [{ text: { content: input.key } }] },
+        Service: { select: { name: input.service } },
+        Source: { rich_text: splitRichText(input.source) },
+        "Fetched At": { date: { start: fetchedAt } },
+        Status: { select: { name: status } },
+        Metadata: { rich_text: splitRichText(metaJson) },
+        Files: { files: fileRefs },
+      },
+      children: metadataBodyBlocks(metaJson),
+    });
+  } catch (e) {
+    // Unknown のときだけ同じ型で context を先頭に付けて再throw
+    // (再送しない・Unknown型と cause を維持。生 key・DB UUID・body は出さない)。
+    if (e instanceof NotionUnknownResultError) {
+      throw new NotionUnknownResultError(
+        `一次データの作成 (service=${input.service} keySha256=${keySha256}) の結果不明のため再送しません: ${(e as Error).message}`,
+        { cause: e }
+      );
+    }
+    throw e;
+  }
 
   return {
     pageId: created.id,
