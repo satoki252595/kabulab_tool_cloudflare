@@ -31,6 +31,37 @@ export type D1BatchStatement = {
   params: ReadonlyArray<string | number | boolean | null>;
 };
 
+/**
+ * drizzle 書込ビルダ列を D1 REST `{batch}` 送信用に変換する。
+ * `toSQL()` の SQL 文字列 + 束縛値をそのまま載せる。束縛値に対象外の型
+ * (object 等) が混ざったら送らず throw する — 書く前に止めるための安全弁で、
+ * 呼び出し側で握り潰さないこと。per-statement フォールバックはしない
+ * (送るなら全文、送らないなら無送信)。
+ */
+export function toD1BatchStatements(
+  builders: Array<{ toSQL: () => { sql: string; params: unknown[] } }>
+): D1BatchStatement[] {
+  return builders.map((b) => {
+    const q = b.toSQL();
+    return {
+      sql: q.sql,
+      params: q.params.map((p): string | number | boolean | null => {
+        if (
+          p === null ||
+          typeof p === "string" ||
+          typeof p === "number" ||
+          typeof p === "boolean"
+        ) {
+          return p;
+        }
+        throw new Error(
+          `[d1-http] batch に対象外の束縛値 (${typeof p})。書込の前に止めます。`
+        );
+      }),
+    };
+  });
+}
+
 interface D1BatchResultEntry {
   success?: boolean;
   error?: unknown;

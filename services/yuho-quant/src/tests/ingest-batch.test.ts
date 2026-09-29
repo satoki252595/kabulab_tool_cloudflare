@@ -5,7 +5,8 @@
  * 存在するが batch callback 未配線で実行時 TypeError になる。かつて upsert 先行
  * + 後続 batch の構成だったため、この未配線で「メタだけ埋まって facts 0 件」の
  * 部分行が残り、次回以降 skipped_existing で永久に埋まらなかった。
- * 対策: (1) 入口 preflight (明示 HTTP sender XOR 実 binding。未知 Node は
+ * 対策: (1) 入口 preflight (明示 HTTP sender XOR 実 binding の有限 shape
+ * ($client の prepare/batch + db.batch が呼び出し可能)。未知 backend は
  * fetch/remote save より前に止める)、(2) upsert・delete・全 insert の同一 batch
  * 化 + documentId の docId サブクエリ参照 (事前 upsert/id 取得の排除)。
  *
@@ -97,7 +98,8 @@ describe("T0: 前提の固定 (sqlite-proxy の batch は未配線)", () => {
     const t = sqliteTable("t", { id: integer("id").primaryKey() });
     const db = drizzleProxy(async () => ({ rows: [] }), { schema: { t } });
     expect((db as unknown as { $client?: unknown }).$client).toBeUndefined();
-    // typeof 判定が素通しする罠そのもの。preflight は $client で判定する。
+    // typeof 判定が素通しする罠そのもの。preflight は $client の有限 shape
+    // (prepare/batch 呼び出し可能) で判定する。有無だけでは null/{} が通る。
     expect(typeof db.batch).toBe("function");
     await expect(
       db.batch([db.delete(t).where(eq(t.id, 1))])
@@ -131,8 +133,10 @@ describe("T1/T2: 入口 preflight (fetch/remote save より前)", () => {
     const restore = silenceConsole();
     try {
       download.mockRejectedValue(new Error("must-not-fetch"));
-      // $client 持ち = binding 相当。batch には到達しないので中身は空でよい。
-      const db = drizzleD1({} as unknown as AnyD1Database);
+      // 有限 shape を満たす $client = binding 相当。batch には到達しない。
+      const db = drizzleD1(
+        { prepare: () => {}, batch: async () => [] } as unknown as AnyD1Database
+      );
       const sender = senderDouble();
       await expect(
         ingestDocument(db as unknown as Database, {
@@ -150,44 +154,27 @@ describe("T1/T2: 入口 preflight (fetch/remote save より前)", () => {
   });
 });
 
-describe("T3: binding route 到達 (fake D1Database)", () => {
-  it("sender 無し + $client 有りは db.batch へ dispatch し、失敗は再送せず投げる", async () => {
-    const restore = silenceConsole();
-    try {
-      download.mockResolvedValue(Buffer.from([0, 1, 2, 3]));
-      const batchCalls: unknown[][] = [];
-      const fakeD1 = {
-        prepare: () => ({
-          bind: () => ({
-            all: async () => ({ results: [] as Record<string, unknown>[] }),
-            // drizzle は列指定 SELECT を values 経由 (raw) で読む。
-            raw: async () => [] as unknown[][],
-            first: async () => null,
-            run: async () => ({}),
-          }),
-        }),
-        batch: async (stmts: unknown[]) => {
-          batchCalls.push(stmts);
-          throw new Error("fake-batch-sentinel");
-        },
-      };
-      const db = drizzleD1(fakeD1 as unknown as AnyD1Database);
-      // preflight を通過し (preflight エラーでない)、db.batch 到達で sentinel。
-      await expect(
-        ingestDocument(db as unknown as Database, {
-          stockId: 11,
-          stockCode: "1001",
-          doc: annualDoc(),
-        })
-      ).rejects.toThrow("fake-batch-sentinel");
-      expect(download).toHaveBeenCalledTimes(1);
-      expect(batchCalls).toHaveLength(1);
-      // upsert + delete 3 文 (+facts 0 件のため insert 無し)。
-      expect(batchCalls[0]).toHaveLength(4);
-    } finally {
-      restore();
+describe("T3: 未知 backend 形 (null/{} の $client) は書込前に止まる", () => {
+  it.each([["null", null], ["{}", {}]] as const)(
+    "sender 無し + $client=%s は preflight で止まり fetch・D1 ゼロ",
+    async (_label, client) => {
+      const restore = silenceConsole();
+      try {
+        download.mockRejectedValue(new Error("must-not-fetch"));
+        const db = drizzleD1(client as unknown as AnyD1Database);
+        await expect(
+          ingestDocument(db as unknown as Database, {
+            stockId: 11,
+            stockCode: "1001",
+            doc: annualDoc(),
+          })
+        ).rejects.toThrow(/batch backend/);
+        expect(download).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
     }
-  });
+  );
 });
 
 describe("T4: 原子失敗 (単一 batch・部分書込なし・再送なし・再実行で回復)", () => {

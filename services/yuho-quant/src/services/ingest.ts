@@ -18,10 +18,8 @@
  */
 import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import type {
-  D1BatchStatement,
-  createD1HttpBatchSender,
-} from "../../../../src/shared/db/d1-http-client.js";
+import type { createD1HttpBatchSender } from "../../../../src/shared/db/d1-http-client.js";
+import { toD1BatchStatements } from "../../../../src/shared/db/d1-http-client.js";
 import {
   yuhoDocuments,
   orderFacts,
@@ -155,18 +153,24 @@ export async function ingestDocument(
   // Shared entrance preflight: 書込 backend の確定は fetch/remote save より前。
   // sqlite-proxy の db.batch はメソッド自体は存在するが batch callback 未配線
   // (drizzle(callback, { schema }) の第2引数は config 扱い) のため実行時に
-  // TypeError になる。公開 API の $client 有無 (proxy=undefined /
-  // binding=D1Database object。実行時 probe で確認) と明示 HTTP sender の
-  // 排他で判定する。未知 Node は書く前に止める。
+  // TypeError になる。$client の有無だけでは足りず (null/{} も「有り」になる)、
+  // 実 D1 binding の有限 shape — $client が prepare/batch 呼び出し可能 かつ
+  // db.batch 呼び出し可能 (D1Database の公開 API。実行時 probe で確認) — と
+  // 明示 HTTP sender の排他で判定する。未知 backend は書く前に止める。
   const d1HttpBatch = args.d1HttpBatch;
-  const hasBindingClient =
-    (db as unknown as { $client?: unknown }).$client !== undefined;
-  if (d1HttpBatch !== undefined && hasBindingClient) {
+  const rawClient = (db as unknown as { $client?: unknown }).$client;
+  const hasBindingBatch =
+    typeof db.batch === "function" &&
+    typeof rawClient === "object" &&
+    rawClient !== null &&
+    typeof (rawClient as { prepare?: unknown }).prepare === "function" &&
+    typeof (rawClient as { batch?: unknown }).batch === "function";
+  if (d1HttpBatch !== undefined && hasBindingBatch) {
     throw new Error(
       "[ingest] D1 書込 backend が二重指定です (d1HttpBatch と binding)。同一入力の sender は 1 つにしてください。"
     );
   }
-  if (d1HttpBatch === undefined && !hasBindingClient) {
+  if (d1HttpBatch === undefined && !hasBindingBatch) {
     throw new Error(
       "[ingest] D1 batch backend がありません: Node (sqlite-proxy) では d1HttpBatch (createD1HttpBatchSender) を明示してください。書込の前に止めます。"
     );
@@ -539,27 +543,9 @@ export async function ingestDocument(
       ),
     ];
     if (d1HttpBatch !== undefined) {
-      const raw: D1BatchStatement[] = statements.map((s) => {
-        const q = s.toSQL();
-        const params: unknown[] = q.params;
-        return {
-          sql: q.sql,
-          params: params.map((p): string | number | boolean | null => {
-            if (
-              p === null ||
-              typeof p === "string" ||
-              typeof p === "number" ||
-              typeof p === "boolean"
-            ) {
-              return p;
-            }
-            throw new Error(
-              `[ingest] D1 HTTP bind に対象外の値 (${typeof p})。書込の前に止めます。`
-            );
-          }),
-        };
-      });
-      await d1HttpBatch(raw);
+      // 同一 builders を toSQL 化して送る (対象外の束縛値は送らず throw)。
+      // per-statement フォールバックはしない。
+      await d1HttpBatch(toD1BatchStatements(statements));
     } else {
       // db.batch の受け口は非空タプル要求。先頭 upsert の存在を
       // 実行時に強制する (chunk が空でも upsert+delete 3 文は残る)。
