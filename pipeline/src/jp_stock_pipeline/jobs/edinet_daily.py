@@ -207,9 +207,16 @@ def _process_document(
     tidy_artifact: RawArtifact | None = None
 
     # 財務系: CSV/XBRL → tidy 変換版付き原本を ⑤ へ (変換失敗でも原本は上げる §5.2)
+    # 実解析原本 (Type5 CSV / 無ければ実 Type1 ZIP) の Notion ⑤ 物理保管が
+    # ③④ 構造化保存の前提条件。Notion 失敗時は書類単位を中止する (§8.1-4)。
     if doc_type_code in FINANCIAL_DOC_TYPES:
         tidy_artifact, tidy = _fetch_financial_tidy(ctx, doc_id, code, data_date)
-        doc_raw_page = ctx.upload_raw(tidy_artifact, sha_map=sha_map, sha_map_date=target_date)
+        doc_raw_page = ctx.upload_raw(
+            tidy_artifact,
+            sha_map=sha_map,
+            sha_map_date=target_date,
+            require_notion=True,
+        )
 
     # PDF 原本 (§4 書類一覧の対象すべて)。失敗しても書類処理自体は継続
     try:
@@ -222,7 +229,15 @@ def _process_document(
     except (FetchError, file_upload.RawUploadError) as exc:
         logger.warning("PDF取得/UL失敗 (書類処理は継続 doc_id=%s): %s", doc_id, exc)
 
+    # 財務系の ④ 原本は実解析原本 (tidy) の ⑤ ページに限る。一覧原本・PDF
+    # ページへの代替は不可 (実 ZIP へのトレーサビリティ §8.1-4)。strict UL と
+    # 書類単位中止で到達不能のはずだが、不変条件として明示死守する。
+    if doc_type_code in FINANCIAL_DOC_TYPES and not doc_raw_page:
+        raise file_upload.RawUploadError(
+            f"財務系 ④ の実解析原本ページが無い (一覧/PDF代替不可): {doc_id}"
+        )
     # ④ 開示書類 upsert (キー=docID)。原本は書類自身 → 無ければ一覧原本
+    # (財務系以外のみ。一覧/PDF は実 ZIP の代用にしない)。
     record = edinet.to_disclosure_record(doc, raw_page_id=doc_raw_page or list_page_id)
     # ① relation 解決。事前マップがあれば per-record 検索を省く(§8.3)。マップ miss は
     # relation 欠落のみ(重複は起きない)なので benign degrade。マップ未取得時は従来の
