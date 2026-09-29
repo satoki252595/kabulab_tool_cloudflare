@@ -38,7 +38,7 @@ import {
   findUniqueBackupChildByTitle,
   queryUniqueRow,
 } from "./archive.js";
-import { notionRequest } from "./client.js";
+import { NotionUnknownResultError, notionRequest } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
 import { splitRichText } from "./rich-text.js";
@@ -917,10 +917,23 @@ export async function upsertObservation(
     const pageId = assertObservationAck(acked, input, { op: "更新", wantPageId: existing.id });
     return { pageId, outcome: "updated" };
   }
-  const created = await notionRequest<ObsWriteAck>("POST", "/pages", {
-    parent: { database_id: dbId },
-    properties: props,
-  });
+  let created: ObsWriteAck;
+  try {
+    created = await notionRequest<ObsWriteAck>("POST", "/pages", {
+      parent: { database_id: dbId },
+      properties: props,
+    });
+  } catch (e) {
+    // Unknown のときだけ同じ型で key context を先頭に付けて再throw
+    // (再送しない・Unknown型と cause を維持。DB UUID は出さない)。
+    if (e instanceof NotionUnknownResultError) {
+      throw new NotionUnknownResultError(
+        `moneyflow 観測の作成 (${MONEYFLOW_OBS_DB_TITLE} obsKey=${key}) の結果不明のため再送しません: ${(e as Error).message}`,
+        { cause: e }
+      );
+    }
+    throw e;
+  }
   const pageId = assertObservationAck(created, input, { op: "作成" });
   return { pageId, outcome: "created" };
 }

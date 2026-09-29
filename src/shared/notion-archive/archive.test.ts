@@ -567,6 +567,68 @@ describe("notion-archive archive (parentPageId)", () => {
       ).rejects.toThrow();
       expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(0);
     });
+
+    it("primary POST の Unknown は同型・cause 保持で service+keySHA を残し、生keyを出さず再送しない", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      const harnessFetch = globalThis.fetch;
+      let postAttempts = 0;
+      globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+        const u = new URL(String(url));
+        if ((init?.method ?? "GET") === "POST" && u.pathname === "/v1/pages") {
+          postAttempts++;
+          throw new Error("network boom");
+        }
+        return (harnessFetch as typeof fetch)(url as string, init);
+      }) as typeof fetch;
+      const { recordPrimaryData } = await load();
+      const { NotionUnknownResultError } = await import("./client.js");
+      const { rootCauseMessage } = await import("../errors.js");
+      const secretKey = "batch-secret-uuid-9f8e";
+      const expectHash = await sha256Hex(secretKey);
+      const err = (await recordPrimaryData({
+        service: "moneyflow",
+        key: secretKey,
+        source: "s",
+        metadata: {},
+      }).then(
+        () => null,
+        (e: Error) => e
+      )) as Error | null;
+      expect(err).toBeInstanceOf(NotionUnknownResultError);
+      expect(err?.cause).toBeInstanceOf(NotionUnknownResultError);
+      expect(err?.message).toContain("service=moneyflow");
+      expect(err?.message).toContain(`keySha256=${expectHash}`);
+      expect(err?.message).not.toContain(secretKey);
+      expect(err?.message).not.toContain("db-1");
+      const chained = rootCauseMessage(err);
+      expect(chained).toContain(expectHash);
+      expect(chained).not.toContain(secretKey);
+      expect(chained).toContain("network boom");
+      expect(postAttempts).toBe(1);
+    });
+
+    it("primary POST の非 Unknown エラーは同一 throw し、context を付けず再送しない", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/pages", [
+        new Response(JSON.stringify({ object: "error", code: "validation_error", message: "bad" }), { status: 400 }),
+      ]);
+      const { recordPrimaryData } = await load();
+      const { NotionUnknownResultError } = await import("./client.js");
+      const err = (await recordPrimaryData({
+        service: "moneyflow",
+        key: "k1",
+        source: "s",
+        metadata: {},
+      }).then(
+        () => null,
+        (e: Error) => e
+      )) as Error | null;
+      expect(err).not.toBeInstanceOf(NotionUnknownResultError);
+      expect(err?.message).not.toContain("一次データの作成");
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(1);
+    });
   });
 
   describe("isArchived", () => {
