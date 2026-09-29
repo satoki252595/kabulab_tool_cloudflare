@@ -103,7 +103,7 @@ describe("fetchDaily", () => {
     expect(splits).toEqual([{ date: "2025-09-11", ratio: 2 }]);
   });
 
-  it("adj 欠落は close で補い、OHLC 欠損バーは落とす", async () => {
+  it("保存候補行の adj 欠落は c 補完せず応答全体を拒否する (Sol 裁定)", async () => {
     useProxy();
     stubChart(
       chartJson({
@@ -121,9 +121,8 @@ describe("fetchDaily", () => {
         },
       })
     );
-    const { bars } = await fetchDaily("7203.T");
-    expect(bars).toHaveLength(1);
-    expect(bars[0].adj).toBe(105);
+    // 0 本目は OHLCV 揃い + adj null → throw。c 代用も行 skip もしない。
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/adj 欠落/);
   });
 
   it("result 欠落は空で返し、quote 欠落は落とす", async () => {
@@ -279,7 +278,7 @@ describe("fetchDaily", () => {
     await expect(fetchDaily("7203.T")).rejects.toThrow(/raw adj\[1\] が非正/);
   });
 
-  it("adj 欠落 (null) は c 代用であり異常ではない", async () => {
+  it("保存候補行の adj 欠落は throw (c 代用なし・行 skip なし)", async () => {
     useProxy();
     stubChart(
       chartJson({
@@ -298,8 +297,32 @@ describe("fetchDaily", () => {
         },
       })
     );
+    // OHLCV 揃い + adj null → 応答全体を拒否。呼び出し側は当該 stock
+    // PUT0/errors/exit1 (既経路 reuse)。
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/adj 欠落/);
+  });
+
+  it("実在 adj はそのまま保存する (c と異なる値で代用なしを証明)", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "7203.T", regularMarketPrice: 105 },
+        indicators: {
+          quote: [
+            {
+              open: [100, 101],
+              high: [110, 111],
+              low: [90, 91],
+              close: [105, 106],
+              volume: [1000, 2000],
+            },
+          ],
+          adjclose: [{ adjclose: [95, 96] }],
+        },
+      })
+    );
     const { bars } = await fetchDaily("7203.T");
-    expect(bars[1].adj).toBe(106);
+    expect(bars.map((b) => b.adj)).toEqual([95, 96]);
   });
 });
 

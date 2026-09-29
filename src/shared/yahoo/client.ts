@@ -756,9 +756,15 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
       c = q.close?.[i],
       v = q.volume?.[i];
     // null は欠落として落とす。null 出来高は 0 に化けない (missing≠実0)。
-    // adj null のみ c 代用 (欠落時の代用であり、実在 adj の異常とは別扱い)。
     if (o == null || h == null || l == null || c == null || v == null) continue;
+    // OHLCV 保存候補が揃った行で adj 欠落なら throw (c 代用なし。行だけの
+    // silent skip も不可)。呼び出し側は当該 stock PUT0/errors/exit1 へ。
     const a = adj[i];
+    if (a == null) {
+      throw new Error(
+        `Chart API エラー [${symbol}]: 保存候補行に adj 欠落のため応答全体を採用しません。`
+      );
+    }
     bars.push({
       date: jstDate(res.timestamp[i]),
       o: +o.toFixed(2),
@@ -766,7 +772,7 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
       l: +l.toFixed(2),
       c: +c.toFixed(2),
       v,
-      adj: a != null ? +a.toFixed(2) : +c.toFixed(2),
+      adj: +a.toFixed(2),
     });
   }
   const splits: { date: string; ratio: number }[] = [];
