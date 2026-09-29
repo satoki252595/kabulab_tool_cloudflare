@@ -70,14 +70,11 @@ async function main() {
   });
   const finishedAt = new Date().toISOString();
   console.log(JSON.stringify({ codes: codes.length, range: RANGE, written, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted }));
-  // run 粒度バッチ保管 (per-stock 鏡像は作らない)。新物理 key のため
-  // VWAP_ARCHIVE_SUMMARY=1 の明示指定時のみ記録し、既定では出さない。
+  // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 intra に必須接続。
+  // 保管失敗は握り潰さず throw を伝播させ job 失敗にする (未保管の成功なし)。
   const summary = buildIngestSummary({ kind: "intra", range: RANGE, codes: codes.length, written, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted, startedAt, finishedAt });
-  if (process.env.VWAP_ARCHIVE_SUMMARY === "1") {
-    await recordPrimaryData({ ...summary, force: false });
-  } else {
-    console.log(JSON.stringify({ archive: "skipped", key: summary.key }));
-  }
+  console.log(JSON.stringify({ archive: "recording", key: summary.key }));
+  await recordPrimaryData({ ...summary, force: false });
   if (aborted) process.exitCode = 2;
 }
 main();
