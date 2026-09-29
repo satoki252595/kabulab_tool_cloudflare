@@ -68,6 +68,7 @@ vi.mock("../../services/ir-catalog/src/services/tdnet/client.js", () => ({
 vi.mock("../shared/notion-archive/index.js", () => ({
   recordPrimaryData: vi.fn(),
   upsertDisclosuresByStock: vi.fn(),
+  findBackupRowsByKeys: vi.fn(async () => []),
 }));
 vi.mock("../../services/yuho-quant/src/services/edinet/client.js", () => ({
   listDocuments: vi.fn(),
