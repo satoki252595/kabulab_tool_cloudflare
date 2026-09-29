@@ -29,8 +29,10 @@ CF の数字曜日は 1=日曜で GitHub と違うため):
   1% 判定は不変。
 - receipt: `stock-scheduler/receipt-<予定UTC日>.json` を `If-None-Match: *`
   で原子的 claim。取得者のみ POST。重複時は既存 receipt を読戻し、
-  同予定日・valid schema・dispatched・同 run 対応のときだけ正常
-  duplicate (追加 POST 0)。claimed/破損は error 継続・再 POST なし。
+  同予定日・dispatch cron・時刻妥当性 (同日・順序)・正の run ID・
+  同一 repo/run URL の全部入りで dispatched のときだけ正常 duplicate
+  (追加 POST 0)。claimed/破損は error 継続・再 POST なし。
+  readcheck も同一 parse で統一。互換 fallback なし。
   POST 検証 (HTTP 200 + `workflow_run_id` / 同一 repo・run の `run_url` /
   `html_url`) 後に native `etagMatches` で CAS 保存。
 - GitHub API は `User-Agent` 必須。Jobs 分頁は同一 origin/path・run 限定、

@@ -15,6 +15,10 @@ scheduled 配線、`wrangler.toml` `[triggers]`、`stock-sync.yml`
   秘密非出力・target 別必須)。
 - API 実形の反映: `run_url` は `/repos` 付き path で検証
   (`html_url` は無し)。レビュー指摘 6 件を同 PR で修正。
+- 保存 receipt の厳密 parse (duplicate 読戻し・readcheck 共用):
+  正の run ID・同一 repo/run URL・cron・時刻妥当性を必須化。
+  0/負/URL 不一致/欠落の回帰あり。POST 失敗 error は HTTP status のみ
+  (応答 body hint 削除)。
 - `pnpm typecheck` / `pnpm lint`: 成功。
 - `wrangler deploy --dry-run`: 成功 (`[triggers]` 2 cron 含む)。
 - 全体 `pnpm test` は CI で確認。

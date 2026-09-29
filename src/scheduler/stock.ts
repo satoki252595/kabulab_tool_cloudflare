@@ -187,18 +187,18 @@ export interface DispatchDetails {
   htmlUrl: string;
 }
 
-function httpsUrl(value: unknown, name: string): URL {
+function httpsUrl(value: unknown, name: string, what = "dispatch 応答"): URL {
   if (typeof value !== "string" || value === "") {
-    throw new Error(`dispatch 応答の ${name} が不正です (空・非文字列)`);
+    throw new Error(`${what}の ${name} が不正です (空・非文字列)`);
   }
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new Error(`dispatch 応答の ${name} が URL として不正です`);
+    throw new Error(`${what}の ${name} が URL として不正です`);
   }
   if (url.protocol !== "https:") {
-    throw new Error(`dispatch 応答の ${name} が https ではありません`);
+    throw new Error(`${what}の ${name} が https ではありません`);
   }
   return url;
 }
@@ -211,11 +211,12 @@ function assertRunUrl(
   value: unknown,
   name: "run_url" | "html_url",
   host: string,
-  runId: number
+  runId: number,
+  what = "dispatch 応答"
 ): string {
-  const url = httpsUrl(value, name);
+  const url = httpsUrl(value, name, what);
   if (url.host !== host) {
-    throw new Error(`dispatch 応答の ${name} の host が不正です`);
+    throw new Error(`${what}の ${name} の host が不正です`);
   }
   // API の run_url は /repos 付き、html_url は /repos 無し (公式の実形)。
   const want =
@@ -223,7 +224,7 @@ function assertRunUrl(
       ? `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/runs/${runId}`
       : `/${GITHUB_OWNER}/${GITHUB_REPO}/actions/runs/${runId}`;
   if (url.pathname !== want) {
-    throw new Error(`dispatch 応答の ${name} が同一 repo/run ではありません`);
+    throw new Error(`${what}の ${name} が同一 repo/run ではありません`);
   }
   return value as string;
 }
@@ -258,16 +259,9 @@ export async function postStockDispatch(
     }
   );
   if (res.status !== 200) {
-    let hint = "";
-    try {
-      const body = (await res.json()) as { message?: unknown };
-      if (typeof body.message === "string" && body.message !== "") {
-        hint = `: ${body.message.slice(0, 200)}`;
-      }
-    } catch {
-      hint = "";
-    }
-    throw new Error(`dispatch POST が失敗しました: HTTP ${res.status}${hint}`);
+    // 任意の応答 body を error へ含めない (非出力保証を関数境界で満たす)。
+    // 切り分けは HTTP status で十分。
+    throw new Error(`dispatch POST が失敗しました: HTTP ${res.status}`);
   }
   let json: unknown;
   try {
@@ -344,20 +338,12 @@ export async function runStockDispatch(deps: {
     if (existing === null) {
       throw new Error(`duplicate の読戻しで receipt が消えています: ${key}`);
     }
-    const receipt = parseReceipt(await existing.text(), key);
-    if (receipt.scheduledDate !== deps.scheduledDate) {
-      throw new Error(`duplicate の receipt 日付不一致: ${key}`);
-    }
-    if (receipt.status !== "dispatched") {
-      throw new Error(
-        `dispatch 未完了の receipt があるため再開しません:` +
-          ` status=${receipt.status} ${key}`
-      );
-    }
-    if (!Number.isSafeInteger(receipt.workflowRunId)) {
-      throw new Error(`duplicate の receipt に run 対応がありません: ${key}`);
-    }
-    const workflowRunId = receipt.workflowRunId as number;
+    const receipt = parseStoredReceipt(
+      await existing.text(),
+      key,
+      deps.scheduledDate
+    );
+    const workflowRunId = receipt.workflowRunId;
     console.info(
       `[stock-scheduler] dispatch duplicate のため POST なし:` +
         ` date=${deps.scheduledDate} run_id=${workflowRunId}`
@@ -375,7 +361,7 @@ export async function runStockDispatch(deps: {
     cron: deps.cron,
     status: "dispatched",
     claimedAt: new Date(deps.nowMs).toISOString(),
-    dispatchedAt: new Date(Date.now()).toISOString(),
+    dispatchedAt: new Date(deps.nowMs).toISOString(),
     workflowRunId: details.workflowRunId,
     runUrl: details.runUrl,
     htmlUrl: details.htmlUrl,
@@ -603,7 +589,29 @@ export function evaluateReadcheck(
   return { stockCompletedAt: stock.completed_at as string };
 }
 
-function parseReceipt(text: string, key: string): StockReceipt {
+/** 検証済みの dispatched receipt (全必須 field あり)。 */
+export interface ValidDispatchedReceipt {
+  version: typeof RECEIPT_VERSION;
+  scheduledDate: string;
+  cron: typeof DISPATCH_CRON;
+  status: "dispatched";
+  claimedAt: string;
+  dispatchedAt: string;
+  workflowRunId: number;
+  runUrl: string;
+  htmlUrl: string;
+}
+
+/**
+ * 保存済み receipt の厳密 parse (duplicate 読戻しと readcheck で共用)。
+ * 実 caller は全必須 field を保存するため互換 fallback なし。
+ * claimed は未完了として error 継続 (正常 duplicate にしない)。
+ */
+function parseStoredReceipt(
+  text: string,
+  key: string,
+  expectedDate: string
+): ValidDispatchedReceipt {
   let json: unknown;
   try {
     json = JSON.parse(text);
@@ -617,13 +625,72 @@ function parseReceipt(text: string, key: string): StockReceipt {
   if (r["version"] !== RECEIPT_VERSION) {
     throw new Error(`receipt の version が未知です: ${key}`);
   }
-  if (r["status"] !== "claimed" && r["status"] !== "dispatched") {
+  if (r["status"] === "claimed") {
+    throw new Error(`dispatch 未完了の receipt です: ${key}`);
+  }
+  if (r["status"] !== "dispatched") {
     throw new Error(`receipt の status が未知です: ${key}`);
   }
   if (typeof r["scheduledDate"] !== "string") {
     throw new Error(`receipt に scheduledDate がありません: ${key}`);
   }
-  return r as unknown as StockReceipt;
+  if (r["scheduledDate"] !== expectedDate) {
+    throw new Error(`receipt の日付不一致: ${key}`);
+  }
+  if (r["cron"] !== DISPATCH_CRON) {
+    throw new Error(`receipt の cron が dispatch ではありません: ${key}`);
+  }
+  const claimedMs =
+    typeof r["claimedAt"] === "string" ? Date.parse(r["claimedAt"]) : NaN;
+  if (!Number.isFinite(claimedMs)) {
+    throw new Error(`receipt の claimedAt が時刻として不正です: ${key}`);
+  }
+  const dispatchedMs =
+    typeof r["dispatchedAt"] === "string" ? Date.parse(r["dispatchedAt"]) : NaN;
+  if (!Number.isFinite(dispatchedMs)) {
+    throw new Error(`receipt の dispatchedAt が時刻として不正です: ${key}`);
+  }
+  if (
+    utcDate(claimedMs) !== expectedDate ||
+    utcDate(dispatchedMs) !== expectedDate
+  ) {
+    throw new Error(`receipt の時刻が予定日と一致しません: ${key}`);
+  }
+  if (claimedMs > dispatchedMs) {
+    throw new Error(`receipt の時刻順序が不正です: ${key}`);
+  }
+  if (
+    !Number.isSafeInteger(r["workflowRunId"]) ||
+    (r["workflowRunId"] as number) <= 0
+  ) {
+    throw new Error(`receipt の workflow_run_id が不正です: ${key}`);
+  }
+  const workflowRunId = r["workflowRunId"] as number;
+  const runUrl = assertRunUrl(
+    r["runUrl"],
+    "run_url",
+    "api.github.com",
+    workflowRunId,
+    "receipt"
+  );
+  const htmlUrl = assertRunUrl(
+    r["htmlUrl"],
+    "html_url",
+    "github.com",
+    workflowRunId,
+    "receipt"
+  );
+  return {
+    version: RECEIPT_VERSION,
+    scheduledDate: expectedDate,
+    cron: DISPATCH_CRON,
+    status: "dispatched",
+    claimedAt: r["claimedAt"] as string,
+    dispatchedAt: r["dispatchedAt"] as string,
+    workflowRunId,
+    runUrl,
+    htmlUrl,
+  };
 }
 
 export async function runDeadlineReadcheck(deps: {
@@ -637,23 +704,8 @@ export async function runDeadlineReadcheck(deps: {
   if (obj === null) {
     throw new Error(`receipt がありません (dispatch 未実行の疑い): ${key}`);
   }
-  const receipt = parseReceipt(await obj.text(), key);
-  if (receipt.scheduledDate !== deps.scheduledDate) {
-    throw new Error(`receipt の日付不一致: ${key}`);
-  }
-  if (receipt.status !== "dispatched") {
-    throw new Error(
-      `dispatch 未完了の receipt です: status=${receipt.status} ${key}`
-    );
-  }
-  if (!Number.isInteger(receipt.workflowRunId)) {
-    throw new Error(`receipt に workflow_run_id がありません: ${key}`);
-  }
-  const jobs = await fetchAllJobs(
-    deps.fetchFn,
-    deps.token,
-    receipt.workflowRunId as number
-  );
+  const receipt = parseStoredReceipt(await obj.text(), key, deps.scheduledDate);
+  const jobs = await fetchAllJobs(deps.fetchFn, deps.token, receipt.workflowRunId);
   const verdict = evaluateReadcheck(jobs, deps.scheduledDate);
   console.info(
     `[stock-scheduler] readcheck OK: date=${deps.scheduledDate}` +

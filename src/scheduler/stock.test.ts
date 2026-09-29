@@ -273,8 +273,51 @@ describe("runStockDispatch", () => {
         JSON.stringify({ ...dispatchedBody(), scheduledDate: "2026-09-29" }),
       ],
       [
-        "run 対応がありません",
+        "workflow_run_id が不正",
         JSON.stringify({ ...dispatchedBody(), workflowRunId: "x" }),
+      ],
+      [
+        "workflow_run_id が不正",
+        JSON.stringify({ ...dispatchedBody(), workflowRunId: 0 }),
+      ],
+      [
+        "workflow_run_id が不正",
+        JSON.stringify({ ...dispatchedBody(), workflowRunId: -5 }),
+      ],
+      [
+        "同一 repo/run ではありません",
+        JSON.stringify({
+          ...dispatchedBody(101),
+          runUrl:
+            "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/102",
+        }),
+      ],
+      [
+        "html_url",
+        JSON.stringify({ ...dispatchedBody(), htmlUrl: undefined }),
+      ],
+      [
+        "cron が dispatch ではありません",
+        JSON.stringify({ ...dispatchedBody(), cron: READCHECK_CRON }),
+      ],
+      [
+        "claimedAt が時刻として不正",
+        JSON.stringify({ ...dispatchedBody(), claimedAt: "not-a-date" }),
+      ],
+      [
+        "時刻順序が不正",
+        JSON.stringify({
+          ...dispatchedBody(),
+          claimedAt: "2026-09-30T17:13:31.000Z",
+          dispatchedAt: "2026-09-30T17:13:30.000Z",
+        }),
+      ],
+      [
+        "時刻が予定日と一致しません",
+        JSON.stringify({
+          ...dispatchedBody(),
+          dispatchedAt: "2026-10-01T00:00:00.000Z",
+        }),
       ],
     ];
     for (const [msg, body] of bad) {
@@ -319,19 +362,20 @@ describe("runStockDispatch", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("POST 非 200 は落とし CAS 保存しない (曖昧 POST)", async () => {
+  it("POST 非 200 は status のみで落とす (応答 body を含めない)", async () => {
     const { bucket, puts } = makeBucket();
     const { fetchFn } = makeFetch(() => jsonRes({ message: "boom" }, 500));
-    await expect(
-      runStockDispatch({
-        bucket,
-        token: TOKEN,
-        cron: DISPATCH_CRON,
-        scheduledDate: "2026-09-30",
-        nowMs: TUE_1713_30S,
-        fetchFn,
-      })
-    ).rejects.toThrow("HTTP 500");
+    const err: unknown = await runStockDispatch({
+      bucket,
+      token: TOKEN,
+      cron: DISPATCH_CRON,
+      scheduledDate: "2026-09-30",
+      nowMs: TUE_1713_30S,
+      fetchFn,
+    }).catch((e: unknown) => e);
+    expect((err as Error).message).toBe(
+      "dispatch POST が失敗しました: HTTP 500"
+    );
     expect(puts).toHaveLength(1);
   });
 
@@ -592,11 +636,20 @@ describe("runDeadlineReadcheck", () => {
         },
       ],
       [
-        "workflow_run_id がありません",
+        "workflow_run_id が不正",
         {
           [receiptKey(DATE)]: JSON.stringify({
             ...dispatchedBody(),
             workflowRunId: undefined,
+          }),
+        },
+      ],
+      [
+        "workflow_run_id が不正",
+        {
+          [receiptKey(DATE)]: JSON.stringify({
+            ...dispatchedBody(),
+            workflowRunId: 0,
           }),
         },
       ],
