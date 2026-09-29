@@ -125,6 +125,25 @@ describe("edinet archive 共通契約", () => {
     expect(archiveTallyFailed(7)).toBe(true);
   });
 
+  it("fileTooLarge は metadata のみ成功にせず throw する (全 caller で未完了扱い)", async () => {
+    vi.mocked(recordPrimaryData).mockResolvedValue({
+      pageId: "p-large",
+      outcome: "recorded",
+      fileTooLarge: true,
+    });
+    await expect(
+      recordEdinetZip({
+        service: "yuho-quant",
+        docID: "S100J2E7",
+        type: 1,
+        zip: realBytes(),
+        source: "EDINET API v2 /documents/S100J2E7?type=1",
+        fetchedAt: "2026-09-28T00:00:00.000Z",
+        metadata: { docID: "S100J2E7" },
+      })
+    ).rejects.toThrow("S100J2E7:type1");
+  });
+
   it("force は透過し、戻り値をそのまま返す", async () => {
     vi.mocked(recordPrimaryData).mockResolvedValue({
       pageId: "p9",

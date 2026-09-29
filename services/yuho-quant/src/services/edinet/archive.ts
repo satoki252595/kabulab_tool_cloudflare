@@ -68,6 +68,10 @@ export function archiveTallyFailed(errorCount: number): boolean {
 /**
  * 1 type 分の実 ZIP を type 別 key で記録する (全経路の共通窓口)。
  * metadata へ `edinetDocType` を付与し、どちらの実体かを行に残す。
+ *
+ * ファイルが Notion 上限超過で添付できなかった (`fileTooLarge`) 場合は
+ * metadata のみ記録成功として返さず throw する。呼び出し側は通単位で
+ * 失敗計上し、全 caller (ingest/backfill/repair) で未完了として扱う。
  */
 export async function recordEdinetZip(args: {
   service: string;
@@ -81,7 +85,7 @@ export async function recordEdinetZip(args: {
 }): Promise<RecordResult> {
   const { service, docID, type, zip, source, fetchedAt, metadata, force } =
     args;
-  return recordPrimaryData({
+  const result = await recordPrimaryData({
     service,
     key: edinetArchiveKey(docID, type),
     source,
@@ -96,4 +100,10 @@ export async function recordEdinetZip(args: {
     ],
     force,
   });
+  if (result.fileTooLarge) {
+    throw new Error(
+      `recordEdinetZip: 実ファイルが Notion 上限超過で未添付です (metadata のみ記録扱いにしない): ${edinetArchiveKey(docID, type)}`
+    );
+  }
+  return result;
 }

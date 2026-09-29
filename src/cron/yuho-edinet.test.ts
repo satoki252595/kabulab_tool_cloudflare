@@ -137,6 +137,25 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     expect(catchupHttpStatus(r)).toBe(500);
   });
 
+  it("境界: 完成済み既存 (skipped_existing) は skip 計数し状態計数に混ぜない", async () => {
+    vi.mocked(listDocuments)
+      .mockResolvedValueOnce({ results: [annualDoc("7203")] } as never)
+      .mockResolvedValue({ results: [] } as never);
+    vi.mocked(ingestDocument).mockResolvedValue({
+      outcome: "skipped_existing",
+      parseStatus: "no_order_table",
+      overseasParseStatus: "no_overseas_table",
+      textParseStatus: "no_text_sections",
+    } as never);
+
+    const r = await runCatchup();
+    expect(r.ingested).toBe(0);
+    expect(r.skippedExisting).toBe(1);
+    expect(r.ingestErrors).toEqual([]);
+    expect(r.byStatus).toEqual({});
+    expect(catchupHttpStatus(r)).toBe(200);
+  });
+
   it("境界: cap・既取込・母集団外は失敗に混ぜない (型で保証)", () => {
     // catchupHttpStatus は Pick<listErrors|ingestErrors> だけ見る。
     // reachedCap/outOfUniverse/skippedExisting は引数の型に入らない。

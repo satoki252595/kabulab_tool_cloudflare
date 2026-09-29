@@ -212,9 +212,10 @@ console.info("\n[text-backfill] 完了:");
 for (const [k, v] of Object.entries(tally).sort((a, b) => b[1] - a[1])) {
   console.info(`  ${k}: ${v}`);
 }
-// 有限 --doc 指定のギャップ修復は失敗が1件でもあれば非0終了にする
-// (対象を絞った修復の false-green を防ぐ。backfill-missing-docs と同一方式)。
-if (docFilter !== null) {
+// 本文保管の失敗 (通エラー・保管 throw・コード不明・行 ID 未取得) が
+// 1件でもあれば非0終了にする (false-green 防止。backfill-missing-docs と同一方式)。
+// 有限 --doc 指定も通常全対象実行も同じ判定。
+{
   const failed =
     (tally.error ?? 0) +
     (tally.notion_text_error ?? 0) +

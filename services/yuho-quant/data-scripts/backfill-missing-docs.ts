@@ -25,8 +25,10 @@ import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
 import {
   archiveTallyFailed,
+  edinetArchiveKey,
   recordEdinetZip,
 } from "../src/services/edinet/archive.js";
+import { isArchived } from "../../../src/shared/notion-archive/index.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
@@ -129,11 +131,27 @@ const { yuhoDocuments, orderFacts, overseasSalesFacts, textSections } = yuhoSche
 const codeToId = await loadIngestCodeToId(db);
 console.info(`[missing] 母集団 ${codeToId.size} 社 range=${fromArg}〜${toArg} force=${force} dryRun=${dryRun}`);
 
-// 取込済み docId は全件 1 回だけ引く (日ごとに引くと 22k 行 × 日数になる)
-const inDbAll = await db.select({ docId: yuhoDocuments.docId }).from(yuhoDocuments);
+// 取込済み docId は全件 1 回だけ引く (日ごとに引くと 22k 行 × 日数になる)。
+// 本文ポインタの有無も一緒に引き、parse 済み (ok) なのにポインタ NULL の通は
+// 既存扱いスキップから外して回収対象にする (本文ポインタ共有根因)。
+const inDbAll = await db
+  .select({
+    docId: yuhoDocuments.docId,
+    textParseStatus: yuhoDocuments.textParseStatus,
+    notionDocPageId: yuhoDocuments.notionDocPageId,
+  })
+  .from(yuhoDocuments);
 const existingAll = new Set(inDbAll.map((r) => r.docId));
+// 本文ポインタ未完成の既存通 (ok なのに行 ID NULL)。保管済み判定から外す。
+const pointerIncomplete = new Set(
+  inDbAll
+    .filter((r) => r.textParseStatus === "ok" && r.notionDocPageId === null)
+    .map((r) => r.docId)
+);
 
 const tally: Record<string, number> = {};
+// type 保管の完成判定メモ (docId → t1/t5 両 key 保管済み)。run 内で使い回す。
+const custodyMemo = new Map<string, boolean>();
 let done = 0;
 let target = 0;
 
@@ -146,9 +164,24 @@ for (const date of eachDay(fromArg, toArg)) {
     console.warn(`[missing] list 失敗 ${date}: ${(e as Error).message} (スキップ)`);
     continue;
   }
+  // 既存扱いスキップは「完成済み」に限定する。本文ポインタ未完成の通に加え、
+  // type 保管 (t1/t5 key) が欠ける通も回収対象に戻す。保管確認は run 内メモ化
+  // (同一通の重複確認を避ける)。force 時は全通処理のため確認しない。
+  const effectiveExisting = new Set(existingAll);
+  for (const id of pointerIncomplete) effectiveExisting.delete(id);
+  if (!force) {
+    for (const doc of listed) {
+      if (!effectiveExisting.has(doc.docID) || custodyMemo.has(doc.docID)) continue;
+      const t1 = await isArchived("yuho-quant", edinetArchiveKey(doc.docID, 1));
+      const t5 = await isArchived("yuho-quant", edinetArchiveKey(doc.docID, 5));
+      const complete = t1 && t5;
+      custodyMemo.set(doc.docID, complete);
+      if (!complete) effectiveExisting.delete(doc.docID);
+    }
+  }
   const { missing, skippedExisting, outOfUniverse } = selectMissingDocs(
     listed,
-    existingAll,
+    effectiveExisting,
     codeToId,
     force
   );
@@ -402,7 +435,15 @@ for (const date of eachDay(fromArg, toArg)) {
 
 console.info("[missing] 完了: " + Object.entries(tally).map(([k, v]) => `${k}=${v}`).join(" "));
 // 保管失敗 (recordEdinetZip の throw を含む) は tally.error に加算される。
-// error > 0 を非0終了にし、失敗を job green にしない (Sol HOLD1)。
-if (archiveTallyFailed(tally.error ?? 0)) {
+// 本文保管の失敗 (保管 throw・コード不明・行 ID 未取得) も同様に非0終了にし、
+// 失敗を job green にしない (Sol HOLD1 + text-pointer 共有根因)。
+if (
+  archiveTallyFailed(
+    (tally.error ?? 0) +
+      (tally.notion_text_error ?? 0) +
+      (tally.notion_text_no_code ?? 0) +
+      (tally.notion_text_no_pointer ?? 0)
+  )
+) {
   process.exitCode = 1;
 }

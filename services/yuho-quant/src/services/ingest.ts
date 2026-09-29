@@ -134,7 +134,11 @@ export async function ingestDocument(
   const { stockId, stockCode, doc, force = false, archiveToNotion = false } = args;
 
   const existing = await db
-    .select({ id: yuhoDocuments.id })
+    .select({
+      id: yuhoDocuments.id,
+      textParseStatus: yuhoDocuments.textParseStatus,
+      notionDocPageId: yuhoDocuments.notionDocPageId,
+    })
     .from(yuhoDocuments)
     .where(eq(yuhoDocuments.docId, doc.docID))
     .limit(1);
@@ -152,7 +156,16 @@ export async function ingestDocument(
     archiveToNotion && !force
       ? await isArchived(NOTION_SERVICE, edinetArchiveKey(doc.docID, 5))
       : false;
-  const needDbWork = !existsInDb || force;
+  // 本文 parse 済み (ok) なのに Notion 行ポインタが無い通は、raw 保管が
+  // 揃っていても未完了として本文回収フローへ回す (skipped_existing にしない)。
+  // D1 書込は docId 冪等 (onConflictDoUpdate + 文書単位 delete→insert) のため
+  // 同一 key の再実行で安全にポインタを完成できる。
+  const existingRow = existing[0];
+  const textPointerMissing =
+    existingRow !== undefined &&
+    existingRow.textParseStatus === "ok" &&
+    existingRow.notionDocPageId === null;
+  const needDbWork = !existsInDb || force || textPointerMissing;
   const needT1 = archiveToNotion && (!t1Present || force);
   const needT5 = archiveToNotion && (!t5Present || force);
   const needArchive = needT1 || needT5;
