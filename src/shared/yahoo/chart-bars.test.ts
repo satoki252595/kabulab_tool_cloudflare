@@ -103,7 +103,7 @@ describe("fetchDaily", () => {
     expect(splits).toEqual([{ date: "2025-09-11", ratio: 2 }]);
   });
 
-  it("adj 欠落は close で補い、OHLC 欠損バーは落とす", async () => {
+  it("保存候補行の adj 欠落は c 補完せず応答全体を拒否する (Sol 裁定)", async () => {
     useProxy();
     stubChart(
       chartJson({
@@ -121,9 +121,8 @@ describe("fetchDaily", () => {
         },
       })
     );
-    const { bars } = await fetchDaily("7203.T");
-    expect(bars).toHaveLength(1);
-    expect(bars[0].adj).toBe(105);
+    // 0 本目は OHLCV 揃い + adj null → throw。c 代用も行 skip もしない。
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/adj 欠落/);
   });
 
   it("result 欠落は空で返し、quote 欠落は落とす", async () => {
@@ -230,6 +229,101 @@ describe("fetchDaily", () => {
     );
     await expect(fetchDaily("7203.T")).rejects.toThrow(/応答全体を採用しません/);
   });
+
+  it("null 出来高のバーは落とし、0 には化けない (missing≠実0)", async () => {
+    useProxy();
+    stubChart(
+      chartCoherent({
+        closes: [1000, 1001],
+        volumes: [10000, null],
+        metaPrice: 1000,
+      })
+    );
+    const { bars } = await fetchDaily("7203.T");
+    expect(bars).toHaveLength(1);
+    expect(bars[0].v).toBe(10000);
+  });
+
+  it("非有限実値 (1e999→Infinity) は filter 前に拒否する", async () => {
+    useProxy();
+    const body = JSON.stringify(
+      chartCoherent({ closes: [1000, 1001], volumes: [10000, 20000], metaPrice: 1000 })
+    ).replace('"volume":[10000,20000]', '"volume":[10000,1e999]');
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body, { status: 200 }))
+    );
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/非有限/);
+  });
+
+  it("実在 adj の非正は拒否し、adj 欠落は c 代用で通す", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "7203.T", regularMarketPrice: 105 },
+        indicators: {
+          quote: [
+            {
+              open: [100, 101],
+              high: [110, 111],
+              low: [90, 91],
+              close: [105, 106],
+              volume: [1000, 2000],
+            },
+          ],
+          adjclose: [{ adjclose: [104, -2] }],
+        },
+      })
+    );
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/raw adj\[1\] が非正/);
+  });
+
+  it("保存候補行の adj 欠落は throw (c 代用なし・行 skip なし)", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "7203.T", regularMarketPrice: 105 },
+        indicators: {
+          quote: [
+            {
+              open: [100, 101],
+              high: [110, 111],
+              low: [90, 91],
+              close: [105, 106],
+              volume: [1000, 2000],
+            },
+          ],
+          adjclose: [{ adjclose: [104, null] }],
+        },
+      })
+    );
+    // OHLCV 揃い + adj null → 応答全体を拒否。呼び出し側は当該 stock
+    // PUT0/errors/exit1 (既経路 reuse)。
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/adj 欠落/);
+  });
+
+  it("実在 adj はそのまま保存する (c と異なる値で代用なしを証明)", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "7203.T", regularMarketPrice: 105 },
+        indicators: {
+          quote: [
+            {
+              open: [100, 101],
+              high: [110, 111],
+              low: [90, 91],
+              close: [105, 106],
+              volume: [1000, 2000],
+            },
+          ],
+          adjclose: [{ adjclose: [95, 96] }],
+        },
+      })
+    );
+    const { bars } = await fetchDaily("7203.T");
+    expect(bars.map((b) => b.adj)).toEqual([95, 96]);
+  });
 });
 
 describe("fetchBars5m", () => {
@@ -268,6 +362,120 @@ describe("fetchBars5m", () => {
     );
     const bars = await fetchBars5m("7203.T");
     expect(bars.map((b) => b.ts)).toEqual([1757635200]);
+  });
+
+  it("1909 形 (meta 乖離+出来高なし) は filter 前の raw 検査で応答全体を拒否する", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: {
+          symbol: "1909.T",
+          regularMarketPrice: 3700,
+          regularMarketTime: 1757635260,
+        },
+        indicators: {
+          quote: [
+            {
+              open: [16280000512, 16280000512],
+              high: [16280000512, 16280000512],
+              low: [16280000512, 16280000512],
+              close: [16280000512, 16280000512],
+              volume: [0, 0],
+            },
+          ],
+        },
+      })
+    );
+    // volume filter は無出来高異常を消すため、整合は未 filter の raw 最新で
+    // 見る。meta 時刻が最新 interval 内 (同時点証明) + 乖離+出来高0 → 拒否。
+    await expect(fetchBars5m("1909.T")).rejects.toThrow(
+      /応答全体を採用しません/
+    );
+  });
+
+  it("時刻根拠が未知 (meta 時刻欠落) なら誤比較せず明示 skip する", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "1909.T", regularMarketPrice: 3700 },
+        indicators: {
+          quote: [
+            {
+              open: [16280000512, 16280000512],
+              high: [16280000512, 16280000512],
+              low: [16280000512, 16280000512],
+              close: [16280000512, 16280000512],
+              volume: [0, 0],
+            },
+          ],
+        },
+      })
+    );
+    // 同時点が証明できないため比較しない。volume 0 行は filter で落ちる。
+    const bars = await fetchBars5m("1909.T");
+    expect(bars).toHaveLength(0);
+  });
+
+  it("出来高つき乖離は正規変動として受理する (daily と同一規則)", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "1909.T", regularMarketPrice: 3700 },
+        indicators: {
+          quote: [
+            {
+              open: [100, 101],
+              high: [110, 111],
+              low: [90, 91],
+              close: [105, 370000],
+              volume: [1000, 500000],
+            },
+          ],
+        },
+      })
+    );
+    // raw 最新 (370000 vs meta 3700、100倍乖離・出来高あり) → 出来高を
+    // 伴う乖離は正規変動として受理する。
+    const bars = await fetchBars5m("1909.T");
+    expect(bars).toHaveLength(2);
+  });
+
+  it("非有限実値 (1e999→Infinity) は欠落ではなく異常として filter 前に拒否する", async () => {
+    useProxy();
+    // JSON は NaN を運べないため、範囲外指数の生テキストで stub する。
+    const body = JSON.stringify(chartJson()).replace(
+      '"volume":[1000,2000]',
+      '"volume":[1000,1e999]'
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body, { status: 200 }))
+    );
+    await expect(fetchBars5m("7203.T")).rejects.toThrow(/非有限/);
+  });
+
+  it("最新バーの終値が無効 (非正) なら応答全体を拒否する", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        meta: { symbol: "7203.T", regularMarketPrice: 3000 },
+        indicators: {
+          quote: [
+            {
+              open: [100, 0],
+              high: [110, 0],
+              low: [90, 0],
+              close: [105, 0],
+              volume: [1000, 2000],
+            },
+          ],
+        },
+      })
+    );
+    // 0 終値は falsy ではなく null でもないため残り、guard が非正で拒否する。
+    await expect(fetchBars5m("7203.T")).rejects.toThrow(
+      /応答全体を採用しません/
+    );
   });
 });
 

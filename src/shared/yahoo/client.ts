@@ -20,7 +20,12 @@ import type {
   StockRawData,
 } from "../types.js";
 import { sharedEnv } from "../env.js";
-import { assertResponsePriceCoherent, sanitizeBars } from "./bar-sanity.js";
+import {
+  assertRawBarsSane,
+  assertResponsePriceCoherent,
+  isProvenSamePoint,
+  sanitizeBars,
+} from "./bar-sanity.js";
 import { STOCK_CODE_REGEX } from "../jpx/stock-code.js";
 
 /**
@@ -611,6 +616,7 @@ interface YahooChartJson {
     result?: Array<{
       meta?: {
         regularMarketPrice?: number | null;
+        regularMarketTime?: number | null;
       };
       timestamp?: number[];
       indicators?: {
@@ -669,6 +675,35 @@ export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]
   // quote 欠落は仕様変更の疑い。空で黙殺せず落とす (旧実装は TypeError)。
   const q = res.indicators?.quote?.[0];
   if (!q) throw new Error(`Chart API エラー [${symbol}]: quote がありません`);
+  // raw-first 全行検査 (filter 前)。volume filter は無出来高異常を消すため、
+  // 実在値の異常は欠落除去の前に見る (他欠落で隠さない)。
+  assertRawBarsSane(
+    symbol,
+    res.timestamp.map((_, i) => ({
+      o: q.open?.[i],
+      h: q.high?.[i],
+      l: q.low?.[i],
+      c: q.close?.[i],
+      v: q.volume?.[i],
+    }))
+  );
+  // meta 価格との整合は同時点証明時のみ。時刻根拠が未知 (欠落・interval外)
+  // なら旧 session/split 前 bar との誤比較になるため明示 skip する。
+  // 形成中 5m bar に daily 完了日 gate は転用しない。
+  {
+    const li = res.timestamp.length - 1;
+    if (
+      li >= 0 &&
+      isProvenSamePoint(res.meta?.regularMarketTime, res.timestamp[li], 300)
+    ) {
+      assertResponsePriceCoherent({
+        symbol,
+        latestUsedClose: q.close?.[li] ?? null,
+        latestVolume: q.volume?.[li] ?? null,
+        metaPrice: res.meta?.regularMarketPrice ?? null,
+      });
+    }
+  }
   const out: Bar5m[] = [];
   for (let i = 0; i < res.timestamp.length; i++) {
     const o = q.open?.[i],
@@ -701,6 +736,18 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
   const q = res.indicators?.quote?.[0];
   if (!q) throw new Error(`Chart API エラー [${symbol}]: quote がありません`);
   const adj = res.indicators?.adjclose?.[0]?.adjclose || [];
+  // raw-first 全行検査 (filter 前)。使用/保存する adj の実値もここで見る。
+  assertRawBarsSane(
+    symbol,
+    res.timestamp.map((_, i) => ({
+      o: q.open?.[i],
+      h: q.high?.[i],
+      l: q.low?.[i],
+      c: q.close?.[i],
+      v: q.volume?.[i],
+    })),
+    adj
+  );
   const bars: DailyBar[] = [];
   for (let i = 0; i < res.timestamp.length; i++) {
     const o = q.open?.[i],
@@ -708,16 +755,24 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
       l = q.low?.[i],
       c = q.close?.[i],
       v = q.volume?.[i];
-    if (o == null || h == null || l == null || c == null) continue;
+    // null は欠落として落とす。null 出来高は 0 に化けない (missing≠実0)。
+    if (o == null || h == null || l == null || c == null || v == null) continue;
+    // OHLCV 保存候補が揃った行で adj 欠落なら throw (c 代用なし。行だけの
+    // silent skip も不可)。呼び出し側は当該 stock PUT0/errors/exit1 へ。
     const a = adj[i];
+    if (a == null) {
+      throw new Error(
+        `Chart API エラー [${symbol}]: 保存候補行に adj 欠落のため応答全体を採用しません。`
+      );
+    }
     bars.push({
       date: jstDate(res.timestamp[i]),
       o: +o.toFixed(2),
       h: +h.toFixed(2),
       l: +l.toFixed(2),
       c: +c.toFixed(2),
-      v: v || 0,
-      adj: a != null ? +a.toFixed(2) : +c.toFixed(2),
+      v,
+      adj: +a.toFixed(2),
     });
   }
   const splits: { date: string; ratio: number }[] = [];
