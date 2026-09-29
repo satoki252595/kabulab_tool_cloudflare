@@ -40,8 +40,10 @@ read-only で精査した記録。結論: **10/10 MATCH** (364 section 全一致
 - guard 実績: requests 53 / denied 0
   (notionGet 13・notionQuery 10・fileGet 10・d1Select 20)。HTTP mutation 0。
 - pagination proof: 最終頁 `has_more=false` を 10 通全通で実観測
-  (malformed 0)。頁メタの所在は私的証跡のみ。
-- 監査実行: 2026-09-29T23:11Z (pagination proof 厳密化の再監査。全文 SHA は
+  (malformed 0)。`has_more` は key 存在+boolean、`next_cursor` は key 存在+
+  null/非空 string、true→非空 string/false→null の pairing まで strict 検証
+  し全 12 頁 validated (実値+validated は私的証跡のみ)。
+- 監査実行: 2026-09-29T23:22Z (strict pagination 検証の再監査。全文 SHA は
   初回と同一)。私的証跡 (0600、集計+SHA のみ) は別保管。
 
 laneA wrap SHA (監査入力の pin):
