@@ -69,3 +69,26 @@ kabuMCP の `edinet_*` とは分けてある（クライアントに両方登録
 `jp_job_runs` は `/v1/meta/jobs`（直近N件の履歴列挙）と違い、ジョブ名ごとに
 最新1件へ畳んで返す。頻度の高いジョブに埋もれて低頻度ジョブの最新行が見えなくなる
 問題を避けるため、鮮度確認 (freshness guard) にはこちらを使う。
+
+## 需給の出典契約
+
+REST（`/v1/supply/latest`・`/v1/supply/:code`）と MCP（`jp_supply_latest`・
+`jp_supply_series`）の4経路は、`meta.attribution` を**フィルタ適用後に
+実際に返す行・非空系列だけ**から算出する（`src/shared/supply.ts` が共有境界）。
+種類は writer 契約どおり3種のみ：`jsf_zandaka` / `jsf_shina` → 日証金の文言、
+`jpx_margin` → JPX の文言（文言自体は `envelope.ts` の `ATTRIBUTION` が正本）。
+返すデータが空なら `attribution: []` で、`licenses: ["personal-only"]` は維持する。
+
+- `data_type` / `series` フィルタは既知3種のみ。`from` / `to` は
+  `YYYY-MM-DD`（ohlcv と同一書式）。`undefined` だけが省略扱いで、
+  `null`・非文字列・空文字列は不正。
+- 不正フィルタは REST 400（`invalid_data_type` / `invalid_series` /
+  `invalid_range`）、MCP は `isError`。
+- 返却データ側の未知種類・非文字列・`series` 欠損は成功扱いしない。
+  REST 500、MCP は `isError`。`series` の `?? {}` 黙殺はしない。
+  系列の各 point は非 null オブジェクトかつ `d: string YYYY-MM-DD` で、
+  1件でも外れたら日付 filter の前に失敗する（既知の空系列は正常 empty）。
+- filter 検証は取得より前。不正 filter はオブジェクト欠損時も 404 に、
+  壊れ payload 時も 500 に変化せず 400 / `isError` を返す。
+- MCP の `data_type` / `series` の enum は3種（`jpx_margin` 含む）。
+  説明文で日証金の貸借と JPX の信用を区別する。
