@@ -109,7 +109,8 @@ private 不在のため引き続き skip (規約どおり)。
 (IDs・値・署名 URL・秘密・private 原文なし)。repo コード変更なし。
 
 - 実行: strict 再 run `2026-09-29T23:39:12Z`–`23:42:29Z` (約197秒・上限15分内)。
-  前回 run `23:23:32Z`–`23:26:52Z` も同一 384 unchanged (旧 report 保全)。
+  前回 loose metadata run `23:23:32Z`–`23:26:52Z` (strict pagination 未証明)
+  も同一 384 unchanged (旧 report 保全)。
 - 手法: 固定 source の pure `toObservations` で 384 drafts を再導出
   (resolve/fetch/ingest 不使用) → 実 entry `upsertObservation(dbId,input)` を
   384 順次 await。transport guard 設置後に dynamic import (deny-before-fetch、
@@ -120,7 +121,7 @@ private 不在のため引き続き skip (規約どおり)。
   - `src/shared/notion-archive/client.ts` `163492793d3c04fc9772bdc34f051ccb1b71cd67`
   - `src/shared/notion-archive/env.ts` `b7a2faca946e9de8c010995e2411f03e572275e6`
   - `services/yuho-quant/src/services/edinet/archive.ts` `34275c18ee6690746e582c09526ebddc282122bc`
-  - `services/moneyflow/lib/adapters/imf-cpis.ts` `699c727209ef0b8000321fc4581cad37bdcd4b`
+  - `services/moneyflow/lib/adapters/imf-cpis.ts` `699c727209ef0b8000321fc4581b1cad37bdcd4b`
   - shared archive `src/shared/notion-archive/archive.ts` `065e3044a6ffbf5ea46d7920ba4f6684199f7c76`
 - 源泉 6 pins (個別 sha256・f1–f6 順):
   `201d1f37a149a23f5dd70606a1ba79dbb2f72b6818dc9339ef1befe7e809994c` /
