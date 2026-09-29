@@ -100,3 +100,59 @@ private 不在のため引き続き skip (規約どおり)。
    (weekly-2026-W37 / futures-oi-2026-W38 / imf-cpis-2024-H1-updated-2025-04-08)。
 3. Notion 保管ファイルの再読 → `toObservations` → 観測ログの冪等 upsert を確認する。
    期待行数: 484 / 134 / 387。
+
+## PIP-384 実 entry 再入直接証跡 (strict 再 run・2026-09-30 JST)
+
+本節は実 entry `upsertObservation` 384 件の直接再入証跡であり、旧来の
+比較ベース second0 proof とは別の直接証拠である。旧証跡・旧 artifact は
+保全し、本節では一切変更しない。公開値は集計・SHA・キー・既存 doc 参照のみ
+(IDs・値・署名 URL・秘密・private 原文なし)。repo コード変更なし。
+
+- 実行: strict 再 run `2026-09-29T23:39:12Z`–`23:42:29Z` (約197秒・上限15分内)。
+  前回 run `23:23:32Z`–`23:26:52Z` も同一 384 unchanged (旧 report 保全)。
+- 手法: 固定 source の pure `toObservations` で 384 drafts を再導出
+  (resolve/fetch/ingest 不使用) → 実 entry `upsertObservation(dbId,input)` を
+  384 順次 await。transport guard 設置後に dynamic import (deny-before-fetch、
+  拒否型は `NotionConfigError` 派生、fatal latch)。
+- 固定 source: main `9ec241044a1ad931689b196b42e58738aa963483` と実行 worktree
+  `353c19419d7d680ecd3ebfd23ee0ff529f7b272c` で下記 blob SHA 一致・clean。
+  - `src/shared/notion-archive/moneyflow.ts` `2d84ef508e5940c84e71687a1ddd1726456b1fab`
+  - `src/shared/notion-archive/client.ts` `163492793d3c04fc9772bdc34f051ccb1b71cd67`
+  - `src/shared/notion-archive/env.ts` `b7a2faca946e9de8c010995e2411f03e572275e6`
+  - `services/yuho-quant/src/services/edinet/archive.ts` `34275c18ee6690746e582c09526ebddc282122bc`
+  - `services/moneyflow/lib/adapters/imf-cpis.ts` `699c727209ef0b8000321fc4581cad37bdcd4b`
+  - shared archive `src/shared/notion-archive/archive.ts` `065e3044a6ffbf5ea46d7920ba4f6684199f7c76`
+- 源泉 6 pins (個別 sha256・f1–f6 順):
+  `201d1f37a149a23f5dd70606a1ba79dbb2f72b6818dc9339ef1befe7e809994c` /
+  `8f136d7f1d696436d03ee375c00a39344c37c1239440d0571b5adc4a21e4aa19` /
+  `2990b9bc47e5ece69fdf6c7d3176ea7a0bdfc6904a8b208d54df386ec23a95d3` /
+  `9aa6090c39fc94a65597555361581a754695dbad0cf5ab99d650e43999871278` /
+  `4a99b3fdcfa989263e98e1fa644df0b62401a670747e24384bcf5409fd9c53e0` /
+  `8ea93b11ba6073a12e3fa12d609626bccf58d7ae2331e670d8965d272de604c6`。
+- 連結 alias pin `97260a8f93a38be3533acc10acde59ebb23502e95a295b6123cd32d7ce9d2718`、
+  batch key `imf-cpis-2025-H1-sha-97260a8f93a3`、p1 pin
+  `75b2041ecef71f615d76799c3a51620f7427f16b441743a8a960748e5d32817e`、
+  golden `5b64e321d83555015b624c974679afb58c7143ed8316588274623836503af120`
+  (draftCount 384・unique 384・4 periods)。
+- 再導出: drafts 384・unique keys 384・keyset golden 一致・periods
+  `2023-H2,2024-H1,2024-H2,2025-H1` 一致。
+- 実 entry 結果: calls 384・returned 384・unchanged 384・created 0・updated 0・未知 0。
+- 読取: 398 件 (search 4 / query 391 / GET 3)。上限 450 内。
+  `sharedRequests` 398・rateLimited 0・transientRetries 0。
+- strict 応答検証 (C107 同等): search/query 395/395 validated。
+  query 391 全件 literal false。search 3 sequences 全て terminal literal false
+  (内 1 sequence は true→cursor(100件) + follow-up terminal false(28件))。
+  clone/JSON 失敗 0・guard 拒否 (blocked) 0。
+- 0 群: mutationAttempt 0・forwardedMutations 0・sourceGET 0・
+  Notion create/update/archive 0・新規 receipt 0・D1/R2 mutation 0・workflow 0。
+- validator tiny check: 欠損/型/pairing 不正 12 件全拒否 + 正常 2 形通過。
+- canonical 再生 SHA 不変 (前回と byte-identical):
+  drafts `fa093dfb1f94aacef0f64227a5f0c61773607e55180ed40110148497764b040c`、
+  inputs `cc31f5b69978a55b6027f455ea680a5b3a40dc4d739e3f25c37227ed697ba535`。
+- artifacts (private `/tmp`・10 files 全 0600・dir 0700): 前回 report
+  `3f7c42f77c11d8647df3753a4d1022cade8528790215fef217ac9d787b81aa97`、
+  今回 report-strict
+  `c1d7a3af2d5dbb477a19a67f64b656a0033d2b47aca0e7a52d351b2a7b3734ff`。
+- 非主張: #132 の unknown POST 1 の解消は主張しない。
+- Refs: #132 #146。関連: `docs/test-logs/official-source-storage-2026-09-28.md`
+  §CODE1/P1 (同一キー 384 行 dry-run 成功)。
