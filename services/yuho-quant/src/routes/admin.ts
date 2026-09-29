@@ -17,6 +17,7 @@ import { Hono } from "hono";
 import { cronAuthMiddleware } from "../../../../src/shared/auth.js";
 import { createDb } from "../db/client.js";
 import {
+  catchupHttpStatus,
   runYuhoEdinetCatchup,
   type ShardOpts,
 } from "../../../../src/cron/yuho-edinet.js";
@@ -53,5 +54,7 @@ adminRoute.post("/catchup", async (c) => {
   }
   const db = createDb(c.env.DB);
   const result = await runYuhoEdinetCatchup(db, shard);
-  return c.json(result);
+  // 実失敗があれば result 本文付きの非 2xx で CLI exit 1 へ接続する
+  // (Sol HOLD2)。母集団外・cap・既取込は正当結果で 200 のまま。
+  return c.json(result, catchupHttpStatus(result));
 });
