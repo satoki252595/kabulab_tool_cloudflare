@@ -7,6 +7,8 @@
  * - buildIngestSummary: run 粒度のバッチ保管入力。per-stock 鏡像は作らない
  *   (CLAUDE 高頻度ポーリング則)。summary JSON 自体を 1 ファイル添付する。
  */
+import { isDeepStrictEqual } from "node:util";
+
 export type PricedBar = {
   o: number;
   h: number;
@@ -66,6 +68,41 @@ export function resolveExitCode(counts: {
 }
 
 /**
+ * same-cached-input 2回目の R2 PUT0 判定。揮発値 `updated` だけを除いた
+ * 保存 object 全体が fresh object と同値なら true (PUT skip)。
+ *
+ * - 比較は stdlib `isDeepStrictEqual` (object のキー順は無視されるため、
+ *   JSON key 順だけの差で不必要 PUT しない。配列順は bar/split の時系列
+ *   正準なので順序差は PUT する)。
+ * - 余分/欠落 field・形状不正 (不正 splits 等) は同値にしない。default []
+ *   補完は禁止 — 壊れた既存を「等しい」と見なして schema 修復を skip
+ *   する根因になるため、欠落・型違いは必ず PUT して正準形で上書きする。
+ * - 既存なし・parse 不能・object 以外 → false (PUT する)。
+ * - intra の range/keep 剪定で集合が変われば内容が変わるため PUT する
+ *   (剪定変更を skip しない)。
+ */
+export function shouldSkipPut(
+  existingRaw: string | null,
+  fresh: Record<string, unknown>
+): boolean {
+  if (existingRaw == null) return false;
+  let old: unknown;
+  try {
+    old = JSON.parse(existingRaw) as unknown;
+  } catch {
+    return false;
+  }
+  if (old === null || typeof old !== "object" || Array.isArray(old)) {
+    return false;
+  }
+  const oldRest = { ...(old as Record<string, unknown>) };
+  delete oldRest.updated;
+  const freshRest = { ...fresh };
+  delete freshRest.updated;
+  return isDeepStrictEqual(oldRest, freshRest);
+}
+
+/**
  * run 識別子。同日再 run の key 衝突 (skipped_existing) を避ける。
  * Actions では GITHUB_RUN_ID(.attempt)、手元では random 8hex。
  */
@@ -84,6 +121,7 @@ export type IngestRunStats = {
   kind: "daily" | "intra";
   range: string;
   runId: string;
+  skipped?: number;
   codes: number;
   written: number;
   empty: number;
@@ -122,6 +160,7 @@ export function buildIngestSummary(stats: IngestRunStats): {
       kind: stats.kind,
       range: stats.range,
       runId: stats.runId,
+      skipped: stats.skipped ?? 0,
       codes: stats.codes,
       written: stats.written,
       empty: stats.empty,

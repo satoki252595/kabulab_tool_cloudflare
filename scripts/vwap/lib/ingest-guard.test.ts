@@ -4,6 +4,7 @@ import {
   findInvalidBars,
   resolveExitCode,
   resolveRunId,
+  shouldSkipPut,
 } from "./ingest-guard.js";
 
 describe("findInvalidBars", () => {
@@ -50,6 +51,73 @@ describe("findInvalidBars", () => {
       ["adj:non-positive"],
       ["adj:missing"],
     ]);
+  });
+});
+
+describe("shouldSkipPut", () => {
+  const bars = [
+    { date: "2026-09-25", o: 100, h: 110, l: 90, c: 105, v: 1000, adj: 104 },
+  ];
+  const splits: unknown[] = [];
+  const fresh = (): Record<string, unknown> => ({
+    code: "7203",
+    updated: "2026-09-29T02:00:00.000Z",
+    bars,
+    splits,
+  });
+  const stored = (over: object = {}) =>
+    JSON.stringify({
+      code: "7203",
+      updated: "2026-09-28T00:00:00.000Z",
+      bars,
+      splits,
+      ...over,
+    });
+
+  it("updated 差だけなら skip (内容同一)", () => {
+    expect(shouldSkipPut(stored(), fresh())).toBe(true);
+  });
+
+  it("JSON key 順だけの差は skip (不必要 PUT しない)", () => {
+    const reordered = JSON.stringify({
+      splits,
+      bars,
+      updated: "2026-09-28T00:00:00.000Z",
+      code: "7203",
+    });
+    expect(shouldSkipPut(reordered, fresh())).toBe(true);
+  });
+
+  it("同 bars でも schema field 差 (余分/欠落) なら PUT する", () => {
+    expect(shouldSkipPut(stored({ extra: 1 }), fresh())).toBe(false);
+    const missing = { code: "7203", updated: "2026-09-28T00:00:00.000Z", bars };
+    expect(shouldSkipPut(JSON.stringify(missing), fresh())).toBe(false);
+  });
+
+  it("不正 splits は [] 扱いせず PUT する (default 補完禁止)", () => {
+    expect(shouldSkipPut(stored({ splits: "xx" }), fresh())).toBe(false);
+    expect(shouldSkipPut(stored({ splits: null }), fresh())).toBe(false);
+  });
+
+  it("bars/splits/code の実変化・剪定は PUT する", () => {
+    expect(
+      shouldSkipPut(stored(), {
+        ...fresh(),
+        bars: [{ ...bars[0], c: 106 }],
+      })
+    ).toBe(false);
+    expect(
+      shouldSkipPut(
+        stored({ bars: [...bars, { ...bars[0], date: "2026-09-24" }] }),
+        fresh()
+      )
+    ).toBe(false);
+  });
+
+  it("既存なし・parse不能・object以外は PUT する", () => {
+    expect(shouldSkipPut(null, fresh())).toBe(false);
+    expect(shouldSkipPut("not-json", fresh())).toBe(false);
+    expect(shouldSkipPut(JSON.stringify([1, 2]), fresh())).toBe(false);
   });
 });
 

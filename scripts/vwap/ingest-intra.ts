@@ -6,8 +6,8 @@ import "dotenv/config";
 // 実行: npx tsx scripts/ingest-intra.ts [--codes=...] [--limit=N] [--range=60d]   KEEP_DAYS=365
 import { fetchBars5m } from "../../src/shared/yahoo/client.js";
 import { r2Get, r2Put, mapLimit, sleep, retry } from "./lib/r2.js";
-import { loadCodes, arg } from "./lib/codes.js";
-import { buildIngestSummary, findInvalidBars, resolveExitCode, resolveRunId } from "./lib/ingest-guard.js";
+import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
+import { buildIngestSummary, findInvalidBars, resolveExitCode, resolveRunId, shouldSkipPut } from "./lib/ingest-guard.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 
 // 既定は低負荷 (逐次・約1.5s間隔 + ジッタ)。速度優先なら CONC / DELAY_MS で上書き。
@@ -23,13 +23,15 @@ if (!/^([1-9]|[1-5][0-9]|60)d$/.test(RANGE)) {
 const MAX_RL = Number(process.env.MAX_RATE_LIMIT || 5);
 
 async function main() {
-  let codes = await loadCodes();
-  const only = arg("codes"); if (only) codes = only.split(",");
+  const universe = await loadCodes();
+  const only = arg("codes");
+  if (only) assertCodesInUniverse(only.split(","), universe);
+  let codes = only ? only.split(",") : universe;
   const limit = arg("limit"); if (limit) codes = codes.slice(0, Number(limit));
 
   const cutoffTs = Math.floor(Date.now() / 1000) - KEEP_DAYS * 86400;
   const startedAt = new Date().toISOString();
-  let written = 0, empty = 0, errors = 0, rateLimited = 0, invalid = 0, done = 0;
+  let written = 0, empty = 0, errors = 0, rateLimited = 0, invalid = 0, skipped = 0, done = 0;
   let consecRL = 0, aborted = false;
   await mapLimit(codes, CONC, async (code) => {
     if (aborted) return;                                   // ブロック検知後は残りを叩かない
@@ -53,7 +55,12 @@ async function main() {
       if (existing) for (const b of (JSON.parse(existing).bars || [])) map.set(b.ts, b);
       for (const b of fresh) map.set(b.ts, b);               // 当日/前日分を上書きマージ
       const bars = [...map.values()].filter((b) => b.ts >= cutoffTs).sort((a, b) => a.ts - b.ts);
-      await r2Put(`intra/${code}.json`, JSON.stringify({ code, updated: new Date().toISOString(), bars }));
+      // same-cached-input 2回目は内容同一で PUT skip (updated 不変)。
+      // keep 剪定で集合が変われば内容が変わるため PUT する。
+      // 比較対象は保存 object そのもの (Sol HOLD1: code/bars/splits 抜粋禁止)。
+      const payload = { code, updated: new Date().toISOString(), bars };
+      if (shouldSkipPut(existing, payload)) { skipped++; return; }
+      await r2Put(`intra/${code}.json`, JSON.stringify(payload));
       written++;
     } catch (e) {
       // レート制限は即リトライせず連続数を数え、しきい値で全体を中断する。
@@ -69,11 +76,11 @@ async function main() {
     }
   });
   const finishedAt = new Date().toISOString();
-  console.log(JSON.stringify({ codes: codes.length, range: RANGE, written, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted }));
+  console.log(JSON.stringify({ codes: codes.length, range: RANGE, written, skipped, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted }));
   // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 intra に必須接続。
   // 保管失敗は握り潰さず throw を伝播させ job 失敗にする (未保管の成功なし)。
   // outcome/fileTooLarge を明示確認し、skipped/partial を成功扱いしない。
-  const summary = buildIngestSummary({ kind: "intra", range: RANGE, runId: resolveRunId(), codes: codes.length, written, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted, startedAt, finishedAt });
+  const summary = buildIngestSummary({ kind: "intra", range: RANGE, runId: resolveRunId(), codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted, startedAt, finishedAt });
   console.log(JSON.stringify({ archive: "recording", key: summary.key }));
   const archived = await recordPrimaryData({ ...summary, force: false });
   if (archived.outcome !== "recorded" || archived.fileTooLarge) {
