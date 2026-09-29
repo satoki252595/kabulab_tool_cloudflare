@@ -16,6 +16,7 @@ import { ROOT } from "../shared/db/tests/source-scan.js";
 import { INSTRUMENT_TYPES } from "../shared/jpx/instrument-type.js";
 import { listDocuments } from "../../services/yuho-quant/src/services/edinet/client.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
+import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
 import type { Database as YuhoDatabase } from "../../services/yuho-quant/src/db/client.js";
 import {
   catchupHttpStatus,
@@ -27,6 +28,9 @@ vi.mock("../../services/yuho-quant/src/services/edinet/client.js", () => ({
 }));
 vi.mock("../../services/yuho-quant/src/services/ingest.js", () => ({
   ingestDocument: vi.fn(),
+}));
+vi.mock("../../services/yuho-quant/src/services/edinet/archive.js", () => ({
+  checkDocsCustody: vi.fn(async () => new Map()),
 }));
 
 function applyD1Migrations(target: DatabaseSync): void {
@@ -154,6 +158,21 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     expect(r.ingestErrors).toEqual([]);
     expect(r.byStatus).toEqual({});
     expect(catchupHttpStatus(r)).toBe(200);
+  });
+
+  it("境界: 日ごとの保管完成を一括取得して ingestDocument へ渡す", async () => {
+    vi.mocked(listDocuments)
+      .mockResolvedValueOnce({ results: [annualDoc("7203")] } as never)
+      .mockResolvedValue({ results: [] } as never);
+    vi.mocked(ingestDocument).mockResolvedValue({ outcome: "ingested" } as never);
+    const custody = { t1: "complete", t5: "complete" } as const;
+    vi.mocked(checkDocsCustody).mockResolvedValueOnce(
+      new Map([["S1007203", custody]])
+    );
+
+    await runCatchup();
+    expect(vi.mocked(checkDocsCustody).mock.calls.length).toBe(1);
+    expect(vi.mocked(ingestDocument).mock.calls[0][1]).toMatchObject({ custody });
   });
 
   it("境界: cap・既取込・母集団外は失敗に混ぜない (型で保証)", () => {

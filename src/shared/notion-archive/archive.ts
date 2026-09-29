@@ -492,6 +492,84 @@ export async function isArchived(
   return (await findByKey(dbId, key)) !== null;
 }
 
+/** 保管行の完成判定に要る最小投影 (key 存在だけでなく実 Files を見る)。 */
+export interface BackupRowState {
+  key: string;
+  /** Files プロパティの添付数。0 = metadata のみ (容量超過等)。 */
+  fileCount: number;
+  /** Status 選択肢名 (recorded / file_too_large 等)。行の自己申告。 */
+  status: string | null;
+  /** Metadata プロパティ JSON の parse 結果。壊れていたら {}。 */
+  metadata: Record<string, unknown>;
+}
+
+interface BackupRowPage {
+  properties: {
+    Key?: { title?: Array<{ plain_text?: string }> };
+    Files?: { files?: unknown[] };
+    Status?: { select?: { name?: string } | null };
+    Metadata?: { rich_text?: Array<{ plain_text?: string }> };
+  };
+}
+
+interface BackupRowQuery {
+  results: BackupRowPage[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+/**
+ * 指定 key 群の保管行を OR 一括で取得する (完成判定用)。
+ * key 存在だけでなく実 Files 添付数・Status・Metadata を返す。
+ * chunk は呼び出し側で複合フィルタ上限内に収めること。
+ */
+export async function findBackupRowsByKeys(
+  service: string,
+  keys: string[],
+  parentPageId?: string
+): Promise<BackupRowState[]> {
+  if (keys.length === 0) return [];
+  const dbId = await ensureBackupDb(service, parentPageId);
+  const filter = {
+    or: keys.map((key) => ({ property: "Key", title: { equals: key } })),
+  };
+  const out: BackupRowState[] = [];
+  let cursor: string | null = null;
+  for (;;) {
+    const res: BackupRowQuery = await notionRequest<BackupRowQuery>(
+      "POST",
+      `/databases/${dbId}/query`,
+      {
+        filter,
+        page_size: 100,
+        ...(cursor !== null ? { start_cursor: cursor } : {}),
+      }
+    );
+    for (const row of res.results) {
+      const key =
+        row.properties.Key?.title?.map((t) => t.plain_text ?? "").join("") ?? "";
+      const metaText =
+        row.properties.Metadata?.rich_text?.map((t) => t.plain_text ?? "").join("") ?? "";
+      let metadata: Record<string, unknown> = {};
+      try {
+        const parsed: unknown = JSON.parse(metaText === "" ? "{}" : metaText);
+        if (typeof parsed === "object" && parsed !== null) metadata = parsed as Record<string, unknown>;
+      } catch {
+        metadata = {};
+      }
+      out.push({
+        key,
+        fileCount: row.properties.Files?.files?.length ?? 0,
+        status: row.properties.Status?.select?.name ?? null,
+        metadata,
+      });
+    }
+    if (!res.has_more || res.next_cursor === null) break;
+    cursor = res.next_cursor;
+  }
+  return out;
+}
+
 /** 文字列を rich_text 上限で分割 (欠落させない) */
 function splitRichText(s: string): Array<{ text: { content: string } }> {
   const out: Array<{ text: { content: string } }> = [];

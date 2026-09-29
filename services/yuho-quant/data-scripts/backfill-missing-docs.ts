@@ -25,10 +25,10 @@ import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
 import {
   archiveTallyFailed,
-  edinetArchiveKey,
+  checkDocsCustody,
   recordEdinetZip,
+  type DocCustody,
 } from "../src/services/edinet/archive.js";
-import { isArchived } from "../../../src/shared/notion-archive/index.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
@@ -41,7 +41,7 @@ import {
 } from "../src/services/edinet/types.js";
 import { backupDocTextToNotion } from "../src/services/text-backup.js";
 import { parseEdinetCsvZip } from "../src/services/edinet/csv.js";
-import { selectMissingDocs } from "../src/services/edinet/missing.js";
+import { applyCompletionFilter, selectMissingDocs } from "../src/services/edinet/missing.js";
 import {
   parseOrderData,
   RX_ORDER_KEYWORD,
@@ -150,8 +150,9 @@ const pointerIncomplete = new Set(
 );
 
 const tally: Record<string, number> = {};
-// type 保管の完成判定メモ (docId → t1/t5 両 key 保管済み)。run 内で使い回す。
-const custodyMemo = new Map<string, boolean>();
+// type 保管完成の run 内メモ (docId → DocCustody)。日ごとの一括取得で足し、
+// 適用は毎回 applyCompletionFilter で行う (false/未完成の適用漏れ防止)。
+const custodyMemo = new Map<string, DocCustody>();
 let done = 0;
 let target = 0;
 
@@ -164,20 +165,27 @@ for (const date of eachDay(fromArg, toArg)) {
     console.warn(`[missing] list 失敗 ${date}: ${(e as Error).message} (スキップ)`);
     continue;
   }
-  // 既存扱いスキップは「完成済み」に限定する。本文ポインタ未完成の通に加え、
-  // type 保管 (t1/t5 key) が欠ける通も回収対象に戻す。保管確認は run 内メモ化
-  // (同一通の重複確認を避ける)。force 時は全通処理のため確認しない。
-  const effectiveExisting = new Set(existingAll);
-  for (const id of pointerIncomplete) effectiveExisting.delete(id);
+  // 既存扱いスキップは「完成済み」に限定する。type 保管完成は日ごとに
+  // 一括取得し run 内メモへ足す (通ごとの照会はしない)。適用は純粋関数で
+  // 毎回行い、memo の未完成が翌日以降も除外に反映されるようにする。
   if (!force) {
-    for (const doc of listed) {
-      if (!effectiveExisting.has(doc.docID) || custodyMemo.has(doc.docID)) continue;
-      const t1 = await isArchived("yuho-quant", edinetArchiveKey(doc.docID, 1));
-      const t5 = await isArchived("yuho-quant", edinetArchiveKey(doc.docID, 5));
-      const complete = t1 && t5;
-      custodyMemo.set(doc.docID, complete);
-      if (!complete) effectiveExisting.delete(doc.docID);
+    const unmemoized = listed
+      .map((doc) => doc.docID)
+      .filter((id) => !custodyMemo.has(id));
+    if (unmemoized.length > 0) {
+      const batch = await checkDocsCustody("yuho-quant", unmemoized);
+      for (const [id, c] of batch) custodyMemo.set(id, c);
     }
+  }
+  const { effective: effectiveExisting, metadataOnly } = applyCompletionFilter(
+    existingAll,
+    pointerIncomplete,
+    custodyMemo,
+    listed.map((doc) => doc.docID)
+  );
+  for (const id of metadataOnly) {
+    console.error(`[missing] archive metadata-only のため STOP (明示修復が必要) docID=${id}`);
+    tally.archive_metadata_only = (tally.archive_metadata_only ?? 0) + 1;
   }
   const { missing, skippedExisting, outOfUniverse } = selectMissingDocs(
     listed,
@@ -435,14 +443,15 @@ for (const date of eachDay(fromArg, toArg)) {
 
 console.info("[missing] 完了: " + Object.entries(tally).map(([k, v]) => `${k}=${v}`).join(" "));
 // 保管失敗 (recordEdinetZip の throw を含む) は tally.error に加算される。
-// 本文保管の失敗 (保管 throw・コード不明・行 ID 未取得) も同様に非0終了にし、
-// 失敗を job green にしない (Sol HOLD1 + text-pointer 共有根因)。
+// 本文保管の失敗 (保管 throw・コード不明・行 ID 未取得) と metadata-only 行の
+// STOP も同様に非0終了にし、失敗を job green にしない (Sol HOLD1 + 共有根因)。
 if (
   archiveTallyFailed(
     (tally.error ?? 0) +
       (tally.notion_text_error ?? 0) +
       (tally.notion_text_no_code ?? 0) +
-      (tally.notion_text_no_pointer ?? 0)
+      (tally.notion_text_no_pointer ?? 0) +
+      (tally.archive_metadata_only ?? 0)
   )
 ) {
   process.exitCode = 1;

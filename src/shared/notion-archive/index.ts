@@ -11,7 +11,7 @@
  *     files: [{ bytes, filename, contentType }], // 取得した物理ファイル
  *   });
  */
-export { recordPrimaryData, moveToTrash, isArchived } from "./archive.js";
+export { recordPrimaryData, moveToTrash, isArchived, findBackupRowsByKeys } from "./archive.js";
 export {
   ensureStockTextDb,
   findStockTextRowId,
@@ -30,6 +30,7 @@ export type {
   RecordPrimaryDataInput,
   RecordResult,
   PrimaryFile,
+  BackupRowState,
 } from "./archive.js";
 export { NotionFileTooLargeError } from "./file-upload.js";
 export { NotionConfigError, notionEnv } from "./env.js";

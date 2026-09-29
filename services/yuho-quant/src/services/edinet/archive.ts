@@ -12,6 +12,7 @@
  * (repair-zip-archive) の全4経路がこの helper だけを使う。
  */
 import {
+  findBackupRowsByKeys,
   recordPrimaryData,
   type RecordResult,
 } from "../../../../../src/shared/notion-archive/index.js";
@@ -28,6 +29,87 @@ export function edinetArchiveKey(
   type: EdinetArchiveDocType
 ): string {
   return `${docID}:type${type}`;
+}
+
+/**
+ * type 保管の完成状態。key 存在だけでは完成にしない (容量超過の
+ * metadata-only 行が次回成功扱いになる false positive を防ぐ)。
+ * - complete: 実 Files 添付あり
+ * - metadata-only: 行はあるが実 Files なし (容量超過等)。STOP/明示修復対象
+ * - missing: 行なし (記録試行の対象)
+ * - not-applicable: XBRL 公式未提供 (既存 metadata の xbrlUnavailable)。t1 のみ
+ */
+export type TypeCustody = "complete" | "metadata-only" | "missing" | "not-applicable";
+
+/** 通単位の type 保管完成 (t1/t5)。 */
+export interface DocCustody {
+  t1: TypeCustody;
+  t5: TypeCustody;
+}
+
+/** 1 回の OR 照会に入れる最大通数 (2 key/通。複合フィルタ上限内に収める)。 */
+const CUSTODY_CHUNK_DOCS = 40;
+
+function custodyOf(
+  rows: Map<string, { fileCount: number; metadata: Record<string, unknown> }>,
+  docID: string,
+  type: EdinetArchiveDocType
+): TypeCustody {
+  const row = rows.get(edinetArchiveKey(docID, type));
+  if (!row) return "missing";
+  if (row.fileCount > 0) return "complete";
+  if (type === 1 && row.metadata["xbrlUnavailable"] === true) return "not-applicable";
+  return "metadata-only";
+}
+
+/**
+ * 複数通の type 保管完成を OR 一括で取得する (run/日ごとの再利用用)。
+ * 1 通あたり 2 key を束ね、40 通ずつに chunk する。見つからない通は
+ * t1/t5 とも missing で埋める (呼び出し側で存在チェック不要)。
+ */
+export async function checkDocsCustody(
+  service: string,
+  docIDs: string[]
+): Promise<Map<string, DocCustody>> {
+  const out = new Map<string, DocCustody>(
+    docIDs.map((docID) => [docID, { t1: "missing", t5: "missing" } as DocCustody])
+  );
+  for (let i = 0; i < docIDs.length; i += CUSTODY_CHUNK_DOCS) {
+    const chunk = docIDs.slice(i, i + CUSTODY_CHUNK_DOCS);
+    const keys = chunk.flatMap((docID) => [
+      edinetArchiveKey(docID, 1),
+      edinetArchiveKey(docID, 5),
+    ]);
+    const rows = new Map(
+      (await findBackupRowsByKeys(service, keys)).map((r) => [r.key, r] as const)
+    );
+    for (const docID of chunk) {
+      out.set(docID, { t1: custodyOf(rows, docID, 1), t5: custodyOf(rows, docID, 5) });
+    }
+  }
+  return out;
+}
+
+/** 1 通分の type 保管完成 (checkDocsCustody の単通版)。 */
+export async function checkDocCustody(service: string, docID: string): Promise<DocCustody> {
+  const m = await checkDocsCustody(service, [docID]);
+  const c = m.get(docID);
+  if (!c) throw new Error(`checkDocCustody: 判定欠落 docID=${docID}`);
+  return c;
+}
+
+/**
+ * metadata-only 行があれば明示修復 STOP を投げる。容量超過の行を
+ * 次回成功扱いで黙殺せず、架空の Type1 を捏造せず、恒久リトライもしない。
+ * 呼び出し側は通単位で失敗計上する。
+ */
+export function assertNoMetadataOnly(custody: DocCustody, docID: string): void {
+  const bad = (["t1", "t5"] as const).filter((t) => custody[t] === "metadata-only");
+  if (bad.length > 0) {
+    throw new Error(
+      `archive custody: metadata-only 行のため STOP (明示修復が必要) docID=${docID} types=${bad.join(",")}`
+    );
+  }
 }
 
 /** 添付 ZIP ファイル名 (既存の `{docID}_xbrl.zip` / `{docID}_csv.zip` を踏襲)。 */

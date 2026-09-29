@@ -24,6 +24,7 @@ import {
   secCodeToTicker,
 } from "../../services/yuho-quant/src/services/edinet/types.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
+import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
 import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
 
 const WINDOW_DAYS = 60;
@@ -160,6 +161,16 @@ export async function runYuhoEdinetCatchup(
       return true;
     });
 
+    // type 保管完成は日ごとに一括取得して使い回す (通ごとの Notion 照会は
+    // 60 日 FIFO の 300 秒予算を食い潰す)。ingestDocument へ渡し、内部照会を省く。
+    const custodyByDoc =
+      targets.length > 0
+        ? await checkDocsCustody(
+            "yuho-quant",
+            targets.map((doc) => doc.docID)
+          )
+        : new Map();
+
     for (const doc of targets) {
       if (ingested >= MAX_INGEST || overBudget()) {
         reachedCap = true;
@@ -182,6 +193,7 @@ export async function runYuhoEdinetCatchup(
           stockCode,
           doc,
           archiveToNotion: true,
+          custody: custodyByDoc.get(doc.docID),
         });
         // skipped_existing (完成済みの早期復帰) は状態計数に含めない。早期復帰の
         // parseStatus 等は実測値でないため、混ぜると運用可視化を汚す。

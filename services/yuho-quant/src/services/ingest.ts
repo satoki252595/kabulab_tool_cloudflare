@@ -24,13 +24,14 @@ import {
   overseasSalesFacts,
   textSections,
 } from "../db/schema.js";
-import { isArchived } from "../../../../src/shared/notion-archive/index.js";
 import { backupDocTextToNotion } from "./text-backup.js";
 import { downloadDocument, EdinetNotFoundError } from "./edinet/client.js";
 import {
-  edinetArchiveKey,
+  assertNoMetadataOnly,
+  checkDocCustody,
   planArchiveUploads,
   recordEdinetZip,
+  type DocCustody,
 } from "./edinet/archive.js";
 import { parseEdinetCsvZip } from "./edinet/csv.js";
 import {
@@ -129,6 +130,12 @@ export async function ingestDocument(
     doc: EdinetDoc;
     force?: boolean;
     archiveToNotion?: boolean;
+    /**
+     * 呼び出し側で日/run ごとに一括取得済みの type 保管完成。
+     * 指定時は内部の Notion 照会を省略する (FIFO の 300 秒予算対策)。
+     * 未指定時は単通照会する (backfill.ts 等)。
+     */
+    custody?: DocCustody;
   }
 ): Promise<IngestResult> {
   const { stockId, stockCode, doc, force = false, archiveToNotion = false } = args;
@@ -146,16 +153,15 @@ export async function ingestDocument(
 
   // Notion 記録は DB 取込とは独立に冪等。DB は取込済でも Notion 未記録なら
   // 物理ファイルを取得して記録する (ルール6: API 取得物は必ず Notion へ)。
-  // type 別 key で有無を判定する: Type5 済みを Type1 済みと混同しない
-  // (旧来の素 docID 1キーは Type1 保存を抑止していた)。旧記録は不変。
-  const t1Present =
+  // type 保管の完成は実 Files 物理添付で判定する (key 存在だけでは
+  // metadata-only 行を成功扱いする)。呼び出し側の一括取得があれば再利用する。
+  const custody: DocCustody | undefined =
     archiveToNotion && !force
-      ? await isArchived(NOTION_SERVICE, edinetArchiveKey(doc.docID, 1))
-      : false;
-  const t5Present =
-    archiveToNotion && !force
-      ? await isArchived(NOTION_SERVICE, edinetArchiveKey(doc.docID, 5))
-      : false;
+      ? (args.custody ?? (await checkDocCustody(NOTION_SERVICE, doc.docID)))
+      : undefined;
+  if (custody) assertNoMetadataOnly(custody, doc.docID);
+  const t1Done = custody !== undefined && custody.t1 !== "missing";
+  const t5Done = custody !== undefined && custody.t5 !== "missing";
   // 本文 parse 済み (ok) なのに Notion 行ポインタが無い通は、raw 保管が
   // 揃っていても未完了として本文回収フローへ回す (skipped_existing にしない)。
   // D1 書込は docId 冪等 (onConflictDoUpdate + 文書単位 delete→insert) のため
@@ -166,8 +172,8 @@ export async function ingestDocument(
     existingRow.textParseStatus === "ok" &&
     existingRow.notionDocPageId === null;
   const needDbWork = !existsInDb || force || textPointerMissing;
-  const needT1 = archiveToNotion && (!t1Present || force);
-  const needT5 = archiveToNotion && (!t5Present || force);
+  const needT1 = archiveToNotion && (!t1Done || force);
+  const needT5 = archiveToNotion && (!t5Done || force);
   const needArchive = needT1 || needT5;
 
   if (!needDbWork && !needArchive) {
@@ -517,8 +523,8 @@ export async function ingestDocument(
       xbrlUnavailable,
     };
     for (const type of planArchiveUploads({
-      t1Present,
-      t5Present,
+      t1Present: t1Done,
+      t5Present: t5Done,
       xbrlAvailable: xbrlZip !== null,
       force,
     })) {
