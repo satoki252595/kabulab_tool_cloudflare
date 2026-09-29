@@ -938,6 +938,94 @@ export async function upsertObservation(
   return { pageId, outcome: "created" };
 }
 
+/** 書込後検証の期待行 (upsert 時の入力 + 書込応答で ack 済みのページ ID)。 */
+export interface VerifiedObservationRow {
+  input: ObservationInput;
+  pageId: string;
+}
+
+interface ObsBatchQueryResponse {
+  results: ObsRowHit[];
+  has_more?: boolean;
+  next_cursor?: string | null;
+}
+
+const OBS_VERIFY_PAGE_SIZE = 100;
+
+/**
+ * 観測ログの書込後検証 (read-only)。書込バッチの全期待キーを、指標×期間の
+ * 分割 (一括または小分割。462 件の個別再読はしない) で新規読取し直し、
+ * ページ ID と `observationRowMatches` 全項目照合で確認する。
+ * 重複・欠落・不一致・不正カーソルは保全停止する。ページ走査は有限 bound
+ * (必要ページ数 + 余裕 2) を持ち、超過も停止する。全行 unchanged の再実行は
+ * upsert 時に各行を照合済みのため、呼び出し側で呼ばない運用。
+ */
+export async function verifyObservedBatch(
+  dbId: string,
+  context: string,
+  expected: readonly VerifiedObservationRow[]
+): Promise<void> {
+  const fail = (why: string): never => {
+    throw new Error(`${context}: 観測ログの書込後検証に失敗したため保全停止: ${why}`);
+  };
+  const wantByKey = new Map<string, VerifiedObservationRow>();
+  for (const row of expected) {
+    const k = observationKey(row.input);
+    if (wantByKey.has(k)) fail(`期待キー重複 key=${k}`);
+    wantByKey.set(k, row);
+  }
+  const partitions = new Map<string, { indicatorPageId: string; period: string; keys: string[] }>();
+  for (const row of expected) {
+    const pkey = `${row.input.indicatorPageId}\n${row.input.period}`;
+    let p = partitions.get(pkey);
+    if (!p) {
+      p = { indicatorPageId: row.input.indicatorPageId, period: row.input.period, keys: [] };
+      partitions.set(pkey, p);
+    }
+    p.keys.push(observationKey(row.input));
+  }
+  const seen = new Map<string, ObsRowHit[]>();
+  for (const p of partitions.values()) {
+    const filter = {
+      and: [
+        { property: MONEYFLOW_OBS_PROPS.indicator, relation: { contains: p.indicatorPageId } },
+        { property: MONEYFLOW_OBS_PROPS.period, rich_text: { equals: p.period } },
+      ],
+    };
+    const maxPages = Math.ceil(p.keys.length / OBS_VERIFY_PAGE_SIZE) + 2;
+    let cursor: string | null = null;
+    let pages = 0;
+    const seenCursors = new Set<string>();
+    for (;;) {
+      pages += 1;
+      if (pages > maxPages) fail(`検証読取のページ数が上限超過 (期待キー ${p.keys.length} 件の分割)`);
+      const body: Record<string, unknown> = { filter, page_size: OBS_VERIFY_PAGE_SIZE };
+      if (cursor) body.start_cursor = cursor;
+      const res = await notionRequest<ObsBatchQueryResponse>("POST", `/databases/${dbId}/query`, body);
+      for (const r of res.results ?? []) {
+        const props = r.properties ? r.properties : fail("検証読取の行に properties なし");
+        const k = plainOf(props[MONEYFLOW_OBS_PROPS.key]?.title) ?? fail("検証読取の行にキーなし");
+        const arr = seen.get(k) ?? [];
+        arr.push(r);
+        seen.set(k, arr);
+      }
+      if (!res.has_more) break;
+      const next = res.next_cursor ? res.next_cursor : fail("検証読取のカーソル不正 (has_more なのに next_cursor なし)");
+      if (seenCursors.has(next)) fail("検証読取のカーソル不正 (同一カーソル再出現)");
+      seenCursors.add(next);
+      cursor = next;
+    }
+  }
+  for (const [k, want] of wantByKey) {
+    const hits = seen.get(k) ?? [];
+    if (hits.length === 0) fail(`検証読取に行なし key=${k}`);
+    if (hits.length > 1) fail(`検証読取に行重複 key=${k}`);
+    const hit = hits[0];
+    if (normalizeId(hit.id) !== normalizeId(want.pageId)) fail(`ページID不一致 key=${k}`);
+    if (!observationRowMatches(hit.properties, want.input)) fail(`書込値不一致 key=${k}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 3. 資金フロー｜取込ログ
 // ---------------------------------------------------------------------------

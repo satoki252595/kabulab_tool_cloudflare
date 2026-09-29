@@ -943,4 +943,121 @@ describe("notion-archive moneyflow", () => {
       expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(2);
     });
   });
+
+  describe("verifyObservedBatch", () => {
+    const dbId = "obs-db";
+    const DEF = "0000aaaa111122223333444455556666";
+    const PRIM = "1111bbbb222233334444555566667777";
+    const base = {
+      period: "2026-08",
+      periodStart: "2026-08-01",
+      periodEnd: "2026-08-31",
+      indicatorKey: "k1",
+      indicatorPageId: DEF,
+      categoryKind: "投資部門" as const,
+      unit: "円" as const,
+      changeFromPrev: null,
+      approximate: false,
+      measureKind: "実測" as const,
+      primaryDataPageId: PRIM,
+    };
+    const rowProps = (category: string, value: number, over: Record<string, unknown> = {}) => ({
+      キー: { type: "title", title: [{ plain_text: `2026-08|k1|${category}` }] },
+      指標: { type: "relation", relation: [{ id: DEF }] },
+      対象期間: { type: "rich_text", rich_text: [{ plain_text: "2026-08" }] },
+      期間開始: { type: "date", date: { start: "2026-08-01" } },
+      期間終了: { type: "date", date: { start: "2026-08-31" } },
+      区分: { type: "rich_text", rich_text: [{ plain_text: category }] },
+      区分種別: { type: "select", select: { name: "投資部門" } },
+      市場区分: { type: "rich_text", rich_text: [] },
+      投資部門: { type: "rich_text", rich_text: [] },
+      取引種別: { type: "rich_text", rich_text: [] },
+      親区分: { type: "rich_text", rich_text: [] },
+      区分階層: { type: "number", number: null },
+      公表日: { type: "date", date: null },
+      値: { type: "number", number: value },
+      単位: { type: "select", select: { name: "円" } },
+      前期比: { type: "number", number: null },
+      近似フラグ: { type: "checkbox", checkbox: false },
+      実測推定: { type: "select", select: { name: "実測" } },
+      一次データ: { type: "relation", relation: [{ id: PRIM }] },
+      ...over,
+    });
+    const row = (id: string, category: string, value: number, over: Record<string, unknown> = {}) => ({
+      id,
+      properties: rowProps(category, value, over),
+    });
+
+    it("一致すれば resolve し、2行を1クエリで読む (read-only・個別再読なし)", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [row("row-a", "A", 1), row("row-b", "B", 2)], has_more: false, next_cursor: null },
+      ]);
+      const { verifyObservedBatch } = await load();
+      await expect(
+        verifyObservedBatch(dbId, "[test-src] k1", [
+          { input: { ...base, category: "A", value: 1 }, pageId: "row-a" },
+          { input: { ...base, category: "B", value: 2 }, pageId: "row-b" },
+        ])
+      ).resolves.toBeUndefined();
+      expect(calls).toHaveLength(1);
+      const sent = JSON.parse(String(calls[0]?.init.body)) as {
+        filter: { and: Array<{ property: string; relation?: { contains: string }; rich_text?: { equals: string } }> };
+      };
+      expect(sent.filter.and).toHaveLength(2);
+      expect(sent.filter.and[0]).toEqual({ property: "指標", relation: { contains: DEF } });
+      expect(sent.filter.and[1]).toEqual({ property: "対象期間", rich_text: { equals: "2026-08" } });
+    });
+
+    it("カーソルを辿って次ページの行も検証する", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [row("row-a", "A", 1)], has_more: true, next_cursor: "c1" },
+        { results: [row("row-b", "B", 2)], has_more: false, next_cursor: null },
+      ]);
+      const { verifyObservedBatch } = await load();
+      await expect(
+        verifyObservedBatch(dbId, "[test-src] k1", [
+          { input: { ...base, category: "A", value: 1 }, pageId: "row-a" },
+          { input: { ...base, category: "B", value: 2 }, pageId: "row-b" },
+        ])
+      ).resolves.toBeUndefined();
+      expect(calls).toHaveLength(2);
+      expect(String(calls[1]?.init.body)).toContain("c1");
+    });
+
+    it("値の不一致・ページID不一致・欠落・重複・不正カーソルは保全停止する", async () => {
+      const { verifyObservedBatch } = await load();
+      const input = { ...base, category: "A", value: 1 };
+      // 値不一致
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [row("row-a", "A", 1, { 値: { type: "number", number: 9 } })], has_more: false, next_cursor: null },
+      ]);
+      await expect(verifyObservedBatch(dbId, "[test-src] k1", [{ input, pageId: "row-a" }])).rejects.toThrow(
+        /書込値不一致/
+      );
+      // ページID不一致
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [row("row-other", "A", 1)], has_more: false, next_cursor: null },
+      ]);
+      await expect(verifyObservedBatch(dbId, "[test-src] k1", [{ input, pageId: "row-a" }])).rejects.toThrow(
+        /ページID不一致/
+      );
+      // 欠落
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [], has_more: false, next_cursor: null }]);
+      await expect(verifyObservedBatch(dbId, "[test-src] k1", [{ input, pageId: "row-a" }])).rejects.toThrow(
+        /検証読取に行なし/
+      );
+      // 重複
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [row("row-a", "A", 1), row("row-dup", "A", 1)], has_more: false, next_cursor: null },
+      ]);
+      await expect(verifyObservedBatch(dbId, "[test-src] k1", [{ input, pageId: "row-a" }])).rejects.toThrow(
+        /検証読取に行重複/
+      );
+      // 不正カーソル (has_more なのに next_cursor なし)
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [], has_more: true, next_cursor: null }]);
+      await expect(verifyObservedBatch(dbId, "[test-src] k1", [{ input, pageId: "row-a" }])).rejects.toThrow(
+        /カーソル不正/
+      );
+    });
+  });
 });

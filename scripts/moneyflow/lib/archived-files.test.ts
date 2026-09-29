@@ -14,6 +14,9 @@ function jsonResponse(body: unknown): Response {
     headers: new Headers(),
     json: async () => body,
     text: async () => JSON.stringify(body),
+    // 署名付き URL のバイト取得用。文字列ボディは raw バイトとして返す。
+    arrayBuffer: async () =>
+      new TextEncoder().encode(typeof body === "string" ? body : JSON.stringify(body)).buffer as ArrayBuffer,
   } as Response;
 }
 
@@ -86,6 +89,58 @@ describe("moneyflow archived-files", () => {
         /保管済みレコードの重複 key=k1 を選ばず保全停止/
       );
       expect(calls).toHaveLength(1);
+    });
+  });
+
+  describe("verifyArchivedAttachments", () => {
+    const pageId = "primary-1";
+    const pageWith = (files: unknown[]) => ({
+      properties: { Files: { type: "files", files } },
+    });
+    const hosted = (name: string) => ({
+      name,
+      type: "file",
+      file: { url: `https://files.example.test/${name}` },
+    });
+    const want = (filename: string, text: string) => ({
+      filename,
+      bytes: new TextEncoder().encode(text),
+    });
+
+    it("件数・名前・バイト長・SHA256 が一致すれば resolve する", async () => {
+      route("GET", `/v1/pages/${pageId}`, [pageWith([hosted("data.csv")])]);
+      route("GET", "/data.csv", ["fresh!"]);
+      const { verifyArchivedAttachments } = await load();
+      await expect(verifyArchivedAttachments(pageId, "[test-src]", "k1", [want("data.csv", "fresh!")])).resolves
+        .toBeUndefined();
+      expect(calls).toHaveLength(2);
+    });
+
+    it("添付件数の不一致は書込前の保全停止にする", async () => {
+      route("GET", `/v1/pages/${pageId}`, [pageWith([])]);
+      const { verifyArchivedAttachments } = await load();
+      await expect(verifyArchivedAttachments(pageId, "[test-src]", "k1", [want("data.csv", "fresh!")])).rejects.toThrow(
+        /保管検証に失敗 key=k1 \(添付 0 件 ≠ 取得 1 件\)/
+      );
+    });
+
+    it("同長でもバイト内容が違えば SHA256 不一致で停止する", async () => {
+      route("GET", `/v1/pages/${pageId}`, [pageWith([hosted("data.csv")])]);
+      route("GET", "/data.csv", ["fresh?"]);
+      const { verifyArchivedAttachments } = await load();
+      await expect(
+        verifyArchivedAttachments(pageId, "[test-src]", "k1", [want("data.csv", "fresh!")])
+      ).rejects.toThrow(/「data\.csv」の SHA256 不一致/);
+    });
+
+    it("外部リンク添付は hosted 要求で停止する", async () => {
+      route("GET", `/v1/pages/${pageId}`, [
+        pageWith([{ name: "data.csv", type: "external", external: { url: "https://example.jp/data.csv" } }]),
+      ]);
+      const { verifyArchivedAttachments } = await load();
+      await expect(
+        verifyArchivedAttachments(pageId, "[test-src]", "k1", [want("data.csv", "fresh!")])
+      ).rejects.toThrow(/Notion-hosted 添付ではありません/);
     });
   });
 });

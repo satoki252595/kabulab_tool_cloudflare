@@ -18,8 +18,10 @@ const notion = vi.hoisted(() => ({
       outcome: "created",
     })
   ),
+  verifyObservedBatch: vi.fn(async (_db: string, _c: string, _rows: unknown) => undefined),
 }));
 const archived = {
+  verifyArchivedAttachments: vi.fn(async (_p: string, _c: string, _k: string, _f: unknown) => undefined),
   requirePrimaryDataDbId: vi.fn(async () => "primary-db"),
   findArchivedRecordByKey: vi.fn(async (_db: string, key: string) => ({
     pageId: "primary-old",
@@ -131,6 +133,8 @@ describe("runSpec", () => {
     expect(notion.recordPrimaryData).not.toHaveBeenCalled();
     // 全 draft を upsert にかける (同値確認のため照会はする)。
     expect(notion.upsertObservation).toHaveBeenCalledTimes(2);
+    // 全行 unchanged なら readback 検証は呼ばない (upsert 照合済み)。
+    expect(notion.verifyObservedBatch).not.toHaveBeenCalled();
     expect(detail).toMatch(/未更新.*2行同値確認/);
   });
 
@@ -175,9 +179,10 @@ describe("runSpec", () => {
     const { spec, fetchImpl } = makeSpec();
     const detail = await runSpec(spec, ctx(true));
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    for (const fn of [notion.isArchived, notion.recordPrimaryData, notion.upsertObservation, notion.ensureObservationsDb]) {
+    for (const fn of [notion.isArchived, notion.recordPrimaryData, notion.upsertObservation, notion.ensureObservationsDb, notion.verifyObservedBatch]) {
       expect(fn).not.toHaveBeenCalled();
     }
+    expect(archived.verifyArchivedAttachments).not.toHaveBeenCalled();
     expect(detail).toBe("dry-run key=src-2026-08 2行");
     info.mockRestore();
   });
@@ -208,5 +213,47 @@ describe("runSpec", () => {
     // 一次データは解析前に保管済み (様式変更でも原本は残す — ルール6)
     expect(notion.recordPrimaryData).toHaveBeenCalledTimes(1);
     expect(notion.upsertObservation).not.toHaveBeenCalled();
+  });
+
+  it("file_too_large なら観測ログを一切書かず停止する (原本なし観測値を残さない)", async () => {
+    const { runSpec } = await import("./run-spec.js");
+    notion.recordPrimaryData.mockResolvedValueOnce({ pageId: "primary-1", outcome: "recorded", fileTooLarge: true });
+    await expect(runSpec(makeSpec().spec, ctx())).rejects.toThrow(/file_too_large/);
+    expect(notion.recordPrimaryData).toHaveBeenCalledTimes(1);
+    expect(archived.verifyArchivedAttachments).not.toHaveBeenCalled();
+    expect(notion.upsertObservation).not.toHaveBeenCalled();
+    expect(notion.verifyObservedBatch).not.toHaveBeenCalled();
+  });
+
+  it("保管添付の検証に失敗したら解析・書込の前に停止する", async () => {
+    const { runSpec } = await import("./run-spec.js");
+    const { spec, fetchImpl } = makeSpec();
+    const toObservations = vi.fn(spec.toObservations);
+    archived.verifyArchivedAttachments.mockRejectedValueOnce(new Error("[test-src]: 保管検証に失敗"));
+    await expect(runSpec({ ...spec, toObservations }, ctx())).rejects.toThrow(/保管検証に失敗/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(archived.verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+    expect(toObservations).not.toHaveBeenCalled();
+    expect(notion.upsertObservation).not.toHaveBeenCalled();
+  });
+
+  it("新規・更新ありの書込バッチは書込後に全行を readback 検証する", async () => {
+    const { runSpec } = await import("./run-spec.js");
+    notion.upsertObservation
+      .mockResolvedValueOnce({ pageId: "row-a", outcome: "created" as const })
+      .mockResolvedValueOnce({ pageId: "row-b", outcome: "updated" as const });
+    const detail = await runSpec(makeSpec().spec, ctx());
+    expect(detail).toMatch(/src-2026-08 を記録 2行 \(新規1\/更新1\/同値0\)/);
+    expect(notion.verifyObservedBatch).toHaveBeenCalledTimes(1);
+    const [dbId, context, rows] = notion.verifyObservedBatch.mock.calls[0] as unknown as [
+      string,
+      string,
+      Array<{ input: { category: string; primaryDataPageId: string }; pageId: string }>
+    ];
+    expect(dbId).toBe("obs-db");
+    expect(context).toContain("test-src");
+    expect(rows.map((r) => r.pageId)).toEqual(["row-a", "row-b"]);
+    expect(rows.map((r) => r.input.category)).toEqual(["fresh-A", "fresh-B"]);
+    expect(rows.every((r) => r.input.primaryDataPageId === "primary-1")).toBe(true);
   });
 });

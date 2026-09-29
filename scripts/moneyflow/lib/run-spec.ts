@@ -4,7 +4,11 @@
  * (「アーカイブ済み ≠ 観測ログ書込済み」) を全取得元に一般化したもの:
  *
  *   - 未保管のキー: 取得元から本体を取り、先に `recordPrimaryData()` で実体保管
- *     (解析が様式変更で失敗しても一次データは残す — ルール6) → 解析 → 観測ログへ upsert
+ *     (解析が様式変更で失敗しても一次データは残す — ルール6) → 保管添付の
+ *     完全一致 (件数・名前・バイト長・SHA256) を検証 → 解析 → 観測ログへ upsert。
+ *     file_too_large・添付不一致は観測ログを書かず停止する。
+ *   - 新規・更新が 1 行でもある書込バッチは、書込後 `verifyObservedBatch()` で
+ *     全行を read-only 再検証する (全行 unchanged の再実行は upsert 照合済み)。
  *   - 保管済みのキー: 取得元へは取りに行かず、Notion の保管ファイルから再解析し、
  *     全 draft を upsert し直す。`upsertObservation` が同値行は書かず
  *     (unchanged)、途中欠落・値・relation の不一致だけ修復する。
@@ -16,6 +20,9 @@ import {
   isArchived,
   recordPrimaryData,
   upsertObservation,
+  verifyObservedBatch,
+  type ObservationInput,
+  type VerifiedObservationRow,
 } from "../../../src/shared/notion-archive/index.js";
 import {
   validateDrafts,
@@ -23,7 +30,12 @@ import {
   type ObservationDraft,
   type SpecFile,
 } from "../../../services/moneyflow/lib/source-spec.js";
-import { downloadArchivedFile, findArchivedRecordByKey, requirePrimaryDataDbId } from "./archived-files.js";
+import {
+  downloadArchivedFile,
+  findArchivedRecordByKey,
+  requirePrimaryDataDbId,
+  verifyArchivedAttachments,
+} from "./archived-files.js";
 
 export interface SpecRunContext {
   dryRun: boolean;
@@ -45,24 +57,43 @@ function countByIndicator(drafts: readonly ObservationDraft[]): Record<string, n
   return out;
 }
 
+/** 観測ログ書込の結果 (書込後検証に必要な行入力・ページ ID を含む)。 */
+interface WrittenBatch {
+  dbId: string;
+  counts: WriteCounts;
+  rows: VerifiedObservationRow[];
+}
+
 async function writeObservations(
   drafts: readonly ObservationDraft[],
   primaryDataPageId: string,
   ctx: SpecRunContext
-): Promise<WriteCounts> {
+): Promise<WrittenBatch> {
   const { dbId } = await ensureObservationsDb();
   const counts: WriteCounts = { created: 0, updated: 0, unchanged: 0 };
+  const rows: VerifiedObservationRow[] = [];
   // 配列順に 1 行ずつ書く。最後の行の存在を「このバッチの取込完了」の印に使うため、
   // 並列化して順序を崩さない。
   for (const d of drafts) {
-    const r = await upsertObservation(dbId, {
+    const input: ObservationInput = {
       ...d,
       indicatorPageId: ctx.indicatorPageId(d.indicatorKey),
       primaryDataPageId,
-    });
+    };
+    const r = await upsertObservation(dbId, input);
     counts[r.outcome] += 1;
+    rows.push({ input, pageId: r.pageId });
   }
-  return counts;
+  return { dbId, counts, rows };
+}
+
+/**
+ * 新規・更新が 1 行でもあれば書込バッチ全体を read-only で再検証する。
+ * 全行 unchanged の再実行は upsert 時に各行を全項目照合済みのため呼ばない。
+ */
+async function verifyWritesIfChanged(specName: string, key: string, written: WrittenBatch): Promise<void> {
+  if (written.counts.created + written.counts.updated === 0) return;
+  await verifyObservedBatch(written.dbId, `[${specName}] ${key}`, written.rows);
 }
 
 function describeCounts(n: number, c: WriteCounts): string {
@@ -132,10 +163,12 @@ export async function runSpec(spec: MoneyflowSourceSpec, ctx: SpecRunContext): P
     const drafts = parseAndValidate(spec, key, files);
     // 最後の 1 行の有無で skip しない。全 draft を upsert し、同値なら
     // 書かず、途中欠落・値・relation の不一致だけ修復する。
-    const counts = await writeObservations(drafts, rec.pageId, ctx);
+    const written = await writeObservations(drafts, rec.pageId, ctx);
+    const counts = written.counts;
     if (counts.created === 0 && counts.updated === 0) {
       return `未更新 (${key} は取込済み・${drafts.length}行同値確認・取得元への再取得なし)`;
     }
+    await verifyWritesIfChanged(spec.name, key, written);
     return `保管済み ${key} から観測ログを再送 ${describeCounts(drafts.length, counts)}`;
   }
 
@@ -153,8 +186,14 @@ export async function runSpec(spec: MoneyflowSourceSpec, ctx: SpecRunContext): P
     metadata: batch.metadata,
     files: batch.files,
   });
+  // 上限超過で一部未保管のまま観測ログを書くと「原本なしの観測値」が残るため、
+  // 書込前に必ず停止する (保管ページは手動確認用に残る)。
+  if (archive.fileTooLarge) {
+    throw new Error(`[${spec.name}] 一次データ ${key} の一部が Notion 上限超過で未保管 (file_too_large) のため観測ログを書きません`);
+  }
+  await verifyArchivedAttachments(archive.pageId, `[${spec.name}]`, key, batch.files);
   const drafts = parseAndValidate(spec, key, batch.files);
-  const counts = await writeObservations(drafts, archive.pageId, ctx);
-  const note = archive.fileTooLarge ? " ※一部ファイルが Notion 上限超過で未保管 (file_too_large)" : "";
-  return `${key} を記録 ${describeCounts(drafts.length, counts)}${note}`;
+  const written = await writeObservations(drafts, archive.pageId, ctx);
+  await verifyWritesIfChanged(spec.name, key, written);
+  return `${key} を記録 ${describeCounts(drafts.length, written.counts)}`;
 }
