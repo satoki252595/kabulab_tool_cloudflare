@@ -6,7 +6,7 @@
 
 ユーザー決定 (2026-09-27): 非公開運用・無料データのみ・近似でよいが
 何を測っているか明記する。Phase 0/1 (R1 33業種) に続き、2026-09-27 に Phase 2〜5 の
-取得元 17 件を実装した (信用残の日次化は未実装)。設計の詳細な経緯は
+取得元 17 件を実装した (信用残の日次化は実装済み — 下記「信用残」節)。設計の詳細な経緯は
 承認済み計画 `notion-velvet-goose.md` を参照 (このファイルは取得元の恒久的な
 インベントリと実装状況の記録)。
 
@@ -43,6 +43,7 @@
 | 空売り集計(業種別) | jpx.co.jp/.../short-selling/index.html | 33業種別の空売り比率(空売り売買代金/総売買代金) | 日次 | PDF | 無料 | personal-only | **実装済み** (`jpx-short-selling.ts`。月次集計に加工) |
 | 東証上場銘柄一覧(data_j.xlsx) | jpx.co.jp/.../misc/01.html | 全銘柄コード・33業種区分(結合キー) | 月次 | Excel | 無料 | personal-only | 実装済み (既存 `src/shared/jpx/sectors.ts`、universe sync が使用) |
 | 既存 D1 (swing_daily_ohlcv×sector) | (社内 D1) | 業種別売買代金・シェア・上昇/下落日売買代金 | 日次データを週次集計 | D1 | — | personal-only | **実装済み** (`GET /api/ingest/moneyflow-sector`) |
+| 信用残高(業種別) | jpx.co.jp/.../margin/01.html | 33業種別の信用売買残高(株/円・一般/制度・前日差・売買比率の14指標) | 日次 | PDF→R2 snapshot replay | 無料 | personal-only | **実装済み** (`jpx-margin-sector` spec。JPX 再取得なし) |
 | 統計月報・売買代金/売買高(市場別) | jpx.co.jp/.../monthly/index.html | 市場別の月間/年間売買高(グロス)。33業種内訳は未確認 | 月次 | 不明 | 無料 | personal-only | 未実装 (D1 集計で代替済み) |
 | 投資部門別売買状況(株式) | jpx.co.jp/.../investor-type/index.html | 投資部門別の買い越し額(業種別内訳なし) | 週次/月次/年次 | PDF/Excel | 無料 | personal-only | Phase 2 予定 |
 | 東証33業種別株価指数・TOPIX-17 | jpx.co.jp/.../cal2_13_sector.pdf | 33業種の株価指数(騰落率)。時価総額の価格変動分を分離する用途 | 日次/リアルタイム | Web表示+PDF(算出要領)。無料の**バルク過去月末値配信は確認できず** | — | personal-only | **見送り** (下記「業種別指数の調査結果」参照) |
@@ -164,12 +165,16 @@ JPX 告知 (2026-07-06)「信用取引残高の公表情報の変更日及び今
   `margin/dates.json`。パーサは `services/vwap-analysis/lib/margin-daily.ts`
   (純粋・14 セル・合計ガード)。API/UI は日次 schema へ直接切替済み。
   旧週次オブジェクト・週次コードは残すが通常経路は読まない (旧互換なし)。
-- **TODO (別途)**: `sector_margin_balance` 系の指標を moneyflow spec +
-  indicator + upsert/readback の通常手順で追加し、日次で「資金フロー｜
-  観測ログ」へ書く。33 業種行は新内訳 dims を未設定 (publicationDate のみ)
+- 33 業種集計も実装済み (同 scope): moneyflow spec `jpx-margin-sector`
+  (日次)。resolve が R2 の実 latest 基準日を決め、snapshot replay +
+  D1 join (`activeEquityCondition` 述語・id/code/sector のみ SELECT) の
+  mapping/coverage を固定 capture し、toObservations が純粋に 14 指標
+  (売買残×株円・一般/制度内訳・前日差・売買比率) × 33 業種 (+ 未分類) の
+  drafts を作る。33 業種行は新内訳 dims を未設定 (publicationDate のみ)
   にして既存 `期間|指標|区分` キーを維持する (key 契約)。公式数量/金額 SUM、
-  公式率の SUM 禁止、派生率は式・分母を明示、分類不明・coverage 不足は
-  成功にしない。
+  公式率の SUM 禁止、派生率は式・分母を明示 (`売/(売+買)`・分母 0 は失敗)、
+  NULL 前日比は 0 埋めせず null 伝播、分類不明・coverage 不足は成功にしない。
+  JPX 原本への再取得なし (初回取込・readback は別途 grant 待ち)。
 
 ## 実装ファイル一覧 (Phase 0/1)
 

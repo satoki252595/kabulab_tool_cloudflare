@@ -3,7 +3,11 @@
 // フロント(SPA)は public/vwap-analysis/ を ASSETS が配信。ここは /api/* だけ。
 import { Hono } from "hono";
 import { fetchYahooChartRaw } from "../../src/shared/yahoo/client.js";
-import { MARGIN_DAILY_FORMAT, selectDailyMarginRows } from "./lib/margin-daily.js";
+import {
+  MARGIN_DAILY_FORMAT,
+  selectDailyMarginRows,
+  validateDailyMarginSnapshot,
+} from "./lib/margin-daily.js";
 import type { MarginDailySnapshot } from "./lib/margin-daily.js";
 
 export const BASE_PATH = "/vwap-analysis";
@@ -76,9 +80,15 @@ app.get("/api/margin", async (c) => {
     if (snap.format !== MARGIN_DAILY_FORMAT) {
       throw new Error(`unknown margin snapshot format: ${snap.format}`);
     }
+    // R2 の欠落・破損を空配列で隠さない。Worker-safe 純粋検証を再利用し、
+    // 全行形状 + basisDate=index 日付の一致を確認してから selection する。
+    validateDailyMarginSnapshot(snap);
+    if (snap.basisDate !== d) {
+      throw new Error(`margin snapshot date mismatch: index=${d} body=${snap.basisDate}`);
+    }
     // 同一ティッカーの複数行 (普通株+種類株等) はどれを使うか決められないため、
     // 値無しで除外日として明示する (先頭行の黙った採用をしない)。
-    const sel = selectDailyMarginRows(snap.rows || [], code);
+    const sel = selectDailyMarginRows(snap.rows, code);
     if (sel.status === "ambiguous") return { date: d, ambiguous: true as const };
     if (sel.status === "missing") return null;
     return { date: d, publicationDate: snap.publicationDate, ...sel.row };

@@ -21,6 +21,37 @@ import {
 
 const FIXTURE = `2026/9/28 申込み現在 東京証券取引所株式部 （単位：一株、一円） 2026/9/29
 As of 2026/9/28 application based Tokyo Stock Exchange, Equities Dept. (Unit: 1 share, 1 yen)
+売残高
+Outstanding Sales
+前日比
+Daily change
+上場比
+Ratio to
+listed shares
+買残高
+Outstanding
+Purchases
+前日比
+Daily change
+上場比
+Ratio to
+listed shares
+一般信用
+Negotiable
+前日比
+Daily change
+制度信用
+Standardized
+前日比
+Daily change
+一般信用
+Negotiable
+前日比
+Daily change
+制度信用
+Standardized
+前日比
+Daily change
 B 合成食品 普通株式 プライム 貸 99990 JP9999999999 株数 Shs. 100 10 0.1% 200 ▲20 0.2% 40 4 60 6 150 ▲10 50 ▲10
 SYNTHETIC FOODS CO.,LTD.Prime Loan 99990 JP9999999999 金額 Val. 100,000 10,000 - 200,000 ▲20,000 - 40,000 4,000 60,000 6,000 150,000 ▲10,000 50,000 ▲10,000
 B 合成機械 普通株式 スタンダード 制 88880 JP8888888888 株数 Shs. 0 - 0.0% 30 - 0.3% 0 - 0 - 12 - 18 -
@@ -69,6 +100,7 @@ Standard sub-total 金額 Val. 0 0 - 30,000 0 - 0 0 0 0 12,000 0 18,000 0
 Growth sub-total 金額 Val. 3,000 0 - 4,000 1,000 - 3,000 0 0 0 4,000 1,000 0 0
 投信等 小計 2 銘柄 株数 Shs. 56 5 - 77 7 - 56 5 0 0 77 7 0 0
 Investment trusts sub-total 金額 Val. 56,000 5,000 - 77,000 7,000 - 56,000 5,000 0 0 77,000 7,000 0 0
+合計 Total 売残高 Outstanding Sales 買残高 Outstanding Purchases
 `;
 
 const PROV = { sourceUrl: "https://example.invalid/m.pdf", rawSha256: "0".repeat(64), rawPageId: null };
@@ -204,5 +236,26 @@ describe("validateDailyMarginSnapshot", () => {
       validateDailyMarginSnapshot({ ...snap, format: "x" as typeof snap.format })
     ).toThrow(/形式タグ/);
     expect(() => validateDailyMarginSnapshot({ ...snap, basisDate: "2026/09/28" })).toThrow(/基準日/);
+  });
+});
+
+describe("assertDailyMarginHeaders (公式列見出しの厳密検証)", () => {
+  it("列交換 (一般信用↔制度信用) は合計が合っていても STOP する", () => {
+    const swapped = FIXTURE.replace(
+      "一般信用\nNegotiable\n前日比\nDaily change\n制度信用\nStandardized",
+      "制度信用\nStandardized\n前日比\nDaily change\n一般信用\nNegotiable"
+    );
+    expect(swapped).not.toBe(FIXTURE);
+    expect(() => parseDailyMarginText(swapped, PROV)).toThrow(/公式列見出し/);
+  });
+
+  it("見出し欠落は STOP する", () => {
+    const noHeader = FIXTURE.split("\n").filter((l) => l !== "売残高").join("\n");
+    expect(() => parseDailyMarginText(noHeader, PROV)).toThrow(/公式列見出し/);
+  });
+
+  it("売買グループ見出しの欠落は STOP する", () => {
+    const noGroup = FIXTURE.replace("合計 Total 売残高 Outstanding Sales 買残高 Outstanding Purchases\n", "");
+    expect(() => parseDailyMarginText(noGroup, PROV)).toThrow(/グループ見出し/);
   });
 });

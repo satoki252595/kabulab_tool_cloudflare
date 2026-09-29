@@ -1,7 +1,11 @@
 // JPX 信用残高 (日次 mtall PDF) → Notion 一次データ保管 → R2 保存。
 // 週次版は公表廃止のため通常取込では使わない (旧 R2 オブジェクトは残すが読まない)。
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
+import {
+  fetchPageFileUrl,
+  recordPrimaryData,
+} from "../../src/shared/notion-archive/index.js";
 import {
   dailyMarginArchiveInput,
   fetchDailyMargin,
@@ -33,21 +37,107 @@ export function mergeDailyMarginDates(saved: readonly string[], current: string)
   return [...new Set([...saved, current])].sort();
 }
 
+/**
+ * 保管済み PDF 実体の fullDL 検証 (first/再入共通)。
+ * 既存単一原本 reader (fetchPageFileUrl) で Files 先頭の実体を落とし、
+ * ファイル名・バイト数・SHA256 が今回取得分と一致しなければ throw する。
+ * 再入時はこの検証が安全 skip の根拠になる (無限 force/reupload はしない)。
+ * 過去に metadata-only で残った保管もここで STOP する (添付なし)。
+ */
+export async function verifyCustodyEntity(
+  pageId: string,
+  filename: string,
+  expected: Uint8Array,
+  expectedSha256: string
+): Promise<void> {
+  const ref = await fetchPageFileUrl(pageId, "Files");
+  if (ref === null) {
+    throw new Error(`margin custody 実体なし: page=${pageId} の Files に添付がないため STOP`);
+  }
+  if (ref.name !== filename) {
+    throw new Error(`margin custody 添付不一致: 期待=${filename} 実際=${ref.name} (page=${pageId})`);
+  }
+  const buf = await (await fetch(ref.url)).arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  if (bytes.byteLength !== expected.byteLength) {
+    throw new Error(
+      `margin custody サイズ不一致: 期待=${expected.byteLength} 実際=${bytes.byteLength} (page=${pageId})`
+    );
+  }
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  if (sha !== expectedSha256) {
+    throw new Error(`margin custody SHA 不一致: 期待=${expectedSha256} 実際=${sha} (page=${pageId})`);
+  }
+}
+
+/**
+ * PUT 計画の純関数。同値スナップショット + 同値 index は PUT0
+ * (祝日の同原本再入)。部分一致は差分だけ PUT する。
+ */
+export function planDailyMarginPuts(
+  existingSnapshot: string | null,
+  snapshotJson: string,
+  saved: readonly string[],
+  merged: readonly string[]
+): { putSnapshot: boolean; putDates: boolean } {
+  return {
+    putSnapshot: existingSnapshot !== snapshotJson,
+    putDates: JSON.stringify(saved) !== JSON.stringify(merged),
+  };
+}
+
 export async function main(): Promise<void> {
   const requested = parseDateArg(process.argv.slice(2));
   const data = await fetchDailyMargin(requested);
   // 全 PUT (R2) より前に検証する — 保管失敗時の部分保存を防ぐため。
   validateDailyMarginSnapshot(data.snapshot);
+  const basis = data.snapshot.basisDate;
+
+  // dates.json を snapshot 含む全 PUT より前に read/validate する。
+  const savedRaw = await r2Get("margin/dates.json");
+  const saved: unknown = savedRaw === null ? [] : JSON.parse(savedRaw);
+  if (!Array.isArray(saved)) {
+    throw new Error(`margin dates.json の形状が不正です (配列でない): ${(savedRaw ?? "").slice(0, 80)}`);
+  }
+  const merged = mergeDailyMarginDates(saved, basis);
+
   const input = dailyMarginArchiveInput(data);
   const archived = await recordPrimaryData(input);
-  const snapshot = { ...data.snapshot, rawPageId: archived.pageId };
-  const basis = snapshot.basisDate;
-  await r2Put(`margin/daily/${basis}.json`, JSON.stringify(snapshot));
-  const savedRaw = await r2Get("margin/dates.json");
-  const saved: string[] = savedRaw === null ? [] : (JSON.parse(savedRaw) as string[]);
-  await r2Put("margin/dates.json", JSON.stringify(mergeDailyMarginDates(saved, basis)));
+  // first は完全保管を要求する。metadata-only (上限超過) は STOP。
+  if (archived.fileTooLarge) {
+    throw new Error(
+      `margin custody 不完全: ${input.key} は上限超過で metadata-only のため STOP (page=${archived.pageId})`
+    );
+  }
+  await verifyCustodyEntity(
+    archived.pageId,
+    input.files[0].filename,
+    data.pdfBytes,
+    data.snapshot.rawSha256
+  );
+
+  const snapshotKey = `margin/daily/${basis}.json`;
+  const snapshotJson = JSON.stringify({ ...data.snapshot, rawPageId: archived.pageId });
+  const existingSnapshot = await r2Get(snapshotKey);
+  const { putSnapshot, putDates } = planDailyMarginPuts(existingSnapshot, snapshotJson, saved, merged);
+  if (!putSnapshot && !putDates) {
+    console.info(
+      `margin daily ingest: basis=${basis} 同値再入のため PUT0 (rows=${data.snapshot.rows.length} page=${archived.pageId})`
+    );
+    return;
+  }
+  if (putSnapshot) {
+    await r2Put(snapshotKey, snapshotJson);
+    const readback = await r2Get(snapshotKey);
+    if (readback !== snapshotJson) {
+      throw new Error(`margin R2 readback 不一致: ${snapshotKey}`);
+    }
+  }
+  if (putDates) {
+    await r2Put("margin/dates.json", JSON.stringify(merged));
+  }
   console.info(
-    `margin daily ingest: basis=${basis} pub=${snapshot.publicationDate} rows=${snapshot.rows.length} page=${archived.pageId}`
+    `margin daily ingest: basis=${basis} pub=${data.snapshot.publicationDate} rows=${data.snapshot.rows.length} page=${archived.pageId}`
   );
 }
 

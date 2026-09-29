@@ -10,7 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-29
 
 ### 変更 (unreleased — #182)
-- **007 信用残日次化**: JPX 銘柄別信用取引残高の日次様式へ直接切替 (旧週次互換なし)。R2 `margin/daily/{基準日}.json` + `margin/dates.json` (`--date=YYYYMMDD` ingest、`?code=&n=` API は日次 schema)。週次オブジェクト/コードは残すが通常経路は読まない (#182)。
+- **007 信用残日次化**: JPX 銘柄別信用取引残高の日次様式へ直接切替 (旧週次互換なし)。R2 `margin/daily/{基準日}.json` + `margin/dates.json` (`--date=YYYYMMDD` ingest、`?code=&n=` API は日次 schema)。週次オブジェクト/コードは残すが通常経路は読まない。業種別集計 (33 業種×14 指標の日次 moneyflow spec `jpx-margin-sector`、JPX 再取得なし) も同 scope で実装 (#182)。
 - **005 shared catalog**: 投資家別売買 inner weekly を 4 キー (証券自己・法人→事業/その他法人・信託銀行) へ細分化し共有キー契約へ (#182)。
 
 ### 変更

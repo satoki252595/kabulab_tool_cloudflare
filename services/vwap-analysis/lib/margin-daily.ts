@@ -261,6 +261,66 @@ const DATE_LINE_RE =
   /^(\d{4})\/(\d{1,2})\/(\d{1,2}) 申込み現在 .* （単位：一株、一円） (\d{4})\/(\d{1,2})\/(\d{1,2})$/;
 const EN_DATE_RE = /^As of (\d{4})\/(\d{1,2})\/(\d{1,2}) application based\b/;
 
+/**
+ * 公式 14 列見出しの原文シーケンス (2026-09-28 分の全 109 ページで同一を確認。
+ * キャッシュ: /tmp 1795979B SHA 7a0c2e21…12ce314 の pure replay)。
+ * 位置固定の parseFigures (c0–c13) と 1 対 1 に対応する:
+ *  売残高/前日比/上場比/買残高/前日比/上場比/
+ *  一般(売)/前日比/制度(売)/前日比/一般(買)/前日比/制度(買)/前日比。
+ * 数量 12 (残高6+前日比6) + 比率 2 (上場比)。単位は日付行の
+ * （単位：一株、一円）で固定 (DATE_LINE_RE が検証)。列交換は合計ガードでは
+ * 見逃すため、入口で厳密一致を要求する。
+ */
+const DAILY_MARGIN_HEADER_LINES: readonly string[] = [
+  "売残高", "Outstanding Sales",
+  "前日比", "Daily change",
+  "上場比", "Ratio to", "listed shares",
+  "買残高", "Outstanding", "Purchases",
+  "前日比", "Daily change",
+  "上場比", "Ratio to", "listed shares",
+  "一般信用", "Negotiable",
+  "前日比", "Daily change",
+  "制度信用", "Standardized",
+  "前日比", "Daily change",
+  "一般信用", "Negotiable",
+  "前日比", "Daily change",
+  "制度信用", "Standardized",
+  "前日比", "Daily change",
+];
+/** 売グループ→買グループの順序を固定する組見出し (全ページに同一行)。 */
+const DAILY_MARGIN_GROUP_LINE = "合計 Total 売残高 Outstanding Sales 買残高 Outstanding Purchases";
+
+/**
+ * 公式列見出しの厳密検証 (parseDailyMarginText の入口で呼ぶ)。
+ * `売残高` で始まる箇所はすべて 31 行シーケンスと厳密一致が必須
+ * (1 箇所でも崩れたら列位置が変わっている可能性のため STOP)。
+ */
+export function assertDailyMarginHeaders(text: string): void {
+  const lines = text.split("\n").map((l) => l.trim());
+  const starts: number[] = [];
+  lines.forEach((l, i) => {
+    if (l === "売残高") starts.push(i);
+  });
+  if (starts.length === 0) fail("日次信用残の公式列見出し (売残高…) が見つかりません");
+  for (const s of starts) {
+    for (let k = 0; k < DAILY_MARGIN_HEADER_LINES.length; k++) {
+      const got = s + k < lines.length ? (lines[s + k] as string) : "(なし)";
+      if (got !== DAILY_MARGIN_HEADER_LINES[k]) {
+        fail(
+          `公式列見出しの不一致です (行 ${s + k + 1}: ${got} — 列位置が変わっている可能性のため STOP)`
+        );
+      }
+    }
+  }
+  const firstRow = lines.findIndex((l) => l.includes("株数 Shs."));
+  if (firstRow >= 0 && (starts[0] as number) > firstRow) {
+    fail("公式列見出しが最初の明細行より後にあります");
+  }
+  if (!lines.includes(DAILY_MARGIN_GROUP_LINE)) {
+    fail(`売買グループ見出しが見つかりません: ${DAILY_MARGIN_GROUP_LINE}`);
+  }
+}
+
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
@@ -450,6 +510,7 @@ export function parseDailyMarginText(
   text: string,
   provenance: { sourceUrl: string; rawSha256: string; rawPageId?: string | null }
 ): MarginDailySnapshot {
+  assertDailyMarginHeaders(text);
   const { basisDate, publicationDate } = parseDailyMarginDates(text);
   const shsByCode = new Map<string, ShsLine>();
   const valByCode = new Map<string, ValLine>();

@@ -41,23 +41,71 @@ function row(sourceCode: string, ordinaryTicker: string | null, sell: number, bu
   };
 }
 
-function snap(rows: ReturnType<typeof row>[]) {
+type Row = ReturnType<typeof row>;
+
+function zeroFig() {
+  return {
+    sellOutstanding: 0, sellChg: 0, sellListedRatio: 0, sellListedRatioRaw: "0.0%",
+    buyOutstanding: 0, buyChg: 0, buyListedRatio: 0, buyListedRatioRaw: "0.0%",
+    negSell: 0, negSellChg: 0, negBuy: 0, negBuyChg: 0,
+    stdSell: 0, stdSellChg: 0, stdBuy: 0, stdBuyChg: 0,
+  };
+}
+
+const NUM_KEYS = [
+  "sellOutstanding", "sellChg", "buyOutstanding", "buyChg",
+  "negSell", "negSellChg", "negBuy", "negBuyChg",
+  "stdSell", "stdSellChg", "stdBuy", "stdBuyChg",
+] as const;
+
+/** 行合計と整合する最小 totals (全行を loan に集約。16行)。検証 reuse のため完全整合が必須。 */
+function totalsFor(rows: Row[]) {
+  const sumOf = (pick: (r: Row) => { [k in (typeof NUM_KEYS)[number]]: number }) => {
+    const out: Record<string, number | string> = { ...zeroFig() };
+    for (const k of NUM_KEYS) out[k] = rows.reduce((a, r) => a + pick(r)[k], 0);
+    return out;
+  };
+  const sumS = sumOf((r) => r.shares);
+  const sumA = sumOf((r) => r.amounts);
+  const n = rows.length;
+  const zS = zeroFig();
+  const zA = zeroFig();
+  const T = (label: string, scope: string, market: string | null, count: number, shares: unknown, amounts: unknown) =>
+    ({ label, scope, market, count, shares, amounts });
+  const block = (label: string, scope: string, count: number, shares: unknown, amounts: unknown) => [
+    T(label, scope, null, count, shares, amounts),
+    T("プライム 小計", scope, "プライム", count, shares, amounts),
+    T("スタンダード 小計", scope, "スタンダード", 0, zS, zA),
+    T("グロース 小計", scope, "グロース", 0, zS, zA),
+  ];
+  return [
+    ...block("貸借銘柄", "loan", n, sumS, sumA),
+    ...block("制度信用銘柄", "standardized", 0, zS, zA),
+    ...block("一般信用銘柄", "other", 0, zS, zA),
+    ...block("総合計", "grand", n, sumS, sumA),
+  ];
+}
+
+function snap(rows: Row[], basisDate: string) {
   return {
     format: "jpx-margin-daily-v1",
-    basisDate: "2026-09-28",
+    basisDate,
     publicationDate: "2026-09-29",
     sourceUrl: "https://example.invalid/m.pdf",
     rawSha256: "0".repeat(64),
     rawPageId: null,
     rows,
-    totals: [],
+    totals: totalsFor(rows),
   };
 }
 
 // 2026-09-25: 25930 (普通株) と 25935 (種類株) が同一ティッカー 2593 に衝突する日。
-const DAY_AMBIGUOUS = snap([row("25930", "2593", 100, 200), row("25935", "2593", 310, 410), row("72030", "7203", 310, 0)]);
+const DAY_AMBIGUOUS = snap(
+  [row("25930", "2593", 100, 200), row("25935", "2593", 310, 410), row("72030", "7203", 310, 0)],
+  "2026-09-25"
+);
 // 2026-09-28: 2593 は 1 行だけの正常日。
-const DAY_NORMAL = snap([row("25930", "2593", 100, 200), row("72030", "7203", 310, 0)]);
+const DAY_NORMAL = snap([row("25930", "2593", 100, 200), row("72030", "7203", 310, 0)], "2026-09-28");
 
 function bucket(files: Record<string, unknown>) {
   return {
@@ -121,6 +169,24 @@ describe("GET /api/margin (同一ティッカー複数行の除外と正常日�
     const body = (await res.json()) as { dates: unknown[]; ambiguousDates: unknown[] };
     expect(body.dates).toEqual([]);
     expect(body.ambiguousDates).toEqual([]);
+  });
+
+  it("rows 欠落の破損スナップショットは空に化けずエラーにする (||[] 禁止)", async () => {
+    const bad = bucket({
+      "margin/dates.json": ["2026-09-28"],
+      "margin/daily/2026-09-28.json": { ...DAY_NORMAL, rows: null },
+    });
+    const res = await app.request("/api/margin?code=2593", {}, { BUCKET: bad } as never);
+    expect(res.status).toBe(500);
+  });
+
+  it("basisDate と index 日付の不一致はエラーにする", async () => {
+    const bad = bucket({
+      "margin/dates.json": ["2026-09-28"],
+      "margin/daily/2026-09-28.json": { ...DAY_NORMAL, basisDate: "2026-09-25" },
+    });
+    const res = await app.request("/api/margin?code=2593", {}, { BUCKET: bad } as never);
+    expect(res.status).toBe(500);
   });
 
   it("旧週次オブジェクトは読まない", async () => {
