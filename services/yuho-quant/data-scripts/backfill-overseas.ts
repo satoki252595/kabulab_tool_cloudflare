@@ -26,6 +26,7 @@ import {
   downloadDocument,
   EdinetNotFoundError,
 } from "../src/services/edinet/client.js";
+import { recordEdinetZip } from "../src/services/edinet/archive.js";
 import {
   parseOverseasData,
   validateOverseasSaveSet,
@@ -75,8 +76,10 @@ for (const r of targets) {
   let honbunFile: string | null = null;
   let facts: ReturnType<typeof parseOverseasData>["facts"] = [];
   let proof: ReturnType<typeof parseOverseasData>["proof"];
+  let zipBytes: Buffer | null = null;
   try {
     const zip = await downloadDocument(r.docId, 1);
+    zipBytes = zip;
     const ex = parseOverseasData(zip, r.periodEnd);
     status = ex.status;
     honbunFile = ex.honbunFile;
@@ -102,6 +105,29 @@ for (const r of targets) {
     facts = [];
   }
   tally[status] = (tally[status] ?? 0) + 1;
+
+  // ルール6: 取得した Type1 実体を type 別 key で記録する (共通契約)。
+  // D1 書込より先に置く: 記録に失敗したら D1 は旧値のまま残り再実行できる。
+  // 既存 key は recordPrimaryData 側で冪等スキップする。
+  if (zipBytes) {
+    await recordEdinetZip({
+      service: "yuho-quant",
+      docID: r.docId,
+      type: 1,
+      zip: zipBytes,
+      source: `EDINET API v2 /documents/${r.docId}?type=1`,
+      fetchedAt: new Date().toISOString(),
+      metadata: {
+        docID: r.docId,
+        filerName: r.filerName,
+        periodEnd: r.periodEnd,
+        overseasParseStatus: status,
+        overseasHonbunFile: honbunFile,
+        overseasFactCount: facts.length,
+        archivedBy: "backfill-overseas",
+      },
+    });
+  }
 
   // overseas 列を更新 (受注列・受注ファクトには触れない)
   await db

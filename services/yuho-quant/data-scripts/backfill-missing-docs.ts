@@ -23,7 +23,7 @@ import "dotenv/config";
 import { eq } from "drizzle-orm";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
-import { recordPrimaryData } from "../../../src/shared/notion-archive/index.js";
+import { recordEdinetZip } from "../src/services/edinet/archive.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
@@ -325,28 +325,31 @@ for (const date of eachDay(fromArg, toArg)) {
         });
       }
 
-      await recordPrimaryData({
-        service: "yuho-quant",
-        key: doc.docID,
-        source: `EDINET API v2 /documents/${doc.docID} (type=1 XBRL / type=5 CSV)`,
-        fetchedAt: submittedAt.toISOString(),
-        metadata: {
-          docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
-          filerName: doc.filerName, docTypeCode: doc.docTypeCode,
-          docDescription: doc.docDescription, periodStart: doc.periodStart,
-          periodEnd, submitDateTime: doc.submitDateTime,
-          parseStatus, honbunFile, factCount: deduped.length,
-          overseasParseStatus, overseasHonbunFile, overseasFactCount: overseasFacts.length,
-          textParseStatus, textSectionCount: sections.length,
-          xbrlUnavailable,
-        },
-        files: [
-          { bytes: new Uint8Array(csvZip), filename: `${doc.docID}_csv.zip`, contentType: "application/zip" },
-          ...(xbrlZip
-            ? [{ bytes: new Uint8Array(xbrlZip), filename: `${doc.docID}_xbrl.zip`, contentType: "application/zip" }]
-            : []),
-        ],
+      // type 別 key で各実体を記録する (共通契約)。各 key の既存は
+      // recordPrimaryData 側で冪等スキップし、Type5 済みは Type1 を抑止しない。
+      const fetchedAt = submittedAt.toISOString();
+      const metadata = {
+        docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
+        filerName: doc.filerName, docTypeCode: doc.docTypeCode,
+        docDescription: doc.docDescription, periodStart: doc.periodStart,
+        periodEnd, submitDateTime: doc.submitDateTime,
+        parseStatus, honbunFile, factCount: deduped.length,
+        overseasParseStatus, overseasHonbunFile, overseasFactCount: overseasFacts.length,
+        textParseStatus, textSectionCount: sections.length,
+        xbrlUnavailable,
+      };
+      await recordEdinetZip({
+        service: "yuho-quant", docID: doc.docID, type: 5, zip: csvZip,
+        source: `EDINET API v2 /documents/${doc.docID}?type=5`,
+        fetchedAt, metadata,
       });
+      if (xbrlZip) {
+        await recordEdinetZip({
+          service: "yuho-quant", docID: doc.docID, type: 1, zip: xbrlZip,
+          source: `EDINET API v2 /documents/${doc.docID}?type=1`,
+          fetchedAt, metadata,
+        });
+      }
       // 定性テキスト本文の Notion 保管 (D1 には索引 + 行 ID のみ)。
       // 失敗は当該通の警告に留める (ポインタ NULL の通は P3 が回収)。
       if (sections.length > 0) {
