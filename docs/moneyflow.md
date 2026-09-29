@@ -6,7 +6,7 @@
 
 ユーザー決定 (2026-09-27): 非公開運用・無料データのみ・近似でよいが
 何を測っているか明記する。Phase 0/1 (R1 33業種) に続き、2026-09-27 に Phase 2〜5 の
-取得元 17 件を実装した (信用残の日次化は未実装)。設計の詳細な経緯は
+取得元 17 件を実装した (信用残の日次化は実装済み — 下記「信用残」節)。設計の詳細な経緯は
 承認済み計画 `notion-velvet-goose.md` を参照 (このファイルは取得元の恒久的な
 インベントリと実装状況の記録)。
 
@@ -43,6 +43,7 @@
 | 空売り集計(業種別) | jpx.co.jp/.../short-selling/index.html | 33業種別の空売り比率(空売り売買代金/総売買代金) | 日次 | PDF | 無料 | personal-only | **実装済み** (`jpx-short-selling.ts`。月次集計に加工) |
 | 東証上場銘柄一覧(data_j.xlsx) | jpx.co.jp/.../misc/01.html | 全銘柄コード・33業種区分(結合キー) | 月次 | Excel | 無料 | personal-only | 実装済み (既存 `src/shared/jpx/sectors.ts`、universe sync が使用) |
 | 既存 D1 (swing_daily_ohlcv×sector) | (社内 D1) | 業種別売買代金・シェア・上昇/下落日売買代金 | 日次データを週次集計 | D1 | — | personal-only | **実装済み** (`GET /api/ingest/moneyflow-sector`) |
+| 信用残高(業種別) | jpx.co.jp/.../margin/01.html | 33業種別の信用売買残高(株/円・一般/制度・前日差・売買比率の14指標) | 日次 | PDF→R2 snapshot replay | 無料 | personal-only | **実装済み** (`jpx-margin-sector` spec。JPX 再取得なし) |
 | 統計月報・売買代金/売買高(市場別) | jpx.co.jp/.../monthly/index.html | 市場別の月間/年間売買高(グロス)。33業種内訳は未確認 | 月次 | 不明 | 無料 | personal-only | 未実装 (D1 集計で代替済み) |
 | 投資部門別売買状況(株式) | jpx.co.jp/.../investor-type/index.html | 投資部門別の買い越し額(業種別内訳なし) | 週次/月次/年次 | PDF/Excel | 無料 | personal-only | Phase 2 予定 |
 | 東証33業種別株価指数・TOPIX-17 | jpx.co.jp/.../cal2_13_sector.pdf | 33業種の株価指数(騰落率)。時価総額の価格変動分を分離する用途 | 日次/リアルタイム | Web表示+PDF(算出要領)。無料の**バルク過去月末値配信は確認できず** | — | personal-only | **見送り** (下記「業種別指数の調査結果」参照) |
@@ -153,22 +154,30 @@
 推測で作らない (ルール1/2)。Phase 2 以降で J-Quants Pro 等の有償契約や
 日次スクレイピングによる自前アーカイブが必要かどうかを改めて判断する。
 
-## 信用残 (銘柄別信用取引残高) の日次化 — TODO
+## 信用残 (銘柄別信用取引残高) の日次化
 
 JPX 告知 (2026-07-06)「信用取引残高の公表情報の変更日及び今後の公表スケジュール
 について」により、**2026-09-28 (月) から「銘柄別信用取引残高」が毎日 16:00 に
 公表され、週次の「銘柄別信用取引週末残高」(火曜16:30) は廃止される**。
 
-- 新資料の様式は初回公表 (2026-09-28) まで確認できないため、**今回の実装
-  (Phase 0/1) には信用残を含めていない**。
-- 既存の週次信用残取込 (`scripts/vwap/ingest-margin.ts` → R2 `margin/{week}.json`、
-  vwap-analysis が使用) は新資料へ切り替えないと 9/28 以降止まる。パーサは
-  `services/vwap-analysis/lib/margin.ts` 側に共通化し、moneyflow の業種別集計
-  (買い残・売り残の前日比) と両方から使えるようにする設計 (計画書 Phase 1 節)。
-- **TODO (2026-09-28 以降に着手)**: 実ファイルをフィクスチャにしてパーサを作り、
-  `sector_margin_balance` 系の指標を `services/moneyflow/lib/indicators.ts` へ
-  追加し、日次で「資金フロー｜観測ログ」へ書く。9/28 に移行が延期された場合は
-  延期中は週次のまま扱う (JPX が同日20時ごろに可否を告知)。
+- 日次取込は実装済み: `scripts/vwap/ingest-margin.ts` (`--date=YYYYMMDD`・
+  未指定は最新) → Notion 一次データ保管 → R2 `margin/daily/{基準日}.json` +
+  `margin/dates.json`。パーサは `services/vwap-analysis/lib/margin-daily.ts`
+  (純粋・14 セル・合計ガード)。API/UI は日次 schema へ直接切替済み。
+  旧週次オブジェクト・週次コードは残すが通常経路は読まない (旧互換なし)。
+- 33 業種集計も実装済み (同 scope): moneyflow spec `jpx-margin-sector`
+  (日次)。resolve が R2 の実 latest 基準日を決め、snapshot replay +
+  D1 join (`activeEquityCondition` 述語・id/code/sector のみ SELECT) の
+  mapping/coverage を固定 capture し、toObservations が純粋に 14 指標
+  (売買残×株円・一般/制度内訳・前日差・売買比率) × 33 業種 (+ 未分類) の
+  drafts を作る。組込は eligible (普通株) かつ一意ティッカーかつ activeEquity
+  の行のみ。非普通株・同一ティッカー複数行 (ISIN 同一性の根拠が無い合算不可)
+  は派生から除外する (raw 全行は snapshot に保存したまま)。
+  33 業種行は新内訳 dims を未設定 (publicationDate のみ)
+  にして既存 `期間|指標|区分` キーを維持する (key 契約)。公式数量/金額 SUM、
+  公式率の SUM 禁止、派生率は式・分母を明示 (`売/(売+買)`・分母 0 は失敗)、
+  NULL 前日比は 0 埋めせず null 伝播、分類不明・coverage 不足は成功にしない。
+  JPX 原本への再取得なし (初回取込・readback は別途 grant 待ち)。
 
 ## 実装ファイル一覧 (Phase 0/1)
 

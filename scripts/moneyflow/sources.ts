@@ -32,6 +32,7 @@ import {
   jpxInvestorReitSpec,
 } from "../../services/moneyflow/lib/adapters/jpx-investor-etf-reit.js";
 import { jsdaBondsSpec } from "../../services/moneyflow/lib/adapters/jsda-bonds.js";
+import { marginSectorSpec } from "../../services/moneyflow/lib/adapters/jpx-margin-sector.js";
 import { jvceaCryptoSpec } from "../../services/moneyflow/lib/adapters/jvcea-crypto.js";
 import {
   mofPortfolioFlowsMonthlySpec,
@@ -48,6 +49,7 @@ import { worldbankMarketcapSpec } from "../../services/moneyflow/lib/adapters/wo
 export const SPEC_SOURCES: readonly MoneyflowSourceSpec[] = [
   // 日次
   coingeckoGlobalSpec,
+  marginSectorSpec,
   // 週次
   JPX_INVESTOR_EQUITY_WEEKLY_SPEC,
   mofPortfolioFlowsWeeklySpec,

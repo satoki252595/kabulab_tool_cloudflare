@@ -3,7 +3,12 @@
 // フロント(SPA)は public/vwap-analysis/ を ASSETS が配信。ここは /api/* だけ。
 import { Hono } from "hono";
 import { fetchYahooChartRaw } from "../../src/shared/yahoo/client.js";
-import { selectMarginRows } from "./lib/margin-select.js";
+import {
+  MARGIN_DAILY_FORMAT,
+  selectDailyMarginRows,
+  validateDailyMarginSnapshot,
+} from "./lib/margin-daily.js";
+import type { MarginDailySnapshot } from "./lib/margin-daily.js";
 
 export const BASE_PATH = "/vwap-analysis";
 
@@ -46,39 +51,51 @@ app.get("/api/daily", async (c) => {
   return passthrough(o.body, 3600);
 });
 
-// 週次信用残高(R2)を集約。n=直近何週ぶん返すか(既定16・上限260=約5年)。
+// 日次信用残高(R2)を集約。n=直近何営業日ぶん返すか(既定60・上限260=約1年)。
 // 日足チャートへ重畳する用途では長期(n=260)を要求する。R2 はバインディング
-// 経由(=subrequest にカウントされない)なので、各週ファイルは並列取得して待ち時間を抑える。
+// 経由(=subrequest にカウントされない)なので、各日ファイルは並列取得して待ち時間を抑える。
+// code は 4 文字ティッカーか 5 文字原文コード。旧週次オブジェクトは読まない。
 app.get("/api/margin", async (c) => {
-  const code = (c.req.query("code") || "").trim();
-  if (!CODE_RE.test(code)) return json({ error: "bad code" }, 400);
+  const code = (c.req.query("code") || "").trim().toUpperCase();
+  if (!CODE_RE.test(code) && !/^[0-9]{3}[0-9A-Z][0-9]$/.test(code)) {
+    return json({ error: "bad code" }, 400);
+  }
   const nRaw = c.req.query("n");
-  let n = 16;
+  let n = 60;
   if (nRaw !== undefined) {
     const parsed = Number(nRaw);
     if (!Number.isInteger(parsed) || parsed < 1 || parsed > 260) return json({ error: "bad n" }, 400);
     n = parsed;
   }
-  // 週次データなので 1 日キャッシュ可。同一銘柄の再オープンで R2 読取を繰り返さない。
+  // 日次データなので 1 日キャッシュ可。同一銘柄の再オープンで R2 読取を繰り返さない。
   const cached = (o: unknown) =>
     new Response(JSON.stringify(o), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=86400" } });
-  const wl = await c.env.BUCKET.get("margin/weeks.json");
-  if (!wl) return cached({ code, weeks: [], ambiguousWeeks: [] });
-  const weeks: string[] = JSON.parse(await wl.text()).slice(-n);
-  const rows = await Promise.all(weeks.map(async (w) => {
-    const o = await c.env.BUCKET.get(`margin/${w}.json`);
-    if (!o) return null;
-    const snap = JSON.parse(await o.text());
-    // 同一コードの複数行 (旧取込の種類株崩壊) はどれが普通株か JSON だけでは
-    // 区別できないため、値無しで除外週として明示する (先頭行の黙った採用をしない)。
-    // 正常な週・銘柄は従来どおり返す (補完・除去・書換えをしない)。
-    const sel = selectMarginRows((snap.rows || []) as Array<{ code: string; sell: number; buy: number; sell_chg: number; buy_chg: number }>, code);
-    if (sel.status === "ambiguous") return { week: w, ambiguous: true as const };
+  const dl = await c.env.BUCKET.get("margin/dates.json");
+  if (!dl) return cached({ code, dates: [], ambiguousDates: [] });
+  const dates: string[] = JSON.parse(await dl.text()).slice(-n);
+  const rows = await Promise.all(dates.map(async (d) => {
+    const o = await c.env.BUCKET.get(`margin/daily/${d}.json`);
+    // index に参照日があるのに snapshot が無いのは破損。正常空に落とさず throw する。
+    if (!o) throw new Error(`margin snapshot missing for indexed date: ${d}`);
+    const snap = JSON.parse(await o.text()) as MarginDailySnapshot;
+    if (snap.format !== MARGIN_DAILY_FORMAT) {
+      throw new Error(`unknown margin snapshot format: ${snap.format}`);
+    }
+    // R2 の欠落・破損を空配列で隠さない。Worker-safe 純粋検証を再利用し、
+    // 全行形状 + basisDate=index 日付の一致を確認してから selection する。
+    validateDailyMarginSnapshot(snap);
+    if (snap.basisDate !== d) {
+      throw new Error(`margin snapshot date mismatch: index=${d} body=${snap.basisDate}`);
+    }
+    // 同一ティッカーの複数行 (普通株+種類株等) はどれを使うか決められないため、
+    // 値無しで除外日として明示する (先頭行の黙った採用をしない)。
+    const sel = selectDailyMarginRows(snap.rows, code);
+    if (sel.status === "ambiguous") return { date: d, ambiguous: true as const };
     if (sel.status === "missing") return null;
-    return { week: w, ...sel.row };
+    return { date: d, publicationDate: snap.publicationDate, ...sel.row };
   }));
-  const ambiguousWeeks = rows.filter((r): r is { week: string; ambiguous: true } => r !== null && "ambiguous" in r).map((r) => r.week);
-  return cached({ code, weeks: rows.filter((r) => r !== null && !("ambiguous" in r)), ambiguousWeeks });
+  const ambiguousDates = rows.filter((r): r is { date: string; ambiguous: true } => r !== null && "ambiguous" in r).map((r) => r.date);
+  return cached({ code, dates: rows.filter((r) => r !== null && !("ambiguous" in r)), ambiguousDates });
 });
 
 export default app;

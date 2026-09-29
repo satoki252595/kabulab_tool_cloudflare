@@ -481,7 +481,7 @@ describe("master-dedup 実 flow 回帰", () => {
         Object.entries(bodies).map(([k, v]) => [k, sha256HexBytes(v)])
       );
       vi.mocked(listPageFiles).mockResolvedValue(
-        names.map((name) => ({ name, url: `https://example.invalid/${name}` }))
+        names.map((name) => ({ name, url: `https://example.invalid/${name}`, kind: "file" as const }))
       );
       globalThis.fetch = (async (url: unknown) => {
         const name = String(url).split("/").pop() as string;
@@ -494,7 +494,7 @@ describe("master-dedup 実 flow 回帰", () => {
     it("SHA 不一致は throw (すり替え検出)", async () => {
       const names = expectedArchiveFileNames("2026-09-28");
       vi.mocked(listPageFiles).mockResolvedValue(
-        names.map((name) => ({ name, url: `https://example.invalid/${name}` }))
+        names.map((name) => ({ name, url: `https://example.invalid/${name}`, kind: "file" as const }))
       );
       globalThis.fetch = (async () => ({
         ok: true,

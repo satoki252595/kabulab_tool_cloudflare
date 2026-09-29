@@ -14,10 +14,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  dailyMarginArchiveInput,
+  dailyMarginPdfUrlForDateFromHtml,
+  extractDailyMarginPdfLinks,
   extractMarginPdfLinks,
+  latestDailyMarginPdfUrlFromHtml,
   latestMarginPdfUrlFromHtml,
   marginArchiveInput,
   marginPdfUrlForWeekFromHtml,
+  parseDailyMarginPdf,
   parseMarginPdf,
   parseMarginText,
   validateMarginData,
@@ -221,6 +226,81 @@ describe("margin 発見経路 (一覧 HTML→PDF URL)", () => {
 
   it("指定週の形式が違えば throw する", () => {
     expect(() => marginPdfUrlForWeekFromHtml(HTML_01, "2026-09-04")).toThrow(/形式が不正/);
+  });
+});
+
+const HTML_01_DAILY = `
+<a href="/markets/statistics-equities/margin/01.html">銘柄別信用取引残高</a>
+<a href="/markets/statistics-equities/margin/tvdivq0000001rnl-att/20260925_mtall.pdf">PDF</a>
+<a href="/markets/statistics-equities/margin/tvdivq0000001rnl-att/20260928_mtall.pdf">PDF</a>
+<a href="/markets/statistics-equities/margin/tvdivq0000001rnl-att/syumatsu2026091800.pdf">PDF</a>
+`;
+
+describe("margin 日次発見経路 (一覧 HTML→mtall PDF URL)", () => {
+  it("mtall リンクだけを抜き出す (syumatsu は拾わない)", () => {
+    expect(extractDailyMarginPdfLinks(HTML_01_DAILY).map((l) => l.stamp)).toEqual([
+      "20260925",
+      "20260928",
+    ]);
+  });
+
+  it("最新の URL を返す", () => {
+    expect(latestDailyMarginPdfUrlFromHtml(HTML_01_DAILY)).toBe(
+      "https://www.jpx.co.jp/markets/statistics-equities/margin/tvdivq0000001rnl-att/20260928_mtall.pdf"
+    );
+  });
+
+  it("mtall が 0 件なら throw する", () => {
+    expect(extractDailyMarginPdfLinks(HTML_05_RENEWED)).toEqual([]);
+    expect(() => latestDailyMarginPdfUrlFromHtml(HTML_05_RENEWED)).toThrow(/margin daily pdf link not found/);
+  });
+
+  it("指定基準日の URL を返す (--date の解決。該当なしは最新で代用しない)", () => {
+    expect(dailyMarginPdfUrlForDateFromHtml(HTML_01_DAILY, "20260925")).toBe(
+      "https://www.jpx.co.jp/markets/statistics-equities/margin/tvdivq0000001rnl-att/20260925_mtall.pdf"
+    );
+    expect(() => dailyMarginPdfUrlForDateFromHtml(HTML_01_DAILY, "20260926")).toThrow(/該当基準日がありません/);
+    expect(() => dailyMarginPdfUrlForDateFromHtml(HTML_01_DAILY, "2026-09-25")).toThrow(/形式が不正/);
+  });
+});
+
+// 実 PDF (日次 2026-09-28 分) をフィクスチャに使う。personal-only のため
+// repo には commit しない。未取得の環境では skip する。
+const DAILY_FIXTURE_PATH = fileURLToPath(
+  new URL("../tests/fixtures/jpx-margin-daily-20260928.pdf", import.meta.url)
+);
+const hasDailyFixture = existsSync(DAILY_FIXTURE_PATH);
+
+describe.skipIf(!hasDailyFixture)("parseDailyMarginPdf (実 PDF: 日次 2026-09-28)", () => {
+  // 下の数値は実 PDF の実測値 (2026-09-29 確認)。フィクスチャを差し替えたら更新すること。
+  const FIXTURE_BYTES = 1795979;
+  const FIXTURE_SHA256 = "7a0c2e21b8c8e545c79ca84d81a1cad43f424b7d88760947b0cc7151f12ce314";
+
+  it("実原本 4259 行を全ガード通過で解析し、バイト列不変で保管引数と一致する", async () => {
+    const bytes = new Uint8Array(readFileSync(DAILY_FIXTURE_PATH));
+    expect(bytes.byteLength).toBe(FIXTURE_BYTES);
+    expect(sha256(bytes)).toBe(FIXTURE_SHA256);
+    const snapshot = await parseDailyMarginPdf(bytes, {
+      sourceUrl: "https://www.jpx.co.jp/markets/statistics-equities/margin/01.html",
+      rawSha256: FIXTURE_SHA256,
+      rawPageId: null,
+    });
+    expect(snapshot.basisDate).toBe("2026-09-28");
+    expect(snapshot.publicationDate).toBe("2026-09-29");
+    expect(snapshot.rows).toHaveLength(4259);
+    expect(snapshot.totals).toHaveLength(19);
+    expect(bytes.byteLength).toBe(FIXTURE_BYTES);
+    expect(sha256(bytes)).toBe(FIXTURE_SHA256);
+
+    const input = dailyMarginArchiveInput({
+      snapshot: { ...snapshot, rawPageId: null },
+      pdfBytes: bytes,
+      pdfUrl: "https://www.jpx.co.jp/x.pdf",
+    });
+    expect(input.key).toBe("jpx-margin-daily-2026-09-28");
+    expect(input.files[0]!.filename).toBe("margin-daily-2026-09-28.pdf");
+    expect(input.files[0]!.bytes).toBe(bytes);
+    expect(input.metadata).toMatchObject({ basisDate: "2026-09-28", publicationDate: "2026-09-29", rowCount: 4259 });
   });
 });
 

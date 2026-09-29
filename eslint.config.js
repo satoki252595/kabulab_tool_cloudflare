@@ -29,5 +29,22 @@ export default tseslint.config(
       "**/drizzle/",
       "coverage/",
     ],
+  },
+  // 007 のブラウザ単一ファイルだけ最小宣言 (他 UI の監査はしない)。
+  // 正当なブラウザ global の no-undef を解消するための環境宣言であり、
+  // ルールの無効化・ignore 追加ではない。
+  {
+    files: ["public/vwap-analysis/app.js"],
+    languageOptions: {
+      globals: {
+        document: "readonly",
+        fetch: "readonly",
+        LightweightCharts: "readonly",
+        requestAnimationFrame: "readonly",
+        ResizeObserver: "readonly",
+        setTimeout: "readonly",
+        window: "readonly",
+      },
+    },
   }
 );

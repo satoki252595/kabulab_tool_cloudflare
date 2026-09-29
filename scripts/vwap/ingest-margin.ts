@@ -1,68 +1,162 @@
-import "dotenv/config";
-// JPX週次PDF(銘柄別信用取引週末残高)を解析→ R2 margin/{week}.json + margin/weeks.json
-// ルール6: 物理ファイルの一次取得物なので PDF 実体を Notion へ冪等記録する。
-// 実行: npx tsx scripts/vwap/ingest-margin.ts [--week=YYYYMMDD]
-//   --week: 指定週の PDF を一覧から取得する (欠落週の手動補修用。一覧に無ければ
-//     throw し、最新週で代用しない)。
+// JPX 信用残高 (日次 mtall PDF) → Notion 一次データ保管 → R2 保存。
+// 週次版は公表廃止のため通常取込では使わない (旧 R2 オブジェクトは残すが読まない)。
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
-  fetchMargin,
-  marginArchiveInput,
-  validateMarginData,
-  weeksMissing,
+  listPageFiles,
+  recordPrimaryData,
+} from "../../src/shared/notion-archive/index.js";
+import {
+  dailyMarginArchiveInput,
+  fetchDailyMargin,
 } from "../../services/vwap-analysis/lib/margin.js";
-import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
+import { validateDailyMarginSnapshot } from "../../services/vwap-analysis/lib/margin-daily.js";
 import { r2Get, r2Put } from "./lib/r2.js";
 
-/**
- * `--week=YYYYMMDD` を解析する純関数。未指定なら undefined (最新週)。
- * 形式が違えば throw する (推測でその場をしのがない — ルール2)。
- */
-export function parseWeekArg(argv: readonly string[]): string | undefined {
-  const prefix = "--week=";
-  const a = argv.find((x) => x.startsWith(prefix));
-  if (!a) return undefined;
-  const week = a.slice(prefix.length);
-  if (!/^\d{8}$/.test(week)) {
-    throw new Error(`--week: 形式が不正です (YYYYMMDD): ${week}`);
+/** `--date=YYYYMMDD` (基準日) をパースする純関数。未指定なら undefined (最新)。 */
+export function parseDateArg(argv: readonly string[]): string | undefined {
+  const arg = argv.find((a) => a.startsWith("--date="));
+  if (arg === undefined) return undefined;
+  const value = arg.slice("--date=".length);
+  if (!/^\d{8}$/.test(value)) {
+    throw new Error(`margin --date の形式が不正です (YYYYMMDD): ${value}`);
   }
-  return week;
+  return value;
 }
 
 /**
- * 週次信用残を 1 週分取り込む。順序は「検証 → 原本保管 → R2 PUT」の固定。
- * 原本 (Notion 一次データ保管) を先にし、R2 (派生 JSON) は後にする —
- * 保管に失敗したら何も保存せず終える (R2 だけ残る部分保存を作らない)。
- * 派生は原本から再生成できるが、逆はできない (7/3・7/10 の実例)。
+ * 基準日リスト (`margin/dates.json`) へ今回分を追加する純関数。
+ * 形式不正の日付が混ざっていたら throw する (黙って落とさない)。
  */
+export function mergeDailyMarginDates(saved: readonly string[], current: string): string[] {
+  const fmt = /^\d{4}-\d{2}-\d{2}$/;
+  if (!fmt.test(current)) throw new Error(`margin 基準日の形式が不正です (YYYY-MM-DD): ${current}`);
+  for (const d of saved) {
+    if (!fmt.test(d)) throw new Error(`margin dates.json の日付形式が不正です (YYYY-MM-DD): ${d}`);
+  }
+  return [...new Set([...saved, current])].sort();
+}
+
+/**
+ * 保管済み PDF 実体の fullDL 検証 (first/再入共通)。
+ * 既存 shared (listPageFiles) を reuse し、Files 添付が今回期待の 1 件
+ * (Notion-hosted・同名) と exact 一致することを要求してから実体を落とし、
+ * バイト数・SHA256 が今回取得分と一致しなければ throw する。
+ * 再入時はこの検証が安全 skip の根拠になる (無限 force/reupload はしない)。
+ * 過去に metadata-only で残った保管もここで STOP する (添付なし)。
+ * 複数添付・外部リンク・不正添付は STOP する (先頭 1 件だけ見て通さない)。
+ */
+export async function verifyCustodyEntity(
+  pageId: string,
+  filename: string,
+  expected: Uint8Array,
+  expectedSha256: string
+): Promise<void> {
+  const refs = await listPageFiles(pageId, "Files");
+  if (refs.length !== 1) {
+    throw new Error(
+      `margin custody 添付数が異常です: page=${pageId} の Files が ${refs.length} 件 (1 件であるべき) のため STOP`
+    );
+  }
+  const ref = refs[0] as { name: string; url: string; kind: "file" | "external" };
+  if (ref.kind !== "file") {
+    throw new Error(`margin custody 外部添付のため STOP します: page=${pageId} name=${ref.name}`);
+  }
+  if (ref.name !== filename) {
+    throw new Error(`margin custody 添付不一致: 期待=${filename} 実際=${ref.name} (page=${pageId})`);
+  }
+  const buf = await (await fetch(ref.url)).arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  if (bytes.byteLength !== expected.byteLength) {
+    throw new Error(
+      `margin custody サイズ不一致: 期待=${expected.byteLength} 実際=${bytes.byteLength} (page=${pageId})`
+    );
+  }
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  if (sha !== expectedSha256) {
+    throw new Error(`margin custody SHA 不一致: 期待=${expectedSha256} 実際=${sha} (page=${pageId})`);
+  }
+}
+
+/**
+ * PUT 計画の純関数。同値スナップショット + 同値 index は PUT0
+ * (祝日の同原本再入)。部分一致は差分だけ PUT する。
+ */
+export function planDailyMarginPuts(
+  existingSnapshot: string | null,
+  snapshotJson: string,
+  saved: readonly string[],
+  merged: readonly string[]
+): { putSnapshot: boolean; putDates: boolean } {
+  return {
+    putSnapshot: existingSnapshot !== snapshotJson,
+    putDates: JSON.stringify(saved) !== JSON.stringify(merged),
+  };
+}
+
 export async function main(): Promise<void> {
-  const requestedWeek = parseWeekArg(process.argv);
-  const data = await fetchMargin(requestedWeek);
-  validateMarginData(data);
-  const { week, rows } = data;
-  // 週一覧の読取・検証も全 PUT より前 (壊れた一覧で半端な PUT をしない)。
-  const wl = await r2Get("margin/weeks.json");
-  const weeks: string[] = wl ? JSON.parse(wl) : [];
-  // 最新のみ取得のため土曜 job を落とした週は永久に飛ばされる (7/3・7/10 の実例)。
-  // 欠落は推測補完せず、今回の出力に明示して運用者に見せる。
-  const missingWeeks = weeksMissing(weeks, week);
-  await recordPrimaryData(marginArchiveInput(data));
-  await r2Put(`margin/${week}.json`, JSON.stringify({ week, rows }));
-  if (!weeks.includes(week)) weeks.push(week);
-  weeks.sort();
-  await r2Put("margin/weeks.json", JSON.stringify(weeks));
-  if (missingWeeks.length > 0) {
-    console.error(`[margin] 欠落週あり (--week で個別補修可能): ${missingWeeks.join(", ")}`);
+  const requested = parseDateArg(process.argv.slice(2));
+  const data = await fetchDailyMargin(requested);
+  // 全 PUT (R2) より前に検証する — 保管失敗時の部分保存を防ぐため。
+  validateDailyMarginSnapshot(data.snapshot);
+  const basis = data.snapshot.basisDate;
+
+  // dates.json を snapshot 含む全 PUT より前に read/validate する。
+  const savedRaw = await r2Get("margin/dates.json");
+  const saved: unknown = savedRaw === null ? [] : JSON.parse(savedRaw);
+  if (!Array.isArray(saved)) {
+    throw new Error(`margin dates.json の形状が不正です (配列でない): ${(savedRaw ?? "").slice(0, 80)}`);
   }
-  console.info(JSON.stringify({ week, count: rows.length, requestedWeek: requestedWeek ?? null, missingWeeks }));
+  const merged = mergeDailyMarginDates(saved, basis);
+
+  const input = dailyMarginArchiveInput(data);
+  const archived = await recordPrimaryData(input);
+  // first は完全保管を要求する。metadata-only (上限超過) は STOP。
+  if (archived.fileTooLarge) {
+    throw new Error(
+      `margin custody 不完全: ${input.key} は上限超過で metadata-only のため STOP (page=${archived.pageId})`
+    );
+  }
+  await verifyCustodyEntity(
+    archived.pageId,
+    input.files[0].filename,
+    data.pdfBytes,
+    data.snapshot.rawSha256
+  );
+
+  const snapshotKey = `margin/daily/${basis}.json`;
+  const snapshotJson = JSON.stringify({ ...data.snapshot, rawPageId: archived.pageId });
+  const existingSnapshot = await r2Get(snapshotKey);
+  const { putSnapshot, putDates } = planDailyMarginPuts(existingSnapshot, snapshotJson, saved, merged);
+  if (!putSnapshot && !putDates) {
+    console.info(
+      `margin daily ingest: basis=${basis} 同値再入のため PUT0 (rows=${data.snapshot.rows.length} page=${archived.pageId})`
+    );
+    return;
+  }
+  if (putSnapshot) {
+    await r2Put(snapshotKey, snapshotJson);
+    const readback = await r2Get(snapshotKey);
+    if (readback !== snapshotJson) {
+      throw new Error(`margin R2 readback 不一致: ${snapshotKey}`);
+    }
+  }
+  if (putDates) {
+    const datesJson = JSON.stringify(merged);
+    await r2Put("margin/dates.json", datesJson);
+    const datesReadback = await r2Get("margin/dates.json");
+    if (datesReadback !== datesJson) {
+      throw new Error("margin dates.json readback 不一致");
+    }
+  }
+  console.info(
+    `margin daily ingest: basis=${basis} pub=${data.snapshot.publicationDate} rows=${data.snapshot.rows.length} page=${archived.pageId}`
+  );
 }
 
-// CLI として直接実行された場合のみ main() を走らせる (import だけでは走らない —
-// テストが parseWeekArg を安全に import できるようにするためのガード。
-// scripts/moneyflow/ingest.ts と同方式)。
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main().catch((e) => {
-    console.error("[margin] 致命的エラー:", e);
+    console.error(e);
     process.exit(1);
   });
 }
