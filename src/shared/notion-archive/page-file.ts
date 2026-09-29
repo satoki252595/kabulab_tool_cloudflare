@@ -14,6 +14,11 @@ export interface PageFileRef {
   name: string;
   /** 現在の signed URL (~1h 有効。即 302 する用) */
   url: string;
+  /**
+   * Notion-hosted (`file_upload` 由来) か外部リンクか。
+   * `file` 以外は `external` 扱い (fail-closed: 保管検証は hosted を要求する)。
+   */
+  kind: "file" | "external";
 }
 
 interface PagePropertiesResponse {
@@ -52,14 +57,15 @@ export async function fetchPageFileUrl(
   const f = files[0];
   const url = f.file?.url ?? f.external?.url;
   if (!url) return null;
-  return { name: f.name, url };
+  return { name: f.name, url, kind: f.type === "file" ? "file" : "external" };
 }
 
 /**
  * 指定ページの指定 files プロパティから全ファイルを取得する。
  * 複数添付 (一次データ保管の snapshot+証拠 3 件等) の実ダウンロード検証用。
  * files プロパティ自体が無ければ空配列 (捏造しない・ルール1)。
- * URL の無いエントリは含めない (欠損を黙って埋めない・ルール2)。
+ * 不正エントリ (種別・名前・URL・構造の欠損) は黙って落とさず STOP する
+ * (ルール2。valid1+malformed1 を refs1 に縮めて件数検査を誤通過させない)。
  */
 export async function listPageFiles(
   pageId: string,
@@ -72,10 +78,22 @@ export async function listPageFiles(
   const prop = page.properties?.[propertyName];
   if (!prop || prop.type !== "files") return [];
   const out: PageFileRef[] = [];
-  for (const f of prop.files ?? []) {
-    const url = f.file?.url ?? f.external?.url;
-    if (!url) continue;
-    out.push({ name: f.name, url });
+  for (const [i, f] of (prop.files ?? []).entries()) {
+    const where = `page=${pageId} files[${i}]`;
+    if (typeof f.name !== "string" || f.name.length === 0) {
+      throw new Error(`Notion Files 添付の名前が不正です (${where}): 欠損のため STOP`);
+    }
+    if (f.type !== "file" && f.type !== "external") {
+      throw new Error(
+        `Notion Files 添付の種別が未知です (${where} name=${f.name} type=${String(f.type)}): 欠損のため STOP`
+      );
+    }
+    // 同一要素の対応 branch だけ読む (file↔external の欄混ぜをしない)。
+    const url = f.type === "file" ? f.file?.url : f.external?.url;
+    if (typeof url !== "string" || url.length === 0) {
+      throw new Error(`Notion Files 添付に URL がありません (${where} name=${f.name}): 欠損のため STOP`);
+    }
+    out.push({ name: f.name, url, kind: f.type });
   }
   return out;
 }

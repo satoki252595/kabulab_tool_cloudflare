@@ -505,15 +505,22 @@ Yahoo シンボルの対応は D1 `jss_index_symbols` が持つ（`nkvi` の Yah
 
 > なお、この変更後も payload は 5 フィールド → 13 フィールドに増え、`n=260` 指定時のレスポンスは約2.6倍になる。制度・一般の内訳8列は後方互換拡張として許容するが、007 側の帯域増は認識しておくこと。
 
-**2026-09-28 の日次化への対応**: キー形式は `margin/{YYYY-MM-DD}.json` のままで、`week` に**営業日**を入れる。`weeks.json` にも営業日を追記する。意味が「週」から「基準日」に変わる事実は新設の `margin/index.json` に書く（`weeks.json` 自体は形を変えない）。
+**2026-09-28 の日次化 (確定・互換なし)**: 週次 PDF の公表廃止に伴い、日次様式
+(`YYYYMMDD_mtall.pdf`) へ直接切り替えた。暫定の `index.json`/`weeks.json` 互換案は
+採用しない (旧互換・移行なしの user 指示)。
+- R2: `margin/daily/{基準日}.json` (日次スナップショット全文) + `margin/dates.json`
+  (営業日リスト)。旧 `margin/{週}.json`・`weeks.json` は残すが通常経路は読まない。
+- スナップショット: `{format, basisDate, publicationDate, sourceUrl, rawSha256,
+  rawPageId, rows, totals}`。行は原文の `sourceCode/name` + 普通株ティッカー
+  (`ordinaryTicker|null`) + 株数/金額の 14 セル (12 数値系+2 率系。`sell/buy/
+  neg/std × 残高/前日比 + 上場比`)。`name`/`isin` は原文にある場合のみ保持する
+  (週次時代の「rows に入れない」方針は日次では適用しない — 全明細 typed 保存)。
+- 検証: 一般+制度=総計 (全行 exact)、小計=分類=総合計、件数=総合計、明細残高和=
+  総合計。明細の前日比和は突合しない (観測事実のみ。`margin-daily.ts` 注記参照)。
+- API/UI: `/api/margin?code=&n=` は日次 schema (`dates[]` + 行全文 + 除外日) を
+  返す。`code` は 4 文字ティッカーか 5 文字原文コード。価格 join は基準日。
 
-```json
-{"schema":2,"entries":[
-  {"date":"2026-09-25","kind":"weekly","source":"JPX","rows":4253,"key":"margin/2026-09-25.json"},
-  {"date":"2026-09-28","kind":"daily","source":"JPX","rows":4251,"key":"margin/2026-09-28.json"}]}
-```
-
-**この `margin/` は正本ではなく期限付き互換シム（R5 例外1）**。廃止条件: (1) 007 の `/api/margin` を `jp-stock-supply` の per-code 読みに変更、(2) `株ラボ-Youtube/margin.py` を per-code に変更（現在は `weeks.json` を読まず `^margin/(\d{4}-\d{2}-\d{2})\.json$` でキー名を直接列挙している）。両方が済んだ時点で新規書込を停止する（既存オブジェクトは削除しない）。
+**この `margin/` は正本ではなく期限付き互換シム（R5 例外1）**。廃止条件: (1) 007 の `/api/margin` を `jp-stock-supply` の per-code 読みに変更、(2) `株ラボ-Youtube/margin.py` を per-code に変更（本リポジトリ外。旧キー `^margin/(\d{4}-\d{2}-\d{2})\.json$` の直接列挙だったため、新キーでは読めない。per-code 化が必要）。両方が済んだ時点で新規書込を停止する（既存オブジェクトは削除しない）。
 
 #### 4.5 `_schema/{prefix}.json` — 契約の自己記述
 

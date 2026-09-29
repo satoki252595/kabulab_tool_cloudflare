@@ -9,7 +9,7 @@
 #
 # ⚠️ 実行時間/コスト: 全 ~4,445 銘柄を回す。**CONC=5 並列**(下の env)で 1パス ~30分、
 # daily+intra ~1h(旧 CONC=1 は ~5h で timeout 接近・月数千分だった)。日足+5分足 cron は
-# **週3(月/水/金)** なので概算 ~1h × 週3 ≈ 月 ~800 分 + margin。stock-sync/catchup を足しても
+# **週3(月/水/金)** なので概算 ~1h × 週3 ≈ 月 ~800 分 + margin 日次 (~1分×平日20 ≈ 月 ~20分)。stock-sync/catchup を足しても
 # 実行時間の目安: 差分時は数十分、バックフィル時は 2-3h 域 (timeout 300 分)。Yahoo は YAHOO_PROXY_BASE 経由 + MAX_RL ガードで
 # 並列でも 429 は抑制(stock-sync が同 CONC=5 で実証済み)。実測は run の所要時間で監視すること。
 #
@@ -28,7 +28,9 @@ on:
     # 月/水/金 08:00 UTC (17:00 JST・東証引け後): 日足10年 + 5分足。Actions 分節約のため週5→週3に間引き。
     # 5分足取込は毎回 range=5d で取得しマージするので、最大2営業日のギャップは次回が回収=取りこぼし無し。
     - cron: "0 8 * * 1,3,5"
-    - cron: "0 9 * * 6" # 土 09:00 UTC: 信用残高(週次)
+    # 平日 08:00 UTC (17:00 JST): 信用残高(日次。JPX 16:00 JST 公表後)。
+    # 祝日は公表が無いため前営業日分を冪等に再 PUT するだけ (キー同一・追記なし)。
+    - cron: "0 8 * * 1-5" # 信用残高(日次)
   workflow_dispatch:
     inputs:
       target:
@@ -120,10 +122,10 @@ jobs:
           INTRA_RANGE: ${{ github.event.inputs.intra_range }}
         run: pnpm ingest:vwap-intra
 
-      # 信用残高 週次 (土 cron または dispatch=margin/all)
-      - name: VWAP margin (weekly) → R2
+      # 信用残高 日次 (平日 cron または dispatch=margin/all)
+      - name: VWAP margin (daily) → R2
         if: >-
-          (github.event_name == 'schedule' && github.event.schedule == '0 9 * * 6') ||
+          (github.event_name == 'schedule' && github.event.schedule == '0 8 * * 1-5') ||
           (github.event_name == 'workflow_dispatch' &&
             (github.event.inputs.target == 'margin' || github.event.inputs.target == 'all'))
         run: pnpm ingest:vwap-margin
