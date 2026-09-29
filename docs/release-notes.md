@@ -9,9 +9,9 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-09-29
 
-### 変更 (unreleased — PR 後に番号追記)
-- **007 信用残日次化**: JPX 銘柄別信用取引残高の日次様式へ直接切替 (旧週次互換なし)。R2 `margin/daily/{基準日}.json` + `margin/dates.json` (`--date=YYYYMMDD` ingest、`?code=&n=` API は日次 schema)。週次オブジェクト/コードは残すが通常経路は読まない。
-- **005 shared catalog**: 投資家別売買 inner weekly を 4 キー (証券自己・法人→事業/その他法人・信託銀行) へ細分化し共有キー契約へ。
+### 変更 (unreleased — #182)
+- **007 信用残日次化**: JPX 銘柄別信用取引残高の日次様式へ直接切替 (旧週次互換なし)。R2 `margin/daily/{基準日}.json` + `margin/dates.json` (`--date=YYYYMMDD` ingest、`?code=&n=` API は日次 schema)。週次オブジェクト/コードは残すが通常経路は読まない (#182)。
+- **005 shared catalog**: 投資家別売買 inner weekly を 4 キー (証券自己・法人→事業/その他法人・信託銀行) へ細分化し共有キー契約へ (#182)。
 
 ### 変更
 - 株式日次syncの完了・例外どちらの終了時も失敗明細バッチ (全件・切詰なし+件数/取引日/分類/元例外) を一次保管してから return/throw するよう修正 (CLI の 1% throw の前に物理保管あり)。保管失敗は非0終了。CLI の 20 グループ表示は要約として残し保管キーを指す (#180)。データ変更なし。
