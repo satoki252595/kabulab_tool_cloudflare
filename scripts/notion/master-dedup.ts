@@ -556,12 +556,27 @@ export function sha256HexBytes(bytes: Uint8Array): string {
  * Notion の返却形状は安定しているため厳密比較し、差があれば止める。
  */
 /**
- * Notion Files プロパティの安定同一性への正規化 (純粋)。
- * hosted (`type: "file"`) の署名 URL は短期認証情報 (query=署名・期限)
- * のため resource (host+path) のみで比べ、query と expiry_time を捨てる。
- * rotation (同 object の再署名) だけを同一判定する。
- * external の URL は利用者管理の安定値として全体比較する
- * (無差別 strip 禁止)。name/type の不一致・未知形状は fail closed。
+ * AWS SigV4 の query params (Notion hosted 署名 URL の rotation 部分)。
+ * これだけを除去し、非署名 query (versionId 等) は残して厳密比較する。
+ */
+const NOTION_SIGNED_URL_PARAMS: ReadonlySet<string> = new Set([
+  "X-Amz-Algorithm",
+  "X-Amz-Content-Sha256",
+  "X-Amz-Credential",
+  "X-Amz-Date",
+  "X-Amz-Expires",
+  "X-Amz-Security-Token",
+  "X-Amz-Signature",
+  "X-Amz-SignedHeaders",
+]);
+
+/**
+ * Notion Files プロパティの rotation 正規化 (純粋)。
+ * 元構造の clone を保ち、hosted file.url の既知署名 query と
+ * file.expiry_time だけを除去する。非署名 query (versionId 等)・
+ * name/type・未知 field は厳密比較 (差があれば不一致)。
+ * external の URL は全体比較 (無差別 strip 禁止)。
+ * URL 解析不能・未知形状は fail closed (ok:false → 不一致)。
  * 実 bytes の同一性は capture proof (files inventory の bytes SHA) が
  * 全呼出側で併せて検証する (props 比較と proof の二重関門)。
  */
@@ -570,34 +585,37 @@ function normalizeFilePropForCompare(prop: unknown): { ok: true; norm: unknown }
   if (!p || typeof p !== "object" || p.type !== "files" || !Array.isArray(p.files)) {
     return { ok: false };
   }
-  const norm: Array<{ name: string; kind: string; resource: string }> = [];
+  const normFiles: unknown[] = [];
   for (const f of p.files) {
     const e = f as {
-      name?: unknown;
       type?: unknown;
-      file?: { url?: unknown };
-      external?: { url?: unknown };
+      file?: unknown;
+      external?: unknown;
     };
-    if (!e || typeof e !== "object" || typeof e.name !== "string" || e.name === "") {
-      return { ok: false };
-    }
+    if (!e || typeof e !== "object") return { ok: false };
     if (e.type === "file") {
-      const url = e.file?.url;
-      if (typeof url !== "string") return { ok: false };
-      const resource = url.split("?")[0];
-      if (!resource.startsWith("https://") || resource.length <= "https://".length) {
+      const file = e.file as { url?: unknown; expiry_time?: unknown } | undefined;
+      if (!file || typeof file !== "object" || typeof file.url !== "string") {
         return { ok: false };
       }
-      norm.push({ name: e.name, kind: "hosted", resource });
+      let resource: string;
+      try {
+        const u = new URL(file.url);
+        for (const k of NOTION_SIGNED_URL_PARAMS) u.searchParams.delete(k);
+        resource = u.toString();
+      } catch {
+        return { ok: false };
+      }
+      const { expiry_time: _drop, ...restFile } = file as Record<string, unknown>;
+      void _drop;
+      normFiles.push({ ...(e as Record<string, unknown>), file: { ...restFile, url: resource } });
     } else if (e.type === "external") {
-      const url = e.external?.url;
-      if (typeof url !== "string" || url === "") return { ok: false };
-      norm.push({ name: e.name, kind: "external", resource: url });
+      normFiles.push(e);
     } else {
       return { ok: false };
     }
   }
-  return { ok: true, norm };
+  return { ok: true, norm: { ...(p as Record<string, unknown>), files: normFiles } };
 }
 
 /**

@@ -662,6 +662,37 @@ describe("master-dedup (純粋関数)", () => {
       expect(propertiesEqualExcept("other", unknown, unknown)).toBe(false);
     });
 
+    it("非署名 query (versionId) の差は除去せず不一致にする", () => {
+      const f = (versionId: string, sig: string) => ({
+        name: "a.zip",
+        type: "file",
+        file: {
+          url: `https://prod-files-secure.invalid/key/a.zip?versionId=${versionId}&X-Amz-Signature=${sig}`,
+          expiry_time: sig,
+        },
+      });
+      const a = { ファイル: { type: "files", files: [f("v1", "s1")] } };
+      const rotatedSameVersion = { ファイル: { type: "files", files: [f("v1", "s2")] } };
+      const diffVersion = { ファイル: { type: "files", files: [f("v2", "s2")] } };
+      expect(propertiesEqualExcept("other", a, rotatedSameVersion)).toBe(true);
+      expect(propertiesEqualExcept("other", a, diffVersion)).toBe(false);
+    });
+
+    it("未知 field の差は drop せず不一致にする", () => {
+      const f = (flag: boolean) => ({
+        name: "a.zip",
+        type: "file",
+        file: {
+          url: "https://prod-files-secure.invalid/key/a.zip?X-Amz-Signature=s",
+          expiry_time: "t",
+          future_flag: flag,
+        },
+      });
+      const a = { ファイル: { type: "files", files: [f(true)] } };
+      const b = { ファイル: { type: "files", files: [f(false)] } };
+      expect(propertiesEqualExcept("other", a, b)).toBe(false);
+    });
+
     it("rotation と同時に他 props が変われば不一致にする", () => {
       const a = {
         タイトル: { type: "title", title: [{ plain_text: "t" }] },
