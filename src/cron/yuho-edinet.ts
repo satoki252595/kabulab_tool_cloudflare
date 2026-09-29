@@ -103,6 +103,13 @@ export async function runYuhoEdinetCatchup(
 ): Promise<YuhoEdinetResult> {
   const startedAt = Date.now();
 
+  // 進捗 checkpoint (1/5): 各 await 直前に入口だけ出す。前段の完了は次の
+  // checkpoint (または末尾の完了 summary) の到達で判る。日付・件数・docID
+  // のみで URL/キー/ヘッダ/本文は出さない。retry/timeout/業務処理は不変。
+  console.info(
+    `[yuho-edinet] 開始: shard=${shard ? `${shard.part}/${shard.of}` : "-"} window=${WINDOW_DAYS}日`
+  );
+
   // 取込の母集団。変更前 (core_stocks の全行) から、非普通株と、区分が NULL の active 行
   // だけを除く。is_active=0 の会社 (上場廃止・地域取引所の単独上場) の有報は取り込み続ける
   // (理由は src/shared/db/active-equity.ts の disclosureIngestCondition)。
@@ -132,6 +139,9 @@ export async function runYuhoEdinetCatchup(
     d.setUTCDate(d.getUTCDate() - i);
     const date = d.toISOString().slice(0, 10);
     scannedDays++;
+
+    // 進捗 checkpoint (2/5): 日ごとの一覧取得の入口。
+    console.info(`[yuho-edinet] list 開始 ${date}`);
 
     let list;
     try {
@@ -163,6 +173,10 @@ export async function runYuhoEdinetCatchup(
 
     // type 保管完成は日ごとに一括取得して使い回す (通ごとの Notion 照会は
     // 60 日 FIFO の 300 秒予算を食い潰す)。ingestDocument へ渡し、内部照会を省く。
+    // 進捗 checkpoint (3/5): 対象ありの日の custody 照会の入口 (日付+件数)。
+    if (targets.length > 0) {
+      console.info(`[yuho-edinet] custody 照会 ${date} ${targets.length}件`);
+    }
     const custodyByDoc =
       targets.length > 0
         ? await checkDocsCustody(
@@ -188,6 +202,8 @@ export async function runYuhoEdinetCatchup(
         // ルール6: 日次キャッチアップでも有報の物理 ZIP を Notion へ記録。
         // Notion 通信の分 1 件あたりの実時間は伸びるが TIME_BUDGET_MS で必ず
         // 打ち切られ、打ち切った残りは翌日以降が docId/Notion 冪等で回収する。
+        // 進捗 checkpoint (4/5): 通ごとの取込の入口 (日付+docID)。
+        console.info(`[yuho-edinet] ingest 開始 ${date} docID=${doc.docID}`);
         const r = await ingestDocument(db, {
           stockId,
           stockCode,
@@ -224,6 +240,8 @@ export async function runYuhoEdinetCatchup(
   // 拾う。手動バックフィル直後は次回定時まで画面が古いまま)。
   let projectionStocks = 0;
   if (!shard) {
+    // 進捗 checkpoint (5/5): L2 投影再生成の入口。完了は末尾 summary の 投影= で判る。
+    console.info(`[yuho-edinet] 投影再生成 開始`);
     const proj = await rebuildYuhoGrowthProjection(db);
     projectionStocks = proj.stocks;
   }

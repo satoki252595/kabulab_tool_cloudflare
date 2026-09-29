@@ -183,3 +183,49 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     expect(catchupHttpStatus({ listErrors: [], ingestErrors: ["S1007203"] })).toBe(500);
   });
 });
+
+describe("進捗 checkpoint: 次回標準実行の段階特定 (#187)", () => {
+  it("5 checkpoint が順序どおり出て秘密 (URL/キー) を含まない", async () => {
+    vi.mocked(listDocuments)
+      .mockResolvedValueOnce({ results: [annualDoc("7203")] } as never)
+      .mockResolvedValue({ results: [] } as never);
+    vi.mocked(ingestDocument).mockResolvedValue({ outcome: "ingested" } as never);
+
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    // mockRestore() は記録 calls も消すため、復元前に抜き出す。
+    let lines: string[] = [];
+    try {
+      const running = runYuhoEdinetCatchup(db as unknown as YuhoDatabase);
+      await vi.runAllTimersAsync();
+      await running;
+      lines = info.mock.calls.map((c) => String(c[0]));
+    } finally {
+      vi.useRealTimers();
+      info.mockRestore();
+      err.mockRestore();
+    }
+
+    // checkpoint・summary に URL・キー・認証ヘッダが出ない。
+    for (const line of lines) {
+      expect(line).not.toMatch(/Subscription-Key|Bearer|https?:\/\//i);
+    }
+    // 入口の到達順 = 開始 → list → custody → ingest → 投影 → 完了。
+    // 前段の完了は次の checkpoint (または完了 summary) で判る。
+    const at = (re: RegExp): number => {
+      const i = lines.findIndex((l) => re.test(l));
+      expect(i).toBeGreaterThanOrEqual(0);
+      return i;
+    };
+    const order = [
+      at(/\[yuho-edinet\] 開始: shard=/),
+      at(/\[yuho-edinet\] list 開始 \d{4}-\d{2}-\d{2}/),
+      at(/\[yuho-edinet\] custody 照会 \d{4}-\d{2}-\d{2} 1件/),
+      at(/\[yuho-edinet\] ingest 開始 \d{4}-\d{2}-\d{2} docID=S1007203/),
+      at(/\[yuho-edinet\] 投影再生成 開始/),
+      at(/\[yuho-edinet\] 完了: shard=/),
+    ];
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+});
