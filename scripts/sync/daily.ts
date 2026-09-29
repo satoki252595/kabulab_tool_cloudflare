@@ -70,6 +70,10 @@ async function main(): Promise<void> {
 
   if (result.failures.length > 0) {
     printFailureSummary(result.failures);
+    console.warn(
+      `[sync-daily] 失敗明細の一次保管: ${result.batchKey} ` +
+        `(全${result.failures.length}件・切詰なし。上は人間可読の要約)`
+    );
   }
 
   if (isDailySyncIncomplete(result)) {

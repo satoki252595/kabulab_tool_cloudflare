@@ -74,6 +74,13 @@ export const sharedEnv = {
     return `${server}/${repo}/actions/runs/${runId}`;
   },
   /**
+   * この実行の Actions run ID と attempt (どちらも GitHub 自動注入)。
+   * 株価バッチ保管の run 一意キーに使う。ローカル実行では未設定 =
+   * `undefined` (呼び出し側が run 開始時刻で代替する。throw しない)。
+   */
+  GITHUB_RUN_ID: () => optional("GITHUB_RUN_ID"),
+  GITHUB_RUN_ATTEMPT: () => optional("GITHUB_RUN_ATTEMPT"),
+  /**
    * GitHub Actions の step 出力ファイル。ローカル実行では未設定 =
    * `undefined` (呼び出し側が出力を諦める。throw しない)。
    */

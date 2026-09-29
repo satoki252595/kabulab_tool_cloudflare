@@ -52,6 +52,7 @@ import { sharedEnv } from "../shared/env.js";
 import {
   ensurePriceSyncDb,
   recordPriceSyncLog,
+  recordPrimaryData,
   type PriceSyncStatus,
 } from "../shared/notion-archive/index.js";
 
@@ -120,6 +121,12 @@ export interface DailySyncResult {
    * (「株価の日次同期」記録は推測せず状態=失敗にする — ルール2)。
    */
   tradingDate: string | null;
+  /**
+   * 失敗バッチの一次保管キー (`price-sync-batch-{runId}`)。
+   * 結果が返る = 保管済み (保管失敗は結果を返さず throw する)。
+   * CLI の 20 グループ表示は要約。このキーの JSON が切詰なし正本。
+   */
+  batchKey: string;
 }
 
 /** 銘柄ごとの処理結果 (in-memory) */
@@ -717,7 +724,11 @@ async function recordPriceSyncCompletion(args: {
  * 記録そのもの (Notion 書込) が失敗しても、元の例外を握りつぶさずログに残すだけに
  * とどめる (呼び出し側は必ず元の例外を rethrow する)。
  */
-async function recordPriceSyncFailureSafely(cause: unknown): Promise<void> {
+async function recordPriceSyncFailureSafely(
+  cause: unknown,
+  mode: PriceSyncBatchMode,
+  startedAtMs: number
+): Promise<void> {
   try {
     await recordPriceSyncCompletion({
       tradingDate: null,
@@ -732,6 +743,202 @@ async function recordPriceSyncFailureSafely(cause: unknown): Promise<void> {
       recordError
     );
   }
+  // 例外時も同一バッチ helper で有限保管する (件数/日付は unknown のまま
+  // null。0 件だったと偽らない)。保管自体の失敗はログに残し、元の例外を
+  // 握りつぶさない (呼び出し側が必ず元の例外を rethrow する)。
+  try {
+    const key = await archivePriceSyncBatch({
+      mode,
+      runId: priceSyncBatchRunId(startedAtMs),
+      startedAt: new Date(startedAtMs).toISOString(),
+      finishedAt: new Date().toISOString(),
+      tradingDate: null,
+      totalStocks: null,
+      successStocks: null,
+      failedStocks: null,
+      failures: [],
+      failureCollection: "aborted",
+      originalError: rootCauseMessage(cause),
+    });
+    console.info(`[sync-daily] 失敗バッチ保管 (例外時): ${key}`);
+  } catch (archiveError) {
+    console.error(
+      "[sync-daily] 失敗バッチ保管 (例外時) 自体にも失敗しました:",
+      archiveError
+    );
+  }
+}
+
+/**
+ * 失敗バッチ保管の失敗分類。実 reason 文字列からのみ導出する
+ * (原因不明を一律 genuine にしない — ルール2)。
+ */
+export type PriceSyncFailureCategory =
+  | "genuine_source_gap"
+  | "priceguard"
+  | "networkparse"
+  | "savefailure"
+  | "unknown";
+
+export function categorizeSyncFailure(error: string): PriceSyncFailureCategory {
+  if (error.includes("10倍超乖離")) return "priceguard";
+  if (error.includes("実日足が未取得")) return "genuine_source_gap";
+  if (isTransientDailySyncFailure(error)) return "networkparse";
+  if (
+    /^D1 HTTP|D1 .*error|constraint|UNIQUE|SQLITE|database .*error/i.test(
+      error
+    )
+  ) {
+    return "savefailure";
+  }
+  return "unknown";
+}
+
+export type PriceSyncBatchMode = "stocks" | "daily";
+
+export interface PriceSyncBatchInput {
+  mode: PriceSyncBatchMode;
+  runId: string;
+  startedAt: string;
+  finishedAt: string;
+  tradingDate: string | null;
+  totalStocks: number | null;
+  successStocks: number | null;
+  failedStocks: number | null;
+  /** 全件・切詰なし。例外中断時は空 + `failureCollection: "aborted"`。 */
+  failures: { code: string; error: string }[];
+  failureCollection: "complete" | "aborted";
+  originalError: string | null;
+}
+
+/** バッチ冪等キー。run 一意 (同一 invocation の success/failure 二重を防ぐ)。 */
+export function priceSyncBatchKey(runId: string): string {
+  return `price-sync-batch-${runId}`;
+}
+
+let cachedBatchRunId: string | null = null;
+/**
+ * 同一 invocation で安定した run 識別子 (バッチ冪等キーの核)。
+ * Actions では runID(.attempt)、ローカルでは run 開始時刻。
+ */
+export function priceSyncBatchRunId(startedAtMs: number): string {
+  if (cachedBatchRunId === null) {
+    const id = sharedEnv.GITHUB_RUN_ID();
+    if (id === undefined) {
+      cachedBatchRunId = `local-${startedAtMs}`;
+    } else {
+      const attempt = sharedEnv.GITHUB_RUN_ATTEMPT();
+      cachedBatchRunId =
+        attempt === undefined ? id : `${id}.${attempt}`;
+    }
+  }
+  return cachedBatchRunId;
+}
+/** テスト用 seam (同一プロセスのテスト間で分離)。 */
+export function _resetBatchRunIdForTests(): void {
+  cachedBatchRunId = null;
+}
+
+/** バッチ JSON の純 builder (切詰なし)。 */
+export function buildPriceSyncBatch(input: PriceSyncBatchInput): {
+  key: string;
+  source: string;
+  fetchedAt: string;
+  metadata: Record<string, unknown>;
+  file: { filename: string; bytes: Uint8Array; contentType: string };
+} {
+  const categories: Record<PriceSyncFailureCategory, number> = {
+    genuine_source_gap: 0,
+    priceguard: 0,
+    networkparse: 0,
+    savefailure: 0,
+    unknown: 0,
+  };
+  for (const f of input.failures) {
+    categories[categorizeSyncFailure(f.error)]++;
+  }
+  const key = priceSyncBatchKey(input.runId);
+  const body = {
+    service: "stock-sync",
+    kind: "price-sync-batch",
+    key,
+    runId: input.runId,
+    mode: input.mode,
+    tradingDate: input.tradingDate,
+    startedAt: input.startedAt,
+    finishedAt: input.finishedAt,
+    stats: {
+      totalStocks: input.totalStocks,
+      successStocks: input.successStocks,
+      failedStocks: input.failedStocks,
+    },
+    failureCollection: input.failureCollection,
+    categories,
+    failures: input.failures,
+    originalError: input.originalError,
+    provenance: {
+      producer: "runDailySync (Yahoo Chart/QuoteSummary→D1 REST)",
+      universe: "core_stocks active+equity (loadDailyTargets)",
+      note: "CLI の 20 グループ表示は人間可読の要約。この JSON が切詰なし正本。",
+    },
+  };
+  return {
+    key,
+    source: "stock-sync runDailySync (Yahoo→D1)",
+    fetchedAt: input.finishedAt,
+    metadata: {
+      mode: input.mode,
+      runId: input.runId,
+      tradingDate: input.tradingDate,
+      totalStocks: input.totalStocks,
+      successStocks: input.successStocks,
+      failedStocks: input.failedStocks,
+      failureCollection: input.failureCollection,
+      categories,
+    },
+    file: {
+      filename: `${key}.json`,
+      bytes: new TextEncoder().encode(JSON.stringify(body)),
+      contentType: "application/json",
+    },
+  };
+}
+
+/**
+ * 失敗バッチ 1 件を一次保管する。`recorder` はテスト用 seam。
+ *
+ * - 成功は `recorded` + `fileTooLarge: false` のときだけ。
+ *   `skipped_existing` は先行記録が metadata-only (fileTooLarge 頁) の
+ *   可能性があり物理証拠にならないため受け入れず throw する
+ *   (完了 fileTooLarge → 例外同キー skip を保管成功と偽らない)。
+ *   キーは run 一意のまま (二重記録自体は `force: false` で防ぐ)。
+ * - recorder の throw も握りつぶさず throw (fail-closed)。
+ *   完了パスでは結果を返さず CLI が非0終了する。例外パスでは呼び出し側が
+ *   元の例外を rethrow する (非0は維持・保管完了も主張しない)。
+ */
+export async function archivePriceSyncBatch(
+  input: PriceSyncBatchInput,
+  recorder: typeof recordPrimaryData = recordPrimaryData
+): Promise<string> {
+  const batch = buildPriceSyncBatch(input);
+  const res = await recorder({
+    service: "stock-sync",
+    key: batch.key,
+    source: batch.source,
+    fetchedAt: batch.fetchedAt,
+    metadata: batch.metadata,
+    files: [batch.file],
+    force: false,
+  });
+  if (res.fileTooLarge) {
+    throw new Error(`失敗バッチ保管が不完全 (fileTooLarge): ${batch.key}`);
+  }
+  if (res.outcome !== "recorded") {
+    throw new Error(
+      `失敗バッチ保管が不完全 (outcome=${res.outcome}): ${batch.key}`
+    );
+  }
+  return batch.key;
 }
 
 /**
@@ -742,10 +949,12 @@ async function recordPriceSyncFailureSafely(cause: unknown): Promise<void> {
 export async function runDailySync(
   db: Db, options: { stocksOnly?: boolean } = {},
 ): Promise<DailySyncResult> {
+  const startedAtMs = Date.now();
+  const mode: PriceSyncBatchMode = options.stocksOnly === true ? "stocks" : "daily";
   try {
     return await runDailySyncAndRecord(db, options.stocksOnly === true);
   } catch (e) {
-    await recordPriceSyncFailureSafely(e);
+    await recordPriceSyncFailureSafely(e, mode, startedAtMs);
     throw e;
   }
 }
@@ -1040,6 +1249,25 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
         : null,
   });
 
+  // 失敗バッチの物理保管。結果 return の前 = CLI の 1% throw の前に完了させる。
+  // 保管失敗は結果を返さず throw (例外パスへ。非0・fallback なし)。
+  const batchKey = await archivePriceSyncBatch({
+    mode: stocksOnly ? "stocks" : "daily",
+    runId: priceSyncBatchRunId(startedAt),
+    startedAt: new Date(startedAt).toISOString(),
+    finishedAt: new Date().toISOString(),
+    tradingDate,
+    totalStocks: targets.length,
+    successStocks: succeeded,
+    failedStocks: failures.length,
+    failures,
+    failureCollection: "complete",
+    originalError: null,
+  });
+  console.info(
+    `[sync-daily] 失敗バッチ保管: ${batchKey} (全${failures.length}件・切詰なし)`
+  );
+
   return {
     totalStocks: targets.length,
     successStocks: succeeded,
@@ -1048,6 +1276,7 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
     elapsedSec,
     failures,
     tradingDate,
+    batchKey,
   };
 }
 
