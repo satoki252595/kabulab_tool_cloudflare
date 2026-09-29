@@ -23,8 +23,8 @@ import { sharedEnv } from "../env.js";
 import {
   assertRawBarsSane,
   assertResponsePriceCoherent,
+  guardChartBars,
   isProvenSamePoint,
-  sanitizeBars,
 } from "./bar-sanity.js";
 import { STOCK_CODE_REGEX } from "../jpx/stock-code.js";
 
@@ -568,33 +568,13 @@ export async function fetchChart(
   // 桁の壊れたバーを取り込まない (bar-sanity.ts 参照)。
   // 1909 の 2026-09-11 は close=16,278,046,720 / volume=0（前日 3,700）で、
   // これが業種平均を汚染して 003 のトップに「機械 +2,105,009.25%」が出た。
-  const { bars: ohlcv, rejected } = sanitizeBars(rawBars);
+  // 共有 guard (修復 replay と同一判定)。棄却の warn は従来どおり出す。
+  const { bars: ohlcv, rejected } = guardChartBars(rawBars, meta.regularMarketPrice, symbol);
   if (rejected.length > 0) {
     console.warn(
       `[yahoo] ${symbol}: 帯域チェックで ${rejected.length} 本を採用しませんでした ` +
         rejected.map((r) => `${r.date}(${r.reason})`).join(" ")
     );
-  }
-
-  // 応答レベルの整合 (sanitize は先頭からの持続異常を捕まえられない)。
-  // 最新有効終値と同一応答の meta 価格が乖離 + 出来高なしなら応答全体を拒否。
-  {
-    let latestUsedClose: number | null = null;
-    let latestVolume: number | null = null;
-    for (let i = ohlcv.length - 1; i >= 0; i--) {
-      const used = ohlcv[i].adj ?? ohlcv[i].close;
-      if (used !== null) {
-        latestUsedClose = used;
-        latestVolume = ohlcv[i].volume;
-        break;
-      }
-    }
-    assertResponsePriceCoherent({
-      symbol,
-      latestUsedClose,
-      latestVolume,
-      metaPrice: meta.regularMarketPrice,
-    });
   }
 
   const price =

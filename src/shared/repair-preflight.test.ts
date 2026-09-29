@@ -6,10 +6,15 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import {
+  OHLCV_REPAIR_CHUNK_ROWS,
   buildAnnualPreflightStatement,
   buildAtrPreflightStatement,
+  buildOhlcvInsertStatement,
+  buildOhlcvNonexistencePreflightStatement,
+  buildStockIdentityPreflightStatement,
   type AnnualPreimage,
   type AtrPreimage,
+  type OhlcvInsertRow,
 } from "./repair-preflight.js";
 
 function setupAtr(): DatabaseSync {
@@ -204,5 +209,71 @@ describe("年次 preflight", () => {
     // 凍結 preimage に対して active 行は不一致 (逆方向も止める)
     db.exec("UPDATE core_stocks SET is_active = 1 WHERE id = 9");
     expect(() => runPreflight(db, frozen.sql, frozen.params)).toThrow();
+  });
+});
+
+describe("OHLCV 修復 preflight + INSERT (#163)", () => {
+  const ROWS: OhlcvInsertRow[] = [
+    { stockId: 7, code: "1380", date: "2026-09-29", open: 100, high: 110, low: 90, close: 105, volume: 1000, adj: 105 },
+    { stockId: 8, code: "1787", date: "2026-09-29", open: null, high: null, low: null, close: 200, volume: 0, adj: null },
+  ];
+
+  function setupOhlcv(): DatabaseSync {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      CREATE TABLE core_stocks (id INTEGER PRIMARY KEY, code TEXT NOT NULL, is_active INTEGER NOT NULL, instrument_type TEXT);
+      CREATE TABLE swing_daily_ohlcv (id INTEGER PRIMARY KEY AUTOINCREMENT, stock_id INTEGER NOT NULL, date TEXT NOT NULL, open REAL, high REAL, low REAL, close REAL, volume REAL, adj REAL, UNIQUE (stock_id, date));
+      INSERT INTO core_stocks VALUES (7, '1380', 1, 'equity'), (8, '1787', 1, 'equity');
+    `);
+    return db;
+  }
+
+  it("一致すれば両 preflight が通り、INSERT できる", () => {
+    const db = setupOhlcv();
+    const id = buildStockIdentityPreflightStatement(ROWS);
+    expect(Object.values(runPreflight(db, id.sql, id.params) as Record<string, unknown>)).toEqual(["null"]);
+    const nx = buildOhlcvNonexistencePreflightStatement(ROWS);
+    expect(Object.values(runPreflight(db, nx.sql, nx.params) as Record<string, unknown>)).toEqual(["null"]);
+    const ins = buildOhlcvInsertStatement(ROWS);
+    db.prepare(ins.sql).run(...(ins.params as []));
+    expect(db.prepare("SELECT COUNT(*) AS n FROM swing_daily_ohlcv").get() as { n: number }).toEqual({ n: 2 });
+    // 書込後は不存在 CAS が落ちる (再送不能・競合検知)。
+    expect(() => runPreflight(db, nx.sql, nx.params)).toThrow();
+  });
+
+  it.each([
+    ["code 付け替え", "UPDATE core_stocks SET code = '9999' WHERE id = 7"],
+    ["active 解除", "UPDATE core_stocks SET is_active = 0 WHERE id = 8"],
+    ["区分書換え", "UPDATE core_stocks SET instrument_type = 'etf' WHERE id = 7"],
+    ["銘柄行の削除", "DELETE FROM core_stocks WHERE id = 8"],
+  ])("銘柄同一性: %s は SQL エラー", (_name, mutate) => {
+    const db = setupOhlcv();
+    db.exec(mutate);
+    const s = buildStockIdentityPreflightStatement(ROWS);
+    expect(() => runPreflight(db, s.sql, s.params)).toThrow();
+  });
+
+  it("既存行 (NULL 行含む) がある対象は不存在 CAS が SQL エラー", () => {
+    const db = setupOhlcv();
+    db.exec("INSERT INTO swing_daily_ohlcv (stock_id, date, close) VALUES (7, '2026-09-29', NULL)");
+    const s = buildOhlcvNonexistencePreflightStatement(ROWS);
+    expect(() => runPreflight(db, s.sql, s.params)).toThrow();
+  });
+
+  it("bind 数は上限 100/文に収まり、13 行は作れない", () => {
+    const full: OhlcvInsertRow[] = Array.from({ length: OHLCV_REPAIR_CHUNK_ROWS }, (_, i) => ({
+      stockId: 100 + i,
+      code: `${1000 + i}`,
+      date: "2026-09-29",
+      open: 1, high: 2, low: 0.5, close: 1.5, volume: 10, adj: 1.5,
+    }));
+    expect(buildStockIdentityPreflightStatement(full).params).toHaveLength(36);
+    expect(buildOhlcvNonexistencePreflightStatement(full).params).toHaveLength(24);
+    expect(buildOhlcvInsertStatement(full).params).toHaveLength(96);
+    const over = [...full, { ...full[0], stockId: 999 }];
+    expect(() => buildStockIdentityPreflightStatement(over)).toThrow(/上限/);
+    expect(() => buildOhlcvNonexistencePreflightStatement(over)).toThrow(/上限/);
+    expect(() => buildOhlcvInsertStatement(over)).toThrow(/上限/);
+    expect(() => buildOhlcvInsertStatement([])).toThrow(/0 件/);
   });
 });

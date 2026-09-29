@@ -10,6 +10,7 @@
  * ドリフト行の除外はしない。不一致の銘柄は batch を作らず STOP する。
  */
 import type { D1BatchStatement } from "./db/d1-http-client.js";
+import { INSTRUMENT_TYPE_EQUITY } from "./jpx/instrument-type.js";
 
 /**
  * ATR 3bool 修復の full preimage。`diffStaleScreeningFlags` の入力 6 列 +
@@ -152,5 +153,90 @@ export function buildAnnualPreflightStatement(snap: AnnualPreimage): D1BatchStat
       bit(snap.isBlueChip),
       snap.revenueTrend,
     ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// OHLCV 行不存在 INSERT 修復 (#163): 銘柄同一性 + 不存在 CAS + INSERT
+// ---------------------------------------------------------------------------
+
+/** INSERT 1 行ぶん (原文のまま。調整換算なし)。 */
+export interface OhlcvInsertRow {
+  stockId: number;
+  code: string;
+  date: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+  adj: number | null;
+}
+
+/**
+ * 1 チャンクの行数上限。INSERT は 8 bind/行 (12 行で 96 bind)、
+ * preflight は 3 bind/行・2 bind/行で、いずれも D1 上限 100/文に収まる。
+ */
+export const OHLCV_REPAIR_CHUNK_ROWS = 12;
+
+function ohlcvChunkGuard(rows: readonly OhlcvInsertRow[], what: string): void {
+  if (rows.length === 0) {
+    throw new Error(`OHLCV 修復 ${what}: 行が 0 件です (呼び出し側のバグ)`);
+  }
+  if (rows.length > OHLCV_REPAIR_CHUNK_ROWS) {
+    throw new Error(
+      `OHLCV 修復 ${what}: ${rows.length} 行は上限 ${OHLCV_REPAIR_CHUNK_ROWS} を超えます (bind 上限逸脱)`
+    );
+  }
+}
+
+/**
+ * 銘柄同一性の preflight 文 (純関数)。全行の (id・code・active・equity) が
+ * 計画時と一致しなければ SQL エラーで batch 全体 rollback。bind は 3/行。
+ */
+export function buildStockIdentityPreflightStatement(rows: readonly OhlcvInsertRow[]): D1BatchStatement {
+  ohlcvChunkGuard(rows, "銘柄同一性");
+  const conds = rows.map(() => "(id = ? AND code = ? AND is_active = 1 AND instrument_type = ?)").join(" OR ");
+  const sql = [
+    "-- preflight: 修復対象の銘柄同一性が計画時と一致しなければ SQL エラーで batch 全体 rollback",
+    `SELECT json(CASE WHEN (SELECT COUNT(*) FROM core_stocks WHERE ${conds}) = ${rows.length} THEN 'null' ELSE '' END)`,
+  ].join("\n");
+  return {
+    sql,
+    params: rows.flatMap((r) => [r.stockId, r.code, INSTRUMENT_TYPE_EQUITY]),
+  };
+}
+
+/**
+ * 行不存在の preflight 文 (純関数)。対象 (stock_id, date) が 1 行でも存在
+ * すれば SQL エラーで batch 全体 rollback (INSERT と同一 batch 内の CAS)。
+ * bind は 2/行。
+ */
+export function buildOhlcvNonexistencePreflightStatement(
+  rows: readonly OhlcvInsertRow[]
+): D1BatchStatement {
+  ohlcvChunkGuard(rows, "不存在 CAS");
+  const conds = rows.map(() => "(stock_id = ? AND date = ?)").join(" OR ");
+  const sql = [
+    "-- preflight: 修復対象 (stock_id, date) が存在すれば SQL エラーで batch 全体 rollback",
+    `SELECT json(CASE WHEN (SELECT COUNT(*) FROM swing_daily_ohlcv WHERE ${conds}) = 0 THEN 'null' ELSE '' END)`,
+  ].join("\n");
+  return {
+    sql,
+    params: rows.flatMap((r) => [r.stockId, r.date]),
+  };
+}
+
+/**
+ * OHLCV 複数行 INSERT 文 (純関数)。plain INSERT (upsert しない):
+ * CAS 通過が前提で、競合はエラー→ batch rollback で全 STOP する。
+ * bind は 8/行。
+ */
+export function buildOhlcvInsertStatement(rows: readonly OhlcvInsertRow[]): D1BatchStatement {
+  ohlcvChunkGuard(rows, "INSERT");
+  const placeholders = rows.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+  return {
+    sql: `INSERT INTO swing_daily_ohlcv (stock_id, date, open, high, low, close, volume, adj) VALUES ${placeholders}`,
+    params: rows.flatMap((r) => [r.stockId, r.date, r.open, r.high, r.low, r.close, r.volume, r.adj]),
   };
 }
