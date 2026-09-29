@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- 需給 API 4経路 (REST latest/series・MCP latest/series) の `meta.attribution` をフィルタ適用後の返却データから算出 (JSF→日証金・JPX→JPX の厳密写像、空は `[]`、`personal-only` 維持)。MCP enum に `jpx_margin` を追加し説明で JSF貸借とJPX信用を区別。不正フィルタは 400/isError、未知返却データは 500/isError。データ変更なし。
 - 残存する個人利用用途文言を整理 (MCP 5 ツール説明中の用途断定を削除、moneyflow 世界指数の用途文言から Notion 個人ダッシュボード断定を削除。応答のライセンス meta・配備範囲は不変)。データ変更なし (#190)。
 - 未保管 moneyflow 経路の書込前に保管添付の完全一致（件数・名前・バイト長・SHA256）を検証し、file_too_large・不一致は観測ログを書かず停止。新規・更新ありの書込バッチは指標×期間の分割読取で全行を read-only 再検証（ページ ID + 全項目照合、重複・欠落・不一致・不正カーソルは保全停止）。データ変更なし (#188)。
 - Worker の Observability を最小設定で有効化 (呼出ログ + 既存 console ログを残す。EDINET 外向き URL の Subscription-Key のため traces は無効のまま)。EDINET 日次取込に秘密なしの進捗 checkpoint を追加し次回標準実行の段階特定を可能に (#187)。

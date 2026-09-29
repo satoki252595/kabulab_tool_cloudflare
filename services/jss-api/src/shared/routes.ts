@@ -6,6 +6,14 @@ import {
   OHLCV_CACHE_TTL_SECS,
   fetchAdjustedOhlcvCached,
 } from "./ohlcv-cache";
+import {
+  SupplyFilterError,
+  assertSeriesObject,
+  parseSupplyFilter,
+  seriesPointsArray,
+  supplySourcesFromLatest,
+  supplySourcesFromSeries,
+} from "./supply";
 import type { AnyEnv, PrivateEnv } from "./types";
 
 /** D1 の COUNT 等で 1 行だけ欲しいときの薄いヘルパ。 */
@@ -245,7 +253,15 @@ export function mountCommon(app: Hono<{ Bindings: AnyEnv }>) {
 export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
   app.get("/v1/supply/latest", async (c) => {
     const limit = parseLimit(c.req.query("limit"));
-    const dataType = c.req.query("data_type");
+    let dataType: string | undefined;
+    try {
+      dataType = parseSupplyFilter("data_type", c.req.query("data_type"));
+    } catch (e) {
+      if (e instanceof SupplyFilterError) {
+        return c.json(errorBody(e.message, "invalid_data_type"), 400);
+      }
+      throw e;
+    }
     const stmt = dataType
       ? c.env.DB.prepare(
           "SELECT code, data_type, data_date, loan_bal, stock_bal, ratio, turn_days," +
@@ -257,7 +273,10 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
             " r2_key, license_tag FROM jss_supply_latest ORDER BY code, data_type LIMIT ?",
         ).bind(limit);
     const { results } = await stmt.all<Record<string, unknown>>();
-    return c.json(envelope(results, { sources: ["日証金"], licenses: ["personal-only"] }));
+    // 出典は実際に返した行から算出する。未知 type の行は throw → 500。
+    return c.json(
+      envelope(results, { sources: supplySourcesFromLatest(results), licenses: ["personal-only"] }),
+    );
   });
 
   app.get("/v1/supply/:code", async (c) => {
@@ -268,13 +287,25 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
     const object = await c.env.SUPPLY.get(`supply/${code}.json`);
     if (!object) return c.json(errorBody("見つからない", "not_found"), 404);
     const payload = (await object.json()) as Record<string, unknown>;
-    const series = (payload.series ?? {}) as Record<string, Array<Record<string, unknown>>>;
-    const wanted = c.req.query("series");
-    const from = c.req.query("from");
-    const to = c.req.query("to");
+    const series = assertSeriesObject(payload.series);
+    let wanted: string | undefined;
+    let from: string | undefined;
+    let to: string | undefined;
+    try {
+      wanted = parseSupplyFilter("series", c.req.query("series"));
+      from = parseSupplyFilter("from", c.req.query("from"));
+      to = parseSupplyFilter("to", c.req.query("to"));
+    } catch (e) {
+      if (e instanceof SupplyFilterError) {
+        const code2 = e.filterName === "series" ? "invalid_series" : "invalid_range";
+        return c.json(errorBody(e.message, code2), 400);
+      }
+      throw e;
+    }
     const filtered: Record<string, Array<Record<string, unknown>>> = {};
-    for (const [name, points] of Object.entries(series)) {
+    for (const [name, value] of Object.entries(series)) {
       if (wanted && name !== wanted) continue;
+      const points = seriesPointsArray(name, value);
       filtered[name] = points.filter((p) => {
         const d = String(p.d ?? "");
         if (from && d < from) return false;
@@ -284,7 +315,7 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
     }
     return c.json(
       envelope({ code, updated: payload.updated, series: filtered }, {
-        sources: ["日証金"],
+        sources: supplySourcesFromSeries(filtered),
         licenses: ["personal-only"],
       }),
     );
