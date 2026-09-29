@@ -6,7 +6,7 @@
  * 取り直して `recordPrimaryData()` (唯一の窓口。ルール6) で記録する。
  * 既記録の通はスキップ (冪等・再開可能)。
  *
- * 冪等・再開可能: recordPrimaryData が Key 完全一致で既存判定する。
+ * 冪等・再開可能: type 別 key (`{docID}:type1/5`) の完全一致で既存判定する。
  *
  * 必要env(.env): EDINET_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
  *               D1_DATABASE_ID, NOTION_*(ルール6)。
@@ -16,7 +16,7 @@
 import "dotenv/config";
 import { eq } from "drizzle-orm";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
-import { recordPrimaryData } from "../../../src/shared/notion-archive/index.js";
+import { recordEdinetZip } from "../src/services/edinet/archive.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
@@ -87,40 +87,48 @@ for (const docId of docIds) {
       row.submittedAt instanceof Date
         ? row.submittedAt
         : new Date((row.submittedAt as unknown as number) * 1000);
-    const r = await recordPrimaryData({
+    // type 別 key で各実体を記録する (共通契約)。各 key の既存は
+    // recordPrimaryData 側で冪等スキップし、Type5 済みは Type1 を抑止しない。
+    const fetchedAt = submittedAt.toISOString();
+    const metadata = {
+      docID: docId,
+      edinetCode: row.edinetCode,
+      filerName: row.filerName,
+      docTypeCode: row.docTypeCode,
+      periodEnd: row.periodEnd,
+      submitDateTime: fetchedAt,
+      repairedBy: "p6-zip-gap",
+    };
+    const r5 = await recordEdinetZip({
       service: "yuho-quant",
-      key: docId,
-      source: `EDINET API v2 /documents/${docId} (type=1 XBRL / type=5 CSV)`,
-      fetchedAt: submittedAt.toISOString(),
-      metadata: {
-        docID: docId,
-        edinetCode: row.edinetCode,
-        filerName: row.filerName,
-        docTypeCode: row.docTypeCode,
-        periodEnd: row.periodEnd,
-        submitDateTime: submittedAt.toISOString(),
-        repairedBy: "p6-zip-gap",
-      },
-      files: [
-        {
-          bytes: new Uint8Array(csvZip),
-          filename: `${docId}_csv.zip`,
-          contentType: "application/zip",
-        },
-        ...(xbrlZip
-          ? [
-              {
-                bytes: new Uint8Array(xbrlZip),
-                filename: `${docId}_xbrl.zip`,
-                contentType: "application/zip",
-              },
-            ]
-          : []),
-      ],
+      docID: docId,
+      type: 5,
+      zip: csvZip,
+      source: `EDINET API v2 /documents/${docId}?type=5`,
+      fetchedAt,
+      metadata,
       force,
     });
-    console.info(`[zip-repair] ${docId}: ${r.outcome}`);
-    tally[r.outcome === "recorded" ? "recorded" : "skipped_existing"] += 1;
+    let r1Outcome = "skipped_no_xbrl";
+    if (xbrlZip) {
+      const r1 = await recordEdinetZip({
+        service: "yuho-quant",
+        docID: docId,
+        type: 1,
+        zip: xbrlZip,
+        source: `EDINET API v2 /documents/${docId}?type=1`,
+        fetchedAt,
+        metadata,
+        force,
+      });
+      r1Outcome = r1.outcome;
+    }
+    console.info(`[zip-repair] ${docId}: t5=${r5.outcome} t1=${r1Outcome}`);
+    tally[
+      r5.outcome === "recorded" || r1Outcome === "recorded"
+        ? "recorded"
+        : "skipped_existing"
+    ] += 1;
   } catch (e) {
     tally.error += 1;
     console.warn(`[zip-repair] 失敗 ${docId}: ${(e as Error).message}`);

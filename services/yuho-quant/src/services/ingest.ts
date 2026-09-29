@@ -24,12 +24,14 @@ import {
   overseasSalesFacts,
   textSections,
 } from "../db/schema.js";
-import {
-  recordPrimaryData,
-  isArchived,
-} from "../../../../src/shared/notion-archive/index.js";
+import { isArchived } from "../../../../src/shared/notion-archive/index.js";
 import { backupDocTextToNotion } from "./text-backup.js";
 import { downloadDocument, EdinetNotFoundError } from "./edinet/client.js";
+import {
+  edinetArchiveKey,
+  planArchiveUploads,
+  recordEdinetZip,
+} from "./edinet/archive.js";
 import { parseEdinetCsvZip } from "./edinet/csv.js";
 import {
   parseOrderData,
@@ -114,9 +116,9 @@ const MAX_FACT_ROWS_PER_STMT = 8;
 /**
  * @param force          true なら既存 docId でも再取得・再構造化して上書き
  * @param archiveToNotion true なら有報の物理ファイル(XBRL+CSV ZIP)とメタを
- *        Notion「一次データ保管」配下の一次データ DB に冪等記録 (CLAUDE.md
- *        ルール6)。Notion 記録は docId 一意で冪等・再開可能。DB 取込済でも
- *        Notion 未記録なら本関数はファイルを取得して Notion へ記録する。
+ *        Notion「一次データ保管」配下の一次データ DB に type 別 key で冪等
+ *        記録 (CLAUDE.md ルール6)。type 毎の有無で判定し再開可能。DB 取込済
+ *        でも Notion 未記録の type があればファイルを取得して記録する。
  */
 export async function ingestDocument(
   db: Database,
@@ -140,12 +142,20 @@ export async function ingestDocument(
 
   // Notion 記録は DB 取込とは独立に冪等。DB は取込済でも Notion 未記録なら
   // 物理ファイルを取得して記録する (ルール6: API 取得物は必ず Notion へ)。
-  const notionPresent =
+  // type 別 key で有無を判定する: Type5 済みを Type1 済みと混同しない
+  // (旧来の素 docID 1キーは Type1 保存を抑止していた)。旧記録は不変。
+  const t1Present =
     archiveToNotion && !force
-      ? await isArchived(NOTION_SERVICE, doc.docID)
+      ? await isArchived(NOTION_SERVICE, edinetArchiveKey(doc.docID, 1))
+      : false;
+  const t5Present =
+    archiveToNotion && !force
+      ? await isArchived(NOTION_SERVICE, edinetArchiveKey(doc.docID, 5))
       : false;
   const needDbWork = !existsInDb || force;
-  const needArchive = archiveToNotion && (!notionPresent || force);
+  const needT1 = archiveToNotion && (!t1Present || force);
+  const needT5 = archiveToNotion && (!t5Present || force);
+  const needArchive = needT1 || needT5;
 
   if (!needDbWork && !needArchive) {
     return {
@@ -235,14 +245,15 @@ export async function ingestDocument(
     );
   }
 
-  // XBRL(type=1) は「受注 or 海外売上 ありで構造化が要る」か「Notion へ物理保存
-  // する (ルール6)」のいずれかで取得する。どちらの開示も無く Notion 保存不要なら
-  // 従来どおり重い XBRL を落とさない (帯域節約)。1 通の XBRL を 1 回だけ取得し、
-  // 受注と海外売上を並行して構造化する (二重ダウンロードしない)。
+  // XBRL(type=1) は「受注 or 海外売上 ありで構造化が要る」か「Type1 の
+  // Notion 物理保存が要る (ルール6)」のいずれかで取得する。どちらの開示も
+  // 無く Type1 保存不要 (Type5 のみ欠け) なら重い XBRL を落とさない
+  // (帯域節約)。1 通の XBRL を 1 回だけ取得し、受注と海外売上を並行して
+  // 構造化する (二重ダウンロードしない)。
   let xbrlZip: Buffer | null = null;
   let xbrlUnavailable = false;
   const wantXbrl =
-    (!csvError && (hasOrderKeyword || hasOverseasKeyword)) || needArchive;
+    (!csvError && (hasOrderKeyword || hasOverseasKeyword)) || needT1;
   if (wantXbrl) {
     try {
       xbrlZip = await downloadDocument(doc.docID, 1);
@@ -467,53 +478,51 @@ export async function ingestDocument(
   }
 
   // ルール6: 有報の物理ファイル(CSV+XBRL ZIP)とメタデータを Notion へ
-  // 冪等記録。docId をキーに既存ならスキップ (再開可能)。XBRL 未提供
-  // (type=1 なし) は CSV のみ記録し xbrlUnavailable=true を残す (捏造しない)。
+  // type 別 key で冪等記録 (再開可能)。各 type の有無だけを見て記録し、
+  // Type5 済みが Type1 保存を抑止しない。XBRL 未提供 (type=1 なし) は
+  // CSV のみ記録し xbrlUnavailable=true を残す (無い物は記録しない)。
   if (needArchive) {
-    const files = [
-      {
-        bytes: new Uint8Array(csvZip),
-        filename: `${doc.docID}_csv.zip`,
-        contentType: "application/zip",
-      },
-      ...(xbrlZip
-        ? [
-            {
-              bytes: new Uint8Array(xbrlZip),
-              filename: `${doc.docID}_xbrl.zip`,
-              contentType: "application/zip",
-            },
-          ]
-        : []),
-    ];
-    await recordPrimaryData({
-      service: NOTION_SERVICE,
-      key: doc.docID,
-      source: `EDINET API v2 /documents/${doc.docID} (type=1 XBRL / type=5 CSV)`,
-      fetchedAt: parseSubmitDateTime(doc.submitDateTime).toISOString(),
-      metadata: {
-        docID: doc.docID,
-        edinetCode: doc.edinetCode,
-        secCode: doc.secCode,
-        filerName: doc.filerName,
-        docTypeCode: doc.docTypeCode,
-        docDescription: doc.docDescription,
-        periodStart: doc.periodStart,
-        periodEnd,
-        submitDateTime: doc.submitDateTime,
-        parseStatus,
-        honbunFile,
-        factCount: deduped.length,
-        overseasParseStatus,
-        overseasHonbunFile,
-        overseasFactCount: overseasFacts.length,
-        textParseStatus,
-        textSectionCount: sections.length,
-        xbrlUnavailable,
-      },
-      files,
+    const fetchedAt = parseSubmitDateTime(doc.submitDateTime).toISOString();
+    const metadata = {
+      docID: doc.docID,
+      edinetCode: doc.edinetCode,
+      secCode: doc.secCode,
+      filerName: doc.filerName,
+      docTypeCode: doc.docTypeCode,
+      docDescription: doc.docDescription,
+      periodStart: doc.periodStart,
+      periodEnd,
+      submitDateTime: doc.submitDateTime,
+      parseStatus,
+      honbunFile,
+      factCount: deduped.length,
+      overseasParseStatus,
+      overseasHonbunFile,
+      overseasFactCount: overseasFacts.length,
+      textParseStatus,
+      textSectionCount: sections.length,
+      xbrlUnavailable,
+    };
+    for (const type of planArchiveUploads({
+      t1Present,
+      t5Present,
+      xbrlAvailable: xbrlZip !== null,
       force,
-    });
+    })) {
+      // plan は xbrlAvailable の type1 だけ返す。zip 無しは記録しない。
+      const zip = type === 1 ? xbrlZip : csvZip;
+      if (!zip) continue;
+      await recordEdinetZip({
+        service: NOTION_SERVICE,
+        docID: doc.docID,
+        type,
+        zip,
+        source: `EDINET API v2 /documents/${doc.docID}?type=${type}`,
+        fetchedAt,
+        metadata,
+        force,
+      });
+    }
   }
 
   // 定性テキスト本文の Notion 保管 (D1 10GB 上限対策。D1 には索引 + 行 ID)。

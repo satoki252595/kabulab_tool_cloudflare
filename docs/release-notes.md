@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-29
 
 ### 変更
+- EDINET一次データ記録をtype別key (`{docID}:type1/5`) +実ZIP添付の共通契約へ統一し、Type5済みによるType1保存抑止を解消。海外backfillにもType1記録を追加 (#168)。旧docID記録は不変。実データ適用は後続。
 - 年次preflightと優待の共通保存経路に親銘柄active/区分・同一性CASを追加し凍結破りを境界で止め、適用runnerの完了キーは種別つき必須+重複検査にした (#166)。データ変更なし。
 - 本番作業: 市場Source D1修復を適用 (ATR 1679行・年次 1490行のactive行のみ。非active 36行は凍結維持のため適用後に復元)。送信前fresh全一致・適用後全new一致・再計算write0・保護一致を確認 (#166)。
 - 市場Source修復の共通input CAS preflight (ATR全入力6+銘柄同一性/年次系列全点+TTM+日付のNULL-safe同一batch検証) と優待全文境界のdescription CAS (行ごと旧文CAS) ビルダーを追加 (#165)。データ適用はまだ。
