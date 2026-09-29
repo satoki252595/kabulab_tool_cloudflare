@@ -42,6 +42,34 @@ describe("validateDrafts", () => {
     expect(() => validateDrafts("s", [draft(), draft({ value: 2 })], [IND])).toThrow(/重複/);
   });
 
+  it("新内訳ありは7セグメントキーで重複判定し、投資部門違いは別行として通す", () => {
+    const a = draft({ marketSegment: "東証プライム", investorCategory: "海外投資家" });
+    const b = draft({ marketSegment: "東証プライム", investorCategory: "個人" });
+    expect(() => validateDrafts("s", [a, b], [IND])).not.toThrow();
+    expect(() => validateDrafts("s", [a, draft({ marketSegment: "東証プライム", investorCategory: "海外投資家", value: 2 })], [IND])).toThrow(
+      /重複/
+    );
+  });
+
+  it("公表日・階層・内訳文字列の形式違反をまとめて報告する", () => {
+    const bad = [
+      draft({ category: "a", publicationDate: "2026/09/29" }),
+      draft({ category: "b", categoryLevel: -1 }),
+      draft({ category: "c", categoryLevel: 1.5 }),
+      draft({ category: "d", tradeType: "  " }),
+    ];
+    let message = "";
+    try {
+      validateDrafts("s", bad, [IND]);
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(/4 件/);
+    expect(message).toMatch(/公表日が YYYY-MM-DD でない/);
+    expect(message).toMatch(/区分階層が非負整数でない/);
+    expect(message).toMatch(/取引種別.*空文字/);
+  });
+
   it("指標定義に無いキー・非有限値・日付逆転・未知の単位をまとめて報告する", () => {
     const bad = [
       draft({ indicatorKey: "nope", category: "a" }),

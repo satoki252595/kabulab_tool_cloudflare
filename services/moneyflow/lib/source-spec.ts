@@ -26,6 +26,7 @@ import type {
   ObservationInput,
   PrimaryFile,
 } from "../../../src/shared/notion-archive/index.js";
+import { observationKey } from "../../../src/shared/notion-archive/index.js";
 
 /** 観測ログ 1 行の下書き (Notion 側のページ ID 以外すべて)。 */
 export type ObservationDraft = Omit<ObservationInput, "indicatorPageId" | "primaryDataPageId">;
@@ -91,8 +92,10 @@ const MEASURE_KINDS: readonly MoneyflowMeasureKind[] = ["実測", "推定"];
 /**
  * 観測行の下書きを検証する (純関数)。Notion へ書く前に必ず通す。
  *   - 指標キーがこの取得元の指標定義に含まれる
- *   - 冪等キー `期間|指標|区分` が重複しない (重複すると後の行が前の行を黙って上書きする)
+ *   - 冪等キー (observationKey。従来 `期間|指標|区分` / 新内訳ありは7セグメント) が
+ *     重複しない (重複すると後の行が前の行を黙って上書きする)
  *   - 値が有限数、日付が YYYY-MM-DD で開始<=終了、単位・区分種別・実測推定が既知の値
+ *   - 新内訳の設定時は公表日が YYYY-MM-DD・階層が非負整数・内訳文字列が非空
  *   - 1 行以上ある (0 行のバッチは様式変更等の異常なので成功扱いにしない)
  *
  * @throws 上記に反する行が 1 件でもあれば、全違反をまとめて throw する。
@@ -109,9 +112,29 @@ export function validateDrafts(
   drafts.forEach((d, i) => {
     const where = `#${i} (${d.period}|${d.indicatorKey}|${d.category})`;
     if (!indicatorKeys.has(d.indicatorKey)) problems.push(`${where}: 指標定義に無い指標キー`);
-    const key = `${d.period}|${d.indicatorKey}|${d.category}`;
+    const key = observationKey(d);
     if (seen.has(key)) problems.push(`${where}: 冪等キーが重複`);
     seen.add(key);
+    for (const [name, v] of [
+      ["市場区分", d.marketSegment],
+      ["投資部門", d.investorCategory],
+      ["取引種別", d.tradeType],
+      ["親区分", d.parentCategory],
+    ] as const) {
+      if (v !== undefined && v !== null && v.trim() === "") {
+        problems.push(`${where}: ${name}が空文字 (未設定は null にする)`);
+      }
+    }
+    if (d.categoryLevel !== undefined && d.categoryLevel !== null) {
+      if (!Number.isInteger(d.categoryLevel) || d.categoryLevel < 0) {
+        problems.push(`${where}: 区分階層が非負整数でない (${d.categoryLevel})`);
+      }
+    }
+    if (d.publicationDate !== undefined && d.publicationDate !== null) {
+      if (!DATE_RE.test(d.publicationDate)) {
+        problems.push(`${where}: 公表日が YYYY-MM-DD でない (${d.publicationDate})`);
+      }
+    }
     if (d.period.trim() === "") problems.push(`${where}: 期間が空`);
     if (d.category.trim() === "") problems.push(`${where}: 区分が空`);
     if (!Number.isFinite(d.value)) problems.push(`${where}: 値が有限数でない (${d.value})`);

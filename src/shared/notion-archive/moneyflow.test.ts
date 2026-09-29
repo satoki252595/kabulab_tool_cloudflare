@@ -465,6 +465,108 @@ describe("notion-archive moneyflow", () => {
     });
   });
 
+  describe("observationKey (新内訳キー)", () => {
+    it("新内訳が未設定なら従来キー `期間|指標|区分` のまま (既存取得元の境界維持)", async () => {
+      const { observationKey } = await load();
+      expect(observationKey({ period: "2026-W38", indicatorKey: "k", category: "c" })).toBe("2026-W38|k|c");
+      expect(
+        observationKey({
+          period: "2026-W38",
+          indicatorKey: "k",
+          category: "c",
+          marketSegment: null,
+          investorCategory: null,
+          tradeType: null,
+          parentCategory: null,
+          categoryLevel: null,
+          publicationDate: "2026-09-29",
+        })
+      ).toBe("2026-W38|k|c");
+    });
+
+    it("内訳が1つでもあれば7セグメントキーになり publicationDate は含めない", async () => {
+      const { observationKey } = await load();
+      expect(
+        observationKey({
+          period: "2026-W38",
+          indicatorKey: "k",
+          category: "表示ラベル",
+          marketSegment: "東証プライム",
+          investorCategory: "海外投資家",
+          publicationDate: "2026-09-29",
+        })
+      ).toBe("2026-W38|k|東証プライム|海外投資家|||");
+      expect(
+        observationKey({
+          period: "2026-W38",
+          indicatorKey: "k",
+          category: "x",
+          tradeType: "信用",
+          parentCategory: "委託計",
+          categoryLevel: 2,
+        })
+      ).toBe("2026-W38|k|||信用|委託計|2");
+    });
+  });
+
+  describe("observationRowMatches (新内訳フィールド)", () => {
+    const input = {
+      period: "2026-W38",
+      periodStart: "2026-09-14",
+      periodEnd: "2026-09-18",
+      indicatorKey: "k",
+      indicatorPageId: "0000aaaa-1111-2222-3333-444455556666",
+      category: "表示ラベル",
+      categoryKind: "投資部門" as const,
+      marketSegment: "東証プライム",
+      investorCategory: "海外投資家",
+      tradeType: null,
+      parentCategory: null,
+      categoryLevel: 1,
+      publicationDate: "2026-09-29",
+      value: 100,
+      unit: "円" as const,
+      changeFromPrev: null,
+      approximate: false,
+      measureKind: "実測" as const,
+      primaryDataPageId: null,
+    };
+    const props = (overrides: Record<string, unknown> = {}) => ({
+      キー: { type: "title", title: [{ plain_text: "2026-W38|k|東証プライム|海外投資家|||1" }] },
+      指標: { type: "relation", relation: [{ id: "0000aaaa111122223333444455556666" }] },
+      対象期間: { type: "rich_text", rich_text: [{ plain_text: "2026-W38" }] },
+      期間開始: { type: "date", date: { start: "2026-09-14" } },
+      期間終了: { type: "date", date: { start: "2026-09-18" } },
+      区分: { type: "rich_text", rich_text: [{ plain_text: "表示ラベル" }] },
+      区分種別: { type: "select", select: { name: "投資部門" } },
+      市場区分: { type: "rich_text", rich_text: [{ plain_text: "東証プライム" }] },
+      投資部門: { type: "rich_text", rich_text: [{ plain_text: "海外投資家" }] },
+      取引種別: { type: "rich_text", rich_text: [] },
+      親区分: { type: "rich_text", rich_text: [] },
+      区分階層: { type: "number", number: 1 },
+      公表日: { type: "date", date: { start: "2026-09-29" } },
+      値: { type: "number", number: 100 },
+      単位: { type: "select", select: { name: "円" } },
+      前期比: { type: "number", number: null },
+      近似フラグ: { type: "checkbox", checkbox: false },
+      実測推定: { type: "select", select: { name: "実測" } },
+      一次データ: { type: "relation", relation: [] },
+      ...overrides,
+    });
+
+    it("新フィールド一致なら true、投資部門・公表日・階層の差異は false", async () => {
+      const { observationRowMatches } = await load();
+      expect(observationRowMatches(props(), input)).toBe(true);
+      expect(
+        observationRowMatches(props({ 投資部門: { type: "rich_text", rich_text: [{ plain_text: "個人" }] } }), input)
+      ).toBe(false);
+      expect(
+        observationRowMatches(props({ 公表日: { type: "date", date: { start: "2026-09-30" } } }), input)
+      ).toBe(false);
+      expect(observationRowMatches(props({ 区分階層: { type: "number", number: 2 } }), input)).toBe(false);
+    });
+  });
+
   describe("ensureRunLogDb / recordRunLog", () => {
     it("固定 DB ID が無ければ新規作成し、実行ごとに新規行を作る (upsert しない)", async () => {
       route("GET", `/v1/blocks/${STOCK_INFO_PAGE}/children`, [childrenPage()]);

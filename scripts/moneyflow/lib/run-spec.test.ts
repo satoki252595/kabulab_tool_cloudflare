@@ -6,7 +6,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MoneyflowSourceSpec, ObservationDraft } from "../../../services/moneyflow/lib/source-spec.js";
 
-const notion = {
+// source-spec.ts が observationKey を同モジュールから import しているため、
+// 実物に被せる形で mock する (被せないと validateDrafts の呼び出しで落ちる)。
+const notion = vi.hoisted(() => ({
   ensureObservationsDb: vi.fn(async () => ({ dbId: "obs-db" })),
   isArchived: vi.fn(async (_s: string, _k: string, _p?: string) => false),
   recordPrimaryData: vi.fn(async (_i: unknown) => ({ pageId: "primary-1", outcome: "recorded", fileTooLarge: false })),
@@ -16,7 +18,7 @@ const notion = {
       outcome: "created",
     })
   ),
-};
+}));
 const archived = {
   requirePrimaryDataDbId: vi.fn(async () => "primary-db"),
   findArchivedRecordByKey: vi.fn(async (_db: string, key: string) => ({
@@ -28,7 +30,10 @@ const archived = {
   listArchivedRecordsByPrefix: vi.fn(),
 };
 
-vi.mock("../../../src/shared/notion-archive/index.js", () => notion);
+vi.mock("../../../src/shared/notion-archive/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/shared/notion-archive/index.js")>()),
+  ...notion,
+}));
 vi.mock("./archived-files.js", () => archived);
 
 const rows = (source: string): ObservationDraft[] => [
