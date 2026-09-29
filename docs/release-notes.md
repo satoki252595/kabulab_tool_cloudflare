@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-29
 
 ### 変更
+- 株式日次syncの完了・例外どちらの終了時も失敗明細バッチ (全件・切詰なし+件数/取引日/分類/元例外) を一次保管してから return/throw するよう修正 (CLI の 1% throw の前に物理保管あり)。保管失敗は非0終了。CLI の 20 グループ表示は要約として残し保管キーを指す。データ変更なし。
 - 財務③の同値再 PATCH を省くよう共有 upsert へ同値判定を追加 (EDINET/TDnet 両 caller が継承。取得日時だけの差は送らない。旧キー採用・訂正新旧ガード・NULL 置換は維持。create 競合の収束時も同値なら書き直さない。再解析の直接 PATCH も同判定で already_reparsed)。保証は Notion ③ の PATCH 0 であり日次再 dispatch 全体の sender 0 ではない (ローカル系統・D1 書込は継続) (#179)。データ変更なし。
 - Node 実行の有報取込と 3 backfill (海外・定性・取込漏れ) で文書メタ・status だけ残り facts が 0 件になる部分保存が起きないよう、既存の D1 HTTP sender を明示指定し、1 文書ぶんの upsert・facts 置換を単一 batch で一括保存 (sender 未指定・未知 backend は書込前に停止)。日次 Worker の取込も同一組成の単一 batch。定性 backfill は本文保管未完了の通も force 無しで回収対象に (#176)。データ変更なし。
 - 株式sync成功後のmoneyflow連鎖を取得元selectorで限定 (dispatch=stocksはsector-turnoverのみ、daily/all・既存scheduledは明示の空=全取得元維持、context/monthlyは連鎖なし)。未知event/target/scheduleはproducer起動前に非0停止 (fallback禁止) (#177)。データ変更なし。
