@@ -11,7 +11,7 @@
  * そのまま ScreenRow へ写す (再計算しない。地域比率だけ `+(yen/total*100)`
  * `.toFixed(1)` で復元し、旧 regionRatioOf と一致)。
  */
-import { eq, inArray, lt, sql } from "drizzle-orm";
+import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { yuhoGrowthProjection } from "../../../../src/shared/db/projection-schema.js";
 import {
@@ -269,14 +269,26 @@ export interface RebuildYuhoGrowthResult {
 /**
  * `p_yuho_growth` を全銘柄ぶん再生成する。EDINET catchup の末尾 (非シャード
  * 実行のみ) が呼ぶ。upsert は冪等で、今回触らなかった行は sweep で消す。
+ *
+ * `stockIds` を渡すと両入力クエリ (受注/海外の全履歴)・全 write・sweep を
+ * 同一集合に拘束する部分再生成になる。対象銘柄の全履歴を読む
+ * (書類 subset での歴史切断はしない)。空集合は全体の意味に**しない**
+ * (throw。空→ALL の silent fallback はルール2違反)。
  */
 export async function rebuildYuhoGrowthProjection(
   db: Database,
-  options: { runStartedSec?: number } = {}
+  options: { runStartedSec?: number; stockIds?: readonly number[] } = {}
 ): Promise<RebuildYuhoGrowthResult> {
   const startedAt = Date.now();
   const runStartedSec =
     options.runStartedSec ?? Math.floor(startedAt / 1000);
+  if (options.stockIds !== undefined && options.stockIds.length === 0) {
+    throw new Error(
+      "rebuildYuhoGrowthProjection: stockIds が空です (全体再生成の意味にしない)"
+    );
+  }
+  const targets =
+    options.stockIds === undefined ? undefined : [...new Set(options.stockIds)];
 
   const orderRows = await db
     .select({
@@ -288,7 +300,14 @@ export async function rebuildYuhoGrowthProjection(
     })
     .from(orderFacts)
     .innerJoin(yuhoDocuments, eq(orderFacts.documentId, yuhoDocuments.id))
-    .where(eq(orderFacts.segmentKind, "total"));
+    .where(
+      targets === undefined
+        ? eq(orderFacts.segmentKind, "total")
+        : and(
+            eq(orderFacts.segmentKind, "total"),
+            inArray(orderFacts.stockId, targets)
+          )
+    );
 
   const overseasRows = await db
     .select({
@@ -305,11 +324,20 @@ export async function rebuildYuhoGrowthProjection(
       eq(overseasSalesFacts.documentId, yuhoDocuments.id)
     )
     .where(
-      inArray(overseasSalesFacts.regionKind, [
-        "overseas_total",
-        "total",
-        "overseas",
-      ])
+      targets === undefined
+        ? inArray(overseasSalesFacts.regionKind, [
+            "overseas_total",
+            "total",
+            "overseas",
+          ])
+        : and(
+            inArray(overseasSalesFacts.regionKind, [
+              "overseas_total",
+              "total",
+              "overseas",
+            ]),
+            inArray(overseasSalesFacts.stockId, targets)
+          )
     );
 
   // MAX は生の epoch 秒で返る (drizzle は sql`` を Date 変換しない)
@@ -446,10 +474,16 @@ export async function rebuildYuhoGrowthProjection(
       });
   }
 
-  // 今回触らなかった行 (ファクトが消えた銘柄) を掃除する
-  await db
-    .delete(yuhoGrowthProjection)
-    .where(lt(yuhoGrowthProjection.computedAt, new Date(runStartedSec * 1000)));
+  // 今回触らなかった行 (ファクトが消えた銘柄) を掃除する。
+  // stockIds 指定時は対象集合だけを掃除し、対象外の既存行は残す。
+  await db.delete(yuhoGrowthProjection).where(
+    targets === undefined
+      ? lt(yuhoGrowthProjection.computedAt, new Date(runStartedSec * 1000))
+      : and(
+          lt(yuhoGrowthProjection.computedAt, new Date(runStartedSec * 1000)),
+          inArray(yuhoGrowthProjection.stockId, targets)
+        )
+  );
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   console.info(
