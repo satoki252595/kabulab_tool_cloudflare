@@ -16,16 +16,15 @@
  *   - 1 回の実行は MAX_INGEST 件 / TIME_BUDGET_MS で打ち切り。残りは次回実行が
  *     拾う (docId 一意で冪等)。6 月の有報集中期も実行回数×日数で吸収。
  */
-import { eq } from "drizzle-orm";
 import type { Database } from "../../services/yuho-quant/src/db/client.js";
 import { loadIngestCodeToId } from "../shared/db/active-equity.js";
-import * as yuhoSchema from "../../services/yuho-quant/src/db/schema.js";
 import { listDocuments } from "../../services/yuho-quant/src/services/edinet/client.js";
 import {
   isAnnualSecuritiesReport,
   secCodeToTicker,
 } from "../../services/yuho-quant/src/services/edinet/types.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
+import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
 import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
 
 const WINDOW_DAYS = 60;
@@ -162,6 +161,16 @@ export async function runYuhoEdinetCatchup(
       return true;
     });
 
+    // type 保管完成は日ごとに一括取得して使い回す (通ごとの Notion 照会は
+    // 60 日 FIFO の 300 秒予算を食い潰す)。ingestDocument へ渡し、内部照会を省く。
+    const custodyByDoc =
+      targets.length > 0
+        ? await checkDocsCustody(
+            "yuho-quant",
+            targets.map((doc) => doc.docID)
+          )
+        : new Map();
+
     for (const doc of targets) {
       if (ingested >= MAX_INGEST || overBudget()) {
         reachedCap = true;
@@ -171,17 +180,10 @@ export async function runYuhoEdinetCatchup(
       const stockCode = secCodeToTicker(doc.secCode)!;
       const stockId = codeToId.get(stockCode)!;
 
-      // 既取込なら EDINET を叩かずスキップ (冪等・帯域節約)
-      const exists = await db
-        .select({ id: yuhoSchema.yuhoDocuments.id })
-        .from(yuhoSchema.yuhoDocuments)
-        .where(eq(yuhoSchema.yuhoDocuments.docId, doc.docID))
-        .limit(1);
-      if (exists.length > 0) {
-        skippedExisting++;
-        continue;
-      }
-
+      // 既取込の判定は ingestDocument の early return に一本化する。ここで
+      // docId 存在だけを見て continue すると、本文ポインタ NULL や type 未保管の
+      // 通が回収されず残る。ingestDocument は完成済み (D1 行・本文ポインタ・
+      // type 保管) の通だけ skipped_existing で EDINET を叩かず返す。
       try {
         // ルール6: 日次キャッチアップでも有報の物理 ZIP を Notion へ記録。
         // Notion 通信の分 1 件あたりの実時間は伸びるが TIME_BUDGET_MS で必ず
@@ -191,14 +193,19 @@ export async function runYuhoEdinetCatchup(
           stockCode,
           doc,
           archiveToNotion: true,
+          custody: custodyByDoc.get(doc.docID),
         });
-        byStatus[r.parseStatus] = (byStatus[r.parseStatus] ?? 0) + 1;
-        // 海外売上も同じ有報から並行構造化される。運用可視化のため prefix 付きで計上。
-        const ok = `oseas:${r.overseasParseStatus}`;
-        byStatus[ok] = (byStatus[ok] ?? 0) + 1;
-        // 定性セクション (CSV のみ抽出) も同様に計上。
-        const tx = `text:${r.textParseStatus}`;
-        byStatus[tx] = (byStatus[tx] ?? 0) + 1;
+        // skipped_existing (完成済みの早期復帰) は状態計数に含めない。早期復帰の
+        // parseStatus 等は実測値でないため、混ぜると運用可視化を汚す。
+        if (r.outcome !== "skipped_existing") {
+          byStatus[r.parseStatus] = (byStatus[r.parseStatus] ?? 0) + 1;
+          // 海外売上も同じ有報から並行構造化される。運用可視化のため prefix 付きで計上。
+          const ok = `oseas:${r.overseasParseStatus}`;
+          byStatus[ok] = (byStatus[ok] ?? 0) + 1;
+          // 定性セクション (CSV のみ抽出) も同様に計上。
+          const tx = `text:${r.textParseStatus}`;
+          byStatus[tx] = (byStatus[tx] ?? 0) + 1;
+        }
         if (r.outcome === "ingested") ingested++;
         else skippedExisting++;
       } catch (e) {

@@ -29,6 +29,7 @@ import "dotenv/config";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
+import { archiveTallyFailed } from "../src/services/edinet/archive.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
@@ -181,6 +182,10 @@ for (const r of targets) {
               .update(yuhoDocuments)
               .set({ notionDocPageId: nb.rowPageId })
               .where(eq(yuhoDocuments.id, r.id));
+          } else {
+            // 本文ありなのに行 ID 未取得は黙って成功にしない (P6 共有根因)。
+            console.warn(`[text-backfill] notion text backup 失敗(行 ID 未取得) ${r.docId}: outcome=${nb.outcome}`);
+            tally.notion_text_no_pointer = (tally.notion_text_no_pointer ?? 0) + 1;
           }
         }
       } catch (e) {
@@ -206,4 +211,17 @@ for (const r of targets) {
 console.info("\n[text-backfill] 完了:");
 for (const [k, v] of Object.entries(tally).sort((a, b) => b[1] - a[1])) {
   console.info(`  ${k}: ${v}`);
+}
+// 本文保管の失敗 (通エラー・保管 throw・コード不明・行 ID 未取得) が
+// 1件でもあれば非0終了にする (false-green 防止。backfill-missing-docs と同一方式)。
+// 有限 --doc 指定も通常全対象実行も同じ判定。
+{
+  const failed =
+    (tally.error ?? 0) +
+    (tally.notion_text_error ?? 0) +
+    (tally.notion_text_no_code ?? 0) +
+    (tally.notion_text_no_pointer ?? 0);
+  if (archiveTallyFailed(failed)) {
+    process.exitCode = 1;
+  }
 }

@@ -25,7 +25,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LedgerEntry, SupplementRow } from "../../../../src/shared/notion-archive/index.js";
 import { makeBudgetedVerifySources } from "./sources-verify.js";
 import { MINI_VOCAB } from "./vocabulary/__fixtures__/mini-vocab.js";
-import { composeRunNotify, runBiztag, type RunSummary } from "./pipeline.js";
+import { composeRunNotify, isBillingBlockedError, runBiztag, type RunSummary } from "./pipeline.js";
 
 const notionMocks = vi.hoisted(() => ({
   createLedgerEntry: vi.fn(),
@@ -343,6 +343,7 @@ function baseSummary(overrides: Partial<RunSummary> = {}): RunSummary {
     failures: [],
     masterDuplicates: [],
     retryExhausted: [],
+    billingBlocked: [],
     ...overrides,
   };
 }
@@ -404,5 +405,62 @@ describe("composeRunNotify", () => {
     expect(result.summary).toContain("9999: エラー");
     expect(result.summary).toContain("1301");
     expect(result.summary).toContain("7129");
+  });
+
+  it("課金切れブロッカーだけでも通知する (remaining:0 の green に埋もれさせない)", () => {
+    const summary = baseSummary({ billingBlocked: ["4326", "3457"] });
+    const result = composeRunNotify(summary);
+    expect(result.notify).toBe(true);
+    expect(result.summary).toContain("課金切れ");
+    expect(result.summary).toContain("4326, 3457");
+  });
+});
+
+describe("isBillingBlockedError", () => {
+  it("402/billing_error 含有は true", () => {
+    expect(
+      isBillingBlockedError(
+        "jev 判定に失敗: jev API がエラーを返しました（status=402）: {\"detail\":{\"error_type\":\"billing_error\"}}"
+      )
+    ).toBe(true);
+  });
+
+  it("null・空・他エラーは false", () => {
+    expect(isBillingBlockedError(null)).toBe(false);
+    expect(isBillingBlockedError("")).toBe(false);
+    expect(isBillingBlockedError("jev API がタイムアウトしました")).toBe(false);
+  });
+});
+
+describe("runBiztag — billingBlocked 集計", () => {
+  it("判定不能+課金エラー+上限未満の行だけを集計する (期日未来も含む)", async () => {
+    notionMocks.loadSupplementRows.mockResolvedValue([
+      minimalRow({
+        stockCode: "4326",
+        tagStatus: "判定不能",
+        error: "jev 判定に失敗（status=402）",
+        attempts: 1,
+        nextRetryAt: "2099-01-01",
+      }),
+      minimalRow({
+        stockCode: "9999",
+        tagStatus: "判定不能",
+        error: "jev API がタイムアウトしました",
+        attempts: 1,
+      }),
+      minimalRow({
+        stockCode: "8888",
+        tagStatus: "判定不能",
+        error: "jev 判定に失敗（status=402）",
+        attempts: 5,
+      }),
+    ]);
+    const summary = await runBiztag({
+      budgetMs: 10_000,
+      dryRun: true,
+      thresholds: { yesMin: 0.8, noMax: 0.2 },
+      model: "test-model",
+    });
+    expect(summary.billingBlocked).toEqual(["4326"]);
   });
 });

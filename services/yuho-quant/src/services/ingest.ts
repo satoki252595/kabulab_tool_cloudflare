@@ -24,13 +24,14 @@ import {
   overseasSalesFacts,
   textSections,
 } from "../db/schema.js";
-import { isArchived } from "../../../../src/shared/notion-archive/index.js";
 import { backupDocTextToNotion } from "./text-backup.js";
 import { downloadDocument, EdinetNotFoundError } from "./edinet/client.js";
 import {
-  edinetArchiveKey,
+  assertNoMetadataOnly,
+  checkDocCustody,
   planArchiveUploads,
   recordEdinetZip,
+  type DocCustody,
 } from "./edinet/archive.js";
 import { parseEdinetCsvZip } from "./edinet/csv.js";
 import {
@@ -129,12 +130,22 @@ export async function ingestDocument(
     doc: EdinetDoc;
     force?: boolean;
     archiveToNotion?: boolean;
+    /**
+     * 呼び出し側で日/run ごとに一括取得済みの type 保管完成。
+     * 指定時は内部の Notion 照会を省略する (FIFO の 300 秒予算対策)。
+     * 未指定時は単通照会する (backfill.ts 等)。
+     */
+    custody?: DocCustody;
   }
 ): Promise<IngestResult> {
   const { stockId, stockCode, doc, force = false, archiveToNotion = false } = args;
 
   const existing = await db
-    .select({ id: yuhoDocuments.id })
+    .select({
+      id: yuhoDocuments.id,
+      textParseStatus: yuhoDocuments.textParseStatus,
+      notionDocPageId: yuhoDocuments.notionDocPageId,
+    })
     .from(yuhoDocuments)
     .where(eq(yuhoDocuments.docId, doc.docID))
     .limit(1);
@@ -142,19 +153,27 @@ export async function ingestDocument(
 
   // Notion 記録は DB 取込とは独立に冪等。DB は取込済でも Notion 未記録なら
   // 物理ファイルを取得して記録する (ルール6: API 取得物は必ず Notion へ)。
-  // type 別 key で有無を判定する: Type5 済みを Type1 済みと混同しない
-  // (旧来の素 docID 1キーは Type1 保存を抑止していた)。旧記録は不変。
-  const t1Present =
+  // type 保管の完成は実 Files 物理添付で判定する (key 存在だけでは
+  // metadata-only 行を成功扱いする)。呼び出し側の一括取得があれば再利用する。
+  const custody: DocCustody | undefined =
     archiveToNotion && !force
-      ? await isArchived(NOTION_SERVICE, edinetArchiveKey(doc.docID, 1))
-      : false;
-  const t5Present =
-    archiveToNotion && !force
-      ? await isArchived(NOTION_SERVICE, edinetArchiveKey(doc.docID, 5))
-      : false;
-  const needDbWork = !existsInDb || force;
-  const needT1 = archiveToNotion && (!t1Present || force);
-  const needT5 = archiveToNotion && (!t5Present || force);
+      ? (args.custody ?? (await checkDocCustody(NOTION_SERVICE, doc.docID)))
+      : undefined;
+  if (custody) assertNoMetadataOnly(custody, doc.docID);
+  const t1Done = custody !== undefined && custody.t1 !== "missing";
+  const t5Done = custody !== undefined && custody.t5 !== "missing";
+  // 本文 parse 済み (ok) なのに Notion 行ポインタが無い通は、raw 保管が
+  // 揃っていても未完了として本文回収フローへ回す (skipped_existing にしない)。
+  // D1 書込は docId 冪等 (onConflictDoUpdate + 文書単位 delete→insert) のため
+  // 同一 key の再実行で安全にポインタを完成できる。
+  const existingRow = existing[0];
+  const textPointerMissing =
+    existingRow !== undefined &&
+    existingRow.textParseStatus === "ok" &&
+    existingRow.notionDocPageId === null;
+  const needDbWork = !existsInDb || force || textPointerMissing;
+  const needT1 = archiveToNotion && (!t1Done || force);
+  const needT5 = archiveToNotion && (!t5Done || force);
   const needArchive = needT1 || needT5;
 
   if (!needDbWork && !needArchive) {
@@ -504,8 +523,8 @@ export async function ingestDocument(
       xbrlUnavailable,
     };
     for (const type of planArchiveUploads({
-      t1Present,
-      t5Present,
+      t1Present: t1Done,
+      t5Present: t5Done,
       xbrlAvailable: xbrlZip !== null,
       force,
     })) {
@@ -527,46 +546,45 @@ export async function ingestDocument(
 
   // 定性テキスト本文の Notion 保管 (D1 10GB 上限対策。D1 には索引 + 行 ID)。
   // needDbWork の有無に依らず手元の本文があれば保管し、行 ID を D1 へ
-  // 書き戻す。失敗は当該通の警告に留める (ポインタ NULL の通は P3 移行
-  // スクリプトが回収する)。セクション 0 件は保管対象外 (textParseStatus
-  // が D1 に残り「未保管」と区別できる)。
+  // 書き戻す。本文あり (sections>0) なのにポインタが残らない状態は成功に
+  // しない: 保管失敗・行なし・行 ID 未取得は throw し、呼び出し側
+  // (日次は通単位で失敗計上して継続) が未完了として扱う。既存行がある
+  // 場合は backupDocTextToNotion が既存行 ID を返して回収する
+  // (skipped_existing)。回収は backfill-text-sections --doc --force が担う。
+  // セクション 0 件は保管対象外 (textParseStatus が D1 側に残り「未保管」と区別できる)。
   if (sections.length > 0) {
-    try {
-      let id = docRowId;
-      if (id === null) {
-        const found = await db
-          .select({ id: yuhoDocuments.id })
-          .from(yuhoDocuments)
-          .where(eq(yuhoDocuments.docId, doc.docID))
-          .limit(1);
-        id = found[0]?.id ?? null;
-      }
-      if (id === null) {
-        console.warn(
-          `[ingest] notion text backup skip(行なし) docID=${doc.docID}`
-        );
-      } else {
-        const r = await backupDocTextToNotion({
-          stockCode,
-          docId: doc.docID,
-          d1DocumentId: id,
-          fiscalYearEnd: periodEnd,
-          textParseStatus,
-          sections,
-          force,
-        });
-        if (r.rowPageId) {
-          await db
-            .update(yuhoDocuments)
-            .set({ notionDocPageId: r.rowPageId })
-            .where(eq(yuhoDocuments.id, id));
-        }
-      }
-    } catch (e) {
-      console.warn(
-        `[ingest] notion text backup 失敗 docID=${doc.docID}: ${(e as Error).message}`
+    let id = docRowId;
+    if (id === null) {
+      const found = await db
+        .select({ id: yuhoDocuments.id })
+        .from(yuhoDocuments)
+        .where(eq(yuhoDocuments.docId, doc.docID))
+        .limit(1);
+      id = found[0]?.id ?? null;
+    }
+    if (id === null) {
+      throw new Error(
+        `[ingest] notion text backup 失敗(行なし) docID=${doc.docID}: D1 行が無いのに本文セクションが ${sections.length} 件あります`
       );
     }
+    const r = await backupDocTextToNotion({
+      stockCode,
+      docId: doc.docID,
+      d1DocumentId: id,
+      fiscalYearEnd: periodEnd,
+      textParseStatus,
+      sections,
+      force,
+    });
+    if (!r.rowPageId) {
+      throw new Error(
+        `[ingest] notion text backup 失敗(行 ID 未取得) docID=${doc.docID}: outcome=${r.outcome}`
+      );
+    }
+    await db
+      .update(yuhoDocuments)
+      .set({ notionDocPageId: r.rowPageId })
+      .where(eq(yuhoDocuments.id, id));
   }
 
   return {

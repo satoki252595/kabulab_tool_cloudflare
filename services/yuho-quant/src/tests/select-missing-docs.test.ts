@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { selectMissingDocs } from "../services/edinet/missing.js";
+import { applyCompletionFilter, selectMissingDocs } from "../services/edinet/missing.js";
+import type { DocCustody } from "../services/edinet/archive.js";
 import type { EdinetDoc } from "../services/edinet/types.js";
+
+const CUSTODY = (t1: DocCustody["t1"], t5: DocCustody["t5"]): DocCustody => ({ t1, t5 });
 
 /** 取りこぼし選別。入力はテスト用の最小構造データ。 */
 
@@ -53,5 +56,32 @@ describe("selectMissingDocs", () => {
     );
     expect(r.missing.map((m) => m.doc.docID)).toEqual(["S1OLD"]);
     expect(r.skippedExisting).toBe(0);
+  });
+});
+
+describe("applyCompletionFilter", () => {
+  it("memo の未完成は呼ぶたび毎回除外する (翌日再掲でも漏らさない)", () => {
+    const existing = new Set(["S1", "S2"]);
+    const memo = new Map<string, DocCustody>([
+      ["S1", CUSTODY("missing", "complete")],
+      ["S2", CUSTODY("complete", "complete")],
+    ]);
+    const day1 = applyCompletionFilter(existing, new Set(), memo, ["S1", "S2"]);
+    expect([...day1.effective].sort()).toEqual(["S2"]);
+    expect(day1.metadataOnly).toEqual([]);
+    // 同じ memo で翌日も同じ listed が来たら同じく除外する (適用漏れなし)
+    const day2 = applyCompletionFilter(existing, new Set(), memo, ["S1", "S2"]);
+    expect([...day2.effective].sort()).toEqual(["S2"]);
+  });
+
+  it("pointer 未完成は既存集合から外し、metadata-only は報告列挙する", () => {
+    const existing = new Set(["P1", "M1", "M2"]);
+    const memo = new Map<string, DocCustody>([
+      ["M1", CUSTODY("metadata-only", "complete")],
+      ["M2", CUSTODY("complete", "complete")],
+    ]);
+    const r = applyCompletionFilter(existing, new Set(["P1"]), memo, ["P1", "M1", "M2"]);
+    expect([...r.effective].sort()).toEqual(["M1", "M2"]);
+    expect(r.metadataOnly).toEqual(["M1"]);
   });
 });

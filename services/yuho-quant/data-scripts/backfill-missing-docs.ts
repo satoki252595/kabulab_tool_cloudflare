@@ -25,7 +25,9 @@ import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
 import {
   archiveTallyFailed,
+  checkDocsCustody,
   recordEdinetZip,
+  type DocCustody,
 } from "../src/services/edinet/archive.js";
 import {
   downloadDocument,
@@ -39,7 +41,7 @@ import {
 } from "../src/services/edinet/types.js";
 import { backupDocTextToNotion } from "../src/services/text-backup.js";
 import { parseEdinetCsvZip } from "../src/services/edinet/csv.js";
-import { selectMissingDocs } from "../src/services/edinet/missing.js";
+import { applyCompletionFilter, selectMissingDocs } from "../src/services/edinet/missing.js";
 import {
   parseOrderData,
   RX_ORDER_KEYWORD,
@@ -129,11 +131,28 @@ const { yuhoDocuments, orderFacts, overseasSalesFacts, textSections } = yuhoSche
 const codeToId = await loadIngestCodeToId(db);
 console.info(`[missing] 母集団 ${codeToId.size} 社 range=${fromArg}〜${toArg} force=${force} dryRun=${dryRun}`);
 
-// 取込済み docId は全件 1 回だけ引く (日ごとに引くと 22k 行 × 日数になる)
-const inDbAll = await db.select({ docId: yuhoDocuments.docId }).from(yuhoDocuments);
+// 取込済み docId は全件 1 回だけ引く (日ごとに引くと 22k 行 × 日数になる)。
+// 本文ポインタの有無も一緒に引き、parse 済み (ok) なのにポインタ NULL の通は
+// 既存扱いスキップから外して回収対象にする (本文ポインタ共有根因)。
+const inDbAll = await db
+  .select({
+    docId: yuhoDocuments.docId,
+    textParseStatus: yuhoDocuments.textParseStatus,
+    notionDocPageId: yuhoDocuments.notionDocPageId,
+  })
+  .from(yuhoDocuments);
 const existingAll = new Set(inDbAll.map((r) => r.docId));
+// 本文ポインタ未完成の既存通 (ok なのに行 ID NULL)。保管済み判定から外す。
+const pointerIncomplete = new Set(
+  inDbAll
+    .filter((r) => r.textParseStatus === "ok" && r.notionDocPageId === null)
+    .map((r) => r.docId)
+);
 
 const tally: Record<string, number> = {};
+// type 保管完成の run 内メモ (docId → DocCustody)。日ごとの一括取得で足し、
+// 適用は毎回 applyCompletionFilter で行う (false/未完成の適用漏れ防止)。
+const custodyMemo = new Map<string, DocCustody>();
 let done = 0;
 let target = 0;
 
@@ -146,9 +165,31 @@ for (const date of eachDay(fromArg, toArg)) {
     console.warn(`[missing] list 失敗 ${date}: ${(e as Error).message} (スキップ)`);
     continue;
   }
+  // 既存扱いスキップは「完成済み」に限定する。type 保管完成は日ごとに
+  // 一括取得し run 内メモへ足す (通ごとの照会はしない)。適用は純粋関数で
+  // 毎回行い、memo の未完成が翌日以降も除外に反映されるようにする。
+  if (!force) {
+    const unmemoized = listed
+      .map((doc) => doc.docID)
+      .filter((id) => !custodyMemo.has(id));
+    if (unmemoized.length > 0) {
+      const batch = await checkDocsCustody("yuho-quant", unmemoized);
+      for (const [id, c] of batch) custodyMemo.set(id, c);
+    }
+  }
+  const { effective: effectiveExisting, metadataOnly } = applyCompletionFilter(
+    existingAll,
+    pointerIncomplete,
+    custodyMemo,
+    listed.map((doc) => doc.docID)
+  );
+  for (const id of metadataOnly) {
+    console.error(`[missing] archive metadata-only のため STOP (明示修復が必要) docID=${id}`);
+    tally.archive_metadata_only = (tally.archive_metadata_only ?? 0) + 1;
+  }
   const { missing, skippedExisting, outOfUniverse } = selectMissingDocs(
     listed,
-    existingAll,
+    effectiveExisting,
     codeToId,
     force
   );
@@ -376,6 +417,10 @@ for (const date of eachDay(fromArg, toArg)) {
                 .update(yuhoSchema.yuhoDocuments)
                 .set({ notionDocPageId: r.rowPageId })
                 .where(eq(yuhoSchema.yuhoDocuments.id, docRowId));
+            } else {
+              // 本文ありなのに行 ID 未取得は黙って成功にしない (P6 共有根因)。
+              console.warn(`[missing] notion text backup 失敗(行 ID 未取得) ${tag}: outcome=${r.outcome}`);
+              tally.notion_text_no_pointer = (tally.notion_text_no_pointer ?? 0) + 1;
             }
           }
         } catch (e) {
@@ -398,7 +443,16 @@ for (const date of eachDay(fromArg, toArg)) {
 
 console.info("[missing] 完了: " + Object.entries(tally).map(([k, v]) => `${k}=${v}`).join(" "));
 // 保管失敗 (recordEdinetZip の throw を含む) は tally.error に加算される。
-// error > 0 を非0終了にし、失敗を job green にしない (Sol HOLD1)。
-if (archiveTallyFailed(tally.error ?? 0)) {
+// 本文保管の失敗 (保管 throw・コード不明・行 ID 未取得) と metadata-only 行の
+// STOP も同様に非0終了にし、失敗を job green にしない (Sol HOLD1 + 共有根因)。
+if (
+  archiveTallyFailed(
+    (tally.error ?? 0) +
+      (tally.notion_text_error ?? 0) +
+      (tally.notion_text_no_code ?? 0) +
+      (tally.notion_text_no_pointer ?? 0) +
+      (tally.archive_metadata_only ?? 0)
+  )
+) {
   process.exitCode = 1;
 }

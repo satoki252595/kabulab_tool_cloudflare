@@ -8,6 +8,7 @@ import {
   secCodeToTicker,
   type EdinetDoc,
 } from "./types.js";
+import type { DocCustody } from "./archive.js";
 
 export interface MissingDoc {
   doc: EdinetDoc;
@@ -38,4 +39,44 @@ export function selectMissingDocs(
     missing.push({ doc, stockId });
   }
   return { missing, skippedExisting, outOfUniverse };
+}
+
+export interface CompletionFilterResult {
+  /** selectMissingDocs へ渡す実効 existing 集合 */
+  effective: Set<string>;
+  /** metadata-only 行を持つ listed 通 (tally/STOP 対象。D1 欠落があれば処理継続) */
+  metadataOnly: string[];
+}
+
+/**
+ * 既存扱いスキップを「完成済み」に限定するための純粋適用。
+ * - pointerIncomplete (D1 ok なのに行 ID NULL) は既存集合から外して回収する
+ * - custody 未完成 (missing) の既存通も外して再処理する
+ * - metadata-only 行の通は STOP 報告用に列挙する (既存なら skip 維持し再処理
+ *   しない。非既存 = D1 欠落の部分失敗は D1 回収のため処理継続する)
+ *
+ * custodyMemo の false/未完成は呼ぶたび毎回適用すること (日をまたいだ
+ * memo 使い回しで除外を忘れると、未完成が成功扱いで残る)。
+ */
+export function applyCompletionFilter(
+  existingAll: Set<string>,
+  pointerIncomplete: Set<string>,
+  custodyMemo: Map<string, DocCustody>,
+  listedDocIDs: string[]
+): CompletionFilterResult {
+  const effective = new Set(existingAll);
+  for (const id of pointerIncomplete) effective.delete(id);
+  const metadataOnly: string[] = [];
+  for (const docID of listedDocIDs) {
+    const c = custodyMemo.get(docID);
+    if (!c) continue;
+    if (c.t1 === "metadata-only" || c.t5 === "metadata-only") {
+      metadataOnly.push(docID);
+      continue;
+    }
+    if (c.t1 === "missing" || c.t5 === "missing") {
+      effective.delete(docID);
+    }
+  }
+  return { effective, metadataOnly };
 }

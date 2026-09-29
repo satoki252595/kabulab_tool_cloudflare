@@ -98,6 +98,9 @@ for (const docId of docIds) {
       periodEnd: row.periodEnd,
       submitDateTime: fetchedAt,
       repairedBy: "p6-zip-gap",
+      // XBRL 未取得 (EdinetNotFound) = 公式未提供の文書化。T1 行不在時の
+      // not-applicable 判定が同通 T5 行のこの flag を見る。
+      xbrlUnavailable: xbrlZip === null,
     };
     const r5 = await recordEdinetZip({
       service: "yuho-quant",
