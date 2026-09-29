@@ -68,7 +68,7 @@ function isTextualContentType(contentType: string): boolean {
  * - 非対応かつ非テキスト (バイナリ) は捏造で `.txt` 化せず throw し、呼び出し側に
  *   正直に失敗を返す (ルール1/2: 黙って別形式で埋めない)。
  */
-function toNotionUpload(
+export function toNotionUpload(
   filename: string,
   contentType: string
 ): { filename: string; contentType: string } {

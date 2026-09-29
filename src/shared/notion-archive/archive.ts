@@ -19,7 +19,8 @@
  */
 import { NotionUnknownResultError, notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
-import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
+import { NotionFileTooLargeError, toNotionUpload, uploadFile } from "./file-upload.js";
+import { sha256Hex, sha256HexBytes } from "../sha256.js";
 
 /** Notion rich_text 1 オブジェクトの上限 */
 const RICH_TEXT_MAX = 2000;
@@ -60,6 +61,13 @@ export interface RecordResult {
   outcome: "recorded" | "skipped_existing";
   /** 一部/全部のファイルが Notion 上限超過でアップロードできなかった場合 true */
   fileTooLarge: boolean;
+  /**
+   * 入力バイト列と保管済み manifest の照合結果。
+   * recorded なら "written" (今回 manifest を書いた)。
+   * skipped_existing なら "same" (manifest 一致) か "unknown"
+   * (旧行に manifest が無く一致不明 — 一致確定ではない)。
+   */
+  manifestMatch: "written" | "same" | "unknown";
 }
 
 interface BlockChildren {
@@ -475,6 +483,116 @@ async function findByKey(
   return row?.id ?? null;
 }
 
+/** caller が metadata に直書き禁止の予約キー (producer が書く manifest 用)。 */
+const FILE_MANIFEST_KEY = "_fileManifest";
+const FILE_MANIFEST_VERSION = 1;
+
+interface FileManifestEntry {
+  originalFilename: string;
+  uploadFilename: string;
+  originalMime: string;
+  uploadMime: string;
+  byteLength: number;
+  sha256: string;
+  upload: "uploaded" | "too_large";
+}
+
+interface FileManifest {
+  version: number;
+  files: FileManifestEntry[];
+  inputFingerprint: string;
+}
+
+interface FrozenFile {
+  filename: string;
+  contentType: string;
+  bytes: Uint8Array<ArrayBuffer>;
+  uploadFilename: string;
+  uploadMime: string;
+  sha256: string;
+}
+
+function compareManifestOrder(
+  a: Pick<FrozenFile, "filename" | "contentType"> & { byteLength: number; sha256: string },
+  b: Pick<FrozenFile, "filename" | "contentType"> & { byteLength: number; sha256: string }
+): number {
+  return (
+    (a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0) ||
+    (a.contentType < b.contentType ? -1 : a.contentType > b.contentType ? 1 : 0) ||
+    a.byteLength - b.byteLength ||
+    (a.sha256 < b.sha256 ? -1 : a.sha256 > b.sha256 ? 1 : 0)
+  );
+}
+
+/**
+ * 入力集合の安定 fingerprint。入力名/MIME/バイト長/SHA の決定順のみから作り、
+ * upload 結果 (file_upload id・成否) と時刻は混ぜない。
+ */
+async function inputFingerprint(
+  files: ReadonlyArray<{ filename: string; contentType: string; byteLength: number; sha256: string }>
+): Promise<string> {
+  const sorted = [...files].sort(compareManifestOrder);
+  return sha256Hex(
+    JSON.stringify(
+      sorted.map((f) => ({ name: f.filename, mime: f.contentType, bytes: f.byteLength, sha: f.sha256 }))
+    )
+  );
+}
+
+function isManifestEntry(v: unknown): v is FileManifestEntry {
+  if (!v || typeof v !== "object") return false;
+  const e = v as Record<string, unknown>;
+  return (
+    typeof e.originalFilename === "string" &&
+    typeof e.uploadFilename === "string" &&
+    typeof e.originalMime === "string" &&
+    typeof e.uploadMime === "string" &&
+    typeof e.byteLength === "number" &&
+    Number.isInteger(e.byteLength) &&
+    e.byteLength >= 0 &&
+    typeof e.sha256 === "string" &&
+    /^[0-9a-f]{64}$/.test(e.sha256) &&
+    (e.upload === "uploaded" || e.upload === "too_large")
+  );
+}
+
+/** parsed metadata から manifest を取り出す。absent / malformed を区別する。 */
+function readFileManifest(metadata: Record<string, unknown>): FileManifest | "absent" | "malformed" {
+  if (!(FILE_MANIFEST_KEY in metadata)) return "absent";
+  const m = metadata[FILE_MANIFEST_KEY] as Record<string, unknown> | null | undefined;
+  if (!m || typeof m !== "object") return "malformed";
+  if (m.version !== FILE_MANIFEST_VERSION) return "malformed";
+  if (!Array.isArray(m.files) || !m.files.every(isManifestEntry)) return "malformed";
+  if (typeof m.inputFingerprint !== "string" || !/^[0-9a-f]{64}$/.test(m.inputFingerprint)) {
+    return "malformed";
+  }
+  return {
+    version: FILE_MANIFEST_VERSION,
+    files: m.files as FileManifestEntry[],
+    inputFingerprint: m.inputFingerprint,
+  };
+}
+
+/** key 完全一致の既存ページの ID と Metadata 全文を返す (manifest 照合用)。 */
+async function findPageMetaByKey(
+  databaseId: string,
+  key: string
+): Promise<{ pageId: string; metadataText: string } | null> {
+  const row = await queryUniqueRow<{
+    id: string;
+    properties?: { Metadata?: { rich_text?: Array<{ plain_text?: string }> } };
+  }>(
+    databaseId,
+    { property: "Key", title: { equals: key } },
+    `Notion archive: 同一 Key の重複 key=${key} を選ばず保全停止`
+  );
+  if (!row) return null;
+  const metadataText = (row.properties?.Metadata?.rich_text ?? [])
+    .map((t) => t.plain_text ?? "")
+    .join("");
+  return { pageId: row.id, metadataText };
+}
+
 /**
  * 指定 key の一次データが既に Notion に記録済みかを軽量判定する
  * (バイト列を取得せずに済むため、再開可能なバックフィルで再 DL を避ける)。
@@ -622,16 +740,74 @@ function metadataBodyBlocks(json: string): unknown[] {
 /**
  * 一次データ 1 件を Notion に冪等記録する。
  * ファイルは物理アップロードして Files プロパティへ添付。
+ * 記録前に freeze した入力バイト列の SHA と正規化名の manifest を
+ * Metadata (`_fileManifest`) に残し、既存 key の再記録時は manifest で
+ * 同一入力か検証する (producer 側 before-bytes 証跡。物理 fullDL 証明とは別)。
  */
 export async function recordPrimaryData(
   input: RecordPrimaryDataInput
 ): Promise<RecordResult> {
+  // 最初の await 前の同期前処理: 予約key偽装の拒否・bytes freeze・正規化。
+  // freeze 後の sha+upload は同一 copy を使い、caller 側の書換え/detach の
+  // 影響を受けない。
+  if (input.metadata && typeof input.metadata === "object" && FILE_MANIFEST_KEY in input.metadata) {
+    throw new Error(
+      `Notion archive: caller metadata に予約キー ${FILE_MANIFEST_KEY} を含められません (偽装のため記録前拒否) key=${input.key}`
+    );
+  }
+  const frozenFiles = (input.files ?? []).map((f) => {
+    const normalized = toNotionUpload(f.filename, f.contentType);
+    return {
+      filename: f.filename,
+      contentType: f.contentType,
+      bytes: f.bytes.slice(),
+      uploadFilename: normalized.filename,
+      uploadMime: normalized.contentType,
+    };
+  });
+  const hashFrozen = async (): Promise<FrozenFile[]> =>
+    Promise.all(
+      frozenFiles.map(async (f) => ({ ...f, sha256: await sha256HexBytes(f.bytes) }))
+    );
+
   const dbId = await ensureBackupDb(input.service, input.parentPageId);
 
   if (!input.force) {
-    const existing = await findByKey(dbId, input.key);
+    const existing = await findPageMetaByKey(dbId, input.key);
     if (existing) {
-      return { pageId: existing, outcome: "skipped_existing", fileTooLarge: false };
+      const hashed = await hashFrozen();
+      const current = await inputFingerprint(
+        hashed.map((f) => ({
+          filename: f.filename,
+          contentType: f.contentType,
+          byteLength: f.bytes.length,
+          sha256: f.sha256,
+        }))
+      );
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(existing.metadataText === "" ? "{}" : existing.metadataText);
+      } catch {
+        parsed = {};
+      }
+      const manifest =
+        parsed && typeof parsed === "object"
+          ? readFileManifest(parsed as Record<string, unknown>)
+          : "absent";
+      if (manifest === "malformed") {
+        throw new Error(
+          `Notion archive: 保管済み manifest が壊れているため保全停止 (UNKNOWNへ黙殺しない) key=${input.key}`
+        );
+      }
+      if (manifest === "absent") {
+        return { pageId: existing.pageId, outcome: "skipped_existing", fileTooLarge: false, manifestMatch: "unknown" };
+      }
+      if (manifest.inputFingerprint !== current) {
+        throw new Error(
+          `Notion archive: 同一 key の入力が変更されているため保全停止 (書込0) key=${input.key}`
+        );
+      }
+      return { pageId: existing.pageId, outcome: "skipped_existing", fileTooLarge: false, manifestMatch: "same" };
     }
   }
 
@@ -640,12 +816,16 @@ export async function recordPrimaryData(
   // file_upload は未添付のまま残るが、Notion は未添付 file_upload を約 1
   // 時間で自動失効・破棄するため恒久的なストレージリークにはならない。
   // 再実行時は findByKey がページ未作成のため再アップロードする (冪等)。
+  const hashed = await hashFrozen();
   const fileRefs: Array<{ name: string; type: "file_upload"; file_upload: { id: string } }> = [];
   const tooLarge: string[] = [];
-  for (const f of input.files ?? []) {
+  const uploadedIndex = new Set<number>();
+  for (let i = 0; i < hashed.length; i++) {
+    const f = hashed[i];
     try {
-      const id = await uploadFile(f);
+      const id = await uploadFile({ bytes: f.bytes, filename: f.filename, contentType: f.contentType });
       fileRefs.push({ name: f.filename, type: "file_upload", file_upload: { id } });
+      uploadedIndex.add(i);
     } catch (e) {
       if (e instanceof NotionFileTooLargeError) {
         tooLarge.push(`${f.filename} (${f.bytes.length}B > WS上限)`);
@@ -655,14 +835,48 @@ export async function recordPrimaryData(
     }
   }
 
+  const orderOf = (f: FrozenFile) => ({
+    filename: f.filename,
+    contentType: f.contentType,
+    byteLength: f.bytes.length,
+    sha256: f.sha256,
+  });
+  const manifest: FileManifest = {
+    version: FILE_MANIFEST_VERSION,
+    files: hashed
+      .map((f, i) => ({ f, i }))
+      .sort((a, b) => compareManifestOrder(orderOf(a.f), orderOf(b.f)))
+      .map(({ f, i }) => ({
+        originalFilename: f.filename,
+        uploadFilename: f.uploadFilename,
+        originalMime: f.contentType,
+        uploadMime: f.uploadMime,
+        byteLength: f.bytes.length,
+        sha256: f.sha256,
+        upload: (uploadedIndex.has(i) ? "uploaded" : "too_large") as "uploaded" | "too_large",
+      })),
+    inputFingerprint: await inputFingerprint(
+      hashed.map((f) => ({
+        filename: f.filename,
+        contentType: f.contentType,
+        byteLength: f.bytes.length,
+        sha256: f.sha256,
+      }))
+    ),
+  };
+
   const fetchedAt = input.fetchedAt ?? new Date().toISOString();
   const metaJson = JSON.stringify(
-    { ...input.metadata, ...(tooLarge.length ? { _fileTooLarge: tooLarge } : {}) },
+    {
+      ...input.metadata,
+      [FILE_MANIFEST_KEY]: manifest,
+      ...(tooLarge.length ? { _fileTooLarge: tooLarge } : {}),
+    },
     null,
     0
   );
   const status = tooLarge.length
-    ? input.files && tooLarge.length === input.files.length
+    ? tooLarge.length === frozenFiles.length
       ? "file_too_large"
       : "recorded_partial_file"
     : "recorded";
@@ -685,6 +899,7 @@ export async function recordPrimaryData(
     pageId: created.id,
     outcome: "recorded",
     fileTooLarge: tooLarge.length > 0,
+    manifestMatch: "written",
   };
 }
 

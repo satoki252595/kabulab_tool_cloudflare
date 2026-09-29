@@ -65,6 +65,7 @@ beforeEach(() => {
     pageId: "page-1",
     outcome: "recorded",
     fileTooLarge: false,
+    manifestMatch: "written",
   });
 });
 
@@ -394,8 +395,8 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
       new Error("対象 2026-09-28 の実日足が未取得です。")
     );
     vi.mocked(recordPrimaryData)
-      .mockResolvedValueOnce({ pageId: "p", outcome: "recorded", fileTooLarge: true })
-      .mockResolvedValue({ pageId: "p", outcome: "skipped_existing", fileTooLarge: false });
+      .mockResolvedValueOnce({ pageId: "p", outcome: "recorded", fileTooLarge: true, manifestMatch: "written" })
+      .mockResolvedValue({ pageId: "p", outcome: "skipped_existing", fileTooLarge: false, manifestMatch: "unknown" });
     const db = freshDb();
     seedTarget(1, "1301");
     seedTarget(2, "1332");

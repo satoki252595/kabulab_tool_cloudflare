@@ -14,6 +14,7 @@
  * (route map + vi.resetModules() でモジュール内キャッシュを毎回リセット)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sha256Hex, sha256HexBytes } from "../sha256.js";
 
 type FetchCalls = Array<{ url: string; init: RequestInit }>;
 
@@ -86,7 +87,7 @@ describe("notion-archive archive (parentPageId)", () => {
         metadata: { a: 1 },
       });
 
-      expect(result).toEqual({ pageId: "page-1", outcome: "recorded", fileTooLarge: false });
+      expect(result).toEqual({ pageId: "page-1", outcome: "recorded", fileTooLarge: false, manifestMatch: "written" });
       const createCall = calls.find((c) => new URL(c.url).pathname === "/v1/databases");
       const createBody = JSON.parse(String(createCall?.init.body)) as {
         parent: { page_id: string };
@@ -181,7 +182,277 @@ describe("notion-archive archive (parentPageId)", () => {
         parentPageId: OTHER_PAGE,
       });
 
-      expect(result).toEqual({ pageId: "existing-page", outcome: "skipped_existing", fileTooLarge: false });
+      expect(result).toEqual({ pageId: "existing-page", outcome: "skipped_existing", fileTooLarge: false, manifestMatch: "unknown" });
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(0);
+    });
+  });
+
+  describe("recordPrimaryData fileManifest", () => {
+    const routeNewDb = (dbId: string) => {
+      route("POST", "/v1/search", [emptySearch()]);
+      route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
+      route("POST", "/v1/databases", [{ id: dbId }]);
+    };
+    const routeUploadOk = (uploadId: string, wsMax = 5242880) => {
+      route("GET", "/v1/users/me", [{ bot: { workspace_limits: { max_file_upload_size_in_bytes: wsMax } } }]);
+      route("POST", "/v1/file_uploads", [{ id: uploadId, status: "pending" }]);
+      route("POST", `/v1/file_uploads/${uploadId}/send`, [{}]);
+      route("GET", `/v1/file_uploads/${uploadId}`, [{ id: uploadId, status: "uploaded" }]);
+    };
+    const lastPageBody = () => {
+      const pageCalls = calls.filter((c) => new URL(c.url).pathname === "/v1/pages");
+      return JSON.parse(String(pageCalls[pageCalls.length - 1]?.init.body)) as {
+        properties: {
+          Metadata: { rich_text: Array<{ text: { content: string } }> };
+          Status: { select: { name: string } };
+        };
+      };
+    };
+    const manifestOfLastPage = () => {
+      const metaText = lastPageBody().properties.Metadata.rich_text.map((t) => t.text.content).join("");
+      return (JSON.parse(metaText) as Record<string, unknown>)["_fileManifest"] as {
+        version: number;
+        files: Array<Record<string, unknown>>;
+        inputFingerprint: string;
+      };
+    };
+
+    it("caller metadata の偽 _fileManifest は fetch 前に拒否する", async () => {
+      const { recordPrimaryData } = await load();
+      await expect(
+        recordPrimaryData({
+          service: "moneyflow",
+          key: "k1",
+          source: "s",
+          metadata: { _fileManifest: { version: 1 } },
+        })
+      ).rejects.toThrow(/予約キー _fileManifest/);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("入力 bytes の事後書換えは sha と upload の両方に影響しない (freeze)", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      routeUploadOk("upload-1");
+      route("POST", "/v1/pages", [{ id: "page-1" }]);
+
+      const original = new TextEncoder().encode("original-data");
+      const expectSha = await sha256HexBytes(original);
+      const bytes = new Uint8Array(original);
+      const { recordPrimaryData } = await load();
+      const p = recordPrimaryData({
+        service: "moneyflow",
+        key: "k1",
+        source: "s",
+        metadata: {},
+        files: [{ bytes, filename: "a.txt", contentType: "text/plain" }],
+      });
+      bytes.fill(0);
+      const result = await p;
+      expect(result.outcome).toBe("recorded");
+      const manifest = manifestOfLastPage();
+      expect(manifest.files).toHaveLength(1);
+      expect(manifest.files[0]?.sha256).toBe(expectSha);
+      const sendCall = calls.find((c) => new URL(c.url).pathname.endsWith("/send"));
+      const sentFile = (sendCall?.init.body as FormData).get("file") as Blob;
+      expect([...new Uint8Array(await sentFile.arrayBuffer())]).toEqual([...original]);
+    });
+
+    it("同一 key・同一 manifest なら skipped_existing + same で書込0", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      routeUploadOk("upload-1");
+      route("POST", "/v1/pages", [{ id: "page-1" }]);
+      const { recordPrimaryData } = await load();
+      const input = {
+        service: "moneyflow",
+        key: "k1",
+        source: "s",
+        metadata: {},
+        files: [{ bytes: new TextEncoder().encode("v1"), filename: "a.txt", contentType: "text/plain" }],
+      };
+      await recordPrimaryData(input);
+      const written = manifestOfLastPage();
+      expect(written.version).toBe(1);
+
+      // 2 回目: 保管済み行に manifest あり・同一入力 → skip + same。
+      calls.length = 0;
+      routes.clear();
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [
+        {
+          results: [
+            {
+              id: "page-1",
+              properties: {
+                Metadata: { rich_text: [{ plain_text: JSON.stringify({ _fileManifest: written }) }] },
+              },
+            },
+          ],
+        },
+      ]);
+      const r2 = await recordPrimaryData({ ...input, files: [{ bytes: new TextEncoder().encode("v1"), filename: "a.txt", contentType: "text/plain" }] });
+      expect(r2).toEqual({ pageId: "page-1", outcome: "skipped_existing", fileTooLarge: false, manifestMatch: "same" });
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(0);
+      expect(calls.filter((c) => new URL(c.url).pathname.includes("file_uploads"))).toHaveLength(0);
+    });
+
+    it("同一 key・入力変更なら STOP し、書込0", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      routeUploadOk("upload-1");
+      route("POST", "/v1/pages", [{ id: "page-1" }]);
+      const { recordPrimaryData } = await load();
+      await recordPrimaryData({
+        service: "moneyflow",
+        key: "k1",
+        source: "s",
+        metadata: {},
+        files: [{ bytes: new TextEncoder().encode("v1"), filename: "a.txt", contentType: "text/plain" }],
+      });
+      const written = manifestOfLastPage();
+
+      calls.length = 0;
+      routes.clear();
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [
+        {
+          results: [
+            {
+              id: "page-1",
+              properties: {
+                Metadata: { rich_text: [{ plain_text: JSON.stringify({ _fileManifest: written }) }] },
+              },
+            },
+          ],
+        },
+      ]);
+      await expect(
+        recordPrimaryData({
+          service: "moneyflow",
+          key: "k1",
+          source: "s",
+          metadata: {},
+          files: [{ bytes: new TextEncoder().encode("v2-changed"), filename: "a.txt", contentType: "text/plain" }],
+        })
+      ).rejects.toThrow(/入力が変更されているため保全停止/);
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(0);
+      expect(calls.filter((c) => new URL(c.url).pathname.includes("file_uploads"))).toHaveLength(0);
+    });
+
+    it("旧行 (manifest 無し) は既存 skip を維持し、一致 UNKNOWN を明示する", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [
+        { results: [{ id: "old-page", properties: { Metadata: { rich_text: [{ plain_text: "{}" }] } } }] },
+      ]);
+      const { recordPrimaryData } = await load();
+      const result = await recordPrimaryData({
+        service: "moneyflow",
+        key: "k-old",
+        source: "s",
+        metadata: {},
+        files: [{ bytes: new TextEncoder().encode("v1"), filename: "a.txt", contentType: "text/plain" }],
+      });
+      expect(result).toEqual({ pageId: "old-page", outcome: "skipped_existing", fileTooLarge: false, manifestMatch: "unknown" });
+    });
+
+    it("壊れた manifest は UNKNOWN へ黙殺せず STOP する", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [
+        {
+          results: [
+            {
+              id: "bad-page",
+              properties: {
+                Metadata: { rich_text: [{ plain_text: JSON.stringify({ _fileManifest: { version: 99 } }) }] },
+              },
+            },
+          ],
+        },
+      ]);
+      const { recordPrimaryData } = await load();
+      await expect(
+        recordPrimaryData({ service: "moneyflow", key: "k-bad", source: "s", metadata: {} })
+      ).rejects.toThrow(/manifest が壊れているため保全停止/);
+    });
+
+    it("正規化 (.jsonl→.txt) は manifest に原本と upload の両方を残す", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      routeUploadOk("upload-1");
+      route("POST", "/v1/pages", [{ id: "page-1" }]);
+      const { recordPrimaryData } = await load();
+      const result = await recordPrimaryData({
+        service: "moneyflow",
+        key: "k1",
+        source: "s",
+        metadata: {},
+        files: [{ bytes: new TextEncoder().encode("{}"), filename: "data.jsonl", contentType: "application/x-ndjson" }],
+      });
+      expect(result.outcome).toBe("recorded");
+      const manifest = manifestOfLastPage();
+      expect(manifest.files[0]?.originalFilename).toBe("data.jsonl");
+      expect(manifest.files[0]?.uploadFilename).toBe("data.jsonl.txt");
+      expect(manifest.files[0]?.originalMime).toBe("application/x-ndjson");
+      expect(manifest.files[0]?.uploadMime).toBe("text/plain");
+      expect(manifest.files[0]?.upload).toBe("uploaded");
+      const createFu = JSON.parse(
+        String(calls.find((c) => new URL(c.url).pathname === "/v1/file_uploads")?.init.body)
+      ) as { filename: string; content_type: string };
+      expect(createFu.filename).toBe("data.jsonl.txt");
+      expect(createFu.content_type).toBe("text/plain");
+    });
+
+    it("上限超過は manifest に too_large を残し、既存 Status/fileTooLarge 境界を維持する", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      routeUploadOk("upload-unused", 5);
+      route("POST", "/v1/pages", [{ id: "page-1" }]);
+      const { recordPrimaryData } = await load();
+      const result = await recordPrimaryData({
+        service: "moneyflow",
+        key: "k1",
+        source: "s",
+        metadata: {},
+        files: [{ bytes: new TextEncoder().encode("0123456789"), filename: "big.txt", contentType: "text/plain" }],
+      });
+      expect(result).toEqual({ pageId: "page-1", outcome: "recorded", fileTooLarge: true, manifestMatch: "written" });
+      const manifest = manifestOfLastPage();
+      expect(manifest.files[0]?.upload).toBe("too_large");
+      expect(manifest.files[0]?.byteLength).toBe(10);
+      expect(lastPageBody().properties.Status.select.name).toBe("file_too_large");
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/file_uploads")).toHaveLength(0);
+    });
+
+    it("0 ファイルは空 manifest + 安定 fingerprint で記録する (物理成功と称さない)", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/pages", [{ id: "page-1" }]);
+      const { recordPrimaryData } = await load();
+      const result = await recordPrimaryData({ service: "moneyflow", key: "k1", source: "s", metadata: {} });
+      expect(result).toEqual({ pageId: "page-1", outcome: "recorded", fileTooLarge: false, manifestMatch: "written" });
+      const manifest = manifestOfLastPage();
+      expect(manifest.files).toEqual([]);
+      expect(manifest.inputFingerprint).toBe(await sha256Hex("[]"));
+    });
+
+    it("upload の恒久失敗は成功にせず throw し、ページを作らない", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("GET", "/v1/users/me", [{ bot: { workspace_limits: { max_file_upload_size_in_bytes: 5242880 } } }]);
+      route("POST", "/v1/file_uploads", [
+        new Response(JSON.stringify({ object: "error", code: "validation_error", message: "bad" }), { status: 400 }),
+      ]);
+      const { recordPrimaryData } = await load();
+      await expect(
+        recordPrimaryData({
+          service: "moneyflow",
+          key: "k1",
+          source: "s",
+          metadata: {},
+          files: [{ bytes: new TextEncoder().encode("x"), filename: "a.txt", contentType: "text/plain" }],
+        })
+      ).rejects.toThrow();
       expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(0);
     });
   });
@@ -687,7 +958,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
       // cache していない → 2 回目は Search から再探索し正常に記録できる。
       const ok = await recordPrimaryData(recordInput);
-      expect(ok).toEqual({ pageId: "page-ok", outcome: "recorded", fileTooLarge: false });
+      expect(ok).toEqual({ pageId: "page-ok", outcome: "recorded", fileTooLarge: false, manifestMatch: "written" });
       expect(calls.filter((c) => new URL(c.url).pathname === "/v1/search")).toHaveLength(3);
     });
 
@@ -704,7 +975,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
       const { recordPrimaryData } = await load();
       const ok = await recordPrimaryData(recordInput);
-      expect(ok).toEqual({ pageId: "page-adopted", outcome: "recorded", fileTooLarge: false });
+      expect(ok).toEqual({ pageId: "page-adopted", outcome: "recorded", fileTooLarge: false, manifestMatch: "written" });
       expect(calls.filter((c) => new URL(c.url).pathname === "/v1/databases")).toHaveLength(1);
     });
   });

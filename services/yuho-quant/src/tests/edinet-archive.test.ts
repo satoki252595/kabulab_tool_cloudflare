@@ -98,6 +98,7 @@ describe("edinet archive 共通契約", () => {
       pageId: "p1",
       outcome: "recorded",
       fileTooLarge: false,
+      manifestMatch: "written",
     });
     const bytes = realBytes();
     const out = await recordEdinetZip({
@@ -137,6 +138,7 @@ describe("edinet archive 共通契約", () => {
       pageId: "p-large",
       outcome: "recorded",
       fileTooLarge: true,
+      manifestMatch: "written",
     });
     await expect(
       recordEdinetZip({
@@ -156,6 +158,7 @@ describe("edinet archive 共通契約", () => {
       pageId: "p9",
       outcome: "skipped_existing",
       fileTooLarge: false,
+      manifestMatch: "unknown",
     });
     vi.mocked(findBackupRowsByKeys).mockResolvedValue([
       { key: "S100J2E7:type5", fileCount: 1, status: "recorded", metadata: {} },
@@ -174,6 +177,7 @@ describe("edinet archive 共通契約", () => {
       pageId: "p9",
       outcome: "skipped_existing",
       fileTooLarge: false,
+      manifestMatch: "unknown",
     });
     expect(vi.mocked(recordPrimaryData).mock.calls[0][0].force).toBe(true);
     expect(vi.mocked(recordPrimaryData).mock.calls[0][0].key).toBe(
@@ -229,6 +233,7 @@ describe("edinet archive 共通契約", () => {
       pageId: "pM",
       outcome: "skipped_existing",
       fileTooLarge: false,
+      manifestMatch: "unknown",
     });
     vi.mocked(findBackupRowsByKeys).mockResolvedValue([
       { key: "D4:type5", fileCount: 0, status: "file_too_large", metadata: {} },
@@ -251,6 +256,7 @@ describe("edinet archive 共通契約", () => {
       pageId: "pD",
       outcome: "skipped_existing",
       fileTooLarge: false,
+      manifestMatch: "unknown",
     });
     vi.mocked(findBackupRowsByKeys).mockResolvedValue([
       { key: "D5:type1", fileCount: 1, status: "recorded", metadata: {} },
