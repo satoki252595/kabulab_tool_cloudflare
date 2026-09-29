@@ -555,6 +555,68 @@ export function sha256HexBytes(bytes: Uint8Array): string {
  * 不変・補足の他 props 不変の検証用)。順序・表記ゆれは吸収しない —
  * Notion の返却形状は安定しているため厳密比較し、差があれば止める。
  */
+/**
+ * Notion Files プロパティの安定同一性への正規化 (純粋)。
+ * hosted (`type: "file"`) の署名 URL は短期認証情報 (query=署名・期限)
+ * のため resource (host+path) のみで比べ、query と expiry_time を捨てる。
+ * rotation (同 object の再署名) だけを同一判定する。
+ * external の URL は利用者管理の安定値として全体比較する
+ * (無差別 strip 禁止)。name/type の不一致・未知形状は fail closed。
+ * 実 bytes の同一性は capture proof (files inventory の bytes SHA) が
+ * 全呼出側で併せて検証する (props 比較と proof の二重関門)。
+ */
+function normalizeFilePropForCompare(prop: unknown): { ok: true; norm: unknown } | { ok: false } {
+  const p = prop as { type?: unknown; files?: unknown };
+  if (!p || typeof p !== "object" || p.type !== "files" || !Array.isArray(p.files)) {
+    return { ok: false };
+  }
+  const norm: Array<{ name: string; kind: string; resource: string }> = [];
+  for (const f of p.files) {
+    const e = f as {
+      name?: unknown;
+      type?: unknown;
+      file?: { url?: unknown };
+      external?: { url?: unknown };
+    };
+    if (!e || typeof e !== "object" || typeof e.name !== "string" || e.name === "") {
+      return { ok: false };
+    }
+    if (e.type === "file") {
+      const url = e.file?.url;
+      if (typeof url !== "string") return { ok: false };
+      const resource = url.split("?")[0];
+      if (!resource.startsWith("https://") || resource.length <= "https://".length) {
+        return { ok: false };
+      }
+      norm.push({ name: e.name, kind: "hosted", resource });
+    } else if (e.type === "external") {
+      const url = e.external?.url;
+      if (typeof url !== "string" || url === "") return { ok: false };
+      norm.push({ name: e.name, kind: "external", resource: url });
+    } else {
+      return { ok: false };
+    }
+  }
+  return { ok: true, norm };
+}
+
+/**
+ * 1 プロパティ分の等価判定 (純粋)。Files 型は安定同一性で比べる。
+ * 片側だけ Files (型変化)・正規化不能は不一致 (fail closed)。
+ */
+function propValueEqual(a: unknown, b: unknown): boolean {
+  const at = (a as { type?: unknown } | undefined)?.type;
+  const bt = (b as { type?: unknown } | undefined)?.type;
+  if (at === "files" || bt === "files") {
+    if (at !== "files" || bt !== "files") return false;
+    const na = normalizeFilePropForCompare(a);
+    const nb = normalizeFilePropForCompare(b);
+    if (!na.ok || !nb.ok) return false;
+    return stableStringify(na.norm) === stableStringify(nb.norm);
+  }
+  return stableStringify(a) === stableStringify(b);
+}
+
 export function propertiesEqualExcept(
   exceptProp: string,
   a: Record<string, unknown>,
@@ -563,7 +625,7 @@ export function propertiesEqualExcept(
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
   for (const k of keys) {
     if (k === exceptProp) continue;
-    if (stableStringify(a[k]) !== stableStringify(b[k])) return false;
+    if (!propValueEqual(a[k], b[k])) return false;
   }
   return true;
 }
@@ -749,7 +811,7 @@ export function nonRelationPropsEqual(
     const at = (a[k] as { type?: unknown } | undefined)?.type;
     const bt = (b[k] as { type?: unknown } | undefined)?.type;
     if (at === "relation" || bt === "relation") continue;
-    if (stableStringify(a[k]) !== stableStringify(b[k])) return false;
+    if (!propValueEqual(a[k], b[k])) return false;
   }
   return true;
 }
