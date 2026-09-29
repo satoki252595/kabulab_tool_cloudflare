@@ -105,3 +105,38 @@ describe("株式とマクロの日次分離", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () => {
+  const ORIGINAL = process.env.SCHEDULED_DATE;
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.SCHEDULED_DATE;
+    else process.env.SCHEDULED_DATE = ORIGINAL;
+  });
+
+  it("一致すれば通常フローへ進む (検証のみ・日付を上書きしない)", async () => {
+    // system time 2026-09-28T17:13Z → targetDate 2026-09-28。
+    process.env.SCHEDULED_DATE = "2026-09-28";
+    vi.mocked(fetchChart).mockResolvedValue(chart("2026-09-25"));
+    const { db } = recordingDb();
+    // 検証を通過し、既存の session guard (日足不一致) まで到達する。
+    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
+      "日足を確認できません"
+    );
+    expect(fetchChart).toHaveBeenCalled();
+  });
+
+  it("不一致・形式不正・実在しない日付は fetch 前に落とす", async () => {
+    for (const [value, msg] of [
+      ["2026-09-27", "一致しません"],
+      ["2026/09/28", "形式が不正"],
+      ["2026-02-30", "実在日ではありません"],
+    ] as const) {
+      process.env.SCHEDULED_DATE = value;
+      vi.mocked(fetchChart).mockClear();
+      const { db, calls } = recordingDb();
+      await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(msg);
+      expect(fetchChart).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    }
+  });
+});

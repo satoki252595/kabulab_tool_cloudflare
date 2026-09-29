@@ -258,6 +258,39 @@ export function runDateKeys(startedAt: number): {
     runMonday: isMondayUtc(at),
   };
 }
+
+const SCHEDULED_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * CF scheduler からの予定 UTC 日を検証する (検証のみ)。
+ *
+ * SCHEDULED_DATE 設定時のみ、YYYY-MM-DD 形式・実在日・今回の対象日
+ * (run 開始 UTC 日) との一致を要求する。一致しない日付での実行は
+ * 対象日取り違えのため即停止する。未設定は素通り (手動・旧経路)。
+ * 検証に使うだけで、targetDate の上書き・時刻のバックデート・
+ * 原本日付の書き換えは一切しない。
+ */
+export function assertScheduledDate(targetDate: string): void {
+  const v = sharedEnv.SCHEDULED_DATE();
+  if (v === undefined) return;
+  const m = SCHEDULED_DATE_RE.exec(v);
+  if (!m) {
+    throw new Error(`SCHEDULED_DATE の形式が不正です: ${v} (YYYY-MM-DD)`);
+  }
+  const roundTrip = new Date(
+    Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  )
+    .toISOString()
+    .slice(0, 10);
+  if (roundTrip !== v) {
+    throw new Error(`SCHEDULED_DATE が実在日ではありません: ${v}`);
+  }
+  if (v !== targetDate) {
+    throw new Error(
+      `SCHEDULED_DATE(${v}) が今回の対象日(${targetDate})と一致しません`
+    );
+  }
+}
 /** upstream 指示や診断文字列が異常でも回復待機を30秒で止める。 */
 const MAX_RECOVERY_BACKOFF_MS = 30_000;
 const MARKET_CONTEXT_CHART_SYMBOLS = [
@@ -964,6 +997,8 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   // 日付キーと週1ゲートは run 開始時刻に固定する (F-05。Phase 実行時刻で
   // 評価し直すと日跨ぎで prune/年次が飢餓し、表の日付がずれる)。
   const { runDate: targetDate, runMonday } = runDateKeys(startedAt);
+  // CF scheduler 経由の run は予定日と対象日の一致を fetch 前に検証する。
+  assertScheduledDate(targetDate);
   if (stocksOnly) {
     const utcMinutes = new Date(startedAt).getUTCHours() * 60 + new Date(startedAt).getUTCMinutes();
     if (utcMinutes < 390 || utcMinutes >= 1260) {

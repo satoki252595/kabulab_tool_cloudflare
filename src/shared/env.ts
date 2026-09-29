@@ -85,6 +85,13 @@ export const sharedEnv = {
    * `undefined` (呼び出し側が出力を諦める。throw しない)。
    */
   GITHUB_OUTPUT: () => optional("GITHUB_OUTPUT"),
+  /**
+   * CF scheduler が workflow_dispatch で渡す予定 UTC 日 (YYYY-MM-DD)。
+   * 共有 producer 入口が形式と対象日一致だけを検証する (検証のみ。
+   * 時刻のバックデート・原本日付の上書きには使わない)。未設定は
+   * `undefined` (手動・旧経路は検証を素通りする。throw しない)。
+   */
+  SCHEDULED_DATE: () => optional("SCHEDULED_DATE"),
 };
 
 /**

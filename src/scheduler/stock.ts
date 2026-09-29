@@ -1,0 +1,588 @@
+/**
+ * 株式 sync の CF スケジューラ (Worker scheduled handler 本体)。
+ *
+ * 背景: GitHub Actions の schedule イベントが 250/318 分の生成遅配を 2 回連続で
+ * 起こし (runner 待ちは 3 秒)、06:00 JST 基準 guard が正しく STOP した。
+ * 株式の起動時刻だけを Cloudflare Cron Trigger へ移し、実実行は従来どおり
+ * GitHub Actions (stock-sync.yml workflow_dispatch) に任せる。cron 前倒しは
+ * Yahoo 確定証拠なしで不採用。詳細は docs/stock-scheduler.md。
+ *
+ * Worker-safe: node 専用 import なし。env/bucket/fetch は引数で受ける。
+ * ログに秘密 (token)・リクエスト URL・run URL の値は出さない。
+ */
+
+export const DISPATCH_CRON = "13 17 * * MON-FRI";
+export const READCHECK_CRON = "5 21 * * MON-FRI";
+
+/** dispatch 先 repo は固定 (設定で差し替えない)。 */
+export const GITHUB_OWNER = "satoki252595";
+export const GITHUB_REPO = "kabulab_tool_cloudflare";
+export const WORKFLOW_FILE = "stock-sync.yml";
+export const GITHUB_API_VERSION = "2026-03-10";
+export const DISPATCH_TARGET = "scheduled-stocks";
+
+/**
+ * dispatch 開始期限。CF cron は通常ほぼ定刻に発火するため、予定時刻から
+ * 60 分を超えた起動は異常 (旧 GH schedule 遅配と同種の事故) として POST 前に
+ * 落とす。21:00 UTC 完了期限への波及を待たない。
+ */
+export const DISPATCH_START_DEADLINE_MINUTES = 60;
+
+/** 株式 step が完了すべき UTC 日内時刻 (06:00 JST 基準 = 21:00 UTC)。 */
+export const COMPLETION_CUTOFF_TIME = "21:00:00.000Z";
+
+const RECEIPT_PREFIX = "stock-scheduler/receipt-";
+const RECEIPT_VERSION = 1;
+
+const JOB_NAME_SYNC = "sync";
+const STEP_STOCK = "stock daily sync";
+const STEP_TOLERATED_COMMENT = "許容内失敗があれば Issue にコメント";
+
+/** R2 BUCKET の最小構造型 (vwap-analysis の Bindings と同じ方式)。 */
+export interface SchedulerBucket {
+  get(key: string): Promise<{ text(): Promise<string> } | null>;
+  put(
+    key: string,
+    value: string,
+    options?: { onlyIf?: Headers }
+  ): Promise<{ etag: string } | null>;
+}
+
+export interface SchedulerEnv {
+  BUCKET: SchedulerBucket;
+  GITHUB_ACTIONS_TOKEN?: string;
+}
+
+export interface ScheduledControllerLike {
+  cron: string;
+  scheduledTime: number;
+}
+
+export type SchedulerRoute = "dispatch" | "readcheck";
+
+export interface StockReceipt {
+  version: number;
+  scheduledDate: string;
+  cron: string;
+  status: "claimed" | "dispatched";
+  claimedAt: string;
+  dispatchedAt?: string;
+  workflowRunId?: number;
+  runUrl?: string;
+  htmlUrl?: string;
+}
+
+/**
+ * WorkerEnv からの型付きアクセサ。token 未設定は即 throw (秘密なしで
+ * dispatch/照会へ進まない。fail-closed)。
+ */
+export function schedulerToken(env: SchedulerEnv): string {
+  const v = env.GITHUB_ACTIONS_TOKEN;
+  if (typeof v !== "string" || v.trim() === "") {
+    throw new Error(
+      "GITHUB_ACTIONS_TOKEN が設定されていません。" +
+        "Root が `wrangler secret put GITHUB_ACTIONS_TOKEN` で登録してください。"
+    );
+  }
+  return v;
+}
+
+/** cron 文字列 → 処理分岐。未知は POST/照会の前に落とす。 */
+export function routeCron(cron: string): SchedulerRoute {
+  if (cron === DISPATCH_CRON) return "dispatch";
+  if (cron === READCHECK_CRON) return "readcheck";
+  throw new Error(
+    `未知の cron です: ${cron} (想定: ${DISPATCH_CRON} / ${READCHECK_CRON})`
+  );
+}
+
+function utcDate(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/**
+ * controller.scheduledTime から予定 UTC 日を確定する。
+ *
+ * - 未来の予定時刻 → error (まだ来ていない日の dispatch/照会はしない)
+ * - 土日 → error (両 cron は MON-FRI。曜日違いの発火は想定外)
+ * - UTC 日跨ぎ (予定日 ≠ 実行日) → error (対象日が曖昧なまま進まない)
+ * - dispatch のみ: 開始期限 (60 分) 超過 → error
+ */
+export function resolveRunDate(
+  route: SchedulerRoute,
+  scheduledTimeMs: number,
+  nowMs: number
+): string {
+  if (!Number.isFinite(scheduledTimeMs) || !Number.isFinite(nowMs)) {
+    throw new Error("scheduledTime/now が時刻として不正です");
+  }
+  if (scheduledTimeMs > nowMs) {
+    throw new Error(
+      `予定時刻が未来です: scheduled=${new Date(scheduledTimeMs).toISOString()}`
+    );
+  }
+  const scheduledDay = new Date(scheduledTimeMs).getUTCDay();
+  if (scheduledDay === 0 || scheduledDay === 6) {
+    throw new Error(
+      `予定日が土日です: ${utcDate(scheduledTimeMs)} (MON-FRI のみ)`
+    );
+  }
+  const scheduledDate = utcDate(scheduledTimeMs);
+  if (scheduledDate !== utcDate(nowMs)) {
+    throw new Error(
+      `UTC 日跨ぎのため対象日が曖昧です: scheduled=${scheduledDate}`
+    );
+  }
+  if (route === "dispatch") {
+    const delayMs = nowMs - scheduledTimeMs;
+    if (delayMs > DISPATCH_START_DEADLINE_MINUTES * 60 * 1000) {
+      throw new Error(
+        `dispatch 開始期限を超過しました: 遅延=${Math.floor(delayMs / 60000)}分` +
+          ` (上限 ${DISPATCH_START_DEADLINE_MINUTES}分)`
+      );
+    }
+  }
+  return scheduledDate;
+}
+
+export function receiptKey(scheduledDate: string): string {
+  return `${RECEIPT_PREFIX}${scheduledDate}.json`;
+}
+
+/**
+ * 予定 UTC 日の receipt を原子的 conditional PUT で claim する。
+ * 同時・逐次の二重 dispatch は R2 側で弾かれる (put は null を返す)。
+ * 取得者のみ POST する。accepted duplicate は追加 POST 0。
+ */
+export async function claimReceipt(
+  bucket: SchedulerBucket,
+  key: string,
+  receipt: StockReceipt
+): Promise<{ claimed: boolean; etag: string | null }> {
+  const put = await bucket.put(key, JSON.stringify(receipt), {
+    onlyIf: new Headers({ "If-None-Match": "*" }),
+  });
+  if (put === null) return { claimed: false, etag: null };
+  return { claimed: true, etag: put.etag };
+}
+
+export interface DispatchDetails {
+  workflowRunId: number;
+  runUrl: string;
+  htmlUrl: string;
+}
+
+function httpsUrl(value: unknown, name: string): string {
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`dispatch 応答の ${name} が不正です (空・非文字列)`);
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`dispatch 応答の ${name} が URL として不正です`);
+  }
+  if (url.protocol !== "https:") {
+    throw new Error(`dispatch 応答の ${name} が https ではありません`);
+  }
+  return value;
+}
+
+/**
+ * GitHub workflow_dispatch POST。HTTP 200 + workflow_run_id/run_url/html_url
+ * の検証を通したものだけ返す。それ以外は throw (pending/結果不明を成功に
+ * しない。自動再 POST もしない)。秘密・URL 値はログに出さない。
+ */
+export async function postStockDispatch(
+  fetchFn: typeof fetch,
+  token: string,
+  scheduledDate: string
+): Promise<DispatchDetails> {
+  const res = await fetchFn(
+    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}` +
+      `/actions/workflows/${WORKFLOW_FILE}/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ref: "main",
+        inputs: { target: DISPATCH_TARGET, scheduled_date: scheduledDate },
+        return_run_details: true,
+      }),
+    }
+  );
+  if (res.status !== 200) {
+    let hint = "";
+    try {
+      const body = (await res.json()) as { message?: unknown };
+      if (typeof body.message === "string" && body.message !== "") {
+        hint = `: ${body.message.slice(0, 200)}`;
+      }
+    } catch {
+      hint = "";
+    }
+    throw new Error(`dispatch POST が失敗しました: HTTP ${res.status}${hint}`);
+  }
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    throw new Error("dispatch 応答が JSON ではありません (HTTP 200)");
+  }
+  if (typeof json !== "object" || json === null) {
+    throw new Error("dispatch 応答の形式が不正です");
+  }
+  const r = json as Record<string, unknown>;
+  if (!Number.isInteger(r["workflow_run_id"])) {
+    throw new Error("dispatch 応答に workflow_run_id (整数) がありません");
+  }
+  return {
+    workflowRunId: r["workflow_run_id"] as number,
+    runUrl: httpsUrl(r["run_url"], "run_url"),
+    htmlUrl: httpsUrl(r["html_url"], "html_url"),
+  };
+}
+
+/**
+ * POST 検証後の receipt 更新を CAS (If-Match) で保存する。
+ * 更新競合 (null) は上書きせず throw (POST 済みのため再 POST もしない。
+ * 手動トリアージ対象として readcheck が error にする)。
+ */
+export async function saveDispatchResult(
+  bucket: SchedulerBucket,
+  key: string,
+  claimEtag: string,
+  receipt: StockReceipt
+): Promise<void> {
+  const put = await bucket.put(key, JSON.stringify(receipt), {
+    onlyIf: new Headers({ "If-Match": claimEtag }),
+  });
+  if (put === null) {
+    throw new Error(
+      `receipt の CAS 保存に失敗しました (競合): date=${receipt.scheduledDate}`
+    );
+  }
+}
+
+export type DispatchOutcome =
+  | { status: "dispatched"; workflowRunId: number }
+  | { status: "duplicate" };
+
+export async function runStockDispatch(deps: {
+  bucket: SchedulerBucket;
+  token: string;
+  cron: string;
+  scheduledDate: string;
+  nowMs: number;
+  fetchFn: typeof fetch;
+}): Promise<DispatchOutcome> {
+  const key = receiptKey(deps.scheduledDate);
+  const { claimed, etag } = await claimReceipt(deps.bucket, key, {
+    version: RECEIPT_VERSION,
+    scheduledDate: deps.scheduledDate,
+    cron: deps.cron,
+    status: "claimed",
+    claimedAt: new Date(deps.nowMs).toISOString(),
+  });
+  if (!claimed || etag === null) {
+    console.info(
+      `[stock-scheduler] dispatch duplicate のため POST なし: date=${deps.scheduledDate}`
+    );
+    return { status: "duplicate" };
+  }
+  const details = await postStockDispatch(
+    deps.fetchFn,
+    deps.token,
+    deps.scheduledDate
+  );
+  await saveDispatchResult(deps.bucket, key, etag, {
+    version: RECEIPT_VERSION,
+    scheduledDate: deps.scheduledDate,
+    cron: deps.cron,
+    status: "dispatched",
+    claimedAt: new Date(deps.nowMs).toISOString(),
+    dispatchedAt: new Date(Date.now()).toISOString(),
+    workflowRunId: details.workflowRunId,
+    runUrl: details.runUrl,
+    htmlUrl: details.htmlUrl,
+  });
+  console.info(
+    `[stock-scheduler] dispatch 完了: date=${deps.scheduledDate}` +
+      ` run_id=${details.workflowRunId}`
+  );
+  return { status: "dispatched", workflowRunId: details.workflowRunId };
+}
+
+export interface RunJobStep {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  completed_at: string | null;
+}
+
+export interface RunJob {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  steps?: RunJobStep[];
+}
+
+function nextPageUrl(linkHeader: string | null): string | null {
+  if (!linkHeader) return null;
+  for (const part of linkHeader.split(",")) {
+    const m = /<([^>]+)>\s*;\s*rel="next"/.exec(part.trim());
+    if (m) {
+      try {
+        return new URL(m[1]).toString();
+      } catch {
+        throw new Error("Jobs API の next ページ URL が不正です");
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * workflow run の jobs を全ページ取得する (Link rel=next を追う)。
+ * 非 200・形式不正は throw (一部だけ見て判定しない)。
+ */
+export async function fetchAllJobs(
+  fetchFn: typeof fetch,
+  token: string,
+  runId: number
+): Promise<RunJob[]> {
+  const headers = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": GITHUB_API_VERSION,
+    Authorization: `Bearer ${token}`,
+  };
+  let url: string | null =
+    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}` +
+    `/actions/runs/${runId}/jobs?per_page=100`;
+  const jobs: RunJob[] = [];
+  while (url !== null) {
+    const res = await fetchFn(url, { headers });
+    if (res.status !== 200) {
+      throw new Error(`Jobs API が失敗しました: HTTP ${res.status}`);
+    }
+    let json: unknown;
+    try {
+      json = await res.json();
+    } catch {
+      throw new Error("Jobs API の応答が JSON ではありません");
+    }
+    if (typeof json !== "object" || json === null) {
+      throw new Error("Jobs API の応答形式が不正です");
+    }
+    const page = (json as Record<string, unknown>)["jobs"];
+    if (!Array.isArray(page)) {
+      throw new Error("Jobs API の応答に jobs 配列がありません");
+    }
+    for (const j of page) {
+      if (typeof j !== "object" || j === null) {
+        throw new Error("Jobs API の job 要素が不正です");
+      }
+      const job = j as Record<string, unknown>;
+      if (typeof job["name"] !== "string") {
+        throw new Error("Jobs API の job に name がありません");
+      }
+      jobs.push({
+        name: job["name"] as string,
+        status: typeof job["status"] === "string" ? job["status"] : "",
+        conclusion:
+          typeof job["conclusion"] === "string" ? job["conclusion"] : null,
+        steps: Array.isArray(job["steps"])
+          ? (job["steps"] as Array<Record<string, unknown>>).map((s) => ({
+              name: typeof s["name"] === "string" ? s["name"] : "",
+              status: typeof s["status"] === "string" ? s["status"] : "",
+              conclusion:
+                typeof s["conclusion"] === "string" ? s["conclusion"] : null,
+              completed_at:
+                typeof s["completed_at"] === "string" ? s["completed_at"] : null,
+            }))
+          : undefined,
+      });
+    }
+    url = nextPageUrl(res.headers.get("Link"));
+  }
+  return jobs;
+}
+
+function stepCompletedAtMs(step: RunJobStep, what: string): number {
+  if (step.completed_at === null) {
+    throw new Error(`${what} の completed_at がありません (結果不明)`);
+  }
+  const ms = Date.parse(step.completed_at);
+  if (!Number.isFinite(ms)) {
+    throw new Error(`${what} の completed_at が時刻として不正です`);
+  }
+  return ms;
+}
+
+export interface ReadcheckVerdict {
+  stockCompletedAt: string;
+}
+
+/**
+ * 期限 readcheck の純粋判定。次を全て満たすときのみ成功:
+ * - job `sync` がちょうど 1 件・completed・conclusion success
+ * - step `stock daily sync` が completed・success・completed_at が
+ *   21:00 UTC (同日) 以前
+ * - step `許容内失敗があれば Issue にコメント` が SKIPPED
+ *   (success = 許容内失敗ありの false-green。欠落も error)
+ * それ以外は全て throw (Workers Logs/Cron Events に error として残る)。
+ */
+export function evaluateReadcheck(
+  jobs: RunJob[],
+  scheduledDate: string
+): ReadcheckVerdict {
+  const cutoffMs = Date.parse(`${scheduledDate}T${COMPLETION_CUTOFF_TIME}`);
+  const syncJobs = jobs.filter((j) => j.name === JOB_NAME_SYNC);
+  if (syncJobs.length === 0) {
+    throw new Error(`job '${JOB_NAME_SYNC}' が見つかりません`);
+  }
+  if (syncJobs.length > 1) {
+    throw new Error(`job '${JOB_NAME_SYNC}' が複数あります (曖昧)`);
+  }
+  const job = syncJobs[0];
+  if (job.status !== "completed") {
+    throw new Error(`job '${JOB_NAME_SYNC}' が未完了です: status=${job.status}`);
+  }
+  if (job.conclusion !== "success") {
+    throw new Error(
+      `job '${JOB_NAME_SYNC}' が成功ではありません: conclusion=${job.conclusion}`
+    );
+  }
+  const steps = job.steps ?? [];
+  const stock = steps.find((s) => s.name === STEP_STOCK);
+  if (!stock) {
+    throw new Error(`step '${STEP_STOCK}' が見つかりません`);
+  }
+  if (stock.status !== "completed" || stock.conclusion !== "success") {
+    throw new Error(
+      `step '${STEP_STOCK}' が成功完了ではありません:` +
+        ` status=${stock.status} conclusion=${stock.conclusion}`
+    );
+  }
+  const stockMs = stepCompletedAtMs(stock, `step '${STEP_STOCK}'`);
+  if (stockMs > cutoffMs) {
+    throw new Error(
+      `step '${STEP_STOCK}' の完了が 21:00 UTC を超過しました:` +
+        ` completed_at=${stock.completed_at}`
+    );
+  }
+  const comment = steps.find((s) => s.name === STEP_TOLERATED_COMMENT);
+  if (!comment) {
+    throw new Error(`step '${STEP_TOLERATED_COMMENT}' が見つかりません`);
+  }
+  if (comment.conclusion !== "skipped") {
+    throw new Error(
+      `許容内失敗の疑い (false-green): step '${STEP_TOLERATED_COMMENT}'` +
+        ` が SKIPPED ではありません: conclusion=${comment.conclusion}`
+    );
+  }
+  return { stockCompletedAt: stock.completed_at as string };
+}
+
+function parseReceipt(text: string, key: string): StockReceipt {
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(`receipt の JSON が不正です: ${key}`);
+  }
+  if (typeof json !== "object" || json === null) {
+    throw new Error(`receipt の形式が不正です: ${key}`);
+  }
+  const r = json as Record<string, unknown>;
+  if (r["version"] !== RECEIPT_VERSION) {
+    throw new Error(`receipt の version が未知です: ${key}`);
+  }
+  if (r["status"] !== "claimed" && r["status"] !== "dispatched") {
+    throw new Error(`receipt の status が未知です: ${key}`);
+  }
+  if (typeof r["scheduledDate"] !== "string") {
+    throw new Error(`receipt に scheduledDate がありません: ${key}`);
+  }
+  return r as unknown as StockReceipt;
+}
+
+export async function runDeadlineReadcheck(deps: {
+  bucket: SchedulerBucket;
+  token: string;
+  scheduledDate: string;
+  fetchFn: typeof fetch;
+}): Promise<ReadcheckVerdict> {
+  const key = receiptKey(deps.scheduledDate);
+  const obj = await deps.bucket.get(key);
+  if (obj === null) {
+    throw new Error(`receipt がありません (dispatch 未実行の疑い): ${key}`);
+  }
+  const receipt = parseReceipt(await obj.text(), key);
+  if (receipt.scheduledDate !== deps.scheduledDate) {
+    throw new Error(`receipt の日付不一致: ${key}`);
+  }
+  if (receipt.status !== "dispatched") {
+    throw new Error(
+      `dispatch 未完了の receipt です: status=${receipt.status} ${key}`
+    );
+  }
+  if (!Number.isInteger(receipt.workflowRunId)) {
+    throw new Error(`receipt に workflow_run_id がありません: ${key}`);
+  }
+  const jobs = await fetchAllJobs(
+    deps.fetchFn,
+    deps.token,
+    receipt.workflowRunId as number
+  );
+  const verdict = evaluateReadcheck(jobs, deps.scheduledDate);
+  console.info(
+    `[stock-scheduler] readcheck OK: date=${deps.scheduledDate}` +
+      ` run_id=${receipt.workflowRunId} stock_completed_at=${verdict.stockCompletedAt}`
+  );
+  return verdict;
+}
+
+/**
+ * Worker scheduled handler 本体。cron で分岐し、各 await を await する。
+ * 失敗は throw (Cron Events に error として残る)。Dispatch 受付は
+ * 同期完了ではない — 完了の判定は readcheck のみが行う。
+ */
+export async function handleStockScheduled(
+  controller: ScheduledControllerLike,
+  env: SchedulerEnv,
+  deps: { fetchFn?: typeof fetch; nowMs?: number } = {}
+): Promise<DispatchOutcome | ReadcheckVerdict> {
+  const route = routeCron(controller.cron);
+  const nowMs = deps.nowMs ?? Date.now();
+  const scheduledDate = resolveRunDate(route, controller.scheduledTime, nowMs);
+  const token = schedulerToken(env);
+  const fetchFn = deps.fetchFn ?? fetch;
+  if (route === "dispatch") {
+    console.info(
+      `[stock-scheduler] dispatch 開始: date=${scheduledDate} cron=${controller.cron}`
+    );
+    return runStockDispatch({
+      bucket: env.BUCKET,
+      token,
+      cron: controller.cron,
+      scheduledDate,
+      nowMs,
+      fetchFn,
+    });
+  }
+  console.info(
+    `[stock-scheduler] readcheck 開始: date=${scheduledDate} cron=${controller.cron}`
+  );
+  return runDeadlineReadcheck({
+    bucket: env.BUCKET,
+    token,
+    scheduledDate,
+    fetchFn,
+  });
+}
