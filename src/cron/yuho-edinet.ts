@@ -69,6 +69,21 @@ export interface YuhoEdinetResult {
   elapsedSec: number;
   /** L2 投影 `p_yuho_growth` の再生成銘柄数。シャード実行では 0 (再生成しない) */
   projectionStocks: number;
+  /** 一覧取得に失敗した日付 (EDINET list の throw)。空でないと job 失敗。 */
+  listErrors: string[];
+  /** 取込 (取得・構造化・保存・物理記録) に失敗した docID。空でないと job 失敗。 */
+  ingestErrors: string[];
+}
+
+/**
+ * catchup 応答の HTTP ステータス契約。実失敗 (一覧/取込の throw) が
+ * 1 件でもあれば 500 + result 本文で CLI exit 1 へ接続する。母集団外・
+ * cap・既取込スキップは正当な結果で 200 のまま (失敗に混ぜない)。
+ */
+export function catchupHttpStatus(
+  r: Pick<YuhoEdinetResult, "listErrors" | "ingestErrors">
+): 200 | 500 {
+  return r.listErrors.length > 0 || r.ingestErrors.length > 0 ? 500 : 200;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -101,6 +116,8 @@ export async function runYuhoEdinetCatchup(
   let skippedExisting = 0;
   let outOfUniverse = 0;
   let reachedCap = false;
+  const listErrors: string[] = [];
+  const ingestErrors: string[] = [];
 
   const overBudget = () => Date.now() - startedAt > TIME_BUDGET_MS;
 
@@ -124,6 +141,7 @@ export async function runYuhoEdinetCatchup(
       console.error(
         `[yuho-edinet] list 失敗 ${date}: ${(e as Error).message}`
       );
+      listErrors.push(date);
       await sleep(800);
       continue;
     }
@@ -187,6 +205,7 @@ export async function runYuhoEdinetCatchup(
         console.error(
           `[yuho-edinet] ingest 失敗 docID=${doc.docID}: ${(e as Error).message}`
         );
+        ingestErrors.push(doc.docID);
       }
       await sleep(300);
     }
@@ -204,7 +223,7 @@ export async function runYuhoEdinetCatchup(
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   console.info(
-    `[yuho-edinet] 完了: shard=${shard ? `${shard.part}/${shard.of}` : "-"} 走査${scannedDays}日 matched=${matched} ingested=${ingested} skip=${skippedExisting} outOfUniverse=${outOfUniverse} cap=${reachedCap} 投影=${projectionStocks} ${elapsedSec.toFixed(1)}s`
+    `[yuho-edinet] 完了: shard=${shard ? `${shard.part}/${shard.of}` : "-"} 走査${scannedDays}日 matched=${matched} ingested=${ingested} skip=${skippedExisting} outOfUniverse=${outOfUniverse} cap=${reachedCap} listErrors=${listErrors.length} ingestErrors=${ingestErrors.length} 投影=${projectionStocks} ${elapsedSec.toFixed(1)}s`
   );
   return {
     shard: shard ?? null,
@@ -217,5 +236,7 @@ export async function runYuhoEdinetCatchup(
     reachedCap,
     elapsedSec,
     projectionStocks,
+    listErrors,
+    ingestErrors,
   };
 }

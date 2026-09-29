@@ -116,3 +116,9 @@ live keeper 7129 の開示が 11 (v1・live の 11 集合完全一致・全行 k
   初回・resume・適用済みの D1 前全経路へ接続。master/補足は snapshot 固定
   ID から取り直す (入口 state 使い回し廃止)。中間 gate の未移行比較も
   件数から集合へ (同数 ID 置換を検出)。回帰 +6 件。全体 3110 pass・0 fail
+- 追補 Files 安定同一性: P3 適用が entry guard で STOP (書込 0。raw1 行の
+  ファイル prop のみ差分・last_edited 不変・writer 無し=署名 URL rotation)。
+  共通 2 comparator を Files 安定同一性 (hosted は name/type/host+path、
+  external は全体、未知 fail closed) へ是正。bytes は既存 proof 連鎖
+  (全 6 呼出で併用確認)。実 rotation ペアで両 comparator 真を確認
+  (in-memory のみ)。回帰 +5 件。全体 3216 pass・0 fail で緑

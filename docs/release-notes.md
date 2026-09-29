@@ -11,6 +11,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ### 変更
 - VWAP取込の5分足にも日足と同じ応答価格整合ガードを接続し、日足/5分足とも保存前に異常バーを書かず数えるSTOPとrun粒度バッチ保管(通常runに必須接続・保管失敗はjob失敗)を追加 (#169)。データ変更なし。
+- EDINET一次データ記録をtype別key (`{docID}:type1/5`) +実ZIP添付の共通契約へ統一し、Type5済みによるType1保存抑止を解消。海外backfillにもType1記録を追加 (#168)。旧docID記録は不変。実データ適用は後続。
 - 年次preflightと優待の共通保存経路に親銘柄active/区分・同一性CASを追加し凍結破りを境界で止め、適用runnerの完了キーは種別つき必須+重複検査にした (#166)。データ変更なし。
 - 本番作業: 市場Source D1修復を適用 (ATR 1679行・年次 1490行のactive行のみ。非active 36行は凍結維持のため適用後に復元)。送信前fresh全一致・適用後全new一致・再計算write0・保護一致を確認 (#166)。
 - 市場Source修復の共通input CAS preflight (ATR全入力6+銘柄同一性/年次系列全点+TTM+日付のNULL-safe同一batch検証) と優待全文境界のdescription CAS (行ごと旧文CAS) ビルダーを追加 (#165)。データ適用はまだ。
@@ -19,6 +20,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - ①マスタ重複の snapshot を完全 proof 化 (本文全 capture+添付 inventory+別キー v2 保管。全 apply 入口に共通 gate)。moneyflow を stock-sync 成功後の連鎖実行に変更し独立 cron を廃止、sector-turnover は実 tradingDate 固定+厳密 coverage gate (#160)。実データ適用は後続。
 - ①マスタ重複の保持先ガードを件数固定から証明済み ID 集合へ変更 (7129 keep 開示 10→11 valid-addition 対応。baseline は実 receipt+v1 を実行時読取、take 固定+直後再読、追加は issuer/原本/keep-only 実証のみ許可)。`--take-only` (snapshot 取得まで・schema は v2-manifest 証拠を SHA 検証再利用) を追加。
 - ①マスタ重複の D1 前 gate に keeper/retire の union 一致 (全 pagination・意図移行状態) を追加し全経路へ接続。resume の同数 ID 置換を見逃さないよう集合比較へ是正。実データ適用は後続 (Refs #102)。
+- ①マスタ重複の props 比較を Files 署名 URL rotation に対応 (hosted は name/type/resource で同一判定、external は全体比較、未知形状は fail closed。bytes は既存 proof 連鎖)。実データ適用は後続 (Refs #102)。
 
 ## 2026-09-28
 
