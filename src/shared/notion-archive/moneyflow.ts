@@ -738,14 +738,80 @@ export async function observationExists(dbId: string, key: string): Promise<bool
 /**
  * 既存行のプロパティが今回書こうとしている値と完全に一致するか (純関数)。
  * 一致すれば PATCH を省く (再実行時の Notion 書込を 2 req→1 req/行に減らす。
- * 値が 1 つでも違えば従来どおり上書きする)。プロパティが読めない・形が想定外の
- * ときは「一致しない」扱いにして上書きへ倒す (黙って古い値を残さない)。
+ * 値が 1 つでも違えば従来どおり上書きする)。照合前に 19 プロパティ全ての
+ * 存在・型を検査し、欠落は null/空の既定値で誤一致させず「一致しない」扱いに
+ * して上書きへ倒す (黙って古い値を残さない。present-null は受理する)。
  */
+type ObsPropShape = "title" | "rich_text" | "relation" | "date" | "number" | "checkbox" | "select";
+
+/**
+ * `buildObsRowProperties` が必ず書く 19 プロパティと期待する形。
+ * 照合前に全存在・型検査し、欠落を null/空の既定値で誤一致させない
+ * (present-null は受理・absent は拒否を区別する)。
+ */
+function obsRowShapeTable(): ReadonlyArray<readonly [string, ObsPropShape]> {
+  const p = MONEYFLOW_OBS_PROPS;
+  return [
+    [p.key, "title"],
+    [p.indicator, "relation"],
+    [p.period, "rich_text"],
+    [p.periodStart, "date"],
+    [p.periodEnd, "date"],
+    [p.category, "rich_text"],
+    [p.categoryKind, "select"],
+    [p.marketSegment, "rich_text"],
+    [p.investorCategory, "rich_text"],
+    [p.tradeType, "rich_text"],
+    [p.parentCategory, "rich_text"],
+    [p.categoryLevel, "number"],
+    [p.publicationDate, "date"],
+    [p.value, "number"],
+    [p.unit, "select"],
+    [p.changeFromPrev, "number"],
+    [p.approximate, "checkbox"],
+    [p.measureKind, "select"],
+    [p.primaryData, "relation"],
+  ];
+}
+
+function obsPropHasShape(value: unknown, shape: ObsPropShape): boolean {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  switch (shape) {
+    case "title":
+      return Array.isArray(v.title);
+    case "rich_text":
+      return Array.isArray(v.rich_text);
+    case "relation":
+      return Array.isArray(v.relation);
+    case "number":
+      return typeof v.number === "number" || v.number === null;
+    case "checkbox":
+      return typeof v.checkbox === "boolean";
+    case "date":
+      return (
+        v.date === null ||
+        (typeof v.date === "object" &&
+          v.date !== null &&
+          typeof (v.date as Record<string, unknown>).start === "string")
+      );
+    case "select":
+      return (
+        typeof v.select === "object" &&
+        v.select !== null &&
+        typeof (v.select as Record<string, unknown>).name === "string"
+      );
+  }
+}
+
 export function observationRowMatches(
   existing: Record<string, NotionPagePropertyValue> | undefined,
   input: ObservationInput
 ): boolean {
   if (!existing) return false;
+  for (const [name, shape] of obsRowShapeTable()) {
+    if (!obsPropHasShape(existing[name], shape)) return false;
+  }
   const p = MONEYFLOW_OBS_PROPS;
   const rel = (name: string): string[] | undefined => existing[name]?.relation?.map((r) => normalizeId(r.id));
   const wantPrimary = input.primaryDataPageId ? [normalizeId(input.primaryDataPageId)] : [];
@@ -780,6 +846,7 @@ export interface UpsertObservationResult {
 
 /** POST/PATCH 応答 (Notion page) の ack 検証に使う最小面。 */
 interface ObsWriteAck {
+  object?: unknown;
   id?: unknown;
   archived?: unknown;
   in_trash?: unknown;
@@ -810,6 +877,7 @@ function assertObservationAck(
   if (page.archived !== false || page.in_trash !== false) bad("非active行への応答");
   const props: Record<string, NotionPagePropertyValue> =
     page.properties && typeof page.properties === "object" ? page.properties : bad("propertiesなし");
+  if (page.object !== "page") bad("応答object不一致");
   if (plainOf(props[MONEYFLOW_OBS_PROPS.key]?.title) !== key) bad("キー不一致");
   if (!observationRowMatches(props, input)) bad("書込値不一致");
   return pageId;

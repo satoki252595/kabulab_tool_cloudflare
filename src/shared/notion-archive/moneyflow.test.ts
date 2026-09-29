@@ -290,12 +290,18 @@ describe("notion-archive moneyflow", () => {
   describe("upsertObservation", () => {
     const dbId = "obs-db";
     const ackPage = (id: string, properties: Record<string, unknown>, overrides: Record<string, unknown> = {}) => ({
+      object: "page",
       id,
       archived: false,
       in_trash: false,
       properties,
       ...overrides,
     });
+    const dropProps = <T extends Record<string, unknown>>(props: T, ...names: string[]): T => {
+      const out = { ...props };
+      for (const n of names) delete out[n];
+      return out;
+    };
 
     it("観測キー (期間|指標|区分) が新規なら作成する", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
@@ -308,6 +314,12 @@ describe("notion-archive moneyflow", () => {
           期間終了: { type: "date", date: { start: "2026-09-18" } },
           区分: { type: "rich_text", rich_text: [{ plain_text: "電気機器" }] },
           区分種別: { type: "select", select: { name: "業種" } },
+          市場区分: { type: "rich_text", rich_text: [] },
+          投資部門: { type: "rich_text", rich_text: [] },
+          取引種別: { type: "rich_text", rich_text: [] },
+          親区分: { type: "rich_text", rich_text: [] },
+          区分階層: { type: "number", number: null },
+          公表日: { type: "date", date: null },
           値: { type: "number", number: 12345 },
           単位: { type: "select", select: { name: "円" } },
           前期比: { type: "number", number: null },
@@ -358,6 +370,12 @@ describe("notion-archive moneyflow", () => {
           期間終了: { type: "date", date: { start: "2026-09-18" } },
           区分: { type: "rich_text", rich_text: [{ plain_text: "電気機器" }] },
           区分種別: { type: "select", select: { name: "業種" } },
+          市場区分: { type: "rich_text", rich_text: [] },
+          投資部門: { type: "rich_text", rich_text: [] },
+          取引種別: { type: "rich_text", rich_text: [] },
+          親区分: { type: "rich_text", rich_text: [] },
+          区分階層: { type: "number", number: null },
+          公表日: { type: "date", date: null },
           値: { type: "number", number: 0.1234 },
           単位: { type: "select", select: { name: "比率" } },
           前期比: { type: "number", number: 0.01 },
@@ -399,6 +417,12 @@ describe("notion-archive moneyflow", () => {
           期間終了: { type: "date", date: { start: "2026-09-18" } },
           区分: { type: "rich_text", rich_text: [{ plain_text: "電気機器" }] },
           区分種別: { type: "select", select: { name: "業種" } },
+          市場区分: { type: "rich_text", rich_text: [] },
+          投資部門: { type: "rich_text", rich_text: [] },
+          取引種別: { type: "rich_text", rich_text: [] },
+          親区分: { type: "rich_text", rich_text: [] },
+          区分階層: { type: "number", number: null },
+          公表日: { type: "date", date: null },
           値: { type: "number", number: 99999 },
           単位: { type: "select", select: { name: "円" } },
           前期比: { type: "number", number: 100 },
@@ -475,6 +499,12 @@ describe("notion-archive moneyflow", () => {
       期間終了: { type: "date", date: { start: "2026-08-31" } },
       区分: { type: "rich_text", rich_text: [{ plain_text: "電気機器" }] },
       区分種別: { type: "select", select: { name: "業種" } },
+      市場区分: { type: "rich_text", rich_text: [] },
+      投資部門: { type: "rich_text", rich_text: [] },
+      取引種別: { type: "rich_text", rich_text: [] },
+      親区分: { type: "rich_text", rich_text: [] },
+      区分階層: { type: "number", number: null },
+      公表日: { type: "date", date: null },
       値: { type: "number", number: 123_000_000 },
       単位: { type: "select", select: { name: "円" } },
       前期比: { type: "number", number: null },
@@ -564,6 +594,65 @@ describe("notion-archive moneyflow", () => {
       expect(calls).toHaveLength(2);
     });
 
+    it("作成応答の object が page でなければ保全停止する", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", "/v1/pages", [ackPage("obs-row-9", existingProps(), { object: "database" })]);
+      const { upsertObservation } = await load();
+      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/作成応答が不正.*応答object不一致/);
+      expect(calls).toHaveLength(2);
+    });
+
+    it("問合せ行に公表日がなければ unchanged と誤一致せず上書きする", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [{ id: "obs-nopub", properties: dropProps(existingProps(), "公表日") }] },
+      ]);
+      route("PATCH", "/v1/pages/obs-nopub", [ackPage("obs-nopub", existingProps())]);
+      const { upsertObservation } = await load();
+      const result = await upsertObservation(dbId, sameInput);
+      expect(result).toEqual({ pageId: "obs-nopub", outcome: "updated" });
+      expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(1);
+    });
+
+    it("問合せ行に市場区分がなければ unchanged と誤一致せず上書きする", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [{ id: "obs-nomkt", properties: dropProps(existingProps(), "市場区分") }] },
+      ]);
+      route("PATCH", "/v1/pages/obs-nomkt", [ackPage("obs-nomkt", existingProps())]);
+      const { upsertObservation } = await load();
+      const result = await upsertObservation(dbId, sameInput);
+      expect(result).toEqual({ pageId: "obs-nomkt", outcome: "updated" });
+      expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(1);
+    });
+
+    it("問合せ行に値プロパティがなければ unchanged と誤一致せず上書きする", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [{ id: "obs-noval", properties: dropProps(existingProps(), "値") }] },
+      ]);
+      route("PATCH", "/v1/pages/obs-noval", [ackPage("obs-noval", existingProps())]);
+      const { upsertObservation } = await load();
+      const result = await upsertObservation(dbId, sameInput);
+      expect(result).toEqual({ pageId: "obs-noval", outcome: "updated" });
+      expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(1);
+    });
+
+    it("作成応答に公表日がなければ保全停止する (欠落の誤一致禁止)", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", "/v1/pages", [ackPage("obs-row-9", dropProps(existingProps(), "公表日"))]);
+      const { upsertObservation } = await load();
+      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/作成応答が不正.*書込値不一致/);
+      expect(calls).toHaveLength(2);
+    });
+
+    it("更新応答に市場区分がなければ保全停止する (欠落の誤一致禁止)", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+      ]);
+      route("PATCH", "/v1/pages/obs-diff", [ackPage("obs-diff", dropProps(existingProps(), "市場区分"))]);
+      const { upsertObservation } = await load();
+      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/更新応答が不正.*書込値不一致/);
+      expect(calls).toHaveLength(2);
+    });
+
     it("observationRowMatches: プロパティが読めない行は一致扱いにしない (古い値を黙って残さない)", async () => {
       const { observationRowMatches } = await load();
       expect(observationRowMatches(undefined, sameInput)).toBe(false);
@@ -572,6 +661,9 @@ describe("notion-archive moneyflow", () => {
       expect(
         observationRowMatches(existingProps({ 一次データ: { type: "relation", relation: [] } }), sameInput)
       ).toBe(false);
+      expect(observationRowMatches(dropProps(existingProps(), "公表日"), sameInput)).toBe(false);
+      expect(observationRowMatches(dropProps(existingProps(), "市場区分"), sameInput)).toBe(false);
+      expect(observationRowMatches(dropProps(existingProps(), "値"), sameInput)).toBe(false);
     });
 
     it("observationExists はキー完全一致の行の有無を返す", async () => {
