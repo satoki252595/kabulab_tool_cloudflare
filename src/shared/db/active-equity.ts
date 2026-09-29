@@ -73,6 +73,23 @@ export async function loadIngestCodeToId(db: CoreDb): Promise<Map<string, number
 }
 
 /**
+ * VWAP 取込 (daily/intra) の母集団: active かつ equity の証券コード一覧。
+ * `code` のみ select し、`instrument_type` の値は取らない (WHERE の bind のみ)。
+ * `code` 昇順で決定的に返す。空集合の扱いは呼び出し側が決める
+ * (VWAP 取込は R2 書込前に throw)。
+ *
+ * `loadIngestCodeToId` (inactive 含む開示契約) とは別物。流用・改変しない。
+ */
+export async function loadActiveEquityCodes(db: CoreDb): Promise<string[]> {
+  const rows = await db
+    .select({ code: stocks.code })
+    .from(stocks)
+    .where(activeEquityCondition())
+    .orderBy(stocks.code);
+  return rows.map((r) => r.code);
+}
+
+/**
  * 1 コードぶんの `stock_id`。母集団 (active かつ equity) に無ければ `null`。
  *
  * **`core_stocks` に行を足さない。** 以前の優待取込は、見つからなければ INSERT

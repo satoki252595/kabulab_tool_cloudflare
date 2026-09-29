@@ -4,6 +4,7 @@ import {
   findInvalidBars,
   resolveExitCode,
   resolveRunId,
+  shouldSkipPut,
 } from "./ingest-guard.js";
 
 describe("findInvalidBars", () => {
@@ -50,6 +51,70 @@ describe("findInvalidBars", () => {
       ["adj:non-positive"],
       ["adj:missing"],
     ]);
+  });
+});
+
+describe("shouldSkipPut", () => {
+  const bars = [
+    { date: "2026-09-25", o: 100, h: 110, l: 90, c: 105, v: 1000, adj: 104 },
+  ];
+  const splits: unknown[] = [];
+  const stored = (over: object = {}) =>
+    JSON.stringify({
+      code: "7203",
+      updated: "2026-09-28T00:00:00.000Z",
+      bars,
+      splits,
+      ...over,
+    });
+
+  it("内容同一なら skip (updated の差は無視する)", () => {
+    expect(
+      shouldSkipPut(stored(), { code: "7203", bars, splits })
+    ).toBe(true);
+  });
+
+  it("bars/splits/code の実変化は PUT する", () => {
+    expect(
+      shouldSkipPut(stored(), {
+        code: "7203",
+        bars: [{ ...bars[0], c: 106 }],
+        splits,
+      })
+    ).toBe(false);
+    expect(
+      shouldSkipPut(stored(), {
+        code: "7203",
+        bars,
+        splits: [{ date: "2026-09-25", numerator: 2, denominator: 1 }],
+      })
+    ).toBe(false);
+    expect(shouldSkipPut(stored(), { code: "7204", bars, splits })).toBe(
+      false
+    );
+  });
+
+  it("剪定で集合が変われば PUT する (skip しない)", () => {
+    expect(
+      shouldSkipPut(
+        stored({ bars: [...bars, { ...bars[0], date: "2026-09-24" }] }),
+        { code: "7203", bars, splits }
+      )
+    ).toBe(false);
+  });
+
+  it("既存なし・parse不能・形状不正は PUT する", () => {
+    expect(shouldSkipPut(null, { code: "7203", bars, splits })).toBe(false);
+    expect(shouldSkipPut("not-json", { code: "7203", bars, splits })).toBe(
+      false
+    );
+    expect(
+      shouldSkipPut(JSON.stringify({ code: "7203" }), {
+        code: "7203",
+        bars,
+        splits,
+      })
+    ).toBe(false);
   });
 });
 

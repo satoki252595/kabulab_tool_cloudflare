@@ -4,8 +4,8 @@ import "dotenv/config";
 import { fetchDaily } from "../../src/shared/yahoo/client.js";
 import { r2Get, r2Put, mapLimit, sleep, retry } from "./lib/r2.js";
 import { mergeDailySplits } from "./lib/daily-merge.js";
-import { loadCodes, arg } from "./lib/codes.js";
-import { buildIngestSummary, findInvalidBars, resolveExitCode, resolveRunId } from "./lib/ingest-guard.js";
+import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
+import { buildIngestSummary, findInvalidBars, resolveExitCode, resolveRunId, shouldSkipPut } from "./lib/ingest-guard.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 
 // 既定は低負荷 (逐次・約1.5s間隔 + ジッタ)。速度優先なら CONC / DELAY_MS で上書き。
@@ -15,12 +15,14 @@ const DELAY = Number(process.env.DELAY_MS || 1500);
 const MAX_RL = Number(process.env.MAX_RATE_LIMIT || 5);
 
 async function main() {
-  let codes = await loadCodes();
-  const only = arg("codes"); if (only) codes = only.split(",");
+  const universe = await loadCodes();
+  const only = arg("codes");
+  if (only) assertCodesInUniverse(only.split(","), universe);
+  let codes = only ? only.split(",") : universe;
   const limit = arg("limit"); if (limit) codes = codes.slice(0, Number(limit));
 
   const startedAt = new Date().toISOString();
-  let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0, invalid = 0;
+  let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0, invalid = 0, skipped = 0;
   let consecRL = 0, aborted = false;
   await mapLimit(codes, CONC, async (code) => {
     if (aborted) return;                                   // ブロック検知後は残りを叩かない
@@ -56,6 +58,8 @@ async function main() {
           bars[bars.length - 1].date
         );
       }
+      // same-cached-input 2回目は内容同一で PUT skip (updated 不変)。
+      if (shouldSkipPut(existing, { code, bars: merged, splits: mergedSplits })) { skipped++; return; }
       await r2Put(`daily/${code}.json`, JSON.stringify({ code, updated: new Date().toISOString(), bars: merged, splits: mergedSplits }));
       written++;
     } catch (e) {
@@ -73,11 +77,11 @@ async function main() {
     }
   });
   const finishedAt = new Date().toISOString();
-  console.log(JSON.stringify({ codes: codes.length, written, empty, errors, invalid, rateLimited, backfilled, aborted }));
+  console.log(JSON.stringify({ codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted }));
   // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 daily に必須接続。
   // 保管失敗は握り潰さず throw を伝播させ job 失敗にする (未保管の成功なし)。
   // outcome/fileTooLarge を明示確認し、skipped/partial を成功扱いしない。
-  const summary = buildIngestSummary({ kind: "daily", range: "1mo-diff/10y-backfill", runId: resolveRunId(), codes: codes.length, written, empty, errors, invalid, rateLimited, backfilled, aborted, startedAt, finishedAt });
+  const summary = buildIngestSummary({ kind: "daily", range: "1mo-diff/10y-backfill", runId: resolveRunId(), codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted, startedAt, finishedAt });
   console.log(JSON.stringify({ archive: "recording", key: summary.key }));
   const archived = await recordPrimaryData({ ...summary, force: false });
   if (archived.outcome !== "recorded" || archived.fileTooLarge) {

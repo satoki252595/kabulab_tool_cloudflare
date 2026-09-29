@@ -66,6 +66,41 @@ export function resolveExitCode(counts: {
 }
 
 /**
+ * same-cached-input 2回目の R2 PUT0 判定。normal merge + 剪定後の正準
+ * payload (code/bars/splits) が既存と同一なら true (PUT skip・updated 不変)。
+ *
+ * - 比較は JSON.stringify の完全一致 (moneyflow.ts の既存方式を踏襲)。
+ *   両辺とも同一キー順のオブジェクトから組み立てるため順序不定はない。
+ * - `updated` は書込時刻の揮発値のため比較対象外。内容等価の定義は
+ *   code+bars+splits の一致 (保存形式の契約: 両 ingest の PUT 構築)。
+ * - 既存なし・parse 不能・形状不正 → false (PUT する)。
+ * - intra の range/keep 剪定で集合が変われば内容が変わるため PUT する
+ *   (剪定変更を skip しない)。
+ */
+export function shouldSkipPut(
+  existingRaw: string | null,
+  fresh: { code: string; bars: unknown[]; splits?: unknown[] }
+): boolean {
+  if (existingRaw == null) return false;
+  let old: { code?: unknown; bars?: unknown; splits?: unknown };
+  try {
+    old = JSON.parse(existingRaw) as typeof old;
+  } catch {
+    return false;
+  }
+  if (old === null || typeof old !== "object" || !Array.isArray(old.bars)) {
+    return false;
+  }
+  const oldSplits = Array.isArray(old.splits) ? old.splits : [];
+  const freshSplits = fresh.splits ?? [];
+  return (
+    old.code === fresh.code &&
+    JSON.stringify(old.bars) === JSON.stringify(fresh.bars) &&
+    JSON.stringify(oldSplits) === JSON.stringify(freshSplits)
+  );
+}
+
+/**
  * run 識別子。同日再 run の key 衝突 (skipped_existing) を避ける。
  * Actions では GITHUB_RUN_ID(.attempt)、手元では random 8hex。
  */
@@ -84,6 +119,7 @@ export type IngestRunStats = {
   kind: "daily" | "intra";
   range: string;
   runId: string;
+  skipped?: number;
   codes: number;
   written: number;
   empty: number;
@@ -122,6 +158,7 @@ export function buildIngestSummary(stats: IngestRunStats): {
       kind: stats.kind,
       range: stats.range,
       runId: stats.runId,
+      skipped: stats.skipped ?? 0,
       codes: stats.codes,
       written: stats.written,
       empty: stats.empty,
