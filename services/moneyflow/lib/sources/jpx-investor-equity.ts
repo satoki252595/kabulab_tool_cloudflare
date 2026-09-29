@@ -12,15 +12,16 @@
  *
  * 【2026-09-29 の様式変更 (週次)】JPX は 2026-09-29 掲載分の「週間」資料から、従来
  * 「売買代金(val)」「売買高(vol)」に分かれていた PDF/Excel を 1 ファイルに統合し、
- * 直近週のみを収録する様式に変える予告をしている (投資部門別売買状況 一覧ページの
- * お知らせ、及び同ページ掲載のサンプルファイル
- * `stock_1_w_YYYYMMDD_YYYYMMDD.xlsx` で確認)。本モジュール作成時点 (2026-09-27) では
- * まだ旧様式 (val/vol 別ファイル、市場別シート) の実ファイルしか存在しないため:
+ * 直近週のみを収録する様式に変えた (予告どおり。新旧の行が同じ表に混在する)。
+ * 本モジュール作成時点 (2026-09-27) ではまだ旧様式 (val/vol 別ファイル、市場別シート)
+ * の実ファイルしか存在しなかったが、2026-09-29 に実ファイル
+ * (`stock_1_w_20260914_20260918.xlsx`、2026年9月第3週 9/14〜9/18 分) と実一覧ページで
+ * 再検証済み:
  *   - 旧様式 (legacy) パーサ: 実際に配布されている週次・月次ファイルから検証。
- *   - 新様式 (unified) パーサ: JPX 公式サンプルファイル (実データではなく仕様サンプル。
- *     ファイル名も `YYYYMMDD` の未置換プレースホルダ) の構造だけを検証。9/29 以降の
- *     実ファイルで再検証が必要 (このモジュールの既知の限界。下記 export
- *     `KNOWN_LIMITATIONS` にも明記)。
+ *   - 週次の新様式 (unified) パーサ: 上記の実ファイルで検証済み (単位は見出しどおり
+ *     千株/千円。112レコード全件で 買い-売り=差引・売り+買い=合計が一致)。
+ *     JPX 公式サンプルファイル (実データではなく仕様サンプル。値が円/株単位のまま)
+ *     は桁の検査で throw する (実データではないことの傍証としてテストで確認)。
  *
  * 【2026-10-08 の様式変更 (月次・週次とは別告知)】月次一覧ページ (00-01.html) には
  * 週次とは別建てで、2026-10-08 掲載分から月次ファイルを株数/金額の2ファイルから
@@ -30,13 +31,13 @@
  * 始まるため、`parseUnifiedSheet` (週次の新様式用) では読めずヘッダ行が見つからず
  * throw する。月次専用の新様式パーサは未実装 (KNOWN_LIMITATIONS 参照)。
  *
- * 【新様式の検知 (週次・月次とも)】取込経路で実際に最初に新様式を目にするのは
- * ファイルではなく一覧ページ。旧様式のリンクだけを拾う実装のままだと、新様式の行/
- * セルを読み飛ばして「1つ前の旧様式の週/月」を最新として黙って返してしまう
- * (再検証で実ページに新様式の行を差し込んで再現済み)。そのため
- * `parseWeeklyIndexHtml` / `parseMonthlyIndexHtml` は、告知どおりのファイル名
- * (`stock_1_w_<8桁>_<8桁>` / `stock_1_m<数字>`) のリンクや、表の中の想定外の行・
- * セルを見つけた時点で throw する (ルール2: 古い期間で黙って埋めない)。
+ * 【新様式の検知】取込経路で実際に最初に新様式を目にするのはファイルではなく
+ * 一覧ページ。週次は新旧の行をどちらも読む (上記)。月次は新様式 (2026-10-08 掲載分
+ * から) が未検証のため、`parseMonthlyIndexHtml` は告知どおりのファイル名
+ * (`stock_1_m<数字>`) のリンクや、表の中の想定外の行・セルを見つけた時点で throw
+ * する (ルール2: 古い期間で黙って埋めない。旧様式だけを拾う実装のままだと新様式の
+ * セルを読み飛ばして「1つ前の旧様式の月」を最新として黙って返してしまう — 再検証で
+ * 実ページに新様式のセルを差し込んで再現済み)。
  *
  * 利用条件: JPX 利用規約により、許諾なしの商用二次利用・再配信・生成AIによる
  * 学習/解析利用は禁止されている。kabulab では「資金フロー」Notion ページ
@@ -821,12 +822,26 @@ export function parseInvestorEquityWorkbook(
 // 一覧ページ (週次) の解析 + 最新ファイル URL 解決
 // ---------------------------------------------------------------------------
 
-export interface WeeklyIndexEntry {
+export interface WeeklyIndexEntryLegacy {
+  kind: "legacy";
   /** 例: "2026年9月第2週(9月7日～9月11日)" (一覧ページ表記そのまま) */
   label: string;
   valueXlsUrl: string;
   volumeXlsUrl: string;
 }
+
+export interface WeeklyIndexEntryUnified {
+  kind: "unified";
+  /** 例: "2026年9月第3週(9月14日～9月18日)" (一覧ページ表記そのまま) */
+  label: string;
+  unifiedXlsxUrl: string;
+}
+
+/**
+ * 週次一覧の1行。2026-09-29 掲載分から新様式の単一 xlsx 行が先頭に載り、
+ * それ以前の週は旧様式の4リンク行のまま残る (同じ表に混在する)。
+ */
+export type WeeklyIndexEntry = WeeklyIndexEntryLegacy | WeeklyIndexEntryUnified;
 
 // 一覧ページの HTML は JPX の CMS が出す固定の表組み。<table>/<tr>/<td> を入れ子なしで
 // 使っている (2026-09-27 の実ページで確認) ので、行単位・セル単位に区切ってから読む
@@ -837,8 +852,9 @@ const HTML_TR_RE = /<tr\b[^>]*>([\s\S]*?)<\/tr>/g;
 const HTML_TD_RE = /<td\b[^>]*>([\s\S]*?)<\/td>/g;
 const LEADING_HREF_RE = /^<a href="([^"]+)"/;
 
-/** 告知された新様式ファイル名 (週次 2026-09-29〜: stock_1_w_YYYYMMDD_YYYYMMDD.pdf/.xlsx)。
- *  一覧ページ下部のサンプルファイルは "YYYYMMDD" の文字のままなので一致しない。 */
+/** 新様式ファイル名 (週次 2026-09-29〜: stock_1_w_YYYYMMDD_YYYYMMDD.pdf/.xlsx)。
+ *  一覧ページ下部のサンプルファイルは "YYYYMMDD" の文字のままなので一致しない。
+ *  資料の表の特定に使う (行の読解は UNIFIED_ROW_FILE_RE 側で行う)。 */
 const WEEKLY_NEW_FORMAT_FILE_RE = /stock_1_w_\d{8}_\d{8}\.(?:xlsx|pdf)/;
 /** 告知された新様式ファイル名 (月次 2026-10-08〜: stock_1_mYYYYMM.pdf/.xlsx)。
  *  サンプル (stock_1_mYYYYMM.*) は文字のままなので一致しない。 */
@@ -867,92 +883,108 @@ const WEEKLY_LINK_CELLS: ReadonlyArray<{ re: RegExp; what: string }> = [
   { re: /stock_val_1_(\d{6})\.xls$/, what: "金額Excel" },
 ];
 
+// 新様式の週次行: [日付ラベル, PDF, Excel, "-", "-"]。PDF/Excel は同じ週の
+// 単一ファイル (stock_1_w_YYYYMMDD_YYYYMMDD.pdf/.xlsx、2026-09-29 掲載分から)。
+const UNIFIED_ROW_FILE_RE = /stock_1_w_(\d{8})_(\d{8})\.(xlsx|pdf)$/;
+// 行ラベル: "2026年9月第3週(9月14日～9月18日)" / "2026年9月第1週(8月31日～9月4日)"
+const WEEKLY_ROW_LABEL_RE = /^(\d{4})年(\d{1,2})月第(\d)週\((\d{1,2})月(\d{1,2})日[～〜~](\d{1,2})月(\d{1,2})日\)$/;
+
+/** ラベルの開始・終了を ISO 日付にする。開始月>終了月なら開始は前年 (年またぎの週)。 */
+function weeklyRowLabelPeriod(label: string): { start: string; end: string } {
+  const m = WEEKLY_ROW_LABEL_RE.exec(label.trim());
+  if (!m) {
+    throw new Error(`JPX 投資部門別売買状況 (週次一覧): 行の日付ラベルの様式が想定外です: "${label}"`);
+  }
+  const year = Number(m[1]);
+  const startMonth = Number(m[4]);
+  const startDay = Number(m[5]);
+  const endMonth = Number(m[6]);
+  const endDay = Number(m[7]);
+  const startYear = startMonth > endMonth ? year - 1 : year;
+  const start = `${startYear}-${pad2(startMonth)}-${pad2(startDay)}`;
+  const end = `${year}-${pad2(endMonth)}-${pad2(endDay)}`;
+  for (const [iso, what] of [[start, "開始日"], [end, "終了日"]] as const) {
+    const d = new Date(`${iso}T00:00:00Z`);
+    if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== iso) {
+      throw new Error(`JPX 投資部門別売買状況 (週次一覧): 「${label}」の${what}が暦日として不正です`);
+    }
+  }
+  return { start, end };
+}
+
 /**
  * 週次一覧ページ (index.html) から、公表済みの週を新しい順に取り出す。
- * 旧様式 (株数PDF/株数XLS/金額PDF/金額XLS の4リンク行) のみ対応。次の場合は
- * throw する (最新週を取り違えて古い週を黙って返さないため。ルール2):
- *   - 告知どおりの新様式ファイル (stock_1_w_<8桁>_<8桁>) へのリンクがページにある
- *   - 旧様式リンクを含む表が1つに定まらない / 表の中に4リンク行でない行がある
- *   - 1行の4リンクの週コードが揃っていない (株数と金額で別の週)
- *   - 行の日付ラベル (YYYY年M月第W週) とリンクの週コード (YYMMWW) が別の週を指している
- *   - 行が週コードの新しい順に並んでいない (latestWeeklyEntry の前提が崩れる)
+ * 2026-09-29 掲載分から新様式の単一 xlsx 行が先頭に載り、旧様式の4リンク行は
+ * それ以前の週として残る (同じ表に混在する。2026-09-29 の実ページで確認)。
+ * 次の場合は throw する (最新週を取り違えて古い週を黙って返さないため。ルール2):
+ *   - 新旧いずれかの様式リンクを含む表が1つに定まらない
+ *   - 表の中に「旧様式の4リンク行」「新様式の PDF/Excel 行」のどちらでもない行がある
+ *   - 旧様式行: 1行の4リンクの週コードが揃っていない / 日付ラベルと週コードが別の週
+ *   - 新様式行: PDF と Excel が別の週 / 日付ラベルの期間とファイル名の期間が一致しない /
+ *     3セル目以降に "-" 以外の余分なセルがある
+ *   - 新様式行が旧様式行より後に載っている (新様式は新しい週にだけ載るため)
+ *   - 行が新しい順に並んでいない (latestWeeklyEntry の前提が崩れる)
  *   - 行が1件も無い
  */
 export function parseWeeklyIndexHtml(html: string): WeeklyIndexEntry[] {
-  const newFormat = WEEKLY_NEW_FORMAT_FILE_RE.exec(html);
-  if (newFormat) {
-    throw new Error(
-      `JPX 投資部門別売買状況 (週次一覧): 新様式のファイル (${newFormat[0]}) が掲載されています。` +
-        "旧様式 (株数/金額 別ファイル) の行だけを読むと最新週を取り違えるため停止します。" +
-        "新様式の一覧ページ解析への対応が必要です。"
-    );
-  }
   const tables = [...html.matchAll(HTML_TABLE_RE)]
     .map((m) => m[1])
-    .filter((t) => /stock_(?:vol|val)_1_\d+\.xls/.test(t));
+    .filter((t) => /stock_(?:vol|val)_1_\d+\.xls/.test(t) || WEEKLY_NEW_FORMAT_FILE_RE.test(t));
   if (tables.length !== 1) {
     throw new Error(
-      `JPX 投資部門別売買状況 (週次一覧): 旧様式ファイルへのリンクを含む表が ${tables.length} 個あります ` +
-        "(1個のはず)。2026-09-29 の様式変更でページ構造が変わった可能性があります。"
+      `JPX 投資部門別売買状況 (週次一覧): 新旧いずれかの様式ファイルへのリンクを含む表が ${tables.length} 個あります ` +
+        "(1個のはず)。ページ構造が変わった可能性があります。"
     );
   }
 
   const entries: WeeklyIndexEntry[] = [];
-  const codes: number[] = [];
+  // 新旧の並び順の検査用: 新様式行は開始日の降順・旧様式行は週コードの降順で、
+  // 新様式行はすべて旧様式行より前 (新様式は新しい週だけに載るため)。
+  const orderKeys: Array<{ kind: WeeklyIndexEntry["kind"]; key: number }> = [];
   for (const cells of tableRowsCells(tables[0])) {
     const rowText = cells.join(" | ");
-    if (cells.length !== 1 + WEEKLY_LINK_CELLS.length) {
-      throw new Error(
-        `JPX 投資部門別売買状況 (週次一覧): 株数/金額 各PDF/XLS の4リンク行ではない行があります: ${rowText.slice(0, 300)}`
-      );
-    }
     const label = cells[0];
-    if (label === "" || label.includes("<")) {
+    if (label === "" || label === undefined || label.includes("<")) {
       throw new Error(`JPX 投資部門別売買状況 (週次一覧): 行の日付ラベルが読めません: ${rowText.slice(0, 300)}`);
     }
-    const rowCodes = new Set<string>();
-    const urls = WEEKLY_LINK_CELLS.map(({ re, what }, idx) => {
-      const hrefMatch = LEADING_HREF_RE.exec(cells[idx + 1]);
-      const fileMatch = hrefMatch === null ? null : re.exec(hrefMatch[1]);
-      if (hrefMatch === null || fileMatch === null) {
-        throw new Error(
-          `JPX 投資部門別売買状況 (週次一覧): 「${label}」の${what}のリンクが想定の名前ではありません: ${cells[idx + 1].slice(0, 200)}`
-        );
-      }
-      rowCodes.add(fileMatch[1]);
-      return toAbsoluteUrl(hrefMatch[1]);
-    });
-    if (rowCodes.size !== 1) {
-      throw new Error(
-        `JPX 投資部門別売買状況 (週次一覧): 「${label}」の4リンクの週コードが揃っていません (${[...rowCodes].join(", ")})`
-      );
+    const isUnifiedLink = (cell: string | undefined): boolean => {
+      if (cell === undefined) return false;
+      const href = LEADING_HREF_RE.exec(cell)?.[1] ?? "";
+      return UNIFIED_ROW_FILE_RE.test(href);
+    };
+    // 2・3セル目のどちらかが新様式リンクなら新様式行として読む (片方だけ "-" の
+    // 未掲載・PDF/Excel の食い違いは parseUnifiedWeeklyRow 側で throw する)。
+    const isUnifiedRow = cells.length >= 3 && (isUnifiedLink(cells[1]) || isUnifiedLink(cells[2]));
+    if (isUnifiedRow) {
+      const entry = parseUnifiedWeeklyRow(label, cells);
+      entries.push(entry);
+      // parse 成功時は cells[2] が単一 xlsx のリンクであることが確定している
+      const startCode = UNIFIED_ROW_FILE_RE.exec(entry.unifiedXlsxUrl)?.[1] as string;
+      orderKeys.push({ kind: "unified", key: Number(startCode) });
+      continue;
     }
-    // 行の日付ラベル (例 "2026年9月第2週(…)") とリンクの週コード (例 260902) が同じ週を
-    // 指していることを確かめる。食い違ったまま先頭行を採ると、ラベル上は最新週なのに
-    // 1つ前の週のファイルを「最新」として取得してしまう (再検証で実ページの先頭行の
-    // リンクを前週のものに差し替えて再現)。
-    const code = [...rowCodes][0];
-    const labelMatch = /^(\d{4})年(\d{1,2})月第(\d)週/.exec(label);
-    const expectedCode =
-      labelMatch === null
-        ? null
-        : `${labelMatch[1].slice(2)}${pad2(Number(labelMatch[2]))}${pad2(Number(labelMatch[3]))}`;
-    if (expectedCode !== code) {
-      throw new Error(
-        `JPX 投資部門別売買状況 (週次一覧): 行の日付ラベル「${label}」とリンクの週コード (${code}) が一致しません`
-      );
-    }
-    codes.push(Number(code));
-    entries.push({ label, volumeXlsUrl: urls[1], valueXlsUrl: urls[3] });
+    const { entry, code } = parseLegacyWeeklyRow(label, cells, rowText);
+    entries.push(entry);
+    orderKeys.push({ kind: "legacy", key: Number(code) });
   }
   if (entries.length === 0) {
     throw new Error(
-      "JPX 投資部門別売買状況 (週次一覧): 想定した行 (株数/金額 各PDF/XLS の4リンク) が" +
-        "見つかりません。2026-09-29 の様式変更でページ構造が変わった可能性があります。"
+      "JPX 投資部門別売買状況 (週次一覧): 想定した行 (旧様式の4リンク行・新様式の単一ファイル行) が" +
+        "見つかりません。ページ構造が変わった可能性があります。"
     );
   }
-  for (let i = 1; i < codes.length; i++) {
-    if (codes[i] >= codes[i - 1]) {
+  let seenLegacy = false;
+  for (let i = 0; i < orderKeys.length; i++) {
+    const cur = orderKeys[i];
+    if (cur.kind === "legacy") {
+      seenLegacy = true;
+    } else if (seenLegacy) {
+      throw new Error(
+        `JPX 投資部門別売買状況 (週次一覧): 新様式の行「${entries[i].label}」が旧様式の行より後にあります。` +
+          "新様式は新しい週だけに載るはずで、順序が崩れています"
+      );
+    }
+    if (i > 0 && cur.kind === orderKeys[i - 1].kind && cur.key >= orderKeys[i - 1].key) {
       throw new Error(
         `JPX 投資部門別売買状況 (週次一覧): 行が新しい週から順に並んでいません ` +
           `(${entries[i - 1].label} の次に ${entries[i].label})。先頭行=最新週の前提が崩れています`
@@ -960,6 +992,106 @@ export function parseWeeklyIndexHtml(html: string): WeeklyIndexEntry[] {
     }
   }
   return entries;
+}
+
+/** 新様式の週次行 ([日付ラベル, PDF, Excel] + "-" の空セル) を読む。 */
+function parseUnifiedWeeklyRow(label: string, cells: string[]): WeeklyIndexEntryUnified {
+  for (const [idx, what] of [[1, "PDF"], [2, "Excel"]] as const) {
+    if (cells[idx].includes("-") && LEADING_HREF_RE.exec(cells[idx]) === null) {
+      throw new Error(
+        `JPX 投資部門別売買状況 (週次一覧): 「${label}」の新様式${what}が未掲載です ` +
+          "(PDF と Excel は対で掲載されるはず)"
+      );
+    }
+  }
+  const hrefs = [1, 2].map((idx) => {
+    const hrefMatch = LEADING_HREF_RE.exec(cells[idx]);
+    const fileMatch = hrefMatch === null ? null : UNIFIED_ROW_FILE_RE.exec(hrefMatch[1]);
+    if (hrefMatch === null || fileMatch === null) {
+      throw new Error(
+        `JPX 投資部門別売買状況 (週次一覧): 「${label}」のリンクが新様式の単一ファイル名ではありません: ${cells[idx].slice(0, 200)}`
+      );
+    }
+    return { href: hrefMatch[1], start: fileMatch[1], end: fileMatch[2], ext: fileMatch[3] };
+  });
+  const [pdf, xlsx] = hrefs as [{ href: string; start: string; end: string; ext: string }, { href: string; start: string; end: string; ext: string }];
+  if (pdf.ext !== "pdf" || xlsx.ext !== "xlsx") {
+    throw new Error(
+      `JPX 投資部門別売買状況 (週次一覧): 「${label}」の新様式行は [PDF, Excel] の順のはずです`
+    );
+  }
+  if (pdf.start !== xlsx.start || pdf.end !== xlsx.end) {
+    throw new Error(
+      `JPX 投資部門別売買状況 (週次一覧): 「${label}」の PDF と Excel が別の週を指しています ` +
+        `(${pdf.start}_${pdf.end} と ${xlsx.start}_${xlsx.end})`
+    );
+  }
+  // 日付ラベルの期間 (例 "2026年9月第3週(9月14日～9月18日)" → 9/14〜9/18) と
+  // ファイル名の期間 (stock_1_w_20260914_20260918) が一致することを確かめる。
+  // 食い違うとラベル上は最新週なのに別の週のファイルを「最新」として取ってしまう。
+  const labelPeriod = weeklyRowLabelPeriod(label);
+  const fileStart = `${xlsx.start.slice(0, 4)}-${xlsx.start.slice(4, 6)}-${xlsx.start.slice(6, 8)}`;
+  const fileEnd = `${xlsx.end.slice(0, 4)}-${xlsx.end.slice(4, 6)}-${xlsx.end.slice(6, 8)}`;
+  if (labelPeriod.start !== fileStart || labelPeriod.end !== fileEnd) {
+    throw new Error(
+      `JPX 投資部門別売買状況 (週次一覧): 行の日付ラベル「${label}」の期間 (${labelPeriod.start}〜${labelPeriod.end}) と` +
+        `リンクのファイル名の期間 (${fileStart}〜${fileEnd}) が一致しません`
+    );
+  }
+  for (const extra of cells.slice(3)) {
+    if (extra !== "-") {
+      throw new Error(
+        `JPX 投資部門別売買状況 (週次一覧): 「${label}」の新様式行に想定外のセルがあります: ${extra.slice(0, 200)}`
+      );
+    }
+  }
+  return { kind: "unified", label, unifiedXlsxUrl: toAbsoluteUrl(xlsx.href) };
+}
+
+/** 旧様式の週次行 ([日付ラベル, 株数PDF, 株数Excel, 金額PDF, 金額Excel]) を読む。 */
+function parseLegacyWeeklyRow(
+  label: string,
+  cells: string[],
+  rowText: string
+): { entry: WeeklyIndexEntryLegacy; code: string } {
+  if (cells.length !== 1 + WEEKLY_LINK_CELLS.length) {
+    throw new Error(
+      `JPX 投資部門別売買状況 (週次一覧): 旧様式の4リンク行・新様式の単一ファイル行のどちらでもない行があります: ${rowText.slice(0, 300)}`
+    );
+  }
+  const rowCodes = new Set<string>();
+  const urls = WEEKLY_LINK_CELLS.map(({ re, what }, idx) => {
+    const hrefMatch = LEADING_HREF_RE.exec(cells[idx + 1]);
+    const fileMatch = hrefMatch === null ? null : re.exec(hrefMatch[1]);
+    if (hrefMatch === null || fileMatch === null) {
+      throw new Error(
+        `JPX 投資部門別売買状況 (週次一覧): 「${label}」の${what}のリンクが想定の名前ではありません: ${cells[idx + 1].slice(0, 200)}`
+      );
+    }
+    rowCodes.add(fileMatch[1]);
+    return toAbsoluteUrl(hrefMatch[1]);
+  });
+  if (rowCodes.size !== 1) {
+    throw new Error(
+      `JPX 投資部門別売買状況 (週次一覧): 「${label}」の4リンクの週コードが揃っていません (${[...rowCodes].join(", ")})`
+    );
+  }
+  // 行の日付ラベル (例 "2026年9月第2週(…)") とリンクの週コード (例 260902) が同じ週を
+  // 指していることを確かめる。食い違ったまま先頭行を採ると、ラベル上は最新週なのに
+  // 1つ前の週のファイルを「最新」として取得してしまう (再検証で実ページの先頭行の
+  // リンクを前週のものに差し替えて再現)。
+  const code = [...rowCodes][0];
+  const labelMatch = /^(\d{4})年(\d{1,2})月第(\d)週/.exec(label);
+  const expectedCode =
+    labelMatch === null
+      ? null
+      : `${labelMatch[1].slice(2)}${pad2(Number(labelMatch[2]))}${pad2(Number(labelMatch[3]))}`;
+  if (expectedCode !== code) {
+    throw new Error(
+      `JPX 投資部門別売買状況 (週次一覧): 行の日付ラベル「${label}」とリンクの週コード (${code}) が一致しません`
+    );
+  }
+  return { entry: { kind: "legacy", label, volumeXlsUrl: urls[1], valueXlsUrl: urls[3] }, code };
 }
 
 /** 一覧ページの並び順 (新しい週が先頭) を前提に最新行を返す。 */
@@ -1153,7 +1285,9 @@ function assertSinglePeriod(
 }
 
 /**
- * 金額ファイルと株数ファイルのレコードを1バッチにまとめる純関数。金額側が全件
+ * 金額ファイルと株数ファイルのレコードを1バッチにまとめる純関数 (旧様式用。
+ * 新様式は単一ファイルに金額・株数の両方を含むため merge 不要で、
+ * 単一期間の確認は `assertSinglePeriod` を直接使う)。金額側が全件
  * metric="value"・株数側が全件 metric="volume"・両方が同じ期間であることを確かめ、
  * 違えば throw する (リンクの取り違えで株数を金額として保存しないため)。
  * 取込 CLI が保管済みファイルから観測を作り直すときも、この関数を通す。
@@ -1174,7 +1308,8 @@ export function mergeValueAndVolumeRecords(
   return merged;
 }
 
-export interface FetchedInvestorEquity {
+export interface FetchedInvestorEquityLegacy {
+  kind: "legacy";
   periodType: InvestorEquityPeriodType;
   /** 取得元 URL (アーカイブ入力・来歴用) */
   valueUrl: string;
@@ -1184,11 +1319,39 @@ export interface FetchedInvestorEquity {
   records: InvestorEquityRecord[];
 }
 
-/** 最新の週次ファイルを解決して取得する。 */
+export interface FetchedInvestorEquityUnified {
+  kind: "unified";
+  periodType: InvestorEquityPeriodType;
+  /** 取得元 URL (アーカイブ入力・来歴用) */
+  unifiedUrl: string;
+  unifiedBytes: Uint8Array;
+  records: InvestorEquityRecord[];
+}
+
+/** 1 週 (旧様式は金額+株数の2ファイル、新様式は単一ファイル) の取得結果。 */
+export type FetchedInvestorEquity = FetchedInvestorEquityLegacy | FetchedInvestorEquityUnified;
+
+/**
+ * 最新の週次ファイルを解決して取得する。旧様式の週は金額 xls + 株数 xls の2本、
+ * 新様式の週 (2026-09-29 掲載分から) は単一 xlsx の1本を取る。
+ */
 export async function fetchLatestJpxInvestorEquityWeekly(): Promise<FetchedInvestorEquity> {
   const html = await fetchText(WEEKLY_INDEX_URL);
   const entries = parseWeeklyIndexHtml(html);
   const latest = latestWeeklyEntry(entries);
+
+  if (latest.kind === "unified") {
+    const unifiedBytes = await fetchBytes(latest.unifiedXlsxUrl);
+    const records = parseInvestorEquityWorkbook(unifiedBytes, urlBasename(latest.unifiedXlsxUrl));
+    assertSinglePeriod(records, "weekly");
+    return {
+      kind: "unified",
+      periodType: "weekly",
+      unifiedUrl: latest.unifiedXlsxUrl,
+      unifiedBytes,
+      records,
+    };
+  }
 
   const [valueBytes, volumeBytes] = await Promise.all([
     fetchBytes(latest.valueXlsUrl),
@@ -1202,6 +1365,7 @@ export async function fetchLatestJpxInvestorEquityWeekly(): Promise<FetchedInves
   );
 
   return {
+    kind: "legacy",
     periodType: "weekly",
     valueUrl: latest.valueXlsUrl,
     volumeUrl: latest.volumeXlsUrl,
@@ -1242,6 +1406,7 @@ export async function fetchLatestJpxInvestorEquityMonthly(): Promise<FetchedInve
   }
 
   return {
+    kind: "legacy",
     periodType: "monthly",
     valueUrl: valueXlsUrl,
     volumeUrl: volumeXlsUrl,
@@ -1288,6 +1453,32 @@ export function jpxInvestorEquityArchiveInput(
   } else {
     keyPeriod = first.periodMonth;
   }
+  const metadata = {
+    periodType: fetched.periodType,
+    periodLabel: first.periodLabel,
+    periodMonth: first.periodMonth,
+    periodStart: first.periodStart,
+    periodEnd: first.periodEnd,
+    recordCount: fetched.records.length,
+    formatVersion: first.formatVersion,
+  };
+  const key = `jpx-investor-equity-${fetched.periodType}-${keyPeriod}`;
+  if (fetched.kind === "unified") {
+    const unifiedFilename = urlBasename(fetched.unifiedUrl);
+    return {
+      service: "moneyflow",
+      key,
+      source: fetched.unifiedUrl,
+      metadata,
+      files: [
+        {
+          bytes: fetched.unifiedBytes,
+          filename: `investor-equity-unified-${unifiedFilename}`,
+          contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+      ],
+    };
+  }
   const valueFilename = urlBasename(fetched.valueUrl);
   const volumeFilename = urlBasename(fetched.volumeUrl);
   const contentType = valueFilename.endsWith(".xlsx")
@@ -1296,17 +1487,9 @@ export function jpxInvestorEquityArchiveInput(
 
   return {
     service: "moneyflow",
-    key: `jpx-investor-equity-${fetched.periodType}-${keyPeriod}`,
+    key,
     source: `${fetched.valueUrl} , ${fetched.volumeUrl}`,
-    metadata: {
-      periodType: fetched.periodType,
-      periodLabel: first.periodLabel,
-      periodMonth: first.periodMonth,
-      periodStart: first.periodStart,
-      periodEnd: first.periodEnd,
-      recordCount: fetched.records.length,
-      formatVersion: first.formatVersion,
-    },
+    metadata,
     files: [
       { bytes: fetched.valueBytes, filename: `investor-equity-value-${valueFilename}`, contentType },
       { bytes: fetched.volumeBytes, filename: `investor-equity-volume-${volumeFilename}`, contentType },
@@ -1374,8 +1557,9 @@ export const JPX_INVESTOR_EQUITY_INDICATORS: readonly MoneyflowIndicatorDef[] = 
       "集計対象は資本金30億円以上の取引参加者経由の取引のみ (全取引の網羅ではない)。" +
       "内国普通株式が対象でETF/REIT/優先株式等は含まない。ToSTNeT(立会外)取引を含む。" +
       "33業種別の内訳は存在しない" +
-      "(市場区分別のみ)。2026-09-29公表分からファイル様式が変わる予告があり、新様式の" +
-      "パーサは公式サンプルでのみ検証済み(実データでの再検証が必要)。",
+      "(市場区分別のみ)。週次は2026-09-29公表分から単一ファイルの新様式になり、" +
+      "実ファイル(2026年9月第3週分)で検証済み。月次の新様式(2026-10-08公表分〜)は" +
+      "未公表のため未対応。",
   },
   {
     key: "jpx_investor_equity_gross_turnover_value",
@@ -1486,10 +1670,12 @@ export function toObservationRows(records: readonly InvestorEquityRecord[]): Mon
 // ---------------------------------------------------------------------------
 
 export const KNOWN_LIMITATIONS: readonly string[] = [
-  "2026-09-29 公表分から週次ファイルが単一化される予告があるが、本モジュール作成時点" +
-    "(2026-09-27) では実ファイルが存在しないため、新様式パーサはJPX公式サンプル" +
-    "(stock_1_w_YYYYMMDD_YYYYMMDD.xlsx、ファイル名未置換=実データではない仕様サンプル)" +
-    "でのみ検証済み。9/29以降、実ファイルでの再検証が必須。",
+  "週次は 2026-09-29 掲載分から単一ファイルの新様式になった。新様式パーサは実ファイル" +
+    "(stock_1_w_20260914_20260918.xlsx、2026年9月第3週 9/14〜9/18 分) で検証済み:" +
+    " 単位は見出しどおり千株/千円、112レコード全件で 買い-売り=差引・売り+買い=合計が" +
+    "一致、桁の検査も通過。JPX公式サンプル (stock_1_w_YYYYMMDD_YYYYMMDD.xlsx、" +
+    "ファイル名未置換=実データではない仕様サンプル) は値が円/株単位のままのため" +
+    "桁の検査で throw する。",
   "新様式ではファイル名 (stock_1_w_YYYYMMDD_YYYYMMDD.xlsx) から期間の開始日・終了日を" +
     "取得する設計。サンプルファイルはプレースホルダ名のため periodStart/periodEnd は" +
     "null になる (捏造しない)。",
@@ -1506,11 +1692,13 @@ export const KNOWN_LIMITATIONS: readonly string[] = [
     "stock_1_m<数字> のリンクが載った時点で parseMonthlyIndexHtml が throw する" +
     "(旧様式の前月を最新として黙って返さない)。10/8以降、実ページ・実ファイルでの" +
     "月次新様式対応が必須。",
-  "週次一覧ページは、告知どおりの新様式ファイル (stock_1_w_<8桁>_<8桁>) へのリンクや、" +
-    "旧様式の4リンク行でない行が表にあれば throw する (新様式の行を読み飛ばして1つ前の" +
-    "週を最新として返さない)。つまり 2026-09-29 以降は週次の取込が必ず停止するので、" +
-    "実ページの構造を見て新様式の一覧解析 (単一ファイル xlsx → parseInvestorEquityWorkbook" +
-    " の新様式パーサ) への接続を実装すること。",
+  "週次一覧ページは新旧の行が同じ表に混在する (2026-09-29 の実ページで確認。新様式行が" +
+    "先頭側)。新様式行は [日付ラベル, PDF, Excel] (+ 空セルは \"-\" のみ) を読み、PDF と" +
+    " Excel が同じ週・日付ラベルの期間とファイル名の期間が一致することを確かめる。" +
+    "新様式行が旧様式行より後に載る・同形式内で新しい順でない・想定外の行があれば" +
+    " throw する (最新週の取り違え防止)。行ラベルの「第n週」の数字自体の妥当性" +
+    " (JPX の週番号付け規則) は検証していない — 期間はラベルの日付範囲とファイル名で" +
+    "確定させる。",
   "JPX公式サンプル (週次・月次とも) の数値は、見出しの単位「千株/千円」で読むと実データ" +
     "(旧様式の同じ市場の総計) の約900〜1100倍の桁になる (例: 週次サンプルのプライム14部門の" +
     "売り合計 42,220,588,401,000 を千円で読むと約4京円。旧様式実ファイル 2026年9月第2週の" +
@@ -1518,8 +1706,10 @@ export const KNOWN_LIMITATIONS: readonly string[] = [
     "作られている (サンプルの全数値セルが1000の倍数) 。新様式パーサは見出しの単位表記に" +
     "従い千株/千円として扱うが、1セル (1市場×1部門×1期間の売り/買い/合計) が 2,000兆円" +
     "(2e12千円) / 2兆株 (2e9千株) を超えたら単位の取り違えとして throw する — そのため" +
-    "JPX公式サンプルそのものは throw する。9/29 以降の実ファイルで、値の桁が旧様式の同じ" +
-    "週の総計と整合するか (千円で約4.8e10/週のプライム総計の売り) を必ず確認すること。",
+    "JPX公式サンプルそのものは throw する。実ファイル (2026年9月第3週分) では全セルが" +
+    "上限内で桁の検査を通過した。なお新旧は公表週が重ならないため旧様式の同じ週の総計と" +
+    "の直接突合はできず、単位の裏付けは新様式ファイル内の見出し・算術一致と同期間の" +
+    "新様式 PDF の突合による (旧ファイルの値への倍率合わせはしない)。",
   "旧様式の期間表題は「タイトルの月 = 期間終了日の月」を前提に検証している " +
     "(実ファイルで確認できたのは 2026年9月第1週 = 8/31〜9/4 のみ)。終了日が翌月に入る" +
     "週 (例: 9/28〜10/2) を JPX がどちらの月に帰属させるかは未確認で、そのような表題は" +
@@ -1529,7 +1719,10 @@ export const KNOWN_LIMITATIONS: readonly string[] = [
   "旧様式の主表のみを読む。表下の「個人・自己の現金/信用の内訳」「海外投資家の法人/" +
     "個人の内訳」は読んでいない。新様式はこの内訳 (自己現金/自己信用/個人現金/個人信用/" +
     "海外投資家法人/海外投資家個人) を列として持ち、逆に自己計/委託計/総計/法人/金融機関/" +
-    "個人/海外投資家の行は無いため、様式変更の前後で投資部門名 (系列) が一致しない。",
+    "個人/海外投資家の行は無い。両様式で名前が同じ8部門 (証券会社・投資信託・事業法人・" +
+    "その他法人等・生保・損保・都銀・地銀等・信託銀行・その他金融機関) は JPX の定義が同一" +
+    "のため同じ系列として扱い、それ以外の新旧の系列は名前が違うため混ざらない" +
+    " (2026-09-29 の user 決定: 旧系列へ無言合流しない。旧方式の互換・移行は要件外)。",
   "投資部門別の内訳は東証33業種別には存在しない (JPX公式統計としてそもそも提供されて" +
     "いない粒度)。R1(33業種)の主指標ではなく補足指標として使う設計。",
   "集計対象は資本金30億円以上の取引参加者経由の取引のみ (JPX注記)。全取引の網羅では" +
