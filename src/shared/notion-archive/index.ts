@@ -149,6 +149,7 @@ export {
   observationExists,
   observationRowMatches,
   observationKey,
+  verifyObservedBatch,
   ensureRunLogDb,
   recordRunLog,
   isMoneyflowFlowType,
@@ -172,6 +173,7 @@ export type {
   MoneyflowMeasureKind,
   ObservationInput,
   UpsertObservationResult,
+  VerifiedObservationRow,
   MoneyflowRunStatus,
   RunLogInput,
 } from "./moneyflow.js";

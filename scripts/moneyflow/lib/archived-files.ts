@@ -6,10 +6,12 @@
  * 「取込の流れ」)。Notion の file.url は約 1 時間で失効する署名付き URL なので、
  * 取得したらすぐダウンロードする。
  */
-import { notionEnv } from "../../../src/shared/notion-archive/index.js";
+import { listPageFiles, notionEnv } from "../../../src/shared/notion-archive/index.js";
 import { notionRequest } from "../../../src/shared/notion-archive/client.js";
 import { findBackupChildByTitle, queryUniqueRow } from "../../../src/shared/notion-archive/archive.js";
 import { MONEYFLOW_PRIMARY_DB_TITLE } from "../../../src/shared/notion-archive/moneyflow.js";
+import { sha256HexBytes } from "../../../src/shared/sha256.js";
+import type { SpecFile } from "../../../services/moneyflow/lib/source-spec.js";
 
 /**
  * 「一次データ保管」配下の「一次データ｜moneyflow」DB の ID を取得する (無ければ throw。
@@ -102,4 +104,40 @@ export async function downloadArchivedFile(file: ArchivedFileLink, context: stri
     throw new Error(`${context}: 保管済みファイル ${file.name} の再取得に失敗 status=${res.status}`);
   }
   return new Uint8Array(await res.arrayBuffer());
+}
+
+/**
+ * 保管直後の付帯検証: 「一次データ｜moneyflow」ページの Files 添付が、
+ * 取得バイト列と完全一致すること (件数・名前・バイト長・SHA256) を
+ * 観測ログの書込前に確認する。不一致・外部添付・欠落は保全停止する
+ * (観測ログを書かない。保管ページ自体の修正はしない — 手動確認用に残す)。
+ */
+export async function verifyArchivedAttachments(
+  primaryDataPageId: string,
+  context: string,
+  key: string,
+  expected: readonly SpecFile[]
+): Promise<void> {
+  const fail = (why: string): never => {
+    throw new Error(`${context}: 保管検証に失敗 key=${key} (${why}) のため観測ログを書きません`);
+  };
+  const hosted = await listPageFiles(primaryDataPageId, "Files");
+  if (hosted.length !== expected.length) {
+    fail(`添付 ${hosted.length} 件 ≠ 取得 ${expected.length} 件`);
+  }
+  for (let i = 0; i < expected.length; i += 1) {
+    const want = expected[i];
+    const got = hosted[i];
+    if (got.name !== want.filename) fail(`添付名不一致「${got.name}」≠「${want.filename}」`);
+    if (got.kind !== "file") fail(`「${want.filename}」が Notion-hosted 添付ではありません`);
+    const bytes = await downloadArchivedFile(got, context);
+    if (bytes.length !== want.bytes.length) {
+      fail(`「${want.filename}」のバイト長 ${bytes.length} ≠ ${want.bytes.length}`);
+    }
+    const [gotSha, wantSha] = await Promise.all([
+      sha256HexBytes(Uint8Array.from(bytes)),
+      sha256HexBytes(Uint8Array.from(want.bytes)),
+    ]);
+    if (gotSha !== wantSha) fail(`「${want.filename}」の SHA256 不一致`);
+  }
 }
