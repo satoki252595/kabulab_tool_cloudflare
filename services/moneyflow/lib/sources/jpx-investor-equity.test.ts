@@ -21,9 +21,10 @@
  *
  * JPX の統計・ページは personal-only (再配布不可) のため、フィクスチャは
  * `fixtures/private/jpx-investor-equity/` (gitignore 済み) に置き commit しない。
- * 未取得の環境 (CI) では実ファイル/実ページを読むテストだけ `describe.skipIf` で
- * skip し、合成データ・指標定義のテストは常に走らせる。describe 直下の読み込みは
- * skip 時にも評価されるため、すべて beforeAll で行う。
+ * 未取得の環境 (CI) では実ファイル/実ページを読むテストだけ `describe.skipIf` /
+ * `it.skipIf` で skip し、合成データ・指標定義のテストは常に走らせる。skip は群別
+ * (週次W2・W1・月次・サンプル・新様式W3・一覧ページ) で、1本の欠けで全部を skip
+ * しない。describe 直下の読み込みは skip 時にも評価されるため、すべて beforeAll で行う。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -48,19 +49,20 @@ import {
 } from "./jpx-investor-equity.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "private", "jpx-investor-equity");
-const FIXTURE_NAMES = [
-  "monthly-index-2026-09-27.html",
-  "monthly-unified-sample-jpx-official.xlsx",
-  "monthly-value-2026-08.xls",
-  "monthly-volume-2026-08.xls",
-  "unified-format-sample-jpx-official.xlsx",
-  "weekly-index-2026-09-27.html",
-  "weekly-value-2026-w1-0831-0904.xls",
-  "weekly-value-2026-w2-0907-0911.xls",
-  "weekly-volume-2026-w1-0831-0904.xls",
-  "weekly-volume-2026-w2-0907-0911.xls",
-];
-const hasFixtures = FIXTURE_NAMES.every((name) => existsSync(join(FIXTURES, name)));
+// 群別の有無 (12本の全有無ではなく群ごとに skip する。private フィクスチャは
+// commit しないため worktree ごとに揃いが違い、全有無では1本の欠けで全部が skip する。
+// 例: この worktree には weekly-volume-2026-w1-0831-0904.xls が無い)。
+const has = (...names: string[]): boolean => names.every((name) => existsSync(join(FIXTURES, name)));
+const hasWeeklyIndex27 = has("weekly-index-2026-09-27.html");
+const hasMonthlyIndex27 = has("monthly-index-2026-09-27.html");
+const hasW2 = has("weekly-value-2026-w2-0907-0911.xls", "weekly-volume-2026-w2-0907-0911.xls");
+const hasW1Val = has("weekly-value-2026-w1-0831-0904.xls");
+const hasW1Vol = has("weekly-volume-2026-w1-0831-0904.xls");
+const hasMonthlyFiles = has("monthly-value-2026-08.xls", "monthly-volume-2026-08.xls");
+const hasUnifiedSample = has("unified-format-sample-jpx-official.xlsx");
+const hasMonthlySample = has("monthly-unified-sample-jpx-official.xlsx");
+const hasUnifiedW3 = has("weekly-unified-2026-w3-0914-0918.xlsx");
+const hasUnifiedW3Index = has("weekly-index-2026-09-29.html");
 
 function loadBytes(name: string): Uint8Array {
   return new Uint8Array(readFileSync(join(FIXTURES, name)));
@@ -138,7 +140,7 @@ describe("parseJpxAmount", () => {
   });
 });
 
-describe.skipIf(!hasFixtures)("旧様式パーサ: 週次 (2026年9月第2週 9/7-9/11, 実ファイル)", () => {
+describe.skipIf(!(hasW2))("旧様式パーサ: 週次 (2026年9月第2週 9/7-9/11, 実ファイル)", () => {
   let valueRecords: InvestorEquityRecord[];
   let volumeRecords: InvestorEquityRecord[];
   beforeAll(() => {
@@ -209,7 +211,7 @@ describe.skipIf(!hasFixtures)("旧様式パーサ: 週次 (2026年9月第2週 9/
   });
 });
 
-describe.skipIf(!hasFixtures)("旧様式パーサ: 週次 (2026年9月第1週 8/31-9/4, 月またぎ, 実ファイル)", () => {
+describe.skipIf(!(hasW1Val))("旧様式パーサ: 週次 (2026年9月第1週 8/31-9/4, 月またぎ, 実ファイル)", () => {
   it("開始日が前月・終了日が当月でも年をまたがず正しく解決する", () => {
     const bytes = loadBytes("weekly-value-2026-w1-0831-0904.xls");
     const records = parseInvestorEquityWorkbook(bytes, "stock_val_1_260901.xls");
@@ -222,7 +224,7 @@ describe.skipIf(!hasFixtures)("旧様式パーサ: 週次 (2026年9月第1週 8/
   });
 });
 
-describe.skipIf(!hasFixtures)("旧様式パーサ: 月次 (2026年8月, 実ファイル)", () => {
+describe.skipIf(!(hasMonthlyFiles))("旧様式パーサ: 月次 (2026年8月, 実ファイル)", () => {
   let records: InvestorEquityRecord[];
   beforeAll(() => {
     records = parseInvestorEquityWorkbook(loadBytes("monthly-value-2026-08.xls"), "stock_val_1_m2608.xls");
@@ -309,7 +311,7 @@ describe.skipIf(!hasFixtures)("旧様式パーサ: 月次 (2026年8月, 実フ�
   });
 });
 
-describe.skipIf(!hasFixtures)("新様式パーサ (JPX公式サンプルファイル。実データではない仕様サンプル)", () => {
+describe.skipIf(!(hasUnifiedSample))("新様式パーサ (JPX公式サンプルファイル。実データではない仕様サンプル)", () => {
   it("桁の検査: サンプル原本は見出し「千株/千円」に対し値が円/株単位 (1000倍) なので throw する", () => {
     // 原本 D8 (プライム自己現金 金額 売り) = 6,094,207,109,000。千円として読むと約6,000兆円で、
     // 旧様式実ファイルの二市場総計 (2026年8月の1か月、売買合計) 407,516,356,670 千円の約15倍。
@@ -360,7 +362,7 @@ describe.skipIf(!hasFixtures)("新様式パーサ (JPX公式サンプルファ�
   });
 });
 
-describe.skipIf(!hasFixtures)("月次専用の新様式サンプル (2026-10-08 掲載分から予告。週次の新様式(2026-09-29)とは" +
+describe.skipIf(!(hasMonthlySample))("月次専用の新様式サンプル (2026-10-08 掲載分から予告。週次の新様式(2026-09-29)とは" +
   "別建てのJPX公式サンプル。実データではなく仕様サンプル)", () => {
   it("ヘッダ行が「年月週」ではなく「年月」で始まる別レイアウトのため、現行の" +
     "parseUnifiedSheet(週次新様式用)はヘッダ行を検知できず throw する " +
@@ -409,7 +411,7 @@ describe("様式が想定と違えば throw する", () => {
 
   it("週次一覧ページの様式が変わって想定した行が無ければ throw する", () => {
     expect(() => parseWeeklyIndexHtml("<html><body>no rows here</body></html>")).toThrow(
-      /様式変更/
+      /リンクを含む表が 0 個/
     );
   });
 
@@ -420,7 +422,7 @@ describe("様式が想定と違えば throw する", () => {
   });
 });
 
-describe.skipIf(!hasFixtures)("週次一覧ページの解析 (実ページ, 2026-09-27時点)", () => {
+describe.skipIf(!(hasWeeklyIndex27))("週次一覧ページの解析 (実ページ, 2026-09-27時点)", () => {
   let entries: ReturnType<typeof parseWeeklyIndexHtml>;
   beforeAll(() => {
     entries = parseWeeklyIndexHtml(loadText("weekly-index-2026-09-27.html"));
@@ -429,6 +431,7 @@ describe.skipIf(!hasFixtures)("週次一覧ページの解析 (実ページ, 202
   it("最新行 (2026年9月第2週) が先頭に来る", () => {
     const latest = latestWeeklyEntry(entries);
     expect(latest.label).toContain("2026年9月第2週");
+    if (latest.kind !== "legacy") throw new Error("旧様式の週のはずが新様式でした");
     expect(latest.valueXlsUrl).toContain("stock_val_1_260902.xls");
     expect(latest.volumeXlsUrl).toContain("stock_vol_1_260902.xls");
   });
@@ -439,7 +442,7 @@ describe.skipIf(!hasFixtures)("週次一覧ページの解析 (実ページ, 202
   });
 });
 
-describe.skipIf(!hasFixtures)("月次一覧ページの解析: まだ公表されていない月の判定 (実ページ, 2026-09-27時点)", () => {
+describe.skipIf(!(hasMonthlyIndex27))("月次一覧ページの解析: まだ公表されていない月の判定 (実ページ, 2026-09-27時点)", () => {
   let entries: ReturnType<typeof parseMonthlyIndexHtml>;
   beforeAll(() => {
     entries = parseMonthlyIndexHtml(loadText("monthly-index-2026-09-27.html"));
@@ -495,7 +498,7 @@ describe("指標定義 (JPX_INVESTOR_EQUITY_INDICATORS)", () => {
   });
 });
 
-describe.skipIf(!hasFixtures)("toObservationRows (観測ログ用の縦長レコード)", () => {
+describe.skipIf(!(hasW2))("toObservationRows (観測ログ用の縦長レコード)", () => {
   it("1レコードにつき net_flow・gross_turnover の2行を出す", () => {
     const bytes = loadBytes("weekly-value-2026-w2-0907-0911.xls");
     const records = parseInvestorEquityWorkbook(bytes, "stock_val_1_260902.xls");
@@ -552,9 +555,9 @@ const MARKETS: ReadonlyArray<InvestorEquityRecord["market"]> = [
   "Tokyo & Nagoya",
 ];
 
-describe.skipIf(!hasFixtures)("isAggregateCategory=false の行は総計を過不足なく分割する (実ファイル全6本×4市場)", () => {
+describe("isAggregateCategory=false の行は総計を過不足なく分割する (実ファイル×4市場。欠けは it ごとに skip)", () => {
   for (const [fixture, originalName] of REAL_LEGACY_FILES) {
-    it(`${fixture}: 葉の売り・買いの合計 = 総計`, () => {
+    it.skipIf(!existsSync(join(FIXTURES, fixture)))(`${fixture}: 葉の売り・買いの合計 = 総計`, () => {
       const records = parseInvestorEquityWorkbook(loadBytes(fixture), originalName);
       for (const market of MARKETS) {
         const leaves = records.filter((r) => r.market === market && !r.isAggregateCategory);
@@ -579,7 +582,7 @@ describe.skipIf(!hasFixtures)("isAggregateCategory=false の行は総計を過�
   }
 });
 
-describe.skipIf(!hasFixtures)("旧様式パーサの様式変更検知 (実ファイルの1セルだけを書き換えて確認)", () => {
+describe.skipIf(!(hasW2))("旧様式パーサの様式変更検知 (実ファイルの1セルだけを書き換えて確認)", () => {
   const W2 = "weekly-value-2026-w2-0907-0911.xls";
 
   it("単位表記 (K5: 千円,%) が千円でなければ throw する (値の桁を決め打ちしない)", () => {
@@ -609,7 +612,7 @@ describe.skipIf(!hasFixtures)("旧様式パーサの様式変更検知 (実フ�
   });
 });
 
-describe.skipIf(!hasFixtures)("新様式パーサの様式変更検知 (JPX公式サンプル(÷1000)の1セルだけを書き換えて確認)", () => {
+describe.skipIf(!(hasUnifiedSample))("新様式パーサの様式変更検知 (JPX公式サンプル(÷1000)の1セルだけを書き換えて確認)", () => {
   // 単位と桁を整合させた (全数値セル÷1000) JPX 公式サンプルの1セルを書き換えて確認する。
 
   it("単位表記 (C7) が千株/千円でなければ throw する", () => {
@@ -666,7 +669,7 @@ describe.skipIf(!hasFixtures)("新様式パーサの様式変更検知 (JPX公�
 
 });
 
-describe.skipIf(!hasFixtures)("週次一覧: 新様式の行を読み飛ばして古い週を返さない (実ページ 2026-09-27 に1行差し込み)", () => {
+describe.skipIf(!(hasWeeklyIndex27))("週次一覧: 新様式の行を読み飛ばして古い週を返さない (実ページ 2026-09-27 に1行差し込み)", () => {
   let html: string;
   let firstRowAt: number;
   beforeAll(() => {
@@ -684,27 +687,48 @@ describe.skipIf(!hasFixtures)("週次一覧: 新様式の行を読み飛ばし�
       "2026年8月第3週(8月17日～8月21日)",
       "2026年8月第2週(8月10日～8月14日)",
     ]);
-    expect(entries[0]?.valueXlsUrl).toBe(
+    const first = entries[0];
+    if (first?.kind !== "legacy") throw new Error("先頭は旧様式の週のはずです");
+    expect(first.valueXlsUrl).toBe(
       "https://www.jpx.co.jp/markets/statistics-equities/investor-type/t13vrt000001yhs9-att/stock_val_1_260902.xls"
     );
   });
 
-  it("告知どおりの新様式ファイル (stock_1_w_<8桁>_<8桁>) の行があれば throw する", () => {
-    // 修正前は、この行と次の「9月第2週」の行をまたいで正規表現が一致して両方を読み飛ばし、
-    // 「9月第1週」を最新週として返していた (再検証で再現)。
+  it("新様式の行 (stock_1_w_<8桁>_<8桁>) は新旧どちらの行も読む (2026-09-29〜)", () => {
+    // 旧実装は新様式の行を見た時点で throw していた。新実装は新旧の行をどちらも読み、
+    // 新様式の行を読み飛ばして古い週を最新として返さない (修正前はこの行と次の
+    // 「9月第2週」の行をまたいで正規表現が一致して両方を読み飛ばし、「9月第1週」を
+    // 最新週として返していた。再検証で再現)。
     const row =
       '<tr><td width="40%" class="a-center">2026年9月第3週(9月14日～9月18日)</td>' +
       '<td class="a-center"><a href="/x/stock_1_w_20260914_20260918.pdf">PDF</a></td>' +
       '<td class="a-center"><a href="/x/stock_1_w_20260914_20260918.xlsx">Excel</a></td></tr>';
-    expect(() => parseWeeklyIndexHtml(insertTopRow(row))).toThrow(/新様式のファイル/);
+    const entries = parseWeeklyIndexHtml(insertTopRow(row));
+    expect(entries).toHaveLength(6);
+    const first = entries[0];
+    if (first?.kind !== "unified") throw new Error("先頭は新様式の週のはずです");
+    expect(first.label).toBe("2026年9月第3週(9月14日～9月18日)");
+    expect(first.unifiedXlsxUrl).toBe("https://www.jpx.co.jp/x/stock_1_w_20260914_20260918.xlsx");
+    expect(latestWeeklyEntry(entries).label).toContain("2026年9月第3週");
+    const second = entries[1];
+    if (second?.kind !== "legacy") throw new Error("2行目は旧様式の週のはずです");
+    expect(second.label).toContain("2026年9月第2週");
   });
 
-  it("告知と違う名前でも、表に4リンク行でない行があれば throw する", () => {
+  it("新様式行の日付ラベルとファイル名の期間が食い違えば throw する (別週の取違え防止)", () => {
+    const row =
+      '<tr><td width="40%" class="a-center">2026年9月第3週(9月14日～9月18日)</td>' +
+      '<td class="a-center"><a href="/x/stock_1_w_20260921_20260925.pdf">PDF</a></td>' +
+      '<td class="a-center"><a href="/x/stock_1_w_20260921_20260925.xlsx">Excel</a></td></tr>';
+    expect(() => parseWeeklyIndexHtml(insertTopRow(row))).toThrow(/ファイル名の期間.*が一致しません/);
+  });
+
+  it("告知と違う名前でも、表に新旧どちらの行でもない行があれば throw する", () => {
     const row =
       '<tr><td class="a-center">2026年9月第3週(9月14日～9月18日)</td>' +
       '<td class="a-center"><a href="/x/stock_1_260903.pdf">PDF</a></td>' +
       '<td class="a-center"><a href="/x/stock_1_260903.xlsx">Excel</a></td></tr>';
-    expect(() => parseWeeklyIndexHtml(insertTopRow(row))).toThrow(/4リンク行ではない行/);
+    expect(() => parseWeeklyIndexHtml(insertTopRow(row))).toThrow(/どちらでもない行/);
   });
 
   it("行が新しい順に並んでいなければ throw する (先頭行=最新週の前提)", () => {
@@ -736,7 +760,7 @@ describe.skipIf(!hasFixtures)("週次一覧: 新様式の行を読み飛ばし�
   });
 });
 
-describe.skipIf(!hasFixtures)("月次一覧: 新様式の月を「未公表」と誤認しない (実ページ 2026-09-27 の9月欄を書き換え)", () => {
+describe.skipIf(!(hasMonthlyIndex27))("月次一覧: 新様式の月を「未公表」と誤認しない (実ページ 2026-09-27 の9月欄を書き換え)", () => {
   let html: string;
   beforeAll(() => {
     html = loadText("monthly-index-2026-09-27.html");
@@ -778,7 +802,7 @@ describe.skipIf(!hasFixtures)("月次一覧: 新様式の月を「未公表」�
   });
 });
 
-describe.skipIf(!hasFixtures)("mergeValueAndVolumeRecords (金額ファイル+株数ファイルを1バッチに)", () => {
+describe.skipIf(!(hasW2))("mergeValueAndVolumeRecords (金額ファイル+株数ファイルを1バッチに)", () => {
   let value: InvestorEquityRecord[];
   let volume: InvestorEquityRecord[];
   beforeAll(() => {
@@ -792,18 +816,18 @@ describe.skipIf(!hasFixtures)("mergeValueAndVolumeRecords (金額ファイル+�
   it("金額と株数の取り違えは throw する", () => {
     expect(() => mergeValueAndVolumeRecords(volume, value, "weekly")).toThrow(/金額ファイルのはず/);
   });
-  it("別の週のファイル同士は throw する", () => {
+  it.skipIf(!hasW1Vol)("別の週のファイル同士は throw する", () => {
     const volumeW1 = parseInvestorEquityWorkbook(loadBytes("weekly-volume-2026-w1-0831-0904.xls"));
     expect(() => mergeValueAndVolumeRecords(value, volumeW1, "weekly")).toThrow(/期間が食い違/);
   });
-  it("週次のはずが月次なら throw する", () => {
+  it.skipIf(!hasMonthlyFiles)("週次のはずが月次なら throw する", () => {
     const mValue = parseInvestorEquityWorkbook(loadBytes("monthly-value-2026-08.xls"));
     const mVolume = parseInvestorEquityWorkbook(loadBytes("monthly-volume-2026-08.xls"));
     expect(() => mergeValueAndVolumeRecords(mValue, mVolume, "weekly")).toThrow(/weekly のはずが monthly/);
   });
 });
 
-describe.skipIf(!hasFixtures)("jpxInvestorEquityArchiveInput (ルール6 の一次データ入力・冪等キー)", () => {
+describe.skipIf(!(hasW2 && hasMonthlyFiles))("jpxInvestorEquityArchiveInput (ルール6 の一次データ入力・冪等キー)", () => {
   const JPX = "https://www.jpx.co.jp/markets/statistics-equities/investor-type";
   const fetchedFrom = (
     periodType: FetchedInvestorEquity["periodType"],
@@ -815,6 +839,7 @@ describe.skipIf(!hasFixtures)("jpxInvestorEquityArchiveInput (ルール6 の一�
     const valueBytes = loadBytes(valueFixture);
     const volumeBytes = loadBytes(volumeFixture);
     return {
+      kind: "legacy",
       periodType,
       valueUrl,
       volumeUrl,
@@ -848,6 +873,7 @@ describe.skipIf(!hasFixtures)("jpxInvestorEquityArchiveInput (ルール6 の一�
   });
 
   it("週次: キーは期間終了日、ファイルは取得したバイト列そのまま (実体アップロード用)", () => {
+    if (weekly.kind !== "legacy") throw new Error("旧様式の週のはずです");
     const input = jpxInvestorEquityArchiveInput(weekly);
     expect(input.key).toBe("jpx-investor-equity-weekly-2026-09-11");
     expect(input.service).toBe("moneyflow");
@@ -892,7 +918,7 @@ describe.skipIf(!hasFixtures)("jpxInvestorEquityArchiveInput (ルール6 の一�
     expect(() => jpxInvestorEquityArchiveInput(noDate)).toThrow(/期間終了日が不明/);
   });
 
-  it("バッチ内で期間が食い違えば、先頭の1件を代表にせず throw する", () => {
+  it.skipIf(!hasW1Vol)("バッチ内で期間が食い違えば、先頭の1件を代表にせず throw する", () => {
     const mixed: FetchedInvestorEquity = {
       ...weekly,
       records: [
@@ -904,7 +930,7 @@ describe.skipIf(!hasFixtures)("jpxInvestorEquityArchiveInput (ルール6 の一�
   });
 });
 
-describe.skipIf(!hasFixtures)("指標定義の公表頻度は JPX 一覧ページの実文言に基づく (検証指摘: 月次『第8営業日』は誤り)", () => {
+describe.skipIf(!(hasWeeklyIndex27 && hasMonthlyIndex27))("指標定義の公表頻度は JPX 一覧ページの実文言に基づく (検証指摘: 月次『第8営業日』は誤り)", () => {
   it("一覧ページ (2026-09-27 実ページ) の文言と一致する", () => {
     expect(loadText("weekly-index-2026-09-27.html")).toContain(
       "毎週第4営業日（通常は木曜日、祝日等非営業日がある場合はその分後ろ倒し） 午後3時30分に資料を掲載します。"
@@ -917,5 +943,268 @@ describe.skipIf(!hasFixtures)("指標定義の公表頻度は JPX 一覧ペー�
       expect(def.frequency).toContain("前月最終週の週次発表と同日");
       expect(def.frequency).not.toContain("第8営業日");
     }
+  });
+});
+
+// ===========================================================================
+// 2026-09-29 追加: 新様式の実ファイル・実ページ (2026年9月第3週 9/14〜9/18 分)
+// ===========================================================================
+
+const UNIFIED_W3_XLSX = "weekly-unified-2026-w3-0914-0918.xlsx";
+const UNIFIED_W3_ORIGINAL_NAME = "stock_1_w_20260914_20260918.xlsx";
+const UNIFIED_W3_INDEX = "weekly-index-2026-09-29.html";
+
+describe.skipIf(!(hasUnifiedW3))("新様式パーサ: 週次実ファイル (2026年9月第3週 9/14-9/18)", () => {
+  let records: InvestorEquityRecord[];
+  beforeAll(() => {
+    records = parseInvestorEquityWorkbook(loadBytes(UNIFIED_W3_XLSX), UNIFIED_W3_ORIGINAL_NAME);
+  });
+
+  it("様式・期間を正しく判定する (年月週コード 2026093 + ファイル名の日付)", () => {
+    expect(records.length).toBe(14 * 4 * 2);
+    for (const r of records) {
+      expect(r.formatVersion).toBe("unified_single_file");
+      expect(r.periodType).toBe("weekly");
+      expect(r.periodLabel).toBe("2026年9月第3週");
+      expect(r.periodMonth).toBe("2026-09");
+      expect(r.periodStart).toBe("2026-09-14");
+      expect(r.periodEnd).toBe("2026-09-18");
+    }
+  });
+
+  it("14部門 × 4市場 × 2指標 = 112レコード (部門名は実ファイルの列見出しそのまま)", () => {
+    expect([...new Set(records.map((r) => r.investorCategory))]).toEqual([
+      "自己現金",
+      "自己信用",
+      "個人現金",
+      "個人信用",
+      "海外投資家法人",
+      "海外投資家個人",
+      "証券会社",
+      "投資信託",
+      "事業法人",
+      "その他法人等",
+      "生保・損保",
+      "都銀・地銀等",
+      "信託銀行",
+      "その他金融機関",
+    ]);
+    expect([...new Set(records.map((r) => r.market))]).toEqual([
+      "TSE Prime",
+      "TSE Standard",
+      "TSE Growth",
+      "Tokyo & Nagoya",
+    ]);
+  });
+
+  it("原本の実測値と一致する: TSE Prime 自己現金 (株数/金額)", () => {
+    // 原本 sheet1 の TSE Prime 行 (株数行・金額行) × 自己現金列。単位は見出しどおり千株/千円。
+    const volume = find(records.filter((r) => r.metric === "volume"), "TSE Prime", "自己現金");
+    expect(volume.sell).toBe(1388713);
+    expect(volume.buy).toBe(1991680);
+    expect(volume.net).toBe(602967);
+    expect(volume.total).toBe(3380393);
+    expect(volume.unit).toBe("thousand_shares");
+    const value = find(records.filter((r) => r.metric === "value"), "TSE Prime", "自己現金");
+    expect(value.sell).toBe(3943522532);
+    expect(value.buy).toBe(5597997582);
+    expect(value.net).toBe(1654475050);
+    expect(value.total).toBe(9541520114);
+    expect(value.unit).toBe("thousand_yen");
+  });
+
+  it("原本の実測値と一致する: TSE Prime 証券会社・二市場 海外投資家個人 (金額)", () => {
+    const sec = find(records.filter((r) => r.metric === "value"), "TSE Prime", "証券会社");
+    expect([sec.sell, sec.buy, sec.net, sec.total]).toEqual([122141108, 114646332, -7494776, 236787440]);
+    const ind = find(records.filter((r) => r.metric === "value"), "Tokyo & Nagoya", "海外投資家個人");
+    expect([ind.sell, ind.buy, ind.net, ind.total]).toEqual([94593286, 95911382, 1318096, 190504668]);
+  });
+
+  it("112件全件で 買い-売り=差引・売り+買い=合計 が一致し、単位の桁検査を通過する", () => {
+    for (const r of records) {
+      expect(r.buy - r.sell).toBe(r.net);
+      expect(r.sell + r.buy).toBe(r.total);
+    }
+    // プライム金額の売り合計 ≒ 45.0兆円。旧様式の別週 (9月第2週 ≒ 47.8兆円) と同じ桁で、
+    // サンプル (円単位のまま ≒ 京円) とは3桁違う。週が違うため厳密な突合はしない
+    // (UNIT ACCEPTANCE: 異期間の旧数値への倍率合わせは禁止)。
+    const primeSell = records
+      .filter((r) => r.market === "TSE Prime" && r.metric === "value")
+      .reduce((a, r) => a + r.sell, 0);
+    expect(primeSell).toBe(44987877647);
+  });
+
+  it("新様式に合計行は無く、14部門すべて isAggregateCategory=false", () => {
+    expect(records.every((r) => r.isAggregateCategory === false)).toBe(true);
+  });
+
+  it("数値セル網羅性: 公式の数値は14群×4列×8行=448セルのみ (親の数値列なし)", () => {
+    // 様式確認 (Sol msg_033279c74c40): 14群の外に公式の親/小計の数値列があれば、
+    // パーサが黙って捨てることになる。実ファイルでは単一シート・群外の数値0・
+    // 群内448 (14群×4列×8行) のみで、親は結合見出しだけ。将来 JPX が親の数値列を
+    // 足したらこのテストが落ちて捨て置きを検知する (親数値の捏造はしない)。
+    const wb = XLSX.read(loadBytes(UNIFIED_W3_XLSX), { type: "array" });
+    expect(wb.SheetNames).toHaveLength(1);
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[wb.SheetNames[0] as string], {
+      header: 1,
+      defval: null,
+    });
+    const groupCols = new Set<number>();
+    for (let g = 0; g < 14; g++) for (let j = 0; j < 4; j++) groupCols.add(3 + g * 4 + j);
+    let inside = 0;
+    const outside: string[] = [];
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r] ?? [];
+      for (let c = 0; c < row.length; c++) {
+        if (typeof row[c] !== "number") continue;
+        if (groupCols.has(c)) inside++;
+        else outside.push(`R${r + 1}C${c}`);
+      }
+    }
+    expect(outside).toEqual([]);
+    expect(inside).toBe(14 * 4 * 8);
+  });
+});
+
+describe.skipIf(!(hasUnifiedW3))("新様式パーサの厳密整合・見出し検証 (実ファイル W3 の1セルだけを書き換え)", () => {
+  // シート名は原文 (況と Stocks の間は NBSP U+00A0。probe でバイト確認)。
+  // F8 = プライム株数・自己現金の差引 (602,967)、G8 = 同じく合計 (3,380,393)、
+  // D7〜G7 = 自己現金の4列見出し。
+  const SHEET = "投資部門別 株式売買状況\u00A0Stocks by Investor";
+
+  it("差引欄が 買い-売り と1だけ違えば throw する (±1 の許容なし)", () => {
+    const wb = XLSX.read(loadBytes(UNIFIED_W3_XLSX), { type: "array" });
+    const sheet = wb.Sheets[SHEET];
+    if (!sheet) throw new Error("テストフィクスチャにシートがありません");
+    sheet["F8"] = { t: "n", v: 602968 };
+    expect(() => parseInvestorEquityWorkbook(workbookBytes(wb), UNIFIED_W3_ORIGINAL_NAME)).toThrow(/差引欄/);
+  });
+
+  it("合計欄が 売り+買い と1だけ違えば throw する (±1 の許容なし)", () => {
+    const wb = XLSX.read(loadBytes(UNIFIED_W3_XLSX), { type: "array" });
+    const sheet = wb.Sheets[SHEET];
+    if (!sheet) throw new Error("テストフィクスチャにシートがありません");
+    sheet["G8"] = { t: "n", v: 3380394 };
+    expect(() => parseInvestorEquityWorkbook(workbookBytes(wb), UNIFIED_W3_ORIGINAL_NAME)).toThrow(/売買合計の不整合/);
+  });
+
+  it("売り/買いの見出しが入れ替わったら throw する (列ずれの検知)", () => {
+    const bytes = mutateCell(UNIFIED_W3_XLSX, SHEET, "D7", "買 Purchases");
+    expect(() => parseInvestorEquityWorkbook(bytes, UNIFIED_W3_ORIGINAL_NAME)).toThrow(/見出しが想定と異なります/);
+  });
+
+  it("未知の見出しがあれば throw する", () => {
+    const bytes = mutateCell(UNIFIED_W3_XLSX, SHEET, "G7", "数量 Qty");
+    expect(() => parseInvestorEquityWorkbook(bytes, UNIFIED_W3_ORIGINAL_NAME)).toThrow(/見出しが想定と異なります/);
+  });
+});
+
+describe.skipIf(!(hasUnifiedW3Index))("週次一覧ページの解析 (実ページ, 2026-09-29時点: 新旧の行が混在)", () => {
+  let entries: ReturnType<typeof parseWeeklyIndexHtml>;
+  beforeAll(() => {
+    entries = parseWeeklyIndexHtml(loadText(UNIFIED_W3_INDEX));
+  });
+
+  it("先頭は新様式の 2026年9月第3週、後続は旧様式の週 (新しい順)", () => {
+    expect(entries.map((e) => e.label)).toEqual([
+      "2026年9月第3週(9月14日～9月18日)",
+      "2026年9月第2週(9月7日～9月11日)",
+      "2026年9月第1週(8月31日～9月4日)",
+      "2026年8月第4週(8月24日～8月28日)",
+      "2026年8月第3週(8月17日～8月21日)",
+    ]);
+    expect(entries.map((e) => e.kind)).toEqual(["unified", "legacy", "legacy", "legacy", "legacy"]);
+  });
+
+  it("先頭の新様式行は単一 xlsx の URL を持つ", () => {
+    const latest = latestWeeklyEntry(entries);
+    if (latest.kind !== "unified") throw new Error("先頭は新様式の週のはずです");
+    expect(latest.unifiedXlsxUrl).toBe(
+      "https://www.jpx.co.jp/markets/statistics-equities/investor-type/t13vrt000002644i-att/stock_1_w_20260914_20260918.xlsx"
+    );
+  });
+
+  it("旧様式の行は従来どおり4リンクを読む", () => {
+    const second = entries[1];
+    if (second?.kind !== "legacy") throw new Error("2行目は旧様式の週のはずです");
+    expect(second.valueXlsUrl).toContain("stock_val_1_260902.xls");
+    expect(second.volumeXlsUrl).toContain("stock_vol_1_260902.xls");
+  });
+});
+
+describe.skipIf(!(hasUnifiedW3Index))("週次一覧: 新様式行の検証 (実ページ 2026-09-29 の1か所だけを書き換え)", () => {
+  let html: string;
+  let firstRowAt: number;
+  let row2At: number;
+  beforeAll(() => {
+    html = loadText(UNIFIED_W3_INDEX);
+    firstRowAt = html.indexOf("<tr>", html.indexOf('<th colspan="2">金額</th>'));
+    row2At = html.indexOf("<tr>", firstRowAt + 1);
+  });
+
+  it("PDF と Excel が別の週を指せば throw する", () => {
+    const broken = html.replace(
+      "stock_1_w_20260914_20260918.pdf",
+      "stock_1_w_20260921_20260925.pdf"
+    );
+    expect(broken).not.toBe(html);
+    expect(() => parseWeeklyIndexHtml(broken)).toThrow(/別の週を指しています/);
+  });
+
+  it("Excel だけ未掲載 (\"-\") なら throw する (PDF と Excel は対で掲載のはず)", () => {
+    const row3At = html.indexOf("<tr>", row2At + 1);
+    const firstRow = html.slice(firstRowAt, row2At);
+    const xlsxCell = firstRow.indexOf("stock_1_w_20260914_20260918.xlsx");
+    const td0 = firstRow.lastIndexOf("<td", xlsxCell);
+    const td1 = firstRow.indexOf("</td>", xlsxCell) + "</td>".length;
+    const unpublished = html.slice(0, firstRowAt + td0) + '<td width="15%" class="a-center">-</td>' + html.slice(firstRowAt + td1);
+    expect(unpublished).not.toBe(html);
+    expect(() => parseWeeklyIndexHtml(unpublished)).toThrow(/未掲載/);
+    expect(row3At).toBeGreaterThan(row2At);
+  });
+
+  it("4・5セル目に \"-\" 以外があれば throw する", () => {
+    const extra = html.replace(
+      '<td width="15%" class="a-center">-</td>',
+      '<td width="15%" class="a-center"><a href="/x/stock_1_w_20260914_20260918.csv">CSV</a></td>'
+    );
+    expect(extra).not.toBe(html);
+    expect(() => parseWeeklyIndexHtml(extra)).toThrow(/想定外のセル/);
+  });
+
+  it("新様式行が旧様式行より後にあれば throw する (新様式は新しい週だけのはず)", () => {
+    const row3At = html.indexOf("<tr>", row2At + 1);
+    const swapped =
+      html.slice(0, firstRowAt) + html.slice(row2At, row3At) + html.slice(firstRowAt, row2At) + html.slice(row3At);
+    expect(swapped).not.toBe(html);
+    expect(() => parseWeeklyIndexHtml(swapped)).toThrow(/旧様式の行より後にあります/);
+  });
+});
+
+describe.skipIf(!(hasUnifiedW3))("jpxInvestorEquityArchiveInput: 新様式の単一ファイル (実ファイル)", () => {
+  it("キーは期間終了日、ファイルは単一 xlsx (実体アップロード用)", () => {
+    const unifiedBytes = loadBytes(UNIFIED_W3_XLSX);
+    const unifiedUrl =
+      "https://www.jpx.co.jp/markets/statistics-equities/investor-type/t13vrt000002644i-att/stock_1_w_20260914_20260918.xlsx";
+    const fetched: FetchedInvestorEquity = {
+      kind: "unified",
+      periodType: "weekly",
+      unifiedUrl,
+      unifiedBytes,
+      records: parseInvestorEquityWorkbook(unifiedBytes, UNIFIED_W3_ORIGINAL_NAME),
+    };
+    const input = jpxInvestorEquityArchiveInput(fetched);
+    expect(input.key).toBe("jpx-investor-equity-weekly-2026-09-18");
+    expect(input.service).toBe("moneyflow");
+    expect(input.source).toBe(unifiedUrl);
+    expect(input.files.map((f) => f.filename)).toEqual([
+      "investor-equity-unified-stock_1_w_20260914_20260918.xlsx",
+    ]);
+    expect(input.files[0]?.bytes).toBe(unifiedBytes);
+    expect(input.files[0]?.contentType).toBe(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    expect(input.metadata.recordCount).toBe(112);
+    expect(input.metadata.formatVersion).toBe("unified_single_file");
   });
 });

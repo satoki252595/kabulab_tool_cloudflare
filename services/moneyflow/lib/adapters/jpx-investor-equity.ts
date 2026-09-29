@@ -16,13 +16,25 @@
  * 公表後に訂正することがある (週次一覧ページに「訂正情報（2024年9月10日）」の掲載あり)。
  * 訂正後のファイルは同じキーのため自動では取り直さない — この限界は指標定義の「限界」に明記する。
  *
- * 1 バッチの行数: 4 市場 × 15 投資部門 × (金額/株数) × (買い越し/売買合計) = 240 行。
+ * 1 バッチの行数: 旧様式は 4 市場 × 15 投資部門 × (金額/株数) × (買い越し/売買合計) = 240 行、
+ * 新様式は 4 市場 × 14 投資部門 × (金額/株数) × (買い越し/売買合計/売付/買付) = 448 行。
+ * 新様式の行には名前付き内訳 (市場/投資部門/取引種別/親区分/階層/公表日) を付け、
+ * 冪等キーは7セグメント (`category` は表示ラベルのみ)。旧様式の行は従来キー
+ * `期間|指標|区分` のまま (旧系列の移行・再取込はしない)。
  *
- * 様式変更: 週次は 2026-09-29 掲載分から、月次は 2026-10-08 掲載分から単一ファイルの
- * 新様式に変わる予告がある。取得元モジュールの一覧ページ解析は新様式のリンクを見た
- * 時点で throw し、本アダプタも新様式 (unified_single_file) のレコードは受け付けずに
- * throw する (新様式は JPX 公式サンプルでしか検証できておらず、サンプルの値の桁が
- * 見出しの単位「千株/千円」と合わない疑いがあるため。実ファイルでの再検証後に対応する)。
+ * 様式変更 (2026-09-29 の user 決定: 旧方式互換・移行要件なし、新様式ファースト):
+ * 週次は 2026-09-29 掲載分から単一ファイルの新様式になり、実ファイル
+ * (`stock_1_w_20260914_20260918.xlsx`、2026年9月第3週分) で検証済み
+ * (単位は見出しどおり千株/千円、112件全件で買い-売り=差引・売り+買い=合計が一致)。
+ * 本アダプタは週次の新旧どちらの様式も受け付ける。月次は 2026-10-08 掲載分からの
+ * 新様式が未公表のため、新様式の月次レコードは受け付けずに throw する
+ * (unknown-reject。公表後に実ファイルで検証して対応する)。
+ *
+ * 新旧の投資部門名: 両様式で名前が同じ8部門 (証券会社・投資信託・事業法人・
+ * その他法人等・生保・損保・都銀・地銀等・信託銀行・その他金融機関) は JPX の定義が
+ * 同一のため同じ系列として扱う。それ以外は名前が違う (旧: 自己計/委託計/総計/法人/
+ * 個人/海外投資家/金融機関 → 新: 自己現金/自己信用/個人現金/個人信用/
+ * 海外投資家法人/海外投資家個人) ため混ざらない。旧系列への無言合流はしない。
  */
 import {
   MONTHLY_INDEX_URL,
@@ -61,6 +73,7 @@ const MONTHLY_SPEC_NAME = "jpx-investor-equity-monthly";
 /** 一次データのファイル名の接頭辞 (`jpxInvestorEquityArchiveInput` の命名と同じ)。 */
 const VALUE_FILE_PREFIX = "investor-equity-value-";
 const VOLUME_FILE_PREFIX = "investor-equity-volume-";
+const UNIFIED_FILE_PREFIX = "investor-equity-unified-";
 
 async function fetchOk(url: string): Promise<Response> {
   const res = await fetch(url, { headers: { "User-Agent": UA } });
@@ -93,19 +106,24 @@ const COMMON_LIMITATIONS =
   "(そのため「総計」でも売りと買いは一致せず、総計の買い越しはゼロにならない)。内国普通株式が" +
   "対象で ETF・REIT・優先株式等は含まない。ToSTNeT (立会外) 取引を含む。東証33業種別の" +
   "内訳は JPX 公式統計に存在しない (市場区分別のみ)。区分は「市場 / 投資部門」で、市場は" +
-  "東証プライム・東証スタンダード・東証グロース・二市場 (東京・名古屋の合算)。投資部門には" +
-  "他の部門の合計行も含む (総計=自己計+委託計、委託計=法人+個人+海外投資家+証券会社、" +
-  "法人=投資信託+事業法人+その他法人等+金融機関、金融機関=生保・損保+都銀・地銀等+" +
-  "信託銀行+その他金融機関)。合計行と内訳を足し合わせると二重計上になる。表下の" +
-  "「自己・個人の現金/信用」「海外投資家の法人/個人」の内訳は取り込んでいない。" +
+  "東証プライム・東証スタンダード・東証グロース・二市場 (東京・名古屋の合算)。旧様式の" +
+  "投資部門には他の部門の合計行も含む (総計=自己計+委託計、委託計=法人+個人+海外投資家+" +
+  "証券会社、法人=投資信託+事業法人+その他法人等+金融機関、金融機関=生保・損保+" +
+  "都銀・地銀等+信託銀行+その他金融機関)。合計行と内訳を足し合わせると二重計上になる。" +
+  "新様式 (週次 2026-09-29 掲載分〜) に合計行は無く、14部門はすべて葉 " +
+  "(自己現金/自己信用/個人現金/個人信用/海外投資家法人/海外投資家個人 + 旧様式と同名の" +
+  "8部門)。旧様式の自己計/委託計/総計/法人/個人/海外投資家/金融機関の系列は新様式では" +
+  "更新されない (系列終了)。旧様式の表下の「自己・個人の現金/信用」「海外投資家の法人/" +
+  "個人」の内訳は取り込んでいない (新様式はこの内訳を列として持つ)。" +
   "前期比は記録しない (空欄)。" +
   "公表後の訂正: JPX は誤りがあれば公表済みの値を訂正することがある (一覧ページの「訂正情報」で" +
   "告知。例: 2024年9月10日)。この取込は同じ期間を1回しか取得しないため、訂正は自動では" +
   "反映されない (反映するには保管済みの一次データをごみへ退避してから取り込み直す)。" +
-  "様式変更: 週次は 2026-09-29 掲載分、月次は 2026-10-08 掲載分から単一ファイルの新様式に" +
-  "変わる予告があり、新様式は実ファイルで検証するまで取込を停止する (失敗として記録される)。" +
-  "新様式では投資部門の区分 (自己現金/自己信用/個人現金/海外投資家法人 等) が変わり、" +
-  "旧様式の系列と直接つながらない。";
+  "様式変更: 週次は 2026-09-29 掲載分から単一ファイルの新様式になり、実ファイル" +
+  "(2026年9月第3週分) で検証済み (単位は見出しどおり千株/千円。新旧で名前が同じ8部門は" +
+  " JPX の定義が同一のため同じ系列、それ以外は名前が違うため混ざらない)。月次は" +
+  " 2026-10-08 掲載分からの新様式が未公表のため、新様式の月次は取込を停止する" +
+  " (失敗として記録される。公表後に実ファイルで検証して対応する)。";
 
 const WEEKLY_LIMITATIONS =
   COMMON_LIMITATIONS +
@@ -281,7 +299,7 @@ const MARKET_JA: Readonly<Record<InvestorEquityMarket, string>> = {
 };
 
 /** 旧様式の主表の投資部門 (これ以外の名前は様式変更として throw する)。 */
-const INVESTOR_CATEGORIES: ReadonlySet<string> = new Set([
+const LEGACY_INVESTOR_CATEGORIES: ReadonlySet<string> = new Set([
   "自己計",
   "委託計",
   "総計",
@@ -299,15 +317,114 @@ const INVESTOR_CATEGORIES: ReadonlySet<string> = new Set([
   "その他金融機関",
 ]);
 
+/**
+ * 新様式の投資部門 (実ファイル `stock_1_w_20260914_20260918.xlsx` で確認した14列。
+ * これ以外の名前は様式変更として throw する)。証券会社・投資信託・事業法人・
+ * その他法人等・生保・損保・都銀・地銀等・信託銀行・その他金融機関の8部門は
+ * 旧様式と名前も JPX の定義も同じため、同じ区分 (同じ系列) として扱う。
+ */
+const UNIFIED_INVESTOR_CATEGORIES: ReadonlySet<string> = new Set([
+  "自己現金",
+  "自己信用",
+  "個人現金",
+  "個人信用",
+  "海外投資家法人",
+  "海外投資家個人",
+  "証券会社",
+  "投資信託",
+  "事業法人",
+  "その他法人等",
+  "生保・損保",
+  "都銀・地銀等",
+  "信託銀行",
+  "その他金融機関",
+]);
+
 function categoryOf(rec: InvestorEquityRecord): string {
   const market = MARKET_JA[rec.market];
   if (market === undefined) {
     throw new Error(`JPX 投資部門別売買状況: 未知の市場です: "${rec.market}"`);
   }
-  if (!INVESTOR_CATEGORIES.has(rec.investorCategory)) {
-    throw new Error(`JPX 投資部門別売買状況: 未知の投資部門です: "${rec.investorCategory}" (様式変更の可能性)`);
+  const known =
+    rec.formatVersion === "unified_single_file" ? UNIFIED_INVESTOR_CATEGORIES : LEGACY_INVESTOR_CATEGORIES;
+  if (!known.has(rec.investorCategory)) {
+    throw new Error(
+      `JPX 投資部門別売買状況: 未知の投資部門です: "${rec.investorCategory}" (${rec.formatVersion} の様式変更の可能性)`
+    );
   }
   return `${market} / ${rec.investorCategory}`;
+}
+
+/**
+ * 新様式14部門の直接親 (JPX の様式変更お知らせ `stock_20260929.pdf` の階層定義。
+ * 自己=現金+信用、個人=現金+信用、海外投資家=法人+個人、委託計=法人+個人+
+ * 海外投資家+証券会社、法人=投資信託+事業法人+その他法人等+金融機関、
+ * 金融機関=生保・損保+都銀・地銀等+信託銀行+その他金融機関)。14部門すべてが
+ * 葉 (categoryLevel 1) で、親の合計行は新様式ファイルに無い。
+ */
+const UNIFIED_PARENT: Readonly<Record<string, string>> = {
+  自己現金: "自己計",
+  自己信用: "自己計",
+  個人現金: "個人",
+  個人信用: "個人",
+  海外投資家法人: "海外投資家",
+  海外投資家個人: "海外投資家",
+  証券会社: "委託計",
+  投資信託: "法人",
+  事業法人: "法人",
+  その他法人等: "法人",
+  "生保・損保": "金融機関",
+  "都銀・地銀等": "金融機関",
+  信託銀行: "金融機関",
+  その他金融機関: "金融機関",
+};
+
+/** 新様式14部門の取引種別。現金/信用に分かれていない部門は null (捏造しない)。 */
+const UNIFIED_TRADE_TYPE: Readonly<Record<string, string | null>> = {
+  自己現金: "現金",
+  自己信用: "信用",
+  個人現金: "現金",
+  個人信用: "信用",
+  海外投資家法人: null,
+  海外投資家個人: null,
+  証券会社: null,
+  投資信託: null,
+  事業法人: null,
+  その他法人等: null,
+  "生保・損保": null,
+  "都銀・地銀等": null,
+  信託銀行: null,
+  その他金融機関: null,
+};
+
+/**
+ * 新様式レコードの名前付き内訳 (市場/投資部門/取引種別/親区分/階層/公表日)。
+ * 公式セルからの明示写像で、`category` は表示ラベルのみ (冪等キーは7セグメント)。
+ * 公表日は公式の公表日が未確認のため null (取得日での代用は禁止)。
+ */
+function unifiedDims(rec: InvestorEquityRecord): {
+  marketSegment: string;
+  investorCategory: string;
+  tradeType: string | null;
+  parentCategory: string;
+  categoryLevel: number;
+  publicationDate: null;
+} {
+  const market = MARKET_JA[rec.market];
+  const parent = UNIFIED_PARENT[rec.investorCategory];
+  if (market === undefined || parent === undefined || !(rec.investorCategory in UNIFIED_TRADE_TYPE)) {
+    throw new Error(
+      `JPX 投資部門別売買状況: 新様式の市場・投資部門の対応が未定義です: "${rec.market} / ${rec.investorCategory}"`
+    );
+  }
+  return {
+    marketSegment: market,
+    investorCategory: rec.investorCategory,
+    tradeType: UNIFIED_TRADE_TYPE[rec.investorCategory] ?? null,
+    parentCategory: parent,
+    categoryLevel: 1,
+    publicationDate: null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -367,10 +484,15 @@ interface ParsedBatch {
 }
 
 /**
- * 金額ファイル・株数ファイルを解析し、1 バッチ (同じ期間・旧様式) であることを確かめる。
+ * 金額ファイル・株数ファイル (旧様式) または単一ファイル (新様式・週次のみ) を解析し、
+ * 1 バッチ (同じ期間・同じ様式) であることを確かめる。
  * 期間ラベル (週次 YYYY-Www / 月次 YYYY-MM) はファイルの中身から決める。
  */
 function parseBatch(files: readonly SpecFile[], periodType: InvestorEquityPeriodType): ParsedBatch {
+  const unifiedFile = files.find((f) => f.filename.startsWith(UNIFIED_FILE_PREFIX));
+  if (unifiedFile !== undefined) {
+    return parseUnifiedBatch(files, unifiedFile, periodType);
+  }
   const valueFile = requireSpecFile(files, (n) => n.startsWith(VALUE_FILE_PREFIX), "JPX 投資部門別 金額ファイル");
   const volumeFile = requireSpecFile(files, (n) => n.startsWith(VOLUME_FILE_PREFIX), "JPX 投資部門別 株数ファイル");
   const valueRecords = parseInvestorEquityWorkbook(valueFile.bytes, valueFile.filename.slice(VALUE_FILE_PREFIX.length));
@@ -381,8 +503,8 @@ function parseBatch(files: readonly SpecFile[], periodType: InvestorEquityPeriod
   const unified = [...valueRecords, ...volumeRecords].find((r) => r.formatVersion !== "legacy_split_files");
   if (unified) {
     throw new Error(
-      `JPX 投資部門別売買状況: 新様式 (${unified.formatVersion}) のファイルです。新様式は JPX 公式サンプルでしか` +
-        "検証しておらず値の単位 (千株/千円) の確認が済んでいないため、実ファイルで検証するまで取り込みません"
+      `JPX 投資部門別売買状況: ${VALUE_FILE_PREFIX}・${VOLUME_FILE_PREFIX} のファイルに` +
+        `新様式 (${unified.formatVersion}) のレコードが混ざっています (ファイル名と中身の様式が不一致)`
     );
   }
   if (valueRecords.length === 0 || valueRecords.some((r) => r.metric !== "value")) {
@@ -418,6 +540,55 @@ function parseBatch(files: readonly SpecFile[], periodType: InvestorEquityPeriod
   return { period, periodStart: first.periodStart, periodEnd: first.periodEnd, records };
 }
 
+/**
+ * 新様式の単一ファイルを解析し、1 バッチ (同じ期間・週次) であることを確かめる。
+ * 月次の新様式 (2026-10-08 掲載分〜) は未公表のため受け付けず throw する。
+ */
+function parseUnifiedBatch(
+  files: readonly SpecFile[],
+  unifiedFile: SpecFile,
+  periodType: InvestorEquityPeriodType
+): ParsedBatch {
+  if (files.length !== 1) {
+    throw new Error(
+      `JPX 投資部門別売買状況: 新様式の単一ファイル (${unifiedFile.filename}) と他のファイルが混ざっています`
+    );
+  }
+  if (periodType !== "weekly") {
+    throw new Error(
+      "JPX 投資部門別売買状況: 月次の新様式ファイルです。月次の新様式 (2026-10-08 掲載分〜) は" +
+        "未公表のため実ファイルで検証するまで取り込みません"
+    );
+  }
+  const records = parseInvestorEquityWorkbook(
+    unifiedFile.bytes,
+    unifiedFile.filename.slice(UNIFIED_FILE_PREFIX.length)
+  );
+  const legacy = records.find((r) => r.formatVersion !== "unified_single_file");
+  if (records.length === 0 || legacy !== undefined) {
+    throw new Error(
+      `JPX 投資部門別売買状況: ${unifiedFile.filename} が新様式の単一ファイルではありません`
+    );
+  }
+  const first = records[0] as InvestorEquityRecord;
+  const signature = (r: InvestorEquityRecord): string =>
+    `${r.formatVersion}|${r.periodType}|${r.periodLabel}|${r.periodStart}|${r.periodEnd}`;
+  const mismatched = records.find((r) => signature(r) !== signature(first));
+  if (mismatched) {
+    throw new Error(
+      `JPX 投資部門別売買状況: 単一ファイル内で期間・様式が食い違っています (${signature(first)} と ${signature(mismatched)})`
+    );
+  }
+  if (first.periodType !== periodType) {
+    throw new Error(`JPX 投資部門別売買状況: ${periodType} のはずが ${first.periodType} のファイルでした`);
+  }
+  if (first.periodStart === null || first.periodEnd === null) {
+    throw new Error(`JPX 投資部門別売買状況: ${first.periodLabel} の集計期間 (開始/終了) が不明です`);
+  }
+  const period = isoWeekLabelOf(new Date(`${first.periodEnd}T00:00:00Z`));
+  return { period, periodStart: first.periodStart, periodEnd: first.periodEnd, records };
+}
+
 function toDrafts(key: string, files: readonly SpecFile[], periodType: InvestorEquityPeriodType): ObservationDraft[] {
   const keyPeriod = periodFromKey(key, periodType);
   const batch = parseBatch(files, periodType);
@@ -433,12 +604,16 @@ function toDrafts(key: string, files: readonly SpecFile[], periodType: InvestorE
     else if (rec.unit === "thousand_shares") unit = "株";
     else throw new Error(`JPX 投資部門別売買状況: 未知の単位です: "${String(rec.unit)}"`);
     const suffix = rec.metric === "value" ? "value" : "volume";
+    const isUnified = rec.formatVersion === "unified_single_file";
     const common = {
       period: batch.period,
       periodStart: batch.periodStart,
       periodEnd: batch.periodEnd,
       category: categoryOf(rec),
       categoryKind: "投資部門" as const,
+      // 新様式のみ名前付き内訳を付ける (旧様式は従来キー `期間|指標|区分` のまま。
+      // 旧系列のキーを変えない = 旧方式の移行・再取込をしない user 決定)。
+      ...(isUnified ? unifiedDims(rec) : {}),
       unit,
       changeFromPrev: null,
       approximate: false,
@@ -451,6 +626,12 @@ function toDrafts(key: string, files: readonly SpecFile[], periodType: InvestorE
       indicatorKey: indicatorKey(`gross_turnover_${suffix}`, periodType),
       value: rec.total * 1000,
     });
+    if (isUnified) {
+      // 新様式の公式売付/買付セルを直接記録する (sell/buy キーは週次のみ。
+      // parseUnifiedBatch が週次を強制しているため、ここでは *_weekly が付く)。
+      drafts.push({ ...common, indicatorKey: indicatorKey(`sell_${suffix}`, periodType), value: rec.sell * 1000 });
+      drafts.push({ ...common, indicatorKey: indicatorKey(`buy_${suffix}`, periodType), value: rec.buy * 1000 });
+    }
   }
   return drafts;
 }
@@ -459,27 +640,41 @@ function toDrafts(key: string, files: readonly SpecFile[], periodType: InvestorE
 // 取得
 // ---------------------------------------------------------------------------
 
-async function fetchBatch(args: {
-  key: string;
-  periodType: InvestorEquityPeriodType;
-  indexUrl: string;
-  indexLabel: string;
-  valueUrl: string;
-  volumeUrl: string;
-}): Promise<FetchedBatch> {
-  // JPX 規約の「高頻度・高負荷の自動取得の自粛」に合わせ、2 本を順に取る。
-  const valueBytes = new Uint8Array(await (await fetchOk(args.valueUrl)).arrayBuffer());
-  const volumeBytes = new Uint8Array(await (await fetchOk(args.volumeUrl)).arrayBuffer());
-  const valueRecords = parseInvestorEquityWorkbook(valueBytes, urlBasename(args.valueUrl));
-  const volumeRecords = parseInvestorEquityWorkbook(volumeBytes, urlBasename(args.volumeUrl));
-  const fetched: FetchedInvestorEquity = {
-    periodType: args.periodType,
-    valueUrl: args.valueUrl,
-    volumeUrl: args.volumeUrl,
-    valueBytes,
-    volumeBytes,
-    records: [...valueRecords, ...volumeRecords],
-  };
+async function fetchBatch(
+  args: {
+    key: string;
+    periodType: InvestorEquityPeriodType;
+    indexUrl: string;
+    indexLabel: string;
+  } & ({ kind: "legacy"; valueUrl: string; volumeUrl: string } | { kind: "unified"; unifiedUrl: string })
+): Promise<FetchedBatch> {
+  let fetched: FetchedInvestorEquity;
+  if (args.kind === "unified") {
+    const unifiedBytes = new Uint8Array(await (await fetchOk(args.unifiedUrl)).arrayBuffer());
+    const records = parseInvestorEquityWorkbook(unifiedBytes, urlBasename(args.unifiedUrl));
+    fetched = {
+      kind: "unified",
+      periodType: args.periodType,
+      unifiedUrl: args.unifiedUrl,
+      unifiedBytes,
+      records,
+    };
+  } else {
+    // JPX 規約の「高頻度・高負荷の自動取得の自粛」に合わせ、2 本を順に取る。
+    const valueBytes = new Uint8Array(await (await fetchOk(args.valueUrl)).arrayBuffer());
+    const volumeBytes = new Uint8Array(await (await fetchOk(args.volumeUrl)).arrayBuffer());
+    const valueRecords = parseInvestorEquityWorkbook(valueBytes, urlBasename(args.valueUrl));
+    const volumeRecords = parseInvestorEquityWorkbook(volumeBytes, urlBasename(args.volumeUrl));
+    fetched = {
+      kind: "legacy",
+      periodType: args.periodType,
+      valueUrl: args.valueUrl,
+      volumeUrl: args.volumeUrl,
+      valueBytes,
+      volumeBytes,
+      records: [...valueRecords, ...volumeRecords],
+    };
+  }
   const archive = jpxInvestorEquityArchiveInput(fetched);
   const files = archive.files.map((f) => ({ ...f }));
   // resolve で決めたキーとファイルの中身が一致することを、保管前に確かめる
@@ -504,17 +699,18 @@ export const JPX_INVESTOR_EQUITY_WEEKLY_SPEC: MoneyflowSourceSpec = {
     const html = await (await fetchOk(WEEKLY_INDEX_URL)).text();
     const latest = latestWeeklyEntry(parseWeeklyIndexHtml(html));
     const key = weeklyKeyFromIndexLabel(latest.label);
+    const base = {
+      key,
+      periodType: "weekly" as const,
+      indexUrl: WEEKLY_INDEX_URL,
+      indexLabel: latest.label,
+    };
     return {
       key,
       fetch: () =>
-        fetchBatch({
-          key,
-          periodType: "weekly",
-          indexUrl: WEEKLY_INDEX_URL,
-          indexLabel: latest.label,
-          valueUrl: latest.valueXlsUrl,
-          volumeUrl: latest.volumeXlsUrl,
-        }),
+        latest.kind === "unified"
+          ? fetchBatch({ ...base, kind: "unified", unifiedUrl: latest.unifiedXlsxUrl })
+          : fetchBatch({ ...base, kind: "legacy", valueUrl: latest.valueXlsUrl, volumeUrl: latest.volumeXlsUrl }),
     };
   },
   toObservations({ key, files }) {
@@ -542,6 +738,7 @@ export const JPX_INVESTOR_EQUITY_MONTHLY_SPEC: MoneyflowSourceSpec = {
           periodType: "monthly",
           indexUrl: MONTHLY_INDEX_URL,
           indexLabel: `${latest.year}年${latest.month}月`,
+          kind: "legacy",
           valueUrl: valueXlsUrl,
           volumeUrl: volumeXlsUrl,
         }),
