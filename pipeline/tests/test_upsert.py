@@ -1092,6 +1092,42 @@ class TestFinancialSummaryMatchesPage:
     def test_読めない形は偽に倒す(self):
         assert upsert.financial_summary_matches_page({}, _fin_rec(), "m-1") is False
 
+    def test_数値prop欠落は偽に倒す(self):
+        """欠けた値を None へ畳んで同値にしない（偽の同値防止）。"""
+        props = _fin_page()
+        del props[S.FIN_PROP_ROA]  # rec 側も None だが欠落は欠落
+        assert upsert.financial_summary_matches_page(props, _fin_rec(), "m-1") is False
+
+    def test_プロパティ形違いは偽に倒す(self):
+        """未知の器でも例外にせず書く側へ。"""
+        props = _fin_page(**{S.FIN_PROP_NET_SALES: "1000"})
+        assert upsert.financial_summary_matches_page(props, _fin_rec(), "m-1") is False
+        props = _fin_page(**{S.FIN_PROP_CONSOLIDATED: {"select": "連結"}})
+        assert upsert.financial_summary_matches_page(props, _fin_rec(), "m-1") is False
+        assert upsert.financial_summary_matches_page(None, _fin_rec(), "m-1") is False
+
+    def test_明示nullは同値になる(self):
+        """厳格化しても正規の null 行は skip できる。"""
+        rec = _fin_rec(accounting_standard=None)
+        props = _fin_page(**{S.FIN_PROP_STANDARD: {"select": None}})
+        assert upsert.financial_summary_matches_page(props, rec, "m-1") is True
+
+    def test_relation_has_moreは偽に倒す(self):
+        """打ち切り済み relation の部分一致を同値としない。"""
+        props = _fin_page(
+            **{
+                S.PROP_RAW_RELATION: {
+                    "relation": [{"id": "raw-page-id-123"}],
+                    "has_more": True,
+                }
+            }
+        )
+        assert upsert.financial_summary_matches_page(props, _fin_rec(), "m-1") is False
+
+    def test_relation要素形違いは偽に倒す(self):
+        props = _fin_page(**{S.PROP_RAW_RELATION: {"relation": ["raw-page-id-123"]}})
+        assert upsert.financial_summary_matches_page(props, _fin_rec(), "m-1") is False
+
     def test_upsert同値はPATCHしない(self, dry_client, monkeypatch):
         """同値の既存行には update も create も送らない。"""
         existing = {

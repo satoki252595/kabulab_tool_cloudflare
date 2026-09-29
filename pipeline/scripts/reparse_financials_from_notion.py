@@ -273,6 +273,13 @@ def apply_reparsed(
     )
     if not defer_readback:
         saved = client.get_page(target["id"])
+    if skipped and not defer_readback:
+        # skip 判定はクエリ時点の target で行った。再読した新鮮な正本にも
+        # 同じ判定をかけ、変わっていたら退避せず止める（既存規則と同列）。
+        if not financial_summary_matches_page(
+            saved.get("properties", {}), record, None
+        ):
+            raise ValueError(f"{record.code}: 同値スキップ後の再読値が一致しません")
     actual = _page_record(saved)
     if allowed and not skipped and actual != record:
         raise ValueError(f"{record.code}: Notion再読値が原本再解析値と一致しません")
