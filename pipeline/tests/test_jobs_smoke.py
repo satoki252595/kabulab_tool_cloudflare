@@ -577,20 +577,21 @@ class TestEdinetLargeHolding:
         assert upsert._edinet_map_from_pages(pages) == {}
 
 
-class TestFinancialCustody:
-    """財務系の実解析原本は Notion ⑤ 物理保管が構造化保存の前提条件。
+class TestCommonStrictCustody:
+    """本番共通 strict: Notion ⑤ 未保管で取得単位を中止する (全 caller)。
 
-    共有 `upload_raw` の既定（双方向フェールセーフ）は他ジョブ用に維持し、
-    財務系だけ `require_notion=True` で local-only NULL 成功を STOP する。
+    共有 `upload_raw` の契約は test_local_store.TestUploadRawFailover が担い、
+    ここでは各 caller (edinet 財務系/master/supply。tdnet は test_tdnet_hourly)
+    の失敗/NULL 配線だけを最小検証する。dry-run の分離も同所で検証する。
     """
 
-    def _ctx(self, tmp_path, *, local_ok=True):
+    def _ctx(self, tmp_path, *, local_ok=True, dry_run=False):
         from types import SimpleNamespace
 
         from jp_stock_pipeline.config import load_settings
         from jp_stock_pipeline.jobs.runner import JobContext
 
-        settings = load_settings(dry_run=True, env=_env(tmp_path))
+        settings = load_settings(dry_run=dry_run, env=_env(tmp_path))
         local = SimpleNamespace(
             upsert_raw_artifact=lambda artifact: (
                 None if local_ok else (_ for _ in ()).throw(RuntimeError("テスト: ローカル失敗"))
@@ -612,90 +613,52 @@ class TestFinancialCustody:
             base_dir=settings_dir,
         )
 
-    def test_require_notion_failure_stops_despite_local_ok(self, monkeypatch, tmp_path):
-        """require_notion: Notion 失敗 + ローカル成功 → 中止 (NULL 成功にしない)。"""
+    def _process_kwargs(self):
+        return dict(
+            master_map={},
+            master_map_ok=False,
+            edinet_map={},
+            disc_map={},
+            disc_map_ok=False,
+            target_date=date(2026, 9, 10),
+            sha_map=None,
+        )
+
+    def test_edinet_financial_tidy_failure_stops_before_pdf_and_structured(
+        self, monkeypatch, tmp_path
+    ):
+        """財務系: tidy 保管失敗 → PDF 試行より前に書類単位を中止 (③④を書かない)。"""
+        from jp_stock_pipeline.jobs.runner import JobContext
+
         ctx = self._ctx(tmp_path, local_ok=True)
-
-        def boom(client, settings, artifact, **kw):
-            raise file_upload.RawUploadError("テスト: Notion 失敗")
-
-        monkeypatch.setattr(file_upload, "upload_raw_artifact", boom)
-        with pytest.raises(file_upload.RawUploadError, match="require_notion"):
-            ctx.upload_raw(self._artifact(tmp_path), require_notion=True)
-
-    def test_require_notion_dup_skip_resumes_without_upload(self, monkeypatch, tmp_path):
-        """require_notion: 既存 SHA は再送せず既存 page_id (中断後の再開)。"""
-        ctx = self._ctx(tmp_path, local_ok=True)
-        monkeypatch.setattr(file_upload, "find_raw_page_by_sha256", lambda *a, **k: "page-exists")
-
-        def must_not_send(client, path):
-            raise AssertionError("再送してはならない")
-
-        monkeypatch.setattr(file_upload, "upload_file", must_not_send)
-        assert ctx.upload_raw(self._artifact(tmp_path), require_notion=True) == "page-exists"
-
-    def test_require_notion_success_returns_page_id(self, monkeypatch, tmp_path):
-        """require_notion: Notion 成功 → page_id を返す (通常経路)。"""
-        ctx = self._ctx(tmp_path, local_ok=True)
+        persisted: list = []
+        monkeypatch.setattr(
+            JobContext,
+            "persist",
+            lambda self, record, notion_write, **kw: persisted.append(record) or True,
+        )
         monkeypatch.setattr(
             file_upload,
             "upload_raw_artifact",
-            lambda client, settings, artifact, **kw: "page-new",
+            lambda *a, **k: (_ for _ in ()).throw(
+                file_upload.RawUploadError("テスト: tidy 保管失敗")
+            ),
         )
-        assert ctx.upload_raw(self._artifact(tmp_path), require_notion=True) == "page-new"
-
-    def test_default_preserves_failsafe_none_on_notion_failure(self, monkeypatch, tmp_path):
-        """既定: Notion 失敗 + ローカル成功 → None を返し続行 (他ジョブ不変)。"""
-        ctx = self._ctx(tmp_path, local_ok=True)
-
-        def boom(client, settings, artifact, **kw):
-            raise file_upload.RawUploadError("テスト: Notion 失敗")
-
-        monkeypatch.setattr(file_upload, "upload_raw_artifact", boom)
-        assert ctx.upload_raw(self._artifact(tmp_path)) is None
-
-    def test_financial_tidy_custody_failure_aborts_document_unit(self, monkeypatch, tmp_path):
-        """財務系: tidy 原本の Notion 保管失敗 → 書類単位を中止 (③④を書かない)。"""
-        from jp_stock_pipeline.jobs.runner import JobContext
-
-        ctx = self._ctx(tmp_path, local_ok=True)
-        persisted: list = []
-        monkeypatch.setattr(
-            JobContext,
-            "persist",
-            lambda self, record, notion_write, **kw: persisted.append(record) or True,
-        )
-
-        def strict_boom(artifact, **kw):
-            assert kw.get("require_notion") is True  # 財務系は strict 呼び出し
-            raise file_upload.RawUploadError("テスト: tidy 保管失敗")
-
-        monkeypatch.setattr(ctx, "upload_raw", strict_boom)
         monkeypatch.setattr(
             edinet_daily,
             "_fetch_financial_tidy",
             lambda ctx_, doc_id, code, data_date: (self._artifact(tmp_path), None),
         )
+        pdf_calls: list = []
+        monkeypatch.setattr(edinet, "fetch_document", lambda *a, **k: pdf_calls.append(a) or None)
         doc = dict(TestEdinetLargeHolding.REAL_120)
         with pytest.raises(file_upload.RawUploadError):
-            edinet_daily._process_document(
-                ctx,
-                doc,
-                "list-page",
-                master_map={},
-                master_map_ok=False,
-                edinet_map={},
-                disc_map={},
-                disc_map_ok=False,
-                target_date=date(2026, 9, 10),
-                sha_map=None,
-            )
+            edinet_daily._process_document(ctx, doc, "list-page", **self._process_kwargs())
         assert persisted == []  # ④③ ともに書かない
+        assert pdf_calls == []  # PDF 試行より前に止まる
 
-    def test_financial_guard_rejects_list_substitution(self, monkeypatch, tmp_path):
-        """財務系: 実解析原本ページ無しで一覧/PDF 代替 → 中止 (不変条件)。"""
-        from jp_stock_pipeline.collectors import edinet
-        from jp_stock_pipeline.http import FetchError
+    def test_edinet_financial_pdf_page_does_not_fill_record_pointer(self, monkeypatch, tmp_path):
+        """財務系: ④ 原本ポインタは tidy のみ。PDF 成功でも指し先にしない。"""
         from jp_stock_pipeline.jobs.runner import JobContext
 
         ctx = self._ctx(tmp_path, local_ok=True)
@@ -705,33 +668,58 @@ class TestFinancialCustody:
             "persist",
             lambda self, record, notion_write, **kw: persisted.append(record) or True,
         )
-        # legacy 経路の再現: strict 無し相当で None が返る + PDF も取れない
-        monkeypatch.setattr(ctx, "upload_raw", lambda artifact, **kw: None)
+        tidy_artifact = self._artifact(tmp_path)
+        pages = iter(["tidy-page", "pdf-page"])
+        monkeypatch.setattr(ctx, "upload_raw", lambda artifact, **kw: next(pages))
         monkeypatch.setattr(
             edinet_daily,
             "_fetch_financial_tidy",
-            lambda ctx_, doc_id, code, data_date: (self._artifact(tmp_path), None),
+            lambda ctx_, doc_id, code, data_date: (tidy_artifact, None),
         )
-        monkeypatch.setattr(
-            edinet,
-            "fetch_document",
-            lambda *a, **k: (_ for _ in ()).throw(FetchError("テスト: PDF 失敗")),
-        )
+        monkeypatch.setattr(edinet, "fetch_document", lambda *a, **k: tidy_artifact)
+        monkeypatch.setattr(edinet_daily.json_to_parquet, "convert_artifact", lambda *a: None)
         doc = dict(TestEdinetLargeHolding.REAL_120)
-        with pytest.raises(file_upload.RawUploadError, match="一覧/PDF代替不可"):
-            edinet_daily._process_document(
-                ctx,
-                doc,
-                "list-page",
-                master_map={},
-                master_map_ok=False,
-                edinet_map={},
-                disc_map={},
-                disc_map_ok=False,
-                target_date=date(2026, 9, 10),
-                sha_map=None,
-            )
-        assert persisted == []
+        edinet_daily._process_document(ctx, doc, "list-page", **self._process_kwargs())
+        assert [r.provenance.raw_page_id for r in persisted] == ["tidy-page"]
+
+    def test_master_sync_notion_failure_aborts_before_upsert(self, monkeypatch, tmp_path):
+        """master: 原本保管失敗 → parse/① upsert より前に中止する。"""
+        ctx = self._ctx(tmp_path, local_ok=True)
+        artifact = self._artifact(tmp_path)
+        monkeypatch.setattr(edinet_codelist, "fetch_codelist", lambda settings: artifact)
+        monkeypatch.setattr(edinet_codelist, "convert_codelist", lambda a: a)
+        monkeypatch.setattr(
+            file_upload,
+            "upload_raw_artifact",
+            lambda *a, **k: (_ for _ in ()).throw(
+                file_upload.RawUploadError("テスト: 原本保管失敗")
+            ),
+        )
+        upsert_calls: list = []
+        monkeypatch.setattr(
+            master_sync.upsert,
+            "load_stock_master_entries",
+            lambda *a, **k: upsert_calls.append(True) or {},
+        )
+        with pytest.raises(file_upload.RawUploadError):
+            master_sync.execute(ctx)
+        assert upsert_calls == []  # ① 側に一切触れない
+
+    def test_supply_fetch_notion_failure_raises(self, monkeypatch, tmp_path):
+        """supply: 原本保管失敗 → 取得単位を中止する (structured 前)。"""
+        from jp_stock_pipeline.jobs import supply_daily
+
+        ctx = self._ctx(tmp_path, local_ok=True)
+        monkeypatch.setattr(supply_daily.jsf, "fetch_csv", lambda name: b"a,b\n1,2\n")
+        monkeypatch.setattr(
+            file_upload,
+            "upload_raw_artifact",
+            lambda *a, **k: (_ for _ in ()).throw(
+                file_upload.RawUploadError("テスト: 原本保管失敗")
+            ),
+        )
+        with pytest.raises(file_upload.RawUploadError):
+            supply_daily._fetch_and_store(ctx, "zandaka", "jsf_zandaka")
 
 
 class TestWorkflowManualDate:

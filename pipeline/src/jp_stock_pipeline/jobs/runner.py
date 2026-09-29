@@ -220,20 +220,15 @@ class JobContext:
             notion_write, lambda s: s.apply_disclosure_lifecycle(record), label
         )
 
-    def upload_raw(
-        self, artifact, *, sha_map=None, sha_map_date=None, require_notion: bool = False
-    ) -> str | None:
-        """原本を Notion ⑤ とローカル ⑤ へ独立に保存する（双方向フェールセーフ）。
+    def upload_raw(self, artifact, *, sha_map=None, sha_map_date=None) -> str | None:
+        """原本を Notion ⑤ とローカル ⑤ へ独立に保存し、Notion ⑤ の raw_page_id を返す。
 
-        Notion ⑤ の raw_page_id を返す（Notion 失敗時は None）。両系統とも原本を
-        保存できなかった場合のみ RawUploadError を送出し、呼び出し側はその取得単位の
-        構造化書き込みを中止する（原本ゼロ＝トレーサビリティ喪失 §3-3/§8.1-4）。
-        どちらか一方にでも原本が残れば構造化書き込みを許可する。
-
-        `require_notion=True` の取得単位（財務系の実解析原本）は例外: Notion ⑤
-        の物理保管が構造化保存の前提条件なので、ローカル ⑤ に残っても Notion
-        失敗時は RawUploadError を送出する。raw_page_id=None のまま構造化だけ
-        成功させる local-only NULL 成功は §8.1-4 違反のため許さない。
+        本番 (非 dry-run) は全取得単位で共通 strict: Notion ⑤ の物理保管が
+        構造化保存の前提条件なので、ローカル ⑤ に残っても Notion 失敗時は
+        RawUploadError を送出し、呼び出し側はその取得単位を中止する
+        (raw_page_id=None のまま構造化だけ成功させる local-only NULL 成功は
+        §8.1-4 違反のため許さない)。例外なく None が返る経路も同様に中止する。
+        dry-run のみ旧来の双方向フェールセーフ (両系統とも失敗時のみ中止 §3-3)。
 
         `sha_map` / `sha_map_date` は ⑤ 重複検索の事前マップ（L-21）。
         省略時は従来どおり原本ごとに検索する。
@@ -255,14 +250,14 @@ class JobContext:
         # Cloudflare は移行中の第3系統。R2 に原本が残れば D1 索引が欠けても
         # トレーサビリティは保たれるので、ここでは取得単位を落とさない。
         self._cloud(lambda c: c.upsert_raw_artifact(artifact), f"⑤{artifact.filename}")
-        if notion_err is not None and (require_notion or local_ok is not True):
-            # require_notion: Notion ⑤ 失敗で即中止（ローカル残存は問わない）。
-            # 既定: 両系統とも失敗時のみ中止（双方向フェールセーフ §3-3）。
-            if require_notion:
-                raise file_upload.RawUploadError(
-                    "原本を Notion ⑤ に保存できず取得単位を中止 "
-                    f"(require_notion): {artifact.filename}"
-                ) from notion_err
+        notion_missing = notion_err is not None or raw_page_id is None
+        if notion_missing and not self.settings.dry_run:
+            # 本番共通 strict: 例外の有無を問わず Notion ⑤ 未保管で即中止。
+            raise file_upload.RawUploadError(
+                f"原本を Notion ⑤ に保存できず取得単位を中止: {artifact.filename}"
+            ) from notion_err
+        if notion_missing and local_ok is not True:
+            # dry-run のみ: 両系統とも原本が残らなかった → 取得単位を中止。
             raise file_upload.RawUploadError(
                 "原本を Notion ⑤・ローカル ⑤ のいずれにも保存できず取得単位を中止: "
                 f"{artifact.filename}"

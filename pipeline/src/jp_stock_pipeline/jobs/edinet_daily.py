@@ -208,15 +208,11 @@ def _process_document(
 
     # 財務系: CSV/XBRL → tidy 変換版付き原本を ⑤ へ (変換失敗でも原本は上げる §5.2)
     # 実解析原本 (Type5 CSV / 無ければ実 Type1 ZIP) の Notion ⑤ 物理保管が
-    # ③④ 構造化保存の前提条件。Notion 失敗時は書類単位を中止する (§8.1-4)。
+    # ③④ 構造化保存の前提条件。本番共通 strict のため Notion 未保管はこの場で
+    # 送出され、PDF/構造化保存より前に書類単位を中止する (§8.1-4)。
     if doc_type_code in FINANCIAL_DOC_TYPES:
         tidy_artifact, tidy = _fetch_financial_tidy(ctx, doc_id, code, data_date)
-        doc_raw_page = ctx.upload_raw(
-            tidy_artifact,
-            sha_map=sha_map,
-            sha_map_date=target_date,
-            require_notion=True,
-        )
+        doc_raw_page = ctx.upload_raw(tidy_artifact, sha_map=sha_map, sha_map_date=target_date)
 
     # PDF 原本 (§4 書類一覧の対象すべて)。失敗しても書類処理自体は継続
     try:
@@ -225,17 +221,14 @@ def _process_document(
         )
         json_to_parquet.convert_artifact(pdf_artifact, "pdf")
         pdf_page = ctx.upload_raw(pdf_artifact, sha_map=sha_map, sha_map_date=target_date)
-        doc_raw_page = doc_raw_page or pdf_page
+        if doc_type_code not in FINANCIAL_DOC_TYPES:
+            # 財務系の ④ 原本ポインタは実解析原本 (tidy) のみに限る。PDF は
+            # 別目的の原本として ⑤ へ残すが、財務系 ④ の指し先にしない
+            # (一覧/PDF による実 ZIP 代替の不可 §8.1-4)。
+            doc_raw_page = doc_raw_page or pdf_page
     except (FetchError, file_upload.RawUploadError) as exc:
         logger.warning("PDF取得/UL失敗 (書類処理は継続 doc_id=%s): %s", doc_id, exc)
 
-    # 財務系の ④ 原本は実解析原本 (tidy) の ⑤ ページに限る。一覧原本・PDF
-    # ページへの代替は不可 (実 ZIP へのトレーサビリティ §8.1-4)。strict UL と
-    # 書類単位中止で到達不能のはずだが、不変条件として明示死守する。
-    if doc_type_code in FINANCIAL_DOC_TYPES and not doc_raw_page:
-        raise file_upload.RawUploadError(
-            f"財務系 ④ の実解析原本ページが無い (一覧/PDF代替不可): {doc_id}"
-        )
     # ④ 開示書類 upsert (キー=docID)。原本は書類自身 → 無ければ一覧原本
     # (財務系以外のみ。一覧/PDF は実 ZIP の代用にしない)。
     record = edinet.to_disclosure_record(doc, raw_page_id=doc_raw_page or list_page_id)
@@ -347,7 +340,7 @@ def execute(ctx: JobContext) -> None:
         logger.warning("⑤ 事前マップ取得失敗 → per-record 検索にフォールバック: %s", exc)
         sha_map = None
 
-    # 1-4. 書類一覧取得・原本⑤UL（Notion⑤/ローカル⑤ 独立。両系統とも失敗時のみ中止 §7.1/§3-3）
+    # 1-4. 書類一覧取得・原本⑤UL（本番共通 strict: Notion⑤未保管で中止 §8.1-4）
     list_artifact, docs = edinet.list_documents(ctx.settings, target_date)
     json_to_parquet.convert_artifact(list_artifact, "json")
     list_page_id = ctx.upload_raw(list_artifact, sha_map=sha_map, sha_map_date=target_date)

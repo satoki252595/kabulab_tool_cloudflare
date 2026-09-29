@@ -622,10 +622,12 @@ class _RecordingLocal:
         return len(rows)
 
 
-def _ctx(local):
+def _ctx(local, *, dry_run: bool = False):
+    from jp_stock_pipeline.config import load_settings
     from jp_stock_pipeline.jobs.runner import JobContext
 
-    return JobContext(settings=None, client=None, args=None, local=local)
+    settings = load_settings(dry_run=dry_run, env={})
+    return JobContext(settings=settings, client=None, args=None, local=local)
 
 
 def _raw(data_date=date(2026, 6, 10)) -> RawArtifact:
@@ -676,9 +678,12 @@ class TestJobContextMirror:
         assert ctx.mirror_failed == 1
 
 
-# --- 双方向フェールセーフ: persist / upload_raw -------------------------------
-# Notion とローカルを独立に書き、片系統が落ちても他系統へ書く（どちらか一方に
-# 残れば成功・両系統失敗のみ失敗）。ユーザー要望 (2026-06-28) の中核挙動。
+# --- 双方向フェールセーフ: persist / 原本⑤ upload_raw --------------------------
+# persist (構造化 ①③④): Notion とローカルを独立に書き、片系統が落ちても
+# 他系統へ書く（どちらか一方に残れば成功・両系統失敗のみ失敗）。
+# ユーザー要望 (2026-06-28) の中核挙動。
+# upload_raw (原本⑤): 本番共通 strict。Notion ⑤ 未保管で取得単位を中止し、
+# dry-run のみ旧来の双方向フェールセーフ (§8.1-4)。
 
 
 def _notion_writer(ok: bool):
@@ -703,6 +708,11 @@ def _ok_uploader(page_id: str = "raw-page-1"):
 
 def _fail_uploader(client, settings, artifact, **kw):
     raise RuntimeError("notion ⑤ down")
+
+
+def _none_uploader(client, settings, artifact, **kw):
+    """例外なく None を返す壊れた uploader (例外なし NULL 経路の再現)。"""
+    return None
 
 
 class _RaisingLocal:
@@ -793,13 +803,33 @@ class TestUploadRawFailover:
         assert ctx.upload_raw(_raw()) == "p1"
         assert local.calls == [("raw",)]
 
-    def test_notion_fails_local_succeeds_returns_none(self, monkeypatch):
-        # Notion ⑤ 失敗でもローカル ⑤ に原本が残れば構造化続行可（page_id=None）
+    def test_production_notion_fails_local_succeeds_raises(self, monkeypatch):
+        # 本番共通 strict: ローカル ⑤ に残っても Notion ⑤ 失敗で取得単位を中止
         from jp_stock_pipeline.notion import file_upload
 
         monkeypatch.setattr(file_upload, "upload_raw_artifact", _fail_uploader)
         local = _RecordingLocal()
         ctx = _ctx(local)
+        with pytest.raises(file_upload.RawUploadError):
+            ctx.upload_raw(_raw())
+        assert ctx.notion_failed == 1 and local.calls == [("raw",)]
+
+    def test_production_exceptionless_none_raises(self, monkeypatch):
+        # 本番共通 strict: 例外なく None が返る経路も同様に中止する
+        from jp_stock_pipeline.notion import file_upload
+
+        monkeypatch.setattr(file_upload, "upload_raw_artifact", _none_uploader)
+        ctx = _ctx(_RecordingLocal())
+        with pytest.raises(file_upload.RawUploadError):
+            ctx.upload_raw(_raw())
+
+    def test_dryrun_notion_fails_local_succeeds_returns_none(self, monkeypatch):
+        # dry-run のみ旧来の双方向フェールセーフ (Notion 失敗でも継続可)
+        from jp_stock_pipeline.notion import file_upload
+
+        monkeypatch.setattr(file_upload, "upload_raw_artifact", _fail_uploader)
+        local = _RecordingLocal()
+        ctx = _ctx(local, dry_run=True)
         assert ctx.upload_raw(_raw()) is None
         assert ctx.notion_failed == 1 and local.calls == [("raw",)]
 
@@ -812,11 +842,14 @@ class TestUploadRawFailover:
         assert ctx.mirror_failed == 1
 
     def test_both_fail_raises(self, monkeypatch):
-        # 原本ゼロ（両系統失敗）は §3-3 違反 → 取得単位中止
+        # 原本ゼロ（両系統失敗）は本番・dry-run とも取得単位中止
         from jp_stock_pipeline.notion import file_upload
 
         monkeypatch.setattr(file_upload, "upload_raw_artifact", _fail_uploader)
         ctx = _ctx(_RaisingLocal())
+        with pytest.raises(file_upload.RawUploadError):
+            ctx.upload_raw(_raw())
+        ctx = _ctx(_RaisingLocal(), dry_run=True)
         with pytest.raises(file_upload.RawUploadError):
             ctx.upload_raw(_raw())
 
