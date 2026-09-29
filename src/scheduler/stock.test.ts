@@ -812,11 +812,19 @@ describe("handleStockScheduled", () => {
         : jsonRes({ jobs: [syncJob(9)] })
     );
     const env: SchedulerEnv = { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN };
-    await handleStockScheduled(
-      { cron: DISPATCH_CRON, scheduledTime: TUE_1713 },
-      env,
-      { fetchFn, nowMs: TUE_1713_30S }
-    );
+    // dispatchedAt は actual clock のため、fixture 時刻を実 shape
+    // (同 UTC 日・claim 後) へ合わせる。
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-30T17:13:35.000Z"));
+    try {
+      await handleStockScheduled(
+        { cron: DISPATCH_CRON, scheduledTime: TUE_1713 },
+        env,
+        { fetchFn, nowMs: TUE_1713_30S }
+      );
+    } finally {
+      vi.useRealTimers();
+    }
     await handleStockScheduled(
       {
         cron: READCHECK_CRON,

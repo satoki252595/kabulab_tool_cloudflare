@@ -361,7 +361,9 @@ export async function runStockDispatch(deps: {
     cron: deps.cron,
     status: "dispatched",
     claimedAt: new Date(deps.nowMs).toISOString(),
-    dispatchedAt: new Date(deps.nowMs).toISOString(),
+    // POST 完了の実時刻は actual clock を保持する (証拠の正確性のため
+    // claim/start 時刻で置換しない)。
+    dispatchedAt: new Date(Date.now()).toISOString(),
     workflowRunId: details.workflowRunId,
     runUrl: details.runUrl,
     htmlUrl: details.htmlUrl,
