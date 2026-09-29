@@ -131,6 +131,7 @@ jobs:
             (github.event.inputs.target == 'daily' || github.event.inputs.target == 'stocks' || github.event.inputs.target == 'scheduled-stocks' || github.event.inputs.target == 'all')
         env:
           SCHEDULED_DATE: ${{ github.event.inputs.scheduled_date }}
+          STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}
         run: pnpm sync:daily:core --stocks-only
 
       - name: market context sync

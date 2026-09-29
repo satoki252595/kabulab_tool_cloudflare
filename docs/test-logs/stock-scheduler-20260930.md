@@ -9,11 +9,12 @@ scheduled 配線、`wrangler.toml` `[triggers]`、`stock-sync.yml`
 
 ## 検証 (Nix・mock のみ。live POST なし)
 
-- `pnpm vitest run src/scheduler/`: 32 件 PASS
-  (曜日・日跨ぎ・期限・重複・曖昧 POST・200 正常・CAS 競合・target routing・
-  false-green・秘密非出力)。
-- `pnpm vitest run src/cron/daily-mode.test.ts`: 8 件 PASS
-  (既存 6 + `SCHEDULED_DATE` 検証 2。fetch 前停止を確認)。
+- `pnpm vitest run src/scheduler/ src/cron/daily-mode.test.ts`: 48 件 PASS
+  (曜日・日跨ぎ・期限・重複読戻し・曖昧 POST・200 正常・CAS 競合・
+  target routing・User-Agent・分頁境界・run 対応・下限・false-green・
+  秘密非出力・target 別必須)。
+- API 実形の反映: `run_url` は `/repos` 付き path で検証
+  (`html_url` は無し)。レビュー指摘 6 件を同 PR で修正。
 - `pnpm typecheck` / `pnpm lint`: 成功。
 - `wrangler deploy --dry-run`: 成功 (`[triggers]` 2 cron 含む)。
 - 全体 `pnpm test` は CI で確認。

@@ -4,6 +4,7 @@ import {
   READCHECK_CRON,
   claimReceipt,
   evaluateReadcheck,
+  fetchAllJobs,
   handleStockScheduled,
   receiptKey,
   resolveRunDate,
@@ -18,35 +19,43 @@ import {
   type StockReceipt,
 } from "./stock.js";
 
-/** R2 conditional PUT 意味論つき fake bucket。 */
+/**
+ * R2 conditional PUT 意味論つき fake bucket。etag は本物と同じ raw
+ * (引用符なし不透明文字列) にし、CAS は native etagMatches で突合する。
+ */
 function makeBucket(initial: Record<string, string> = {}) {
   const store = new Map<string, { body: string; etag: string }>(
-    Object.entries(initial).map(([k, v]) => [k, { body: v, etag: `"seed-${k}"` }])
+    Object.entries(initial).map(([k, v], i) => [
+      k,
+      { body: v, etag: `seedraw${i}` },
+    ])
   );
   let n = 0;
-  const puts: Array<{ key: string; value: string; cond: string | null }> = [];
+  const puts: Array<{
+    key: string;
+    value: string;
+    onlyIf: Headers | { etagMatches: string } | undefined;
+  }> = [];
   const bucket: SchedulerBucket = {
     get: async (key: string) => {
       const hit = store.get(key);
       return hit ? { text: async () => hit.body } : null;
     },
-    put: async (key: string, value: string, options?: { onlyIf?: Headers }) => {
+    put: async (
+      key: string,
+      value: string,
+      options?: { onlyIf?: Headers | { etagMatches: string } }
+    ) => {
       const onlyIf = options?.onlyIf;
-      puts.push({
-        key,
-        value,
-        cond: onlyIf ? (onlyIf.get("If-None-Match") ?? onlyIf.get("If-Match")) : null,
-      });
-      if (onlyIf?.get("If-None-Match") === "*") {
-        if (store.has(key)) return null;
-      }
-      const match = onlyIf?.get("If-Match");
-      if (match !== null && match !== undefined) {
+      puts.push({ key, value, onlyIf });
+      if (onlyIf instanceof Headers) {
+        if (onlyIf.get("If-None-Match") === "*" && store.has(key)) return null;
+      } else if (onlyIf !== undefined) {
         const cur = store.get(key);
-        if (!cur || cur.etag !== match) return null;
+        if (!cur || cur.etag !== onlyIf.etagMatches) return null;
       }
       n += 1;
-      const etag = `"v${n}"`;
+      const etag = `rawetag${n}`;
       store.set(key, { body: value, etag });
       return { etag };
     },
@@ -93,16 +102,17 @@ function dispatchedBody(runId = 101): StockReceipt {
     status: "dispatched",
     dispatchedAt: "2026-09-30T17:13:31.000Z",
     workflowRunId: runId,
-    runUrl: `https://api.github.com/repos/o/r/actions/runs/${runId}`,
-    htmlUrl: `https://github.com/o/r/actions/runs/${runId}`,
+    runUrl: `https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/${runId}`,
+    htmlUrl: `https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/${runId}`,
   };
 }
 
-function syncJob(overrides: Partial<RunJob> = {}): RunJob {
+function syncJob(runId = 101, overrides: Partial<RunJob> = {}): RunJob {
   return {
     name: "sync",
     status: "completed",
     conclusion: "success",
+    run_id: runId,
     steps: [
       {
         name: "stock daily sync",
@@ -192,8 +202,10 @@ describe("runStockDispatch", () => {
     const { fetchFn, calls } = makeFetch(() =>
       jsonRes({
         workflow_run_id: 101,
-        run_url: "https://api.github.com/repos/o/r/actions/runs/101",
-        html_url: "https://github.com/o/r/actions/runs/101",
+        run_url:
+          "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/101",
+        html_url:
+          "https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/101",
       })
     );
     const r = await runStockDispatch({
@@ -215,14 +227,18 @@ describe("runStockDispatch", () => {
     const headers = init.headers as Record<string, string>;
     expect(headers["Authorization"]).toBe(`Bearer ${TOKEN}`);
     expect(headers["X-GitHub-Api-Version"]).toBe("2026-03-10");
+    expect(headers["User-Agent"]).toMatch(/^kabulab-stock-scheduler\//);
     expect(JSON.parse(String(init.body))).toEqual({
       ref: "main",
       inputs: { target: "scheduled-stocks", scheduled_date: "2026-09-30" },
       return_run_details: true,
     });
     expect(puts).toHaveLength(2);
-    expect(puts[0].cond).toBe("*");
-    expect(puts[1].cond).toBe('"v1"');
+    expect(puts[0].onlyIf).toBeInstanceOf(Headers);
+    expect((puts[0].onlyIf as Headers).get("If-None-Match")).toBe("*");
+    const cas = puts[1].onlyIf as { etagMatches: string };
+    expect(cas.etagMatches).toBe("rawetag1");
+    expect(cas.etagMatches).not.toContain('"');
     const savedObj = await bucket.get(receiptKey("2026-09-30"));
     expect(savedObj).not.toBeNull();
     const saved = JSON.parse(await savedObj!.text());
@@ -230,9 +246,9 @@ describe("runStockDispatch", () => {
     expect(saved.workflowRunId).toBe(101);
   });
 
-  it("重複 claim は POST 0 (同時・逐次二重禁止)", async () => {
+  it("重複 + dispatched 読戻しは POST 0 で正常 duplicate", async () => {
     const { bucket } = makeBucket({
-      [receiptKey("2026-09-30")]: JSON.stringify(claimBody()),
+      [receiptKey("2026-09-30")]: JSON.stringify(dispatchedBody(101)),
     });
     const { fetchFn, calls } = makeFetch(() => jsonRes({}));
     const r = await runStockDispatch({
@@ -243,7 +259,63 @@ describe("runStockDispatch", () => {
       nowMs: TUE_1713_30S,
       fetchFn,
     });
-    expect(r).toEqual({ status: "duplicate" });
+    expect(r).toEqual({ status: "duplicate", workflowRunId: 101 });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("重複 + claimed/破損/日付不一致/run欠落は error 継続 (再 POST 0)", async () => {
+    const bad: Array<[string, string]> = [
+      ["dispatch 未完了", JSON.stringify(claimBody())],
+      ["JSON が不正", "{oops"],
+      ["version が未知", JSON.stringify({ version: 9 })],
+      [
+        "日付不一致",
+        JSON.stringify({ ...dispatchedBody(), scheduledDate: "2026-09-29" }),
+      ],
+      [
+        "run 対応がありません",
+        JSON.stringify({ ...dispatchedBody(), workflowRunId: "x" }),
+      ],
+    ];
+    for (const [msg, body] of bad) {
+      const { bucket } = makeBucket({ [receiptKey("2026-09-30")]: body });
+      const { fetchFn, calls } = makeFetch(() => jsonRes({}));
+      await expect(
+        runStockDispatch({
+          bucket,
+          token: TOKEN,
+          cron: DISPATCH_CRON,
+          scheduledDate: "2026-09-30",
+          nowMs: TUE_1713_30S,
+          fetchFn,
+        })
+      ).rejects.toThrow(msg);
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  it("重複 + 読戻しで receipt 消失は error (再 POST 0)", async () => {
+    const { bucket } = makeBucket({
+      [receiptKey("2026-09-30")]: JSON.stringify(dispatchedBody()),
+    });
+    const realGet = bucket.get.bind(bucket);
+    let n = 0;
+    bucket.get = (async (...a: Parameters<typeof realGet>) => {
+      n += 1;
+      if (n === 1) return null;
+      return realGet(...a);
+    }) as typeof realGet;
+    const { fetchFn, calls } = makeFetch(() => jsonRes({}));
+    await expect(
+      runStockDispatch({
+        bucket,
+        token: TOKEN,
+        cron: DISPATCH_CRON,
+        scheduledDate: "2026-09-30",
+        nowMs: TUE_1713_30S,
+        fetchFn,
+      })
+    ).rejects.toThrow("消えています");
     expect(calls).toHaveLength(0);
   });
 
@@ -263,7 +335,14 @@ describe("runStockDispatch", () => {
     expect(puts).toHaveLength(1);
   });
 
-  it("200 でも run 詳細欠落・URL 不正は落とす", async () => {
+  it("200 でも run 詳細欠落・URL 不正・repo/run 不一致は落とす", async () => {
+    const ok = {
+      workflow_run_id: 101,
+      run_url:
+        "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/101",
+      html_url:
+        "https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/101",
+    };
     for (const body of [
       { run_url: "https://x/y", html_url: "https://x/y" },
       {
@@ -272,6 +351,32 @@ describe("runStockDispatch", () => {
         html_url: "https://x/y",
       },
       { workflow_run_id: 1, run_url: "https://x/y" },
+      { ...ok, workflow_run_id: 0 },
+      { ...ok, workflow_run_id: 1.5 },
+      // 別 repo
+      {
+        ...ok,
+        run_url:
+          "https://api.github.com/repos/other/repo/actions/runs/101",
+      },
+      // 別 run
+      {
+        ...ok,
+        html_url:
+          "https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/102",
+      },
+      // run_url に /repos 無し (html 形の混入)
+      {
+        ...ok,
+        run_url:
+          "https://api.github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/101",
+      },
+      // html_url に /repos 付き (API 形の混入)
+      {
+        ...ok,
+        html_url:
+          "https://github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/101",
+      },
     ]) {
       const { bucket, puts } = makeBucket();
       const { fetchFn } = makeFetch(() => jsonRes(body));
@@ -301,8 +406,10 @@ describe("runStockDispatch", () => {
     const { fetchFn, calls } = makeFetch(() =>
       jsonRes({
         workflow_run_id: 7,
-        run_url: "https://api.github.com/r/7",
-        html_url: "https://github.com/r/7",
+        run_url:
+          "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/7",
+        html_url:
+          "https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/7",
       })
     );
     await expect(
@@ -332,11 +439,11 @@ describe("evaluateReadcheck", () => {
       "複数"
     );
     expect(() =>
-      evaluateReadcheck([syncJob({ status: "in_progress" })], DATE)
+      evaluateReadcheck([syncJob(101, { status: "in_progress" })], DATE)
     ).toThrow("未完了");
     expect(() =>
       evaluateReadcheck(
-        [syncJob({ status: "completed", conclusion: "failure" })],
+        [syncJob(101, { status: "completed", conclusion: "failure" })],
         DATE
       )
     ).toThrow("成功ではありません");
@@ -345,14 +452,14 @@ describe("evaluateReadcheck", () => {
     const base = syncJob();
     expect(() =>
       evaluateReadcheck(
-        [syncJob({ steps: base.steps!.filter((s) => s.name !== "stock daily sync") })],
+        [syncJob(101, { steps: base.steps!.filter((s) => s.name !== "stock daily sync") })],
         DATE
       )
     ).toThrow("見つかりません");
     expect(() =>
       evaluateReadcheck(
         [
-          syncJob({
+          syncJob(101, {
             steps: base.steps!.map((s) =>
               s.name === "stock daily sync"
                 ? { ...s, conclusion: "failure" }
@@ -366,7 +473,7 @@ describe("evaluateReadcheck", () => {
     expect(() =>
       evaluateReadcheck(
         [
-          syncJob({
+          syncJob(101, {
             steps: base.steps!.map((s) =>
               s.name === "stock daily sync"
                 ? { ...s, completed_at: "2026-09-30T21:30:00.000Z" }
@@ -380,7 +487,7 @@ describe("evaluateReadcheck", () => {
     expect(() =>
       evaluateReadcheck(
         [
-          syncJob({
+          syncJob(101, {
             steps: base.steps!.map((s) =>
               s.name === "stock daily sync" ? { ...s, completed_at: null } : s
             ),
@@ -390,12 +497,43 @@ describe("evaluateReadcheck", () => {
       )
     ).toThrow("completed_at がありません");
   });
+  it("株式 step の完了が同日 17:13 より前 (別日の成功) は落とす", () => {
+    const base = syncJob();
+    expect(() =>
+      evaluateReadcheck(
+        [
+          syncJob(101, {
+            steps: base.steps!.map((s) =>
+              s.name === "stock daily sync"
+                ? { ...s, completed_at: "2026-09-29T20:30:00.000Z" }
+                : s
+            ),
+          }),
+        ],
+        DATE
+      )
+    ).toThrow("17:13 UTC より前");
+    expect(
+      evaluateReadcheck(
+        [
+          syncJob(101, {
+            steps: base.steps!.map((s) =>
+              s.name === "stock daily sync"
+                ? { ...s, completed_at: "2026-09-30T17:13:00.000Z" }
+                : s
+            ),
+          }),
+        ],
+        DATE
+      )
+    ).toEqual({ stockCompletedAt: "2026-09-30T17:13:00.000Z" });
+  });
   it("コメント step の success (false-green)・欠落は落とす", () => {
     const base = syncJob();
     expect(() =>
       evaluateReadcheck(
         [
-          syncJob({
+          syncJob(101, {
             steps: base.steps!.map((s) =>
               s.name === "許容内失敗があれば Issue にコメント"
                 ? { ...s, conclusion: "success" }
@@ -409,7 +547,7 @@ describe("evaluateReadcheck", () => {
     expect(() =>
       evaluateReadcheck(
         [
-          syncJob({
+          syncJob(101, {
             steps: base.steps!.filter(
               (s) => s.name !== "許容内失敗があれば Issue にコメント"
             ),
@@ -481,16 +619,23 @@ describe("runDeadlineReadcheck", () => {
     const { bucket } = makeBucket({
       [receiptKey(DATE)]: JSON.stringify(dispatchedBody(5)),
     });
+    const page2 =
+      "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/5/jobs?page=2";
     const { fetchFn, calls } = makeFetch((url) => {
-      if (url.includes("page=2")) return jsonRes({ jobs: [syncJob()] });
+      if (url.includes("page=2")) return jsonRes({ jobs: [syncJob(5)] });
       return jsonRes(
         {
           jobs: [
-            { name: "moneyflow", status: "completed", conclusion: "success" },
+            {
+              name: "moneyflow",
+              status: "completed",
+              conclusion: "success",
+              run_id: 5,
+            },
           ],
         },
         200,
-        '<https://api.github.com/x?page=2>; rel="next"'
+        `<${page2}>; rel="next"`
       );
     });
     const v = await runDeadlineReadcheck({
@@ -501,6 +646,64 @@ describe("runDeadlineReadcheck", () => {
     });
     expect(v.stockCompletedAt).toBe("2026-09-30T20:30:00.000Z");
     expect(calls).toHaveLength(2);
+    const getHeaders = calls[0].init?.headers as Record<string, string>;
+    expect(getHeaders["User-Agent"]).toMatch(/^kabulab-stock-scheduler\//);
+  });
+
+  it("next が対象外 origin/path のとき辿らず落とす (Bearer 送出なし)", async () => {
+    const badNext = [
+      "https://evil.example.com/jobs?page=2",
+      "http://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/5/jobs?page=2",
+      "https://api.github.com/repos/other/repo/actions/runs/5/jobs?page=2",
+      "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/6/jobs?page=2",
+      "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/5/checks?page=2",
+    ];
+    for (const next of badNext) {
+      const { fetchFn, calls } = makeFetch(() =>
+        jsonRes({ jobs: [] }, 200, `<${next}>; rel="next"`)
+      );
+      await expect(fetchAllJobs(fetchFn, TOKEN, 5)).rejects.toThrow(
+        "対象外 origin/path"
+      );
+      expect(calls).toHaveLength(1);
+    }
+  });
+
+  it("pagination の循環・ページ数超過は落とす", async () => {
+    const self =
+      "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/5/jobs?per_page=100";
+    const loop = makeFetch(() =>
+      jsonRes({ jobs: [] }, 200, `<${self}>; rel="next"`)
+    );
+    await expect(fetchAllJobs(loop.fetchFn, TOKEN, 5)).rejects.toThrow("循環");
+    let n = 0;
+    const endless = makeFetch(() => {
+      n += 1;
+      return jsonRes(
+        { jobs: [] },
+        200,
+        `<https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/5/jobs?page=${n + 1}>; rel="next"`
+      );
+    });
+    await expect(fetchAllJobs(endless.fetchFn, TOKEN, 5)).rejects.toThrow(
+      "上限 (10) を超過"
+    );
+    expect(endless.calls).toHaveLength(10);
+  });
+
+  it("run ID 非正整数・job run_id 不一致は落とす", async () => {
+    const { fetchFn } = makeFetch(() => jsonRes({ jobs: [] }));
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      await expect(fetchAllJobs(fetchFn, TOKEN, bad)).rejects.toThrow(
+        "正の整数"
+      );
+    }
+    const mixed = makeFetch(() =>
+      jsonRes({ jobs: [{ ...syncJob(101), run_id: 999 }] })
+    );
+    await expect(fetchAllJobs(mixed.fetchFn, TOKEN, 101)).rejects.toThrow(
+      "別 run の job"
+    );
   });
   it("Jobs API 非 200 は落とす", async () => {
     const { bucket } = makeBucket({
@@ -546,12 +749,14 @@ describe("handleStockScheduled", () => {
   });
   it("ログに秘密・URL 値を出さない", async () => {
     const { bucket } = makeBucket();
-    const runUrl = "https://api.github.com/repos/o/r/actions/runs/9";
-    const htmlUrl = "https://github.com/o/r/actions/runs/9";
+    const runUrl =
+      "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/9";
+    const htmlUrl =
+      "https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/9";
     const { fetchFn } = makeFetch((url) =>
       url.includes("/dispatches")
         ? jsonRes({ workflow_run_id: 9, run_url: runUrl, html_url: htmlUrl })
-        : jsonRes({ jobs: [syncJob()] })
+        : jsonRes({ jobs: [syncJob(9)] })
     );
     const env: SchedulerEnv = { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN };
     await handleStockScheduled(
@@ -584,6 +789,7 @@ describe("claimReceipt/saveDispatchResult", () => {
     const first = await claimReceipt(bucket, key, claimBody());
     expect(first.claimed).toBe(true);
     expect(first.etag).toBeTruthy();
+    expect(first.etag as string).not.toContain('"');
     const second = await claimReceipt(bucket, key, claimBody());
     expect(second).toEqual({ claimed: false, etag: null });
   });

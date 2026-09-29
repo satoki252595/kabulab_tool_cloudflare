@@ -28,21 +28,28 @@ CF の数字曜日は 1=日曜で GitHub と違うため):
   は POST 前に error。既存の price guard・close guard・完了期限・失敗率
   1% 判定は不変。
 - receipt: `stock-scheduler/receipt-<予定UTC日>.json` を `If-None-Match: *`
-  で原子的 claim。取得者のみ POST。同時・逐次の二重 dispatch は追加
-  POST 0 (accepted duplicate)。POST 検証 (HTTP 200 + `workflow_run_id` /
-  `run_url` / `html_url`) 後に `If-Match` で CAS 保存。
+  で原子的 claim。取得者のみ POST。重複時は既存 receipt を読戻し、
+  同予定日・valid schema・dispatched・同 run 対応のときだけ正常
+  duplicate (追加 POST 0)。claimed/破損は error 継続・再 POST なし。
+  POST 検証 (HTTP 200 + `workflow_run_id` / 同一 repo・run の `run_url` /
+  `html_url`) 後に native `etagMatches` で CAS 保存。
+- GitHub API は `User-Agent` 必須。Jobs 分頁は同一 origin/path・run 限定、
+  循環検出・10 頁上限超過は error。run ID は正の整数のみ。
 - pending・結果不明は成功にしない。自動再 POST なし (CAS 競合時は
   手動トリアージ。POST 済みのため再送しない)。
 - secret・URL 値はログに出さない (run_id の数値のみ)。
-- `scheduled_date` は共有 producer 入口 (`runDailySyncAndRecord`) で形式と
-  対象日一致だけを検証する。時刻のバックデート・原本日付の上書きなし。
+- `scheduled_date` は共有 producer 入口 (`runDailySyncAndRecord`) で検証
+  のみ。`STOCK_SYNC_TARGET=scheduled-stocks` のとき必須
+  (欠落・空・空白は fetch 前に落とす)。手動 stocks 未指定は現契約維持。
+  時刻のバックデート・原本日付の上書きなし。
 - 新 dispatch target `scheduled-stocks` は株式 only。moneyflow selector は
   旧 scheduled と同じ空文字 (全 sources)。手動 `stocks` の
   sector-turnover 限定は維持。
 - readcheck 成功条件: job `sync` が completed・success かつ `stock daily
-  sync` が success・completed_at が 21:00 UTC 以前、かつ
-  `許容内失敗があれば Issue にコメント` が SKIPPED (success = 許容内失敗
-  ありの false-green。step 欠落も error)。Dispatch 受付は同期完了でない。
+  sync` が success・completed_at が同日 17:13〜21:00 UTC (古い別日の
+  成功を通さない)、かつ `許容内失敗があれば Issue にコメント` が
+  SKIPPED (success = 許容内失敗ありの false-green。step 欠落も error)。
+  検証対象は receipt の run ID と照合する。Dispatch 受付は同期完了でない。
 - 既存の Notion 完了/失敗バッチ・Actions 通知を再利用。新 table・DO・
   Issue 書き込み権限は不要。
 

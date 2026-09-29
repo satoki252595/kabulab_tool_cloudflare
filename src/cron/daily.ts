@@ -264,15 +264,24 @@ const SCHEDULED_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 /**
  * CF scheduler からの予定 UTC 日を検証する (検証のみ)。
  *
- * SCHEDULED_DATE 設定時のみ、YYYY-MM-DD 形式・実在日・今回の対象日
- * (run 開始 UTC 日) との一致を要求する。一致しない日付での実行は
- * 対象日取り違えのため即停止する。未設定は素通り (手動・旧経路)。
+ * target=scheduled-stocks のとき SCHEDULED_DATE は必須 (欠落・空・空白は
+ * fetch 前に落とす。workflow input の required だけでは target 別の必須を
+ * 表せないため Node 入口で見る)。設定値は YYYY-MM-DD 形式・実在日・
+ * 今回の対象日 (run 開始 UTC 日) との一致を要求する。手動 stocks 等の
+ * 未設定は現契約どおり素通りする。
  * 検証に使うだけで、targetDate の上書き・時刻のバックデート・
  * 原本日付の書き換えは一切しない。
  */
 export function assertScheduledDate(targetDate: string): void {
   const v = sharedEnv.SCHEDULED_DATE();
-  if (v === undefined) return;
+  if (v === undefined) {
+    if (sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks") {
+      throw new Error(
+        "target=scheduled-stocks には SCHEDULED_DATE が必須です"
+      );
+    }
+    return;
+  }
   const m = SCHEDULED_DATE_RE.exec(v);
   if (!m) {
     throw new Error(`SCHEDULED_DATE の形式が不正です: ${v} (YYYY-MM-DD)`);

@@ -40,10 +40,11 @@ describe("stock-sync.yml target routing", () => {
     expect(yml).toContain('stocks) ONLY="sector-turnover"');
   });
 
-  it("daily step は scheduled-stocks で動き SCHEDULED_DATE を渡す", () => {
+  it("daily step は scheduled-stocks で動き日付と target を渡す", () => {
     expect(yml).toContain("github.event.inputs.target == 'scheduled-stocks'");
     expect(yml).toContain(
       "SCHEDULED_DATE: ${{ github.event.inputs.scheduled_date }}"
     );
+    expect(yml).toContain("STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}");
   });
 });

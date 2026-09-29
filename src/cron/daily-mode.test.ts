@@ -107,18 +107,48 @@ describe("株式とマクロの日次分離", () => {
 });
 
 describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () => {
-  const ORIGINAL = process.env.SCHEDULED_DATE;
+  const ORIGINAL_DATE = process.env.SCHEDULED_DATE;
+  const ORIGINAL_TARGET = process.env.STOCK_SYNC_TARGET;
   afterEach(() => {
-    if (ORIGINAL === undefined) delete process.env.SCHEDULED_DATE;
-    else process.env.SCHEDULED_DATE = ORIGINAL;
+    if (ORIGINAL_DATE === undefined) delete process.env.SCHEDULED_DATE;
+    else process.env.SCHEDULED_DATE = ORIGINAL_DATE;
+    if (ORIGINAL_TARGET === undefined) delete process.env.STOCK_SYNC_TARGET;
+    else process.env.STOCK_SYNC_TARGET = ORIGINAL_TARGET;
   });
 
   it("一致すれば通常フローへ進む (検証のみ・日付を上書きしない)", async () => {
     // system time 2026-09-28T17:13Z → targetDate 2026-09-28。
     process.env.SCHEDULED_DATE = "2026-09-28";
+    process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
     vi.mocked(fetchChart).mockResolvedValue(chart("2026-09-25"));
     const { db } = recordingDb();
     // 検証を通過し、既存の session guard (日足不一致) まで到達する。
+    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
+      "日足を確認できません"
+    );
+    expect(fetchChart).toHaveBeenCalled();
+  });
+
+  it("scheduled-stocks の日付欠落・空・空白は fetch 前に落とす", async () => {
+    process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
+    for (const value of [undefined, "", "   "] as const) {
+      if (value === undefined) delete process.env.SCHEDULED_DATE;
+      else process.env.SCHEDULED_DATE = value;
+      vi.mocked(fetchChart).mockClear();
+      const { db, calls } = recordingDb();
+      await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
+        "SCHEDULED_DATE が必須"
+      );
+      expect(fetchChart).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it("手動 stocks の日付未指定は現契約どおり素通りする", async () => {
+    delete process.env.SCHEDULED_DATE;
+    process.env.STOCK_SYNC_TARGET = "stocks";
+    vi.mocked(fetchChart).mockResolvedValue(chart("2026-09-25"));
+    const { db } = recordingDb();
     await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
       "日足を確認できません"
     );
