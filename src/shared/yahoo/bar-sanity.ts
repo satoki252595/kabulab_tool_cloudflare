@@ -304,3 +304,35 @@ export function sanitizeBars(bars: readonly Bar[]): SanitizeResult {
   }
   return { bars: out, rejected };
 }
+
+/**
+ * Chart 応答の全履歴 guard (sanitize + 応答整合) を一括適用する共有関数。
+ * `fetchChart` 本体と修復 replay が同じ判定を使う。guard は対象日の切断
+ * より前・全履歴に対して行う (sanitize は直前採用バー比較、coherence は
+ * 最新有効終値を見るため、切断後の適用では判定が変わる)。
+ * ログは出さない (呼び出し側が必要なら rejected を報告する)。
+ */
+export function guardChartBars(
+  rawBars: readonly Bar[],
+  metaPrice: number | null | undefined,
+  symbol: string
+): SanitizeResult {
+  const { bars: ohlcv, rejected } = sanitizeBars(rawBars);
+  let latestUsedClose: number | null = null;
+  let latestVolume: number | null = null;
+  for (let i = ohlcv.length - 1; i >= 0; i--) {
+    const used = ohlcv[i].adj ?? ohlcv[i].close;
+    if (used !== null) {
+      latestUsedClose = used;
+      latestVolume = ohlcv[i].volume;
+      break;
+    }
+  }
+  assertResponsePriceCoherent({
+    symbol,
+    latestUsedClose,
+    latestVolume,
+    metaPrice,
+  });
+  return { bars: ohlcv, rejected };
+}
