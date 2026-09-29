@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import reparse_financials_from_notion as reparse  # noqa: E402
 from test_backfill_financials_from_notion import _page  # noqa: E402
 from jp_stock_pipeline.notion import schema as S  # noqa: E402
+from jp_stock_pipeline.notion.upsert import _FIN_FIELD_TO_PROP  # noqa: E402
 from jp_stock_pipeline.cloud_store.financials import COLUMNS, record_to_row  # noqa: E402
 from jp_stock_pipeline.cloud_store.schema import _FINANCIALS  # noqa: E402
 from test_financial_context_units import EDINET_CASES, fixture_provenance, fixture_tidy  # noqa: E402
@@ -187,6 +188,83 @@ def test_old_key_is_not_archived_until_corrected_value_is_read_back(monkeypatch)
     monkeypatch.setattr(reparse, "_page_record", lambda page: corrected)
     assert reparse.apply_reparsed(Client(), "db", old_page, corrected) == ("reparsed", target)
     assert events == [("update", "target"), ("read", "target"), ("archive", "old")]
+
+
+def _full_props():
+    """同値判定が通る完全形の properties（実 API は全 prop を明示形で返す）。"""
+    props = dict(_page()["properties"])
+    props[S.FIN_PROP_TITLE] = {"title": [{"plain_text": "8154 2025/03期 本決算"}]}
+    props[S.PROP_RAW_RELATION] = {"relation": [{"id": "raw-1"}]}
+    for prop in _FIN_FIELD_TO_PROP.values():
+        props.setdefault(prop, {"number": None})
+    return props
+
+
+def test_apply_reparsed_skips_same_value_without_patch():
+    """L-22: 再解析値が既存行と同値なら PATCH せず already_reparsed。"""
+    props = _full_props()
+    target = {"id": "target", "properties": props}
+    old = reparse.notion_financial({"id": "target", "properties": props})
+    record = replace(
+        old,
+        provenance=replace(
+            old.provenance, raw_page_id="raw-1",
+            fetched_at=old.provenance.fetched_at + timedelta(days=1),
+        ),
+    )
+    events = []
+
+    class Client:
+        def update_page(self, *args):
+            pytest.fail("同値は PATCH しない")
+
+        def get_page(self, page_id):
+            events.append(("read", page_id))
+            return target
+
+        def archive_page(self, page_id):
+            events.append(("archive", page_id))
+
+    action, saved = reparse.apply_reparsed(
+        Client(), "db", target, record, targets=[target]
+    )
+    assert (action, saved) == ("already_reparsed", target)
+    assert events == [("read", "target")]  # 再読は維持、退避は同一ページで不要
+
+
+def test_apply_reparsed_skip_verifies_fresh_page_before_archive():
+    """skip 後に再読値が変わっていたら退避せず止める（drift 検出）。"""
+    props = _full_props()
+    target = {"id": "target", "properties": props}
+    old = reparse.notion_financial({"id": "target", "properties": props})
+    record = replace(
+        old,
+        provenance=replace(
+            old.provenance, raw_page_id="raw-1",
+            fetched_at=old.provenance.fetched_at + timedelta(days=1),
+        ),
+    )
+    drifted_props = dict(props)
+    drifted_props[S.FIN_PROP_NET_SALES] = {"number": 1.0}  # クエリ後に変化
+    drifted = {"id": "target", "properties": drifted_props}
+    events = []
+
+    class Client:
+        def update_page(self, *args):
+            pytest.fail("同値は PATCH しない")
+
+        def get_page(self, page_id):
+            events.append(("read", page_id))
+            return drifted
+
+        def archive_page(self, page_id):
+            events.append(("archive", page_id))
+
+    with pytest.raises(ValueError, match="再読値が一致しません"):
+        reparse.apply_reparsed(
+            Client(), "db", {"id": "old"}, record, targets=[target]
+        )
+    assert ("archive", "old") not in events  # 退避しない
 
 
 def test_newer_disclosure_is_kept_when_old_key_collides(monkeypatch):

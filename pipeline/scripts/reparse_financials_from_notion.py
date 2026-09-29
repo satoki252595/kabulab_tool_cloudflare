@@ -35,6 +35,7 @@ from jp_stock_pipeline.notion.client import NotionClient
 from jp_stock_pipeline.notion.upsert import (
     financial_overwrite_allowed,
     financial_summary_filter,
+    financial_summary_matches_page,
     financial_summary_properties,
 )
 from jp_stock_pipeline.transform import normalize as normalize_module
@@ -259,11 +260,28 @@ def apply_reparsed(
         raise ValueError(f"{record.code}: 修正先の財務キーが重複しています")
     target = targets[0] if targets else page
     allowed = financial_overwrite_allowed(target, record)
-    saved = client.update_page(target["id"], financial_summary_properties(record)) if allowed else target
+    # 同値 skip (L-22)。再解析値が既存行と同値（取得日時だけの差を除く）なら
+    # PATCH せず action=already_reparsed。再読・旧正本変化 guard・退避は維持する。
+    # payload に master relation を含めないので master_page_id=None で比べる。
+    skipped = allowed and financial_summary_matches_page(
+        target.get("properties", {}), record, None
+    )
+    saved = (
+        client.update_page(target["id"], financial_summary_properties(record))
+        if allowed and not skipped
+        else target
+    )
     if not defer_readback:
         saved = client.get_page(target["id"])
+    if skipped and not defer_readback:
+        # skip 判定はクエリ時点の target で行った。再読した新鮮な正本にも
+        # 同じ判定をかけ、変わっていたら退避せず止める（既存規則と同列）。
+        if not financial_summary_matches_page(
+            saved.get("properties", {}), record, None
+        ):
+            raise ValueError(f"{record.code}: 同値スキップ後の再読値が一致しません")
     actual = _page_record(saved)
-    if allowed and actual != record:
+    if allowed and not skipped and actual != record:
         raise ValueError(f"{record.code}: Notion再読値が原本再解析値と一致しません")
     if not allowed and (
         actual.code != record.code
@@ -275,6 +293,8 @@ def apply_reparsed(
         raise ValueError(f"{record.code}: 新しい開示を保持したことを確認できません")
     if not defer_readback and target["id"] != page["id"]:
         client.archive_page(page["id"])
+    if skipped:
+        return "already_reparsed", saved
     return ("reparsed" if allowed else "newer_disclosure_preserved"), saved
 
 

@@ -1090,6 +1090,168 @@ def pick_financial_page(
     return oldest_page([page for page in pages if rank(page) == best])
 
 
+def _prop_shape_ok(properties: dict, name: str, kind: str) -> bool:
+    """所有 payload プロパティの存在+型/形状の検査（L-22 同値判定の前提）。
+
+    欠落・未知の型は False（書く側に倒す）。`.get` で None へ畳んで同値に
+    しない。これが無いと、欠けた行が「全部 None のレコード」と誤って一致する。
+    実 API は全プロパティを明示形（null 含む）で返すので、通常行は通る。
+    """
+    prop = properties.get(name)
+    if not isinstance(prop, dict) or kind not in prop:
+        return False
+    inner = prop[kind]
+    if kind in ("title", "rich_text"):
+        return isinstance(inner, list)
+    if kind == "select":
+        return inner is None or (isinstance(inner, dict) and "name" in inner)
+    if kind == "date":
+        return inner is None or (
+            isinstance(inner, dict) and isinstance(inner.get("start"), str)
+        )
+    if kind == "relation":
+        return isinstance(inner, list)
+    if kind == "number":
+        return inner is None or (
+            isinstance(inner, (int, float)) and not isinstance(inner, bool)
+        )
+    return False
+
+
+def _relation_complete(properties: dict, name: str) -> bool:
+    """relation が打ち切られていないか。has_more 付きは比較対象外（False へ）。"""
+    prop = properties.get(name)
+    return isinstance(prop, dict) and prop.get("has_more") is not True
+
+
+def _read_relation_ids_checked(properties: dict, name: str) -> list[str] | None:
+    """relation id 一覧。形が違えば None（書く側に倒す）。
+
+    共有の `_read_relation_ids` は読めない要素を落として畳むが、同値判定では
+    畳んだ結果の一致を同値としない（欠落のマスク防止）。
+    """
+    prop = properties.get(name)
+    if not isinstance(prop, dict) or not isinstance(prop.get("relation"), list):
+        return None
+    ids: list[str] = []
+    for item in prop["relation"]:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            return None
+        ids.append(item["id"])
+    return ids
+
+
+def financial_summary_matches_page(
+    properties: dict, record: FinancialSummaryRecord, master_page_id: str | None
+) -> bool:
+    """③ の既存行が record と同値か（L-22。日次再実行の同値 PATCH → 差分のみ）。
+
+    比較するのは `financial_summary_properties` の意味フィールド（タイトル/
+    銘柄コード/決算期末/開示種別/連結単体/会計基準/数値 19 項目/開示日/
+    データ基準日/ソース/ライセンス/品質）+ payload にある relation。
+    取得日時だけは見ない（毎 run 変わるので見ると skip が死ぬ）。
+
+    所有する全プロパティは存在+型/形状を先に検査し、欠落・未知の型・
+    has_more 付き relation は False（書く側に倒す）。欠けた値を None へ
+    畳んで同値にしない。
+
+    relation は「payload にあるときだけ」比べる。`master_page_id` が None や
+    dry-run 合成ID の run は payload に relation を含めないので、既存行に
+    relation があっても書き直す意味が無い。原本 relation も同じ。
+    page_id のダッシュ有無・大文字小文字の差は正規化して吸収する。
+
+    数値は None と 0 を区別する（欠損の上書き消去・復活を見逃さない §3-1）。
+    int/float の型差は数値として吸収する。
+    """
+    if not isinstance(properties, dict):
+        return False
+    if _read_text_value(properties, S.FIN_PROP_TITLE) != _clip(
+        financial_summary_title(record)
+    ) or not _prop_shape_ok(properties, S.FIN_PROP_TITLE, "title"):
+        return False
+    if _read_text_value(properties, S.FIN_PROP_CODE) != record.code or not _prop_shape_ok(
+        properties, S.FIN_PROP_CODE, "rich_text"
+    ):
+        return False
+    if (
+        _read_date_start(properties, S.FIN_PROP_PERIOD_END)
+        != record.fiscal_period_end.isoformat()
+        or not _prop_shape_ok(properties, S.FIN_PROP_PERIOD_END, "date")
+    ):
+        return False
+    if _read_select_name(properties, S.FIN_PROP_DISCLOSURE_TYPE) != record.disclosure_type or (
+        not _prop_shape_ok(properties, S.FIN_PROP_DISCLOSURE_TYPE, "select")
+    ):
+        return False
+    if _read_select_name(properties, S.FIN_PROP_CONSOLIDATED) != (
+        record.consolidated or None
+    ) or not _prop_shape_ok(properties, S.FIN_PROP_CONSOLIDATED, "select"):
+        return False
+    if _read_select_name(properties, S.FIN_PROP_STANDARD) != (
+        record.accounting_standard or None
+    ) or not _prop_shape_ok(properties, S.FIN_PROP_STANDARD, "select"):
+        return False
+    for field_name, prop_name in _FIN_FIELD_TO_PROP.items():
+        if not _prop_shape_ok(properties, prop_name, "number"):
+            return False
+        got = properties[prop_name]["number"]
+        want = getattr(record, field_name)
+        if want is None:
+            if got is not None:
+                return False
+            continue
+        if got is None or got != want:
+            return False
+    if record.disclosed_at is None:
+        if _read_date_start(properties, S.FIN_PROP_DISCLOSED_AT) is not None or (
+            not _prop_shape_ok(properties, S.FIN_PROP_DISCLOSED_AT, "date")
+        ):
+            return False
+    elif not _same_moment(
+        record.disclosed_at.isoformat(),
+        _read_date_start(properties, S.FIN_PROP_DISCLOSED_AT),
+    ) or not _prop_shape_ok(properties, S.FIN_PROP_DISCLOSED_AT, "date"):
+        return False
+    prov = record.provenance
+    if _read_select_name(properties, S.PROP_SOURCE) != prov.source.value or not _prop_shape_ok(
+        properties, S.PROP_SOURCE, "select"
+    ):
+        return False
+    if _read_select_name(properties, S.PROP_LICENSE_TAG) != prov.license_tag.value or (
+        not _prop_shape_ok(properties, S.PROP_LICENSE_TAG, "select")
+    ):
+        return False
+    if _read_select_name(properties, S.PROP_QUALITY) != prov.quality.value or (
+        not _prop_shape_ok(properties, S.PROP_QUALITY, "select")
+    ):
+        return False
+    want_data_date = prov.data_date.isoformat() if prov.data_date else None
+    if _read_date_start(properties, S.PROP_DATA_DATE) != want_data_date or not _prop_shape_ok(
+        properties, S.PROP_DATA_DATE, "date"
+    ):
+        return False
+    want_master = real_page_id(master_page_id)
+    if want_master is not None:
+        got_master = _read_relation_ids_checked(properties, S.PROP_MASTER_RELATION)
+        if (
+            got_master is None
+            or not _relation_complete(properties, S.PROP_MASTER_RELATION)
+            or [_normalize_page_id(pid) for pid in got_master]
+            != [_normalize_page_id(want_master)]
+        ):
+            return False
+    raw_id = real_page_id(prov.raw_page_id)
+    if raw_id is not None:
+        got_raw = _read_relation_ids_checked(properties, S.PROP_RAW_RELATION)
+        if (
+            got_raw is None
+            or not _relation_complete(properties, S.PROP_RAW_RELATION)
+            or [_normalize_page_id(pid) for pid in got_raw] != [_normalize_page_id(raw_id)]
+        ):
+            return False
+    return True
+
+
 def upsert_financial_summary(
     client: NotionClient,
     settings: Settings,
@@ -1114,6 +1276,14 @@ def upsert_financial_summary(
     共有する既知の課題（Issue #14 派生）でも、有報の開示日は短信より後になる
     のが通常のため、有報着地後に短信バッチが再実行されても有報値を守れる。
     ただしキー自体にソースを含めていないため、これは緩和であり根治ではない。
+
+    **同値スキップ (L-22)**: 開示日時ガードを通過した既存行が今回のレコードと
+    同値（取得日時だけの差を除く）なら PATCH せず既存 page_id を返す。日次再
+    実行の同値 PATCH を 0 にする。旧キー採用の行・訂正の新旧が違う行は一致し
+    ないので従来どおり書く。create 競合の収束時も正のページが同値なら書き直
+    さない。保証するのは Notion ③ の PATCH 0 であり、日次再 dispatch 全体の
+    sender 0 ではない（ローカル系統・D1 jss_financials への書込は呼び出し側が
+    続ける）。
     """
     db_id = settings.db_id("financials")
     key = (record.code, record.fiscal_period_end, record.disclosure_type, record.consolidated)
@@ -1136,6 +1306,17 @@ def upsert_financial_summary(
         )
     if existing is not None and not financial_overwrite_allowed(existing, record):
         return existing["id"]
+    if existing is not None and financial_summary_matches_page(
+        existing.get("properties", {}), record, master_page_id
+    ):
+        # 同値 skip (L-22)。旧キー採用の行はキー項目が違うので一致せず、
+        # 従来どおり書き直しに進む。取得日時だけの差は送らない。
+        logger.info(
+            "③ 財務サマリ: 同値のため PATCH を省く: page=%s %s %s %s",
+            existing.get("id"), record.code, record.fiscal_period_end,
+            record.disclosure_type,
+        )
+        return existing["id"]
     # existing は直前の _find_page_full で確定済み（prefetch マップ経由ではない
     # just-in-time の単発検索）なので、None の場合も含め page_resolved=True で渡し、
     # _upsert 内での _find_page 再クエリ（二重問い合わせ）を避ける。
@@ -1148,7 +1329,10 @@ def upsert_financial_summary(
         financial_summary_properties(record, master_page_id),
         existing_page_id=existing["id"] if existing else None,
         page_resolved=True,
-        rewrite_allowed=lambda page: financial_overwrite_allowed(page, record),
+        rewrite_allowed=lambda page: financial_overwrite_allowed(page, record)
+        and not financial_summary_matches_page(
+            page.get("properties", {}), record, master_page_id
+        ),
     )
 
 
