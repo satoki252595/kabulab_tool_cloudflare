@@ -12,6 +12,8 @@ import argparse
 import types
 from datetime import date, datetime, timezone
 
+import pytest
+
 from jp_stock_pipeline.config import load_settings
 from jp_stock_pipeline.jobs import tdnet_hourly as mod
 from jp_stock_pipeline.jobs.runner import JobContext
@@ -22,8 +24,10 @@ from jp_stock_pipeline.notion.client import NotionClient
 UTC = timezone.utc
 
 
-def _ctx(raw_data_dir: str) -> JobContext:
-    settings = load_settings(env={"RAW_DATA_DIR": raw_data_dir}, dry_run=True)
+def _ctx(raw_data_dir: str, *, dry_run: bool = True) -> JobContext:
+    settings = load_settings(env={"RAW_DATA_DIR": raw_data_dir}, dry_run=dry_run)
+    # client は未使用のコラボレータ (dry_run=True 固定で token 不要)。本番性の
+    # 判定は settings.dry_run のみが行う (共通 strict の dry-run 分離)。
     ctx = JobContext(
         settings=settings,
         client=NotionClient(None, rps=1000.0, dry_run=True),
@@ -89,3 +93,44 @@ class TestProcessFinancialXbrlSavesDocId:
 
         assert captured["doc_id"] == "81234567"
         assert captured["scope"] == "7203"
+
+
+class TestFinancialXbrlCommonStrict:
+    """本番共通 strict: XBRL 原本の Notion 未保管で開示単位を中止する。"""
+
+    def test_production_custody_failure_stops_before_financial_record(self, monkeypatch, tmp_path):
+        from jp_stock_pipeline.notion import file_upload
+
+        monkeypatch.setattr(
+            mod, "fetch", lambda url, **kw: types.SimpleNamespace(content=b"zip-bytes")  # noqa: ARG005
+        )
+        # save_raw は実物 (tmp へ書くのみ・通信なし)。変換だけ mock する。
+        monkeypatch.setattr(
+            mod.xbrl_to_csv, "xbrl_zip_to_tidy", lambda content, code, doc_id: "tidy"  # noqa: ARG005
+        )
+        monkeypatch.setattr(mod.xbrl_to_csv, "write_tidy", lambda tidy, artifact: None)  # noqa: ARG005
+        monkeypatch.setattr(
+            file_upload,
+            "upload_raw_artifact",
+            lambda *a, **kw: (_ for _ in ()).throw(  # noqa: ARG005
+                file_upload.RawUploadError("テスト: XBRL 保管失敗")
+            ),
+        )
+        built: list = []
+        monkeypatch.setattr(
+            mod.normalize,
+            "tidy_to_financial_record",
+            lambda tidy, code, prov, *, disclosed_at: built.append(prov),  # noqa: ARG005
+        )
+
+        ctx = _ctx(str(tmp_path), dry_run=False)
+        del ctx.upload_raw  # 共通 helper 実物を使う (_ctx の固定 lambda を外す)
+        persisted: list = []
+        ctx.persist = lambda record, notion_write, **kw: persisted.append(record) or True  # noqa: ARG005
+
+        with pytest.raises(file_upload.RawUploadError):
+            mod._process_financial_xbrl(  # noqa: SLF001
+                ctx, _record(), "https://example/xbrl.zip",
+                master_id="M1", master_resolved=True,
+            )
+        assert built == [] and persisted == []

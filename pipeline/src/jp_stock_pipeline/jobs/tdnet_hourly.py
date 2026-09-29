@@ -181,7 +181,7 @@ def execute(ctx: JobContext) -> None:
         sha_map = None
 
     for artifact, records, xbrl_urls in batches:
-        # 原本必須: Notion⑤/ローカル⑤ の両系統とも失敗時のみ構造化を書かない (§7.1/§3-3)
+        # 原本必須: 本番共通 strict (Notion⑤未保管で取得単位を中止 §8.1-4)
         raw_page_id = ctx.upload_raw(artifact, sha_map=sha_map, sha_map_date=target_date)
 
         # ③ の `core_stocks.id` を 1 回でまとめて解決する (§8.3 と同じ考え方)。
