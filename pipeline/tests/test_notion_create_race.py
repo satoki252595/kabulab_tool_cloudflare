@@ -404,6 +404,38 @@ class TestFinancialGuardOnRewrite:
         assert fake.archived("db-fin") == ["page-0002"]
 
 
+def _as_read_shape(props: dict) -> dict:
+    """書き込み形の properties を実 API の読み取り形へ寄せる。
+
+    実 Notion は title/rich_text に text.content と plain_text の両方を返す。
+    フェイクのフィルタ評価は content を、同値判定は plain_text を読む。
+    """
+    out = copy.deepcopy(props)
+    for value in out.values():
+        for kind in ("title", "rich_text"):
+            for block in value.get(kind, []) or []:
+                block.setdefault("plain_text", block.get("text", {}).get("content", ""))
+    return out
+
+
+class TestFinancialSameValueNoRewrite:
+    """L-22: create 競合でも正のページが同値なら書き直さない。"""
+
+    def test_same_value_canonical_is_not_rewritten(self):
+        rec = financial(1000.0, date(2026, 9, 1))
+        fake = FakeNotion()
+        fake.pages.append({
+            "id": "page-0000", "db": "db-fin", "created_time": "2026-09-13T00:00:00.000Z",
+            "archived": False,
+            "properties": _as_read_shape(upsert.financial_summary_properties(rec)),
+        })
+        fake.miss_queries = 1  # A の初回検索だけ未存在を読む
+        page_id = upsert.upsert_financial_summary(fake, settings(), rec)
+        assert page_id == "page-0000"
+        assert ("update", "page-0000") not in fake.calls  # 書き直し 0
+        assert fake.archived("db-fin") == ["page-0001"]  # 自分は archive
+
+
 class TestFailuresDoNotStopTheJob:
     def _race_outcome(self, fake: FakeNotion) -> upsert.UpsertOutcome:
         fake.before_insert = lambda: upsert.upsert_disclosure(

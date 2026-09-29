@@ -971,3 +971,150 @@ class TestDisclosureMatchesPage:
         )
         assert pid is None
         assert c.calls == []  # 検索も更新もしない
+
+
+def _fin_page(**overrides):
+    """③ の query 返却形状（読み取り形）の properties を作る。"""
+    numbers = {
+        prop: {"number": None} for prop in upsert._FIN_FIELD_TO_PROP.values()
+    }
+    numbers[S.FIN_PROP_NET_SALES] = {"number": 1000.0}
+    numbers[S.FIN_PROP_EPS] = {"number": 10.5}
+    props = {
+        S.FIN_PROP_TITLE: {"title": [{"plain_text": "7203 2026/03期 本決算"}]},
+        S.FIN_PROP_CODE: {"rich_text": [{"plain_text": "7203"}]},
+        S.FIN_PROP_PERIOD_END: {"date": {"start": "2026-03-31"}},
+        S.FIN_PROP_DISCLOSURE_TYPE: {"select": {"name": "本決算"}},
+        S.FIN_PROP_CONSOLIDATED: {"select": {"name": "連結"}},
+        S.FIN_PROP_STANDARD: {"select": {"name": "日本基準"}},
+        **numbers,
+        S.FIN_PROP_DISCLOSED_AT: {"date": {"start": "2026-06-10T15:00:00+09:00"}},
+        S.PROP_SOURCE: {"select": {"name": "EDINET"}},
+        S.PROP_LICENSE_TAG: {"select": {"name": "commercial-ok"}},
+        S.PROP_DATA_DATE: {"date": {"start": "2026-06-10"}},
+        S.PROP_QUALITY: {"select": {"name": "正常"}},
+        S.PROP_MASTER_RELATION: {"relation": [{"id": "m-1"}]},
+        S.PROP_RAW_RELATION: {"relation": [{"id": "raw-page-id-123"}]},
+        # 取得日時は古いまま（同値 skip では見ない）。
+        S.PROP_FETCHED_AT: {"date": {"start": "2026-06-09T19:30:00+09:00"}},
+    }
+    props.update(overrides)
+    return props
+
+
+def _fin_rec(**overrides):
+    kwargs = dict(
+        code="7203",
+        fiscal_period_end=date(2026, 3, 31),
+        disclosure_type="本決算",
+        consolidated="連結",
+        accounting_standard="日本基準",
+        net_sales=1000.0,
+        eps=10.5,
+        disclosed_at=datetime(2026, 6, 10, 15, 0, tzinfo=JST),
+        provenance=prov(),
+    )
+    kwargs.update(overrides)
+    return FinancialSummaryRecord(**kwargs)
+
+
+class TestFinancialSummaryMatchesPage:
+    """L-22: 既存行と同値なら再 PATCH を省く（日次 51 件 → 差分のみ）。"""
+
+    def test_同値なら真(self):
+        assert upsert.financial_summary_matches_page(_fin_page(), _fin_rec(), "m-1") is True
+
+    def test_取得日時が違っても同値(self):
+        rec = _fin_rec(provenance=prov(fetched_at=datetime(2026, 7, 1, 12, 0)))
+        assert upsert.financial_summary_matches_page(_fin_page(), rec, "m-1") is True
+
+    def test_日時の表記揺れを吸収する(self):
+        """Notion が Z 正規化で返しても skip が死なない。"""
+        props = _fin_page(**{S.FIN_PROP_DISCLOSED_AT: {"date": {"start": "2026-06-10T06:00:00Z"}}})
+        # JST 15:00 == UTC 06:00
+        assert upsert.financial_summary_matches_page(props, _fin_rec(), "m-1") is True
+
+    def test_master_noneならrelationがあっても同値(self):
+        """relation を書かない run が既存 relation で不一致にしない。"""
+        assert upsert.financial_summary_matches_page(_fin_page(), _fin_rec(), None) is True
+
+    def test_原本が変われば偽(self):
+        """⑤ を上げ直した run は relation を張り替えるため PATCH する。"""
+        rec = _fin_rec(provenance=prov(raw_page_id="raw-2"))
+        assert upsert.financial_summary_matches_page(_fin_page(), rec, "m-1") is False
+
+    def test_Noneと0を区別する(self):
+        """欠損の上書き消去・復活を見逃さない (§3-1)。"""
+        # 既存 None → 今回 0.0: 値の復活なので書く
+        rec = _fin_rec(roa_pct=0.0)
+        assert upsert.financial_summary_matches_page(_fin_page(), rec, "m-1") is False
+        # 既存 10.5 → 今回 None: 値の消去なので書く
+        rec = _fin_rec(eps=None)
+        assert upsert.financial_summary_matches_page(_fin_page(), rec, "m-1") is False
+
+    def test_intとfloatの型差を吸収する(self):
+        props = _fin_page(**{S.FIN_PROP_NET_SALES: {"number": 1000}})
+        assert upsert.financial_summary_matches_page(props, _fin_rec(), "m-1") is True
+
+    def test_未知の型は偽に倒す(self):
+        props = _fin_page(**{S.FIN_PROP_NET_SALES: {"number": "1000"}})
+        assert upsert.financial_summary_matches_page(props, _fin_rec(), "m-1") is False
+
+    @pytest.mark.parametrize(
+        "prop,value",
+        [
+            (S.FIN_PROP_TITLE, {"title": [{"plain_text": "7203 2026/03期 修正"}]}),
+            (S.FIN_PROP_CODE, {"rich_text": []}),
+            (S.FIN_PROP_PERIOD_END, {"date": {"start": "2026-06-30"}}),
+            (S.FIN_PROP_DISCLOSURE_TYPE, {"select": {"name": "1Q"}}),
+            (S.FIN_PROP_CONSOLIDATED, {"select": {"name": "単体"}}),
+            (S.FIN_PROP_STANDARD, {"select": {"name": "IFRS"}}),
+            (S.FIN_PROP_NET_SALES, {"number": 1001.0}),
+            (S.FIN_PROP_EPS, {"number": None}),
+            (S.FIN_PROP_DISCLOSED_AT, {"date": {"start": "2026-06-11T15:00:00+09:00"}}),
+            (S.PROP_SOURCE, {"select": {"name": "TDnet"}}),
+            (S.PROP_LICENSE_TAG, {"select": {"name": "factual-cite"}}),
+            (S.PROP_DATA_DATE, {"date": {"start": "2026-06-11"}}),
+            (S.PROP_QUALITY, {"select": {"name": "要確認"}}),
+        ],
+    )
+    def test_意味が違えば偽(self, prop, value):
+        assert upsert.financial_summary_matches_page(_fin_page(**{prop: value}), _fin_rec(), "m-1") is False
+
+    def test_masterが変われば偽(self):
+        props = _fin_page(**{S.PROP_MASTER_RELATION: {"relation": [{"id": "m-2"}]}})
+        assert upsert.financial_summary_matches_page(props, _fin_rec(), "m-1") is False
+
+    def test_ダッシュ大小文字差を吸収する(self):
+        props = _fin_page(**{S.PROP_RAW_RELATION: {"relation": [{"id": "RAW-page-ID-123"}]}})
+        assert upsert.financial_summary_matches_page(props, _fin_rec(), "m-1") is True
+
+    def test_読めない形は偽に倒す(self):
+        assert upsert.financial_summary_matches_page({}, _fin_rec(), "m-1") is False
+
+    def test_upsert同値はPATCHしない(self, dry_client, monkeypatch):
+        """同値の既存行には update も create も送らない。"""
+        existing = {
+            "id": "fin-7203",
+            "created_time": "2026-06-10T00:00:00.000Z",
+            "properties": _fin_page(),
+        }
+        monkeypatch.setattr(dry_client, "query_database", lambda *a, **k: [existing])
+        settings = make_settings()
+        page_id = upsert.upsert_financial_summary(dry_client, settings, _fin_rec(), "m-1")
+        assert page_id == "fin-7203"
+        assert [o for o in dry_client.ops if o.op in ("update_page", "create_page")] == []
+
+    def test_旧キー採用行は書き直す(self, dry_client, monkeypatch):
+        """旧開示種別の採用行は同値にならず従来どおり書く (pick 維持)。"""
+        existing = {
+            "id": "fin-7203",
+            "created_time": "2026-06-10T00:00:00.000Z",
+            "properties": _fin_page(**{S.FIN_PROP_DISCLOSURE_TYPE: {"select": {"name": "2Q"}}}),
+        }
+        monkeypatch.setattr(dry_client, "query_database", lambda *a, **k: [existing])
+        settings = make_settings()
+        rec = _fin_rec(disclosure_type="中間")
+        page_id = upsert.upsert_financial_summary(dry_client, settings, rec, "m-1")
+        assert page_id == "fin-7203"
+        assert len([o for o in dry_client.ops if o.op == "update_page"]) == 1

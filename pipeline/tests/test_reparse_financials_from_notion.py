@@ -189,6 +189,41 @@ def test_old_key_is_not_archived_until_corrected_value_is_read_back(monkeypatch)
     assert events == [("update", "target"), ("read", "target"), ("archive", "old")]
 
 
+def test_apply_reparsed_skips_same_value_without_patch():
+    """L-22: 再解析値が既存行と同値なら PATCH せず already_reparsed。"""
+    base = _page()
+    props = dict(base["properties"])
+    props[S.FIN_PROP_TITLE] = {"title": [{"plain_text": "8154 2025/03期 本決算"}]}
+    props[S.PROP_RAW_RELATION] = {"relation": [{"id": "raw-1"}]}
+    target = {"id": "target", "properties": props}
+    old = reparse.notion_financial({"id": "target", "properties": props})
+    record = replace(
+        old,
+        provenance=replace(
+            old.provenance, raw_page_id="raw-1",
+            fetched_at=old.provenance.fetched_at + timedelta(days=1),
+        ),
+    )
+    events = []
+
+    class Client:
+        def update_page(self, *args):
+            pytest.fail("同値は PATCH しない")
+
+        def get_page(self, page_id):
+            events.append(("read", page_id))
+            return target
+
+        def archive_page(self, page_id):
+            events.append(("archive", page_id))
+
+    action, saved = reparse.apply_reparsed(
+        Client(), "db", target, record, targets=[target]
+    )
+    assert (action, saved) == ("already_reparsed", target)
+    assert events == [("read", "target")]  # 再読は維持、退避は同一ページで不要
+
+
 def test_newer_disclosure_is_kept_when_old_key_collides(monkeypatch):
     old = reparse.notion_financial(_page())
     corrected = replace(old, consolidated="単体")
