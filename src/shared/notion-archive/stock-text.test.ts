@@ -331,6 +331,128 @@ describe("notion-archive stock-text", () => {
       await expect(readStockTextRow("row-1")).rejects.toThrow("目印ではない");
     });
 
+    it("has_more=true + next_cursor=null は部分成功にせず throw", async () => {
+      route("GET", "/v1/blocks/row-1/children", [
+        childrenPage(
+          [h2("抽出テキスト全文 (1項目)"), h3("b1", "A (a)")],
+          true,
+          null
+        ),
+      ]);
+      const { readStockTextRow } = await load();
+      await expect(readStockTextRow("row-1")).rejects.toThrow(
+        "has_more=true だが next_cursor が文字列ではない"
+      );
+    });
+
+    it("has_more のキー欠落・型不正は throw", async () => {
+      route("GET", "/v1/blocks/row-1/children", [
+        { results: [h2("抽出テキスト全文 (1項目)")], next_cursor: null },
+      ]);
+      const { readStockTextRow } = await load();
+      await expect(readStockTextRow("row-1")).rejects.toThrow(
+        "has_more が boolean ではない"
+      );
+    });
+
+    it("has_more の型不正は throw", async () => {
+      route("GET", "/v1/blocks/row-1/children", [
+        { results: [], has_more: "false", next_cursor: null },
+      ]);
+      const { readStockTextRow } = await load();
+      await expect(readStockTextRow("row-1")).rejects.toThrow(
+        "has_more が boolean ではない"
+      );
+    });
+
+    it("next_cursor の数値・空文字は throw", async () => {
+      route("GET", "/v1/blocks/row-1/children", [
+        childrenPage(
+          [h2("抽出テキスト全文 (1項目)")],
+          true,
+          123 as unknown as string
+        ),
+        childrenPage([h2("抽出テキスト全文 (1項目)")], true, ""),
+      ]);
+      const { readStockTextRow } = await load();
+      await expect(readStockTextRow("row-1")).rejects.toThrow(
+        "next_cursor が null/非空文字列ではない"
+      );
+      await expect(readStockTextRow("row-1")).rejects.toThrow(
+        "next_cursor が null/非空文字列ではない"
+      );
+      expect(calls).toHaveLength(2);
+    });
+
+    it("has_more=false + next_cursor 非null は throw", async () => {
+      route("GET", "/v1/blocks/row-1/children", [
+        childrenPage([h2("抽出テキスト全文 (0項目)")], false, "x"),
+      ]);
+      const { readStockTextRow } = await load();
+      await expect(readStockTextRow("row-1")).rejects.toThrow(
+        "has_more=false だが next_cursor が null ではない"
+      );
+    });
+
+    it("results 非配列は throw", async () => {
+      route("GET", "/v1/blocks/row-1/children", [
+        { results: "not-array", has_more: false, next_cursor: null },
+      ]);
+      const { readStockTextRow } = await load();
+      await expect(readStockTextRow("row-1")).rejects.toThrow(
+        "results が配列ではない"
+      );
+    });
+
+    it("空白のみの next_cursor は throw", async () => {
+      route("GET", "/v1/blocks/row-1/children", [
+        childrenPage([h2("抽出テキスト全文 (1項目)")], true, "   "),
+      ]);
+      const { readStockTextRow } = await load();
+      await expect(readStockTextRow("row-1")).rejects.toThrow(
+        "next_cursor が null/非空文字列ではない"
+      );
+    });
+
+    it("反復カーソルは追加 GET 前に throw (2 GET で停止)", async () => {
+      route("GET", "/v1/blocks/row-1/children", [
+        childrenPage(
+          [h2("抽出テキスト全文 (1項目)"), h3("b1", "A (a)")],
+          true,
+          "c"
+        ),
+        childrenPage([code("b2", "続き")], true, "c"),
+        childrenPage([code("b3", "到達しない")]),
+      ]);
+      const { readStockTextRow } = await load();
+      await expect(readStockTextRow("row-1")).rejects.toThrow(
+        "next_cursor の反復"
+      );
+      expect(calls).toHaveLength(2);
+    });
+
+    it("正常 3 ページは頁をまたいだ節も全文復元する", async () => {
+      route("GET", "/v1/blocks/row-1/children", [
+        childrenPage(
+          [h2("抽出テキスト全文 (2項目)"), h3("b1", "A (a)")],
+          true,
+          "c1"
+        ),
+        childrenPage([code("b2", "前半")], true, "c2"),
+        childrenPage([
+          code("b3", "後半"),
+          h3("b4", "B (b)"),
+          code("b5", "全文B"),
+        ]),
+      ]);
+      const { readStockTextRow } = await load();
+      expect(await readStockTextRow("row-1")).toEqual([
+        { itemName: "A", sectionKey: "a", text: "前半後半" },
+        { itemName: "B", sectionKey: "b", text: "全文B" },
+      ]);
+      expect(calls).toHaveLength(3);
+    });
+
     it("見出しの無い本文・想定外ブロックは throw", async () => {
       route("GET", "/v1/blocks/row-1/children", [
         childrenPage([h2("抽出テキスト全文 (1項目)"), code("b9", "浮遊")]),
