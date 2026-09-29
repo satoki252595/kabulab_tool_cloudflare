@@ -122,7 +122,15 @@ const MONTHLY_LIMITATIONS =
   "区切られ暦月と一致しない (例: 2026年8月 = 8/3〜8/28。8/31 は9月分に入る)。" +
   "期間開始・終了にはファイルに書かれた実際の集計期間を記録する。";
 
-type IndicatorKind = "net_flow_value" | "gross_turnover_value" | "net_flow_volume" | "gross_turnover_volume";
+type IndicatorKind =
+  | "net_flow_value"
+  | "gross_turnover_value"
+  | "net_flow_volume"
+  | "gross_turnover_volume"
+  | "sell_value"
+  | "buy_value"
+  | "sell_volume"
+  | "buy_volume";
 
 const KIND_TEXT: Record<IndicatorKind, { displayName: string; flowType: IndicatorDefInput["flowType"]; description: string }> = {
   net_flow_value: {
@@ -168,6 +176,44 @@ const KIND_TEXT: Record<IndicatorKind, { displayName: string; flowType: Indicato
       "単位は株 (千株表示を株に換算)。定義: 売付株数 + 買付株数。市場区分別。" +
       SOURCE_NOTE,
   },
+  sell_value: {
+    displayName: "投資部門別 売付額 (株式)",
+    flowType: "売買代金",
+    description:
+      "ある投資部門が期間中に株を売った金額そのもの (期間中のフロー。新様式ファイルの" +
+      "公式売付セルの直接値で、net/gross のような派生計算ではない)。単位は円 " +
+      "(JPX の千円表示を円に換算)。買い越し/売り越しの向きは表さない。" +
+      "定義: 投資部門別の株式売付金額。市場区分別。" +
+      SOURCE_NOTE,
+  },
+  buy_value: {
+    displayName: "投資部門別 買付額 (株式)",
+    flowType: "売買代金",
+    description:
+      "ある投資部門が期間中に株を買った金額そのもの (期間中のフロー。新様式ファイルの" +
+      "公式買付セルの直接値で、net/gross のような派生計算ではない)。単位は円 " +
+      "(JPX の千円表示を円に換算)。買い越し/売り越しの向きは表さない。" +
+      "定義: 投資部門別の株式買付金額。市場区分別。" +
+      SOURCE_NOTE,
+  },
+  sell_volume: {
+    displayName: "投資部門別 売付株数 (株式)",
+    flowType: "売買代金",
+    description:
+      "ある投資部門が期間中に株を売った株数そのもの (期間中のフロー。売付額の株数版。" +
+      "新様式ファイルの公式売付セルの直接値)。単位は株 (千株表示を株に換算)。" +
+      "定義: 投資部門別の株式売付株数。市場区分別。" +
+      SOURCE_NOTE,
+  },
+  buy_volume: {
+    displayName: "投資部門別 買付株数 (株式)",
+    flowType: "売買代金",
+    description:
+      "ある投資部門が期間中に株を買った株数そのもの (期間中のフロー。買付額の株数版。" +
+      "新様式ファイルの公式買付セルの直接値)。単位は株 (千株表示を株に換算)。" +
+      "定義: 投資部門別の株式買付株数。市場区分別。" +
+      SOURCE_NOTE,
+  },
 };
 
 const KINDS: readonly IndicatorKind[] = [
@@ -175,6 +221,17 @@ const KINDS: readonly IndicatorKind[] = [
   "gross_turnover_value",
   "net_flow_volume",
   "gross_turnover_volume",
+];
+
+/**
+ * 新様式の公式売付/買付セル用 (週次のみ。月次は future 0 のため付けない)。
+ * カタログ定義だけ先行し、観測行の配線 (toDrafts) は新週次パーサ側 (C) が行う。
+ */
+const WEEKLY_EXTRA_KINDS: readonly IndicatorKind[] = [
+  "sell_value",
+  "buy_value",
+  "sell_volume",
+  "buy_volume",
 ];
 
 /**
@@ -189,7 +246,9 @@ function indicatorKey(kind: IndicatorKind, periodType: InvestorEquityPeriodType)
 function buildIndicators(periodType: InvestorEquityPeriodType): IndicatorDefInput[] {
   const frequency: MoneyflowFrequency = periodType === "weekly" ? "週次" : "月次";
   const label = periodType === "weekly" ? "週次" : "月次";
-  return KINDS.map((kind) => ({
+  const kinds = periodType === "weekly" ? [...KINDS, ...WEEKLY_EXTRA_KINDS] : KINDS;
+  const baseLimitations = periodType === "weekly" ? WEEKLY_LIMITATIONS : MONTHLY_LIMITATIONS;
+  return kinds.map((kind) => ({
     key: indicatorKey(kind, periodType),
     displayName: `${KIND_TEXT[kind].displayName} ${label}`,
     requirement: "R1",
@@ -198,7 +257,11 @@ function buildIndicators(periodType: InvestorEquityPeriodType): IndicatorDefInpu
     sourceUrl: periodType === "weekly" ? WEEKLY_INDEX_URL : MONTHLY_INDEX_URL,
     license: "personal-only",
     frequency,
-    limitations: periodType === "weekly" ? WEEKLY_LIMITATIONS : MONTHLY_LIMITATIONS,
+    limitations: WEEKLY_EXTRA_KINDS.includes(kind)
+      ? baseLimitations +
+        "この指標は新様式ファイル (2026-09-29 掲載分〜) の公式売付/買付セルを直接" +
+        "記録する。旧様式系列 (net/gross) とは定義が違い、無言で合流しない。"
+      : baseLimitations,
   }));
 }
 

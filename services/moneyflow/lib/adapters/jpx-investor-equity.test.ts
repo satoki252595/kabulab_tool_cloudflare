@@ -67,7 +67,9 @@ afterEach(() => {
 describe("指標定義", () => {
   it("全指標が enum ガードを通り、キーが一意・https・日本語の説明と限界を持つ", () => {
     const all = JPX_INVESTOR_EQUITY_SPECS.flatMap((s) => s.indicators);
-    expect(all).toHaveLength(8);
+    expect(all).toHaveLength(12);
+    expect(JPX_INVESTOR_EQUITY_WEEKLY_SPEC.indicators).toHaveLength(8);
+    expect(JPX_INVESTOR_EQUITY_MONTHLY_SPEC.indicators).toHaveLength(4);
     expect(new Set(all.map((i) => i.key)).size).toBe(all.length);
     for (const ind of all) {
       expect(isMoneyflowFlowType(ind.flowType)).toBe(true);
@@ -100,6 +102,27 @@ describe("指標定義", () => {
       expect(ind.limitations).not.toMatch(/終了日の月に数える/);
       expect(ind.limitations).toMatch(/確認できていない/);
     }
+  });
+
+  it("週次に売付/買付の4キーを含み、net/gross と unit・source・定義が整合する (月次は付けない)", () => {
+    const weekly = JPX_INVESTOR_EQUITY_WEEKLY_SPEC.indicators;
+    const monthlyKeys = new Set(JPX_INVESTOR_EQUITY_MONTHLY_SPEC.indicators.map((i) => i.key));
+    for (const kind of ["sell_value", "buy_value", "sell_volume", "buy_volume"] as const) {
+      const key = `jpx_investor_equity_${kind}_weekly`;
+      const found = weekly.find((i) => i.key === key);
+      expect(found).toBeDefined();
+      expect(found!.frequency).toBe("週次");
+      expect(found!.license).toBe("personal-only");
+      expect(found!.sourceUrl).toMatch(/^https:\/\/www\.jpx\.co\.jp\/markets\/statistics-equities\/investor-type\//);
+      expect(found!.limitations).toMatch(/新様式ファイル/);
+      expect(monthlyKeys.has(`jpx_investor_equity_${kind}_monthly`)).toBe(false);
+    }
+    const sellValue = weekly.find((i) => i.key === "jpx_investor_equity_sell_value_weekly")!;
+    const buyVolume = weekly.find((i) => i.key === "jpx_investor_equity_buy_volume_weekly")!;
+    expect(sellValue.description).toMatch(/円/);
+    expect(buyVolume.description).toMatch(/株/);
+    expect(sellValue.description).toMatch(/売付金額/);
+    expect(buyVolume.description).toMatch(/買付株数/);
   });
 });
 
