@@ -7,13 +7,21 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ---
 
+## 2026-09-30
+
+### 本番作業
+- 352 sector-margin rows newly saved, final 461 rows full19 exact; #110 POST outcome unknown/held, 462 not claimed.
+
+---
+
 ## 2026-09-29
 
-### 変更 (unreleased — #182)
+### 変更
 - **007 信用残日次化**: JPX 銘柄別信用取引残高の日次様式へ直接切替 (旧週次互換なし)。R2 `margin/daily/{基準日}.json` + `margin/dates.json` (`--date=YYYYMMDD` ingest、`?code=&n=` API は日次 schema)。週次オブジェクト/コードは残すが通常経路は読まない。業種別集計 (33 業種×14 指標の日次 moneyflow spec `jpx-margin-sector`、JPX 再取得なし) も同 scope で実装 (#182)。
 - **005 shared catalog**: 投資家別売買 inner weekly を 4 キー (証券自己・法人→事業/その他法人・信託銀行) へ細分化し共有キー契約へ (#182)。
-
-### 変更
+- 共有 upsert の POST/PATCH 応答検証ガードを追加 (id・明示 active・key・書込値の ack 検証、不正は unknown 保全停止・再送なし。全 caller 共有) (#183)。データ変更なし。
+- 一次データ記録に入力 bytes freeze + SHA manifest を追加 (producer 側 before-bytes 証跡。物理 fullDL 証明とは別。同一 skip/変更 STOP/旧行 unknown) (#184)。データ変更なし。
+- shared POST の Unknown 例外へ key context を付与 (観測 key・primary key SHA、生 key 非開示、再送なし・Unknown 型維持) (#185)。データ変更なし。
 - moneyflowのJPX投資部門別売買状況 (株式・週次) を2026-09-29掲載分の新様式 (単一xlsx) に対応。新様式はnet/grossに加え公式売付/買付セルを直接記録し、名前付き6内訳 (市場/投資部門/取引種別/親区分/階層/公表日) で冪等キー7セグメントに。旧様式系列は従来キーのまま (移行・再取込なし)。実ファイル (9月第3週) で検証 (xlsx 112件算術一致・同期間PDF親合計96/96一致)。月次新様式 (10/08〜)・ETF/REIT (10/13〜) は未公表のためreject維持 (#181)。実データ適用は後続。
 - 株式日次syncの完了・例外どちらの終了時も失敗明細バッチ (全件・切詰なし+件数/取引日/分類/元例外) を一次保管してから return/throw するよう修正 (CLI の 1% throw の前に物理保管あり)。保管失敗は非0終了。CLI の 20 グループ表示は要約として残し保管キーを指す (#180)。データ変更なし。
 - 財務③の同値再 PATCH を省くよう共有 upsert へ同値判定を追加 (EDINET/TDnet 両 caller が継承。取得日時だけの差は送らない。旧キー採用・訂正新旧ガード・NULL 置換は維持。create 競合の収束時も同値なら書き直さない。再解析の直接 PATCH も同判定で already_reparsed)。保証は Notion ③ の PATCH 0 であり日次再 dispatch 全体の sender 0 ではない (ローカル系統・D1 書込は継続) (#179)。データ変更なし。
