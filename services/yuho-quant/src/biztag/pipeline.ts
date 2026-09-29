@@ -94,6 +94,21 @@ export interface RunSummary {
   masterDuplicates: string[];
   /** 再試行上限 (`MAX_RETRY_ATTEMPTS`) に到達したまま残っている銘柄コード (docs §11.6) */
   retryExhausted: string[];
+  /**
+   * 課金切れ (jev 402/billing_error) で判定不能のまま残っている銘柄コード。
+   * 再試行期日が未来の skip も含めて集計する (`remaining: 0` を完了と
+   * 読み違えないため。2026-09-29 実測 14 件が green のまま埋もれていた)。
+   */
+  billingBlocked: string[];
+}
+
+/**
+ * 台帳「判定エラー」列が jev 課金切れを示すかの純粋判定。
+ * `JevUnavailableError` の message 形 (`status=402` / `billing_error` 含有) を見る。
+ */
+export function isBillingBlockedError(error: string | null): boolean {
+  if (!error) return false;
+  return error.includes("billing_error") || error.includes("status=402");
 }
 
 /**
@@ -357,6 +372,17 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
 
   const items = planWork(latest, rows, vocab, vocabDiffFromRowVersion, today);
   const retryExhausted = items.filter((i) => i.retryExhausted === true).map((i) => i.stockCode).sort();
+  // 課金切れの未解決ブロッカーを台帳エラーから集計する。再試行期日の
+  // 未来・到来を問わない (未来 skip も残件であり、完了ではない)。
+  const billingBlocked = rows
+    .filter(
+      (r) =>
+        r.tagStatus === "判定不能" &&
+        isBillingBlockedError(r.error) &&
+        (r.attempts ?? 0) < MAX_RETRY_ATTEMPTS
+    )
+    .map((r) => r.stockCode)
+    .sort();
 
   // 6. 銘柄マスタ (relation 先) の索引。
   // ① 側で同じ銘柄コードが複数行ある銘柄は relation を空のままにする (どれかを選ばない)。
@@ -451,6 +477,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     vocabSeeded: seeded,
     masterDuplicates,
     retryExhausted,
+    billingBlocked,
     gate,
     deadline,
     failures,
@@ -498,6 +525,13 @@ export function composeRunNotify(summary: RunSummary): RunNotifyResult {
       `① 銘柄マスタ重複 (relation 未設定): ${summary.masterDuplicates.length}件 (${summary.masterDuplicates
         .slice(0, 10)
         .join(", ")}${summary.masterDuplicates.length > 10 ? " 他" : ""})`
+    );
+  }
+  if (summary.billingBlocked.length > 0) {
+    notes.push(
+      `課金切れ (jev 402/billing_error) で判定不能のまま残っている銘柄: ${summary.billingBlocked.length}件 (${summary.billingBlocked
+        .slice(0, 10)
+        .join(", ")}${summary.billingBlocked.length > 10 ? " 他" : ""})`
     );
   }
   const extraNote = notes.length > 0 ? `\n${notes.join("\n")}` : "";

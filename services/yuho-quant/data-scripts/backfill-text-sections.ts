@@ -29,6 +29,7 @@ import "dotenv/config";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
+import { archiveTallyFailed } from "../src/services/edinet/archive.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
@@ -181,6 +182,10 @@ for (const r of targets) {
               .update(yuhoDocuments)
               .set({ notionDocPageId: nb.rowPageId })
               .where(eq(yuhoDocuments.id, r.id));
+          } else {
+            // 本文ありなのに行 ID 未取得は黙って成功にしない (P6 共有根因)。
+            console.warn(`[text-backfill] notion text backup 失敗(行 ID 未取得) ${r.docId}: outcome=${nb.outcome}`);
+            tally.notion_text_no_pointer = (tally.notion_text_no_pointer ?? 0) + 1;
           }
         }
       } catch (e) {
@@ -206,4 +211,16 @@ for (const r of targets) {
 console.info("\n[text-backfill] 完了:");
 for (const [k, v] of Object.entries(tally).sort((a, b) => b[1] - a[1])) {
   console.info(`  ${k}: ${v}`);
+}
+// 有限 --doc 指定のギャップ修復は失敗が1件でもあれば非0終了にする
+// (対象を絞った修復の false-green を防ぐ。backfill-missing-docs と同一方式)。
+if (docFilter !== null) {
+  const failed =
+    (tally.error ?? 0) +
+    (tally.notion_text_error ?? 0) +
+    (tally.notion_text_no_code ?? 0) +
+    (tally.notion_text_no_pointer ?? 0);
+  if (archiveTallyFailed(failed)) {
+    process.exitCode = 1;
+  }
 }

@@ -376,6 +376,10 @@ for (const date of eachDay(fromArg, toArg)) {
                 .update(yuhoSchema.yuhoDocuments)
                 .set({ notionDocPageId: r.rowPageId })
                 .where(eq(yuhoSchema.yuhoDocuments.id, docRowId));
+            } else {
+              // 本文ありなのに行 ID 未取得は黙って成功にしない (P6 共有根因)。
+              console.warn(`[missing] notion text backup 失敗(行 ID 未取得) ${tag}: outcome=${r.outcome}`);
+              tally.notion_text_no_pointer = (tally.notion_text_no_pointer ?? 0) + 1;
             }
           }
         } catch (e) {

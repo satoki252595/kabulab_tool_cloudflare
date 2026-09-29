@@ -527,46 +527,45 @@ export async function ingestDocument(
 
   // 定性テキスト本文の Notion 保管 (D1 10GB 上限対策。D1 には索引 + 行 ID)。
   // needDbWork の有無に依らず手元の本文があれば保管し、行 ID を D1 へ
-  // 書き戻す。失敗は当該通の警告に留める (ポインタ NULL の通は P3 移行
-  // スクリプトが回収する)。セクション 0 件は保管対象外 (textParseStatus
-  // が D1 に残り「未保管」と区別できる)。
+  // 書き戻す。本文あり (sections>0) なのにポインタが残らない状態は成功に
+  // しない: 保管失敗・行なし・行 ID 未取得は throw し、呼び出し側
+  // (日次は通単位で失敗計上して継続) が未完了として扱う。既存行がある
+  // 場合は backupDocTextToNotion が既存行 ID を返して回収する
+  // (skipped_existing)。回収は backfill-text-sections --doc --force が担う。
+  // セクション 0 件は保管対象外 (textParseStatus が D1 側に残り「未保管」と区別できる)。
   if (sections.length > 0) {
-    try {
-      let id = docRowId;
-      if (id === null) {
-        const found = await db
-          .select({ id: yuhoDocuments.id })
-          .from(yuhoDocuments)
-          .where(eq(yuhoDocuments.docId, doc.docID))
-          .limit(1);
-        id = found[0]?.id ?? null;
-      }
-      if (id === null) {
-        console.warn(
-          `[ingest] notion text backup skip(行なし) docID=${doc.docID}`
-        );
-      } else {
-        const r = await backupDocTextToNotion({
-          stockCode,
-          docId: doc.docID,
-          d1DocumentId: id,
-          fiscalYearEnd: periodEnd,
-          textParseStatus,
-          sections,
-          force,
-        });
-        if (r.rowPageId) {
-          await db
-            .update(yuhoDocuments)
-            .set({ notionDocPageId: r.rowPageId })
-            .where(eq(yuhoDocuments.id, id));
-        }
-      }
-    } catch (e) {
-      console.warn(
-        `[ingest] notion text backup 失敗 docID=${doc.docID}: ${(e as Error).message}`
+    let id = docRowId;
+    if (id === null) {
+      const found = await db
+        .select({ id: yuhoDocuments.id })
+        .from(yuhoDocuments)
+        .where(eq(yuhoDocuments.docId, doc.docID))
+        .limit(1);
+      id = found[0]?.id ?? null;
+    }
+    if (id === null) {
+      throw new Error(
+        `[ingest] notion text backup 失敗(行なし) docID=${doc.docID}: D1 行が無いのに本文セクションが ${sections.length} 件あります`
       );
     }
+    const r = await backupDocTextToNotion({
+      stockCode,
+      docId: doc.docID,
+      d1DocumentId: id,
+      fiscalYearEnd: periodEnd,
+      textParseStatus,
+      sections,
+      force,
+    });
+    if (!r.rowPageId) {
+      throw new Error(
+        `[ingest] notion text backup 失敗(行 ID 未取得) docID=${doc.docID}: outcome=${r.outcome}`
+      );
+    }
+    await db
+      .update(yuhoDocuments)
+      .set({ notionDocPageId: r.rowPageId })
+      .where(eq(yuhoDocuments.id, id));
   }
 
   return {
