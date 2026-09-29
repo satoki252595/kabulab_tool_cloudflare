@@ -109,7 +109,9 @@ def _export_kabumcp_cache(ctx: JobContext, artifact: RawArtifact, doc_id: str) -
         logger.info("kabuMCP cache dry-run: 書込スキップ doc_id=%s", doc_id)
         return
     if artifact.datatype == "xbrl":
-        ctx.add_failure(f"kabumcp:{doc_id}", "type1 fallback は連携対象外のためスキップ")
+        # 任意 cache-export の正式対象外。合法 skip として情報記録のみ
+        # (失敗計上しない — exit 非0 の根拠にしない)。
+        logger.info("kabuMCP cache skip: type1 fallback は連携対象外 doc_id=%s", doc_id)
         return
     try:
         result = _copy_kabumcp_csv(artifact, doc_id, cache_dir)
@@ -146,6 +148,9 @@ def _fetch_financial_tidy(
             "tidy 変換失敗 (原本は保全し ⑤ へ。③ 反映はスキップ §5.2): doc_id=%s", doc_id
         )
         artifact.convert_status = ConvertStatus.FAILED
+        # 本物の変換失敗は欠損として計上する (exit 非0 の根拠 §3-2)。
+        # 原本保存は続ける (return は変えない)。
+        ctx.add_failure(doc_id, "tidy 変換失敗 (原本は保全)")
     return artifact, tidy
 
 

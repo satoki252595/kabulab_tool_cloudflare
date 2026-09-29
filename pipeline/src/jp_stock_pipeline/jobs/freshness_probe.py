@@ -209,8 +209,9 @@ def execute(ctx: JobContext) -> None:
         _record_observed(ctx, store, capacity, dry_run=dry_run)
 
     if ctx.failed:
-        # runner は failed>0 かつ processed>0 を exit 0 にするので、ここで例外を投げて
-        # 失敗に落とす。落とさないと「8 件中 1 件だけ凍結」が誰にも見えない。
+        # 共有 runner は failed>0 (一部失敗も含め) を exit 1 にする。ここでは
+        # 例外を投げて失敗を明示的に可視化する (落とさないと「8 件中 1 件だけ
+        # 凍結」が誰にも見えない §3-2)。
         raise ProbeIncomplete(
             f"{ctx.failed}/{len(DATASET_SOURCES) + 1} 件を測れなかった:"
             f" {ctx.failed_codes}"
