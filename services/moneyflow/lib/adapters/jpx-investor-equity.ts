@@ -17,7 +17,10 @@
  * 訂正後のファイルは同じキーのため自動では取り直さない — この限界は指標定義の「限界」に明記する。
  *
  * 1 バッチの行数: 旧様式は 4 市場 × 15 投資部門 × (金額/株数) × (買い越し/売買合計) = 240 行、
- * 新様式は 4 市場 × 14 投資部門 × (金額/株数) × (買い越し/売買合計) = 224 行。
+ * 新様式は 4 市場 × 14 投資部門 × (金額/株数) × (買い越し/売買合計/売付/買付) = 448 行。
+ * 新様式の行には名前付き内訳 (市場/投資部門/取引種別/親区分/階層/公表日) を付け、
+ * 冪等キーは7セグメント (`category` は表示ラベルのみ)。旧様式の行は従来キー
+ * `期間|指標|区分` のまま (旧系列の移行・再取込はしない)。
  *
  * 様式変更 (2026-09-29 の user 決定: 旧方式互換・移行要件なし、新様式ファースト):
  * 週次は 2026-09-29 掲載分から単一ファイルの新様式になり、実ファイル
@@ -352,6 +355,78 @@ function categoryOf(rec: InvestorEquityRecord): string {
   return `${market} / ${rec.investorCategory}`;
 }
 
+/**
+ * 新様式14部門の直接親 (JPX の様式変更お知らせ `stock_20260929.pdf` の階層定義。
+ * 自己=現金+信用、個人=現金+信用、海外投資家=法人+個人、委託計=法人+個人+
+ * 海外投資家+証券会社、法人=投資信託+事業法人+その他法人等+金融機関、
+ * 金融機関=生保・損保+都銀・地銀等+信託銀行+その他金融機関)。14部門すべてが
+ * 葉 (categoryLevel 1) で、親の合計行は新様式ファイルに無い。
+ */
+const UNIFIED_PARENT: Readonly<Record<string, string>> = {
+  自己現金: "自己計",
+  自己信用: "自己計",
+  個人現金: "個人",
+  個人信用: "個人",
+  海外投資家法人: "海外投資家",
+  海外投資家個人: "海外投資家",
+  証券会社: "委託計",
+  投資信託: "法人",
+  事業法人: "法人",
+  その他法人等: "法人",
+  "生保・損保": "金融機関",
+  "都銀・地銀等": "金融機関",
+  信託銀行: "金融機関",
+  その他金融機関: "金融機関",
+};
+
+/** 新様式14部門の取引種別。現金/信用に分かれていない部門は null (捏造しない)。 */
+const UNIFIED_TRADE_TYPE: Readonly<Record<string, string | null>> = {
+  自己現金: "現金",
+  自己信用: "信用",
+  個人現金: "現金",
+  個人信用: "信用",
+  海外投資家法人: null,
+  海外投資家個人: null,
+  証券会社: null,
+  投資信託: null,
+  事業法人: null,
+  その他法人等: null,
+  "生保・損保": null,
+  "都銀・地銀等": null,
+  信託銀行: null,
+  その他金融機関: null,
+};
+
+/**
+ * 新様式レコードの名前付き内訳 (市場/投資部門/取引種別/親区分/階層/公表日)。
+ * 公式セルからの明示写像で、`category` は表示ラベルのみ (冪等キーは7セグメント)。
+ * 公表日は公式の公表日が未確認のため null (取得日での代用は禁止)。
+ */
+function unifiedDims(rec: InvestorEquityRecord): {
+  marketSegment: string;
+  investorCategory: string;
+  tradeType: string | null;
+  parentCategory: string;
+  categoryLevel: number;
+  publicationDate: null;
+} {
+  const market = MARKET_JA[rec.market];
+  const parent = UNIFIED_PARENT[rec.investorCategory];
+  if (market === undefined || parent === undefined || !(rec.investorCategory in UNIFIED_TRADE_TYPE)) {
+    throw new Error(
+      `JPX 投資部門別売買状況: 新様式の市場・投資部門の対応が未定義です: "${rec.market} / ${rec.investorCategory}"`
+    );
+  }
+  return {
+    marketSegment: market,
+    investorCategory: rec.investorCategory,
+    tradeType: UNIFIED_TRADE_TYPE[rec.investorCategory] ?? null,
+    parentCategory: parent,
+    categoryLevel: 1,
+    publicationDate: null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 冪等キー
 // ---------------------------------------------------------------------------
@@ -529,12 +604,16 @@ function toDrafts(key: string, files: readonly SpecFile[], periodType: InvestorE
     else if (rec.unit === "thousand_shares") unit = "株";
     else throw new Error(`JPX 投資部門別売買状況: 未知の単位です: "${String(rec.unit)}"`);
     const suffix = rec.metric === "value" ? "value" : "volume";
+    const isUnified = rec.formatVersion === "unified_single_file";
     const common = {
       period: batch.period,
       periodStart: batch.periodStart,
       periodEnd: batch.periodEnd,
       category: categoryOf(rec),
       categoryKind: "投資部門" as const,
+      // 新様式のみ名前付き内訳を付ける (旧様式は従来キー `期間|指標|区分` のまま。
+      // 旧系列のキーを変えない = 旧方式の移行・再取込をしない user 決定)。
+      ...(isUnified ? unifiedDims(rec) : {}),
       unit,
       changeFromPrev: null,
       approximate: false,
@@ -547,6 +626,12 @@ function toDrafts(key: string, files: readonly SpecFile[], periodType: InvestorE
       indicatorKey: indicatorKey(`gross_turnover_${suffix}`, periodType),
       value: rec.total * 1000,
     });
+    if (isUnified) {
+      // 新様式の公式売付/買付セルを直接記録する (sell/buy キーは週次のみ。
+      // parseUnifiedBatch が週次を強制しているため、ここでは *_weekly が付く)。
+      drafts.push({ ...common, indicatorKey: indicatorKey(`sell_${suffix}`, periodType), value: rec.sell * 1000 });
+      drafts.push({ ...common, indicatorKey: indicatorKey(`buy_${suffix}`, periodType), value: rec.buy * 1000 });
+    }
   }
   return drafts;
 }

@@ -7,6 +7,7 @@ import {
   isMoneyflowFrequency,
   isMoneyflowLicense,
   isMoneyflowRequirement,
+  observationKey,
 } from "../../../../src/shared/notion-archive/moneyflow.js";
 import { validateDrafts, type ObservationDraft, type SpecFile } from "../source-spec.js";
 import * as sourceModule from "../sources/jpx-investor-equity.js";
@@ -316,14 +317,14 @@ describe("toObservations の写像 (合成入力・CI 用)", () => {
     ).toThrow(/未知の単位/);
   });
 
-  it("新様式の単一ファイルは 224 行を出す (合成入力)", () => {
+  it("新様式の単一ファイルは 448 行を出す (合成入力。net/gross/sell/buy)", () => {
     mockParseOnce(syntheticUnifiedRecords());
     const drafts = JPX_INVESTOR_EQUITY_WEEKLY_SPEC.toObservations({
       key: "jpx-investor-equity-weekly-2026-W38",
       files: SYNTH_UNIFIED_FILES,
     });
     validateDrafts(JPX_INVESTOR_EQUITY_WEEKLY_SPEC.name, drafts, JPX_INVESTOR_EQUITY_WEEKLY_SPEC.indicators);
-    expect(drafts).toHaveLength(4 * 14 * 2 * 2);
+    expect(drafts).toHaveLength(4 * 14 * 2 * 4);
     expect(find(drafts, "jpx_investor_equity_net_flow_value_weekly", "東証プライム / 自己現金")).toMatchObject({
       period: "2026-W38",
       periodStart: "2026-09-14",
@@ -337,6 +338,53 @@ describe("toObservations の写像 (合成入力・CI 用)", () => {
       value: 230_000,
       unit: "株",
     });
+    // 公式売付/買付セルを直接記録する
+    expect(find(drafts, "jpx_investor_equity_sell_value_weekly", "東証プライム / 自己現金").value).toBe(100_000);
+    expect(find(drafts, "jpx_investor_equity_buy_volume_weekly", "二市場 / 証券会社").value).toBe(130_000);
+  });
+
+  it("新様式の行は6内訳を持ち、冪等キーは7セグメント (category は表示のみ)", () => {
+    mockParseOnce(syntheticUnifiedRecords());
+    const drafts = JPX_INVESTOR_EQUITY_WEEKLY_SPEC.toObservations({
+      key: "jpx-investor-equity-weekly-2026-W38",
+      files: SYNTH_UNIFIED_FILES,
+    });
+    const cash = find(drafts, "jpx_investor_equity_sell_value_weekly", "東証プライム / 自己現金");
+    expect(cash).toMatchObject({
+      marketSegment: "東証プライム",
+      investorCategory: "自己現金",
+      tradeType: "現金",
+      parentCategory: "自己計",
+      categoryLevel: 1,
+      publicationDate: null,
+    });
+    expect(observationKey(cash)).toBe(
+      "2026-W38|jpx_investor_equity_sell_value_weekly|東証プライム|自己現金|現金|自己計|1"
+    );
+    // 現金/信用に分かれていない部門の取引種別は null (捏造しない)
+    const sec = find(drafts, "jpx_investor_equity_buy_value_weekly", "東証プライム / 証券会社");
+    expect(sec).toMatchObject({ tradeType: null, parentCategory: "委託計", categoryLevel: 1 });
+    expect(observationKey(sec)).toBe(
+      "2026-W38|jpx_investor_equity_buy_value_weekly|東証プライム|証券会社||委託計|1"
+    );
+  });
+
+  it("旧様式の行は名前付き内訳を持たず、従来キー `期間|指標|区分` のまま", () => {
+    mockParse(syntheticRecords("value"), syntheticRecords("volume"));
+    const drafts = JPX_INVESTOR_EQUITY_WEEKLY_SPEC.toObservations({
+      key: "jpx-investor-equity-weekly-2026-W37",
+      files: SYNTH_FILES,
+    });
+    const net = find(drafts, "jpx_investor_equity_net_flow_value_weekly", "東証プライム / 海外投資家");
+    expect(net.marketSegment).toBeUndefined();
+    expect(net.investorCategory).toBeUndefined();
+    expect(net.tradeType).toBeUndefined();
+    expect(net.parentCategory).toBeUndefined();
+    expect(net.categoryLevel).toBeUndefined();
+    expect(net.publicationDate).toBeUndefined();
+    expect(observationKey(net)).toBe(
+      "2026-W37|jpx_investor_equity_net_flow_value_weekly|東証プライム / 海外投資家"
+    );
   });
 
   it("旧様式名のファイルに新様式レコードが混ざれば throw (ファイル名と中身の不一致)", () => {
@@ -501,13 +549,13 @@ describe.skipIf(!hasMonthly)("実ファイル: 月次 2026年8月 (8/3〜8/28)",
 });
 
 describe.skipIf(!hasUnifiedW3)("実ファイル: 新様式 週次 2026年9月第3週 (9/14〜9/18)", () => {
-  it("validateDrafts を通り、行数 224・値は千円/千株→円/株に換算される", () => {
+  it("validateDrafts を通り、行数 448・値は千円/千株→円/株に換算される", () => {
     const drafts = JPX_INVESTOR_EQUITY_WEEKLY_SPEC.toObservations({
       key: "jpx-investor-equity-weekly-2026-W38",
       files: unifiedW3Files(),
     });
     validateDrafts(JPX_INVESTOR_EQUITY_WEEKLY_SPEC.name, drafts, JPX_INVESTOR_EQUITY_WEEKLY_SPEC.indicators);
-    expect(drafts).toHaveLength(224);
+    expect(drafts).toHaveLength(448);
     expect(drafts.every((d) => d.period === "2026-W38" && d.periodStart === "2026-09-14" && d.periodEnd === "2026-09-18")).toBe(
       true
     );
@@ -526,6 +574,25 @@ describe.skipIf(!hasUnifiedW3)("実ファイル: 新様式 週次 2026年9月第
     );
     // TSE Prime 自己現金 株数: 差引 602,967 千株
     expect(find(drafts, "jpx_investor_equity_net_flow_volume_weekly", "東証プライム / 自己現金").value).toBe(602_967_000);
+    // TSE Prime 自己現金 金額: 売 3,943,522,532 / 買 5,597,997,582 千円 (公式セル直接値)
+    expect(find(drafts, "jpx_investor_equity_sell_value_weekly", "東証プライム / 自己現金").value).toBe(
+      3_943_522_532_000
+    );
+    expect(find(drafts, "jpx_investor_equity_buy_value_weekly", "東証プライム / 自己現金").value).toBe(5_597_997_582_000);
+    // 名前付き内訳: 自己現金は 現金/自己計、証券会社は取引種別なし/委託計
+    expect(find(drafts, "jpx_investor_equity_sell_value_weekly", "東証プライム / 自己現金")).toMatchObject({
+      marketSegment: "東証プライム",
+      investorCategory: "自己現金",
+      tradeType: "現金",
+      parentCategory: "自己計",
+      categoryLevel: 1,
+      publicationDate: null,
+    });
+    expect(find(drafts, "jpx_investor_equity_buy_value_weekly", "東証プライム / 証券会社")).toMatchObject({
+      investorCategory: "証券会社",
+      tradeType: null,
+      parentCategory: "委託計",
+    });
   });
 
   it("旧様式の合計行の系列は含まれず、新旧の別名系列は混ざらない", () => {
@@ -644,7 +711,7 @@ describe.skipIf(!hasUnifiedW3)("resolve/fetch (週次新様式、fetch スタブ
     expect(batch.files[0]?.bytes.length).toBeGreaterThan(0);
     const drafts = JPX_INVESTOR_EQUITY_WEEKLY_SPEC.toObservations({ key: batch.key, files: batch.files });
     validateDrafts(JPX_INVESTOR_EQUITY_WEEKLY_SPEC.name, drafts, JPX_INVESTOR_EQUITY_WEEKLY_SPEC.indicators);
-    expect(drafts).toHaveLength(224);
+    expect(drafts).toHaveLength(448);
   });
 });
 
