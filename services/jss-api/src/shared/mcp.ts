@@ -12,6 +12,14 @@
 import { envelope } from "./envelope";
 import { fetchAdjustedOhlcvCached } from "./ohlcv-cache";
 import {
+  SUPPLY_TYPES,
+  assertSeriesObject,
+  parseSupplyFilter,
+  seriesPointsArray,
+  supplySourcesFromLatest,
+  supplySourcesFromSeries,
+} from "./supply";
+import {
   MAX_BATCH_CODES,
   fetchIndicatorsByCodes,
   fetchLatestJobRuns,
@@ -33,12 +41,13 @@ export const TOOLS = [
   {
     name: "jp_supply_latest",
     description:
-      "日本株の需給（日証金の貸借取引残高）の最新断面を返す。data_type は " +
-      "jsf_zandaka（貸借残高）か jsf_shina（逆日歩）。",
+      "日本株の需給の最新断面を返す。data_type は jsf_zandaka（日証金の貸借残高）・" +
+      "jsf_shina（日証金の逆日歩）・jpx_margin（JPX の信用残）。省略時は全種類。" +
+      "出典は返却行から算出する (meta.attribution)。",
     inputSchema: {
       type: "object",
       properties: {
-        data_type: { type: "string", enum: ["jsf_zandaka", "jsf_shina"] },
+        data_type: { type: "string", enum: [...SUPPLY_TYPES] },
         limit: { type: "integer", minimum: 1, maximum: 500 },
       },
     },
@@ -46,12 +55,14 @@ export const TOOLS = [
   {
     name: "jp_supply_series",
     description:
-      "1銘柄の需給時系列を返す。融資残高・貸株残高・信用倍率・回転日数・逆日歩。",
+      "1銘柄の需給時系列を返す。series は jsf_zandaka（日証金の貸借残高）・" +
+      "jsf_shina（日証金の逆日歩）・jpx_margin（JPX の信用残）。省略時は全系列。" +
+      "出典は返却系列から算出する (meta.attribution)。",
     inputSchema: {
       type: "object",
       properties: {
         code: { type: "string", description: "4桁の銘柄コード" },
-        series: { type: "string", enum: ["jsf_zandaka", "jsf_shina"] },
+        series: { type: "string", enum: [...SUPPLY_TYPES] },
         from: { type: "string", description: "YYYY-MM-DD" },
         to: { type: "string", description: "YYYY-MM-DD" },
       },
@@ -164,7 +175,7 @@ async function callTool(
     }
     case "jp_supply_latest": {
       const limit = parseLimit(String(args.limit ?? ""), 100);
-      const dataType = args.data_type ? String(args.data_type) : null;
+      const dataType = parseSupplyFilter("data_type", args.data_type);
       const stmt = dataType
         ? env.DB.prepare(
             "SELECT code, data_type, data_date, loan_bal, stock_bal, ratio, turn_days" +
@@ -175,28 +186,31 @@ async function callTool(
               " FROM jss_supply_latest ORDER BY code, data_type LIMIT ?",
           ).bind(limit);
       const { results } = await stmt.all();
-      return envelope(results, { sources: ["日証金"], licenses: ["personal-only"] });
+      return envelope(results, {
+        sources: supplySourcesFromLatest(results as Array<{ data_type: unknown }>),
+        licenses: ["personal-only"],
+      });
     }
     case "jp_supply_series": {
       const code = String(args.code ?? "");
       if (!isValidCode(code)) throw new Error("銘柄コードは4桁");
+      const wanted = parseSupplyFilter("series", args.series);
+      const from = parseSupplyFilter("from", args.from);
+      const to = parseSupplyFilter("to", args.to);
       const object = await env.SUPPLY.get(`supply/${code}.json`);
       if (!object) throw new Error(`需給データが無い: ${code}`);
       const payload = (await object.json()) as Record<string, unknown>;
-      const series = (payload.series ?? {}) as Record<string, Array<Record<string, unknown>>>;
-      const wanted = args.series ? String(args.series) : null;
-      const from = args.from ? String(args.from) : null;
-      const to = args.to ? String(args.to) : null;
+      const series = assertSeriesObject(payload.series);
       const filtered: Record<string, unknown[]> = {};
-      for (const [key, points] of Object.entries(series)) {
+      for (const [key, value] of Object.entries(series)) {
         if (wanted && key !== wanted) continue;
+        const points = seriesPointsArray(key, value);
         filtered[key] = points.filter((p) => {
-          const d = String(p.d ?? "");
-          return (!from || d >= from) && (!to || d <= to);
+          return (!from || p.d >= from) && (!to || p.d <= to);
         });
       }
       return envelope({ code, updated: payload.updated, series: filtered }, {
-        sources: ["日証金"], licenses: ["personal-only"],
+        sources: supplySourcesFromSeries(filtered), licenses: ["personal-only"],
       });
     }
     case "jp_ohlcv_range": {
