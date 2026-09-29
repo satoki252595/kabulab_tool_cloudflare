@@ -153,22 +153,23 @@
 推測で作らない (ルール1/2)。Phase 2 以降で J-Quants Pro 等の有償契約や
 日次スクレイピングによる自前アーカイブが必要かどうかを改めて判断する。
 
-## 信用残 (銘柄別信用取引残高) の日次化 — TODO
+## 信用残 (銘柄別信用取引残高) の日次化
 
 JPX 告知 (2026-07-06)「信用取引残高の公表情報の変更日及び今後の公表スケジュール
 について」により、**2026-09-28 (月) から「銘柄別信用取引残高」が毎日 16:00 に
 公表され、週次の「銘柄別信用取引週末残高」(火曜16:30) は廃止される**。
 
-- 新資料の様式は初回公表 (2026-09-28) まで確認できないため、**今回の実装
-  (Phase 0/1) には信用残を含めていない**。
-- 既存の週次信用残取込 (`scripts/vwap/ingest-margin.ts` → R2 `margin/{week}.json`、
-  vwap-analysis が使用) は新資料へ切り替えないと 9/28 以降止まる。パーサは
-  `services/vwap-analysis/lib/margin.ts` 側に共通化し、moneyflow の業種別集計
-  (買い残・売り残の前日比) と両方から使えるようにする設計 (計画書 Phase 1 節)。
-- **TODO (2026-09-28 以降に着手)**: 実ファイルをフィクスチャにしてパーサを作り、
-  `sector_margin_balance` 系の指標を `services/moneyflow/lib/indicators.ts` へ
-  追加し、日次で「資金フロー｜観測ログ」へ書く。9/28 に移行が延期された場合は
-  延期中は週次のまま扱う (JPX が同日20時ごろに可否を告知)。
+- 日次取込は実装済み: `scripts/vwap/ingest-margin.ts` (`--date=YYYYMMDD`・
+  未指定は最新) → Notion 一次データ保管 → R2 `margin/daily/{基準日}.json` +
+  `margin/dates.json`。パーサは `services/vwap-analysis/lib/margin-daily.ts`
+  (純粋・14 セル・合計ガード)。API/UI は日次 schema へ直接切替済み。
+  旧週次オブジェクト・週次コードは残すが通常経路は読まない (旧互換なし)。
+- **TODO (別途)**: `sector_margin_balance` 系の指標を moneyflow spec +
+  indicator + upsert/readback の通常手順で追加し、日次で「資金フロー｜
+  観測ログ」へ書く。33 業種行は新内訳 dims を未設定 (publicationDate のみ)
+  にして既存 `期間|指標|区分` キーを維持する (key 契約)。公式数量/金額 SUM、
+  公式率の SUM 禁止、派生率は式・分母を明示、分類不明・coverage 不足は
+  成功にしない。
 
 ## 実装ファイル一覧 (Phase 0/1)
 

@@ -1,10 +1,63 @@
 /**
  * VWAP Analysis 公開 API (app.ts) の /api/margin のテスト。
- * R2 (BUCKET) を差し替えた Hono app.request で、崩壊週の除外と正常週の
- * 保護を確かめる。週ファイルの中身は合成 (実 R2 の行の形だけ真似る)。
+ *
+ * 日次スナップショット (`margin/daily/YYYY-MM-DD.json` + `margin/dates.json`)
+ * を R2 モックに載せ、同一ティッカー複数行の除外日表示と正常日の保護を検証する。
  */
 import { describe, expect, it } from "vitest";
 import app from "./app.js";
+
+function row(sourceCode: string, ordinaryTicker: string | null, sell: number, buy: number) {
+  const fig = (s: number, b: number) => ({
+    sellOutstanding: s,
+    sellChg: 0,
+    sellListedRatio: 0,
+    sellListedRatioRaw: "0.0%",
+    buyOutstanding: b,
+    buyChg: 0,
+    buyListedRatio: 0,
+    buyListedRatioRaw: "0.0%",
+    negSell: s,
+    negSellChg: 0,
+    negBuy: b,
+    negBuyChg: 0,
+    stdSell: 0,
+    stdSellChg: 0,
+    stdBuy: 0,
+    stdBuyChg: 0,
+  });
+  return {
+    sourceCode,
+    name: `合成${sourceCode}`,
+    ordinaryTicker,
+    eligible: ordinaryTicker !== null,
+    unitLetter: "B",
+    sectype: "普通株式",
+    market: "プライム",
+    loanKind: "貸",
+    isin: "JP0000000000",
+    shares: fig(sell, buy),
+    amounts: fig(sell * 1000, buy * 1000),
+  };
+}
+
+function snap(rows: ReturnType<typeof row>[]) {
+  return {
+    format: "jpx-margin-daily-v1",
+    basisDate: "2026-09-28",
+    publicationDate: "2026-09-29",
+    sourceUrl: "https://example.invalid/m.pdf",
+    rawSha256: "0".repeat(64),
+    rawPageId: null,
+    rows,
+    totals: [],
+  };
+}
+
+// 2026-09-25: 25930 (普通株) と 25935 (種類株) が同一ティッカー 2593 に衝突する日。
+const DAY_AMBIGUOUS = snap([row("25930", "2593", 100, 200), row("25935", "2593", 310, 410), row("72030", "7203", 310, 0)]);
+// 2026-09-28: 2593 は 1 行だけの正常日。
+const DAY_NORMAL = snap([row("25930", "2593", 100, 200), row("72030", "7203", 310, 0)]);
 
 function bucket(files: Record<string, unknown>) {
   return {
@@ -16,74 +69,69 @@ function bucket(files: Record<string, unknown>) {
   };
 }
 
-const NORMAL_WEEK = {
-  week: "2026-09-11",
-  rows: [
-    { code: "2593", sell: 100, sell_chg: 1, buy: 200, buy_chg: 2 },
-    { code: "25935", sell: 10, sell_chg: 0, buy: 20, buy_chg: 0 },
-    { code: "7203", sell: 300, sell_chg: 3, buy: 400, buy_chg: 4 },
-  ],
-};
-
-// 実測の崩壊形 (2026-09-04 の R2): 同一 4 桁コードの複数行。
-const COLLAPSED_WEEK = {
-  week: "2026-09-04",
-  rows: [
-    { code: "2593", sell: 77200, sell_chg: -78300, buy: 244500, buy_chg: -38100 },
-    { code: "2593", sell: 100, sell_chg: -200, buy: 17500, buy_chg: 3000 },
-    { code: "7203", sell: 310, sell_chg: 3, buy: 410, buy_chg: 4 },
-  ],
-};
-
 const BUCKET = bucket({
-  "margin/weeks.json": ["2026-09-04", "2026-09-11"],
-  "margin/2026-09-04.json": COLLAPSED_WEEK,
-  "margin/2026-09-11.json": NORMAL_WEEK,
+  "margin/dates.json": ["2026-09-25", "2026-09-28"],
+  "margin/daily/2026-09-25.json": DAY_AMBIGUOUS,
+  "margin/daily/2026-09-28.json": DAY_NORMAL,
 });
 
-describe("GET /api/margin (崩壊週の除外と正常週の保護)", () => {
-  it("崩壊コードは崩壊週を除外して ambiguousWeeks に明示し、正常週は返す", async () => {
+describe("GET /api/margin (同一ティッカー複数行の除外と正常日の保護)", () => {
+  it("code=2593: 衝突日は除外日、正常日だけ値を返す", async () => {
     const res = await app.request("/api/margin?code=2593", {}, { BUCKET } as never);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      code: string;
-      weeks: Array<{ week: string; sell: number; buy: number }>;
-      ambiguousWeeks: string[];
+      dates: Array<{ date: string; publicationDate: string; shares: { sellOutstanding: number } }>;
+      ambiguousDates: string[];
     };
-    expect(body.code).toBe("2593");
-    // 崩壊週 (09-04) の値は出さず、除外週として明示する
-    expect(body.weeks.map((w) => w.week)).toEqual(["2026-09-11"]);
-    expect(body.weeks[0]).toMatchObject({ week: "2026-09-11", sell: 100, buy: 200 });
-    expect(body.ambiguousWeeks).toEqual(["2026-09-04"]);
+    expect(body.dates.map((d) => d.date)).toEqual(["2026-09-28"]);
+    expect(body.dates[0]).toMatchObject({ publicationDate: "2026-09-29" });
+    expect(body.dates[0]!.shares.sellOutstanding).toBe(100);
+    expect(body.ambiguousDates).toEqual(["2026-09-25"]);
   });
 
-  it("同じ崩壊週でも正常な銘柄は全週返す (保護)", async () => {
+  it("code=7203: 両日とも正常に値を返す (除外の影響なし)", async () => {
     const res = await app.request("/api/margin?code=7203", {}, { BUCKET } as never);
     const body = (await res.json()) as {
-      weeks: Array<{ week: string; sell: number }>;
-      ambiguousWeeks: string[];
+      dates: Array<{ date: string; shares: { sellOutstanding: number } }>;
     };
-    expect(body.weeks.map((w) => w.week)).toEqual(["2026-09-04", "2026-09-11"]);
-    expect(body.weeks[0]).toMatchObject({ week: "2026-09-04", sell: 310 });
-    expect(body.ambiguousWeeks).toEqual([]);
+    expect(body.dates.map((d) => d.date)).toEqual(["2026-09-25", "2026-09-28"]);
+    expect(body.dates[0]!.shares.sellOutstanding).toBe(310);
   });
 
-  it("存在しない銘柄は空の週列 (従来どおり) + 空の除外週", async () => {
+  it("5文字原文コードでも直接引ける", async () => {
+    const res = await app.request("/api/margin?code=25935", {}, { BUCKET } as never);
+    const body = (await res.json()) as {
+      dates: Array<{ date: string; sourceCode: string }>;
+      ambiguousDates: unknown[];
+    };
+    expect(body.dates.map((d) => d.date)).toEqual(["2026-09-25"]);
+    expect(body.dates[0]!.sourceCode).toBe("25935");
+    expect(body.ambiguousDates).toEqual([]);
+  });
+
+  it("存在しない銘柄は空 + 空の除外日", async () => {
     const res = await app.request("/api/margin?code=9999", {}, { BUCKET } as never);
-    const body = (await res.json()) as { weeks: unknown[]; ambiguousWeeks: unknown[] };
-    expect(body.weeks).toEqual([]);
-    expect(body.ambiguousWeeks).toEqual([]);
+    const body = (await res.json()) as { dates: unknown[]; ambiguousDates: unknown[] };
+    expect(body.dates).toEqual([]);
+    expect(body.ambiguousDates).toEqual([]);
   });
 
-  it("weeks.json が無ければ空 (従来どおり) + 空の除外週", async () => {
+  it("dates.json が無ければ空 (従来どおり) + 空の除外日", async () => {
     const res = await app.request("/api/margin?code=2593", {}, { BUCKET: bucket({}) } as never);
-    const body = (await res.json()) as { weeks: unknown[]; ambiguousWeeks: unknown[] };
-    expect(body.weeks).toEqual([]);
-    expect(body.ambiguousWeeks).toEqual([]);
+    const body = (await res.json()) as { dates: unknown[]; ambiguousDates: unknown[] };
+    expect(body.dates).toEqual([]);
+    expect(body.ambiguousDates).toEqual([]);
   });
 
-  it("n の範囲外・不正コードは 400 (従来どおり)", async () => {
-    expect((await app.request("/api/margin?code=2593&n=999", {}, { BUCKET } as never)).status).toBe(400);
-    expect((await app.request("/api/margin?code=259", {}, { BUCKET } as never)).status).toBe(400);
+  it("旧週次オブジェクトは読まない", async () => {
+    const legacy = bucket({
+      "margin/dates.json": ["2026-09-28"],
+      "margin/daily/2026-09-28.json": DAY_NORMAL,
+      "margin/weeks.json": ["2026-09-18"],
+      "margin/2026-09-18.json": { rows: [row("25930", "2593", 1, 2)] },
+    });
+    const res = await app.request("/api/margin?code=2593", {}, { BUCKET: legacy } as never);
+    const body = (await res.json()) as { dates: Array<{ date: string }> };
+    expect(body.dates.map((d) => d.date)).toEqual(["2026-09-28"]);
   });
 });

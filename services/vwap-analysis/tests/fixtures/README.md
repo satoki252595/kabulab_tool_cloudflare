@@ -11,6 +11,11 @@
   一覧から `syumatsu2026091800.pdf` を辿って取得。2026-09-18 申込み現在・
   873,311 bytes・SHA256 `21c99f4e…c52131d` で取得確認済み。
   #117 で Notion 実体アップロードに失敗した週そのもの)
+- `jpx-margin-daily-20260928.pdf` — 「銘柄別信用取引残高」日次 PDF
+  (https://www.jpx.co.jp/markets/statistics-equities/margin/01.html の
+  一覧から `20260928_mtall.pdf` を辿って取得。2026-09-28 申込み現在・
+  1,795,979 bytes・SHA256 `7a0c2e21…12ce314` で取得確認済み。
+  週次 PDF の公表廃止に伴う日次様式の初回確認分)
 
 ## 取得方法 (未取得の環境向け)
 

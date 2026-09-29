@@ -1,6 +1,9 @@
 // JPX「銘柄別信用取引週末残高」週次PDFを取得・解析（全銘柄・無料）。
+import { createHash } from "node:crypto";
 import { extractText, getDocumentProxy } from "unpdf";
 import { marginCodeToKey } from "../../../src/shared/jpx/stock-code.js";
+import type { MarginDailySnapshot } from "./margin-daily.js";
+import { parseDailyMarginText } from "./margin-daily.js";
 import { assertDistinctMarginCodes } from "./margin-select.js";
 
 const UA =
@@ -177,6 +180,128 @@ export async function fetchMargin(requestedWeek?: string): Promise<MarginData> {
     );
   }
   return { ...parsed, pdfBytes: bytes, pdfUrl: url };
+}
+
+/**
+ * 日次 PDF (`YYYYMMDD_mtall.pdf`) 用の取得・解析。週次版とは別契約で、
+ * 通常の取込・API・UI はこちらだけを使う (週次 PDF の公表は廃止)。
+ */
+export interface MarginDailyData {
+  snapshot: MarginDailySnapshot;
+  /** 取得した PDF の実体 (ルール6: Notion 一次データへの実体アップロード用) */
+  pdfBytes: Uint8Array;
+  /** 取得元 PDF の URL (来歴用) */
+  pdfUrl: string;
+}
+
+// 一覧ページから YYYYMMDD_mtall.pdf のリンクを抜き出す純関数。
+export function extractDailyMarginPdfLinks(html: string): Array<{ url: string; stamp: string }> {
+  const m = [...html.matchAll(/\/markets\/statistics-equities\/margin\/[^"']*?(\d{8})_mtall\.pdf/g)];
+  return m.map((x) => ({ url: x[0], stamp: x[1] }));
+}
+
+/** 一覧 HTML から最新の日次 PDF の URL を得る純関数。無ければ throw する。 */
+export function latestDailyMarginPdfUrlFromHtml(html: string): string {
+  const links = extractDailyMarginPdfLinks(html);
+  if (!links.length) throw new Error("margin daily pdf link not found");
+  links.sort((a, b) => a.stamp.localeCompare(b.stamp));
+  return BASE + links[links.length - 1]!.url;
+}
+
+/**
+ * 一覧 HTML から指定基準日 (YYYYMMDD) の日次 PDF の URL を得る純関数。
+ * 該当が無ければ throw し、最新で代用しない (ルール2)。
+ */
+export function dailyMarginPdfUrlForDateFromHtml(html: string, yyyymmdd: string): string {
+  if (!/^\d{8}$/.test(yyyymmdd)) {
+    throw new Error(`margin date の形式が不正です (YYYYMMDD): ${yyyymmdd}`);
+  }
+  const links = extractDailyMarginPdfLinks(html).filter((l) => l.stamp === yyyymmdd);
+  if (!links.length) {
+    throw new Error(`margin daily pdf link not found for date=${yyyymmdd} (一覧に該当基準日がありません)`);
+  }
+  links.sort((a, b) => a.stamp.localeCompare(b.stamp));
+  return BASE + links[links.length - 1]!.url;
+}
+
+/** 一覧ページから最新の日次 PDF の URL を得る。 */
+export async function latestDailyMarginPdfUrl(): Promise<string> {
+  const html = await (await fetch(PAGE, { headers: { "User-Agent": UA } })).text();
+  return latestDailyMarginPdfUrlFromHtml(html);
+}
+
+/** 一覧ページから指定基準日 (YYYYMMDD) の日次 PDF の URL を得る。 */
+export async function dailyMarginPdfUrlForDate(yyyymmdd: string): Promise<string> {
+  const html = await (await fetch(PAGE, { headers: { "User-Agent": UA } })).text();
+  return dailyMarginPdfUrlForDateFromHtml(html, yyyymmdd);
+}
+
+/**
+ * PDF バイト列から日次スナップショットを抽出する。引数のバイト列は変更しない
+ * (parseMarginPdf と同じくコピーを unpdf へ渡す — ArrayBuffer detach 対策)。
+ * ページ結合はしない (行単位の正規表現のため。ページ跨ぎの行割れは
+ * parseDailyMarginText が行スキャン+突合で吸収する)。
+ */
+export async function parseDailyMarginPdf(
+  bytes: Uint8Array,
+  provenance: { sourceUrl: string; rawSha256: string; rawPageId?: string | null }
+): Promise<MarginDailySnapshot> {
+  const pdf = await getDocumentProxy(bytes.slice());
+  const { text } = await extractText(pdf);
+  return parseDailyMarginText(text.join("\n"), provenance);
+}
+
+/**
+ * 指定基準日 (YYYYMMDD) を取得する。省略時は最新。
+ * 指定日の場合は PDF 本文の基準日が一致しなければ throw する
+ * (JPX 側の取り違えを別日の値として保存しない)。
+ */
+export async function fetchDailyMargin(requestedDate?: string): Promise<MarginDailyData> {
+  const url =
+    requestedDate === undefined ? await latestDailyMarginPdfUrl() : await dailyMarginPdfUrlForDate(requestedDate);
+  const buf = await (await fetch(url, { headers: { "User-Agent": UA } })).arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  const rawSha256 = createHash("sha256").update(bytes).digest("hex");
+  const snapshot = await parseDailyMarginPdf(bytes, { sourceUrl: url, rawSha256, rawPageId: null });
+  if (requestedDate !== undefined && snapshot.basisDate.replaceAll("-", "") !== requestedDate) {
+    throw new Error(
+      `margin date 不一致: 要求=${requestedDate} に対して PDF 本文の基準日=${snapshot.basisDate} (URL=${url})`
+    );
+  }
+  return { snapshot, pdfBytes: bytes, pdfUrl: url };
+}
+
+/**
+ * ルール6: Notion 一次データ記録の入力を組み立てる純関数。
+ * キーは基準日で冪等 (`jpx-margin-daily-YYYY-MM-DD`)。ファイルは PDF 実体。
+ */
+export function dailyMarginArchiveInput(data: MarginDailyData): {
+  service: string;
+  key: string;
+  source: string;
+  metadata: Record<string, unknown>;
+  files: Array<{ bytes: Uint8Array; filename: string; contentType: string }>;
+} {
+  return {
+    service: "vwap-analysis",
+    key: `jpx-margin-daily-${data.snapshot.basisDate}`,
+    source: data.pdfUrl,
+    metadata: {
+      basisDate: data.snapshot.basisDate,
+      publicationDate: data.snapshot.publicationDate,
+      format: data.snapshot.format,
+      rowCount: data.snapshot.rows.length,
+      bytes: data.pdfBytes.byteLength,
+      sha256: data.snapshot.rawSha256,
+    },
+    files: [
+      {
+        bytes: data.pdfBytes,
+        filename: `margin-daily-${data.snapshot.basisDate}.pdf`,
+        contentType: "application/pdf",
+      },
+    ],
+  };
 }
 
 /**

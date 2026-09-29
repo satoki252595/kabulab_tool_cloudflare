@@ -3,7 +3,7 @@
 // 007 VWAP 分析 — 単一ビュー。
 //  ・足(ローソク) = 日足R2の正規OHLCV（寄/引含む・分割調整 adj）。表示範囲は「5分足が在る期間」を上限に制限し、期間指定で絞る。
 //  ・VWAP / 価格別出来高 = 5分足(R2・直近〜最大365日)から算出。分割は日足 adj/c 係数で価格・出来高を連続化。
-//  ・信用残高(週次) = 第3ペインに重畳。
+//  ・信用残高(日次・基準日ベース) = 第3ペインに重畳。
 // ヘッダー(meta)は銘柄情報＋信用残高情報のみ。用語ヘルプ(ルール7)は footer の用語凡例と meta の信用語に付与。
 
 const $ = (id) => document.getElementById(id);
@@ -125,7 +125,7 @@ function initChart() {
   vwapSeries = chart.addLineSeries({
     color: "#2563eb", lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: "VWAP",
     priceFormat: { type: "price", precision: 0, minMove: 1 } });
-  // 信用残高(週次)を中段の別スケール"mgn"へ。買残=紫 / 売残=赤。
+  // 信用残高(日次)を中段の別スケール"mgn"へ。買残=紫 / 売残=赤。
   mBuy = chart.addLineSeries({ color: "#7c3aed", lineWidth: 2, priceScaleId: "mgn", priceLineVisible: false, lastValueVisible: false, title: "買残", priceFormat: { type: "volume" } });
   mSell = chart.addLineSeries({ color: "#f23645", lineWidth: 2, priceScaleId: "mgn", priceLineVisible: false, lastValueVisible: false, title: "売残", priceFormat: { type: "volume" } });
   volSeries = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol", lastValueVisible: false });
@@ -268,7 +268,7 @@ async function load(code) {
   // 5分足・日足・信用残高を並列取得。日足が無ければ表示不可、5分足/信用は欠落しても明示して続行(ルール2)。
   const dailyReq = fetch(`${apiBase()}/api/daily?code=${code}`).then((r) => r.json());
   const fiveReq = fetch(`${apiBase()}/api/intra?code=${code}`).then((r) => r.json()).then(parseIntra).then((v) => ({ v })).catch((e) => ({ err: String(e) }));
-  const marginReq = fetch(`${apiBase()}/api/margin?code=${code}&n=104`).then((r) => r.json()).then((j) => ({ v: j.weeks || [], amb: j.ambiguousWeeks || [] })).catch((e) => ({ err: String(e) }));
+  const marginReq = fetch(`${apiBase()}/api/margin?code=${code}&n=104`).then((r) => r.json()).then((j) => ({ v: j.dates || [], amb: j.ambiguousDates || [] })).catch((e) => ({ err: String(e) }));
 
   let dj, fr, mr;
   try { [dj, fr, mr] = await Promise.all([dailyReq, fiveReq, marginReq]); }
@@ -349,15 +349,16 @@ function render() {
     vwapSeries.setData([]); currentProfile = null;
   }
 
-  // ---- 信用残高(週次)。足の範囲は covStart のまま広げず、過渡期(最新信用週が covStart より前)でも
-  //      最新週だけ左外側に置いて必ず見せる(時間軸は LightweightCharts が自動で含む)。----
+  // ---- 信用残高(日次・基準日ベースで価格に join)。足の範囲は covStart のまま広げず、
+  //      過渡期(最新信用日が covStart より前)でも最新日だけ左外側に置いて必ず見せる
+  //      (時間軸は LightweightCharts が自動で含む)。----
   const allM = data.margin || [];
-  let mw = allM.filter((x) => x.week >= from);
+  let mw = allM.filter((x) => x.date >= from);
   if (!mw.length && range === "all" && allM.length) mw = [allM[allM.length - 1]];
   const hasMargin = mw.length > 0;
   if (hasMargin) {
-    mBuy.setData(mw.map((x) => ({ time: x.week, value: x.buy })));
-    mSell.setData(mw.map((x) => ({ time: x.week, value: x.sell })));
+    mBuy.setData(mw.map((x) => ({ time: x.date, value: x.shares.buyOutstanding })));
+    mSell.setData(mw.map((x) => ({ time: x.date, value: x.shares.sellOutstanding })));
   } else { mBuy.setData([]); mSell.setData([]); }
 
   applyScaleLayout(hasMargin && show.margin);
@@ -391,19 +392,22 @@ function renderMeta(shown, mw) {
     <div class="stat"><span class="k">終値（${last.date}）</span><span class="v ${cls(chg)}">${fmtInt(close)} <span style="font-size:13px">${sign(chg)}${fmtInt(chg)}</span></span></div>`;
   if (mw.length) {
     const lm = mw[mw.length - 1];
-    const ratio = lm.sell ? (lm.buy / lm.sell).toFixed(2) : "—";
+    const buy = lm.shares.buyOutstanding, sell = lm.shares.sellOutstanding;
+    const ratio = sell ? (buy / sell).toFixed(2) : "—";
+    // 前日比 null (原文 `-` セル) は 0 にせず "—" で明示する (ルール2)。
+    const chg = (v) => (v === null || v === undefined ? "—" : `${sign(v)}${fmtInt(v)}`);
     html += `
-    <div class="stat"><span class="k">${tip("買残")}（${lm.week}）</span><span class="v sub" style="color:#7c3aed">${fmtInt(lm.buy)} <span style="font-size:13px">${sign(lm.buy_chg)}${fmtInt(lm.buy_chg)}</span></span></div>
-    <div class="stat"><span class="k">${tip("売残")}</span><span class="v down sub">${fmtInt(lm.sell)} <span style="font-size:13px">${sign(lm.sell_chg)}${fmtInt(lm.sell_chg)}</span></span></div>
+    <div class="stat"><span class="k">${tip("買残")}（基準${lm.date}・公表${lm.publicationDate}）</span><span class="v sub" style="color:#7c3aed">${fmtInt(buy)} <span style="font-size:13px">${chg(lm.shares.buyChg)}</span></span></div>
+    <div class="stat"><span class="k">${tip("売残")}</span><span class="v down sub">${fmtInt(sell)} <span style="font-size:13px">${chg(lm.shares.sellChg)}</span></span></div>
     <div class="stat"><span class="k">${tip("信用倍率", "r")}</span><span class="v sub">${ratio}</span></div>`;
   } else {
     const note = data.marginErr ? "取得失敗" : "未取得";
     html += `<div class="stat"><span class="k">${tip("信用残高")}</span><span class="v sub">${note}</span></div>`;
   }
-  // 旧取込の種類株崩壊で普通株・種類株を区別できない週は API が除外する (値は出さない)。
-  // 除外がある銘柄では週数を明示する (正常な週の表示は変えない)。
+  // 同一ティッカー複数行 (普通株+種類株等) で行を一意に選べない日は API が除外する (値は出さない)。
+  // 除外がある銘柄では日数を明示する (正常な日の表示は変えない)。
   if (data.marginAmbiguous && data.marginAmbiguous.length) {
-    html += `<div class="stat"><span class="k">${tip("信用残高")}（一部週を除外）</span><span class="v sub">${data.marginAmbiguous.length}週を非表示（銘柄統合の不整合）</span></div>`;
+    html += `<div class="stat"><span class="k">${tip("信用残高")}（一部日を除外）</span><span class="v sub">${data.marginAmbiguous.length}日を非表示（同一ティッカー複数行）</span></div>`;
   }
   $("meta").innerHTML = html;
 }
@@ -416,7 +420,7 @@ function renderFooter(excluded5m) {
   const exNote = excluded5m ? ` ／ 分割係数欠落 ${excluded5m}本を除外` : "";
   const legend = [tip("VWAP", "up"), tip("POC", "up"), tip("バリューエリア", "up"), tip("価格別出来高", "up"), tip("信用残高", "up r")].join(" ・ ");
   $("updated").innerHTML =
-    `<span class="ft-note">全 ${master.length.toLocaleString()} 銘柄（東証全上場） ／ 日足（VWAP・価格別出来高は5分足から算出・分割調整済）${exNote} ／ ${cov} ／ 信用残高 週次</span>` +
+    `<span class="ft-note">全 ${master.length.toLocaleString()} 銘柄（東証全上場） ／ 日足（VWAP・価格別出来高は5分足から算出・分割調整済）${exNote} ／ ${cov} ／ 信用残高 日次</span>` +
     `<span class="ft-legend">用語: ${legend}</span>`;
 }
 
