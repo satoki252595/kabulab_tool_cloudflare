@@ -91,8 +91,11 @@ def test_bad_zip_and_optional_modes(tmp_path, artifact, caplog):
     ctx.add_success()  # Notion/ローカル収集済み
     job._export_kabumcp_cache(ctx, bad, DOC_ID)
     job._export_kabumcp_cache(ctx, replace(artifact, datatype="xbrl"), DOC_ID)
-    assert ctx.failed == 2
+    # corrupt 実失敗のみ計上。type1 は連携対象外の合法 skip (情報記録のみ)。
+    assert ctx.failed == 1
     assert _status(ctx, False) == STATUS_PARTIAL
+    caplog.set_level("INFO")
+    job._export_kabumcp_cache(ctx, replace(artifact, datatype="xbrl"), DOC_ID)
     assert "type1 fallback" in caplog.text
     assert not cache.exists()
 
@@ -172,5 +175,7 @@ def test_amended_interim_reports_use_financial_pipeline(
     assert persisted[0] == "raw" and persisted[-1] is financial
     # 170 (訂正半期報告書) は「半期報告」。以前は④に選択肢が無く「四半期報告」へ寄せていた。
     assert persisted[1].doc_type == doc_type_label
-    assert ctx.failed == int(fallback)  # type1 は保存済みでもキャッシュ未対応を隠さない
+    # type1 fallback は連携対象外の合法 skip。保存済みでも失敗計上しない
+    # (情報ログに残す。exit 非0 の根拠にしない)。
+    assert ctx.failed == 0
     assert (tmp_path / "cache" / f"{DOC_ID}.zip").exists() is not fallback

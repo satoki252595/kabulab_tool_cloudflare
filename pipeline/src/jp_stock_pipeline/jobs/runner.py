@@ -291,7 +291,9 @@ def github_run_url(env: dict[str, str]) -> str | None:
 
 
 def _status(ctx: JobContext, crashed: bool) -> str:
-    if crashed:
+    # 実 CF 書き込み失敗は失敗に落とす (cloud_failed は _cloud が実 False/
+    # 例外のときだけ数える。未設定/None・dry-run・optout は数えない)。
+    if crashed or ctx.cloud_failed:
         return STATUS_FAILURE
     if ctx.failed == 0:
         return STATUS_SUCCESS
@@ -310,7 +312,8 @@ def run_job(
 ) -> int:
     """ジョブ実行のエントリポイント。fn(ctx) を実行し ⑦ へ記録する。
 
-    返り値は終了コード (成功/一部失敗=0, 失敗=1)。
+    返り値は終了コード (成功=0, 一部失敗/失敗=1)。一部失敗を 0 で返すと
+    「1 件だけ凍結」が誰にも見えないため、成功以外は非0にする。
     """
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -362,7 +365,7 @@ def run_job(
         from ..cloud_store.d1 import D1Store  # noqa: PLC0415 - 任意依存
         from ..cloud_store.ops import safe_record_job_run  # noqa: PLC0415
 
-        safe_record_job_run(
+        recorded = safe_record_job_run(
             D1Store(ctx.cloud.settings, writer=job_name),
             job_name=job_name,
             status=status,
@@ -373,6 +376,13 @@ def run_job(
             duration_secs=round(duration, 1),
             finished_at=int(time.time()),
         )
+        if recorded is False:
+            # 実行履歴の記録失敗は実 CF 書き込み失敗。握らず計上し、
+            # 最終 status を判定し直す (失敗に落ちる)。ローカル cleanup は続ける。
+            # この分岐は cloud あり + D1 有効のときだけ来るので、未設定/None・
+            # dry-run・optout の成功扱いは変わらない。
+            ctx.cloud_failed += 1
+            status = _status(ctx, crashed)
 
     # ローカル ⑦ への記録 + 接続クローズ（失敗してもジョブ結果に影響させない）
     if ctx.local is not None:
@@ -399,7 +409,7 @@ def run_job(
         "%s: %s (processed=%d failed=%d %.1fs)",
         job_name, status, ctx.processed, ctx.failed, duration,
     )
-    return 1 if status == STATUS_FAILURE else 0
+    return 0 if status == STATUS_SUCCESS else 1
 
 
 def parse_codes_arg(args: argparse.Namespace) -> list[str] | None:

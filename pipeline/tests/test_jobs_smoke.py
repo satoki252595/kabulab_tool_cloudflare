@@ -245,7 +245,7 @@ class TestMasterSync:
         assert mass_delist == []
         # 中止を警告ログに出す（黙って中止せず可視化 §3-2。履歴は D1 jss_job_runs）
         assert "上場廃止検知を中止" in caplog.text
-        assert code == 0  # processed>0 & failed>0 = 一部失敗は exit 0
+        assert code == 1  # processed>0 & failed>0 = 一部失敗も exit 1 (共有 runner 契約)
 
 
 class TestTdnetHourly:
@@ -280,7 +280,7 @@ class TestTdnetHourly:
         monkeypatch.setattr(tdnet_hourly, "fetch", no_network)
 
         code = tdnet_hourly.main(["--dry-run"], env=_env(tmp_path))
-        assert code == 0  # ④ は成立する (XBRL→③ の失敗があっても一部失敗まで)
+        assert code == 1  # ④ は成立するが XBRL→③ の失敗は exit 1 (一部失敗も非0)
 
         client = captured_clients[0]
         disc_ops = _ops_with_prop(client, S.DISC_PROP_DOC_ID)
@@ -744,3 +744,80 @@ class TestWorkflowManualDate:
         assert parser.parse_args(["--date", "2026-01-05"]).date == date(2026, 1, 5)
         with pytest.raises(SystemExit):
             parser.parse_args(["--date", "2026/01/05"])
+
+
+class TestRunJobExit:
+    """共有 runner 終了コード: 成功だけ 0、それ以外は 1 (9 caller 共通)。
+
+    source 一部失敗・実 CF 書き込み失敗 (False/例外)・実行履歴の記録失敗は
+    非0。未設定/None・dry-run・合法 skip は 0 のまま。実 HTTP/Source 取得なし。
+    """
+
+    @pytest.mark.parametrize(
+        "name,argv,setup,expected",
+        [
+            ("source-partial", [], "partial", 1),
+            ("cf-false", [], "cf_false", 1),
+            ("cf-exception", [], "cf_exc", 1),
+            ("jobrun-record-false", [], "record_false", 1),
+            ("none-optout", [], "optout", 0),
+            ("dry-run", ["--dry-run"], "ok", 0),
+            ("legal-skip", [], "skip", 0),
+        ],
+    )
+    def test_exit(self, monkeypatch, tmp_path, name, argv, setup, expected):
+        from types import SimpleNamespace
+
+        from jp_stock_pipeline.cloud_store import d1 as d1_module
+        from jp_stock_pipeline.cloud_store import ops as ops_module
+
+        recorded: dict = {}
+
+        def fn(ctx):
+            if setup == "partial":
+                ctx.add_success(2)
+                ctx.add_failure("X", "boom")
+            elif setup in ("cf_false", "cf_exc"):
+                ctx.cloud = SimpleNamespace(
+                    settings=SimpleNamespace(d1_enabled=lambda: False)
+                )
+                if setup == "cf_false":
+                    assert ctx._cloud(lambda c: False, "t") is False
+                else:
+
+                    def boom(c):
+                        raise RuntimeError("cf down")
+
+                    assert ctx._cloud(boom, "t") is False
+                ctx.add_success()
+            elif setup == "record_false":
+                ctx.cloud = SimpleNamespace(
+                    settings=SimpleNamespace(d1_enabled=lambda: True)
+                )
+                ctx.local = SimpleNamespace(
+                    write_job_log=lambda *a, **k: recorded.setdefault("logged", True),
+                    close=lambda: recorded.setdefault("closed", True),
+                )
+                ctx.add_success()
+            elif setup == "optout":
+                assert ctx.cloud is None
+                assert ctx._cloud(lambda c: True, "t") is None
+                ctx.add_success()
+            elif setup == "ok":
+                ctx.add_success()
+            elif setup == "skip":
+                pass  # 合法 skip: 何もせず成功のまま
+
+        if setup == "record_false":
+            monkeypatch.setattr(d1_module, "D1Store", lambda *a, **k: object())
+            monkeypatch.setattr(
+                ops_module, "safe_record_job_run", lambda *a, **k: False
+            )
+
+        env = _env(tmp_path)
+        env["NOTION_TOKEN"] = "dummy-token"
+        code = runner.run_job("test-job", fn, argv, env=env)
+        assert code == expected, name
+        if setup == "record_false":
+            # 記録失敗でもローカル cleanup は続ける
+            assert recorded == {"logged": True, "closed": True}
