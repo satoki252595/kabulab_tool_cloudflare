@@ -12,10 +12,14 @@
  * 定性埋め戻し用。CSV のみで XBRL は落とさない (軽量)。
  *
  * D1 は本来バインディング経由だが、本処理は Node 専用 (大量の EDINET 取得 +
- * ローカルパース) のため createD1HttpDb (sqlite-proxy / D1 REST) で書く。
- * sqlite-proxy は db.batch 非対応なので per-statement の冪等 update/insert で書く。
+ * ローカルパース) のため createD1HttpDb (sqlite-proxy / D1 REST) で読む。
+ * 書込は 1 文書ぶん (text status UPDATE + 索引 DELETE + INSERT 群) を
+ * createD1HttpBatchSender の単一 batch で原子適用する。逐次だと UPDATE 後に
+ * 落ちた場合「status だけ埋まって索引 0 件」の部分行が残り、次回選定から
+ * 外れて永久欠損になる。per-statement フォールバックはしない。
  *
- * 冪等・再開可能: text_parse_status が埋まった有報は (force 無しなら) 対象外。
+ * 冪等・再開可能: text_parse_status 未処理 (NULL) の有報に加え、parse 済み
+ * (ok) なのに Notion 行ポインタが無い通も (force 無しで) 回収対象。
  *
  * 必要env(.env): EDINET_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
  *               D1_DATABASE_ID。
@@ -26,8 +30,16 @@
  *       --force 無しの --doc は未処理 (NULL) の通だけに効く)
  */
 import "dotenv/config";
-import { and, eq, inArray, isNull } from "drizzle-orm";
-import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import { eq, inArray } from "drizzle-orm";
+import {
+  createD1HttpBatchSender,
+  createD1HttpDb,
+  toD1BatchStatements,
+} from "../../../src/shared/db/d1-http-client.js";
+import {
+  buildTextBackfillStatements,
+  textBackfillWhere,
+} from "./lib/text-backfill.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
 import { archiveTallyFailed } from "../src/services/edinet/archive.js";
 import {
@@ -37,6 +49,7 @@ import {
 import { parseEdinetCsvZip } from "../src/services/edinet/csv.js";
 import { extractTextSections } from "../src/services/edinet/text-sections.js";
 import { backupDocTextToNotion } from "../src/services/text-backup.js";
+import type { Database } from "../src/db/client.js";
 import * as yuhoSchema from "../src/db/schema.js";
 
 const arg = (n: string) =>
@@ -58,18 +71,14 @@ if (arg("doc") !== undefined && (docFilter === null || docFilter.length === 0)) 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const db = createD1HttpDb(yuhoSchema);
-const { yuhoDocuments, textSections } = yuhoSchema;
+// D1 書込口の明示指定 (Node では必須)。sender は無状態なので run 全体で
+// 1 個を使い回す。backfill.ts / backfill-overseas.ts と同一の窓口。
+const d1HttpBatch = createD1HttpBatchSender();
+const { yuhoDocuments } = yuhoSchema;
 // stock_id → 証券コード (Notion 銘柄親ページのキー。無ければ当該通を飛ばす)
 const idToCode = new Map(
   [...(await loadIngestCodeToId(db))].map(([code, id]) => [id, code] as const)
 );
-
-/** D1 の bind 変数上限 (100) 対策: 9 列/行 → 8 行/文で分割 */
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
 
 if (docFilter !== null) {
   const existRows = await db
@@ -94,18 +103,7 @@ const all = await db
     textParseStatus: yuhoDocuments.textParseStatus,
   })
   .from(yuhoDocuments)
-  .where(
-    docFilter !== null
-      ? force
-        ? inArray(yuhoDocuments.docId, docFilter)
-        : and(
-            isNull(yuhoDocuments.textParseStatus),
-            inArray(yuhoDocuments.docId, docFilter)
-          )
-      : force
-        ? undefined
-        : isNull(yuhoDocuments.textParseStatus)
-  );
+  .where(textBackfillWhere(docFilter, force));
 
 const targets = all.slice(offset, offset + (limit === Infinity ? all.length : limit));
 console.info(
@@ -135,29 +133,18 @@ for (const r of targets) {
     }
     tally[status] = (tally[status] ?? 0) + 1;
 
-    // text 列を更新 (受注・海外の列・ファクトには触れない)
-    await db
-      .update(yuhoDocuments)
-      .set({ textParseStatus: status })
-      .where(eq(yuhoDocuments.id, r.id));
-
-    // 定性セクション索引を置換 (delete → insert)。sqlite-proxy は batch 非対応
-    // なので逐次 + 8 行ずつに分割 (D1 bind 上限 100: 8×8=64)。
+    // text 列の更新 (受注・海外の列・ファクトには触れない) + 定性セクション
+    // 索引の置換 (delete → insert) を 1 文書ぶんの単一 batch で原子適用する。
     // 本文は Notion のみ (P4)。以下で backupDocTextToNotion が保管する。
-    await db.delete(textSections).where(eq(textSections.documentId, r.id));
-    const sectionRows = sections.map((s) => ({
-      documentId: r.id,
-      stockId: r.stockId,
-      fiscalYearEnd: r.periodEnd,
-      sectionKey: s.sectionKey,
-      elementId: s.elementId,
-      itemName: s.itemName,
-      contextId: s.contextId,
-      charCount: s.charCount,
-    }));
-    for (const part of chunk(sectionRows, 8)) {
-      await db.insert(textSections).values(part);
-    }
+    // 失敗は外の catch で tally.error に計上し非 0 終了する (握り潰さない)。
+    // statement fallback なし。
+    const statements = buildTextBackfillStatements(
+      db as unknown as Database,
+      r,
+      status,
+      sections
+    );
+    await d1HttpBatch(toD1BatchStatements(statements));
 
     // 定性テキスト本文の Notion 保管 (D1 には索引 + 行 ID のみ)。
     // 失敗は当該通の警告に留める (ポインタ NULL の通は P3 が回収)。

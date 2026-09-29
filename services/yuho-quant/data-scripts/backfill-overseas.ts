@@ -9,8 +9,11 @@
  * 本スクリプトは「統合前に受注のみ取り込んだ既存有報」の海外埋め戻し用。
  *
  * D1 は本来バインディング経由だが、本処理は Node 専用 (大量の EDINET 取得 +
- * ローカルパース) のため createD1HttpDb (sqlite-proxy / D1 REST) で書く。
- * sqlite-proxy は db.batch 非対応なので per-statement の冪等 update/insert で書く。
+ * ローカルパース) のため createD1HttpDb (sqlite-proxy / D1 REST) で読む。
+ * 書込は 1 文書ぶん (status UPDATE + facts DELETE + INSERT 群) を
+ * createD1HttpBatchSender の単一 batch で原子適用する。逐次だと UPDATE 後に
+ * 落ちた場合「status だけ埋まって facts 0 件」の部分行が残り、次回 force 無し
+ * では対象外 (= 永久欠損) になる。per-statement フォールバックはしない。
  *
  * 冪等・再開可能: overseas_parse_status が埋まった有報は (force 無しなら) 対象外。
  *
@@ -21,7 +24,11 @@
  */
 import "dotenv/config";
 import { eq, isNull } from "drizzle-orm";
-import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import {
+  createD1HttpBatchSender,
+  createD1HttpDb,
+  toD1BatchStatements,
+} from "../../../src/shared/db/d1-http-client.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
@@ -50,6 +57,9 @@ function chunk<T>(a: T[], s: number): T[][] {
 }
 
 const db = createD1HttpDb(yuhoSchema);
+// D1 書込口の明示指定 (Node では必須)。sender は無状態なので run 全体で
+// 1 個を使い回す。backfill.ts の ingestDocument 経由と同一の窓口。
+const d1HttpBatch = createD1HttpBatchSender();
 const { yuhoDocuments, overseasSalesFacts } = yuhoSchema;
 
 const all = await db
@@ -129,16 +139,11 @@ for (const r of targets) {
     });
   }
 
-  // overseas 列を更新 (受注列・受注ファクトには触れない)
-  await db
-    .update(yuhoDocuments)
-    .set({ overseasParseStatus: status, overseasHonbunFile: honbunFile })
-    .where(eq(yuhoDocuments.id, r.id));
-
-  // 海外ファクトを置換 (delete → insert)。sqlite-proxy は batch 非対応なので逐次。
-  await db
-    .delete(overseasSalesFacts)
-    .where(eq(overseasSalesFacts.documentId, r.id));
+  // overseas 列の更新 (受注列・受注ファクトには触れない) + 海外ファクトの
+  // 置換 (delete → insert) を 1 文書ぶんの単一 batch で原子適用する。
+  // facts 0 件 (parse_error 等) でも UPDATE + DELETE の 2 文は送る
+  // (全 tuple に status を記録する契約は維持)。失敗は throw が外へ伝播し
+  // 非 0 終了する (握り潰さない)。statement fallback なし。
   const rows = facts.map((f) => ({
     documentId: r.id,
     stockId: r.stockId,
@@ -152,9 +157,17 @@ for (const r of targets) {
     ratioPct: f.ratioPct,
     pattern: status.startsWith("ok_") ? status.replace("ok_", "") : "none",
   }));
-  for (const part of chunk(rows, 8)) {
-    await db.insert(overseasSalesFacts).values(part);
-  }
+  const statements = [
+    db
+      .update(yuhoDocuments)
+      .set({ overseasParseStatus: status, overseasHonbunFile: honbunFile })
+      .where(eq(yuhoDocuments.id, r.id)),
+    db.delete(overseasSalesFacts).where(eq(overseasSalesFacts.documentId, r.id)),
+    ...chunk(rows, 8).map((part) =>
+      db.insert(overseasSalesFacts).values(part)
+    ),
+  ];
+  await d1HttpBatch(toD1BatchStatements(statements));
 
   n++;
   if (n % 50 === 0) {

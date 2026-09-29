@@ -8,9 +8,11 @@
  *
  * 1 通あたり: CSV(5) 取得 → キーワード事前判定 → 必要なら XBRL(1) 取得 →
  * 受注・海外・定性 24 項目を構造化 → D1 へ冪等 upsert →
- * 物理 ZIP を Notion へ冪等記録 (ルール6)。パーサは本番と同一物を共有し、
- * sqlite-proxy (db.batch 非対応) のため書込だけ per-statement で行う
- * (backfill-overseas/text と同じ方式。ingest.ts が正本)。
+ * 物理 ZIP を Notion へ冪等記録 (ルール6)。パーサは本番と同一物を共有する。
+ * 書込は 1 文書ぶん (文書 upsert + 3 表の置換) を createD1HttpBatchSender の
+ * 単一 batch で原子適用する (ingest.ts と同一組成。docId サブクエリ参照)。
+ * 逐次だと upsert 後に落ちた場合「メタだけ埋まって facts 0 件」の部分行が
+ * 残り、次回は既存扱いで永久欠損になる。per-statement フォールバックはしない。
  *
  * 冪等・再開可能: docId 既存は (force 無しなら) スキップ。
  *
@@ -21,7 +23,15 @@
  */
 import "dotenv/config";
 import { eq } from "drizzle-orm";
-import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import {
+  createD1HttpBatchSender,
+  createD1HttpDb,
+  toD1BatchStatements,
+} from "../../../src/shared/db/d1-http-client.js";
+import {
+  buildMissingDocStatements,
+  dedupeOrders,
+} from "./lib/missing-backfill.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
 import {
   archiveTallyFailed,
@@ -40,6 +50,7 @@ import {
   type EdinetDoc,
 } from "../src/services/edinet/types.js";
 import { backupDocTextToNotion } from "../src/services/text-backup.js";
+import type { Database } from "../src/db/client.js";
 import { parseEdinetCsvZip } from "../src/services/edinet/csv.js";
 import { applyCompletionFilter, selectMissingDocs } from "../src/services/edinet/missing.js";
 import {
@@ -81,39 +92,6 @@ function parseSubmitDateTime(s: string): Date {
   return new Date(Date.UTC(+y, +mo - 1, +d, hh ? +hh : 0, mm ? +mm : 0));
 }
 
-function toYen(raw: number | null, factor: number): number | null {
-  if (raw === null) return null;
-  return Math.round(raw * factor);
-}
-
-function orderPatternOf(status: ParseStatus | "parse_error"): string {
-  if (status === "ok_pattern_b") return "pattern_b";
-  if (status === "ok_pattern_c") return "pattern_c";
-  if (status === "ok_total_only") return "total_only";
-  return "pattern_a";
-}
-
-function overseasPatternOf(status: OverseasParseStatus | "parse_error"): string {
-  if (status === "ok_geo_rows") return "geo_rows";
-  if (status === "ok_geo_cols") return "geo_cols";
-  return "none";
-}
-
-function dedupeOrders(facts: OrderFact[], docId: string): OrderFact[] {
-  const out: OrderFact[] = [];
-  const seen = new Set<string>();
-  for (const f of facts) {
-    const k = `${f.fiscalYearEnd} ${f.segmentName}`;
-    if (seen.has(k)) {
-      console.warn(`[missing] dup-seg-skip docID=${docId} fy=${f.fiscalYearEnd} seg=${f.segmentName}`);
-      continue;
-    }
-    seen.add(k);
-    out.push(f);
-  }
-  return out;
-}
-
 function eachDay(from: string, to: string): string[] {
   const out: string[] = [];
   const d = new Date(`${from}T00:00:00Z`);
@@ -127,7 +105,10 @@ function eachDay(from: string, to: string): string[] {
 }
 
 const db = createD1HttpDb(yuhoSchema);
-const { yuhoDocuments, orderFacts, overseasSalesFacts, textSections } = yuhoSchema;
+// D1 書込口の明示指定 (Node では必須)。sender は無状態なので run 全体で
+// 1 個を使い回す。他 backfill と同一の窓口。
+const d1HttpBatch = createD1HttpBatchSender();
+const { yuhoDocuments } = yuhoSchema;
 const codeToId = await loadIngestCodeToId(db);
 console.info(`[missing] 母集団 ${codeToId.size} 社 range=${fromArg}〜${toArg} force=${force} dryRun=${dryRun}`);
 
@@ -303,71 +284,37 @@ for (const date of eachDay(fromArg, toArg)) {
         overseasFacts = [];
       }
 
-      // per-statement 冪等 upsert (sqlite-proxy は batch 非対応)
-      const ex = await db
+      // 文書 upsert + 3 表の置換を単一 batch で原子適用する (ingest.ts と
+      // 同一組成)。失敗は外の catch で tally.error に計上し非 0 終了する
+      // (握り潰さない)。statement fallback なし。
+      const submittedAt = parseSubmitDateTime(doc.submitDateTime);
+      const statements = buildMissingDocStatements(db as unknown as Database, {
+        stockId,
+        docId: doc.docID,
+        edinetCode: doc.edinetCode,
+        docTypeCode: doc.docTypeCode,
+        filerName: doc.filerName,
+        periodStart: doc.periodStart,
+        periodEnd,
+        submittedAt,
+        parseStatus,
+        honbunFile,
+        overseasParseStatus,
+        overseasHonbunFile,
+        textParseStatus,
+        deduped,
+        overseasFacts,
+        sections,
+      });
+      await d1HttpBatch(toD1BatchStatements(statements));
+      // 行 id は batch から取り出さない (ingest.ts と同一方針)。本文保管と
+      // ポインタ書戻しに要るため docId 冪等 SELECT で解決する (読取のみ)。
+      const idRow = await db
         .select({ id: yuhoDocuments.id })
         .from(yuhoDocuments)
         .where(eq(yuhoDocuments.docId, doc.docID))
         .limit(1);
-      let docRowId: number;
-      const submittedAt = parseSubmitDateTime(doc.submitDateTime);
-      if (ex.length > 0) {
-        docRowId = ex[0]!.id;
-        await db
-          .update(yuhoDocuments)
-          .set({
-            parseStatus, honbunFile, overseasParseStatus, overseasHonbunFile,
-            textParseStatus, submittedAt, periodStart: doc.periodStart, periodEnd,
-          })
-          .where(eq(yuhoDocuments.id, docRowId));
-      } else {
-        await db.insert(yuhoDocuments).values({
-          stockId, edinetCode: doc.edinetCode, docId: doc.docID,
-          docTypeCode: doc.docTypeCode, filerName: doc.filerName,
-          periodStart: doc.periodStart, periodEnd, submittedAt,
-          parseStatus, honbunFile, overseasParseStatus, overseasHonbunFile,
-          textParseStatus,
-        });
-        // sqlite-proxy は returning の挙動が読み筋と違うことがあるため
-        // 確実に引き直す (doc_id 一意)。
-        const re = await db
-          .select({ id: yuhoDocuments.id })
-          .from(yuhoDocuments)
-          .where(eq(yuhoDocuments.docId, doc.docID))
-          .limit(1);
-        docRowId = re[0]!.id;
-      }
-      await db.delete(orderFacts).where(eq(orderFacts.documentId, docRowId));
-      for (const f of deduped) {
-        await db.insert(orderFacts).values({
-          documentId: docRowId, stockId, fiscalYearEnd: f.fiscalYearEnd,
-          segmentName: f.segmentName, segmentKind: f.segmentKind,
-          isConsolidated: f.isConsolidated, unitLabel: f.unitLabel,
-          ordersReceivedRaw: f.ordersReceived, orderBacklogRaw: f.orderBacklog,
-          ordersReceivedYen: toYen(f.ordersReceived, f.unitYenFactor),
-          orderBacklogYen: toYen(f.orderBacklog, f.unitYenFactor),
-          pattern: orderPatternOf(parseStatus),
-        });
-      }
-      await db.delete(overseasSalesFacts).where(eq(overseasSalesFacts.documentId, docRowId));
-      for (const f of overseasFacts) {
-        await db.insert(overseasSalesFacts).values({
-          documentId: docRowId, stockId, fiscalYearEnd: f.fiscalYearEnd,
-          regionName: f.regionName, regionKind: f.regionKind,
-          isConsolidated: f.isConsolidated, unitLabel: f.unitLabel,
-          salesRaw: f.salesAmount, salesYen: toYen(f.salesAmount, f.unitYenFactor),
-          ratioPct: f.ratioPct, pattern: overseasPatternOf(overseasParseStatus),
-        });
-      }
-      await db.delete(textSections).where(eq(textSections.documentId, docRowId));
-      for (const s of sections) {
-        // 索引のみ。本文は Notion (backupDocTextToNotion で保管済み)。
-        await db.insert(textSections).values({
-          documentId: docRowId, stockId, fiscalYearEnd: periodEnd,
-          sectionKey: s.sectionKey, elementId: s.elementId,
-          itemName: s.itemName, contextId: s.contextId, charCount: s.charCount,
-        });
-      }
+      const docRowId = idRow[0]!.id;
 
       // type 別 key で各実体を記録する (共通契約)。各 key の既存は
       // recordPrimaryData 側で冪等スキップし、Type5 済みは Type1 を抑止しない。

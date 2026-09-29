@@ -16,8 +16,10 @@
  *   - ルール6: API/ファイル取得物は Notion「一次データ保管」配下の一次データ
  *     DB に冪等記録し、物理ファイルは実体アップロードする
  */
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
+import type { createD1HttpBatchSender } from "../../../../src/shared/db/d1-http-client.js";
+import { toD1BatchStatements } from "../../../../src/shared/db/d1-http-client.js";
 import {
   yuhoDocuments,
   orderFacts,
@@ -136,9 +138,43 @@ export async function ingestDocument(
      * 未指定時は単通照会する (backfill.ts 等)。
      */
     custody?: DocCustody;
+    /**
+     * Node (sqlite-proxy) での D1 書込口。`createD1HttpBatchSender()` の
+     * 戻り値をそのまま渡す。sqlite-proxy は `db.batch` メソッドを持つが
+     * batch callback 未配線で実行時 TypeError になるため、typeof 判定では
+     * 足りず明示指定が必須。Worker (D1 バインディング) では未指定のまま
+     * 既存 `db.batch` を使う。両方の指定は sender 曖昧として止める。
+     */
+    d1HttpBatch?: ReturnType<typeof createD1HttpBatchSender>;
   }
 ): Promise<IngestResult> {
   const { stockId, stockCode, doc, force = false, archiveToNotion = false } = args;
+
+  // Shared entrance preflight: 書込 backend の確定は fetch/remote save より前。
+  // sqlite-proxy の db.batch はメソッド自体は存在するが batch callback 未配線
+  // (drizzle(callback, { schema }) の第2引数は config 扱い) のため実行時に
+  // TypeError になる。$client の有無だけでは足りず (null/{} も「有り」になる)、
+  // 実 D1 binding の有限 shape — $client が prepare/batch 呼び出し可能 かつ
+  // db.batch 呼び出し可能 (D1Database の公開 API。実行時 probe で確認) — と
+  // 明示 HTTP sender の排他で判定する。未知 backend は書く前に止める。
+  const d1HttpBatch = args.d1HttpBatch;
+  const rawClient = (db as unknown as { $client?: unknown }).$client;
+  const hasBindingBatch =
+    typeof db.batch === "function" &&
+    typeof rawClient === "object" &&
+    rawClient !== null &&
+    typeof (rawClient as { prepare?: unknown }).prepare === "function" &&
+    typeof (rawClient as { batch?: unknown }).batch === "function";
+  if (d1HttpBatch !== undefined && hasBindingBatch) {
+    throw new Error(
+      "[ingest] D1 書込 backend が二重指定です (d1HttpBatch と binding)。同一入力の sender は 1 つにしてください。"
+    );
+  }
+  if (d1HttpBatch === undefined && !hasBindingBatch) {
+    throw new Error(
+      "[ingest] D1 batch backend がありません: Node (sqlite-proxy) では d1HttpBatch (createD1HttpBatchSender) を明示してください。書込の前に止めます。"
+    );
+  }
 
   const existing = await db
     .select({
@@ -387,9 +423,15 @@ export async function ingestDocument(
     overseasFacts = [];
   }
 
-  let docRowId: number | null = null;
   if (needDbWork) {
-    const [docRow] = await db
+    // 文書 upsert 自体を facts/text 置換と同一 batch に入れる。以前は upsert
+    // を先行コミットして返却 id を facts に流していたため、後続 batch の失敗
+    // で「メタだけ埋まって facts 0 件」の部分行が残り、次回以降
+    // skipped_existing で永久に埋まらなかった (Node sqlite-proxy の
+    // db.batch 未配線で確定発症)。facts/text の documentId は同一 batch 内
+    // の upsert 行を docId サブクエリで参照し、事前 upsert/id 取得の 2 往復
+    // を排除する。行 id は batch から取り出さない (両 backend で同一動作)。
+    const docUpsert = db
       .insert(yuhoDocuments)
       .values({
         stockId,
@@ -418,16 +460,21 @@ export async function ingestDocument(
           periodStart: doc.periodStart,
           periodEnd,
         },
-      })
-      .returning({ id: yuhoDocuments.id });
-    docRowId = docRow?.id ?? null;
+      });
+
+    // 同一 batch 内の upsert 行を指す docId サブクエリ。facts/text の
+    // documentId はこれで束縛する (JS 側で id を受け渡さない)。1 行あたりの
+    // bind 数は変わらない (id 値の束縛が docID 文字列の束縛に置き換わるだけ)。
+    const docIdSubquery = sql`(select ${yuhoDocuments.id} from ${yuhoDocuments} where ${yuhoDocuments.docId} = ${doc.docID})`;
 
     // 再取り込み (force) 時は当該書類の旧 facts を破棄してから入れ直す。
     // D1 の bind 上限 (100) を超えないよう insert を 8 行ずつに分割し、
-    // delete と全 insert を db.batch() で 1 トランザクションとして原子的に
-    // 置換する (Neon 版の delete→insert と等価以上の一貫性)。
+    // upsert・delete・全 insert を同一 batch で原子的に置換する (Neon 版の
+    // delete→insert と等価以上の一貫性)。送信口は入口 preflight で確定済み:
+    // Worker は既存 db.batch、Node は明示 d1HttpBatch (同一 builders を
+    // toSQL 化して送る。per-statement フォールバックはしない)。
     const factRows = deduped.map((f) => ({
-      documentId: docRow.id,
+      documentId: docIdSubquery,
       stockId,
       fiscalYearEnd: f.fiscalYearEnd,
       segmentName: f.segmentName,
@@ -448,10 +495,10 @@ export async function ingestDocument(
               : "pattern_a",
     }));
 
-    // 海外売上ファクト (yuho_overseas_facts) も同じ docRow を親に置換する。
-    // 11 列/行 → D1 bind 上限 100 に対し 8 行/文 (8×11=88) で分割。
+    // 海外売上ファクト (yuho_overseas_facts) も同じ docId サブクエリを親に
+    // 置換する。11 列/行 → D1 bind 上限 100 に対し 8 行/文 (8×11=88) で分割。
     const overseasRows = overseasFacts.map((f) => ({
-      documentId: docRow.id,
+      documentId: docIdSubquery,
       stockId,
       fiscalYearEnd: f.fiscalYearEnd,
       regionName: f.regionName,
@@ -464,11 +511,11 @@ export async function ingestDocument(
       pattern: overseasPatternOf(overseasParseStatus),
     }));
 
-    // 定性セクション索引 (yuho_text_sections) も同じ docRow を親に
+    // 定性セクション索引 (yuho_text_sections) も同じ docId サブクエリを親に
     // 置換する。本文は Notion のみ (P4)。8 列/行 → D1 bind 上限 100 に対し
     // 8 行/文 (8×8=64)。抽出器が 1 セクション 1 行に確定済みなので重複は出ない。
     const sectionRows = sections.map((s) => ({
-      documentId: docRow.id,
+      documentId: docIdSubquery,
       stockId,
       fiscalYearEnd: periodEnd,
       sectionKey: s.sectionKey,
@@ -478,22 +525,38 @@ export async function ingestDocument(
       charCount: s.charCount,
     }));
 
-    await db.batch([
-      db.delete(orderFacts).where(eq(orderFacts.documentId, docRow.id)),
+    const statements = [
+      docUpsert,
+      db.delete(orderFacts).where(eq(orderFacts.documentId, docIdSubquery)),
       ...chunk(factRows, MAX_FACT_ROWS_PER_STMT).map((rows) =>
         db.insert(orderFacts).values(rows)
       ),
       db
         .delete(overseasSalesFacts)
-        .where(eq(overseasSalesFacts.documentId, docRow.id)),
+        .where(eq(overseasSalesFacts.documentId, docIdSubquery)),
       ...chunk(overseasRows, MAX_FACT_ROWS_PER_STMT).map((rows) =>
         db.insert(overseasSalesFacts).values(rows)
       ),
-      db.delete(textSections).where(eq(textSections.documentId, docRow.id)),
+      db.delete(textSections).where(eq(textSections.documentId, docIdSubquery)),
       ...chunk(sectionRows, MAX_FACT_ROWS_PER_STMT).map((rows) =>
         db.insert(textSections).values(rows)
       ),
-    ]);
+    ];
+    if (d1HttpBatch !== undefined) {
+      // 同一 builders を toSQL 化して送る (対象外の束縛値は送らず throw)。
+      // per-statement フォールバックはしない。
+      await d1HttpBatch(toD1BatchStatements(statements));
+    } else {
+      // db.batch の受け口は非空タプル要求。先頭 upsert の存在を
+      // 実行時に強制する (chunk が空でも upsert+delete 3 文は残る)。
+      const [first, ...rest] = statements;
+      if (first === undefined) {
+        throw new Error(
+          "[ingest] D1 batch 文が 0 件です (upsert 先頭の不変条件違反)。書込の前に止めます。"
+        );
+      }
+      await db.batch([first, ...rest]);
+    }
   }
 
   // ルール6: 有報の物理ファイル(CSV+XBRL ZIP)とメタデータを Notion へ
@@ -553,15 +616,15 @@ export async function ingestDocument(
   // (skipped_existing)。回収は backfill-text-sections --doc --force が担う。
   // セクション 0 件は保管対象外 (textParseStatus が D1 側に残り「未保管」と区別できる)。
   if (sections.length > 0) {
-    let id = docRowId;
-    if (id === null) {
-      const found = await db
-        .select({ id: yuhoDocuments.id })
-        .from(yuhoDocuments)
-        .where(eq(yuhoDocuments.docId, doc.docID))
-        .limit(1);
-      id = found[0]?.id ?? null;
-    }
+    // D1 行 id は batch から取り出さない (両 backend で同一動作にするため、
+    // upsert に .returning を付けない)。docId 冪等 SELECT で解決する
+    // (従来のフォールバックを正規化。PK 1 件読み)。
+    const found = await db
+      .select({ id: yuhoDocuments.id })
+      .from(yuhoDocuments)
+      .where(eq(yuhoDocuments.docId, doc.docID))
+      .limit(1);
+    const id = found[0]?.id ?? null;
     if (id === null) {
       throw new Error(
         `[ingest] notion text backup 失敗(行なし) docID=${doc.docID}: D1 行が無いのに本文セクションが ${sections.length} 件あります`
