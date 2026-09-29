@@ -184,14 +184,14 @@ describe("archivePriceSyncBatch", () => {
     });
   });
 
-  it("skipped_existing は先行記録ありとして受け入れる (二重防止の正常系)", async () => {
+  it("skipped_existing は物理証拠なしとして throw (二重防止≠保管成功)", async () => {
     const fake = vi.fn().mockResolvedValue({
       pageId: "p",
       outcome: "skipped_existing",
       fileTooLarge: false,
     });
-    await expect(archivePriceSyncBatch(batchInput(), fake)).resolves.toBe(
-      "price-sync-batch-test-run.1"
+    await expect(archivePriceSyncBatch(batchInput(), fake)).rejects.toThrow(
+      /skipped_existing/
     );
   });
 
@@ -386,6 +386,29 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     expect(body.failures).toHaveLength(2);
     expect(body.failures.map((f) => f.code).sort()).toEqual(["1301", "1332"]);
     expect(body.categories).toMatchObject({ genuine_source_gap: 2 });
+  });
+
+  it("完了保管 fileTooLarge→例外同キー skip でも保管成功を偽らない (元例外で非0)", async () => {
+    vi.mocked(fetchChart).mockResolvedValue(sessionChart("2026-09-28"));
+    vi.mocked(fetchStockRawData).mockRejectedValue(
+      new Error("対象 2026-09-28 の実日足が未取得です。")
+    );
+    vi.mocked(recordPrimaryData)
+      .mockResolvedValueOnce({ pageId: "p", outcome: "recorded", fileTooLarge: true })
+      .mockResolvedValue({ pageId: "p", outcome: "skipped_existing", fileTooLarge: false });
+    const db = freshDb();
+    seedTarget(1, "1301");
+    seedTarget(2, "1332");
+    // 完了パスの fileTooLarge が元例外。例外パスの同キー skip は
+    // metadata-only の可能性があるため保管成功にしない。
+    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
+      /fileTooLarge/
+    );
+    expect(vi.mocked(recordPrimaryData)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(recordPriceSyncLog)).toHaveBeenCalledWith(
+      "test-db",
+      expect.objectContaining({ status: "失敗", tradingDate: null })
+    );
   });
 
   it("成功時も空バッチを保管して batchKey を返す", async () => {

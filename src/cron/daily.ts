@@ -907,12 +907,14 @@ export function buildPriceSyncBatch(input: PriceSyncBatchInput): {
 /**
  * 失敗バッチ 1 件を一次保管する。`recorder` はテスト用 seam。
  *
- * - `force: false` + run 一意キーで、同一 invocation の success/failure
- *   二重記録を防ぐ。`skipped_existing` は先行記録あり (証跡あり) として
- *   受け入れる (二重防止が働いた正常系)。
- * - `fileTooLarge` と recorder の throw は握りつぶさず throw (fail-closed)。
+ * - 成功は `recorded` + `fileTooLarge: false` のときだけ。
+ *   `skipped_existing` は先行記録が metadata-only (fileTooLarge 頁) の
+ *   可能性があり物理証拠にならないため受け入れず throw する
+ *   (完了 fileTooLarge → 例外同キー skip を保管成功と偽らない)。
+ *   キーは run 一意のまま (二重記録自体は `force: false` で防ぐ)。
+ * - recorder の throw も握りつぶさず throw (fail-closed)。
  *   完了パスでは結果を返さず CLI が非0終了する。例外パスでは呼び出し側が
- *   元の例外を rethrow する (非0は維持)。
+ *   元の例外を rethrow する (非0は維持・保管完了も主張しない)。
  */
 export async function archivePriceSyncBatch(
   input: PriceSyncBatchInput,
@@ -931,7 +933,7 @@ export async function archivePriceSyncBatch(
   if (res.fileTooLarge) {
     throw new Error(`失敗バッチ保管が不完全 (fileTooLarge): ${batch.key}`);
   }
-  if (res.outcome !== "recorded" && res.outcome !== "skipped_existing") {
+  if (res.outcome !== "recorded") {
     throw new Error(
       `失敗バッチ保管が不完全 (outcome=${res.outcome}): ${batch.key}`
     );
