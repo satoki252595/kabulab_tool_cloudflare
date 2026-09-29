@@ -69,13 +69,13 @@ export function synthRow(
   ordinaryTicker: string | null,
   sell: number,
   buy: number,
-  opts: { sellChg?: number | null; buyChg?: number | null } = {},
+  opts: { sellChg?: number | null; buyChg?: number | null; eligible?: boolean } = {},
 ): SynthRow {
   return {
     sourceCode,
     name: `合成${sourceCode}`,
     ordinaryTicker,
-    eligible: ordinaryTicker !== null,
+    eligible: opts.eligible ?? ordinaryTicker !== null,
     unitLetter: "B",
     sectype: "普通株式",
     market: "プライム",
@@ -181,11 +181,17 @@ export function synthSectorFixture(): {
     rows.push(synthRow(code, ticker, 100 + i, 200 + i, { sellChg }));
     tickerSector.set(ticker, sector);
   });
-  // 同一ティッカー複数行 (1001 に 2 行目。集計に含めるが明示する)。
+  // 同一ティッカー複数行 (1001 に 2 行目。ISIN 同一性の根拠が無いため除外)。
   rows.push(synthRow("10011", "1001", 7, 8));
+  // 水産の組込行 (1001 が重複除外されるため、別ティッカーで補う)。
+  rows.push(synthRow("20020", "2002", 13, 14));
+  tickerSector.set("2002", "水産・農林業");
   // sector NULL の active 行 (未分類へ)。
   rows.push(synthRow("20010", "2001", 3, 4));
   tickerSector.set("2001", null);
+  // 非普通株行 (eligible=false。mapping に載せても gate が先に除外する)。
+  rows.push(synthRow("20030", "2003", 15, 16, { eligible: false }));
+  tickerSector.set("2003", "化学");
   // 除外行: ティッカー不能 / master 外 / active 外。
   rows.push(synthRow("14900", null, 5, 6));
   rows.push(synthRow("99990", "9999", 9, 10));

@@ -28,6 +28,7 @@ describe("notion-archive page-file (先頭/null 維持)", () => {
             files: [
               { name: "first-no-url", type: "file" },
               { name: "second", type: "file", file: { url: "https://example.invalid/second" } },
+              { name: "ext", type: "external", external: { url: "https://example.invalid/ext" } },
             ],
           },
         },
@@ -48,7 +49,8 @@ describe("notion-archive page-file (先頭/null 維持)", () => {
     const { fetchPageFileUrl, listPageFiles } = await import("./page-file.js");
     expect(await fetchPageFileUrl("page-1", "Files")).toBeNull();
     expect(await listPageFiles("page-1", "Files")).toEqual([
-      { name: "second", url: "https://example.invalid/second" },
+      { name: "second", url: "https://example.invalid/second", kind: "file" },
+      { name: "ext", url: "https://example.invalid/ext", kind: "external" },
     ]);
   });
 });

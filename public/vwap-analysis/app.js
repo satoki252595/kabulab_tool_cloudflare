@@ -12,7 +12,7 @@ const $ = (id) => document.getElementById(id);
 const norm = (s) =>
   String(s)
     .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
-    .replace(/　/g, " ").toLowerCase().trim();
+    .replace(/\u3000/g, " ").toLowerCase().trim();
 
 const fmtInt = (n) => Math.round(n).toLocaleString("ja-JP");
 const jstDate = (ts) => new Date((ts + 32400) * 1000).toISOString().slice(0, 10);

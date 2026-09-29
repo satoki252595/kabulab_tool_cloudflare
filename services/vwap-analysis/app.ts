@@ -75,7 +75,8 @@ app.get("/api/margin", async (c) => {
   const dates: string[] = JSON.parse(await dl.text()).slice(-n);
   const rows = await Promise.all(dates.map(async (d) => {
     const o = await c.env.BUCKET.get(`margin/daily/${d}.json`);
-    if (!o) return null;
+    // index に参照日があるのに snapshot が無いのは破損。正常空に落とさず throw する。
+    if (!o) throw new Error(`margin snapshot missing for indexed date: ${d}`);
     const snap = JSON.parse(await o.text()) as MarginDailySnapshot;
     if (snap.format !== MARGIN_DAILY_FORMAT) {
       throw new Error(`unknown margin snapshot format: ${snap.format}`);

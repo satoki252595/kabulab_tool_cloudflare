@@ -100,8 +100,14 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
     custodyBytes?: Uint8Array;
     /** 保管実体の添付名。未指定なら FILENAME。null なら添付なし。 */
     custodyName?: string | null;
+    /** 保管 Files の全添付を直接指定 (複数・外部の検査用)。 */
+    custodyFiles?: Array<{ name: string; url: string; kind: "file" | "external" }>;
+    /** 単一添付の kind。未指定なら file。 */
+    custodyKind?: "file" | "external";
     /** true なら snapshot の readback を破損させる。 */
     corruptReadback?: boolean;
+    /** true なら dates.json の readback を破損させる。 */
+    corruptDatesReadback?: boolean;
   }
 
   async function runMain(opts: RunOpts = {}) {
@@ -137,13 +143,14 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
       order.push("archive");
       return opts.archiveImpl ? opts.archiveImpl() : { pageId: "p1", fileTooLarge: false };
     });
-    const fetchPageFileUrl = vi.fn(async () => {
-      if (opts.custodyName === null) return null;
-      return { name: opts.custodyName ?? FILENAME, url: "https://example.invalid/f" };
+    const listPageFiles = vi.fn(async () => {
+      if (opts.custodyFiles !== undefined) return opts.custodyFiles;
+      if (opts.custodyName === null) return [];
+      return [{ name: opts.custodyName ?? FILENAME, url: "https://example.invalid/f", kind: opts.custodyKind ?? "file" }];
     });
     vi.doMock("../../src/shared/notion-archive/index.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("../../src/shared/notion-archive/index.js")>();
-      return { ...actual, recordPrimaryData, fetchPageFileUrl };
+      return { ...actual, recordPrimaryData, listPageFiles };
     });
     const store = new Map<string, string>(Object.entries(opts.seed ?? {}));
     const r2Get = vi.fn(async (key: string) => {
@@ -151,6 +158,10 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
       if (opts.corruptReadback && key === "margin/daily/2026-09-28.json" && store.has(key)) {
         const gets = order.filter((o) => o === `get:${key}`).length;
         if (gets >= 2) return '{"corrupted":true}';
+      }
+      if (opts.corruptDatesReadback && key === "margin/dates.json" && store.has(key)) {
+        const gets = order.filter((o) => o === `get:${key}`).length;
+        if (gets >= 2) return '["1999-01-01"]';
       }
       return store.has(key) ? (store.get(key) as string) : null;
     });
@@ -198,6 +209,7 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
       "r2:margin/daily/2026-09-28.json",
       "get:margin/daily/2026-09-28.json",
       "r2:margin/dates.json",
+      "get:margin/dates.json",
     ]);
   });
 
@@ -249,7 +261,24 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
 
   it("保管実体の添付がなければ STOP する (過去の metadata-only 再入を含む)", async () => {
     const { r2Put, rejected } = await runMain({ custodyName: null });
-    expect(String(rejected)).toMatch(/実体なし/);
+    expect(String(rejected)).toMatch(/添付数が異常/);
+    expect(r2Put).not.toHaveBeenCalled();
+  });
+
+  it("Files が複数添付なら STOP する (先頭だけ見て通さない)", async () => {
+    const { r2Put, rejected } = await runMain({
+      custodyFiles: [
+        { name: FILENAME, url: "https://example.invalid/f", kind: "file" },
+        { name: "extra.pdf", url: "https://example.invalid/x", kind: "file" },
+      ],
+    });
+    expect(String(rejected)).toMatch(/添付数が異常/);
+    expect(r2Put).not.toHaveBeenCalled();
+  });
+
+  it("外部リンク添付は STOP する (hosted 要求)", async () => {
+    const { r2Put, rejected } = await runMain({ custodyKind: "external" });
+    expect(String(rejected)).toMatch(/外部添付/);
     expect(r2Put).not.toHaveBeenCalled();
   });
 
@@ -267,5 +296,13 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
       corruptReadback: true,
     });
     expect(String(rejected)).toMatch(/readback 不一致/);
+  });
+
+  it("dates.json の readback が一致しなければ STOP する", async () => {
+    const { rejected } = await runMain({
+      seed: { "margin/dates.json": JSON.stringify(["2026-09-25"]) },
+      corruptDatesReadback: true,
+    });
+    expect(String(rejected)).toMatch(/dates\.json readback 不一致/);
   });
 });

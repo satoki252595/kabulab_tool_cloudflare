@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
-  fetchPageFileUrl,
+  listPageFiles,
   recordPrimaryData,
 } from "../../src/shared/notion-archive/index.js";
 import {
@@ -39,10 +39,12 @@ export function mergeDailyMarginDates(saved: readonly string[], current: string)
 
 /**
  * 保管済み PDF 実体の fullDL 検証 (first/再入共通)。
- * 既存単一原本 reader (fetchPageFileUrl) で Files 先頭の実体を落とし、
- * ファイル名・バイト数・SHA256 が今回取得分と一致しなければ throw する。
+ * 既存 shared (listPageFiles) を reuse し、Files 添付が今回期待の 1 件
+ * (Notion-hosted・同名) と exact 一致することを要求してから実体を落とし、
+ * バイト数・SHA256 が今回取得分と一致しなければ throw する。
  * 再入時はこの検証が安全 skip の根拠になる (無限 force/reupload はしない)。
  * 過去に metadata-only で残った保管もここで STOP する (添付なし)。
+ * 複数添付・外部リンク・不正添付は STOP する (先頭 1 件だけ見て通さない)。
  */
 export async function verifyCustodyEntity(
   pageId: string,
@@ -50,9 +52,15 @@ export async function verifyCustodyEntity(
   expected: Uint8Array,
   expectedSha256: string
 ): Promise<void> {
-  const ref = await fetchPageFileUrl(pageId, "Files");
-  if (ref === null) {
-    throw new Error(`margin custody 実体なし: page=${pageId} の Files に添付がないため STOP`);
+  const refs = await listPageFiles(pageId, "Files");
+  if (refs.length !== 1) {
+    throw new Error(
+      `margin custody 添付数が異常です: page=${pageId} の Files が ${refs.length} 件 (1 件であるべき) のため STOP`
+    );
+  }
+  const ref = refs[0] as { name: string; url: string; kind: "file" | "external" };
+  if (ref.kind !== "file") {
+    throw new Error(`margin custody 外部添付のため STOP します: page=${pageId} name=${ref.name}`);
   }
   if (ref.name !== filename) {
     throw new Error(`margin custody 添付不一致: 期待=${filename} 実際=${ref.name} (page=${pageId})`);
@@ -134,7 +142,12 @@ export async function main(): Promise<void> {
     }
   }
   if (putDates) {
-    await r2Put("margin/dates.json", JSON.stringify(merged));
+    const datesJson = JSON.stringify(merged);
+    await r2Put("margin/dates.json", datesJson);
+    const datesReadback = await r2Get("margin/dates.json");
+    if (datesReadback !== datesJson) {
+      throw new Error("margin dates.json readback 不一致");
+    }
   }
   console.info(
     `margin daily ingest: basis=${basis} pub=${data.snapshot.publicationDate} rows=${data.snapshot.rows.length} page=${archived.pageId}`

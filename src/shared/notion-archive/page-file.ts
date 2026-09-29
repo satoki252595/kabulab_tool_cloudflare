@@ -14,6 +14,11 @@ export interface PageFileRef {
   name: string;
   /** 現在の signed URL (~1h 有効。即 302 する用) */
   url: string;
+  /**
+   * Notion-hosted (`file_upload` 由来) か外部リンクか。
+   * `file` 以外は `external` 扱い (fail-closed: 保管検証は hosted を要求する)。
+   */
+  kind: "file" | "external";
 }
 
 interface PagePropertiesResponse {
@@ -52,7 +57,7 @@ export async function fetchPageFileUrl(
   const f = files[0];
   const url = f.file?.url ?? f.external?.url;
   if (!url) return null;
-  return { name: f.name, url };
+  return { name: f.name, url, kind: f.type === "file" ? "file" : "external" };
 }
 
 /**
@@ -75,7 +80,7 @@ export async function listPageFiles(
   for (const f of prop.files ?? []) {
     const url = f.file?.url ?? f.external?.url;
     if (!url) continue;
-    out.push({ name: f.name, url });
+    out.push({ name: f.name, url, kind: f.type === "file" ? "file" : "external" });
   }
   return out;
 }

@@ -62,10 +62,11 @@ const PERSONAL_ONLY = "personal-only" as const;
  * 残高の限界 (全 12 残高指標で共通)。派生比率は別文。
  */
 const BALANCE_LIMITATIONS =
-  "対象は当該基準日の JPX 信用残高に載る銘柄のうち、上場中の内国普通株" +
-  "(active かつ equity) に属する行。ETF・REIT・上場廃止・銘柄種別不明などで紐付かない行は" +
-  "除外し、件数と理由を一次データ保管の mapping JSON に残す (0 扱いで足さない)。" +
-  "同一ティッカー複数行 (普通株+種類株等) は全行を合算する。" +
+  "対象は当該基準日の JPX 信用残高に載る行のうち、普通株 (eligible) かつ" +
+  "ティッカーが一意かつ上場中の内国普通株 (active かつ equity) に属する行。" +
+  "非普通株・同一ティッカー複数行 (ISIN/行同一性の根拠が無い合算は不可)・" +
+  "ETF・REIT・上場廃止・銘柄種別不明などで紐付かない行は除外し、件数と理由を" +
+  "一次データ保管の mapping JSON に残す (0 扱いで足さない。raw 全行は snapshot に保存したまま)。" +
   "前期比 (公式前営業日差の合計) は、構成銘柄のいずれかが `-` (未公表) の業種では null" +
   "(未取得のまま。0 埋めしない)。信用残高の原本 coverage と株価データの欠損は別の話で、" +
   "分母を混ぜない。";
@@ -346,6 +347,8 @@ async function resolve(_now: Date): Promise<{ key: string; fetch: () => Promise<
       universe: mapping.coverage.universe,
       matched: mapping.coverage.matched,
       excludedNoTicker: mapping.coverage.excludedNoTicker.length,
+      excludedNonEligible: mapping.coverage.excludedNonEligible.length,
+      excludedDuplicateTickers: mapping.coverage.duplicateTickers.length,
       excludedNotInMaster: mapping.coverage.excludedNotInMaster.length,
       excludedOutsideActiveEquity: mapping.coverage.excludedOutsideActiveEquity.length,
     },

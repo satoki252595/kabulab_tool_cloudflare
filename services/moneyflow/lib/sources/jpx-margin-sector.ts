@@ -29,6 +29,7 @@ import { createD1HttpDb } from "../../../../src/shared/db/d1-http-client.js";
 import {
   MARGIN_DAILY_FORMAT,
   validateDailyMarginSnapshot,
+  type MarginDailyRow,
   type MarginDailySnapshot,
 } from "../../../../services/vwap-analysis/lib/margin-daily.js";
 import { r2Get } from "../../../../scripts/vwap/lib/r2.js";
@@ -79,20 +80,27 @@ export interface MarginSectorRow {
  * (source から定義)。price54missing や全 core active 数を分母にしない。
  * JPX 未掲載銘柄の 0 補完はしない。未解決 mapping はここに残し、
  * STOP 基準 (空母集団・33 欠落・照合不一致・replay 不一致) に触れたら失敗させる。
+ *
+ * 除外ルール (Sol final HOLD4): ticker だけで join せず、raw 行の eligible を
+ * 先に要求する。eligible=false 行・同一ティッカー複数行 (ISIN/行同一性の根拠が
+ * 無い合算は不可) は派生集計から除外する。raw 全行は snapshot に保存したまま
+ * (除外は派生対象からのみ)。
  */
 export interface MarginSectorCoverage {
   /** 対象母集団の PDF 明細行数。 */
   universe: number;
-  /** activeEquity ティッカーに属する行数。 */
+  /** 集計対象行数 (eligible かつ一意ティッカーかつ activeEquity)。 */
   matched: number;
-  /** ティッカー不能行の原文コード (例: 種別欠落行)。 */
+  /** eligible=false のうち ticker 不能行の原文コード (例: 種別欠落行)。 */
   excludedNoTicker: string[];
+  /** eligible=false のうち ticker あり行の原文コード (非普通株)。 */
+  excludedNonEligible: string[];
+  /** 同一ティッカー複数行 (eligible。ISIN 同一性の根拠が無いため合算せず除外)。 */
+  duplicateTickers: Array<{ ticker: string; codes: string[] }>;
   /** master に無いティッカー。 */
   excludedNotInMaster: string[];
   /** master にあるが active かつ equity でないティッカー (理由の内訳は出さない)。 */
   excludedOutsideActiveEquity: string[];
-  /** 同一ティッカー複数行 (集計には含めるが明示する)。 */
-  duplicateTickers: Array<{ ticker: string; codes: string[] }>;
   /** sector NULL の active 行数 (未分類へ集計)。 */
   unclassifiedRows: number;
 }
@@ -187,9 +195,52 @@ function rowChg(fig: {
   };
 }
 
+/** 行単位の解決結果。build (coverage) と aggregate (集計) で共用する単一規則。 */
+export type MarginRowStatus =
+  | { kind: "included"; sector: string | null }
+  | { kind: "excluded"; reason: "noTicker" | "nonEligible" | "duplicate" | "notInMaster" | "outsideActive" };
+
+export interface MarginJoinContext {
+  tickerSector: ReadonlyMap<string, string | null>;
+  master: ReadonlySet<string>;
+  /** eligible 行が 2 件以上あるティッカー。 */
+  dupTickers: ReadonlySet<string>;
+}
+
+/** eligible 行だけを数えて複数行ティッカー集合を作る純関数。 */
+export function findDuplicateTickers(rows: readonly MarginDailyRow[]): Map<string, string[]> {
+  const byTicker = new Map<string, string[]>();
+  for (const row of rows) {
+    if (!row.eligible || row.ordinaryTicker === null) continue;
+    const list = byTicker.get(row.ordinaryTicker) ?? [];
+    list.push(row.sourceCode);
+    byTicker.set(row.ordinaryTicker, list);
+  }
+  return new Map([...byTicker.entries()].filter(([, codes]) => codes.length > 1));
+}
+
+/**
+ * snapshot 1 行 → join 解決の純関数 (Sol final HOLD4)。
+ * ticker だけで join せず raw 行の eligible を先に要求する。eligible=false 行と
+ * 同一ティッカー複数行 (ISIN/行同一性の根拠が無い合算は不可) は除外する。
+ */
+export function classifyMarginRow(row: MarginDailyRow, ctx: MarginJoinContext): MarginRowStatus {
+  const t = row.ordinaryTicker;
+  if (!row.eligible) {
+    return { kind: "excluded", reason: t === null ? "noTicker" : "nonEligible" };
+  }
+  if (t === null) return { kind: "excluded", reason: "noTicker" };
+  if (ctx.dupTickers.has(t)) return { kind: "excluded", reason: "duplicate" };
+  const sector = ctx.tickerSector.get(t);
+  if (sector === undefined) {
+    return { kind: "excluded", reason: ctx.master.has(t) ? "outsideActive" : "notInMaster" };
+  }
+  return { kind: "included", sector };
+}
+
 /**
  * snapshot 行 → join 解決の純関数。mapping に無いティッカー・master 判定は
- * 呼び出し側の master 集合で行う (replay でも同逻辑)。
+ * 呼び出し側の master 集合で行う (replay でも同一規則)。
  */
 export function buildMarginSectorInput(
   snapshot: MarginDailySnapshot,
@@ -197,35 +248,42 @@ export function buildMarginSectorInput(
   master: ReadonlySet<string>
 ): MarginSectorInput {
   validateDailyMarginSnapshot(snapshot);
-  const byTicker = new Map<string, string[]>();
-  for (const row of snapshot.rows) {
-    if (row.ordinaryTicker === null) continue;
-    const list = byTicker.get(row.ordinaryTicker) ?? [];
-    list.push(row.sourceCode);
-    byTicker.set(row.ordinaryTicker, list);
-  }
-  const duplicateTickers = [...byTicker.entries()]
-    .filter(([, codes]) => codes.length > 1)
+  const dupGroups = findDuplicateTickers(snapshot.rows);
+  const duplicateTickers = [...dupGroups.entries()]
     .map(([ticker, codes]) => ({ ticker, codes: [...codes].sort() }))
     .sort((a, b) => (a.ticker < b.ticker ? -1 : 1));
+  const ctx: MarginJoinContext = { tickerSector, master, dupTickers: new Set(dupGroups.keys()) };
 
   const excludedNoTicker: string[] = [];
+  const excludedNonEligible: string[] = [];
   const excludedNotInMaster: string[] = [];
   const excludedOutsideActiveEquity: string[] = [];
   let matched = 0;
   let unclassifiedRows = 0;
   for (const row of snapshot.rows) {
-    const t = row.ordinaryTicker;
-    if (t === null) {
-      excludedNoTicker.push(row.sourceCode);
+    const st = classifyMarginRow(row, ctx);
+    if (st.kind === "included") {
+      matched += 1;
+      if (st.sector === null) unclassifiedRows += 1;
       continue;
     }
-    if (!tickerSector.has(t)) {
-      (master.has(t) ? excludedOutsideActiveEquity : excludedNotInMaster).push(t);
-      continue;
+    const t = row.ordinaryTicker as string;
+    switch (st.reason) {
+      case "noTicker":
+        excludedNoTicker.push(row.sourceCode);
+        break;
+      case "nonEligible":
+        excludedNonEligible.push(row.sourceCode);
+        break;
+      case "duplicate":
+        break; // duplicateTickers に記録済み。
+      case "notInMaster":
+        excludedNotInMaster.push(t);
+        break;
+      case "outsideActive":
+        excludedOutsideActiveEquity.push(t);
+        break;
     }
-    matched += 1;
-    if (tickerSector.get(t) === null) unclassifiedRows += 1;
   }
   // ティッカー単位で一意化 (複数行ティッカーの除外は 1 件に)。
   const uniq = (xs: string[]): string[] => [...new Set(xs)].sort();
@@ -242,9 +300,10 @@ export function buildMarginSectorInput(
       universe: snapshot.rows.length,
       matched,
       excludedNoTicker: excludedNoTicker.sort(),
+      excludedNonEligible: excludedNonEligible.sort(),
+      duplicateTickers,
       excludedNotInMaster: uniq(excludedNotInMaster),
       excludedOutsideActiveEquity: uniq(excludedOutsideActiveEquity),
-      duplicateTickers,
       unclassifiedRows,
     },
   };
@@ -275,7 +334,7 @@ export function parseMarginSectorInput(input: unknown): MarginSectorInput {
   for (const k of ["universe", "matched", "unclassifiedRows"]) {
     if (typeof cov[k] !== "number" || !Number.isFinite(cov[k] as number)) fail(`mapping JSON の coverage.${k} が有限数ではありません`);
   }
-  for (const k of ["excludedNoTicker", "excludedNotInMaster", "excludedOutsideActiveEquity"]) {
+  for (const k of ["excludedNoTicker", "excludedNonEligible", "excludedNotInMaster", "excludedOutsideActiveEquity"]) {
     if (!Array.isArray(cov[k]) || !(cov[k] as unknown[]).every((x) => typeof x === "string")) {
       fail(`mapping JSON の coverage.${k} が文字列配列ではありません`);
     }
@@ -366,10 +425,18 @@ export function aggregateMarginSectors(
   };
   const excludedShares = zeroBalances();
   const excludedAmounts = zeroBalances();
+  // build と同一の単一規則で解決する (両 callpath 一貫)。
+  const ctx: MarginJoinContext = {
+    tickerSector: new Map(Object.entries(mapping.tickerSector)),
+    master: new Set(mapping.masterTickers),
+    dupTickers: new Set(findDuplicateTickers(snapshot.rows).keys()),
+  };
+  let includedRows = 0;
+  let excludedRows = 0;
   for (const row of snapshot.rows) {
-    const t = row.ordinaryTicker;
-    const sector = t === null ? undefined : mapping.tickerSector[t];
-    if (t === null || sector === undefined) {
+    const st = classifyMarginRow(row, ctx);
+    if (st.kind === "excluded") {
+      excludedRows += 1;
       const bs = rowBalances(row.shares);
       const ba = rowBalances(row.amounts);
       for (const k of BALANCE_KEYS) {
@@ -378,7 +445,9 @@ export function aggregateMarginSectors(
       }
       continue;
     }
-    const agg = ensure(sector ?? MONEYFLOW_UNCLASSIFIED_SECTOR);
+    includedRows += 1;
+    const t = row.ordinaryTicker as string;
+    const agg = ensure(st.sector ?? MONEYFLOW_UNCLASSIFIED_SECTOR);
     agg.tickers.add(t);
     agg.rowCount += 1;
     const bs = rowBalances(row.shares);
@@ -389,6 +458,13 @@ export function aggregateMarginSectors(
     }
     addChg(agg.sharesChg, rowChg(row.shares));
     addChg(agg.amountsChg, rowChg(row.amounts));
+  }
+  // 行会計: 組込 + 除外 = universe、組込 = matched (ゼロ残高行の取りこぼし防止)。
+  if (includedRows !== coverage.matched) {
+    fail(`組込行数が coverage と不一致です: ${includedRows} != ${coverage.matched}`);
+  }
+  if (includedRows + excludedRows !== coverage.universe) {
+    fail(`行会計が合いません: 組込 ${includedRows} + 除外 ${excludedRows} != ${coverage.universe}`);
   }
 
   // 33 業種の過不足検査 (未分類はある場合のみ)。

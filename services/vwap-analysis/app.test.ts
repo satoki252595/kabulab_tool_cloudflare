@@ -180,6 +180,12 @@ describe("GET /api/margin (同一ティッカー複数行の除外と正常日�
     expect(res.status).toBe(500);
   });
 
+  it("index 参照日に snapshot が無い (破損) は正常空に落とさずエラーにする", async () => {
+    const bad = bucket({ "margin/dates.json": ["2026-09-28"] });
+    const res = await app.request("/api/margin?code=2593", {}, { BUCKET: bad } as never);
+    expect(res.status).toBe(500);
+  });
+
   it("basisDate と index 日付の不一致はエラーにする", async () => {
     const bad = bucket({
       "margin/dates.json": ["2026-09-28"],

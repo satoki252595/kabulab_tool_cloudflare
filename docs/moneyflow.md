@@ -170,7 +170,10 @@ JPX 告知 (2026-07-06)「信用取引残高の公表情報の変更日及び今
   D1 join (`activeEquityCondition` 述語・id/code/sector のみ SELECT) の
   mapping/coverage を固定 capture し、toObservations が純粋に 14 指標
   (売買残×株円・一般/制度内訳・前日差・売買比率) × 33 業種 (+ 未分類) の
-  drafts を作る。33 業種行は新内訳 dims を未設定 (publicationDate のみ)
+  drafts を作る。組込は eligible (普通株) かつ一意ティッカーかつ activeEquity
+  の行のみ。非普通株・同一ティッカー複数行 (ISIN 同一性の根拠が無い合算不可)
+  は派生から除外する (raw 全行は snapshot に保存したまま)。
+  33 業種行は新内訳 dims を未設定 (publicationDate のみ)
   にして既存 `期間|指標|区分` キーを維持する (key 契約)。公式数量/金額 SUM、
   公式率の SUM 禁止、派生率は式・分母を明示 (`売/(売+買)`・分母 0 は失敗)、
   NULL 前日比は 0 埋めせず null 伝播、分類不明・coverage 不足は成功にしない。

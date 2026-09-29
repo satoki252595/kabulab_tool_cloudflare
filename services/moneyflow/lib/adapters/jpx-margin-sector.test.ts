@@ -69,18 +69,18 @@ describe("marginSectorSpec.toObservations", () => {
     const { files } = specFiles();
     const drafts = marginSectorSpec.toObservations({ key: KEY, files });
     const sell = drafts.find((d) => d.indicatorKey === "sector_margin_sell_shares" && d.category === "水産・農林業")!;
-    expect(sell.value).toBe(107);
-    expect(sell.changeFromPrev).toBe(2);
+    expect(sell.value).toBe(13);
+    expect(sell.changeFromPrev).toBe(1);
     expect(sell.unit).toBe("株");
     // 化学: 売前日比 null 伝播。
     const chem = drafts.find((d) => d.indicatorKey === "sector_margin_sell_shares" && d.category === "化学")!;
     expect(chem.value).toBe(106);
     expect(chem.changeFromPrev).toBeNull();
-    // 派生比率: 売/(売+買)。水産 107/(107+208)。
+    // 派生比率: 売/(売+買)。水産 13/(13+14)。
     const ratio = drafts.find(
       (d) => d.indicatorKey === "sector_margin_sell_position_ratio_shares" && d.category === "水産・農林業",
     )!;
-    expect(ratio.value).toBeCloseTo(107 / 315, 12);
+    expect(ratio.value).toBeCloseTo(13 / 27, 12);
     expect(ratio.unit).toBe("比率");
     expect(ratio.changeFromPrev).toBeNull();
   });
@@ -112,8 +112,8 @@ describe("marginSectorSpec.toObservations", () => {
     const fixed = {
       ...rest,
       totals: [
-        T("貸借銘柄", "loan", null, 38),
-        T("プライム 小計", "loan", "プライム", 38),
+        T("貸借銘柄", "loan", null, 40),
+        T("プライム 小計", "loan", "プライム", 40),
         T("スタンダード 小計", "loan", "スタンダード", 0),
         T("グロース 小計", "loan", "グロース", 0),
         T("制度信用銘柄", "standardized", null, 0),
@@ -124,8 +124,8 @@ describe("marginSectorSpec.toObservations", () => {
         T("プライム 小計", "other", "プライム", 0),
         T("スタンダード 小計", "other", "スタンダード", 0),
         T("グロース 小計", "other", "グロース", 0),
-        T("総合計", "grand", null, 38),
-        T("プライム 小計", "grand", "プライム", 38),
+        T("総合計", "grand", null, 40),
+        T("プライム 小計", "grand", "プライム", 40),
         T("スタンダード 小計", "grand", "スタンダード", 0),
         T("グロース 小計", "grand", "グロース", 0),
       ],
