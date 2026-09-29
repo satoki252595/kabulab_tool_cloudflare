@@ -16,6 +16,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - Worker の Observability を最小設定で有効化 (呼出ログ + 既存 console ログを残す。EDINET 外向き URL の Subscription-Key のため traces は無効のまま)。EDINET 日次取込に秘密なしの進捗 checkpoint を追加し次回標準実行の段階特定を可能に (#187)。
 
 ### 本番作業
+- Issue #163 の 9/29 欠損 54 固定診断を live 1 回実行し complete（実バー有り 47・終値なし 2・stale 1・priceguard 4、原文 54 + manifest 1 の 55 添付を 1 行 custody・全件 readback 一致）。旧 run 失敗理由は未確定のまま。D1 修復なし。
 - 業種別信用残を352行新規保存し、既存分を含む安全対象461行の全19項目一致を再読確認。safe461同一入力再実行は全461 unchanged・作成/更新送信0 (証跡 Issue #132)。#110はPOST結果不明のため保留し、462行すべて完了とは扱わない。
 
 ---
