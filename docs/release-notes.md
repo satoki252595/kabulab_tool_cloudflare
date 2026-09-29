@@ -10,6 +10,8 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- C107 有報テキスト 10 文書・364 section を保存済み原文と read-only 精査し 10/10 MATCH (全文 SHA 一致・D1 索引重複 0、HTTP mutation 0)。証跡 `docs/test-logs/c107-yuho-text-audit-2026-09-29.md`。範囲外の主張なし。データ変更なし。
+- moneyflow 指標定義の未確認断定を除去: 財務省系列の「速報値で確報改定を反映しない」を版 (最終更新日) +直近 CSV 窓 upsert の実契約どおりの説明へ修正 (速報/確報の区別は原本未確認のため断定しない)。JSDA hako.pdf の docs 状態を「2026-09-27 取得・確認済み」へ是正。データ変更なし。
 - 需給 API 4経路 (REST latest/series・MCP latest/series) の `meta.attribution` をフィルタ適用後の返却データから算出 (JSF→日証金・JPX→JPX の厳密写像、空は `[]`、`personal-only` 維持)。MCP enum に `jpx_margin` を追加し説明で JSF貸借とJPX信用を区別。不正フィルタは 400/isError、未知返却データ・point 形状不正は 500/isError。データ変更なし (#193)。
 - Issue #163 の 9/29 OHLCV 欠損 54 銘柄の固定診断 PREP を追加（Chart 5y/1d のみ 54 GET、7 分類全件判定、診断バッチ 1 行 custody + readback 照合、D1 SELECT のみ、`--execute` live gate）。live 未実行、データ変更なし (#192)。
 - 残存する個人利用用途文言を整理 (MCP 5 ツール説明中の用途断定を削除、moneyflow 世界指数の用途文言から Notion 個人ダッシュボード断定を削除。応答のライセンス meta・配備範囲は不変)。データ変更なし (#190)。
@@ -17,6 +19,8 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - Worker の Observability を最小設定で有効化 (呼出ログ + 既存 console ログを残す。EDINET 外向き URL の Subscription-Key のため traces は無効のまま)。EDINET 日次取込に秘密なしの進捗 checkpoint を追加し次回標準実行の段階特定を可能に (#187)。
 
 ### 本番作業
+- 優待 ABC 修復 131 銘柄を適用 (requests 131・statements 508・完了 131、適用前 refetch 全一致、inactive 11 除外)。再入 (2nd run 差分 0) は未観測のため主張なし。
+- 優待全文修復 13 銘柄を適用 (requests 13・statements 75・desc 62、適用前 refetch 全一致。eligible 85 のうち historical 39・whole-stock STOP 23 は除外)。再入は未観測のため主張なし。
 - Issue #163 の 9/29 欠損 54 固定診断を live 1 回実行し complete（実バー有り 47・終値なし 2・stale 1・priceguard 4、原文 54 + manifest 1 の 55 添付を 1 行 custody・全件 readback 一致）。旧 run 失敗理由は未確定のまま。D1 修復なし。
 - 業種別信用残を352行新規保存し、既存分を含む安全対象461行の全19項目一致を再読確認。safe461同一入力再実行は全461 unchanged・作成/更新送信0 (証跡 Issue #132)。#110はPOST結果不明のため保留し、462行すべて完了とは扱わない。
 
