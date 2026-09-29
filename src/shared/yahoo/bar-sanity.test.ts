@@ -11,9 +11,11 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_DAILY_RATIO,
   type Bar,
+  assertRawBarsSane,
   assertResponsePriceCoherent,
   checkBarSelf,
   checkFreshClose,
+  isProvenSamePoint,
   sanitizeBars,
 } from "./bar-sanity.js";
 
@@ -258,5 +260,75 @@ describe("checkFreshClose — 日次 writer 前提 (日付 + 実終値)", () => 
     expect(
       checkFreshClose(bar({ date: "2026-09-25", ...over }), "2026-09-25"),
     ).toEqual({ ok: false, reason: "missing_fresh_close" });
+  });
+});
+
+describe("assertRawBarsSane — filter 前の全 raw 行検査", () => {
+  const row = (over: object = {}) => ({
+    o: 100,
+    h: 110,
+    l: 90,
+    c: 105,
+    v: 1000,
+    ...over,
+  });
+
+  it("正常・欠落 null は通す", () => {
+    expect(() =>
+      assertRawBarsSane("7203.T", [row(), row({ v: null }), row({ c: null })])
+    ).not.toThrow();
+  });
+
+  it("非最新行の負値も欠落に隠さず拒否する", () => {
+    expect(() =>
+      assertRawBarsSane("7203.T", [row({ c: -5 }), row({ v: null })])
+    ).toThrow(/raw c\[0\] が非正/);
+  });
+
+  it("負の出来高を拒否する (0 は正当)", () => {
+    expect(() => assertRawBarsSane("7203.T", [row({ v: -5 })])).toThrow(
+      /raw volume\[0\] が負/
+    );
+    expect(() => assertRawBarsSane("7203.T", [row({ v: 0 })])).not.toThrow();
+  });
+
+  it("高安逆転を拒否するが終値のレンジ外は正当 (7112 丸め)", () => {
+    expect(() =>
+      assertRawBarsSane("7203.T", [{ o: 100, h: 80, l: 90, c: 85, v: 10 }])
+    ).toThrow(/高安逆転/);
+    expect(() =>
+      assertRawBarsSane("7112.T", [
+        { o: 699, h: 700, l: 698, c: 697, v: 100 },
+      ])
+    ).not.toThrow();
+  });
+
+  it("実在 adj の非有限・非正を拒否し、null は欠落として通す", () => {
+    expect(() =>
+      assertRawBarsSane("7203.T", [row()], [Number.NaN])
+    ).toThrow(/raw adj\[0\] が非有限/);
+    expect(() => assertRawBarsSane("7203.T", [row()], [-3])).toThrow(
+      /raw adj\[0\] が非正/
+    );
+    expect(() =>
+      assertRawBarsSane("7203.T", [row()], [null])
+    ).not.toThrow();
+  });
+});
+
+describe("isProvenSamePoint — meta 時刻と bar interval の同時点証明", () => {
+  it("interval 内の meta 時刻のみ true", () => {
+    expect(isProvenSamePoint(1757635260, 1757635200, 300)).toBe(true);
+    expect(isProvenSamePoint(1757635200, 1757635200, 300)).toBe(true);
+  });
+
+  it("欠落・非有限・interval 外は false (明示 skip 用)", () => {
+    expect(isProvenSamePoint(null, 1757635200, 300)).toBe(false);
+    expect(isProvenSamePoint(undefined, 1757635200, 300)).toBe(false);
+    expect(isProvenSamePoint(Number.NaN, 1757635200, 300)).toBe(false);
+    expect(isProvenSamePoint(1757635200 + 300, 1757635200, 300)).toBe(false);
+    expect(isProvenSamePoint(1757635200 - 1, 1757635200, 300)).toBe(false);
+    // 旧 session (前日) の bar と現 meta は誤比較しない。
+    expect(isProvenSamePoint(1757635200, 1757548800, 300)).toBe(false);
   });
 });
