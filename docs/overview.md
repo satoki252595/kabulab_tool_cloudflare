@@ -251,7 +251,7 @@ Cloudflare D1 (kabulab-cf, SQLite)
 
 取込 (書込) は **GitHub Actions(Node)** が担う。指標・スコア計算は Node で行い、D1 へは `createD1HttpDb` (D1 REST) で書き込む。Yahoo は共有クライアントが **`YAHOO_PROXY_BASE`** (Worker エッジの `/api/ingest/yahoo` に一本化。旧 `/vwap-analysis/api/ingest-fetch` は K4c-1 で廃止) 経由で叩くため、ランナー IP が 429 されない。Workers Paid / Workers Cron は使わない (subrequest 50/invocation の無料枠では Worker 上で全銘柄 sync を捌けないため)。
 
-株価系の自動化は GitHub Actions ワークフロー [`.github/workflows/stock-sync.yml`](../.github/workflows/stock-sync.yml) が担当 (平日17:13 UTC = 翌02:13 JSTに株式日次、21:00 UTC = 翌06:00 JSTに米国市場後のマクロのみ、毎月10日01:30 UTC = 10:30 JSTに月次 universe + otakara rebuild)。
+株価系の自動化は GitHub Actions ワークフロー [`.github/workflows/stock-sync.yml`](../.github/workflows/stock-sync.yml) が担当 (CF trigger 17:13 UTC dispatch = 翌02:13 JSTに株式日次、21:00 UTC = 翌06:00 JSTに米国市場後のマクロのみ、毎月10日01:30 UTC = 10:30 JSTに月次 universe + otakara rebuild。21:05 UTC に期限 readcheck。詳細は [stock-scheduler](./stock-scheduler.md))。
 
 従来はサービス毎に sync コマンド (`sync:rsi`, `sync:otakara`, `sync:swing`, `sync:sectors`, `sync-light`) が分裂していた。2026-04 の refactor で `sync:daily` / `sync:monthly` の 2 本に統合。2026-05、004 financial-math (DCF/CAPM/EMH) が一般日本株ユニバースを要するため母集団を「otakara が seed する優待縛り ~1,600」から **東証プライム／スタンダード／グロースの内国株式（共有4文字コード、約3,700）** へ拡張し、母集団 seed 用の `sync:universe` を追加した (3 コマンド体制)。地域市場の単独上場銘柄と5桁種類株は対象外。優待は `core_stocks.is_yutai` フラグで保持し、002 otakara のみ is_yutai=true を母集団とする。
 

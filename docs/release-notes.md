@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- 株式 sync の起動を GH schedule から CF Cron Trigger へ移行 (17:13 dispatch + 21:05 期限 readcheck。旧株式 cron 廃止)。GH schedule 遅配 250/318 分×2 連続の根本対策。資格設定待ちのため未 merge・データ変更なし。
 - 需給 API 4経路 (REST latest/series・MCP latest/series) の `meta.attribution` をフィルタ適用後の返却データから算出 (JSF→日証金・JPX→JPX の厳密写像、空は `[]`、`personal-only` 維持)。MCP enum に `jpx_margin` を追加し説明で JSF貸借とJPX信用を区別。不正フィルタは 400/isError、未知返却データ・point 形状不正は 500/isError。データ変更なし (#193)。
 - Issue #163 の 9/29 OHLCV 欠損 54 銘柄の固定診断 PREP を追加（Chart 5y/1d のみ 54 GET、7 分類全件判定、診断バッチ 1 行 custody + readback 照合、D1 SELECT のみ、`--execute` live gate）。live 未実行、データ変更なし (#192)。
 - 残存する個人利用用途文言を整理 (MCP 5 ツール説明中の用途断定を削除、moneyflow 世界指数の用途文言から Notion 個人ダッシュボード断定を削除。応答のライセンス meta・配備範囲は不変)。データ変更なし (#190)。
