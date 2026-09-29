@@ -10,7 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-29
 
 ### 変更
-- Node 実行の有報取込と海外 backfill で文書メタ・status だけ残り facts が 0 件になる部分保存が起きないよう、既存の D1 HTTP sender を明示指定し、1 文書ぶんの upsert・facts 置換を単一 batch で一括保存 (sender 未指定・未知 backend は書込前に停止)。日次 Worker の取込も同一組成の単一 batch (#176)。データ変更なし。
+- Node 実行の有報取込と 3 backfill (海外・定性・取込漏れ) で文書メタ・status だけ残り facts が 0 件になる部分保存が起きないよう、既存の D1 HTTP sender を明示指定し、1 文書ぶんの upsert・facts 置換を単一 batch で一括保存 (sender 未指定・未知 backend は書込前に停止)。日次 Worker の取込も同一組成の単一 batch。定性 backfill は本文保管未完了の通も force 無しで回収対象に (#176)。データ変更なし。
 - 株式sync成功後のmoneyflow連鎖を取得元selectorで限定 (dispatch=stocksはsector-turnoverのみ、daily/all・既存scheduledは明示の空=全取得元維持、context/monthlyは連鎖なし)。未知event/target/scheduleはproducer起動前に非0停止 (fallback禁止) (#177)。データ変更なし。
 - 本番作業: 単一378A書類の有報テキスト35 section を Notion へ記録し文書 pointer を設定 (他列・3 facts 集合不変、適用後読戻35/35一致、完了再入 sender0 を実証)。単一 lease の1回適用のみ。fulltuple範囲外の主張なし。
 - pipeline 共有 runner の終了コードを厳格化 (9 caller 共通: 成功だけ exit 0、一部失敗・実CF書込失敗・実行履歴の記録失敗は exit 1)。未設定/None・dry-run・合法 skip は 0 のまま。EDINET 財務 tidy の本物の変換失敗を欠損計上し、kabuMCP type1 は連携対象外の合法 skip として情報記録のみに。データ変更なし。

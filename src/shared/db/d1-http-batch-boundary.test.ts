@@ -16,6 +16,10 @@
  *   4. backfill-overseas の D1 書込は全て d1HttpBatch 経由で、逐次の
  *      `await db.update/insert/delete` は無いこと (UPDATE 後に落ちると
  *      status だけ埋まる同根因。ビルダの構築自体は await 無しなので可)。
+ *   5. backfill-text-sections / backfill-missing-docs の DELETE・INSERT は
+ *      全て d1HttpBatch 経由で、逐次の `await db.delete/insert` は無いこと。
+ *      Notion 確定後のポインタ単行 UPDATE (別境界) だけは await 書込として
+ *      残る。status の batch 内包は実 SQLite テスト (backfill-atomic) が担う。
  */
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -148,5 +152,24 @@ describe("createD1HttpDb の batch 境界", () => {
         " 逐次 await 書込は status だけ埋まる同根因になるため禁止"
     ).toEqual([]);
     expect(src).toMatch(/await\s+d1HttpBatch\s*\(\s*toD1BatchStatements\s*\(/);
+  });
+
+  it("backfill-text-sections / backfill-missing-docs の DELETE・INSERT は d1HttpBatch 経由", () => {
+    for (const rel of [
+      "services/yuho-quant/data-scripts/backfill-text-sections.ts",
+      "services/yuho-quant/data-scripts/backfill-missing-docs.ts",
+    ]) {
+      const src = stripComments(
+        readFileSync(join(ROOT, rel), "utf-8")
+      );
+      // DELETE/INSERT の逐次 await は全面禁止 (単一 batch へ同梱が正規)。
+      // Notion 確定後のポインタ単行 UPDATE は別境界として残るため対象外。
+      const sequential = src.match(/await\s+db\s*\.\s*(insert|delete)\s*\(/g);
+      expect(
+        sequential ?? [],
+        `${rel} の DELETE・INSERT は d1HttpBatch の単一 batch で送ること`
+      ).toEqual([]);
+      expect(src).toMatch(/await\s+d1HttpBatch\s*\(\s*toD1BatchStatements\s*\(/);
+    }
   });
 });
