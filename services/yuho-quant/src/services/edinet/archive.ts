@@ -57,6 +57,15 @@ export function planArchiveUploads(args: {
 }
 
 /**
+ * backfill 系 tail の終了判定 (repair-zip-archive と同一方式)。
+ * error 系が1件でもあれば process.exitCode=1。保管失敗を tally 加算だけで
+ * 終わらせて job green にしない (Sol HOLD1)。呼び出し側の tail で使う。
+ */
+export function archiveTallyFailed(errorCount: number): boolean {
+  return errorCount > 0;
+}
+
+/**
  * 1 type 分の実 ZIP を type 別 key で記録する (全経路の共通窓口)。
  * metadata へ `edinetDocType` を付与し、どちらの実体かを行に残す。
  */

@@ -13,6 +13,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { recordPrimaryData } from "../../../../src/shared/notion-archive/index.js";
 import {
+  archiveTallyFailed,
   edinetArchiveFilename,
   edinetArchiveKey,
   planArchiveUploads,
@@ -114,6 +115,14 @@ describe("edinet archive 共通契約", () => {
     ).toBe(true);
     expect((got.metadata as Record<string, unknown>).edinetDocType).toBe(1);
     expect((got.metadata as Record<string, unknown>).docID).toBe("S100J2E7");
+  });
+
+  it("保管失敗は失敗扱い: error > 0 だけ非0終了する (missing-docs tail 契約)", () => {
+    // backfill-missing-docs の最終 catch は保管失敗も tally.error へ加算
+    // する。tail はこの判定で exitCode=1 にし、job green にしない。
+    expect(archiveTallyFailed(0)).toBe(false);
+    expect(archiveTallyFailed(1)).toBe(true);
+    expect(archiveTallyFailed(7)).toBe(true);
   });
 
   it("force は透過し、戻り値をそのまま返す", async () => {

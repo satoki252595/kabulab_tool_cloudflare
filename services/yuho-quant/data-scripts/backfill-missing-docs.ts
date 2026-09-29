@@ -23,7 +23,10 @@ import "dotenv/config";
 import { eq } from "drizzle-orm";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
-import { recordEdinetZip } from "../src/services/edinet/archive.js";
+import {
+  archiveTallyFailed,
+  recordEdinetZip,
+} from "../src/services/edinet/archive.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
@@ -394,3 +397,8 @@ for (const date of eachDay(fromArg, toArg)) {
 }
 
 console.info("[missing] 完了: " + Object.entries(tally).map(([k, v]) => `${k}=${v}`).join(" "));
+// 保管失敗 (recordEdinetZip の throw を含む) は tally.error に加算される。
+// error > 0 を非0終了にし、失敗を job green にしない (Sol HOLD1)。
+if (archiveTallyFailed(tally.error ?? 0)) {
+  process.exitCode = 1;
+}
