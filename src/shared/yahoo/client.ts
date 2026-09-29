@@ -452,27 +452,42 @@ export interface ChartResult {
 }
 
 /**
- * 単一シンボルの日足データを取得する
- *
- * @param symbol - "7203" (日本株) / "^VIX" (指数) / "NIY=F" (先物)
- * @param range  - "6mo" | "1y" | "5y" など。デフォルト "5y"
- * @throws HTTP / パース / データ不在エラー時
+ * `fetchChart` の原文 capture (診断の一次保管用)。
+ * HTTP 判定・JSON parse・guard より前に `response.clone()` から取る。
  */
-export async function fetchChart(
-  symbol: string,
-  range = "5y"
-): Promise<ChartResult> {
-  const normalized = normalizeSymbol(symbol);
-  const url = `${CHART_API_BASE}/${normalized}?range=${range}&interval=1d&events=split%2Cdiv`;
-  const response = await yahooFetch(url);
+export interface YahooChartRawCapture {
+  symbol: string;
+  status: number;
+  bytes: Uint8Array;
+}
 
-  if (!response.ok) {
-    throw new Error(
-      await yahooHttpErrorMessage(`Chart API HTTP エラー [${symbol}]`, response)
-    );
-  }
+export interface FetchChartOptions {
+  /**
+   * 原文 capture の受取 (任意・1 件)。指定時のみ clone して呼ぶ
+   * (未指定の通常呼出はバイト列に触れず従来どおり)。
+   */
+  onRaw?: (capture: YahooChartRawCapture) => void | Promise<void>;
+}
 
-  const json = await response.json();
+/** `parseChartResponse` の戻り値 (fetchChart と診断が共有する parse 結果)。 */
+export interface ParsedChartResponse {
+  bars: DailyOhlcv[];
+  meta: {
+    regularMarketPrice: number | null;
+    previousClose: number | null;
+    chartPreviousClose: number | null;
+  };
+  timestamps: number[];
+  closePrices: (number | null)[];
+}
+
+/**
+ * Chart 応答 JSON の純粋 parse (zod 検証 + 日足マッピング)。
+ * `fetchChart` 本体と診断 (保管済み原文の再 parse) が共有し、
+ * parse 知識の二重化による分類違いを防ぐ。guard (sanitize・coherence)
+ * は含まない (呼び出し側が従来どおり適用する)。
+ */
+export function parseChartResponse(json: unknown, symbol: string): ParsedChartResponse {
   const parsed = yahooChartResponseSchema.parse(json);
 
   if (parsed.chart.error) {
@@ -492,7 +507,7 @@ export async function fetchChart(
   // 呼び出し側の `r.adj ?? r.close` が機能する（adjclose 欠落 = 分割なし = close が正値）。
   const adjcloseArr = result.indicators.adjclose?.[0]?.adjclose ?? [];
 
-  const rawBars: DailyOhlcv[] = timestamps.map((ts, i) => ({
+  const bars: DailyOhlcv[] = timestamps.map((ts, i) => ({
     date: toDateString(ts),
     open: quote?.open?.[i] ?? null,
     high: quote?.high?.[i] ?? null,
@@ -501,6 +516,54 @@ export async function fetchChart(
     volume: quote?.volume?.[i] ?? null,
     adj: adjcloseArr[i] ?? null,
   }));
+
+  return {
+    bars,
+    meta: {
+      regularMarketPrice: result.meta.regularMarketPrice ?? null,
+      previousClose: result.meta.previousClose ?? null,
+      chartPreviousClose: result.meta.chartPreviousClose ?? null,
+    },
+    timestamps,
+    closePrices: quote?.close ?? [],
+  };
+}
+
+/**
+ * 単一シンボルの日足データを取得する
+ *
+ * @param symbol - "7203" (日本株) / "^VIX" (指数) / "NIY=F" (先物)
+ * @param range  - "6mo" | "1y" | "5y" など。デフォルト "5y"
+ * @param options - `onRaw` 指定時のみ原文 capture する (未指定は従来どおり)
+ * @throws HTTP / パース / データ不在エラー時
+ */
+export async function fetchChart(
+  symbol: string,
+  range = "5y",
+  options?: FetchChartOptions
+): Promise<ChartResult> {
+  const normalized = normalizeSymbol(symbol);
+  const url = `${CHART_API_BASE}/${normalized}?range=${range}&interval=1d&events=split%2Cdiv`;
+  const response = await yahooFetch(url);
+
+  if (options?.onRaw) {
+    const bytes = new Uint8Array(await response.clone().arrayBuffer());
+    await options.onRaw({ symbol, status: response.status, bytes });
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      await yahooHttpErrorMessage(`Chart API HTTP エラー [${symbol}]`, response)
+    );
+  }
+
+  const json = await response.json();
+  const {
+    bars: rawBars,
+    meta,
+    timestamps,
+    closePrices,
+  } = parseChartResponse(json, symbol);
 
   // 桁の壊れたバーを取り込まない (bar-sanity.ts 参照)。
   // 1909 の 2026-09-11 は close=16,278,046,720 / volume=0（前日 3,700）で、
@@ -530,13 +593,12 @@ export async function fetchChart(
       symbol,
       latestUsedClose,
       latestVolume,
-      metaPrice: result.meta.regularMarketPrice ?? null,
+      metaPrice: meta.regularMarketPrice,
     });
   }
 
-  const closePrices = quote?.close ?? [];
   const price =
-    result.meta.regularMarketPrice ??
+    meta.regularMarketPrice ??
     closePrices.filter((p): p is number => p !== null).slice(-1)[0] ??
     null;
 
@@ -546,8 +608,8 @@ export async function fetchChart(
     : new Date().toISOString().split("T")[0];
 
   const previousClose =
-    result.meta.previousClose ??
-    result.meta.chartPreviousClose ??
+    meta.previousClose ??
+    meta.chartPreviousClose ??
     closePrices.filter((p): p is number => p !== null).slice(-2, -1)[0] ??
     null;
 
