@@ -493,3 +493,60 @@ describe("総数と表示件数の分離 (F-07 同型)", () => {
     expect(html).not.toContain("件を表示（全");
   });
 });
+
+describe("stockIds 部分再生成", () => {
+  function l2Row(stockId: number): Record<string, unknown> {
+    return sqlite
+      .prepare("SELECT * FROM p_yuho_growth WHERE stock_id = ?")
+      .get(stockId) as Record<string, unknown>;
+  }
+
+  it("対象だけ再生成し対象外の行に触らない (computed_at 含め同一)", async () => {
+    const beforeOthers = [2, 3, 4].map(l2Row);
+    // stock 1 の海外ファクトを全消し (受注は残る → ovs が null の行に再計算)。
+    sqlite.prepare("DELETE FROM yuho_overseas_facts WHERE stock_id = 1").run();
+    const r = await rebuildYuhoGrowthProjection(db, { stockIds: [1] });
+    expect(r.stocks).toBe(1);
+    const a = l2Row(1);
+    expect(a["ovs_years"]).toBe(0);
+    expect(a["ord_years"]).toBe(5);
+    expect([2, 3, 4].map(l2Row)).toEqual(beforeOthers);
+  });
+
+  it("空集合は throw (全体再生成の意味にしない)", async () => {
+    await expect(rebuildYuhoGrowthProjection(db, { stockIds: [] })).rejects.toThrow(
+      /stockIds が空/
+    );
+  });
+
+  it("sweep は対象集合だけに及ぶ (対象外の陳腐行は残す)", async () => {
+    sqlite.prepare("DELETE FROM yuho_order_facts WHERE stock_id = 2").run();
+    sqlite.prepare("DELETE FROM yuho_overseas_facts WHERE stock_id = 3").run();
+    const r = await rebuildYuhoGrowthProjection(db, {
+      stockIds: [2],
+      runStartedSec: Math.floor(Date.now() / 1000) + 5,
+    });
+    expect(r.stocks).toBe(0);
+    // 対象 2 はファクト消滅 → sweep。対象外 3 は陳腐でも残る。
+    expect(
+      (sqlite.prepare("SELECT COUNT(*) c FROM p_yuho_growth WHERE stock_id = 2").get() as { c: number }).c
+    ).toBe(0);
+    expect(
+      (sqlite.prepare("SELECT COUNT(*) c FROM p_yuho_growth WHERE stock_id = 3").get() as { c: number }).c
+    ).toBe(1);
+  });
+
+  it("部分再生成の行は全体再生成と一致する (computed_at 除く)", async () => {
+    sqlite.prepare("UPDATE yuho_overseas_facts SET sales_yen = 999 WHERE stock_id = 1 AND region_name = '海外売上高'").run();
+    await rebuildYuhoGrowthProjection(db, { stockIds: [1] });
+    const bounded = l2Row(1);
+    await rebuildYuhoGrowthProjection(db);
+    const full = l2Row(1);
+    const strip = (row: Record<string, unknown>) => {
+      const copy = { ...row };
+      delete copy["computed_at"];
+      return copy;
+    };
+    expect(strip(bounded)).toEqual(strip(full));
+  });
+});
