@@ -48,6 +48,24 @@ export function findInvalidBars(bars: readonly PricedBar[]): InvalidBar[] {
 }
 
 /**
+ * 取込 run の終了コード。errors/invalid/rateLimited のいずれかがあれば
+ * 非0 (当該銘柄 PUT0 は呼び出し側で確定済み)。aborted は 2 のまま。
+ * 単発 rate-limit (MAX_RL 未達) も成功扱いしない。
+ */
+export function resolveExitCode(counts: {
+  aborted: boolean;
+  errors: number;
+  invalid: number;
+  rateLimited: number;
+}): 0 | 1 | 2 {
+  if (counts.aborted) return 2;
+  if (counts.errors > 0 || counts.invalid > 0 || counts.rateLimited > 0) {
+    return 1;
+  }
+  return 0;
+}
+
+/**
  * run 識別子。同日再 run の key 衝突 (skipped_existing) を避ける。
  * Actions では GITHUB_RUN_ID(.attempt)、手元では random 8hex。
  */

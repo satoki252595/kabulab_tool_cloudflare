@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildIngestSummary,
   findInvalidBars,
+  resolveExitCode,
   resolveRunId,
 } from "./ingest-guard.js";
 
@@ -49,6 +50,27 @@ describe("findInvalidBars", () => {
       ["adj:non-positive"],
       ["adj:missing"],
     ]);
+  });
+});
+
+describe("resolveExitCode", () => {
+  const zero = { aborted: false, errors: 0, invalid: 0, rateLimited: 0 };
+
+  it("全0のみ exit 0 (negative)", () => {
+    expect(resolveExitCode(zero)).toBe(0);
+  });
+
+  it("errors/invalid/rateLimited のいずれかで exit 1 (positive)", () => {
+    expect(resolveExitCode({ ...zero, errors: 1 })).toBe(1);
+    expect(resolveExitCode({ ...zero, invalid: 1 })).toBe(1);
+    // 単発 rate-limit (MAX_RL 未達) も成功扱いしない。
+    expect(resolveExitCode({ ...zero, rateLimited: 1 })).toBe(1);
+  });
+
+  it("aborted は 2 のまま", () => {
+    expect(
+      resolveExitCode({ ...zero, aborted: true, rateLimited: 5 })
+    ).toBe(2);
   });
 });
 
