@@ -495,7 +495,7 @@ export function isMoneyflowMeasureKind(v: string): v is MoneyflowMeasureKind {
 }
 
 export const MONEYFLOW_OBS_PROPS = {
-  /** title。冪等キー `期間|指標キー|区分` */
+  /** title。冪等キー (従来 `期間|指標キー|区分` / 新様式は内訳7セグメント。observationKey 参照) */
   key: "キー",
   indicator: "指標",
   period: "対象期間",
@@ -503,6 +503,12 @@ export const MONEYFLOW_OBS_PROPS = {
   periodEnd: "期間終了",
   category: "区分",
   categoryKind: "区分種別",
+  marketSegment: "市場区分",
+  investorCategory: "投資部門",
+  tradeType: "取引種別",
+  parentCategory: "親区分",
+  categoryLevel: "区分階層",
+  publicationDate: "公表日",
   value: "値",
   unit: "単位",
   changeFromPrev: "前期比",
@@ -522,6 +528,12 @@ function buildObsDbProperties(args: { defsDbId: string; primaryDataDbId: string 
     [MONEYFLOW_OBS_PROPS.periodEnd]: { date: {} },
     [MONEYFLOW_OBS_PROPS.category]: { rich_text: {} },
     [MONEYFLOW_OBS_PROPS.categoryKind]: { select: { options: CATEGORY_KIND_OPTIONS } },
+    [MONEYFLOW_OBS_PROPS.marketSegment]: { rich_text: {} },
+    [MONEYFLOW_OBS_PROPS.investorCategory]: { rich_text: {} },
+    [MONEYFLOW_OBS_PROPS.tradeType]: { rich_text: {} },
+    [MONEYFLOW_OBS_PROPS.parentCategory]: { rich_text: {} },
+    [MONEYFLOW_OBS_PROPS.categoryLevel]: { number: {} },
+    [MONEYFLOW_OBS_PROPS.publicationDate]: { date: {} },
     [MONEYFLOW_OBS_PROPS.value]: { number: {} },
     [MONEYFLOW_OBS_PROPS.unit]: { select: { options: UNIT_OPTIONS } },
     [MONEYFLOW_OBS_PROPS.changeFromPrev]: { number: {} },
@@ -615,6 +627,23 @@ export interface ObservationInput {
   indicatorPageId: string;
   category: string;
   categoryKind: MoneyflowCategoryKind;
+  /**
+   * 新様式 JPX (投資部門・信用) 用の名前付き内訳。既存 27 取得元は未設定のまま
+   * (optional + nullable) で従来キー `期間|指標|区分` の境界を維持する。
+   * 設定時は冪等キーが `期間|指標|市場|投資部門|取引種別|親区分|階層` になり、
+   * `category` は表示ラベルのみ (キーから外れる)。tradeType/parent/level/
+   * publication 等を `category` 文字列へ詰めない (新標準)。
+   */
+  marketSegment?: string | null;
+  investorCategory?: string | null;
+  tradeType?: string | null;
+  parentCategory?: string | null;
+  categoryLevel?: number | null;
+  /**
+   * 公式の公表日 (YYYY-MM-DD)。取得日での代用は禁止し、未確認は null。
+   * 冪等キーには含めない (保存比較の対象)。
+   */
+  publicationDate?: string | null;
   value: number;
   unit: MoneyflowUnit;
   /** 前期比。求まらない (初回等) 場合は null (捏造しない)。 */
@@ -626,9 +655,39 @@ export interface ObservationInput {
   primaryDataPageId: string | null;
 }
 
-/** 冪等キー `期間|指標キー|区分` を組み立てる。 */
-export function observationKey(input: Pick<ObservationInput, "period" | "indicatorKey" | "category">): string {
-  return `${input.period}|${input.indicatorKey}|${input.category}`;
+/**
+ * 冪等キーを組み立てる。新内訳 5 項目 (市場/投資部門/取引種別/親区分/階層) が
+ * すべて未設定なら従来の `期間|指標キー|区分` (既存取得元の再取込不要の境界)。
+ * 1 つでも設定されていれば新様式キー
+ * `期間|指標|市場|投資部門|取引種別|親区分|階層` (固定7セグメント。未設定欄は空)。
+ * `publicationDate` はどちらのキーにも含めない (保存比較のみ)。
+ */
+export function observationKey(
+  input: Pick<
+    ObservationInput,
+    | "period"
+    | "indicatorKey"
+    | "category"
+    | "marketSegment"
+    | "investorCategory"
+    | "tradeType"
+    | "parentCategory"
+    | "categoryLevel"
+    | "publicationDate"
+  >
+): string {
+  const dims = [
+    input.marketSegment ?? null,
+    input.investorCategory ?? null,
+    input.tradeType ?? null,
+    input.parentCategory ?? null,
+    input.categoryLevel ?? null,
+  ];
+  if (dims.every((d) => d === null)) {
+    return `${input.period}|${input.indicatorKey}|${input.category}`;
+  }
+  const seg = (v: string | number | null | undefined): string => (v === null || v === undefined ? "" : String(v));
+  return `${input.period}|${input.indicatorKey}|${seg(input.marketSegment)}|${seg(input.investorCategory)}|${seg(input.tradeType)}|${seg(input.parentCategory)}|${seg(input.categoryLevel)}`;
 }
 
 function buildObsRowProperties(input: ObservationInput): Record<string, unknown> {
@@ -640,6 +699,13 @@ function buildObsRowProperties(input: ObservationInput): Record<string, unknown>
     [MONEYFLOW_OBS_PROPS.periodEnd]: { date: { start: input.periodEnd } },
     [MONEYFLOW_OBS_PROPS.category]: { rich_text: splitRichText(input.category) },
     [MONEYFLOW_OBS_PROPS.categoryKind]: { select: { name: input.categoryKind } },
+    [MONEYFLOW_OBS_PROPS.marketSegment]: { rich_text: splitRichText(input.marketSegment ?? "") },
+    [MONEYFLOW_OBS_PROPS.investorCategory]: { rich_text: splitRichText(input.investorCategory ?? "") },
+    [MONEYFLOW_OBS_PROPS.tradeType]: { rich_text: splitRichText(input.tradeType ?? "") },
+    [MONEYFLOW_OBS_PROPS.parentCategory]: { rich_text: splitRichText(input.parentCategory ?? "") },
+    [MONEYFLOW_OBS_PROPS.categoryLevel]: { number: input.categoryLevel ?? null },
+    [MONEYFLOW_OBS_PROPS.publicationDate]:
+      input.publicationDate ? { date: { start: input.publicationDate } } : { date: null },
     [MONEYFLOW_OBS_PROPS.value]: { number: input.value },
     [MONEYFLOW_OBS_PROPS.unit]: { select: { name: input.unit } },
     [MONEYFLOW_OBS_PROPS.changeFromPrev]: { number: input.changeFromPrev },
@@ -664,7 +730,7 @@ async function findObsRowByKey(dbId: string, key: string): Promise<ObsRowHit | n
   );
 }
 
-/** 冪等キー `期間|指標|区分` の行が観測ログに既にあるか (取込完了判定に使う)。 */
+/** 冪等キー (observationKey) の行が観測ログに既にあるか (取込完了判定に使う)。 */
 export async function observationExists(dbId: string, key: string): Promise<boolean> {
   return (await findObsRowByKey(dbId, key)) !== null;
 }
@@ -691,6 +757,12 @@ export function observationRowMatches(
     existing[p.periodEnd]?.date?.start === input.periodEnd,
     plainOf(existing[p.category]?.rich_text) === input.category,
     existing[p.categoryKind]?.select?.name === input.categoryKind,
+    (plainOf(existing[p.marketSegment]?.rich_text) ?? "") === (input.marketSegment ?? ""),
+    (plainOf(existing[p.investorCategory]?.rich_text) ?? "") === (input.investorCategory ?? ""),
+    (plainOf(existing[p.tradeType]?.rich_text) ?? "") === (input.tradeType ?? ""),
+    (plainOf(existing[p.parentCategory]?.rich_text) ?? "") === (input.parentCategory ?? ""),
+    (existing[p.categoryLevel]?.number ?? null) === (input.categoryLevel ?? null),
+    (existing[p.publicationDate]?.date?.start ?? null) === (input.publicationDate ?? null),
     existing[p.value]?.number === input.value,
     existing[p.unit]?.select?.name === input.unit,
     existing[p.changeFromPrev]?.number === input.changeFromPrev,
@@ -706,7 +778,7 @@ export interface UpsertObservationResult {
   outcome: "created" | "updated" | "unchanged";
 }
 
-/** 冪等キー `期間|指標|区分` で upsert する (既存行と値が同一なら書き込まない)。 */
+/** 冪等キー (observationKey) で upsert する (既存行と値が同一なら書き込まない)。 */
 export async function upsertObservation(
   dbId: string,
   input: ObservationInput
