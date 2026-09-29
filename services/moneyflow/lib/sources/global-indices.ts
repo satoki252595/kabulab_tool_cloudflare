@@ -725,8 +725,7 @@ export interface MoneyflowIndicatorDefinition {
 const YAHOO_FINANCE_URL = "https://finance.yahoo.com/";
 const USAGE_TERMS =
   "Yahoo Finance の公開チャートAPI (ログイン・APIキー不要)。既存の統合 Yahoo クライアント " +
-  "(`src/shared/yahoo/client.ts`) を再利用し、新しい取得先は追加していない。個人利用のみ " +
-  "(kabulab は Notion 個人ダッシュボードとしての利用)。";
+  "(`src/shared/yahoo/client.ts`) を再利用し、新しい取得先は追加していない。個人利用のみ。";
 
 function indicatorDescription(entry: GlobalIndexCatalogEntry): {
   description: string;

@@ -34,7 +34,7 @@ export const TOOLS = [
     name: "jp_supply_latest",
     description:
       "日本株の需給（日証金の貸借取引残高）の最新断面を返す。data_type は " +
-      "jsf_zandaka（貸借残高）か jsf_shina（逆日歩）。personal-only のため私的利用限定。",
+      "jsf_zandaka（貸借残高）か jsf_shina（逆日歩）。出典は日本証券金融。利用条件は応答の meta.attribution を参照。",
     inputSchema: {
       type: "object",
       properties: {
@@ -47,7 +47,7 @@ export const TOOLS = [
     name: "jp_supply_series",
     description:
       "1銘柄の需給時系列を返す。融資残高・貸株残高・信用倍率・回転日数・逆日歩。" +
-      "personal-only のため私的利用限定。",
+      "出典は日本証券金融。利用条件は応答の meta.attribution を参照。",
     inputSchema: {
       type: "object",
       properties: {
@@ -63,7 +63,7 @@ export const TOOLS = [
     name: "jp_ohlcv_range",
     description:
       "1銘柄の日足 OHLCV を返す。分割・配当調整済みの全系列（adj_*）付き。" +
-      "Yahoo 由来＝personal-only のため私的利用限定。",
+      "出典は Yahoo Finance。利用条件は応答の meta.attribution を参照。",
     inputSchema: {
       type: "object",
       properties: {
@@ -87,7 +87,7 @@ export const TOOLS = [
       "終値・出来高・前日比・移動平均(5/20/25/60/75)・RSI(14)・MACD・ATR(14)・出来高比率・20日レンジを含む。" +
       "codes は最大 " + MAX_BATCH_CODES + " 件。見つからない code は data.not_found に列挙する" +
       "（未知コードか未計算かは区別しない。欠損値を埋めて返すことはしない）。" +
-      "Yahoo 由来＝personal-only のため私的利用限定。",
+      "出典は Yahoo Finance。利用条件は応答の meta.attribution を参照。",
     inputSchema: {
       type: "object",
       properties: {
@@ -108,7 +108,7 @@ export const TOOLS = [
       "日本株のバリュエーションの最新断面を銘柄コードで返す（旧 Notion『②株価テクニカル』の" +
       "バリュエーション欄の代替）。株価・PER・PBR・配当利回り・EPS・BPS・ROE・ROA・時価総額と、" +
       "その基準日(data_date)・取得時刻(fetched_at)を含む。codes は最大 " + MAX_BATCH_CODES + " 件。" +
-      "見つからない code は data.not_found に列挙する。Yahoo 由来＝personal-only のため私的利用限定。",
+      "見つからない code は data.not_found に列挙する。出典は Yahoo Finance。利用条件は応答の meta.attribution を参照。",
     inputSchema: {
       type: "object",
       properties: {
