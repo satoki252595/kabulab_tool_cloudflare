@@ -760,7 +760,9 @@ export async function recordPrimaryData(
     return {
       filename: f.filename,
       contentType: f.contentType,
-      bytes: f.bytes.slice(),
+      // NOTE: Buffer.prototype.slice はメモリ共有のため freeze にならない。
+      // new Uint8Array() で必ず複写する (Node/Workers 両用)。
+      bytes: new Uint8Array(f.bytes),
       uploadFilename: normalized.filename,
       uploadMime: normalized.contentType,
     };
@@ -802,12 +804,30 @@ export async function recordPrimaryData(
       if (manifest === "absent") {
         return { pageId: existing.pageId, outcome: "skipped_existing", fileTooLarge: false, manifestMatch: "unknown" };
       }
+      const selfCheck = await inputFingerprint(
+        manifest.files.map((e) => ({
+          filename: e.originalFilename,
+          contentType: e.originalMime,
+          byteLength: e.byteLength,
+          sha256: e.sha256,
+        }))
+      );
+      if (selfCheck !== manifest.inputFingerprint) {
+        throw new Error(
+          `Notion archive: 保管済み manifest の自己整合検査に失敗したため保全停止 (書込0) key=${input.key}`
+        );
+      }
       if (manifest.inputFingerprint !== current) {
         throw new Error(
           `Notion archive: 同一 key の入力が変更されているため保全停止 (書込0) key=${input.key}`
         );
       }
-      return { pageId: existing.pageId, outcome: "skipped_existing", fileTooLarge: false, manifestMatch: "same" };
+      return {
+        pageId: existing.pageId,
+        outcome: "skipped_existing",
+        fileTooLarge: manifest.files.some((e) => e.upload === "too_large"),
+        manifestMatch: "same",
+      };
     }
   }
 

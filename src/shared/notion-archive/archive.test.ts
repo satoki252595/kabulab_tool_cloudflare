@@ -436,6 +436,118 @@ describe("notion-archive archive (parentPageId)", () => {
       expect(manifest.inputFingerprint).toBe(await sha256Hex("[]"));
     });
 
+    it("Node Buffer 入力も確実に freeze する (slice 共有の回帰)", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      routeUploadOk("upload-1");
+      route("POST", "/v1/pages", [{ id: "page-1" }]);
+
+      const original = Buffer.from("buffer-original");
+      const expectSha = await sha256HexBytes(new Uint8Array(original));
+      const { recordPrimaryData } = await load();
+      const p = recordPrimaryData({
+        service: "moneyflow",
+        key: "k1",
+        source: "s",
+        metadata: {},
+        files: [{ bytes: original, filename: "b.txt", contentType: "text/plain" }],
+      });
+      original.fill(0);
+      const result = await p;
+      expect(result.outcome).toBe("recorded");
+      expect(manifestOfLastPage().files[0]?.sha256).toBe(expectSha);
+      const sendCall = calls.find((c) => new URL(c.url).pathname.endsWith("/send"));
+      const sentFile = (sendCall?.init.body as FormData).get("file") as Blob;
+      expect(Buffer.from(await sentFile.arrayBuffer()).toString()).toBe("buffer-original");
+    });
+
+    it("too_large を含む同一入力の skip は fileTooLarge を true で返す (caller guard 用)", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      routeUploadOk("upload-unused", 5);
+      route("POST", "/v1/pages", [{ id: "page-1" }]);
+      const { recordPrimaryData } = await load();
+      const input = {
+        service: "moneyflow",
+        key: "k1",
+        source: "s",
+        metadata: {},
+        files: [{ bytes: new TextEncoder().encode("0123456789"), filename: "big.txt", contentType: "text/plain" }],
+      };
+      const r1 = await recordPrimaryData(input);
+      expect(r1.fileTooLarge).toBe(true);
+      const written = manifestOfLastPage();
+      expect(written.files[0]?.upload).toBe("too_large");
+
+      calls.length = 0;
+      routes.clear();
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [
+        {
+          results: [
+            {
+              id: "page-1",
+              properties: {
+                Metadata: { rich_text: [{ plain_text: JSON.stringify({ _fileManifest: written }) }] },
+              },
+            },
+          ],
+        },
+      ]);
+      const r2 = await recordPrimaryData({
+        ...input,
+        files: [{ bytes: new TextEncoder().encode("0123456789"), filename: "big.txt", contentType: "text/plain" }],
+      });
+      expect(r2).toEqual({ pageId: "page-1", outcome: "skipped_existing", fileTooLarge: true, manifestMatch: "same" });
+    });
+
+    it("保存 manifest の entries 改竄 (fingerprint 据置) は自己整合検査で STOP する", async () => {
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      routeUploadOk("upload-1");
+      route("POST", "/v1/pages", [{ id: "page-1" }]);
+      const { recordPrimaryData } = await load();
+      await recordPrimaryData({
+        service: "moneyflow",
+        key: "k1",
+        source: "s",
+        metadata: {},
+        files: [{ bytes: new TextEncoder().encode("v1"), filename: "a.txt", contentType: "text/plain" }],
+      });
+      const written = manifestOfLastPage();
+      const tampered = {
+        ...written,
+        files: [{ ...written.files[0], byteLength: (written.files[0]?.byteLength as number) + 1 }],
+      };
+
+      calls.length = 0;
+      routes.clear();
+      routeNewDb("db-1");
+      route("POST", "/v1/databases/db-1/query", [
+        {
+          results: [
+            {
+              id: "page-1",
+              properties: {
+                Metadata: { rich_text: [{ plain_text: JSON.stringify({ _fileManifest: tampered }) }] },
+              },
+            },
+          ],
+        },
+      ]);
+      await expect(
+        recordPrimaryData({
+          service: "moneyflow",
+          key: "k1",
+          source: "s",
+          metadata: {},
+          files: [{ bytes: new TextEncoder().encode("v1"), filename: "a.txt", contentType: "text/plain" }],
+        })
+      ).rejects.toThrow(/自己整合検査に失敗したため保全停止/);
+      expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(0);
+      expect(calls.filter((c) => new URL(c.url).pathname.includes("file_uploads"))).toHaveLength(0);
+    });
+
     it("upload の恒久失敗は成功にせず throw し、ページを作らない", async () => {
       routeNewDb("db-1");
       route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
