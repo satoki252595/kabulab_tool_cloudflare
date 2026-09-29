@@ -653,6 +653,91 @@ describe("notion-archive moneyflow", () => {
       expect(calls).toHaveLength(2);
     });
 
+    it("問合せ行の空期待テキストに不正要素があれば unchanged と誤一致せず上書きする", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        {
+          results: [
+            {
+              id: "obs-badtext",
+              properties: existingProps({ 市場区分: { type: "rich_text", rich_text: [{}] } }),
+            },
+          ],
+        },
+      ]);
+      route("PATCH", "/v1/pages/obs-badtext", [ackPage("obs-badtext", existingProps())]);
+      const { upsertObservation } = await load();
+      const result = await upsertObservation(dbId, sameInput);
+      expect(result).toEqual({ pageId: "obs-badtext", outcome: "updated" });
+      expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(1);
+    });
+
+    it("問合せ行の型違い (公表日が rich_text) は null期待でも誤一致せず上書きする", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        {
+          results: [
+            {
+              id: "obs-badtype",
+              properties: existingProps({ 公表日: { type: "rich_text", rich_text: [] } }),
+            },
+          ],
+        },
+      ]);
+      route("PATCH", "/v1/pages/obs-badtype", [ackPage("obs-badtype", existingProps())]);
+      const { upsertObservation } = await load();
+      const result = await upsertObservation(dbId, sameInput);
+      expect(result).toEqual({ pageId: "obs-badtype", outcome: "updated" });
+      expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(1);
+    });
+
+    it("問合せ行の relation 要素 id 不正は throw せず上書きへ倒す", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        {
+          results: [
+            { id: "obs-badrel", properties: existingProps({ 指標: { type: "relation", relation: [{}] } }) },
+          ],
+        },
+      ]);
+      route("PATCH", "/v1/pages/obs-badrel", [ackPage("obs-badrel", existingProps())]);
+      const { upsertObservation } = await load();
+      const result = await upsertObservation(dbId, sameInput);
+      expect(result).toEqual({ pageId: "obs-badrel", outcome: "updated" });
+      expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(1);
+    });
+
+    it("作成応答の空期待テキストに不正要素があれば保全停止する", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", "/v1/pages", [
+        ackPage("obs-row-9", existingProps({ 市場区分: { type: "rich_text", rich_text: [{}] } })),
+      ]);
+      const { upsertObservation } = await load();
+      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/作成応答が不正.*書込値不一致/);
+      expect(calls).toHaveLength(2);
+    });
+
+    it("更新応答の型違い (公表日が rich_text) は null期待でも保全停止する", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+      ]);
+      route("PATCH", "/v1/pages/obs-diff", [
+        ackPage("obs-diff", existingProps({ 公表日: { type: "rich_text", rich_text: [] } })),
+      ]);
+      const { upsertObservation } = await load();
+      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/更新応答が不正.*書込値不一致/);
+      expect(calls).toHaveLength(2);
+    });
+
+    it("更新応答の relation 要素 id 不正は throw ではなく保全停止する", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+      ]);
+      route("PATCH", "/v1/pages/obs-diff", [
+        ackPage("obs-diff", existingProps({ 指標: { type: "relation", relation: [{}] } })),
+      ]);
+      const { upsertObservation } = await load();
+      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/更新応答が不正.*書込値不一致/);
+      expect(calls).toHaveLength(2);
+    });
+
     it("observationRowMatches: プロパティが読めない行は一致扱いにしない (古い値を黙って残さない)", async () => {
       const { observationRowMatches } = await load();
       expect(observationRowMatches(undefined, sameInput)).toBe(false);

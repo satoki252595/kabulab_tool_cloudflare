@@ -746,8 +746,9 @@ type ObsPropShape = "title" | "rich_text" | "relation" | "date" | "number" | "ch
 
 /**
  * `buildObsRowProperties` が必ず書く 19 プロパティと期待する形。
- * 照合前に全存在・型検査し、欠落を null/空の既定値で誤一致させない
- * (present-null は受理・absent は拒否を区別する)。
+ * 照合前に type 判別子・存在・要素型まで検査し、欠落・型違い・
+ * 不正要素を null/空の既定値で誤一致させない (present-null・空配列は
+ * 受理・absent/不正形は拒否を区別する)。
  */
 function obsRowShapeTable(): ReadonlyArray<readonly [string, ObsPropShape]> {
   const p = MONEYFLOW_OBS_PROPS;
@@ -777,15 +778,30 @@ function obsRowShapeTable(): ReadonlyArray<readonly [string, ObsPropShape]> {
 function obsPropHasShape(value: unknown, shape: ObsPropShape): boolean {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
+  if (v.type !== shape) return false;
+  const textElements = (arr: unknown): boolean =>
+    Array.isArray(arr) &&
+    arr.every(
+      (el) => typeof el === "object" && el !== null && typeof (el as Record<string, unknown>).plain_text === "string"
+    );
   switch (shape) {
     case "title":
-      return Array.isArray(v.title);
+      return textElements(v.title);
     case "rich_text":
-      return Array.isArray(v.rich_text);
+      return textElements(v.rich_text);
     case "relation":
-      return Array.isArray(v.relation);
+      return (
+        Array.isArray(v.relation) &&
+        v.relation.every(
+          (el) =>
+            typeof el === "object" &&
+            el !== null &&
+            typeof (el as Record<string, unknown>).id === "string" &&
+            ((el as Record<string, unknown>).id as string) !== ""
+        )
+      );
     case "number":
-      return typeof v.number === "number" || v.number === null;
+      return (typeof v.number === "number" && Number.isFinite(v.number)) || v.number === null;
     case "checkbox":
       return typeof v.checkbox === "boolean";
     case "date":
