@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-29
 
 ### 変更
+- pipeline 共有 runner の終了コードを厳格化 (9 caller 共通: 成功だけ exit 0、一部失敗・実CF書込失敗・実行履歴の記録失敗は exit 1)。未設定/None・dry-run・合法 skip は 0 のまま。EDINET 財務 tidy の本物の変換失敗を欠損計上し、kabuMCP type1 は連携対象外の合法 skip として情報記録のみに。データ変更なし。
 - VWAP取込の日足失敗 (exit1) で5分足を道連れ停止しないよう日足/5分足の実行を独立化 (両statusを出力・どちらか非0はexit1)。ABORT (exit2・連続429/503) だけは5分足を走らせず即exit2の契約を維持 (#175)。データ変更なし。
 - 原本⑤のNotion保管を本番共通strict化 (全caller: 未保管で取得単位を中止。dry-runのみ旧来継続)。財務系④ポインタは実解析原本のみに限定し、手動 --date の子bash転送欠陥 (edinet/tdnet) を位置引数化で修正 (#174)。実データ適用なし。
 - 本番作業: EDINET一次データ修復59書類 (51訂正/7正規nonsales/1非構造) とL2投影16銘柄 (15再生成/1正規absent) を適用。適用前後fresh全一致・再計算write0を確認 (#174)。fulltuple範囲外の主張なし。
