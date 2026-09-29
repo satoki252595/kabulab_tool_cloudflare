@@ -15,10 +15,11 @@ run36600267379 の 276s ECONNRESET と一致 (Issue #98 へ記録済み)。
 - 全 inbound ルート (portal `/`、001〜007 サービス、`/api/ingest/*`) の
   query 引数は絞込・ページング・コード・日付のみ。認証はすべて
   `Authorization: Bearer` ヘッダ (`CRON_SECRET` / `VOCAB_REVIEW_TOKEN`)。
-- 唯一の例外は `/api/ingest/yahoo` の `u` で、外部 URL (Yahoo API の素の
-  URL) を取る。受理ホストは query1/2.finance.yahoo.com に allowlist され、
-  crumb/cookie はエッジ側 (`yahooFetchDirect`) で付与するため `u` 自体に
-  秘密は含まれない。
+- 唯一の例外は `/api/ingest/yahoo` の `u` で、外部 URL を取る。受理
+  ホストは query1/2.finance.yahoo.com に allowlist される。通常の Node
+  caller が渡す `u` はキー/crumb なしの素の Yahoo API URL (crumb/cookie
+  はエッジ側 `yahooFetchDirect` で付与)。任意 caller-supplied `u` の
+  秘密なしは endpoint として保証しない。
 - Worker 到達の console 出力は docID/ticker/tdnetId/件数・時刻のみ。
   Yahoo 系エラー経路は `redactYahooDiagnostic` で redact 済み (既存テストあり)。
   EDINET エラー文にキーは含まれない。
