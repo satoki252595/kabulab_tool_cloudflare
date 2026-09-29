@@ -284,10 +284,8 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
     if (!isValidCode(code)) {
       return c.json(errorBody("銘柄コードは4桁", "invalid_code"), 400);
     }
-    const object = await c.env.SUPPLY.get(`supply/${code}.json`);
-    if (!object) return c.json(errorBody("見つからない", "not_found"), 404);
-    const payload = (await object.json()) as Record<string, unknown>;
-    const series = assertSeriesObject(payload.series);
+    // filter 検証は R2 get より前。不正 filter は欠損オブジェクト時も
+    // 404 に、壊れ payload 時も 500 に変化せず契約どおり 400 を返す。
     let wanted: string | undefined;
     let from: string | undefined;
     let to: string | undefined;
@@ -302,14 +300,17 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
       }
       throw e;
     }
+    const object = await c.env.SUPPLY.get(`supply/${code}.json`);
+    if (!object) return c.json(errorBody("見つからない", "not_found"), 404);
+    const payload = (await object.json()) as Record<string, unknown>;
+    const series = assertSeriesObject(payload.series);
     const filtered: Record<string, Array<Record<string, unknown>>> = {};
     for (const [name, value] of Object.entries(series)) {
       if (wanted && name !== wanted) continue;
       const points = seriesPointsArray(name, value);
       filtered[name] = points.filter((p) => {
-        const d = String(p.d ?? "");
-        if (from && d < from) return false;
-        if (to && d > to) return false;
+        if (from && p.d < from) return false;
+        if (to && p.d > to) return false;
         return true;
       });
     }

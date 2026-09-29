@@ -69,15 +69,35 @@ export function supplySourcesFromSeries(series: Record<string, unknown>): string
   return ["日証金", "JPX"].filter((s) => seen.has(s));
 }
 
+/** 検証済みの需給 point。`d` は YYYY-MM-DD 文字列で確定している。 */
+export interface SupplyPoint {
+  d: string;
+  [key: string]: unknown;
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 /**
  * 返却対象の1系列を検証して配列として返す (日付 filter の前に呼ぶ)。
- * 未知 key・非配列値は throw。filter で除外される key は検証しない
- * (応答に含まれないものは契約の対象外)。
+ * 未知 key・非配列値は throw。さらに全 point を non-null 非配列
+ * オブジェクトかつ `d: string YYYY-MM-DD` で検証する。呼び出し側は
+ * 検証済み `p.d` を直接比較し、fallback (`??`) や `String()` 強制をしない
+ * ({} / d 欠損・非文字列の黙殺を防ぐ)。
+ * filter で除外される key は検証しない (応答に含まれないものは契約の対象外)。
  */
-export function seriesPointsArray(key: string, value: unknown): Array<Record<string, unknown>> {
+export function seriesPointsArray(key: string, value: unknown): SupplyPoint[] {
   assertKnownSupplyType(key, `series key: ${key}`);
   if (!Array.isArray(value)) throw new Error(`需給系列が配列でない: ${key}`);
-  return value as Array<Record<string, unknown>>;
+  for (const point of value) {
+    if (typeof point !== "object" || point === null || Array.isArray(point)) {
+      throw new Error(`需給 point が不正 (series=${key})`);
+    }
+    const d = (point as Record<string, unknown>).d;
+    if (typeof d !== "string" || !DATE_RE.test(d)) {
+      throw new Error(`需給 point の d が YYYY-MM-DD でない (series=${key})`);
+    }
+  }
+  return value as SupplyPoint[];
 }
 
 /**

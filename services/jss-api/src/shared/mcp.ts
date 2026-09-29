@@ -12,6 +12,7 @@
 import { envelope } from "./envelope";
 import { fetchAdjustedOhlcvCached } from "./ohlcv-cache";
 import {
+  SUPPLY_TYPES,
   assertSeriesObject,
   parseSupplyFilter,
   seriesPointsArray,
@@ -46,7 +47,7 @@ export const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        data_type: { type: "string", enum: ["jsf_zandaka", "jsf_shina", "jpx_margin"] },
+        data_type: { type: "string", enum: [...SUPPLY_TYPES] },
         limit: { type: "integer", minimum: 1, maximum: 500 },
       },
     },
@@ -61,7 +62,7 @@ export const TOOLS = [
       type: "object",
       properties: {
         code: { type: "string", description: "4桁の銘柄コード" },
-        series: { type: "string", enum: ["jsf_zandaka", "jsf_shina", "jpx_margin"] },
+        series: { type: "string", enum: [...SUPPLY_TYPES] },
         from: { type: "string", description: "YYYY-MM-DD" },
         to: { type: "string", description: "YYYY-MM-DD" },
       },
@@ -193,20 +194,19 @@ async function callTool(
     case "jp_supply_series": {
       const code = String(args.code ?? "");
       if (!isValidCode(code)) throw new Error("銘柄コードは4桁");
+      const wanted = parseSupplyFilter("series", args.series);
+      const from = parseSupplyFilter("from", args.from);
+      const to = parseSupplyFilter("to", args.to);
       const object = await env.SUPPLY.get(`supply/${code}.json`);
       if (!object) throw new Error(`需給データが無い: ${code}`);
       const payload = (await object.json()) as Record<string, unknown>;
       const series = assertSeriesObject(payload.series);
-      const wanted = parseSupplyFilter("series", args.series);
-      const from = parseSupplyFilter("from", args.from);
-      const to = parseSupplyFilter("to", args.to);
       const filtered: Record<string, unknown[]> = {};
       for (const [key, value] of Object.entries(series)) {
         if (wanted && key !== wanted) continue;
         const points = seriesPointsArray(key, value);
         filtered[key] = points.filter((p) => {
-          const d = String(p.d ?? "");
-          return (!from || d >= from) && (!to || d <= to);
+          return (!from || p.d >= from) && (!to || p.d <= to);
         });
       }
       return envelope({ code, updated: payload.updated, series: filtered }, {

@@ -315,4 +315,95 @@ describe("MCP 需給ツールの契約", () => {
       expect(tool!.description).toContain("meta.attribution");
     }
   });
+
+  it("enum は SUPPLY_TYPES を reuse し 3type を硬コード複製しない", async () => {
+    const { SUPPLY_TYPES } = await import("../src/shared/supply");
+    for (const name of ["jp_supply_latest", "jp_supply_series"] as const) {
+      const tool = TOOLS.find((t) => t.name === name)!;
+      const props = tool.inputSchema.properties as Record<string, { enum?: readonly string[] }>;
+      const key = name === "jp_supply_latest" ? "data_type" : "series";
+      expect(props[key]!.enum).toEqual([...SUPPLY_TYPES]);
+    }
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../src/shared/mcp.ts", import.meta.url), "utf8");
+    expect(src).not.toMatch(/"jsf_zandaka"/);
+    expect(src).not.toMatch(/"jsf_shina"/);
+    expect(src).not.toMatch(/"jpx_margin"/);
+  });
+});
+
+describe("point 形状の厳密検証 (filter 有無とも error)", () => {
+  // helper 内で全 point を検証するため、日付 filter で除外される前に失敗する。
+  const BAD_POINTS: Array<{ shape: string; point: unknown }> = [
+    { shape: "null", point: null },
+    { shape: "array", point: [] },
+    { shape: "{}", point: {} },
+    { shape: "d:number", point: { d: 20260910 } },
+    { shape: "d:boolean", point: { d: true } },
+    { shape: 'd:""', point: { d: "" } },
+    { shape: "d:非日付", point: { d: "09-10" } },
+  ];
+  const FILTERS = [
+    { filter: "filter無", query: "", args: {} },
+    { filter: "from有", query: "?from=2026-09-01", args: { from: "2026-09-01" } },
+  ];
+
+  it.each(
+    BAD_POINTS.flatMap((p) => FILTERS.map((f) => ({ ...p, ...f }))),
+  )("REST series $shape+$filter → 500", async ({ point, query }) => {
+    const { status } = await restSeries(seriesPayload({ jsf_zandaka: [point] }), query);
+    expect(status).toBe(500);
+  });
+
+  it("REST series 後段の不正 point も 500 (全件検証)", async () => {
+    const { status } = await restSeries(
+      seriesPayload({ jsf_zandaka: [...JSF_POINTS, null] }),
+      "",
+    );
+    expect(status).toBe(500);
+  });
+
+  it.each(
+    BAD_POINTS.flatMap((p) => FILTERS.map((f) => ({ ...p, ...f }))),
+  )("MCP series $shape+$filter → isError", async ({ point, args }) => {
+    const env = envWith({ supply: { "supply/7203.json": seriesPayload({ jsf_zandaka: [point] }) } });
+    const { isError } = await mcpCall(env, "jp_supply_series", { code: "7203", ...args });
+    expect(isError).toBe(true);
+  });
+
+  it("MCP series 後段の不正 point も isError (全件検証)", async () => {
+    const env = envWith({
+      supply: { "supply/7203.json": seriesPayload({ jsf_zandaka: [...JSF_POINTS, {}] }) },
+    });
+    const { isError } = await mcpCall(env, "jp_supply_series", { code: "7203" });
+    expect(isError).toBe(true);
+  });
+
+  it("REST 既知の空系列 → 200 で正常 empty", async () => {
+    const { status, body } = await restSeries(seriesPayload({ jsf_zandaka: [] }), "");
+    expect(status).toBe(200);
+    expect(body!.meta.attribution).toEqual([]);
+    expect(body!.meta.licenses).toEqual(["personal-only"]);
+  });
+
+  it("MCP 既知の空系列 → 正常 empty", async () => {
+    const env = envWith({ supply: { "supply/7203.json": seriesPayload({ jpx_margin: [] }) } });
+    const { isError, envelope } = await mcpCall(env, "jp_supply_series", { code: "7203" });
+    expect(isError).toBe(false);
+    expect(envelope!.meta.attribution).toEqual([]);
+  });
+});
+
+describe("filter 検証は fetch より前 (REST series)", () => {
+  it("不正 filter + 欠損オブジェクト → 400 (404 に変化しない)", async () => {
+    const res = await app.request("/v1/supply/7203?series=xxx", AUTH, envWith({ supply: {} }));
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("invalid_series");
+  });
+
+  it("不正 filter + series 欠損 payload → 400 (500 に変化しない)", async () => {
+    const { status, text } = await restSeries({ code: "7203" }, "?series=xxx");
+    expect(status).toBe(400);
+    expect(text).toContain("invalid_series");
+  });
 });

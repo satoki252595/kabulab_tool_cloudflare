@@ -86,5 +86,9 @@ REST（`/v1/supply/latest`・`/v1/supply/:code`）と MCP（`jp_supply_latest`�
   `invalid_range`）、MCP は `isError`。
 - 返却データ側の未知種類・非文字列・`series` 欠損は成功扱いしない。
   REST 500、MCP は `isError`。`series` の `?? {}` 黙殺はしない。
+  系列の各 point は非 null オブジェクトかつ `d: string YYYY-MM-DD` で、
+  1件でも外れたら日付 filter の前に失敗する（既知の空系列は正常 empty）。
+- filter 検証は取得より前。不正 filter はオブジェクト欠損時も 404 に、
+  壊れ payload 時も 500 に変化せず 400 / `isError` を返す。
 - MCP の `data_type` / `series` の enum は3種（`jpx_margin` 含む）。
   説明文で日証金の貸借と JPX の信用を区別する。
