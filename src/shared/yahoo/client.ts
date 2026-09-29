@@ -669,6 +669,25 @@ export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]
   // quote 欠落は仕様変更の疑い。空で黙殺せず落とす (旧実装は TypeError)。
   const q = res.indicators?.quote?.[0];
   if (!q) throw new Error(`Chart API エラー [${symbol}]: quote がありません`);
+  // raw-first 検査 (filter 前)。volume filter は無出来高異常を消すため、
+  // 最新 bar の整合は未 filter の実値で見る。NaN は欠落ではなく異常。
+  {
+    const li = res.timestamp.length - 1;
+    const rc = q.close?.[li] ?? null;
+    const rv = q.volume?.[li] ?? null;
+    if (typeof rc === "number" && !Number.isFinite(rc)) {
+      throw new Error(`Chart API エラー [${symbol}]: 最新 close が非有限`);
+    }
+    if (typeof rv === "number" && !Number.isFinite(rv)) {
+      throw new Error(`Chart API エラー [${symbol}]: 最新 volume が非有限`);
+    }
+    assertResponsePriceCoherent({
+      symbol,
+      latestUsedClose: rc,
+      latestVolume: rv,
+      metaPrice: res.meta?.regularMarketPrice ?? null,
+    });
+  }
   const out: Bar5m[] = [];
   for (let i = 0; i < res.timestamp.length; i++) {
     const o = q.open?.[i],
@@ -676,6 +695,16 @@ export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]
       l = q.low?.[i],
       c = q.close?.[i],
       v = q.volume?.[i];
+    for (const [k, val] of Object.entries({ o, h, l, c, v }) as [
+      string,
+      unknown,
+    ][]) {
+      if (typeof val === "number" && !Number.isFinite(val)) {
+        throw new Error(
+          `Chart API エラー [${symbol}]: ${k}[${i}] が非有限 (${String(val)})`
+        );
+      }
+    }
     if (o == null || h == null || l == null || c == null || !v) continue;
     out.push({
       ts: res.timestamp[i],
@@ -687,16 +716,6 @@ export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]
     });
   }
   out.sort((a, b) => a.ts - b.ts);
-  // fetchDaily と同じ応答整合 (R2 intra への別経路も書込前に拒否する)。
-  {
-    const latest = out[out.length - 1];
-    assertResponsePriceCoherent({
-      symbol,
-      latestUsedClose: latest?.c ?? null,
-      latestVolume: latest?.v ?? null,
-      metaPrice: res.meta?.regularMarketPrice ?? null,
-    });
-  }
   return out;
 }
 
@@ -718,7 +737,19 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
       l = q.low?.[i],
       c = q.close?.[i],
       v = q.volume?.[i];
-    if (o == null || h == null || l == null || c == null) continue;
+    // NaN は欠落ではなく異常 (filter 前に落とす)。null出来高は欠落として
+    // 落とし、0 には化けない (missing≠実0)。
+    for (const [k, val] of Object.entries({ o, h, l, c, v }) as [
+      string,
+      unknown,
+    ][]) {
+      if (typeof val === "number" && !Number.isFinite(val)) {
+        throw new Error(
+          `Chart API エラー [${symbol}]: ${k}[${i}] が非有限 (${String(val)})`
+        );
+      }
+    }
+    if (o == null || h == null || l == null || c == null || v == null) continue;
     const a = adj[i];
     bars.push({
       date: jstDate(res.timestamp[i]),
@@ -726,7 +757,7 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
       h: +h.toFixed(2),
       l: +l.toFixed(2),
       c: +c.toFixed(2),
-      v: v || 0,
+      v,
       adj: a != null ? +a.toFixed(2) : +c.toFixed(2),
     });
   }

@@ -230,6 +230,32 @@ describe("fetchDaily", () => {
     );
     await expect(fetchDaily("7203.T")).rejects.toThrow(/応答全体を採用しません/);
   });
+
+  it("null 出来高のバーは落とし、0 には化けない (missing≠実0)", async () => {
+    useProxy();
+    stubChart(
+      chartCoherent({
+        closes: [1000, 1001],
+        volumes: [10000, null],
+        metaPrice: 1000,
+      })
+    );
+    const { bars } = await fetchDaily("7203.T");
+    expect(bars).toHaveLength(1);
+    expect(bars[0].v).toBe(10000);
+  });
+
+  it("非有限実値 (1e999→Infinity) は filter 前に拒否する", async () => {
+    useProxy();
+    const body = JSON.stringify(
+      chartCoherent({ closes: [1000, 1001], volumes: [10000, 20000], metaPrice: 1000 })
+    ).replace('"volume":[10000,20000]', '"volume":[10000,1e999]');
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body, { status: 200 }))
+    );
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/非有限/);
+  });
 });
 
 describe("fetchBars5m", () => {
@@ -270,7 +296,7 @@ describe("fetchBars5m", () => {
     expect(bars.map((b) => b.ts)).toEqual([1757635200]);
   });
 
-  it("出来高なし乖離バーは先に落ち、残なしは guard を素通しして空で返す", async () => {
+  it("1909 形 (meta 乖離+出来高なし) は filter 前の raw 検査で応答全体を拒否する", async () => {
     useProxy();
     stubChart(
       chartJson({
@@ -288,10 +314,11 @@ describe("fetchBars5m", () => {
         },
       })
     );
-    // 出来高 0 のバーは整形で先に落ちる。残バーなし → latest null で
-    // guard は比較不能として通し、空を返す (欠落扱い・補完なし)。
-    const bars = await fetchBars5m("1909.T");
-    expect(bars).toHaveLength(0);
+    // volume filter は無出来高異常を消すため、整合は未 filter の raw 最新で
+    // 見る。乖離+出来高0 → 拒否 (filter 後に見ると常に受理になる欠落)。
+    await expect(fetchBars5m("1909.T")).rejects.toThrow(
+      /応答全体を採用しません/
+    );
   });
 
   it("出来高つき乖離は正規変動として受理する (daily と同一規則)", async () => {
@@ -302,20 +329,34 @@ describe("fetchBars5m", () => {
         indicators: {
           quote: [
             {
-              open: [100, 16280000512],
-              high: [110, 16280000512],
-              low: [90, 16280000512],
-              close: [105, 16280000512],
-              volume: [1000, 0],
+              open: [100, 101],
+              high: [110, 111],
+              low: [90, 91],
+              close: [105, 370000],
+              volume: [1000, 500000],
             },
           ],
         },
       })
     );
-    // 2 本目は volume 0 で落ち、最新は 1 本目 (105 vs meta 3700、
-    // 10倍超乖離・出来高あり) → 出来高を伴う乖離は受理する。
+    // raw 最新 (370000 vs meta 3700、100倍乖離・出来高あり) → 出来高を
+    // 伴う乖離は正規変動として受理する。
     const bars = await fetchBars5m("1909.T");
-    expect(bars).toHaveLength(1);
+    expect(bars).toHaveLength(2);
+  });
+
+  it("非有限実値 (1e999→Infinity) は欠落ではなく異常として filter 前に拒否する", async () => {
+    useProxy();
+    // JSON は NaN を運べないため、範囲外指数の生テキストで stub する。
+    const body = JSON.stringify(chartJson()).replace(
+      '"volume":[1000,2000]',
+      '"volume":[1000,1e999]'
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body, { status: 200 }))
+    );
+    await expect(fetchBars5m("7203.T")).rejects.toThrow(/非有限/);
   });
 
   it("最新バーの終値が無効 (非正) なら応答全体を拒否する", async () => {

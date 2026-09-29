@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildIngestSummary, findInvalidBars } from "./ingest-guard.js";
+import {
+  buildIngestSummary,
+  findInvalidBars,
+  resolveRunId,
+} from "./ingest-guard.js";
 
 describe("findInvalidBars", () => {
   const good = { o: 100, h: 110, l: 90, c: 105, v: 1000 };
@@ -27,10 +31,32 @@ describe("findInvalidBars", () => {
   });
 });
 
+describe("resolveRunId", () => {
+  it("Actions では run_id(.attempt)", () => {
+    expect(
+      resolveRunId({ GITHUB_RUN_ID: "36504277304", GITHUB_RUN_ATTEMPT: "2" })
+    ).toBe("36504277304.2");
+    expect(resolveRunId({ GITHUB_RUN_ID: "36504277304" })).toBe("36504277304");
+  });
+
+  it("手元では local-8hex (同日再 run で衝突しない)", () => {
+    const a = resolveRunId({});
+    const b = resolveRunId({});
+    expect(a).toMatch(/^local-[0-9a-f]{8}$/);
+    expect(b).toMatch(/^local-[0-9a-f]{8}$/);
+    expect(a).not.toBe(b);
+  });
+
+  it("非数値の GITHUB_RUN_ID は無視して local へ", () => {
+    expect(resolveRunId({ GITHUB_RUN_ID: "abc" })).toMatch(/^local-/);
+  });
+});
+
 describe("buildIngestSummary", () => {
   const stats = {
     kind: "intra" as const,
     range: "5d",
+    runId: "36504277304.1",
     codes: 10,
     written: 9,
     empty: 0,
@@ -46,9 +72,9 @@ describe("buildIngestSummary", () => {
   it("run粒度のkey/添付1件・per-stock鏡像なし", () => {
     const s = buildIngestSummary(stats);
     expect(s.service).toBe("vwap-analysis");
-    expect(s.key).toBe("vwap-ingest-intra-20260928");
+    expect(s.key).toBe("vwap-ingest-intra-20260928-36504277304.1");
     expect(s.files).toHaveLength(1);
-    expect(s.files[0].filename).toBe("vwap-ingest-intra-20260928.json");
+    expect(s.files[0].filename).toBe("vwap-ingest-intra-20260928-36504277304.1.json");
     const body = JSON.parse(new TextDecoder().decode(s.files[0].bytes));
     expect(body.invalid).toBe(1);
     expect(body.written).toBe(9);
@@ -59,5 +85,11 @@ describe("buildIngestSummary", () => {
     expect(() =>
       buildIngestSummary({ ...stats, finishedAt: "not-a-date" })
     ).toThrow(/日付キー不能/);
+  });
+
+  it("runId 形状不正は投げる", () => {
+    expect(() =>
+      buildIngestSummary({ ...stats, runId: "../evil" })
+    ).toThrow(/runId 形状不正/);
   });
 });

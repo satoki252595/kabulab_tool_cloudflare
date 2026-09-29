@@ -5,7 +5,7 @@ import { fetchDaily } from "../../src/shared/yahoo/client.js";
 import { r2Get, r2Put, mapLimit, sleep, retry } from "./lib/r2.js";
 import { mergeDailySplits } from "./lib/daily-merge.js";
 import { loadCodes, arg } from "./lib/codes.js";
-import { buildIngestSummary, findInvalidBars } from "./lib/ingest-guard.js";
+import { buildIngestSummary, findInvalidBars, resolveRunId } from "./lib/ingest-guard.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 
 // 既定は低負荷 (逐次・約1.5s間隔 + ジッタ)。速度優先なら CONC / DELAY_MS で上書き。
@@ -76,9 +76,15 @@ async function main() {
   console.log(JSON.stringify({ codes: codes.length, written, empty, errors, invalid, rateLimited, backfilled, aborted }));
   // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 daily に必須接続。
   // 保管失敗は握り潰さず throw を伝播させ job 失敗にする (未保管の成功なし)。
-  const summary = buildIngestSummary({ kind: "daily", range: "1mo-diff/10y-backfill", codes: codes.length, written, empty, errors, invalid, rateLimited, backfilled, aborted, startedAt, finishedAt });
+  // outcome/fileTooLarge を明示確認し、skipped/partial を成功扱いしない。
+  const summary = buildIngestSummary({ kind: "daily", range: "1mo-diff/10y-backfill", runId: resolveRunId(), codes: codes.length, written, empty, errors, invalid, rateLimited, backfilled, aborted, startedAt, finishedAt });
   console.log(JSON.stringify({ archive: "recording", key: summary.key }));
-  await recordPrimaryData({ ...summary, force: false });
+  const archived = await recordPrimaryData({ ...summary, force: false });
+  if (archived.outcome !== "recorded" || archived.fileTooLarge) {
+    throw new Error(`バッチ保管が不完全 (outcome=${archived.outcome} fileTooLarge=${archived.fileTooLarge}): ${summary.key}`);
+  }
+  // errors/invalid 計数があれば非0終了 (銘柄 PUT0 は上で確定済み)。
   if (aborted) process.exitCode = 2;
+  else if (errors > 0 || invalid > 0) process.exitCode = 1;
 }
 main();

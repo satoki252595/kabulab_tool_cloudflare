@@ -42,9 +42,25 @@ export function findInvalidBars(bars: readonly PricedBar[]): InvalidBar[] {
   return out;
 }
 
+/**
+ * run 識別子。同日再 run の key 衝突 (skipped_existing) を避ける。
+ * Actions では GITHUB_RUN_ID(.attempt)、手元では random 8hex。
+ */
+export function resolveRunId(env: NodeJS.ProcessEnv = process.env): string {
+  const id = env.GITHUB_RUN_ID;
+  if (id && /^\d+$/.test(id)) {
+    const attempt = env.GITHUB_RUN_ATTEMPT;
+    return attempt && /^\d+$/.test(attempt) ? `${id}.${attempt}` : id;
+  }
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return `local-${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
 export type IngestRunStats = {
   kind: "daily" | "intra";
   range: string;
+  runId: string;
   codes: number;
   written: number;
   empty: number;
@@ -70,15 +86,19 @@ export function buildIngestSummary(stats: IngestRunStats): {
   if (!/^\d{8}$/.test(day)) {
     throw new Error(`finishedAt から日付キー不能: ${stats.finishedAt}`);
   }
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,40}$/.test(stats.runId)) {
+    throw new Error(`runId 形状不正: ${stats.runId}`);
+  }
   const body = JSON.stringify({ ...stats, day });
   return {
     service: "vwap-analysis",
-    key: `vwap-ingest-${stats.kind}-${day}`,
+    key: `vwap-ingest-${stats.kind}-${day}-${stats.runId}`,
     source: `vwap-ingest ${stats.kind} run summary (${stats.range})`,
     fetchedAt: stats.finishedAt,
     metadata: {
       kind: stats.kind,
       range: stats.range,
+      runId: stats.runId,
       codes: stats.codes,
       written: stats.written,
       empty: stats.empty,
@@ -91,7 +111,7 @@ export function buildIngestSummary(stats: IngestRunStats): {
     files: [
       {
         bytes: new TextEncoder().encode(body),
-        filename: `vwap-ingest-${stats.kind}-${day}.json`,
+        filename: `vwap-ingest-${stats.kind}-${day}-${stats.runId}.json`,
         contentType: "application/json",
       },
     ],
