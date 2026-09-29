@@ -1037,6 +1037,33 @@ describe.skipIf(!(hasUnifiedW3))("新様式パーサ: 週次実ファイル (202
   it("新様式に合計行は無く、14部門すべて isAggregateCategory=false", () => {
     expect(records.every((r) => r.isAggregateCategory === false)).toBe(true);
   });
+
+  it("数値セル網羅性: 公式の数値は14群×4列×8行=448セルのみ (親の数値列なし)", () => {
+    // 様式確認 (Sol msg_033279c74c40): 14群の外に公式の親/小計の数値列があれば、
+    // パーサが黙って捨てることになる。実ファイルでは単一シート・群外の数値0・
+    // 群内448 (14群×4列×8行) のみで、親は結合見出しだけ。将来 JPX が親の数値列を
+    // 足したらこのテストが落ちて捨て置きを検知する (親数値の捏造はしない)。
+    const wb = XLSX.read(loadBytes(UNIFIED_W3_XLSX), { type: "array" });
+    expect(wb.SheetNames).toHaveLength(1);
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[wb.SheetNames[0] as string], {
+      header: 1,
+      defval: null,
+    });
+    const groupCols = new Set<number>();
+    for (let g = 0; g < 14; g++) for (let j = 0; j < 4; j++) groupCols.add(3 + g * 4 + j);
+    let inside = 0;
+    const outside: string[] = [];
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r] ?? [];
+      for (let c = 0; c < row.length; c++) {
+        if (typeof row[c] !== "number") continue;
+        if (groupCols.has(c)) inside++;
+        else outside.push(`R${r + 1}C${c}`);
+      }
+    }
+    expect(outside).toEqual([]);
+    expect(inside).toBe(14 * 4 * 8);
+  });
 });
 
 describe.skipIf(!(hasUnifiedW3))("新様式パーサの厳密整合・見出し検証 (実ファイル W3 の1セルだけを書き換え)", () => {
