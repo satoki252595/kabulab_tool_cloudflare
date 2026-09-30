@@ -16,6 +16,8 @@ master全件Notion map取得失敗は書込前STOPに変更し、不明な母集
 
 FSA取得済みZIP `f7f1d42f8f5732265cc241a9689f6e35f483593327f6250ec3aa30ec8bb53816`（9/30基準）の3issuer行投影、既存owner POSTのcore18160/listing193（9/18）投影を使用。原本取得・物理保管は既存source5証跡を再利用。原本CSVは既存非公開fixture方針を維持し、未配置CIでは明示skip。
 
-Nix `uv run pytest`: **1528 passed / 58 skipped**（取得済み原本ありのローカル実行）。新回帰14件は過去CSVへの遡及拒否、両caller一致、原文欠損保持、次日CSVと現在業種、literal復帰、競合・重複・法人番号変更、coreID/active/owner/listing変更HOLD、UPDATE時競合、将来／効力済みdelistを実際のSQLite SQLで確認。全件map失敗で原本保全・構造化書込0も確認。変更対象ruff PASS。
+Nix `uv run pytest`: **1529 passed / 58 skipped**（取得済み原本ありのローカル実行）。新回帰15件は過去CSVへの遡及拒否、両caller一致、原文欠損保持、次日CSVと現在業種、literal復帰、競合・重複・法人番号変更、coreID/active/owner/listing変更HOLD、UPDATE時競合、将来／効力済みdelistを実際のSQLite SQLで確認。全件map失敗で原本保全・構造化書込0も確認。変更対象ruff PASS。
 
 初期coreID/episodeは保存済みPOST時点の証明であり現在DBの再観測とは扱わない。実適用前はRootの別資格確認・実行条件が必要。
+
+認定subsetの来歴は共通関数で作成。sector世代manifestにledger SHA・raw空欄/resolvedコード・証拠参照・現在owner検査値を保存する。masterは認定行がある場合のみ派生来歴を既存save_raw/upload_rawで物理保管し、認定行のprovenance.raw_page_idで結ぶ。派生manifestは元FSA rawPageId/SHA・CSV sourceAsOf・実sourceFetchedAt・過去binding取得時計を別々に記録。原本SHA重複スキップで来歴が未添付になる方式は採らない。保管失敗時の認定行書込0を実経路で検証。新model/schemaなし。

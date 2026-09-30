@@ -145,3 +145,19 @@ def certified_update(ticker: str, sector: str, asof: date) -> tuple[str, list]:
       (SELECT MAX(eligibility_as_of) FROM universe_overlay_state))
  RETURNING code"""
     return sql, [sector, ticker, b["coreStockId"], asof.isoformat(), b["listingDate"], b["listingDate"]]
+
+
+def binding_lineage(resolved: dict[int, str], current: list[dict]) -> dict:
+    """認定subsetだけの来歴。過去原本参照と現在owner検査を別々に保存する。"""
+    import hashlib
+
+    by_code = {b["ticker"]: b for b in load_bindings()}
+    return {
+        "ledger": {"path": "docs/ipo-classification-ledger-20260930.json",
+                   "sha256": hashlib.sha256(LEDGER.read_bytes()).hexdigest()},
+        "rows": [{"line": n, "rawCode": "", "resolvedCode": code,
+                  "codeOrigin": "certified-official-binding", "sectorOrigin": "current-FSA",
+                  "binding": by_code[code],
+                  "currentOwner": next(r for r in current if r["code"] == code)}
+                 for n, code in sorted(resolved.items())],
+    }

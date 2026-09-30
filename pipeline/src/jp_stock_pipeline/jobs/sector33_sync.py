@@ -388,6 +388,9 @@ def execute(ctx: JobContext) -> SectorReport:
         # capture 時に固定され、世代 key の digest に入る。
         "response": captured["response"],
     }
+    resolved = codelist_identity.resolve_blank_tickers(zip_bytes, current)
+    if resolved:
+        manifest["identityBindings"] = codelist_identity.binding_lineage(resolved, current)
     key = _generation_key(asof, manifest)
     manifest["key"] = key  # 自記 (digest 対象外。照合は CLI/double が key 一致で行う)
     manifest_path = artifact.local_path.parent / f"{artifact.local_path.stem}-sector33-manifest.json"

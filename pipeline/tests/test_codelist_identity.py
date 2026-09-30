@@ -3,7 +3,6 @@ import csv
 import io
 import json
 from datetime import date
-from pathlib import Path
 
 import pytest
 from conftest import fixture_path
@@ -12,8 +11,6 @@ from test_sector33_sync import _SectorD1
 
 from jp_stock_pipeline.collectors import codelist_identity as ci, edinet_codelist as ec
 from jp_stock_pipeline.jobs import sector33_sync as sector
-
-FIXTURE = Path(__file__).parent / "fixtures/edinet/issuer-binding"
 
 
 def actual(current_changes=None, *, column=None, value=None, source_date=None, duplicate=False):
@@ -28,7 +25,7 @@ def actual(current_changes=None, *, column=None, value=None, source_date=None, d
     text = io.StringIO()
     csv.writer(text).writerows(rows)
     data = _make_zip({"EdinetcodeDlInfo.csv": text.getvalue()})
-    current = json.loads((FIXTURE / "current-627.json").read_text())
+    current = json.loads(fixture_path("edinet/issuer-binding/current-627.json").read_text())
     if current_changes:
         current.update(current_changes)
     return data, [current]
@@ -132,3 +129,56 @@ def test_update_rechecks_episode_and_protects_other_columns():
     assert not ci.resolve_blank_tickers(data, store.query(ci.SNAPSHOT_SQL))
     assert store.query(sql, params) == []
     assert store.values()["627A"][0] == "情報・通信業"
+
+
+def test_master_lineage_physical_gate_and_record_relation(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from jp_stock_pipeline.jobs import master_sync as master
+    from jp_stock_pipeline.licensing import LicenseTag
+    from jp_stock_pipeline.models import Source
+    from jp_stock_pipeline.rawstore import save_raw
+
+    data, current = actual()
+    artifact = save_raw(data, source=Source.EDINET, datatype="codelist", scope="ALL",
+                        data_date=date(2026, 9, 30), url=ec.CODELIST_URL, ext="zip",
+                        license_tag=LicenseTag.COMMERCIAL_OK, base_dir=tmp_path)
+    monkeypatch.setattr(ec, "fetch_codelist", lambda settings: artifact)
+    monkeypatch.setattr(master, "_sector33_store", lambda ctx: SimpleNamespace(query=lambda sql: current))
+    monkeypatch.setattr(master.upsert, "load_stock_master_entries", lambda *args: {})
+    records, uploaded, failures = [], [], []
+
+    def upload(raw):
+        uploaded.append(raw)
+        return "original-fsa" if len(uploaded) == 1 else "identity-lineage"
+
+    ctx = SimpleNamespace(client=None, settings=SimpleNamespace(dry_run=True, raw_data_dir=tmp_path),
+                          args=SimpleNamespace(limit=None), upload_raw=upload,
+                          persist=lambda record, *args, **kwargs: records.append(record) or True,
+                          add_success=lambda: None,
+                          add_failure=lambda *args: failures.append(args))
+    master.execute(ctx)
+    assert not failures and len(uploaded) == 2
+    assert len(records) == 1 and records[0].code == "627A"
+    assert records[0].provenance.raw_page_id == "identity-lineage"
+    assert records[0].provenance.fetched_at == artifact.fetched_at
+    lineage = json.loads(uploaded[1].local_path.read_bytes())
+    assert lineage["fsa"]["rawPageId"] == "original-fsa"
+    assert lineage["fsa"]["sha256"] == artifact.sha256
+    assert lineage["fsa"]["sourceAsOf"] == "2026-09-30"
+    assert lineage["rows"][0]["rawCode"] == ""
+    assert lineage["rows"][0]["binding"]["archiveKey"] == "ipo-bridge-20260930-daf8faeccd46"
+    assert lineage["ledger"]["sha256"]
+    # 派生来歴の物理保管失敗を握らず、同じ認定行の書込前に停止する。
+    records.clear()
+    uploaded.clear()
+
+    def fail_lineage(raw):
+        uploaded.append(raw)
+        if len(uploaded) == 2:
+            raise RuntimeError("物理保管未確認")
+        return "original-fsa"
+
+    ctx.upload_raw = fail_lineage
+    with pytest.raises(RuntimeError, match="物理保管未確認"):
+        master.execute(ctx)
+    assert records == []

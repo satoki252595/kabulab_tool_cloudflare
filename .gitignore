@@ -150,3 +150,6 @@ services/vwap-analysis/tests/fixtures/yahoo-*.json
 # (再配布が明示的に許される取得元だけ public/ に置く)。一覧・取得手順は
 # services/moneyflow/lib/sources/fixtures/README.md。未取得の環境ではテストが skip する。
 services/moneyflow/lib/sources/fixtures/private/
+
+# 取得済みFSA/owner identity回帰の私有原本投影（未配置テストはskip）
+pipeline/tests/fixtures/edinet/issuer-binding/

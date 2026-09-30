@@ -129,6 +129,8 @@ SKIP_ALLOWED: frozenset[str] = frozenset(
         "convert/tdnet_disclosure_sample.pdf",
         "convert/yanoshin_tdnet_recent.json",
         "edinet/Edinetcode.zip",
+        "edinet/issuer-binding/current-627.json",
+        "edinet/issuer-binding/fsa-three-rows.csv",
         "edinet/csv_sample.meta.json",
         "edinet/csv_sample.zip",
         "edinet/documents_error_401.json",

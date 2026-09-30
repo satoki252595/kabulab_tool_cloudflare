@@ -35,6 +35,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import time
 from functools import partial
 
@@ -42,6 +43,7 @@ from ..cloud_store import core_stocks, notion_pages
 from ..cloud_store.d1 import D1Error, D1Store
 from ..collectors import codelist_identity, edinet_codelist
 from ..notion import upsert
+from ..rawstore import save_raw
 from .runner import JobContext, apply_limit, build_parser, main_exit, run_job
 
 logger = logging.getLogger(__name__)
@@ -71,10 +73,35 @@ def execute(ctx: JobContext) -> None:
             ctx.add_failure("core_stocks.sector33", f"現在値を読めない: {exc}")
     # current未取得では認定blankだけHOLD、literal経路は従来どおり。
     resolved = codelist_identity.resolve_blank_tickers(artifact.local_path.read_bytes(), current)
+    identity_page_id = None
+    if resolved:
+        if raw_page_id is None:
+            ctx.add_failure("codelist-identity", "元FSA rawPageId未保管")
+            return
+        source_asof = edinet_codelist._read_codelist_rows(artifact.local_path.read_bytes())[0]
+        # 元原本SHA dedupへ添付追加せず、派生来歴を別の物理取得単位として保全。
+        lineage = codelist_identity.binding_lineage(resolved, current)
+        lineage["fsa"] = {"rawPageId": raw_page_id, "sha256": artifact.sha256,
+                          "sourceAsOf": source_asof.isoformat(),
+                          "sourceFetchedAt": artifact.fetched_at.isoformat()}
+        identity_artifact = save_raw(
+            json.dumps(lineage, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+            source=artifact.source, datatype="codelist-identity-derived", scope="ALL",
+            data_date=source_asof, url=artifact.url, ext="json",
+            license_tag=artifact.license_tag, base_dir=ctx.settings.raw_data_dir,
+        )
+        identity_page_id = ctx.upload_raw(identity_artifact)  # 失敗は認定行の書込前STOP
+        if identity_page_id is None:
+            ctx.add_failure("codelist-identity", "派生来歴未保管")
+            return
     # 5. Transform（全件。欠損診断のため limit 前の全コードを保持）
     records = edinet_codelist.parse_codelist(
         artifact.local_path.read_bytes(), raw_page_id=raw_page_id, current=current
     )
+    for record in records:
+        if record.code in resolved.values():
+            record.provenance.raw_page_id = identity_page_id
+            record.provenance.fetched_at = artifact.fetched_at
     # 候補検査は全件 parse 後・limit 前・① upsert 前 (sector33_sync と共通)。
     # 重複は last-wins で潰さず STOP する (strict unique)。
     try:
