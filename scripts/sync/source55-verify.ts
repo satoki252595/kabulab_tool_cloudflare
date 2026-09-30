@@ -146,7 +146,7 @@ export const PINNED_VERIFY_MODULES = {
   env: "de8449e3b8c5c217e206acac92ca3bfab5005d4a5fef3c7c0608f42a1f4ae1c0",
   pageFile: "48f8574f6b4eac3b8a23f83c343c7e52e1274b5c10fe437ebb59fb9d682a3f59",
   sha256: "da3711c4f39656b665f46aa2922adbdf41f3af5045fcf28301540da521a001de",
-  yahooClient: "cf8294df95e187036753ee10ab98263aa14198d1536cddaacbb69c5f9e137bdf",
+  yahooClient: "60bca236229ecbb1f2ea13f9970b5f7e9bb87d3279aa7e901db90de40d6f1955",
   yahooBarSanity: "0f7ec911bcfbb6abadf20bc4c2694554a04de96190c0f7ebf26a73aa6a55eea6",
   pnpmLock: "805dd5b36ca9ec385b29de1ded715305537eac514dbc7c77dfc55b2d56617e58",
 } as const;

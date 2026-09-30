@@ -51,7 +51,6 @@ import {
   d1HttpQueryUrlFor,
 } from "../../src/shared/db/d1-http-client.js";
 import { sharedEnv } from "../../src/shared/env.js";
-import { stableStringify } from "./ipo-bridge-capture.js";
 import {
   assertFreshOutDir,
   createCaptureFetch,
@@ -91,13 +90,12 @@ export const PINNED_PACKET_SHA = "6c7fb424b175bf23e0d6b5ca827146e7b0167a85819d8b
 export const PINNED_DB_SHA = "a7bcf8e2f330e5c81f78e063131dc8837c90d7db9c07388ad7eeca4c8768ba0e";
 /** exact-forward query URL full SHA (prefix 不可。pure preflight 確定・Root 報告済みの値)。 */
 export const PINNED_URL_SHA = "8a2fc196212244e660668396fcdd92228f1b2120b6dd16145bbdeef321ddeb49";
-/** 再使用 module 4 件の full SHA (pure preflight 確定・Root 報告済みの値)。 */
+/** 再使用 module 5 件の full SHA (pure preflight 確定・Root 報告済みの値)。 */
 export const PINNED_MODULES = {
   capture: "3e25047d6c77a8c74626c0f67ac075923501e315612f0ab5c399643b91732060",
   selectProof: "6c864f43b8141162783368c311c2abd8e673e34dd58c82469618173e7a96bf05",
   d1Client: "2d16180bdf864bcade9f8850b922f99b768be8de3bcbe427900fc9ec7afda1c1",
-  sharedEnv: "183af3b9847673b5ea3863f81b0866c7d078075193b702631bfd7941bb1e8d15",
-  ipoBridge: "462c1219b923165ac8a949f479fe459542272e49c0c7ab73475aaaa251f055b7",
+  sharedEnv: "49d9f77dee74f3e711466f123c284572de6b991b5ad4a50c9f86921eaa915239",
   pnpmLock: "805dd5b36ca9ec385b29de1ded715305537eac514dbc7c77dfc55b2d56617e58",
 };
 /** packet R1/R2 file bytes SHA (source pins。pure preflight 確定・Root 報告済みの値)。 */
@@ -116,7 +114,6 @@ export const MODULE_FILES = {
   selectProof: join(HERE, "../../services/yuho-quant/data-scripts/overseas-745-select-proof.ts"),
   d1Client: join(HERE, "../../src/shared/db/d1-http-client.ts"),
   sharedEnv: join(HERE, "../../src/shared/env.ts"),
-  ipoBridge: join(HERE, "./ipo-bridge-capture.ts"),
   pnpmLock: join(HERE, "../../pnpm-lock.yaml"),
 } as const;
 
@@ -133,6 +130,18 @@ export interface PacketR2 {
   dateBind: string;
   idSlots: { slot: number; code: string; id: string }[];
   counts: { sends: number; binds: number; expectedRowsMax: number };
+}
+
+/**
+ * sorted-key compact JSON (純粋関数)。未 review の IPO WIP
+ * (`ipo-bridge-capture.ts`) から verbatim 移設した実体で、2READ 実行時と
+ * 同一の bytes を出す。将来の IPO 側はここを再使用する。
+ */
+export function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map((v) => stableStringify(v)).join(",")}]`;
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`).join(",")}}`;
 }
 
 /**
@@ -177,7 +186,6 @@ export interface Owner2ReadPins {
     selectProof: string;
     d1Client: string;
     sharedEnv: string;
-    ipoBridge: string;
     pnpmLock: string;
   };
   sources: { r1: string; r2: string };

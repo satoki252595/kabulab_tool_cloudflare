@@ -19,11 +19,22 @@
 - `scripts/sync/source55-verify.ts`
   source55 same-run re-verification。ONE verify 済み
   (files 55・codes 54・replay40 40/40・gate 3/55/0)。
-- `scripts/sync/ipo-bridge-capture.ts`
-  compile 依存として exact 収録 (2READ executor の stableStringify
-  供給のみ)。UNEXECUTED / WIP であり、CODE CLEAR・live proof ではない。
-  IPO live path は本 PR で実行しない。source5 の前に whole-code review
-  が必要。originals 保持・55/2READ の rerun なし。
+- 2READ executor の `stableStringify` は、未 review IPO WIP の同名純粋関数を
+  verbatim 移設した実体 (本 PR に IPO 926-line 本体は含めない。
+  将来の IPO 側はここを再使用)。移設のみの差分のため canonical bytes・
+  PACKET SHA (`6c7fb424…`) は不変。
+- 実行時 bytes pins (executor 旧 SHA・`ipoBridge: 462c1219…`・
+  `sharedEnv: 183af3b9…`・`yahooClient: cf8294df…` 含む) は run 記録に
+  歴史的事実として保持 (retag・rerun なし)。
+  本 PR の実行時との差分は下記 3 点のみ:
+  1. executor の stableStringify 移設 (canonical bytes 同一。
+     PACKET SHA `6c7fb424…` 不変を確認)。
+  2. latest-main の `sharedEnv` additive 差分 (VWAP knobs 追加のみ。
+     42+/0-) への re-pin。
+  3. latest-main の `yahoo/client.ts` 差分 (応答銘柄同一性検証の追加等)
+     への re-pin。retained 54 bytes に対する offline replay-40 等価性
+     (既存 replayRawBar + ohlcvSevenEqual。network 0・書込 0) で
+     40/40 一致を確認。55 の再取得・再 verify なし。
 - `services/yuho-quant/data-scripts/overseas-fresh-read-capture.ts`
   最小差分 (sha256Hex/setSHA export・R1/R2 kind・self pins 更新)。
 - `src/shared/db/d1-http-client.ts`
@@ -36,8 +47,10 @@
 
 - price40 CAS 実行物 (`price40-cas-execute.ts`・price40 記録)。
   seam adapter は packet branch に WIP 隔離。WRITE 0 のまま。
-- IPO live 5-GET (`ipo-zip-bridge.py`・tests・flake poppler・
-  IPO 記録)。source5 GET 0 のまま。
+- IPO 本体 (`ipo-bridge-capture.ts` 926-line・`ipo-zip-bridge.py`・
+  tests・IPO 記録)。UNEXECUTED / WIP。source5 は別途 whole-code
+  review + final CODE CLEAR の後に着手。source5 GET 0 のまま。
+  (poppler 追加は承認済み。待ちではない)
 - 上記以外の packet branch 差分は本 PR に含めない。
 
 ## gates
