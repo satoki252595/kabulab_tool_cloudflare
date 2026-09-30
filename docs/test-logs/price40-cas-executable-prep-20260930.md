@@ -43,7 +43,7 @@ WRITE 0 のまま。
   batch POST ≤4 件は frozen-body allowlist + 同一 idiom wrapper
   (既存 sender 本体は不変)。
 - preflight0 (canonical env。送信 0・network 0): **PASS** exit 0。
-  artifacts 17・retained 58・modules 18・D1 URL SHA。stderr 0 bytes。
+  artifacts 17・retained 58・modules 19・D1 URL SHA。stderr 0 bytes。
   stdout は private 固定 artifact に保存:
   `/tmp/price40-packet-preflight-20260930/PREFLIGHT.json` (0600)
   SHA `c182d1d83b44b38d6098ba9cec2453accd4e5baf51e1b6b1e7524760913fac75`
@@ -274,8 +274,10 @@ receipt の 40 full tuple 照合 → local pure reentry-0 (本 proof と同一�
   pnpmLock `805dd5b3…` (full 値は preflight 内)。
 - env: Notion 2 + D1 3 の typed presence のみ (値なし・network なし)。
 - outcome-fix 後再確定 (canonical env。送信 0・network 0): **PASS** exit 0。
-  artifacts 17 (budgetSend v3 pin 含む)・retained 58・modules 18・
+  artifacts 17 (budgetSend v3 pin 含む)・retained 58・modules 19・
   D1 URL SHA。stderr 0 bytes。
+  (注: modules 18 は 230b2be 世代のみの historical count
+  (universeOverlay なし)。4cb116e で 19 に。以降 19。)
   `/tmp/price40-packet-preflight-20260930/PREFLIGHT.json` (0600)
   SHA `c182d1d83b44b38d6098ba9cec2453accd4e5baf51e1b6b1e7524760913fac75`
   (出力 JSON 同一のため既報 SHA と一致)。
