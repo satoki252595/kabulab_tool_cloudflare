@@ -14,6 +14,7 @@
 import {
   findBackupRowsByKeys,
   recordPrimaryData,
+  verifyArchivedAttachments,
   type RecordResult,
 } from "../../../../../src/shared/notion-archive/index.js";
 
@@ -142,24 +143,6 @@ export function edinetArchiveFilename(
 }
 
 /**
- * 記録すべき type の純粋決定。各 type の有無だけを見て、Type5 先在でも
- * Type1 未記録なら type1 を返す。XBRL 未取得なら type1 は計画しない
- * (無い物の記録は捏造。ルール1)。
- */
-export function planArchiveUploads(args: {
-  t1Present: boolean;
-  t5Present: boolean;
-  xbrlAvailable: boolean;
-  force?: boolean;
-}): EdinetArchiveDocType[] {
-  const { t1Present, t5Present, xbrlAvailable, force = false } = args;
-  const out: EdinetArchiveDocType[] = [];
-  if (force || !t5Present) out.push(5);
-  if (xbrlAvailable && (force || !t1Present)) out.push(1);
-  return out;
-}
-
-/**
  * backfill 系 tail の終了判定 (repair-zip-archive と同一方式)。
  * error 系が1件でもあれば process.exitCode=1。保管失敗を tally 加算だけで
  * 終わらせて job green にしない (Sol HOLD1)。呼び出し側の tail で使う。
@@ -175,6 +158,12 @@ export function archiveTallyFailed(errorCount: number): boolean {
  * ファイルが Notion 上限超過で添付できなかった (`fileTooLarge`) 場合は
  * metadata のみ記録成功として返さず throw する。呼び出し側は通単位で
  * 失敗計上し、全 caller (ingest/backfill/repair) で未完了として扱う。
+ *
+ * 記録後は unique physical の full-bytes SHA を readback 確認する
+ * (verifyArchivedAttachments reuse)。mismatch・取得失敗は throw。
+ * skipped_existing は先に unique 行 + 実体ありを検証する。旧 manifest
+ * unknown でも実 bytes 一致は許容し、unknown 表示は保持する
+ * (manifest を書換えない)。
  */
 export async function recordEdinetZip(args: {
   service: string;
@@ -211,6 +200,16 @@ export async function recordEdinetZip(args: {
   if (result.outcome === "skipped_existing") {
     await assertExistingRowPhysical(service, docID, type);
   }
+  await verifyArchivedAttachments(
+    result.pageId,
+    [
+      {
+        filename: edinetArchiveFilename(docID, type),
+        bytes: new Uint8Array(zip),
+      },
+    ],
+    `EDINET一次 ${edinetArchiveKey(docID, type)}`
+  );
   return result;
 }
 
