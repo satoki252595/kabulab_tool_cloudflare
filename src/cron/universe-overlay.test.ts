@@ -13,6 +13,7 @@ import {
   OverlayHoldError,
   parseMarketSuffix,
   planOverlayDeltas,
+  withBasicEvidence,
 } from "./universe-overlay.js";
 import { loadAppliedOverlaySets } from "./universe.js";
 
@@ -358,6 +359,159 @@ describe("planOverlayDeltas", () => {
     expect(plan.skipped.futureListing).toBe(2);
   });
 
+  it("batch.basics の束縛証拠のみ full-form 解決する (欠落/stale/外国/不一致は HOLD)", async () => {
+    const { DEFS_COUNTRY_GUIDE, DEFS_ORDINARY_CODE } = await import(
+      "../shared/jpx/basic-profile.js"
+    );
+    type Ev = import("../shared/jpx/basic-profile.js").BasicProfileEvidence;
+    const byCode = new Map<string, OverlayExistingRow>();
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    const ev = (code: string, partial: Partial<Ev>): Ev => ({
+      code4: code,
+      code5: `${code}0`,
+      isin: "JP9999999999",
+      marketBare: "グロース",
+      countryCell: null,
+      sector: "サービス業",
+      basicFetchedAt: "2026-09-30T01:00:00.000Z",
+      entrySha: "e".repeat(64),
+      searchSha: "f".repeat(64),
+      rawSha: "a".repeat(64),
+      sourceUrl: "u",
+      defsPins: {
+        countryGuide: DEFS_COUNTRY_GUIDE.sha256,
+        ordinaryCode: DEFS_ORDINARY_CODE.sha256,
+      },
+      custody: { pageId: "p" },
+      boundEventsFetchedAt: "2026-09-30T00:00:00.000Z",
+      qualificationDate: "2026-09-29",
+      qualificationBasis: "current-owner-qualified",
+      datedSourcePin: null,
+      reviewedPins: null,
+      ...partial,
+    });
+    // batch 世代 = 2026-09-30T00:00:00.000Z。618A の event 市場 = グロース。
+    b.basics = new Map([
+      ["618A", ev("618A", {})],
+      ["621A", ev("621A", { boundEventsFetchedAt: "2026-09-29T00:00:00.000Z" })],
+      ["625A", ev("625A", { marketBare: null, countryCell: "グロース アメリカ" })],
+      ["622A", ev("622A", {})],
+      ["623A", ev("623A", { marketBare: "スタンダード", custody: null })],
+    ]);
+    const plan = planOverlayDeltas(b, byCode);
+    const byCodeOut = new Map(plan.listingInserts.map((l) => [l.code, l.market]));
+    expect(byCodeOut.get("618A")).toBe("グロース（内国株式）");
+    expect(byCodeOut.get("621A")).toBeNull();
+    expect(byCodeOut.get("625A")).toBeNull();
+    expect(byCodeOut.get("622A")).toBeNull();
+    expect(byCodeOut.get("623A")).toBeNull();
+    expect(byCodeOut.get("619A")).toBeNull();
+  });
+
+  it("inactive 衝突・逆行時計・SHA 形式不正の証拠は HOLD", async () => {
+    const { DEFS_COUNTRY_GUIDE, DEFS_ORDINARY_CODE } = await import(
+      "../shared/jpx/basic-profile.js"
+    );
+    type Ev = import("../shared/jpx/basic-profile.js").BasicProfileEvidence;
+    const mk = (partial: Partial<Ev>): Ev => ({
+      code4: "618A",
+      code5: "618A0",
+      isin: "JP9999999999",
+      marketBare: "グロース",
+      countryCell: null,
+      sector: "サービス業",
+      basicFetchedAt: "2026-09-30T01:00:00.000Z",
+      entrySha: "e".repeat(64),
+      searchSha: "f".repeat(64),
+      rawSha: "a".repeat(64),
+      sourceUrl: "u",
+      defsPins: {
+        countryGuide: DEFS_COUNTRY_GUIDE.sha256,
+        ordinaryCode: DEFS_ORDINARY_CODE.sha256,
+      },
+      custody: { pageId: "p" },
+      boundEventsFetchedAt: "2026-09-30T00:00:00.000Z",
+      qualificationDate: "2026-09-29",
+      qualificationBasis: "current-owner-qualified",
+      datedSourcePin: null,
+      reviewedPins: null,
+      ...partial,
+    });
+    // inactive 衝突は証拠があっても HOLD。
+    const byInactive = new Map<string, OverlayExistingRow>([
+      ["618A", { id: 1, code: "618A", name: "x", market: "グロース（内国株式）", isActive: false }],
+    ]);
+    const b1 = batch("2026-09-29");
+    b1.sources.delisted.rows = [];
+    b1.sources.transfers.rows = [];
+    b1.basics = new Map([["618A", mk({})]]);
+    const p1 = planOverlayDeltas(b1, byInactive);
+    expect(p1.listingInserts.find((l) => l.code === "618A")?.market).toBeNull();
+    expect(p1.skipped.listingInactiveCollision).toBe(1);
+    // 逆行時計 (basic < gen) は HOLD。
+    const b2 = batch("2026-09-29");
+    b2.sources.delisted.rows = [];
+    b2.sources.transfers.rows = [];
+    b2.basics = new Map([
+      ["618A", mk({ basicFetchedAt: "2026-09-29T23:00:00.000Z" })],
+    ]);
+    const p2 = planOverlayDeltas(b2, new Map());
+    expect(p2.listingInserts.find((l) => l.code === "618A")?.market).toBeNull();
+    // SHA 形式不正は HOLD。
+    const b3 = batch("2026-09-29");
+    b3.sources.delisted.rows = [];
+    b3.sources.transfers.rows = [];
+    b3.basics = new Map([["618A", mk({ rawSha: "zzz" })]]);
+    const p3 = planOverlayDeltas(b3, new Map());
+    expect(p3.listingInserts.find((l) => l.code === "618A")?.market).toBeNull();
+  });
+
+  it("current 9/30 証拠は historic 9/29 母集団を qualify しない (HOLD)", async () => {
+    const { DEFS_COUNTRY_GUIDE, DEFS_ORDINARY_CODE } = await import(
+      "../shared/jpx/basic-profile.js"
+    );
+    // 9/29 eligibility の batch に、9/30 所有検証の証拠を提示する。
+    // bound・時計・保管・定義 pins は全て正。日付だけが historic。
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    b.sources.newListings.rows = b.sources.newListings.rows.slice(0, 1);
+    b.basics = new Map([
+      [
+        "618A",
+        {
+          code4: "618A",
+          code5: "618A0",
+          isin: "JP3306480009",
+          marketBare: "グロース",
+          countryCell: null,
+          sector: "サービス業",
+          basicFetchedAt: "2026-09-30T01:00:00.000Z",
+          entrySha: "e".repeat(64),
+          searchSha: "f".repeat(64),
+          rawSha: "a".repeat(64),
+          sourceUrl: "u",
+          defsPins: {
+            countryGuide: DEFS_COUNTRY_GUIDE.sha256,
+            ordinaryCode: DEFS_ORDINARY_CODE.sha256,
+          },
+          custody: { pageId: "p" },
+          boundEventsFetchedAt: "2026-09-30T00:00:00.000Z",
+          qualificationDate: "2026-09-30",
+          qualificationBasis: "current-owner-qualified",
+          datedSourcePin: null,
+          reviewedPins: null,
+        },
+      ],
+    ]);
+    const plan = planOverlayDeltas(b, new Map());
+    expect(
+      plan.listingInserts.find((l) => l.code === "618A")?.market
+    ).toBeNull();
+  });
+
   it("冪等: 非active delist・一致済 market・在core IPO は no-op", () => {
     const rows = coreAll().map((r) =>
       DELIST_14.some(([c]) => c === r.code) ? { ...r, isActive: false } : r
@@ -635,6 +789,53 @@ CREATE TABLE universe_overlay_state (
     expect(rows.map((r) => r.code)).toEqual(["618A"]);
   });
 
+  it("証拠あり IPO は full-form で INSERT される (sector は NULL のまま)", async () => {
+    const { DEFS_COUNTRY_GUIDE, DEFS_ORDINARY_CODE } = await import(
+      "../shared/jpx/basic-profile.js"
+    );
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    b.sources.newListings.rows = b.sources.newListings.rows.slice(0, 1);
+    b.basics = new Map([
+      [
+        "618A",
+        {
+          code4: "618A",
+          code5: "618A0",
+          isin: "JP3306480009",
+          marketBare: "グロース",
+          countryCell: null,
+          sector: "サービス業",
+          basicFetchedAt: "2026-09-30T01:00:00.000Z",
+          entrySha: "e".repeat(64),
+          searchSha: "f".repeat(64),
+          rawSha: "a".repeat(64),
+          sourceUrl: "u",
+          defsPins: {
+            countryGuide: DEFS_COUNTRY_GUIDE.sha256,
+            ordinaryCode: DEFS_ORDINARY_CODE.sha256,
+          },
+          custody: { pageId: "p" },
+          boundEventsFetchedAt: "2026-09-30T00:00:00.000Z",
+          qualificationDate: "2026-09-29",
+          qualificationBasis: "current-owner-qualified",
+          datedSourcePin: null,
+          reviewedPins: null,
+        },
+      ],
+    ]);
+    const res = await applyUniverseOverlay(memDb() as never, b, []);
+    expect(res.listed).toBe(1);
+    expect(res.heldListingCodes).toEqual([]);
+    const row = sqlite
+      .prepare("SELECT market, sector, instrument_type FROM core_stocks WHERE code='618A'")
+      .get() as { market: string; sector: null; instrument_type: string };
+    expect(row.market).toBe("グロース（内国株式）");
+    expect(row.sector).toBeNull();
+    expect(row.instrument_type).toBe("equity");
+  });
+
   it("同日再入でも HOLD 残があれば no-op 正常にしない (BLOCKER 回帰)", async () => {
     sqlite.exec(
       `INSERT INTO universe_overlay_state (id, eligibility_as_of, events_fetched_at, held_listing_codes)
@@ -705,7 +906,11 @@ CREATE TABLE universe_overlay_state (
       () => null,
       (e: unknown) => e
     );
-    expect(collect).toHaveBeenCalledWith({ baseAsOf: null, eligibilityAsOf: "2026-09-29" });
+    expect(collect).toHaveBeenCalledWith({
+      baseAsOf: null,
+      eligibilityAsOf: "2026-09-29",
+      skipBasicsFor: new Set(["1948"]),
+    });
     expect(err).toBeInstanceOf(OverlayHoldError);
     const row = sqlite
       .prepare("SELECT is_active FROM core_stocks WHERE code='1948'")
@@ -820,5 +1025,350 @@ describe("applyUniverseOverlay", () => {
       "update",
       "insert",
     ]);
+  });
+});
+
+describe("withBasicEvidence", () => {
+  const enc = new TextEncoder();
+  function fakeBasic(
+    code: string,
+    marketBare: string,
+    pins?: { countryGuide: string; ordinaryCode: string }
+  ) {
+    const evidence = {
+      code4: code,
+      code5: `${code}0`,
+      isin: "JP9999999999",
+      marketBare,
+      countryCell: null,
+      sector: "サービス業",
+      basicFetchedAt: "2026-09-30T01:00:00.000Z",
+      entrySha: "e".repeat(64),
+      searchSha: "f".repeat(64),
+      rawSha: "a".repeat(64),
+      sourceUrl: "u",
+      defsPins: pins ?? { countryGuide: "cg", ordinaryCode: "oc" },
+      custody: null,
+      boundEventsFetchedAt: null,
+      qualificationDate: null,
+      qualificationBasis: null,
+      datedSourcePin: null,
+      reviewedPins: null,
+    };
+    const mk = (tag: string, sha256: string) => ({
+      url: "u",
+      fetchedAt: "f",
+      status: 200,
+      bytes: enc.encode(`${code}-${tag}`),
+      sha256,
+    });
+    return {
+      entry: mk("r1", "e".repeat(64)),
+      search: mk("r2", "f".repeat(64)),
+      basic: mk("r3", "a".repeat(64)),
+      evidence,
+    };
+  }
+  // record → listFiles → downloadBytes の一貫 mock (readback が通る形)。
+  function verifyMocks() {
+    const stored = new Map<string, { filename: string; bytes: Uint8Array }[]>();
+    const record = vi.fn(async (input: {
+      key: string;
+      files: { filename: string; bytes: Uint8Array }[];
+    }) => {
+      stored.set(input.key, input.files);
+      return {
+        pageId: `pg-${input.key}`,
+        outcome: "recorded",
+        fileTooLarge: false,
+        manifestMatch: "written",
+      };
+    });
+    const listFiles = vi.fn(async (pageId: string) => {
+      const key = pageId.replace(/^pg-/, "");
+      return (stored.get(key) ?? []).map((f) => ({
+        name: f.filename,
+        kind: "file",
+        url: `u:${key}:${f.filename}`,
+      }));
+    });
+    const downloadBytes = vi.fn(async (url: string) => {
+      const [, key, ...rest] = url.split(":");
+      const name = rest.join(":");
+      const file = (stored.get(key) ?? []).find((f) => f.filename === name);
+      if (file === undefined) throw new Error(`no such file ${url}`);
+      return file.bytes;
+    });
+    return { record, listFiles, downloadBytes };
+  }
+
+  it("eligible 行のみ取得・保管+readback して batch.basics に束縛する", async () => {
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    b.sources.newListings.rows = b.sources.newListings.rows.slice(0, 2);
+    const collectBasic = vi.fn(async (code: string) => fakeBasic(code, "グロース"));
+    const { record, listFiles, downloadBytes } = verifyMocks();
+    const collect = withBasicEvidence(async () => b, {
+      collectBasic: collectBasic as never,
+      record: record as never,
+      listFiles: listFiles as never,
+      downloadBytes: downloadBytes as never,
+    });
+    const out = await collect({ baseAsOf: null, eligibilityAsOf: "2026-09-29" });
+    // slice(0,2) = 618A (9/11) + 619A (9/16)。どちらも eligible。
+    expect(collectBasic).toHaveBeenCalledTimes(2);
+    expect(record).toHaveBeenCalledTimes(2);
+    // key は rawSHA+世代を束縛する。
+    const key0 = (record.mock.calls[0][0] as { key: string }).key;
+    expect(key0).toContain("20260930000000");
+    expect(key0).toContain("a".repeat(12));
+    const ev = out.basics?.get("618A");
+    expect(ev?.custody?.pageId).toContain("pg-basic-618A");
+    expect(ev?.boundEventsFetchedAt).toBe("2026-09-30T00:00:00.000Z");
+    // reviewed input なし → qualification null (= HOLD)。
+    expect(ev?.qualificationDate).toBeNull();
+    expect(ev?.qualificationBasis).toBeNull();
+    expect(ev?.datedSourcePin).toBeNull();
+    expect(downloadBytes.mock.calls.length).toBe(6);
+  });
+
+  it("未来・収録済み・delist 阻止は取得しない", async () => {
+    const b = batch("2026-09-29");
+    b.sources.transfers.rows = [];
+    b.sources.delisted.rows = [
+      delistedRow("627A", "2026-09-20", "x", "スタンダード"),
+    ];
+    const collectBasic = vi.fn(async (code: string) => fakeBasic(code, "グロース"));
+    const { record, listFiles, downloadBytes } = verifyMocks();
+    const collect = withBasicEvidence(async () => b, {
+      collectBasic: collectBasic as never,
+      record: record as never,
+      listFiles: listFiles as never,
+      downloadBytes: downloadBytes as never,
+    });
+    const out = await collect({
+      baseAsOf: null,
+      eligibilityAsOf: "2026-09-29",
+      skipBasicsFor: new Set(["618A"]),
+    });
+    const got = collectBasic.mock.calls.map((c) => c[0] as string);
+    // 618A=収録済み skip、627A=delist 阻止 skip、652A/653A=未来 skip。
+    expect(got.sort()).toEqual(
+      ["619A", "621A", "622A", "623A", "625A", "634A", "646A"].sort()
+    );
+    expect(out.basics?.has("618A")).toBe(false);
+    expect(out.basics?.has("627A")).toBe(false);
+  });
+
+  it("1 社の取得失敗は warn + 省略 (HOLD へ)", async () => {
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    b.sources.newListings.rows = b.sources.newListings.rows.slice(0, 1);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const collect = withBasicEvidence(async () => b, {
+        collectBasic: (async () => {
+          throw new Error("boom");
+        }) as never,
+        record: (async () => {
+          throw new Error("must not record");
+        }) as never,
+        listFiles: (async () => []) as never,
+        downloadBytes: (async () => new Uint8Array()) as never,
+      });
+      const out = await collect({ baseAsOf: null, eligibilityAsOf: "2026-09-29" });
+      expect(out.basics?.size).toBe(0);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("partial 得済み raw は保管してから省略する (黙殺禁止)", async () => {
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    b.sources.newListings.rows = b.sources.newListings.rows.slice(0, 1);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const fb = fakeBasic("618A", "グロース");
+      const err = Object.assign(new Error("R3 down"), {
+        partial: { entry: fb.entry, search: fb.search },
+      });
+      const { record, listFiles, downloadBytes } = verifyMocks();
+      const collect = withBasicEvidence(async () => b, {
+        collectBasic: (async () => {
+          throw err;
+        }) as never,
+        record: record as never,
+        listFiles: listFiles as never,
+        downloadBytes: downloadBytes as never,
+      });
+      const out = await collect({ baseAsOf: null, eligibilityAsOf: "2026-09-29" });
+      expect(out.basics?.size).toBe(0);
+      expect(record).toHaveBeenCalledTimes(1);
+      const key = (record.mock.calls[0][0] as { key: string }).key;
+      expect(key).toContain("-partial");
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("保管 readback 不一致は loud STOP", async () => {
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    b.sources.newListings.rows = b.sources.newListings.rows.slice(0, 1);
+    const collect = withBasicEvidence(async () => b, {
+      collectBasic: (async (code: string) => fakeBasic(code, "グロース")) as never,
+      record: (async () => ({
+        pageId: "pg",
+        outcome: "recorded",
+        fileTooLarge: false,
+        manifestMatch: "written",
+      })) as never,
+      listFiles: (async () => []) as never,
+      downloadBytes: (async () => new Uint8Array()) as never,
+    });
+    await expect(
+      collect({ baseAsOf: null, eligibilityAsOf: "2026-09-29" })
+    ).rejects.toThrow(/readback 照合に失敗/);
+  });
+
+  it("reviewed input がある code のみ qualification を stamp する", async () => {
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    b.sources.newListings.rows = b.sources.newListings.rows.slice(0, 2);
+    const collectBasic = vi.fn(async (code: string) => fakeBasic(code, "グロース"));
+    const { record, listFiles, downloadBytes } = verifyMocks();
+    const pins = {
+      entrySha: "e".repeat(64),
+      searchSha: "f".repeat(64),
+      rawSha: "a".repeat(64),
+      custodyPageIds: ["pg-reviewed"],
+    };
+    const collect = withBasicEvidence(async () => b, {
+      collectBasic: collectBasic as never,
+      record: record as never,
+      listFiles: listFiles as never,
+      downloadBytes: downloadBytes as never,
+      qualificationInput: new Map([
+        [
+          "618A",
+          {
+            date: "2026-09-30",
+            basis: "current-owner-qualified" as const,
+            marketBare: "グロース",
+            receiptPins: pins,
+          },
+        ],
+        // 619A: market 不一致 → stamp しない。
+        [
+          "619A",
+          {
+            date: "2026-09-30",
+            basis: "current-owner-qualified" as const,
+            marketBare: "スタンダード",
+            receiptPins: pins,
+          },
+        ],
+      ]),
+    });
+    const out = await collect({ baseAsOf: null, eligibilityAsOf: "2026-09-29" });
+    // 日付は requested elig (9/29) ではなく reviewed 指定 (9/30) が載る。
+    expect(out.basics?.get("618A")?.qualificationDate).toBe("2026-09-30");
+    expect(out.basics?.get("618A")?.qualificationBasis).toBe(
+      "current-owner-qualified"
+    );
+    expect(out.basics?.get("618A")?.reviewedPins?.rawSha).toBe("a".repeat(64));
+    expect(out.basics?.get("619A")?.qualificationDate).toBeNull();
+  });
+
+  it("receipt pins 不一致は stamp しない (stale 印流用防止)", async () => {
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    b.sources.newListings.rows = b.sources.newListings.rows.slice(0, 1);
+    const collectBasic = vi.fn(async (code: string) => fakeBasic(code, "グロース"));
+    const { record, listFiles, downloadBytes } = verifyMocks();
+    const collect = withBasicEvidence(async () => b, {
+      collectBasic: collectBasic as never,
+      record: record as never,
+      listFiles: listFiles as never,
+      downloadBytes: downloadBytes as never,
+      qualificationInput: new Map([
+        [
+          "618A",
+          {
+            date: "2026-09-30",
+            basis: "current-owner-qualified" as const,
+            marketBare: "グロース",
+            receiptPins: {
+              entrySha: "e".repeat(64),
+              searchSha: "f".repeat(64),
+              rawSha: "b".repeat(64),
+              custodyPageIds: ["pg-reviewed"],
+            },
+          },
+        ],
+      ]),
+    });
+    const out = await collect({ baseAsOf: null, eligibilityAsOf: "2026-09-29" });
+    // market 一致でも R3 SHA 不一致 → null。
+    expect(out.basics?.get("618A")?.qualificationDate).toBeNull();
+    expect(out.basics?.get("618A")?.reviewedPins).toBeNull();
+    // custody/bound は付く (HOLD 対象として保全済み)。
+    expect(out.basics?.get("618A")?.custody).not.toBeNull();
+  });
+
+  it("normal fresh 取得 + historic 9/29 cycle は HOLD (current 9/30 入力の流用不可)", async () => {
+    const { DEFS_COUNTRY_GUIDE, DEFS_ORDINARY_CODE } = await import(
+      "../shared/jpx/basic-profile.js"
+    );
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    b.sources.newListings.rows = b.sources.newListings.rows.slice(0, 1);
+    // 定義 pins は正規品にし、日付だけを historic 不一致にする。
+    const collectBasic = vi.fn(async (code: string) =>
+      fakeBasic(code, "グロース", {
+        countryGuide: DEFS_COUNTRY_GUIDE.sha256,
+        ordinaryCode: DEFS_ORDINARY_CODE.sha256,
+      })
+    );
+    const { record, listFiles, downloadBytes } = verifyMocks();
+    const collect = withBasicEvidence(async () => b, {
+      collectBasic: collectBasic as never,
+      record: record as never,
+      listFiles: listFiles as never,
+      downloadBytes: downloadBytes as never,
+      qualificationInput: new Map([
+        [
+          "618A",
+          {
+            date: "2026-09-30",
+            basis: "current-owner-qualified" as const,
+            marketBare: "グロース",
+            receiptPins: {
+              entrySha: "e".repeat(64),
+              searchSha: "f".repeat(64),
+              rawSha: "a".repeat(64),
+              custodyPageIds: ["pg-reviewed"],
+            },
+          },
+        ],
+      ]),
+    });
+    // fresh 取得は成功するが、9/30 stamp は 9/29 batch を qualify しない。
+    const out = await collect({ baseAsOf: null, eligibilityAsOf: "2026-09-29" });
+    expect(out.basics?.get("618A")?.qualificationDate).toBe("2026-09-30");
+    const plan = planOverlayDeltas(out, new Map());
+    expect(
+      plan.listingInserts.find((l) => l.code === "618A")?.market
+    ).toBeNull();
   });
 });

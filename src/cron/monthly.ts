@@ -29,6 +29,7 @@ import { runDateKeys } from "./daily.js";
 import { collectUniverseOfficialEvents } from "./universe-official-events.js";
 import {
   ensureUniverseOverlay,
+  withBasicEvidence,
   type OverlayCollectFn,
 } from "./universe-overlay.js";
 
@@ -55,7 +56,9 @@ export async function runMonthlyRebuild(
   // HOLD 残があれば不完全失敗を throw し、再構築へ進まない。
   const overlay = await ensureUniverseOverlay(db, {
     eligibilityAsOf: runDateKeys(startedAt).runDate,
-    collect: deps.collectOverlay ?? ((input) => collectUniverseOfficialEvents(input)),
+    collect:
+      deps.collectOverlay ??
+      withBasicEvidence((input) => collectUniverseOfficialEvents(input)),
   });
   if (overlay.applied) {
     console.info(

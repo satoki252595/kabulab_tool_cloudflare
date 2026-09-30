@@ -10,7 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
-- 母集団 universe の月次 stale 窓を JPX 公式 3 頁 (上場廃止/新規上場/市場区分変更) の日次 overlay で補正する PREP (収集・厳密 parse・宣言被覆・世代管理・HOLD/不完全失敗・月次 deferral・daily/monthly 配線・0025 migration)。IPO 分類は未確定のため HOLD 継続。本番適用なし、データ変更なし (Refs #196)。
+- 母集団 universe の月次 stale 窓を JPX 公式 3 頁 (上場廃止/新規上場/市場区分変更) の日次 overlay で補正する PREP (収集・厳密 parse・宣言被覆・世代管理・HOLD/不完全失敗・月次 deferral・daily/monthly 配線・0025 migration)。IPO 分類は Basic 証拠 mechanism (3 段収集・composer custody+readback・planner gate・clock guard) を接続、9/9 captured positive (ledger+readback 済み)。reviewed qualification input は Root 承認待ちのため未配線=該当 cycle は HOLD。本番適用なし、データ変更なし (Refs #196)。
 - 優待 ABC 131/全文 13 の実再入 0 を保存済み証跡のみで offline 証明 (ABC 473 行全省略・全文 62 行全適用済み・効果文 0、送信口 throw-if-called)。共有 planner に preimage 3 値の同値省略と全文分類を追加。normal C45 は pending/stale を正直計数。証跡 `docs/test-logs/yutai-reentry-proof-20260930.md`。データ変更なし (Refs #146 #102)。
 - Yahoo crumb 429 を typed deadline 付きで保持し、取込 proxy は 429 + 実残り秒 Retry-After で返す (従来の 502 丸めを是正)。期限内は同一 deadline で再 bootstrap せず、期限切れ後に single-flight で回復。Node recovery の待機 budget cap 30 秒・認証方式・再試行回数は不変。データ変更なし (Refs #163)。
 - Notion read-list 全入口 (TS 共有 client + Python client) の応答メタ (`results`・`has_more`・`next_cursor` の型と組合せ) を厳密検証し、不正・反復カーソル (same・A→B→A) は追加取得前に停止 (再試行なし)。正常本文・保存形式・writer は不変、既存 caller の失敗通知へ伝播。データ変更なし (Fixes #199)。

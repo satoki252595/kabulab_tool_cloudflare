@@ -13,6 +13,20 @@
  */
 import { sql } from "drizzle-orm";
 import { stocks } from "../shared/db/core-schema.js";
+import { sha256HexBytes } from "../shared/sha256.js";
+import {
+  collectBasicProfile,
+  DEFS_COUNTRY_GUIDE,
+  DEFS_ORDINARY_CODE,
+  resolveDomesticFullMarket,
+  type BasicFetch,
+  type BasicProfileEvidence,
+  type BasicReceiptPins,
+} from "../shared/jpx/basic-profile.js";
+import {
+  listPageFiles,
+  recordPrimaryData,
+} from "../shared/notion-archive/index.js";
 import {
   listingOfficialEvents,
   universeOverlayState,
@@ -31,7 +45,13 @@ import type { UniverseOfficialEventsBatch } from "./universe-official-events.js"
  * C collector の実型を正本とする alias (同型二重維持はしない)。
  * B 側の命名安定のための別名のみ。
  */
-export type OverlayBatchInput = UniverseOfficialEventsBatch;
+/**
+ * collector 返却 batch + Basic 分類証拠 (composer が保管後に束縛)。
+ * C の型には触らず intersection で足す。証拠なし = 全 IPO HOLD。
+ */
+export type OverlayBatchInput = UniverseOfficialEventsBatch & {
+  basics?: ReadonlyMap<string, BasicProfileEvidence>;
+};
 
 /** 適用計画が見る既存 core_stocks 行。 */
 export interface OverlayExistingRow {
@@ -122,9 +142,25 @@ export function parseMarketSuffix(market: string): string | null {
   return m?.[1] ?? null;
 }
 
+/** ISO 8601 (UTC Z) の数値検証。文字列 gate の前提。 */
+function isValidIso(s: string): boolean {
+  return (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(s) &&
+    !Number.isNaN(Date.parse(s))
+  );
+}
+
+/** 全文 SHA256 (64 hex) の形式検証。 */
+function isFullSha(s: string): boolean {
+  return /^[0-9a-f]{64}$/.test(s);
+}
+
 /**
  * batch と既存 core から適用計画を作る。書込も DB 読込もしない純粋関数。
  * 未確定 IPO は listingInserts (market=null) に積み、held 判定は呼び出し側。
+ * IPO の market 解決は batch.basics の証拠のみ (hardcoded map なし)。
+ * identity・同世代束縛・保管・定義 pins・event 市場一致の全 gate を
+ * 満たす国内普通株のみ full-form。欠落・stale・mismatch は null (= HOLD)。
  */
 export function planOverlayDeltas(
   batch: OverlayBatchInput,
@@ -314,7 +350,8 @@ export function planOverlayDeltas(
       plan.skipped.listingAlreadyInCore++;
       continue;
     }
-    if (cur !== undefined && !cur.isActive) {
+    const inactiveHit = cur !== undefined && !cur.isActive;
+    if (inactiveHit) {
       // inactive 衝突は新上場 identity proof 不足として HOLD (現役化しない)。
       plan.skipped.listingInactiveCollision++;
     }
@@ -324,11 +361,39 @@ export function planOverlayDeltas(
       plan.skipped.listingDelisted++;
       continue;
     }
-    // 分類契約が未確定のため market full-form は作らない (null=HOLD)。
+    // 証明済み国内普通株のみ market full-form に解決する。
+    // inactive 衝突は証拠があっても HOLD (現役化しない)。
+    const ev = batch.basics?.get(row.code);
+    let market: string | null = null;
+    if (
+      !inactiveHit &&
+      ev !== undefined &&
+      ev.code4 === row.code &&
+      ev.code5 === `${row.code}0` &&
+      ev.marketBare === row.market &&
+      ev.boundEventsFetchedAt !== null &&
+      ev.boundEventsFetchedAt === batch.eventsFetchedAt &&
+      isValidIso(batch.eventsFetchedAt) &&
+      isValidIso(ev.basicFetchedAt) &&
+      Date.parse(ev.basicFetchedAt) >= Date.parse(batch.eventsFetchedAt) &&
+      isFullSha(ev.entrySha) &&
+      isFullSha(ev.searchSha) &&
+      isFullSha(ev.rawSha) &&
+      ev.custody !== null &&
+      ev.custody.pageId !== "" &&
+      ev.defsPins.countryGuide === DEFS_COUNTRY_GUIDE.sha256 &&
+      ev.defsPins.ordinaryCode === DEFS_ORDINARY_CODE.sha256 &&
+      ev.qualificationDate !== null &&
+      ev.qualificationDate === batch.eligibilityAsOf &&
+      ev.qualificationBasis === "current-owner-qualified" &&
+      ev.datedSourcePin === null
+    ) {
+      market = resolveDomesticFullMarket(ev);
+    }
     plan.listingInserts.push({
       code: row.code,
       name: row.companyName,
-      market: null,
+      market,
       listingDate: row.listingDate,
     });
   }
@@ -502,11 +567,280 @@ export interface EnsureOverlayResult {
   result: OverlayApplyResult | null;
 }
 
-/** collector 注入型 (本番は C の collectUniverseOfficialEvents)。 */
+/** collector 注入型 (本番は withBasicEvidence 合成済み)。 */
 export type OverlayCollectFn = (input: {
   baseAsOf: string | null;
   eligibilityAsOf: string;
-}) => Promise<UniverseOfficialEventsBatch>;
+  /** core 収録済み code (composer は Basic 取得を省く)。 */
+  skipBasicsFor?: ReadonlySet<string>;
+}) => Promise<OverlayBatchInput>;
+
+/**
+ * Root 承認済みの reviewed qualification input (別途用意)。
+ * 日付は requested elig から割り当てない。receipt pins は実保管のもの。
+ */
+export type ReviewedQualificationInput = ReadonlyMap<
+  string,
+  {
+    date: string;
+    basis: "current-owner-qualified";
+    marketBare: string;
+    receiptPins: BasicReceiptPins;
+  }
+>;
+
+export interface BasicsComposerDeps {
+  collectBasic?: (code4: string) => Promise<{
+    entry: BasicFetch;
+    search: BasicFetch;
+    basic: BasicFetch;
+    evidence: BasicProfileEvidence;
+  }>;
+  record?: typeof recordPrimaryData;
+  listFiles?: typeof listPageFiles;
+  downloadBytes?: (url: string) => Promise<Uint8Array>;
+  /** reviewed qualification input。未指定の code は qualification null。 */
+  qualificationInput?: ReviewedQualificationInput;
+}
+
+async function defaultBasicsDownloadBytes(url: string): Promise<Uint8Array> {
+  const res = await fetch(url, { redirect: "follow" });
+  if (!res.ok) {
+    throw new Error(`hosted 再取得に失敗 status=${res.status}`);
+  }
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+/**
+ * custody 記録 + 物理 readback (件数・名前一意・全 hosted・全 bytes SHA)。
+ * universe-official-events.ts の recordAndVerify と同 pattern (private 実装)。
+ */
+async function recordBasicsAndVerify(
+  record: typeof recordPrimaryData,
+  listFiles: typeof listPageFiles,
+  downloadBytes: (url: string) => Promise<Uint8Array>,
+  key: string,
+  source: string,
+  fetchedAt: string,
+  metadata: Record<string, unknown>,
+  files: { filename: string; bytes: Uint8Array; contentType: string }[],
+  label: string
+): Promise<string> {
+  const fail = (why: string): never => {
+    throw new Error(`${label} の readback 照合に失敗したため STOP: ${why}`);
+  };
+  const res = await record({
+    service: "universe-basic",
+    key,
+    source,
+    fetchedAt,
+    metadata,
+    files,
+    force: false,
+  });
+  if (res.fileTooLarge) {
+    throw new Error(`${label} の保管が不完全 (fileTooLarge): ${key}`);
+  }
+  const ok =
+    res.outcome === "recorded" ||
+    (res.outcome === "skipped_existing" && res.manifestMatch === "same");
+  if (!ok) {
+    throw new Error(
+      `${label} の保管が不完全 (outcome=${res.outcome} manifestMatch=${res.manifestMatch}): ${key}`
+    );
+  }
+  const names = files.map((f) => f.filename);
+  if (new Set(names).size !== names.length) fail("添付名の重複 (内部不整合)");
+  const hosted = await listFiles(res.pageId, "Files");
+  if (hosted.length !== files.length) {
+    fail(`添付 ${hosted.length} 件 ≠ 記録 ${files.length} 件`);
+  }
+  const hostedNames = hosted.map((h) => h.name);
+  if (new Set(hostedNames).size !== hostedNames.length) fail("hosted 添付名の重複");
+  const byName = new Map(hosted.map((h) => [h.name, h]));
+  for (const f of files) {
+    const got = byName.get(f.filename) ?? fail(`添付「${f.filename}」なし`);
+    if (got.kind !== "file") fail(`「${f.filename}」が Notion-hosted 添付ではありません`);
+    const bytes = await downloadBytes(got.url);
+    if (bytes.length !== f.bytes.length) {
+      fail(`「${f.filename}」のバイト長 ${bytes.length} ≠ ${f.bytes.length}`);
+    }
+    const [gotSha, wantSha] = await Promise.all([
+      sha256HexBytes(Uint8Array.from(bytes)),
+      sha256HexBytes(Uint8Array.from(f.bytes)),
+    ]);
+    if (gotSha !== wantSha) fail(`「${f.filename}」の SHA256 不一致`);
+  }
+  return res.pageId;
+}
+
+/**
+ * base batch へ Basic 分類証拠を束縛する composer。
+ * 要取得 IPO (eligible・core 未収録・delist 非阻止) の各 code について
+ * collectBasicProfile (同 cycle fresh) → 一次保管+readback →
+ * custody/bound stamp。保管 key は rawSHA+世代を束縛する
+ * (同日変更頁の masquerade 防止)。
+ * qualification は reviewed input がある code のみ stamp する。
+ * requested elig からの割当・UTC/JST 推定はしない。未指定は null (= HOLD)。
+ * 未取得 (失敗・partial 保管済み) は warn + 証拠省略
+ * (planner HOLD → assert で不完全失敗)。保管失敗は loud STOP。
+ */
+export function withBasicEvidence(
+  baseCollect: OverlayCollectFn,
+  deps: BasicsComposerDeps = {}
+): OverlayCollectFn {
+  const collectBasic =
+    deps.collectBasic ?? ((code4: string) => collectBasicProfile(code4));
+  const record = deps.record ?? recordPrimaryData;
+  const listFiles = deps.listFiles ?? listPageFiles;
+  const downloadBytes = deps.downloadBytes ?? defaultBasicsDownloadBytes;
+  const qualificationInput = deps.qualificationInput;
+  return async (input) => {
+    const batch = await baseCollect(input);
+    // planner と同一の delist-final map (不要取得の除外用)。
+    const delistFinalByCode = new Map<string, string>();
+    for (const row of batch.sources.delisted.rows) {
+      if (row.effectiveDate > input.eligibilityAsOf) continue;
+      const prev = delistFinalByCode.get(row.code);
+      if (prev === undefined || row.effectiveDate > prev) {
+        delistFinalByCode.set(row.code, row.effectiveDate);
+      }
+    }
+    const basics = new Map<string, BasicProfileEvidence>();
+    for (const row of batch.sources.newListings.rows) {
+      if (row.listingDate > input.eligibilityAsOf) continue;
+      if (input.skipBasicsFor?.has(row.code) === true) continue;
+      const delistFinal = delistFinalByCode.get(row.code);
+      if (delistFinal !== undefined && delistFinal >= row.listingDate) continue;
+      let got: {
+        entry: BasicFetch;
+        search: BasicFetch;
+        basic: BasicFetch;
+        evidence: BasicProfileEvidence;
+      };
+      try {
+        got = await collectBasic(row.code);
+      } catch (e) {
+        // 得済み partial raw は保管してから省略する (黙殺禁止)。
+        const partial = (e as { partial?: Partial<Record<"entry" | "search" | "basic", BasicFetch>> }).partial;
+        const partialFiles = (
+          [
+            ["r1.html", partial?.entry],
+            ["r2.html", partial?.search],
+            ["r3.html", partial?.basic],
+          ] as const
+        ).flatMap(([suffix, fetch]) =>
+          fetch === undefined
+            ? []
+            : [{ filename: `${row.code}-${suffix}`, bytes: fetch.bytes, contentType: "text/html" }]
+        );
+        if (partialFiles.length > 0) {
+          const pageId = await recordBasicsAndVerify(
+            record,
+            listFiles,
+            downloadBytes,
+            `basic-${row.code}-${input.eligibilityAsOf}-partial`,
+            "JPX 東証上場会社情報サービス basic partial",
+            batch.eventsFetchedAt,
+            { code: row.code, partial: true },
+            partialFiles,
+            `basic ${row.code} partial`
+          );
+          console.warn(
+            `[universe-overlay] basic ${row.code} partial 保管済み ${pageId} (HOLD へ)`
+          );
+        } else {
+          // 値を含まない message のみ (fail() は bool/count のみ)。
+          console.warn(
+            `[universe-overlay] basic ${row.code} 取得失敗のため証拠なし (HOLD へ): ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
+        continue;
+      }
+      const files = [
+        {
+          filename: `${row.code}-r1.html`,
+          bytes: got.entry.bytes,
+          contentType: "text/html",
+        },
+        {
+          filename: `${row.code}-r2.html`,
+          bytes: got.search.bytes,
+          contentType: "text/html",
+        },
+        {
+          filename: `${row.code}-r3.html`,
+          bytes: got.basic.bytes,
+          contentType: "text/html",
+        },
+      ];
+      const genDigits = batch.eventsFetchedAt.replace(/[^0-9]/g, "");
+      const pageId = await recordBasicsAndVerify(
+        record,
+        listFiles,
+        downloadBytes,
+        `basic-${row.code}-${input.eligibilityAsOf}-gen-${genDigits}-sha-${got.evidence.rawSha.slice(0, 12)}`,
+        "JPX 東証上場会社情報サービス basic (entry/search/basic)",
+        got.evidence.basicFetchedAt,
+        {
+          code: row.code,
+          eligibilityAsOf: input.eligibilityAsOf,
+          eventsFetchedAt: batch.eventsFetchedAt,
+          basicFetchedAt: got.evidence.basicFetchedAt,
+          entrySha: got.evidence.entrySha,
+          searchSha: got.evidence.searchSha,
+          rawSha: got.evidence.rawSha,
+          sourceUrl: got.evidence.sourceUrl,
+          defsCountryGuide: got.evidence.defsPins.countryGuide,
+          defsOrdinaryCode: got.evidence.defsPins.ordinaryCode,
+        },
+        files,
+        `basic ${row.code}`
+      );
+      // qualification は reviewed input の明示指定のみ。実証拠との束縛:
+      // market 一致 + receipt pins の全文 SHA 完全一致を要求する。
+      // 将来頁・同 market 別頁への stale 印流用は HOLD。
+      const reviewed = qualificationInput?.get(row.code);
+      const pins = reviewed?.receiptPins;
+      const stamp =
+        reviewed !== undefined &&
+        /^\d{4}-\d{2}-\d{2}$/.test(reviewed.date) &&
+        reviewed.basis === "current-owner-qualified" &&
+        reviewed.marketBare === got.evidence.marketBare &&
+        pins !== undefined &&
+        isFullSha(pins.entrySha) &&
+        isFullSha(pins.searchSha) &&
+        isFullSha(pins.rawSha) &&
+        pins.custodyPageIds.length > 0 &&
+        pins.custodyPageIds.every((p) => p !== "") &&
+        pins.entrySha === got.entry.sha256 &&
+        pins.searchSha === got.search.sha256 &&
+        pins.rawSha === got.basic.sha256
+          ? {
+              date: reviewed.date,
+              basis: reviewed.basis,
+              pins: {
+                entrySha: pins.entrySha,
+                searchSha: pins.searchSha,
+                rawSha: pins.rawSha,
+                custodyPageIds: [...pins.custodyPageIds],
+              } satisfies BasicReceiptPins,
+            }
+          : null;
+      basics.set(row.code, {
+        ...got.evidence,
+        custody: { pageId },
+        boundEventsFetchedAt: batch.eventsFetchedAt,
+        qualificationDate: stamp?.date ?? null,
+        qualificationBasis: stamp?.basis ?? null,
+        datedSourcePin: null,
+        reviewedPins: stamp?.pins ?? null,
+      });
+    }
+    batch.basics = basics;
+    return batch;
+  };
+}
 
 /**
  * target-load 前の共通 pre-step。既適用なら no-op。
@@ -542,11 +876,7 @@ export async function ensureUniverseOverlay(
     }
     return { applied: false, result: null };
   }
-  const batch = await opts.collect({
-    baseAsOf: sets.baseAsOf,
-    eligibilityAsOf: opts.eligibilityAsOf,
-  });
-  // 全 code identity を読む (inactive 衝突の HOLD 判定に必要)。
+  // 全 code identity を読む (inactive 衝突 HOLD + composer 不要取得の除外)。
   const existing = (await db
     .select({
       id: stocks.id,
@@ -556,6 +886,11 @@ export async function ensureUniverseOverlay(
       isActive: stocks.isActive,
     })
     .from(stocks)) as OverlayExistingRow[];
+  const batch = await opts.collect({
+    baseAsOf: sets.baseAsOf,
+    eligibilityAsOf: opts.eligibilityAsOf,
+    skipBasicsFor: new Set(existing.map((r) => r.code)),
+  });
   const result = await applyUniverseOverlay(db, batch, existing);
   assertNoHeldListings(result);
   return { applied: true, result };

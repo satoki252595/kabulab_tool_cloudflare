@@ -1,0 +1,294 @@
+{
+ "meta": {
+  "eligibilityAsOf": "2026-09-30",
+  "historicClaim": null,
+  "rule": "basic市場区分セルbare∈{プライム,スタンダード,グロース,TOKYO PRO Market}→上場内国会社(公式defs)。marketFull=bare+（内国株式）(月次data_j形式)。sectorはbasic業種セルverbatim。countrySuffix有り/欠落/矛盾→HOLD。",
+  "defsPin": {
+   "source": "https://www.jpx.co.jp/listing/co-search/01.html",
+   "fetchedAt": "2026-09-30T09:25:32+09:00",
+   "sha256": "96b4efc099a1d68e01d846617ad9eef72a11b671c46f3cd86e9227af56dcb213"
+  },
+  "listingSourcePin": {
+   "source": "https://www.jpx.co.jp/listing/stocks/new/index.html",
+   "rawSha": "70c27b36577fd591310b72f1ceea459c5e467016ba0f612c5855a632df638fc8",
+   "genFetchedAt": "2026-09-30T01:02:51.641Z"
+  },
+  "grants": {
+   "s2-618A": {
+    "cap": 3,
+    "used": 3,
+    "note": "separate scope (entry/search/basic)"
+   },
+   "remaining8": {
+    "cap": 25,
+    "used": 25,
+    "note": "g2 max24 used22 (7x3 + 619A burned1/0bytes) + g3 619A-only max3 used3 (sends 23-25)"
+   },
+   "attemptedOverall": 28,
+   "remaining": 0,
+   "note": "attempted 28 には burned 1 (0 bytes) を含む。全GET終了、追加0。"
+  },
+  "ordinaryCodePin": {
+   "source": "https://www.jpx.co.jp/glossary/ma/429.html",
+   "fetchedAt": "2026-09-30T09:25:34+09:00",
+   "sha256": "f6fec43bbae08258d067e6a0c7429cfcc9d43ba2eeace1407b3eeea8a7bf29b8",
+   "rule": "株式銘柄コード=固有名4桁+予備1桁。普通株式は4桁正式(予備桁0付加の5桁表示あり)。新株/優先株等は予備コード使用5桁。"
+  },
+  "sectorPolicy": "basic業種はverbatim監査用。core insert sectorはNULL維持 (BASIC industryはsector33ではない)。",
+  "sourceAsOf": "unknown (basic頁にas-of原文なし。fetchedAtは取得時刻でありas-of推定に使わない)"
+ },
+ "entries": [
+  {
+   "code": "618A",
+   "status": "domestic-ordinary-positive",
+   "basicRow": {
+    "code5": "618A0",
+    "isin": "JP3306480009",
+    "marketBare": "グロース",
+    "countrySuffix": null,
+    "sector": "サービス業",
+    "kessan": "8月31日",
+    "tangen": "100",
+    "tables": 4,
+    "consistent": true
+   },
+   "marketFull": "グロース（内国株式）",
+   "listingDate": "2026-09-11",
+   "basicFetchedAt": "2026-09-30T10:49:30+09:00",
+   "rawSha": {
+    "r1": "4345b4de1173193c46cac51c5f26c3dcfa023d7dcbc800bef13c564f093296c9",
+    "r2": "f2ad5dd98ae1af9ecaa656e57ead10d7fe0723869f0120920fd626e65a5d0e9b",
+    "r3": "9022607693defcb6023888658fecff24f08d2e41f82cb5452f2c10d94a39eb71"
+   },
+   "notion": [
+    "3ebd74ff-84cd-817e-9851-d0466a315bc5",
+    "3ebd74ff-84cd-81a4-ab76-db0b76687893",
+    "3ebd74ff-84cd-8131-97b7-db9a88334ba7"
+   ]
+  },
+  {
+   "code": "621A",
+   "status": "domestic-ordinary-positive",
+   "basicRow": {
+    "code5": "621A0",
+    "isin": "JP3172510004",
+    "marketBare": "グロース",
+    "countrySuffix": null,
+    "sector": "サービス業",
+    "kessan": "9月30日",
+    "tangen": "100",
+    "tables": 4,
+    "consistent": true
+   },
+   "marketFull": "グロース（内国株式）",
+   "listingDate": "2026-09-16",
+   "basicFetchedAt": "2026-09-30T11:14:12+09:00",
+   "rawSha": {
+    "r1": "95936562a0ef21f75e3b1745cee1e58084f49e7791a8df465b1185cdcf6e12f2",
+    "r2": "a3dd578c26626c80a962763c165c49d71e1fca3e66bc1b975fd0f4e52f0052a5",
+    "r3": "90561a2b8c1f45ab5d204b0837398d7ee520159e3f81741c4e53c6eba985ab25"
+   },
+   "notion": [
+    "3ebd74ff-84cd-8108-a2ef-c2d9ff86feb1",
+    "3ebd74ff-84cd-815a-83e9-e9b856fcc865",
+    "3ebd74ff-84cd-813d-882f-ec161d5ffcff"
+   ]
+  },
+  {
+   "code": "625A",
+   "status": "domestic-ordinary-positive",
+   "basicRow": {
+    "code5": "625A0",
+    "isin": "JP3395950003",
+    "marketBare": "グロース",
+    "countrySuffix": null,
+    "sector": "サービス業",
+    "kessan": "9月30日",
+    "tangen": "100",
+    "tables": 4,
+    "consistent": true
+   },
+   "marketFull": "グロース（内国株式）",
+   "listingDate": "2026-09-17",
+   "basicFetchedAt": "2026-09-30T11:14:12+09:00",
+   "rawSha": {
+    "r1": "760b789525b44905d6f73b28ecf8abc3d2079f81c238fad057c8978c8de7ce6c",
+    "r2": "e61e2997671ca288c4b343a73f8d76c9d3b8a7d240cb1316bd5ac46a2f66302e",
+    "r3": "fcbe4676cdbe7633dd5fe0f92ff827c6de96b55d9818335b589981fa83443b2e"
+   },
+   "notion": [
+    "3ebd74ff-84cd-81ce-8def-eef132977c0f",
+    "3ebd74ff-84cd-8145-a3c8-ee0d10754da4",
+    "3ebd74ff-84cd-81bd-b185-feee2e83b6b6"
+   ]
+  },
+  {
+   "code": "622A",
+   "status": "domestic-ordinary-positive",
+   "basicRow": {
+    "code5": "622A0",
+    "isin": "JP3545330007",
+    "marketBare": "スタンダード",
+    "countrySuffix": null,
+    "sector": "情報・通信業",
+    "kessan": "9月30日",
+    "tangen": "100",
+    "tables": 4,
+    "consistent": true
+   },
+   "marketFull": "スタンダード（内国株式）",
+   "listingDate": "2026-09-18",
+   "basicFetchedAt": "2026-09-30T11:14:13+09:00",
+   "rawSha": {
+    "r1": "e4730a66479726af30eb2408d8ca644ff38e4b2ece861cbb501c3c03610f661c",
+    "r2": "d5860a9156b465b68c2dc7aff48c9cd1f0ce0639fb700b473c422e7590e8aa9a",
+    "r3": "194fc9e72cf86069196e7721d7184edb99dd1d949aa06a5c2772e0359830163a"
+   },
+   "notion": [
+    "3ebd74ff-84cd-8138-b35c-fdc95b473178",
+    "3ebd74ff-84cd-8172-a6c2-fcfe4a0af1ce",
+    "3ebd74ff-84cd-8172-b224-d6f5e80ecd8c"
+   ]
+  },
+  {
+   "code": "623A",
+   "status": "domestic-ordinary-positive",
+   "basicRow": {
+    "code5": "623A0",
+    "isin": "JP3835740006",
+    "marketBare": "スタンダード",
+    "countrySuffix": null,
+    "sector": "不動産業",
+    "kessan": "11月30日",
+    "tangen": "100",
+    "tables": 4,
+    "consistent": true
+   },
+   "marketFull": "スタンダード（内国株式）",
+   "listingDate": "2026-09-18",
+   "basicFetchedAt": "2026-09-30T11:14:13+09:00",
+   "rawSha": {
+    "r1": "6f0eeea1c830adfd8575ad91aa9a42dff236bc88afaf7c198abbf72f1ab00edb",
+    "r2": "d8543659e8c63ceab00a3ccd7370690091b2cdd2d5f35492ff37b6c31a829228",
+    "r3": "17120e8e8c997db3a97f3056b208f140cb7a9cdf51047b71626e6a2231209da6"
+   },
+   "notion": [
+    "3ebd74ff-84cd-818c-ad75-e2f5afecf38d",
+    "3ebd74ff-84cd-81ee-9181-f0dd73672930",
+    "3ebd74ff-84cd-8175-9800-eee182025c4f"
+   ]
+  },
+  {
+   "code": "627A",
+   "status": "domestic-ordinary-positive",
+   "basicRow": {
+    "code5": "627A0",
+    "isin": "JP3107640009",
+    "marketBare": "スタンダード",
+    "countrySuffix": null,
+    "sector": "情報・通信業",
+    "kessan": "12月31日",
+    "tangen": "100",
+    "tables": 4,
+    "consistent": true
+   },
+   "marketFull": "スタンダード（内国株式）",
+   "listingDate": "2026-09-18",
+   "basicFetchedAt": "2026-09-30T11:14:14+09:00",
+   "rawSha": {
+    "r1": "fdae9d4328b6a6c1dc31f029e50de5b3c973fa8109b1405009644483b2860b88",
+    "r2": "1a06f067ad19260315375f106a25245a72d2dc50a4b962795568bb2cb50645c0",
+    "r3": "b8d3d5a51680d98c3fc9843d5955df21c797d9fd687f5a57f66b2c2b38dc2a61"
+   },
+   "notion": [
+    "3ebd74ff-84cd-8180-b62b-ec044eec190b",
+    "3ebd74ff-84cd-8154-823b-e8c49c50bd71",
+    "3ebd74ff-84cd-8157-aded-dd66f13d9f6d"
+   ]
+  },
+  {
+   "code": "634A",
+   "status": "domestic-ordinary-positive",
+   "basicRow": {
+    "code5": "634A0",
+    "isin": "JP3979310004",
+    "marketBare": "スタンダード",
+    "countrySuffix": null,
+    "sector": "情報・通信業",
+    "kessan": "6月30日",
+    "tangen": "100",
+    "tables": 4,
+    "consistent": true
+   },
+   "marketFull": "スタンダード（内国株式）",
+   "listingDate": "2026-09-25",
+   "basicFetchedAt": "2026-09-30T11:14:14+09:00",
+   "rawSha": {
+    "r1": "1ef23c8f435490229a02318142024f669c90743cf654dcbcacfe806de5502133",
+    "r2": "0a063c8dec0413bd56c1566db538fdfeea2f6a89c85340e1f4374acb73c95cab",
+    "r3": "3a4105a3b0485804f4c780f3ded4877b5a9a66d9f892f7a555b7014e74f0af41"
+   },
+   "notion": [
+    "3ebd74ff-84cd-81a7-8b91-e6990de457d4",
+    "3ebd74ff-84cd-8195-b5d6-fb9da95afa6a",
+    "3ebd74ff-84cd-8153-aca1-d3233d9b437f"
+   ]
+  },
+  {
+   "code": "646A",
+   "status": "domestic-ordinary-positive",
+   "basicRow": {
+    "code5": "646A0",
+    "isin": "JP3268350000",
+    "marketBare": "スタンダード",
+    "countrySuffix": null,
+    "sector": "化学",
+    "kessan": "12月31日",
+    "tangen": "100",
+    "tables": 4,
+    "consistent": true
+   },
+   "marketFull": "スタンダード（内国株式）",
+   "listingDate": "2026-09-29",
+   "basicFetchedAt": "2026-09-30T11:14:15+09:00",
+   "rawSha": {
+    "r1": "1d45f9ced073f8bcad7ce40f1b959612492b22d673e6849375412fd95b8a208e",
+    "r2": "828e5eef6a602812cdbb341e7e58e72f71b19683c0d41af938a0f72020c0ce15",
+    "r3": "d1a4e4ef2e8766c6aed16a8efb7dcb19b45890a0d5cf80e4a08ce1786a70f9ca"
+   },
+   "notion": [
+    "3ebd74ff-84cd-818c-9168-fd42d3f758ff",
+    "3ebd74ff-84cd-812a-9fc0-e5fcc7f37d6f",
+    "3ebd74ff-84cd-81bd-bb37-c8327abc48fe"
+   ]
+  },
+  {
+   "code": "619A",
+   "status": "domestic-ordinary-positive",
+   "basicRow": {
+    "code5": "619A0",
+    "isin": "JP3200610008",
+    "marketBare": "スタンダード",
+    "countrySuffix": null,
+    "sector": "その他製品",
+    "kessan": "12月31日",
+    "tangen": "100",
+    "tables": 4,
+    "consistent": true
+   },
+   "marketFull": "スタンダード（内国株式）",
+   "listingDate": "2026-09-16",
+   "basicFetchedAt": "2026-09-30T11:47:06.959233+09:00",
+   "rawSha": {
+    "r1": "d9067e50d0fea01df2fbf532857bb914993458f387cd4d070b482382efeaba3b",
+    "r2": "00c9fe2d4beb55474bcfaf3738dc470c351b87ce735dcbea21164cd9f5622d45",
+    "r3": "c5960b694a769f082a957616b77989927ba667367019cd5546bb8ea603512d3a"
+   },
+   "notion": [
+    "3ebd74ff-84cd-81fd-8dfa-d893b0aa24ab",
+    "3ebd74ff-84cd-8197-81bf-e170e471d24c",
+    "3ebd74ff-84cd-8170-a426-e5e3ac476f1e"
+   ]
+  }
+ ]
+}

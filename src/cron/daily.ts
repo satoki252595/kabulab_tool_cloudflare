@@ -98,6 +98,7 @@ import { rootCauseMessage } from "../shared/errors.js";
 import { collectUniverseOfficialEvents } from "./universe-official-events.js";
 import {
   ensureUniverseOverlay,
+  withBasicEvidence,
   type OverlayCollectFn,
 } from "./universe-overlay.js";
 
@@ -1124,7 +1125,9 @@ async function runDailySyncAndRecord(
   // HOLD 残があれば不完全失敗を throw し、株価 fetch へ進まない。
   const overlay = await ensureUniverseOverlay(db, {
     eligibilityAsOf: targetDate,
-    collect: collectOverlay ?? ((input) => collectUniverseOfficialEvents(input)),
+    collect:
+      collectOverlay ??
+      withBasicEvidence((input) => collectUniverseOfficialEvents(input)),
   });
   if (overlay.applied) {
     console.info(

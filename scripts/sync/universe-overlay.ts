@@ -13,7 +13,10 @@ import { createD1HttpDb } from "../../src/shared/db/d1-http-client.js";
 import { rootCauseMessage } from "../../src/shared/errors.js";
 import { runDateKeys } from "../../src/cron/daily.js";
 import { collectUniverseOfficialEvents } from "../../src/cron/universe-official-events.js";
-import { ensureUniverseOverlay } from "../../src/cron/universe-overlay.js";
+import {
+  ensureUniverseOverlay,
+  withBasicEvidence,
+} from "../../src/cron/universe-overlay.js";
 
 function parseAsOf(argv: string[]): string {
   const hit = argv.find((a) => a.startsWith("--as-of="));
@@ -32,7 +35,7 @@ async function main(): Promise<void> {
   const db = createD1HttpDb({});
   const out = await ensureUniverseOverlay(db, {
     eligibilityAsOf,
-    collect: (input) => collectUniverseOfficialEvents(input),
+    collect: withBasicEvidence((input) => collectUniverseOfficialEvents(input)),
   });
   if (!out.applied || out.result === null) {
     console.info(`[universe-overlay] no-op (elig=${eligibilityAsOf} 適用済み)`);
