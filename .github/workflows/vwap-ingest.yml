@@ -135,6 +135,17 @@ jobs:
           (github.event_name == 'workflow_dispatch' &&
             (github.event.inputs.target == 'margin' || github.event.inputs.target == 'all'))
         run: pnpm ingest:vwap-margin
+      # archive 前に producer が cwd/.vwap-summaries/ へ原本 bytes を保持する。
+      # 保管失敗 (413 UNKNOWN 等) でも summary が ephemeral runner と共に消えない。
+      - name: summary を失敗時 artifact に残す
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vwap-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .vwap-summaries/
+          # v4 は既定で hidden files を除外する。限定 exact dir のみ対象。
+          include-hidden-files: true
+          if-no-files-found: warn
       - name: 失敗したら Issue を立てる
         if: failure()
         uses: ./.github/actions/notify-failure
