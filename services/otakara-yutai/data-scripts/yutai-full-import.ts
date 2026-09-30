@@ -62,6 +62,14 @@ export type BenefitDetail = {
   minShares: number;
   description: string;
   notes: string;
+  /**
+   * この優待が載る表のローカルな権利月 (h3 セクションの「優待権利確定月」)。
+   * ページ全体の union を全優待に被せる旧形は 8022 の 9 月幽霊行を作ったため廃止。
+   * 空は「表の月が不明/曖昧」= 合成不能 (HOLD)。呼び出し側が月を推測で補わないこと。
+   */
+  localRecordMonths: number[];
+  /** 由来 (h3 見出しの原文)。表の特定用で、判定には使わない。 */
+  heading: string;
 };
 
 /** 個別ページ 1 銘柄ぶんの取得結果 (fetch-yutai-full.ts の Phase 2)。 */
@@ -69,7 +77,6 @@ export type StockYutaiData = {
   code: string;
   name: string;
   market: string;
-  recordMonths: number[];
   category: string;
   benefits: BenefitDetail[];
 };
@@ -188,8 +195,16 @@ export type CarryPlan = {
  *
  * 同一 context キーの重複は解釈が同一なら 1 つに畳み、食い違えば STOP
  * (黙って上書きしない。削除の前なので何も書かずに止まる)。
+ *
+ * legacy-null → company の昇格は、今回の取得で表ローカルに合成される行
+ * (`plannedMeta` にあるキー) にだけ付ける。幽霊月などで合成されない行の値を
+ * 昇格させない (companypromote0 until tablelocalqualified)。
+ * 判定には合成元の表見出しも渡す (見出しだけの選択・抽選条件を落とさない)。
  */
-export function planCarry(rows: readonly CarrySourceRow[]): CarryPlan {
+export function planCarry(
+  rows: readonly CarrySourceRow[],
+  plannedMeta: ReadonlyMap<string, readonly string[]>,
+): CarryPlan {
   const carried = new Map<string, CarriedInterpretation>();
   const nulledKeys = new Set<string>();
   const promotedKeys = new Set<string>();
@@ -210,12 +225,13 @@ export function planCarry(rows: readonly CarrySourceRow[]): CarryPlan {
       const verdict = qualifyCompanyPerGrantValue(row.description, estimatedValue, {
         minShares: [row.minShares],
         recordMonths: [row.recordMonth],
+        headings: plannedMeta.get(key),
       });
       if (!verdict.qualified) {
         estimatedValue = null;
         estimateValueSource = null;
         nulledKeys.add(key);
-      } else if (estimateValueSource === null) {
+      } else if (estimateValueSource === null && plannedMeta.has(key)) {
         estimateValueSource = "company";
         promotedKeys.add(key);
       }
@@ -270,24 +286,51 @@ export type YutaiFullImportResult = {
 };
 
 /**
- * 1 銘柄の取得結果から作る優待行 (権利月 × 株数条件)。掲載文は全文保存する。
+ * 1 銘柄の取得結果から作る優待行 (表ローカルの権利月 × 株数条件)。掲載文は全文保存する。
  *
  * 旧 notes[:200]/desc[:500] の切り詰めは 3447 の 3 群で末尾の tier 条件を
  * 落とした (保存文が文の途中で切断。要約の根拠消失)。D1 の description 列は
  * TEXT 型で長さ制限が無いため、切り詰める理由は無い。以降の similar source も
  * この共通経路 (切り詰め無し) を使うこと。
+ *
+ * 各優待は自分の表の `localRecordMonths` でのみ行を作る。ページ全体の union を
+ * 全優待に被せると、表に無い月の幽霊行ができる (8022 のゴルフスクール入会金は
+ * 3 月の表だけで、9 月行 37956 は誤合成)。`localRecordMonths` が空の優待は
+ * 合成せず `heldBenefits` に数える (HOLD。月を推測で補わない)。
  */
+export type BenefitRowPlan = {
+  recordMonth: number;
+  minShares: number;
+  description: string;
+  /** 表の h3 見出し (原文)。判定の HOLD 走査用。DB には書かない。 */
+  heading: string;
+};
+
 export function benefitRowsOf(
   data: StockYutaiData,
-): { recordMonth: number; minShares: number; description: string }[] {
-  const rows: { recordMonth: number; minShares: number; description: string }[] = [];
-  for (const month of data.recordMonths) {
-    for (const benefit of data.benefits) {
+): { rows: BenefitRowPlan[]; heldBenefits: number } {
+  const rows: BenefitRowPlan[] = [];
+  let heldBenefits = 0;
+  for (const benefit of data.benefits) {
+    // 旧契約 (localRecordMonths 自体が無い) は undefined.length で落ちず、
+    // 契約エラーとして明示する (部分合成しない)。
+    if (!Array.isArray(benefit.localRecordMonths)) {
+      throw new Error(
+        `code=${data.code} の取得結果に localRecordMonths がありません (旧契約)。` +
+          `表ローカル月つきで取り直してください。見出し=${JSON.stringify(benefit.heading ?? "")} ` +
+          `株数=${String(benefit.minShares)}`,
+      );
+    }
+    if (benefit.localRecordMonths.length === 0) {
+      heldBenefits++;
+      continue;
+    }
+    for (const month of benefit.localRecordMonths) {
       const desc = benefit.notes ? `${benefit.description}\n${benefit.notes}` : benefit.description;
-      rows.push({ recordMonth: month, minShares: benefit.minShares, description: desc });
+      rows.push({ recordMonth: month, minShares: benefit.minShares, description: desc, heading: benefit.heading });
     }
   }
-  return rows;
+  return { rows, heldBenefits };
 }
 
 /**
@@ -372,21 +415,52 @@ export async function importYutaiFull(
     );
   }
 
+  // 合成計画は退避より先に作る。昇格は合成される行にだけ付けるため
+  // (`planCarry` の plannedKeys)、表ローカル月を持たない優待はここで HOLD になる。
+  const planned = targets.map((t) => {
+    const { rows, heldBenefits } = benefitRowsOf(t.data);
+    return {
+      ...t,
+      genreSlug: guessGenreSlug(t.data.category, t.data.benefits.map((b) => b.description).join(" ")),
+      rows,
+      heldBenefits,
+    };
+  });
+  // 合成キー → 表見出し (同一文言が複数表にある銘柄は全見出しで走査)。
+  const plannedMeta = new Map<string, string[]>();
+  for (const p of planned) {
+    for (const r of p.rows) {
+      const key = carryKey(p.data.code, r.description, r.minShares, r.recordMonth);
+      const list = plannedMeta.get(key);
+      if (list) {
+        if (!list.includes(r.heading)) list.push(r.heading);
+      } else {
+        plannedMeta.set(key, [r.heading]);
+      }
+    }
+  }
+  const plannedKeys = new Set(plannedMeta.keys());
+  const heldTotal = planned.reduce((n, p) => n + p.heldBenefits, 0);
+  if (heldTotal > 0) {
+    // UNKNOWN の表月で削除・再建を進めると、正規の優待行が「権利なし」として
+    // 消え、銘柄が廃止扱いになる。部分破壊の成功にせず、書く前に止める。
+    const detail = planned
+      .filter((p) => p.heldBenefits > 0)
+      .map((p) => `${p.data.code}x${p.heldBenefits}`)
+      .join(", ");
+    throw new Error(
+      `表の月が無い優待が ${heldTotal} 件あるため取り込みません (UNKNOWN は削除しない)。` +
+        `対象: ${detail}。表ローカル月が取れる取得結果でやり直してください。` +
+        `優待データは削除していません。`,
+    );
+  }
+
   // 作り直せない解釈を退避する。short_summary / estimated_value はクラウド LLM 要約の
   // 取り込み (import-summary-results.ts) の産物で、この取込の INSERT では値を作れない
   // (掲載文 description は公開面に出せないため代わりが無い)。キーは (銘柄コード,
   // description, 株数, 権利月) の内容アドレスなので、context が変わらない限り
   // 作り直した行に戻せる。計画は純関数 `planCarry` (要約取込と同じ共有厳密判定)。
-  const { carried, nulledKeys, promotedKeys } = planCarry(existing);
-
-  const planned = targets.map((t) => ({
-    ...t,
-    genreSlug: guessGenreSlug(t.data.category, t.data.benefits.map((b) => b.description).join(" ")),
-    rows: benefitRowsOf(t.data),
-  }));
-  const plannedKeys = new Set(
-    planned.flatMap((p) => p.rows.map((r) => carryKey(p.data.code, r.description, r.minShares, r.recordMonth))),
-  );
+  const { carried, nulledKeys, promotedKeys } = planCarry(existing, plannedMeta);
   const droppedInterpretations = [...carried.keys()].filter((k) => !plannedKeys.has(k)).length;
   console.info(`  既存の解釈を退避: ${carried.size}件`);
   if (nulledKeys.size > 0) {

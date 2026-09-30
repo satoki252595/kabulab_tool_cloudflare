@@ -71,7 +71,7 @@ beforeEach(() => {
   }
   sqlite.prepare("INSERT INTO yutai_genres (id, name, slug, description) VALUES (1, 'その他', 'other', '')").run();
   const insBenefit = sqlite.prepare(
-    "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month, estimated_value) VALUES (?, 1, ?, ?, ?, ?, ?)"
+    "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month, estimated_value, estimate_value_source) VALUES (?, 1, ?, ?, ?, ?, ?, 'company')"
   );
   // A: 100株 5,000円 (現入力)。保存利回りは旧入力 (1,000円) の 1.007% のまま
   insBenefit.run(STOCK_A, "架空ギフト 5,000円相当", "要約A", 100, 3, 5000);
@@ -163,16 +163,49 @@ describe("planYieldRecompute", () => {
   });
 
   it("overlay は書き込み予定値を仮適用する (dry-run の先見せ)", async () => {
+    // 予定値は文言と整合するものだけ通る (2,000 円の額面に 2,000 円)。
+    sqlite.prepare("UPDATE yutai_benefits SET description = ? WHERE stock_id = ?").run("架空ギフト 2,000円相当", STOCK_C);
     const rowId = (
       sqlite.prepare("SELECT id FROM yutai_benefits WHERE stock_id = ?").get(STOCK_C) as { id: number }
     ).id;
-    const plan = await planYieldRecompute(db, [STOCK_C], new Map([[rowId, 2000]]));
+    const plan = await planYieldRecompute(db, [STOCK_C], new Map([[rowId, { value: 2000, source: "company" }]]));
     expect(plan.entries.map((e) => [e.prev, e.next, e.changed])).toEqual([[1.0, 2.0, true]]);
     // overlay は DB を変えない
     expect(finOf(STOCK_C).yutai_yield).toBe(1.0);
   });
 
   it("overlay の null は利回り入力から外す", () => {
+    const entries = computeYieldEntries(
+      [STOCK_C],
+      {
+        prices: new Map([[STOCK_C, { price: 1000, yutaiYield: 1.0, dataDate: "2026-09-13", fetchedAt: 1 }]]),
+        benefits: new Map([
+          [
+            STOCK_C,
+            [
+              {
+                rowId: 7,
+                minShares: 100,
+                recordMonth: 3,
+                description: "架空",
+                shortSummary: null,
+                estimatedValue: 1000,
+                estimateValueSource: "company",
+                updatedAt: 1,
+              },
+            ],
+          ],
+        ]),
+        scoreInputs: new Map(),
+        scores: new Map(),
+        parents: new Map(),
+      },
+      new Map([[7, { value: null, source: null }]])
+    );
+    expect(entries.entries.map((e) => [e.prev, e.next, e.changed])).toEqual([[1.0, null, true]]);
+  });
+
+  it("source NULL の非 null 値は利回りに入れない (0 フォールバックしない)", () => {
     const entries = computeYieldEntries(
       [STOCK_C],
       {
@@ -197,9 +230,112 @@ describe("planYieldRecompute", () => {
         scoreInputs: new Map(),
         scores: new Map(),
         parents: new Map(),
-      },
-      new Map([[7, null]])
+      }
     );
+    // 由来なし値は分子に入らず、算定不能 (null) になる。0 にはしない。
+    expect(entries.entries.map((e) => [e.prev, e.next, e.changed])).toEqual([[1.0, null, true]]);
+  });
+
+  it("裸の company 値 (不認定文言) は利回りに入れない", () => {
+    const entries = computeYieldEntries(
+      [STOCK_C],
+      {
+        prices: new Map([[STOCK_C, { price: 1000, yutaiYield: 1.0, dataDate: "2026-09-13", fetchedAt: 1 }]]),
+        benefits: new Map([
+          [
+            STOCK_C,
+            [
+              {
+                rowId: 7,
+                minShares: 100,
+                recordMonth: 3,
+                description: "カタログより選択 5,000円相当",
+                shortSummary: null,
+                estimatedValue: 5000,
+                estimateValueSource: "company",
+                updatedAt: 1,
+              },
+            ],
+          ],
+        ]),
+        scoreInputs: new Map(),
+        scores: new Map(),
+        parents: new Map(),
+      }
+    );
+    // choice HOLD → 算定不能 (null)。company スタンプだけでは通さない。
+    expect(entries.entries.map((e) => [e.prev, e.next, e.changed])).toEqual([[1.0, null, true]]);
+  });
+
+  it("旧 source NULL 行への company 書き込み予定は post-image の出典で拾う", () => {
+    const entries = computeYieldEntries(
+      [STOCK_C],
+      {
+        prices: new Map([[STOCK_C, { price: 1000, yutaiYield: null, dataDate: "2026-09-13", fetchedAt: 1 }]]),
+        benefits: new Map([
+          [
+            STOCK_C,
+            [
+              {
+                rowId: 7,
+                minShares: 100,
+                recordMonth: 3,
+                description: "架空ギフト 1,000円相当",
+                shortSummary: null,
+                estimatedValue: null,
+                estimateValueSource: null,
+                updatedAt: 1,
+              },
+            ],
+          ],
+        ]),
+        scoreInputs: new Map(),
+        scores: new Map(),
+        parents: new Map(),
+      },
+      new Map([[7, { value: 1000, source: "company" }]])
+    );
+    expect(entries.entries.map((e) => [e.prev, e.next, e.changed])).toEqual([[null, 1.0, true]]);
+  });
+
+  it("同一文言の群に株数違いの行があれば混在 HOLD (NULL の兄弟行も数える)", () => {
+    const entries = computeYieldEntries(
+      [STOCK_C],
+      {
+        prices: new Map([[STOCK_C, { price: 1000, yutaiYield: 1.0, dataDate: "2026-09-13", fetchedAt: 1 }]]),
+        benefits: new Map([
+          [
+            STOCK_C,
+            [
+              {
+                rowId: 7,
+                minShares: 100,
+                recordMonth: 3,
+                description: "架空ギフト 1,000円相当",
+                shortSummary: null,
+                estimatedValue: 1000,
+                estimateValueSource: "company",
+                updatedAt: 1,
+              },
+              {
+                rowId: 8,
+                minShares: 1000,
+                recordMonth: 3,
+                description: "架空ギフト 1,000円相当",
+                shortSummary: null,
+                estimatedValue: null,
+                estimateValueSource: null,
+                updatedAt: 1,
+              },
+            ],
+          ],
+        ]),
+        scoreInputs: new Map(),
+        scores: new Map(),
+        parents: new Map(),
+      }
+    );
+    // 株数混在 (100/1000) の同一文言は 1 つの金額を決めない。
     expect(entries.entries.map((e) => [e.prev, e.next, e.changed])).toEqual([[1.0, null, true]]);
   });
 });
