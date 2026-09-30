@@ -56,9 +56,9 @@ UI で「未対応」と出す（ルール1/2）。**海外売上高 = 開示さ
 テストで固定してから**。旧基準「海外売上高」注記は現行有報からほぼ消滅（調査280件で
 0件）のため対象外。`pnpm audit:overseas` で全銘柄の取りこぼし署名を集計できる。
 
-> 本サービスは Cloudflare D1 で本番稼働中。DB は **D1(`c.env.DB` バインディング)**、
-> 取込は **Worker の認証ルート + GitHub Actions トリガ**。
-> 旧 `pnpm yuho:backfill` CLI は D1 移行で無効化（fail-fast）し、Worker バルク取込へ再実装予定。
+> 本サービスは Cloudflare D1 で本番稼働中。サイトと Worker 認証ルートは
+> **D1(`c.env.DB` バインディング)**、日次 GitHub Actions CLI は **Node + D1 HTTP atomic sender**
+> で同じ共通取込を直接実行する。`pnpm yuho:backfill` も既存 Node/D1 接続で稼働する。
 
 ### 事業タグ(biztag)固有のルール
 

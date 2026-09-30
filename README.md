@@ -54,7 +54,7 @@ pnpm install              # 依存インストール
 │   ├── cron/                        # 取込オーケストレーション (Node / GitHub Actions から実行)
 │   │   ├── daily.ts / monthly.ts    # 日次/月次 sync (Yahoo → D1。D1 REST 書込)
 │   │   ├── universe.ts              # JPX 母集団同期
-│   │   ├── yuho-edinet.ts           # 005 EDINET キャッチアップ (D1。Worker 取込ルートから呼ぶ)
+│   │   ├── yuho-edinet.ts           # 005 EDINET キャッチアップ (Node 日次 CLI / Worker ルート共通)
 │   │   └── ir-catalog-tdnet.ts      # 006 TDnet キャッチアップ
 │   └── shared/
 │       ├── design.ts                # 共通デザイントークン
@@ -122,7 +122,7 @@ pnpm ingest:vwap-margin   # JPX 週次PDF (信用残高) → R2 margin/{week}.js
 # データ取得 (006 TDnet → D1。Worker 取込ルートを叩く)
 pnpm ingest:ir-tdnet      # /ir-catalog/admin/catchup を CRON_SECRET 認証で POST
 
-# データ取得 (005 EDINET → D1。Worker 取込ルートを叩く)
+# データ取得 (005 EDINET → D1。Node が共通処理を直接実行)
 pnpm ingest:yuho-edinet   # Node 共通取込 + D1 HTTP atomic sender (EDINET/D1/Notion 設定必須)
 
 # 事業タグ (005 EDINET 取込の次に実行。D1 は読むだけ・書込は Notion のみ)
@@ -233,7 +233,7 @@ R2_ACCOUNT_ID=<cloudflare-account-id>                                  # 007 VWA
 R2_ACCESS_KEY_ID=<r2-access-key-id>
 R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
 R2_BUCKET=vwap-data
-WORKER_BASE_URL=https://kabulab-cf.<subdomain>.workers.dev             # 005 取込トリガ CLI が叩く Worker
+WORKER_BASE_URL=https://kabulab-cf.<subdomain>.workers.dev             # Yahoo 等の既存プロキシ接続先 (EDINET 日次 CLI は不使用)
 ```
 
 > R2 の Access Key は Cloudflare ダッシュボード → R2 → Overview → Account details → API Tokens
