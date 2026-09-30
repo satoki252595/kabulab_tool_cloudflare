@@ -19,6 +19,8 @@
 
 残るdaily2件も全businessとstrict proofが一致し、intraの零分割対象はqualified:true（6848bars）。cache bypass・同URL再送・Yahoo proxy GETは行っていない。定時runの完了とsummaryの物理保管はこの4 GETだけでは証明しない。元の失敗runも再実行していない。
 
+操作・全文post・consumer確認の45ファイルをZIPとmanifestで物理保管した。保管キーは `vwap-repair-operation-20260930-ac896b84a895`。shared record force:false、実record10/readback5、添付2件の全文および全45memberのSHA一致。ZIP SHA256: `d5e3c878946e37fb55c4c67149a17d0395df8e2867f4bd3e82abc82798f98abb`。先行する原文・前画像の保管は再送していない。
+
 ## 同様の株数基準の穴
 
 共有zeroSplitCoveredは保存5分足の窓内だけで分割を検査していた。窓終了後から現在の日足の最終日までに分割がある場合も、旧5分足の基準は未確認のためHOLDが必要。検査終点を日足最終日に修正した。
