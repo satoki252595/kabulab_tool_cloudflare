@@ -191,7 +191,15 @@ union SHA `9690d780…8fe1878` を private 0600 固定。18 chunks (≤100 IDs)�
   実流出防止の証拠にしない (下記の actual check が正)。
 - offline 検証 (正・actual producer): guard 実体を小関数 export
   (`assertPerDocCounts` / `createBoundedFetch`) + CLI-main 判定で
-  import-safe 化し、private 0600 `perdoc-actual-check.mts` が実関数を呼ぶ。
-  保存済み Q1/Q2 の 18 chunks 全 pass + 同一 chunk 2 doc 相殺 mutation で
-  actual HOLD + 37 件目の native 到達 0 (mockCalls 36 のまま) +
-  非 D1 到達の native 0 を確認。新 live D1/source 0。stdout は counts のみ。
+  import-safe 化し、実関数を呼ぶ同一 check を repo に tracked 保持。
+  - tracked: `services/yuho-quant/data-scripts/overseas-745-guard-check.ts`
+    (raw 値の Git 持込 0。private 0600 `perdoc-actual-check.mts` と同一内容。
+    旧 `perdoc-check.mts` は保全のみ)。
+  - 実 runnable command:
+    `pnpm exec tsx services/yuho-quant/data-scripts/overseas-745-guard-check.ts`
+  - private 入力: `/tmp/overseas745-select-20260930/select-live.json`
+    `4a4cbc04…adeb517` + `select-union.json` `54c6fb38…4f16fdc`。
+  - tracked same-check 1回実行: 実 18 chunks pass + 同一 chunk 2 doc
+    相殺 mutation で actual HOLD + 37 件目の native 到達 0
+    (mockCalls 36 のまま) + 非 D1 到達の native 0。
+    新 live D1/source 0。stdout は counts のみ。
