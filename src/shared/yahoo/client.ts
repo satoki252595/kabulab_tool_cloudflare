@@ -27,6 +27,7 @@ import {
   isProvenSamePoint,
 } from "./bar-sanity.js";
 import { STOCK_CODE_REGEX } from "../jpx/stock-code.js";
+import { sha256HexBytes } from "../sha256.js";
 
 /**
  * 日本株銘柄コード。
@@ -717,6 +718,7 @@ interface YahooChartJson {
     result?: Array<{
       meta?: {
         symbol?: string;
+        range?: string;
         regularMarketPrice?: number | null;
         regularMarketTime?: number | null;
       };
@@ -741,6 +743,11 @@ interface YahooChartJson {
   };
 }
 
+/**
+ * VWAP 正規化日足 (OHLCV のみ)。adj は金融入力に使わない
+ * (全 consumer が OHLC close を使う)。adj 原文は一次保管にのみ残し、
+ * ここでは読まない・検証しない・保存しない。c 置換・係数化もしない。
+ */
 export interface DailyBar {
   date: string;
   o: number;
@@ -748,11 +755,27 @@ export interface DailyBar {
   l: number;
   c: number;
   v: number;
-  adj: number;
+}
+/**
+ * Daily fetch の provenance。ingest が R2 object へそのまま persist し、
+ * API が zero-split 適格の検証に使う (ONE contract)。
+ * observedAt は body 受信完了 clock (r.clone().arrayBuffer() 解決時点)。
+ * R2 の `updated` (書込 clock) を取得時刻として扱わない。
+ * splits はこの fetch の応答 events のみ (保存物の merged splits ではない)。
+ */
+export interface DailyFetchProof {
+  observedAt: string;
+  rawSha: string;
+  requestedRange: string;
+  symbol: string;
+  firstTs: number | null;
+  lastTs: number | null;
+  splits: { date: string; ratio: number }[];
 }
 export interface DailyResult {
   bars: DailyBar[];
   splits: { date: string; ratio: number }[];
+  proof: DailyFetchProof;
 }
 
 export const jstDate = (ts: number) =>
@@ -988,22 +1011,50 @@ export async function fetchDaily(
   options?: FetchChartOptions
 ): Promise<DailyResult> {
   const r = await fetchYahooChartRaw(symbol, range, "1d", true);
+  // body 受信完了で bytes 確定 + clock。onRaw 有無に関わらず取得する (proof のため)。
+  const rawBytes = new Uint8Array(await r.clone().arrayBuffer());
+  const observedAt = new Date().toISOString();
   // fetchChart と同一の原文 capture (durable-before-parse 用。未指定は従来どおり)。
   if (options?.onRaw) {
-    const bytes = new Uint8Array(await r.clone().arrayBuffer());
-    await options.onRaw({ symbol, status: r.status, bytes, url: r.url });
+    await options.onRaw({ symbol, status: r.status, bytes: rawBytes, url: r.url });
   }
   ensureOk(r);
-  const j = (await r.json()) as YahooChartJson;
+  return parseDailyChart(symbol, range, rawBytes, observedAt);
+}
+
+/**
+ * Daily chart 応答 bytes の純粋 parse + proof 生成 (fetch なし)。
+ * テストは実 bytes をここへ直接入れられる (GET0)。
+ */
+export async function parseDailyChart(
+  symbol: string,
+  range: string,
+  rawBytes: Uint8Array,
+  observedAt: string
+): Promise<DailyResult> {
+  const rawSha = await sha256HexBytes(Uint8Array.from(rawBytes));
+  const j = JSON.parse(new TextDecoder().decode(rawBytes)) as YahooChartJson;
   const { res, timestamps } = extractChartResult(symbol, j);
+  // symbol は extractChartResult 内の既存 assertResponseSymbol が照合済み。
+  // range も応答 meta の echo と照合する (要求と異なる span の採用防止)。
+  if (res.meta?.range !== range) {
+    throw new Error(`Chart API エラー [${symbol}]: 要求 range ${range} と応答 range が不一致`);
+  }
+  // proof.symbol には要求 symbol を bind する (応答一致は検証済み)。
   // quote 欠落は仕様変更の疑い。空で黙殺せず落とす (旧実装は TypeError)。
   const q = res.indicators?.quote?.[0];
   if (!q) throw new Error(`Chart API エラー [${symbol}]: quote がありません`);
   assertQuoteArrays(symbol, q as unknown as Record<string, unknown>, timestamps.length);
-  // 真正 empty: 構造妥当 + timestamp 空配列のみ。
-  if (timestamps.length === 0) return { bars: [], splits: [] };
-  const adj = res.indicators?.adjclose?.[0]?.adjclose || [];
-  // raw-first 全行検査 (filter 前)。使用/保存する adj の実値もここで見る。
+  // 真正 empty: 構造妥当 + timestamp 空配列のみ。proof は空 span で付ける。
+  if (timestamps.length === 0) {
+    return {
+      bars: [],
+      splits: [],
+      proof: { observedAt, rawSha, requestedRange: range, symbol, firstTs: null, lastTs: null, splits: [] },
+    };
+  }
+  // raw-first 全行検査 (filter 前)。adj は見ない (VWAP demotion。
+  // adjclose の有無・正負は OHLCV 採用を block しない)。
   assertRawBarsSane(
     symbol,
     timestamps.map((_, i) => ({
@@ -1012,8 +1063,7 @@ export async function fetchDaily(
       l: q.low?.[i],
       c: q.close?.[i],
       v: q.volume?.[i],
-    })),
-    adj
+    }))
   );
   const bars: DailyBar[] = [];
   for (let i = 0; i < timestamps.length; i++) {
@@ -1025,14 +1075,6 @@ export async function fetchDaily(
     // null は欠落として落とす。null 出来高は 0 に化けない (missing≠実0)。
     // v=0 は合法行として残す (daily は v0 を filter しない)。
     if (o == null || h == null || l == null || c == null || v == null) continue;
-    // OHLCV 保存候補が揃った行で adj 欠落なら throw (c 代用なし。行だけの
-    // silent skip も不可)。呼び出し側は当該 stock PUT0/errors/exit1 へ。
-    const a = adj[i];
-    if (a == null) {
-      throw new Error(
-        `Chart API エラー [${symbol}]: 保存候補行に adj 欠落のため応答全体を採用しません。`
-      );
-    }
     bars.push({
       date: jstDate(timestamps[i]),
       o: +o.toFixed(2),
@@ -1040,7 +1082,6 @@ export async function fetchDaily(
       l: +l.toFixed(2),
       c: +c.toFixed(2),
       v,
-      adj: +a.toFixed(2),
     });
   }
   // 非空 timestamps で有効バー 0 = 全行 null 欠落。真正 empty にしない。
@@ -1113,7 +1154,19 @@ export async function fetchDaily(
       metaPrice: res.meta?.regularMarketPrice ?? null,
     });
   }
-  return { bars, splits };
+  return {
+    bars,
+    splits,
+    proof: {
+      observedAt,
+      rawSha,
+      requestedRange: range,
+      symbol,
+      firstTs: timestamps[0],
+      lastTs: timestamps[timestamps.length - 1],
+      splits,
+    },
+  };
 }
 
 // -----------------------------------------------------------------------------

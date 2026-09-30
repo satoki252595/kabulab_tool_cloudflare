@@ -1,14 +1,41 @@
 import "dotenv/config";
-// 全銘柄の日足を更新（未取得は10年バックフィル、既存は直近1ヶ月差分）→ R2 daily/{code}.json
+// 全銘柄の日足を更新（既存有無に関わらず 10y を 1 社 1 回取得し全置換）→ R2 daily/{code}.json
 // 実行: npx tsx scripts/ingest-daily.ts [--codes=7203,6758] [--limit=50]
 import { fileURLToPath } from "node:url";
 import { fetchDaily } from "../../src/shared/yahoo/client.js";
-import { r2Get, r2Put, mapLimit, sleep, retry, R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
-import { mergeDailySplits, type DailySplit } from "./lib/daily-merge.js";
+import { r2Get, r2Put, mapLimit, sleep, R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
+import { buildRepairPost } from "./lib/repair-daily.js";
 import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
-import { archiveSummaryOrFatal, assertSavedDailyShape, bodyPin, buildIngestSummary, findInvalidBars, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome, type SavedDaily } from "./lib/ingest-guard.js";
+import { archiveSummaryOrFatal, assertSavedDailyShape, bodyPin, buildIngestSummary, findInvalidBars, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome } from "./lib/ingest-guard.js";
+import { isCalendarDateString, isStrictIsoUtc, jstDateSec } from "../../src/shared/vwap/proof.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
+
+/**
+ * 明示 10y range (run 起点の JST 暦日)。応答からの導出は禁止
+ * (fresh 先頭日からの from 推定は欠落隠しになる)。
+ */
+export function tenYearRange(nowIso: string): { from: string; to: string } {
+  // 実 clock は厳格 ISO UTC のみ (緩い Date.parse は繰上げを通すため HOLD)。
+  if (!isStrictIsoUtc(nowIso)) {
+    throw new Error(`tenYearRange: 無効な now のため HOLD`);
+  }
+  const ms = Date.parse(nowIso);
+  const to = jstDateSec(Math.floor(ms / 1000));
+  if (!isCalendarDateString(to)) {
+    throw new Error(`tenYearRange: 無効な to のため HOLD`);
+  }
+  const [y, m, d] = to.split("-").map(Number);
+  // うるう日 (02-29) のみ明示 rule: target 年に 02-29 は存在しない
+  // (10 年差はうるう年同士になり得ない) ため 02-28 に倒す。
+  if (m === 2 && d === 29) return { from: `${y - 10}-02-28`, to };
+  const from = `${y - 10}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  // 構造上ここは常に有効 (02-29 は上で処理済み)。念のため HOLD。
+  if (!isCalendarDateString(from)) {
+    throw new Error(`tenYearRange: 無効な from のため HOLD (now=${nowIso})`);
+  }
+  return { from, to };
+}
 
 export async function main() {
   // knob は main 内で型付き取得する (未設定・不正値は final catch で exit 2)。
@@ -21,6 +48,7 @@ export async function main() {
   const limit = arg("limit"); if (limit) codes = codes.slice(0, Number(limit));
 
   const startedAt = new Date().toISOString();
+  const TEN_Y_RANGE = tenYearRange(startedAt); // run 内一定の明示 10y range
   let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0, invalid = 0, skipped = 0;
   let consecRL = 0, aborted = false, fatal = false;
   const unknownCodes: string[] = [];
@@ -55,22 +83,23 @@ export async function main() {
     }
     if (aborted || fatal) return;                        // GET await 中に counterpart が fatal 化しうる
     // 既存は Yahoo 取得より先に検証する。source empty でも腐敗を見逃さない。
-    let old: SavedDaily | null = null;
     if (existing !== null) {
       try {
-        old = assertSavedDailyShape(existing, `daily/${code}.json`, code);
+        assertSavedDailyShape(existing, `daily/${code}.json`, code);
       } catch (e) {
         errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
         outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
         return;
       }
     }
-    const range = existing === null ? "10y" : "1mo";
-    if (existing === null) backfilled++;
+    // 通常 daily は 10y を 1 社 1 回取得し全置換する (1mo 差分マージなし)。
+    backfilled++;
     let bars: Awaited<ReturnType<typeof fetchDaily>>["bars"];
     let splits: Awaited<ReturnType<typeof fetchDaily>>["splits"];
+    let proof: Awaited<ReturnType<typeof fetchDaily>>["proof"];
     try {
-      ({ bars, splits } = await retry(() => fetchDaily(`${code}.T`, range), 3));
+      // 1 社 1 回の単発取得 (producer 側の chart retry なし。失敗は error/HOLD 計数へ)。
+      ({ bars, splits, proof } = await fetchDaily(`${code}.T`, "10y"));
     } catch (e) {
       // レート制限は「これ以上叩くな」のシグナル。即リトライせず連続数を数え、
       // しきい値で全体を中断する (ブロックを延長しない / 低負荷化)。
@@ -100,30 +129,33 @@ export async function main() {
       outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: null };
       return;
     }
-    let merged = bars;
-    // 初回 (10y backfill) は応答の全履歴が正。差分更新は窓マージする。
-    let mergedSplits = splits;
-    if (old !== null) {
-      const map = new Map<string, any>(old.bars.map((b) => [b.date as string, b]));
-      for (const b of bars) map.set(b.date, b);
-      merged = [...map.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
-      // splits だけ全置換すると窓外の分割履歴が消える (F-09)。bars と同じ
-      // 日付キーで窓マージする (窓外保持・窓内は fresh が正)。
-      mergedSplits = mergeDailySplits(
-        old.splits as unknown as DailySplit[],
-        splits,
-        bars[0].date,
-        bars[bars.length - 1].date
-      );
+    // whole-post rebuild (repair guard reuse): 明示 10y range 内の旧有効日付は
+    // fresh 必須 (欠落 HOLD)、range 外旧は明示破棄。bars/splits/proof 全置換。
+    // 旧無しは空 old 扱いの単一 path。旧移行の温存は要求しない。
+    let rp: ReturnType<typeof buildRepairPost>;
+    try {
+      rp = buildRepairPost({
+        code,
+        oldRaw: existing ?? JSON.stringify({ code, bars: [], splits: [] }),
+        fresh: { bars, splits, proof },
+        range: TEN_Y_RANGE,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
+      outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: null };
+      return;
     }
-    // same-cached-input 2回目は内容同一で PUT skip (updated 不変)。
+    const postJson = rp.postJson;
+    // range 外旧の破棄は outcome に残す (件数+端。0 件はキーなし)。
+    const discarded = rp.discardedOutOfRange.count > 0 ? rp.discardedOutOfRange : undefined;
+    // same-cached-input 2回目は内容同一で PUT skip (updated 不変・初回 clock 保持)。
     // 比較対象は保存 object そのもの (Sol HOLD1: code/bars/splits 抜粋禁止)。
-    const payload = { code, updated: new Date().toISOString(), bars: merged, splits: mergedSplits };
-    const payloadJson = JSON.stringify(payload);
-    if (shouldSkipPut(existing, payload)) {
+    if (shouldSkipPut(existing, JSON.parse(postJson) as Record<string, unknown>)) {
       skipped++;
       // skip の pin は standing の既存 bytes (新規 timestamp 付き payload ではない)。
       outcomes[code] = { status: "skipped", latestSourceBar: latest, bodySha: existing === null ? null : bodyPin(existing) };
+      if (discarded) outcomes[code].discardedOutOfRange = discarded;
       return;
     }
     if (aborted || fatal) {
@@ -132,25 +164,26 @@ export async function main() {
       return;
     }
     try {
-      await r2Put(`daily/${code}.json`, payloadJson);
+      await r2Put(`daily/${code}.json`, postJson);
     } catch (e) {
       // PUT fault は全件 fatal。区別は正直計数する (unknown/rejected/想定外)。
       if (e instanceof R2PutUnknownError) {
         unknownCodes.push(code);
-        outcomes[code] = { status: "unknown", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
+        outcomes[code] = { status: "unknown", latestSourceBar: latest, bodySha: bodyPin(postJson) };
       } else if (e instanceof R2PutRejectedError) {
         rejectedCodes.push(code);
-        outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
+        outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(postJson) };
       } else {
         const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
         errors++; if (errors <= 5) console.error(`  ${code}: ${sanitizeLogText(text).slice(0, 200)}`);
-        outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
+        outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(postJson) };
       }
       stopNewWork(code, e instanceof Error ? e.message : String(e));
       return;
     }
     written++;
-    outcomes[code] = { status: "written", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
+    outcomes[code] = { status: "written", latestSourceBar: latest, bodySha: bodyPin(postJson) };
+    if (discarded) outcomes[code].discardedOutOfRange = discarded;
   });
   // 未着手の全件 accounting。prepared-but-stopped は上で latest 付き notStarted。
   for (const code of codes) {
@@ -164,7 +197,7 @@ export async function main() {
   console.log(JSON.stringify({ codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted, fatal, unknown: unknown.length, rejected: rejected.length }));
   // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 daily に必須接続。
   // 保管失敗は fatal exit 2 にして後続 intra を走らせない (未保管の成功なし)。
-  const summary = buildIngestSummary({ kind: "daily", range: "1mo-diff/10y-backfill", runId: resolveRunId(), codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
+  const summary = buildIngestSummary({ kind: "daily", range: "10y-full", runId: resolveRunId(), codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
   const local = writeSummaryLocal(summary);
   if (!local.ok) {
     console.error(JSON.stringify({ archive: "local-failed", key: summary.key, reason: local.reason }));

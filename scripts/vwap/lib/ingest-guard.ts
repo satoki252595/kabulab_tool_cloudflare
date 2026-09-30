@@ -10,6 +10,8 @@
 import { createHash } from "node:crypto";
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
+import type { DailyFetchProof } from "../../../src/shared/yahoo/client.js";
+import { isDailyFetchProof } from "../../../src/shared/vwap/proof.js";
 
 export type PricedBar = {
   o: number;
@@ -125,6 +127,8 @@ export type SavedDaily = {
   code: string;
   bars: Array<Record<string, unknown>>;
   splits: Array<Record<string, unknown>>;
+  /** この fetch の provenance (legacy object には無い。ある場合は形状 strict)。 */
+  proof?: DailyFetchProof;
 };
 
 export type SavedIntra = {
@@ -144,8 +148,8 @@ export function isCalendarDate(d: string): boolean {
  * 保存済み R2 daily object の strict 検証。以下は throw する:
  * parse 不能・非 object・code 不一致 (cross-code 混入防止)・
  * bars/splits 非配列・bar の日付不正・重複日付・価格異常 (既存
- * findInvalidBars を reuse)・adj 欠落 (daily 保存バーは adj 必須)・
- * splits 要素の日付不正・ratio 非正有限。
+ * findInvalidBars を OHLCV のみで reuse。adj は金融 schema 外のため
+ * 欠落要求・検証ともしない)・splits 要素の日付不正・ratio 非正有限。
  * `old.bars || []` の黙示補完は禁止 (新 valid が壊 old を温存して PUT
  * する根因になる)。呼び出し側は当該銘柄 PUT0・errors 計数へ。
  */
@@ -179,11 +183,12 @@ export function assertSavedDailyShape(raw: string, key: string, expectedCode: st
       throw new Error(`保存済み形状が不正です (bars 日付重複): ${key}`);
     }
     seenDates.add(r.date);
-    if (r.adj === undefined) {
-      throw new Error(`保存済み形状が不正です (bars adj 欠落): ${key}`);
-    }
+    // adj は金融 schema 外 (VWAP demotion)。legacy bytes の adj (正負問わず)
+    // は原文保管として温存し、欠落要求も検証もしない。
   }
-  const bad = findInvalidBars(o.bars as unknown as PricedBar[]);
+  const bad = findInvalidBars(
+    (o.bars as unknown as PricedBar[]).map((b) => ({ o: b.o, h: b.h, l: b.l, c: b.c, v: b.v }))
+  );
   if (bad.length > 0) {
     throw new Error(`保存済み形状が不正です (bars 価格異常 ${bad.length} 件): ${key}`);
   }
@@ -200,6 +205,10 @@ export function assertSavedDailyShape(raw: string, key: string, expectedCode: st
     ) {
       throw new Error(`保存済み形状が不正です (splits 要素): ${key}`);
     }
+  }
+  // proof は legacy 欠落を許すが、ある場合は形状 strict (ONE contract)。
+  if (o.proof !== undefined && !isDailyFetchProof(o.proof)) {
+    throw new Error(`保存済み形状が不正です (proof 不正): ${key}`);
   }
   return o as unknown as SavedDaily;
 }
@@ -279,6 +288,18 @@ export function shouldSkipPut(
   delete oldRest.updated;
   const freshRest = { ...fresh };
   delete freshRest.updated;
+  // proof の観測 clock のみ等価対象外 (canonical standing proof 保持)。
+  // 同一 cached (rawSha・range・span・splits 一致) の再観測は PUT0 し、
+  // standing の初回 observedAt を restamp しない。rawSha・coverage・
+  // splits の差異は PUT する (body 欄の一般 drop はしない)。
+  for (const rest of [oldRest, freshRest]) {
+    const p = (rest as Record<string, unknown>).proof;
+    if (p !== undefined && p !== null && typeof p === "object" && !Array.isArray(p)) {
+      const cp = { ...(p as Record<string, unknown>) };
+      delete cp.observedAt;
+      (rest as Record<string, unknown>).proof = cp;
+    }
+  }
   return isDeepStrictEqual(oldRest, freshRest);
 }
 
@@ -315,10 +336,13 @@ export type IngestOutcomeStatus =
   | "error"
   | "unknown"
   | "notStarted";
+/** range 外旧の明示破棄 (件数+端。価格なし)。0 件時はキー自体を持たない。 */
+export type DiscardedOutOfRange = { count: number; first: string | null; last: string | null };
 export type IngestCodeOutcome = {
   status: IngestOutcomeStatus;
   latestSourceBar: string | number | null;
   bodySha: string | null;
+  discardedOutOfRange?: DiscardedOutOfRange;
 };
 
 export type IngestRunStats = {

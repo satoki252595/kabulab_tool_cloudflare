@@ -356,11 +356,11 @@ describe("assertSavedDailyShape", () => {
     expect(() => assertSavedDailyShape(good({ bars: null }), "daily/7203.json", "7203")).toThrow(/非配列/);
   });
 
-  it("日付不正・重複・adj欠落・価格異常は落とす", () => {
+  it("日付不正・重複・価格異常は落とす (adj 欠落は通す: VWAP demotion)", () => {
     expect(() => assertSavedDailyShape(good({ bars: [{ ...bar, date: "2026-13-40" }] }), "daily/7203.json", "7203")).toThrow(/日付不正/);
     expect(() => assertSavedDailyShape(good({ bars: [bar, bar] }), "daily/7203.json", "7203")).toThrow(/重複/);
     const noAdj = { date: "2026-09-25", o: 100, h: 110, l: 90, c: 105, v: 1000 };
-    expect(() => assertSavedDailyShape(good({ bars: [noAdj] }), "daily/7203.json", "7203")).toThrow(/adj 欠落/);
+    expect(assertSavedDailyShape(good({ bars: [noAdj] }), "daily/7203.json", "7203").code).toBe("7203");
     expect(() => assertSavedDailyShape(good({ bars: [{ ...bar, c: -5 }] }), "daily/7203.json", "7203")).toThrow(/価格異常/);
   });
 
