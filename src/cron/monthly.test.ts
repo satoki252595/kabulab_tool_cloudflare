@@ -4,6 +4,7 @@ import { runMonthlyRebuild } from "./monthly.js";
 import { runDateKeys } from "./daily.js";
 import type { OverlayCollectFn } from "./universe-overlay.js";
 import { fakeOverlayCollect } from "./tests/overlay-batch.js";
+import { makeThrowingSender } from "./tests/overlay-test-sender.js";
 
 const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
 
@@ -70,8 +71,23 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
       select: () => ({
         from: (t: unknown) => {
           if (t === coreSchema.stocks) {
+            // snapshot 読取 (orderBy) は全 11 列の完全行を返す (形状検証つき)。
+            const snapshotRows = active.map((s) => ({
+              id: s.id,
+              code: s.code,
+              name: `nm-${s.code}`,
+              market: "プライム（内国株式）",
+              sector: null,
+              isActive: 1,
+              isYutai: 1,
+              createdAt: 1,
+              updatedAt: 1,
+              instrumentType: "equity",
+              sector33: null,
+            }));
             return {
               where: async () => active,
+              orderBy: async () => snapshotRows,
               then: (
                 resolve: (v: typeof active) => void,
                 reject?: (e: unknown) => void
@@ -79,20 +95,29 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
             };
           }
           // overlay 適用済み (完全世代 tuple・events 未適用) の正契約 → no-op。
-          if (t === listingOfficialEvents) return { where: async () => [] };
+          if (t === listingOfficialEvents) {
+            return { where: async () => [], orderBy: async () => [] };
+          }
           if (t === universeOverlayState) {
+            const row = {
+              id: 1,
+              baseAsOf: "2026-08-31",
+              eventsFetchedAt: "stub-gen",
+              eventsSha: "s",
+              eligibilityAsOf: runDateKeys(Date.now()).runDate,
+              appliedAt: "stub-applied",
+              appliedDelist: 0,
+              appliedListing: 0,
+              appliedTransfer: 0,
+              heldListingCodes: null,
+            };
             return {
-              where: async () => [
-                {
-                  id: 1,
-                  baseAsOf: "2026-08-31",
-                  eventsFetchedAt: "stub-gen",
-                  eventsSha: "s",
-                  eligibilityAsOf: runDateKeys(Date.now()).runDate,
-                  appliedAt: "stub-applied",
-                  heldListingCodes: null,
-                },
-              ],
+              where: async () => [row],
+              orderBy: async () => [row],
+              then: (
+                resolve: (v: typeof row[]) => void,
+                reject?: (e: unknown) => void
+              ) => Promise.resolve([row]).then(resolve, reject),
             };
           }
           if (t === coreSchema.stockFinancials) return core;
@@ -125,13 +150,13 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
 
   it("全 N 銘柄をスコア化する", async () => {
     const { db } = makeStub();
-    const result = await runMonthlyRebuild(db, { collectOverlay: fakeCollect });
+    const result = await runMonthlyRebuild(db, { collectOverlay: fakeCollect, sendOverlayBatch: makeThrowingSender() });
     expect(result.scoredStocks).toBe(N);
   });
 
   it("insert は ceil(N/5) + ceil(N/16) 回だけ呼ばれる", async () => {
     const { db, calls } = makeStub();
-    await runMonthlyRebuild(db, { collectOverlay: fakeCollect });
+    await runMonthlyRebuild(db, { collectOverlay: fakeCollect, sendOverlayBatch: makeThrowingSender() });
     // 40 銘柄: financials 8 回 (5×8) + scores 3 回 (16+16+8)
     expect(calls).toHaveLength(8 + 3);
     const fin = calls.filter((c) => c.table === otakaraSchema.stockFinancials);
@@ -144,7 +169,7 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
 
   it("チャンク行数は D1 bind 上限 (100/文) を超えない", async () => {
     const { db, calls } = makeStub();
-    await runMonthlyRebuild(db, { collectOverlay: fakeCollect });
+    await runMonthlyRebuild(db, { collectOverlay: fakeCollect, sendOverlayBatch: makeThrowingSender() });
     // financials 18 列×行数 ≤ 100 → 5 行まで、scores 6 列×行数 ≤ 100 → 16 行まで
     for (const c of calls) {
       if (c.table === otakaraSchema.stockFinancials) {
@@ -168,7 +193,7 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
 
   it("書き戻し行の stockId に欠け・重複がない", async () => {
     const { db, calls } = makeStub();
-    await runMonthlyRebuild(db, { collectOverlay: fakeCollect });
+    await runMonthlyRebuild(db, { collectOverlay: fakeCollect, sendOverlayBatch: makeThrowingSender() });
     for (const c of calls) {
       const ids = (c.rows as { stockId: number }[]).map((r) => r.stockId);
       expect(new Set(ids).size).toBe(ids.length);

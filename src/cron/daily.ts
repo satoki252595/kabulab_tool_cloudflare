@@ -39,7 +39,7 @@
  */
 
 import { sql, eq, and, or, gte, lte, lt, asc, isNull, inArray } from "drizzle-orm";
-import { createD1HttpDb } from "../shared/db/d1-http-client.js";
+import { createD1HttpBatchSender, createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 import {
@@ -102,6 +102,7 @@ import { collectUniverseOfficialEvents } from "./universe-official-events.js";
 import {
   ensureUniverseOverlay,
   withBasicEvidence,
+  type OverlayBatchSender,
   type OverlayCollectFn,
 } from "./universe-overlay.js";
 
@@ -1091,7 +1092,11 @@ export async function archivePriceSyncBatch(
  */
 export async function runDailySync(
   db: Db,
-  options: { stocksOnly?: boolean; collectOverlay?: OverlayCollectFn } = {},
+  options: {
+    stocksOnly?: boolean;
+    collectOverlay?: OverlayCollectFn;
+    sendOverlayBatch?: OverlayBatchSender;
+  } = {},
 ): Promise<DailySyncResult> {
   const startedAtMs = Date.now();
   const mode: PriceSyncBatchMode = options.stocksOnly === true ? "stocks" : "daily";
@@ -1099,7 +1104,8 @@ export async function runDailySync(
     return await runDailySyncAndRecord(
       db,
       options.stocksOnly === true,
-      options.collectOverlay
+      options.collectOverlay,
+      options.sendOverlayBatch
     );
   } catch (e) {
     await recordPriceSyncFailureSafely(e, mode, startedAtMs);
@@ -1110,7 +1116,8 @@ export async function runDailySync(
 async function runDailySyncAndRecord(
   db: Db,
   stocksOnly: boolean,
-  collectOverlay?: OverlayCollectFn
+  collectOverlay?: OverlayCollectFn,
+  sendOverlayBatch?: OverlayBatchSender
 ): Promise<DailySyncResult> {
   const startedAt = Date.now();
   // 日付キーと週1ゲートは run 開始時刻に固定する (F-05。Phase 実行時刻で
@@ -1150,6 +1157,7 @@ async function runDailySyncAndRecord(
     collect:
       collectOverlay ??
       withBasicEvidence((input) => collectUniverseOfficialEvents(input)),
+    sendBatch: sendOverlayBatch ?? createD1HttpBatchSender(),
   });
   if (overlay.applied) {
     console.info(
