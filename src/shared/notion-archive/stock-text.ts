@@ -92,56 +92,6 @@ interface ChildrenResponse {
   next_cursor: string | null;
 }
 
-/**
- * blocks/children のページ応答を厳密検証する (#199 の根因対策)。
- * 旧実装は型 cast + `!has_more || next_cursor === null` 終了で、不正型・
- * 継続カーソル欠落の途中本文を成功返却し得た。検証は局所完結
- * (client 全体・他 collector の改造なし):
- *   - 応答は non-null・非配列の object
- *   - own `results` + 配列
- *   - own `has_more` + boolean
- *   - own `next_cursor` + null/非空文字列 (空白のみ拒否)
- *   - pairing: true→文字列・false→null
- * 不正は throw (部分本文の成功返却なし。呼び出し側の既存 catch へ伝播)。
- */
-function validatedChildrenPage(
-  res: unknown,
-  rowPageId: string,
-  page: number
-): ChildrenResponse {
-  const where = `Notion 有報テキスト行のページ応答が不正 (page=${rowPageId} 頁=${page})`;
-  if (typeof res !== "object" || res === null || Array.isArray(res)) {
-    throw new Error(`${where}: 応答が object ではない`);
-  }
-  const r = res as Record<string, unknown>;
-  if (!Object.hasOwn(r, "results") || !Array.isArray(r["results"])) {
-    throw new Error(`${where}: results が配列ではない`);
-  }
-  if (!Object.hasOwn(r, "has_more") || typeof r["has_more"] !== "boolean") {
-    throw new Error(`${where}: has_more が boolean ではない`);
-  }
-  const hasMore = r["has_more"] as boolean;
-  if (!Object.hasOwn(r, "next_cursor")) {
-    throw new Error(`${where}: next_cursor が無い`);
-  }
-  const nextCursor = r["next_cursor"];
-  const cursorOk =
-    nextCursor === null ||
-    (typeof nextCursor === "string" &&
-      nextCursor.length > 0 &&
-      nextCursor.trim().length > 0);
-  if (!cursorOk) {
-    throw new Error(`${where}: next_cursor が null/非空文字列ではない`);
-  }
-  if (hasMore && typeof nextCursor !== "string") {
-    throw new Error(`${where}: has_more=true だが next_cursor が文字列ではない`);
-  }
-  if (!hasMore && nextCursor !== null) {
-    throw new Error(`${where}: has_more=false だが next_cursor が null ではない`);
-  }
-  return res as ChildrenResponse;
-}
-
 /** プロセス内キャッシュ: 有報テキスト DB ID (単一 DB のため銘柄コード不要) */
 let cachedDbId: string | null = null;
 
@@ -357,13 +307,13 @@ export async function readStockTextRow(
       cursor !== null
         ? `?start_cursor=${cursor}&page_size=100`
         : "?page_size=100";
-    const raw: unknown = await notionRequest(
+    // envelope は client の共通 guard が検証済み (不正は NotionConfigError)。
+    // ここでは反復カーソルの検出と literal false 終端だけを担う。
+    const res: ChildrenResponse = await notionRequest<ChildrenResponse>(
       "GET",
       `/blocks/${rowPageId}/children${qs}`
     );
     page += 1;
-    // 検証後だけ本文追加。終端は has_more===false のみ。
-    const res = validatedChildrenPage(raw, rowPageId, page);
     blocks.push(...res.results);
     if (res.has_more === false) break;
     const next = res.next_cursor as string;

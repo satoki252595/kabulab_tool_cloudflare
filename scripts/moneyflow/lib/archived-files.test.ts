@@ -65,13 +65,13 @@ describe("moneyflow archived-files", () => {
     });
 
     it("無ければ null を返す", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       const { findArchivedRecordByKey } = await load();
       await expect(findArchivedRecordByKey(dbId, "k1")).resolves.toBeNull();
     });
 
     it("1件ならキーとファイルを取り出す", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [row("page-1", "k1")] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [row("page-1", "k1")] , has_more: false, next_cursor: null }]);
       const { findArchivedRecordByKey } = await load();
       await expect(findArchivedRecordByKey(dbId, "k1")).resolves.toEqual({
         pageId: "page-1",
@@ -82,7 +82,7 @@ describe("moneyflow archived-files", () => {
 
     it("同一キーが2件ならどれも選ばず throw する (再解析の取り違え防止)", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [row("page-1", "k1"), row("page-2", "k1")] },
+        { results: [row("page-1", "k1"), row("page-2", "k1")] , has_more: false, next_cursor: null },
       ]);
       const { findArchivedRecordByKey } = await load();
       await expect(findArchivedRecordByKey(dbId, "k1")).rejects.toThrow(

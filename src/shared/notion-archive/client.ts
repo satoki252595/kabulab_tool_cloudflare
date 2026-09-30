@@ -234,6 +234,101 @@ export interface NotionRequestOptions {
   notionVersion?: string;
 }
 
+/**
+ * read-list 系の endpoint family。query string 除外後の path + method で
+ * 判定する。`data_sources` 系は実 caller が無いため対象外。
+ */
+type ReadListFamily =
+  | "search"
+  | "database-query"
+  | "block-children"
+  | "page-property";
+
+function readListFamily(
+  method: "GET" | "POST" | "PATCH" | "DELETE",
+  path: string
+): ReadListFamily | null {
+  const bare = path.split("?", 1)[0] ?? path;
+  if (method === "POST" && bare === "/search") return "search";
+  if (method === "POST" && /^\/databases\/[^/]+\/query$/.test(bare)) {
+    return "database-query";
+  }
+  if (method === "GET" && /^\/blocks\/[^/]+\/children$/.test(bare)) {
+    return "block-children";
+  }
+  if (
+    method === "GET" &&
+    /^\/pages\/[^/]+\/properties\/[^/]+$/.test(bare)
+  ) {
+    return "page-property";
+  }
+  return null;
+}
+
+/**
+ * read-list 系 envelope の strict guard (#199 の共通根因対策)。
+ * 全 collector が `!has_more || !next_cursor` の truthiness 終了に依存して
+ * おり、`res.json() as T` の無検証が共通根因だった。検証は入口 1 箇所で
+ * 完結し、各 collector の改造・新 iterator は設けない:
+ *   - own `results` + 配列
+ *   - own `has_more` + boolean
+ *   - own `next_cursor` + null/非空文字列 (空白のみ拒否)
+ *   - pairing: true→文字列・false→null
+ * `results` 要素の意味は既存 collector の担当 (触らない)。
+ * page-property は object 判別: `list` なら同 guard、
+ * `property_item` (singular) は許容、それ以外は reject。
+ * 不正は `NotionConfigError` で即 STOP (retry 対象外。doFetch ループの外で
+ * 検証するため再試行に入らない)。エラー文は endpoint family + field のみ
+ * (ID/cursor/body 値は出さない)。
+ */
+function assertListEnvelope(body: unknown, family: ReadListFamily): void {
+  const where = `Notion list 応答が不正 (endpoint=${family})`;
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw new NotionConfigError(`${where} field=response: object ではない`);
+  }
+  const b = body as Record<string, unknown>;
+  if (family === "page-property") {
+    if (!Object.hasOwn(b, "object")) {
+      throw new NotionConfigError(`${where} field=object: 判別子が無い`);
+    }
+    if (b["object"] === "property_item") return;
+    if (b["object"] !== "list") {
+      throw new NotionConfigError(`${where} field=object: 不正な判別子`);
+    }
+  }
+  if (!Object.hasOwn(b, "results") || !Array.isArray(b["results"])) {
+    throw new NotionConfigError(`${where} field=results: 配列ではない`);
+  }
+  if (!Object.hasOwn(b, "has_more") || typeof b["has_more"] !== "boolean") {
+    throw new NotionConfigError(`${where} field=has_more: boolean ではない`);
+  }
+  const hasMore = b["has_more"] as boolean;
+  if (!Object.hasOwn(b, "next_cursor")) {
+    throw new NotionConfigError(`${where} field=next_cursor: キーが無い`);
+  }
+  const nextCursor = b["next_cursor"];
+  const cursorOk =
+    nextCursor === null ||
+    (typeof nextCursor === "string" &&
+      nextCursor.length > 0 &&
+      nextCursor.trim().length > 0);
+  if (!cursorOk) {
+    throw new NotionConfigError(
+      `${where} field=next_cursor: null/非空文字列ではない`
+    );
+  }
+  if (hasMore && typeof nextCursor !== "string") {
+    throw new NotionConfigError(
+      `${where} field=next_cursor: has_more=true だが文字列ではない`
+    );
+  }
+  if (!hasMore && nextCursor !== null) {
+    throw new NotionConfigError(
+      `${where} field=next_cursor: has_more=false だが null ではない`
+    );
+  }
+}
+
 /** JSON API 呼び出し (GET/POST/PATCH/DELETE)。非 2xx は throw (ルール2)。 */
 export async function notionRequest<T = unknown>(
   method: "GET" | "POST" | "PATCH" | "DELETE",
@@ -259,7 +354,21 @@ export async function notionRequest<T = unknown>(
       `${method} ${path}`,
       isCreate
     );
-    return (await res.json()) as T;
+    const family = readListFamily(method, path);
+    if (family === null) {
+      return (await res.json()) as T;
+    }
+    // read-list のみ strict guard (doFetch retry ループの外。fetch 1 回で即 STOP)。
+    let parsed: unknown;
+    try {
+      parsed = await res.json();
+    } catch {
+      throw new NotionConfigError(
+        `Notion list 応答が不正 (endpoint=${family}) field=response: JSON decode 失敗`
+      );
+    }
+    assertListEnvelope(parsed, family);
+    return parsed as T;
   });
 }
 

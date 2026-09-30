@@ -350,7 +350,7 @@ describe("text-sections-query", () => {
     db = createDb(createD1(sqlite) as unknown as D1Database);
 
     await expect(getLatestTextSections(db, 2)).rejects.toThrow(
-      "has_more=true だが next_cursor が文字列ではない"
+      "Notion list 応答が不正 (endpoint=block-children)"
     );
   });
 });

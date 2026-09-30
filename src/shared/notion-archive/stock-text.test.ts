@@ -74,6 +74,8 @@ describe("notion-archive stock-text", () => {
 
   const dbQuery = (ids: string[]) => ({
     results: ids.map((id) => ({ id })),
+    has_more: false,
+    next_cursor: null,
   });
 
   describe("buildTextBodyBlocks", () => {
@@ -331,7 +333,7 @@ describe("notion-archive stock-text", () => {
       await expect(readStockTextRow("row-1")).rejects.toThrow("目印ではない");
     });
 
-    it("has_more=true + next_cursor=null は部分成功にせず throw", async () => {
+    it("不正 envelope は共通 guard で部分成功にせず throw", async () => {
       route("GET", "/v1/blocks/row-1/children", [
         childrenPage(
           [h2("抽出テキスト全文 (1項目)"), h3("b1", "A (a)")],
@@ -341,76 +343,7 @@ describe("notion-archive stock-text", () => {
       ]);
       const { readStockTextRow } = await load();
       await expect(readStockTextRow("row-1")).rejects.toThrow(
-        "has_more=true だが next_cursor が文字列ではない"
-      );
-    });
-
-    it("has_more のキー欠落・型不正は throw", async () => {
-      route("GET", "/v1/blocks/row-1/children", [
-        { results: [h2("抽出テキスト全文 (1項目)")], next_cursor: null },
-      ]);
-      const { readStockTextRow } = await load();
-      await expect(readStockTextRow("row-1")).rejects.toThrow(
-        "has_more が boolean ではない"
-      );
-    });
-
-    it("has_more の型不正は throw", async () => {
-      route("GET", "/v1/blocks/row-1/children", [
-        { results: [], has_more: "false", next_cursor: null },
-      ]);
-      const { readStockTextRow } = await load();
-      await expect(readStockTextRow("row-1")).rejects.toThrow(
-        "has_more が boolean ではない"
-      );
-    });
-
-    it("next_cursor の数値・空文字は throw", async () => {
-      route("GET", "/v1/blocks/row-1/children", [
-        childrenPage(
-          [h2("抽出テキスト全文 (1項目)")],
-          true,
-          123 as unknown as string
-        ),
-        childrenPage([h2("抽出テキスト全文 (1項目)")], true, ""),
-      ]);
-      const { readStockTextRow } = await load();
-      await expect(readStockTextRow("row-1")).rejects.toThrow(
-        "next_cursor が null/非空文字列ではない"
-      );
-      await expect(readStockTextRow("row-1")).rejects.toThrow(
-        "next_cursor が null/非空文字列ではない"
-      );
-      expect(calls).toHaveLength(2);
-    });
-
-    it("has_more=false + next_cursor 非null は throw", async () => {
-      route("GET", "/v1/blocks/row-1/children", [
-        childrenPage([h2("抽出テキスト全文 (0項目)")], false, "x"),
-      ]);
-      const { readStockTextRow } = await load();
-      await expect(readStockTextRow("row-1")).rejects.toThrow(
-        "has_more=false だが next_cursor が null ではない"
-      );
-    });
-
-    it("results 非配列は throw", async () => {
-      route("GET", "/v1/blocks/row-1/children", [
-        { results: "not-array", has_more: false, next_cursor: null },
-      ]);
-      const { readStockTextRow } = await load();
-      await expect(readStockTextRow("row-1")).rejects.toThrow(
-        "results が配列ではない"
-      );
-    });
-
-    it("空白のみの next_cursor は throw", async () => {
-      route("GET", "/v1/blocks/row-1/children", [
-        childrenPage([h2("抽出テキスト全文 (1項目)")], true, "   "),
-      ]);
-      const { readStockTextRow } = await load();
-      await expect(readStockTextRow("row-1")).rejects.toThrow(
-        "next_cursor が null/非空文字列ではない"
+        "Notion list 応答が不正 (endpoint=block-children)"
       );
     });
 

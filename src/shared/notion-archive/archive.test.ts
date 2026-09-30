@@ -76,7 +76,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "db-default" }]);
-      route("POST", `/v1/databases/db-default/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/db-default/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: "page-1" }]);
 
       const { recordPrimaryData } = await load();
@@ -101,7 +101,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${OTHER_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "db-custom" }]);
-      route("POST", `/v1/databases/db-custom/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/db-custom/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: "page-2" }]);
 
       const { recordPrimaryData } = await load();
@@ -128,8 +128,8 @@ describe("notion-archive archive (parentPageId)", () => {
       route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
       route("GET", `/v1/blocks/${OTHER_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "db-default" }, { id: "db-custom" }]);
-      route("POST", `/v1/databases/db-default/query`, [{ results: [] }]);
-      route("POST", `/v1/databases/db-custom/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/db-default/query`, [{ results: [] , has_more: false, next_cursor: null }]);
+      route("POST", `/v1/databases/db-custom/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: "page-a" }, { id: "page-b" }]);
 
       const { recordPrimaryData } = await load();
@@ -157,7 +157,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "db-default" }]);
-      route("POST", `/v1/databases/db-default/query`, [{ results: [] }, { results: [] }]);
+      route("POST", `/v1/databases/db-default/query`, [{ results: [], has_more: false, next_cursor: null }, { results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: "page-a" }, { id: "page-b" }]);
 
       const { recordPrimaryData } = await load();
@@ -171,7 +171,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${OTHER_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "db-custom" }]);
-      route("POST", `/v1/databases/db-custom/query`, [{ results: [{ id: "existing-page" }] }]);
+      route("POST", `/v1/databases/db-custom/query`, [{ results: [{ id: "existing-page" }] , has_more: false, next_cursor: null }]);
 
       const { recordPrimaryData } = await load();
       const result = await recordPrimaryData({
@@ -232,7 +232,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
     it("入力 bytes の事後書換えは sha と upload の両方に影響しない (freeze)", async () => {
       routeNewDb("db-1");
-      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-1/query", [{ results: [] , has_more: false, next_cursor: null }]);
       routeUploadOk("upload-1");
       route("POST", "/v1/pages", [{ id: "page-1" }]);
 
@@ -260,7 +260,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
     it("同一 key・同一 manifest なら skipped_existing + same で書込0", async () => {
       routeNewDb("db-1");
-      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-1/query", [{ results: [] , has_more: false, next_cursor: null }]);
       routeUploadOk("upload-1");
       route("POST", "/v1/pages", [{ id: "page-1" }]);
       const { recordPrimaryData } = await load();
@@ -289,6 +289,8 @@ describe("notion-archive archive (parentPageId)", () => {
               },
             },
           ],
+          has_more: false,
+          next_cursor: null,
         },
       ]);
       const r2 = await recordPrimaryData({ ...input, files: [{ bytes: new TextEncoder().encode("v1"), filename: "a.txt", contentType: "text/plain" }] });
@@ -299,7 +301,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
     it("同一 key・入力変更なら STOP し、書込0", async () => {
       routeNewDb("db-1");
-      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-1/query", [{ results: [] , has_more: false, next_cursor: null }]);
       routeUploadOk("upload-1");
       route("POST", "/v1/pages", [{ id: "page-1" }]);
       const { recordPrimaryData } = await load();
@@ -325,6 +327,8 @@ describe("notion-archive archive (parentPageId)", () => {
               },
             },
           ],
+          has_more: false,
+          next_cursor: null,
         },
       ]);
       await expect(
@@ -343,7 +347,7 @@ describe("notion-archive archive (parentPageId)", () => {
     it("旧行 (manifest 無し) は既存 skip を維持し、一致 UNKNOWN を明示する", async () => {
       routeNewDb("db-1");
       route("POST", "/v1/databases/db-1/query", [
-        { results: [{ id: "old-page", properties: { Metadata: { rich_text: [{ plain_text: "{}" }] } } }] },
+        { results: [{ id: "old-page", properties: { Metadata: { rich_text: [{ plain_text: "{}" }] } } }] , has_more: false, next_cursor: null },
       ]);
       const { recordPrimaryData } = await load();
       const result = await recordPrimaryData({
@@ -368,6 +372,8 @@ describe("notion-archive archive (parentPageId)", () => {
               },
             },
           ],
+          has_more: false,
+          next_cursor: null,
         },
       ]);
       const { recordPrimaryData } = await load();
@@ -378,7 +384,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
     it("正規化 (.jsonl→.txt) は manifest に原本と upload の両方を残す", async () => {
       routeNewDb("db-1");
-      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-1/query", [{ results: [] , has_more: false, next_cursor: null }]);
       routeUploadOk("upload-1");
       route("POST", "/v1/pages", [{ id: "page-1" }]);
       const { recordPrimaryData } = await load();
@@ -405,7 +411,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
     it("上限超過は manifest に too_large を残し、既存 Status/fileTooLarge 境界を維持する", async () => {
       routeNewDb("db-1");
-      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-1/query", [{ results: [] , has_more: false, next_cursor: null }]);
       routeUploadOk("upload-unused", 5);
       route("POST", "/v1/pages", [{ id: "page-1" }]);
       const { recordPrimaryData } = await load();
@@ -426,7 +432,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
     it("0 ファイルは空 manifest + 安定 fingerprint で記録する (物理成功と称さない)", async () => {
       routeNewDb("db-1");
-      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-1/query", [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: "page-1" }]);
       const { recordPrimaryData } = await load();
       const result = await recordPrimaryData({ service: "moneyflow", key: "k1", source: "s", metadata: {} });
@@ -438,7 +444,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
     it("Node Buffer 入力も確実に freeze する (slice 共有の回帰)", async () => {
       routeNewDb("db-1");
-      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-1/query", [{ results: [] , has_more: false, next_cursor: null }]);
       routeUploadOk("upload-1");
       route("POST", "/v1/pages", [{ id: "page-1" }]);
 
@@ -463,7 +469,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
     it("too_large を含む同一入力の skip は fileTooLarge を true で返す (caller guard 用)", async () => {
       routeNewDb("db-1");
-      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-1/query", [{ results: [] , has_more: false, next_cursor: null }]);
       routeUploadOk("upload-unused", 5);
       route("POST", "/v1/pages", [{ id: "page-1" }]);
       const { recordPrimaryData } = await load();
@@ -492,6 +498,8 @@ describe("notion-archive archive (parentPageId)", () => {
               },
             },
           ],
+          has_more: false,
+          next_cursor: null,
         },
       ]);
       const r2 = await recordPrimaryData({
@@ -503,7 +511,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
     it("保存 manifest の entries 改竄 (fingerprint 据置) は自己整合検査で STOP する", async () => {
       routeNewDb("db-1");
-      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-1/query", [{ results: [] , has_more: false, next_cursor: null }]);
       routeUploadOk("upload-1");
       route("POST", "/v1/pages", [{ id: "page-1" }]);
       const { recordPrimaryData } = await load();
@@ -533,6 +541,8 @@ describe("notion-archive archive (parentPageId)", () => {
               },
             },
           ],
+          has_more: false,
+          next_cursor: null,
         },
       ]);
       await expect(
@@ -550,7 +560,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
     it("upload の恒久失敗は成功にせず throw し、ページを作らない", async () => {
       routeNewDb("db-1");
-      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-1/query", [{ results: [] , has_more: false, next_cursor: null }]);
       route("GET", "/v1/users/me", [{ bot: { workspace_limits: { max_file_upload_size_in_bytes: 5242880 } } }]);
       route("POST", "/v1/file_uploads", [
         new Response(JSON.stringify({ object: "error", code: "validation_error", message: "bad" }), { status: 400 }),
@@ -570,7 +580,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
     it("primary POST の Unknown は同型・cause 保持で service+keySHA を残し、生keyを出さず再送しない", async () => {
       routeNewDb("db-1");
-      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-1/query", [{ results: [] , has_more: false, next_cursor: null }]);
       const harnessFetch = globalThis.fetch;
       let postAttempts = 0;
       globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
@@ -610,7 +620,7 @@ describe("notion-archive archive (parentPageId)", () => {
 
     it("primary POST の非 Unknown エラーは同一 throw し、context を付けず再送しない", async () => {
       routeNewDb("db-1");
-      route("POST", "/v1/databases/db-1/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-1/query", [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [
         new Response(JSON.stringify({ object: "error", code: "validation_error", message: "bad" }), { status: 400 }),
       ]);
@@ -636,7 +646,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "db-default" }]);
-      route("POST", `/v1/databases/db-default/query`, [{ results: [{ id: "p" }] }]);
+      route("POST", `/v1/databases/db-default/query`, [{ results: [{ id: "p" }] , has_more: false, next_cursor: null }]);
 
       const { isArchived } = await load();
       const result = await isArchived("moneyflow", "k1");
@@ -651,7 +661,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${OTHER_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "db-custom" }]);
-      route("POST", `/v1/databases/db-custom/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/db-custom/query`, [{ results: [] , has_more: false, next_cursor: null }]);
 
       const { isArchived } = await load();
       const result = await isArchived("moneyflow", "k1", OTHER_PAGE);
@@ -702,7 +712,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "trash-default" }]);
-      route("POST", "/v1/databases/trash-default/query", [{ results: [] }]);
+      route("POST", "/v1/databases/trash-default/query", [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: TRASH_ID }]);
       route("GET", `/v1/pages/${TRASH_ID}`, [trashPageProps]);
       route("PATCH", `/v1/pages/${ORIGIN_ID}`, [{ id: ORIGIN_ID }]);
@@ -727,7 +737,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${OTHER_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "trash-custom" }]);
-      route("POST", "/v1/databases/trash-custom/query", [{ results: [] }]);
+      route("POST", "/v1/databases/trash-custom/query", [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: OTHER_TRASH_ID }]);
       route("GET", `/v1/pages/${OTHER_TRASH_ID}`, [{ ...trashPageProps, id: OTHER_TRASH_ID }]);
       route("PATCH", `/v1/pages/${ORIGIN_ID}`, [{ id: ORIGIN_ID }]);
@@ -758,7 +768,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "trash-default" }]);
       route("POST", "/v1/databases/trash-default/query", [
-        { results: [] }, { results: [{ id: TRASH_ID }] },
+        { results: [], has_more: false, next_cursor: null }, { results: [{ id: TRASH_ID }] , has_more: false, next_cursor: null },
       ]);
       route("GET", "/original.json", [new Response('{"snapshot":true}', { headers: { "content-type": "application/json" } }), new Response('{"snapshot":true}')]);
       route("GET", "/copied.json", [new Response('{"snapshot":true}'), new Response('{"snapshot":true}')]);
@@ -798,7 +808,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "trash-default" }]);
-      route("POST", "/v1/databases/trash-default/query", [{ results: [{ id: TRASH_ID }] }]);
+      route("POST", "/v1/databases/trash-default/query", [{ results: [{ id: TRASH_ID }] , has_more: false, next_cursor: null }]);
       route("GET", `/v1/pages/${TRASH_ID}`, [{ ...trashPageProps, properties: { ...trashPageProps.properties, Files: { files: [
         { ...files[0], file: { url: "https://files.example.test/copied.json" } },
       ] } } }]);
@@ -816,7 +826,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [{ id: "trash-default" }]);
-      route("POST", "/v1/databases/trash-default/query", [{ results: [{ id: TRASH_ID }] }]);
+      route("POST", "/v1/databases/trash-default/query", [{ results: [{ id: TRASH_ID }] , has_more: false, next_cursor: null }]);
       route("GET", `/v1/pages/${TRASH_ID}`, [{ ...trashPageProps, properties: { ...trashPageProps.properties, Files: { files } } }]);
       const { moveToTrash } = await load();
       expect(await moveToTrash({ service: "moneyflow", originPageId: ORIGIN_ID, reason: "再開" })).toEqual({ trashPageId: TRASH_ID });
@@ -841,7 +851,7 @@ describe("notion-archive archive (parentPageId)", () => {
         route("POST", "/v1/search", [emptySearch()]);
         route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
         route("POST", "/v1/databases", [{ id: "trash-default" }]);
-        route("POST", "/v1/databases/trash-default/query", [{ results: kind === "missing" ? [] : kind === "duplicate" ? [{ id: TRASH_ID }, { id: OTHER_TRASH_ID }] : [{ id: TRASH_ID }] }]);
+        route("POST", "/v1/databases/trash-default/query", [{ results: kind === "missing" ? [] : kind === "duplicate" ? [{ id: TRASH_ID }, { id: OTHER_TRASH_ID }] : [{ id: TRASH_ID }] , has_more: false, next_cursor: null }]);
         route("GET", `/v1/pages/${TRASH_ID}`, [{
           ...trashPageProps,
           properties: {
@@ -866,7 +876,7 @@ describe("notion-archive archive (parentPageId)", () => {
     const CTX = "moneyflow 観測ログの重複 key=k1 を選ばず保全停止";
 
     it("0件なら null を返す", async () => {
-      route("POST", `/v1/databases/${DB}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${DB}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       const { queryUniqueRow } = await load();
       await expect(queryUniqueRow(DB, FILTER, CTX)).resolves.toBeNull();
       // 重複検出のため 2 件で問い合わせる (page_size: 1 + 先頭選択は禁止)。
@@ -876,13 +886,13 @@ describe("notion-archive archive (parentPageId)", () => {
     });
 
     it("1件ならその行を返す", async () => {
-      route("POST", `/v1/databases/${DB}/query`, [{ results: [{ id: "row-1" }] }]);
+      route("POST", `/v1/databases/${DB}/query`, [{ results: [{ id: "row-1" }] , has_more: false, next_cursor: null }]);
       const { queryUniqueRow } = await load();
       await expect(queryUniqueRow(DB, FILTER, CTX)).resolves.toEqual({ id: "row-1" });
     });
 
     it("2件ならどれも選ばず throw する", async () => {
-      route("POST", `/v1/databases/${DB}/query`, [{ results: [{ id: "row-1" }, { id: "row-2" }] }]);
+      route("POST", `/v1/databases/${DB}/query`, [{ results: [{ id: "row-1" }, { id: "row-2" }] , has_more: false, next_cursor: null }]);
       const { queryUniqueRow } = await load();
       const err = (await queryUniqueRow(DB, FILTER, CTX).catch((e: Error) => e)) as Error;
       expect(err).toBeInstanceOf(Error);
@@ -1121,7 +1131,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("GET", `/v1/databases/${ADOPTED}`, [
         { ...goodSchema(), properties: { ...goodSchema().properties, Key: { type: "rich_text" } } },
       ]);
-      route("POST", "/v1/databases/db-new/query", [{ results: [] }]);
+      route("POST", "/v1/databases/db-new/query", [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: "page-ok" }]);
 
       const { recordPrimaryData } = await load();
@@ -1144,7 +1154,7 @@ describe("notion-archive archive (parentPageId)", () => {
       route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
       route("POST", "/v1/databases", [new Response("overload", { status: 500 })]);
       route("GET", `/v1/databases/${ADOPTED}`, [goodSchema()]);
-      route("POST", `/v1/databases/${ADOPTED}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${ADOPTED}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: "page-adopted" }]);
 
       const { recordPrimaryData } = await load();
@@ -1175,7 +1185,7 @@ describe("notion-archive archive (parentPageId)", () => {
         { results: [dbHit("db-x")], has_more: false, next_cursor: null },
       ]);
       route("POST", "/v1/databases/db-x/query", [
-        { results: [], has_more: true, next_cursor: null },
+        { results: [], has_more: true, next_cursor: "c1" },
       ]);
       const { findBackupRowsByKeys } = await load();
       await expect(findBackupRowsByKeys("moneyflow", ["k1"])).rejects.toThrow(
