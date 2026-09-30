@@ -270,10 +270,11 @@ export interface RebuildYuhoGrowthResult {
  * `p_yuho_growth` を全銘柄ぶん再生成する。EDINET catchup の末尾 (非シャード
  * 実行のみ) が呼ぶ。upsert は冪等で、今回触らなかった行は sweep で消す。
  *
- * `stockIds` を渡すと両入力クエリ (受注/海外の全履歴)・全 write・sweep を
- * 同一集合に拘束する部分再生成になる。対象銘柄の全履歴を読む
- * (書類 subset での歴史切断はしない)。空集合は全体の意味に**しない**
- * (throw。空→ALL の silent fallback はルール2違反)。
+ * `stockIds` を渡すと両入力クエリ (受注/海外の全履歴)・全 write・sweep・
+ * `source_max_date` の MAX を同一集合に拘束する部分再生成になる。
+ * 対象銘柄の全履歴を読む (書類 subset での歴史切断はしない)。
+ * 空集合は全体の意味に**しない** (throw。空→ALL の silent fallback
+ * はルール2違反)。`stockIds` 未指定時は global MAX (既定・不変)。
  */
 export async function rebuildYuhoGrowthProjection(
   db: Database,
@@ -340,12 +341,18 @@ export async function rebuildYuhoGrowthProjection(
           )
     );
 
-  // MAX は生の epoch 秒で返る (drizzle は sql`` を Date 変換しない)
-  const [maxDoc] = await db
+  // MAX は生の epoch 秒で返る (drizzle は sql`` を Date 変換しない)。
+  // stockIds 指定時は対象集合の MAX (全体 MAX を混ぜない)。
+  // 未指定時は global MAX (既定・不変)。
+  const maxSelect = db
     .select({
       maxSubmittedAt: sql<number | null>`MAX(${yuhoDocuments.submittedAt})`,
     })
     .from(yuhoDocuments);
+  const [maxDoc] =
+    targets === undefined
+      ? await maxSelect
+      : await maxSelect.where(inArray(yuhoDocuments.stockId, targets));
   const sourceMaxDate = new Date((maxDoc?.maxSubmittedAt ?? 0) * 1000)
     .toISOString()
     .slice(0, 10);

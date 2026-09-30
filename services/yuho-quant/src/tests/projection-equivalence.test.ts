@@ -536,7 +536,7 @@ describe("stockIds 部分再生成", () => {
     ).toBe(1);
   });
 
-  it("部分再生成の行は全体再生成と一致する (computed_at 除く)", async () => {
+  it("部分再生成の行は全体再生成と一致する (computed_at・source_max_date 除く)", async () => {
     sqlite.prepare("UPDATE yuho_overseas_facts SET sales_yen = 999 WHERE stock_id = 1 AND region_name = '海外売上高'").run();
     await rebuildYuhoGrowthProjection(db, { stockIds: [1] });
     const bounded = l2Row(1);
@@ -545,8 +545,22 @@ describe("stockIds 部分再生成", () => {
     const strip = (row: Record<string, unknown>) => {
       const copy = { ...row };
       delete copy["computed_at"];
+      // source_max_date は scope 別契約 (対象集合 MAX vs global MAX) のため除外。
+      delete copy["source_max_date"];
       return copy;
     };
     expect(strip(bounded)).toEqual(strip(full));
+  });
+
+  it("source_max_date は stockIds 指定時は対象集合の MAX・未指定時は global MAX", async () => {
+    const d = (sec: number) => new Date(sec * 1000).toISOString().slice(0, 10);
+    // stock 1 の MAX は 1750000000 (global MAX 1760000000 は stock 2)。
+    await rebuildYuhoGrowthProjection(db, { stockIds: [1] });
+    expect(l2Row(1)["source_max_date"]).toBe(d(1750000000));
+    await rebuildYuhoGrowthProjection(db, { stockIds: [2] });
+    expect(l2Row(2)["source_max_date"]).toBe(d(1760000000));
+    // 未指定時は global MAX (既定・不変)。
+    await rebuildYuhoGrowthProjection(db);
+    expect(l2Row(1)["source_max_date"]).toBe(d(1760000000));
   });
 });
