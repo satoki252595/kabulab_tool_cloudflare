@@ -1,28 +1,53 @@
-# Source-custody query runner round1 PREP (2026-09-30・live 未実行)
+# Source-custody query runner (2026-09-30・round1 実行済み・rest PREP)
 
-20 docs / 40 keys の query-only 照会 runner。既存 helper
-`checkDocsCustody` を再使用 (新規 framework なし)。
-read-only route guard + closed caps + hash-first packet。
-live は CODE CLEAR + concrete grant 待ち (照会 0)。
+query-only 照会 runner。既存 helper `checkDocsCustody` を再使用
+(新規 framework なし)。read-only route guard + closed caps +
+hash-first packet。round1 (20/40) は ONE 実行済み PASS。
+rest (3655/7310) は PREP のみ・live は grant 待ち。
 
 - script: `services/yuho-quant/data-scripts/overseas-custody-query.ts`
-  (FULL `577af613…9c9f57`、self pin `482e65f2…f73649`)。
+  (FULL `30b3213f…e11c4`、self pin `86758f13…15de`)。
   test `services/yuho-quant/src/tests/overseas-custody-query.test.ts`
-  14 passed 同梱。
-- preflight: `8d7f4a6b…91ea3` exit 0・sends 0・writes 0・
-  docs 20・keys 40 (canonical env・typed parent 照合済み)。
+  18 passed 同梱。
+- preflight (両 round): `6570d974…7ab80` exit 0・sends 0・writes 0・
+  round1 (20/40) + rest (3655/7310) 検証済み
+  (canonical env・typed parent 照合済み)。
+- round1 実行 bytes: FULL `577af613…9c9f57`
+  (HEAD `9144b25`・CODE CLEAR 済み・bytes は履歴に保持)。
 
-## Fixed scope (round1)
+## Round1 result (ONE 実行済み PASS・再実行なし)
 
-- service `yuho-quant` + hold73 先頭 20 通 (docID sort)。
-- 40 exact keys `{doc}:type1`/`:type5`。
-  key manifest `custody-keys-20.json` `f2f348d5…158f` (SHA 照合)。
-- docs 厳密 20・keys 厳密 40・各通対・key 再導出一致を形状証明。
+- window: `2026-09-30T10:48:35.511Z` → `10:48:36.641Z` exit 0。
+  workHEAD `9144b25` 照合一致。
+- verdicts: 20 docs / 40 keys — t1 missing 20・t5 missing 20
+  (全 40 keys 行なし。query `results 0 / has_more false`)。
+- network: native 2 (search 200 + query 200)・rejected 0・
+  rateLimited 0・retries 0。bodies 2 保存。
+  DB 既存発見 (scan 代替・CREATE 経路なし)。
+- receipts (0600): findings `40787ec6…5dafb`・
+  attempt log `b771b6e6…3d14`・search body `19314ce9…`・
+  query body `c46d2026…`。stdout counts/SHA のみ・stderr 空。
+- zeros: sourceGET 0 / D1 0 / R2 0 / dispatch 0 / writes 0。
+- missing 行から freshGET necessity を推論しない。
+  原本 ZIP / official provenance を先に扱う (REQUIRED は Root 判断)。
+- primary READY 0 (query-only)。byte 適格化なし。
+
+## Fixed scope (rounds)
+
+- round は `--round=1|rest` の明示指定のみ (default なし)。
+- round1: hold73 先頭 20 通 (docID sort)・40 exact keys。
+  key manifest `custody-keys-20.json` `f2f348d5…158f`。
+  実行済み・重複照会禁止。
+- rest: union 3675 MINUS round1 exact 20 = 3655 通・7310 keys
+  (docID sort・均一 packet・53+3602 分割なし)。
+  key manifest `custody-keys-rest.json` `6d0f4e9b…bd6e`。
+  183 chunks (末尾 30 keys)。live 未実行・grant 待ち。
+- 各 round: docs/keys exact・各通対・key 再導出一致を形状証明。
   補完なし。
 
 ## Read-only guard (native の前・actual)
 
-- allow-list (round1 到達の4経路のみ):
+- allow-list (到達の4経路のみ):
   POST `/v1/search`・POST `/v1/databases/{id}/query`・
   GET `/v1/databases/{id}`・GET `/v1/blocks/{id}/children`
   (後者のみ start_cursor/page_size 許可)。https + api.notion.com
@@ -30,7 +55,7 @@ live は CODE CLEAR + concrete grant 待ち (照会 0)。
 - deny (送らず HOLD): POST `/v1/databases` (ensureDatabase の
   CREATE 経路)・POST `/v1/pages`・PATCH・DELETE・
   非 Notion host・形状外全般。DB 不在は CREATE せず HOLD。
-- binding (第2関門): query filter 全 key が manifest 40 内・
+- binding (第2関門): query filter 全 key が当 round manifest 内・
   page_size 厳密 41・search title/filter/page_size 厳密固定・
   children 親 typed 一致 (dashless)・DB id 単一 pin
   (初回確定・drift 拒否・未 pin の dbget 拒否)。
@@ -52,10 +77,13 @@ live は CODE CLEAR + concrete grant 待ち (照会 0)。
 
 ## Caps (closed)
 
-- native 試行 ≤ 96 (導出: 論理 worst search ≤4 + scan ≤5 +
-  query 1 + schema 1 = 11 × retry 乗数 7 (MAX_RETRY 6) = 77 +
-  余白 19。超過は HOLD)。pre-forward 計数 + post-assert。
-- helper 内 41 = query ROWS 上限 (has_more で HOLD)。
+- round1: native 試行 ≤ 96 (導出: 論理 worst 11 × retry 乗数 7 =
+  77 + 余白 19。超過は HOLD)。pre-forward 計数 + post-assert。
+- rest: native 試行 ≤ 1351 (導出: ensure worst 10 (search ≤4 +
+  scan ≤5 + schema 1。search 4 は仮定・超過 HOLD) + query 183 =
+  193 論理 × 7 = 1351 厳密)。DB 解決は初 chunk の 1 回のみ
+  (以降 dbCache + guard pin 再使用)。
+- helper 内 41 = query ROWS 上限/chunk (has_more で HOLD)。
 - listing/DL は本 round 範囲外 (別 stage・別 caps・計数別)。
 
 ## Honest status
@@ -68,7 +96,7 @@ live は CODE CLEAR + concrete grant 待ち (照会 0)。
 
 ## Pins (full content SHA256)
 
-- self `482e65f2…f73649` (正準化) / FULL `577af613…9c9f57`
+- self `86758f13…15de` (正準化) / FULL `30b3213f…e11c4`
 - edinet/archive `a02f24f6…53fbc5`
 - shared archive `b4388151…5edf`・client `4a7f7800…6754`・
   env `de8449e3…ae1c0` (PR221 時と同一・不変)
@@ -84,11 +112,15 @@ live は CODE CLEAR + concrete grant 待ち (照会 0)。
 
 ## zeros (now)
 
-sourceGET 0 / Notion 照会 0 / D1 READ+write 0 /
-R2 0 / dispatch 0。live は CODE CLEAR + concrete grant 待ち。
+sourceGET 0 / D1 READ+write 0 / R2 0 / dispatch 0 / Notion mutation 0。
+Notion 照会は round1 authorized ONE (2 attempts) のみ。
+rest live は CODE CLEAR + concrete grant 待ち (照会 0)。
 
 ## limits
 
-- 本記録は PREP (code + preflight + tests) のみ。live 未実行。
+- rest は PREP (code + packet + preflight + tests) のみ。live 未実行。
+- round1 receipts は保持・再実行なし。README/PR 記録は不変。
 - DB 観測・parser 出力・baseline 160 の再検証なし (fixed reuse)。
-- round2 以降 (残 3602・full closure) は別途計画。
+- full closure (listing/DL) は別途 stage・別 caps。
+- missing 行から freshGET necessity を推論しない。
+  原本 ZIP / official provenance を先に扱う。

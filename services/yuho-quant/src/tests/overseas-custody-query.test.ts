@@ -17,6 +17,8 @@ import {
   isAllowedRoute,
   loadPacket,
   requireGrant,
+  requireRound,
+  ROUNDS,
   saveBodyWx,
   type GuardBindings,
   type GuardCounters,
@@ -250,11 +252,54 @@ describe("packet (hash-first・形状証明)", () => {
     expect(() => assertPacketShape(null, keyFn)).toThrow(HoldError);
   });
 
-  it("存在しない packet・pin 外 SHA は HOLD (SHA 照合は実 preflight が行う)", () => {
+  it("rest 規模 (3655/7310) の形状証明が通る", () => {
+    const docs = Array.from({ length: 3655 }, (_, i) => `S${String(i).padStart(6, "0")}X`);
+    const keys = docs.flatMap((d) => [keyFn(d, 1), keyFn(d, 5)]);
+    const p = assertPacketShape({ service: "yuho-quant", keys }, keyFn, 3655, 7310);
+    expect(p.docs).toHaveLength(3655);
+    expect(p.keys).toHaveLength(7310);
+    expect(() => assertPacketShape({ service: "yuho-quant", keys: keys.slice(0, 7308) }, keyFn, 3655, 7310)).toThrow(
+      HoldError
+    );
+  });
+
+  it("SHA 一致の packet は読込通過する", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "custody-test-"));
+    const { createHash } = await import("node:crypto");
+    const keys = Array.from({ length: 20 }, (_, i) => `S10${String(i).padStart(4, "0")}X`).flatMap((d) => [
+      keyFn(d, 1),
+      keyFn(d, 5),
+    ]);
+    const good = join(dir, "good.json");
+    const data = JSON.stringify({ service: "yuho-quant", keys });
+    writeFileSync(good, data);
+    const sha = createHash("sha256").update(data).digest("hex");
+    const cfg = { round: "t", docs: 20, keys: 40, chunks: 1, cap: 96, packet: good, packetSHA: sha, outDir: dir };
+    expect(loadPacket(cfg, keyFn).docs).toHaveLength(20);
+  });
+
+  it("pin 外 SHA・不在 packet は HOLD", () => {
     const dir = mkdtempSync(join(tmpdir(), "custody-test-"));
     const bad = join(dir, "bad.json");
     writeFileSync(bad, JSON.stringify({ service: "yuho-quant", keys: [] }));
-    expect(() => loadPacket(bad, keyFn)).toThrow(HoldError);
-    expect(() => loadPacket(join(dir, "absent.json"), keyFn)).toThrow(HoldError);
+    const cfg = { round: "t", docs: 0, keys: 0, chunks: 0, cap: 0, packet: bad, packetSHA: "0".repeat(64), outDir: dir };
+    // SHA 不一致で落ちる (形状検証に到達しない)
+    expect(() => loadPacket(cfg, keyFn)).toThrow(HoldError);
+    expect(() => loadPacket({ ...cfg, packet: join(dir, "absent.json") }, keyFn)).toThrow(HoldError);
+  });
+});
+
+describe("rounds (closed・明示指定)", () => {
+  it("round 定義は固定値 (1: 20/40/1/96・rest: 3655/7310/183/1351)", () => {
+    expect(ROUNDS["1"]).toMatchObject({ docs: 20, keys: 40, chunks: 1, cap: 96 });
+    expect(ROUNDS["rest"]).toMatchObject({ docs: 3655, keys: 7310, chunks: 183, cap: 1351 });
+    expect(183 * 40 - 7310).toBe(10); // 末尾 30 keys (40-10)
+  });
+
+  it("--round 明示のみ通過・不明は HOLD", () => {
+    expect(requireRound(["node", "x.js", "--round=1"]).round).toBe("1");
+    expect(requireRound(["node", "x.js", "--round=rest"]).round).toBe("rest");
+    expect(() => requireRound(["node", "x.js"])).toThrow(HoldError);
+    expect(() => requireRound(["node", "x.js", "--round=all"])).toThrow(HoldError);
   });
 });

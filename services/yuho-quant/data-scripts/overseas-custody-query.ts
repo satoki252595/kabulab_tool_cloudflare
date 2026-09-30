@@ -1,8 +1,10 @@
 /**
- * Source-custody query runner round1 (query-only, 20 docs / 40 keys).
+ * Source-custody query runner (query-only)。
  *
- * 既存 helper `checkDocsCustody(service, docIDs)` を使い、1 chunk
- * (20 通・`{doc}:type1`/`:type5` の 40 keys) の TypeCustody を照会する。
+ * 既存 helper `checkDocsCustody(service, docIDs)` を使い、固定 round の
+ * TypeCustody を照会する。round1: 20 docs / 40 keys / 1 chunk (実行済み)。
+ * rest: 残 3655 docs / 7310 keys / 183 chunks (末尾 30 keys)。
+ * round は --round=1|rest の明示指定のみ (default なし)。
  * verdict は行プロパティ由来 (complete = 行存在 + hosted fileCount>0)。
  *
  * Query-only の強制: read-only route guard を native の前に置き、
@@ -25,10 +27,12 @@
  * private 保存する (余分 GET なし。次段 closure・lookup 証跡用。
  * 全行 NULL/metadata を保全し、projection で代替しない)。
  *
- * Caps (closed): native 試行 ≤ 96 (導出: 論理 worst
- * search ≤4 + scan ≤5 + query 1 + schema 1 = 11 × retry 乗数 7
- * (MAX_RETRY 6) = 77 + 余白 19。超過は HOLD)。
- * helper 内の 41 は query ROWS 上限 (has_more で HOLD)。
+ * Caps (closed): round1 は native 試行 ≤ 96。rest は ≤ 1351
+ * (導出: ensure worst 10 (search ≤4 + scan ≤5 + schema 1。
+ * search 4 は仮定・超過 HOLD) + query 183 = 193 論理 ×
+ * retry 乗数 7 (MAX_RETRY 6) = 1351 厳密。超過は HOLD)。
+ * DB 解決は初 chunk の 1 回のみ (以降 dbCache + guard pin 再使用)。
+ * helper 内の 41 は query ROWS 上限/chunk (has_more で HOLD)。
  * listing/DL は本 round の範囲外 (別 stage・別 caps)。
  *
  * complete ≠ same-bytes 検証済み。full-ZIP readback
@@ -36,7 +40,7 @@
  * primary READY は query-only のため常に 0 (complete でも適格化しない)。
  * Unknown は再送しない (shared client 契約)。
  *
- * fixed scope: docs 厳密 20・keys 厳密 40 (key manifest SHA 照合)。
+ * fixed scope per round (packet SHA + exact counts 照合)。
  * grant-first・OUT-fresh・durable attempt log (0600 fsync)。
  * stdout は counts/SHA のみ (docIDs・pageId は 0600 のみ)。
  */
@@ -64,25 +68,18 @@ function argValue(n: string, dflt: string): string {
   return process.argv.find((a) => a.startsWith(`--${n}=`))?.split("=")[1] ?? dflt;
 }
 
-const PACKET_FILE = argValue(
-  "packet",
-  "/tmp/overseas-current3675-compare2-20260930/custody-keys-20.json"
-);
-const OUT_DIR = argValue("out-dir", "/tmp/overseas-custody-query-20260930");
 const ENV_FILE = argValue("env-file", join(REPO_ROOT, ".env"));
 const STARTED_AT = new Date().toISOString();
 
 const SERVICE = "yuho-quant";
-const ROUND_DOCS = 20;
-const ROUND_KEYS = 40;
-const NOTION_ATTEMPT_CAP = 96;
 
 const PINS = {
   keyManifestSHA: "f2f348d51e311ec57f9ecbd7e90125fe89877f331dc07f8676f30907ac76158f",
+  restManifestSHA: "6d0f4e9bdad14f568fc106538f586d9ded7506ed46f9a60255968c7a6f76bd6e",
   parentSHA: "4896af08d92d1510861d6288ea92080b1d1548f48a8c2ee20d3ed08d01da2205",
   // module pins は全て file bytes の full SHA256 (git blob 40char ではない)。
   modules: {
-    custodySelf: "482e65f28bc0a5aee16b4b9bc322b55279f76d6030f35902f095cc8cb4f73649",
+    custodySelf: "86758f130d19f86fff069a3caa82d5f3d7ba817c28a1cdb6290d3ee5f9a615de",
     edinetArchive: "a02f24f632ea6309a68899bc59b2c3760b2fd7686f26501894f7f5fc7c53fbc5",
     sharedArchive: "b4388151a2aa36cd6b70fabd4c22d1451641b39c7e7475e6b6c0e109573c5edf",
     sharedClient: "4a7f780053ad4bce844e40323e75f4d1713bc1a0c5affe8e4710002192346754",
@@ -109,6 +106,48 @@ export class HoldError extends Error {
 }
 function hold(msg: string): never {
   throw new HoldError(msg);
+}
+
+/**
+ * Round 定義 (closed・固定)。
+ * round1: 20 docs / 40 keys / cap 96 (実行済み。重複照会禁止)。
+ * rest: 残 3655 docs / 7310 keys / 183 chunks (末尾 30 keys)。
+ * rest cap 導出: ensure worst (search ≤4 + scan ≤5 + schema 1 = 10。
+ * search 4 は仮定・超過は HOLD) + query 183 = 193 論理 ×
+ * retry 乗数 7 (MAX_RETRY 6) = 1351 厳密 (余白なし・fail-closed)。
+ * DB 解決は初 chunk の 1 回のみ (以降 dbCache + guard pin 再使用)。
+ */
+export interface RoundConfig {
+  round: string;
+  docs: number;
+  keys: number;
+  chunks: number;
+  cap: number;
+  packet: string;
+  packetSHA: string;
+  outDir: string;
+}
+export const ROUNDS: Record<string, RoundConfig> = {
+  "1": {
+    round: "1", docs: 20, keys: 40, chunks: 1, cap: 96,
+    packet: "/tmp/overseas-current3675-compare2-20260930/custody-keys-20.json",
+    packetSHA: PINS.keyManifestSHA,
+    outDir: "/tmp/overseas-custody-query-20260930",
+  },
+  rest: {
+    round: "rest", docs: 3655, keys: 7310, chunks: 183, cap: 1351,
+    packet: "/tmp/overseas-custody-query-prep-20260930/custody-keys-rest.json",
+    packetSHA: PINS.restManifestSHA,
+    outDir: "/tmp/overseas-custody-query-rest-20260930",
+  },
+};
+
+/** round は明示指定のみ (default なし。重複照会の誤実行を防ぐ)。 */
+export function requireRound(argv: string[]): RoundConfig {
+  const r = argv.find((a) => a.startsWith("--round="))?.split("=")[1] ?? "";
+  const cfg = ROUNDS[r];
+  if (!cfg) hold("round 未指定/不明: --round=1|rest を明示すること");
+  return cfg;
 }
 
 function sha256Hex(data: Uint8Array | string): string {
@@ -406,17 +445,17 @@ const DOC_SHAPE = /^S[0-9A-Z]{7}$/;
  * 形状証明 (20 通・各通 type1+type5・key 再導出一致)。補完なし。
  */
 export function loadPacket(
-  path: string,
+  cfg: RoundConfig,
   keyFn: (docID: string, type: 1 | 5) => string
 ): CustodyPacket {
   let raw: Buffer;
   try {
-    raw = readFileSync(path);
+    raw = readFileSync(cfg.packet);
   } catch {
-    hold(`packet 不在: ${path}`);
+    hold(`packet 不在: ${cfg.packet}`);
   }
-  if (sha256Hex(new Uint8Array(raw)) !== PINS.keyManifestSHA) {
-    hold("packet SHA 外 (round1 key manifest 不一致)");
+  if (sha256Hex(new Uint8Array(raw)) !== cfg.packetSHA) {
+    hold(`packet SHA 外 (round ${cfg.round} key manifest 不一致)`);
   }
   let obj: unknown;
   try {
@@ -424,21 +463,23 @@ export function loadPacket(
   } catch {
     hold("packet JSON 破損");
   }
-  return assertPacketShape(obj, keyFn);
+  return assertPacketShape(obj, keyFn, cfg.docs, cfg.keys);
 }
 
 /**
- * Packet 形状証明 (純粋・SHA 照合後)。20 通・40 keys・各通対・
- * key 再導出一致。補完なし。
+ * Packet 形状証明 (純粋・SHA 照合後)。expDocs 通・expKeys keys・
+ * 各通対・key 再導出一致。補完なし。
  */
 export function assertPacketShape(
   obj: unknown,
-  keyFn: (docID: string, type: 1 | 5) => string
+  keyFn: (docID: string, type: 1 | 5) => string,
+  expDocs = 20,
+  expKeys = 40
 ): CustodyPacket {
   const rec = obj as Record<string, unknown>;
   if (!rec || typeof rec !== "object" || !Array.isArray(rec["keys"])) hold("packet keys 非配列");
   const keys = rec["keys"] as unknown[];
-  if (keys.length !== ROUND_KEYS) hold(`packet keys 数外: ${keys.length}`);
+  if (keys.length !== expKeys) hold(`packet keys 数外: ${keys.length}`);
   if (rec["service"] !== SERVICE) hold("packet service 外");
   const docs: string[] = [];
   for (const k of keys) {
@@ -448,7 +489,7 @@ export function assertPacketShape(
     docs.push(m[1]);
   }
   const uniq = [...new Set(docs)].sort();
-  if (uniq.length !== ROUND_DOCS) hold(`packet docs 数外: ${uniq.length}`);
+  if (uniq.length !== expDocs) hold(`packet docs 数外: ${uniq.length}`);
   for (const d of uniq) {
     const t1 = `${d}:type1`;
     const t5 = `${d}:type5`;
@@ -488,9 +529,11 @@ const CUSTODY_DOMAIN = ["complete", "metadata-only", "missing", "not-applicable"
 
 async function main(): Promise<void> {
   const grant = requireGrant(process.argv);
-  assertFreshOutDir(OUT_DIR);
-  mkdirSync(OUT_DIR, { recursive: true, mode: 0o700 });
-  chmodSync(OUT_DIR, 0o700);
+  const cfg = requireRound(process.argv);
+  const outDir = argValue("out-dir", cfg.outDir);
+  assertFreshOutDir(outDir);
+  mkdirSync(outDir, { recursive: true, mode: 0o700 });
+  chmodSync(outDir, 0o700);
 
   // 先に file/env の純粋検証 (fetch なし) を済ませ、binding を確定して
   // から guard を native の前に設置し、repo runtime を load する。
@@ -507,7 +550,7 @@ async function main(): Promise<void> {
   const statsMod = await import("../../../src/shared/notion-archive/index.js");
   const { notionStats, resetNotionStats } = statsMod;
 
-  const packet = loadPacket(PACKET_FILE, edinetArchiveKey);
+  const packet = loadPacket(cfg, edinetArchiveKey);
   let parentId: string;
   try {
     notionEnv.NOTION_TOKEN();
@@ -522,7 +565,7 @@ async function main(): Promise<void> {
     typedParentDashless: dashless(parentId),
     expectedTitle: `一次データ｜${SERVICE}`,
   };
-  globalThis.fetch = createReadOnlyGuardFetch(nativeFetch, OUT_DIR, gate, NOTION_ATTEMPT_CAP, bindings);
+  globalThis.fetch = createReadOnlyGuardFetch(nativeFetch, outDir, gate, cfg.cap, bindings);
 
   resetNotionStats();
   let verdicts: Map<string, { t1: string; t5: string }>;
@@ -530,19 +573,19 @@ async function main(): Promise<void> {
     verdicts = await checkDocsCustody(SERVICE, packet.docs);
   } catch (e) {
     writePrivate(
-      join(OUT_DIR, "hold-detail.json"),
+      join(outDir, "hold-detail.json"),
       JSON.stringify({ at: new Date().toISOString(), label: "custody query 失敗", detail: String((e as Error)?.message ?? e) })
     );
     hold("custody query 失敗 (詳細は private hold-detail.json 参照。attempt log 保持)");
   }
-  if (verdicts.size !== ROUND_DOCS) hold(`verdict 数外: ${verdicts.size}`);
+  if (verdicts.size !== cfg.docs) hold(`verdict 数外: ${verdicts.size}`);
   for (const d of packet.docs) {
     const v = verdicts.get(d);
     if (!v || !CUSTODY_DOMAIN.includes(v.t1 as never) || !CUSTODY_DOMAIN.includes(v.t5 as never)) {
       hold("verdict 形状外 (通欠落・値域外)");
     }
   }
-  if (gate.attempts > NOTION_ATTEMPT_CAP) hold(`attempt cap 外: ${gate.attempts}`);
+  if (gate.attempts > cfg.cap) hold(`attempt cap 外: ${gate.attempts}`);
   const stats = notionStats();
 
   const t1: Record<string, number> = {};
@@ -552,25 +595,25 @@ async function main(): Promise<void> {
     t5[v.t5] = (t5[v.t5] ?? 0) + 1;
   }
   const workHead = execFileSync("git", ["-C", REPO_ROOT, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const logPath = join(OUT_DIR, "guard-attempt.log");
+  const logPath = join(outDir, "guard-attempt.log");
   if (!existsSync(logPath)) hold("attempt log 不在 (PASS 経路で到達不能のはず)");
   const attemptLogSHA = sha256Hex(new Uint8Array(readFileSync(logPath)));
-  const bodyFiles = readdirSync(OUT_DIR).filter((f) => f.startsWith("attempt-") && f.endsWith(".bin")).sort();
+  const bodyFiles = readdirSync(outDir).filter((f) => f.startsWith("attempt-") && f.endsWith(".bin")).sort();
   const findings = {
     at_start: STARTED_AT, at_end: new Date().toISOString(), result: "PASS",
-    mode: "custody-query-round1", grant, workHEAD: workHead, service: SERVICE,
-    ready: 0,
+    mode: `custody-query-round-${cfg.round}`, grant, workHEAD: workHead, service: SERVICE,
+    ready: 0, round: cfg.round, chunks: cfg.chunks,
     docs: packet.docs,
     verdicts: [...verdicts.entries()].map(([doc, v]) => ({ doc, ...v })),
-    counts: { docs: ROUND_DOCS, keys: ROUND_KEYS, t1, t5 },
-    scope: { keyManifestSHA: PINS.keyManifestSHA, parentSHA, modules: moduleSHAs, scriptFullSHA, attemptCap: NOTION_ATTEMPT_CAP },
+    counts: { docs: cfg.docs, keys: cfg.keys, t1, t5 },
+    scope: { packetSHA: cfg.packetSHA, parentSHA, modules: moduleSHAs, scriptFullSHA, attemptCap: cfg.cap },
     gate,
     notionStats: stats,
     bodies: { count: bodyFiles.length, files: bodyFiles },
     attemptLogSHA,
     zeros: { sourceGET: 0, d1read: 0, d1write: 0, r2: 0, dispatch: 0, writes: 0 },
     limits: [
-      "query-only round1 (20 docs/40 keys)。TypeCustody は行プロパティ由来。",
+      `query-only round-${cfg.round} (${cfg.docs} docs/${cfg.keys} keys/${cfg.chunks} chunks)。TypeCustody は行プロパティ由来。`,
       "complete = 行存在 + hosted fileCount>0。same-bytes 検証ではない。",
       "primary READY 0 (query-only。complete でも適格化しない)。",
       "full-ZIP readback (listing + hosted DL + length/SHA) は別途 future stage (別 caps)。",
@@ -579,17 +622,17 @@ async function main(): Promise<void> {
       "docIDs・grant 文は 0600 のみ。stdout は counts/SHA のみ。",
     ],
   };
-  const findingsSHA = writePrivate(join(OUT_DIR, "custody-findings.json"), JSON.stringify(findings, null, 2));
+  const findingsSHA = writePrivate(join(outDir, "custody-findings.json"), JSON.stringify(findings, null, 2));
 
   console.info(JSON.stringify({
-    result: "PASS", service: SERVICE, docs: ROUND_DOCS, keys: ROUND_KEYS, ready: 0,
+    result: "PASS", service: SERVICE, round: cfg.round, docs: cfg.docs, keys: cfg.keys, chunks: cfg.chunks, ready: 0,
     t1, t5,
-    keyManifestSHA: PINS.keyManifestSHA, parentSHA,
+    packetSHA: cfg.packetSHA, parentSHA,
     modules: moduleSHAs, scriptFullSHA,
     gate, notionStats: stats, bodies: bodyFiles.length, attemptLogSHA,
     zeros: findings.zeros, limits: findings.limits,
     artifacts: {
-      findings: { path: join(OUT_DIR, "custody-findings.json"), sha256: findingsSHA },
+      findings: { path: join(outDir, "custody-findings.json"), sha256: findingsSHA },
       attemptLog: { path: logPath, sha256: attemptLogSHA },
     },
     at_end: findings.at_end,
@@ -609,7 +652,12 @@ async function preflight(): Promise<void> {
   const envMod = await import("../../../src/shared/notion-archive/env.js");
   const { notionEnv } = envMod;
   const { moduleSHAs, scriptFullSHA } = assertModules();
-  const packet = loadPacket(PACKET_FILE, edinetArchiveKey);
+  // 両 round の packet を常に検証する (SHA + 形状 + key 導出)。
+  const verified: Record<string, { docs: number; keys: number; chunks: number; cap: number; packetSHA: string }> = {};
+  for (const cfg of Object.values(ROUNDS)) {
+    const p = loadPacket(cfg, edinetArchiveKey);
+    verified[cfg.round] = { docs: p.docs.length, keys: p.keys.length, chunks: cfg.chunks, cap: cfg.cap, packetSHA: cfg.packetSHA };
+  }
   if (!existsSync(ENV_FILE)) hold(`env-file 不在: ${ENV_FILE}`);
   dotenv.config({ path: ENV_FILE, quiet: true });
   let parentSHA: string;
@@ -622,11 +670,10 @@ async function preflight(): Promise<void> {
   if (parentSHA !== PINS.parentSHA) hold("typed parent 外 (canonical target 不一致)");
   console.info(JSON.stringify({
     result: "PREFLIGHT", sends: 0, writes: 0,
-    service: SERVICE, docs: packet.docs.length, keys: packet.keys.length,
-    keyManifestSHA: PINS.keyManifestSHA, parentSHA,
+    service: SERVICE, rounds: verified, parentSHA,
     modules: moduleSHAs, scriptFullSHA,
     notionEnv: "present",
-    budget: { notionAttempts: NOTION_ATTEMPT_CAP, queryRows: 41 },
+    budget: { queryRows: 41 },
   }));
 }
 

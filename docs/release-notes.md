@@ -10,7 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
-- 海外 source-custody query runner round1 PREP を追加 (既存 checkDocsCustody 再使用・20 docs/40 keys query-only。read-only route guard (CREATE/PATCH/DELETE 拒否・body/query exact 束縛・redirect manual/3xx STOP) + native cap 96 + 同一 response clone 保存 + full SHA pins。live 未実行・CODE CLEAR + grant 待ち)。証跡 `docs/test-logs/overseas-custody-query-2026-09-30.md`。source/Notion/D1/R2/dispatch 0、データ変更なし。
+- 海外 source-custody query runner を追加 (既存 checkDocsCustody 再使用・query-only。round1 20 docs/40 keys は ONE 実行済み PASS (t1/t5 missing 40/40・attempts 2・READY 0)。rest 3655 docs/7310 keys (183 chunks) は PREP のみ・live grant 待ち。read-only route guard (CREATE/PATCH/DELETE 拒否・body/query exact 束縛・redirect manual/3xx STOP) + closed caps (96/1351) + 同一 response clone 保存 + full SHA pins)。証跡 `docs/test-logs/overseas-custody-query-2026-09-30.md`。source/Notion-mutation/D1/R2/dispatch 0、データ変更なし。
 - VWAP batch summary の metadata を counts+pin+集約のみに縮小し per-code outcomes は物理 JSON 本文に保持 (旧 full 内包は約 530KB・266 分割で Notion 上限超過 → run 36698387232 の daily archive が 413 UNKNOWN・intra 0。証跡 `docs/vwap-run36698387232-413-unknown-20260930.md`)。データ変更なし (Refs #117)。
 - 共有 Yahoo parse 境界で request/response の meta.symbol 一致を検証 (不一致・欠落は throw、alias 推測なし。既存 normalize のみ)。データ変更なし。
 - VWAP 取込 producer の root 修正 (R2 送信 1 試行・PUT 応答契約・rejected/unknown 分別・GET 厳格 bootstrap、Yahoo 真正 empty は timestamp 空配列のみ・全行欠落と malformed は throw、保存形状 strict、R2 fault で新規停止・保管失敗は exit 2、knob 型付き取得)。データ変更なし (Refs #117)。
