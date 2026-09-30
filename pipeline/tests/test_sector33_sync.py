@@ -38,7 +38,20 @@ def _zip_bytes() -> bytes:
 
 
 def _fixture_text() -> str:
-    return mod._read_codelist_csv(_zip_bytes())
+    return edinet_codelist._read_codelist_csv(_zip_bytes())
+
+
+def test_blank_rows_use_same_contract_for_master_and_sector():
+    text = _fixture_text()
+    lines = text.splitlines(keepends=True)
+    # 実原本の末尾に空白行だけを追加。金融値・識別子は一切変更しない。
+    data = _make_zip({"EdinetcodeDlInfo.csv": "".join(lines) + "\n  ,  \n"})
+    records = edinet_codelist.parse_codelist(data)
+    original = edinet_codelist.parse_codelist(_zip_bytes())
+    assert [(r.code, r.edinet_code, r.sector33) for r in records] == [
+        (r.code, r.edinet_code, r.sector33) for r in original
+    ]
+    assert mod._scan_listed_rows(data) == mod._scan_listed_rows(_zip_bytes())
 
 
 def _fake_fetch(art):

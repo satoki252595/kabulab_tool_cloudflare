@@ -23,9 +23,7 @@ subprocess で呼ぶ 1 経路のみ。`ctx.upload_raw` / local / R2 原本 SDK �
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
-import io
 import json
 import logging
 import subprocess
@@ -42,7 +40,7 @@ from ..collectors.edinet_codelist import (
     _COL_SECTOR,
     _COL_SEC_CODE,
     _LISTED_VALUE,
-    _read_codelist_csv,
+    _read_codelist_rows,
     inspect_codelist_candidates,
     is_valid_edinet_code,
 )
@@ -157,20 +155,17 @@ def check_sector_config(settings: Settings, args: argparse.Namespace) -> None:
 def _scan_listed_rows(zip_bytes: bytes) -> tuple[list[dict], list[SectorHold]]:
     """実 reader で生行を読み、ticker 欠損の合法/不正を分類する。
 
-    parser と同じ入力 (`_read_codelist_csv`)・同じ正規化
+    parser と同じ検証済み行 (`_read_codelist_rows`)・同じ正規化
     (`source_code_to_ticker`) を使う。空原値は parser に見えないため
     ここで HOLD する。`00000` 原値は共有検査が record (`0000`) 側で
     HOLD するためここでは黙って飛ばす (二重診断を避ける)。
     戻りは (admitted 行, HOLD/INFO 診断)。admitted 行は
     `{ticker, raw, edinet, sector, line}`。
     """
-    text = _read_codelist_csv(zip_bytes)
-    rows = list(csv.reader(io.StringIO(text)))
-    header = rows[1]
-    idx = {name: header.index(name) for name in (_COL_EDINET_CODE, _COL_LISTED, _COL_SECTOR, _COL_SEC_CODE)}
+    _, idx, rows = _read_codelist_rows(zip_bytes)
     admitted: list[dict] = []
     holds: list[SectorHold] = []
-    for lineno, row in enumerate(rows[2:], start=3):
+    for lineno, row in rows:
         if row[idx[_COL_LISTED]].strip() != _LISTED_VALUE:
             continue
         raw = row[idx[_COL_SEC_CODE]].strip()
