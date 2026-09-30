@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   archiveSummaryOrFatal,
@@ -12,6 +16,7 @@ import {
   shouldSkipPut,
   sourceObservedAggregate,
   universePin,
+  writeSummaryLocal,
 } from "./ingest-guard.js";
 import excerpt from "./__fixtures__/universe-excerpt.json";
 
@@ -379,5 +384,44 @@ describe("assertSavedIntraShape", () => {
     expect(() => assertSavedIntraShape(good({ bars: [{ ...bar, ts: -1 }] }), "intra/7203.json", "7203")).toThrow(/ts 不正/);
     expect(() => assertSavedIntraShape(good({ bars: [bar, bar] }), "intra/7203.json", "7203")).toThrow(/重複/);
     expect(() => assertSavedIntraShape(good({ bars: [{ ...bar, h: 1, l: 90 }] }), "intra/7203.json", "7203")).toThrow(/価格異常/);
+  });
+});
+
+describe("writeSummaryLocal", () => {
+  const summary = (bytes: Uint8Array = new TextEncoder().encode(`{"k":1}`)) => ({
+    key: "vwap-ingest-daily-20260930-test.1",
+    files: [{ bytes, filename: "vwap-ingest-daily-20260930-test.1.json", contentType: "application/json" }],
+  });
+
+  it("exact bytes を wx 0600 で書く (full SHA 一致)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vwap-"));
+    const bytes = new TextEncoder().encode(`{"k":1}`.padEnd(5000, " "));
+    const r = writeSummaryLocal(summary(bytes), join(dir, ".vwap-summaries"));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const disk = readFileSync(r.path);
+    expect(disk.length).toBe(bytes.length);
+    expect(createHash("sha256").update(disk).digest("hex")).toBe(
+      createHash("sha256").update(bytes).digest("hex")
+    );
+    expect(statSync(r.path).mode & 0o777).toBe(0o600);
+  });
+
+  it("既存衝突は拒否し原本を温存する (上書きなし)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vwap-"));
+    const first = writeSummaryLocal(summary(), dir);
+    expect(first.ok).toBe(true);
+    const second = writeSummaryLocal(summary(new TextEncoder().encode(`{"k":2}`)), dir);
+    expect(second).toEqual({ ok: false, reason: "exists" });
+    if (!first.ok) return;
+    expect(readFileSync(first.path).toString()).toBe(`{"k":1}`);
+  });
+
+  it("files!=1・書込不能は throw せず ok:false", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vwap-"));
+    expect(writeSummaryLocal({ key: "x", files: [] }, dir).ok).toBe(false);
+    const blocker = join(dir, "blocker");
+    writeFileSync(blocker, "x");
+    expect(writeSummaryLocal(summary(), join(blocker, "sub")).ok).toBe(false);
   });
 });

@@ -1,3 +1,6 @@
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { R2PutUnknownError } from "./lib/r2.js";
 import { r2Get, r2Put } from "./lib/r2.js";
@@ -52,6 +55,8 @@ const BAR = { ts: TS, o: 100, h: 110, l: 90, c: 105, v: 1000 };
 const existingA = JSON.stringify({ code: "A", updated: "2026-09-28T00:00:00.000Z", bars: [BAR] });
 
 const SAVED_ARGV = [...process.argv];
+const SAVED_CWD = process.cwd();
+// main() は cwd/.vwap-summaries/ へ原本を書く。repo 汚染防止で tmp へ chdir。
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -59,8 +64,10 @@ beforeEach(() => {
   process.argv = ["node", "vitest"];
   process.exitCode = undefined;
   mockRecord.mockResolvedValue({ outcome: "recorded", fileTooLarge: false } as never);
+  process.chdir(mkdtempSync(join(tmpdir(), "vwap-intra-")));
 });
 afterEach(() => {
+  process.chdir(SAVED_CWD);
   process.argv = SAVED_ARGV;
   process.exitCode = undefined;
   vi.restoreAllMocks();
@@ -84,6 +91,11 @@ describe("ingest-intra main flow", () => {
     expect(outcomes.B.status).toBe("written");
     expect(outcomes.B.latestSourceBar).toBe(TS);
     expect(recordedMetadata().universe).toMatchObject({ size: 2 });
+    // 原本 bytes は archive 前に local へ (intra 配線証明)。
+    const files = readdirSync(".vwap-summaries");
+    expect(files).toHaveLength(1);
+    const local = JSON.parse(readFileSync(join(".vwap-summaries", files[0]), "utf-8")) as { kind: string };
+    expect(local.kind).toBe("intra");
   });
 
   it("GET fault after source await => PUT0/exit2 (second code never fetched)", async () => {

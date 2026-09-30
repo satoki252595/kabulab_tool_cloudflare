@@ -52,5 +52,10 @@ check "daily-abort2-intra-notrun-final2" 2 0 2 no
 check "intra-abort2-final2" 0 2 2 yes
 check "success-final0" 0 0 0 yes
 
+# failure-artifact 回収口の存在確認 (durable-before-archive の対)。
+grep -q "actions/upload-artifact@v4" "$YML" || { fail=$((fail+1)); echo "FAIL: artifact action missing"; }
+grep -q "name: summary を失敗時 artifact に残す" "$YML" || { fail=$((fail+1)); echo "FAIL: artifact step missing"; }
+grep -q "path: .vwap-summaries/" "$YML" || { fail=$((fail+1)); echo "FAIL: artifact path missing"; }
+
 echo "pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]
