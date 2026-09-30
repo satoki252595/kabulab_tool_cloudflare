@@ -421,16 +421,6 @@ class TestLifecycleUpdates:
     def _updates(self, dry_client):
         return [o for o in dry_client.ops if o.op == "update_page"]
 
-    def test_mark_absent_from_codelist(self, dry_client):
-        upsert.mark_master_absent_from_codelist(dry_client, make_settings(), "master-7203")
-        (op,) = self._updates(dry_client)
-        assert op.payload["page_id"] == "master-7203"
-        props = op.payload["properties"]
-        assert props[S.MASTER_PROP_LISTED]["checkbox"] is False
-        # 状態の上場廃止確定は一次開示に一本化 (§3-1/§3-7)。コードリスト消失だけでは
-        # 状態を倒さない(listed=True∧状態=上場廃止 の矛盾行や誤検知固着を防ぐ)
-        assert S.MASTER_PROP_STATUS not in props
-
     def test_apply_lifecycle_delisting(self, dry_client, monkeypatch):
         monkeypatch.setattr(dry_client, "query_database", lambda *a, **k: [{"id": "m-7203"}])
         rec = DisclosureRecord(

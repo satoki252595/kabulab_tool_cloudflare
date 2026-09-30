@@ -153,8 +153,7 @@ def stock_master_properties(
     """① 銘柄マスタ。None 項目は明示的な空値で送信し前回値をクリア (§3-1 完全置換)。
 
     include_lifecycle=False のとき 状態 を payload に含めない。これは
-    「開示イベント (apply_disclosure_lifecycle) とコードリスト消失
-    (mark_master_absent_from_codelist) が所有する」フィールドであり、月次の
+    「開示イベント (apply_disclosure_lifecycle) が所有する」フィールドであり、月次の
     codelist 同期 (master_sync) が上書き・消去してはならない (§ Phase3 二重所有の回避)。
     名称/業種/EDINETコード/listed は codelist 所有なので常に完全置換する。
     現行履歴DB ID / 履歴シャード番号 / 履歴行数（本番DBに残る廃止済み列）は
@@ -735,7 +734,7 @@ def stock_master_matches_page(
     - 時刻系（最終データ更新日/取得日時/データ基準日）: 毎 run 変わるので
       見ると skip が永遠に発火しない。意味が変わった run の PATCH で更新される
     - 由来系（ソース/ライセンス/品質/原本）: master_sync では実行ごとに同一
-    - ライフサイクル 3 項目: 開示・消失が所有し master_sync は書かない
+    - ライフサイクル 3 項目: 開示が所有し master_sync は書かない
 
     読めない形の行は False（書く側に倒す。欠損より二重 PATCH がまし）。
     """
@@ -997,24 +996,6 @@ STATUS_DELISTED = "上場廃止"
 LIFECYCLE_DOC_TYPES: frozenset[str] = frozenset({"上場廃止", "新規上場"})
 
 
-def mark_master_absent_from_codelist(
-    client: NotionClient, settings: Settings, page_id: str
-) -> None:
-    """① 行を「EDINET上場リストから消えた」= listed=False にする。
-
-    コードリストからの消失は listed=False（取得停止）の確定トリガ (§ Phase3)。
-    ただし「状態=上場廃止」の確定はコードリストのヒューリスティックでは行わず、
-    一次開示 (apply_disclosure_lifecycle) に一本化する: EDINET コードリストの
-    一時的な揺らぎ（行スキップ・提出者要件の一時割れ等）で個別銘柄が誤検知された
-    場合に、「上場廃止」という誤った権威的状態を ① へ書き込まない (§3-1 誤った
-    権威的値は欠損より悪い / §3-7 状態は一次開示由来)。これにより listed=True かつ
-    状態=上場廃止 という矛盾行も生じない（状態の所有は disclosure 側に一本化）。
-    再上場時は次回 master_sync の upsert が listed=True へ自己修復する。
-    部分更新（listed のみ。状態を含む他フィールドは直前の値を保持）。
-    """
-    client.update_page(page_id, {S.MASTER_PROP_LISTED: checkbox_prop(False)})
-
-
 def apply_disclosure_lifecycle(
     client: NotionClient,
     settings: Settings,
@@ -1033,8 +1014,8 @@ def apply_disclosure_lifecycle(
 
     - 上場廃止(発表): 状態=上場廃止。**listed は触らない**: 効力発生まで売買は
       継続するため取得も継続する (§3-1 取得可能なデータを自動で止めない)。
-      確定的な listed=False はコードリスト消失
-      (mark_master_absent_from_codelist) が担う。
+      コードリスト不在だけで listed=False にはしない。
+      有効な上場廃止による取得停止は、この Python 経路では未実装。
     - 新規上場: 状態=上場。listed は codelist 同期が所有するため触らない。
 
     状態(select)は確定値なので常に設定する。① に該当銘柄が無ければ何もしない
