@@ -359,11 +359,17 @@ async function getYahooCredential(): Promise<YahooCredential> {
     return credential;
   } catch (error) {
     if (credentialRefreshAttempt === refreshAttempt) {
+      // waiter 共有は typed 429 の同一 instance か、redact 済み Error の
+      // いずれか。非 typed の原文・raw cause は共有しない (秘密露出防止)。
       recordCredentialRefreshError(
         refreshAttempt,
-        error instanceof Error
+        error instanceof YahooRateLimitError
           ? error
-          : new Error(redactYahooDiagnostic(String(error)), { cause: error })
+          : new Error(
+              redactYahooDiagnostic(
+                error instanceof Error ? error.message : String(error)
+              )
+            )
       );
     }
     if (error instanceof YahooRateLimitError) {
@@ -390,7 +396,8 @@ function invalidateYahooCredential(used: YahooCredential): void {
 
 /**
  * crumb 付きの直接 fetch (401 時のみ 1 度 crumb を取り直して retry)。
- * **エッジ (Worker) 上で動く前提**。Cloudflare エッジ IP は Yahoo の 429 に掛からない。
+ * **エッジ (Worker) 上で動く前提**。エッジからでも crumb 取得で 429 を
+ * 観測した実績あり (typed deadline + cooldown で扱う)。
  * 取込プロキシルート (/api/ingest/yahoo) からも直接呼ばれる (export)。
  */
 export async function yahooFetchDirect(url: string): Promise<Response> {

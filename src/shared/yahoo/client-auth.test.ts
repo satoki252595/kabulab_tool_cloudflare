@@ -544,4 +544,64 @@ describe("crumb 429 cooldown", () => {
     expect(pageCalls).toBe(2);
     expect(crumbCalls).toBe(2);
   });
+
+  it("非 typed 失敗の同時待機者へは原文・raw 秘密を共有しない", async () => {
+    let rejectPage!: (error: unknown) => void;
+    const gate = new Promise<Response>((_resolve, reject) => {
+      rejectPage = reject;
+    });
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL): Promise<Response> => {
+        const url = requestUrl(input);
+        if (url === "https://finance.yahoo.com/quote/AAPL") {
+          return gate;
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { yahooFetchDirect, YahooRateLimitError } =
+      await import("./client.js");
+
+    const first = yahooFetchDirect(
+      "https://query1.finance.yahoo.com/v8/test/first"
+    );
+    const second = yahooFetchDirect(
+      "https://query1.finance.yahoo.com/v8/test/second"
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    // network 層が秘密入り message で失敗した想定 (非 typed)。
+    const leaked = new Error(
+      "fetch failed: https://query2.finance.yahoo.com/v1/test/getcrumb" +
+        "?crumb=live-crumb-secret Bearer live-bearer-secret " +
+        "Cookie: A1=live-cookie-secret"
+    );
+    rejectPage(leaked);
+
+    const results = await Promise.allSettled([first, second]);
+    expect(results.map((r) => r.status)).toEqual(["rejected", "rejected"]);
+    const errors = results.map((r) =>
+      r.status === "rejected" ? (r.reason as Error) : new Error("resolved?")
+    );
+    for (const error of errors) {
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(YahooRateLimitError);
+    }
+    // owner は原文のまま、waiter は redact 済みコピー。どちらが owner かは
+    // 不定のため、両 error のうち少なくとも一方が raw 秘密なしであること、
+    // および waiter 側が同一 instance でも cause 付きでもないことを検証する。
+    const messages = errors.map((e) => e.message);
+    const redacted = messages.filter(
+      (m) =>
+        !m.includes("live-cookie-secret") &&
+        !m.includes("live-crumb-secret") &&
+        !m.includes("live-bearer-secret")
+    );
+    expect(redacted.length).toBeGreaterThanOrEqual(1);
+    expect(redacted[0]).toContain("[redacted]");
+    const waiter = errors.find((e) => e !== leaked);
+    expect(waiter).toBeInstanceOf(Error);
+    expect(waiter).not.toBeInstanceOf(YahooRateLimitError);
+    expect((waiter as Error & { cause?: unknown }).cause).toBeUndefined();
+  });
 });
