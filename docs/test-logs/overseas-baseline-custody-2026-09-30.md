@@ -28,6 +28,22 @@ private 0600 のみ。
 - code/source/preflight pins は baseline-pins.json に固定
   (runner blob/full・params/combined/SQL・union・d1Target)。
 
+## Archive runner (CODE CLEAR 待ち・live 未実行)
+
+- script: `services/yuho-quant/data-scripts/overseas-baseline-archive.ts`
+  (blob `56f2abe8fb81`, FULL `99c4f0c8…b82bb`,
+  test blob `6952f36dd534` 5 passed 同梱)。
+- fixed key `freshread-baseline-20260930:{liveSHA}` + fetchedAt 08:40:31Z。
+  force=false 固定。record → queryUniqueRow 一意性 →
+  verifyArchivedAttachments 全 3 files bytes/SHA。
+  Unknown 再送なし。too_large/unknown-manifest は HOLD。
+- 比較: ZIP SHA + 全 160 名 + 159 payload SHA + member-list pin。
+- network budget: notionRequest ≤ 96 (代表 17・worst 典型 26・
+  MAX_RETRY 6 有界) + raw GET 3 (retry なし)。超過は clean-run 主張なし。
+- preflight: exit 0 (送信 0・書込 0)。ZIP/members/pins/key 導出 +
+  notion token present のみ確認。証跡 `archive-preflight.json`
+  `7ae77c5d…fa020d` (0600)。
+
 ## Archive 境界 (conditional GO・未実行)
 
 - Root conditional GO: ONE shared force=false logical record +
