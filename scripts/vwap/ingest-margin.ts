@@ -158,10 +158,14 @@ export async function main(): Promise<void> {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main().catch((e: unknown) => {
+  process.exitCode = 2;
+  try {
+    await main();
+    process.exitCode = 0;
+  } catch (e: unknown) {
     // 生 SDK cause (URL 等) を出さず sanitized のみ。
     const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
     console.error(`ingest-margin fatal: ${sanitizeLogText(text).slice(0, 300)}`);
-    process.exit(1);
-  });
+    process.exitCode = 2;
+  }
 }

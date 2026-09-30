@@ -223,8 +223,12 @@ export async function main() {
 // loadCodes/config 等の想定外失敗は exit 2 (daily crash 1 で intra を誘発しない)。
 // sanitized 1 行のみ、再試行なし。
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main().catch((e: unknown) => {
+  // 未解決PromiseだけではNodeは生存しない。summaryまで完了する前の終了は失敗。
+  process.exitCode = 2;
+  try {
+    await main();
+  } catch (e: unknown) {
     console.error(`ingest-daily fatal: ${sanitizeLogText(e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 300)}`);
-    process.exit(2);
-  });
+    process.exitCode = 2;
+  }
 }
