@@ -1,9 +1,14 @@
 /**
- * 日足 OHLCV（全系列調整）のテスト。
+ * 日足 OHLCV（提供元の OHLCV（分割調整済み）・adj_* は配当込 total-return）のテスト。
  *
- * 数値は調整計算の合成例（2:1 分割のモデルケース）。実市場の値ではない。
- * D1 はスタブで、実通信はしない。
+ * BARS は調整計算の合成例（2:1 分割のモデルケース。既存）。実市場の値ではない。
+ * 有効経路の回帰は pipeline/tests/fixtures/transform/ の実観測 excerpt で行う
+ * (licensed 値のため untracked。未取得の環境では skip する)。
+ * 新規テストに架空の財務値は使わない。境界は非価格の edge scalar
+ * (null/NaN/0/負) のみで探る。D1 はスタブで、実通信はしない。
  */
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import privateApp from "../src/private";
@@ -40,36 +45,104 @@ function privateEnv(): PrivateEnv {
 }
 
 describe("adjustmentFactor", () => {
-  it("adj/close の比を返す", () => {
+  it("既知の有限正値は adj/close の比を返す (既存 2:1 モデルのみ)", () => {
     expect(adjustmentFactor(2050, 1025)).toBe(0.5);
   });
 
-  it("adj 欠落・close ゼロは係数 1（無調整）", () => {
-    expect(adjustmentFactor(105, null)).toBe(1);
-    expect(adjustmentFactor(0, 10)).toBe(1);
+  it("unknown (欠落・非有限・非正・比不正) は null、偽の 1 なし", () => {
+    // 非価格の edge scalar のみ (財務値の捏造なし)。
+    expect(adjustmentFactor(105, null)).toBeNull();
+    expect(adjustmentFactor(null, 104)).toBeNull();
+    expect(adjustmentFactor(0, 10)).toBeNull();
+    expect(adjustmentFactor(105, 0)).toBeNull();
+    expect(adjustmentFactor(105, -2)).toBeNull();
+    expect(adjustmentFactor(-5, 100)).toBeNull();
+    expect(adjustmentFactor(Number.NaN, 100)).toBeNull();
+    expect(adjustmentFactor(100, Number.POSITIVE_INFINITY)).toBeNull();
   });
 });
 
 describe("adjustBar", () => {
-  it("2:1 分割で OHLC 半分・出来高 2 倍", () => {
+  it("2:1 分割で OHLC 半分・出来高は未補正 (adj_volume legacy null)", () => {
     const bar = adjustBar(BARS[0]!);
     expect(bar.adj_close).toBe(1025);
     expect(bar.adj_open).toBe(1000);
     expect(bar.adj_high).toBe(1050);
     expect(bar.adj_low).toBe(995);
-    expect(bar.adj_volume).toBe(2000);
+    expect(bar.adj_volume).toBeNull();
     expect(bar.adjusted).toBe(true);
     // 生値は保持する
     expect(bar.open).toBe(2000);
     expect(bar.volume).toBe(1000);
   });
 
-  it("adj 欠落は生値のまま adjusted=false", () => {
+  it("adj 欠落は調整価格 null・生値保持・adjusted=false", () => {
     const bar = adjustBar(BARS[1]!);
-    expect(bar.adj_open).toBe(100);
-    expect(bar.adj_volume).toBe(500);
+    expect(bar.adj_open).toBeNull();
+    expect(bar.adj_high).toBeNull();
+    expect(bar.adj_low).toBeNull();
+    expect(bar.adj_volume).toBeNull();
     expect(bar.adj_close).toBeNull();
     expect(bar.adjusted).toBe(false);
+    expect(bar.open).toBe(100);
+    expect(bar.volume).toBe(500);
+  });
+
+  it("非正 adj は調整価格全 null (adj_close 含む。金融入力に使わない)", () => {
+    const bar = adjustBar({ ...BARS[0]!, adj: -3 });
+    expect(bar.adj_open).toBeNull();
+    expect(bar.adj_close).toBeNull();
+    expect(bar.adjusted).toBe(false);
+    expect(bar.close).toBe(2050);
+  });
+});
+
+type ExcerptRow = {
+  date: string; open: number; high: number; low: number; close: number; volume: number; adj: number;
+};
+const EXCERPTS = [
+  { name: "jss-ohlcv-dividend-7944.json", sha: "3ed9414777841203f6ec11b21e012cfddeb4c308452a93b23f188adb0ed86bef" },
+  { name: "jss-ohlcv-dividend-9984.json", sha: "68e68fed708d182fab34917235ddd181856a47cc37534e331bc429645a6e863b" },
+] as const;
+const excerptUrl = (name: string): URL =>
+  new URL(`../../../pipeline/tests/fixtures/transform/${name}`, import.meta.url);
+const excerptsPresent = (): boolean => EXCERPTS.every((e) => existsSync(excerptUrl(e.name)));
+function loadExcerpt(name: string, sha: string): ExcerptRow[] {
+  const raw = readFileSync(excerptUrl(name));
+  // 誤・改変ファイルの混入防止に full SHA を固定する。
+  expect(createHash("sha256").update(raw).digest("hex")).toBe(sha);
+  return (JSON.parse(raw.toString("utf8")) as { rows: ExcerptRow[] }).rows;
+}
+
+describe.skipIf(!excerptsPresent())("実配当抜粋の回帰 (7944/9984・未取得 skip)", () => {
+  for (const { name, sha } of EXCERPTS) {
+    it(`${name}: f!=1 で価格調整・出来高不変`, () => {
+      const rows = loadExcerpt(name, sha);
+      expect(rows.length).toBeGreaterThan(0);
+      let adjusted = 0;
+      for (const r of rows) {
+        const bar = adjustBar(r);
+        const f = r.adj / r.close;
+        expect(f).toBeGreaterThan(0);
+        expect(f).toBeLessThanOrEqual(1);
+        if (f !== 1) {
+          adjusted += 1;
+          expect(bar.adjusted).toBe(true);
+          expect(bar.adj_open).toBeCloseTo(Math.round(r.open * f * 10000) / 10000, 4);
+          expect(bar.adj_close).toBe(r.adj);
+        }
+        // 出来高は未補正: SOURCE 不変 + legacy null。
+        expect(bar.volume).toBe(r.volume);
+        expect(bar.adj_volume).toBeNull();
+      }
+      expect(adjusted).toBeGreaterThan(0);
+    });
+  }
+
+  it("実値から導く既知 f=1 は 1 を返す (偽 1 と区別)", () => {
+    const rows = loadExcerpt(EXCERPTS[0].name, EXCERPTS[0].sha);
+    const c = rows[0]!.close;
+    expect(adjustmentFactor(c, c)).toBe(1);
   });
 });
 
@@ -155,6 +228,32 @@ describe("MCP jp_ohlcv_range", () => {
   it("不正なコードは isError", async () => {
     const body = await call({ code: "ABC" });
     expect(body.result.isError).toBe(true);
+  });
+});
+
+describe("REST/MCP 共有一貫性", () => {
+  it("同一入力で同一 bars (意味論の二重化なし)", async () => {
+    const env = privateEnv();
+    const res = await privateApp.request("/v1/ohlcv/7203", AUTH, env);
+    const rest = (await res.json()) as { data: { bars: unknown[] } };
+    const req = new Request("http://x/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "jp_ohlcv_range", arguments: { code: "7203" } },
+      }),
+    });
+    const mres = await handleMcp(req, env);
+    const mbody = (await mres.json()) as { result: { content: Array<{ text: string }> } };
+    const mcp = JSON.parse(mbody.result.content[0]!.text) as { data: { bars: unknown[] } };
+    expect(mcp.data.bars).toEqual(rest.data.bars);
+  });
+
+  it("cache key は v2 世代 (旧 6h 意味と混同しない)", () => {
+    expect(ohlcvCacheKey("7203", { limit: 250 })).toContain("/v2/ohlcv/");
   });
 });
 
