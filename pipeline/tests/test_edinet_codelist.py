@@ -337,6 +337,17 @@ class TestFetchCodelist:
         assert seen == [resp]
         assert art.local_path.read_bytes() == data
 
+    def test_invalid_csv_zip_is_preserved_before_error(self, tmp_path, monkeypatch):
+        data = _make_zip({"Wrong.csv": mod._read_codelist_csv(_zip_bytes())})
+        monkeypatch.setattr(mod, "fetch", lambda url: SimpleNamespace(content=data))
+        settings = load_settings(env={"RAW_DATA_DIR": str(tmp_path)}, dry_run=True)
+        with pytest.raises(ValueError, match="想定と不一致"):
+            mod.fetch_codelist(settings)
+        saved = list(tmp_path.glob("*.zip"))
+        assert len(saved) == 1
+        assert "nodate" in saved[0].name
+        assert saved[0].read_bytes() == data
+
     def test_response_metadata_allowlist(self):
         """status・最終 URL・安全 header のみ。secret/auth 系は捨てる。"""
         resp = SimpleNamespace(

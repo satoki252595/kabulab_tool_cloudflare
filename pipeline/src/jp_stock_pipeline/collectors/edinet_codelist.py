@@ -122,19 +122,26 @@ def fetch_codelist(
         )
     if on_response is not None:
         on_response(resp)
-    return save_raw(
-        resp.content,
-        source=Source.EDINET,
-        datatype="codelist",
-        scope="ALL",
-        data_date=_meta_row_date(
+    data_date = None
+    try:
+        data_date = _meta_row_date(
             next(csv.reader(io.StringIO(_read_codelist_csv(resp.content))), [])
-        ),  # 公表基準日。取得時刻は save_raw が別に記録する。
-        url=CODELIST_URL,
-        ext="zip",
-        license_tag=LicenseTag.COMMERCIAL_OK,
-        base_dir=settings.raw_data_dir,
-    )
+        )
+    finally:
+        # 日付解読に失敗しても原本は保全する。例外は呼出側へ伝播し、
+        # 不正ZIPを成功扱いしない。取得時刻は save_raw が別に記録する。
+        artifact = save_raw(
+            resp.content,
+            source=Source.EDINET,
+            datatype="codelist",
+            scope="ALL",
+            data_date=data_date,
+            url=CODELIST_URL,
+            ext="zip",
+            license_tag=LicenseTag.COMMERCIAL_OK,
+            base_dir=settings.raw_data_dir,
+        )
+    return artifact
 
 
 # zip 内のコードリスト CSV の期待名（実物はこの1ファイルのみ）。
