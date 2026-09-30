@@ -148,7 +148,7 @@ network 0・書込 0 (OUT のみ)。per-doc 明細は private 0600 のみ。
 - MUTATION 境界 (重要・live 前の必須条件): helper 単体は
   mutation-free ではない。`checkDocsCustody` →
   `findBackupRowsByKeys` → `ensureBackupDb` → `ensureDatabase` は
-  DB 不在時に CREATE する (POST 実測・コード確認)。
+  DB 不在時に CREATE する (コード確認)。
   本 proposal は照会 0・grant 0 のまま。将来 live 照会の前に、
   read-only fetch route guard (POST create/update/delete を
   native 前に拒否。POST `/databases/{id}/query` のみ許可) または
