@@ -133,7 +133,7 @@ describe("parseStockDetail は表ローカル月を優待に付ける", () => {
     expect(parseStockDetail("8022", noSpan)).toEqual({
       status: "unknown",
       code: "8022",
-      reason: "no-local-month: 直営ゴルフスクールの入会金 無料",
+      reason: "no-local-month: h3=直営ゴルフスクールの入会金 無料",
     });
   });
 
@@ -145,12 +145,40 @@ describe("parseStockDetail は表ローカル月を優待に付ける", () => {
     });
   });
 
-  it("最初の h3 より前の優待テーブルは帰属できないので unknown (黙って落とさない)", () => {
+  it("同一 h3 の 2 表は表ごとの直近 span が優先する (表ローカル override)", () => {
+    // 合成変形: 1 つの h3 配下に 2 表。各表の直前に別の月 span を置く。
+    const tableOnly = FITTING8022.slice(FITTING8022.indexOf('<div class="md_table_wrapper">'));
+    const span9 = "優待権利確定月：<span>9月</span>";
+    const html = `<h3 class="ulno">合成セクション</h3>\n優待権利確定月：<span>3月</span>\n${tableOnly}\n${span9}\n${tableOnly}`;
+    const data = unwrapOk(parseStockDetail("9100", html));
+    expect(data.benefits.map((b) => b.localRecordMonths)).toEqual([[3], [9]]);
+    expect(data.benefits[0].heading).toBe("合成セクション");
+  });
+
+  it("最初の h3 より前の表は直前の span があれば表ローカルで取る", () => {
+    const tableOnly = GOLF8022.slice(GOLF8022.indexOf('<div class="md_table_wrapper">'));
+    const span = "優待権利確定月：<span>3月</span>";
+    const data = unwrapOk(parseStockDetail("8022", `${UNION8022}\n${span}\n${tableOnly}`));
+    expect(data.benefits.map((b) => [b.heading, b.localRecordMonths])).toEqual([["", [3]]]);
+  });
+
+  it("最初の h3 より前で span が無い優待テーブルは unknown (union 推測しない)", () => {
     const tableOnly = GOLF8022.slice(GOLF8022.indexOf('<div class="md_table_wrapper">'));
     expect(parseStockDetail("8022", `${UNION8022}\n${tableOnly}`)).toEqual({
       status: "unknown",
       code: "8022",
-      reason: "unscoped-table-before-first-h3",
+      reason: "no-local-month: pre-h3",
+    });
+  });
+
+  it("h3 を跨いだ span は後の表に適用しない", () => {
+    // span は最初の h3 の表にだけ効く。2 つ目の h3 の表には効かない。
+    const tableOnly = GOLF8022.slice(GOLF8022.indexOf('<div class="md_table_wrapper">'));
+    const html = `<h3 class="ulno">第一</h3>\n優待権利確定月：<span>3月</span>\n${tableOnly}\n<h3 class="ulno">第二</h3>\n${tableOnly}`;
+    expect(parseStockDetail("9100", html)).toEqual({
+      status: "unknown",
+      code: "9100",
+      reason: "no-local-month: h3=第二",
     });
   });
 });

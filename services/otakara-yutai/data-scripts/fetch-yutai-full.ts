@@ -156,11 +156,12 @@ function parseMonths(text: string): number[] {
 /**
  * 個別ページ HTML の純パース (fetch しない。テストと offline rerender 用に export)。
  *
- * 権利月は h3 セクション (優待の表) ごとの「優待権利確定月」span から取り、
- * その表の優待にだけ付ける (表ローカル。h3 セクションが、配下の全優待に月を
- * 明示する親スコープ)。ページ上部の valuations の union を全部の表に被せない
- * (旧形は 8022 の 3 月限定の表に 9 月行 37956 を誤合成した)。
- * 表があるのに月 span が無いセクション、表が無いページは `unknown`
+ * 権利月は各優待テーブルに直近で先行する「優待権利確定月」span から取る。
+ * セクション先頭の span は配下の表への明示スコープとして継承でき (親スコープ
+ * 継承)、表ごとの span があればそちらが優先する (表ローカル override)。
+ * h3 を跨いだ span は適用しない。ページ上部の valuations の union を
+ * 推測で被せない (旧形は 8022 の 3 月限定の表に 9 月行 37956 を誤合成した)。
+ * span が無い表、表が無いページは `unknown`
  * (月の推測・100 株の仮優待フォールバックはしない。廃止の意味では使わない)。
  */
 export function parseStockDetail(code: string, html: string): StockDetailResult {
@@ -190,56 +191,68 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
   const titleMatch = html.match(/<h3[^>]*class="ulno"[^>]*>([^<]+)/);
   const category = titleMatch ? titleMatch[1].trim() : "株主優待";
 
-  // h3 セクションごとに (見出し, 表ローカルの月, 株数別優待テーブル) を取る。
-  const benefits: BenefitDetail[] = [];
-  const sections = html.split(/<h3[^>]*class="ulno"[^>]*>/i);
-  // 最初の h3 より前の優待テーブルは月を帰属できない (unknown。落とさない)。
-  const preTables = sections[0].match(/<table[^>]*class="md_table[^"]*"[^>]*>([\s\S]*?)<\/table>/gi) ?? [];
-  if (preTables.some((t) => t.includes("必要株数") || /\d+株以上/.test(t))) {
-    return { status: "unknown", code, reason: "unscoped-table-before-first-h3" };
+  // h3 / 月 span / テーブルを文書順に辿り、表ごとに直近の適用 span を取る。
+  // 同一セクション内の後発 span はその表だけに優先 (表ローカル override)、
+  // 無ければセクション先頭 span を継承する。h3 を跨いだ span は使わない。
+  type DocEvent =
+    | { kind: "h3"; index: number; heading: string }
+    | { kind: "span"; index: number; months: number[] }
+    | { kind: "table"; index: number; tableHtml: string };
+  const events: DocEvent[] = [];
+  for (const m of html.matchAll(/<h3[^>]*class="ulno"[^>]*>([^<]*)/gi)) {
+    events.push({ kind: "h3", index: m.index ?? 0, heading: (m[1] ?? "").trim() });
   }
-  for (const section of sections.slice(1)) {
-    const heading = (section.match(/^([^<]*)/)?.[1] ?? "").trim();
-    const tables = [
-      ...section.matchAll(/<table[^>]*class="md_table[^"]*"[^>]*>([\s\S]*?)<\/table>/gi),
-    ].filter(
-      (t) => t[1].includes("必要株数") || /\d+株以上/.test(t[1]),
-    );
-    if (tables.length === 0) continue;
-    // 表より前の span (h3 と表の間) がこのセクションの明示スコープ。
-    const beforeTables = section.slice(0, section.indexOf(tables[0][0]));
-    const spanMatch = beforeTables.match(/優待権利確定月：<span[^>]*>([^<]+)/i);
-    const localRecordMonths = spanMatch ? parseMonths(spanMatch[1]) : [];
-    if (localRecordMonths.length === 0) {
-      return { status: "unknown", code, reason: `no-local-month: ${heading.slice(0, 60)}` };
+  for (const m of html.matchAll(/優待権利確定月：<span[^>]*>([^<]+)/gi)) {
+    events.push({ kind: "span", index: m.index ?? 0, months: parseMonths(m[1]) });
+  }
+  for (const m of html.matchAll(/<table[^>]*class="md_table[^"]*"[^>]*>([\s\S]*?)<\/table>/gi)) {
+    events.push({ kind: "table", index: m.index ?? 0, tableHtml: m[1] });
+  }
+  events.sort((a, b) => a.index - b.index);
+
+  const benefits: BenefitDetail[] = [];
+  let heading = "";
+  let scopeMonths: number[] | null = null;
+  for (const ev of events) {
+    if (ev.kind === "h3") {
+      heading = ev.heading;
+      scopeMonths = null;
+      continue;
     }
+    if (ev.kind === "span") {
+      scopeMonths = ev.months;
+      continue;
+    }
+    // 優待テーブル以外 (利回り表など) は月スコープに触らない。
+    if (!ev.tableHtml.includes("必要株数") && !/\d+株以上/.test(ev.tableHtml)) continue;
+    if (scopeMonths === null || scopeMonths.length === 0) {
+      const where = heading ? `h3=${heading.slice(0, 60)}` : "pre-h3";
+      return { status: "unknown", code, reason: `no-local-month: ${where}` };
+    }
+    const localRecordMonths = scopeMonths;
+    const rows = ev.tableHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi);
+    let lastNotes = "";
 
-    for (const tableMatch of tables) {
-      const tableHtml = tableMatch[1];
-      const rows = tableHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi);
-      let lastNotes = "";
-
-      for (const row of rows) {
-        const cells: string[] = [];
-        const cellMatches = row[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi);
-        for (const cell of cellMatches) {
-          cells.push(cell[1].replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]*>/g, "").trim());
-        }
-
-        // ヘッダー行スキップ
-        if (cells[0] === "必要株数" || cells.length < 2) continue;
-
-        // 株数パース
-        const sharesMatch = cells[0]?.match(/(\d[\d,]+)\s*株/);
-        if (!sharesMatch) continue;
-        const minShares = parseInt(sharesMatch[1].replace(/,/g, ""), 10);
-
-        const description = cells[1] || "";
-        const notes = cells[2] || lastNotes;
-        if (cells[2]) lastNotes = cells[2];
-
-        benefits.push({ minShares, description, notes, localRecordMonths, heading });
+    for (const row of rows) {
+      const cells: string[] = [];
+      const cellMatches = row[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi);
+      for (const cell of cellMatches) {
+        cells.push(cell[1].replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]*>/g, "").trim());
       }
+
+      // ヘッダー行スキップ
+      if (cells[0] === "必要株数" || cells.length < 2) continue;
+
+      // 株数パース
+      const sharesMatch = cells[0]?.match(/(\d[\d,]+)\s*株/);
+      if (!sharesMatch) continue;
+      const minShares = parseInt(sharesMatch[1].replace(/,/g, ""), 10);
+
+      const description = cells[1] || "";
+      const notes = cells[2] || lastNotes;
+      if (cells[2]) lastNotes = cells[2];
+
+      benefits.push({ minShares, description, notes, localRecordMonths, heading });
     }
   }
 

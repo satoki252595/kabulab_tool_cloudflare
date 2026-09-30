@@ -472,10 +472,25 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
   });
   const metaOf = (rows: CarrySourceRow[], heading = "株主優待"): Map<string, string[]> =>
     new Map(rows.map((r) => [carryKey(r.code, r.description, r.minShares, r.recordMonth), [heading]]));
+  const grpOf = (rows: CarrySourceRow[]): Map<string, Map<string, { minShares: number[]; recordMonths: number[] }>> => {
+    const out = new Map<string, Map<string, { minShares: number[]; recordMonths: number[] }>>();
+    for (const r of rows) {
+      let byCode = out.get(r.code);
+      if (!byCode) out.set(r.code, (byCode = new Map()));
+      const g = byCode.get(r.description);
+      if (g) {
+        g.minShares.push(r.minShares);
+        g.recordMonths.push(r.recordMonth);
+      } else {
+        byCode.set(r.description, { minShares: [r.minShares], recordMonths: [r.recordMonth] });
+      }
+    }
+    return out;
+  };
 
   it("legacy-null の額面一致は company に上げて carry する", () => {
     const rows = [srcRow({})];
-    const p = planCarry(rows, metaOf(rows));
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
     const key = carryKey("5929", RAW34TEXT["5929"], 100, 3);
     expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: 500, estimateValueSource: "company" });
     expect(p.promotedKeys).toEqual(new Set([key]));
@@ -485,7 +500,7 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
   it("合成されない行 (幽霊月など) は昇格しない", () => {
     // 判定自体は通る額面一致だが、plannedMeta に無い = 表ローカルに合成されない。
     const rows = [srcRow({ recordMonth: 9 })];
-    const p = planCarry(rows, new Map());
+    const p = planCarry(rows, new Map(), grpOf(rows));
     const key = carryKey("5929", RAW34TEXT["5929"], 100, 9);
     expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: 500, estimateValueSource: null });
     expect(p.promotedKeys).toEqual(new Set());
@@ -495,7 +510,7 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     // 文言自体は額面一致だが、表見出しが選択肢 (単一代表値は不正確)。
     const rows = [srcRow({})];
     const key = carryKey("5929", RAW34TEXT["5929"], 100, 3);
-    const p = planCarry(rows, new Map([[key, ["優待品カタログより選択"]]]));
+    const p = planCarry(rows, new Map([[key, ["優待品カタログより選択"]]]), grpOf(rows));
     expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
     expect(p.nulledKeys).toEqual(new Set([key]));
     expect(p.promotedKeys).toEqual(new Set());
@@ -505,8 +520,21 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     // 文言に金額が無く値は不一致。見出しに同額があっても positive にしない。
     const rows = [srcRow({ description: "優待品の引換", estimatedValue: 3300 })];
     const key = carryKey("5929", "優待品の引換", 100, 3);
-    const p = planCarry(rows, new Map([[key, ["3,300円相当の優待"]]]));
+    const p = planCarry(rows, new Map([[key, ["3,300円相当の優待"]]]), grpOf(rows));
     expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
+    expect(p.promotedKeys).toEqual(new Set());
+  });
+
+  it("同一文言の群に株数違いの兄弟があれば混在 HOLD (singleton で通さない)", () => {
+    // 100 株行だけ見れば額面一致だが、合成群に 1000 株の兄弟がある。
+    const rows = [srcRow({})];
+    const key = carryKey("5929", RAW34TEXT["5929"], 100, 3);
+    const groups = new Map([
+      ["5929", new Map([[RAW34TEXT["5929"], { minShares: [100, 1000], recordMonths: [3, 3] }]])],
+    ]);
+    const p = planCarry(rows, new Map([[key, ["株主優待"]]]), groups);
+    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
+    expect(p.nulledKeys).toEqual(new Set([key]));
     expect(p.promotedKeys).toEqual(new Set());
   });
 
@@ -516,7 +544,7 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     const rows = [
       srcRow({ code: ABSENT_CODE, description: desc, estimatedValue: 500, estimateValueSource: "company" }),
     ];
-    const p = planCarry(rows, metaOf(rows));
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
     const key = carryKey(ABSENT_CODE, desc, 100, 3);
     // 要約は保持、値と出典は null (provenance 隠しで値を残さない)
     expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
@@ -525,36 +553,48 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
   });
 
   it("未対応の出典の非 null 値は STOP する (扱いを発明しない)", () => {
-    expect(() => planCarry([srcRow({ estimateValueSource: "web" })], new Map())).toThrow(/未対応の出典/);
-    expect(() => planCarry([srcRow({ estimateValueSource: "other" })], new Map())).toThrow(/未対応の出典/);
+    expect(() => planCarry([srcRow({ estimateValueSource: "web" })], new Map(), new Map())).toThrow(/未対応の出典/);
+    expect(() => planCarry([srcRow({ estimateValueSource: "other" })], new Map(), new Map())).toThrow(/未対応の出典/);
     // 値が null なら出典によらず要約を戻す (STOP しない)
     const rows = [srcRow({ estimatedValue: null, estimateValueSource: "web" })];
-    const p = planCarry(rows, metaOf(rows));
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
     expect(p.carried.size).toBe(1);
   });
 
   it("同一 context の重複は同一なら畳み、食い違えば STOP する", () => {
     const row = srcRow({});
-    const same = planCarry([row, { ...row }], metaOf([row]));
+    const same = planCarry([row, { ...row }], metaOf([row]), grpOf([row, { ...row }]));
     expect(same.carried.size).toBe(1);
-    expect(() => planCarry([row, { ...row, shortSummary: "別要約" }], metaOf([row]))).toThrow(/食い違う/);
-    expect(() => planCarry([row, { ...row, estimatedValue: 501 }], metaOf([row]))).toThrow(/食い違う/);
+    expect(() => planCarry([row, { ...row, shortSummary: "別要約" }], metaOf([row]), grpOf([row, { ...row, shortSummary: "別要約" }]))).toThrow(/食い違う/);
+    expect(() => planCarry([row, { ...row, estimatedValue: 501 }], metaOf([row]), grpOf([row, { ...row, estimatedValue: 501 }]))).toThrow(/食い違う/);
   });
 
   it("context (株数・権利月) が違えば別キーで carry する", () => {
+    // 同一文言の群に月・株数の混在があるので、3 キーとも混在 HOLD で null 戻し。
     const rows = [
       srcRow({ recordMonth: 3 }),
       srcRow({ recordMonth: 9 }),
       srcRow({ minShares: 1000 }),
     ];
-    const p = planCarry(rows, metaOf(rows));
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
     expect(p.carried.size).toBe(3);
-    expect(p.nulledKeys).toEqual(new Set());
+    expect(p.nulledKeys).toEqual(
+      new Set([
+        carryKey("5929", RAW34TEXT["5929"], 100, 3),
+        carryKey("5929", RAW34TEXT["5929"], 100, 9),
+        carryKey("5929", RAW34TEXT["5929"], 1000, 3),
+      ])
+    );
+    for (const c of p.carried.values()) {
+      expect(c.estimatedValue).toBeNull();
+      expect(c.estimateValueSource).toBeNull();
+    }
+    expect(p.promotedKeys).toEqual(new Set());
   });
 
   it("解釈が無い行は退避しない", () => {
     const rows = [srcRow({ shortSummary: null, estimatedValue: null })];
-    const p = planCarry(rows, metaOf(rows));
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
     expect(p.carried.size).toBe(0);
   });
 });

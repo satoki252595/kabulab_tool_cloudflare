@@ -200,10 +200,18 @@ export type CarryPlan = {
  * (`plannedMeta` にあるキー) にだけ付ける。幽霊月などで合成されない行の値を
  * 昇格させない (companypromote0 until tablelocalqualified)。
  * 判定には合成元の表見出しも渡す (見出しだけの選択・抽選条件を落とさない)。
+ * recipient context は同一 (銘柄, 文言) の合成全行から (`plannedGroups`)。
+ * 単一行の singleton では株数・月混在の兄弟を見落とすため使わない。
  */
+export type PlannedRecipientGroups = ReadonlyMap<
+  string,
+  ReadonlyMap<string, { minShares: readonly number[]; recordMonths: readonly number[] }>
+>;
+
 export function planCarry(
   rows: readonly CarrySourceRow[],
   plannedMeta: ReadonlyMap<string, readonly string[]>,
+  plannedGroups: PlannedRecipientGroups,
 ): CarryPlan {
   const carried = new Map<string, CarriedInterpretation>();
   const nulledKeys = new Set<string>();
@@ -222,9 +230,13 @@ export function planCarry(
             `role の扱いを決めるまで削除も再 INSERT もしない)`
         );
       }
-      const verdict = qualifyCompanyPerGrantValue(row.description, estimatedValue, {
+      const group = plannedGroups.get(row.code)?.get(row.description) ?? {
         minShares: [row.minShares],
         recordMonths: [row.recordMonth],
+      };
+      const verdict = qualifyCompanyPerGrantValue(row.description, estimatedValue, {
+        minShares: group.minShares,
+        recordMonths: group.recordMonths,
         headings: plannedMeta.get(key),
       });
       if (!verdict.qualified) {
@@ -427,8 +439,12 @@ export async function importYutaiFull(
     };
   });
   // 合成キー → 表見出し (同一文言が複数表にある銘柄は全見出しで走査)。
+  // 同時に (銘柄, 文言) の recipient 群も作る (判定 context 用。単一行禁止)。
   const plannedMeta = new Map<string, string[]>();
+  const plannedGroups = new Map<string, Map<string, { minShares: number[]; recordMonths: number[] }>>();
   for (const p of planned) {
+    let byCode = plannedGroups.get(p.data.code);
+    if (!byCode) plannedGroups.set(p.data.code, (byCode = new Map()));
     for (const r of p.rows) {
       const key = carryKey(p.data.code, r.description, r.minShares, r.recordMonth);
       const list = plannedMeta.get(key);
@@ -436,6 +452,13 @@ export async function importYutaiFull(
         if (!list.includes(r.heading)) list.push(r.heading);
       } else {
         plannedMeta.set(key, [r.heading]);
+      }
+      const g = byCode.get(r.description);
+      if (g) {
+        g.minShares.push(r.minShares);
+        g.recordMonths.push(r.recordMonth);
+      } else {
+        byCode.set(r.description, { minShares: [r.minShares], recordMonths: [r.recordMonth] });
       }
     }
   }
@@ -460,7 +483,7 @@ export async function importYutaiFull(
   // (掲載文 description は公開面に出せないため代わりが無い)。キーは (銘柄コード,
   // description, 株数, 権利月) の内容アドレスなので、context が変わらない限り
   // 作り直した行に戻せる。計画は純関数 `planCarry` (要約取込と同じ共有厳密判定)。
-  const { carried, nulledKeys, promotedKeys } = planCarry(existing, plannedMeta);
+  const { carried, nulledKeys, promotedKeys } = planCarry(existing, plannedMeta, plannedGroups);
   const droppedInterpretations = [...carried.keys()].filter((k) => !plannedKeys.has(k)).length;
   console.info(`  既存の解釈を退避: ${carried.size}件`);
   if (nulledKeys.size > 0) {
