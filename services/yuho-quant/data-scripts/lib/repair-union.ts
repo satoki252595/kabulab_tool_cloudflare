@@ -127,6 +127,19 @@ export function classifyReceipt(
   return { state: "ARCHIVE_PENDING", shaMatch: true };
 }
 
+/**
+ * 観測 namespace。live1781 tag を持つ doc のみ observed (旧 live snapshot の
+ * DB projection が存在する)。それ以外は historical: live 観測なしのため
+ * DB missing/current-changed/null-status/empty-facts を一切推論しない。
+ * historical の savedfacts 比較は歴史 namespaceに留め、repair-changed 数に
+ * しない。旧1695・歴史 3127 のいずれも repair 対象数ではない。
+ */
+export type ObserveNamespace = "observed" | "historical";
+
+export function observeNamespace(tags: ReadonlyArray<MembershipTag>): ObserveNamespace {
+  return tags.includes("live1781") ? "observed" : "historical";
+}
+
 /** 新 pipeline の per-doc verdict (qualified 判定の唯一の入力)。 */
 export interface NewVerdict {
   doc: string;

@@ -11,11 +11,25 @@ SHA・limits のみ (public 可)。per-doc の値・表は private 0600 のみ�
   `parseOverseasData` / `validateOverseasSaveSet` + backfill-overseas/ingest
   同等変換 + lib `repair-union.ts` の union/tags/分離)
 - union lib: `services/yuho-quant/data-scripts/lib/repair-union.ts`
-  (test: `overseas-repair-union.test.ts` 13 passed。実 docID の
-  交差/outside-live/unknown-pin 対照 + 母集合分離 + receipt 分類
-  (verified 証跡+実 bytes 一致のみ RECEIVED) + offline 候補除外条件)
-- 実行: `2026-09-30T06:48:14Z`–`06:50:40Z` (約146秒・fetch 全面拒否・結果 PASS)
-- 実行 workHEAD: `4b998ab34b35` (PR208 merge main。closed-208 branch 不使用)
+  (test: `overseas-repair-union.test.ts` 14 passed。実 docID の
+  交差/outside-live/unknown-pin 対照 + 観測 namespace 分割 +
+  母集合分離 + receipt 分類 (verified 証跡+実 bytes 一致のみ RECEIVED) +
+  offline 候補除外条件)
+- 実行: `2026-09-30T07:22:09Z`–`07:23:31Z` (約82秒・fetch 全面拒否・結果 PASS。
+  trust 修正 run。前回 07:09 実行の counts (changed 3127/match 475) は
+  未観測 doc を DB-changed に混入させていたため repair 数として破棄
+  (superseded)。artifact は本 run で上書き)
+- 実行 workHEAD: `768990cd2604` (= report 記録値そのまま。実行時 tree は dirty:
+  trust 修正の lib/script/test が未 commit。実行→commit の間に code
+  変更はなく (note/release の転記のみ)、実行 script/lib/test bytes =
+  下記 commit 済み blob と同一。実行 pin の捏造なし: workHEAD は
+  dirty 時の HEAD を示し、code bytes は blob SHA で review 可)
+  - script blob `52b53b40b4c2` / lib blob `bcf704fec47f` /
+    test blob `e3b8c147303a`
+- Published HEAD: 本記録を含む branch 最終 commit (report 参照)。
+  実行 HEAD (`768990c`) と published HEAD は別物:
+  artifact は実行時 bytes に紐づき、published HEAD はその bytes を
+  含む後続 commit である。closed-208 branch 不使用
 - 実 CLI: `npx tsx services/yuho-quant/data-scripts/overseas-repair-prep.ts`
   (既定 `--lane-dir=/tmp --raw-dir=/tmp/overseas_laneA_raw`
   `--prep-dir=/tmp/overseas745-prep-20260930`
@@ -49,6 +63,10 @@ SHA・limits のみ (public 可)。per-doc の値・表は private 0600 のみ�
 - union 3675 全 doc に tags (census/live/old1695/pin73/804系列)。
   同じ doc の複数母集合所属は正当 (例: S1008Q8O は 5 tags 併持)。
   対照: S1008XET (outside-live 採用)、S100AKTK (unknown-pin + live 観測)。
+- 観測 namespace 分割 (join 実結果): observed 1781 (live1781 tag あり。
+  DB 比較の対象) / historical 1894 (live 観測なし。LIVE_UNOBSERVED)。
+  1781 + 1894 = 3675 (構造照合)。pin73 の内訳は join が決定する
+  (推測値を書かない)。
 
 ## per-doc 保持 (認定証跡・private のみ)
 
@@ -73,25 +91,41 @@ SHA・limits のみ (public 可)。per-doc の値・表は private 0600 のみ�
 
 ## preimage 基準
 
-- applied59: journal 記録の sealed-post があれば primary (6件)、なければ
-  live 行を L3match 59/59 (status/honbun/raw 含む全行一致) の根拠で proxy。
-- 非59: savedfacts before + savedStatus。live 観測行は別途添付
-  (observed-not-current の表示)。
+- observed + applied59: journal 記録の sealed-post があれば primary (6件)、
+  なければ live 行を L3match 59/59 (status/honbun/raw 含む全行一致) の
+  根拠で proxy (sealed baseline を別途保持)。
+- observed + 非59: 旧 live の full projected rows/status/honbun を before とし
+  current parser と比較する (raw/honbun 比較あり)。結果は
+  observed-not-current (旧観測)。
+- historical (outside 1894): live map 群に触れない。savedfacts との比較は
+  歴史 namespace (historicalCompare) のみ。DB missing/current-changed/
+  null-status/empty-facts を推論しない (live rows の `?? []` なし)。
 - 比較 fields は 745-prep と同一 (STATUS/HONBUN/SCOPE/FYEAR/VALUE/RAW/
   UNIT/CONSOLIDATED/REGIONKIND/RATIO/PATTERN)。
 
 ## 結果 counts
 
-- total 3675 (59/745/2871)。match 475 / changed 3127。
-- HOLD_PARSE 0 / HOLD_VALIDATION 0 / HOLD_PIN_MISSING 73 /
-  HOLD_PIN_MISMATCH 0 / HOLD_RECEIPT 0。
-- receipt: PENDING 3675 / RECEIVED 0。newQualified 0 (assert)。
-- 分離: oldL1Changed1695=1695 / newQualified=0 (別 field)。
+- total 3675 (59/745/2871)。
+  observed 1781: match 21 / changed 1687 / HOLD_PIN_MISSING 73 /
+  HOLD_PARSE 0 / HOLD_VALIDATION 0 / HOLD_PIN_MISMATCH 0 / HOLD_RECEIPT 0
+  (21+1687+73 = 1781。構造照合)。
+- historical 1894: 全 LIVE_UNOBSERVED (repair verdict なし)。
+  historicalCompare: changed 1440 / match 454 (歴史 namespace。
+  repair-changed 数にしない)。unobserved 内の pin不足 0・
+  未比較 0 (いずれも join 実結果)。
+- 前回 run の changed 3127 / match 475 は trust 修正により repair 数として
+  破棄 (superseded)。旧1695・歴史 changed のいずれも repair 対象数ではない。
+- receipt: PENDING 3675 / RECEIVED 0。offlineCandidates 0 (計算結果) /
+  liveReady 0 / applyQualified 0 (いずれも別 field)。
+- 分離: oldL1Changed1695=1695 / offlineCandidates=0 /
+  liveReady=0 / applyQualified=0 (別 field)。
 - census 自己整合 3602/3602 (同一 parser・同一 bytes の再現)。
-- 成果物: `repair-manifest.json` (3675) `fbe41196…5ab3f` /
-  `repair-journal.jsonl` (3200行) `3327fc87…b5c9` /
-  `repair-sets.json` `915a6aed…fd8d` /
-  `repair-report.json` (0600 out-dir のみ)
+- 成果物: `repair-manifest.json` (3675) `754ecba7…caac98` /
+  `repair-journal.jsonl` (3654行) `85985cda…e2af` /
+  `repair-sets.json` `cf39b957…8884` /
+  `repair-report.json` `9963b3b7…829` (0600 out-dir のみ)。
+  同 dir の `repair-report-hold.json` は初回 06:48 の census assert
+  HOLD 残骸 (superseded。今回 PASS とは無関係)。
 
 ## zeros
 
@@ -115,6 +149,10 @@ d1r2mutation 0 / workflow 0 / newReceipts 0 / sends 0。
 
 - 1411/1487/36 (3602 census) と旧 live 1695 (旧 parser prep 由来
   L1changed) は母集合が別。1695 を新 qualified 候補数と呼ばない。
+- DB 比較は observed (live1781) のみ。outside 1894 は LIVE_UNOBSERVED
+  (DB missing/current-changed/null-status/empty-facts を推論しない。
+  live rows の `?? []` なし)。旧1695・歴史 changed のいずれも repair
+  対象数ではない。存在確定は将来 fresh full SELECT が行う。
 - live snapshot は旧観測で live-current を保証しない (preimage 参照のみ)。
 - 73 pin不足は過去 custody UNKNOWN として apply HOLD。将来 official
   fresh GET / current identity / full-bytes / custody / current CAS で

@@ -19,6 +19,7 @@ import {
   censusTags,
   classifyReceipt,
   computeOfflineCandidates,
+  observeNamespace,
   separatedCounts,
   type MembershipTag,
   type NewVerdict,
@@ -81,6 +82,18 @@ describe("repair union (実 docID)", () => {
     ]);
     const tags = union.get("S100AKTK") as MembershipTag[];
     expect(tags.some((t) => t.startsWith("census-"))).toBe(false);
+  });
+
+  it("観測 namespace: live1781 tag の有無のみで observed/historical を分ける (実 docID)", () => {
+    const union = buildUnion(tagEntries());
+    // S1008Q8O: live 観測あり → observed (DB 比較の対象)。
+    expect(observeNamespace(union.get("S1008Q8O") as MembershipTag[])).toBe("observed");
+    // S1008XET: live 観測なし → historical (DB 推論なし・LIVE_UNOBSERVED)。
+    expect(observeNamespace(union.get("S1008XET") as MembershipTag[])).toBe("historical");
+    // S100AKTK: pin なしでも live 観測あり → observed (pin 分割は別軸)。
+    expect(observeNamespace(union.get("S100AKTK") as MembershipTag[])).toBe("observed");
+    // S1008Q8W: live 観測あり → observed。
+    expect(observeNamespace(union.get("S1008Q8W") as MembershipTag[])).toBe("observed");
   });
 
   it("census class 決定: adopted/held/reverse/other (reverse は adopted 併持)", () => {

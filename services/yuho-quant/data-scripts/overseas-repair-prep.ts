@@ -7,6 +7,17 @@
  * 1411/1487/36 (3602 census) と旧 live 1695 (旧 parser prep 由来の L1changed)
  * は母集合が別のため docID 分離し、1695 を新 qualified 候補数と呼ばない。
  *
+ * 観測 namespace (trust 境界):
+ * - observed (live1781 のみ): 旧 live snapshot の full projected rows/status/
+ *   honbun を before とし current parser と比較する (sealed59 は sealed
+ *   baseline を別途保持)。結果は observed-not-current (旧観測)。
+ * - historical (outside 1894): live 観測なし → verdict LIVE_UNOBSERVED。
+ *   DB missing/current-changed/null-status/empty-facts を一切推論しない
+ *   (live rows の `?? []` なし)。savedfacts との比較は歴史 namespace
+ *   (historicalCompare) に留め、repair-changed 数にしない。旧1695 も
+ *   歴史 changed 数も repair 対象数ではない。存在確定は将来 fresh full
+ *   SELECT が行う。
+ *
  * 再使用のみ (新 framework なし): 745-prep と同一 skeleton (fetch 全面拒否・
  * pins 照合・parse→validate→caller 同等変換・compare・0600 成果物)、同一
  * parser/validator、union/tags/分離は lib/repair-union.ts (test 済み)。
@@ -573,6 +584,12 @@ function loadSelectLive(bytes: Buffer, union: Set<string>): {
   if (q1sum !== 10257) hold(`select-live Q1総計外: ${q1sum}`);
   const rows = new Map<string, LiveRow[]>();
   const rawQ2 = new Map<string, Array<Record<string, unknown>>>();
+  // 観測済み-empty は実 [] として事前登録する (q2 行なし = 0 行の観測)。
+  // 未観測 doc は本 map 群に触れない (trust 境界: `?? []` 推論なし)。
+  for (const d of docs.keys()) {
+    rows.set(d, []);
+    rawQ2.set(d, []);
+  }
   for (const e of q2) {
     const r = asRecord(e, "select-live q2 要素");
     const doc = r["docId"];
@@ -587,7 +604,8 @@ function loadSelectLive(bytes: Buffer, union: Set<string>): {
     if (!(r["salesYen"] === null || typeof r["salesYen"] === "number")) hold(`select-live q2 yen 外: ${doc}`);
     if (!(r["ratioPct"] === null || typeof r["ratioPct"] === "number")) hold(`select-live q2 ratio 外: ${doc}`);
     if (typeof r["pattern"] !== "string") hold(`select-live q2 pattern 外: ${doc}`);
-    const list = rows.get(doc) ?? [];
+    const list = rows.get(doc);
+    if (list === undefined) hold(`select-live q2 行登録外: ${doc}`);
     list.push({
       fiscalYearEnd: r["fiscalYearEnd"] as string,
       regionName: r["regionName"] as string,
@@ -599,10 +617,9 @@ function loadSelectLive(bytes: Buffer, union: Set<string>): {
       ratioPct: r["ratioPct"] as number | null,
       pattern: r["pattern"] as string,
     });
-    rows.set(doc, list);
-    const rawList = rawQ2.get(doc) ?? [];
+    const rawList = rawQ2.get(doc);
+    if (rawList === undefined) hold(`select-live q2 raw登録外: ${doc}`);
     rawList.push(r);
-    rawQ2.set(doc, rawList);
   }
   return { docs, rows, rawQ1, rawQ2 };
 }
@@ -717,7 +734,7 @@ const RECEIPTS_PATH = argValue("receipts", "none");
 const OUT_DIR = argValue("out-dir", "/tmp/overseas-repair-prep-20260930");
 const STARTED_AT = new Date().toISOString();
 
-type Verdict = "match" | "changed" | "HOLD_PIN_MISSING" | "HOLD_PIN_MISMATCH" | "HOLD_PARSE" | "HOLD_VALIDATION" | "HOLD_RECEIPT";
+type Verdict = "match" | "changed" | "HOLD_PIN_MISSING" | "HOLD_PIN_MISMATCH" | "HOLD_PARSE" | "HOLD_VALIDATION" | "HOLD_RECEIPT" | "LIVE_UNOBSERVED";
 
 interface ManifestRecord {
   doc: string;
@@ -746,8 +763,13 @@ interface ManifestRecord {
   preimageRef: string;
   liveObserved: boolean;
   verdict: Verdict;
+  /** observed (live1781) の DB 比較結果。historical は null。 */
   compareVerdict: "match" | "changed" | null;
+  /** observed の比較理由。historical は空。 */
   reasons: string[];
+  /** historical (outside) の savedfacts 比較。歴史 namespace。repair 数にしない。 */
+  historicalCompare: "match" | "changed" | null;
+  historicalReasons: string[];
   receipt: ReceiptState;
   receiptShaMatch: boolean;
   /** manifest 照合 metadata (same/written+pageId)。hosted 証明ではない。 */
@@ -903,14 +925,17 @@ async function main(): Promise<void> {
 
     // scope 既知: 全行の連結 scope が確定 (null 行ありは unknown scope)。
     const scopeKnown = rows !== null && rows.every((r) => r.isConsolidated !== null);
+    // 観測 namespace: live1781 のみ observed。outside は DB を推論しない。
+    const observed = union.has(doc);
     const rec: ManifestRecord = {
       doc, tags, set, pin, pinMismatch, zipBytes: zipBytes.length, zipSHA256: zipSHA,
       periodEnd, censusClasses, prepVerdict: prec.verdict, savedStatus: prec.savedStatus,
       currentStatus, honbunFile, tablesScanned,
       factsCount: rows ? rows.length : null, proof, facts, scopeKnown, validateOK, validateError,
       baseline: set === "applied59" ? "sealed" : "before",
-      preimageRef: "", liveObserved: union.has(doc),
-      verdict: "match", compareVerdict: null, reasons: [], receipt,
+      preimageRef: "", liveObserved: observed,
+      verdict: "match", compareVerdict: null, reasons: [],
+      historicalCompare: null, historicalReasons: [], receipt,
       receiptShaMatch: receiptVerdict.shaMatch, receiptMeta,
     };
     newVerdicts.push({
@@ -924,23 +949,47 @@ async function main(): Promise<void> {
     });
 
     if (parseError !== null) {
-      rec.verdict = "HOLD_PARSE";
-      rec.preimageRef = preimageRefOf(doc, set, journalSealed, union);
+      rec.verdict = observed ? "HOLD_PARSE" : "LIVE_UNOBSERVED";
+      rec.preimageRef = preimageRefOf(doc, set, journalSealed, observed);
       journalLines.push(JSON.stringify({
-        doc, tags, set, pin, pinMismatch, verdict: rec.verdict, baseline: rec.baseline,
-        preimageRef: rec.preimageRef,
-        before: journalBefore(doc, set, journalSealed, savedfacts, prec, live),
+        doc, tags, set, pin, pinMismatch, verdict: rec.verdict,
+        namespace: observed ? "observed" : "historical",
+        baseline: rec.baseline, preimageRef: rec.preimageRef,
+        before: journalBefore(doc, set, journalSealed, savedfacts, prec, live, observed),
         after: null, parseError, receipt, reasons: [],
       }));
     } else if (!validateOK) {
-      rec.verdict = "HOLD_VALIDATION";
-      rec.preimageRef = preimageRefOf(doc, set, journalSealed, union);
+      rec.verdict = observed ? "HOLD_VALIDATION" : "LIVE_UNOBSERVED";
+      rec.preimageRef = preimageRefOf(doc, set, journalSealed, observed);
       journalLines.push(JSON.stringify({
-        doc, tags, set, pin, pinMismatch, verdict: rec.verdict, baseline: rec.baseline,
-        preimageRef: rec.preimageRef,
-        before: journalBefore(doc, set, journalSealed, savedfacts, prec, live),
+        doc, tags, set, pin, pinMismatch, verdict: rec.verdict,
+        namespace: observed ? "observed" : "historical",
+        baseline: rec.baseline, preimageRef: rec.preimageRef,
+        before: journalBefore(doc, set, journalSealed, savedfacts, prec, live, observed),
         after: { status: currentStatus, honbunFile, tablesScanned, rows: null, proof, facts },
         validateError, receipt, reasons: [],
+      }));
+    } else if (!observed) {
+      // historical: savedfacts との比較は歴史 namespace のみ。DB の状態は
+      // 推論しない (live map 群に触れない)。repair verdict なし。
+      const after = rows as SaveRow[];
+      rec.preimageRef = "historical:savedfacts";
+      const hist: CompareOut = compareRows(savedfacts.get(doc) as BeforeRow[], after,
+        prec.savedStatus, currentStatus as string, null, null, false, false);
+      rec.historicalCompare = hist.equal ? "match" : "changed";
+      rec.historicalReasons = hist.reasons;
+      rec.verdict = "LIVE_UNOBSERVED";
+      journalLines.push(JSON.stringify({
+        doc, tags, set, pin, pinMismatch, verdict: rec.verdict, namespace: "historical",
+        baseline: rec.baseline, preimageRef: rec.preimageRef,
+        historical: {
+          before: { status: prec.savedStatus, honbunFile: null, rows: savedfacts.get(doc) },
+          after: { status: currentStatus, honbunFile, tablesScanned, rows: after, proof, facts },
+          compareVerdict: rec.historicalCompare,
+          reasons: hist.reasons, addedKeys: hist.addedKeys, removedKeys: hist.removedKeys,
+          fieldDiffs: hist.fieldDiffs,
+        },
+        liveObserved: null, receipt,
       }));
     } else {
       const after = rows as SaveRow[];
@@ -950,6 +999,7 @@ async function main(): Promise<void> {
       if (set === "applied59") {
         // sealed-post preimage: journal 記録があれば primary、なければ live 行を
         // L3match 59/59 (status/honbun/raw 含む全行一致) の根拠で proxy する。
+        // (59 は全件 observed のため live map の strict get が成立する)
         const sealed = journalSealed.get(doc);
         if (sealed) {
           rec.preimageRef = "sealed-post:prep-journal";
@@ -957,15 +1007,17 @@ async function main(): Promise<void> {
         } else {
           const lv = live.docs.get(doc) as LiveDoc;
           rec.preimageRef = "sealed-via-live:L3match59of59";
-          preimage = { status: lv.status, honbun: lv.honbun, rows: live.rows.get(doc) ?? [] };
+          preimage = { status: lv.status, honbun: lv.honbun, rows: live.rows.get(doc) as LiveRow[] };
         }
         compareRaw = true;
         compareHonbun = true;
       } else {
-        rec.preimageRef = "before:savedfacts";
-        preimage = { status: prec.savedStatus, honbun: null, rows: savedfacts.get(doc) as BeforeRow[] };
-        compareRaw = false;
-        compareHonbun = false;
+        // observed 非59: 旧 live の full projected rows/status/honbun を before とする。
+        const lv = live.docs.get(doc) as LiveDoc;
+        rec.preimageRef = "live:full-projection";
+        preimage = { status: lv.status, honbun: lv.honbun, rows: live.rows.get(doc) as LiveRow[] };
+        compareRaw = true;
+        compareHonbun = true;
       }
       const cmp: CompareOut = compareRows(preimage.rows, after, preimage.status, currentStatus as string,
         preimage.honbun, honbunFile, compareRaw, compareHonbun);
@@ -976,19 +1028,20 @@ async function main(): Promise<void> {
         : pinMismatch ? "HOLD_PIN_MISMATCH"
         : rec.compareVerdict;
       if (rec.verdict !== "match") {
-        const liveObserved = union.has(doc) ? {
-          kind: "live-observed-not-current",
-          status: (live.docs.get(doc) as LiveDoc).status,
-          rows: live.rows.get(doc) ?? [],
-          rawQ1: live.rawQ1.get(doc) ?? null,
-          rawQ2: live.rawQ2.get(doc) ?? [],
-        } : null;
+        const lv = live.docs.get(doc) as LiveDoc;
         journalLines.push(JSON.stringify({
           doc, tags, set, pin, pinMismatch, verdict: rec.verdict, compareVerdict: rec.compareVerdict,
-          baseline: rec.baseline, preimageRef: rec.preimageRef,
+          namespace: "observed", baseline: rec.baseline, preimageRef: rec.preimageRef,
           before: { status: preimage.status, honbunFile: preimage.honbun, rows: preimage.rows },
           after: { status: currentStatus, honbunFile, tablesScanned, rows: after, proof, facts },
-          liveObserved, receipt,
+          liveObserved: {
+            kind: "live-observed-not-current",
+            status: lv.status,
+            rows: live.rows.get(doc) as LiveRow[],
+            rawQ1: live.rawQ1.get(doc) as Record<string, unknown>,
+            rawQ2: live.rawQ2.get(doc) as Array<Record<string, unknown>>,
+          },
+          receipt,
           reasons: cmp.reasons, addedKeys: cmp.addedKeys, removedKeys: cmp.removedKeys,
           fieldDiffs: cmp.fieldDiffs,
         }));
@@ -1028,6 +1081,11 @@ async function main(): Promise<void> {
     holdPinMissing: count((r) => r.verdict === "HOLD_PIN_MISSING"),
     holdPinMismatch: count((r) => r.verdict === "HOLD_PIN_MISMATCH"),
     holdReceipt: count((r) => r.verdict === "HOLD_RECEIPT"),
+    liveUnobserved: count((r) => r.verdict === "LIVE_UNOBSERVED"),
+    unobservedPinMissing: count((r) => r.verdict === "LIVE_UNOBSERVED" && r.pin === "fixed-now"),
+    unobservedNoCompare: count((r) => r.verdict === "LIVE_UNOBSERVED" && r.historicalCompare === null),
+    historicalChanged: count((r) => r.historicalCompare === "changed"),
+    historicalMatch: count((r) => r.historicalCompare === "match"),
     receiptPending: count((r) => r.receipt === "ARCHIVE_PENDING"),
     receiptReceived: count((r) => r.receipt === "RECEIVED"),
     receiptShaMatch: count((r) => r.receiptShaMatch),
@@ -1040,19 +1098,34 @@ async function main(): Promise<void> {
   if (counts.censusAbsent73 !== 73) hold("census 欠落外");
   if (counts.live1781 !== 1781) hold("live 件数外");
   if (counts.pinMissing73 !== 73) hold("pin不足外");
+  // 分割の構造照合 (verdict 数の推測値は書かない。join の実結果のみ)。
+  if (counts.liveUnobserved + counts.live1781 !== counts.total) hold("observed/historical 分割外");
+  if (counts.holdPinMissing + counts.unobservedPinMissing !== counts.pinMissing73) {
+    hold("pin不足 分割外");
+  }
+  if (counts.historicalChanged + counts.historicalMatch + counts.unobservedNoCompare !== counts.liveUnobserved) {
+    hold("historical 内訳外");
+  }
+  if (counts.match + counts.changed + counts.holdParse + counts.holdValidation + counts.holdPinMissing + counts.holdPinMismatch + counts.holdReceipt !== counts.live1781) {
+    hold("observed 内訳外");
+  }
   const sets = {
     byTag: Object.fromEntries(
       (["census-adopted", "census-held", "census-reverse", "census-other", "live1781",
         "old-l1changed1695", "pin73unknown", "hist804", "applied59", "remain745",
         "stable2871"] as MembershipTag[]).map((t) => [t, ids((r) => r.tags.includes(t))])
     ),
-    changed: ids((r) => r.verdict === "changed"),
-    match: ids((r) => r.verdict === "match"),
+    observedChanged: ids((r) => r.verdict === "changed"),
+    observedMatch: ids((r) => r.verdict === "match"),
     holdParse: ids((r) => r.verdict === "HOLD_PARSE"),
     holdValidation: ids((r) => r.verdict === "HOLD_VALIDATION"),
     holdPinMissing: ids((r) => r.verdict === "HOLD_PIN_MISSING"),
     holdPinMismatch: ids((r) => r.verdict === "HOLD_PIN_MISMATCH"),
     holdReceipt: ids((r) => r.verdict === "HOLD_RECEIPT"),
+    liveUnobserved: ids((r) => r.verdict === "LIVE_UNOBSERVED"),
+    unobservedPinMissing: ids((r) => r.verdict === "LIVE_UNOBSERVED" && r.pin === "fixed-now"),
+    historicalChanged: ids((r) => r.historicalCompare === "changed"),
+    historicalMatch: ids((r) => r.historicalCompare === "match"),
     offlineCandidates,
   };
 
@@ -1087,6 +1160,8 @@ async function main(): Promise<void> {
     zeros: { fetchAttempts, sourceGET: 0, notionCreateUpdateArchive: 0, d1r2mutation: 0, workflow: 0, newReceipts: 0, sends: 0 },
     limits: [
       "1411/1487/36 (3602 census) と旧 live 1695 (旧 parser prep 由来 L1changed) は母集合が別。1695 を新候補数と呼ばない。候補数は dedup union join からのみ。",
+      "DB 比較は observed (live1781) のみ。outside は LIVE_UNOBSERVED (DB missing/current-changed/null-status/empty-facts を推論しない。live rows の `?? []` なし)。旧1695・歴史 changed のいずれも repair 対象数ではない。存在確定は将来 fresh full SELECT。",
+      "savedfacts 比較は historical namespace (historicalCompare) に留め repair-changed 数にしない。",
       "候補の意味は OFFLINE_CANDIDATE。live READY は fresh custody/current CAS なし → 0 (別明示)。apply 許可は grant なし → 0 (別明示)。",
       "live snapshot は旧観測で live-current を保証しない。59 の sealed 代理は L3match 59/59 が根拠。観測行全体 (q1/q2 の id 含む) を保持するが DB 全体像の preimage は名乗らない (旧 Q1 は 7 列 projection のみ。未選択 protected は将来 fresh SELECT が要る)。",
       "73 pin不足は過去 custody UNKNOWN として apply HOLD。将来 official fresh GET/current identity/full-bytes/custody/current CAS で現修正資格化する道を残し、過去を偽補完しない。",
@@ -1121,40 +1196,50 @@ function preimageRefOf(
   doc: string,
   set: string,
   journalSealed: Map<string, SealedBefore>,
-  union: Set<string>
+  observed: boolean
 ): string {
-  if (set !== "applied59") return "before:savedfacts";
+  if (set !== "applied59") return observed ? "live:full-projection" : "historical:savedfacts";
   if (journalSealed.has(doc)) return "sealed-post:prep-journal";
-  if (union.has(doc)) return "sealed-via-live:L3match59of59";
+  if (observed) return "sealed-via-live:L3match59of59";
   return "sealed:unavailable-HOLD";
 }
 
-/** journal 用の before 側テーブル。 */
+/** journal 用の before 側テーブル (observed/historical で分岐)。 */
 function journalBefore(
   doc: string,
   set: string,
   journalSealed: Map<string, SealedBefore>,
   savedfacts: Map<string, BeforeRow[]>,
   prec: PrepRecord,
-  live: { docs: Map<string, LiveDoc>; rows: Map<string, LiveRow[]> }
+  live: { docs: Map<string, LiveDoc>; rows: Map<string, LiveRow[]> },
+  observed: boolean
 ): unknown {
   if (set === "applied59") {
     const sealed = journalSealed.get(doc);
     if (sealed) return { kind: "sealed-post", ...sealed };
-    const lv = live.docs.get(doc);
-    if (lv) {
+    if (observed) {
+      const lv = live.docs.get(doc) as LiveDoc;
       return {
         kind: "sealed-via-live",
         status: lv.status,
         honbun: lv.honbun,
-        rows: live.rows.get(doc) ?? [],
+        rows: live.rows.get(doc) as LiveRow[],
         basis: "L3match59of59",
       };
     }
     return { kind: "sealed-unavailable" };
   }
+  if (observed) {
+    const lv = live.docs.get(doc) as LiveDoc;
+    return {
+      kind: "live-full-projection",
+      status: lv.status,
+      honbun: lv.honbun,
+      rows: live.rows.get(doc) as LiveRow[],
+    };
+  }
   return {
-    kind: "before",
+    kind: "before-historical",
     status: prec.savedStatus,
     honbunFile: null,
     rows: savedfacts.get(doc) as BeforeRow[],
