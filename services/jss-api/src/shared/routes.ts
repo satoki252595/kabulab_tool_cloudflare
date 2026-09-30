@@ -322,7 +322,7 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
     );
   });
 
-  // 日足 OHLCV（全系列調整済み）。Yahoo 由来＝personal-only のため内部面のみ。
+  // 日足 OHLCV（提供元の OHLCV（分割調整済み）。adj_* は配当込 total-return）。出来高の現株数補正なし。Yahoo 由来のため内部面のみ。
   // 10年分 ≈ 2500 バーのため上限は 3000。from/to は YYYY-MM-DD のみ受け、
   // 書式違いは索引に載らない述語になるので 400 で拒否する。
   app.get("/v1/ohlcv/:code", async (c) => {

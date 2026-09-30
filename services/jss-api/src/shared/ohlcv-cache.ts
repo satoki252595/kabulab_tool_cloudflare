@@ -33,7 +33,8 @@ import {
 /** キャッシュの有効期間（秒）。原本の更新頻度（1日1回以下）に対する上限。 */
 export const OHLCV_CACHE_TTL_SECS = 6 * 3600;
 
-const CACHE_KEY_BASE = "https://ohlcv-cache.internal/v1/ohlcv/";
+// v2: adj 意味論の変更 (unknown null・出来高未補正) で旧 6h 意味と混ざらないよう世代更新。
+const CACHE_KEY_BASE = "https://ohlcv-cache.internal/v2/ohlcv/";
 
 export interface CachedOhlcvResult {
   code: string;

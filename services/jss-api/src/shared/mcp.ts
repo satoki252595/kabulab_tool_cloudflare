@@ -72,7 +72,7 @@ export const TOOLS = [
   {
     name: "jp_ohlcv_range",
     description:
-      "1銘柄の日足 OHLCV を返す。分割・配当調整済みの全系列（adj_*）付き。",
+      "1銘柄の日足 OHLCV を返す。提供元の OHLCV（分割調整済み）。adj_* は配当込 total-return 調整価格（係数不明は null、adj_volume は常に null）。出来高の現株数補正はしない。",
     inputSchema: {
       type: "object",
       properties: {
