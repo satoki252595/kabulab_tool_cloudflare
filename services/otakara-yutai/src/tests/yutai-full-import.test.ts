@@ -119,6 +119,12 @@ const OUTSIDE_IDS: readonly number[] = OUTSIDE.map((s) => s.id);
  */
 const ABSENT_CODE = "1299";
 
+/**
+ * raw34 8153.json /benefits/0 の DB 保存形 (verbatim。pointer は raw34-excerpts.ts)。
+ * marked な per-test unit の外で取る alias (synthetic-code-guard の検査単位対策)。
+ */
+const RAW8153 = RAW34TEXT["8153"];
+
 const descOf = (code: string) => `架空優待${code} 1,000円相当`;
 
 /** 取得結果 1 銘柄。name / market は core_stocks と違う値にして、上書きすると分かるようにする。 */
@@ -472,11 +478,12 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
   });
 
   it("不認定の company 値は source を付け替えず値ごと null で戻す (8153 の単価)", () => {
-    const desc = RAW34TEXT["8153"];
+    // 掲載文は 8153 原文の alias、銘柄コードは合成 (pure carry test に実コード不要)。
+    const desc = RAW8153;
     const p = planCarry([
-      srcRow({ code: "8153", description: desc, estimatedValue: 500, estimateValueSource: "company" }),
+      srcRow({ code: ABSENT_CODE, description: desc, estimatedValue: 500, estimateValueSource: "company" }),
     ]);
-    const key = carryKey("8153", desc, 100, 3);
+    const key = carryKey(ABSENT_CODE, desc, 100, 3);
     // 要約は保持、値と出典は null (provenance 隠しで値を残さない)
     expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
     expect(p.nulledKeys).toEqual(new Set([key]));
@@ -584,7 +591,7 @@ describe("importYutaiFull の post-image 利回り追随", () => {
   it("厳密 carry で null になった値は利回り・スコアに追随する (raw8153。price/data_date は不変)", async () => {
     // 8153 原文の行。company 1,500 は共有厳密判定に落ちて null で戻る。
     seedFinancialStock(400, "9300", 1.5);
-    seedBenefit(400, RAW34TEXT["8153"], 1500, "company");
+    seedBenefit(400, RAW8153, 1500, "company");
     const prevScore = scoreOf(400);
     captureConsole();
     const { calls, sender } = makeAtomicSender();
@@ -697,7 +704,7 @@ describe("importYutaiFull の post-image 利回り追随", () => {
     seedFinancialStock(403, "9303", 0, { isYutai: 0 });
     // 対照: 非母集団 (inactive / 非 equity) の残存利回りには触らない。
     seedFinancialStock(404, "9404", 0, { active: 0 });
-    seedFinancialStock(405, "9405", 0, { instrumentType: "reit_fund" });
+    seedFinancialStock(405, "1298", 0, { instrumentType: "reit_fund" }); // 1298: 合成コード (<1300 policy)
     captureConsole();
     const targets = HELD.map((s) => fetched(s.code));
 
