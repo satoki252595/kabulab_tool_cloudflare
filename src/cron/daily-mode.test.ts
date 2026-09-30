@@ -168,6 +168,59 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
+/** 1 target (1301) を返す routing proxy。count/MAX は空 DB 相当。 */
+function recordingDbWithTargets() {
+  const calls: string[] = [];
+  const params: unknown[][] = [];
+  let targetsServed = false;
+  const db = drizzle(
+    async (sql, p) => {
+      calls.push(sql);
+      params.push([...p]);
+      if (
+        !targetsServed &&
+        sql.includes("core_stocks") &&
+        sql.includes("stock_indicators")
+      ) {
+        targetsServed = true;
+        return { rows: [[1, "1301", "食料品", null]] };
+      }
+      if (
+        sql.includes("core_stocks") &&
+        sql.includes("instrument_type") &&
+        !sql.includes("stock_indicators")
+      ) {
+        return { rows: [[1]] };
+      }
+      if (/count\(\*\)/i.test(sql)) return { rows: [[0]] };
+      if (/max\(/i.test(sql)) return { rows: [[null]] };
+      return { rows: [] };
+    },
+    {
+      schema: { ...coreSchema, ...rsiSchema, ...swingSchema, ...projectionSchema },
+    }
+  );
+  return { calls, params, db: db as Parameters<typeof runMarketContextSync>[0] };
+}
+
+function stockRaw(ohlcv: Array<{
+  date: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+  adj: number | null;
+}>) {
+  return {
+    price: null, per: null, pbr: null, dividendYield: null, eps: null,
+    bps: null, roe: null, roa: null, marketCap: null, operatingMarginTtm: null,
+    dataDate: "2026-09-30",
+    ohlcv,
+    annualFinancials: [],
+  };
+}
+
 describe("株式とマクロの日次分離", () => {
   it.each(["2026-09-25", undefined])("実日足が対象日でなければD1を書かない (%s)", async (date) => {
     // dataDateが今日でも、実timestampの日足が無ければ祝日/障害を成功にしない。
@@ -396,11 +449,72 @@ describe("株式とマクロの日次分離", () => {
   });
 
   it("保管失敗は throw し D1 マクロを書かない (daily caller)", async () => {
-    vi.setSystemTime(new Date("2026-09-30T01:55:26Z"));
+    vi.setSystemTime(new Date("2026-09-30T17:13:00Z"));
     mockMacro(ALIGNED);
     vi.mocked(recordPrimaryData).mockRejectedValue(new Error("notion down"));
     const { db, calls } = recordingDb();
     await expect(runDailySync(db, {})).rejects.toThrow("notion down");
     expect(calls.filter((sql) => sql.includes("swing_market_context"))).toEqual([]);
+  });
+});
+
+describe("株式 guard の default パス共有 (stocksOnly 依存の除去)", () => {
+  // no-arg daily.ts / all-daily の default パスも stocksOnly と同じ guard。
+  // stocksOnly はマクロ有無だけを決める。
+  it.each([
+    "2026-09-30T05:00:00Z",
+    "2026-09-30T22:00:00Z",
+  ])("default パスも時間窓外は全書込を止める (%s)", async (at) => {
+    vi.setSystemTime(new Date(at));
+    const { db, calls } = recordingDb();
+    await expect(runDailySync(db, {})).rejects.toThrow("株式同期は東証");
+    expect(calls).toEqual([]);
+    expect(fetchChart).not.toHaveBeenCalled();
+  });
+
+  it.each(["2026-09-25", undefined])(
+    "default パスも対象日実日足がなければD1を書かない (%s)",
+    async (date) => {
+      vi.setSystemTime(new Date("2026-09-30T17:13:00Z"));
+      vi.mocked(fetchChart).mockResolvedValue(chart(date));
+      const { db, calls } = recordingDb();
+      await expect(runDailySync(db, {})).rejects.toThrow("日足を確認できません");
+      expect(calls).toEqual([]);
+    }
+  );
+
+  it("default パスも対象日の fresh null bar ではD1を書かない", async () => {
+    vi.setSystemTime(new Date("2026-09-30T17:13:00Z"));
+    vi.mocked(fetchChart).mockResolvedValue({
+      symbol: "^N225", price: 100, previousClose: 99, dataDate: "2026-09-30",
+      ohlcv: [{ date: "2026-09-30", open: null, high: null, low: null,
+        close: null, volume: null, adj: null }],
+    });
+    const { db, calls } = recordingDb();
+    await expect(runDailySync(db, {})).rejects.toThrow("日足を確認できません");
+    expect(calls).toEqual([]);
+  });
+
+  it.each([
+    ["stale", [{ date: "2026-09-29", open: 99, high: 100, low: 99, close: 100, volume: 10, adj: 100 }]],
+    ["forming (fresh null bar)", [{ date: "2026-09-30", open: null, high: null, low: null, close: null, volume: null, adj: null }]],
+    ["latest null", []],
+  ])("default パスも銘柄 latest %s は銘柄書込 0 (マクロのみ)", async (_name, ohlcv) => {
+    // Date だけ fake (対象日・窓の決定性)。sleep は実 timer で通す。
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T17:13:00Z"));
+    mockMacro(ALIGNED);
+    vi.mocked(fetchStockRawData).mockResolvedValue(stockRaw(ohlcv));
+    const { db, calls } = recordingDbWithTargets();
+    const result = await runDailySync(db, {});
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].code).toBe("1301");
+    expect(result.failures[0].error).toMatch(/実日足が未取得/);
+    // 回収なし (非 transient)。銘柄 INSERT 0、マクロ 1 件のみ。
+    expect(fetchStockRawData).toHaveBeenCalledTimes(1);
+    const inserts = calls.filter((sql) => sql.startsWith("insert"));
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]).toContain('insert into "swing_market_context"');
   });
 });

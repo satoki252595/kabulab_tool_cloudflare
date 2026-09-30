@@ -1101,10 +1101,12 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   // 日付キーと週1ゲートは run 開始時刻に固定する (F-05。Phase 実行時刻で
   // 評価し直すと日跨ぎで prune/年次が飢餓し、表の日付がずれる)。
   const { runDate: targetDate, runMonday } = runDateKeys(startedAt);
-  if (stocksOnly) {
+  // 株式の時間窓・N225 対象日/fresh-close guard は全 stock パス共通
+  // (stocksOnly でも default でも同じ。stocksOnly はマクロ有無だけを決める)。
+  {
     const utcMinutes = new Date(startedAt).getUTCHours() * 60 + new Date(startedAt).getUTCMinutes();
     if (utcMinutes < 390 || utcMinutes >= 1260) {
-      throw new Error("株式専用同期は東証15:30 JST終了後から翌06:00 JST基準までに実行してください");
+      throw new Error("株式同期は東証15:30 JST終了後から翌06:00 JST基準までに実行してください");
     }
     // 日本祝日カレンダーを推測しない。対象日の実日足 (日付 + 実終値) が
     // なければ全書込を止める。日付だけの gate では対象日の fresh null bar が
@@ -1187,7 +1189,7 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
       try {
         await stockStartGate.wait();
         const snap = await buildSnapshot(target.id, target.code, target.sector,
-          stocksOnly ? targetDate : undefined,
+          targetDate,
           jssAnnualByCode.get(target.code) ?? []);
         pending.push({
           target,
@@ -1262,7 +1264,7 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
         const target = recoveryTarget.target;
         await stockStartGate.wait();
         const snap = await buildSnapshot(target.id, target.code, target.sector,
-          stocksOnly ? targetDate : undefined,
+          targetDate,
           jssAnnualByCode.get(target.code) ?? []);
         const gapDates = collectOhlcvGapCandidates(
           snap.ohlcv6mo,
@@ -1388,7 +1390,7 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   if (marketContextOk === undefined) throw new Error("マクロ同期結果を確認できません");
-  if (stocksOnly && Date.now() > Date.parse(`${targetDate}T21:00:00Z`)) {
+  if (Date.now() > Date.parse(`${targetDate}T21:00:00Z`)) {
     throw new Error(
       `株式同期が ${targetDate} の翌06:00 JST基準を超えました。` +
       "基準後の値は過去レポートに使えません。日次レポートの欠損と同期遅延を確認してください。"
@@ -1603,7 +1605,7 @@ async function buildSnapshot(
   stockId: number,
   code: string,
   sector: string | null,
-  expectedDate?: string,
+  expectedDate: string,
   jssAnnualRows: JssAnnualRow[] = [],
 ): Promise<StockSnapshot> {
   // 1 回の Chart(5y) + QuoteSummary で全指標を賄う
@@ -1611,15 +1613,14 @@ async function buildSnapshot(
 
   // -- 6mo スライス (swing 用指標の入力。fresh gate の対象もここ) --
   const ohlcv6mo = raw.ohlcv.slice(-130);
-  if (expectedDate !== undefined) {
-    // 日付一致だけでなく対象日の実終値 (adj ?? close) も要求する。
-    // 対象日の fresh null bar を日付だけで合格にすると、古い終値で計算した
-    // 指標を対象日付で保存してしまう (F-01)。正当な欠損は未取得扱いにし、
-    // 値の補完はしない (ルール2)。RSI を含む全 technical 計算の前に落とす。
-    const fresh = checkFreshClose(ohlcv6mo.at(-1), expectedDate);
-    if (!fresh.ok) {
-      throw new Error(`${code}: 対象 ${expectedDate} の実日足が未取得です。古い日の指標を書き直しません。`);
-    }
+  // 日付一致だけでなく対象日の実終値 (adj ?? close) も要求する。
+  // 対象日の fresh null bar を日付だけで合格にすると、古い終値で計算した
+  // 指標を対象日付で保存してしまう (F-01)。正当な欠損は未取得扱いにし、
+  // 値の補完はしない (ルール2)。RSI を含む全 technical 計算の前に落とす。
+  // expectedDate は必須 (全 stock パス共通)。dataDate への黙殺代替なし。
+  const fresh = checkFreshClose(ohlcv6mo.at(-1), expectedDate);
+  if (!fresh.ok) {
+    throw new Error(`${code}: 対象 ${expectedDate} の実日足が未取得です。古い日の指標を書き直しません。`);
   }
 
   // -- RSI 時系列 (5y 全量) → percentile —— adjclose ベースで分割歪みを除去 --
@@ -1637,10 +1638,7 @@ async function buildSnapshot(
   // 優良株選定の年度売上は正本の年次系列 (001 銘柄詳細と共用の gate で整形)。
   // Yahoo 年次 (raw.annualFinancials) は旧表の writer にだけ残す。
   // TTM 営業利益率は Yahoo のまま (単年 jss 値に置き換えると定義が変わる)。
-  const annualSeries = pickAnnualSeries(
-    jssAnnualRows,
-    expectedDate ?? raw.dataDate
-  );
+  const annualSeries = pickAnnualSeries(jssAnnualRows, expectedDate);
   const blueChip = evaluateBlueChip(annualSeries, raw.operatingMarginTtm);
 
   // -- 6mo スライス → swing 用指標 —— adjclose ベースで分割歪みを除去 --
@@ -1702,7 +1700,9 @@ async function buildSnapshot(
     latestHigh: latestRow?.high ?? null,
     latestLow: latestRow?.low ?? null,
     latestVolume: latestRow?.volume ?? null,
-    latestDate: latestRow?.date ?? raw.dataDate,
+    // fresh gate が latest 行・日付 = expectedDate を証明済み。
+    // dataDate への代替は置かない (dataDate は quote metadata として別保持)。
+    latestDate: expectedDate,
     previousClose:
       ohlcv6mo.length >= 2
         ? (ohlcv6mo[ohlcv6mo.length - 2].close ?? null)
