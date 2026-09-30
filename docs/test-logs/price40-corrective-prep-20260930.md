@@ -62,8 +62,14 @@ archive・corrective attempt ともに本記録では実行しない
   `--proof-path` で再使用 + SHA pointer (bytes/wrapper/payload/key)。
 - private one-off thin runner (repo 外。tracked 新規なし):
   `/tmp/price40-failed-archive-20260930/run.mts` (0600)。
-  FULL SHA `8a3b703a7a0a08333d4858e9250d000918cd5c295700e87709e5f4d9ce3c0ffc`。
+  FULL SHA `32de718b06b10874014d16c802b8406f337cf9fb0c5471783af275da8622e444`
+  (旧 `8a3b703a…c0ffc` は記録保持)。
   新規 suite/report framework なし。
+- narrow 確定: wrapper.runId を exact 照合して直接使用
+  (fallback なし)。fetchedAt は原本 generatedAt (valid string
+  照合済み)。attemptLog/reportOut は同一 dirname を初回 network
+  前に assert + 両 dir を record 前に用意 (known-receipt 落下防止)。
+  stage counter は fresh。原本 counter 不変。
 - 既存 helper のみ:
   `recordPrimaryData` (literal key/body/source・force:false。
   fetchedAt は原本 generatedAt。metadata は原本 counts +
