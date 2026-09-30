@@ -1,8 +1,9 @@
 # 海外 fresh full READ / custody / CAS proposal (2026-09-30)
 
-PROPOSAL (未実行・LOCAL PREP のみ)。次最小 actual への具体案を Root review へ。
-code/test/framework の新規なし。本記録は schema・counts・SHA・limits のみ
-(public 可)。exact 列表・chunk 計画・pin 表は private 0600 packet のみ。
+PROPOSAL として開始し、capture runner 実装 + preflight を経て
+ONE authorized 74-SELECT run を実行済み (下記 Actual run)。
+本記録は schema・counts・SHA・limits のみ (public 可)。
+exact 列表・chunk 計画・pin 表・raw は private 0600 のみ。
 
 - branch: `fix/overseas-freshread-prep-20260930` from main `cd25a81` (PR216 merge)
 - packet: `/tmp/overseas-freshread-prep-20260930/freshread-packet.json`
@@ -210,10 +211,28 @@ code/test/framework の新規なし。本記録は schema・counts・SHA・limit
   `52b53b40b4c2` / repair-union lib `bcf704fec47f` /
   select-proof `91eb924f41fc`
 
+## Actual run (ONE authorized 74-SELECT・executed)
+
+- workHEAD `f352c7cc3271` (commit は不変に保持)。
+  `08:40:24Z`–`08:40:31Z`。grant-first・preflight exit 0 経由。
+- 37 chunks、Q1F 37 + Q2F 37 = 74 sends / 74 receipts / 0 failed。
+  148 attempt-log lines (send 74 + receipt 74)。markers 74 + bodies 74。
+- counts: q1Rows 3675 / q2Rows 21245 / q1sum 21245 / missingDocs 0
+  (全通観測。旧 1894 未観測・73 pin不足を含む。存在観測であり
+  custody 意味は不変)。
+- artifacts (0600): union `6b0bd05a…` / manifest `e0870e02…` /
+  live `96f5af98…` / rawBodies combined `c959b2b2…` (74 files
+  独立 rehash OK)。
+- 旧 1781/1894 分割は historical のみ。現行 PREP 基準は
+  frozen 3675 + current parser + NEW full16/Q2 all13。
+- repair 対象数の主張なし (旧 1687/1695 から live target count を
+  導出しない)。L2/CAS は対象外 (別 proposal)。
+
 ## zeros (now)
 
-sourceGET 0 / Notion READ+archive 0 / D1 READ 0 / D1 WRITE 0 /
-R2 0 / dispatch 0。新 grant は Root 別具体承認。
+D1 READ 74 (authorized ONE run のみ) / sourceGET 0 /
+Notion READ+archive 0 / D1 WRITE 0 / R2 0 / dispatch 0。
+追加 query/run/source/archive なし。新 grant は Root 別具体承認。
 
 ## limits
 
