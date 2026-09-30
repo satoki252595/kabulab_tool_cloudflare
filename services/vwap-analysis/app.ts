@@ -3,6 +3,16 @@
 // フロント(SPA)は public/vwap-analysis/ を ASSETS が配信。ここは /api/* だけ。
 import { Hono } from "hono";
 import { fetchYahooChartRaw } from "../../src/shared/yahoo/client.js";
+import type { DailyFetchProof } from "../../src/shared/yahoo/client.js";
+import {
+  intraWindowOf,
+  isCalendarDateString,
+  isDailyBarShape,
+  isDailyFetchProof,
+  isIntraBarShape,
+  zeroSplitCovered,
+} from "../../src/shared/vwap/proof.js";
+import type { IntraWindow } from "../../src/shared/vwap/proof.js";
 import {
   MARGIN_DAILY_FORMAT,
   selectDailyMarginRows,
@@ -19,8 +29,6 @@ const SYMBOL_RE = /^[0-9A-Za-z]{1,6}\.[A-Z]{1,2}$/;
 const CODE_RE = /^[0-9A-Za-z]{4}$/;
 const json = (o: unknown, status = 200) =>
   new Response(JSON.stringify(o), { status, headers: { "Content-Type": "application/json" } });
-const passthrough = (body: ReadableStream, maxAge: number) =>
-  new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${maxAge}` } });
 
 // 当日5分足: Yahoo をその場中継（ライブ・15-20分遅延）
 app.get("/api/chart", async (c) => {
@@ -33,22 +41,169 @@ app.get("/api/chart", async (c) => {
   });
 });
 
-// 蓄積5分足(R2・直近約1年・1ファイル)を素通し
+// intra 価格 basis 契約: producer proof を検証して配信・適格化する。
+// 適格 (zero-split verified) は daily proof の実証 span が保存 intra
+// 全体を覆い、span 内 splits が窓と交差しない場合のみ。legacy
+// (proof なし)・span 外・窓内 split は HOLD。wire basis は UNKNOWN
+// のまま断定しない。不正形状の既知 object は reject (throw) し、
+// 欠落 object の legitempty とは区別する。
+const INTRA_SOURCE = "yahoo-5m"; // fetchBars5m (Yahoo chart interval=5m) 由来。code fact。
+const INTRA_WIRE = "unknown"; // wire 上の調整 basis は未確定。断定しない。
+
+type IntraBasis = {
+  source: string;
+  wire: string;
+  qualified: boolean;
+  reason: string | null;
+  window: { firstTs: number; lastTs: number; bars: number } | null; // bars 実測
+  sessions: string[]; // bars 実測の JST セッション
+};
+
+const holdBasis = (reason: string, window: IntraBasis["window"], sessions: string[]): IntraBasis => ({
+  source: INTRA_SOURCE, wire: INTRA_WIRE, qualified: false, reason, window, sessions,
+});
+
+const passBasis = (window: IntraWindow): IntraBasis => ({
+  source: INTRA_SOURCE,
+  wire: INTRA_WIRE,
+  qualified: true,
+  reason: "zero-split-verified",
+  window: { firstTs: window.firstTs, lastTs: window.lastTs, bars: window.bars },
+  sessions: window.sessions,
+});
+
+type ValidDaily = {
+  updated: unknown;
+  bars: unknown[];
+  splits: Array<{ date: string; ratio: number }>;
+  proof: DailyFetchProof | null;
+};
+
+/** 日足 object の strict 読取。欠落は null、形状不正は throw (reject)。 */
+async function readDailyObject(
+  bucket: Bindings["BUCKET"],
+  code: string
+): Promise<ValidDaily | null> {
+  const o = await bucket.get(`daily/${code}.json`);
+  if (!o) return null;
+  const body = JSON.parse(await o.text()) as {
+    code?: unknown; updated?: unknown; bars?: unknown; splits?: unknown; proof?: unknown;
+  };
+  if (body.code !== code) throw new Error(`daily object の code 不一致: ${code}`);
+  if (!Array.isArray(body.bars)) throw new Error(`daily object の bars 非配列: ${code}`);
+  // 消費者は昇順・末尾最新を信頼する。重複は非昇順に含めて一律 reject。
+  let prev = "";
+  for (const b of body.bars) {
+    if (!isDailyBarShape(b)) throw new Error(`daily object の bar 不正: ${code}`);
+    const d = (b as { date: string }).date;
+    if (d <= prev) throw new Error(`daily object の date 非昇順: ${code}`);
+    prev = d;
+  }
+  if (!Array.isArray(body.splits)) throw new Error(`daily object の splits 非配列: ${code}`);
+  const splits: Array<{ date: string; ratio: number }> = [];
+  for (const s of body.splits as Array<{ date?: unknown; ratio?: unknown }>) {
+    if (s === null || typeof s !== "object" || !isCalendarDateString(s.date) ||
+        typeof s.ratio !== "number" || !Number.isFinite(s.ratio) || s.ratio <= 0) {
+      throw new Error(`daily object の splits 要素不正: ${code}`);
+    }
+    splits.push({ date: s.date, ratio: s.ratio });
+  }
+  if (body.proof !== undefined && body.proof !== null && !isDailyFetchProof(body.proof)) {
+    throw new Error(`daily object の proof 不正: ${code}`);
+  }
+  const proof = body.proof === undefined || body.proof === null
+    ? null
+    : (body.proof as DailyFetchProof);
+  // proof は要求 code の symbol に bind されていること (cross-code 混入防止)。
+  // intra/daily 両 path の単一 guard (呼出側の重複検査は持たない)。
+  if (proof !== null && proof.symbol !== `${code}.T`) {
+    throw new Error(`daily proof の symbol 不一致: ${code}`);
+  }
+  return { updated: body.updated ?? null, bars: body.bars, splits, proof };
+}
+
+type ValidIntra = { updated: unknown; bars: unknown[]; window: IntraWindow | null };
+
+/** 5分足 object の strict 読取。欠落は null、形状不正は throw (reject)。 */
+async function readIntraObject(
+  bucket: Bindings["BUCKET"],
+  code: string
+): Promise<ValidIntra | null> {
+  const o = await bucket.get(`intra/${code}.json`);
+  if (!o) return null;
+  const body = JSON.parse(await o.text()) as { code?: unknown; bars?: unknown; updated?: unknown };
+  if (body.code !== code) throw new Error(`intra object の code 不一致: ${code}`);
+  if (!Array.isArray(body.bars)) throw new Error(`intra object の bars 非配列: ${code}`);
+  const bars = body.bars;
+  if (bars.length === 0) return { updated: body.updated ?? null, bars, window: null };
+  const tsList: number[] = [];
+  const seen = new Set<number>();
+  for (const b of bars) {
+    if (!isIntraBarShape(b)) throw new Error(`intra object の bar 不正: ${code}`);
+    const ts = (b as { ts: number }).ts;
+    if (seen.has(ts)) throw new Error(`intra object の ts 重複: ${code}`);
+    seen.add(ts);
+    tsList.push(ts);
+  }
+  return { updated: body.updated ?? null, bars, window: intraWindowOf(tsList) };
+}
+
+// 蓄積5分足(R2) + proof 検証 basis を配信
 app.get("/api/intra", async (c) => {
   const code = (c.req.query("code") || "").trim();
   if (!CODE_RE.test(code)) return json({ error: "bad code" }, 400);
-  const o = await c.env.BUCKET.get(`intra/${code}.json`);
-  if (!o) return json({ code, bars: [], note: "未蓄積" });
-  return passthrough(o.body, 3600);
+  const cached = (o: unknown) =>
+    new Response(JSON.stringify(o), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=3600" } });
+  const intra = await readIntraObject(c.env.BUCKET, code);
+  if (!intra) return cached({ code, bars: [], note: "未蓄積", basis: holdBasis("intra-missing", null, []) });
+  if (!intra.window) {
+    return cached({ code, updated: intra.updated, bars: [], basis: holdBasis("intra-empty", null, []) });
+  }
+  const daily = await readDailyObject(c.env.BUCKET, code);
+  if (!daily) {
+    return cached({
+      code, updated: intra.updated, bars: intra.bars,
+      basis: holdBasis("daily-unavailable", intra.window, intra.window.sessions),
+    });
+  }
+  if (!daily.proof) {
+    return cached({
+      code, updated: intra.updated, bars: intra.bars,
+      basis: holdBasis("proof-absent", intra.window, intra.window.sessions),
+    });
+  }
+  // 適格は full-10y proof のみ。要求 range の真正は producer の meta echo
+  // 照合済み。ここでは 10y 以外の proof を HOLD する (書換えはしない)。
+  if (daily.proof.requestedRange !== "10y") {
+    return cached({
+      code, updated: intra.updated, bars: intra.bars,
+      basis: holdBasis("range-not-10y", intra.window, intra.window.sessions),
+    });
+  }
+  const cov = zeroSplitCovered(
+    daily.proof,
+    intra.window,
+    daily.bars.map((b) => (b as { date: string }).date),
+    daily.splits
+  );
+  if (!cov.ok) {
+    return cached({
+      code, updated: intra.updated, bars: intra.bars,
+      basis: holdBasis(cov.reason, intra.window, intra.window.sessions),
+    });
+  }
+  return cached({ code, updated: intra.updated, bars: intra.bars, basis: passBasis(intra.window) });
 });
 
-// 日足10年(R2)を素通し
+// 日足10年(R2) + producer proof を検証して配信
 app.get("/api/daily", async (c) => {
   const code = (c.req.query("code") || "").trim();
   if (!CODE_RE.test(code)) return json({ error: "bad code" }, 400);
-  const o = await c.env.BUCKET.get(`daily/${code}.json`);
-  if (!o) return json({ code, bars: [], note: "未取得（バックフィル待ち）" });
-  return passthrough(o.body, 3600);
+  const cached = (o: unknown) =>
+    new Response(JSON.stringify(o), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=3600" } });
+  const daily = await readDailyObject(c.env.BUCKET, code);
+  if (!daily) return cached({ code, bars: [], splits: [], note: "未取得（バックフィル待ち）", proof: null });
+  return cached({ code, updated: daily.updated, bars: daily.bars, splits: daily.splits, proof: daily.proof });
 });
 
 // 日次信用残高(R2)を集約。n=直近何営業日ぶん返すか(既定60・上限260=約1年)。

@@ -92,3 +92,13 @@ REST（`/v1/supply/latest`・`/v1/supply/:code`）と MCP（`jp_supply_latest`�
   壊れ payload 時も 500 に変化せず 400 / `isError` を返す。
 - MCP の `data_type` / `series` の enum は3種（`jpx_margin` 含む）。
   説明文で日証金の貸借と JPX の信用を区別する。
+
+## Release 2026-09-30
+
+Public/private redeploy (nullable adj factor + standalone): health/licenses 200,
+private nokey 401, 100% active.
+
+- public `9b6d5c8c-70f6-4b8f-9733-dca97fc726b8` exit 0 — `/health`・licenses 200。
+- private `b48fdc77-45d6-4d15-b94c-cc95e80b1e3d` exit 0 — `/health` 200、
+  無キー 401 `unauthorized` (unauth 契約どおり)。
+- 各 ONE deploy (`--keep-vars`, OAuth 正規 account)。再実施なし。
