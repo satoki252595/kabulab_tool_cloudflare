@@ -175,8 +175,8 @@ exact 列表・chunk 計画・pin 表・raw は private 0600 のみ。
   37 chunks・params/SQL/combined/7 modules 全一致 +
   d1Target `a7bcf8e2…` 照合済み。sends 0・writes 0 (out dir 未作成)。
   証跡 `preflight-20260930.json` (private 0600・counts/SHA のみ)。
-- 状態: GPT-sol CODE CLEAR 待ち。CLEAR + 最終 hash pins 報告まで
-  live 実行しない。CLEAR 後は ONE 74-SELECT run のみ (追加許可なし)。
+- 状態: GPT-sol CODE CLEAR 済み・ONE 74-SELECT run 実行済み
+  (08:40Z・上記 Actual run)。追加 query/run なし。
 
 ## 再使用 helper (新規なし)
 
@@ -236,9 +236,10 @@ Notion READ+archive 0 / D1 WRITE 0 / R2 0 / dispatch 0。
 
 ## limits
 
-- 本 proposal は未実行。具体値は将来 run の report が持つ。
-- Fresh READ 自体も Root の別 grant が要る (D1 74 HTTP・SELECT-only)。
-- 旧 snapshot (1781) は旧観測。full preimage は fresh Q1F+Q2F のみ。
+- 修復/CAS/L2/primary-custody は proposal のみ (未実行・別 grant 要)。
+  Fresh READ は実行済み (08:40Z・workHEAD f352・上記 Actual run pins)。
+- 旧 snapshot 1781 計測値は historical (旧観測)。
+  full preimage は fresh Q1F+Q2F のみ。
 - 未選択の protected 外 (orderFacts 行等) は scope 外:
   変更不可を構造 (allowlist + 表限定) で保証し、CAS は doc 14列差 0 で
   検証する。Root 確認事項。
