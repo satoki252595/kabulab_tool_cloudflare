@@ -74,9 +74,10 @@ export interface YuhoEdinetResult {
 }
 
 /**
- * catchup 応答の HTTP ステータス契約。実失敗 (一覧/取込の throw) が
- * 1 件でもあれば 500 + result 本文で CLI exit 1 へ接続する。母集団外・
- * cap・既取込スキップは正当な結果で 200 のまま (失敗に混ぜない)。
+ * 完了結果の成功判定。一覧取得失敗があれば Worker は 500 + result、
+ * Node CLI は exit 1。取込例外は結果を返さず伝播し、Node CLI は exit 2。
+ * 母集団外・cap・既取込は正当結果で 200 (Node exit 0)。
+ * ingestErrors は既存応答 schema の互換項目で、例外停止後の結果は作らない。
  */
 export function catchupHttpStatus(
   r: Pick<YuhoEdinetResult, "listErrors" | "ingestErrors">
