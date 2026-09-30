@@ -7,8 +7,10 @@
  * 回収する (例: --from=2026-06-01 --to=2026-08-31)。
  *
  * 1 通あたり: CSV(5) 取得 → キーワード事前判定 → 必要なら XBRL(1) 取得 →
- * 受注・海外・定性 24 項目を構造化 → D1 へ冪等 upsert →
- * 物理 ZIP を Notion へ冪等記録 (ルール6)。パーサは本番と同一物を共有する。
+ * 受注・海外・定性 24 項目を構造化 → 物理 ZIP を Notion へ冪等記録
+ * (ルール6。DB batch より先。raw-before-DB) → D1 へ冪等 upsert →
+ * 定性テキスト本文のみ DBid 解決後に保管。パーサは本番と同一物を共有する。
+ * 1 通処理の正本は lib/missing-backfill.ts processMissingDoc。
  * 書込は 1 文書ぶん (文書 upsert + 3 表の置換) を createD1HttpBatchSender の
  * 単一 batch で原子適用する (ingest.ts と同一組成。docId サブクエリ参照)。
  * 逐次だと upsert 後に落ちた場合「メタだけ埋まって facts 0 件」の部分行が
@@ -22,16 +24,11 @@
  * 実行: pnpm yuho:backfill:missing -- --from=2026-06-01 --to=2026-08-31 [--limit=N] [--force] [--dry-run]
  */
 import "dotenv/config";
-import { eq } from "drizzle-orm";
 import {
   createD1HttpBatchSender,
   createD1HttpDb,
-  toD1BatchStatements,
 } from "../../../src/shared/db/d1-http-client.js";
-import {
-  buildMissingDocStatements,
-  dedupeOrders,
-} from "./lib/missing-backfill.js";
+import { processMissingDoc } from "./lib/missing-backfill.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
 import {
   archiveTallyFailed,
@@ -41,35 +38,12 @@ import {
 } from "../src/services/edinet/archive.js";
 import {
   downloadDocument,
-  EdinetNotFoundError,
   listDocuments,
 } from "../src/services/edinet/client.js";
-import {
-  resolveReportPeriodEnd,
-  secCodeToTicker,
-  type EdinetDoc,
-} from "../src/services/edinet/types.js";
+import type { EdinetDoc } from "../src/services/edinet/types.js";
 import { backupDocTextToNotion } from "../src/services/text-backup.js";
 import type { Database } from "../src/db/client.js";
-import { parseEdinetCsvZip } from "../src/services/edinet/csv.js";
 import { applyCompletionFilter, selectMissingDocs } from "../src/services/edinet/missing.js";
-import {
-  parseOrderData,
-  RX_ORDER_KEYWORD,
-  type ParseStatus,
-} from "../src/services/edinet/order-parser.js";
-import {
-  parseOverseasData,
-  RX_OVERSEAS_KEYWORD,
-  validateOverseasSaveSet,
-  type OverseasFact,
-  type OverseasParseStatus,
-} from "../src/services/overseas-parser.js";
-import {
-  extractTextSections,
-  type TextParseStatus,
-} from "../src/services/edinet/text-sections.js";
-import type { OrderFact } from "../src/services/edinet/order-parser.js";
 import * as yuhoSchema from "../src/db/schema.js";
 
 const arg = (n: string) =>
@@ -83,14 +57,12 @@ if (!fromArg || !toArg || !/^\d{4}-\d{2}-\d{2}$/.test(fromArg) || !/^\d{4}-\d{2}
   console.error("usage: --from=YYYY-MM-DD --to=YYYY-MM-DD [--limit=N] [--force] [--dry-run]");
   process.exit(1);
 }
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-function parseSubmitDateTime(s: string): Date {
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
-  if (!m) throw new Error(`submitDateTime 形式が不正: ${s}`);
-  const [, y, mo, d, hh, mm] = m;
-  return new Date(Date.UTC(+y, +mo - 1, +d, hh ? +hh : 0, mm ? +mm : 0));
+// raw-before-DB 契約: write mode で --no-archive は未対応 (明示 STOP)。
+if (process.argv.includes("--no-archive") && !dryRun) {
+  console.error("[missing] --no-archive は write mode 未対応のため STOP します (raw-before-DB 契約)");
+  process.exit(1);
 }
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function eachDay(from: string, to: string): string[] {
   const out: string[] = [];
@@ -182,204 +154,21 @@ for (const date of eachDay(fromArg, toArg)) {
   for (const { doc, stockId } of missing) {
     if (target >= limit) break;
     target++;
-    const tag = `docID=${doc.docID} ${doc.filerName}`;
-    try {
-      // 有報として最低限必要なメタが欠ける異常エントリは捏造せず明示スキップ
-      // (ingest.ts の skipped_invalid_meta と同じ。ルール2)。
-      if (!doc.filerName || !doc.docTypeCode || !doc.edinetCode || !doc.submitDateTime) {
-        console.warn(`[missing] skip(meta-missing) docID=${doc.docID}`);
-        tally.skipped_invalid_meta = (tally.skipped_invalid_meta ?? 0) + 1;
-        continue;
-      }
-      const periodEnd = resolveReportPeriodEnd(doc);
-      if (!periodEnd) {
-        tally.skipped_no_period = (tally.skipped_no_period ?? 0) + 1;
-        continue;
-      }
-      const csvZip = await downloadDocument(doc.docID, 5);
-      let hasOrder = false;
-      let hasOverseas = false;
-      let csvError = false;
-      let rows: ReturnType<typeof parseEdinetCsvZip> | null = null;
-      try {
-        rows = parseEdinetCsvZip(csvZip);
-        hasOrder = rows.some((r) => RX_ORDER_KEYWORD.test(r.itemName) || RX_ORDER_KEYWORD.test(r.value));
-        hasOverseas = rows.some(
-          (r) => RX_OVERSEAS_KEYWORD.test(r.itemName) || RX_OVERSEAS_KEYWORD.test(r.value)
-        );
-      } catch {
-        csvError = true;
-      }
-      let xbrlZip: Buffer | null = null;
-      let xbrlUnavailable = false;
-      if (hasOrder || hasOverseas) {
-        try {
-          xbrlZip = await downloadDocument(doc.docID, 1);
-        } catch (e) {
-          if (e instanceof EdinetNotFoundError) xbrlUnavailable = true;
-          else throw e;
-        }
-      }
-
-      let parseStatus: ParseStatus | "parse_error" = "no_order_table";
-      let honbunFile: string | null = null;
-      let facts: OrderFact[] = [];
-      if (!csvError && hasOrder && xbrlZip) {
-        try {
-          const o = parseOrderData(xbrlZip, periodEnd);
-          parseStatus = o.status;
-          honbunFile = o.honbunFile;
-          facts = o.facts;
-        } catch (e) {
-          parseStatus = "parse_error";
-          console.warn(`[missing] order parse_error ${tag}: ${(e as Error).message}`);
-        }
-      } else if (csvError || (hasOrder && !xbrlZip)) {
-        parseStatus = "parse_error";
-      }
-
-      let overseasParseStatus: OverseasParseStatus | "parse_error" = "no_overseas_table";
-      let overseasHonbunFile: string | null = null;
-      let overseasFacts: OverseasFact[] = [];
-      let overseasProof: ReturnType<typeof parseOverseasData>["proof"];
-      if (!csvError && hasOverseas && xbrlZip) {
-        try {
-          const o = parseOverseasData(xbrlZip, periodEnd);
-          overseasParseStatus = o.status;
-          overseasHonbunFile = o.honbunFile;
-          overseasFacts = o.facts;
-          overseasProof = o.proof;
-        } catch (e) {
-          overseasParseStatus = "parse_error";
-          console.warn(`[missing] overseas parse_error ${tag}: ${(e as Error).message}`);
-        }
-      } else if (csvError || (hasOverseas && !xbrlZip)) {
-        overseasParseStatus = "parse_error";
-      }
-
-      let textParseStatus: TextParseStatus | "parse_error" = "no_text_sections";
-      let sections: ReturnType<typeof extractTextSections> = [];
-      if (csvError || !rows) {
-        textParseStatus = "parse_error";
-      } else {
-        try {
-          sections = extractTextSections(rows);
-          textParseStatus = sections.length > 0 ? "ok" : "no_text_sections";
-        } catch (e) {
-          textParseStatus = "parse_error";
-          console.warn(`[missing] text parse_error ${tag}: ${(e as Error).message}`);
-        }
-      }
-
-      const deduped = dedupeOrders(facts, doc.docID);
-      // 海外売上ファクトは保存前検証を通す。違反があれば parse_error + 空保存
-      // (先頭行 dedup で回復させない = aggregate-before-dedup の再発防止)。
-      try {
-        validateOverseasSaveSet(overseasFacts, overseasProof);
-      } catch (e) {
-        console.warn(
-          `[missing] overseas save-set invalid; downgrade to parse_error docID=${doc.docID}: ${(e as Error).message}`
-        );
-        overseasParseStatus = "parse_error";
-        overseasFacts = [];
-      }
-
-      // 文書 upsert + 3 表の置換を単一 batch で原子適用する (ingest.ts と
-      // 同一組成)。失敗は外の catch で tally.error に計上し非 0 終了する
-      // (握り潰さない)。statement fallback なし。
-      const submittedAt = parseSubmitDateTime(doc.submitDateTime);
-      const statements = buildMissingDocStatements(db as unknown as Database, {
-        stockId,
-        docId: doc.docID,
-        edinetCode: doc.edinetCode,
-        docTypeCode: doc.docTypeCode,
-        filerName: doc.filerName,
-        periodStart: doc.periodStart,
-        periodEnd,
-        submittedAt,
-        parseStatus,
-        honbunFile,
-        overseasParseStatus,
-        overseasHonbunFile,
-        textParseStatus,
-        deduped,
-        overseasFacts,
-        sections,
-      });
-      await d1HttpBatch(toD1BatchStatements(statements));
-      // 行 id は batch から取り出さない (ingest.ts と同一方針)。本文保管と
-      // ポインタ書戻しに要るため docId 冪等 SELECT で解決する (読取のみ)。
-      const idRow = await db
-        .select({ id: yuhoDocuments.id })
-        .from(yuhoDocuments)
-        .where(eq(yuhoDocuments.docId, doc.docID))
-        .limit(1);
-      const docRowId = idRow[0]!.id;
-
-      // type 別 key で各実体を記録する (共通契約)。各 key の既存は
-      // recordPrimaryData 側で冪等スキップし、Type5 済みは Type1 を抑止しない。
-      const fetchedAt = submittedAt.toISOString();
-      const metadata = {
-        docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
-        filerName: doc.filerName, docTypeCode: doc.docTypeCode,
-        docDescription: doc.docDescription, periodStart: doc.periodStart,
-        periodEnd, submitDateTime: doc.submitDateTime,
-        parseStatus, honbunFile, factCount: deduped.length,
-        overseasParseStatus, overseasHonbunFile, overseasFactCount: overseasFacts.length,
-        textParseStatus, textSectionCount: sections.length,
-        xbrlUnavailable,
-      };
-      await recordEdinetZip({
-        service: "yuho-quant", docID: doc.docID, type: 5, zip: csvZip,
-        source: `EDINET API v2 /documents/${doc.docID}?type=5`,
-        fetchedAt, metadata,
-      });
-      if (xbrlZip) {
-        await recordEdinetZip({
-          service: "yuho-quant", docID: doc.docID, type: 1, zip: xbrlZip,
-          source: `EDINET API v2 /documents/${doc.docID}?type=1`,
-          fetchedAt, metadata,
-        });
-      }
-      // 定性テキスト本文の Notion 保管 (D1 には索引 + 行 ID のみ)。
-      // 失敗は当該通の警告に留める (ポインタ NULL の通は P3 が回収)。
-      if (sections.length > 0) {
-        try {
-          const ticker = secCodeToTicker(doc.secCode);
-          if (ticker === null) {
-            console.warn(`[missing] notion text skip(コード不明) docID=${doc.docID}`);
-            tally.notion_text_no_code = (tally.notion_text_no_code ?? 0) + 1;
-          } else {
-            const r = await backupDocTextToNotion({
-              stockCode: ticker,
-              docId: doc.docID,
-              d1DocumentId: docRowId,
-              fiscalYearEnd: periodEnd,
-              textParseStatus,
-              sections,
-              force,
-            });
-            if (r.rowPageId) {
-              await db
-                .update(yuhoSchema.yuhoDocuments)
-                .set({ notionDocPageId: r.rowPageId })
-                .where(eq(yuhoSchema.yuhoDocuments.id, docRowId));
-            } else {
-              // 本文ありなのに行 ID 未取得は黙って成功にしない (P6 共有根因)。
-              console.warn(`[missing] notion text backup 失敗(行 ID 未取得) ${tag}: outcome=${r.outcome}`);
-              tally.notion_text_no_pointer = (tally.notion_text_no_pointer ?? 0) + 1;
-            }
-          }
-        } catch (e) {
-          console.warn(`[missing] notion text backup 失敗 ${tag}: ${(e as Error).message}`);
-          tally.notion_text_error = (tally.notion_text_error ?? 0) + 1;
-        }
-      }
-      tally.ingested = (tally.ingested ?? 0) + 1;
-    } catch (e) {
-      tally.error = (tally.error ?? 0) + 1;
-      console.warn(`[missing] 失敗 ${tag}: ${(e as Error).message}`);
-    }
+    // 1 通処理の正本は lib/missing-backfill.ts processMissingDoc (IO 境界は
+    // 実物を注入)。失敗は内部で tally 計上済みのためここでは数えない。
+    await processMissingDoc(
+      db as unknown as Database,
+      {
+        downloadDocument,
+        recordEdinetZip,
+        d1HttpBatch,
+        backupDocTextToNotion,
+        tally: (key) => {
+          tally[key] = (tally[key] ?? 0) + 1;
+        },
+      },
+      { doc, stockId, force }
+    );
     done++;
     if (done % 50 === 0) {
       console.info(`[missing] ${done}件処理 ` + Object.entries(tally).map(([k, v]) => `${k}=${v}`).join(" "));

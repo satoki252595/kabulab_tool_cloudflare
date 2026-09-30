@@ -2,10 +2,11 @@
  * EDINET archive 共通契約のテスト (type 別 key + 実 ZIP bytes)。
  *
  * notion-archive 層はモックし (実体は stock-text.test.ts が保証)、ここでは
- * type 別 key の一意性・実 bytes の同一添付・記録計画 (Type5 先在でも
- * Type1 未記録なら保存) の契約を固定する。全 caller (ingest /
- * backfill-missing-docs / backfill-overseas / manual59 repair) が同一
- * helper を使うことが契約。
+ * type 別 key の一意性・実 bytes の同一添付・記録後の readback 照合
+ * (unique physical の full-bytes SHA 確認) の契約を固定する。全 caller
+ * (ingest / backfill-missing-docs / backfill-overseas / manual59 repair)
+ * が同一 helper を使うことが契約。記録対象 type の決定は各 caller の
+ * guard が担う (custody 完備でも DB 書込ありは同一確認を通す)。
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -14,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import {
   findBackupRowsByKeys,
   recordPrimaryData,
+  verifyArchivedAttachments,
 } from "../../../../src/shared/notion-archive/index.js";
 import {
   archiveTallyFailed,
@@ -22,13 +24,13 @@ import {
   checkDocsCustody,
   edinetArchiveFilename,
   edinetArchiveKey,
-  planArchiveUploads,
   recordEdinetZip,
 } from "../services/edinet/archive.js";
 
 vi.mock("../../../../src/shared/notion-archive/index.js", () => ({
   recordPrimaryData: vi.fn(),
   findBackupRowsByKeys: vi.fn(),
+  verifyArchivedAttachments: vi.fn(),
 }));
 
 // 実 bytes は既存の実原本 fixture を不透明バイト列として読む。helper は
@@ -42,6 +44,7 @@ const realBytes = () =>
 describe("edinet archive 共通契約", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(verifyArchivedAttachments).mockResolvedValue(undefined);
   });
 
   it("type 別 key は type 毎に一意で旧来の素 docID と衝突しない", () => {
@@ -54,43 +57,6 @@ describe("edinet archive 共通契約", () => {
   it("添付名は既存の xbrl/csv 命名を踏襲する", () => {
     expect(edinetArchiveFilename("S100J2E7", 1)).toBe("S100J2E7_xbrl.zip");
     expect(edinetArchiveFilename("S100J2E7", 5)).toBe("S100J2E7_csv.zip");
-  });
-
-  it("Type5 先在でも Type1 未記録なら type1 を計画する (抑止の根因修正)", () => {
-    expect(
-      planArchiveUploads({ t1Present: false, t5Present: true, xbrlAvailable: true })
-    ).toEqual([1]);
-    expect(
-      planArchiveUploads({ t1Present: true, t5Present: false, xbrlAvailable: true })
-    ).toEqual([5]);
-    expect(
-      planArchiveUploads({ t1Present: false, t5Present: false, xbrlAvailable: true })
-    ).toEqual([5, 1]);
-    expect(
-      planArchiveUploads({ t1Present: true, t5Present: true, xbrlAvailable: true })
-    ).toEqual([]);
-  });
-
-  it("XBRL 未取得なら type1 を計画しない・force は取得済み全 type を再記録する", () => {
-    expect(
-      planArchiveUploads({ t1Present: false, t5Present: false, xbrlAvailable: false })
-    ).toEqual([5]);
-    expect(
-      planArchiveUploads({
-        t1Present: true,
-        t5Present: true,
-        xbrlAvailable: true,
-        force: true,
-      })
-    ).toEqual([5, 1]);
-    expect(
-      planArchiveUploads({
-        t1Present: true,
-        t5Present: true,
-        xbrlAvailable: false,
-        force: true,
-      })
-    ).toEqual([5]);
   });
 
   it("recordEdinetZip は type 別 key・実 bytes・種別メタで1件記録する", async () => {
@@ -123,6 +89,14 @@ describe("edinet archive 共通契約", () => {
     ).toBe(true);
     expect((got.metadata as Record<string, unknown>).edinetDocType).toBe(1);
     expect((got.metadata as Record<string, unknown>).docID).toBe("S100J2E7");
+    // 記録後は同一 bytes の readback 照合を type 別 filename で 1 回通す。
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+    const vcall = vi.mocked(verifyArchivedAttachments).mock.calls[0];
+    expect(vcall[0]).toBe("p1");
+    expect(vcall[1]).toHaveLength(1);
+    expect(vcall[1][0].filename).toBe("S100J2E7_xbrl.zip");
+    expect(Buffer.from(vcall[1][0].bytes).equals(Buffer.from(bytes))).toBe(true);
+    expect(vcall[2]).toContain("S100J2E7:type1");
   });
 
   it("保管失敗は失敗扱い: error > 0 だけ非0終了する (missing-docs tail 契約)", () => {
@@ -151,6 +125,7 @@ describe("edinet archive 共通契約", () => {
         metadata: { docID: "S100J2E7" },
       })
     ).rejects.toThrow("S100J2E7:type1");
+    expect(verifyArchivedAttachments).not.toHaveBeenCalled();
   });
 
   it("force は透過し、戻り値をそのまま返す", async () => {
@@ -182,6 +157,12 @@ describe("edinet archive 共通契約", () => {
     expect(vi.mocked(recordPrimaryData).mock.calls[0][0].force).toBe(true);
     expect(vi.mocked(recordPrimaryData).mock.calls[0][0].key).toBe(
       "S100J2E7:type5"
+    );
+    // skipped_existing でも unique 行確認の後に同一 bytes 照合を通す。
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(verifyArchivedAttachments).mock.calls[0][0]).toBe("p9");
+    expect(vi.mocked(verifyArchivedAttachments).mock.calls[0][1][0].filename).toBe(
+      "S100J2E7_csv.zip"
     );
   });
 
@@ -249,6 +230,7 @@ describe("edinet archive 共通契約", () => {
         metadata: {},
       })
     ).rejects.toThrow("既存行に実ファイルなし");
+    expect(verifyArchivedAttachments).not.toHaveBeenCalled();
   });
 
   it("skipped_existing + 同一 key 重複行 → 保全停止", async () => {
@@ -273,6 +255,55 @@ describe("edinet archive 共通契約", () => {
         metadata: {},
       })
     ).rejects.toThrow("重複行");
+    expect(verifyArchivedAttachments).not.toHaveBeenCalled();
+  });
+
+  it("readback 照合の mismatch は throw し、記録成功にしない", async () => {
+    vi.mocked(recordPrimaryData).mockResolvedValue({
+      pageId: "pV",
+      outcome: "recorded",
+      fileTooLarge: false,
+      manifestMatch: "written",
+    });
+    vi.mocked(verifyArchivedAttachments).mockRejectedValueOnce(
+      new Error("EDINET一次 D9:type5の readback 照合に失敗したため HOLD: SHA256 不一致")
+    );
+    await expect(
+      recordEdinetZip({
+        service: "yuho-quant",
+        docID: "D9",
+        type: 5,
+        zip: realBytes(),
+        source: "EDINET API v2 /documents/D9?type=5",
+        fetchedAt: "2026-09-28T00:00:00.000Z",
+        metadata: {},
+      })
+    ).rejects.toThrow("readback 照合に失敗");
+  });
+
+  it("skipped_existing + 旧 manifest unknown でも実 bytes 一致は許容し、unknown 表示は保持する (書換えない)", async () => {
+    vi.mocked(recordPrimaryData).mockResolvedValue({
+      pageId: "pU",
+      outcome: "skipped_existing",
+      fileTooLarge: false,
+      manifestMatch: "unknown",
+    });
+    vi.mocked(findBackupRowsByKeys).mockResolvedValue([
+      { key: "D10:type1", fileCount: 1, status: "recorded", metadata: {} },
+    ]);
+    const out = await recordEdinetZip({
+      service: "yuho-quant",
+      docID: "D10",
+      type: 1,
+      zip: realBytes(),
+      source: "EDINET API v2 /documents/D10?type=1",
+      fetchedAt: "2026-09-28T00:00:00.000Z",
+      metadata: {},
+    });
+    expect(out.outcome).toBe("skipped_existing");
+    // 重複 mutation なし: recordPrimaryData はこの 1 回きり (manifest 書換えなし)。
+    expect(recordPrimaryData).toHaveBeenCalledTimes(1);
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
   });
 
   it("T1 行不在 + T5 実体あり + T5 行 xbrlUnavailable → t1 not-applicable (T5 由来)", async () => {

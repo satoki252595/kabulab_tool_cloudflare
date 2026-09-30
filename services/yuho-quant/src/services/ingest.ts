@@ -3,9 +3,11 @@
  *
  * 流れ: 書類取得 API type=5(CSV)/type=1(XBRL) ZIP → 受注・海外売上を
  *       構造化 + CSV 行から定性セクション (事業の内容・リスク等) を抽出 →
- *       yuho_documents / order_facts / overseas_facts / text_sections に
- *       冪等 upsert → (archiveToNotion 時) 物理 ZIP とメタを Notion へ
- *       冪等記録 (ルール6)。
+ *       物理 ZIP とメタを Notion へ冪等記録 (ルール6。DB batch より先。
+ *       raw-before-DB) → yuho_documents / order_facts / overseas_facts /
+ *       text_sections に冪等 upsert → 定性テキスト本文のみ DBid 解決後に保管。
+ *       custody 完備でも DB 書込ありなら parser 使用 bytes の同一確認を
+ *       既存 physical へ通す (strict byte guard。重複 mutation なし)。
  *
  * CLAUDE.md ルール準拠:
  *   - docId 一意で冪等 (再実行・再シャードでも二重計上しない)
@@ -31,7 +33,6 @@ import { downloadDocument, EdinetNotFoundError } from "./edinet/client.js";
 import {
   assertNoMetadataOnly,
   checkDocCustody,
-  planArchiveUploads,
   recordEdinetZip,
   type DocCustody,
 } from "./edinet/archive.js";
@@ -118,10 +119,12 @@ const MAX_FACT_ROWS_PER_STMT = 8;
 
 /**
  * @param force          true なら既存 docId でも再取得・再構造化して上書き
- * @param archiveToNotion true なら有報の物理ファイル(XBRL+CSV ZIP)とメタを
+ * @param archiveToNotion 有報の物理ファイル(XBRL+CSV ZIP)とメタを
  *        Notion「一次データ保管」配下の一次データ DB に type 別 key で冪等
  *        記録 (CLAUDE.md ルール6)。type 毎の有無で判定し再開可能。DB 取込済
  *        でも Notion 未記録の type があればファイルを取得して記録する。
+ *        既定 true。false の明示指定は DB 書込の前に明示 STOP する
+ *        (raw-before-DB 契約。未対応)。
  */
 export async function ingestDocument(
   db: Database,
@@ -148,7 +151,7 @@ export async function ingestDocument(
     d1HttpBatch?: ReturnType<typeof createD1HttpBatchSender>;
   }
 ): Promise<IngestResult> {
-  const { stockId, stockCode, doc, force = false, archiveToNotion = false } = args;
+  const { stockId, stockCode, doc, force = false, archiveToNotion = true } = args;
 
   // Shared entrance preflight: 書込 backend の確定は fetch/remote save より前。
   // sqlite-proxy の db.batch はメソッド自体は存在するが batch callback 未配線
@@ -264,6 +267,15 @@ export async function ingestDocument(
       textSectionCount: 0,
       periodEnd: null,
     };
+  }
+
+  // raw-before-DB 契約: archiveToNotion=false は未対応。DB 書込の前に明示
+  // STOP する (書込も fetch もしない)。既存 cache の早期 skip・meta 不備・
+  // period 不明は上で return 済みのためここには来ない。
+  if (!archiveToNotion && needDbWork) {
+    throw new Error(
+      `[ingest] archiveToNotion=false は未対応のため DB 書込の前に STOP します (raw-before-DB 契約): docID=${doc.docID}`
+    );
   }
 
   // 1) 軽量な CSV で受注・海外売上 開示の有無を確定。どちらも無ければ重い XBRL を
@@ -423,6 +435,68 @@ export async function ingestDocument(
     overseasFacts = [];
   }
 
+  // ルール6 + raw-before-DB + strict byte guard (Root 原本 mandatory):
+  // DB batch の前に type ごと最大 1 回 recordEdinetZip を通す。
+  // - custody 欠落 type (needT5/needT1): 新規記録
+  // - custody 完備でも needDbWork (parser が bytes 使用): 同一 bytes/SHA
+  //   確認を既存 physical へ通す。通常枝 (force=false) では
+  //   recordPrimaryData は skipped_existing で重複 mutation なし →
+  //   unique physical + full-bytes SHA verify。force=true は既存契約
+  //   どおり args.force を透過する (再記録の枝)。旧 plan-gated 経路
+  //   (custody 完備で無検証のまま DB 到達) はこの guard が塞ぐ。
+  // needDbWork=false (archived_only 等) は欠落 type のみ従来通り。
+  // 記録失敗は throw が伝播し DB は旧値のまま (再実行可)。
+  // metadata は DBid 非依存 (text ポインタのみ DBid 解決後)。
+  if (archiveToNotion) {
+    const fetchedAt = parseSubmitDateTime(doc.submitDateTime).toISOString();
+    const metadata = {
+      docID: doc.docID,
+      edinetCode: doc.edinetCode,
+      secCode: doc.secCode,
+      filerName: doc.filerName,
+      docTypeCode: doc.docTypeCode,
+      docDescription: doc.docDescription,
+      periodStart: doc.periodStart,
+      periodEnd,
+      submitDateTime: doc.submitDateTime,
+      parseStatus,
+      honbunFile,
+      factCount: deduped.length,
+      overseasParseStatus,
+      overseasHonbunFile,
+      overseasFactCount: overseasFacts.length,
+      textParseStatus,
+      textSectionCount: sections.length,
+      xbrlUnavailable,
+    };
+    // csvZip は取得失敗時 throw のためここでは非 null。xbrlZip は未提供で
+    // null の場合 type1 を記録しない (無い物の記録は捏造。ルール1)。
+    if (needT5 || needDbWork) {
+      await recordEdinetZip({
+        service: NOTION_SERVICE,
+        docID: doc.docID,
+        type: 5,
+        zip: csvZip,
+        source: `EDINET API v2 /documents/${doc.docID}?type=5`,
+        fetchedAt,
+        metadata,
+        force,
+      });
+    }
+    if (xbrlZip && (needT1 || needDbWork)) {
+      await recordEdinetZip({
+        service: NOTION_SERVICE,
+        docID: doc.docID,
+        type: 1,
+        zip: xbrlZip,
+        source: `EDINET API v2 /documents/${doc.docID}?type=1`,
+        fetchedAt,
+        metadata,
+        force,
+      });
+    }
+  }
+
   if (needDbWork) {
     // 文書 upsert 自体を facts/text 置換と同一 batch に入れる。以前は upsert
     // を先行コミットして返却 id を facts に流していたため、後続 batch の失敗
@@ -556,54 +630,6 @@ export async function ingestDocument(
         );
       }
       await db.batch([first, ...rest]);
-    }
-  }
-
-  // ルール6: 有報の物理ファイル(CSV+XBRL ZIP)とメタデータを Notion へ
-  // type 別 key で冪等記録 (再開可能)。各 type の有無だけを見て記録し、
-  // Type5 済みが Type1 保存を抑止しない。XBRL 未提供 (type=1 なし) は
-  // CSV のみ記録し xbrlUnavailable=true を残す (無い物は記録しない)。
-  if (needArchive) {
-    const fetchedAt = parseSubmitDateTime(doc.submitDateTime).toISOString();
-    const metadata = {
-      docID: doc.docID,
-      edinetCode: doc.edinetCode,
-      secCode: doc.secCode,
-      filerName: doc.filerName,
-      docTypeCode: doc.docTypeCode,
-      docDescription: doc.docDescription,
-      periodStart: doc.periodStart,
-      periodEnd,
-      submitDateTime: doc.submitDateTime,
-      parseStatus,
-      honbunFile,
-      factCount: deduped.length,
-      overseasParseStatus,
-      overseasHonbunFile,
-      overseasFactCount: overseasFacts.length,
-      textParseStatus,
-      textSectionCount: sections.length,
-      xbrlUnavailable,
-    };
-    for (const type of planArchiveUploads({
-      t1Present: t1Done,
-      t5Present: t5Done,
-      xbrlAvailable: xbrlZip !== null,
-      force,
-    })) {
-      // plan は xbrlAvailable の type1 だけ返す。zip 無しは記録しない。
-      const zip = type === 1 ? xbrlZip : csvZip;
-      if (!zip) continue;
-      await recordEdinetZip({
-        service: NOTION_SERVICE,
-        docID: doc.docID,
-        type,
-        zip,
-        source: `EDINET API v2 /documents/${doc.docID}?type=${type}`,
-        fetchedAt,
-        metadata,
-        force,
-      });
     }
   }
 
