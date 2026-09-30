@@ -6,7 +6,7 @@ code/test/framework の新規なし。本記録は schema・counts・SHA・limit
 
 - branch: `fix/overseas-freshread-prep-20260930` from main `cd25a81` (PR216 merge)
 - packet: `/tmp/overseas-freshread-prep-20260930/freshread-packet.json`
-  `8f18941e…ba6e0` / `freshread-chunks.json` `cc44578b…47ccf` (0600)
+  `bd4ca899…063411` / `freshread-chunks.json` `cc44578b…47ccf` (0600)
 
 ## 現状の trust 境界 (proposal の前提)
 
@@ -37,12 +37,19 @@ code/test/framework の新規なし。本記録は schema・counts・SHA・limit
 - 型付き `db.select` のみ (raw positional arrays 不使用)。実行前に
   `toSQL` を取得し read-only + 射影数 (17/13) + 射影名 uniqueness を
   断言 (`assertProjection` 再使用。C29 再発防止)。
+- exact parameterized SQL template は packet に pin (実 drizzle builders の
+  offline `toSQL` 生成。executor は throw のため未実行)。
+  Q1F template `dbd42ae9…fecbd2d` / Q2F template `47f4b830…2acf75d`
+  (binds は `{?chunkIDs}` のみ。per-chunk params = chunk docIDs、
+  binds = chunk 件数 (100×36 + 75)。perChunkParams を packet に pin)。
 
 ## 観測の受理条件 (案・select-proof と同一 strictness)
 
-- Q1 cardinality: 行数 == chunk IDs (exact)。missing doc →
-  per-doc MISSING_IDENTITY (READ は継続し、CAS で HOLD)。
-  dup/echo 範囲外 → STOP。
+- Q1 cardinality: 行数 ≤ chunk 件数。observed docIDs は unique かつ
+  chunk の subset、missing = chunk − observed の exact set partition
+  (重複・echo 範囲外 → STOP)。missing doc → per-doc MISSING_IDENTITY
+  (READ は継続し、CAS で HOLD)。rows == all IDs は要求しない
+  (missing HOLD 継続と両立しないため)。
 - Q2: 決定順検証 + Q1 連鎖 (`document_id`/`stock_id` 一致) + PK 重複 STOP +
   canonical-key (doc + fiscalYearEnd + regionName) 重複 STOP。
 - doc別 COUNT 照合: Q1.factsCount == Q2 per-doc rows
@@ -56,9 +63,13 @@ code/test/framework の新規なし。本記録は schema・counts・SHA・limit
 ## Source / custody (案)
 
 - source 3675: 既存 raw ZIP + `manifest_full.json` pin を carry。
-  full-custody-qualified (t1 実体 complete + SHA/length 照合) vs pending を
-  per-doc に分ける。照合は既存 `manifest_full` pin + 将来 official fresh
-  bytes (別 grant)。
+  pin 照合 (SHA/length) は byte identity であり、Notion full physical
+  custody ではない。full-custody-qualified vs pending の per-doc 分割は
+  byte 照合 + 下記 hosted physical の両方で行う。
+- full physical custody (byte 照合とは別途・将来 grant): unique hosted
+  actual ZIP の full HTTP 200 / length / SHA を shared verify
+  (`verifyArchivedAttachments` 系) で確認する。D1 full post
+  (postflight) とは別物であり、same-run 記述で混同しない。
 - 73 historical UNKNOWN は保持 (過去 custody 不明・apply HOLD。偽補完なし)。
   将来 official fresh GET / current identity / full-bytes / custody /
   current CAS で現修正資格化する道 (PREP 記録の通り)。
@@ -80,8 +91,35 @@ code/test/framework の新規なし。本記録は schema・counts・SHA・limit
   UPDATE + DELETE + INSERT(11列順・8行 chunk)。逐次 fallback なし)。
 - `yuho_order_facts` / text 系には触れない (UPDATE allowlist 2列・
   DELETE は overseas 表に限定)。orders/text 変更 0 は CAS 条件に含める。
-- same-run full physical verify: 適用と同一 run で全 pre-image rows を
-  exact counts/ids で含む postflight を行い、reentry 0 を receipts で示す。
+- same-run verify は二段 (混同しない): (a) full physical verify =
+  hosted actual ZIP の full HTTP 200 / length / SHA の shared verify、
+  (b) D1 full post = 全 pre-image rows を exact counts/ids で含む
+  postflight。両方 + reentry 0 が CAS 条件。
+- 注意: backfill-overseas の per-doc batch (UPDATE + DELETE + INSERT) は
+  full-preimage CAS ではない。将来の最小 executor は batch 先頭に
+  CAS guard (preimage 照合) を置き、UPDATE/DELETE/INSERT の前に検証する
+  こと。protected post-check のみでは不十分。実装は今しない
+  (global repair framework を作らない)。
+
+## L2 p_yuho_growth 関係 (actual caller 静読 trace・提案のみ)
+
+- 唯一の本番 caller: `src/cron/yuho-edinet.ts:245` (非シャード定時のみ。
+  shard 実行は sweep 競合のため走らせない)。現行は全量再生成
+  (stockIds なし)。scoped 使用は tests のみ。
+- `rebuildYuhoGrowthProjection(db, {stockIds})` の境界 (projection.ts 静読):
+  両入力 (受注 total + join submittedAt / 海外 3 regionKinds + join
+  submittedAt)・全 write (stockId PK upsert・30列×3行=90 binds/文)・
+  sweep (computedAt < runStarted) を同一 stockIds に拘束。対象銘柄は
+  全履歴を読む (書類 subset 切断なし)。空 stockIds は throw
+  (ALL 化なし)。sweep は対象外の既存行を残す (既書込 stockIds 境界)。
+  注意: `MAX(submittedAt)` (sourceMaxDate) は無条件全表
+  (scoped でも global)。
+- facts/status 修復後の plan (案・未実行): actual fresh Q1 で確定した
+  affected stockIds だけ既再生成を scoped 実行 + bounded pre/post
+  (preimage 存在・upsert 件数・sweep 件数) / reentry 0。旧 L2 は温存しない
+  (stale 行は scoped 再生成で上書き・sweep で消去)。
+- 未知 stockIds の取得なし・全37980 audit claim なし。stockIds は
+  fresh Q1 の観測 stock_id のみから導出する。
 
 ## 再使用 helper (新規なし)
 
@@ -96,6 +134,8 @@ code/test/framework の新規なし。本記録は schema・counts・SHA・limit
   `createD1HttpBatchSender` (将来 apply 用。件数一致 + 全文 success)。
 - parser `overseas-parser.ts` blob `07ad7a54b975c543a604dcf52b31df91b72f23f7`
   (main `cd25a81` 時点。PREP と同一)。
+- L2 `rebuildYuhoGrowthProjection(db, {stockIds})` (将来 scoped 再生成用。
+  本番 caller は `src/cron/yuho-edinet.ts:245` のみ)。
 
 ## 固定 pins (carry・packet で bytes 検証済み)
 
