@@ -180,10 +180,9 @@ export interface OverlayListingInsertRow {
 
 /**
  * overlay 用: 新規上場行を挿入する (呼出側で 14 行/文に分割済み)。
- * instrument_type は NULL のまま残し、月次 seed の backfill に任せる
- * (書くのは universe sync だけ、という single-writer 契約のため。
- * 母集団の述語は active-equity 経由で instrument_type を使わない)。
- * conflict は無現役化 (DoNothing)。
+ * instrument_type は 'equity' を明示する (NULL だと日次の
+ * activeEquityCondition() に載らない)。sector は NULL (EDINET 所有)、
+ * is_yutai は DB default (false)。conflict は無現役化 (DoNothing)。
  */
 export async function insertCoreStocks(
   db: OverlayWriterDb,
@@ -200,6 +199,8 @@ export async function insertCoreStocks(
         market: l.market,
         sector: null,
         isActive: true,
+        // bind ではなくリテラル (INSTRUMENT_TYPE_EQUITY_LITERAL の docstring)。
+        instrumentType: INSTRUMENT_TYPE_EQUITY_LITERAL,
       }))
     )
     .onConflictDoNothing({ target: stocks.code });

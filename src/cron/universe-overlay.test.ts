@@ -251,7 +251,39 @@ describe("planOverlayDeltas", () => {
     b.sources.transfers.rows = [
       { code: "3000", companyName: "x", effectiveDate: "2026-09-10", fromMarket: "グロース", toMarket: "プライム", note: "" },
     ];
-    expect(() => planOverlayDeltas(b, byCode)).toThrow(/fromMarket 不一致/);
+    expect(() => planOverlayDeltas(b, byCode)).toThrow(/説明不能のため STOP/);
+  });
+
+  it("接続 chain の途中 (現=B) から resume して最終へ進む", () => {
+    const byCode = new Map([
+      ["3000", { id: 1, code: "3000", name: "x", market: "スタンダード（内国株式）", isActive: true }],
+    ]);
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.newListings.rows = [];
+    b.sources.transfers.rows = [
+      { code: "3000", companyName: "x", effectiveDate: "2026-09-10", fromMarket: "グロース", toMarket: "スタンダード", note: "" },
+      { code: "3000", companyName: "x", effectiveDate: "2026-09-20", fromMarket: "スタンダード", toMarket: "プライム", note: "" },
+    ];
+    const plan = planOverlayDeltas(b, byCode);
+    expect(plan.marketUpdates).toEqual([
+      { id: 1, code: "3000", from: "スタンダード（内国株式）", to: "プライム（内国株式）", effectiveDate: "2026-09-20" },
+    ]);
+    expect(plan.skipped.transferAlreadyReflected).toBe(1);
+  });
+
+  it("非接続 chain (中間 event 欠落) は説明不能 STOP", () => {
+    const byCode = new Map([
+      ["3000", { id: 1, code: "3000", name: "x", market: "スタンダード（内国株式）", isActive: true }],
+    ]);
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.newListings.rows = [];
+    b.sources.transfers.rows = [
+      { code: "3000", companyName: "x", effectiveDate: "2026-09-10", fromMarket: "グロース", toMarket: "スタンダード", note: "" },
+      { code: "3000", companyName: "x", effectiveDate: "2026-09-20", fromMarket: "プライム", toMarket: "グロース", note: "" },
+    ];
+    expect(() => planOverlayDeltas(b, byCode)).toThrow(/chain 非接続/);
   });
 
   it("同 code 同日 transfer 矛盾は throw する", () => {
@@ -511,6 +543,98 @@ CREATE TABLE universe_overlay_state (
     expect(sets.delisted.size).toBe(0);
   });
 
+  it("接続 2transfer + state 書込失敗 → retry は chain resume で成功する (BLOCKER 回帰)", async () => {
+    const { universeOverlayState } = await import("../shared/db/universe-events.js");
+    sqlite
+      .prepare("INSERT INTO core_stocks (code, name, market, is_active) VALUES (?, ?, ?, 1)")
+      .run("3000", "x", "グロース（内国株式）");
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.newListings.rows = [];
+    b.sources.transfers.rows = [
+      { code: "3000", companyName: "x", effectiveDate: "2026-09-10", fromMarket: "グロース", toMarket: "スタンダード", note: "" },
+      { code: "3000", companyName: "x", effectiveDate: "2026-09-20", fromMarket: "スタンダード", toMarket: "プライム", note: "" },
+    ];
+    // run1: state 書込だけ落とす fault 注入 db。
+    const db1 = memDb() as unknown as { insert: (t: unknown) => unknown };
+    const realInsert = (db1.insert as (t: unknown) => unknown).bind(db1);
+    db1.insert = ((t: unknown) =>
+      t === universeOverlayState
+        ? {
+            values: () => ({
+              onConflictDoUpdate: async () => {
+                throw new Error("state write boom");
+              },
+            }),
+          }
+        : realInsert(t)) as (t: unknown) => unknown;
+    const boom = await ensureUniverseOverlay(db1 as never, {
+      eligibilityAsOf: "2026-09-29",
+      collect: vi.fn().mockResolvedValue(b),
+    }).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect((boom as Error).message).toBe("state write boom");
+    // partial: core は最終 C まで進むが state は不在 (世代未確定)。
+    const mid = sqlite.prepare("SELECT market FROM core_stocks WHERE code='3000'").get() as { market: string };
+    expect(mid.market).toBe("プライム（内国株式）");
+    const midState = sqlite.prepare("SELECT COUNT(*) AS n FROM universe_overlay_state").get() as { n: number };
+    expect(midState.n).toBe(0);
+    // run2 (retry): 未確定世代は reuse せず再適用し、chain resume で成功する。
+    const out = await ensureUniverseOverlay(memDb() as never, {
+      eligibilityAsOf: "2026-09-29",
+      collect: vi.fn().mockResolvedValue(b),
+    });
+    expect(out.applied).toBe(true);
+    expect(out.result?.stateCommitted).toBe(true);
+    expect(out.result?.marketUpdated).toBe(0);
+    expect(out.result?.skipped.transferAlreadyReflected).toBe(2);
+    const st = sqlite.prepare("SELECT eligibility_as_of FROM universe_overlay_state WHERE id=1").get() as {
+      eligibility_as_of: string;
+    };
+    expect(st.eligibility_as_of).toBe("2026-09-29");
+  });
+
+  it("HOLD IPO は INSERT しない / helper は equity で INSERT し同サイクル SELECT に載る", async () => {
+    const { activeEquityCondition } = await import("../shared/db/active-equity.js");
+    const { stocks } = await import("../shared/db/core-schema.js");
+    const { insertCoreStocks } = await import("./universe.js");
+    const hold = batch("2026-09-29");
+    hold.sources.delisted.rows = [];
+    hold.sources.transfers.rows = [];
+    hold.sources.newListings.rows = hold.sources.newListings.rows.slice(0, 1);
+    const resHold = await applyUniverseOverlay(memDb() as never, hold, []);
+    expect(resHold.listed).toBe(0);
+    expect(resHold.heldListingCodes).toEqual(["618A"]);
+    const nHold = sqlite.prepare("SELECT COUNT(*) AS n FROM core_stocks").get() as { n: number };
+    expect(nHold.n).toBe(0);
+    // 正分類済み行 (full-form market) は helper が equity で INSERT する。
+    // planner の market:null HOLD 政策は不変 (producer 接続は Root の source grant 待ち)。
+    const src = hold.sources.newListings.rows[0];
+    const classified = { code: src.code, name: src.companyName, market: "グロース（内国株式）" };
+    await insertCoreStocks(memDb() as never, [classified]);
+    await insertCoreStocks(memDb() as never, [classified]);
+    const nReady = sqlite.prepare("SELECT COUNT(*) AS n FROM core_stocks").get() as { n: number };
+    expect(nReady.n).toBe(1);
+    const raw = sqlite.prepare("SELECT instrument_type, sector, is_yutai FROM core_stocks WHERE code='618A'").get() as {
+      instrument_type: string;
+      sector: null;
+      is_yutai: number;
+    };
+    expect(raw.instrument_type).toBe("equity");
+    expect(raw.sector).toBeNull();
+    expect(raw.is_yutai).toBe(0);
+    // 同サイクル: 共通述語で SELECT (値は select しない。code のみ)。
+    const rows = await (memDb() as never as {
+      select: (c: unknown) => { from: (t: unknown) => { where: (w: unknown) => Promise<{ code: string }[]> } };
+    })
+      .select({ code: stocks.code })
+      .from(stocks)
+      .where(activeEquityCondition());
+    expect(rows.map((r) => r.code)).toEqual(["618A"]);
+  });
+
   it("同日再入でも HOLD 残があれば no-op 正常にしない (BLOCKER 回帰)", async () => {
     sqlite.exec(
       `INSERT INTO universe_overlay_state (id, eligibility_as_of, events_fetched_at, held_listing_codes)
@@ -544,6 +668,7 @@ CREATE TABLE universe_overlay_state (
       market: "グロース（内国株式）",
       sector: null,
       isActive: true,
+      instrumentType: "equity",
     }));
     const lq = db.insert(stocks).values(listingRows).toSQL();
     expect(lq.params.length).toBeLessThanOrEqual(100);

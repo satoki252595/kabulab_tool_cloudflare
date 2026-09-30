@@ -100,7 +100,7 @@ export interface OverlayPlan {
 
 /** events upsert: 11 binds/行 → 9 行/文 (99 binds)。 */
 export const OVERLAY_EVENT_CHUNK = 9;
-/** listing insert: 5 binds/行 → 14 行/文 (70 binds)。 */
+/** listing insert: 6 binds/行 → 14 行/文 (84 binds)。 */
 export const OVERLAY_LISTING_CHUNK = 14;
 
 /** HOLD の拒否ガード。retry-safe (delist/transfer は冪等再適用)。 */
@@ -243,23 +243,40 @@ export function planOverlayDeltas(
         `transfer ${code}: 現 market の形式が未知 (${JSON.stringify(cur.market)})。接尾辞を推測しない`
       );
     }
-    let curShort = cur.market.slice(0, cur.market.length - suffix.length);
-    let lastDate = "";
-    for (const ev of group) {
-      // fromMarket 整合: 一致のみ連鎖。to 側が現状態と一致すれば
-      // 反映済み (source 証明あり) として skip。それ以外は説明不能のため STOP。
-      if (ev.fromMarket !== curShort) {
-        if (ev.toMarket === curShort) {
-          plan.skipped.transferAlreadyReflected++;
-          continue;
-        }
+    const currentShort = cur.market.slice(0, cur.market.length - suffix.length);
+    // chronologically connected chain 検証: to[i] == from[i+1]。
+    // 中間 event 欠落は説明不能のため STOP (曖昧 replay 禁止)。
+    for (let i = 1; i < group.length; i++) {
+      if (group[i].fromMarket !== group[i - 1].toMarket) {
         throw new OverlayHoldError(
           [code],
-          `transfer fromMarket 不一致 (${ev.fromMarket}→${ev.toMarket} に対し現 ${curShort}、${ev.effectiveDate})。説明不能のため STOP。`
+          `transfer chain 非接続 (${group[i - 1].effectiveDate} ${group[i - 1].fromMarket}→${group[i - 1].toMarket} と ${group[i].effectiveDate} ${group[i].fromMarket}→${group[i].toMarket})。説明不能のため STOP。`
         );
       }
-      curShort = ev.toMarket;
-      lastDate = ev.effectiveDate;
+    }
+    // resume 位置: 現状態が chain 上の node と一致する末尾 (source 証明 prefix)。
+    // 先頭一致なら全体適用。chain 上に無ければ説明不能のため STOP。
+    let resume = -1;
+    if (currentShort !== group[0].fromMarket) {
+      for (let i = group.length - 1; i >= 0; i--) {
+        if (group[i].toMarket === currentShort) {
+          resume = i;
+          break;
+        }
+      }
+      if (resume === -1) {
+        throw new OverlayHoldError(
+          [code],
+          `transfer chain 上に現 ${currentShort} が無い (${group.map((g) => `${g.effectiveDate} ${g.fromMarket}→${g.toMarket}`).join(", ")})。説明不能のため STOP。`
+        );
+      }
+      plan.skipped.transferAlreadyReflected += resume + 1;
+    }
+    let curShort = currentShort;
+    let lastDate = "";
+    for (let i = resume + 1; i < group.length; i++) {
+      curShort = group[i].toMarket;
+      lastDate = group[i].effectiveDate;
     }
     const next = curShort + suffix;
     if (next === cur.market) {
@@ -415,8 +432,8 @@ export async function applyUniverseOverlay(
   const heldCodes = plan.listingInserts
     .filter((l) => l.market === null)
     .map((l) => l.code);
-  // sector は NULL (EDINET 所有)。instrument_type も NULL のまま
-  // (月次 backfill が充填。書くのは universe sync だけ)。
+  // sector は NULL (EDINET 所有)。instrument_type='equity' は helper が
+  // 明示する (NULL だと日次の activeEquityCondition() に載らない)。
   const ready = plan.listingInserts.filter(
     (l): l is OverlayListingInsert & { market: string } => l.market !== null
   );
