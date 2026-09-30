@@ -246,6 +246,36 @@ class StrictArchiveDouble:
         )
 
 
+class _CannedStore:
+    """snapshot 行をそのまま返す store (UNIQUE を持てない異常系用)。
+
+    重複 code・非 dict 行など SQLite 実形では作れない信頼境界ベクタを
+    供給する。書込は記録のみ。
+    """
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.write_sql: list = []
+        self.sql_log: list = []
+
+    def query(self, sql, params=None):
+        self.sql_log.append(sql)
+        if sql.lstrip().upper().startswith("SELECT"):
+            return self._rows
+        self.write_sql.append(sql)
+        return []
+
+
+def _wire_canned(monkeypatch, tmp_path, rows, data: bytes | None = None):
+    art = _artifact(tmp_path, data)
+    monkeypatch.setattr(edinet_codelist, "fetch_codelist", _fake_fetch(art))
+    store = _CannedStore(rows)
+    monkeypatch.setattr(mod, "D1Store", lambda *a, **k: store)
+    holder: dict = {}
+    _cli_ok(monkeypatch, holder)
+    return store
+
+
 def _wire_strict(monkeypatch, tmp_path, store, data: bytes | None = None):
     """fetch/D1 実形 + 厳格原本 replay。戻りは double。"""
     art = _artifact(tmp_path, data)
@@ -481,7 +511,8 @@ class TestHoldsContinue:
         assert state2["failed"] == 1
 
     def test_unmapped_nontarget_hold(self, monkeypatch, tmp_path):
-        store = _SectorD1([("7699", "輸送用機器", 0, "equity")])
+        (t1, s1) = _real_tickers(1)[0]
+        store = _SectorD1([(t1, s1, 1, "equity"), ("7699", "輸送用機器", 0, "equity")])
         _wire(monkeypatch, tmp_path, store)
         ctx, state = _ctx()
         report = mod.execute(ctx)
@@ -787,6 +818,81 @@ class TestStrictReplay:
         assert dbl.record_calls == 1
 
 
+class TestCurrentSnapshotGate:
+    """current active snapshot の完全性 gate。不正は STOP で書込 0。"""
+
+    def _run(self, monkeypatch, tmp_path, rows):
+        store = _wire_canned(monkeypatch, tmp_path, rows)
+        ctx, state = _ctx()
+        report = mod.execute(ctx)
+        return store, state, report
+
+    def test_empty_snapshot_stops(self, monkeypatch, tmp_path):
+        store, state, report = self._run(monkeypatch, tmp_path, [])
+        assert report.stopped == "invalid-current-stop"
+        assert store.write_sql == []
+        assert state["failed"] == 1
+        assert state["codes"][0][0] == "sector33-prewrite-invalid-current-stop"
+
+    def test_duplicate_code_stops(self, monkeypatch, tmp_path):
+        t1 = _real_tickers(1)[0][0]
+        store, state, report = self._run(
+            monkeypatch, tmp_path, [{"code": t1, "sector33": None}, {"code": t1, "sector33": "化学"}]
+        )
+        assert report.stopped == "invalid-current-stop"
+        assert store.write_sql == []
+        assert state["failed"] == 1
+
+    @pytest.mark.parametrize("code", ["", "   ", "ABCDE", None, 7203])
+    def test_empty_or_invalid_code_stops(self, monkeypatch, tmp_path, code):
+        store, state, report = self._run(
+            monkeypatch, tmp_path, [{"code": code, "sector33": None}]
+        )
+        assert report.stopped == "invalid-current-stop"
+        assert store.write_sql == []
+        assert state["failed"] == 1
+
+    @pytest.mark.parametrize("code", ["72030", "7203 ", "130a", "７２０３", "0000"])
+    def test_noncanonical_code_stops(self, monkeypatch, tmp_path, code):
+        """5 桁 source 形・trim 差・表記揺れ・phantom は正準でないため STOP。"""
+        store, state, report = self._run(
+            monkeypatch, tmp_path, [{"code": code, "sector33": None}]
+        )
+        assert report.stopped == "invalid-current-stop"
+        assert store.write_sql == []
+        assert state["failed"] == 1
+
+    @pytest.mark.parametrize("sector", [{"k": 1}, ["化学"], 123, 1.5, True])
+    def test_malformed_sector33_type_stops(self, monkeypatch, tmp_path, sector):
+        """sector33 は str/None のみ。dict/list/数値は writer 前に STOP。"""
+        t1 = _real_tickers(1)[0][0]
+        store, state, report = self._run(
+            monkeypatch, tmp_path, [{"code": t1, "sector33": sector}]
+        )
+        assert report.stopped == "invalid-current-stop"
+        assert store.write_sql == []
+        assert state["failed"] == 1
+
+    @pytest.mark.parametrize("row", [{"code": "7203"}, {"sector33": None}, ["7203"], "7203", None])
+    def test_incomplete_row_stops(self, monkeypatch, tmp_path, row):
+        store, state, report = self._run(monkeypatch, tmp_path, [row])
+        assert report.stopped == "invalid-current-stop"
+        assert store.write_sql == []
+        assert state["failed"] == 1
+
+    def test_unknown_sector_still_retained_with_gap(self, monkeypatch, tmp_path):
+        """gate は構造のみ見る。未知 sector 値は retain + gap (partial) のまま。"""
+        _wire_canned(
+            monkeypatch, tmp_path, [{"code": "9999", "sector33": ""}, {"code": "9998", "sector33": None}]
+        )
+        ctx, state = _ctx()
+        report = mod.execute(ctx)
+        assert report.stopped is None
+        assert report.gaps == ["9998", "9999"]
+        assert state["failed"] == 1
+        assert state["codes"][0][0] == "sector33-gap"
+
+
 class TestAgreementAndTaxonomy:
     def test_scan_parser_agreement(self):
         records = edinet_codelist.parse_codelist(_zip_bytes())
@@ -810,5 +916,6 @@ class TestAgreementAndTaxonomy:
                 "sector33-gap",
                 "archive-failure",
                 "config-stop",
+                "invalid-current-stop",
             }
         )

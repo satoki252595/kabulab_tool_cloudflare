@@ -286,7 +286,7 @@ class TestD1Store:
         captured: list = []
         store = self._store(
             monkeypatch, captured,
-            {"success": True, "result": [{"results": [{"code": "7203"}]}]},
+            {"success": True, "result": [{"success": True, "results": [{"code": "7203"}]}]},
         )
         assert store.query("SELECT code FROM t") == [{"code": "7203"}]
         assert captured[0]["idempotent"] is True  # upsert/SELECT のみ通す前提
@@ -296,13 +296,96 @@ class TestD1Store:
         from jp_stock_pipeline.cloud_store.d1 import MAX_BOUND_PARAMS, D1Error
 
         captured: list = []
-        store = self._store(monkeypatch, captured, {"success": True, "result": []})
+        store = self._store(monkeypatch, captured, {"success": True, "result": [{"success": True, "results": []}]})
         with pytest.raises(D1Error, match="バインドパラメータ上限"):
             store.query("SELECT 1", list(range(MAX_BOUND_PARAMS + 1)))
 
+    def test_bound_limit_boundary_sends(self, monkeypatch):
+        """ちょうど 100 は送る。境界の off-by-one を固定する。"""
+        from jp_stock_pipeline.cloud_store.d1 import MAX_BOUND_PARAMS
+
+        captured: list = []
+        store = self._store(monkeypatch, captured, {"success": True, "result": [{"success": True, "results": []}]})
+        assert store.query("SELECT 1", list(range(MAX_BOUND_PARAMS))) == []
+        assert len(captured) == 1
+
+    @pytest.mark.parametrize("bad", [
+        float("nan"), float("inf"), float("-inf"), True, False,
+        {"k": 1}, ["x"], b"x",
+    ])
+    def test_non_finite_scalar_bind_sends_zero(self, monkeypatch, bad):
+        """有限スカラー (None/str/int/有限 float) 以外は送らず弾く。"""
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        captured: list = []
+        store = self._store(monkeypatch, captured, {"success": True, "result": [{"success": True, "results": []}]})
+        with pytest.raises(D1Error, match="bind"):
+            store.query("SELECT ?", [bad])
+        assert captured == []
+
+    @pytest.mark.parametrize("bad", [{"a": 1}, "x", (1, 2), {1, 2}])
+    def test_non_list_params_sends_zero(self, monkeypatch, bad):
+        """params は list か None。それ以外 (dict/str/tuple…) は送らず弾く。
+
+        形検査なしでは dict→key 列・str→文字列へ素通しし、JSON params の
+        形が崩れる。実呼び出しは list のみ。
+        """
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        captured: list = []
+        store = self._store(monkeypatch, captured, {"success": True, "result": [{"success": True, "results": []}]})
+        with pytest.raises(D1Error, match="list か None"):
+            store.query("SELECT ?", bad)
+        assert captured == []
+
+    def test_finite_scalar_binds_send(self, monkeypatch):
+        captured: list = []
+        store = self._store(monkeypatch, captured, {"success": True, "result": [{"success": True, "results": []}]})
+        assert store.query("SELECT ?", [None, "s", 1, 0, 1.5, -0.0]) == []
+        assert len(captured) == 1
+
+    @pytest.mark.parametrize("response,match", [
+        ([], "object でない"),
+        ({"success": 1, "result": [{"success": True, "results": []}]}, "D1 エラー"),
+        ({"success": "true", "result": [{"success": True, "results": []}]}, "D1 エラー"),
+        ({"result": [{"success": True, "results": []}]}, "D1 エラー"),
+        ({"success": True}, "1 文の list"),
+        ({"success": True, "result": []}, "1 文の list"),
+        ({"success": True, "result": [{}, {}]}, "1 文の list"),
+        ({"success": True, "result": "x"}, "1 文の list"),
+        ({"success": True, "result": [[]]}, "entry が success"),
+        ({"success": True, "result": [{"success": False, "results": []}]}, "entry が success"),
+        ({"success": True, "result": [{"results": []}]}, "entry が success"),
+        ({"success": True, "result": [{"success": True}]}, "results が list"),
+        ({"success": True, "result": [{"success": True, "results": {}}]}, "results が list"),
+        ({"success": True, "result": [{"success": True, "results": ["x"]}]}, "object でない"),
+        ({"success": True, "result": [{"success": True, "results": [None]}]}, "object でない"),
+    ])
+    def test_malformed_response_is_rejected(self, monkeypatch, response, match):
+        """応答の形 (dict・literal True・result exact1・entry・results・行) を
+        厳密検査する。不正は例外 (応答後のため送信は 1 回発生する)。"""
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        captured: list = []
+        store = self._store(monkeypatch, captured, response)
+        with pytest.raises(D1Error, match=match):
+            store.query("SELECT 1")
+        assert len(captured) == 1
+
+    def test_empty_results_and_extension_keys_are_accepted(self, monkeypatch):
+        """空 results (行なし SELECT・書込空応答) は正常。entry の拡張 key も許す。"""
+        captured: list = []
+        store = self._store(
+            monkeypatch, captured,
+            {"success": True, "result": [{"success": True, "results": [], "meta": {}}],
+             "errors": [], "messages": []},
+        )
+        assert store.query("SELECT 1") == []
+        assert len(captured) == 1
+
     def test_upsert_builds_conflict_clause_without_overwriting_pk(self, monkeypatch):
         captured: list = []
-        store = self._store(monkeypatch, captured, {"success": True, "result": []})
+        store = self._store(monkeypatch, captured, {"success": True, "result": [{"success": True, "results": []}]})
         written = store.upsert(
             "jss_supply_latest",
             ["code", "data_date", "buy"],
@@ -318,7 +401,7 @@ class TestD1Store:
     def test_keep_columns_are_written_back_from_the_table_not_excluded(self, monkeypatch):
         """`keep` に挙げた列は再送のたびに excluded.* で上書きしない (overlaps_refactor)。"""
         captured: list = []
-        store = self._store(monkeypatch, captured, {"success": True, "result": []})
+        store = self._store(monkeypatch, captured, {"success": True, "result": [{"success": True, "results": []}]})
         store.upsert(
             "jss_raw_files",
             ["sha256", "first_fetched_at", "last_fetched_at"],
@@ -416,6 +499,22 @@ class TestDatabaseFileSize:
         with pytest.raises(D1Error, match="読めない"):
             store.database_file_size()
 
+    @pytest.mark.parametrize("response,match", [
+        ([], "object でない"),
+        ({"success": 1, "result": {"file_size": 1, "num_tables": 1}}, "D1 容量エラー"),
+        ({"success": True, "result": []}, "result が object"),
+        ({"success": True, "result": None}, "result が object"),
+        ({"success": True}, "result が object"),
+    ])
+    def test_envelope_is_strict(self, monkeypatch, response, match):
+        """dict 応答・literal True・result dict を必須にする (兄弟経路も同格)。"""
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        captured: list = []
+        store = self._store(monkeypatch, captured, response)
+        with pytest.raises(D1Error, match=match):
+            store.database_file_size()
+
 
 class TestD1BatchUpsert:
     """複数行を1文にまとめて往復を減らす。
@@ -431,7 +530,7 @@ class TestD1BatchUpsert:
 
         class _Resp:
             def json(self):
-                return {"success": True, "result": [{"results": []}]}
+                return {"success": True, "result": [{"success": True, "results": []}]}
 
         def fake_post(url, *, json_body, headers, idempotent=False, **kwargs):
             captured.append(json_body)
@@ -484,6 +583,41 @@ class TestD1BatchUpsert:
             store.upsert("t", ["a", "b"], [[1, 2], [3]], conflict=["a"])
         assert captured == []  # 送っていない
 
+    def test_second_half_nan_sends_zero(self, monkeypatch):
+        """全行の有限検査は最初の chunk 送信より前。後半 NaN でも送らない。"""
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        captured: list = []
+        store = self._store(monkeypatch, captured)
+        rows = [[f"c{i}", "t", float(i)] for i in range(40)]
+        rows[35][2] = float("nan")  # 2 chunk 目 (3 列なら 33 行/回)
+        with pytest.raises(D1Error, match="非有限 float"):
+            store.upsert("t", ["code", "data_type", "n"], rows, conflict=["code"])
+        assert captured == []
+
+    @pytest.mark.parametrize("bad", [True, {"k": 1}, float("inf")])
+    def test_upsert_rejects_non_scalar_before_sending(self, monkeypatch, bad):
+        """upsert も `query` と同じ helper で検査する (sends 0)。"""
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        captured: list = []
+        store = self._store(monkeypatch, captured)
+        with pytest.raises(D1Error, match="列目"):
+            store.upsert("t", ["a", "b"], [[1, 2], [3, bad]], conflict=["a"])
+        assert captured == []
+
+    @pytest.mark.parametrize("rows", ["ab", ("a", "b"), {"k": 1}, [["a", "b"], "cd"], [["a", "b"], ("c", "d")]])
+    def test_upsert_rejects_non_list_container_before_sending(self, monkeypatch, rows):
+        """rows 全体・各行は list 形が必須。str 行は幅一致でも文字 flatten するため
+        幅検査より先に弾く (sends 0)。"""
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        captured: list = []
+        store = self._store(monkeypatch, captured)
+        with pytest.raises(D1Error, match="list"):
+            store.upsert("t", ["a", "b"], rows, conflict=["a"])
+        assert captured == []
+
     def test_all_columns_as_conflict_key_is_rejected(self, monkeypatch):
         """更新する列が無い upsert は SQL が壊れるので事前に弾く。"""
         from jp_stock_pipeline.cloud_store.d1 import D1Error
@@ -521,7 +655,7 @@ class TestD1UpsertKeepAgainstRealSqlite:
 
         class _Resp:
             def json(self):
-                return {"success": True, "result": [{"results": []}]}
+                return {"success": True, "result": [{"success": True, "results": []}]}
 
         def fake_post(url, *, json_body, headers, idempotent=False, **kwargs):
             con.execute(json_body["sql"], json_body["params"])

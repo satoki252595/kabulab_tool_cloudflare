@@ -48,7 +48,7 @@ from ..collectors.edinet_codelist import (
 )
 from ..config import Settings, load_settings
 from ..contracts.sector33 import TSE_SECTOR33_NAMES, normalize_sector33
-from ..contracts.stock_code import source_code_to_ticker
+from ..contracts.stock_code import parse_stock_code, source_code_to_ticker
 from .runner import JobContext, build_parser, main_exit, run_job
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,7 @@ DIAG_KINDS = frozenset(
         "sector33-gap",
         "archive-failure",
         "config-stop",
+        "invalid-current-stop",
     }
 )
 
@@ -192,6 +193,51 @@ def _scan_listed_rows(zip_bytes: bytes) -> tuple[list[dict], list[SectorHold]]:
             }
         )
     return admitted, holds
+
+
+def _validate_current_snapshot(current: list[dict]) -> None:
+    """active-equity snapshot の完全性 gate。不正は typed STOP (書込 0)。
+
+    空 snapshot・非 dict 行・code/sector33 欠落・非正準 code・phantom・
+    sector33 非 str/非 None・code 重複は identity 未確定として通さない。
+    code は標準 `parse_stock_code` の正準形と一文字ずつ一致が必須
+    (5 桁 source 形・trim 差・表記揺れは正準でないため STOP)。
+    重複は正準 ID で見る。`0000` は標準 helper が通す phantom のため
+    明示除外する。sector33 は str/None の構造型のみ許す (dict/list は
+    後段で hash 不能・数値は DB 形として不正)。未知文字列・None は
+    retain + gap のまま (NULL 消去しない方針は維持)。
+    """
+    if not current:
+        raise SectorPrewriteStop(
+            "invalid-current-stop", "current active snapshot が空 (identity 未確定)"
+        )
+    seen: set[str] = set()
+    for index, row in enumerate(current):
+        if not isinstance(row, dict) or "code" not in row or "sector33" not in row:
+            raise SectorPrewriteStop(
+                "invalid-current-stop", f"snapshot {index} 行目が不完全 (code/sector33 欠落)"
+            )
+        code = row.get("code")
+        canon = parse_stock_code(code)
+        if canon is None or canon != code:
+            raise SectorPrewriteStop(
+                "invalid-current-stop", f"snapshot {index} 行目の code が正準形ではない: {code!r}"
+            )
+        if canon == "0000":
+            raise SectorPrewriteStop(
+                "invalid-current-stop", f"snapshot {index} 行目が phantom code: {code!r}"
+            )
+        sector = row.get("sector33")
+        if sector is not None and not isinstance(sector, str):
+            raise SectorPrewriteStop(
+                "invalid-current-stop",
+                f"snapshot {index} 行目の sector33 が str/None ではない: {type(sector).__name__}",
+            )
+        if canon in seen:
+            raise SectorPrewriteStop(
+                "invalid-current-stop", f"snapshot の code 重複: {canon!r}"
+            )
+        seen.add(canon)
 
 
 def _verify_normalization(admitted: list[dict]) -> None:
@@ -387,6 +433,12 @@ def execute(ctx: JobContext) -> SectorReport:
     except D1Error as exc:
         ctx.add_failure("sector33-read", f"現在値を読めない: {exc}")
         report.stopped = "read-failure"
+        return report
+    try:
+        _validate_current_snapshot(current)
+    except SectorPrewriteStop as exc:
+        ctx.add_failure(f"sector33-prewrite-{exc.kind}", str(exc))
+        report.stopped = exc.kind
         return report
     active = {str(r.get("code") or "") for r in current}
     try:
