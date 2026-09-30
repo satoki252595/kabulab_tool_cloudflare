@@ -57,11 +57,12 @@ SHA・limits のみ (public 可)。per-doc の値・表は private 0600 のみ�
   fiscal locator を持たない)。facts が unitYenFactor + fiscal + scope を
   運ぶ。same-table locator は facts の行自体。toSaveRows/status のみでは
   失われるため両方残す。新 parser instrumentation/trace なし。
-- receipt は既存 explicit unique/full-physical 証跡 (検証済み readback 記録)
-  が実 ZIP の SHA+length と一致した場合のみ RECEIVED。sha/bytes 一致のみ
-  では hosted を名乗らず ARCHIVE_PENDING のまま shaMatch metadata のみ残す
-  (byte identity ≠ hosted receipt)。不在 → PENDING、不正/不一致 → HOLD。
-  検証済み loader なし → 現状 RECEIVED 到達なし。
+- receipt は既証跡の静読のみ。不在 → ARCHIVE_PENDING、不正/実 bytes
+  不一致 → HOLD。same/written + pageId は manifest 照合の記録であって
+  hosted bytes の証明ではないため、一致しても RECEIVED にしない
+  (metadata として保持 + shaMatch)。検証済み physical receipt loader
+  なし → RECEIVED は将来の explicitly verified physical closure まで
+  到達なし。
 - 候補は parse+validate+pin+pin不一致なし+scope既知+receipt の全条件。
   意味は OFFLINE_CANDIDATE (live READY ではない)。計算結果をそのまま報告し
   grant で 0 に偽装しない (今回は receipt 証跡なしの実結果として 0)。
@@ -87,7 +88,7 @@ SHA・limits のみ (public 可)。per-doc の値・表は private 0600 のみ�
 - receipt: PENDING 3675 / RECEIVED 0。newQualified 0 (assert)。
 - 分離: oldL1Changed1695=1695 / newQualified=0 (別 field)。
 - census 自己整合 3602/3602 (同一 parser・同一 bytes の再現)。
-- 成果物: `repair-manifest.json` (3675) `bf9a6aeb…f16bb` /
+- 成果物: `repair-manifest.json` (3675) `fbe41196…5ab3f` /
   `repair-journal.jsonl` (3200行) `3327fc87…b5c9` /
   `repair-sets.json` `915a6aed…fd8d` /
   `repair-report.json` (0600 out-dir のみ)
@@ -120,8 +121,9 @@ d1r2mutation 0 / workflow 0 / newReceipts 0 / sends 0。
   現修正資格化する道を残し、過去を偽補完しない。
 - 旧 source pins mismatch は再 pin せず per-doc HOLD (今回は 0)。
 - receipt 証跡なし → 全 ARCHIVE_PENDING。不正/unknown 証跡は HOLD。
-  sha 一致のみでは hosted を名乗らない。offline 候補 0 は実結果。
-  liveReady 0 (fresh custody/CAS なし)・apply 許可 0 (grant なし) は別明示。
+  manifest 照合一致でも hosted を名乗らない (metadata 保持)。
+  offline 候補 0 は実結果。liveReady 0 (fresh custody/CAS なし)・
+  apply 許可 0 (grant なし) は別明示。
 - 未選択 protected fields は LIMIT (将来 fresh SELECT が要る)。unit/locator
   の断定は既 output の範囲に限る (量子幅を unit 倍率/locator 証拠と偽らない)。
 - 旧 journal/grants は照合読取のみ。CANCELLED grants は再利用しない。

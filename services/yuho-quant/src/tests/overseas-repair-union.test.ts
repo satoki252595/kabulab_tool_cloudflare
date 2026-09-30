@@ -153,18 +153,20 @@ describe("receipt 分類 (既証跡の静読のみ)", () => {
     ).toEqual({ state: "ARCHIVE_PENDING", shaMatch: true });
   });
 
-  it("既存 explicit unique/full-physical 証跡 + 実 bytes 一致のみ RECEIVED", () => {
-    const verified = {
+  it("manifest 照合 (same/written+pageId) があっても RECEIVED にしない (hosted 証明なし)", () => {
+    const manifestMatched = {
       sha256: "a".repeat(64),
       bytes: 120,
       receipt: { pageId: "page-1", manifestMatch: "same" },
     };
-    expect(classifyReceipt("S1008Q8O", new Map([["S1008Q8O", verified]]), actual)).toEqual({
-      state: "RECEIVED",
+    // 一致しても ARCHIVE_PENDING (metadata 保持)。RECEIVED は将来の
+    // explicitly verified physical closure まで到達なし。
+    expect(classifyReceipt("S1008Q8O", new Map([["S1008Q8O", manifestMatched]]), actual)).toEqual({
+      state: "ARCHIVE_PENDING",
       shaMatch: true,
     });
-    // 検証記録があっても実 bytes 不一致は HOLD。
-    const bad = { ...verified, sha256: "b".repeat(64) };
+    // 記録があっても実 bytes 不一致は HOLD。
+    const bad = { ...manifestMatched, sha256: "b".repeat(64) };
     expect(classifyReceipt("S1008Q8O", new Map([["S1008Q8O", bad]]), actual).state).toBe(
       "HOLD_RECEIPT"
     );

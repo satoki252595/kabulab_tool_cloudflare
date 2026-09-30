@@ -88,8 +88,8 @@ export interface ReceiptEvidence {
   sha256: string;
   bytes: number;
   /**
-   * 既存 explicit unique/full-physical 証跡 (検証済み readback の記録)。
-   * 不在のまま sha/bytes が一致しても hosted receipt を名乗らない。
+   * 既存 manifest 照合の記録 (same/written + pageId)。metadata として
+   * 保持するが、unique physical hosted bytes の証明にはならない。
    */
   receipt?: { pageId: string; manifestMatch: string };
 }
@@ -102,12 +102,12 @@ export interface ReceiptVerdict {
 
 /**
  * receipt 分類。証跡不在 → ARCHIVE_PENDING。形状外・実 bytes 不一致 →
- * HOLD_RECEIPT (不正/unknown は HOLD)。RECEIVED は既存 explicit
- * unique/full-physical 証跡 (検証済み readback 記録) が実 bytes と一致
- * した場合のみ。{sha256,bytes} の一致は byte identity の証明であって
- * hosted receipt の証明ではないため、単独では ARCHIVE_PENDING のまま
- * shaMatch metadata のみ残す。receipt 証跡自体は offline の既存入力のみ
- * (新規 fetch なし)。検証済み loader なし → 現状 RECEIVED 到達なし。
+ * HOLD_RECEIPT (不正/unknown は HOLD)。same/written + pageId は manifest
+ * 照合の記録であって unique physical hosted bytes の証明ではないため、
+ * 一致しても RECEIVED にしない (metadata として保持)。検証済み physical
+ * receipt loader なし → RECEIVED は将来の explicitly verified physical
+ * closure まで到達なし。receipt 証跡自体は offline の既存入力のみ
+ * (新規 fetch なし)。
  */
 export function classifyReceipt(
   doc: string,
@@ -123,14 +123,6 @@ export function classifyReceipt(
     Number.isFinite(ev.bytes);
   if (!shapeOK) return { state: "HOLD_RECEIPT", shaMatch: false };
   const shaMatch = ev.sha256 === actual.sha256 && ev.bytes === actual.bytes;
-  const r = ev.receipt;
-  const verified =
-    r !== undefined &&
-    typeof r === "object" &&
-    typeof r.pageId === "string" &&
-    r.pageId !== "" &&
-    (r.manifestMatch === "same" || r.manifestMatch === "written");
-  if (verified && shaMatch) return { state: "RECEIVED", shaMatch: true };
   if (!shaMatch) return { state: "HOLD_RECEIPT", shaMatch: false };
   return { state: "ARCHIVE_PENDING", shaMatch: true };
 }

@@ -23,10 +23,10 @@
  *   rounding/reconciliation 区間、facts は unitYenFactor + fiscal + scope。
  *   same-table locator は facts の行自体。private のみ)。
  * - receipt は既証跡の静読のみ (不在 → ARCHIVE_PENDING、不正/実 bytes
- *   不一致 → HOLD)。RECEIVED は既存 explicit unique/full-physical 証跡
- *   (検証済み readback 記録) が実 ZIP の SHA+length と一致した場合のみ。
- *   sha/bytes 一致のみでは hosted を名乗らず ARCHIVE_PENDING のまま
- *   shaMatch metadata のみ残す。検証済み loader なし → 現状到達なし。
+ *   不一致 → HOLD)。same/written + pageId は manifest 照合の記録であって
+ *   hosted bytes の証明ではないため、一致しても RECEIVED にしない
+ *   (metadata として保持)。検証済み physical receipt loader なし →
+ *   RECEIVED は将来の explicitly verified physical closure まで到達なし。
  * - 候補は parse+validate+pin+pin不一致なし+scope既知+receipt の全条件。
  *   意味は OFFLINE_CANDIDATE。計算結果をそのまま報告し、grant で 0 に
  *   偽装しない。liveReady / applyQualified は grant 状態として別明示。
@@ -750,6 +750,8 @@ interface ManifestRecord {
   reasons: string[];
   receipt: ReceiptState;
   receiptShaMatch: boolean;
+  /** manifest 照合 metadata (same/written+pageId)。hosted 証明ではない。 */
+  receiptMeta: { pageId: string; manifestMatch: string } | null;
 }
 
 async function main(): Promise<void> {
@@ -861,6 +863,7 @@ async function main(): Promise<void> {
     const censusClasses = cen ? censusTags(cen.oldStatus, cen.status) : [];
     const receiptVerdict = classifyReceipt(doc, receipts, { sha256: zipSHA, bytes: zipBytes.length });
     const receipt = receiptVerdict.state;
+    const receiptMeta = receipts.get(doc)?.receipt ?? null;
 
     // 現 parser → validate → 保存 caller 同等変換。例外は HOLD 分類 (fallback なし)。
     let currentStatus: string | null = null;
@@ -908,7 +911,7 @@ async function main(): Promise<void> {
       baseline: set === "applied59" ? "sealed" : "before",
       preimageRef: "", liveObserved: union.has(doc),
       verdict: "match", compareVerdict: null, reasons: [], receipt,
-      receiptShaMatch: receiptVerdict.shaMatch,
+      receiptShaMatch: receiptVerdict.shaMatch, receiptMeta,
     };
     newVerdicts.push({
       doc,
@@ -1089,7 +1092,7 @@ async function main(): Promise<void> {
       "73 pin不足は過去 custody UNKNOWN として apply HOLD。将来 official fresh GET/current identity/full-bytes/custody/current CAS で現修正資格化する道を残し、過去を偽補完しない。",
       "旧 source pins mismatch は再 pin せず per-doc HOLD。raw bytes/SHA の観測値は記録のみ。",
       "proof は rounding/reconciliation 区間。unit/locator の断定は既 output の範囲に限る (量子幅を unit 倍率/locator 証拠と偽らない。新 instrumentation なし)。",
-      "receipt 証跡なし → 全 ARCHIVE_PENDING。不正/unknown 証跡は HOLD。sha 一致のみでは hosted を名乗らない。",
+      "receipt 証跡なし → 全 ARCHIVE_PENDING。不正/unknown 証跡は HOLD。same/written+pageId は manifest 照合の記録であり hosted 証明ではない (metadata 保持)。RECEIVED は将来の explicitly verified physical closure まで到達なし。",
       "旧 journal/grants は照合読取のみ。CANCELLED grants は再利用しない。",
       "本番/source GET は未実行 (fetch 0)。orders/text 修正 0。",
     ],
