@@ -585,7 +585,9 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
     // `instrumentType` を修飾つきで参照するファイル (テスト以外) を固定する。
     //   - src/cron/universe.ts: 唯一の書き手 (ガードの件数も同じ SELECT で数える)
     //   - src/shared/db/active-equity.ts: 母集団の述語 (WHERE / ON だけで使う)
-    // 3 つ目が現れたら、値を select しているか、helper を経由しない述語である。
+    //   - scripts/sync/price40-cas-execute.ts: 値の select のみ
+    //     (frozen R1 との exact 照合。述語・書込・公開面なし)
+    // 4 つ目が現れたら、値を select しているか、helper を経由しない述語である。
     const qualifiedReferrers = collectSources(join(ROOT, "src"))
       .concat(collectSources(join(ROOT, "services")))
       .concat(collectSources(join(ROOT, "scripts")))
@@ -599,7 +601,11 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
     expect(
       qualifiedReferrers,
       "instrument_type を述語に使うなら src/shared/db/active-equity.ts の activeEquityCondition() を経由すること",
-    ).toEqual(["src/cron/universe.ts", "src/shared/db/active-equity.ts"]);
+    ).toEqual([
+      "scripts/sync/price40-cas-execute.ts",
+      "src/cron/universe.ts",
+      "src/shared/db/active-equity.ts",
+    ]);
   });
 
   it("sector33 の書き込み検出器が参照と書き込みを取り違えない", () => {
