@@ -616,6 +616,7 @@ describe("proveNormal45 再利用 (fresh 正常系)", () => {
     stockName: "架空",
     description: DESC,
     rowCount: 1,
+    recipients: [{ minShares: 100, recordMonth: 3 }],
   });
   const crow = (): BenefitRow => ({
     id: 11,

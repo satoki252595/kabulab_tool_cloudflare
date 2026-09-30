@@ -45,6 +45,24 @@ const VIOLATION_RULES = ["annotation", "too_long", "prose", "empty", "internal"]
 /** `taskId` の形式 (`benefitKey` の出力形式)。結果ファイル側のスキーマ検証にも使う。 */
 export const TASK_ID_PATTERN = /^[0-9a-f]{16}$/;
 
+const RecipientContext = z.strictObject({
+  minShares: z.number().check(z.int(), z.positive()),
+  recordMonth: z.number().check(z.int(), z.minimum(1), z.maximum(12)),
+});
+
+/** 同じ掲載文を受け取る実際の株数・権利月。重複を除き順序を固定する。 */
+export function recipientContexts(
+  rows: readonly Pick<BenefitRow, "minShares" | "recordMonth">[],
+): z.infer<typeof RecipientContext>[] {
+  const contexts = new Map<string, z.infer<typeof RecipientContext>>();
+  for (const { minShares, recordMonth } of rows) {
+    contexts.set(`${minShares}:${recordMonth}`, { minShares, recordMonth });
+  }
+  return [...contexts.values()].sort((a, b) =>
+    a.minShares - b.minShares || a.recordMonth - b.recordMonth,
+  );
+}
+
 /** タスクファイル 1 行。外部エージェントへの入力。 */
 export const SummaryTask = z.strictObject({
     /** `benefitKey(stockCode, description)`。結果の突き合わせキー。 */
@@ -61,6 +79,7 @@ export const SummaryTask = z.strictObject({
     description: z.string(),
     /** この文言を持つ D1 の行数 (権利月違い等)。作業量の目安。 */
     rowCount: z.number().check(z.int(), z.positive()),
+    recipients: z.array(RecipientContext).check(z.minLength(1)),
 });
 export type SummaryTask = z.infer<typeof SummaryTask>;
 
@@ -85,16 +104,18 @@ export function selectSummaryTasks(
 ): SummaryTask[] {
   const groups = new Map<
     string,
-    { stockCode: string; stockName: string; description: string; summaries: (string | null)[] }
+    { stockCode: string; stockName: string; description: string; summaries: (string | null)[];
+      recipients: Pick<BenefitRow, "minShares" | "recordMonth">[] }
   >();
   for (const r of rows) {
     const key = benefitKey(r.stockCode, r.description);
     let g = groups.get(key);
     if (!g) {
-      g = { stockCode: r.stockCode, stockName: r.stockName, description: r.description, summaries: [] };
+      g = { stockCode: r.stockCode, stockName: r.stockName, description: r.description, summaries: [], recipients: [] };
       groups.set(key, g);
     }
     g.summaries.push(r.shortSummary);
+    g.recipients.push({ minShares: r.minShares, recordMonth: r.recordMonth });
   }
 
   const tasks: SummaryTask[] = [];
@@ -122,6 +143,7 @@ export function selectSummaryTasks(
       stockName: g.stockName,
       description: g.description,
       rowCount: g.summaries.length,
+      recipients: recipientContexts(g.recipients),
     });
   }
 

@@ -12,6 +12,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - VWAPの日足・5分足・信用データの保存を取得時のR2版に条件付け、競合時は上書きせず停止。新規ファイルも取得時に存在しなかった場合だけ作成する。
 
 ### 変更
+- 優待の生成仕様を取込側の厳密判定に統一。実際の保有株数・権利月をタスクに渡し、発行後に条件が変わった結果は取込前に停止する。ポイントの一律円換算・任意の合算・年間額の流用を生成指示から除去（契約版 `2026-09-30.2`）。データ変更なし。
 - 海外 closed-44 修復 PREP の部分 WHERE ガードを廃止し、atomic batch 先頭の full16文書/all12facts・件数/両方向EXCEPT検証へ修正。未知通信失敗は停止、実NEWPOST同じ処理への再入は送信0。Nix actual44原本/SQLite17 tests PASS、通常共通パーサーの12numeric/32unknown一致を確認。CLIのliveは未閉鎖のため明示STOP、実データ変更0。証跡 `docs/test-logs/overseas-closed44-exec-2026-09-30.md`。
 - price40 corrective 9/29 本番適用 (APPLIED 40/unknown 0/write0 0。outside-held 7 + source-excluded 7。D1 SELECT 3 + batch POST 4 の文計 19 + Notion receipt 1。旧 LOCAL_REJECT は 745 fetch 置換が確定的 root cause (PR236 修正済み)。原本 receipt 508 は immutable archive 済み。新 receipt payload 7238B `1dd240e9…`。ACTUAL post 40 full7 照合 + same-producer reentry-0 PROOF-OK)。証跡 `docs/test-logs/price40-corrective-prep-20260930.md`。
 - VWAP 日足 producer の proof 化 + full-10y 適格 (fetchDaily が body 完了 clock・raw SHA・要求 range の proof を発行し meta echo 照合。通常 daily は 10y を 1 社 1 回取得し全置換。adj は金融入力外で bare OHLCV。intra 適格は span 一致・session 包含・splits 完全一致・窓内 split なし・10y のみ。daily 配信は 5y/legacy も構造どおり提供)。JSS public/private を再 deploy (public `9b6d5c8c`・private `b48fdc77`、health/licenses 200・無キー 401、100% active)。データ変更なし (#237, Refs #117)。
