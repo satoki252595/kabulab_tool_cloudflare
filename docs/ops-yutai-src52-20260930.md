@@ -8,7 +8,11 @@
 
 - 16 stocks / 52 benefit rows / 54 outside rows (保護)
 - 7075: canonical desc + 6,500/13,000 company 値。8153 sibs 2行は別正準証明
-- 35 unrepaired siblings: HOLD のまま (illegal-attr 0)
+- 35 unrepaired siblings: HOLD のまま (全52外・保護54内。全 source NULL、
+  うち 33行は推定値 non-NULL の未認定 legacy 残存 + 2行 NULL
+  (no_source_identity)。内訳 7033:10・7476:1・8255:16・4911:2・3467:2・
+  3512:1・5929:1。HOLD 理由は group docs の正規理由。不正 company 付与なし。
+  全体の金額修復完了は主張しない。scope52 のみ完了)
 
 ## source custody (事前・read-only 検証)
 
