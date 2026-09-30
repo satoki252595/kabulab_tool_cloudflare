@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- VWAP 日足 producer の proof 化 + full-10y 適格 (fetchDaily が body 完了 clock・raw SHA・要求 range の proof を発行し meta echo 照合。通常 daily は 10y を 1 社 1 回取得し全置換。adj は金融入力外で bare OHLCV。intra 適格は span 一致・session 包含・splits 完全一致・窓内 split なし・10y のみ。daily 配信は 5y/legacy も構造どおり提供)。JSS public/private を再 deploy (public `9b6d5c8c`・private `b48fdc77`、health/licenses 200・無キー 401、100% active)。データ変更なし (#237, Refs #117)。
 - 海外 L2 `source_max_date` の MAX を `stockIds` 指定時は対象集合に拘束 (未指定時は global MAX 不変・空は throw 維持。caller は global 呼び不変)。scope 別契約の focused tests (23 + 5 passed)。データ変更なし。
 - jss-api 日足の調整意味論を訂正 (価格は生値・adj_* は配当込 total-return、係数不明は null・偽 1 なし、出来高未補正、cache v2)。データ変更なし。
 - VWAP daily adj 修復の rebuild 土台 (fetchDaily 原文 capture hook 追加・repair-daily whole-post 再構築 + tests)。取得実績: 7944 は fresh 応答自体の非正 adj で HOLD (既知)、8303/8919 は未送信 STOP。Adj 定義は Yahoo 公式 [adjusted close は分割+配当](https://in.help.yahoo.com/kb/adjusted-close-sln28256.html)・[AAPL history の Close=分割調整・Adj Close=分割+配当/キャピタルゲイン](https://finance.yahoo.com/quote/AAPL/history/) に基づく。データ変更なし (Refs #117)。
