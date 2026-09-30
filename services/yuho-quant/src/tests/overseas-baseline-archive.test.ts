@@ -15,6 +15,7 @@ import {
   HoldError,
   loadFreeze,
   requireGrant,
+  writeDurablePrivate,
   type GateCounters,
 } from "../../data-scripts/overseas-baseline-archive.js";
 
@@ -54,6 +55,19 @@ describe("metadata (counts/SHA のみ)", () => {
 describe("loadFreeze (失敗系のみ)", () => {
   it("不在 dir は HOLD", () => {
     expect(() => loadFreeze(join(tmpdir(), "archive-test-absent-xyz"))).toThrow(HoldError);
+  });
+});
+
+describe("record receipt 即時保存 (wx0600+fsync)", () => {
+  it("単一書込・0600・内容一致", async () => {
+    const { statSync, readFileSync } = await import("node:fs");
+    const dir = mkdtempSync(join(tmpdir(), "archive-test-"));
+    const p = join(dir, "archive-record-receipt.json");
+    const sha = writeDurablePrivate(p, JSON.stringify({ a: 1 }));
+    expect((statSync(p).mode & 0o777)).toBe(0o600);
+    expect(JSON.parse(readFileSync(p, "utf8"))).toEqual({ a: 1 });
+    expect(sha).toMatch(/^[0-9a-f]{64}$/);
+    expect(() => writeDurablePrivate(p, JSON.stringify({ a: 2 }))).toThrow();
   });
 });
 

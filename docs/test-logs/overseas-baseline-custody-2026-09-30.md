@@ -1,8 +1,10 @@
 # 海外 baseline custody / current PREP proposal (2026-09-30)
 
-LOCAL proposal のみ (未実行)。現行基準は frozen 3675 + current parser +
-NEW full16/Q2 all13。旧 1781/1894 分割・旧 1687/1695 counts は
-historical のみ (live target count にしない)。
+現行基準は frozen 3675 + current parser + NEW full16/Q2 all13。
+旧 1781/1894 分割・旧 1687/1695 counts は historical のみ
+(live target count にしない)。
+archive ONE は実行済み PASS (09:18:19Z)・join PREP は local 実行済み
+(09:28:15Z)。再実行・re-GET・re-record なし。
 本記録は counts・SHA・limits のみ (public 可)。raw・表・値は
 private 0600 のみ。
 
@@ -23,16 +25,31 @@ private 0600 のみ。
 - immutableKey: `freshread-baseline-20260930:{liveSHA}`
   (`liveSHA` = `96f5af98…`。actual capture 由来)。
 - one logical shared strict custody: 上記 key の単一論理単位。
-  ZIP pin は byte identity であり physical Notion custody ではない
-  (PENDING のまま)。
+- baseline ZIP は OBSERVATION (DB 観測の保管)。
+  3675 rawZIP の primary proof では決してない。
+  source-primary の適格判断は join PREP / source 照合が担う
+  (証跡 `docs/test-logs/overseas-current3675-join-2026-09-30.md`)。
 - code/source/preflight pins は baseline-pins.json に固定
   (runner blob/full・params/combined/SQL・union・d1Target)。
 
-## Archive runner (CODE CLEAR 待ち・live 未実行)
+## Archive runner (ONE 実行済み PASS・再実行なし)
 
-- script: `services/yuho-quant/data-scripts/overseas-baseline-archive.ts`
-  (blob `41e890d7fc68`, FULL `e784c02597c8…bec0`,
-  test blob `9bb228f9db1f` 7 passed 同梱)。
+- 実行 bytes: `services/yuho-quant/data-scripts/overseas-baseline-archive.ts`
+  HEAD `e793866` (blob `41e890d7fc68`, FULL `e784c025…bec0`)。
+  09:18:04Z→09:18:19Z exit 0: recorded・manifestMatch written・
+  Notion 16 ≤ 96・hosted GET 3 = 3・ZIP 160 closure 3/3 + 3/3。
+  pageId は private report (`a8113ca0…0cf52`) のみ。
+- e793 order 限界 (保持・捏造なし): known-result は readback 後の
+  最終 report にのみ保存された。事後の `archive-record-receipt.json`
+  (`f3a3aebd…76a0b`) は post-hoc 保持であり、returnedAt は
+  実 instant ではなく send-log 由来の bound
+  (09:18:14.169Z→09:18:15.231Z) として記録した。
+  earlier receipt の捏造なし。
+- producer 修正 (rerun なし・将来 HEAD 用): record 復帰直後に
+  known-result を wx0600+fsync で即時保存し、その後に
+  unique/readback を行う (blob `4ff6ee00caaf`、
+  FULL `0cc1b2ef…4700`、self pin `269c2fc3…655`、
+  test 8 passed・preflight `bfcaa288…9de` sends 0)。
 - fixed key `freshread-baseline-20260930:{liveSHA}` + fetchedAt 08:40:31Z。
   force=false 固定。record → queryUniqueRow 一意性 →
   verifyArchivedAttachments 全 3 files bytes/SHA (既存 Promise<void>)。
@@ -50,25 +67,29 @@ private 0600 のみ。
   modules + typed TOKEN/PAGE_ID 存在 (欠落は HOLD nonzero)。
   証跡 `archive-preflight.json` `4cbeafb2…63683` (0600)。
 
-## Archive 境界 (conditional GO・未実行)
+## Archive 境界 (通過・実行済み)
 
-- Root conditional GO: ONE shared force=false logical record +
-  full hosted ZIP + ALL members。SourceGET 0 / D1 write 0。
-- 実行は review boundary の後: fixed hash / member list / full pins /
-  safe format の independent CODE CLEAR + Root first notification。
-  境界通過後は追加 Root wait なしに進行可。
-- safe format: 上記 ZIP bytes + member-list + pins のみ。
-  全 members 検証 (count/SHA) を archive 前後に行う。
+- Root conditional GO + independent CODE CLEAR + Root first
+  notification を経て ONE を実行した (追加 wait なし)。
+  force=false・full hosted ZIP + ALL members・SourceGET 0 / D1 write 0。
+- safe format: ZIP bytes + member-list + pins のみ。
+  全 members 検証 (count/SHA) は archive 前後に完了。
+- 以降の reverify/reupload/re-record/new key なし
+  (Root accepted・追加 Notion 停止)。
 
-## Join proposal (parser rerun なし・未実行)
+## Join PREP (local 実行済み・parser rerun なし)
 
-- 既存 PR216 private facts/proof journal (per-doc after/proof/facts) を
-  NEW 3675 baseline (fresh Q1F/Q2F) に join する。parser 再実行なし。
-- verdicts: changed / match / hold + source-custody-pending を分離する。
+- fresh Q1F/Q2F x pin census 3602 x tags x inspect-73 の exact join を
+  local 実行した (network 0)。parser 再実行なし。
+  証跡 `docs/test-logs/overseas-current3675-join-2026-09-30.md`。
+- 3675 = PIN_PRESENT 3602 + PIN_MISSING_HOLD 73。
+  distinct stocks 563 (HOLD 接触 67)。Q2 21245 = 20848 + 397。
+  論理キー doc 内重複 0。
+- 73 は全通 ZIP あり + actual SHA 初回記録 + fresh identity あり。
+  NEEDS_SOURCE_PROVENANCE_REVIEW・HOLD 継続 (REQUIRED なし)。
+- CAS keys (protected14 SHA + Q2 key/rows SHA)・L2 stock 集計は
+  join 成果物に確定 (executor guard 入力・書込 0)。
   旧 1687/1695 は使わない (join 実結果のみ)。
-- 保護: doc14 不変 + expected2 (overseas status/honbun) 比較。
-  facts は business key + 全列 + NULL + count で照合。
-  full preimage (doc 全16 + facts 全列) を CAS 入力とする。
 
 ## 73 pin-inspection (local・fetch 0・確定)
 
@@ -77,8 +98,9 @@ private 0600 のみ。
   (`inspect-73.json` `88c2d5a0…90b93`)。
 - 検査範囲の限定: official source metadata・current ZIP issuer・
   doc identity・known physical proof は未検査。
-  よって freshGET は全通 NEEDS_SOURCE_PROVENANCE_REVIEW
-  (既存 ZIP 実 SHA / source identity / known receipt の検査待ち)。
+  既存 ZIP actual SHA は join PREP で初回記録済み (73-provenance)。
+  source identity / known receipt は検査待ちのため全通
+  NEEDS_SOURCE_PROVENANCE_REVIEW を継続する。
   REQUIRED は既存 official provenance が資格化不能な場合のみ付与する。
   旧 pin 不足が GET を強制するとは主張しない。
 - 全通 HOLD 継続 (過去 custody UNKNOWN・現資格なし。偽補完なし)。
@@ -101,14 +123,14 @@ private 0600 のみ。
 
 ## zeros (now)
 
-sourceGET 0 / Notion READ+archive 0 / D1 READ+write 0 /
-R2 0 / dispatch 0。D1 READ 74 は前 run の authorized ONE のみ
-(再実行・re-GET なし)。
+sourceGET 0 / D1 追加 READ+write 0 / R2 0 / dispatch 0。
+Notion 16 + hosted 3 は authorized ONE archive のみ。
+D1 READ 74 は前 run の authorized ONE のみ
+(再実行・re-GET・re-record なし)。
 
 ## limits
 
-- 本 proposal 未実行。freeze ZIP は local 確定 (hosted archive は
-  review boundary の後)。
-- ZIP pin != physical Notion custody (PENDING)。
-- 73 は HOLD 継続 (将来 official fresh GET 道あり)。
-- code/test 新規なし (plan のみ)。
+- baseline ZIP は OBSERVATION。3675 rawZIP の primary proof ではない。
+- PIN_PRESENT は source 適格を意味しない (source-primary 別途)。
+- 73 は HOLD 継続 (過去 custody UNKNOWN・現資格なし)。
+- DB 観測は @08:40:31Z snapshot。executor は CAS guard で再確認する。

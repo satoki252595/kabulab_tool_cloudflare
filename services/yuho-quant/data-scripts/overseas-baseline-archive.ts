@@ -6,6 +6,8 @@
  * verifyArchivedAttachments の全 bytes (長さ+SHA) で readback 照合する。
  * 比較対象は pinned 期待値 (ZIP SHA + 全 160 名 + 159 payload SHA +
  * member-list pin)。Unknown は再送しない (shared client 契約)。
+ * 順序保証: record 復帰直後に known-result を wx0600+fsync で即時保存し、
+ * その後に unique/readback を行う (verify 成否に依らず記録事実が残る)。
  *
  * fixed key: `freshread-baseline-20260930:{liveSHA}` (actual capture 由来)。
  * fetchedAt: 実際の capture 終了 `08:40:31.050Z` (実行時刻にしない)。
@@ -85,7 +87,7 @@ const PINS = {
   scriptBlob: "666de96eccc74c2d09594d22c6413ea6245a1748",
   scriptFullSHA: "73935bd9d2f7308fd3d3102c49caf7078a4fe75b7735b30c4d6eeb839c7ced83",
   modules: {
-    archiveSelf: "beefddffe88f4401ee4e8cf0889b2353a432fc3440234a856ec89bbee91bfd44",
+    archiveSelf: "269c2fc36601ce10bf661e087f311b8bebfe2b310e434881314168acff213655",
     sharedArchive: "b4388151a2aa36cd6b70fabd4c22d1451641b39c7e7475e6b6c0e109573c5edf",
     sharedReadback: "6bfde103d2cad0cacd942833d3caa1957e44de167a0ce18345bae492c2b2194c",
     sharedClient: "4a7f780053ad4bce844e40323e75f4d1713bc1a0c5affe8e4710002192346754",
@@ -133,6 +135,21 @@ function argValue(n: string, dflt: string): string {
 function writePrivate(path: string, data: string | Buffer): string {
   writeFileSync(path, data, { mode: 0o600 });
   return sha256Hex(typeof data === "string" ? data : new Uint8Array(data));
+}
+
+/**
+ * record 直後の known-result 即時保存用: wx (単一書込) + 0600 + fsync。
+ * unique/readback の前に呼ぶ。以降の verify 成否に依らず記録事実が残る。
+ */
+export function writeDurablePrivate(path: string, data: string): string {
+  const fd = openSync(path, "wx", 0o600);
+  try {
+    writeSync(fd, data + "\n");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  return sha256Hex(data + "\n");
 }
 
 /** 追記 + fsync。 */
@@ -368,6 +385,17 @@ async function main(): Promise<void> {
       force: false,
     })
   );
+  // known-result 即時保存: record 復帰直後に durable 化し、unique/readback より先に残す。
+  // (fileTooLarge/manifest の HOLD 前。以降の verify 成否に依らず記録事実が残る。)
+  const returnedAt = new Date().toISOString();
+  const receiptSHA = writeDurablePrivate(
+    join(OUT_DIR, "archive-record-receipt.json"),
+    JSON.stringify({
+      returnedAt, outcome: result.outcome, manifestMatch: result.manifestMatch,
+      fileTooLarge: result.fileTooLarge, pageId: result.pageId,
+      workHEAD: workHead, keySHA: sha256Hex(BASELINE_KEY),
+    }, null, 2)
+  );
   if (result.fileTooLarge) {
     hold("full-hosted 不可 (WS 上限超過ファイルあり)。記録事実は残す。custody 主張なし");
   }
@@ -406,7 +434,7 @@ async function main(): Promise<void> {
     mode: "baseline-archive", grant, workHEAD: workHead,
     key: BASELINE_KEY, fetchedAt: FETCHED_AT,
     outcome: result.outcome, manifestMatch: result.manifestMatch, fileTooLarge: result.fileTooLarge,
-    pageId: result.pageId,
+    pageId: result.pageId, returnedAt, recordReceiptSHA: receiptSHA,
     scope: { ...PINS, modules: moduleSHAs, scriptFullSHA, notionBudget: NOTION_BUDGET, rawGetBudget: RAW_GET_BUDGET },
     gate,
     notionStats: stats,
@@ -426,7 +454,10 @@ async function main(): Promise<void> {
     modules: moduleSHAs, scriptFullSHA,
     gate, notionStats: stats,
     zeros: report.zeros, limits: report.limits,
-    artifacts: { report: { path: join(OUT_DIR, "archive-report.json"), sha256: reportSHA } },
+    artifacts: {
+      report: { path: join(OUT_DIR, "archive-report.json"), sha256: reportSHA },
+      recordReceipt: { path: join(OUT_DIR, "archive-record-receipt.json"), sha256: receiptSHA },
+    },
     at_end: report.at_end,
   }));
 }
