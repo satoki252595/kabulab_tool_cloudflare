@@ -52,17 +52,32 @@ it("conditional repair preserves the native ETag and propagates a stale precondi
 });
 
 describe("r2Put contract (1 attempt, no retry)", () => {
+  it("known missing objects create only while still absent", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValueOnce(svcError("PreconditionFailed", 412));
+    await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(R2PutRejectedError);
+    const command = send.mock.calls[0][0] as PutObjectCommand;
+    expect(command.input.IfNoneMatch).toBe("*");
+    expect(command.input.IfMatch).toBeUndefined();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([undefined, "", " ", "*", " * "])("invalid observed version %s never sends", async (version) => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    await expect(r2Put("daily/7203.json", "{}", version as string)).rejects.toThrow("observed ETag");
+    expect(send).not.toHaveBeenCalled();
+  });
   it("2xx + ETag resolves", async () => {
     const send = vi.spyOn(S3Client.prototype, "send");
     send.mockImplementationOnce(async () => okPut());
-    await r2Put("daily/7203.json", "{}");
+    await r2Put("daily/7203.json", "{}", null);
     expect(send).toHaveBeenCalledTimes(1);
   });
 
   it("timeout without response is unknown, sent once", async () => {
     const send = vi.spyOn(S3Client.prototype, "send");
     send.mockRejectedValueOnce(svcError("TimeoutError"));
-    await expect(r2Put("daily/7203.json", "{}")).rejects.toBeInstanceOf(
+    await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(
       R2PutUnknownError
     );
     expect(send).toHaveBeenCalledTimes(1);
@@ -73,7 +88,7 @@ describe("r2Put contract (1 attempt, no retry)", () => {
     async (name, status) => {
       const send = vi.spyOn(S3Client.prototype, "send");
       send.mockRejectedValueOnce(svcError(name, status));
-      await expect(r2Put("daily/7203.json", "{}")).rejects.toBeInstanceOf(
+      await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(
         R2PutUnknownError
       );
       expect(send).toHaveBeenCalledTimes(1);
@@ -87,7 +102,7 @@ describe("r2Put contract (1 attempt, no retry)", () => {
   ])("%s (%s) is explicit rejection", async (name, status) => {
     const send = vi.spyOn(S3Client.prototype, "send");
     send.mockRejectedValueOnce(svcError(name, status));
-    await expect(r2Put("daily/7203.json", "{}")).rejects.toBeInstanceOf(
+    await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(
       R2PutRejectedError
     );
     expect(send).toHaveBeenCalledTimes(1);
@@ -96,7 +111,7 @@ describe("r2Put contract (1 attempt, no retry)", () => {
   it("2xx without ETag is unknown, not success", async () => {
     const send = vi.spyOn(S3Client.prototype, "send");
     send.mockImplementationOnce(async () => ({ $metadata: { httpStatusCode: 200 } }));
-    await expect(r2Put("daily/7203.json", "{}")).rejects.toBeInstanceOf(
+    await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(
       R2PutUnknownError
     );
   });
@@ -104,7 +119,7 @@ describe("r2Put contract (1 attempt, no retry)", () => {
   it("resolved response without metadata is unknown", async () => {
     const send = vi.spyOn(S3Client.prototype, "send");
     send.mockImplementationOnce(async () => ({ ETag: '"x"' }));
-    await expect(r2Put("daily/7203.json", "{}")).rejects.toBeInstanceOf(
+    await expect(r2Put("daily/7203.json", "{}", null)).rejects.toBeInstanceOf(
       R2PutUnknownError
     );
   });
@@ -116,7 +131,7 @@ describe("r2Put contract (1 attempt, no retry)", () => {
         name: "TimeoutError",
       })
     );
-    const err = (await r2Put("daily/7203.json", "{}").catch((e: unknown) => e)) as Error;
+    const err = (await r2Put("daily/7203.json", "{}", null).catch((e: unknown) => e)) as Error;
     expect(err.message).toContain("cause=TimeoutError/none");
     expect(err.message).not.toContain("LEAK");
     expect(err.message).not.toContain("https://");
