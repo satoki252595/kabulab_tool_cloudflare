@@ -38,11 +38,31 @@ EDINET コードリストからの sector33 差分同期ジョブ
 
 ## 検証 (offline)
 
-- `pipeline: ruff + pytest` 全緑 (1495 passed / 0 failed / 58 skipped)。
+- `pipeline: ruff + pytest` 全緑 (1501 passed / 0 failed / 58 skipped)。
   実フィクスチャ＋実 helper で archive 失敗→writer 0、重複 STOP、
   合法欠損 HOLD、未知 retain、非株式 0、2nd diff 0、sector-only・
   `updated_at` 保護、診断 taxonomy 全種別を cover。
-- TS CLI は vitest 7 件 (record 1 回・unique・全 bytes SHA 照合の
-  正常/異常系)。
+- TS CLI は vitest 7 件。実 shared `verifyArchivedAttachments` を
+  stub transport 上で実行し、record 1 回・unique・全 bytes SHA 照合・
+  同名 ZIP 重複＋manifest 欠落の拒否を cover (独自照合 loop なし)。
+
+## BLOCKER 対応 (PR213 review)
+
+- (1) TS 独自 list/download/SHA loop を削除し、共有の厳格
+  `verifyArchivedAttachments` (unique filename＋full bytes HTTP200・
+  length・SHA) を `queryUnique` 後に呼ぶ 1 経路に統合。vitest は実
+  verifier 実行 (transport のみ stub) で重複 ZIP・manifest 欠落・
+  external・長短・SHA 不一致・DL 失敗を落とす。
+- (2) 保管世代 key を `edinet-codelist-{asOf}-{manifest正準12hex}` に
+  変更 (`_generation_key`: 不変の capture metadata 派生。`key` 自記は
+  digest 対象外)。record 時 `now()` 採番なし、失敗時の別 key 発明なし。
+  旧 `edinet-codelist-{asof}` 形と衝突しないため 9/30 pins を保全する。
+- 同日 source の正常な繰り返し producer を厳格原本 replay
+  (`StrictArchiveDouble`: 単発 record force=false・unique・hosted 層
+  全 bytes 照合) で統合対照: 両 run archive 成功 (新世代 key・照合一致)、
+  1 回目 N 行書込・2 回目 D1 差分 0、先行 pin bytes 不変。同一 key＋異
+  bytes は失敗 (逃げ key なし)、hosted 改竄は SHA で検出、manifest pin
+  不一致は producer 検査で検出。
+- 外部送受信の追加 0 (source/Notion/D1/R2/dispatch)。D1/R2 実書込 0。
 - 通常 3817 件の parse 結果は保持 (合法 preferred/empty/00000 は
   非候補に分離)。

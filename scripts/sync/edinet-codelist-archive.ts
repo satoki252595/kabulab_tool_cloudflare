@@ -1,8 +1,9 @@
 /**
  * EDINET コードリストの原本 custody 薄 CLI。
  * Python の sector33_sync が subprocess で呼ぶ 1 経路。
- * shared recordPrimaryData (force:false) → unique + physical/full-bytes-SHA
- * verify が成功した場合のみ D1 writer へ進んでよい。
+ * shared recordPrimaryData (force:false) → 既存 queryUnique (unique) →
+ * 既存 verifyArchivedAttachments (unique filename + full bytes) が成功した
+ * 場合のみ D1 writer へ進んでよい。自前の list/download/SHA ループは持たない。
  * stdout は結果 JSON の 1 行のみ。診断は stderr。成功で exit 0、 else exit 1。
  */
 import "dotenv/config";
@@ -13,21 +14,13 @@ import {
   queryUniqueRow,
   recordPrimaryData,
 } from "../../src/shared/notion-archive/archive.js";
-import { listPageFiles } from "../../src/shared/notion-archive/page-file.js";
+import { verifyArchivedAttachments } from "../../src/shared/notion-archive/readback.js";
 import { notionEnv } from "../../src/shared/notion-archive/env.js";
-
-export interface ArchiveFileRef {
-  name: string;
-  kind: string;
-  url: string;
-}
 
 export interface ArchiveDeps {
   record: typeof recordPrimaryData;
   findDb: (service: string) => Promise<string | null>;
   queryUnique: (dbId: string, key: string) => Promise<{ id: string } | null>;
-  listFiles: (pageId: string) => Promise<readonly ArchiveFileRef[]>;
-  download: (url: string) => Promise<Uint8Array>;
 }
 
 export interface ArchiveInput {
@@ -46,7 +39,6 @@ export interface ArchiveResult {
   outcome?: "recorded" | "skipped_existing";
   pageId?: string;
   verified: boolean;
-  files?: { name: string; bytes: number; sha256: string }[];
   reason?: string;
 }
 
@@ -89,36 +81,19 @@ export async function archiveAndVerify(
   }
   if (!row) return fail("同 run で行を再取得できない");
   if (row.id !== rec.pageId) return fail("再取得した行が記録 page と不一致");
-  const hosted = await deps.listFiles(row.id);
-  const want = new Map([
-    [input.zipName, input.zipBytes],
-    [input.manifestName, input.manifestBytes],
-  ]);
-  if (hosted.length !== want.size) {
-    return fail(`添付 ${hosted.length} 件 ≠ 記録 ${want.size} 件`);
+  try {
+    await verifyArchivedAttachments(
+      row.id,
+      [
+        { filename: input.zipName, bytes: input.zipBytes },
+        { filename: input.manifestName, bytes: input.manifestBytes },
+      ],
+      "edinet-codelist-archive"
+    );
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e));
   }
-  const verified: { name: string; bytes: number; sha256: string }[] = [];
-  for (const h of hosted) {
-    const expected = want.get(h.name);
-    if (!expected) return fail(`想定外の添付「${h.name}」`);
-    if (h.kind !== "file") return fail(`「${h.name}」が hosted 添付ではない`);
-    let bytes: Uint8Array;
-    try {
-      bytes = await deps.download(h.url);
-    } catch (e) {
-      return fail(`「${h.name}」の再取得に失敗: ${e instanceof Error ? e.message : e}`);
-    }
-    if (bytes.length !== expected.length) {
-      return fail(`「${h.name}」のバイト長 ${bytes.length} ≠ ${expected.length}`);
-    }
-    const [got, wantSha] = await Promise.all([
-      sha256HexBytes(Uint8Array.from(bytes)),
-      sha256HexBytes(Uint8Array.from(expected)),
-    ]);
-    if (got !== wantSha) return fail(`「${h.name}」の SHA256 不一致`);
-    verified.push({ name: h.name, bytes: bytes.length, sha256: got });
-  }
-  return { ok: true, outcome: rec.outcome, pageId: rec.pageId, verified: true, files: verified };
+  return { ok: true, outcome: rec.outcome, pageId: rec.pageId, verified: true };
 }
 
 export function parseArchiveArgs(argv: readonly string[]): {
@@ -163,12 +138,6 @@ const realDeps: ArchiveDeps = {
       { property: "Key", title: { equals: key } },
       "edinet-codelist-archive: 同 run の unique 検証"
     ),
-  listFiles: (pageId) => listPageFiles(pageId, "Files"),
-  download: async (url) => {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`status=${res.status}`);
-    return new Uint8Array(await res.arrayBuffer());
-  },
 };
 
 async function main(): Promise<number> {

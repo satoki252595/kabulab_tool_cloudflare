@@ -251,8 +251,21 @@ def _qualify_targets(
     return qualified, holds
 
 
-def _archive_key(asof: str) -> str:
-    return f"edinet-codelist-{asof}"
+def _generation_key(asof: str, manifest: dict[str, object]) -> str:
+    """保管世代 key を不変の capture metadata から派生させる。
+
+    入力は実際の fetch で固定された値のみ (asOf/zipSha256/zipBytes/
+    requestedAt/completedAt/listedRecords/sourceUrl)。本文内の `"key"`
+    自記は digest 対象外 (循環回避)。record 時の `now()` 採番はしない
+    (再実行で別 key になる冪等破壊のため禁止)。同一 capture は同一 key、
+    1 バイトでも違えば別 key になる。旧 `edinet-codelist-{asof}` 形とは
+    衝突しないため既存 pin を保全する。失敗時に別 key を発明する逃げ
+    経路は持たない (単発 CLI 呼び・失敗は archive-failure STOP)。
+    """
+    capture = {k: v for k, v in manifest.items() if k != "key"}
+    canonical = json.dumps(capture, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+    return f"edinet-codelist-{asof}-{digest}"
 
 
 def execute(ctx: JobContext) -> SectorReport:
@@ -284,7 +297,6 @@ def execute(ctx: JobContext) -> SectorReport:
         report.stopped = "asof-unknown"
         return report
     asof = records[0].provenance.data_date.isoformat()
-    key = _archive_key(asof)
     # 完全性 gate は保管より前 (壊れた世代を custody しない)。共有検査 +
     # scan/一致/再正規化のいずれも read-only。
     try:
@@ -309,8 +321,7 @@ def execute(ctx: JobContext) -> SectorReport:
         ctx.add_failure(f"sector33-prewrite-{exc.kind}", str(exc))
         report.stopped = exc.kind
         return report
-    manifest = {
-        "key": key,
+    manifest: dict[str, object] = {
         "asOf": asof,
         "zipSha256": hashlib.sha256(zip_bytes).hexdigest(),
         "zipBytes": len(zip_bytes),
@@ -319,6 +330,8 @@ def execute(ctx: JobContext) -> SectorReport:
         "listedRecords": len(records),
         "sourceUrl": edinet_codelist.CODELIST_URL,
     }
+    key = _generation_key(asof, manifest)
+    manifest["key"] = key  # 自記 (digest 対象外。照合は CLI/double が key 一致で行う)
     manifest_path = artifact.local_path.parent / f"{artifact.local_path.stem}-sector33-manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
 
