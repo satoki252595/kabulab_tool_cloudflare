@@ -86,6 +86,21 @@ describe("selectSummaryTasks", () => {
     expect(tasks.map((t) => t.taskId)).toEqual([K_CATALOG]);
   });
 
+  it("受取条件をタスクへ渡し、文言が同じでも発行後の株数・月変更をはじく", () => {
+    const rows = [ROWS[0], { ...ROWS[1], recordMonth: 9 }, { ...ROWS[0], id: 13 }];
+    const tasks = selectSummaryTasks(rows);
+    expect(tasks[0].recipients).toEqual([
+      { minShares: 100, recordMonth: 3 }, { minShares: 100, recordMonth: 9 },
+    ]);
+    expect(planSummaryImport({ tasks, currentRows: [...rows].reverse(), resultsText: result({}) }).updates).toHaveLength(1);
+    for (const changed of [{ minShares: 200 }, { recordMonth: 6 }]) {
+      const currentRows = rows.map((r, i) => i === 0 ? { ...r, ...changed } : r);
+      const plan = planSummaryImport({ tasks, currentRows, resultsText: result({}) });
+      expect(plan.updates).toEqual([]);
+      expect(plan.rejections.map((r) => r.reason)).toEqual(["stale"]);
+    }
+  });
+
   it("--limit は決定的な順序の先頭から切る", () => {
     expect(selectSummaryTasks(ROWS, { limit: 1 }).map((t) => t.taskId)).toEqual([K_CATALOG]);
   });

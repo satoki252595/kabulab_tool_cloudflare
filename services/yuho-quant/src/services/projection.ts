@@ -436,7 +436,7 @@ export async function rebuildYuhoGrowthProjection(
     });
   }
 
-  // 30 列 × 3 行 = 90 binds/文 (D1 上限 100)。列を足したら直すこと。
+  // 32 列 × 3 行 = 96 binds/文 (D1 上限 100)。列を足したら直すこと。
   const ROWS_PER_STATEMENT = 3;
   for (let i = 0; i < rows.length; i += ROWS_PER_STATEMENT) {
     const chunk = rows.slice(i, i + ROWS_PER_STATEMENT);

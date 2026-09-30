@@ -177,16 +177,16 @@ GitHub Actions 月次
 
 1. `pnpm yutai:summary:export` が要約の要る `(銘柄, 掲載文)` をタスク JSONL に書き出す (要約が NULL / 既存要約が契約違反。`--violations-only` で後者だけ)。`--retask-keys` で内容キー指定の作り直し (`rework`) も出せる (2026-09-28。契約上有効だが別群の要約・tier 違いの修復用)。
 2. 外部エージェントが [作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md) に従って結果 JSONL を返す。
-3. `pnpm yutai:summary:import` が結果を**信用せずに**検証し (要約契約 `summary-contract.ts`、金額の決定論ガード `sanitizeEstimatedValue`、`taskId` と今の D1 の内容キーの一致、契約の版)、通った行だけを書く。既定は dry-run。`--apply` では書いた銘柄の `yutai_yield` とスコア 3 列を同一実行で再計算する (`recompute-yields.ts`。2026-09-28。取り込みだけ利回りを置き去りにする fresh stale の再発防止。`data_date` は月次のまま)。書き込み予定が無い再実行ではタスク対象の利回りを再評価する (中断からの復帰用。冪等)。
+3. `pnpm yutai:summary:import` が結果を**信用せずに**検証し (要約契約、共有厳密金額判定 `qualifyCompanyPerGrantValue`、`taskId` と現行掲載文の一致、発行時の株数・権利月と現行群の一致、契約の版)、通った行だけを書く。金額は原文で一意に裏づけられた1回分の全体額だけを `company` として保存する。ポイントの一律円換算、選択肢の代表額、任意の合算、年間額の各月への流用はしない。既定は dry-run。`--apply` では同じ post 入力から `yutai_yield` とスコア3列も再計算する (`data_date` は保護)。書く予定が無い再実行でもタスク対象の利回りを再評価する。
 
-fetch (`fetch-yutai-full.ts`) は全削除→再 INSERT の前に解釈を内容キーで退避して戻すが、戻す前に推定値を現行ゲートで検証し、通らない値 (0・抽選賞品・根拠なし) は要約だけ戻して値を `null` で戻す (2026-09-28。無検証の温存をやめる)。出典 (`estimate_value_source`) も一緒に退避する (従来は落としていて毎 fetch で全行 null になっていた)。
+fetch (`fetch-yutai-full.ts`) は掲載文・株数・権利月が一致する解釈だけを持ち越す。現在の表見出し・全受取条件の群を同じ厳密判定へ渡し、不認定の旧値は要約を保って金額と出典をともに `null` にする。出典NULLの旧値も、現在の掲載原文・表ローカルの月条件で適格になった場合だけ `company` に上げる。未対応出典の非NULL値は削除前に停止する。取込終了時には利回りとスコアも再計算する。月次・再計算もこの共通判定を通る金額だけを使い、値不明を0円として計算しない。
 
 タスク / 結果ファイルは掲載文を含むので gitignore 済みの `data-scripts/data/` かリポジトリ外にしか置けない (`private-path.ts` が git に確かめて止める)。
 
 経緯: `claude -p` (サブスク CLI) → node-llama-cpp によるローカル LLM (ELYZA-JP-8B、初回に数 GB を DL) → クラウド LLM。ローカル経路は生成側に長さチェックの退路があり、契約違反の要約 85 行 (8,314 行中) を公開面に残していた。クラウド LLM の費用は Cursor 等の契約側で発生し、このリポジトリの原価ではない。
 
 - 例: `"QUOカード 1,000円相当"` / `"ゼンショー食事券 6,000円(年12,000円)"` / `"高島屋10%割引(限度30万円)"`
-- `estimatedValue`: 年間の推定金銭価値 (円)。割引券など金額換算不能なものは `null`
+- `estimatedValue`: その権利月に受け取る優待全体の1回分の円建て額面。原文から一意に決められないものは `null`
 - カード一覧: `shortSummary` を `" / "` 区切りで表示
 - 銘柄詳細: `shortSummary` のみを表示する。`description` は出典サイトの掲載文そのもので、
   規約上の再掲不可のため**公開面には出さない** (推定額の算出など内部処理専用。
