@@ -142,6 +142,32 @@ code/test/framework の新規なし。本記録は schema・counts・SHA・limit
 - 未知 stockIds の取得なし・全37980 audit claim なし。stockIds は
   fresh Q1 の観測 stock_id のみから導出する。
 
+## Capture runner (CODE 詳報・preflight 済み・live 未実行)
+
+- script: `services/yuho-quant/data-scripts/overseas-fresh-read-capture.ts`
+  (blob `43945b940b1b`, test blob `6829db053f1d` 17 passed 同梱)。
+  usage: live `--grant="<Root承認文>"` (grant-first・なしは HOLD) /
+  preflight `--preflight` (送信 0・FS 書込 0)。
+- 送信路: budget 74 bound + fsync-first attempt log + whole body wx0600 +
+  safe receipt (bodySHA/path/rawBytes・request 秘密なし) + redirect manual +
+  retry 0。1 query 1 attempt。Q1 exact partition (missing HOLD 継続) /
+  Q2 identity/keyset/order/per-doc COUNT/full cols/NULL strict。
+- pins (送信前に全断言): okdocs `034cefad…` / params37 `df1d194b…` /
+  q1f100 `24d06c43…` / q1f75 `66c5bb36…` / q2f100 `b411e068…` /
+  q2f75 `0d18c03f…` / combined74 `69745666…` / modules
+  (select-proof `6c864f43…` / d1-client `cde8899a…` /
+  yuho-schema `8adec138…` / core-schema `3393ccc6…` /
+  self 正準化 `96581547…`)。self 実 full-file SHA `d11d8a60…`
+  は報告のみ (循環回避。Root 外部 pin)。
+- 正準 D1 target = `d1HttpQueryUrl()` 出力の SHA。Root 指定
+  `a7bcf8e2…8ba0e` と照合 (不一致/env 不在は HOLD)。
+- preflight 結果 (本 env・cred なし): 静的 scope PASS
+  (37 chunks・params/SQL/combined/modules 全一致)。
+  target 段で HOLD exit 1 (env-file 不在・fail-closed 正)。
+  sends 0・writes 0 (out dir 未作成)。
+- 状態: GPT-sol CODE CLEAR 待ち。CLEAR + 最終 hash pins 報告まで
+  live 実行しない。CLEAR 後は ONE 74-SELECT run のみ (追加許可なし)。
+
 ## 再使用 helper (新規なし)
 
 - `overseas-745-select-proof.ts` (blob `91eb924f41fc`):
