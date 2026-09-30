@@ -613,7 +613,8 @@ function projectedNames(sqlText: string): string[] {
   });
 }
 
-function assertProjection(sqlText: string, expectCount: number, label: string): void {
+/** exported for fresh-read-capture reuse (no behavior change). */
+export function assertProjection(sqlText: string, expectCount: number, label: string): void {
   const names = projectedNames(sqlText);
   if (names.length !== expectCount) {
     hold(`${label} 射影数外: ${names.length} != ${expectCount}`);
@@ -639,7 +640,8 @@ interface LiveDoc {
   factsCount: number;
 }
 
-interface LiveFact {
+/** exported for fresh-read-capture reuse (no behavior change). */
+export interface LiveFact {
   docId: string;
   id: number;
   documentId: number;
@@ -685,7 +687,8 @@ function validateQ1Row(r: Record<string, unknown>, label: string): LiveDoc {
   };
 }
 
-function validateQ2Row(r: Record<string, unknown>, label: string): LiveFact {
+/** exported for fresh-read-capture reuse (no behavior change). */
+export function validateQ2Row(r: Record<string, unknown>, label: string): LiveFact {
   const keys = Object.keys(r).sort();
   const want = ["docId", "documentId", "fiscalYearEnd", "id", "isConsolidated", "pattern",
     "ratioPct", "regionKind", "regionName", "salesRaw", "salesYen", "stockId", "unitLabel"].sort();

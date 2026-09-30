@@ -1,0 +1,246 @@
+# 海外 fresh full READ / custody / CAS proposal (2026-09-30)
+
+PROPOSAL として開始し、capture runner 実装 + preflight を経て
+ONE authorized 74-SELECT run を実行済み (下記 Actual run)。
+本記録は schema・counts・SHA・limits のみ (public 可)。
+exact 列表・chunk 計画・pin 表・raw は private 0600 のみ。
+
+- branch: `fix/overseas-freshread-prep-20260930` from main `cd25a81` (PR216 merge)
+- packet: `/tmp/overseas-freshread-prep-20260930/freshread-packet.json`
+  `bd4ca899…063411` / `freshread-chunks.json` `cc44578b…47ccf` (0600)
+
+## 現状の trust 境界 (proposal の前提)
+
+- 旧1781 Q1 projection (7列) は full preimage ではない。不足 10列:
+  `edinet_code`, `doc_type_code`, `filer_name`, `period_start`,
+  `submitted_at`, `parse_status`, `honbun_file`, `text_parse_status`,
+  `notion_doc_page_id`, `ingested_at`。
+- outside 1894 の LIVE_UNOBSERVED は DB 不在ではない (未観測であり、
+  存在・不在のいずれも断定しない)。fresh read は 3675 全通を対象とし、
+  全通に観測 identity または明示の missing-identity HOLD を与える。
+
+## Fresh full READ 仕様 (案)
+
+- Q1F (per chunk): `yuho_documents` 全 16列 (schema.ts 宣言順) +
+  doc別 correlated `factsCount` = 17射影。doc identity + protected全列。
+- Q2F (per chunk): `yuho_overseas_facts` 全 12 storage列 + `docId` echo
+  (inner join) = 13射影。決定順 (`doc_id`, `fiscal_year_end`,
+  `region_name`)。全facts列 (旧 Q2 と同一・既に full)。
+- chunks: 3675 sorted docIDs を ≤100 で 37 chunks (36×100 + 1×75)。
+  chunk 計画は packet に pin (per-chunk SHA)。
+- parameter counts: per SELECT の binds は chunk IDs のみ (≤100)。
+  D1 上限 (bind 100 / 1文100KB / 1invocation 1000query) は
+  呼出側 chunk 分割で遵守 (d1-http-client 契約)。
+- 送信回数上限: 37 chunks × (Q1F + Q2F) = **74 SELECT / 74 HTTP**。
+  単発試行・追加 retry 0・書込 0。guard budget 74
+  (`createBoundedFetch` を budget 差替で再使用。batch envelope 禁止・
+  SELECT 以外拒否・書込語拒否・budget+1 件目を送信前拒否)。
+- 型付き `db.select` のみ (raw positional arrays 不使用)。実行前に
+  `toSQL` を取得し read-only + 射影数 (17/13) + 射影名 uniqueness を
+  断言 (`assertProjection` 再使用。C29 再発防止)。
+- exact parameterized SQL template は packet に pin (実 drizzle builders の
+  offline `toSQL` 生成。executor は throw のため未実行)。
+  Q1F template `dbd42ae9…fecbd2d` / Q2F template `47f4b830…2acf75d`
+  (binds は `{?chunkIDs}` のみ。per-chunk params = chunk docIDs、
+  binds = chunk 件数 (100×36 + 75)。perChunkParams を packet に pin)。
+
+## 観測の受理条件 (案・select-proof と同一 strictness)
+
+- Q1 cardinality: 行数 ≤ chunk 件数。observed docIDs は unique かつ
+  chunk の subset、missing = chunk − observed の exact set partition
+  (重複・echo 範囲外 → STOP)。missing doc → per-doc MISSING_IDENTITY
+  (READ は継続し、CAS で HOLD)。rows == all IDs は要求しない
+  (missing HOLD 継続と両立しないため)。
+- Q2: 決定順検証 + Q1 連鎖 (`document_id`/`stock_id` 一致) + PK 重複 STOP +
+  canonical-key (doc + fiscalYearEnd + regionName) 重複 STOP。
+- doc別 COUNT 照合: Q1.factsCount == Q2 per-doc rows
+  (`assertPerDocCounts` 再使用。chunk 合計のみでは相互相殺を見逃す)。
+- 0-rows (factsCount 0 + Q2 0行) は正当な不在観測 (doc 行あり・facts なし)。
+  DB-missing とは呼ばない。NULL は保持 (ルール2・0 埋めなし)。
+  shape/type 外・unknown は STOP (推測しない)。
+- stdout は counts/SHA のみ (D1 IDs/values 0)。honbun 等の protected 値は
+  0600 のみ。
+
+## Source / custody (案)
+
+- source 3675: 既存 raw ZIP + `manifest_full.json` pin を carry。
+  pin 照合 (SHA/length) は byte identity であり、Notion full physical
+  custody ではない。full-custody-qualified vs pending の per-doc 分割は
+  byte 照合 + 下記 hosted physical の両方で行う。
+- full physical custody (byte 照合とは別途・将来 grant): unique hosted
+  actual ZIP の full HTTP 200 / length / SHA を shared verify
+  (`verifyArchivedAttachments` 系) で確認する。D1 full post
+  (postflight) とは別物であり、same-run 記述で混同しない。
+- 73 historical UNKNOWN は保持 (過去 custody 不明・apply HOLD。偽補完なし)。
+  将来 official fresh GET / current identity / full-bytes / custody /
+  current CAS で現修正資格化する道 (PREP 記録の通り)。
+- Notion 一次保管は既存契約を再使用 (`{docID}:type1`/`:type5` keys +
+  実 bytes のみ。`recordEdinetZip` / `TypeCustody`
+  complete/metadata-only/missing/not-applicable)。custody 照会は
+  20 docs/回 (40 keys・上限 41 内)。今回は照会 0 (将来 grant)。
+
+## CAS (将来 apply・案。apply grant は別途)
+
+- 条件 (全充足のみ適用可): per-doc full fresh preimage 存在 (Q1F+Q2F) +
+  protected 14列の差 0 (pre→post) + missing-identity HOLD の解決または
+  除外 + orders/text 変更 0 + same-run full physical verify +
+  全 postflight + reentry 0。
+- protected 14列 = 全 doc 列から `overseas_parse_status` /
+  `overseas_honbun_file` を除いたもの (packet に列挙)。
+  repair の書込は overseas 2列 + facts 置換のみ
+  (backfill-overseas と同一形状: per-doc 単一 batch で
+  UPDATE + DELETE + INSERT(11列順・8行 chunk)。逐次 fallback なし)。
+- `yuho_order_facts` / text 系には触れない (UPDATE allowlist 2列・
+  DELETE は overseas 表に限定)。orders/text 変更 0 は CAS 条件に含める。
+- same-run verify は二段 (混同しない): (a) full physical verify =
+  hosted actual ZIP の full HTTP 200 / length / SHA の shared verify、
+  (b) D1 full post: doc の protected id + fields 不変を確認し、facts は
+  expected NEW 表と exact 照合する (全列 / 論理キー (fiscalYearEnd +
+  regionName) / count / NULL + fresh PK unique + documentId/stockId の
+  referential identity)。旧 facts full preimage は CAS guard (書込前照合)
+  専用。DELETE+INSERT は PK ids/row counts を置換するため、削除済み旧
+  fact IDs の存続は要求しない。両段 + reentry 0 が CAS 条件。
+- 注意: backfill-overseas の per-doc batch (UPDATE + DELETE + INSERT) は
+  full-preimage CAS ではない。将来の最小 executor は batch 先頭に
+  CAS guard (preimage 照合) を置き、UPDATE/DELETE/INSERT の前に検証する
+  こと。protected post-check のみでは不十分。実装は今しない
+  (global repair framework を作らない)。
+
+## L2 p_yuho_growth 関係 (actual caller 静読 trace・提案のみ)
+
+- 唯一の本番 caller: `src/cron/yuho-edinet.ts:245` (非シャード定時のみ。
+  shard 実行は sweep 競合のため走らせない)。現行は全量再生成
+  (stockIds なし)。scoped 使用は tests のみ。
+- `rebuildYuhoGrowthProjection(db, {stockIds})` の境界 (projection.ts 静読):
+  両入力 (受注 total + join submittedAt / 海外 3 regionKinds + join
+  submittedAt)・全 write (stockId PK upsert・30列×3行=90 binds/文)・
+  sweep (computedAt < runStarted) を同一 stockIds に拘束。対象銘柄は
+  全履歴を読む (書類 subset 切断なし)。空 stockIds は throw
+  (ALL 化なし)。sweep は対象外の既存行を残す (既書込 stockIds 境界)。
+  注意: `MAX(submittedAt)` (sourceMaxDate) は無条件全表
+  (scoped でも global)。
+- facts/status 修復後の plan (案・未実行): actual fresh Q1 で確定した
+  affected stockIds を 1 call ≤97 stockIds の group に分け、既再生成を
+  scoped 実行する (海外入力が regionKind 3 binds + stockIds のため
+  3+N ≤ 100 → N ≤ 97。全 affected を 1 call にしない)。
+  全 groups で単一の実生成 runStartedSec を共有する。
+  per-group に order 入力・overseas 入力・upsert・sweep・pre/post を
+  bounded 化し、reentry 0。旧 L2 は温存しない (stale 行は scoped
+  再生成で上書き・sweep で消去)。
+- 実関数からの exact query-count 公式 (per rebuild call):
+  3 SELECT (受注入力 + 海外入力 + MAX(submittedAt)) +
+  ceil(R/3) upsert (30列×3行=90 binds/文。R = 書込行数 ≤ 対象銘柄数) +
+  1 sweep DELETE = 4 + ceil(R/3)。G groups の総数は Σ (4 + ceil(R_g/3))、
+  上限 37G (R_g ≤ 97 のとき)。pre/post 計数は同一 groups で別途
+  bounded に計数する。
+- scoped MAX(submittedAt) は将来の最小 helper 変更として提案:
+  scoped branch のみ `where(stockIds)` を付け、global default caller
+  (引数なし全量) は不変。global 37980 scan / audit claim はしない。
+- 現状の表明: 既存関数は ≤97 grouping も scoped MAX も強制しない
+  (executor 側の grouping + helper 最小変更は将来 work であり、
+  already provided ではない)。実装・test・READ は今しない。
+- READ74 proposal は将来 L2 reads/writes budget と独立 (別 budget)。
+- 未知 stockIds の取得なし・全37980 audit claim なし。stockIds は
+  fresh Q1 の観測 stock_id のみから導出する。
+
+## Capture runner (CODE 詳報・preflight 済み・live 未実行)
+
+- script: `services/yuho-quant/data-scripts/overseas-fresh-read-capture.ts`
+  (blob `666de96eccc7`, test blob `fc1436ffe885` 21 passed 同梱)。
+  usage: live `--grant="<Root承認文>"` (grant-first・なしは HOLD) /
+  preflight `--preflight` (送信 0・FS 書込 0)。
+- 送信路: budget 74 bound + exact grant 照合 (D1 target SHA + attempt
+  SQL SHA + params idsSHA。log/forward の前) + per-seq marker 予約
+  (wx0600/fsync。重複は native 到達前に send 0) + OUT 既存拒否 (replay
+  防止) + fsync-first attempt log + whole body wx0600 + safe receipt
+  (bodySHA/path/rawBytes/sendAt/receivedAt・request 秘密なし) +
+  redirect manual + retry 0。
+  1 query 1 attempt。Q1 exact partition (missing HOLD 継続) /
+  Q2 identity/keyset/order/per-doc COUNT/full cols/NULL strict。
+  facts PK は全 37 chunks 横断の一集合で UNIQUE。
+- stdout-safety: D1 IDs/values・provider body は 0600 hold-details.log
+  のみ。stdout/stderr HOLD は safe label (counts/SHA 契約)。
+- pins (送信前に全断言): okdocs `034cefad…` / params37 `df1d194b…` /
+  q1f100 `24d06c43…` / q1f75 `66c5bb36…` / q2f100 `b411e068…` /
+  q2f75 `0d18c03f…` / combined74 `69745666…` / modules
+  (select-proof `6c864f43…` / d1-client `f2dc8d7a…` /
+  yuho-schema `8adec138…` / core-schema `3393ccc6…` /
+  shared-env `183af3b9…` / pnpm-lock `805dd5b3…` /
+  self 正準化 `4f18b30f…`)。self 実 full-file SHA `73935bd9…`
+  は報告のみ (循環回避。Root 外部 pin)。
+- 正準 D1 target = typed `D1_DATABASE_ID` 値の SHA。Root 指定
+  `a7bcf8e2…8ba0e` と照合 (不一致/env 不在は HOLD)。
+  forward 先 URL は同一 typed accessors の正準 URL と別軸 exact 照合。
+- preflight 結果 (正準 env・送信 0): exit 0 PASS。
+  37 chunks・params/SQL/combined/7 modules 全一致 +
+  d1Target `a7bcf8e2…` 照合済み。sends 0・writes 0 (out dir 未作成)。
+  証跡 `preflight-20260930.json` (private 0600・counts/SHA のみ)。
+- 状態: GPT-sol CODE CLEAR 済み・ONE 74-SELECT run 実行済み
+  (08:40Z・上記 Actual run)。追加 query/run なし。
+
+## 再使用 helper (新規なし)
+
+- `overseas-745-select-proof.ts` (blob `91eb924f41fc`):
+  `createBoundedFetch` / `assertProjection` / `projectedNames` /
+  `assertPerDocCounts` / Q1/Q2 型付き select 形状 / per-query manifest。
+- `backfill-overseas.ts`: per-doc 原子 batch 形状 (UPDATE + DELETE +
+  INSERT) / `validateOverseasSaveSet` 前検証 / `recordEdinetZip` 順序
+  (D1 書込より先)。
+- `src/shared/db/d1-http-client.ts`: `createD1HttpDb` (単発 SELECT・
+  strict success 検証・outcome-unknown は再送なし) /
+  `createD1HttpBatchSender` (将来 apply 用。件数一致 + 全文 success)。
+- parser `overseas-parser.ts` blob `07ad7a54b975c543a604dcf52b31df91b72f23f7`
+  (main `cd25a81` 時点。PREP と同一)。
+- L2 `rebuildYuhoGrowthProjection(db, {stockIds})` (将来 scoped 再生成用。
+  本番 caller は `src/cron/yuho-edinet.ts:245` のみ)。
+
+## 固定 pins (carry・packet で bytes 検証済み)
+
+- source: `manifest_full` `398843d5…02ca4` (3602) + ZIP 3675 (0600)
+- `okdocs` `034cefad…98735` / `savedfacts` `58122d8d…b2bbb31` (21258行)
+- 745-prep: manifest `c2345269…7083a7` / sets `62095358…308b5d1` /
+  journal `5127c73b…88d5b9dc` (1728行)
+- census `bb1cccb1…de7387` (3602 最終 freeze)
+- select: union `54c6fb38…f16fdc` (1781) / live `4a4cbc04…adeb517` /
+  compare `75ba0835…74e879`
+- repair PREP (PR216): manifest `754ecba7…caac98` (3675) /
+  journal `85985cda…e2af` (3654行) / sets `cf39b957…8884` /
+  report `9963b3b7…829`
+  (observed 21/1687/73 + historical 1440/454・LIVE_UNOBSERVED 1894)
+- code (main `cd25a81`): parser `07ad7a54…` / repair-prep script
+  `52b53b40b4c2` / repair-union lib `bcf704fec47f` /
+  select-proof `91eb924f41fc`
+
+## Actual run (ONE authorized 74-SELECT・executed)
+
+- workHEAD `f352c7cc3271` (commit は不変に保持)。
+  `08:40:24Z`–`08:40:31Z`。grant-first・preflight exit 0 経由。
+- 37 chunks、Q1F 37 + Q2F 37 = 74 sends / 74 receipts / 0 failed。
+  148 attempt-log lines (send 74 + receipt 74)。markers 74 + bodies 74。
+- counts: q1Rows 3675 / q2Rows 21245 / q1sum 21245 / missingDocs 0
+  (全通観測。旧 1894 未観測・73 pin不足を含む。存在観測であり
+  custody 意味は不変)。
+- artifacts (0600): union `6b0bd05a…` / manifest `e0870e02…` /
+  live `96f5af98…` / rawBodies combined `c959b2b2…` (74 files
+  独立 rehash OK)。
+- 旧 1781/1894 分割は historical のみ。現行 PREP 基準は
+  frozen 3675 + current parser + NEW full16/Q2 all13。
+- repair 対象数の主張なし (旧 1687/1695 から live target count を
+  導出しない)。L2/CAS は対象外 (別 proposal)。
+
+## zeros (now)
+
+D1 READ 74 (authorized ONE run のみ) / sourceGET 0 /
+Notion READ+archive 0 / D1 WRITE 0 / R2 0 / dispatch 0。
+追加 query/run/source/archive なし。新 grant は Root 別具体承認。
+
+## limits
+
+- 修復/CAS/L2/primary-custody は proposal のみ (未実行・別 grant 要)。
+  Fresh READ は実行済み (08:40Z・workHEAD f352・上記 Actual run pins)。
+- 旧 snapshot 1781 計測値は historical (旧観測)。
+  full preimage は fresh Q1F+Q2F のみ。
+- 未選択の protected 外 (orderFacts 行等) は scope 外:
+  変更不可を構造 (allowlist + 表限定) で保証し、CAS は doc 14列差 0 で
+  検証する。Root 確認事項。
+- orders/text 修正 0。closed 208/216 branches への push なし。
