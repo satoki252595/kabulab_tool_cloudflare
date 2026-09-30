@@ -12,6 +12,7 @@ import {
 } from "../../services/vwap-analysis/lib/margin.js";
 import { validateDailyMarginSnapshot } from "../../services/vwap-analysis/lib/margin-daily.js";
 import { r2Get, r2Put } from "./lib/r2.js";
+import { sanitizeLogText } from "./lib/ingest-guard.js";
 
 /** `--date=YYYYMMDD` (基準日) をパースする純関数。未指定なら undefined (最新)。 */
 export function parseDateArg(argv: readonly string[]): string | undefined {
@@ -155,8 +156,10 @@ export async function main(): Promise<void> {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main().catch((e) => {
-    console.error(e);
+  main().catch((e: unknown) => {
+    // 生 SDK cause (URL 等) を出さず sanitized のみ。
+    const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    console.error(`ingest-margin fatal: ${sanitizeLogText(text).slice(0, 300)}`);
     process.exit(1);
   });
 }

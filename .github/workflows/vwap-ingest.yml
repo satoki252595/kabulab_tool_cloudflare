@@ -66,6 +66,10 @@ jobs:
       # かつ Yahoo 側 429 は MAX_RL=5 連続中断ガードで保護(stock-sync が CONC=5 で実証済み)。
       CONC: "5"
       DELAY_MS: "300"
+      # 取込 knob の通常値 (必須宣言。コード側に黙示既定なし)。
+      MAX_RATE_LIMIT: "5"
+      KEEP_DAYS: "365"
+      INTRA_RANGE: "5d"
       YAHOO_PROXY_BASE: ${{ secrets.YAHOO_PROXY_BASE }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
@@ -99,8 +103,10 @@ jobs:
           (github.event_name == 'workflow_dispatch' &&
             (github.event.inputs.target == 'daily-intra' || github.event.inputs.target == 'all'))
         run: |
-          # daily の errors/invalid (exit1) で intra を道連れにしない。ABORT (exit2・
-          # 連続429/503) だけは intra を走らせず即 exit2 (「これ以上叩くな」契約を維持)。
+          # daily の errors/invalid (exit1) で intra を道連れにしない。exit2
+          # (連続429/503 ABORT・R2 fatal unknown/rejected/GET fault・バッチ保管
+          # 失敗・main 想定外) だけは intra を走らせず即 exit2 (「これ以上叩くな」
+          # 契約と未保管成功なしを維持)。
           daily_rc=0
           pnpm ingest:vwap-daily || daily_rc=$?
           if [ "$daily_rc" -eq 2 ]; then

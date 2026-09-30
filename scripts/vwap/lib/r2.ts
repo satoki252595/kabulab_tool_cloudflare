@@ -15,6 +15,9 @@ function client(): S3Client {
   if (!s3) {
     s3 = new S3Client({
       region: "auto",
+      // SDK 内部 retry を止める。mutation/read とも 1 試行のみ。
+      // 呼び出し側の retry() 包みも禁止 (mutation)。
+      maxAttempts: 1,
       endpoint: `https://${sharedEnv.R2_ACCOUNT_ID()}.r2.cloudflarestorage.com`,
       credentials: {
         accessKeyId: sharedEnv.R2_ACCESS_KEY_ID(),
@@ -25,6 +28,55 @@ function client(): S3Client {
   return s3;
 }
 
+/**
+ * R2 PUT が明示拒否された (適用なし確定。例: 412 PreconditionFailed)。
+ * 呼び出し側は rejected を正直計数し、新規送信を止めて fatal 終了する。
+ */
+export class R2PutRejectedError extends Error {
+  constructor(key: string, code: string, status: number | "none", cause: unknown) {
+    super(`R2 PUT 拒否 (適用なし確定。再送なし): ${key} cause=${code}/${status}`, { cause });
+    this.name = "R2PutRejectedError";
+  }
+}
+
+/**
+ * R2 PUT の結果が確定しなかった (応答なし/5xx/timeout/応答 schema 不正等)。
+ * 適用有無不明のため呼び出し側は新規送信を止め、既知 inflight を正直計数して
+ * summary 保管後に fatal 終了する。再送しない。
+ */
+export class R2PutUnknownError extends Error {
+  constructor(key: string, code: string, status: number | "none", cause: unknown) {
+    super(`R2 PUT 結果不明 (適用有無が確定しません。再送なし): ${key} cause=${code}/${status}`, { cause });
+    this.name = "R2PutUnknownError";
+  }
+}
+
+/** 生 cause から sanitized (code/status) のみ抜く。URL/秘密は文面に出さない。 */
+function r2CauseOf(e: unknown): { code: string; status: number | "none" } {
+  const err = e as { name?: unknown; $metadata?: { httpStatusCode?: unknown } } | null;
+  const code = typeof err?.name === "string" && err.name.length > 0 ? err.name : "unknown";
+  const raw = err?.$metadata?.httpStatusCode;
+  const status = typeof raw === "number" && Number.isFinite(raw) ? raw : "none";
+  return { code, status };
+}
+
+/**
+ * 明示拒否 (適用なし確定) の判定。412 前提失敗と retry 不能な確定 4xx のみ。
+ * 408/429 (retryable)・5xx・status なしは適用有無が曖昧なため unknown。
+ */
+function isExplicitRejection(code: string, status: number | "none"): boolean {
+  if (code === "PreconditionFailed" || status === 412) return true;
+  if (status === "none") return false;
+  if (status === 408 || status === 429) return false;
+  return status >= 400 && status < 500;
+}
+
+/**
+ * R2 へ 1 試行だけ PUT する (SDK 内部 retry なし。呼び出し側の retry() 包み禁止)。
+ * 成功契約: 2xx + nonempty ETag。満たさない応答・例外は
+ * R2PutRejectedError (明示拒否) か R2PutUnknownError (結果不明) のいずれかで
+ * throw する。どちらも呼び出し側は新規送信を止めて fatal 終了する。
+ */
 export async function r2Put(key: string, body: string, ifMatch?: string): Promise<void> {
   if (LOCAL_OUT) {
     // Repair CAS is an R2 server guarantee; local files are only a read-only preview.
@@ -34,7 +86,26 @@ export async function r2Put(key: string, body: string, ifMatch?: string): Promis
     await fs.writeFile(p, body);
     return;
   }
-  await client().send(new PutObjectCommand({ Bucket: sharedEnv.R2_BUCKET(), Key: key, Body: body, ContentType: "application/json", IfMatch: ifMatch }));
+  let res: unknown;
+  try {
+    res = await client().send(new PutObjectCommand({ Bucket: sharedEnv.R2_BUCKET(), Key: key, Body: body, ContentType: "application/json", IfMatch: ifMatch }));
+  } catch (e) {
+    const { code, status } = r2CauseOf(e);
+    if (isExplicitRejection(code, status)) throw new R2PutRejectedError(key, code, status, e);
+    throw new R2PutUnknownError(key, code, status, e);
+  }
+  const r = res as { ETag?: unknown; $metadata?: { httpStatusCode?: unknown } } | null;
+  const status = r?.$metadata?.httpStatusCode;
+  const etag = r?.ETag;
+  const statusOk = typeof status === "number" && Number.isFinite(status) && status >= 200 && status < 300;
+  const etagOk = typeof etag === "string" && etag.length > 0;
+  if (!statusOk || !etagOk) {
+    // 成功 schema を満たさない応答は結果不明 (known 失敗にしない)。
+    throw new R2PutUnknownError(key, "bad-response", statusOk ? (status as number) : "none", {
+      statusType: typeof status,
+      hasETag: etagOk,
+    });
+  }
 }
 
 export async function r2Get(key: string): Promise<string | null> {
@@ -52,13 +123,21 @@ export async function r2GetVersion(key: string): Promise<{ body: string; etag: s
       throw e;
     }
   }
+  // 正常 bootstrap は明示 NoSuchKey + service 404 のみ。汎用 404
+  // (bucket/endpoint 誤り等)・矛盾メタは missing-object の証明に
+  // ならないため fault として throw する。
+  // 成功 envelope は strict 200 + body + nonempty ETag を要求する。
   try {
     const r = await client().send(new GetObjectCommand({ Bucket: sharedEnv.R2_BUCKET(), Key: key }));
-    if (!r.Body || !r.ETag) throw new Error("R2 object body or ETag missing");
-    return { body: await r.Body.transformToString(), etag: r.ETag };
+    const status = (r as { $metadata?: { httpStatusCode?: unknown } }).$metadata?.httpStatusCode;
+    const etag = r.ETag;
+    if (status !== 200 || !r.Body || typeof etag !== "string" || etag.length === 0) {
+      throw new Error(`R2 GET 応答が不完全です: ${key}`);
+    }
+    return { body: await r.Body.transformToString(), etag };
   } catch (e) {
-    const error = e as { name?: string; $metadata?: { httpStatusCode?: number } };
-    if (error?.name === "NoSuchKey" || error?.$metadata?.httpStatusCode === 404) return null;
+    const err = e as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
+    if (err?.name === "NoSuchKey" && err?.$metadata?.httpStatusCode === 404) return null;
     throw e;
   }
 }

@@ -762,21 +762,131 @@ export interface Bar5m {
   v: number;
 }
 
+/** chart.error の field-family 診断。値は出さない (存在と型のみ)。 */
+function chartErrorFamily(err: unknown): string {
+  if (err === null || err === undefined) return "none";
+  if (typeof err !== "object") return `type=${typeof err}`;
+  if (Array.isArray(err)) return `array[${err.length}]`;
+  return `keys=${Object.keys(err as Record<string, unknown>).sort().join(",")}`;
+}
+
+/**
+ * chart result の厳密抽出。真正 empty は「構造的に妥当な result +
+ * timestamp 空配列」のみ。以下は success-empty にせず throw する:
+ * chart 非 object / chart.error 非 null (result 併存でも STOP) /
+ * result 非配列・非単一・非 object / timestamp 非配列・非有限・非正・
+ * 無効 JS 日付。`{0: res}` 形の未知 envelope は受けない。
+ */
+function extractChartResult(symbol: string, j: YahooChartJson): {
+  res: Exclude<
+    Exclude<Exclude<YahooChartJson["chart"], undefined>["result"], undefined>[number],
+    undefined
+  >;
+  timestamps: number[];
+} {
+  const chart = j?.chart as unknown;
+  if (chart === null || typeof chart !== "object" || Array.isArray(chart)) {
+    throw new Error(
+      `Chart API エラー [${symbol}]: chart がありません (空として採用しません)。`
+    );
+  }
+  const chartErr = (chart as { error?: unknown }).error;
+  if (chartErr !== null && chartErr !== undefined) {
+    throw new Error(
+      `Chart API エラー [${symbol}]: chart.error があるため採用しません (${chartErrorFamily(chartErr)})。`
+    );
+  }
+  const result = (chart as { result?: unknown }).result;
+  if (!Array.isArray(result) || result.length !== 1) {
+    throw new Error(
+      `Chart API エラー [${symbol}]: result が単一ではありません (空として採用しません)。`
+    );
+  }
+  const res = result[0] as Record<string, unknown> | null;
+  if (res === null || typeof res !== "object" || Array.isArray(res)) {
+    throw new Error(
+      `Chart API エラー [${symbol}]: result が object ではありません (空として採用しません)。`
+    );
+  }
+  const ts = res.timestamp;
+  if (!Array.isArray(ts)) {
+    throw new Error(
+      `Chart API エラー [${symbol}]: timestamp が配列ではありません (空として採用しません)。`
+    );
+  }
+  for (const t of ts) {
+    // jstDate 適用前に正の妥当 JS 日付であることを要求する
+    // (RangeError・source 日付捏造の防止)。
+    const ms = typeof t === "number" ? (t + 32400) * 1000 : NaN;
+    if (!Number.isFinite(t) || t <= 0 || !Number.isFinite(ms) || Number.isNaN(new Date(ms).getTime())) {
+      throw new Error(
+        `Chart API エラー [${symbol}]: timestamp が正当な時刻ではありません (空として採用しません)。`
+      );
+    }
+  }
+  return {
+    res: res as Exclude<
+      Exclude<Exclude<YahooChartJson["chart"], undefined>["result"], undefined>[number],
+      undefined
+    >,
+    timestamps: ts,
+  };
+}
+
+/**
+ * quote 必須 5 配列の検証。存在 + timestamps と exact 同長を要求する。
+ * 空配列は可 (真正 empty の形)。`[] + stale 非空 quote`・truncated quote は
+ * malformed (真正 empty・partial null 扱いしない)。同長での per-row null は
+ * 明示 row-missing として残す。
+ */
+function assertQuoteArrays(
+  symbol: string,
+  q: Record<string, unknown>,
+  timestampsLength: number
+): asserts q is {
+  open: unknown[];
+  high: unknown[];
+  low: unknown[];
+  close: unknown[];
+  volume: unknown[];
+} {
+  for (const k of ["open", "high", "low", "close", "volume"] as const) {
+    const arr = q[k];
+    if (!Array.isArray(arr)) {
+      throw new Error(
+        `Chart API エラー [${symbol}]: quote 配列 ${k} がありません (空として採用しません)。`
+      );
+    }
+    if (arr.length !== timestampsLength) {
+      throw new Error(
+        `Chart API エラー [${symbol}]: quote 配列 ${k} の長さが timestamp と一致しません ` +
+          `(${arr.length} vs ${timestampsLength})。`
+      );
+    }
+  }
+}
+
 // 5分足を正準形 [{ts,o,h,l,c,v}] で取得（蓄積・フロント共通の内部形式）。
+// 空の区別: timestamp 空配列の真正 empty → []。非空 timestamps で
+// 有効バー 0 かつ null 脱落あり → 欠落として throw (真正 empty にしない)。
+// 全行 v=0 (妥当 OHLC) → 意図的 business 除外の結果 [] (no-trade 観測。
+// 休日推定・v0 行の保持はしない)。
 export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]> {
   const r = await fetchYahooChartRaw(symbol, range, "5m", false);
   ensureOk(r);
   const j = (await r.json()) as YahooChartJson;
-  const res = j?.chart?.result?.[0];
-  if (!res || !res.timestamp) return [];
+  const { res, timestamps } = extractChartResult(symbol, j);
   // quote 欠落は仕様変更の疑い。空で黙殺せず落とす (旧実装は TypeError)。
   const q = res.indicators?.quote?.[0];
   if (!q) throw new Error(`Chart API エラー [${symbol}]: quote がありません`);
+  assertQuoteArrays(symbol, q as unknown as Record<string, unknown>, timestamps.length);
+  // 真正 empty: 構造妥当 + timestamp 空配列のみ。
+  if (timestamps.length === 0) return [];
   // raw-first 全行検査 (filter 前)。volume filter は無出来高異常を消すため、
   // 実在値の異常は欠落除去の前に見る (他欠落で隠さない)。
   assertRawBarsSane(
     symbol,
-    res.timestamp.map((_, i) => ({
+    timestamps.map((_, i) => ({
       o: q.open?.[i],
       h: q.high?.[i],
       l: q.low?.[i],
@@ -788,10 +898,10 @@ export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]
   // なら旧 session/split 前 bar との誤比較になるため明示 skip する。
   // 形成中 5m bar に daily 完了日 gate は転用しない。
   {
-    const li = res.timestamp.length - 1;
+    const li = timestamps.length - 1;
     if (
       li >= 0 &&
-      isProvenSamePoint(res.meta?.regularMarketTime, res.timestamp[li], 300)
+      isProvenSamePoint(res.meta?.regularMarketTime, timestamps[li], 300)
     ) {
       assertResponsePriceCoherent({
         symbol,
@@ -802,15 +912,25 @@ export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]
     }
   }
   const out: Bar5m[] = [];
-  for (let i = 0; i < res.timestamp.length; i++) {
+  let droppedNull = 0;
+  let droppedZeroVol = 0;
+  for (let i = 0; i < timestamps.length; i++) {
     const o = q.open?.[i],
       h = q.high?.[i],
       l = q.low?.[i],
       c = q.close?.[i],
       v = q.volume?.[i];
-    if (o == null || h == null || l == null || c == null || !v) continue;
+    if (o == null || h == null || l == null || c == null || v == null) {
+      droppedNull++;
+      continue;
+    }
+    // v=0 は raw として合法。filter 除外は意図的 business 選択。
+    if (!v) {
+      droppedZeroVol++;
+      continue;
+    }
     out.push({
-      ts: res.timestamp[i],
+      ts: timestamps[i],
       o: +o.toFixed(2),
       h: +h.toFixed(2),
       l: +l.toFixed(2),
@@ -818,25 +938,35 @@ export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]
       v,
     });
   }
+  if (out.length === 0 && droppedNull > 0) {
+    throw new Error(
+      `Chart API エラー [${symbol}]: 全行欠落のため空として採用しません ` +
+        `(timestamps=${timestamps.length} null脱落=${droppedNull} v0除外=${droppedZeroVol})。`
+    );
+  }
   out.sort((a, b) => a.ts - b.ts);
   return out;
 }
 
 // 日足（最大10年・分割/配当イベント込み）を取得・整形。
+// 空の区別は fetchBars5m と同一: 真正 empty は timestamp 空配列のみ。
+// 非空 timestamps で有効バー 0 (全行 null) → 欠落として throw する。
 export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyResult> {
   const r = await fetchYahooChartRaw(symbol, range, "1d", true);
   ensureOk(r);
   const j = (await r.json()) as YahooChartJson;
-  const res = j?.chart?.result?.[0];
-  if (!res || !res.timestamp) return { bars: [], splits: [] };
+  const { res, timestamps } = extractChartResult(symbol, j);
   // quote 欠落は仕様変更の疑い。空で黙殺せず落とす (旧実装は TypeError)。
   const q = res.indicators?.quote?.[0];
   if (!q) throw new Error(`Chart API エラー [${symbol}]: quote がありません`);
+  assertQuoteArrays(symbol, q as unknown as Record<string, unknown>, timestamps.length);
+  // 真正 empty: 構造妥当 + timestamp 空配列のみ。
+  if (timestamps.length === 0) return { bars: [], splits: [] };
   const adj = res.indicators?.adjclose?.[0]?.adjclose || [];
   // raw-first 全行検査 (filter 前)。使用/保存する adj の実値もここで見る。
   assertRawBarsSane(
     symbol,
-    res.timestamp.map((_, i) => ({
+    timestamps.map((_, i) => ({
       o: q.open?.[i],
       h: q.high?.[i],
       l: q.low?.[i],
@@ -846,13 +976,14 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
     adj
   );
   const bars: DailyBar[] = [];
-  for (let i = 0; i < res.timestamp.length; i++) {
+  for (let i = 0; i < timestamps.length; i++) {
     const o = q.open?.[i],
       h = q.high?.[i],
       l = q.low?.[i],
       c = q.close?.[i],
       v = q.volume?.[i];
     // null は欠落として落とす。null 出来高は 0 に化けない (missing≠実0)。
+    // v=0 は合法行として残す (daily は v0 を filter しない)。
     if (o == null || h == null || l == null || c == null || v == null) continue;
     // OHLCV 保存候補が揃った行で adj 欠落なら throw (c 代用なし。行だけの
     // silent skip も不可)。呼び出し側は当該 stock PUT0/errors/exit1 へ。
@@ -863,7 +994,7 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
       );
     }
     bars.push({
-      date: jstDate(res.timestamp[i]),
+      date: jstDate(timestamps[i]),
       o: +o.toFixed(2),
       h: +h.toFixed(2),
       l: +l.toFixed(2),
@@ -872,11 +1003,65 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
       adj: +a.toFixed(2),
     });
   }
+  // 非空 timestamps で有効バー 0 = 全行 null 欠落。真正 empty にしない。
+  // (daily は v=0 行を残すため、0 件は null 脱落のみで起きる)
+  if (bars.length === 0) {
+    throw new Error(
+      `Chart API エラー [${symbol}]: 全行欠落のため空として採用しません (timestamps=${timestamps.length})。`
+    );
+  }
   const splits: { date: string; ratio: number }[] = [];
-  const ev = res.events?.splits || {};
-  for (const k of Object.keys(ev)) {
-    const s = ev[k];
-    splits.push({ date: jstDate(s.date), ratio: s.numerator / s.denominator });
+  // events/splits は提供されれば期待 object。欠落 (null/undefined) のみ
+  // no-events として空扱いする (文書化された不在形)。
+  const events = res.events as unknown;
+  if (events !== null && events !== undefined) {
+    if (typeof events !== "object" || Array.isArray(events)) {
+      throw new Error(
+        `Chart API エラー [${symbol}]: events 応答の形状が不正です。`
+      );
+    }
+    const ev = (events as { splits?: unknown }).splits;
+    if (ev !== null && ev !== undefined) {
+      if (typeof ev !== "object" || Array.isArray(ev)) {
+        throw new Error(
+          `Chart API エラー [${symbol}]: splits 応答の形状が不正です。`
+        );
+      }
+      for (const k of Object.keys(ev)) {
+        const s = (ev as Record<string, unknown>)[k] as {
+          date?: unknown;
+          numerator?: unknown;
+          denominator?: unknown;
+        } | null;
+        // 分割株数は負にならない: 分子・分母は各々有限正数。
+        // (負/負が見かけ正 ratio になる抜けを塞ぐ)
+        const badShape =
+          s == null ||
+          typeof s.date !== "number" ||
+          !Number.isFinite(s.date) ||
+          s.date <= 0 ||
+          Number.isNaN(new Date((s.date + 32400) * 1000).getTime()) ||
+          !Number.isFinite(s.numerator) ||
+          (s.numerator as number) <= 0 ||
+          !Number.isFinite(s.denominator) ||
+          (s.denominator as number) <= 0;
+        if (badShape) {
+          throw new Error(
+            `Chart API エラー [${symbol}]: splits 応答の形状が不正です (key=${k})。`
+          );
+        }
+        // 結果 ratio が有限正数であることを要求する (0/負・overflow
+        // Infinity の JSON null 化を保存前に拒否。保存側契約と同一)。
+        const ratio = (s as { numerator: number; denominator: number }).numerator /
+          (s as { numerator: number; denominator: number }).denominator;
+        if (!Number.isFinite(ratio) || ratio <= 0) {
+          throw new Error(
+            `Chart API エラー [${symbol}]: splits ratio が正の有限値ではありません (key=${k})。`
+          );
+        }
+        splits.push({ date: jstDate(s.date as number), ratio });
+      }
+    }
   }
   // fetchChart と同じ応答整合 (R2 daily への別経路も書込前に拒否する)。
   {

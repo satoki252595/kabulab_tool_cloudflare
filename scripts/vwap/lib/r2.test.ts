@@ -1,6 +1,11 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { r2GetVersion, r2Put } from "./r2.js";
+import {
+  r2GetVersion,
+  r2Put,
+  R2PutRejectedError,
+  R2PutUnknownError,
+} from "./r2.js";
 
 vi.mock("../../../src/shared/env.js", () => ({
   sharedEnv: {
@@ -13,23 +18,167 @@ vi.mock("../../../src/shared/env.js", () => ({
 }));
 afterEach(() => vi.restoreAllMocks());
 
+const okGet = () => ({
+  ETag: '"native-etag"',
+  Body: { transformToString: async () => "original bytes" },
+  $metadata: { httpStatusCode: 200 },
+});
+const okPut = () => ({
+  ETag: '"put-etag"',
+  $metadata: { httpStatusCode: 200 },
+});
+const svcError = (name: string, status?: number) =>
+  Object.assign(new Error(name), {
+    name,
+    ...(status === undefined ? {} : { $metadata: { httpStatusCode: status } }),
+  });
+
 it("conditional repair preserves the native ETag and propagates a stale precondition failure", async () => {
   const send = vi.spyOn(S3Client.prototype, "send");
-  send.mockImplementationOnce(async () => ({
-    ETag: '"native-etag"',
-    Body: { transformToString: async () => "original bytes" },
-  }));
+  send.mockImplementationOnce(async () => okGet());
   const current = await r2GetVersion("daily/1909.json");
   expect(current).toEqual({ body: "original bytes", etag: '"native-etag"' });
-  send.mockRejectedValueOnce(new Error("PreconditionFailed"));
+  send.mockRejectedValueOnce(svcError("PreconditionFailed", 412));
   await expect(
     r2Put("daily/1909.json", "repaired bytes", current!.etag),
-  ).rejects.toThrow("PreconditionFailed");
+  ).rejects.toBeInstanceOf(R2PutRejectedError);
   const command = send.mock.calls[1][0] as PutObjectCommand;
   expect(command).toBeInstanceOf(PutObjectCommand);
   expect(command.input).toMatchObject({
     Bucket: "test-bucket",
     Key: "daily/1909.json",
     IfMatch: '"native-etag"',
+  });
+});
+
+describe("r2Put contract (1 attempt, no retry)", () => {
+  it("2xx + ETag resolves", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockImplementationOnce(async () => okPut());
+    await r2Put("daily/7203.json", "{}");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("timeout without response is unknown, sent once", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValueOnce(svcError("TimeoutError"));
+    await expect(r2Put("daily/7203.json", "{}")).rejects.toBeInstanceOf(
+      R2PutUnknownError
+    );
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([["InternalError", 500], ["SlowDown", 503], ["TooManyRequests", 429]])(
+    "%s (%s) is unknown, never rejected",
+    async (name, status) => {
+      const send = vi.spyOn(S3Client.prototype, "send");
+      send.mockRejectedValueOnce(svcError(name, status));
+      await expect(r2Put("daily/7203.json", "{}")).rejects.toBeInstanceOf(
+        R2PutUnknownError
+      );
+      expect(send).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each([
+    ["PreconditionFailed", 412],
+    ["Forbidden", 403],
+    ["BadRequest", 400],
+  ])("%s (%s) is explicit rejection", async (name, status) => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValueOnce(svcError(name, status));
+    await expect(r2Put("daily/7203.json", "{}")).rejects.toBeInstanceOf(
+      R2PutRejectedError
+    );
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("2xx without ETag is unknown, not success", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockImplementationOnce(async () => ({ $metadata: { httpStatusCode: 200 } }));
+    await expect(r2Put("daily/7203.json", "{}")).rejects.toBeInstanceOf(
+      R2PutUnknownError
+    );
+  });
+
+  it("resolved response without metadata is unknown", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockImplementationOnce(async () => ({ ETag: '"x"' }));
+    await expect(r2Put("daily/7203.json", "{}")).rejects.toBeInstanceOf(
+      R2PutUnknownError
+    );
+  });
+
+  it("messages carry sanitized code/status only, no raw cause text", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValueOnce(
+      Object.assign(new Error("https://secret.example/endpoint?key=LEAK"), {
+        name: "TimeoutError",
+      })
+    );
+    const err = (await r2Put("daily/7203.json", "{}").catch((e: unknown) => e)) as Error;
+    expect(err.message).toContain("cause=TimeoutError/none");
+    expect(err.message).not.toContain("LEAK");
+    expect(err.message).not.toContain("https://");
+  });
+});
+
+describe("SDK retry disabled", () => {
+  it("shared client resolves maxAttempts 1 (send count alone proves nothing)", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockImplementationOnce(async () => okGet());
+    await r2GetVersion("daily/7203.json");
+    // 新規 public API なしに実 client instance の解決済み設定を読む。
+    const client = send.mock.contexts[0] as unknown as {
+      config: { maxAttempts: () => Promise<number> };
+    };
+    await expect(client.config.maxAttempts()).resolves.toBe(1);
+  });
+});
+
+describe("r2GetVersion contract", () => {
+  it("explicit NoSuchKey is normal bootstrap (null)", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValueOnce(svcError("NoSuchKey", 404));
+    await expect(r2GetVersion("daily/7203.json")).resolves.toBeNull();
+  });
+
+  it("NoSuchKey with contradictory metadata is a fault, not bootstrap", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValueOnce(svcError("NoSuchKey", 500));
+    await expect(r2GetVersion("daily/7203.json")).rejects.toThrow();
+    send.mockRejectedValueOnce(svcError("NoSuchKey"));
+    await expect(r2GetVersion("daily/7203.json")).rejects.toThrow();
+  });
+
+  it("generic 404 without NoSuchKey is a fault, not bootstrap", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValueOnce(svcError("NotFound", 404));
+    await expect(r2GetVersion("daily/7203.json")).rejects.toThrow();
+  });
+
+  it("non-404 faults throw", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValueOnce(svcError("Forbidden", 403));
+    await expect(r2GetVersion("daily/7203.json")).rejects.toThrow();
+  });
+
+  it("200 without ETag is a fault", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockImplementationOnce(async () => ({
+      Body: { transformToString: async () => "x" },
+      $metadata: { httpStatusCode: 200 },
+    }));
+    await expect(r2GetVersion("daily/7203.json")).rejects.toThrow(/不完全/);
+  });
+
+  it("non-200 envelope is a fault", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockImplementationOnce(async () => ({
+      ETag: '"x"',
+      Body: { transformToString: async () => "x" },
+      $metadata: { httpStatusCode: 206 },
+    }));
+    await expect(r2GetVersion("daily/7203.json")).rejects.toThrow(/不完全/);
   });
 });

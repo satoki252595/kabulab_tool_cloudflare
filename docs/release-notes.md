@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- VWAP 取込 producer の root 修正 (R2 送信 1 試行・PUT 応答契約・rejected/unknown 分別・GET 厳格 bootstrap、Yahoo 真正 empty は timestamp 空配列のみ・全行欠落と malformed は throw、保存形状 strict、R2 fault で新規停止・保管失敗は exit 2、knob 型付き取得)。データ変更なし (Refs #117)。
 - 海外 baseline custody / current PREP を追加 (baseline ZIP 160 members 固定 + immutable key の ONE archive 実行済み PASS (Notion 16 + hosted 3・160 closure)、CURRENT 3675 exact join を local 実行 (3602 pin + 73 HOLD・stocks 563・Q2 21245、CAS keys + L2 集計 + 73 provenance 確定)、frozen parser × NEW live の current compare を actuals で local 実行 (journal 3654 verbatim + fresh parse 21・LIMIT 0。MATCH 494・CHANGED 3181 (FACTS 929 + BOTH 2252)・adopted 1411/candidate 2191/HOLD 73・L2 affected 520 stocks→6 groups・bounded 20docs/40keys 提案。facts→DB 変換は共有正準 helper に集約・5 callers 同一関数)。baseline ZIP は OBSERVATION (rawZIP primary proof ではない)。旧 1781/1894・旧 counts は historical)。証跡 `docs/test-logs/overseas-baseline-custody-2026-09-30.md`・`docs/test-logs/overseas-current3675-join-2026-09-30.md`・`docs/test-logs/overseas-current3675-compare-2026-09-30.md`。source/D1追加/R2/dispatch 0、データ変更なし。
 - 海外 fresh full READ を capture runner で実行 (Q1F 17射影 + Q2F 13射影 × 37 chunks = 74 SELECT。3675全通観測・21245 facts・missing 0。grant-first・preflight・fsync-first log・whole body wx0600・safe receipt・retry 0)。旧 1781/1894 は historical のみ、現行基準は frozen 3675 + NEW full16/Q2 all13。証跡 `docs/test-logs/overseas-fresh-read-proposal-2026-09-30.md`。D1 READ 74 のみ、source/Notion/D1書込/R2/dispatch 0、データ変更なし。
 - Python D1 trust root を最小厳格化 (query 応答の dict・literal True・result exact1・entry・results・行 dict 必須、bind は有限スカラーのみ max100、upsert は全行検査を初 chunk 前に、file_size 兄弟も同格)。sector job は current active の空・重複・非正準 code (phantom 含む)・sector33 非 str/非 None・不完全行を prewrite STOP (正準形一致・正準 ID 重複・構造型、未知 sector は retain/gap 維持)。証跡 `docs/test-logs/py-d1-trust-root-20260930.md`。データ変更なし (Refs #196)。
@@ -41,6 +42,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - Worker の Observability を最小設定で有効化 (呼出ログ + 既存 console ログを残す。EDINET 外向き URL の Subscription-Key のため traces は無効のまま)。EDINET 日次取込に秘密なしの進捗 checkpoint を追加し次回標準実行の段階特定を可能に (#187)。
 
 ### 本番作業
+- 本番作業: 母集団 universe 9/30 overlay を D1 へ 1 回適用 (owner 31 文全 success、core 3810→3819・activeEquity 3695・events 226、適用後 3-SELECT 再読で exact 一致・再入 collect 0/send 0 を検証)。actual 証跡 19 点を Notion 一次データへ RECORDED (key `actual-proof-2026-09-30-3eaff8c3...`、manifestMatch written、readback 通過)。証跡 pins は `docs/universe-overlay-actual-proof-20260930.md` (Refs #196)。
 - 優待 source52 修復を適用 (16 batch・74 statements・52行、適用後 post4 全列一致・outside54 保護一致・NEWPOST 再入 0 を実証)。exec/post 証跡 56点 1-ZIP を Notion 一次データへ full SHA readback 保管 (Refs #146)。
 - 優待 ABC 修復 131 銘柄を適用 (requests 131・statements 508・完了 131、適用前 refetch 全一致、inactive 11 除外)。再入 (2nd run 差分 0) は未観測のため主張なし。
 - 優待全文修復 13 銘柄を適用 (requests 13・statements 75・desc 62、適用前 refetch 全一致。eligible 85 のうち historical 39・whole-stock STOP 23 は除外)。再入は未観測のため主張なし。
