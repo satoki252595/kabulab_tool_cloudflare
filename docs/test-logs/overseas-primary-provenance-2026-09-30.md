@@ -18,17 +18,23 @@ local FS 読みのみ。source / live Notion / D1 新規操作 0・
   bytes/SHA/cachedZipPath/lease はなし (legacy 世代)。
 - Source: `EDINET API v2 /documents/S100YWM7?type=1`
   (bare 形。新 59 行の cached-path suffix なし)。
-- container 時刻の整合: hosted 内 mtime 09-29 13:45 (JST と読めば
-  = row 作成 04:45Z に一致。fetch→即 attach と整合)。
-  local 慣用原本は 09-28 23:25 JST (= 14:25Z) の別 fetch。
-  同一 static document の 2 独立 fetch で説明がつく。
-- hosting 側も local 側も official anchor なし
-  (EDINET 公開 SHA との照合は未実施・両者とも laneA 期 fetch)。
-- 決定: Tier B の bytes/official 適格化には NEED-SOURCE
-  (explicit grant 下の公式 GET で anchor するまでは不可)。
+- container 時刻 (observed metadata・fetch 時刻の証明ではない):
+  hosted 内 mtime 09-29 13:45 / local 内 mtime 09-28 23:25
+  (as-stored・TZ 未確定)。ZIP 内 mtime も FS mtime も
+  repack/copy で変わるため actual source fetch 時刻を証明しない。
+  「2 独立 fetch」は仮説であり観測事実ではない (所見から除外)。
+- manifest anchor (recorded 09-28): local 慣用原本の SHA は
+  manifest_full 記録値 `44d67cf6…` と一致 (09-28 以降不変)。
+  hosted (`42a7404d…`) は manifest anchor とも不一致。
+  既存 publisher/sourceDoc/wire custody の検査を GET 必要性の
+  判断より先に行う。fresh GET 自体が re-timestamp し得るため、
+  GET が bytes anchor を与える保証はない。
+- 決定: Tier B の bytes/official は NEED-REVIEW/LIMIT
+  (mandatory な NEED-SOURCE とは主張しない)。
   archived-wire-as-primary は content-level 利用に限り LIMIT 付きで
   可 (official 形 source URI + 作成以来 immutable +
-  独立 local との content 照合済み。same-bytes 適格化ではない)。
+  manifest-anchor 済み local との content 照合済み。
+  same-bytes 適格化ではない)。
 - inner-ZIP-equal (entry-bytes SHA `ded1638c…` 一致) 単独では
   official/bytes 適格化しない。残 Tier B 4 行は hosted 未取得の
   ため pattern 類推を主張しない (unattempted)。
@@ -40,15 +46,24 @@ local FS 読みのみ。source / live Notion / D1 新規操作 0・
 - union 3675 verdicts 確定: t1 missing 3611 / t5 missing 3670。
   pinPresent=false == 73 list を照合一致。
 - t1 local 原本: 3675/3675 存在・empty 0・20MB 超 0
-  (max 5117559・全 single_part)。mtime 09-28 13:19–14:26Z
-  (laneA fetch window・意味ある clock)。
+  (max 5117559・全 single_part)。
+  FS mtime 09-28 13:19–14:26Z は metadata 扱い
+  (capture 時刻の証明ではない)。
   t5 local: 0/3675 (全 absent)。
-- batch  eligible (t1 missing + local 存在 + 正サイズ):
+- manifest 照合 (recorded 09-28): eligible 3611 中
+  match 3538 / mismatch 0 / absent 73 (73-set 全件)。
+  manifest.json 59 件 = Tier A doc set と一致。
+  per-file の actual fetch clock は manifest/log/receipt の
+  どこにも存在しない (source 日 tag `2026-09-28` のみ)。
+  よって sourceClock = UNKNOWN (substitution なし)。
+- batch  eligible-bytes (t1 missing + local 存在 + 正サイズ):
   3611/3611 (3602-set 3538 + 73-set 73)。no-local 0。
   総 bytes 2984049797。
 - private packet (0600): `missing-t1-inventory.json`
-  `00c9f107…b1aba01` (per-cell: doc/type/key/legacyKey/
-  pinSet/stockId/filerName/periodEnd/SHA/size/sourceURI/clock)。
+  `a91c7958…1000e3` (per-cell: doc/type/key/legacyKey/
+  pinSet/stockId/filerName/periodEnd/SHA/size/sourceURI/
+  clockBasis{fsMtimeObserved/manifestDay/sourceClock}/
+  manifestSha/manifestMatch)。
   typed custody は観測済み・legacy key custody は
   UNOBSERVED (契約上読まない)。key 形 mapping のみ収録。
 - t5 missing 3670: local 0 のため batch scope 0・全 HOLD。
@@ -59,9 +74,12 @@ local FS 読みのみ。source / live Notion / D1 新規操作 0・
 - 最小 batch 提案 (実装・実行は別途 CODE CLEAR + grant):
   既存 `recordEdinetZip` (type1) + 内蔵 readback のみ。
   新規 archive framework なし。metadata: edinetDocType=1 +
-  source 構築 URI (観測形・構築と明示) + fetchedAt=観測 mtime
-  (明示) + packet SHA + lease (Root 支給)。
-  filename/contentType は契約 exact。
+  source 構築 URI (観測形・構築と明示) + packet SHA +
+  観測 metadata (fsMtime/manifestDay・capture 主張なし) +
+  lease (Root 支給)。filename/contentType は契約 exact。
+- fetchedAt: UNDECIDED。mtime からの capture 時刻の発明なし・
+  省略時の now 暗黙も使わない。batch は bytes 適格だが
+  clock 規約が Root 決定待ち (CODE CLEAR の前提)。
 - closed caps: 1 record 当たり notionRequest 論理 ≤9
   (existence 1・upload-create 1・part-send 1・polls ≤4・
   pages-create 1・readback-listing 1) ×7 + hosted 1 =
