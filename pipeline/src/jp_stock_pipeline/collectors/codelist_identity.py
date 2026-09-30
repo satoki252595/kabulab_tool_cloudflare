@@ -47,6 +47,10 @@ def load_bindings() -> list[dict]:
                 or type(b["coreStockId"]) is not int or b["coreStockId"] <= 0):
             raise ValueError("IPO identityBinding が不正")
         date.fromisoformat(b["listingDate"])
+        date.fromisoformat(b["fsaReference"]["asOf"])
+        for ref in (b["fsaReference"], b["coreReference"]):
+            if not re.fullmatch(r"[0-9a-f]{64}", ref["sha256"]):
+                raise ValueError("IPO identityBinding 初期資格参照pinが不正")
         if not b["archiveKey"] or not re.fullmatch(r"[0-9a-f]{64}", b["archiveZipSha256"]):
             raise ValueError("IPO identityBinding の物理原本参照が不正")
         sources = b["sources"]
@@ -106,7 +110,8 @@ def resolve_blank_tickers(zip_bytes: bytes, current: list[dict] | None) -> dict[
         if raw:
             continue  # 一致したliteralは通常parserに任せる
         candidates = [] if current is None else [r for r in current if r.get("code") == b["ticker"]]
-        valid = len(candidates) == 1 and asof is not None
+        valid = (len(candidates) == 1 and asof is not None
+                 and asof >= date.fromisoformat(b["fsaReference"]["asOf"]))
         if valid:
             c = candidates[0]
             owner = c.get("owner_as_of")

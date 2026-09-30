@@ -47,6 +47,12 @@ def test_actual_both_callers_and_missing_raw_preserved():
     assert ec.inspect_codelist_candidates(master).sector[0].code == "627A"
 
 
+def test_historical_csv_before_binding_is_not_retroactively_certified():
+    data, current = actual(source_date="2026年09月29日")
+    assert not ci.resolve_blank_tickers(data, current)
+    assert not any(r.code == "627A" for r in ec.parse_codelist(data, current=current))
+
+
 def test_future_csv_current_sector_and_literal_priority():
     data, current = actual({"owner_as_of": "2026-10-01"}, source_date="2026年10月01日",
                            column="提出者業種", value="サービス業")
