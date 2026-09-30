@@ -1,36 +1,56 @@
 /**
- * closed-44 executor の実 SQLite 検証 (synthetic seeds のみ・network 0)。
+ * closed-44 executor の検証。
  *
- * - validate: own exact keys・status 閉 domain・numeric/unknown facts 形状。
- * - build: DELETE→INSERT→UPDATE の組成・unknown の INSERT なし・bind ≤100。
- * - apply (実 SELECT 判定): clean → APPLIED 全一致 / prestate 不一致 →
- *   HOLD 送信 0 / race 余剰行 → exact-set guard が DELETE を 0 行化。
- * - classify: APPLIED / NOOP_PRESTATE / MISMATCH の 3 値。
+ * 常時実行 (fixture 不要): 不正入力の fail-closed + grant gate。
+ * actual44 (private fixture 必要): 全 44 通の build 固定 + 実 SQLite
+ * での APPLIED 適用 + FIRST-断定 trip 時の atomic rollback 回帰。
+ * fixture (0600 private packet) 不在の環境 (CI) では actual44 を
+ * 明示 skip する。
  *
- * batch 輸送自体の原子性は D1 側の保証・実証記録の分担
- * (d1-http-client.ts)。本テストは組成 + guard 意味 + 判定を証明する。
+ * 合成の金融値・会社名 seed は使わない。DB-backed の全値は private
+ * packet の actual captured 行由来 (in-memory のみ・repo に書かない)。
+ * 失敗時出力に財務値が出ないよう、比較は正準 SHA・件数・ラベルのみ。
  */
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { drizzle as drizzleProxy } from "drizzle-orm/sqlite-proxy";
 import type { Database } from "../db/client.js";
+import { parseOverseasData } from "../services/overseas-parser.js";
+import { toOverseasSaveRows } from "../services/overseas-save-rows.js";
 import {
   applyOneDoc,
-  buildDocBatch,
+  assertGrant,
   classifyPost,
-  doc16Equals,
   expectedPost,
-  freezeStatements,
-  q2SetEquals,
+  loadPacket,
+  normDoc,
+  normQ2,
+  prefreezeDoc,
+  serializeQ2,
+  stateDigest,
+  toUnixSec,
   validateDocRow,
+  type LiveDeps,
   type ValidDoc,
 } from "../../data-scripts/overseas-closed44-execute.js";
-import { toD1BatchStatements } from "../../../../src/shared/db/d1-http-client.js";
+import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
 
 const ROOT = fileURLToPath(new URL("../../../..", import.meta.url));
+const FIXTURE = "/tmp/overseas-closed44-qual-20260930/closed44-qual.json";
+/** preflight 固定 pin との cross-lock (設計変更時は CODE review で更新)。 */
+
+
+function tryLoadFixture(): { docs: ValidDoc[]; l2Stocks: number[] } | null {
+  if (!existsSync(FIXTURE)) return null;
+  return loadPacket(FIXTURE);
+}
+
+const FIX = tryLoadFixture();
+const HAS_FIXTURE = FIX !== null;
 
 function applyD1Migrations(target: DatabaseSync): void {
   const dir = join(ROOT, "drizzle", "d1");
@@ -43,13 +63,11 @@ function applyD1Migrations(target: DatabaseSync): void {
   }
 }
 
-function openLocal(): {
-  sqlite: DatabaseSync;
-  queryDb: Database;
-  buildDb: Database;
-} {
+function openLocal(): { sqlite: DatabaseSync; queryDb: Database; buildDb: Database } {
   const sqlite = new DatabaseSync(":memory:");
   applyD1Migrations(sqlite);
+  // This regression isolates document/fact CAS; no invented core parent rows.
+  sqlite.exec("PRAGMA foreign_keys = OFF");
   const queryDb = drizzleProxy(async (sqlStr, params, method) => {
     const stmt = sqlite.prepare(sqlStr);
     if (method === "run") {
@@ -68,60 +86,9 @@ function openLocal(): {
   return { sqlite, queryDb, buildDb };
 }
 
-const STOCK = 9001;
-const SUBMIT_SEC = 1719792000;
-const INGEST_SEC = 1727000000;
-const iso = (s: number) => new Date(s * 1000).toISOString();
-
-function seedAll(sqlite: DatabaseSync): void {
-  sqlite
-    .prepare(
-      "INSERT INTO core_stocks (id, code, name, market, is_active, instrument_type, sector33) VALUES (?, '9001', '合成9001', 'プライム', 1, 'stock', '建設業')"
-    )
-    .run(STOCK);
-}
-
-/** synthetic doc16 (packet 形・ISO 時刻)。値は形状のみ。 */
-function doc16(docId: string, id: number): Record<string, unknown> {
-  return {
-    id,
-    stockId: STOCK,
-    edinetCode: "E99999",
-    docId,
-    docTypeCode: "120",
-    filerName: "合成株式会社",
-    periodStart: "2024-04-01",
-    periodEnd: "2025-03-31",
-    submittedAt: iso(SUBMIT_SEC),
-    parseStatus: "ok_pattern_a",
-    honbunFile: "syn/honbun.htm",
-    overseasParseStatus: "ok_geo_rows",
-    overseasHonbunFile: "syn/old.htm",
-    textParseStatus: "ok",
-    notionDocPageId: null,
-    ingestedAt: iso(INGEST_SEC),
-  };
-}
-
-function insertDoc(sqlite: DatabaseSync, d: Record<string, unknown>): void {
-  const args = [
-    d["id"],
-    d["stockId"],
-    d["edinetCode"],
-    d["docId"],
-    d["docTypeCode"],
-    d["filerName"],
-    d["periodStart"],
-    d["periodEnd"],
-    SUBMIT_SEC,
-    d["parseStatus"],
-    d["honbunFile"],
-    d["overseasParseStatus"],
-    d["overseasHonbunFile"],
-    d["textParseStatus"],
-    d["notionDocPageId"],
-    INGEST_SEC,
-  ];
+/** packet actual 行を live seed する (値は全て packet 由来)。 */
+function seedActual(sqlite: DatabaseSync, doc: ValidDoc): void {
+  const d = doc.doc16;
   sqlite
     .prepare(
       `INSERT INTO yuho_documents (id, stock_id, edinet_code, doc_id, doc_type_code, filer_name,
@@ -130,399 +97,315 @@ function insertDoc(sqlite: DatabaseSync, d: Record<string, unknown>): void {
        notion_doc_page_id, ingested_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(...(args as never[]));
+    .run(...([
+      d["id"],
+      d["stockId"],
+      d["edinetCode"],
+      d["docId"],
+      d["docTypeCode"],
+      d["filerName"],
+      d["periodStart"],
+      d["periodEnd"],
+      toUnixSec(d["submittedAt"], "seed"),
+      d["parseStatus"],
+      d["honbunFile"],
+      d["overseasParseStatus"],
+      d["overseasHonbunFile"],
+      d["textParseStatus"],
+      d["notionDocPageId"],
+      toUnixSec(d["ingestedAt"], "seed"),
+    ] as never[]));
+  for (const r of doc.q2) {
+    const b = r["isConsolidated"];
+    sqlite
+      .prepare(
+        `INSERT INTO yuho_overseas_facts (id, document_id, stock_id, fiscal_year_end, region_name,
+         region_kind, is_consolidated, unit_label, sales_raw, sales_yen, ratio_pct, pattern)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(...([
+        r["id"],
+        r["documentId"],
+        r["stockId"],
+        r["fiscalYearEnd"],
+        r["regionName"],
+        r["regionKind"],
+        b === null ? null : b ? 1 : 0,
+        r["unitLabel"],
+        r["salesRaw"],
+        r["salesYen"],
+        r["ratioPct"],
+        r["pattern"],
+      ] as never[]));
+  }
 }
 
-/** synthetic Q2 行 (packet 形)。 */
-function q2row(
-  docId: string,
-  id: number,
-  docDbId: number,
-  region: string,
-  sales: number | null
-): Record<string, unknown> {
-  return {
-    docId,
-    id,
-    documentId: docDbId,
-    stockId: STOCK,
-    fiscalYearEnd: "2025-03-31",
-    regionName: region,
-    regionKind: "overseas",
-    isConsolidated: true,
-    unitLabel: "合成円",
-    salesRaw: sales,
-    salesYen: sales === null ? null : sales * 1000,
-    ratioPct: null,
-    pattern: "geo_rows",
-  };
+/** live 全行の正準 SHA (値非開示の同一性比較用)。 */
+function liveSnapshotSha(sqlite: DatabaseSync, docDbId: number): string {
+  const doc = sqlite.prepare("SELECT * FROM yuho_documents WHERE id = ?").all(docDbId);
+  const facts = sqlite
+    .prepare("SELECT * FROM yuho_overseas_facts WHERE document_id = ? ORDER BY id")
+    .all(docDbId);
+  return stateDigest({ doc, facts });
 }
 
-function insertFact(sqlite: DatabaseSync, r: Record<string, unknown>): void {
-  const args = [
-    r["id"],
-    r["documentId"],
-    r["stockId"],
-    r["fiscalYearEnd"],
-    r["regionName"],
-    r["regionKind"],
-    1,
-    r["unitLabel"],
-    r["salesRaw"],
-    r["salesYen"],
-    r["ratioPct"],
-    r["pattern"],
-  ];
-  sqlite
-    .prepare(
-      `INSERT INTO yuho_overseas_facts (id, document_id, stock_id, fiscal_year_end, region_name,
-       region_kind, is_consolidated, unit_label, sales_raw, sales_yen, ratio_pct, pattern)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(...(args as never[]));
+function mkOutDir(tag: string): string {
+  const dir = join(tmpdir(), `closed44-exec-test-${tag}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
 }
 
-function packetRow(opts: {
-  doc: string;
-  id: number;
-  numeric: boolean;
-  q2: Record<string, unknown>[];
-  newFacts: Record<string, unknown>[];
-  status: string;
-}): Record<string, unknown> {
-  return {
-    doc: opts.doc,
-    stockId: STOCK,
-    qual: opts.numeric
-      ? "OFFLINE_CANDIDATE_NUMERIC"
-      : "OFFLINE_CANDIDATE_UNSTRUCTURED",
-    preimage: { doc16: doc16(opts.doc, opts.id) },
-    q2: opts.q2,
-    journal: {
-      status: opts.status,
-      honbunFile: "syn/new.htm",
-      facts: opts.newFacts,
-    },
-    cas: {
-      entire16SHA: "e",
-      protectedSHA: "p",
-      q2KeySHA: "k",
-      q2RowsSHA: "r",
-      reverified: true,
-    },
-  };
-}
-
-function newFact(region: string, sales: number | null): Record<string, unknown> {
-  return {
-    regionName: region,
-    regionKind: "overseas",
-    salesAmount: sales,
-    ratioPct: null,
-    unitLabel: "合成円",
-    unitYenFactor: 1000,
-    fiscalYearEnd: "2025-03-31",
-    isConsolidated: true,
-  };
-}
-
-/** sender: 記録 + 実 sqlite へ逐次実行 (原子性は D1 側の分担)。 */
-function recordingSender(sqlite: DatabaseSync): {
-  calls: { sql: string; params: unknown[] }[][];
-  sender: (stmts: readonly { sql: string; params: unknown[] }[]) => Promise<void>;
-} {
-  const calls: { sql: string; params: unknown[] }[][] = [];
-  return {
-    calls,
-    sender: async (stmts) => {
-      calls.push(stmts.map((s) => ({ sql: s.sql, params: [...s.params] })));
+function mkDeps(sqlite: DatabaseSync, queryDb: Database, tag: string): LiveDeps {
+  const outDir = mkOutDir(tag);
+  // D1 batch 原子性の local 等価: BEGIN/COMMIT・失敗時 ROLLBACK。
+  // (D1 REST batch 自体の原子性は d1-http-client の実証記録の分担。
+  // 本テストは FIRST-trip-before-mutation の文順 + 無変更を証明する。)
+  const sender = async (stmts: readonly D1BatchStatement[]): Promise<void> => {
+    sqlite.exec("BEGIN IMMEDIATE");
+    try {
       for (const s of stmts) {
         sqlite.prepare(s.sql).run(...(s.params as never[]));
       }
-    },
+      sqlite.exec("COMMIT");
+    } catch (e) {
+      sqlite.exec("ROLLBACK");
+      throw e;
+    }
+  };
+  return {
+    queryDb,
+    sender,
+    ledger: join(outDir, "ledger.jsonl"),
+    outDir,
+    counters: { idx: 0, total: 1, sent: 0, applied: 0, held: 0 },
   };
 }
 
-describe("validate", () => {
-  it("numeric/unknown の正規行を受理する", () => {
-    const q = [q2row("S100T0001", 1, 101, "合成州", 7)];
-    const n = validateDocRow(
-      packetRow({
-        doc: "S100T0001",
-        id: 101,
-        numeric: true,
-        q2: q,
-        newFacts: [newFact("合成州", 7)],
-        status: "ok_geo_rows",
-      }),
-      0
-    );
-    expect(n.numeric).toBe(true);
-    const u = validateDocRow(
-      packetRow({
-        doc: "S100T0002",
-        id: 102,
-        numeric: false,
-        q2: q,
-        newFacts: [],
-        status: "geo_present_unstructured",
-      }),
-      1
-    );
-    expect(u.numeric).toBe(false);
-  });
+/** sender 呼出回数の記録 wrapper。 */
+function counting(deps: LiveDeps): { deps: LiveDeps; calls: () => number } {
+  let n = 0;
+  const inner = deps.sender;
+  deps.sender = (async (s) => { n += 1; await inner(s); }) as LiveDeps["sender"];
+  return { deps, calls: () => n };
+}
 
-  it("未知 status・形状違反・key 欠落を拒否する", () => {
-    const q = [q2row("S100T0001", 1, 101, "合成州", 7)];
-    const base = () =>
-      packetRow({
-        doc: "S100T0001",
-        id: 101,
-        numeric: true,
-        q2: q,
-        newFacts: [newFact("合成州", 7)],
-        status: "ok_geo_rows",
-      });
-    const bad1 = base();
-    (bad1["journal"] as Record<string, unknown>)["status"] = "mystery";
-    expect(() => validateDocRow(bad1, 0)).toThrow();
-    const bad2 = base();
-    (bad2["journal"] as Record<string, unknown>)["facts"] = [];
-    expect(() => validateDocRow(bad2, 0)).toThrow();
-    const bad3 = packetRow({
-      doc: "S100T0002",
-      id: 102,
-      numeric: false,
-      q2: q,
-      newFacts: [newFact("合成州", 7)],
-      status: "geo_present_unstructured",
-    });
-    expect(() => validateDocRow(bad3, 0)).toThrow();
-    const bad4 = base();
-    const bad4pre = bad4["preimage"] as Record<string, unknown>;
-    delete bad4pre["doc16"];
-    expect(() => validateDocRow(bad4, 0)).toThrow();
-  });
-});
-
-describe("build", () => {
-  it("組成と bind 上限 (unknown は INSERT なし)", () => {
-    const { buildDb } = openLocal();
-    const mk = (numeric: boolean): ValidDoc =>
-      validateDocRow(
-        packetRow({
-          doc: numeric ? "S100T0001" : "S100T0002",
-          id: numeric ? 101 : 102,
-          numeric,
-          q2: [
-            q2row("S100T0", 1, 101, "合成州甲", 7),
-            q2row("S100T0", 2, 101, "合成州乙", null),
-          ],
-          newFacts: numeric ? [newFact("合成州甲", 7)] : [],
-          status: numeric ? "ok_geo_cols" : "geo_present_unstructured",
-        }),
-        0
-      );
-    const nb = buildDocBatch(buildDb, mk(true));
-    expect(nb.kinds).toEqual(["DELETE", "INSERT", "UPDATE"]);
-    const ub = buildDocBatch(buildDb, mk(false));
-    expect(ub.kinds).toEqual(["DELETE", "UPDATE"]);
-    for (const [b, k] of [
-      [nb, "n"],
-      [ub, "u"],
-    ] as const) {
-      const stmts = freezeStatements(b.builders, b.kinds, k);
-      for (const s of stmts) expect(s.params.length).toBeLessThanOrEqual(100);
+describe("fail-closed garbage (fixture 不要)", () => {
+  it("非 object・空・欠落を拒否する", () => {
+    for (const bad of [null, undefined, 42, "x", [], {}]) {
+      expect(() => validateDocRow(bad, 0)).toThrow();
     }
-    const delSql = toD1BatchStatements(nb.builders)[0]?.sql ?? "";
-    expect(delSql).toMatch(/delete/i);
-    expect(delSql).toMatch(/count\(\*\)/i);
+    expect(() => normDoc({}, "t")).toThrow();
+    expect(() => normQ2({}, "t")).toThrow();
+    expect(() => normDoc({ id: 1 }, "t")).toThrow();
+    // undefined は null 化せず STOP。
+    expect(() => normQ2({ id: undefined }, "t")).toThrow();
+  });
+
+  it("grant gate: 必須・bounded・printable", () => {
+    expect(() => assertGrant(undefined)).toThrow();
+    expect(() => assertGrant("")).toThrow();
+    expect(() => assertGrant("x".repeat(129))).toThrow();
+    expect(() => assertGrant("a\nb")).toThrow();
+    expect(assertGrant("root-grant-1")).toBe("root-grant-1");
+    expect(serializeQ2([], "t")).toBe("[]");
+  });
+
+  it("fixture 有無を明示する", () => {
+    console.info(`[closed44-exec-test] actual44 fixture: ${HAS_FIXTURE ? "present" : "absent (skip)"}`);
+    expect(typeof HAS_FIXTURE).toBe("boolean");
   });
 });
 
-describe("apply (実 sqlite)", () => {
-  it("numeric clean → APPLIED (doc 2 列のみ更新・facts 置換)", async () => {
-    const { sqlite, queryDb, buildDb } = openLocal();
-    seedAll(sqlite);
-    const d = doc16("S100T0001", 101);
-    insertDoc(sqlite, d);
-    const q = [
-      q2row("S100T0001", 1, 101, "合成州甲", 7),
-      q2row("S100T0001", 2, 101, "合成州乙", 3),
-    ];
-    for (const r of q) insertFact(sqlite, r);
-    const doc = validateDocRow(
-      packetRow({
-        doc: "S100T0001",
-        id: 101,
-        numeric: true,
-        q2: q,
-        newFacts: [newFact("合成州甲", 9)],
-        status: "ok_geo_cols",
-      }),
-      0
-    );
-    const rec = recordingSender(sqlite);
-    const r = await applyOneDoc(
-      { queryDb, sender: rec.sender as never },
-      buildDb,
-      doc
-    );
-    expect(r.outcome).toBe("APPLIED");
-    expect(rec.calls.length).toBe(1);
-    const post = sqlite
-      .prepare("SELECT * FROM yuho_documents WHERE doc_id = 'S100T0001'")
-      .all() as Record<string, unknown>[];
-    expect(post.length).toBe(1);
-    expect(post[0]?.["overseas_parse_status"]).toBe("ok_geo_cols");
-    expect(post[0]?.["overseas_honbun_file"]).toBe("syn/new.htm");
-    expect(post[0]?.["filer_name"]).toBe("合成株式会社");
-    const facts = sqlite
-      .prepare("SELECT region_name, sales_raw FROM yuho_overseas_facts WHERE document_id = 101")
-      .all() as Record<string, unknown>[];
-    expect(facts).toEqual([{ region_name: "合成州甲", sales_raw: 9 }]);
+describe.skipIf(!HAS_FIXTURE)("actual44 (private fixture)", () => {
+  const docs = (FIX?.docs ?? []) as ValidDoc[];
+  const numericDoc = docs.find((d) => d.numeric) as ValidDoc;
+  const unknownDoc = docs.find((d) => !d.numeric) as ValidDoc;
+
+  it("normal parser actual44 matches qualified12 and honest unknown32", () => {
+    let numeric = 0;
+    let unknown = 0;
+    for (const doc of docs) {
+      const raw = readFileSync(`/tmp/overseas_laneA_raw/${doc.docId}_t1.zip`);
+      const parsed = parseOverseasData(raw, doc.doc16["periodEnd"] as string);
+      // SHA-only comparisons prevent private financial values appearing in failures.
+      expect(parsed.status === doc.newStatus).toBe(true);
+      expect(parsed.honbunFile === doc.newHonbunFile).toBe(true);
+      const actual = toOverseasSaveRows(parsed.facts, parsed.status).map(stateDigest).sort();
+      const qualified = toOverseasSaveRows(doc.newFacts, doc.newStatus).map(stateDigest).sort();
+      expect(stateDigest(actual) === stateDigest(qualified)).toBe(true);
+      if (doc.numeric) numeric += 1;
+      else { unknown += 1; expect(parsed.facts.length).toBe(0); }
+    }
+    expect(numeric).toBe(12);
+    expect(unknown).toBe(32);
+  }, 180_000);
+
+  it("packet 44/44 + 内訳 12/32 + L2 10", () => {
+    expect(docs.length).toBe(44);
+    expect(docs.filter((d) => d.numeric).length).toBe(12);
+    expect(docs.filter((d) => !d.numeric).length).toBe(32);
+    const stocks = new Set(docs.map((d) => d.stockId));
+    expect(stocks.size).toBe(10);
+    for (const d of docs) {
+      expect(d.q2.length).toBeGreaterThanOrEqual(1);
+      expect(d.lineage.custody).toBe("A-anchored-same-bytes");
+    }
   });
 
-  it("unknown clean → APPLIED (facts 空・status 更新)", async () => {
+  it("numeric clean → APPLIED (post 正準一致)", async () => {
     const { sqlite, queryDb, buildDb } = openLocal();
-    seedAll(sqlite);
-    insertDoc(sqlite, doc16("S100T0002", 102));
-    const q = [q2row("S100T0002", 5, 102, "合成州", 7)];
-    for (const r of q) insertFact(sqlite, r);
-    const doc = validateDocRow(
-      packetRow({
-        doc: "S100T0002",
-        id: 102,
-        numeric: false,
-        q2: q,
-        newFacts: [],
-        status: "geo_present_unstructured",
-      }),
-      0
-    );
-    const rec = recordingSender(sqlite);
-    const r = await applyOneDoc(
-      { queryDb, sender: rec.sender as never },
-      buildDb,
-      doc
-    );
+    seedActual(sqlite, numericDoc);
+    const { deps, calls } = counting(mkDeps(sqlite, queryDb, "num-apply"));
+    const r = await applyOneDoc(deps, numericDoc, prefreezeDoc(buildDb, numericDoc));
     expect(r.outcome).toBe("APPLIED");
-    const n = sqlite
-      .prepare("SELECT COUNT(*) AS c FROM yuho_overseas_facts WHERE document_id = 102")
-      .get() as { c: number };
-    expect(n.c).toBe(0);
-    const st = sqlite
-      .prepare("SELECT overseas_parse_status AS s FROM yuho_documents WHERE doc_id = 'S100T0002'")
-      .get() as { s: string };
-    expect(st.s).toBe("geo_present_unstructured");
+    expect(calls()).toBe(1);
+    // post は expected と一致 (件数・label のみ比較。値は開示しない)。
+    const docDbId = numericDoc.doc16["id"] as number;
+    const liveDoc = sqlite.prepare("SELECT * FROM yuho_documents WHERE doc_id = ?").get(numericDoc.docId) as Record<string, unknown>;
+    expect(liveDoc["overseas_parse_status"]).toBe(numericDoc.newStatus);
+    expect(liveDoc["overseas_honbun_file"]).toBe(numericDoc.newHonbunFile);
+    const n = sqlite.prepare("SELECT COUNT(*) AS c FROM yuho_overseas_facts WHERE document_id = ?").get(docDbId) as { c: number };
+    expect(n.c).toBe(numericDoc.newFacts.length);
+    // business 集合の正準ダイジェスト一致。
+    const postBiz = (sqlite.prepare("SELECT fiscal_year_end, region_name, region_kind, is_consolidated, unit_label, sales_raw, sales_yen, ratio_pct, pattern FROM yuho_overseas_facts WHERE document_id = ? ORDER BY id").all(docDbId) as Record<string, unknown>[])
+      .map((o) => stateDigest(o)).sort();
+    const expBiz = expectedPost(numericDoc).facts
+      .map((f) => stateDigest({
+        fiscal_year_end: f["fiscalYearEnd"],
+        region_name: f["regionName"],
+        region_kind: f["regionKind"],
+        is_consolidated: f["isConsolidated"] === null ? null : f["isConsolidated"] ? 1 : 0,
+        unit_label: f["unitLabel"],
+        sales_raw: f["salesRaw"],
+        sales_yen: f["salesYen"],
+        ratio_pct: f["ratioPct"],
+        pattern: f["pattern"],
+      })).sort();
+    expect(postBiz).toEqual(expBiz);
+  });
+
+  it("actual NEWPOST reentry uses same writer and sends zero", async () => {
+    const { sqlite, queryDb, buildDb } = openLocal();
+    seedActual(sqlite, numericDoc);
+    const batch = prefreezeDoc(buildDb, numericDoc);
+    const first = counting(mkDeps(sqlite, queryDb, "post-first"));
+    await applyOneDoc(first.deps, numericDoc, batch);
+    const actualPost = liveSnapshotSha(sqlite, numericDoc.doc16["id"] as number);
+    const second = counting(mkDeps(sqlite, queryDb, "post-reentry"));
+    expect((await applyOneDoc(second.deps, numericDoc, batch)).outcome).toBe("MATCH");
+    expect(second.calls()).toBe(0);
+    expect(liveSnapshotSha(sqlite, numericDoc.doc16["id"] as number)).toBe(actualPost);
+  });
+
+  it.each(["doc", "one-fact", "fact-id", "membership"])("race %s throws before DML and preserves actual state", async (kind) => {
+    const { sqlite, queryDb, buildDb } = openLocal();
+    seedActual(sqlite, numericDoc);
+    const id = numericDoc.doc16["id"] as number;
+    const deps = mkDeps(sqlite, queryDb, `race-${kind}`);
+    const realSender = deps.sender;
+    let sends = 0;
+    let raced = "";
+    deps.sender = async (stmts) => {
+      sends += 1;
+      if (kind === "doc") sqlite.prepare("UPDATE yuho_documents SET filer_name = filer_name || '_fault' WHERE id = ?").run(id);
+      else if (kind === "one-fact") sqlite.prepare("UPDATE yuho_overseas_facts SET sales_raw = COALESCE(sales_raw,0)+1 WHERE id = (SELECT MIN(id) FROM yuho_overseas_facts WHERE document_id = ?)").run(id);
+      else if (kind === "fact-id") sqlite.prepare("UPDATE yuho_overseas_facts SET id = id + 10000000 WHERE document_id = ?").run(id);
+      else sqlite.prepare("DELETE FROM yuho_overseas_facts WHERE id = (SELECT MIN(id) FROM yuho_overseas_facts WHERE document_id = ?)").run(id);
+      raced = liveSnapshotSha(sqlite, id);
+      await realSender(stmts);
+    };
+    await expect(applyOneDoc(deps, numericDoc, prefreezeDoc(buildDb, numericDoc))).rejects.toThrow();
+    expect(sends).toBe(1);
+    expect(deps.counters.applied).toBe(0);
+    expect(liveSnapshotSha(sqlite, id)).toBe(raced);
+  });
+
+  it("unknown HTTP failure aborts instead of no-op classification", async () => {
+    const { sqlite, queryDb, buildDb } = openLocal();
+    seedActual(sqlite, numericDoc);
+    const deps = mkDeps(sqlite, queryDb, "http-unknown");
+    deps.sender = async () => { throw new Error("D1 HTTP error: unknown outcome"); };
+    await expect(applyOneDoc(deps, numericDoc, prefreezeDoc(buildDb, numericDoc))).rejects.toThrow("unknown outcome");
+    expect(deps.counters.sent).toBe(1);
+    expect(deps.counters.applied).toBe(0);
   });
 
   it("prestate 不一致 → HOLD_PRESTATE・送信 0・無変更", async () => {
     const { sqlite, queryDb, buildDb } = openLocal();
-    seedAll(sqlite);
-    insertDoc(sqlite, doc16("S100T0001", 101));
-    const q = [q2row("S100T0001", 1, 101, "合成州甲", 7)];
-    for (const r of q) insertFact(sqlite, r);
-    sqlite
-      .prepare("UPDATE yuho_overseas_facts SET sales_raw = 999 WHERE id = 1")
-      .run();
-    const doc = validateDocRow(
-      packetRow({
-        doc: "S100T0001",
-        id: 101,
-        numeric: true,
-        q2: q,
-        newFacts: [newFact("合成州甲", 7)],
-        status: "ok_geo_rows",
-      }),
-      0
-    );
-    const rec = recordingSender(sqlite);
-    const r = await applyOneDoc(
-      { queryDb, sender: rec.sender as never },
-      buildDb,
-      doc
-    );
+    seedActual(sqlite, numericDoc);
+    const id = numericDoc.doc16["id"] as number;
+    const before = liveSnapshotSha(sqlite, id);
+    sqlite.prepare("UPDATE yuho_overseas_facts SET sales_raw = COALESCE(sales_raw, 0) + 1 WHERE document_id = ?").run(id);
+    const { deps, calls } = counting(mkDeps(sqlite, queryDb, "hold"));
+    const r = await applyOneDoc(deps, numericDoc, prefreezeDoc(buildDb, numericDoc));
     expect(r.outcome).toBe("HOLD_PRESTATE");
-    expect(rec.calls.length).toBe(0);
-    const v = sqlite
-      .prepare("SELECT sales_raw AS s FROM yuho_overseas_facts WHERE id = 1")
-      .get() as { s: number };
-    expect(v.s).toBe(999);
+    expect(calls()).toBe(0);
+    const tampered = liveSnapshotSha(sqlite, id);
+    expect(tampered).not.toBe(before);
   });
 
-  it("race 余剰行 → DELETE guard が 0 行化 (live 無傷)", () => {
+  it("FIRST trip → batch 全体 rollback・live 無傷", () => {
     const { sqlite, buildDb } = openLocal();
-    seedAll(sqlite);
-    insertDoc(sqlite, doc16("S100T0002", 102));
-    const q = [q2row("S100T0002", 5, 102, "合成州", 7)];
-    for (const r of q) insertFact(sqlite, r);
-    sqlite
-      .prepare(
-        "INSERT INTO yuho_overseas_facts (document_id, stock_id, fiscal_year_end, region_name, region_kind, is_consolidated, unit_label, sales_raw, sales_yen, ratio_pct, pattern) VALUES (102, ?, '2025-03-31', '競合州', 'overseas', 1, '合成円', 1, 1000, NULL, 'geo_rows')"
-      )
-      .run(STOCK);
-    const doc = validateDocRow(
-      packetRow({
-        doc: "S100T0002",
-        id: 102,
-        numeric: false,
-        q2: q,
-        newFacts: [],
-        status: "geo_present_unstructured",
-      }),
-      0
-    );
-    const { builders } = buildDocBatch(buildDb, doc);
-    const stmts = toD1BatchStatements(builders);
-    const before = (
-      sqlite
-        .prepare("SELECT COUNT(*) AS c FROM yuho_overseas_facts WHERE document_id = 102")
-        .get() as { c: number }
-    ).c;
-    expect(before).toBe(2);
-    sqlite.prepare(stmts[0]?.sql ?? "").run(...((stmts[0]?.params ?? []) as never[]));
-    const after = (
-      sqlite
-        .prepare("SELECT COUNT(*) AS c FROM yuho_overseas_facts WHERE document_id = 102")
-        .get() as { c: number }
-    ).c;
-    expect(after).toBe(2);
+    seedActual(sqlite, numericDoc);
+    const id = numericDoc.doc16["id"] as number;
+    sqlite.prepare("UPDATE yuho_documents SET filer_name = filer_name || '_x' WHERE id = ?").run(id);
+    const snap = liveSnapshotSha(sqlite, id);
+    const { stmts } = prefreezeDoc(buildDb, numericDoc);
+    // FIRST 単独でも trip する。
+    expect(() => sqlite.prepare(stmts[0]?.sql ?? "").get(...((stmts[0]?.params ?? []) as never[]))).toThrow();
+    // batch 全体は ROLLBACK で無変更。
+    sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      for (const s of stmts) {
+        sqlite.prepare(s.sql).run(...(s.params as never[]));
+      }
+      sqlite.exec("COMMIT");
+      throw new Error("trip せず COMMIT した (障害)");
+    } catch (e) {
+      sqlite.exec("ROLLBACK");
+      if ((e as Error).message.includes("trip せず")) throw e;
+    }
+    expect(liveSnapshotSha(sqlite, id)).toBe(snap);
+    const n = sqlite.prepare("SELECT COUNT(*) AS c FROM yuho_overseas_facts WHERE document_id = ?").get(id) as { c: number };
+    expect(n.c).toBe(numericDoc.q2.length);
   });
-});
 
-describe("classify/compare", () => {
-  it("APPLIED / NOOP_PRESTATE / MISMATCH", () => {
-    const d = doc16("S100T0001", 101);
-    const q = [q2row("S100T0001", 1, 101, "合成州甲", 7)];
-    const doc = validateDocRow(
-      packetRow({
-        doc: "S100T0001",
-        id: 101,
-        numeric: true,
-        q2: q,
-        newFacts: [newFact("合成州甲", 7)],
-        status: "ok_geo_rows",
-      }),
-      0
-    );
-    const exp = expectedPost(doc);
-    expect(doc16Equals({ ...d }, d)).toBe(true);
-    expect(q2SetEquals([...q], q)).toBe(true);
-    const appliedPost = {
-      doc16: exp.doc16,
-      q2: exp.facts.map((f, i) => ({ ...f, id: 900 + i, documentId: 101, stockId: STOCK })),
-    };
-    expect(
-      classifyPost({ doc16: d, q2: q }, appliedPost, exp)
-    ).toBe("APPLIED");
-    expect(classifyPost({ doc16: d, q2: q }, { doc16: d, q2: q }, exp)).toBe(
-      "NOOP_PRESTATE"
-    );
-    const tampered = {
-      doc16: { ...exp.doc16 },
-      q2: [{ ...appliedPost.q2[0], salesRaw: 12345 }].filter(Boolean) as Record<string, unknown>[],
-    };
-    expect(classifyPost({ doc16: d, q2: q }, tampered, exp)).toBe("MISMATCH");
+  it("unknown clean → APPLIED (facts 0・honest status)", async () => {
+    const { sqlite, queryDb, buildDb } = openLocal();
+    seedActual(sqlite, unknownDoc);
+    const deps = mkDeps(sqlite, queryDb, "unk-apply");
+    const r = await applyOneDoc(deps, unknownDoc, prefreezeDoc(buildDb, unknownDoc));
+    expect(r.outcome).toBe("APPLIED");
+    const id = unknownDoc.doc16["id"] as number;
+    const n = sqlite.prepare("SELECT COUNT(*) AS c FROM yuho_overseas_facts WHERE document_id = ?").get(id) as { c: number };
+    expect(n.c).toBe(0);
+    const st = sqlite.prepare("SELECT overseas_parse_status AS s FROM yuho_documents WHERE id = ?").get(id) as { s: string };
+    expect(st.s).toBe(unknownDoc.newStatus);
+  });
+
+  it("classify: post/expected の 3 値 (label のみ)", () => {
+    const exp = expectedPost(numericDoc);
+    const appliedQ2 = exp.facts.map((f, i) => ({ ...f, id: 100000 + i, documentId: numericDoc.doc16["id"], stockId: numericDoc.doc16["stockId"] }));
+    expect(classifyPost({ doc16: numericDoc.doc16, q2: numericDoc.q2 }, { doc16: exp.doc16, q2: appliedQ2 }, exp)).toBe("APPLIED");
+    expect(classifyPost({ doc16: numericDoc.doc16, q2: numericDoc.q2 }, { doc16: numericDoc.doc16, q2: numericDoc.q2 }, exp)).toBe("NOOP_PRESTATE");
+    const first = { ...(appliedQ2[0] as Record<string, unknown>) };
+    first["salesRaw"] = ((first["salesRaw"] as number | null) ?? 0) + 1;
+    const tampered = { doc16: { ...exp.doc16 }, q2: [first] };
+    expect(classifyPost({ doc16: numericDoc.doc16, q2: numericDoc.q2 }, tampered, exp)).toBe("MISMATCH");
+  });
+
+  it("norm/serialize: own-key 完備・undefined STOP・NULL 保持", () => {
+    const d = normDoc(numericDoc.doc16, "t");
+    expect(Object.keys(d).length).toBe(16);
+    const q = normQ2(numericDoc.q2[0] as Record<string, unknown>, "t");
+    expect(Object.keys(q).length).toBe(12);
+    const s = serializeQ2(numericDoc.q2, "t");
+    expect(JSON.parse(s).length).toBe(numericDoc.q2.length);
+    const missing = { ...numericDoc.doc16 } as Record<string, unknown>;
+    delete missing["filerName"];
+    expect(() => normDoc(missing, "t")).toThrow();
+    const undef = { ...numericDoc.q2[0] } as Record<string, unknown>;
+    undef["salesRaw"] = undefined;
+    expect(() => normQ2(undef, "t")).toThrow();
   });
 });
