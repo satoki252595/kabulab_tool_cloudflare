@@ -7,6 +7,7 @@
  * - buildIngestSummary: run 粒度のバッチ保管入力。per-stock 鏡像は作らない
  *   (CLAUDE 高頻度ポーリング則)。summary JSON 自体を 1 ファイル添付する。
  */
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 export type PricedBar = {
@@ -53,18 +54,196 @@ export function findInvalidBars(bars: readonly PricedBar[]): InvalidBar[] {
  * 取込 run の終了コード。errors/invalid/rateLimited のいずれかがあれば
  * 非0 (当該銘柄 PUT0 は呼び出し側で確定済み)。aborted は 2 のまま。
  * 単発 rate-limit (MAX_RL 未達) も成功扱いしない。
+ * fatalUnknown (R2 PUT unknown/rejected・R2 GET fault) は 2。
+ * ワークフローは exit 2 で後続 intra を走らせない。
  */
 export function resolveExitCode(counts: {
   aborted: boolean;
+  fatalUnknown: boolean;
   errors: number;
   invalid: number;
   rateLimited: number;
 }): 0 | 1 | 2 {
-  if (counts.aborted) return 2;
+  if (counts.aborted || counts.fatalUnknown) return 2;
   if (counts.errors > 0 || counts.invalid > 0 || counts.rateLimited > 0) {
     return 1;
   }
   return 0;
+}
+
+/** ログ文面の sanitizer。URL・secret 代入値を落とす。 */
+export function sanitizeLogText(s: string): string {
+  return s
+    .replace(/https?:\/\/\S+/g, "<url>")
+    .replace(/secret\s*=\s*\S+/gi, "secret=<redacted>");
+}
+
+export type ArchiveResult = { code: 0 | 2; reason: string | null };
+
+/**
+ * run 粒度バッチ保管の実行 + 終了コード解決。recorded 以外・fileTooLarge・
+ * 例外はすべて 2 (fatal)。呼び出し側は exit 2 で後続を止める。
+ * ワークフローは daily の exit 2 で intra を走らせない。
+ * 失敗理由は sanitized で reason に載せ、呼び出し側が receipt ログへ出す。
+ * source archive の証拠を握り潰さない。
+ */
+export async function archiveSummaryOrFatal(
+  record: () => Promise<{ outcome: string; fileTooLarge: boolean }>
+): Promise<ArchiveResult> {
+  let r: { outcome: string; fileTooLarge: boolean };
+  try {
+    r = await record();
+  } catch (e) {
+    const name = e instanceof Error ? e.name : typeof e;
+    const msg = e instanceof Error ? e.message : String(e);
+    return { code: 2, reason: `exception:${name}: ${sanitizeLogText(msg).slice(0, 200)}` };
+  }
+  if (r.fileTooLarge) return { code: 2, reason: `fileTooLarge outcome=${r.outcome}` };
+  if (r.outcome !== "recorded") return { code: 2, reason: `outcome=${r.outcome}` };
+  return { code: 0, reason: null };
+}
+
+/**
+ * 実行母集団の pin。sorted 結合の SHA256 + 件数。summary が「何を回したか」
+ * を証明する (financial 値なし)。
+ */
+export function universePin(codes: readonly string[]): { size: number; sha256: string } {
+  const sorted = [...codes].sort();
+  return {
+    size: sorted.length,
+    sha256: createHash("sha256").update(sorted.join("\n"), "utf8").digest("hex"),
+  };
+}
+
+/** PUT body の pin。何を書いたかの証跡 (financial 値なし)。 */
+export function bodyPin(body: string): string {
+  return createHash("sha256").update(body, "utf8").digest("hex");
+}
+
+export type SavedDaily = {
+  code: string;
+  bars: Array<Record<string, unknown>>;
+  splits: Array<Record<string, unknown>>;
+};
+
+export type SavedIntra = {
+  code: string;
+  bars: Array<Record<string, unknown>>;
+};
+
+/** YYYY-MM-DD の暦妥当性 (存在する日付のみ)。 */
+function isCalendarDate(d: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+  const ms = Date.parse(`${d}T00:00:00Z`);
+  if (!Number.isFinite(ms)) return false;
+  return new Date(ms).toISOString().slice(0, 10) === d;
+}
+
+/**
+ * 保存済み R2 daily object の strict 検証。以下は throw する:
+ * parse 不能・非 object・code 不一致 (cross-code 混入防止)・
+ * bars/splits 非配列・bar の日付不正・重複日付・価格異常 (既存
+ * findInvalidBars を reuse)・adj 欠落 (daily 保存バーは adj 必須)・
+ * splits 要素の日付不正・ratio 非正有限。
+ * `old.bars || []` の黙示補完は禁止 (新 valid が壊 old を温存して PUT
+ * する根因になる)。呼び出し側は当該銘柄 PUT0・errors 計数へ。
+ */
+export function assertSavedDailyShape(raw: string, key: string, expectedCode: string): SavedDaily {
+  let old: unknown;
+  try {
+    old = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`保存済み形状が不正です (parse 不能): ${key}`);
+  }
+  if (old === null || typeof old !== "object" || Array.isArray(old)) {
+    throw new Error(`保存済み形状が不正です (object でない): ${key}`);
+  }
+  const o = old as Record<string, unknown>;
+  if (typeof o.code !== "string" || o.code !== expectedCode) {
+    throw new Error(`保存済み形状が不正です (code 不一致): ${key}`);
+  }
+  if (!Array.isArray(o.bars) || !Array.isArray(o.splits)) {
+    throw new Error(`保存済み形状が不正です (bars/splits 非配列): ${key}`);
+  }
+  const seenDates = new Set<string>();
+  for (const b of o.bars) {
+    const r = b as Record<string, unknown> | null;
+    if (r === null || typeof r !== "object") {
+      throw new Error(`保存済み形状が不正です (bars 要素非 object): ${key}`);
+    }
+    if (typeof r.date !== "string" || !isCalendarDate(r.date)) {
+      throw new Error(`保存済み形状が不正です (bars 日付不正): ${key}`);
+    }
+    if (seenDates.has(r.date)) {
+      throw new Error(`保存済み形状が不正です (bars 日付重複): ${key}`);
+    }
+    seenDates.add(r.date);
+    if (r.adj === undefined) {
+      throw new Error(`保存済み形状が不正です (bars adj 欠落): ${key}`);
+    }
+  }
+  const bad = findInvalidBars(o.bars as unknown as PricedBar[]);
+  if (bad.length > 0) {
+    throw new Error(`保存済み形状が不正です (bars 価格異常 ${bad.length} 件): ${key}`);
+  }
+  for (const s of o.splits) {
+    const r = s as Record<string, unknown> | null;
+    if (
+      r === null ||
+      typeof r !== "object" ||
+      typeof r.date !== "string" ||
+      !isCalendarDate(r.date) ||
+      typeof r.ratio !== "number" ||
+      !Number.isFinite(r.ratio) ||
+      r.ratio <= 0
+    ) {
+      throw new Error(`保存済み形状が不正です (splits 要素): ${key}`);
+    }
+  }
+  return o as unknown as SavedDaily;
+}
+
+/**
+ * 保存済み R2 intra object の strict 検証。daily と同一方針。
+ * bars 要素は ts (有限正数値)・重複なし・価格妥当 (findInvalidBars reuse)。
+ * adj は intra に無い (undefined のまま検査し、欠落扱いしない)。
+ */
+export function assertSavedIntraShape(raw: string, key: string, expectedCode: string): SavedIntra {
+  let old: unknown;
+  try {
+    old = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`保存済み形状が不正です (parse 不能): ${key}`);
+  }
+  if (old === null || typeof old !== "object" || Array.isArray(old)) {
+    throw new Error(`保存済み形状が不正です (object でない): ${key}`);
+  }
+  const o = old as Record<string, unknown>;
+  if (typeof o.code !== "string" || o.code !== expectedCode) {
+    throw new Error(`保存済み形状が不正です (code 不一致): ${key}`);
+  }
+  if (!Array.isArray(o.bars)) {
+    throw new Error(`保存済み形状が不正です (bars 非配列): ${key}`);
+  }
+  const seenTs = new Set<number>();
+  for (const b of o.bars) {
+    const r = b as Record<string, unknown> | null;
+    if (r === null || typeof r !== "object") {
+      throw new Error(`保存済み形状が不正です (bars 要素非 object): ${key}`);
+    }
+    if (typeof r.ts !== "number" || !Number.isFinite(r.ts) || r.ts <= 0) {
+      throw new Error(`保存済み形状が不正です (bars ts 不正): ${key}`);
+    }
+    if (seenTs.has(r.ts)) {
+      throw new Error(`保存済み形状が不正です (bars ts 重複): ${key}`);
+    }
+    seenTs.add(r.ts);
+  }
+  const bad = findInvalidBars(o.bars as unknown as PricedBar[]);
+  if (bad.length > 0) {
+    throw new Error(`保存済み形状が不正です (bars 価格異常 ${bad.length} 件): ${key}`);
+  }
+  return o as unknown as SavedIntra;
 }
 
 /**
@@ -117,6 +296,30 @@ export function resolveRunId(env: NodeJS.ProcessEnv = process.env): string {
   return `local-${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
+/**
+ * 銘柄単位の確定 outcome。実行 codes 全件がちょうど 1 件ずつ載る
+ * (notStarted 含め全件 accounting)。
+ * - written/skipped/empty/error/unknown/notStarted の 6 値。
+ * - latestSourceBar: 実応答の最新 source bar。daily は Yahoo timestamp
+ *   由来の JST 日付 (YYYY-MM-DD)、intra は実 ts 秒。未 fetch は null。
+ *   run day (UTC) は archive key 専用で、完了取引日の推定はしない。
+ * - bodySha: written は送信 body、skipped は standing の既存 bytes、
+ *   unknown/rejected は試行 body の SHA256。出力なしは null。
+ *   financial 値は載せない。
+ */
+export type IngestOutcomeStatus =
+  | "written"
+  | "skipped"
+  | "empty"
+  | "error"
+  | "unknown"
+  | "notStarted";
+export type IngestCodeOutcome = {
+  status: IngestOutcomeStatus;
+  latestSourceBar: string | number | null;
+  bodySha: string | null;
+};
+
 export type IngestRunStats = {
   kind: "daily" | "intra";
   range: string;
@@ -133,6 +336,14 @@ export type IngestRunStats = {
   aborted: boolean;
   startedAt: string;
   finishedAt: string;
+  /** R2 結果不明の銘柄 (sorted)。適用有無は断定しない。 */
+  unknown: string[];
+  /** R2 明示拒否の銘柄 (sorted)。適用なし確定。 */
+  rejected: string[];
+  /** 実行母集団の pin (sorted SHA + 件数)。financial 値なし。 */
+  universe: { size: number; sha256: string };
+  /** 銘柄単位の確定 outcome (code → outcome)。全件 accounting。 */
+  outcomes: Record<string, IngestCodeOutcome>;
 };
 
 export function buildIngestSummary(stats: IngestRunStats): {
@@ -169,6 +380,10 @@ export function buildIngestSummary(stats: IngestRunStats): {
       rateLimited: stats.rateLimited,
       backfilled: stats.backfilled ?? 0,
       aborted: stats.aborted,
+      unknown: stats.unknown,
+      rejected: stats.rejected,
+      universe: stats.universe,
+      outcomes: stats.outcomes,
     },
     files: [
       {

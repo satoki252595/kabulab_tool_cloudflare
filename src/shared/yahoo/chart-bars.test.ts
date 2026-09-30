@@ -125,13 +125,123 @@ describe("fetchDaily", () => {
     await expect(fetchDaily("7203.T")).rejects.toThrow(/adj 欠落/);
   });
 
-  it("result 欠落は空で返し、quote 欠落は落とす", async () => {
+  it("result 欠落は空で返さず落とす。quote 欠落も落とす", async () => {
     useProxy();
     stubChart({ chart: { result: [] } });
-    expect(await fetchDaily("7203.T")).toEqual({ bars: [], splits: [] });
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/result が単一ではありません/);
 
     stubChart(chartJson({ indicators: {} }));
     await expect(fetchDaily("7203.T")).rejects.toThrow(/quote がありません/);
+  });
+
+  it("真正 empty は timestamp 空配列 + 同長空 quote のみ", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        timestamp: [],
+        indicators: {
+          quote: [{ open: [], high: [], low: [], close: [], volume: [] }],
+          adjclose: [{ adjclose: [] }],
+        },
+      })
+    );
+    expect(await fetchDaily("7203.T")).toEqual({ bars: [], splits: [] });
+  });
+
+  it("chart.error 併存は result があっても採用しない (値は出さない)", async () => {
+    useProxy();
+    stubChart({
+      chart: {
+        result: chartJson().chart.result,
+        error: { code: "Not Found", description: "No data found for 7203.T" },
+      },
+    });
+    const err = (await fetchDaily("7203.T").catch((e: unknown) => e)) as Error;
+    expect(err.message).toMatch(/chart\.error/);
+    expect(err.message).toMatch(/keys=code,description/);
+    expect(err.message).not.toContain("No data found");
+  });
+
+  it("{0: res} 形の未知 envelope は受けない", async () => {
+    useProxy();
+    stubChart({ chart: { result: { 0: chartJson().chart.result[0] } } });
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/result が単一ではありません/);
+  });
+
+  it("timestamp 非配列・非有限・非正・無効日付は落とす", async () => {
+    useProxy();
+    for (const ts of [null, "x", [1757548800, Number.NaN], [0], [-5], [1e30]]) {
+      stubChart(chartJson({ timestamp: ts }));
+      await expect(fetchDaily("7203.T")).rejects.toThrow(/timestamp|正当な時刻/);
+    }
+  });
+
+  it("quote 長不一致 (truncated/stale) は malformed で落とす", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        indicators: {
+          quote: [{ open: [100], high: [110, 111], low: [90, 91], close: [105, 106], volume: [1000, 2000] }],
+          adjclose: [{ adjclose: [104, 105] }],
+        },
+      })
+    );
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/長さが timestamp と一致しません/);
+    // timestamp [] + stale 非空 quote も真正 empty にしない。
+    stubChart(
+      chartJson({
+        timestamp: [],
+        indicators: {
+          quote: [{ open: [100], high: [110], low: [90], close: [105], volume: [1000] }],
+          adjclose: [{ adjclose: [] }],
+        },
+      })
+    );
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/長さが timestamp と一致しません/);
+  });
+
+  it("全行 null は真正 empty にせず落とす (証拠付き)", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        indicators: {
+          quote: [{ open: [null, null], high: [null, null], low: [null, null], close: [null, null], volume: [null, null] }],
+          adjclose: [{ adjclose: [null, null] }],
+        },
+      })
+    );
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/全行欠落.*timestamps=2/);
+  });
+
+  it("splits 形状不正 (0 除算・非数) は落とす", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        events: { splits: { "1": { date: 1757548800, numerator: 2, denominator: 0 } } },
+      })
+    );
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/splits 応答の形状が不正/);
+  });
+
+  it("splits ratio 非正・overflow・日付不正・非 object は落とす", async () => {
+    useProxy();
+    const cases: Array<[string, unknown]> = [
+      ["zero-numerator", { splits: { "1": { date: 1757548800, numerator: 0, denominator: 1 } } }],
+      ["negative-denominator", { splits: { "1": { date: 1757548800, numerator: 2, denominator: -1 } } }],
+      ["negative-negative", { splits: { "1": { date: 1757548800, numerator: -2, denominator: -1 } } }],
+      ["overflow-ratio", { splits: { "1": { date: 1757548800, numerator: 1e308, denominator: 1e-308 } } }],
+      ["bad-event-date", { splits: { "1": { date: -5, numerator: 2, denominator: 1 } } }],
+      ["splits-array", { splits: [{ date: 1757548800, numerator: 2, denominator: 1 }] }],
+    ];
+    for (const [name, events] of cases) {
+      stubChart(chartJson({ events }));
+      await expect(fetchDaily("7203.T"), name).rejects.toThrow(/splits/);
+    }
+    stubChart(chartJson({ events: "xx" }));
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/events 応答の形状が不正/);
+    // 欠落 (null/undefined) は文書化された no-events として空扱い。
+    stubChart(chartJson({ events: undefined }));
+    expect((await fetchDaily("7203.T")).splits).toEqual([]);
   });
 
   /**
@@ -327,6 +437,53 @@ describe("fetchDaily", () => {
 });
 
 describe("fetchBars5m", () => {
+  it("result 欠落・chart.error は空で返さず落とす", async () => {
+    useProxy();
+    stubChart({ chart: { result: [] } });
+    await expect(fetchBars5m("7203.T")).rejects.toThrow(/result が単一ではありません/);
+    stubChart({ chart: { result: chartJson().chart.result, error: { code: "x" } } });
+    await expect(fetchBars5m("7203.T")).rejects.toThrow(/chart\.error/);
+  });
+
+  it("真正 empty は timestamp 空配列 + 同長空 quote のみ", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        timestamp: [],
+        indicators: {
+          quote: [{ open: [], high: [], low: [], close: [], volume: [] }],
+        },
+      })
+    );
+    expect(await fetchBars5m("7203.T")).toEqual([]);
+  });
+
+  it("全行 null は真正 empty にせず落とす (証拠付き)", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        indicators: {
+          quote: [{ open: [null, null], high: [null, null], low: [null, null], close: [null, null], volume: [null, null] }],
+        },
+      })
+    );
+    await expect(fetchBars5m("7203.T")).rejects.toThrow(/全行欠落.*null脱落=2/);
+  });
+
+  it("quote 長不一致・timestamp 不正は malformed で落とす", async () => {
+    useProxy();
+    stubChart(
+      chartJson({
+        indicators: {
+          quote: [{ open: [100], high: [110, 111], low: [90, 91], close: [105, 106], volume: [1000, 2000] }],
+        },
+      })
+    );
+    await expect(fetchBars5m("7203.T")).rejects.toThrow(/長さが timestamp と一致しません/);
+    stubChart(chartJson({ timestamp: [1757548800, -1] }));
+    await expect(fetchBars5m("7203.T")).rejects.toThrow(/正当な時刻/);
+  });
+
   it("正準形に整形し時系列昇順にする", async () => {
     useProxy();
     stubChart(chartJson());
