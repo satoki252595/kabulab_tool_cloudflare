@@ -174,6 +174,53 @@ export type CompanyNominalVerdict =
   | { qualified: true; rule: "face-literal" | "coupon-unit" | "points-rate" }
   | { qualified: false; code: string; detail: string };
 
+/**
+ * 内部の保存形式 headed-description (producer が DB `description` に書く形)。
+ *
+ * 表の h3 見出しは額面の positive 根拠にできないが、種別・選択・抽選の
+ * context (negative) として判定に要る。別列を持たず、保存文の先頭行に
+ * `【種別：<JSON文字列>】` を置く。空でない見出しは必ず persist する
+ * (本文に含まれていても落とさない — 包含は heading-scope HOLD と等価では
+ * ない。条件の黙殺 = fallback はしない)。見出し bytes は JSON
+ * encoding で全保持し (】・改行も壊さない)、positive 本文と分離する。
+ * 空見出しだけ素の本文で正直に欠落させる。
+ * marker の無い旧保存文は `{ heading: null, body: 原文 }` で素通しし、
+ * 旧判定と 1 文字も変えない。marker 付きで壊れた保存文は
+ * `malformed: true` で返す — 正の全文としては扱わず、呼び出し側が
+ * HOLD/STOP する (qualifier は HOLD verdict、carry キーは STOP)。
+ * 公開面は `description` 列自体を引かない (app.ts) ので届かない。
+ */
+/** headed 保存形式の先頭 marker。summary-contract の echo 拒否と共有する (単一真実)。 */
+export const HEADED_MARK = "【種別：";
+
+export type SplitHeaded = { heading: string | null; body: string; malformed: boolean };
+
+/** 保存形を作る。空見出しは素の本文、それ以外は必ず headed で全 bytes 保持。 */
+export function headedDescription(heading: string, body: string): string {
+  const h = heading ?? "";
+  if (h === "") return body;
+  return `${HEADED_MARK}${JSON.stringify(h)}】\n${body}`;
+}
+
+/**
+ * 保存形を切り分ける。先頭行の marker だけを見る (文中の同形は無視)。
+ * 見出し部は末尾 `】` まで貪欲に取り JSON として読む (見出し内の `】` 可)。
+ */
+export function splitHeadedDescription(stored: string): SplitHeaded {
+  if (!stored.startsWith(HEADED_MARK)) return { heading: null, body: stored, malformed: false };
+  const nl = stored.indexOf("\n");
+  const first = nl < 0 ? stored : stored.slice(0, nl);
+  if (!first.endsWith("】")) return { heading: null, body: stored, malformed: true };
+  let heading: unknown;
+  try {
+    heading = JSON.parse(first.slice(HEADED_MARK.length, -1));
+  } catch {
+    return { heading: null, body: stored, malformed: true };
+  }
+  if (typeof heading !== "string") return { heading: null, body: stored, malformed: true };
+  return { heading, body: nl < 0 ? "" : stored.slice(nl + 1), malformed: false };
+}
+
 /** 約の複合語 (近似の意味を持たないため approx 判定から除く)。 */
 const YAKU_COMPOUNDS = [
   "約款",
@@ -267,7 +314,7 @@ function isAnnualSpan(desc: string, index: number): boolean {
  *   素の並置 (3枚セット（10,000円相当）のような set-total) までは除かない —
  *   実形に単価読みの根拠が無く、除くと set-total を誤爆するため。
  */
-function isNonFaceSpan(desc: string, span: YenSpan): boolean {
+function isNonFaceSpanBefore(desc: string, span: YenSpan): boolean {
   const before = desc.slice(Math.max(0, span.index - 12), span.index);
   if (/(?:年間|合計|総額|累計)\s*$/.test(before)) return true;
   if (/[〜～≒＝=]\s*$/.test(before)) return true;
@@ -279,10 +326,18 @@ function isNonFaceSpan(desc: string, span: YenSpan): boolean {
   if (/(?:ポイント|(?<![A-Za-z])pt)\s*[（(]?\s*(?:当たり|あたり|当り)?\s*$/.test(before)) return true;
   if (/(?:枚|個|口|冊|本|セット|点|回)\s*[（(]?\s*(?:当たり|あたり|当り)\s*$/.test(before)) return true;
   if (/(?:枚|個|口|冊|本|セット|点|回|ポイント|(?<![A-Za-z])pt)\s*につき\s*$/.test(before)) return true;
+  return false;
+}
+
+function isNonFaceSpanAfter(desc: string, span: YenSpan): boolean {
   const after = desc.slice(span.end, span.end + 12);
   return /^(?:\[[^\]]*\]|（[^）]*）|\([^)]*\))?(?:以上|以下|未満|超|から|まで|ごと|毎|引き|割引|オフ|OFF)/.test(
     after
   );
+}
+
+function isNonFaceSpan(desc: string, span: YenSpan): boolean {
+  return isNonFaceSpanBefore(desc, span) || isNonFaceSpanAfter(desc, span);
 }
 
 /** 額面候補の span (年間・合計・範囲・購入条件つきを除く)。 */
@@ -334,6 +389,27 @@ function extractTicketUnits(clauseRaw: string): number[] {
   const out: number[] = [];
   for (const s of extractStrictYenSpans(clause)) {
     if (!isNonFaceSpan(clause, s) && hasTicketAfter(clause, s)) out.push(s.value);
+  }
+  return out;
+}
+
+/**
+ * 見出しの型付き券 unit (○円券・○円割引券など券名つき額面)。
+ * headed coupon-unit 規則だけが使う。券の隣接が必須で、bare 通貨は採らない。
+ * 単価・レート・年間・範囲つきは除く (既存の before 境界をそのまま使う)。
+ * after 側は券名の一部としての割引/引き (500円割引券) だけ採り、範囲の
+ * 下端摘み (500～1000円券の 500) は除く。数量との積は呼び出し側で見る。
+ */
+function extractHeadedTicketUnits(headingRaw: string): number[] {
+  const h = normalizeNumeric(headingRaw);
+  const out: number[] = [];
+  for (const s of extractStrictYenSpans(headingRaw)) {
+    if (!hasTicketAfter(h, s)) continue;
+    if (isNonFaceSpanBefore(h, s)) continue;
+    const after = h.slice(s.end, s.end + 12);
+    if (/^\s*[〜～]/.test(after)) continue;
+    if (isNonFaceSpanAfter(h, s) && !/^(?:割引|値引|引き)券/.test(after)) continue;
+    out.push(s.value);
   }
   return out;
 }
@@ -629,21 +705,21 @@ export type PerGrantContext = {
 };
 
 /**
- * 見出しの HOLD 走査。額面の positive 認定はしない (見出しの金額を根拠に
- * company へ上げない)。述語は `qualifyCompanyNominal` と同一。
+ * 見出しの scope HOLD 走査。額面の positive 認定はしない (見出しの金額を
+ * 根拠に company へ上げない)。抽選は見出しの scope で HOLD し、見出し自体に
+ * 金額・当選人数があるかは問わない (7578「抽選式株主優待」+ 本文「1口」)。
+ * 選択肢は従来どおり見出し単独で HOLD を保つ。割引はここでは見ない —
+ * 型付き券 unit 規則の後に、見出し+本文の joint で別に見る。
  */
-function headingHold(heading: string, value: number | null): CompanyNominalVerdict | null {
+function headingScopeHold(heading: string, value: number | null): CompanyNominalVerdict | null {
   if (hasApproxMarker(heading)) {
     return { qualified: false, code: "approx", detail: "見出しに概算表記" };
   }
   if (value !== null && isUnconvertedForeignAmount(heading, value)) {
     return { qualified: false, code: "foreign", detail: "見出しに外貨額面" };
   }
-  if (value !== null && isLotteryPrizeAmount(heading, value)) {
-    return { qualified: false, code: "lottery", detail: "見出しに抽選賞品の金額" };
-  }
-  if (isDiscountWithoutRedeemable(heading)) {
-    return { qualified: false, code: "discount", detail: "見出しが割引 (換金金券なし)" };
+  if (normalizeNumeric(heading).includes("抽選")) {
+    return { qualified: false, code: "lottery", detail: "見出しが抽選 scope" };
   }
   if (hasChoiceMarker(heading)) {
     return { qualified: false, code: "choice", detail: "見出しに選択肢" };
@@ -655,6 +731,50 @@ function headingHold(heading: string, value: number | null): CompanyNominalVerdi
     return { qualified: false, code: "resale", detail: "見出しに転売・買取相場" };
   }
   return null;
+}
+
+/** 見出し+本文の joint 割引 HOLD。換金性例外は本文から来てよい (9616 の券額面を殺さない)。 */
+function headingDiscountHold(heading: string, body: string): CompanyNominalVerdict | null {
+  if (
+    isDiscountWithoutRedeemable(heading) &&
+    isDiscountWithoutRedeemable(`${heading}\n${body}`)
+  ) {
+    return { qualified: false, code: "discount", detail: "見出しが割引 (見出し+本文に換金金券なし)" };
+  }
+  return null;
+}
+
+/**
+ * headed 型付き coupon-unit 規則 (4680「500円割引券」+ 本文「1枚」)。
+ * 通るのは narrow な 1 形だけ: 見出しの型付き券 unit が単一値 × 本文の
+ * per-grant 数量が単一値 × 積が値と整数完全一致。generic な見出し通貨は
+ * 採らない (unit 抽出が券隣接必須)。数量は既存の per-grant 抽出
+ * (年間・単価基数・小数を除く) をそのまま使い、複数 distinct は曖昧で
+ * 落とす (4680 sh300 の「3枚」+ 利用条件「1日1枚」は適用しない)。
+ * 許容誤差・推定レート・cross-clause の組合せは無い。見出しは当該行自身の
+ * 保存見出し・同一キーの ctx 見出しだけで、他行の見出しは引かない
+ * (direct same-benefit context は構造で保証。lookup は無い)。
+ * 呼び出し側が本文 nominal の HOLD コードで絞る (no_per_grant_face の
+ * 純粋な額面欠落だけが対象。本文の choice/approx/lottery 等の negative
+ * 判定は authoritative で、この規則は上書きしない)。
+ */
+function qualifyHeadedCouponUnit(
+  headings: readonly string[],
+  body: string,
+  value: number | null
+): CompanyNominalVerdict | null {
+  if (value === null || !Number.isInteger(value) || value <= 0) return null;
+  const units = new Set<number>();
+  for (const h of headings) {
+    for (const u of extractHeadedTicketUnits(h)) units.add(u);
+  }
+  if (units.size !== 1) return null;
+  const qtys = [...new Set(extractPerGrantQuantities(body))];
+  if (qtys.length !== 1) return null;
+  const [unit] = [...units];
+  const [qty] = qtys;
+  if (unit * qty !== value) return null;
+  return { qualified: true, rule: "coupon-unit" };
 }
 
 /**
@@ -675,6 +795,20 @@ export function qualifyCompanyPerGrantValue(
   value: number | null,
   ctx: PerGrantContext
 ): CompanyNominalVerdict {
+  // headed 保存形は先に切り分ける。本文だけが positive 規則の入力で、
+  // 保存見出しは ctx 見出しと束ねて HOLD 走査にだけ使う。marker 無し旧文は
+  // body = 原文・見出し無しで旧判定と同一。壊れた headed は正の全文に
+  // しない (HOLD で止め、company へ上げない)。
+  const split = splitHeadedDescription(descRaw);
+  if (split.malformed) {
+    return {
+      qualified: false,
+      code: "malformed_headed_contract",
+      detail: "保存文の headed 契約が壊れている (正の本文として扱わない)",
+    };
+  }
+  const { heading: storedHeading, body } = split;
+  const headings = [...(storedHeading ? [storedHeading] : []), ...(ctx.headings ?? [])];
   if (new Set(ctx.minShares).size > 1) {
     return {
       qualified: false,
@@ -682,7 +816,7 @@ export function qualifyCompanyPerGrantValue(
       detail: `同一文言の行で株数条件が異なる (${[...new Set(ctx.minShares)].sort((a, b) => a - b).join(",")}株。tier 混在のため金額を1つに決めない)`,
     };
   }
-  const amounts = extractStrictYenAmounts(descRaw);
+  const amounts = extractStrictYenAmounts(body);
   if (new Set(ctx.recordMonths).size > 1 && amounts.length >= 2) {
     return {
       qualified: false,
@@ -690,18 +824,33 @@ export function qualifyCompanyPerGrantValue(
       detail: "複数月の同一文言に per-grant 候補額が2種類以上 (文言から1つに決めない)",
     };
   }
-  if (amounts.length >= 2 && hasMultiConditionTiers(descRaw)) {
+  if (amounts.length >= 2 && hasMultiConditionTiers(body)) {
     return {
       qualified: false,
       code: "ambiguous_condition_tiers",
       detail: "文言自体に複数 tier が並び per-grant 候補額が2種類以上 (tier↔金額の対応づけ不能)",
     };
   }
-  for (const heading of ctx.headings ?? []) {
-    const hold = headingHold(heading, value);
+  for (const heading of headings) {
+    const hold = headingScopeHold(heading, value);
     if (hold) return hold;
   }
-  return qualifyCompanyNominal(descRaw, value);
+  // 本文 nominal を先に求める (既存ラベルを保つ)。本文 HOLD のうち純粋な
+  // 額面欠落 (no_per_grant_face) だけ headed 型付き coupon-unit 規則の対象に
+  // し、choice/approx/lottery 等の本文 negative 判定は authoritative
+  // (上書きしない)。joint 割引は nominal qualified の返却より先に見る —
+  // 割引見出し + 換金性の無い本文額面は HOLD で止める (9616 の券額面は
+  // joint 換金性例外で通す)。最後に本文 nominal を返す。
+  const nominal = qualifyCompanyNominal(body, value);
+  if (!nominal.qualified && nominal.code === "no_per_grant_face") {
+    const headedCoupon = qualifyHeadedCouponUnit(headings, body, value);
+    if (headedCoupon) return headedCoupon;
+  }
+  for (const heading of headings) {
+    const hold = headingDiscountHold(heading, body);
+    if (hold) return hold;
+  }
+  return nominal;
 }
 
 /**

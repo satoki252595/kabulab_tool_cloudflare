@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- 優待 company 判定に表見出し context を persist (内部 headed 保存形式。合同割引・抽選 scope・型付き券 unit×数量の narrow 規則。見出しのみ金額は額面にしない。本文 negative は authoritative)。要約契約 2026-09-30.1 (内部 marker の echo を `internal` 違反で reject)。次回 full-import から保存文が headed 形に変わる (公開面は shortSummary のみで不変)。データ変更なし (Refs #146)。
 - VWAP batch summary の metadata を counts+pin+集約のみに縮小し per-code outcomes は物理 JSON 本文に保持 (旧 full 内包は約 530KB・266 分割で Notion 上限超過 → run 36698387232 の daily archive が 413 UNKNOWN・intra 0。証跡 `docs/vwap-run36698387232-413-unknown-20260930.md`)。データ変更なし (Refs #117)。
 - 共有 Yahoo parse 境界で request/response の meta.symbol 一致を検証 (不一致・欠落は throw、alias 推測なし。既存 normalize のみ)。データ変更なし。
 - VWAP 取込 producer の root 修正 (R2 送信 1 試行・PUT 応答契約・rejected/unknown 分別・GET 厳格 bootstrap、Yahoo 真正 empty は timestamp 空配列のみ・全行欠落と malformed は throw、保存形状 strict、R2 fault で新規停止・保管失敗は exit 2、knob 型付き取得)。データ変更なし (Refs #117)。

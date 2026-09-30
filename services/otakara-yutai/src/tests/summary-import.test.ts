@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
-import { sanitizeEstimatedValue } from "../../data-scripts/estimated-value-guard.js";
+import { headedDescription, sanitizeEstimatedValue } from "../../data-scripts/estimated-value-guard.js";
 import { assertNotCommittable } from "../../data-scripts/private-path.js";
 import { SUMMARY_CONTRACT_VERSION } from "../../data-scripts/summary-contract.js";
 import {
@@ -543,6 +543,24 @@ describe("dry-run の出力に掲載文の断片を出さない (既定)", () =>
     const report = formatPlanReport(p).join("\n");
     expect(report).not.toContain(rejectedSummary);
     expect(report).not.toContain(DESC_CATALOG);
+  });
+
+  it("headed 掲載文の内部 marker を写した要約は実経路ではじき、読みやすい条件文言は通す", () => {
+    const desc = headedDescription("500円割引券", "1枚");
+    const rows = [row({ id: 41, stockCode: "9993", description: desc, shortSummary: null, estimatedValue: null })];
+    const htasks = selectSummaryTasks(rows);
+    expect(htasks).toHaveLength(1);
+    const key = htasks[0].taskId;
+    const echo = JSON.stringify({ taskId: key, contractVersion: SUMMARY_CONTRACT_VERSION, shortSummary: "【種別：\"500円割引券\"】 1枚", estimatedValue: null });
+    const p1 = planSummaryImport({ tasks: htasks, resultsText: echo, currentRows: rows });
+    expect(p1.updates).toHaveLength(0);
+    expect(p1.rejections).toHaveLength(1);
+    expect(p1.rejections[0]).toMatchObject({ reason: "contract", taskId: key });
+    expect(p1.rejections[0].detail).toBe("internal: 内部 headed marker を含む");
+    const clean = JSON.stringify({ taskId: key, contractVersion: SUMMARY_CONTRACT_VERSION, shortSummary: "割引券 500円 1枚", estimatedValue: null });
+    const p2 = planSummaryImport({ tasks: htasks, resultsText: clean, currentRows: rows });
+    expect(p2.rejections).toHaveLength(0);
+    expect(p2.updates).toHaveLength(1);
   });
 
   it("JSON として読めない行は固定文になり、Node のエラー文 (入力の先頭を含む) を出さない", () => {
