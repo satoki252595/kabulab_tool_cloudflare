@@ -7,7 +7,7 @@
  *          母集団外の銘柄の優待には触らない。D1 への書き込みと、削除の前に止める
  *          条件は yutai-full-import.ts (値のテストは src/tests/yutai-full-import.test.ts)
  */
-import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import { createD1HttpBatchSender, createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { log } from "../../../src/shared/log.js";
 import * as schema from "../src/db/schema.js";
 import {
@@ -231,7 +231,7 @@ async function main() {
 
   // Phase 3: DB import
   log.info("\n📦 Phase 3: DBにインポート中...");
-  const result = await importYutaiFull(createD1HttpDb(schema), allData);
+  const result = await importYutaiFull(createD1HttpDb(schema), allData, createD1HttpBatchSender());
 
   log.info("\n" + "=".repeat(60));
   log.info("📊 最終結果:");
@@ -241,6 +241,10 @@ async function main() {
   console.info(`  取得できず優待行を消した銘柄: ${result.abolishedCount}`);
   console.info(`  戻せなかった解釈: ${result.droppedInterpretations}`);
   console.info(`  取り込み失敗: ${result.failedCodes.length}`);
+  console.info(`  利回り再計算を適用: ${result.recompute.updated}銘柄 / スコア: ${result.recompute.scoresUpdated}銘柄`);
+  console.info(
+    `  財務行が無く対象外: ${result.recompute.skippedNoRow.length} / スコア行が無くスコアだけ対象外: ${result.recompute.skippedNoScore.length}`
+  );
   log.info(`  複数権利月の銘柄: ${multiMonth}`);
   log.info(`  複数株数条件の銘柄: ${multiShare}`);
   log.info("=".repeat(60));

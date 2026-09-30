@@ -34,13 +34,29 @@
  * D1 HTTP クライアントはトランザクション非対応 (src/shared/db/d1-http-client.ts)。
  * is_yutai は「事前に全 false → ループで true」にせず、立て終えた後に、今回取り込めな
  * かった銘柄だけを false へ落とす (CLAUDE.md ルール2)。
+ *
+ * ## 書き込みの終わりの利回り・スコア追随
+ *
+ * write/end・write-error/end に、実際の post-image から 1 回だけ再計算する
+ * (fetchYieldInputs → computeYieldEntries → snapshotStockPreimages →
+ * applyYieldRecomputeAtomically。既存の共有 builders のみ)。
+ * scope は「優待行を持っていた銘柄 ∪ 今回取得 ∪ 利回りが残る銘柄」で、
+ * 廃止・中断再入の stale 利回りを直す。書き込み前の STOP では走らせない。
+ * 書くのは yield + fetched_at / score3 だけ (price・data_date 等は不変)。
  */
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
-import { stocks, yutaiBenefits, yutaiGenres } from "../src/db/schema.js";
+import { stockFinancials, stocks, yutaiBenefits, yutaiGenres } from "../src/db/schema.js";
+import { type AtomicBatchSender, snapshotStockPreimages } from "./atomic-apply.js";
 import { benefitKey } from "./benefit-key.js";
 import { qualifyCompanyPerGrantValue } from "./estimated-value-guard.js";
+import {
+  applyYieldRecomputeAtomically,
+  computeYieldEntries,
+  fetchYieldInputs,
+  formatRecomputeReport,
+} from "./recompute-yields.js";
 
 export type BenefitDetail = {
   minShares: number;
@@ -242,6 +258,15 @@ export type YutaiFullImportResult = {
   droppedInterpretations: number;
   /** 取り込みに失敗したコード。 */
   failedCodes: string[];
+  /** post-image の利回り・スコア再計算 (write/end・write-error/end に 1 回だけ)。 */
+  recompute: {
+    updated: number;
+    scoresUpdated: number;
+    /** 財務行が無く対象外 (counts explicit)。 */
+    skippedNoRow: number[];
+    /** スコア行が無くスコアだけ対象外。 */
+    skippedNoScore: number[];
+  };
 };
 
 /**
@@ -268,10 +293,19 @@ function benefitRowsOf(
 /**
  * 取得結果で、母集団の銘柄の優待を作り直す。母集団外の銘柄の優待には触らない。
  * 止める条件はファイル先頭のコメント。
+ *
+ * 書き込みの終わり (write/end) と書き込み失敗時 (write-error/end) に、実際の
+ * post-image から利回り・スコアを 1 回だけ再計算して追随させる (既存の共有
+ * builders のみ。新規の financial SQL/計算は持たない)。書き込み前の STOP
+ * (coverage・carry preflight 等) では走らせない。`sender` は必須の 1 注入
+ * (本番は `createD1HttpBatchSender()`。省略時の silent skip はしない)。
+ * 個別銘柄の失敗が残れば、再計算の適用後に明示の部分失敗を投げる
+ * (成功結果は返さない)。銘柄は全行の成功でのみ imported に数える。
  */
 export async function importYutaiFull(
   db: YutaiFullImportDb,
   allData: StockYutaiData[],
+  sender: AtomicBatchSender,
 ): Promise<YutaiFullImportResult> {
   // ---- 読み取り (ここから「書き込み」までは D1 に書かない) ----
 
@@ -370,103 +404,167 @@ export async function importYutaiFull(
     console.warn(`  戻せない解釈 (掲載文の変更・優待行を消す銘柄): ${droppedInterpretations}件`);
   }
 
-  // ---- 書き込み ----
+  // post-image の利回り・スコア追随 (write/end・write-error/end に 1 回だけ呼ぶ)。
+  // scope は「優待行を持っていた銘柄 ∪ 今回取得 ∪ 利回りが残る銘柄」。
+  // 廃止・中断再入の stale 利回りを直す。全銘柄には広げない。
+  // 計算・ガード・適用は同一読取 (fetch → compute → snapshot → apply)。
+  // 書くのは yield + fetched_at / score3 だけで、price・data_date 等は触らない
+  // (buildYieldScoreStatements の既存契約)。
+  const codeById = new Map(universe.map((s) => [s.id, s.code]));
+  const runPostImageRecompute = async (): Promise<YutaiFullImportResult["recompute"]> => {
+    const withYield = await db
+      .select({ stockId: stockFinancials.stockId })
+      .from(stockFinancials)
+      .where(isNotNull(stockFinancials.yutaiYield));
+    const scope = [
+      ...new Set([
+        ...heldIds,
+        ...targetIds,
+        ...withYield.map((r) => r.stockId).filter((id) => codeById.has(id)),
+      ]),
+    ].sort((a, b) => a - b);
+    const inputs = await fetchYieldInputs(db, scope);
+    const plan = computeYieldEntries(scope, inputs);
+    const codeOf = (stockId: number): string => codeById.get(stockId) ?? `stock:${stockId}`;
+    for (const line of formatRecomputeReport(plan, codeOf)) console.info(`  ${line}`);
+    const { updated, scoresUpdated } = await applyYieldRecomputeAtomically(
+      sender,
+      plan,
+      snapshotStockPreimages(inputs, scope)
+    );
+    console.info(`  利回り再計算を適用: ${updated}銘柄 / スコア: ${scoresUpdated}銘柄`);
+    return { updated, scoresUpdated, skippedNoRow: plan.skippedNoRow, skippedNoScore: plan.skippedNoScore };
+  };
 
-  // ジャンルは slug で upsert し、消さない。母集団外の優待行が genre_id で参照しており
-  // (外部キー ON DELETE no action)、id も変えない。
-  const genreIds = new Map<string, number>();
-  for (const g of YUTAI_GENRES) {
-    const [row] = await db
-      .insert(yutaiGenres)
-      .values(g)
-      .onConflictDoUpdate({
-        target: yutaiGenres.slug,
-        set: { name: g.name, description: g.description },
-      })
-      .returning({ id: yutaiGenres.id });
-    genreIds.set(g.slug, row.id);
-  }
-
-  console.info(
-    `  母集団の銘柄の優待行を削除中 (${heldIds.size}銘柄。母集団外の優待行と core_stocks は保持)...`,
-  );
-  const deleteIds = [...heldIds];
-  for (let i = 0; i < deleteIds.length; i += ID_CHUNK) {
-    await db
-      .delete(yutaiBenefits)
-      .where(inArray(yutaiBenefits.stockId, deleteIds.slice(i, i + ID_CHUNK)));
-  }
+  // ---- 書き込み (この中の失敗は post-image 再計算の後、元の失敗を投げ直す) ----
 
   let benefitCount = 0;
   const importedIds = new Set<number>();
   const failedCodes: string[] = [];
-
-  for (const p of planned) {
-    try {
-      const genreId = genreIds.get(p.genreSlug);
-      if (genreId === undefined) {
-        throw new Error(`ジャンル ${p.genreSlug} が YUTAI_GENRES にありません`);
-      }
-      // is_yutai だけを、値が変わる銘柄だけ立てる。name / market は書かない
-      // (core_stocks の同期 src/cron/universe.ts が書く列で、優待の取込が上書きするものではない)。
-      if (!p.wasYutai) {
-        await db
-          .update(stocks)
-          .set({ isYutai: true, updatedAt: sql`(unixepoch())` })
-          .where(and(eq(stocks.id, p.stockId), eq(stocks.isYutai, false)));
-      }
-      importedIds.add(p.stockId);
-
-      // 各権利月 × 各株数条件で優待レコードを作成
-      for (const r of p.rows) {
-        // 同じ (銘柄, 文言, 株数, 権利月) なら退避した解釈をそのまま戻す。
-        // 新規/文言変更/context 変更は未解釈のまま入り、次の要約タスク書き出し
-        // (export-summary-tasks.ts) の対象になる。
-        const previous = carried.get(carryKey(p.data.code, r.description, r.minShares, r.recordMonth));
-        await db.insert(yutaiBenefits).values({
-          stockId: p.stockId,
-          genreId,
-          description: r.description,
-          shortSummary: previous === undefined ? null : previous.shortSummary,
-          minShares: r.minShares,
-          recordMonth: r.recordMonth,
-          estimatedValue: previous === undefined ? null : previous.estimatedValue,
-          estimateValueSource: previous === undefined ? null : previous.estimateValueSource,
-        });
-        benefitCount++;
-      }
-    } catch (e) {
-      // 個別銘柄の失敗は握り潰さず記録する (CLAUDE.md ルール2: オペレータ通知)
-      failedCodes.push(p.data.code);
-      console.error(`  [warn] ${p.data.code} の取り込み失敗:`, e instanceof Error ? e.message : e);
+  try {
+    // ジャンルは slug で upsert し、消さない。母集団外の優待行が genre_id で参照しており
+    // (外部キー ON DELETE no action)、id も変えない。
+    const genreIds = new Map<string, number>();
+    for (const g of YUTAI_GENRES) {
+      const [row] = await db
+        .insert(yutaiGenres)
+        .values(g)
+        .onConflictDoUpdate({
+          target: yutaiGenres.slug,
+          set: { name: g.name, description: g.description },
+        })
+        .returning({ id: yutaiGenres.id });
+      genreIds.set(g.slug, row.id);
     }
-  }
 
-  // 全件失敗 = DB が壊れている。後処理で優待銘柄を false に落とすと otakara が全滅する
-  // ので早期 throw する (ルール2: 早期失敗)。
-  if (importedIds.size === 0) {
-    throw new Error(
-      `優待銘柄を 1 件も取り込めませんでした (失敗 ${failedCodes.length} 件)。` +
-        `DB 接続を確認してください。`,
+    console.info(
+      `  母集団の銘柄の優待行を削除中 (${heldIds.size}銘柄。母集団外の優待行と core_stocks は保持)...`,
     );
+    const deleteIds = [...heldIds];
+    for (let i = 0; i < deleteIds.length; i += ID_CHUNK) {
+      await db
+        .delete(yutaiBenefits)
+        .where(inArray(yutaiBenefits.stockId, deleteIds.slice(i, i + ID_CHUNK)));
+    }
+
+    for (const p of planned) {
+      try {
+        const genreId = genreIds.get(p.genreSlug);
+        if (genreId === undefined) {
+          throw new Error(`ジャンル ${p.genreSlug} が YUTAI_GENRES にありません`);
+        }
+
+        // 各権利月 × 各株数条件で優待レコードを作成
+        for (const r of p.rows) {
+          // 同じ (銘柄, 文言, 株数, 権利月) なら退避した解釈をそのまま戻す。
+          // 新規/文言変更/context 変更は未解釈のまま入り、次の要約タスク書き出し
+          // (export-summary-tasks.ts) の対象になる。
+          const previous = carried.get(carryKey(p.data.code, r.description, r.minShares, r.recordMonth));
+          await db.insert(yutaiBenefits).values({
+            stockId: p.stockId,
+            genreId,
+            description: r.description,
+            shortSummary: previous === undefined ? null : previous.shortSummary,
+            minShares: r.minShares,
+            recordMonth: r.recordMonth,
+            estimatedValue: previous === undefined ? null : previous.estimatedValue,
+            estimateValueSource: previous === undefined ? null : previous.estimateValueSource,
+          });
+          benefitCount++;
+        }
+        // 全行の成功でのみ imported に数える (INSERT 失敗銘柄の imported 混入は
+        // 全件失敗ガードの回避になる)。is_yutai も成功銘柄だけ立てる。
+        // name / market は書かない (core_stocks の同期 src/cron/universe.ts が書く列で、
+        // 優待の取込が上書きするものではない)。
+        if (!p.wasYutai) {
+          await db
+            .update(stocks)
+            .set({ isYutai: true, updatedAt: sql`(unixepoch())` })
+            .where(and(eq(stocks.id, p.stockId), eq(stocks.isYutai, false)));
+        }
+        importedIds.add(p.stockId);
+      } catch (e) {
+        // 個別銘柄の失敗は握り潰さず記録する (CLAUDE.md ルール2: オペレータ通知)
+        failedCodes.push(p.data.code);
+        console.error(`  [warn] ${p.data.code} の取り込み失敗:`, e instanceof Error ? e.message : e);
+      }
+    }
+
+    // 全件失敗 = DB が壊れている。後処理で優待銘柄を false に落とすと otakara が全滅する
+    // ので早期 throw する (ルール2: 早期失敗)。
+    if (importedIds.size === 0) {
+      throw new Error(
+        `優待銘柄を 1 件も取り込めませんでした (失敗 ${failedCodes.length} 件)。` +
+          `DB 接続を確認してください。`,
+      );
+    }
+
+    // 後処理: 今回取り込めなかった母集団の優待銘柄を is_yutai=false へ (優待の廃止。
+    // core_stocks の行は残す)。母集団外は触らない。読み直さず、先頭で引いた母集団の
+    // is_yutai を使う (今回立てた銘柄は importedIds に入っている)。
+    const toFalseIds = universe.filter((s) => s.isYutai && !importedIds.has(s.id)).map((s) => s.id);
+    for (let i = 0; i < toFalseIds.length; i += ID_CHUNK) {
+      await db
+        .update(stocks)
+        .set({ isYutai: false, updatedAt: sql`(unixepoch())` })
+        .where(inArray(stocks.id, toFalseIds.slice(i, i + ID_CHUNK)));
+    }
+
+    if (failedCodes.length > 0) {
+      console.warn(
+        `  取り込み失敗 ${failedCodes.length} 件: ${failedCodes.slice(0, 30).join(", ")}${
+          failedCodes.length > 30 ? " ..." : ""
+        }`,
+      );
+    }
+
+  } catch (e) {
+    // write-error/end: 部分書き込みの実像で再計算を 1 回だけ試みる。
+    // 回復も失敗したら両方を保つ。成功完了はログしない (throw のみ)。
+    try {
+      await runPostImageRecompute();
+    } catch (recomputeError) {
+      throw new AggregateError(
+        [e, recomputeError],
+        "書き込み失敗後の利回り再計算も失敗しました (両方を確認してください)",
+        { cause: recomputeError }
+      );
+    }
+    throw e;
   }
 
-  // 後処理: 今回取り込めなかった母集団の優待銘柄を is_yutai=false へ (優待の廃止。
-  // core_stocks の行は残す)。母集団外は触らない。読み直さず、先頭で引いた母集団の
-  // is_yutai を使う (今回立てた銘柄は importedIds に入っている)。
-  const toFalseIds = universe.filter((s) => s.isYutai && !importedIds.has(s.id)).map((s) => s.id);
-  for (let i = 0; i < toFalseIds.length; i += ID_CHUNK) {
-    await db
-      .update(stocks)
-      .set({ isYutai: false, updatedAt: sql`(unixepoch())` })
-      .where(inArray(stocks.id, toFalseIds.slice(i, i + ID_CHUNK)));
-  }
+  // write/end: 実際の post-image から利回り・スコアを 1 回だけ追随させる。
+  // ここでの失敗はそのまま throw し (再試行しない)、成功結果も成功ログも出さない。
+  const recompute = await runPostImageRecompute();
 
+  // 部分失敗は成功完了にしない。再計算は適用済みなので、失敗銘柄の確認と
+  // 再実行を促して明示的に落とす (再計算の再試行はしない。scope は attempted
+  // のまま保持し、失敗銘柄も post-image 修復の対象に含めている)。
   if (failedCodes.length > 0) {
-    console.warn(
-      `  取り込み失敗 ${failedCodes.length} 件: ${failedCodes.slice(0, 30).join(", ")}${
-        failedCodes.length > 30 ? " ..." : ""
-      }`,
+    throw new Error(
+      `優待の取り込みに ${failedCodes.length} 件失敗しました ` +
+        `(${failedCodes.slice(0, 30).join(", ")}${failedCodes.length > 30 ? " ..." : ""})。` +
+        `利回り再計算は post-image に適用済みです。失敗銘柄を確認して再実行してください。`
     );
   }
 
@@ -477,5 +575,6 @@ export async function importYutaiFull(
     abolishedCount,
     droppedInterpretations,
     failedCodes,
+    recompute,
   };
 }
