@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- 母集団 universe overlay を原子 batch 化する PREP (Refs #196): full core 11 列全行 + state/events 全集合の CAS guard を先頭に [guard, 書込 30 文] を sender へ 1 回送信 (retry 0)。base/reuse/skip/plan/guard は同一確定 snapshot が駆動し、内部読替え・逐次適用・fallback 経路を除去。未確定 IPO は送信前に HOLD (書込 0)。共有 D1 送信口 (batch + single-query) を strict 化 (top.success===true・entry 全 success・有限 bind 事前検証、outcome-unknown は再送なし)。実 q7 3810x11 + fresh9 での offline proof は private のみ (9/14/5・events 226・31 文・maxBind 99・再入 0・9/29 全 9 HOLD)。本番適用なし、データ変更なし (Refs #196)。
 - 海外 actual-repair の純 offline PREP を追加 (最終 parser で 3675 通を再生成し docID union の tags + full facts + preimage + protected 差 + reason journal を確定。1411/1487/36 と旧 live 1695 は母集合分離、73 pin不足は過去 UNKNOWN+HOLD、receipt なし→全 ARCHIVE_PENDING、apply-qualified 0)。証跡 `docs/test-logs/overseas-repair-prep-2026-09-30.md`。データ変更なし。
 - EDINET コードリストの信頼境界を厳格化 (zip 内は期待名 CSV 単独・ヘッダ名一意・非空白行の列幅不一致は STOP)。9 月 IPO 9 件の一次取得 PREP (asOf 2026-09-30、6 件適格・3 件 identity 未確定 HOLD (ticker literal 不在)、保管 readback 2/2)。証跡 `docs/test-logs/edinet-codelist-9ipo-proof-20260930.md`。データ変更なし (Refs #196)。
 - 優待 full-import の write/end・write-error/end に post-image 利回り・スコア追随を追加 (既存 builders のみ。新規 financial SQL/計算なし): scope は優待保持∪今回取得∪利回り残存で廃止・中断の stale を修復。個別失敗が残れば再計算適用後に明示の部分失敗を投げて成功完了にせず、銘柄は全行成功でのみ imported に数える。書き込み前 STOP では走らせない。書くのは yield+fetched_at/score3 のみ (price/data_date 不変)。データ変更なし (Refs #146 #102)。

@@ -1,0 +1,64 @@
+{
+ "codes": {
+  "618A": {
+   "code4": "618A",
+   "code5": "618A0",
+   "isin": "JP3306480009",
+   "marketBare": "グロース",
+   "countryCell": null,
+   "sector": "サービス業",
+   "entryFetchedAt": "2026-09-30T04:50:53.569Z",
+   "searchFetchedAt": "2026-09-30T04:50:53.621Z",
+   "basicFetchedAt": "2026-09-30T04:50:53.724Z",
+   "entrySha": "c04a31af835511f0ce1ed834df523fb001668905abeceb071d239ce27b08a782",
+   "searchSha": "f2ad5dd98ae1af9ecaa656e57ead10d7fe0723869f0120920fd626e65a5d0e9b",
+   "rawSha": "9022607693defcb6023888658fecff24f08d2e41f82cb5452f2c10d94a39eb71",
+   "sourceUrl": "https://www2.jpx.co.jp/tseHpFront/JJK010010Action.do?Show=Show",
+   "custody": {
+    "pageId": "3ebd74ff-84cd-8186-a85c-dd4a64c51121"
+   },
+   "boundEventsFetchedAt": "2026-09-30T01:02:51.641Z",
+   "qualificationDate": "2026-09-30",
+   "qualificationBasis": "current-observation",
+   "datedSourcePin": null,
+   "reviewedPins": {
+    "entrySha": "c04a31af835511f0ce1ed834df523fb001668905abeceb071d239ce27b08a782",
+    "searchSha": "f2ad5dd98ae1af9ecaa656e57ead10d7fe0723869f0120920fd626e65a5d0e9b",
+    "rawSha": "9022607693defcb6023888658fecff24f08d2e41f82cb5452f2c10d94a39eb71",
+    "custodyPageIds": [
+     "3ebd74ff-84cd-8186-a85c-dd4a64c51121"
+    ]
+   }
+  },
+  "646A": {
+   "code4": "646A",
+   "code5": "646A0",
+   "isin": "JP3268350000",
+   "marketBare": "スタンダード",
+   "countryCell": null,
+   "sector": "化学",
+   "entryFetchedAt": "2026-09-30T04:51:23.818Z",
+   "searchFetchedAt": "2026-09-30T04:51:24.014Z",
+   "basicFetchedAt": "2026-09-30T04:51:24.177Z",
+   "entrySha": "cfbf31365cfa696aabc099be75e40385a4f3a1a24ae3f8bfa93551462e931b72",
+   "searchSha": "828e5eef6a602812cdbb341e7e58e72f71b19683c0d41af938a0f72020c0ce15",
+   "rawSha": "d1a4e4ef2e8766c6aed16a8efb7dcb19b45890a0d5cf80e4a08ce1786a70f9ca",
+   "sourceUrl": "https://www2.jpx.co.jp/tseHpFront/JJK010010Action.do?Show=Show",
+   "custody": {
+    "pageId": "3ebd74ff-84cd-81e2-b501-fbaa11368a87"
+   },
+   "boundEventsFetchedAt": "2026-09-30T01:02:51.641Z",
+   "qualificationDate": "2026-09-30",
+   "qualificationBasis": "current-observation",
+   "datedSourcePin": null,
+   "reviewedPins": {
+    "entrySha": "cfbf31365cfa696aabc099be75e40385a4f3a1a24ae3f8bfa93551462e931b72",
+    "searchSha": "828e5eef6a602812cdbb341e7e58e72f71b19683c0d41af938a0f72020c0ce15",
+    "rawSha": "d1a4e4ef2e8766c6aed16a8efb7dcb19b45890a0d5cf80e4a08ce1786a70f9ca",
+    "custodyPageIds": [
+     "3ebd74ff-84cd-81e2-b501-fbaa11368a87"
+    ]
+   }
+  }
+ }
+}
