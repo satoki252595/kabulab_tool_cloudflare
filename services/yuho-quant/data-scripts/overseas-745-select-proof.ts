@@ -39,56 +39,73 @@
 // ---------------------------------------------------------------------------
 // 0. read-only fetch guard (repo import より前に設置)
 // ---------------------------------------------------------------------------
-let httpObserved = 0;
-let httpFailed = 0;
-const nativeFetch = globalThis.fetch.bind(globalThis);
 const D1_QUERY_RE = /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/[^/]+\/d1\/database\/[^/]+\/query$/;
 const WRITE_WORD_RE = /\b(insert|update|delete|drop|alter|create|replace|pragma|vacuum|attach|detach|grant|revoke|begin|commit|rollback)\b/i;
 
-globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
-  const u = String(url);
-  if (!D1_QUERY_RE.test(u)) {
-    httpFailed += 1;
-    throw new Error(`SELECT proof: D1 query 以外への到達を拒否: ${u.slice(0, 80)}`);
-  }
-  let body: { sql?: unknown; params?: unknown; batch?: unknown };
-  try {
-    body = JSON.parse(String(init?.body ?? "{}")) as typeof body;
-  } catch {
-    httpFailed += 1;
-    throw new Error("SELECT proof: D1 body 非JSON");
-  }
-  if (body.batch !== undefined) {
-    httpFailed += 1;
-    throw new Error("SELECT proof: batch envelope 禁止 (単発 SELECT のみ)");
-  }
-  if (typeof body.sql !== "string" || !/^\s*(select|with)\b/i.test(body.sql)) {
-    httpFailed += 1;
-    throw new Error("SELECT proof: 非SELECT 文を拒否");
-  }
-  if (WRITE_WORD_RE.test(body.sql)) {
-    httpFailed += 1;
-    throw new Error("SELECT proof: 書込語を含む文を拒否");
-  }
-  // 送信前 bound: 37 件目を送る前に拒否する (終端 check だけでは保証不可)。
-  if (httpObserved >= 36) {
-    httpFailed += 1;
-    throw new Error("SELECT proof: 上限 36 を超える送信を拒否");
-  }
-  httpObserved += 1;
-  try {
-    return await nativeFetch(u, { ...init, signal: AbortSignal.timeout(60_000) });
-  } catch (e) {
-    httpFailed += 1;
-    throw e;
-  }
-}) as typeof fetch;
+export interface GuardCounters {
+  observed: number;
+  failed: number;
+}
+
+/**
+ * D1 送信境界 guard の実体。D1 query endpoint・単発 SELECT・書込語なしを
+ * 検証し、budget 件目以降は native 到達前に拒否する。producer 本体も
+ * offline check も同一関数を使う (export して波及を保証)。
+ */
+export function createBoundedFetch(
+  nativeImpl: typeof fetch,
+  budget: number,
+  counters: GuardCounters
+): typeof fetch {
+  return (async (url: unknown, init?: RequestInit) => {
+    const u = String(url);
+    if (!D1_QUERY_RE.test(u)) {
+      counters.failed += 1;
+      throw new Error(`SELECT proof: D1 query 以外への到達を拒否: ${u.slice(0, 80)}`);
+    }
+    let body: { sql?: unknown; params?: unknown; batch?: unknown };
+    try {
+      body = JSON.parse(String(init?.body ?? "{}")) as typeof body;
+    } catch {
+      counters.failed += 1;
+      throw new Error("SELECT proof: D1 body 非JSON");
+    }
+    if (body.batch !== undefined) {
+      counters.failed += 1;
+      throw new Error("SELECT proof: batch envelope 禁止 (単発 SELECT のみ)");
+    }
+    if (typeof body.sql !== "string" || !/^\s*(select|with)\b/i.test(body.sql)) {
+      counters.failed += 1;
+      throw new Error("SELECT proof: 非SELECT 文を拒否");
+    }
+    if (WRITE_WORD_RE.test(body.sql)) {
+      counters.failed += 1;
+      throw new Error("SELECT proof: 書込語を含む文を拒否");
+    }
+    // 送信前 bound: budget+1 件目を送る前に拒否する (終端 check だけでは保証不可)。
+    if (counters.observed >= budget) {
+      counters.failed += 1;
+      throw new Error(`SELECT proof: 上限 ${budget} を超える送信を拒否`);
+    }
+    counters.observed += 1;
+    try {
+      return await nativeImpl(u, { ...init, signal: AbortSignal.timeout(60_000) });
+    } catch (e) {
+      counters.failed += 1;
+      throw e;
+    }
+  }) as typeof fetch;
+}
+
+const nativeFetch = globalThis.fetch.bind(globalThis);
+const liveCounters: GuardCounters = { observed: 0, failed: 0 };
+globalThis.fetch = createBoundedFetch(nativeFetch, 36, liveCounters);
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, basename } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import dotenv from "dotenv";
 import { eq, inArray, sql } from "drizzle-orm";
 
@@ -694,6 +711,26 @@ function validateQ2Row(r: Record<string, unknown>, label: string): LiveFact {
   };
 }
 
+/**
+ * doc別 COUNT 照合の実体 (Q1.factsCount == Q2 per-doc rows)。
+ * chunk 合計だけでは同一 chunk 内の相互相殺を見逃すため doc 単位で断言する。
+ * producer 本体も offline check も同一関数を使う (export して波及を保証)。
+ */
+export function assertPerDocCounts(
+  chunk: string[],
+  q1counts: Map<string, number>,
+  q2docIds: string[],
+  label: string
+): void {
+  const perDoc = new Map<string, number>();
+  for (const id of q2docIds) perDoc.set(id, (perDoc.get(id) ?? 0) + 1);
+  for (const docId of chunk) {
+    if ((perDoc.get(docId) ?? 0) !== (q1counts.get(docId) ?? -1)) {
+      hold(`${label} doc別COUNT外: ${docId}`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -751,6 +788,7 @@ async function main(): Promise<void> {
   const queries: QueryRecord[] = [];
   const sqlTexts: string[] = [];
   const liveDocs = new Map<string, LiveDoc>();
+  const q1counts = new Map<string, number>();
   const liveFacts: LiveFact[] = [];
   const liveIds = new Set<number>();
   const seenQ1 = new Set<string>();
@@ -790,6 +828,7 @@ async function main(): Promise<void> {
       if (liveIds.has(d.id)) hold(`${label} Q1 id 重複: ${d.id}`);
       liveIds.add(d.id);
       liveDocs.set(d.docId, d);
+      q1counts.set(d.docId, d.factsCount);
       chunkCountSum += d.factsCount;
     }
 
@@ -833,7 +872,7 @@ async function main(): Promise<void> {
     }
     const seenKeys = new Set<string>();
     const seenFactIds = new Set<number>();
-    const perDocQ2 = new Map<string, number>();
+    const chunkFacts: LiveFact[] = [];
     for (const r of q2rows) {
       const f = validateQ2Row(r, label);
       if (!chunk.includes(f.docId)) hold(`${label} Q2 echo 範囲外: ${f.docId}`);
@@ -846,19 +885,16 @@ async function main(): Promise<void> {
       if (seenKeys.has(k)) hold(`${label} Q2 canonical-key 重複 (live dup): ${k}`);
       seenKeys.add(k);
       liveFacts.push(f);
-      perDocQ2.set(f.docId, (perDocQ2.get(f.docId) ?? 0) + 1);
+      chunkFacts.push(f);
     }
     // doc別 COUNT 照合 (chunk 合計だけでは相互相殺を見逃す)。
-    for (const docId of chunk) {
-      const q1c = (liveDocs.get(docId) as LiveDoc).factsCount;
-      if ((perDocQ2.get(docId) ?? 0) !== q1c) hold(`${label} doc別COUNT外: ${docId}`);
-    }
+    assertPerDocCounts(chunk, q1counts, chunkFacts.map((f) => f.docId), label);
     if (q2rows.length !== chunkCountSum) {
       hold(`${label} Q1合計(${chunkCountSum}) != Q2行数(${q2rows.length})`);
     }
   }
-  if (httpObserved !== 36) hold(`HTTP 観測外: ${httpObserved} != 36`);
-  if (httpFailed !== 0) hold(`HTTP 失敗あり: ${httpFailed}`);
+  if (liveCounters.observed !== 36) hold(`HTTP 観測外: ${liveCounters.observed} != 36`);
+  if (liveCounters.failed !== 0) hold(`HTTP 失敗あり: ${liveCounters.failed}`);
   if (seenQ1.size !== 1781) hold(`Q1 総数外: ${seenQ1.size}`);
   const q1sum = [...liveDocs.values()].reduce((a, d) => a + d.factsCount, 0);
   if (q1sum !== liveFacts.length) hold(`Q1総計(${q1sum}) != Q2総行(${liveFacts.length})`);
@@ -970,7 +1006,8 @@ async function main(): Promise<void> {
       honbunScopes,
     },
     zeros: {
-      httpObserved, httpFailed, nonD1fetch: 0, writes: 0, sourceGET: 0,
+      httpObserved: liveCounters.observed, httpFailed: liveCounters.failed,
+      nonD1fetch: 0, writes: 0, sourceGET: 0,
       notionCreateUpdateArchive: 0, d1r2mutation: 0, workflow: 0, newReceipts: 0, retries: 0,
     },
     limits: [
@@ -994,7 +1031,7 @@ async function main(): Promise<void> {
     result: "PASS",
     union: report.union,
     chunks: chunks.length,
-    queries: { q1: 18, q2: 18, httpObserved, httpFailed },
+    queries: { q1: 18, q2: 18, httpObserved: liveCounters.observed, httpFailed: liveCounters.failed },
     liveCounts: { q1Rows: seenQ1.size, q2Rows: liveFacts.length, q1sum },
     compareCounts: tally,
     honbunScopes,
@@ -1006,21 +1043,27 @@ async function main(): Promise<void> {
   }));
 }
 
-try {
-  await main();
-  process.exit(0);
-} catch (e) {
-  const reason = e instanceof Error ? e.message : String(e);
-  const holdReport = {
-    at_start: STARTED_AT,
-    at_end: new Date().toISOString(),
-    result: "HOLD",
-    reason,
-    zeros: { httpObserved, httpFailed },
-  };
+// CLI 実行時のみ main() を走らせる。import 時は guard 設置 + 実関数の
+// 提供のみとし、main() は実行しない (offline check が実関数を呼ぶため)。
+const isCliMain =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isCliMain) {
   try {
-    writePrivate(join(OUT_DIR, "select-report-hold.json"), JSON.stringify(holdReport, null, 2));
-  } catch { /* report 書込自体の失敗は握らず抜ける */ }
-  console.error(JSON.stringify(holdReport));
-  process.exit(1);
+    await main();
+    process.exit(0);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    const holdReport = {
+      at_start: STARTED_AT,
+      at_end: new Date().toISOString(),
+      result: "HOLD",
+      reason,
+      zeros: { httpObserved: liveCounters.observed, httpFailed: liveCounters.failed },
+    };
+    try {
+      writePrivate(join(OUT_DIR, "select-report-hold.json"), JSON.stringify(holdReport, null, 2));
+    } catch { /* report 書込自体の失敗は握らず抜ける */ }
+    console.error(JSON.stringify(holdReport));
+    process.exit(1);
+  }
 }

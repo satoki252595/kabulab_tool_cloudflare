@@ -185,7 +185,13 @@ union SHA `9690d780…8fe1878` を private 0600 固定。18 chunks (≤100 IDs)�
   (終端 check だけでは 37 件目の送信を防げない)。
   (2) chunk 毎に Q1 doc別 `factsCount` と Q2 doc別 rows の一致を検証
   (chunk 合計だけでは同一 chunk 内の相互相殺を見逃す)。
-- offline 検証 (保存済み 1781/10257 のみ。新 live GET 0):
-  実データ 1781 docs 不一致 0 + 同一 chunk 2 doc の count 相殺 mutation
-  (chunk 合計不変) を 2 docs 検出で FAIL 実証。chunk 合計のみの盲も確認。
-  検証 probe は private 0600 (`perdoc-check.mts`)。stdout は counts のみ。
+- offline 検証 (旧・copied algorithm): private 0600 `perdoc-check.mts` が
+  照合ロジックを複写して実データ 1781 docs 不一致 0 + 相殺 mutation の
+  FAIL を実証。旧証跡として保全するが、producer 削除に波及しないため
+  実流出防止の証拠にしない (下記の actual check が正)。
+- offline 検証 (正・actual producer): guard 実体を小関数 export
+  (`assertPerDocCounts` / `createBoundedFetch`) + CLI-main 判定で
+  import-safe 化し、private 0600 `perdoc-actual-check.mts` が実関数を呼ぶ。
+  保存済み Q1/Q2 の 18 chunks 全 pass + 同一 chunk 2 doc 相殺 mutation で
+  actual HOLD + 37 件目の native 到達 0 (mockCalls 36 のまま) +
+  非 D1 到達の native 0 を確認。新 live D1/source 0。stdout は counts のみ。
