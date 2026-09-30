@@ -76,11 +76,15 @@ function isExplicitRejection(code: string, status: number | "none"): boolean {
  * 成功契約: 2xx + nonempty ETag。満たさない応答・例外は
  * R2PutRejectedError (明示拒否) か R2PutUnknownError (結果不明) のいずれかで
  * throw する。どちらも呼び出し側は新規送信を止めて fatal 終了する。
+ * observedVersion は同じ object の GET で得た不透明 ETag。明示 NoSuchKey
+ * の null は IfNoneMatch:* で作成する。取得後の競合は 412 で停止する。
  */
-export async function r2Put(key: string, body: string, ifMatch?: string): Promise<void> {
+export async function r2Put(key: string, body: string, observedVersion: string | null): Promise<void> {
+  if (observedVersion !== null && (typeof observedVersion !== "string" || observedVersion.trim().length === 0 || observedVersion.trim() === "*")) {
+    throw new Error("R2 write requires an observed ETag or explicit missing-object null");
+  }
   if (LOCAL_OUT) {
-    // Repair CAS is an R2 server guarantee; local files are only a read-only preview.
-    if (ifMatch !== undefined) throw new Error("conditional R2 write requires remote R2");
+    // Local output is a preview, never evidence of the remote server's CAS guarantee.
     const p = path.join(LOCAL_OUT, key);
     await fs.mkdir(path.dirname(p), { recursive: true });
     await fs.writeFile(p, body);
@@ -88,7 +92,9 @@ export async function r2Put(key: string, body: string, ifMatch?: string): Promis
   }
   let res: unknown;
   try {
-    res = await client().send(new PutObjectCommand({ Bucket: sharedEnv.R2_BUCKET(), Key: key, Body: body, ContentType: "application/json", IfMatch: ifMatch }));
+    res = await client().send(new PutObjectCommand({ Bucket: sharedEnv.R2_BUCKET(), Key: key, Body: body, ContentType: "application/json",
+      ...(observedVersion === null ? { IfNoneMatch: "*" } : { IfMatch: observedVersion }),
+    }));
   } catch (e) {
     const { code, status } = r2CauseOf(e);
     if (isExplicitRejection(code, status)) throw new R2PutRejectedError(key, code, status, e);
