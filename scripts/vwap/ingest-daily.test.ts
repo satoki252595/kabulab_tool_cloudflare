@@ -1,3 +1,6 @@
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { R2PutUnknownError } from "./lib/r2.js";
 import { r2Get, r2Put } from "./lib/r2.js";
@@ -53,6 +56,8 @@ const BAR_B = { date: "2026-09-25", o: 200, h: 210, l: 190, c: 205, v: 2000, adj
 const existingA = JSON.stringify({ code: "A", updated: "2026-09-28T00:00:00.000Z", bars: [BAR_A], splits: [] });
 
 const SAVED_ARGV = [...process.argv];
+const SAVED_CWD = process.cwd();
+// main() は cwd/.vwap-summaries/ へ原本を書く。repo 汚染防止で tmp へ chdir。
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -61,12 +66,19 @@ beforeEach(() => {
   process.exitCode = undefined;
   (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = undefined;
   mockRecord.mockResolvedValue({ outcome: "recorded", fileTooLarge: false } as never);
+  process.chdir(mkdtempSync(join(tmpdir(), "vwap-daily-")));
 });
 afterEach(() => {
+  process.chdir(SAVED_CWD);
   process.argv = SAVED_ARGV;
   process.exitCode = undefined;
   vi.restoreAllMocks();
 });
+const localSummaryBody = (): Record<string, unknown> => {
+  const files = readdirSync(".vwap-summaries");
+  expect(files).toHaveLength(1);
+  return JSON.parse(readFileSync(join(".vwap-summaries", files[0]), "utf-8")) as Record<string, unknown>;
+};
 
 describe("ingest-daily main flow", () => {
   it("normal positive + skip control (exit 0, all codes accounted)", async () => {
@@ -170,5 +182,20 @@ describe("ingest-daily main flow", () => {
     mockRecord.mockResolvedValue({ outcome: "skipped_existing", fileTooLarge: false } as never);
     await main();
     expect(process.exitCode).toBe(2);
+    // archive 失敗時も原本 bytes は local に残る (artifact 回収対象)。
+    const local = localSummaryBody();
+    expect(Object.keys(local.outcomes as Record<string, unknown>)).toEqual(["A"]);
+  });
+
+  it("local write failure => record 0 + exit 2 (no archive attempt)", async () => {
+    mockLoadCodes.mockResolvedValue(["A"]);
+    mockR2Get.mockResolvedValue(null);
+    mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [] });
+    mockR2Put.mockResolvedValue(undefined);
+    // .vwap-summaries を file で塞ぎ mkdir を失敗させる。
+    writeFileSync(".vwap-summaries", "blocker");
+    await main();
+    expect(process.exitCode).toBe(2);
+    expect(mockRecord).toHaveBeenCalledTimes(0);
   });
 });

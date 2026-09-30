@@ -54,7 +54,7 @@ kabuMCP の `edinet_*` とは分けてある（クライアントに両方登録
 |---|---|
 | `jp_supply_latest` | 需給の最新断面 |
 | `jp_supply_series` | 1銘柄の需給時系列 |
-| `jp_ohlcv_range` | 日足 OHLCV（全系列調整済み。REST と束ねた edge キャッシュ、TTL 6h） |
+| `jp_ohlcv_range` | 日足 OHLCV（提供元の OHLCV（分割調整済み）。adj_* は配当込 total-return 価格 (adj_volume は常に null)。係数不明は null。出来高の現株数補正なし。REST と束ねた edge キャッシュ、TTL 6h） |
 | `jp_indicators_latest` | 株価テクニカルの最新断面（複数銘柄可、旧 Notion「②株価テクニカル」の代替） |
 | `jp_valuation` | バリュエーションの最新断面（複数銘柄可、旧 Notion「②株価テクニカル」バリュエーション欄の代替） |
 | `jp_dataset_freshness` | 各データセットの鮮度 |

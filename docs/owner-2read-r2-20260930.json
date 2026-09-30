@@ -1,0 +1,229 @@
+{
+ "meta": {
+  "packet": "owner-after 2-READ R2",
+  "scope": "qualified-40 full OHLCV 7-tuple preimage (date 2026-09-29)",
+  "sends": 1,
+  "writes": 0,
+  "dispatch": 0,
+  "pins": {
+   "diagKey": "price-sync-diag-20260929-local-1790720602657",
+   "diagManifestSha256": "f509f5dbc2e1838d9073067b9b7059de8cee760ac4878f1da3df63f8e1af894d",
+   "eligibleR2Sha256": "643d017a66a86fa8a78a4d45f57b243aafe2e997987a24d4bbe5abcbcfee8e4b",
+   "baseAReceipt": "CONFIRMED-single-831-match",
+   "baseSha256": "fff94dd14057c8bfa36a3fbabd8e228bbed63751c7ecd10c1a8281f5385fcb78"
+  },
+  "precondition": "all 40 R1-resolved exact-1 active-equity, else R2 does not send (HOLD)",
+  "fillRule": "slot i takes the R1 actual id of code i, in listed order; date bind first",
+  "sentinelRule": "unresolved stays unknown sentinel, never placed in a bind (non-actual)",
+  "futureScope": "post/readback (R3) + writes belong to a future write grant, not this packet"
+ },
+ "sql": "SELECT stock_id, date, open, high, low, close, volume, adj FROM swing_daily_ohlcv WHERE date = ? AND stock_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+ "dateBind": "2026-09-29",
+ "idSlots": [
+  {
+   "slot": 1,
+   "code": "1380",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 2,
+   "code": "1787",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 3,
+   "code": "1905",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 4,
+   "code": "291A",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 5,
+   "code": "3184",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 6,
+   "code": "3439",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 7,
+   "code": "3477",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 8,
+   "code": "3495",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 9,
+   "code": "3583",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 10,
+   "code": "3600",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 11,
+   "code": "3944",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 12,
+   "code": "4365",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 13,
+   "code": "4464",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 14,
+   "code": "4629",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 15,
+   "code": "4976",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 16,
+   "code": "5484",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 17,
+   "code": "5969",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 18,
+   "code": "5990",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 19,
+   "code": "6396",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 20,
+   "code": "6408",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 21,
+   "code": "6558",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 22,
+   "code": "6566",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 23,
+   "code": "7067",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 24,
+   "code": "7413",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 25,
+   "code": "7515",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 26,
+   "code": "7523",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 27,
+   "code": "7565",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 28,
+   "code": "7812",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 29,
+   "code": "7857",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 30,
+   "code": "7877",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 31,
+   "code": "9012",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 32,
+   "code": "9017",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 33,
+   "code": "9049",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 34,
+   "code": "9087",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 35,
+   "code": "9313",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 36,
+   "code": "9331",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 37,
+   "code": "9361",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 38,
+   "code": "9362",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 39,
+   "code": "9691",
+   "id": "<R1-actual>"
+  },
+  {
+   "slot": 40,
+   "code": "9698",
+   "id": "<R1-actual>"
+  }
+ ],
+ "counts": {
+  "sends": 1,
+  "binds": 41,
+  "expectedRowsMax": 40
+ }
+}

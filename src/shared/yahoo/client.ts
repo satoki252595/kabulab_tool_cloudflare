@@ -509,6 +509,8 @@ export interface YahooChartRawCapture {
   symbol: string;
   status: number;
   bytes: Uint8Array;
+  /** 最終 response.url (redirect 検出用。要求 URL との一致を呼出側が検証)。 */
+  url: string;
 }
 
 export interface FetchChartOptions {
@@ -600,7 +602,7 @@ export async function fetchChart(
 
   if (options?.onRaw) {
     const bytes = new Uint8Array(await response.clone().arrayBuffer());
-    await options.onRaw({ symbol, status: response.status, bytes });
+    await options.onRaw({ symbol, status: response.status, bytes, url: response.url });
   }
 
   if (!response.ok) {
@@ -980,8 +982,17 @@ export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]
 // 日足（最大10年・分割/配当イベント込み）を取得・整形。
 // 空の区別は fetchBars5m と同一: 真正 empty は timestamp 空配列のみ。
 // 非空 timestamps で有効バー 0 (全行 null) → 欠落として throw する。
-export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyResult> {
+export async function fetchDaily(
+  symbol: string,
+  range = "10y",
+  options?: FetchChartOptions
+): Promise<DailyResult> {
   const r = await fetchYahooChartRaw(symbol, range, "1d", true);
+  // fetchChart と同一の原文 capture (durable-before-parse 用。未指定は従来どおり)。
+  if (options?.onRaw) {
+    const bytes = new Uint8Array(await r.clone().arrayBuffer());
+    await options.onRaw({ symbol, status: r.status, bytes, url: r.url });
+  }
   ensureOk(r);
   const j = (await r.json()) as YahooChartJson;
   const { res, timestamps } = extractChartResult(symbol, j);

@@ -125,7 +125,7 @@ function mockMacro(
       const f = files[symbol];
       if (!f) throw new Error(`テスト: 未定義 symbol ${symbol}`);
       if (!opts?.noRaw?.includes(symbol)) {
-        await options?.onRaw?.({ symbol, status: 200, bytes: fxBytes(f) });
+        await options?.onRaw?.({ symbol, status: 200, bytes: fxBytes(f), url: `https://mock.test/chart/${symbol}` });
       }
       return chartFromFixture(symbol, f);
     }
