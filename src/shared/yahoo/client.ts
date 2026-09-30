@@ -550,6 +550,8 @@ export function parseChartResponse(json: unknown, symbol: string): ParsedChartRe
   }
 
   const result = parsed.chart.result[0];
+  // symbol は raw 形 ("7203") で来る。正規化してから応答と照合する。
+  assertResponseSymbol(normalizeSymbol(symbol), symbol, result.meta);
   const timestamps = result.timestamp ?? [];
   const quote = result.indicators.quote[0];
   // Yahoo は interval=1d では indicators.adjclose を常に含む。
@@ -712,6 +714,7 @@ interface YahooChartJson {
   chart?: {
     result?: Array<{
       meta?: {
+        symbol?: string;
         regularMarketPrice?: number | null;
         regularMarketTime?: number | null;
       };
@@ -760,6 +763,30 @@ export interface Bar5m {
   l: number;
   c: number;
   v: number;
+}
+
+/**
+ * 応答銘柄の同一性検証 (VWAP/ fetchChart 共有 boundary)。
+ * 要求の正規化形と応答 meta.symbol の完全一致を要求する。
+ * 欠落・不一致は throw (別銘柄混入の採用防止)。推測・補完なし。
+ * 正規 alias は既存 normalizeSymbol のみ。
+ */
+function assertResponseSymbol(
+  requestedNormalized: string,
+  symbol: string,
+  meta: { symbol?: unknown } | null | undefined
+): void {
+  const got = meta?.symbol;
+  if (typeof got !== "string" || got.length === 0) {
+    throw new Error(
+      `Chart API エラー [${symbol}]: 応答 meta.symbol がありません (別銘柄混入防止のため採用しません)。`
+    );
+  }
+  if (got !== requestedNormalized) {
+    throw new Error(
+      `Chart API エラー [${symbol}]: 応答銘柄が要求と一致しません (要求=${requestedNormalized} 応答=${got})。`
+    );
+  }
 }
 
 /** chart.error の field-family 診断。値は出さない (存在と型のみ)。 */
@@ -824,6 +851,8 @@ function extractChartResult(symbol: string, j: YahooChartJson): {
       );
     }
   }
+  // VWAP 呼び出し側は正規化形 ("7203.T") で呼ぶ。応答の同一性を検証する。
+  assertResponseSymbol(symbol, symbol, res.meta as { symbol?: unknown } | null | undefined);
   return {
     res: res as Exclude<
       Exclude<Exclude<YahooChartJson["chart"], undefined>["result"], undefined>[number],
