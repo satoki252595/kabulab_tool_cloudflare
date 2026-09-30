@@ -233,7 +233,7 @@ R2_ACCOUNT_ID=<cloudflare-account-id>                                  # 007 VWA
 R2_ACCESS_KEY_ID=<r2-access-key-id>
 R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
 R2_BUCKET=vwap-data
-WORKER_BASE_URL=https://kabulab-cf.<subdomain>.workers.dev             # Yahoo 等の既存プロキシ接続先 (EDINET 日次 CLI は不使用)
+WORKER_BASE_URL=https://kabulab-cf.<subdomain>.workers.dev             # moneyflow 等の既存 Worker 接続先 (EDINET 日次 CLI は不使用)
 ```
 
 > R2 の Access Key は Cloudflare ダッシュボード → R2 → Overview → Account details → API Tokens
