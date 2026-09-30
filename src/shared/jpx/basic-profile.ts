@@ -37,6 +37,21 @@ export const BASIC_TABLE_HEAD = [
 ];
 
 /**
+ * 検索結果表の実測 header 原文 (2026-09-30、span 展開前 8 cell)。
+ * pre-expansion 選択専用。展開後の検証は SEARCH_RESULT_HEAD で行う。
+ */
+export const SEARCH_RESULT_HEAD_RAW = [
+  "コード",
+  "銘柄名",
+  "市場区分",
+  "業種分類",
+  "決算期",
+  "注意情報等",
+  "基本情報",
+  "株価表示",
+];
+
+/**
  * 検索結果表の実測 header (2026-09-30、extractTables の span 展開後)。
  * 決算期 th は colspan=2 のため 9 cell。code 列は index 0。
  */
@@ -157,7 +172,7 @@ export function parseBasicProfile(
   code4: string
 ): BasicProfileRow {
   const code5 = `${code4}0`;
-  const tables = extractTables(html);
+  const tables = extractTables(html, { selectHeader: BASIC_TABLE_HEAD });
   const allRows = tables.flatMap((t) => [...t.head, ...t.body]);
   const headerOk = allRows.some(
     (r) =>
@@ -513,7 +528,9 @@ async function collectBasicProfileInner(
   if (!r2.text.includes(`gotoBaseJh('${code5}', '1')`)) {
     fail(code4, "R2", "gotoBaseJh 非観測");
   }
-  const resultTables = extractTables(r2.text).filter((t) =>
+  const resultTables = extractTables(r2.text, {
+    selectHeader: SEARCH_RESULT_HEAD_RAW,
+  }).filter((t) =>
     [...t.head, ...t.body].some(
       (r) =>
         r.length === SEARCH_RESULT_HEAD.length &&

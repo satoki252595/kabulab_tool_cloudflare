@@ -1133,7 +1133,7 @@ CREATE TABLE universe_overlay_state (
     expect(hit).toEqual([{ code: "618A" }]);
   });
 
-  it("実 collectBasicProfile (ticking 時計・実 HTML) → no-map → insert される", async () => {
+  it("実 collectBasicProfile (ticking 時計・FULL 実 HTML) → no-map → insert される", async () => {
     const { collectBasicProfile } = await import(
       "../shared/jpx/basic-profile.js"
     );
@@ -1141,10 +1141,12 @@ CREATE TABLE universe_overlay_state (
       dirname(fileURLToPath(import.meta.url)),
       "../shared/jpx/__fixtures__"
     );
+    // FULL 実 raw (sid のみ REDACTED)。抜粋では検出できない
+    // 無関係レイアウト表の ragged (table#18) を含む。
     const pages = [
-      readFileSync(join(fx, "basic-entry-form.html"), "utf-8"),
-      readFileSync(join(fx, "basic-search-030.html"), "utf-8"),
-      readFileSync(join(fx, "basic-table.html"), "utf-8"),
+      readFileSync(join(fx, "basic-full-r1-entry.html"), "utf-8"),
+      readFileSync(join(fx, "basic-full-r2-search.html"), "utf-8"),
+      readFileSync(join(fx, "basic-full-r3-basic.html"), "utf-8"),
     ];
     // 実時計の ms 進行を模す ticking clock (JST 9/30 15:31 起点)。
     const t0 = Date.parse("2026-09-30T06:31:00.000Z");

@@ -20,7 +20,7 @@ export type RawCell = {
 };
 
 export type RawTable = {
-  /** ページ内の出現順 (0-based)。 */
+  /** slice 位置 (0-based。選択時は疎になる)。 */
   tableIndex: number;
   /** table 開始タグのバイトオフセット (年見出しとの対応付け用)。 */
   startIndex: number;
@@ -190,15 +190,35 @@ function splitRows(sectionHtml: string): string[] {
 }
 
 /**
+ * 行内セルを span 解釈なしで割る (pre-expansion 選択用)。
+ * 選択は完全一致のみ。span の有無は問わない (展開時に厳密検証する)。
+ */
+function splitRowCells(rowHtml: string): string[] {
+  const texts: string[] = [];
+  const cellRe = /<(t[dh])\b([^>]*)>([\s\S]*?)<\/\1\s*>/gi;
+  let c: RegExpExecArray | null;
+  while ((c = cellRe.exec(rowHtml)) !== null) {
+    texts.push(cellText(c[3] ?? ""));
+  }
+  return texts;
+}
+
+/**
  * 文書中の <table> を入れ子対応で抜き、thead/tbody 別に展開する。
  * thead も tbody も無い表は head=[]・body=全行 (記録上区別する。推測しない)。
+ * selectHeader 指定時は展開前に exact header 行を持つ表だけを選ぶ
+ * (無関係レイアウト表の ragged で dedicated 抽出が死なないため)。
+ * 選ばれた表の span/長方形展開は厳密なまま (catch/skip しない)。
+ * 未指定の caller は従来通り全表を厳密展開する。
  */
-export function extractTables(html: string): RawTable[] {
+export function extractTables(
+  html: string,
+  opts?: { selectHeader?: readonly string[] }
+): RawTable[] {
   const tables: RawTable[] = [];
   const re = /<\/?table\b[^>]*>/gi;
   let depth = 0;
   let start = -1;
-  let tableIndex = 0;
   let m: RegExpExecArray | null;
   const slices: Array<{ start: number; html: string }> = [];
   while ((m = re.exec(html)) !== null) {
@@ -215,7 +235,8 @@ export function extractTables(html: string): RawTable[] {
       if (depth < 0) depth = 0;
     }
   }
-  for (const slice of slices) {
+  for (let si = 0; si < slices.length; si++) {
+    const slice = slices[si] as { start: number; html: string };
     const headSections: string[] = [];
     const bodySections: string[] = [];
     const headRe = /<thead\b[^>]*>([\s\S]*?)<\/thead\s*>/gi;
@@ -236,14 +257,28 @@ export function extractTables(html: string): RawTable[] {
                 .replace(/<thead\b[^>]*>[\s\S]*?<\/thead\s*>/gi, "")
                 .replace(/<tbody\b[^>]*>[\s\S]*?<\/tbody\s*>/gi, "")
             );
-    const context = `table#${tableIndex}`;
+    const want = opts?.selectHeader;
+    if (want !== undefined) {
+      let hit = false;
+      for (const rowHtml of [...headRows, ...bodyRows]) {
+        const texts = splitRowCells(rowHtml);
+        if (
+          texts.length === want.length &&
+          texts.every((t, i) => t === want[i])
+        ) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit) continue;
+    }
+    const context = `table#${si}`;
     tables.push({
-      tableIndex,
+      tableIndex: si,
       startIndex: slice.start,
       head: expandGrid(headRows, `${context}/thead`),
       body: expandGrid(bodyRows, `${context}/tbody`),
     });
-    tableIndex++;
   }
   return tables;
 }
