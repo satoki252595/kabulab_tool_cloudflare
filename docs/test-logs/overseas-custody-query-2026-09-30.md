@@ -3,7 +3,8 @@
 query-only 照会 runner。既存 helper `checkDocsCustody` を再使用
 (新規 framework なし)。read-only route guard + closed caps +
 hash-first packet。round1 (20/40) は ONE 実行済み PASS。
-rest (3655/7310) は PREP のみ・live は grant 待ち。
+rest (3655/7310) は ONE 実行済み PASS (Root conditional grant 消費。
+追加照会なし)。
 
 - script: `services/yuho-quant/data-scripts/overseas-custody-query.ts`
   (FULL `4ac4489d…9ab5d`、self pin `42d54333…069d3`)。
@@ -39,6 +40,32 @@ rest (3655/7310) は PREP のみ・live は grant 待ち。
   原本 ZIP / official provenance を先に扱う (REQUIRED は Root 判断)。
 - primary READY 0 (query-only)。byte 適格化なし。
 
+## Rest result (ONE 実行済み PASS・再実行なし)
+
+- window: `2026-09-30T11:28:32.932Z` → `11:30:23.106Z` exit 0。
+  workHEAD `1085599` 照合一致。実行 bytes FULL `4ac4489d…9ab5d`。
+- verdicts: 3655 docs / 7310 keys — t1 missing 3591・complete 64・
+  t5 missing 3650・complete 5 (metadata-only / not-applicable 0)。
+  complete = 行存在 + hosted fileCount>0 (same-bytes 検証ではない)。
+- network: native 184 (search 200 + query 200×183)・rejected 0・
+  rateLimited 0・retries 0。query 成功 183/183 (2xx 後のみ前進)。
+  bodies 184 保存。DB 既存発見 (CREATE 経路なし)。
+- ledger: reserved 184 + captured 184 = 368 行・seq 1:1 対・
+  全 bodySHA 照合一致・全 status 200・全 0600。
+- query bodies: 183 件全 `has_more false`・総 rows 69・
+  chunk 最大 10 rows (t1 complete 64 + t5 complete 5 と一致。
+  metadata-only 0 のため全返却行 = complete)。
+  C 独立 static 監査 PASS と一致 (184 200・pairs exact・
+  183 body SHAs・raw len/SHA 0600)。
+- receipts (0600): findings `af82c988…28d24a`・
+  attempt log `516bb9c2…07fc4`・stdout `de1e1e6b…ab8974`・
+  stderr 空 (0 bytes)。
+- zeros: sourceGET 0 / D1 0 / R2 0 / dispatch 0 / writes 0。
+- union 算術合計 (round1 全 missing + rest 実測の加算のみ):
+  3675 通 — t1 missing 3611・complete 64・t5 missing 3670・
+  complete 5。primary READY 0 のまま (適格化なし)。
+- grant 消費済み ONE。追加照会・replay なし。
+
 ## Fixed scope (rounds)
 
 - round は `--round=1|rest` の明示指定のみ (default なし)。
@@ -48,7 +75,8 @@ rest (3655/7310) は PREP のみ・live は grant 待ち。
 - rest: union 3675 MINUS round1 exact 20 = 3655 通・7310 keys
   (docID sort・均一 packet・53+3602 分割なし)。
   key manifest `custody-keys-rest.json` `6d0f4e9b…bd6e`。
-  183 chunks (末尾 30 keys)。live 未実行・grant 待ち。
+  183 chunks (末尾 30 keys)。ONE 実行済み PASS・grant 消費・
+  追加照会なし。
 - 各 round: docs/keys exact・各通対・key 再導出一致を形状証明。
   補完なし。
 
@@ -133,13 +161,15 @@ rest (3655/7310) は PREP のみ・live は grant 待ち。
 ## zeros (now)
 
 sourceGET 0 / D1 READ+write 0 / R2 0 / dispatch 0 / Notion mutation 0。
-Notion 照会は round1 authorized ONE (2 attempts) のみ。
-rest live は CODE CLEAR + concrete grant 待ち (照会 0)。
+Notion 照会は round1 authorized ONE (2 attempts) +
+rest authorized ONE (184 attempts) のみ。両 grant 消費済み・
+追加照会なし。
 
 ## limits
 
-- rest は PREP (code + packet + preflight + tests) のみ。live 未実行。
-- round1 receipts は保持・再実行なし。README/PR 記録は不変。
+- rest は ONE 実行済み PASS (code + packet + preflight + tests +
+  184 attempts)。両 grant 消費・追加照会なし。
+- round1/rest receipts は保持・再実行なし。README/PR 記録は不変。
 - DB 観測・parser 出力・baseline 160 の再検証なし (fixed reuse)。
 - full closure (listing/DL) は別途 stage・別 caps。
 - missing 行から freshGET necessity を推論しない。
