@@ -194,6 +194,15 @@ def parse_codelist(
 # 銘柄を指さないため候補から外し HOLD 診断にする (STOP しない)。
 _PHANTOM_TICKER = "0000"
 
+# EDINET code の literal 形 (`E` + 5 桁)。レジストリ照会はしない。
+# 実測の両世代 (11348/11394 行) で非空白値は全てこの形。
+_EDINET_RE = re.compile(r"^E[0-9]{5}$")
+
+
+def is_valid_edinet_code(value: str | None) -> bool:
+    """EDINET code の literal 有効性。blank は False (未知として扱う)。"""
+    return value is not None and value != "" and _EDINET_RE.match(value) is not None
+
 
 class CodelistInspectError(ValueError):
     """候補検査の typed STOP。`kind` で事由を区別する。"""
@@ -207,20 +216,36 @@ class CodelistInspectError(ValueError):
 class CandidateHold:
     """非候補の typed HOLD 診断。"""
 
-    kind: str  # "legal-missing-ticker"
+    kind: str  # "legal-missing-ticker" | "blank-issuer-hold"
     detail: str
+
+
+@dataclass(frozen=True)
+class InspectedCandidates:
+    """候補検査の結果。①upsert 用と sector 資格の最小区別。
+
+    - `candidates`: ①upsert 用の全候補 (blank issuer を含む。① schema は
+      optional のため改造しない)。
+    - `sector`: sector 資格 (literal 有効 EDINET id 必須。blank は除外)。
+    """
+
+    candidates: list[StockMasterRecord]
+    sector: list[StockMasterRecord]
+    holds: list[CandidateHold]
 
 
 def inspect_codelist_candidates(
     records: list[StockMasterRecord],
-) -> tuple[list[StockMasterRecord], list[CandidateHold]]:
+) -> InspectedCandidates:
     """全 records の正規化 ticker/issuer 一意性を検査し候補と HOLD に分離する。
 
     呼び出し位置: 全件 parse 後・limit 前・① upsert 前 (両 job 共通)。
     - `0000` phantom (`00000` 由来) → 非候補 + HOLD (STOP しない)。
     - 同一 ticker の複数行 (identical/conflicting 問わず) → STOP。
-    - 同一 EDINET code の複数 ticker (blank EDINET 除外) → STOP。
-    - 候補は入力順 (dedup しない。last-wins は廃止)。
+    - 同一 EDINET code の複数 ticker (blank 除外) → STOP。
+    - 非空白で literal 不正な EDINET code → STOP。
+    - blank issuer → typed identity HOLD + sector 除外 (①候補には残す)。
+    - 候補は入力順 (dedup しない。last-wins は廃止)。name join はしない。
     """
     holds = [
         CandidateHold("legal-missing-ticker", f"00000 由来 (edinet={r.edinet_code})")
@@ -228,6 +253,11 @@ def inspect_codelist_candidates(
         if r.code == _PHANTOM_TICKER
     ]
     candidates = [r for r in records if r.code != _PHANTOM_TICKER]
+    for r in candidates:
+        if r.edinet_code and not is_valid_edinet_code(r.edinet_code):
+            raise CodelistInspectError(
+                "invalid-issuer-stop", f"{r.code}: 不正 EDINET {r.edinet_code!r}"
+            )
     seen: set[str] = set()
     for r in candidates:
         if r.code in seen:
@@ -244,7 +274,14 @@ def inspect_codelist_candidates(
             raise CodelistInspectError(
                 "dup-issuer-stop", f"{edinet}: {','.join(sorted(tickers))}"
             )
-    return candidates, holds
+    sector: list[StockMasterRecord] = []
+    for r in candidates:
+        # 不正 nonempty は上で STOP 済み。ここに残る非有効は blank のみ。
+        if not is_valid_edinet_code(r.edinet_code):
+            holds.append(CandidateHold("blank-issuer-hold", f"{r.code}: issuer 空"))
+            continue
+        sector.append(r)
+    return InspectedCandidates(candidates=candidates, sector=sector, holds=holds)
 
 
 def convert_codelist(artifact: RawArtifact) -> RawArtifact:

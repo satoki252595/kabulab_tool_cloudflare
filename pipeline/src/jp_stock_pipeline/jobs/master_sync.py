@@ -68,14 +68,14 @@ def execute(ctx: JobContext) -> None:
     # 候補検査は全件 parse 後・limit 前・① upsert 前 (sector33_sync と共通)。
     # 重複は last-wins で潰さず STOP する (strict unique)。
     try:
-        candidates, cand_holds = edinet_codelist.inspect_codelist_candidates(records)
+        inspected = edinet_codelist.inspect_codelist_candidates(records)
     except edinet_codelist.CodelistInspectError as exc:
         ctx.add_failure("codelist-candidates", f"{exc.kind}: {exc}")
         return
-    for hold in cand_holds:
+    for hold in inspected.holds:
         logger.warning("候補 HOLD (%s): %s", hold.kind, hold.detail)
-    fetched_codes = {r.code for r in candidates}
-    upsert_records = apply_limit(candidates, ctx.args.limit)
+    fetched_codes = {r.code for r in inspected.candidates}
+    upsert_records = apply_limit(inspected.candidates, ctx.args.limit)
     logger.info("コードリスト: %d 銘柄を ① へ upsert", len(upsert_records))
 
     # ① 既存行マップ {code: page_id} を一括取得（per-record 検索を排除 §8.3。
@@ -139,7 +139,9 @@ def execute(ctx: JobContext) -> None:
         logger.info("--limit 指定のため D1 core_stocks.sector33 の充填はスキップ (部分取得)")
         return
     _detect_delistings(ctx, fetched_codes, master_map, map_ok)
-    _sync_sector33(ctx, candidates)
+    # sector には資格側だけ渡す (blank issuer を sector tuple へ渡さない)。
+    # ①upsert 用元 records との最小区別。① schema は改造しない。
+    _sync_sector33(ctx, inspected.sector)
     _sync_notion_pages(ctx, master_entries, map_ok)
 
 

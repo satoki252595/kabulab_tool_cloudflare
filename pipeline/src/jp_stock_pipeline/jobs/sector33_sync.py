@@ -44,6 +44,7 @@ from ..collectors.edinet_codelist import (
     _LISTED_VALUE,
     _read_codelist_csv,
     inspect_codelist_candidates,
+    is_valid_edinet_code,
 )
 from ..config import Settings, load_settings
 from ..contracts.sector33 import normalize_sector33
@@ -85,9 +86,11 @@ DIAG_KINDS = frozenset(
         "invalid-ticker",
         "dup-ticker-stop",
         "dup-issuer-stop",
+        "invalid-issuer-stop",
         "renormalize-stop",
         "ambiguous-sector-stop",
         "unmapped-sector-nontarget",
+        "blank-issuer-hold",
         "sector33-gap",
         "archive-failure",
         "config-stop",
@@ -208,8 +211,10 @@ def _qualify_targets(
 ) -> tuple[list[tuple[str, str]], list[SectorHold]]:
     """active 対象の sector 適格化。戻りは (qualified (ticker, raw sector), 診断)。
 
-    非空白で写像不能な sector を持つ target は STOP。空白 sector・不在は
-    gap 候補として保持する (NULL 消去しない)。name join はしない。
+    qualified sector 入力は literal 有効 EDINET id 必須。blank issuer は
+    共有検査の HOLD 済みとして gap 候補に保持する (NULL 消去しない)。
+    不正 nonempty issuer は STOP。非空白で写像不能な sector を持つ target
+    も STOP。空白 sector・不在は gap 候補として保持する。name join はしない。
     """
     qualified: list[tuple[str, str]] = []
     holds: list[SectorHold] = []
@@ -218,6 +223,13 @@ def _qualify_targets(
         row = by_ticker.get(ticker)
         if row is None:
             continue  # 不在は gap 候補 (保持)。STOP しない。
+        if not row["edinet"]:
+            continue  # blank issuer: 共有 HOLD 済み。gap 候補として保持。
+        if not is_valid_edinet_code(row["edinet"]):
+            raise SectorPrewriteStop(
+                "invalid-issuer-stop",
+                f"{ticker}: 不正 EDINET {row['edinet']!r} (line {row['line']})",
+            )
         sector = row["sector"]
         if not sector:
             continue  # 空白 sector は gap 候補 (保持)。STOP しない。
@@ -276,12 +288,12 @@ def execute(ctx: JobContext) -> SectorReport:
     # 完全性 gate は保管より前 (壊れた世代を custody しない)。共有検査 +
     # scan/一致/再正規化のいずれも read-only。
     try:
-        _, cand_holds = inspect_codelist_candidates(records)
+        inspected = inspect_codelist_candidates(records)
     except edinet_codelist.CodelistInspectError as exc:
         ctx.add_failure(f"sector33-prewrite-{exc.kind}", str(exc))
         report.stopped = exc.kind
         return report
-    report.holds.extend(SectorHold(h.kind, h.detail) for h in cand_holds)
+    report.holds.extend(SectorHold(h.kind, h.detail) for h in inspected.holds)
     admitted, scan_holds = _scan_listed_rows(zip_bytes)
     report.holds.extend(scan_holds)
     # scan と parser の一致 pin。parser 側にだけ居る code は

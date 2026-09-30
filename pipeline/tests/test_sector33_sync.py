@@ -253,6 +253,23 @@ class TestPrewriteStops:
             mod._verify_normalization([{"ticker": "ZZZ9", "raw": "garbage!!!", "line": 3}])
         assert ei.value.kind == "renormalize-stop"
 
+    def test_invalid_issuer_stop(self, monkeypatch, tmp_path):
+        """不正 nonempty issuer は prewrite STOP。壊れた世代は custody しない。"""
+        lines = _fixture_text().split("\n")
+        header = next(csv.reader([lines[1]]))
+        ei = header.index("ＥＤＩＮＥＴコード")
+        row = next(csv.reader([lines[2]]))
+        row[ei] = "XYZ"
+        lines[2] = _quoted(row)
+        data = _make_zip({"EdinetcodeDlInfo.csv": "\n".join(lines)})
+        store = _SectorD1([])
+        _wire(monkeypatch, tmp_path, store, cli="boom", data=data)
+        ctx, state = _ctx()
+        report = mod.execute(ctx)
+        assert report.stopped == "invalid-issuer-stop"
+        assert store.write_sql == []
+        assert state["failed"] == 1
+
     def test_ambiguous_sector_stop(self, monkeypatch, tmp_path):
         lines = _fixture_text().split("\n")
         header = next(csv.reader([lines[1]]))
@@ -308,6 +325,31 @@ class TestHoldsContinue:
         assert "invalid-ticker" in [h.kind for h in report.holds]
         assert report.stopped is None
         assert state["failed"] == 0
+
+    def test_blank_issuer_retain_and_gap(self, monkeypatch, tmp_path):
+        """blank issuer は既 sector 保持。NULL 残存は gap (partial の種)。"""
+        lines = _fixture_text().split("\n")
+        header = next(csv.reader([lines[1]]))
+        ei = header.index("ＥＤＩＮＥＴコード")
+        row = next(csv.reader([lines[2]]))
+        row[ei] = ""
+        lines[2] = _quoted(row)
+        data = _make_zip({"EdinetcodeDlInfo.csv": "\n".join(lines)})
+        ticker = edinet_codelist.parse_codelist(_zip_bytes())[0].code
+        store = _SectorD1([(ticker, "輸送用機器", 1, "equity")])
+        _wire(monkeypatch, tmp_path, store, data=data)
+        ctx, state = _ctx()
+        report = mod.execute(ctx)
+        assert "blank-issuer-hold" in [h.kind for h in report.holds]
+        assert report.stopped is None
+        assert store.values()[ticker][0] == "輸送用機器"
+        assert state["failed"] == 0
+        store2 = _SectorD1([(ticker, None, 1, "equity")])
+        _wire(monkeypatch, tmp_path, store2, data=data)
+        ctx2, state2 = _ctx()
+        report2 = mod.execute(ctx2)
+        assert report2.gaps == [ticker]
+        assert state2["failed"] == 1
 
     def test_unmapped_nontarget_hold(self, monkeypatch, tmp_path):
         store = _SectorD1([("7699", "輸送用機器", 0, "equity")])
@@ -449,9 +491,11 @@ class TestAgreementAndTaxonomy:
                 "invalid-ticker",
                 "dup-ticker-stop",
                 "dup-issuer-stop",
+                "invalid-issuer-stop",
                 "renormalize-stop",
                 "ambiguous-sector-stop",
                 "unmapped-sector-nontarget",
+                "blank-issuer-hold",
                 "sector33-gap",
                 "archive-failure",
                 "config-stop",

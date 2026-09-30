@@ -12,6 +12,9 @@ EDINET コードリストからの sector33 差分同期ジョブ
 - 共有候補検査 (`inspect_codelist_candidates`) を全件 parse 後・limit 前・
   ① upsert 前に master/sector 両 job で必須化。ticker/issuer 重複は STOP、
   `0000` phantom は非候補＋HOLD。last-wins (`_dedup_by_code`) は廃止。
+- issuer 資格: qualified sector 入力は literal 有効 EDINET id (`E`+5 桁)
+  必須。blank issuer は typed identity HOLD＋sector 除外 (①候補には残す。
+  ① schema 改造なし)。不正 nonempty issuer は prewrite STOP。name join 禁止。
 - 共有 planner: ticker 重複は sector 成否と独立した seen で STOP
   (unknown-first の見逃しなし)。未知 sector は desired に入れず retain
   (NULL 消去なし)。builder は None・33 業種外名称を拒否する backstop。
@@ -35,7 +38,7 @@ EDINET コードリストからの sector33 差分同期ジョブ
 
 ## 検証 (offline)
 
-- `pipeline: ruff + pytest` 全緑 (1491 passed / 0 failed / 58 skipped)。
+- `pipeline: ruff + pytest` 全緑 (1495 passed / 0 failed / 58 skipped)。
   実フィクスチャ＋実 helper で archive 失敗→writer 0、重複 STOP、
   合法欠損 HOLD、未知 retain、非株式 0、2nd diff 0、sector-only・
   `updated_at` 保護、診断 taxonomy 全種別を cover。

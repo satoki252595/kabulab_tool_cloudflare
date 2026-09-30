@@ -236,9 +236,11 @@ class TestInspectCandidates:
 
     def test_実フィクスチャは重複なし順序保持(self):
         records = mod.parse_codelist(_zip_bytes())
-        candidates, holds = mod.inspect_codelist_candidates(records)
-        assert holds == []
-        assert [r.code for r in candidates] == [r.code for r in records]
+        out = mod.inspect_codelist_candidates(records)
+        assert out.holds == []
+        assert [r.code for r in out.candidates] == [r.code for r in records]
+        # 実 source に blank issuer なし: sector 資格は全候補と一致する
+        assert [r.code for r in out.sector] == [r.code for r in records]
 
     def test_同一tickerの重複はSTOP(self):
         records = mod.parse_codelist(_zip_bytes())
@@ -261,19 +263,28 @@ class TestInspectCandidates:
             mod.inspect_codelist_candidates([*records, other])
         assert ei.value.kind == "dup-issuer-stop"
 
-    def test_blankEDINETは衝突しない(self):
+    def test_blankEDINETは衝突せずsector除外とHOLD(self):
         records = mod.parse_codelist(_zip_bytes())
         a = replace(records[0], edinet_code=None)
         b = replace(records[1], edinet_code=None)
-        candidates, _ = mod.inspect_codelist_candidates([a, b])
-        assert [r.code for r in candidates] == [a.code, b.code]
+        out = mod.inspect_codelist_candidates([a, b])
+        assert [r.code for r in out.candidates] == [a.code, b.code]
+        assert out.sector == []
+        assert [h.kind for h in out.holds] == ["blank-issuer-hold"] * 2
+
+    def test_不正nonemptyEDINETはSTOP(self):
+        records = mod.parse_codelist(_zip_bytes())
+        bad = replace(records[0], edinet_code="XYZ")
+        with pytest.raises(mod.CodelistInspectError) as ei:
+            mod.inspect_codelist_candidates([*records, bad])
+        assert ei.value.kind == "invalid-issuer-stop"
 
     def test_0000phantomは非候補とHOLD(self):
         records = mod.parse_codelist(_zip_bytes())
         phantom = replace(records[0], code="0000")
-        candidates, holds = mod.inspect_codelist_candidates([*records, phantom])
-        assert "0000" not in {r.code for r in candidates}
-        assert [h.kind for h in holds] == ["legal-missing-ticker"]
+        out = mod.inspect_codelist_candidates([*records, phantom])
+        assert "0000" not in {r.code for r in out.candidates}
+        assert [h.kind for h in out.holds] == ["legal-missing-ticker"]
 
 
 class TestFetchCodelist:
