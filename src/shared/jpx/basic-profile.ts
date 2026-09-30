@@ -121,8 +121,8 @@ export type BasicProfileEvidence = BasicProfileRow & {
    * current 所有検証のみ。historic 日付への流用は planner が拒否する。
    */
   qualificationDate: string | null;
-  /** qualify 根拠。現行は current-owner-qualified のみ受理。 */
-  qualificationBasis: "current-owner-qualified" | null;
+  /** qualify 根拠 (provenance。任意設定ではない)。 */
+  qualificationBasis: "current-owner-qualified" | "current-observation" | null;
   /**
    * dated admission 証明 pin (将来の明示 source 用。現行は常に null)。
    * 非 null の未知形式は planner が fail-closed で拒否する。

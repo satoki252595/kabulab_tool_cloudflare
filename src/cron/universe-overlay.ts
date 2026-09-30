@@ -156,6 +156,18 @@ function isFullSha(s: string): boolean {
 }
 
 /**
+ * 実観測 ISO 時刻の JST 暦日 (YYYY-MM-DD)。invalid ISO は null。
+ * UTC slice・listing 日・sourceAsOf の代用はしない。
+ * sourceAsOf は UNKNOWN のまま (本関数は観測日の読取であり as-of 推定ではない)。
+ */
+function observedJstDate(iso: string): string | null {
+  if (!isValidIso(iso)) return null;
+  return new Date(Date.parse(iso) + 9 * 3600 * 1000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+/**
  * batch と既存 core から適用計画を作る。書込も DB 読込もしない純粋関数。
  * 未確定 IPO は listingInserts (market=null) に積み、held 判定は呼び出し側。
  * IPO の market 解決は batch.basics の証拠のみ (hardcoded map なし)。
@@ -385,7 +397,9 @@ export function planOverlayDeltas(
       ev.defsPins.ordinaryCode === DEFS_ORDINARY_CODE.sha256 &&
       ev.qualificationDate !== null &&
       ev.qualificationDate === batch.eligibilityAsOf &&
-      ev.qualificationBasis === "current-owner-qualified" &&
+      (ev.qualificationBasis === "current-owner-qualified" ||
+        (ev.qualificationBasis === "current-observation" &&
+          observedJstDate(ev.basicFetchedAt) === batch.eligibilityAsOf)) &&
       ev.datedSourcePin === null
     ) {
       market = resolveDomesticFullMarket(ev);
@@ -827,14 +841,47 @@ export function withBasicEvidence(
               } satisfies BasicReceiptPins,
             }
           : null;
+      // current-observation (通常 caller・reviewed なし用)。3 raw の実保管 +
+      // 全文 SHA readback は上記 pageId 確定で完了済み。実 basicFetchedAt の
+      // JST 暦日が elig と一致し、同一 cycle の実証拠が positive complete
+      // (code4/code5 予備桁 0・event 市場一致・国内短名・defs・世代時刻) の
+      // 場合のみ stamp する。日付は実観測 JST 日 (requested elig・UTC 日・
+      // listing 日・sourceAsOf の代用禁止)。historic・異日・R3 跨日は HOLD。
+      const observedJst =
+        stamp === null ? observedJstDate(got.evidence.basicFetchedAt) : null;
+      const observed =
+        stamp === null &&
+        observedJst !== null &&
+        observedJst === input.eligibilityAsOf &&
+        got.evidence.code4 === row.code &&
+        got.evidence.code5 === `${row.code}0` &&
+        got.evidence.marketBare === row.market &&
+        resolveDomesticFullMarket(got.evidence) !== null &&
+        got.evidence.defsPins.countryGuide === DEFS_COUNTRY_GUIDE.sha256 &&
+        got.evidence.defsPins.ordinaryCode === DEFS_ORDINARY_CODE.sha256 &&
+        isValidIso(batch.eventsFetchedAt) &&
+        Date.parse(got.evidence.basicFetchedAt) >=
+          Date.parse(batch.eventsFetchedAt)
+          ? {
+              date: observedJst,
+              basis: "current-observation" as const,
+              pins: {
+                entrySha: got.entry.sha256,
+                searchSha: got.search.sha256,
+                rawSha: got.basic.sha256,
+                custodyPageIds: [pageId],
+              } satisfies BasicReceiptPins,
+            }
+          : null;
+      const final = stamp ?? observed;
       basics.set(row.code, {
         ...got.evidence,
         custody: { pageId },
         boundEventsFetchedAt: batch.eventsFetchedAt,
-        qualificationDate: stamp?.date ?? null,
-        qualificationBasis: stamp?.basis ?? null,
+        qualificationDate: final?.date ?? null,
+        qualificationBasis: final?.basis ?? null,
         datedSourcePin: null,
-        reviewedPins: stamp?.pins ?? null,
+        reviewedPins: final?.pins ?? null,
       });
     }
     batch.basics = basics;
