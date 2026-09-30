@@ -39,6 +39,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - Worker の Observability を最小設定で有効化 (呼出ログ + 既存 console ログを残す。EDINET 外向き URL の Subscription-Key のため traces は無効のまま)。EDINET 日次取込に秘密なしの進捗 checkpoint を追加し次回標準実行の段階特定を可能に (#187)。
 
 ### 本番作業
+- 優待 source52 修復を適用 (16 batch・74 statements・52行、適用後 post4 全列一致・outside54 保護一致・NEWPOST 再入 0 を実証)。exec/post 証跡 56点 1-ZIP を Notion 一次データへ full SHA readback 保管 (Refs #146)。
 - 優待 ABC 修復 131 銘柄を適用 (requests 131・statements 508・完了 131、適用前 refetch 全一致、inactive 11 除外)。再入 (2nd run 差分 0) は未観測のため主張なし。
 - 優待全文修復 13 銘柄を適用 (requests 13・statements 75・desc 62、適用前 refetch 全一致。eligible 85 のうち historical 39・whole-stock STOP 23 は除外)。再入は未観測のため主張なし。
 - Issue #163 の 9/29 欠損 54 固定診断を live 1 回実行し complete（実バー有り 47・終値なし 2・stale 1・priceguard 4、原文 54 + manifest 1 の 55 添付を 1 行 custody・全件 readback 一致）。旧 run 失敗理由は未確定のまま。D1 修復なし。
