@@ -10,6 +10,7 @@ import io
 import zipfile
 from datetime import date
 
+import pytest
 from conftest import fixture_path
 
 from jp_stock_pipeline.collectors import edinet_codelist as mod
@@ -100,6 +101,133 @@ class TestParseCodelist:
         text = mod._read_codelist_csv(_zip_bytes())
         assert "ＥＤＩＮＥＴコード" in text
         assert "証券コード" in text
+
+
+def _make_zip(files: dict[str, str]) -> bytes:
+    """敵対ケース用の最小 zip を組む（実フィクスチャの代替ではなく検証ベクタ）。"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, text in files.items():
+            zf.writestr(name, text.encode("cp932"))
+    return buf.getvalue()
+
+
+def _mutate_fixture_line3(old_tail: str, new_tail: str) -> bytes:
+    """実フィクスチャ CSV の 3 行目 (先頭データ行) の末尾だけを置換して zip 化。
+
+    他の全行は実物のまま。置換対象の不一致は assert で落とす
+    (fixture 変更時の黙って通過を防ぐ)。
+    """
+    text = mod._read_codelist_csv(_zip_bytes())
+    lines = text.split("\n")
+    assert lines[2].endswith(old_tail), "fixture line3 tail changed"
+    lines[2] = lines[2][: -len(old_tail)] + new_tail
+    return _make_zip({"EdinetcodeDlInfo.csv": "\n".join(lines)})
+
+
+_TRUST_META = "ダウンロード実行日,2026年09月30日現在,件数,1件"
+_TRUST_HEADER = (
+    "ＥＤＩＮＥＴコード,提出者種別,上場区分,連結の有無,資本金,決算日,"
+    "提出者名,提出者名（英字）,提出者名（ヨミ）,所在地,提出者業種,"
+    "証券コード,提出者法人番号"
+)
+_TRUST_ROW = "E12345,,上場,,1000,,テスト株式会社,,,,サービス業,72030,"
+
+
+class TestTrustBoundary:
+    def test_複数CSVは先頭採用せずSTOP(self):
+        data = _make_zip(
+            {
+                "EdinetcodeDlInfo.csv": f"{_TRUST_META}\n{_TRUST_HEADER}\n{_TRUST_ROW}\n",
+                "Extra.csv": "a,b\n1,2\n",
+            }
+        )
+        with pytest.raises(ValueError, match="想定と不一致"):
+            mod.parse_codelist(data)
+
+    def test_別名CSVのみはSTOP(self):
+        data = _make_zip({"Other.csv": f"{_TRUST_META}\n{_TRUST_HEADER}\n{_TRUST_ROW}\n"})
+        with pytest.raises(ValueError, match="想定と不一致"):
+            mod.parse_codelist(data)
+
+    def test_CSV不在はSTOP(self):
+        data = _make_zip({"notes.txt": "no csv here"})
+        with pytest.raises(ValueError, match="想定と不一致"):
+            mod.parse_codelist(data)
+
+    def test_重複ヘッダはSTOP(self):
+        dup_header = _TRUST_HEADER.replace("提出者法人番号", "証券コード")
+        data = _make_zip(
+            {"EdinetcodeDlInfo.csv": f"{_TRUST_META}\n{dup_header}\n{_TRUST_ROW}\n"}
+        )
+        with pytest.raises(ValueError, match="ヘッダ名が重複"):
+            mod.parse_codelist(data)
+
+    def test_非空白の列不足行はSTOP(self):
+        data = _make_zip(
+            {"EdinetcodeDlInfo.csv": f"{_TRUST_META}\n{_TRUST_HEADER}\nE99999,,上場\n"}
+        )
+        with pytest.raises(ValueError, match="3行目.*列不足"):
+            mod.parse_codelist(data)
+
+    def test_完全な空白行のみスキップ(self):
+        data = _make_zip(
+            {
+                "EdinetcodeDlInfo.csv": (
+                    f"{_TRUST_META}\n{_TRUST_HEADER}\n{_TRUST_ROW}\n\n{_TRUST_ROW}\n"
+                )
+            }
+        )
+        records = mod.parse_codelist(data)
+        assert len(records) == 2
+
+    def test_実フィクスチャは単一CSVと一意ヘッダと全行同幅(self):
+        """実物の前提を固定する（敵対ベクタではなく実測の錨）。"""
+        import csv as _csv
+
+        with zipfile.ZipFile(io.BytesIO(_zip_bytes())) as zf:
+            assert zf.namelist() == ["EdinetcodeDlInfo.csv"]
+        rows = list(_csv.reader(io.StringIO(mod._read_codelist_csv(_zip_bytes()))))
+        assert len(rows[1]) == len(set(rows[1]))
+        width = len(rows[1])
+        assert all(len(r) == width or not any(c.strip() for c in r) for r in rows[2:])
+
+    def test_実物由来の最終列truncateはSTOP(self):
+        """実フィクスチャの先頭データ行の最終列 (法人番号) 欠落は STOP。
+
+        旧実装は必要列 (証券コード) より後ろの欠落を見逃していた。
+        """
+        import csv as _csv
+
+        data = _mutate_fixture_line3(',"5070001000715"\r', "\r")
+        line3 = mod._read_codelist_csv(data).split("\n")[2]
+        assert len(next(_csv.reader([line3]))) == 12  # ベクタの自己検証
+        with pytest.raises(ValueError, match="3行目.*列不足"):
+            mod.parse_codelist(data)
+
+    def test_実物由来の余分列はSTOP(self):
+        """実フィクスチャの先頭データ行への余分列の付加は STOP。
+
+        旧実装はヘッダより長い行の余分を黙殺していた。
+        """
+        import csv as _csv
+
+        data = _mutate_fixture_line3("\r", ',"余分"\r')
+        line3 = mod._read_codelist_csv(data).split("\n")[2]
+        assert len(next(_csv.reader([line3]))) == 14  # ベクタの自己検証
+        with pytest.raises(ValueError, match="3行目.*列過多"):
+            mod.parse_codelist(data)
+
+    def test_ヘッダ拡張は同幅なら正常(self):
+        """列追加のヘッダ (一意＋必須名あり) と同幅の行は拒否しない。"""
+        ext_header = _TRUST_HEADER + ",新列"
+        ext_row = _TRUST_ROW + ",x"
+        data = _make_zip(
+            {"EdinetcodeDlInfo.csv": f"{_TRUST_META}\n{ext_header}\n{ext_row}\n"}
+        )
+        records = mod.parse_codelist(data)
+        assert len(records) == 1
+        assert records[0].code == "7203"
 
 
 class TestFetchCodelist:

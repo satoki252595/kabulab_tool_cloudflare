@@ -87,14 +87,21 @@ def fetch_codelist(settings: Settings) -> RawArtifact:
     )
 
 
+# zip 内のコードリスト CSV の期待名（実物はこの1ファイルのみ）。
+# 複数・別名・不在は黙って先頭採用せず STOP する（信頼境界 §3）。
+_EXPECTED_CSV_NAME = "EdinetcodeDlInfo.csv"
+
+
 def _read_codelist_csv(zip_bytes: bytes) -> str:
     """zip 内のコードリスト CSV を cp932 でデコードして返す（値不変）。"""
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         csv_names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
-        if not csv_names:
-            raise ValueError("コードリスト zip 内に CSV が見つからない")
-        # 実物は EdinetcodeDlInfo.csv の1ファイルのみ。複数あれば先頭（名前順）を使う
-        return zf.read(sorted(csv_names)[0]).decode("cp932")
+        if csv_names != [_EXPECTED_CSV_NAME]:
+            raise ValueError(
+                "コードリスト zip 内の CSV が想定と不一致 "
+                f"(期待 [{_EXPECTED_CSV_NAME}] のみ、実際 {sorted(csv_names)})"
+            )
+        return zf.read(_EXPECTED_CSV_NAME).decode("cp932")
 
 
 def _meta_row_date(meta_row: list[str]) -> date | None:
@@ -125,6 +132,9 @@ def parse_codelist(
 
     data_date = _meta_row_date(rows[0])
     header = rows[1]
+    if len(header) != len(set(header)):
+        dupes = sorted({h for h in header if header.count(h) > 1})
+        raise ValueError(f"コードリスト CSV のヘッダ名が重複: {dupes}")
     try:
         idx = {
             name: header.index(name)
@@ -134,10 +144,24 @@ def parse_codelist(
         raise ValueError(f"コードリスト CSV のヘッダが想定と不一致: {header}") from exc
 
     fetched_at = now_jst()
+    width = len(header)
     records: list[StockMasterRecord] = []
-    for row in rows[2:]:
-        if len(row) <= max(idx.values()):
-            continue  # 列不足行（末尾の空行等）はスキップ
+    for lineno, row in enumerate(rows[2:], start=3):
+        if not any(cell.strip() for cell in row):
+            continue  # 完全な空白行のみスキップ
+        # 非空白行はヘッダと同幅が必須。過少も過多も構造不正として STOP
+        # する（必要列より後ろの欠落・余分列の黙殺をしない）。
+        # ヘッダ自体の拡張は妨げない（一意＋必須名＋同幅なら正常）。
+        if len(row) < width:
+            raise ValueError(
+                f"コードリスト CSV の{lineno}行目が列不足 "
+                f"(ヘッダ {width} 列に対し {len(row)} 列)"
+            )
+        if len(row) > width:
+            raise ValueError(
+                f"コードリスト CSV の{lineno}行目が列過多 "
+                f"(ヘッダ {width} 列に対し {len(row)} 列)"
+            )
         if row[idx[_COL_LISTED]].strip() != _LISTED_VALUE:
             continue  # 上場企業のみ
         code = normalize_sec_code(row[idx[_COL_SEC_CODE]])
