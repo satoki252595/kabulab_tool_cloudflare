@@ -2,8 +2,8 @@ import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { R2PutUnknownError } from "./lib/r2.js";
-import { r2Get, r2Put } from "./lib/r2.js";
+import { R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
+import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { loadCodes } from "./lib/codes.js";
 import { fetchBars5m } from "../../src/shared/yahoo/client.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
@@ -11,7 +11,7 @@ import { main } from "./ingest-intra.js";
 
 vi.mock("./lib/r2.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./lib/r2.js")>();
-  return { ...mod, r2Get: vi.fn(), r2Put: vi.fn() };
+  return { ...mod, r2GetVersion: vi.fn(), r2Put: vi.fn() };
 });
 vi.mock("./lib/codes.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./lib/codes.js")>();
@@ -36,7 +36,7 @@ vi.mock("../../src/shared/env.js", () => ({
   },
 }));
 
-const mockR2Get = vi.mocked(r2Get);
+const mockR2Get = vi.mocked(r2GetVersion);
 const mockR2Put = vi.mocked(r2Put);
 const mockLoadCodes = vi.mocked(loadCodes);
 const mockFetch5m = vi.mocked(fetchBars5m);
@@ -74,15 +74,27 @@ afterEach(() => {
 });
 
 describe("ingest-intra main flow", () => {
+  it("concurrent replacement rejects the exact observed version and stops remaining codes", async () => {
+    mockLoadCodes.mockResolvedValue(["A", "B"]);
+    mockR2Get.mockResolvedValue({ body: existingA, etag: "opaque-multipart-2" });
+    mockFetch5m.mockResolvedValue([{ ...BAR, ts: TS + 60 }]);
+    mockR2Put.mockRejectedValueOnce(new R2PutRejectedError("intra/A.json", "PreconditionFailed", 412, null));
+    await main();
+    expect(mockR2Put).toHaveBeenCalledTimes(1);
+    expect(mockR2Put.mock.calls[0][2]).toBe("opaque-multipart-2");
+    expect(mockFetch5m).toHaveBeenCalledTimes(1);
+    expect(process.exitCode).toBe(2);
+  });
   it("normal positive + skip control (exit 0, all codes accounted)", async () => {
     mockLoadCodes.mockResolvedValue(["A", "B"]);
-    mockR2Get.mockImplementation(async (key: string) => (key === "intra/A.json" ? existingA : null));
+    mockR2Get.mockImplementation(async (key: string) => (key === "intra/A.json" ? { body: existingA, etag: "observed-version" } : null));
     mockFetch5m.mockResolvedValue([BAR]);
     await main();
     expect(process.exitCode).toBe(0);
     expect(mockFetch5m).toHaveBeenCalledTimes(2);
     expect(mockR2Put).toHaveBeenCalledTimes(1);
     expect(mockR2Put.mock.calls[0][0]).toBe("intra/B.json");
+    expect(mockR2Put.mock.calls[0][2]).toBeNull();
     const outcomes = recordedBody().outcomes as Record<string, { status: string; latestSourceBar: unknown; bodySha: unknown }>;
     expect(Object.keys(outcomes).sort()).toEqual(["A", "B"]);
     expect(outcomes.A.status).toBe("skipped");
