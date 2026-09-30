@@ -29,9 +29,13 @@ frozen probe のみで 1 回実行した記録。結論: **FRESH_MATCH**
 | 8 | benefits | 64 | 200 | 465 |
 
 - benefits 合計 1668 (期待と一致)。caps 内。
-- 比較: content 差 0・drift 0 (fin/score 含む。夜間更新なし)・
-  実 planner→実 apply 0 送信・FT 62 全適用済み (親 identity 一致)・
-  normal45 pending 28/38src + stale 9 = 37/50 cross-check pass。
+- 比較: content 差 0・drift 0・実 planner→実 apply 0 送信・
+  FT 62 全適用済み (親 identity 一致)・normal45 pending 28/38src +
+  stale 9 = 37/50 cross-check pass。
+- drift 0 の範囲: benefits 全行集合 1668 + fin/score ABC 131
+  (期待 post 基準) + 利回り再計算 144 + updatedAt receipt。
+  非 ABC 13 銘柄の fin/score は履歴 baseline が無いため比較対象外
+  (`finScoreUncovered: 13`)。144 全体の夜間更新なしは主張しない。
 - N6 outside: 6 銘柄の active-equity + benefitID (14/2/2/16/4/4) を証明。
 - 8 連読は非 transaction (記録のみ。apply なし)。
 
@@ -53,8 +57,9 @@ frozen probe のみで 1 回実行した記録。結論: **FRESH_MATCH**
 | metadata.json | 8590 | `589eeacf…044379d45` |
 | partial-ledger.jsonl | 2017 | `d5e9d11f…bfa92fb` |
 
-- 全文 SHA は metadata.json の `localFiles` (private) に記録。
+- 全文 SHA は Notion 記録の metadata 内 `localFiles` と私的 custody receipt
+  に記録 (fresh 側の metadata.json に `localFiles` は無い。訂正済み)。
 - Notion 一次データ保管: key
   `yutai-fresh-audit-20260930-scope183147371fa0-run20260930T024544Z`
   (force=false, outcome recorded)。strict unique 1 row・hosted 11 件・
-  全件 DL の bytes+SHA 照合 11/11。
+  全件 DL の bytes+SHA 照合 11/11。実行 stdout は私的 receipt に保全。
