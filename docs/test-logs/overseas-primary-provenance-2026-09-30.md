@@ -32,14 +32,15 @@ local FS 読みのみ。source / live Notion / D1 新規操作 0・
 - 決定: Tier B の bytes/official は NEED-REVIEW/LIMIT
   (mandatory な NEED-SOURCE とは主張しない)。
   archived-wire-as-primary は content-level 利用に限り LIMIT 付きで
-  可 (official 形 source URI + 作成以来 immutable +
+  可 (official 形 source URI + 観測区間内
+  (09-29 作成 → 09-30 2 captures) で created==edited +
   manifest-anchor 済み local との content 照合済み。
-  same-bytes 適格化ではない)。
+  最終観測以降の不変は主張しない。same-bytes 適格化ではない)。
 - inner-ZIP-equal (entry-bytes SHA `ded1638c…` 一致) 単独では
   official/bytes 適格化しない。残 Tier B 4 行は hosted 未取得の
   ため pattern 類推を主張しない (unattempted)。
-- 原本 ZIP / hosted raw は immutable。repack も新 key での
-  再 archive もしない (SAME の捏造禁止)。
+- 原本 ZIP / hosted raw を変更しない (repack・新 key での
+  再 archive による SAME 捏造の禁止。不変性の事実主張ではない)。
 
 ## B. missing-3611 inventory + 最小 batch 提案 (未実行)
 
