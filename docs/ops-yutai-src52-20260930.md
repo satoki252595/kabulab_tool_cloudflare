@@ -1,8 +1,8 @@
 # 優待 source52 historical repair — 運用記録 (2026-09-30)
 
 16銘柄・52優待行の historical ABC/desc/利回り修復の実施記録。
-本番コード追加なし。本書に raw 本文・ID・秘密情報・body 成果物は含まない
-(SHA/counts のみ)。
+本番コード追加なし。本書に raw 本文・Notion page ID・秘密情報・body 成果物は
+含まない (公開 stock/context ID・SHA/counts のみ開示)。
 
 ## スコープ
 
@@ -31,12 +31,14 @@
 ## WRITE (exec16。承認済み1回実行)
 
 - 16/16 success、74 statements (preflight16 + ABC38 + desc4 + yield10 + score6)
-- 38 updates (42行 cleanup import + sib 1件 + company 4件 + 7075 2件) +
-  desc 4件 (7075 shares-tier 別)。利回り changed 10銘柄・score 6銘柄
+- 38 groups / 52 rows: 31 groups・42 cleanup 行 + 1 group・sib 2行 +
+  4 groups・company 4行 + 2 groups・7075 4行。desc 4件は 7075 shares-tier 別。
+  利回り changed 10銘柄・score 6銘柄
 - 銘柄別文数: 143:6、343:7、493:6、501:3、515:2、644:4、826:4、927:2、
   1051:2、1095:2、1127:8、1230:4、1243:2、1476:5、1500:7、1546:10
-- 共有 strict sender (exact-200 強制・有限 binds・UNKNOWN STOP)。銘柄毎
-  attempt-before + settle receipt + raw bytes (wx0600)。retry/resend 0
+- 共有 strict sender (success 厳密判定・有限 binds・UNKNOWN STOP) +
+  private fetch-tee の exact-200 強制 (sender 本体の `res.ok` ではない)。
+  銘柄毎 attempt-before + settle receipt + raw bytes (wx0600)。retry/resend 0
 - 実行時計は銘柄毎の送受信 UTC + HTTP Date を記録。EMIT 判定は実測時計のみ
 
 ## POST4 (承認済み1回実行。`yutai-post4-capture-2026-09-30T08-10-53-779Z`)
@@ -52,8 +54,8 @@
 
 ## post-custody (承認済み1回実行)
 
-- 56点 1-ZIP: exec16 raw16+meta16+receipt16、post4 raw6+REPORT+ATTEMPT。
-  8PRE の重複なし。secrets スキャン 0
+- 56点 1-ZIP: exec16 raw16+meta16+receipt16、post4 raw4+LEDGER+RESULT+
+  REPORT+ATTEMPT の8点。8PRE の重複なし。secrets スキャン 0
 - key `6d3f09dacfda2d512b13327c3a8f210e7a49dfacb7bc886ffea723a9d7b540e1`
 - ZIP `03724221f2fa4f3e07c6e644b14fc5d16396e9aaad2b48396ada16622a4f26ba`
   (152,975B)。manifest `fd336d8d9705b13a8aca79aaec8bce505410a3b420111f822ce9e172d9aa6688`
