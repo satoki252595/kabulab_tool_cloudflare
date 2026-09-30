@@ -135,10 +135,6 @@ class JobContext:
             type(record).__name__,
         )
 
-    def mirror_mark_absent(self, code: str) -> bool | None:
-        """コードリスト消失 (listed=False) をローカルへ反映。"""
-        return self._mirror(lambda s: s.mark_master_absent(code), "mark_absent")
-
     def mirror_lifecycle(self, record) -> bool | None:
         """上場廃止/新規上場の状態反映をローカルへ。"""
         return self._mirror(lambda s: s.apply_disclosure_lifecycle(record), "lifecycle")
@@ -209,10 +205,6 @@ class JobContext:
             lambda store: self._mirror_record(store, record, include_lifecycle),
             label,
         )
-
-    def persist_mark_absent(self, code: str, notion_write, *, label: str) -> bool:
-        """listed=False を Notion とローカルへ独立に反映する。"""
-        return self._persist(notion_write, lambda s: s.mark_master_absent(code), label)
 
     def persist_lifecycle(self, record, notion_write, *, label: str) -> bool:
         """ライフサイクル状態 (上場廃止/新規上場) を Notion とローカルへ独立反映する。"""

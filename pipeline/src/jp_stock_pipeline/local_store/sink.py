@@ -118,9 +118,6 @@ class LocalStore:
         if built is not None:
             self._exec(built)
 
-    def mark_master_absent(self, code: str) -> None:
-        self._exec(mappers.mark_absent_update(code))
-
     def write_job_log(
         self,
         job_name: str,
