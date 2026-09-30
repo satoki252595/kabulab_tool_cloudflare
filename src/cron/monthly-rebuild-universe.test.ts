@@ -104,6 +104,8 @@ beforeEach(() => {
   sqlite = new DatabaseSync(":memory:");
   applyD1Migrations(sqlite);
   sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (1, 'QUOカード', 'quo')");
+  // overlay bootstrap base は確定済み (本 test は母集団絞込が対象)。
+  sqlite.exec("INSERT INTO universe_overlay_state (id, base_as_of) VALUES (1, '2026-08-31')");
   seedYutaiStock(EQUITY_ID, "7203", INSTRUMENT_TYPES.equity);
   // 合成コード。JPX の上場銘柄一覧 (2026-08-31 版) にも本番 core_stocks にも無い。
   seedYutaiStock(REIT_ID, "1201", INSTRUMENT_TYPES.reitFund);

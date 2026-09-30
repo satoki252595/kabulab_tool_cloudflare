@@ -266,6 +266,8 @@ function freshDb(): Db {
       if (stmt.trim()) sqlite.exec(stmt);
     }
   }
+  // overlay bootstrap base は確定済み (本 test は保管配線が対象)。
+  sqlite.exec("INSERT INTO universe_overlay_state (id, base_as_of) VALUES (1, '2026-08-31')");
   // jss_financials は pipeline 所有で drizzle migration に無い
   // (daily-jss-annual.test.ts と同じ手書き DDL)。
   sqlite.exec(`

@@ -73,6 +73,10 @@ function recordingDb() {
     async (sql, p) => {
       calls.push(sql);
       params.push([...p]);
+      // overlay state: base 確定・世代未適用 (bootstrap gate 通過)。
+      if (/^\s*select/i.test(sql) && sql.includes("universe_overlay_state")) {
+        return { rows: [[1, "2026-08-31", null, null, null, null, 0, 0, 0, null]] };
+      }
       return { rows: [] };
     },
     {
@@ -199,6 +203,12 @@ function recordingDbWithTargets() {
       }
       if (/count\(\*\)/i.test(sql)) return { rows: [[0]] };
       if (/max\(/i.test(sql)) return { rows: [[null]] };
+      // overlay state: base 確定・世代未適用 (bootstrap gate 通過、適用は進む)。
+      // 列順: id, base_as_of, events_fetched_at, events_sha, eligibility_as_of,
+      // applied_at, applied_delist, applied_listing, applied_transfer, held_listing_codes。
+      if (/^\s*select/i.test(sql) && sql.includes("universe_overlay_state")) {
+        return { rows: [[1, "2026-08-31", null, null, null, null, 0, 0, 0, null]] };
+      }
       return { rows: [] };
     },
     {

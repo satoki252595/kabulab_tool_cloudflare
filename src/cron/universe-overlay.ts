@@ -952,6 +952,16 @@ export async function ensureUniverseOverlay(
   }
 ): Promise<EnsureOverlayResult> {
   const sets = await loadAppliedOverlaySets(db);
+  // bootstrap base 未確定なら reuse/collect 前に HOLD。base_as_of は月次 seed の
+  // 所有 (成功時のみ commit)。null のまま collector へ進むと bootstrapPartial
+  // (当年1年のみ被覆) が適用され、writer が base NULL を永続化する。
+  // 明示 base の owner 適用は applyUniverseOverlay を直接使う (本 gate 外)。
+  if (sets.baseAsOf === null) {
+    throw new OverlayHoldError(
+      [],
+      "母集団 base 未確定のため bootstrap HOLD (月次 seed が base_as_of を所有。明示 base なしには進行不可)。"
+    );
+  }
   if (sets.eligibilityAsOf === opts.eligibilityAsOf) {
     // 同日再入でも HOLD 残があれば正常 return 禁止 (不完全母数での進行を防ぐ)。
     if (sets.heldListingCodes.length > 0) {

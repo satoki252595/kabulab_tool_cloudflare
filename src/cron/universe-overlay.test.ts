@@ -785,9 +785,38 @@ CREATE TABLE universe_overlay_state (
     expect(collect).not.toHaveBeenCalled();
   });
 
+  it("base 未確定 (null) なら reuse/collect 前に bootstrap HOLD (STOP)", async () => {
+    // state 不在 (prod 初期相当): collect せず OverlayHoldError。
+    const collect = vi.fn();
+    const err = await ensureUniverseOverlay(memDb() as never, {
+      eligibilityAsOf: "2026-09-29",
+      collect,
+    }).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(OverlayHoldError);
+    expect((err as OverlayHoldError).codes).toEqual([]);
+    expect((err as Error).message).toContain("bootstrap HOLD");
+    expect(collect).not.toHaveBeenCalled();
+    // base NULL の state 行があっても同じ (不在と同値)。
+    sqlite.exec("INSERT INTO universe_overlay_state (id) VALUES (1)");
+    const collect2 = vi.fn();
+    const err2 = await ensureUniverseOverlay(memDb() as never, {
+      eligibilityAsOf: "2026-09-29",
+      collect: collect2,
+    }).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(err2).toBeInstanceOf(OverlayHoldError);
+    expect((err2 as Error).message).toContain("bootstrap HOLD");
+    expect(collect2).not.toHaveBeenCalled();
+  });
+
   it("elig 一致でも世代 tuple 不完全なら HOLD (不完全失敗)", async () => {
     sqlite.exec(
-      `INSERT INTO universe_overlay_state (id, eligibility_as_of) VALUES (1, '2026-09-29')`
+      `INSERT INTO universe_overlay_state (id, base_as_of, eligibility_as_of) VALUES (1, '2026-08-31', '2026-09-29')`
     );
     const collect = vi.fn();
     const err = await ensureUniverseOverlay(memDb() as never, {
@@ -846,6 +875,8 @@ CREATE TABLE universe_overlay_state (
     sqlite
       .prepare("INSERT INTO core_stocks (code, name, market, is_active) VALUES (?, ?, ?, 1)")
       .run("3000", "x", "グロース（内国株式）");
+    // bootstrap base は確定済み (本 test は chain resume が対象。base なしは別 test)。
+    sqlite.exec("INSERT INTO universe_overlay_state (id, base_as_of) VALUES (1, '2026-08-31')");
     const b = batch("2026-09-29");
     b.sources.delisted.rows = [];
     b.sources.newListings.rows = [];
@@ -874,11 +905,15 @@ CREATE TABLE universe_overlay_state (
       (e: unknown) => e
     );
     expect((boom as Error).message).toBe("state write boom");
-    // partial: core は最終 C まで進むが state は不在 (世代未確定)。
+    // partial: core は最終 C まで進むが世代 tuple は未確定 (base のみ)。
     const mid = sqlite.prepare("SELECT market FROM core_stocks WHERE code='3000'").get() as { market: string };
     expect(mid.market).toBe("プライム（内国株式）");
-    const midState = sqlite.prepare("SELECT COUNT(*) AS n FROM universe_overlay_state").get() as { n: number };
-    expect(midState.n).toBe(0);
+    const midState = sqlite.prepare("SELECT eligibility_as_of, events_fetched_at FROM universe_overlay_state WHERE id=1").get() as {
+      eligibility_as_of: string | null;
+      events_fetched_at: string | null;
+    };
+    expect(midState.eligibility_as_of).toBeNull();
+    expect(midState.events_fetched_at).toBeNull();
     // run2 (retry): 未確定世代は reuse せず再適用し、chain resume で成功する。
     const out = await ensureUniverseOverlay(memDb() as never, {
       eligibilityAsOf: "2026-09-29",
@@ -989,8 +1024,8 @@ CREATE TABLE universe_overlay_state (
 
   it("同日再入でも HOLD 残があれば no-op 正常にしない (BLOCKER 回帰)", async () => {
     sqlite.exec(
-      `INSERT INTO universe_overlay_state (id, eligibility_as_of, events_fetched_at, held_listing_codes)
-       VALUES (1, '2026-09-29', 'GEN-HOLD', '["618A","646A"]')`
+      `INSERT INTO universe_overlay_state (id, base_as_of, eligibility_as_of, events_fetched_at, held_listing_codes)
+       VALUES (1, '2026-08-31', '2026-09-29', 'GEN-HOLD', '["618A","646A"]')`
     );
     const collect = vi.fn();
     const err = await ensureUniverseOverlay(memDb() as never, {
@@ -1045,6 +1080,8 @@ CREATE TABLE universe_overlay_state (
     sqlite
       .prepare("INSERT INTO core_stocks (code, name, market, is_active) VALUES (?, ?, ?, 1)")
       .run("1948", "弘電社", "スタンダード（内国株式）");
+    // 既知 base: collect へ base 8/31 が渡り適用へ進む (known-base positive)。
+    sqlite.exec("INSERT INTO universe_overlay_state (id, base_as_of) VALUES (1, '2026-08-31')");
     const b = batch("2026-09-29");
     b.sources.newListings.rows = b.sources.newListings.rows.slice(0, 1);
     b.sources.transfers.rows = [];
@@ -1058,7 +1095,7 @@ CREATE TABLE universe_overlay_state (
       (e: unknown) => e
     );
     expect(collect).toHaveBeenCalledWith({
-      baseAsOf: null,
+      baseAsOf: "2026-08-31",
       eligibilityAsOf: "2026-09-29",
       skipBasicsFor: new Set(["1948"]),
     });
