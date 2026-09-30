@@ -490,6 +490,12 @@ function toDateString(timestampSec: number): string {
 export interface ChartResult {
   symbol: string;
   price: number | null;
+  /**
+   * source 明示 previousClose (meta.previousClose のみ)。欠損は null。
+   * 確定日足の前日比には使わない (実バー終値と一致しない — 2026-09-30 実測
+   * 4/4 で chartPreviousClose は直前実バー終値と不一致。日足の前日比は
+   * 実バー + 直前実バーの終値で組む)。
+   */
   previousClose: number | null;
   dataDate: string;
   ohlcv: DailyOhlcv[];
@@ -631,11 +637,9 @@ export async function fetchChart(
     ? toDateString(latestTs)
     : new Date().toISOString().split("T")[0];
 
-  const previousClose =
-    meta.previousClose ??
-    meta.chartPreviousClose ??
-    closePrices.filter((p): p is number => p !== null).slice(-2, -1)[0] ??
-    null;
+  // source 明示 previousClose のみ。chartPreviousClose / 日足終値での補完は
+  // しない (実測で別意味と確定 — 呼び出し側は実バー終値で前日比を組む)。
+  const previousClose = meta.previousClose ?? null;
 
   return { symbol, price, previousClose, dataDate, ohlcv };
 }

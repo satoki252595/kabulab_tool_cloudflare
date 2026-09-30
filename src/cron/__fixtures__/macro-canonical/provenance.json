@@ -1,0 +1,88 @@
+{
+  "derivedAt": "2026-09-30T02:34:55.274Z",
+  "actual": {
+    "n225-20260930.json": {
+      "source": "N225-raw.json",
+      "sourceSha256": "4495c7d8e7b4f2e960ebdaa316439847704a7b34435be7a6057e38ab8f3e12dc",
+      "sourceLen": 2937,
+      "slice": "last 3 of 20 bars",
+      "barDates": [
+        "2026-09-28",
+        "2026-09-29",
+        "2026-09-30"
+      ],
+      "observedReq": "2026-09-30T01:55:26.140Z"
+    },
+    "gspc-20260930.json": {
+      "source": "GSPC-raw.json",
+      "sourceSha256": "4288024e4daa277472a8d21215076b2d557a5d683629a2aaf66fda843260cc2d",
+      "sourceLen": 3327,
+      "slice": "last 3 of 21 bars",
+      "barDates": [
+        "2026-09-25",
+        "2026-09-28",
+        "2026-09-29"
+      ],
+      "observedReq": "2026-09-30T01:55:26.772Z"
+    },
+    "vix-20260930.json": {
+      "source": "VIX-raw.json",
+      "sourceSha256": "c56a57dd0a7d659b7d276ba6acfff5ce718f0e56881c3f61d5da3790e8b84245",
+      "sourceLen": 3512,
+      "slice": "last 3 of 22 bars",
+      "barDates": [
+        "2026-09-25",
+        "2026-09-28",
+        "2026-09-29"
+      ],
+      "observedReq": "2026-09-30T01:55:26.922Z"
+    },
+    "niy-20260930.json": {
+      "source": "NIY-raw.json",
+      "sourceSha256": "fd99273b36428a49c382f9b15b70bd5b779436b7e234cc6b1fd1861ac2bccdeb",
+      "sourceLen": 2376,
+      "slice": "last 3 of 22 bars",
+      "barDates": [
+        "2026-09-28",
+        "2026-09-29",
+        "2026-09-30"
+      ],
+      "observedReq": "2026-09-30T01:55:27.099Z"
+    },
+    "n225-20260929.json": {
+      "source": "/tmp/market-src-repair-20260929/yahoo-actuals/N225.json",
+      "sourceSha256": "6ebd7375786d944053ad6921f5fc16f8392f201140ec750ffeb32c31e5873233",
+      "twin": "N225-fresh1-20260928.json content-identical (key-order-only byte diff)",
+      "sourceLen": 2828,
+      "slice": "last 3 of 19 bars",
+      "barDates": [
+        "2026-09-24",
+        "2026-09-25",
+        "2026-09-28"
+      ],
+      "note": "HOLD regression: candidate 9/28 close NULL, no 9/25 fallback"
+    }
+  },
+  "symbolic": {
+    "n225-0910-forming.symbolic.json": {
+      "story": "09:10 JST 9/30: session forming (lastTs==start, rmt<end); confirmed must be 9/29 (prior actual bar, not assumed yesterday)",
+      "values": "round symbolic (test-only)"
+    },
+    "gspc-nullclose.symbolic.json": {
+      "story": "session ended (rmt>=end) but confirmed bar close null -> HOLD (no silent older-bar substitution)",
+      "values": "round symbolic (test-only)"
+    },
+    "n225-friday-stale.symbolic.json": {
+      "story": "lastTs(9/25) < regular.start(Mon 9/28) -> confirmed 9/25; covers lastTs<start path + divergent-date gate test",
+      "values": "round symbolic (test-only)"
+    },
+    "vix-friday-stale.symbolic.json": {
+      "story": "lastTs(9/25) < regular.start(Mon 9/28 Chicago) -> confirmed 9/25; VIX!=key gate test",
+      "values": "round symbolic (test-only)"
+    },
+    "vi-symbolic.html": {
+      "story": "parseable VI page double (DPP-PRP==DYWP); ZXD 2026-09-29",
+      "values": "round symbolic (test-only)"
+    }
+  }
+}
