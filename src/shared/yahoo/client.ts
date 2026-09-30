@@ -49,10 +49,14 @@ const QUOTE_SUMMARY_API_BASE = "https://query1.finance.yahoo.com/v10/finance/quo
 const QUOTE_SUMMARY_MODULES =
   "financialData,defaultKeyStatistics,summaryDetail,incomeStatementHistory";
 const HTTP_ERROR_BODY_MAX_BYTES = 300;
-const DEFAULT_RATE_LIMIT_BACKOFF_MS = 5_000;
-const MAX_RATE_LIMIT_BACKOFF_MS = 30_000;
+/** Retry-After が無い 429 の既定待ち (Yahoo 指定ではなく既定。実測調整可)。 */
+export const DEFAULT_RATE_LIMIT_BACKOFF_MS = 5_000;
 
-/** Retry-After を絶対時刻へ変換し、Actions の実行時間を守るため最大30秒に制限する。 */
+/**
+ * Retry-After を絶対時刻へ変換する。source 実期限を保持し、30 秒への
+ * 短縮はしない (待機 budget の cap は呼び出し側 — Node recovery の
+ * MAX_RECOVERY_BACKOFF_MS — が担う)。非 finite は既定に倒す。
+ */
 function rateLimitRetryAt(response: Response): number | null {
   if (response.status !== 429) return null;
 
@@ -60,7 +64,11 @@ function rateLimitRetryAt(response: Response): number | null {
   const value = response.headers.get("Retry-After")?.trim();
   let delayMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
   if (value && /^\d+$/.test(value)) {
-    delayMs = Number(value) * 1_000;
+    const seconds = Number(value);
+    delayMs =
+      Number.isFinite(seconds) && Number.isFinite(seconds * 1_000)
+        ? seconds * 1_000
+        : DEFAULT_RATE_LIMIT_BACKOFF_MS;
   } else if (value) {
     const retryAt = Date.parse(value);
     if (
@@ -71,7 +79,8 @@ function rateLimitRetryAt(response: Response): number | null {
     }
   }
 
-  return now + Math.min(delayMs, MAX_RATE_LIMIT_BACKOFF_MS);
+  const retryAt = now + delayMs;
+  return Number.isFinite(retryAt) ? retryAt : now + DEFAULT_RATE_LIMIT_BACKOFF_MS;
 }
 
 async function readResponsePrefix(
@@ -154,7 +163,10 @@ let credentialGeneration = 0;
 let credentialRefreshInProgress = false;
 let credentialRefreshAttempt = 0;
 let credentialRefreshStartedAt = 0;
-const credentialRefreshErrors: Record<number, string> = {};
+const credentialRefreshErrors: Record<number, Error> = {};
+/** crumb 429 の期限付き失敗。期限内は同一 typed error を投げ、bootstrap しない。 */
+let credentialRateLimitedUntil = 0;
+let credentialRateLimitError: YahooRateLimitError | null = null;
 const credentialRefreshWaiterCounts: Record<number, number> = {};
 const CREDENTIAL_REFRESH_POLL_MS = 100;
 const MAX_CREDENTIAL_REFRESH_MS = 30_000;
@@ -210,9 +222,9 @@ function removeCredentialRefreshWaiter(refreshAttempt: number): void {
 
 function recordCredentialRefreshError(
   refreshAttempt: number,
-  message: string
+  error: Error
 ): void {
-  credentialRefreshErrors[refreshAttempt] = message;
+  credentialRefreshErrors[refreshAttempt] = error;
   if (credentialRefreshWaiterCounts[refreshAttempt] === undefined) {
     delete credentialRefreshErrors[refreshAttempt];
   }
@@ -225,7 +237,9 @@ function expireCredentialRefresh(refreshAttempt: number): void {
   ) {
     recordCredentialRefreshError(
       refreshAttempt,
-      `Yahoo credential refresh timed out after ${MAX_CREDENTIAL_REFRESH_MS}ms`
+      new Error(
+        `Yahoo credential refresh timed out after ${MAX_CREDENTIAL_REFRESH_MS}ms`
+      )
     );
     credentialRefreshInProgress = false;
   }
@@ -265,6 +279,13 @@ async function bootstrapYahooCredential(
   );
   assertCredentialRefreshOwner(refreshAttempt);
 
+  if (crumbRes.status === 429) {
+    throw new YahooRateLimitError(
+      429,
+      parseRetryAfter(crumbRes),
+      rateLimitRetryAt(crumbRes)
+    );
+  }
   if (!crumbRes.ok) {
     throw new Error(
       await yahooHttpErrorMessage("Yahoo crumb HTTP エラー", crumbRes)
@@ -283,6 +304,13 @@ async function bootstrapYahooCredential(
 async function getYahooCredential(): Promise<YahooCredential> {
   const cached = currentYahooCredential();
   if (cached) return cached;
+
+  if (
+    credentialRateLimitError !== null &&
+    Date.now() < credentialRateLimitedUntil
+  ) {
+    throw credentialRateLimitError;
+  }
 
   if (credentialRefreshInProgress) {
     const joinedAttempt = credentialRefreshAttempt;
@@ -304,7 +332,7 @@ async function getYahooCredential(): Promise<YahooCredential> {
         );
       }
       const refreshError = credentialRefreshErrors[joinedAttempt];
-      if (refreshError !== undefined) throw new Error(refreshError);
+      if (refreshError !== undefined) throw refreshError;
       return getYahooCredential();
     } finally {
       removeCredentialRefreshWaiter(joinedAttempt);
@@ -326,16 +354,31 @@ async function getYahooCredential(): Promise<YahooCredential> {
     };
     cachedCredential = credential;
     credentialExpiry = Date.now() + 30 * 60 * 1000;
+    credentialRateLimitedUntil = 0;
+    credentialRateLimitError = null;
     return credential;
   } catch (error) {
-    const message = redactYahooDiagnostic(
-      error instanceof Error ? error.message : String(error)
-    );
     if (credentialRefreshAttempt === refreshAttempt) {
-      recordCredentialRefreshError(refreshAttempt, message);
+      // waiter 共有は typed 429 の同一 instance か、redact 済み Error の
+      // いずれか。非 typed の原文・raw cause は共有しない (秘密露出防止)。
+      recordCredentialRefreshError(
+        refreshAttempt,
+        error instanceof YahooRateLimitError
+          ? error
+          : new Error(
+              redactYahooDiagnostic(
+                error instanceof Error ? error.message : String(error)
+              )
+            )
+      );
+    }
+    if (error instanceof YahooRateLimitError) {
+      credentialRateLimitedUntil =
+        error.retryAtMs ?? Date.now() + DEFAULT_RATE_LIMIT_BACKOFF_MS;
+      credentialRateLimitError = error;
     }
     if (error instanceof Error) throw error;
-    throw new Error(message, { cause: error });
+    throw new Error(redactYahooDiagnostic(String(error)), { cause: error });
   } finally {
     if (credentialRefreshAttempt === refreshAttempt) {
       credentialRefreshInProgress = false;
@@ -353,7 +396,8 @@ function invalidateYahooCredential(used: YahooCredential): void {
 
 /**
  * crumb 付きの直接 fetch (401 時のみ 1 度 crumb を取り直して retry)。
- * **エッジ (Worker) 上で動く前提**。Cloudflare エッジ IP は Yahoo の 429 に掛からない。
+ * **エッジ (Worker) 上で動く前提**。エッジからでも crumb 取得で 429 を
+ * 観測した実績あり (typed deadline + cooldown で扱う)。
  * 取込プロキシルート (/api/ingest/yahoo) からも直接呼ばれる (export)。
  */
 export async function yahooFetchDirect(url: string): Promise<Response> {
@@ -608,9 +652,13 @@ export async function fetchChart(
 export class YahooRateLimitError extends Error {
   constructor(
     readonly status: number,
-    readonly retryAfterMs: number | null
+    readonly retryAfterMs: number | null,
+    readonly retryAtMs: number | null = null
   ) {
-    super(`yahoo ${status} (rate limited)`);
+    super(
+      `yahoo ${status} (rate limited)` +
+        (retryAtMs !== null ? `; retry-at-ms=${retryAtMs}` : "")
+    );
     this.name = "YahooRateLimitError";
   }
 }
@@ -619,7 +667,10 @@ function parseRetryAfter(r: Response): number | null {
   const ra = r.headers.get("retry-after");
   if (!ra) return null;
   const sec = Number(ra);
-  return Number.isFinite(sec) && sec >= 0 ? sec * 1000 : null;
+  if (!Number.isFinite(sec) || sec < 0 || !Number.isFinite(sec * 1_000)) {
+    return null;
+  }
+  return sec * 1_000;
 }
 
 /** !ok を投げ分ける。429/503 はレート制限として型付きで投げる。 */
