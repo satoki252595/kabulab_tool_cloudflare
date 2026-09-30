@@ -278,24 +278,39 @@ async function defaultRoundTrip(
     body: req.method === "POST" ? req.body ?? "" : undefined,
     redirect: "manual",
   });
+  // 生バイトを先に確保する (後段の失敗時も partial として運ぶため)。
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const text = new TextDecoder().decode(bytes);
   const getSetCookie = (
     res.headers as Headers & { getSetCookie?: () => string[] }
   ).getSetCookie;
   if (typeof getSetCookie !== "function") {
-    throw new Error(
+    const err = new Error(
       "basic: getSetCookie unavailable — session 保管不能のため STOP"
     );
+    (err as Error & { partialRaw?: RoundTripPartialRaw }).partialRaw = {
+      url: req.url,
+      status: res.status,
+      bytes,
+    };
+    throw err;
   }
-  // 生バイトを一次保管し、text はここからの decode (再生成しない)。
-  const bytes = new Uint8Array(await res.arrayBuffer());
+  // text は生バイトからの decode (再生成しない)。
   return {
     status: res.status,
     location: res.headers.get("location"),
     setCookies: getSetCookie.call(res.headers),
     bytes,
-    text: new TextDecoder().decode(bytes),
+    text,
   };
 }
+
+/** roundTrip 層が失敗時に運ぶ得済み生バイト。 */
+export type RoundTripPartialRaw = {
+  url: string;
+  status: number;
+  bytes: Uint8Array<ArrayBuffer>;
+};
 
 function inputTag(formHtml: string, name: string): string | null {
   for (const m of formHtml.matchAll(/<input[^>]*>/g)) {
@@ -352,6 +367,7 @@ export async function collectBasicProfile(
   const nowIso = deps.nowIso ?? (() => new Date().toISOString());
   const jar = new Map<string, string>();
   const code5 = `${code4}0`;
+  const cycleStartedAt = nowIso();
   const partial: BasicPartial = {};
   const mkFetch = async (
     url: string,
@@ -371,11 +387,32 @@ export async function collectBasicProfile(
       code5,
       roundTrip,
       nowIso,
+      cycleStartedAt,
       jar,
       partial,
       mkFetch
     );
   } catch (e) {
+    // roundTrip 層の partialRaw (cookie API 失敗等) は URL で段を特定する。
+    // 当該段のみ未保管なら回収する (他段の有無は問わない)。
+    const raw =
+      e !== null && typeof e === "object"
+        ? (e as { partialRaw?: RoundTripPartialRaw }).partialRaw
+        : undefined;
+    if (raw !== undefined) {
+      const recovered = await mkFetch(
+        raw.url,
+        raw.status,
+        raw.bytes,
+        cycleStartedAt
+      );
+      if (raw.url === TSE_ENTRY_URL) partial.entry ??= recovered;
+      else if (raw.url === `https://www2.jpx.co.jp${TSE_BASIC_PATH}`) {
+        partial.basic ??= recovered;
+      } else if (raw.url.startsWith("https://www2.jpx.co.jp" + TSE_SEARCH_PATH)) {
+        partial.search ??= recovered;
+      }
+    }
     if (
       partial.entry !== undefined ||
       partial.search !== undefined ||
@@ -392,6 +429,7 @@ async function collectBasicProfileInner(
   code5: string,
   roundTrip: BasicRoundTrip,
   nowIso: () => string,
+  cycleStartedAt: string,
   jar: Map<string, string>,
   partial: BasicPartial,
   mkFetch: (
@@ -408,6 +446,13 @@ async function collectBasicProfileInner(
 }> {
   // ---- R1: fresh anonymous entry ----
   const r1 = await roundTrip({ method: "GET", url: TSE_ENTRY_URL });
+  // partial は status/session/schema guard の前に得済み raw から確保する。
+  partial.entry = await mkFetch(
+    TSE_ENTRY_URL,
+    r1.status,
+    r1.bytes,
+    cycleStartedAt
+  );
   if (r1.status !== 200 || r1.location !== null) {
     fail(code4, "R1", `http=${r1.status} redirect=${r1.location !== null}`);
   }
@@ -415,8 +460,6 @@ async function collectBasicProfileInner(
   // session 連続性の強制 (値は出さない。bool のみ)。
   const session1 = jar.get("JSESSIONID") ?? "";
   if (session1 === "") fail(code4, "R1", "JSESSIONID 未発行");
-  const fetchedAt = nowIso();
-  partial.entry = await mkFetch(TSE_ENTRY_URL, r1.status, r1.bytes, fetchedAt);
   const form1 = r1.text.match(
     /<form[^>]*name="JJK010010Form"[^>]*action="([^"]+)"/
   );
@@ -447,6 +490,12 @@ async function collectBasicProfileInner(
     body: body2,
     cookie: cookieHeader(jar),
   });
+  partial.search = await mkFetch(
+    `https://www2.jpx.co.jp${action1}`,
+    r2.status,
+    r2.bytes,
+    cycleStartedAt
+  );
   if (r2.status !== 200 || r2.location !== null) {
     fail(code4, "R2", `http=${r2.status} redirect=${r2.location !== null}`);
   }
@@ -454,12 +503,6 @@ async function collectBasicProfileInner(
   if ((jar.get("JSESSIONID") ?? "") !== session1) {
     fail(code4, "R2", "session 断 (S1 型 bounce)");
   }
-  partial.search = await mkFetch(
-    `https://www2.jpx.co.jp${action1}`,
-    r2.status,
-    r2.bytes,
-    fetchedAt
-  );
   // exact-one は検索結果表の code 列 (index 0) で判定する。
   // 各結果行は gotoBaseJh('CODE5','1') を 1 つ描く。
   if (!r2.text.includes(`gotoBaseJh('${code5}', '1')`)) {
@@ -519,6 +562,12 @@ async function collectBasicProfileInner(
     body: params.toString(),
     cookie: cookieHeader(jar),
   });
+  partial.basic = await mkFetch(
+    `https://www2.jpx.co.jp${TSE_BASIC_PATH}`,
+    r3.status,
+    r3.bytes,
+    cycleStartedAt
+  );
   if (r3.status !== 200 || r3.location !== null) {
     fail(code4, "R3", `http=${r3.status} redirect=${r3.location !== null}`);
   }
@@ -526,12 +575,7 @@ async function collectBasicProfileInner(
   if ((jar.get("JSESSIONID") ?? "") !== session1) {
     fail(code4, "R3", "session 断 (S1 型 bounce)");
   }
-  partial.basic = await mkFetch(
-    `https://www2.jpx.co.jp${TSE_BASIC_PATH}`,
-    r3.status,
-    r3.bytes,
-    fetchedAt
-  );
+  const basicFetchedAt = nowIso();
   const row = parseBasicProfile(r3.text, code4);
   const entry = partial.entry as BasicFetch;
   const search = partial.search as BasicFetch;
@@ -542,7 +586,7 @@ async function collectBasicProfileInner(
     basic,
     evidence: {
       ...row,
-      basicFetchedAt: fetchedAt,
+      basicFetchedAt,
       entrySha: entry.sha256,
       searchSha: search.sha256,
       rawSha: basic.sha256,

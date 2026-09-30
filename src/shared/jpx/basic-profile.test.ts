@@ -9,8 +9,13 @@ import {
   TSE_BASIC_PATH,
   TSE_ENTRY_URL,
   TSE_SEARCH_PATH,
+  type BasicFetch,
   type BasicRoundTrip,
 } from "./basic-profile.js";
+
+type PartialErr = Error & {
+  partial?: { entry?: BasicFetch; search?: BasicFetch; basic?: BasicFetch };
+};
 
 // fixture は 621A S2 実 raw の抜粋。`;jsessionid=` 値のみ REDACTED
 // (他は byte-exact)。event hidden 値は session 非依存の literal。
@@ -128,7 +133,7 @@ describe("collectBasicProfile (mock 3 段・live なし)", () => {
     expect(out.evidence.rawSha).toBe(out.basic.sha256);
   });
 
-  it("R2 session 断は STOP (S1 型 bounce)", async () => {
+  it("R2 session 断は STOP (S1 型 bounce)・bounce body を partial 保管", async () => {
     const { roundTrip } = mockTrip([ENTRY, SEARCH, TABLE]);
     let n = 0;
     const flapping: BasicRoundTrip = async (req) => {
@@ -142,9 +147,20 @@ describe("collectBasicProfile (mock 3 段・live なし)", () => {
       }
       return r;
     };
-    await expect(
-      collectBasicProfile("621A", { roundTrip: flapping })
-    ).rejects.toThrow(/session 断/);
+    const err = await collectBasicProfile("621A", {
+      roundTrip: flapping,
+    }).then(
+      () => null,
+      (e: unknown) => e as PartialErr
+    );
+    expect(err?.message).toMatch(/session 断/);
+    expect(err?.partial?.entry).toBeDefined();
+    // bounce 応答の受信 body は黙殺せず search 段として保管する。
+    expect(err?.partial?.search?.bytes).toEqual(
+      new TextEncoder().encode(SEARCH)
+    );
+    expect(err?.partial?.search?.status).toBe(200);
+    expect(err?.partial?.basic).toBeUndefined();
   });
 
   it("R2 結果表の複数行は exact-one 不成立", async () => {
@@ -192,25 +208,33 @@ describe("collectBasicProfile (mock 3 段・live なし)", () => {
     ).rejects.toThrow(/ListShow/);
   });
 
-  it("R3 失敗時は得済み entry/search を partial に添付する", async () => {
+  it("R3 失敗時は得済み entry/search/basic を partial に添付する", async () => {
     const { roundTrip } = mockTrip([ENTRY, SEARCH, TABLE], [200, 200, 500]);
     const err = await collectBasicProfile("621A", { roundTrip }).then(
       () => null,
-      (e: unknown) => e as Error & { partial?: { entry?: unknown; search?: unknown; basic?: unknown } }
+      (e: unknown) => e as PartialErr
     );
     expect(err?.message).toContain("R3");
     expect(err?.partial?.entry).toBeDefined();
     expect(err?.partial?.search).toBeDefined();
-    expect(err?.partial?.basic).toBeUndefined();
+    // 非 200 body も得済みとして basic 段に保管する (status ごと)。
+    expect(err?.partial?.basic?.bytes).toEqual(
+      new TextEncoder().encode(TABLE)
+    );
+    expect(err?.partial?.basic?.status).toBe(500);
   });
 
-  it("R1 失敗時は partial なし (得済みゼロ)", async () => {
-    const { roundTrip } = mockTrip([ENTRY, SEARCH, TABLE], [500, 200, 200]);
-    const err = await collectBasicProfile("621A", { roundTrip }).then(
+  it("R1 輸送失敗時は partial なし (得済みゼロ)", async () => {
+    const throwing: BasicRoundTrip = async () => {
+      throw new Error("transport down");
+    };
+    const err = await collectBasicProfile("621A", {
+      roundTrip: throwing,
+    }).then(
       () => null,
-      (e: unknown) => e as Error & { partial?: unknown }
+      (e: unknown) => e as PartialErr
     );
-    expect(err?.message).toContain("R1");
+    expect(err?.message).toContain("transport down");
     expect(err?.partial).toBeUndefined();
   });
 });
