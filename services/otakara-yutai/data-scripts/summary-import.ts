@@ -30,10 +30,8 @@
  *   そうしていたが、ガードに掛かるのは「割引を金額にした」「桁を取り違えた」
  *   出力で、同じ回答の要約側も誤読している疑いが強い。行ごとはじいて再依頼する。
  * - 違反を自動で切り詰めて書く: ルール2 (黙って直さない) に反するので採らない。
- * - 5 万円未満にも高額帯と同じ「本文の金額 × 数量 / 合計に一致」を求める: 仕様書が
- *   認める「年間額 ÷ 回数」などが一致せず正しい回答まではじくので採らない。
- *   代わりに共有厳密判定 (額面表示の同定 + 同一 clause の積 + tier 混在 HOLD) で
- *   company 適格を見る。
+ * - 高額帯の数量・合計検査だけで company 適格とする: 全金額で共有厳密判定
+ *   (額面表示の同定 + 同一 clause の積 + tier 混在 HOLD) を別に求める。
  */
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { z } from "../../../src/shared/zod-mini.js";
@@ -52,7 +50,7 @@ import {
   isVerbatimCopy,
   normalizeSummary,
 } from "./summary-contract.js";
-import { TASK_ID_PATTERN, type BenefitRow, type SummaryTask } from "./summary-tasks.js";
+import { TASK_ID_PATTERN, recipientContexts, type BenefitRow, type SummaryTask } from "./summary-tasks.js";
 
 /**
  * 結果ファイル 1 行。外部エージェントの出力。`taskId` / `contractVersion` は
@@ -269,6 +267,13 @@ export function planSummaryImport(input: {
     const row = current.get(result.taskId);
     if (!row) {
       reject("stale", "今の D1 にこの (銘柄, 掲載文) が無い (タスク発行後に再取得で文言が変わった)");
+      continue;
+    }
+    const recipients = recipientContexts(row.minShares.map((minShares, i) => ({
+      minShares, recordMonth: row.recordMonths[i],
+    })));
+    if (JSON.stringify(recipientContexts(task.recipients)) !== JSON.stringify(recipients)) {
+      reject("stale", "タスク発行後に株数・権利月の受取条件が変わった");
       continue;
     }
     const summary = normalizeSummary(result.shortSummary);
