@@ -31,18 +31,24 @@ private 0600 のみ。
 ## Archive runner (CODE CLEAR 待ち・live 未実行)
 
 - script: `services/yuho-quant/data-scripts/overseas-baseline-archive.ts`
-  (blob `56f2abe8fb81`, FULL `99c4f0c8…b82bb`,
-  test blob `6952f36dd534` 5 passed 同梱)。
+  (blob `41e890d7fc68`, FULL `e784c02597c8…bec0`,
+  test blob `9bb228f9db1f` 7 passed 同梱)。
 - fixed key `freshread-baseline-20260930:{liveSHA}` + fetchedAt 08:40:31Z。
   force=false 固定。record → queryUniqueRow 一意性 →
-  verifyArchivedAttachments 全 3 files bytes/SHA。
+  verifyArchivedAttachments 全 3 files bytes/SHA (既存 Promise<void>)。
   Unknown 再送なし。too_large/unknown-manifest は HOLD。
-- 比較: ZIP SHA + 全 160 名 + 159 payload SHA + member-list pin。
-- network budget: notionRequest ≤ 96 (代表 17・worst 典型 26・
-  MAX_RETRY 6 有界) + raw GET 3 (retry なし)。超過は clean-run 主張なし。
-- preflight: exit 0 (送信 0・書込 0)。ZIP/members/pins/key 導出 +
-  notion token present のみ確認。証跡 `archive-preflight.json`
-  `7ae77c5d…fa020d` (0600)。
+- 比較: ZIP bytes+SHA pin + member-list/pins pins + payload 件数。
+  159 payload SHA は freeze 時独立検証済み・同一 ZIP bytes が保証
+  (member-list bytes 照合。新 ZIP parser なし)。
+- 固定 gate (native 前): Notion API 試行 ≤ 96・hosted GET ≤ 3 を
+  実数し、durable log の上で forward。非 GET/非 GET-POST・budget 超過・
+  不明 host は拒否。shared retry 意味・Unknown 不再送は不変。
+  stdout HOLD は safe label (helper 由来 detail は 0600 のみ)。
+- modules pin 10: self 正準化 + shared archive/readback/client/
+  file-upload/page-file/env/index/sha256 + pnpm-lock。
+- preflight: exit 0 (送信 0・書込 0・fetch 拒否固定)。freeze pins +
+  modules + typed TOKEN/PAGE_ID 存在 (欠落は HOLD nonzero)。
+  証跡 `archive-preflight.json` `4cbeafb2…63683` (0600)。
 
 ## Archive 境界 (conditional GO・未実行)
 

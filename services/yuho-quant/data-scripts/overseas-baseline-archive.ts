@@ -31,7 +31,17 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import dotenv from "dotenv";
@@ -74,6 +84,32 @@ const PINS = {
   workHEAD: "f352c7cc3271b7ac7c2e559404f863843dbc4e1d",
   scriptBlob: "666de96eccc74c2d09594d22c6413ea6245a1748",
   scriptFullSHA: "73935bd9d2f7308fd3d3102c49caf7078a4fe75b7735b30c4d6eeb839c7ced83",
+  modules: {
+    archiveSelf: "beefddffe88f4401ee4e8cf0889b2353a432fc3440234a856ec89bbee91bfd44",
+    sharedArchive: "b4388151a2aa36cd6b70fabd4c22d1451641b39c7e7475e6b6c0e109573c5edf",
+    sharedReadback: "6bfde103d2cad0cacd942833d3caa1957e44de167a0ce18345bae492c2b2194c",
+    sharedClient: "4a7f780053ad4bce844e40323e75f4d1713bc1a0c5affe8e4710002192346754",
+    sharedFileUpload: "c63657f6357424c278ebbaee3656cc62f8bc3fc43ca2aa0fe485210998107f8f",
+    sharedPageFile: "48f8574f6b4eac3b8a23f83c343c7e52e1274b5c10fe437ebb59fb9d682a3f59",
+    sharedEnv: "de8449e3b8c5c217e206acac92ca3bfab5005d4a5fef3c7c0608f42a1f4ae1c0",
+    sharedIndex: "6b1f4547c14cd35636d88f5e80e8d0cc5ad861cb8300beabef689106b3cfe6da",
+    sharedSha256: "da3711c4f39656b665f46aa2922adbdf41f3af5045fcf28301540da521a001de",
+    pnpmLock: "805dd5b36ca9ec385b29de1ded715305537eac514dbc7c77dfc55b2d56617e58",
+  } as Record<string, string>,
+};
+
+const SELF_PATH = fileURLToPath(import.meta.url);
+const MODULE_FILES: Record<string, string> = {
+  archiveSelf: SELF_PATH,
+  sharedArchive: join(REPO_ROOT, "src/shared/notion-archive/archive.ts"),
+  sharedReadback: join(REPO_ROOT, "src/shared/notion-archive/readback.ts"),
+  sharedClient: join(REPO_ROOT, "src/shared/notion-archive/client.ts"),
+  sharedFileUpload: join(REPO_ROOT, "src/shared/notion-archive/file-upload.ts"),
+  sharedPageFile: join(REPO_ROOT, "src/shared/notion-archive/page-file.ts"),
+  sharedEnv: join(REPO_ROOT, "src/shared/notion-archive/env.ts"),
+  sharedIndex: join(REPO_ROOT, "src/shared/notion-archive/index.ts"),
+  sharedSha256: join(REPO_ROOT, "src/shared/sha256.ts"),
+  pnpmLock: join(REPO_ROOT, "pnpm-lock.yaml"),
 };
 
 export class HoldError extends Error {
@@ -99,6 +135,17 @@ function writePrivate(path: string, data: string | Buffer): string {
   return sha256Hex(typeof data === "string" ? data : new Uint8Array(data));
 }
 
+/** 追記 + fsync。 */
+export function durableAppend(path: string, line: string): void {
+  const fd = openSync(path, "a", 0o600);
+  try {
+    writeSync(fd, line + "\n");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** grant-first: Root explicit grant なしに実行しない (fetch 0 のまま HOLD)。 */
 export function requireGrant(argv: string[]): string {
   const g = argv.find((a) => a.startsWith("--grant="))?.split("=")[1] ?? "";
@@ -109,6 +156,66 @@ export function requireGrant(argv: string[]): string {
 /** OUT 再利用の拒否 (replay/上書き防止)。 */
 export function assertFreshOutDir(outDir: string): void {
   if (existsSync(outDir)) hold(`OUT 既存のため拒否 (replay/上書き防止): ${outDir}`);
+}
+
+export interface GateCounters {
+  notion: number;
+  hosted: number;
+  rejected: number;
+}
+
+const NOTION_API_HOST = "api.notion.com";
+
+/**
+ * 固定 small gate (native の前)。Notion API 試行 ≤ budget・hosted file
+ * GET ≤ 3 を数え、attempt を durable log へ残してから forward する。
+ * Notion 以外への非 GET・全 budget 超過・GET/POST 以外は拒否する
+ * (本 flow に update/delete は無い)。shared client の retry 意味・
+ * Unknown 不再送は変えない (gate は試行を数えるだけ)。
+ */
+export function createNotionGateFetch(
+  inner: typeof fetch,
+  outDir: string,
+  counters: GateCounters,
+  notionBudget: number,
+  hostedBudget: number
+): typeof fetch {
+  return (async (url: unknown, init?: RequestInit) => {
+    let host: string;
+    try {
+      host = new URL(String(url)).hostname;
+    } catch {
+      counters.rejected += 1;
+      throw new Error("archive gate: URL 形状外のため送らない");
+    }
+    const method = (init?.method ?? "GET").toUpperCase();
+    const isNotion = host === NOTION_API_HOST;
+    if (!isNotion) {
+      if (method !== "GET" || counters.hosted >= hostedBudget) {
+        counters.rejected += 1;
+        throw new Error("archive gate: hosted GET 上限外・非 GET のため送らない");
+      }
+      counters.hosted += 1;
+    } else {
+      if (method !== "GET" && method !== "POST") {
+        counters.rejected += 1;
+        throw new Error("archive gate: GET/POST 以外の mutation 系は送らない");
+      }
+      if (counters.notion >= notionBudget) {
+        counters.rejected += 1;
+        throw new Error(`archive gate: Notion budget 外 (${notionBudget}) のため送らない`);
+      }
+      counters.notion += 1;
+    }
+    durableAppend(
+      join(outDir, "notion-attempt.log"),
+      JSON.stringify({
+        seq: counters.notion + counters.hosted,
+        host, method, at: new Date().toISOString(), phase: "send",
+      })
+    );
+    return inner(url as string, init);
+  }) as typeof fetch;
 }
 
 /** network budget の事後断言 (嵐を超えたら clean-run 主張なし)。 */
@@ -128,7 +235,12 @@ export interface FreezeFiles {
   pinsBytes: Buffer;
 }
 
-/** freeze 成果物の読込 + pin 照合 (送信 0)。member-list の 159 payload SHA 全照合つき。 */
+/**
+ * freeze 成果物の読込 + pin 照合 (送信 0)。ZIP bytes+SHA pin +
+ * member-list/pins pins + payload 件数を照合する。159 payload SHA は
+ * freeze 時に独立検証済みであり、同一 ZIP bytes の pin がそれを保証する
+ * (新 ZIP parser なし・member-list bytes 照合が 159 行の同一性を担う)。
+ */
 export function loadFreeze(freezeDir: string): FreezeFiles {
   const zipName = "freshread-baseline-20260930.zip";
   const memberListName = "member-list.json";
@@ -161,6 +273,36 @@ export function loadFreeze(freezeDir: string): FreezeFiles {
   return { zipName, zipBytes, memberListName, memberListBytes, pinsName, pinsBytes };
 }
 
+/**
+ * loaded modules の bytes SHA 照合 (送信 0)。self は pin 行を TODO へ
+ * 正準化した形で pin し、実 full-file SHA は別途報告する (循環回避)。
+ */
+export function assertModules(): { moduleSHAs: Record<string, string>; scriptFullSHA: string } {
+  const moduleSHAs: Record<string, string> = {};
+  let scriptFullSHA = "";
+  for (const [k, p] of Object.entries(MODULE_FILES)) {
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(p);
+    } catch {
+      hold(`module 不在: ${k}`);
+    }
+    if (k === "archiveSelf") {
+      scriptFullSHA = sha256Hex(new Uint8Array(bytes));
+      bytes = Buffer.from(
+        bytes.toString("utf8").replace(/archiveSelf: "[0-9a-f]{64}"/, 'archiveSelf: "TODO"'),
+        "utf8"
+      );
+    }
+    const got = sha256Hex(new Uint8Array(bytes));
+    if (got !== (PINS.modules as Record<string, string>)[k]) {
+      hold(`${k} module pin外: got=${got.slice(0, 16)}…`);
+    }
+    moduleSHAs[k] = got;
+  }
+  return { moduleSHAs, scriptFullSHA };
+}
+
 /** archive metadata (counts/SHA のみ。IDs/values 0)。 */
 export function buildMetadata(): Record<string, unknown> {
   return {
@@ -180,6 +322,7 @@ export function buildMetadata(): Record<string, unknown> {
 async function main(): Promise<void> {
   const grant = requireGrant(process.argv);
   const freeze = loadFreeze(FREEZE_DIR);
+  const { moduleSHAs, scriptFullSHA } = assertModules();
   if (!existsSync(ENV_FILE)) hold(`env-file 不在: ${ENV_FILE} (--env-file で指定)`);
   dotenv.config({ path: ENV_FILE, quiet: true });
   const workHead = execFileSync("git", ["-C", REPO_ROOT, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -193,16 +336,38 @@ async function main(): Promise<void> {
     { filename: freeze.pinsName, contentType: "application/json", bytes: new Uint8Array(freeze.pinsBytes) },
   ];
 
+  // 固定 gate を native の前に設置する (本プロセスの load 経路に
+  // fetch 上書きは無いため main 先頭の capture で足りる)。
+  const nativeFetch = globalThis.fetch.bind(globalThis);
+  const gate: GateCounters = { notion: 0, hosted: 0, rejected: 0 };
+  globalThis.fetch = createNotionGateFetch(nativeFetch, OUT_DIR, gate, NOTION_BUDGET, RAW_GET_BUDGET);
+
+  // live 区間: helper 由来の detail (pageID/body を含み得る) は 0600 に
+  // だけ残し、stdout には safe label のみ出す。
+  const guardLive = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (e) {
+      writePrivate(
+        join(OUT_DIR, "hold-detail.json"),
+        JSON.stringify({ at: new Date().toISOString(), label, detail: String((e as Error)?.message ?? e) })
+      );
+      hold(`${label} (詳細は private hold-detail.json 参照)`);
+    }
+  };
+
   resetNotionStats();
-  const result = await recordPrimaryData({
-    service: SERVICE,
-    key: BASELINE_KEY,
-    source: SOURCE,
-    fetchedAt: FETCHED_AT,
-    metadata: buildMetadata(),
-    files,
-    force: false,
-  });
+  const result = await guardLive("baseline record 失敗", () =>
+    recordPrimaryData({
+      service: SERVICE,
+      key: BASELINE_KEY,
+      source: SOURCE,
+      fetchedAt: FETCHED_AT,
+      metadata: buildMetadata(),
+      files,
+      force: false,
+    })
+  );
   if (result.fileTooLarge) {
     hold("full-hosted 不可 (WS 上限超過ファイルあり)。記録事実は残す。custody 主張なし");
   }
@@ -211,25 +376,30 @@ async function main(): Promise<void> {
   }
 
   // 一意性: 同一 key の行が1件かつ今回 pageId と一致すること。
-  const parentPageId = notionEnv.NOTION_ARCHIVE_PAGE_ID() as string;
-  const dbId = await findUniqueBackupChildByTitle({
-    parentPageId, title: `一次データ｜${SERVICE}`, kind: "database",
+  const row = await guardLive("baseline 一意性確認失敗", async () => {
+    const parentPageId = notionEnv.NOTION_ARCHIVE_PAGE_ID() as string;
+    const dbId = await findUniqueBackupChildByTitle({
+      parentPageId, title: `一次データ｜${SERVICE}`, kind: "database",
+    });
+    if (!dbId) hold("backup DB 不在 (一意性確認不能)");
+    return queryUniqueRow<{ id: string }>(
+      dbId, { property: "Key", title: { equals: BASELINE_KEY } }, "baseline archive 一意性"
+    );
   });
-  if (!dbId) hold("backup DB 不在 (一意性確認不能)");
-  const row = await queryUniqueRow<{ id: string }>(
-    dbId, { property: "Key", title: { equals: BASELINE_KEY } }, "baseline archive 一意性"
-  );
   if (!row || row.id !== result.pageId) hold("行一意性外 (0件・複数・pageId 不一致)");
 
   // readback: 全 3 files の hosted bytes (長さ+SHA) 照合。
-  await verifyArchivedAttachments(
-    result.pageId,
-    files.map((f) => ({ filename: f.filename, bytes: f.bytes })),
-    "baseline"
+  // (既存 signature Promise<void> のまま。失敗は throw → private 保持。)
+  await guardLive("baseline readback 照合失敗", () =>
+    verifyArchivedAttachments(
+      result.pageId,
+      files.map((f) => ({ filename: f.filename, bytes: f.bytes })),
+      "baseline"
+    )
   );
 
   const stats = notionStats();
-  assertBudget(stats, files.length);
+  assertBudget({ requests: gate.notion }, gate.hosted);
 
   const report = {
     at_start: STARTED_AT, at_end: new Date().toISOString(), result: "PASS",
@@ -237,7 +407,8 @@ async function main(): Promise<void> {
     key: BASELINE_KEY, fetchedAt: FETCHED_AT,
     outcome: result.outcome, manifestMatch: result.manifestMatch, fileTooLarge: result.fileTooLarge,
     pageId: result.pageId,
-    scope: { ...PINS, notionBudget: NOTION_BUDGET, rawGetBudget: RAW_GET_BUDGET },
+    scope: { ...PINS, modules: moduleSHAs, scriptFullSHA, notionBudget: NOTION_BUDGET, rawGetBudget: RAW_GET_BUDGET },
+    gate,
     notionStats: stats,
     zeros: { sourceGET: 0, d1read: 0, d1write: 0, r2: 0, dispatch: 0, force: 0, resendUnknown: 0 },
     limits: [
@@ -252,24 +423,32 @@ async function main(): Promise<void> {
     result: "PASS", outcome: result.outcome, manifestMatch: result.manifestMatch,
     keySHA: sha256Hex(BASELINE_KEY),
     zip: { bytes: PINS.zipBytes, sha256: PINS.zipSHA, members: PINS.zipMembers },
-    notionStats: stats,
+    modules: moduleSHAs, scriptFullSHA,
+    gate, notionStats: stats,
     zeros: report.zeros, limits: report.limits,
     artifacts: { report: { path: join(OUT_DIR, "archive-report.json"), sha256: reportSHA } },
     at_end: report.at_end,
   }));
 }
 
-/** preflight: 純粋検証のみ (送信 0・FS 書込 0)。 */
+/**
+ * preflight: 純粋検証のみ (送信 0・FS 書込 0)。fetch は拒否で固定する。
+ * typed TOKEN + PAGE_ID の存在も要求し、欠落は HOLD (nonzero)。
+ * PASS-like の absent exit 0 は出さない。
+ */
 function preflight(): void {
+  globalThis.fetch = (() => {
+    throw new Error("preflight: network fetch denied");
+  }) as typeof fetch;
   const freeze = loadFreeze(FREEZE_DIR);
+  const { moduleSHAs, scriptFullSHA } = assertModules();
   if (!existsSync(ENV_FILE)) hold(`env-file 不在: ${ENV_FILE}`);
   dotenv.config({ path: ENV_FILE, quiet: true });
-  let notionPresent: string;
   try {
     notionEnv.NOTION_TOKEN();
-    notionPresent = "present";
+    notionEnv.NOTION_ARCHIVE_PAGE_ID();
   } catch {
-    notionPresent = "absent-HOLD-at-live";
+    hold("notion env 不在 (NOTION_TOKEN / NOTION_ARCHIVE_PAGE_ID)");
   }
   const meta = JSON.stringify(buildMetadata());
   console.info(JSON.stringify({
@@ -283,7 +462,8 @@ function preflight(): void {
       { name: freeze.memberListName, bytes: freeze.memberListBytes.length },
       { name: freeze.pinsName, bytes: freeze.pinsBytes.length },
     ],
-    notionToken: notionPresent,
+    modules: moduleSHAs, scriptFullSHA,
+    notionEnv: "present",
     budget: { notionRequests: NOTION_BUDGET, rawGets: RAW_GET_BUDGET },
   }));
 }
