@@ -1,0 +1,5 @@
+{
+  "_provenance": "Excerpt of 14 real codes verified present in actual 9/30 post active-equity universe (3695 codes, sorted-join-sha e441dd1fdfccacb7a3f448c16495259d4e4b19b5acd4ae913f5502beeb86beb3, post SHA9bc6b50b). Predicate: isActive==1 AND instrumentType==equity. Members: range boundaries (1301/9997), control 7203, new listing 618A, actual run-36698387232 error codes (7944/8303/8919), deterministic spread (every 263rd). Full 3695 list stays private (Notion + /tmp only), never committed.",
+  "_codesAreRealOutcomesAreStructural": "Codes are observed. Outcome values attached in tests are explicitly STRUCTURAL placeholders (shape/size proof), never claimed as observed ingestion results.",
+  "codes": ["1301", "2286", "296A", "3486", "3993", "4439", "4951", "584A", "618A", "7203", "7944", "8303", "8919", "9997"]
+}

@@ -13,6 +13,7 @@ import {
   sourceObservedAggregate,
   universePin,
 } from "./ingest-guard.js";
+import excerpt from "./__fixtures__/universe-excerpt.json";
 
 describe("findInvalidBars", () => {
   const good = { o: 100, h: 110, l: 90, c: 105, v: 1000 };
@@ -216,19 +217,29 @@ describe("buildIngestSummary", () => {
     expect(s.metadata.sourceObserved).toEqual({ count: 1, maxDate: null, maxTs: 1757548800 });
   });
 
-  it("3695 件級でも metadata は Notion 上限内に収まる (offline size bound)", () => {
-    // 実 code 形 (4-5 ASCII) × 3695 の worst-case outcomes。本文は大きくてよい。
+  it("実 code 抜粋で metadata は Notion 上限内に収まる (excerpt size bound)", () => {
+    // codes は実抜粋 (fixture provenance 参照)。metadata は counts+pin+集約
+    // のみで code 件数に依存しない (O(1)) ため、抜粋で上限適合を証明し、
+    // 3695 実件は private offline proof (報告のみ、raw 非 commit) で確認する。
+    // outcome 値・unknown/rejected 所属は STRUCTURAL (形状保持の証明用。
+    // 観測結果の主張ではない)。
+    const codes = excerpt.codes as string[];
     const outcomes: Record<string, { status: "written"; latestSourceBar: string; bodySha: string }> = {};
-    for (let i = 0; i < 3695; i++) {
-      const code = `${String(1000 + (i % 9000))}${i % 2 === 0 ? "A" : ""}`;
+    for (const code of codes) {
       outcomes[code] = { status: "written", latestSourceBar: "2026-09-30", bodySha: "b".repeat(64) };
     }
-    const n = Object.keys(outcomes).length;
     const s = buildIngestSummary({
       ...stats,
-      codes: n,
-      written: n,
-      universe: { size: n, sha256: "e".repeat(64) },
+      kind: "daily",
+      range: "1mo-diff/10y-backfill",
+      codes: codes.length,
+      written: codes.length,
+      unknown: ["4439"],
+      rejected: ["584A"],
+      universe: {
+        size: codes.length,
+        sha256: "da8250ddb370ece4dc6c62e68542adbae0dcf991ebb261a0e7fa3ea918586e4c",
+      },
       outcomes,
     });
     // metadata: rich_text 配列 ≤100 要素 (text 2000 刻み)・blocks ≤1000・
@@ -240,12 +251,15 @@ describe("buildIngestSummary", () => {
     expect(richTextItems).toBeLessThanOrEqual(10);
     const bodyBlocks = Math.ceil(metaLen / 2000);
     expect(bodyBlocks).toBeLessThanOrEqual(10);
-    // 本文は full outcomes + unknown/rejected 一覧を保持する (欠落なし)。
+    expect("outcomes" in (s.metadata as Record<string, unknown>)).toBe(false);
+    expect(s.metadata.unknownCount).toBe(1);
+    expect(s.metadata.rejectedCount).toBe(1);
+    // 本文は全 outcomes + 非空 unknown/rejected 一覧を保持する (欠落なし)。
     const body = JSON.parse(new TextDecoder().decode(s.files[0].bytes));
-    expect(Object.keys(body.outcomes)).toHaveLength(n);
-    expect(body.universe.sha256).toBe("e".repeat(64));
-    expect(body.unknown).toEqual([]);
-    expect(body.rejected).toEqual([]);
+    expect(Object.keys(body.outcomes)).toHaveLength(codes.length);
+    expect(body.universe.sha256).toBe("da8250ddb370ece4dc6c62e68542adbae0dcf991ebb261a0e7fa3ea918586e4c");
+    expect(body.unknown).toEqual(["4439"]);
+    expect(body.rejected).toEqual(["584A"]);
   });
 
   it("日付キーが取れないfinishedAtは投げる", () => {
