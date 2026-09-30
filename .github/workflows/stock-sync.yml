@@ -123,6 +123,26 @@ jobs:
             (github.event.inputs.target == 'daily' || github.event.inputs.target == 'stocks' || github.event.inputs.target == 'all'))
         run: pnpm sync:daily:core --stocks-only
 
+      # sector33 のみ同期。株式 daily 成功＋trade_date 非空の直後、moneyflow 前。
+      # context/monthly 単独では daily が skip されるため走らない。
+      # 失敗 (partial 含む) は sync job を落として moneyflow を止める。
+      - uses: DeterminateSystems/nix-installer-action@main
+        if: steps.daily.conclusion == 'success' && steps.daily.outputs.trade_date != ''
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+        if: steps.daily.conclusion == 'success' && steps.daily.outputs.trade_date != ''
+      - name: Sync pipeline dependencies
+        if: steps.daily.conclusion == 'success' && steps.daily.outputs.trade_date != ''
+        run: nix develop -c bash -c 'cd pipeline && uv sync --frozen'
+      - name: sector33 sync
+        if: steps.daily.conclusion == 'success' && steps.daily.outputs.trade_date != ''
+        env:
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
+        run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.sector33_sync'
+
       - name: market context sync
         if: >-
           (github.event_name == 'schedule' && github.event.schedule == '0 21 * * 1-5') ||

@@ -10,8 +10,11 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import re
+import zipfile
 from datetime import date, datetime
 from pathlib import Path
 
@@ -137,18 +140,87 @@ class TestMasterSync:
         # (従来は 1[⑤] + 5[per-record] = 6 だった)。
         assert calls["n"] == 2
 
-    def test_dedup_by_code_keeps_last_occurrence(self):
-        """同一コードの重複は最後を採用（事前マップ運用での二重 create を防ぐ）。"""
-        from jp_stock_pipeline.jobs.master_sync import _dedup_by_code
+    def test_duplicate_codelist_aborts_before_upsert(self, monkeypatch, tmp_path, captured_clients):
+        """重複は last-wins で潰さず STOP する (strict unique)。① 書込 0。"""
+        raw = fixture_path("edinet/Edinetcode.zip").read_bytes()
+        text = zipfile.ZipFile(io.BytesIO(raw)).read("EdinetcodeDlInfo.csv").decode("cp932")
+        lines = text.split("\n")
+        dup_line = next(line for line in lines[2:] if line.strip())
+        if lines[-1] == "":
+            lines[-1:] = [dup_line]
+        else:
+            lines.append(dup_line)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("EdinetcodeDlInfo.csv", "\n".join(lines).encode("cp932"))
+        dup_bytes = buf.getvalue()
 
-        class _R:
-            def __init__(self, code, name):
-                self.code = code
-                self.name = name
+        def fake_fetch(settings):
+            return save_raw(
+                dup_bytes,
+                source=Source.EDINET,
+                datatype="codelist",
+                scope="ALL",
+                data_date=date(2026, 6, 10),
+                url="fixture://edinet/Edinetcode.zip",
+                ext="zip",
+                license_tag=source_license(Source.EDINET),
+                base_dir=settings.raw_data_dir,
+            )
 
-        out = _dedup_by_code([_R("7203", "a"), _R("6758", "b"), _R("7203", "c")])
-        assert [r.code for r in out] == ["7203", "6758"]  # 初出順を維持
-        assert {r.code: r.name for r in out}["7203"] == "c"  # 値は最後の出現
+        monkeypatch.setattr(edinet_codelist, "fetch_codelist", fake_fetch)
+        code = master_sync.main(["--dry-run"], env=_env(tmp_path))
+        assert code == 1
+        client = captured_clients[0]
+        assert _ops_with_prop(client, S.MASTER_PROP_NAME) == []
+
+    def test_sector_gets_qualified_subset_blank_upserted(
+        self, monkeypatch, tmp_path, captured_clients
+    ):
+        """①upsert は blank issuer を含み、sector 入力は資格側だけ (最小区別)。"""
+        raw = fixture_path("edinet/Edinetcode.zip").read_bytes()
+        text = zipfile.ZipFile(io.BytesIO(raw)).read("EdinetcodeDlInfo.csv").decode("cp932")
+        lines = text.split("\n")
+        header = next(csv.reader([lines[1]]))
+        ei = header.index("ＥＤＩＮＥＴコード")
+        row = next(csv.reader([lines[2]]))
+        row[ei] = ""
+        buf = io.StringIO()
+        csv.writer(buf, lineterminator="").writerow(row)
+        lines[2] = buf.getvalue()
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as zf:
+            zf.writestr("EdinetcodeDlInfo.csv", "\n".join(lines).encode("cp932"))
+        blank_bytes = out.getvalue()
+
+        def fake_fetch(settings):
+            return save_raw(
+                blank_bytes,
+                source=Source.EDINET,
+                datatype="codelist",
+                scope="ALL",
+                data_date=date(2026, 6, 10),
+                url="fixture://edinet/Edinetcode.zip",
+                ext="zip",
+                license_tag=source_license(Source.EDINET),
+                base_dir=settings.raw_data_dir,
+            )
+
+        monkeypatch.setattr(edinet_codelist, "fetch_codelist", fake_fetch)
+        seen: dict = {}
+
+        def capture_sector(ctx, records):
+            seen["codes"] = [r.code for r in records]
+
+        monkeypatch.setattr(master_sync, "_sync_sector33", capture_sector)
+        code = master_sync.main(["--dry-run"], env=_env(tmp_path))
+        assert code == 0
+        records = edinet_codelist.parse_codelist(blank_bytes)
+        blank_ticker = next(r.code for r in records if not r.edinet_code)
+        client = captured_clients[0]
+        assert len(_ops_with_prop(client, S.MASTER_PROP_NAME)) == len(records)
+        assert blank_ticker not in seen["codes"]
+        assert len(seen["codes"]) == len(records) - 1
 
     def test_raw_upload_failure_aborts_structured_writes(
         self, monkeypatch, tmp_path, captured_clients

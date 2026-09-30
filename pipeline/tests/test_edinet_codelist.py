@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import io
 import zipfile
+from dataclasses import replace
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 from conftest import fixture_path
@@ -230,6 +232,62 @@ class TestTrustBoundary:
         assert records[0].code == "7203"
 
 
+class TestInspectCandidates:
+    """共有候補検査 (master_sync / sector33_sync 共通)。実 record 由来で組む。"""
+
+    def test_実フィクスチャは重複なし順序保持(self):
+        records = mod.parse_codelist(_zip_bytes())
+        out = mod.inspect_codelist_candidates(records)
+        assert out.holds == []
+        assert [r.code for r in out.candidates] == [r.code for r in records]
+        # 実 source に blank issuer なし: sector 資格は全候補と一致する
+        assert [r.code for r in out.sector] == [r.code for r in records]
+
+    def test_同一tickerの重複はSTOP(self):
+        records = mod.parse_codelist(_zip_bytes())
+        with pytest.raises(mod.CodelistInspectError) as ei:
+            mod.inspect_codelist_candidates([*records, records[0]])
+        assert ei.value.kind == "dup-ticker-stop"
+
+    def test_同一tickerの矛盾行もSTOP(self):
+        records = mod.parse_codelist(_zip_bytes())
+        other = replace(records[0], edinet_code="E99999", name="別名")
+        with pytest.raises(mod.CodelistInspectError) as ei:
+            mod.inspect_codelist_candidates([*records, other])
+        assert ei.value.kind == "dup-ticker-stop"
+
+    def test_同一EDINETの複数tickerはSTOP(self):
+        records = mod.parse_codelist(_zip_bytes())
+        other = replace(records[0], code="9999")
+        assert "9999" not in {r.code for r in records}
+        with pytest.raises(mod.CodelistInspectError) as ei:
+            mod.inspect_codelist_candidates([*records, other])
+        assert ei.value.kind == "dup-issuer-stop"
+
+    def test_blankEDINETは衝突せずsector除外とHOLD(self):
+        records = mod.parse_codelist(_zip_bytes())
+        a = replace(records[0], edinet_code=None)
+        b = replace(records[1], edinet_code=None)
+        out = mod.inspect_codelist_candidates([a, b])
+        assert [r.code for r in out.candidates] == [a.code, b.code]
+        assert out.sector == []
+        assert [h.kind for h in out.holds] == ["blank-issuer-hold"] * 2
+
+    def test_不正nonemptyEDINETはSTOP(self):
+        records = mod.parse_codelist(_zip_bytes())
+        bad = replace(records[0], edinet_code="XYZ")
+        with pytest.raises(mod.CodelistInspectError) as ei:
+            mod.inspect_codelist_candidates([*records, bad])
+        assert ei.value.kind == "invalid-issuer-stop"
+
+    def test_0000phantomは非候補とHOLD(self):
+        records = mod.parse_codelist(_zip_bytes())
+        phantom = replace(records[0], code="0000")
+        out = mod.inspect_codelist_candidates([*records, phantom])
+        assert "0000" not in {r.code for r in out.candidates}
+        assert [h.kind for h in out.holds] == ["legal-missing-ticker"]
+
+
 class TestFetchCodelist:
     def test_saves_raw_with_license(self, tmp_path, monkeypatch):
         """fetch をモックし（内容は実フィクスチャのバイト列）保存経路を検証する。"""
@@ -248,6 +306,41 @@ class TestFetchCodelist:
         assert art.scope == "ALL"
         assert art.license_tag is LicenseTag.COMMERCIAL_OK
         assert art.url == mod.CODELIST_URL
+
+    def test_on_response_receives_same_response(self, tmp_path, monkeypatch):
+        """同一 Response を callback へ渡す。渡さない既存呼び出しは不変。"""
+        data = _zip_bytes()
+        resp = SimpleNamespace(
+            content=data,
+            status_code=200,
+            url=mod.CODELIST_URL,
+            headers={"content-length": str(len(data))},
+        )
+        monkeypatch.setattr(mod, "fetch", lambda url, **kw: resp)
+        settings = load_settings(env={"RAW_DATA_DIR": str(tmp_path)}, dry_run=True)
+        seen: list = []
+        art = mod.fetch_codelist(settings, on_response=seen.append)
+        assert seen == [resp]
+        assert art.local_path.read_bytes() == data
+
+    def test_response_metadata_allowlist(self):
+        """status・最終 URL・安全 header のみ。secret/auth 系は捨てる。"""
+        resp = SimpleNamespace(
+            status_code=200,
+            url="https://disclosure2dl.edinet-fsa.go.jp/x/Edinetcode.zip",
+            headers={
+                "Content-Type": "application/zip",
+                "Content-Length": "571872",
+                "Set-Cookie": "SID=secret",
+                "Authorization": "Bearer secret",
+                "X-Custom-Session": "abc",
+            },
+        )
+        assert mod.response_metadata(resp) == {
+            "status": 200,
+            "finalUrl": "https://disclosure2dl.edinet-fsa.go.jp/x/Edinetcode.zip",
+            "headers": {"content-type": "application/zip", "content-length": "571872"},
+        }
 
 
 class TestConvertCodelist:

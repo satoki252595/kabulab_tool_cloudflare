@@ -74,8 +74,8 @@ class TestNormalizeSector33:
 
 
 class TestBuildSector33Updates:
-    def _changes(self, n: int) -> dict[str, str | None]:
-        names = list(TSE_SECTOR33_NAMES) + [None]
+    def _changes(self, n: int) -> dict[str, str]:
+        names = list(TSE_SECTOR33_NAMES)
         return {f"{1000 + i:04d}": names[i % len(names)] for i in range(n)}
 
     def test_updated_at_を_SET_しない(self) -> None:
@@ -112,6 +112,15 @@ class TestBuildSector33Updates:
     def test_差分が無ければ0文(self) -> None:
         assert cs.build_sector33_updates({}) == []
 
+    def test_None値は拒否する(self) -> None:
+        """backstop: plan 側で排除済みのはず。二重の関門。"""
+        with pytest.raises(ValueError, match="None を書かない"):
+            cs.build_sector33_updates({"7203": None})
+
+    def test_33業種外の名称は拒否する(self) -> None:
+        with pytest.raises(ValueError, match="33業種外"):
+            cs.build_sector33_updates({"7203": "未知業種X"})
+
 
 class TestPlanSector33Updates:
     def test_変わる行だけを返す(self) -> None:
@@ -139,11 +148,34 @@ class TestPlanSector33Updates:
         changes = cs.plan_sector33_updates(current, [("72030", "輸送用機器")])
         assert changes == {"7203": "輸送用機器"}
 
-    def test_コードリストに居て業種が33業種外なら_NULL_を書く(self) -> None:
+    def test_コードリストに居て業種が33業種外ならretainする(self) -> None:
+        """未知 sector は None を desired へ入れず確証済みの既値を保持する。"""
         current = [{"code": "9999", "sector33": "サービス業"}]
-        assert cs.plan_sector33_updates(current, [("99990", "外国法人・組合")]) == {
-            "9999": None
-        }
+        assert cs.plan_sector33_updates(current, [("99990", "外国法人・組合")]) == {}
+        assert cs.plan_sector33_updates(current, [("99990", "未知業種X")]) == {}
+
+    def test_同一tickerの重複はSTOPする(self) -> None:
+        """last-wins は廃止。重複は潰さず STOP する。"""
+        current = [{"code": "7203", "sector33": None}]
+        with pytest.raises(ValueError, match="ticker 重複"):
+            cs.plan_sector33_updates(
+                current, [("72030", "輸送用機器"), ("7203", "輸送用機器")]
+            )
+
+    def test_未知firstから既知への重複もSTOPする(self) -> None:
+        """先行行の未知 sector が continue されても後続の重複を見逃さない。"""
+        current = [{"code": "7203", "sector33": None}]
+        with pytest.raises(ValueError, match="ticker 重複"):
+            cs.plan_sector33_updates(
+                current, [("72030", "外国法人・組合"), ("7203", "輸送用機器")]
+            )
+
+    def test_未知同士の重複もSTOPする(self) -> None:
+        current = [{"code": "7203", "sector33": None}]
+        with pytest.raises(ValueError, match="ticker 重複"):
+            cs.plan_sector33_updates(
+                current, [("72030", "外国法人・組合"), ("7203", "未知業種X")]
+            )
 
     def test_差分が無ければ空(self) -> None:
         current = [{"code": "7203", "sector33": "輸送用機器"}]
