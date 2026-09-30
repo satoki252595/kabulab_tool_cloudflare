@@ -2,7 +2,7 @@
 
 - 金融庁公開のコードリスト zip（CSV同梱）を取得する。商用利用可
   (公共データ利用規約 PDL1.0 準拠 §2.1) のため license_tag=commercial-ok
-- zip 内 CSV は cp932。1行目はメタ行（ダウンロード実行日・件数）、
+- zip 内 CSV は cp932。1行目はメタ行（公表基準日・件数）、
   2行目がヘッダ、3行目以降がデータ（実レスポンスで確認済み）
 - 証券コードは5桁（末尾0、例 "72030"・新方式 "409A0"）→ 4桁に正規化
 - 変換版は cp932→UTF-8 の文字コード正規化のみ（値不変 §5.2）
@@ -122,17 +122,26 @@ def fetch_codelist(
         )
     if on_response is not None:
         on_response(resp)
-    return save_raw(
-        resp.content,
-        source=Source.EDINET,
-        datatype="codelist",
-        scope="ALL",
-        data_date=now_jst().date(),  # 取得日（リスト自体が取得日現在のスナップショット）
-        url=CODELIST_URL,
-        ext="zip",
-        license_tag=LicenseTag.COMMERCIAL_OK,
-        base_dir=settings.raw_data_dir,
-    )
+    data_date = None
+    try:
+        data_date = _meta_row_date(
+            next(csv.reader(io.StringIO(_read_codelist_csv(resp.content))), [])
+        )
+    finally:
+        # 日付解読に失敗しても原本は保全する。例外は呼出側へ伝播し、
+        # 不正ZIPを成功扱いしない。取得時刻は save_raw が別に記録する。
+        artifact = save_raw(
+            resp.content,
+            source=Source.EDINET,
+            datatype="codelist",
+            scope="ALL",
+            data_date=data_date,
+            url=CODELIST_URL,
+            ext="zip",
+            license_tag=LicenseTag.COMMERCIAL_OK,
+            base_dir=settings.raw_data_dir,
+        )
+    return artifact
 
 
 # zip 内のコードリスト CSV の期待名（実物はこの1ファイルのみ）。
@@ -164,15 +173,10 @@ def _meta_row_date(meta_row: list[str]) -> date | None:
     return None
 
 
-def parse_codelist(
-    zip_bytes: bytes, *, raw_page_id: str | None = None
-) -> list[StockMasterRecord]:
-    """コードリスト zip をパースし、証券コードを持つ上場企業のみ返す (§10 P1)。
-
-    - 1行目=メタ行（ダウンロード実行日=データ基準日として使用）、2行目=ヘッダ
-    - 証券コードは5桁→4桁化、EDINETコード・提出者名・業種（33業種相当）を設定
-    - Provenance: source=EDINET / commercial-ok (§2.1) / data_date=メタ行の取得日
-    """
+def _read_codelist_rows(
+    zip_bytes: bytes,
+) -> tuple[date | None, dict[str, int], list[tuple[int, list[str]]]]:
+    """マスタ・業種同期で同じヘッダ/行幅検証と空白行の扱いを使う。"""
     text = _read_codelist_csv(zip_bytes)
     rows = list(csv.reader(io.StringIO(text)))
     if len(rows) < 2:
@@ -191,9 +195,8 @@ def parse_codelist(
     except ValueError as exc:
         raise ValueError(f"コードリスト CSV のヘッダが想定と不一致: {header}") from exc
 
-    fetched_at = now_jst()
     width = len(header)
-    records: list[StockMasterRecord] = []
+    validated: list[tuple[int, list[str]]] = []
     for lineno, row in enumerate(rows[2:], start=3):
         if not any(cell.strip() for cell in row):
             continue  # 完全な空白行のみスキップ
@@ -210,6 +213,18 @@ def parse_codelist(
                 f"コードリスト CSV の{lineno}行目が列過多 "
                 f"(ヘッダ {width} 列に対し {len(row)} 列)"
             )
+        validated.append((lineno, row))
+    return data_date, idx, validated
+
+
+def parse_codelist(
+    zip_bytes: bytes, *, raw_page_id: str | None = None
+) -> list[StockMasterRecord]:
+    """証券コードを持つ上場企業を返す。基準日は原本メタ行から読む。"""
+    data_date, idx, rows = _read_codelist_rows(zip_bytes)
+    fetched_at = now_jst()
+    records: list[StockMasterRecord] = []
+    for _, row in rows:
         if row[idx[_COL_LISTED]].strip() != _LISTED_VALUE:
             continue  # 上場企業のみ
         code = normalize_sec_code(row[idx[_COL_SEC_CODE]])

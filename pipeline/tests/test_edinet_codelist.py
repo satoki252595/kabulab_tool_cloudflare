@@ -304,8 +304,22 @@ class TestFetchCodelist:
         assert art.source is Source.EDINET
         assert art.datatype == "codelist"
         assert art.scope == "ALL"
+        assert art.data_date == date(2026, 6, 10)
+        assert "20260610" in art.local_path.name
         assert art.license_tag is LicenseTag.COMMERCIAL_OK
         assert art.url == mod.CODELIST_URL
+
+    def test_missing_source_date_is_not_replaced_by_fetch_date(self, tmp_path, monkeypatch):
+        text = mod._read_codelist_csv(_zip_bytes())
+        _, separator, body = text.partition("\n")
+        assert separator
+        data = _make_zip({"EdinetcodeDlInfo.csv": "\n" + body})
+        monkeypatch.setattr(mod, "fetch", lambda url: SimpleNamespace(content=data))
+        settings = load_settings(env={"RAW_DATA_DIR": str(tmp_path)}, dry_run=True)
+        art = mod.fetch_codelist(settings)
+        assert art.data_date is None
+        assert "nodate" in art.local_path.name
+        assert art.local_path.read_bytes() == data
 
     def test_on_response_receives_same_response(self, tmp_path, monkeypatch):
         """同一 Response を callback へ渡す。渡さない既存呼び出しは不変。"""
@@ -322,6 +336,17 @@ class TestFetchCodelist:
         art = mod.fetch_codelist(settings, on_response=seen.append)
         assert seen == [resp]
         assert art.local_path.read_bytes() == data
+
+    def test_invalid_csv_zip_is_preserved_before_error(self, tmp_path, monkeypatch):
+        data = _make_zip({"Wrong.csv": mod._read_codelist_csv(_zip_bytes())})
+        monkeypatch.setattr(mod, "fetch", lambda url: SimpleNamespace(content=data))
+        settings = load_settings(env={"RAW_DATA_DIR": str(tmp_path)}, dry_run=True)
+        with pytest.raises(ValueError, match="想定と不一致"):
+            mod.fetch_codelist(settings)
+        saved = list(tmp_path.glob("*.zip"))
+        assert len(saved) == 1
+        assert "nodate" in saved[0].name
+        assert saved[0].read_bytes() == data
 
     def test_response_metadata_allowlist(self):
         """status・最終 URL・安全 header のみ。secret/auth 系は捨てる。"""
