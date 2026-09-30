@@ -2,8 +2,9 @@
  * Yahoo Finance レスポンスの Zod バリデータ。
  *
  * rsi-screening と swing-trading と otakara-yutai の 3 サービスで重複していた定義を
- * ここに集約する。meta には previousClose / chartPreviousClose も入れて、マクロ指数の
- * 前日終値取得にも使えるようにしている。
+ * ここに集約する。meta の previousClose / chartPreviousClose フィールドは原文保持の
+ * ために残すが、前日終値用途には使わない (2026-09-30 実測 4/4 で chartPreviousClose
+ * は直前実バー終値と不一致 = 別意味。確定日足の前日比は実バー終値で組む)。
  */
 
 import { z } from "../zod-mini.js";

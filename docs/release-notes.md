@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- マクロ行キーの日時正準化と原本保管: 行キーは GSPC 確定バー日、N225/VIX 確定日と VI 日付が一致し必須値が揃うときだけ保存 (不一致・不足は HOLD で前回値保持)。最終 draft と同一 generation の chart 原文 4 + VI HTML + manifest を `macro-source-batch-*` に保管し strict readback 通過後のみ D1 保存 (保管失敗は throw)。`previousClose` は source 明示値のみ (補完 chain 削除)。データ変更なし (Refs #163)。
 - Yahoo crumb 429 を typed deadline 付きで保持し、取込 proxy は 429 + 実残り秒 Retry-After で返す (従来の 502 丸めを是正)。期限内は同一 deadline で再 bootstrap せず、期限切れ後に single-flight で回復。Node recovery の待機 budget cap 30 秒・認証方式・再試行回数は不変。データ変更なし (Refs #163)。
 - Notion read-list 全入口 (TS 共有 client + Python client) の応答メタ (`results`・`has_more`・`next_cursor` の型と組合せ) を厳密検証し、不正・反復カーソル (same・A→B→A) は追加取得前に停止 (再試行なし)。正常本文・保存形式・writer は不変、既存 caller の失敗通知へ伝播。データ変更なし (Fixes #199)。
 - 海外残745 の純 offline PREP を実施 (固定 raw の再生成・changed set 新導出のみ。原本追加取得・本番書込 0。変更候補は検証待ち)。データ変更なし (#202)。
