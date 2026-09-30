@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- 海外残745 の純 offline PREP を実施 (固定 raw の再生成・changed set 新導出のみ。原本追加取得・本番書込 0。変更候補は検証待ち)。データ変更なし (#202)。
 - PIP-384 実 entry 再入の直接証跡を公開 proof として追記 (実 upsert 384 全 unchanged・書込 0、応答 strict 検証 395/395・query 全件 + search 全 sequence terminal false。旧比較 proof とは別証跡)。データ変更なし (#201, Refs #132 #146)。
 - C107 有報テキスト 10 文書・364 section を保存済み原文と read-only 精査し 10/10 MATCH (全文 SHA 一致・D1 索引重複 0、HTTP mutation 0)。証跡 `docs/test-logs/c107-yuho-text-audit-2026-09-29.md`。範囲外の主張なし。データ変更なし。
 - moneyflow 指標定義の未確認断定を除去: 財務省系列の「速報値で確報改定を反映しない」を版 (最終更新日) +直近 CSV 窓 upsert の実契約どおりの説明へ修正 (速報/確報の区別は原本未確認のため断定しない)。JSDA hako.pdf の docs 状態を「2026-09-27 取得・確認済み」へ是正。データ変更なし。

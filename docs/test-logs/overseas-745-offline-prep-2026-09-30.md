@@ -10,6 +10,12 @@ laneA 残 745 の later apply 前の純 offline 準備。固定 3675 ZIP の既�
   (新規 export/framework なし。既存 `parseOverseasData` /
   `validateOverseasSaveSet` + backfill-overseas/ingest 同等変換を再使用)
 - 実行: `2026-09-30T00:17:43Z`–`00:19:05Z` (約82秒・fetch 全面拒否・結果 PASS)
+- 実行 workHEAD: `e822744` (実行時は script 未 commit。published/reviewed
+  `47c2d5c` と script bytes 同一。clean tree で commit)。
+- 実 CLI (legacy `--name=value` 式):
+  `pnpm exec tsx services/yuho-quant/data-scripts/overseas-745-prep.ts`
+  (既定 `--lane-dir=/tmp --raw-dir=/tmp/overseas_laneA_raw`
+  `--out-dir=/tmp/overseas745-prep-20260930` で実行)
 - parser 固定: `services/yuho-quant/src/services/overseas-parser.ts`
   blob `07efdd0a25a79328873cf34faf6a1cb5a2095bbe` (HEAD 一致・clean 確認)
 - 関連: `docs/test-logs/overseas-root-causes-2026-09-28.md` (§6 適用計画の 745 残)
@@ -81,7 +87,9 @@ laneA 残 745 の later apply 前の純 offline 準備。固定 3675 ZIP の既�
 
 - `fetchAttempts` 0・sourceGET 0・Notion create/update/archive 0・
   新規 receipt 0・D1/R2 mutation 0・workflow 0。本番/source GET 未実行。
-- raw 3675 ZIP + `manifest_full.json` は実行前後で bytes/SHA・dir 列挙が不変。
+- 実観測: 3675 ZIP 全読・hash 1回 (期待 pin 3602 全一致) + 実行前後の
+  `manifest_full.json` SHA・dir filenames 一致。ZIP 全件の再 hash は未観測
+  (script は manifest SHA + dir 列挙のみ再確認。再 run なし)。
 - CANCELLED の旧 laneA grants は再利用なし (journal は照合読取のみ)。
 
 ## 成果物 (private `/tmp/overseas745-prep-20260930/`・0600・dir 0700)
@@ -90,6 +98,7 @@ laneA 残 745 の later apply 前の純 offline 準備。固定 3675 ZIP の既�
 - `prep-journal.jsonl` (1728 lines = changed 1655 + HOLD_PIN 73) `5127c73b…85b9dc`
 - `prep-sets.json` (分類別 docID 集合) `62095358…308b5d1`
 - `prep-report.json` `a96a3d33…bcb3a`
+- 出力 mode は dir 0700・4 files 全 0600 を `ls` で一致確認済み。
 
 ## 検証
 
@@ -107,6 +116,9 @@ laneA 残 745 の later apply 前の純 offline 準備。固定 3675 ZIP の既�
   (現 `null` が正直値の可能性。盲目的な再 seal なし)。
 - 925 の 804外 changed は現 parser 世代差による新規差分。適用範囲への
   取込可否は Root 判断 (本 PREP は範囲拡大を提案しない)。
+- journal reasons は変更 field 分類のみ。parser candidate/gate/root-cause
+  帰属は未完のため原因未帰属・適用資格なし。parser 自体の追加 fix を
+  この diff だけから推測しない。
 - stable match 1894 は before 一致のため D1 再読の対象外 (下記計画の範囲外)。
 - source HTTP identity・全 physical archive・fullDL proof は later apply 前 required。
 
