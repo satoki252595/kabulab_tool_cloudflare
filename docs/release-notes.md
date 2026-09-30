@@ -9,8 +9,11 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-09-30
 
+- VWAPの日足・5分足・信用データの保存を取得時のR2版に条件付け、競合時は上書きせず停止。新規ファイルも取得時に存在しなかった場合だけ作成する。
+
 ### 変更
 - 本番優待303候補・68銘柄を原本条件と全列CASで修復（60原子バッチ417文、DELETE114、yield44/score38/月1）。実post全4表から同じwriter再生成0、golden52+8・価格/基準日保護。PRE24/POST274原本を物理保管・fullSHA照合。時計区間外4セルと行生成HOLD15は別途明記。証跡 `docs/ops-yutai-cas68-20260930.md`。
+- 海外 closed-44 修復 PREP の部分 WHERE ガードを廃止し、atomic batch 先頭の full16文書/all12facts・件数/両方向EXCEPT検証へ修正。未知通信失敗は停止、実NEWPOST同じ処理への再入は送信0。Nix actual44原本/SQLite17 tests PASS、通常共通パーサーの12numeric/32unknown一致を確認。CLIのliveは未閉鎖のため明示STOP、実データ変更0。証跡 `docs/test-logs/overseas-closed44-exec-2026-09-30.md`。
 - price40 corrective 9/29 本番適用 (APPLIED 40/unknown 0/write0 0。outside-held 7 + source-excluded 7。D1 SELECT 3 + batch POST 4 の文計 19 + Notion receipt 1。旧 LOCAL_REJECT は 745 fetch 置換が確定的 root cause (PR236 修正済み)。原本 receipt 508 は immutable archive 済み。新 receipt payload 7238B `1dd240e9…`。ACTUAL post 40 full7 照合 + same-producer reentry-0 PROOF-OK)。証跡 `docs/test-logs/price40-corrective-prep-20260930.md`。
 - VWAP 日足 producer の proof 化 + full-10y 適格 (fetchDaily が body 完了 clock・raw SHA・要求 range の proof を発行し meta echo 照合。通常 daily は 10y を 1 社 1 回取得し全置換。adj は金融入力外で bare OHLCV。intra 適格は span 一致・session 包含・splits 完全一致・窓内 split なし・10y のみ。daily 配信は 5y/legacy も構造どおり提供)。JSS public/private を再 deploy (public `9b6d5c8c`・private `b48fdc77`、health/licenses 200・無キー 401、100% active)。データ変更なし (#237, Refs #117)。
 - price40 corrective PREP (未実行): 失敗 ONE の原本 receipt (同一 key/body) の archive 計画 (private thin runner + preflight0 PASS) と corrective 40 packet (merged-236 の 745 module pin 追随のみ。frozen body 不変。preflight0 PASS + pure proof PROOF-OK)。証跡 `docs/test-logs/price40-corrective-prep-20260930.md`。live なし、データ変更なし。
