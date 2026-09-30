@@ -13,9 +13,12 @@
  * 送らず HOLD する。特に POST /v1/databases (ensureDatabase の
  * CREATE 経路)・POST /v1/pages・PATCH・DELETE は拒否する。
  * DB 不在は CREATE せず HOLD する (fail-closed)。
- * さらに body/query を exact 値へ束縛する (query filter 全 key が
- * manifest 40 内・page_size 厳密・search title/filter 固定・
- * children 親 typed 一致・DB id 単一 pin)。
+ * さらに body/query を exact 値へ束縛する (query は当該 chunk の
+ * canonical body SHA 厳密一致 (packet docs + helper 順由来の事前導出
+ * 183 件。subset/oversized/重複/余分 key/順序入替は bytes 不一致で拒否)・
+ * search title/filter 固定・children 親 typed 一致・DB id 単一 pin)。
+ * 同一 chunk の再送は成功応答まで許可し、次 chunk への前進は
+ * 2xx 受信後のみ。最終的に query 成功 chunk 数 = round chunks を assert する。
  *
  * Redirect: 同一 request に redirect manual を強制し、3xx は
  * follow せず STOP する (default follow の boundary bypass を塞ぐ)。
@@ -79,7 +82,7 @@ const PINS = {
   parentSHA: "4896af08d92d1510861d6288ea92080b1d1548f48a8c2ee20d3ed08d01da2205",
   // module pins は全て file bytes の full SHA256 (git blob 40char ではない)。
   modules: {
-    custodySelf: "86758f130d19f86fff069a3caa82d5f3d7ba817c28a1cdb6290d3ee5f9a615de",
+    custodySelf: "2f60bc6ae19aed11ea165118d827dbdd87bff4f11d39741cbfa305db5379af4a",
     edinetArchive: "a02f24f632ea6309a68899bc59b2c3760b2fd7686f26501894f7f5fc7c53fbc5",
     sharedArchive: "b4388151a2aa36cd6b70fabd4c22d1451641b39c7e7475e6b6c0e109573c5edf",
     sharedClient: "4a7f780053ad4bce844e40323e75f4d1713bc1a0c5affe8e4710002192346754",
@@ -185,13 +188,43 @@ export function assertFreshOutDir(outDir: string): void {
 export interface GuardCounters {
   attempts: number;
   rejected: number;
+  /** 2xx 受信済み query chunk 数 (前進は成功応答後のみ)。 */
+  querySuccess: number;
 }
 
-/** request binding (round1 固定・body/query を exact 値へ束縛)。 */
+/**
+ * request binding (round 固定・body/query を exact 値へ束縛)。
+ * chunkBodySHAs: packet docs を helper 順 (20 通/chunk・通内 type1→type5)
+ * で canonical query body 化した SHA (chunk 順)。当該 chunk の一致のみ許可。
+ */
 export interface GuardBindings {
-  manifestKeys: ReadonlySet<string>;
+  chunkBodySHAs: readonly string[];
   typedParentDashless: string;
   expectedTitle: string;
+}
+
+/**
+ * chunk 別 canonical query body SHA の事前導出 (pure)。
+ * `findBackupRowsByKeys` の送信 bytes と同一構築
+ * (`{ filter: { or: [{ property: "Key", title: { equals } }] }, page_size: 41 }`
+ * の JSON.stringify 順) のため、helper 素通し bytes と一致する。
+ * 重複 SHA (chunk 判別不能) は HOLD する。
+ */
+export function deriveChunkBodySHAs(
+  docs: readonly string[],
+  keyFn: (docID: string, type: 1 | 5) => string
+): string[] {
+  const shas: string[] = [];
+  for (let i = 0; i < docs.length; i += 20) {
+    const keys = docs.slice(i, i + 20).flatMap((docID) => [keyFn(docID, 1), keyFn(docID, 5)]);
+    const canonical = JSON.stringify({
+      filter: { or: keys.map((key) => ({ property: "Key", title: { equals: key } })) },
+      page_size: 41,
+    });
+    shas.push(sha256Hex(canonical));
+  }
+  if (new Set(shas).size !== shas.length) hold("chunk body SHA 重複 (chunk 判別不能)");
+  return shas;
 }
 
 export function dashless(id: string): string {
@@ -250,8 +283,10 @@ export function routeTag(method: string, path: string): string {
 
 /**
  * Body/query の exact binding (allow-list の内側の第2関門)。
- * query: body filter の全 key が manifest 40 内 + page_size 厳密 41 +
- * DB id の単一 pin (初回確定・以後 drift 拒否)。
+ * query: body bytes 全体が expectedChunkIdx の事前導出 canonical SHA と
+ * 厳密一致 (subset/oversized/重複/余分 key/順序入替・page_size 違いは
+ * 全て bytes 不一致で拒否) + DB id の単一 pin (初回確定・以後 drift 拒否)。
+ * 同一 chunk の再送は同一 SHA のため通過する (前進は guard が 2xx 後に行う)。
  * search: query が backup DB title 厳密一致 + filter database +
  * page_size 厳密 100 (start_cursor のみ可変)。
  * children: 親が typed parent 厳密一致 (dashless)。
@@ -262,7 +297,8 @@ export function assertRequestBindings(
   url: URL,
   init: RequestInit | undefined,
   bindings: GuardBindings,
-  pinnedDbId: string | null
+  pinnedDbId: string | null,
+  expectedChunkIdx: number
 ): string | null {
   const p = url.pathname;
   const seg = (re: RegExp): string | null => {
@@ -286,19 +322,11 @@ export function assertRequestBindings(
   }
   const qid = method === "POST" ? seg(/^\/v1\/databases\/([A-Za-z0-9-]{32,36})\/query$/) : null;
   if (qid) {
-    const body = parseJsonBody(init);
-    if (body["page_size"] !== 41) hold("binding外: query page_size 非41");
-    const filter = body["filter"] as Record<string, unknown> | undefined;
-    const or = filter?.["or"];
-    if (!filter || !Array.isArray(or) || or.length === 0) hold("binding外: query filter 非OR");
-    for (const e of or as unknown[]) {
-      const r = e as Record<string, unknown>;
-      const title = r?.["title"] as Record<string, unknown> | undefined;
-      const key = title?.["equals"];
-      if (r?.["property"] !== "Key" || typeof key !== "string" || !bindings.manifestKeys.has(key)) {
-        hold("binding外: query key 非manifest");
-      }
-    }
+    const raw = init?.body;
+    if (typeof raw !== "string") hold("binding外: query body 非string");
+    const want = bindings.chunkBodySHAs[expectedChunkIdx];
+    if (want === undefined) hold("binding外: query chunk 超過");
+    if (sha256Hex(raw) !== want) hold("binding外: query body 非exact-chunk");
     if (pinnedDbId === null) return qid;
     if (qid !== pinnedDbId) hold("binding外: DB drift");
     return pinnedDbId;
@@ -349,6 +377,10 @@ export function saveBodyWx(outDir: string, name: string, bytes: Uint8Array): str
 /**
  * Read-only guard (native の前)。
  * 順序: allow-list → binding → cap → forward (redirect manual 強制)。
+ * query は当該 chunk の canonical body SHA のみ許可し、同一 chunk の
+ * 再送は成功応答まで通す。次 chunk への前進は 2xx 受信後のみ
+ * (3xx/4xx/5xx・到達失敗では前進しない)。最終成功 chunk 数は
+ * 呼出側が round chunks と照合する。
  * forward 後は同一 response を clone して HTTP bytes + safe 状態を
  * helper 判定の前に private 保存する (次段 closure・lookup 証跡用。
  * 余分 GET なし)。3xx は follow せず STOP する。
@@ -363,6 +395,7 @@ export function createReadOnlyGuardFetch(
   bindings: GuardBindings
 ): typeof fetch {
   let pinnedDbId: string | null = null;
+  let expectedChunkIdx = 0;
   return (async (url: unknown, init?: RequestInit) => {
     let u: URL;
     try {
@@ -375,7 +408,7 @@ export function createReadOnlyGuardFetch(
     const logLine = (line: Record<string, unknown>): void => {
       durableAppend(join(outDir, "guard-attempt.log"), JSON.stringify(line));
     };
-    const deny = (why: string): never => {
+    const deny = (why: string, extra?: Record<string, unknown>): never => {
       counters.rejected += 1;
       logLine({
         seq: counters.attempts + counters.rejected,
@@ -384,15 +417,22 @@ export function createReadOnlyGuardFetch(
         method,
         host: u.hostname,
         path: u.pathname,
+        ...extra,
         at: new Date().toISOString(),
       });
       throw new HoldError(`query guard: 拒否のため送らない (${why}。詳細は private log 参照)`);
     };
     if (!isAllowedRoute(method, u)) deny("allow-list外");
     try {
-      pinnedDbId = assertRequestBindings(method, u, init, bindings, pinnedDbId);
+      pinnedDbId = assertRequestBindings(method, u, init, bindings, pinnedDbId, expectedChunkIdx);
     } catch (e) {
-      if (e instanceof HoldError) deny(e.message.replace(/^HOLD: /, ""));
+      if (e instanceof HoldError) {
+        // 拒否 request の forensics (0600): body 指紋のみ。ID 素値は残さない。
+        const rb = init?.body;
+        const extra =
+          typeof rb === "string" ? { bodySHA: sha256Hex(rb), bodyLen: rb.length } : undefined;
+        deny(e.message.replace(/^HOLD: /, ""), extra);
+      }
       throw e;
     }
     if (counters.attempts >= cap) deny(`attempt cap外 (${cap})`);
@@ -428,6 +468,11 @@ export function createReadOnlyGuardFetch(
     if (res.status >= 300 && res.status < 400) {
       logLine({ seq, decision: "redirect-stop", file: name, status: res.status, at: new Date().toISOString() });
       throw new HoldError("query guard: 3xx 受信のため STOP (follow なし。body 保存済み。詳細は private log 参照)");
+    }
+    // 前進は成功応答 (2xx) の query のみ。4xx/5xx・到達失敗は同一 chunk 再送可。
+    if (tag === "query" && res.status >= 200 && res.status < 300) {
+      expectedChunkIdx += 1;
+      counters.querySuccess += 1;
     }
     return res;
   }) as typeof fetch;
@@ -542,7 +587,7 @@ async function main(): Promise<void> {
   dotenv.config({ path: ENV_FILE, quiet: true });
 
   const nativeFetch = globalThis.fetch.bind(globalThis);
-  const gate: GuardCounters = { attempts: 0, rejected: 0 };
+  const gate: GuardCounters = { attempts: 0, rejected: 0, querySuccess: 0 };
   const edinetMod = await import("../src/services/edinet/archive.js");
   const { checkDocsCustody, edinetArchiveKey } = edinetMod;
   const envMod = await import("../../../src/shared/notion-archive/env.js");
@@ -560,8 +605,10 @@ async function main(): Promise<void> {
   }
   const parentSHA = sha256Hex(parentId);
   if (parentSHA !== PINS.parentSHA) hold("typed parent 外 (canonical target 不一致)");
+  const chunkBodySHAs = deriveChunkBodySHAs(packet.docs, edinetArchiveKey);
+  if (chunkBodySHAs.length !== cfg.chunks) hold(`chunk 数外: ${chunkBodySHAs.length}`);
   const bindings: GuardBindings = {
-    manifestKeys: new Set(packet.keys),
+    chunkBodySHAs,
     typedParentDashless: dashless(parentId),
     expectedTitle: `一次データ｜${SERVICE}`,
   };
@@ -586,6 +633,7 @@ async function main(): Promise<void> {
     }
   }
   if (gate.attempts > cfg.cap) hold(`attempt cap 外: ${gate.attempts}`);
+  if (gate.querySuccess !== cfg.chunks) hold(`query 成功 chunk 数外: ${gate.querySuccess}`);
   const stats = notionStats();
 
   const t1: Record<string, number> = {};
@@ -606,7 +654,8 @@ async function main(): Promise<void> {
     docs: packet.docs,
     verdicts: [...verdicts.entries()].map(([doc, v]) => ({ doc, ...v })),
     counts: { docs: cfg.docs, keys: cfg.keys, t1, t5 },
-    scope: { packetSHA: cfg.packetSHA, parentSHA, modules: moduleSHAs, scriptFullSHA, attemptCap: cfg.cap },
+    scope: { packetSHA: cfg.packetSHA, parentSHA, modules: moduleSHAs, scriptFullSHA, attemptCap: cfg.cap, chunks: cfg.chunks },
+    chunkBodySHAs,
     gate,
     notionStats: stats,
     bodies: { count: bodyFiles.length, files: bodyFiles },
@@ -617,7 +666,8 @@ async function main(): Promise<void> {
       "complete = 行存在 + hosted fileCount>0。same-bytes 検証ではない。",
       "primary READY 0 (query-only。complete でも適格化しない)。",
       "full-ZIP readback (listing + hosted DL + length/SHA) は別途 future stage (別 caps)。",
-      "attempt cap 96 = native 試行 (retry 乗数込)。超過・deny・DB 不在は HOLD (CREATE なし)。",
+      `attempt cap ${cfg.cap} = native 試行 (retry 乗数込)。超過・deny・DB 不在は HOLD (CREATE なし)。`,
+      `query 成功 chunk 数 ${gate.querySuccess}/${cfg.chunks} 照合済み (2xx 後のみ前進)。`,
       "Unknown は再送しない (shared client 契約)。",
       "docIDs・grant 文は 0600 のみ。stdout は counts/SHA のみ。",
     ],
@@ -652,11 +702,13 @@ async function preflight(): Promise<void> {
   const envMod = await import("../../../src/shared/notion-archive/env.js");
   const { notionEnv } = envMod;
   const { moduleSHAs, scriptFullSHA } = assertModules();
-  // 両 round の packet を常に検証する (SHA + 形状 + key 導出)。
-  const verified: Record<string, { docs: number; keys: number; chunks: number; cap: number; packetSHA: string }> = {};
+  // 両 round の packet を常に検証する (SHA + 形状 + key 導出 + chunk body 導出)。
+  const verified: Record<string, { docs: number; keys: number; chunks: number; chunkBodies: number; cap: number; packetSHA: string }> = {};
   for (const cfg of Object.values(ROUNDS)) {
     const p = loadPacket(cfg, edinetArchiveKey);
-    verified[cfg.round] = { docs: p.docs.length, keys: p.keys.length, chunks: cfg.chunks, cap: cfg.cap, packetSHA: cfg.packetSHA };
+    const shas = deriveChunkBodySHAs(p.docs, edinetArchiveKey);
+    if (shas.length !== cfg.chunks) hold(`preflight chunk 数外 round=${cfg.round}: ${shas.length}`);
+    verified[cfg.round] = { docs: p.docs.length, keys: p.keys.length, chunks: cfg.chunks, chunkBodies: shas.length, cap: cfg.cap, packetSHA: cfg.packetSHA };
   }
   if (!existsSync(ENV_FILE)) hold(`env-file 不在: ${ENV_FILE}`);
   dotenv.config({ path: ENV_FILE, quiet: true });

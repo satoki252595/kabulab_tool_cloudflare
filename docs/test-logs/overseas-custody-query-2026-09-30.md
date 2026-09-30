@@ -6,14 +6,18 @@ hash-first packet。round1 (20/40) は ONE 実行済み PASS。
 rest (3655/7310) は PREP のみ・live は grant 待ち。
 
 - script: `services/yuho-quant/data-scripts/overseas-custody-query.ts`
-  (FULL `30b3213f…e11c4`、self pin `86758f13…15de`)。
+  (FULL `1ca9674b…fe83b`、self pin `2f60bc6a…af4a`)。
   test `services/yuho-quant/src/tests/overseas-custody-query.test.ts`
-  18 passed 同梱。
-- preflight (両 round): `6570d974…7ab80` exit 0・sends 0・writes 0・
-  round1 (20/40) + rest (3655/7310) 検証済み
-  (canonical env・typed parent 照合済み)。
+  21 passed 同梱 (実 helper bytes 照合 + retry/変造 guard 含む)。
+- preflight (両 round): `ae83938f…deeb` exit 0・sends 0・writes 0・
+  round1 (20/40・chunkBodies 1) + rest (3655/7310・chunkBodies 183)
+  検証済み (canonical env・typed parent 照合済み)。
 - round1 実行 bytes: FULL `577af613…9c9f57`
   (HEAD `9144b25`・CODE CLEAR 済み・bytes は履歴に保持)。
+- rest 束縛強化 (live 0 のまま): query は当該 chunk の canonical
+  body SHA 厳密一致のみ許可 (membership 検査から置換)。
+  同一 chunk 再送は 2xx まで許可・前進は 2xx 後のみ・
+  最終 query 成功 chunk 数 = round chunks を assert。
 
 ## Round1 result (ONE 実行済み PASS・再実行なし)
 
@@ -55,10 +59,16 @@ rest (3655/7310) は PREP のみ・live は grant 待ち。
 - deny (送らず HOLD): POST `/v1/databases` (ensureDatabase の
   CREATE 経路)・POST `/v1/pages`・PATCH・DELETE・
   非 Notion host・形状外全般。DB 不在は CREATE せず HOLD。
-- binding (第2関門): query filter 全 key が当 round manifest 内・
-  page_size 厳密 41・search title/filter/page_size 厳密固定・
-  children 親 typed 一致 (dashless)・DB id 単一 pin
-  (初回確定・drift 拒否・未 pin の dbget 拒否)。
+- binding (第2関門): query は当該 chunk の canonical body SHA と
+  厳密一致のみ許可 (packet docs + helper 順の事前導出 183 件。
+  subset/oversized/重複/余分 key/順序入替・page_size 違いは
+  bytes 不一致で拒否)。同一 chunk 再送は 2xx まで許可・
+  前進は 2xx 受信後のみ (3xx/4xx/5xx・到達失敗は不前進)。
+  search title/filter/page_size 厳密固定・children 親 typed 一致
+  (dashless)・DB id 単一 pin (初回確定・drift 拒否・
+  未 pin の dbget 拒否)。最終 query 成功 chunk 数 = round chunks。
+- deny forensics (0600): 拒否 request の bodySHA + bodyLen を
+  attempt log に残す (ID 素値なし)。
 - redirect: 同一 request に manual 強制。3xx は follow せず STOP。
 - native 到達失敗も HOLD (safe label・詳細は private log)。
 
@@ -96,7 +106,7 @@ rest (3655/7310) は PREP のみ・live は grant 待ち。
 
 ## Pins (full content SHA256)
 
-- self `86758f13…15de` (正準化) / FULL `30b3213f…e11c4`
+- self `2f60bc6a…af4a` (正準化) / FULL `1ca9674b…fe83b`
 - edinet/archive `a02f24f6…53fbc5`
 - shared archive `b4388151…5edf`・client `4a7f7800…6754`・
   env `de8449e3…ae1c0` (PR221 時と同一・不変)

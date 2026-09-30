@@ -4,6 +4,7 @@
  * canonical env で別途検証する。
  */
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,7 @@ import {
   assertRequestBindings,
   createReadOnlyGuardFetch,
   dashless,
+  deriveChunkBodySHAs,
   HoldError,
   isAllowedRoute,
   loadPacket,
@@ -23,11 +25,14 @@ import {
   type GuardBindings,
   type GuardCounters,
 } from "../../data-scripts/overseas-custody-query.js";
+import { checkDocsCustody, edinetArchiveKey } from "../services/edinet/archive.js";
 
 const ID = "a1b2c3d4e5f60718293a4b5c6d7e8f90a";
 const U = (s: string) => new URL(s);
+const keyFn = (d: string, t: 1 | 5) => `${d}:type${t}`;
+const shaOf = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
 const BIND: GuardBindings = {
-  manifestKeys: new Set(["S1000000X:type1", "S1000000X:type5"]),
+  chunkBodySHAs: deriveChunkBodySHAs(["S1000000X"], keyFn),
   typedParentDashless: dashless(ID),
   expectedTitle: "一次データ｜yuho-quant",
 };
@@ -77,8 +82,14 @@ describe("read-only allow-list", () => {
 
 describe("bindings (body/query exact)", () => {
   const qurl = U(`https://api.notion.com/v1/databases/${ID}/query`);
+  // helper 送信形の独立リテラル (導出関数を使わない)。
   const qbody = JSON.stringify({
-    filter: { or: [{ property: "Key", title: { equals: "S1000000X:type1" } }] },
+    filter: {
+      or: [
+        { property: "Key", title: { equals: "S1000000X:type1" } },
+        { property: "Key", title: { equals: "S1000000X:type5" } },
+      ],
+    },
     page_size: 41,
   });
   const surl = U("https://api.notion.com/v1/search");
@@ -89,37 +100,54 @@ describe("bindings (body/query exact)", () => {
   });
 
   it("固定値一致は通過・DB pin は初回確定", () => {
-    expect(assertRequestBindings("POST", qurl, { method: "POST", body: qbody }, BIND, null)).toBe(ID);
-    expect(assertRequestBindings("POST", qurl, { method: "POST", body: qbody }, BIND, ID)).toBe(ID);
-    expect(assertRequestBindings("POST", surl, { method: "POST", body: sbody }, BIND, null)).toBeNull();
+    expect(shaOf(qbody)).toBe(BIND.chunkBodySHAs[0]);
+    expect(assertRequestBindings("POST", qurl, { method: "POST", body: qbody }, BIND, null, 0)).toBe(ID);
+    expect(assertRequestBindings("POST", qurl, { method: "POST", body: qbody }, BIND, ID, 0)).toBe(ID);
+    expect(assertRequestBindings("POST", surl, { method: "POST", body: sbody }, BIND, null, 0)).toBeNull();
     expect(
-      assertRequestBindings("GET", U(`https://api.notion.com/v1/blocks/${ID}/children?page_size=100`), undefined, BIND, null)
+      assertRequestBindings("GET", U(`https://api.notion.com/v1/blocks/${ID}/children?page_size=100`), undefined, BIND, null, 0)
     ).toBeNull();
-    expect(assertRequestBindings("GET", U(`https://api.notion.com/v1/databases/${ID}`), undefined, BIND, ID)).toBe(ID);
+    expect(assertRequestBindings("GET", U(`https://api.notion.com/v1/databases/${ID}`), undefined, BIND, ID, 0)).toBe(ID);
   });
 
-  it("manifest 外 key・非固定値・drift・未 pin は HOLD", () => {
-    const badKey = JSON.stringify({
-      filter: { or: [{ property: "Key", title: { equals: "ZZZ:type1" } }] },
-      page_size: 41,
-    });
-    expect(() => assertRequestBindings("POST", qurl, { method: "POST", body: badKey }, BIND, null)).toThrow(HoldError);
-    const badPage = JSON.stringify({
-      filter: { or: [{ property: "Key", title: { equals: "S1000000X:type1" } }] },
-      page_size: 42,
-    });
-    expect(() => assertRequestBindings("POST", qurl, { method: "POST", body: badPage }, BIND, null)).toThrow(HoldError);
+  it("非exact-chunk (subset/oversized/範囲外/余分key/順序入替/超過) は HOLD", () => {
+    const base = JSON.parse(qbody) as { filter: { or: unknown[] }; page_size: number };
+    const or = base.filter.or as Array<Record<string, unknown>>;
+    const variant = (o: unknown[], extra?: Record<string, unknown>) =>
+      JSON.stringify({ filter: { or: o }, page_size: 41, ...extra });
+    // subset (type5 欠落)
+    expect(() => assertRequestBindings("POST", qurl, { method: "POST", body: variant(or.slice(0, 1)) }, BIND, null, 0)).toThrow(HoldError);
+    // oversized (重複追加)
+    expect(() => assertRequestBindings("POST", qurl, { method: "POST", body: variant([...or, or[0]]) }, BIND, null, 0)).toThrow(HoldError);
+    // 範囲外 key
+    const outside = JSON.parse(JSON.stringify(or)) as Array<Record<string, { equals: string }>>;
+    outside[0].title.equals = "ZZZ:type1";
+    expect(() => assertRequestBindings("POST", qurl, { method: "POST", body: variant(outside) }, BIND, null, 0)).toThrow(HoldError);
+    // 余分 top-level key
+    expect(() => assertRequestBindings("POST", qurl, { method: "POST", body: variant(or, { start_cursor: "x" }) }, BIND, null, 0)).toThrow(HoldError);
+    // 順序入替 (type5→type1)
+    expect(() => assertRequestBindings("POST", qurl, { method: "POST", body: variant([or[1], or[0]]) }, BIND, null, 0)).toThrow(HoldError);
+    // page_size 違い
+    const badPage = JSON.stringify({ filter: { or }, page_size: 42 });
+    expect(() => assertRequestBindings("POST", qurl, { method: "POST", body: badPage }, BIND, null, 0)).toThrow(HoldError);
+    // chunk 超過 (当該 0 のみ有効・1 は存在しない)
+    expect(() => assertRequestBindings("POST", qurl, { method: "POST", body: qbody }, BIND, null, 1)).toThrow(HoldError);
+    // 健全性: 無変更の再 serialize は通過する
+    expect(assertRequestBindings("POST", qurl, { method: "POST", body: variant(or) }, BIND, null, 0)).toBe(ID);
+  });
+
+  it("drift・未 pin・非固定値は HOLD", () => {
     const other = "b1b2c3d4e5f60718293a4b5c6d7e8f90b";
-    expect(() => assertRequestBindings("POST", qurl, { method: "POST", body: qbody }, BIND, other)).toThrow(HoldError);
-    expect(() => assertRequestBindings("GET", U(`https://api.notion.com/v1/databases/${ID}`), undefined, BIND, null)).toThrow(HoldError);
+    expect(() => assertRequestBindings("POST", qurl, { method: "POST", body: qbody }, BIND, other, 0)).toThrow(HoldError);
+    expect(() => assertRequestBindings("GET", U(`https://api.notion.com/v1/databases/${ID}`), undefined, BIND, null, 0)).toThrow(HoldError);
     const badTitle = JSON.stringify({
       query: "別物",
       filter: { property: "object", value: "database" },
       page_size: 100,
     });
-    expect(() => assertRequestBindings("POST", surl, { method: "POST", body: badTitle }, BIND, null)).toThrow(HoldError);
+    expect(() => assertRequestBindings("POST", surl, { method: "POST", body: badTitle }, BIND, null, 0)).toThrow(HoldError);
     expect(
-      () => assertRequestBindings("GET", U(`https://api.notion.com/v1/blocks/${other}/children`), undefined, BIND, null)
+      () => assertRequestBindings("GET", U(`https://api.notion.com/v1/blocks/${other}/children`), undefined, BIND, null, 0)
     ).toThrow(HoldError);
   });
 });
@@ -138,7 +166,7 @@ describe("guard (native 前・deny 到達なし)", () => {
       native += 1;
       return new Response("{}");
     }) as typeof fetch;
-    const counters: GuardCounters = { attempts: 0, rejected: 0 };
+    const counters: GuardCounters = { attempts: 0, rejected: 0, querySuccess: 0 };
     const g = createReadOnlyGuardFetch(inner, dir, counters, 1, BIND);
     // 許可経路は通る
     await g("https://api.notion.com/v1/search", { method: "POST", body: sbody });
@@ -167,7 +195,7 @@ describe("guard (native 前・deny 到達なし)", () => {
       seenRedirect = init?.redirect;
       return new Response("moved", { status: 301, headers: { location: "https://evil.example.com/" } });
     }) as typeof fetch;
-    const counters: GuardCounters = { attempts: 0, rejected: 0 };
+    const counters: GuardCounters = { attempts: 0, rejected: 0, querySuccess: 0 };
     const g = createReadOnlyGuardFetch(inner, dir, counters, 96, BIND);
     await expect(g("https://api.notion.com/v1/search", { method: "POST", body: sbody })).rejects.toThrow(
       /3xx/
@@ -188,7 +216,7 @@ describe("guard (native 前・deny 到達なし)", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })) as typeof fetch;
-    const counters: GuardCounters = { attempts: 0, rejected: 0 };
+    const counters: GuardCounters = { attempts: 0, rejected: 0, querySuccess: 0 };
     const g = createReadOnlyGuardFetch(inner, dir, counters, 96, BIND);
     const res = await g("https://api.notion.com/v1/search", { method: "POST", body: sbody });
     expect(await res.json()).toEqual({ a: 1, n: null });
@@ -203,7 +231,7 @@ describe("guard (native 前・deny 到達なし)", () => {
     const inner = (async () => {
       throw new Error("boom");
     }) as typeof fetch;
-    const counters: GuardCounters = { attempts: 0, rejected: 0 };
+    const counters: GuardCounters = { attempts: 0, rejected: 0, querySuccess: 0 };
     const g = createReadOnlyGuardFetch(inner, dir, counters, 96, BIND);
     await expect(g("https://api.notion.com/v1/search", { method: "POST", body: sbody })).rejects.toThrow(
       HoldError
@@ -226,7 +254,6 @@ describe("saveBodyWx", () => {
 });
 
 describe("packet (hash-first・形状証明)", () => {
-  const keyFn = (d: string, t: 1 | 5) => `${d}:type${t}`;
   const docs = Array.from({ length: 20 }, (_, i) => `S10${String(i).padStart(4, "0")}X`);
 
   it("40 keys・20 通・対・再導出が揃う packet のみ通過", () => {
@@ -301,5 +328,129 @@ describe("rounds (closed・明示指定)", () => {
     expect(requireRound(["node", "x.js", "--round=rest"]).round).toBe("rest");
     expect(() => requireRound(["node", "x.js"])).toThrow(HoldError);
     expect(() => requireRound(["node", "x.js", "--round=all"])).toThrow(HoldError);
+  });
+});
+
+describe("exact-chunk guard (actual helper bytes・hermetic)", () => {
+  const PARENT = "f1f2f3f4-f5f6-0708-1829-3a4b5c6d7e8f";
+  const DBID = "d1d2d3d4-d5d6-0708-1829-3a4b5c6d7e8f";
+
+  it("実 helper 送信 bytes が事前導出 chunk SHA と一致し、2 chunk 成功する", async () => {
+    const docs = Array.from({ length: 21 }, (_, i) => `S1${String(i).padStart(6, "0")}`);
+    const shas = deriveChunkBodySHAs(docs, edinetArchiveKey);
+    expect(shas).toHaveLength(2);
+    const bindings: GuardBindings = {
+      chunkBodySHAs: shas,
+      typedParentDashless: dashless(PARENT),
+      expectedTitle: "一次データ｜yuho-quant",
+    };
+    const dir = mkdtempSync(join(tmpdir(), "custody-test-"));
+    const counters: GuardCounters = { attempts: 0, rejected: 0, querySuccess: 0 };
+    const queryBodies: string[] = [];
+    const inner = (async (u: unknown, init?: RequestInit) => {
+      const url = new URL(String(u));
+      if (url.pathname === "/v1/search") {
+        const q = (JSON.parse(String(init?.body)) as { query: string }).query;
+        return new Response(
+          JSON.stringify({
+            results: [
+              {
+                object: "database",
+                id: DBID,
+                title: q,
+                parent: { type: "page_id", page_id: PARENT },
+                created_time: "2026-01-01T00:00:00.000Z",
+              },
+            ],
+            has_more: false,
+            next_cursor: null,
+          })
+        );
+      }
+      if (url.pathname.endsWith("/query")) {
+        queryBodies.push(String(init?.body));
+        return new Response(JSON.stringify({ results: [], has_more: false, next_cursor: null }));
+      }
+      return new Response(JSON.stringify({ results: [], has_more: false, next_cursor: null }));
+    }) as typeof fetch;
+    const g = createReadOnlyGuardFetch(inner, dir, counters, 96, bindings);
+    const prevFetch = globalThis.fetch;
+    const prevToken = process.env["NOTION_TOKEN"];
+    const prevParent = process.env["NOTION_ARCHIVE_PAGE_ID"];
+    process.env["NOTION_TOKEN"] = "test-token";
+    process.env["NOTION_ARCHIVE_PAGE_ID"] = PARENT;
+    try {
+      globalThis.fetch = g;
+      const verdicts = await checkDocsCustody("yuho-quant", docs);
+      expect(verdicts.size).toBe(21);
+      for (const v of verdicts.values()) expect(v).toEqual({ t1: "missing", t5: "missing" });
+    } finally {
+      globalThis.fetch = prevFetch;
+      if (prevToken === undefined) delete process.env["NOTION_TOKEN"];
+      else process.env["NOTION_TOKEN"] = prevToken;
+      if (prevParent === undefined) delete process.env["NOTION_ARCHIVE_PAGE_ID"];
+      else process.env["NOTION_ARCHIVE_PAGE_ID"] = prevParent;
+    }
+    // 実 helper の送信 bytes (素通し) が事前導出と一致する
+    expect(queryBodies).toHaveLength(2);
+    expect(shaOf(queryBodies[0])).toBe(shas[0]);
+    expect(shaOf(queryBodies[1])).toBe(shas[1]);
+    expect(counters.querySuccess).toBe(2);
+    expect(counters.rejected).toBe(0);
+  });
+
+  it("同一 chunk 再送は成功まで許可・前進後の再送と変造 body は拒否", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "custody-test-"));
+    const counters: GuardCounters = { attempts: 0, rejected: 0, querySuccess: 0 };
+    const statuses = [500, 200];
+    let native = 0;
+    const inner = (async () => {
+      native += 1;
+      const st = statuses.shift() ?? 200;
+      return new Response(JSON.stringify({ results: [], has_more: false }), { status: st });
+    }) as typeof fetch;
+    const g = createReadOnlyGuardFetch(inner, dir, counters, 96, BIND);
+    const qbody = JSON.stringify({
+      filter: {
+        or: [
+          { property: "Key", title: { equals: "S1000000X:type1" } },
+          { property: "Key", title: { equals: "S1000000X:type5" } },
+        ],
+      },
+      page_size: 41,
+    });
+    const qurl = `https://api.notion.com/v1/databases/${ID}/query`;
+    // 1 回目 500: 前進しない
+    await g(qurl, { method: "POST", body: qbody });
+    expect(counters.querySuccess).toBe(0);
+    // 同一 chunk 再送 → 200 で前進
+    await g(qurl, { method: "POST", body: qbody });
+    expect(counters.querySuccess).toBe(1);
+    expect(native).toBe(2);
+    // 前進後の同一 body 再送は拒否 (native 未到達)
+    await expect(g(qurl, { method: "POST", body: qbody })).rejects.toThrow(HoldError);
+    expect(native).toBe(2);
+    // 変造 body は別 guard (chunk 0) でも拒否
+    const or = (JSON.parse(qbody) as { filter: { or: unknown[] } }).filter.or;
+    const subset = JSON.stringify({ filter: { or: (or as unknown[]).slice(0, 1) }, page_size: 41 });
+    const oversized = JSON.stringify({ filter: { or: [...(or as unknown[]), or[0]] }, page_size: 41 });
+    for (const bad of [subset, oversized]) {
+      const d2 = mkdtempSync(join(tmpdir(), "custody-test-"));
+      const c2: GuardCounters = { attempts: 0, rejected: 0, querySuccess: 0 };
+      let n2 = 0;
+      const g2 = createReadOnlyGuardFetch(
+        (async () => {
+          n2 += 1;
+          return new Response("{}");
+        }) as typeof fetch,
+        d2,
+        c2,
+        96,
+        BIND
+      );
+      await expect(g2(qurl, { method: "POST", body: bad })).rejects.toThrow(HoldError);
+      expect(n2).toBe(0);
+      expect(c2.querySuccess).toBe(0);
+    }
   });
 });
