@@ -76,6 +76,19 @@ SHA・limits のみ (public 可)。per-doc の値・表は private 0600 のみ�
 fetchAttempts 0 / sourceGET 0 / notionCreateUpdateArchive 0 /
 d1r2mutation 0 / workflow 0 / newReceipts 0 / sends 0。
 
+## 旧 scope 記述の正誤 (PR208 merge 確定後)
+
+- 旧 overseas scope notes の「SOL review待ち」「数値選択不変」は
+  PR208 最終 (numeric+scope CLEAR) により stale。現真値は本記録と
+  `overseas-numeric-root-2026-09-30.md` が持つ (旧 note は歴史記録
+  として残し、書換えない)。
+- 最終 59 gate: MATCH 15 / flips 32 / scope-only 12。
+  table-local numeric root の validation は完了。
+  歴史 data-write は 0 (本番 D1/Notion への書込なし)。
+- 現 repair の apply qualification は別途 PENDING (本 PREP は
+  apply-qualified 0)。PREP actual 候補数は dedup union join からのみ
+  導出し、旧1695 比較 count の再使用はしない。
+
 ## limits
 
 - 1411/1487/36 (3602 census) と旧 live 1695 (旧 parser prep 由来
