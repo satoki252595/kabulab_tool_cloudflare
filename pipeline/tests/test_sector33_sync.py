@@ -852,6 +852,27 @@ class TestCurrentSnapshotGate:
         assert store.write_sql == []
         assert state["failed"] == 1
 
+    @pytest.mark.parametrize("code", ["72030", "7203 ", "130a", "７２０３", "0000"])
+    def test_noncanonical_code_stops(self, monkeypatch, tmp_path, code):
+        """5 桁 source 形・trim 差・表記揺れ・phantom は正準でないため STOP。"""
+        store, state, report = self._run(
+            monkeypatch, tmp_path, [{"code": code, "sector33": None}]
+        )
+        assert report.stopped == "invalid-current-stop"
+        assert store.write_sql == []
+        assert state["failed"] == 1
+
+    @pytest.mark.parametrize("sector", [{"k": 1}, ["化学"], 123, 1.5, True])
+    def test_malformed_sector33_type_stops(self, monkeypatch, tmp_path, sector):
+        """sector33 は str/None のみ。dict/list/数値は writer 前に STOP。"""
+        t1 = _real_tickers(1)[0][0]
+        store, state, report = self._run(
+            monkeypatch, tmp_path, [{"code": t1, "sector33": sector}]
+        )
+        assert report.stopped == "invalid-current-stop"
+        assert store.write_sql == []
+        assert state["failed"] == 1
+
     @pytest.mark.parametrize("row", [{"code": "7203"}, {"sector33": None}, ["7203"], "7203", None])
     def test_incomplete_row_stops(self, monkeypatch, tmp_path, row):
         store, state, report = self._run(monkeypatch, tmp_path, [row])

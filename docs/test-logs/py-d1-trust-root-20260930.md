@@ -34,19 +34,24 @@ offline 検証のみ。D1 実送・source・Notion・R2・dispatch 0。
 ## sector job の snapshot gate
 
 - current active snapshot の空・非 dict 行・code/sector33 欠落・
-  空 code・不正 code・code 重複は `invalid-current-stop` の
-  prewrite STOP (書込 0)。code 当否は標準 `source_code_to_ticker`。
-- sector33 値の当否は gate で見ない。未知値は retain + gap (partial)
-  のまま (NULL 消去しない方針は維持)。
+  非正準 code・phantom・sector33 非 str/非 None・code 重複は
+  `invalid-current-stop` の prewrite STOP (書込 0)。
+- code は標準 `parse_stock_code` の正準形と一文字ずつ一致が必須
+  (5 桁 source 形・trim 差・表記揺れは STOP)。重複は正準 ID で見る。
+  `0000` は標準 helper が通す phantom のため明示除外する。
+- sector33 は str/None の構造型のみ許す (dict/list の hash 不能・
+  数値の不正 DB 形を writer 前に STOP)。未知文字列・None は
+  retain + gap (partial) のまま (NULL 消去しない方針は維持)。
 - 診断 taxonomy に `invalid-current-stop` を追加。
 
 ## 検証 (offline)
 
-- `pipeline: ruff + pytest` 全緑 (1552 passed / 0 failed / 58 skipped)。
+- `pipeline: ruff + pytest` 全緑 (1562 passed / 0 failed / 58 skipped)。
 - 既存 double の非現実形 (`result: []`・entry success 欠落) を実 API 形
   (`result: [{success: true, results: []}]`) へ是正。
 - 新規: 応答異常 15 形・bind 8 形 (sends 0)・境界 100・upsert 後半 NaN
   (sends 0)・upsert 非 scalar 3 形・file_size 厳格 5 形・sector gate
-  (空・重複・空/不正 code 5 形・不完全行 5 形・retain 対照)。
+  (空・重複・空/不正 code 5 形・非正準 code 5 形・sector33 構造型 5 形・
+  不完全行 5 形・retain 対照)。
 - 既存 1 件の seed を新契約へ更新 (`test_unmapped_nontarget_hold` に
   active 行を追加。空 snapshot は STOP が正のため。assert 内容は不変)。
