@@ -4,6 +4,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { runDailySync, runMarketContextSync } from "./daily.js";
+import type { OverlayCollectFn } from "./universe-overlay.js";
+import { fakeOverlayCollect } from "./tests/overlay-batch.js";
+
+const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
+
 import {
   fetchChart,
   fetchStockRawData,
@@ -68,6 +73,10 @@ function recordingDb() {
     async (sql, p) => {
       calls.push(sql);
       params.push([...p]);
+      // overlay state: base 確定・世代未適用 (bootstrap gate 通過)。
+      if (/^\s*select/i.test(sql) && sql.includes("universe_overlay_state")) {
+        return { rows: [[1, "2026-08-31", null, null, null, null, 0, 0, 0, null]] };
+      }
       return { rows: [] };
     },
     {
@@ -194,6 +203,12 @@ function recordingDbWithTargets() {
       }
       if (/count\(\*\)/i.test(sql)) return { rows: [[0]] };
       if (/max\(/i.test(sql)) return { rows: [[null]] };
+      // overlay state: base 確定・世代未適用 (bootstrap gate 通過、適用は進む)。
+      // 列順: id, base_as_of, events_fetched_at, events_sha, eligibility_as_of,
+      // applied_at, applied_delist, applied_listing, applied_transfer, held_listing_codes。
+      if (/^\s*select/i.test(sql) && sql.includes("universe_overlay_state")) {
+        return { rows: [[1, "2026-08-31", null, null, null, null, 0, 0, 0, null]] };
+      }
       return { rows: [] };
     },
     {
@@ -226,7 +241,7 @@ describe("株式とマクロの日次分離", () => {
     // dataDateが今日でも、実timestampの日足が無ければ祝日/障害を成功にしない。
     vi.mocked(fetchChart).mockResolvedValue(chart(date));
     const { db, calls } = recordingDb();
-    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow("日足を確認できません");
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect })).rejects.toThrow("日足を確認できません");
     expect(calls).toEqual([]);
     expect(fetchStockRawData).not.toHaveBeenCalled();
     expect(recordPriceSyncLog).toHaveBeenCalledWith("test-db", expect.objectContaining({
@@ -243,7 +258,7 @@ describe("株式とマクロの日次分離", () => {
         close: null, volume: null, adj: null }],
     });
     const { db, calls } = recordingDb();
-    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow("日足を確認できません");
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect })).rejects.toThrow("日足を確認できません");
     expect(calls).toEqual([]);
     expect(fetchStockRawData).not.toHaveBeenCalled();
     expect(recordPriceSyncLog).toHaveBeenCalledWith("test-db", expect.objectContaining({
@@ -507,14 +522,21 @@ describe("株式 guard の default パス共有 (stocksOnly 依存の除去)", (
     mockMacro(ALIGNED);
     vi.mocked(fetchStockRawData).mockResolvedValue(stockRaw(ohlcv));
     const { db, calls } = recordingDbWithTargets();
-    const result = await runDailySync(db, {});
+    const result = await runDailySync(db, { collectOverlay: fakeCollect });
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].code).toBe("1301");
     expect(result.failures[0].error).toMatch(/実日足が未取得/);
-    // 回収なし (非 transient)。銘柄 INSERT 0、マクロ 1 件のみ。
+    // 回収なし (非 transient)。銘柄 INSERT 0、マクロ 1 件。
+    // 空 overlay は singleton 世代 commit のみ (production helper の正規書込)。
     expect(fetchStockRawData).toHaveBeenCalledTimes(1);
     const inserts = calls.filter((sql) => sql.startsWith("insert"));
-    expect(inserts).toHaveLength(1);
-    expect(inserts[0]).toContain('insert into "swing_market_context"');
+    expect(inserts).toHaveLength(2);
+    expect(
+      inserts.filter((sql) => sql.includes('insert into "swing_market_context"'))
+    ).toHaveLength(1);
+    expect(
+      inserts.filter((sql) => sql.includes('insert into "universe_overlay_state"'))
+    ).toHaveLength(1);
+    expect(inserts.filter((sql) => sql.includes("core_stocks"))).toHaveLength(0);
   });
 });

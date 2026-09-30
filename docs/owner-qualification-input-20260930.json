@@ -1,0 +1,147 @@
+{
+ "meta": {
+  "qualificationDate": "2026-09-30",
+  "qualificationBasis": "current-owner-qualified",
+  "derivedFrom": "docs/ipo-classification-ledger-20260930.json (captured 9/9, readback verified)",
+  "note": "requested elig からの割当ではない。Root 承認後に composer deps へ供給する。runtime loader は未配線 (別途 Root 決定)。",
+  "sourceAsOf": "unknown (basic頁にas-of原文なし)",
+  "historicUse": "forbidden (planner が eligibility 不一致を HOLD)"
+ },
+ "codes": {
+  "618A": {
+   "date": "2026-09-30",
+   "basis": "current-owner-qualified",
+   "marketBare": "グロース",
+   "receiptPins": {
+    "entrySha": "4345b4de1173193c46cac51c5f26c3dcfa023d7dcbc800bef13c564f093296c9",
+    "searchSha": "f2ad5dd98ae1af9ecaa656e57ead10d7fe0723869f0120920fd626e65a5d0e9b",
+    "rawSha": "9022607693defcb6023888658fecff24f08d2e41f82cb5452f2c10d94a39eb71",
+    "custodyPageIds": [
+     "3ebd74ff-84cd-817e-9851-d0466a315bc5",
+     "3ebd74ff-84cd-81a4-ab76-db0b76687893",
+     "3ebd74ff-84cd-8131-97b7-db9a88334ba7"
+    ]
+   }
+  },
+  "621A": {
+   "date": "2026-09-30",
+   "basis": "current-owner-qualified",
+   "marketBare": "グロース",
+   "receiptPins": {
+    "entrySha": "95936562a0ef21f75e3b1745cee1e58084f49e7791a8df465b1185cdcf6e12f2",
+    "searchSha": "a3dd578c26626c80a962763c165c49d71e1fca3e66bc1b975fd0f4e52f0052a5",
+    "rawSha": "90561a2b8c1f45ab5d204b0837398d7ee520159e3f81741c4e53c6eba985ab25",
+    "custodyPageIds": [
+     "3ebd74ff-84cd-8108-a2ef-c2d9ff86feb1",
+     "3ebd74ff-84cd-815a-83e9-e9b856fcc865",
+     "3ebd74ff-84cd-813d-882f-ec161d5ffcff"
+    ]
+   }
+  },
+  "625A": {
+   "date": "2026-09-30",
+   "basis": "current-owner-qualified",
+   "marketBare": "グロース",
+   "receiptPins": {
+    "entrySha": "760b789525b44905d6f73b28ecf8abc3d2079f81c238fad057c8978c8de7ce6c",
+    "searchSha": "e61e2997671ca288c4b343a73f8d76c9d3b8a7d240cb1316bd5ac46a2f66302e",
+    "rawSha": "fcbe4676cdbe7633dd5fe0f92ff827c6de96b55d9818335b589981fa83443b2e",
+    "custodyPageIds": [
+     "3ebd74ff-84cd-81ce-8def-eef132977c0f",
+     "3ebd74ff-84cd-8145-a3c8-ee0d10754da4",
+     "3ebd74ff-84cd-81bd-b185-feee2e83b6b6"
+    ]
+   }
+  },
+  "622A": {
+   "date": "2026-09-30",
+   "basis": "current-owner-qualified",
+   "marketBare": "スタンダード",
+   "receiptPins": {
+    "entrySha": "e4730a66479726af30eb2408d8ca644ff38e4b2ece861cbb501c3c03610f661c",
+    "searchSha": "d5860a9156b465b68c2dc7aff48c9cd1f0ce0639fb700b473c422e7590e8aa9a",
+    "rawSha": "194fc9e72cf86069196e7721d7184edb99dd1d949aa06a5c2772e0359830163a",
+    "custodyPageIds": [
+     "3ebd74ff-84cd-8138-b35c-fdc95b473178",
+     "3ebd74ff-84cd-8172-a6c2-fcfe4a0af1ce",
+     "3ebd74ff-84cd-8172-b224-d6f5e80ecd8c"
+    ]
+   }
+  },
+  "623A": {
+   "date": "2026-09-30",
+   "basis": "current-owner-qualified",
+   "marketBare": "スタンダード",
+   "receiptPins": {
+    "entrySha": "6f0eeea1c830adfd8575ad91aa9a42dff236bc88afaf7c198abbf72f1ab00edb",
+    "searchSha": "d8543659e8c63ceab00a3ccd7370690091b2cdd2d5f35492ff37b6c31a829228",
+    "rawSha": "17120e8e8c997db3a97f3056b208f140cb7a9cdf51047b71626e6a2231209da6",
+    "custodyPageIds": [
+     "3ebd74ff-84cd-818c-ad75-e2f5afecf38d",
+     "3ebd74ff-84cd-81ee-9181-f0dd73672930",
+     "3ebd74ff-84cd-8175-9800-eee182025c4f"
+    ]
+   }
+  },
+  "627A": {
+   "date": "2026-09-30",
+   "basis": "current-owner-qualified",
+   "marketBare": "スタンダード",
+   "receiptPins": {
+    "entrySha": "fdae9d4328b6a6c1dc31f029e50de5b3c973fa8109b1405009644483b2860b88",
+    "searchSha": "1a06f067ad19260315375f106a25245a72d2dc50a4b962795568bb2cb50645c0",
+    "rawSha": "b8d3d5a51680d98c3fc9843d5955df21c797d9fd687f5a57f66b2c2b38dc2a61",
+    "custodyPageIds": [
+     "3ebd74ff-84cd-8180-b62b-ec044eec190b",
+     "3ebd74ff-84cd-8154-823b-e8c49c50bd71",
+     "3ebd74ff-84cd-8157-aded-dd66f13d9f6d"
+    ]
+   }
+  },
+  "634A": {
+   "date": "2026-09-30",
+   "basis": "current-owner-qualified",
+   "marketBare": "スタンダード",
+   "receiptPins": {
+    "entrySha": "1ef23c8f435490229a02318142024f669c90743cf654dcbcacfe806de5502133",
+    "searchSha": "0a063c8dec0413bd56c1566db538fdfeea2f6a89c85340e1f4374acb73c95cab",
+    "rawSha": "3a4105a3b0485804f4c780f3ded4877b5a9a66d9f892f7a555b7014e74f0af41",
+    "custodyPageIds": [
+     "3ebd74ff-84cd-81a7-8b91-e6990de457d4",
+     "3ebd74ff-84cd-8195-b5d6-fb9da95afa6a",
+     "3ebd74ff-84cd-8153-aca1-d3233d9b437f"
+    ]
+   }
+  },
+  "646A": {
+   "date": "2026-09-30",
+   "basis": "current-owner-qualified",
+   "marketBare": "スタンダード",
+   "receiptPins": {
+    "entrySha": "1d45f9ced073f8bcad7ce40f1b959612492b22d673e6849375412fd95b8a208e",
+    "searchSha": "828e5eef6a602812cdbb341e7e58e72f71b19683c0d41af938a0f72020c0ce15",
+    "rawSha": "d1a4e4ef2e8766c6aed16a8efb7dcb19b45890a0d5cf80e4a08ce1786a70f9ca",
+    "custodyPageIds": [
+     "3ebd74ff-84cd-818c-9168-fd42d3f758ff",
+     "3ebd74ff-84cd-812a-9fc0-e5fcc7f37d6f",
+     "3ebd74ff-84cd-81bd-bb37-c8327abc48fe"
+    ]
+   }
+  },
+  "619A": {
+   "date": "2026-09-30",
+   "basis": "current-owner-qualified",
+   "marketBare": "スタンダード",
+   "receiptPins": {
+    "entrySha": "d9067e50d0fea01df2fbf532857bb914993458f387cd4d070b482382efeaba3b",
+    "searchSha": "00c9fe2d4beb55474bcfaf3738dc470c351b87ce735dcbea21164cd9f5622d45",
+    "rawSha": "c5960b694a769f082a957616b77989927ba667367019cd5546bb8ea603512d3a",
+    "custodyPageIds": [
+     "3ebd74ff-84cd-81fd-8dfa-d893b0aa24ab",
+     "3ebd74ff-84cd-8197-81bf-e170e471d24c",
+     "3ebd74ff-84cd-8170-a426-e5e3ac476f1e"
+    ]
+   }
+  }
+ }
+}

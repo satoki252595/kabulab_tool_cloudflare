@@ -131,6 +131,540 @@ export function isDiscountWithoutRedeemable(descRaw: string): boolean {
 export const HIGH_VALUE_THRESHOLD = 50000;
 
 /**
+ * 企業提示 (company) の名目認定。LLM の推定値を company として採用してよいかの
+ * 決定論判定 (純関数)。`sanitizeEstimatedValue` (危険値の除去) とは別物で、
+ * sanitize を通ってもここで HOLD なら company にしない (root bug の修正:
+ * 旧 planSummaryImport は sanitize + 金額表現の存在だけで company を付けていた)。
+ *
+ * positive は「受益の額面 scope の同定」が必須で、整数一致だけでは足りない。
+ * 利用価格・購入金額条件 (優待価格○円、○円以上の買物で) との一致は額面の
+ * 根拠にならない。単価×数量・ポイント×レートの組合せは同一 clause 内のもの
+ * だけ認める (全文 cross product は無関係 clause の金額を拾う)。
+ * 否定マーカー (choice/addon/resale/approx) は全文で見る: 別 clause の
+ * 免責 (※金額は目安) を見逃す方が危険なため、安全側 (HOLD) に倒す。
+ *
+ * QUALIFY (exact, per-benefit — 整数の完全一致のみ。2% 許容は使わない):
+ * - face-literal: 値と一致する額面表示 (○円相当 / ○円分 / ○円券の隣接)。
+ *   年間・合計・範囲・購入条件・換算レート・単価つきの金額は額面候補から除く
+ * - coupon-unit: 同一 clause 内の明示の単価 (1枚当たり○円相当・○円券) ×
+ *   per-grant 数量 (単価の基数・年間数量を除く)。
+ *   額面×数量の明示積 (100円×25枚) も同じ扱い
+ * - points-rate: 同一 clause 内の明示の厳密レート (1ポイント1円) × ポイント数
+ *   (販促・レート基数を除く)
+ * HOLD:
+ * - approx: ≒/約 (約款等の複合語を除く)
+ * - foreign: 外貨額面の未換算 / lottery: 抽選賞品 / discount: 割引の金額化
+ * - choice: 選択肢の別価値 (単一代表値は不正確)
+ * - addon: 付帯物の別価値 / resale: 転売・買取相場
+ * - annual: 年間合計を各月に充当
+ * - multi_face_components: 額面候補が2種類以上 (部分摘み・合算はしない)
+ * - unit_partial: 単価だけの値 (数量つきの受益全体ではない)
+ * - no_per_grant_face: 上のいずれにも当たらない (無関係の金額・数量、推定合計等)
+ *
+ * 文言+値だけの判定が `qualifyCompanyNominal`。株数・権利月の recipient
+ * context を含む厳密判定は `qualifyCompanyPerGrantValue` (要約取込と
+ * full-import carry の両方が同じ関数を使う。述語の二重化はしない)。
+ *
+ * 機械判定の対象外 (人手監査に委ねる): 同一文言の別 instrument の部分摘み
+ * (A券/B券の片方だけ等)、無標識の併給 (+優待品) の部分額。「+」は「+税」
+ * 記法と衝突するため addon マーカーにしない。「コース」「プラン」は物理的
+ * 施設・料金体系の意味がありうるため choice マーカーにしない。
+ */
+export type CompanyNominalVerdict =
+  | { qualified: true; rule: "face-literal" | "coupon-unit" | "points-rate" }
+  | { qualified: false; code: string; detail: string };
+
+/** 約の複合語 (近似の意味を持たないため approx 判定から除く)。 */
+const YAKU_COMPOUNDS = [
+  "約款",
+  "契約",
+  "条約",
+  "婚約",
+  "予約",
+  "節約",
+  "解約",
+  "旧約",
+  "新約",
+  "誓約",
+  "制約",
+  "規約",
+  "要約",
+  "概要",
+  "簡約",
+  "集約",
+  "約定",
+  "約数",
+  "約分",
+  "倹約",
+];
+
+function hasApproxMarker(descRaw: string): boolean {
+  const desc = normalizeNumeric(descRaw);
+  if (desc.includes("≒")) return true;
+  let stripped = desc;
+  for (const c of YAKU_COMPOUNDS) stripped = stripped.split(c).join("");
+  return stripped.includes("約");
+}
+
+/** 選択肢の存在 (単一金額では代表できない)。 */
+function hasChoiceMarker(descRaw: string): boolean {
+  return /選択|選べ|お選び|どちらか|いずれか|[①②③④⑤⑥⑦⑧⑨⑩]/.test(normalizeNumeric(descRaw));
+}
+
+/** 付帯物の存在 (金額の対象が本体+付帯で、全額が不明)。 */
+function hasAddonMarker(descRaw: string): boolean {
+  return /さらに|加えて|別途|併せて|あわせて|それに加え/.test(normalizeNumeric(descRaw));
+}
+
+/** 転売・買取相場の存在 (企業提示の額面ではない)。 */
+function hasResaleMarker(descRaw: string): boolean {
+  return /転売|オークション|ヤフオク|メルカリ|中古相場|買取価格|フリマ/.test(normalizeNumeric(descRaw));
+}
+
+/**
+ * 円建て金額の出現位置つき抽出。ポイント/pt は含めない
+ * (qualifier はポイントを円扱いしない。明示レートがある場合だけ
+ * points-rate 規則で別に見る)。
+ */
+function extractStrictYenSpans(descRaw: string): YenSpan[] {
+  const desc = normalizeNumeric(descRaw);
+  const spans: YenSpan[] = [];
+  const num = (m: string): number => Number(m.replace(/,/g, ""));
+  const push = (m: RegExpMatchArray, value: number): void => {
+    if (m.index === undefined) return;
+    spans.push({ value, index: m.index, end: m.index + m[0].length });
+  };
+  // 数値境界: 小数・桁の一部の断片 (0.5円の「5円」) は採らない。
+  // 未対応の小数トークンは拒否 (小数演算はしない)。
+  for (const m of desc.matchAll(/(?<![0-9.．])([0-9][0-9,]*)\s*万\s*円/g)) {
+    push(m, num(m[1]) * 10000);
+  }
+  for (const m of desc.matchAll(/(?<![0-9.．])([0-9][0-9,]*)\s*千\s*円/g)) {
+    push(m, num(m[1]) * 1000);
+  }
+  for (const m of desc.matchAll(/(?<![0-9.．])([0-9][0-9,]*)\s*円/g)) {
+    const v = num(m[1]);
+    if (v > 0) push(m, v);
+  }
+  return spans;
+}
+
+/** span の直前が「年間」か (年間合計の金額・数量は per-grant の根拠にしない)。 */
+function isAnnualSpan(desc: string, index: number): boolean {
+  return /年間\s*$/.test(desc.slice(Math.max(0, index - 8), index));
+}
+
+/**
+ * 額面にならない金額 span か (正規化後テキストで判定):
+ * - 年間・合計・総額・累計つき (期間合計・総額は per-grant の額面ではない)
+ * - 範囲・近似つき (〜○円、約○円、≒○円。端の値だけ摘むのは tier-pick と同じ。
+ *   約は漢字複合語 (節約・予約等) の一部を除く)
+ * - 購入条件・利用条件つき (○円以上/以下/未満/超/から/まで/ごとに使える、
+ *   ○円引き/割引。使うための条件額・割引額は受益の額面ではない。
+ *   税込注記 ([税込]/（税込）) を挟む形も同じ)
+ * - 換算レート・単価つき (○ポイント○円、1枚当たり○円、○枚につき○円。
+ *   レート・単価自体は受益全体の額面ではない。括弧挟みも同じ)。
+ *   素の並置 (3枚セット（10,000円相当）のような set-total) までは除かない —
+ *   実形に単価読みの根拠が無く、除くと set-total を誤爆するため。
+ */
+function isNonFaceSpan(desc: string, span: YenSpan): boolean {
+  const before = desc.slice(Math.max(0, span.index - 12), span.index);
+  if (/(?:年間|合計|総額|累計)\s*$/.test(before)) return true;
+  if (/[〜～≒＝=]\s*$/.test(before)) return true;
+  const yaku = before.match(/約\s*$/);
+  if (yaku?.index !== undefined) {
+    const prev = before[yaku.index - 1];
+    if (prev === undefined || !/[\u4e00-\u9fff]/.test(prev)) return true;
+  }
+  if (/(?:ポイント|(?<![A-Za-z])pt)\s*[（(]?\s*(?:当たり|あたり|当り)?\s*$/.test(before)) return true;
+  if (/(?:枚|個|口|冊|本|セット|点|回)\s*[（(]?\s*(?:当たり|あたり|当り)\s*$/.test(before)) return true;
+  if (/(?:枚|個|口|冊|本|セット|点|回|ポイント|(?<![A-Za-z])pt)\s*につき\s*$/.test(before)) return true;
+  const after = desc.slice(span.end, span.end + 12);
+  return /^(?:\[[^\]]*\]|（[^）]*）|\([^)]*\))?(?:以上|以下|未満|超|から|まで|ごと|毎|引き|割引|オフ|OFF)/.test(
+    after
+  );
+}
+
+/** 額面候補の span (年間・合計・範囲・購入条件つきを除く)。 */
+function extractFaceSpans(descRaw: string): YenSpan[] {
+  const desc = normalizeNumeric(descRaw);
+  return extractStrictYenSpans(descRaw).filter((s) => !isNonFaceSpan(desc, s));
+}
+
+/**
+ * 円建て金額 (万/千/円。ポイントは除く) の distinct 値。年間・合計・範囲・
+ * 購入条件つきは除く。複数月・複数 tier の曖昧さ判定に使う
+ * (per-grant 候補が 2 種類以上あれば文言から 1 つに決めない)。
+ */
+export function extractStrictYenAmounts(descRaw: string): number[] {
+  return [...new Set(extractFaceSpans(descRaw).map((s) => s.value))];
+}
+
+/**
+ * 券の隣接窓 (文字数)。「○円相当の商品券」「○円分の商品券」を拾う幅。
+ * clause 境界 (。、；・括弧) で切る — 別 clause の券は数えない。
+ */
+const TICKET_WINDOW_CHARS = 8;
+
+/** span 直後の窓に券があるか (○円券 / ○円相当の商品券)。 */
+function hasTicketAfter(desc: string, span: YenSpan): boolean {
+  const window = desc.slice(span.end, span.end + TICKET_WINDOW_CHARS).split(/[。、；\n（(]/)[0];
+  return window !== undefined && window.includes("券");
+}
+
+/**
+ * 額面表示の値 (○円相当 / ○円分 / ○円券の隣接)。企業の額面 scope の同定で、
+ * 素の金額一致 (利用価格・購入金額条件との一致) は採らない。
+ */
+function extractFaceValues(descRaw: string): number[] {
+  const desc = normalizeNumeric(descRaw);
+  const out: number[] = [];
+  for (const s of extractFaceSpans(descRaw)) {
+    const rest = desc.slice(s.end, s.end + 6);
+    if (/^\s*相当/.test(rest) || rest.startsWith("分") || hasTicketAfter(desc, s)) {
+      out.push(s.value);
+    }
+  }
+  return out;
+}
+
+/** 券の額面 unit (○円券)。同一 clause 内の数量と掛けて coupon-unit 規則で見る。 */
+function extractTicketUnits(clauseRaw: string): number[] {
+  const clause = normalizeNumeric(clauseRaw);
+  const out: number[] = [];
+  for (const s of extractStrictYenSpans(clause)) {
+    if (!isNonFaceSpan(clause, s) && hasTicketAfter(clause, s)) out.push(s.value);
+  }
+  return out;
+}
+
+/** 年間数量 (「年間 6枚」)。年間合計の金額化チェックに使う。 */
+function extractAnnualQuantities(descRaw: string): number[] {
+  const desc = normalizeNumeric(descRaw);
+  const out: number[] = [];
+  for (const m of desc.matchAll(/年間[^\d\n。]{0,6}([0-9][0-9,]*)\s*(?:枚|個|口|冊|本|セット|点|回)/g)) {
+    const n = Number(m[1].replace(/,/g, ""));
+    if (n >= 1 && n <= 100) out.push(n);
+  }
+  return out;
+}
+
+/**
+ * 単価表現の基数 (1枚当たり○円の「1枚」) を落とす。基数は付与数ではなく
+ * 単価の定義域なので、数量ヒントに混ぜると単価×1=単価の shortcut が通る。
+ */
+function stripUnitCardinals(desc: string): string {
+  return desc.replace(
+    /[0-9][0-9,]*\s*(?:枚|個|口|冊|本|セット|点|回)(?=\s*(?:当たり|あたり|当り|につき))/g,
+    ""
+  );
+}
+
+/** 年間数量を除いた per-grant の数量ヒント (単価の基数・小数トークンを除く)。 */
+function extractPerGrantQuantities(descRaw: string): number[] {
+  const desc = normalizeNumeric(descRaw);
+  // 小数トークン (×2.5枚) は数量にしない。整数部の切り出し (2・5) は捏造のため。
+  // 既存の extractQuantities 自体は変えない (旧経路の挙動不変)。
+  const dedecimal = desc.replace(/[0-9][0-9,]*[.．][0-9]+/g, "");
+  const stripped = dedecimal.replace(/年間[^\d\n。]{0,6}[0-9][0-9,]*\s*(?:枚|個|口|冊|本|セット|点|回)/g, "");
+  return extractQuantities(stripUnitCardinals(stripped));
+}
+
+/** 明示の単価 (1枚当たり○円相当)。値そのまま (万/千換算つき)。 */
+function extractCouponUnits(descRaw: string): number[] {
+  const desc = normalizeNumeric(descRaw);
+  const out: number[] = [];
+  // 1 の境界: 桁の一部 (21枚当たりの「1枚」) は基数にしない。
+  for (const m of desc.matchAll(
+    /(?<![0-9.．])1\s*(?:枚|個|口|セット|点|回|冊|本)\s*(?:当たり|あたり|当り|につき)\s*([0-9][0-9,]*)\s*(万\s*円|千\s*円|円)/g
+  )) {
+    const mult = m[2].startsWith("万") ? 10000 : m[2].startsWith("千") ? 1000 : 1;
+    out.push(Number(m[1].replace(/,/g, "")) * mult);
+  }
+  return out;
+}
+
+/** 額面×数量の明示積 (100円×25枚) の unit/qty 対。年間にかかるものは除く。 */
+function extractFaceProductPairs(descRaw: string): { unit: number; qty: number }[] {
+  const desc = normalizeNumeric(descRaw);
+  const out: { unit: number; qty: number }[] = [];
+  // unit の数値境界 (qty 側は「円×N枚」の剛直形が自己防衛する)。
+  for (const m of desc.matchAll(
+    /(?<![0-9.．])([0-9][0-9,]*)\s*(万\s*円|千\s*円|円)\s*[×x✕]\s*([0-9][0-9,]*)\s*(?:枚|個|口|セット|点|回|冊|本)/gi
+  )) {
+    if (m.index !== undefined && isAnnualSpan(desc, m.index)) continue;
+    const mult = m[2].startsWith("万") ? 10000 : m[2].startsWith("千") ? 1000 : 1;
+    const unit = Number(m[1].replace(/,/g, "")) * mult;
+    const qty = Number(m[3].replace(/,/g, ""));
+    if (qty >= 1 && qty <= 100) out.push({ unit, qty });
+  }
+  return out;
+}
+
+/** 額面×数量の明示積 (100円×25枚)。 */
+function extractFaceProducts(descRaw: string): number[] {
+  return extractFaceProductPairs(descRaw).map((p) => p.unit * p.qty);
+}
+
+/** 明示積の unit 側 (100円×25枚の 100)。単価 literal の抑止に使う。 */
+function extractFaceProductUnits(descRaw: string): number[] {
+  return extractFaceProductPairs(descRaw).map((p) => p.unit);
+}
+
+/** 販促ポイント (還元/付与/倍) か。extractYenSpans と同じ 6 文字規則。 */
+function isPromoPointsAfter(desc: string, end: number): boolean {
+  return /還元|付与|倍/.test(desc.slice(end, end + 6));
+}
+
+/** レート式の基数 (1ポイント1円の「1ポイント」) か。レート自体は付与数ではない。 */
+function isRateCardinalAfter(desc: string, end: number): boolean {
+  const after = desc.slice(end, end + 10);
+  return (
+    /^\s*[（(]?\s*(?:[≒＝=×x✕]|約)?\s*[0-9]/.test(after) ||
+    /^\s*(?:当たり|あたり|当り|は|=|→|：|:|につき)/.test(after)
+  );
+}
+
+/** ポイント数 (販促・レート基数を除く)。位置つき。 */
+function extractPointSpans(descRaw: string): YenSpan[] {
+  const desc = normalizeNumeric(descRaw);
+  const spans: YenSpan[] = [];
+  const push = (m: RegExpMatchArray): void => {
+    if (m.index === undefined) return;
+    const end = m.index + m[0].length;
+    if (isPromoPointsAfter(desc, end)) return;
+    const v = Number(m[1].replace(/,/g, ""));
+    if (v <= 0) return;
+    if (v === 1 && isRateCardinalAfter(desc, end)) return;
+    spans.push({ value: v, index: m.index, end });
+  };
+  // 数値境界: 小数の断片 (2.5ポイントの「5ポイント」) は採らない。
+  for (const m of desc.matchAll(/(?<![0-9.．])([0-9][0-9,]*)\s*ポイント/g)) push(m);
+  for (const m of desc.matchAll(/(?<![0-9.．])([0-9][0-9,]*)\s*pt\b/gi)) push(m);
+  return spans;
+}
+
+/**
+ * 明示の厳密レート (1ポイント1円)。1ポイントの基数を縛る 2 形だけ採る。
+ * 基数なし形 (ポイントN円相当) はポイント総額の表示から単位レートを捏造する
+ * ため採らない。≒/約つきは approx 規則で先に HOLD される。結合子なしの
+ * 離れ形 (「1ポイント 対象商品1500円」) は採らない。
+ */
+function extractExactRates(descRaw: string): number[] {
+  const desc = normalizeNumeric(descRaw);
+  const out: number[] = [];
+  const push = (m: RegExpMatchArray): void => {
+    out.push(Number(m[1].replace(/,/g, "")));
+  };
+  // 1 の境界: 桁の一部の 1 (5001ポイントの末尾「1」) は基数にしない。
+  for (const m of desc.matchAll(/(?<![0-9.．])1(?:ポイント|pt)([0-9][0-9,]*)\s*円/g)) push(m);
+  for (const m of desc.matchAll(
+    /(?<![0-9.．])1\s*(?:ポイント|pt)\s*(?:は|=|→|：|:|当たり|あたり|当り|につき)\s*([0-9][0-9,]*)\s*円/g
+  )) {
+    push(m);
+  }
+  return out;
+}
+
+/**
+ * 値が単価 (1枚当たり・○円券・○円相当×数量の unit) で、受益に数量 (2以上)
+ * がつくか。単価だけでは受益全体の額ではないので literal shortcut を塞ぐ
+ * (全体額の明示か単価×数量の積だけが positive)。抑止は全文で見る
+ * (HOLD 方向の安全側)。数量は基数・年間を除いた per-grant のもの。
+ */
+function isUnitPricedWhole(descRaw: string, value: number): boolean {
+  const units = new Set([
+    ...extractCouponUnits(descRaw),
+    ...extractTicketUnits(descRaw),
+    ...extractFaceProductUnits(descRaw),
+  ]);
+  if (!units.has(value)) return false;
+  return extractPerGrantQuantities(descRaw).some((q) => q >= 2);
+}
+
+/**
+ * 文言を clause (句) に割る。単価×数量・ポイント×レートの組合せは同一
+ * clause 内のものだけ認める — 全文 cross product は無関係 clause の金額を
+ * 拾って無関係な積を作る。括弧は割らない (「(1ポイント1円相当)」は一体)。
+ */
+function splitClauses(descRaw: string): string[] {
+  return normalizeNumeric(descRaw)
+    .split(/[。、；\n]+/)
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0);
+}
+
+/** 株数条件 tier の列挙 (N株以上)。文言に複数あれば tier 混在。 */
+function distinctShareThresholds(desc: string): Set<number> {
+  const out = new Set<number>();
+  for (const m of desc.matchAll(/([0-9][0-9,]*)\s*株以上/g)) {
+    out.add(Number(m[1].replace(/,/g, "")));
+  }
+  return out;
+}
+
+/** 保有年数条件 tier の列挙 (N年以上/未満/超)。 */
+function distinctYearThresholds(desc: string): Set<number> {
+  const out = new Set<number>();
+  for (const m of desc.matchAll(/([0-9][0-9,]*)\s*年(?:以上|未満|超)/g)) {
+    out.add(Number(m[1].replace(/,/g, "")));
+  }
+  return out;
+}
+
+/**
+ * 文言自体に複数の条件 tier が並ぶか (要約の文言とは無関係に判定する。
+ * 要約から保有年ラベルを消しても回避できない)。tier 混在 + per-grant 候補額
+ * が 2 種類以上あれば、tier↔金額の対応づけは構文解析なしに決めないので HOLD。
+ * 金額が 1 種類なら tier-pick の余地が無いのでここでは落とさない
+ * (経過措置の注記に年数条件が並ぶだけの単一額面の行まで落とさないため)。
+ */
+function hasMultiConditionTiers(descRaw: string): boolean {
+  const desc = normalizeNumeric(descRaw);
+  if (distinctShareThresholds(desc).size >= 2) return true;
+  if (distinctYearThresholds(desc).size >= 2) return true;
+  if (/年(?:以上|超)/.test(desc) && /年(?:未満|以下)/.test(desc)) return true;
+  if (/初年度/.test(desc) && /年(?:以上|未満|超)/.test(desc)) return true;
+  return false;
+}
+
+export function qualifyCompanyNominal(descRaw: string, value: number | null): CompanyNominalVerdict {
+  if (value === null || !Number.isInteger(value) || value <= 0) {
+    return { qualified: false, code: "no-value", detail: "値が無いか非正整数" };
+  }
+  if (hasApproxMarker(descRaw)) {
+    return { qualified: false, code: "approx", detail: "≒/約つき (概算の企業提示ではない)" };
+  }
+  if (isUnconvertedForeignAmount(descRaw, value)) {
+    return { qualified: false, code: "foreign", detail: "外貨額面の未換算" };
+  }
+  if (isLotteryPrizeAmount(descRaw, value)) {
+    return { qualified: false, code: "lottery", detail: "抽選賞品の金額" };
+  }
+  if (isDiscountWithoutRedeemable(descRaw)) {
+    return { qualified: false, code: "discount", detail: "割引の金額化 (換金金券なし)" };
+  }
+  if (hasChoiceMarker(descRaw)) {
+    return { qualified: false, code: "choice", detail: "選択肢の別価値あり (単一代表値は不正確)" };
+  }
+  if (hasAddonMarker(descRaw)) {
+    return { qualified: false, code: "addon", detail: "付帯物の別価値あり (全額不明)" };
+  }
+  if (hasResaleMarker(descRaw)) {
+    return { qualified: false, code: "resale", detail: "転売・買取相場 (企業提示の額面ではない)" };
+  }
+  const desc = normalizeNumeric(descRaw);
+  const annualYen = extractStrictYenSpans(descRaw)
+    .filter((s) => isAnnualSpan(desc, s.index))
+    .map((s) => s.value);
+  if (annualYen.includes(value)) {
+    return { qualified: false, code: "annual", detail: "年間合計を各月に充当" };
+  }
+  // 額面候補が2種類以上あれば、1つを摘んでも合算しても全体額にならない。
+  // 部分値も任意の合計も作らない (fail-closed)。recipient/month の一致は
+  // 部分を全体にしないので、context とは無関係にここで落とす。
+  const faces = extractFaceValues(descRaw);
+  if (new Set(faces).size >= 2) {
+    return {
+      qualified: false,
+      code: "multi_face_components",
+      detail: "額面候補が複数あり全体額を一意に決めない (部分摘み・合算はしない)",
+    };
+  }
+  // 額面表示 (○円相当/○円分/○円券)。素の金額一致は採らない。
+  // 単価だけの値は受益全体ではないのでここで塞ぐ (unit_partial)。
+  if (faces.includes(value)) {
+    if (isUnitPricedWhole(descRaw, value)) {
+      return {
+        qualified: false,
+        code: "unit_partial",
+        detail: "単価のみで受益全体の額ではない (数量つき。全体額か単価×数量だけが positive)",
+      };
+    }
+    return { qualified: true, rule: "face-literal" };
+  }
+  // 単価 × per-grant 数量 (同一 clause 内)。年間数量での一致は annual。
+  // 単価は 1枚当たり表示と券額面 (○円券) の両方を見る。
+  for (const clause of splitClauses(descRaw)) {
+    const units = [...extractCouponUnits(clause), ...extractTicketUnits(clause)];
+    if (units.length === 0) continue;
+    const perGrantQty = extractPerGrantQuantities(clause);
+    if (units.some((u) => perGrantQty.some((q) => u * q === value))) {
+      return { qualified: true, rule: "coupon-unit" };
+    }
+    const annualQty = extractAnnualQuantities(clause);
+    if (units.some((u) => annualQty.some((q) => u * q === value))) {
+      return { qualified: false, code: "annual", detail: "年間数量での金額化" };
+    }
+  }
+  // 額面×数量の明示積 (100円×25枚)。単一正規表現なので同一 clause 性は自明。
+  if (extractFaceProducts(descRaw).includes(value)) {
+    return { qualified: true, rule: "coupon-unit" };
+  }
+  // ポイント × 厳密レート (同一 clause 内)。
+  for (const clause of splitClauses(descRaw)) {
+    const points = extractPointSpans(clause).map((s) => s.value);
+    const rates = extractExactRates(clause);
+    if (rates.length > 0 && rates.some((r) => points.some((p) => p * r === value))) {
+      return { qualified: true, rule: "points-rate" };
+    }
+  }
+  return { qualified: false, code: "no_per_grant_face", detail: "企業提示の exact な額面根拠が無い (無関係の金額・数量、推定合計等)" };
+}
+
+/**
+ * company 値の厳密判定に使う recipient context。要約取込では同一文言の
+ * group 全行分、carry では 1 行分を渡す (どちらも同じ関数・同じ述語)。
+ */
+export type PerGrantContext = {
+  readonly minShares: readonly number[];
+  readonly recordMonths: readonly number[];
+};
+
+/**
+ * company 値の共有厳密判定 (純関数)。要約取込 (`planSummaryImport`) と
+ * full-import carry (`planCarry`) の両方がこの 1 関数を使う
+ * (importer と carry で別述語を持たない)。
+ *
+ * - group の株数条件が混ざれば 1 つの金額を決めない (group 全体 HOLD)
+ * - 複数月の group で per-grant 候補額が 2 種類以上あれば HOLD
+ *   (max/約数などの算術ヒューリスティクスは根拠にならないので使わない。
+ *   単一候補 + 下の qualifier 通過だけが明示の per-grant 根拠)
+ * - 文言自体に複数 tier が並び per-grant 候補額が 2 種類以上あれば HOLD
+ *   (要約の文言とは無関係。要約から tier ラベルを消しても回避できない)
+ * - 上を抜けたら文言+値の qualifier (`qualifyCompanyNominal`)
+ */
+export function qualifyCompanyPerGrantValue(
+  descRaw: string,
+  value: number | null,
+  ctx: PerGrantContext
+): CompanyNominalVerdict {
+  if (new Set(ctx.minShares).size > 1) {
+    return {
+      qualified: false,
+      code: "mixed_share_context",
+      detail: `同一文言の行で株数条件が異なる (${[...new Set(ctx.minShares)].sort((a, b) => a - b).join(",")}株。tier 混在のため金額を1つに決めない)`,
+    };
+  }
+  const amounts = extractStrictYenAmounts(descRaw);
+  if (new Set(ctx.recordMonths).size > 1 && amounts.length >= 2) {
+    return {
+      qualified: false,
+      code: "multi_month_amounts",
+      detail: "複数月の同一文言に per-grant 候補額が2種類以上 (文言から1つに決めない)",
+    };
+  }
+  if (amounts.length >= 2 && hasMultiConditionTiers(descRaw)) {
+    return {
+      qualified: false,
+      code: "ambiguous_condition_tiers",
+      detail: "文言自体に複数 tier が並び per-grant 候補額が2種類以上 (tier↔金額の対応づけ不能)",
+    };
+  }
+  return qualifyCompanyNominal(descRaw, value);
+}
+
+/**
  * 当選人数トークンと金額表現の隣接 window (文字数)。抽選賞品の判定に使う。
  * 固定値で、確率も閾値調整もない (販促ポイント除外の「直後 6 文字」と同じ流儀)。
  * 文境界 (。、改行) を跨ぐ隣接は数えない — 固定分と抽選の別文併記
@@ -297,15 +831,4 @@ export function sanitizeEstimatedValue(
   return grounded || matchesSum ? value : null;
 }
 
-/**
- * 取り込み済みの値を次回フェッチで持ち越してよいか。取り込みゲート
- * (sanitize + 金額表現の存在) と同じ判定を 1 関数に束ねたもので、
- * `planSummaryImport` の value_guard / value_ungrounded とペアになる。
- * 持ち越し時に壊れた解釈を無検証で温存しないための判定 (fetch の全削除→
- * 再 INSERT が旧解釈を捨てる際、検証済みのものだけ戻す)。
- */
-export function isCarryableValue(descRaw: string, value: number | null): boolean {
-  if (value === null) return false;
-  if (sanitizeEstimatedValue(descRaw, value) !== value) return false;
-  return extractYenAmounts(descRaw).length > 0;
-}
+

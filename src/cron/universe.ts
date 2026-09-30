@@ -7,10 +7,15 @@
  * JPX の件数不足・異常縮小は書き込み前に throw する。
  */
 
-import { sql, inArray, eq } from "drizzle-orm";
+import { and, sql, inArray, eq, lte } from "drizzle-orm";
+import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 
 import * as coreSchema from "../shared/db/core-schema.js";
+import {
+  listingOfficialEvents,
+  universeOverlayState,
+} from "../shared/db/universe-events.js";
 import {
   downloadJpxListing,
   isListedEquity,
@@ -43,6 +48,165 @@ type CoreWriterDb = Pick<Db, "insert" | "select" | "update">;
 export const UPSERT_CHUNK = 16;
 /** inactivate の IN リスト bind 上限対策チャンク (1 列 × N 値、80 < 100)。 */
 export const INACT_CHUNK = 80;
+
+/**
+ * overlay 系が DB に求める構造的な型 (core 書込 + overlay 台帳読書)。
+ * ライセンス境界の single-writer 契約のため、core_stocks への書込は
+ * このファイルの helper 経由に集約する (overlay module から直接書かない)。
+ */
+export type OverlayWriterDb = Pick<
+  BaseSQLiteDatabase<"async", unknown, Record<string, unknown>>,
+  "insert" | "select" | "update"
+>;
+
+/** 現世代の適用済みイベント集合 (月次 seed の deferral が読む)。 */
+export interface AppliedOverlaySets {
+  baseAsOf: string | null;
+  eventsFetchedAt: string | null;
+  eventsSha: string | null;
+  eligibilityAsOf: string | null;
+  appliedAt: string | null;
+  /** code 集合 (kind 別)。state 不在・世代未確定なら全て空。 */
+  delisted: ReadonlySet<string>;
+  listed: ReadonlySet<string>;
+  transferred: ReadonlySet<string>;
+  /** per-code UNKNOWN (HOLD 中 IPO) の明示。NULL/空 = 完全。 */
+  heldListingCodes: readonly string[];
+}
+
+/**
+ * singleton state + 現世代一致の適用済み events を読む。
+ * 旧 MAX(last_seen) は使わない (現世代は state.eventsFetchedAt のみ)。
+ */
+export async function loadAppliedOverlaySets(
+  db: OverlayWriterDb
+): Promise<AppliedOverlaySets> {
+  const empty: AppliedOverlaySets = {
+    baseAsOf: null,
+    eventsFetchedAt: null,
+    eventsSha: null,
+    eligibilityAsOf: null,
+    appliedAt: null,
+    delisted: new Set(),
+    listed: new Set(),
+    transferred: new Set(),
+    heldListingCodes: [],
+  };
+  const states = await db
+    .select()
+    .from(universeOverlayState)
+    .where(eq(universeOverlayState.id, 1));
+  const state = (states as Array<{
+    baseAsOf: string | null;
+    eventsFetchedAt: string | null;
+    eventsSha: string | null;
+    eligibilityAsOf: string | null;
+    appliedAt: string | null;
+    heldListingCodes: string | null;
+  }>)[0];
+  if (state === undefined) return empty;
+  const held: readonly string[] =
+    state.heldListingCodes !== null && state.heldListingCodes !== ""
+      ? (JSON.parse(state.heldListingCodes) as string[])
+      : [];
+  const base = {
+    baseAsOf: state.baseAsOf,
+    eventsFetchedAt: state.eventsFetchedAt,
+    eventsSha: state.eventsSha,
+    eligibilityAsOf: state.eligibilityAsOf,
+    appliedAt: state.appliedAt,
+    heldListingCodes: held,
+  };
+  if (state.eventsFetchedAt === null || state.eligibilityAsOf === null) {
+    return { ...base, delisted: new Set(), listed: new Set(), transferred: new Set() };
+  }
+  const rows = (await db
+    .select({
+      code: listingOfficialEvents.code,
+      kind: listingOfficialEvents.kind,
+    })
+    .from(listingOfficialEvents)
+    .where(
+      and(
+        eq(listingOfficialEvents.lastSeenFetchedAt, state.eventsFetchedAt),
+        lte(listingOfficialEvents.effectiveDate, state.eligibilityAsOf)
+      )
+    )) as Array<{ code: string; kind: string }>;
+  const delisted = new Set<string>();
+  const listed = new Set<string>();
+  const transferred = new Set<string>();
+  for (const r of rows) {
+    if (r.kind === "delist") delisted.add(r.code);
+    else if (r.kind === "listing") listed.add(r.code);
+    else if (r.kind === "transfer") transferred.add(r.code);
+  }
+  return { ...base, delisted, listed, transferred };
+}
+
+/** overlay 用: 指定 id 群を inactivate する (80 件/文)。 */
+export async function deactivateCoreStocksByIds(
+  db: OverlayWriterDb,
+  ids: readonly number[]
+): Promise<void> {
+  const { stocks } = coreSchema;
+  for (let i = 0; i < ids.length; i += INACT_CHUNK) {
+    await db
+      .update(stocks)
+      .set({ isActive: false, updatedAt: sql`(unixepoch())` })
+      .where(inArray(stocks.id, ids.slice(i, i + INACT_CHUNK)));
+  }
+}
+
+/** overlay 用: 指定 id 群の market を一括更新する (80 件/文)。 */
+export async function updateCoreStocksMarketByIds(
+  db: OverlayWriterDb,
+  market: string,
+  ids: readonly number[]
+): Promise<void> {
+  const { stocks } = coreSchema;
+  for (let i = 0; i < ids.length; i += INACT_CHUNK) {
+    await db
+      .update(stocks)
+      .set({ market, updatedAt: sql`(unixepoch())` })
+      .where(inArray(stocks.id, ids.slice(i, i + INACT_CHUNK)));
+  }
+}
+
+export interface OverlayListingInsertRow {
+  code: string;
+  name: string;
+  market: string;
+}
+
+/**
+ * overlay 用: 新規上場行を挿入する (呼出側で 14 行/文に分割済み)。
+ * instrument_type は 'equity' を明示する (NULL だと日次の
+ * activeEquityCondition() に載らない)。sector は NULL (JPX 月次所有;
+ * overlay は書かない)。sector33 は EDINET 所有の公開列のため触らない
+ * (NULL のまま)。Basic 業種はどちらにも書かない。
+ * is_yutai は DB default (false)。conflict は無現役化 (DoNothing)。
+ */
+export async function insertCoreStocks(
+  db: OverlayWriterDb,
+  rows: readonly OverlayListingInsertRow[]
+): Promise<void> {
+  if (rows.length === 0) return;
+  const { stocks } = coreSchema;
+  await db
+    .insert(stocks)
+    .values(
+      rows.map((l) => ({
+        code: l.code,
+        name: l.name,
+        market: l.market,
+        sector: null,
+        isActive: true,
+        // bind ではなくリテラル (INSTRUMENT_TYPE_EQUITY_LITERAL の docstring)。
+        instrumentType: INSTRUMENT_TYPE_EQUITY_LITERAL,
+      }))
+    )
+    .onConflictDoNothing({ target: stocks.code });
+}
 /**
  * ガード(a) の下限。**`rawCount` は data_j の全行数**で、ETF/ETN・REIT・PRO Market・
  * 外国株の行も、5 文字の種類株の行も含む (`isListedEquity` も 4 文字コード契約も
@@ -500,7 +664,12 @@ export async function seedUniverse(
   if (jpxRows.length === 0) {
     throw new Error("JPX listing が 0 行。data_j.xlsx の取得を確認してください。");
   }
-  const equities = jpxRows.filter(isListedEquity);
+  // overlay 適用済みコードへ月次 seed が後勝ちしない (stale XLS 同一 entry 再入対策)。
+  // overlay 所有コードは upsert/対象外化の両方から外す。state 不在なら従来通り。
+  const overlay = await loadAppliedOverlaySets(db);
+  const equities = jpxRows
+    .filter(isListedEquity)
+    .filter((r) => !overlay.delisted.has(r.code) && !overlay.transferred.has(r.code));
   const sourceDates = new Set(jpxRows.map((row) => row.asOf));
   if (sourceDates.size !== 1) {
     throw new Error(
@@ -522,8 +691,10 @@ export async function seedUniverse(
     })
     .from(coreSchema.stocks)
     .where(eq(coreSchema.stocks.isActive, true));
-  const pendingDeactivation = existing.filter((s) =>
-    shouldDeactivateUniverseCode(s.code, rawCodes)
+  const pendingDeactivation = existing.filter(
+    (s) =>
+      shouldDeactivateUniverseCode(s.code, rawCodes) &&
+      !overlay.listed.has(s.code)
   );
   const deactivatedIds = pendingDeactivation.map((s) => s.id);
   const isEquityRow = (s: { instrumentType: string | null }): boolean =>
@@ -555,6 +726,15 @@ export async function seedUniverse(
     instrumentTypeUpdates,
     deactivatedIds,
   });
+
+  // 月次 seed が base provenance を所有する。成功時のみ記録する。
+  await db
+    .insert(universeOverlayState)
+    .values({ id: 1, baseAsOf: sourceAsOf })
+    .onConflictDoUpdate({
+      target: universeOverlayState.id,
+      set: { baseAsOf: sql`excluded.base_as_of` },
+    });
 
   return {
     sourceAsOf,
