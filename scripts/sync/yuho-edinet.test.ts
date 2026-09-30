@@ -1,205 +1,59 @@
-/**
- * scripts/sync/yuho-edinet.ts (EDINET catchup トリガ) の transport テスト。
- *
- * #98: catchup ジョブが Worker への POST で落ちていた。実失敗は以下 2 種:
- *   - run36022119851: HeadersTimeoutError (応答遅延。~302 秒後に発火。
- *     undici 既定の headers 300 秒に対し Worker が全 catchup 後に応答するため)
- *   - run36156111106: read ECONNRESET (一過性切断。~249 秒後に発火)
- *
- * 修正方針: node:https による単発要求とし、ヘッダ＋本文全体に明示期限
- * (600 秒) をかける。再送・リダイレクト追従は一切しない — Worker 側に
- * 永続リース/要求冪等が無く (docId SELECT→取込・Notion key照会→作成は
- * 競合し得る。D1 書込が先なので D1 存在は Notion 完了を証明しない)、
- * 二重 POST は二重取込・二重保管を起こし得る。切断は可視のまま残し、
- * 運用 (次回定期実行の 60 日窓による自己回収・手動再実行) に委ねる。
- *
- * 本テストは実 TLS サーバ (127.0.0.1・自己署名・openssl 生成) に対する
- * transport チェックであり、要求回数が正確に 1 であることを数える。
- */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer as createHttpsServer, type Server } from "node:https";
-import type { Socket } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { postCatchup } from "./yuho-edinet.js";
-
-const SECRET = "test-secret-do-not-leak";
-const PATH = "/yuho-quant/admin/catchup";
-
-type Handler = (
-  req: { url?: string },
-  res: {
-    writeHead: (code: number, headers?: Record<string, string>) => void;
-    write: (s: string) => void;
-    end: (s?: string) => void;
-    destroy: () => void;
-  }
-) => void;
-
-let server: Server;
-let port = 0;
-let certPem = "";
-let requestCount = 0;
-let handler: Handler = (_req, res) => res.end("default");
-const sockets = new Set<Socket>();
-
-const url = (): URL => new URL(`https://127.0.0.1:${port}${PATH}`);
-
-function makeOpensslCnf(dir: string): string {
-  const cnf = join(dir, "openssl.cnf");
-  writeFileSync(
-    cnf,
-    [
-      "[req]",
-      "distinguished_name = dn",
-      "x509_extensions = SAN",
-      "prompt = no",
-      "[dn]",
-      "CN = localhost",
-      "[SAN]",
-      "subjectAltName = DNS:localhost,IP:127.0.0.1",
-      "",
-    ].join("\n")
-  );
-  return cnf;
-}
-
-beforeAll(() => {
-  const dir = mkdtempSync(join(tmpdir(), "yuho-edinet-tls-"));
-  const cnf = makeOpensslCnf(dir);
-  const key = join(dir, "key.pem");
-  const cert = join(dir, "cert.pem");
-  const r = spawnSync(
-    "openssl",
-    [
-      "req", "-x509", "-newkey", "rsa:2048",
-      "-keyout", key, "-out", cert,
-      "-days", "2", "-nodes",
-      "-config", cnf, "-extensions", "SAN",
-    ],
-    { encoding: "utf-8" }
-  );
-  if (r.status !== 0) {
-    throw new Error(
-      `テスト用 TLS 証明書の生成に openssl が必要です: ${(r.stderr || "").slice(0, 300)}`
-    );
-  }
-  certPem = readFileSync(cert, "utf-8");
-  server = createHttpsServer(
-    { key: readFileSync(key), cert: readFileSync(cert) },
-    (req, res) => {
-      requestCount++;
-      handler(req, res);
-    }
-  );
-  server.on("connection", (s: Socket) => {
-    sockets.add(s);
-    s.on("error", () => {});
-    s.on("close", () => sockets.delete(s));
+import { readFileSync } from "node:fs";
+import ts from "typescript";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { main, parseShard } from "./yuho-edinet.js";
+import { createD1HttpDb, createD1HttpBatchSender } from "../../src/shared/db/d1-http-client.js";
+import { runYuhoEdinetCatchup } from "../../src/cron/yuho-edinet.js";
+import { yuhoEnv } from "../../services/yuho-quant/src/env.js";
+import { notionEnv } from "../../src/shared/notion-archive/env.js";
+vi.mock("../../src/shared/db/d1-http-client.js", () => ({createD1HttpDb: vi.fn(), createD1HttpBatchSender: vi.fn()}));
+vi.mock("../../src/cron/yuho-edinet.js", () => ({runYuhoEdinetCatchup: vi.fn(), catchupHttpStatus: (r: {listErrors: string[]; ingestErrors: string[]}) => r.listErrors.length || r.ingestErrors.length ? 500 : 200}));
+vi.mock("../../services/yuho-quant/src/env.js", () => ({yuhoEnv: {EDINET_API_KEY: vi.fn()}}));
+vi.mock("../../src/shared/notion-archive/env.js", () => ({notionEnv: {NOTION_TOKEN: vi.fn(), NOTION_ARCHIVE_PAGE_ID: vi.fn(), NOTION_YUHO_TEXT_DB_ID: vi.fn()}}));
+beforeEach(() => vi.resetAllMocks());
+describe("direct Node catchup", () => {
+  it("validates shard without blank/partial/fraction/duplicate coercion", () => {
+    expect(parseShard([])).toBeUndefined();
+    expect(parseShard(["--part=0", "--of=8"])).toEqual({part: 0, of: 8});
+    for (const args of [["--part"], ["--part=0"], ["--part=", "--of=8"], ["--part=0.1", "--of=8"], ["--part=8", "--of=8"], ["--part=0", "--part=1", "--of=8"]]) expect(() => parseShard(args)).toThrow();
   });
-  return new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      port = (server.address() as { port: number }).port;
-      resolve();
-    });
+  it("uses the same Node DB and atomic sender; successful complete result only exits zero", async () => {
+    const db = {}, sender = vi.fn();
+    vi.mocked(createD1HttpDb).mockReturnValue(db as never);
+    vi.mocked(createD1HttpBatchSender).mockReturnValue(sender);
+    vi.mocked(runYuhoEdinetCatchup).mockResolvedValue({listErrors: [], ingestErrors: []} as never);
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      expect(await main(["--part=0", "--of=8"])).toBe(0);
+      expect(runYuhoEdinetCatchup).toHaveBeenCalledWith(db, {part: 0, of: 8}, sender);
+      vi.mocked(runYuhoEdinetCatchup).mockResolvedValue({listErrors: ["2026-09-30"], ingestErrors: []} as never);
+      expect(await main([])).toBe(1);
+    } finally { log.mockRestore(); }
+  });
+  it("missing source/archive config stops before DB or any source; thrown operation propagates", async () => {
+    vi.mocked(yuhoEnv.EDINET_API_KEY).mockImplementationOnce(() => {throw new Error("missing");});
+    await expect(main([])).rejects.toThrow("missing");
+    expect(createD1HttpDb).not.toHaveBeenCalled();
+    vi.mocked(notionEnv.NOTION_YUHO_TEXT_DB_ID).mockImplementationOnce(() => {throw new Error("missing archive");});
+    await expect(main([])).rejects.toThrow("missing archive");
+    expect(runYuhoEdinetCatchup).not.toHaveBeenCalled();
+    vi.mocked(runYuhoEdinetCatchup).mockRejectedValueOnce(new Error("unknown"));
+    await expect(main([])).rejects.toThrow("unknown");
+    expect(runYuhoEdinetCatchup).toHaveBeenCalledTimes(1);
   });
 });
 
-afterAll(async () => {
-  for (const s of sockets) s.destroy();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-});
-
-async function catchError(p: Promise<string>): Promise<Error> {
-  return (await p.catch((e: unknown) => e)) as Error;
-}
-
-describe("postCatchup transport (#98)", () => {
-  it("期限内の遅延応答に成功し、要求は1回だけ送る", async () => {
-    requestCount = 0;
-    handler = (_req, res) => {
-      setTimeout(() => res.end("done-body"), 300);
-    };
-    await expect(
-      postCatchup(url(), SECRET, { timeoutMs: 10_000, tlsCaPem: certPem })
-    ).resolves.toBe("done-body");
-    expect(requestCount).toBe(1);
-  });
-
-  it("期限切れで失敗し、再送しない (切断は可視のまま)", async () => {
-    requestCount = 0;
-    handler = () => {
-      // 応答しない (期限切れを起こす)。
-    };
-    const err = await catchError(postCatchup(
-      url(),
-      SECRET,
-      { timeoutMs: 300, tlsCaPem: certPem }
-    ));
-    expect(err).toBeInstanceOf(Error);
-    expect(err.message).toMatch(/期限切れ/);
-    expect(requestCount).toBe(1);
-  });
-
-  it("途中で切れた応答で失敗し、再送しない", async () => {
-    requestCount = 0;
-    handler = (_req, res) => {
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.write("partial");
-      res.destroy();
-    };
-    const err = await catchError(postCatchup(
-      url(),
-      SECRET,
-      { timeoutMs: 10_000, tlsCaPem: certPem }
-    ));
-    expect(err).toBeInstanceOf(Error);
-    expect(err.message).toMatch(/中断|切断|エラー/);
-    expect(requestCount).toBe(1);
-  });
-
-  it("HTTP 500 は status のみで失敗し、再送しない (本文は載せない)", async () => {
-    requestCount = 0;
-    handler = (_req, res) => {
-      res.writeHead(500, { "Content-Type": "text/plain" });
-      // 上流応答は untrusted: 秘密・URL が混ざっても文に出さない。
-      res.end(`boom ${SECRET} https://127.0.0.1:${port}/secret-path?token=abc`);
-    };
-    const err = await catchError(postCatchup(
-      url(),
-      SECRET,
-      { timeoutMs: 10_000, tlsCaPem: certPem }
-    ));
-    expect(err).toBeInstanceOf(Error);
-    expect(err.message).toBe("catchup 失敗: HTTP 500");
-    expect(err.message).not.toContain(SECRET);
-    expect(err.message).not.toContain("127.0.0.1");
-    expect(requestCount).toBe(1);
-  });
-
-  it("エラー文・cause に秘密・URL を含めない", async () => {
-    handler = () => {
-      // 応答しない (期限切れを起こす)。
-    };
-    const err = await catchError(postCatchup(
-      url(),
-      SECRET,
-      { timeoutMs: 300, tlsCaPem: certPem }
-    ));
-    expect(err.message).not.toContain(SECRET);
-    expect(err.message).not.toContain("127.0.0.1");
-    expect(err.message).not.toContain(PATH);
-    // cause を付けないことが漏洩防止の機構 (https 層の元エラーは
-    // ホスト名を埋め込むことがあるためそのまま残さない)。
-    expect((err as { cause?: unknown }).cause).toBeUndefined();
-  });
-
-  it("https 以外は要求を送らず即失敗する", async () => {
-    requestCount = 0;
-    const httpUrl = new URL(`http://127.0.0.1:${port}${PATH}`);
-    await expect(postCatchup(httpUrl, SECRET)).rejects.toThrow(/https のみ/);
-    expect(requestCount).toBe(0);
-  });
+it("actual Node CLI entry cannot report unfinished or rejected work as success", () => {
+  const marker = "if (process.argv[1] === fileURLToPath(import.meta.url)) {";
+  const source = readFileSync(new URL("./yuho-edinet.ts", import.meta.url), "utf8");
+  const entry = source.slice(source.lastIndexOf(marker));
+  expect(entry.startsWith(marker)).toBe(true);
+  for (const [body, exit] of [["await new Promise(() => {});", 2], ["throw new Error('untrusted-secret');", 2], ["return 0;", 0], ["return 1;", 1]] as const) {
+    const code = ts.transpileModule(`import {fileURLToPath} from "node:url"; process.argv[1]=fileURLToPath(import.meta.url); async function main(){${body}} ${entry}`, {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext}}).outputText;
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", code], {encoding: "utf8", timeout: 5000});
+    expect(child.error).toBeUndefined();
+    expect(child.status).toBe(exit);
+    expect(child.stderr).not.toContain("untrusted-secret");
+  }
 });

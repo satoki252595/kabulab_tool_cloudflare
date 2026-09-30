@@ -1,9 +1,8 @@
 /**
  * EDINET 日次 catchup の応答契約テスト (Sol HOLD2)。
  *
- * 実失敗 (一覧/取込の throw。物理保管失敗を含む) は result の
- * listErrors/ingestErrors に集計され、admin は result 本文付き 500 で
- * CLI exit 1 へ接続する。母集団外・cap・既取込は正当結果で 200 のまま。
+ * 一覧の取得失敗は result に集計し、非成功終了する。
+ * 取込例外 (物理保管失敗を含む) は次の文書・L2 に進まず throw。母集団外・cap・既取込は正当結果で 200 のまま。
  * 外部 (EDINET / 取込本体) は vi.mock で塞ぎ、D1 は本番と同じ
  * migration を流した in-memory SQLite に向ける (ingest-universe と同一方式)。
  */
@@ -16,6 +15,7 @@ import { ROOT } from "../shared/db/tests/source-scan.js";
 import { INSTRUMENT_TYPES } from "../shared/jpx/instrument-type.js";
 import { listDocuments } from "../../services/yuho-quant/src/services/edinet/client.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
+import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
 import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
 import type { Database as YuhoDatabase } from "../../services/yuho-quant/src/db/client.js";
 import {
@@ -31,6 +31,10 @@ vi.mock("../../services/yuho-quant/src/services/ingest.js", () => ({
 }));
 vi.mock("../../services/yuho-quant/src/services/edinet/archive.js", () => ({
   checkDocsCustody: vi.fn(async () => new Map()),
+}));
+
+vi.mock("../../services/yuho-quant/src/services/projection.js", () => ({
+  rebuildYuhoGrowthProjection: vi.fn(async () => ({stocks: 0})),
 }));
 
 function applyD1Migrations(target: DatabaseSync): void {
@@ -86,8 +90,11 @@ async function runCatchup() {
   const err = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
     const running = runYuhoEdinetCatchup(db as unknown as YuhoDatabase);
+    const settled = running.then(value => ({value}), error => ({error}));
     await vi.runAllTimersAsync();
-    return await running;
+    const outcome = await settled;
+    if ("error" in outcome) throw outcome.error;
+    return outcome.value;
   } finally {
     vi.useRealTimers();
     info.mockRestore();
@@ -96,6 +103,12 @@ async function runCatchup() {
 }
 
 describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
+  it("new ingest zero still performs full global L2 for previous shard/backfill recovery", async () => {
+    vi.mocked(listDocuments).mockResolvedValue({results: []} as never);
+    await runCatchup();
+    expect(rebuildYuhoGrowthProjection).toHaveBeenCalledExactlyOnceWith(db);
+  });
+
   it("positive: 母集団外あり・失敗なし → errors 空・200", async () => {
     vi.mocked(listDocuments)
       .mockResolvedValueOnce({ results: [annualDoc("7203"), annualDoc("1208")] } as never)
@@ -129,16 +142,17 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     expect(catchupHttpStatus(r)).toBe(500);
   });
 
-  it("negative: 取込失敗 (物理保管失敗を含む) → ingestErrors に docID・500", async () => {
+  it("negative: 取込失敗 (物理保管失敗を含む) → 即停止・次文書/L2なし", async () => {
     vi.mocked(listDocuments)
       .mockResolvedValueOnce({ results: [annualDoc("7203")] } as never)
       .mockResolvedValue({ results: [] } as never);
     vi.mocked(ingestDocument).mockRejectedValueOnce(new Error("Notion 記録失敗"));
+    vi.mocked(listDocuments).mockReset().mockResolvedValueOnce({results: [annualDoc("7203"), annualDoc("7203")]} as never);
 
-    const r = await runCatchup();
-    expect(r.listErrors).toEqual([]);
-    expect(r.ingestErrors).toEqual(["S1007203"]);
-    expect(catchupHttpStatus(r)).toBe(500);
+    await expect(runCatchup()).rejects.toThrow("Notion 記録失敗");
+    expect(ingestDocument).toHaveBeenCalledTimes(1);
+    expect(listDocuments).toHaveBeenCalledTimes(1);
+    expect(rebuildYuhoGrowthProjection).not.toHaveBeenCalled();
   });
 
   it("境界: 完成済み既存 (skipped_existing) は skip 計数し状態計数に混ぜない", async () => {
