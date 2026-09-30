@@ -133,7 +133,7 @@ export type SavedIntra = {
 };
 
 /** YYYY-MM-DD の暦妥当性 (存在する日付のみ)。 */
-function isCalendarDate(d: string): boolean {
+export function isCalendarDate(d: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
   const ms = Date.parse(`${d}T00:00:00Z`);
   if (!Number.isFinite(ms)) return false;
