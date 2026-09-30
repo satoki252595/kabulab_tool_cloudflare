@@ -46,6 +46,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - 未保管 moneyflow 経路の書込前に保管添付の完全一致（件数・名前・バイト長・SHA256）を検証し、file_too_large・不一致は観測ログを書かず停止。新規・更新ありの書込バッチは指標×期間の分割読取で全行を read-only 再検証（ページ ID + 全項目照合、重複・欠落・不一致・不正カーソルは保全停止）。データ変更なし (#188)。
 - Worker の Observability を最小設定で有効化 (呼出ログ + 既存 console ログを残す。EDINET 外向き URL の Subscription-Key のため traces は無効のまま)。EDINET 日次取込に秘密なしの進捗 checkpoint を追加し次回標準実行の段階特定を可能に (#187)。
 - 優待 producer の表ローカル月 root 修正 + 推定値 trust 境界 (residual33/68): 個別ページ抽出が h3 表ごとの権利確定月・見出しを優待に付け、ページ union の blanket 展開を廃止 (8022 の 9 月幽霊行 37956 等を合成しない)。月不明表・取得失敗は import/収集の前に STOP (未確定を廃止削除しない)。判定は表見出しも走査 (額面根拠にはしない)。利回り・スコア・公開面は backend 合成 (company + 共有厳密判定の通過分) / 公開最小境界 (company のみ) を通り、不認定・由来なしは null の正直表示 (0 フォールバックなし)。月/ジャンル集計を月次と repair-CAS の共有関数に抽出。67株 + 1808 の現行 read-only 計測は private 証跡のみ。データ変更なし (Refs #146)。
+- ops runners (2READ/archive/source55) の code + 実行記録を publish (各 live 1 回の actual closure 済み。2READ は事後 audit 受領・sequencing limitation 付き)。共有 D1 batch sender 注釈を known/unknown throw+stop/再送なし/readonly 照合へ是正 (挙動不変)。新規 WRITE なし、データ変更なし。
 
 ### 本番作業
 - 本番作業: 母集団 universe 9/30 overlay を D1 へ 1 回適用 (owner 31 文全 success、core 3810→3819・activeEquity 3695・events 226、適用後 3-SELECT 再読で exact 一致・再入 collect 0/send 0 を検証)。actual 証跡 19 点を Notion 一次データへ RECORDED (key `actual-proof-2026-09-30-3eaff8c3...`、manifestMatch written、readback 通過)。証跡 pins は `docs/universe-overlay-actual-proof-20260930.md` (Refs #196)。
