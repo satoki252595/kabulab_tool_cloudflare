@@ -105,8 +105,10 @@ export interface OverseasCandidateCapture {
   textBlock: string | null;
   /** 囲み TextBlock の contextRef (context 証拠)。 */
   contextRef: string | null;
-  /** caption 末尾160字 (表ローカル証拠の原文断片)。 */
+  /** caption 末尾160字 (表ローカル証拠の原文断片。compact 表示用)。 */
   captionTail: string;
+  /** caption 全文 (表ローカル証拠の原文。attribution 用)。 */
+  caption: string;
   /** reducer の grid 判定。 */
   gridScope: boolean | null;
   /** Gate0 の確定結果。 */
@@ -2779,6 +2781,7 @@ export function parseOverseasHtml(
           textBlock,
           contextRef,
           captionTail: caption.slice(-160),
+          caption,
           gridScope,
           scope,
           ...(cand.trace ? { trace: cand.trace } : {}),

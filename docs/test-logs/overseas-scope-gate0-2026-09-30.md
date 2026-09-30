@@ -58,8 +58,14 @@ R2 書込・dispatch 0)。本記録は counts・SHA・limits + 証拠所在の�
   capture に記録。継続事業の選択根拠 (XRWN の 2 合計列の採択等) の
   是非は SOL review に委ね、flag だけで数字を承認しない。
 - VHA9/XTT8 (59 外): true 維持・不変。他 921 への same-cause 一般化なし。
-- 成果物 (private 0600): 59 capture `6e1030e3…38d6a4` /
-  delta list `2fab4823…04e029`
+- 成果物 (private 0600): frozen capture 63 文書
+  (59 + W81W/XRWN/VHA9/XTT8。候補全件の offset・parent・contextRef・
+  caption 全文・grid/scope・fiscal・score・採否・reducer trace)
+  `b7c3cc16…a2d30b9` / delta list `2fab4823…04e029` /
+  trace8 readable `d6c39025…f64dd`
+  (旧 `overseas-scope-trace.json` の W81W/XRWN 概略は本 capture が置換。
+  dims 解決の既存 XML/header helper は不在のため contextRef まで。
+  FilingDateInstant からの FY 推定はしない)
 
 ## 3602 census (pinned 全件・選択影響調査)
 
