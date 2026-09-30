@@ -10,8 +10,10 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
-- 海外 L2 `source_max_date` の MAX を `stockIds` 指定時は対象集合に拘束 (未指定時は global MAX 不変・空は throw 維持。caller は global 呼び不変)。scope 別契約の focused tests (23 + 5 passed)。データ変更なし。
 - 海外 69 physical closure の LOCAL PREP (既存 complete 69 行の inventory: 契約違反 0・新 59 行は local 原本 SHA 一致・legacy 10 行は t1 5 件のみ慣用 local 存在・t5 5 件は byte source なし HOLD。Tier A59 + B5 を strict `verifyArchivedAttachments` 閉鎖 scope で ONE 実行 (Tier A 59 閉鎖・Tier B 先頭は同長・SHA 不一致で fail-fast HOLD (content 同一・re-timestamped container を証明)・残 B4 未試行・C5 除外のまま。native 120・grant 消費・追加照会なし)。missing は fresh GET 必要性を意味しない。証跡 `docs/test-logs/overseas-physical-close69-prep-2026-09-30.md`。データ変更なし。
+- 優待 company 判定に表見出し context を persist (内部 headed 保存形式。合同割引・抽選 scope・型付き券 unit×数量の narrow 規則。見出しのみ金額は額面にしない。本文 negative は authoritative)。要約契約 2026-09-30.1 (内部 marker の echo を `internal` 違反で reject)。次回 full-import から保存文が headed 形に変わる (公開面は shortSummary のみで不変)。データ変更なし (Refs #146)。
+- 海外 source-custody query runner を追加 (既存 checkDocsCustody 再使用・query-only。round1 20 docs/40 keys は ONE 実行済み PASS (t1/t5 missing 40/40・attempts 2・READY 0)。rest 3655 docs/7310 keys (183 chunks) は ONE 実行済み PASS (t1 missing 3591・complete 64・t5 missing 3650・complete 5・attempts 184・query 成功 183/183・READY 0・両 grant 消費・追加照会なし)。read-only route guard (CREATE/PATCH/DELETE 拒否・body/query exact 束縛・redirect manual/3xx STOP) + closed caps (96/1351) + 同一 response clone 保存 + full SHA pins)。証跡 `docs/test-logs/overseas-custody-query-2026-09-30.md`。source/Notion-mutation/D1/R2/dispatch 0、データ変更なし。
+- 海外 L2 `source_max_date` の MAX を `stockIds` 指定時は対象集合に拘束 (未指定時は global MAX 不変・空は throw 維持。caller は global 呼び不変)。scope 別契約の focused tests (23 + 5 passed)。データ変更なし。
 - jss-api 日足の調整意味論を訂正 (価格は生値・adj_* は配当込 total-return、係数不明は null・偽 1 なし、出来高未補正、cache v2)。データ変更なし。
 - VWAP daily adj 修復の rebuild 土台 (fetchDaily 原文 capture hook 追加・repair-daily whole-post 再構築 + tests)。取得実績: 7944 は fresh 応答自体の非正 adj で HOLD (既知)、8303/8919 は未送信 STOP。Adj 定義は Yahoo 公式 [adjusted close は分割+配当](https://in.help.yahoo.com/kb/adjusted-close-sln28256.html)・[AAPL history の Close=分割調整・Adj Close=分割+配当/キャピタルゲイン](https://finance.yahoo.com/quote/AAPL/history/) に基づく。データ変更なし (Refs #117)。
 - VWAP batch summary の原本 bytes を archive 前に runner local (0700/wx0600/fsync) へ保持し、失敗時は artifact で回収。local 書込失敗は archive 前 fatal exit 2 (daily 2 で intra 0)。データ変更なし (Refs #117)。
@@ -48,6 +50,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - 未保管 moneyflow 経路の書込前に保管添付の完全一致（件数・名前・バイト長・SHA256）を検証し、file_too_large・不一致は観測ログを書かず停止。新規・更新ありの書込バッチは指標×期間の分割読取で全行を read-only 再検証（ページ ID + 全項目照合、重複・欠落・不一致・不正カーソルは保全停止）。データ変更なし (#188)。
 - Worker の Observability を最小設定で有効化 (呼出ログ + 既存 console ログを残す。EDINET 外向き URL の Subscription-Key のため traces は無効のまま)。EDINET 日次取込に秘密なしの進捗 checkpoint を追加し次回標準実行の段階特定を可能に (#187)。
 - 優待 producer の表ローカル月 root 修正 + 推定値 trust 境界 (residual33/68): 個別ページ抽出が h3 表ごとの権利確定月・見出しを優待に付け、ページ union の blanket 展開を廃止 (8022 の 9 月幽霊行 37956 等を合成しない)。月不明表・取得失敗は import/収集の前に STOP (未確定を廃止削除しない)。判定は表見出しも走査 (額面根拠にはしない)。利回り・スコア・公開面は backend 合成 (company + 共有厳密判定の通過分) / 公開最小境界 (company のみ) を通り、不認定・由来なしは null の正直表示 (0 フォールバックなし)。月/ジャンル集計を月次と repair-CAS の共有関数に抽出。67株 + 1808 の現行 read-only 計測は private 証跡のみ。データ変更なし (Refs #146)。
+- ops runners (2READ/archive/source55) の code + 実行記録を publish (各 live 1 回の actual closure 済み。2READ は事後 audit 受領・sequencing limitation 付き)。共有 D1 batch sender 注釈を known/unknown throw+stop/再送なし/readonly 照合へ是正 (挙動不変)。新規 WRITE なし、データ変更なし。
 
 ### 本番作業
 - 本番作業: 母集団 universe 9/30 overlay を D1 へ 1 回適用 (owner 31 文全 success、core 3810→3819・activeEquity 3695・events 226、適用後 3-SELECT 再読で exact 一致・再入 collect 0/send 0 を検証)。actual 証跡 19 点を Notion 一次データへ RECORDED (key `actual-proof-2026-09-30-3eaff8c3...`、manifestMatch written、readback 通過)。証跡 pins は `docs/universe-overlay-actual-proof-20260930.md` (Refs #196)。

@@ -38,6 +38,13 @@ describe("checkSummary — 本番で実在した違反", () => {
     expect(rules("リーガメンバーズ会員にご登録いただく必要があります。")).toContain("prose");
   });
 
+  it("内部 headed marker の書き写しを検出する (読みやすい条件文言は通す)", () => {
+    expect(rules("【種別：\"500円割引券\"】 1枚")).toContain("internal");
+    // 取り込み側は NFKC 済み (：→:) で来る。両形を落とす。
+    expect(rules("【種別：\"500円割引券\"】 1枚".normalize("NFKC"))).toContain("internal");
+    expect(rules("割引券 500円 1枚")).not.toContain("internal");
+  });
+
   it("空を検出する", () => {
     expect(rules("")).toEqual(["empty"]);
     expect(rules("   ")).toEqual(["empty"]);

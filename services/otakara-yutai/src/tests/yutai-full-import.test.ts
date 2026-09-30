@@ -47,6 +47,7 @@ import {
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
 import { scoreStock } from "../../../../src/shared/scoring.js";
+import { headedDescription } from "../../data-scripts/estimated-value-guard.js";
 import type { AtomicBatchSender } from "../../data-scripts/atomic-apply.js";
 import { RAW34TEXT } from "./raw34-excerpts.js";
 
@@ -311,7 +312,7 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
     expect(result).toMatchObject({ stockCount: HELD.length, abolishedCount: 0, droppedInterpretations: 1 });
     expect(
       benefitsOf(snapshot().benefits, [changed.id]).map((b) => [b.description, b.short_summary, b.estimated_value]),
-    ).toEqual([["架空優待 文言を変更", null, null]]);
+    ).toEqual([[headedDescription("株主優待", "架空優待 文言を変更"), null, null]]);
     expect(logs.some((l) => l.includes("戻せない解釈") && l.includes("1件"))).toBe(true);
   });
 });
@@ -333,7 +334,7 @@ describe("importYutaiFull は掲載文を切り詰めない", () => {
 
     const rows = benefitsOf(snapshot().benefits, [target.id]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].description).toBe(`${longDesc}\n${longNotes}`);
+    expect(rows[0].description).toBe(headedDescription("株主優待", `${longDesc}\n${longNotes}`));
     expect(String(rows[0].description).length).toBeGreaterThan(500);
     expect(String(rows[0].description).endsWith("【10年以上】10口")).toBe(true);
   });
@@ -497,6 +498,21 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     expect(p.nulledKeys).toEqual(new Set());
   });
 
+  it("headed 既存行は本文キーで突き合う (素文 planned と cross-form carry)", () => {
+    const plain = [srcRow({})];
+    const headed = [srcRow({ description: headedDescription("株主優待", RAW34TEXT["5929"]) })];
+    // 呼び出し側は planned 側を carryBody でキー化する (= 素文キー)。
+    const p = planCarry(headed, metaOf(plain), grpOf(plain));
+    const key = carryKey("5929", RAW34TEXT["5929"], 100, 3);
+    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: 500, estimateValueSource: "company" });
+    expect(p.promotedKeys).toEqual(new Set([key]));
+  });
+
+  it("壊れた headed 既存行はキー化せず STOP する", () => {
+    const rows = [srcRow({ description: "【種別：xxx】\n優待品 500円相当" })];
+    expect(() => planCarry(rows, metaOf(rows), grpOf(rows))).toThrow(/headed 契約の壊れた掲載文/);
+  });
+
   it("合成されない行 (幽霊月など) は昇格しない", () => {
     // 判定自体は通る額面一致だが、plannedMeta に無い = 表ローカルに合成されない。
     const rows = [srcRow({ recordMonth: 9 })];
@@ -611,11 +627,11 @@ describe("benefitRowsOf は表ローカル月でのみ合成する (8022 の幽�
     const { rows, heldBenefits } = benefitRowsOf(data);
     expect(heldBenefits).toBe(0);
     expect(rows.map((r) => [r.recordMonth, r.minShares, r.description])).toEqual([
-      [3, 100, "3,300円相当"],
-      [3, 100, "割引"],
-      [9, 100, "割引"],
+      [3, 100, headedDescription("直営ゴルフスクールの入会金 無料", "3,300円相当")],
+      [3, 100, headedDescription("優待割引", "割引")],
+      [9, 100, headedDescription("優待割引", "割引")],
     ]);
-    // 合成元の表見出しは判定用に保持する (DB には書かない)。
+    // 合成元の表見出しは headed 契約で description 先頭に persist する (判定の HOLD 走査用)。
     expect(rows.map((r) => r.heading)).toEqual([
       "直営ゴルフスクールの入会金 無料",
       "優待割引",
