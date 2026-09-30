@@ -38,6 +38,14 @@ const mockR2Put = vi.mocked(r2Put);
 const mockLoadCodes = vi.mocked(loadCodes);
 const mockFetch5m = vi.mocked(fetchBars5m);
 const mockRecord = vi.mocked(recordPrimaryData);
+const recordedBody = (): Record<string, unknown> => {
+  const input = mockRecord.mock.calls[0][0] as {
+    files: Array<{ bytes: Uint8Array }>;
+  };
+  return JSON.parse(new TextDecoder().decode(input.files[0].bytes)) as Record<string, unknown>;
+};
+const recordedMetadata = (): Record<string, unknown> =>
+  (mockRecord.mock.calls[0][0] as { metadata: Record<string, unknown> }).metadata;
 
 const TS = Math.floor(Date.now() / 1000) - 100;
 const BAR = { ts: TS, o: 100, h: 110, l: 90, c: 105, v: 1000 };
@@ -68,15 +76,14 @@ describe("ingest-intra main flow", () => {
     expect(mockFetch5m).toHaveBeenCalledTimes(2);
     expect(mockR2Put).toHaveBeenCalledTimes(1);
     expect(mockR2Put.mock.calls[0][0]).toBe("intra/B.json");
-    const summary = mockRecord.mock.calls[0][0] as { metadata: Record<string, unknown> };
-    const outcomes = summary.metadata.outcomes as Record<string, { status: string; latestSourceBar: unknown; bodySha: unknown }>;
+    const outcomes = recordedBody().outcomes as Record<string, { status: string; latestSourceBar: unknown; bodySha: unknown }>;
     expect(Object.keys(outcomes).sort()).toEqual(["A", "B"]);
     expect(outcomes.A.status).toBe("skipped");
     expect(outcomes.A.latestSourceBar).toBe(TS);
     expect(typeof outcomes.A.bodySha).toBe("string");
     expect(outcomes.B.status).toBe("written");
     expect(outcomes.B.latestSourceBar).toBe(TS);
-    expect(summary.metadata.universe).toMatchObject({ size: 2 });
+    expect(recordedMetadata().universe).toMatchObject({ size: 2 });
   });
 
   it("GET fault after source await => PUT0/exit2 (second code never fetched)", async () => {
@@ -89,8 +96,7 @@ describe("ingest-intra main flow", () => {
     expect(mockFetch5m).toHaveBeenCalledTimes(1);
     expect(mockFetch5m.mock.calls[0][0]).toBe("A.T");
     expect(mockR2Put).toHaveBeenCalledTimes(0);
-    const summary = mockRecord.mock.calls[0][0] as { metadata: Record<string, unknown> };
-    const outcomes = summary.metadata.outcomes as Record<string, { status: string }>;
+    const outcomes = recordedBody().outcomes as Record<string, { status: string }>;
     expect(outcomes.A.status).toBe("error");
     expect(outcomes.B.status).toBe("notStarted");
   });
@@ -104,9 +110,8 @@ describe("ingest-intra main flow", () => {
     expect(process.exitCode).toBe(2);
     expect(mockR2Put).toHaveBeenCalledTimes(1);
     expect(mockFetch5m).toHaveBeenCalledTimes(1);
-    const summary = mockRecord.mock.calls[0][0] as { metadata: Record<string, unknown> };
-    expect(summary.metadata.unknown).toEqual(["A"]);
-    const outcomes = summary.metadata.outcomes as Record<string, { status: string }>;
+    expect(recordedMetadata().unknownCount).toBe(1);
+    const outcomes = recordedBody().outcomes as Record<string, { status: string }>;
     expect(outcomes.A.status).toBe("unknown");
     expect(outcomes.B.status).toBe("notStarted");
   });

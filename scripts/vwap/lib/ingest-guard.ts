@@ -346,6 +346,30 @@ export type IngestRunStats = {
   outcomes: Record<string, IngestCodeOutcome>;
 };
 
+/**
+ * source 観測の集約。latestSourceBar 非 null の件数 + 日付/ts の最大。
+ * summary は kind 単一のため daily は maxDate、intra は maxTs の片方のみ
+ * 埋まる。empty/notStarted (null) は数えない。
+ */
+export function sourceObservedAggregate(
+  outcomes: Record<string, IngestCodeOutcome>
+): { count: number; maxDate: string | null; maxTs: number | null } {
+  let count = 0;
+  let maxDate: string | null = null;
+  let maxTs: number | null = null;
+  for (const code of Object.keys(outcomes)) {
+    const v = outcomes[code].latestSourceBar;
+    if (v === null || v === undefined) continue;
+    count++;
+    if (typeof v === "string") {
+      if (maxDate === null || v > maxDate) maxDate = v;
+    } else if (typeof v === "number") {
+      if (maxTs === null || v > maxTs) maxTs = v;
+    }
+  }
+  return { count, maxDate, maxTs };
+}
+
 export function buildIngestSummary(stats: IngestRunStats): {
   service: string;
   key: string;
@@ -380,10 +404,14 @@ export function buildIngestSummary(stats: IngestRunStats): {
       rateLimited: stats.rateLimited,
       backfilled: stats.backfilled ?? 0,
       aborted: stats.aborted,
-      unknown: stats.unknown,
-      rejected: stats.rejected,
+      // per-code outcomes (3695 件級) と unknown/rejected 一覧は物理 JSON
+      // 本文のみ。metadata に載せると Notion 上限 (rich_text 配列 ≤100・
+      // text ≤2000・blocks ≤1000、超過 400) を超える。full JSON の SHA は
+      // 共有 _fileManifest が運ぶ (archive 側の変更なし)。
+      unknownCount: stats.unknown.length,
+      rejectedCount: stats.rejected.length,
       universe: stats.universe,
-      outcomes: stats.outcomes,
+      sourceObserved: sourceObservedAggregate(stats.outcomes),
     },
     files: [
       {
