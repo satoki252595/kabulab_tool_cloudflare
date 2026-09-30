@@ -7,7 +7,10 @@ vi.mock("../shared/yahoo/client.js", async (importOriginal) => {
 });
 
 import { ingestProxyRoute } from "./ingest-proxy.js";
-import { yahooFetchDirect } from "../shared/yahoo/client.js";
+import {
+  YahooRateLimitError,
+  yahooFetchDirect,
+} from "../shared/yahoo/client.js";
 
 const ORIGINAL_CRON_SECRET = process.env.CRON_SECRET;
 const fetchYahoo = vi.mocked(yahooFetchDirect);
@@ -95,6 +98,75 @@ describe("GET /yahoo", () => {
     expect(log).not.toContain("secret-crumb");
     expect(log).not.toContain("secret-token");
     expect(log).not.toContain("secret-cookie");
+  });
+
+  it("YahooRateLimitError は 429 + Retry-After + 診断marker を返す", async () => {
+    const retryAt = Date.now() + 5_000;
+    fetchYahoo.mockRejectedValue(new YahooRateLimitError(429, 5_000, retryAt));
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const target = encodeURIComponent(
+      "https://query1.finance.yahoo.com/v8/finance/chart/7203.T"
+    );
+
+    const response = await ingestProxyRoute.request(
+      `https://proxy.example.test/yahoo?u=${target}`,
+      { headers: { Authorization: "Bearer test-secret" } }
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("5");
+    expect(response.headers.get("X-Kabulab-Yahoo-Status")).toBe("429");
+    const body = await response.json();
+    expect(body.error).toContain("yahoo rate limited");
+    expect(body.error).toContain(`retry-at-ms=${retryAt}`);
+    expect(body.error).not.toContain("A1=");
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    const log = String(consoleError.mock.calls[0]?.[0]);
+    expect(JSON.parse(log)).toMatchObject({
+      event: "yahoo_ingest_proxy_rate_limited",
+      source: "ingest-proxy",
+      status: 429,
+      retryAfterSec: 5,
+    });
+  });
+
+  it("typed 503 は 429 に誤変換せず 502 のまま", async () => {
+    fetchYahoo.mockRejectedValue(new YahooRateLimitError(503, null, null));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const target = encodeURIComponent(
+      "https://query1.finance.yahoo.com/v8/finance/chart/7203.T"
+    );
+
+    const response = await ingestProxyRoute.request(
+      `https://proxy.example.test/yahoo?u=${target}`,
+      { headers: { Authorization: "Bearer test-secret" } }
+    );
+
+    expect(response.status).toBe(502);
+    expect(response.headers.get("Retry-After")).toBeNull();
+    expect(response.headers.get("X-Kabulab-Yahoo-Status")).toBeNull();
+    expect(await response.json()).toEqual({
+      error: "yahoo ingest proxy failed",
+    });
+  });
+
+  it("相対 deadline のみでも 429 + Retry-After を返す", async () => {
+    fetchYahoo.mockRejectedValue(new YahooRateLimitError(429, 3_000, null));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const target = encodeURIComponent(
+      "https://query1.finance.yahoo.com/v8/finance/chart/7203.T"
+    );
+
+    const response = await ingestProxyRoute.request(
+      `https://proxy.example.test/yahoo?u=${target}`,
+      { headers: { Authorization: "Bearer test-secret" } }
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("3");
+    expect(response.headers.get("X-Kabulab-Yahoo-Status")).toBe("429");
   });
 });
 

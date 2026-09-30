@@ -17,6 +17,7 @@ import {
   MAX_IDS_PER_UPDATE,
   applySummaryImport,
   buildDescriptionUpdateStatements,
+  classifyDescriptionRepair,
   formatPlanReport,
   planSummaryImport,
   type SummaryWriter,
@@ -508,6 +509,29 @@ describe("buildDescriptionUpdateStatements (全文修復の description 書き�
 
   it("空なら文を作らない", () => {
     expect(buildDescriptionUpdateStatements([], "新全文")).toEqual([]);
+  });
+
+  it("旧文と新文が同一の行は飛ばす (no-op 再送防止)", () => {
+    const stmts = buildDescriptionUpdateStatements(
+      [
+        { id: 11, oldDescription: "同一文", updatedAt: 100 },
+        { id: 12, oldDescription: "旧文B", updatedAt: 200 },
+      ],
+      "同一文"
+    );
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0].params).toEqual(["同一文", 12, "旧文B", 200]);
+  });
+});
+
+describe("classifyDescriptionRepair (全文再入の行分類)", () => {
+  it.each([
+    ["現文=新全文→適用済み", "新全文", "旧文", "新全文", "ALREADY_APPLIED"],
+    ["現文=旧文→候補", "旧文", "旧文", "新全文", "CANDIDATE"],
+    ["どちらでもない→STOP", "第三文", "旧文", "新全文", "STOP"],
+    ["旧文=新文で現文一致→適用済み", "同一文", "同一文", "同一文", "ALREADY_APPLIED"],
+  ])("%s", (_name, current, oldDescription, newFull, want) => {
+    expect(classifyDescriptionRepair({ current, oldDescription, newFull })).toBe(want);
   });
 });
 
