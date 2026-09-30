@@ -40,6 +40,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - Worker の Observability を最小設定で有効化 (呼出ログ + 既存 console ログを残す。EDINET 外向き URL の Subscription-Key のため traces は無効のまま)。EDINET 日次取込に秘密なしの進捗 checkpoint を追加し次回標準実行の段階特定を可能に (#187)。
 
 ### 本番作業
+- 本番作業: 母集団 universe 9/30 overlay を D1 へ 1 回適用 (owner 31 文全 success、core 3810→3819・activeEquity 3695・events 226、適用後 3-SELECT 再読で exact 一致・再入 collect 0/send 0 を検証)。actual 証跡 19 点を Notion 一次データへ RECORDED (key `actual-proof-2026-09-30-3eaff8c3...`、manifestMatch written、readback 通過)。証跡 pins は `docs/universe-overlay-actual-proof-20260930.md` (Refs #196)。
 - 優待 source52 修復を適用 (16 batch・74 statements・52行、適用後 post4 全列一致・outside54 保護一致・NEWPOST 再入 0 を実証)。exec/post 証跡 56点 1-ZIP を Notion 一次データへ full SHA readback 保管 (Refs #146)。
 - 優待 ABC 修復 131 銘柄を適用 (requests 131・statements 508・完了 131、適用前 refetch 全一致、inactive 11 除外)。再入 (2nd run 差分 0) は未観測のため主張なし。
 - 優待全文修復 13 銘柄を適用 (requests 13・statements 75・desc 62、適用前 refetch 全一致。eligible 85 のうち historical 39・whole-stock STOP 23 は除外)。再入は未観測のため主張なし。
