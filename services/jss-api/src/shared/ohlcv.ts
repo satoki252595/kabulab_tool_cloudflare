@@ -1,15 +1,17 @@
 /**
- * 日足 OHLCV の取得と全系列調整（正規化）。
+ * 日足 OHLCV の取得と調整価格の付与。
  *
- * 調整の基準は Yahoo の調整終値（D1 `swing_daily_ohlcv.adj`）。
- * バーごとの係数 factor = adj / close を O/H/L/C に掛け、出来高は割る。
- * Yahoo の Adj Close は分割・併合・配当落ち込みなので、この係数で
- * 全系列が配当・分割調整済みになる。R2 の splits を読まないのは、
- * 係数を D1 の 1 行から決定的に決めるため（R2 側の欠落に左右されない）。
+ * 価格基盤は生 OHLCV (Yahoo split-adjusted)。adj_* は Yahoo Adj Close
+ * (split+配当の total-return) に基づく調整価格であり、「分割調整済み」とは
+ * 呼ばない。R2 の splits を読まないのは、係数を D1 の 1 行から決定的に
+ * 決めるため (R2 側の欠落に左右されない)。event 比率の二重適用はしない。
  *
- * adj が無い・close が 0 のバーは係数 1（無調整）で返す。欠落を例外に
- * すると、adj 未 backfill の古い行がある銘柄の全期間取得が壊れる。
- * 調整の有無はバーごとの `adjusted` フラグで明示する。
+ * 係数 factor = adj / close は両値が既知の有限正値のときのみ確定する。
+ * unknown (欠落・非有限・非正・比の非有限・非正) は null を返し、偽の 1
+ * で無調整に見せない。unknown 行の調整価格は null、生 OHLCV は保持する。
+ * adj_volume は legacy field として残すが常に null: 出来高の現株数補正は
+ * split 出来高意味論が未確認のため行わない (no divide adj/close)。
+ * SOURCE の volume は不変。
  */
 
 export interface OhlcvRow {
@@ -42,17 +44,23 @@ function round4(n: number | null): number | null {
   return n === null ? null : Math.round(n * 10000) / 10000;
 }
 
-/** 係数を決める。adj/close が両方あり close != 0 のときだけ調整する。 */
-export function adjustmentFactor(close: number | null, adj: number | null): number {
-  if (close === null || adj === null || close === 0) return 1;
-  if (!Number.isFinite(close) || !Number.isFinite(adj)) return 1;
-  return adj / close;
+/**
+ * 係数を決める。両値が既知の有限正値で比が有限正のときのみ値を返す。
+ * それ以外 (unknown) は null。偽の 1 を返さない。
+ */
+export function adjustmentFactor(close: number | null, adj: number | null): number | null {
+  if (close === null || adj === null) return null;
+  if (!Number.isFinite(close) || !Number.isFinite(adj)) return null;
+  if (close <= 0 || adj <= 0) return null;
+  const f = adj / close;
+  if (!Number.isFinite(f) || f <= 0) return null;
+  return f;
 }
 
 export function adjustBar(row: OhlcvRow): AdjustedBar {
   const factor = adjustmentFactor(row.close, row.adj);
   const scaled = (n: number | null): number | null =>
-    n === null ? null : round4(n * factor);
+    factor === null || n === null ? null : round4(n * factor);
   return {
     date: row.date,
     open: row.open,
@@ -64,8 +72,9 @@ export function adjustBar(row: OhlcvRow): AdjustedBar {
     adj_open: scaled(row.open),
     adj_high: scaled(row.high),
     adj_low: scaled(row.low),
-    adj_volume: row.volume === null ? null : round4(row.volume / factor),
-    adjusted: factor !== 1,
+    // legacy field: 常に null (split 出来高意味論未確認のため補正しない)。
+    adj_volume: null,
+    adjusted: factor !== null && factor !== 1,
   };
 }
 

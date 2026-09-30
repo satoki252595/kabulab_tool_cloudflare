@@ -1,0 +1,71 @@
+{
+ "code": "9984",
+ "dividendTs": 1711584000,
+ "dividendDate": "2024-03-28",
+ "rows": [
+  {
+   "date": "2024-03-25",
+   "open": 2303.75,
+   "high": 2337.25,
+   "low": 2295.25,
+   "close": 2295.5,
+   "volume": 28234800,
+   "adj": 2272.158447265625
+  },
+  {
+   "date": "2024-03-26",
+   "open": 2308.75,
+   "high": 2316.25,
+   "low": 2244.5,
+   "close": 2268.5,
+   "volume": 36150400,
+   "adj": 2245.4326171875
+  },
+  {
+   "date": "2024-03-27",
+   "open": 2237.5,
+   "high": 2275.75,
+   "low": 2230.25,
+   "close": 2262.25,
+   "volume": 31026800,
+   "adj": 2239.246337890625
+  },
+  {
+   "date": "2024-03-28",
+   "open": 2241.0,
+   "high": 2256.5,
+   "low": 2232.5,
+   "close": 2240.5,
+   "volume": 27258800,
+   "adj": 2223.122802734375
+  },
+  {
+   "date": "2024-03-29",
+   "open": 2241.25,
+   "high": 2251.0,
+   "low": 2227.75,
+   "close": 2235.5,
+   "volume": 11431600,
+   "adj": 2218.161376953125
+  },
+  {
+   "date": "2024-04-01",
+   "open": 2254.5,
+   "high": 2257.25,
+   "low": 2194.25,
+   "close": 2207.5,
+   "volume": 23174000,
+   "adj": 2190.378173828125
+  },
+  {
+   "date": "2024-04-02",
+   "open": 2216.0,
+   "high": 2224.25,
+   "low": 2192.5,
+   "close": 2199.0,
+   "volume": 20110000,
+   "adj": 2181.9443359375
+  }
+ ],
+ "_provenance": "Verbatim (date,open,high,low,close,volume,adj) \u00b13 sessions around dividend 2024-03-28 from audit-b/yahoo-5y/9984.json SHA06b44e798fdbc669a618f6f5f64d59ec86fe2bb4b916674c34f6e518ac01234f. Bars are observed values, not adjusted outputs."
+}

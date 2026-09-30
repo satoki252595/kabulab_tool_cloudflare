@@ -1,0 +1,71 @@
+{
+ "code": "7944",
+ "dividendTs": 1656460800,
+ "dividendDate": "2022-06-29",
+ "rows": [
+  {
+   "date": "2022-06-24",
+   "open": 4010.0,
+   "high": 4135.0,
+   "low": 4010.0,
+   "close": 4085.0,
+   "volume": 23600,
+   "adj": 3370.412353515625
+  },
+  {
+   "date": "2022-06-27",
+   "open": 4155.0,
+   "high": 4250.0,
+   "low": 4115.0,
+   "close": 4195.0,
+   "volume": 39300,
+   "adj": 3461.16943359375
+  },
+  {
+   "date": "2022-06-28",
+   "open": 4195.0,
+   "high": 4250.0,
+   "low": 4145.0,
+   "close": 4240.0,
+   "volume": 38100,
+   "adj": 3498.297607421875
+  },
+  {
+   "date": "2022-06-29",
+   "open": 4200.0,
+   "high": 4205.0,
+   "low": 4100.0,
+   "close": 4185.0,
+   "volume": 75900,
+   "adj": 3517.6298828125
+  },
+  {
+   "date": "2022-06-30",
+   "open": 4150.0,
+   "high": 4180.0,
+   "low": 4000.0,
+   "close": 4035.0,
+   "volume": 76600,
+   "adj": 3391.550048828125
+  },
+  {
+   "date": "2022-07-01",
+   "open": 4105.0,
+   "high": 4140.0,
+   "low": 4050.0,
+   "close": 4105.0,
+   "volume": 77300,
+   "adj": 3450.38720703125
+  },
+  {
+   "date": "2022-07-04",
+   "open": 4195.0,
+   "high": 4225.0,
+   "low": 4165.0,
+   "close": 4210.0,
+   "volume": 32500,
+   "adj": 3538.643310546875
+  }
+ ],
+ "_provenance": "Verbatim (date,open,high,low,close,volume,adj) \u00b13 sessions around dividend 2022-06-29 from acq-7944.bin SHA0b35e0df364f0b0c34ebc92ff9504104e22bdad02abe97beb7bce86be0431e5d. Bars are observed values, not adjusted outputs."
+}
