@@ -86,9 +86,17 @@ async function main(): Promise<void> {
   // table_unrecognized/parse_error/orders_only のものだけを force 再取込
   // (パーサ改善の反映用)。他 (ok_*/no_order_table) は EDINET を叩かず skip。
   const reparseUnrecognized = hasFlag("reparse-unrecognized");
-  // --no-archive: Notion 物理アーカイブを行わない (parse 再評価だけが目的の
-  // 再取込で既存 ZIP の Notion 再アップロード帯域を節約)。
+  // --no-archive: write mode 未対応 (下で明示 STOP)。parse 再評価時は
+  // archive 済み key が冪等スキップされるため再アップロード帯域は生じない。
   const archiveToNotion = !hasFlag("no-archive");
+  // raw-before-DB 契約: 本スクリプトは常時 write のため --no-archive は
+  // 未対応。ingest 側も archiveToNotion=false を DB 書込前に止める (二重明示)。
+  if (hasFlag("no-archive")) {
+    console.error(
+      "[backfill] --no-archive は write mode 未対応のため STOP します (raw-before-DB 契約)"
+    );
+    process.exit(1);
+  }
   const force = hasFlag("force") || reparseUnrecognized;
 
   // 再評価対象の docId 集合を事前ロード (EDINET を叩く前に絞り込む)

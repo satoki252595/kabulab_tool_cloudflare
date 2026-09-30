@@ -10,10 +10,10 @@
  * fetch/remote save より前に止める)、(2) upsert・delete・全 insert の同一 batch
  * 化 + documentId の docId サブクエリ参照 (事前 upsert/id 取得の排除)。
  *
- * 本ファイルは実 ingestDocument を走らせる (mock は EDINET 取得のみ。
- * archiveToNotion=false のため Notion へは触れない)。CSV 入力は壊れバイト列で
- * 明示の parse_error 経路に入れ、書込形状だけを検証する (ソース fixture の
- * 捏造はしない。full raw replay もしない)。
+ * 本ファイルは実 ingestDocument を走らせる (mock は EDINET 取得と
+ * Notion 側 3 関数。custody は呼出側指定で完備を渡し、単通照会はしない)。
+ * CSV 入力は壊れバイト列で明示の parse_error 経路に入れ、書込形状だけを
+ * 検証する (ソース fixture の捏造はしない。full raw replay もしない)。
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { drizzle as drizzleProxy } from "drizzle-orm/sqlite-proxy";
@@ -25,13 +25,34 @@ import type { Database } from "../db/client.js";
 import { downloadDocument } from "../services/edinet/client.js";
 import type { EdinetDoc } from "../services/edinet/types.js";
 import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
+import {
+  findBackupRowsByKeys,
+  recordPrimaryData,
+  verifyArchivedAttachments,
+} from "../../../../src/shared/notion-archive/index.js";
 
 vi.mock("../services/edinet/client.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../services/edinet/client.js")>();
   return { ...mod, downloadDocument: vi.fn() };
 });
+vi.mock("../../../../src/shared/notion-archive/index.js", () => ({
+  recordPrimaryData: vi.fn(),
+  findBackupRowsByKeys: vi.fn(),
+  verifyArchivedAttachments: vi.fn(),
+}));
 
 const download = vi.mocked(downloadDocument);
+
+// raw-before-DB 既定 (archiveToNotion=true) のため Notion 側は静的成功。
+// custody は呼出側指定で完備を渡す (T4/T5) ので単通照会は起きない。
+vi.mocked(recordPrimaryData).mockResolvedValue({
+  pageId: "page-batch",
+  outcome: "recorded",
+  fileTooLarge: false,
+  manifestMatch: "written",
+});
+vi.mocked(findBackupRowsByKeys).mockResolvedValue([]);
+vi.mocked(verifyArchivedAttachments).mockResolvedValue(undefined);
 
 function annualDoc(): EdinetDoc {
   return {
@@ -185,11 +206,12 @@ describe("T4: 原子失敗 (単一 batch・部分書込なし・再送なし・�
       const sender = senderDouble();
       sender.failOnce(new Error("D1 REST 500 (test)"));
       const { db, calls } = proxyDb(() => []);
-      const args = {
+      const args: Parameters<typeof ingestDocument>[1] = {
         stockId: 11,
         stockCode: "1001",
         doc: annualDoc(),
         d1HttpBatch: sender.send,
+        custody: { t1: "complete", t5: "complete" },
       };
 
       await expect(ingestDocument(db as unknown as Database, args)).rejects.toThrow("D1 REST 500 (test)");
@@ -238,11 +260,12 @@ describe("T5: 同一入力の完了/再入場なし", () => {
         }
         return [];
       });
-      const args = {
+      const args: Parameters<typeof ingestDocument>[1] = {
         stockId: 11,
         stockCode: "1001",
         doc: annualDoc(),
         d1HttpBatch: sender.send,
+        custody: { t1: "complete", t5: "complete" },
       };
 
       const r1 = await ingestDocument(db as unknown as Database, args);

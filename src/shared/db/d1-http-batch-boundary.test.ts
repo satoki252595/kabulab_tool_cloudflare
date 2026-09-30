@@ -20,6 +20,8 @@
  *      全て d1HttpBatch 経由で、逐次の `await db.delete/insert` は無いこと。
  *      Notion 確定後のポインタ単行 UPDATE (別境界) だけは await 書込として
  *      残る。status の batch 内包は実 SQLite テスト (backfill-atomic) が担う。
+ *      missing-docs の batch 呼出は lib/missing-backfill.ts processMissingDoc
+ *      に委譲されており、script は委譲呼出のみ・lib を同基準で検査する。
  */
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -169,7 +171,36 @@ describe("createD1HttpDb の batch 境界", () => {
         sequential ?? [],
         `${rel} の DELETE・INSERT は d1HttpBatch の単一 batch で送ること`
       ).toEqual([]);
-      expect(src).toMatch(/await\s+d1HttpBatch\s*\(\s*toD1BatchStatements\s*\(/);
     }
+    const textSrc = stripComments(
+      readFileSync(
+        join(ROOT, "services/yuho-quant/data-scripts/backfill-text-sections.ts"),
+        "utf-8"
+      )
+    );
+    expect(textSrc).toMatch(/await\s+d1HttpBatch\s*\(\s*toD1BatchStatements\s*\(/);
+    // missing-docs は lib の processMissingDoc に委譲する (二重実装なし)。
+    const missingSrc = stripComments(
+      readFileSync(
+        join(ROOT, "services/yuho-quant/data-scripts/backfill-missing-docs.ts"),
+        "utf-8"
+      )
+    );
+    expect(missingSrc).toMatch(/await\s+processMissingDoc\s*\(/);
+    // lib 側も同基準: 逐次 await の insert/delete なし + 単一 batch 呼出あり。
+    const libSrc = stripComments(
+      readFileSync(
+        join(ROOT, "services/yuho-quant/data-scripts/lib/missing-backfill.ts"),
+        "utf-8"
+      )
+    );
+    const libSequential = libSrc.match(/await\s+db\s*\.\s*(insert|delete)\s*\(/g);
+    expect(
+      libSequential ?? [],
+      "lib/missing-backfill.ts の DELETE・INSERT は d1HttpBatch の単一 batch で送ること"
+    ).toEqual([]);
+    expect(libSrc).toMatch(
+      /await\s+deps\.d1HttpBatch\s*\(\s*toD1BatchStatements\s*\(/
+    );
   });
 });

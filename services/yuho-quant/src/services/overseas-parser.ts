@@ -75,6 +75,13 @@ export type OverseasParseStatus =
  */
 export interface OverseasProof {
   reconciliationAdjustment: number;
+  /**
+   * 地理未分類の営業売上の abs 合計 (source 由来の実式。通過時は常に 0)。
+   * 保存 validation が算術照合の前に必須・0・有限を強制する (backstop)。
+   * 旧 proof (field なし) は STOP し、default 0 は置かない。明示消去・
+   * 明示別収益の調整額は reconciliationAdjustment 側で不変に維持する。
+   */
+  geoUnclassified: number;
   mode: RoundingMode;
   /** 和区間 (= 地域印刷セル + 調整脚の区間の和。parse 側で確定)。 */
   sumLo: number;
@@ -134,6 +141,32 @@ export interface OverseasCapture {
   status: OverseasParseStatus | null;
   stopReason: string | null;
   candidates: OverseasCandidateCapture[];
+  /** 地理未分類で却下した表 (実 reducer 由来。監査用。reject 時のみ採取)。 */
+  incomplete?: Array<{
+    start: number;
+    kind: "rows" | "cols";
+    labels: string[];
+    amount: number | null;
+  }>;
+}
+
+/**
+ * 地理未分類の営業売上が残る表の共通拒否 (fail-closed HOLD)。
+ * 明示消去額 (調整額/消去)・明示別収益 (その他の収益)・丸めは正当な
+ * 照合脚として維持し、会社共通 (全社/本社)・修飾なしその他・事業行・
+ * 期表示の nonzero・欠損は候補ごと却下する (label による免除なし)。
+ * 数値の推定 (その他全額外国・total−Japan) はしない。amount は監査用
+ * の表示だけで採否には使わない (採否は nonzero 件数・欠損ラベル)。
+ */
+export interface GeoIncomplete {
+  marker: "geo_incomplete";
+  /** 未分類の行/列ラベル (実 reducer 由来)。 */
+  labels: string[];
+  /**
+   * 未分類額の abs 合計 (正負の相殺を許さない)。欠損セルがあるときは
+   * null (金額不明。それでも fail-closed で却下する)。
+   */
+  amount: number | null;
 }
 
 /**
@@ -188,6 +221,14 @@ const RX_AGGREGATE =
   /^(外部顧客への売上高|外部顧客に対する売上高|外部顧客への売上収益|外部顧客に対する売上収益|外部顧客への営業収益|外部顧客に対する営業収益|顧客との契約から生じる収益|売上高合計|売上収益合計|営業収益合計|連結収益合計|営業収益|合計|総合計|総計|計|連結|連結売上高|連結計|連結財務諸表計上額)$/;
 /** 「その他」系 (地域ブロック内なら overseas, 収益/事業文脈なら除外) */
 const RX_OTHER_REGIONISH = /^(その他|その他の地域|その他地域|その他海外|外国|諸外国|直接輸出|輸出)$/;
+/**
+ * 修飾なし Other (地理の立証なし。採用・保存のいずれも不可)。
+ * 海外/外国/輸出を含む明示 (その他海外・外国・諸外国・直接輸出・輸出)
+ * は海外活動の明示として修飾済みに扱う (採用側の既存設計を維持)。
+ */
+function isBareOther(label: string): boolean {
+  return /^(その他|その他の地域|その他地域)$/.test(label);
+}
 /**
  * 総額列の見出し (連結/合計/計)。S100FHUH で実証: 当連結の報告セグメント表は
  * 連結列が「連結損益計算書 計上額」、小計列が「計」で、旧正規表現
@@ -582,6 +623,33 @@ const RX_AGG_COL =
   /小計|合計|総計|累計|中計|セグメント計(?![一-龯々〆〤ぁ-んァ-ヶ])|部門計(?![一-龯々〆〤ぁ-んァ-ヶ])|計[（(]|計$|^計(?![一-龯々〆〤ぁ-んァ-ヶ])|連結|外部顧客/;
 /** 全社・本社共通 (地理不明の会社共通分。照合のみに使い fact 化しない) */
 const RX_COMPANY_COMMON = /全社|本社/;
+/**
+ * 期表示ラベル (当期/前期・年度・第N期)。事業/地域いずれの軸も立証でき
+ * ないため未分類 unknown として扱い、metadata 扱いの免除はしない
+ * (null dash を含む)。年度利益級の metric 行は RX_NONGEO_EXCL 側で
+ * 先に除く (rows/cols 両 predicate 共通)。
+ */
+const RX_FY_LABEL = /年度|当期|前期|通期|第[0-9０-９]+期/;
+/**
+ * 集計見出し (block タイトル語彙。noteClassOf/score の既存語彙のみ)。
+ * null セルの見出し行/列は leaf なし (header) として除く。
+ * 実数は未分類 HOLD (総額級の無証拠合算はしない)。
+ */
+const RX_COLLECTIVE_TITLE =
+  /主たる地域市場|地域ごとの情報|地域に関する情報|地域別に関する情報|地域別情報|地域別の内訳|地域別内訳|地域別|所在地別|仕向地別/;
+/** 脚注 marker 先頭 (metadata。cleanLabel の strip 語彙と同一)。null は除く。 */
+const RX_FOOTNOTE_LEAD = /^(注|※|＊|\*|☆|★)/;
+/**
+ * 実証済 metric (metricOf の語彙に完全一致のみ。fallback の免除専用)。
+ * ○○売上/○○収益級の複合は未分類 HOLD (語一致の抜け道にしない)。
+ */
+const RX_PROVEN_METRIC = /^(売上高|売上収益|営業収益|営業利益|事業利益)$/;
+/**
+ * rows 値列の除外語彙 (pickValueColForRows と rows fallback で共有。
+ * 比率/消去/内部の実証済み語彙。1 定義・内容不変)。
+ */
+const RX_ROWS_VALUE_COL_EXCL =
+  /調整額?|セグメント間|内部売上|内部取引|消去|前年比|増減|構成比|割合|％|%/;
 /** 会社総額スコープの集計 (地域小計と区別する。S100YCID) */
 function isCompanyAggLabel(label: string): boolean {
   return /連結|外部顧客/.test(label);
@@ -685,7 +753,7 @@ function pickValueColForRows(
   reportYear: number
 ): ColPick | null {
   const width = colHeader.length;
-  const EXCL = /調整額?|セグメント間|内部売上|内部取引|消去|前年比|増減|構成比|割合|％|%/;
+  const EXCL = RX_ROWS_VALUE_COL_EXCL;
 
   // 1) 合計/連結 列
   const aggCols: number[] = [];
@@ -744,7 +812,7 @@ function tryGeoRows(
   fiscalYearEnd: string,
   heading: string,
   mode: RoundingMode
-): ParsedTable | null {
+): ParsedTable | GeoIncomplete | null {
   const flat = gridX.map((r) => r.join("")).join("");
   // 単位は表外の見出し ((単位：百万円) 等) に書かれることが多い → heading も見る
   const unit = detectUnitOrNull(flat) ?? detectUnitOrNull(heading);
@@ -819,7 +887,18 @@ function tryGeoRows(
   const shokei: Array<{ idx: number; value: number; quantum: number }> = [];
   const elimCells: CellAmount[] = [];
   const otherRevenueCells: CellAmount[] = [];
-  const companyCommonCells: CellAmount[] = [];
+  const companyCommonCells: Array<{
+    label: string;
+    value: number;
+    quantum: number;
+  }> = [];
+  // 地理未分類の営業行 (事業セグメント等。nonzero・欠損で候補ごと却下)。
+  const geoUnclassifiedCells: Array<{
+    label: string;
+    value: number;
+    quantum: number;
+  }> = [];
+  const incompleteMissingLabels: string[] = [];
   let hasBusinessRows = false;
   // 最初の集計行より後の地域行は別 block (S100TYYR: 事業 block の「その他」
   // 4953 を地域に混入させない)。小計は block 終端ではなく block 内区切り。
@@ -838,6 +917,8 @@ function tryGeoRows(
     if (role === "other" && v !== null && !RX_ELIMINATION.test(normLabel)) {
       hasBusinessRows = true;
     }
+    // arm 採取済み flag (gap の共有 fallback との二重採取防止)。
+    let armClaimed = false;
     // 収益認識 triplet の非地域脚 (契約小計→外部顧客総額の橋渡し。S100PUMS)。
     // 集計にも地域にも数えない (classifyRegion の other 扱いと一致)。
     if (
@@ -847,20 +928,56 @@ function tryGeoRows(
       RX_OTHER_REVENUE.test(cleanLabel(row[0] ?? ""))
     ) {
       otherRevenueCells.push({ value: cell.value, quantum: cell.quantum });
+      armClaimed = true; // 実数行だけ claim (欠損は fallback の HOLD 対象)。
     }
     // 全社・本社共通行 (地理不明の会社共通分。S100AGPO: 合計に含まれる 9)。
     // 集計行より前 (同一 block) のものだけ照合に加え、fact 化はしない。
+    // nonzero・欠損は候補ごと却下 (label 免除しない。source 別の立証待ち)。
     if (
       role === "other" &&
-      v !== null &&
-      cell !== null &&
       !seenAggRow &&
       // 消去行は elim 脚が持つため全社共通に重ねない (S100DA2Y「消去又は
       // 全社」の二重計上を Gate3 の区間照合が摘出。1行は1脚だけ)。
       !RX_ELIMINATION.test(normLabel) &&
       RX_COMPANY_COMMON.test(cleanLabel(row[0] ?? ""))
     ) {
-      companyCommonCells.push({ value: cell.value, quantum: cell.quantum });
+      armClaimed = true; // 欠損は本 arm が処理 (fallback 二重防止)。
+      if (v !== null && cell !== null) {
+        companyCommonCells.push({
+          label: cleanLabel(row[0] ?? ""),
+          value: cell.value,
+          quantum: cell.quantum,
+        });
+      } else {
+        incompleteMissingLabels.push(cleanLabel(row[0] ?? ""));
+      }
+    }
+    // 地理未分類の営業行 (事業セグメント・期表示。cols の非地域列と同一の
+    // 完全性)。集計行より前 (同一 block) の実数・欠損行だけを見る (TYYR
+    // 級の後続 block の事業行は別表の内容のため対象外)。期表示行は metadata
+    // 扱いで免除しない (null dash を含む)。metric 行は NONGEO_EXCL で除く。
+    // 修飾なしその他行は採用点で捕捉する (下の isBareOther 側。ここでは
+    // 扱わない)。
+    if (
+      role === "other" &&
+      !seenAggRow &&
+      !RX_ELIMINATION.test(normLabel) &&
+      !RX_OTHER_REVENUE.test(cleanLabel(row[0] ?? "")) &&
+      !RX_COMPANY_COMMON.test(cleanLabel(row[0] ?? "")) &&
+      (RX_BUSINESS_COL.test(cleanLabel(row[0] ?? "")) ||
+        RX_FY_LABEL.test(cleanLabel(row[0] ?? ""))) &&
+      !RX_NONGEO_EXCL.test(cleanLabel(row[0] ?? ""))
+    ) {
+      armClaimed = true; // 欠損は本 arm が処理 (fallback 二重防止)。
+      if (v !== null && cell !== null) {
+        geoUnclassifiedCells.push({
+          label: cleanLabel(row[0] ?? ""),
+          value: cell.value,
+          quantum: cell.quantum,
+        });
+      } else {
+        incompleteMissingLabels.push(cleanLabel(row[0] ?? ""));
+      }
     }
     if (RX_SHOKEI.test(normLabel)) {
       // 小計の値が読めない block 構成は検証不能 → 却下 (fail-closed)
@@ -903,12 +1020,87 @@ function tryGeoRows(
       return null;
     }
     if (seenAggRow) continue;
-    if (role !== "domestic" && role !== "overseas") continue;
-    if (v === null || cell === null) continue;
+    const rowName = cleanLabel(row[0] ?? "");
+    if (role !== "domestic" && role !== "overseas") {
+      // 共有 fallback (default-deny): 未分類行の売上 leaf 脱落防止。
+      // arm 採取済み・実証済 metric・比率/消去 (EXCL) は除く。section/
+      // 集計/block 外は上で除外済み。実数は小数も HOLD (符号相殺なし)。
+      // null は見出し・脚注・空行を除き HOLD。
+      if (
+        !armClaimed &&
+        !RX_PROVEN_METRIC.test(norm(rowName)) &&
+        !RX_ROWS_VALUE_COL_EXCL.test(rowName) &&
+        // null のその他収益は bridge-0 (実数は arm が採取)。その他収益は
+        // 証明済みの非売上区分で、欠損は分子を縮めない (照合が guard)。
+        !RX_OTHER_REVENUE.test(rowName)
+      ) {
+        if (v !== null && cell !== null) {
+          geoUnclassifiedCells.push({
+            label: rowName === "" ? `(row ${i})` : rowName,
+            value: cell.value,
+            quantum: cell.quantum,
+          });
+        } else if (
+          rowName !== "" &&
+          !RX_COLLECTIVE_TITLE.test(rowName) &&
+          !RX_FOOTNOTE_LEAD.test(rowName)
+        ) {
+          incompleteMissingLabels.push(rowName);
+        }
+      }
+      continue;
+    }
+    // 修飾なしその他行は地理の立証がないため採用しない (W81W その他 1462)。
+    // 実数・欠損とも未分類として共有位置で候補ごと却下する (fail-closed)。
+    // 修飾つき (その他海外/直接輸出等) は従来どおり採用する。
+    if (isBareOther(rowName)) {
+      if (v !== null && cell !== null) {
+        geoUnclassifiedCells.push({
+          label: rowName,
+          value: cell.value,
+          quantum: cell.quantum,
+        });
+      } else {
+        incompleteMissingLabels.push(rowName);
+      }
+      continue;
+    }
+    // 既知地域の売上 leaf 欠損は黙殺しない (numerator/地域集合の縮小防止。
+    // dash を含む共有 null 契約)。section/集計/block 外は上で除外済み。
+    // 共有位置で subtotal/hybrid より前に却下し、proof 0 で certified しない。
+    if (v === null || cell === null) {
+      incompleteMissingLabels.push(rowName);
+      continue;
+    }
     if (!Number.isInteger(v)) return null; // 小数 = % 列誤認 → 却下
-    const name = cleanLabel(row[0] ?? "");
+    const name = rowName;
     if (name === "") continue;
     entries.push({ idx: i, role, name, sub: row[1] ?? "", value: v, quantum: cell.quantum });
+  }
+
+  // 地理未分類 (会社共通・事業行・修飾なしその他・期表示) が nonzero・
+  // 欠損で残れば候補ごと却下 (fail-closed HOLD。rows-main・小計の両 path
+  // に効く共有位置)。
+  // 判定は nonzero 件数 (正負の相殺を許さない)。
+  const badUnclassifiedRows = [
+    ...companyCommonCells.filter((c) => c.value !== 0),
+    ...geoUnclassifiedCells.filter((c) => c.value !== 0),
+  ];
+  if (
+    incompleteMissingLabels.length > 0 ||
+    badUnclassifiedRows.length > 0
+  ) {
+    return {
+      marker: "geo_incomplete",
+      labels: [
+        ...incompleteMissingLabels,
+        ...badUnclassifiedRows.map((c) => c.label),
+      ],
+      amount:
+        incompleteMissingLabels.length > 0
+          ? null
+          : badUnclassifiedRows.reduce((a, c) => a + Math.abs(c.value), 0),
+    };
   }
 
   if (shokei.length > 0) {
@@ -921,7 +1113,11 @@ function tryGeoRows(
       consolidated,
       mode,
       vc,
-      colHeader[vc] ?? ""
+      colHeader[vc] ?? "",
+      [...companyCommonCells, ...geoUnclassifiedCells].reduce(
+        (a, c) => a + Math.abs(c.value),
+        0
+      )
     );
     if (b1) return { ...b1, valueAxisHeader: colHeader[vc] ?? "" };
     return null;
@@ -933,6 +1129,16 @@ function tryGeoRows(
   let metricPruned = false;
   const entryNames = entries.map((e) => e.name);
   if (new Set(entryNames).size !== entryNames.length) {
+    // P-hier の sub 読替えで修飾なしその他が地域名になる表は地理未分類
+    // (S100OJV9 その他 5122)。解決前に候補ごと却下する (fail-closed)。
+    const bareSubs = entries.filter((e) => isBareOther(cleanLabel(e.sub)));
+    if (bareSubs.length > 0) {
+      return {
+        marker: "geo_incomplete",
+        labels: [...new Set(bareSubs.map((e) => cleanLabel(e.sub)))],
+        amount: bareSubs.reduce((a, e) => a + Math.abs(e.value), 0),
+      };
+    }
     if (elimCells.some((c) => c.value !== 0)) return null; // 消去つき重複は未証明の組合せ → 却下
     const resolved = resolveDupEntries(entries, aggregates, mode);
     if (!resolved) return null;
@@ -1149,6 +1355,8 @@ function tryGeoRows(
   // 一致集計と異なる総額セルを使っても中間項は足さない (総額セルは1表示セル)。
   const sumOf = (cells: readonly CellAmount[]): number =>
     cells.reduce((a, c) => a + c.value, 0);
+  const sumAbs = (cells: readonly CellAmount[]): number =>
+    cells.reduce((a, c) => a + Math.abs(c.value), 0);
   const adjCells: CellAmount[] = [
     ...elimCells,
     ...(bridged ? otherRevenueCells : []),
@@ -1203,6 +1411,8 @@ function tryGeoRows(
     facts,
     proof: {
       reconciliationAdjustment: reconAdjustment,
+      // 未分類 abs 額 (却下済みのため常に 0。backstop 用に実式で運ぶ)。
+      geoUnclassified: sumAbs([...companyCommonCells, ...geoUnclassifiedCells]),
       mode,
       sumLo: proofSumLo,
       sumHi: proofSumHi,
@@ -1245,7 +1455,9 @@ function finishShokeiBlocks(
   mode: RoundingMode,
   /** 値列の特定結果 (trace 用。選択には使わない)。 */
   valueCol: number,
-  valueLabel: string
+  valueLabel: string,
+  /** 未分類の abs 合計 (source 由来。backstop 用に実式で運ぶ)。 */
+  geoUnclassifiedAbs: number
 ): ParsedTable | null {
   const bounds = shokei.map((s) => s.idx).sort((a, b) => a - b);
   // 最終小計より後の地域行は所属 block 不明 → 却下
@@ -1343,6 +1555,7 @@ function finishShokeiBlocks(
     facts,
     proof: {
       reconciliationAdjustment: 0,
+      geoUnclassified: geoUnclassifiedAbs,
       mode,
       sumLo: proofSumLo,
       sumHi: proofSumHi,
@@ -1595,7 +1808,7 @@ function tryGeoCols(
   mode: RoundingMode,
   caption: string = "",
   textBlock: string | null = null
-): ParsedTable | "single_row_fiscal_unknown" | null {
+): ParsedTable | "single_row_fiscal_unknown" | GeoIncomplete | null {
   const flat = gridX.map((r) => r.join("")).join("");
   const unit = detectUnitOrNull(flat) ?? detectUnitOrNull(heading);
   if (!unit) return null;
@@ -1644,6 +1857,8 @@ function tryGeoCols(
   // 単一行の直接証明 (分岐が受理した表だけ設定する)。
   let singleRowProof: SingleRowProof | undefined;
   let singleRowAxis: string | undefined;
+  // ラベルつき値行か (col0 セルが値でなく行ラベル)。単一行は col0 が数値。
+  const valueRowLabeled = valueRow >= 0;
   if (valueRow < 0) {
     // 単一行 geocols の限定分岐 (Sol確定 + Root残gate): 地域 header +
     // 無ラベル数値行が唯一で、売上 TextBlock の囲み + 直前小見出しの sales
@@ -1700,15 +1915,20 @@ function tryGeoCols(
 
   const consolidated = detectConsolidated(gridX.flat().join(" "));
   const EXCL = /調整額?|セグメント間|内部|消去|割合|％|%/;
-  // セグメント注記か (地域注記を兼ねる。S100ACAR は地域注記を省略し本表参照)。
-  const headText = gridX
-    .slice(0, headerIdx + 1)
-    .map((r) => r.join(""))
-    .join("");
-  const hasKeiCol = gridX[headerIdx].some((c) => /^計$/.test(cleanLabel(c)));
-  const isSegmentNote =
-    /報告セグメント/.test(headText) && (totalCol >= 0 || hasKeiCol);
-  const nonGeoSegCells: CellAmount[] = [];
+  // 非地域列の内訳。会社共通 (全社/本社)・修飾なしその他・事業・期表示の
+  // nonzero・欠損は候補ごと却下する (海外 numerator の欠落防止。label
+  // 免除なし。推定はしない)。注記種別で分岐しない (表ローカル一律)。
+  const companyCommonCells: Array<{
+    label: string;
+    value: number;
+    quantum: number;
+  }> = [];
+  const geoUnclassifiedCells: Array<{
+    label: string;
+    value: number;
+    quantum: number;
+  }> = [];
+  const incompleteMissingLabels: string[] = [];
   interface Col {
     index: number;
     name: string;
@@ -1724,39 +1944,118 @@ function tryGeoCols(
     if (ci === totalCol) continue;
     const h = norm(gridX[headerIdx][ci] ?? "");
     const hClean = cleanLabel(gridX[headerIdx][ci] ?? "");
-    // セグメント注記の非地域列 (その他・事業単位・全社共通) は地理が定まら
-    // ないため fact 化せず照合にだけ加える (S100ACAR その他 1748、
-    // S100IWKH スポーツ施設事業 512497)。海外売上高は地理列のみの下限。
-    // 小計・総額列は和なので除く (報告セグメント計の二重計上防止)。
+    // 非地域列は fact 化しない。小計・総額列は和なので除く (報告セグメント計
+    // の二重計上防止)。会社共通・修飾なしその他・事業・期表示の実数・欠損は
+    // 未分類として共有位置で候補ごと却下する (fail-closed HOLD。label 免除
+    // なし)。修飾つきその他 (その他海外/直接輸出等) は本分岐の対象外とし、
+    // 下の role 採用へ落とす (従来どおり)。明示消去・集計・metric 列は除く
+    // (S100ACAR その他 1748、S100IWKH スポーツ施設事業 512497)。
     if (
-      isSegmentNote &&
       !RX_AGG_COL.test(h) &&
       !RX_ELIMINATION.test(h) &&
       !EXCL.test(h) &&
-      (RX_OTHER_REGIONISH.test(hClean) ||
+      (isBareOther(hClean) ||
         RX_COMPANY_COMMON.test(hClean) ||
-        RX_BUSINESS_COL.test(hClean)) &&
+        RX_BUSINESS_COL.test(hClean) ||
+        RX_FY_LABEL.test(hClean)) &&
       !RX_NONGEO_EXCL.test(hClean)
     ) {
-      const ncell = parseJpNumberCell(gridX[valueRow][ci] ?? "");
+      const rawCell = gridX[valueRow][ci] ?? "";
+      const ncell = parseJpNumberCell(rawCell);
       if (ncell !== null && !Number.isInteger(ncell.value)) return null;
-      if (ncell !== null) {
-        nonGeoSegCells.push({ value: ncell.value, quantum: ncell.quantum });
+      if (ncell === null) {
+        incompleteMissingLabels.push(hClean);
+        continue;
+      }
+      if (RX_COMPANY_COMMON.test(hClean)) {
+        companyCommonCells.push({
+          label: hClean,
+          value: ncell.value,
+          quantum: ncell.quantum,
+        });
+      } else {
+        geoUnclassifiedCells.push({
+          label: hClean,
+          value: ncell.value,
+          quantum: ncell.quantum,
+        });
       }
       continue;
     }
     const role = colRole[ci];
-    if (role !== "domestic" && role !== "overseas") continue;
+    if (role !== "domestic" && role !== "overseas") {
+      // 共有 fallback (default-deny): 未分類列の売上 leaf 脱落防止。
+      // 不明ラベルの regex 列挙ではなく、明示の集計/消去/metric/見出し列
+      // だけを既存述語で除き、残りの実数・欠損は HOLD する (rows と同一)。
+      // 実数は小数も HOLD。null は集計見出し・脚注・空列・ラベル列を除く。
+      const rawCell = gridX[valueRow][ci] ?? "";
+      const fcell = parseJpNumberCell(rawCell);
+      if (
+        !RX_AGG_COL.test(h) &&
+        !RX_TOTAL_COL.test(h) &&
+        !RX_ELIMINATION.test(h) &&
+        !EXCL.test(h) &&
+        !RX_PROVEN_METRIC.test(norm(hClean)) &&
+        !(valueRowLabeled && ci === 0) &&
+        // null のその他収益は bridge-0 扱いで除く (実数は cols に橋がない
+        // ため HOLD)。rows の arm 採取と対称。
+        !(RX_OTHER_REVENUE.test(hClean) && fcell === null)
+      ) {
+        if (fcell !== null) {
+          geoUnclassifiedCells.push({
+            label: hClean === "" ? `(col ${ci})` : hClean,
+            value: fcell.value,
+            quantum: fcell.quantum,
+          });
+        } else if (
+          hClean !== "" &&
+          !RX_COLLECTIVE_TITLE.test(hClean) &&
+          !RX_FOOTNOTE_LEAD.test(hClean)
+        ) {
+          incompleteMissingLabels.push(hClean);
+        }
+      }
+      continue;
+    }
     if (EXCL.test(h)) continue;
     const vcell = parseJpNumberCell(gridX[valueRow][ci] ?? "");
     if (vcell !== null && !Number.isInteger(vcell.value)) return null;
+    // 既知地域列の売上 leaf 欠損は黙殺しない (rows と同一の完全性)。
+    // metric/集計列は上で除外済み。grouping の前に共有位置で却下する。
+    // ラベル列 (col0 の行ラベルセル) は leaf ではないため除く。
+    if (vcell === null) {
+      if (valueRowLabeled && ci === 0) continue;
+      incompleteMissingLabels.push(cleanLabel(gridX[headerIdx][ci] ?? ""));
+      continue;
+    }
     cols.push({
       index: ci,
       name: cleanLabel(gridX[headerIdx][ci] ?? ""),
       kind: role,
-      value: vcell?.value ?? null,
-      qw: vcell?.quantum ?? 0,
+      value: vcell.value,
+      qw: vcell.quantum,
     });
+  }
+  // 地理未分類の営業列 (修飾なしその他・事業・会社共通・期表示) が
+  // nonzero・欠損で残れば候補ごと却下 (fail-closed HOLD。明示消去・丸め
+  // は対象外)。判定は nonzero 件数 (正負の相殺を許さない)。0 セルは
+  // 区間安定のため照合に残す。
+  const badUnclassified = [
+    ...companyCommonCells.filter((c) => c.value !== 0),
+    ...geoUnclassifiedCells.filter((c) => c.value !== 0),
+  ];
+  if (incompleteMissingLabels.length > 0 || badUnclassified.length > 0) {
+    return {
+      marker: "geo_incomplete",
+      labels: [
+        ...incompleteMissingLabels,
+        ...badUnclassified.map((c) => c.label),
+      ],
+      amount:
+        incompleteMissingLabels.length > 0
+          ? null
+          : badUnclassified.reduce((a, c) => a + Math.abs(c.value), 0),
+    };
   }
   // P-hier-cols: 親ラベル重複は子階層 (次行) で grouping する。複数列の親は
   // 子が非空・非数値・群内一意のときだけ合算できる (S100DDYF/S100Y53G で実証)。
@@ -1850,7 +2149,13 @@ function tryGeoCols(
     if (c.value === null) continue;
     colCells.push({ value: c.value, quantum: c.qw });
   }
-  const adjCells: CellAmount[] = [...elimCells, ...nonGeoSegCells];
+  // 照合脚は明示消去 + 0 の未分類 (nonzero 未分類・欠損は上で却下済みの
+  // ためここには来ない。会社共通 0 も区間安定のため残す)。
+  const adjCells: CellAmount[] = [
+    ...elimCells,
+    ...companyCommonCells,
+    ...geoUnclassifiedCells,
+  ];
   const matched = aggregates.find((a) =>
     cellsConsistent(
       [...colCells, ...adjCells],
@@ -1903,6 +2208,8 @@ function tryGeoCols(
   });
   const sumOf = (cells: readonly CellAmount[]): number =>
     cells.reduce((a, c) => a + c.value, 0);
+  const sumAbs = (cells: readonly CellAmount[]): number =>
+    cells.reduce((a, c) => a + Math.abs(c.value), 0);
   const [totalLo, totalHi] = totalCell
     ? cellInterval(totalCell.value, totalCell.quantum, mode)
     : [proofSumLo, proofSumHi];
@@ -1910,6 +2217,8 @@ function tryGeoCols(
     facts,
     proof: {
       reconciliationAdjustment: sumOf(adjCells),
+      // 未分類 abs 額 (却下済みのため常に 0。backstop 用に実式で運ぶ)。
+      geoUnclassified: sumAbs([...companyCommonCells, ...geoUnclassifiedCells]),
       mode,
       sumLo: proofSumLo,
       sumHi: proofSumHi,
@@ -1972,6 +2281,15 @@ export function validateOverseasSaveSet(
   if (regions.some((f) => f.salesAmount === null)) {
     throw new Error("保存集合に欠損の地域売上があります。");
   }
+  // 地理未分類の backstop: 修飾なしその他 (その他/その他の地域/その他地域)
+  // は地理の立証がないため保存できない (reducer の採用却下をすり抜けた
+  // 不完全集合の保存防止。修飾つきは対象外)。
+  const bareOther = regions.find((f) => isBareOther(f.regionName));
+  if (bareOther) {
+    throw new Error(
+      `保存集合に地理未立証のその他地域があります: ${bareOther.regionName}`
+    );
+  }
   let domesticSum = 0;
   let overseasSum = 0;
   for (const f of regions) {
@@ -1988,6 +2306,18 @@ export function validateOverseasSaveSet(
   // 3 caller (ingest/backfill-overseas/backfill-missing) は proof を渡す。
   if (!proof) {
     throw new Error("保存集合の proof がありません。");
+  }
+  // 地理未分類の backstop (保存境界の完全性。W81W/XRWN 級の omission 防止)。
+  // reducer は通過 proof に未分類 abs 額を必ず載せる (通過時は常に 0)。
+  // 旧 proof (field なし)・nonzero・非有限は算術照合の前に STOP し、
+  // default 0 は置かない。明示消去・明示別収益の調整額は対象外。
+  const geoUnclassified: unknown = proof.geoUnclassified;
+  if (
+    typeof geoUnclassified !== "number" ||
+    !Number.isFinite(geoUnclassified) ||
+    geoUnclassified !== 0
+  ) {
+    throw new Error("保存集合に地理未分類の営業売上が残っています。");
   }
   // 基数の一致: facts の地域合計 + 調整額は proof の和区間の中心に exact 一致
   // すること (caller の dedup 落ち等の欠損・改変はここで throw)。
@@ -2639,6 +2969,7 @@ export function parseOverseasHtml(
     cap.status = null;
     cap.stopReason = null;
     cap.candidates = [];
+    cap.incomplete = [];
   }
   const markCap = (
     status: OverseasParseStatus,
@@ -2717,9 +3048,25 @@ export function parseOverseasHtml(
       trace?: ReducerTrace;
       singleRowProof?: SingleRowProof;
     } | null = null;
+    // 地理未分類の表は候補化しない (table-local HOLD)。geo 信号は立てる
+    // (他に clean な候補がなければ文書ごと geo_present_unstructured)。
+    const capReject = (kind: "rows" | "cols", inc: GeoIncomplete): void => {
+      sawGeoSignal = true;
+      if (!cap) return;
+      // incomplete[] だけに積む。candidates[] に積むと buffered との同順
+      // 対応が崩れ fiscal-excluded の index 付替えが誤記録になる。
+      if (!cap.incomplete) cap.incomplete = [];
+      cap.incomplete.push({
+        start,
+        kind,
+        labels: inc.labels,
+        amount: inc.amount,
+      });
+    };
     {
       const rows = tryGeoRows(grid, reportPeriodEnd, heading, mode);
-      if (rows)
+      if (rows && "marker" in rows) capReject("rows", rows);
+      else if (rows)
         cand = {
           status: "ok_geo_rows",
           facts: rows.facts,
@@ -2743,7 +3090,8 @@ export function parseOverseasHtml(
         markCap("geo_present_unstructured", "single-row-fiscal-unknown", null);
         return { status: "geo_present_unstructured", facts: [], tablesScanned };
       }
-      if (cols)
+      if (cols && "marker" in cols) capReject("cols", cols);
+      else if (cols)
         cand = {
           status: "ok_geo_cols",
           facts: cols.facts,
