@@ -277,7 +277,7 @@ export type YutaiFullImportResult = {
  * TEXT 型で長さ制限が無いため、切り詰める理由は無い。以降の similar source も
  * この共通経路 (切り詰め無し) を使うこと。
  */
-function benefitRowsOf(
+export function benefitRowsOf(
   data: StockYutaiData,
 ): { recordMonth: number; minShares: number; description: string }[] {
   const rows: { recordMonth: number; minShares: number; description: string }[] = [];
