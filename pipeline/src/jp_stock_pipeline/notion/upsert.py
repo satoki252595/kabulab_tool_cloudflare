@@ -32,7 +32,6 @@ from ..models import (
     Provenance,
     StockMasterRecord,
 )
-from notion_client.errors import APIResponseError
 
 from . import schema as S
 from .client import NotionClient
@@ -503,9 +502,9 @@ def _upsert(
     省く（全銘柄ループでの 1req/銘柄 を削減 §8.3。事前に DB 全行マップを一括取得して
     渡す運用）。事前マップは **all-or-nothing** で渡すこと: 部分マップを True で渡すと
     未収録キーが create され重複行になる（§8.1-6 冪等性違反）。マップ取得に失敗した
-    ときは page_resolved=False にして従来の per-record 検索へフォールバックする。
-    existing_page_id が（削除済み等で）実在しない場合は object_not_found を握って
-    create へフォールバックし、事前マップと実DBのズレを自己修復する。
+    ときは caller が書込前に停止する。prefetchを使わない呼出しは通常のキー検索を行う。
+    existing_page_id のUPDATE失敗は権限喪失と削除を区別できないため伝播し、
+    新規作成へ切り替えない。確定検索/完全mapで不存在と分かったNoneだけcreateする。
 
     create したときだけ、同じキーで 1 回再検索して重複を収束させる
     (#13, converge_created_page)。update の経路では追加の問い合わせをしない。
@@ -531,13 +530,8 @@ def _upsert_outcome(
     """_upsert の本体。重複の収束結果まで返す。"""
     page_id = existing_page_id if page_resolved else _find_page(client, db_id, flt)
     if page_id:
-        try:
-            client.update_page(page_id, props)
-            return UpsertOutcome(page_id=page_id)
-        except APIResponseError as exc:
-            # 事前マップの page_id が実在しない（削除済み等）→ create で自己修復
-            if not (page_resolved and getattr(exc, "code", "") == "object_not_found"):
-                raise
+        client.update_page(page_id, props)
+        return UpsertOutcome(page_id=page_id)
     created = client.create_page(parent={"database_id": db_id}, properties=props)
     return converge_created_page(
         client, db_id, flt, created,
