@@ -41,6 +41,8 @@ import { defineConfig } from "drizzle-kit";
 export default defineConfig({
   schema: [
     "./src/shared/db/core-schema.ts",
+    // 母集団所有者の公式イベント台帳 + overlay 適用状態 (Issue #196)。
+    "./src/shared/db/universe-events.ts",
     // L2 投影層 (p_*)。writer は共有の日次 cron、reader は各サービスの画面。
     // 所有が 1 サービスに閉じないのでここへ独立させてある
     // (置き場が暫定である理由と撤去条件はファイル冒頭のコメント)。

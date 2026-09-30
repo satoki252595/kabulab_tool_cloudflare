@@ -15,6 +15,7 @@
     "test:coverage": "vitest run --coverage",
     "db:generate:d1": "drizzle-kit generate --config=drizzle.d1.config.ts",
     "sync:universe": "tsx scripts/sync/universe.ts",
+    "sync:universe-overlay": "tsx scripts/sync/universe-overlay.ts",
     "sync:daily": "tsx scripts/sync/all-daily.ts",
     "sync:daily:core": "tsx scripts/sync/daily.ts",
     "sync:monthly": "tsx scripts/sync/all-monthly.ts",

@@ -1,0 +1,1975 @@
+
+
+
+
+
+
+
+
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+
+
+
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ja" xml:lang="ja">
+<head>
+    <meta http-equiv="Content-Script-Type" content="text/javascript" />
+    <meta http-equiv="Content-Style-Type" content="text/css" />
+    <meta name="copyright" content="Copyright (C) Tokyo Stock Exchange, Inc. All rights reserved." />
+    <meta name="description" content="" />
+    <meta name="keywords" content="" /> 
+    <title>
+    
+    
+    	東京証券取引所　上場会社詳細
+    
+	</title>
+	<link href="/common/css/HPLCDS_import_listed.css" rel="stylesheet" type="text/css" charset="shift_jis" media="all" />
+	<link href="/common/css/HPLCDS_listed.css" rel="stylesheet" type="text/css" charset="shift_jis" media="all" />
+	<script type="text/javascript" src="/common/js/verchk.js" charset="utf-8" ></script>
+	<script type="text/javascript" src="/common/js/default.js" charset="utf-8" ></script>
+	<script type="text/javascript" src="/common/js/gnavi.js" charset="utf-8" ></script>
+	<script type="text/javascript" src="/common/js/page_1column01.js" charset="utf-8" ></script>
+	
+	<script type="text/javascript" src="/common/js/TWJ_Common.js?20240311" charset="utf-8" ></script>
+	
+</head>
+<body onload="init();">
+<div id="pagelayout">
+	
+		
+
+
+
+
+
+
+
+
+	
+
+	<div class="header_douteki">
+	
+		<img alt="image" src="/common/images/lc_header.png"/>
+	
+	</div>
+	<div id="pankuzuArea">
+	    <div id="pankuzubox">
+	    	
+	    	
+	    		<a href="/tseHpFront/JJK010010Action.do?Show=Show" class="pankuzulink">検索条件入力</a>
+	    	
+	    	
+	    		<span class="pankuzulink">上場会社詳細</span>
+	    	
+	    </div>
+	</div>
+
+	
+	
+	
+	
+	
+	
+    <form name="JJK010040Form" method="POST" action="/tseHpFront/JJK010040Action.do">
+		<input type="hidden" name="Show" value="Show" disabled="disabled"/>
+		<input type="hidden" name="XBRLDownload" value="XBRLDownload" disabled="disabled"/>
+		<input type="hidden" name="Return" value="Return" disabled="disabled"/>
+		<input type="hidden" id="xbrlFlePs" name="xbrlFlePs" value=""/>
+		
+		<input type="hidden" name="DisplayPDF" value="DisplayPDF" disabled="disabled"/>
+		<input type="hidden" id="syoriKanrNo" name="syoriKanrNo" value=""/>
+		
+		<div id="bodycontents">
+		    <div id="leftnavi"></div>
+			
+			
+				
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div id="body_basicInformation" class="bodycontents" style="display:block;">
+
+
+
+	<div class="pagecontents">
+		<div class="title1">
+			<h1 class="fontsizeL">上場会社詳細（基本情報）</h1>
+		</div>
+		<div class="printbtn">
+			<img src="/common/images/bt_print.gif" alt="印刷" width="81" height="20" id="bt_print0" 
+			     class="cursorHand" onclick="print_out()" 
+			     onmouseover="javascript:this.src='/common/images/bt_print_a.gif';" 
+			     onmouseout="javascript:this.src='/common/images/bt_print.gif';" />
+		</div>
+		
+		<p class="boxNaviPagetop" align="right">
+			<!-- CG検索からの場合 -->
+			
+			<!-- CG検索以外からの場合 -->
+			
+				<!-- CG検索(英文情報)からの場合 -->
+				
+				
+					<a id="chuiJikoURLLink" name="chuiJikoURLLink" target="_blank" href="https://www.jpx.co.jp/listing/co-search/01.html" class="txtLink fontsizeS">
+						データ利用上の注意事項
+					</a>
+				
+			
+		</p>
+		
+		<div class="boxOptListed05">
+			<h3 class="fontsizeM">オーディオストック</h3>
+			<p class="fontsizeM">
+			</p>
+			<br class="clearFloat" />
+		</div>
+		<div class="subnavi_M_1">
+			<div class="active">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1a colorRed2">
+							基本情報
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="icon_end">&nbsp;</div>
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1">
+							<a href="javascript:changeTab('2');">
+								適時開示情報
+							</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1">
+							<a href="javascript:changeTab('4');">
+								縦覧書類 / PR情報
+							</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1">
+							<a href="javascript:changeTab('3');">
+								コーポレート・<br />ガバナンス</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_newwin">
+						
+							<a target="_blank" href="https://quote.jpx.co.jp/jpxhp/main/index.aspx?F=stock_detail&disptype=information&qcode=621A">
+								株価情報
+							</a>
+						
+						</td>
+					</tr>
+				</table>
+			</div>
+		</div>
+		<div class="clearFloat"></div>
+		<table border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin20">
+			<tr>
+				<th nowrap="nowrap">コード</th>
+				<th nowrap="nowrap">ISINコード</th>
+				<th nowrap="nowrap">
+					市場区分
+				</th>
+				<th nowrap="nowrap">業種</th>
+				<th nowrap="nowrap">決算期</th>
+				<th nowrap="nowrap">売買単位</th>
+			</tr>
+			<tr align="center">
+				<td>621A0</td>
+				<td>JP3172510004</td>
+				<td>
+					グロース
+					
+				</td>
+				<td>サービス業</td>
+				<td>9月30日</td>
+				<td>100</td>
+			</tr>
+		</table>
+		<table width="840" border="0" cellpadding="0" cellspacing="0" class="tableStyle02 fontsizeS">
+			<tr>
+				<th nowrap="nowrap" width="50%" align="center" colspan="2">英文商号</th>
+				<th nowrap="nowrap" width="50%" align="center" colspan="2">株主名簿管理人</th>
+			</tr>
+			<tr align="center">
+				<td colspan="2">Audiostock Inc.</td>
+				<td colspan="2">三菱ＵＦＪ信託銀行</td>
+			</tr>
+			<tr>
+				<th nowrap="nowrap" width="25%" align="center">設立年月日</th>
+				<th nowrap="nowrap" width="25%" align="center">本社所在地</th>
+				<th nowrap="nowrap" width="25%" align="center">上場取引所</th>
+				<th nowrap="nowrap" width="25%" align="center">月末投資単位</th>
+			</tr>
+			<tr align="center">
+				<td>2007/10/11</td>
+				<td>岡山</td>
+				<td>東</td>
+				<td>-</td>
+			</tr>
+			<tr>
+				<th nowrap="nowrap" align="center">決算発表（予定）</th>
+				<th nowrap="nowrap" align="center">第一四半期（予定）</th>
+				<th nowrap="nowrap" align="center">第二四半期（予定）</th>
+				<th nowrap="nowrap" align="center">第三四半期（予定）</th>
+			</tr>
+			<tr align="center">
+				<td>2026/11/13</td>
+				<td>-</td>
+				<td>-</td>
+				<td>-</td>
+			</tr>
+			<tr>
+				<th nowrap="nowrap" align="center">株主総会開催日（予定）</th>
+				<th nowrap="nowrap" align="center">代表者役職</th>
+				<th nowrap="nowrap" align="center">代表者氏名</th>
+				<th nowrap="nowrap" align="center">上場年月日</th>
+			</tr>
+			<tr align="center">
+				<td>-</td>
+				<td>代表取締役社長</td>
+				<td>西尾　周一郎</td>
+				<td>2026/09/16</td>
+			</tr>
+		</table>
+		
+		<table width="630" border="0" cellpadding="0" cellspacing="0" class="tableStyle02 fontsizeS" style="table-layout:fixed;">
+			<tr>
+				<th nowrap="nowrap" width="calc(100% / 3)" align="center">注意情報</th>
+				<th nowrap="nowrap" width="calc(100% / 3)" align="center">
+					上場株式数
+					
+				</th>
+				<th nowrap="nowrap" width="calc(100% / 3)" align="center">発行済株式数
+					
+				</th>
+			</tr>
+			<tr align="center">
+	            <td align="center" style="padding-left:0px;padding-right:0px;">
+	            	
+	                
+	                
+	                
+	                
+	                
+	                
+	                
+	                	
+	                		&nbsp;
+	                	
+	                
+	            	
+	            	
+	            	
+	            	
+	            	
+	            	
+	            	
+	            </td>
+				<td style="padding-left:2px;padding-right:2px;">4,159,000</td>
+				<td style="padding-left:2px;padding-right:2px;">4,159,000</td>
+			</tr>
+		</table>
+		<table width="840" border="0" cellpadding="0" cellspacing="0" class="tableStyle02 fontsizeS">
+			<tr>
+				<th style="padding-left:0px;padding-right:0px;" nowrap="nowrap" width="13%" align="center">貸借銘柄</th>
+				<th style="padding-left:0px;padding-right:0px;" nowrap="nowrap" width="12%" align="center">信用銘柄</th>
+				<th style="padding-left:0px;padding-right:0px;" width="25%" align="center">
+					<a href="https://www.jpx.co.jp/equities/listed-co/services/asb/index.html" target="linkWin1" class="txtLink">
+						財務会計基準機構への加入有無
+					</a>
+				</th>
+				<th style="padding-left:0px;padding-right:0px;" width="25%" align="center">
+					<a href="https://www.jpx.co.jp/glossary/ka/120.html" target="linkWin2" class="txtLink">
+						継続企業の前提の注記の有無
+					</a>
+				</th>
+				<th style="padding-left:0px;padding-right:0px;" width="25%" align="center">
+					<a href="https://www.jpx.co.jp/glossary/sa/193.html" target="linkWin4" class="txtLink">
+						支配株主等の有無
+					</a>
+				</th>
+			</tr>
+			<tr align="center">
+				<td><strong></strong>&nbsp;</td>
+				<td><strong>●</strong>&nbsp;</td>
+				<td>加入有り</td>
+				<td>無し</td>
+				<td>無し</td>
+			</tr>
+		</table>
+		
+		<table width="840" border="0" cellpadding="0" cellspacing="0" class="tableStyle02 fontsizeS">
+			<tr>
+				<th nowrap="nowrap" align="center" colspan="3">その他お知らせ</th>
+			</tr>
+			<tr align="center">
+				<td width="33%" align="left">
+					
+						
+					
+					
+					&nbsp;
+				</td>
+				<td width="33%" align="left">
+					
+						
+					
+					
+					&nbsp;
+				</td>	
+				<td width="34%" align="left">
+					
+						
+					
+					
+					&nbsp;
+				</td>
+			</tr>
+		</table>
+		<table class="naviButton">
+			<tr>
+				<td class="naviButtonL">
+					<input type="button" value="戻る" class="negativeButton"
+						onclick="submitPage(document.forms['JJK010040Form'],document.forms['JJK010040Form'].Return)" />
+				</td>
+			</tr>
+		</table>
+	</div>
+</div>  
+				
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div id="body_disclosure" class="bodycontents" style="display:none;">
+	<div class="pagecontents">
+		<div class="title1">
+			<h1 class="fontsizeL">上場会社詳細（適時開示情報）</h1>		
+		</div>
+		<div class="printbtn">
+			<img src="/common/images/bt_print.gif" alt="印刷" width="81" height="20" id="bt_print0" 
+			     class="cursorHand" onclick="print_out()" 
+			     onmouseover="javascript:this.src='/common/images/bt_print_a.gif';" 
+			     onmouseout="javascript:this.src='/common/images/bt_print.gif';" />
+		</div>
+		
+		<p class="boxNaviPagetop" align="right">
+			<!-- CG検索からの場合 -->
+			
+			<!-- CG検索以外からの場合 -->
+			
+				<!-- CG検索(英文情報)からの場合 -->
+				
+				
+					<a id="chuiJikoURLLink" name="chuiJikoURLLink" target="_blank" href="https://www.jpx.co.jp/listing/co-search/01.html" class="txtLink fontsizeS">
+						データ利用上の注意事項
+					</a>
+				
+			
+		</p>
+		
+		<div class="boxOptListed05">
+			<h3 class="fontsizeM">オーディオストック</h3>
+			<p class="fontsizeM">
+				<input type="button" style="visibility:hidden" class="activeButton" />
+			</p>
+			<br class="clearFloat" />
+		</div>	
+		<div class="subnavi_M_1">
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1">
+							<a href="javascript:changeTab('1');">
+								基本情報
+							</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="active">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1a colorRed2">
+							適時開示情報
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="icon_end">&nbsp;</div>
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1">
+							<a href="javascript:changeTab('4');">
+								縦覧書類 / PR情報
+							</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+			
+			
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1">
+							<a href="javascript:changeTab('3');">
+								コーポレート・<br />ガバナンス
+							</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+			
+			
+			
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_newwin">
+						
+							<a target="_blank" href="https://quote.jpx.co.jp/jpxhp/main/index.aspx?F=stock_detail&disptype=information&qcode=621A">
+								株価情報
+							</a>
+						
+						</td>
+					</tr>
+				</table>
+			</div>
+		</div>
+		<div class="clearFloat"></div>
+		<table border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin20">
+			<tr>
+				<th nowrap="nowrap">コード</th>
+				<th nowrap="nowrap">ISINコード</th>
+				<th nowrap="nowrap">
+					市場区分
+				</th>
+				<th nowrap="nowrap">業種</th>
+				
+					<th nowrap="nowrap">決算期</th>
+				
+				
+				<th nowrap="nowrap">売買単位</th>
+			</tr>
+			<tr align="center">
+				<td>621A0</td>
+				<td>JP3172510004</td>
+				<td>
+					グロース
+					
+				</td>
+				<td>サービス業</td>
+				
+					<td>9月30日</td>
+				
+				
+				<td>100</td>
+			</tr>
+		</table>
+		
+		<h4>法定開示情報(有価証券報告書等)</h4>
+		
+		
+			
+			<table id="closeUpHotei_open"  width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+				<tr>
+					<th nowrap="nowrap" width="20%" align="left">
+					    <input type="button" class="activeButton" value="情報を閲覧する場合はこちら" 
+					    	onclick="javascript:changeCloseUpStatus('closeUpHotei');displayMore('hotei', '0', '1');" />
+					</th>
+				</tr>
+			</table>		
+			<table id="closeUpHotei" style="display:none;border:none" width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+				<tr>
+					<td align="left" style="border:none">
+						<strong class="fontsizeS">
+							<span>EDINETから取得した情報を表示しています。　出典：EDINET閲覧（提出）サイト（</span
+							><span><a href="https://disclosure2.edinet-fsa.go.jp/" target="linkWin12_3"></span
+							><span>https://disclosure2.edinet-fsa.go.jp/</a>）</span>
+						</strong>
+					</td>
+				</tr>
+				<tr>
+					<td nowrap="nowrap" align="left" style="border:none">
+					    <input type="button" class="activeButton" id="closeUpHotei_close" style="display:none;" value="閉じる" 
+							onclick="changeCloseUpStatus('closeUpHotei');" />
+					</td>
+				</tr>
+				<tr>
+					<td class="NormalBody">
+						<table width="100%" border="0" cellpadding="0" cellspacing="0" class="fontsizeS">
+							<tr>
+								<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+								<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="730"></th>
+							</tr>
+							<tr>
+								<th nowrap="nowrap">提出日</th>
+								<th nowrap="nowrap">提出書類</th>
+							</tr>
+							
+							
+								<tr>
+									<td align="center">-</td>
+									<td>掲載情報はありません。</td>
+								</tr>	
+							
+						</table>
+					</td>
+				</tr>
+				<tr>
+					<td nowrap="nowrap" align="left" style="border:none">
+						<input type="button" class="activeButton" id="hotei" style="display:none;" 
+							value="さらに表示" onclick="displayMore('hotei', '0', '2');" />
+					</td>
+				</tr>
+			</table>
+		
+		<div class="boxNaviPagetop"><a href="#"><img src="/common/images/bt_pagetop_clear.gif" alt="このページの上部へ" /></a></div>
+		
+		
+			
+			
+				
+				
+				
+					<h4>適時開示情報</h4>
+				
+				
+					<span class="colorRed2 fontsizeS">
+						・[決算情報]
+					</span>
+				
+				<table id="closeUpKaiJi0_open"  width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<th nowrap="nowrap" width="20%" align="left">
+						    <input type="button" class="activeButton" value="情報を閲覧する場合はこちら" 
+						    	onclick="javascript:changeCloseUpStatus('closeUpKaiJi0');displayMore('1101', '0', '1');" />
+						</th>
+					</tr>
+				</table>
+				<table id="closeUpKaiJi0" style="display:none;border:none" width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<td nowrap="nowrap" align="left" style="border:none">
+						    <input type="button" class="activeButton" id="closeUpKaiJi0_close" style="display:none;" value="閉じる" 
+						    	onclick="changeCloseUpStatus('closeUpKaiJi0');" />
+						</td>
+					</tr>
+					<tr>
+						<td class="NormalBody">
+							<table width="100%" border="0" cellpadding="0" cellspacing="0" class="fontsizeS">
+							
+							
+							
+							
+							
+								<tr>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="470"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="80"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="90"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="90"></th>
+								</tr>
+								<tr>
+									<th nowrap="nowrap" rowspan="2">開示日</th>
+									<th nowrap="nowrap" rowspan="2">表題</th>
+									<th nowrap="nowrap" rowspan="2">XBRL</th>
+									<th nowrap="nowrap" colspan="2">HTML</th>
+								</tr>
+								<tr>
+									<th nowrap="nowrap">サマリー</th>
+									<th nowrap="nowrap">添付資料</th>
+								</tr>
+							
+							
+							
+							
+								<tr>
+									<td align="center">-</td>
+									<td>掲載情報はありません。</td>
+									<td>&nbsp;</td>
+									<td>&nbsp;</td>
+									
+									
+									
+									<td>&nbsp;</td>
+									
+									
+								</tr>
+							</table>
+						</td>
+					</tr>
+				</table>
+				<div class="boxNaviPagetop">
+					<a href="#">
+						<img src="/common/images/bt_pagetop_clear.gif" alt="このページの上部へ" />
+					</a>
+				</div>
+							
+			
+			
+			
+		
+			
+			
+				
+				
+				
+				
+					<span class="colorRed2 fontsizeS">
+						・[決定事実 / 発生事実]
+					</span>
+				
+				<table id="closeUpKaiJi1_open"  width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<th nowrap="nowrap" width="20%" align="left">
+						    <input type="button" class="activeButton" value="情報を閲覧する場合はこちら" 
+						    	onclick="javascript:changeCloseUpStatus('closeUpKaiJi1');displayMore('1102', '1', '1');" />
+						</th>
+					</tr>
+				</table>
+				<table id="closeUpKaiJi1" style="display:none;border:none" width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<td nowrap="nowrap" align="left" style="border:none">
+						    <input type="button" class="activeButton" id="closeUpKaiJi1_close" style="display:none;" value="閉じる" 
+						    	onclick="changeCloseUpStatus('closeUpKaiJi1');" />
+						</td>
+					</tr>
+					<tr>
+						<td class="NormalBody">
+							<table width="100%" border="0" cellpadding="0" cellspacing="0" class="fontsizeS">
+							
+							
+							
+								<tr>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="470"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="150"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+								</tr>
+								<tr>
+									<th nowrap="nowrap">開示日</th>
+									<th colspan="2" nowrap="nowrap">表題</th>
+									<th nowrap="nowrap">XBRL</th>
+								</tr>
+							
+							
+							
+							
+							
+							
+			
+			
+			
+		
+			
+			
+			
+			
+					
+					
+					
+					<tr id="1102_0">
+						<td align="center">2026/09/16</td>
+						<td >
+							<div class="txtLink2">
+								<div class="txtLink2_InnerDiv">
+									<a href="/disc/621A0/140120260910533876.pdf" target="linkWin9_1">
+										東京証券取引所グロース市場への上場に伴う当社決算情報等のお知らせ
+									</a>
+								</div>
+							</div>
+						</td>
+						
+						
+						
+						<td  align="right" nowrap="nowrap">
+							&thinsp;
+							
+							
+							
+							
+						</td>
+						
+						
+						<td align="center">
+							
+							
+								&nbsp;
+							
+						</td>
+						
+						
+						
+						
+					</tr>
+					<!-- カテゴリの最終行 -->
+					
+								</table>
+							</td>
+						</tr>
+						<tr>
+							<td nowrap="nowrap" align="left" style="border:none">
+								<input type="button" class="activeButton" id="1102" style="display:none;" 
+								    value="さらに表示" onclick="displayMore('1102', '1', '2');" />
+							</td>
+						</tr>
+					</table>
+					<div class="boxNaviPagetop">
+						<a href="#">
+							<img src="/common/images/bt_pagetop_clear.gif" alt="このページの上部へ" />
+						</a>
+					</div>
+				
+			
+		
+			
+			
+				
+				
+				
+				
+					<span class="colorRed2 fontsizeS">
+						・[上場維持基準への適合に向けた計画]
+					</span>
+				
+				<table id="closeUpKaiJi3_open"  width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<th nowrap="nowrap" width="20%" align="left">
+						    <input type="button" class="activeButton" value="情報を閲覧する場合はこちら" 
+						    	onclick="javascript:changeCloseUpStatus('closeUpKaiJi3');displayMore('1103', '0', '1');" />
+						</th>
+					</tr>
+				</table>
+				<table id="closeUpKaiJi3" style="display:none;border:none" width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<td nowrap="nowrap" align="left" style="border:none">
+						    <input type="button" class="activeButton" id="closeUpKaiJi3_close" style="display:none;" value="閉じる" 
+						    	onclick="changeCloseUpStatus('closeUpKaiJi3');" />
+						</td>
+					</tr>
+					<tr>
+						<td class="NormalBody">
+							<table width="100%" border="0" cellpadding="0" cellspacing="0" class="fontsizeS">
+							
+							
+							
+								<tr>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="470"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="150"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+								</tr>
+								<tr>
+									<th nowrap="nowrap">開示日</th>
+									<th colspan="2" nowrap="nowrap">表題</th>
+									<th nowrap="nowrap">XBRL</th>
+								</tr>
+							
+							
+							
+							
+							
+							
+								<tr>
+									<td align="center">-</td>
+									<td>掲載情報はありません。</td>
+									<td>&nbsp;</td>
+									<td>&nbsp;</td>
+									
+									
+									
+									
+								</tr>
+							</table>
+						</td>
+					</tr>
+				</table>
+				<div class="boxNaviPagetop">
+					<a href="#">
+						<img src="/common/images/bt_pagetop_clear.gif" alt="このページの上部へ" />
+					</a>
+				</div>
+							
+			
+			
+			
+		
+			
+			
+				
+				
+				
+				
+					<span class="colorRed2 fontsizeS">
+						・[その他]
+					</span>
+				
+				<table id="closeUpKaiJi4_open"  width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<th nowrap="nowrap" width="20%" align="left">
+						    <input type="button" class="activeButton" value="情報を閲覧する場合はこちら" 
+						    	onclick="javascript:changeCloseUpStatus('closeUpKaiJi4');displayMore('1104', '1', '1');" />
+						</th>
+					</tr>
+				</table>
+				<table id="closeUpKaiJi4" style="display:none;border:none" width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<td nowrap="nowrap" align="left" style="border:none">
+						    <input type="button" class="activeButton" id="closeUpKaiJi4_close" style="display:none;" value="閉じる" 
+						    	onclick="changeCloseUpStatus('closeUpKaiJi4');" />
+						</td>
+					</tr>
+					<tr>
+						<td class="NormalBody">
+							<table width="100%" border="0" cellpadding="0" cellspacing="0" class="fontsizeS">
+							
+							
+							
+								<tr>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="470"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="150"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+								</tr>
+								<tr>
+									<th nowrap="nowrap">開示日</th>
+									<th colspan="2" nowrap="nowrap">表題</th>
+									<th nowrap="nowrap">XBRL</th>
+								</tr>
+							
+							
+							
+							
+							
+							
+			
+			
+			
+		
+			
+			
+			
+			
+					
+					
+					
+					<tr id="1104_0">
+						<td align="center">2026/09/16</td>
+						<td >
+							<div class="txtLink2">
+								<div class="txtLink2_InnerDiv">
+									<a href="/disc/621A0/140120260910533875.pdf" target="linkWin9_1">
+										事業計画及び成長可能性に関する事項
+									</a>
+								</div>
+							</div>
+						</td>
+						
+						
+						
+						<td  align="right" nowrap="nowrap">
+							&thinsp;
+							
+							
+							
+							
+						</td>
+						
+						
+						<td align="center">
+							
+							
+								&nbsp;
+							
+						</td>
+						
+						
+						
+						
+					</tr>
+					<!-- カテゴリの最終行 -->
+					
+								</table>
+							</td>
+						</tr>
+						<tr>
+							<td nowrap="nowrap" align="left" style="border:none">
+								<input type="button" class="activeButton" id="1104" style="display:none;" 
+								    value="さらに表示" onclick="displayMore('1104', '1', '2');" />
+							</td>
+						</tr>
+					</table>
+					<div class="boxNaviPagetop">
+						<a href="#">
+							<img src="/common/images/bt_pagetop_clear.gif" alt="このページの上部へ" />
+						</a>
+					</div>
+				
+			
+		
+		<table class="naviButton">
+			<tr>
+				<td class="naviButtonL">
+					<input type="button" value="戻る" class="negativeButton"
+						onclick="submitPage(document.forms['JJK010040Form'],document.forms['JJK010040Form'].Return)" />
+				</td>
+			</tr>
+		</table>
+	</div>
+</div>
+  
+				
+
+
+
+
+
+
+
+
+
+<div id="body_filing" class="bodycontents" style="display:none;">
+	<div class="pagecontents">
+		<div class="title1">
+			<h1 class="fontsizeL">上場会社詳細（縦覧書類 / PR情報）</h1>		
+		</div>
+		<div class="printbtn">
+			<img src="/common/images/bt_print.gif" alt="印刷" width="81" height="20" id="bt_print0" 
+			     class="cursorHand" onclick="print_out()" 
+			     onmouseover="javascript:this.src='/common/images/bt_print_a.gif';" 
+			     onmouseout="javascript:this.src='/common/images/bt_print.gif';" />
+		</div>
+		<p class="boxNaviPagetop" align="right">
+			<!-- CG検索からの場合 -->
+			
+			<!-- CG検索以外からの場合 -->
+			
+				<!-- CG検索(英文情報)からの場合 -->
+				
+				
+					<a id="chuiJikoURLLink" name="chuiJikoURLLink" target="_blank" href="https://www.jpx.co.jp/listing/co-search/01.html" class="txtLink fontsizeS">
+						データ利用上の注意事項
+					</a>
+				
+			
+		</p>
+		<div class="boxOptListed05">
+			<h3 class="fontsizeM">オーディオストック</h3>
+			<p class="fontsizeM">
+				<input type="button" style="visibility:hidden" class="activeButton" />
+			</p>
+			<br class="clearFloat" />
+		</div>	
+		<div class="subnavi_M_1">
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1">
+							<a href="javascript:changeTab('1');">
+								基本情報
+							</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1">
+							<a href="javascript:changeTab('2');">
+								適時開示情報
+							</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="active">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1a colorRed2">
+							縦覧書類 / PR情報
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="icon_end">&nbsp;</div>
+			
+			
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1">
+							<a href="javascript:changeTab('3');">
+								コーポレート・<br />ガバナンス
+							</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+			
+			
+			
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_newwin">
+							<a target="_blank" href="https://quote.jpx.co.jp/jpxhp/main/index.aspx?F=stock_detail&disptype=information&qcode=621A">
+								株価情報
+							</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+		</div>
+		<div class="clearFloat"></div>
+		<table border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin20">
+			<tr>
+				<th nowrap="nowrap">コード</th>
+				<th nowrap="nowrap">ISINコード</th>
+				<th nowrap="nowrap">
+					市場区分
+				</th>
+				<th nowrap="nowrap">業種</th>
+				
+					<th nowrap="nowrap">決算期</th>
+				
+				
+				<th nowrap="nowrap">売買単位</th>
+			</tr>
+			<tr align="center">
+				<td>621A0</td>
+				<td>JP3172510004</td>
+				<td>
+					グロース
+					
+				</td>
+				<td>サービス業</td>
+				
+					<td>9月30日</td>
+				
+				
+				<td>100</td>
+			</tr>
+		</table>
+		
+			
+			
+				
+				
+				
+					<h4>縦覧書類</h4>
+				
+				
+					<span class="colorRed2 fontsizeS">・[株主総会招集通知 / 株主総会資料]</span>
+				
+				<table id="closeUpFili0_open"  width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<th nowrap="nowrap" width="20%" align="left">
+						    <input type="button" class="activeButton" value="情報を閲覧する場合はこちら" 
+						    	onclick="javascript:changeCloseUpStatus('closeUpFili0');displayMore('1105', '0', '1');" />
+						</th>
+					</tr>
+				</table>
+				<table id="closeUpFili0" style="display:none;border:none" width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<td nowrap="nowrap" align="left" style="border:none">
+						    <input type="button" class="activeButton" id="closeUpFili0_close" style="display:none;" value="閉じる" 
+						    	onclick="changeCloseUpStatus('closeUpFili0');" />
+						</td>
+					</tr>
+					<tr>
+						<td class="NormalBody">
+							<table width="100%" border="0" cellpadding="0" cellspacing="0" class="fontsizeS">
+								<tr>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="470"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="150"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+								</tr>
+								<tr>
+									<th nowrap="nowrap">縦覧日</th>
+									<th colspan="2" nowrap="nowrap">表題</th>
+									<th nowrap="nowrap">XBRL</th>
+								</tr>
+							
+							
+								<tr>
+									<td align="center">-</td>
+									<td>掲載情報はありません。</td>
+									<td>&nbsp;</td>
+									<td>&nbsp;</td>
+								</tr>
+							</table>
+						</td>
+					</tr>
+				</table>
+				<div class="boxNaviPagetop">
+					<a href="#">
+						<img src="/common/images/bt_pagetop_clear.gif" alt="このページの上部へ" />
+					</a>
+				</div>
+							
+			
+			
+			
+		
+			
+			
+				
+				
+				
+				
+					<span class="colorRed2 fontsizeS">・[独立役員届出書]</span>
+				
+				<table id="closeUpFili1_open"  width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<th nowrap="nowrap" width="20%" align="left">
+						    <input type="button" class="activeButton" value="情報を閲覧する場合はこちら" 
+						    	onclick="javascript:changeCloseUpStatus('closeUpFili1');displayMore('1106', '1', '1');" />
+						</th>
+					</tr>
+				</table>
+				<table id="closeUpFili1" style="display:none;border:none" width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<td nowrap="nowrap" align="left" style="border:none">
+						    <input type="button" class="activeButton" id="closeUpFili1_close" style="display:none;" value="閉じる" 
+						    	onclick="changeCloseUpStatus('closeUpFili1');" />
+						</td>
+					</tr>
+					<tr>
+						<td class="NormalBody">
+							<table width="100%" border="0" cellpadding="0" cellspacing="0" class="fontsizeS">
+								<tr>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="470"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="150"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+								</tr>
+								<tr>
+									<th nowrap="nowrap">縦覧日</th>
+									<th colspan="2" nowrap="nowrap">表題</th>
+									<th nowrap="nowrap">XBRL</th>
+								</tr>
+							
+							
+			
+			
+			
+		
+			
+			
+			
+			
+					
+					
+					
+					<tr id="1106_0">
+						<td align="center">2026/09/16</td>
+						<td >
+							<div class="txtLink2">
+								<div class="txtLink2_InnerDiv">
+									<a href="/disc/621A0/140120260910533871.pdf" target="linkWin9_1">
+										独立役員届出書
+									</a>
+								</div>
+							</div>
+						</td>
+						<td  align="right" nowrap="nowrap">
+							&thinsp;
+							
+							
+							
+							
+						</td>
+						<td align="center">
+							
+							
+								&nbsp;
+							
+						</td>
+					</tr>
+					<!-- カテゴリの最終行 -->
+					
+								</table>
+							</td>
+						</tr>
+						<tr>
+							<td nowrap="nowrap" align="left" style="border:none">
+								<input type="button" class="activeButton" id="1106" style="display:none;" 
+								    value="さらに表示" onclick="displayMore('1106', '1', '2');" />
+							</td>
+						</tr>
+					</table>
+					<div class="boxNaviPagetop">
+						<a href="#">
+							<img src="/common/images/bt_pagetop_clear.gif" alt="このページの上部へ" />
+						</a>
+					</div>
+				
+			
+		
+			
+			
+				
+				
+				
+				
+					<span class="colorRed2 fontsizeS">・[定款]</span>
+				
+				<table id="closeUpFili3_open"  width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<th nowrap="nowrap" width="20%" align="left">
+						    <input type="button" class="activeButton" value="情報を閲覧する場合はこちら" 
+						    	onclick="javascript:changeCloseUpStatus('closeUpFili3');displayMore('1107', '1', '1');" />
+						</th>
+					</tr>
+				</table>
+				<table id="closeUpFili3" style="display:none;border:none" width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<td nowrap="nowrap" align="left" style="border:none">
+						    <input type="button" class="activeButton" id="closeUpFili3_close" style="display:none;" value="閉じる" 
+						    	onclick="changeCloseUpStatus('closeUpFili3');" />
+						</td>
+					</tr>
+					<tr>
+						<td class="NormalBody">
+							<table width="100%" border="0" cellpadding="0" cellspacing="0" class="fontsizeS">
+								<tr>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="470"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="150"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+								</tr>
+								<tr>
+									<th nowrap="nowrap">縦覧日</th>
+									<th colspan="2" nowrap="nowrap">表題</th>
+									<th nowrap="nowrap">XBRL</th>
+								</tr>
+							
+							
+			
+			
+			
+		
+			
+			
+			
+			
+					
+					
+					
+					<tr id="1107_0">
+						<td align="center">2026/09/16</td>
+						<td >
+							<div class="txtLink2">
+								<div class="txtLink2_InnerDiv">
+									<a href="/disc/621A0/140120260910533869.pdf" target="linkWin9_1">
+										定款 2026/09/16
+									</a>
+								</div>
+							</div>
+						</td>
+						<td  align="right" nowrap="nowrap">
+							&thinsp;
+							
+							
+							
+							
+						</td>
+						<td align="center">
+							
+							
+								&nbsp;
+							
+						</td>
+					</tr>
+					<!-- カテゴリの最終行 -->
+					
+								</table>
+							</td>
+						</tr>
+						<tr>
+							<td nowrap="nowrap" align="left" style="border:none">
+								<input type="button" class="activeButton" id="1107" style="display:none;" 
+								    value="さらに表示" onclick="displayMore('1107', '1', '2');" />
+							</td>
+						</tr>
+					</table>
+					<div class="boxNaviPagetop">
+						<a href="#">
+							<img src="/common/images/bt_pagetop_clear.gif" alt="このページの上部へ" />
+						</a>
+					</div>
+				
+			
+		
+			
+			
+				
+				
+				
+				
+					<span class="colorRed2 fontsizeS">・[その他]</span>
+				
+				<table id="closeUpFili5_open"  width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<th nowrap="nowrap" width="20%" align="left">
+						    <input type="button" class="activeButton" value="情報を閲覧する場合はこちら" 
+						    	onclick="javascript:changeCloseUpStatus('closeUpFili5');displayMore('1108', '4', '1');" />
+						</th>
+					</tr>
+				</table>
+				<table id="closeUpFili5" style="display:none;border:none" width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<td nowrap="nowrap" align="left" style="border:none">
+						    <input type="button" class="activeButton" id="closeUpFili5_close" style="display:none;" value="閉じる" 
+						    	onclick="changeCloseUpStatus('closeUpFili5');" />
+						</td>
+					</tr>
+					<tr>
+						<td class="NormalBody">
+							<table width="100%" border="0" cellpadding="0" cellspacing="0" class="fontsizeS">
+								<tr>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="470"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="150"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+								</tr>
+								<tr>
+									<th nowrap="nowrap">縦覧日</th>
+									<th colspan="2" nowrap="nowrap">表題</th>
+									<th nowrap="nowrap">XBRL</th>
+								</tr>
+							
+							
+			
+			
+			
+		
+			
+			
+			
+			
+					
+					
+					
+					<tr id="1108_0">
+						<td align="center">2026/08/31</td>
+						<td >
+							<div class="txtLink2">
+								<div class="txtLink2_InnerDiv">
+									<a href="/disc/621A0/140120260831528259.pdf" target="linkWin9_1">
+										（追加）上場申請のための有価証券報告書の訂正報告書
+									</a>
+								</div>
+							</div>
+						</td>
+						<td  align="right" nowrap="nowrap">
+							&thinsp;
+							
+							
+							
+							
+						</td>
+						<td align="center">
+							
+							
+								&nbsp;
+							
+						</td>
+					</tr>
+					<!-- カテゴリの最終行 -->
+					
+			
+		
+			
+			
+			
+			
+					
+					
+					
+					<tr id="1108_1">
+						<td align="center">2026/08/14</td>
+						<td >
+							<div class="txtLink2">
+								<div class="txtLink2_InnerDiv">
+									<a href="/disc/621A0/140120260814521334.pdf" target="linkWin9_1">
+										上場申請のための半期報告書
+									</a>
+								</div>
+							</div>
+						</td>
+						<td  align="right" nowrap="nowrap">
+							&thinsp;
+							
+							
+							
+							
+						</td>
+						<td align="center">
+							
+							
+								&nbsp;
+							
+						</td>
+					</tr>
+					<!-- カテゴリの最終行 -->
+					
+			
+		
+			
+			
+			
+			
+					
+					
+					
+					<tr id="1108_2">
+						<td align="center">2026/08/14</td>
+						<td >
+							<div class="txtLink2">
+								<div class="txtLink2_InnerDiv">
+									<a href="/disc/621A0/140120260814521333.pdf" target="linkWin9_1">
+										上場申請のための有価証券報告書
+									</a>
+								</div>
+							</div>
+						</td>
+						<td  align="right" nowrap="nowrap">
+							&thinsp;
+							
+							
+							
+							
+						</td>
+						<td align="center">
+							
+							
+								&nbsp;
+							
+						</td>
+					</tr>
+					<!-- カテゴリの最終行 -->
+					
+			
+		
+			
+			
+			
+			
+					
+					
+					
+					<tr id="1108_3">
+						<td align="center">2026/08/14</td>
+						<td >
+							<div class="txtLink2">
+								<div class="txtLink2_InnerDiv">
+									<a href="/disc/621A0/140120260814521335.pdf" target="linkWin9_1">
+										上場申請のための有価証券報告書等の適正性に関する確認書
+									</a>
+								</div>
+							</div>
+						</td>
+						<td  align="right" nowrap="nowrap">
+							&thinsp;
+							
+							
+							
+							
+						</td>
+						<td align="center">
+							
+							
+								&nbsp;
+							
+						</td>
+					</tr>
+					<!-- カテゴリの最終行 -->
+					
+								</table>
+							</td>
+						</tr>
+						<tr>
+							<td nowrap="nowrap" align="left" style="border:none">
+								<input type="button" class="activeButton" id="1108" style="display:none;" 
+								    value="さらに表示" onclick="displayMore('1108', '4', '2');" />
+							</td>
+						</tr>
+					</table>
+					<div class="boxNaviPagetop">
+						<a href="#">
+							<img src="/common/images/bt_pagetop_clear.gif" alt="このページの上部へ" />
+						</a>
+					</div>
+				
+			
+		
+			
+			
+				
+				
+				
+					<h4>ESGに関する報告書</h4>
+				
+				
+				<table id="closeUpFili10_open"  width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<th nowrap="nowrap" width="20%" align="left">
+						    <input type="button" class="activeButton" value="情報を閲覧する場合はこちら" 
+						    	onclick="javascript:changeCloseUpStatus('closeUpFili10');displayMore('1109', '0', '1');" />
+						</th>
+					</tr>
+				</table>
+				<table id="closeUpFili10" style="display:none;border:none" width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<td nowrap="nowrap" align="left" style="border:none">
+						    <input type="button" class="activeButton" id="closeUpFili10_close" style="display:none;" value="閉じる" 
+						    	onclick="changeCloseUpStatus('closeUpFili10');" />
+						</td>
+					</tr>
+					<tr>
+						<td class="NormalBody">
+							<table width="100%" border="0" cellpadding="0" cellspacing="0" class="fontsizeS">
+								<tr>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="470"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="150"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+								</tr>
+								<tr>
+									<th nowrap="nowrap">公開日</th>
+									<th colspan="2" nowrap="nowrap">表題</th>
+									<th nowrap="nowrap">XBRL</th>
+								</tr>
+							
+							
+								<tr>
+									<td align="center">-</td>
+									<td>掲載情報はありません。</td>
+									<td>&nbsp;</td>
+									<td>&nbsp;</td>
+								</tr>
+							</table>
+						</td>
+					</tr>
+				</table>
+				<div class="boxNaviPagetop">
+					<a href="#">
+						<img src="/common/images/bt_pagetop_clear.gif" alt="このページの上部へ" />
+					</a>
+				</div>
+							
+			
+			
+			
+		
+			
+			
+				
+				
+				
+					<h4>PR情報</h4>
+				
+				
+				<table id="closeUpFili11_open"  width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<th nowrap="nowrap" width="20%" align="left">
+						    <input type="button" class="activeButton" value="情報を閲覧する場合はこちら" 
+						    	onclick="javascript:changeCloseUpStatus('closeUpFili11');displayMore('1110', '0', '1');" />
+						</th>
+					</tr>
+				</table>
+				<table id="closeUpFili11" style="display:none;border:none" width="840" border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin10">
+					<tr>
+						<td nowrap="nowrap" align="left" style="border:none">
+						    <input type="button" class="activeButton" id="closeUpFili11_close" style="display:none;" value="閉じる" 
+						    	onclick="changeCloseUpStatus('closeUpFili11');" />
+						</td>
+					</tr>
+					<tr>
+						<td class="NormalBody">
+							<table width="100%" border="0" cellpadding="0" cellspacing="0" class="fontsizeS">
+								<tr>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="470"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="150"></th>
+									<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="110"></th>
+								</tr>
+								<tr>
+									<th nowrap="nowrap">公開日</th>
+									<th colspan="2" nowrap="nowrap">表題</th>
+									<th nowrap="nowrap">XBRL</th>
+								</tr>
+							
+							
+								<tr>
+									<td align="center">-</td>
+									<td>掲載情報はありません。</td>
+									<td>&nbsp;</td>
+									<td>&nbsp;</td>
+								</tr>
+							</table>
+						</td>
+					</tr>
+				</table>
+				<div class="boxNaviPagetop">
+					<a href="#">
+						<img src="/common/images/bt_pagetop_clear.gif" alt="このページの上部へ" />
+					</a>
+				</div>
+							
+			
+			
+			
+		
+		<table class="naviButton">
+			<tr>
+				<td class="naviButtonL">
+					<input type="button" value="戻る" class="negativeButton"
+						onclick="submitPage(document.forms['JJK010040Form'],document.forms['JJK010040Form'].Return)" />
+				</td>
+			</tr>
+		</table>
+	</div>
+</div>
+  
+				
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div id="body_CorporateGovernance" class="bodycontents" style="display:none;">
+
+
+
+	<div class="pagecontents">
+		<div class="title1">
+			
+			<h1 class="fontsizeL">上場会社詳細（コーポレート・ガバナンス情報）</h1>
+			
+		</div>
+		<div class="printbtn">
+			<img src="/common/images/bt_print.gif" alt="印刷" width="81" height="20" id="bt_print0" 
+			     class="cursorHand" onclick="print_out()" 
+			     onmouseover="javascript:this.src='/common/images/bt_print_a.gif';" 
+			     onmouseout="javascript:this.src='/common/images/bt_print.gif';" />
+		</div>
+		
+		<p class="boxNaviPagetop" align="right">
+			<!-- CG検索からの場合 -->
+			
+			<!-- CG検索以外からの場合 -->
+			
+				<!-- CG検索(英文情報)からの場合 -->
+				
+				
+					<a id="chuiJikoURLLink" name="chuiJikoURLLink" target="_blank" href="https://www.jpx.co.jp/listing/co-search/01.html" class="txtLink fontsizeS">
+						データ利用上の注意事項
+					</a>
+				
+			
+		</p>
+		
+		<span id="cgTabError" style="text-indent:0em;font-size:large;font-weight:bold;color:#FF0000;"></span>
+		<div class="boxOptListed05">
+			<h3 class="fontsizeM">オーディオストック</h3>
+			<p class="fontsizeM">
+			</p>
+			<br class="clearFloat" />
+		</div>
+		<div class="subnavi_M_1">
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1">
+							<a href="javascript:changeTab('1');">基本情報</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1">
+							<a href="javascript:changeTab('2');">
+								適時開示情報
+							</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1">
+							<a href="javascript:changeTab('4');">
+								縦覧書類 / PR情報
+							</a>
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="active">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_subnavi1a colorRed2">
+							コーポレート・<br />ガバナンス
+						</td>
+					</tr>
+				</table>
+			</div>
+			<div class="icon_end">&nbsp;</div>
+			<div class="normal">
+				<table class="NormalTbl" style="line-height:13px;font-size:13px;">
+					<tr>
+						<td valign="middle" class="icon_newwin">
+						
+							<a target="_blank" href="https://quote.jpx.co.jp/jpxhp/main/index.aspx?F=stock_detail&disptype=information&qcode=621A">
+								株価情報
+							</a>
+						
+						</td>
+					</tr>
+				</table>
+			</div>
+		</div>
+		<div class="clearFloat"></div>	
+		<table border="0" cellpadding="0" cellspacing="0" class="fontsizeS margin20">
+			<tr>
+				<th nowrap="nowrap">コード</th>
+				<th nowrap="nowrap">ISINコード</th>
+				<th nowrap="nowrap">
+					市場区分
+				</th>
+				<th nowrap="nowrap">業種</th>
+				<th nowrap="nowrap">決算期</th>
+				<th nowrap="nowrap">売買単位</th>
+			</tr>
+			<tr align="center">
+				<td>621A0</td>
+				<td>JP3172510004</td>
+				<td>
+					グロース
+					
+				</td>
+				<td>サービス業</td>
+				<td>9月30日</td>
+				<td>100</td>
+			</tr>
+		</table>
+		
+		<h4>コーポレート・ガバナンス情報</h4>
+		
+		<table width="840" cellpadding="0" cellspacing="0" border="0" class="fontsizeS">
+			<tr>
+				<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="70"></th>
+				<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="90"></th>
+				<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="70"></th>
+				<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="240"></th>
+				<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="60"></th>
+				<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="50"></th>
+				<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="50"></th>
+				<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="80"></th>
+				<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="60"></th>
+				<th style="height:0px;margin:0px;padding:0px;border-right-style:hidden;border-left-style:hidden" width="60"></th>
+			</tr>
+			<tr>
+				<th rowspan="2" nowrap="nowrap">組織形態</th>
+				<th rowspan="2" nowrap="nowrap">親会社</th>
+				<th rowspan="2" nowrap="nowrap">外国人<br />株式<br />所有比率</th>
+				<th colspan="2" nowrap="nowrap">筆頭株主</th>
+				<th rowspan="2" nowrap="nowrap">取締役<br />（独立社外）</th>
+				<th rowspan="2" nowrap="nowrap">監査役<br />（独立社外）</th>
+				<th rowspan="2" nowrap="nowrap">縦覧日</th>
+				<th colspan="2" nowrap="nowrap">ファイル</th>
+			</tr>
+			<tr>
+				<th nowrap="nowrap">名称</th>
+				<th nowrap="nowrap">比率(%)</th>
+				<th nowrap="nowrap">表示</th>
+				<th nowrap="nowrap">XBRL</th>
+			</tr>
+			
+			<tr>
+				<td align="center">
+					
+					
+						監査役
+					
+					
+					
+					
+				</td>
+				<td align="center">
+					
+						無
+					
+					
+					
+				</td>
+				<td align="center">
+					10%未満
+				</td>
+				<td align="center">
+					株式会社ウエストテイルズ
+				</td>
+				<td align="center">
+					29.16
+				</td>
+				<td align="center">
+					4
+					<br />
+					(1)
+				</td>
+				<td align="center">
+					3
+					<br />
+					(3)
+				</td>
+				<td align="center">
+					2026/09/16
+				</td>
+				<td align="center">
+					<a href="/disc/621A0/140120260909533726.pdf" target="linkWin12_1">
+						<img src="/common/images/icon_pdf.gif" alt="PDFファイル" width="31" height="31" border="0" />
+					</a>
+					
+						<a href="/disc/621A0/100920260909533726.html" target="linkWin12_2">
+							<img src="/common/images/icon_html.gif" alt="HTMLファイル" width="31" height="31" border="0" />
+						</a>
+					
+				</td>
+				<td align="center">
+					<label>
+					
+							<img src="/common/images/icon_xbrl.gif" class="cursorHand" alt="XBRL" width="31" height="31" border="0" 
+								onclick="doDownload(document.forms['JJK010040Form'],
+									document.forms['JJK010040Form'].XBRLDownload,
+									'/621A0/101220260909533726.zip');"/>
+					
+					
+					</label>
+				</td>
+			</tr>
+			
+			
+		</table>
+		<table class="naviButton">
+			<tr>
+				<td class="naviButtonL">
+					<input type="button" name="Submit" value="戻る" class="negativeButton"
+						onclick="submitPage(document.forms['JJK010040Form'],document.forms['JJK010040Form'].Return)" />
+				</td>
+			</tr>
+		</table>
+	</div>
+</div>	
+  
+			
+			
+			
+			
+			
+			
+			
+			
+			
+		</div>
+	</form>
+	<p class="boxNaviPagetop" align="right">
+		<input id="chuiJikoURL"   type="hidden" value="https://www.jpx.co.jp/listing/co-search/01.html" />
+		<input id="chuiJikoURLCg" type="hidden" value="https://www.jpx.co.jp/listing/cg-search/index.html" />
+		<input id="gmnDspKbn" type="hidden" value='1' />
+	</p>
+	
+
+
+
+
+<div class="boxOptUser01"></div>
+<div class="clearFooterFloat right"></div>
+<div id="footerarea">
+	<iframe title="footer" id="footer04" height="60" marginheight="0" src="/common/html/footer04.html" frameborder="0" width="920" name="footer04" marginwidth="0" scrolling="no">
+		<img alt="image" id="bt_pagetop" class="btpagetop" src="/common/images/bt_pagetop.gif" width="0" height="0" />
+	</iframe>
+</div>
+</div>
+</body>
+</html>

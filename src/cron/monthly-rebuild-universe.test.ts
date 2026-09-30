@@ -25,6 +25,11 @@ import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as otakaraSchema from "../../services/otakara-yutai/src/db/schema.js";
 import { INSTRUMENT_TYPES } from "../shared/jpx/instrument-type.js";
 import { runMonthlyRebuild } from "./monthly.js";
+import type { OverlayCollectFn } from "./universe-overlay.js";
+import { fakeOverlayCollect } from "./tests/overlay-batch.js";
+
+const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
+
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -99,6 +104,8 @@ beforeEach(() => {
   sqlite = new DatabaseSync(":memory:");
   applyD1Migrations(sqlite);
   sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (1, 'QUOカード', 'quo')");
+  // overlay bootstrap base は確定済み (本 test は母集団絞込が対象)。
+  sqlite.exec("INSERT INTO universe_overlay_state (id, base_as_of) VALUES (1, '2026-08-31')");
   seedYutaiStock(EQUITY_ID, "7203", INSTRUMENT_TYPES.equity);
   // 合成コード。JPX の上場銘柄一覧 (2026-08-31 版) にも本番 core_stocks にも無い。
   seedYutaiStock(REIT_ID, "1201", INSTRUMENT_TYPES.reitFund);
@@ -111,7 +118,7 @@ afterEach(() => {
 
 describe("runMonthlyRebuild の母集団 (active かつ equity かつ is_yutai)", () => {
   it("otakara_stock_financials / otakara_stock_scores には equity の行だけができる", async () => {
-    const result = await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db);
+    const result = await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db, { collectOverlay: fakeCollect });
 
     expect(result.scoredStocks).toBe(1);
     expect(stockIds("otakara_stock_financials")).toEqual([EQUITY_ID]);
@@ -127,7 +134,7 @@ describe("runMonthlyRebuild の母集団 (active かつ equity かつ is_yutai)"
       )
       .run(REIT_ID, FROZEN_DATE);
 
-    await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db);
+    await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db, { collectOverlay: fakeCollect });
 
     const reit = sqlite
       .prepare("SELECT price, data_date AS dataDate FROM otakara_stock_financials WHERE stock_id = ?")
@@ -158,7 +165,7 @@ describe("runMonthlyRebuild の権利月・ジャンル集計 (L-51)", () => {
       )
       .run(EQUITY_ID);
 
-    await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db);
+    await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db, { collectOverlay: fakeCollect });
 
     const scores = sqlite
       .prepare("SELECT yutai_months AS months, yutai_genre_ids AS genres FROM otakara_stock_scores WHERE stock_id = ?")
