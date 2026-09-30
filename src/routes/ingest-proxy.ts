@@ -7,6 +7,8 @@ import {
   isoWeekToDateRange,
 } from "./moneyflow-sector.js";
 import {
+  DEFAULT_RATE_LIMIT_BACKOFF_MS,
+  YahooRateLimitError,
   redactYahooDiagnostic,
   yahooFetchDirect,
 } from "../shared/yahoo/client.js";
@@ -59,6 +61,34 @@ ingestProxyRoute.get("/yahoo", async (c) => {
   try {
     res = await yahooFetchDirect(u);
   } catch (error) {
+    if (error instanceof YahooRateLimitError && error.status === 429) {
+      const remainingMs =
+        error.retryAtMs !== null
+          ? error.retryAtMs - Date.now()
+          : (error.retryAfterMs ?? DEFAULT_RATE_LIMIT_BACKOFF_MS);
+      // source 実残り秒を伝播する (30 への短縮なし。非 finite は既定に倒す)。
+      const retryAfterSec = Number.isFinite(remainingMs)
+        ? Math.max(0, Math.ceil(remainingMs / 1000))
+        : Math.ceil(DEFAULT_RATE_LIMIT_BACKOFF_MS / 1000);
+      console.error(
+        JSON.stringify({
+          event: "yahoo_ingest_proxy_rate_limited",
+          source: "ingest-proxy",
+          status: error.status,
+          retryAfterSec,
+        })
+      );
+      return c.json(
+        {
+          error: `yahoo rate limited: ${redactYahooDiagnostic(rootCauseMessage(error)).slice(0, 200)}`,
+        },
+        429,
+        {
+          "Retry-After": String(retryAfterSec),
+          "X-Kabulab-Yahoo-Status": String(error.status),
+        }
+      );
+    }
     console.error(
       JSON.stringify({
         event: "yahoo_ingest_proxy_error",

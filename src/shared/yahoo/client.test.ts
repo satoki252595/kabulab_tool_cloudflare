@@ -370,3 +370,33 @@ describe("fetchChart — 応答整合 guard (F-01 1909 再発防止)", () => {
     expect(res.ohlcv).toHaveLength(2);
   });
 });
+
+describe("proxy 429 → Node recovery contract", () => {
+  it("proxy 429 + Retry-After は retry-at-ms 付き transient message になる", async () => {
+    process.env.YAHOO_PROXY_BASE = "https://kabulab.example.test";
+    process.env.CRON_SECRET = "test-secret";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response('{"error":"yahoo rate limited"}', {
+            status: 429,
+            headers: {
+              "Retry-After": "7",
+              "X-Kabulab-Yahoo-Status": "429",
+            },
+          })
+      )
+    );
+    const before = Date.now();
+    const err = await fetchChart("^N225", "1mo").catch((e: unknown) => e);
+    const message = err instanceof Error ? err.message : String(err);
+    // 既存 recovery が parse する retry-at-ms を運ぶ。
+    const retryAt = Number(/\bretry-at-ms=(\d+)\b/.exec(message)?.[1]);
+    expect(retryAt).toBeGreaterThanOrEqual(before);
+    expect(retryAt).toBeLessThanOrEqual(Date.now() + 7_000);
+    const { isTransientDailySyncFailure } = await import("../../cron/daily.js");
+    expect(isTransientDailySyncFailure(message)).toBe(true);
+    expect(message).not.toContain("A1=");
+  });
+});
