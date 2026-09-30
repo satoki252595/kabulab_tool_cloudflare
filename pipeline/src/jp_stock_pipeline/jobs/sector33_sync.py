@@ -94,6 +94,7 @@ DIAG_KINDS = frozenset(
         "sector33-gap",
         "archive-failure",
         "config-stop",
+        "invalid-current-stop",
     }
 )
 
@@ -192,6 +193,40 @@ def _scan_listed_rows(zip_bytes: bytes) -> tuple[list[dict], list[SectorHold]]:
             }
         )
     return admitted, holds
+
+
+def _validate_current_snapshot(current: list[dict]) -> None:
+    """active-equity snapshot の完全性 gate。不正は typed STOP (書込 0)。
+
+    空 snapshot・非 dict 行・code/sector33 欠落・空 code・不正 code
+    (標準 `source_code_to_ticker` で判定)・code 重複は identity 未確定
+    として通さない。sector33 値の当否はここでは見ない (未知は retain
+    し gap へ。NULL 消去しない方針は維持)。
+    """
+    if not current:
+        raise SectorPrewriteStop(
+            "invalid-current-stop", "current active snapshot が空 (identity 未確定)"
+        )
+    seen: set[str] = set()
+    for index, row in enumerate(current):
+        if not isinstance(row, dict) or "code" not in row or "sector33" not in row:
+            raise SectorPrewriteStop(
+                "invalid-current-stop", f"snapshot {index} 行目が不完全 (code/sector33 欠落)"
+            )
+        code = row.get("code")
+        if not isinstance(code, str) or not code.strip():
+            raise SectorPrewriteStop(
+                "invalid-current-stop", f"snapshot {index} 行目の code が空"
+            )
+        if source_code_to_ticker(code) is None:
+            raise SectorPrewriteStop(
+                "invalid-current-stop", f"snapshot {index} 行目の code が不正: {code!r}"
+            )
+        if code in seen:
+            raise SectorPrewriteStop(
+                "invalid-current-stop", f"snapshot の code 重複: {code!r}"
+            )
+        seen.add(code)
 
 
 def _verify_normalization(admitted: list[dict]) -> None:
@@ -387,6 +422,12 @@ def execute(ctx: JobContext) -> SectorReport:
     except D1Error as exc:
         ctx.add_failure("sector33-read", f"現在値を読めない: {exc}")
         report.stopped = "read-failure"
+        return report
+    try:
+        _validate_current_snapshot(current)
+    except SectorPrewriteStop as exc:
+        ctx.add_failure(f"sector33-prewrite-{exc.kind}", str(exc))
+        report.stopped = exc.kind
         return report
     active = {str(r.get("code") or "") for r in current}
     try:
