@@ -31,10 +31,13 @@
 ## WRITE (exec16。承認済み1回実行)
 
 - 16/16 success、74 statements (preflight16 + ABC38 + desc4 + yield10 + score6)
+- 38 updates (42行 cleanup import + sib 1件 + company 4件 + 7075 2件) +
+  desc 4件 (7075 shares-tier 別)。利回り changed 10銘柄・score 6銘柄
 - 銘柄別文数: 143:6、343:7、493:6、501:3、515:2、644:4、826:4、927:2、
   1051:2、1095:2、1127:8、1230:4、1243:2、1476:5、1500:7、1546:10
 - 共有 strict sender (exact-200 強制・有限 binds・UNKNOWN STOP)。銘柄毎
   attempt-before + settle receipt + raw bytes (wx0600)。retry/resend 0
+- 実行時計は銘柄毎の送受信 UTC + HTTP Date を記録。EMIT 判定は実測時計のみ
 
 ## POST4 (承認済み1回実行。`yutai-post4-capture-2026-09-30T08-10-53-779Z`)
 
@@ -42,10 +45,21 @@
   fin16 / sco16 全一致
 - EMIT 時刻 (52 updated_at + 10 fetched_at): 整数・EXEC16 記録時計内・
   HTTP Date 整合。tolerance なし
-- 保護列: outside54 全列・core16 全列・price/data_date・created_at・
-  scored_at は byte-exact
+- 保護列: outside54 全11列・core16 全列・price/data_date・created_at・
+  scored_at は byte-exact。touched 行の非書込列も全一致
 - NEWPOST LOCAL 再演 (bridge + 実 fetch + compute + snapshot + 52決定):
-  reentry 0
+  reentry 0 (利回り・ABC・desc いずれも再plan 0件)
+
+## post-custody (承認済み1回実行)
+
+- 56点 1-ZIP: exec16 raw16+meta16+receipt16、post4 raw6+REPORT+ATTEMPT。
+  8PRE の重複なし。secrets スキャン 0
+- key `6d3f09dacfda2d512b13327c3a8f210e7a49dfacb7bc886ffea723a9d7b540e1`
+- ZIP `03724221f2fa4f3e07c6e644b14fc5d16396e9aaad2b48396ada16622a4f26ba`
+  (152,975B)。manifest `fd336d8d9705b13a8aca79aaec8bce505410a3b420111f822ce9e172d9aa6688`
+- `recorded`/`written` (force=false, 1 call)。uniqueDB/key/pageID 一致。
+  ZIP full bytes + inner56 SHA readback PASS
+  (receipt `8675e1d40629d402abde136ae084b03b3daad4e82c9fe4094bd3ba647d3a6841`)
 
 ## フォールバックなし宣言
 
@@ -65,3 +79,4 @@
 - post4 runner `eeb43a187239e37ad4993164283b58224304c9986cd3ec037b265805f6bd130c`
 - postcap `41723b4aa1f54f950c1db5c58570f13848aaeb0297b09000587cfdc1f34a9e8b`
 - post4 report `6c97a3b8dca22de5f855e4bce97c51597b278e61553c5ff1b672b3b530b8a2a9`
+- postcustody runner `34872a87fad40a2e20ba9eaaee9b264b8f613d022323a082fd779867fff036c8`
