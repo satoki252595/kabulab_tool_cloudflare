@@ -11,11 +11,14 @@ import {
   extractQuantities,
   extractYenAmounts,
   extractYenSpans,
+  headedDescription,
   isLotteryPrizeAmount,
   isUnconvertedForeignAmount,
   qualifyCompanyNominal,
   qualifyCompanyPerGrantValue,
   sanitizeEstimatedValue,
+  splitHeadedDescription,
+  trustedCompanyYieldValue,
   type CompanyNominalVerdict,
 } from "../../data-scripts/estimated-value-guard.js";
 
@@ -358,5 +361,111 @@ describe("qualifyCompanyPerGrantValue (共有厳密判定。原文抜粋)", () =
   it("単一候補の複数 tier は qualifier に委ねる (8153 は額面なしで HOLD)", () => {
     // 候補額 500 のみ。tier 規則は素通りし、qualifier が単価/cross-clause で落とす。
     expect(verdictOf(qualifyCompanyPerGrantValue(RAW["8153"], 1500, single100))).toBe("hold:no_per_grant_face");
+  });
+});
+
+describe("headed-description 契約 (見出し persist + 本文分離)", () => {
+  // 実ソース由来の最小引用: SOURCE42 custody
+  // (pageId 3ebd74ff-84cd-81bf-8e54-d50e20e42340 / 9616.json benefits[0]・4680.json)。
+  const H9616 = "株主優待割引（電子チケット）";
+  const B9616 = "2,000円相当\n※電子チケットの利用が困難な場合は、紙の優待券を発行。";
+
+  it("空でない見出しは必ず persist し bytes を全保持する (空見出しだけ素の本文)", () => {
+    const stored = headedDescription("優待券", "優待券 3,000円相当");
+    expect(stored.startsWith("【種別：")).toBe(true);
+    expect(splitHeadedDescription(stored)).toEqual({
+      heading: "優待券",
+      body: "優待券 3,000円相当",
+      malformed: false,
+    });
+    for (const h of ["表A】追記", "見出し\n二行目", '割引"特"別']) {
+      const s = splitHeadedDescription(headedDescription(h, "本文 1,000円相当"));
+      expect(s).toEqual({ heading: h, body: "本文 1,000円相当", malformed: false });
+    }
+    expect(headedDescription("", "本文 1,000円相当")).toBe("本文 1,000円相当");
+  });
+
+  it("壊れた headed 契約は正の全文にしない (HOLD で止める)", () => {
+    // 文中の marker は無視して素通し (legacy 互換)。
+    expect(splitHeadedDescription("本文\n【種別：x】").malformed).toBe(false);
+    for (const bad of ["【種別：xxx】\n3,000円相当", "【種別：\n3,000円相当", "【種別：\"未閉じ\n3,000円相当"]) {
+      expect(splitHeadedDescription(bad).malformed).toBe(true);
+      expect(verdictOf(qualifyCompanyPerGrantValue(bad, 3000, { minShares: [100], recordMonths: [3] }))).toBe(
+        "hold:malformed_headed_contract"
+      );
+    }
+  });
+
+  it("9616 実ソース: 券額面は保持し、真の割引は HOLD (joint の両方向)", () => {
+    const v = qualifyCompanyPerGrantValue(headedDescription(H9616, B9616), 2000, {
+      minShares: [100],
+      recordMonths: [3, 9],
+    });
+    expect(verdictOf(v)).toBe("qualified:face-literal");
+    const d = qualifyCompanyPerGrantValue(headedDescription("優待割引", "20%割引\n直営店で利用可"), 1000, {
+      minShares: [100],
+      recordMonths: [3],
+    });
+    expect(verdictOf(d)).toBe("hold:discount");
+    // 本文が face-literal で通っても、割引見出し + joint 無換金性は先に止める。
+    const b = qualifyCompanyPerGrantValue(headedDescription("優待割引", "3,000円の優待券"), 3000, {
+      minShares: [100],
+      recordMonths: [3],
+    });
+    expect(verdictOf(b)).toBe("hold:discount");
+  });
+
+  it("4680 実ソース原文: 型付き券 unit × 単一数量だけ coupon-unit 規則が通す", () => {
+    // sh100: heading「500円割引券」+ body「1枚」+ 利用条件注記 (原文そのまま)。
+    const b100 =
+      "1枚\n※1、1,000円以上の利用につき1日1枚利用可能。\n（アミューズメント利用料・その他対象外あり）";
+    const v = qualifyCompanyPerGrantValue(headedDescription("500円割引券", b100), 500, {
+      minShares: [100],
+      recordMonths: [3, 6, 9, 12],
+    });
+    expect(verdictOf(v)).toBe("qualified:coupon-unit");
+    // sh300: 「3枚」+ 利用条件「1日1枚」で数量が曖昧 → 適用しない (explicit HOLD)。
+    const b300 =
+      "3枚\n※1、1,000円以上の利用につき1日1枚利用可能。\n（アミューズメント利用料・その他対象外あり）";
+    const w = qualifyCompanyPerGrantValue(headedDescription("500円割引券", b300), 1500, {
+      minShares: [300],
+      recordMonths: [3, 6, 9, 12],
+    });
+    expect(verdictOf(w)).not.toContain("qualified");
+    // generic な見出し通貨は額面にしない (trap)。
+    const t = qualifyCompanyPerGrantValue(headedDescription("株主優待3,300円相当", "入会金無料"), 3300, {
+      minShares: [100],
+      recordMonths: [3],
+    });
+    expect(verdictOf(t)).toBe("hold:no_per_grant_face");
+  });
+
+  it("本文 negative は authoritative: unit×数量が一致しても choice 本文は通さない (共有 backend 境界)", () => {
+    // 共有呼び出し境界 trustedCompanyYieldValue (monthly/recompute 経路) で確認する。
+    const v = trustedCompanyYieldValue(
+      {
+        description: headedDescription("3,000円券", "AまたはBから選択 1枚"),
+        estimatedValue: 3000,
+        estimateValueSource: "company",
+      },
+      { minShares: [100], recordMonths: [3] }
+    );
+    expect(v).toBeNull();
+  });
+
+  it("抽選は見出し scope で HOLD (見出しに金額・人数が無くても問わない)", () => {
+    // 実形: 7578「抽選式株主優待（参加口数）」+ 本文「1口」。
+    const v = qualifyCompanyPerGrantValue(headedDescription("抽選式株主優待（参加口数）", "1口"), 1000, {
+      minShares: [100],
+      recordMonths: [3],
+    });
+    expect(verdictOf(v)).toBe("hold:lottery");
+    // ctx 見出し経路 (carry) も同じ。
+    const v2 = qualifyCompanyPerGrantValue("1口", 1000, {
+      minShares: [100],
+      recordMonths: [3],
+      headings: ["抽選式株主優待（参加口数）"],
+    });
+    expect(verdictOf(v2)).toBe("hold:lottery");
   });
 });

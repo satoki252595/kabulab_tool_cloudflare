@@ -622,6 +622,51 @@ function assertStringOrNull(v: unknown, what: string): void {
 }
 
 /**
+ * core 行集合の形状検証 (full snapshot の core 部にも承認 subset にも適用)。
+ * `assertValidSnapshotShape` の core 部分の抽出。id/code の重複は
+ * Map collapse による計画欠落のため STOP する。
+ */
+export function assertValidCoreRows(core: OverlaySnapshotCoreRow[]): void {
+  for (const r of core) {
+    if (!isFiniteInteger(r.id)) {
+      throw new Error("overlay snapshot STOP: core.id が有限整数ではない");
+    }
+    for (const f of ["code", "name", "market"] as const) {
+      if (typeof r[f] !== "string") {
+        throw new Error(`overlay snapshot STOP: core.${f} が string ではない`);
+      }
+    }
+    for (const f of ["sector", "instrumentType", "sector33"] as const) {
+      assertStringOrNull(r[f], `core.${f}`);
+    }
+    for (const f of ["isActive", "isYutai"] as const) {
+      if (r[f] !== 0 && r[f] !== 1) {
+        throw new Error(`overlay snapshot STOP: core.${f} が 0/1 ではない`);
+      }
+    }
+    for (const f of ["createdAt", "updatedAt"] as const) {
+      if (!isFiniteInteger(r[f])) {
+        throw new Error(`overlay snapshot STOP: core.${f} が有限整数ではない`);
+      }
+    }
+  }
+  const coreIds = new Set<number>();
+  for (const r of core) {
+    if (coreIds.has(r.id)) {
+      throw new Error(`overlay snapshot STOP: core id 重複 ${r.id}`);
+    }
+    coreIds.add(r.id);
+  }
+  const coreCodes = new Set<string>();
+  for (const r of core) {
+    if (coreCodes.has(r.code)) {
+      throw new Error(`overlay snapshot STOP: core code 重複 ${r.code}`);
+    }
+    coreCodes.add(r.code);
+  }
+}
+
+/**
  * snapshot の形状検証 (DB 読取にも外部 frozen object にも適用)。
  * state は 0 行または id=1 の 1 行のみ。core の id/code、events の
  * id/(code,kind,effective_date) の重複は Map collapse による計画欠落の
@@ -648,29 +693,7 @@ export function assertValidSnapshotShape(snapshot: OverlaySnapshot): void {
       }
     }
   }
-  for (const r of snapshot.core) {
-    if (!isFiniteInteger(r.id)) {
-      throw new Error("overlay snapshot STOP: core.id が有限整数ではない");
-    }
-    for (const f of ["code", "name", "market"] as const) {
-      if (typeof r[f] !== "string") {
-        throw new Error(`overlay snapshot STOP: core.${f} が string ではない`);
-      }
-    }
-    for (const f of ["sector", "instrumentType", "sector33"] as const) {
-      assertStringOrNull(r[f], `core.${f}`);
-    }
-    for (const f of ["isActive", "isYutai"] as const) {
-      if (r[f] !== 0 && r[f] !== 1) {
-        throw new Error(`overlay snapshot STOP: core.${f} が 0/1 ではない`);
-      }
-    }
-    for (const f of ["createdAt", "updatedAt"] as const) {
-      if (!isFiniteInteger(r[f])) {
-        throw new Error(`overlay snapshot STOP: core.${f} が有限整数ではない`);
-      }
-    }
-  }
+  assertValidCoreRows(snapshot.core);
   for (const r of snapshot.events) {
     if (!isFiniteInteger(r.id)) {
       throw new Error("overlay snapshot STOP: events.id が有限整数ではない");
@@ -683,20 +706,6 @@ export function assertValidSnapshotShape(snapshot: OverlaySnapshot): void {
     for (const f of ["name", "marketFrom", "marketTo", "lastSeenFetchedAt"] as const) {
       assertStringOrNull(r[f], `events.${f}`);
     }
-  }
-  const coreIds = new Set<number>();
-  for (const r of snapshot.core) {
-    if (coreIds.has(r.id)) {
-      throw new Error(`overlay snapshot STOP: core id 重複 ${r.id}`);
-    }
-    coreIds.add(r.id);
-  }
-  const coreCodes = new Set<string>();
-  for (const r of snapshot.core) {
-    if (coreCodes.has(r.code)) {
-      throw new Error(`overlay snapshot STOP: core code 重複 ${r.code}`);
-    }
-    coreCodes.add(r.code);
   }
   const evIds = new Set<number>();
   for (const r of snapshot.events) {
@@ -770,6 +779,43 @@ export function buildOverlayPreflightStatement(
     "  AND (SELECT COUNT(*) FROM act_ev) = (SELECT COUNT(*) FROM exp_ev)",
     "  AND NOT EXISTS (SELECT * FROM act_ev EXCEPT SELECT * FROM exp_ev)",
     "  AND NOT EXISTS (SELECT * FROM exp_ev EXCEPT SELECT * FROM act_ev)",
+    "THEN 'null' ELSE '' END)",
+  ].join("\n");
+  return { sql: sqlText, params: [doc] };
+}
+
+/**
+ * 承認 core 行集合の scoped preflight (CAS guard)。`buildOverlayPreflightStatement`
+ * の core 部と同一機構 (json_each 展開 + 件数 + 両方向 EXCEPT + `json('')` の
+ * SQL エラーで batch 全体 rollback)。act 側は承認 ids の `WHERE id IN` に
+ * 絞り、state/events・非対象 core 行は見ない。touched 集合の parent
+ * freshness 専用。空集合は SQL 不正 (`IN ()`) のため拒否する。
+ */
+export function buildCoreRowsPreflightStatement(
+  rows: OverlaySnapshotCoreRow[]
+): D1BatchStatement {
+  assertValidCoreRows(rows);
+  if (rows.length === 0) {
+    throw new Error("overlay snapshot STOP: guard 対象 core 行が 0 件");
+  }
+  const ids = rows.map((r) => r.id).sort((a, b) => a - b).join(",");
+  const doc = JSON.stringify({ count: rows.length, core: rows });
+  const coreCols =
+    "id, code, name, market, sector, is_active, is_yutai, created_at, updated_at, instrument_type, sector33";
+  const coreJson =
+    "json_extract(value,'$.id'), json_extract(value,'$.code'), json_extract(value,'$.name'), json_extract(value,'$.market'), json_extract(value,'$.sector'), json_extract(value,'$.isActive'), json_extract(value,'$.isYutai'), json_extract(value,'$.createdAt'), json_extract(value,'$.updatedAt'), json_extract(value,'$.instrumentType'), json_extract(value,'$.sector33')";
+  const actScope = `core_stocks WHERE id IN (${ids})`;
+  const sqlText = [
+    "-- preflight: snapshot 不一致は SQL エラーで batch 全体 rollback",
+    "WITH snap(j) AS (VALUES (?)),",
+    `exp_t(${coreCols}) AS (SELECT ${coreJson} FROM json_each(json_extract((SELECT j FROM snap), '$.core'))),`,
+    `act_t(${coreCols}) AS (SELECT ${coreCols} FROM ${actScope})`,
+    "SELECT json(CASE WHEN",
+    `  (SELECT COUNT(*) FROM ${actScope}) = json_extract((SELECT j FROM snap), '$.count')`,
+    "  AND (SELECT COUNT(*) FROM exp_t) = json_extract((SELECT j FROM snap), '$.count')",
+    "  AND (SELECT COUNT(*) FROM act_t) = (SELECT COUNT(*) FROM exp_t)",
+    "  AND NOT EXISTS (SELECT * FROM act_t EXCEPT SELECT * FROM exp_t)",
+    "  AND NOT EXISTS (SELECT * FROM exp_t EXCEPT SELECT * FROM act_t)",
     "THEN 'null' ELSE '' END)",
   ].join("\n");
   return { sql: sqlText, params: [doc] };

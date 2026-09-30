@@ -37,7 +37,7 @@
  */
 
 // ---------------------------------------------------------------------------
-// 0. read-only fetch guard (repo import より前に設置)
+// 0. read-only fetch guard (直接 CLI 時のみ。repo import より前に設置)
 // ---------------------------------------------------------------------------
 const D1_QUERY_RE = /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/[^/]+\/d1\/database\/[^/]+\/query$/;
 const WRITE_WORD_RE = /\b(insert|update|delete|drop|alter|create|replace|pragma|vacuum|attach|detach|grant|revoke|begin|commit|rollback)\b/i;
@@ -99,7 +99,14 @@ export function createBoundedFetch(
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const liveCounters: GuardCounters = { observed: 0, failed: 0 };
-globalThis.fetch = createBoundedFetch(nativeFetch, 36, liveCounters);
+// 直接 CLI 判定 (import 判定用。pathToFileURL は hoisted import)。
+// bounded guard の設置は直接 CLI のときだけ行う。import 側
+// (assertProjection 等の利用者) の fetch は置き換えない。
+const isCliMain =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isCliMain) {
+  globalThis.fetch = createBoundedFetch(nativeFetch, 36, liveCounters);
+}
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -1046,10 +1053,9 @@ async function main(): Promise<void> {
   }));
 }
 
-// CLI 実行時のみ main() を走らせる。import 時は guard 設置 + 実関数の
-// 提供のみとし、main() は実行しない (offline check が実関数を呼ぶため)。
-const isCliMain =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+// CLI 実行時のみ main() を走らせる。import 時は実関数の提供のみとし、
+// main() は実行しない (offline check が実関数を呼ぶため)。
+// guard 設置も直接 CLI のときだけ (上の isCliMain 判定で設置済み)。
 if (isCliMain) {
   try {
     await main();

@@ -21,12 +21,19 @@ import {
 } from "./recompute-yields.js";
 
 /**
- * 同銘柄ガード batch の先頭 preflight が検証する full preimage。
+ * 同銘柄ガード batch の先頭 preflight が検証する projection preimage
+ * (計画に使う列の射影。行の全集合 × 列の射影であり、全列の full ではない)。
  *
  * REST batch は changes() 0 を放置すると部分適用になるため、batch 内の
- * 先頭文で「計画時と 1 列も違わない」ことを SQL エラー化する
+ * 先頭文で「射影列が計画時と 1 列も違わない」ことを SQL エラー化する
  * (不一致 → `json('')` が throw → batch 全体 rollback)。
  * 通常 import と ABC (A+C 統合) の両経路がこの同一 builder を使う。
+ *
+ * 射影に含まれない列 (preflight は見ない): 優待 genre_id/created_at、
+ * 財務 eps/bps/roa/market_cap/ma_5/ma_75、スコア scored_at/yutai_months/
+ * yutai_genre_ids、親 core の code/is_active 以外 (instrument_type は
+ * equity 述語でのみ確認)。全列が必要な CAS は complement 文を同 batch に
+ * 足すこと (全列 preimage はこの builder の責務外)。
  */
 export type StockBenefitPreimage = {
   id: number;
@@ -53,7 +60,7 @@ export type StockPreimage = {
    * 非 active・非 equity の銘柄は preimage の値にかかわらず落ちる。
    */
   parent: { code: string; isActive: boolean };
-  /** 同銘柄の優待行の全集合 (追加・削除の検知を含む)。 */
+  /** 同銘柄の優待行の全集合 (行の追加・削除を検知。列は下の射影のみ。genre_id/created_at は見ない)。 */
   benefits: StockBenefitPreimage[];
   /**
    * 財務行 (利回り・スコア計算の入力 + 行の同一性)。行が無ければ null。
@@ -227,20 +234,20 @@ export function assertVerifiedBenefitsMatch(input: {
 }
 
 /**
- * 1 銘柄の full preimage 検証文を作る (純関数・副作用なし)。
+ * 1 銘柄の projection preimage 検証文を作る (純関数・副作用なし)。
  *
  * 仕組み: snapshot 全体を 1 bound JSON で渡し (`$.benefits` 配列 +
  * `$.financial` + `$.scores`)、`json_each` CTE で期待集合を起こして現行と
  * 突き合わせる。優待行は件数 + 双方向 EXCEPT (NULL は集合意味で等価。
- * 追加・削除も検知)。財務・スコアは行の有無 + 全列の NULL-safe (`IS`) 照合
- * (財務は利回り・日付・株価 + スコア計算の実入力 8 列 + 取得時刻)。
+ * 追加・削除も検知)。財務・スコアは行の有無 + 射影列の NULL-safe (`IS`) 照合
+ * (全列ではない。財務は利回り・日付・株価 + スコア計算の実入力 8 列 + 取得時刻)。
  * 1 列でも違えば `json('')` が throw し、D1 REST batch 全体が rollback する
  * (SQLite 公式: 不正 JSON への `json()` はエラー)。
  * bind は snapshot JSON 1 + stockId 5 の計 6 (D1 上限 100/文に収まる)。
  */
 export function buildStockPreflightStatement(snapshot: StockPreimage): D1BatchStatement {
   const sql = [
-    "-- preflight: 同銘柄の full preimage が計画時と一致しなければ SQL エラーで batch 全体 rollback",
+    "-- preflight: 同銘柄の projection preimage (射影) が計画時と一致しなければ SQL エラーで batch 全体 rollback",
     "WITH snap(j) AS (VALUES (?)),",
     "exp_ben(id, stock_id, min_shares, record_month, description, short_summary, estimated_value, estimate_value_source, updated_at) AS (",
     "  SELECT json_extract(value, '$.id'), json_extract(value, '$.stockId'), json_extract(value, '$.minShares'), json_extract(value, '$.recordMonth'), json_extract(value, '$.description'), json_extract(value, '$.shortSummary'), json_extract(value, '$.estimatedValue'), json_extract(value, '$.estimateValueSource'), json_extract(value, '$.updatedAt') FROM json_each(json_extract((SELECT j FROM snap), '$.benefits'))",
@@ -289,7 +296,7 @@ export type StockBatch = {
 
 /**
  * 銘柄単位の batch 計画 (副作用なし・決定的な順序)。
- * 非空 batch の先頭に必ず preflight 文を置く (full preimage 不一致は
+ * 非空 batch の先頭に必ず preflight 文を置く (preimage 不一致は
  * SQL エラー → batch 全体 rollback。ドリフト行の除外はしない。
  * 不一致の銘柄は batch を作らず止めるため、呼び出し側で除外せず STOP する)。
  * 要約の文を先に、利回り・スコアの文を後に並べる (従来の逐次順序と同じ)。
@@ -301,7 +308,7 @@ export function planAtomicBatches(input: {
   updates: readonly PlannedUpdate[];
   yieldPlan: YieldRecomputePlan;
   stockOfBenefit: (benefitId: number) => number | undefined;
-  /** 同銘柄の full preimage (必須。計算入力と同一読取の snapshot)。 */
+  /** 同銘柄の projection preimage (必須。計算入力と同一読取の snapshot)。 */
   preimages: ReadonlyMap<number, StockPreimage>;
 }): StockBatch[] {
   const benefitByStock = new Map<number, D1BatchStatement[]>();

@@ -50,7 +50,27 @@ import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
 import { stockFinancials, stocks, yutaiBenefits, yutaiGenres } from "../src/db/schema.js";
 import { type AtomicBatchSender, snapshotStockPreimages } from "./atomic-apply.js";
 import { benefitKey } from "./benefit-key.js";
-import { qualifyCompanyPerGrantValue } from "./estimated-value-guard.js";
+import {
+  headedDescription,
+  qualifyCompanyPerGrantValue,
+  splitHeadedDescription,
+} from "./estimated-value-guard.js";
+
+/**
+ * carry/group キー用の本文。headed 保存形の見出し行を落として比べるので、
+ * 素文の既存行と headed の合成行が同じキーで突き合う (移行 import でも
+ * 解釈を落とさない)。素文には恒等で旧キーと同一。壊れた headed は
+ * キー化せず STOP する (誤突合せ・黙殺をしない)。
+ */
+function carryBody(description: string): string {
+  const split = splitHeadedDescription(description);
+  if (split.malformed) {
+    throw new Error(
+      `headed 契約の壊れた掲載文は carry キー化しない (STOP): ${JSON.stringify(description.slice(0, 80))}`
+    );
+  }
+  return split.body;
+}
 import {
   applyYieldRecomputeAtomically,
   computeYieldEntries,
@@ -218,7 +238,7 @@ export function planCarry(
   const promotedKeys = new Set<string>();
   for (const row of rows) {
     if (row.shortSummary == null && row.estimatedValue == null) continue;
-    const key = carryKey(row.code, row.description, row.minShares, row.recordMonth);
+    const key = carryKey(row.code, carryBody(row.description), row.minShares, row.recordMonth);
     let estimatedValue = row.estimatedValue;
     let estimateValueSource = row.estimateValueSource;
     if (estimatedValue !== null) {
@@ -230,7 +250,7 @@ export function planCarry(
             `role の扱いを決めるまで削除も再 INSERT もしない)`
         );
       }
-      const group = plannedGroups.get(row.code)?.get(row.description) ?? {
+      const group = plannedGroups.get(row.code)?.get(carryBody(row.description)) ?? {
         minShares: [row.minShares],
         recordMonths: [row.recordMonth],
       };
@@ -314,7 +334,7 @@ export type BenefitRowPlan = {
   recordMonth: number;
   minShares: number;
   description: string;
-  /** 表の h3 見出し (原文)。判定の HOLD 走査用。DB には書かない。 */
+  /** 表の h3 見出し (原文)。headed 契約で description 先頭に persist し、判定の HOLD 走査に使う。 */
   heading: string;
 };
 
@@ -338,7 +358,8 @@ export function benefitRowsOf(
       continue;
     }
     for (const month of benefit.localRecordMonths) {
-      const desc = benefit.notes ? `${benefit.description}\n${benefit.notes}` : benefit.description;
+      const body = benefit.notes ? `${benefit.description}\n${benefit.notes}` : benefit.description;
+      const desc = headedDescription(benefit.heading, body);
       rows.push({ recordMonth: month, minShares: benefit.minShares, description: desc, heading: benefit.heading });
     }
   }
@@ -446,19 +467,19 @@ export async function importYutaiFull(
     let byCode = plannedGroups.get(p.data.code);
     if (!byCode) plannedGroups.set(p.data.code, (byCode = new Map()));
     for (const r of p.rows) {
-      const key = carryKey(p.data.code, r.description, r.minShares, r.recordMonth);
+      const key = carryKey(p.data.code, carryBody(r.description), r.minShares, r.recordMonth);
       const list = plannedMeta.get(key);
       if (list) {
         if (!list.includes(r.heading)) list.push(r.heading);
       } else {
         plannedMeta.set(key, [r.heading]);
       }
-      const g = byCode.get(r.description);
+      const g = byCode.get(carryBody(r.description));
       if (g) {
         g.minShares.push(r.minShares);
         g.recordMonths.push(r.recordMonth);
       } else {
-        byCode.set(r.description, { minShares: [r.minShares], recordMonths: [r.recordMonth] });
+        byCode.set(carryBody(r.description), { minShares: [r.minShares], recordMonths: [r.recordMonth] });
       }
     }
   }
@@ -576,7 +597,7 @@ export async function importYutaiFull(
           // 同じ (銘柄, 文言, 株数, 権利月) なら退避した解釈をそのまま戻す。
           // 新規/文言変更/context 変更は未解釈のまま入り、次の要約タスク書き出し
           // (export-summary-tasks.ts) の対象になる。
-          const previous = carried.get(carryKey(p.data.code, r.description, r.minShares, r.recordMonth));
+          const previous = carried.get(carryKey(p.data.code, carryBody(r.description), r.minShares, r.recordMonth));
           await db.insert(yutaiBenefits).values({
             stockId: p.stockId,
             genreId,

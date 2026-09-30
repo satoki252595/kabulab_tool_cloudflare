@@ -40,7 +40,7 @@ export type BenefitRow = {
   updatedAt: number;
 };
 
-const VIOLATION_RULES = ["annotation", "too_long", "prose", "empty"] as const satisfies readonly SummaryViolation["rule"][];
+const VIOLATION_RULES = ["annotation", "too_long", "prose", "empty", "internal"] as const satisfies readonly SummaryViolation["rule"][];
 
 /** `taskId` の形式 (`benefitKey` の出力形式)。結果ファイル側のスキーマ検証にも使う。 */
 export const TASK_ID_PATTERN = /^[0-9a-f]{16}$/;

@@ -249,8 +249,8 @@ async function reportYieldPreview(
  * その前に、検証時の対象タプル (`verifiedBenefits`) と適用時の再読を突き合わせ、
  * 検証→再読の間に変わっていたら batch を作らず送らず全体 STOP する
  * (再読の採用で旧 plan の上書きを許さない。ドリフト行の除外はしない)。
- * batch 先頭の preflight が full preimage を検証し、不一致は SQL エラーで
- * batch 全体 rollback。
+ * batch 先頭の preflight が projection preimage (射影) を検証し、不一致は
+ * SQL エラーで batch 全体 rollback。
  * ガードの snapshot は利回り計算と同一読取 (`fetchYieldInputs` 1 回)。
  * `data_date` は月次のまま。銘柄間の失敗は止めて同引数の再実行で回復する
  * (適用済み銘柄は無変更・冪等。`resolveTargetIds` の和集合で混合再開に対応)。
