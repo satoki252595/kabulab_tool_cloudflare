@@ -302,7 +302,7 @@ describe("applyImportAtomically", () => {
     expect(finOf(STOCK_A).yutai_yield).toBe(1.0070493454179255);
   });
 
-  it("再実行は冪等 (値は不変。要約の再適用だけ再送される)", async () => {
+  it("再実行は完全 no-op (同値省略で送信なし。値は不変)", async () => {
     const first = makeAtomicSender();
     await applyImportAtomically(db, first.sender, {
       targetIds: [1001, 1004],
@@ -318,10 +318,8 @@ describe("applyImportAtomically", () => {
       updates: [UPDATE_A],
       verifiedBenefits: readVerified([1001, 1004]),
     });
-    // A は preflight + 要約の再適用のみ (利回り・スコアは無変更で文なし)。D は送信なし。
-    expect(second.calls.map((c) => c.length)).toEqual([2]);
-    expect(second.calls[0][0].sql.startsWith("-- preflight")).toBe(true);
-    expect(second.calls[0][1].sql).toContain("UPDATE yutai_benefits");
+    // A も D も同値省略・利回り無変更で送信なし (preflight のみの batch は作らない)。
+    expect(second.calls).toEqual([]);
     expect(benefitOf(1001)).toMatchObject({ short_summary: "新要約A", estimated_value: 5000 });
     expect(finOf(STOCK_A).yutai_yield).toBeCloseTo(5.0352467, 6);
     expect(finOf(STOCK_D).yutai_yield).toBe(1.0);
@@ -433,6 +431,86 @@ describe("planAtomicBatches", () => {
         preimages: new Map(),
       })
     ).toThrow(/preimage がありません/);
+  });
+
+  it("preimage と 3 値完全一致の ID は省略し、欠落 ID は投げる", async () => {
+    const inputs = await fetchYieldInputs(db, [STOCK_A]);
+    const preimages = snapshotStockPreimages(inputs, [STOCK_A]);
+    const stockOfA = (id: number) => (id === 1001 ? STOCK_A : undefined);
+    const emptyYield = { entries: [], skippedNoRow: [], skippedNoScore: [] };
+    // fixture 行 1001 (旧要約A/1000/null) と完全一致 → batch なし。
+    const same: PlannedUpdate = {
+      taskId: "0123456789abcdef",
+      ids: [1001],
+      shortSummary: "旧要約A",
+      estimatedValue: 1000,
+      estimateValueSource: null,
+    };
+    expect(
+      planAtomicBatches({ updates: [same], yieldPlan: emptyYield, stockOfBenefit: stockOfA, preimages })
+    ).toEqual([]);
+    // 出典だけ違う (null→company) → 省略せず文を作る (来歴を隠さない)。
+    const sourceOnly: PlannedUpdate = {
+      taskId: "0123456789abcdef",
+      ids: [1001],
+      shortSummary: "旧要約A",
+      estimatedValue: 1000,
+      estimateValueSource: "company",
+    };
+    const batches = planAtomicBatches({
+      updates: [sourceOnly],
+      yieldPlan: emptyYield,
+      stockOfBenefit: stockOfA,
+      preimages,
+    });
+    expect(batches).toHaveLength(1);
+    expect(batches[0].statements).toHaveLength(2); // preflight + 要約
+    // preimage に無い ID は黙殺せず投げる。
+    const missing: PlannedUpdate = {
+      taskId: "0123456789abcdef",
+      ids: [9999],
+      shortSummary: "旧要約A",
+      estimatedValue: 1000,
+      estimateValueSource: null,
+    };
+    expect(() =>
+      planAtomicBatches({
+        updates: [missing],
+        yieldPlan: emptyYield,
+        stockOfBenefit: () => STOCK_A,
+        preimages,
+      })
+    ).toThrow(/preimage にありません/);
+  });
+
+  it("同一銘柄の複数更新は追記する (上書きで落とさない)", async () => {
+    const inputs = await fetchYieldInputs(db, [STOCK_A]);
+    const preimages = snapshotStockPreimages(inputs, [STOCK_A]);
+    const stockOfA = (id: number) => (id === 1001 ? STOCK_A : undefined);
+    const emptyYield = { entries: [], skippedNoRow: [], skippedNoScore: [] };
+    const u1: PlannedUpdate = {
+      taskId: "aaaaaaaaaaaaaaaa",
+      ids: [1001],
+      shortSummary: "新要約A1",
+      estimatedValue: 5000,
+      estimateValueSource: "company",
+    };
+    const u2: PlannedUpdate = {
+      taskId: "bbbbbbbbbbbbbbbb",
+      ids: [1001],
+      shortSummary: "新要約A2",
+      estimatedValue: 6000,
+      estimateValueSource: "company",
+    };
+    const batches = planAtomicBatches({
+      updates: [u1, u2],
+      yieldPlan: emptyYield,
+      stockOfBenefit: stockOfA,
+      preimages,
+    });
+    expect(batches).toHaveLength(1);
+    const benefit = batches[0].statements.filter((s) => s.sql.startsWith("UPDATE yutai_benefits"));
+    expect(benefit.map((s) => s.params[0])).toEqual(["新要約A1", "新要約A2"]);
   });
 });
 

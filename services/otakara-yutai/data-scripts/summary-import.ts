@@ -386,10 +386,34 @@ export function buildDescriptionUpdateStatements(
   rows: readonly { id: number; oldDescription: string; updatedAt: number }[],
   newDescription: string,
 ): D1BatchStatement[] {
-  return rows.map((r) => ({
-    sql: "UPDATE yutai_benefits SET description = ?, updated_at = (unixepoch()) WHERE id = ? AND description = ? AND updated_at = ?",
-    params: [newDescription, r.id, r.oldDescription, r.updatedAt],
-  }));
+  // 旧文と新文が同一の行は文を作らない (no-op 書き換えの再送防止)。
+  return rows
+    .filter((r) => r.oldDescription !== newDescription)
+    .map((r) => ({
+      sql: "UPDATE yutai_benefits SET description = ?, updated_at = (unixepoch()) WHERE id = ? AND description = ? AND updated_at = ?",
+      params: [newDescription, r.id, r.oldDescription, r.updatedAt],
+    }));
+}
+
+/**
+ * 全文修復の行分類 (再入証明用。全文だけが旧文/新文の一致を使う)。
+ * - `ALREADY_APPLIED`: 現文が新全文と一致 (適用済み。再送不要)
+ * - `CANDIDATE`: 現文が旧文と一致 (未適用。文の対象候補)
+ * - `STOP`: どちらでもない (drift。黙殺せず呼び出し側で STOP すること)
+ */
+export type DescriptionRepairClass =
+  | "ALREADY_APPLIED"
+  | "CANDIDATE"
+  | "STOP";
+
+export function classifyDescriptionRepair(input: {
+  current: string;
+  oldDescription: string;
+  newFull: string;
+}): DescriptionRepairClass {
+  if (input.current === input.newFull) return "ALREADY_APPLIED";
+  if (input.current === input.oldDescription) return "CANDIDATE";
+  return "STOP";
 }
 
 /**
