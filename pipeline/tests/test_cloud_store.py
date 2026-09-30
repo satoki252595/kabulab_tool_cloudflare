@@ -323,6 +323,21 @@ class TestD1Store:
             store.query("SELECT ?", [bad])
         assert captured == []
 
+    @pytest.mark.parametrize("bad", [{"a": 1}, "x", (1, 2), {1, 2}])
+    def test_non_list_params_sends_zero(self, monkeypatch, bad):
+        """params は list か None。それ以外 (dict/str/tuple…) は送らず弾く。
+
+        形検査なしでは dict→key 列・str→文字列へ素通しし、JSON params の
+        形が崩れる。実呼び出しは list のみ。
+        """
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        captured: list = []
+        store = self._store(monkeypatch, captured, {"success": True, "result": [{"success": True, "results": []}]})
+        with pytest.raises(D1Error, match="list か None"):
+            store.query("SELECT ?", bad)
+        assert captured == []
+
     def test_finite_scalar_binds_send(self, monkeypatch):
         captured: list = []
         store = self._store(monkeypatch, captured, {"success": True, "result": [{"success": True, "results": []}]})
@@ -589,6 +604,18 @@ class TestD1BatchUpsert:
         store = self._store(monkeypatch, captured)
         with pytest.raises(D1Error, match="列目"):
             store.upsert("t", ["a", "b"], [[1, 2], [3, bad]], conflict=["a"])
+        assert captured == []
+
+    @pytest.mark.parametrize("rows", ["ab", ("a", "b"), {"k": 1}, [["a", "b"], "cd"], [["a", "b"], ("c", "d")]])
+    def test_upsert_rejects_non_list_container_before_sending(self, monkeypatch, rows):
+        """rows 全体・各行は list 形が必須。str 行は幅一致でも文字 flatten するため
+        幅検査より先に弾く (sends 0)。"""
+        from jp_stock_pipeline.cloud_store.d1 import D1Error
+
+        captured: list = []
+        store = self._store(monkeypatch, captured)
+        with pytest.raises(D1Error, match="list"):
+            store.upsert("t", ["a", "b"], rows, conflict=["a"])
         assert captured == []
 
     def test_all_columns_as_conflict_key_is_rejected(self, monkeypatch):

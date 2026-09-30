@@ -92,6 +92,8 @@ class D1Store:
         再送が `duplicate column name` を返す」= 実際は適用済みなのに失敗として
         報告される、が起こりうる。
         """
+        if params is not None and not isinstance(params, list):
+            raise D1Error(f"D1 の params は list か None: {type(params).__name__}")
         if params and len(params) > MAX_BOUND_PARAMS:
             raise D1Error(
                 f"D1 のバインドパラメータ上限 {MAX_BOUND_PARAMS} 超過: {len(params)} 個"
@@ -201,10 +203,14 @@ class D1Store:
         テーブル名で修飾した列参照が更新前の既存値を指す（`excluded.col` は
         逆に挿入しようとした側の値を指す）。
         """
+        if not isinstance(rows, list):
+            raise D1Error(f"upsert の rows は list: {type(rows).__name__}")
         if not rows:
             return 0
         width = len(columns)
         for index, row in enumerate(rows):
+            if not isinstance(row, list):
+                raise D1Error(f"{index} 行目が list ではない: {type(row).__name__}")
             if len(row) != width:
                 raise D1Error(
                     f"{index} 行目の値の数が列数と違う: {len(row)} != {width}"
