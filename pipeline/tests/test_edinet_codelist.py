@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -228,6 +229,51 @@ class TestTrustBoundary:
         records = mod.parse_codelist(data)
         assert len(records) == 1
         assert records[0].code == "7203"
+
+
+class TestInspectCandidates:
+    """共有候補検査 (master_sync / sector33_sync 共通)。実 record 由来で組む。"""
+
+    def test_実フィクスチャは重複なし順序保持(self):
+        records = mod.parse_codelist(_zip_bytes())
+        candidates, holds = mod.inspect_codelist_candidates(records)
+        assert holds == []
+        assert [r.code for r in candidates] == [r.code for r in records]
+
+    def test_同一tickerの重複はSTOP(self):
+        records = mod.parse_codelist(_zip_bytes())
+        with pytest.raises(mod.CodelistInspectError) as ei:
+            mod.inspect_codelist_candidates([*records, records[0]])
+        assert ei.value.kind == "dup-ticker-stop"
+
+    def test_同一tickerの矛盾行もSTOP(self):
+        records = mod.parse_codelist(_zip_bytes())
+        other = replace(records[0], edinet_code="E99999", name="別名")
+        with pytest.raises(mod.CodelistInspectError) as ei:
+            mod.inspect_codelist_candidates([*records, other])
+        assert ei.value.kind == "dup-ticker-stop"
+
+    def test_同一EDINETの複数tickerはSTOP(self):
+        records = mod.parse_codelist(_zip_bytes())
+        other = replace(records[0], code="9999")
+        assert "9999" not in {r.code for r in records}
+        with pytest.raises(mod.CodelistInspectError) as ei:
+            mod.inspect_codelist_candidates([*records, other])
+        assert ei.value.kind == "dup-issuer-stop"
+
+    def test_blankEDINETは衝突しない(self):
+        records = mod.parse_codelist(_zip_bytes())
+        a = replace(records[0], edinet_code=None)
+        b = replace(records[1], edinet_code=None)
+        candidates, _ = mod.inspect_codelist_candidates([a, b])
+        assert [r.code for r in candidates] == [a.code, b.code]
+
+    def test_0000phantomは非候補とHOLD(self):
+        records = mod.parse_codelist(_zip_bytes())
+        phantom = replace(records[0], code="0000")
+        candidates, holds = mod.inspect_codelist_candidates([*records, phantom])
+        assert "0000" not in {r.code for r in candidates}
+        assert [h.kind for h in holds] == ["legal-missing-ticker"]
 
 
 class TestFetchCodelist:

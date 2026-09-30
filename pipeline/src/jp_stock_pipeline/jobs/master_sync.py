@@ -65,11 +65,17 @@ def execute(ctx: JobContext) -> None:
     records = edinet_codelist.parse_codelist(
         artifact.local_path.read_bytes(), raw_page_id=raw_page_id
     )
-    fetched_codes = {r.code for r in records}
-    # 同一コードの重複を除去（事前マップ + page_resolved 運用では、同一 run 内に同一
-    # コードが複数あると未収録キーが二重 create されうる。コードリストはコード一意の
-    # はずだが防御的に潰す。最後の出現を採用）。
-    upsert_records = _dedup_by_code(apply_limit(records, ctx.args.limit))
+    # 候補検査は全件 parse 後・limit 前・① upsert 前 (sector33_sync と共通)。
+    # 重複は last-wins で潰さず STOP する (strict unique)。
+    try:
+        candidates, cand_holds = edinet_codelist.inspect_codelist_candidates(records)
+    except edinet_codelist.CodelistInspectError as exc:
+        ctx.add_failure("codelist-candidates", f"{exc.kind}: {exc}")
+        return
+    for hold in cand_holds:
+        logger.warning("候補 HOLD (%s): %s", hold.kind, hold.detail)
+    fetched_codes = {r.code for r in candidates}
+    upsert_records = apply_limit(candidates, ctx.args.limit)
     logger.info("コードリスト: %d 銘柄を ① へ upsert", len(upsert_records))
 
     # ① 既存行マップ {code: page_id} を一括取得（per-record 検索を排除 §8.3。
@@ -133,7 +139,7 @@ def execute(ctx: JobContext) -> None:
         logger.info("--limit 指定のため D1 core_stocks.sector33 の充填はスキップ (部分取得)")
         return
     _detect_delistings(ctx, fetched_codes, master_map, map_ok)
-    _sync_sector33(ctx, records)
+    _sync_sector33(ctx, candidates)
     _sync_notion_pages(ctx, master_entries, map_ok)
 
 
@@ -194,7 +200,9 @@ def _sync_sector33(ctx: JobContext, records: list) -> None:
     if store is None:
         logger.info("D1 未設定のため core_stocks.sector33 の充填はスキップ")
         return
-    codelist = [(r.code, r.sector33) for r in _dedup_by_code(records)]
+    # 呼び出し前に検査済みの候補だけが来る。ここで collapse しない
+    # (重複は planner が STOP する。last-wins は廃止)。
+    codelist = [(r.code, r.sector33) for r in records]
     try:
         current = store.query(core_stocks.SECTOR33_SNAPSHOT_SQL)
     except D1Error as exc:
@@ -226,14 +234,6 @@ def _sync_sector33(ctx: JobContext, records: list) -> None:
         "core_stocks.sector33: %d 行を更新（うち NULL %d 件 / %d 文 / 読んだ行 %d 件）",
         written, to_null, len(statements), len(current),
     )
-
-
-def _dedup_by_code(records: list) -> list:
-    """同一銘柄コードの重複レコードを除去する（最後の出現を採用、順序は初出を維持）。"""
-    out: dict[str, object] = {}
-    for record in records:
-        out[record.code] = record
-    return list(out.values())
 
 
 def _detect_delistings(

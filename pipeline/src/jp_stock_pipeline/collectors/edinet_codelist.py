@@ -15,6 +15,7 @@ import io
 import logging
 import re
 import zipfile
+from dataclasses import dataclass
 from datetime import date
 
 from ..config import Settings
@@ -185,6 +186,65 @@ def parse_codelist(
             )
         )
     return records
+
+
+# --- 候補検査 (master_sync / sector33_sync 共通) -------------------------------
+
+# `00000` 証券コード由来の phantom ticker。listed として parse されるが
+# 銘柄を指さないため候補から外し HOLD 診断にする (STOP しない)。
+_PHANTOM_TICKER = "0000"
+
+
+class CodelistInspectError(ValueError):
+    """候補検査の typed STOP。`kind` で事由を区別する。"""
+
+    def __init__(self, kind: str, detail: str) -> None:
+        super().__init__(detail)
+        self.kind = kind
+
+
+@dataclass(frozen=True)
+class CandidateHold:
+    """非候補の typed HOLD 診断。"""
+
+    kind: str  # "legal-missing-ticker"
+    detail: str
+
+
+def inspect_codelist_candidates(
+    records: list[StockMasterRecord],
+) -> tuple[list[StockMasterRecord], list[CandidateHold]]:
+    """全 records の正規化 ticker/issuer 一意性を検査し候補と HOLD に分離する。
+
+    呼び出し位置: 全件 parse 後・limit 前・① upsert 前 (両 job 共通)。
+    - `0000` phantom (`00000` 由来) → 非候補 + HOLD (STOP しない)。
+    - 同一 ticker の複数行 (identical/conflicting 問わず) → STOP。
+    - 同一 EDINET code の複数 ticker (blank EDINET 除外) → STOP。
+    - 候補は入力順 (dedup しない。last-wins は廃止)。
+    """
+    holds = [
+        CandidateHold("legal-missing-ticker", f"00000 由来 (edinet={r.edinet_code})")
+        for r in records
+        if r.code == _PHANTOM_TICKER
+    ]
+    candidates = [r for r in records if r.code != _PHANTOM_TICKER]
+    seen: set[str] = set()
+    for r in candidates:
+        if r.code in seen:
+            raise CodelistInspectError(
+                "dup-ticker-stop", f"{r.code} が複数行 (edinet={r.edinet_code})"
+            )
+        seen.add(r.code)
+    by_edinet: dict[str, set[str]] = {}
+    for r in candidates:
+        if r.edinet_code:
+            by_edinet.setdefault(r.edinet_code, set()).add(r.code)
+    for edinet, tickers in sorted(by_edinet.items()):
+        if len(tickers) > 1:
+            raise CodelistInspectError(
+                "dup-issuer-stop", f"{edinet}: {','.join(sorted(tickers))}"
+            )
+    return candidates, holds
 
 
 def convert_codelist(artifact: RawArtifact) -> RawArtifact:

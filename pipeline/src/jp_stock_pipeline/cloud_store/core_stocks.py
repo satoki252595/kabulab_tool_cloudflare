@@ -71,7 +71,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-from ..contracts.sector33 import normalize_sector33
+from ..contracts.sector33 import TSE_SECTOR33_NAMES, normalize_sector33
 from ..contracts.stock_code import source_code_to_ticker
 from .d1 import MAX_BOUND_PARAMS, MAX_COMPOUND_SELECT_TERMS
 
@@ -207,23 +207,34 @@ SECTOR33_SNAPSHOT_SQL = f"SELECT code, {SECTOR33_COLUMN} FROM {TABLE}"
 def plan_sector33_updates(
     current_rows: Iterable[Mapping[str, object]],
     codelist: Iterable[tuple[str | None, str | None]],
-) -> dict[str, str | None]:
+) -> dict[str, str]:
     """書くべき `{code: 新しい sector33}` を返す（値が変わる行だけ）。
 
-    - `current_rows` は `SECTOR33_SNAPSHOT_SQL` の結果（D1 側の正）
+    - `current_rows` は D1 側の正（`{code, sector33}` の行）
     - `codelist` は `(証券コード, 提出者業種)` の組。コードは `source_code_to_ticker`
       で 4 文字にする（5 文字は末尾 "0" のときだけ。別証券への取り違えを避ける）
     - **コードリストに現れない銘柄は触らない。** コードリストの一時的な欠落や
       REIT・インフラファンド（EDINET に証券コードが無い）で既存値を NULL に
-      潰さない。NULL を書くのは「コードリストに居て、正規化結果が None」の銘柄だけ
-    - 同じティッカーが 2 回現れたら後勝ち（`master_sync._dedup_by_code` と同じ）
+      潰さない
+    - **sector 未知 (正規化結果が None) は retain する。** None を desired に
+      入れず、確証済みの既値を NULL 消去しない
+    - 同じティッカーが 2 回現れたら STOP する (last-wins は廃止)
     """
-    desired: dict[str, str | None] = {}
+    desired: dict[str, str] = {}
+    # 重複検査は sector の成否と独立した seen で行う。desired 基準では
+    # 先行行の未知 sector が continue されて後続の重複を見逃すため。
+    seen: set[str] = set()
     for raw_code, raw_sector in codelist:
         ticker = source_code_to_ticker(raw_code)
         if ticker is None:
             continue
-        desired[ticker] = normalize_sector33(raw_sector)
+        if ticker in seen:
+            raise ValueError(f"sector33 plan: ticker 重複 {ticker} (STOP)")
+        seen.add(ticker)
+        mapped = normalize_sector33(raw_sector)
+        if mapped is None:
+            continue  # 未知 sector は retain (None を desired へ入れない)
+        desired[ticker] = mapped
 
     changes: dict[str, str | None] = {}
     for row in current_rows:
@@ -252,7 +263,15 @@ def build_sector33_updates(changes: Mapping[str, str | None]) -> list[tuple[str,
     値でまとめる形なら 34 値 × 99 行で約 50 文に減る。加えて CASE は WHEN と IN の
     列が 1 つでもずれると ELSE 無しで NULL を書く（既存値を黙って潰す）が、
     値でまとめる形はその失敗の仕方を持たない。
+
+    小さな backstop として、None 値と 33 業種外の名称はここでも拒否する
+    (plan 側で排除済みのはず。二重の関門)。
     """
+    for code, value in changes.items():
+        if value is None:
+            raise ValueError(f"sector33 build: None を書かない ({code})")
+        if value not in TSE_SECTOR33_NAMES:
+            raise ValueError(f"sector33 build: 33業種外の名称 {value!r} ({code})")
     by_value: dict[str | None, list[str]] = {}
     for code in sorted(changes):
         by_value.setdefault(changes[code], []).append(code)
