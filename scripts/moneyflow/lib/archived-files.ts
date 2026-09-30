@@ -7,7 +7,7 @@
  * 取得したらすぐダウンロードする。
  */
 import { listPageFiles, notionEnv } from "../../../src/shared/notion-archive/index.js";
-import { notionRequest } from "../../../src/shared/notion-archive/client.js";
+import { assertCursorProgress, notionRequest } from "../../../src/shared/notion-archive/client.js";
 import { findBackupChildByTitle, queryUniqueRow } from "../../../src/shared/notion-archive/archive.js";
 import { MONEYFLOW_PRIMARY_DB_TITLE } from "../../../src/shared/notion-archive/moneyflow.js";
 import { sha256HexBytes } from "../../../src/shared/sha256.js";
@@ -78,6 +78,7 @@ export async function findArchivedRecordByKey(primaryDbId: string, key: string):
 export async function listArchivedRecordsByPrefix(primaryDbId: string, prefix: string): Promise<ArchivedRecord[]> {
   const out: ArchivedRecord[] = [];
   let cursor: string | null = null;
+  const seen = new Set<string>();
   for (;;) {
     const body: Record<string, unknown> = {
       filter: { property: "Key", title: { starts_with: prefix } },
@@ -89,6 +90,9 @@ export async function listArchivedRecordsByPrefix(primaryDbId: string, prefix: s
       `/databases/${primaryDbId}/query`,
       body
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const r of res.results) out.push(toArchivedRecord(r));
     if (!res.has_more || !res.next_cursor) break;
     cursor = res.next_cursor;

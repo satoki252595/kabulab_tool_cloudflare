@@ -329,6 +329,24 @@ function assertListEnvelope(body: unknown, family: ReadListFamily): void {
   }
 }
 
+/**
+ * pagination cursor の前進表明 (#199 の兄弟穴対策。各列挙の局所 Set 用)。
+ * envelope の型・pairing は入口 guard 済みの前提で、反復 (same・A→B→A)
+ * だけを追加 GET 前に止める。global 状態・cursor cache は持たない
+ * (呼び出し側が列挙ごとに Set を作る)。エラー文に値を含めない。
+ */
+export function assertCursorProgress(
+  seen: Set<string>,
+  nextCursor: string
+): void {
+  if (seen.has(nextCursor)) {
+    throw new NotionConfigError(
+      "Notion list 応答が不正: next_cursor の反復 (追加取得前に停止)"
+    );
+  }
+  seen.add(nextCursor);
+}
+
 /** JSON API 呼び出し (GET/POST/PATCH/DELETE)。非 2xx は throw (ルール2)。 */
 export async function notionRequest<T = unknown>(
   method: "GET" | "POST" | "PATCH" | "DELETE",

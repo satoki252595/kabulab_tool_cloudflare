@@ -140,7 +140,7 @@ def test_reads_and_property_overwrites_still_recover(client, operation):
     calls = sdk_responses(client, [
         httpx.ReadTimeout("timeout"),
         (503, {"code": "service_unavailable", "message": "wait"}, {"Retry-After": "4"}),
-        (200, {"results": [], "id": "existing"}, {}),
+        (200, {"results": [], "id": "existing", "has_more": False, "next_cursor": None}, {}),
     ])
     operation(client)
     assert len(calls) == 3
@@ -176,8 +176,9 @@ def test_raw_creation_rate_limits_keep_retry_after(client, status):
     ("POST", "databases/db/query"), ("POST", "/data_sources/source/query/"),
 ])
 def test_raw_reads_including_post_recover(client, method, path):
+    terminal = {"id": "result", "results": [], "has_more": False, "next_cursor": None}
     client._session.request.side_effect = [
-        requests.Timeout("timeout"), raw_response(503), raw_response(200),
+        requests.Timeout("timeout"), raw_response(503), raw_response(200, terminal),
     ]
     assert client.raw_api(method, path)["id"] == "result"
     assert client._session.request.call_count == 3
@@ -293,6 +294,7 @@ class TestQueryTruncation:
         client = self._client(monkeypatch, {
             "results": [{"id": "x"}],
             "has_more": False,
+            "next_cursor": None,
             "request_status": {
                 "type": "incomplete", "incomplete_reason": "query_result_limit_reached"
             },
@@ -307,6 +309,7 @@ class TestQueryTruncation:
         client = self._client(monkeypatch, {
             "results": [{"id": str(i)} for i in range(QUERY_RESULT_LIMIT)],
             "has_more": False,
+            "next_cursor": None,
         })
         with pytest.raises(QueryTruncatedError):
             client.query_database("db", page_size=QUERY_RESULT_LIMIT, strict=True)
@@ -315,6 +318,7 @@ class TestQueryTruncation:
         client = self._client(monkeypatch, {
             "results": [{"id": "x"}],
             "has_more": False,
+            "next_cursor": None,
             "request_status": {"type": "incomplete"},
         })
         with caplog.at_level("WARNING"):
@@ -323,7 +327,9 @@ class TestQueryTruncation:
         assert any("打ち切られた" in r.message for r in caplog.records)
 
     def test_normal_result_neither_warns_nor_raises(self, monkeypatch, caplog):
-        client = self._client(monkeypatch, {"results": [{"id": "x"}], "has_more": False})
+        client = self._client(
+            monkeypatch, {"results": [{"id": "x"}], "has_more": False, "next_cursor": None}
+        )
         with caplog.at_level("WARNING"):
             rows = client.query_database("db", strict=True)
         assert len(rows) == 1
@@ -342,3 +348,195 @@ def test_list_page_property_items_follows_cursor(client):
     assert len(calls) == 2
     assert calls[0].method == "GET" and "/pages/page-1/properties/" in str(calls[0].url)
     assert "start_cursor=c2" in str(calls[1].url)
+
+
+LIST_OPS = [
+    lambda c: c.query_database("db"),
+    lambda c: c.list_page_property_items("page", "prop"),
+    lambda c: c.list_child_blocks("block"),
+]
+
+MALFORMED_ENVELOPES = [
+    ("non-dict", ["not", "a", "dict"]),
+    ("missing-results", {"has_more": False, "next_cursor": None}),
+    ("results-non-list", {"results": {}, "has_more": False, "next_cursor": None}),
+    ("missing-has-more", {"results": [], "next_cursor": None}),
+    ("has-more-int", {"results": [], "has_more": 1, "next_cursor": "c"}),
+    ("has-more-str", {"results": [], "has_more": "true", "next_cursor": None}),
+    ("missing-cursor", {"results": [], "has_more": False}),
+    ("cursor-int", {"results": [], "has_more": True, "next_cursor": 123}),
+    ("true-none-cursor", {"results": [], "has_more": True, "next_cursor": None}),
+    ("true-blank-cursor", {"results": [], "has_more": True, "next_cursor": "  "}),
+    ("false-str-cursor", {"results": [], "has_more": False, "next_cursor": "c"}),
+    ("object-page", {"object": "page", "results": [], "has_more": False, "next_cursor": None}),
+    ("scalar-missing-type", {"object": "property_item", "id": "x"}),
+]
+
+
+@pytest.mark.parametrize("operation", LIST_OPS, ids=["query", "property", "blocks"])
+@pytest.mark.parametrize("case,body", MALFORMED_ENVELOPES, ids=[m[0] for m in MALFORMED_ENVELOPES])
+def test_malformed_list_envelope_stops_after_single_fetch(client, operation, case, body):
+    """壊れた envelope は 1 fetch で即 STOP。再試行も追加 GET もしない。"""
+    calls = sdk_responses(client, [(200, body, {})])
+    with pytest.raises(module.NotionConfigError, match="再試行しません"):
+        operation(client)
+    assert len(calls) == 1
+    module.time.sleep.assert_not_called()
+
+
+def _list_page(results, has_more, next_cursor):
+    return {"object": "list", "results": results, "has_more": has_more, "next_cursor": next_cursor}
+
+
+@pytest.mark.parametrize("operation", LIST_OPS, ids=["query", "property", "blocks"])
+@pytest.mark.parametrize("cursors,n_calls", [(["A", "A"], 2), (["A", "B", "A"], 3)],
+                                        ids=["same", "aba"])
+def test_repeated_cursor_stops_before_extra_get(client, operation, cursors, n_calls):
+    """same/A→B→A は追加 GET 前に止める。無限ページネーションにしない。"""
+    pages = [
+        _list_page([{"id": f"r{i}"}], True, cur) for i, cur in enumerate(cursors)
+    ]
+    pages.append(_list_page([{"id": "never"}], False, None))
+    calls = sdk_responses(client, [(200, p, {}) for p in pages])
+    with pytest.raises(module.NotionConfigError, match="同一 cursor の再送"):
+        operation(client)
+    assert len(calls) == n_calls
+    module.time.sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("operation", LIST_OPS, ids=["query", "property", "blocks"])
+def test_normal_two_pages_concatenate(client, operation):
+    first = _list_page([{"id": "a"}], True, "c2")
+    second = _list_page([{"id": "b"}], False, None)
+    calls = sdk_responses(client, [(200, first, {}), (200, second, {})])
+    assert [r["id"] for r in operation(client)] == ["a", "b"]
+    assert len(calls) == 2
+    # query は POST body、他は URL に cursor を載せる。
+    second_call = str(calls[1].url) + calls[1].content.decode()
+    assert "c2" in second_call and "start_cursor" in second_call
+
+
+def test_query_max_pages_returns_first_page_only(client):
+    first = _list_page([{"id": "a"}], True, "c2")
+    calls = sdk_responses(client, [(200, first, {})])
+    assert client.query_database("db", max_pages=1) == [{"id": "a"}]
+    assert len(calls) == 1
+
+
+def test_scalar_property_item_returns_single_item(client):
+    """正規 scalar (object=property_item + type 判別子の union 形) だけ通す。"""
+    body = {"object": "property_item", "id": "p", "type": "number", "number": 5}
+    calls = sdk_responses(client, [(200, body, {})])
+    assert client.list_page_property_items("page", "prop") == [body]
+    assert len(calls) == 1
+
+
+def test_scalar_after_list_pages_is_rejected(client):
+    calls = sdk_responses(client, [
+        (200, _list_page([{"id": "a"}], True, "c2"), {}),
+        (200, {"object": "property_item", "id": "p", "type": "number", "number": 5}, {}),
+    ])
+    with pytest.raises(module.NotionConfigError, match="list 頁の後に scalar"):
+        client.list_page_property_items("page", "prop")
+    assert len(calls) == 2
+
+
+def test_config_error_carries_no_id_body_or_cursor_values(client):
+    """検証失敗の文面に ID/body/cursor 値を入れない。"""
+    body = {"results": [{"id": "secret-page-id"}], "has_more": False,
+            "next_cursor": "zz9secretcursor"}
+    sdk_responses(client, [(200, body, {})])
+    with pytest.raises(module.NotionConfigError) as excinfo:
+        client.query_database("db")
+    message = str(excinfo.value)
+    assert "secret-page-id" not in message
+    assert "zz9secretcursor" not in message
+
+
+def test_sdk_list_decode_failure_is_config_error_without_retry(client):
+    """SDK 経路の JSON decode 失敗は ConfigError 化し、retry に入れない。"""
+    calls = []
+
+    def send(request):
+        calls.append(request)
+        return httpx.Response(200, content=b"not json{{{", headers={}, request=request)
+
+    client._client.client.send = send
+    with pytest.raises(module.NotionConfigError, match="decode に失敗"):
+        client.query_database("db")
+    assert len(calls) == 1
+    module.time.sleep.assert_not_called()
+
+
+def _raw_invalid_json():
+    response = requests.Response()
+    response.status_code = 200
+    response._content = b"not json{{{"
+    return response
+
+
+@pytest.mark.parametrize("method,path", [
+    ("POST", "search"),
+    ("POST", "databases/db/query"),
+    ("GET", "blocks/block/children"),
+    ("GET", "pages/page/properties/prop"),
+])
+def test_raw_read_list_decode_failure_never_retries(client, method, path):
+    """read-list の raw JSON decode 失敗は即 ConfigError。call 1 回・sleep 0。"""
+    client._session.request.side_effect = [_raw_invalid_json(), raw_response(200)]
+    with pytest.raises(module.NotionConfigError, match="decode に失敗"):
+        client.raw_api(method, path)
+    assert client._session.request.call_count == 1
+    module.time.sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("method,path", [
+    ("POST", "search"),
+    ("POST", "databases/db/query"),
+    ("GET", "blocks/block/children"),
+])
+def test_raw_read_list_envelope_is_validated(client, method, path):
+    good = {"object": "list", "results": [{"id": "a"}], "has_more": False, "next_cursor": None}
+    client._session.request.side_effect = [raw_response(200, good)]
+    assert client.raw_api(method, path)["results"] == [{"id": "a"}]
+    bad = {"results": [], "has_more": 1, "next_cursor": "c"}
+    client._session.request.side_effect = [raw_response(200, bad), raw_response(200)]
+    with pytest.raises(module.NotionConfigError, match="exact bool"):
+        client.raw_api(method, path)
+    assert client._session.request.call_count == 2
+
+
+def test_raw_property_scalar_passes_and_arbitrary_object_rejected(client):
+    scalar = {"object": "property_item", "id": "p", "type": "checkbox", "checkbox": True}
+    client._session.request.side_effect = [raw_response(200, scalar)]
+    assert client.raw_api("GET", "pages/page/properties/prop") == scalar
+    client._session.request.side_effect = [
+        raw_response(200, {"object": "page", "id": "p"}), raw_response(200),
+    ]
+    with pytest.raises(module.NotionConfigError, match="list/property_item 以外"):
+        client.raw_api("GET", "pages/page/properties/prop")
+    assert client._session.request.call_count == 2
+
+
+def test_raw_create_decode_failure_keeps_unknown_no_resend_contract(client):
+    """raw 作成の decode 失敗は従来どおり結果不明・再送なし (validation 対象外)。"""
+    client._session.request.side_effect = [_raw_invalid_json(), raw_response(200)]
+    with pytest.raises(module.NotionRequestError, match="結果不明"):
+        client.raw_api("POST", "file_uploads", json_body={})
+    assert client._session.request.call_count == 1
+    module.time.sleep.assert_not_called()
+
+
+def test_sdk_create_decode_failure_is_not_retried_nor_validated(client):
+    """SDK 作成の成功 shape は validation 対象外。decode 失敗はそのまま送出・再送なし。"""
+    calls = []
+
+    def send(request):
+        calls.append(request)
+        return httpx.Response(200, content=b"not json{{{", headers={}, request=request)
+
+    client._client.client.send = send
+    with pytest.raises(json.JSONDecodeError):
+        client.create_page(parent={"database_id": "db"}, properties={})
+    assert len(calls) == 1
+    module.time.sleep.assert_not_called()

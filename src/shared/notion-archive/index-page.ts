@@ -16,7 +16,7 @@ import {
   findBackupChildByTitle,
   selectOldestPageId,
 } from "./archive.js";
-import { notionRequest } from "./client.js";
+import { assertCursorProgress, notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import { INDEX_PAGE_TITLE, buildIndexBlocks } from "./map.js";
 
@@ -57,6 +57,7 @@ export interface EnsureIndexPageOptions {
 async function listChildBlockIds(pageId: string): Promise<string[]> {
   const ids: string[] = [];
   let cursor: string | null = null;
+  const seen = new Set<string>();
   for (;;) {
     const qs: string =
       cursor !== null
@@ -66,6 +67,9 @@ async function listChildBlockIds(pageId: string): Promise<string[]> {
       "GET",
       `/blocks/${pageId}/children${qs}`
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const b of res.results) ids.push(b.id);
     if (!res.has_more || res.next_cursor === null) break;
     cursor = res.next_cursor;

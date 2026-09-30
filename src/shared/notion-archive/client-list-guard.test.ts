@@ -229,6 +229,33 @@ describe("notion-archive client list guard", () => {
     expect((err as Error).message).not.toContain("CURSORSECRET");
   });
 
+  describe("assertCursorProgress", () => {
+    it.each([
+      ["same cursor", ["a", "a"]],
+      ["A→B→A", ["a", "b", "a"]],
+    ])("%s は 2 度目で throw する", async (_name, cursors) => {
+      const { assertCursorProgress } = await import("./client.js");
+      const { NotionConfigError } = await import("./env.js");
+      const seen = new Set<string>();
+      for (const c of cursors.slice(0, -1)) assertCursorProgress(seen, c);
+      expect(() =>
+        assertCursorProgress(seen, cursors[cursors.length - 1]!)
+      ).toThrow(NotionConfigError);
+      expect(() =>
+        assertCursorProgress(seen, cursors[cursors.length - 1]!)
+      ).toThrow("next_cursor の反復");
+    });
+
+    it("unique cursors は通過し Set に残る", async () => {
+      const { assertCursorProgress } = await import("./client.js");
+      const seen = new Set<string>();
+      assertCursorProgress(seen, "a");
+      assertCursorProgress(seen, "b");
+      assertCursorProgress(seen, "c");
+      expect([...seen].sort()).toEqual(["a", "b", "c"]);
+    });
+  });
+
   describe("page-property union", () => {
     const propPath =
       "/pages/pppppppppppppppppppppppppppppppp/properties/ttitle";

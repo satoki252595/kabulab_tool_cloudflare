@@ -39,7 +39,7 @@
  * ため。archived 行は残るが非表示で、移行は write-once のため通常出ない)。
  */
 import { queryUniqueRow } from "./archive.js";
-import { notionRequest } from "./client.js";
+import { assertCursorProgress, notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 
 /** rich_text 1 ブロックの上限 (archive.ts と同一値) */
@@ -301,30 +301,23 @@ export async function readStockTextRow(
   const blocks: HeadingBlock[] = [];
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
-  let page = 0;
   for (;;) {
     const qs: string =
       cursor !== null
         ? `?start_cursor=${cursor}&page_size=100`
         : "?page_size=100";
     // envelope は client の共通 guard が検証済み (不正は NotionConfigError)。
-    // ここでは反復カーソルの検出と literal false 終端だけを担う。
+    // 反復は本文処理より前、終端は has_more===false のみ。
     const res: ChildrenResponse = await notionRequest<ChildrenResponse>(
       "GET",
       `/blocks/${rowPageId}/children${qs}`
     );
-    page += 1;
+    if (res.has_more === true) {
+      assertCursorProgress(seenCursors, res.next_cursor as string);
+    }
     blocks.push(...res.results);
     if (res.has_more === false) break;
-    const next = res.next_cursor as string;
-    // 反復カーソルは追加 GET 前に停止 (重複・無限読取の防止)。
-    if (seenCursors.has(next)) {
-      throw new Error(
-        `Notion 有報テキスト行のページ応答が不正 (page=${rowPageId} 頁=${page}): next_cursor の反復`
-      );
-    }
-    seenCursors.add(next);
-    cursor = next;
+    cursor = res.next_cursor as string;
   }
   const [marker, ...rest] = blocks;
   if (

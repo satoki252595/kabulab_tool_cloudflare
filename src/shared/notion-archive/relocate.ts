@@ -13,7 +13,7 @@
  * からも守るための窓口として `client.ts` の `notionRequest`/`movePage`/
  * `moveDatabase` をラップして再輸出する。
  */
-import { movePage, moveDatabase, notionRequest } from "./client.js";
+import { movePage, moveDatabase, assertCursorProgress, notionRequest } from "./client.js";
 import type { MovePageParent } from "./client.js";
 
 export { movePage, moveDatabase };
@@ -50,6 +50,7 @@ export async function findDatabasesByTitlePrefix(
   const wantParent = parentPageId.replace(/-/g, "");
   const hits: FoundDatabase[] = [];
   let cursor: string | null = null;
+  const seen = new Set<string>();
   for (;;) {
     const body: Record<string, unknown> = {
       query: prefix,
@@ -58,6 +59,9 @@ export async function findDatabasesByTitlePrefix(
     };
     if (cursor) body.start_cursor = cursor;
     const res = await notionRequest<SearchResponse>("POST", "/search", body);
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const r of res.results) {
       if (r.archived === true || r.in_trash === true) continue;
       if (r.parent?.type !== "page_id") continue;
@@ -143,6 +147,7 @@ export async function listDirectChildren(
 ): Promise<{ children: RemainingChild[]; truncated: boolean }> {
   const children: RemainingChild[] = [];
   let cursor: string | null = null;
+  const seen = new Set<string>();
   let truncated = true;
   for (let p = 0; p < maxPages; p++) {
     const qs: string =
@@ -153,6 +158,9 @@ export async function listDirectChildren(
       "GET",
       `/blocks/${pageId}/children${qs}`
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const b of res.results) {
       children.push({
         id: b.id,

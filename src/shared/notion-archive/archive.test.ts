@@ -1022,6 +1022,112 @@ describe("notion-archive archive (parentPageId)", () => {
     });
   });
 
+  describe("pagination cursor 反復 (#199 兄弟穴。create/delete なし)", () => {
+    const TITLE = "一次データ｜moneyflow";
+    const dbHit = (id: string) => ({
+      id,
+      created_time: "2026-09-28T00:00:00.000Z",
+      parent: { type: "page_id", page_id: ARCHIVE_PAGE },
+      title: [{ plain_text: TITLE }],
+    });
+    const childDb = (id: string) => ({
+      id,
+      type: "child_database",
+      child_database: { title: TITLE },
+    });
+    const searchCalls = () =>
+      calls.filter((c) => new URL(c.url).pathname === "/v1/search");
+    const childrenCalls = () =>
+      calls.filter((c) => new URL(c.url).pathname.includes("/children"));
+
+    it("search の same cursor は追加 GET 前に停止する", async () => {
+      route("POST", "/v1/search", [
+        { results: [], has_more: true, next_cursor: "a" },
+        { results: [], has_more: true, next_cursor: "a" },
+        { results: [], has_more: false, next_cursor: null },
+      ]);
+      const { findAllBackupChildrenByTitle } = await load();
+      await expect(
+        findAllBackupChildrenByTitle({
+          parentPageId: ARCHIVE_PAGE,
+          title: TITLE,
+          kind: "database",
+        })
+      ).rejects.toThrow("next_cursor の反復");
+      expect(searchCalls()).toHaveLength(2);
+    });
+
+    it("search の A→B→A は追加 GET 前に停止する", async () => {
+      route("POST", "/v1/search", [
+        { results: [], has_more: true, next_cursor: "a" },
+        { results: [], has_more: true, next_cursor: "b" },
+        { results: [], has_more: true, next_cursor: "a" },
+        { results: [], has_more: false, next_cursor: null },
+      ]);
+      const { findAllBackupChildrenByTitle } = await load();
+      await expect(
+        findAllBackupChildrenByTitle({
+          parentPageId: ARCHIVE_PAGE,
+          title: TITLE,
+          kind: "database",
+        })
+      ).rejects.toThrow("next_cursor の反復");
+      expect(searchCalls()).toHaveLength(3);
+    });
+
+    it("children の same cursor は追加 GET 前に停止する", async () => {
+      route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [
+        { results: [], has_more: true, next_cursor: "a" },
+        { results: [], has_more: true, next_cursor: "a" },
+        { results: [], has_more: false, next_cursor: null },
+      ]);
+      const { findAllChildDatabases } = await load();
+      await expect(
+        findAllChildDatabases(ARCHIVE_PAGE, TITLE)
+      ).rejects.toThrow("next_cursor の反復");
+      expect(childrenCalls()).toHaveLength(2);
+    });
+
+    it("正常な複数ページは全件返す (cursor 進行を止めない)", async () => {
+      route("POST", "/v1/search", [
+        {
+          results: [dbHit("db-1")],
+          has_more: true,
+          next_cursor: "a",
+        },
+        {
+          results: [dbHit("db-2")],
+          has_more: false,
+          next_cursor: null,
+        },
+      ]);
+      route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [
+        {
+          results: [childDb("c-1")],
+          has_more: true,
+          next_cursor: "b",
+        },
+        {
+          results: [childDb("c-2")],
+          has_more: false,
+          next_cursor: null,
+        },
+      ]);
+      const { findAllBackupChildrenByTitle, findAllChildDatabases } =
+        await load();
+      const hits = await findAllBackupChildrenByTitle({
+        parentPageId: ARCHIVE_PAGE,
+        title: TITLE,
+        kind: "database",
+      });
+      expect(hits.map((h) => h.id).sort()).toEqual(["db-1", "db-2"]);
+      expect(searchCalls()).toHaveLength(2);
+      const children = await findAllChildDatabases(ARCHIVE_PAGE, TITLE);
+      expect(children.sort()).toEqual(["c-1", "c-2"]);
+      expect(childrenCalls()).toHaveLength(2);
+    });
+  });
+
   describe("findUniqueChildDatabaseForAdopt (子DB回収 0/1/複数)", () => {
     const TITLE = "適時開示｜7203";
     const STOCK = "s".repeat(32);
