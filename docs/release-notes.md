@@ -11,7 +11,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ### 変更
 - jss-api 日足の調整意味論を訂正 (価格は生値・adj_* は配当込 total-return、係数不明は null・偽 1 なし、出来高未補正、cache v2)。データ変更なし。
-- VWAP daily adj 修復の rebuild 土台 (fetchDaily 原文 capture hook 追加・repair-daily whole-post 再構築 + tests)。取得 3 件は別途 grant 待ちで未実行。データ変更なし (Refs #117)。
+- VWAP daily adj 修復の rebuild 土台 (fetchDaily 原文 capture hook 追加・repair-daily whole-post 再構築 + tests)。取得実績: 7944 は fresh 応答自体の非正 adj で HOLD (既知)、8303/8919 は未送信 STOP。Adj 定義は Yahoo 公式 [adjusted close は分割+配当](https://in.help.yahoo.com/kb/adjusted-close-sln28256.html)・[AAPL history の Close=分割調整・Adj Close=分割+配当/キャピタルゲイン](https://finance.yahoo.com/quote/AAPL/history/) に基づく。データ変更なし (Refs #117)。
 - VWAP batch summary の原本 bytes を archive 前に runner local (0700/wx0600/fsync) へ保持し、失敗時は artifact で回収。local 書込失敗は archive 前 fatal exit 2 (daily 2 で intra 0)。データ変更なし (Refs #117)。
 - VWAP batch summary の metadata を counts+pin+集約のみに縮小し per-code outcomes は物理 JSON 本文に保持 (旧 full 内包は約 530KB・266 分割で Notion 上限超過 → run 36698387232 の daily archive が 413 UNKNOWN・intra 0。証跡 `docs/vwap-run36698387232-413-unknown-20260930.md`)。データ変更なし (Refs #117)。
 - 共有 Yahoo parse 境界で request/response の meta.symbol 一致を検証 (不一致・欠落は throw、alias 推測なし。既存 normalize のみ)。データ変更なし。
