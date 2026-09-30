@@ -47,7 +47,7 @@ import {
 } from "./summary-tasks.js";
 
 /** SHA pin (保存済み証跡の固定。1 文字でも違えば HOLD)。 */
-const PINS: Record<string, string> = {
+export const PINS: Record<string, string> = {
   "yutai-abc-manifest.json":
     "f3586e6fcfaaef9f3d773f755720a642652986d7c9adf08de12a3d46135379fe",
   "yutai-fulltext-manifest.postabc.json":
