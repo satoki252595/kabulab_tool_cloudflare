@@ -5,7 +5,8 @@ producer (`parseOverseasData`/`parseOverseasHtml`) が grid 文面だけで
 `isConsolidated` を決め、表ローカルの scope 証拠 (caption の range 表題・
 TextBlock) を落としていた問題の修正。全面 offline (source GET・D1/Notion/
 R2 書込・dispatch 0)。本記録は counts・SHA・limits + 証拠所在のみ
-(public 可)。per-doc の値・表は private 0600 のみ。
+(public 可)。per-doc の値・表は private 0600 のみ (例外: reviewer 指示の
+W81W numeric HOLD 記録に必要な 4 値のみ本文に明示)。
 
 - 実装: `services/yuho-quant/src/services/overseas-parser.ts`
   `resolveTableScope` (Gate0。候補生成直後・期首フィルタ前) +
@@ -53,10 +54,19 @@ R2 書込・dispatch 0)。本記録は counts・SHA・limits + 証拠所在の�
   証拠は table-local の明示 (当連結 tier caption / 連結調整後 / 当事業年度
   range 表題)。裸連結・連結調整前のみの採用表は null のまま
   (S100QHYM 級 5 文書が MATCH 維持)。
-- W81W/XRWN (59 外): status・値不変。採用 trace (値行/総額列の index・
-  label・採用 leaf・parent/context/fiscal/score・競合採否) を private
-  capture に記録。継続事業の選択根拠 (XRWN の 2 合計列の採択等) の
-  是非は SOL review に委ね、flag だけで数字を承認しない。
+- W81W (59 外): status・値不変。採用表 @1349409 の外部顧客行は
+  日本 102488・米国 73106・その他 1462・合計 177057。
+  (注)1 が「その他」に米国を除く海外現地法人の事業活動等を含むと
+  明示するにもかかわらず、現行の海外 numerator 73106 は開示済み海外
+  1462 を除外している。**numeric HOLD・未解決の source 不整合として
+  明示記録する** (本 PR では source 取得・書込・数値 parser 変更なし)。
+- XRWN (59 外): status・値不変。採用表 @1488297 は valueIndex 5 行・
+  totalIndex 6 列。同一値の重複 合計行が 2 行あり、直近注記は継続の
+  産業機械事業と非継続の輸送機器事業 (IFRS 5 号) を明示する。
+  継続事業の選択根拠の是非は SOL review に委ね、flag だけで数字を
+  承認しない。
+- 両文書の採用 trace (値/総額の index・label・採用 leaf・parent・
+  context・fiscal・score・競合採否) は private capture に記録済み。
 - VHA9/XTT8 (59 外): true 維持・不変。他 921 への same-cause 一般化なし。
 - 成果物 (private 0600): frozen capture 63 文書
   (59 + W81W/XRWN/VHA9/XTT8。候補全件の offset・parent・contextRef・
