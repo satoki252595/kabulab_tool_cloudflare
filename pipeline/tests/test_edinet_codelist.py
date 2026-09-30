@@ -10,6 +10,7 @@ import io
 import zipfile
 from datetime import date
 
+import pytest
 from conftest import fixture_path
 
 from jp_stock_pipeline.collectors import edinet_codelist as mod
@@ -100,6 +101,86 @@ class TestParseCodelist:
         text = mod._read_codelist_csv(_zip_bytes())
         assert "ＥＤＩＮＥＴコード" in text
         assert "証券コード" in text
+
+
+def _make_zip(files: dict[str, str]) -> bytes:
+    """敵対ケース用の最小 zip を組む（実フィクスチャの代替ではなく検証ベクタ）。"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, text in files.items():
+            zf.writestr(name, text.encode("cp932"))
+    return buf.getvalue()
+
+
+_TRUST_META = "ダウンロード実行日,2026年09月30日現在,件数,1件"
+_TRUST_HEADER = (
+    "ＥＤＩＮＥＴコード,提出者種別,上場区分,連結の有無,資本金,決算日,"
+    "提出者名,提出者名（英字）,提出者名（ヨミ）,所在地,提出者業種,"
+    "証券コード,提出者法人番号"
+)
+_TRUST_ROW = "E12345,,上場,,1000,,テスト株式会社,,,,サービス業,72030,"
+
+
+class TestTrustBoundary:
+    def test_複数CSVは先頭採用せずSTOP(self):
+        data = _make_zip(
+            {
+                "EdinetcodeDlInfo.csv": f"{_TRUST_META}\n{_TRUST_HEADER}\n{_TRUST_ROW}\n",
+                "Extra.csv": "a,b\n1,2\n",
+            }
+        )
+        with pytest.raises(ValueError, match="想定と不一致"):
+            mod.parse_codelist(data)
+
+    def test_別名CSVのみはSTOP(self):
+        data = _make_zip({"Other.csv": f"{_TRUST_META}\n{_TRUST_HEADER}\n{_TRUST_ROW}\n"})
+        with pytest.raises(ValueError, match="想定と不一致"):
+            mod.parse_codelist(data)
+
+    def test_CSV不在はSTOP(self):
+        data = _make_zip({"notes.txt": "no csv here"})
+        with pytest.raises(ValueError, match="想定と不一致"):
+            mod.parse_codelist(data)
+
+    def test_重複ヘッダはSTOP(self):
+        dup_header = _TRUST_HEADER.replace("提出者法人番号", "証券コード")
+        data = _make_zip(
+            {"EdinetcodeDlInfo.csv": f"{_TRUST_META}\n{dup_header}\n{_TRUST_ROW}\n"}
+        )
+        with pytest.raises(ValueError, match="ヘッダ名が重複"):
+            mod.parse_codelist(data)
+
+    def test_非空白の列不足行はSTOP(self):
+        data = _make_zip(
+            {"EdinetcodeDlInfo.csv": f"{_TRUST_META}\n{_TRUST_HEADER}\nE99999,,上場\n"}
+        )
+        with pytest.raises(ValueError, match="3行目.*列不足"):
+            mod.parse_codelist(data)
+
+    def test_完全な空白行のみスキップ(self):
+        data = _make_zip(
+            {
+                "EdinetcodeDlInfo.csv": (
+                    f"{_TRUST_META}\n{_TRUST_HEADER}\n{_TRUST_ROW}\n\n{_TRUST_ROW}\n"
+                )
+            }
+        )
+        records = mod.parse_codelist(data)
+        assert len(records) == 2
+
+    def test_実フィクスチャは単一CSVと一意ヘッダと列不足なし(self):
+        """実物の前提を固定する（敵対ベクタではなく実測の錨）。"""
+        import csv as _csv
+
+        with zipfile.ZipFile(io.BytesIO(_zip_bytes())) as zf:
+            assert zf.namelist() == ["EdinetcodeDlInfo.csv"]
+        rows = list(_csv.reader(io.StringIO(mod._read_codelist_csv(_zip_bytes()))))
+        assert len(rows[1]) == len(set(rows[1]))
+        need = max(
+            rows[1].index(n)
+            for n in ("ＥＤＩＮＥＴコード", "上場区分", "提出者名", "提出者業種", "証券コード")
+        )
+        assert all(len(r) > need or not any(c.strip() for c in r) for r in rows[2:])
 
 
 class TestFetchCodelist:
