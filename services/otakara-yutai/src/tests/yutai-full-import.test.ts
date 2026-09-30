@@ -538,12 +538,18 @@ describe("importYutaiFull の post-image 利回り追随", () => {
   const isYutaiOf = (stockId: number) =>
     (sqlite.prepare("SELECT is_yutai FROM core_stocks WHERE id = ?").get(stockId) as { is_yutai: number }).is_yutai;
 
-  /** 財務行 + スコア行を持つ母集団銘柄を足す。スコアは渡した利回りで計算済み。 */
-  const seedFinancialStock = (id: number, code: string, yutaiYield: number | null, insertCore = true) => {
+  /** 財務行 + スコア行を持つ銘柄を足す。スコアは渡した利回りで計算済み。 */
+  const seedFinancialStock = (
+    id: number,
+    code: string,
+    yutaiYield: number | null,
+    opts: { insertCore?: boolean; active?: number; instrumentType?: string; isYutai?: number } = {}
+  ) => {
+    const { insertCore = true, active = 1, instrumentType = "equity", isYutai = 1 } = opts;
     if (insertCore) {
       sqlite
-        .prepare("INSERT INTO core_stocks (id, code, name, market, is_active, is_yutai, instrument_type) VALUES (?, ?, ?, 'テスト市場', 1, 1, 'equity')")
-        .run(id, code, `テスト${code}`);
+        .prepare("INSERT INTO core_stocks (id, code, name, market, is_active, is_yutai, instrument_type) VALUES (?, ?, ?, 'テスト市場', ?, ?, ?)")
+        .run(id, code, `テスト${code}`, active, isYutai, instrumentType);
     }
     sqlite
       .prepare("INSERT INTO otakara_stock_financials (stock_id, price, per, pbr, dividend_yield, roe, yutai_yield, data_date) VALUES (?, 1000, 10, 1.0, 2.0, 8.0, ?, '2026-09-13')")
@@ -628,7 +634,7 @@ describe("importYutaiFull の post-image 利回り追随", () => {
   });
 
   it("全件失敗でも post-image 再計算は走り、元の失敗を保つ (AggregateError にしない)", async () => {
-    seedFinancialStock(HELD[0].id, HELD[0].code, 1.0, false);
+    seedFinancialStock(HELD[0].id, HELD[0].code, 1.0, { insertCore: false });
     captureConsole();
     const { calls, sender } = makeAtomicSender();
 
@@ -646,7 +652,7 @@ describe("importYutaiFull の post-image 利回り追随", () => {
   });
 
   it("部分失敗は再計算の適用後に明示的に落とす。失敗銘柄は imported に数えない", async () => {
-    seedFinancialStock(HELD[0].id, HELD[0].code, 1.0, false);
+    seedFinancialStock(HELD[0].id, HELD[0].code, 1.0, { insertCore: false });
     captureConsole();
     const { calls, sender } = makeAtomicSender();
     const [failed, ...rest] = HELD;
@@ -685,9 +691,40 @@ describe("importYutaiFull の post-image 利回り追随", () => {
     expect(finOf(402).yutai_yield).toBe(9.99);
   });
 
+  it("優待行なし・未取得でも残存利回り (0 含む) は scope に入り直る。母集団外は不変", async () => {
+    // 中断再入の境界: 優待行なし・is_yutai=false・allData 不在でも、利回りが
+    // non-null (0 を含む) なら scope の利回り lane で拾って null に直す。
+    seedFinancialStock(403, "9303", 0, { isYutai: 0 });
+    // 対照: 非母集団 (inactive / 非 equity) の残存利回りには触らない。
+    seedFinancialStock(404, "9404", 0, { active: 0 });
+    seedFinancialStock(405, "9405", 0, { instrumentType: "reit_fund" });
+    captureConsole();
+    const targets = HELD.map((s) => fetched(s.code));
+
+    const first = makeAtomicSender();
+    const r1 = await importYutaiFull(db, targets, first.sender);
+    expect(r1.recompute.updated).toBe(1);
+    expect(first.calls.length).toBe(1);
+    expect(finOf(403).yutai_yield).toBe(null);
+    expect(scoreOf(403)).toEqual(expectedScore(null));
+    expect(finOf(403).price).toBe(1000);
+    expect(finOf(403).data_date).toBe("2026-09-13");
+    expect(isYutaiOf(403)).toBe(0);
+    expect(finOf(404).yutai_yield).toBe(0);
+    expect(finOf(405).yutai_yield).toBe(0);
+    expect(scoreOf(404)).toEqual(expectedScore(0));
+    expect(scoreOf(405)).toEqual(expectedScore(0));
+
+    const second = makeAtomicSender();
+    const r2 = await importYutaiFull(db, targets, second.sender);
+    expect(r2.recompute.updated).toBe(0);
+    expect(r2.recompute.scoresUpdated).toBe(0);
+    expect(second.calls).toEqual([]);
+  });
+
   it("書き込み失敗 + 再計算失敗は両方を保つ (AggregateError)", async () => {
     // 再計算が送信まで進むよう stale 利回りを置く (送信が無ければ再計算は成功する)
-    seedFinancialStock(HELD[0].id, HELD[0].code, 1.0, false);
+    seedFinancialStock(HELD[0].id, HELD[0].code, 1.0, { insertCore: false });
     const logs = captureConsole();
     const sender: AtomicBatchSender = async () => {
       throw new Error("送信失敗 (テスト)");
