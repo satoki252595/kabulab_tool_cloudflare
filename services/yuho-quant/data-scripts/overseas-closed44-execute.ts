@@ -59,7 +59,7 @@ const MODULE_PINS: Readonly<Record<string, string>> = {
   "services/yuho-quant/src/services/ingest.ts":
     "89ec23f902a323c31111357ee3382dcbbe6a5482627e0dcc96a0431999baa3a0",
   "services/yuho-quant/src/services/projection.ts":
-    "924b73c2fa0fe775edf09152c650e1ceaacf9b650e20c7f1afd0c39a3ab1d1f0",
+    "7985aa7b1790e396dce3deb04384ec884c89733173967436b06e360b83c6f704",
   "services/yuho-quant/src/services/overseas-save-rows.ts":
     "00d873f055f40450317c113affcadaede86b79592eb3d53a98ee0ec1921303c0",
   "services/yuho-quant/src/db/schema.ts":
@@ -1039,7 +1039,9 @@ async function main(): Promise<void> {
   const out = argVal("out");
   if (!packet || !out) fail("--packet= --out= are required");
   const summary = await runPreflight(packet, out);
-  console.info(JSON.stringify({ mode: "preflight", sends: 0, ...summary }));
+  const { l2, ...counts } = summary;
+  console.info(JSON.stringify({ mode: "preflight", sends: 0, ...counts,
+    l2: { stocks: l2.stocks.length, groups: l2.groups } }));
 }
 
 const invoked = process.argv[1]?.endsWith("overseas-closed44-execute.ts") ?? false;
