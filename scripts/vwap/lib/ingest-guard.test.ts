@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  archiveSummaryOrFatal,
+  assertSavedDailyShape,
+  assertSavedIntraShape,
+  bodyPin,
   buildIngestSummary,
   findInvalidBars,
   resolveExitCode,
   resolveRunId,
+  sanitizeLogText,
   shouldSkipPut,
+  universePin,
 } from "./ingest-guard.js";
 
 describe("findInvalidBars", () => {
@@ -122,7 +128,7 @@ describe("shouldSkipPut", () => {
 });
 
 describe("resolveExitCode", () => {
-  const zero = { aborted: false, errors: 0, invalid: 0, rateLimited: 0 };
+  const zero = { aborted: false, fatalUnknown: false, errors: 0, invalid: 0, rateLimited: 0 };
 
   it("全0のみ exit 0 (negative)", () => {
     expect(resolveExitCode(zero)).toBe(0);
@@ -139,6 +145,10 @@ describe("resolveExitCode", () => {
     expect(
       resolveExitCode({ ...zero, aborted: true, rateLimited: 5 })
     ).toBe(2);
+  });
+
+  it("fatalUnknown (R2 fault) は 2 (後続 intra を止める)", () => {
+    expect(resolveExitCode({ ...zero, fatalUnknown: true })).toBe(2);
   });
 });
 
@@ -178,6 +188,12 @@ describe("buildIngestSummary", () => {
     aborted: false,
     startedAt: "2026-09-28T08:00:00.000Z",
     finishedAt: "2026-09-28T08:30:00.000Z",
+    unknown: [] as string[],
+    rejected: [] as string[],
+    universe: { size: 10, sha256: "u".repeat(64) },
+    outcomes: {
+      "7203": { status: "written" as const, latestSourceBar: 1757548800, bodySha: "b".repeat(64) },
+    },
   };
 
   it("run粒度のkey/添付1件・per-stock鏡像なし", () => {
@@ -189,7 +205,9 @@ describe("buildIngestSummary", () => {
     const body = JSON.parse(new TextDecoder().decode(s.files[0].bytes));
     expect(body.invalid).toBe(1);
     expect(body.written).toBe(9);
+    expect(body.outcomes["7203"].status).toBe("written");
     expect(s.metadata.invalid).toBe(1);
+    expect(s.metadata.unknown).toEqual([]);
   });
 
   it("日付キーが取れないfinishedAtは投げる", () => {
@@ -202,5 +220,92 @@ describe("buildIngestSummary", () => {
     expect(() =>
       buildIngestSummary({ ...stats, runId: "../evil" })
     ).toThrow(/runId 形状不正/);
+  });
+});
+
+describe("archiveSummaryOrFatal", () => {
+  it("recorded のみ 0", async () => {
+    await expect(
+      archiveSummaryOrFatal(async () => ({ outcome: "recorded", fileTooLarge: false }))
+    ).resolves.toEqual({ code: 0, reason: null });
+  });
+
+  it("skipped/fileTooLarge/例外は理由付き 2", async () => {
+    await expect(
+      archiveSummaryOrFatal(async () => ({ outcome: "skipped_existing", fileTooLarge: false }))
+    ).resolves.toEqual({ code: 2, reason: "outcome=skipped_existing" });
+    await expect(
+      archiveSummaryOrFatal(async () => ({ outcome: "recorded", fileTooLarge: true }))
+    ).resolves.toMatchObject({ code: 2 });
+    const r = await archiveSummaryOrFatal(async () => { throw new Error("boom https://x.example/s"); });
+    expect(r.code).toBe(2);
+    expect(r.reason).toContain("exception:Error:");
+    expect(r.reason).not.toContain("https://");
+  });
+});
+
+describe("sanitizeLogText", () => {
+  it("URL と secret 代入を落とす", () => {
+    expect(sanitizeLogText("at https://a.example/x?k=1 end")).toBe("at <url> end");
+    expect(sanitizeLogText("secret=abc123 ok")).toBe("secret=<redacted> ok");
+  });
+});
+
+describe("universePin/bodyPin", () => {
+  it("sorted 結合の安定 pin", () => {
+    const a = universePin(["7203", "6758"]);
+    const b = universePin(["6758", "7203"]);
+    expect(a).toEqual(b);
+    expect(a.size).toBe(2);
+    expect(a.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(universePin(["7203"]).sha256).not.toBe(a.sha256);
+    expect(bodyPin("{}")).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe("assertSavedDailyShape", () => {
+  const bar = { date: "2026-09-25", o: 100, h: 110, l: 90, c: 105, v: 1000, adj: 104 };
+  const good = (over: object = {}) =>
+    JSON.stringify({ code: "7203", updated: "x", bars: [bar], splits: [{ date: "2020-01-01", ratio: 2 }], ...over });
+
+  it("正準形は通す", () => {
+    expect(assertSavedDailyShape(good(), "daily/7203.json", "7203").code).toBe("7203");
+  });
+
+  it("parse不能・非object・code不一致・非配列は落とす", () => {
+    expect(() => assertSavedDailyShape("xx", "daily/7203.json", "7203")).toThrow(/parse 不能/);
+    expect(() => assertSavedDailyShape("[1]", "daily/7203.json", "7203")).toThrow(/object でない/);
+    expect(() => assertSavedDailyShape(good({ code: "6758" }), "daily/7203.json", "7203")).toThrow(/code 不一致/);
+    expect(() => assertSavedDailyShape(good({ bars: null }), "daily/7203.json", "7203")).toThrow(/非配列/);
+  });
+
+  it("日付不正・重複・adj欠落・価格異常は落とす", () => {
+    expect(() => assertSavedDailyShape(good({ bars: [{ ...bar, date: "2026-13-40" }] }), "daily/7203.json", "7203")).toThrow(/日付不正/);
+    expect(() => assertSavedDailyShape(good({ bars: [bar, bar] }), "daily/7203.json", "7203")).toThrow(/重複/);
+    const noAdj = { date: "2026-09-25", o: 100, h: 110, l: 90, c: 105, v: 1000 };
+    expect(() => assertSavedDailyShape(good({ bars: [noAdj] }), "daily/7203.json", "7203")).toThrow(/adj 欠落/);
+    expect(() => assertSavedDailyShape(good({ bars: [{ ...bar, c: -5 }] }), "daily/7203.json", "7203")).toThrow(/価格異常/);
+  });
+
+  it("splits 要素の日付不正・ratio 非正有限は落とす", () => {
+    expect(() => assertSavedDailyShape(good({ splits: [{ date: "xx", ratio: 2 }] }), "daily/7203.json", "7203")).toThrow(/splits 要素/);
+    expect(() => assertSavedDailyShape(good({ splits: [{ date: "2020-01-01", ratio: 0 }] }), "daily/7203.json", "7203")).toThrow(/splits 要素/);
+  });
+});
+
+describe("assertSavedIntraShape", () => {
+  const bar = { ts: 1757548800, o: 100, h: 110, l: 90, c: 105, v: 1000 };
+  const good = (over: object = {}) =>
+    JSON.stringify({ code: "7203", updated: "x", bars: [bar], ...over });
+
+  it("正準形は通す (adj なし可)", () => {
+    expect(assertSavedIntraShape(good(), "intra/7203.json", "7203").code).toBe("7203");
+  });
+
+  it("code不一致・ts不正・重複・価格異常は落とす", () => {
+    expect(() => assertSavedIntraShape(good({ code: "6758" }), "intra/7203.json", "7203")).toThrow(/code 不一致/);
+    expect(() => assertSavedIntraShape(good({ bars: [{ ...bar, ts: -1 }] }), "intra/7203.json", "7203")).toThrow(/ts 不正/);
+    expect(() => assertSavedIntraShape(good({ bars: [bar, bar] }), "intra/7203.json", "7203")).toThrow(/重複/);
+    expect(() => assertSavedIntraShape(good({ bars: [{ ...bar, h: 1, l: 90 }] }), "intra/7203.json", "7203")).toThrow(/価格異常/);
   });
 });

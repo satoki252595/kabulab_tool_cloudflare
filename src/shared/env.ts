@@ -85,6 +85,48 @@ export const sharedEnv = {
    * `undefined` (呼び出し側が出力を諦める。throw しない)。
    */
   GITHUB_OUTPUT: () => optional("GITHUB_OUTPUT"),
+  /**
+   * VWAP 取込 knob (vwap-ingest.yml・.env.example で明示宣言)。
+   * 未設定は throw (黙示既定なし)。CONC/MAX_RATE_LIMIT/KEEP_DAYS は
+   * 正整数、DELAY_MS は非負有限を要求する。値は出さず名のみ。
+   */
+  vwapKnobs: (): {
+    conc: number;
+    delayMs: number;
+    maxRateLimit: number;
+    keepDays: number;
+  } => {
+    const num = (key: string): number => {
+      const n = Number(required(key));
+      if (!Number.isFinite(n)) {
+        throw new Error(`環境変数 ${key} は数値である必要があります。`);
+      }
+      return n;
+    };
+    const conc = num("CONC");
+    const delayMs = num("DELAY_MS");
+    const maxRateLimit = num("MAX_RATE_LIMIT");
+    const keepDays = num("KEEP_DAYS");
+    const positiveInts: Array<[string, number]> = [
+      ["CONC", conc],
+      ["MAX_RATE_LIMIT", maxRateLimit],
+      ["KEEP_DAYS", keepDays],
+    ];
+    for (const [key, v] of positiveInts) {
+      if (!Number.isInteger(v) || v <= 0) {
+        throw new Error(`環境変数 ${key} は正の整数である必要があります。`);
+      }
+    }
+    if (delayMs < 0) {
+      throw new Error("環境変数 DELAY_MS は非負の数値である必要があります。");
+    }
+    return { conc, delayMs, maxRateLimit, keepDays };
+  },
+  /**
+   * VWAP 5分足の取得範囲の通常値。CLI --range が無ければ必須
+   * (未設定フォールバックなし)。値は出さず名のみ。
+   */
+  VWAP_INTRA_RANGE: () => required("INTRA_RANGE"),
 };
 
 /**
