@@ -99,10 +99,52 @@ archive・corrective attempt ともに本記録では実行しない
 - stdout は safe label のみ (counts/SHA。pageId なし。pageId は
   private record-return に保持)。
 
-## grant 提案 (順序。いずれも未実行)
+## grant 提案 (順序。提案時点ではいずれも未実行)
 
 1. failed receipt archive (`price40-failed-receipt-archive.ts`) の
    ONE 実行 grant (key/pins/budget 上記)。
 2. corrective 40 attempt (`price40-cas-execute.ts` repin 版) の
    ONE 実行 grant (新 runId・fresh dirs・予算 v3)。
 3. どちらも自動実行しない。review 後に Root が sequential に判断する。
+
+## actual (2026-09-30。両 grant とも Root 承認のもと各 ONE 実行済み)
+
+- 旧試行 (key `price-sync-repair-20260929-local-1790772411835`):
+  LOCAL_REJECT-before-native (D1/Notion とも state 0)。
+  確定的 root cause は `overseas-745-select-proof.ts` の import 時
+  無条件 fetch 置換 (PR236 で直接 CLI 時のみ設置に修正済み)。
+  原本 wrapper 3911B `a88cde88…fab9` / payload `508fd433…05757` は
+  immutable のまま private thin runner で archive PASS
+  (same key/body raw JSON 1 file。Notion API 10 + hosted 1)。
+  旧 tree/counter/証跡は非 reset・不変。
+- corrective ONE (分離 tree `d0aeea0`。237 未含有。
+  adapter `ce50bf80…b684` / 19 pins 19/19 照合。
+  preflight `c182d1d8…ac75` 送信 0。予算内):
+  実行窓 2026-09-30T13:51:29Z→13:51:34Z。exit 0。
+  APPLIED。applied 40 / unknown 0 / write0 0 /
+  d1failed 0 / aborted false / adapter holds 0。
+  outside-held 7 件 (`not-in-eligible-set` のみ。47−40 の期待診断を保持)。
+  source-excluded 7 件 (diag category: source_gap 2 / priceguard 4 / stale 1)。
+  sends D1 SELECT 3 + batch POST 4 (文計 19) /
+  Notion API 8 + hosted 1 (gate 8/1/0)。stderr 0。
+  (per-code 一覧・pageId は private 証跡のみ。Git には載せない)
+- 新 success receipt: runId `local-1790776289146` /
+  key `price-sync-repair-20260929-local-1790776289146`。
+  outcome recorded / manifestMatch written。
+  physical payload 7238B `1dd240e9…7990a`
+  (wrapper 9831B `58a25ef4…26861`)。
+- ACTUAL post 照合: readback 40 行の membership + full7 全値が
+  承認 expected-post (`5b722925…27d3b`) と一致。
+  actual post body `57ddff0e…20de7` を retained。
+  touched-40 core11 は batch 内 atomic scoped guard で照合
+  (applied 40 / d1failed 0 が commit 時一致の証明)。
+- ACTUAL same-producer reentry (network/Notion 0。fetch throw stub。
+  readRows に ACTUAL post を使用。expected fixture 不使用):
+  PROOF-OK。sendBatch 0 / write0 40 / applied 0 /
+  approved-held 0 / outside-7 保持。
+  runner `a2e33f8f…746a` / `PROOF.json` `fa63c394…ee49a`。
+  (reentry は APPLIED 主張なし。適用済み確認の事実のみ)
+- private 証跡 (0600): `/tmp/price40-corrective-live-20260930/`
+  (HASHNOTICE `a974cdba…7824e`・PREFLIGHT・out/・tmp/ receipt)、
+  `/tmp/price40-corrective-reentry-20260930/` (PROOF)。
+  本 grant は消費済み。再実行なし。
