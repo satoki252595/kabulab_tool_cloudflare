@@ -26,11 +26,11 @@ interface D1QueryResponse {
 }
 
 /**
- * 束縛値の private 検証 (converter と sender が共用。public API なし)。
+ * 束縛値の検証 (converter・sender・exact-SQL 読みが共用)。
  * null/真偽値/文字列/有限数のみ許可。NaN/Infinity は JSON 化で null に
  * 変質し、undefined/object は形が崩れるため送らず止める。
  */
-function assertBindableParams(params: readonly unknown[]): void {
+export function assertBindableParams(params: readonly unknown[]): void {
   for (const p of params) {
     if (p === null || typeof p === "string" || typeof p === "boolean") continue;
     if (typeof p === "number") {
@@ -52,6 +52,64 @@ export type D1BatchStatement = {
   sql: string;
   params: ReadonlyArray<string | number | boolean | null>;
 };
+
+/**
+ * 単文 `/query` 応答の厳密検証 (whole → strict の順で呼ぶこと)。
+ * 実測 schema: top.success===true / result 配列 len1 /
+ * entry object success===true / results 配列 / 全行 object。
+ * 欠落・null・文字列・非 object は outcome-unknown で throw し再送しない。
+ * results 空 (SELECT 0 行・書込) は正規。object 行の配列を返す。
+ * (createD1HttpDb の callback と exact-SQL 読みが共用する。)
+ */
+export function assertD1SingleQueryResponse(data: unknown): Record<string, unknown>[] {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    throw new Error(
+      "D1 query: 応答の形が不明です (再送なし。手動確認が必要)。"
+    );
+  }
+  const top = data as { success?: unknown; result?: unknown; errors?: unknown };
+  if (top.success === false) {
+    throw new Error(`D1 HTTP error: ${JSON.stringify((data as D1QueryResponse).errors)}`);
+  }
+  if (top.success !== true) {
+    throw new Error(
+      "D1 query: 応答 top の成否が不明です (再送なし。手動確認が必要)。"
+    );
+  }
+  if (!Array.isArray(top.result) || top.result.length !== 1) {
+    throw new Error(
+      "D1 query: 応答 result が len1 配列ではありません (再送なし。手動確認が必要)。"
+    );
+  }
+  const entry: unknown = top.result[0];
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    throw new Error(
+      "D1 query: 応答 entry が object ではありません (再送なし。手動確認が必要)。"
+    );
+  }
+  const entryRec = entry as { success?: unknown; results?: unknown; error?: unknown };
+  if (entryRec.success === false) {
+    throw new Error(`D1 HTTP error: ${JSON.stringify(entryRec.error ?? entry)}`);
+  }
+  if (entryRec.success !== true) {
+    throw new Error(
+      "D1 query: 応答 entry の成否が不明です (再送なし。手動確認が必要)。"
+    );
+  }
+  if (!Array.isArray(entryRec.results)) {
+    throw new Error(
+      "D1 query: 応答 results が配列ではありません (再送なし。手動確認が必要)。"
+    );
+  }
+  for (const [i, row] of (entryRec.results as unknown[]).entries()) {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) {
+      throw new Error(
+        `D1 query: 応答 ${i + 1} 行目が object ではありません (再送なし。手動確認が必要)。`
+      );
+    }
+  }
+  return entryRec.results as Record<string, unknown>[];
+}
 
 /**
  * drizzle 書込ビルダ列を D1 REST `{batch}` 送信用に変換する。
@@ -87,13 +145,19 @@ interface D1BatchResponse {
 }
 
 /**
+ * exact-forward `/query` URL の唯一の組立式 (単発・batch・exact-SQL 共用)。
+ * 呼出側はこの式で作った URL を hash して pin 照合し、同一物を送る。
+ */
+export function d1HttpQueryUrlFor(accountId: string, databaseId: string): string {
+  return `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`;
+}
+
+/**
  * 単発と batch で同じ `/query` URL を使う (資格も同じ型付きアクセサ)。
  * fresh-read-capture の exact-forward 照合用に export (no behavior change)。
  */
 export function d1HttpQueryUrl(): string {
-  const accountId = sharedEnv.CLOUDFLARE_ACCOUNT_ID();
-  const databaseId = sharedEnv.D1_DATABASE_ID();
-  return `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`;
+  return d1HttpQueryUrlFor(sharedEnv.CLOUDFLARE_ACCOUNT_ID(), sharedEnv.D1_DATABASE_ID());
 }
 
 /**
@@ -122,65 +186,16 @@ export function createD1HttpDb<TSchema extends Record<string, unknown>>(
         const body = await res.text();
         throw new Error(`D1 HTTP ${res.status}: ${body.slice(0, 300)}`);
       }
-      // 実測 schema の厳密検証: top.success===true / result 配列 len1 /
-      // entry object success===true / results 配列 / 全行 object。
-      // 欠落・null・文字列・非 object は outcome-unknown で throw し再送しない。
+      // whole HTTP (res.ok + JSON) の後に strict 検証を適用する。
       const data: unknown = await res.json();
-      if (typeof data !== "object" || data === null || Array.isArray(data)) {
-        throw new Error(
-          "D1 query: 応答の形が不明です (再送なし。手動確認が必要)。"
-        );
-      }
-      const top = data as { success?: unknown; result?: unknown; errors?: unknown };
-      if (top.success === false) {
-        throw new Error(`D1 HTTP error: ${JSON.stringify((data as D1QueryResponse).errors)}`);
-      }
-      if (top.success !== true) {
-        throw new Error(
-          "D1 query: 応答 top の成否が不明です (再送なし。手動確認が必要)。"
-        );
-      }
-      if (!Array.isArray(top.result) || top.result.length !== 1) {
-        throw new Error(
-          "D1 query: 応答 result が len1 配列ではありません (再送なし。手動確認が必要)。"
-        );
-      }
-      const entry: unknown = top.result[0];
-      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-        throw new Error(
-          "D1 query: 応答 entry が object ではありません (再送なし。手動確認が必要)。"
-        );
-      }
-      const entryRec = entry as { success?: unknown; results?: unknown; error?: unknown };
-      if (entryRec.success === false) {
-        throw new Error(`D1 HTTP error: ${JSON.stringify(entryRec.error ?? entry)}`);
-      }
-      if (entryRec.success !== true) {
-        throw new Error(
-          "D1 query: 応答 entry の成否が不明です (再送なし。手動確認が必要)。"
-        );
-      }
-      if (!Array.isArray(entryRec.results)) {
-        throw new Error(
-          "D1 query: 応答 results が配列ではありません (再送なし。手動確認が必要)。"
-        );
-      }
-      for (const [i, row] of (entryRec.results as unknown[]).entries()) {
-        if (typeof row !== "object" || row === null || Array.isArray(row)) {
-          throw new Error(
-            `D1 query: 応答 ${i + 1} 行目が object ではありません (再送なし。手動確認が必要)。`
-          );
-        }
-      }
+      const objects = assertD1SingleQueryResponse(data);
       // D1 /query は results をオブジェクト配列(SELECT 列順)で返す。sqlite-proxy は
       // 位置配列を期待するので Object.values で列順の配列に変換する。
       // 前提: SELECT が同名カラムを二重射影しないこと(同名キーは Object.values で
       // 1 つに潰れ位置がずれる)。drizzle のカラム選択は重複しないため通常問題ない。
       // results[] 空 (SELECT 0 行・書込) は正規。get の空 rows[0] ?? [] は
       // 上の schema 検証の後でのみ適用する。
-      const rows = (entryRec.results as Record<string, unknown>[]).map((o) =>
-        Object.values(o)
-      );
+      const rows = objects.map((o) => Object.values(o));
       return { rows: method === "get" ? (rows[0] ?? []) : rows };
     },
     { schema: { ...coreSchema, ...schema } }
@@ -198,9 +213,7 @@ export function createD1HttpDb<TSchema extends Record<string, unknown>>(
  * 削除済み。公式 REST 文書に rollback の明文は無く、binding `DB.batch` にだけ
  * 明文がある)。この関数は実証時と同一の envelope (`{batch}`) と束縛変数 SQL で
  * 送り、応答の件数と各文の成否を検査する — 名前だけで原子性を主張しない。
- * 失敗時 (known-failure) も応答不明時 (unknown) も throw して呼び出し側は止める。
- * 同引数の再送はしない (resend 0)。unknown は適用有無が確定しないため、別途
- * 読み取り専用の照合で状態を確定してから人が判断する — 自動再実行しない。
+ * 失敗時は throw し、呼び出し側は止めて同引数の再実行 (冪等) で回復する。
  */
 export function createD1HttpBatchSender(): (
   statements: readonly D1BatchStatement[]

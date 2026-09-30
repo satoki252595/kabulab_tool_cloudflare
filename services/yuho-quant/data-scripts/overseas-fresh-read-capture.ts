@@ -103,9 +103,9 @@ const PINS = {
   /** 37 per-chunk idsSHA を結合した SHA (params 固定)。 */
   params37: "df1d194b7b2b460d10097eacf41f4d4f65217aeda09f148595bd1ac12510452d",
   modules: {
-    captureSelf: "4f18b30fabd294adae6b0b8cdb12b36d63c69ad6d8472885b8ee2e4fdd5d6cee",
+    captureSelf: "a435b3b13b57576d9bd02531d69fb26b20c61dd718ef4a9f631040b2fa73cc3c",
     selectProof: "6c864f43b8141162783368c311c2abd8e673e34dd58c82469618173e7a96bf05",
-    d1Client: "f2dc8d7a9e9ee4428ff4a466a4fa05f66890904f46871060e286f766c370dfda",
+    d1Client: "2d16180bdf864bcade9f8850b922f99b768be8de3bcbe427900fc9ec7afda1c1",
     yuhoSchema: "8adec13819c141b23044bce38ddfbbe9a933f5080972161993779ba62c473393",
     coreSchema: "3393ccc640bdef58f1abd895e36b853d5afc764f9a3e464aa61a915f318e714d",
     sharedEnv: "183af3b9847673b5ea3863f81b0866c7d078075193b702631bfd7941bb1e8d15",
@@ -136,11 +136,11 @@ function hold(msg: string): never {
   throw new HoldError(msg);
 }
 
-function sha256Hex(data: Uint8Array | string): string {
+export function sha256Hex(data: Uint8Array | string): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-function setSHA(ids: string[]): string {
+export function setSHA(ids: string[]): string {
   return sha256Hex(JSON.stringify([...ids].sort()));
 }
 
@@ -376,7 +376,7 @@ export interface GuardCounters {
 
 export interface AttemptCtx {
   seq: number;
-  kind: "Q1F" | "Q2F";
+  kind: "Q1F" | "Q2F" | "R1" | "R2";
   chunk: number;
   idsSHA: string;
   sqlSHA: string;
@@ -385,7 +385,7 @@ export interface AttemptCtx {
 /** whole body の receipt (strict judge の前に確定)。 */
 export interface BodyReceipt {
   seq: number;
-  kind: "Q1F" | "Q2F";
+  kind: "Q1F" | "Q2F" | "R1" | "R2";
   path: string;
   sha256: string;
   bytes: number;
