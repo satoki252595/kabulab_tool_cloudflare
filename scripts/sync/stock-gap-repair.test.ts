@@ -82,13 +82,13 @@ const bar = (
   adj: adj === undefined ? c : adj,
 });
 
-function chartJson(bars: Bar[], metaPrice: number | null) {
+function chartJson(bars: Bar[], metaPrice: number | null, symbol = "0000.T") {
   const col = (pick: (b: Bar) => number | null) => bars.map(pick);
   return {
     chart: {
       result: [
         {
-          meta: { symbol: "0000.T", regularMarketPrice: metaPrice, previousClose: null },
+          meta: { symbol, regularMarketPrice: metaPrice, previousClose: null },
           timestamp: bars.map((b) => b.ts),
           indicators: {
             quote: [
@@ -153,43 +153,43 @@ describe("parseEligibleFile", () => {
 
 describe("replayRawBar", () => {
   it("9/29 正値バーは原文のまま採用する (adj 別値・v0 維持)", () => {
-    const out = replayRawBar("1380", bytesOf(chartJson([bar(D28, 100), bar(D29, 101, 0, 99)], 101)));
+    const out = replayRawBar("1380", bytesOf(chartJson([bar(D28, 100), bar(D29, 101, 0, 99)], 101, "1380.T")));
     expect(out.kind).toBe("ok");
     if (out.kind !== "ok") return;
     expect(out.row).toEqual({ date: "2026-09-29", open: 100, high: 102, low: 99, close: 101, volume: 0, adj: 99 });
   });
 
   it("9/29 欠落・重複・raw close 不正は HOLD する", () => {
-    expect(replayRawBar("1380", bytesOf(chartJson([bar(D28, 100)], 100))).kind).toBe("held");
-    const dup = replayRawBar("1380", bytesOf(chartJson([bar(D29, 101), bar(D29, 102)], 101)));
+    expect(replayRawBar("1380", bytesOf(chartJson([bar(D28, 100)], 100, "1380.T"))).kind).toBe("held");
+    const dup = replayRawBar("1380", bytesOf(chartJson([bar(D29, 101), bar(D29, 102)], 101, "1380.T")));
     expect(dup).toEqual({ kind: "held", reason: expect.stringMatching(/duplicate/) });
-    const nul = replayRawBar("1380", bytesOf(chartJson([bar(D28, 100), bar(D29, null, 0, null)], 100)));
+    const nul = replayRawBar("1380", bytesOf(chartJson([bar(D28, 100), bar(D29, null, 0, null)], 100, "1380.T")));
     expect(nul).toEqual({ kind: "held", reason: "raw-close-not-positive-finite" });
     // close 0 (o=-1 連れ) は共有 guard 冒頭の raw 検査で応答全体を拒否する。
-    const zero = replayRawBar("1380", bytesOf(chartJson([bar(D28, 100), bar(D29, 0)], 100)));
+    const zero = replayRawBar("1380", bytesOf(chartJson([bar(D28, 100), bar(D29, 0)], 100, "1380.T")));
     expect(zero.kind).toBe("held");
     if (zero.kind === "held") expect(zero.reason).toMatch(/^guard-rejected:/);
   });
 
   it("sanitize 棄却・応答乖離は HOLD する (保存しない)", () => {
-    const rej = replayRawBar("1909", bytesOf(chartJson([bar(D28, 100), bar(D29, 5000, 0)], 100)));
+    const rej = replayRawBar("1909", bytesOf(chartJson([bar(D28, 100), bar(D29, 5000, 0)], 100, "1909.T")));
     expect(rej).toEqual({ kind: "held", reason: "guarded-9/29-missing" });
-    const inc = replayRawBar("7082", bytesOf(chartJson([bar(D29, 100, 0)], 5000)));
+    const inc = replayRawBar("7082", bytesOf(chartJson([bar(D29, 100, 0)], 5000, "7082.T")));
     expect(inc.kind).toBe("held");
     if (inc.kind === "held") expect(inc.reason).toMatch(/^guard-rejected:/);
   });
 
   it("raw 実在値の異常 (出来高負・OHL 非正・adj 非正) は HOLD する", () => {
-    const negVol = replayRawBar("1380", bytesOf(chartJson([bar(D28, 100), { ...bar(D29, 101), v: -5 }], 101)));
+    const negVol = replayRawBar("1380", bytesOf(chartJson([bar(D28, 100), { ...bar(D29, 101), v: -5 }], 101, "1380.T")));
     expect(negVol.kind).toBe("held");
-    const zeroOpen = replayRawBar("1380", bytesOf(chartJson([bar(D28, 100), { ...bar(D29, 101), o: 0 }], 101)));
+    const zeroOpen = replayRawBar("1380", bytesOf(chartJson([bar(D28, 100), { ...bar(D29, 101), o: 0 }], 101, "1380.T")));
     expect(zeroOpen.kind).toBe("held");
-    const negAdj = replayRawBar("1380", bytesOf(chartJson([bar(D28, 100), bar(D29, 101, 2000, -3)], 101)));
+    const negAdj = replayRawBar("1380", bytesOf(chartJson([bar(D28, 100), bar(D29, 101, 2000, -3)], 101, "1380.T")));
     expect(negAdj.kind).toBe("held");
     // null・adj null・v0 は正常 (欠落扱い)。
     const ok = replayRawBar(
       "1380",
-      bytesOf(chartJson([{ ...bar(D28, 100), adj: null }, bar(D29, 101, 0, null)], 101))
+      bytesOf(chartJson([{ ...bar(D28, 100), adj: null }, bar(D29, 101, 0, null)], 101, "1380.T"))
     );
     expect(ok.kind).toBe("ok");
   });
@@ -204,7 +204,7 @@ describe("replayRawBar", () => {
   it("guard は本番 fetchChart と同等 (同一原文・同一 9/29 判定)", async () => {
     process.env.YAHOO_PROXY_BASE = "https://kabulab.example.test";
     process.env.CRON_SECRET = "test-secret";
-    const json = chartJson([bar(D28, 100), bar(D29, 101, 2000)], 101);
+    const json = chartJson([bar(D28, 100), bar(D29, 101, 2000)], 101, "1380.T");
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(json), { status: 200 })));
     const chart = await fetchChart("1380", "5y");
     const replay = replayRawBar("1380", bytesOf(json));
@@ -250,7 +250,8 @@ describe("runGapRepair", () => {
     category,
     reason: "x",
   });
-  const okRaw = (close = 101) => bytesOf(chartJson([bar(D28, 100), bar(D29, close, 2000)], close));
+  const okRaw = (code: string, close = 101) =>
+    bytesOf(chartJson([bar(D28, 100), bar(D29, close, 2000)], close, `${code}.T`));
   const okRow = (close: number): OhlcvSeven => ({
     date: "2026-09-29",
     open: close - 1,
@@ -327,8 +328,8 @@ describe("runGapRepair", () => {
     const { deps, batches, recorded } = depsOf({
       manifest,
       raws: [
-        ["1380", okRaw(101)],
-        ["1787", okRaw(202)],
+        ["1380", okRaw("1380", 101)],
+        ["1787", okRaw("1787", 202)],
       ],
       readRows: echoReadRows([
         [7, okRow(101)],
@@ -376,7 +377,7 @@ describe("runGapRepair", () => {
     const order: string[] = [];
     const { deps, recorded } = depsOf({
       manifest,
-      raws: [["1380", okRaw(101)]],
+      raws: [["1380", okRaw("1380", 101)]],
       readRows: echoReadRows([[7, okRow(101)]]),
       persistProof: async (proof) => {
         order.push("persist");
@@ -404,7 +405,7 @@ describe("runGapRepair", () => {
   it("CAS 競合は全 STOP し後続 chunk を送らない (receipt には abort を残す)", async () => {
     const codes = Array.from({ length: 13 }, (_, i) => `9${String(100 + i)}`);
     const manifest = manifestOf(codes.map((c) => codeEntry(c)));
-    const raws = codes.map((c) => [c, okRaw()] as [string, Uint8Array]);
+    const raws = codes.map((c) => [c, okRaw(c)] as [string, Uint8Array]);
     const { deps, batches, recorded } = depsOf({
       manifest,
       raws,
@@ -436,7 +437,7 @@ describe("runGapRepair", () => {
     let calls = 0;
     const { deps } = depsOf({
       manifest,
-      raws: [["1380", okRaw(101)]],
+      raws: [["1380", okRaw("1380", 101)]],
       sendBatch,
       readRows: async () => {
         calls += 1;
@@ -459,7 +460,7 @@ describe("runGapRepair", () => {
     let calls = 0;
     const { deps } = depsOf({
       manifest,
-      raws: [["1380", okRaw(101)]],
+      raws: [["1380", okRaw("1380", 101)]],
       sendBatch: async () => {
         throw new Error("HTTP timeout");
       },
@@ -483,8 +484,8 @@ describe("runGapRepair", () => {
     const { deps } = depsOf({
       manifest,
       raws: [
-        ["1380", okRaw(101)],
-        ["1787", okRaw(202)],
+        ["1380", okRaw("1380", 101)],
+        ["1787", okRaw("1787", 202)],
       ],
       readRows: async () => {
         calls += 1;
@@ -505,7 +506,7 @@ describe("runGapRepair", () => {
     const row: OhlcvSeven = { date: "2026-09-29", open: 100, high: 102, low: 99, close: 101, volume: 2000, adj: 101 };
     const { deps, batches } = depsOf({
       manifest,
-      raws: [["1380", okRaw(101)]],
+      raws: [["1380", okRaw("1380", 101)]],
       readRows: async () => new Map([[7, row]]),
     });
     const report = await runGapRepair("run-9", grant(["1380"]), deps);
@@ -525,8 +526,8 @@ describe("runGapRepair", () => {
     const { deps, batches } = depsOf({
       manifest,
       raws: [
-        ["1380", okRaw(101)],
-        ["1787", okRaw(202)],
+        ["1380", okRaw("1380", 101)],
+        ["1787", okRaw("1787", 202)],
       ],
       readRows: async () => new Map([[7, diff]]),
     });
@@ -544,8 +545,8 @@ describe("runGapRepair", () => {
     const { deps } = depsOf({
       manifest,
       raws: [
-        ["1380", okRaw(101)],
-        ["1787", okRaw(202)],
+        ["1380", okRaw("1380", 101)],
+        ["1787", okRaw("1787", 202)],
       ],
       readRows: echoReadRows([[7, okRow(101)]]),
     });
@@ -556,14 +557,14 @@ describe("runGapRepair", () => {
 
   it("eligible 空・未知・非 has_real_bar・manifest 非 complete は即 STOP する", async () => {
     const manifest = manifestOf([codeEntry("1380")]);
-    const { deps } = depsOf({ manifest, raws: [["1380", okRaw(101)]] });
+    const { deps } = depsOf({ manifest, raws: [["1380", okRaw("1380", 101)]] });
     await expect(runGapRepair("run-9", grant([]), deps)).rejects.toThrow(/eligible 集合が空/);
     await expect(runGapRepair("run-9", grant(["9999"]), deps)).rejects.toThrow(/manifest にありません/);
     const mixed = manifestOf([codeEntry("1380"), { ...codeEntry("3480"), category: "source_gap" }]);
-    const d2 = depsOf({ manifest: mixed, raws: [["1380", okRaw(101)]] });
+    const d2 = depsOf({ manifest: mixed, raws: [["1380", okRaw("1380", 101)]] });
     await expect(runGapRepair("run-9", grant(["1380", "3480"]), d2.deps)).rejects.toThrow(/保存不可/);
     const partial = { ...manifest, completeness: "partial" };
-    const d3 = depsOf({ manifest: partial, raws: [["1380", okRaw(101)]] });
+    const d3 = depsOf({ manifest: partial, raws: [["1380", okRaw("1380", 101)]] });
     await expect(runGapRepair("run-9", grant(["1380"]), d3.deps)).rejects.toThrow(/complete 前提/);
   });
 
@@ -572,7 +573,7 @@ describe("runGapRepair", () => {
     let calls = 0;
     const { deps } = depsOf({
       manifest,
-      raws: [["1380", okRaw(101)]],
+      raws: [["1380", okRaw("1380", 101)]],
       readRows: async () => {
         calls += 1;
         // 1 回目 (事前照合): 不存在。2 回目 (readback): 別値。
@@ -595,7 +596,7 @@ describe("runGapRepair", () => {
     let calls = 0;
     const { deps } = depsOf({
       manifest,
-      raws: [["1380", okRaw(101)]],
+      raws: [["1380", okRaw("1380", 101)]],
       readRows: async () => {
         calls += 1;
         return new Map();
@@ -616,7 +617,7 @@ describe("runGapRepair", () => {
     const verifyReceipt = vi.fn(async () => {});
     const { deps, verified } = depsOf({
       manifest,
-      raws: [["1380", okRaw(101)]],
+      raws: [["1380", okRaw("1380", 101)]],
       record: record as never,
       verifyReceipt,
     });
@@ -634,7 +635,7 @@ describe("runGapRepair", () => {
     const verifyReceipt = vi.fn(async () => {});
     const { deps } = depsOf({
       manifest,
-      raws: [["1380", okRaw(101)]],
+      raws: [["1380", okRaw("1380", 101)]],
       readRows: echoReadRows([[7, okRow(101)]]),
       record: record as never,
       verifyReceipt,
@@ -653,7 +654,7 @@ describe("runGapRepair", () => {
     const record = vi.fn(async () => ({ pageId: "receipt-page", outcome: "recorded", fileTooLarge: false }));
     const { deps } = depsOf({
       manifest,
-      raws: [["1380", okRaw(101)]],
+      raws: [["1380", okRaw("1380", 101)]],
       readRows: echoReadRows([[7, okRow(101)]]),
       record: record as never,
       verifyReceipt: async () => {
@@ -670,7 +671,7 @@ describe("runGapRepair", () => {
     const record = vi.fn(async () => ({}));
     const { deps } = depsOf({
       manifest,
-      raws: [["1380", okRaw(101)]],
+      raws: [["1380", okRaw("1380", 101)]],
       sendBatch,
       record: record as never,
       probeProofAbsent: async () => {

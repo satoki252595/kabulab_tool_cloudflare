@@ -299,6 +299,7 @@ describe("fetchChart — 応答整合 guard (F-01 1909 再発防止)", () => {
     closes: (number | null)[];
     volumes: (number | null)[];
     metaPrice: number;
+    symbol?: string;
   }) {
     const day = (s: string) => Date.parse(`${s}T00:00:00Z`) / 1000;
     const dates = ["2026-09-24", "2026-09-25"].slice(0, over.closes.length);
@@ -307,7 +308,7 @@ describe("fetchChart — 応答整合 guard (F-01 1909 再発防止)", () => {
         result: [
           {
             meta: {
-              symbol: "7203.T",
+              symbol: over.symbol ?? "7203.T",
               regularMarketPrice: over.metaPrice,
               currency: "JPY",
             },
@@ -352,10 +353,21 @@ describe("fetchChart — 応答整合 guard (F-01 1909 再発防止)", () => {
 
   it("薄商い (出来高0・乖離なし) は受理する", async () => {
     useProxyStub(
-      chartNormal({ closes: [1000, 1000], volumes: [10000, 0], metaPrice: 1000 })
+      chartNormal({ closes: [1000, 1000], volumes: [10000, 0], metaPrice: 1000, symbol: "3600.T" })
     );
     const res = await fetchChart("3600", "5y");
     expect(res.ohlcv).toHaveLength(2);
+  });
+
+  it("応答 meta.symbol の不一致・欠落は採用しない (raw 形は正規化して照合)", async () => {
+    useProxyStub(
+      chartNormal({ closes: [1000, 1000], volumes: [10000, 10000], metaPrice: 1000, symbol: "1909.T" })
+    );
+    await expect(fetchChart("7203", "5y")).rejects.toThrow(/要求=7203\.T 応答=1909\.T/);
+    const missing = chartNormal({ closes: [1000, 1000], volumes: [10000, 10000], metaPrice: 1000 });
+    delete (missing.chart.result[0].meta as Record<string, unknown>).symbol;
+    useProxyStub(missing);
+    await expect(fetchChart("7203", "5y")).rejects.toThrow();
   });
 
   it("出来高を伴う急変 (正規分割) は受理する", async () => {

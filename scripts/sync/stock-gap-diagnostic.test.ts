@@ -65,13 +65,13 @@ const bar = (
   adj: adj === undefined ? c : adj,
 });
 
-function chartJson(bars: Bar[], metaPrice: number | null) {
+function chartJson(bars: Bar[], metaPrice: number | null, symbol = "0000.T") {
   const col = (pick: (b: Bar) => number | null) => bars.map(pick);
   return {
     chart: {
       result: [
         {
-          meta: { symbol: "0000.T", regularMarketPrice: metaPrice, previousClose: null },
+          meta: { symbol, regularMarketPrice: metaPrice, previousClose: null },
           timestamp: bars.map((b) => b.ts),
           indicators: {
             quote: [
@@ -127,7 +127,7 @@ async function fetchStatus(code: string, status: number, body: string): Promise<
 
 describe("resolveFetchOutcome + classifyGap", () => {
   it("9/29 正値バー保持 → has_real_bar (旧 run 原因は別途 undetermined)", async () => {
-    const fetched = await fetchOk("1380", chartJson([bar(D28, 100), bar(D29, 101, 2000)], 101));
+    const fetched = await fetchOk("1380", chartJson([bar(D28, 100), bar(D29, 101, 2000)], 101, "1380.T"));
     const outcome = resolveFetchOutcome({ code: "1380", ...fetched });
     expect(outcome.kind).toBe("ok");
     const r = classifyGap("1380", outcome);
@@ -137,7 +137,7 @@ describe("resolveFetchOutcome + classifyGap", () => {
   });
 
   it("9/29 close/adj null → source_gap", async () => {
-    const fetched = await fetchOk("1380", chartJson([bar(D28, 100), bar(D29, null, 0, null)], 101));
+    const fetched = await fetchOk("1380", chartJson([bar(D28, 100), bar(D29, null, 0, null)], 101, "1380.T"));
     const r = classifyGap("1380", resolveFetchOutcome({ code: "1380", ...fetched }));
     expect(r.category).toBe("source_gap");
     expect(r.evidence.reason).toBe("null-or-nonpositive-close");
@@ -145,7 +145,7 @@ describe("resolveFetchOutcome + classifyGap", () => {
   });
 
   it("末尾が 9/29 より前 → stale", async () => {
-    const fetched = await fetchOk("9914", chartJson([bar(D26 - 86400, 100), bar(D26, 101)], 101));
+    const fetched = await fetchOk("9914", chartJson([bar(D26 - 86400, 100), bar(D26, 101)], 101, "9914.T"));
     const r = classifyGap("9914", resolveFetchOutcome({ code: "9914", ...fetched }));
     expect(r.category).toBe("stale");
     expect(r.evidence.tailDate).toBe("2026-09-26");
@@ -153,7 +153,7 @@ describe("resolveFetchOutcome + classifyGap", () => {
   });
 
   it("9/29 のみ欠け・末尾が後 → source_gap (末尾を鮮度に使わない)", async () => {
-    const fetched = await fetchOk("1380", chartJson([bar(D28, 100), bar(D30, 102)], 102));
+    const fetched = await fetchOk("1380", chartJson([bar(D28, 100), bar(D30, 102)], 102, "1380.T"));
     const r = classifyGap("1380", resolveFetchOutcome({ code: "1380", ...fetched }));
     expect(r.category).toBe("source_gap");
     expect(r.evidence.reason).toBe("bar-missing");
@@ -163,7 +163,7 @@ describe("resolveFetchOutcome + classifyGap", () => {
   it("raw 9/29 正値が sanitize 棄却 → priceguard (source absent と混同しない)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const fetched = await fetchOk("1909", chartJson([bar(D28, 100), bar(D29, 5000, 0)], 100));
+      const fetched = await fetchOk("1909", chartJson([bar(D28, 100), bar(D29, 5000, 0)], 100, "1909.T"));
       expect(fetched.error).toBeNull();
       const r = classifyGap("1909", resolveFetchOutcome({ code: "1909", ...fetched }));
       expect(r.category).toBe("priceguard");
@@ -175,7 +175,7 @@ describe("resolveFetchOutcome + classifyGap", () => {
   });
 
   it("応答全体の 10 倍超乖離 throw → priceguard", async () => {
-    const fetched = await fetchOk("7082", chartJson([bar(D29, 100, 0)], 5000));
+    const fetched = await fetchOk("7082", chartJson([bar(D29, 100, 0)], 5000, "7082.T"));
     expect(fetched.error).toMatch(/10倍超乖離/);
     const r = classifyGap("7082", resolveFetchOutcome({ code: "7082", ...fetched }));
     expect(r.category).toBe("priceguard");
@@ -263,7 +263,7 @@ describe("resolveFetchOutcome + classifyGap", () => {
   });
 
   it("parseCapturedChart は本番と同一 parse (zod 不正は ZodError)", () => {
-    const bytes = new TextEncoder().encode(JSON.stringify(chartJson([bar(D29, 101)], 101)));
+    const bytes = new TextEncoder().encode(JSON.stringify(chartJson([bar(D29, 101)], 101, "1380.T")));
     const bars = parseCapturedChart("1380", bytes);
     expect(bars).toHaveLength(1);
     expect(bars[0]?.date).toBe("2026-09-29");
@@ -449,11 +449,11 @@ describe("verifyDiagBatchAttachments", () => {
 });
 
 describe("runGapDiagnostic", () => {
-  const okBytes = () =>
-    new TextEncoder().encode(JSON.stringify(chartJson([bar(D28, 100), bar(D29, 101, 2000)], 101)));
+  const okBytes = (code: string) =>
+    new TextEncoder().encode(JSON.stringify(chartJson([bar(D28, 100), bar(D29, 101, 2000)], 101, `${code}.T`)));
 
   const okFetchOne = vi.fn(async (code: string): Promise<GapDiagFetchResult> => {
-    const bytes = okBytes();
+    const bytes = okBytes(code);
     const rawBars = parseCapturedChart(code, bytes);
     return {
       capture: { status: 200, bytes },
@@ -556,7 +556,7 @@ describe("runGapDiagnostic", () => {
     const calls: string[] = [];
     const fetchOne = vi.fn(async (code: string): Promise<GapDiagFetchResult> => {
       calls.push(code);
-      const bytes = okBytes();
+      const bytes = okBytes(code);
       if (calls.length < 3) {
         const rawBars = parseCapturedChart(code, bytes);
         return {
@@ -610,7 +610,7 @@ describe("runGapDiagnostic", () => {
     process.env.NOTION_TOKEN = "dummy";
     const fetchOne = vi.fn(async (code: string): Promise<GapDiagFetchResult> => {
       if (code !== "2180") {
-        const bytes = okBytes();
+        const bytes = okBytes(code);
         const rawBars = parseCapturedChart(code, bytes);
         return {
           capture: { status: 200, bytes },
@@ -661,7 +661,7 @@ describe("runGapDiagnostic", () => {
 
   it("保管失敗は runner を失敗させる (成功に偽らない)", async () => {
     const fetchOne = vi.fn(async (code: string): Promise<GapDiagFetchResult> => {
-      const bytes = okBytes();
+      const bytes = okBytes(code);
       const rawBars = parseCapturedChart(code, bytes);
       return {
         capture: { status: 200, bytes },

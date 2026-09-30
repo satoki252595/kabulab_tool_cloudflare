@@ -29,6 +29,7 @@ function chartJson(over: Record<string, unknown> = {}) {
     chart: {
       result: [
         {
+          meta: { symbol: "7203.T", regularMarketPrice: 105 },
           timestamp: [1757548800, 1757635200],
           indicators: {
             quote: [
@@ -160,6 +161,14 @@ describe("fetchDaily", () => {
     expect(err.message).toMatch(/chart\.error/);
     expect(err.message).toMatch(/keys=code,description/);
     expect(err.message).not.toContain("No data found");
+  });
+
+  it("応答 meta.symbol の欠落・不一致は採用しない", async () => {
+    useProxy();
+    stubChart(chartJson({ meta: { regularMarketPrice: 105 } }));
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/meta\.symbol がありません/);
+    stubChart(chartJson({ meta: { symbol: "1909.T", regularMarketPrice: 105 } }));
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/要求=7203\.T 応答=1909\.T/);
   });
 
   it("{0: res} 形の未知 envelope は受けない", async () => {
