@@ -65,6 +65,23 @@ live DL・record・D1 書込・fresh source GET は全て未実行・別 grant�
   sha256 `da3711c4…001de`・edinet/archive `a02f24f6…53fbc5`
   (既存 pin と同一・不変のものは再掲)。
 
+## 閉鎖 runner 実装 (LOCAL PREP・未実行・CODE CLEAR 待ち)
+
+- script: `services/yuho-quant/data-scripts/overseas-physical-close64.ts`
+  (FULL `9e23e814…5e1da`、self pin `8d3b2648…f0d85`)。
+  test `services/yuho-quant/src/tests/overseas-physical-close64.test.ts`
+  14 passed 同梱 (実 verifier 経路含む・hermetic)。
+- 既存 `verifyArchivedAttachments` を直接使用 (新規 framework なし)。
+  期待 bytes は local 原本 (Tier A: metadata 照合・Tier B: 観測値照合)。
+- guard: GET pages exact 64 + hosted 観測 host
+  (`prod-files-secure.s3.us-west-2.amazonaws.com`・保存 bodies 由来)
+  各 URL 1 回・redirect manual・reserved 行 fsync 先行・
+  whole body wx0600・3xx STOP・fail-fast。
+- preflight: `996f2212…d76bf` exit 0・sends 0・writes 0・
+  69/64/59/5/5 + 67497778 bytes 再照合済み
+  (canonical env・packet `16d51720…63bd4d8` 不変照合)。
+- live DL 0。Root conditional DL grant 待ち。
+
 ## Limits
 
 - 本 PREP は live 0 (DL/listing の追加送信なし)。
