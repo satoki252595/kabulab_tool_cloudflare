@@ -28,13 +28,10 @@ import {
   runDailySync,
   type PriceSyncBatchInput,
 } from "./daily.js";
-import {
-  emptyUniverseBatch,
-  type OverlayCollectFn,
-} from "./universe-overlay.js";
+import type { OverlayCollectFn } from "./universe-overlay.js";
+import { fakeOverlayCollect } from "./tests/overlay-batch.js";
 
-const fakeCollect: OverlayCollectFn = async (input) =>
-  emptyUniverseBatch(input.baseAsOf, input.eligibilityAsOf);
+const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
 
 import { fetchChart, fetchStockRawData } from "../shared/yahoo/client.js";
 import "../shared/yahoo/nikkei-vi.js";

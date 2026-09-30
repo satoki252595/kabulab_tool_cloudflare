@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import { runMonthlyRebuild } from "./monthly.js";
-import {
-  emptyUniverseBatch,
-  type OverlayCollectFn,
-} from "./universe-overlay.js";
+import { runDateKeys } from "./daily.js";
+import type { OverlayCollectFn } from "./universe-overlay.js";
+import { fakeOverlayCollect } from "./tests/overlay-batch.js";
 
-const fakeCollect: OverlayCollectFn = async (input) =>
-  emptyUniverseBatch(input.baseAsOf, input.eligibilityAsOf);
+const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
 
 import * as coreSchema from "../shared/db/core-schema.js";
-import { universeOverlayState } from "../shared/db/universe-events.js";
+import {
+  listingOfficialEvents,
+  universeOverlayState,
+} from "../shared/db/universe-events.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as otakaraSchema from "../../services/otakara-yutai/src/db/schema.js";
 
@@ -77,7 +78,23 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
               ) => Promise.resolve(active).then(resolve, reject),
             };
           }
-          if (t === universeOverlayState) return { where: async () => [] };
+          // overlay 適用済み (完全世代 tuple・events 未適用) の正契約 → no-op。
+          if (t === listingOfficialEvents) return { where: async () => [] };
+          if (t === universeOverlayState) {
+            return {
+              where: async () => [
+                {
+                  id: 1,
+                  baseAsOf: "2026-08-31",
+                  eventsFetchedAt: "stub-gen",
+                  eventsSha: "s",
+                  eligibilityAsOf: runDateKeys(Date.now()).runDate,
+                  appliedAt: "stub-applied",
+                  heldListingCodes: null,
+                },
+              ],
+            };
+          }
           if (t === coreSchema.stockFinancials) return core;
           if (t === swingSchema.stockIndicators) return swing;
           // 同一テーブルに .where() 付き (利回り用) となし (月/ジャンル用) が

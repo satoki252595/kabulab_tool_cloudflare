@@ -25,13 +25,10 @@ import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as otakaraSchema from "../../services/otakara-yutai/src/db/schema.js";
 import { INSTRUMENT_TYPES } from "../shared/jpx/instrument-type.js";
 import { runMonthlyRebuild } from "./monthly.js";
-import {
-  emptyUniverseBatch,
-  type OverlayCollectFn,
-} from "./universe-overlay.js";
+import type { OverlayCollectFn } from "./universe-overlay.js";
+import { fakeOverlayCollect } from "./tests/overlay-batch.js";
 
-const fakeCollect: OverlayCollectFn = async (input) =>
-  emptyUniverseBatch(input.baseAsOf, input.eligibilityAsOf);
+const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
 
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));

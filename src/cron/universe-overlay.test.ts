@@ -8,13 +8,13 @@ import {
   applyUniverseOverlay,
   assertNoHeldListings,
   ensureUniverseOverlay,
-  loadAppliedOverlaySets,
   OverlayBatchInput,
   OverlayExistingRow,
   OverlayHoldError,
   parseMarketSuffix,
   planOverlayDeltas,
 } from "./universe-overlay.js";
+import { loadAppliedOverlaySets } from "./universe.js";
 
 // 値は全て実証拠の転記 (捏造なし):
 //   delist行: pinned delisted.html sha4974be15 (136行中9月14+未来2)
@@ -238,7 +238,20 @@ describe("planOverlayDeltas", () => {
     expect(plan.marketUpdates).toEqual([
       { id: 1, code: "3000", from: "スタンダード（内国株式）", to: "プライム（内国株式）", effectiveDate: "2026-09-20" },
     ]);
-    expect(plan.skipped.transferFromMismatch).toBe(1);
+    expect(plan.skipped.transferAlreadyReflected).toBe(1);
+  });
+
+  it("transfer from/to 双方不一致は説明不能 STOP (throw)", () => {
+    const byCode = new Map([
+      ["3000", { id: 1, code: "3000", name: "x", market: "スタンダード（内国株式）", isActive: true }],
+    ]);
+    const b = batch("2026-09-29");
+    b.sources.delisted.rows = [];
+    b.sources.newListings.rows = [];
+    b.sources.transfers.rows = [
+      { code: "3000", companyName: "x", effectiveDate: "2026-09-10", fromMarket: "グロース", toMarket: "プライム", note: "" },
+    ];
+    expect(() => planOverlayDeltas(b, byCode)).toThrow(/fromMarket 不一致/);
   });
 
   it("同 code 同日 transfer 矛盾は throw する", () => {
@@ -428,9 +441,10 @@ CREATE TABLE universe_overlay_state (
     expect(sets.heldListingCodes).toEqual(["618A"]);
   });
 
-  it("既適用 elig なら collect せず no-op", async () => {
+  it("既適用 elig + 完全世代 tuple なら collect せず no-op", async () => {
     sqlite.exec(
-      `INSERT INTO universe_overlay_state (id, eligibility_as_of) VALUES (1, '2026-09-29')`
+      `INSERT INTO universe_overlay_state (id, base_as_of, events_fetched_at, events_sha, eligibility_as_of, applied_at)
+       VALUES (1, '2026-08-31', 'GEN2', 's', '2026-09-29', '2026-09-29T00:00:00.000Z')`
     );
     const collect = vi.fn();
     const out = await ensureUniverseOverlay(memDb() as never, {
@@ -439,6 +453,62 @@ CREATE TABLE universe_overlay_state (
     });
     expect(out).toEqual({ applied: false, result: null });
     expect(collect).not.toHaveBeenCalled();
+  });
+
+  it("elig 一致でも世代 tuple 不完全なら HOLD (不完全失敗)", async () => {
+    sqlite.exec(
+      `INSERT INTO universe_overlay_state (id, eligibility_as_of) VALUES (1, '2026-09-29')`
+    );
+    const collect = vi.fn();
+    const err = await ensureUniverseOverlay(memDb() as never, {
+      eligibilityAsOf: "2026-09-29",
+      collect,
+    }).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(OverlayHoldError);
+    expect((err as Error).message).toContain("不完全な世代 tuple");
+    expect(collect).not.toHaveBeenCalled();
+  });
+
+  it("partial 書込 (applied_at 欠落) の世代は reuse しない (retry で再適用)", async () => {
+    sqlite.exec(
+      `INSERT INTO universe_overlay_state (id, base_as_of, events_fetched_at, events_sha, eligibility_as_of)
+       VALUES (1, '2026-08-31', 'GEN-PARTIAL', 's', '2026-09-29')`
+    );
+    const collect = vi.fn();
+    const err = await ensureUniverseOverlay(memDb() as never, {
+      eligibilityAsOf: "2026-09-29",
+      collect,
+    }).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(OverlayHoldError);
+    expect((err as Error).message).toContain("不完全な世代 tuple");
+    expect(collect).not.toHaveBeenCalled();
+  });
+
+  it("complete empty batch は state 世代を進める (旧世代に留まらない)", async () => {
+    const { emptyUniverseBatch } = await import("./tests/overlay-batch.js");
+    const res = await applyUniverseOverlay(
+      memDb() as never,
+      emptyUniverseBatch("2026-08-31", "2026-09-29"),
+      []
+    );
+    expect(res.stateCommitted).toBe(true);
+    expect(res.eventsUpserted).toBe(0);
+    const st = sqlite
+      .prepare("SELECT events_fetched_at, events_sha, eligibility_as_of, applied_delist FROM universe_overlay_state WHERE id=1")
+      .get() as { events_fetched_at: string; events_sha: string; eligibility_as_of: string; applied_delist: number };
+    expect(st.events_fetched_at).toBe("1970-01-01T00:00:00.000Z");
+    expect(st.events_sha).toBe("e".repeat(64));
+    expect(st.eligibility_as_of).toBe("2026-09-29");
+    expect(st.applied_delist).toBe(0);
+    const sets = await loadAppliedOverlaySets(memDb() as never);
+    expect(sets.eventsFetchedAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(sets.delisted.size).toBe(0);
   });
 
   it("同日再入でも HOLD 残があれば no-op 正常にしない (BLOCKER 回帰)", async () => {
@@ -474,7 +544,6 @@ CREATE TABLE universe_overlay_state (
       market: "グロース（内国株式）",
       sector: null,
       isActive: true,
-      instrumentType: "equity",
     }));
     const lq = db.insert(stocks).values(listingRows).toSQL();
     expect(lq.params.length).toBeLessThanOrEqual(100);

@@ -11,15 +11,20 @@
  * 表から消えた旧予定行 (延期/取消) を自動発効させない。
  * IPO 挿入は分類契約の確定まで guard で HOLD (無言 skip しない)。
  */
-import { and, eq, lte, inArray, sql } from "drizzle-orm";
-import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 import { stocks } from "../shared/db/core-schema.js";
 import {
   listingOfficialEvents,
   universeOverlayState,
 } from "../shared/db/universe-events.js";
-import { INSTRUMENT_TYPE_EQUITY } from "../shared/jpx/instrument-type.js";
 import type { TransferRow } from "../shared/jpx/transfers.js";
+import {
+  deactivateCoreStocksByIds,
+  insertCoreStocks,
+  loadAppliedOverlaySets,
+  updateCoreStocksMarketByIds,
+  type OverlayWriterDb,
+} from "./universe.js";
 import type { UniverseOfficialEventsBatch } from "./universe-official-events.js";
 
 /**
@@ -83,7 +88,7 @@ export interface OverlayPlan {
     transferNotInCore: number;
     transferMarketCurrent: number;
     transferInactive: number;
-    transferFromMismatch: number;
+    transferAlreadyReflected: number;
     listingAlreadyInCore: number;
     listingInactiveCollision: number;
     listingDelisted: number;
@@ -95,8 +100,18 @@ export interface OverlayPlan {
 
 /** events upsert: 11 binds/行 → 9 行/文 (99 binds)。 */
 export const OVERLAY_EVENT_CHUNK = 9;
-/** listing insert: 7 binds/行 (上限見積) → 14 行/文 (98 binds)。 */
+/** listing insert: 5 binds/行 → 14 行/文 (70 binds)。 */
 export const OVERLAY_LISTING_CHUNK = 14;
+
+/** HOLD の拒否ガード。retry-safe (delist/transfer は冪等再適用)。 */
+export class OverlayHoldError extends Error {
+  readonly codes: readonly string[];
+  constructor(codes: readonly string[], reason: string) {
+    super(`IPO HOLD (${codes.length}件): ${codes.join(",")}。${reason}`);
+    this.name = "OverlayHoldError";
+    this.codes = codes;
+  }
+}
 
 /**
  * 市場区分の接尾辞 (`（内国株式）` 等) を温存取得する。
@@ -126,7 +141,7 @@ export function planOverlayDeltas(
       transferNotInCore: 0,
       transferMarketCurrent: 0,
       transferInactive: 0,
-      transferFromMismatch: 0,
+      transferAlreadyReflected: 0,
       listingAlreadyInCore: 0,
       listingInactiveCollision: 0,
       listingDelisted: 0,
@@ -231,10 +246,17 @@ export function planOverlayDeltas(
     let curShort = cur.market.slice(0, cur.market.length - suffix.length);
     let lastDate = "";
     for (const ev of group) {
-      // fromMarket 整合: 現在状態と一致する event のみ連鎖させる。
+      // fromMarket 整合: 一致のみ連鎖。to 側が現状態と一致すれば
+      // 反映済み (source 証明あり) として skip。それ以外は説明不能のため STOP。
       if (ev.fromMarket !== curShort) {
-        plan.skipped.transferFromMismatch++;
-        continue;
+        if (ev.toMarket === curShort) {
+          plan.skipped.transferAlreadyReflected++;
+          continue;
+        }
+        throw new OverlayHoldError(
+          [code],
+          `transfer fromMarket 不一致 (${ev.fromMarket}→${ev.toMarket} に対し現 ${curShort}、${ev.effectiveDate})。説明不能のため STOP。`
+        );
       }
       curShort = ev.toMarket;
       lastDate = ev.effectiveDate;
@@ -304,16 +326,6 @@ export function planOverlayDeltas(
   return plan;
 }
 
-/** IPO HOLD の拒否ガード。retry-safe (delist/transfer は冪等再適用)。 */
-export class OverlayHoldError extends Error {
-  readonly codes: readonly string[];
-  constructor(codes: readonly string[], reason: string) {
-    super(`IPO HOLD (${codes.length}件): ${codes.join(",")}。${reason}`);
-    this.name = "OverlayHoldError";
-    this.codes = codes;
-  }
-}
-
 export interface OverlayApplyResult {
   eventsUpserted: number;
   deactivated: number;
@@ -324,10 +336,7 @@ export interface OverlayApplyResult {
   stateCommitted: boolean;
 }
 
-export type OverlayWriterDb = Pick<
-  BaseSQLiteDatabase<"async", unknown, Record<string, unknown>>,
-  "insert" | "select" | "update"
->;
+export type { OverlayWriterDb };
 
 /**
  * 計画を実行する。順序: events upsert → delist → transfer → IPO guard →
@@ -342,19 +351,8 @@ export async function applyUniverseOverlay(
   const byCode = new Map(existing.map((r) => [r.code, r]));
   const plan = planOverlayDeltas(batch, byCode);
 
-  // 空 batch は書込なしの no-op (state も進めない)。
-  if (plan.eventUpserts.length === 0) {
-    return {
-      eventsUpserted: 0,
-      deactivated: 0,
-      marketUpdated: 0,
-      listed: 0,
-      heldListingCodes: [],
-      skipped: plan.skipped,
-      stateCommitted: false,
-    };
-  }
-
+  // 空 batch でも state 世代は進める (complete empty generation)。
+  // 旧世代に留まると stale 世代選択が残る。
   for (let i = 0; i < plan.eventUpserts.length; i += OVERLAY_EVENT_CHUNK) {
     const slice = plan.eventUpserts.slice(i, i + OVERLAY_EVENT_CHUNK);
     await db
@@ -395,13 +393,11 @@ export async function applyUniverseOverlay(
       });
   }
 
-  const deactIds = plan.deactivations.map((d) => d.id);
-  for (let i = 0; i < deactIds.length; i += 80) {
-    await db
-      .update(stocks)
-      .set({ isActive: false, updatedAt: sql`(unixepoch())` })
-      .where(inArray(stocks.id, deactIds.slice(i, i + 80)));
-  }
+  // core_stocks 書込は single-writer 契約のため universe.ts helper 経由。
+  await deactivateCoreStocksByIds(
+    db,
+    plan.deactivations.map((d) => d.id)
+  );
 
   const idsByMarket = new Map<string, number[]>();
   for (const u of plan.marketUpdates) {
@@ -410,12 +406,7 @@ export async function applyUniverseOverlay(
     idsByMarket.set(u.to, ids);
   }
   for (const [to, ids] of idsByMarket) {
-    for (let i = 0; i < ids.length; i += 80) {
-      await db
-        .update(stocks)
-        .set({ market: to, updatedAt: sql`(unixepoch())` })
-        .where(inArray(stocks.id, ids.slice(i, i + 80)));
-    }
+    await updateCoreStocksMarketByIds(db, to, ids);
   }
 
   // IPO: market 未確定 (unknown) は HOLD。確定 positive のみ挿入する。
@@ -424,25 +415,13 @@ export async function applyUniverseOverlay(
   const heldCodes = plan.listingInserts
     .filter((l) => l.market === null)
     .map((l) => l.code);
-  // sector は NULL (EDINET 所有)。conflict は無現役化 (DoNothing)。
+  // sector は NULL (EDINET 所有)。instrument_type も NULL のまま
+  // (月次 backfill が充填。書くのは universe sync だけ)。
   const ready = plan.listingInserts.filter(
     (l): l is OverlayListingInsert & { market: string } => l.market !== null
   );
   for (let i = 0; i < ready.length; i += OVERLAY_LISTING_CHUNK) {
-    const slice = ready.slice(i, i + OVERLAY_LISTING_CHUNK);
-    await db
-      .insert(stocks)
-      .values(
-        slice.map((l) => ({
-          code: l.code,
-          name: l.name,
-          market: l.market,
-          sector: null,
-          isActive: true,
-          instrumentType: INSTRUMENT_TYPE_EQUITY,
-        }))
-      )
-      .onConflictDoNothing({ target: stocks.code });
+    await insertCoreStocks(db, ready.slice(i, i + OVERLAY_LISTING_CHUNK));
   }
 
   // base_as_of は月次 seed の所有。conflict 時は events 系のみ更新する。
@@ -501,84 +480,6 @@ export function assertNoHeldListings(result: OverlayApplyResult): void {
   }
 }
 
-/** 現世代の適用済みイベント集合 (月次 seed の deferral が読む)。 */
-export interface AppliedOverlaySets {
-  baseAsOf: string | null;
-  eventsFetchedAt: string | null;
-  eligibilityAsOf: string | null;
-  /** code 集合 (kind 別)。state 不在・世代未確定なら全て空。 */
-  delisted: ReadonlySet<string>;
-  listed: ReadonlySet<string>;
-  transferred: ReadonlySet<string>;
-  /** per-code UNKNOWN (HOLD 中 IPO) の明示。NULL/空 = 完全。 */
-  heldListingCodes: readonly string[];
-}
-
-/**
- * singleton state + 現世代一致の適用済み events を読む。
- * 旧 MAX(last_seen) は使わない (現世代は state.eventsFetchedAt のみ)。
- */
-export async function loadAppliedOverlaySets(
-  db: OverlayWriterDb
-): Promise<AppliedOverlaySets> {
-  const empty: AppliedOverlaySets = {
-    baseAsOf: null,
-    eventsFetchedAt: null,
-    eligibilityAsOf: null,
-    delisted: new Set(),
-    listed: new Set(),
-    transferred: new Set(),
-    heldListingCodes: [],
-  };
-  const states = await db
-    .select()
-    .from(universeOverlayState)
-    .where(eq(universeOverlayState.id, 1));
-  const state = states[0] as
-    | {
-        baseAsOf: string | null;
-        eventsFetchedAt: string | null;
-        eligibilityAsOf: string | null;
-        heldListingCodes: string | null;
-      }
-    | undefined;
-  if (state === undefined) return empty;
-  const held: readonly string[] =
-    state.heldListingCodes !== null && state.heldListingCodes !== ""
-      ? (JSON.parse(state.heldListingCodes) as string[])
-      : [];
-  const base = {
-    baseAsOf: state.baseAsOf,
-    eventsFetchedAt: state.eventsFetchedAt,
-    eligibilityAsOf: state.eligibilityAsOf,
-    heldListingCodes: held,
-  };
-  if (state.eventsFetchedAt === null || state.eligibilityAsOf === null) {
-    return { ...base, delisted: new Set(), listed: new Set(), transferred: new Set() };
-  }
-  const rows = (await db
-    .select({
-      code: listingOfficialEvents.code,
-      kind: listingOfficialEvents.kind,
-    })
-    .from(listingOfficialEvents)
-    .where(
-      and(
-        eq(listingOfficialEvents.lastSeenFetchedAt, state.eventsFetchedAt),
-        lte(listingOfficialEvents.effectiveDate, state.eligibilityAsOf)
-      )
-    )) as Array<{ code: string; kind: string }>;
-  const delisted = new Set<string>();
-  const listed = new Set<string>();
-  const transferred = new Set<string>();
-  for (const r of rows) {
-    if (r.kind === "delist") delisted.add(r.code);
-    else if (r.kind === "listing") listed.add(r.code);
-    else if (r.kind === "transfer") transferred.add(r.code);
-  }
-  return { ...base, delisted, listed, transferred };
-}
-
 export interface EnsureOverlayResult {
   applied: boolean;
   result: OverlayApplyResult | null;
@@ -589,33 +490,6 @@ export type OverlayCollectFn = (input: {
   baseAsOf: string | null;
   eligibilityAsOf: string;
 }) => Promise<UniverseOfficialEventsBatch>;
-
-/** 空 batch (dry-run・test 用。適用しても何も変わらない)。 */
-export function emptyUniverseBatch(
-  baseAsOf: string | null,
-  eligibilityAsOf: string
-): UniverseOfficialEventsBatch {
-  const src = (url: string) => ({
-    rows: [],
-    coveredYears: [eligibilityAsOf.slice(0, 4)],
-    rawSha: "e".repeat(64),
-    sourceUrl: url,
-  });
-  return {
-    baseAsOf,
-    eligibilityAsOf,
-    eventsFetchedAt: "1970-01-01T00:00:00.000Z",
-    eventsSha: "e".repeat(64),
-    archiveKey: "e".repeat(12),
-    pageId: "empty",
-    coverage: { years: [eligibilityAsOf.slice(0, 4)], bootstrapPartial: baseAsOf === null },
-    sources: {
-      delisted: src("https://www.jpx.co.jp/listing/stocks/delisted/index.html"),
-      newListings: src("https://www.jpx.co.jp/listing/stocks/new/index.html"),
-      transfers: src("https://www.jpx.co.jp/listing/stocks/transfers/index.html"),
-    },
-  };
-}
 
 /**
  * target-load 前の共通 pre-step。既適用なら no-op。
@@ -635,6 +509,18 @@ export async function ensureUniverseOverlay(
       throw new OverlayHoldError(
         sets.heldListingCodes,
         `elig=${opts.eligibilityAsOf} は HOLD 残ありのため不完全失敗 (再試行で解消するまで進行不可)。`
+      );
+    }
+    // 完全 generation tuple (現世代 pin) の成立を確認して reuse する。
+    // eventsFetchedAt/eventsSha は source archive pin、不在なら不完全 HOLD。
+    if (
+      sets.eventsFetchedAt === null ||
+      sets.eventsSha === null ||
+      sets.appliedAt === null
+    ) {
+      throw new OverlayHoldError(
+        [],
+        `elig=${opts.eligibilityAsOf} の state は不完全な世代 tuple のため HOLD (再適用で解消するまで進行不可)。`
       );
     }
     return { applied: false, result: null };
