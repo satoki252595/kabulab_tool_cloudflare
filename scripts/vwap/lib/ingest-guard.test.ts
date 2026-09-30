@@ -10,6 +10,7 @@ import {
   resolveRunId,
   sanitizeLogText,
   shouldSkipPut,
+  sourceObservedAggregate,
   universePin,
 } from "./ingest-guard.js";
 
@@ -207,7 +208,37 @@ describe("buildIngestSummary", () => {
     expect(body.written).toBe(9);
     expect(body.outcomes["7203"].status).toBe("written");
     expect(s.metadata.invalid).toBe(1);
-    expect(s.metadata.unknown).toEqual([]);
+    // metadata は counts + pin + 集約のみ。outcomes/一覧は物理 JSON 本文。
+    expect(s.metadata.unknownCount).toBe(0);
+    expect("outcomes" in (s.metadata as Record<string, unknown>)).toBe(false);
+    expect("unknown" in (s.metadata as Record<string, unknown>)).toBe(false);
+    expect(s.metadata.universe).toEqual({ size: 10, sha256: "u".repeat(64) });
+    expect(s.metadata.sourceObserved).toEqual({ count: 1, maxDate: null, maxTs: 1757548800 });
+  });
+
+  it("3695 件級でも metadata は Notion 上限内に収まる (offline size bound)", () => {
+    // 実 code 形 (4-5 ASCII) × 3695 の worst-case outcomes。本文は大きくてよい。
+    const outcomes: Record<string, { status: "written"; latestSourceBar: string; bodySha: string }> = {};
+    for (let i = 0; i < 3695; i++) {
+      const code = `${String(1000 + (i % 9000))}${i % 2 === 0 ? "A" : ""}`;
+      outcomes[code] = { status: "written", latestSourceBar: "2026-09-30", bodySha: "b".repeat(64) };
+    }
+    const n = Object.keys(outcomes).length;
+    const s = buildIngestSummary({
+      ...stats,
+      codes: n,
+      written: n,
+      universe: { size: n, sha256: "e".repeat(64) },
+      outcomes,
+    });
+    // metadata: rich_text 配列 ≤100 (text 2000 刻み) = 200000 文字未満を要求。
+    // 実測 ~1KB のところ bound 10000 で余裕を持たせつつ上限から遠ざける。
+    const metaLen = JSON.stringify(s.metadata).length;
+    expect(metaLen).toBeLessThan(10000);
+    // 本文は full outcomes を保持する。
+    const body = JSON.parse(new TextDecoder().decode(s.files[0].bytes));
+    expect(Object.keys(body.outcomes)).toHaveLength(n);
+    expect(body.universe.sha256).toBe("e".repeat(64));
   });
 
   it("日付キーが取れないfinishedAtは投げる", () => {
@@ -241,6 +272,26 @@ describe("archiveSummaryOrFatal", () => {
     expect(r.code).toBe(2);
     expect(r.reason).toContain("exception:Error:");
     expect(r.reason).not.toContain("https://");
+  });
+});
+
+describe("sourceObservedAggregate", () => {
+  it("観測ありのみ数え、日付/ts の最大を取る", () => {
+    expect(
+      sourceObservedAggregate({
+        a: { status: "written", latestSourceBar: "2026-09-29", bodySha: "x" },
+        b: { status: "skipped", latestSourceBar: "2026-09-30", bodySha: "y" },
+        c: { status: "empty", latestSourceBar: null, bodySha: null },
+        d: { status: "notStarted", latestSourceBar: null, bodySha: null },
+      })
+    ).toEqual({ count: 2, maxDate: "2026-09-30", maxTs: null });
+    expect(
+      sourceObservedAggregate({
+        a: { status: "written", latestSourceBar: 100, bodySha: "x" },
+        b: { status: "unknown", latestSourceBar: 200, bodySha: "y" },
+      })
+    ).toEqual({ count: 2, maxDate: null, maxTs: 200 });
+    expect(sourceObservedAggregate({})).toEqual({ count: 0, maxDate: null, maxTs: null });
   });
 });
 

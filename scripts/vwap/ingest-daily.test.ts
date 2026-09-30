@@ -39,6 +39,14 @@ const mockR2Put = vi.mocked(r2Put);
 const mockLoadCodes = vi.mocked(loadCodes);
 const mockFetchDaily = vi.mocked(fetchDaily);
 const mockRecord = vi.mocked(recordPrimaryData);
+const recordedBody = (): Record<string, unknown> => {
+  const input = mockRecord.mock.calls[0][0] as {
+    files: Array<{ bytes: Uint8Array }>;
+  };
+  return JSON.parse(new TextDecoder().decode(input.files[0].bytes)) as Record<string, unknown>;
+};
+const recordedMetadata = (): Record<string, unknown> =>
+  (mockRecord.mock.calls[0][0] as { metadata: Record<string, unknown> }).metadata;
 
 const BAR_A = { date: "2026-09-25", o: 100, h: 110, l: 90, c: 105, v: 1000, adj: 104 };
 const BAR_B = { date: "2026-09-25", o: 200, h: 210, l: 190, c: 205, v: 2000, adj: 204 };
@@ -74,12 +82,9 @@ describe("ingest-daily main flow", () => {
     expect(mockR2Put).toHaveBeenCalledTimes(1);
     expect(mockR2Put.mock.calls[0][0]).toBe("daily/B.json");
     expect(mockRecord).toHaveBeenCalledTimes(1);
-    const summary = mockRecord.mock.calls[0][0] as {
-      key: string;
-      metadata: Record<string, unknown>;
-    };
-    expect(summary.key).toMatch(/^vwap-ingest-daily-/);
-    const outcomes = summary.metadata.outcomes as Record<string, { status: string; latestSourceBar: unknown; bodySha: unknown }>;
+    const input = mockRecord.mock.calls[0][0] as { key: string };
+    expect(input.key).toMatch(/^vwap-ingest-daily-/);
+    const outcomes = recordedBody().outcomes as Record<string, { status: string; latestSourceBar: unknown; bodySha: unknown }>;
     expect(Object.keys(outcomes).sort()).toEqual(["A", "B"]);
     expect(outcomes.A.status).toBe("skipped");
     expect(outcomes.A.latestSourceBar).toBe("2026-09-25");
@@ -88,8 +93,8 @@ describe("ingest-daily main flow", () => {
     expect(outcomes.B.status).toBe("written");
     expect(outcomes.B.latestSourceBar).toBe("2026-09-25");
     expect(typeof outcomes.B.bodySha).toBe("string");
-    expect(summary.metadata.universe).toMatchObject({ size: 2 });
-    expect(summary.metadata.unknown).toEqual([]);
+    expect(recordedMetadata().universe).toMatchObject({ size: 2 });
+    expect(recordedMetadata().unknownCount).toBe(0);
   });
 
   it("first PUT timeout => PUT1/Yahoo0-more/unknown1/notStarted1/exit2 (archive still runs)", async () => {
@@ -105,9 +110,8 @@ describe("ingest-daily main flow", () => {
     expect(mockFetchDaily.mock.calls[0][0]).toBe("A.T");
     // summary 保管は走り、unknown1/notStarted1 を記録する。
     expect(mockRecord).toHaveBeenCalledTimes(1);
-    const summary = mockRecord.mock.calls[0][0] as { metadata: Record<string, unknown> };
-    expect(summary.metadata.unknown).toEqual(["A"]);
-    const outcomes = summary.metadata.outcomes as Record<string, { status: string }>;
+    expect(recordedMetadata().unknownCount).toBe(1);
+    const outcomes = recordedBody().outcomes as Record<string, { status: string }>;
     expect(outcomes.A.status).toBe("unknown");
     expect(outcomes.B.status).toBe("notStarted");
   });
@@ -120,8 +124,7 @@ describe("ingest-daily main flow", () => {
     expect(process.exitCode).toBe(2);
     expect(mockFetchDaily).toHaveBeenCalledTimes(0);
     expect(mockR2Put).toHaveBeenCalledTimes(0);
-    const summary = mockRecord.mock.calls[0][0] as { metadata: Record<string, unknown> };
-    const outcomes = summary.metadata.outcomes as Record<string, { status: string }>;
+    const outcomes = recordedBody().outcomes as Record<string, { status: string }>;
     expect(outcomes.A.status).toBe("error");
     expect(outcomes.B.status).toBe("notStarted");
     // 生 SDK cause (URL) は stdout/stderr に出さない。
@@ -153,8 +156,7 @@ describe("ingest-daily main flow", () => {
     // A は GET 解決後に fatal 再確認で止まり、Yahoo を叩かない。C も未着手。
     expect(mockFetchDaily).toHaveBeenCalledTimes(1);
     expect(mockFetchDaily.mock.calls[0][0]).toBe("B.T");
-    const summary = mockRecord.mock.calls[0][0] as { metadata: Record<string, unknown> };
-    const outcomes = summary.metadata.outcomes as Record<string, { status: string; latestSourceBar: unknown }>;
+    const outcomes = recordedBody().outcomes as Record<string, { status: string; latestSourceBar: unknown }>;
     expect(outcomes.A).toEqual({ status: "notStarted", latestSourceBar: null, bodySha: null });
     expect(outcomes.B.status).toBe("unknown");
     expect(outcomes.C.status).toBe("notStarted");
