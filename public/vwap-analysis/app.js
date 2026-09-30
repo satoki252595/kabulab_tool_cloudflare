@@ -296,8 +296,10 @@ function statusEmpty(big, sub) {
 async function load(code) {
   statusEmpty("読み込み中…", `${code} のデータを取得しています`);
   // 5分足・日足・信用残高を並列取得。日足が無ければ表示不可、5分足/信用は欠落しても明示して続行(ルール2)。
-  const dailyReq = fetch(`${apiBase()}/api/daily?code=${code}`).then((r) => r.json());
-  const fiveReq = fetch(`${apiBase()}/api/intra?code=${code}`).then((r) => r.json()).then((j) => ({ v: parseIntra(j), basis: (j && j.basis) || null })).catch((e) => ({ err: String(e) }));
+  // !ok は json 化せず throw → 明示の失敗表示。silent の「未取得」化はしない。
+  const needOk = (name) => (r) => { if (!r.ok) throw new Error(`${name} HTTP ${r.status}`); return r.json(); };
+  const dailyReq = fetch(`${apiBase()}/api/daily?code=${code}`).then(needOk("daily"));
+  const fiveReq = fetch(`${apiBase()}/api/intra?code=${code}`).then(needOk("intra")).then((j) => ({ v: parseIntra(j), basis: (j && j.basis) || null })).catch((e) => ({ err: String(e) }));
   const marginReq = fetch(`${apiBase()}/api/margin?code=${code}&n=104`).then((r) => r.json()).then((j) => ({ v: j.dates || [], amb: j.ambiguousDates || [] })).catch((e) => ({ err: String(e) }));
 
   let dj, fr, mr;
@@ -365,7 +367,8 @@ function render() {
       const p = (b.h + b.l + b.c) / 3;   // 生 典型価格
       const v = b.v;                       // 生 出来高
       pv += p * v; vv += v;
-      perDay.set(d, vv ? +(pv / vv).toFixed(2) : +b.c.toFixed(2));
+      // 累積出来高 0 (正当な無出来高) の日は VWAP 点を置かない。close 代用なし。
+      if (vv > 0) perDay.set(d, +(pv / vv).toFixed(2));
       rawBars.push({ h: b.h, l: b.l, c: b.c, v });
     }
     const pts = [...perDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([time, value]) => ({ time, value }));
@@ -443,7 +446,7 @@ function renderFooter() {
   const cov = data.fiveErr
     ? `5分足: 取得失敗`
     : (data.fiveHold
-      ? `5分足 HOLD (${data.fiveHold})`
+      ? `5分足の確認待ち（日足のみ表示）`
       : (data.fiveDays ? `5分足 ${data.fiveDays}日（${data.fiveStart}〜）` : `5分足: 未取得`));
   const exNote = "";
   const legend = [tip("VWAP", "up"), tip("POC", "up"), tip("バリューエリア", "up"), tip("価格別出来高", "up"), tip("信用残高", "up r")].join(" ・ ");
