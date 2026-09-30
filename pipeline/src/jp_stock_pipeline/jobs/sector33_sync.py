@@ -47,7 +47,7 @@ from ..collectors.edinet_codelist import (
     is_valid_edinet_code,
 )
 from ..config import Settings, load_settings
-from ..contracts.sector33 import normalize_sector33
+from ..contracts.sector33 import TSE_SECTOR33_NAMES, normalize_sector33
 from ..contracts.stock_code import source_code_to_ticker
 from .runner import JobContext, build_parser, main_exit, run_job
 
@@ -255,7 +255,7 @@ def _generation_key(asof: str, manifest: dict[str, object]) -> str:
     """保管世代 key を不変の capture metadata から派生させる。
 
     入力は実際の fetch で固定された値のみ (asOf/zipSha256/zipBytes/
-    requestedAt/completedAt/listedRecords/sourceUrl)。本文内の `"key"`
+    requestedAt/completedAt/listedRecords/sourceUrl/response)。本文内の `"key"`
     自記は digest 対象外 (循環回避)。record 時の `now()` 採番はしない
     (再実行で別 key になる冪等破壊のため禁止)。同一 capture は同一 key、
     1 バイトでも違えば別 key になる。旧 `edinet-codelist-{asof}` 形とは
@@ -279,7 +279,13 @@ def execute(ctx: JobContext) -> SectorReport:
         return report
     try:
         requested_at = datetime.now(timezone.utc)
-        artifact = edinet_codelist.fetch_codelist(ctx.settings)
+        captured: dict[str, object] = {}
+        artifact = edinet_codelist.fetch_codelist(
+            ctx.settings,
+            on_response=lambda resp: captured.update(
+                {"response": edinet_codelist.response_metadata(resp)}
+            ),
+        )
         completed_at = datetime.now(timezone.utc)
     except Exception as exc:
         ctx.add_failure("sector33-fetch", f"取得失敗: {exc}")
@@ -329,6 +335,9 @@ def execute(ctx: JobContext) -> SectorReport:
         "completedAt": completed_at.isoformat(),
         "listedRecords": len(records),
         "sourceUrl": edinet_codelist.CODELIST_URL,
+        # 同一 Response 由来の不変 metadata (status/最終 URL/安全 header)。
+        # capture 時に固定され、世代 key の digest に入る。
+        "response": captured["response"],
     }
     key = _generation_key(asof, manifest)
     manifest["key"] = key  # 自記 (digest 対象外。照合は CLI/double が key 一致で行う)
@@ -405,9 +414,15 @@ def execute(ctx: JobContext) -> SectorReport:
         written += len(params) - 1
     report.written = written
     ctx.add_success(written)
-    current_null = {str(r.get("code") or "") for r in current if r.get("sector33") is None}
-    gaps = sorted(c for c in current_null if c not in changes)
-    # 書いた値は全て非 NULL (qualified のみ) のため、changes に居れば解消済み。
+    current_invalid = {
+        str(r.get("code") or "")
+        for r in current
+        if r.get("sector33") not in TSE_SECTOR33_NAMES
+    }
+    gaps = sorted(c for c in current_invalid if c not in changes)
+    # 書いた値は全て正規 33 名 (qualified のみ。builder backstop と同一語彙)
+    # のため、changes に居れば解消済み。未有効な現値 (NULL・空・33 業種外)
+    # は NULL 書換えせず保持したまま gap に載せ partial にする。
     report.gaps = gaps
     if gaps:
         sample = ",".join(gaps[:10])

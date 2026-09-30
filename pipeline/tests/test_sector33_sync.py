@@ -41,6 +41,24 @@ def _fixture_text() -> str:
     return mod._read_codelist_csv(_zip_bytes())
 
 
+def _fake_fetch(art):
+    """fetch 二重: `on_response` へ実 bytes 由来の応答 metadata を渡す。"""
+
+    def fake(settings, *, on_response=None):
+        if on_response is not None:
+            data = art.local_path.read_bytes()
+            on_response(
+                SimpleNamespace(
+                    status_code=200,
+                    url=edinet_codelist.CODELIST_URL,
+                    headers={"content-length": str(len(data))},
+                )
+            )
+        return art
+
+    return fake
+
+
 def _artifact(tmp_path, data: bytes | None = None):
     return save_raw(
         data if data is not None else _zip_bytes(),
@@ -127,7 +145,7 @@ def _cli_fail(monkeypatch, holder: dict):
 def _wire(monkeypatch, tmp_path, store, *, cli: str = "ok", data: bytes | None = None):
     holder: dict = {}
     art = _artifact(tmp_path, data)
-    monkeypatch.setattr(edinet_codelist, "fetch_codelist", lambda settings: art)
+    monkeypatch.setattr(edinet_codelist, "fetch_codelist", _fake_fetch(art))
     monkeypatch.setattr(mod, "D1Store", lambda *a, **k: store)
     if cli == "ok":
         _cli_ok(monkeypatch, holder)
@@ -231,7 +249,7 @@ class StrictArchiveDouble:
 def _wire_strict(monkeypatch, tmp_path, store, data: bytes | None = None):
     """fetch/D1 実形 + 厳格原本 replay。戻りは double。"""
     art = _artifact(tmp_path, data)
-    monkeypatch.setattr(edinet_codelist, "fetch_codelist", lambda settings: art)
+    monkeypatch.setattr(edinet_codelist, "fetch_codelist", _fake_fetch(art))
     monkeypatch.setattr(mod, "D1Store", lambda *a, **k: store)
     dbl = StrictArchiveDouble()
     monkeypatch.setattr(mod, "_run_archive_cli", dbl.cli)
@@ -295,7 +313,7 @@ class TestArchiveGate:
     def test_archive_failure_writes_zero(self, monkeypatch, tmp_path):
         t1 = _real_tickers(1)[0][0]
         store = _SectorD1([(t1, None, 1, "equity")])
-        _wire(monkeypatch, tmp_path, store, cli="fail")
+        holder = _wire(monkeypatch, tmp_path, store, cli="fail")
         ctx, state = _ctx()
         report = mod.execute(ctx)
         assert report.stopped == "archive-failure"
@@ -303,6 +321,17 @@ class TestArchiveGate:
         assert state["failed"] == 1
         assert state["codes"][0][0] == "sector33-archive"
         assert report.archive_page_id is None
+        # 保管失敗でも producer の応答 linkage は manifest に残る。
+        man_arg = next(a for a in holder["cmd"] if a.startswith("--manifest="))[11:]
+        manifest = json.loads(Path(man_arg).read_text(encoding="utf-8"))
+        assert manifest["response"] == {
+            "status": 200,
+            "finalUrl": edinet_codelist.CODELIST_URL,
+            "headers": {"content-length": str(len(_zip_bytes()))},
+        }
+        key_arg = next(a for a in holder["cmd"] if a.startswith("--key="))[6:]
+        assert manifest["key"] == key_arg
+        assert key_arg == mod._generation_key("2026-06-10", manifest)
 
     def test_cli_receives_key_and_paths(self, monkeypatch, tmp_path):
         store = _SectorD1([])
@@ -471,6 +500,31 @@ class TestWriterSemantics:
         assert "9998" in report.gaps
         assert state["failed"] == 1
 
+    def test_invalid_current_gaps_when_source_absent(self, monkeypatch, tmp_path):
+        """source 不在でも未有効な現値は gap (partial)。正規 33 名は gap なし。
+
+        空文字・非 33 名は NULL 書換えせず保持するが、不足として gap に
+        載せ partial (exit 1) にする。確証済みの正規 33 名は保持＋gap なし。
+        """
+        codes = {r.code for r in edinet_codelist.parse_codelist(_zip_bytes())}
+        assert not ({"9999", "9998", "9995"} & codes)
+        store = _SectorD1(
+            [
+                ("9999", "", 1, "equity"),
+                ("9998", "外国法人・組合", 1, "equity"),
+                ("9995", "化学", 1, "equity"),
+            ]
+        )
+        _wire(monkeypatch, tmp_path, store)
+        ctx, state = _ctx()
+        report = mod.execute(ctx)
+        assert store.values()["9999"][0] == ""
+        assert store.values()["9998"][0] == "外国法人・組合"
+        assert store.values()["9995"][0] == "化学"
+        assert report.gaps == ["9998", "9999"]
+        assert state["failed"] == 1
+        assert state["codes"][0][0] == "sector33-gap"
+
     def test_non_equity_untouched(self, monkeypatch, tmp_path):
         (t1, s1), (t2, _), (t3, _) = _real_tickers(3)
         store = _SectorD1(
@@ -526,6 +580,20 @@ class TestWriterSemantics:
             hashlib.sha256(dbl.pages[key1]["files"][zip_name]).hexdigest()
             == hashlib.sha256(_zip_bytes()).hexdigest()
         )
+        # 応答 linkage: 両世代の保管 manifest が同一応答を指し、各 key が
+        # 自世代 manifest (応答含む) から再計算できる。local の manifest
+        # ファイルは run 2 が上書きするため、世代別の保管 bytes で照合する。
+        expected_response = {
+            "status": 200,
+            "finalUrl": edinet_codelist.CODELIST_URL,
+            "headers": {"content-length": str(len(_zip_bytes()))},
+        }
+        for cmd, key in ((dbl.cmds[0], key1), (dbl.cmds[1], key2)):
+            man_name = Path(next(a for a in cmd if a.startswith("--manifest="))[11:]).name
+            manifest = json.loads(dbl.pages[key]["files"][man_name].decode("utf-8"))
+            assert manifest["response"] == expected_response
+            assert manifest["key"] == key
+            assert key == mod._generation_key("2026-06-10", manifest)
 
     def test_sector_only_and_updated_at(self, monkeypatch, tmp_path):
         (t1, _), (t2, _) = _real_tickers(2)
@@ -586,7 +654,7 @@ class TestWriterSemantics:
         t1 = _real_tickers(1)[0][0]
         store = _SectorD1([(t1, None, 1, "equity")])
         art = _artifact(tmp_path)
-        monkeypatch.setattr(edinet_codelist, "fetch_codelist", lambda settings: art)
+        monkeypatch.setattr(edinet_codelist, "fetch_codelist", _fake_fetch(art))
         monkeypatch.setattr(mod, "D1Store", lambda *a, **k: store)
 
         def no_cli(*a, **k):
@@ -610,6 +678,11 @@ class TestGenerationKey:
             "completedAt": "2026-06-10T00:00:01+00:00",
             "listedRecords": len(edinet_codelist.parse_codelist(_zip_bytes())),
             "sourceUrl": edinet_codelist.CODELIST_URL,
+            "response": {
+                "status": 200,
+                "finalUrl": edinet_codelist.CODELIST_URL,
+                "headers": {"content-length": str(len(_zip_bytes()))},
+            },
         }
 
     def test_derives_from_capture_only(self):
@@ -629,6 +702,15 @@ class TestGenerationKey:
         other = dict(cap, zipSha256="0" * 64)
         assert mod._generation_key("2026-06-10", other) != base
         other = dict(cap, completedAt="2026-06-10T00:00:02+00:00")
+        assert mod._generation_key("2026-06-10", other) != base
+        other = dict(
+            cap,
+            response={
+                "status": 200,
+                "finalUrl": edinet_codelist.CODELIST_URL,
+                "headers": {"content-length": "1"},
+            },
+        )
         assert mod._generation_key("2026-06-10", other) != base
         assert mod._generation_key("2026-06-11", cap).startswith("edinet-codelist-2026-06-11-")
 

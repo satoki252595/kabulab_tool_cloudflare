@@ -15,8 +15,11 @@ import io
 import logging
 import re
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
+
+import requests
 
 from ..config import Settings
 from ..contracts.stock_code import source_code_to_ticker
@@ -67,14 +70,58 @@ def normalize_sec_code(sec_code: str | None) -> str | None:
     return source_code_to_ticker(sec_code)
 
 
-def fetch_codelist(settings: Settings) -> RawArtifact:
-    """コードリスト zip を取得し、無加工で原本保存する (§8.1 step 1-2)。"""
+# 応答 metadata として manifest に残す header の allowlist (小文字)。
+# 存在したものだけ拾い、欠けていても推測・補完しない。secret・session・
+# Cookie・auth 系は載せない (下の deny が第二の関門)。
+_RESPONSE_HEADER_ALLOWLIST = frozenset(
+    {"content-type", "content-length", "last-modified", "etag"}
+)
+_RESPONSE_HEADER_DENY = frozenset(
+    {
+        "cookie",
+        "set-cookie",
+        "authorization",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "www-authenticate",
+    }
+)
+
+
+def response_metadata(resp: requests.Response) -> dict[str, object]:
+    """同一 Response から status・最終 URL・安全 header だけを抜き出す。
+
+    body は触らない (原本は `save_raw` の `resp.content` が正)。header 名は
+    小文字に正準化する。deny 掲載・allowlist 外は捨てる。
+    """
+    headers: dict[str, str] = {}
+    for name, value in resp.headers.items():
+        low = name.lower()
+        if low in _RESPONSE_HEADER_DENY:
+            continue
+        if low in _RESPONSE_HEADER_ALLOWLIST:
+            headers[low] = value
+    return {"status": resp.status_code, "finalUrl": resp.url, "headers": headers}
+
+
+def fetch_codelist(
+    settings: Settings,
+    *,
+    on_response: Callable[[requests.Response], None] | None = None,
+) -> RawArtifact:
+    """コードリスト zip を取得し、無加工で原本保存する (§8.1 step 1-2)。
+
+    `on_response` は同一 Response を受け取る最小 seam (検証通過後のみ呼ぶ。
+    新 GET・新 schema なし)。渡さない既存呼び出し (月次) の挙動は不変。
+    """
     resp = fetch(CODELIST_URL)
     # マジックバイト検証 (CONTRACTS): 200 で返るエラーページを正本の原本にしない (§3)
     if not resp.content.startswith(b"PK\x03\x04"):
         raise FetchError(
             f"コードリスト応答が zip でない (エラーページ?): head={resp.content[:16]!r}"
         )
+    if on_response is not None:
+        on_response(resp)
     return save_raw(
         resp.content,
         source=Source.EDINET,

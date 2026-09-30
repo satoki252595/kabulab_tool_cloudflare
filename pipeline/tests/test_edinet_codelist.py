@@ -10,6 +10,7 @@ import io
 import zipfile
 from dataclasses import replace
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 from conftest import fixture_path
@@ -305,6 +306,41 @@ class TestFetchCodelist:
         assert art.scope == "ALL"
         assert art.license_tag is LicenseTag.COMMERCIAL_OK
         assert art.url == mod.CODELIST_URL
+
+    def test_on_response_receives_same_response(self, tmp_path, monkeypatch):
+        """同一 Response を callback へ渡す。渡さない既存呼び出しは不変。"""
+        data = _zip_bytes()
+        resp = SimpleNamespace(
+            content=data,
+            status_code=200,
+            url=mod.CODELIST_URL,
+            headers={"content-length": str(len(data))},
+        )
+        monkeypatch.setattr(mod, "fetch", lambda url, **kw: resp)
+        settings = load_settings(env={"RAW_DATA_DIR": str(tmp_path)}, dry_run=True)
+        seen: list = []
+        art = mod.fetch_codelist(settings, on_response=seen.append)
+        assert seen == [resp]
+        assert art.local_path.read_bytes() == data
+
+    def test_response_metadata_allowlist(self):
+        """status・最終 URL・安全 header のみ。secret/auth 系は捨てる。"""
+        resp = SimpleNamespace(
+            status_code=200,
+            url="https://disclosure2dl.edinet-fsa.go.jp/x/Edinetcode.zip",
+            headers={
+                "Content-Type": "application/zip",
+                "Content-Length": "571872",
+                "Set-Cookie": "SID=secret",
+                "Authorization": "Bearer secret",
+                "X-Custom-Session": "abc",
+            },
+        )
+        assert mod.response_metadata(resp) == {
+            "status": 200,
+            "finalUrl": "https://disclosure2dl.edinet-fsa.go.jp/x/Edinetcode.zip",
+            "headers": {"content-type": "application/zip", "content-length": "571872"},
+        }
 
 
 class TestConvertCodelist:

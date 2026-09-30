@@ -38,7 +38,7 @@ EDINET コードリストからの sector33 差分同期ジョブ
 
 ## 検証 (offline)
 
-- `pipeline: ruff + pytest` 全緑 (1501 passed / 0 failed / 58 skipped)。
+- `pipeline: ruff + pytest` 全緑 (1504 passed / 0 failed / 58 skipped)。
   実フィクスチャ＋実 helper で archive 失敗→writer 0、重複 STOP、
   合法欠損 HOLD、未知 retain、非株式 0、2nd diff 0、sector-only・
   `updated_at` 保護、診断 taxonomy 全種別を cover。
@@ -64,5 +64,28 @@ EDINET コードリストからの sector33 差分同期ジョブ
   bytes は失敗 (逃げ key なし)、hosted 改竄は SHA で検出、manifest pin
   不一致は producer 検査で検出。
 - 外部送受信の追加 0 (source/Notion/D1/R2/dispatch)。D1/R2 実書込 0。
+
+## gap guard 修正 (review)
+
+- gap 判定を NULL のみから「正規 33 名 (builder backstop と同一語彙)
+  でない現値」へ拡張。空文字・33 業種外の既値は source 不在でも
+  NULL 書換えせず保持したまま gap に載せ partial (exit 1) にする
+  (success のまま moneyflow へ進めない)。正規 33 名の既値は保持＋gap なし。
+- 対照: 現値 空/`外国法人・組合`/正規 33 名 × source 不在 → retain＋
+  前 2 件のみ gap・partial。
+
+## onResponse 最小 seam (review)
+
+- `fetch_codelist` に同一 Response を渡す `on_response` を追加 (検証通過
+  後のみ呼ぶ。新 GET・新 schema なし)。月次呼び出しは引数なしのまま互換。
+- `response_metadata` は status・最終 URL・allowlist 安全 header
+  (content-type/content-length/last-modified/etag、存在分のみ) だけを
+  抜き出す。Cookie/Set-Cookie/auth 系は deny の第二関門でも捨てる。
+  body は `save_raw` の同一 `resp.content` が正。
+- sector caller は manifest に `response` を含め、世代 key の digest に
+  入れる。record 時 `now()` 採番・不明 POST 後の逃げ key 生成はなし。
+- linkage: 正常 run・archive 失敗・reentry の各 manifest が同一応答を
+  指し、各 key が自世代 manifest (応答含む) から再計算できることを
+  offline 対照で確認 (reentry は世代別の保管 bytes で照合)。
 - 通常 3817 件の parse 結果は保持 (合法 preferred/empty/00000 は
   非候補に分離)。
