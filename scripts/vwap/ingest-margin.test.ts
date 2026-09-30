@@ -165,13 +165,13 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
       }
       return store.has(key) ? (store.get(key) as string) : null;
     });
-    const r2Put = vi.fn(async (key: string, body: string) => {
+    const r2Put = vi.fn(async (key: string, body: string, _observedVersion: string | null) => {
       order.push(`r2:${key}`);
       store.set(key, body);
     });
     vi.doMock("./lib/r2.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./lib/r2.js")>();
-      return { ...actual, r2Get, r2Put };
+      return { ...actual, r2Get, r2GetVersion: async (key: string) => { const body = await r2Get(key); return body === null ? null : { body, etag: "observed-version" }; }, r2Put };
     });
     // 検証は純粋パーサのテストで担保済み。ここでは順序だけ見る。
     vi.doMock("../../services/vwap-analysis/lib/margin-daily.js", async (importOriginal) => {
@@ -198,10 +198,12 @@ describe("main (検証 → 原本保管 → 実体確認 → R2 PUT の順序)",
   }
 
   it("原本保管が全 R2 PUT より先、dates.json は全 PUT より先に読む", async () => {
-    const { order, rejected } = await runMain({
+    const { order, rejected, r2Put } = await runMain({
       seed: { "margin/dates.json": JSON.stringify(["2026-09-25"]) },
     });
     expect(rejected).toBeNull();
+    expect(r2Put.mock.calls[0][2]).toBeNull();
+    expect(r2Put.mock.calls[1][2]).toBe("observed-version");
     expect(order).toEqual([
       "get:margin/dates.json",
       "archive",

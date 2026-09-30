@@ -6,7 +6,7 @@ import "dotenv/config";
 // 実行: npx tsx scripts/ingest-intra.ts [--codes=...] [--limit=N] [--range=60d]   KEEP_DAYS=365
 import { fileURLToPath } from "node:url";
 import { fetchBars5m } from "../../src/shared/yahoo/client.js";
-import { r2Get, r2Put, mapLimit, sleep, retry, R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
+import { r2GetVersion, r2Put, mapLimit, sleep, retry, R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
 import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { archiveSummaryOrFatal, assertSavedIntraShape, bodyPin, buildIngestSummary, findInvalidBars, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome, type SavedIntra } from "./lib/ingest-guard.js";
@@ -76,8 +76,11 @@ export async function main() {
     if (aborted || fatal) return;                        // source await 中に counterpart が fatal 化しうる
     // R2 GET fault は fatal。null は明示 NoSuchKey の正常 bootstrap のみ。
     let existing: string | null;
+    let observedVersion: string | null;
     try {
-      existing = await r2Get(`intra/${code}.json`);
+      const current = await r2GetVersion(`intra/${code}.json`);
+      existing = current === null ? null : current.body;
+      observedVersion = current === null ? null : current.etag;
     } catch (e) {
       // GET fault は typed family のみ記録する (生 SDK cause を出さない)。
       const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
@@ -131,7 +134,7 @@ export async function main() {
       return;
     }
     try {
-      await r2Put(`intra/${code}.json`, payloadJson);
+      await r2Put(`intra/${code}.json`, payloadJson, observedVersion);
     } catch (e) {
       // PUT fault は全件 fatal。区別は正直計数する (unknown/rejected/想定外)。
       if (e instanceof R2PutUnknownError) {

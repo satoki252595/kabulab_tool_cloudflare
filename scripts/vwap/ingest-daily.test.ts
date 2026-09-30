@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { R2PutUnknownError } from "./lib/r2.js";
-import { r2Get, r2Put } from "./lib/r2.js";
+import { R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
+import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { loadCodes } from "./lib/codes.js";
 import { fetchDaily } from "../../src/shared/yahoo/client.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
@@ -13,7 +13,7 @@ import { main, tenYearRange } from "./ingest-daily.js";
 
 vi.mock("./lib/r2.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./lib/r2.js")>();
-  return { ...mod, r2Get: vi.fn(), r2Put: vi.fn() };
+  return { ...mod, r2GetVersion: vi.fn(), r2Put: vi.fn() };
 });
 vi.mock("./lib/codes.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./lib/codes.js")>();
@@ -39,7 +39,7 @@ vi.mock("../../src/shared/env.js", () => ({
   },
 }));
 
-const mockR2Get = vi.mocked(r2Get);
+const mockR2Get = vi.mocked(r2GetVersion);
 const mockR2Put = vi.mocked(r2Put);
 const mockLoadCodes = vi.mocked(loadCodes);
 const mockFetchDaily = vi.mocked(fetchDaily);
@@ -97,9 +97,20 @@ const localSummaryBody = (): Record<string, unknown> => {
 };
 
 describe("ingest-daily main flow", () => {
+  it("concurrent replacement rejects the exact observed version and stops remaining codes", async () => {
+    mockLoadCodes.mockResolvedValue(["A", "B"]);
+    mockR2Get.mockResolvedValue({ body: existingA, etag: "opaque-multipart-2" });
+    mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: { ...FAKE_PROOF, rawSha: "a".repeat(64) } });
+    mockR2Put.mockRejectedValueOnce(new R2PutRejectedError("daily/A.json", "PreconditionFailed", 412, null));
+    await main();
+    expect(mockR2Put).toHaveBeenCalledTimes(1);
+    expect(mockR2Put.mock.calls[0][2]).toBe("opaque-multipart-2");
+    expect(mockFetchDaily).toHaveBeenCalledTimes(1);
+    expect(process.exitCode).toBe(2);
+  });
   it("normal positive + skip control (exit 0, all codes accounted)", async () => {
     mockLoadCodes.mockResolvedValue(["A", "B"]);
-    mockR2Get.mockImplementation(async (key: string) => (key === "daily/A.json" ? existingA : null));
+    mockR2Get.mockImplementation(async (key: string) => (key === "daily/A.json" ? { body: existingA, etag: "observed-version" } : null));
     mockFetchDaily.mockImplementation(async (symbol: string) =>
       symbol === "A.T"
         ? { bars: [BAR_A], splits: [], proof: FAKE_PROOF }
@@ -111,6 +122,7 @@ describe("ingest-daily main flow", () => {
     // B のみ PUT。A は内容同一で skip。
     expect(mockR2Put).toHaveBeenCalledTimes(1);
     expect(mockR2Put.mock.calls[0][0]).toBe("daily/B.json");
+    expect(mockR2Put.mock.calls[0][2]).toBeNull();
     expect(mockRecord).toHaveBeenCalledTimes(1);
     const input = mockRecord.mock.calls[0][0] as { key: string };
     expect(input.key).toMatch(/^vwap-ingest-daily-/);
@@ -253,7 +265,7 @@ describe.skipIf(!existsSync(FIX_R2_DAILY_7203))("ingest-daily actual same-cached
     const P2 = { ...proofBase, observedAt: "2026-09-29T01:00:00.000Z" };
     const store = new Map<string, string>([["daily/7203.json", standing]]);
     mockLoadCodes.mockResolvedValue(["7203"]);
-    mockR2Get.mockImplementation(async (key: string) => store.get(key) ?? null);
+    mockR2Get.mockImplementation(async (key: string) => store.has(key) ? { body: store.get(key)!, etag: "observed-version" } : null);
     mockR2Put.mockImplementation(async (key: string, body: string) => {
       store.set(key, body);
     });
@@ -263,6 +275,7 @@ describe.skipIf(!existsSync(FIX_R2_DAILY_7203))("ingest-daily actual same-cached
     expect(process.exitCode).toBe(0);
     expect(mockR2Put).toHaveBeenCalledTimes(1);
     const after1 = store.get("daily/7203.json") as string;
+    expect(mockR2Put.mock.calls[0][2]).toBe("observed-version");
     const sha1 = sha256str(after1);
     const post1 = JSON.parse(after1) as { bars: unknown[]; proof: { observedAt: string } };
     expect(post1.bars).toHaveLength(freshFull.length);
@@ -305,7 +318,7 @@ describe.skipIf(!existsSync(FIX_R2_DAILY_7203))("ingest-daily actual same-cached
       observedAt: "2026-09-29T00:00:00.000Z",
     };
     mockLoadCodes.mockResolvedValue(["7203"]);
-    mockR2Get.mockResolvedValue(standing);
+    mockR2Get.mockResolvedValue({ body: standing, etag: "observed-version" });
     mockFetchDaily.mockResolvedValueOnce({ bars: freshBars, splits: [], proof: P });
     await main();
     expect(process.exitCode).toBe(1);

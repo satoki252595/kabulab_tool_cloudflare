@@ -11,7 +11,7 @@ import {
   fetchDailyMargin,
 } from "../../services/vwap-analysis/lib/margin.js";
 import { validateDailyMarginSnapshot } from "../../services/vwap-analysis/lib/margin-daily.js";
-import { r2Get, r2Put } from "./lib/r2.js";
+import { r2Get, r2GetVersion, r2Put } from "./lib/r2.js";
 import { sanitizeLogText } from "./lib/ingest-guard.js";
 
 /** `--date=YYYYMMDD` (基準日) をパースする純関数。未指定なら undefined (最新)。 */
@@ -103,7 +103,8 @@ export async function main(): Promise<void> {
   const basis = data.snapshot.basisDate;
 
   // dates.json を snapshot 含む全 PUT より前に read/validate する。
-  const savedRaw = await r2Get("margin/dates.json");
+  const datesVersion = await r2GetVersion("margin/dates.json");
+  const savedRaw = datesVersion === null ? null : datesVersion.body;
   const saved: unknown = savedRaw === null ? [] : JSON.parse(savedRaw);
   if (!Array.isArray(saved)) {
     throw new Error(`margin dates.json の形状が不正です (配列でない): ${(savedRaw ?? "").slice(0, 80)}`);
@@ -127,7 +128,8 @@ export async function main(): Promise<void> {
 
   const snapshotKey = `margin/daily/${basis}.json`;
   const snapshotJson = JSON.stringify({ ...data.snapshot, rawPageId: archived.pageId });
-  const existingSnapshot = await r2Get(snapshotKey);
+  const snapshotVersion = await r2GetVersion(snapshotKey);
+  const existingSnapshot = snapshotVersion === null ? null : snapshotVersion.body;
   const { putSnapshot, putDates } = planDailyMarginPuts(existingSnapshot, snapshotJson, saved, merged);
   if (!putSnapshot && !putDates) {
     console.info(
@@ -136,7 +138,7 @@ export async function main(): Promise<void> {
     return;
   }
   if (putSnapshot) {
-    await r2Put(snapshotKey, snapshotJson);
+    await r2Put(snapshotKey, snapshotJson, snapshotVersion === null ? null : snapshotVersion.etag);
     const readback = await r2Get(snapshotKey);
     if (readback !== snapshotJson) {
       throw new Error(`margin R2 readback 不一致: ${snapshotKey}`);
@@ -144,7 +146,7 @@ export async function main(): Promise<void> {
   }
   if (putDates) {
     const datesJson = JSON.stringify(merged);
-    await r2Put("margin/dates.json", datesJson);
+    await r2Put("margin/dates.json", datesJson, datesVersion === null ? null : datesVersion.etag);
     const datesReadback = await r2Get("margin/dates.json");
     if (datesReadback !== datesJson) {
       throw new Error("margin dates.json readback 不一致");

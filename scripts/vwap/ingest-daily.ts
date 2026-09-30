@@ -3,7 +3,7 @@ import "dotenv/config";
 // 実行: npx tsx scripts/ingest-daily.ts [--codes=7203,6758] [--limit=50]
 import { fileURLToPath } from "node:url";
 import { fetchDaily } from "../../src/shared/yahoo/client.js";
-import { r2Get, r2Put, mapLimit, sleep, R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
+import { r2GetVersion, r2Put, mapLimit, sleep, R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
 import { buildRepairPost } from "./lib/repair-daily.js";
 import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
@@ -71,8 +71,11 @@ export async function main() {
     // R2 GET fault は fatal。null は明示 NoSuchKey の正常 bootstrap のみ。
     // 空文字列は bootstrap ではなく腐敗 (=== null 判定。truthiness 禁止)。
     let existing: string | null;
+    let observedVersion: string | null;
     try {
-      existing = await r2Get(`daily/${code}.json`);
+      const current = await r2GetVersion(`daily/${code}.json`);
+      existing = current === null ? null : current.body;
+      observedVersion = current === null ? null : current.etag;
     } catch (e) {
       // GET fault は typed family のみ記録する (生 SDK cause を出さない)。
       const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
@@ -164,7 +167,7 @@ export async function main() {
       return;
     }
     try {
-      await r2Put(`daily/${code}.json`, postJson);
+      await r2Put(`daily/${code}.json`, postJson, observedVersion);
     } catch (e) {
       // PUT fault は全件 fatal。区別は正直計数する (unknown/rejected/想定外)。
       if (e instanceof R2PutUnknownError) {
