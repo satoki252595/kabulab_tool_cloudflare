@@ -39,7 +39,7 @@
  * ため。archived 行は残るが非表示で、移行は write-once のため通常出ない)。
  */
 import { queryUniqueRow } from "./archive.js";
-import { notionRequest } from "./client.js";
+import { assertCursorProgress, notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 
 /** rich_text 1 ブロックの上限 (archive.ts と同一値) */
@@ -299,19 +299,25 @@ export async function readStockTextRow(
   rowPageId: string
 ): Promise<StockTextSection[]> {
   const blocks: HeadingBlock[] = [];
+  const seenCursors = new Set<string>();
   let cursor: string | null = null;
   for (;;) {
     const qs: string =
       cursor !== null
         ? `?start_cursor=${cursor}&page_size=100`
         : "?page_size=100";
+    // envelope は client の共通 guard が検証済み (不正は NotionConfigError)。
+    // 反復は本文処理より前、終端は has_more===false のみ。
     const res: ChildrenResponse = await notionRequest<ChildrenResponse>(
       "GET",
       `/blocks/${rowPageId}/children${qs}`
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seenCursors, res.next_cursor as string);
+    }
     blocks.push(...res.results);
-    if (!res.has_more || res.next_cursor === null) break;
-    cursor = res.next_cursor;
+    if (res.has_more === false) break;
+    cursor = res.next_cursor as string;
   }
   const [marker, ...rest] = blocks;
   if (

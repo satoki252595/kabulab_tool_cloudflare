@@ -17,7 +17,7 @@
  *     という正直なステータスを記録 (捏造値ではなく事実 / 運用者可視)。
  *   - メタデータ全文はページ本文の code block に必ず原文保存し欠落させない。
  */
-import { NotionUnknownResultError, notionRequest } from "./client.js";
+import { NotionUnknownResultError, assertCursorProgress, notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import { NotionFileTooLargeError, toNotionUpload, uploadFile } from "./file-upload.js";
 import { sha256Hex, sha256HexBytes } from "../sha256.js";
@@ -149,6 +149,7 @@ export async function findAllBackupChildrenByTitle(args: {
   const wantParent = parentPageId.replace(/-/g, "");
   const hits: BackupChildHit[] = [];
   let cursor: string | null = null;
+  const seen = new Set<string>();
   for (;;) {
     const body: Record<string, unknown> = {
       query: title,
@@ -161,6 +162,9 @@ export async function findAllBackupChildrenByTitle(args: {
       "/search",
       body
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const r of res.results) {
       if (r.archived === true || r.in_trash === true) continue;
       if (r.parent?.type !== "page_id") continue;
@@ -226,6 +230,7 @@ async function scanFirstChildrenForTitle(
   maxPages = 5
 ): Promise<string | null> {
   let cursor: string | null = null;
+  const seen = new Set<string>();
   for (let p = 0; p < maxPages; p++) {
     const qs: string =
       cursor !== null
@@ -235,6 +240,9 @@ async function scanFirstChildrenForTitle(
       "GET",
       `/blocks/${parentPageId}/children${qs}`
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const b of res.results) {
       if (
         kind === "database" &&
@@ -294,12 +302,16 @@ export async function findAllChildDatabases(
 ): Promise<string[]> {
   const hits: string[] = [];
   let cursor: string | null = null;
+  const seen = new Set<string>();
   for (;;) {
     const qs = cursor ? `?start_cursor=${cursor}&page_size=100` : "?page_size=100";
     const res: BlockChildren = await notionRequest<BlockChildren>(
       "GET",
       `/blocks/${pageId}/children${qs}`
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const b of res.results) {
       if (b.type === "child_database" && b.child_database?.title === title) {
         hits.push(b.id);

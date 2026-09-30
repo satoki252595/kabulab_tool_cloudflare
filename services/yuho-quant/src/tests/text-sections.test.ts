@@ -212,6 +212,8 @@ describe("text-sections-query", () => {
   const ORIG_NOW = Date.now;
   // 行 ID → Notion 子ブロック列
   let notionRows: Map<string, unknown[]>;
+  // 行 ID → 生ページ応答 (不正応答の注入用。あれば定型の代わりに返す)
+  let notionRaw: Map<string, unknown>;
   // ペーシング待ちを消す単調増加時刻。client モジュールはテスト間で
   // 使い回すため、beforeEach 毎に巻き戻すと待ち時間が爆発する (実測で
   // タイムアウト)。ファイル内で単調に進める。
@@ -223,12 +225,23 @@ describe("text-sections-query", () => {
     seedStock(1, "1001");
     seedStock(2, "1002");
     notionRows = new Map();
+    notionRaw = new Map();
     process.env.NOTION_TOKEN = "dummy-token";
     process.env.NOTION_BACKUP_PAGE_ID = "b".repeat(32);
     process.env.NOTION_TRASH_PAGE_ID = "c".repeat(32);
     Date.now = (() => (mockNow += 10_000)) as typeof Date.now;
     globalThis.fetch = (async (url: unknown) => {
       const m = /\/blocks\/([^/]+)\/children/.exec(String(url));
+      if (m && notionRaw.has(m[1]!)) {
+        const body = notionRaw.get(m[1]!);
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => body,
+          text: async () => "{}",
+        } as Response;
+      }
       const blocks = m ? (notionRows.get(m[1]!) ?? null) : null;
       if (!blocks) throw new Error(`テスト: 未定義行への fetch: ${String(url)}`);
       return {
@@ -319,5 +332,25 @@ describe("text-sections-query", () => {
     db = createDb(createD1(sqlite) as unknown as D1Database);
 
     expect(await getLatestTextSections(db, 2)).toEqual([]);
+  });
+
+  it("不正ページ応答は部分本文を返さず reject する (#199)", async () => {
+    seedDoc(6, 2, "2025-03-31", 1760000000, "row-bad");
+    seedSection(6, 2, "2025-03-31", "business", 8);
+    // 途中本文つきの malformed (has_more=true + next_cursor=null)
+    notionRaw.set("row-bad", {
+      results: [
+        h2("抽出テキスト全文 (1項目)"),
+        h3("b1", "事業の内容 (business)"),
+        code("b2", "途中まで"),
+      ],
+      has_more: true,
+      next_cursor: null,
+    });
+    db = createDb(createD1(sqlite) as unknown as D1Database);
+
+    await expect(getLatestTextSections(db, 2)).rejects.toThrow(
+      "Notion list 応答が不正 (endpoint=block-children)"
+    );
   });
 });

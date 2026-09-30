@@ -12,7 +12,7 @@ import {
   findBackupChildByTitle,
   findUniqueBackupChildByTitle,
 } from "./archive.js";
-import { notionRequest } from "./client.js";
+import { assertCursorProgress, notionRequest } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
 import { joinRichText, splitRichText } from "./rich-text.js";
@@ -232,6 +232,7 @@ export async function listLedgerEntries(
 
   const entries: LedgerEntry[] = [];
   let cursor: string | undefined;
+  const seen = new Set<string>();
   for (;;) {
     const body: Record<string, unknown> = {
       page_size: 100,
@@ -245,6 +246,9 @@ export async function listLedgerEntries(
     if (cursor) body.start_cursor = cursor;
 
     const res = await notionRequest<QueryResponse>("POST", `/databases/${dbId}/query`, body);
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const page of res.results) entries.push(parseLedgerPage(page));
     if (!res.has_more || !res.next_cursor) break;
     cursor = res.next_cursor;
@@ -267,9 +271,13 @@ interface ChildrenResponse {
 async function loadChildren(pageId: string): Promise<BodyBlock[]> {
   const blocks: BodyBlock[] = [];
   let cursor: string | undefined;
+  const seen = new Set<string>();
   for (;;) {
     const qs = cursor ? `?start_cursor=${cursor}&page_size=100` : "?page_size=100";
     const res = await notionRequest<ChildrenResponse>("GET", `/blocks/${pageId}/children${qs}`);
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     blocks.push(...res.results);
     if (!res.has_more || !res.next_cursor) break;
     cursor = res.next_cursor;

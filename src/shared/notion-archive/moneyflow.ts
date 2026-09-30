@@ -38,7 +38,7 @@ import {
   findUniqueBackupChildByTitle,
   queryUniqueRow,
 } from "./archive.js";
-import { NotionUnknownResultError, notionRequest } from "./client.js";
+import { NotionUnknownResultError, assertCursorProgress, notionRequest } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
 import { splitRichText } from "./rich-text.js";
@@ -1002,6 +1002,9 @@ export async function verifyObservedBatch(
       const body: Record<string, unknown> = { filter, page_size: OBS_VERIFY_PAGE_SIZE };
       if (cursor) body.start_cursor = cursor;
       const res = await notionRequest<ObsBatchQueryResponse>("POST", `/databases/${dbId}/query`, body);
+      if (res.has_more === true) {
+        assertCursorProgress(seenCursors, res.next_cursor as string);
+      }
       for (const r of res.results ?? []) {
         const props = r.properties ? r.properties : fail("検証読取の行に properties なし");
         const k = plainOf(props[MONEYFLOW_OBS_PROPS.key]?.title) ?? fail("検証読取の行にキーなし");
@@ -1009,11 +1012,8 @@ export async function verifyObservedBatch(
         arr.push(r);
         seen.set(k, arr);
       }
-      if (!res.has_more) break;
-      const next = res.next_cursor ? res.next_cursor : fail("検証読取のカーソル不正 (has_more なのに next_cursor なし)");
-      if (seenCursors.has(next)) fail("検証読取のカーソル不正 (同一カーソル再出現)");
-      seenCursors.add(next);
-      cursor = next;
+      if (res.has_more === false) break;
+      cursor = res.next_cursor as string;
     }
   }
   for (const [k, want] of wantByKey) {

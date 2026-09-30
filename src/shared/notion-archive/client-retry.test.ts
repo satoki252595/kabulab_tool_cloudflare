@@ -200,17 +200,15 @@ describe("notion-archive client retry", () => {
   });
 
   it("POST /databases/{id}/query の 500 は読取のため再試行する", async () => {
-    script = [
-      { status: 500 },
-      { status: 200, body: { results: [] } },
-    ];
+    const page = { results: [], has_more: false, next_cursor: null };
+    script = [{ status: 500 }, { status: 200, body: page }];
     const { notionRequest } = await load();
     const got = await notionRequest<{ results: unknown[] }>(
       "POST",
       "/databases/abc/query",
       {}
     );
-    expect(got).toEqual({ results: [] });
+    expect(got).toEqual(page);
     expect(fetchCount).toBe(2);
   });
 });

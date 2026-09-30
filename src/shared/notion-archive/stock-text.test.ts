@@ -74,6 +74,8 @@ describe("notion-archive stock-text", () => {
 
   const dbQuery = (ids: string[]) => ({
     results: ids.map((id) => ({ id })),
+    has_more: false,
+    next_cursor: null,
   });
 
   describe("buildTextBodyBlocks", () => {
@@ -329,6 +331,59 @@ describe("notion-archive stock-text", () => {
       ]);
       const { readStockTextRow } = await load();
       await expect(readStockTextRow("row-1")).rejects.toThrow("目印ではない");
+    });
+
+    it("不正 envelope は共通 guard で部分成功にせず throw", async () => {
+      route("GET", "/v1/blocks/row-1/children", [
+        childrenPage(
+          [h2("抽出テキスト全文 (1項目)"), h3("b1", "A (a)")],
+          true,
+          null
+        ),
+      ]);
+      const { readStockTextRow } = await load();
+      await expect(readStockTextRow("row-1")).rejects.toThrow(
+        "Notion list 応答が不正 (endpoint=block-children)"
+      );
+    });
+
+    it("反復カーソルは追加 GET 前に throw (2 GET で停止)", async () => {
+      route("GET", "/v1/blocks/row-1/children", [
+        childrenPage(
+          [h2("抽出テキスト全文 (1項目)"), h3("b1", "A (a)")],
+          true,
+          "c"
+        ),
+        childrenPage([code("b2", "続き")], true, "c"),
+        childrenPage([code("b3", "到達しない")]),
+      ]);
+      const { readStockTextRow } = await load();
+      await expect(readStockTextRow("row-1")).rejects.toThrow(
+        "next_cursor の反復"
+      );
+      expect(calls).toHaveLength(2);
+    });
+
+    it("正常 3 ページは頁をまたいだ節も全文復元する", async () => {
+      route("GET", "/v1/blocks/row-1/children", [
+        childrenPage(
+          [h2("抽出テキスト全文 (2項目)"), h3("b1", "A (a)")],
+          true,
+          "c1"
+        ),
+        childrenPage([code("b2", "前半")], true, "c2"),
+        childrenPage([
+          code("b3", "後半"),
+          h3("b4", "B (b)"),
+          code("b5", "全文B"),
+        ]),
+      ]);
+      const { readStockTextRow } = await load();
+      expect(await readStockTextRow("row-1")).toEqual([
+        { itemName: "A", sectionKey: "a", text: "前半後半" },
+        { itemName: "B", sectionKey: "b", text: "全文B" },
+      ]);
+      expect(calls).toHaveLength(3);
     });
 
     it("見出しの無い本文・想定外ブロックは throw", async () => {

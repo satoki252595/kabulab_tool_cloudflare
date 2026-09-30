@@ -25,7 +25,7 @@
  * too_large は終端 skip、error/未添付は PATCH 更新で再実行収束。
  * 捏造・既定値埋めはしない (ルール2)。
  */
-import { notionRequest } from "./client.js";
+import { assertCursorProgress, notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
 import {
@@ -196,6 +196,7 @@ async function findChildDatabase(
   title: string
 ): Promise<string | null> {
   let cursor: string | null = null;
+  const seen = new Set<string>();
   for (;;) {
     const qs = cursor
       ? `?start_cursor=${cursor}&page_size=100`
@@ -204,6 +205,9 @@ async function findChildDatabase(
       "GET",
       `/blocks/${pageId}/children${qs}`
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const b of res.results) {
       if (b.type === "child_database" && b.child_database?.title === title) {
         return b.id;
@@ -554,6 +558,7 @@ async function loadExistingInRange(
   const byKey = new Map<string, ExistingRow>();
   const byTitlePubdate = new Map<string, ExistingRow>();
   let cursor: string | undefined;
+  const seen = new Set<string>();
   for (;;) {
     const res = await notionRequest<{
       results: QueryPage[];
@@ -569,6 +574,9 @@ async function loadExistingInRange(
       page_size: 100,
       ...(cursor ? { start_cursor: cursor } : {}),
     });
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const p of res.results) {
       const txt = (p.properties["TDnet ID"]?.rich_text ?? [])
         .map((t) => t.plain_text)

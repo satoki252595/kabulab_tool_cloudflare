@@ -27,7 +27,7 @@ import {
   findAllBackupChildrenByTitle,
   recordPrimaryData,
 } from "../../src/shared/notion-archive/archive.js";
-import { notionRequest } from "../../src/shared/notion-archive/client.js";
+import { assertCursorProgress, notionRequest } from "../../src/shared/notion-archive/client.js";
 import { notionEnv } from "../../src/shared/notion-archive/env.js";
 import { listPageFiles } from "../../src/shared/notion-archive/page-file.js";
 import { joinRichText } from "../../src/shared/notion-archive/rich-text.js";
@@ -251,6 +251,7 @@ async function readFullRelation(
 ): Promise<string[]> {
   const ids: string[] = [];
   let cursor: string | undefined;
+  const seen = new Set<string>();
   for (;;) {
     const qs = cursor ? `?start_cursor=${cursor}&page_size=100` : "?page_size=100";
     const res = await paced(paceMs, () =>
@@ -259,6 +260,9 @@ async function readFullRelation(
         `/pages/${pageId}/properties/${propId}${qs}`
       )
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const r of res.results) ids.push(r.id);
     if (!res.has_more) break;
     if (!res.next_cursor) {
@@ -298,12 +302,16 @@ export async function queryDbAll(
 ): Promise<NotionPage[]> {
   const out: NotionPage[] = [];
   let cursor: string | undefined;
+  const seen = new Set<string>();
   for (;;) {
     const body: Record<string, unknown> = { filter, page_size: 100 };
     if (cursor) body["start_cursor"] = cursor;
     const res = await paced(paceMs, () =>
       notionRequest<QueryResponse>("POST", `/databases/${dbId}/query`, body)
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     out.push(...res.results);
     if (!res.has_more) break;
     if (!res.next_cursor) {
@@ -389,11 +397,15 @@ export interface FilesCapture {
 export async function listAllBlocks(paceMs: number, blockId: string): Promise<RawBlock[]> {
   const out: RawBlock[] = [];
   let cursor: string | undefined;
+  const seen = new Set<string>();
   for (;;) {
     const qs = cursor ? `?start_cursor=${cursor}&page_size=100` : "?page_size=100";
     const res = await paced(paceMs, () =>
       notionRequest<ChildrenListResponse>("GET", `/blocks/${blockId}/children${qs}`)
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     out.push(...res.results);
     if (!res.has_more) break;
     if (!res.next_cursor) {
@@ -872,6 +884,7 @@ export async function enumerateMasterIncoming(
   const masterDb = normalizePageId(notionEnv.NOTION_DB_STOCK_MASTER());
   const dbIds: Array<{ id: string; title: string; properties: unknown }> = [];
   let cursor: string | null = null;
+  const seen = new Set<string>();
   for (;;) {
     const body: Record<string, unknown> = {
       filter: { property: "object", value: "database" },
@@ -881,6 +894,9 @@ export async function enumerateMasterIncoming(
     const res = await paced(paceMs, () =>
       notionRequest<SearchDbResponse>("POST", "/search", body)
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const r of res.results) {
       if (r.archived === true || r.in_trash === true) continue;
       dbIds.push({ id: r.id, title: dbTitleOf(r.title), properties: r.properties });
