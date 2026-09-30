@@ -105,18 +105,18 @@ jobs:
         run: |
           # daily の errors/invalid (exit1) で intra を道連れにしない。exit2
           # (連続429/503 ABORT・R2 fatal unknown/rejected/GET fault・バッチ保管
-          # 失敗・main 想定外) だけは intra を走らせず即 exit2 (「これ以上叩くな」
+          # 失敗・main 想定外) とその他の未完了/異常出口は intra を走らせず exit2 (「これ以上叩くな」
           # 契約と未保管成功なしを維持)。
           daily_rc=0
           pnpm ingest:vwap-daily || daily_rc=$?
-          if [ "$daily_rc" -eq 2 ]; then
-            echo "daily_exit=2 intra_exit=not-run reason=daily-abort"
+          if [ "$daily_rc" -ne 0 ] && [ "$daily_rc" -ne 1 ]; then
+            echo "daily_exit=${daily_rc} intra_exit=not-run reason=daily-abort"
             exit 2
           fi
           intra_rc=0
           pnpm ingest:vwap-intra || intra_rc=$?
           echo "daily_exit=${daily_rc} intra_exit=${intra_rc}"
-          if [ "$intra_rc" -eq 2 ]; then exit 2; fi
+          if [ "$intra_rc" -ne 0 ] && [ "$intra_rc" -ne 1 ]; then exit 2; fi
           if [ "$daily_rc" -ne 0 ] || [ "$intra_rc" -ne 0 ]; then exit 1; fi
 
       # 5分足のみ (dispatch=intra)。intra_range で 60d バックフィル可能 (Yahoo上限60d)。

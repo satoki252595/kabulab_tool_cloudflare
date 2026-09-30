@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # vwap-ingest.yml daily-intra run block の最小 runnable check。
 # YAML 内の実ブロックを抽出して stub pnpm で実行する (複写ロジックの乖離なし)。
-# 4 cases: daily1→intra実行+final1 / daily2→intra未実行+final2 / intra2→final2 / 成功→0。
+# 正常/partial/fatal と Node未完了出口13の後続停止を検査。
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 YML="$ROOT/.github/workflows/vwap-ingest.yml"
@@ -50,6 +50,8 @@ check() { # name daily_rc intra_rc want_final want_intra_run
 check "daily1-intra-runs-final1" 1 0 1 yes
 check "daily-abort2-intra-notrun-final2" 2 0 2 no
 check "intra-abort2-final2" 0 2 2 yes
+check "daily-unfinished13-intra-notrun-final2" 13 0 2 no
+check "intra-unfinished13-final2" 0 13 2 yes
 check "success-final0" 0 0 0 yes
 
 # failure-artifact 回収口の存在確認 (durable-before-archive の対)。
