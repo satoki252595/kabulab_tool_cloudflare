@@ -213,7 +213,9 @@ export function createD1HttpDb<TSchema extends Record<string, unknown>>(
  * 削除済み。公式 REST 文書に rollback の明文は無く、binding `DB.batch` にだけ
  * 明文がある)。この関数は実証時と同一の envelope (`{batch}`) と束縛変数 SQL で
  * 送り、応答の件数と各文の成否を検査する — 名前だけで原子性を主張しない。
- * 失敗時は throw し、呼び出し側は止めて同引数の再実行 (冪等) で回復する。
+ * 失敗時 (known-failure) も応答不明時 (unknown) も throw して呼び出し側は止める。
+ * 同引数の再送はしない (resend 0)。unknown は適用有無が確定しないため、別途
+ * 読み取り専用の照合で状態を確定してから人が判断する — 自動再実行しない。
  */
 export function createD1HttpBatchSender(): (
   statements: readonly D1BatchStatement[]

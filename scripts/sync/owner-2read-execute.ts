@@ -92,9 +92,9 @@ export const PINNED_DB_SHA = "a7bcf8e2f330e5c81f78e063131dc8837c90d7db9c07388ad7
 export const PINNED_URL_SHA = "8a2fc196212244e660668396fcdd92228f1b2120b6dd16145bbdeef321ddeb49";
 /** 再使用 module 5 件の full SHA (pure preflight 確定・Root 報告済みの値)。 */
 export const PINNED_MODULES = {
-  capture: "3e25047d6c77a8c74626c0f67ac075923501e315612f0ab5c399643b91732060",
+  capture: "fede652c5518f6ae74d3d3987eafedcbf95d042a32f79b9f481e91a9a76825d1",
   selectProof: "6c864f43b8141162783368c311c2abd8e673e34dd58c82469618173e7a96bf05",
-  d1Client: "2d16180bdf864bcade9f8850b922f99b768be8de3bcbe427900fc9ec7afda1c1",
+  d1Client: "5a50ec98aee0f7b1a2c5dbd7f831099847242acc875106919f2e8e0efd5e2d4a",
   sharedEnv: "49d9f77dee74f3e711466f123c284572de6b991b5ad4a50c9f86921eaa915239",
   pnpmLock: "805dd5b36ca9ec385b29de1ded715305537eac514dbc7c77dfc55b2d56617e58",
 };

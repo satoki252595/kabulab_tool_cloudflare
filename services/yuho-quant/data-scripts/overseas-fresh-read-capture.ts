@@ -103,9 +103,9 @@ const PINS = {
   /** 37 per-chunk idsSHA を結合した SHA (params 固定)。 */
   params37: "df1d194b7b2b460d10097eacf41f4d4f65217aeda09f148595bd1ac12510452d",
   modules: {
-    captureSelf: "a435b3b13b57576d9bd02531d69fb26b20c61dd718ef4a9f631040b2fa73cc3c",
+    captureSelf: "bb9253c5524f58c4b56cf788c75da26016281857c1f14d3cf0d8549e6248c170",
     selectProof: "6c864f43b8141162783368c311c2abd8e673e34dd58c82469618173e7a96bf05",
-    d1Client: "2d16180bdf864bcade9f8850b922f99b768be8de3bcbe427900fc9ec7afda1c1",
+    d1Client: "5a50ec98aee0f7b1a2c5dbd7f831099847242acc875106919f2e8e0efd5e2d4a",
     yuhoSchema: "8adec13819c141b23044bce38ddfbbe9a933f5080972161993779ba62c473393",
     coreSchema: "3393ccc640bdef58f1abd895e36b853d5afc764f9a3e464aa61a915f318e714d",
     sharedEnv: "183af3b9847673b5ea3863f81b0866c7d078075193b702631bfd7941bb1e8d15",
