@@ -431,14 +431,47 @@ def test_scalar_property_item_returns_single_item(client):
     assert len(calls) == 1
 
 
-def test_scalar_after_list_pages_is_rejected(client):
+@pytest.mark.parametrize("first_results", [[{"id": "a"}], []], ids=["nonempty", "empty"])
+def test_scalar_after_list_pages_is_rejected(client, first_results):
+    """pagination begun 後の scalar は初頁の空/非空を問わず拒否する。"""
     calls = sdk_responses(client, [
-        (200, _list_page([{"id": "a"}], True, "c2"), {}),
+        (200, _list_page(first_results, True, "c2"), {}),
         (200, {"object": "property_item", "id": "p", "type": "number", "number": 5}, {}),
     ])
     with pytest.raises(module.NotionConfigError, match="list 頁の後に scalar"):
         client.list_page_property_items("page", "prop")
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("operation", [
+    lambda c: c.query_database("db"),
+    lambda c: c.list_child_blocks("block"),
+], ids=["query", "blocks"])
+def test_query_and_blocks_keep_optional_object_compat(client, operation):
+    """query/children は object 欠落の list を受理する (後方互換を保持)。"""
+    body = {"results": [{"id": "a"}], "has_more": False, "next_cursor": None}
+    calls = sdk_responses(client, [(200, body, {})])
+    assert operation(client) == [{"id": "a"}]
+    assert len(calls) == 1
+
+
+def test_property_list_missing_object_is_rejected(client):
+    """property endpoint は own object 必須。missing object の list 成功はない。"""
+    body = {"results": [{"id": "a"}], "has_more": False, "next_cursor": None}
+    calls = sdk_responses(client, [(200, body, {})])
+    with pytest.raises(module.NotionConfigError, match="list/property_item ではない"):
+        client.list_page_property_items("page", "prop")
+    assert len(calls) == 1
+    module.time.sleep.assert_not_called()
+
+
+def test_raw_property_list_missing_object_is_rejected(client):
+    body = {"results": [{"id": "a"}], "has_more": False, "next_cursor": None}
+    client._session.request.side_effect = [raw_response(200, body), raw_response(200)]
+    with pytest.raises(module.NotionConfigError, match="list/property_item ではない"):
+        client.raw_api("GET", "pages/page/properties/prop")
+    assert client._session.request.call_count == 1
+    module.time.sleep.assert_not_called()
 
 
 def test_config_error_carries_no_id_body_or_cursor_values(client):
@@ -513,7 +546,7 @@ def test_raw_property_scalar_passes_and_arbitrary_object_rejected(client):
     client._session.request.side_effect = [
         raw_response(200, {"object": "page", "id": "p"}), raw_response(200),
     ]
-    with pytest.raises(module.NotionConfigError, match="list/property_item 以外"):
+    with pytest.raises(module.NotionConfigError, match="list/property_item ではない"):
         client.raw_api("GET", "pages/page/properties/prop")
     assert client._session.request.call_count == 2
 

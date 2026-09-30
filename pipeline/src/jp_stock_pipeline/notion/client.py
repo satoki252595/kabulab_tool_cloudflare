@@ -299,13 +299,15 @@ class NotionClient:
         body = self._call(_do, _retry_safe=retry_safe)
         # 既知 read-list 経路だけ envelope を検証する (File Upload 等の
         # 非 list 成功 shape には広げない)。
-        if (
-            is_property_retrieve
-            and isinstance(body, dict)
-            and body.get("object", "list") != "list"
-        ):
-            _require_scalar_property_item(body, op="raw_api")
-            return body
+        if is_property_retrieve:
+            # property endpoint は own object discriminator 必須 (TS 同契約)。
+            if not isinstance(body, dict) or body.get("object") not in ("list", "property_item"):
+                raise NotionConfigError(
+                    "Notion raw_api: object が list/property_item ではない。再試行しません。"
+                )
+            if body["object"] != "list":
+                _require_scalar_property_item(body, op="raw_api")
+                return body
         if guard_read_list:
             _require_read_list_envelope(body, op="raw_api")
         return body
@@ -419,10 +421,18 @@ class NotionClient:
                 raise NotionConfigError(
                     "Notion list_page_property_items: 応答 JSON の decode に失敗。再試行しません。"
                 ) from exc
-            if isinstance(resp, dict) and resp.get("object", "list") != "list":
-                # 単一値プロパティは正規 scalar のみ受理する。list 頁の後に
-                # scalar が来る混在は protocol 違反として止める。
-                if results:
+            if not isinstance(resp, dict) or resp.get("object") not in ("list", "property_item"):
+                # property endpoint は own object discriminator 必須
+                # (TS 同契約。missing object の list 成功 fallback はしない)。
+                raise NotionConfigError(
+                    "Notion list_page_property_items: object が list/property_item ではない。"
+                    "再試行しません。"
+                )
+            if resp["object"] != "list":
+                # 単一値プロパティは初頁 scalar のみ受理する。pagination begun
+                # (cursor 送出済み) 後の scalar は protocol 違反として止める。
+                # `if results` では空初頁→scalar を誤 success するため cursor で見る。
+                if cursor is not None:
                     raise NotionConfigError(
                         "Notion list_page_property_items: list 頁の後に scalar。再試行しません。"
                     )
