@@ -13,8 +13,9 @@ SHA・limits のみ (public 可)。per-doc の値・表は private 0600 のみ�
 - union lib: `services/yuho-quant/data-scripts/lib/repair-union.ts`
   (test: `overseas-repair-union.test.ts` 14 passed。実 docID の
   交差/outside-live/unknown-pin 対照 + 観測 namespace 分割 +
-  母集合分離 + receipt 分類 (verified 証跡+実 bytes 一致のみ RECEIVED) +
-  offline 候補除外条件)
+  母集合分離 + receipt 分類 (SHA/manifest 照合のみでは ARCHIVE_PENDING
+  のまま。検証済み physical loader なし → RECEIVED は将来の explicitly
+  verified physical closure まで到達なし) + offline 候補除外条件)
 - 実行: `2026-09-30T07:22:09Z`–`07:23:31Z` (約82秒・fetch 全面拒否・結果 PASS。
   trust 修正 run。前回 07:09 実行の counts (changed 3127/match 475) は
   未観測 doc を DB-changed に混入させていたため repair 数として破棄
