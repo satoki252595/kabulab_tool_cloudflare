@@ -2,7 +2,8 @@
  * クラウド LLM 要約の書き出し・取り込みのテスト。
  *
  * LLM の出力は信用しない前提なので、「はじくべきものをはじく」「dry-run で書かない」
- * を固定する。掲載文はすべて架空 (出典サイトの文面は使わない)。
+ * を固定する。既存テストの掲載文はすべて架空 (出典サイトの文面は使わない)。
+ * 共有厳密判定のテストは raw34 の原文抜粋 (`./raw34-excerpts.ts`) を使う。
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,6 +29,7 @@ import {
   serializeTasks,
   type BenefitRow,
 } from "../../data-scripts/summary-tasks.js";
+import { RAW34TEXT } from "./raw34-excerpts.js";
 
 const SERVICE_DIR = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -385,6 +387,139 @@ describe("planSummaryImport", () => {
       { taskId: K_CATALOG, ids: [11, 12], shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, estimateValueSource: "company" },
     ]);
     expect(p.skippedEquivalent).toBe(0);
+  });
+});
+
+describe("planSummaryImport の共有厳密判定 (原文抜粋)", () => {
+  // RAW34TEXT は raw34 の原文抜粋 (pointer は raw34-excerpts.ts に cited)。
+  const planWith = (rows: BenefitRow[], resultsText: string) =>
+    planSummaryImport({ tasks: selectSummaryTasks(rows), resultsText, currentRows: rows });
+
+  it("原文の単一額面は company で通す (5929/7075)", () => {
+    const desc = RAW34TEXT["5929"];
+    const rows = [
+      row({ id: 71, stockCode: "9101", description: desc, shortSummary: null, estimatedValue: null }),
+    ];
+    const taskId = keyOf("9101", desc);
+    const p = planWith(
+      rows,
+      result({ taskId, shortSummary: "優待品 500円相当", estimatedValue: 500 })
+    );
+    expect(p.rejections).toEqual([]);
+    expect(p.updates).toEqual([
+      { taskId, ids: [71], shortSummary: "優待品 500円相当", estimatedValue: 500, estimateValueSource: "company" },
+    ]);
+
+    const desc7075 = RAW34TEXT["7075"];
+    const rows7075 = [
+      row({
+        id: 72,
+        stockCode: "9102",
+        description: desc7075,
+        minShares: 500,
+        shortSummary: null,
+        estimatedValue: null,
+      }),
+    ];
+    const taskId7075 = keyOf("9102", desc7075);
+    const p2 = planWith(
+      rows7075,
+      result({ taskId: taskId7075, shortSummary: "優待品 6,500円相当", estimatedValue: 6500 })
+    );
+    expect(p2.rejections).toEqual([]);
+    expect(p2.updates).toEqual([
+      {
+        taskId: taskId7075,
+        ids: [72],
+        shortSummary: "優待品 6,500円相当",
+        estimatedValue: 6500,
+        estimateValueSource: "company",
+      },
+    ]);
+  });
+
+  it("tier-pick は要約のラベルの有無によらず落とす (3512。監査 QUALIFIED からの転換)", () => {
+    const desc = RAW34TEXT["3512"];
+    const rows = [
+      row({ id: 73, stockCode: "9103", description: desc, minShares: 300, shortSummary: null, estimatedValue: null }),
+    ];
+    const taskId = keyOf("9103", desc);
+    // 要約に tier ラベルが無い (摘み隠し) 場合も落とす
+    const p1 = planWith(rows, result({ taskId, shortSummary: "優待品 2,000円相当", estimatedValue: 2000 }));
+    expect(p1.updates).toEqual([]);
+    expect(p1.rejections.map((r) => r.reason)).toEqual(["value_ungrounded"]);
+    expect(p1.rejections[0].detail).toContain("ambiguous_condition_tiers");
+    // ラベルがあっても同じ
+    const p2 = planWith(
+      rows,
+      result({ taskId, shortSummary: "【3年以上】優待品 2,000円相当", estimatedValue: 2000 })
+    );
+    expect(p2.updates).toEqual([]);
+    expect(p2.rejections.map((r) => r.reason)).toEqual(["value_ungrounded"]);
+  });
+
+  it("単価・陳腐値は落として現行行を温存する (8153/7075)", () => {
+    // 8153: 500 は notes の単価 (監査 QUALIFIED 6 件からの転換)
+    const desc8153 = RAW34TEXT["8153"];
+    const rows8153 = [
+      row({ id: 74, stockCode: "9104", description: desc8153, shortSummary: null, estimatedValue: null }),
+    ];
+    const p1 = planWith(
+      rows8153,
+      result({ taskId: keyOf("9104", desc8153), shortSummary: "優待券 3枚", estimatedValue: 500 })
+    );
+    expect(p1.updates).toEqual([]);
+    expect(p1.rejections.map((r) => r.reason)).toEqual(["value_ungrounded"]);
+
+    // 7075: 5,000 は原文に無い DB の陳腐値 (raw 6,500)。現行行は温存 (updates 0)。
+    const desc7075 = RAW34TEXT["7075"];
+    const rows7075 = [
+      row({
+        id: 75,
+        stockCode: "9105",
+        description: desc7075,
+        minShares: 500,
+        shortSummary: null,
+        estimatedValue: 5000,
+      }),
+    ];
+    const p2 = planWith(
+      rows7075,
+      result({ taskId: keyOf("9105", desc7075), shortSummary: "優待品 5,000円相当", estimatedValue: 5000 })
+    );
+    expect(p2.updates).toEqual([]);
+    expect(p2.rejections.map((r) => r.reason)).toEqual(["value_ungrounded"]);
+  });
+
+  it("同一文言で株数条件が混ざる group は全体を落とす (5929)", () => {
+    const desc = RAW34TEXT["5929"];
+    const rows = [
+      row({ id: 76, stockCode: "9106", description: desc, minShares: 100, shortSummary: null, estimatedValue: null }),
+      row({ id: 77, stockCode: "9106", description: desc, minShares: 1000, shortSummary: null, estimatedValue: null }),
+    ];
+    const p = planWith(
+      rows,
+      result({ taskId: keyOf("9106", desc), shortSummary: "優待品 500円相当", estimatedValue: 500 })
+    );
+    expect(p.updates).toEqual([]);
+    expect(p.rejections.map((r) => r.reason)).toEqual(["value_ungrounded"]);
+    expect(p.rejections[0].detail).toContain("mixed_share_context");
+  });
+
+  it("利用条件額は落とし、総額は通す (7512)", () => {
+    const desc = RAW34TEXT["7512"];
+    const rows = [
+      row({ id: 78, stockCode: "9107", description: desc, shortSummary: null, estimatedValue: null }),
+    ];
+    const taskId = keyOf("9107", desc);
+    const p1 = planWith(rows, result({ taskId, shortSummary: "優待券 1,000円相当", estimatedValue: 1000 }));
+    expect(p1.updates).toEqual([]);
+    expect(p1.rejections.map((r) => r.reason)).toEqual(["value_ungrounded"]);
+    const p2 = planWith(rows, result({ taskId, shortSummary: "優待券 2,500円相当", estimatedValue: 2500 }));
+    expect(p2.rejections).toEqual([]);
+    expect(p2.updates).toEqual([
+      { taskId, ids: [78], shortSummary: "優待券 2,500円相当", estimatedValue: 2500, estimateValueSource: "company" },
+    ]);
   });
 });
 
