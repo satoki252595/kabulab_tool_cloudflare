@@ -6,6 +6,11 @@ import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { runDailySync, runMarketContextSync } from "./daily.js";
 import type { OverlayCollectFn } from "./universe-overlay.js";
 import { fakeOverlayCollect } from "./tests/overlay-batch.js";
+import {
+  makeRecordingSender,
+  makeThrowingSender,
+} from "./tests/overlay-test-sender.js";
+import type { D1BatchStatement } from "../shared/db/d1-http-client.js";
 
 const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
 
@@ -186,6 +191,14 @@ function recordingDbWithTargets() {
     async (sql, p) => {
       calls.push(sql);
       params.push([...p]);
+      // overlay snapshot の core 全列読取 (3 列 fingerprint で同定)。
+      if (
+        sql.includes("core_stocks") &&
+        sql.includes("sector33") &&
+        sql.includes("is_yutai")
+      ) {
+        return { rows: [] };
+      }
       if (
         !targetsServed &&
         sql.includes("core_stocks") &&
@@ -468,7 +481,9 @@ describe("株式とマクロの日次分離", () => {
     mockMacro(ALIGNED);
     vi.mocked(recordPrimaryData).mockRejectedValue(new Error("notion down"));
     const { db, calls } = recordingDb();
-    await expect(runDailySync(db, {})).rejects.toThrow("notion down");
+    await expect(
+      runDailySync(db, { sendOverlayBatch: makeThrowingSender() })
+    ).rejects.toThrow("notion down");
     expect(calls.filter((sql) => sql.includes("swing_market_context"))).toEqual([]);
   });
 });
@@ -522,21 +537,25 @@ describe("株式 guard の default パス共有 (stocksOnly 依存の除去)", (
     mockMacro(ALIGNED);
     vi.mocked(fetchStockRawData).mockResolvedValue(stockRaw(ohlcv));
     const { db, calls } = recordingDbWithTargets();
-    const result = await runDailySync(db, { collectOverlay: fakeCollect });
+    const batches: D1BatchStatement[][] = [];
+    const result = await runDailySync(db, {
+      collectOverlay: fakeCollect,
+      sendOverlayBatch: makeRecordingSender({ batches }),
+    });
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].code).toBe("1301");
     expect(result.failures[0].error).toMatch(/実日足が未取得/);
     // 回収なし (非 transient)。銘柄 INSERT 0、マクロ 1 件。
-    // 空 overlay は singleton 世代 commit のみ (production helper の正規書込)。
+    // 空 overlay は sender へ guard + state commit の 1 送信。
     expect(fetchStockRawData).toHaveBeenCalledTimes(1);
     const inserts = calls.filter((sql) => sql.startsWith("insert"));
-    expect(inserts).toHaveLength(2);
+    expect(inserts).toHaveLength(1);
     expect(
       inserts.filter((sql) => sql.includes('insert into "swing_market_context"'))
     ).toHaveLength(1);
-    expect(
-      inserts.filter((sql) => sql.includes('insert into "universe_overlay_state"'))
-    ).toHaveLength(1);
     expect(inserts.filter((sql) => sql.includes("core_stocks"))).toHaveLength(0);
+    expect(batches).toHaveLength(1);
+    expect(batches[0]?.length).toBe(2);
+    expect(batches[0]?.[1]?.sql).toContain("universe_overlay_state");
   });
 });

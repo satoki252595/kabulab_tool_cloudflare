@@ -143,33 +143,48 @@ export async function loadAppliedOverlaySets(
   return { ...base, delisted, listed, transferred };
 }
 
-/** overlay 用: 指定 id 群を inactivate する (80 件/文)。 */
-export async function deactivateCoreStocksByIds(
+/**
+ * batch 送信用の drizzle builder の構造型 (実行しない。compiler が toSQL 化)。
+ */
+export type OverlayStatementBuilder = {
+  toSQL: () => { sql: string; params: unknown[] };
+};
+
+/** overlay 用: 指定 id 群の inactivate builder 列 (80 件/文。実行しない)。 */
+export function deactivateCoreStocksByIds(
   db: OverlayWriterDb,
   ids: readonly number[]
-): Promise<void> {
+): OverlayStatementBuilder[] {
   const { stocks } = coreSchema;
+  const out: OverlayStatementBuilder[] = [];
   for (let i = 0; i < ids.length; i += INACT_CHUNK) {
-    await db
-      .update(stocks)
-      .set({ isActive: false, updatedAt: sql`(unixepoch())` })
-      .where(inArray(stocks.id, ids.slice(i, i + INACT_CHUNK)));
+    out.push(
+      db
+        .update(stocks)
+        .set({ isActive: false, updatedAt: sql`(unixepoch())` })
+        .where(inArray(stocks.id, ids.slice(i, i + INACT_CHUNK)))
+    );
   }
+  return out;
 }
 
-/** overlay 用: 指定 id 群の market を一括更新する (80 件/文)。 */
-export async function updateCoreStocksMarketByIds(
+/** overlay 用: 指定 id 群の market 一括更新 builder 列 (80 件/文。実行しない)。 */
+export function updateCoreStocksMarketByIds(
   db: OverlayWriterDb,
   market: string,
   ids: readonly number[]
-): Promise<void> {
+): OverlayStatementBuilder[] {
   const { stocks } = coreSchema;
+  const out: OverlayStatementBuilder[] = [];
   for (let i = 0; i < ids.length; i += INACT_CHUNK) {
-    await db
-      .update(stocks)
-      .set({ market, updatedAt: sql`(unixepoch())` })
-      .where(inArray(stocks.id, ids.slice(i, i + INACT_CHUNK)));
+    out.push(
+      db
+        .update(stocks)
+        .set({ market, updatedAt: sql`(unixepoch())` })
+        .where(inArray(stocks.id, ids.slice(i, i + INACT_CHUNK)))
+    );
   }
+  return out;
 }
 
 export interface OverlayListingInsertRow {
@@ -179,33 +194,31 @@ export interface OverlayListingInsertRow {
 }
 
 /**
- * overlay 用: 新規上場行を挿入する (呼出側で 14 行/文に分割済み)。
+ * overlay 用: 新規上場行の挿入 builder (呼出側で 14 行/文に分割済み。実行しない)。
  * instrument_type は 'equity' を明示する (NULL だと日次の
  * activeEquityCondition() に載らない)。sector は NULL (JPX 月次所有;
  * overlay は書かない)。sector33 は EDINET 所有の公開列のため触らない
  * (NULL のまま)。Basic 業種はどちらにも書かない。
- * is_yutai は DB default (false)。conflict は無現役化 (DoNothing)。
+ * is_yutai は DB default (false)。conflict は SQL エラーにする
+ * (DoNothing で黙殺しない。batch 原子性の下で全 rollback する)。
  */
-export async function insertCoreStocks(
+export function insertCoreStocks(
   db: OverlayWriterDb,
   rows: readonly OverlayListingInsertRow[]
-): Promise<void> {
-  if (rows.length === 0) return;
+): OverlayStatementBuilder | null {
+  if (rows.length === 0) return null;
   const { stocks } = coreSchema;
-  await db
-    .insert(stocks)
-    .values(
-      rows.map((l) => ({
-        code: l.code,
-        name: l.name,
-        market: l.market,
-        sector: null,
-        isActive: true,
-        // bind ではなくリテラル (INSTRUMENT_TYPE_EQUITY_LITERAL の docstring)。
-        instrumentType: INSTRUMENT_TYPE_EQUITY_LITERAL,
-      }))
-    )
-    .onConflictDoNothing({ target: stocks.code });
+  return db.insert(stocks).values(
+    rows.map((l) => ({
+      code: l.code,
+      name: l.name,
+      market: l.market,
+      sector: null,
+      isActive: true,
+      // bind ではなくリテラル (INSTRUMENT_TYPE_EQUITY_LITERAL の docstring)。
+      instrumentType: INSTRUMENT_TYPE_EQUITY_LITERAL,
+    }))
+  );
 }
 /**
  * ガード(a) の下限。**`rawCount` は data_j の全行数**で、ETF/ETN・REIT・PRO Market・

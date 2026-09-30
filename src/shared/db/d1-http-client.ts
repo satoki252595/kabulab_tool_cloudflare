@@ -25,6 +25,28 @@ interface D1QueryResponse {
   result?: Array<{ results?: Record<string, unknown>[] }>;
 }
 
+/**
+ * 束縛値の private 検証 (converter と sender が共用。public API なし)。
+ * null/真偽値/文字列/有限数のみ許可。NaN/Infinity は JSON 化で null に
+ * 変質し、undefined/object は形が崩れるため送らず止める。
+ */
+function assertBindableParams(params: readonly unknown[]): void {
+  for (const p of params) {
+    if (p === null || typeof p === "string" || typeof p === "boolean") continue;
+    if (typeof p === "number") {
+      if (!Number.isFinite(p)) {
+        throw new Error(
+          `[d1-http] batch に非有限の束縛値 (${String(p)})。書込の前に止めます。`
+        );
+      }
+      continue;
+    }
+    throw new Error(
+      `[d1-http] batch に対象外の束縛値 (${typeof p})。書込の前に止めます。`
+    );
+  }
+}
+
 /** D1 REST `/query` の `{batch: [...]}` の 1 要素。値は束縛変数で送る。 */
 export type D1BatchStatement = {
   sql: string;
@@ -43,21 +65,10 @@ export function toD1BatchStatements(
 ): D1BatchStatement[] {
   return builders.map((b) => {
     const q = b.toSQL();
+    assertBindableParams(q.params);
     return {
       sql: q.sql,
-      params: q.params.map((p): string | number | boolean | null => {
-        if (
-          p === null ||
-          typeof p === "string" ||
-          typeof p === "number" ||
-          typeof p === "boolean"
-        ) {
-          return p;
-        }
-        throw new Error(
-          `[d1-http] batch に対象外の束縛値 (${typeof p})。書込の前に止めます。`
-        );
-      }),
+      params: q.params as (string | number | boolean | null)[],
     };
   });
 }
@@ -95,6 +106,7 @@ export function createD1HttpDb<TSchema extends Record<string, unknown>>(
 
   return drizzle(
     async (sqlStr, params, method) => {
+      assertBindableParams(params as readonly unknown[]);
       const res = await fetch(url, {
         method: "POST",
         headers: {
@@ -107,16 +119,65 @@ export function createD1HttpDb<TSchema extends Record<string, unknown>>(
         const body = await res.text();
         throw new Error(`D1 HTTP ${res.status}: ${body.slice(0, 300)}`);
       }
-      const data = (await res.json()) as D1QueryResponse;
-      if (!data.success) {
-        throw new Error(`D1 HTTP error: ${JSON.stringify(data.errors)}`);
+      // 実測 schema の厳密検証: top.success===true / result 配列 len1 /
+      // entry object success===true / results 配列 / 全行 object。
+      // 欠落・null・文字列・非 object は outcome-unknown で throw し再送しない。
+      const data: unknown = await res.json();
+      if (typeof data !== "object" || data === null || Array.isArray(data)) {
+        throw new Error(
+          "D1 query: 応答の形が不明です (再送なし。手動確認が必要)。"
+        );
+      }
+      const top = data as { success?: unknown; result?: unknown; errors?: unknown };
+      if (top.success === false) {
+        throw new Error(`D1 HTTP error: ${JSON.stringify((data as D1QueryResponse).errors)}`);
+      }
+      if (top.success !== true) {
+        throw new Error(
+          "D1 query: 応答 top の成否が不明です (再送なし。手動確認が必要)。"
+        );
+      }
+      if (!Array.isArray(top.result) || top.result.length !== 1) {
+        throw new Error(
+          "D1 query: 応答 result が len1 配列ではありません (再送なし。手動確認が必要)。"
+        );
+      }
+      const entry: unknown = top.result[0];
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        throw new Error(
+          "D1 query: 応答 entry が object ではありません (再送なし。手動確認が必要)。"
+        );
+      }
+      const entryRec = entry as { success?: unknown; results?: unknown; error?: unknown };
+      if (entryRec.success === false) {
+        throw new Error(`D1 HTTP error: ${JSON.stringify(entryRec.error ?? entry)}`);
+      }
+      if (entryRec.success !== true) {
+        throw new Error(
+          "D1 query: 応答 entry の成否が不明です (再送なし。手動確認が必要)。"
+        );
+      }
+      if (!Array.isArray(entryRec.results)) {
+        throw new Error(
+          "D1 query: 応答 results が配列ではありません (再送なし。手動確認が必要)。"
+        );
+      }
+      for (const [i, row] of (entryRec.results as unknown[]).entries()) {
+        if (typeof row !== "object" || row === null || Array.isArray(row)) {
+          throw new Error(
+            `D1 query: 応答 ${i + 1} 行目が object ではありません (再送なし。手動確認が必要)。`
+          );
+        }
       }
       // D1 /query は results をオブジェクト配列(SELECT 列順)で返す。sqlite-proxy は
       // 位置配列を期待するので Object.values で列順の配列に変換する。
       // 前提: SELECT が同名カラムを二重射影しないこと(同名キーは Object.values で
       // 1 つに潰れ位置がずれる)。drizzle のカラム選択は重複しないため通常問題ない。
-      const objs = data.result?.[0]?.results ?? [];
-      const rows = objs.map((o) => Object.values(o));
+      // results[] 空 (SELECT 0 行・書込) は正規。get の空 rows[0] ?? [] は
+      // 上の schema 検証の後でのみ適用する。
+      const rows = (entryRec.results as Record<string, unknown>[]).map((o) =>
+        Object.values(o)
+      );
       return { rows: method === "get" ? (rows[0] ?? []) : rows };
     },
     { schema: { ...coreSchema, ...schema } }
@@ -145,6 +206,10 @@ export function createD1HttpBatchSender(): (
     if (statements.length === 0) {
       throw new Error("D1 batch: 文が 0 件です (呼び出し側のバグ)");
     }
+    // 直接組立の文 (converter 経由でない経路) も JSON/fetch の前に全検証する。
+    for (const s of statements) {
+      assertBindableParams(s.params);
+    }
     const res = await fetch(url, {
       method: "POST",
       headers: {
@@ -159,20 +224,49 @@ export function createD1HttpBatchSender(): (
       const body = await res.text();
       throw new Error(`D1 HTTP ${res.status}: ${body.slice(0, 300)}`);
     }
-    const data = (await res.json()) as D1BatchResponse;
-    if (!data.success) {
-      throw new Error(`D1 HTTP error: ${JSON.stringify(data.errors)}`);
+    const data: unknown = await res.json();
+    // 成否は厳密判定のみ通す。truthy 文字列・欠落・非 object は全て
+    // outcome-unknown で throw し、再送しない (結果不明のまま触らない)。
+    if (typeof data !== "object" || data === null || Array.isArray(data)) {
+      throw new Error(
+        "D1 batch: 応答の形が不明です (再送なし。手動確認が必要)。"
+      );
     }
-    const entries = data.result ?? [];
+    const top = data as { success?: unknown; result?: unknown; errors?: unknown };
+    if (top.success === false) {
+      throw new Error(`D1 HTTP error: ${JSON.stringify((data as D1BatchResponse).errors)}`);
+    }
+    if (top.success !== true) {
+      throw new Error(
+        "D1 batch: 応答 top の成否が不明です (再送なし。手動確認が必要)。"
+      );
+    }
+    if (!Array.isArray(top.result)) {
+      throw new Error(
+        "D1 batch: 応答 result が配列ではありません (再送なし。手動確認が必要)。"
+      );
+    }
+    const entries: unknown[] = top.result;
     if (entries.length !== statements.length) {
       throw new Error(
         `D1 batch: 応答 ${entries.length} 件が送信 ${statements.length} 件と一致しません`
       );
     }
     for (const [i, e] of entries.entries()) {
-      if (e && typeof e === "object" && e.success === false) {
+      if (typeof e !== "object" || e === null || Array.isArray(e)) {
         throw new Error(
-          `D1 batch: ${i + 1} 件目の文が失敗しました: ${JSON.stringify(e.error ?? e)}`
+          `D1 batch: ${i + 1} 件目の応答が object ではありません (再送なし。手動確認が必要)。`
+        );
+      }
+      const s = (e as { success?: unknown }).success;
+      if (s === false) {
+        throw new Error(
+          `D1 batch: ${i + 1} 件目の文が失敗しました: ${JSON.stringify((e as D1BatchResultEntry).error ?? e)}`
+        );
+      }
+      if (s !== true) {
+        throw new Error(
+          `D1 batch: ${i + 1} 件目の成否が不明です (再送なし。手動確認が必要)。`
         );
       }
     }

@@ -17,7 +17,7 @@
  */
 
 import { sql, eq, and, isNotNull } from "drizzle-orm";
-import { createD1HttpDb } from "../shared/db/d1-http-client.js";
+import { createD1HttpBatchSender, createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 
 import * as coreSchema from "../shared/db/core-schema.js";
@@ -30,6 +30,7 @@ import { collectUniverseOfficialEvents } from "./universe-official-events.js";
 import {
   ensureUniverseOverlay,
   withBasicEvidence,
+  type OverlayBatchSender,
   type OverlayCollectFn,
 } from "./universe-overlay.js";
 
@@ -48,7 +49,7 @@ export function createMonthlyRebuildDb() {
 
 export async function runMonthlyRebuild(
   db: Db,
-  deps: { collectOverlay?: OverlayCollectFn } = {}
+  deps: { collectOverlay?: OverlayCollectFn; sendOverlayBatch?: OverlayBatchSender } = {}
 ): Promise<MonthlyRebuildResult> {
   const startedAt = Date.now();
 
@@ -59,6 +60,7 @@ export async function runMonthlyRebuild(
     collect:
       deps.collectOverlay ??
       withBasicEvidence((input) => collectUniverseOfficialEvents(input)),
+    sendBatch: deps.sendOverlayBatch ?? createD1HttpBatchSender(),
   });
   if (overlay.applied) {
     console.info(
