@@ -5,11 +5,12 @@
  * 全 phase で実 forward 0 (stub は数えて throw する)。
  *
  * - `importer`: stub fetch → merged adapter import → fetch 同一性 +
- *   caller guard intact + 旧 import 相当の manual install で
- *   frozen batch / Notion search の ban 署名を再現する。
+ *   caller guard intact (stub calls 2・native HTTP 0)。
  * - `cli <tmpout>`: argv[1] を 745 にして import (直接 CLI 相当) →
  *   guard 設置 + main() は env 不在 HOLD (送信 0) → exit 1 を
  *   ExitError として回収し、設置後 guard の ban を検証する。
+ * (旧 tree の ban 再現は private actual-old proof で行う。
+ * 本 tree の guard を手で置くのは tautology のため置かない。)
  */
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -24,8 +25,8 @@ const eq = (a: unknown, b: unknown, what: string): void => {
 
 const D1_URL = "https://api.cloudflare.com/client/v4/accounts/ACCT/d1/database/DB/query";
 const NOTION_SEARCH = "https://api.notion.com/v1/search";
-// 原本 receipt (price40 ONE live, local 0600 証拠保持) の abortReason。
-const RECEIPT_ABORT = "chunk-0:SELECT proof: batch envelope 禁止 (単発 SELECT のみ)";
+// 否定 batch は定数 envelope で足りる (数値 fixture 不要)。
+const BATCH_REFUSAL_BODY = JSON.stringify({ batch: [] });
 
 let forwards = 0;
 const stub = (async () => {
@@ -65,43 +66,11 @@ async function importerPhase(): Promise<void> {
     () => {}
   );
   eq(seen.length, 2, "caller wrapper 到達");
-  eq(forwards, before + 2, "caller wrapper forward");
-  // 旧 tree 署名: 旧 import 相当 (= 本関数を global に置く) の ban を再現。
-  const mod = await import("./overseas-745-select-proof.js");
+  eq(forwards, before + 2, "importer stub calls 2 (native HTTP 0)");
+  // 745 自体の import でも fetch は置き換わらない。
+  await import("./overseas-745-select-proof.js");
   if (globalThis.fetch !== wrapper) fail("745 import が fetch を置き換えた");
-  const guarded = mod.createBoundedFetch(stub, 36, { observed: 0, failed: 0 });
-  const frozen = await frozenBatchBody();
-  const atBan = forwards;
-  await throwsExact(
-    guarded(D1_URL, { method: "POST", body: JSON.stringify({ batch: frozen }) }),
-    "SELECT proof: batch envelope 禁止 (単発 SELECT のみ)",
-    "frozen batch ban"
-  );
-  await throwsExact(
-    guarded(NOTION_SEARCH, { method: "POST", body: "{}" }),
-    `SELECT proof: D1 query 以外への到達を拒否: ${NOTION_SEARCH}`,
-    "notion search ban"
-  );
-  eq(forwards, atBan, "ban は forward 前");
-  eq(`chunk-0:SELECT proof: batch envelope 禁止 (単発 SELECT のみ)`, RECEIPT_ABORT, "receipt abortReason 一致");
-  console.info("IMPORTER-OK identity-kept caller-intact batch-ban search-ban forward0");
-}
-
-/** 既存 builders による frozen 形 batch 本体 (pure。fixture 由来のみ)。 */
-async function frozenBatchBody(): Promise<unknown[]> {
-  const mod = await import("../../../src/shared/repair-preflight.js");
-  const rows = [1, 2].map((n) => ({
-    stockId: 1000 + n,
-    code: `100${n}`,
-    date: "2026-09-29",
-    open: 100,
-    high: 101,
-    low: 99,
-    close: 100,
-    volume: 10,
-    adj: 100,
-  }));
-  return [mod.buildOhlcvInsertStatement(rows)];
+  console.info("IMPORTER-OK identity-kept caller-intact stub2 native0");
 }
 
 async function cliPhase(tmpOut: string): Promise<void> {
@@ -122,9 +91,8 @@ async function cliPhase(tmpOut: string): Promise<void> {
   if (codes.exit !== 1) fail("直接 CLI の exit 1 なし");
   if (globalThis.fetch === stub) fail("直接 CLI で guard 未設置");
   eq(forwards, before, "直接 CLI の main 前 forward");
-  const frozen = await frozenBatchBody();
   await throwsExact(
-    globalThis.fetch(D1_URL, { method: "POST", body: JSON.stringify({ batch: frozen }) }),
+    globalThis.fetch(D1_URL, { method: "POST", body: BATCH_REFUSAL_BODY }),
     "SELECT proof: batch envelope 禁止 (単発 SELECT のみ)",
     "cli batch ban"
   );

@@ -8,11 +8,13 @@
  * 原本 wrapper/path/content SHA は local 0600 証拠として保持)。
  * guard 設置は直接 CLI のときだけ。import 側の fetch は置き換えない。
  *
- * child driver が 2 phase を offline (stub forward 0) で検証する:
+ * child driver が 2 phase を offline で検証する:
  * importer: merged adapter import 後の fetch 同一性 + caller guard
- *   intact + 旧 import 相当の ban 署名 (receipt 一致)。
+ *   intact (stub calls 2・native HTTP 0)。
  * cli: 直接 CLI 相当 (argv[1]=745) では guard 設置 + main() は
  *   env 不在 HOLD (送信 0・exit 1) + 設置後 guard の ban。
+ * (旧 tree の ban 再現は private actual-old proof
+ * `/tmp/745-actualold-proof-20260930/` で行う。repo 外。)
  */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
@@ -27,7 +29,7 @@ const DRIVER = join(HERE, "overseas-745-import-sideeffect.driver.mts");
 const TSX = join(REPO_ROOT, "node_modules", ".bin", "tsx");
 
 describe("745 import sideeffect (child-process, offline)", () => {
-  it("import は fetch を置き換えない + 旧 ban 署名 + 直接 CLI guard 維持", () => {
+  it("import は fetch を置き換えない + 直接 CLI guard 維持", () => {
     const importer = execFileSync(TSX, [DRIVER, "importer"], {
       cwd: REPO_ROOT,
       encoding: "utf-8",
