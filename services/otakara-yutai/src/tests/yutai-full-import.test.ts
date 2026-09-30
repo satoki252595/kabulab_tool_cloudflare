@@ -4,7 +4,9 @@
  * 固定したい契約:
  *
  *   1. 母集団 (core_stocks の active かつ equity) の銘柄だけ、優待行を作り直す。退避した
- *      解釈 (short_summary / estimated_value) は内容キーで戻す。
+ *      解釈 (short_summary / estimated_value) は内容キーで戻す。値は要約取込と
+ *      同じ共有厳密判定で company 適格を見て、不認定は値ごと null で戻す
+ *      (provenance 付け替えで値を温存しない)。
  *   2. 母集団外の銘柄 (上場廃止・区分が NULL・非普通株) は、取得結果に載っていても
  *      取り込まず、既存の優待行 (解釈を含む) と is_yutai に触らない。
  *   3. 母集団の銘柄で、優待行を持っていたのに今回取得できなかったものは、優待行を消して
@@ -29,12 +31,16 @@ import {
   GENRE_SLUG_MAP,
   MIN_YUTAI_COVERAGE_PERCENT,
   YUTAI_GENRES,
+  carryKey,
   guessGenreSlug,
   importYutaiFull,
+  planCarry,
+  type CarrySourceRow,
   type StockYutaiData,
   type YutaiFullImportDb,
 } from "../../data-scripts/yutai-full-import.js";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
+import { RAW34TEXT } from "./raw34-excerpts.js";
 
 /** drizzle/d1 の全マイグレーションを番号順に流す (本番 D1 と同じ形)。 */
 function applyD1Migrations(target: DatabaseSync): void {
@@ -114,7 +120,8 @@ beforeEach(() => {
   const insBenefit = sqlite.prepare(
     "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month, estimated_value) VALUES (?, ?, ?, ?, 100, 3, ?)",
   );
-  HELD.forEach((s, i) => insBenefit.run(s.id, otherId, descOf(s.code), `要約${s.code}`, 1000 + i));
+  // 推定値は掲載文の額面と一致させる (共有厳密判定を通る「正常な解釈」)。
+  HELD.forEach((s) => insBenefit.run(s.id, otherId, descOf(s.code), `要約${s.code}`, 1000));
   OUTSIDE.forEach((s, i) => insBenefit.run(s.id, otherId, descOf(s.code), `要約${s.code}`, 5000 + i));
 
   db = makeProxyDb(sqlite) as unknown as YutaiFullImportDb;
@@ -190,7 +197,7 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
     const heldIds = HELD.map((s) => s.id);
     const heldAfter = benefitsOf(after.benefits, heldIds);
     expect(heldAfter.map((b) => [b.stock_id, b.short_summary, b.estimated_value])).toEqual(
-      HELD.map((s, i) => [s.id, `要約${s.code}`, 1000 + i]),
+      HELD.map((s) => [s.id, `要約${s.code}`, 1000]),
     );
     const maxIdBefore = Math.max(...before.benefits.map((b) => Number(b.id)));
     expect(heldAfter.every((b) => Number(b.id) > maxIdBefore)).toBe(true);
@@ -298,21 +305,35 @@ describe("importYutaiFull の解釈の退避", () => {
       .prepare("SELECT estimate_value_source FROM yutai_benefits WHERE stock_id = ? ORDER BY id")
       .all(stockId)
       .map((r) => (r as { estimate_value_source: unknown }).estimate_value_source);
+  const valueOf = (stockId: number): unknown[] =>
+    sqlite
+      .prepare("SELECT estimated_value FROM yutai_benefits WHERE stock_id = ? ORDER BY id")
+      .all(stockId)
+      .map((r) => (r as { estimated_value: unknown }).estimated_value);
 
-  it("退避した出典も一緒に戻す (従来は落として毎回 null になっていた)", async () => {
-    const [target, ...rest] = HELD;
+  it("退避した出典は検証通過で戻り、legacy-null は company に上がる。不認定は値ごと null", async () => {
+    const [target, promoted, nulled] = HELD;
     sqlite
       .prepare("UPDATE yutai_benefits SET estimate_value_source = 'company' WHERE stock_id = ?")
       .run(target.id);
+    // 額面 1,000 と合わない値 (共有厳密判定に落ちる)
+    sqlite.prepare("UPDATE yutai_benefits SET estimated_value = 1001 WHERE stock_id = ?").run(nulled.id);
     captureConsole();
 
     await importYutaiFull(db, HELD.map((s) => fetched(s.code)));
 
+    // company + 額面一致はそのまま戻る
     expect(sourceOf(target.id)).toEqual(["company"]);
-    expect(sourceOf(rest[0].id)).toEqual([null]);
+    expect(valueOf(target.id)).toEqual([1000]);
+    // legacy-null + 額面一致は company に上がる
+    expect(sourceOf(promoted.id)).toEqual(["company"]);
+    expect(valueOf(promoted.id)).toEqual([1000]);
+    // 不認定は source 付け替えで温存せず、値ごと null
+    expect(sourceOf(nulled.id)).toEqual([null]);
+    expect(valueOf(nulled.id)).toEqual([null]);
   });
 
-  it("現行ゲートを通らない推定値は要約だけ戻し、値は null で戻す", async () => {
+  it("共有厳密判定に落ちた推定値は要約だけ戻し、値は null で戻す", async () => {
     const [zeroRow, lotteryRow, ...rest] = HELD;
     // 0 値 (旧 LLM 経路の残存)
     sqlite
@@ -341,8 +362,87 @@ describe("importYutaiFull の解釈の退避", () => {
     // 正常な解釈はそのまま戻る
     expect(
       benefitsOf(after.benefits, [rest[0].id]).map((b) => [b.short_summary, b.estimated_value])
-    ).toEqual([[`要約${rest[0].code}`, 1002]]);
-    expect(logs.some((l) => l.includes("検証落ちの推定値") && l.includes("2件"))).toBe(true);
+    ).toEqual([[`要約${rest[0].code}`, 1000]]);
+    expect(logs.some((l) => l.includes("不認定の推定値") && l.includes("2件"))).toBe(true);
+    // 残り 18 行は legacy-null から company に上がる
+    expect(sourceOf(rest[0].id)).toEqual(["company"]);
+    expect(logs.some((l) => l.includes("昇格") && l.includes("18件"))).toBe(true);
+  });
+
+  it("未対応の出典 (web) の値は削除の前に止め、何も書かない", async () => {
+    const [target] = HELD;
+    sqlite.prepare("UPDATE yutai_benefits SET estimate_value_source = 'web' WHERE stock_id = ?").run(target.id);
+    const before = snapshot();
+    captureConsole();
+
+    await expect(importYutaiFull(db, HELD.map((s) => fetched(s.code)))).rejects.toThrow(/未対応の出典/);
+    expect(snapshot()).toEqual(before);
+    expect(sourceOf(target.id)).toEqual(["web"]);
+  });
+});
+
+describe("planCarry (退避計画の純関数。原文抜粋)", () => {
+  // RAW34TEXT は raw34 の原文抜粋 (pointer は raw34-excerpts.ts に cited)。
+  const srcRow = (over: Partial<CarrySourceRow>): CarrySourceRow => ({
+    code: "5929",
+    description: RAW34TEXT["5929"],
+    minShares: 100,
+    recordMonth: 3,
+    shortSummary: "優待品 500円相当",
+    estimatedValue: 500,
+    estimateValueSource: null,
+    ...over,
+  });
+
+  it("legacy-null の額面一致は company に上げて carry する", () => {
+    const p = planCarry([srcRow({})]);
+    const key = carryKey("5929", RAW34TEXT["5929"], 100, 3);
+    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: 500, estimateValueSource: "company" });
+    expect(p.promotedKeys).toEqual(new Set([key]));
+    expect(p.nulledKeys).toEqual(new Set());
+  });
+
+  it("不認定の company 値は source を付け替えず値ごと null で戻す (8153 の単価)", () => {
+    const desc = RAW34TEXT["8153"];
+    const p = planCarry([
+      srcRow({ code: "8153", description: desc, estimatedValue: 500, estimateValueSource: "company" }),
+    ]);
+    const key = carryKey("8153", desc, 100, 3);
+    // 要約は保持、値と出典は null (provenance 隠しで値を残さない)
+    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
+    expect(p.nulledKeys).toEqual(new Set([key]));
+    expect(p.promotedKeys).toEqual(new Set());
+  });
+
+  it("未対応の出典の非 null 値は STOP する (扱いを発明しない)", () => {
+    expect(() => planCarry([srcRow({ estimateValueSource: "web" })])).toThrow(/未対応の出典/);
+    expect(() => planCarry([srcRow({ estimateValueSource: "other" })])).toThrow(/未対応の出典/);
+    // 値が null なら出典によらず要約を戻す (STOP しない)
+    const p = planCarry([srcRow({ estimatedValue: null, estimateValueSource: "web" })]);
+    expect(p.carried.size).toBe(1);
+  });
+
+  it("同一 context の重複は同一なら畳み、食い違えば STOP する", () => {
+    const row = srcRow({});
+    const same = planCarry([row, { ...row }]);
+    expect(same.carried.size).toBe(1);
+    expect(() => planCarry([row, { ...row, shortSummary: "別要約" }])).toThrow(/食い違う/);
+    expect(() => planCarry([row, { ...row, estimatedValue: 501 }])).toThrow(/食い違う/);
+  });
+
+  it("context (株数・権利月) が違えば別キーで carry する", () => {
+    const p = planCarry([
+      srcRow({ recordMonth: 3 }),
+      srcRow({ recordMonth: 9 }),
+      srcRow({ minShares: 1000 }),
+    ]);
+    expect(p.carried.size).toBe(3);
+    expect(p.nulledKeys).toEqual(new Set());
+  });
+
+  it("解釈が無い行は退避しない", () => {
+    const p = planCarry([srcRow({ shortSummary: null, estimatedValue: null })]);
+    expect(p.carried.size).toBe(0);
   });
 });
 

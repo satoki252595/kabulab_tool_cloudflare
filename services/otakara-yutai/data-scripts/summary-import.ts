@@ -15,10 +15,11 @@
  *
  * 取り込んだ金額は公開面で `estimate_value_source = "company"` (企業が示した額) として
  * 出る (`services/otakara-yutai/src/db/schema.ts` の定義)。`sanitizeEstimatedValue` は
- * 5 万円未満を無条件に通すので、掲載文に金額が 1 つも無いのに LLM が相場を見積もった
- * 値まで「企業公表」として載ってしまう。そこで金額を入れるなら掲載文に金額表現が
- * あることを別に求める (ルール1)。`sanitizeEstimatedValue` 自体を変えないのは、
- * 移設で挙動不変としたガードの判定基準をこの変更で動かさないため。
+ * 危険値の除去でしかなく、それ + 金額表現の存在だけでは tier-pick・選択肢摘み・
+ * 利用価格一致などの LLM 誤読が company として載ってしまう (root bug)。そこで
+ * 金額を入れるなら共有厳密判定 `qualifyCompanyPerGrantValue` の通過を別に求める
+ * (ルール1。full-import carry と同じ 1 関数)。`sanitizeEstimatedValue` 自体を
+ * 変えないのは、移設で挙動不変としたガードの判定基準をこの変更で動かさないため。
  *
  * 書き込み先の行 ID はタスクファイルではなく**今の D1 から内容キーで引き直す**。
  * `fetch-yutai-full.ts` は再取得のたびに全行を作り直して ID を振り直すため、
@@ -30,13 +31,18 @@
  *   出力で、同じ回答の要約側も誤読している疑いが強い。行ごとはじいて再依頼する。
  * - 違反を自動で切り詰めて書く: ルール2 (黙って直さない) に反するので採らない。
  * - 5 万円未満にも高額帯と同じ「本文の金額 × 数量 / 合計に一致」を求める: 仕様書が
- *   認める「年間額 ÷ 回数」などが一致せず正しい回答まではじくので、金額表現の
- *   有無だけを見る。
+ *   認める「年間額 ÷ 回数」などが一致せず正しい回答まではじくので採らない。
+ *   代わりに共有厳密判定 (額面表示の同定 + 同一 clause の積 + tier 混在 HOLD) で
+ *   company 適格を見る。
  */
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { benefitKey } from "./benefit-key.js";
-import { extractYenAmounts, sanitizeEstimatedValue } from "./estimated-value-guard.js";
+import {
+  extractYenAmounts,
+  qualifyCompanyPerGrantValue,
+  sanitizeEstimatedValue,
+} from "./estimated-value-guard.js";
 import {
   CONTRACT_VERSION_PATTERN,
   SUMMARY_CONTRACT_VERSION,
@@ -143,6 +149,8 @@ export function planSummaryImport(input: {
       summaries: (string | null)[];
       values: (number | null)[];
       sources: (string | null)[];
+      minShares: number[];
+      recordMonths: number[];
     }
   >();
   for (const r of input.currentRows) {
@@ -153,6 +161,8 @@ export function planSummaryImport(input: {
       e.summaries.push(r.shortSummary);
       e.values.push(r.estimatedValue);
       e.sources.push(r.estimateValueSource);
+      e.minShares.push(r.minShares);
+      e.recordMonths.push(r.recordMonth);
     } else {
       current.set(key, {
         ids: [r.id],
@@ -160,6 +170,8 @@ export function planSummaryImport(input: {
         summaries: [r.shortSummary],
         values: [r.estimatedValue],
         sources: [r.estimateValueSource],
+        minShares: [r.minShares],
+        recordMonths: [r.recordMonth],
       });
     }
   }
@@ -284,6 +296,19 @@ export function planSummaryImport(input: {
     if (result.estimatedValue !== null && extractYenAmounts(row.description).length === 0) {
       reject("value_ungrounded", `estimatedValue=${result.estimatedValue} だが掲載文に金額表現 (円・千円・万円・ポイント) が無い`);
       continue;
+    }
+    // company 採用は共有厳密判定の positive 認定が必須。sanitize を通っても
+    // HOLD なら reject し、現行行を温存する (推定 escape なし)。
+    // 判定は carry (`planCarry`) と同じ `qualifyCompanyPerGrantValue`。
+    if (result.estimatedValue !== null) {
+      const q = qualifyCompanyPerGrantValue(row.description, result.estimatedValue, {
+        minShares: row.minShares,
+        recordMonths: row.recordMonths,
+      });
+      if (!q.qualified) {
+        reject("value_ungrounded", `company 不認定 (${q.code}): ${q.detail}`);
+        continue;
+      }
     }
     const plannedSource = result.estimatedValue !== null ? "company" : null;
     const alreadyApplied = row.ids.every(
