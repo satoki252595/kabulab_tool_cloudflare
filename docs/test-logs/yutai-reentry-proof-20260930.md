@@ -28,8 +28,8 @@ normal C45 経路は pending/stale を正直計数し、0-writes の範囲を明
 | 証明 | 結果 |
 | --- | --- |
 | A: normal C45 実 planner | 45 タスク = pending 28 (38 行・全行出典のみ差) + skipped 8 + stale 9 (全文起因・12 行) + 未回答 0。pending+stale=37 は live cUpdates と一致、出典差 38+12=50。0-writes は equivalent 8 の範囲のみ |
-| B: legacy ABC shared 原子同値化 | 131 銘柄・filed 264 文・473 一意 ID (重複・衝突・null 要約 0)。per-ID 省略 473/473、優待文 0、利回り変化 0、スコア変化 0、欠落 0 |
-| C: 全文 62 行分類再入 | 適用済み 62/62、未適用 0、STOP 0、文 0 (旧≠新の実変化 62 を確認のうえ。builder なら 62 文出る) |
+| B: legacy ABC shared 原子同値化 | 131 銘柄・filed 264 文・473 一意 ID (重複・衝突・null 要約 0)。per-ID 省略 473/473、優待文 0、利回り変化 0、スコア変化 0、欠落 0。実 batch を既存 applyAtomicBatches→throwingSender に渡し送信 0 回 |
+| C: 全文 62 行分類再入 | 適用済み 62/62、未適用 0、STOP 0。現文起点で実 builder を呼び実リストから 0 文を数え、実送信 0 回 (旧≠新の実変化 62 を確認のうえ。旧文起点なら 62 文出る) |
 
 - filed 内訳の再検算: 131 preflight + 264 優待 + 61 利回り + 52 スコア = 508。
   利回り・スコア文の params は yield entry の next と一致。

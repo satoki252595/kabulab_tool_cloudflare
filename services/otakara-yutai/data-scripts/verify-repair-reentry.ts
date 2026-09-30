@@ -20,10 +20,12 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  applyAtomicBatches,
   planAtomicBatches,
   type AtomicBatchSender,
   type StockPreimage,
 } from "./atomic-apply.js";
+import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { assertNotCommittable } from "./private-path.js";
 import {
   computeYieldEntries,
@@ -361,6 +363,7 @@ export type ProofBResult = {
   scoreChanged: number;
   effectiveStatements: number;
   batches: number;
+  senderCalls: number;
 };
 
 /**
@@ -368,13 +371,16 @@ export type ProofBResult = {
  * - planned (filed UPDATE) と post (pre+planned 模擬) の per-ID 厳密比較を
  *   独立集計し、shared planAtomicBatches の出力と突き合わせる。
  * - 利回りは実 computeYieldEntries で post 再計算し、changed 0 を確認する。
+ * - planner の実 batch を既存 applyAtomicBatches にそのまま渡し、送信 0 回を
+ *   実経路で確認する (条件付き sender-fail だけに頼らない)。
  */
-export function proveAbcReentry(
+export async function proveAbcReentry(
   abc: AbcParsed,
   filed: FiledUpdateStatement[],
   plannedById: Map<number, Triple>,
-  plannedIds: number[]
-): ProofBResult {
+  plannedIds: number[],
+  sender: AtomicBatchSender
+): Promise<ProofBResult> {
   // post preimages (3 値のみ適用。updatedAt は offline では模擬しない)。
   const post = simulatePostBenefits(abc.preimages, plannedById);
   // producer: filed 文ごとに DISTINCT PlannedUpdate (順序・帰属維持)。
@@ -481,6 +487,17 @@ export function proveAbcReentry(
     // preflight 先頭以外の全 effective 文を数える (利回り文は changed 時のみ出る)。
     effectiveStatements += Math.max(0, b.statements.length - 1);
   }
+  // 実送信経路: planner の実 batch を既存 apply に渡す。batch が残れば
+  // throwingSender が throw する。0 batch なら sender は呼ばれない。
+  let senderCalls = 0;
+  const counting: AtomicBatchSender = async (statements) => {
+    senderCalls++;
+    return sender(statements);
+  };
+  const applied = await applyAtomicBatches(counting, batches);
+  if (applied.stocks !== 0 || applied.statements !== 0 || senderCalls !== 0) {
+    fail(`ABC 再入で実 apply が送信した (stocks=${applied.stocks} statements=${applied.statements} calls=${senderCalls})`);
+  }
   // 独立集計: planned と post の per-ID 厳密比較 (planner 出力と突き合わせ)。
   let omitted = 0;
   let changed = 0;
@@ -514,6 +531,7 @@ export function proveAbcReentry(
     scoreChanged,
     effectiveStatements,
     batches: batches.length,
+    senderCalls,
   };
 }
 
@@ -532,14 +550,21 @@ export type ProofCResult = {
   stops: number;
   descStatements: number;
   wouldWrite: number;
+  senderCalls: number;
 };
 
 /**
  * 証明 C: 全文 62 行の分類再入。現文 (post 模擬) が新全文と一致すれば
  * ALREADY_APPLIED。CANDIDATE/STOP が 1 行でもあれば STOP (0 の偽装なし)。
+ * ALREADY_APPLIED 行も現文起点で実 builder を呼び、実リストから数えて
+ * 実送信経路に渡す (固定値 0 を置かない。filter が壊れれば落ちる)。
  * builder が無力なための 0 ではないこと (wouldWrite) も同時に示す。
  */
-export function proveFulltextReentry(rows: FulltextRow[], currentById: Map<number, string>): ProofCResult {
+export async function proveFulltextReentry(
+  rows: FulltextRow[],
+  currentById: Map<number, string>,
+  sender: AtomicBatchSender
+): Promise<ProofCResult> {
   let applied = 0;
   let candidates = 0;
   let stops = 0;
@@ -559,6 +584,28 @@ export function proveFulltextReentry(rows: FulltextRow[], currentById: Map<numbe
   }
   if (stops > 0) fail(`全文 ${stops} 行が STOP (drift): ids=${stopIds.slice(0, 10).join(",")}`);
   if (candidates > 0) fail(`全文 ${candidates} 行が未適用のまま (再入 0 不成立)`);
+  // 実経路: 現文 (適用済みなら新全文) を起点に実 builder を呼び、実リストから数える。
+  const actual: D1BatchStatement[] = [];
+  for (const r of rows) {
+    const current = currentById.get(r.id);
+    if (current === undefined) fail(`全文行 ${r.id} の現文が無い`);
+    actual.push(
+      ...buildDescriptionUpdateStatements(
+        [{ id: r.id, oldDescription: current!, updatedAt: r.updatedAt }],
+        r.newFull
+      )
+    );
+  }
+  const descStatements = actual.length;
+  let senderCalls = 0;
+  const counting: AtomicBatchSender = async (statements) => {
+    senderCalls++;
+    return sender(statements);
+  };
+  if (descStatements > 0) {
+    await counting(actual); // throwingSender ならここで HOLD。
+    fail(`全文再入で実 builder が ${descStatements} 文出した (再入 0 不成立)`);
+  }
   // builder の実力確認: 旧文のままなら 62 文出る (0 は分類の結果)。
   let wouldWrite = 0;
   for (const r of rows) {
@@ -567,7 +614,7 @@ export function proveFulltextReentry(rows: FulltextRow[], currentById: Map<numbe
       r.newFull
     ).length;
   }
-  return { rows: rows.length, applied, candidates, stops, descStatements: 0, wouldWrite };
+  return { rows: rows.length, applied, candidates, stops, descStatements, wouldWrite, senderCalls };
 }
 
 export type ProofAResult = {
@@ -785,7 +832,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   if (v3rows !== 1557) fail(`v3 rows=${v3rows} (want 1557)`);
 
   // 3. 証明 B (legacy ABC shared 原子同値化)。
-  const proofB = proveAbcReentry(abc, abc.filed, plannedById, plannedIds);
+  const proofB = await proveAbcReentry(abc, abc.filed, plannedById, plannedIds, throwingSender);
   if (proofB.omitted !== 473 || proofB.changed !== 0 || proofB.missing !== 0) {
     fail(`ABC per-ID 集計の不整合: omitted=${proofB.omitted} changed=${proofB.changed} missing=${proofB.missing}`);
   }
@@ -917,7 +964,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     ftRows.push({ id, stockCode: row!.stockCode, oldDescription: u.old, newFull: u.newFull, updatedAt: row!.updatedAt });
     currentById.set(id, u.newFull); // post 模擬 (live 適用で desc 62/mismatch 0 確認済み)。
   }
-  const proofC = proveFulltextReentry(ftRows, currentById);
+  const proofC = await proveFulltextReentry(ftRows, currentById, throwingSender);
   const ftPost = asRecord(JSON.parse(ftPostText), "ft-apply-post");
   if (ftPost["newFull"] !== 62 || ftPost["mismatch"] !== 0) fail("ft-apply-post の newFull/mismatch が想定外");
 
@@ -964,10 +1011,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     fail(`出典差行=${proofA.sourceOnlyRows + proofA.staleSourceOnlyRows} (want 50)`);
   }
 
-  // 6. 送信強制: 効果文が残っていれば throw-if-called で落とす。
-  if (proofB.effectiveStatements > 0 || proofC.descStatements > 0) {
-    await throwingSender([]);
-  }
+  // 6. 送信強制は各証明内の実経路で済み (実 apply/実 builder→throwingSender)。
+  // ここに条件付き gate は置かない (実経路の二重化は偽装の温床のため)。
 
   const evidence: Evidence = {
     at: new Date().toISOString(),
@@ -999,8 +1044,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       console.info(
         `DONE verdict=${e.verdict} ` +
           `A[tasks=${e.proofA.tasks} pending=${e.proofA.pendingTasks}/${e.proofA.pendingRows}rows srcOnly=${e.proofA.sourceOnlyRows} skipped=${e.proofA.skippedEquivalent} stale=${e.proofA.stale} unanswered=${e.proofA.unanswered}] ` +
-          `B[stocks=${e.proofB.stocks} planned=${e.proofB.plannedIds} omitted=${e.proofB.omitted} changed=${e.proofB.changed} missing=${e.proofB.missing} benefitStmts=${e.proofB.benefitStatements} yield=${e.proofB.yieldChanged} score=${e.proofB.scoreChanged}] ` +
-          `C[rows=${e.proofC.rows} applied=${e.proofC.applied} candidates=${e.proofC.candidates} stops=${e.proofC.stops} wouldWrite=${e.proofC.wouldWrite}]`
+          `B[stocks=${e.proofB.stocks} planned=${e.proofB.plannedIds} omitted=${e.proofB.omitted} changed=${e.proofB.changed} missing=${e.proofB.missing} benefitStmts=${e.proofB.benefitStatements} yield=${e.proofB.yieldChanged} score=${e.proofB.scoreChanged} calls=${e.proofB.senderCalls}] ` +
+          `C[rows=${e.proofC.rows} applied=${e.proofC.applied} candidates=${e.proofC.candidates} stops=${e.proofC.stops} descStmts=${e.proofC.descStatements} wouldWrite=${e.proofC.wouldWrite} calls=${e.proofC.senderCalls}]`
       );
     })
     .catch((e) => {

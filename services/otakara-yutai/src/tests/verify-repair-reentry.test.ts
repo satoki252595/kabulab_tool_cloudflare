@@ -4,15 +4,25 @@
  * 原文・ID 実値は持ち込まない。実証跡での結合実行は手動 + 私的証跡。
  */
 import { describe, expect, it } from "vitest";
-import type { StockPreimage } from "../../data-scripts/atomic-apply.js";
+import type { AtomicBatchSender, StockPreimage } from "../../data-scripts/atomic-apply.js";
+import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
 import {
   parseAbcManifest,
   producePlannedUpdate,
+  proveAbcReentry,
   proveFulltextReentry,
   proveTargetCoverage,
   simulatePostBenefits,
   throwingSender,
 } from "../../data-scripts/verify-repair-reentry.js";
+
+const countingSender = (): { sender: AtomicBatchSender; calls: D1BatchStatement[][] } => {
+  const calls: D1BatchStatement[][] = [];
+  const sender: AtomicBatchSender = async (statements) => {
+    calls.push([...statements]);
+  };
+  return { sender, calls };
+};
 
 const pre = (benefits: StockPreimage["benefits"]): StockPreimage => ({
   stockId: 101,
@@ -119,20 +129,25 @@ describe("proveFulltextReentry (全文分類再入)", () => {
     { id: 22, stockCode: "1001", oldDescription: "旧文B", newFull: "新全文B", updatedAt: 200 },
   ];
 
-  it("全行適用済みで 0 文、wouldWrite は行数", () => {
-    const r = proveFulltextReentry(rows, new Map([[21, "新全文A"], [22, "新全文B"]]));
+  it("全行適用済みで実 builder 0 文・送信 0 回、wouldWrite は行数", async () => {
+    const { sender, calls } = countingSender();
+    const r = await proveFulltextReentry(rows, new Map([[21, "新全文A"], [22, "新全文B"]]), sender);
     expect(r).toMatchObject({ rows: 2, applied: 2, candidates: 0, stops: 0, descStatements: 0, wouldWrite: 2 });
+    expect(r.senderCalls).toBe(0);
+    expect(calls).toHaveLength(0);
   });
 
-  it("未適用・drift・同一文は投げる", () => {
-    expect(() => proveFulltextReentry(rows, new Map([[21, "新全文A"], [22, "旧文B"]]))).toThrow(/未適用/);
-    expect(() => proveFulltextReentry(rows, new Map([[21, "新全文A"], [22, "第三文"]]))).toThrow(/STOP/);
-    expect(() =>
+  it("未適用・drift・同一文は投げる", async () => {
+    const { sender } = countingSender();
+    await expect(proveFulltextReentry(rows, new Map([[21, "新全文A"], [22, "旧文B"]]), sender)).rejects.toThrow(/未適用/);
+    await expect(proveFulltextReentry(rows, new Map([[21, "新全文A"], [22, "第三文"]]), sender)).rejects.toThrow(/STOP/);
+    await expect(
       proveFulltextReentry(
         [{ id: 23, stockCode: "1001", oldDescription: "同一", newFull: "同一", updatedAt: 300 }],
-        new Map([[23, "同一"]])
+        new Map([[23, "同一"]]),
+        sender
       )
-    ).toThrow(/同一/);
+    ).rejects.toThrow(/同一/);
   });
 });
 
@@ -189,5 +204,74 @@ describe("parseAbcManifest (形状検証)", () => {
 describe("throwingSender (送信口)", () => {
   it("呼ばれたら throw する", async () => {
     await expect(throwingSender([])).rejects.toThrow(/0 writes 違反/);
+  });
+});
+
+describe("proveAbcReentry (実 planner→実 apply の再入)", () => {
+  const fin = {
+    yutaiYield: null,
+    dataDate: "2026-09-29",
+    price: 1000,
+    per: null,
+    pbr: null,
+    dividendYield: null,
+    roe: null,
+    ma25: null,
+    rsi14: null,
+    macd: null,
+    macdSignal: null,
+    fetchedAt: 1,
+  };
+  const manifestOf = (summary: string): string =>
+    JSON.stringify({
+      batches: {
+        perStock: [
+          {
+            stockId: 101,
+            statements: [
+              {
+                sql: "-- preflight",
+                params: [
+                  JSON.stringify({
+                    stockId: 101,
+                    parent: { code: "1001", isActive: true },
+                    benefits: [row(11, "旧", null, null)],
+                    financial: fin,
+                    scores: null,
+                  }),
+                ],
+              },
+              { sql: "UPDATE yutai_benefits SET short_summary = ?, x", params: [summary, null, null, 11] },
+            ],
+          },
+        ],
+      },
+      yield: {
+        entries: [
+          { stockId: 101, prev: null, next: null, changed: false, scorePrev: null, scoreNext: null, scoreChanged: false },
+        ],
+        skippedNoRow: [],
+        skippedNoScore: [101],
+        changed: 0,
+        scoreChanged: 0,
+      },
+    });
+
+  it("一致すれば batch 0・実送信 0 回", async () => {
+    const abc = parseAbcManifest(manifestOf("新"));
+    const { plannedById, plannedIds } = proveTargetCoverage(abc.filed, abc.preimages);
+    const { sender, calls } = countingSender();
+    const r = await proveAbcReentry(abc, abc.filed, plannedById, plannedIds, sender);
+    expect(r).toMatchObject({ plannedIds: 1, omitted: 1, changed: 0, missing: 0, effectiveStatements: 0, batches: 0 });
+    expect(r.senderCalls).toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("filed が post と食い違えば実 apply 経路で throw する", async () => {
+    const abc = parseAbcManifest(manifestOf("別"));
+    const plannedById = new Map([[11, { shortSummary: "新", estimatedValue: null, estimateValueSource: null }]]);
+    await expect(proveAbcReentry(abc, abc.filed, plannedById, [11], throwingSender)).rejects.toThrow(
+      /0 writes 違反/
+    );
   });
 });
