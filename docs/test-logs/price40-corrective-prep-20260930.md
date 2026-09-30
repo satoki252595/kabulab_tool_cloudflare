@@ -60,8 +60,9 @@ archive・corrective attempt ともに本記録では実行しない
 - docs への raw mirror なし (BLOCKED につき除去済み)。
   原本 immutable `/tmp/price40-exec-20260930/...` を
   `--proof-path` で再使用 + SHA pointer (bytes/wrapper/payload/key)。
-- private one-off thin runner (repo 外。tracked 新規なし):
-  `/tmp/price40-failed-archive-20260930/run.mts` (0600)。
+- private one-off thin runner (repo 外。tracked 新規なし。
+  raw mirror なし):
+  `/tmp/price40-failed-archive-20260930/run.mts` (0600。172 行)。
   FULL SHA `32de718b06b10874014d16c802b8406f337cf9fb0c5471783af275da8622e444`
   (旧 `8a3b703a…c0ffc` は記録保持)。
   新規 suite/report framework なし。
