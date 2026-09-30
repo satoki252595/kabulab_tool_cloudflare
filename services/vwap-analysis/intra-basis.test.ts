@@ -7,10 +7,31 @@ import { parseDailyChart } from "../../src/shared/yahoo/client.js";
 import type { DailyFetchProof } from "../../src/shared/yahoo/client.js";
 import { intraWindowOf, zeroSplitCovered } from "../../src/shared/vwap/proof.js";
 import type { IntraWindow } from "../../src/shared/vwap/proof.js";
+import { jstDateSec } from "../../src/shared/vwap/proof.js";
 
 const FIX = join(__dirname, "tests", "fixtures");
 const RD = (n: string): string => readFileSync(join(FIX, n), "utf8");
 const sha = (s: string | Buffer): string => createHash("sha256").update(s).digest("hex");
+
+const SPLIT_SOURCE = "/tmp/vwap-adj-repair/acq2-8303.bin";
+it.skipIf(!existsSync(SPLIT_SOURCE))("actual split after the stored-window projection but before daily anchor stays HOLD", async () => {
+  const bytes = readFileSync(SPLIT_SOURCE);
+  expect(sha(bytes)).toBe("aa41f1e11a50f813821a2cd2737c8569f58900af723d2f7ae1b4c7e861b12621");
+  const fresh = await parseDailyChart("8303.T", "10y", bytes, "2026-09-30T13:54:52.390Z");
+  const dates = fresh.bars.map((b) => b.date);
+  const split = fresh.splits.find((s) => s.date > dates[0] && s.date <= dates.at(-1)!);
+  expect(split).toBeDefined();
+  const before = dates.filter((date) => date < split!.date).at(-1)!;
+  expect(before).toBeDefined();
+  const timestamps = (JSON.parse(bytes.toString("utf8")) as { chart: { result: Array<{ timestamp: number[] }> } }).chart.result[0].timestamp;
+  // Project actual daily session timestamps into the qualifier's window input.
+  // This is a boundary regression, not a claim of actual 5m wire adjustment.
+  const projected = (date: string) => intraWindowOf([timestamps.find((ts) => jstDateSec(ts) === date)!]);
+  expect(zeroSplitCovered(fresh.proof, projected(before), dates, fresh.splits))
+    .toEqual({ ok: false, reason: "in-window-split" });
+  expect(zeroSplitCovered(fresh.proof, projected(dates.at(-1)!), dates, fresh.splits))
+    .toEqual({ ok: true });
+});
 
 // fixtures は .gitignore 対象 (原文非公開)。不在の環境 (CI) では skip。
 const WANT = [

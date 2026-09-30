@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
 import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { loadCodes } from "./lib/codes.js";
-import { fetchDaily } from "../../src/shared/yahoo/client.js";
+import { fetchDaily, parseDailyChart } from "../../src/shared/yahoo/client.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { main, tenYearRange } from "./ingest-daily.js";
 
@@ -235,6 +235,65 @@ const FIX_R2_DAILY_7203 = join(HERE, "../../services/vwap-analysis/tests/fixture
 // 実 excerpt 全 bytes pin (由来は fixtures/README.md)。不一致は fail (fallback なし)。
 const R2_DAILY_7203_SHA = "2a727f0665ba53e78da50944e58714271f20d26e6ad7e9b296dcd5a21e0c8efc";
 const sha256str = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
+
+// Actual licensed bytes remain private. This replay uses the actual frozen plan
+// clock, not the machine's later clock; it proves same-run reentry through main().
+const ACTUAL_REPAIR_DIR = "/tmp/vwap-adj-repair";
+const ACTUAL_UNIVERSE = "/tmp/fresh-snapshot-read-20260930/post-read/post-snapshot.normalized.json";
+const ACTUAL_CODES = ["7944", "8303", "8919"];
+const ACTUAL_SOURCES = ["acq-7944.bin", "acq2-8303.bin", "acq2-8919.bin"];
+const actualReplayAvailable = existsSync(ACTUAL_UNIVERSE) && existsSync(join(ACTUAL_REPAIR_DIR, "rep3-wholepost-plan.json")) &&
+  ACTUAL_CODES.every((c, i) => existsSync(join(ACTUAL_REPAIR_DIR, `repair3-${c}.post-body.json`)) && existsSync(join(ACTUAL_REPAIR_DIR, ACTUAL_SOURCES[i])));
+it.skipIf(!actualReplayAvailable)("actual repaired NEWPOSTs reenter the SAME normal main with source replay and PUT0", async () => {
+  const universeRaw = readFileSync(ACTUAL_UNIVERSE, "utf8");
+  expect(sha256str(universeRaw)).toBe("9bc6b50b7fa3ac86edd17bf87ef60625428423e72efa9df86de7ca741a5b1ec8");
+  const universe = (JSON.parse(universeRaw) as { core: Array<{ code: string; isActive: number; instrumentType: string }> }).core
+    .filter((r) => r.isActive === 1 && r.instrumentType === "equity").map((r) => r.code).sort();
+  expect(universe).toHaveLength(3695);
+  expect(sha256str(universe.join("\n"))).toBe("e441dd1fdfccacb7a3f448c16495259d4e4b19b5acd4ae913f5502beeb86beb3");
+  const plan = JSON.parse(readFileSync(join(ACTUAL_REPAIR_DIR, "rep3-wholepost-plan.json"), "utf8")) as {
+    planAt: string; rows: Array<{ code: string; postSha: string; sourceSha: string; sourceObservedAt: string }>;
+  };
+  const standing = new Map<string, string>();
+  const fresh = new Map<string, Awaited<ReturnType<typeof parseDailyChart>>>();
+  for (let i = 0; i < ACTUAL_CODES.length; i++) {
+    const code = ACTUAL_CODES[i], row = plan.rows[i];
+    expect(row.code).toBe(code);
+    const post = readFileSync(join(ACTUAL_REPAIR_DIR, `repair3-${code}.post-body.json`), "utf8");
+    expect(sha256str(post)).toBe(row.postSha);
+    const source = readFileSync(join(ACTUAL_REPAIR_DIR, ACTUAL_SOURCES[i]));
+    expect(createHash("sha256").update(source).digest("hex")).toBe(row.sourceSha);
+    standing.set(`daily/${code}.json`, post);
+    fresh.set(`${code}.T`, await parseDailyChart(`${code}.T`, "10y", source, row.sourceObservedAt));
+  }
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(plan.planAt));
+  try {
+    process.argv = ["node", "vitest", `--codes=${ACTUAL_CODES.join(",")}`];
+    mockLoadCodes.mockResolvedValue(universe);
+    mockR2Get.mockImplementation(async (key) => {
+      const body = standing.get(key);
+      if (body === undefined) throw new Error("unexpected object read");
+      return { body, etag: "offline-observed-version" };
+    });
+    mockFetchDaily.mockImplementation(async (symbol, range) => {
+      expect(range).toBe("10y");
+      const value = fresh.get(symbol);
+      if (value === undefined) throw new Error("unexpected source request");
+      return value;
+    });
+    mockR2Put.mockImplementation(async () => { throw new Error("unexpected PUT during actual replay"); });
+    await main();
+    expect(process.exitCode).toBe(0);
+    expect(mockFetchDaily).toHaveBeenCalledTimes(3);
+    expect(mockR2Put).not.toHaveBeenCalled();
+    const outcomes = recordedBody().outcomes as Record<string, { status: string }>;
+    expect(Object.keys(outcomes)).toEqual(ACTUAL_CODES);
+    expect(Object.values(outcomes).every((r) => r.status === "skipped")).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 describe.skipIf(!existsSync(FIX_R2_DAILY_7203))("ingest-daily actual same-cached (実 excerpt)", () => {
   it("同一 cached 再観測 → run2 PUT0/standing bytes 不変/初回 clock 保持", async () => {

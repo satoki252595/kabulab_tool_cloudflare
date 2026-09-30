@@ -43,8 +43,8 @@ app.get("/api/chart", async (c) => {
 
 // intra 価格 basis 契約: producer proof を検証して配信・適格化する。
 // 適格 (zero-split verified) は daily proof の実証 span が保存 intra
-// 全体を覆い、span 内 splits が窓と交差しない場合のみ。legacy
-// (proof なし)・span 外・窓内 split は HOLD。wire basis は UNKNOWN
+// 全体を覆い、窓の初日から日足の最終日まで分割がない場合のみ。legacy
+// (proof なし)・span 外・現在の基準までの split は HOLD。wire basis は UNKNOWN
 // のまま断定しない。不正形状の既知 object は reject (throw) し、
 // 欠落 object の legitempty とは区別する。
 const INTRA_SOURCE = "yahoo-5m"; // fetchBars5m (Yahoo chart interval=5m) 由来。code fact。
