@@ -11,6 +11,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ### 変更
 - 優待 company 判定に表見出し context を persist (内部 headed 保存形式。合同割引・抽選 scope・型付き券 unit×数量の narrow 規則。見出しのみ金額は額面にしない。本文 negative は authoritative)。要約契約 2026-09-30.1 (内部 marker の echo を `internal` 違反で reject)。次回 full-import から保存文が headed 形に変わる (公開面は shortSummary のみで不変)。データ変更なし (Refs #146)。
+- 海外 L2 `source_max_date` の MAX を `stockIds` 指定時は対象集合に拘束 (未指定時は global MAX 不変・空は throw 維持。caller は global 呼び不変)。scope 別契約の focused tests (23 + 5 passed)。データ変更なし。
 - jss-api 日足の調整意味論を訂正 (価格は生値・adj_* は配当込 total-return、係数不明は null・偽 1 なし、出来高未補正、cache v2)。データ変更なし。
 - VWAP daily adj 修復の rebuild 土台 (fetchDaily 原文 capture hook 追加・repair-daily whole-post 再構築 + tests)。取得実績: 7944 は fresh 応答自体の非正 adj で HOLD (既知)、8303/8919 は未送信 STOP。Adj 定義は Yahoo 公式 [adjusted close は分割+配当](https://in.help.yahoo.com/kb/adjusted-close-sln28256.html)・[AAPL history の Close=分割調整・Adj Close=分割+配当/キャピタルゲイン](https://finance.yahoo.com/quote/AAPL/history/) に基づく。データ変更なし (Refs #117)。
 - VWAP batch summary の原本 bytes を archive 前に runner local (0700/wx0600/fsync) へ保持し、失敗時は artifact で回収。local 書込失敗は archive 前 fatal exit 2 (daily 2 で intra 0)。データ変更なし (Refs #117)。
