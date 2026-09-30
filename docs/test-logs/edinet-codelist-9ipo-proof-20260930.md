@@ -23,7 +23,8 @@ EDINET 同一性・sector33 の一次取得 PREP。値は private のみ、こ�
 - 実 `parse_codelist` で上場 3817 件、data_date 2026-09-30
 - 9 対象中 6 件が ticker 単独・EDINET コード有・sector33 正規化可で適格
   (618A・619A・621A・625A・623A・634A)
-- 3 件は source asOf 時点で CSV 全フィールドに不在のため正直 HOLD
+- 3 件は ticker literal が CSV 全フィールドに 0 件のため
+  issuer/ticker identity 未確定 HOLD (発行体自体の不在は未証明。名称名寄せなし)
   (622A・627A: JPX 上場 9/18、646A: JPX 上場 9/29)
 - 全 ticker の conflicting duplicate 0 (winner-last 採用なし)
 
@@ -31,9 +32,17 @@ EDINET 同一性・sector33 の一次取得 PREP。値は private のみ、こ�
 
 - `edinet_codelist._read_codelist_csv`: 期待名単独でなければ STOP
   (複数 CSV の先頭採用・別名・不在の黙認を除去)
-- `parse_codelist`: ヘッダ名の重複は STOP、非空白の列不足行は STOP
-  (完全な空白行のみ従来どおり skip)
-- 新規 7 件: 敵対ベクタ 6 (複数/別名/不在/重複ヘッダ/非空白短行/空白 skip)
-  + 実フィクスチャの前提固定 1 (単一名・一意ヘッダ・短行なし)
-- `pipeline: ruff + pytest` 全緑 (1453 passed / 0 failed / 58 skipped)。
+- `parse_codelist`: ヘッダ名の重複は STOP、非空白行の列幅不一致は STOP
+  (過少・過多とも。完全な空白行のみ skip、ヘッダ拡張＋同幅は正常)
+- 新規 10 件: 敵対ベクタ 6 (複数/別名/不在/重複ヘッダ/非空白短行/空白 skip)
+  + 実フィクスチャ由来 2 (最終列 truncate・余分列) + ヘッダ拡張正常 1
+  + 実フィクスチャの前提固定 1 (単一名・一意ヘッダ・全行同幅)
+- `pipeline: ruff + pytest` 全緑 (1456 passed / 0 failed / 58 skipped)。
   D1 変更 0・owner 書込 0 (enrichment は別途 review)。
+
+## 訂正履歴 (2026-09-30、Root final review)
+
+- 旧理由「source asOf 時点で CSV 全フィールドに不在」は発行体不在まで
+  含意しうる過広表現だったため、「ticker literal 不在→issuer/ticker
+  identity 未確定 HOLD、発行体不在は未証明」へ限定した。
+  raw・receipt・pin は不変。名称による名寄せは行わない。

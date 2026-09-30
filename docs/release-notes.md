@@ -10,7 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
-- EDINET コードリストの信頼境界を厳格化 (zip 内は期待名 CSV 単独・ヘッダ名一意・非空白の列不足行は STOP)。9 月 IPO 9 件の一次取得 PREP (asOf 2026-09-30、6 件適格・3 件 source 不在 HOLD、保管 readback 2/2)。証跡 `docs/test-logs/edinet-codelist-9ipo-proof-20260930.md`。データ変更なし (Refs #196)。
+- EDINET コードリストの信頼境界を厳格化 (zip 内は期待名 CSV 単独・ヘッダ名一意・非空白の列不足行は STOP)。9 月 IPO 9 件の一次取得 PREP (asOf 2026-09-30、6 件適格・3 件 identity 未確定 HOLD (ticker literal 不在)、保管 readback 2/2)。証跡 `docs/test-logs/edinet-codelist-9ipo-proof-20260930.md`。データ変更なし (Refs #196)。
 - マクロ行キーの日時正準化と原本保管: 行キーは GSPC 確定バー日、N225/VIX 確定日と VI 日付が一致し必須値が揃うときだけ保存 (不一致・不足は HOLD で前回値保持)。最終 draft と同一 generation の chart 原文 4 + VI HTML + manifest を `macro-source-batch-*` に保管し strict readback 通過後のみ D1 保存 (保管失敗は throw)。`previousClose` は source 明示値のみ (補完 chain 削除)。データ変更なし (Refs #163)。
 - 株式 guard の全 stock パス共有: 時間窓・N225 対象日/fresh-close・銘柄別 targetDate・完了期限を default パスにも適用 (stocksOnly はマクロ有無のみ)。`expectedDate` 必須化と `dataDate` 代替の除去。データ変更なし (Refs #163)。
 - 優待 144 銘柄の fresh 監査を frozen probe の 8 read-only SELECT で実測し FRESH_MATCH (content 差 0・drift 0・実送信 0、FT 62 全適用済み・normal 37/50 一致)。証跡 11 件は private + Notion 一次データ保管。doc `docs/test-logs/yutai-fresh-audit-proof-20260930.md`。データ変更なし (Refs #146 #102)。

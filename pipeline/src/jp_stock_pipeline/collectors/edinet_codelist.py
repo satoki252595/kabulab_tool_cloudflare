@@ -144,16 +144,24 @@ def parse_codelist(
         raise ValueError(f"コードリスト CSV のヘッダが想定と不一致: {header}") from exc
 
     fetched_at = now_jst()
-    need = max(idx.values())
+    width = len(header)
     records: list[StockMasterRecord] = []
     for lineno, row in enumerate(rows[2:], start=3):
-        if len(row) <= need:
-            if any(cell.strip() for cell in row):
-                raise ValueError(
-                    f"コードリスト CSV の{lineno}行目が列不足で非空白 "
-                    "(黙って切り捨てない)"
-                )
+        if not any(cell.strip() for cell in row):
             continue  # 完全な空白行のみスキップ
+        # 非空白行はヘッダと同幅が必須。過少も過多も構造不正として STOP
+        # する（必要列より後ろの欠落・余分列の黙殺をしない）。
+        # ヘッダ自体の拡張は妨げない（一意＋必須名＋同幅なら正常）。
+        if len(row) < width:
+            raise ValueError(
+                f"コードリスト CSV の{lineno}行目が列不足 "
+                f"(ヘッダ {width} 列に対し {len(row)} 列)"
+            )
+        if len(row) > width:
+            raise ValueError(
+                f"コードリスト CSV の{lineno}行目が列過多 "
+                f"(ヘッダ {width} 列に対し {len(row)} 列)"
+            )
         if row[idx[_COL_LISTED]].strip() != _LISTED_VALUE:
             continue  # 上場企業のみ
         code = normalize_sec_code(row[idx[_COL_SEC_CODE]])
