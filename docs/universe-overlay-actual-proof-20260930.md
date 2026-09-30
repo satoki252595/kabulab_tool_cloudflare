@@ -123,12 +123,13 @@ whole HTTP raw を判定前に wx 保存。
 - D (price47 resolve-only actual post) handoff は readonly packet を別途用意し、
   dispatch は Root が行う。
 
-## Actual proof archive (PREP frozen、record 未実行)
+## Actual proof archive (RECORDED)
 
-- conditional archive grant は adopted 済み。bundle + runner 凍結、
-  preflight 全 true (counter 0、stale なし、networkSends 0)。
-- record 0: SOL CODE CLEAR + hash-first Root + conditional one GO の前は
-  実行しない。unknown STOP / replay 0 / newkey escape 0。完了主張なし。
+- conditional one GO のもと 1 回記録。verdict RECORDED
+  (outcome recorded、manifestMatch written、fileTooLarge false、
+  19 member pins、strict readback 通過)。
+- recorded/written 2026-09-30T08:49:31.174Z、verdict 2026-09-30T08:49:33.809Z。
+  counter 1。unknown なし、replay 0、newkey escape 0。
 - runner `c26f11530dde94ba0d263182e0cf26723cd5abb6e8d14a93256191bb39e6c9e1` /
   ZIP 183671B `3eaff8c3cb73982d03a2b211d3dee0d5876718fa91b743d84682483202f810a3` /
   manifest `1a5fe8c3138a9b0c37c80c9c63be05206dfb63b773c7e825442b2d3851904702` /
