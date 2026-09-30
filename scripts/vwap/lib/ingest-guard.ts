@@ -8,6 +8,7 @@
  *   (CLAUDE 高頻度ポーリング則)。summary JSON 自体を 1 ファイル添付する。
  */
 import { createHash } from "node:crypto";
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 
 export type PricedBar = {
@@ -132,7 +133,7 @@ export type SavedIntra = {
 };
 
 /** YYYY-MM-DD の暦妥当性 (存在する日付のみ)。 */
-function isCalendarDate(d: string): boolean {
+export function isCalendarDate(d: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
   const ms = Date.parse(`${d}T00:00:00Z`);
   if (!Number.isFinite(ms)) return false;
@@ -368,6 +369,47 @@ export function sourceObservedAggregate(
     }
   }
   return { count, maxDate, maxTs };
+}
+
+/**
+ * summary 本文 bytes の archive 前 durable 保持 (trust boundary)。
+ * run 36698387232 の 413 UNKNOWN で原本 bytes が memory 内消失した再発防止。
+ * dir 0700・file wx 0600 + fsync・既存衝突は拒否 (上書きなし)。
+ * 書込失敗は呼び出し側が archive 前に fatal exit 2 (record 0。daily 2 で
+ * intra 0)。「保存失敗でも archive 継続」の fallback は禁止。
+ * dir 既定は `.vwap-summaries` (cwd 相対。テストは tmp へ chdir する)。
+ */
+export const SUMMARY_LOCAL_DIR = ".vwap-summaries";
+
+export function writeSummaryLocal(
+  summary: {
+    key: string;
+    files: Array<{ bytes: Uint8Array; filename: string; contentType: string }>;
+  },
+  dir: string = SUMMARY_LOCAL_DIR
+): { ok: true; path: string } | { ok: false; reason: string } {
+  try {
+    if (summary.files.length !== 1) return { ok: false, reason: "files!=1" };
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    chmodSync(dir, 0o700);
+    const path = `${dir}/${summary.files[0].filename}`;
+    // writeSync は short count を返しうる。writeFileSync(fd) の full-write
+    // で exact bytes を保証してから fsync する。
+    const fd = openSync(path, "wx", 0o600);
+    try {
+      writeFileSync(fd, summary.files[0].bytes);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    return { ok: true, path };
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException)?.code === "EEXIST") return { ok: false, reason: "exists" };
+    return {
+      ok: false,
+      reason: sanitizeLogText(e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 120),
+    };
+  }
 }
 
 export function buildIngestSummary(stats: IngestRunStats): {

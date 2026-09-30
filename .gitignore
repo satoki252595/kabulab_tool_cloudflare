@@ -57,6 +57,8 @@ conductor/
 tmp/
 temp/
 .vercel
+# VWAP summary 原本の archive 前 durable 保持 (CI failure artifact が回収)
+.vwap-summaries/
 
 # nix / direnv
 .direnv/

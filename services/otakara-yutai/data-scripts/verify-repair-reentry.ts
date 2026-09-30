@@ -29,6 +29,7 @@ import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js"
 import { assertNotCommittable } from "./private-path.js";
 import {
   computeYieldEntries,
+  type OverlayValue,
   type YieldInputs,
   type YieldRecomputePlan,
 } from "./recompute-yields.js";
@@ -602,8 +603,8 @@ export async function proveAbcReentry(
     if (e.prev !== preYield) fail(`yield entry prev が pre 利回りと不一致: stockId=${e.stockId}`);
   }
   const stockIds = [...abc.preimages.keys()].sort((a, b) => a - b);
-  const overlay = new Map<number, number | null>();
-  for (const [id, t] of plannedById) overlay.set(id, t.estimatedValue);
+  const overlay = new Map<number, OverlayValue>();
+  for (const [id, t] of plannedById) overlay.set(id, { value: t.estimatedValue, source: t.estimateValueSource });
   const yieldPlan: YieldRecomputePlan = computeYieldEntries(stockIds, { prices, benefits, scoreInputs, scores, parents }, overlay);
   // post 再計算は全銘柄不変のはず。変化があれば STOP (再入で書くものがある)。
   let yieldChanged = 0;

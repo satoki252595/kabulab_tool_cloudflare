@@ -48,6 +48,7 @@ import {
   fetchYieldInputs,
   formatRecomputeReport,
   planYieldRecompute,
+  type OverlayValue,
   type RecomputeYieldsDb,
   type YieldRecomputePlan,
 } from "./recompute-yields.js";
@@ -226,12 +227,14 @@ async function resolveTouchedStocks(
 async function reportYieldPreview(
   db: ReturnType<typeof openOtakaraD1>,
   targetIds: number[],
-  updates: { ids: number[]; estimatedValue: number | null }[]
+  updates: readonly PlannedUpdate[]
 ): Promise<void> {
   if (targetIds.length === 0) return;
   const { stockIds, codeOf } = await resolveTouchedStocks(db, targetIds);
-  const overlay = new Map<number, number | null>();
-  for (const u of updates) for (const id of u.ids) overlay.set(id, u.estimatedValue);
+  const overlay = new Map<number, OverlayValue>();
+  for (const u of updates) {
+    for (const id of u.ids) overlay.set(id, { value: u.estimatedValue, source: u.estimateValueSource });
+  }
   const plan = await planYieldRecompute(db, stockIds, overlay);
   for (const line of formatRecomputeReport(plan, codeOf)) {
     console.info(`[summary:import] (preview) ${line}`);
@@ -280,8 +283,10 @@ export async function applyImportAtomically(
     };
   }
   const { stockIds, codeOf, stockOf } = await resolveTouchedStocks(db, [...input.targetIds]);
-  const overlay = new Map<number, number | null>();
-  for (const u of input.updates) for (const id of u.ids) overlay.set(id, u.estimatedValue);
+  const overlay = new Map<number, OverlayValue>();
+  for (const u of input.updates) {
+    for (const id of u.ids) overlay.set(id, { value: u.estimatedValue, source: u.estimateValueSource });
+  }
   // 計算とガードは同一読取の snapshot から (別 fresh 読みの代用は drift の見逃し)。
   const yieldInputs = await fetchYieldInputs(db, stockIds);
   // 検証→再読の間の改変は、計算も batch も作らず全体 STOP (再読の採用で

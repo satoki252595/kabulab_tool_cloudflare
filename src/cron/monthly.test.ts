@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runMonthlyRebuild } from "./monthly.js";
+import { groupBenefitDisplaySets, runMonthlyRebuild } from "./monthly.js";
 import { runDateKeys } from "./daily.js";
 import type { OverlayCollectFn } from "./universe-overlay.js";
 import { fakeOverlayCollect } from "./tests/overlay-batch.js";
@@ -58,13 +58,15 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
     stockId: s.id,
     minShares: 100,
     estimatedValue: 1000,
+    estimateValueSource: "company",
+    description: "1,000円相当",
     recordMonth: 3,
     genreId: 1,
   }));
 
   type Db = Parameters<typeof runMonthlyRebuild>[0];
 
-  function makeStub() {
+  function makeStub(benefitRows: typeof benefits = benefits, allRows: typeof benefits = benefitRows) {
     const calls: { table: unknown; rowCount: number; rows: unknown[] }[] = [];
     const fakeDb = {
       update: () => ({ set: () => ({ where: async () => [] as unknown[] }) }),
@@ -126,11 +128,13 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
           // あるため、await 可能かつ .where() を持つ thenable を返す
           if (t === otakaraSchema.yutaiBenefits) {
             return {
-              where: async () => benefits,
+              // .where() 付き = 利回り分子候補 (company + 非 null のみ)。
+              // 素通し = 全優待行 (月/ジャンル + recipient context 用)。
+              where: async () => benefitRows,
               then: (
-                resolve: (v: typeof benefits) => void,
+                resolve: (v: typeof allRows) => void,
                 reject?: (e: unknown) => void
-              ) => Promise.resolve(benefits).then(resolve, reject),
+              ) => Promise.resolve(allRows).then(resolve, reject),
             };
           }
           throw new Error("unexpected table in stub select");
@@ -203,5 +207,69 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
       .flatMap((c) => (c.rows as { stockId: number }[]).map((r) => r.stockId))
       .sort((a, b) => a - b);
     expect(allFinIds).toEqual(active.map((s) => s.id));
+  });
+
+  it("不認定の company 値・source NULL 値は利回りに入れない (null で書く)", async () => {
+    const rows = benefits.map((b) =>
+      b.stockId === 1
+        ? { ...b, description: "カタログより選択 5,000円相当", estimatedValue: 5000 }
+        : b.stockId === 2
+          ? { ...b, estimateValueSource: null as unknown as string }
+          : b
+    );
+    const { db, calls } = makeStub(rows);
+    await runMonthlyRebuild(db, { collectOverlay: fakeCollect, sendOverlayBatch: makeThrowingSender() });
+    const finRows = calls
+      .filter((c) => c.table === otakaraSchema.stockFinancials)
+      .flatMap((c) => c.rows as { stockId: number; yutaiYield: number | null }[]);
+    // 1: choice HOLD → null。2: source NULL → null。3: 正常に算定。
+    expect(finRows.find((r) => r.stockId === 1)?.yutaiYield).toBeNull();
+    expect(finRows.find((r) => r.stockId === 2)?.yutaiYield).toBeNull();
+    expect(finRows.find((r) => r.stockId === 3)?.yutaiYield).toBe((1000 / (1000 * 100)) * 100);
+  });
+
+  it("同一文言の群に値なしの株数違い兄弟行があれば混在 HOLD (全行 context)", async () => {
+    // 分子候補には無い NULL 兄弟行 (1000 株) が context に混ざる。
+    const desc = "1,000円相当";
+    const all = [
+      ...benefits,
+      { stockId: 4, minShares: 1000, estimatedValue: null, estimateValueSource: null, description: desc, recordMonth: 3, genreId: 1 },
+    ];
+    const { db, calls } = makeStub(benefits, all as typeof benefits);
+    await runMonthlyRebuild(db, { collectOverlay: fakeCollect, sendOverlayBatch: makeThrowingSender() });
+    const finRows = calls
+      .filter((c) => c.table === otakaraSchema.stockFinancials)
+      .flatMap((c) => c.rows as { stockId: number; yutaiYield: number | null }[]);
+    // 4: 株数混在 (100/1000) の同一文言は 1 つの金額を決めない。
+    expect(finRows.find((r) => r.stockId === 4)?.yutaiYield).toBeNull();
+    expect(finRows.find((r) => r.stockId === 3)?.yutaiYield).toBe((1000 / (1000 * 100)) * 100);
+  });
+});
+
+describe("groupBenefitDisplaySets (月次と repair-CAS の共有集計)", () => {
+  it("銘柄ごとに月・ジャンルを昇順・重複なし JSON にする", () => {
+    const got = groupBenefitDisplaySets([
+      { stockId: 1, recordMonth: 9, genreId: 3 },
+      { stockId: 1, recordMonth: 3, genreId: 3 },
+      { stockId: 1, recordMonth: 9, genreId: 5 },
+      { stockId: 2, recordMonth: 2, genreId: 7 },
+    ]);
+    expect(got.get(1)).toEqual({ yutaiMonths: "[3,9]", yutaiGenreIds: "[3,5]" });
+    expect(got.get(2)).toEqual({ yutaiMonths: "[2]", yutaiGenreIds: "[7]" });
+  });
+
+  it("行が無い銘柄は載らない (呼び出し側が null にする)", () => {
+    const got = groupBenefitDisplaySets([{ stockId: 1, recordMonth: 3, genreId: 3 }]);
+    expect(got.has(2)).toBe(false);
+    expect(got.get(2)?.yutaiMonths ?? null).toBeNull();
+  });
+
+  it("phantom 削除の post-image で月が縮む (8022 の 9 月幽霊を落とす形)", () => {
+    // 3 月行だけ残った post-image → [3]。削除前の [3,9] は残さない。
+    const got = groupBenefitDisplaySets([
+      { stockId: 1461, recordMonth: 3, genreId: 10 },
+      { stockId: 1461, recordMonth: 3, genreId: 12 },
+    ]);
+    expect(got.get(1461)).toEqual({ yutaiMonths: "[3]", yutaiGenreIds: "[10,12]" });
   });
 });

@@ -7,7 +7,7 @@ import { r2Get, r2Put, mapLimit, sleep, retry, R2PutRejectedError, R2PutUnknownE
 import { mergeDailySplits, type DailySplit } from "./lib/daily-merge.js";
 import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
-import { archiveSummaryOrFatal, assertSavedDailyShape, bodyPin, buildIngestSummary, findInvalidBars, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, type IngestCodeOutcome, type SavedDaily } from "./lib/ingest-guard.js";
+import { archiveSummaryOrFatal, assertSavedDailyShape, bodyPin, buildIngestSummary, findInvalidBars, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome, type SavedDaily } from "./lib/ingest-guard.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 
 export async function main() {
@@ -165,10 +165,17 @@ export async function main() {
   // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 daily に必須接続。
   // 保管失敗は fatal exit 2 にして後続 intra を走らせない (未保管の成功なし)。
   const summary = buildIngestSummary({ kind: "daily", range: "1mo-diff/10y-backfill", runId: resolveRunId(), codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
+  const local = writeSummaryLocal(summary);
+  if (!local.ok) {
+    console.error(JSON.stringify({ archive: "local-failed", key: summary.key, reason: local.reason }));
+    process.exitCode = 2;
+    return;
+  }
+  console.log(JSON.stringify({ archive: "local", key: summary.key, path: local.path }));
   console.log(JSON.stringify({ archive: "recording", key: summary.key }));
   const archived = await archiveSummaryOrFatal(() => recordPrimaryData({ ...summary, force: false }));
   if (archived.code === 2) {
-    console.error(JSON.stringify({ archive: "failed", key: summary.key, reason: archived.reason }));
+    console.error(JSON.stringify({ archive: "failed", key: summary.key, local: local.path, reason: archived.reason }));
     process.exitCode = 2;
     return;
   }

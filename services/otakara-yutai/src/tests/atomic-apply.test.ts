@@ -54,6 +54,7 @@ import {
   buildYieldScoreStatements,
   computeYieldEntries,
   fetchYieldInputs,
+  type OverlayValue,
   type RecomputeYieldsDb,
   type YieldRecomputeEntry,
 } from "../../data-scripts/recompute-yields.js";
@@ -518,7 +519,7 @@ describe("preflight ガード", () => {
   /** 計算とガードは同一読取から (本番の applyImportAtomically と同じ形)。 */
   async function planA() {
     const inputs = await fetchYieldInputs(db, [STOCK_A]);
-    const overlay = new Map<number, number | null>([[1001, 5000]]);
+    const overlay = new Map<number, OverlayValue>([[1001, { value: 5000, source: "company" }]]);
     return {
       yieldPlan: computeYieldEntries([STOCK_A], inputs, overlay),
       preimages: snapshotStockPreimages(inputs, [STOCK_A]),
@@ -678,7 +679,7 @@ describe("preflight ガード", () => {
 
   it("財務・スコア行が無い銘柄は行の不在を preimage にする", async () => {
     const inputs = await fetchYieldInputs(db, [STOCK_N]);
-    const yieldPlan = computeYieldEntries([STOCK_N], inputs, new Map([[1005, 2000]]));
+    const yieldPlan = computeYieldEntries([STOCK_N], inputs, new Map([[1005, { value: 2000, source: "company" }]]));
     expect(yieldPlan.entries).toEqual([]);
     expect(yieldPlan.skippedNoRow).toEqual([STOCK_N]);
     const preimages = snapshotStockPreimages(inputs, [STOCK_N]);
@@ -700,7 +701,7 @@ describe("preflight ガード", () => {
     ["スコア行", "INSERT INTO otakara_stock_scores (stock_id, fundamental_score, technical_score, total_score) VALUES (105, 50, 50, 50)"],
   ])("行の不在 preimage に対する%sの出現は drift として落とす", async (_name, insert) => {
     const inputs = await fetchYieldInputs(db, [STOCK_N]);
-    const yieldPlan = computeYieldEntries([STOCK_N], inputs, new Map([[1005, 2000]]));
+    const yieldPlan = computeYieldEntries([STOCK_N], inputs, new Map([[1005, { value: 2000, source: "company" }]]));
     const preimages = snapshotStockPreimages(inputs, [STOCK_N]);
     const batches = planAtomicBatches({
       updates: [UPDATE_N],
@@ -724,7 +725,7 @@ describe("preflight ガード", () => {
       estimateValueSource: null,
     };
     const inputs = await fetchYieldInputs(db, [STOCK_A]);
-    const yieldPlan = computeYieldEntries([STOCK_A], inputs, new Map([[1001, null]]));
+    const yieldPlan = computeYieldEntries([STOCK_A], inputs, new Map([[1001, { value: null, source: null }]]));
     expect(yieldPlan.entries.map((e) => [e.prev, e.next, e.changed])).toEqual([
       [1.0070493454179255, null, true],
     ]);
