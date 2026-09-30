@@ -251,10 +251,9 @@ describe("隔離修復 S100OE0P: 不一致保存行 → 販売実績の正しい
   });
 });
 
-describe("隔離修復 S100J2E7: 不一致保存行 → 品目合算の正しい行へ", () => {
-  it("原本→保存→表示の全経路が回復値を運び、再実行で不変", async () => {
+describe("隔離修復 S100J2E7: 不一致保存行 → 地理未分類 HOLD へ (北米 dash)", () => {
+  it("原本→保存→表示の全経路が正直な HOLD になり、再実行で不変", async () => {
     // 本番の不一致保存行を seed (SUM(overseas)=8303 ≠ overseas_total=19827)。
-    // per-column provenance: ot/total は源泉正で保持し、欠落した地域行だけ直す。
     seedStock(2, "7277");
     seedDoc(200, 2, "S100J2E7", "2020-03-31", "ok_geo_rows");
     seedSavedFact(200, 2, "2020-03-31", "日本", "domestic", 16698, 16698000000, null, 1, "geo_rows");
@@ -263,44 +262,32 @@ describe("隔離修復 S100J2E7: 不一致保存行 → 品目合算の正しい
     seedSavedFact(200, 2, "2020-03-31", "海外売上高", "overseas_total", 19827, 19827000000, 38.6, 1, "geo_rows");
     seedSavedFact(200, 2, "2020-03-31", "連結売上高", "total", 51340, 51340000000, null, 1, "geo_rows");
 
-    // 原本 (地域×品目の2次元表) は品目合算で回復する
+    // 原本 (北米ブレーキ「－」欠損) は地理未分類で HOLD する (旧: 欠損を
+    // 黙殺して品目合算で回復)。T6Q9 と同一の修復→未対応パターン。
     const r = parseOverseasHtml(fx("georows-dup-region-ambiguous-S100J2E7.html"), "2020-03-31");
-    expect(r.status).toBe("ok_geo_rows");
+    expect(r.status).toBe("geo_present_unstructured");
+    expect(r.facts).toHaveLength(0);
 
-    // 保存: 取込save path等価の置換。地域行は合算値、ot/total は源泉値を保持。
+    // 保存: status更新 + facts削除 (0 inserts)
     await repairSave(200, 2, r.status, "test-honbun.htm", r.facts, r.proof);
-    const after = await readFacts(200);
-    expect(after).toEqual([
-      "2020-03-31|アジア|overseas|16963000000|null",
-      "2020-03-31|北米|overseas|2864000000|null",
-      "2020-03-31|日本|domestic|31512000000|null",
-      "2020-03-31|海外売上高|overseas_total|19827000000|38.6",
-      "2020-03-31|連結売上高|total|51340000000|null",
-    ]);
+    expect(await readFacts(200)).toEqual([]);
     const [doc] = await db
       .select({ s: yuhoDocuments.overseasParseStatus })
       .from(yuhoDocuments)
       .where(eq(yuhoDocuments.id, 200));
-    expect(doc.s).toBe("ok_geo_rows");
+    expect(doc.s).toBe("geo_present_unstructured");
 
-    // 表示: 画面queryが回復値を読む
+    // 表示: 未対応として正直に出る (捏造値なし)
     const trend = await getOverseasTrendByCode(db, "7277");
     expect(trend).not.toBeNull();
-    expect(trend!.hasStructuredData).toBe(true);
-    expect(trend!.points).toHaveLength(1);
-    const p = trend!.points[0];
-    expect(p.overseasYen).toBe(19827000000);
-    expect(p.totalYen).toBe(51340000000);
-    expect(p.domesticYen).toBe(31512000000);
-    expect(p.ratioPct).toBe(38.6);
-    expect(p.regions.map((x) => `${x.name}:${x.yen}`)).toEqual([
-      "アジア:16963000000",
-      "北米:2864000000",
-    ]);
+    expect(trend!.hasStructuredData).toBe(false);
+    expect(trend!.points).toHaveLength(0);
+    expect(trend!.documents).toHaveLength(1);
+    expect(trend!.documents[0].overseasParseStatus).toBe("geo_present_unstructured");
 
-    // 再実行で不変 (2nd run 0 changes)
+    // 再実行で不変
     await repairSave(200, 2, r.status, "test-honbun.htm", r.facts, r.proof);
-    expect(await readFacts(200)).toEqual(after);
+    expect(await readFacts(200)).toEqual([]);
   });
 });
 

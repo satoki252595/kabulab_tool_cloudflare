@@ -12,14 +12,23 @@
  *   - 正常保存後の同一入力の再入は送信 0 (binding 経路は batch 0、
  *     Node sender 経路は sender 呼出 0) で skipped_existing。
  *
- * mock する境界は bytes→facts の橋渡しだけ (download + 3 パーサ + CSV)。
+ * mock する境界は bytes→facts の橋渡し (download + 3 パーサ + CSV) と
+ * Notion 側 (notion-archive 3 関数 + text-backup)。notion-archive は
+ * key→pageId の stateful store で dedup (recorded/skipped_existing) と
+ * custody 行を再現し、unique physical + readback 照合の通過を固定する。
  * パーサの戻す facts は全てコミット済み実 fixture を実パーサで解いた本物
- * (受注: patternB-1803-shimizu 10 件 / 海外: georows-single-col-sen 7 件。
- * いずれも非空 + 保存集合検証 PASS をプローブ済み)。dedup・保存集合検証・
- * batch 構築・dispatch・skip 判定は全て本番コード。bytes→facts の正しさ自体は
- * parser 系テスト (order/overseas/text-sections) が担う分担。
- * 定性 sections は [] 固定 (「抽出できる節が無い」正規 outcome。text 系は
- * text-sections.test.ts / text-backup.test.ts の担当)。
+ * (受注: patternB-1803-shimizu 10 件 / 海外: georows-2dproduct-sales
+ * YBHC 非空 HOLD-clean 件。いずれも非空 + 保存集合検証 PASS を固定)。
+ * dedup・保存集合検証・batch 構築・dispatch・skip 判定は全て本番コード。
+ * bytes→facts の正しさ自体は parser 系テスト (order/overseas/text-sections)
+ * が担う分担。既定の sections [] は「抽出できる節が無い」正規 outcome
+ * (text 系は text-sections.test.ts / text-backup.test.ts の担当)。
+ *
+ * 第 2 describe は raw-before-DB 契約: 物理 ZIP の記録 (+同一 bytes 照合)
+ * が DB batch より先で、失敗時は DB 旧値のまま throw すること、custody
+ * 完備でも DB 書込ありは同一確認を通すこと (strict byte guard)、T1
+ * 未提供の T5 単独と未知失敗の throw、text 本文の DBid 解決後保管を、
+ * 実 SQLite の行と mock 呼出順で証明する。
  *
  * 前提の分担: batch 輸送自体の原子性は D1 binding `DB.batch` の文書保証と
  * D1 REST `{batch}` の実証記録 (d1-http-client.ts の docstring) が担う。
@@ -31,11 +40,21 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { drizzle as drizzleProxy } from "drizzle-orm/sqlite-proxy";
 import { ingestDocument } from "../services/ingest.js";
 import { createDb, type Database } from "../db/client.js";
-import { downloadDocument } from "../services/edinet/client.js";
+import {
+  downloadDocument,
+  EdinetNotFoundError,
+} from "../services/edinet/client.js";
+import {
+  findBackupRowsByKeys,
+  recordPrimaryData,
+  verifyArchivedAttachments,
+  type BackupRowState,
+} from "../../../../src/shared/notion-archive/index.js";
+import { backupDocTextToNotion } from "../services/text-backup.js";
 import {
   parseEdinetCsvZip,
   type EdinetCsvRow,
@@ -71,6 +90,15 @@ vi.mock("../services/edinet/text-sections.js", async (importOriginal) => {
   const mod =
     await importOriginal<typeof import("../services/edinet/text-sections.js")>();
   return { ...mod, extractTextSections: vi.fn() };
+});
+vi.mock("../../../../src/shared/notion-archive/index.js", () => ({
+  recordPrimaryData: vi.fn(),
+  findBackupRowsByKeys: vi.fn(),
+  verifyArchivedAttachments: vi.fn(),
+}));
+vi.mock("../services/text-backup.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../services/text-backup.js")>();
+  return { ...mod, backupDocTextToNotion: vi.fn() };
 });
 
 const FX = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -182,6 +210,146 @@ function silenceConsole() {
   };
 }
 
+/** Notion 側の stateful store (key → pageId)。dedup と custody 行を再現する。 */
+const notionStore = new Map<string, string>();
+
+function resetNotion(): void {
+  notionStore.clear();
+  vi.mocked(recordPrimaryData).mockReset();
+  vi.mocked(findBackupRowsByKeys).mockReset();
+  vi.mocked(verifyArchivedAttachments).mockReset();
+  vi.mocked(recordPrimaryData).mockImplementation(async (input) => {
+    const hit = notionStore.get(input.key);
+    if (hit !== undefined && !input.force) {
+      return {
+        pageId: hit,
+        outcome: "skipped_existing",
+        fileTooLarge: false,
+        manifestMatch: "unknown",
+      } as const;
+    }
+    const pageId = `page-${input.key}`;
+    notionStore.set(input.key, pageId);
+    return {
+      pageId,
+      outcome: "recorded",
+      fileTooLarge: false,
+      manifestMatch: "written",
+    } as const;
+  });
+  vi.mocked(findBackupRowsByKeys).mockImplementation(
+    async (_service: string, keys: string[]): Promise<BackupRowState[]> =>
+      keys
+        .filter((k) => notionStore.has(k))
+        .map((k) => ({ key: k, fileCount: 1, status: "recorded", metadata: {} }))
+  );
+  vi.mocked(verifyArchivedAttachments).mockResolvedValue(undefined);
+}
+
+/** 指定 docID の T5+T1 を保管済みとして事前 seed する (custody 完備の再現)。 */
+function seedNotion(docID: string): void {
+  notionStore.set(`${docID}:type5`, `page-${docID}:type5`);
+  notionStore.set(`${docID}:type1`, `page-${docID}:type1`);
+}
+
+/** 全 mock 境界を既定に戻す (実 fixture 由来 facts + Notion 既定 + text 既定)。 */
+function setupParserBridges(): void {
+  vi.mocked(downloadDocument).mockReset();
+  vi.mocked(parseEdinetCsvZip).mockReset();
+  vi.mocked(parseOrderData).mockReset();
+  vi.mocked(parseOverseasData).mockReset();
+  vi.mocked(extractTextSections).mockReset();
+  vi.mocked(backupDocTextToNotion).mockReset();
+  resetNotion();
+  const orderEx = parseOrderHtml(fx("patternB-1803-shimizu.html"), "2025-03-31");
+  const overseasEx = parseOverseasHtml(
+    fx("georows-2dproduct-sales-S100YBHC.html"),
+    "2026-03-31"
+  );
+  vi.mocked(downloadDocument).mockResolvedValue(Buffer.from("unused-by-parser-mocks"));
+  const csvRow = (itemName: string): EdinetCsvRow => ({
+    elementId: "e1",
+    itemName,
+    contextId: "c1",
+    relativeYear: "CurrentYearDuration",
+    consolidatedOrNonConsolidated: "連結",
+    periodOrInstant: "期間",
+    unitId: "u1",
+    unit: "円",
+    value: "v",
+  });
+  vi.mocked(parseEdinetCsvZip).mockReturnValue([
+    csvRow("受注高"),
+    csvRow("海外売上高"),
+  ]);
+  vi.mocked(parseOrderData).mockReturnValue({
+    ...orderEx,
+    honbunFile: "test-honbun.html",
+  });
+  vi.mocked(parseOverseasData).mockReturnValue({
+    ...overseasEx,
+    honbunFile: "test-honbun.html",
+  });
+  vi.mocked(extractTextSections).mockReturnValue([]);
+  vi.mocked(backupDocTextToNotion).mockResolvedValue({
+    rowPageId: "text-row-1",
+    outcome: "recorded",
+  });
+}
+
+/** binding 経路の実 DB (stock 行つき) を 1 つ用意する。 */
+function setupBindingDb(): {
+  sqlite: DatabaseSync;
+  db: Database;
+  counters: { batches: number; batchStmts: number };
+} {
+  const sqlite = new DatabaseSync(":memory:");
+  applyD1Migrations(sqlite);
+  sqlite
+    .prepare(
+      "INSERT INTO core_stocks (id, code, name, market, is_active, instrument_type, sector33) VALUES (11, '1001', 'テスト1001', 'プライム', 1, 'stock', '建設業')"
+    )
+    .run();
+  const counters = { batches: 0, batchStmts: 0 };
+  const db = createDb(
+    createD1(sqlite, counters) as unknown as Parameters<typeof createDb>[0]
+  );
+  return { sqlite, db, counters };
+}
+
+/**
+ * sender 経路の proxy + 実行 sender。allowRun=false は Phase B と同じく
+ * proxy への書込を禁止し、sender 経由のみを構造証明する。text ポインタの
+ * 書戻し (db.update) が要る試験だけ true にする。
+ */
+function setupSenderDb(sqlite: DatabaseSync, allowRun: boolean): {
+  proxyDb: Database;
+  sender: Mock<(statements: readonly D1BatchStatement[]) => Promise<void>>;
+} {
+  const proxyDb = drizzleProxy(async (sqlStr, params, method) => {
+    if (method === "run") {
+      if (!allowRun) {
+        throw new Error("proxy への書込は禁止 (Node 書込は sender のみのはず)");
+      }
+      sqlite.prepare(sqlStr).run(...(params as never[]));
+      return { rows: [] };
+    }
+    const stmt = sqlite.prepare(sqlStr);
+    const names = stmt.columns().map((col) => col.name);
+    const rows = (
+      stmt.all(...(params as never[])) as Record<string, unknown>[]
+    ).map((row) => names.map((n) => row[n]));
+    return { rows: method === "get" ? (rows[0] ?? []) : rows };
+  });
+  const sender: Mock<(statements: readonly D1BatchStatement[]) => Promise<void>> =
+    vi.fn(async (statements: readonly D1BatchStatement[]) => {
+      for (const st of statements) {
+        sqlite.prepare(st.sql).run(...(st.params as never[]));
+      }
+    });
+  return { proxyDb: proxyDb as unknown as Database, sender };
+}
+
 describe("実SQLite 原子性 (HOLD2)", () => {
   it("非空facts batch の途中失敗は document+全facts を rollback し、正常同入力の再入は送信0", async () => {
     const restore = silenceConsole();
@@ -224,9 +392,11 @@ describe("実SQLite 原子性 (HOLD2)", () => {
       const orderEx = parseOrderHtml(fx("patternB-1803-shimizu.html"), "2025-03-31");
       expect(orderEx.status).toBe("ok_pattern_b");
       expect(orderEx.facts.length).toBeGreaterThan(0);
+      // W16I はその他 883 で地理未分類 HOLD のため、非空 facts には
+      // clean な YBHC (P-2D 回復) を使う。原子性の意図は不変。
       const overseasEx = parseOverseasHtml(
-        fx("georows-single-col-sen-S100W16I.html"),
-        "2025-03-31"
+        fx("georows-2dproduct-sales-S100YBHC.html"),
+        "2026-03-31"
       );
       expect(overseasEx.status).toBe("ok_geo_rows");
       expect(overseasEx.facts.length).toBeGreaterThan(0);
@@ -260,6 +430,11 @@ describe("実SQLite 原子性 (HOLD2)", () => {
         honbunFile: "test-honbun.html",
       });
       vi.mocked(extractTextSections).mockReturnValue([]);
+      vi.mocked(backupDocTextToNotion).mockResolvedValue({
+        rowPageId: "text-row-1",
+        outcome: "recorded",
+      });
+      resetNotion();
 
       const dumpTables = () => ({
         docs: sqlite.prepare("SELECT * FROM yuho_documents ORDER BY id").all(),
@@ -293,6 +468,9 @@ describe("実SQLite 原子性 (HOLD2)", () => {
       // batch は実行された (空振りでない) かつ全表が旧状態のまま。
       expect(counters.batches).toBe(1);
       expect(dumpTables()).toEqual(beforeFault);
+      // 故障 leg でも raw 記録は batch より先に完了 (record T5+T1 + verify)。
+      expect(vi.mocked(recordPrimaryData).mock.calls.length).toBe(2);
+      expect(vi.mocked(verifyArchivedAttachments).mock.calls.length).toBe(2);
       expect(
         sqlite.prepare("SELECT id FROM yuho_documents WHERE doc_id = 'S100TESTA1'").get()
       ).toBeUndefined();
@@ -327,6 +505,9 @@ describe("実SQLite 原子性 (HOLD2)", () => {
       ).toEqual(
         new Set(overseasEx.facts.map((f) => `${f.fiscalYearEnd} ${f.regionName}`))
       );
+      // 成功 leg: custody 完備でも DB 書込ありは同一確認を通す (guard +2)。
+      expect(vi.mocked(recordPrimaryData).mock.calls.length).toBe(4);
+      expect(vi.mocked(verifyArchivedAttachments).mock.calls.length).toBe(4);
       // 旧文書の行は無傷。
       expect(
         sqlite.prepare("SELECT * FROM yuho_documents WHERE doc_id = 'S100OLD001'").get()
@@ -335,10 +516,13 @@ describe("実SQLite 原子性 (HOLD2)", () => {
       // 再入 leg: 同一入力は skip で batch 追加 0・fetch 追加 0。
       const batchesAfterSuccess = counters.batches;
       const downloadsAfterSuccess = vi.mocked(downloadDocument).mock.calls.length;
+      const recordsAfterSuccess = vi.mocked(recordPrimaryData).mock.calls.length;
       const rA2 = await ingestDocument(dbA, argsA);
       expect(rA2.outcome).toBe("skipped_existing");
       expect(counters.batches).toBe(batchesAfterSuccess);
       expect(vi.mocked(downloadDocument).mock.calls.length).toBe(downloadsAfterSuccess);
+      // 既存 cache の再入は archive 呼出も 0 増 (早期 skip 維持)。
+      expect(vi.mocked(recordPrimaryData).mock.calls.length).toBe(recordsAfterSuccess);
 
       // ---- Phase B: Node sender 経路 (proxy 読取 + 明示 sender 書込)。
       // 試験 sender は受信した本番生成 SQL を実 SQLite へ逐次実行する。
@@ -372,6 +556,9 @@ describe("実SQLite 原子性 (HOLD2)", () => {
       const rB = await ingestDocument(proxyDb as unknown as Database, argsB);
       expect(rB.outcome).toBe("ingested");
       expect(senderCalls).toHaveLength(1);
+      // Phase B 新規通は custody 欠落 → 新規記録 +2。
+      expect(vi.mocked(recordPrimaryData).mock.calls.length).toBe(6);
+      expect(vi.mocked(verifyArchivedAttachments).mock.calls.length).toBe(6);
       const docB = sqlite
         .prepare("SELECT * FROM yuho_documents WHERE doc_id = 'S100TESTB1'")
         .get() as Record<string, unknown>;
@@ -388,6 +575,237 @@ describe("実SQLite 原子性 (HOLD2)", () => {
       const rB2 = await ingestDocument(proxyDb as unknown as Database, argsB);
       expect(rB2.outcome).toBe("skipped_existing");
       expect(senderCalls).toHaveLength(1);
+      expect(vi.mocked(recordPrimaryData).mock.calls.length).toBe(6);
+      expect(vi.mocked(verifyArchivedAttachments).mock.calls.length).toBe(6);
+    } finally {
+      sqlite.close();
+      restore();
+    }
+  });
+});
+
+describe("raw-before-DB 契約 (原本 mandatory)", () => {
+  it("custody 完備 + DB 未取込でも parser 使用 bytes を同一確認してから DB へ (strict byte guard)", async () => {
+    const restore = silenceConsole();
+    const { sqlite } = setupBindingDb();
+    try {
+      setupParserBridges();
+      seedNotion("S100GUARD1");
+      const { proxyDb, sender } = setupSenderDb(sqlite, false);
+      const r = await ingestDocument(proxyDb, {
+        stockId: 11,
+        stockCode: "1001",
+        doc: annualDoc("S100GUARD1"),
+        d1HttpBatch: sender,
+      });
+      expect(r.outcome).toBe("ingested");
+      // guard: custody 完備でも type ごと 1 回の record (dedup skip) + verify。
+      expect(vi.mocked(recordPrimaryData).mock.calls.length).toBe(2);
+      expect(vi.mocked(verifyArchivedAttachments).mock.calls.length).toBe(2);
+      expect(sender.mock.calls.length).toBe(1);
+      const lastVerify = Math.max(
+        ...vi.mocked(verifyArchivedAttachments).mock.invocationCallOrder
+      );
+      const firstBatch = Math.min(...sender.mock.invocationCallOrder);
+      expect(lastVerify).toBeLessThan(firstBatch);
+      // metadata は DBid 非依存。
+      for (const c of vi.mocked(recordPrimaryData).mock.calls) {
+        const meta = c[0].metadata as Record<string, unknown>;
+        expect("docRowId" in meta).toBe(false);
+        expect("documentId" in meta).toBe(false);
+        expect(meta.docID).toBe("S100GUARD1");
+      }
+      // 実 DB 行が保存されている。
+      const row = sqlite
+        .prepare("SELECT * FROM yuho_documents WHERE doc_id = 'S100GUARD1'")
+        .get() as { parse_status: string; overseas_parse_status: string };
+      expect(row.parse_status).toBe("ok_pattern_b");
+      expect(row.overseas_parse_status).toBe("ok_geo_rows");
+    } finally {
+      sqlite.close();
+      restore();
+    }
+  });
+
+  it("archiveToNotion=false は DB 書込前に明示 STOP し、fetch も DB も触らない", async () => {
+    const restore = silenceConsole();
+    const { sqlite, db, counters } = setupBindingDb();
+    try {
+      setupParserBridges();
+      await expect(
+        ingestDocument(db, {
+          stockId: 11,
+          stockCode: "1001",
+          doc: annualDoc("S100NARG1"),
+          archiveToNotion: false,
+        })
+      ).rejects.toThrow("raw-before-DB");
+      expect(vi.mocked(downloadDocument).mock.calls.length).toBe(0);
+      expect(counters.batches).toBe(0);
+      expect(vi.mocked(recordPrimaryData).mock.calls.length).toBe(0);
+      expect(vi.mocked(findBackupRowsByKeys).mock.calls.length).toBe(0);
+      expect(
+        sqlite.prepare("SELECT * FROM yuho_documents WHERE doc_id = 'S100NARG1'").get()
+      ).toBeUndefined();
+    } finally {
+      sqlite.close();
+      restore();
+    }
+  });
+
+  it("record 失敗は DB 旧値のまま throw する (batch 0)", async () => {
+    const restore = silenceConsole();
+    const { sqlite, db, counters } = setupBindingDb();
+    try {
+      setupParserBridges();
+      vi.mocked(recordPrimaryData).mockRejectedValueOnce(new Error("notion down"));
+      await expect(
+        ingestDocument(db, {
+          stockId: 11,
+          stockCode: "1001",
+          doc: annualDoc("S100RECF1"),
+        })
+      ).rejects.toThrow("notion down");
+      expect(counters.batches).toBe(0);
+      expect(
+        sqlite.prepare("SELECT * FROM yuho_documents WHERE doc_id = 'S100RECF1'").get()
+      ).toBeUndefined();
+    } finally {
+      sqlite.close();
+      restore();
+    }
+  });
+
+  it("readback 照合の失敗は DB 旧値のまま throw する (batch 0)", async () => {
+    const restore = silenceConsole();
+    const { sqlite, db, counters } = setupBindingDb();
+    try {
+      setupParserBridges();
+      vi.mocked(verifyArchivedAttachments).mockRejectedValueOnce(
+        new Error("EDINET一次 S100VERF1:type5の readback 照合に失敗したため HOLD: SHA256 不一致")
+      );
+      await expect(
+        ingestDocument(db, {
+          stockId: 11,
+          stockCode: "1001",
+          doc: annualDoc("S100VERF1"),
+        })
+      ).rejects.toThrow("readback 照合に失敗");
+      expect(counters.batches).toBe(0);
+      expect(
+        sqlite.prepare("SELECT * FROM yuho_documents WHERE doc_id = 'S100VERF1'").get()
+      ).toBeUndefined();
+    } finally {
+      sqlite.close();
+      restore();
+    }
+  });
+
+  it("T1 未提供 (型付き 404) のみ T5 単独で進み、xbrlUnavailable を残す", async () => {
+    const restore = silenceConsole();
+    const { sqlite, db, counters } = setupBindingDb();
+    try {
+      setupParserBridges();
+      vi.mocked(downloadDocument).mockImplementation(async (docId, docType) => {
+        if (docType === 1) throw new EdinetNotFoundError(docId, docType);
+        return Buffer.from("csv-bytes");
+      });
+      const r = await ingestDocument(db, {
+        stockId: 11,
+        stockCode: "1001",
+        doc: annualDoc("S100T1NA1"),
+      });
+      expect(r.outcome).toBe("ingested");
+      const keys = vi.mocked(recordPrimaryData).mock.calls.map((c) => c[0].key);
+      expect(keys).toEqual(["S100T1NA1:type5"]);
+      const meta = vi.mocked(recordPrimaryData).mock.calls[0][0]
+        .metadata as Record<string, unknown>;
+      expect(meta.xbrlUnavailable).toBe(true);
+      expect(counters.batches).toBe(1);
+      // XBRL なしで構造化不能 → parse_error を正直に記録し、facts は空。
+      expect(r.parseStatus).toBe("parse_error");
+      expect(r.overseasParseStatus).toBe("parse_error");
+      expect(r.factCount).toBe(0);
+      expect(r.overseasFactCount).toBe(0);
+      const row = sqlite
+        .prepare("SELECT * FROM yuho_documents WHERE doc_id = 'S100T1NA1'")
+        .get() as { parse_status: string; overseas_parse_status: string };
+      expect(row.parse_status).toBe("parse_error");
+      expect(row.overseas_parse_status).toBe("parse_error");
+      expect(vi.mocked(backupDocTextToNotion).mock.calls.length).toBe(0);
+    } finally {
+      sqlite.close();
+      restore();
+    }
+  });
+
+  it("T1 未知失敗は throw し、DB も記録も触らない (無断 T5 単独にしない)", async () => {
+    const restore = silenceConsole();
+    const { sqlite, db, counters } = setupBindingDb();
+    try {
+      setupParserBridges();
+      vi.mocked(downloadDocument).mockImplementation(async (docId, docType) => {
+        if (docType === 1) throw new Error(`edinet 500 docID=${docId}`);
+        return Buffer.from("csv-bytes");
+      });
+      await expect(
+        ingestDocument(db, {
+          stockId: 11,
+          stockCode: "1001",
+          doc: annualDoc("S100T1UK1"),
+        })
+      ).rejects.toThrow("edinet 500");
+      expect(counters.batches).toBe(0);
+      expect(vi.mocked(recordPrimaryData).mock.calls.length).toBe(0);
+      expect(
+        sqlite.prepare("SELECT * FROM yuho_documents WHERE doc_id = 'S100T1UK1'").get()
+      ).toBeUndefined();
+    } finally {
+      sqlite.close();
+      restore();
+    }
+  });
+
+  it("text 本文は DBid 解決後に保管し、実 id を渡して書戻す", async () => {
+    const restore = silenceConsole();
+    const { sqlite } = setupBindingDb();
+    try {
+      setupParserBridges();
+      vi.mocked(extractTextSections).mockReturnValue([
+        {
+          sectionKey: "risks",
+          text: "リスク本文",
+          charCount: 5,
+          elementId: "e1",
+          itemName: "事業等のリスク",
+          contextId: "c1",
+        },
+      ]);
+      const { proxyDb, sender } = setupSenderDb(sqlite, true);
+      const r = await ingestDocument(proxyDb, {
+        stockId: 11,
+        stockCode: "1001",
+        doc: annualDoc("S100TEXT1"),
+        d1HttpBatch: sender,
+      });
+      expect(r.outcome).toBe("ingested");
+      expect(r.textParseStatus).toBe("ok");
+      expect(sender.mock.calls.length).toBe(1);
+      expect(vi.mocked(backupDocTextToNotion).mock.calls.length).toBe(1);
+      // batch より後に text 保管 (順序)。
+      const batchOrder = Math.min(...sender.mock.invocationCallOrder);
+      const textOrder = Math.min(
+        ...vi.mocked(backupDocTextToNotion).mock.invocationCallOrder
+      );
+      expect(batchOrder).toBeLessThan(textOrder);
+      // 実 id の連携: SELECT の id と backup 引数が一致し、書戻しが残る。
+      const row = sqlite
+        .prepare("SELECT * FROM yuho_documents WHERE doc_id = 'S100TEXT1'")
+        .get() as { id: number; notion_doc_page_id: string };
+      expect(vi.mocked(backupDocTextToNotion).mock.calls[0][0].d1DocumentId).toBe(
+        row.id
+      );
+      expect(row.notion_doc_page_id).toBe("text-row-1");
     } finally {
       sqlite.close();
       restore();

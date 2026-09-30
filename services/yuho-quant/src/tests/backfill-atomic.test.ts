@@ -298,9 +298,11 @@ describe("missing-docs: batch 途中失敗は文書+3表を rollback し通常�
       const orderEx = parseOrderHtml(fx("patternB-1803-shimizu.html"), "2025-03-31");
       const deduped = dedupeOrders(orderEx.facts, "S100MISS01");
       expect(deduped.length).toBeGreaterThan(0);
+      // W16I はその他 883 で地理未分類 HOLD のため、非空 facts には
+      // clean な YBHC (P-2D 回復) を使う。原子性の意図は不変。
       const overseasEx = parseOverseasHtml(
-        fx("georows-single-col-sen-S100W16I.html"),
-        "2025-03-31"
+        fx("georows-2dproduct-sales-S100YBHC.html"),
+        "2026-03-31"
       );
       expect(overseasEx.facts.length).toBeGreaterThan(0);
       expect(() =>
