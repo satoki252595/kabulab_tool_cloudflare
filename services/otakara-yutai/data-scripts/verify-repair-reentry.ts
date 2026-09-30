@@ -47,7 +47,7 @@ import {
 } from "./summary-tasks.js";
 
 /** SHA pin (保存済み証跡の固定。1 文字でも違えば HOLD)。 */
-const PINS: Record<string, string> = {
+export const PINS: Record<string, string> = {
   "yutai-abc-manifest.json":
     "f3586e6fcfaaef9f3d773f755720a642652986d7c9adf08de12a3d46135379fe",
   "yutai-fulltext-manifest.postabc.json":
@@ -107,7 +107,7 @@ export function parseVerifyArgs(argv: readonly string[]): Args {
   };
 }
 
-type NamedRow = {
+export type NamedRow = {
   id: number;
   stockId: number;
   stockCode: string;
@@ -119,8 +119,9 @@ type NamedRow = {
   estimatedValue: number | null;
   estimateValueSource: string | null;
   updatedAt: number;
-  newFull: string;
-  newFullSha: string;
+  /** 全文対象外の行は null (非 FT 264 行)。FT 62 行は文字列。 */
+  newFull: string | null;
+  newFullSha: string | null;
   provenance: {
     manifestHtmlSha: string;
     manifestJsonSha: string;
@@ -128,6 +129,129 @@ type NamedRow = {
     localJsonSha: string;
   };
 };
+
+/** row-manifest の厳密 parse (349 行)。fresh probe と共有する。 */
+export function parseRowManifest(text: string): Map<number, NamedRow> {
+  const root = asRecord(JSON.parse(text), "row-manifest");
+  const out = new Map<number, NamedRow>();
+  for (const w of asArray(root["rows"], "row-manifest.rows")) {
+    const r = asRecord(w, "row-manifest row");
+    if (
+      typeof r["id"] !== "number" ||
+      typeof r["stockId"] !== "number" ||
+      typeof r["stockCode"] !== "string" ||
+      typeof r["minShares"] !== "number" ||
+      typeof r["recordMonth"] !== "number" ||
+      typeof r["oldDescription"] !== "string" ||
+      typeof r["oldSha"] !== "string" ||
+      typeof r["updatedAt"] !== "number"
+    ) {
+      fail("row-manifest 行の必須列が不正");
+    }
+    if (r["newFull"] !== null && typeof r["newFull"] !== "string") {
+      fail("row-manifest 行の newFull が不正");
+    }
+    if (r["newFullSha"] !== null && typeof r["newFullSha"] !== "string") {
+      fail("row-manifest 行の newFullSha が不正");
+    }
+    if (
+      r["shortSummary"] !== null &&
+      r["shortSummary"] !== undefined &&
+      typeof r["shortSummary"] !== "string"
+    ) {
+      fail("row-manifest 行の shortSummary が不正");
+    }
+    if (
+      r["estimatedValue"] !== null &&
+      r["estimatedValue"] !== undefined &&
+      typeof r["estimatedValue"] !== "number"
+    ) {
+      fail("row-manifest 行の estimatedValue が不正");
+    }
+    if (
+      r["estimateValueSource"] !== null &&
+      r["estimateValueSource"] !== undefined &&
+      typeof r["estimateValueSource"] !== "string"
+    ) {
+      fail("row-manifest 行の estimateValueSource が不正");
+    }
+    const p = asRecord(r["provenance"], "row-manifest provenance");
+    for (const k of ["manifestHtmlSha", "manifestJsonSha", "localHtmlSha", "localJsonSha"]) {
+      if (typeof p[k] !== "string") fail(`row-manifest provenance.${k} が文字列ではない`);
+    }
+    const id = r["id"] as number;
+    if (out.has(id)) fail(`row-manifest ID ${id} の重複`);
+    out.set(id, {
+      id,
+      stockId: r["stockId"] as number,
+      stockCode: r["stockCode"] as string,
+      minShares: r["minShares"] as number,
+      recordMonth: r["recordMonth"] as number,
+      oldDescription: r["oldDescription"] as string,
+      oldSha: r["oldSha"] as string,
+      shortSummary: (r["shortSummary"] ?? null) as string | null,
+      estimatedValue: (r["estimatedValue"] ?? null) as number | null,
+      estimateValueSource: (r["estimateValueSource"] ?? null) as string | null,
+      updatedAt: r["updatedAt"] as number,
+      newFull: r["newFull"] as string | null,
+      newFullSha: r["newFullSha"] as string | null,
+      provenance: {
+        manifestHtmlSha: p["manifestHtmlSha"] as string,
+        manifestJsonSha: p["manifestJsonSha"] as string,
+        localHtmlSha: p["localHtmlSha"] as string,
+        localJsonSha: p["localJsonSha"] as string,
+      },
+    });
+  }
+  if (out.size !== 349) fail(`row-manifest rows=${out.size} (want 349)`);
+  return out;
+}
+
+export type FtBatchedUpdate = { newFull: string; old: string; updatedAt: number };
+
+/** 全文 manifest の batched 62 行の厳密 parse (13 batches)。fresh probe と共有する。 */
+export function parseFtBatchedUpdates(text: string): Map<number, FtBatchedUpdate> {
+  const root = asRecord(JSON.parse(text), "fulltext-manifest");
+  const batches = asArray(root["batches"], "fulltext-manifest.batches");
+  if (batches.length !== 13) fail(`全文 batches stocks=${batches.length} (want 13)`);
+  const out = new Map<number, FtBatchedUpdate>();
+  for (const b of batches) {
+    const batch = asRecord(b, "fulltext batch");
+    for (const s of asArray(batch["statements"], "fulltext statements").slice(1)) {
+      const st = asRecord(s, "fulltext statement");
+      const sql = st["sql"];
+      if (typeof sql !== "string" || !sql.startsWith("UPDATE yutai_benefits SET description = ?")) {
+        fail("全文の非 preflight 文が description UPDATE ではない");
+      }
+      const p = asArray(st["params"], "fulltext params");
+      if (typeof p[0] !== "string" || typeof p[1] !== "number" || typeof p[2] !== "string" || typeof p[3] !== "number") {
+        fail("全文 params の [newFull, id, old, updatedAt] が不正");
+      }
+      const id = p[1] as number;
+      if (out.has(id)) fail(`全文 ID ${id} の重複`);
+      out.set(id, { newFull: p[0] as string, old: p[2] as string, updatedAt: p[3] as number });
+    }
+  }
+  if (out.size !== 62) fail(`全文 batched rows=${out.size} (want 62)`);
+  return out;
+}
+
+export type Manifest34Result = { code: string; htmlSha256: string; jsonSha256: string };
+
+/** manifest-34 の厳密 parse (34 codes)。fresh probe と共有する。 */
+export function parseManifest34Results(text: string): Manifest34Result[] {
+  const root = asRecord(JSON.parse(text), "manifest-34");
+  const out: Manifest34Result[] = [];
+  for (const w of asArray(root["results"], "manifest-34.results")) {
+    const r = asRecord(w, "manifest-34 result");
+    if (typeof r["code"] !== "string" || typeof r["htmlSha256"] !== "string" || typeof r["jsonSha256"] !== "string") {
+      fail("manifest-34 result の code/sha が不正");
+    }
+    out.push({ code: r["code"] as string, htmlSha256: r["htmlSha256"] as string, jsonSha256: r["jsonSha256"] as string });
+  }
+  if (out.length !== 34) fail(`manifest-34 codes=${out.length} (want 34)`);
+  return out;
+}
 
 function asRecord(v: unknown, what: string): Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) fail(`${what} が object ではない`);
@@ -167,7 +291,7 @@ export function producePlannedUpdate(stmt: FiledUpdateStatement): PlannedUpdate 
   return { ...u, ids: [...u.ids] };
 }
 
-type AbcParsed = {
+export type AbcParsed = {
   preimages: Map<number, StockPreimage>;
   filed: FiledUpdateStatement[];
   benefitUpdateCount: number;
@@ -286,6 +410,36 @@ export function parseAbcManifest(text: string): AbcParsed {
     changedStocks: y["changed"] as number,
     scoreChangedStocks: y["scoreChanged"] as number,
   };
+}
+
+export type PostFinScoreOverrides = {
+  yieldNext: Map<number, number | null>;
+  scoreNext: Map<number, { fundamentalScore: number; technicalScore: number; totalScore: number }>;
+};
+
+/**
+ * filed 済み利回り・スコアの期待 post 値 (検証済み manifest entries 由来)。
+ * main が filed 文 params と突き合わせ済みのため entries を信じ、件数も
+ * filed 文数と突き合わせる。fresh probe が pre との偽 drift を出さない
+ * ために使う (業務 logic の複写ではない)。
+ */
+export function postFinScoreOverrides(abc: AbcParsed): PostFinScoreOverrides {
+  const yieldNext = new Map<number, number | null>();
+  const scoreNext = new Map<number, { fundamentalScore: number; technicalScore: number; totalScore: number }>();
+  for (const e of abc.yieldEntries) {
+    if (e.changed) yieldNext.set(e.stockId, e.next);
+    if (e.scoreChanged) {
+      if (!e.scoreNext) fail(`yield entry stockId=${e.stockId} が scoreChanged なのに scoreNext が無い`);
+      scoreNext.set(e.stockId, { ...e.scoreNext });
+    }
+  }
+  if (yieldNext.size !== abc.yieldStmts.length || scoreNext.size !== abc.scoreStmts.length) {
+    fail(
+      `期待 post 件数が filed 文数と不一致: yield ${yieldNext.size}/${abc.yieldStmts.length}, ` +
+        `score ${scoreNext.size}/${abc.scoreStmts.length}`
+    );
+  }
+  return { yieldNext, scoreNext };
 }
 
 /** 473 ID の完全被覆 + 一意 + target 同一性の証明 (shared 同値化の前段)。 */
@@ -869,25 +1023,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   if ((regen["aMatch"] as number) + (regen["aDrift"] as number) !== 430) fail("aMatch+aDrift が 430 ではない");
 
   // 4. 証明 C (全文 62)。
-  const ft = asRecord(JSON.parse(ftText), "fulltext-manifest");
-  const ftBatches = asArray(ft["batches"], "fulltext-manifest.batches");
-  if (ftBatches.length !== 13) fail(`全文 batches stocks=${ftBatches.length} (want 13)`);
-  const descUpdates = new Map<number, { newFull: string; old: string; updatedAt: number }>();
-  for (const b of ftBatches) {
-    const batch = asRecord(b, "fulltext batch");
-    for (const s of asArray(batch["statements"], "fulltext statements").slice(1)) {
-      const st = asRecord(s, "fulltext statement");
-      const sql = st["sql"] as string;
-      if (typeof sql !== "string" || !sql.startsWith("UPDATE yutai_benefits SET description = ?")) {
-        fail("全文の非 preflight 文が description UPDATE ではない");
-      }
-      const p = asArray(st["params"], "fulltext params");
-      const id = p[1] as number;
-      if (descUpdates.has(id)) fail(`全文 ID ${id} の重複`);
-      descUpdates.set(id, { newFull: p[0] as string, old: p[2] as string, updatedAt: p[3] as number });
-    }
-  }
-  if (descUpdates.size !== 62) fail(`全文 batched rows=${descUpdates.size} (want 62)`);
+  const descUpdates = parseFtBatchedUpdates(ftText);
   const ftbefore = asRecord(JSON.parse(ftbeforeText), "ftbefore-inventory");
   const preById = new Map<number, string>();
   for (const s of asArray(ftbefore["stocks"], "ftbefore.stocks")) {
@@ -896,34 +1032,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       preById.set(r["id"] as number, r["description"] as string);
     }
   }
-  const rowManifest = asRecord(JSON.parse(rowText), "row-manifest");
-  const rowById = new Map<number, NamedRow>();
-  for (const w of asArray(rowManifest["rows"], "row-manifest.rows")) {
-    const r = asRecord(w, "row-manifest row");
-    rowById.set(r["id"] as number, {
-      id: r["id"] as number,
-      stockId: r["stockId"] as number,
-      stockCode: r["stockCode"] as string,
-      minShares: r["minShares"] as number,
-      recordMonth: r["recordMonth"] as number,
-      oldDescription: r["oldDescription"] as string,
-      oldSha: r["oldSha"] as string,
-      shortSummary: (r["shortSummary"] ?? null) as string | null,
-      estimatedValue: (r["estimatedValue"] ?? null) as number | null,
-      estimateValueSource: (r["estimateValueSource"] ?? null) as string | null,
-      updatedAt: r["updatedAt"] as number,
-      newFull: r["newFull"] as string,
-      newFullSha: r["newFullSha"] as string,
-      provenance: r["provenance"] as NamedRow["provenance"],
-    });
-  }
-  if (rowById.size !== 349) fail(`row-manifest rows=${rowById.size} (want 349)`);
+  const rowById = parseRowManifest(rowText);
   // provenance source SHA: upstream 実ファイルと manifest-34 記録の両方と突き合わせる。
-  const m34 = asRecord(JSON.parse(m34Text), "manifest-34");
   const m34res = new Map<string, { htmlSha256: string; jsonSha256: string }>();
-  for (const w of asArray(m34["results"], "manifest-34.results")) {
-    const r = asRecord(w, "manifest-34 result");
-    m34res.set(r["code"] as string, { htmlSha256: r["htmlSha256"] as string, jsonSha256: r["jsonSha256"] as string });
+  for (const r of parseManifest34Results(m34Text)) {
+    m34res.set(r.code, { htmlSha256: r.htmlSha256, jsonSha256: r.jsonSha256 });
   }
   let provenanceOk = 0;
   const htmlCache = new Map<string, string>();
