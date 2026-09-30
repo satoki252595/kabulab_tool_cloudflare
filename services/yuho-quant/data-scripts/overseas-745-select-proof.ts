@@ -70,6 +70,11 @@ globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
     httpFailed += 1;
     throw new Error("SELECT proof: 書込語を含む文を拒否");
   }
+  // 送信前 bound: 37 件目を送る前に拒否する (終端 check だけでは保証不可)。
+  if (httpObserved >= 36) {
+    httpFailed += 1;
+    throw new Error("SELECT proof: 上限 36 を超える送信を拒否");
+  }
   httpObserved += 1;
   try {
     return await nativeFetch(u, { ...init, signal: AbortSignal.timeout(60_000) });
@@ -828,6 +833,7 @@ async function main(): Promise<void> {
     }
     const seenKeys = new Set<string>();
     const seenFactIds = new Set<number>();
+    const perDocQ2 = new Map<string, number>();
     for (const r of q2rows) {
       const f = validateQ2Row(r, label);
       if (!chunk.includes(f.docId)) hold(`${label} Q2 echo 範囲外: ${f.docId}`);
@@ -840,6 +846,12 @@ async function main(): Promise<void> {
       if (seenKeys.has(k)) hold(`${label} Q2 canonical-key 重複 (live dup): ${k}`);
       seenKeys.add(k);
       liveFacts.push(f);
+      perDocQ2.set(f.docId, (perDocQ2.get(f.docId) ?? 0) + 1);
+    }
+    // doc別 COUNT 照合 (chunk 合計だけでは相互相殺を見逃す)。
+    for (const docId of chunk) {
+      const q1c = (liveDocs.get(docId) as LiveDoc).factsCount;
+      if ((perDocQ2.get(docId) ?? 0) !== q1c) hold(`${label} doc別COUNT外: ${docId}`);
     }
     if (q2rows.length !== chunkCountSum) {
       hold(`${label} Q1合計(${chunkCountSum}) != Q2行数(${q2rows.length})`);

@@ -177,3 +177,15 @@ union SHA `9690d780…8fe1878` を private 0600 固定。18 chunks (≤100 IDs)�
   later apply 前 Root review (今回 apply grant 0)。
   future apply CAS は全 pre-image rows を exact counts/ids で含めること。
 - ライブ source ZIP archive は未実行 (不可のまま)。
+
+## Guard fix: 送信前 36-bound + doc別 COUNT (2026-09-30)
+
+- GPT-sol final review 指摘の producer 側 2 guard を既存 flow へ数行追加。
+  (1) D1 送信前に `httpObserved >= 36` を拒否
+  (終端 check だけでは 37 件目の送信を防げない)。
+  (2) chunk 毎に Q1 doc別 `factsCount` と Q2 doc別 rows の一致を検証
+  (chunk 合計だけでは同一 chunk 内の相互相殺を見逃す)。
+- offline 検証 (保存済み 1781/10257 のみ。新 live GET 0):
+  実データ 1781 docs 不一致 0 + 同一 chunk 2 doc の count 相殺 mutation
+  (chunk 合計不変) を 2 docs 検出で FAIL 実証。chunk 合計のみの盲も確認。
+  検証 probe は private 0600 (`perdoc-check.mts`)。stdout は counts のみ。
