@@ -67,12 +67,14 @@ import {
   parseFtBatchedUpdates,
   parseManifest34Results,
   parseRowManifest,
+  postFinScoreOverrides,
   producePlannedUpdate,
   proveNormal45,
   proveTargetCoverage,
   throwingSender,
   type FtBatchedUpdate,
   type NamedRow,
+  type PostFinScoreOverrides,
 } from "./verify-repair-reentry.js";
 import { sharedEnv } from "../../../src/shared/env.js";
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
@@ -198,8 +200,11 @@ export type FreshScope = {
   union: number[];
   chunks: [number[], number[]];
   perStock: Map<number, ScopeStock>;
-  /** 全 benefitId→親 mapping (ABC preimage 1557 + row-manifest 349 の merge)。 */
+  /** 全 benefitId→親 mapping (ABC preimage 1557 + row-manifest外 111 = 1668)。 */
   benefitMap: Map<number, { stockId: number; code: string }>;
+  /** 内訳: ABC fullset 1557 と ABC 外の row-manifest 111。仮定の新件数ではない。 */
+  abcBenefitCount: number;
+  rowOnlyBenefitCount: number;
   abcIds: number[];
   ftIds: number[];
   normalIds: number[];
@@ -283,6 +288,21 @@ export function deriveScope(abcText: string, ftText: string, rowText: string, m3
   if (chunks[0].length !== 80 || chunks[1].length !== 64) {
     fail(`chunks=${chunks[0].length}+${chunks[1].length} (want 80+64)`);
   }
+  let abcBenefitCount = 0;
+  const abcBenefitIds = new Set<number>();
+  for (const pre of abc.preimages.values()) {
+    for (const b of pre.benefits) {
+      abcBenefitCount++;
+      abcBenefitIds.add(b.id);
+    }
+  }
+  if (abcBenefitCount !== 1557) fail(`ABC benefits=${abcBenefitCount} (want 1557)`);
+  let rowOnlyBenefitCount = 0;
+  for (const bid of benefitMap.keys()) {
+    if (!abcBenefitIds.has(bid)) rowOnlyBenefitCount++;
+  }
+  if (rowOnlyBenefitCount !== 111) fail(`row-manifest外 benefits=${rowOnlyBenefitCount} (want 111)`);
+  if (benefitMap.size !== 1668) fail(`benefitMap=${benefitMap.size} (want 1668 = 1557 + 111)`);
   const canonical = JSON.stringify({
     union: union.map((sid) => [sid, perStock.get(sid)!.code, perStock.get(sid)!.sources]),
     benefits: [...benefitMap.entries()]
@@ -294,6 +314,8 @@ export function deriveScope(abcText: string, ftText: string, rowText: string, m3
     chunks,
     perStock,
     benefitMap,
+    abcBenefitCount,
+    rowOnlyBenefitCount,
     abcIds,
     ftIds,
     normalIds: [...normalSet].sort((a, b) => a - b),
@@ -540,6 +562,16 @@ export function appendLedgerLine(dir: string, entry: Record<string, unknown>): v
 }
 
 /**
+ * 得られた応答の HTTP 検査 (clone・onRaw の後、validate の前)。
+ * redirect・非 2xx は実 status/kind を添えて STOP する (retry なし)。
+ * 非 2xx に validate PASS は出さない。
+ */
+export function checkHttpStatus(index: number, kind: CallKind, status: number, redirected: boolean): void {
+  if (redirected) fail(`${index} 件目で redirect を検出 (status=${status} kind=${kind}。redirect 禁止)`);
+  if (status < 200 || status >= 300) fail(`${index} 件目が HTTP ${status} (kind=${kind}。retry せず STOP)`);
+}
+
+/**
  * 8 連読の取得器。global fetch を検査・記録ラッパで包む。
  * - 送信前: URL・envelope・SELECT・期待 SQL/params 完全一致を検査する。
  * - 送信は redirect manual (follow による extra HTTP を構造的に封じる)。
@@ -578,10 +610,15 @@ export async function captureFreshReads(
     }
     const chunkNo = n <= 4 ? 0 : 1;
     const res = await realFetch(input as string, { ...(init as RequestInit), redirect: "manual" });
-    if (res.redirected) fail(`${n} 件目で redirect を検出 (redirect 禁止)`);
-    if (res.status >= 300 && res.status < 400) fail(`${n} 件目が redirect 応答 ${res.status} (follow せず STOP)`);
+    // 得られた応答は全て (3xx/500 含む) 先に clone・保存し、それから検査する。
     const bytes = Buffer.from(await res.clone().arrayBuffer());
     sink?.onRaw(n, bytes);
+    try {
+      checkHttpStatus(n, kind, res.status, res.redirected);
+    } catch (e) {
+      sink?.onValidated(n, -1, String(e));
+      throw e;
+    }
     let validated: ValidatedRows;
     try {
       validated = validateRawResponse(kind, bytes, scope.chunks[chunkNo]);
@@ -806,13 +843,17 @@ export function compareBenefitFullSet(
 }
 
 /**
- * 保護 fin/score の full property 比較。差は全て runtime drift として
- * 独立計数する (正当な夜間更新もありうる。正直報告し、0 に丸めない)。
- * preimage を持つ ABC 131 銘柄のみ期待がある。他は uncovered として数える。
+ * 保護 fin/score の full property 比較。期待値は pre ではなく期待 post
+ * (filed 済み 61 利回り + 52 スコアの上書き。それ以外は pre のまま)。
+ * pre 比較のままだと意図どおりの適用が偽 drift になるため。
+ * 差は全て runtime drift として独立計数する (正当な夜間更新もありうる。
+ * 正直報告し、0 に丸めない)。preimage を持つ ABC 131 銘柄のみ期待がある。
+ * 他は uncovered として数える。
  */
 export function compareProtectedFinScores(
   preimages: Map<number, StockPreimage>,
-  fresh: Map<number, StockPreimage>
+  fresh: Map<number, StockPreimage>,
+  overrides: PostFinScoreOverrides
 ): { drift: DriftDiff[]; uncovered: number } {
   const drift: DriftDiff[] = [];
   let uncovered = 0;
@@ -823,8 +864,11 @@ export function compareProtectedFinScores(
       drift.push({ scope: "fin", stockId: sid, field: "preimage", expected: "present", fresh: "MISSING" });
       continue;
     }
+    // 利回り writer は yutai_yield + fetched_at を書く。61 変更銘柄の
+    // fetched_at は書込 receipt (pre 超過を要求)。他は pre 一致を要求する。
+    const yieldChanged = overrides.yieldNext.has(sid);
+    const wantYield = yieldChanged ? overrides.yieldNext.get(sid)! : pre.financial?.yutaiYield;
     const finKeys = [
-      "yutaiYield",
       "dataDate",
       "price",
       "per",
@@ -835,28 +879,57 @@ export function compareProtectedFinScores(
       "rsi14",
       "macd",
       "macdSignal",
-      "fetchedAt",
     ] as const;
     if (pre.financial === null && f.financial !== null) {
       drift.push({ scope: "fin", stockId: sid, field: "row", expected: "null", fresh: "ADDED" });
     } else if (pre.financial !== null && f.financial === null) {
       drift.push({ scope: "fin", stockId: sid, field: "row", expected: "present", fresh: "MISSING" });
     } else if (pre.financial && f.financial) {
+      if (f.financial.yutaiYield !== wantYield) {
+        drift.push({
+          scope: "fin",
+          stockId: sid,
+          field: "yutaiYield",
+          expected: fmt(wantYield),
+          fresh: fmt(f.financial.yutaiYield),
+        });
+      }
+      if (yieldChanged) {
+        if (!(f.financial.fetchedAt > pre.financial.fetchedAt)) {
+          drift.push({
+            scope: "fin",
+            stockId: sid,
+            field: "fetchedAt-receipt",
+            expected: `>${pre.financial.fetchedAt}`,
+            fresh: `${f.financial.fetchedAt}`,
+          });
+        }
+      } else if (f.financial.fetchedAt !== pre.financial.fetchedAt) {
+        drift.push({
+          scope: "fin",
+          stockId: sid,
+          field: "fetchedAt",
+          expected: fmt(pre.financial.fetchedAt),
+          fresh: fmt(f.financial.fetchedAt),
+        });
+      }
       for (const k of finKeys) {
         if (pre.financial[k] !== f.financial[k]) {
           drift.push({ scope: "fin", stockId: sid, field: k, expected: fmt(pre.financial[k]), fresh: fmt(f.financial[k]) });
         }
       }
     }
+    // スコア writer は 3 列のみ書く。期待は override があればそれ、無ければ pre。
+    const wantScores = overrides.scoreNext.get(sid) ?? pre.scores;
     const scoreKeys = ["fundamentalScore", "technicalScore", "totalScore"] as const;
-    if (pre.scores === null && f.scores !== null) {
+    if (wantScores === null && f.scores !== null) {
       drift.push({ scope: "score", stockId: sid, field: "row", expected: "null", fresh: "ADDED" });
-    } else if (pre.scores !== null && f.scores === null) {
+    } else if (wantScores !== null && f.scores === null) {
       drift.push({ scope: "score", stockId: sid, field: "row", expected: "present", fresh: "MISSING" });
-    } else if (pre.scores && f.scores) {
+    } else if (wantScores && f.scores) {
       for (const k of scoreKeys) {
-        if (pre.scores[k] !== f.scores[k]) {
-          drift.push({ scope: "score", stockId: sid, field: k, expected: fmt(pre.scores[k]), fresh: fmt(f.scores[k]) });
+        if (wantScores[k] !== f.scores[k]) {
+          drift.push({ scope: "score", stockId: sid, field: k, expected: fmt(wantScores[k]), fresh: fmt(f.scores[k]) });
         }
       }
     }
@@ -967,7 +1040,8 @@ function printPlan(scope: FreshScope, args: ProbeArgs): void {
       `PLAN verdict=READY_FOR_GRANT (live NOT executed)`,
       `scope union=${scope.union.length} chunks=${scope.chunks[0].length}+${scope.chunks[1].length} ` +
         `A=${scope.abcIds.length} F=${scope.ftIds.length} N=${scope.normalIds.length} ` +
-        `outside6=${scope.outside6.length} benefitMap=${scope.benefitMap.size}`,
+        `outside6=${scope.outside6.length} benefitMap=${scope.benefitMap.size} ` +
+        `(ABC ${scope.abcBenefitCount} + rowOnly ${scope.rowOnlyBenefitCount})`,
       `scopeSha=${scope.scopeSha}`,
       `calls=${CALL_PLAN.map((c) => `${c.kind}:${c.table}`).join(",")} x2chunks (POST /query, SELECT only)`,
       `sqlSha=${expected.map((e) => sha256Hex(e.sql).slice(0, 8)).join(",")}`,
@@ -1007,6 +1081,8 @@ async function runLive(args: ProbeArgs, scope: FreshScope): Promise<void> {
         union: scope.union.length,
         outside6: scope.outside6,
         benefitMap: scope.benefitMap.size,
+        abcBenefits: scope.abcBenefitCount,
+        rowOnlyBenefits: scope.rowOnlyBenefitCount,
       },
       chunks: [scope.chunks[0].length, scope.chunks[1].length],
     },
@@ -1077,7 +1153,8 @@ async function runLive(args: ProbeArgs, scope: FreshScope): Promise<void> {
   const batched = parseFtBatchedUpdates(readPinned(args.dir, "yutai-fulltext-manifest.postabc.json"));
   const expectedPost = buildExpectedPost(scope.benefitMap, abc.preimages, rowById, plannedById, batched);
   const fullCmp = compareBenefitFullSet(expectedPost, fresh);
-  const finCmp = compareProtectedFinScores(abc.preimages, fresh);
+  const overrides = postFinScoreOverrides(abc);
+  const finCmp = compareProtectedFinScores(abc.preimages, fresh, overrides);
   const drift: DriftDiff[] = [...fullCmp.drift, ...finCmp.drift];
   // 利回り再計算 (fresh 入力)。変化は runtime drift として独立計数する。
   const overlay = new Map<number, number | null>();

@@ -291,7 +291,7 @@ export function producePlannedUpdate(stmt: FiledUpdateStatement): PlannedUpdate 
   return { ...u, ids: [...u.ids] };
 }
 
-type AbcParsed = {
+export type AbcParsed = {
   preimages: Map<number, StockPreimage>;
   filed: FiledUpdateStatement[];
   benefitUpdateCount: number;
@@ -410,6 +410,36 @@ export function parseAbcManifest(text: string): AbcParsed {
     changedStocks: y["changed"] as number,
     scoreChangedStocks: y["scoreChanged"] as number,
   };
+}
+
+export type PostFinScoreOverrides = {
+  yieldNext: Map<number, number | null>;
+  scoreNext: Map<number, { fundamentalScore: number; technicalScore: number; totalScore: number }>;
+};
+
+/**
+ * filed 済み利回り・スコアの期待 post 値 (検証済み manifest entries 由来)。
+ * main が filed 文 params と突き合わせ済みのため entries を信じ、件数も
+ * filed 文数と突き合わせる。fresh probe が pre との偽 drift を出さない
+ * ために使う (業務 logic の複写ではない)。
+ */
+export function postFinScoreOverrides(abc: AbcParsed): PostFinScoreOverrides {
+  const yieldNext = new Map<number, number | null>();
+  const scoreNext = new Map<number, { fundamentalScore: number; technicalScore: number; totalScore: number }>();
+  for (const e of abc.yieldEntries) {
+    if (e.changed) yieldNext.set(e.stockId, e.next);
+    if (e.scoreChanged) {
+      if (!e.scoreNext) fail(`yield entry stockId=${e.stockId} が scoreChanged なのに scoreNext が無い`);
+      scoreNext.set(e.stockId, { ...e.scoreNext });
+    }
+  }
+  if (yieldNext.size !== abc.yieldStmts.length || scoreNext.size !== abc.scoreStmts.length) {
+    fail(
+      `期待 post 件数が filed 文数と不一致: yield ${yieldNext.size}/${abc.yieldStmts.length}, ` +
+        `score ${scoreNext.size}/${abc.scoreStmts.length}`
+    );
+  }
+  return { yieldNext, scoreNext };
 }
 
 /** 473 ID の完全被覆 + 一意 + target 同一性の証明 (shared 同値化の前段)。 */

@@ -8,7 +8,8 @@ main merge せず、live 実行せず、probe 実装と計画のみ報告する�
 ## 1. scope (offline 再導出・固定)
 
 - ABC 131 + FT 13 + normal 34 (manifest-34) → union **144** 銘柄。
-  A∩FT=6、normal-outside=6、benefitId→親 mapping 1668 件。
+  A∩FT=6、normal-outside=6、benefitId→親 mapping 1668 件
+  (= ABC fullset 1557 + ABC 外の row-manifest 111。仮定の新件数ではない)。
 - scope SHA (sorted canonical): `183147371fa0d681d0e113a7f676f62f8d350744d18a0dd6e30ae5e33acb6689`
 - chunk: 144 = **80 + 64** (既存 `ID_CHUNK=80` のまま)。
 - 外 6 銘柄は stockID/code/active-equity/benefitID の exact proof を取る
@@ -66,10 +67,15 @@ main merge せず、live 実行せず、probe 実装と計画のみ報告する�
   不変行の pre 値) と fresh の全行比較。NULL-safe・membership 双方向・
   親帰属・minShares/recordMonth・掲載文。差は content として全件保存する
   (473 だけ見て MATCH にしない)。
+- 保護 fin/score の期待値は pre ではなく期待 post
+  (filed 済み 61 利回り + 52 スコアの上書き。それ以外は pre のまま)。
+  pre 比較のままだと意図どおりの適用が偽 drift になるため。
+  期待値は既存 proof の helper (`postFinScoreOverrides`) から取る。
 - runtime drift は独立計数し full match への丸めは 0: 保護 fin/score の
   full property・untouched 行の updatedAt・利回り再計算の変化。
   正当な夜間更新もありうるため正直報告し、0 に丸めない。
-  修復行の updatedAt は書込 receipt (pre より進むこと) を要求する。
+  修復行の updatedAt と 61 変更銘柄の fetched_at は書込 receipt
+  (pre より進むこと) を要求する。
 - 実 planner→実 apply は既存 producer/proof 関数を再利用し 0 送信を証明する。
 - FT 62: 実分類の actual 件数 + 全 62 行の親 identity
   (stockId/code/benefit-table) 証明 + ALREADY_APPLIED 行の実 builder 0 文。

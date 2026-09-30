@@ -17,6 +17,7 @@ import {
   buildExpectedCalls,
   buildExpectedPost,
   checkFreshParents,
+  checkHttpStatus,
   compareBenefitFullSet,
   compareFtFresh,
   compareProtectedFinScores,
@@ -28,7 +29,11 @@ import {
   validateRawResponse,
   type FreshScope,
 } from "../../data-scripts/probe-yutai-fresh-audit.js";
-import { proveNormal45 } from "../../data-scripts/verify-repair-reentry.js";
+import {
+  parseAbcManifest,
+  postFinScoreOverrides,
+  proveNormal45,
+} from "../../data-scripts/verify-repair-reentry.js";
 
 const URL = "https://api.cloudflare.com/client/v4/accounts/A/d1/database/D/query";
 
@@ -229,6 +234,8 @@ const scopeOf = (union: number[], codes: Record<number, string>): FreshScope => 
   chunks: [union.slice(0, 80), union.slice(80)],
   perStock: new Map(union.map((sid) => [sid, { stockId: sid, code: codes[sid], sources: ["ABC" as const] }])),
   benefitMap: new Map(),
+  abcBenefitCount: 0,
+  rowOnlyBenefitCount: 0,
   abcIds: union,
   ftIds: [],
   normalIds: [],
@@ -367,9 +374,9 @@ describe("buildExpectedPost + compareBenefitFullSet (保存全行集合)", () =>
   });
 });
 
-describe("compareProtectedFinScores", () => {
+describe("compareProtectedFinScores (期待 post 基準)", () => {
   const fin = {
-    yutaiYield: null,
+    yutaiYield: 1.0,
     dataDate: "2026-09-29",
     price: 1000,
     per: null,
@@ -383,11 +390,44 @@ describe("compareProtectedFinScores", () => {
     fetchedAt: 1,
   };
   const scores = { fundamentalScore: 1, technicalScore: 2, totalScore: 3 };
+  const empty = { yieldNext: new Map(), scoreNext: new Map() };
 
   it("一致で drift なし", () => {
     const pre = new Map([[7, { ...preimageOf([]), financial: { ...fin }, scores: { ...scores } }]]);
     const fresh = new Map([[7, { ...preimageOf([]), financial: { ...fin }, scores: { ...scores } }]]);
-    expect(compareProtectedFinScores(pre, fresh)).toEqual({ drift: [], uncovered: 0 });
+    expect(compareProtectedFinScores(pre, fresh, empty)).toEqual({ drift: [], uncovered: 0 });
+  });
+
+  it("filed 済み利回り・スコアは期待 post と比べ、偽 drift を出さない", () => {
+    const pre = new Map([[7, { ...preimageOf([]), financial: { ...fin }, scores: { ...scores } }]]);
+    const fresh = new Map([
+      [
+        7,
+        {
+          ...preimageOf([]),
+          financial: { ...fin, yutaiYield: 1.5, fetchedAt: 9 },
+          scores: { fundamentalScore: 4, technicalScore: 5, totalScore: 6 },
+        },
+      ],
+    ]);
+    const overrides = {
+      yieldNext: new Map([[7, 1.5]]),
+      scoreNext: new Map([[7, { fundamentalScore: 4, technicalScore: 5, totalScore: 6 }]]),
+    };
+    expect(compareProtectedFinScores(pre, fresh, overrides)).toEqual({ drift: [], uncovered: 0 });
+  });
+
+  it("期待 post との差・receipt 違反は drift に列挙する", () => {
+    const pre = new Map([[7, { ...preimageOf([]), financial: { ...fin }, scores: { ...scores } }]]);
+    const fresh = new Map([
+      [7, { ...preimageOf([]), financial: { ...fin, yutaiYield: 1.5, fetchedAt: 1 }, scores: { ...scores } }],
+    ]);
+    const overrides = {
+      yieldNext: new Map([[7, 2.5]]),
+      scoreNext: new Map(),
+    };
+    const { drift } = compareProtectedFinScores(pre, fresh, overrides);
+    expect(drift.map((d) => `${d.scope}:${d.field}`).sort()).toEqual(["fin:fetchedAt-receipt", "fin:yutaiYield"]);
   });
 
   it("全列の差を行欠落含め drift に列挙し、preimage 無しは uncovered", () => {
@@ -396,9 +436,82 @@ describe("compareProtectedFinScores", () => {
       [7, { ...preimageOf([]), financial: { ...fin, price: 999 }, scores: null }],
       [8, preimageOf([])],
     ]);
-    const { drift, uncovered } = compareProtectedFinScores(pre, fresh);
+    const { drift, uncovered } = compareProtectedFinScores(pre, fresh, empty);
     expect(drift.map((d) => `${d.scope}:${d.field}`).sort()).toEqual(["fin:price", "score:row"]);
     expect(uncovered).toBe(1);
+  });
+});
+
+describe("postFinScoreOverrides (検証済み entries 由来)", () => {
+  const manifestOf = (entries: unknown[], stmts: unknown[]): string =>
+    JSON.stringify({
+      batches: {
+        perStock: [
+          {
+            stockId: 101,
+            statements: [
+              {
+                sql: "-- preflight",
+                params: [
+                  JSON.stringify({
+                    stockId: 101,
+                    parent: { code: "1001", isActive: true },
+                    benefits: [],
+                    financial: null,
+                    scores: null,
+                  }),
+                ],
+              },
+              ...stmts,
+            ],
+          },
+        ],
+      },
+      yield: { entries, skippedNoRow: [], skippedNoScore: [], changed: 0, scoreChanged: 0 },
+    });
+
+  it("changed/scoreChanged の next を拾う", () => {
+    const abc = parseAbcManifest(
+      manifestOf(
+        [
+          {
+            stockId: 101,
+            prev: 1.0,
+            next: 1.5,
+            changed: true,
+            scorePrev: { fundamentalScore: 1, technicalScore: 2, totalScore: 3 },
+            scoreNext: { fundamentalScore: 4, technicalScore: 5, totalScore: 6 },
+            scoreChanged: true,
+          },
+        ],
+        [
+          { sql: "UPDATE otakara_stock_financials SET yutai_yield = ?, x", params: [1.5, 101] },
+          { sql: "UPDATE otakara_stock_scores SET x", params: [4, 5, 6, 101] },
+        ]
+      )
+    );
+    const o = postFinScoreOverrides(abc);
+    expect(o.yieldNext.get(101)).toBe(1.5);
+    expect(o.scoreNext.get(101)).toEqual({ fundamentalScore: 4, technicalScore: 5, totalScore: 6 });
+  });
+
+  it("entries と filed 文数が食い違えば止める", () => {
+    const abc = parseAbcManifest(
+      manifestOf(
+        [{ stockId: 101, prev: 1.0, next: 1.5, changed: true, scorePrev: null, scoreNext: null, scoreChanged: false }],
+        []
+      )
+    );
+    expect(() => postFinScoreOverrides(abc)).toThrow(/filed 文数と不一致/);
+  });
+});
+
+describe("checkHttpStatus", () => {
+  it("2xx を通し、redirect・非 2xx は実 status/kind を添えて止める", () => {
+    expect(() => checkHttpStatus(3, "score", 200, false)).not.toThrow();
+    expect(() => checkHttpStatus(2, "fin", 302, false)).toThrow(/HTTP 302.*kind=fin/);
+    expect(() => checkHttpStatus(5, "parent", 500, false)).toThrow(/HTTP 500.*kind=parent/);
+    expect(() => checkHttpStatus(1, "benefits", 200, true)).toThrow(/redirect.*kind=benefits/);
   });
 });
 
