@@ -184,8 +184,8 @@ export const PINNED_PACKET_MODULES = {
   yahooClient: "60bca236229ecbb1f2ea13f9970b5f7e9bb87d3279aa7e901db90de40d6f1955",
   yahooBarSanity: "0f7ec911bcfbb6abadf20bc4c2694554a04de96190c0f7ebf26a73aa6a55eea6",
   archiveAdapter: "70b19e72de35a4af7d85018556ed070826d3f87e1eaf47bd85d6979fb1d538c3",
-  freshCapture: "fede652c5518f6ae74d3d3987eafedcbf95d042a32f79b9f481e91a9a76825d1",
-  selectProof: "6c864f43b8141162783368c311c2abd8e673e34dd58c82469618173e7a96bf05",
+  freshCapture: "d349a80bc473fbe3a4dc415553c89a9cc2a7680746a80533f5dc40cd8420f944",
+  selectProof: "cbb03a3aef6d73385c348478f686302d24a252da4d82aa1cd2d4b19f5b0faebd",
   universeOverlay: "c69c05363dacce3b6dd4199e4684718fec11f69a8f2b87c412e7ddc31c206e75",
   pnpmLock: "805dd5b36ca9ec385b29de1ded715305537eac514dbc7c77dfc55b2d56617e58",
 } as const;
