@@ -26,7 +26,9 @@ import {
   effectiveSubheading,
   lastRangedFiscalTitle,
   SINGLE_ROW_SALES_TEXTBLOCK,
+  resolveTableScope,
   type OverseasFact,
+  type OverseasCapture,
 } from "../services/overseas-parser.js";
 import { REGION_BUCKETS } from "../services/overseas-query.js";
 
@@ -1264,5 +1266,202 @@ describe("単一行 geocols 限定分岐: 直前小見出し + TextBlock + capti
     dash[2][2] = "－";
     expect(singleUnlabeledValueRow(dash, 1, 4, roles, 3, CAP83, SALES_TB)).toBe(-1);
     expect(singleUnlabeledValueRow(grid83, 1, 4, roles, -1, CAP83, SALES_TB)).toBe(-1);
+  });
+});
+
+describe("Gate0 — 表ローカル連結区分 (table-local scope)", () => {
+  const allScope = (facts: OverseasFact[]) =>
+    new Set(facts.map((f) => String(f.isConsolidated)));
+
+  it("S100AO7M 当連結 range 表題 + NotesToConsolidated → true (アジア/米州は2列和)", () => {
+    const r = parseOverseasHtml(fx("scope-ao7m-geocol-S100AO7M.html"), "2017-03-31");
+    expect(r.status).toBe("ok_geo_cols");
+    expect(allScope(r.facts)).toEqual(new Set(["true"]));
+    expect(pick(r.facts, "domestic")!.salesAmount).toBe(501837);
+    expect(region(r.facts, "アジア")!.salesAmount).toBe(280265);
+    expect(region(r.facts, "米州")!.salesAmount).toBe(232112);
+    expect(region(r.facts, "欧州")!.salesAmount).toBe(76980);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(589357);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(1091195);
+    expect(r.facts[0]!.fiscalYearEnd).toBe("2017-03-31");
+  });
+
+  it("S100OE0P 販売実績は true + 前表の生産実績は候補化しない (noleak)", () => {
+    const capture: OverseasCapture = { status: null, stopReason: null, candidates: [] };
+    const r = parseOverseasHtml(fx("scope-oe0p-prod-sales-S100OE0P.html"), "2022-03-31", { capture });
+    expect(r.status).toBe("ok_geo_rows");
+    expect(allScope(r.facts)).toEqual(new Set(["true"]));
+    // 生産実績表は候補にすらならない (販売実績表のみが候補)
+    expect(capture.candidates.length).toBe(1);
+    expect(capture.candidates[0]!.selected).toBe(true);
+    expect(pick(r.facts, "domestic")!.salesAmount).toBe(16163);
+    expect(region(r.facts, "南北アメリカ")!.salesAmount).toBe(11814);
+    expect(region(r.facts, "中国")!.salesAmount).toBe(5209);
+    expect(region(r.facts, "東南アジア／インド")!.salesAmount).toBe(4497);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(21520);
+    // 生産高の計 37537 ではなく販売実績の計 37686 であること
+    expect(pick(r.facts, "total")!.salesAmount).toBe(37686);
+    expect(r.facts[0]!.fiscalYearEnd).toBe("2022-03-31");
+  });
+
+  it("S100R1GC/S100TPW6/S100W2OC/S100YEVT 当連結販売実績 → true (FY 継承)", () => {
+    const cases = [
+      { fx: "scope-r1gc-sales-S100R1GC.html", pe: "2023-03-31", domestic: 17975, ot: 28818, total: 46794 },
+      { fx: "scope-tpw6-sales-S100TPW6.html", pe: "2024-03-31", domestic: 19607, ot: 33377, total: 52985 },
+      { fx: "scope-w2oc-sales-S100W2OC.html", pe: "2025-03-31", domestic: 19433, ot: 36077, total: 55512 },
+      { fx: "scope-yevt-sales-S100YEVT.html", pe: "2026-03-31", domestic: 19643, ot: 31521, total: 51165 },
+    ] as const;
+    for (const c of cases) {
+      const r = parseOverseasHtml(fx(c.fx), c.pe);
+      expect(r.status).toBe("ok_geo_rows");
+      expect(allScope(r.facts)).toEqual(new Set(["true"]));
+      expect(pick(r.facts, "domestic")!.salesAmount).toBe(c.domestic);
+      expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(c.ot);
+      expect(pick(r.facts, "total")!.salesAmount).toBe(c.total);
+      expect(r.facts[0]!.fiscalYearEnd).toBe(c.pe);
+    }
+  });
+
+  it("S100OH3F 当事業年度 range 表題 → false (個別。grid/tb に連結なし)", () => {
+    const r = parseOverseasHtml(fx("scope-oh3f-jigyotitle-S100OH3F.html"), "2022-03-31");
+    expect(r.status).toBe("ok_geo_cols");
+    expect(allScope(r.facts)).toEqual(new Set(["false"]));
+    expect(pick(r.facts, "domestic")!.salesAmount).toBe(3926667);
+    expect(region(r.facts, "その他")!.salesAmount).toBe(651540);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(651540);
+    expect(pick(r.facts, "total")!.salesAmount).toBe(4578208);
+    expect(r.facts[0]!.fiscalYearEnd).toBe("2022-03-31");
+  });
+
+  it("S100QHYM 連結調整前のみ → null (調整前数値を連結と呼ばない)", () => {
+    const r = parseOverseasHtml(fx("scope-qhym-chouseimae-S100QHYM.html"), "2022-12-31");
+    expect(r.status).toBe("ok_geo_rows");
+    expect(allScope(r.facts)).toEqual(new Set(["null"]));
+    expect(pick(r.facts, "domestic")!.salesAmount).toBe(14572);
+    expect(pick(r.facts, "domestic")!.unitLabel).toBe("億円");
+    expect(region(r.facts, "米州")!.salesAmount).toBe(1620);
+    expect(pick(r.facts, "overseas_total")!.salesAmount).toBe(8414);
+    // 総額印刷なしの computed 欠損は null のまま (捏造しない)
+    expect(pick(r.facts, "total")!.salesAmount).toBeNull();
+    expect(r.facts[0]!.fiscalYearEnd).toBe("2022-12-31");
+  });
+
+  it("resolveTableScope: 実 caption 文字列の判定 (doc@offset 由来)", () => {
+    const TB_CONS = "NotesToConsolidatedFinancialStatementsIFRSTextBlock";
+    // S100AO7M caption の range 表題 (実文) → true
+    expect(
+      resolveTableScope(
+        "売上高は顧客の所在地を基礎とし、国又は地域に分類しております。当連結会計年度（自 2016年４月１日 至 2017年３月31日）（単位：百万円）",
+        TB_CONS,
+        null
+      )
+    ).toBe(true);
+    // S100OH3F caption の range 表題 (実文) → false
+    expect(
+      resolveTableScope(
+        "記載を省略しております。当事業年度(自 2021年４月１日 至 2022年３月31日 ) １ 製品及びサービスごとの情報",
+        "RevenuesFromExternalCustomersInformationForEachRegionTextBlock",
+        null
+      )
+    ).toBe(false);
+    // S100QHYM caption の注記 (実文) → null (連結調整前は positive でない)
+    expect(
+      resolveTableScope(
+        "※「海外売上高」は連結調整前数値となります。",
+        "BusinessPolicyBusinessEnvironmentIssuesToAddressEtcTextBlock",
+        null
+      )
+    ).toBeNull();
+    // S100VI6W caption の注記 (実文) → null (連結調整後は exact list 外)
+    expect(
+      resolveTableScope(
+        "※「海外売上収益」は連結調整後数値となります。",
+        "BusinessPolicyBusinessEnvironmentIssuesToAddressEtcTextBlock",
+        null
+      )
+    ).toBeNull();
+    // S100V5SX caption の組替注記 (実文): 個別財務諸表の言及は false 駆動
+    // しない (false は FY 表題のみ)。当連結 exact + grid 連結 → true。
+    expect(
+      resolveTableScope(
+        "当連結会計年度より、海外事業規模の拡大に伴いロイヤリティーの重要性が増していることを踏まえて、従来、個別財務諸表において「営業外収益」の区分に表示しておりました",
+        "NotesSegmentInformationEtcConsolidatedFinancialStatementsTextBlock",
+        true
+      )
+    ).toBe(true);
+    // S1009CRX 脚注 (実文): 裸の非連結言及は positive 証拠にしない
+    expect(
+      resolveTableScope(
+        "※１．非連結子会社及び関連会社に対するものは次のとおりであります。",
+        null,
+        null
+      )
+    ).toBeNull();
+  });
+
+  it("resolveTableScope: 個別 FY 表題 × 他 positive は mismatch (3602 未観測の fail-closed pin)", () => {
+    // 実 caption × 実 gridScope 値の組合せ。文書実例はないが仕様を固定する。
+    expect(
+      resolveTableScope(
+        "当事業年度(自 2021年４月１日 至 2022年３月31日 )",
+        null,
+        true
+      )
+    ).toBe("mismatch");
+    expect(
+      resolveTableScope(
+        "当連結会計年度（自 2016年４月１日 至 2017年３月31日）",
+        null,
+        false
+      )
+    ).toBe("mismatch");
+  });
+
+  it("capture trace: AO7M は実 reducer の採用列・総額列を運ぶ (推定なし)", () => {
+    const capture: OverseasCapture = { status: null, stopReason: null, candidates: [] };
+    const r = parseOverseasHtml(fx("scope-ao7m-geocol-S100AO7M.html"), "2017-03-31", { capture });
+    expect(r.status).toBe("ok_geo_cols");
+    expect(capture.candidates.length).toBe(1);
+    const c = capture.candidates[0]!;
+    expect(c.selected).toBe(true);
+    expect(c.textBlock).toBe("NotesToConsolidatedFinancialStatementsIFRSTextBlock");
+    expect(c.contextRef).toBe("CurrentYearDuration");
+    expect(c.scope).toBe(true);
+    expect(c.fiscal).toBe("T:2017-03-31");
+    expect(c.trace?.kind).toBe("cols");
+    expect(c.trace?.valueIndex).toBe(2);
+    expect(c.trace?.valueLabel).toBe("売上高");
+    expect(c.trace?.totalIndex).toBe(7);
+    expect(c.trace?.totalLabel).toBe("合計");
+    // アジア/米州は 2 列の合算採用 (leaf 全 index を保持)
+    expect(c.trace?.adopted).toEqual([
+      { indices: [1], label: "日本" },
+      { indices: [2, 3], label: "アジア" },
+      { indices: [4, 5], label: "米州" },
+      { indices: [6], label: "欧州" },
+    ]);
+  });
+
+  it("capture trace: OE0P は実 reducer の採用行・総額行を運ぶ (推定なし)", () => {
+    const capture: OverseasCapture = { status: null, stopReason: null, candidates: [] };
+    const r = parseOverseasHtml(fx("scope-oe0p-prod-sales-S100OE0P.html"), "2022-03-31", { capture });
+    expect(r.status).toBe("ok_geo_rows");
+    const c = capture.candidates.find((x) => x.selected)!;
+    expect(c.textBlock).toBe(
+      "ManagementAnalysisOfFinancialPositionOperatingResultsAndCashFlowsTextBlock"
+    );
+    expect(c.contextRef).toBe("FilingDateInstant");
+    expect(c.scope).toBe(true);
+    expect(c.trace?.kind).toBe("rows");
+    expect(c.trace?.valueIndex).toBe(1);
+    expect(c.trace?.valueLabel).toBe("金額(百万円)");
+    expect(c.trace?.totalIndex).toBe(5);
+    expect(c.trace?.totalLabel).toBe("合計");
+    expect(c.trace?.adopted).toEqual([
+      { indices: [1], label: "日本" },
+      { indices: [2], label: "南北アメリカ" },
+      { indices: [3], label: "中国" },
+      { indices: [4], label: "東南アジア／インド" },
+    ]);
   });
 });

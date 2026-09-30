@@ -92,10 +92,72 @@ export interface OverseasExtraction {
   proof?: OverseasProof;
 }
 
+/**
+ * 候補 table の診断レコード (非DB保存の任意 diagnostic。保存対象外)。
+ * 全 field は実 selector の中間値そのもの (推測・複製なし。新 regex 0)。
+ * dims は header 側 context 定義の解決が必要なため含めない (html-only の
+ * 本 API では解決不能。contextRef までを運ぶ)。
+ */
+export interface OverseasCandidateCapture {
+  /** 表開始 offset。 */
+  start: number;
+  /** 囲み TextBlock 名 (parent)。 */
+  textBlock: string | null;
+  /** 囲み TextBlock の contextRef (context 証拠)。 */
+  contextRef: string | null;
+  /** caption 末尾160字 (表ローカル証拠の原文断片)。 */
+  captionTail: string;
+  /** reducer の grid 判定。 */
+  gridScope: boolean | null;
+  /** Gate0 の確定結果。 */
+  scope: ScopeResolution;
+  /** 期の確定 ("T:date"/"Z:date"/"mismatch"/"unknown")。 */
+  fiscal: string;
+  /** 選定 score。 */
+  score: number;
+  /** 採用されたか (候補採否)。 */
+  selected: boolean;
+  /** 除外理由 (fiscal-excluded 等。採用は null)。 */
+  dropReason: string | null;
+  /** 採用値の要約 (total/overseas_total・単位つき)。 */
+  selectedValue: string;
+  /** 値軸 header (continuing axes)。 */
+  axis: string;
+  /** reducer 由来の選択 trace (値/総額の index・label、採用 leaf)。 */
+  trace?: ReducerTrace;
+}
+
+/** 文書単位の診断 (parseOverseasHtml の opts.capture に採取)。 */
+export interface OverseasCapture {
+  status: OverseasParseStatus | null;
+  stopReason: string | null;
+  candidates: OverseasCandidateCapture[];
+}
+
+/**
+ * reducer 由来の選択 trace (実 selector の中間値。後付け推定なし)。
+ * indices は展開 grid 内の 0-based 位置 (rows=行 / cols=列)。
+ * 合算採用 (grouping) は leaf 全 index を持つ。
+ */
+export interface ReducerTrace {
+  kind: "rows" | "cols";
+  /** 値列/値行の index。 */
+  valueIndex: number;
+  /** 値列/値行の見出しラベル。 */
+  valueLabel: string;
+  /** 総額列/行の index (printed 総額なしの computed total は null)。 */
+  totalIndex: number | null;
+  /** 総額のラベル (同上 null)。 */
+  totalLabel: string | null;
+  /** 採用した地域行/列の (leaf indices, label)。 */
+  adopted: Array<{ indices: number[]; label: string }>;
+}
+
 /** 1表の構造化結果。facts と照合の証明を対で返す */
 interface ParsedTable {
   facts: OverseasFact[];
   proof: OverseasProof;
+  trace?: ReducerTrace;
   /**
    * 値列/値行の見出しテキスト (期首確定鎖の第1段)。rows は pick した値列の
    * colHeader、cols は値行の行テキスト。LVA5 級の2期比較表は表外表題が
@@ -270,6 +332,79 @@ function detectUnitOrNull(
 function detectConsolidated(headerText: string): boolean | null {
   if (/連結/.test(headerText)) return true;
   if (/事業年度/.test(headerText) && !/連結/.test(headerText)) return false;
+  return null;
+}
+
+/**
+ * 表ローカルの連結区分の確定結果。`null` = 証拠不足 (grid 判定のまま。
+ * 推測しない)。`"mismatch"` = 表内証拠の明示矛盾 (候補生成直後に doc-STOP
+ * へ流す。都合の良い表を選ばない)。
+ */
+export type ScopeResolution = boolean | "mismatch" | null;
+
+/**
+ * 実 trace で確認した連結専用 TextBlock 名 (exact match のみ)。
+ * 列挙外の TextBlock は abstain (連結の証拠にしない):
+ * - ManagementAnalysisOf...TextBlock (E01080 販売実績表の親) は context が
+ *   FilingDateInstant (提出日≠FY) であり FY/scope の証明にならない。
+ * - InformationAboutGeographicalAreasIFRSTextBlock /
+ *   RevenuesFromExternalCustomersInformationForEachRegionTextBlock は
+ *   連結専用名ではないため入れない。
+ */
+const CONSOLIDATED_TEXTBLOCKS = new Set([
+  // S100AO7M 採用表 (context=CurrentYearDuration 2016-04-01→2017-03-31)。
+  "NotesToConsolidatedFinancialStatementsIFRSTextBlock",
+  // W81W/XRWN/VHA9/XTT8 の収益分解表。
+  "NotesRevenueConsolidatedFinancialStatementsIFRSTextBlock",
+  // W81W/XRWN の報告セグメント表。
+  "NotesSegmentInformationConsolidatedFinancialStatementsIFRSTextBlock",
+  // XRWN の減損表 (R1 除外対象だが名は連結専用)。
+  "NotesImpairmentLossesConsolidatedFinancialStatementsIFRSTextBlock",
+]);
+
+/**
+ * 表ローカルの連結区分を確定する (Gate0。候補生成直後・期首フィルタ前)。
+ * 見るのは当該表だけ: caption (表間原文。他表の借用なし)・囲み TextBlock 名・
+ * grid 判定 (既存 detectConsolidated)。wide 窓・footer・文書全体・旧 flag の
+ * 持ち越しはしない。数値の行/列選択には触らない。
+ * - まず既存 lastRangedFiscalTitle で直近 range 表題 (採用期の明示) を取り、
+ *   連結会計年度 → true / 事業年度 (連結なし) → false と読む。
+ * - positive は表関連の明示 exact phrase (当連結会計年度/連結財務諸表/
+ *   連結決算) のみ。裸の連結言及・非連結・連結調整前は positive 証拠に
+ *   しない (前表の連結語 + 当事業年度表題の表を true にしない)。
+ * - 個別 FY 表題の false と他 positive の共存は明示矛盾 → "mismatch"。
+ * - 証拠不足 → null (推測しない)。
+ */
+export function resolveTableScope(
+  caption: string,
+  textBlock: string | null,
+  gridScope: boolean | null
+): ScopeResolution {
+  // 非連結は positive の substring (連結財務諸表/連結決算) を潰すために先除去。
+  // 削除のみで phrase を生成しない。range 表題に非連結は現れないため無害。
+  const cap = caption.replace(/非連結/g, "");
+  const title = lastRangedFiscalTitle(cap);
+  const titleScope =
+    title === null
+      ? null
+      : /連結/.test(title)
+        ? true
+        : /事業年度/.test(title)
+          ? false
+          : null;
+  const exactPos =
+    /当連結会計年度|連結財務諸表|連結決算/.test(cap);
+  const tbScope =
+    textBlock !== null && CONSOLIDATED_TEXTBLOCKS.has(textBlock) ? true : null;
+  const pos =
+    titleScope === true ||
+    exactPos ||
+    tbScope === true ||
+    gridScope === true;
+  const neg = titleScope === false || gridScope === false;
+  if (neg && pos) return "mismatch";
+  if (pos) return true;
+  if (neg) return false;
   return null;
 }
 
@@ -658,7 +793,13 @@ function tryGeoRows(
   // すべて控える。地域行は「顧客との契約」水準で按分され、「外部顧客への売上高」
   // はそれに非地域分の『その他の収益』を足した広い総額になることがあるため、
   // 検証は「地域合計がいずれかの集計行と一致するか」で行う。
-  const aggregates: Array<{ label: string; value: number; quantum: number }> = [];
+  const aggregates: Array<{
+    label: string;
+    value: number;
+    quantum: number;
+    /** 集計行の grid 行 index (trace 用)。 */
+    idx: number;
+  }> = [];
   const consolidated = detectConsolidated(gridX.flat().join(" "));
   interface Entry {
     idx: number;
@@ -669,6 +810,8 @@ function tryGeoRows(
     value: number;
     /** 印刷セルの quantum (Gate3。合算出力は子 quantum の合計を持つ)。 */
     quantum: number;
+    /** P-2D 合算時の leaf 全行 index (trace 用。DupEntry と同型)。 */
+    leafIdx?: number[];
   }
   const entries: Entry[] = [];
   const shokei: Array<{ idx: number; value: number; quantum: number }> = [];
@@ -732,7 +875,12 @@ function tryGeoRows(
         cell !== null &&
         /外部顧客|顧客との契約|合計|連結|^計$/.test(normLabel)
       ) {
-        aggregates.push({ label: normLabel, value: v, quantum: cell.quantum });
+        aggregates.push({
+          label: normLabel,
+          value: v,
+          quantum: cell.quantum,
+          idx: i,
+        });
       }
       continue;
     }
@@ -769,7 +917,9 @@ function tryGeoRows(
       unit,
       fiscalYearEnd,
       consolidated,
-      mode
+      mode,
+      vc,
+      colHeader[vc] ?? ""
     );
     if (b1) return { ...b1, valueAxisHeader: colHeader[vc] ?? "" };
     return null;
@@ -1058,6 +1208,17 @@ function tryGeoRows(
       totalHi,
     },
     valueAxisHeader: colHeader[vc] ?? "",
+    trace: {
+      kind: "rows",
+      valueIndex: vc,
+      valueLabel: colHeader[vc] ?? "",
+      totalIndex: totalAgg?.idx ?? null,
+      totalLabel: totalAgg?.label ?? null,
+      adopted: useEntries.map((e) => ({
+        indices: e.leafIdx ?? [e.idx],
+        label: e.name,
+      })),
+    },
   };
 }
 
@@ -1070,17 +1231,28 @@ function tryGeoRows(
 function finishShokeiBlocks(
   entries: Array<{ idx: number; role: "domestic" | "overseas"; name: string; value: number; quantum: number }>,
   shokei: Array<{ idx: number; value: number; quantum: number }>,
-  aggregates: Array<{ label: string; value: number; quantum: number }>,
+  aggregates: Array<{
+    label: string;
+    value: number;
+    quantum: number;
+    idx: number;
+  }>,
   unit: { label: string; factor: number },
   fiscalYearEnd: string,
   consolidated: boolean | null,
-  mode: RoundingMode
+  mode: RoundingMode,
+  /** 値列の特定結果 (trace 用。選択には使わない)。 */
+  valueCol: number,
+  valueLabel: string
 ): ParsedTable | null {
   const bounds = shokei.map((s) => s.idx).sort((a, b) => a - b);
   // 最終小計より後の地域行は所属 block 不明 → 却下
   if (entries.some((e) => e.idx > bounds[bounds.length - 1])) return null;
   let prev = -1;
-  const groups = new Map<string, { kind: "domestic" | "overseas"; sum: number }>();
+  const groups = new Map<
+    string,
+    { kind: "domestic" | "overseas"; sum: number; idxs: number[] }
+  >();
   for (const s of shokei) {
     const block = entries.filter((e) => e.idx > prev && e.idx < s.idx);
     prev = s.idx;
@@ -1099,8 +1271,10 @@ function finishShokeiBlocks(
     for (const e of block) {
       const g = groups.get(e.name);
       if (g && g.kind !== e.role) return null; // block 間で内外区分が矛盾 → 却下
-      if (g) g.sum += e.value;
-      else groups.set(e.name, { kind: e.role, sum: e.value });
+      if (g) {
+        g.sum += e.value;
+        g.idxs.push(e.idx);
+      } else groups.set(e.name, { kind: e.role, sum: e.value, idxs: [e.idx] });
     }
   }
   // grand: 小計の合計が開示総額のいずれかと一致すること (総額の捏造なし)
@@ -1173,6 +1347,17 @@ function finishShokeiBlocks(
       totalLo,
       totalHi,
     },
+    trace: {
+      kind: "rows",
+      valueIndex: valueCol,
+      valueLabel,
+      totalIndex: grand.idx,
+      totalLabel: grand.label,
+      adopted: [...groups].map(([name, g]) => ({
+        indices: g.idxs,
+        label: name,
+      })),
+    },
   };
 }
 
@@ -1183,6 +1368,8 @@ interface DupEntry {
   sub: string;
   value: number;
   quantum: number;
+  /** P-2D 合算時の leaf 全行 index (trace 用。非合算は未設定)。 */
+  leafIdx?: number[];
 }
 
 /**
@@ -1196,7 +1383,12 @@ interface DupEntry {
  */
 function resolveDupEntries(
   entries: DupEntry[],
-  aggregates: Array<{ label: string; value: number; quantum: number }>,
+  aggregates: Array<{
+    label: string;
+    value: number;
+    quantum: number;
+    idx: number;
+  }>,
   mode: RoundingMode
 ): { entries: DupEntry[]; metricPruned: boolean } | null {
   // P-metric: 全行の sub が metric 対で、売上/利益の両方があれば利益行を除く
@@ -1229,14 +1421,28 @@ function resolveDupEntries(
   if (isProduct2D) {
     const groups = new Map<
       string,
-      { kind: "domestic" | "overseas"; sum: number; width: number; idx: number }
+      {
+        kind: "domestic" | "overseas";
+        sum: number;
+        width: number;
+        idx: number;
+        idxs: number[];
+      }
     >();
     for (const e of entries) {
       const g = groups.get(e.name);
       if (g) {
         g.sum += e.value;
         g.width += e.quantum;
-      } else groups.set(e.name, { kind: e.role, sum: e.value, width: e.quantum, idx: e.idx });
+        g.idxs.push(e.idx);
+      } else
+        groups.set(e.name, {
+          kind: e.role,
+          sum: e.value,
+          width: e.quantum,
+          idx: e.idx,
+          idxs: [e.idx],
+        });
     }
     // 分割の証明: 合算前 leaf セルの区間の和が開示集計のいずれかと重なること。
     // 合算出力は子 quantum の合計幅を持つ (純計算値への quantum 付与ではなく
@@ -1260,6 +1466,7 @@ function resolveDupEntries(
         sub: "",
         value: g.sum,
         quantum: g.width,
+        leafIdx: g.idxs,
       })),
       metricPruned: false,
     };
@@ -1465,14 +1672,25 @@ function tryGeoCols(
   // 集計列 (連結/合計) と消去列 (調整額/消去) を収集。行パスと同型に、
   // 地域合計 (+消去) がいずれかの集計列と一致することを要求する
   // (S100Y53G: 地域 569330 + 調整額 36 ≈ 連結 569370)。
-  const aggregates: Array<{ label: string; value: number; quantum: number }> = [];
+  const aggregates: Array<{
+    label: string;
+    value: number;
+    quantum: number;
+    /** 集計列の grid 列 index (trace 用)。 */
+    idx: number;
+  }> = [];
   const elimCells: CellAmount[] = [];
   for (let ci = 0; ci < width; ci++) {
     const h = norm(gridX[headerIdx][ci] ?? "");
     const acell = parseJpNumberCell(gridX[valueRow][ci] ?? "");
     if (acell === null) continue;
     if (RX_TOTAL_COL.test(h)) {
-      aggregates.push({ label: h, value: acell.value, quantum: acell.quantum });
+      aggregates.push({
+        label: h,
+        value: acell.value,
+        quantum: acell.quantum,
+        idx: ci,
+      });
     } else if (RX_ELIMINATION.test(h)) {
       elimCells.push({ value: acell.value, quantum: acell.quantum });
     }
@@ -1496,6 +1714,8 @@ function tryGeoCols(
     value: number | null;
     /** 子印刷セルの quantum 合計幅 (grouping で合算したら子の合計。件数n ではない) */
     qw: number;
+    /** grouping 合算時の leaf 全列 index (trace 用)。 */
+    idxs?: number[];
   }
   const cols: Col[] = [];
   for (let ci = 0; ci < width; ci++) {
@@ -1548,7 +1768,13 @@ function tryGeoCols(
     for (const c of cols) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
     const groups = new Map<
       string,
-      { kind: "domestic" | "overseas"; sum: number; qw: number; subs: string[] }
+      {
+        kind: "domestic" | "overseas";
+        sum: number;
+        qw: number;
+        subs: string[];
+        idxs: number[];
+      }
     >();
     for (const c of cols) {
       const rawSub = child[c.index] ?? "";
@@ -1570,12 +1796,14 @@ function tryGeoCols(
           g.qw += c.qw;
         }
         g.subs.push(sub);
+        g.idxs.push(c.index);
       } else {
         groups.set(c.name, {
           kind: c.kind,
           sum: c.value ?? 0,
           qw: c.value !== null ? c.qw : 0,
           subs: [sub],
+          idxs: [c.index],
         });
       }
     }
@@ -1588,6 +1816,7 @@ function tryGeoCols(
         kind: g.kind,
         value: g.sum as number | null,
         qw: g.qw,
+        idxs: g.idxs,
       }));
   }
   const facts: OverseasFact[] = [];
@@ -1687,6 +1916,19 @@ function tryGeoCols(
     },
     valueAxisHeader: singleRowAxis ?? gridX[valueRow]?.join("") ?? "",
     ...(singleRowProof ? { singleRowProof } : {}),
+    trace: {
+      kind: "cols",
+      valueIndex: valueRow,
+      valueLabel: norm(gridX[valueRow]?.[0] ?? ""),
+      totalIndex: totalAgg?.idx ?? null,
+      totalLabel: totalAgg?.label ?? null,
+      adopted: useCols
+        .filter((c) => c.value !== null)
+        .map((c) => ({
+          indices: c.idxs ?? [c.index],
+          label: c.name,
+        })),
+    },
   };
 }
 
@@ -1794,6 +2036,7 @@ function tablesWithHeading(
   wide: string;
   caption: string;
   textBlock: string | null;
+  contextRef: string | null;
   start: number;
 }> {
   const out: Array<{
@@ -1802,6 +2045,7 @@ function tablesWithHeading(
     wide: string;
     caption: string;
     textBlock: string | null;
+    contextRef: string | null;
     start: number;
   }> = [];
   // table と ix:nonNumeric (TextBlock 囲み) を同一走査で拾う。ix の開閉は
@@ -1810,7 +2054,8 @@ function tablesWithHeading(
   const stack: number[] = [];
   // 開いている ix:nonNumeric の内側から見た TextBlock 名 (非 TextBlock は
   // null の深さ標識)。表を直接囲む TextBlock を contract の直接証明に使う。
-  const ixStack: Array<string | null> = [];
+  // contextRef は diagnostic の parent/context 証拠 (選択には使わない)。
+  const ixStack: Array<{ tb: string | null; contextRef: string | null }> = [];
   let m: RegExpExecArray | null;
   const strip = (s: string): string =>
     s
@@ -1829,7 +2074,11 @@ function tablesWithHeading(
       } else if (!/\/>$/.test(m[0])) {
         const nm = /name\s*=\s*"([^"]+)"/i.exec(m[0]);
         const local = nm ? nm[1].split(":").pop()! : "";
-        ixStack.push(/TextBlock$/.test(local) ? local : null);
+        const cr = /contextRef\s*=\s*"([^"]+)"/i.exec(m[0]);
+        ixStack.push({
+          tb: /TextBlock$/.test(local) ? local : null,
+          contextRef: cr ? cr[1] : null,
+        });
       }
       continue;
     }
@@ -1853,14 +2102,16 @@ function tablesWithHeading(
         stack.length > 0 ? stack[stack.length - 1] : Math.min(prevTopEnd, start);
       const caption = strip(html.slice(capFrom, start)).slice(-4000);
       let textBlock: string | null = null;
+      let contextRef: string | null = null;
       for (let i = ixStack.length - 1; i >= 0; i--) {
-        if (ixStack[i] !== null) {
-          textBlock = ixStack[i];
+        if (ixStack[i].tb !== null) {
+          textBlock = ixStack[i].tb;
+          contextRef = ixStack[i].contextRef;
           break;
         }
       }
       if (stack.length === 0) prevTopEnd = re.lastIndex;
-      out.push({ table, heading, start, wide, caption, textBlock });
+      out.push({ table, heading, start, wide, caption, textBlock, contextRef });
     } else {
       stack.push(m.index);
     }
@@ -2347,7 +2598,7 @@ function pickCurrentOfFiscalPair(
 export function parseOverseasHtml(
   html: string,
   reportPeriodEnd: string,
-  opts: { roundingMode?: RoundingMode } = {}
+  opts: { roundingMode?: RoundingMode; capture?: OverseasCapture } = {}
 ): Omit<OverseasExtraction, "honbunFile"> {
   const mode = opts.roundingMode ?? detectRoundingMode(html).mode;
   const tables = tablesWithHeading(html);
@@ -2376,10 +2627,45 @@ export function parseOverseasHtml(
     heading: string;
     flat: string;
     wide: string;
+    scope: ScopeResolution;
     singleRowProof?: SingleRowProof;
   }[] = [];
 
-  for (const { table, heading, wide, caption, textBlock, start } of tables) {
+  // 任意 diagnostic の採取口 (capture 未指定なら全て no-op)。
+  const cap = opts.capture ?? null;
+  if (cap) {
+    cap.status = null;
+    cap.stopReason = null;
+    cap.candidates = [];
+  }
+  const markCap = (
+    status: OverseasParseStatus,
+    stopReason: string | null,
+    selectedStart: number | null
+  ): void => {
+    if (!cap) return;
+    cap.status = status;
+    cap.stopReason = stopReason;
+    if (selectedStart === null) return;
+    for (const r of cap.candidates) {
+      if (r.start === selectedStart) {
+        r.selected = true;
+        r.dropReason = null;
+      } else if (r.dropReason === null) {
+        r.dropReason = "not-selected";
+      }
+    }
+  };
+
+  for (const {
+    table,
+    heading,
+    wide,
+    caption,
+    textBlock,
+    contextRef,
+    start,
+  } of tables) {
     const rawGrid = tableToGridExpanded(table);
     if (rawGrid.length < 2) continue;
     // 全角数字・ラテンの半角化 (全パス共通)。S1009XV6 の「その他 ５」等、
@@ -2426,6 +2712,7 @@ export function parseOverseasHtml(
       facts: OverseasFact[];
       proof: OverseasProof;
       axis: string;
+      trace?: ReducerTrace;
       singleRowProof?: SingleRowProof;
     } | null = null;
     {
@@ -2436,6 +2723,7 @@ export function parseOverseasHtml(
           facts: rows.facts,
           proof: rows.proof,
           axis: rows.valueAxisHeader ?? "",
+          ...(rows.trace ? { trace: rows.trace } : {}),
         };
     }
     if (!cand) {
@@ -2450,6 +2738,7 @@ export function parseOverseasHtml(
       // 単一行の売上直接証明はあるが caption に期表示なし → fiscal-unknown
       // STOP (Root残gate)。黙殺せず、wide (前表) 継承で採用もしない。
       if (cols === "single_row_fiscal_unknown") {
+        markCap("geo_present_unstructured", "single-row-fiscal-unknown", null);
         return { status: "geo_present_unstructured", facts: [], tablesScanned };
       }
       if (cols)
@@ -2459,13 +2748,72 @@ export function parseOverseasHtml(
           proof: cols.proof,
           axis: cols.valueAxisHeader ?? "",
           ...(cols.singleRowProof ? { singleRowProof: cols.singleRowProof } : {}),
+          ...(cols.trace ? { trace: cols.trace } : {}),
         };
     }
     if (cand) {
-      buffered.push({ ...cand, start, heading, flat, wide });
+      // 表ローカルの連結区分 (Gate0 の入力。reducer の grid 判定を起点に
+      // caption/TextBlock の明示で確定する。数値選択は不変)。
+      const gridScope = cand.facts[0]?.isConsolidated ?? null;
+      const scope = resolveTableScope(caption, textBlock, gridScope);
+      buffered.push({ ...cand, start, heading, flat, wide, scope });
+      // 任意 diagnostic (capture 指定時のみ採取。選択動作は不変)。
+      if (cap) {
+        const tot =
+          cand.facts.find((f) => f.regionKind === "total")?.salesAmount ??
+          null;
+        const ot =
+          cand.facts.find((f) => f.regionKind === "overseas_total")
+            ?.salesAmount ?? null;
+        const fisc = fiscalOfCand(
+          {
+            singleRowProof: cand.singleRowProof,
+            axis: cand.axis,
+            flat,
+            wide,
+          },
+          reportPeriodEnd
+        );
+        cap.candidates.push({
+          start,
+          textBlock,
+          contextRef,
+          captionTail: caption.slice(-160),
+          gridScope,
+          scope,
+          ...(cand.trace ? { trace: cand.trace } : {}),
+          fiscal:
+            fisc === "mismatch"
+              ? "mismatch"
+              : !fisc
+                ? "unknown"
+                : `${fisc.side}:${fisc.date ?? "nodate"}`,
+          score: scoreCandidate(heading, flat, cand.status),
+          selected: false,
+          dropReason: null,
+          selectedValue: `total:${String(tot)} overseas:${String(ot)} ${cand.facts[0]?.unitLabel ?? ""}`,
+          axis: cand.axis,
+        });
+      }
     } else if (/日本|本邦/.test(flat) && RX_OVERSEAS_REGION.test(flat)) {
       // 日本(本邦) + 海外地域 + 数値 はあるが構造化できなかった → 取りこぼし候補
       sawGeoSignal = true;
+    }
+  }
+
+  // 連結区分の確定 (Gate0。候補生成直後・期首フィルタ前): 各候補の
+  // 表ローカル証拠で scope を確定する。矛盾の表が1つでもあれば doc-STOP
+  // (黙殺も都合の良い表の採用もしない)。確定した区分は facts へ反映する
+  // (数値の行/列選択は不変)。不足 (null) は grid 判定のまま残す。
+  for (const b of buffered) {
+    if (b.scope === "mismatch") {
+      markCap("geo_present_unstructured", "scope-mismatch", null);
+      return { status: "geo_present_unstructured", facts: [], tablesScanned };
+    }
+  }
+  for (const b of buffered) {
+    if (b.scope === true || b.scope === false) {
+      for (const f of b.facts) f.isConsolidated = b.scope;
     }
   }
 
@@ -2488,6 +2836,10 @@ export function parseOverseasHtml(
       const inh = inhs[i];
       if (inh === "mismatch" || (inh && inh.side === "Z")) {
         sawGeoSignal = true;
+        // buffered と capture は同順で push される。
+        if (cap && cap.candidates[i]) {
+          cap.candidates[i].dropReason = "fiscal-excluded";
+        }
         continue;
       }
       candidates.push({
@@ -2511,6 +2863,7 @@ export function parseOverseasHtml(
   if (candidates.length > 1) {
     const fiscals = candidates.map((c) => fiscalOfCand(c, reportPeriodEnd));
     if (fiscals.some((f) => f !== null) && fiscals.some((f) => f === null)) {
+      markCap("geo_present_unstructured", "fiscal-ambiguity", null);
       return { status: "geo_present_unstructured", facts: [], tablesScanned };
     }
   }
@@ -2533,6 +2886,7 @@ export function parseOverseasHtml(
           return k === "unknown" || k === "mixed";
         })
       ) {
+        markCap("geo_present_unstructured", "contract-ambiguity", null);
         return { status: "geo_present_unstructured", facts: [], tablesScanned };
       }
       // 最高点群を (sourceFiscal, 連結区分, 単位, contract) で group 化し、
@@ -2564,14 +2918,17 @@ export function parseOverseasHtml(
         }
       }
       if (internalConflict) {
+        markCap("geo_present_unstructured", "group-conflict", null);
         return { status: "geo_present_unstructured", facts: [], tablesScanned };
       }
       if (groups.size === 1) {
         // 全 top が同一 group・同一キー。metric 標識つきの収束は
         // 非売上値の保存になり得るので STOP (fail-closed)。
         if (tops.some((c) => hasMetricMarkers(c.flat))) {
+          markCap("geo_present_unstructured", "metric-markers", null);
           return { status: "geo_present_unstructured", facts: [], tablesScanned };
         }
+        markCap(best.status, null, best.start);
         return {
           status: best.status,
           facts: best.facts,
@@ -2586,6 +2943,7 @@ export function parseOverseasHtml(
       // TZ 汚染ペアは同 group 不一致→STOP に流れる。
       const current = pickCurrentOfFiscalPair(tops, reportPeriodEnd);
       if (current) {
+        markCap(current.status, null, current.start);
         return {
           status: current.status,
           facts: current.facts,
@@ -2593,8 +2951,10 @@ export function parseOverseasHtml(
           proof: current.proof,
         };
       }
+      markCap("geo_present_unstructured", "multi-group", null);
       return { status: "geo_present_unstructured", facts: [], tablesScanned };
     }
+    markCap(best.status, null, best.start);
     return {
       status: best.status,
       facts: best.facts,
@@ -2603,6 +2963,11 @@ export function parseOverseasHtml(
     };
   }
 
+  markCap(
+    sawGeoSignal ? "geo_present_unstructured" : "no_overseas_table",
+    sawGeoSignal ? "unstructured" : "no-signal",
+    null
+  );
   return {
     status: sawGeoSignal ? "geo_present_unstructured" : "no_overseas_table",
     facts: [],

@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- 海外売上 producer が表ローカルの連結区分 (caption の range 表題・exact 既知 TextBlock) を確定する Gate0 を追加 (従来 grid 文面のみで scope を落としていた 6 文書 36 行を連結に是正)。個別 FY 表題×positive 共存は doc-STOP、不足は null。数値の行/列選択・保存形式は不変、既存 3602 文書の選択差分 0 (59 sealed 照合の 30 文書 184 行の scope 追加差分は SOL review 待ちのため未適用)。データ変更なし。
 - Yahoo crumb 429 を typed deadline 付きで保持し、取込 proxy は 429 + 実残り秒 Retry-After で返す (従来の 502 丸めを是正)。期限内は同一 deadline で再 bootstrap せず、期限切れ後に single-flight で回復。Node recovery の待機 budget cap 30 秒・認証方式・再試行回数は不変。データ変更なし (Refs #163)。
 - Notion read-list 全入口 (TS 共有 client + Python client) の応答メタ (`results`・`has_more`・`next_cursor` の型と組合せ) を厳密検証し、不正・反復カーソル (same・A→B→A) は追加取得前に停止 (再試行なし)。正常本文・保存形式・writer は不変、既存 caller の失敗通知へ伝播。データ変更なし (Fixes #199)。
 - 海外残745 の純 offline PREP を実施 (固定 raw の再生成・changed set 新導出のみ。原本追加取得・本番書込 0。変更候補は検証待ち)。データ変更なし (#202)。
