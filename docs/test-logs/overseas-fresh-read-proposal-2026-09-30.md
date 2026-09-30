@@ -115,9 +115,26 @@ code/test/framework の新規なし。本記録は schema・counts・SHA・limit
   注意: `MAX(submittedAt)` (sourceMaxDate) は無条件全表
   (scoped でも global)。
 - facts/status 修復後の plan (案・未実行): actual fresh Q1 で確定した
-  affected stockIds だけ既再生成を scoped 実行 + bounded pre/post
-  (preimage 存在・upsert 件数・sweep 件数) / reentry 0。旧 L2 は温存しない
-  (stale 行は scoped 再生成で上書き・sweep で消去)。
+  affected stockIds を 1 call ≤97 stockIds の group に分け、既再生成を
+  scoped 実行する (海外入力が regionKind 3 binds + stockIds のため
+  3+N ≤ 100 → N ≤ 97。全 affected を 1 call にしない)。
+  全 groups で単一の実生成 runStartedSec を共有する。
+  per-group に order 入力・overseas 入力・upsert・sweep・pre/post を
+  bounded 化し、reentry 0。旧 L2 は温存しない (stale 行は scoped
+  再生成で上書き・sweep で消去)。
+- 実関数からの exact query-count 公式 (per rebuild call):
+  3 SELECT (受注入力 + 海外入力 + MAX(submittedAt)) +
+  ceil(R/3) upsert (30列×3行=90 binds/文。R = 書込行数 ≤ 対象銘柄数) +
+  1 sweep DELETE = 4 + ceil(R/3)。G groups の総数は Σ (4 + ceil(R_g/3))、
+  上限 37G (R_g ≤ 97 のとき)。pre/post 計数は同一 groups で別途
+  bounded に計数する。
+- scoped MAX(submittedAt) は将来の最小 helper 変更として提案:
+  scoped branch のみ `where(stockIds)` を付け、global default caller
+  (引数なし全量) は不変。global 37980 scan / audit claim はしない。
+- 現状の表明: 既存関数は ≤97 grouping も scoped MAX も強制しない
+  (executor 側の grouping + helper 最小変更は将来 work であり、
+  already provided ではない)。実装・test・READ は今しない。
+- READ74 proposal は将来 L2 reads/writes budget と独立 (別 budget)。
 - 未知 stockIds の取得なし・全37980 audit claim なし。stockIds は
   fresh Q1 の観測 stock_id のみから導出する。
 
