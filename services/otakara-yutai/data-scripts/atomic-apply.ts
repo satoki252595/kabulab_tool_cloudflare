@@ -314,6 +314,27 @@ export function planAtomicBatches(input: {
           `優待行 ${id} の銘柄が今の D1 から引けません (taskId=${u.taskId}。再取得と並行した疑い)`
         );
       }
+      // 同値省略: preimage の 3 実値と完全一致する ID は文を作らない。
+      // preimage/ID の欠落は黙殺せず投げる (ガードを縮めない)。
+      // 要約・推定値・出典の 3 列だけを比べる (掲載文 description は
+      // ABC 更新の対象外のため持ち込まない)。
+      const preimage = input.preimages.get(stockId);
+      if (!preimage) {
+        throw new Error(
+          `銘柄 ${stockId} の preimage がありません (ガード無しの batch は作らない)`
+        );
+      }
+      const row = preimage.benefits.find((b) => b.id === id);
+      if (!row) {
+        throw new Error(
+          `優待行 ${id} (taskId=${u.taskId}) が銘柄 ${stockId} の preimage にありません (同値判定不能のため STOP)`
+        );
+      }
+      const same =
+        row.shortSummary === u.shortSummary &&
+        row.estimatedValue === u.estimatedValue &&
+        row.estimateValueSource === u.estimateValueSource;
+      if (same) continue;
       const list = idsByStock.get(stockId);
       if (list) list.push(id);
       else idsByStock.set(stockId, [id]);

@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- 優待 ABC 131/全文 13 の実再入 0 を保存済み証跡のみで offline 証明 (ABC 473 行全省略・全文 62 行全適用済み・効果文 0、送信口 throw-if-called)。共有 planner に preimage 3 値の同値省略と全文分類を追加。normal C45 は pending/stale を正直計数。証跡 `docs/test-logs/yutai-reentry-proof-20260930.md`。データ変更なし (Refs #146 #102)。
 - Notion read-list 全入口 (TS 共有 client + Python client) の応答メタ (`results`・`has_more`・`next_cursor` の型と組合せ) を厳密検証し、不正・反復カーソル (same・A→B→A) は追加取得前に停止 (再試行なし)。正常本文・保存形式・writer は不変、既存 caller の失敗通知へ伝播。データ変更なし (Fixes #199)。
 - PIP-384 実 entry 再入の直接証跡を公開 proof として追記 (実 upsert 384 全 unchanged・書込 0、応答 strict 検証 395/395・query 全件 + search 全 sequence terminal false。旧比較 proof とは別証跡)。データ変更なし (#201, Refs #132 #146)。
 - C107 有報テキスト 10 文書・364 section を保存済み原文と read-only 精査し 10/10 MATCH (全文 SHA 一致・D1 索引重複 0、HTTP mutation 0)。証跡 `docs/test-logs/c107-yuho-text-audit-2026-09-29.md`。範囲外の主張なし。データ変更なし。
