@@ -71,8 +71,9 @@ import { drizzle, type SqliteRemoteDatabase } from "drizzle-orm/sqlite-proxy";
 import { eq, inArray, sql } from "drizzle-orm";
 
 // guard 設置後に repo runtime を dynamic import する (select-proof と同一順序)。
-// (select-proof の import は同梱の budget-36 guard を global に置くが、本
-// runner が budget-74 の capture guard で上書きするため無害。)
+// (select-proof の import は global fetch を置き換えない
+// (直接 CLI 時のみ設置)。本 runner は main() 内で budget-74 の
+// capture guard を明示設置する。)
 const selectProofMod = await import("./overseas-745-select-proof.js");
 const { createBoundedFetch, assertPerDocCounts, assertProjection, validateQ2Row } = selectProofMod;
 const d1Mod = await import("../../../src/shared/db/d1-http-client.js");
