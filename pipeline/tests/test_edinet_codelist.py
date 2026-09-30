@@ -304,8 +304,22 @@ class TestFetchCodelist:
         assert art.source is Source.EDINET
         assert art.datatype == "codelist"
         assert art.scope == "ALL"
+        assert art.data_date == date(2026, 6, 10)
+        assert "20260610" in art.local_path.name
         assert art.license_tag is LicenseTag.COMMERCIAL_OK
         assert art.url == mod.CODELIST_URL
+
+    def test_missing_source_date_is_not_replaced_by_fetch_date(self, tmp_path, monkeypatch):
+        text = mod._read_codelist_csv(_zip_bytes())
+        _, separator, body = text.partition("\n")
+        assert separator
+        data = _make_zip({"EdinetcodeDlInfo.csv": "\n" + body})
+        monkeypatch.setattr(mod, "fetch", lambda url: SimpleNamespace(content=data))
+        settings = load_settings(env={"RAW_DATA_DIR": str(tmp_path)}, dry_run=True)
+        art = mod.fetch_codelist(settings)
+        assert art.data_date is None
+        assert "nodate" in art.local_path.name
+        assert art.local_path.read_bytes() == data
 
     def test_on_response_receives_same_response(self, tmp_path, monkeypatch):
         """同一 Response を callback へ渡す。渡さない既存呼び出しは不変。"""

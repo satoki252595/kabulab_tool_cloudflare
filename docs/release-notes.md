@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- EDINETコードリストの原本基準日をCSVの公表日から保存し、取得時刻と分離。マスタ・業種同期の行検証を共有し、空白行による業種同期の停止を修正。
 - price40 corrective 9/29 本番適用 (APPLIED 40/unknown 0/write0 0。outside-held 7 + source-excluded 7。D1 SELECT 3 + batch POST 4 の文計 19 + Notion receipt 1。旧 LOCAL_REJECT は 745 fetch 置換が確定的 root cause (PR236 修正済み)。原本 receipt 508 は immutable archive 済み。新 receipt payload 7238B `1dd240e9…`。ACTUAL post 40 full7 照合 + same-producer reentry-0 PROOF-OK)。証跡 `docs/test-logs/price40-corrective-prep-20260930.md`。
 - VWAP 日足 producer の proof 化 + full-10y 適格 (fetchDaily が body 完了 clock・raw SHA・要求 range の proof を発行し meta echo 照合。通常 daily は 10y を 1 社 1 回取得し全置換。adj は金融入力外で bare OHLCV。intra 適格は span 一致・session 包含・splits 完全一致・窓内 split なし・10y のみ。daily 配信は 5y/legacy も構造どおり提供)。JSS public/private を再 deploy (public `9b6d5c8c`・private `b48fdc77`、health/licenses 200・無キー 401、100% active)。データ変更なし (#237, Refs #117)。
 - price40 corrective PREP (未実行): 失敗 ONE の原本 receipt (同一 key/body) の archive 計画 (private thin runner + preflight0 PASS) と corrective 40 packet (merged-236 の 745 module pin 追随のみ。frozen body 不変。preflight0 PASS + pure proof PROOF-OK)。証跡 `docs/test-logs/price40-corrective-prep-20260930.md`。live なし、データ変更なし。
