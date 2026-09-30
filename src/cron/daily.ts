@@ -53,8 +53,11 @@ import {
   ensurePriceSyncDb,
   recordPriceSyncLog,
   recordPrimaryData,
+  verifyArchivedAttachments,
   type PriceSyncStatus,
 } from "../shared/notion-archive/index.js";
+import { sha256HexBytes } from "../shared/sha256.js";
+import { selectConfirmedCloses } from "./macro-session.js";
 
 // core スキーマ (共有。日次 sync が更新)
 import * as coreSchema from "../shared/db/core-schema.js";
@@ -272,14 +275,31 @@ type MarketContextTarget =
   | MarketContextChartSymbol
   | typeof NIKKEI_VI_TARGET;
 interface MarketContextChartValue {
+  /** 最新 confirmed bar の実終値 (形成中バー・snapshot は入れない)。 */
   price: number | null;
+  /** 確定日より前の最新バーの実終値。無ければ null (pct は null)。 */
   prevClose: number | null;
-  /** 最新バーの日付 ('YYYY-MM-DD')。N225 の実バー日が行キーの照合に使う。 */
+  /** price バーの日付 ('YYYY-MM-DD')。GSPC の確定日が行キーになる。 */
   date: string | null;
 }
 interface MarketContextDraft {
   charts: Record<MarketContextChartSymbol, MarketContextChartValue>;
   nikkeiVi: number | null;
+  /** VI の ZXD (データ日付)。行キーとの照合に使う。 */
+  nikkeiViDate: string | null;
+}
+/** マクロ一次原本の run-local collector (1 target × attempt ごとに 1 件)。 */
+interface MacroRawAttempt {
+  target: MarketContextTarget;
+  attempt: number;
+  /** 実要求開始・完了時刻 (ISO8601)。run startedAt とは別に attempt 毎。 */
+  requestedAt: string;
+  completedAt: string;
+  status: number | null;
+  bytes: Uint8Array | null;
+  sha256: string | null;
+  /** 通信失敗などで body が無い理由 (body があるとき null)。 */
+  noBodyReason: string | null;
 }
 /**
  * swing_daily_ohlcv の保持本数 (営業日相当)。増分 upsert と併せて書込/容量を抑える。
@@ -1081,10 +1101,12 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   // 日付キーと週1ゲートは run 開始時刻に固定する (F-05。Phase 実行時刻で
   // 評価し直すと日跨ぎで prune/年次が飢餓し、表の日付がずれる)。
   const { runDate: targetDate, runMonday } = runDateKeys(startedAt);
-  if (stocksOnly) {
+  // 株式の時間窓・N225 対象日/fresh-close guard は全 stock パス共通
+  // (stocksOnly でも default でも同じ。stocksOnly はマクロ有無だけを決める)。
+  {
     const utcMinutes = new Date(startedAt).getUTCHours() * 60 + new Date(startedAt).getUTCMinutes();
     if (utcMinutes < 390 || utcMinutes >= 1260) {
-      throw new Error("株式専用同期は東証15:30 JST終了後から翌06:00 JST基準までに実行してください");
+      throw new Error("株式同期は東証15:30 JST終了後から翌06:00 JST基準までに実行してください");
     }
     // 日本祝日カレンダーを推測しない。対象日の実日足 (日付 + 実終値) が
     // なければ全書込を止める。日付だけの gate では対象日の fresh null bar が
@@ -1134,17 +1156,9 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   // -----------------------------------------------------------------
   console.info(`[sync-daily] Phase 2: マクロコンテキスト${stocksOnly ? "対象外" : "取得"}`);
   const marketContext = stocksOnly ? null : await fetchMarketContextDraft();
-  const deferMarketContextPersistence = marketContext?.failures.some(
-    ({ error }) => isTransientDailySyncFailure(error)
-  );
   let marketContextOk: boolean | null | undefined = stocksOnly ? null : undefined;
-  if (marketContext !== null && !deferMarketContextPersistence) {
-    marketContextOk = await persistMarketContextWithDiagnostics(
-      db,
-      marketContext.draft,
-      targetDate
-    );
-  }
+  // Phase 2 では persist しない。回収後の最終 draft を下流で 1 回だけ
+  // 保管+保存する (初回保存と回収後保存の集約。銘柄の保存順序は不変)。
 
   // -----------------------------------------------------------------
   // Phase 3: 銘柄ごとのフェッチ + 計算 + DB 書き込み (worker pool)
@@ -1175,7 +1189,7 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
       try {
         await stockStartGate.wait();
         const snap = await buildSnapshot(target.id, target.code, target.sector,
-          stocksOnly ? targetDate : undefined,
+          targetDate,
           jssAnnualByCode.get(target.code) ?? []);
         pending.push({
           target,
@@ -1241,7 +1255,8 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
           if (marketContext === null) throw new Error("株式専用同期でマクロ回収を要求しました");
           await fetchMarketContextTarget(
             marketContext.draft,
-            recoveryTarget.target
+            recoveryTarget.target,
+            marketContext.collector
           );
           return;
         }
@@ -1249,7 +1264,7 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
         const target = recoveryTarget.target;
         await stockStartGate.wait();
         const snap = await buildSnapshot(target.id, target.code, target.sector,
-          stocksOnly ? targetDate : undefined,
+          targetDate,
           jssAnnualByCode.get(target.code) ?? []);
         const gapDates = collectOhlcvGapCandidates(
           snap.ohlcv6mo,
@@ -1300,11 +1315,14 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
     }
   }
 
-  if (marketContext !== null && marketContextOk === undefined) {
-    marketContextOk = await persistMarketContextWithDiagnostics(
+  // 最終 draft の保管+保存はここで 1 回だけ (daily/context-only 共通)。
+  // HOLD でも実取得の原本は保管する。保管失敗は throw (丸めない)。
+  if (marketContext !== null) {
+    marketContextOk = await archiveAndPersistMarketContext(
       db,
+      startedAt,
       marketContext.draft,
-      targetDate
+      marketContext.collector
     );
   }
 
@@ -1372,7 +1390,7 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   if (marketContextOk === undefined) throw new Error("マクロ同期結果を確認できません");
-  if (stocksOnly && Date.now() > Date.parse(`${targetDate}T21:00:00Z`)) {
+  if (Date.now() > Date.parse(`${targetDate}T21:00:00Z`)) {
     throw new Error(
       `株式同期が ${targetDate} の翌06:00 JST基準を超えました。` +
       "基準後の値は過去レポートに使えません。日次レポートの欠損と同期遅延を確認してください。"
@@ -1441,15 +1459,13 @@ export async function runMarketContextSync(db: Db): Promise<boolean> {
   const context = await fetchMarketContextDraft();
   const recovery = await recoverTransientDailyFailures(
     context.failures,
-    (target) => fetchMarketContextTarget(context.draft, target),
+    (target) => fetchMarketContextTarget(context.draft, target, context.collector),
     { deadlineMs: startedAt + RECOVERY_TIME_BUDGET_MS },
   );
   for (const failure of recovery.failures) {
     console.warn(`[sync-context] マクロ未回復 ${failure.target}:`, failure.error);
   }
-  // 日付キーは run 開始日に固定する (F-05 同型)。
-  const runDate = runDateKeys(startedAt).runDate;
-  return persistMarketContextWithDiagnostics(db, context.draft, runDate);
+  return archiveAndPersistMarketContext(db, startedAt, context.draft, context.collector);
 }
 
 /**
@@ -1589,7 +1605,7 @@ async function buildSnapshot(
   stockId: number,
   code: string,
   sector: string | null,
-  expectedDate?: string,
+  expectedDate: string,
   jssAnnualRows: JssAnnualRow[] = [],
 ): Promise<StockSnapshot> {
   // 1 回の Chart(5y) + QuoteSummary で全指標を賄う
@@ -1597,15 +1613,14 @@ async function buildSnapshot(
 
   // -- 6mo スライス (swing 用指標の入力。fresh gate の対象もここ) --
   const ohlcv6mo = raw.ohlcv.slice(-130);
-  if (expectedDate !== undefined) {
-    // 日付一致だけでなく対象日の実終値 (adj ?? close) も要求する。
-    // 対象日の fresh null bar を日付だけで合格にすると、古い終値で計算した
-    // 指標を対象日付で保存してしまう (F-01)。正当な欠損は未取得扱いにし、
-    // 値の補完はしない (ルール2)。RSI を含む全 technical 計算の前に落とす。
-    const fresh = checkFreshClose(ohlcv6mo.at(-1), expectedDate);
-    if (!fresh.ok) {
-      throw new Error(`${code}: 対象 ${expectedDate} の実日足が未取得です。古い日の指標を書き直しません。`);
-    }
+  // 日付一致だけでなく対象日の実終値 (adj ?? close) も要求する。
+  // 対象日の fresh null bar を日付だけで合格にすると、古い終値で計算した
+  // 指標を対象日付で保存してしまう (F-01)。正当な欠損は未取得扱いにし、
+  // 値の補完はしない (ルール2)。RSI を含む全 technical 計算の前に落とす。
+  // expectedDate は必須 (全 stock パス共通)。dataDate への黙殺代替なし。
+  const fresh = checkFreshClose(ohlcv6mo.at(-1), expectedDate);
+  if (!fresh.ok) {
+    throw new Error(`${code}: 対象 ${expectedDate} の実日足が未取得です。古い日の指標を書き直しません。`);
   }
 
   // -- RSI 時系列 (5y 全量) → percentile —— adjclose ベースで分割歪みを除去 --
@@ -1623,10 +1638,7 @@ async function buildSnapshot(
   // 優良株選定の年度売上は正本の年次系列 (001 銘柄詳細と共用の gate で整形)。
   // Yahoo 年次 (raw.annualFinancials) は旧表の writer にだけ残す。
   // TTM 営業利益率は Yahoo のまま (単年 jss 値に置き換えると定義が変わる)。
-  const annualSeries = pickAnnualSeries(
-    jssAnnualRows,
-    expectedDate ?? raw.dataDate
-  );
+  const annualSeries = pickAnnualSeries(jssAnnualRows, expectedDate);
   const blueChip = evaluateBlueChip(annualSeries, raw.operatingMarginTtm);
 
   // -- 6mo スライス → swing 用指標 —— adjclose ベースで分割歪みを除去 --
@@ -1688,7 +1700,9 @@ async function buildSnapshot(
     latestHigh: latestRow?.high ?? null,
     latestLow: latestRow?.low ?? null,
     latestVolume: latestRow?.volume ?? null,
-    latestDate: latestRow?.date ?? raw.dataDate,
+    // fresh gate が latest 行・日付 = expectedDate を証明済み。
+    // dataDate への代替は置かない (dataDate は quote metadata として別保持)。
+    latestDate: expectedDate,
     previousClose:
       ohlcv6mo.length >= 2
         ? (ohlcv6mo[ohlcv6mo.length - 2].close ?? null)
@@ -2612,32 +2626,131 @@ function createMarketContextDraft(): MarketContextDraft {
       "NIY=F": { price: null, prevClose: null, date: null },
     },
     nikkeiVi: null,
+    nikkeiViDate: null,
   };
+}
+
+/**
+ * 原本 collector へ 1 attempt を追記する。回収 attempt は別番号で保持し、
+ * 初回原本を上書きしない。body が無い通信失敗も理由つきで記録する。
+ */
+async function collectMacroRawAttempt(
+  collector: MacroRawAttempt[],
+  target: MarketContextTarget,
+  requestedAt: string,
+  capture: { status: number; bytes: Uint8Array } | null,
+  noBodyReason: string | null
+): Promise<void> {
+  const attempt = collector.filter((a) => a.target === target).length;
+  collector.push({
+    target,
+    attempt,
+    requestedAt,
+    completedAt: new Date().toISOString(),
+    status: capture?.status ?? null,
+    bytes: capture ? new Uint8Array(capture.bytes) : null,
+    sha256: capture ? await sha256HexBytes(Uint8Array.from(capture.bytes)) : null,
+    noBodyReason: capture ? null : (noBodyReason ?? "body なし (onRaw 未発火)"),
+  });
 }
 
 async function fetchMarketContextTarget(
   draft: MarketContextDraft,
-  target: MarketContextTarget
+  target: MarketContextTarget,
+  collector: MacroRawAttempt[]
 ): Promise<void> {
+  const requestedAt = new Date().toISOString();
   if (target === NIKKEI_VI_TARGET) {
-    const snapshot = await fetchNikkeiVi();
-    draft.nikkeiVi = snapshot.price;
+    let capture: { status: number; bytes: Uint8Array } | null = null;
+    try {
+      const snapshot = await fetchNikkeiVi({
+        onRaw: (cap) => {
+          capture = cap;
+        },
+      });
+      await collectMacroRawAttempt(collector, target, requestedAt, capture, null);
+      if (capture === null) {
+        console.warn(
+          `[sync-daily]   マクロ対象 ${target}: 原文 capture が無いため採用しません。保存時に HOLD します。`
+        );
+        return;
+      }
+      draft.nikkeiVi = snapshot.price;
+      draft.nikkeiViDate = snapshot.date;
+    } catch (error) {
+      await collectMacroRawAttempt(
+        collector,
+        target,
+        requestedAt,
+        capture,
+        `取得失敗 (body ${capture ? "あり" : "なし"}): ${rootCauseMessage(error)}`
+      );
+      throw error;
+    }
     return;
   }
 
-  const chart = await fetchChart(target, "1mo");
-  draft.charts[target] = {
-    price: chart.price,
-    prevClose: chart.previousClose,
-    date: chart.ohlcv.at(-1)?.date ?? null,
+  // holder 経由で受け取る (closure 代入の変数を直接 narrow しない)。
+  const capture: { current: { status: number; bytes: Uint8Array } | null } = {
+    current: null,
   };
+  try {
+    const chart = await fetchChart(target, "1mo", {
+      onRaw: (cap) => {
+        capture.current = cap;
+      },
+    });
+    await collectMacroRawAttempt(collector, target, requestedAt, capture.current, null);
+    const raw = capture.current;
+    if (raw === null) {
+      // 原本 capture 必須 (NIY snapshot も含む全 target)。hook 未発火の
+      // 契約後退があっても原本なしの値を採用しない。保存時に HOLD する。
+      console.warn(
+        `[sync-daily]   マクロ対象 ${target}: 原文 capture が無いため採用しません。保存時に HOLD します。`
+      );
+      return;
+    }
+    if (target === "NIY=F") {
+      // NIY は confirmed helper の対象外。snapshot をそのまま使う
+      // (確定日足扱いしない。日付は最新バー日で照合には使わない)。
+      draft.charts[target] = {
+        price: chart.price,
+        prevClose: chart.previousClose,
+        date: chart.ohlcv.at(-1)?.date ?? null,
+      };
+      return;
+    }
+    try {
+      const confirmed = selectConfirmedCloses(raw.bytes, chart.ohlcv, target);
+      draft.charts[target] = {
+        price: confirmed.value,
+        prevClose: confirmed.prev,
+        date: confirmed.date,
+      };
+    } catch (error) {
+      // session 不足・形成中のみ・確定バー欠落は fetch 失敗ではない。
+      // 回収対象にせず、保存時の日付 gate で HOLD する。
+      console.warn(`[sync-daily]   マクロ対象 ${target}:`, rootCauseMessage(error));
+    }
+  } catch (error) {
+    await collectMacroRawAttempt(
+      collector,
+      target,
+      requestedAt,
+      capture.current,
+      `取得失敗 (body ${capture.current ? "あり" : "なし"}): ${rootCauseMessage(error)}`
+    );
+    throw error;
+  }
 }
 
 async function fetchMarketContextDraft(): Promise<{
   draft: MarketContextDraft;
   failures: DailyRecoveryFailure<MarketContextTarget>[];
+  collector: MacroRawAttempt[];
 }> {
   const draft = createMarketContextDraft();
+  const collector: MacroRawAttempt[] = [];
   const failures: DailyRecoveryFailure<MarketContextTarget>[] = [];
   const targets: readonly MarketContextTarget[] = [
     ...MARKET_CONTEXT_CHART_SYMBOLS,
@@ -2647,7 +2760,7 @@ async function fetchMarketContextDraft(): Promise<{
   await Promise.all(
     targets.map(async (target) => {
       try {
-        await fetchMarketContextTarget(draft, target);
+        await fetchMarketContextTarget(draft, target, collector);
       } catch (error) {
         const message = rootCauseMessage(error);
         failures.push({ target, error: message });
@@ -2656,27 +2769,76 @@ async function fetchMarketContextDraft(): Promise<{
     })
   );
 
-  return { draft, failures };
+  return { draft, failures, collector };
+}
+
+interface MarketContextGate {
+  ok: boolean;
+  key: string | null;
+  reason: string;
+}
+
+/**
+ * 正準 gate (純関数)。INSERT の前に必須データの完全性を判定する。
+ * 行キーは GSPC の確定バー日。N225/VIX 確定日と VI 日付 (ZXD) が
+ * キーと一致し、必須の確定終値・前日終値・snapshot が揃うときだけ
+ * 書く。異なる取引日の脚を混ぜた行・null で前回行を潰す部分行を
+ * 残さない。NIY は snapshot のため日付照合はしない (価格は必須)。
+ * 曜日もカレンダーも見ない。
+ */
+function decideMarketContextGate(draft: MarketContextDraft): MarketContextGate {
+  const key = draft.charts["^GSPC"].date;
+  const n225 = draft.charts["^N225"];
+  const vix = draft.charts["^VIX"];
+  const gspc = draft.charts["^GSPC"];
+  const niy = draft.charts["NIY=F"];
+  if (key === null) {
+    return { ok: false, key: null, reason: "GSPC 確定日が無い (取得失敗または session 不足)" };
+  }
+  const dates: Array<[string, string | null]> = [
+    ["N225 確定日", n225.date],
+    ["VIX 確定日", vix.date],
+    ["VI 日付", draft.nikkeiViDate],
+  ];
+  for (const [name, d] of dates) {
+    if (d === null) {
+      return { ok: false, key, reason: `${name}が無い (取得失敗または session 不足)` };
+    }
+    if (d !== key) {
+      return { ok: false, key, reason: `${name} ${d} ≠ GSPC ${key} (混ぜない)` };
+    }
+  }
+  const required: Array<[string, number | null]> = [
+    ["N225 確定終値", n225.price],
+    ["N225 前日終値", n225.prevClose],
+    ["GSPC 確定終値", gspc.price],
+    ["GSPC 前日終値", gspc.prevClose],
+    ["VIX 確定終値", vix.price],
+    ["NIY snapshot", niy.price],
+    ["VI 価格", draft.nikkeiVi],
+  ];
+  for (const [name, v] of required) {
+    if (v === null) {
+      return { ok: false, key, reason: `${name}が無い (部分行を書かない)` };
+    }
+  }
+  return { ok: true, key, reason: "確定日・必須値が一致" };
 }
 
 async function persistMarketContext(
   db: Db,
-  draft: MarketContextDraft,
-  runDate: string
+  draft: MarketContextDraft
 ): Promise<boolean> {
-  // 日付キーは呼び出し側が run 開始日から決める (実行時刻だと日跨ぎでずれる。F-05 同型)。
-  // 書くのは N225 の実バー日と一致するときだけ (F-06)。不一致 (休場・取得
-  // 遅延・N225 取得失敗) は書かず前回値を残す。日付の一致で判定し、曜日の
-  // 推測もカレンダーも使わない。一致するとき run 日≡取引日になる。
-  const n225BarDate = draft.charts["^N225"].date;
-  if (n225BarDate === null || n225BarDate !== runDate) {
+  // 書くのは正準 gate が通るときだけ (F-06 の後継)。不一致・不足は
+  // 書かず前回値を残す (HOLD)。実行日・run 日はキーに使わない。
+  const gate = decideMarketContextGate(draft);
+  if (!gate.ok || gate.key === null) {
     console.warn(
-      `[sync-daily]   マクロ保存スキップ: N225 実日足=${n225BarDate ?? "未取得"} が ` +
-        `run 日 ${runDate} と不一致 (休場または取得遅延)。前回値を保持します。`
+      `[sync-daily]   マクロ保存スキップ (HOLD): ${gate.reason}。前回値を保持します。`
     );
     return false;
   }
-  const today = runDate;
+  const today = gate.key;
   const n225 = draft.charts["^N225"];
   const vix = draft.charts["^VIX"];
   const gspc = draft.charts["^GSPC"];
@@ -2735,24 +2897,17 @@ async function persistMarketContext(
       },
     });
 
-  return (
-    n225.price !== null &&
-    n225.prevClose !== null &&
-    vix.price !== null &&
-    gspc.price !== null &&
-    gspc.prevClose !== null &&
-    niy.price !== null &&
-    nikkeiVi !== null
-  );
+  // ここまで来たら gate が必須値の完全性を保証済み。INSERT 後の
+  // 部分行チェックは gate 前へ移動したので true を返す。
+  return true;
 }
 
 async function persistMarketContextWithDiagnostics(
   db: Db,
-  draft: MarketContextDraft,
-  runDate: string
+  draft: MarketContextDraft
 ): Promise<boolean> {
   try {
-    return await persistMarketContext(db, draft, runDate);
+    return await persistMarketContext(db, draft);
   } catch (error) {
     console.warn(
       "[sync-daily]   マクロ保存失敗:",
@@ -2760,6 +2915,132 @@ async function persistMarketContextWithDiagnostics(
     );
     return false;
   }
+}
+
+/** マクロ一次原本バッチの冪等 key (run 一意。実 startedAt + 既存 runId)。 */
+function macroSourceBatchKey(runId: string, startedAt: number): string {
+  return `macro-source-batch-${runId}-${startedAt}`;
+}
+
+function macroRawFileTag(target: MarketContextTarget): string {
+  if (target === NIKKEI_VI_TARGET) return "VI";
+  if (target === "NIY=F") return "NIY";
+  return target.replace(/^\^/, "");
+}
+
+/**
+ * 最終 draft + 同一 generation の原本を保管し、strict readback が通って
+ * 初めて D1 へ persist する。daily/context-only 両 caller の唯一の経路。
+ *
+ * 保管失敗 (fileTooLarge・非 recorded・manifest 不一致・readback 不一致) は
+ * この catch の外 = 呼び出し側へ throw し、false/success に丸めない。
+ * 未回復 target・日付不足の HOLD でも実取得の原本は保管する (save 0)。
+ */
+async function archiveAndPersistMarketContext(
+  db: Db,
+  startedAt: number,
+  draft: MarketContextDraft,
+  attempts: readonly MacroRawAttempt[]
+): Promise<boolean> {
+  await archiveMacroSourceBatch({ startedAt, draft, attempts });
+  return persistMarketContextWithDiagnostics(db, draft);
+}
+
+async function archiveMacroSourceBatch(args: {
+  startedAt: number;
+  draft: MarketContextDraft;
+  attempts: readonly MacroRawAttempt[];
+}): Promise<string> {
+  const runId = priceSyncBatchRunId(args.startedAt);
+  const key = macroSourceBatchKey(runId, args.startedAt);
+  if (args.attempts.length === 0) {
+    throw new Error("マクロ一次原本: attempt 記録が空 (内部不整合のため STOP)");
+  }
+  // fetchedAt は run 開始ではなく実観測の完了 (全 attempt の最新
+  // completedAt)。run startedAt は provenance として別途残す。
+  const fetchedAt = args.attempts
+    .map((a) => a.completedAt)
+    .sort()
+    .at(-1) as string;
+  const gate = decideMarketContextGate(args.draft);
+  const files: Array<{ filename: string; bytes: Uint8Array; contentType: string }> = [];
+  const attemptEntries = args.attempts.map((a) => {
+    let filename: string | null = null;
+    if (a.bytes !== null) {
+      const ext = a.target === NIKKEI_VI_TARGET ? "html" : "json";
+      filename = `macro-${macroRawFileTag(a.target)}-attempt${a.attempt}.${ext}`;
+      files.push({
+        filename,
+        bytes: a.bytes,
+        contentType: a.target === NIKKEI_VI_TARGET ? "text/html" : "application/json",
+      });
+    }
+    return {
+      target: a.target,
+      attempt: a.attempt,
+      requestedAt: a.requestedAt,
+      completedAt: a.completedAt,
+      status: a.status,
+      byteLength: a.bytes?.length ?? null,
+      sha256: a.sha256,
+      filename,
+      noBodyReason: a.noBodyReason,
+    };
+  });
+  const manifest = {
+    service: "stock-sync",
+    kind: "macro-source-batch",
+    key,
+    runId,
+    startedAt: new Date(args.startedAt).toISOString(),
+    gate,
+    draft: {
+      charts: Object.fromEntries(
+        MARKET_CONTEXT_CHART_SYMBOLS.map((s) => [s, args.draft.charts[s]])
+      ),
+      nikkeiVi: args.draft.nikkeiVi,
+      nikkeiViDate: args.draft.nikkeiViDate,
+    },
+    attempts: attemptEntries,
+  };
+  const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
+  files.push({
+    filename: "macro-manifest.json",
+    bytes: manifestBytes,
+    contentType: "application/json",
+  });
+
+  const res = await recordPrimaryData({
+    service: "stock-sync",
+    key,
+    source: "macro-producer final-draft + same-generation raw (chart onRaw + VI HTML)",
+    fetchedAt,
+    metadata: {
+      key,
+      runId,
+      startedAt: new Date(args.startedAt).toISOString(),
+      gate,
+      keyDates: {
+        gspc: args.draft.charts["^GSPC"].date,
+        n225: args.draft.charts["^N225"].date,
+        vi: args.draft.nikkeiViDate,
+      },
+      attemptCount: args.attempts.length,
+      fileCount: files.length,
+    },
+    files,
+    force: false,
+  });
+  if (res.fileTooLarge) {
+    throw new Error(`マクロ一次原本の保管が不完全 (fileTooLarge): ${key}`);
+  }
+  if (res.outcome !== "recorded" || res.manifestMatch !== "written") {
+    throw new Error(
+      `マクロ一次原本の保管が不完全 (outcome=${res.outcome} manifest=${res.manifestMatch}): ${key}`
+    );
+  }
+  await verifyArchivedAttachments(res.pageId, files, "マクロ一次原本");
+  return res.pageId;
 }
 
 function sleep(ms: number): Promise<void> {

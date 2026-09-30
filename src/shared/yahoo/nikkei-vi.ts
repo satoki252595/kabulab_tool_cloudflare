@@ -33,7 +33,22 @@ export interface NikkeiViSnapshot {
   latestTimestamp: string | null;
 }
 
-export async function fetchNikkeiVi(): Promise<NikkeiViSnapshot> {
+export interface NikkeiViRawCapture {
+  status: number;
+  bytes: Uint8Array;
+}
+
+export interface FetchNikkeiViOptions {
+  /**
+   * 原文 capture の受取 (任意・1 件)。chart の onRaw と同型。
+   * HTTP 判定より前に clone して呼ぶ (未指定の通常呼出は従来どおり)。
+   */
+  onRaw?: (capture: NikkeiViRawCapture) => void | Promise<void>;
+}
+
+export async function fetchNikkeiVi(
+  options?: FetchNikkeiViOptions
+): Promise<NikkeiViSnapshot> {
   const res = await fetch(NIKKEI_SMARTCHART_URL, {
     headers: {
       "User-Agent":
@@ -42,6 +57,11 @@ export async function fetchNikkeiVi(): Promise<NikkeiViSnapshot> {
       "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
     },
   });
+
+  if (options?.onRaw) {
+    const bytes = new Uint8Array(await res.clone().arrayBuffer());
+    await options.onRaw({ status: res.status, bytes });
+  }
 
   if (!res.ok) {
     throw new Error(
@@ -99,9 +119,36 @@ export async function fetchNikkeiVi(): Promise<NikkeiViSnapshot> {
     );
   }
 
-  const date =
-    typeof o.ZXD === "string" ? o.ZXD : new Date().toISOString().split("T")[0];
-  const latestTimestamp = typeof o["DPP:T"] === "string" ? o["DPP:T"] : null;
+  // ZXD (データ日付) の欠損・不正を実行日での黙殺補完はしない (ルール2)。
+  // 前日終値 PRP の日付も原文に無いので推測しない。どちらも欠ければ
+  // 呼び出し側が HOLD する (確定日照合の材料に自明な日付を入れない)。
+  if (typeof o.ZXD !== "string" || !isCalendarDateString(o.ZXD)) {
+    throw new Error(
+      "Nikkei smartchart: ZXD (データ日付) が暦上有効な YYYY-MM-DD ではありません (欠損・不正のため STOP)"
+    );
+  }
+  const date = o.ZXD;
+  // DPP:T (現在値タイムスタンプ) は explicit TZ 付き ISO8601 が必須で、
+  // 日付が ZXD と一致すること。欠損・不正・日付不一致は STOP
+  // (呼び出し側 HOLD)。異なる日の古い tick と当日の ZXD を混ぜない。
+  // Date.parse だけでは Feb30 繰り上げ・TZ 無しを通すため別途検証する。
+  const dppT = o["DPP:T"];
+  if (typeof dppT !== "string" || !isTimestampWithZone(dppT)) {
+    throw new Error(
+      "Nikkei smartchart: DPP:T (現在値タイムスタンプ) が TZ 付き ISO8601 ではありません (STOP)"
+    );
+  }
+  if (!isCalendarDateString(dppT.slice(0, 10))) {
+    throw new Error(
+      "Nikkei smartchart: DPP:T の日付が暦上有効ではありません (STOP)"
+    );
+  }
+  if (dppT.slice(0, 10) !== date) {
+    throw new Error(
+      `Nikkei smartchart: DPP:T の日付 ${dppT.slice(0, 10)} と ZXD ${date} が一致しません (STOP)`
+    );
+  }
+  const latestTimestamp = dppT;
 
   return {
     price: dpp,
@@ -111,6 +158,31 @@ export async function fetchNikkeiVi(): Promise<NikkeiViSnapshot> {
     date,
     latestTimestamp,
   };
+}
+
+/** 暦上有効な YYYY-MM-DD (Feb30・13月などの繰り上げ元を拒否)。 */
+function isCalendarDateString(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1) return false;
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const dim = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1];
+  return d <= dim;
+}
+
+/** explicit Z/signed-offset 付き ISO8601 (TZ 無しを拒否)。 */
+function isTimestampWithZone(value: string): boolean {
+  if (
+    !/^\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?(\.\d+)?(Z|[+-]([01]\d|2[0-3]):?[0-5]\d)$/.test(
+      value
+    )
+  ) {
+    return false;
+  }
+  return !Number.isNaN(Date.parse(value));
 }
 
 function parseNumericField(value: unknown, name: string): number {

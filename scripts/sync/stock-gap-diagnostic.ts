@@ -33,7 +33,7 @@ import {
   parseChartResponse,
   type ChartResult,
 } from "../../src/shared/yahoo/client.js";
-import { listPageFiles, recordPrimaryData } from "../../src/shared/notion-archive/index.js";
+import { recordPrimaryData, verifyArchivedAttachments } from "../../src/shared/notion-archive/index.js";
 import { sha256HexBytes } from "../../src/shared/sha256.js";
 import { requireYahooProxyForNodeSync, sharedEnv } from "../../src/shared/env.js";
 import { rootCauseMessage } from "../../src/shared/errors.js";
@@ -433,39 +433,14 @@ export async function recordDiagBatch(
 }
 
 /**
- * 保管直後の readback 照合: 添付の件数・名前・hosted・全 bytes (長さ+SHA256)
- * が記録時と一致すること。現 main の strict `listPageFiles`
- * (不正要素は throw) を使い、短縮・欠落があれば件数不一致で HOLD する。
+ * 保管直後の readback 照合 (契約維持の薄い wrapper。実体は共有
+ * `verifyArchivedAttachments` に移動し label「診断バッチ」で旧文面を保つ)。
  */
 export async function verifyDiagBatchAttachments(
   pageId: string,
   files: readonly DiagBatchFile[]
 ): Promise<void> {
-  const fail = (why: string): never => {
-    throw new Error(`診断バッチの readback 照合に失敗したため HOLD: ${why}`);
-  };
-  const names = files.map((f) => f.filename);
-  if (new Set(names).size !== names.length) fail("添付名の重複 (内部不整合)");
-  const hosted = await listPageFiles(pageId, "Files");
-  if (hosted.length !== files.length) {
-    fail(`添付 ${hosted.length} 件 ≠ 記録 ${files.length} 件`);
-  }
-  const byName = new Map(hosted.map((h) => [h.name, h]));
-  for (const f of files) {
-    const got = byName.get(f.filename) ?? fail(`添付「${f.filename}」なし`);
-    if (got.kind !== "file") fail(`「${f.filename}」が Notion-hosted 添付ではありません`);
-    const res = await fetch(got.url);
-    if (!res.ok) fail(`「${f.filename}」の再取得に失敗 status=${res.status}`);
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.length !== f.bytes.length) {
-      fail(`「${f.filename}」のバイト長 ${bytes.length} ≠ ${f.bytes.length}`);
-    }
-    const [gotSha, wantSha] = await Promise.all([
-      sha256HexBytes(Uint8Array.from(bytes)),
-      sha256HexBytes(Uint8Array.from(f.bytes)),
-    ]);
-    if (gotSha !== wantSha) fail(`「${f.filename}」の SHA256 不一致`);
-  }
+  return verifyArchivedAttachments(pageId, files, "診断バッチ");
 }
 
 export interface GapDiagFetchResult {
