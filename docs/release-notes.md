@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- VWAP batch summary の metadata を counts+pin+集約のみに縮小し per-code outcomes は物理 JSON 本文に保持 (旧 full 内包は約 530KB・266 分割で Notion 上限超過 → run 36698387232 の daily archive が 413 UNKNOWN・intra 0。証跡 `docs/vwap-run36698387232-413-unknown-20260930.md`)。データ変更なし (Refs #117)。
 - 共有 Yahoo parse 境界で request/response の meta.symbol 一致を検証 (不一致・欠落は throw、alias 推測なし。既存 normalize のみ)。データ変更なし。
 - VWAP 取込 producer の root 修正 (R2 送信 1 試行・PUT 応答契約・rejected/unknown 分別・GET 厳格 bootstrap、Yahoo 真正 empty は timestamp 空配列のみ・全行欠落と malformed は throw、保存形状 strict、R2 fault で新規停止・保管失敗は exit 2、knob 型付き取得)。データ変更なし (Refs #117)。
 - 海外 fresh full READ を capture runner で実行 (Q1F 17射影 + Q2F 13射影 × 37 chunks = 74 SELECT。3675全通観測・21245 facts・missing 0。grant-first・preflight・fsync-first log・whole body wx0600・safe receipt・retry 0)。旧 1781/1894 は historical のみ、現行基準は frozen 3675 + NEW full16/Q2 all13。証跡 `docs/test-logs/overseas-fresh-read-proposal-2026-09-30.md`。D1 READ 74 のみ、source/Notion/D1書込/R2/dispatch 0、データ変更なし。
