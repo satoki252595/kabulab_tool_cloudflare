@@ -21,8 +21,10 @@
  * 背景: 以前の取込は、優待行とジャンルを全削除してから作り直していた。取込を母集団に
  * 絞ったあとも全削除のままだと、母集団外の銘柄の優待行と、作り直せない解釈が消える。
  *
- * 掲載文はすべて架空。D1 は yutai-stock-universe.test.ts と同じく、drizzle/d1 の
- * マイグレーションを流したローカル SQLite に sqlite-proxy で向ける (外部キーも効く)。
+ * 既存テストの掲載文はすべて架空。共有厳密判定・carry・利回り追随のテストは
+ * raw34 の原文抜粋 (`./raw34-excerpts.ts`) を使う。D1 は
+ * yutai-stock-universe.test.ts と同じく、drizzle/d1 のマイグレーションを流した
+ * ローカル SQLite に sqlite-proxy で向ける (外部キーも効く)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
