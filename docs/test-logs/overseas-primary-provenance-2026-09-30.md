@@ -1,0 +1,121 @@
+# Primary provenance inventory (2026-09-30・LOCAL のみ・新規送信 0)
+
+59 closure PARTIAL 受理後の LOCAL 作業。保存済み artifacts +
+local FS 読みのみ。source / live Notion / D1 新規操作 0・
+新規 grant 消費なし。
+
+## A. 60th page forensics (GET 0・captured のみ)
+
+- 対象 `S100YWM7:type1` (Tier B 先頭・fail-fast HOLD 行)。
+  query 時 (11:28–11:30Z) と listing 時 (12:1xZ) で
+  created/edited (`2026-09-29T04:45:00Z`)・全 properties 一致。
+  観測間 drift なし。
+- publisher-original provenance (legacy metadata):
+  filer `河西工業`・edinetCode + secCode・docTypeCode 130
+  (訂正有報・第95期)・periodEnd 2026-03-31・
+  submitDateTime 2026-08-14 11:00 (= Fetched At)・
+  parse ok系・honbunFile・fact counts・edinetDocType 1。
+  bytes/SHA/cachedZipPath/lease はなし (legacy 世代)。
+- Source: `EDINET API v2 /documents/S100YWM7?type=1`
+  (bare 形。新 59 行の cached-path suffix なし)。
+- container 時刻の整合: hosted 内 mtime 09-29 13:45 (JST と読めば
+  = row 作成 04:45Z に一致。fetch→即 attach と整合)。
+  local 慣用原本は 09-28 23:25 JST (= 14:25Z) の別 fetch。
+  同一 static document の 2 独立 fetch で説明がつく。
+- hosting 側も local 側も official anchor なし
+  (EDINET 公開 SHA との照合は未実施・両者とも laneA 期 fetch)。
+- 決定: Tier B の bytes/official 適格化には NEED-SOURCE
+  (explicit grant 下の公式 GET で anchor するまでは不可)。
+  archived-wire-as-primary は content-level 利用に限り LIMIT 付きで
+  可 (official 形 source URI + 作成以来 immutable +
+  独立 local との content 照合済み。same-bytes 適格化ではない)。
+- inner-ZIP-equal (entry-bytes SHA `ded1638c…` 一致) 単独では
+  official/bytes 適格化しない。残 Tier B 4 行は hosted 未取得の
+  ため pattern 類推を主張しない (unattempted)。
+- 原本 ZIP / hosted raw は immutable。repack も新 key での
+  再 archive もしない (SAME の捏造禁止)。
+
+## B. missing-3611 inventory + 最小 batch 提案 (未実行)
+
+- union 3675 verdicts 確定: t1 missing 3611 / t5 missing 3670。
+  pinPresent=false == 73 list を照合一致。
+- t1 local 原本: 3675/3675 存在・empty 0・20MB 超 0
+  (max 5117559・全 single_part)。mtime 09-28 13:19–14:26Z
+  (laneA fetch window・意味ある clock)。
+  t5 local: 0/3675 (全 absent)。
+- batch  eligible (t1 missing + local 存在 + 正サイズ):
+  3611/3611 (3602-set 3538 + 73-set 73)。no-local 0。
+  総 bytes 2984049797。
+- private packet (0600): `missing-t1-inventory.json`
+  `00c9f107…b1aba01` (per-cell: doc/type/key/legacyKey/
+  pinSet/stockId/filerName/periodEnd/SHA/size/sourceURI/clock)。
+  typed custody は観測済み・legacy key custody は
+  UNOBSERVED (契約上読まない)。key 形 mapping のみ収録。
+- t5 missing 3670: local 0 のため batch scope 0・全 HOLD。
+  fresh GET の必要性は推論しない。
+- 73-set 73 件は batch に含むが provenance LIMIT 付き
+  (pin-absent の repair 側 HOLD は記録で解消しない。
+  3602/73 の grant 分割は Root 判断)。
+- 最小 batch 提案 (実装・実行は別途 CODE CLEAR + grant):
+  既存 `recordEdinetZip` (type1) + 内蔵 readback のみ。
+  新規 archive framework なし。metadata: edinetDocType=1 +
+  source 構築 URI (観測形・構築と明示) + fetchedAt=観測 mtime
+  (明示) + packet SHA + lease (Root 支給)。
+  filename/contentType は契約 exact。
+- closed caps: 1 record 当たり notionRequest 論理 ≤9
+  (existence 1・upload-create 1・part-send 1・polls ≤4・
+  pages-create 1・readback-listing 1) ×7 + hosted 1 =
+  64 native max。初回 ensure ≤70 + users/me 7。
+  batch 3611 で native cap 231181 (77 + 3611×64)。
+  D1/source 0。
+- 失敗方針 (提案): record-level HOLD (fileTooLarge/重複/形状外)
+  は outcome 収集して継続・輸送/unknown/auth は ABORT。
+  Unknown 再送なし。実行時 existence 再照合は helper 内蔵
+  (staleness 対応)。
+- module pins (full SHA256): archive `b4388151…5edf`・
+  client `4a7f7800…6754`・env `de8449e3…ae1c0`・
+  readback `6bfde103…2194c`・page-file `48f8574f…3f59`・
+  sha256 `da3711c4…001de`・file-upload `c63657f6…07f8f`・
+  edinet/archive `a02f24f6…53fbc5`・pnpm-lock `805dd5b3…17e58`。
+
+## C. closed-59 qualification plan (Root review 前・書込なし)
+
+- 59 通 (全 3602-set・73 を含まない) の現行 parser facts /
+  scope / units / full preimage / scoped CAS / L2 を束ね、
+  全 3675 を待たず meaningful subset 先行の Root review へ。
+  same-bytes のみで primary-qualified と呼ばない。
+- 内訳: class ADOPTED 19 / CANDIDATE 40・
+  verdict MATCH 15 / CHANGED_BOTH 32 / CHANGED_FACTS 12・
+  source JOURNAL_ACTUAL 44 / FRESH_PARSE_ACTUAL 15・
+  parserStatus ok系 19 / unstructured 35 / no_table 5・
+  factsEq true 15 / statusEq true 27。
+- preimage: entire16SHA 59/59・protectedSHA 59/59・
+  Q2 314 rows (per-doc key/rows SHA 収録)。
+- journal 44/59 (proof 付き 12)。残 15 は fresh-parse 出力に
+  ex.facts/ex.proof (journal 外)。scope/units/fiscal 証跡の
+  深さは通単位で濃淡あり (per-doc 収録・一律主張なし)。
+- CAS: per-doc entire16 + protected + facts が scoped CAS 入力
+  (列定義は cas-inputs doc16/protected14)。
+- L2: distinct stocks 16 → 1 group (≤97・単一 scoped 呼出し)。
+- private packet (0600): `closed59-qual.json`
+  `8830fd9b…beced1223` (per-doc 全層 + 集計)。
+  status: SAME-BYTES-CLOSED, PRIMARY-QUALIFICATION PENDING
+  ROOT REVIEW。
+- 書込 (D1/Notion) 0。適用は Root review 後の別 grant。
+
+## 適格の境界 (exact)
+
+- custody59: Tier A 59 keys の metadata-anchored same-bytes
+  receipt のみ確定。whole-apply (repair 適用) = 0。
+- Tier B: 1 行 content-equivalent 証明 (bytes 拒否)・
+  4 行 unattempted。Tier C 5: HOLD (byte source なし)。
+- missing 3611/3670 は source 不在の証明ではなく、
+  fresh GET 必要性を意味しない。
+- 閉鎖・記録・適用のいずれも READY の blanket 適格化なし。
+
+## zeros (now)
+
+sourceGET 0 / live Notion 0 (保存 bodies 読みのみ) /
+D1 新規 0 / R2 0 / dispatch 0 / record 0 / mutation 0。
+live 送信は消費済み grant のみ (query 2+184・close 120)。
+追加送信・rerun なし。
