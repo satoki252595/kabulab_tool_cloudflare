@@ -16,6 +16,8 @@ PRE＋本作業のD1実計56回。追加EDINET/Yahoo取得、R2、dispatchは0�
 
 新しい観測・実行証拠は既存shared Notion archive窓口を使い、force:false、既存DBのみ、known returnをdurable保存してからunique/full readbackを検証した。UNKNOWN時の再送やnew keyは行っていない。
 
+既存59件はEDINET一次原本の件数。PRE19／POST331はD1観測・SQL・実行証跡ZIPのメンバー数であり、EDINET原本件数ではない。
+
 | Stage | Full ZIP SHA256 | Bytes／members | Actual native |
 | --- | --- | --- | --- |
 | PRE | `4d436884b08a8d73e82d52fedcf5b3bb149ba59fb952dcd360a056a260be3f49` | 84119／19 | Notion10＋hosted1（15:19:59.702 UTC完了） |
