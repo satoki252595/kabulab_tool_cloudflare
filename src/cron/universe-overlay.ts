@@ -542,7 +542,7 @@ export async function applyUniverseOverlay(
   const heldCodes = plan.listingInserts
     .filter((l) => l.market === null)
     .map((l) => l.code);
-  // sector は NULL (EDINET 所有)。instrument_type='equity' は helper が
+  // sector は NULL (JPX 月次所有; overlay は書かない)。instrument_type='equity' は helper が
   // 明示する (NULL だと日次の activeEquityCondition() に載らない)。
   const ready = plan.listingInserts.filter(
     (l): l is OverlayListingInsert & { market: string } => l.market !== null
