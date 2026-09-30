@@ -90,6 +90,9 @@ private 0600 のみ。
 - CAS keys (protected14 SHA + Q2 key/rows SHA)・L2 stock 集計は
   join 成果物に確定 (executor guard 入力・書込 0)。
   旧 1687/1695 は使わない (join 実結果のみ)。
+- current compare (frozen parser × NEW live) は別記録に確定
+  (MATCH 494・CHANGED 3181・L2 affected 520・bounded 20/40 提案)。
+  証跡 `docs/test-logs/overseas-current3675-compare-2026-09-30.md`。
 
 ## 73 pin-inspection (local・fetch 0・確定)
 
