@@ -82,23 +82,74 @@ network 0・書込 0 (OUT のみ)。per-doc 明細は private 0600 のみ。
 - 旧 facts full preimage は CAS guard (書込前照合) 専用。
   本キー単独で repair 実行しない。
 
-## Primary custody (baseline と分離・既存 proof 再使用)
+## Primary custody (DB 証明と source-ZIP closure を分離)
 
-- qualified (live-ready/source-primary) 0 /
-  offline-candidate 0 (既存分類の再使用。receipt 証跡なしの実結果) /
-  ARCHIVE_PENDING 3675 (全通・73 を含む) /
-  UNKNOWN (past) 73 (overlap を明示・保持)。
-- known physical proofs (再使用・reverify なし):
-  journal 記録の sealed-post 6 件 + applied59 の L3match 59/59
-  proxy 根拠 + sealed baseline (別途保持)。
+- DB-side 既知 proofs (再使用・reverify なし。source-ZIP の
+  physical closure ではない): journal 記録の sealed-post 6 件
+  (DB afterimage・prep-journal に 6 行実在確認) + applied59 の
+  L3match 59/59 (ratio・非 sealed 53 通の DB proxy 根拠) +
+  sealed baseline (DB observation・全 3675 通)。
+  DB baseline から custody 適格は導かない。
+- source-ZIP physical closure: 全 scope で 0 (closure receipts なし)。
+  Ready 0 / PENDING 3675 を維持 (safe)。
+  qualified (live-ready/source-primary) 0 / offline-candidate 0
+  (既存分類の再使用) / ARCHIVE_PENDING 3675 /
+  UNKNOWN (past) 73 (overlap 明示・保持)。
   RECEIVED は explicitly verified physical closure まで到達なし。
-- bounded lookup/readback proposal (exact・proposal のみ):
-  hold73 の docID sort 先頭 20 → `{doc}:type1`/`:type5` の 40 keys を
-  1 run (上限 41 内) で照会する。契約は `recordEdinetZip` /
-  `TypeCustody` (complete/metadata-only/missing/not-applicable)。
-  既存 custody の照会であり再取得・re-record なし。
-  照会 0 (将来別 grant)。対象 20 通は private
-  (`custody-proposal.json` `32f89752…75e6`)。
+
+## Scope 別 exact counts
+
+- H73 (pin-missing 73): DB-reuse sealed-post 0 / L3-proxy 0 /
+  baseline-obs 73。sourceZIP qualified 0・pending 73。
+  bytePinMismatch: no-pin (73・測定対象なし)。
+  physicalMismatch: UNMEASURED (closure receipts なし)。
+  UNKNOWNpast 73。
+- PIN3602: DB-reuse sealed-post 6 / L3-proxy 53 / baseline-obs 3602。
+  sourceZIP qualified 0・pending 3602。
+  bytePinMismatch 0 (measured)。physicalMismatch UNMEASURED。
+  UNKNOWNpast 0。
+- FULL3675: DB-reuse 6 / 53 / 3675。qualified 0・pending 3675。
+  bytePinMismatch 0 + no-pin 73。physicalMismatch UNMEASURED。
+  UNKNOWNpast 73。
+
+## Saved source-custody receipts の検査 (selection 前)
+
+- writers (backfill/ingest/missing-backfill) は local receipt を
+  永続化しない (write 系なし・コード確認)。local に保存済みの
+  source-ZIP custody receipts は 0 件 (確認対象: writer paths・
+  /tmp 証跡群・repair receipts 全 ARCHIVE_PENDING・
+  745-prep sealed-posts (DB-side)・baseline archive (observation))。
+  Notion 側の既存行は未検査 (照会 0・将来 grant まで)。
+- よって selection は 73-first を明示方針とする
+  (pin-missing = 最高 provenance risk)。残 3602 は pending であり
+  除外ではない (後続 rounds で同一 helper)。
+
+## Bounded proposal (exact・query-only・proposal のみ)
+
+- helper (既存・実装あり): `checkDocsCustody(service, docIDs)`
+  (`services/yuho-quant/src/services/edinet/archive.ts`)。
+  内部で 20 通 chunk → `findBackupRowsByKeys(service, 40 keys)` →
+  `ensureBackupDb` (typed NOTION_ARCHIVE_PAGE_ID default +
+  service 名から DB 導出。DB id 直渡しなし)。
+- round1 入力: service `yuho-quant` + hold73 先頭 20 通 (private) +
+  40 exact keys `{doc}:type1`/`:type5` (key manifest
+  `custody-keys-20.json` `f2f348d5…158f`・0600) +
+  module pins (archive blob `ac19ae4ff4eb`・edinet/archive blob
+  `f70d15e2f8c2`・client blob `039ee4581006`)。
+- 出力/契約: 通単位 `{t1, t5}` TypeCustody
+  (complete/metadata-only/missing/not-applicable)。
+  complete = 行存在 + hosted fileCount > 0。重複 key 行は STOP。
+- cap の分離 (重要): 41 (`BACKUP_ROWS_QUERY_PAGE_SIZE`) は
+  1 chunk の query ROWS 上限のみ (40 keys + 余白 1・has_more で
+  HOLD・cursor 追跡なし)。files listing (`listPageFiles` 1/page)・
+  hosted DL (1/file・full bytes) は別途・コード内数値 cap なし
+  (件数駆動・run 時計数)。41 が closure 全体を覆うとは主張しない。
+  full closure = query 行 + listing + DL bytes+SHA (要 readback)。
+- coverage 数学: 73 → 4 chunks (20×3+13) / 3602 → 181 chunks /
+  3675 → 184 chunks。各 chunk = ensureDb + 1 query。
+  round1 は 1 chunk (20 通・40 keys) のみ。
+- 照会 0 (将来別 grant)。再取得・re-record なし。
+  対象 20 通は private (`custody-proposal.json` `32f89752…75e6`)。
 
 ## 73 deep provenance (既存証跡の検査・REQUIRED 未 deem)
 
@@ -114,10 +165,12 @@ network 0・書込 0 (OUT のみ)。per-doc 明細は private 0600 のみ。
 - freshGET は NEEDS_SOURCE_PROVENANCE_REVIEW を継続。
   REQUIRED は deem しない (Root 判断)。過去 UNKNOWN を保持。
 
-## L2 scoped (affected 実 stocks・proposal のみ)
+## L2 scoped (provisional・proposal のみ)
 
-- affected = CHANGED かつ non-HOLD かつ non-LIMIT docs の
-  stockIds: 520 stocks。(MATCH/HOLD 除外。)
+- affected (compare-observed provisional) = CHANGED かつ non-HOLD
+  かつ non-LIMIT docs の stockIds: 520 stocks。(MATCH/HOLD 除外。)
+- 将来 qualification で scopeFalse 75・HOLD が filter され scope は
+  縮小する (確定 scope ではない)。live-READY 主張なし。
 - 97 以下 group に分割 → 6 groups (97×5 + 35)。
 - steps (既存形状のみ): per-group rebuild scoped +
   order/overseas 入力・upsert・sweep・pre/post bounded 化・
@@ -132,6 +185,7 @@ network 0・書込 0 (OUT のみ)。per-doc 明細は private 0600 のみ。
 - `cas-inputs.json` `9bd04a40…33ee`
 - `l2-scoped.json` `a5df2bb4…2ef2` (520 stocks 実リスト + groups)
 - `custody-proposal.json` `32f89752…75e6` (bounded 20 通実リスト)
+- `custody-keys-20.json` `f2f348d5…158f` (40 exact keys manifest)
 - `73-deep.json` `58f5a3a6…fd59`
 - `run-record.json` (inputs/outputs SHAs・module pins・counts)
 

@@ -114,8 +114,12 @@ private 0600 のみ。
 
 ## Physical lookup/readback (bounded PREP・将来 grant)
 
-- 既知 primary proof を再使用。既存 20doc/40keys/41cap helper の
-  bounded PREP で行う。UNKNOWN 既存 key の re-record 0。
+- DB-side 既知 proofs (sealed-post 6・L3-proxy・baseline-obs) は
+  source-ZIP closure ではない (分離・適格化なし)。
+  既存 `checkDocsCustody` helper の bounded PREP で行う。
+  query cap 41 は照会行のみ (listing/DL は別途・詳細は compare 記録)。
+  73-first 明示・3602 pending (除外なし)。
+  UNKNOWN 既存 key の re-record 0。
 
 ## L2 / CAS (proposal のみ)
 
