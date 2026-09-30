@@ -1,0 +1,36 @@
+{
+ "note": "tracked excerpts only (real rows). Full 3810x11 preimage + full 226 batch are private (/tmp) + physical Notion pins below. No full copy/session/signedURL in Git.",
+ "fullQ7": {
+  "privatePath": "/tmp/d1-preflight-20260930/q7.normalized.json",
+  "sha256": "83e70395705169c6e14249d9f67fca63e1953f56ab83ef2772472ae39f1eb02a",
+  "rows": 3810,
+  "notionKey": "d1-physical-receipts-20260930-sha-606cdb2f8dee",
+  "notionFiles": {
+   "preflight-q7.normalized.json": "83e70395705169c6e14249d9f67fca63e1953f56ab83ef2772472ae39f1eb02a",
+   "preflight-q7-fullcore.json": "fd11c6617041a2458d49513acd3f63039272dd011a140a7ef76ca9067057c6e8"
+  },
+  "readback": "OK (25 files)"
+ },
+ "fullBatch": {
+  "privatePath": "/tmp/collector-live-20260930/live-batch-2026-09-30T01-02-51-641Z.json",
+  "sha256": "182c5aafad7e9a4ee67c461dafa9fb5af8f47f36ab0329ccfaa38b0cccafe60d"
+ },
+ "freshCustodyKeys": [
+  "basic-618A-fresh3-*",
+  "basic-646A-fresh3-* (+7 more in /tmp/s3-fresh-20260930/custody.json)"
+ ],
+ "excerptCriteria": {
+  "core": "19 touched (14 deact + 5 mupd by frozen writers.json) + 6 controls (lowest-id 4 active-equity untouched + lowest-id 2 inactive)",
+  "delisted": "14 driving rows + lowest-code future row",
+  "transfers": "5 driving rows + lowest-code out-of-excerpt-core row",
+  "listings": "618A + 646A + lowest-code future row",
+  "basics": "real evidence for 618A + 646A (defsPins bound from live code constants in-test)"
+ },
+ "expectedExcerptPlan": {
+  "deactivated": 14,
+  "marketUpdated": 5,
+  "listed": 2,
+  "eventsUpserted": 24,
+  "statements": 8
+ }
+}

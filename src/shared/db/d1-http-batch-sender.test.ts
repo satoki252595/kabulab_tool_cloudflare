@@ -8,7 +8,7 @@
  * 失敗時は throw (黙って部分適用を返さない)。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createD1HttpBatchSender } from "./d1-http-client.js";
+import { createD1HttpBatchSender, toD1BatchStatements } from "./d1-http-client.js";
 
 const ORIG = {
   token: process.env.CLOUDFLARE_API_TOKEN,
@@ -131,5 +131,116 @@ describe("createD1HttpBatchSender", () => {
         { sql: "SELECT 2", params: [] },
       ])
     ).rejects.toThrow(/2 件目の文が失敗/);
+  });
+
+  it("top success の欠落/null/真文字列は outcome-unknown (再送なし)", async () => {
+    useTestEnv();
+    for (const body of [
+      JSON.stringify({ result: [{ success: true }] }),
+      JSON.stringify({ success: null, result: [{ success: true }] }),
+      JSON.stringify({ success: "true", result: [{ success: true }] }),
+      JSON.stringify({ success: 1, result: [{ success: true }] }),
+      JSON.stringify([{ success: true }]),
+      JSON.stringify("ok"),
+    ]) {
+      const fetch = vi.fn(async () => new Response(body, { status: 200 }));
+      vi.stubGlobal("fetch", fetch);
+      await expect(
+        createD1HttpBatchSender()([{ sql: "SELECT 1", params: [] }])
+      ).rejects.toThrow(/再送なし/);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("result 非配列・entry 非 object/成否不明は outcome-unknown (再送なし)", async () => {
+    useTestEnv();
+    const bodies = [
+      // result 欠落/null/文字列。
+      { success: true },
+      { success: true, result: null },
+      { success: true, result: "ok" },
+      // entry: null/文字列/配列/success 欠落/真文字列。
+      { success: true, result: [null] },
+      { success: true, result: ["ok"] },
+      { success: true, result: [[{ success: true }]] },
+      { success: true, result: [{}] },
+      { success: true, result: [{ success: "true" }] },
+      { success: true, result: [{ success: 1 }] },
+    ];
+    for (const body of bodies) {
+      const fetch = vi.fn(async () => new Response(JSON.stringify(body), { status: 200 }));
+      vi.stubGlobal("fetch", fetch);
+      await expect(
+        createD1HttpBatchSender()([{ sql: "SELECT 1", params: [] }])
+      ).rejects.toThrow(/再送なし/);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("明示 true の正常応答は通す (余分 field 付きも可)", async () => {
+    useTestEnv();
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            result: [
+              { success: true, meta: { changes: 1 }, extra: [1, 2] },
+              { success: true, results: [] },
+            ],
+          }),
+          { status: 200 }
+        )
+    );
+    vi.stubGlobal("fetch", fetch);
+    await createD1HttpBatchSender()([
+      { sql: "SELECT 1", params: [] },
+      { sql: "SELECT 2", params: [] },
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("sender 直接組立の NaN/Infinity/undefined/object は fetch0 で止める", async () => {
+    useTestEnv();
+    const bad = [
+      [Number.NaN],
+      [Number.POSITIVE_INFINITY],
+      [Number.NEGATIVE_INFINITY],
+      [undefined],
+      [{ a: 1 }],
+      [[1]],
+    ];
+    for (const params of bad) {
+      const fetch = vi.fn(async () => new Response("{}", { status: 200 }));
+      vi.stubGlobal("fetch", fetch);
+      await expect(
+        createD1HttpBatchSender()([
+          { sql: "SELECT ?", params: params as never },
+        ])
+      ).rejects.toThrow(/非有限|対象外/);
+      expect(fetch).not.toHaveBeenCalled();
+    }
+    // 対照: null/真偽値/文字列/有限数は送る。
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ success: true, result: [{ success: true }] }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetch);
+    await createD1HttpBatchSender()([
+      { sql: "SELECT ?, ?, ?, ?", params: [null, true, "a", 1.5] },
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("toD1BatchStatements は NaN/Infinity を送らず止める", () => {
+    const nan = { toSQL: () => ({ sql: "SELECT ?", params: [Number.NaN] }) };
+    expect(() => toD1BatchStatements([nan])).toThrow(/非有限/);
+    const inf = { toSQL: () => ({ sql: "SELECT ?", params: [Number.POSITIVE_INFINITY] }) };
+    expect(() => toD1BatchStatements([inf])).toThrow(/非有限/);
+    // 有限値・null・真偽値は通す。
+    const ok = { toSQL: () => ({ sql: "SELECT ?, ?, ?, ?", params: [1.5, "a", true, null] }) };
+    expect(toD1BatchStatements([ok])).toEqual([
+      { sql: "SELECT ?, ?, ?, ?", params: [1.5, "a", true, null] },
+    ]);
   });
 });

@@ -35,10 +35,14 @@ import type { TransferRow } from "../shared/jpx/transfers.js";
 import {
   deactivateCoreStocksByIds,
   insertCoreStocks,
-  loadAppliedOverlaySets,
   updateCoreStocksMarketByIds,
+  type OverlayStatementBuilder,
   type OverlayWriterDb,
 } from "./universe.js";
+import {
+  toD1BatchStatements,
+  type D1BatchStatement,
+} from "../shared/db/d1-http-client.js";
 import type { UniverseOfficialEventsBatch } from "./universe-official-events.js";
 
 /**
@@ -465,96 +469,377 @@ export interface OverlayApplyResult {
 
 export type { OverlayWriterDb };
 
+/** snapshot が読む core_stocks 全 11 列 (生の格納値。型は正す)。 */
+export interface OverlaySnapshotCoreRow {
+  id: number;
+  code: string;
+  name: string;
+  market: string;
+  sector: string | null;
+  isActive: number;
+  isYutai: number;
+  createdAt: number;
+  updatedAt: number;
+  instrumentType: string | null;
+  sector33: string | null;
+}
+
+/** snapshot が読む state 行 (不在は null)。 */
+export interface OverlaySnapshotStateRow {
+  id: number;
+  baseAsOf: string | null;
+  eventsFetchedAt: string | null;
+  eventsSha: string | null;
+  eligibilityAsOf: string | null;
+  appliedAt: string | null;
+  appliedDelist: number;
+  appliedListing: number;
+  appliedTransfer: number;
+  heldListingCodes: string | null;
+}
+
+/** snapshot が読む events 行 (全 12 列)。 */
+export interface OverlaySnapshotEventRow {
+  id: number;
+  code: string;
+  kind: string;
+  effectiveDate: string;
+  name: string | null;
+  marketFrom: string | null;
+  marketTo: string | null;
+  sourceUrl: string;
+  fetchedAt: string;
+  rawSha: string;
+  archiveKey: string;
+  lastSeenFetchedAt: string | null;
+}
+
 /**
- * 計画を実行する。順序: events upsert → delist → transfer → IPO guard →
- * inserts → state commit。guard 発動時は delist/transfer まで書込済みで
- * state 未確定 (再実行で冪等継続)。D1 書込は Root grant 後の本番実行のみ。
+ * 適用の同一 snapshot。plan と guard はこの同一 object から作る
+ * (plan 後に fresh 読替えない。drift の見逃しになる)。
  */
-export async function applyUniverseOverlay(
+export interface OverlaySnapshot {
+  core: OverlaySnapshotCoreRow[];
+  state: OverlaySnapshotStateRow | null;
+  events: OverlaySnapshotEventRow[];
+}
+
+/**
+ * batch 1 件分の送信口。本番は `createD1HttpBatchSender()`、テストでは差し替える。
+ * 1 回の send が 1 リクエスト (retry 0)。送信口の形は
+ * services/otakara-yutai の atomic 適用と同一。
+ */
+export type OverlayBatchSender = (
+  statements: readonly D1BatchStatement[]
+) => Promise<void>;
+
+/** D1 1 文の bind 上限。compiler は全ての文で検査する (送る前に止める)。 */
+export const OVERLAY_MAX_BINDS_PER_STATEMENT = 100;
+
+/**
+ * snapshot を 3 SELECT で読む。drizzle の mode 変換 (boolean/Date) を避け、
+ * 格納値そのまま (整数/文字列/NULL) で取るため raw SQL 射影にする。
+ * guard の json_extract 比較と型一致させる要請 (型 drift も検知する)。
+ */
+export async function readOverlaySnapshot(
+  db: OverlayWriterDb
+): Promise<OverlaySnapshot> {
+  const core = (await db
+    .select({
+      id: sql<number>`id`,
+      code: sql<string>`code`,
+      name: sql<string>`name`,
+      market: sql<string>`market`,
+      sector: sql<string | null>`sector`,
+      isActive: sql<number>`is_active`,
+      isYutai: sql<number>`is_yutai`,
+      createdAt: sql<number>`created_at`,
+      updatedAt: sql<number>`updated_at`,
+      instrumentType: sql<string | null>`instrument_type`,
+      sector33: sql<string | null>`sector33`,
+    })
+    .from(stocks)
+    .orderBy(stocks.id)) as OverlaySnapshotCoreRow[];
+  const stateRows = (await db
+    .select({
+      id: sql<number>`id`,
+      baseAsOf: sql<string | null>`base_as_of`,
+      eventsFetchedAt: sql<string | null>`events_fetched_at`,
+      eventsSha: sql<string | null>`events_sha`,
+      eligibilityAsOf: sql<string | null>`eligibility_as_of`,
+      appliedAt: sql<string | null>`applied_at`,
+      appliedDelist: sql<number>`applied_delist`,
+      appliedListing: sql<number>`applied_listing`,
+      appliedTransfer: sql<number>`applied_transfer`,
+      heldListingCodes: sql<string | null>`held_listing_codes`,
+    })
+    .from(universeOverlayState)
+    .orderBy(universeOverlayState.id)) as OverlaySnapshotStateRow[];
+  const events = (await db
+    .select({
+      id: sql<number>`id`,
+      code: sql<string>`code`,
+      kind: sql<string>`kind`,
+      effectiveDate: sql<string>`effective_date`,
+      name: sql<string | null>`name`,
+      marketFrom: sql<string | null>`market_from`,
+      marketTo: sql<string | null>`market_to`,
+      sourceUrl: sql<string>`source_url`,
+      fetchedAt: sql<string>`fetched_at`,
+      rawSha: sql<string>`raw_sha`,
+      archiveKey: sql<string>`archive_key`,
+      lastSeenFetchedAt: sql<string | null>`last_seen_fetched_at`,
+    })
+    .from(listingOfficialEvents)
+    .orderBy(
+      listingOfficialEvents.kind,
+      listingOfficialEvents.code,
+      listingOfficialEvents.effectiveDate
+    )) as OverlaySnapshotEventRow[];
+  // singleton 以外 (複数行) は明示 reject (id=1 だけ見て他を隠さない)。
+  if (stateRows.length > 1) {
+    throw new Error(
+      `overlay snapshot STOP: universe_overlay_state が ${stateRows.length} 行 (singleton のみ有効)`
+    );
+  }
+  const snapshot: OverlaySnapshot = {
+    core,
+    state: stateRows[0] ?? null,
+    events,
+  };
+  assertValidSnapshotShape(snapshot);
+  return snapshot;
+}
+
+function isFiniteInteger(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v);
+}
+
+function assertStringOrNull(v: unknown, what: string): void {
+  if (v !== null && typeof v !== "string") {
+    throw new Error(`overlay snapshot STOP: ${what} が string|null ではない`);
+  }
+}
+
+/**
+ * snapshot の形状検証 (DB 読取にも外部 frozen object にも適用)。
+ * state は 0 行または id=1 の 1 行のみ。core の id/code、events の
+ * id/(code,kind,effective_date) の重複は Map collapse による計画欠落の
+ * ため STOP する (DB 制約は供給 object を検証しない)。
+ * 全射影 field は存在 + 格納 primitive/null 型を検証する。JSON 化は
+ * NaN/Infinity を null に変質させ undefined を落とすため、guard bind
+ * (既に string) より前のこの時点で弾く。不正 snapshot の nullable
+ * field が NaN→null で偽一致してはならない。
+ */
+export function assertValidSnapshotShape(snapshot: OverlaySnapshot): void {
+  if (snapshot.state !== null) {
+    const st = snapshot.state;
+    if (!isFiniteInteger(st.id) || st.id !== 1) {
+      throw new Error(
+        "overlay snapshot STOP: state 行は id=1 の 1 行のみ有効"
+      );
+    }
+    for (const f of ["baseAsOf", "eventsFetchedAt", "eventsSha", "eligibilityAsOf", "appliedAt", "heldListingCodes"] as const) {
+      assertStringOrNull(st[f], `state.${f}`);
+    }
+    for (const f of ["appliedDelist", "appliedListing", "appliedTransfer"] as const) {
+      if (!isFiniteInteger(st[f])) {
+        throw new Error(`overlay snapshot STOP: state.${f} が有限整数ではない`);
+      }
+    }
+  }
+  for (const r of snapshot.core) {
+    if (!isFiniteInteger(r.id)) {
+      throw new Error("overlay snapshot STOP: core.id が有限整数ではない");
+    }
+    for (const f of ["code", "name", "market"] as const) {
+      if (typeof r[f] !== "string") {
+        throw new Error(`overlay snapshot STOP: core.${f} が string ではない`);
+      }
+    }
+    for (const f of ["sector", "instrumentType", "sector33"] as const) {
+      assertStringOrNull(r[f], `core.${f}`);
+    }
+    for (const f of ["isActive", "isYutai"] as const) {
+      if (r[f] !== 0 && r[f] !== 1) {
+        throw new Error(`overlay snapshot STOP: core.${f} が 0/1 ではない`);
+      }
+    }
+    for (const f of ["createdAt", "updatedAt"] as const) {
+      if (!isFiniteInteger(r[f])) {
+        throw new Error(`overlay snapshot STOP: core.${f} が有限整数ではない`);
+      }
+    }
+  }
+  for (const r of snapshot.events) {
+    if (!isFiniteInteger(r.id)) {
+      throw new Error("overlay snapshot STOP: events.id が有限整数ではない");
+    }
+    for (const f of ["code", "kind", "effectiveDate", "sourceUrl", "fetchedAt", "rawSha", "archiveKey"] as const) {
+      if (typeof r[f] !== "string") {
+        throw new Error(`overlay snapshot STOP: events.${f} が string ではない`);
+      }
+    }
+    for (const f of ["name", "marketFrom", "marketTo", "lastSeenFetchedAt"] as const) {
+      assertStringOrNull(r[f], `events.${f}`);
+    }
+  }
+  const coreIds = new Set<number>();
+  for (const r of snapshot.core) {
+    if (coreIds.has(r.id)) {
+      throw new Error(`overlay snapshot STOP: core id 重複 ${r.id}`);
+    }
+    coreIds.add(r.id);
+  }
+  const coreCodes = new Set<string>();
+  for (const r of snapshot.core) {
+    if (coreCodes.has(r.code)) {
+      throw new Error(`overlay snapshot STOP: core code 重複 ${r.code}`);
+    }
+    coreCodes.add(r.code);
+  }
+  const evIds = new Set<number>();
+  for (const r of snapshot.events) {
+    if (evIds.has(r.id)) {
+      throw new Error(`overlay snapshot STOP: events id 重複 ${r.id}`);
+    }
+    evIds.add(r.id);
+  }
+  const evKeys = new Set<string>();
+  for (const r of snapshot.events) {
+    const k = JSON.stringify([r.code, r.kind, r.effectiveDate]);
+    if (evKeys.has(k)) {
+      throw new Error(`overlay snapshot STOP: events 複合重複 ${k}`);
+    }
+    evKeys.add(k);
+  }
+}
+
+/**
+ * batch 先頭の preflight (CAS guard)。snapshot 不一致は `json('')` の
+ * SQL エラーで batch 全体 rollback する。機構は承認済み
+ * services/otakara-yutai/data-scripts/atomic-apply.ts の
+ * buildStockPreflightStatement と同一 (trigger/guard table なし)。
+ *
+ * 比較 (全て同一 snapshot 由来。bind は JSON 1 件。SQL は固定):
+ * - core 全行の件数 + 全 11 列の両方向 EXCEPT (値・NULL・型・行の
+ *   追加/削除を検知。EXCEPT は NULL-safe かつ型区別、json_extract は型保持。
+ *   対象外行の drift も縮小せず検知する)
+ * - state 全行の件数 + 両方向 EXCEPT (同形で一様に扱う)
+ * - events 全行の件数 + 両方向 EXCEPT (同上)
+ */
+export function buildOverlayPreflightStatement(
+  snapshot: OverlaySnapshot
+): D1BatchStatement {
+  const doc = JSON.stringify({
+    count: snapshot.core.length,
+    core: snapshot.core,
+    state: snapshot.state === null ? [] : [snapshot.state],
+    events: snapshot.events,
+  });
+  const coreCols =
+    "id, code, name, market, sector, is_active, is_yutai, created_at, updated_at, instrument_type, sector33";
+  const coreJson =
+    "json_extract(value,'$.id'), json_extract(value,'$.code'), json_extract(value,'$.name'), json_extract(value,'$.market'), json_extract(value,'$.sector'), json_extract(value,'$.isActive'), json_extract(value,'$.isYutai'), json_extract(value,'$.createdAt'), json_extract(value,'$.updatedAt'), json_extract(value,'$.instrumentType'), json_extract(value,'$.sector33')";
+  const stateCols =
+    "id, base_as_of, events_fetched_at, events_sha, eligibility_as_of, applied_at, applied_delist, applied_listing, applied_transfer, held_listing_codes";
+  const stateJson =
+    "json_extract(value,'$.id'), json_extract(value,'$.baseAsOf'), json_extract(value,'$.eventsFetchedAt'), json_extract(value,'$.eventsSha'), json_extract(value,'$.eligibilityAsOf'), json_extract(value,'$.appliedAt'), json_extract(value,'$.appliedDelist'), json_extract(value,'$.appliedListing'), json_extract(value,'$.appliedTransfer'), json_extract(value,'$.heldListingCodes')";
+  const evCols =
+    "id, code, kind, effective_date, name, market_from, market_to, source_url, fetched_at, raw_sha, archive_key, last_seen_fetched_at";
+  const evJson =
+    "json_extract(value,'$.id'), json_extract(value,'$.code'), json_extract(value,'$.kind'), json_extract(value,'$.effectiveDate'), json_extract(value,'$.name'), json_extract(value,'$.marketFrom'), json_extract(value,'$.marketTo'), json_extract(value,'$.sourceUrl'), json_extract(value,'$.fetchedAt'), json_extract(value,'$.rawSha'), json_extract(value,'$.archiveKey'), json_extract(value,'$.lastSeenFetchedAt')";
+  const sqlText = [
+    "-- preflight: snapshot 不一致は SQL エラーで batch 全体 rollback",
+    "WITH snap(j) AS (VALUES (?)),",
+    `exp_t(${coreCols}) AS (SELECT ${coreJson} FROM json_each(json_extract((SELECT j FROM snap), '$.core'))),`,
+    `act_t(${coreCols}) AS (SELECT ${coreCols} FROM core_stocks),`,
+    `exp_state(${stateCols}) AS (SELECT ${stateJson} FROM json_each(json_extract((SELECT j FROM snap), '$.state'))),`,
+    `act_state(${stateCols}) AS (SELECT ${stateCols} FROM universe_overlay_state),`,
+    `exp_ev(${evCols}) AS (SELECT ${evJson} FROM json_each(json_extract((SELECT j FROM snap), '$.events'))),`,
+    `act_ev(${evCols}) AS (SELECT ${evCols} FROM universe_official_events)`,
+    "SELECT json(CASE WHEN",
+    "  (SELECT COUNT(*) FROM core_stocks) = json_extract((SELECT j FROM snap), '$.count')",
+    "  AND (SELECT COUNT(*) FROM exp_t) = json_extract((SELECT j FROM snap), '$.count')",
+    "  AND (SELECT COUNT(*) FROM act_t) = (SELECT COUNT(*) FROM exp_t)",
+    "  AND NOT EXISTS (SELECT * FROM act_t EXCEPT SELECT * FROM exp_t)",
+    "  AND NOT EXISTS (SELECT * FROM exp_t EXCEPT SELECT * FROM act_t)",
+    "  AND (SELECT COUNT(*) FROM act_state) = (SELECT COUNT(*) FROM exp_state)",
+    "  AND NOT EXISTS (SELECT * FROM act_state EXCEPT SELECT * FROM exp_state)",
+    "  AND NOT EXISTS (SELECT * FROM exp_state EXCEPT SELECT * FROM act_state)",
+    "  AND (SELECT COUNT(*) FROM act_ev) = (SELECT COUNT(*) FROM exp_ev)",
+    "  AND NOT EXISTS (SELECT * FROM act_ev EXCEPT SELECT * FROM exp_ev)",
+    "  AND NOT EXISTS (SELECT * FROM exp_ev EXCEPT SELECT * FROM act_ev)",
+    "THEN 'null' ELSE '' END)",
+  ].join("\n");
+  return { sql: sqlText, params: [doc] };
+}
+
+/** plan + 先頭 guard + 書込 30 文の batch 全体。 */
+export interface OverlayBatchPlan {
+  plan: OverlayPlan;
+  statements: D1BatchStatement[];
+}
+
+function eventUpsertBuilders(
   db: OverlayWriterDb,
   batch: OverlayBatchInput,
-  existing: ReadonlyArray<OverlayExistingRow>
-): Promise<OverlayApplyResult> {
-  const byCode = new Map(existing.map((r) => [r.code, r]));
-  const plan = planOverlayDeltas(batch, byCode);
-
-  // 空 batch でも state 世代は進める (complete empty generation)。
-  // 旧世代に留まると stale 世代選択が残る。
-  for (let i = 0; i < plan.eventUpserts.length; i += OVERLAY_EVENT_CHUNK) {
-    const slice = plan.eventUpserts.slice(i, i + OVERLAY_EVENT_CHUNK);
-    await db
-      .insert(listingOfficialEvents)
-      .values(
-        slice.map((e) => ({
-          code: e.code,
-          kind: e.kind,
-          effectiveDate: e.effectiveDate,
-          name: e.name,
-          marketFrom: e.marketFrom,
-          marketTo: e.marketTo,
-          sourceUrl: e.sourceUrl,
-          fetchedAt: e.fetchedAt,
-          rawSha: e.rawSha,
-          archiveKey: e.archiveKey,
-          lastSeenFetchedAt: batch.eventsFetchedAt,
-        }))
-      )
-      .onConflictDoUpdate({
-        target: [
-          listingOfficialEvents.code,
-          listingOfficialEvents.kind,
-          listingOfficialEvents.effectiveDate,
-        ],
-        // 同 key の訂正 (name/market/source) は fresh 実値で上書きする。
-        // lastSeen のみ更新では古い meta が残る。
-        set: {
-          name: sql`excluded.name`,
-          marketFrom: sql`excluded.market_from`,
-          marketTo: sql`excluded.market_to`,
-          sourceUrl: sql`excluded.source_url`,
-          fetchedAt: sql`excluded.fetched_at`,
-          rawSha: sql`excluded.raw_sha`,
-          archiveKey: sql`excluded.archive_key`,
-          lastSeenFetchedAt: sql`excluded.last_seen_fetched_at`,
-        },
-      });
+  upserts: readonly OverlayEventUpsert[]
+): OverlayStatementBuilder[] {
+  const out: OverlayStatementBuilder[] = [];
+  for (let i = 0; i < upserts.length; i += OVERLAY_EVENT_CHUNK) {
+    const slice = upserts.slice(i, i + OVERLAY_EVENT_CHUNK);
+    out.push(
+      db
+        .insert(listingOfficialEvents)
+        .values(
+          slice.map((e) => ({
+            code: e.code,
+            kind: e.kind,
+            effectiveDate: e.effectiveDate,
+            name: e.name,
+            marketFrom: e.marketFrom,
+            marketTo: e.marketTo,
+            sourceUrl: e.sourceUrl,
+            fetchedAt: e.fetchedAt,
+            rawSha: e.rawSha,
+            archiveKey: e.archiveKey,
+            lastSeenFetchedAt: batch.eventsFetchedAt,
+          }))
+        )
+        .onConflictDoUpdate({
+          target: [
+            listingOfficialEvents.code,
+            listingOfficialEvents.kind,
+            listingOfficialEvents.effectiveDate,
+          ],
+          // 同 key の訂正 (name/market/source) は fresh 実値で上書きする。
+          // lastSeen のみ更新では古い meta が残る。
+          set: {
+            name: sql`excluded.name`,
+            marketFrom: sql`excluded.market_from`,
+            marketTo: sql`excluded.market_to`,
+            sourceUrl: sql`excluded.source_url`,
+            fetchedAt: sql`excluded.fetched_at`,
+            rawSha: sql`excluded.raw_sha`,
+            archiveKey: sql`excluded.archive_key`,
+            lastSeenFetchedAt: sql`excluded.last_seen_fetched_at`,
+          },
+        })
+    );
   }
+  return out;
+}
 
-  // core_stocks 書込は single-writer 契約のため universe.ts helper 経由。
-  await deactivateCoreStocksByIds(
-    db,
-    plan.deactivations.map((d) => d.id)
-  );
-
-  const idsByMarket = new Map<string, number[]>();
-  for (const u of plan.marketUpdates) {
-    const ids = idsByMarket.get(u.to) ?? [];
-    ids.push(u.id);
-    idsByMarket.set(u.to, ids);
-  }
-  for (const [to, ids] of idsByMarket) {
-    await updateCoreStocksMarketByIds(db, to, ids);
-  }
-
-  // IPO: market 未確定 (unknown) は HOLD。確定 positive のみ挿入する。
-  // 汎用 permission flag による暫定固定停止は残さない。
-  // HOLD は throw せず結果に載せる。loudness は assertNoHeldListings が担う。
-  const heldCodes = plan.listingInserts
-    .filter((l) => l.market === null)
-    .map((l) => l.code);
-  // sector は NULL (JPX 月次所有; overlay は書かない)。instrument_type='equity' は helper が
-  // 明示する (NULL だと日次の activeEquityCondition() に載らない)。
-  const ready = plan.listingInserts.filter(
-    (l): l is OverlayListingInsert & { market: string } => l.market !== null
-  );
-  for (let i = 0; i < ready.length; i += OVERLAY_LISTING_CHUNK) {
-    await insertCoreStocks(db, ready.slice(i, i + OVERLAY_LISTING_CHUNK));
-  }
-
+function stateCommitBuilder(
+  db: OverlayWriterDb,
+  batch: OverlayBatchInput,
+  plan: OverlayPlan,
+  listed: number
+): OverlayStatementBuilder {
   // base_as_of は月次 seed の所有。conflict 時は events 系のみ更新する。
-  // held (per-code UNKNOWN) は NULL/空=完全。HOLD 残は不完全として記録する。
-  const heldJson = heldCodes.length > 0 ? JSON.stringify(heldCodes) : null;
-  await db
+  // held は pre-send throw のため常に NULL (完全のみ commit する)。
+  return db
     .insert(universeOverlayState)
     .values({
       id: 1,
@@ -564,9 +849,9 @@ export async function applyUniverseOverlay(
       eligibilityAsOf: batch.eligibilityAsOf,
       appliedAt: new Date().toISOString(),
       appliedDelist: plan.deactivations.length,
-      appliedListing: ready.length,
+      appliedListing: listed,
       appliedTransfer: plan.marketUpdates.length,
-      heldListingCodes: heldJson,
+      heldListingCodes: null,
     })
     .onConflictDoUpdate({
       target: universeOverlayState.id,
@@ -581,30 +866,112 @@ export async function applyUniverseOverlay(
         heldListingCodes: sql`excluded.held_listing_codes`,
       },
     });
+}
 
+/**
+ * 同一 snapshot から計画と batch 全体を組立てる (副作用なし)。
+ * 順序: [guard, events upsert, delist, transfer, IPO inserts, state commit]。
+ * 未確定 IPO が 1 件でもあれば sender の前に throw し、core/state/events
+ * への書込は 0 (従来の部分書込経路は除去。archive の保管は collector 側で
+ * 保全済みのため残る)。全ての文は bind 100 以内を送る前に検査する。
+ */
+export function planOverlayBatch(
+  db: OverlayWriterDb,
+  batch: OverlayBatchInput,
+  snapshot: OverlaySnapshot
+): OverlayBatchPlan {
+  // 外部 frozen snapshot も同一検証 (DB 制約は供給 object を守らない)。
+  assertValidSnapshotShape(snapshot);
+  const byCode = new Map(
+    snapshot.core.map((r) => [
+      r.code,
+      {
+        id: r.id,
+        code: r.code,
+        name: r.name,
+        market: r.market,
+        isActive: r.isActive === 1,
+      } satisfies OverlayExistingRow,
+    ])
+  );
+  const plan = planOverlayDeltas(batch, byCode);
+
+  // IPO: market 未確定 (unknown) が 1 件でもあれば送信前に HOLD。
+  const heldCodes = plan.listingInserts
+    .filter((l) => l.market === null)
+    .map((l) => l.code);
+  if (heldCodes.length > 0) {
+    throw new OverlayHoldError(
+      heldCodes,
+      "required IPO 未解決のため不完全失敗 (atomic batch 未送信: core/state/events 書込 0)。"
+    );
+  }
+  // sector は NULL (JPX 月次所有; overlay は書かない)。instrument_type='equity' は helper が
+  // 明示する (NULL だと日次の activeEquityCondition() に載らない)。
+  const ready = plan.listingInserts.filter(
+    (l): l is OverlayListingInsert & { market: string } => l.market !== null
+  );
+
+  const guard = buildOverlayPreflightStatement(snapshot);
+  // drizzle builder が要るのは toSQL のためだけ。実行は sender が担う。
+  const builders: OverlayStatementBuilder[] = [
+    ...eventUpsertBuilders(db, batch, plan.eventUpserts),
+    ...deactivateCoreStocksByIds(
+      db,
+      plan.deactivations.map((d) => d.id)
+    ),
+  ];
+  const idsByMarket = new Map<string, number[]>();
+  for (const u of plan.marketUpdates) {
+    const ids = idsByMarket.get(u.to) ?? [];
+    ids.push(u.id);
+    idsByMarket.set(u.to, ids);
+  }
+  for (const [to, ids] of idsByMarket) {
+    builders.push(...updateCoreStocksMarketByIds(db, to, ids));
+  }
+  for (let i = 0; i < ready.length; i += OVERLAY_LISTING_CHUNK) {
+    const b = insertCoreStocks(db, ready.slice(i, i + OVERLAY_LISTING_CHUNK));
+    if (b !== null) builders.push(b);
+  }
+  builders.push(stateCommitBuilder(db, batch, plan, ready.length));
+  const statements = [guard, ...toD1BatchStatements(builders)];
+  for (const [i, s] of statements.entries()) {
+    if (s.params.length > OVERLAY_MAX_BINDS_PER_STATEMENT) {
+      throw new Error(
+        `overlay batch: ${i + 1} 件目の bind ${s.params.length} が上限 ${OVERLAY_MAX_BINDS_PER_STATEMENT} 超 (送らず STOP)`
+      );
+    }
+  }
+  return { plan, statements };
+}
+
+/**
+ * 計画を原子適用する。snapshot は呼出側の確定入力 (必須。内部で
+ * fresh 読替えしない — review 済み preimage の無言置換を禁じる)。
+ * 同一 snapshot から plan と guard を作り、[guard, 書込] 全体を
+ * sender へ 1 回だけ送る (retry 0)。db は toSQL builder 構築専用。
+ * 未確定 IPO は送信前に throw し、core/state/events 書込は 0。
+ * 件数は送信成功 (sender が全 statements の成否を検査) をもって plan 値で返す。
+ * D1 書込は Root grant 後の本番実行のみ。
+ */
+export async function applyUniverseOverlay(
+  db: OverlayWriterDb,
+  batch: OverlayBatchInput,
+  snapshot: OverlaySnapshot,
+  send: OverlayBatchSender
+): Promise<OverlayApplyResult> {
+  const { plan, statements } = planOverlayBatch(db, batch, snapshot);
+  await send(statements);
   return {
     eventsUpserted: plan.eventUpserts.length,
     deactivated: plan.deactivations.length,
     marketUpdated: plan.marketUpdates.length,
-    listed: ready.length,
-    heldListingCodes: heldCodes,
+    listed: plan.listingInserts.length,
+    heldListingCodes: [],
     skipped: plan.skipped,
     stateCommitted: true,
   };
-}
-
-/**
- * HOLD 残ありの結果を不完全失敗にする。未知 IPO を除いた母数での
- * 正常完了・株価 fetch 継続を禁止する。daily/monthly pre-step と
- * 単独 entry の両方が適用後に呼ぶ (retry-safe)。
- */
-export function assertNoHeldListings(result: OverlayApplyResult): void {
-  if (result.heldListingCodes.length > 0) {
-    throw new OverlayHoldError(
-      result.heldListingCodes,
-      "required IPO 未解決のため不完全失敗 (delist/transfer は適用済み)。"
-    );
-  }
 }
 
 export interface EnsureOverlayResult {
@@ -949,33 +1316,54 @@ export async function ensureUniverseOverlay(
   opts: {
     eligibilityAsOf: string;
     collect: OverlayCollectFn;
+    /** batch 送信口 (必須。daily/monthly/CLI 同一 seam。fallback なし)。 */
+    sendBatch: OverlayBatchSender;
   }
 ): Promise<EnsureOverlayResult> {
-  const sets = await loadAppliedOverlaySets(db);
+  // 同一 snapshot が base/reuse/skip/plan/guard を駆動する (collect 前に確定)。
+  // collect 中の並行変更は guard が送信時に止める。旧 state で collect して
+  // 新 state で適用する rebase はしない。owner は確定 frozen snapshot を
+  // apply へ直接渡す (本 gate 外。内部読替えなし)。
+  const snapshot = await readOverlaySnapshot(db);
+  const st = snapshot.state;
   // bootstrap base 未確定なら reuse/collect 前に HOLD。base_as_of は月次 seed の
   // 所有 (成功時のみ commit)。null のまま collector へ進むと bootstrapPartial
   // (当年1年のみ被覆) が適用され、writer が base NULL を永続化する。
-  // 明示 base の owner 適用は applyUniverseOverlay を直接使う (本 gate 外)。
-  if (sets.baseAsOf === null) {
+  if (st === null || st.baseAsOf === null) {
     throw new OverlayHoldError(
       [],
       "母集団 base 未確定のため bootstrap HOLD (月次 seed が base_as_of を所有。明示 base なしには進行不可)。"
     );
   }
-  if (sets.eligibilityAsOf === opts.eligibilityAsOf) {
+  if (st.eligibilityAsOf === opts.eligibilityAsOf) {
     // 同日再入でも HOLD 残があれば正常 return 禁止 (不完全母数での進行を防ぐ)。
-    if (sets.heldListingCodes.length > 0) {
+    // held JSON は文字列配列を検証してから使う (cast のみで変な object を
+    // 通さない。壊れ値は STOP)。
+    let held: readonly string[] = [];
+    if (st.heldListingCodes !== null && st.heldListingCodes !== "") {
+      const parsed: unknown = JSON.parse(st.heldListingCodes);
+      if (
+        !Array.isArray(parsed) ||
+        !parsed.every((p): p is string => typeof p === "string")
+      ) {
+        throw new Error(
+          `overlay snapshot STOP: held_listing_codes が文字列配列ではない (${st.heldListingCodes.slice(0, 80)})`
+        );
+      }
+      held = parsed;
+    }
+    if (held.length > 0) {
       throw new OverlayHoldError(
-        sets.heldListingCodes,
+        [...held],
         `elig=${opts.eligibilityAsOf} は HOLD 残ありのため不完全失敗 (再試行で解消するまで進行不可)。`
       );
     }
     // 完全 generation tuple (現世代 pin) の成立を確認して reuse する。
     // eventsFetchedAt/eventsSha は source archive pin、不在なら不完全 HOLD。
     if (
-      sets.eventsFetchedAt === null ||
-      sets.eventsSha === null ||
-      sets.appliedAt === null
+      st.eventsFetchedAt === null ||
+      st.eventsSha === null ||
+      st.appliedAt === null
     ) {
       throw new OverlayHoldError(
         [],
@@ -984,22 +1372,11 @@ export async function ensureUniverseOverlay(
     }
     return { applied: false, result: null };
   }
-  // 全 code identity を読む (inactive 衝突 HOLD + composer 不要取得の除外)。
-  const existing = (await db
-    .select({
-      id: stocks.id,
-      code: stocks.code,
-      name: stocks.name,
-      market: stocks.market,
-      isActive: stocks.isActive,
-    })
-    .from(stocks)) as OverlayExistingRow[];
   const batch = await opts.collect({
-    baseAsOf: sets.baseAsOf,
+    baseAsOf: st.baseAsOf,
     eligibilityAsOf: opts.eligibilityAsOf,
-    skipBasicsFor: new Set(existing.map((r) => r.code)),
+    skipBasicsFor: new Set(snapshot.core.map((r) => r.code)),
   });
-  const result = await applyUniverseOverlay(db, batch, existing);
-  assertNoHeldListings(result);
+  const result = await applyUniverseOverlay(db, batch, snapshot, opts.sendBatch);
   return { applied: true, result };
 }

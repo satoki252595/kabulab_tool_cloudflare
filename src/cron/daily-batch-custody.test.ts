@@ -30,6 +30,7 @@ import {
 } from "./daily.js";
 import type { OverlayCollectFn } from "./universe-overlay.js";
 import { fakeOverlayCollect } from "./tests/overlay-batch.js";
+import { makeTxBatchSender } from "./tests/overlay-test-sender.js";
 
 const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
 
@@ -344,7 +345,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
   it("例外時は元例外を保持し aborted バッチ (null 件数) を保管する", async () => {
     vi.mocked(fetchChart).mockResolvedValue(sessionChart("2026-09-25"));
     const db = freshDb();
-    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect })).rejects.toThrow(
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) })).rejects.toThrow(
       "日足を確認できません"
     );
     expect(vi.mocked(recordPriceSyncLog)).toHaveBeenCalledWith(
@@ -379,7 +380,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     const db = freshDb();
     seedTarget(1, "1301");
     seedTarget(2, "1332");
-    const result = await runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect });
+    const result = await runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) });
     // core は throw しない (throw は CLI の 1% 判定)。物理保管が先。
     expect(isDailySyncIncomplete(result)).toBe(true);
     expect(result.batchKey).toMatch(/^price-sync-batch-/);
@@ -409,7 +410,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     seedTarget(2, "1332");
     // 完了パスの fileTooLarge が元例外。例外パスの同キー skip は
     // metadata-only の可能性があるため保管成功にしない。
-    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect })).rejects.toThrow(
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) })).rejects.toThrow(
       /fileTooLarge/
     );
     expect(vi.mocked(recordPrimaryData)).toHaveBeenCalledTimes(2);
@@ -424,7 +425,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     vi.mocked(fetchStockRawData).mockResolvedValue(stockRaw(260, "2026-09-28"));
     const db = freshDb();
     seedTarget(1, "1301");
-    const result = await runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect });
+    const result = await runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) });
     expect(result.failedStocks).toBe(0);
     expect(isDailySyncIncomplete(result)).toBe(false);
     expect(result.batchKey).toMatch(/^price-sync-batch-/);

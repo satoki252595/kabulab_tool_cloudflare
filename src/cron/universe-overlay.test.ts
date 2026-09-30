@@ -9,15 +9,20 @@ import type { NewListingRow } from "../shared/jpx/new-listings.js";
 import type { TransferRow } from "../shared/jpx/transfers.js";
 import {
   applyUniverseOverlay,
-  assertNoHeldListings,
   ensureUniverseOverlay,
   OverlayBatchInput,
   OverlayExistingRow,
   OverlayHoldError,
   parseMarketSuffix,
+  planOverlayBatch,
   planOverlayDeltas,
+  readOverlaySnapshot,
   withBasicEvidence,
 } from "./universe-overlay.js";
+import {
+  makeThrowingSender,
+  makeTxBatchSender,
+} from "./tests/overlay-test-sender.js";
 import { loadAppliedOverlaySets } from "./universe.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 import { stocks } from "../shared/db/core-schema.js";
@@ -780,6 +785,7 @@ CREATE TABLE universe_overlay_state (
     const out = await ensureUniverseOverlay(memDb() as never, {
       eligibilityAsOf: "2026-09-29",
       collect,
+      sendBatch: makeThrowingSender(),
     });
     expect(out).toEqual({ applied: false, result: null });
     expect(collect).not.toHaveBeenCalled();
@@ -791,6 +797,7 @@ CREATE TABLE universe_overlay_state (
     const err = await ensureUniverseOverlay(memDb() as never, {
       eligibilityAsOf: "2026-09-29",
       collect,
+      sendBatch: makeThrowingSender(),
     }).then(
       () => null,
       (e: unknown) => e
@@ -805,6 +812,7 @@ CREATE TABLE universe_overlay_state (
     const err2 = await ensureUniverseOverlay(memDb() as never, {
       eligibilityAsOf: "2026-09-29",
       collect: collect2,
+      sendBatch: makeThrowingSender(),
     }).then(
       () => null,
       (e: unknown) => e
@@ -822,6 +830,7 @@ CREATE TABLE universe_overlay_state (
     const err = await ensureUniverseOverlay(memDb() as never, {
       eligibilityAsOf: "2026-09-29",
       collect,
+      sendBatch: makeThrowingSender(),
     }).then(
       () => null,
       (e: unknown) => e
@@ -840,6 +849,7 @@ CREATE TABLE universe_overlay_state (
     const err = await ensureUniverseOverlay(memDb() as never, {
       eligibilityAsOf: "2026-09-29",
       collect,
+      sendBatch: makeThrowingSender(),
     }).then(
       () => null,
       (e: unknown) => e
@@ -851,11 +861,15 @@ CREATE TABLE universe_overlay_state (
 
   it("complete empty batch は state 世代を進める (旧世代に留まらない)", async () => {
     const { emptyUniverseBatch } = await import("./tests/overlay-batch.js");
+    const snapshot = await readOverlaySnapshot(memDb() as never);
+    const count = { sends: 0 };
     const res = await applyUniverseOverlay(
       memDb() as never,
       emptyUniverseBatch("2026-08-31", "2026-09-29"),
-      []
+      snapshot,
+      makeTxBatchSender(sqlite, count)
     );
+    expect(count.sends).toBe(1);
     expect(res.stateCommitted).toBe(true);
     expect(res.eventsUpserted).toBe(0);
     const st = sqlite
@@ -870,84 +884,36 @@ CREATE TABLE universe_overlay_state (
     expect(sets.delisted.size).toBe(0);
   });
 
-  it("接続 2transfer + state 書込失敗 → retry は chain resume で成功する (BLOCKER 回帰)", async () => {
-    const { universeOverlayState } = await import("../shared/db/universe-events.js");
-    sqlite
-      .prepare("INSERT INTO core_stocks (code, name, market, is_active) VALUES (?, ?, ?, 1)")
-      .run("3000", "x", "グロース（内国株式）");
-    // bootstrap base は確定済み (本 test は chain resume が対象。base なしは別 test)。
-    sqlite.exec("INSERT INTO universe_overlay_state (id, base_as_of) VALUES (1, '2026-08-31')");
-    const b = batch("2026-09-29");
-    b.sources.delisted.rows = [];
-    b.sources.newListings.rows = [];
-    b.sources.transfers.rows = [
-      { code: "3000", companyName: "x", effectiveDate: "2026-09-10", fromMarket: "グロース", toMarket: "スタンダード", note: "" },
-      { code: "3000", companyName: "x", effectiveDate: "2026-09-20", fromMarket: "スタンダード", toMarket: "プライム", note: "" },
-    ];
-    // run1: state 書込だけ落とす fault 注入 db。
-    const db1 = memDb() as unknown as { insert: (t: unknown) => unknown };
-    const realInsert = (db1.insert as (t: unknown) => unknown).bind(db1);
-    db1.insert = ((t: unknown) =>
-      t === universeOverlayState
-        ? {
-            values: () => ({
-              onConflictDoUpdate: async () => {
-                throw new Error("state write boom");
-              },
-            }),
-          }
-        : realInsert(t)) as (t: unknown) => unknown;
-    const boom = await ensureUniverseOverlay(db1 as never, {
-      eligibilityAsOf: "2026-09-29",
-      collect: vi.fn().mockResolvedValue(b),
-    }).then(
-      () => null,
-      (e: unknown) => e
-    );
-    expect((boom as Error).message).toBe("state write boom");
-    // partial: core は最終 C まで進むが世代 tuple は未確定 (base のみ)。
-    const mid = sqlite.prepare("SELECT market FROM core_stocks WHERE code='3000'").get() as { market: string };
-    expect(mid.market).toBe("プライム（内国株式）");
-    const midState = sqlite.prepare("SELECT eligibility_as_of, events_fetched_at FROM universe_overlay_state WHERE id=1").get() as {
-      eligibility_as_of: string | null;
-      events_fetched_at: string | null;
-    };
-    expect(midState.eligibility_as_of).toBeNull();
-    expect(midState.events_fetched_at).toBeNull();
-    // run2 (retry): 未確定世代は reuse せず再適用し、chain resume で成功する。
-    const out = await ensureUniverseOverlay(memDb() as never, {
-      eligibilityAsOf: "2026-09-29",
-      collect: vi.fn().mockResolvedValue(b),
-    });
-    expect(out.applied).toBe(true);
-    expect(out.result?.stateCommitted).toBe(true);
-    expect(out.result?.marketUpdated).toBe(0);
-    expect(out.result?.skipped.transferAlreadyReflected).toBe(2);
-    const st = sqlite.prepare("SELECT eligibility_as_of FROM universe_overlay_state WHERE id=1").get() as {
-      eligibility_as_of: string;
-    };
-    expect(st.eligibility_as_of).toBe("2026-09-29");
-  });
-
-  it("HOLD IPO は INSERT しない / helper は equity で INSERT し同サイクル SELECT に載る", async () => {
+  it("HOLD IPO は送信前に throw し 0 writes / helper は equity で INSERT し同サイクル SELECT に載る", async () => {
     const { activeEquityCondition } = await import("../shared/db/active-equity.js");
     const { stocks } = await import("../shared/db/core-schema.js");
     const { insertCoreStocks } = await import("./universe.js");
+    const { toD1BatchStatements } = await import("../shared/db/d1-http-client.js");
     const hold = batch("2026-09-29");
     hold.sources.delisted.rows = [];
     hold.sources.transfers.rows = [];
     hold.sources.newListings.rows = hold.sources.newListings.rows.slice(0, 1);
-    const resHold = await applyUniverseOverlay(memDb() as never, hold, []);
-    expect(resHold.listed).toBe(0);
-    expect(resHold.heldListingCodes).toEqual(["618A"]);
+    const snapshot = await readOverlaySnapshot(memDb() as never);
+    const err = await applyUniverseOverlay(memDb() as never, hold, snapshot, makeThrowingSender()).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(OverlayHoldError);
+    expect((err as OverlayHoldError).codes).toEqual(["618A"]);
     const nHold = sqlite.prepare("SELECT COUNT(*) AS n FROM core_stocks").get() as { n: number };
     expect(nHold.n).toBe(0);
-    // 正分類済み行 (full-form market) は helper が equity で INSERT する。
-    // planner の market:null HOLD 政策は不変 (producer 接続は Root の source grant 待ち)。
+    const eHold = sqlite.prepare("SELECT COUNT(*) AS n FROM universe_official_events").get() as { n: number };
+    expect(eHold.n).toBe(0);
+    // 正分類済み行 (full-form market) は helper builder が equity で INSERT する。
     const src = hold.sources.newListings.rows[0];
     const classified = { code: src.code, name: src.companyName, market: "グロース（内国株式）" };
-    await insertCoreStocks(memDb() as never, [classified]);
-    await insertCoreStocks(memDb() as never, [classified]);
+    const builder = insertCoreStocks(memDb() as never, [classified]);
+    if (builder === null) throw new Error("test bug: builder null");
+    const count = { sends: 0 };
+    await makeTxBatchSender(sqlite, count)(toD1BatchStatements([builder]));
+    expect(count.sends).toBe(1);
+    // 二重挿入は DoNothing せず SQL エラーにする (batch 原子性の前提)。
+    await expect(makeTxBatchSender(sqlite, count)(toD1BatchStatements([builder]))).rejects.toThrow(/UNIQUE/i);
     const nReady = sqlite.prepare("SELECT COUNT(*) AS n FROM core_stocks").get() as { n: number };
     expect(nReady.n).toBe(1);
     const raw = sqlite.prepare("SELECT instrument_type, sector, is_yutai FROM core_stocks WHERE code='618A'").get() as {
@@ -1011,7 +977,10 @@ CREATE TABLE universe_overlay_state (
         },
       ],
     ]);
-    const res = await applyUniverseOverlay(memDb() as never, b, []);
+    const snapshot = await readOverlaySnapshot(memDb() as never);
+    const count = { sends: 0 };
+    const res = await applyUniverseOverlay(memDb() as never, b, snapshot, makeTxBatchSender(sqlite, count));
+    expect(count.sends).toBe(1);
     expect(res.listed).toBe(1);
     expect(res.heldListingCodes).toEqual([]);
     const row = sqlite
@@ -1031,6 +1000,7 @@ CREATE TABLE universe_overlay_state (
     const err = await ensureUniverseOverlay(memDb() as never, {
       eligibilityAsOf: "2026-09-29",
       collect,
+      sendBatch: makeThrowingSender(),
     }).then(
       () => null,
       (e: unknown) => e
@@ -1076,7 +1046,7 @@ CREATE TABLE universe_overlay_state (
     expect(eq.params.length).toBeLessThanOrEqual(100);
   });
 
-  it("未適用なら collect→apply→assert (HOLD で不完全失敗・delist は適用済み)", async () => {
+  it("未適用なら collect→apply→assert (HOLD は送信前に不完全失敗・0 writes)", async () => {
     sqlite
       .prepare("INSERT INTO core_stocks (code, name, market, is_active) VALUES (?, ?, ?, 1)")
       .run("1948", "弘電社", "スタンダード（内国株式）");
@@ -1090,6 +1060,7 @@ CREATE TABLE universe_overlay_state (
     const err = await ensureUniverseOverlay(memDb() as never, {
       eligibilityAsOf: "2026-09-29",
       collect,
+      sendBatch: makeThrowingSender(),
     }).then(
       () => null,
       (e: unknown) => e
@@ -1100,15 +1071,19 @@ CREATE TABLE universe_overlay_state (
       skipBasicsFor: new Set(["1948"]),
     });
     expect(err).toBeInstanceOf(OverlayHoldError);
+    expect((err as OverlayHoldError).codes).toEqual(["618A"]);
+    // 送信前 throw のため delist も未適用・state 未確定・events 0。
     const row = sqlite
       .prepare("SELECT is_active FROM core_stocks WHERE code='1948'")
       .get() as { is_active: number };
-    expect(row.is_active).toBe(0);
+    expect(row.is_active).toBe(1);
     const st = sqlite
       .prepare("SELECT eligibility_as_of, held_listing_codes FROM universe_overlay_state WHERE id=1")
-      .get() as { eligibility_as_of: string; held_listing_codes: string };
-    expect(st.eligibility_as_of).toBe("2026-09-29");
-    expect(JSON.parse(st.held_listing_codes)).toEqual(["618A"]);
+      .get() as { eligibility_as_of: string | null; held_listing_codes: string | null };
+    expect(st.eligibility_as_of).toBeNull();
+    expect(st.held_listing_codes).toBeNull();
+    const ev = sqlite.prepare("SELECT COUNT(*) AS n FROM universe_official_events").get() as { n: number };
+    expect(ev.n).toBe(0);
   });
 
   it("no-map current-observation は insert され active-equity 到達可能になる", async () => {
@@ -1144,7 +1119,10 @@ CREATE TABLE universe_overlay_state (
     expect(ev?.reviewedPins?.searchSha).toBe(fb.search.sha256);
     expect(ev?.reviewedPins?.rawSha).toBe(fb.basic.sha256);
     expect(ev?.reviewedPins?.custodyPageIds).toEqual([ev?.custody?.pageId]);
-    const result = await applyUniverseOverlay(memDb() as never, out, []);
+    const snapshot = await readOverlaySnapshot(memDb() as never);
+    const count = { sends: 0 };
+    const result = await applyUniverseOverlay(memDb() as never, out, snapshot, makeTxBatchSender(sqlite, count));
+    expect(count.sends).toBe(1);
     expect(result.listed).toBe(1);
     expect(result.heldListingCodes).toEqual([]);
     const rows = sqlite
@@ -1226,7 +1204,10 @@ CREATE TABLE universe_overlay_state (
     expect(ev?.qualificationDate).toBe("2026-09-30");
     expect(ev?.qualificationBasis).toBe("current-observation");
     expect(ev?.reviewedPins?.rawSha).toBe(ev?.rawSha);
-    const result = await applyUniverseOverlay(memDb() as never, out, []);
+    const snapshot = await readOverlaySnapshot(memDb() as never);
+    const count = { sends: 0 };
+    const result = await applyUniverseOverlay(memDb() as never, out, snapshot, makeTxBatchSender(sqlite, count));
+    expect(count.sends).toBe(1);
     expect(result.listed).toBe(1);
     expect(result.heldListingCodes).toEqual([]);
     const row = sqlite
@@ -1247,45 +1228,96 @@ CREATE TABLE universe_overlay_state (
 });
 
 describe("applyUniverseOverlay", () => {
-  type Db = Parameters<typeof applyUniverseOverlay>[0];
+  let sqlite: DatabaseSync;
 
-  // 呼出順と文種だけ記録する最小 fake (drizzle 連鎖の同定はしない)。
-  function recordingDb() {
-    const calls: string[] = [];
-    const db = {
-      insert: (_t: unknown) => ({
-        values: (_v: unknown) => ({
-          onConflictDoUpdate: async (_c: unknown) => {
-            calls.push("insert");
-            return [];
-          },
-          onConflictDoNothing: async (_c?: unknown) => {
-            calls.push("insert");
-            return [];
-          },
-        }),
-      }),
-      update: (_t: unknown) => ({
-        set: (_s: unknown) => ({
-          where: async (_w: unknown) => {
-            calls.push("update");
-            return [];
-          },
-        }),
-      }),
-      select: () => {
-        throw new Error("select 未使用");
-      },
-    };
-    return { db: db as unknown as Db, calls };
+  const DDL = `
+CREATE TABLE core_stocks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  market TEXT NOT NULL,
+  sector TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  is_yutai INTEGER NOT NULL DEFAULT 0,
+  instrument_type TEXT,
+  sector33 TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE TABLE universe_official_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+  code TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  effective_date TEXT NOT NULL,
+  name TEXT,
+  market_from TEXT,
+  market_to TEXT,
+  source_url TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  raw_sha TEXT NOT NULL,
+  archive_key TEXT NOT NULL,
+  last_seen_fetched_at TEXT
+);
+CREATE UNIQUE INDEX uq_e ON universe_official_events (code, kind, effective_date);
+CREATE TABLE universe_overlay_state (
+  id INTEGER PRIMARY KEY NOT NULL,
+  base_as_of TEXT,
+  events_fetched_at TEXT,
+  events_sha TEXT,
+  eligibility_as_of TEXT,
+  applied_at TEXT,
+  applied_delist INTEGER DEFAULT 0 NOT NULL,
+  applied_listing INTEGER DEFAULT 0 NOT NULL,
+  applied_transfer INTEGER DEFAULT 0 NOT NULL,
+  held_listing_codes TEXT
+);`;
+
+  function memDb() {
+    return drizzle(async (sqlStr, params, method) => {
+      const stmt = sqlite.prepare(sqlStr);
+      const bind = params as (null | number | bigint | string | Uint8Array)[];
+      if (method === "run") {
+        stmt.run(...bind);
+        return { rows: [] };
+      }
+      const rows = (stmt.all(...bind) as Record<string, unknown>[]).map((o) =>
+        Object.values(o)
+      );
+      return { rows: method === "get" ? (rows[0] ?? []) : rows };
+    });
   }
 
-  it("IPO HOLD 時も state 確定し held を結果に載せる (throw しない)", async () => {
-    const { db, calls } = recordingDb();
-    const res = await applyUniverseOverlay(db, batch("2026-09-29"), coreAll());
-    expect(res.stateCommitted).toBe(true);
-    expect(res.listed).toBe(0);
-    expect(res.heldListingCodes).toEqual([
+  // coreAll() と同値の実 rows (id 100+i)。
+  function seedCoreAll(): void {
+    const ins = sqlite.prepare(
+      "INSERT INTO core_stocks (id, code, name, market, is_active) VALUES (?, ?, ?, ?, 1)"
+    );
+    for (const r of coreAll()) ins.run(r.id, r.code, r.name, r.market);
+  }
+
+  beforeEach(() => {
+    sqlite = new DatabaseSync(":memory:");
+    sqlite.exec(DDL);
+  });
+
+  afterEach(() => {
+    sqlite?.close();
+  });
+
+  it("unknown listing ANY は送信前に HOLD (sender 未呼出・0 writes)", async () => {
+    seedCoreAll();
+    const snapshot = await readOverlaySnapshot(memDb() as never);
+    const err = await applyUniverseOverlay(
+      memDb() as never,
+      batch("2026-09-29"),
+      snapshot,
+      makeThrowingSender()
+    ).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(OverlayHoldError);
+    expect((err as OverlayHoldError).codes).toEqual([
       "618A",
       "619A",
       "621A",
@@ -1296,57 +1328,39 @@ describe("applyUniverseOverlay", () => {
       "634A",
       "646A",
     ]);
-    expect(res.deactivated).toBe(14);
-    expect(res.marketUpdated).toBe(1);
-    // events 4文 (30行/9) + delist + transfer + state。
-    expect(calls).toEqual([
-      "insert",
-      "insert",
-      "insert",
-      "insert",
-      "update",
-      "update",
-      "insert",
-    ]);
-  });
-
-  it("assertNoHeldListings は HOLD 残で不完全失敗を throw する", async () => {
-    const { db } = recordingDb();
-    const res = await applyUniverseOverlay(db, batch("2026-09-29"), coreAll());
-    const err = (() => {
-      try {
-        assertNoHeldListings(res);
-        return null;
-      } catch (e) {
-        return e;
-      }
-    })();
-    expect(err).toBeInstanceOf(OverlayHoldError);
-    expect((err as Error).message).toContain("618A");
-    expect((err as Error).message).toContain("646A");
+    // 0 writes: core 全 active のまま・state 0 行・events 0 行。
+    const active = sqlite.prepare("SELECT COUNT(*) AS n FROM core_stocks WHERE is_active=1").get() as { n: number };
+    expect(active.n).toBe(coreAll().length);
+    const st = sqlite.prepare("SELECT COUNT(*) AS n FROM universe_overlay_state").get() as { n: number };
+    expect(st.n).toBe(0);
+    const ev = sqlite.prepare("SELECT COUNT(*) AS n FROM universe_official_events").get() as { n: number };
+    expect(ev.n).toBe(0);
   });
 
   it("IPO 無し batch は全適用して state 確定する", async () => {
-    const { db, calls } = recordingDb();
+    seedCoreAll();
     const b = batch("2026-09-29");
     b.sources.newListings.rows = b.sources.newListings.rows.filter((r) =>
       FUTURE_IPO.some(([c]) => c === r.code)
     );
-    const res = await applyUniverseOverlay(db, b, coreAll());
+    const snapshot = await readOverlaySnapshot(memDb() as never);
+    const { statements } = planOverlayBatch(memDb() as never, b, snapshot);
+    // guard + events 3文 (21行/9) + delist + transfer + state。
+    expect(statements.length).toBe(7);
+    const count = { sends: 0 };
+    const res = await applyUniverseOverlay(memDb() as never, b, snapshot, makeTxBatchSender(sqlite, count));
+    expect(count.sends).toBe(1);
     expect(res.stateCommitted).toBe(true);
     expect(res.deactivated).toBe(14);
     expect(res.marketUpdated).toBe(1);
     expect(res.listed).toBe(0);
     expect(res.skipped.futureListing).toBe(2);
-    // events 3文 (21行/9: 16+2+3) + delist + transfer + state。
-    expect(calls).toEqual([
-      "insert",
-      "insert",
-      "insert",
-      "update",
-      "update",
-      "insert",
-    ]);
+    const st = sqlite.prepare("SELECT eligibility_as_of, held_listing_codes FROM universe_overlay_state WHERE id=1").get() as {
+      eligibility_as_of: string;
+      held_listing_codes: null;
+    };
+    expect(st.eligibility_as_of).toBe("2026-09-29");
+    expect(st.held_listing_codes).toBeNull();
   });
 });
 
