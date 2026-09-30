@@ -11,6 +11,8 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ### 変更
 - 海外売上 producer が表ローカルの連結区分 (caption の range 表題・exact 既知 TextBlock) を確定する Gate0 を追加 (従来 grid 文面のみで scope を落としていた 6 文書 36 行を連結に是正)。個別 FY 表題×positive 共存は doc-STOP、不足は null。数値の行/列選択・保存形式は不変、既存 3602 文書の選択差分 0 (59 sealed 照合の 30 文書 184 行の scope 追加差分は SOL review 待ちのため未適用)。データ変更なし。
+- マクロ行キーの日時正準化と原本保管: 行キーは GSPC 確定バー日、N225/VIX 確定日と VI 日付が一致し必須値が揃うときだけ保存 (不一致・不足は HOLD で前回値保持)。最終 draft と同一 generation の chart 原文 4 + VI HTML + manifest を `macro-source-batch-*` に保管し strict readback 通過後のみ D1 保存 (保管失敗は throw)。`previousClose` は source 明示値のみ (補完 chain 削除)。データ変更なし (Refs #163)。
+- 株式 guard の全 stock パス共有: 時間窓・N225 対象日/fresh-close・銘柄別 targetDate・完了期限を default パスにも適用 (stocksOnly はマクロ有無のみ)。`expectedDate` 必須化と `dataDate` 代替の除去。データ変更なし (Refs #163)。
 - 優待 144 銘柄の fresh 監査を frozen probe の 8 read-only SELECT で実測し FRESH_MATCH (content 差 0・drift 0・実送信 0、FT 62 全適用済み・normal 37/50 一致)。証跡 11 件は private + Notion 一次データ保管。doc `docs/test-logs/yutai-fresh-audit-proof-20260930.md`。データ変更なし (Refs #146 #102)。
 - 優待 ABC 131/全文 13 の実再入 0 を保存済み証跡のみで offline 証明 (ABC 473 行全省略・全文 62 行全適用済み・効果文 0、送信口 throw-if-called)。共有 planner に preimage 3 値の同値省略と全文分類を追加。normal C45 は pending/stale を正直計数。証跡 `docs/test-logs/yutai-reentry-proof-20260930.md`。データ変更なし (Refs #146 #102)。
 - Yahoo crumb 429 を typed deadline 付きで保持し、取込 proxy は 429 + 実残り秒 Retry-After で返す (従来の 502 丸めを是正)。期限内は同一 deadline で再 bootstrap せず、期限切れ後に single-flight で回復。Node recovery の待機 budget cap 30 秒・認証方式・再試行回数は不変。データ変更なし (Refs #163)。
