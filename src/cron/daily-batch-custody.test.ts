@@ -28,6 +28,14 @@ import {
   runDailySync,
   type PriceSyncBatchInput,
 } from "./daily.js";
+import {
+  emptyUniverseBatch,
+  type OverlayCollectFn,
+} from "./universe-overlay.js";
+
+const fakeCollect: OverlayCollectFn = async (input) =>
+  emptyUniverseBatch(input.baseAsOf, input.eligibilityAsOf);
+
 import { fetchChart, fetchStockRawData } from "../shared/yahoo/client.js";
 import "../shared/yahoo/nikkei-vi.js";
 import {
@@ -337,7 +345,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
   it("例外時は元例外を保持し aborted バッチ (null 件数) を保管する", async () => {
     vi.mocked(fetchChart).mockResolvedValue(sessionChart("2026-09-25"));
     const db = freshDb();
-    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect })).rejects.toThrow(
       "日足を確認できません"
     );
     expect(vi.mocked(recordPriceSyncLog)).toHaveBeenCalledWith(
@@ -372,7 +380,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     const db = freshDb();
     seedTarget(1, "1301");
     seedTarget(2, "1332");
-    const result = await runDailySync(db, { stocksOnly: true });
+    const result = await runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect });
     // core は throw しない (throw は CLI の 1% 判定)。物理保管が先。
     expect(isDailySyncIncomplete(result)).toBe(true);
     expect(result.batchKey).toMatch(/^price-sync-batch-/);
@@ -402,7 +410,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     seedTarget(2, "1332");
     // 完了パスの fileTooLarge が元例外。例外パスの同キー skip は
     // metadata-only の可能性があるため保管成功にしない。
-    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect })).rejects.toThrow(
       /fileTooLarge/
     );
     expect(vi.mocked(recordPrimaryData)).toHaveBeenCalledTimes(2);
@@ -417,7 +425,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     vi.mocked(fetchStockRawData).mockResolvedValue(stockRaw(260, "2026-09-28"));
     const db = freshDb();
     seedTarget(1, "1301");
-    const result = await runDailySync(db, { stocksOnly: true });
+    const result = await runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect });
     expect(result.failedStocks).toBe(0);
     expect(isDailySyncIncomplete(result)).toBe(false);
     expect(result.batchKey).toMatch(/^price-sync-batch-/);

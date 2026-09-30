@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { runDailySync, runMarketContextSync } from "./daily.js";
+import {
+  emptyUniverseBatch,
+  type OverlayCollectFn,
+} from "./universe-overlay.js";
+
+const fakeCollect: OverlayCollectFn = async (input) =>
+  emptyUniverseBatch(input.baseAsOf, input.eligibilityAsOf);
+
 import { fetchChart, fetchStockRawData } from "../shared/yahoo/client.js";
 import { fetchNikkeiVi } from "../shared/yahoo/nikkei-vi.js";
 import { ensurePriceSyncDb, recordPriceSyncLog } from "../shared/notion-archive/index.js";
@@ -45,7 +53,7 @@ describe("株式とマクロの日次分離", () => {
     // dataDateが今日でも、実timestampの日足が無ければ祝日/障害を成功にしない。
     vi.mocked(fetchChart).mockResolvedValue(chart(date));
     const { db, calls } = recordingDb();
-    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow("日足を確認できません");
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect })).rejects.toThrow("日足を確認できません");
     expect(calls).toEqual([]);
     expect(fetchStockRawData).not.toHaveBeenCalled();
     expect(recordPriceSyncLog).toHaveBeenCalledWith("test-db", expect.objectContaining({
@@ -62,7 +70,7 @@ describe("株式とマクロの日次分離", () => {
         close: null, volume: null, adj: null }],
     });
     const { db, calls } = recordingDb();
-    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow("日足を確認できません");
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect })).rejects.toThrow("日足を確認できません");
     expect(calls).toEqual([]);
     expect(fetchStockRawData).not.toHaveBeenCalled();
     expect(recordPriceSyncLog).toHaveBeenCalledWith("test-db", expect.objectContaining({

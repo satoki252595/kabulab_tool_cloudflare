@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { runMonthlyRebuild } from "./monthly.js";
+import {
+  emptyUniverseBatch,
+  type OverlayCollectFn,
+} from "./universe-overlay.js";
+
+const fakeCollect: OverlayCollectFn = async (input) =>
+  emptyUniverseBatch(input.baseAsOf, input.eligibilityAsOf);
+
 import * as coreSchema from "../shared/db/core-schema.js";
+import { universeOverlayState } from "../shared/db/universe-events.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as otakaraSchema from "../../services/otakara-yutai/src/db/schema.js";
 
@@ -59,7 +68,16 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
       update: () => ({ set: () => ({ where: async () => [] as unknown[] }) }),
       select: () => ({
         from: (t: unknown) => {
-          if (t === coreSchema.stocks) return { where: async () => active };
+          if (t === coreSchema.stocks) {
+            return {
+              where: async () => active,
+              then: (
+                resolve: (v: typeof active) => void,
+                reject?: (e: unknown) => void
+              ) => Promise.resolve(active).then(resolve, reject),
+            };
+          }
+          if (t === universeOverlayState) return { where: async () => [] };
           if (t === coreSchema.stockFinancials) return core;
           if (t === swingSchema.stockIndicators) return swing;
           // 同一テーブルに .where() 付き (利回り用) となし (月/ジャンル用) が
@@ -90,13 +108,13 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
 
   it("全 N 銘柄をスコア化する", async () => {
     const { db } = makeStub();
-    const result = await runMonthlyRebuild(db);
+    const result = await runMonthlyRebuild(db, { collectOverlay: fakeCollect });
     expect(result.scoredStocks).toBe(N);
   });
 
   it("insert は ceil(N/5) + ceil(N/16) 回だけ呼ばれる", async () => {
     const { db, calls } = makeStub();
-    await runMonthlyRebuild(db);
+    await runMonthlyRebuild(db, { collectOverlay: fakeCollect });
     // 40 銘柄: financials 8 回 (5×8) + scores 3 回 (16+16+8)
     expect(calls).toHaveLength(8 + 3);
     const fin = calls.filter((c) => c.table === otakaraSchema.stockFinancials);
@@ -109,7 +127,7 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
 
   it("チャンク行数は D1 bind 上限 (100/文) を超えない", async () => {
     const { db, calls } = makeStub();
-    await runMonthlyRebuild(db);
+    await runMonthlyRebuild(db, { collectOverlay: fakeCollect });
     // financials 18 列×行数 ≤ 100 → 5 行まで、scores 6 列×行数 ≤ 100 → 16 行まで
     for (const c of calls) {
       if (c.table === otakaraSchema.stockFinancials) {
@@ -133,7 +151,7 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
 
   it("書き戻し行の stockId に欠け・重複がない", async () => {
     const { db, calls } = makeStub();
-    await runMonthlyRebuild(db);
+    await runMonthlyRebuild(db, { collectOverlay: fakeCollect });
     for (const c of calls) {
       const ids = (c.rows as { stockId: number }[]).map((r) => r.stockId);
       expect(new Set(ids).size).toBe(ids.length);

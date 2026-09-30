@@ -11,11 +11,13 @@ import { sql, inArray, eq } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 
 import * as coreSchema from "../shared/db/core-schema.js";
+import { universeOverlayState } from "../shared/db/universe-events.js";
 import {
   downloadJpxListing,
   isListedEquity,
   type JpxRow,
 } from "../shared/jpx/sectors.js";
+import { loadAppliedOverlaySets } from "./universe-overlay.js";
 import {
   INSTRUMENT_TYPE_EQUITY,
   classifyInstrumentType,
@@ -500,7 +502,12 @@ export async function seedUniverse(
   if (jpxRows.length === 0) {
     throw new Error("JPX listing が 0 行。data_j.xlsx の取得を確認してください。");
   }
-  const equities = jpxRows.filter(isListedEquity);
+  // overlay 適用済みコードへ月次 seed が後勝ちしない (stale XLS 同一 entry 再入対策)。
+  // overlay 所有コードは upsert/対象外化の両方から外す。state 不在なら従来通り。
+  const overlay = await loadAppliedOverlaySets(db);
+  const equities = jpxRows
+    .filter(isListedEquity)
+    .filter((r) => !overlay.delisted.has(r.code) && !overlay.transferred.has(r.code));
   const sourceDates = new Set(jpxRows.map((row) => row.asOf));
   if (sourceDates.size !== 1) {
     throw new Error(
@@ -522,8 +529,10 @@ export async function seedUniverse(
     })
     .from(coreSchema.stocks)
     .where(eq(coreSchema.stocks.isActive, true));
-  const pendingDeactivation = existing.filter((s) =>
-    shouldDeactivateUniverseCode(s.code, rawCodes)
+  const pendingDeactivation = existing.filter(
+    (s) =>
+      shouldDeactivateUniverseCode(s.code, rawCodes) &&
+      !overlay.listed.has(s.code)
   );
   const deactivatedIds = pendingDeactivation.map((s) => s.id);
   const isEquityRow = (s: { instrumentType: string | null }): boolean =>
@@ -555,6 +564,15 @@ export async function seedUniverse(
     instrumentTypeUpdates,
     deactivatedIds,
   });
+
+  // 月次 seed が base provenance を所有する。成功時のみ記録する。
+  await db
+    .insert(universeOverlayState)
+    .values({ id: 1, baseAsOf: sourceAsOf })
+    .onConflictDoUpdate({
+      target: universeOverlayState.id,
+      set: { baseAsOf: sql`excluded.base_as_of` },
+    });
 
   return {
     sourceAsOf,

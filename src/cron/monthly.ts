@@ -25,6 +25,12 @@ import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as otakaraSchema from "../../services/otakara-yutai/src/db/schema.js";
 
 import { scoreStock, type ScoringInput } from "../shared/scoring.js";
+import { runDateKeys } from "./daily.js";
+import { collectUniverseOfficialEvents } from "./universe-official-events.js";
+import {
+  ensureUniverseOverlay,
+  type OverlayCollectFn,
+} from "./universe-overlay.js";
 
 const SCHEMAS = { ...swingSchema, ...otakaraSchema };
 type Db = ReturnType<typeof createMonthlyRebuildDb>;
@@ -39,8 +45,24 @@ export function createMonthlyRebuildDb() {
   return createD1HttpDb(SCHEMAS);
 }
 
-export async function runMonthlyRebuild(db: Db): Promise<MonthlyRebuildResult> {
+export async function runMonthlyRebuild(
+  db: Db,
+  deps: { collectOverlay?: OverlayCollectFn } = {}
+): Promise<MonthlyRebuildResult> {
   const startedAt = Date.now();
+
+  // 母集団 overlay: target-load 前に公式イベントを適用する (Issue #196)。
+  // HOLD 残があれば不完全失敗を throw し、再構築へ進まない。
+  const overlay = await ensureUniverseOverlay(db, {
+    eligibilityAsOf: runDateKeys(startedAt).runDate,
+    collect: deps.collectOverlay ?? ((input) => collectUniverseOfficialEvents(input)),
+  });
+  if (overlay.applied) {
+    console.info(
+      `[sync-monthly] overlay 適用: delist=${overlay.result?.deactivated} ` +
+        `transfer=${overlay.result?.marketUpdated} held=${overlay.result?.heldListingCodes.length}`
+    );
+  }
 
   // -----------------------------------------------------------------
   // Phase 1: is_yutai を yutai_benefits から導出 (自己修復)

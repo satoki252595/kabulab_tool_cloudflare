@@ -95,6 +95,11 @@ import {
 } from "../shared/sector-aggregate.js";
 import type { DailyOhlcv } from "../shared/types.js";
 import { rootCauseMessage } from "../shared/errors.js";
+import { collectUniverseOfficialEvents } from "./universe-official-events.js";
+import {
+  ensureUniverseOverlay,
+  type OverlayCollectFn,
+} from "./universe-overlay.js";
 
 // -----------------------------------------------------------------------------
 // 型定義
@@ -1064,19 +1069,28 @@ export async function archivePriceSyncBatch(
  * @param db createDailyDb() の戻り (Node→D1 HTTP)
  */
 export async function runDailySync(
-  db: Db, options: { stocksOnly?: boolean } = {},
+  db: Db,
+  options: { stocksOnly?: boolean; collectOverlay?: OverlayCollectFn } = {},
 ): Promise<DailySyncResult> {
   const startedAtMs = Date.now();
   const mode: PriceSyncBatchMode = options.stocksOnly === true ? "stocks" : "daily";
   try {
-    return await runDailySyncAndRecord(db, options.stocksOnly === true);
+    return await runDailySyncAndRecord(
+      db,
+      options.stocksOnly === true,
+      options.collectOverlay
+    );
   } catch (e) {
     await recordPriceSyncFailureSafely(e, mode, startedAtMs);
     throw e;
   }
 }
 
-async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<DailySyncResult> {
+async function runDailySyncAndRecord(
+  db: Db,
+  stocksOnly: boolean,
+  collectOverlay?: OverlayCollectFn
+): Promise<DailySyncResult> {
   const startedAt = Date.now();
   // 日付キーと週1ゲートは run 開始時刻に固定する (F-05。Phase 実行時刻で
   // 評価し直すと日跨ぎで prune/年次が飢餓し、表の日付がずれる)。
@@ -1106,6 +1120,18 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 1: ブートストラップ");
   await assertDailySchema(db);
+  // 母集団 overlay: target-load 前に公式イベントを適用する (Issue #196)。
+  // HOLD 残があれば不完全失敗を throw し、株価 fetch へ進まない。
+  const overlay = await ensureUniverseOverlay(db, {
+    eligibilityAsOf: targetDate,
+    collect: collectOverlay ?? ((input) => collectUniverseOfficialEvents(input)),
+  });
+  if (overlay.applied) {
+    console.info(
+      `[sync-daily]   overlay 適用: delist=${overlay.result?.deactivated} ` +
+        `transfer=${overlay.result?.marketUpdated} held=${overlay.result?.heldListingCodes.length}`
+    );
+  }
   const targets = await loadDailyTargets(db);
   console.info(`[sync-daily]   対象: ${targets.length} 銘柄 (active かつ equity)`);
   // 優良株選定の入力にする正本の年次実績を 1 文で先読みする。

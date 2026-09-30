@@ -25,6 +25,14 @@ import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as otakaraSchema from "../../services/otakara-yutai/src/db/schema.js";
 import { INSTRUMENT_TYPES } from "../shared/jpx/instrument-type.js";
 import { runMonthlyRebuild } from "./monthly.js";
+import {
+  emptyUniverseBatch,
+  type OverlayCollectFn,
+} from "./universe-overlay.js";
+
+const fakeCollect: OverlayCollectFn = async (input) =>
+  emptyUniverseBatch(input.baseAsOf, input.eligibilityAsOf);
+
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -111,7 +119,7 @@ afterEach(() => {
 
 describe("runMonthlyRebuild の母集団 (active かつ equity かつ is_yutai)", () => {
   it("otakara_stock_financials / otakara_stock_scores には equity の行だけができる", async () => {
-    const result = await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db);
+    const result = await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db, { collectOverlay: fakeCollect });
 
     expect(result.scoredStocks).toBe(1);
     expect(stockIds("otakara_stock_financials")).toEqual([EQUITY_ID]);
@@ -127,7 +135,7 @@ describe("runMonthlyRebuild の母集団 (active かつ equity かつ is_yutai)"
       )
       .run(REIT_ID, FROZEN_DATE);
 
-    await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db);
+    await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db, { collectOverlay: fakeCollect });
 
     const reit = sqlite
       .prepare("SELECT price, data_date AS dataDate FROM otakara_stock_financials WHERE stock_id = ?")
@@ -158,7 +166,7 @@ describe("runMonthlyRebuild の権利月・ジャンル集計 (L-51)", () => {
       )
       .run(EQUITY_ID);
 
-    await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db);
+    await runMonthlyRebuild(makeProxyDb(sqlite) as unknown as Db, { collectOverlay: fakeCollect });
 
     const scores = sqlite
       .prepare("SELECT yutai_months AS months, yutai_genre_ids AS genres FROM otakara_stock_scores WHERE stock_id = ?")
