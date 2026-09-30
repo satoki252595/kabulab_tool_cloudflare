@@ -12,7 +12,7 @@
  * - 正常成功では従来の逐次適用と同一の値になる (builder≡writer を別途固定)。
  * - 混合再開 (更新なし・stale のタスク行) は純 recompute の batch で追随し、
  *   無変更の銘柄には触らない。
- * - 非空 batch の先頭に必ず preflight 文が付く。full preimage の不一致
+ * - 非空 batch の先頭に必ず preflight 文が付く。projection preimage の不一致
  *   (値・要約・掲載文の書き換え、行の追加・削除、利回り・日付・株価・
  *   スコア計算の実入力 8 列の書き換え、スコアの書き換え、財務・スコア行の
  *   削除/出現) は SQL エラーで batch 全体が落ち、書きかけを残さない
