@@ -145,7 +145,7 @@ code/test/framework の新規なし。本記録は schema・counts・SHA・limit
 ## Capture runner (CODE 詳報・preflight 済み・live 未実行)
 
 - script: `services/yuho-quant/data-scripts/overseas-fresh-read-capture.ts`
-  (blob `a3675487f671`, test blob `fc1436ffe885` 21 passed 同梱)。
+  (blob `666de96eccc7`, test blob `fc1436ffe885` 21 passed 同梱)。
   usage: live `--grant="<Root承認文>"` (grant-first・なしは HOLD) /
   preflight `--preflight` (送信 0・FS 書込 0)。
 - 送信路: budget 74 bound + exact grant 照合 (D1 target SHA + attempt
@@ -162,17 +162,18 @@ code/test/framework の新規なし。本記録は schema・counts・SHA・limit
 - pins (送信前に全断言): okdocs `034cefad…` / params37 `df1d194b…` /
   q1f100 `24d06c43…` / q1f75 `66c5bb36…` / q2f100 `b411e068…` /
   q2f75 `0d18c03f…` / combined74 `69745666…` / modules
-  (select-proof `6c864f43…` / d1-client `cde8899a…` /
+  (select-proof `6c864f43…` / d1-client `f2dc8d7a…` /
   yuho-schema `8adec138…` / core-schema `3393ccc6…` /
   shared-env `183af3b9…` / pnpm-lock `805dd5b3…` /
-  self 正準化 `08610000…`)。self 実 full-file SHA `2aa2d3fe…`
+  self 正準化 `4f18b30f…`)。self 実 full-file SHA `73935bd9…`
   は報告のみ (循環回避。Root 外部 pin)。
-- 正準 D1 target = `d1HttpQueryUrl()` 出力の SHA。Root 指定
+- 正準 D1 target = typed `D1_DATABASE_ID` 値の SHA。Root 指定
   `a7bcf8e2…8ba0e` と照合 (不一致/env 不在は HOLD)。
-- preflight 結果 (本 env・cred なし): 静的 scope PASS
-  (37 chunks・params/SQL/combined/modules 全一致)。
-  target 段で HOLD exit 1 (env-file 不在・fail-closed 正)。
-  sends 0・writes 0 (out dir 未作成)。
+  forward 先 URL は同一 typed accessors の正準 URL と別軸 exact 照合。
+- preflight 結果 (正準 env・送信 0): exit 0 PASS。
+  37 chunks・params/SQL/combined/7 modules 全一致 +
+  d1Target `a7bcf8e2…` 照合済み。sends 0・writes 0 (out dir 未作成)。
+  証跡 `preflight-20260930.json` (private 0600・counts/SHA のみ)。
 - 状態: GPT-sol CODE CLEAR 待ち。CLEAR + 最終 hash pins 報告まで
   live 実行しない。CLEAR 後は ONE 74-SELECT run のみ (追加許可なし)。
 

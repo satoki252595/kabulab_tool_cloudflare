@@ -88,8 +88,7 @@ interface D1BatchResponse {
 
 /**
  * 単発と batch で同じ `/query` URL を使う (資格も同じ型付きアクセサ)。
- * fresh-read-capture の canonical D1 target SHA 検証のため export
- * (no behavior change)。
+ * fresh-read-capture の exact-forward 照合用に export (no behavior change)。
  */
 export function d1HttpQueryUrl(): string {
   const accountId = sharedEnv.CLOUDFLARE_ACCOUNT_ID();

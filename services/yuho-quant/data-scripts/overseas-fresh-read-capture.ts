@@ -77,6 +77,8 @@ const selectProofMod = await import("./overseas-745-select-proof.js");
 const { createBoundedFetch, assertPerDocCounts, assertProjection, validateQ2Row } = selectProofMod;
 const d1Mod = await import("../../../src/shared/db/d1-http-client.js");
 const { createD1HttpDb, d1HttpQueryUrl } = d1Mod;
+const envMod = await import("../../../src/shared/env.js");
+const { sharedEnv } = envMod;
 const yuhoSchema = await import("../src/db/schema.js");
 const { yuhoDocuments, overseasSalesFacts } = yuhoSchema;
 
@@ -90,7 +92,7 @@ const CHUNK_SIZE = 100;
 
 const PINS = {
   okdocs: "034cefad5a7986f874fdc453c0e6a28f23d1ffe565be1ada5a65020718298735",
-  /** 正準 D1 target = d1HttpQueryUrl() 出力の SHA (Root 指定)。 */
+  /** 正準 D1 target = typed D1_DATABASE_ID 値の SHA (Root 指定・実 env 照合済み)。 */
   d1Target: "a7bcf8e2f330e5c81f78e063131dc8837c90d7db9c07388ad7eeca4c8768ba0e",
   q1f100: "24d06c43837f1189b3ee8d33414717d9163f0327988922b2c6887967a92afa4f",
   q1f75: "66c5bb367ff3dcaceac0b42a9b3d3257400dea38fa07a2c17248a2c1120dd443",
@@ -101,9 +103,9 @@ const PINS = {
   /** 37 per-chunk idsSHA を結合した SHA (params 固定)。 */
   params37: "df1d194b7b2b460d10097eacf41f4d4f65217aeda09f148595bd1ac12510452d",
   modules: {
-    captureSelf: "086100005d0f8055dba5f3c3c3004036c016a6604f57be7506c5384c75a307f4",
+    captureSelf: "4f18b30fabd294adae6b0b8cdb12b36d63c69ad6d8472885b8ee2e4fdd5d6cee",
     selectProof: "6c864f43b8141162783368c311c2abd8e673e34dd58c82469618173e7a96bf05",
-    d1Client: "cde8899a13faaeb5a48df671d917021be302bb2f253f2a481cc6ad4ef29bee97",
+    d1Client: "f2dc8d7a9e9ee4428ff4a466a4fa05f66890904f46871060e286f766c370dfda",
     yuhoSchema: "8adec13819c141b23044bce38ddfbbe9a933f5080972161993779ba62c473393",
     coreSchema: "3393ccc640bdef58f1abd895e36b853d5afc764f9a3e464aa61a915f318e714d",
     sharedEnv: "183af3b9847673b5ea3863f81b0866c7d078075193b702631bfd7941bb1e8d15",
@@ -627,15 +629,15 @@ export function assertStaticScope(laneDir: string): StaticScope {
   return { chunks, unionSHA, idsSHAs, paramsSHA, sqlOf, combinedSHA, moduleSHAs, scriptFullSHA };
 }
 
-/** 正準 D1 target (typed accessors の query URL) の SHA 照合。env 不在は HOLD。 */
+/** 正準 D1 target (typed D1_DATABASE_ID 値) の SHA 照合。env 不在は HOLD。 */
 export function assertD1Target(): string {
-  let url: string;
+  let id: string;
   try {
-    url = d1HttpQueryUrl() as string;
+    id = sharedEnv.D1_DATABASE_ID() as string;
   } catch (e) {
     hold(`D1 target 取得不能 (env 不在): ${(e as Error).message}`);
   }
-  const got = sha256Hex(url);
+  const got = sha256Hex(id);
   if (got !== PINS.d1Target) hold(`D1 target 外: got=${got.slice(0, 16)}…`);
   return got;
 }
@@ -668,7 +670,7 @@ async function main(): Promise<void> {
   // 静的 scope + target を送信前に固定する。
   const scope = assertStaticScope(LANE_DIR);
   if (!existsSync(ENV_FILE)) hold(`env-file 不在: ${ENV_FILE} (--env-file で指定)`);
-  dotenv.config({ path: ENV_FILE });
+  dotenv.config({ path: ENV_FILE, quiet: true });
   assertD1Target();
   const workHead = execFileSync("git", ["-C", REPO_ROOT, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
@@ -681,7 +683,10 @@ async function main(): Promise<void> {
   const counters: GuardCounters = { observed: 0, failed: 0 };
   const receipts: BodyReceipt[] = [];
   const bounded = createBoundedFetch(nativeFetch, BUDGET, counters);
-  globalThis.fetch = createCaptureFetch(bounded, OUT_DIR, counters, receipts, PINS.d1Target);
+  // forward 先は同一 typed accessors の正準 URL と exact 照合する
+  // (DB-ID pin とは別軸。両方で exact grant)。
+  const targetUrlSHA = sha256Hex(d1HttpQueryUrl());
+  globalThis.fetch = createCaptureFetch(bounded, OUT_DIR, counters, receipts, targetUrlSHA);
   const db = createD1HttpDb(yuhoSchema);
 
   // live 検証の stdout-safety: D1 IDs/values・provider body を含み得る
@@ -882,7 +887,7 @@ function preflight(): void {
   }) as typeof fetch;
   const scope = assertStaticScope(LANE_DIR);
   if (!existsSync(ENV_FILE)) hold(`env-file 不在: ${ENV_FILE}`);
-  dotenv.config({ path: ENV_FILE });
+  dotenv.config({ path: ENV_FILE, quiet: true });
   const target = assertD1Target();
   console.info(JSON.stringify({
     result: "PREFLIGHT",
