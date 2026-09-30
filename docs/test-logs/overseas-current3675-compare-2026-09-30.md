@@ -145,6 +145,16 @@ network 0・書込 0 (OUT のみ)。per-doc 明細は private 0600 のみ。
   hosted DL (1/file・full bytes) は別途・コード内数値 cap なし
   (件数駆動・run 時計数)。41 が closure 全体を覆うとは主張しない。
   full closure = query 行 + listing + DL bytes+SHA (要 readback)。
+- MUTATION 境界 (重要・live 前の必須条件): helper 単体は
+  mutation-free ではない。`checkDocsCustody` →
+  `findBackupRowsByKeys` → `ensureBackupDb` → `ensureDatabase` は
+  DB 不在時に CREATE する (POST 実測・コード確認)。
+  本 proposal は照会 0・grant 0 のまま。将来 live 照会の前に、
+  read-only fetch route guard (POST create/update/delete を
+  native 前に拒否。POST `/databases/{id}/query` のみ許可) または
+  既存 find-only DB resolver + missing-STOP を runner に備える
+  (新規 global framework なし)。guard なしの live 実行なし。
+  helper 単体に HTTP cap の主張なし (cap は runner 側で数える)。
 - coverage 数学: 73 → 4 chunks (20×3+13) / 3602 → 181 chunks /
   3675 → 184 chunks。各 chunk = ensureDb + 1 query。
   round1 は 1 chunk (20 通・40 keys) のみ。
