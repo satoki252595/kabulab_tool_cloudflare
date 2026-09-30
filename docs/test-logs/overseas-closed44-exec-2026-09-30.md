@@ -1,4 +1,6 @@
-# 海外 closed-44 修復 PREP (2026-09-30・実データ WRITE 0)
+# 海外 closed-44 修復 PREP (PR239検証時点・実データ WRITE 0)
+
+この文書はコード検証時点の記録。後続の44件実修復・L2・PRE/POST物理保管は [本番作業記録](overseas-closed44-actual-2026-09-30.md) に記載する。
 
 ## SOL が修正した境界
 
@@ -39,7 +41,7 @@ fact runtime id/集合件数の競合時 rollback、HTTP unknown ABORT を検証
 CI に private fixture が無ければ actual 部分を明示 skip。fixture が存在するが
 壊れている場合は skip にせず失敗する。
 
-## 未完了の operational scope
+## PR239検証時点の未完了 operational scope
 
 CLI は LOCAL PREP のみ。`--live` は送信前に明示 STOPする。
 既知59原本/74READ/保管の再実行なし。現時点で live READY / 全適用 0。

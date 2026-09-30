@@ -7,6 +7,10 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ---
 
+## 2026-10-01
+
+- 海外の資格化済み44文書をfull16/all12原子CASで修復（POST62facts）。対象10銘柄のL2は全32列POST一致、同じ文書writerの実POST再入44MATCH／送信0。PRE19／POST331原本を全文SHAと全membersまで物理保管。対象外・未資格分は未修復。証跡 `docs/test-logs/overseas-closed44-actual-2026-09-30.md`。
+
 ## 2026-09-30
 
 - VWAP日足3件の修復・全文確認・API確認の45ファイルを物理保管し、添付全文と全SHAの一致を確認。
