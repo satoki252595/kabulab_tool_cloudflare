@@ -1033,6 +1033,8 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
           numerator?: unknown;
           denominator?: unknown;
         } | null;
+        // 分割株数は負にならない: 分子・分母は各々有限正数。
+        // (負/負が見かけ正 ratio になる抜けを塞ぐ)
         const badShape =
           s == null ||
           typeof s.date !== "number" ||
@@ -1040,8 +1042,9 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
           s.date <= 0 ||
           Number.isNaN(new Date((s.date + 32400) * 1000).getTime()) ||
           !Number.isFinite(s.numerator) ||
+          (s.numerator as number) <= 0 ||
           !Number.isFinite(s.denominator) ||
-          (s.denominator as number) === 0;
+          (s.denominator as number) <= 0;
         if (badShape) {
           throw new Error(
             `Chart API エラー [${symbol}]: splits 応答の形状が不正です (key=${k})。`

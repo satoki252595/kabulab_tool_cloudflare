@@ -228,6 +228,7 @@ describe("fetchDaily", () => {
     const cases: Array<[string, unknown]> = [
       ["zero-numerator", { splits: { "1": { date: 1757548800, numerator: 0, denominator: 1 } } }],
       ["negative-denominator", { splits: { "1": { date: 1757548800, numerator: 2, denominator: -1 } } }],
+      ["negative-negative", { splits: { "1": { date: 1757548800, numerator: -2, denominator: -1 } } }],
       ["overflow-ratio", { splits: { "1": { date: 1757548800, numerator: 1e308, denominator: 1e-308 } } }],
       ["bad-event-date", { splits: { "1": { date: -5, numerator: 2, denominator: 1 } } }],
       ["splits-array", { splits: [{ date: 1757548800, numerator: 2, denominator: 1 }] }],
