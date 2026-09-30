@@ -112,6 +112,20 @@ class TestMasterSync:
             tag = op.payload["properties"][S.PROP_LICENSE_TAG]["select"]["name"]
             assert tag == LicenseTag.COMMERCIAL_OK.value
 
+    def test_master_map_failure_stops_all_structured_writes(
+        self, monkeypatch, tmp_path, captured_clients
+    ):
+        self._patch_fetch(monkeypatch, tmp_path)
+
+        def failed_map(*args, **kwargs):
+            raise RuntimeError("取得失敗 (全件map未確定)")
+
+        monkeypatch.setattr(master_sync.upsert, "load_stock_master_entries", failed_map)
+        assert master_sync.main(["--dry-run"], env=_env(tmp_path)) == 1
+        client = captured_clients[0]
+        assert not _ops_with_prop(client, S.MASTER_PROP_NAME)
+        assert any(S.RAW_PROP_SHA256 in (op.payload.get("properties") or {}) for op in client.ops)
+
     def test_prefetch_map_eliminates_per_record_queries(
         self, monkeypatch, tmp_path, captured_clients
     ):
@@ -209,7 +223,7 @@ class TestMasterSync:
         monkeypatch.setattr(edinet_codelist, "fetch_codelist", fake_fetch)
         seen: dict = {}
 
-        def capture_sector(ctx, records):
+        def capture_sector(ctx, records, **kwargs):
             seen["codes"] = [r.code for r in records]
 
         monkeypatch.setattr(master_sync, "_sync_sector33", capture_sector)

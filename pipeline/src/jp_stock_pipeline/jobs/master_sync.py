@@ -24,7 +24,7 @@
 `cloud_store/core_stocks.py` の「sector33 の充填で updated_at を進めない理由」。
 
 - **差分だけ書く。** `SELECT code, sector33 FROM core_stocks` を 1 文読み、
-  値が変わる行だけ UPDATE する。初回 backfill の後は通常 0 文
+  現在owner/identityも同じ1文で読み、値が変わる行だけ UPDATE する。
 - **コードリストに現れない銘柄は触らない**（一時的な欠落で既存値を NULL に潰さない）
 - `--dry-run` は読むだけで書かない。`--limit` は部分取得なので読みもしない
 - D1 の失敗は `ctx.add_failure` に記録し、Notion / ローカルの同期は止めない
@@ -35,13 +35,15 @@
 from __future__ import annotations
 
 import logging
+import json
 import time
 from functools import partial
 
 from ..cloud_store import core_stocks, notion_pages
 from ..cloud_store.d1 import D1Error, D1Store
-from ..collectors import edinet_codelist
-from ..notion import upsert
+from ..collectors import codelist_identity, edinet_codelist
+from ..notion import schema as S, upsert
+from ..rawstore import save_raw
 from .runner import JobContext, apply_limit, build_parser, main_exit, run_job
 
 logger = logging.getLogger(__name__)
@@ -61,10 +63,45 @@ def execute(ctx: JobContext) -> None:
     # 4. ⑤へ原本+変換版を UL。本番共通 strict: Notion⑤未保管で中止 (§8.1-4)
     raw_page_id = ctx.upload_raw(artifact)
 
+    # D1 optionalは維持。既存sector READを前倒ししidentity資格と差分計画で共用。
+    current = None
+    store = None if ctx.args.limit else _sector33_store(ctx)
+    if store is not None:
+        try:
+            current = store.query(codelist_identity.SNAPSHOT_SQL)
+        except D1Error as exc:
+            ctx.add_failure("core_stocks.sector33", f"現在値を読めない: {exc}")
+    # current未取得では認定blankだけHOLD、literal経路は従来どおり。
+    resolved = codelist_identity.resolve_blank_tickers(artifact.local_path.read_bytes(), current)
+    identity_page_id = None
+    if resolved:
+        if raw_page_id is None:
+            ctx.add_failure("codelist-identity", "元FSA rawPageId未保管")
+            return
+        source_asof = edinet_codelist._read_codelist_rows(artifact.local_path.read_bytes())[0]
+        # 元原本SHA dedupへ添付追加せず、派生来歴を別の物理取得単位として保全。
+        lineage = codelist_identity.binding_lineage(resolved, current)
+        lineage["fsa"] = {"rawPageId": raw_page_id, "sha256": artifact.sha256,
+                          "sourceAsOf": source_asof.isoformat(),
+                          "sourceFetchedAt": artifact.fetched_at.isoformat()}
+        identity_artifact = save_raw(
+            json.dumps(lineage, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+            source=artifact.source, datatype="codelist-identity-derived", scope="ALL",
+            data_date=source_asof, url=artifact.url, ext="json",
+            license_tag=artifact.license_tag, base_dir=ctx.settings.raw_data_dir,
+        )
+        identity_page_id = ctx.upload_raw(identity_artifact)  # 失敗は認定行の書込前STOP
+        if identity_page_id is None:
+            ctx.add_failure("codelist-identity", "派生来歴未保管")
+            return
     # 5. Transform（全件。欠損診断のため limit 前の全コードを保持）
     records = edinet_codelist.parse_codelist(
-        artifact.local_path.read_bytes(), raw_page_id=raw_page_id
+        artifact.local_path.read_bytes(), raw_page_id=raw_page_id, current=current
     )
+    for record in records:
+        if record.code in resolved.values():
+            record.provenance.raw_page_id = identity_page_id
+            record.provenance.fetched_at = artifact.fetched_at
     # 候補検査は全件 parse 後・limit 前・① upsert 前 (sector33_sync と共通)。
     # 重複は last-wins で潰さず STOP する (strict unique)。
     try:
@@ -79,15 +116,15 @@ def execute(ctx: JobContext) -> None:
     logger.info("コードリスト: %d 銘柄を ① へ upsert", len(upsert_records))
 
     # ① 既存行マップ {code: page_id} を一括取得（per-record 検索を排除 §8.3。
-    # ~3900銘柄×1req削減）。取得失敗時は per-record 検索へ degrade（all-or-nothing:
+    # ~3900銘柄×1req削減）。取得失敗時は書込前STOP（all-or-nothing:
     # 部分マップを信用して create すると重複行になるため §8.1-6）。このマップは
     # 欠損診断でも再利用し ① 全件スキャンを 2回→1回 にする。
     try:
         master_entries = upsert.load_stock_master_entries(ctx.client, ctx.settings)
         map_ok = True
-    except Exception as exc:  # noqa: BLE001 - 失敗時は per-record 検索へフォールバック
-        master_entries, map_ok = {}, False
-        logger.warning("① マップ取得失敗 → per-record 検索にフォールバック: %s", exc)
+    except Exception as exc:  # noqa: BLE001 - 全件取得失敗は書込前STOP
+        ctx.add_failure("stock-master-map", f"① 全件マップ取得失敗: {exc}")
+        return  # 不明な母集団でcreate/update/sector/mirrorを書かない
     master_map = {code: pid for code, (pid, _props) in master_entries.items()}
 
     # 6. Upsert (冪等キー=銘柄コード)。状態/上場日/上場廃止日 は開示が所有する
@@ -101,7 +138,13 @@ def execute(ctx: JobContext) -> None:
         # L-19: 既存行と同値なら PATCH を省く（月次 3,841 件 → 差分のみ）。
         # ローカル系統には書く（persist の notion 側だけを no-op にする）。
         entry = master_entries.get(record.code)
-        if map_ok and entry is not None and upsert.stock_master_matches_page(entry[1], record):
+        identity_matches = record.code not in resolved.values() or (
+            entry is not None
+            and upsert._read_relation_ids_checked(entry[1], S.PROP_RAW_RELATION) == [identity_page_id]
+            and upsert._relation_complete(entry[1], S.PROP_RAW_RELATION)
+        )
+        if (map_ok and entry is not None and identity_matches
+                and upsert.stock_master_matches_page(entry[1], record)):
             skipped += 1
             notion_write = partial(_existing_page_id, entry[0])
         else:
@@ -140,7 +183,7 @@ def execute(ctx: JobContext) -> None:
     _hold_absent_codes(ctx, fetched_codes, master_map, map_ok)
     # sector には資格側だけ渡す (blank issuer を sector tuple へ渡さない)。
     # ①upsert 用元 records との最小区別。① schema は改造しない。
-    _sync_sector33(ctx, inspected.sector)
+    _sync_sector33(ctx, inspected.sector, store=store, current=current, certified=set(resolved.values()))
     _sync_notion_pages(ctx, master_entries, map_ok)
 
 
@@ -190,27 +233,33 @@ def _sync_notion_pages(
     logger.info("① D1 写し: stock %d 件 / edinet逆引き %d 件", n_stock, n_edinet)
 
 
-def _sync_sector33(ctx: JobContext, records: list) -> None:
+def _sync_sector33(
+    ctx: JobContext, records: list, *, store: D1Store | None, current: list[dict] | None,
+    certified: set[str]
+) -> None:
     """EDINET「提出者業種」で D1 `core_stocks.sector33` の差分だけを埋める。
 
     D1 未設定は失敗にしない。このジョブの主目的は Notion ① / ローカル ① の同期で、
     D1 の資格情報が無い環境（手元・Notion 単独運用）でも従来どおり成功させる。
     成否は `processed` に数えない（① の件数の意味を変えないため）。
     """
-    store = _sector33_store(ctx)
     if store is None:
         logger.info("D1 未設定のため core_stocks.sector33 の充填はスキップ")
         return
     # 呼び出し前に検査済みの候補だけが来る。ここで collapse しない
     # (重複は planner が STOP する。last-wins は廃止)。
     codelist = [(r.code, r.sector33) for r in records]
-    try:
-        current = store.query(core_stocks.SECTOR33_SNAPSHOT_SQL)
-    except D1Error as exc:
-        ctx.add_failure("core_stocks.sector33", f"現在値を読めない: {exc}")
-        return
+    if current is None:
+        return  # 前倒しREAD失敗は既に記録済み。再READしない。
     changes = core_stocks.plan_sector33_updates(current, codelist)
-    statements = core_stocks.build_sector33_updates(changes)
+    asof = records[0].provenance.data_date if certified and records else None
+    # blank認定の行だけUPDATE identity guardを追加する。
+    guarded = {k: v for k, v in changes.items() if k in certified}
+    statements = core_stocks.build_sector33_updates({k: v for k, v in changes.items() if k not in guarded})
+    if guarded and asof is None:
+        ctx.add_failure("core_stocks.sector33", "認定行の基準日不明")
+        return
+    statements += [codelist_identity.certified_update(k, v, asof) for k, v in guarded.items()]
     to_null = sum(1 for v in changes.values() if v is None)
     if ctx.settings.dry_run:
         logger.info(
@@ -222,7 +271,9 @@ def _sync_sector33(ctx: JobContext, records: list) -> None:
     written = 0
     for sql, params in statements:
         try:
-            store.query(sql, params)
+            result = store.query(sql, params)
+            if "RETURNING code" in sql and result != [{"code": params[1]}]:
+                raise D1Error("認定identityがUPDATE時に変化 (書込0)")
         except D1Error as exc:
             # 途中の文で止める。書けた分は残るが、次回は差分から再計算するので収束する。
             ctx.add_failure(
@@ -230,7 +281,7 @@ def _sync_sector33(ctx: JobContext, records: list) -> None:
                 f"UPDATE 失敗（{written}/{len(changes)} 行まで適用済み）: {exc}",
             )
             return
-        written += len(params) - 1
+        written += 1 if "RETURNING code" in sql else len(params) - 1
     logger.info(
         "core_stocks.sector33: %d 行を更新（うち NULL %d 件 / %d 文 / 読んだ行 %d 件）",
         written, to_null, len(statements), len(current),

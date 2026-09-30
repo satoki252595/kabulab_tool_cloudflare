@@ -726,7 +726,7 @@ class TestPrefetchedPageMap:
     """事前マップ(page_resolved=True)で per-record 検索を省く (§8.3)。
 
     全銘柄ループの 1req/銘柄 削減。all-or-nothing で渡すこと・stale page_id の
-    create フォールバックが本クラスの回帰防止対象。
+    失敗時のcreate停止が本クラスの回帰防止対象。
     """
 
     def test_resolved_existing_updates_without_query(self):
@@ -747,23 +747,24 @@ class TestPrefetchedPageMap:
         # 未収録キーは作成前に検索せず create する。作成後の 1 回は重複の再確認 (#13)
         assert c.calls == [("create", "db-master"), ("query", "db-master")]
 
-    def test_unresolved_falls_back_to_query(self):
-        # page_resolved=False（マップ取得失敗の degrade）→ 従来どおり per-record 検索
+    def test_without_prefetch_uses_explicit_key_query(self):
+        # prefetchを使わない正常callerは明示的にキー検索する
         c = _RecordingClient(query_result=[{"id": "found"}])
         pid = upsert._upsert(c, "db-master", {"k": 1}, {"p": 1}, page_resolved=False)
         assert pid == "found"
         assert ("query", "db-master") in c.calls
         assert ("update", "found") in c.calls
 
-    def test_stale_page_id_self_heals_to_create(self):
-        # 事前マップの page_id が実在しない（削除済み）→ object_not_found を握って create
-        c = _RecordingClient(update_raises=_api_error("object_not_found"))
-        pid = upsert._upsert(
-            c, "db-master", {"k": 1}, {"p": 1}, existing_page_id="stale", page_resolved=True
-        )
-        assert pid == "created-1"
-        assert ("update", "stale") in c.calls
-        assert ("create", "db-master") in c.calls
+    def test_object_not_found_stops_without_create(self):
+        # 権限喪失と削除は区別できない。既存UPDATE失敗をcreateへ切り替えない。
+        error = _api_error("object_not_found")
+        c = _RecordingClient(update_raises=error)
+        with pytest.raises(type(error)) as caught:
+            upsert._upsert(
+                c, "db-master", {"k": 1}, {"p": 1}, existing_page_id="stale", page_resolved=True
+            )
+        assert caught.value is error
+        assert c.calls == [("update", "stale")]
 
     def test_non_object_not_found_error_propagates(self):
         # 他のAPIエラーは握り潰さず伝播（隠れた書き込み失敗にしない）
