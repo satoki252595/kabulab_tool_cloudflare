@@ -378,6 +378,8 @@ describe("planOverlayDeltas", () => {
       countryCell: null,
       sector: "サービス業",
       basicFetchedAt: "2026-09-30T01:00:00.000Z",
+      entryFetchedAt: "2026-09-30T01:00:00.000Z",
+      searchFetchedAt: "2026-09-30T01:00:00.000Z",
       entrySha: "e".repeat(64),
       searchSha: "f".repeat(64),
       rawSha: "a".repeat(64),
@@ -391,7 +393,12 @@ describe("planOverlayDeltas", () => {
       qualificationDate: "2026-09-29",
       qualificationBasis: "current-owner-qualified",
       datedSourcePin: null,
-      reviewedPins: null,
+      reviewedPins: {
+        entrySha: "e".repeat(64),
+        searchSha: "f".repeat(64),
+        rawSha: "a".repeat(64),
+        custodyPageIds: ["p"],
+      },
       ...partial,
     });
     // batch 世代 = 2026-09-30T00:00:00.000Z。618A の event 市場 = グロース。
@@ -425,6 +432,8 @@ describe("planOverlayDeltas", () => {
       countryCell: null,
       sector: "サービス業",
       basicFetchedAt: "2026-09-30T01:00:00.000Z",
+      entryFetchedAt: "2026-09-30T01:00:00.000Z",
+      searchFetchedAt: "2026-09-30T01:00:00.000Z",
       entrySha: "e".repeat(64),
       searchSha: "f".repeat(64),
       rawSha: "a".repeat(64),
@@ -438,7 +447,12 @@ describe("planOverlayDeltas", () => {
       qualificationDate: "2026-09-29",
       qualificationBasis: "current-owner-qualified",
       datedSourcePin: null,
-      reviewedPins: null,
+      reviewedPins: {
+        entrySha: "e".repeat(64),
+        searchSha: "f".repeat(64),
+        rawSha: "a".repeat(64),
+        custodyPageIds: ["p"],
+      },
       ...partial,
     });
     // inactive 衝突は証拠があっても HOLD。
@@ -491,6 +505,8 @@ describe("planOverlayDeltas", () => {
           countryCell: null,
           sector: "サービス業",
           basicFetchedAt: "2026-09-30T01:00:00.000Z",
+          entryFetchedAt: "2026-09-30T01:00:00.000Z",
+          searchFetchedAt: "2026-09-30T01:00:00.000Z",
           entrySha: "e".repeat(64),
           searchSha: "f".repeat(64),
           rawSha: "a".repeat(64),
@@ -504,7 +520,12 @@ describe("planOverlayDeltas", () => {
           qualificationDate: "2026-09-30",
           qualificationBasis: "current-owner-qualified",
           datedSourcePin: null,
-          reviewedPins: null,
+          reviewedPins: {
+            entrySha: "e".repeat(64),
+            searchSha: "f".repeat(64),
+            rawSha: "a".repeat(64),
+            custodyPageIds: ["p"],
+          },
         },
       ],
     ]);
@@ -550,6 +571,8 @@ describe("planOverlayDeltas", () => {
       countryCell: null,
       sector: "サービス業",
       basicFetchedAt: "2026-09-30T06:31:00.000Z",
+      entryFetchedAt: "2026-09-30T06:31:00.000Z",
+      searchFetchedAt: "2026-09-30T06:31:00.000Z",
       entrySha: "e".repeat(64),
       searchSha: "f".repeat(64),
       rawSha: "a".repeat(64),
@@ -563,7 +586,12 @@ describe("planOverlayDeltas", () => {
       qualificationDate: "2026-09-30",
       qualificationBasis: "current-observation",
       datedSourcePin: null,
-      reviewedPins: null,
+      reviewedPins: {
+        entrySha: "e".repeat(64),
+        searchSha: "f".repeat(64),
+        rawSha: "a".repeat(64),
+        custodyPageIds: ["p"],
+      },
       ...partial,
     });
     b.basics = new Map([
@@ -573,10 +601,74 @@ describe("planOverlayDeltas", () => {
         marketBare: "スタンダード",
         basicFetchedAt: "2026-09-30T16:00:00.000Z",
       })],
+      // receipt pages が実 custody を含まない → 対応不一致で HOLD。
+      ["622A", ev("622A", {
+        marketBare: "スタンダード",
+        reviewedPins: {
+          entrySha: "e".repeat(64),
+          searchSha: "f".repeat(64),
+          rawSha: "a".repeat(64),
+          custodyPageIds: ["other"],
+        },
+      })],
     ]);
     const plan = planOverlayDeltas(b, byCode);
     const byCodeOut = new Map(plan.listingInserts.map((l) => [l.code, l.market]));
     expect(byCodeOut.get("618A")).toBe("グロース（内国株式）");
+    expect(byCodeOut.get("619A")).toBeNull();
+    expect(byCodeOut.get("622A")).toBeNull();
+  });
+
+  it("存在しない暦日 (9/31) は両 basis で HOLD する (正規化受入禁止)", async () => {
+    const { DEFS_COUNTRY_GUIDE, DEFS_ORDINARY_CODE } = await import(
+      "../shared/jpx/basic-profile.js"
+    );
+    type Ev = import("../shared/jpx/basic-profile.js").BasicProfileEvidence;
+    const byCode = new Map<string, OverlayExistingRow>();
+    const b = batch("2026-09-30");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    const ev = (
+      code: string,
+      basis: "current-owner-qualified" | "current-observation",
+      marketBare: string
+    ): Ev => ({
+      code4: code,
+      code5: `${code}0`,
+      isin: "JP9999999999",
+      marketBare,
+      countryCell: null,
+      sector: "サービス業",
+      entryFetchedAt: "2026-09-31T00:00:00.000Z",
+      searchFetchedAt: "2026-09-31T00:00:00.000Z",
+      basicFetchedAt: "2026-09-31T00:00:00.000Z",
+      entrySha: "e".repeat(64),
+      searchSha: "f".repeat(64),
+      rawSha: "a".repeat(64),
+      sourceUrl: "u",
+      defsPins: {
+        countryGuide: DEFS_COUNTRY_GUIDE.sha256,
+        ordinaryCode: DEFS_ORDINARY_CODE.sha256,
+      },
+      custody: { pageId: "p" },
+      boundEventsFetchedAt: "2026-09-30T00:00:00.000Z",
+      qualificationDate: "2026-09-30",
+      qualificationBasis: basis,
+      datedSourcePin: null,
+      reviewedPins: {
+        entrySha: "e".repeat(64),
+        searchSha: "f".repeat(64),
+        rawSha: "a".repeat(64),
+        custodyPageIds: ["p"],
+      },
+    });
+    b.basics = new Map([
+      ["618A", ev("618A", "current-owner-qualified", "グロース")],
+      ["619A", ev("619A", "current-observation", "スタンダード")],
+    ]);
+    const plan = planOverlayDeltas(b, byCode);
+    const byCodeOut = new Map(plan.listingInserts.map((l) => [l.code, l.market]));
+    expect(byCodeOut.get("618A")).toBeNull();
     expect(byCodeOut.get("619A")).toBeNull();
   });
 });
@@ -857,6 +949,8 @@ CREATE TABLE universe_overlay_state (
           countryCell: null,
           sector: "サービス業",
           basicFetchedAt: "2026-09-30T01:00:00.000Z",
+          entryFetchedAt: "2026-09-30T01:00:00.000Z",
+          searchFetchedAt: "2026-09-30T01:00:00.000Z",
           entrySha: "e".repeat(64),
           searchSha: "f".repeat(64),
           rawSha: "a".repeat(64),
@@ -870,7 +964,12 @@ CREATE TABLE universe_overlay_state (
           qualificationDate: "2026-09-29",
           qualificationBasis: "current-owner-qualified",
           datedSourcePin: null,
-          reviewedPins: null,
+          reviewedPins: {
+            entrySha: "e".repeat(64),
+            searchSha: "f".repeat(64),
+            rawSha: "a".repeat(64),
+            custodyPageIds: ["p"],
+          },
         },
       ],
     ]);
@@ -1143,6 +1242,7 @@ function fakeBasic(
   pins?: { countryGuide: string; ordinaryCode: string },
   fetchedAt?: string
 ) {
+  const ts = fetchedAt ?? "2026-09-30T01:00:00.000Z";
   const evidence = {
     code4: code,
     code5: `${code}0`,
@@ -1150,7 +1250,9 @@ function fakeBasic(
     marketBare,
     countryCell: null,
     sector: "サービス業",
-    basicFetchedAt: fetchedAt ?? "2026-09-30T01:00:00.000Z",
+    entryFetchedAt: ts,
+    searchFetchedAt: ts,
+    basicFetchedAt: ts,
     entrySha: "e".repeat(64),
     searchSha: "f".repeat(64),
     rawSha: "a".repeat(64),
@@ -1165,7 +1267,7 @@ function fakeBasic(
   };
   const mk = (tag: string, sha256: string) => ({
     url: "u",
-    fetchedAt: "f",
+    fetchedAt: ts,
     status: 200,
     bytes: enc.encode(`${code}-${tag}`),
     sha256,
@@ -1524,7 +1626,8 @@ describe("withBasicEvidence", () => {
       "../shared/jpx/basic-profile.js"
     );
     const b = batch("2026-09-30");
-    b.eventsFetchedAt = "2026-09-29T00:00:00.000Z";
+    // 世代も JST 9/30 (UTC 9/29 15:00)。basic は UTC 前日・JST 当日。
+    b.eventsFetchedAt = "2026-09-29T15:00:00.000Z";
     b.sources.delisted.rows = [];
     b.sources.transfers.rows = [];
     b.sources.newListings.rows = b.sources.newListings.rows.slice(0, 1);
@@ -1652,6 +1755,61 @@ describe("withBasicEvidence", () => {
     expect(collectBasic).toHaveBeenCalledTimes(1);
     expect(out.basics?.get("618A")?.qualificationDate).toBeNull();
     expect(out.basics?.get("618A")?.qualificationBasis).toBeNull();
+  });
+
+  it("seam 主張と got の不一致は両 basis とも stamp しない (上書きなし HOLD)", async () => {
+    const { DEFS_COUNTRY_GUIDE, DEFS_ORDINARY_CODE } = await import(
+      "../shared/jpx/basic-profile.js"
+    );
+    const b = batch("2026-09-30");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    b.sources.newListings.rows = b.sources.newListings.rows.slice(0, 1);
+    const fb = fakeBasic(
+      "618A",
+      "グロース",
+      {
+        countryGuide: DEFS_COUNTRY_GUIDE.sha256,
+        ordinaryCode: DEFS_ORDINARY_CODE.sha256,
+      },
+      "2026-09-30T06:31:00.000Z"
+    );
+    // seam 主張だけを歪める (got 実物は正規のまま)。
+    fb.evidence.rawSha = "c".repeat(64);
+    fb.evidence.basicFetchedAt = "2026-09-30T07:31:00.000Z";
+    const { record, listFiles, downloadBytes } = verifyMocks();
+    const collect = withBasicEvidence(async () => b, {
+      collectBasic: (async () => fb) as never,
+      record: record as never,
+      listFiles: listFiles as never,
+      downloadBytes: downloadBytes as never,
+      // got に一致する reviewed 入力があっても seam 不一致で拒否する。
+      qualificationInput: new Map([
+        [
+          "618A",
+          {
+            date: "2026-09-30",
+            basis: "current-owner-qualified" as const,
+            marketBare: "グロース",
+            receiptPins: {
+              entrySha: "e".repeat(64),
+              searchSha: "f".repeat(64),
+              rawSha: "a".repeat(64),
+              custodyPageIds: ["pg-reviewed"],
+            },
+          },
+        ],
+      ]),
+    });
+    const out = await collect({ baseAsOf: null, eligibilityAsOf: "2026-09-30" });
+    const ev = out.basics?.get("618A");
+    expect(ev?.qualificationDate).toBeNull();
+    expect(ev?.qualificationBasis).toBeNull();
+    expect(ev?.reviewedPins).toBeNull();
+    // custody/bound は付くが、主張値は書き換えない。
+    expect(ev?.custody).not.toBeNull();
+    expect(ev?.rawSha).toBe("c".repeat(64));
+    expect(ev?.basicFetchedAt).toBe("2026-09-30T07:31:00.000Z");
   });
 
   it("custody record 失敗は loud STOP (握り潰さない)", async () => {

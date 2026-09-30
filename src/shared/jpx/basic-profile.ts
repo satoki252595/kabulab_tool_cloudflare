@@ -103,6 +103,10 @@ export type BasicReceiptPins = {
 
 /** planner が消費する分類証拠 (同一 batch 世代に束縛して供給する)。 */
 export type BasicProfileEvidence = BasicProfileRow & {
+  /** R1 取得時刻 (ISO)。planner JST 再検証用。 */
+  entryFetchedAt: string;
+  /** R2 取得時刻 (ISO)。planner JST 再検証用。 */
+  searchFetchedAt: string;
   /** basic 取得時刻 (ISO)。監査 clock (世代証明は boundEventsFetchedAt)。 */
   basicFetchedAt: string;
   /** R1/R2/R3 raw の全文 SHA。 */
@@ -367,7 +371,6 @@ export async function collectBasicProfile(
   const nowIso = deps.nowIso ?? (() => new Date().toISOString());
   const jar = new Map<string, string>();
   const code5 = `${code4}0`;
-  const cycleStartedAt = nowIso();
   const partial: BasicPartial = {};
   const mkFetch = async (
     url: string,
@@ -387,7 +390,6 @@ export async function collectBasicProfile(
       code5,
       roundTrip,
       nowIso,
-      cycleStartedAt,
       jar,
       partial,
       mkFetch
@@ -395,6 +397,7 @@ export async function collectBasicProfile(
   } catch (e) {
     // roundTrip 層の partialRaw (cookie API 失敗等) は URL で段を特定する。
     // 当該段のみ未保管なら回収する (他段の有無は問わない)。
+    // 時刻は回収時点の実時計 (受信直後相当の最良観測)。
     const raw =
       e !== null && typeof e === "object"
         ? (e as { partialRaw?: RoundTripPartialRaw }).partialRaw
@@ -404,7 +407,7 @@ export async function collectBasicProfile(
         raw.url,
         raw.status,
         raw.bytes,
-        cycleStartedAt
+        nowIso()
       );
       if (raw.url === TSE_ENTRY_URL) partial.entry ??= recovered;
       else if (raw.url === `https://www2.jpx.co.jp${TSE_BASIC_PATH}`) {
@@ -429,7 +432,6 @@ async function collectBasicProfileInner(
   code5: string,
   roundTrip: BasicRoundTrip,
   nowIso: () => string,
-  cycleStartedAt: string,
   jar: Map<string, string>,
   partial: BasicPartial,
   mkFetch: (
@@ -447,11 +449,13 @@ async function collectBasicProfileInner(
   // ---- R1: fresh anonymous entry ----
   const r1 = await roundTrip({ method: "GET", url: TSE_ENTRY_URL });
   // partial は status/session/schema guard の前に得済み raw から確保する。
+  // 時刻は各応答の実受信時 (cycle 開始の流用ではない)。
+  const entryFetchedAt = nowIso();
   partial.entry = await mkFetch(
     TSE_ENTRY_URL,
     r1.status,
     r1.bytes,
-    cycleStartedAt
+    entryFetchedAt
   );
   if (r1.status !== 200 || r1.location !== null) {
     fail(code4, "R1", `http=${r1.status} redirect=${r1.location !== null}`);
@@ -490,11 +494,12 @@ async function collectBasicProfileInner(
     body: body2,
     cookie: cookieHeader(jar),
   });
+  const searchFetchedAt = nowIso();
   partial.search = await mkFetch(
     `https://www2.jpx.co.jp${action1}`,
     r2.status,
     r2.bytes,
-    cycleStartedAt
+    searchFetchedAt
   );
   if (r2.status !== 200 || r2.location !== null) {
     fail(code4, "R2", `http=${r2.status} redirect=${r2.location !== null}`);
@@ -566,7 +571,7 @@ async function collectBasicProfileInner(
     `https://www2.jpx.co.jp${TSE_BASIC_PATH}`,
     r3.status,
     r3.bytes,
-    cycleStartedAt
+    nowIso()
   );
   if (r3.status !== 200 || r3.location !== null) {
     fail(code4, "R3", `http=${r3.status} redirect=${r3.location !== null}`);
@@ -586,6 +591,8 @@ async function collectBasicProfileInner(
     basic,
     evidence: {
       ...row,
+      entryFetchedAt,
+      searchFetchedAt,
       basicFetchedAt,
       entrySha: entry.sha256,
       searchSha: search.sha256,

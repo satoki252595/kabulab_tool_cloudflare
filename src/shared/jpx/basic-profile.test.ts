@@ -224,6 +224,27 @@ describe("collectBasicProfile (mock 3 段・live なし)", () => {
     expect(err?.partial?.basic?.status).toBe(500);
   });
 
+  it("R1/R2/R3 の fetchedAt は各実受信時で単調 (cycle 流用なし)", async () => {
+    const { roundTrip } = mockTrip([ENTRY, SEARCH, TABLE]);
+    const stamps = [
+      "2026-09-30T00:00:01.000Z",
+      "2026-09-30T00:00:02.000Z",
+      "2026-09-30T00:00:03.000Z",
+      "2026-09-30T00:00:04.000Z",
+    ];
+    let n = 0;
+    const out = await collectBasicProfile("621A", {
+      roundTrip,
+      nowIso: () => stamps[Math.min(n++, stamps.length - 1)],
+    });
+    expect(out.entry.fetchedAt).toBe("2026-09-30T00:00:01.000Z");
+    expect(out.search.fetchedAt).toBe("2026-09-30T00:00:02.000Z");
+    expect(out.basic.fetchedAt).toBe("2026-09-30T00:00:03.000Z");
+    expect(out.evidence.basicFetchedAt).toBe("2026-09-30T00:00:04.000Z");
+    expect(out.evidence.entryFetchedAt).toBe(out.entry.fetchedAt);
+    expect(out.evidence.searchFetchedAt).toBe(out.search.fetchedAt);
+  });
+
   it("R1 輸送失敗時は partial なし (得済みゼロ)", async () => {
     const throwing: BasicRoundTrip = async () => {
       throw new Error("transport down");

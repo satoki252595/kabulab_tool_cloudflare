@@ -142,11 +142,25 @@ export function parseMarketSuffix(market: string): string | null {
   return m?.[1] ?? null;
 }
 
-/** ISO 8601 (UTC Z) の数値検証。文字列 gate の前提。 */
+/**
+ * ISO 8601 (UTC Z) の暦妥当性検証。文字列 gate の前提。
+ * Date.parse は存在しない暦日 (9/31 等) を正規化して通すため、
+ * UTC 成分の round-trip 一致を要求する (millis は任意)。
+ */
 function isValidIso(s: string): boolean {
+  const m =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?Z$/.exec(s);
+  if (m === null) return false;
+  const ms = Date.parse(s);
+  if (Number.isNaN(ms)) return false;
+  const d = new Date(ms);
   return (
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(s) &&
-    !Number.isNaN(Date.parse(s))
+    d.getUTCFullYear() === Number(m[1]) &&
+    d.getUTCMonth() + 1 === Number(m[2]) &&
+    d.getUTCDate() === Number(m[3]) &&
+    d.getUTCHours() === Number(m[4]) &&
+    d.getUTCMinutes() === Number(m[5]) &&
+    d.getUTCSeconds() === Number(m[6])
   );
 }
 
@@ -387,19 +401,36 @@ export function planOverlayDeltas(
       ev.boundEventsFetchedAt === batch.eventsFetchedAt &&
       isValidIso(batch.eventsFetchedAt) &&
       isValidIso(ev.basicFetchedAt) &&
+      isValidIso(ev.entryFetchedAt) &&
+      isValidIso(ev.searchFetchedAt) &&
+      Date.parse(ev.entryFetchedAt) <= Date.parse(ev.searchFetchedAt) &&
+      Date.parse(ev.searchFetchedAt) <= Date.parse(ev.basicFetchedAt) &&
       Date.parse(ev.basicFetchedAt) >= Date.parse(batch.eventsFetchedAt) &&
       isFullSha(ev.entrySha) &&
       isFullSha(ev.searchSha) &&
       isFullSha(ev.rawSha) &&
       ev.custody !== null &&
       ev.custody.pageId !== "" &&
+      // receipt 3SHA は証拠 3SHA と一致し、保管対応は非空 (両 basis)。
+      // page 集合の一致は要求しない (通常 composite 1 頁と
+      // reviewed 原本 3 頁は provenance が異なるため)。
+      ev.reviewedPins !== null &&
+      ev.reviewedPins.entrySha === ev.entrySha &&
+      ev.reviewedPins.searchSha === ev.searchSha &&
+      ev.reviewedPins.rawSha === ev.rawSha &&
+      ev.reviewedPins.custodyPageIds.length > 0 &&
+      ev.reviewedPins.custodyPageIds.every((p) => p !== "") &&
       ev.defsPins.countryGuide === DEFS_COUNTRY_GUIDE.sha256 &&
       ev.defsPins.ordinaryCode === DEFS_ORDINARY_CODE.sha256 &&
       ev.qualificationDate !== null &&
       ev.qualificationDate === batch.eligibilityAsOf &&
       (ev.qualificationBasis === "current-owner-qualified" ||
         (ev.qualificationBasis === "current-observation" &&
-          observedJstDate(ev.basicFetchedAt) === batch.eligibilityAsOf)) &&
+          observedJstDate(ev.entryFetchedAt) === batch.eligibilityAsOf &&
+          observedJstDate(ev.searchFetchedAt) === batch.eligibilityAsOf &&
+          observedJstDate(ev.basicFetchedAt) === batch.eligibilityAsOf &&
+          observedJstDate(batch.eventsFetchedAt) === batch.eligibilityAsOf &&
+          ev.reviewedPins.custodyPageIds.includes(ev.custody.pageId))) &&
       ev.datedSourcePin === null
     ) {
       market = resolveDomesticFullMarket(ev);
@@ -816,7 +847,18 @@ export function withBasicEvidence(
       // 将来頁・同 market 別頁への stale 印流用は HOLD。
       const reviewed = qualificationInput?.get(row.code);
       const pins = reviewed?.receiptPins;
+      // seam 主張 (evidence) と実 fetch (got) の一致を要求する。
+      // 不一致は黙って上書きせず、両 basis とも stamp しない (HOLD)。
+      // 原文メタは書き換えない (日付 rewrite 禁止)。
+      const seamConsistent =
+        got.evidence.entrySha === got.entry.sha256 &&
+        got.evidence.searchSha === got.search.sha256 &&
+        got.evidence.rawSha === got.basic.sha256 &&
+        got.evidence.entryFetchedAt === got.entry.fetchedAt &&
+        got.evidence.searchFetchedAt === got.search.fetchedAt &&
+        got.evidence.basicFetchedAt === got.basic.fetchedAt;
       const stamp =
+        seamConsistent &&
         reviewed !== undefined &&
         /^\d{4}-\d{2}-\d{2}$/.test(reviewed.date) &&
         reviewed.basis === "current-owner-qualified" &&
@@ -842,26 +884,35 @@ export function withBasicEvidence(
             }
           : null;
       // current-observation (通常 caller・reviewed なし用)。3 raw の実保管 +
-      // 全文 SHA readback は上記 pageId 確定で完了済み。実 basicFetchedAt の
-      // JST 暦日が elig と一致し、同一 cycle の実証拠が positive complete
-      // (code4/code5 予備桁 0・event 市場一致・国内短名・defs・世代時刻) の
-      // 場合のみ stamp する。日付は実観測 JST 日 (requested elig・UTC 日・
-      // listing 日・sourceAsOf の代用禁止)。historic・異日・R3 跨日は HOLD。
+      // 全文 SHA readback は上記 pageId 確定で完了済み。R1/R2/R3 実受信時刻
+      // (got 由来) + event 世代の JST 暦日が全て elig と一致し、実時刻が
+      // 順序 (entry≤search≤basic) で、同一 cycle の実証拠が positive
+      // complete (code4/code5 予備桁 0・event 市場一致・国内短名・defs・
+      // 世代時刻) の場合のみ stamp する。日付は実観測 JST 日 (requested
+      // elig・UTC 日・listing 日・sourceAsOf の代用禁止)。UTC 日跨ぎは
+      // 許容、JST cycle 跨ぎ・historic・異日は HOLD。
+      const r1At = got.entry.fetchedAt;
+      const r2At = got.search.fetchedAt;
+      const r3At = got.basic.fetchedAt;
       const observedJst =
-        stamp === null ? observedJstDate(got.evidence.basicFetchedAt) : null;
+        stamp === null ? observedJstDate(r3At) : null;
       const observed =
         stamp === null &&
+        seamConsistent &&
         observedJst !== null &&
         observedJst === input.eligibilityAsOf &&
+        observedJstDate(r1At) === input.eligibilityAsOf &&
+        observedJstDate(r2At) === input.eligibilityAsOf &&
+        observedJstDate(batch.eventsFetchedAt) === input.eligibilityAsOf &&
+        Date.parse(r1At) <= Date.parse(r2At) &&
+        Date.parse(r2At) <= Date.parse(r3At) &&
         got.evidence.code4 === row.code &&
         got.evidence.code5 === `${row.code}0` &&
         got.evidence.marketBare === row.market &&
         resolveDomesticFullMarket(got.evidence) !== null &&
         got.evidence.defsPins.countryGuide === DEFS_COUNTRY_GUIDE.sha256 &&
         got.evidence.defsPins.ordinaryCode === DEFS_ORDINARY_CODE.sha256 &&
-        isValidIso(batch.eventsFetchedAt) &&
-        Date.parse(got.evidence.basicFetchedAt) >=
-          Date.parse(batch.eventsFetchedAt)
+        Date.parse(r3At) >= Date.parse(batch.eventsFetchedAt)
           ? {
               date: observedJst,
               basis: "current-observation" as const,
