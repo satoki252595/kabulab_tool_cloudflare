@@ -1,0 +1,5 @@
+2026-09-30取得済み原本の行投影（全件CSVではない）。新規取得なし。
+
+FSA ZIP SHA256: f7f1d42f8f5732265cc241a9689f6e35f483593327f6250ec3aa30ec8bb53816。原本meta/headerとE38412/E42099/E42126の3行は値不変。current-627.jsonは保存済みowner POSTのcore18160/state/listing193投影。公式notice/stockの直接bindingと物理archive参照は既存IPO ledger identityBindingを参照。検証中の変更は境界を検査する明示的な変異であり、実データとして出力しない。
+
+ローカルCSV投影SHA256: b74298a8b0d2d04a864fb03b2972e76fc5bcb229fdabd285fcd3fb4d0dd5e8d8。CSVは既存.gitignoreの原本非公開運用を維持し、未配置環境では明示skip。原本ありのローカル検証は必須で実施済み。

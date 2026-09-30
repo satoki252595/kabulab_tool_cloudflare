@@ -195,6 +195,8 @@ def _read_codelist_rows(
     except ValueError as exc:
         raise ValueError(f"コードリスト CSV のヘッダが想定と不一致: {header}") from exc
 
+    if "提出者法人番号" in header:
+        idx["提出者法人番号"] = header.index("提出者法人番号")
     width = len(header)
     validated: list[tuple[int, list[str]]] = []
     for lineno, row in enumerate(rows[2:], start=3):
@@ -218,16 +220,19 @@ def _read_codelist_rows(
 
 
 def parse_codelist(
-    zip_bytes: bytes, *, raw_page_id: str | None = None
+    zip_bytes: bytes, *, raw_page_id: str | None = None, current: list[dict] | None = None
 ) -> list[StockMasterRecord]:
     """証券コードを持つ上場企業を返す。基準日は原本メタ行から読む。"""
+    from .codelist_identity import resolve_blank_tickers
+
+    resolved = resolve_blank_tickers(zip_bytes, current)
     data_date, idx, rows = _read_codelist_rows(zip_bytes)
     fetched_at = now_jst()
     records: list[StockMasterRecord] = []
-    for _, row in rows:
+    for lineno, row in rows:
         if row[idx[_COL_LISTED]].strip() != _LISTED_VALUE:
             continue  # 上場企業のみ
-        code = normalize_sec_code(row[idx[_COL_SEC_CODE]])
+        code = resolved[lineno] if lineno in resolved else normalize_sec_code(row[idx[_COL_SEC_CODE]])
         if code is None:
             continue  # 証券コードを持つ企業のみ
         records.append(

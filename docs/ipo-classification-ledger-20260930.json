@@ -233,7 +233,38 @@
     "3ebd74ff-84cd-8180-b62b-ec044eec190b",
     "3ebd74ff-84cd-8154-823b-e8c49c50bd71",
     "3ebd74ff-84cd-8157-aded-dd66f13d9f6d"
-   ]
+   ],
+   "identityBinding": {
+    "edinetCode": "E38412",
+    "corporateNumber": "1120001164401",
+    "coreStockId": 18160,
+    "listingDate": "2026-09-18",
+    "fsaReference": {
+     "asOf": "2026-09-30",
+     "sha256": "f7f1d42f8f5732265cc241a9689f6e35f483593327f6250ec3aa30ec8bb53816"
+    },
+    "coreReference": {
+     "sha256": "9bc6b50b7fa3ac86edd17bf87ef60625428423e72efa9df86de7ca741a5b1ec8"
+    },
+    "archiveKey": "ipo-bridge-20260930-daf8faeccd46",
+    "archiveZipSha256": "566321d0324dbf4fc45c7435c184dbb487ac47db2ad8ac89d5b2e4714107d91d",
+    "sources": [
+     {
+      "role": "notice",
+      "url": "https://akippa.co.jp/ir/notice/",
+      "sha256": "1dcb0710faa532e86bec4bfd4c1f663bd4c123408086a4a89206e9f2d680e401",
+      "bytes": 37249,
+      "fetchedAt": "2026-09-30T14:15:41.758Z"
+     },
+     {
+      "role": "stock",
+      "url": "https://akippa.co.jp/ir/stock/",
+      "sha256": "fb28b9d2d0c2ed2f862491c4e03b2aed92d877199eb6c3ff3684ff7db004d58b",
+      "bytes": 37829,
+      "fetchedAt": "2026-09-30T14:15:42.373Z"
+     }
+    ]
+   }
   },
   {
    "code": "634A",

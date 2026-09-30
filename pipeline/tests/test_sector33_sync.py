@@ -116,6 +116,7 @@ class _SectorD1(SqliteD1):
         self.con.executescript(PROD_DDL)
         for stmt in APPLIED_DDL:
             self.con.execute(stmt)
+        self.con.executescript((Path(__file__).resolve().parents[2] / "drizzle/d1/0025_useful_nightcrawler.sql").read_text())
         for code, sector33, active, itype in rows:
             self.con.execute(
                 "INSERT INTO core_stocks (code, name, market, sector, updated_at,"

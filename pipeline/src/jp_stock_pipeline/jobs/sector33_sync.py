@@ -28,12 +28,12 @@ import json
 import logging
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from ..cloud_store import core_stocks
 from ..cloud_store.d1 import D1Error, D1Store
-from ..collectors import edinet_codelist
+from ..collectors import codelist_identity, edinet_codelist
 from ..collectors.edinet_codelist import (
     _COL_EDINET_CODE,
     _COL_LISTED,
@@ -58,11 +58,8 @@ JOB_NAME = "sector33_sync"
 # 述語 (WHERE bind) にだけ使い、値は select しない (D-13-6)。
 _INSTRUMENT_EQUITY = "equity"
 
-# active-equity current の読み取り。select するのは code/sector33 のみ。
-ACTIVE_SNAPSHOT_SQL = (
-    f"SELECT code, {core_stocks.SECTOR33_COLUMN} FROM {core_stocks.TABLE} "
-    "WHERE is_active = ? AND instrument_type = ? ORDER BY code"
-)
+# active-equity current と認定identity/owner世代を同じ1文で読む。
+ACTIVE_SNAPSHOT_SQL = codelist_identity.ACTIVE_SNAPSHOT_SQL
 ACTIVE_SNAPSHOT_PARAMS = [1, _INSTRUMENT_EQUITY]
 
 ARCHIVE_SERVICE = "universe"
@@ -152,7 +149,7 @@ def check_sector_config(settings: Settings, args: argparse.Namespace) -> None:
         raise SectorConfigError("--codes は受けない (部分 scope では重複/欠落判定が崩れる)")
 
 
-def _scan_listed_rows(zip_bytes: bytes) -> tuple[list[dict], list[SectorHold]]:
+def _scan_listed_rows(zip_bytes: bytes, current: list[dict] | None = None) -> tuple[list[dict], list[SectorHold]]:
     """実 reader で生行を読み、ticker 欠損の合法/不正を分類する。
 
     parser と同じ検証済み行 (`_read_codelist_rows`)・同じ正規化
@@ -162,6 +159,7 @@ def _scan_listed_rows(zip_bytes: bytes) -> tuple[list[dict], list[SectorHold]]:
     戻りは (admitted 行, HOLD/INFO 診断)。admitted 行は
     `{ticker, raw, edinet, sector, line}`。
     """
+    resolved = codelist_identity.resolve_blank_tickers(zip_bytes, current)
     _, idx, rows = _read_codelist_rows(zip_bytes)
     admitted: list[dict] = []
     holds: list[SectorHold] = []
@@ -169,12 +167,12 @@ def _scan_listed_rows(zip_bytes: bytes) -> tuple[list[dict], list[SectorHold]]:
         if row[idx[_COL_LISTED]].strip() != _LISTED_VALUE:
             continue
         raw = row[idx[_COL_SEC_CODE]].strip()
-        if raw == "":
+        if raw == "" and lineno not in resolved:
             holds.append(SectorHold("legal-missing-ticker", f"line {lineno}: 空"))
             continue
         if raw == "00000":
             continue  # 共有検査が `0000` record 側で HOLD する
-        ticker = source_code_to_ticker(raw)
+        ticker = resolved[lineno] if lineno in resolved else source_code_to_ticker(raw)
         if ticker is None:
             holds.append(SectorHold("invalid-ticker", f"line {lineno}: {raw!r}"))
             continue
@@ -185,6 +183,7 @@ def _scan_listed_rows(zip_bytes: bytes) -> tuple[list[dict], list[SectorHold]]:
                 "edinet": row[idx[_COL_EDINET_CODE]].strip(),
                 "sector": row[idx[_COL_SECTOR]].strip(),
                 "line": lineno,
+                "identity_origin": "certified" if lineno in resolved else "literal",
             }
         )
     return admitted, holds
@@ -238,6 +237,8 @@ def _validate_current_snapshot(current: list[dict]) -> None:
 def _verify_normalization(admitted: list[dict]) -> None:
     """admitted 全行の正規化を再検証する。不正は STOP (絶対に通さない)。"""
     for row in admitted:
+        if row.get("identity_origin") == "certified" and row["raw"] == "":
+            continue  # 同じ共有resolverが現在owner/原本bindingを検証済み
         again = source_code_to_ticker(row["raw"])
         if again is None or again != row["ticker"]:
             raise SectorPrewriteStop(
@@ -333,8 +334,15 @@ def execute(ctx: JobContext) -> SectorReport:
         report.stopped = "fetch-failure"
         return report
     zip_bytes = artifact.local_path.read_bytes()
+    store = D1Store(ctx.settings.cloud_store, writer=JOB_NAME)
     try:
-        records = edinet_codelist.parse_codelist(zip_bytes)
+        current = store.query(ACTIVE_SNAPSHOT_SQL, list(ACTIVE_SNAPSHOT_PARAMS))
+    except D1Error as exc:
+        ctx.add_failure("sector33-read", f"現在値を読めない: {exc}")
+        report.stopped = "read-failure"
+        return report
+    try:
+        records = edinet_codelist.parse_codelist(zip_bytes, current=current)
     except ValueError as exc:
         ctx.add_failure("sector33-parse", f"parse 失敗: {exc}")
         report.stopped = "parse-failure"
@@ -353,7 +361,7 @@ def execute(ctx: JobContext) -> SectorReport:
         report.stopped = exc.kind
         return report
     report.holds.extend(SectorHold(h.kind, h.detail) for h in inspected.holds)
-    admitted, scan_holds = _scan_listed_rows(zip_bytes)
+    admitted, scan_holds = _scan_listed_rows(zip_bytes, current=current)
     report.holds.extend(scan_holds)
     # scan と parser の一致 pin。parser 側にだけ居る code は
     # 合法欠損由来の phantom (`00000`→`0000`) のみ許す。
@@ -422,13 +430,6 @@ def execute(ctx: JobContext) -> SectorReport:
     else:
         logger.info("dry-run: archive CLI と D1 書込を省く (fetch/parse/gate/plan のみ)")
 
-    store = D1Store(ctx.settings.cloud_store, writer=JOB_NAME)
-    try:
-        current = store.query(ACTIVE_SNAPSHOT_SQL, list(ACTIVE_SNAPSHOT_PARAMS))
-    except D1Error as exc:
-        ctx.add_failure("sector33-read", f"現在値を読めない: {exc}")
-        report.stopped = "read-failure"
-        return report
     try:
         _validate_current_snapshot(current)
     except SectorPrewriteStop as exc:
@@ -445,7 +446,11 @@ def execute(ctx: JobContext) -> SectorReport:
         return report
 
     changes = core_stocks.plan_sector33_updates(current, qualified)
-    statements = core_stocks.build_sector33_updates(changes)
+    certified = {a["ticker"] for a in admitted if a.get("identity_origin") == "certified"}
+    guarded = {k: v for k, v in changes.items() if k in certified}
+    statements = core_stocks.build_sector33_updates({k: v for k, v in changes.items() if k not in guarded})
+    statements += [codelist_identity.certified_update(k, v, date.fromisoformat(asof))
+                   for k, v in guarded.items()]
     report.planned = len(changes)
     if ctx.settings.dry_run:
         logger.info("dry-run: %d 行の差分を書かない (%d 文)", len(changes), len(statements))
@@ -453,12 +458,14 @@ def execute(ctx: JobContext) -> SectorReport:
     written = 0
     for sql, params in statements:
         try:
-            store.query(sql, params)
+            result = store.query(sql, params)
+            if "RETURNING code" in sql and result != [{"code": params[1]}]:
+                raise D1Error("認定identityがUPDATE時に変化 (書込0)")
         except D1Error as exc:
             ctx.add_failure("sector33-update", f"UPDATE 失敗 ({written}/{len(changes)} 行): {exc}")
             report.stopped = "update-failure"
             return report
-        written += len(params) - 1
+        written += 1 if "RETURNING code" in sql else len(params) - 1
     report.written = written
     ctx.add_success(written)
     current_invalid = {

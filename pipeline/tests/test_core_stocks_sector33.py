@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from datetime import date
 from types import SimpleNamespace
 
@@ -198,6 +200,7 @@ class _FakeD1(SqliteD1):
         self.con.executescript(PROD_DDL)
         for stmt in APPLIED_DDL:
             self.con.execute(stmt)
+        self.con.executescript((Path(__file__).resolve().parents[2] / "drizzle/d1/0025_useful_nightcrawler.sql").read_text())
         for code, sector33 in rows:
             self.con.execute(
                 "INSERT INTO core_stocks (code, name, market, sector, updated_at, sector33)"
@@ -250,11 +253,17 @@ def fake_d1(monkeypatch):
     return install
 
 
+def _prepared_sync(ctx, records):
+    store = master_sync._sector33_store(ctx)
+    current = store.query(cs.SECTOR33_SNAPSHOT_SQL) if store is not None else None
+    master_sync._sync_sector33(ctx, records, store=store, current=current, certified=set())
+
+
 class TestSyncSector33:
     def test_差分だけ書き_updated_at_は動かない(self, fake_d1) -> None:
         store = fake_d1([("7203", "輸送用機器"), ("9301", None), ("1201", "不動産業")])
         ctx = _ctx(dry_run=False)
-        master_sync._sync_sector33(
+        _prepared_sync(
             ctx,
             [_record("7203", "輸送用機器"), _record("9301", "倉庫・運輸関連")],
         )
@@ -269,15 +278,15 @@ class TestSyncSector33:
     def test_2回目は0文(self, fake_d1) -> None:
         store = fake_d1([("9301", None)])
         records = [_record("9301", "倉庫・運輸関連")]
-        master_sync._sync_sector33(_ctx(dry_run=False), records)
+        _prepared_sync(_ctx(dry_run=False), records)
         before = len(store.write_sql)
-        master_sync._sync_sector33(_ctx(dry_run=False), records)
+        _prepared_sync(_ctx(dry_run=False), records)
         assert len(store.write_sql) == before
 
     def test_dry_run_は書かない(self, fake_d1) -> None:
         store = fake_d1([("9301", None)])
         ctx = _ctx(dry_run=True)
-        master_sync._sync_sector33(ctx, [_record("9301", "倉庫・運輸関連")])
+        _prepared_sync(ctx, [_record("9301", "倉庫・運輸関連")])
         assert store.write_sql == []
         assert store.sql_log == [cs.SECTOR33_SNAPSHOT_SQL]
         assert store.values()["9301"] == (None, 1000)
@@ -290,14 +299,14 @@ class TestSyncSector33:
 
         monkeypatch.setattr(master_sync, "D1Store", boom)
         ctx = _ctx(dry_run=False, d1=False)
-        master_sync._sync_sector33(ctx, [_record("9301", "倉庫・運輸関連")])
+        _prepared_sync(ctx, [_record("9301", "倉庫・運輸関連")])
         assert ctx.failures == []
 
     def test_D1_の失敗は記録して例外を投げない(self, fake_d1) -> None:
         """Notion / ローカルの同期（この後の処理とジョブログ）を止めない。"""
         fake_d1([("9301", None)], fail_on_update=True)
         ctx = _ctx(dry_run=False)
-        master_sync._sync_sector33(ctx, [_record("9301", "倉庫・運輸関連")])
+        _prepared_sync(ctx, [_record("9301", "倉庫・運輸関連")])
         assert ctx.failures and ctx.failures[0][0] == "core_stocks.sector33"
 
 
@@ -329,7 +338,8 @@ class TestMasterSyncWiring:
         self._patch_fetch(monkeypatch)
         store = fake_d1([("7203", None), ("9301", None)])
         assert master_sync.main(["--dry-run"], env=self._env(tmp_path)) == 0
-        assert store.sql_log == [cs.SECTOR33_SNAPSHOT_SQL]
+        assert len(store.sql_log) == 1
+        assert "latest_listing_date" in store.sql_log[0]
         assert store.write_sql == []
 
     def test_limit_指定では読みも書きもしない(self, monkeypatch, tmp_path, fake_d1) -> None:
