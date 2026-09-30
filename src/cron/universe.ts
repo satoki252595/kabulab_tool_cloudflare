@@ -181,7 +181,9 @@ export interface OverlayListingInsertRow {
 /**
  * overlay 用: 新規上場行を挿入する (呼出側で 14 行/文に分割済み)。
  * instrument_type は 'equity' を明示する (NULL だと日次の
- * activeEquityCondition() に載らない)。sector は NULL (EDINET 所有)、
+ * activeEquityCondition() に載らない)。sector は NULL (所有は JPX 月次;
+ * personal-only のため overlay は書かない)。sector33 は EDINET 所有の
+ * 公開列のため触らない (NULL のまま)。Basic 業種はどちらにも書かない。
  * is_yutai は DB default (false)。conflict は無現役化 (DoNothing)。
  */
 export async function insertCoreStocks(

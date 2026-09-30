@@ -25,6 +25,11 @@
     "note": "g2 max24 used22 (7x3 + 619A burned1/0bytes) + g3 619A-only max3 used3 (sends 23-25)"
    },
    "attemptedOverall": 28,
+   "pdf1-618A": {
+    "cap": 1,
+    "used": 1,
+    "note": "separate scope (dated admission PDF, no repeat)"
+   },
    "remaining": 0,
    "note": "attempted 28 には burned 1 (0 bytes) を含む。全GET終了、追加0。"
   },
@@ -64,7 +69,31 @@
     "3ebd74ff-84cd-817e-9851-d0466a315bc5",
     "3ebd74ff-84cd-81a4-ab76-db0b76687893",
     "3ebd74ff-84cd-8131-97b7-db9a88334ba7"
-   ]
+   ],
+   "datedSource": {
+    "sourceAsOf": "2026-08-12",
+    "sourceAsOfNote": "提出日 (p2 表紙)。fetch 時刻ではない",
+    "submittedDate": "2026-08-12",
+    "company": "株式会社KOMPEITO",
+    "docTitle": "新規上場申請のための有価証券報告書(Ⅰの部)",
+    "url": "https://www.jpx.co.jp/listing/stocks/new/t13vrt000001u0tv-att/09KOMPEITO-1s.pdf",
+    "bytes": 2669627,
+    "sha256": "ab923270f7011b299e21ec8f50febb42393994248a878566ab58c6c0231836db",
+    "contentType": "application/pdf",
+    "httpStatus": 200,
+    "redirect": null,
+    "lastModified": "Wed, 12 Aug 2026 07:00:29 GMT",
+    "hrefUniqueInGeneration": true,
+    "generationRawSha": "70c27b36577fd591310b72f1ceea459c5e467016ba0f612c5855a632df638fc8",
+    "ordinaryOnlySince": "2026-06-04",
+    "ordinaryBasis": "p39 全優先株式を会社法178条に基づき消却 + p60⑨ 現在は普通株式のみ・種類株式発行会社ではない",
+    "codeInDoc": false,
+    "listingDateInDoc": false,
+    "custodyPageId": "3ebd74ff-84cd-819d-ae74-ccc661030a79",
+    "custodyKey": "basic-618A-2026-09-30-dated-gen-20260930010251641-sha-ab923270f701",
+    "custodyOutcome": "recorded",
+    "readback": "OK"
+   }
   },
   {
    "code": "621A",
