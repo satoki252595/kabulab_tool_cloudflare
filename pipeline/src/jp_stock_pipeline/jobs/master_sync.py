@@ -42,7 +42,7 @@ from functools import partial
 from ..cloud_store import core_stocks, notion_pages
 from ..cloud_store.d1 import D1Error, D1Store
 from ..collectors import codelist_identity, edinet_codelist
-from ..notion import upsert
+from ..notion import schema as S, upsert
 from ..rawstore import save_raw
 from .runner import JobContext, apply_limit, build_parser, main_exit, run_job
 
@@ -138,7 +138,13 @@ def execute(ctx: JobContext) -> None:
         # L-19: 既存行と同値なら PATCH を省く（月次 3,841 件 → 差分のみ）。
         # ローカル系統には書く（persist の notion 側だけを no-op にする）。
         entry = master_entries.get(record.code)
-        if map_ok and entry is not None and upsert.stock_master_matches_page(entry[1], record):
+        identity_matches = record.code not in resolved.values() or (
+            entry is not None
+            and upsert._read_relation_ids_checked(entry[1], S.PROP_RAW_RELATION) == [identity_page_id]
+            and upsert._relation_complete(entry[1], S.PROP_RAW_RELATION)
+        )
+        if (map_ok and entry is not None and identity_matches
+                and upsert.stock_master_matches_page(entry[1], record)):
             skipped += 1
             notion_write = partial(_existing_page_id, entry[0])
         else:

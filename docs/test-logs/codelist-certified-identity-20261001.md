@@ -21,3 +21,5 @@ Nix `uv run pytest`: **1529 passed / 58 skipped**（取得済み原本ありの�
 初期coreID/episodeは保存済みPOST時点の証明であり現在DBの再観測とは扱わない。実適用前はRootの別資格確認・実行条件が必要。
 
 認定subsetの来歴は共通関数で作成。sector世代manifestにledger SHA・raw空欄/resolvedコード・証拠参照・現在owner検査値を保存する。masterは認定行がある場合のみ派生来歴を既存save_raw/upload_rawで物理保管し、認定行のprovenance.raw_page_idで結ぶ。派生manifestは元FSA rawPageId/SHA・CSV sourceAsOf・実sourceFetchedAt・過去binding取得時計を別々に記録。原本SHA重複スキップで来歴が未添付になる方式は採らない。保管失敗時の認定行書込0を実経路で検証。新model/schemaなし。
+
+認定subsetのNotion同値skipは意味値だけでは許可せず、既存原本relationが同じ認定manifestに完全一致した時だけ許可する。旧FSArelationの場合にPATCHされる実caller回帰を確認し、native同値skipは変更しない。

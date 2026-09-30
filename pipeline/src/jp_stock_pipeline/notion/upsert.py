@@ -733,7 +733,7 @@ def stock_master_matches_page(
 
     - 時刻系（最終データ更新日/取得日時/データ基準日）: 毎 run 変わるので
       見ると skip が永遠に発火しない。意味が変わった run の PATCH で更新される
-    - 由来系（ソース/ライセンス/品質/原本）: master_sync では実行ごとに同一
+    - 由来系: 認定tickerの原本relation一致は master_sync caller が別途検査する
     - ライフサイクル 3 項目: 開示が所有し master_sync は書かない
 
     読めない形の行は False（書く側に倒す。欠損より二重 PATCH がまし）。

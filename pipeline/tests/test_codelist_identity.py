@@ -168,6 +168,36 @@ def test_master_lineage_physical_gate_and_record_relation(monkeypatch, tmp_path)
     assert lineage["rows"][0]["rawCode"] == ""
     assert lineage["rows"][0]["binding"]["archiveKey"] == "ipo-bridge-20260930-daf8faeccd46"
     assert lineage["ledger"]["sha256"]
+    # 意味値一致でも旧FSA relationなら認定来歴へのPATCHを省かない。
+    from jp_stock_pipeline.notion import schema as S
+    props = master.upsert.stock_master_properties(records[0])
+    for prop in props.values():
+        for block in prop.get("title", prop.get("rich_text", [])):
+            block["plain_text"] = block["text"]["content"]  # Notion response形
+    assert master.upsert.stock_master_matches_page(props, records[0])
+    props[S.PROP_RAW_RELATION] = {"relation": [{"id": "original-fsa"}]}
+    monkeypatch.setattr(master.upsert, "load_stock_master_entries",
+                        lambda *args: {"627A": ("master-page", props)})
+    writes = []
+    monkeypatch.setattr(master.upsert, "upsert_stock_master",
+                        lambda *args, **kwargs: writes.append(kwargs) or "master-page")
+
+    def persist(record, notion_write, **kwargs):
+        records.append(record)
+        notion_write()
+        return True
+
+    ctx.persist = persist
+    uploaded.clear()
+    records.clear()
+    master.execute(ctx)
+    assert len(writes) == 1 and writes[0]["existing_page_id"] == "master-page"
+    # 同じ認定manifest relationまで届いた場合だけ、再実行skipを維持する。
+    props[S.PROP_RAW_RELATION] = {"relation": [{"id": "identity-lineage"}]}
+    uploaded.clear()
+    records.clear()
+    master.execute(ctx)
+    assert len(writes) == 1
     # 派生来歴の物理保管失敗を握らず、同じ認定行の書込前に停止する。
     records.clear()
     uploaded.clear()
