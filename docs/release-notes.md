@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- 海外 baseline custody / current PREP proposal を追加 (未実行・LOCAL のみ。3675 baseline ZIP 160 members 固定 + immutable key、PR216 journal→NEW baseline join 案、73 pin-inspection 73/73 HOLD、L2 scoped/CAS 案。旧 1781/1894・旧 counts は historical)。証跡 `docs/test-logs/overseas-baseline-custody-2026-09-30.md`。source/Notion/D1/R2/dispatch 全 0、データ変更なし。
 - 海外 fresh full READ を capture runner で実行 (Q1F 17射影 + Q2F 13射影 × 37 chunks = 74 SELECT。3675全通観測・21245 facts・missing 0。grant-first・preflight・fsync-first log・whole body wx0600・safe receipt・retry 0)。旧 1781/1894 は historical のみ、現行基準は frozen 3675 + NEW full16/Q2 all13。証跡 `docs/test-logs/overseas-fresh-read-proposal-2026-09-30.md`。D1 READ 74 のみ、source/Notion/D1書込/R2/dispatch 0、データ変更なし。
 - Python D1 trust root を最小厳格化 (query 応答の dict・literal True・result exact1・entry・results・行 dict 必須、bind は有限スカラーのみ max100、upsert は全行検査を初 chunk 前に、file_size 兄弟も同格)。sector job は current active の空・重複・非正準 code (phantom 含む)・sector33 非 str/非 None・不完全行を prewrite STOP (正準形一致・正準 ID 重複・構造型、未知 sector は retain/gap 維持)。証跡 `docs/test-logs/py-d1-trust-root-20260930.md`。データ変更なし (Refs #196)。
 - sector33-only cadence を追加 (stock daily 成功＋trade_date 非空の直後・moneyflow 前の step)。EDINET 取得→厳密 parse→共有候補検査 (ticker/issuer 一意＋literal 有効 EDINET 必須)→TS CLI 保管検証→active-equity 差分のみ D1 書込。重複は last-wins 廃止で STOP、未知 sector は retain (NULL 消去なし)、builder は None/33 業種外を拒否。不足残存は partial (exit 1) で moneyflow 停止。証跡 `docs/test-logs/sector33-cadence-proof-20260930.md`。データ変更なし (Refs #196)。
