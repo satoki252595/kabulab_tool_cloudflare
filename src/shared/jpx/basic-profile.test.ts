@@ -230,7 +230,6 @@ describe("collectBasicProfile (mock 3 段・live なし)", () => {
       "2026-09-30T00:00:01.000Z",
       "2026-09-30T00:00:02.000Z",
       "2026-09-30T00:00:03.000Z",
-      "2026-09-30T00:00:04.000Z",
     ];
     let n = 0;
     const out = await collectBasicProfile("621A", {
@@ -240,7 +239,8 @@ describe("collectBasicProfile (mock 3 段・live なし)", () => {
     expect(out.entry.fetchedAt).toBe("2026-09-30T00:00:01.000Z");
     expect(out.search.fetchedAt).toBe("2026-09-30T00:00:02.000Z");
     expect(out.basic.fetchedAt).toBe("2026-09-30T00:00:03.000Z");
-    expect(out.evidence.basicFetchedAt).toBe("2026-09-30T00:00:04.000Z");
+    // evidence 時刻は fetch 時刻と同一変数 (2 度採りは seam 不一致を起こす)。
+    expect(out.evidence.basicFetchedAt).toBe(out.basic.fetchedAt);
     expect(out.evidence.entryFetchedAt).toBe(out.entry.fetchedAt);
     expect(out.evidence.searchFetchedAt).toBe(out.search.fetchedAt);
   });

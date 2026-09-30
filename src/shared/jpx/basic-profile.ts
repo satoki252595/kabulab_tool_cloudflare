@@ -567,11 +567,14 @@ async function collectBasicProfileInner(
     body: params.toString(),
     cookie: cookieHeader(jar),
   });
+  // R3 受信直後に 1 回だけ採取し、fetch と evidence で共有する。
+  // 2 度採りすると実時計の ms 進行で seam 不一致になり全 IPO が HOLD する。
+  const r3FetchedAt = nowIso();
   partial.basic = await mkFetch(
     `https://www2.jpx.co.jp${TSE_BASIC_PATH}`,
     r3.status,
     r3.bytes,
-    nowIso()
+    r3FetchedAt
   );
   if (r3.status !== 200 || r3.location !== null) {
     fail(code4, "R3", `http=${r3.status} redirect=${r3.location !== null}`);
@@ -580,7 +583,7 @@ async function collectBasicProfileInner(
   if ((jar.get("JSESSIONID") ?? "") !== session1) {
     fail(code4, "R3", "session 断 (S1 型 bounce)");
   }
-  const basicFetchedAt = nowIso();
+  const basicFetchedAt = r3FetchedAt;
   const row = parseBasicProfile(r3.text, code4);
   const entry = partial.entry as BasicFetch;
   const search = partial.search as BasicFetch;

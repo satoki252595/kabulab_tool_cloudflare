@@ -1,4 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import type { DelistedRow } from "../shared/jpx/delisted.js";
@@ -1128,6 +1131,79 @@ CREATE TABLE universe_overlay_state (
       .from(stocks)
       .where(activeEquityCondition());
     expect(hit).toEqual([{ code: "618A" }]);
+  });
+
+  it("実 collectBasicProfile (ticking 時計・実 HTML) → no-map → insert される", async () => {
+    const { collectBasicProfile } = await import(
+      "../shared/jpx/basic-profile.js"
+    );
+    const fx = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../shared/jpx/__fixtures__"
+    );
+    const pages = [
+      readFileSync(join(fx, "basic-entry-form.html"), "utf-8"),
+      readFileSync(join(fx, "basic-search-030.html"), "utf-8"),
+      readFileSync(join(fx, "basic-table.html"), "utf-8"),
+    ];
+    // 実時計の ms 進行を模す ticking clock (JST 9/30 15:31 起点)。
+    const t0 = Date.parse("2026-09-30T06:31:00.000Z");
+    let tick = 0;
+    const deps = {
+      nowIso: () => new Date(t0 + tick++).toISOString(),
+    };
+    let n = 0;
+    const roundTrip = async () => {
+      const text = pages[n++];
+      return {
+        status: 200,
+        location: null,
+        // fixture の form action sid (REDACTED) と一致させる。
+        setCookies: ["JSESSIONID=REDACTED; Path=/; HttpOnly"],
+        bytes: enc.encode(text),
+        text,
+      };
+    };
+    const b = batch("2026-09-30");
+    b.sources.delisted.rows = [];
+    b.sources.transfers.rows = [];
+    // fixture は 621A (9/16・グロース) の S2 実 raw 抜粋。
+    b.sources.newListings.rows = b.sources.newListings.rows.slice(2, 3);
+    expect(b.sources.newListings.rows[0]?.code).toBe("621A");
+    const { record, listFiles, downloadBytes } = verifyMocks();
+    const collect = withBasicEvidence(async () => b, {
+      collectBasic: ((code: string) =>
+        collectBasicProfile(code, {
+          roundTrip: roundTrip as never,
+          nowIso: deps.nowIso,
+        })) as never,
+      record: record as never,
+      listFiles: listFiles as never,
+      downloadBytes: downloadBytes as never,
+    });
+    const out = await collect({ baseAsOf: null, eligibilityAsOf: "2026-09-30" });
+    const ev = out.basics?.get("621A");
+    // ticking 下でも seam 一致し current-observation が載る。
+    expect(ev?.qualificationDate).toBe("2026-09-30");
+    expect(ev?.qualificationBasis).toBe("current-observation");
+    expect(ev?.reviewedPins?.rawSha).toBe(ev?.rawSha);
+    const result = await applyUniverseOverlay(memDb() as never, out, []);
+    expect(result.listed).toBe(1);
+    expect(result.heldListingCodes).toEqual([]);
+    const row = sqlite
+      .prepare(
+        "SELECT market, sector, is_active, instrument_type FROM core_stocks WHERE code='621A'"
+      )
+      .get() as {
+      market: string;
+      sector: null;
+      is_active: number;
+      instrument_type: string;
+    };
+    expect(row.market).toBe("グロース（内国株式）");
+    expect(row.sector).toBeNull();
+    expect(row.is_active).toBe(1);
+    expect(row.instrument_type).toBe("equity");
   });
 });
 
