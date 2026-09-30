@@ -11,12 +11,15 @@ import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
+import { createHash } from "node:crypto";
 import {
+  assertFreshOutDir,
   buildQ1F,
   buildQ2F,
   chunkIds,
   createCaptureFetch,
   HoldError,
+  holdPrivate,
   offlineDb,
   partitionChunk,
   requireGrant,
@@ -174,7 +177,21 @@ describe("bound guard (native 0 call)", () => {
   });
 });
 
-describe("capture 層 (fsync-first log + wx0600 body + safe receipt)", () => {
+describe("capture 層 (exact grant + fsync-first log + wx0600 body + safe receipt)", () => {
+  const sha = (d: string) => createHash("sha256").update(d).digest("hex");
+  const setSHA = (ids: string[]) => sha(JSON.stringify([...ids].sort()));
+  const URL = "https://d1.invalid/query";
+  const SQL = "select 1";
+  const PARAMS = ["S100SECRET"];
+  const attemptOf = (): AttemptCtx => ({
+    seq: 7, kind: "Q1F", chunk: 0, idsSHA: setSHA(PARAMS), sqlSHA: sha(SQL),
+  });
+  const bodyOf = (sql = SQL, params: unknown[] = PARAMS) => ({
+    method: "POST",
+    headers: { authorization: "Bearer s3cr3t" },
+    body: JSON.stringify({ sql, params }),
+  });
+
   it("body を wx0600 保存し res を intact で返し log 2 行を残す", async () => {
     const dir = mkdtempSync(join(tmpdir(), "capture-test-"));
     const counters: GuardCounters = { observed: 0, failed: 0 };
@@ -184,13 +201,9 @@ describe("capture 層 (fsync-first log + wx0600 body + safe receipt)", () => {
         status: 200,
         headers: { "content-type": "application/json", authorization: "Bearer s3cr3t" },
       })) as typeof fetch;
-    const at: AttemptCtx = { seq: 7, kind: "Q1F", chunk: 0, idsSHA: "i".repeat(64), sqlSHA: "s".repeat(64) };
-    const cap = createCaptureFetch(inner, dir, counters, receipts, () => at, () => undefined);
-    const res = await cap("https://d1.invalid/query", {
-      method: "POST",
-      headers: { authorization: "Bearer s3cr3t" },
-      body: JSON.stringify({ sql: "select 1", params: ["S100SECRET"] }),
-    });
+    const at = attemptOf();
+    const cap = createCaptureFetch(inner, dir, counters, receipts, sha(URL), () => at, () => undefined);
+    const res = await cap(URL, bodyOf());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ success: true });
     const bodyPath = join(dir, "attempt-007-Q1F-body.bin");
@@ -209,6 +222,8 @@ describe("capture 層 (fsync-first log + wx0600 body + safe receipt)", () => {
     expect(log).toContain('"status":200');
     expect(log).toContain('"bodySHA":"');
     expect(log).toContain('"rawBytes":');
+    expect(log).toContain('"sendAt":"');
+    expect(log).toContain('"receivedAt":"');
     expect(log).toContain(bodyPath);
     // request 秘密・params 値は log しない。
     expect(log).not.toContain("s3cr3t");
@@ -216,17 +231,76 @@ describe("capture 層 (fsync-first log + wx0600 body + safe receipt)", () => {
     expect(log).not.toContain("authorization");
   });
 
-  it("同一 seq の再入は wx で拒否する", async () => {
+  it("target/SQL/params の不一致は log/forward の前に拒否する (inner 0 call)", async () => {
+    for (const mutate of [
+      { url: "https://evil.invalid/query", sql: SQL, params: PARAMS, want: "target SHA 外" },
+      { url: URL, sql: "select 2", params: PARAMS, want: "SQL SHA 外" },
+      { url: URL, sql: SQL, params: ["S100OTHER"], want: "idsSHA 外" },
+    ]) {
+      const dir = mkdtempSync(join(tmpdir(), "capture-test-"));
+      const counters: GuardCounters = { observed: 0, failed: 0 };
+      const receipts: BodyReceipt[] = [];
+      let innerCalls = 0;
+      const inner = (async () => {
+        innerCalls += 1;
+        return new Response("{}");
+      }) as typeof fetch;
+      const cap = createCaptureFetch(inner, dir, counters, receipts, sha(URL), () => attemptOf(), () => undefined);
+      await expect(cap(mutate.url, bodyOf(mutate.sql, mutate.params))).rejects.toThrow(mutate.want);
+      expect(innerCalls).toBe(0);
+      expect(receipts.length).toBe(0);
+      expect(counters.failed).toBe(1);
+      expect(() => readFileSync(join(dir, "attempt.log"))).toThrow();
+    }
+  });
+
+  it("実 builders の SQL/params が exact grant を通過する (送信なし capture)", async () => {
+    const chunk = ["S100T000", "S100T001"];
+    let captured: { sql: string; params: unknown[] } | null = null;
+    const db = drizzle(async (sqlStr, params) => {
+      captured = { sql: sqlStr, params: [...params] };
+      return { rows: [] };
+    }, { schema: {} });
+    await buildQ1F(db, chunk);
+    if (captured === null) throw new Error("capture 失敗");
+    const { sql: realSQL, params: realParams } = captured as { sql: string; params: unknown[] };
     const dir = mkdtempSync(join(tmpdir(), "capture-test-"));
     const counters: GuardCounters = { observed: 0, failed: 0 };
     const receipts: BodyReceipt[] = [];
-    const inner = (async () => new Response("{}")) as typeof fetch;
-    const at: AttemptCtx = { seq: 1, kind: "Q1F", chunk: 0, idsSHA: "i", sqlSHA: "s" };
-    const cap = createCaptureFetch(inner, dir, counters, receipts, () => at, () => undefined);
-    await cap("https://d1.invalid/query", {});
-    await expect(cap("https://d1.invalid/query", {})).rejects.toThrow("再入");
+    let innerCalls = 0;
+    const inner = (async () => {
+      innerCalls += 1;
+      return new Response("{}");
+    }) as typeof fetch;
+    const at: AttemptCtx = {
+      seq: 1, kind: "Q1F", chunk: 0,
+      idsSHA: setSHA((realParams as unknown[]).map((p) => String(p))),
+      sqlSHA: sha(realSQL),
+    };
+    const cap = createCaptureFetch(inner, dir, counters, receipts, sha(URL), () => at, () => undefined);
+    await cap(URL, { body: JSON.stringify({ sql: realSQL, params: realParams }) });
+    expect(innerCalls).toBe(1);
+    expect(receipts.length).toBe(1);
+  });
+
+  it("同一 seq の再入は marker 予約で native 到達前に拒否する (2 回目は send 0)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "capture-test-"));
+    const counters: GuardCounters = { observed: 0, failed: 0 };
+    const receipts: BodyReceipt[] = [];
+    let innerCalls = 0;
+    const inner = (async () => {
+      innerCalls += 1;
+      return new Response("{}");
+    }) as typeof fetch;
+    const cap = createCaptureFetch(inner, dir, counters, receipts, sha(URL), () => attemptOf(), () => undefined);
+    await cap(URL, bodyOf());
+    await expect(cap(URL, bodyOf())).rejects.toThrow("予約済み・再送なし");
+    expect(innerCalls).toBe(1);
     expect(counters.failed).toBe(1);
     expect(receipts.length).toBe(1);
+    const markerPath = join(dir, "attempt-007-Q1F-reserved");
+    expect(statSync(markerPath).mode & 0o777).toBe(0o600);
+    expect(readFileSync(markerPath, "utf8")).toContain('"reservedAt":"');
   });
 
   it("attempt context 不在の送信を拒否する", async () => {
@@ -238,9 +312,37 @@ describe("capture 層 (fsync-first log + wx0600 body + safe receipt)", () => {
       innerCalls += 1;
       return new Response("{}");
     }) as typeof fetch;
-    const cap = createCaptureFetch(inner, dir, counters, receipts, () => null, () => undefined);
-    await expect(cap("https://d1.invalid/query", {})).rejects.toThrow("context 不在");
+    const cap = createCaptureFetch(inner, dir, counters, receipts, sha(URL), () => null, () => undefined);
+    await expect(cap(URL, bodyOf())).rejects.toThrow("context 不在");
     expect(innerCalls).toBe(0);
     expect(receipts.length).toBe(0);
+  });
+});
+
+describe("assertFreshOutDir (replay/上書き防止)", () => {
+  it("既存 dir は拒否・不存在は通過 (作成はしない)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "capture-test-"));
+    expect(() => assertFreshOutDir(dir)).toThrow(HoldError);
+    expect(() => assertFreshOutDir(join(dir, "fresh-sub"))).not.toThrow();
+  });
+});
+
+describe("holdPrivate (stdout-safety)", () => {
+  it("safe label のみ投げ detail は 0600 に残す", () => {
+    const dir = mkdtempSync(join(tmpdir(), "capture-test-"));
+    expect(() => holdPrivate(dir, "chunk0 Q1F 送信失敗", "D1 FULL BODY S100SECRET s3cr3t")).toThrow(
+      HoldError
+    );
+    try {
+      holdPrivate(dir, "chunk0 Q1F 送信失敗", "x");
+    } catch (e) {
+      expect((e as Error).message).toBe("HOLD: chunk0 Q1F 送信失敗 (詳細は private hold-details.log 参照)");
+      expect((e as Error).message).not.toContain("S100SECRET");
+    }
+    const logPath = join(dir, "hold-details.log");
+    expect(statSync(logPath).mode & 0o777).toBe(0o600);
+    const log = readFileSync(logPath, "utf8");
+    expect(log).toContain("S100SECRET");
+    expect(log).toContain("s3cr3t");
   });
 });

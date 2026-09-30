@@ -6,7 +6,8 @@
  * × 2 = 上限 74 SELECT で取得し、0600 に raw capture する。比較・CAS・L2・
  * 書込は含まない (READ-only)。post-facts の IDs は business key +
  * expected NEW 表で照合する (削除済み旧 fact IDs の存続は要求しない)。
- * doc 側は protected 全16列の capture が preimage となる。
+ * doc 側は全16列の capture が preimage となる (将来 repair は
+ * protected14 不変 + overseas 2列 (status/honbun) の正規変更を期待)。
  *
  * 実行条件 (fail-closed):
  * - `--grant=<Root承認文>` が無いと起動しない (fetch 0 のまま HOLD)。
@@ -17,10 +18,15 @@
  * 送信路 (既存再使用 + capture 層):
  * - `createBoundedFetch` (budget 74): D1 query endpoint・単発 SELECT・
  *   書込語なし・budget 超過の送信前拒否。
- * - capture 層: attempt を durable log へ fsync してから forward
- *   (redirect manual)。strict judge の前に whole HTTP body bytes を
- *   wx0600 保存 + safe headers/receipt を log。request 側
+ * - capture 層: 実 forward 内容を pinned grant (D1 target SHA +
+ *   attempt SQL SHA + params idsSHA) と照合してから attempt を
+ *   durable log へ fsync し forward (redirect manual)。strict judge の
+ *   前に whole HTTP body bytes を wx0600 保存 + safe receipt
+ *   (bodySHA/path/rawBytes/sendAt/receivedAt) を log。request 側
  *   (Authorization/params 値) は log しない。
+ * - stdout-safety: D1 IDs/values・provider body を含み得る detail は
+ *   0600 の hold-details.log にだけ残し、stdout (counts/SHA 契約) には
+ *   safe label のみ出す。
  *
  * 再使用 (新規 framework なし): select-proof の `createBoundedFetch` /
  * `assertPerDocCounts` / `assertProjection` / `validateQ2Row`、共有
@@ -95,11 +101,13 @@ const PINS = {
   /** 37 per-chunk idsSHA を結合した SHA (params 固定)。 */
   params37: "df1d194b7b2b460d10097eacf41f4d4f65217aeda09f148595bd1ac12510452d",
   modules: {
-    captureSelf: "96581547d3ff38c6e516cd49d0ced813bd5f61438588b82aa072734170c8176d",
+    captureSelf: "086100005d0f8055dba5f3c3c3004036c016a6604f57be7506c5384c75a307f4",
     selectProof: "6c864f43b8141162783368c311c2abd8e673e34dd58c82469618173e7a96bf05",
     d1Client: "cde8899a13faaeb5a48df671d917021be302bb2f253f2a481cc6ad4ef29bee97",
     yuhoSchema: "8adec13819c141b23044bce38ddfbbe9a933f5080972161993779ba62c473393",
     coreSchema: "3393ccc640bdef58f1abd895e36b853d5afc764f9a3e464aa61a915f318e714d",
+    sharedEnv: "183af3b9847673b5ea3863f81b0866c7d078075193b702631bfd7941bb1e8d15",
+    pnpmLock: "805dd5b36ca9ec385b29de1ded715305537eac514dbc7c77dfc55b2d56617e58",
   } as Record<string, string>,
 };
 
@@ -109,6 +117,8 @@ const MODULE_FILES: Record<string, string> = {
   d1Client: join(REPO_ROOT, "src/shared/db/d1-http-client.ts"),
   yuhoSchema: join(REPO_ROOT, "services/yuho-quant/src/db/schema.ts"),
   coreSchema: join(REPO_ROOT, "src/shared/db/core-schema.ts"),
+  sharedEnv: join(REPO_ROOT, "src/shared/env.ts"),
+  pnpmLock: join(REPO_ROOT, "pnpm-lock.yaml"),
 };
 
 // ---------------------------------------------------------------------------
@@ -149,6 +159,24 @@ export function durableAppend(path: string, line: string): void {
   } finally {
     closeSync(fd);
   }
+}
+
+/** OUT 再利用の拒否 (replay・artifact 上書き防止。fetch の前に判定)。 */
+export function assertFreshOutDir(outDir: string): void {
+  if (existsSync(outDir)) hold(`OUT 既存のため拒否 (replay/上書き防止): ${outDir}`);
+}
+
+/**
+ * private 保持の HOLD。D1 IDs/values・provider body を含み得る detail は
+ * 0600 の hold-details.log にだけ残し、stdout (counts/SHA 契約) には
+ * safe label のみ出す。
+ */
+export function holdPrivate(outDir: string, label: string, detail: unknown): never {
+  durableAppend(
+    join(outDir, "hold-details.log"),
+    JSON.stringify({ at: new Date().toISOString(), label, detail: String(detail) })
+  );
+  hold(`${label} (詳細は private hold-details.log 参照)`);
 }
 
 function isInt(v: unknown): v is number {
@@ -364,16 +392,20 @@ export interface BodyReceipt {
 let currentAttempt: AttemptCtx | null = null;
 
 /**
- * bound 済み fetch (createBoundedFetch 産) を包み、forward 前に attempt を
- * durable log へ fsync し、strict judge の前に whole body bytes を wx0600
- * 保存 + safe receipt を log する。request 側の秘密 (Authorization 等)・
- * params 値は log しない。redirect は manual (追随せず STOP)。
+ * bound 済み fetch (createBoundedFetch 産) を包み、実 forward 内容を
+ * pinned grant (D1 target SHA + attempt SQL SHA + params idsSHA) と
+ * 照合してから durable log へ fsync し forward する。広い endpoint
+ * regex だけでは送らない。strict judge の前に whole body bytes を
+ * wx0600 保存 + safe receipt を log する。request 側の秘密
+ * (Authorization 等)・params 値は log しない。redirect は manual
+ * (追随せず STOP)。
  */
 export function createCaptureFetch(
   inner: typeof fetch,
   outDir: string,
   counters: GuardCounters,
   receipts: BodyReceipt[],
+  targetSHA: string,
   attemptSource: () => AttemptCtx | null = () => currentAttempt,
   clearAttempt: () => void = () => {
     currentAttempt = null;
@@ -385,10 +417,39 @@ export function createCaptureFetch(
       counters.failed += 1;
       throw new Error("capture: attempt context 不在 (main 経路外の送信を拒否)");
     }
+    // exact grant 照合 (log/forward の前。不一致は attempt に数えない)。
+    if (sha256Hex(String(url)) !== targetSHA) {
+      counters.failed += 1;
+      throw new Error("capture: D1 target SHA 外 (pinned target 以外へ送らない)");
+    }
+    const { sql: bodySql, params: bodyParams } = ((): { sql: string; params: unknown[] } => {
+      try {
+        const parsed = JSON.parse(String(init?.body ?? "")) as { sql?: unknown; params?: unknown };
+        if (typeof parsed.sql !== "string" || !Array.isArray(parsed.params)) {
+          throw new Error("shape");
+        }
+        return { sql: parsed.sql, params: parsed.params };
+      } catch {
+        counters.failed += 1;
+        throw new Error("capture: body 形状外 (sql/params を読めないため送らない)");
+      }
+    })();
+    if (sha256Hex(bodySql) !== at.sqlSHA) {
+      counters.failed += 1;
+      throw new Error("capture: SQL SHA 外 (attempt 指定と異なる文を送らない)");
+    }
+    if (setSHA(bodyParams.map((p) => String(p))) !== at.idsSHA) {
+      counters.failed += 1;
+      throw new Error("capture: params idsSHA 外 (attempt 指定と異なる IDs を送らない)");
+    }
+    if (!tryReserveAttemptMarker(outDir, at)) {
+      counters.failed += 1;
+      throw new Error(`capture: attempt 重複 (seq=${at.seq} ${at.kind} 予約済み・再送なし)`);
+    }
     const t0 = Date.now();
     durableAppend(
       join(outDir, "attempt.log"),
-      JSON.stringify({ ...at, at: new Date().toISOString(), phase: "send" })
+      JSON.stringify({ ...at, sendAt: new Date().toISOString(), phase: "send" })
     );
     let res: Response;
     try {
@@ -413,12 +474,14 @@ export function createCaptureFetch(
       const v = res.headers.get(k);
       if (v !== null) safeHeaders[k] = v;
     }
+    // receivedAt は body 保存確定時の実 clock (sendAt と対。両方保持)。
+    const receivedAt = new Date().toISOString();
     durableAppend(
       join(outDir, "attempt.log"),
       JSON.stringify({
         ...at, phase: "receipt", status: res.status,
         reqBytes: String(init?.body ?? "").length, rawBytes: raw.length,
-        bodySHA, bodyPath, ms,
+        bodySHA, bodyPath, ms, receivedAt,
         headers: safeHeaders,
       })
     );
@@ -429,6 +492,30 @@ export function createCaptureFetch(
 
 export function setAttempt(at: AttemptCtx): void {
   currentAttempt = at;
+}
+
+/**
+ * per-seq attempt marker の予約 (wx0600 + fsync)。forward の前に置き、
+ * 重複 attempt を native 到達前に拒否する (replay は send 0)。
+ * 予約は失敗時も残す (unknown/failed attempt は永久予約・retry 0)。
+ * 予約済みなら false (TOCTOU のため存在確認 + 作成は wx の原子性に任せる)。
+ */
+function tryReserveAttemptMarker(outDir: string, at: AttemptCtx): boolean {
+  const markerPath = join(outDir, `attempt-${String(at.seq).padStart(3, "0")}-${at.kind}-reserved`);
+  const line = JSON.stringify({ ...at, reservedAt: new Date().toISOString() });
+  let fd: number;
+  try {
+    fd = openSync(markerPath, "wx", 0o600);
+  } catch {
+    return false;
+  }
+  try {
+    writeSync(fd, line + "\n");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -585,15 +672,34 @@ async function main(): Promise<void> {
   assertD1Target();
   const workHead = execFileSync("git", ["-C", REPO_ROOT, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
+  assertFreshOutDir(OUT_DIR);
   mkdirSync(OUT_DIR, { recursive: true, mode: 0o700 });
   chmodSync(OUT_DIR, 0o700);
 
   // capture guard: bound(74) → native を包む。drizzle 経路のみ送信する。
+  // forward は pinned D1 target SHA + attempt SQL/params 照合つき。
   const counters: GuardCounters = { observed: 0, failed: 0 };
   const receipts: BodyReceipt[] = [];
   const bounded = createBoundedFetch(nativeFetch, BUDGET, counters);
-  globalThis.fetch = createCaptureFetch(bounded, OUT_DIR, counters, receipts);
+  globalThis.fetch = createCaptureFetch(bounded, OUT_DIR, counters, receipts, PINS.d1Target);
   const db = createD1HttpDb(yuhoSchema);
+
+  // live 検証の stdout-safety: D1 IDs/values・provider body を含み得る
+  // detail は holdPrivate (0600) にだけ残し、stdout には safe label のみ。
+  const guardLive = <T>(label: string, fn: () => T): T => {
+    try {
+      return fn();
+    } catch (e) {
+      holdPrivate(OUT_DIR, label, e instanceof Error ? e.message : String(e));
+    }
+  };
+  const guardLiveAsync = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (e) {
+      holdPrivate(OUT_DIR, label, e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const queries: QueryRecord[] = [];
   const liveQ1: LiveDocF[] = [];
@@ -601,6 +707,9 @@ async function main(): Promise<void> {
   const missing: Array<{ chunk: number; docId: string }> = [];
   const liveIds = new Set<number>();
   const seenQ1 = new Set<string>();
+  // facts PK は全 37 chunks 横断の一集合で UNIQUE を断言する
+  // (chunk-local では文書跨ぎの重複 PK を見逃す)。
+  const seenFactIds = new Set<number>();
   let seq = 0;
 
   for (let ci = 0; ci < scope.chunks.length; ci++) {
@@ -615,35 +724,33 @@ async function main(): Promise<void> {
     if (!/^\s*select\b/i.test(q1sql)) hold(`${label} Q1F 非SELECT`);
     const q1sqlSHA = sha256Hex(q1sql);
     setAttempt({ seq: seq + 1, kind: "Q1F", chunk: ci, idsSHA, sqlSHA: q1sqlSHA });
-    let q1rows: unknown[];
     const q1at = new Date().toISOString();
     const q1t0 = Date.now();
-    try {
-      q1rows = (await q1b) as unknown[];
-    } catch (e) {
-      hold(`${label} Q1F 失敗 (retry なし・raw 保存済み): ${(e as Error).message}`);
-    }
+    const q1rows = await guardLiveAsync(`${label} Q1F 送信失敗`, async () => (await q1b) as unknown[]);
     const q1ms = Date.now() - q1t0;
     queries.push({ seq: ++seq, kind: "Q1F", chunk: ci, idsSHA, sqlSHA: q1sqlSHA, at: q1at, ms: q1ms, rows: q1rows.length });
     if (q1rows.length > chunk.length) hold(`${label} Q1F cardinality 外: ${q1rows.length} > ${chunk.length}`);
-    const q1docs = new Map<string, LiveDocF>();
-    const q1counts = new Map<string, number>();
-    const observedRaw: string[] = [];
-    for (const r of q1rows) {
-      const d = validateQ1FRow(asRecord(r, `${label} Q1F 行`), label);
-      observedRaw.push(d.docId);
-      if (liveIds.has(d.id)) hold(`${label} Q1F id 重複: ${d.id}`);
-      liveIds.add(d.id);
-      q1docs.set(d.docId, d);
-      q1counts.set(d.docId, d.factsCount);
-    }
-    const part = partitionChunk(chunk, observedRaw, label);
-    for (const d of part.observed) {
-      if (seenQ1.has(d)) hold(`${label} Q1F chunk 跨ぎ重複: ${d}`);
-      seenQ1.add(d);
-      liveQ1.push(q1docs.get(d) as LiveDocF);
-    }
-    for (const m of part.missing) missing.push({ chunk: ci, docId: m });
+    const { part, q1docs, q1counts } = guardLive(`${label} Q1F 行検証失敗`, () => {
+      const docs = new Map<string, LiveDocF>();
+      const counts = new Map<string, number>();
+      const observedRaw: string[] = [];
+      for (const r of q1rows) {
+        const d = validateQ1FRow(asRecord(r, `${label} Q1F 行`), label);
+        observedRaw.push(d.docId);
+        if (liveIds.has(d.id)) hold(`${label} Q1F id 重複: ${d.id}`);
+        liveIds.add(d.id);
+        docs.set(d.docId, d);
+        counts.set(d.docId, d.factsCount);
+      }
+      const p = partitionChunk(chunk, observedRaw, label);
+      for (const d of p.observed) {
+        if (seenQ1.has(d)) hold(`${label} Q1F chunk 跨ぎ重複: ${d}`);
+        seenQ1.add(d);
+        liveQ1.push(docs.get(d) as LiveDocF);
+      }
+      for (const m of p.missing) missing.push({ chunk: ci, docId: m });
+      return { part: p, q1docs: docs, q1counts: counts };
+    });
     const observedSet = new Set(part.observed);
 
     // Q2F。
@@ -653,14 +760,9 @@ async function main(): Promise<void> {
     if (!/^\s*select\b/i.test(q2sql)) hold(`${label} Q2F 非SELECT`);
     const q2sqlSHA = sha256Hex(q2sql);
     setAttempt({ seq: seq + 1, kind: "Q2F", chunk: ci, idsSHA, sqlSHA: q2sqlSHA });
-    let q2rows: unknown[];
     const q2at = new Date().toISOString();
     const q2t0 = Date.now();
-    try {
-      q2rows = (await q2b) as unknown[];
-    } catch (e) {
-      hold(`${label} Q2F 失敗 (retry なし・raw 保存済み): ${(e as Error).message}`);
-    }
+    const q2rows = await guardLiveAsync(`${label} Q2F 送信失敗`, async () => (await q2b) as unknown[]);
     const q2ms = Date.now() - q2t0;
     queries.push({ seq: ++seq, kind: "Q2F", chunk: ci, idsSHA, sqlSHA: q2sqlSHA, at: q2at, ms: q2ms, rows: q2rows.length });
     const orderKeys = q2rows.map((r) => {
@@ -670,24 +772,26 @@ async function main(): Promise<void> {
     for (let i = 1; i < orderKeys.length; i++) {
       if ((orderKeys[i - 1] as string) > (orderKeys[i] as string)) hold(`${label} Q2F 順序外`);
     }
-    const seenKeys = new Set<string>();
-    const seenFactIds = new Set<number>();
     const chunkFactDocIds: string[] = [];
-    for (const r of q2rows) {
-      const f = validateQ2Row(asRecord(r, `${label} Q2F 行`), label);
-      if (!observedSet.has(f.docId)) hold(`${label} Q2F 未観測 echo: ${f.docId}`);
-      const q1 = q1docs.get(f.docId) as LiveDocF;
-      if (q1.id !== f.documentId) hold(`${label} Q2F document_id 連鎖外: ${f.docId}`);
-      if (q1.stockId !== f.stockId) hold(`${label} Q2F stock 連鎖外: ${f.docId}`);
-      if (seenFactIds.has(f.id)) hold(`${label} Q2F PK 重複: ${f.id}`);
-      seenFactIds.add(f.id);
-      const k = `${f.docId} ${rowKey(f)}`;
-      if (seenKeys.has(k)) hold(`${label} Q2F canonical-key 重複: ${k}`);
-      seenKeys.add(k);
-      liveQ2.push(f);
-      chunkFactDocIds.push(f.docId);
-    }
-    assertPerDocCounts(part.observed, q1counts, chunkFactDocIds, label);
+    guardLive(`${label} Q2F 行検証失敗`, () => {
+      // canonical-key は docId を含むため chunk-local で全域と等価。
+      const seenKeys = new Set<string>();
+      for (const r of q2rows) {
+        const f = validateQ2Row(asRecord(r, `${label} Q2F 行`), label);
+        if (!observedSet.has(f.docId)) hold(`${label} Q2F 未観測 echo: ${f.docId}`);
+        const q1 = q1docs.get(f.docId) as LiveDocF;
+        if (q1.id !== f.documentId) hold(`${label} Q2F document_id 連鎖外: ${f.docId}`);
+        if (q1.stockId !== f.stockId) hold(`${label} Q2F stock 連鎖外: ${f.docId}`);
+        if (seenFactIds.has(f.id)) hold(`${label} Q2F PK 重複 (全 chunks 横断): ${f.id}`);
+        seenFactIds.add(f.id);
+        const k = `${f.docId} ${rowKey(f)}`;
+        if (seenKeys.has(k)) hold(`${label} Q2F canonical-key 重複: ${k}`);
+        seenKeys.add(k);
+        liveQ2.push(f);
+        chunkFactDocIds.push(f.docId);
+      }
+      assertPerDocCounts(part.observed, q1counts, chunkFactDocIds, label);
+    });
   }
 
   if (counters.observed !== 74) hold(`HTTP 観測外: ${counters.observed} != 74`);
@@ -733,7 +837,7 @@ async function main(): Promise<void> {
     },
     limits: [
       "READ-only。比較・CAS・L2・書込なし。旧事実 preimage は将来 CAS guard 専用。",
-      "post-facts 照合は business key + expected NEW 表 (削除済み旧 fact IDs の存続は要求しない)。doc は protected 全16列不変。",
+      "post-facts 照合は business key + expected NEW 表 (削除済み旧 fact IDs の存続は要求しない)。doc は full16 preimage capture・protected14 不変 + overseas 2列は expected 変更比較。",
       "Q1 行数 ≤ chunk。missing は exact partition + per-doc MISSING_IDENTITY (READ 継続・CAS で HOLD)。",
       "0-rows は正当な不在観測。NULL 保持。shape/type 外・unknown は STOP。",
       "attempt 全件に fsync-first log + whole body wx0600 + safe receipt。redirect manual・retry 0。",
