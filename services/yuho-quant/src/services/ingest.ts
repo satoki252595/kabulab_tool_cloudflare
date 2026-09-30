@@ -439,10 +439,11 @@ export async function ingestDocument(
   // DB batch の前に type ごと最大 1 回 recordEdinetZip を通す。
   // - custody 欠落 type (needT5/needT1): 新規記録
   // - custody 完備でも needDbWork (parser が bytes 使用): 同一 bytes/SHA
-  //   確認を既存 physical へ通す (force=false のため recordPrimaryData は
-  //   skipped_existing で重複 mutation なし → unique physical +
-  //   full-bytes SHA verify)。旧 plan-gated 経路 (custody 完備で無検証の
-  //   まま DB 到達) はこの guard が塞ぐ。
+  //   確認を既存 physical へ通す。通常枝 (force=false) では
+  //   recordPrimaryData は skipped_existing で重複 mutation なし →
+  //   unique physical + full-bytes SHA verify。force=true は既存契約
+  //   どおり args.force を透過する (再記録の枝)。旧 plan-gated 経路
+  //   (custody 完備で無検証のまま DB 到達) はこの guard が塞ぐ。
   // needDbWork=false (archived_only 等) は欠落 type のみ従来通り。
   // 記録失敗は throw が伝播し DB は旧値のまま (再実行可)。
   // metadata は DBid 非依存 (text ポインタのみ DBid 解決後)。

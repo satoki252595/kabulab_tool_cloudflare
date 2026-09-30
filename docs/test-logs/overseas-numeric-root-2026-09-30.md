@@ -128,10 +128,12 @@ elim 脚に混ぜて照合していた。`proof.reconciliationAdjustment` は
   記録を DB batch より先に 1 回行う。記録失敗は DB 旧値のまま
   throw (ingest) / tally.error (missing)。
 - strict byte guard (ingest): custody 完備でも DB 書込ありなら
-  parser 使用 bytes の同一確認を既存 physical へ通す。force=false の
-  ため recordPrimaryData は skipped_existing (重複 mutation なし)→
-  unique physical + full-bytes SHA verify。旧 plan-gated 経路
-  (無検証のまま DB 到達) は塞ぎ、`planArchiveUploads` は削除。
+  parser 使用 bytes の同一確認を既存 physical へ通す。通常枝
+  (force=false) では recordPrimaryData は skipped_existing
+  (重複 mutation なし)→ unique physical + full-bytes SHA verify。
+  force=true は既存 force 契約どおり args.force を透過する
+  (再記録の枝)。旧 plan-gated 経路 (無検証のまま DB 到達) は塞ぎ、
+  `planArchiveUploads` は削除。
 - 共有 helper `recordEdinetZip` に readback 照合
   (verifyArchivedAttachments reuse) を内蔵。mismatch・取得失敗は
   throw。旧 manifest unknown でも実 bytes 一致は許容し unknown
@@ -150,8 +152,10 @@ elim 脚に混ぜて照合していた。`proof.reconciliationAdjustment` は
   抽出 (IO 境界注入で offline 試験可能。振る舞いの正本は lib)。
 - 試験: edinet-archive 18・ingest-atomic 8 (HOLD2 + 契約 7)・
   ingest-batch 7・missing-backfill-order 5・batch-boundary 5。
-  いずれも実 SQLite + mock 呼出順で順序を証明。offline のみ
-  (source GET / Notion mutation / D1・R2 書込 / dispatch は 0)。
+  caller 4 件のうち ingest-atomic・missing-backfill-order は実 SQLite +
+  IO mock、ingest-batch は proxy double + IO mock、batch-boundary は
+  静的走査で順序を証明する。helper (edinet-archive) は IO mock のみ。
+  offline のみ (source GET / Notion mutation / D1・R2 書込 / dispatch は 0)。
 
 ## 残差・coverage 損失 (正直記録)
 
