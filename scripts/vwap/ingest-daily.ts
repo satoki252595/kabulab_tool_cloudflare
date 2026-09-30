@@ -31,7 +31,9 @@ export async function main() {
   const stopNewWork = (code: string, why: unknown) => {
     if (!fatal) {
       fatal = true;
-      console.error(`  ${code}: R2 fault のため新規作業を停止します: ${why}`);
+      // 生 SDK cause (URL 等) を出さず sanitized のみ。
+      const text = why instanceof Error ? `${why.name}: ${why.message}` : String(why);
+      console.error(`  ${code}: R2 fault のため新規作業を停止します: ${sanitizeLogText(text).slice(0, 200)}`);
     }
   };
   await mapLimit(codes, CONC, async (code) => {
@@ -44,9 +46,11 @@ export async function main() {
     try {
       existing = await r2Get(`daily/${code}.json`);
     } catch (e) {
-      errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
+      // GET fault は typed family のみ記録する (生 SDK cause を出さない)。
+      const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      errors++; if (errors <= 5) console.error(`  ${code}: ${sanitizeLogText(text).slice(0, 200)}`);
       outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
-      stopNewWork(code, e);
+      stopNewWork(code, text);
       return;
     }
     if (aborted || fatal) return;                        // GET await 中に counterpart が fatal 化しうる
@@ -138,7 +142,8 @@ export async function main() {
         rejectedCodes.push(code);
         outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
       } else {
-        errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
+        const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+        errors++; if (errors <= 5) console.error(`  ${code}: ${sanitizeLogText(text).slice(0, 200)}`);
         outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
       }
       stopNewWork(code, e instanceof Error ? e.message : String(e));

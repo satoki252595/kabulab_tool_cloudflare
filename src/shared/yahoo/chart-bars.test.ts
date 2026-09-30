@@ -223,6 +223,26 @@ describe("fetchDaily", () => {
     await expect(fetchDaily("7203.T")).rejects.toThrow(/splits 応答の形状が不正/);
   });
 
+  it("splits ratio 非正・overflow・日付不正・非 object は落とす", async () => {
+    useProxy();
+    const cases: Array<[string, unknown]> = [
+      ["zero-numerator", { splits: { "1": { date: 1757548800, numerator: 0, denominator: 1 } } }],
+      ["negative-denominator", { splits: { "1": { date: 1757548800, numerator: 2, denominator: -1 } } }],
+      ["overflow-ratio", { splits: { "1": { date: 1757548800, numerator: 1e308, denominator: 1e-308 } } }],
+      ["bad-event-date", { splits: { "1": { date: -5, numerator: 2, denominator: 1 } } }],
+      ["splits-array", { splits: [{ date: 1757548800, numerator: 2, denominator: 1 }] }],
+    ];
+    for (const [name, events] of cases) {
+      stubChart(chartJson({ events }));
+      await expect(fetchDaily("7203.T"), name).rejects.toThrow(/splits/);
+    }
+    stubChart(chartJson({ events: "xx" }));
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/events 応答の形状が不正/);
+    // 欠落 (null/undefined) は文書化された no-events として空扱い。
+    stubChart(chartJson({ events: undefined }));
+    expect((await fetchDaily("7203.T")).splits).toEqual([]);
+  });
+
   /**
    * 最小合成 fixture。9/28 観測の 1909 応答の形だけを写す
    * (先頭から持続する異常水準・出来高 0・末尾 null・meta 正常)。

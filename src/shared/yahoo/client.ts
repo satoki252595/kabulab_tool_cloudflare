@@ -1011,24 +1011,54 @@ export async function fetchDaily(symbol: string, range = "10y"): Promise<DailyRe
     );
   }
   const splits: { date: string; ratio: number }[] = [];
-  const ev = res.events?.splits || {};
-  for (const k of Object.keys(ev)) {
-    const s = ev[k] as { date?: unknown; numerator?: unknown; denominator?: unknown } | null;
-    if (
-      s == null ||
-      !Number.isFinite(s.date) ||
-      !Number.isFinite(s.numerator) ||
-      !Number.isFinite(s.denominator) ||
-      s.denominator === 0
-    ) {
+  // events/splits は提供されれば期待 object。欠落 (null/undefined) のみ
+  // no-events として空扱いする (文書化された不在形)。
+  const events = res.events as unknown;
+  if (events !== null && events !== undefined) {
+    if (typeof events !== "object" || Array.isArray(events)) {
       throw new Error(
-        `Chart API エラー [${symbol}]: splits 応答の形状が不正です (key=${k})。`
+        `Chart API エラー [${symbol}]: events 応答の形状が不正です。`
       );
     }
-    splits.push({
-      date: jstDate(s.date as number),
-      ratio: (s.numerator as number) / (s.denominator as number),
-    });
+    const ev = (events as { splits?: unknown }).splits;
+    if (ev !== null && ev !== undefined) {
+      if (typeof ev !== "object" || Array.isArray(ev)) {
+        throw new Error(
+          `Chart API エラー [${symbol}]: splits 応答の形状が不正です。`
+        );
+      }
+      for (const k of Object.keys(ev)) {
+        const s = (ev as Record<string, unknown>)[k] as {
+          date?: unknown;
+          numerator?: unknown;
+          denominator?: unknown;
+        } | null;
+        const badShape =
+          s == null ||
+          typeof s.date !== "number" ||
+          !Number.isFinite(s.date) ||
+          s.date <= 0 ||
+          Number.isNaN(new Date((s.date + 32400) * 1000).getTime()) ||
+          !Number.isFinite(s.numerator) ||
+          !Number.isFinite(s.denominator) ||
+          (s.denominator as number) === 0;
+        if (badShape) {
+          throw new Error(
+            `Chart API エラー [${symbol}]: splits 応答の形状が不正です (key=${k})。`
+          );
+        }
+        // 結果 ratio が有限正数であることを要求する (0/負・overflow
+        // Infinity の JSON null 化を保存前に拒否。保存側契約と同一)。
+        const ratio = (s as { numerator: number; denominator: number }).numerator /
+          (s as { numerator: number; denominator: number }).denominator;
+        if (!Number.isFinite(ratio) || ratio <= 0) {
+          throw new Error(
+            `Chart API エラー [${symbol}]: splits ratio が正の有限値ではありません (key=${k})。`
+          );
+        }
+        splits.push({ date: jstDate(s.date as number), ratio });
+      }
+    }
   }
   // fetchChart と同じ応答整合 (R2 daily への別経路も書込前に拒否する)。
   {

@@ -114,7 +114,8 @@ describe("ingest-daily main flow", () => {
 
   it("strict GET fault => source0/PUT0/exit2", async () => {
     mockLoadCodes.mockResolvedValue(["A", "B"]);
-    mockR2Get.mockRejectedValue(new Error("R2 GET 応答が不完全です: daily/A.json"));
+    mockR2Get.mockRejectedValue(new Error("TimeoutError https://r2.example.test/secret-leak"));
+    const errSpy = vi.mocked(console.error);
     await main();
     expect(process.exitCode).toBe(2);
     expect(mockFetchDaily).toHaveBeenCalledTimes(0);
@@ -123,6 +124,10 @@ describe("ingest-daily main flow", () => {
     const outcomes = summary.metadata.outcomes as Record<string, { status: string }>;
     expect(outcomes.A.status).toBe("error");
     expect(outcomes.B.status).toBe("notStarted");
+    // 生 SDK cause (URL) は stdout/stderr に出さない。
+    for (const call of errSpy.mock.calls) {
+      expect(String(call[0])).not.toContain("https://");
+    }
   });
 
   it("delayed worker rechecks fatal after GET await => no new stage", async () => {
