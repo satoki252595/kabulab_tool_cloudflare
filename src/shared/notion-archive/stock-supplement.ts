@@ -19,7 +19,7 @@ import {
   findBackupChildByTitle,
   findUniqueBackupChildByTitle,
 } from "./archive.js";
-import { notionRequest } from "./client.js";
+import { assertCursorProgress, notionRequest } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
 import { RICH_TEXT_MAX, joinRichText, splitRichText } from "./rich-text.js";
@@ -444,6 +444,7 @@ export async function loadSupplementRows(
   const rows: SupplementRow[] = [];
   const codeToPageIds = new Map<string, string[]>();
   let cursor: string | undefined;
+  const seen = new Set<string>();
   for (;;) {
     const body: Record<string, unknown> = { page_size: 100 };
     if (opts?.codes && opts.codes.length > 0) {
@@ -460,6 +461,9 @@ export async function loadSupplementRows(
       `/databases/${dbId}/query?${qs}`,
       body
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const page of res.results) {
       const row = parseSupplementRow(page, textColumns);
       rows.push(row);
@@ -512,6 +516,7 @@ export async function loadStockMasterIndex(): Promise<StockMasterIndex> {
 
   const pagesByCode = new Map<string, string[]>();
   let cursor: string | undefined;
+  const seen = new Set<string>();
   for (;;) {
     const body: Record<string, unknown> = { page_size: 100 };
     if (cursor) body.start_cursor = cursor;
@@ -520,6 +525,9 @@ export async function loadStockMasterIndex(): Promise<StockMasterIndex> {
       `/databases/${dbId}/query?${qs}`,
       body
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const page of res.results) {
       const prop = page.properties["銘柄コード"];
       const code = readRich(prop) || readTitle(prop);
@@ -917,12 +925,16 @@ export async function replaceEvidenceBlock(
 ): Promise<void> {
   const toDelete: string[] = [];
   let cursor: string | undefined;
+  const seen = new Set<string>();
   for (;;) {
     const qs = cursor ? `?start_cursor=${cursor}&page_size=100` : "?page_size=100";
     const res = await notionRequest<ChildrenResponse>(
       "GET",
       `/blocks/${pageId}/children${qs}`
     );
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const b of res.results) {
       if (b.type !== "heading_3") continue;
       const text = joinRichText(b.heading_3?.rich_text);

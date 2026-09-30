@@ -68,12 +68,16 @@ vi.mock("../../src/shared/notion-archive/page-file.js", () => ({
   fetchPageFileUrl: vi.fn(),
 }));
 
-vi.mock("../../src/shared/notion-archive/client.js", () => ({
-  notionRequest: vi.fn(),
-  NotionUnknownResultError: class NotionUnknownResultError extends Error {},
-  notionStats: vi.fn(),
-  resetNotionStats: vi.fn(),
-}));
+vi.mock("../../src/shared/notion-archive/client.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/shared/notion-archive/client.js")>();
+  return {
+    notionRequest: vi.fn(),
+    NotionUnknownResultError: class NotionUnknownResultError extends Error {},
+    notionStats: vi.fn(),
+    resetNotionStats: vi.fn(),
+    assertCursorProgress: original.assertCursorProgress,
+  };
+});
 
 import { listPageFiles } from "../../src/shared/notion-archive/page-file.js";
 import { notionRequest } from "../../src/shared/notion-archive/client.js";

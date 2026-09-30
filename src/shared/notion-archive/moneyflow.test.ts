@@ -94,7 +94,7 @@ describe("notion-archive moneyflow", () => {
     const dbId = "defs-db";
 
     it("指標キーが新規なら作成する", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: "def-row-1" }]);
       const { upsertIndicatorDef } = await load();
       const result = await upsertIndicatorDef(dbId, {
@@ -120,7 +120,7 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("既存の指標キーがあれば更新する", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [{ id: "def-existing" }] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [{ id: "def-existing" }] , has_more: false, next_cursor: null }]);
       route("PATCH", "/v1/pages/def-existing", [{ id: "def-existing" }]);
       const { upsertIndicatorDef } = await load();
       const result = await upsertIndicatorDef(dbId, {
@@ -139,7 +139,7 @@ describe("notion-archive moneyflow", () => {
 
     it("同一キーが2件ならどれも選ばず throw する (先頭選択禁止)", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [{ id: "def-a" }, { id: "def-b" }] },
+        { results: [{ id: "def-a" }, { id: "def-b" }] , has_more: false, next_cursor: null },
       ]);
       const { upsertIndicatorDef } = await load();
       await expect(
@@ -186,7 +186,7 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("既存定義と完全一致なら PATCH しない (分割された rich_text も連結して比較)", async () => {
-      route("POST", "/v1/databases/defs/query", [{ results: [{ id: "def-1", properties: props() }] }]);
+      route("POST", "/v1/databases/defs/query", [{ results: [{ id: "def-1", properties: props() }] , has_more: false, next_cursor: null }]);
       const { upsertIndicatorDef } = await load();
       expect(await upsertIndicatorDef("defs", def)).toEqual({ pageId: "def-1", outcome: "unchanged" });
       expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(0);
@@ -194,7 +194,7 @@ describe("notion-archive moneyflow", () => {
 
     it("説明文が変われば上書きする", async () => {
       route("POST", "/v1/databases/defs/query", [
-        { results: [{ id: "def-1", properties: props({ 説明: { type: "rich_text", rich_text: [{ plain_text: "旧" }] } }) }] },
+        { results: [{ id: "def-1", properties: props({ 説明: { type: "rich_text", rich_text: [{ plain_text: "旧" }] } }) }] , has_more: false, next_cursor: null },
       ]);
       route("PATCH", "/v1/pages/def-1", [{ id: "def-1" }]);
       const { upsertIndicatorDef } = await load();
@@ -304,7 +304,7 @@ describe("notion-archive moneyflow", () => {
     };
 
     it("観測キー (期間|指標|区分) が新規なら作成する", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [
         ackPage("obs-row-1", {
           キー: { type: "title", title: [{ plain_text: "2026-W38|sector_turnover|電気機器" }] },
@@ -360,7 +360,7 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("primaryDataPageId が null なら一次データ relation は空にする", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [
         ackPage("obs-row-2", {
           キー: { type: "title", title: [{ plain_text: "2026-W38|sector_turnover_share|電気機器" }] },
@@ -407,7 +407,7 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("既存キーがあれば更新する", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [{ id: "obs-existing" }] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [{ id: "obs-existing" }] , has_more: false, next_cursor: null }]);
       route("PATCH", "/v1/pages/obs-existing", [
         ackPage("obs-existing", {
           キー: { type: "title", title: [{ plain_text: "2026-W38|sector_turnover|電気機器" }] },
@@ -452,7 +452,7 @@ describe("notion-archive moneyflow", () => {
 
     it("同一キーが2件ならどれも選ばず throw する (先頭選択禁止)", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [{ id: "obs-a" }, { id: "obs-b" }] },
+        { results: [{ id: "obs-a" }, { id: "obs-b" }] , has_more: false, next_cursor: null },
       ]);
       const { upsertObservation } = await load();
       await expect(
@@ -515,7 +515,7 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("既存行と値が完全一致なら PATCH せず unchanged を返す (ID のハイフン有無は同一視)", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [{ id: "obs-same", properties: existingProps() }] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [{ id: "obs-same", properties: existingProps() }] , has_more: false, next_cursor: null }]);
       const { upsertObservation } = await load();
       const result = await upsertObservation(dbId, sameInput);
       expect(result).toEqual({ pageId: "obs-same", outcome: "unchanged" });
@@ -524,7 +524,7 @@ describe("notion-archive moneyflow", () => {
 
     it("値が 1 つでも違えば上書きする", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] , has_more: false, next_cursor: null },
       ]);
       route("PATCH", "/v1/pages/obs-diff", [ackPage("obs-diff", existingProps())]);
       const { upsertObservation } = await load();
@@ -533,7 +533,7 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("作成応答の書込値が不一致なら保全停止し、再送しない", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [
         ackPage("obs-row-9", existingProps({ 値: { type: "number", number: 1 } })),
       ]);
@@ -545,7 +545,7 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("作成応答に properties がなければ保全停止し、成功にしない", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: "obs-row-9", archived: false, in_trash: false }]);
       const { upsertObservation } = await load();
       await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/作成応答が不正.*propertiesなし/);
@@ -554,7 +554,7 @@ describe("notion-archive moneyflow", () => {
 
     it("更新応答の書込値が不一致なら保全停止し、再送しない", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] , has_more: false, next_cursor: null },
       ]);
       route("PATCH", "/v1/pages/obs-diff", [
         ackPage("obs-diff", existingProps({ 値: { type: "number", number: 2 } })),
@@ -568,7 +568,7 @@ describe("notion-archive moneyflow", () => {
 
     it("更新応答に properties がなければ保全停止する", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] , has_more: false, next_cursor: null },
       ]);
       route("PATCH", "/v1/pages/obs-diff", [{ id: "obs-diff", archived: false, in_trash: false }]);
       const { upsertObservation } = await load();
@@ -578,7 +578,7 @@ describe("notion-archive moneyflow", () => {
 
     it("更新応答が別ページの id なら保全停止する (同ページ要求)", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] , has_more: false, next_cursor: null },
       ]);
       route("PATCH", "/v1/pages/obs-diff", [ackPage("obs-other", existingProps())]);
       const { upsertObservation } = await load();
@@ -587,7 +587,7 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("応答行が archived なら作成・更新とも成功にしない (明示active要求)", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [ackPage("obs-row-9", existingProps(), { archived: true })]);
       const { upsertObservation } = await load();
       await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/作成応答が不正.*非active行への応答/);
@@ -595,7 +595,7 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("作成応答の object が page でなければ保全停止する", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [ackPage("obs-row-9", existingProps(), { object: "database" })]);
       const { upsertObservation } = await load();
       await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/作成応答が不正.*応答object不一致/);
@@ -604,7 +604,7 @@ describe("notion-archive moneyflow", () => {
 
     it("問合せ行に公表日がなければ unchanged と誤一致せず上書きする", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [{ id: "obs-nopub", properties: dropProps(existingProps(), "公表日") }] },
+        { results: [{ id: "obs-nopub", properties: dropProps(existingProps(), "公表日") }] , has_more: false, next_cursor: null },
       ]);
       route("PATCH", "/v1/pages/obs-nopub", [ackPage("obs-nopub", existingProps())]);
       const { upsertObservation } = await load();
@@ -615,7 +615,7 @@ describe("notion-archive moneyflow", () => {
 
     it("問合せ行に市場区分がなければ unchanged と誤一致せず上書きする", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [{ id: "obs-nomkt", properties: dropProps(existingProps(), "市場区分") }] },
+        { results: [{ id: "obs-nomkt", properties: dropProps(existingProps(), "市場区分") }] , has_more: false, next_cursor: null },
       ]);
       route("PATCH", "/v1/pages/obs-nomkt", [ackPage("obs-nomkt", existingProps())]);
       const { upsertObservation } = await load();
@@ -626,7 +626,7 @@ describe("notion-archive moneyflow", () => {
 
     it("問合せ行に値プロパティがなければ unchanged と誤一致せず上書きする", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [{ id: "obs-noval", properties: dropProps(existingProps(), "値") }] },
+        { results: [{ id: "obs-noval", properties: dropProps(existingProps(), "値") }] , has_more: false, next_cursor: null },
       ]);
       route("PATCH", "/v1/pages/obs-noval", [ackPage("obs-noval", existingProps())]);
       const { upsertObservation } = await load();
@@ -636,7 +636,7 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("作成応答に公表日がなければ保全停止する (欠落の誤一致禁止)", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [ackPage("obs-row-9", dropProps(existingProps(), "公表日"))]);
       const { upsertObservation } = await load();
       await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/作成応答が不正.*書込値不一致/);
@@ -645,7 +645,7 @@ describe("notion-archive moneyflow", () => {
 
     it("更新応答に市場区分がなければ保全停止する (欠落の誤一致禁止)", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] , has_more: false, next_cursor: null },
       ]);
       route("PATCH", "/v1/pages/obs-diff", [ackPage("obs-diff", dropProps(existingProps(), "市場区分"))]);
       const { upsertObservation } = await load();
@@ -662,6 +662,8 @@ describe("notion-archive moneyflow", () => {
               properties: existingProps({ 市場区分: { type: "rich_text", rich_text: [{}] } }),
             },
           ],
+          has_more: false,
+          next_cursor: null,
         },
       ]);
       route("PATCH", "/v1/pages/obs-badtext", [ackPage("obs-badtext", existingProps())]);
@@ -680,6 +682,8 @@ describe("notion-archive moneyflow", () => {
               properties: existingProps({ 公表日: { type: "rich_text", rich_text: [] } }),
             },
           ],
+          has_more: false,
+          next_cursor: null,
         },
       ]);
       route("PATCH", "/v1/pages/obs-badtype", [ackPage("obs-badtype", existingProps())]);
@@ -695,6 +699,8 @@ describe("notion-archive moneyflow", () => {
           results: [
             { id: "obs-badrel", properties: existingProps({ 指標: { type: "relation", relation: [{}] } }) },
           ],
+          has_more: false,
+          next_cursor: null,
         },
       ]);
       route("PATCH", "/v1/pages/obs-badrel", [ackPage("obs-badrel", existingProps())]);
@@ -705,7 +711,7 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("作成応答の空期待テキストに不正要素があれば保全停止する", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [
         ackPage("obs-row-9", existingProps({ 市場区分: { type: "rich_text", rich_text: [{}] } })),
       ]);
@@ -716,7 +722,7 @@ describe("notion-archive moneyflow", () => {
 
     it("更新応答の型違い (公表日が rich_text) は null期待でも保全停止する", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] , has_more: false, next_cursor: null },
       ]);
       route("PATCH", "/v1/pages/obs-diff", [
         ackPage("obs-diff", existingProps({ 公表日: { type: "rich_text", rich_text: [] } })),
@@ -728,7 +734,7 @@ describe("notion-archive moneyflow", () => {
 
     it("更新応答の relation 要素 id 不正は throw ではなく保全停止する", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
-        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] },
+        { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] , has_more: false, next_cursor: null },
       ]);
       route("PATCH", "/v1/pages/obs-diff", [
         ackPage("obs-diff", existingProps({ 指標: { type: "relation", relation: [{}] } })),
@@ -752,14 +758,14 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("observationExists はキー完全一致の行の有無を返す", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [{ id: "x" }] }, { results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [{ id: "x" }], has_more: false, next_cursor: null }, { results: [] , has_more: false, next_cursor: null }]);
       const { observationExists } = await load();
       expect(await observationExists(dbId, "2026-08|k|c")).toBe(true);
       expect(await observationExists(dbId, "2026-08|k|d")).toBe(false);
     });
 
     it("POST の Unknown は同型・cause 保持で obsKey context を先頭に残し、再送しない", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       const harnessFetch = globalThis.fetch;
       let postAttempts = 0;
       globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
@@ -789,7 +795,7 @@ describe("notion-archive moneyflow", () => {
     });
 
     it("POST の非 Unknown エラーは同一 throw し、context を付けず再送しない", async () => {
-      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] }]);
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [
         new Response(JSON.stringify({ object: "error", code: "validation_error", message: "bad" }), { status: 400 }),
       ]);
@@ -1053,10 +1059,10 @@ describe("notion-archive moneyflow", () => {
       await expect(verifyObservedBatch(dbId, "[test-src] k1", [{ input, pageId: "row-a" }])).rejects.toThrow(
         /検証読取に行重複/
       );
-      // 不正カーソル (has_more なのに next_cursor なし)
+      // 不正カーソル (has_more なのに next_cursor なし。入口 guard で reject)
       route("POST", `/v1/databases/${dbId}/query`, [{ results: [], has_more: true, next_cursor: null }]);
       await expect(verifyObservedBatch(dbId, "[test-src] k1", [{ input, pageId: "row-a" }])).rejects.toThrow(
-        /カーソル不正/
+        /Notion list 応答が不正 \(endpoint=database-query\)/
       );
     });
   });

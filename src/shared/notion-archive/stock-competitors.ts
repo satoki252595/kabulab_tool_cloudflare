@@ -15,7 +15,7 @@
  * B 側には自動で反映しない (設計書 §4 の運営決定。双方が互いを競合と見なす
  * 保証は無いため)。
  */
-import { notionRequest } from "./client.js";
+import { assertCursorProgress, notionRequest } from "./client.js";
 import { splitRichText, joinRichText } from "./rich-text.js";
 
 export const COMPETITOR_PROPS = {
@@ -119,10 +119,14 @@ export async function loadCompetitorMeta(
 
   const rows: CompetitorMeta[] = [];
   let cursor: string | undefined;
+  const seen = new Set<string>();
   for (;;) {
     const body: Record<string, unknown> = { page_size: 100 };
     if (cursor) body.start_cursor = cursor;
     const res = await notionRequest<QueryResponse>("POST", `/databases/${dbId}/query?${qs}`, body);
+    if (res.has_more === true) {
+      assertCursorProgress(seen, res.next_cursor as string);
+    }
     for (const page of res.results) {
       const p = page.properties;
       rows.push({
