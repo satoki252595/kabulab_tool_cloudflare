@@ -24,16 +24,25 @@ main merge せず、live 実行せず、probe 実装と計画のみ報告する�
   `otakara_stock_scores` / `yutai_benefits`。
 - 期待列 (コード由来。実 bytes と違えば STOP):
   parent 3 (`id,code,is_active`) / fin 13 / score 4 / benefits 9。
+  物理列名は schema 定義どおり (`ma_25` / `rsi_14`。`ma25` 誤記は修正済み)。
   - 注意: 指示の `fin14cols` に対しコード由来は 13 列
-    (`stock_id,price,per,pbr,dividend_yield,roe,ma25,rsi14,macd,macd_signal,yutai_yield,data_date,fetched_at`)。
+    (`stock_id,price,per,pbr,dividend_yield,roe,ma_25,rsi_14,macd,macd_signal,yutai_yield,data_date,fetched_at`)。
     強制せず live bytes で確定する。score の `score3` は stock_id 除きで一致。
 - 送信前検査: URL 完全一致 (DB exact)・単発 `{sql,params}` envelope のみ
-  (`batch` 拒否)・SELECT 単文 (`;` 拒否)。8 件 exact (extra 0)・redirect 0・
-  retry 0。writer/sender は throw-if-called のみ。batch 送信口は作らない。
+  (`batch` 拒否)・SELECT 単文 (`;` 拒否)。さらに既存実 builder と同一の
+  select 式の `.toSQL()` 8 文と SQL・params・件数を完全一致で照合する
+  (projection/predicate/144 scope を強制。parent params は chunk+2 =
+  82/66。式の複写乖離は runtime で STOP)。
+- 8 件 exact (extra 0)・retry 0。redirect は `manual` 送信で follow を
+  構造的に封じ、3xx 応答は follow せず STOP。
+  writer/sender は throw-if-called のみ。batch 送信口は作らない。
 
 ## 3. 取得と検証 (live 時のみ)
 
-- `POST /query` ×8。fetch ラッパで `response.clone()` の実 bytes を保存する。
+- `POST /query` ×8。fetch ラッパで `response.clone()` の実 bytes を
+  capture 直後に immutable 保存し (validate 前)、validate 成否も
+  incremental な partial ledger へ残す。途中失敗でも取得済み bytes と
+  失敗記録は失わない。
 - raw 応答の厳密検証: HTTP 成功・`success:true`・`result[0].results` 配列の
   存在・行の列順と列型・chunk 帰属・一意性。results の欠落を `[]` とは
   扱わない (共有 client の fallback があっても監査は 0 同値を主張しない)。
@@ -42,25 +51,35 @@ main merge せず、live 実行せず、probe 実装と計画のみ報告する�
   STOP (truncate しない)。
 - 8 連読は global transaction ではない。将来の apply は FULL CAS が別 gate。
 
-## 4. 出力 10 件 (private のみ。Git/doc は件数・SHA のみ)
+## 4. 出力 11 件 (private のみ。Git/doc は件数・SHA のみ)
 
 - `/tmp/yutai-fresh-audit-20260930/` (0700, write-once。非空なら拒否)。
 - `raw-response-01.json`〜`08.json` (実 bytes, 0600) +
-  `fresh-snapshot.json` (derived, 0600) + `metadata.json` (0600)。
+  `fresh-snapshot.json` (derived, 0600) + `metadata.json` (0600) +
+  `partial-ledger.jsonl` (capture/validate の incremental 記録, 0600)。
 - stdout/doc に auth header・env・cookie・URL 生値・原文を出さない
   (URL は SHA のみ)。
 
 ## 5. 比較 (fresh snapshot 入力。模擬 post ではない)
 
-- ABC 473: 現行 3 値 + 保護 identity (親) + 掲載文 (FT 62 は newFull・他は
-  row-manifest 旧文) を全 ID 比較。差が無ければ実 planner→実 apply で
-  0 送信を証明する (既存 producer/proof 関数を再利用)。
-- FT 62: 実分類の actual 件数 (ALREADY_APPLIED/CANDIDATE/STOP) +
-  ALREADY_APPLIED 行の実 builder 0 文・送信 0 回。
-- normal45: fresh 現行行 + 実 planner の actual 件数。
-  offline 28pending/38src + 9stale/12 = 37/50 は cross-check (未実測) で、
-  違えば実 diff を保存し件数を強制しない。
+- 保存全行集合 (benefitMap 1668): 期待 post (ABC 3 値 + FT 掲載文 +
+  不変行の pre 値) と fresh の全行比較。NULL-safe・membership 双方向・
+  親帰属・minShares/recordMonth・掲載文。差は content として全件保存する
+  (473 だけ見て MATCH にしない)。
+- runtime drift は独立計数し full match への丸めは 0: 保護 fin/score の
+  full property・untouched 行の updatedAt・利回り再計算の変化。
+  正当な夜間更新もありうるため正直報告し、0 に丸めない。
+  修復行の updatedAt は書込 receipt (pre より進むこと) を要求する。
+- 実 planner→実 apply は既存 producer/proof 関数を再利用し 0 送信を証明する。
+- FT 62: 実分類の actual 件数 + 全 62 行の親 identity
+  (stockId/code/benefit-table) 証明 + ALREADY_APPLIED 行の実 builder 0 文。
+- normal45: 既存 `proveNormal45` を fresh 現行行 + preFT 再構成行で再利用し、
+  rejected/stale/equivalent/pending の全理由を保持する。
+  offline 37/50 との一致は cross-check (内容一致の決定論的帰結)。
 - 9 stale タスクの ID 書換だけでの修復は禁止 (原文の再認定が必要)。
+- parser は既存 verify CLI の共有 export
+  (`parseRowManifest` / `parseFtBatchedUpdates` / `parseManifest34Results`)。
+  probe 側の複写は削除した (verify CLI の DONE は同一出力で再確認済み)。
 
 ## 6. gates と completeness (grant 条件)
 
@@ -68,5 +87,5 @@ main merge せず、live 実行せず、probe 実装と計画のみ報告する�
   private filenames + semantics + completeness の root review 後。
 - Source GET 0 / Notion archive 0 / D1 R2 writes 0 / dispatch 0 のまま。
 - 将来 capture 成功後の Notion PrimaryData 記録
-  (unique key 日付+snapshotSHA・force false・physical 10 全件 strict unique)
+  (unique key 日付+snapshotSHA・force false・physical 11 全件 strict unique)
   は別 WRITE gate。現在 WRITE grant 0。

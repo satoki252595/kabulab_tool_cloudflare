@@ -4,27 +4,40 @@
  * 目的: 本番 D1 の現値を保存済み preimage/証跡と突き合わせる fresh 監査。
  * 既存の読取 chain (`openOtakaraD1` → `fetchYieldInputs` → `snapshotStockPreimages`)
  * をそのまま使い、新 SQL・新 API adapter は作らない。`loadBenefitRows`
- * (unbounded) は使わない。
+ * (unbounded) は使わない。比較は既存 verify CLI の parser/producer/planner
+ * を再利用し、判定の複写はしない (小 read capture + 既存 compare 再利用)。
  *
  * 送信なしの構造:
  * - 既定は plan 表示のみ (HTTP 0・env 0・file 0)。live 取得は --execute-live
  *   を付けた時だけ走り、root の grant (probe SHA + scope SHA + 件数 +
  *   private filenames + semantics + completeness の review) が前提。
  * - 8 POST は全て単発 {sql, params} の SELECT のみ。送信前に URL 完全一致・
- *   envelope 検査・SELECT 単文検査をする。batch 送信口は作らない。
- *   writer/sender は throw-if-called のみ。
+ *   envelope 検査・SELECT 単文検査・既存実 builder の .toSQL() との完全一致
+ *   (SQL・params・件数) をする。batch 送信口は作らない。
+ *   writer/sender は throw-if-called のみ。redirect は manual (follow 0)。
  * - 8 連読は global transaction ではない (将来の apply は FULL CAS が別 gate)。
- * - 応答は raw bytes で保存し、shape/results/行型/必須列を厳密検証する。
- *   共有 client の missing-result→[] があっても監査は 0 同値を主張しない。
+ * - 応答は capture 直後に immutable 保存し、shape/results/行型/必須列を
+ *   厳密検証する。共有 client の missing-result→[] があっても監査は
+ *   0 同値を主張しない。
  *
  * 使い方:
  *   plan (offline): node --import tsx services/otakara-yutai/data-scripts/probe-yutai-fresh-audit.ts
  *   live (grant 後のみ): 同 + --execute-live
  */
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { and, inArray } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { openOtakaraD1 } from "./benefit-rows.js";
 import {
   applyAtomicBatches,
@@ -47,17 +60,25 @@ import {
 import {
   parseTaskFile,
   type BenefitRow,
-  type SummaryTask,
 } from "./summary-tasks.js";
 import {
   PINS,
   parseAbcManifest,
+  parseFtBatchedUpdates,
+  parseManifest34Results,
+  parseRowManifest,
   producePlannedUpdate,
+  proveNormal45,
   proveTargetCoverage,
   throwingSender,
+  type FtBatchedUpdate,
+  type NamedRow,
 } from "./verify-repair-reentry.js";
 import { sharedEnv } from "../../../src/shared/env.js";
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
+import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
+import { stocks as coreStocks } from "../../../src/shared/db/core-schema.js";
+import { stockFinancials, stockScores, yutaiBenefits } from "../src/db/schema.js";
 
 function fail(msg: string): never {
   throw new Error(`[fresh-probe] HOLD: ${msg}`);
@@ -76,11 +97,6 @@ function readPinned(dir: string, name: string): string {
 function asRecord(v: unknown, what: string): Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) fail(`${what} が object ではない`);
   return v as Record<string, unknown>;
-}
-
-function asArray(v: unknown, what: string): unknown[] {
-  if (!Array.isArray(v)) fail(`${what} が配列ではない`);
-  return v;
 }
 
 export type ProbeArgs = {
@@ -107,7 +123,7 @@ export function parseProbeArgs(argv: readonly string[]): ProbeArgs {
   };
 }
 
-/** 出力 10 件の固定名 (01-08 raw + snapshot + metadata)。 */
+/** 出力の固定名 (01-08 raw + snapshot + metadata + partial ledger)。 */
 export const RAW_NAMES = [
   "raw-response-01.json",
   "raw-response-02.json",
@@ -120,6 +136,7 @@ export const RAW_NAMES = [
 ] as const;
 export const SNAPSHOT_NAME = "fresh-snapshot.json";
 export const METADATA_NAME = "metadata.json";
+export const LEDGER_NAME = "partial-ledger.jsonl";
 
 export const UNION_SIZE = 144;
 export const CHUNK_SIZE = 80;
@@ -138,6 +155,7 @@ export const CALL_PLAN: { kind: CallKind; table: string }[] = [
 /**
  * raw 応答行の期待キー (列順つき。共有 client が Object.values の列順に
  * 依存するため順序まで固定する)。実 bytes と違えば STOP (実値を保存)。
+ * 物理列名は schema 定義どおり (ma_25 / rsi_14 に注意)。
  */
 export const EXPECTED_KEYS: Record<CallKind, readonly string[]> = {
   parent: ["id", "code", "is_active"],
@@ -148,8 +166,8 @@ export const EXPECTED_KEYS: Record<CallKind, readonly string[]> = {
     "pbr",
     "dividend_yield",
     "roe",
-    "ma25",
-    "rsi14",
+    "ma_25",
+    "rsi_14",
     "macd",
     "macd_signal",
     "yutai_yield",
@@ -189,108 +207,33 @@ export type FreshScope = {
   scopeSha: string;
 };
 
-type NamedRowLite = { id: number; stockId: number; stockCode: string; oldDescription: string };
-
-function parseRowManifestLite(text: string): NamedRowLite[] {
-  const root = asRecord(JSON.parse(text), "row-manifest");
-  const out: NamedRowLite[] = [];
-  for (const e of asArray(root["rows"], "row-manifest.rows")) {
-    const r = asRecord(e, "row-manifest row");
-    if (
-      typeof r["id"] !== "number" ||
-      typeof r["stockId"] !== "number" ||
-      typeof r["stockCode"] !== "string" ||
-      typeof r["oldDescription"] !== "string"
-    ) {
-      fail("row-manifest 行の id/stockId/stockCode/oldDescription が不正");
-    }
-    out.push({
-      id: r["id"] as number,
-      stockId: r["stockId"] as number,
-      stockCode: r["stockCode"] as string,
-      oldDescription: r["oldDescription"] as string,
-    });
-  }
-  return out;
-}
-
-function parseRowManifestFull(text: string): Map<number, { oldDescription: string; newFull: string }> {
-  const root = asRecord(JSON.parse(text), "row-manifest");
-  const out = new Map<number, { oldDescription: string; newFull: string }>();
-  for (const e of asArray(root["rows"], "row-manifest.rows")) {
-    const r = asRecord(e, "row-manifest row");
-    if (typeof r["id"] !== "number" || typeof r["oldDescription"] !== "string" || typeof r["newFull"] !== "string") {
-      fail("row-manifest 行の id/oldDescription/newFull が不正");
-    }
-    out.set(r["id"] as number, { oldDescription: r["oldDescription"] as string, newFull: r["newFull"] as string });
-  }
-  return out;
-}
-
-function parseFtBatched(text: string): Map<number, { newFull: string; old: string }> {
-  const root = asRecord(JSON.parse(text), "fulltext-manifest");
-  const batches = asArray(root["batches"], "fulltext-manifest.batches");
-  if (batches.length !== 13) fail(`全文 batches stocks=${batches.length} (want 13)`);
-  const out = new Map<number, { newFull: string; old: string }>();
-  for (const b of batches) {
-    const batch = asRecord(b, "fulltext batch");
-    for (const s of asArray(batch["statements"], "fulltext statements").slice(1)) {
-      const st = asRecord(s, "fulltext statement");
-      const sql = st["sql"];
-      if (typeof sql !== "string" || !sql.startsWith("UPDATE yutai_benefits SET description = ?")) {
-        fail("全文の非 preflight 文が description UPDATE ではない");
-      }
-      const p = asArray(st["params"], "fulltext params");
-      const id = p[1];
-      if (typeof id !== "number" || typeof p[0] !== "string" || typeof p[2] !== "string") {
-        fail("全文 params の [newFull, id, old] が不正");
-      }
-      if (out.has(id)) fail(`全文 ID ${id} の重複`);
-      out.set(id, { newFull: p[0] as string, old: p[2] as string });
-    }
-  }
-  if (out.size !== 62) fail(`全文 batched rows=${out.size} (want 62)`);
-  return out;
-}
-
-function parseManifest34Codes(text: string): string[] {
-  const root = asRecord(JSON.parse(text), "manifest-34");
-  const out: string[] = [];
-  for (const e of asArray(root["results"], "manifest-34.results")) {
-    const code = asRecord(e, "manifest-34 result")["code"];
-    if (typeof code !== "string") fail("manifest-34 result.code が文字列ではない");
-    out.push(code);
-  }
-  if (out.length !== 34) fail(`manifest-34 codes=${out.length} (want 34)`);
-  return out;
-}
-
 /**
  * 監査 scope の再導出 (offline)。ABC 131 + FT 13 + normal 34 → union 144、
  * A∩FT=6、normal-outside=6 を実値で検証する。違えば STOP (強制しない)。
+ * parser は既存 verify CLI の共有品を使う (複写しない)。
  */
 export function deriveScope(abcText: string, ftText: string, rowText: string, m34Text: string): FreshScope {
   const abc = parseAbcManifest(abcText);
   const abcIds = [...abc.preimages.keys()].sort((a, b) => a - b);
   if (abcIds.length !== 131) fail(`ABC stocks=${abcIds.length} (want 131)`);
-  const rows = parseRowManifestLite(rowText);
-  const id2stock = new Map(rows.map((r) => [r.id, r.stockId]));
+  const rowById = parseRowManifest(rowText);
+  const id2stock = new Map([...rowById.values()].map((r) => [r.id, r.stockId]));
   const code2stock = new Map<string, number>();
-  for (const r of rows) {
+  for (const r of rowById.values()) {
     const prev = code2stock.get(r.stockCode);
     if (prev !== undefined && prev !== r.stockId) fail(`code=${r.stockCode} が複数 stockId に出現`);
     code2stock.set(r.stockCode, r.stockId);
   }
-  const batched = parseFtBatched(ftText);
+  const batched = parseFtBatchedUpdates(ftText);
   const ftIds = [...new Set([...batched.keys()].map((id) => {
     const s = id2stock.get(id);
     if (s === undefined) fail(`全文 ID ${id} が row-manifest に無い`);
     return s!;
   }))].sort((a, b) => a - b);
   if (ftIds.length !== 13) fail(`FT stocks=${ftIds.length} (want 13)`);
-  const normalIds = parseManifest34Codes(m34Text).map((code) => {
-    const s = code2stock.get(code);
-    if (s === undefined) fail(`manifest-34 code=${code} が row-manifest に無い`);
+  const normalIds = parseManifest34Results(m34Text).map((e) => {
+    const s = code2stock.get(e.code);
+    if (s === undefined) fail(`manifest-34 code=${e.code} が row-manifest に無い`);
     return s!;
   });
   const normalSet = new Set(normalIds);
@@ -331,7 +274,7 @@ export function deriveScope(abcText: string, ftText: string, rowText: string, m3
       benefitMap.set(b.id, { stockId: sid, code: pre.parent.code });
     }
   }
-  for (const r of rows) {
+  for (const r of rowById.values()) {
     const prev = benefitMap.get(r.id);
     if (prev && prev.stockId !== r.stockId) fail(`benefit ${r.id} の親が衝突: ${prev.stockId} vs ${r.stockId}`);
     benefitMap.set(r.id, { stockId: r.stockId, code: r.stockCode });
@@ -396,6 +339,78 @@ export function matchCallKind(sql: string): CallKind {
   fail(`想定外テーブルへの SELECT: ${sql.slice(0, 120)}`);
 }
 
+export type ExpectedCall = { kind: CallKind; chunk: number; sql: string; params: unknown[] };
+
+/**
+ * 既存実 builder と同一の select 式 (同一 schema・同一述語) から .toSQL() で
+ * 期待の 8 文を生成する。同一 drizzle builder のため env も network も要らない。
+ * 送信文言との完全一致で照合する (式の乖離は runtime で STOP する)。
+ * 注意: parent は chunkIDs + active 真偽 + equity リテラルで chunk+2 params
+ * (80 chunk なら 82。80 total と思わないこと)。
+ */
+export function buildExpectedCalls(chunks: [number[], number[]]): ExpectedCall[] {
+  const db = drizzle(async () => {
+    fail("toSQL 生成中に query が実行された (ありえない)");
+  });
+  const out: ExpectedCall[] = [];
+  chunks.forEach((chunk, ci) => {
+    const parent = db
+      .select({ stockId: coreStocks.id, code: coreStocks.code, isActive: coreStocks.isActive })
+      .from(coreStocks)
+      .where(and(inArray(coreStocks.id, chunk), activeEquityCondition()))
+      .toSQL();
+    out.push({ kind: "parent", chunk: ci, sql: parent.sql, params: [...parent.params] });
+    const fin = db
+      .select({
+        stockId: stockFinancials.stockId,
+        price: stockFinancials.price,
+        per: stockFinancials.per,
+        pbr: stockFinancials.pbr,
+        dividendYield: stockFinancials.dividendYield,
+        roe: stockFinancials.roe,
+        ma25: stockFinancials.ma25,
+        rsi14: stockFinancials.rsi14,
+        macd: stockFinancials.macd,
+        macdSignal: stockFinancials.macdSignal,
+        yutaiYield: stockFinancials.yutaiYield,
+        dataDate: stockFinancials.dataDate,
+        fetchedAt: stockFinancials.fetchedAt,
+      })
+      .from(stockFinancials)
+      .where(inArray(stockFinancials.stockId, chunk))
+      .toSQL();
+    out.push({ kind: "fin", chunk: ci, sql: fin.sql, params: [...fin.params] });
+    const score = db
+      .select({
+        stockId: stockScores.stockId,
+        fundamentalScore: stockScores.fundamentalScore,
+        technicalScore: stockScores.technicalScore,
+        totalScore: stockScores.totalScore,
+      })
+      .from(stockScores)
+      .where(inArray(stockScores.stockId, chunk))
+      .toSQL();
+    out.push({ kind: "score", chunk: ci, sql: score.sql, params: [...score.params] });
+    const ben = db
+      .select({
+        rowId: yutaiBenefits.id,
+        stockId: yutaiBenefits.stockId,
+        minShares: yutaiBenefits.minShares,
+        recordMonth: yutaiBenefits.recordMonth,
+        description: yutaiBenefits.description,
+        shortSummary: yutaiBenefits.shortSummary,
+        estimatedValue: yutaiBenefits.estimatedValue,
+        estimateValueSource: yutaiBenefits.estimateValueSource,
+        updatedAt: yutaiBenefits.updatedAt,
+      })
+      .from(yutaiBenefits)
+      .where(inArray(yutaiBenefits.stockId, chunk))
+      .toSQL();
+    out.push({ kind: "benefits", chunk: ci, sql: ben.sql, params: [...ben.params] });
+  });
+  return out;
+}
+
 export type CapturedCall = {
   index: number;
   kind: CallKind;
@@ -426,8 +441,8 @@ const COL_TYPES: Record<CallKind, Record<string, "number" | "string" | "number|n
     pbr: "number|null",
     dividend_yield: "number|null",
     roe: "number|null",
-    ma25: "number|null",
-    rsi14: "number|null",
+    ma_25: "number|null",
+    rsi_14: "number|null",
     macd: "number|null",
     macd_signal: "number|null",
     yutai_yield: "number|null",
@@ -511,12 +526,33 @@ export function validateRawResponse(kind: CallKind, bytes: Buffer, chunkIds: rea
   return { kind, rows };
 }
 
-/** 8 連読の取得器。global fetch を検査・記録ラッパで包む。 */
+export type CaptureSink = {
+  /** capture 直後・validate 前に呼ばれる (raw の即時保存用)。 */
+  onRaw(index: number, bytes: Buffer): void;
+  /** validate の成否 (失敗も残す)。 */
+  onValidated(index: number, rowCount: number, error: string | null): void;
+};
+
+/** partial ledger への追記 (0600。失敗時も残る)。 */
+export function appendLedgerLine(dir: string, entry: Record<string, unknown>): void {
+  appendFileSync(join(dir, LEDGER_NAME), JSON.stringify(entry) + "\n", { mode: 0o600 });
+  chmodSync(join(dir, LEDGER_NAME), 0o600);
+}
+
+/**
+ * 8 連読の取得器。global fetch を検査・記録ラッパで包む。
+ * - 送信前: URL・envelope・SELECT・期待 SQL/params 完全一致を検査する。
+ * - 送信は redirect manual (follow による extra HTTP を構造的に封じる)。
+ * - capture 直後に sink へ raw を渡し (validate 前の immutable 保存)、
+ *   validate 成否も sink へ残す。途中失敗でも取得済み bytes は失わない。
+ */
 export async function captureFreshReads(
   scope: FreshScope,
-  expectedUrl: string
+  expectedUrl: string,
+  sink?: CaptureSink
 ): Promise<{ inputs: YieldInputs; calls: CapturedCall[]; rawBytes: Buffer[] }> {
   const db = openOtakaraD1();
+  const expected = buildExpectedCalls(scope.chunks);
   const calls: CapturedCall[] = [];
   const rawBytes: Buffer[] = [];
   const realFetch = globalThis.fetch;
@@ -527,16 +563,33 @@ export async function captureFreshReads(
     if (initRec["method"] !== "POST") fail(`fetch method が POST ではない: ${String(initRec["method"])}`);
     if (typeof initRec["body"] !== "string") fail("fetch body が文字列ではない");
     n++;
-    if (n > 8) fail(`9 件目の HTTP 呼び出し (extra HTTP 禁止)。8 件で打ち切る`);
+    if (n > 8) fail(`9 件目の HTTP 呼び出し (extra HTTP 禁止)。送らず打ち切る`);
     const { sql, params } = inspectSelectCall(input as string, initRec["body"] as string, expectedUrl);
     const want = CALL_PLAN[(n - 1) % 4];
     const kind = matchCallKind(sql);
     if (kind !== want.kind) fail(`${n} 件目の種別が ${kind} (want ${want.kind})`);
+    const exp = expected[n - 1];
+    if (sql !== exp.sql || JSON.stringify(params) !== JSON.stringify(exp.params)) {
+      fail(
+        `${n} 件目の送信が期待文と不一致 ` +
+          `(sql actual=${sha256Hex(sql).slice(0, 12)} want=${sha256Hex(exp.sql).slice(0, 12)}, ` +
+          `params ${params.length}/${(exp.params as unknown[]).length})`
+      );
+    }
     const chunkNo = n <= 4 ? 0 : 1;
-    const res = await realFetch(input as string, init as RequestInit);
+    const res = await realFetch(input as string, { ...(init as RequestInit), redirect: "manual" });
     if (res.redirected) fail(`${n} 件目で redirect を検出 (redirect 禁止)`);
+    if (res.status >= 300 && res.status < 400) fail(`${n} 件目が redirect 応答 ${res.status} (follow せず STOP)`);
     const bytes = Buffer.from(await res.clone().arrayBuffer());
-    const validated = validateRawResponse(kind, bytes, scope.chunks[chunkNo]);
+    sink?.onRaw(n, bytes);
+    let validated: ValidatedRows;
+    try {
+      validated = validateRawResponse(kind, bytes, scope.chunks[chunkNo]);
+    } catch (e) {
+      sink?.onValidated(n, -1, String(e));
+      throw e;
+    }
+    sink?.onValidated(n, validated.rows.length, null);
     rawBytes.push(bytes);
     calls.push({
       index: n,
@@ -594,59 +647,224 @@ export function checkFreshParents(scope: FreshScope, inputs: YieldInputs): Paren
   return problems;
 }
 
-export type AbcFreshDiff = {
+export type ExpectedBenefitRow = {
   id: number;
-  field: "row" | "shortSummary" | "estimatedValue" | "estimateValueSource" | "description" | "parent";
-  planned: string;
+  stockId: number;
+  minShares: number;
+  recordMonth: number;
+  description: string;
+  shortSummary: string | null;
+  estimatedValue: number | null;
+  estimateValueSource: string | null;
+  updatedAtPre: number;
+  repaired: boolean;
+};
+
+export type PlannedTriple = {
+  shortSummary: string;
+  estimatedValue: number | null;
+  estimateValueSource: string | null;
+};
+
+/**
+ * 保存全行の期待 post を組む (ABC 3 値 + FT 掲載文 + 不変行の pre 値)。
+ * 473 planned だけでなく benefitMap 全行 (1668) が対象。源が無い行は STOP。
+ */
+export function buildExpectedPost(
+  benefitMap: Map<number, { stockId: number; code: string }>,
+  preimages: Map<number, StockPreimage>,
+  rowById: Map<number, NamedRow>,
+  plannedById: Map<number, PlannedTriple>,
+  batched: Map<number, FtBatchedUpdate>
+): Map<number, ExpectedBenefitRow> {
+  const preById = new Map<number, StockPreimage["benefits"][number]>();
+  for (const pre of preimages.values()) {
+    for (const b of pre.benefits) preById.set(b.id, b);
+  }
+  const out = new Map<number, ExpectedBenefitRow>();
+  for (const [bid, m] of benefitMap) {
+    const pre = preById.get(bid);
+    const nm = rowById.get(bid);
+    const planned = plannedById.get(bid);
+    const triple = planned ?? pre ?? nm;
+    if (!triple) fail(`benefit ${bid} の期待 3 値の源が無い`);
+    const desc = batched.get(bid)?.newFull ?? nm?.oldDescription ?? pre?.description;
+    if (desc === undefined) fail(`benefit ${bid} の期待掲載文の源が無い`);
+    const minShares = pre?.minShares ?? nm?.minShares;
+    const recordMonth = pre?.recordMonth ?? nm?.recordMonth;
+    const updatedAtPre = pre?.updatedAt ?? nm?.updatedAt;
+    if (minShares === undefined || recordMonth === undefined || updatedAtPre === undefined) {
+      fail(`benefit ${bid} の期待行属性の源が無い`);
+    }
+    out.set(bid, {
+      id: bid,
+      stockId: m.stockId,
+      minShares,
+      recordMonth,
+      description: desc,
+      shortSummary: triple.shortSummary,
+      estimatedValue: triple.estimatedValue,
+      estimateValueSource: triple.estimateValueSource as string | null,
+      updatedAtPre,
+      repaired: planned !== undefined || batched.has(bid),
+    });
+  }
+  return out;
+}
+
+export type ContentDiff = { id: number; field: string; expected: string; fresh: string };
+export type DriftDiff = {
+  scope: "fin" | "score" | "updatedAt" | "yield";
+  stockId: number;
+  id?: number;
+  field: string;
+  expected: string;
   fresh: string;
 };
 
-export function compareAbcFresh(
-  plannedById: Map<number, { shortSummary: string; estimatedValue: number | null; estimateValueSource: string | null }>,
-  plannedIds: number[],
-  fresh: Map<number, StockPreimage>,
-  descExpected: Map<number, string>,
-  benefitMap: Map<number, { stockId: number; code: string }>
-): { diffs: AbcFreshDiff[]; descUncovered: number } {
+/**
+ * 保存全行集合の比較 (NULL-safe ===、full membership 双方向、親帰属)。
+ * content: 修復 scope の差 (1 件でも MATCH 不成立)。
+ * drift: runtime 由来の差 (untouched 行の updatedAt 等。独立計数し、
+ * full match への丸めは 0。修復行の receipt 違反は content 扱い)。
+ */
+export function compareBenefitFullSet(
+  expected: Map<number, ExpectedBenefitRow>,
+  fresh: Map<number, StockPreimage>
+): { content: ContentDiff[]; drift: DriftDiff[] } {
   const freshById = new Map<number, { stockId: number; row: StockPreimage["benefits"][number] }>();
   for (const [sid, pre] of fresh) {
     for (const b of pre.benefits) freshById.set(b.id, { stockId: sid, row: b });
   }
-  const diffs: AbcFreshDiff[] = [];
-  let descUncovered = 0;
+  const content: ContentDiff[] = [];
+  const drift: DriftDiff[] = [];
   const fmt = (v: unknown): string => (typeof v === "string" ? v : JSON.stringify(v));
-  for (const id of plannedIds) {
-    const p = plannedById.get(id)!;
-    const f = freshById.get(id);
+  for (const [bid, e] of expected) {
+    const f = freshById.get(bid);
     if (!f) {
-      diffs.push({ id, field: "row", planned: "present", fresh: "MISSING" });
+      content.push({ id: bid, field: "row", expected: "present", fresh: "MISSING" });
       continue;
     }
-    if (f.row.shortSummary !== p.shortSummary) {
-      diffs.push({ id, field: "shortSummary", planned: fmt(p.shortSummary), fresh: fmt(f.row.shortSummary) });
+    if (f.stockId !== e.stockId) {
+      content.push({ id: bid, field: "parent", expected: `stockId=${e.stockId}`, fresh: `stockId=${f.stockId}` });
     }
-    if (f.row.estimatedValue !== p.estimatedValue) {
-      diffs.push({ id, field: "estimatedValue", planned: fmt(p.estimatedValue), fresh: fmt(f.row.estimatedValue) });
+    if (f.row.minShares !== e.minShares) {
+      content.push({ id: bid, field: "minShares", expected: fmt(e.minShares), fresh: fmt(f.row.minShares) });
     }
-    if (f.row.estimateValueSource !== p.estimateValueSource) {
-      diffs.push({
-        id,
+    if (f.row.recordMonth !== e.recordMonth) {
+      content.push({ id: bid, field: "recordMonth", expected: fmt(e.recordMonth), fresh: fmt(f.row.recordMonth) });
+    }
+    if (f.row.description !== e.description) {
+      content.push({ id: bid, field: "description", expected: e.description, fresh: f.row.description });
+    }
+    if (f.row.shortSummary !== e.shortSummary) {
+      content.push({ id: bid, field: "shortSummary", expected: fmt(e.shortSummary), fresh: fmt(f.row.shortSummary) });
+    }
+    if (f.row.estimatedValue !== e.estimatedValue) {
+      content.push({
+        id: bid,
+        field: "estimatedValue",
+        expected: fmt(e.estimatedValue),
+        fresh: fmt(f.row.estimatedValue),
+      });
+    }
+    if (f.row.estimateValueSource !== e.estimateValueSource) {
+      content.push({
+        id: bid,
         field: "estimateValueSource",
-        planned: fmt(p.estimateValueSource),
+        expected: fmt(e.estimateValueSource),
         fresh: fmt(f.row.estimateValueSource),
       });
     }
-    const wantParent = benefitMap.get(id)?.stockId;
-    if (wantParent !== undefined && f.stockId !== wantParent) {
-      diffs.push({ id, field: "parent", planned: `stockId=${wantParent}`, fresh: `stockId=${f.stockId}` });
-    }
-    const wantDesc = descExpected.get(id);
-    if (wantDesc === undefined) descUncovered++;
-    else if (f.row.description !== wantDesc) {
-      diffs.push({ id, field: "description", planned: `sha=${sha256Hex(wantDesc)}`, fresh: `sha=${sha256Hex(f.row.description)}` });
+    if (e.repaired) {
+      // 修復行は書込 receipt として updated_at が進んでいること (内容一致が前提)。
+      if (!(f.row.updatedAt > e.updatedAtPre)) {
+        content.push({
+          id: bid,
+          field: "updatedAt-receipt",
+          expected: `>${e.updatedAtPre}`,
+          fresh: `${f.row.updatedAt}`,
+        });
+      }
+    } else if (f.row.updatedAt !== e.updatedAtPre) {
+      drift.push({
+        scope: "updatedAt",
+        stockId: f.stockId,
+        id: bid,
+        field: "updatedAt",
+        expected: `${e.updatedAtPre}`,
+        fresh: `${f.row.updatedAt}`,
+      });
     }
   }
-  return { diffs, descUncovered };
+  for (const [bid, f] of freshById) {
+    if (!expected.has(bid)) {
+      content.push({ id: bid, field: "row", expected: "absent", fresh: `ADDED stockId=${f.stockId}` });
+    }
+  }
+  return { content, drift };
+}
+
+/**
+ * 保護 fin/score の full property 比較。差は全て runtime drift として
+ * 独立計数する (正当な夜間更新もありうる。正直報告し、0 に丸めない)。
+ * preimage を持つ ABC 131 銘柄のみ期待がある。他は uncovered として数える。
+ */
+export function compareProtectedFinScores(
+  preimages: Map<number, StockPreimage>,
+  fresh: Map<number, StockPreimage>
+): { drift: DriftDiff[]; uncovered: number } {
+  const drift: DriftDiff[] = [];
+  let uncovered = 0;
+  const fmt = (v: unknown): string => (typeof v === "string" ? v : JSON.stringify(v));
+  for (const [sid, pre] of preimages) {
+    const f = fresh.get(sid);
+    if (!f) {
+      drift.push({ scope: "fin", stockId: sid, field: "preimage", expected: "present", fresh: "MISSING" });
+      continue;
+    }
+    const finKeys = [
+      "yutaiYield",
+      "dataDate",
+      "price",
+      "per",
+      "pbr",
+      "dividendYield",
+      "roe",
+      "ma25",
+      "rsi14",
+      "macd",
+      "macdSignal",
+      "fetchedAt",
+    ] as const;
+    if (pre.financial === null && f.financial !== null) {
+      drift.push({ scope: "fin", stockId: sid, field: "row", expected: "null", fresh: "ADDED" });
+    } else if (pre.financial !== null && f.financial === null) {
+      drift.push({ scope: "fin", stockId: sid, field: "row", expected: "present", fresh: "MISSING" });
+    } else if (pre.financial && f.financial) {
+      for (const k of finKeys) {
+        if (pre.financial[k] !== f.financial[k]) {
+          drift.push({ scope: "fin", stockId: sid, field: k, expected: fmt(pre.financial[k]), fresh: fmt(f.financial[k]) });
+        }
+      }
+    }
+    const scoreKeys = ["fundamentalScore", "technicalScore", "totalScore"] as const;
+    if (pre.scores === null && f.scores !== null) {
+      drift.push({ scope: "score", stockId: sid, field: "row", expected: "null", fresh: "ADDED" });
+    } else if (pre.scores !== null && f.scores === null) {
+      drift.push({ scope: "score", stockId: sid, field: "row", expected: "present", fresh: "MISSING" });
+    } else if (pre.scores && f.scores) {
+      for (const k of scoreKeys) {
+        if (pre.scores[k] !== f.scores[k]) {
+          drift.push({ scope: "score", stockId: sid, field: k, expected: fmt(pre.scores[k]), fresh: fmt(f.scores[k]) });
+        }
+      }
+    }
+  }
+  for (const sid of fresh.keys()) {
+    if (!preimages.has(sid)) uncovered++;
+  }
+  return { drift, uncovered };
 }
 
 export type FtFreshResult = {
@@ -655,33 +873,49 @@ export type FtFreshResult = {
   candidates: number;
   stops: number;
   missing: number[];
+  parentMismatches: { id: number; expected: string; fresh: string }[];
   descStatements: number;
   senderCalls: number;
 };
 
+/**
+ * FT 62 の fresh 比較。分類に加え、全 62 行の親 (stockId/code/benefit-table
+ * identity) を証明する。scope 内の別親＋同文のすり抜けは許さない。
+ */
 export async function compareFtFresh(
-  batched: Map<number, { newFull: string; old: string }>,
-  freshDescById: Map<number, string>,
-  freshUpdatedAtById: Map<number, number>,
+  batched: Map<number, FtBatchedUpdate>,
+  freshById: Map<number, { description: string; updatedAt: number; stockId: number }>,
+  expectedParent: Map<number, { stockId: number; code: string }>,
+  freshCodeByStock: Map<number, string>,
   sender: AtomicBatchSender
 ): Promise<FtFreshResult> {
   let applied = 0;
   let candidates = 0;
   let stops = 0;
   const missing: number[] = [];
+  const parentMismatches: FtFreshResult["parentMismatches"] = [];
   const actual: D1BatchStatement[] = [];
   for (const [id, u] of batched) {
-    const current = freshDescById.get(id);
-    if (current === undefined) {
+    const f = freshById.get(id);
+    if (f === undefined) {
       missing.push(id);
       continue;
     }
-    const cls = classifyDescriptionRepair({ current, oldDescription: u.old, newFull: u.newFull });
+    const want = expectedParent.get(id)!;
+    const freshCode = freshCodeByStock.get(f.stockId);
+    if (f.stockId !== want.stockId || freshCode !== want.code) {
+      parentMismatches.push({
+        id,
+        expected: `stockId=${want.stockId} code=${want.code}`,
+        fresh: `stockId=${f.stockId} code=${freshCode ?? "MISSING"}`,
+      });
+    }
+    const cls = classifyDescriptionRepair({ current: f.description, oldDescription: u.old, newFull: u.newFull });
     if (cls === "ALREADY_APPLIED") {
       applied++;
       actual.push(
         ...buildDescriptionUpdateStatements(
-          [{ id, oldDescription: current, updatedAt: freshUpdatedAtById.get(id)! }],
+          [{ id, oldDescription: f.description, updatedAt: f.updatedAt }],
           u.newFull
         )
       );
@@ -694,72 +928,26 @@ export async function compareFtFresh(
     return sender(statements);
   };
   if (actual.length > 0) await counting(actual);
-  return { rows: batched.size, applied, candidates, stops, missing, descStatements: actual.length, senderCalls };
+  return { rows: batched.size, applied, candidates, stops, missing, parentMismatches, descStatements: actual.length, senderCalls };
 }
 
-export type Normal45Fresh = {
-  tasks: number;
-  pendingTasks: number;
-  pendingRows: number;
-  sourceOnlyRows: number;
-  skippedEquivalent: number;
-  staleTaskIds: string[];
-  unanswered: number;
-};
-
-export function compareNormal45Fresh(
-  tasks: readonly SummaryTask[],
-  resultsText: string,
-  currentRows: readonly BenefitRow[]
-): Normal45Fresh {
-  const plan = planSummaryImport({ tasks, resultsText, currentRows });
-  const resultById = new Map<string, { shortSummary: string; estimatedValue: number | null }>();
-  for (const line of resultsText.split("\n")) {
-    if (line.trim() === "") continue;
-    const r = asRecord(JSON.parse(line), "results 行");
-    resultById.set(r["taskId"] as string, {
-      shortSummary: r["shortSummary"] as string,
-      estimatedValue: (r["estimatedValue"] ?? null) as number | null,
-    });
-  }
-  const taskById = new Map(tasks.map((t) => [t.taskId, t]));
-  const rowByKey = new Map<string, BenefitRow[]>();
-  for (const r of currentRows) {
-    const k = `${r.stockCode}\n${r.description}`;
-    const list = rowByKey.get(k);
-    if (list) list.push(r);
-    else rowByKey.set(k, [r]);
-  }
-  let pendingRows = 0;
-  let sourceOnlyRows = 0;
-  for (const u of plan.updates) {
-    const t = taskById.get(u.taskId)!;
-    const res = resultById.get(u.taskId)!;
-    const plannedSource = res.estimatedValue !== null ? "company" : null;
-    for (const r of rowByKey.get(`${t.stockCode}\n${t.description}`) ?? []) {
-      pendingRows++;
-      if (
-        r.shortSummary === res.shortSummary &&
-        r.estimatedValue === res.estimatedValue &&
-        r.estimateValueSource !== plannedSource
-      ) {
-        sourceOnlyRows++;
-      }
+/**
+ * fresh 現行行から preFT 行を再構成する (FT 62 行の掲載文を pinned mapping で
+ * 旧文へ戻す)。fresh 掲載文が新全文と違えば再構成不能として STOP する
+ * (drift 調査が必要。黙って旧文を置かない)。
+ */
+export function reconstructPreFtRows(
+  freshRows: readonly BenefitRow[],
+  batched: Map<number, FtBatchedUpdate>
+): BenefitRow[] {
+  return freshRows.map((r) => {
+    const u = batched.get(r.id);
+    if (!u) return r;
+    if (r.description !== u.newFull) {
+      fail(`行 ${r.id} の fresh 掲載文が新全文と不一致 (preFT 再構成不能)`);
     }
-  }
-  const staleTaskIds: string[] = [];
-  for (const r of plan.rejections) {
-    if (r.reason === "stale" && r.taskId) staleTaskIds.push(r.taskId);
-  }
-  return {
-    tasks: tasks.length,
-    pendingTasks: plan.updates.length,
-    pendingRows,
-    sourceOnlyRows,
-    skippedEquivalent: plan.skippedEquivalent,
-    staleTaskIds,
-    unanswered: plan.unansweredTaskIds.length,
-  };
+    return { ...r, description: u.old };
+  });
 }
 
 function writePrivateFile(dir: string, name: string, data: string | Buffer): void {
@@ -773,6 +961,7 @@ function selfSha(): string {
 }
 
 function printPlan(scope: FreshScope, args: ProbeArgs): void {
+  const expected = buildExpectedCalls(scope.chunks);
   console.info(
     [
       `PLAN verdict=READY_FOR_GRANT (live NOT executed)`,
@@ -781,8 +970,10 @@ function printPlan(scope: FreshScope, args: ProbeArgs): void {
         `outside6=${scope.outside6.length} benefitMap=${scope.benefitMap.size}`,
       `scopeSha=${scope.scopeSha}`,
       `calls=${CALL_PLAN.map((c) => `${c.kind}:${c.table}`).join(",")} x2chunks (POST /query, SELECT only)`,
+      `sqlSha=${expected.map((e) => sha256Hex(e.sql).slice(0, 8)).join(",")}`,
+      `params=${expected.map((e) => (e.params as unknown[]).length).join(",")}`,
       `caps benefits<=${BENEFITS_CAP} parent/fin/score<=${UNION_SIZE} each`,
-      `files=${[...RAW_NAMES, SNAPSHOT_NAME, METADATA_NAME].join(",")} under ${args.outDir} (0700/0600, write-once)`,
+      `files=${[...RAW_NAMES, SNAPSHOT_NAME, METADATA_NAME, LEDGER_NAME].join(",")} under ${args.outDir} (0700/0600, write-once)`,
       `gates: --execute-live + root grant required; writes 0; seq reads are NOT a global transaction`,
     ].join("\n")
   );
@@ -827,14 +1018,32 @@ async function runLive(args: ProbeArgs, scope: FreshScope): Promise<void> {
       "9 stale task IDs must NOT be repaired by rewriting task IDs (source re-certification required)",
     ],
   };
-  // 取得 (raw は 1 件ずつ即時保存し、途中失敗でも残す)。
+  // 取得 (raw は capture 直後に immutable 保存し、validate 成否も ledger へ)。
+  const sink: CaptureSink = {
+    onRaw: (index, bytes) => {
+      writePrivateFile(args.outDir, RAW_NAMES[index - 1], bytes);
+      appendLedgerLine(args.outDir, {
+        index,
+        phase: "captured",
+        bytesLength: bytes.length,
+        bytesSha: sha256Hex(bytes),
+        at: new Date().toISOString(),
+      });
+    },
+    onValidated: (index, rowCount, error) => {
+      appendLedgerLine(args.outDir, {
+        index,
+        phase: error ? "FAILED" : "validated",
+        rowCount,
+        error,
+        at: new Date().toISOString(),
+      });
+    },
+  };
   let inputs: YieldInputs;
   try {
-    const cap = await captureFreshReads(scope, expectedUrl);
+    const cap = await captureFreshReads(scope, expectedUrl, sink);
     inputs = cap.inputs;
-    for (const [i, b] of cap.rawBytes.entries()) {
-      writePrivateFile(args.outDir, RAW_NAMES[i], b);
-    }
     calls.push(...cap.calls);
   } catch (e) {
     writeMeta({ ...baseMeta, calls, verdict: { overall: "CAPTURE_STOP", error: String(e) } });
@@ -860,20 +1069,41 @@ async function runLive(args: ProbeArgs, scope: FreshScope): Promise<void> {
     fail(`親に ${parentProblems.length} 件の問題 (全件保存。truncate なし)`);
   }
   const fresh = snapshotStockPreimages(inputs, scope.union);
-  // 比較 ABC。
+  // 期待 post の構築と比較 (保存全行集合)。
   const abcText = readPinned(args.dir, "yutai-abc-manifest.json");
   const abc = parseAbcManifest(abcText);
   const { plannedById, plannedIds } = proveTargetCoverage(abc.filed, abc.preimages);
-  const rowFull = parseRowManifestFull(readPinned(args.dir, "yutai-row-manifest.json"));
-  const batched = parseFtBatched(readPinned(args.dir, "yutai-fulltext-manifest.postabc.json"));
-  const descExpected = new Map<number, string>();
-  for (const [id, r] of rowFull) descExpected.set(id, batched.get(id)?.newFull ?? r.oldDescription);
-  const abcCmp = compareAbcFresh(plannedById, plannedIds, fresh, descExpected, scope.benefitMap);
-  // 利回り再計算 (fresh 入力)。
+  const rowById = parseRowManifest(readPinned(args.dir, "yutai-row-manifest.json"));
+  const batched = parseFtBatchedUpdates(readPinned(args.dir, "yutai-fulltext-manifest.postabc.json"));
+  const expectedPost = buildExpectedPost(scope.benefitMap, abc.preimages, rowById, plannedById, batched);
+  const fullCmp = compareBenefitFullSet(expectedPost, fresh);
+  const finCmp = compareProtectedFinScores(abc.preimages, fresh);
+  const drift: DriftDiff[] = [...fullCmp.drift, ...finCmp.drift];
+  // 利回り再計算 (fresh 入力)。変化は runtime drift として独立計数する。
   const overlay = new Map<number, number | null>();
   for (const [id, t] of plannedById) overlay.set(id, t.estimatedValue);
   const yieldPlan = computeYieldEntries(scope.union, inputs, overlay);
-  const yieldDiffs = yieldPlan.entries.filter((e) => e.changed || e.scoreChanged).map((e) => e.stockId);
+  for (const e of yieldPlan.entries) {
+    const stored = inputs.prices.get(e.stockId)?.yutaiYield ?? null;
+    if (e.changed) {
+      drift.push({
+        scope: "yield",
+        stockId: e.stockId,
+        field: "yutaiYield",
+        expected: `stored=${JSON.stringify(stored)}`,
+        fresh: `recomputed=${JSON.stringify(e.next)}`,
+      });
+    }
+    if (e.scoreChanged) {
+      drift.push({
+        scope: "yield",
+        stockId: e.stockId,
+        field: "score",
+        expected: "stored",
+        fresh: `recomputed=${JSON.stringify(e.scoreNext)}`,
+      });
+    }
+  }
   // 実 planner→実 apply (差が無ければ 0 送信)。
   const updates: PlannedUpdate[] = abc.filed.map((f) => producePlannedUpdate(f));
   const stockOfBenefit = new Map<number, number>();
@@ -898,20 +1128,33 @@ async function runLive(args: ProbeArgs, scope: FreshScope): Promise<void> {
   } catch (e) {
     applyError = String(e);
   }
-  // 比較 FT。
-  const freshDescById = new Map<number, string>();
-  const freshUpdatedAtById = new Map<number, number>();
-  for (const [, pre] of fresh) {
+  // 比較 FT (分類 + 全 62 行の親 identity)。
+  const freshById = new Map<number, { description: string; updatedAt: number; stockId: number }>();
+  const freshCodeByStock = new Map<number, string>();
+  for (const [sid, pre] of fresh) {
+    freshCodeByStock.set(sid, pre.parent.code);
     for (const b of pre.benefits) {
-      freshDescById.set(b.id, b.description);
-      freshUpdatedAtById.set(b.id, b.updatedAt);
+      freshById.set(b.id, { description: b.description, updatedAt: b.updatedAt, stockId: sid });
     }
   }
-  const ftCmp = await compareFtFresh(batched, freshDescById, freshUpdatedAtById, throwingSender).catch((e) => {
+  let ftCmp: FtFreshResult & { error?: string };
+  try {
+    ftCmp = await compareFtFresh(batched, freshById, scope.benefitMap, freshCodeByStock, throwingSender);
+  } catch (e) {
     // throwingSender が投げた = 実 builder が文を出した (0-writes 構造どおり)。
-    return { rows: batched.size, applied: -1, candidates: -1, stops: -1, missing: [] as number[], descStatements: -1, senderCalls: 1, error: String(e) } as const;
-  });
-  // 比較 normal45 (fresh 現行行 + 実 planner。37/50 は cross-check のみ)。
+    ftCmp = {
+      rows: batched.size,
+      applied: -1,
+      candidates: -1,
+      stops: -1,
+      missing: [],
+      parentMismatches: [],
+      descStatements: -1,
+      senderCalls: 1,
+      error: String(e),
+    };
+  }
+  // 比較 normal45 (既存 proveNormal45 を fresh 現行行 + preFT 再構成で再利用)。
   const tasks = parseTaskFile(readFileSync(join(args.c45dir, "tasks-c45.jsonl"), "utf-8"));
   const resultsText = readFileSync(join(args.c45dir, "results-c45.jsonl"), "utf-8");
   const nameByCode = new Map<string, string>();
@@ -944,7 +1187,26 @@ async function runLive(args: ProbeArgs, scope: FreshScope): Promise<void> {
       });
     }
   }
-  const normalCmp = compareNormal45Fresh(tasks, resultsText, currentRows);
+  let normalCmp: ReturnType<typeof proveNormal45> | null = null;
+  let normalError: string | null = null;
+  try {
+    normalCmp = proveNormal45(tasks, resultsText, currentRows, reconstructPreFtRows(currentRows, batched));
+  } catch (e) {
+    normalError = String(e);
+  }
+  // 却下の全理由と taskId (既存 planner の再利用。複写しない)。
+  const rawPlan = planSummaryImport({ tasks, resultsText, currentRows });
+  const rejectionIds: Record<string, string[]> = {};
+  for (const r of rawPlan.rejections) {
+    const list = rejectionIds[r.reason] ?? [];
+    if (r.taskId) list.push(r.taskId);
+    rejectionIds[r.reason] = list;
+  }
+  const normalCrossCheckPass =
+    normalError === null &&
+    normalCmp !== null &&
+    normalCmp.pendingTasks + normalCmp.stale === 37 &&
+    normalCmp.sourceOnlyRows + normalCmp.staleSourceOnlyRows === 50;
   // N6 outside の exact proof。
   const n6proof = scope.outside6.map((sid) => ({
     stockId: sid,
@@ -953,18 +1215,23 @@ async function runLive(args: ProbeArgs, scope: FreshScope): Promise<void> {
     predicatePass: "activeEquityCondition (active+equity by construction; instrument_type value unread)",
     benefitIds: (fresh.get(sid)?.benefits ?? []).map((b) => b.id).sort((a, b) => a - b),
   }));
-  const overall =
-    abcCmp.diffs.length === 0 &&
-    yieldDiffs.length === 0 &&
-    applied.stocks === 0 &&
-    applied.statements === 0 &&
-    senderCalls === 0 &&
-    applyError === null &&
+  const ftClean =
     !("error" in ftCmp) &&
     ftCmp.candidates === 0 &&
     ftCmp.stops === 0 &&
     ftCmp.missing.length === 0 &&
-    ftCmp.descStatements === 0
+    ftCmp.parentMismatches.length === 0 &&
+    ftCmp.descStatements === 0 &&
+    ftCmp.senderCalls === 0;
+  const overall =
+    fullCmp.content.length === 0 &&
+    drift.length === 0 &&
+    applied.stocks === 0 &&
+    applied.statements === 0 &&
+    senderCalls === 0 &&
+    applyError === null &&
+    ftClean &&
+    normalCrossCheckPass
       ? "FRESH_MATCH"
       : "DIVERGED";
   const snapshot = {
@@ -998,14 +1265,21 @@ async function runLive(args: ProbeArgs, scope: FreshScope): Promise<void> {
     })),
     caps: { benefitsTotal, benefitsCap: BENEFITS_CAP, parentFinScoreCap: UNION_SIZE },
     compare: {
-      abc: { planned: plannedIds.length, diffs: abcCmp.diffs, descUncovered: abcCmp.descUncovered },
-      yield: { changedStocks: yieldDiffs },
+      fullSet: {
+        expected: expectedPost.size,
+        planned: plannedIds.length,
+        content: fullCmp.content,
+        drift,
+        finScoreUncovered: finCmp.uncovered,
+      },
       apply: { batches: batches.length, applied, senderCalls, applyError },
       ft: ftCmp,
       normal45: {
-        ...normalCmp,
-        staleTasks: normalCmp.staleTaskIds.length,
-        crossCheck: "offline 28pending/38src + 9stale/12 = 37/50 (reference only, unmeasured live)",
+        result: normalCmp,
+        error: normalError,
+        rejectionIds,
+        crossCheckPass: normalCrossCheckPass,
+        crossCheckNote: "offline 28pending/38src + 9stale/12 = 37/50 (deterministic consequence of full content match)",
       },
       n6outside: n6proof,
     },
@@ -1014,8 +1288,8 @@ async function runLive(args: ProbeArgs, scope: FreshScope): Promise<void> {
   console.info(
     `DONE verdict=${overall} ` +
       `scope=${scope.scopeSha.slice(0, 12)} calls=8 benefits=${benefitsTotal} ` +
-      `abcDiffs=${abcCmp.diffs.length} yieldDiffs=${yieldDiffs.length} apply=${applied.stocks}/${applied.statements}/${senderCalls} ` +
-      `normal=pending${normalCmp.pendingTasks}/${normalCmp.pendingRows}rows stale${normalCmp.staleTaskIds.length}`
+      `content=${fullCmp.content.length} drift=${drift.length} apply=${applied.stocks}/${applied.statements}/${senderCalls} ` +
+      `normal=${normalCmp ? `pending${normalCmp.pendingTasks} stale${normalCmp.stale} xcheck${normalCrossCheckPass ? "pass" : "DIFF"}` : `ERROR`}`
   );
   if (overall !== "FRESH_MATCH") process.exit(1);
 }
