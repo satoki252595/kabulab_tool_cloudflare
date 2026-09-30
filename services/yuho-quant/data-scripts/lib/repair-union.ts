@@ -6,10 +6,11 @@
  * 母集合の分離契約:
  * - union は重複を正当に dedup し、全 membership tags を残す。同じ doc が
  *   複数母集合 (census/live1781/旧1695 等) に属することは禁止しない。
- * - 禁止は「旧1695 を新 qualified 候補数と偽ること/母集合混同」のみ。
- *   `computeQualified` は新 pipeline の verdict のみを受け、旧集合を
- *   引数に取らない (構造的に混同不可)。report は旧数と新数を別 field で
- *   保持する (`SeparatedCounts`)。
+ * - 禁止は「旧1695 を新候補数と偽ること/母集合混同」のみ。
+ *   `computeOfflineCandidates` は新 pipeline の verdict のみを受け、旧集合を
+ *   引数に取らない (構造的に混同不可)。report は旧数・offline 候補・
+ *   liveReady・applyQualified を別 field で保持する (`SeparatedCounts`)。
+ *   offline 候補の意味は OFFLINE_CANDIDATE であり live READY ではない。
  */
 export type MembershipTag =
   | "census-adopted"
@@ -86,53 +87,111 @@ export type ReceiptState = "RECEIVED" | "ARCHIVE_PENDING" | "HOLD_RECEIPT";
 export interface ReceiptEvidence {
   sha256: string;
   bytes: number;
+  /**
+   * 既存 explicit unique/full-physical 証跡 (検証済み readback の記録)。
+   * 不在のまま sha/bytes が一致しても hosted receipt を名乗らない。
+   */
+  receipt?: { pageId: string; manifestMatch: string };
+}
+
+export interface ReceiptVerdict {
+  state: ReceiptState;
+  /** 実 bytes との SHA+length 一致 (metadata として保持。単独では RECEIVED にしない)。 */
+  shaMatch: boolean;
 }
 
 /**
- * receipt 分類。不在 → ARCHIVE_PENDING。存在しても sha/bytes 形状外 →
- * HOLD_RECEIPT (不正/unknown は HOLD)。receipt 証跡自体は offline の
- * 既存入力のみ (新規 fetch なし)。
+ * receipt 分類。証跡不在 → ARCHIVE_PENDING。形状外・実 bytes 不一致 →
+ * HOLD_RECEIPT (不正/unknown は HOLD)。RECEIVED は既存 explicit
+ * unique/full-physical 証跡 (検証済み readback 記録) が実 bytes と一致
+ * した場合のみ。{sha256,bytes} の一致は byte identity の証明であって
+ * hosted receipt の証明ではないため、単独では ARCHIVE_PENDING のまま
+ * shaMatch metadata のみ残す。receipt 証跡自体は offline の既存入力のみ
+ * (新規 fetch なし)。検証済み loader なし → 現状 RECEIVED 到達なし。
  */
 export function classifyReceipt(
   doc: string,
-  receipts: ReadonlyMap<string, ReceiptEvidence>
-): ReceiptState {
+  receipts: ReadonlyMap<string, ReceiptEvidence>,
+  actual: { sha256: string; bytes: number }
+): ReceiptVerdict {
   const ev = receipts.get(doc);
-  if (ev === undefined) return "ARCHIVE_PENDING";
-  if (typeof ev.sha256 !== "string" || ev.sha256.length !== 64) return "HOLD_RECEIPT";
-  if (typeof ev.bytes !== "number" || !Number.isFinite(ev.bytes)) return "HOLD_RECEIPT";
-  return "RECEIVED";
+  if (ev === undefined) return { state: "ARCHIVE_PENDING", shaMatch: false };
+  const shapeOK =
+    typeof ev.sha256 === "string" &&
+    ev.sha256.length === 64 &&
+    typeof ev.bytes === "number" &&
+    Number.isFinite(ev.bytes);
+  if (!shapeOK) return { state: "HOLD_RECEIPT", shaMatch: false };
+  const shaMatch = ev.sha256 === actual.sha256 && ev.bytes === actual.bytes;
+  const r = ev.receipt;
+  const verified =
+    r !== undefined &&
+    typeof r === "object" &&
+    typeof r.pageId === "string" &&
+    r.pageId !== "" &&
+    (r.manifestMatch === "same" || r.manifestMatch === "written");
+  if (verified && shaMatch) return { state: "RECEIVED", shaMatch: true };
+  if (!shaMatch) return { state: "HOLD_RECEIPT", shaMatch: false };
+  return { state: "ARCHIVE_PENDING", shaMatch: true };
 }
 
 /** 新 pipeline の per-doc verdict (qualified 判定の唯一の入力)。 */
 export interface NewVerdict {
   doc: string;
+  parseOK: boolean;
   validateOK: boolean;
   pinPresent: boolean;
+  pinMismatch: boolean;
+  scopeKnown: boolean;
   receipt: ReceiptState;
 }
 
 /**
- * 新 qualified 候補の導出。validate 通過 + pin あり + receipt 受領の
- * 3 条件のみ。旧集合 (旧1695 等) は引数に取らないため、新 qualified 数に
- * 旧数を混入させることは構造的にできない。本 PREP (apply grant 0・
- * receipt 証跡なし) では 0 を返す。呼び出し側は 0 を assert する。
+ * OFFLINE_CANDIDATE の導出。parse 通過 + validate 通過 + pin あり +
+ * pin 不一致なし + scope 既知 + receipt 受領の全条件のみ。pinMismatch・
+ * parse/validation HOLD・unknown scope は候補にしない。旧集合 (旧1695 等)
+ * は引数に取らないため、旧数を混入させることは構造的にできない。
+ * 意味は offline 候補であり live READY ではない。grant の有無で 0 に
+ * 偽装しない (計算結果をそのまま報告する。本 PREP では receipt 証跡なし
+ * の実結果として 0)。
  */
-export function computeQualified(verdicts: ReadonlyArray<NewVerdict>): string[] {
+export function computeOfflineCandidates(verdicts: ReadonlyArray<NewVerdict>): string[] {
   return verdicts
-    .filter((v) => v.validateOK && v.pinPresent && v.receipt === "RECEIVED")
+    .filter(
+      (v) =>
+        v.parseOK &&
+        v.validateOK &&
+        v.pinPresent &&
+        !v.pinMismatch &&
+        v.scopeKnown &&
+        v.receipt === "RECEIVED"
+    )
     .map((v) => v.doc)
     .sort();
 }
 
-/** 旧数と新数を別 field で保持する report 用 counts (混同防止)。 */
+/** 旧数・新候補・live/apply を別 field で保持する report 用 counts (混同防止)。 */
 export interface SeparatedCounts {
   /** 旧 live 観測の L1 changed 数 (旧 parser prep 由来。母集合が別)。 */
   oldL1Changed1695: number;
-  /** 新 pipeline の qualified 候補数 (本 PREP では 0)。 */
-  newQualified: number;
+  /** 新 pipeline の OFFLINE_CANDIDATE 数 (計算結果そのまま)。 */
+  offlineCandidates: number;
+  /** fresh custody/current CAS 前の live READY 数 (grant 状態として別明示)。 */
+  liveReady: number;
+  /** apply 許可数 (grant 状態として別明示)。 */
+  applyQualified: number;
 }
 
-export function separatedCounts(oldL1Changed: number, qualifiedDocs: string[]): SeparatedCounts {
-  return { oldL1Changed1695: oldL1Changed, newQualified: qualifiedDocs.length };
+export function separatedCounts(
+  oldL1Changed: number,
+  offlineDocs: string[],
+  liveReady: number,
+  applyQualified: number
+): SeparatedCounts {
+  return {
+    oldL1Changed1695: oldL1Changed,
+    offlineCandidates: offlineDocs.length,
+    liveReady,
+    applyQualified,
+  };
 }

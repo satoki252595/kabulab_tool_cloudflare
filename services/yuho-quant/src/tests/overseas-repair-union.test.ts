@@ -9,16 +9,16 @@
  * (overseas-repair-prep.ts の run) で確認する。
  *
  * 同じ doc が複数母集合に属することは正当 (dedup + 全 tags 保持)。
- * 禁止は「旧1695 を新 qualified 候補数と偽ること/母集合混同」のみで、
- * `computeQualified` が旧集合を引数に取らないこと + report の別 field
- * (`SeparatedCounts`) で構造保証する。
+ * 禁止は「旧1695 を新候補数と偽ること/母集合混同」のみで、
+ * `computeOfflineCandidates` が旧集合を引数に取らないこと + report の別 field
+ * (`SeparatedCounts`: 旧数・offline 候補・liveReady・applyQualified) で構造保証する。
  */
 import { describe, expect, it } from "vitest";
 import {
   buildUnion,
   censusTags,
   classifyReceipt,
-  computeQualified,
+  computeOfflineCandidates,
   separatedCounts,
   type MembershipTag,
   type NewVerdict,
@@ -102,61 +102,119 @@ describe("repair union (実 docID)", () => {
 });
 
 describe("receipt 分類 (既証跡の静読のみ)", () => {
+  const actual = { sha256: "a".repeat(64), bytes: 120 };
+
   it("証跡不在は ARCHIVE_PENDING (実 docID)", () => {
     const receipts = new Map();
-    expect(classifyReceipt("S1008Q8O", receipts)).toBe("ARCHIVE_PENDING");
-    expect(classifyReceipt("S100AKTK", receipts)).toBe("ARCHIVE_PENDING");
+    expect(classifyReceipt("S1008Q8O", receipts, actual)).toEqual({
+      state: "ARCHIVE_PENDING",
+      shaMatch: false,
+    });
+    expect(classifyReceipt("S100AKTK", receipts, actual).state).toBe("ARCHIVE_PENDING");
   });
 
   it("形状外の証跡は HOLD_RECEIPT (不正/unknown は HOLD)", () => {
     expect(
-      classifyReceipt("S1008Q8O", new Map([["S1008Q8O", { sha256: "zz", bytes: 12 }]]))
-    ).toBe("HOLD_RECEIPT");
+      classifyReceipt("S1008Q8O", new Map([["S1008Q8O", { sha256: "zz", bytes: 12 }]]), actual)
+    ).toEqual({ state: "HOLD_RECEIPT", shaMatch: false });
     expect(
       classifyReceipt(
         "S1008Q8O",
-        new Map([["S1008Q8O", { sha256: "x".repeat(64), bytes: Number.NaN }]])
-      )
+        new Map([["S1008Q8O", { sha256: "x".repeat(64), bytes: Number.NaN }]]),
+        actual
+      ).state
     ).toBe("HOLD_RECEIPT");
   });
 
-  it("64hex+bytes の証跡のみ RECEIVED", () => {
+  it("実 bytes と不一致の証跡は HOLD_RECEIPT", () => {
     expect(
       classifyReceipt(
         "S1008Q8O",
-        new Map([["S1008Q8O", { sha256: "a".repeat(64), bytes: 120 }]])
+        new Map([["S1008Q8O", { sha256: "b".repeat(64), bytes: 120 }]]),
+        actual
       )
-    ).toBe("RECEIVED");
+    ).toEqual({ state: "HOLD_RECEIPT", shaMatch: false });
+    expect(
+      classifyReceipt(
+        "S1008Q8O",
+        new Map([["S1008Q8O", { sha256: "a".repeat(64), bytes: 121 }]]),
+        actual
+      ).state
+    ).toBe("HOLD_RECEIPT");
+  });
+
+  it("sha/bytes 一致のみでは RECEIVED にしない (hosted 証明なし。shaMatch のみ保持)", () => {
+    expect(
+      classifyReceipt(
+        "S1008Q8O",
+        new Map([["S1008Q8O", { sha256: "a".repeat(64), bytes: 120 }]]),
+        actual
+      )
+    ).toEqual({ state: "ARCHIVE_PENDING", shaMatch: true });
+  });
+
+  it("既存 explicit unique/full-physical 証跡 + 実 bytes 一致のみ RECEIVED", () => {
+    const verified = {
+      sha256: "a".repeat(64),
+      bytes: 120,
+      receipt: { pageId: "page-1", manifestMatch: "same" },
+    };
+    expect(classifyReceipt("S1008Q8O", new Map([["S1008Q8O", verified]]), actual)).toEqual({
+      state: "RECEIVED",
+      shaMatch: true,
+    });
+    // 検証記録があっても実 bytes 不一致は HOLD。
+    const bad = { ...verified, sha256: "b".repeat(64) };
+    expect(classifyReceipt("S1008Q8O", new Map([["S1008Q8O", bad]]), actual).state).toBe(
+      "HOLD_RECEIPT"
+    );
   });
 });
 
-describe("母集合分離 (旧1695 と新 qualified の混同防止)", () => {
+describe("母集合分離 (旧1695 と新候補の混同防止)", () => {
   const newVerdicts: NewVerdict[] = [
-    { doc: "S1008Q8O", validateOK: true, pinPresent: true, receipt: "ARCHIVE_PENDING" },
-    { doc: "S1008XET", validateOK: true, pinPresent: true, receipt: "ARCHIVE_PENDING" },
-    { doc: "S100AKTK", validateOK: false, pinPresent: false, receipt: "ARCHIVE_PENDING" },
-    { doc: "S1008Q8W", validateOK: true, pinPresent: true, receipt: "ARCHIVE_PENDING" },
+    { doc: "S1008Q8O", parseOK: true, validateOK: true, pinPresent: true, pinMismatch: false, scopeKnown: true, receipt: "ARCHIVE_PENDING" },
+    { doc: "S1008XET", parseOK: true, validateOK: true, pinPresent: true, pinMismatch: false, scopeKnown: true, receipt: "ARCHIVE_PENDING" },
+    { doc: "S100AKTK", parseOK: true, validateOK: false, pinPresent: false, pinMismatch: false, scopeKnown: false, receipt: "ARCHIVE_PENDING" },
+    { doc: "S1008Q8W", parseOK: true, validateOK: true, pinPresent: true, pinMismatch: false, scopeKnown: true, receipt: "ARCHIVE_PENDING" },
   ];
 
-  it("旧 L1changed の doc でも receipt なしは qualified にならない", () => {
+  it("旧 L1changed の doc でも receipt なしは offline 候補にならない", () => {
     // S1008Q8O/S100AKTK/S1008Q8W は旧1695 側だが、新判定は新 verdict のみ。
-    expect(computeQualified(newVerdicts)).toEqual([]);
+    expect(computeOfflineCandidates(newVerdicts)).toEqual([]);
   });
 
-  it("3 条件 (validate+pin+receipt) を満たした doc のみ qualified", () => {
+  it("pinMismatch・parse/validation HOLD・unknown scope は候補にしない", () => {
+    const base: NewVerdict = { doc: "S1008Q8O", parseOK: true, validateOK: true, pinPresent: true, pinMismatch: false, scopeKnown: true, receipt: "RECEIVED" };
+    expect(computeOfflineCandidates([base])).toEqual(["S1008Q8O"]);
+    expect(computeOfflineCandidates([{ ...base, pinMismatch: true }])).toEqual([]);
+    expect(computeOfflineCandidates([{ ...base, parseOK: false }])).toEqual([]);
+    expect(computeOfflineCandidates([{ ...base, validateOK: false }])).toEqual([]);
+    expect(computeOfflineCandidates([{ ...base, scopeKnown: false }])).toEqual([]);
+    expect(computeOfflineCandidates([{ ...base, pinPresent: false }])).toEqual([]);
+  });
+
+  it("全条件を満たした doc のみ offline 候補 (意味は OFFLINE_CANDIDATE)", () => {
     const withReceipt: NewVerdict[] = [
       ...newVerdicts,
-      { doc: "S1008XET", validateOK: true, pinPresent: true, receipt: "RECEIVED" },
+      { doc: "S1008XET", parseOK: true, validateOK: true, pinPresent: true, pinMismatch: false, scopeKnown: true, receipt: "RECEIVED" },
     ];
-    // 同一 doc の 2 verdicts (pending + received): received の方が qualified。
-    expect(computeQualified(withReceipt)).toEqual(["S1008XET"]);
+    // 同一 doc の 2 verdicts (pending + received): received の方が候補。
+    expect(computeOfflineCandidates(withReceipt)).toEqual(["S1008XET"]);
   });
 
-  it("report は旧数と新数を別 field で保持する (混同防止)", () => {
-    const counts = separatedCounts(1695, computeQualified(newVerdicts));
-    expect(counts).toEqual({ oldL1Changed1695: 1695, newQualified: 0 });
+  it("report は旧数・offline 候補・liveReady・applyQualified を別 field で保持する (混同防止)", () => {
+    const counts = separatedCounts(1695, computeOfflineCandidates(newVerdicts), 0, 0);
+    expect(counts).toEqual({
+      oldL1Changed1695: 1695,
+      offlineCandidates: 0,
+      liveReady: 0,
+      applyQualified: 0,
+    });
     // 旧数を新数に代入する混同は型で不可: 別名 field のみ。
     expect("oldL1Changed1695" in counts).toBe(true);
-    expect("newQualified" in counts).toBe(true);
+    expect("offlineCandidates" in counts).toBe(true);
+    expect("liveReady" in counts).toBe(true);
+    expect("applyQualified" in counts).toBe(true);
   });
 });

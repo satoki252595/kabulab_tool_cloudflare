@@ -11,8 +11,9 @@ SHA・limits のみ (public 可)。per-doc の値・表は private 0600 のみ�
   `parseOverseasData` / `validateOverseasSaveSet` + backfill-overseas/ingest
   同等変換 + lib `repair-union.ts` の union/tags/分離)
 - union lib: `services/yuho-quant/data-scripts/lib/repair-union.ts`
-  (test: `overseas-repair-union.test.ts` 10 passed。実 docID の
-  交差/outside-live/unknown-pin 対照 + 母集合分離 + receipt 分類)
+  (test: `overseas-repair-union.test.ts` 13 passed。実 docID の
+  交差/outside-live/unknown-pin 対照 + 母集合分離 + receipt 分類
+  (verified 証跡+実 bytes 一致のみ RECEIVED) + offline 候補除外条件)
 - 実行: `2026-09-30T06:48:14Z`–`06:50:40Z` (約146秒・fetch 全面拒否・結果 PASS)
 - 実行 workHEAD: `4b998ab34b35` (PR208 merge main。closed-208 branch 不使用)
 - 実 CLI: `npx tsx services/yuho-quant/data-scripts/overseas-repair-prep.ts`
@@ -49,6 +50,26 @@ SHA・limits のみ (public 可)。per-doc の値・表は private 0600 のみ�
   同じ doc の複数母集合所属は正当 (例: S1008Q8O は 5 tags 併持)。
   対照: S1008XET (outside-live 採用)、S100AKTK (unknown-pin + live 観測)。
 
+## per-doc 保持 (認定証跡・private のみ)
+
+- 実 parser の `proof` + 変換前の実 `facts` を manifest/journal に保持する。
+  proof は rounding/reconciliation 区間 (unitYenFactor・selected-table・
+  fiscal locator を持たない)。facts が unitYenFactor + fiscal + scope を
+  運ぶ。same-table locator は facts の行自体。toSaveRows/status のみでは
+  失われるため両方残す。新 parser instrumentation/trace なし。
+- receipt は既存 explicit unique/full-physical 証跡 (検証済み readback 記録)
+  が実 ZIP の SHA+length と一致した場合のみ RECEIVED。sha/bytes 一致のみ
+  では hosted を名乗らず ARCHIVE_PENDING のまま shaMatch metadata のみ残す
+  (byte identity ≠ hosted receipt)。不在 → PENDING、不正/不一致 → HOLD。
+  検証済み loader なし → 現状 RECEIVED 到達なし。
+- 候補は parse+validate+pin+pin不一致なし+scope既知+receipt の全条件。
+  意味は OFFLINE_CANDIDATE (live READY ではない)。計算結果をそのまま報告し
+  grant で 0 に偽装しない (今回は receipt 証跡なしの実結果として 0)。
+  liveReady / applyQualified は grant 状態として別明示 (いずれも 0)。
+- live 観測行の全体 (q1 の id/stockId/periodEnd、q2 の id/documentId/stockId
+  を含む rawQ1/rawQ2) を journal に保持する (照合 projection とは別)。
+  DB 全体像の preimage は名乗らない (旧 Q1 は 7 列 projection のみ)。
+
 ## preimage 基準
 
 - applied59: journal 記録の sealed-post があれば primary (6件)、なければ
@@ -66,9 +87,9 @@ SHA・limits のみ (public 可)。per-doc の値・表は private 0600 のみ�
 - receipt: PENDING 3675 / RECEIVED 0。newQualified 0 (assert)。
 - 分離: oldL1Changed1695=1695 / newQualified=0 (別 field)。
 - census 自己整合 3602/3602 (同一 parser・同一 bytes の再現)。
-- 成果物: `repair-manifest.json` (3675) `4736faff…5e97672c` /
-  `repair-journal.jsonl` (3200行) `7572a3b3…41e5c` /
-  `repair-sets.json` `060358ee…b9e15` /
+- 成果物: `repair-manifest.json` (3675) `bf9a6aeb…f16bb` /
+  `repair-journal.jsonl` (3200行) `3327fc87…b5c9` /
+  `repair-sets.json` `915a6aed…fd8d` /
   `repair-report.json` (0600 out-dir のみ)
 
 ## zeros
@@ -98,6 +119,10 @@ d1r2mutation 0 / workflow 0 / newReceipts 0 / sends 0。
   fresh GET / current identity / full-bytes / custody / current CAS で
   現修正資格化する道を残し、過去を偽補完しない。
 - 旧 source pins mismatch は再 pin せず per-doc HOLD (今回は 0)。
-- receipt 証跡なし → 全 ARCHIVE_PENDING。apply-qualified 0 (apply grant なし)。
+- receipt 証跡なし → 全 ARCHIVE_PENDING。不正/unknown 証跡は HOLD。
+  sha 一致のみでは hosted を名乗らない。offline 候補 0 は実結果。
+  liveReady 0 (fresh custody/CAS なし)・apply 許可 0 (grant なし) は別明示。
+- 未選択 protected fields は LIMIT (将来 fresh SELECT が要る)。unit/locator
+  の断定は既 output の範囲に限る (量子幅を unit 倍率/locator 証拠と偽らない)。
 - 旧 journal/grants は照合読取のみ。CANCELLED grants は再利用しない。
 - 本番/source GET は未実行 (fetch 0)。orders/text 修正 0。

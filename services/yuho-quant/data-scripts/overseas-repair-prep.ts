@@ -19,8 +19,20 @@
  *   のため再利用しない (journal は outcome/planSHA の照合読取のみ)。
  * - 例外は empty facts へ fallback せず HOLD 分類。旧 journal の blind apply なし。
  * - raw ファイルは原状保全 (書込なし)。旧 source pins mismatch は再 pin せず HOLD。
- * - receipt は既証跡の静読のみ (不在 → ARCHIVE_PENDING、不正 → HOLD)。
- * - apply-qualified は 0 を assert する (apply grant なし)。
+ * - 実 parser の proof + 変換前の実 facts を per-doc に保持する (proof は
+ *   rounding/reconciliation 区間、facts は unitYenFactor + fiscal + scope。
+ *   same-table locator は facts の行自体。private のみ)。
+ * - receipt は既証跡の静読のみ (不在 → ARCHIVE_PENDING、不正/実 bytes
+ *   不一致 → HOLD)。RECEIVED は既存 explicit unique/full-physical 証跡
+ *   (検証済み readback 記録) が実 ZIP の SHA+length と一致した場合のみ。
+ *   sha/bytes 一致のみでは hosted を名乗らず ARCHIVE_PENDING のまま
+ *   shaMatch metadata のみ残す。検証済み loader なし → 現状到達なし。
+ * - 候補は parse+validate+pin+pin不一致なし+scope既知+receipt の全条件。
+ *   意味は OFFLINE_CANDIDATE。計算結果をそのまま報告し、grant で 0 に
+ *   偽装しない。liveReady / applyQualified は grant 状態として別明示。
+ * - live 観測行の全体 (q1/q2 の id/stockId/periodEnd/documentId 含む) を
+ *   journal に保持する (照合 projection とは別)。DB 全体像の preimage は
+ *   名乗らない (旧 Q1 は 7 列 projection のみ)。
  *
  * 固定入力 (bytes SHA256 pins・不一致は HOLD):
  * - overseas_laneA_raw/manifest_full.json (3602 pins) + <docID>_t1.zip (3675)
@@ -56,7 +68,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, chmodSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OverseasFact } from "../src/services/overseas-parser.js";
+import type { OverseasFact, OverseasProof } from "../src/services/overseas-parser.js";
 import type {
   MembershipTag,
   NewVerdict,
@@ -68,7 +80,7 @@ import type {
 const parserMod = await import("../src/services/overseas-parser.js");
 const { parseOverseasData, validateOverseasSaveSet } = parserMod;
 const unionMod = await import("./lib/repair-union.js");
-const { buildUnion, censusTags, classifyReceipt, computeQualified, separatedCounts } = unionMod;
+const { buildUnion, censusTags, classifyReceipt, computeOfflineCandidates, separatedCounts } = unionMod;
 
 // ---------------------------------------------------------------------------
 // 固定 pins
@@ -518,10 +530,18 @@ interface LiveDoc {
   factsCount: number;
 }
 
-/** live snapshot (旧観測。live-current を保証しない)。 */
+/**
+ * live snapshot (旧観測。live-current を保証しない)。
+ * 照合 projection (docs/rows) とは別に、観測行の全体 (rawQ1/rawQ2:
+ * id/stockId/periodEnd/documentId を含む) を保持する。DB 全体像の
+ * preimage を名乗らない (旧 Q1 は 7 列 projection のみ。未選択の
+ * protected fields は LIMIT・将来 fresh SELECT が要る)。
+ */
 function loadSelectLive(bytes: Buffer, union: Set<string>): {
   docs: Map<string, LiveDoc>;
   rows: Map<string, LiveRow[]>;
+  rawQ1: Map<string, Record<string, unknown>>;
+  rawQ2: Map<string, Array<Record<string, unknown>>>;
 } {
   const obj = asRecord(parseJSON(bytes, "select-live"), "select-live");
   const q1 = obj["q1"];
@@ -529,6 +549,7 @@ function loadSelectLive(bytes: Buffer, union: Set<string>): {
   if (!Array.isArray(q1) || q1.length !== 1781) hold("select-live q1 外");
   if (!Array.isArray(q2) || q2.length !== 10257) hold("select-live q2 外");
   const docs = new Map<string, LiveDoc>();
+  const rawQ1 = new Map<string, Record<string, unknown>>();
   let q1sum = 0;
   for (const e of q1) {
     const r = asRecord(e, "select-live q1 要素");
@@ -545,11 +566,13 @@ function loadSelectLive(bytes: Buffer, union: Set<string>): {
       honbun: r["overseasHonbunFile"] as string | null,
       factsCount: r["factsCount"] as number,
     });
+    rawQ1.set(doc, r);
     q1sum += r["factsCount"] as number;
   }
   if (docs.size !== 1781) hold("select-live q1 union 不一致");
   if (q1sum !== 10257) hold(`select-live Q1総計外: ${q1sum}`);
   const rows = new Map<string, LiveRow[]>();
+  const rawQ2 = new Map<string, Array<Record<string, unknown>>>();
   for (const e of q2) {
     const r = asRecord(e, "select-live q2 要素");
     const doc = r["docId"];
@@ -577,8 +600,11 @@ function loadSelectLive(bytes: Buffer, union: Set<string>): {
       pattern: r["pattern"] as string,
     });
     rows.set(doc, list);
+    const rawList = rawQ2.get(doc) ?? [];
+    rawList.push(r);
+    rawQ2.set(doc, rawList);
   }
-  return { docs, rows };
+  return { docs, rows, rawQ1, rawQ2 };
 }
 
 /** receipt 証跡 (任意。既定 none → 全 ARCHIVE_PENDING)。 */
@@ -594,7 +620,19 @@ function loadReceipts(path: string): Map<string, ReceiptEvidence> {
   const obj = asRecord(parseJSON(bytes, "receipts"), "receipts");
   for (const [doc, v] of Object.entries(obj)) {
     const r = asRecord(v, `receipts[${doc}]`);
-    out.set(doc, { sha256: r["sha256"] as string, bytes: r["bytes"] as number });
+    const rec = r["receipt"];
+    out.set(doc, {
+      sha256: r["sha256"] as string,
+      bytes: r["bytes"] as number,
+      ...(rec !== undefined && typeof rec === "object" && rec !== null
+        ? {
+            receipt: {
+              pageId: (rec as Record<string, unknown>)["pageId"] as string,
+              manifestMatch: (rec as Record<string, unknown>)["manifestMatch"] as string,
+            },
+          }
+        : {}),
+    });
   }
   return out;
 }
@@ -697,6 +735,11 @@ interface ManifestRecord {
   honbunFile: string | null;
   tablesScanned: number | null;
   factsCount: number | null;
+  /** 実 parser の proof (rounding/reconciliation 区間の認定証跡。private のみ)。 */
+  proof: OverseasProof | null;
+  /** 変換前の実 facts (unitYenFactor + fiscal + scope。proof と併置。private のみ)。 */
+  facts: OverseasFact[] | null;
+  scopeKnown: boolean;
   validateOK: boolean | null;
   validateError: string | null;
   baseline: "sealed" | "before";
@@ -706,6 +749,7 @@ interface ManifestRecord {
   compareVerdict: "match" | "changed" | null;
   reasons: string[];
   receipt: ReceiptState;
+  receiptShaMatch: boolean;
 }
 
 async function main(): Promise<void> {
@@ -815,13 +859,16 @@ async function main(): Promise<void> {
     const tags = unionTags.get(doc) as MembershipTag[];
     const cen = census.entries.get(doc);
     const censusClasses = cen ? censusTags(cen.oldStatus, cen.status) : [];
-    const receipt = classifyReceipt(doc, receipts);
+    const receiptVerdict = classifyReceipt(doc, receipts, { sha256: zipSHA, bytes: zipBytes.length });
+    const receipt = receiptVerdict.state;
 
     // 現 parser → validate → 保存 caller 同等変換。例外は HOLD 分類 (fallback なし)。
     let currentStatus: string | null = null;
     let honbunFile: string | null = null;
     let tablesScanned: number | null = null;
     let rows: SaveRow[] | null = null;
+    let proof: OverseasProof | null = null;
+    let facts: OverseasFact[] | null = null;
     let validateOK: boolean | null = null;
     let validateError: string | null = null;
     let parseError: string | null = null;
@@ -830,6 +877,8 @@ async function main(): Promise<void> {
       currentStatus = ex.status;
       honbunFile = ex.honbunFile;
       tablesScanned = ex.tablesScanned;
+      proof = ex.proof ?? null;
+      facts = ex.facts;
       try {
         validateOverseasSaveSet(ex.facts, ex.proof);
         validateOK = true;
@@ -849,16 +898,27 @@ async function main(): Promise<void> {
       }
     }
 
+    // scope 既知: 全行の連結 scope が確定 (null 行ありは unknown scope)。
+    const scopeKnown = rows !== null && rows.every((r) => r.isConsolidated !== null);
     const rec: ManifestRecord = {
       doc, tags, set, pin, pinMismatch, zipBytes: zipBytes.length, zipSHA256: zipSHA,
       periodEnd, censusClasses, prepVerdict: prec.verdict, savedStatus: prec.savedStatus,
       currentStatus, honbunFile, tablesScanned,
-      factsCount: rows ? rows.length : null, validateOK, validateError,
+      factsCount: rows ? rows.length : null, proof, facts, scopeKnown, validateOK, validateError,
       baseline: set === "applied59" ? "sealed" : "before",
       preimageRef: "", liveObserved: union.has(doc),
       verdict: "match", compareVerdict: null, reasons: [], receipt,
+      receiptShaMatch: receiptVerdict.shaMatch,
     };
-    newVerdicts.push({ doc, validateOK: validateOK === true, pinPresent: pin === "pinned", receipt });
+    newVerdicts.push({
+      doc,
+      parseOK: parseError === null,
+      validateOK: validateOK === true,
+      pinPresent: pin === "pinned",
+      pinMismatch,
+      scopeKnown,
+      receipt,
+    });
 
     if (parseError !== null) {
       rec.verdict = "HOLD_PARSE";
@@ -876,7 +936,7 @@ async function main(): Promise<void> {
         doc, tags, set, pin, pinMismatch, verdict: rec.verdict, baseline: rec.baseline,
         preimageRef: rec.preimageRef,
         before: journalBefore(doc, set, journalSealed, savedfacts, prec, live),
-        after: { status: currentStatus, honbunFile, tablesScanned, rows: null },
+        after: { status: currentStatus, honbunFile, tablesScanned, rows: null, proof, facts },
         validateError, receipt, reasons: [],
       }));
     } else {
@@ -917,12 +977,14 @@ async function main(): Promise<void> {
           kind: "live-observed-not-current",
           status: (live.docs.get(doc) as LiveDoc).status,
           rows: live.rows.get(doc) ?? [],
+          rawQ1: live.rawQ1.get(doc) ?? null,
+          rawQ2: live.rawQ2.get(doc) ?? [],
         } : null;
         journalLines.push(JSON.stringify({
           doc, tags, set, pin, pinMismatch, verdict: rec.verdict, compareVerdict: rec.compareVerdict,
           baseline: rec.baseline, preimageRef: rec.preimageRef,
           before: { status: preimage.status, honbunFile: preimage.honbun, rows: preimage.rows },
-          after: { status: currentStatus, honbunFile, tablesScanned, rows: after },
+          after: { status: currentStatus, honbunFile, tablesScanned, rows: after, proof, facts },
           liveObserved, receipt,
           reasons: cmp.reasons, addedKeys: cmp.addedKeys, removedKeys: cmp.removedKeys,
           fieldDiffs: cmp.fieldDiffs,
@@ -934,10 +996,12 @@ async function main(): Promise<void> {
   if (censusCompared !== 3602) hold(`census 照合対象外: ${censusCompared}`);
   if (censusAgree !== censusCompared) hold(`census 自己不一致: ${censusAgree}/${censusCompared}`);
 
-  // 6. 集計 + 集合出力 + qualified 0 の assert。
-  const qualified = computeQualified(newVerdicts);
-  if (qualified.length !== 0) hold(`apply-qualified 非0: ${qualified.length} (apply grant なし)`);
-  const sep = separatedCounts(compare.l1changed.length, qualified);
+  // 6. 集計 + 集合出力。候補数は計算結果そのまま (grant で偽装しない)。
+  // liveReady / applyQualified は grant 状態として別明示する。
+  const LIVE_READY = 0; // fresh custody/current CAS なし
+  const APPLY_QUALIFIED = 0; // apply grant なし
+  const offlineCandidates = computeOfflineCandidates(newVerdicts);
+  const sep = separatedCounts(compare.l1changed.length, offlineCandidates, LIVE_READY, APPLY_QUALIFIED);
   const count = (pred: (r: ManifestRecord) => boolean): number => manifest.filter(pred).length;
   const ids = (pred: (r: ManifestRecord) => boolean): string[] =>
     manifest.filter(pred).map((r) => r.doc).sort();
@@ -963,14 +1027,16 @@ async function main(): Promise<void> {
     holdReceipt: count((r) => r.verdict === "HOLD_RECEIPT"),
     receiptPending: count((r) => r.receipt === "ARCHIVE_PENDING"),
     receiptReceived: count((r) => r.receipt === "RECEIVED"),
-    newQualified: sep.newQualified,
+    receiptShaMatch: count((r) => r.receiptShaMatch),
+    offlineCandidates: sep.offlineCandidates,
+    liveReady: sep.liveReady,
+    applyQualified: sep.applyQualified,
     censusAgree3675: censusAgree,
   };
   if (counts.total !== 3675) hold(`manifest 件数外: ${counts.total}`);
   if (counts.censusAbsent73 !== 73) hold("census 欠落外");
   if (counts.live1781 !== 1781) hold("live 件数外");
   if (counts.pinMissing73 !== 73) hold("pin不足外");
-  if (counts.newQualified !== 0) hold("newQualified 非0");
   const sets = {
     byTag: Object.fromEntries(
       (["census-adopted", "census-held", "census-reverse", "census-other", "live1781",
@@ -984,7 +1050,7 @@ async function main(): Promise<void> {
     holdPinMissing: ids((r) => r.verdict === "HOLD_PIN_MISSING"),
     holdPinMismatch: ids((r) => r.verdict === "HOLD_PIN_MISMATCH"),
     holdReceipt: ids((r) => r.verdict === "HOLD_RECEIPT"),
-    qualified: qualified,
+    offlineCandidates,
   };
 
   // 7. 成果物の書込 (OUT_DIR のみ・0600)。
@@ -1017,11 +1083,13 @@ async function main(): Promise<void> {
     },
     zeros: { fetchAttempts, sourceGET: 0, notionCreateUpdateArchive: 0, d1r2mutation: 0, workflow: 0, newReceipts: 0, sends: 0 },
     limits: [
-      "1411/1487/36 (3602 census) と旧 live 1695 (旧 parser prep 由来 L1changed) は母集合が別。1695 を新 qualified 候補数と呼ばない。",
-      "live snapshot は旧観測で live-current を保証しない (preimage 参照のみ)。59 の sealed 代理は L3match 59/59 が根拠。",
+      "1411/1487/36 (3602 census) と旧 live 1695 (旧 parser prep 由来 L1changed) は母集合が別。1695 を新候補数と呼ばない。候補数は dedup union join からのみ。",
+      "候補の意味は OFFLINE_CANDIDATE。live READY は fresh custody/current CAS なし → 0 (別明示)。apply 許可は grant なし → 0 (別明示)。",
+      "live snapshot は旧観測で live-current を保証しない。59 の sealed 代理は L3match 59/59 が根拠。観測行全体 (q1/q2 の id 含む) を保持するが DB 全体像の preimage は名乗らない (旧 Q1 は 7 列 projection のみ。未選択 protected は将来 fresh SELECT が要る)。",
       "73 pin不足は過去 custody UNKNOWN として apply HOLD。将来 official fresh GET/current identity/full-bytes/custody/current CAS で現修正資格化する道を残し、過去を偽補完しない。",
       "旧 source pins mismatch は再 pin せず per-doc HOLD。raw bytes/SHA の観測値は記録のみ。",
-      "receipt 証跡なし → 全 ARCHIVE_PENDING。不正/unknown 証跡は HOLD。apply-qualified 0 (apply grant なし)。",
+      "proof は rounding/reconciliation 区間。unit/locator の断定は既 output の範囲に限る (量子幅を unit 倍率/locator 証拠と偽らない。新 instrumentation なし)。",
+      "receipt 証跡なし → 全 ARCHIVE_PENDING。不正/unknown 証跡は HOLD。sha 一致のみでは hosted を名乗らない。",
       "旧 journal/grants は照合読取のみ。CANCELLED grants は再利用しない。",
       "本番/source GET は未実行 (fetch 0)。orders/text 修正 0。",
     ],
