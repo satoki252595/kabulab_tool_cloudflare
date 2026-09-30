@@ -1,8 +1,8 @@
 "use strict";
 
 // 007 VWAP 分析 — 単一ビュー。
-//  ・足(ローソク) = 日足R2の正規OHLCV（寄/引含む・分割調整 adj）。表示範囲は「5分足が在る期間」を上限に制限し、期間指定で絞る。
-//  ・VWAP / 価格別出来高 = 5分足(R2・直近〜最大365日)から算出。分割は日足 adj/c 係数で価格・出来高を連続化。
+//  ・足(ローソク) = 日足R2の正規OHLCV（Yahoo split-adjusted。adj 係数なし）。表示範囲は「5分足が在る期間」を上限に制限し、期間指定で絞る。
+//  ・VWAP / 価格別出来高 = 5分足(R2・直近〜最大365日・生値)から算出。adj(配当込 total-return)は価格基盤に使わない。
 //  ・信用残高(日次・基準日ベース) = 第3ペインに重畳。
 // ヘッダー(meta)は銘柄情報＋信用残高情報のみ。用語ヘルプ(ルール7)は footer の用語凡例と meta の信用語に付与。
 
@@ -52,7 +52,7 @@ let range = "all";               // 表示期間: "all" | "3mo" | "1mo" | "2wk"
 
 const apiBase = () => cfg.apiBase || "";
 // 銘柄ごとに取得済みデータをキャッシュ（期間切替で再フェッチしない）。
-let data = null;                 // { code, daily:[...], splits:[...], five:[...], margin:[...], factor:Map, covStart, covEnd, fiveDays, fiveErr, marginErr, marginAmbiguous:[...] }
+let data = null;                 // { code, daily:[...], splits:[...], five:[...], margin:[...], covStart, covEnd, fiveDays, fiveErr, marginErr, marginAmbiguous:[...] }
 
 const RANGES = [["2wk", "2週"], ["1mo", "1ヶ月"], ["3mo", "3ヶ月"], ["all", "全期間"]];
 
@@ -275,22 +275,20 @@ async function load(code) {
   catch (e) { if (code === curCode) statusEmpty("取得に失敗しました", String(e)); return; }
   if (code !== curCode) return;
 
-  // 無効バー(終値/調整後が非正)は分割係数 f=adj/c を壊すので除外(ルール2: 不正値を黙って使わない)。
-  const daily = ((dj && dj.bars) || []).filter((b) => b.c > 0 && b.adj > 0);
+  // 価格基盤は OHLC 終値 (Yahoo split-adjusted)。adj は読まない。
+  const daily = ((dj && dj.bars) || []).filter((b) => b.c > 0);
   if (!daily.length) { return statusEmpty("日足が未取得です", "平日の取引終了後に自動取込されます（バックフィル待ち）。"); }
 
   const five = fr.v || [];
   const fiveDates = [...new Set(five.map((b) => jstDate(b.ts)))].sort();
-  // 分割調整係数 f=adj/c（日付別）。5分足(生値)を調整後ローソク価格軸へ揃え、分割・併合を連続化する。
-  const factor = new Map();
-  for (const b of daily) factor.set(b.date, b.c ? b.adj / b.c : 1);
+  // 係数なし。Yahoo OHLC は分割遡及調整済みのため event 比率の二重適用はしない。
 
   // 表示範囲の起点 = 5分足の最古日（=「5分足で取得できた範囲」）。5分足が無ければ直近60本の日足を代替範囲に。
   const covStart = fiveDates.length ? fiveDates[0] : (daily.length > 60 ? daily[daily.length - 60].date : daily[0].date);
   const covEnd = daily[daily.length - 1].date;
 
   data = {
-    code, daily, splits: (dj && dj.splits) || [], five, factor,
+    code, daily, splits: (dj && dj.splits) || [], five,
     margin: mr.v || null, marginErr: mr.err || null, marginAmbiguous: mr.amb || [],
     fiveDays: fiveDates.length, fiveStart: fiveDates[0] || null, fiveErr: fr.err || null,
     covStart, covEnd,
@@ -310,41 +308,35 @@ function rangeFrom(key, covStart, toDate) {
 
 function render() {
   if (!data) return;
-  const fOf = (d) => (data.factor.has(d) ? data.factor.get(d) : 1);
   // 足・5分足の範囲。covStart(=5分足被覆下限)より前へは広げない(要望1)。
   const from = rangeFrom(range, data.covStart, data.covEnd);
-  const latestDaily = data.daily[data.daily.length - 1].date;
 
-  // ---- 足(ローソク) + 出来高: 日足R2(分割調整)。範囲 = [from, covEnd] ----
+  // ---- 足(ローソク) + 出来高: 日足R2の生 OHLCV (Yahoo split-adjusted)。範囲 = [from, covEnd] ----
   const inRange = data.daily.filter((b) => b.date >= from && b.date <= data.covEnd);
   const shown = inRange.length ? inRange : data.daily.slice(-1);
-  candleSeries.setData(shown.map((b) => { const f = fOf(b.date); return { time: b.date, open: +(b.o * f).toFixed(2), high: +(b.h * f).toFixed(2), low: +(b.l * f).toFixed(2), close: +b.adj.toFixed(2) }; }));
-  volSeries.setData(shown.map((b) => { const f = fOf(b.date); return { time: b.date, value: Math.round(b.v / f), color: b.c >= b.o ? "rgba(8,153,129,0.45)" : "rgba(242,54,69,0.45)" }; }));
+  candleSeries.setData(shown.map((b) => ({ time: b.date, open: b.o, high: b.h, low: b.l, close: b.c })));
+  volSeries.setData(shown.map((b) => ({ time: b.date, value: Math.round(b.v), color: b.c >= b.o ? "rgba(8,153,129,0.45)" : "rgba(242,54,69,0.45)" })));
 
-  // ---- VWAP + 価格別出来高: 5分足(分割調整)。範囲先頭からの期間アンカー、日足解像度にサンプル ----
-  // 分割係数 f=adj/c が無い「古い日付」の5分足は、未調整値を黙って混ぜず除外する(ルール2)。
-  // ただし当日(まだ日足が確定していない最新日以降)は調整不要なので f=1 で残す(これは正しい未調整)。
-  let excluded5m = 0;
+  // ---- VWAP + 価格別出来高: 5分足生値。範囲先頭からの期間アンカー、日足解像度にサンプル ----
   const within = [];
   for (const b of data.five) {
     const d = jstDate(b.ts);
     if (d < from) continue;
-    if (data.factor.has(d) || d >= latestDaily) within.push(b);
-    else excluded5m++;
+    within.push(b);
   }
   if (within.length) {
-    let pv = 0, vv = 0; const perDay = new Map(); const adjBars = [];
+    let pv = 0, vv = 0; const perDay = new Map(); const rawBars = [];
     for (const b of within) {
-      const d = jstDate(b.ts), f = data.factor.has(d) ? data.factor.get(d) : 1;
-      const p = ((b.h + b.l + b.c) / 3) * f;   // 調整後 典型価格
-      const v = b.v / f;                        // 調整後 出来高(現在の株数基準)
+      const d = jstDate(b.ts);
+      const p = (b.h + b.l + b.c) / 3;   // 生 典型価格
+      const v = b.v;                       // 生 出来高
       pv += p * v; vv += v;
-      perDay.set(d, vv ? +(pv / vv).toFixed(2) : +(b.c * f).toFixed(2));
-      adjBars.push({ h: b.h * f, l: b.l * f, c: b.c * f, v });
+      perDay.set(d, vv ? +(pv / vv).toFixed(2) : +b.c.toFixed(2));
+      rawBars.push({ h: b.h, l: b.l, c: b.c, v });
     }
     const pts = [...perDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([time, value]) => ({ time, value }));
     vwapSeries.setData(pts);
-    currentProfile = volumeProfile(adjBars, cfg.profileBins, cfg.valueAreaPercent);
+    currentProfile = volumeProfile(rawBars, cfg.profileBins, cfg.valueAreaPercent);
   } else {
     vwapSeries.setData([]); currentProfile = null;
   }
@@ -366,7 +358,7 @@ function render() {
   chart.timeScale().fitContent();
 
   renderMeta(shown, mw);
-  renderFooter(excluded5m);
+  renderFooter();
   updateInfo();
 }
 
@@ -383,8 +375,8 @@ function updateInfo() {
 function renderMeta(shown, mw) {
   const last = shown[shown.length - 1];
   const prev = shown[shown.length - 2] || last;   // 表示範囲は直近の連続日なので [-2] は前営業日
-  const close = +(last.adj).toFixed(2);
-  const prevClose = +(prev.adj).toFixed(2);
+  const close = +(last.c).toFixed(2);
+  const prevClose = +(prev.c).toFixed(2);
   const chg = close - prevClose;
   const cls = (x) => (x >= 0 ? "up" : "down"), sign = (x) => (x >= 0 ? "+" : "");
   let html = `
@@ -413,11 +405,11 @@ function renderMeta(shown, mw) {
 }
 
 // footer: データ概況 + 用語凡例（ルール7。語の点線下線をタップで解説・上方向に開く）。出所名は表示しない。
-function renderFooter(excluded5m) {
+function renderFooter() {
   const cov = data.fiveErr
     ? `5分足: 取得失敗`
     : (data.fiveDays ? `5分足 ${data.fiveDays}日（${data.fiveStart}〜）` : `5分足: 未取得`);
-  const exNote = excluded5m ? ` ／ 分割係数欠落 ${excluded5m}本を除外` : "";
+  const exNote = "";
   const legend = [tip("VWAP", "up"), tip("POC", "up"), tip("バリューエリア", "up"), tip("価格別出来高", "up"), tip("信用残高", "up r")].join(" ・ ");
   $("updated").innerHTML =
     `<span class="ft-note">全 ${master.length.toLocaleString()} 銘柄（東証全上場） ／ 日足（VWAP・価格別出来高は5分足から算出・分割調整済）${exNote} ／ ${cov} ／ 信用残高 日次</span>` +
