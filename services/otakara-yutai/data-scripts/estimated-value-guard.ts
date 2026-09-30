@@ -619,7 +619,43 @@ export function qualifyCompanyNominal(descRaw: string, value: number | null): Co
 export type PerGrantContext = {
   readonly minShares: readonly number[];
   readonly recordMonths: readonly number[];
+  /**
+   * 表の h3 見出し (原文)。HOLD 語の走査にだけ使い、額面の根拠にはしない。
+   * 見出しだけにある選択・抽選・割引等の条件を落とさないため
+   * (8022 の 3,300 円は見出し「直営ゴルフスクールの入会金 無料」が正体)。
+   * 省略可 (DB 行だけの呼び出しでは欠ける)。
+   */
+  readonly headings?: readonly string[];
 };
+
+/**
+ * 見出しの HOLD 走査。額面の positive 認定はしない (見出しの金額を根拠に
+ * company へ上げない)。述語は `qualifyCompanyNominal` と同一。
+ */
+function headingHold(heading: string, value: number | null): CompanyNominalVerdict | null {
+  if (hasApproxMarker(heading)) {
+    return { qualified: false, code: "approx", detail: "見出しに概算表記" };
+  }
+  if (value !== null && isUnconvertedForeignAmount(heading, value)) {
+    return { qualified: false, code: "foreign", detail: "見出しに外貨額面" };
+  }
+  if (value !== null && isLotteryPrizeAmount(heading, value)) {
+    return { qualified: false, code: "lottery", detail: "見出しに抽選賞品の金額" };
+  }
+  if (isDiscountWithoutRedeemable(heading)) {
+    return { qualified: false, code: "discount", detail: "見出しが割引 (換金金券なし)" };
+  }
+  if (hasChoiceMarker(heading)) {
+    return { qualified: false, code: "choice", detail: "見出しに選択肢" };
+  }
+  if (hasAddonMarker(heading)) {
+    return { qualified: false, code: "addon", detail: "見出しに付帯物の別価値" };
+  }
+  if (hasResaleMarker(heading)) {
+    return { qualified: false, code: "resale", detail: "見出しに転売・買取相場" };
+  }
+  return null;
+}
 
 /**
  * company 値の共有厳密判定 (純関数)。要約取込 (`planSummaryImport`) と
@@ -661,7 +697,34 @@ export function qualifyCompanyPerGrantValue(
       detail: "文言自体に複数 tier が並び per-grant 候補額が2種類以上 (tier↔金額の対応づけ不能)",
     };
   }
+  for (const heading of ctx.headings ?? []) {
+    const hold = headingHold(heading, value);
+    if (hold) return hold;
+  }
   return qualifyCompanyNominal(descRaw, value);
+}
+
+/**
+ * 利回り・スコア計算用の backend 合成 (1 箇所。述語の二重化はしない)。
+ * company の非 null 値を共有厳密判定にかけ、通過分だけ返す。
+ * 裸の company スタンプ (legacy の未認定値) は落とす。不認定・不明は
+ * null (no-data) にし、0 にはしない。公開面は使わない
+ * (公開は `trusted-value.ts` の最小境界だけ。guard を bundle に入れない)。
+ */
+export function trustedCompanyYieldValue(
+  row: {
+    description: string;
+    estimatedValue: number | null;
+    estimateValueSource: string | null;
+  },
+  group: { minShares: readonly number[]; recordMonths: readonly number[] },
+): number | null {
+  if (row.estimateValueSource !== "company" || row.estimatedValue === null) return null;
+  const verdict = qualifyCompanyPerGrantValue(row.description, row.estimatedValue, {
+    minShares: group.minShares,
+    recordMonths: group.recordMonths,
+  });
+  return verdict.qualified ? row.estimatedValue : null;
 }
 
 /**

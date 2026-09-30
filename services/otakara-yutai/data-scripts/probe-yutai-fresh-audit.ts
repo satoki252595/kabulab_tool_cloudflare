@@ -49,6 +49,7 @@ import {
 import {
   computeYieldEntries,
   fetchYieldInputs,
+  type OverlayValue,
   type YieldInputs,
 } from "./recompute-yields.js";
 import {
@@ -1157,8 +1158,8 @@ async function runLive(args: ProbeArgs, scope: FreshScope): Promise<void> {
   const finCmp = compareProtectedFinScores(abc.preimages, fresh, overrides);
   const drift: DriftDiff[] = [...fullCmp.drift, ...finCmp.drift];
   // 利回り再計算 (fresh 入力)。変化は runtime drift として独立計数する。
-  const overlay = new Map<number, number | null>();
-  for (const [id, t] of plannedById) overlay.set(id, t.estimatedValue);
+  const overlay = new Map<number, OverlayValue>();
+  for (const [id, t] of plannedById) overlay.set(id, { value: t.estimatedValue, source: t.estimateValueSource });
   const yieldPlan = computeYieldEntries(scope.union, inputs, overlay);
   for (const e of yieldPlan.entries) {
     const stored = inputs.prices.get(e.stockId)?.yutaiYield ?? null;

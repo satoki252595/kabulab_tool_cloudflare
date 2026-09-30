@@ -21,6 +21,7 @@ import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { calcYutaiYield } from "../../../src/cron/monthly.js";
 import { scoreStock, type ScoringInput } from "../../../src/shared/scoring.js";
+import { trustedCompanyYieldValue } from "./estimated-value-guard.js";
 import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
 import { stocks as coreStocks } from "../../../src/shared/db/core-schema.js";
 import { stockFinancials, stockScores, yutaiBenefits } from "../src/db/schema.js";
@@ -185,14 +186,22 @@ export async function fetchYieldInputs(
   return { prices, benefits, scoreInputs, scores, parents };
 }
 
+/** dry-run 用の仮適用 1 件 (post-image の値 + 出典。両方で trust を見る)。 */
+export type OverlayValue = {
+  value: number | null;
+  source: string | null;
+};
+
 /**
  * 利回り・スコア再計算の純計算。`overlay` は dry-run 用の仮適用
- * (優待行 id → 書き込み予定の推定値。null は利回り入力から外す)。
+ * (優待行 id → 書き込み予定の post-image)。利回りの入力は
+ * 共有 trust 境界 (`trustedEstimateValue`) を通った行だけ
+ * (source NULL の非 null 値は分子に入れない)。
  */
 export function computeYieldEntries(
   stockIds: readonly number[],
   inputs: YieldInputs,
-  overlay: ReadonlyMap<number, number | null> = new Map()
+  overlay: ReadonlyMap<number, OverlayValue> = new Map()
 ): YieldRecomputePlan {
   const entries: YieldRecomputeEntry[] = [];
   const skippedNoRow: number[] = [];
@@ -203,12 +212,32 @@ export function computeYieldEntries(
       skippedNoRow.push(stockId);
       continue;
     }
-    // 月次 rebuild と同じく金額換算できた行だけが利回りの入力
-    const rows = (inputs.benefits.get(stockId) ?? [])
-      .map((b) => ({
-        minShares: b.minShares,
-        estimatedValue: overlay.has(b.rowId) ? overlay.get(b.rowId)! : b.estimatedValue,
-      }))
+    // 月次 rebuild と同じ backend 合成を通った行だけが利回りの入力。
+    // overlay は post-image (値 + 出典) で上書きし、合成は上書き後に見る
+    // (旧 source NULL の行への company 書き込み予定を落とさないため)。
+    // recipient context は同一文言の群から (月・株数の混在は HOLD)。
+    const stockBenefits = inputs.benefits.get(stockId) ?? [];
+    const groupOf = new Map<string, { minShares: number[]; recordMonths: number[] }>();
+    for (const b of stockBenefits) {
+      const g = groupOf.get(b.description);
+      if (g) {
+        g.minShares.push(b.minShares);
+        g.recordMonths.push(b.recordMonth);
+      } else {
+        groupOf.set(b.description, { minShares: [b.minShares], recordMonths: [b.recordMonth] });
+      }
+    }
+    const rows = stockBenefits
+      .map((b) => {
+        const post = overlay.get(b.rowId);
+        const estimatedValue = trustedCompanyYieldValue(
+          post
+            ? { description: b.description, estimatedValue: post.value, estimateValueSource: post.source }
+            : b,
+          groupOf.get(b.description) ?? { minShares: [b.minShares], recordMonths: [b.recordMonth] }
+        );
+        return { minShares: b.minShares, estimatedValue };
+      })
       .filter(
         (b): b is { minShares: number; estimatedValue: number } => b.estimatedValue !== null
       );
@@ -251,7 +280,7 @@ export function computeYieldEntries(
 export async function planYieldRecompute(
   db: RecomputeYieldsDb,
   stockIds: readonly number[],
-  overlay: ReadonlyMap<number, number | null> = new Map()
+  overlay: ReadonlyMap<number, OverlayValue> = new Map()
 ): Promise<YieldRecomputePlan> {
   return computeYieldEntries(stockIds, await fetchYieldInputs(db, stockIds), overlay);
 }

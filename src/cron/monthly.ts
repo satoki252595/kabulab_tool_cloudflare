@@ -25,6 +25,7 @@ import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as otakaraSchema from "../../services/otakara-yutai/src/db/schema.js";
 
 import { scoreStock, type ScoringInput } from "../shared/scoring.js";
+import { trustedCompanyYieldValue } from "../../services/otakara-yutai/data-scripts/estimated-value-guard.js";
 import { runDateKeys } from "./daily.js";
 import { collectUniverseOfficialEvents } from "./universe-official-events.js";
 import {
@@ -116,50 +117,68 @@ export async function runMonthlyRebuild(
   const swingIndicators = await db.select().from(swingSchema.stockIndicators);
   const swingIndMap = new Map(swingIndicators.map((i) => [i.stockId, i]));
 
-  // 金額換算できた行だけを対象にする。利回りは「**価値が算定できる最小の
-  // 保有段階**での利回り」と定義する。NULL 行も含めて最低単元を決めると、
-  // 最小段階の優待が金額換算不能な銘柄で分子が 0 になり、本来 0.3% などの
-  // 妥当な利回りが出ていた 95 銘柄が一斉に算定不能になる（本番データで実測）。
+  // 利回りは「**価値が算定できる最小の保有段階**での利回り」と定義する。
+  // NULL 行も含めて最低単元を決めると、最小段階の優待が金額換算不能な銘柄で
+  // 分子が 0 になり、本来 0.3% などの妥当な利回りが出ていた 95 銘柄が一斉に
+  // 算定不能になる（本番データで実測）。
+  // 由来つき (company) で金額がある行だけ読み、backend 合成
+  // (`trustedCompanyYieldValue`) の通過分だけを分子に入れる。裸の company
+  // スタンプ (legacy の未認定値) や source NULL 値は入れない。
   const benefitRows = await db
     .select({
       stockId: otakaraSchema.yutaiBenefits.stockId,
       minShares: otakaraSchema.yutaiBenefits.minShares,
+      recordMonth: otakaraSchema.yutaiBenefits.recordMonth,
+      description: otakaraSchema.yutaiBenefits.description,
       estimatedValue: otakaraSchema.yutaiBenefits.estimatedValue,
+      estimateValueSource: otakaraSchema.yutaiBenefits.estimateValueSource,
     })
     .from(otakaraSchema.yutaiBenefits)
-    .where(isNotNull(otakaraSchema.yutaiBenefits.estimatedValue));
-  const benefitMap = new Map<number, typeof benefitRows>();
-  for (const b of benefitRows) {
-    const list = benefitMap.get(b.stockId);
-    if (list) list.push(b);
-    else benefitMap.set(b.stockId, [b]);
-  }
-
+    .where(
+      and(
+        isNotNull(otakaraSchema.yutaiBenefits.estimatedValue),
+        eq(otakaraSchema.yutaiBenefits.estimateValueSource, "company"),
+      ),
+    );
   // 権利月・ジャンルの集計 (L-51)。利回り用とは別に**全優待行**から引く。
   // 月/ジャンルの絞り込みは金額換算の可否と無関係なので、estimatedValue の
   // NULL 行を落とすと絞り込みの母集団が欠ける (旧 IN 副問合せに条件は無い)。
+  // description/minShares も一緒に引き、利回りの recipient context
+  // (同一文言の群。NULL/他出典の兄弟行も数える) に共用する。2 度引きしない。
   const monthGenreRows = await db
     .select({
       stockId: otakaraSchema.yutaiBenefits.stockId,
       recordMonth: otakaraSchema.yutaiBenefits.recordMonth,
       genreId: otakaraSchema.yutaiBenefits.genreId,
+      minShares: otakaraSchema.yutaiBenefits.minShares,
+      description: otakaraSchema.yutaiBenefits.description,
     })
     .from(otakaraSchema.yutaiBenefits);
-  const monthMap = new Map<number, Set<number>>();
-  const genreMap = new Map<number, Set<number>>();
+  const displaySets = groupBenefitDisplaySets(monthGenreRows);
+  // recipient context は全優待行から。SQL 述語で絞った分子候補に適用する。
+  const groupCtx = new Map<string, { minShares: number[]; recordMonths: number[] }>();
   for (const b of monthGenreRows) {
-    let months = monthMap.get(b.stockId);
-    if (!months) monthMap.set(b.stockId, (months = new Set()));
-    months.add(b.recordMonth);
-    let genres = genreMap.get(b.stockId);
-    if (!genres) genreMap.set(b.stockId, (genres = new Set()));
-    genres.add(b.genreId);
+    const key = `${b.stockId}\0${b.description}`;
+    const g = groupCtx.get(key);
+    if (g) {
+      g.minShares.push(b.minShares);
+      g.recordMonths.push(b.recordMonth);
+    } else {
+      groupCtx.set(key, { minShares: [b.minShares], recordMonths: [b.recordMonth] });
+    }
   }
-  /** 昇順・重複なし JSON (P4 backfill の json_group_array と同じ形)。空は NULL。 */
-  const toJsonSet = (set: Set<number> | undefined): string | null =>
-    set === undefined || set.size === 0
-      ? null
-      : JSON.stringify([...set].sort((a, b) => a - b));
+  const benefitMap = new Map<number, { minShares: number; estimatedValue: number }[]>();
+  for (const b of benefitRows) {
+    const estimatedValue = trustedCompanyYieldValue(
+      b,
+      groupCtx.get(`${b.stockId}\0${b.description}`) ?? { minShares: [b.minShares], recordMonths: [b.recordMonth] }
+    );
+    if (estimatedValue === null) continue;
+    const list = benefitMap.get(b.stockId);
+    const row = { minShares: b.minShares, estimatedValue };
+    if (list) list.push(row);
+    else benefitMap.set(b.stockId, [row]);
+  }
 
   let scoredCount = 0;
   const today = new Date().toISOString().split("T")[0];
@@ -219,8 +238,8 @@ export async function runMonthlyRebuild(
       fundamentalScore: score.fundamentalScore,
       technicalScore: score.technicalScore,
       totalScore: score.totalScore,
-      yutaiMonths: toJsonSet(monthMap.get(s.id)),
-      yutaiGenreIds: toJsonSet(genreMap.get(s.id)),
+      yutaiMonths: displaySets.get(s.id)?.yutaiMonths ?? null,
+      yutaiGenreIds: displaySets.get(s.id)?.yutaiGenreIds ?? null,
     });
 
     scoredCount++;
@@ -327,6 +346,43 @@ export async function runMonthlyRebuild(
  * 既存の「金額換算が難しい優待」表示と同じ方針（§3-1 推定禁止）。
  */
 export const YUTAI_YIELD_MAX_PCT = 50;
+
+/** 昇順・重複なし JSON (P4 backfill の json_group_array と同じ形)。空は NULL。 */
+function toJsonSet(set: Set<number> | undefined): string | null {
+  return set === undefined || set.size === 0
+    ? null
+    : JSON.stringify([...set].sort((a, b) => a - b));
+}
+
+/**
+ * 優待行の集合から銘柄ごとの表示用月・ジャンル集合を作る (純関数)。
+ * 月次 rebuild と phantom 削除の repair-CAS が同一関数を使う
+ * (削除だけだと scores の絞り込みが古い月のまま残るため、post-image の
+ * 全優待行から引き直す)。入力は**全優待行** (金額換算の可否で落とさない)。
+ * 行が無い銘柄は Map に載らない (呼び出し側が null にする)。
+ */
+export function groupBenefitDisplaySets(
+  rows: readonly { stockId: number; recordMonth: number; genreId: number }[],
+): Map<number, { yutaiMonths: string | null; yutaiGenreIds: string | null }> {
+  const monthMap = new Map<number, Set<number>>();
+  const genreMap = new Map<number, Set<number>>();
+  for (const b of rows) {
+    let months = monthMap.get(b.stockId);
+    if (!months) monthMap.set(b.stockId, (months = new Set()));
+    months.add(b.recordMonth);
+    let genres = genreMap.get(b.stockId);
+    if (!genres) genreMap.set(b.stockId, (genres = new Set()));
+    genres.add(b.genreId);
+  }
+  const out = new Map<number, { yutaiMonths: string | null; yutaiGenreIds: string | null }>();
+  for (const [stockId, months] of monthMap) {
+    out.set(stockId, {
+      yutaiMonths: toJsonSet(months),
+      yutaiGenreIds: toJsonSet(genreMap.get(stockId)),
+    });
+  }
+  return out;
+}
 
 export function calcYutaiYield(
   price: number | null,

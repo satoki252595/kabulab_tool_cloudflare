@@ -174,12 +174,25 @@ describe("groupBenefits", () => {
     expect(g.allMonths).toEqual([3, 9]);
   });
 
-  it("同一商品に複数の推定額があれば大きい方を残す", () => {
+  it("同一商品に複数の推定額があれば大きい方を残す (company のみ)", () => {
+    const [g] = groupBenefits([
+      row({ estimatedValue: 3000, estimateValueSource: "company" }),
+      row({ recordMonth: 9, estimatedValue: 5000, estimateValueSource: "company" }),
+    ]);
+    expect(g.tiers[0].products[0].estimatedValue).toBe(5000);
+    expect(g.tiers[0].products[0].estimateValueSource).toBe("company");
+  });
+
+  it("由来なしの値は公開に出さず、要約・月は残す", () => {
     const [g] = groupBenefits([
       row({ estimatedValue: 3000 }),
       row({ recordMonth: 9, estimatedValue: 5000 }),
     ]);
-    expect(g.tiers[0].products[0].estimatedValue).toBe(5000);
+    const p = g.tiers[0].products[0];
+    expect(p.estimatedValue).toBeNull();
+    expect(p.estimateValueSource).toBeNull();
+    expect(p.summary).toBe("3,000円相当");
+    expect(p.months).toEqual([3, 9]);
   });
 
   it("株数段階が違えば別 tier にし、株数昇順で返す", () => {

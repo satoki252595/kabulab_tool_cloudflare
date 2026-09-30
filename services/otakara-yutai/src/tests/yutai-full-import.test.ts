@@ -35,6 +35,7 @@ import {
   GENRE_SLUG_MAP,
   MIN_YUTAI_COVERAGE_PERCENT,
   YUTAI_GENRES,
+  benefitRowsOf,
   carryKey,
   guessGenreSlug,
   importYutaiFull,
@@ -135,9 +136,8 @@ function fetched(code: string, description = descOf(code)): StockYutaiData {
     code,
     name: `取得元の名前${code}`,
     market: "取得元の市場",
-    recordMonths: [3],
     category: "株主優待",
-    benefits: [{ minShares: 100, description, notes: "" }],
+    benefits: [{ minShares: 100, description, notes: "", localRecordMonths: [3], heading: "株主優待" }],
   };
 }
 
@@ -326,7 +326,7 @@ describe("importYutaiFull は掲載文を切り詰めない", () => {
     const longDesc = `架空優待${target.code} ` + "あ".repeat(600);
     const longNotes = "い".repeat(300) + "【10年以上】10口";
     const data = fetched(target.code);
-    data.benefits = [{ minShares: 100, description: longDesc, notes: longNotes }];
+    data.benefits = [{ minShares: 100, description: longDesc, notes: longNotes, localRecordMonths: [3], heading: "株主優待" }];
 
     const { sender } = makeRecordingSender();
     await importYutaiFull(db, [data, ...rest.map((s) => fetched(s.code))], sender);
@@ -470,21 +470,81 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     estimateValueSource: null,
     ...over,
   });
+  const metaOf = (rows: CarrySourceRow[], heading = "株主優待"): Map<string, string[]> =>
+    new Map(rows.map((r) => [carryKey(r.code, r.description, r.minShares, r.recordMonth), [heading]]));
+  const grpOf = (rows: CarrySourceRow[]): Map<string, Map<string, { minShares: number[]; recordMonths: number[] }>> => {
+    const out = new Map<string, Map<string, { minShares: number[]; recordMonths: number[] }>>();
+    for (const r of rows) {
+      let byCode = out.get(r.code);
+      if (!byCode) out.set(r.code, (byCode = new Map()));
+      const g = byCode.get(r.description);
+      if (g) {
+        g.minShares.push(r.minShares);
+        g.recordMonths.push(r.recordMonth);
+      } else {
+        byCode.set(r.description, { minShares: [r.minShares], recordMonths: [r.recordMonth] });
+      }
+    }
+    return out;
+  };
 
   it("legacy-null の額面一致は company に上げて carry する", () => {
-    const p = planCarry([srcRow({})]);
+    const rows = [srcRow({})];
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
     const key = carryKey("5929", RAW34TEXT["5929"], 100, 3);
     expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: 500, estimateValueSource: "company" });
     expect(p.promotedKeys).toEqual(new Set([key]));
     expect(p.nulledKeys).toEqual(new Set());
   });
 
+  it("合成されない行 (幽霊月など) は昇格しない", () => {
+    // 判定自体は通る額面一致だが、plannedMeta に無い = 表ローカルに合成されない。
+    const rows = [srcRow({ recordMonth: 9 })];
+    const p = planCarry(rows, new Map(), grpOf(rows));
+    const key = carryKey("5929", RAW34TEXT["5929"], 100, 9);
+    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: 500, estimateValueSource: null });
+    expect(p.promotedKeys).toEqual(new Set());
+  });
+
+  it("見出しだけの選択肢は HOLD にして値ごと null で戻す", () => {
+    // 文言自体は額面一致だが、表見出しが選択肢 (単一代表値は不正確)。
+    const rows = [srcRow({})];
+    const key = carryKey("5929", RAW34TEXT["5929"], 100, 3);
+    const p = planCarry(rows, new Map([[key, ["優待品カタログより選択"]]]), grpOf(rows));
+    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
+    expect(p.nulledKeys).toEqual(new Set([key]));
+    expect(p.promotedKeys).toEqual(new Set());
+  });
+
+  it("見出しの金額は額面根拠にならない (裸の値は上げない)", () => {
+    // 文言に金額が無く値は不一致。見出しに同額があっても positive にしない。
+    const rows = [srcRow({ description: "優待品の引換", estimatedValue: 3300 })];
+    const key = carryKey("5929", "優待品の引換", 100, 3);
+    const p = planCarry(rows, new Map([[key, ["3,300円相当の優待"]]]), grpOf(rows));
+    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
+    expect(p.promotedKeys).toEqual(new Set());
+  });
+
+  it("同一文言の群に株数違いの兄弟があれば混在 HOLD (singleton で通さない)", () => {
+    // 100 株行だけ見れば額面一致だが、合成群に 1000 株の兄弟がある。
+    const rows = [srcRow({})];
+    const key = carryKey("5929", RAW34TEXT["5929"], 100, 3);
+    const groups = new Map([
+      ["5929", new Map([[RAW34TEXT["5929"], { minShares: [100, 1000], recordMonths: [3, 3] }]])],
+    ]);
+    const p = planCarry(rows, new Map([[key, ["株主優待"]]]), groups);
+    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
+    expect(p.nulledKeys).toEqual(new Set([key]));
+    expect(p.promotedKeys).toEqual(new Set());
+  });
+
   it("不認定の company 値は source を付け替えず値ごと null で戻す (8153 の単価)", () => {
     // 掲載文は 8153 原文の alias、銘柄コードは合成 (pure carry test に実コード不要)。
     const desc = RAW8153;
-    const p = planCarry([
+    const rows = [
       srcRow({ code: ABSENT_CODE, description: desc, estimatedValue: 500, estimateValueSource: "company" }),
-    ]);
+    ];
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
     const key = carryKey(ABSENT_CODE, desc, 100, 3);
     // 要約は保持、値と出典は null (provenance 隠しで値を残さない)
     expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
@@ -493,34 +553,120 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
   });
 
   it("未対応の出典の非 null 値は STOP する (扱いを発明しない)", () => {
-    expect(() => planCarry([srcRow({ estimateValueSource: "web" })])).toThrow(/未対応の出典/);
-    expect(() => planCarry([srcRow({ estimateValueSource: "other" })])).toThrow(/未対応の出典/);
+    expect(() => planCarry([srcRow({ estimateValueSource: "web" })], new Map(), new Map())).toThrow(/未対応の出典/);
+    expect(() => planCarry([srcRow({ estimateValueSource: "other" })], new Map(), new Map())).toThrow(/未対応の出典/);
     // 値が null なら出典によらず要約を戻す (STOP しない)
-    const p = planCarry([srcRow({ estimatedValue: null, estimateValueSource: "web" })]);
+    const rows = [srcRow({ estimatedValue: null, estimateValueSource: "web" })];
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
     expect(p.carried.size).toBe(1);
   });
 
   it("同一 context の重複は同一なら畳み、食い違えば STOP する", () => {
     const row = srcRow({});
-    const same = planCarry([row, { ...row }]);
+    const same = planCarry([row, { ...row }], metaOf([row]), grpOf([row, { ...row }]));
     expect(same.carried.size).toBe(1);
-    expect(() => planCarry([row, { ...row, shortSummary: "別要約" }])).toThrow(/食い違う/);
-    expect(() => planCarry([row, { ...row, estimatedValue: 501 }])).toThrow(/食い違う/);
+    expect(() => planCarry([row, { ...row, shortSummary: "別要約" }], metaOf([row]), grpOf([row, { ...row, shortSummary: "別要約" }]))).toThrow(/食い違う/);
+    expect(() => planCarry([row, { ...row, estimatedValue: 501 }], metaOf([row]), grpOf([row, { ...row, estimatedValue: 501 }]))).toThrow(/食い違う/);
   });
 
   it("context (株数・権利月) が違えば別キーで carry する", () => {
-    const p = planCarry([
+    // 同一文言の群に月・株数の混在があるので、3 キーとも混在 HOLD で null 戻し。
+    const rows = [
       srcRow({ recordMonth: 3 }),
       srcRow({ recordMonth: 9 }),
       srcRow({ minShares: 1000 }),
-    ]);
+    ];
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
     expect(p.carried.size).toBe(3);
-    expect(p.nulledKeys).toEqual(new Set());
+    expect(p.nulledKeys).toEqual(
+      new Set([
+        carryKey("5929", RAW34TEXT["5929"], 100, 3),
+        carryKey("5929", RAW34TEXT["5929"], 100, 9),
+        carryKey("5929", RAW34TEXT["5929"], 1000, 3),
+      ])
+    );
+    for (const c of p.carried.values()) {
+      expect(c.estimatedValue).toBeNull();
+      expect(c.estimateValueSource).toBeNull();
+    }
+    expect(p.promotedKeys).toEqual(new Set());
   });
 
   it("解釈が無い行は退避しない", () => {
-    const p = planCarry([srcRow({ shortSummary: null, estimatedValue: null })]);
+    const rows = [srcRow({ shortSummary: null, estimatedValue: null })];
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
     expect(p.carried.size).toBe(0);
+  });
+});
+
+describe("benefitRowsOf は表ローカル月でのみ合成する (8022 の幽霊 9 月行を作らない)", () => {
+  it("優待ごとに自分の表の月だけで行を作る (union 展開しない)", () => {
+    const data: StockYutaiData = {
+      ...fetched("8022"),
+      benefits: [
+        { minShares: 100, description: "3,300円相当", notes: "", localRecordMonths: [3], heading: "直営ゴルフスクールの入会金 無料" },
+        { minShares: 100, description: "割引", notes: "", localRecordMonths: [3, 9], heading: "優待割引" },
+      ],
+    };
+    const { rows, heldBenefits } = benefitRowsOf(data);
+    expect(heldBenefits).toBe(0);
+    expect(rows.map((r) => [r.recordMonth, r.minShares, r.description])).toEqual([
+      [3, 100, "3,300円相当"],
+      [3, 100, "割引"],
+      [9, 100, "割引"],
+    ]);
+    // 合成元の表見出しは判定用に保持する (DB には書かない)。
+    expect(rows.map((r) => r.heading)).toEqual([
+      "直営ゴルフスクールの入会金 無料",
+      "優待割引",
+      "優待割引",
+    ]);
+  });
+
+  it("表の月が空の優待は合成せず held に数える", () => {
+    const data: StockYutaiData = {
+      ...fetched("8022"),
+      benefits: [
+        { minShares: 100, description: "x", notes: "", localRecordMonths: [], heading: "不明表" },
+      ],
+    };
+    const { rows, heldBenefits } = benefitRowsOf(data);
+    expect(rows).toEqual([]);
+    expect(heldBenefits).toBe(1);
+  });
+
+  it("旧契約 (localRecordMonths 自体が無い) は契約エラーで明示する", () => {
+    const data = fetched("8022");
+    delete (data.benefits[0] as unknown as Record<string, unknown>).localRecordMonths;
+    expect(() => benefitRowsOf(data)).toThrow(/localRecordMonths がありません/);
+  });
+});
+
+describe("importYutaiFull は UNKNOWN 表月で書く前に止める (sender0・DB不変)", () => {
+  it("held があると削除前に STOP し、何も書かない", async () => {
+    const before = snapshot();
+    captureConsole();
+    const { calls, sender } = makeAtomicSender();
+    const bad = fetched(HELD[0].code);
+    bad.benefits = [
+      { minShares: 100, description: descOf(HELD[0].code), notes: "", localRecordMonths: [], heading: "不明表" },
+    ];
+    const allData = [bad, ...HELD.slice(1).map((s) => fetched(s.code))];
+    await expect(importYutaiFull(db, allData, sender)).rejects.toThrow(/表の月が無い優待/);
+    expect(calls.length).toBe(0);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it("旧契約の取得結果は契約エラーで止め、何も書かない", async () => {
+    const before = snapshot();
+    captureConsole();
+    const { calls, sender } = makeAtomicSender();
+    const bad = fetched(HELD[0].code);
+    delete (bad.benefits[0] as unknown as Record<string, unknown>).localRecordMonths;
+    const allData = [bad, ...HELD.slice(1).map((s) => fetched(s.code))];
+    await expect(importYutaiFull(db, allData, sender)).rejects.toThrow(/localRecordMonths がありません/);
+    expect(calls.length).toBe(0);
+    expect(snapshot()).toEqual(before);
   });
 });
 
@@ -587,7 +733,7 @@ describe("importYutaiFull の post-image 利回り追随", () => {
   /** INSERT を失敗させる取得結果 (min_shares NOT NULL 違反)。 */
   const failingFetched = (code: string): StockYutaiData => ({
     ...fetched(code),
-    benefits: [{ minShares: undefined as unknown as number, description: "x", notes: "" }],
+    benefits: [{ minShares: undefined as unknown as number, description: "x", notes: "", localRecordMonths: [3], heading: "x" }],
   });
 
   it("厳密 carry で null になった値は利回り・スコアに追随する (raw8153。price/data_date は不変)", async () => {

@@ -22,6 +22,7 @@ import {
   publicStockMetaLabel,
 } from "../../src/shared/db/public-columns.js";
 import { activeEquityCondition } from "../../src/shared/db/active-equity.js";
+import { trustedEstimateValue } from "../../src/shared/trusted-value.js";
 
 /**
  * 002 お宝優待 — kabulab portal 配下の /otakara-yutai サブアプリ
@@ -646,11 +647,15 @@ export function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
       // 原文が違っても要約が同じなら 1 行に畳まれる (意図的)。実データでは 17 組で、
       // いずれも推定額が一致するため金額は失われない。権利月は months に束ねる。
       const key = b.summary || `\u0000anon:${anonSeq++}`;
+      // 公開する金額は trust 境界を通った値だけ (company 以外は null → 正直な
+      // 「金額換算が難しい優待」表示。要約・月・条件の文言は落とさない)。
+      const trusted = trustedEstimateValue(b);
+      const trustedSource = trusted === null ? null : b.estimateValueSource;
       if (!productMap.has(key)) {
         productMap.set(key, {
           summary: b.summary,
-          estimatedValue: b.estimatedValue,
-          estimateValueSource: b.estimateValueSource,
+          estimatedValue: trusted,
+          estimateValueSource: trustedSource,
           months: [],
         });
       }
@@ -659,9 +664,9 @@ export function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
       // 最大の推定価値を残す（同一商品が月ごとに別値を持つ場合の保険）。
       // 値を差し替えるときは出典区分も一緒に差し替える (ルール1: 値と
       // 出典の対応を崩さない)。
-      if (b.estimatedValue != null && (p.estimatedValue == null || b.estimatedValue > p.estimatedValue)) {
-        p.estimatedValue = b.estimatedValue;
-        p.estimateValueSource = b.estimateValueSource;
+      if (trusted != null && (p.estimatedValue == null || trusted > p.estimatedValue)) {
+        p.estimatedValue = trusted;
+        p.estimateValueSource = trustedSource;
       }
     }
     const tiers: TierGroup[] = [...tierMap.entries()]
