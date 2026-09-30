@@ -231,14 +231,21 @@ describe("buildIngestSummary", () => {
       universe: { size: n, sha256: "e".repeat(64) },
       outcomes,
     });
-    // metadata: rich_text 配列 ≤100 (text 2000 刻み) = 200000 文字未満を要求。
-    // 実測 ~1KB のところ bound 10000 で余裕を持たせつつ上限から遠ざける。
+    // metadata: rich_text 配列 ≤100 要素 (text 2000 刻み)・blocks ≤1000・
+    // payload ≤500KB を要求。実測 ~1KB のところ bound で余裕を持たせつつ
+    // 上限から遠ざける (chunk 数の直接証明)。
     const metaLen = JSON.stringify(s.metadata).length;
     expect(metaLen).toBeLessThan(10000);
-    // 本文は full outcomes を保持する。
+    const richTextItems = Math.ceil(metaLen / 2000);
+    expect(richTextItems).toBeLessThanOrEqual(10);
+    const bodyBlocks = Math.ceil(metaLen / 2000);
+    expect(bodyBlocks).toBeLessThanOrEqual(10);
+    // 本文は full outcomes + unknown/rejected 一覧を保持する (欠落なし)。
     const body = JSON.parse(new TextDecoder().decode(s.files[0].bytes));
     expect(Object.keys(body.outcomes)).toHaveLength(n);
     expect(body.universe.sha256).toBe("e".repeat(64));
+    expect(body.unknown).toEqual([]);
+    expect(body.rejected).toEqual([]);
   });
 
   it("日付キーが取れないfinishedAtは投げる", () => {
