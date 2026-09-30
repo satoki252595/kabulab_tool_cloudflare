@@ -122,21 +122,58 @@ laneA 残 745 の later apply 前の純 offline 準備。固定 3675 ZIP の既�
 - stable match 1894 は before 一致のため D1 再読の対象外 (下記計画の範囲外)。
 - source HTTP identity・全 physical archive・fullDL proof は later apply 前 required。
 
-## 次段 D1 SELECT 計画案 (bounded・未実行・新 grant 別途)
+## D1 SELECT proof (Root grant 版・実行済み)
 
-対象は非 match の 1781 docs (changed745 724 + hold745 21 + changedOutside 925 +
-holdOutside804 52 + 全59)。docID リストは private `prep-sets.json` から。
-100件/chunk で 18 chunks。SELECT のみ。
+Root 承認 (SELECT-only・≤36 requests・単発・書込なし)。
+対象は disjoint union 1781 docs (旧745 + changedOutside804 925 +
+holdOutside804 52 + all59。73 pin不足のうち 21 は 745 内で重複加算なし)。
+union SHA `9690d780…8fe1878` を private 0600 固定。18 chunks (≤100 IDs)。
 
-- Q1 (status/honbun): `SELECT doc_id, overseas_parse_status,
-  overseas_honbun_file FROM yuho_documents WHERE doc_id IN (…)`。
-  期待: chunk 毎に投入件数と同行 (745系 745行・925系 925行・73系 73行・59系 59行)。
-  status は PREP currentStatus と、honbun は PREP 記録 (59 は sealed) と照合。
-- Q2 (facts): `SELECT d.doc_id, f.fiscal_year_end, f.region_name,
-  f.region_kind, f.is_consolidated, f.unit_label, f.sales_raw, f.sales_yen,
-  f.ratio_pct, f.pattern FROM yuho_overseas_facts f JOIN yuho_documents d
-  ON f.document_id = d.id WHERE d.doc_id IN (…) ORDER BY 1, 2, 3`。
-  期待行数の目安 (before 側): 745系 4242・925系 5412・73系 397・59系 327。
-  745/925系は PREP after 表と、59系は sealed-post と多重集合比較する。
-- Q3 (counts): chunk 毎の `COUNT(*)` で Q1/Q2 の抜けなしを確認。
-- 実行は Root review 後の新 grant で行う。本 PREP では実行しない。
+- Q1 (chunk 毎 1 SELECT): doc identity + stock identity + periodEnd +
+  status + honbun + doc別 correlated overseasFacts COUNT (同一 request)。
+- Q2 (chunk 毎 1 SELECT): 同一 IDs の facts 全 storage cols (12 col) +
+  docID echo。決定順 (`doc_id`, `fiscal_year_end`, `region_name`)。
+  nullable 保持。型付き `db.select` のみ (raw positional 不使用)。
+- bound: 36 SELECT / 36 HTTP requests。追加 auto-retry 0。
+  Q1 cardinality (全部 unique・欠落なし) + Q1 counts 合計 = Q2 全行
+  (0-facts doc 含む)。missing/dup/列異常/値異常/truncation は STOP。
+- 比較: L1 live vs PREP-current / L2 live vs historical before を別比較。
+  all59 は L3 live vs sealed-post も別比較。old facts counts 推計を
+  必須 live 件数にしない (Q1 observed count が基準)。
+- 実行 script:
+  `services/yuho-quant/data-scripts/overseas-745-select-proof.ts`
+  (legacy `--name=value` 式。`--env-file` で read credential を指定)。
+  実行 workHEAD `06a7246` (実行時は script 未 commit。commit 後 bytes 同一)。
+- 実 CLI:
+  `pnpm exec tsx services/yuho-quant/data-scripts/overseas-745-select-proof.ts
+  --env-file=/Users/satoki252595/projects/kabulab-cf/.env`
+- 実行: `2026-09-30T00:46:17Z`–`00:46:20Z` (約3秒・結果 PASS)。
+- 成果物 (private `/tmp/overseas745-select-20260930/`・dir 0700・5 files 全
+  0600 を `ls` で一致確認): `select-union.json` `54c6fb38…4f16fdc` /
+  `select-manifest.json` (36 queries) `560147ae…782952c` /
+  `select-live.json` (観測 snapshot) `4a4cbc04…adeb517` /
+  `select-compare.json` (L1/L2/L3) `75ba0835…74e879` /
+  `select-report.json` (read-only receipt) `d921f6ba…165766e`。
+
+## SELECT proof 結果 (counts・SHA のみ)
+
+- 36/36 HTTP 成功・失敗 0・retry 0。非 D1 fetch 0・書込 0・source GET 0・
+  Notion 新 POST 0。querySHA `db2f4928…6530762a` を 0600 記録。
+- Q1 1781行 (18 chunks 全て cardinality 一致) / Q2 10257行 /
+  Q1合計 10257 (chunk 毎 + 総計で一致。truncation なし)。
+- L1 (live vs PREP-current): match 86 / changed 1695。
+  match 内訳は match59 の 53 + holdOutside の before一致 33 (全て特定済み)。
+- L2 (live vs before): match 1722 / changed 59。
+  changed 集合は applied59 と完全一致 (live は適用 59 箇所のみ before と相違)。
+- L3 (59 live vs sealed-post): match 59 / changed 0。
+  適用が stuck している初の全 rows 観測。現 prod 59 は sealed どおり。
+- 行数整合: before 10270 → live 10257 (Δ−13 = sealed apply 差分 314−327)。
+- canonical-key 重複: DUP_BEFORE 0 / DUP_AFTER 0 (全比較)。
+  live Q2 は全 storage PK/rows を保持し重複なし (dup は STOP 対象だった)。
+- honbun scope 実測: L1 1781 全件両側非 null で比較・L3 59 全件比較。
+  null 混在 0。honbun 値は protected scope (0600 のみ・stdout 0)。
+- D1 IDs/values の stdout 出力 0。D1 IDs は 0600 snapshot のみ。
+- 候補 changed の全原因帰属は既 raw の pure-offline 説明 +
+  later apply 前 Root review (今回 apply grant 0)。
+  future apply CAS は全 pre-image rows を exact counts/ids で含めること。
+- ライブ source ZIP archive は未実行 (不可のまま)。
