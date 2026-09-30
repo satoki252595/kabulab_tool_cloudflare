@@ -15,7 +15,11 @@ import io
 import logging
 import re
 import zipfile
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
+
+import requests
 
 from ..config import Settings
 from ..contracts.stock_code import source_code_to_ticker
@@ -66,14 +70,58 @@ def normalize_sec_code(sec_code: str | None) -> str | None:
     return source_code_to_ticker(sec_code)
 
 
-def fetch_codelist(settings: Settings) -> RawArtifact:
-    """コードリスト zip を取得し、無加工で原本保存する (§8.1 step 1-2)。"""
+# 応答 metadata として manifest に残す header の allowlist (小文字)。
+# 存在したものだけ拾い、欠けていても推測・補完しない。secret・session・
+# Cookie・auth 系は載せない (下の deny が第二の関門)。
+_RESPONSE_HEADER_ALLOWLIST = frozenset(
+    {"content-type", "content-length", "last-modified", "etag"}
+)
+_RESPONSE_HEADER_DENY = frozenset(
+    {
+        "cookie",
+        "set-cookie",
+        "authorization",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "www-authenticate",
+    }
+)
+
+
+def response_metadata(resp: requests.Response) -> dict[str, object]:
+    """同一 Response から status・最終 URL・安全 header だけを抜き出す。
+
+    body は触らない (原本は `save_raw` の `resp.content` が正)。header 名は
+    小文字に正準化する。deny 掲載・allowlist 外は捨てる。
+    """
+    headers: dict[str, str] = {}
+    for name, value in resp.headers.items():
+        low = name.lower()
+        if low in _RESPONSE_HEADER_DENY:
+            continue
+        if low in _RESPONSE_HEADER_ALLOWLIST:
+            headers[low] = value
+    return {"status": resp.status_code, "finalUrl": resp.url, "headers": headers}
+
+
+def fetch_codelist(
+    settings: Settings,
+    *,
+    on_response: Callable[[requests.Response], None] | None = None,
+) -> RawArtifact:
+    """コードリスト zip を取得し、無加工で原本保存する (§8.1 step 1-2)。
+
+    `on_response` は同一 Response を受け取る最小 seam (検証通過後のみ呼ぶ。
+    新 GET・新 schema なし)。渡さない既存呼び出し (月次) の挙動は不変。
+    """
     resp = fetch(CODELIST_URL)
     # マジックバイト検証 (CONTRACTS): 200 で返るエラーページを正本の原本にしない (§3)
     if not resp.content.startswith(b"PK\x03\x04"):
         raise FetchError(
             f"コードリスト応答が zip でない (エラーページ?): head={resp.content[:16]!r}"
         )
+    if on_response is not None:
+        on_response(resp)
     return save_raw(
         resp.content,
         source=Source.EDINET,
@@ -185,6 +233,102 @@ def parse_codelist(
             )
         )
     return records
+
+
+# --- 候補検査 (master_sync / sector33_sync 共通) -------------------------------
+
+# `00000` 証券コード由来の phantom ticker。listed として parse されるが
+# 銘柄を指さないため候補から外し HOLD 診断にする (STOP しない)。
+_PHANTOM_TICKER = "0000"
+
+# EDINET code の literal 形 (`E` + 5 桁)。レジストリ照会はしない。
+# 実測の両世代 (11348/11394 行) で非空白値は全てこの形。
+_EDINET_RE = re.compile(r"^E[0-9]{5}$")
+
+
+def is_valid_edinet_code(value: str | None) -> bool:
+    """EDINET code の literal 有効性。blank は False (未知として扱う)。"""
+    return value is not None and value != "" and _EDINET_RE.match(value) is not None
+
+
+class CodelistInspectError(ValueError):
+    """候補検査の typed STOP。`kind` で事由を区別する。"""
+
+    def __init__(self, kind: str, detail: str) -> None:
+        super().__init__(detail)
+        self.kind = kind
+
+
+@dataclass(frozen=True)
+class CandidateHold:
+    """非候補の typed HOLD 診断。"""
+
+    kind: str  # "legal-missing-ticker" | "blank-issuer-hold"
+    detail: str
+
+
+@dataclass(frozen=True)
+class InspectedCandidates:
+    """候補検査の結果。①upsert 用と sector 資格の最小区別。
+
+    - `candidates`: ①upsert 用の全候補 (blank issuer を含む。① schema は
+      optional のため改造しない)。
+    - `sector`: sector 資格 (literal 有効 EDINET id 必須。blank は除外)。
+    """
+
+    candidates: list[StockMasterRecord]
+    sector: list[StockMasterRecord]
+    holds: list[CandidateHold]
+
+
+def inspect_codelist_candidates(
+    records: list[StockMasterRecord],
+) -> InspectedCandidates:
+    """全 records の正規化 ticker/issuer 一意性を検査し候補と HOLD に分離する。
+
+    呼び出し位置: 全件 parse 後・limit 前・① upsert 前 (両 job 共通)。
+    - `0000` phantom (`00000` 由来) → 非候補 + HOLD (STOP しない)。
+    - 同一 ticker の複数行 (identical/conflicting 問わず) → STOP。
+    - 同一 EDINET code の複数 ticker (blank 除外) → STOP。
+    - 非空白で literal 不正な EDINET code → STOP。
+    - blank issuer → typed identity HOLD + sector 除外 (①候補には残す)。
+    - 候補は入力順 (dedup しない。last-wins は廃止)。name join はしない。
+    """
+    holds = [
+        CandidateHold("legal-missing-ticker", f"00000 由来 (edinet={r.edinet_code})")
+        for r in records
+        if r.code == _PHANTOM_TICKER
+    ]
+    candidates = [r for r in records if r.code != _PHANTOM_TICKER]
+    for r in candidates:
+        if r.edinet_code and not is_valid_edinet_code(r.edinet_code):
+            raise CodelistInspectError(
+                "invalid-issuer-stop", f"{r.code}: 不正 EDINET {r.edinet_code!r}"
+            )
+    seen: set[str] = set()
+    for r in candidates:
+        if r.code in seen:
+            raise CodelistInspectError(
+                "dup-ticker-stop", f"{r.code} が複数行 (edinet={r.edinet_code})"
+            )
+        seen.add(r.code)
+    by_edinet: dict[str, set[str]] = {}
+    for r in candidates:
+        if r.edinet_code:
+            by_edinet.setdefault(r.edinet_code, set()).add(r.code)
+    for edinet, tickers in sorted(by_edinet.items()):
+        if len(tickers) > 1:
+            raise CodelistInspectError(
+                "dup-issuer-stop", f"{edinet}: {','.join(sorted(tickers))}"
+            )
+    sector: list[StockMasterRecord] = []
+    for r in candidates:
+        # 不正 nonempty は上で STOP 済み。ここに残る非有効は blank のみ。
+        if not is_valid_edinet_code(r.edinet_code):
+            holds.append(CandidateHold("blank-issuer-hold", f"{r.code}: issuer 空"))
+            continue
+        sector.append(r)
+    return InspectedCandidates(candidates=candidates, sector=sector, holds=holds)
 
 
 def convert_codelist(artifact: RawArtifact) -> RawArtifact:

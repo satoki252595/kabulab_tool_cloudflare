@@ -332,7 +332,9 @@ class TestWriterClaims:
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                     if node.func.attr == "build_sector33_updates":
                         callers.add(path.name)
-        assert callers == {"master_sync.py"}, callers
+        # stockStock の enrich 書込経路は 2 つ (月次 master + sector33-only cadence)。
+        # どちらも同一 builder (sector33 のみ SET) を使い、writer 宣言は不変。
+        assert callers == {"master_sync.py", "sector33_sync.py"}, callers
 
     def test_all_を使わず_base_で始める(self) -> None:
         """PK が `(dataset, column_group)` なので後からの改名は破壊的書換になる。

@@ -20,6 +20,7 @@
     "sync:daily:core": "tsx scripts/sync/daily.ts",
     "sync:monthly": "tsx scripts/sync/all-monthly.ts",
     "sync:monthly:core": "tsx scripts/sync/monthly.ts",
+    "sync:edinet-archive": "tsx scripts/sync/edinet-codelist-archive.ts",
     "ingest:yuho-edinet": "tsx scripts/sync/yuho-edinet.ts",
     "backfill:overseas": "tsx services/yuho-quant/data-scripts/backfill-overseas.ts",
     "audit:overseas": "tsx services/yuho-quant/data-scripts/audit-overseas.ts",
