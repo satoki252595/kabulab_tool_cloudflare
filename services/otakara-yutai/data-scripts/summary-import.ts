@@ -52,7 +52,7 @@ import {
   isVerbatimCopy,
   normalizeSummary,
 } from "./summary-contract.js";
-import { TASK_ID_PATTERN, type BenefitRow, type SummaryTask } from "./summary-tasks.js";
+import { TASK_ID_PATTERN, recipientContexts, type BenefitRow, type SummaryTask } from "./summary-tasks.js";
 
 /**
  * 結果ファイル 1 行。外部エージェントの出力。`taskId` / `contractVersion` は
@@ -269,6 +269,13 @@ export function planSummaryImport(input: {
     const row = current.get(result.taskId);
     if (!row) {
       reject("stale", "今の D1 にこの (銘柄, 掲載文) が無い (タスク発行後に再取得で文言が変わった)");
+      continue;
+    }
+    const recipients = recipientContexts(row.minShares.map((minShares, i) => ({
+      minShares, recordMonth: row.recordMonths[i],
+    })));
+    if (JSON.stringify(recipientContexts(task.recipients)) !== JSON.stringify(recipients)) {
+      reject("stale", "タスク発行後に株数・権利月の受取条件が変わった");
       continue;
     }
     const summary = normalizeSummary(result.shortSummary);
