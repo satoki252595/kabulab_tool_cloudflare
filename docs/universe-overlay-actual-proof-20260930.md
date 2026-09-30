@@ -120,6 +120,20 @@ whole HTTP raw を判定前に wx 保存。
   owner raw/meta/verdict/counter、post pq1-3 raw/meta/attempt + snapshot +
   criteria、capture/guard/archive 一式。
 - Notion: 上記 2 record keys (bundle + guard receipt)。
-- actual proof の新規物理 archive は Root 別 grant まで PREP のみ。
 - D (price47 resolve-only actual post) handoff は readonly packet を別途用意し、
   dispatch は Root が行う。
+
+## Actual proof archive (PREP frozen、record 未実行)
+
+- conditional archive grant は adopted 済み。bundle + runner 凍結、
+  preflight 全 true (counter 0、stale なし、networkSends 0)。
+- record 0: SOL CODE CLEAR + hash-first Root + conditional one GO の前は
+  実行しない。unknown STOP / replay 0 / newkey escape 0。完了主張なし。
+- runner `379550247cde5931667da84168a01fb023f1a2f24598ac6736ad64e702405251` /
+  ZIP 183671B `3eaff8c3cb73982d03a2b211d3dee0d5876718fa91b743d84682483202f810a3` /
+  manifest `1a5fe8c3138a9b0c37c80c9c63be05206dfb63b773c7e825442b2d3851904702` /
+  19 members unique + full SHA /
+  key `actual-proof-2026-09-30-3eaff8c3cb73982d03a2b211d3dee0d5876718fa91b743d84682483202f810a3`。
+- members は actual のみ (owner 5 + post 13 + pins 1)。pre28/guard4 の
+  bytes 再送なし (SHA/key 参照のみ)。pure toNotionUpload を burn 前に済ませ、
+  LOCAL 拒否は 0 attempts で返す。known receipt wx を unique/readback より先に固める。
