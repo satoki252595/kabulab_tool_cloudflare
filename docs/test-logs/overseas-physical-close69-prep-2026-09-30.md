@@ -80,11 +80,40 @@ live DL・record・D1 書込・fresh source GET は全て未実行・別 grant�
 - preflight: `996f2212…d76bf` exit 0・sends 0・writes 0・
   69/64/59/5/5 + 67497778 bytes 再照合済み
   (canonical env・packet `16d51720…63bd4d8` 不変照合)。
-- live DL 0。Root conditional DL grant 待ち。
+- Root conditional DL grant にて ONE 実行済み (結果は次節)。
+  追加実行なし。
+
+## 閉鎖 ONE 実行結果 (HOLD・fail-fast・再実行なし)
+
+- window: `2026-09-30T12:11:37.443Z` → `12:12:18.201Z` exit 1。
+  実行 HEAD `a2415d2` (実行前照合・tree clean・bytes FULL 照合済み。
+  hold-detail に workHEAD 記録なし — 知られた制限)。
+- Tier A 59/59 閉鎖達成 (metadata-anchored same-bytes)。
+  続く Tier B 先頭 `S100YWM7:type1` で SHA 不一致 HOLD。
+  残 Tier B 4 行は未試行 (fail-fast)。Tier C 5 は除外のまま。
+- 不一致の内訳 (LOCAL forensics・再取得なし):
+  hosted 長 = local 長 = 1032133・hosted SHA `42a7404d…9756f2c`・
+  local SHA `44d67cf6…4844e8` (packet inventory 値と一致・
+  local 変化なし)。55 entries・names + 長さ同一・
+  entry-bytes SHA 両者 `ded1638c…f4580` で一致。
+  結論: 同一 content の re-timestamped container
+  (hosted 09-29 13:45 / local 09-28 23:25・初 divergence byte 11)。
+  strict byte-closure の拒否は正しい。content 同一の証明であり、
+  same-bytes 適格化ではない。
+- network: native 120 (listing 60 + hosted 60)・全 200・
+  rejected 0・hosted retry 0。ledger reserved 120 + captured 120 =
+  240 行・seq 1:1 対・全 bodySHA 照合一致・全 0600。
+- receipts (0600): hold-detail `ae8fc7f2…2fe06`・
+  ledger `1320fdce…712`・stderr `13a66c4d…61f5f` (stdout 空)。
+- zeros: search 0 / sourceGET 0 / D1 0 / R2 0 / record 0 /
+  mutation 0 / dispatch 0。
+- grant 消費済み ONE。Tier B 残・Tier C に追加照会・rerun なし。
+- READY は blanket 適格化なし (Root 判断)。
+  Tier A 59 の same-bytes receipt のみ確定。
 
 ## Limits
 
-- 本 PREP は live 0 (DL/listing の追加送信なし)。
+- 本 PREP + ONE 実行は閉鎖 59 + HOLD 1 で確定。追加送信なし。
 - missing t1 3611 / t5 3670 (union) は source 不在の証明ではなく、
   fresh GET の必要性も意味しない。Tier C は HOLD のまま。
 - complete ≠ READY。READY 判定は Root (本 PREP は bytes 照合の
