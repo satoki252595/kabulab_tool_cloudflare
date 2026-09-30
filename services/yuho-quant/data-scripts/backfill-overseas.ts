@@ -37,6 +37,7 @@ import { recordEdinetZip } from "../src/services/edinet/archive.js";
 import {
   parseOverseasData,
   validateOverseasSaveSet,
+  type OverseasParseStatus,
 } from "../src/services/overseas-parser.js";
 import * as yuhoSchema from "../src/db/schema.js";
 
@@ -47,9 +48,8 @@ const limit = arg("limit") ? Number(arg("limit")) : Infinity;
 const offset = arg("offset") ? Number(arg("offset")) : 0;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function toYen(raw: number | null, factor: number): number | null {
-  return raw === null ? null : Math.round(raw * factor);
-}
+// 保存行変換は共有正準 (overseas-save-rows.ts) を使用する。
+import { toOverseasSaveRows } from "../src/services/overseas-save-rows.js";
 function chunk<T>(a: T[], s: number): T[][] {
   const o: T[][] = [];
   for (let i = 0; i < a.length; i += s) o.push(a.slice(i, i + s));
@@ -82,7 +82,8 @@ console.info(
 const tally: Record<string, number> = {};
 let n = 0;
 for (const r of targets) {
-  let status = "no_xbrl";
+  // 全経路 (try 成功・catch・検証降格) で代入後に初読される。初期値なし。
+  let status: OverseasParseStatus | "parse_error";
   let honbunFile: string | null = null;
   let facts: ReturnType<typeof parseOverseasData>["facts"] = [];
   let proof: ReturnType<typeof parseOverseasData>["proof"];
@@ -144,18 +145,10 @@ for (const r of targets) {
   // facts 0 件 (parse_error 等) でも UPDATE + DELETE の 2 文は送る
   // (全 tuple に status を記録する契約は維持)。失敗は throw が外へ伝播し
   // 非 0 終了する (握り潰さない)。statement fallback なし。
-  const rows = facts.map((f) => ({
+  const rows = toOverseasSaveRows(facts, status).map((o) => ({
     documentId: r.id,
     stockId: r.stockId,
-    fiscalYearEnd: f.fiscalYearEnd,
-    regionName: f.regionName,
-    regionKind: f.regionKind,
-    isConsolidated: f.isConsolidated,
-    unitLabel: f.unitLabel,
-    salesRaw: f.salesAmount,
-    salesYen: toYen(f.salesAmount, f.unitYenFactor),
-    ratioPct: f.ratioPct,
-    pattern: status.startsWith("ok_") ? status.replace("ok_", "") : "none",
+    ...o,
   }));
   const statements = [
     db
