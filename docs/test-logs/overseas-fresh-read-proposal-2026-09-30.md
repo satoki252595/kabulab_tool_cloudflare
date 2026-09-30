@@ -93,8 +93,12 @@ code/test/framework の新規なし。本記録は schema・counts・SHA・limit
   DELETE は overseas 表に限定)。orders/text 変更 0 は CAS 条件に含める。
 - same-run verify は二段 (混同しない): (a) full physical verify =
   hosted actual ZIP の full HTTP 200 / length / SHA の shared verify、
-  (b) D1 full post = 全 pre-image rows を exact counts/ids で含む
-  postflight。両方 + reentry 0 が CAS 条件。
+  (b) D1 full post: doc の protected id + fields 不変を確認し、facts は
+  expected NEW 表と exact 照合する (全列 / 論理キー (fiscalYearEnd +
+  regionName) / count / NULL + fresh PK unique + documentId/stockId の
+  referential identity)。旧 facts full preimage は CAS guard (書込前照合)
+  専用。DELETE+INSERT は PK ids/row counts を置換するため、削除済み旧
+  fact IDs の存続は要求しない。両段 + reentry 0 が CAS 条件。
 - 注意: backfill-overseas の per-doc batch (UPDATE + DELETE + INSERT) は
   full-preimage CAS ではない。将来の最小 executor は batch 先頭に
   CAS guard (preimage 照合) を置き、UPDATE/DELETE/INSERT の前に検証する
