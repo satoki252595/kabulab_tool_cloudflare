@@ -114,6 +114,17 @@ whole HTTP raw を判定前に wx 保存。
 (resend 0)。unknown は読み取り専用照合で状態確定後に人が判断」。
 ふるまい変更なし。
 
+## Collection remainder (未収集・別 lane)
+
+- 本証明の 9/30 qualification / sourceAsOf UNKNOWN は current-only を
+  証明する。9/29 historical の証明ではない。
+- 将来の past-target IPO には dated admission / stock class / domestic
+  primary の evidence が必要。保存済み 618 一部 PDF の dated legal
+  classification は unresolved のまま HOLD。current Basic の observedAt は
+  historical proof にならない。
+- 9/29 price40 と new9 EDINET 公開 sector33 は別 owner lane。
+  Basic industry → sector33 の自動読替えなし、自動完了主張なし。
+
 ## 物理保管 (Git 外)
 
 - private: `/tmp/fresh-snapshot-read-20260930/` (0700/0600)。
