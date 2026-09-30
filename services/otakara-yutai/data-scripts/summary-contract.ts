@@ -21,13 +21,15 @@
  *   注記記号の取り込み 38 行 / 60 字超 35 行 / です・ます調 5 行 (重複あり計 ~70 行)
  */
 
+import { HEADED_MARK } from "./estimated-value-guard.js";
+
 /**
  * 要約契約の版。タスクファイルと結果ファイルの各行に載り、取り込み時に
  * 一致しない行ははじく。規則 (下の上限・記号・文体) や作業仕様書の要約規則を
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-09-28.2";
+export const SUMMARY_CONTRACT_VERSION = "2026-09-30.1";
 
 /**
  * 要約の % 表現が掲載文に裏づけられているか。
@@ -82,7 +84,7 @@ const ANNOTATION_MARKS = ["※", "■", "◆", "◇"] as const;
 const POLITE_ENDINGS = ["です。", "ます。", "ください", "いたします"] as const;
 
 export type SummaryViolation = {
-  rule: "annotation" | "too_long" | "prose" | "empty";
+  rule: "annotation" | "too_long" | "prose" | "empty" | "internal";
   detail: string;
 };
 
@@ -93,6 +95,13 @@ export function checkSummary(summary: string): SummaryViolation[] {
   if (text === "") {
     out.push({ rule: "empty", detail: "要約が空" });
     return out;
+  }
+  // タスク掲載文の先頭にある内部 headed marker を写した要約は、公開面に
+  // 内部 encoding が漏れるので落とす (読みやすい条件文言自体は落とさない)。
+  // 取り込み側は NFKC 済み (：→:) で来るため両形を見る。書き出し側の
+  // checkSummary (素文) と取り込み側 (正規化済み) のどちらからも漏らさない。
+  if (text.includes(HEADED_MARK) || text.normalize("NFKC").includes(HEADED_MARK.normalize("NFKC"))) {
+    out.push({ rule: "internal", detail: "内部 headed marker を含む" });
   }
   const marks = ANNOTATION_MARKS.filter((m) => text.includes(m));
   if (marks.length > 0) {

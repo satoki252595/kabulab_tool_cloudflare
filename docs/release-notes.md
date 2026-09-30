@@ -10,6 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- 優待 company 判定に表見出し context を persist (内部 headed 保存形式。合同割引・抽選 scope・型付き券 unit×数量の narrow 規則。見出しのみ金額は額面にしない。本文 negative は authoritative)。要約契約 2026-09-30.1 (内部 marker の echo を `internal` 違反で reject)。次回 full-import から保存文が headed 形に変わる (公開面は shortSummary のみで不変)。データ変更なし (Refs #146)。
 - 海外 source-custody query runner を追加 (既存 checkDocsCustody 再使用・query-only。round1 20 docs/40 keys は ONE 実行済み PASS (t1/t5 missing 40/40・attempts 2・READY 0)。rest 3655 docs/7310 keys (183 chunks) は ONE 実行済み PASS (t1 missing 3591・complete 64・t5 missing 3650・complete 5・attempts 184・query 成功 183/183・READY 0・両 grant 消費・追加照会なし)。read-only route guard (CREATE/PATCH/DELETE 拒否・body/query exact 束縛・redirect manual/3xx STOP) + closed caps (96/1351) + 同一 response clone 保存 + full SHA pins)。証跡 `docs/test-logs/overseas-custody-query-2026-09-30.md`。source/Notion-mutation/D1/R2/dispatch 0、データ変更なし。
 - 海外 L2 `source_max_date` の MAX を `stockIds` 指定時は対象集合に拘束 (未指定時は global MAX 不変・空は throw 維持。caller は global 呼び不変)。scope 別契約の focused tests (23 + 5 passed)。データ変更なし。
 - jss-api 日足の調整意味論を訂正 (価格は生値・adj_* は配当込 total-return、係数不明は null・偽 1 なし、出来高未補正、cache v2)。データ変更なし。
