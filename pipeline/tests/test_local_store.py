@@ -477,12 +477,6 @@ class TestJobLogInsert:
 
 
 class TestLifecycleAndAbsent:
-    def test_mark_absent_only_sets_listed_false(self):
-        sql, params = mappers.mark_absent_update("7203")
-        assert "listed = FALSE" in sql
-        assert "status" not in sql  # 状態は一次開示が所有
-        assert params == {"code": "7203"}
-
     def test_lifecycle_delisting_with_date(self):
         rec = DisclosureRecord(
             doc_id="d", title="上場廃止", disclosed_at=datetime(2026, 6, 10, tzinfo=JST),
@@ -610,9 +604,6 @@ class _RecordingLocal:
     def upsert_raw_artifact(self, a):
         self.calls.append(("raw",))
 
-    def mark_master_absent(self, code):
-        self.calls.append(("absent", code))
-
     def apply_disclosure_lifecycle(self, r):
         self.calls.append(("lifecycle",))
 
@@ -724,9 +715,6 @@ class _RaisingLocal:
     def upsert_raw_artifact(self, a):
         raise RuntimeError("db down")
 
-    def mark_master_absent(self, code):
-        raise RuntimeError("db down")
-
     def apply_disclosure_lifecycle(self, r):
         raise RuntimeError("db down")
 
@@ -773,13 +761,6 @@ class TestPersistFailover:
         w_bad, _ = _notion_writer(ok=False)
         assert ctx.persist(self._price(), w_bad, label="②") is False
         assert ctx.notion_failed == 1
-
-    def test_mark_absent_failover(self):
-        local = _RecordingLocal()
-        ctx = _ctx(local)
-        w, _ = _notion_writer(ok=False)
-        assert ctx.persist_mark_absent("7203", w, label="absent") is True
-        assert ("absent", "7203") in local.calls and ctx.notion_failed == 1
 
     def test_lifecycle_failover(self):
         local = _RecordingLocal()

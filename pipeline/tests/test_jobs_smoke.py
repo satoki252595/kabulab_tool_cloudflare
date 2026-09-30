@@ -239,50 +239,56 @@ class TestMasterSync:
         assert _ops_with_prop(client, S.MASTER_PROP_NAME) == []  # ① への書き込みなし
         # 失敗終了する（実行履歴は D1 jss_job_runs。Notion ⑦ は廃止）
 
-    def test_delisting_detection_marks_absent(self, monkeypatch, tmp_path, captured_clients):
-        """コードリストから消えた銘柄を listed=False にする (§ Phase3)。
-        状態=上場廃止 の確定は一次開示に一本化し、消失検知では状態を倒さない。"""
-        from jp_stock_pipeline.licensing import LicenseTag
-        from jp_stock_pipeline.models import Provenance, StockMasterRecord, now_jst
-        from jp_stock_pipeline.notion.client import NotionClient
-
-        self._patch_fetch(monkeypatch, tmp_path)
-        # コードリストの現役は 7203 のみ
-        rec = StockMasterRecord(
-            code="7203", name="トヨタ自動車", listed=True, status="上場",
-            provenance=Provenance(
-                source=Source.EDINET, license_tag=LicenseTag.COMMERCIAL_OK,
-                data_date=date(2026, 6, 10), fetched_at=now_jst(),
-            ),
-        )
-        monkeypatch.setattr(edinet_codelist, "parse_codelist", lambda *a, **k: [rec])
-        # ① には 7203 と 9999(コードリストから消えた) が既存
-        def fake_query(self, db_id, **kwargs):
-            return [
-                {"id": "p-7203",
-                 "properties": {S.MASTER_PROP_CODE: {"rich_text": [{"plain_text": "7203"}]}}},
-                {"id": "p-9999",
-                 "properties": {S.MASTER_PROP_CODE: {"rich_text": [{"plain_text": "9999"}]}}},
-            ]
-        monkeypatch.setattr(NotionClient, "query_database", fake_query)
-
-        code = master_sync.main(["--dry-run"], env=_env(tmp_path))  # --limit 無し=全件
-        assert code == 0
-        client = captured_clients[0]
-        delisted = [
-            o for o in client.ops
-            if o.op == "update_page" and o.payload["page_id"] == "p-9999"
-        ]
-        assert len(delisted) == 1
-        props = delisted[0].payload["properties"]
-        assert props[S.MASTER_PROP_LISTED]["checkbox"] is False
-        # 消失検知は listed=False のみ。状態=上場廃止 は一次開示由来に一本化 (§3-1/§3-7)
-        assert S.MASTER_PROP_STATUS not in props
-
-    def test_blast_radius_guard_blocks_mass_delisting(
+    def test_filtered_real_issuers_hold_without_flipping_listed(
         self, monkeypatch, tmp_path, captured_clients, caplog
     ):
-        """コードリストが既存の50%未満なら一括上場廃止せず中止する (§ Phase3 安全弁)。"""
+        """実原本の ticker 欠損/非上場行は、廃止と推定せず既存値を保持する。"""
+        import csv
+
+        raw = fixture_path("edinet/Edinetcode.zip").read_bytes()
+        text = zipfile.ZipFile(io.BytesIO(raw)).read("EdinetcodeDlInfo.csv").decode("cp932")
+        rows = list(csv.reader(io.StringIO(text)))
+        header = rows[1]
+        code_i = header.index(edinet_codelist._COL_SEC_CODE)
+        listed_i = header.index(edinet_codelist._COL_LISTED)
+        targets = [r for r in rows[2:] if r[listed_i] == "上場"
+                   and edinet_codelist.normalize_sec_code(r[code_i])][:2]
+        assert len(targets) == 2
+        codes = [edinet_codelist.normalize_sec_code(r[code_i]) for r in targets]
+        targets[0][code_i] = ""
+        targets[1][listed_i] = "非上場"
+        csv_out = io.StringIO()
+        csv.writer(csv_out).writerows(rows)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("EdinetcodeDlInfo.csv", csv_out.getvalue().encode("cp932"))
+
+        def fake_fetch(settings):
+            return save_raw(buf.getvalue(), source=Source.EDINET, datatype="codelist",
+                            scope="ALL", data_date=date(2026, 6, 10),
+                            url="fixture://edinet/Edinetcode.zip", ext="zip",
+                            license_tag=source_license(Source.EDINET), base_dir=settings.raw_data_dir)
+
+        monkeypatch.setattr(edinet_codelist, "fetch_codelist", fake_fetch)
+        existing = [
+            {"id": f"p-{c}", "properties": {
+                S.MASTER_PROP_CODE: {"rich_text": [{"plain_text": c}]},
+                S.MASTER_PROP_LISTED: {"checkbox": True}}}
+            for c in codes
+        ]
+        monkeypatch.setattr(NotionClient, "query_database", lambda *a, **k: existing)
+        assert master_sync.main(["--dry-run"], env=_env(tmp_path)) == 0
+        for c in codes:
+            assert not any(o.op == "update_page" and o.payload["page_id"] == f"p-{c}"
+                           for o in captured_clients[0].ops)
+            assert f"codelist-absence HOLD: {c}" in caplog.text
+        assert "コードリスト不在 2 銘柄" in caplog.text
+        assert all(p["properties"][S.MASTER_PROP_LISTED]["checkbox"] for p in existing)
+
+    def test_coverage_guard_reports_abnormal_capture(
+        self, monkeypatch, tmp_path, captured_clients, caplog
+    ):
+        """コードリストが既存の50%未満なら異常取得として報告する (§ Phase3 安全弁)。"""
         from jp_stock_pipeline.licensing import LicenseTag
         from jp_stock_pipeline.models import Provenance, StockMasterRecord, now_jst
         from jp_stock_pipeline.notion.client import NotionClient
@@ -316,7 +322,7 @@ class TestMasterSync:
         ]
         assert mass_delist == []
         # 中止を警告ログに出す（黙って中止せず可視化 §3-2。履歴は D1 jss_job_runs）
-        assert "上場廃止検知を中止" in caplog.text
+        assert "欠損診断を中止" in caplog.text
         assert code == 1  # processed>0 & failed>0 = 一部失敗も exit 1 (共有 runner 契約)
 
 

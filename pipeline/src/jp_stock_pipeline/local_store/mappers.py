@@ -338,14 +338,6 @@ def job_log_insert(
     return f"INSERT INTO job_log ({col_list}) VALUES ({placeholders})", params
 
 
-def mark_absent_update(code: str) -> tuple[str, dict]:
-    """コードリスト消失 → listed=False のみ（状態は一次開示が所有 § Phase3）。"""
-    return (
-        "UPDATE stock_master SET listed = FALSE, updated_at = now() WHERE code = %(code)s",
-        {"code": code},
-    )
-
-
 def lifecycle_update(record: DisclosureRecord) -> tuple[str, dict] | None:
     """上場廃止/新規上場の一次開示 → ① の状態を部分更新する (§ Phase3)。
 
