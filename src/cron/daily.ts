@@ -38,7 +38,7 @@
  *   - マクロ 4 指数のどれかが取れない場合も null で通す
  */
 
-import { sql, eq, and, or, gte, lte, lt, asc, isNull } from "drizzle-orm";
+import { sql, eq, and, or, gte, lte, lt, asc, isNull, inArray } from "drizzle-orm";
 import { createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { publicSectorColumn } from "../shared/db/public-columns.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
@@ -675,6 +675,123 @@ export async function loadNullCloseDates(
   return byStock;
 }
 
+/** 過去行不存在の存在確認プローブ (F-09 #163)。 */
+export interface OhlcvGapProbe {
+  stockId: number;
+  date: string;
+}
+
+/**
+ * fresh スライスから gap 候補日を抜く (純粋関数)。
+ * 保持 90 本窓内の watermark 以前日で、新規 (a)・NULL 訂正 (b) のどちらにも
+ * 該当しない日。呼び出し側が `loadSavedOhlcvDates` で存在確認し、
+ * 未保存の日だけ規則 (c) で回収する。
+ */
+export function collectOhlcvGapCandidates(
+  ohlcv6mo: readonly DailyOhlcv[],
+  existingMaxDate: string | undefined,
+  correctionDates: ReadonlySet<string> | undefined
+): string[] {
+  if (existingMaxDate === undefined) return [];
+  const window = ohlcv6mo.slice(-OHLCV_RETENTION_DAYS);
+  return window
+    .map((r) => r.date)
+    .filter(
+      (d) =>
+        d <= existingMaxDate &&
+        !(correctionDates?.has(d) ?? false)
+    );
+}
+
+/**
+ * プローブ集合を D1 bind 100/文に収まる chunk へ分ける (純粋関数)。
+ * 1 文の bind 数 = 銘柄数 + 日付和集合サイズ。1 銘柄ぶん (1 + 90 以下)
+ * は必ず 1 文に収まる (collectOhlcvGapCandidates は窓 90 本以下)。
+ */
+export interface OhlcvGapChunk {
+  stockIds: number[];
+  dates: string[];
+  wanted: ReadonlySet<string>;
+}
+
+export function packOhlcvGapChunks(probes: readonly OhlcvGapProbe[]): OhlcvGapChunk[] {
+  const byStock = new Map<number, Set<string>>();
+  for (const p of probes) {
+    const set = byStock.get(p.stockId);
+    if (set === undefined) {
+      byStock.set(p.stockId, new Set([p.date]));
+    } else {
+      set.add(p.date);
+    }
+  }
+  const unionSize = (stocks: ReadonlyMap<number, ReadonlySet<string>>): number => {
+    const u = new Set<string>();
+    for (const dates of stocks.values()) {
+      for (const d of dates) u.add(d);
+    }
+    return u.size;
+  };
+  const freeze = (stocks: ReadonlyMap<number, ReadonlySet<string>>): OhlcvGapChunk => {
+    const dates = [...new Set([...stocks.values()].flatMap((s) => [...s]))];
+    const wanted = new Set<string>();
+    for (const [stockId, ds] of stocks) {
+      for (const d of ds) wanted.add(`${stockId}|${d}`);
+    }
+    return { stockIds: [...stocks.keys()], dates, wanted };
+  };
+  const chunks: OhlcvGapChunk[] = [];
+  let cur = new Map<number, ReadonlySet<string>>();
+  for (const [stockId, dates] of byStock) {
+    const test = new Map(cur);
+    test.set(stockId, dates);
+    if (test.size + unionSize(test) > 100 && cur.size > 0) {
+      chunks.push(freeze(cur));
+      cur = new Map();
+    }
+    cur.set(stockId, dates);
+  }
+  if (cur.size > 0) chunks.push(freeze(cur));
+  return chunks;
+}
+
+/**
+ * プローブした (stockId, date) のうち保存済みの集合を返す。
+ * 日付 IN × 銘柄 IN の直積で引き (100 bind/文の chunk 分割)、JS 側で
+ * プローブ集合に絞る (複合 ON の JOIN を持ち込まない。空なら問合せなし)。
+ * 既知 empty と未知を区別する: プローブ対象 stock は空 Set を先に作り、
+ * 行 0 件でも entry を残す (規則 (c) が発火できる)。プローブなし stock は
+ * entry を作らない (savedDates 未指定 = 未知のまま)。
+ */
+export async function loadSavedOhlcvDates(
+  db: Db,
+  probes: readonly OhlcvGapProbe[]
+): Promise<Map<number, Set<string>>> {
+  const out = new Map<number, Set<string>>();
+  if (probes.length === 0) return out;
+  for (const p of probes) {
+    if (!out.has(p.stockId)) out.set(p.stockId, new Set());
+  }
+  for (const chunk of packOhlcvGapChunks(probes)) {
+    const rows = await db
+      .select({
+        stockId: swingSchema.dailyOhlcv.stockId,
+        date: swingSchema.dailyOhlcv.date,
+      })
+      .from(swingSchema.dailyOhlcv)
+      .where(
+        and(
+          inArray(swingSchema.dailyOhlcv.date, chunk.dates),
+          inArray(swingSchema.dailyOhlcv.stockId, chunk.stockIds)
+        )
+      );
+    for (const r of rows) {
+      if (!chunk.wanted.has(`${r.stockId}|${r.date}`)) continue;
+      out.get(r.stockId)?.add(r.date);
+    }
+  }
+  return out;
+}
+
 /**
  * 日次 sync が「株価の日次同期」記録 (Notion) に使う状態を決める (純粋関数)。
  * 取引日を導出できない = 実質全滅なので、失敗件数に関わらず必ず「失敗」にする
@@ -1076,6 +1193,25 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
 
+  // Phase 3a.5: 過去行不存在の存在確認 (F-09 #163)。各 snap の保持 90 本窓内
+  // の watermark 以前日を 1 文で問い合わせ、FlushItem へ載せる。
+  // 候補なし (通常時) は問合せ自体を出さない。
+  {
+    const probes: OhlcvGapProbe[] = pending.flatMap((p) =>
+      collectOhlcvGapCandidates(p.snap.ohlcv6mo, p.existingMaxDate, p.correctionDates).map(
+        (date) => ({ stockId: p.snap.stockId, date })
+      )
+    );
+    const saved = await loadSavedOhlcvDates(db, probes);
+    for (const p of pending) {
+      const set = saved.get(p.snap.stockId);
+      if (set !== undefined) p.savedDates = set;
+    }
+    if (probes.length > 0) {
+      console.info(`[sync-daily]   過去行の存在確認: 候補 ${probes.length} (stock,日)`);
+    }
+  }
+
   // Phase 3b: 表ごとの multi-row flush。失敗は初回失敗に積んで回収へ回す。
   const flushFailures = await flushSnapshots(db, pending, {
     writeAnnual,
@@ -1115,10 +1251,20 @@ async function runDailySyncAndRecord(db: Db, stocksOnly: boolean): Promise<Daily
         const snap = await buildSnapshot(target.id, target.code, target.sector,
           stocksOnly ? targetDate : undefined,
           jssAnnualByCode.get(target.code) ?? []);
+        const gapDates = collectOhlcvGapCandidates(
+          snap.ohlcv6mo,
+          latestDateByStock.get(target.id),
+          nullCloseDatesByStock.get(target.id)
+        );
+        const gapSaved = await loadSavedOhlcvDates(
+          db,
+          gapDates.map((date) => ({ stockId: target.id, date }))
+        );
         await writeStockSnapshot(db, snap, latestDateByStock.get(target.id), {
           writeAnnual,
           runStartedSec,
           correctionDates: nullCloseDatesByStock.get(target.id),
+          savedDates: gapSaved.get(target.id),
         });
         recoveredStocks++;
       } catch (error) {
@@ -1630,6 +1776,12 @@ export interface WriteStockSnapshotOptions {
    * 複数行 flush は `FlushItem.correctionDates` を使う。省略時は新規日のみ。
    */
   correctionDates?: ReadonlySet<string>;
+  /**
+   * 存在確認済みの保存済み日付 (F-09 #163)。1 行 flush (回収パス) 用。
+   * 複数行 flush は `FlushItem.savedDates` を使う。省略時は規則 (c)
+   * (過去行不存在の回収) を発火させない (旧動作)。
+   */
+  savedDates?: ReadonlySet<string>;
 }
 
 // -----------------------------------------------------------------------------
@@ -1650,6 +1802,12 @@ export interface FlushItem<T = unknown> {
    * fresh スライス内に実終値がある日だけ再送する。省略時は新規日のみ。
    */
   correctionDates?: ReadonlySet<string>;
+  /**
+   * 存在確認済みの保存済み日付 (F-09 #163。`loadSavedOhlcvDates`)。
+   * watermark 以前の穴のうち保持 90 本窓内かつ未保存の日を回収する。
+   * 省略時は回収しない (旧動作。未知を未保存とみなさない)。
+   */
+  savedDates?: ReadonlySet<string>;
 }
 
 export interface FlushFailure<T = unknown> {
@@ -1722,7 +1880,12 @@ function buildRsiRows(item: FlushItem<never>): BuiltRow<Record<string, unknown>>
 function buildOhlcvRows(
   item: FlushItem<never>
 ): BuiltRow<Record<string, unknown>>[] {
-  const { snap, existingMaxDate, correctionDates } = item;
+  const { snap, existingMaxDate, correctionDates, savedDates } = item;
+  // 保持 90 本窓の下端 (prune が残す範囲。窓外の不存在は復活させない)。
+  const keepFrom =
+    snap.ohlcv6mo.length > OHLCV_RETENTION_DAYS
+      ? snap.ohlcv6mo[snap.ohlcv6mo.length - OHLCV_RETENTION_DAYS].date
+      : null;
   const newOhlcv = existingMaxDate
     ? snap.ohlcv6mo.filter(
         (r) =>
@@ -1730,7 +1893,18 @@ function buildOhlcvRows(
           // 保存済み NULL 日の訂正再送 (F-04)。fresh に実終値がある日だけ
           // (fresh も null の日は NULL のまま正直に残す)。保存済みの有効値は
           // 遡及訂正でも自動では書き換えない (別途 raw 証跡つき修復)。
-          (r.close !== null && (correctionDates?.has(r.date) ?? false))
+          (r.close !== null && (correctionDates?.has(r.date) ?? false)) ||
+          // 過去行不存在の回収 (F-09 #163)。watermark 以前の穴のうち、
+          // 保持 90 本窓内かつ存在確認で未保存の日だけ送る (存在確認済みの
+          // ため保存済み有効値の書換えは起きない)。savedDates 未指定 (未知)
+          // は未保存とみなさず発火させない。窓外は prune 済みのため送らない。
+          // 訂正対象日は除外する (F-04 の管轄。fresh null の日に規則 (c) が
+          // 発火すると既存 NULL 行を fresh NULL で上書きしてしまう)。
+          (r.date <= existingMaxDate &&
+            (keepFrom === null || r.date >= keepFrom) &&
+            !(correctionDates?.has(r.date) ?? false) &&
+            savedDates !== undefined &&
+            !savedDates.has(r.date))
       )
     : snap.ohlcv6mo;
   return newOhlcv.map((r) => ({
@@ -2145,7 +2319,14 @@ export async function writeStockSnapshot(
   // 1 行 flush。回収パスとテストが使う。失敗したら throw (旧動作と同じ)。
   const failed = await flushSnapshots(
     db,
-    [{ snap, existingMaxDate, correctionDates: options.correctionDates }],
+    [
+      {
+        snap,
+        existingMaxDate,
+        correctionDates: options.correctionDates,
+        savedDates: options.savedDates,
+      },
+    ],
     options
   );
   if (failed.length > 0) throw new Error(failed[0].error);

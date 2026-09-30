@@ -15,6 +15,7 @@ import {
   assertResponsePriceCoherent,
   checkBarSelf,
   checkFreshClose,
+  guardChartBars,
   isProvenSamePoint,
   sanitizeBars,
 } from "./bar-sanity.js";
@@ -330,5 +331,29 @@ describe("isProvenSamePoint — meta 時刻と bar interval の同時点証明",
     expect(isProvenSamePoint(1757635200 - 1, 1757635200, 300)).toBe(false);
     // 旧 session (前日) の bar と現 meta は誤比較しない。
     expect(isProvenSamePoint(1757635200, 1757548800, 300)).toBe(false);
+  });
+});
+
+describe("guardChartBars — sanitize + 応答整合の共有適用", () => {
+  it("正常系列は全採用・meta 整合で通す", () => {
+    const bars = [bar({ date: "2026-09-28" }), bar({ date: "2026-09-29", close: 3710 })];
+    const r = guardChartBars(bars, 3710, "0000");
+    expect(r.bars).toHaveLength(2);
+    expect(r.rejected).toEqual([]);
+  });
+
+  it("出来高なしの桁跳びバーは落とし、残りは通す (fetchChart と同一)", () => {
+    const bars = [
+      bar({ date: "2026-09-28" }),
+      bar({ date: "2026-09-29", close: 16278046720, volume: 0 }),
+    ];
+    const r = guardChartBars(bars, 3700, "1909");
+    expect(r.bars.map((b) => b.date)).toEqual(["2026-09-28"]);
+    expect(r.rejected).toEqual([{ date: "2026-09-29", reason: "jump_without_volume" }]);
+  });
+
+  it("最新有効終値と meta の 10 倍超乖離 + 出来高なしは応答全体を拒否する", () => {
+    const bars = [bar({ date: "2026-09-29", close: 100, volume: 0 })];
+    expect(() => guardChartBars(bars, 5000, "7082")).toThrow(/10倍超乖離/);
   });
 });

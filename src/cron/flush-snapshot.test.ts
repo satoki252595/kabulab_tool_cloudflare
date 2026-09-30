@@ -5,7 +5,10 @@ import * as rsiSchema from "../../services/rsi-screening/src/db/schema.js";
 import * as swingSchema from "../../services/swing-trading/src/db/schema.js";
 import * as projectionSchema from "../shared/db/projection-schema.js";
 import {
+  collectOhlcvGapCandidates,
   flushSnapshots,
+  loadSavedOhlcvDates,
+  packOhlcvGapChunks,
   writeStockSnapshot,
   type FlushItem,
 } from "./daily.js";
@@ -259,5 +262,220 @@ describe("flushSnapshots の NULL 訂正再送 (F-04)", () => {
       correctionDates: new Set(["2026-09-09"]),
     });
     expect(ohlcvDates(calls)).toEqual(["2026-09-09"]);
+  });
+});
+
+describe("buildOhlcvRows の過去行不存在回収 (F-09 #163)", () => {
+  // makeSnap の ohlcv6mo は 9/08・9/09・9/10 (いずれも実終値あり)。
+  function ohlcvDates(calls: RecordedCall[]): string[] {
+    const pattern = /insert into "swing_daily_ohlcv"/i;
+    return calls
+      .filter((c) => pattern.test(c.sql))
+      .flatMap((c) => c.params)
+      .filter((p): p is string => typeof p === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p));
+  }
+
+  /** date 昇順の連番バー列を作る (窓テスト用)。 */
+  function series(from: string, n: number) {
+    const out: { date: string; open: number; high: number; low: number; close: number; volume: number; adj: number }[] = [];
+    const [y, m, d] = from.split("-").map(Number);
+    const base = Date.UTC(y, m - 1, d);
+    for (let i = 0; i < n; i++) {
+      const date = new Date(base + i * 86400000).toISOString().slice(0, 10);
+      out.push({ date, open: 100, high: 110, low: 90, close: 100 + (i % 7), volume: 1000, adj: 100 + (i % 7) });
+    }
+    return out;
+  }
+
+  it("watermark 進行後の 9/29 不存在を回収する", async () => {
+    const { db, calls } = makeRecordingDb();
+    const snap = makeSnap(1);
+    // watermark は 9/10 まで進行済み。9/09 行だけ不存在 (9/08・9/10 は保存済み)。
+    const failed = await flushSnapshots(
+      db,
+      [
+        {
+          target: { stockId: 1 },
+          snap,
+          existingMaxDate: "2026-09-10",
+          savedDates: new Set(["2026-09-08", "2026-09-10"]),
+        },
+      ],
+      { runStartedSec: 1 }
+    );
+    expect(failed).toEqual([]);
+    expect(ohlcvDates(calls)).toEqual(["2026-09-09"]);
+  });
+
+  it("保存済み集合にある日は送らない (既存有効行の保護)", async () => {
+    const { db, calls } = makeRecordingDb();
+    const failed = await flushSnapshots(
+      db,
+      [
+        {
+          target: { stockId: 1 },
+          snap: makeSnap(1),
+          existingMaxDate: "2026-09-10",
+          savedDates: new Set(["2026-09-08", "2026-09-09", "2026-09-10"]),
+        },
+      ],
+      { runStartedSec: 1 }
+    );
+    expect(failed).toEqual([]);
+    expect(ohlcvDates(calls)).toEqual([]);
+  });
+
+  it("savedDates 未指定では回収しない (旧動作・未知の扱い)", async () => {
+    const { db, calls } = makeRecordingDb();
+    const failed = await flushSnapshots(
+      db,
+      [{ target: { stockId: 1 }, snap: makeSnap(1), existingMaxDate: "2026-09-10" }],
+      { runStartedSec: 1 }
+    );
+    expect(failed).toEqual([]);
+    expect(ohlcvDates(calls)).toEqual([]);
+  });
+
+  it("保持 90 本窓より前の不存在は復活させない (prune 済み)", async () => {
+    const { db, calls } = makeRecordingDb();
+    const snap = makeSnap(1);
+    snap.ohlcv6mo = series("2026-05-01", 130);
+    const dates = snap.ohlcv6mo.map((b) => b.date);
+    const maxDate = dates[dates.length - 1];
+    // 先頭 40 本 (窓外) + 窓内 1 日を未保存にする。
+    const unsaved = new Set([dates[0], dates[100]]);
+    const saved = new Set(dates.filter((d) => !unsaved.has(d)));
+    const failed = await flushSnapshots(
+      db,
+      [{ target: { stockId: 1 }, snap, existingMaxDate: maxDate, savedDates: saved }],
+      { runStartedSec: 1 }
+    );
+    expect(failed).toEqual([]);
+    // 窓内の dates[100] だけ回収。窓外の dates[0] は送らない。
+    expect(ohlcvDates(calls)).toEqual([dates[100]]);
+  });
+
+  it("1 行 flush は options.savedDates を引き継ぐ (回収パス)", async () => {
+    const { db, calls } = makeRecordingDb();
+    await writeStockSnapshot(db, makeSnap(1), "2026-09-10", {
+      runStartedSec: 1,
+      savedDates: new Set(["2026-09-08", "2026-09-10"]),
+    });
+    expect(ohlcvDates(calls)).toEqual(["2026-09-09"]);
+  });
+
+  it("既存 NULL 行 + fresh null は全列送らない (F-04 契約の維持)", async () => {
+    const { db, calls } = makeRecordingDb();
+    const snap = makeSnap(1);
+    snap.ohlcv6mo[1].close = null;
+    snap.ohlcv6mo[1].open = null;
+    // 訂正対象 (既存 NULL 行)。保存済み集合に無くても規則 (c) は発火しない。
+    const failed = await flushSnapshots(
+      db,
+      [
+        {
+          target: { stockId: 1 },
+          snap,
+          existingMaxDate: "2026-09-10",
+          correctionDates: new Set(["2026-09-09"]),
+          savedDates: new Set(["2026-09-08", "2026-09-10"]),
+        },
+      ],
+      { runStartedSec: 1 }
+    );
+    expect(failed).toEqual([]);
+    expect(ohlcvDates(calls)).toEqual([]);
+  });
+
+  it("collectOhlcvGapCandidates: 窓内・watermark 以前・訂正対象外だけ抜く", () => {
+    const bars = series("2026-09-01", 100).map((b) => ({ ...b }));
+    // 末尾 12/09 が watermark。窓内 (9/11〜) の訂正 1 日を除外。
+    expect(collectOhlcvGapCandidates(bars, "2026-12-09", new Set(["2026-09-15"]))).toEqual(
+      bars
+        .slice(-90)
+        .map((b) => b.date)
+        .filter((d) => d !== "2026-09-15")
+    );
+    expect(collectOhlcvGapCandidates(bars, undefined, undefined)).toEqual([]);
+  });
+});
+
+describe("loadSavedOhlcvDates / packOhlcvGapChunks", () => {
+  function makeFakeDb(saved: ReadonlySet<string>): { db: Db; calls: RecordedCall[] } {
+    const calls: RecordedCall[] = [];
+    // 直積の過剰取得を含めて返す。本物 DB の代わりに JS 側の絞りを見る。
+    const db = drizzle(
+      async (sqlStr, params) => {
+        calls.push({ sql: sqlStr, params: [...params] });
+        const rows: unknown[][] = [];
+        for (const key of saved) {
+          const [stockId, date] = key.split("|");
+          rows.push([Number(stockId), date]);
+        }
+        return { rows };
+      },
+      {
+        schema: { ...coreSchema, ...rsiSchema, ...swingSchema, ...projectionSchema },
+      }
+    );
+    return { db: db as Db, calls };
+  }
+
+  it("空プローブは問合せなし", async () => {
+    const { db, calls } = makeFakeDb(new Set());
+    expect(await loadSavedOhlcvDates(db, [])).toEqual(new Map());
+    expect(calls).toHaveLength(0);
+  });
+
+  it("直積の過剰取得を絞り、行 0 件 stock は空 Set を残す (既知 empty)", async () => {
+    const saved = new Set(["1|2026-09-08", "1|2026-09-09", "2|2026-09-08", "2|2026-09-09", "3|2026-09-08"]);
+    const { db, calls } = makeFakeDb(saved);
+    const out = await loadSavedOhlcvDates(db, [
+      { stockId: 1, date: "2026-09-08" },
+      { stockId: 2, date: "2026-09-09" },
+      { stockId: 4, date: "2026-09-08" },
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(out.get(1)).toEqual(new Set(["2026-09-08"]));
+    expect(out.get(2)).toEqual(new Set(["2026-09-09"]));
+    // 行 0 件でも entry あり (既知 empty)。未プローブは entry なし (未知)。
+    expect(out.get(4)).toEqual(new Set());
+    expect(out.has(3)).toBe(false);
+    expect(out.has(5)).toBe(false);
+  });
+
+  it("実 3700 相当でも全 chunk が bind 100/文に収まり全プローブを網羅する", () => {
+    const dates: string[] = [];
+    const base = Date.UTC(2026, 5, 1);
+    for (let i = 0; i < 90; i++) {
+      dates.push(new Date(base + i * 86400000).toISOString().slice(0, 10));
+    }
+    const probes = [];
+    for (let stockId = 1; stockId <= 3700; stockId++) {
+      for (const date of dates) probes.push({ stockId, date });
+    }
+    const chunks = packOhlcvGapChunks(probes);
+    expect(chunks.length).toBeGreaterThan(0);
+    for (const c of chunks) {
+      expect(c.stockIds.length + c.dates.length).toBeLessThanOrEqual(100);
+    }
+    const covered = new Set<string>();
+    for (const c of chunks) {
+      for (const w of c.wanted) {
+        expect(covered.has(w)).toBe(false);
+        covered.add(w);
+      }
+    }
+    expect(covered.size).toBe(probes.length);
+  });
+
+  it("1 銘柄 90 日は 1 文 (91 bind) に収まる", () => {
+    const probes = [];
+    for (let i = 0; i < 90; i++) {
+      probes.push({ stockId: 7, date: `2026-06-${String(i + 1).padStart(2, "0")}` });
+    }
+    const chunks = packOhlcvGapChunks(probes);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].stockIds.length + chunks[0].dates.length).toBe(91);
   });
 });
