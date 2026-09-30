@@ -39,8 +39,9 @@ same-bytes のみで primary-qualified と呼ばない。
 - OFFLINE_CANDIDATE_UNSTRUCTURED (32):
   custody + provenance + expected empty facts (非空は HOLD) +
   full CAS + honbun 在否。数値なき unknown-state 候補として
-  numeric 12 と分離。live Q2 行 (4–7 行/通) が存在するため
-  数値削除は提案しない (status-level 扱いは Root 決定)。
+  numeric 12 と分離。承認済み unknown-empty 契約を適用:
+  empty facts + honest status + scoped L2 での unqualified
+  old projection 除去 (fake-zero なし・旧値全否定なし)。
 - LIMIT: 0 (NO_JOURNAL/PREIMAGE_GAP/CAS_GAP/UNIT_GAP/
   KIND_UNKNOWN/LITERAL_UNCONFIRMED/SOURCE_CONTEXT_UNAVAILABLE/
   PROVENANCE_GAP/UNEXPECTED_FACTS のいずれも該当なし)。
@@ -111,6 +112,11 @@ S100YDNF, S100YJKO。
   pre-write SELECT 照合は必要だが単独では race-proof でない
   ため不十分。batch 原子性の根拠は repo 実証注記 + binding 文書
   (REST 文書に明文なし・provenance として明示)。
+  DELETE 後に OLD Q2 guard を再評価しない (insert/doc 更新の
+  失敗または partial no-op を招く)。initial full prestate の
+  guard assertion + 既存 json-error mechanism/batch による
+  atomic rollback を再使用。具体 SQL は適用前に review。
+  live 0 (executor 未実装)。
 - 失敗方針 (提案): per-doc CAS-HOLD は skip 継続・
   輸送/unknown は ABORT。Unknown 再送なし。
   packet は入力 pins であり live state ではない。
