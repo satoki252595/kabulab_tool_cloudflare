@@ -10,7 +10,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
-- 優待 company 値の共有厳密判定を追加: 要約取込と full-import carry が同じ純関数で額面 scope・同一 clause の積・tier/月混在・複数額面を検証し、不認定は値ごと null で戻す (provenance 付け替え温存なし)。未対応出典・解釈食い違いは削除前に STOP。生産ガードの 50 行再判定は QUALIFIED 8/HOLD 42 (人手監査 rev2 の 16/34 とは tier/cross-clause/≒ の機械判定差。7075 の raw 対 DB 陳腐値は別 gate)。データ変更なし (Refs #146 #102)。
+- 優待 company 値の共有厳密判定を追加: 要約取込と full-import carry が同じ純関数で額面 scope・同一 clause の積・tier/月混在・複数額面を検証する。不認定の取扱いは経路で異なる — 要約取込は結果全体を reject して現行行を温存する (既存の financial data を修復しない)、carry のみ値と出典を null で戻す (要約は保持、provenance 付け替え温存なし)。未対応出典・解釈食い違いは削除前に STOP。生産ガードの 50 行再判定は QUALIFIED 8/HOLD 42 (人手監査 rev2 の 16/34 とは tier/cross-clause/≒ の機械判定差。7075 の raw 対 DB 陳腐値は別 gate)。データ変更なし (Refs #146 #102)。
 - マクロ行キーの日時正準化と原本保管: 行キーは GSPC 確定バー日、N225/VIX 確定日と VI 日付が一致し必須値が揃うときだけ保存 (不一致・不足は HOLD で前回値保持)。最終 draft と同一 generation の chart 原文 4 + VI HTML + manifest を `macro-source-batch-*` に保管し strict readback 通過後のみ D1 保存 (保管失敗は throw)。`previousClose` は source 明示値のみ (補完 chain 削除)。データ変更なし (Refs #163)。
 - 株式 guard の全 stock パス共有: 時間窓・N225 対象日/fresh-close・銘柄別 targetDate・完了期限を default パスにも適用 (stocksOnly はマクロ有無のみ)。`expectedDate` 必須化と `dataDate` 代替の除去。データ変更なし (Refs #163)。
 - 優待 144 銘柄の fresh 監査を frozen probe の 8 read-only SELECT で実測し FRESH_MATCH (content 差 0・drift 0・実送信 0、FT 62 全適用済み・normal 37/50 一致)。証跡 11 件は private + Notion 一次データ保管。doc `docs/test-logs/yutai-fresh-audit-proof-20260930.md`。データ変更なし (Refs #146 #102)。
