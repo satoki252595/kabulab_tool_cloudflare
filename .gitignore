@@ -139,6 +139,11 @@ services/moneyflow/tests/fixtures/*.pdf
 # 007 vwap-analysis — 上と同じ理由 (JPX 信用残 PDF は personal-only)。
 # 取得は README.md の手順。未取得の環境ではフィクスチャテストが skip する。
 services/vwap-analysis/tests/fixtures/*.pdf
+# 007 vwap-analysis — R2 実 excerpt (自 bucket 保存物の写し。PUBLIC repo のため commit しない)。
+# 由来・SHA は tests/fixtures/README.md。未取得の環境ではフィクスチャテストが skip する。
+services/vwap-analysis/tests/fixtures/r2-*.json
+# 007 vwap-analysis — Yahoo 応答実 bytes (parse/proof の実証用。commit しない。同上)。
+services/vwap-analysis/tests/fixtures/yahoo-*.json
 
 # 008 moneyflow Phase 2〜5 の取得元フィクスチャ (実ファイル)。このリポジトリは PUBLIC。
 # personal-only・利用条件要確認・再配布不可の取得元の実ファイルは private/ に置き commit しない

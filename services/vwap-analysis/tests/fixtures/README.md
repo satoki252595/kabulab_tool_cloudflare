@@ -32,3 +32,33 @@ curl -s -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
 未取得の環境では `lib/margin.test.ts` のフィクスチャテストは `describe.skipIf`
 で **skip** する (fail ではない)。ファイル名の週が変わった場合はテスト内の
 定数 (バイト数・SHA256・week・行数) を合わせて更新すること。
+
+## R2 実 excerpt (basis proof の実証用。commit しない)
+
+- `r2-daily-7203.json` — R2 `daily/7203.json` 保存物の写し
+  (由来 `/tmp/audit-b/r2/daily-7203.json`・2026-09-28 取得・224,008 bytes・
+  SHA256 `2a727f0665ba53e78da50944e58714271f20d26e6ad7e9b296dcd5a21e0c8efc`。
+  code 7203・bars 2529 (2016-06-20..2026-09-25)・splits []・
+  updated 2026-09-25T13:41:14.066Z・proof なし legacy 形)。
+  用途: 同一 cached 再観測の PUT0/standing bytes 不変 regression、
+  strict 保存形状の実適合、legacy (proof 欠落) HOLD。
+- `r2-intra-7203.json` — R2 `intra/7203.json` の写し
+  (由来 `/tmp/audit-b/r2/intra-7203.json`・2026-09-28 取得・525,727 bytes・
+  SHA256 `628dfb7fef7a0b8b0dabc09a35198e43d26b2cfa6d28ea2a6f92c939972ff6d1`。
+  code 7203・bars 7871 (sessions 121・2026-03-25..09-25)・
+  updated 2026-09-25T14:22:51.453Z)。用途: HOLD/適格の実 window。
+- `r2-intra-3600.json` — R2 `intra/3600.json` の写し
+  (由来 `/tmp/audit-b/r2/intra-3600.json`・2026-09-28 取得・7,694 bytes・
+  SHA256 `c369a2081a116e817b9a44bdf842609168e52a1a70ffbd61b35acc4117814466`。
+  code 3600・bars 123 (sessions 61・2026-03-25..09-18))。用途: 第二実 window。
+- `yahoo-5y-7203.json` — Yahoo chart 5y 応答実 bytes (7203.T)
+  (由来 `/tmp/audit-b/yahoo-5y/7203.json`・2026-09-28 取得・
+  SHA256 `0db61a252127532d33ae2c486836fd7e5aad5adf17c223903c9e2c36d3a0f023`。
+  1222 ts (2021-09-28..2026-09-28)・splits [2021-09-29 5:1])。
+  用途: 実 parse→proof→適格 positive。observedAt は取得 mtime 代理
+  (2026-09-28T08:54:58Z。市場証拠ではなく clock 表示用)。
+- `yahoo-7944-10y.json` — Yahoo chart 10y 応答実 bytes (7944.T)
+  (由来 adj-repair 取得 acq-7944.bin・151,523 bytes・
+  SHA256 `0b35e0df364f0b0c34ebc92ff9504104e22bdad02abe97beb7bce86be0431e5d`・
+  body 完了 2026-09-30T11:01:08.585Z。2462 ts・splits なし)。
+  用途: 実 bytes の adj demotion 証明 (GET0 再利用)。

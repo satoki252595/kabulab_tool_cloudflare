@@ -29,7 +29,7 @@ function chartJson(over: Record<string, unknown> = {}) {
     chart: {
       result: [
         {
-          meta: { symbol: "7203.T", regularMarketPrice: 105 },
+          meta: { symbol: "7203.T", range: "10y", regularMarketPrice: 105 },
           timestamp: [1757548800, 1757635200],
           indicators: {
             quote: [
@@ -92,19 +92,26 @@ describe("fetchYahooChartRaw", () => {
 });
 
 describe("fetchDaily", () => {
-  it("バー・分割・JST・adj を旧実装どおり整形する", async () => {
+  it("バー・分割・JST を旧実装どおり整形する (adj は持たない)", async () => {
     useProxy();
     stubChart(chartJson());
-    const { bars, splits } = await fetchDaily("7203.T");
+    const { bars, splits, proof } = await fetchDaily("7203.T");
     expect(bars).toHaveLength(2);
     // JST 変換 (ts + 9h の日付)
     expect(bars[0].date).toBe("2025-09-11");
     expect(bars[0]).toMatchObject({ o: 100, h: 110, l: 90, c: 105, v: 1000 });
-    expect(bars[0].adj).toBe(104);
+    expect("adj" in bars[0]).toBe(false);
     expect(splits).toEqual([{ date: "2025-09-11", ratio: 2 }]);
+    // proof 配管 (stub bytes 由来の実配線。市場値の主張ではない)。
+    expect(proof.requestedRange).toBe("10y");
+    expect(proof.symbol).toBe("7203.T");
+    expect([proof.firstTs, proof.lastTs]).toEqual([1757548800, 1757635200]);
+    expect(proof.splits).toEqual([{ date: "2025-09-11", ratio: 2 }]);
+    expect(proof.rawSha).toMatch(/^[0-9a-f]{64}$/);
+    expect(Number.isFinite(Date.parse(proof.observedAt))).toBe(true);
   });
 
-  it("保存候補行の adj 欠落は c 補完せず応答全体を拒否する (Sol 裁定)", async () => {
+  it("adj 欠落は OHLCV 採用を block しない (VWAP demotion。Sol 裁定の対象外)", async () => {
     useProxy();
     stubChart(
       chartJson({
@@ -122,8 +129,11 @@ describe("fetchDaily", () => {
         },
       })
     );
-    // 0 本目は OHLCV 揃い + adj null → throw。c 代用も行 skip もしない。
-    await expect(fetchDaily("7203.T")).rejects.toThrow(/adj 欠落/);
+    // 0 本目は OHLCV 揃い → 採用 (adj なし)。1 本目は OHLCV null で脱落。
+    const { bars } = await fetchDaily("7203.T");
+    expect(bars).toHaveLength(1);
+    expect(bars[0]).toMatchObject({ o: 100, h: 110, l: 90, c: 105, v: 1000 });
+    expect("adj" in bars[0]).toBe(false);
   });
 
   it("result 欠落は空で返さず落とす。quote 欠落も落とす", async () => {
@@ -146,7 +156,19 @@ describe("fetchDaily", () => {
         },
       })
     );
-    expect(await fetchDaily("7203.T")).toEqual({ bars: [], splits: [] });
+    expect(await fetchDaily("7203.T")).toEqual({
+      bars: [],
+      splits: [],
+      proof: {
+        observedAt: expect.any(String),
+        rawSha: expect.any(String),
+        requestedRange: "10y",
+        symbol: "7203.T",
+        firstTs: null,
+        lastTs: null,
+        splits: [],
+      },
+    });
   });
 
   it("chart.error 併存は result があっても採用しない (値は出さない)", async () => {
@@ -262,7 +284,7 @@ describe("fetchDaily", () => {
     const day = (s: string) => Date.parse(`${s}T00:00:00Z`) / 1000;
     const lv = [16280000512, 16280000512, 16280000512, null];
     return chartJson({
-      meta: { symbol: "1909.T", regularMarketPrice: 3700 },
+      meta: { symbol: "1909.T", range: "10y", regularMarketPrice: 3700 },
       timestamp: [
         day("2026-09-10"),
         day("2026-09-11"),
@@ -292,7 +314,7 @@ describe("fetchDaily", () => {
     const day = (s: string) => Date.parse(`${s}T00:00:00Z`) / 1000;
     const dates = ["2026-09-24", "2026-09-25"].slice(0, over.closes.length);
     return chartJson({
-      meta: { symbol: "7203.T", regularMarketPrice: over.metaPrice },
+      meta: { symbol: "7203.T", range: "10y", regularMarketPrice: over.metaPrice },
       timestamp: dates.map(day),
       indicators: {
         quote: [
@@ -375,11 +397,11 @@ describe("fetchDaily", () => {
     await expect(fetchDaily("7203.T")).rejects.toThrow(/非有限/);
   });
 
-  it("実在 adj の非正は拒否し、adj 欠落は c 代用で通す", async () => {
+  it("adjclose の非正は OHLCV 採用を block しない (VWAP demotion。7944 類型)", async () => {
     useProxy();
     stubChart(
       chartJson({
-        meta: { symbol: "7203.T", regularMarketPrice: 105 },
+        meta: { symbol: "7203.T", range: "10y", regularMarketPrice: 105 },
         indicators: {
           quote: [
             {
@@ -394,14 +416,16 @@ describe("fetchDaily", () => {
         },
       })
     );
-    await expect(fetchDaily("7203.T")).rejects.toThrow(/raw adj\[1\] が非正/);
+    const { bars } = await fetchDaily("7203.T");
+    expect(bars).toHaveLength(2);
+    expect(bars.every((b) => !("adj" in b))).toBe(true);
   });
 
-  it("保存候補行の adj 欠落は throw (c 代用なし・行 skip なし)", async () => {
+  it("adjclose の欠落は OHLCV 採用を block しない (VWAP demotion)", async () => {
     useProxy();
     stubChart(
       chartJson({
-        meta: { symbol: "7203.T", regularMarketPrice: 105 },
+        meta: { symbol: "7203.T", range: "10y", regularMarketPrice: 105 },
         indicators: {
           quote: [
             {
@@ -416,16 +440,16 @@ describe("fetchDaily", () => {
         },
       })
     );
-    // OHLCV 揃い + adj null → 応答全体を拒否。呼び出し側は当該 stock
-    // PUT0/errors/exit1 (既経路 reuse)。
-    await expect(fetchDaily("7203.T")).rejects.toThrow(/adj 欠落/);
+    const { bars } = await fetchDaily("7203.T");
+    expect(bars).toHaveLength(2);
+    expect(bars.every((b) => !("adj" in b))).toBe(true);
   });
 
-  it("実在 adj はそのまま保存する (c と異なる値で代用なしを証明)", async () => {
+  it("正規化 bar は OHLCV のみを持つ (adj 非保存・c 置換なし)", async () => {
     useProxy();
     stubChart(
       chartJson({
-        meta: { symbol: "7203.T", regularMarketPrice: 105 },
+        meta: { symbol: "7203.T", range: "10y", regularMarketPrice: 105 },
         indicators: {
           quote: [
             {
@@ -441,7 +465,8 @@ describe("fetchDaily", () => {
       })
     );
     const { bars } = await fetchDaily("7203.T");
-    expect(bars.map((b) => b.adj)).toEqual([95, 96]);
+    expect(Object.keys(bars[0]).sort()).toEqual(["c", "date", "h", "l", "o", "v"]);
+    expect(bars.map((b) => b.c)).toEqual([105, 106]);
   });
 });
 

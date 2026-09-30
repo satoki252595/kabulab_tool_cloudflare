@@ -1,18 +1,18 @@
 /**
- * Daily adj 修復の whole-post rebuild (純関数)。
+ * Daily whole-post rebuild (純関数。VWAP adj demotion 済み)。
  *
- * 対象: 保存済み daily object の stored adj<=0 の 3 件 (7944/8303/8919)。
+ * 対象: 保存済み daily object の再構築 (7944/8303/8919 を含む)。
  * fresh Yahoo 10y (既存 fetchDaily 全 guard 済み) で whole post を再構築する。
  * 既存 schema/merge/identity/finite guard のみ reuse し、新規検証枠は作らない。
+ * adj は金融入力に使わない (旧 bytes の adj は原文保管として温存し検証しない)。
  *
  * 契約:
  * - range {from,to} は要求 10y の frozen 明示指定 (既定なし。fresh 先頭日
  *   からの導出は禁止)。range 外の旧 bar は明示破棄 (件数+端を報告)。
  *   range 内旧 bar は qualified fresh で完全置換するまで保護する:
  *   実在旧 in-range 日付が fresh に欠ければ一律 HOLD (throw)。
- *   旧不良 (adj<=0) 行も除外しない (修復対象日の silent drop 防止)。
- * - fresh 不合格 (非正 adj・欠落・契約外・重複・splits 不正) は HOLD。
- *   adj 補完・close 代用・null 合成はしない。
+ *   旧不良行も除外しない (修復対象日の silent drop 防止)。
+ * - fresh 不合格 (OHLCV 非有限・非正・欠落・契約外・重複・splits 不正) は HOLD。
  * - 候補 post は既存 assertSavedDailyShape で最終証明する。
  * - 価格値は出さない (件数・日付・成否のみ)。
  */
@@ -20,6 +20,7 @@ import {
   assertSavedDailyShape,
   findInvalidBars,
   isCalendarDate,
+  type DiscardedOutOfRange,
   type SavedDaily,
 } from "./ingest-guard.js";
 import type { DailyResult } from "../../../src/shared/yahoo/client.js";
@@ -31,7 +32,7 @@ export type RepairPost = {
   postJson: string;
   freshFirst: string;
   freshLast: string;
-  discardedOutOfRange: { count: number; first: string | null; last: string | null };
+  discardedOutOfRange: DiscardedOutOfRange;
   supersededInRange: number;
 };
 
@@ -65,9 +66,9 @@ export function buildRepairPost(args: {
   const oldBars = (o as { bars?: unknown }).bars;
   if (!Array.isArray(oldBars)) hold("old bars 非配列");
 
-  // fresh 全 bar の有限・正値・adj 正値 (既存 guard reuse)。
+  // fresh 全 bar の有限・正値 (既存 guard reuse。adj は金融入力に使わない)。
   const bad = findInvalidBars(
-    fresh.bars.map((b) => ({ o: b.o, h: b.h, l: b.l, c: b.c, v: b.v, adj: b.adj }))
+    fresh.bars.map((b) => ({ o: b.o, h: b.h, l: b.l, c: b.c, v: b.v }))
   );
   if (bad.length > 0) {
     const fams = [...new Set(bad.flatMap((b) => b.reasons.map((r) => r.split(":")[0])))].sort();
@@ -111,12 +112,13 @@ export function buildRepairPost(args: {
     hold(`in-range 旧 ${missingOld.length} 件が fresh に欠落 (${head}${missingOld.length > 10 ? "…" : ""})`);
   }
 
-  // 候補 post を既存保存形状で最終証明する。
+  // 候補 post を既存保存形状で最終証明する。fresh の proof をそのまま継承する。
   const candidate = JSON.stringify({
     code,
     updated: updatedAt,
     bars: fresh.bars,
     splits: fresh.splits,
+    proof: fresh.proof,
   });
   const post = assertSavedDailyShape(candidate, `daily/${code}.json`, code);
   return {
