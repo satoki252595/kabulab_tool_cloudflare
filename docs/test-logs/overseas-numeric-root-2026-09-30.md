@@ -40,6 +40,16 @@ elim 脚に混ぜて照合していた。`proof.reconciliationAdjustment` は
   metric/header/aggregate に限定し、部分一致の metric 免除はしない
   (exact `^(売上高|売上収益|営業収益|営業利益|事業利益)$` のみ)。
   `事業収益合計` のような substring は HOLD 側の対照 (YR3G)。
+- 短行 missing (Root 最終指摘。same missing-leaf root):
+  `row.length <= vc` の無言 skip を廃し、短行を missing cell として
+  共通分類へ通す (`row[vc] ?? ""` → null。dash/空セルと同一 path)。
+  tableToGridExpanded は行ごとの幅で push し全表 padding しないため
+  到達可能。header/axis 外除外は保持。空行は従来どおり skip。
+- firstNum 境界 guard (同上): 先頭地域行が全 null/短行で firstNum より
+  上に吸収されても known 地域を missing 検査から除外しない。
+  firstNum/header/vc の推定契約は不変。header 列見出し文面は
+  roles[] (col-0 行軸分類) に現れないため対象外。除外範囲は
+  roles other のため自然に除く。
 - 保持する除外: section 除外・header 上・集計/小計・消去・P/L guard・
   集計後 block・metric 列・集合表題/脚注・null その他の収益の
   bridge-0。`classifyRegion` 自体は不変 (受注 path 影響 0)。
@@ -71,15 +81,21 @@ elim 脚に混ぜて照合していた。`proof.reconciliationAdjustment` は
   の labeled HOLD、VI7V/VI6W/QHYM/LN1R の product-block HOLD、
   YR3G `事業収益合計` の substring 非免除対照、QIEX null
   その他の収益の bridge-0 免除。flips-solely-on-proven-metric 0。
-- `overseas-parser.test.ts` 128 passed (fallback・対照含む最終)。
+- 短行・境界の pin (実 fixture の欠落 mutation。値の捏造なし):
+  W1LQ 中国行の末尾値欠落 → 短行 missing HOLD、W1LQ 日本行の値欠落 →
+  境界 guard HOLD (途中欠落の対照)、VI7V 製品行の短行化 → missing
+  HOLD (ラベル集合は有値 5512 と同一、amount のみ null)。
+- `overseas-parser.test.ts` 131 passed (短行・境界含む最終)。
   typecheck + lint clean。
 
 ## 59 gate (新 parser vs sealed。offline)
 
-- MATCH 22/59。STATUS flip ok→unstructured 25 件 (全件に
+- MATCH 15/59。STATUS flip ok→unstructured 32 件 (全件に
   incomplete 記録あり)。scope-only 12 件 (Gate0 のまま)。
+  (22/25/12 は fallback 前の中間値のため historical。)
 - flip 内訳 (doc): bare-Other 主導 21 件、既知 leaf 欠損 4 件
-  (北米 dash 級)。cause cells: その他 30・その他の地域 8・北米 4。
+  (北米 dash 級)、product-block (fallback) 7 件 (metricpair 系)。
+  cause cells: その他 30・その他の地域 8・北米 4・製品 6label×7。
 - gate と capture の status/count 不一致 0。
 - 例: Y53G は 2 表 HOLD + clean 表採用 (設計どおりの survivor)。
 
@@ -87,7 +103,8 @@ elim 脚に混ぜて照合していた。`proof.reconciliationAdjustment` は
 
 - 最終 freeze SHA `bb1cccb1…` (3602 行 JSONL)。AGREE 3602/3602、
   error 0、gate/capture 不一致 0。新規 HOLD の全件に labeled
-  incomplete 記録あり (empty 0)。
+  incomplete 記録あり (empty 0)。短行・境界 guard 追加後の再 run も
+  byte-identical (両 guard は corpus で発火 0。armed のまま)。
 - 新規 HOLD (ok→unstructured) 1487 件 (rows 1289 + cols 198)。
   (中間値 1391 は fallback 前のため historical。freeze が正。)
 - 逆 flip (un→ok の clean survivor) 36 件 (rows 33 + cols 3)。

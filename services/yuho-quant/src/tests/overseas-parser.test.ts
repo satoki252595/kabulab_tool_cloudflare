@@ -328,6 +328,73 @@ describe("P-2D/P-hier/P-metric: 証明できる重複は正しく読む", () => 
   });
 });
 
+describe("短行・先頭吸収の missing 検査 (欠損 leaf の黙殺防止)", () => {
+  /**
+   * 実 fixture の指定行から末尾 td を n 個落とす (値の捏造なし。
+   * 欠落 mutation のみ)。対象行は一意でなければ throw する。
+   */
+  function dropLastTds(html: string, anchor: string, n: number, extra?: string): string {
+    const rs = html.match(/<tr[\s\S]*?<\/tr>/g) ?? [];
+    const hits = rs.filter((r) => r.includes(anchor) && (!extra || r.includes(extra)));
+    if (hits.length !== 1) throw new Error(`row not unique: ${anchor} x${hits.length}`);
+    const row = hits[0];
+    const tds = row.match(/<td[\s\S]*?<\/td>/g) ?? [];
+    return html.replace(row, row.slice(0, row.indexOf(tds[tds.length - n])) + "</tr>");
+  }
+
+  it("S100W1LQ 途中地域行の末尾値cell欠落は短行 missing として HOLD (旧: 無言 skip)", () => {
+    // 中国行の末尾 9,974 を落とすと vc=5 に対して短行。tableToGridExpanded は
+    // 行ごとの幅で push し全表 padding しないため到達可能。欠損 leaf として HOLD。
+    const html = dropLastTds(fx("georows-america-othernorth-europe-S100W1LQ.html"), "中国", 1);
+    const capture: OverseasCapture = { status: null, stopReason: null, candidates: [] };
+    const r = parseOverseasHtml(html, "2025-03-31", { capture });
+    expect(r.status).toBe("geo_present_unstructured");
+    expect(r.facts).toHaveLength(0);
+    expect(capture.incomplete).toEqual([
+      { start: 450, kind: "rows", labels: ["中国"], amount: null },
+    ]);
+  });
+
+  it("S100W1LQ 先頭地域行の値欠落は firstNum 吸収されず HOLD (境界 guard。途中欠落の対照)", () => {
+    // 日本行の値セルを全欠落 → firstNum が中国行へずれる。境界 guard が
+    // 先頭の日本を missing 検査から除外しない。firstNum/header/vc 契約は不変。
+    const html = dropLastTds(fx("georows-america-othernorth-europe-S100W1LQ.html"), "日本", 5);
+    const capture: OverseasCapture = { status: null, stopReason: null, candidates: [] };
+    const r = parseOverseasHtml(html, "2025-03-31", { capture });
+    expect(r.status).toBe("geo_present_unstructured");
+    expect(r.facts).toHaveLength(0);
+    expect(capture.incomplete).toEqual([
+      { start: 450, kind: "rows", labels: ["日本"], amount: null },
+    ]);
+  });
+
+  it("S100VI7V unknown 製品行の短行は missing として HOLD (有値 5512 の対照)", () => {
+    // 売上高行×3 + rowspan-carry の営業利益行×3 (grid 8cell) の末尾値セルを
+    // 落として短行化する。ラベル集合は有値 HOLD と同一、amount のみ null。
+    // (物流ラベルは素片が markup 分割のため「物流」で anchor する。)
+    let html = fx("georows-metricpair-S100VI7V.html");
+    for (const p of ["警備輸送", "重量品建設", "物流"]) {
+      html = dropLastTds(html, p, 3, "売上高");
+    }
+    const trs = html.match(/<tr[\s\S]*?<\/tr>/g) ?? [];
+    const prodEiei = trs.filter(
+      (r, i) => i >= 12 && r.includes("営業利益") && !r.includes("売上高")
+    );
+    expect(prodEiei).toHaveLength(3);
+    for (const row of prodEiei) {
+      const tds = row.match(/<td[\s\S]*?<\/td>/g) ?? [];
+      html = html.replace(row, row.slice(0, row.indexOf(tds[tds.length - 3])) + "</tr>");
+    }
+    const capture: OverseasCapture = { status: null, stopReason: null, candidates: [] };
+    const r = parseOverseasHtml(html, "2022-12-31", { capture });
+    expect(r.status).toBe("geo_present_unstructured");
+    expect(r.facts).toHaveLength(0);
+    expect(capture.incomplete).toEqual([
+      { start: 479, kind: "rows", labels: ["警備輸送", "警備輸送", "重量品建設", "重量品建設", "物流サポート", "物流サポート"], amount: null },
+    ]);
+  });
+});
+
 describe("保存前検証: caller 共通境界は壊れた集合を保存させない", () => {
   // 実 parse 出力への破壊注入 (negative)。正常系は各回復テストで通す。
   // proof は必須 (facts-only は STOP)。正常系は parse 出力の proof を渡す。

@@ -904,10 +904,27 @@ function tryGeoRows(
   // 4953 を地域に混入させない)。小計は block 終端ではなく block 内区切り。
   let seenAggRow = false;
 
+  // 境界 guard: 先頭地域行が全 null/短行で firstNum より上に吸収されても、
+  // known 地域の missing 検査から除外しない (欠損 leaf の黙殺防止)。
+  // firstNum/header/vc の推定契約は不変。header 自体の列見出し文面は
+  // roles[] (col-0 行軸ラベルの分類) に現れないため対象外。除外範囲は
+  // roles が other のため自然に除く。pre-firstNum 行に数値はないため
+  // vc 値は必然 null (missing 扱い)。
+  for (let i = 0; i < firstNum; i++) {
+    const leadRole = roles[i];
+    if (leadRole === "domestic" || leadRole === "overseas") {
+      incompleteMissingLabels.push(cleanLabel(gridX[i][0] ?? ""));
+    }
+  }
+
   for (let i = firstNum; i < gridX.length; i++) {
     if (excluded.has(i)) continue;
     const row = gridX[i];
-    if (row.length <= vc) continue;
+    // 短行は missing cell として共通分類へ通す (tableToGridExpanded は
+    // 行ごとの幅で push し全表 padding しないため到達可能。欠損 leaf の
+    // 黙殺防止)。row[vc] ?? "" → null で dash/空セルと同一 path に載る。
+    // header/axis 外は上の excluded で保持。空行は fallback の非空条件で
+    // 従来どおり skip (classifyRegion("") は other)。
     const role = roles[i];
     const cell = parseJpNumberCell(row[vc] ?? "");
     const v = cell?.value ?? null;
