@@ -129,7 +129,8 @@ export type ZeroSplitReason =
  *   時刻の直接比較は同日最終 session を誤却下するため)。
  * - intra の全 sessions が daily bar 日付に存在する。
  * - daily.splits が proof.splits と完全一致する。
- * - proof splits が窓と交差しない。
+ * - 保存窓の初日から日足の最終日までに分割がない。窓終了後の分割も
+ *   現在の日足との株数基準を変えるため、未確認の旧5分足を適格にしない。
  * - proof.requestedRange が "10y" (full-10y のみ。構造の後・最後に見る)。
  * daily bars/splits は検証済み (isDailyBarShape 等) のものを受け取る。
  */
@@ -167,9 +168,8 @@ export function zeroSplitCovered(
     }
   }
   const first = window.sessions[0];
-  const last = window.sessions[window.sessions.length - 1];
   for (const s of proof.splits) {
-    if (s.date >= first && s.date <= last) return { ok: false, reason: "in-window-split" };
+    if (s.date >= first && s.date <= barLast) return { ok: false, reason: "in-window-split" };
   }
   // full-10y のみ適格。最後に置く: 構造 HOLD の診断を range で潰さない。
   // (API 境界は provenance を先に見る。両層で見るのが契約)。
