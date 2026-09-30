@@ -10,6 +10,8 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 ## 2026-09-30
 
 ### 変更
+- 優待 full-import の write/end・write-error/end に post-image 利回り・スコア追随を追加 (既存 builders のみ。新規 financial SQL/計算なし): scope は優待保持∪今回取得∪利回り残存で廃止・中断の stale を修復。個別失敗が残れば再計算適用後に明示の部分失敗を投げて成功完了にせず、銘柄は全行成功でのみ imported に数える。書き込み前 STOP では走らせない。書くのは yield+fetched_at/score3 のみ (price/data_date 不変)。データ変更なし (Refs #146 #102)。
+- 優待 company 値の共有厳密判定を追加: 要約取込と full-import carry が同じ純関数で額面 scope・同一 clause の積・tier/月混在・複数額面を検証する。不認定の取扱いは経路で異なる — 要約取込は結果全体を reject して現行行を温存する (既存の financial data を修復しない)、carry のみ値と出典を null で戻す (要約は保持、provenance 付け替え温存なし)。未対応出典・解釈食い違いは削除前に STOP。生産ガードの 50 行再判定は QUALIFIED 8/HOLD 42 (人手監査 rev2 の 16/34 とは tier/cross-clause/≒ の機械判定差。7075 の raw 対 DB 陳腐値は別 gate)。データ変更なし (Refs #146 #102)。
 - マクロ行キーの日時正準化と原本保管: 行キーは GSPC 確定バー日、N225/VIX 確定日と VI 日付が一致し必須値が揃うときだけ保存 (不一致・不足は HOLD で前回値保持)。最終 draft と同一 generation の chart 原文 4 + VI HTML + manifest を `macro-source-batch-*` に保管し strict readback 通過後のみ D1 保存 (保管失敗は throw)。`previousClose` は source 明示値のみ (補完 chain 削除)。データ変更なし (Refs #163)。
 - 株式 guard の全 stock パス共有: 時間窓・N225 対象日/fresh-close・銘柄別 targetDate・完了期限を default パスにも適用 (stocksOnly はマクロ有無のみ)。`expectedDate` 必須化と `dataDate` 代替の除去。データ変更なし (Refs #163)。
 - 母集団 universe の月次 stale 窓を JPX 公式 3 頁 (上場廃止/新規上場/市場区分変更) の日次 overlay で補正する PREP (収集・厳密 parse・宣言被覆・世代管理・HOLD/不完全失敗・月次 deferral・daily/monthly 配線・0025 migration)。IPO 分類は Basic 証拠 mechanism (3 段収集・composer custody+readback・planner gate・clock guard) を接続、9/9 captured positive (ledger+readback 済み)。reviewed qualification input は Root 承認待ちのため未配線=該当 cycle は HOLD。本番適用なし、データ変更なし (Refs #196)。
