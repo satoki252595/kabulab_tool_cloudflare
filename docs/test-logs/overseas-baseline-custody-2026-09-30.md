@@ -91,8 +91,11 @@ private 0600 のみ。
   join 成果物に確定 (executor guard 入力・書込 0)。
   旧 1687/1695 は使わない (join 実結果のみ)。
 - current compare (frozen parser × NEW live) は別記録に確定
-  (MATCH 494・CHANGED 3181・L2 affected 520・bounded 20/40 提案)。
+  (actuals: journal 3654 verbatim + fresh parse 21・LIMIT 0。
+  MATCH 494・CHANGED 3181・L2 affected 520・bounded 20/40 提案)。
   証跡 `docs/test-logs/overseas-current3675-compare-2026-09-30.md`。
+- facts→DB 変換は共有正準 helper に集約
+  (`overseas-save-rows.ts`・5 callers 同一関数・test 8 passed)。
 
 ## 73 pin-inspection (local・fetch 0・確定)
 
