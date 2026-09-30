@@ -16,9 +16,10 @@ private 0600 のみ。
 - ZIP (stdlib・deterministic・rebuild 同一 SHA):
   `freshread-baseline-20260930.zip` 16579214 bytes
   `e8948dc3…4292f99` (0600)。
-- members 160: capture-union/manifest/live/report + attempt.log +
+- ZIP 160 members = payload 159 + member-list 1。
+  payload: capture-union/manifest/live/report + attempt.log +
   raw body 74 + markers 74 + preflight/stdout/run-record/packet/chunks +
-  baseline-pins.json + member-list.json (payload のみ・self-hash なし)。
+  baseline-pins.json。member-list は payload のみ列挙 (self-hash なし)。
 - immutableKey: `freshread-baseline-20260930:{liveSHA}`
   (`liveSHA` = `96f5af98…`。actual capture 由来)。
 - one logical shared strict custody: 上記 key の単一論理単位。
@@ -49,11 +50,16 @@ private 0600 のみ。
 
 ## 73 pin-inspection (local・fetch 0・確定)
 
-- 73/73: ZIP あり + fresh identity あり + 旧 pin 不足
+- 73/73: 既存 ZIP あり + NEW DB identity あり + 旧 pin 不足
   (category pin-absent)。per-doc 明細は private 0600
-  (`inspect-73.json` `0e82871d…97e3b`)。
-- 全通 HOLD (過去 custody UNKNOWN。偽補完なし)。
-  official fresh GET は custody 資格化に needed (将来 grant)。
+  (`inspect-73.json` `88c2d5a0…90b93`)。
+- 検査範囲の限定: official source metadata・current ZIP issuer・
+  doc identity・known physical proof は未検査。
+  よって freshGET は全通 NEEDS_SOURCE_PROVENANCE_REVIEW
+  (既存 ZIP 実 SHA / source identity / known receipt の検査待ち)。
+  REQUIRED は既存 official provenance が資格化不能な場合のみ付与する。
+  旧 pin 不足が GET を強制するとは主張しない。
+- 全通 HOLD 継続 (過去 custody UNKNOWN・現資格なし。偽補完なし)。
   73 は permanent skip ではない。
 
 ## Physical lookup/readback (bounded PREP・将来 grant)
