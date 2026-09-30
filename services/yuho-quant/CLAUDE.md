@@ -142,7 +142,7 @@ services/yuho-quant/
 すべて **リポジトリルート** から実行する (一覧は root README 参照):
 
 ```bash
-pnpm ingest:yuho-edinet     # Worker /yuho-quant/admin/catchup を叩く (要 WORKER_BASE_URL + CRON_SECRET)
+pnpm ingest:yuho-edinet     # Node 共通取込 + D1 HTTP atomic sender (EDINET/D1/Notion 設定必須)
 pnpm backfill:overseas      # 既存有報の海外埋め戻し (D1 HTTP)
 pnpm yuho:backfill:text     # 既存有報の開示テキスト埋め戻し (CSV のみ・D1 HTTP)
 pnpm yuho:backfill:missing  # 期間指定の取りこぼし回収 (日次上限で欠けた分。無制限・再開可能)

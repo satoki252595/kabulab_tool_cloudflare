@@ -26,12 +26,16 @@
    `drizzle/d1/*.sql` を生成し、
    `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/<生成された>.sql`
    で D1 に反映。
-3. 取込は **Worker 側で実行**: 認証ルート
-   `POST /yuho-quant/admin/catchup` (Bearer `CRON_SECRET`) を叩く。手動なら
-   `pnpm ingest:yuho-edinet` (`scripts/sync/yuho-edinet.ts` が
-   `WORKER_BASE_URL` を叩く薄いトリガ。`--part=0 --of=8` で shard 指定可)。
-   - 初回 5 年バックフィル CLI (`yuho:backfill`) は D1 移行で
-     無効化 (fail-fast)。Worker バルク取込へ再実装予定。
+3. 日次 CLI `pnpm ingest:yuho-edinet` は Node から共通取込を直接実行し、
+   既存 D1 HTTP atomic sender と Notion 物理保管を使う。
+   `EDINET_API_KEY`、`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、
+   `D1_DATABASE_ID`、`NOTION_TOKEN`、`NOTION_ARCHIVE_PAGE_ID`、
+   `NOTION_YUHO_TEXT_DB_ID` を開始前に検査する。`--part=0 --of=8` は shard 指定。
+   Worker の認証ルート `POST /yuho-quant/admin/catchup` は別入口として保持する。
+   初回・期間指定の回収は既存 `pnpm yuho:backfill` / `pnpm yuho:backfill:missing` を使う。
+   取込例外は新規文書を開始せず停止する。バックフィルの並列実行では既に開始した
+   文書の完了を待つため、その文書の保存は完了し得る（全実行のロールバックではない）。
+   非シャードの正常完了時は、新規取込0でも全体L2を再生成する。
 4. 以降は GitHub Actions の `catchup.yml` (平日 11:00 UTC) が自動で新規有報を
    取り込む。
 

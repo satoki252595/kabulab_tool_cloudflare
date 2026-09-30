@@ -1,11 +1,9 @@
 /**
  * 005 yuho-quant — 取込トリガ（Worker 側エントリ, ADR-0001）。
  *
- * D1 はバインディング経由でのみ触れるため、EDINET 有報の取込は Node ローカル
- * CLI ではなく **Worker 上で** 実行する。本ルートが現状の唯一の取込窓口で、
- * 手動 curl / CLI トリガ (scripts/sync/yuho-edinet.ts) から叩く。Workers Cron
- * Trigger からの定期起動 ([triggers] crons + scheduled ハンドラ) は Phase 3 で
- * 追加予定 (現状は未配線)。
+ * Worker バインディング経由の認証付き取込窓口。日次 Node CLI は同じ共通処理を
+ * 既存 D1 HTTP 接続で直接実行するため、このルートへの長い POST は使わない。
+ * Workers Cron Trigger は未配線。
  *
  *   POST /yuho-quant/admin/catchup[?part=0&of=8]
  *   Authorization: Bearer $CRON_SECRET
@@ -54,7 +52,7 @@ adminRoute.post("/catchup", async (c) => {
   }
   const db = createDb(c.env.DB);
   const result = await runYuhoEdinetCatchup(db, shard);
-  // 実失敗があれば result 本文付きの非 2xx で CLI exit 1 へ接続する
-  // (Sol HOLD2)。母集団外・cap・既取込は正当結果で 200 のまま。
+  // 一覧取得失敗は result 本文付き非 2xx。取込例外は結果を返さず停止する。
+  // 母集団外・cap・既取込は正当結果で 200 のまま。
   return c.json(result, catchupHttpStatus(result));
 });

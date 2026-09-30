@@ -123,7 +123,7 @@ pnpm ingest:vwap-margin   # JPX 週次PDF (信用残高) → R2 margin/{week}.js
 pnpm ingest:ir-tdnet      # /ir-catalog/admin/catchup を CRON_SECRET 認証で POST
 
 # データ取得 (005 EDINET → D1。Worker 取込ルートを叩く)
-pnpm ingest:yuho-edinet   # WORKER_BASE_URL の /yuho-quant/admin/catchup を CRON_SECRET 認証で POST
+pnpm ingest:yuho-edinet   # Node 共通取込 + D1 HTTP atomic sender (EDINET/D1/Notion 設定必須)
 
 # 事業タグ (005 EDINET 取込の次に実行。D1 は読むだけ・書込は Notion のみ)
 pnpm biztag run           # 事業タグ判定 (差分処理。詳細は docs/005-yuho-quant-business-tags.md §11)
@@ -187,7 +187,7 @@ Worker は **無料プラン**で、サイト配信(D1 読取)+ 取込プロキ�
 
 1. **Neon 解約** (あなたの手作業。Neon コンソールで実施) — 解約後は `.env`/GH Secret の
    `DATABASE_URL` を削除してよい。
-2. **GH Secret `WORKER_BASE_URL`** (= Worker URL) — catchup.yml(EDINET/TDnet)用。未追加なら追加。
+2. **GH Secret `EDINET_API_KEY`** — catchup.yml の Node EDINET 取込用（backfill と同じ設定）。
 3. **文書リフレッシュ** — 各サービス CLAUDE.md/README の Neon/Vercel 期記述を現行に合わせる
    (K5c で順次実施中)。
 
@@ -271,7 +271,7 @@ pnpm ingest:vwap-daily  # 日足10年
 pnpm ingest:vwap-intra  # 5分足
 pnpm ingest:vwap-margin # 信用残高 (週次・JPX PDF・Yahoo 非依存)
 
-# 006 TDnet / 005 EDINET — デプロイ済み Worker の /admin/catchup を叩く薄いトリガ
+# 006 TDnet / 005 EDINET — Node から D1 HTTP で共通取込
 pnpm ingest:ir-tdnet
 pnpm ingest:yuho-edinet
 
@@ -322,7 +322,7 @@ pnpm yutai:summary:import --tasks <タスク> --results <結果> --apply        
 | マクロ判定が `HOLD` のまま | 日経電子版の HTML 構造変更 or 到達不能 | `src/shared/yahoo/nikkei-vi.ts` を確認 (silent に B/C 判定しない・ルール2) |
 | セクター一覧が "未分類" 1 件 | `core.stocks.sector` が NULL (初回 or JPX URL 変更) | `pnpm sync:universe` を手動実行。必要なら続けて `pnpm sync:monthly:core` |
 | Yahoo rate limit で失敗多発 | crumb 期限切れ or 上限超過 | 並列度を下げる (`CONC` / `DELAY_MS`)、翌日再試行 |
-| 005 yuho-quant が空表示 | D1 へ未投入 | `pnpm ingest:yuho-edinet` で EDINET から取込 (要 `WORKER_BASE_URL` + `CRON_SECRET`) |
+| 005 yuho-quant が空表示 | D1 へ未投入 | `pnpm ingest:yuho-edinet` で EDINET から取込 (要 EDINET/D1/Notion 設定) |
 
 ### クラウドコスト監視と休止中のサービス
 

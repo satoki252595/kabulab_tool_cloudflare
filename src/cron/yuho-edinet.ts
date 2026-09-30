@@ -1,21 +1,19 @@
 /**
- * 005 yuho-quant — EDINET 有報の日次キャッチアップ (D1 + Worker 実行)。
+ * 005 yuho-quant — EDINET 有報の日次キャッチアップ (Node / Worker 共通)。
  *
- * D1 はバインディング経由でのみ触れるため、本処理は Worker 上で動く。
- * 起動経路は **認証付き HTTP ルート** (POST /yuho-quant/admin/catchup,
- * services/yuho-quant/src/routes/admin.ts) で、D1 を `createDb(c.env.DB)` で
- * 渡して呼ぶ。catchup.yml が薄いトリガ (scripts/sync/yuho-edinet.ts) で叩く。
- * Workers Cron は使わない (無料運用方針)。Node の日次パイプライン
- * (scripts/sync/all-daily.ts) からは分離済み。
+ * Node 日次 CLI は既存 D1 HTTP 接続と atomic sender で同じ処理を実行する。
+ * Worker 認証ルートは引き続き D1 binding を渡す。長い取込・L2 の完了を
+ * 1 本の Worker HTTP 応答待ちにせず、Node が各処理を直接 await する。
  *
  * 動作:
- *   - 直近 WINDOW_DAYS 日を新しい順に EDINET 書類一覧で走査
+ *   - 直近 WINDOW_DAYS 日を古い順に (FIFO) EDINET 書類一覧で走査
  *   - 取込の母集団 (src/shared/db/active-equity.ts の `loadIngestCodeToId`。core_stocks から
  *     非普通株と、区分が NULL の active 行を除いたもの) の有報 (120/130) のうち未取込のものを
  *     ingestDocument で構造化保存 (CSV 事前判定で受注なしは XBRL を落とさない)
  *   - 1 回の実行は MAX_INGEST 件 / TIME_BUDGET_MS で打ち切り。残りは次回実行が
  *     拾う (docId 一意で冪等)。6 月の有報集中期も実行回数×日数で吸収。
  */
+import type { createD1HttpBatchSender } from "../shared/db/d1-http-client.js";
 import type { Database } from "../../services/yuho-quant/src/db/client.js";
 import { loadIngestCodeToId } from "../shared/db/active-equity.js";
 import { listDocuments } from "../../services/yuho-quant/src/services/edinet/client.js";
@@ -39,7 +37,8 @@ const WINDOW_DAYS = 60;
 const MAX_INGEST = 60;
 /**
  * 実時間の上限。Workers の CPU 時間制限 (Paid 既定 30s, 最大 5 分まで引上可) と
- * は別に、fetch/sleep 主体の本処理は壁時計でこの予算に達したら打ち切る。
+ * は別に、fetch/sleep 主体の本処理はこの壁時計予算で新しい日・通の開始を止める。
+ * 開始済みの通は await し、その後の全体 L2 も予算外なので全実行の期限ではない。
  * shard 指定時は docId ハッシュで 1/of の文書だけを担当するので、複数実行
  * (cron 並走 or 連続実行) 合算で全件をカバーし、打ち切った残りも次回が docId
  * 冪等で拾う (取りこぼさない)。
@@ -70,7 +69,7 @@ export interface YuhoEdinetResult {
   projectionStocks: number;
   /** 一覧取得に失敗した日付 (EDINET list の throw)。空でないと job 失敗。 */
   listErrors: string[];
-  /** 取込 (取得・構造化・保存・物理記録) に失敗した docID。空でないと job 失敗。 */
+  /** 完了応答では空。取込例外は結果を返さず即停止する (応答 schema は維持)。 */
   ingestErrors: string[];
 }
 
@@ -99,7 +98,8 @@ function hashDocId(docId: string): number {
 
 export async function runYuhoEdinetCatchup(
   db: Database,
-  shard?: ShardOpts
+  shard?: ShardOpts,
+  d1HttpBatch?: ReturnType<typeof createD1HttpBatchSender>
 ): Promise<YuhoEdinetResult> {
   const startedAt = Date.now();
 
@@ -146,9 +146,9 @@ export async function runYuhoEdinetCatchup(
     let list;
     try {
       list = await listDocuments(date);
-    } catch (e) {
+    } catch {
       console.error(
-        `[yuho-edinet] list 失敗 ${date}: ${(e as Error).message}`
+        `[yuho-edinet] list 失敗 ${date}: 取得失敗 (再送なし)`
       );
       listErrors.push(date);
       await sleep(800);
@@ -200,8 +200,8 @@ export async function runYuhoEdinetCatchup(
       // type 保管) の通だけ skipped_existing で EDINET を叩かず返す。
       try {
         // ルール6: 日次キャッチアップでも有報の物理 ZIP を Notion へ記録。
-        // Notion 通信の分 1 件あたりの実時間は伸びるが TIME_BUDGET_MS で必ず
-        // 打ち切られ、打ち切った残りは翌日以降が docId/Notion 冪等で回収する。
+        // Notion 通信の分 1 件あたりの実時間は伸びる。予算は次の通の開始を
+        // 止める境界であり、進行中の通を中断したり全実行の期限を保証しない。
         // 進捗 checkpoint (4/5): 通ごとの取込の入口 (日付+docID)。
         console.info(`[yuho-edinet] ingest 開始 ${date} docID=${doc.docID}`);
         const r = await ingestDocument(db, {
@@ -210,6 +210,7 @@ export async function runYuhoEdinetCatchup(
           doc,
           archiveToNotion: true,
           custody: custodyByDoc.get(doc.docID),
+          d1HttpBatch,
         });
         // skipped_existing (完成済みの早期復帰) は状態計数に含めない。早期復帰の
         // parseStatus 等は実測値でないため、混ぜると運用可視化を汚す。
@@ -226,9 +227,10 @@ export async function runYuhoEdinetCatchup(
         else skippedExisting++;
       } catch (e) {
         console.error(
-          `[yuho-edinet] ingest 失敗 docID=${doc.docID}: ${(e as Error).message}`
+          `[yuho-edinet] ingest 失敗 docID=${doc.docID}: STOP (再送なし)`
         );
-        ingestErrors.push(doc.docID);
+        // 適用有無が不明な例外も含む。次の通・日付・L2へ進まず停止する。
+        throw e;
       }
       await sleep(300);
     }
@@ -248,7 +250,7 @@ export async function runYuhoEdinetCatchup(
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   console.info(
-    `[yuho-edinet] 完了: shard=${shard ? `${shard.part}/${shard.of}` : "-"} 走査${scannedDays}日 matched=${matched} ingested=${ingested} skip=${skippedExisting} outOfUniverse=${outOfUniverse} cap=${reachedCap} listErrors=${listErrors.length} ingestErrors=${ingestErrors.length} 投影=${projectionStocks} ${elapsedSec.toFixed(1)}s`
+    `[yuho-edinet] ${listErrors.length ? "終了（失敗あり）" : "完了"}: shard=${shard ? `${shard.part}/${shard.of}` : "-"} 走査${scannedDays}日 matched=${matched} ingested=${ingested} skip=${skippedExisting} outOfUniverse=${outOfUniverse} cap=${reachedCap} listErrors=${listErrors.length} ingestErrors=${ingestErrors.length} 投影=${projectionStocks} ${elapsedSec.toFixed(1)}s`
   );
   return {
     shard: shard ?? null,

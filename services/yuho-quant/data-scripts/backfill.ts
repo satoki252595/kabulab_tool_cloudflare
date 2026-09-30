@@ -36,6 +36,7 @@
  * D1_DATABASE_ID (未設定なら required で throw)。
  */
 import "dotenv/config";
+import { fileURLToPath } from "node:url";
 import {
   createD1HttpBatchSender,
   createD1HttpDb,
@@ -69,7 +70,7 @@ function shiftYearsISO(iso: string, dy: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   // sqlite-proxy (D1 HTTP) と D1 バインディング版は同じ async SQLite クエリビルダ
   // API を持つ (共に BaseSQLiteDatabase)。型クラスのみ異なるためキャストで橋渡し。
   // backfill-overseas.ts / scripts/sync/ir-tdnet.ts と同じ形。
@@ -124,7 +125,11 @@ async function main(): Promise<void> {
   }
   // 同一日の有報は互いに独立なので小さな並列度で取り込み実時間を短縮
   // (EDINET は公開上限なしだが常識的レートに収めるため上限 4)。
-  const concurrency = Math.min(4, Math.max(1, Number(arg("concurrency") ?? "1")));
+  const requestedConcurrency = Number(arg("concurrency") ?? "1");
+  if (!Number.isSafeInteger(requestedConcurrency) || requestedConcurrency <= 0) {
+    throw new Error("concurrency は正の安全な整数で指定してください");
+  }
+  const concurrency = Math.min(4, requestedConcurrency);
 
   // code(4桁) → stockId マップ。母集団は日次キャッチアップ (src/cron/yuho-edinet.ts) と
   // 同じ取込の母集団 (非普通株と、区分が NULL の active 行を除く。理由は
@@ -160,11 +165,10 @@ async function main(): Promise<void> {
     let list;
     try {
       list = await listDocuments(date);
-    } catch (e) {
-      // 一覧取得失敗は一過性の可能性。握り潰さず記録して次の日へ
-      console.error(`[backfill] list 失敗 ${date}: ${(e as Error).message}`);
-      await sleep(1000);
-      continue;
+    } catch {
+      // 一覧取得に失敗した日は次の日へ進まず停止。
+      console.error(`[backfill] list 失敗 ${date}: 取得失敗 (再送なし)`);
+      throw new Error("[backfill] 一覧取得失敗 (再送なし)");
     }
 
     const targets = list.results.filter((doc) => {
@@ -178,8 +182,10 @@ async function main(): Promise<void> {
     matched += targets.length;
     // concurrency 件ずつのワーカープールで取り込み (順序非依存・冪等)
     let cursor = 0;
+    let halted = false;
     async function worker(): Promise<void> {
       for (;;) {
+        if (halted) return;
         const idx = cursor++;
         if (idx >= targets.length) return;
         const doc = targets[idx];
@@ -209,17 +215,21 @@ async function main(): Promise<void> {
             skipped++;
           }
         } catch (e) {
-          // ネットワーク等の一過性失敗。記録して継続 (次回再実行で拾える)
+          // 既に進行中の通は完了を待つが、新しい通・日付は開始しない。
+          halted = true;
           console.error(
-            `[backfill] ingest 失敗 ${ticker} docID=${doc.docID}: ${(e as Error).message}`
+            `[backfill] ingest 失敗 ${ticker} docID=${doc.docID}: STOP (再送なし)`
           );
+          throw e;
         }
         await sleep(300);
       }
     }
-    await Promise.all(
+    const settled = await Promise.allSettled(
       Array.from({ length: Math.min(concurrency, targets.length || 1) }, worker)
     );
+    const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed) throw failed.reason;
     if (scannedDays % 30 === 0) {
       console.info(
         `[backfill] 進捗: ${scannedDays}日走査 / matched=${matched} ingested=${ingested} skipped=${skipped}`
@@ -238,7 +248,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e) => {
-  console.error("[backfill] 致命的エラー:", e);
-  process.exit(1);
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  process.exitCode = 2;
+  try {
+    await main();
+    process.exitCode = 0;
+  } catch {
+    console.error("[backfill] 完了せず停止しました (再送なし)");
+  }
+}
