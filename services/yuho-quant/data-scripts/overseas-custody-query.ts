@@ -82,7 +82,7 @@ const PINS = {
   parentSHA: "4896af08d92d1510861d6288ea92080b1d1548f48a8c2ee20d3ed08d01da2205",
   // module pins は全て file bytes の full SHA256 (git blob 40char ではない)。
   modules: {
-    custodySelf: "2f60bc6ae19aed11ea165118d827dbdd87bff4f11d39741cbfa305db5379af4a",
+    custodySelf: "42d543332276c7b7e137404c56d999f8e4e860f46d6e6f446a54f0d9ab1069d3",
     edinetArchive: "a02f24f632ea6309a68899bc59b2c3760b2fd7686f26501894f7f5fc7c53fbc5",
     sharedArchive: "b4388151a2aa36cd6b70fabd4c22d1451641b39c7e7475e6b6c0e109573c5edf",
     sharedClient: "4a7f780053ad4bce844e40323e75f4d1713bc1a0c5affe8e4710002192346754",
@@ -376,7 +376,8 @@ export function saveBodyWx(outDir: string, name: string, bytes: Uint8Array): str
 
 /**
  * Read-only guard (native の前)。
- * 順序: allow-list → binding → cap → forward (redirect manual 強制)。
+ * 順序: allow-list → binding → cap → reserve 行 fsync → forward
+ * (redirect manual 強制)。crash しても送信試行が ledger に残る。
  * query は当該 chunk の canonical body SHA のみ許可し、同一 chunk の
  * 再送は成功応答まで通す。次 chunk への前進は 2xx 受信後のみ
  * (3xx/4xx/5xx・到達失敗では前進しない)。最終成功 chunk 数は
@@ -438,6 +439,17 @@ export function createReadOnlyGuardFetch(
     if (counters.attempts >= cap) deny(`attempt cap外 (${cap})`);
     counters.attempts += 1;
     const seq = counters.attempts + counters.rejected;
+    // durable counter: forward の前に予約行を fsync する (既存 logLine
+    // idiom。crash しても送信試行が ledger に残り、受信後の
+    // captured/redirect-stop 行と seq で対になる。body は指紋のみ)。
+    const reqBody = init?.body;
+    logLine({
+      seq, decision: "reserved", method, host: u.hostname, path: u.pathname,
+      ...(typeof reqBody === "string"
+        ? { bodySHA: sha256Hex(reqBody), bodyLen: reqBody.length }
+        : {}),
+      at: new Date().toISOString(),
+    });
     // redirect manual を同一 request に強制し、default follow の
     // boundary bypass を塞ぐ。
     const fwdInit: RequestInit = { ...init, redirect: "manual" };

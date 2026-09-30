@@ -6,12 +6,15 @@ hash-first packet。round1 (20/40) は ONE 実行済み PASS。
 rest (3655/7310) は PREP のみ・live は grant 待ち。
 
 - script: `services/yuho-quant/data-scripts/overseas-custody-query.ts`
-  (FULL `1ca9674b…fe83b`、self pin `2f60bc6a…af4a`)。
+  (FULL `4ac4489d…9ab5d`、self pin `42d54333…069d3`)。
   test `services/yuho-quant/src/tests/overseas-custody-query.test.ts`
   21 passed 同梱 (実 helper bytes 照合 + retry/変造 guard 含む)。
-- preflight (両 round): `ae83938f…deeb` exit 0・sends 0・writes 0・
+- preflight (両 round): `cb6a686f…10f3` exit 0・sends 0・writes 0・
   round1 (20/40・chunkBodies 1) + rest (3655/7310・chunkBodies 183)
   検証済み (canonical env・typed parent 照合済み)。
+  旧 preflight 成果物は HEAD 明示 rename 済み
+  (`preflight-55d1229-stdout.json` = `6570d974…7ab80`・
+  `preflight-1aa5cbd-stdout.json` = `ae83938f…deeb`・bytes 不変)。
 - round1 実行 bytes: FULL `577af613…9c9f57`
   (HEAD `9144b25`・CODE CLEAR 済み・bytes は履歴に保持)。
 - rest 束縛強化 (live 0 のまま): query は当該 chunk の canonical
@@ -74,6 +77,13 @@ rest (3655/7310) は PREP のみ・live は grant 待ち。
 
 ## Capture (同一 response・helper 判定の前)
 
+- forward の前に `reserved` 行 (seq・method・host・path・
+  bodySHA/bodyLen・at) を durableAppend + fsync で ledger へ書く。
+  crash しても送信試行が残り、受信後の captured/redirect-stop 行と
+  seq で対になる。round1 実行 bytes (`577af613…`/`9144b25`) には
+  この予約が無い (当時 ledger は受信後行のみ) — PASS 自体の有効性に
+  影響なし (attempts/counters/bodies 照合済み)・rerun なし。
+  以後の予約捏造はしない。
 - forward した全 response (3xx 失敗含む) を clone し、HTTP bytes +
   status + safe headers (content-type/length・retry-after のみ。
   session/cookie 系なし) + actual clock (receivedAt) を
@@ -106,7 +116,7 @@ rest (3655/7310) は PREP のみ・live は grant 待ち。
 
 ## Pins (full content SHA256)
 
-- self `2f60bc6a…af4a` (正準化) / FULL `1ca9674b…fe83b`
+- self `42d54333…069d3` (正準化) / FULL `4ac4489d…9ab5d`
 - edinet/archive `a02f24f6…53fbc5`
 - shared archive `b4388151…5edf`・client `4a7f7800…6754`・
   env `de8449e3…ae1c0` (PR221 時と同一・不変)
