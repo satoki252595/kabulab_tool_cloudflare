@@ -187,44 +187,8 @@ function asRecord(v: unknown, label: string): Record<string, unknown> {
   return v as Record<string, unknown>;
 }
 
-// ---------------------------------------------------------------------------
-// 保存 caller 同等変換 (backfill-overseas.ts + ingest.ts と同一意味)
-// ---------------------------------------------------------------------------
-function toYen(raw: number | null, factor: number): number | null {
-  return raw === null ? null : Math.round(raw * factor);
-}
-
-function patternOf(status: string): string {
-  if (status === "ok_geo_rows") return "geo_rows";
-  if (status === "ok_geo_cols") return "geo_cols";
-  return "none";
-}
-
-interface SaveRow {
-  fiscalYearEnd: string;
-  regionName: string;
-  regionKind: string;
-  isConsolidated: boolean | null;
-  unitLabel: string;
-  salesRaw: number | null;
-  salesYen: number | null;
-  ratioPct: number | null;
-  pattern: string;
-}
-
-function toSaveRows(facts: OverseasFact[], status: string): SaveRow[] {
-  return facts.map((f) => ({
-    fiscalYearEnd: f.fiscalYearEnd,
-    regionName: f.regionName,
-    regionKind: f.regionKind,
-    isConsolidated: f.isConsolidated,
-    unitLabel: f.unitLabel,
-    salesRaw: f.salesAmount,
-    salesYen: toYen(f.salesAmount, f.unitYenFactor),
-    ratioPct: f.ratioPct,
-    pattern: patternOf(status),
-  }));
-}
+// 保存行変換は共有正準 (overseas-save-rows.ts) を使用する。
+import { toOverseasSaveRows as toSaveRows, type OverseasSaveRow as SaveRow } from "../src/services/overseas-save-rows.js";
 
 const rowKey = (r: { fiscalYearEnd: string; regionName: string }): string =>
   `${r.fiscalYearEnd} ${r.regionName}`;

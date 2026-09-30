@@ -83,11 +83,9 @@ export interface IngestResult {
   periodEnd: string | null;
 }
 
-function overseasPatternOf(status: OverseasParseStatus | "parse_error"): string {
-  if (status === "ok_geo_rows") return "geo_rows";
-  if (status === "ok_geo_cols") return "geo_cols";
-  return "none";
-}
+// 保存行変換は共有正準 (overseas-save-rows.ts) を使用する。
+// (toYen は orders 系が共用。orders の振舞い変更なし。)
+import { toYen, toOverseasSaveRows } from "./overseas-save-rows.js";
 
 /** "2024-06-27 15:30" / "2024-06-27" を Date 化 (JST 表記をそのまま) */
 function parseSubmitDateTime(s: string): Date {
@@ -97,10 +95,6 @@ function parseSubmitDateTime(s: string): Date {
   return new Date(Date.UTC(+y, +mo - 1, +d, hh ? +hh : 0, mm ? +mm : 0));
 }
 
-function toYen(raw: number | null, factor: number): number | null {
-  if (raw === null) return null;
-  return Math.round(raw * factor);
-}
 
 /** 配列を size 件ずつに分割する（D1 の bind 変数上限対策） */
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -571,18 +565,10 @@ export async function ingestDocument(
 
     // 海外売上ファクト (yuho_overseas_facts) も同じ docId サブクエリを親に
     // 置換する。11 列/行 → D1 bind 上限 100 に対し 8 行/文 (8×11=88) で分割。
-    const overseasRows = overseasFacts.map((f) => ({
+    const overseasRows = toOverseasSaveRows(overseasFacts, overseasParseStatus).map((o) => ({
       documentId: docIdSubquery,
       stockId,
-      fiscalYearEnd: f.fiscalYearEnd,
-      regionName: f.regionName,
-      regionKind: f.regionKind,
-      isConsolidated: f.isConsolidated,
-      unitLabel: f.unitLabel,
-      salesRaw: f.salesAmount,
-      salesYen: toYen(f.salesAmount, f.unitYenFactor),
-      ratioPct: f.ratioPct,
-      pattern: overseasPatternOf(overseasParseStatus),
+      ...o,
     }));
 
     // 定性セクション索引 (yuho_text_sections) も同じ docId サブクエリを親に

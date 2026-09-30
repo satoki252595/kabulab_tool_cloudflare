@@ -55,10 +55,9 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-function toYen(raw: number | null, factor: number): number | null {
-  if (raw === null) return null;
-  return Math.round(raw * factor);
-}
+// 保存行変換は共有正準 (overseas-save-rows.ts) を使用する。
+// (toYen は orders 系が共用。orders の振舞い変更なし。)
+import { toYen, toOverseasSaveRows } from "../../src/services/overseas-save-rows.js";
 
 function orderPatternOf(status: ParseStatus | "parse_error"): string {
   if (status === "ok_pattern_b") return "pattern_b";
@@ -67,11 +66,7 @@ function orderPatternOf(status: ParseStatus | "parse_error"): string {
   return "pattern_a";
 }
 
-function overseasPatternOf(status: OverseasParseStatus | "parse_error"): string {
-  if (status === "ok_geo_rows") return "geo_rows";
-  if (status === "ok_geo_cols") return "geo_cols";
-  return "none";
-}
+
 
 /**
  * 同一 (会計期末, セグメント名) の重複は order_facts の一意制約に反する
@@ -168,18 +163,10 @@ export function buildMissingDocStatements(db: Database, w: MissingDocWriteSet) {
     orderBacklogYen: toYen(f.orderBacklog, f.unitYenFactor),
     pattern: orderPatternOf(w.parseStatus),
   }));
-  const overseasRows = w.overseasFacts.map((f) => ({
+  const overseasRows = toOverseasSaveRows(w.overseasFacts, w.overseasParseStatus).map((o) => ({
     documentId: docIdSubquery,
     stockId: w.stockId,
-    fiscalYearEnd: f.fiscalYearEnd,
-    regionName: f.regionName,
-    regionKind: f.regionKind,
-    isConsolidated: f.isConsolidated,
-    unitLabel: f.unitLabel,
-    salesRaw: f.salesAmount,
-    salesYen: toYen(f.salesAmount, f.unitYenFactor),
-    ratioPct: f.ratioPct,
-    pattern: overseasPatternOf(w.overseasParseStatus),
+    ...o,
   }));
   const sectionRows = w.sections.map((s) => ({
     documentId: docIdSubquery,
