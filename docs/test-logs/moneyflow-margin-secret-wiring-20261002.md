@@ -20,5 +20,11 @@ JPXの新PDF取得は0、R2/D1は読取で、派生入力2ファイルの全文�
 同基準日のNotion観測ログをupsertし更新行を全文照合する既存経路は保持した。
 
 Nix環境で関連5ファイル44 tests PASS・全体typecheck PASS・lint PASS。
-この記録時点では修正後の通常workflow実行は未確認。PRの3CIとmain反映後に
-`only=jpx-margin-sector` で別途確認する。全moneyflowやsector-turnoverの正常化ではない。
+PRの3CIとmain反映後、[通常run36908547972](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/36908547972)
+は `only=jpx-margin-sector` で2026-10-01 18:48:43 UTC SUCCESS。
+実最大basis9/30の476行（未分類を含む34区分×14指標）は新規476／更新0／同値0で、
+通常producerの全476POST照合を通過した。
+[保存原本の独立照合](moneyflow-margin-normal-20261002.md)も、実manifestとhosted全文2件の
+SHA一致・共有parser476行再解析／validate PASSを確認した（Notion3＋hosted2、追加source／D1／R2／mutation0）。
+源PDFの当時のHTTP取得clockはUNKNOWN、旧9/28keyは未照会・再POST0のまま。
+全moneyflowやsector-turnoverの正常化ではない。
