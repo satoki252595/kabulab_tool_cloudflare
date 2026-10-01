@@ -200,5 +200,6 @@ Nix環境で原本before-parse、全inflight待ち、片API失敗と原文超過
 8 MiB分割、全parts private保存、後半unknown POST再送0、Notion hosted不一致、capture不足、
 初回・回収custody失敗、custody中の21UTC到達、各D1文の期限停止を確認した。
 株式・共有対象4files70 passed。既存macro modeを含む対象47 passed。
-型検査・lint・`git diff --check` が成功。全suiteは254 files passed / 4,142 passed / 427既存skipで成功（main統合前）。Wrangler dry-runも成功。
+型検査・lint・`git diff --check` が成功。最新main `bfd2ac2` の通常merge後も全suiteは254 files passed / 4,142 passed / 427既存skipで成功。
+株式・共有・VWAPの最終対象10filesは196 passed / 3既存skip。型・lint・Wrangler dry-runも成功。
 テストの実HTTP/source GET・本番Notion / D1 / R2 mutationは0。
