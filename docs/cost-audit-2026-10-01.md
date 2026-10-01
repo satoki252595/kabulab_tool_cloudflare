@@ -12,15 +12,18 @@ D1 read/write/保存・R2 A/B/Standard保存・Builds、および最後30日の 
 根拠はない。外部AI・Notionなど未確認の費用を含めた
 「全費用が必ず $5/月」「将来の追加費用も必ず $0」とは結論しない。
 
-- コード基準: main `7f1442972793051882d4c2d15771348eb6e4c647`。
+- 通常負荷表の起点: main `7f1442972793051882d4c2d15771348eb6e4c647`。
+  Yahoo原文保管修正は[PR #256](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/256)、
+  main `380e931e2305d9871e430cfccea3aa033c468e89`。追加負荷を末尾へ分けた。
 - 定時起動変更: [PR #195](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/195)。
-  head `51dd661a56eac6d5a229a9a465fd5b9444d748f9` の株式・マクロ計4 Cronへの
+  head `40f500033db73e45c1c941e1c3ba21652c5b59f4` の株式・マクロ計4 Cronへの
   更新を2026-10-02に読取確認し、負荷表へ反映。マージ後に再確認する。
 - 料金・制限の取得日: **2026-10-01**。金額は USD、税・為替換算を含めない。
 - ユーザーの Paid 契約申告に加え、認証済みダッシュボード読取で Workers Paid を確認。
   請求画面・個人情報・他サービスの利用額は私有証跡とし公開 Git に保存しない。
-- GitHub API で当該 repo の `visibility=public` を確認。認証値は読まず、
-  この調査ではプラン購入・設定変更・ジョブ起動を行っていない。
+- GitHub API で当該 repo の `visibility=public` を確認。認証値を公開せず、
+  費用確認のためのプラン購入・設定変更・ジョブ起動は行っていない。
+  通常ジョブ検証・本番修復は[別記録](./test-logs/remaining-ops-20261002.md)に分ける。
 
 ## Cloudflare の料金
 
@@ -180,9 +183,10 @@ I/O待機はCPUに含まれない。高額化の防止は CPU 上限だけでな
   利用する。Cloudflare Paidに含まれず、契約・実使用量が未取得なので金額未確定。
   [年次レビューの既存手順](./005-yuho-quant-business-tags.md)、
   [優待要約の契約](../services/otakara-yutai/docs/llm-summary-task.md)
-- **Notion**: #132 の過去コメントで Business trial の確認根拠があるが、現在の課金
-  プラン・試用終了日・seat数はこの調査で未取得。Paidはmemberごとの契約で、
-  API呼出し量だけから月額を算出しない。公式のfile uploads条件・試用後の契約を確認する。
+- **Notion**: 2026-10-02の認証済み請求画面で、既存Plus契約とBusiness trialの併存を
+  確認した。試用終了後は既存プランの継続を選べる。個別の契約額・更新日・seat数は
+  私有証跡へ保存した。今回の残件対応のための新規アップグレードは不要。
+  Paidはmemberごとの契約で、API呼出し量だけから月額を算出しない。
   [Notion料金](https://www.notion.com/pricing)
   APIはBusiness/Enterprise 600 req/min、他180 req/min、workspace共有の制限もある。
   Free複数memberは lifetime 1,000 blocks、Paid/single-member Freeは無制限。
@@ -207,7 +211,7 @@ I/O待機はCPUに含まれない。高額化の防止は CPU 上限だけでな
 | R2 IA容量・retrieval | 使用状態未確認、Standard表で代用しない |
 | Workers Builds | 認証済画面で包含枠内確認。account集計でproject別帰属不可 |
 | GitHub runnerとvisibility | public/標準ubuntuを確認済み。保存課金は未確認 |
-| Jev入力tokens・credit・請求、Notion現在契約 | Jev再開用creditの用意は別対応。月間tokens・請求とNotion現在契約は未取得 |
+| Jev入力tokens・credit・請求、Notion現在契約 | Jev再開用creditの用意は別対応。月間tokens・請求は未取得。Notion既存Plus契約＋Business trialを認証済みで確認 |
 | 既存Budget Alerts | 認証済画面で設定済み確認。hard capではなく通知のみ、変更なし |
 | 現在のCPU limits | ダッシュボード値は未取得。設定変更なし |
 
@@ -223,3 +227,27 @@ samplingが記載されているが、現在は枠内なのでこの調査で受
 
 本調査で料金変更・ログ削減・CPU上限変更・新規購買は行っていない。
 service別実測を取得したら、検査日時・serviceの計数・確定範囲を追記して判断を更新する。
+
+## Yahoo原文保管の追加負荷
+
+2026-10-02に通常株価・VWAPの最終Yahoo応答本文の保管欠落を確認し、同じHTTP応答を
+gzipへまとめて共有Notionへ保管する修正を進めた。追加のYahoo GET、D1/R2への原文書込は
+増やさず、圧縮はNodeで実行する。上の通常負荷表とは別にNotion保存とrunner時間が増える。
+[実装・測定と限界](./test-logs/yahoo-raw-custody-20261002.md)を正本にする。
+
+既存Chart54件を全bytes/SHA照合したオフラインgzip測定から、株式Chartだけの外挿は
+約85.6 MB/日、約1.88 GB/22回、約660保管ページ/月。標本は全銘柄の代表性を保証せず、
+QuoteSummary・回収・実本番wrapperの全metadataを含めない。VWAPの10年/5分足原文は
+全量実測前で、同じ圧縮率を適用しない。
+
+VWAPはfetch並列5を維持し最大30銘柄/8 MiB到達までまとめる。各batchが1添付で足りる
+正常シナリオなら `ceil(3695/30)×13×2 = 3,224` ページ/月、約19,344 Notion API呼出。
+既存380 ms limiterの間隔相当は約2.04時間/月（保守2.5 req/sでは約2.15時間）。
+5銘柄ずつ保管する案の約19,214ページ/月より約83%減る。8 MiB分割、初回探索、転送、
+429待機は別であり、これは実測所要時間でも保存件数の確定上限でもない。
+
+既存Notion Plusには[unlimited file uploads](https://www.notion.com/pricing)があり、今回の
+修正のための追加契約は不要。ただし[1 DB 250,000行等の制限](https://www.notion.com/help/optimize-database-load-times-and-performance)
+があるため、upload無制限を行数無制限とは解釈しない。原文を公開Actions artifactへ出さず、
+標準public runnerの実行分数は無料。初回の実保存量・ページ数・所要時間を記録して
+300分のjob期限を確認する。将来の利用増加・他サービス分の費用は現在の枠内観測から保証しない。
