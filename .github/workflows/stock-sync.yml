@@ -1,8 +1,9 @@
 # 株価 日次/月次 sync を GitHub Actions(Node)で実行 → D1。
 #
-# Workers Paid を使わない運用。指標/スコア計算は Node で行い、D1 へは createD1HttpDb
+# 指標/スコア計算は Node で行い、D1 へは createD1HttpDb
 # (D1 REST) で書き込む。Yahoo は共有クライアントが YAHOO_PROXY_BASE(Cloudflare エッジの
-# /api/ingest/yahoo)経由で叩くため、GitHub ランナーの IP が 429 されることはない。
+# /api/ingest/yahoo)経由で叩く。D1とプロキシの利用はCloudflareの包含枠/従量料金の対象。
+# proxy経由でも上流の429等は起こり得る。失敗は原本とともに記録して停止する。
 #
 # default ブランチ(main)から発火する(schedule は main のワークフローのみ)。
 #
@@ -17,7 +18,7 @@
 #   NOTION_PRICE_SYNC_DB_ID … 上記 DB を ID 固定する場合のみ (任意。未設定なら自動発見/作成)
 #
 # 日次 ~3,700 銘柄は ~40-50 分/回 (public repo のため Actions 分課金は無し)。
-#    平日毎日 + VWAP と合わせると枠に近づくため、必要なら cron を Mon/Wed/Fri 等へ間引く。
+#    原本保管とreadbackで所要時間は増える。正確な完了は各runの結果で確認する。
 #
 # 株式 sync の実成功後は moneyflow を workflow_call で連鎖する (#160)。
 # 実 tradingDate を固定入力し、許容内失敗ありは受け入れない。失敗 producer の
