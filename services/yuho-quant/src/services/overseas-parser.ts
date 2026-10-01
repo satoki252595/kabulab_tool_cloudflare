@@ -112,6 +112,8 @@ export interface OverseasExtraction {
 export interface OverseasCandidateCapture {
   /** 表開始 offset。 */
   start: number;
+  /** ZIP 内の実本文ファイル。start はこの本文内の offset (HTML-only は未設定)。 */
+  honbunFile?: string;
   /** 囲み TextBlock 名 (parent)。 */
   textBlock: string | null;
   /** 囲み TextBlock の contextRef (context 証拠)。 */
@@ -150,6 +152,7 @@ export interface OverseasCapture {
   /** 地理未分類で却下した表 (実 reducer 由来。監査用。reject 時のみ採取)。 */
   incomplete?: Array<{
     start: number;
+    honbunFile?: string;
     kind: "rows" | "cols";
     labels: string[];
     amount: number | null;
@@ -712,7 +715,7 @@ interface Honbun {
   html: string;
 }
 
-function pickHonbunHtml(entries: Map<string, Buffer>): Honbun | null {
+function collectHonbunHtml(entries: Map<string, Buffer>): Honbun[] {
   const names = [...entries.keys()];
   const honbun = names.filter(
     (n) =>
@@ -725,13 +728,12 @@ function pickHonbunHtml(entries: Map<string, Buffer>): Honbun | null {
     (n) => /PublicDoc\//i.test(n) && /\.html?$/i.test(n)
   );
   const list = honbun.length > 0 ? honbun : pubHtml;
-  if (list.length === 0) return null;
-  // 海外/地域 開示語を含む本文を優先
-  for (const n of list) {
-    const html = entries.get(n)!.toString("utf8");
-    if (RX_OVERSEAS_KEYWORD.test(html)) return { name: n, html };
-  }
-  return { name: list[0], html: entries.get(list[0])!.toString("utf8") };
+  // 同一有報は分割本文を持つ。前半の説明文に地域語があっても、後半の
+  // 財務注記を捨てず、全本文の候補を同じ Gate で比較する。
+  return list.map((name) => ({
+    name,
+    html: entries.get(name)!.toString("utf8"),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -2560,8 +2562,8 @@ export function parseOverseasData(
     throw new Error(`reportPeriodEnd 形式が不正: ${reportPeriodEnd}`);
   }
   const entries = unzip(zipBuf);
-  const picked = pickHonbunHtml(entries);
-  if (!picked) {
+  const bodies = collectHonbunHtml(entries);
+  if (bodies.length === 0) {
     if (opts.capture) {
       opts.capture.status = "no_overseas_table";
       opts.capture.stopReason = "no-signal";
@@ -2583,12 +2585,37 @@ export function parseOverseasData(
   );
   const filingText = names.map((n) => entries.get(n)!.toString("utf8")).join("\n");
   const { mode } = detectRoundingMode(filingText);
-  const r = parseOverseasHtml(picked.html, reportPeriodEnd, {
+  const capture: OverseasCapture = opts.capture ?? {
+    status: null, stopReason: null, candidates: [],
+  };
+  const tables: OverseasTable[] = [];
+  // 内部選定の offset は全本文で一意。診断は必ず実 filename/本文内 offset
+  // に戻す。heading/caption/wide は各本文だけから作り、他本文を借りない。
+  const sources = new Map<number, { honbunFile: string; start: number }>();
+  let base = 0;
+  for (const body of bodies) {
+    const durationContexts = readFilingDurationContexts(
+      entries, body.name, reportPeriodEnd
+    );
+    for (const table of tablesWithHeading(body.html)) {
+      const start = base + table.start;
+      sources.set(start, { honbunFile: body.name, start: table.start });
+      tables.push({ ...table, start, durationContexts });
+    }
+    base += body.html.length + 1;
+  }
+  const r = parseOverseasTables(tables, reportPeriodEnd, {
     roundingMode: mode,
-    capture: opts.capture,
-    durationContexts: readFilingDurationContexts(entries, picked.name, reportPeriodEnd),
+    capture,
   });
-  return { ...r, honbunFile: picked.name };
+  const selected = capture.candidates.find((c) => c.selected);
+  const honbunFile = selected ? sources.get(selected.start)!.honbunFile : null;
+  for (const c of [...capture.candidates, ...(capture.incomplete ?? [])]) {
+    const source = sources.get(c.start)!;
+    c.start = source.start;
+    c.honbunFile = source.honbunFile;
+  }
+  return { ...r, honbunFile };
 }
 
 /**
@@ -3004,7 +3031,26 @@ export function parseOverseasHtml(
   } = {}
 ): Omit<OverseasExtraction, "honbunFile"> {
   const mode = opts.roundingMode ?? detectRoundingMode(html).mode;
-  const tables = tablesWithHeading(html);
+  return parseOverseasTables(
+    tablesWithHeading(html).map((table) => ({
+      ...table, durationContexts: opts.durationContexts,
+    })),
+    reportPeriodEnd,
+    { roundingMode: mode, capture: opts.capture }
+  );
+}
+
+type OverseasTable = ReturnType<typeof tablesWithHeading>[number] & {
+  durationContexts?: FilingDurationContexts;
+};
+
+/** 単一 HTML と ZIP 全本文で同じ候補・証拠・曖昧性 Gate を使う。 */
+function parseOverseasTables(
+  tables: OverseasTable[],
+  reportPeriodEnd: string,
+  opts: { roundingMode: RoundingMode; capture?: OverseasCapture }
+): Omit<OverseasExtraction, "honbunFile"> {
+  const mode = opts.roundingMode;
   let tablesScanned = 0;
   let sawGeoSignal = false;
 
@@ -3069,6 +3115,7 @@ export function parseOverseasHtml(
     textBlock,
     contextRef,
     start,
+    durationContexts,
   } of tables) {
     const rawGrid = tableToGridExpanded(table);
     if (rawGrid.length < 2) continue;
@@ -3155,8 +3202,8 @@ export function parseOverseasHtml(
         mode,
         caption,
         textBlock,
-        opts.durationContexts === undefined ? undefined :
-          contextRef === null ? null : (opts.durationContexts.get(contextRef) ?? null)
+        durationContexts === undefined ? undefined :
+          contextRef === null ? null : (durationContexts.get(contextRef) ?? null)
       );
       // 単一行の売上直接証明はあるが caption/実context で期を証明できない
       // → fiscal-unknown STOP。wide (前表) 継承で採用しない。
