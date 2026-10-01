@@ -1919,7 +1919,12 @@ function tryGeoCols(
         side: contextPeriod.endDate === normPeriodEnd(fiscalYearEnd) ? "T" : "Z",
         date: contextPeriod.endDate,
       };
-      const words = periodWordClassOf(caption, "");
+      // 最寄りrangeより前の期語は継承しない。range以後の反対語は矛盾のまま。
+      const normalizedCaption = toHalfWidthDigits(caption);
+      const words = periodWordClassOf(
+        title === null ? caption : normalizedCaption.slice(normalizedCaption.lastIndexOf(title)),
+        ""
+      );
       if (words === "TZ" || (words !== "-" && words !== inh.side))
         return "single_row_fiscal_mismatch";
       if (title) {
