@@ -59,17 +59,17 @@ export const DEFAULT_RATE_LIMIT_BACKOFF_MS = 5_000;
  * MAX_RECOVERY_BACKOFF_MS — が担う)。非 finite は既定に倒す。
  */
 function rateLimitRetryAt(response: Response): number | null {
-  if (response.status !== 429) return null;
+  if (response.status !== 429 && response.status !== 503) return null;
 
   const now = Date.now();
   const value = response.headers.get("Retry-After")?.trim();
-  let delayMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
+  let delayMs: number | null = response.status === 429 ? DEFAULT_RATE_LIMIT_BACKOFF_MS : null;
   if (value && /^\d+$/.test(value)) {
     const seconds = Number(value);
     delayMs =
       Number.isFinite(seconds) && Number.isFinite(seconds * 1_000)
         ? seconds * 1_000
-        : DEFAULT_RATE_LIMIT_BACKOFF_MS;
+        : delayMs;
   } else if (value) {
     const retryAt = Date.parse(value);
     if (
@@ -80,6 +80,7 @@ function rateLimitRetryAt(response: Response): number | null {
     }
   }
 
+  if (delayMs === null) return null;
   const retryAt = now + delayMs;
   return Number.isFinite(retryAt) ? retryAt : now + DEFAULT_RATE_LIMIT_BACKOFF_MS;
 }
@@ -518,7 +519,7 @@ export interface YahooChartRawCapture {
 /** 同一応答の原文と、body受信完了の実clock。認証headerは収集しない。 */
 export interface YahooRawCapture extends YahooChartRawCapture {
   receivedAt: string;
-  headers: { contentType?: string; upstreamStatus?: string };
+  headers: { contentType?: string; upstreamStatus?: string; retryAfter?: string };
 }
 
 export const MAX_YAHOO_RAW_BYTES = 8 * 1024 * 1024;
@@ -562,8 +563,10 @@ function rawCapture(symbol: string, response: Response, bytes: Uint8Array, recei
   const headers: YahooRawCapture["headers"] = {};
   const contentType = response.headers.get("Content-Type");
   const upstreamStatus = response.headers.get("X-Kabulab-Yahoo-Status");
+  const retryAfter = response.headers.get("Retry-After");
   if (contentType !== null) headers.contentType = contentType;
   if (upstreamStatus !== null) headers.upstreamStatus = upstreamStatus;
+  if (retryAfter !== null) headers.retryAfter = retryAfter;
   return { symbol, status: response.status, bytes, receivedAt, headers,
     url: redactYahooDiagnostic(response.url) };
 }
@@ -740,7 +743,7 @@ function parseRetryAfter(r: Response): number | null {
 function ensureOk(r: Response): void {
   if (r.ok) return;
   if (r.status === 429 || r.status === 503) {
-    throw new YahooRateLimitError(r.status, parseRetryAfter(r));
+    throw new YahooRateLimitError(r.status, parseRetryAfter(r), rateLimitRetryAt(r));
   }
   throw new Error(`yahoo ${r.status}`);
 }

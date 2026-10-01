@@ -157,7 +157,7 @@ describe("共有Yahoo取得のraw custody", () => {
     useProxy();
     for (const status of [200, 503]) {
       const response = new Response("invalid JSON\nsource bytes", { status, headers: {
-        "Content-Type": "text/plain", "X-Kabulab-Yahoo-Status": "503", "Set-Cookie": "private-secret",
+        "Content-Type": "text/plain", "X-Kabulab-Yahoo-Status": "503", "Retry-After": "120", "Set-Cookie": "private-secret",
       } });
       Object.defineProperty(response, "url", { value: "https://test.invalid/api?crumb=private-secret&symbol=7203" });
       vi.stubGlobal("fetch", vi.fn(async () => response));
@@ -167,7 +167,7 @@ describe("共有Yahoo取得のraw custody", () => {
       expect(new TextDecoder().decode(seen[0].bytes)).toBe("invalid JSON\nsource bytes");
       expect(seen[0].status).toBe(status);
       expect(Number.isFinite(Date.parse(seen[0].receivedAt))).toBe(true);
-      expect(seen[0].headers).toEqual({ contentType: "text/plain", upstreamStatus: "503" });
+      expect(seen[0].headers).toEqual({ contentType: "text/plain", upstreamStatus: "503", retryAfter: "120" });
       expect(seen[0].url).not.toContain("private-secret");
       expect(seen[0].url).toContain("symbol=7203");
     }

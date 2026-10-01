@@ -103,9 +103,11 @@ export async function main() {
           if ((e as { name?: string })?.name === "YahooRateLimitError") {
             rateLimited++; consecRL++;
             outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
-            if (consecRL >= MAX_RL && !aborted) {
+            const retryAt = (e as { retryAtMs?: number | null }).retryAtMs;
+            const cooling = typeof retryAt === "number" && Number.isFinite(retryAt) && retryAt > Date.now();
+            if ((cooling || consecRL >= MAX_RL) && !aborted) {
               aborted = true;
-              console.error(`[abort] Yahoo 429/503 が ${MAX_RL} 連続。IP がレート制限中のため中断します。別回線(テザリング等)か時間を空けて再実行してください。`);
+              console.error(`[abort] Yahoo 429/503 のため新規取得を停止します (retry-at-ms=${retryAt}, consecutive=${consecRL})。取得済原文を保管して終了します。`);
             }
             return;
           }

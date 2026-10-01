@@ -264,12 +264,12 @@ describe("ingest-daily main flow", () => {
     expect(process.exitCode).toBe(0);
   });
 
-  it("HTTP rate-limit ABORT still archives the acquired body and sends no PUT", async () => {
+  it("future rate deadline aborts before MAX_RL, archives the body and sends no PUT", async () => {
     rawHook.status = 429;
-    (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 1, delayMs: 1, maxRateLimit: 1, keepDays: 365 };
+    (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 1, delayMs: 1, maxRateLimit: 5, keepDays: 365 };
     mockLoadCodes.mockResolvedValue(["A", "B"]);
     mockR2Get.mockResolvedValue(null);
-    mockFetchDaily.mockRejectedValue(Object.assign(new Error("yahoo 429"), { name: "YahooRateLimitError" }));
+    mockFetchDaily.mockRejectedValue(Object.assign(new Error("yahoo 429"), { name: "YahooRateLimitError", retryAtMs: Date.now() + 120_000 }));
     await main();
     expect(mockRawArchive.mock.calls[0][0].captures).toHaveLength(1);
     expect(mockRawArchive.mock.calls[0][0].captures[0].capture.status).toBe(429);

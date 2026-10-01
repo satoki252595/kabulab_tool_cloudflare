@@ -394,27 +394,26 @@ export type PrioritizedDailyRecoveryTarget<MacroTarget, StockTarget> =
   | { kind: "stock"; target: StockTarget };
 
 /**
- * 銘柄開始を平準化し、最初の429の Retry-After 中は未実行銘柄を止める。
- * run 内の数値だけを共有し、外部 call、retry、30秒超の待機は増やさない。
+ * 銘柄開始を平準化し、観測した429の Retry-After 中は未実行銘柄を止める。
+ * run 内の数値だけを共有し、外部callやretryは増やさない。source期限を短縮しない。
  */
-export function createDailyStockStartGate(startIntervalMs: number) {
+export function createDailyStockStartGate(startIntervalMs: number, deadlineMs?: number) {
   let nextStartAt = 0;
   let backoffUntil = 0;
-  let rateLimitObserved = false;
 
   return {
-    async wait(): Promise<void> {
+    async wait(): Promise<boolean> {
       while (true) {
         const now = Date.now();
         const startAt = Math.max(now, nextStartAt, backoffUntil);
+        if (deadlineMs !== undefined && startAt >= deadlineMs) return false;
         nextStartAt = startAt + startIntervalMs;
-        if (startAt <= now) return;
+        if (startAt <= now) return true;
         await sleep(startAt - now);
-        if (backoffUntil <= startAt) return;
+        if (backoffUntil <= startAt) return true;
       }
     },
     observeFailure(message: string): void {
-      if (rateLimitObserved) return;
       if (
         !/^(?:Chart|QuoteSummary) API HTTP エラー \[[^\]]+\]: 429\b/.test(
           message
@@ -424,11 +423,7 @@ export function createDailyStockStartGate(startIntervalMs: number) {
       }
       const requested = Number(/\bretry-at-ms=(\d+)\b/.exec(message)?.[1]);
       if (!Number.isFinite(requested)) return;
-      rateLimitObserved = true;
-      backoffUntil = Math.min(
-        requested,
-        Date.now() + MAX_RECOVERY_BACKOFF_MS
-      );
+      backoffUntil = Math.max(backoffUntil, requested);
     },
   };
 }
@@ -471,8 +466,8 @@ export function isTransientDailySyncFailure(message: string): boolean {
  *
  * 回収量は件数ではなく時間予算 (`deadlineMs`) で区切る (L-57)。
  * 予算切れで手を付けなかった対象は `skippedDueToLimit` に数える。
- * 2 パス目も Retry-After を尊重する (初回の指示を上限 30 秒で待つ)。
- * `deadlineMs` を渡さないと全件を回収する (テスト用)。
+ * 2パス目もsource期限を尊重する。30秒の待機予算外なら取得を省略し期限を短縮しない。
+ * `deadlineMs` 未指定時もsource期限と30秒の待機予算は守る。
  */
 export async function recoverTransientDailyFailures<T>(
   failures: readonly DailyRecoveryFailure<T>[],
@@ -491,11 +486,9 @@ export async function recoverTransientDailyFailures<T>(
         ({ error }) => Number(/\bretry-at-ms=(\d+)\b/.exec(error)?.[1]) || 0
       )
   );
-  const retryAt = Math.min(
-    requestedRetryAt,
-    Date.now() + MAX_RECOVERY_BACKOFF_MS
-  );
-  if (retryAt > Date.now()) await sleep(retryAt - Date.now());
+  const cannotWait = requestedRetryAt > Date.now() + MAX_RECOVERY_BACKOFF_MS ||
+    (options.deadlineMs !== undefined && requestedRetryAt >= options.deadlineMs);
+  if (!cannotWait && requestedRetryAt > Date.now()) await sleep(requestedRetryAt - Date.now());
 
   for (const failure of failures) {
     // 原本保管STOPなどrun全体の条件は対象単位のcatchへ丸めない。
@@ -504,7 +497,7 @@ export async function recoverTransientDailyFailures<T>(
       unresolved.push(failure);
       continue;
     }
-    if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
+    if (cannotWait || (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs)) {
       unresolved.push(failure);
       skippedDueToLimit++;
       continue;
@@ -1235,7 +1228,7 @@ async function runDailySyncAndRecord(
   const queue = [...targets];
   const firstPassFailures: DailyRecoveryFailure<(typeof targets)[number]>[] =
     [];
-  const stockStartGate = createDailyStockStartGate(STOCK_START_INTERVAL_MS);
+  const stockStartGate = createDailyStockStartGate(STOCK_START_INTERVAL_MS, Date.parse(`${targetDate}T21:00:00Z`));
   let succeeded = 0;
 
   // 年次は月曜 UTC の run でのみ書く (L-49)。年 1 回変わるものに毎日
@@ -1283,7 +1276,10 @@ async function runDailySyncAndRecord(
       const target = queue.shift();
       if (!target) break;
       try {
-        await stockStartGate.wait();
+        if (!await stockStartGate.wait()) {
+          custodyStop = new Error("Yahooの取得開始期限が株式同期の21UTC期限以後のためSTOPします");
+          break;
+        }
         if (custodyStop !== null) break;
         assertStockDeadline();
         const snap = await capturedSnapshot(target, 0, firstCaptures, firstMissing);
