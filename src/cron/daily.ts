@@ -268,6 +268,49 @@ export function runDateKeys(startedAt: number): {
     runMonday: isMondayUtc(at),
   };
 }
+
+const SCHEDULED_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * CF scheduler からの予定 UTC 日を検証する (検証のみ)。
+ *
+ * target=scheduled-stocks / scheduled-context のとき SCHEDULED_DATE は必須 (欠落・空・空白は
+ * fetch 前に落とす。workflow input の required だけでは target 別の必須を
+ * 表せないため Node 入口で見る)。設定値は YYYY-MM-DD 形式・実在日・
+ * 今回の対象日 (run 開始 UTC 日) との一致を要求する。手動 stocks 等の
+ * 未設定は現契約どおり素通りする。
+ * 検証に使うだけで、targetDate の上書き・時刻のバックデート・
+ * 原本日付の書き換えは一切しない。
+ */
+export function assertScheduledDate(targetDate: string): void {
+  const v = sharedEnv.SCHEDULED_DATE();
+  if (v === undefined) {
+    const target = sharedEnv.STOCK_SYNC_TARGET();
+    if (target === "scheduled-stocks" || target === "scheduled-context") {
+      throw new Error(
+        `target=${target} には SCHEDULED_DATE が必須です`
+      );
+    }
+    return;
+  }
+  const m = SCHEDULED_DATE_RE.exec(v);
+  if (!m) {
+    throw new Error(`SCHEDULED_DATE の形式が不正です: ${v} (YYYY-MM-DD)`);
+  }
+  const roundTrip = new Date(
+    Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  )
+    .toISOString()
+    .slice(0, 10);
+  if (roundTrip !== v) {
+    throw new Error(`SCHEDULED_DATE が実在日ではありません: ${v}`);
+  }
+  if (v !== targetDate) {
+    throw new Error(
+      `SCHEDULED_DATE(${v}) が今回の対象日(${targetDate})と一致しません`
+    );
+  }
+}
 /** upstream 指示や診断文字列が異常でも回復待機を30秒で止める。 */
 const MAX_RECOVERY_BACKOFF_MS = 30_000;
 const MARKET_CONTEXT_CHART_SYMBOLS = [
@@ -1123,6 +1166,8 @@ async function runDailySyncAndRecord(
   // 日付キーと週1ゲートは run 開始時刻に固定する (F-05。Phase 実行時刻で
   // 評価し直すと日跨ぎで prune/年次が飢餓し、表の日付がずれる)。
   const { runDate: targetDate, runMonday } = runDateKeys(startedAt);
+  // CF scheduler 経由の run は予定日と対象日の一致を fetch 前に検証する。
+  assertScheduledDate(targetDate);
   // 株式の時間窓・N225 対象日/fresh-close guard は全 stock パス共通
   // (stocksOnly でも default でも同じ。stocksOnly はマクロ有無だけを決める)。
   {
@@ -1484,6 +1529,16 @@ async function runDailySyncAndRecord(
 /** 米国市場の取引終了後にマクロだけ同期。銘柄全量・株価同期完了記録は触らない。 */
 export async function runMarketContextSync(db: Db): Promise<boolean> {
   const startedAt = Date.now();
+  const scheduled = sharedEnv.STOCK_SYNC_TARGET() === "scheduled-context";
+  const targetDate = runDateKeys(startedAt).runDate;
+  assertScheduledDate(targetDate);
+  if (scheduled) {
+    const floor = Date.parse(`${targetDate}T21:00:00.000Z`);
+    const cutoff = Date.parse(`${targetDate}T21:30:00.000Z`);
+    if (startedAt < floor || startedAt > cutoff) {
+      throw new Error("定時マクロの開始は予定日21:00〜21:30 UTCに限定します");
+    }
+  }
   const ny = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "numeric",
     hourCycle: "h23",
@@ -1502,7 +1557,8 @@ export async function runMarketContextSync(db: Db): Promise<boolean> {
   for (const failure of recovery.failures) {
     console.warn(`[sync-context] マクロ未回復 ${failure.target}:`, failure.error);
   }
-  return archiveAndPersistMarketContext(db, startedAt, context.draft, context.collector);
+  return archiveAndPersistMarketContext(db, startedAt, context.draft, context.collector,
+    scheduled ? targetDate : undefined);
 }
 
 /**
@@ -2823,7 +2879,7 @@ interface MarketContextGate {
  * 残さない。NIY は snapshot のため日付照合はしない (価格は必須)。
  * 曜日もカレンダーも見ない。
  */
-function decideMarketContextGate(draft: MarketContextDraft): MarketContextGate {
+function decideMarketContextGate(draft: MarketContextDraft, expectedDate?: string): MarketContextGate {
   const key = draft.charts["^GSPC"].date;
   const n225 = draft.charts["^N225"];
   const vix = draft.charts["^VIX"];
@@ -2831,6 +2887,9 @@ function decideMarketContextGate(draft: MarketContextDraft): MarketContextGate {
   const niy = draft.charts["NIY=F"];
   if (key === null) {
     return { ok: false, key: null, reason: "GSPC 確定日が無い (取得失敗または session 不足)" };
+  }
+  if (expectedDate !== undefined && key !== expectedDate) {
+    return { ok: false, key, reason: `GSPC 確定日 ${key} ≠ 予定日 ${expectedDate} (過去日を代用しない)` };
   }
   const dates: Array<[string, string | null]> = [
     ["N225 確定日", n225.date],
@@ -2864,11 +2923,12 @@ function decideMarketContextGate(draft: MarketContextDraft): MarketContextGate {
 
 async function persistMarketContext(
   db: Db,
-  draft: MarketContextDraft
+  draft: MarketContextDraft,
+  expectedDate?: string
 ): Promise<boolean> {
   // 書くのは正準 gate が通るときだけ (F-06 の後継)。不一致・不足は
   // 書かず前回値を残す (HOLD)。実行日・run 日はキーに使わない。
-  const gate = decideMarketContextGate(draft);
+  const gate = decideMarketContextGate(draft, expectedDate);
   if (!gate.ok || gate.key === null) {
     console.warn(
       `[sync-daily]   マクロ保存スキップ (HOLD): ${gate.reason}。前回値を保持します。`
@@ -2876,6 +2936,9 @@ async function persistMarketContext(
     return false;
   }
   const today = gate.key;
+  if (expectedDate !== undefined && Date.now() > Date.parse(`${expectedDate}T22:00:00.000Z`)) {
+    throw new Error("定時マクロの保存期限22:00 UTCを超過しました");
+  }
   const n225 = draft.charts["^N225"];
   const vix = draft.charts["^VIX"];
   const gspc = draft.charts["^GSPC"];
@@ -2941,10 +3004,11 @@ async function persistMarketContext(
 
 async function persistMarketContextWithDiagnostics(
   db: Db,
-  draft: MarketContextDraft
+  draft: MarketContextDraft,
+  expectedDate?: string
 ): Promise<boolean> {
   try {
-    return await persistMarketContext(db, draft);
+    return await persistMarketContext(db, draft, expectedDate);
   } catch (error) {
     console.warn(
       "[sync-daily]   マクロ保存失敗:",
@@ -2977,16 +3041,18 @@ async function archiveAndPersistMarketContext(
   db: Db,
   startedAt: number,
   draft: MarketContextDraft,
-  attempts: readonly MacroRawAttempt[]
+  attempts: readonly MacroRawAttempt[],
+  expectedDate?: string
 ): Promise<boolean> {
-  await archiveMacroSourceBatch({ startedAt, draft, attempts });
-  return persistMarketContextWithDiagnostics(db, draft);
+  await archiveMacroSourceBatch({ startedAt, draft, attempts, expectedDate });
+  return persistMarketContextWithDiagnostics(db, draft, expectedDate);
 }
 
 async function archiveMacroSourceBatch(args: {
   startedAt: number;
   draft: MarketContextDraft;
   attempts: readonly MacroRawAttempt[];
+  expectedDate?: string;
 }): Promise<string> {
   const runId = priceSyncBatchRunId(args.startedAt);
   const key = macroSourceBatchKey(runId, args.startedAt);
@@ -2999,7 +3065,7 @@ async function archiveMacroSourceBatch(args: {
     .map((a) => a.completedAt)
     .sort()
     .at(-1) as string;
-  const gate = decideMarketContextGate(args.draft);
+  const gate = decideMarketContextGate(args.draft, args.expectedDate);
   const files: Array<{ filename: string; bytes: Uint8Array; contentType: string }> = [];
   const attemptEntries = args.attempts.map((a) => {
     let filename: string | null = null;
@@ -3030,6 +3096,7 @@ async function archiveMacroSourceBatch(args: {
     key,
     runId,
     startedAt: new Date(args.startedAt).toISOString(),
+    expectedDate: args.expectedDate,
     gate,
     draft: {
       charts: Object.fromEntries(

@@ -3,8 +3,9 @@ main = "worker/entry.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
 
-# 配信 + 取込プロキシ (/api/ingest/yahoo)。Worker は無料プランで運用する。
-# 取込と指標計算は GitHub Actions (Node) が行う (Workers Cron / [limits] は使わない)。
+# 配信 + 取込プロキシ (/api/ingest/yahoo)。Worker は Workers Paid で運用する。
+# 取込と指標計算は GitHub Actions (Node) が行う ([limits] は使わない)。
+# 株式・マクロ sync の起動・期限 readcheck だけ Workers Cron を使う (下記 [triggers])。
 # EDINET/TDnet は各サービスの /admin/catchup を Node トリガが叩く。
 # 母集団の JPX 同期は `pnpm sync:universe` (Node)。
 # 静的アセット（public/ = kabulab PWA資産 + public/vwap-analysis/ フロント）。
@@ -24,6 +25,13 @@ bucket_name = "vwap-data"
 binding = "DB"
 database_name = "kabulab-cf"
 database_id = "639c0315-0d41-4345-95ab-aec5906224ed"
+
+# 株式 sync の CF スケジューラ (docs/stock-scheduler.md)。GitHub schedule
+# イベントの遅配 (250/318 分を 2 回連続) を受け、起動時刻だけ CF へ移した。
+# 実実行は従来どおり Actions (workflow_dispatch)。曜日は名前指定 (CF の
+# 数字曜日は 1=日曜で GitHub と違うため)。変更の伝播には最大 15 分かかる。
+[triggers]
+crons = ["13 17 * * MON-FRI", "5 21 * * MON-FRI", "0 21 * * MON-FRI", "5 22 * * MON-FRI"]
 
 # CRON_SECRET は取込プロキシ/取込ルートの認証 secret（`wrangler secret put CRON_SECRET`）。
 # EDINET_API_KEY / NOTION_TOKEN も Worker 取込ルートで参照する secret（ローカルは .env）。
