@@ -25,12 +25,16 @@
 #   YAHOO_PROXY_BASE        … 既存 (stock-sync.yml と共通)。世界の主要指数 (global-indices) が
 #                             共有 Yahoo クライアント経由で使う
 #   COINGECKO_DEMO_API_KEY  … 新規・任意。未設定でも動くが匿名アクセスは 429 が出やすい
+#   R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET …
+#     日次信用残の保存済snapshot読取 (新しいJPX PDF取得はしない)
+#   CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN / D1_DATABASE_ID …
+#     同snapshotの銘柄→業種mapping読取
 #
 # 初回 (Notion が空の状態) は全取得元の最新期間を一度に書くため時間がかかる。
 # タイムアウトしても次回実行が「保管済み・観測ログ途中」から再開する (同値行は書き込まない)。
 #
-# 信用残 (日次) は今回のワークフローに含めない (TODO: docs/moneyflow.md 参照。
-# 2026-09-28 の JPX 日次化を確認してから別途追加する)。
+# 日次信用残は jpx-margin-sector がR2の実latest基準日を使う。
+# sector-turnoverのtrade_dateで信用残の基準日を上書きしない。
 name: moneyflow
 
 on:
@@ -78,6 +82,20 @@ on:
         required: true
       COINGECKO_DEMO_API_KEY:
         required: false
+      R2_ACCOUNT_ID:
+        required: false
+      R2_ACCESS_KEY_ID:
+        required: false
+      R2_SECRET_ACCESS_KEY:
+        required: false
+      R2_BUCKET:
+        required: false
+      CLOUDFLARE_ACCOUNT_ID:
+        required: false
+      CLOUDFLARE_API_TOKEN:
+        required: false
+      D1_DATABASE_ID:
+        required: false
 
 concurrency:
   group: moneyflow-ingest
@@ -99,6 +117,15 @@ jobs:
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
       YAHOO_PROXY_BASE: ${{ secrets.YAHOO_PROXY_BASE }}
       COINGECKO_DEMO_API_KEY: ${{ secrets.COINGECKO_DEMO_API_KEY }}
+      # jpx-margin-sectorのみが使う既存credentials。他の取得元の必須にはしない。
+      # 選択時の欠落は既存の型付きアクセサが停止する。
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
     steps:
       - uses: actions/checkout@v4
 
