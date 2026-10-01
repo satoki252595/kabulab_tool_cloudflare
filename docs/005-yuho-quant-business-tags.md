@@ -490,6 +490,12 @@ pnpm biztag rollback --to=v1 --reason="v3 で追加した語の精度が低い�
   - **再試行上限（5回）に達したまま残っている銘柄がある**: 継続的に本文取得/判定に
     失敗している銘柄。Notion の該当行の「判定エラー」列を見て原因を切り分ける
     （EDINET 側の本文抽出失敗、jev 側の恒常的エラー 等）。
+  - **課金切れ（jev 402/billing_error）で判定不能の銘柄がある**: 再試行期日が未来、
+    または再試行上限に達した行も通知に残す。Cloudflare Workers Paidとは別の
+    TypeSafeアカウントのCreditsを確認する。上限到達は課金問題の解消を意味しない。
+    `--codes=`は再試行期日・上限を解除しない。`--dry-run`でもjevへの有料呼出は
+    発生するため、課金復旧の確認にはアカウント残高・支払状態を先に確認する。
+    [2026-10-01の残件調査](test-logs/data-remaining-investigation-20261001.md)を参照。
 
 ## 12. 競合他社 (competitors)
 
