@@ -2,8 +2,9 @@
 
 Refs #102 #132 #146 #196。起点 main `7f1442972793051882d4c2d15771348eb6e4c647`。
 最新Issueコメント、既存実行記録、共有producer、公式の公表・料金ページを照合した。
-本調査は本番データ修復の新しい実績を主張しない。課金補充、Notion/D1/R2への
-書込、workflow dispatch、結果不明POSTの再送は行っていない。
+10/2の続行で646A業種1列と優待4銘柄を限定修復し、原本・PRE/POSTの共有物理保管と
+全列照合・同writer再入0を完了した。詳細は以下のactual記録に分ける。課金補充、
+R2書込、workflow dispatch、結果不明POSTの再送は行っていない。
 
 ## 事業タグの課金切れ
 
@@ -70,7 +71,9 @@ JSON request payload計545,216 bytes。jev API呼出は0。
   通常parserは646Aを採用する。622Aは同じ原本でも非上場・サービス業・証券コード空欄。
   原ZIPは0600で保持し、ローカル型変換エラー後も再GETせず読み直した。HTTP応答の
   正確な時刻・headerは永続化できず、保存時刻を取得時刻の代用にしない。
-  共有Notion物理保管・readbackおよび本番適用はこの時点で未実施。
+  10/2に共有Notion物理保管・全readback後、通常qualification/planner/builderで
+  sector33 NULL→化学を限定適用した。実POST全56 cells一致・同writer再入SQL0、
+  原本/PRE/POSTの物理保管を完了。[646A実修復](issuer646-actual-20261002.md)。
 - 再開点は当日の公式EDINETコードリストを取得・物理保管し、既存の厳密CSV readerと
   発行体資格関数で現在行を読むこと。証券コードが公式に補完済みなら通常経路を使い、
   なお空欄なら公式ticker・EDINETコード・現在法人番号・JPX上場世代の資格を満たす
@@ -81,7 +84,10 @@ JSON request payload計545,216 bytes。jev API呼出は0。
 
 [68銘柄の実修復](../ops-yutai-cas68-20260930.md)は完了済み。残る15行は、
 2307の未来移行5、2001の制度/解析差6、8508の一回限り1、3189の消失2、6577の消失1。
-金額NULL化11・未変更4という既存結果を保持する。
+旧結果は金額NULL化11・未変更4。その後10/2に4銘柄・対象14行の制度/行生成を
+限定修復し、[実POST全467 cells・再入SQL0・物理保管](yutai-hold14-actual-20261002.md)を
+完了した。2307の新選択式4行は既存qualifierのchoiceで金額NULLを保持し、2001の
+寄付選択・3189の抽選/購入条件付きポイントもNULL。8508の単発1行は別途対応が必要。
 
 | 銘柄 | 公式の追加調査先・判断に必要な点 |
 | --- | --- |
@@ -95,9 +101,10 @@ JSON request payload計545,216 bytes。jev API呼出は0。
 SHA`0c9e4440033977dc0c8dfea9fc0a2ee0bb1e03f218bdc6b3cc96c3bd6862171f`、
 POST ZIP6,704,121 bytes・SHA`1b817512e3b84cb4fa7b620a03688eac86fd54c9ec400f8f8ef8700692e3fd92`は
 既存証拠と一致し、旧HOLD15のID・原因を回収した。最新D1のcore/benefit2 SELECTも保存済み。
-公式5資料（2307 PDF・他4 HTML）を各1 GETで0600保存したが、追加原本の共有物理保管・
-全15行のqualification完了ではない。確定した処置だけを既存full-import/whole-writerへ渡す。
-最新PRE4表・原本を物理保管して全列条件・POST全列・再適用書込0を確認する。
+公式8資料と追加8添付（2307旧表・ANAP issuer-linked scripts/listing/変更PDFと
+取得manifest）を共有物理保管し、全fresh-downloadを照合した。最新PRE4表全列を
+固定し、確定した4銘柄だけ27SQL・1batchで修復した。actual記録に原本/PRE/POSTの
+key・bytes/SHA・実応答・全列条件と再入0を記載している。全15行の完了は主張しない。
 
 ## 海外売上の未資格・未保管
 
@@ -154,4 +161,5 @@ Enterprise監査ログは[Notionの公式仕様](https://www.notion.com/help/aud
 `nix develop -c pnpm exec vitest run services/yuho-quant/src/biztag/pipeline.test.ts`
 は17件pass。`nix develop -c pnpm typecheck`および対象2ファイルのESLintはexit0。
 既存のNix管理runtimeとrepo依存を使用し、グローバルinstallは0。
-CI結果は本PRで確認する。実データ修復・課金復旧・新様式の実ファイル検証の成功とは区別する。
+billing回帰・型/lintは本PRのCIで確認する。追加本番修復のSQLite証明、原本資格、
+全列POST・再入0は各actual記録に分ける。課金復旧や新様式実ファイル検証の成功とは区別する。
