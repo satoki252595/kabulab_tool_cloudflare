@@ -96,7 +96,7 @@ export interface RunSummary {
   retryExhausted: string[];
   /**
    * 課金切れ (jev 402/billing_error) で判定不能のまま残っている銘柄コード。
-   * 再試行期日が未来の skip も含めて集計する (`remaining: 0` を完了と
+   * 再試行期日が未来・再試行上限に達した skip も含めて集計する (`remaining: 0` を完了と
    * 読み違えないため。2026-09-29 実測 14 件が green のまま埋もれていた)。
    */
   billingBlocked: string[];
@@ -373,14 +373,9 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const items = planWork(latest, rows, vocab, vocabDiffFromRowVersion, today);
   const retryExhausted = items.filter((i) => i.retryExhausted === true).map((i) => i.stockCode).sort();
   // 課金切れの未解決ブロッカーを台帳エラーから集計する。再試行期日の
-  // 未来・到来を問わない (未来 skip も残件であり、完了ではない)。
+  // 未来・到来・上限到達を問わない (skip も残件であり、完了ではない)。
   const billingBlocked = rows
-    .filter(
-      (r) =>
-        r.tagStatus === "判定不能" &&
-        isBillingBlockedError(r.error) &&
-        (r.attempts ?? 0) < MAX_RETRY_ATTEMPTS
-    )
+    .filter((r) => r.tagStatus === "判定不能" && isBillingBlockedError(r.error))
     .map((r) => r.stockCode)
     .sort();
 

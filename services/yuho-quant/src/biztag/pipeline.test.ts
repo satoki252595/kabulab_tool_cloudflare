@@ -433,7 +433,7 @@ describe("isBillingBlockedError", () => {
 });
 
 describe("runBiztag — billingBlocked 集計", () => {
-  it("判定不能+課金エラー+上限未満の行だけを集計する (期日未来も含む)", async () => {
+  it("判定不能+課金エラーの行を再試行上限到達・期日未来も含めて集計する", async () => {
     notionMocks.loadSupplementRows.mockResolvedValue([
       minimalRow({
         stockCode: "4326",
@@ -461,6 +461,6 @@ describe("runBiztag — billingBlocked 集計", () => {
       thresholds: { yesMin: 0.8, noMax: 0.2 },
       model: "test-model",
     });
-    expect(summary.billingBlocked).toEqual(["4326"]);
+    expect(summary.billingBlocked).toEqual(["4326", "8888"]);
   });
 });
