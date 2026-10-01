@@ -198,7 +198,7 @@ function snapshot() {
       .all(),
     benefits: sqlite
       .prepare(
-        "SELECT id, stock_id, genre_id, description, short_summary, min_shares, record_month, estimated_value FROM yutai_benefits ORDER BY id",
+        "SELECT id, stock_id, genre_id, description, short_summary, min_shares, record_month, record_date, estimated_value FROM yutai_benefits ORDER BY id",
       )
       .all(),
     genres: sqlite.prepare("SELECT id, name, slug FROM yutai_genres ORDER BY id").all(),
@@ -459,6 +459,33 @@ describe("importYutaiFull の解釈の退避", () => {
   });
 });
 
+describe("単発権利日の全量取込", () => {
+  it("同一掲載文・株数・月の単発日を解釈なしでも保持し、新規通常行はNULLで入れる", async () => {
+    const [oneoff, ...rest] = HELD;
+    sqlite.prepare("UPDATE yutai_benefits SET record_month=9, record_date='2026-09-02', short_summary=NULL, estimated_value=NULL WHERE stock_id=?").run(oneoff.id);
+    const data = fetched(oneoff.code);
+    data.benefits[0].localRecordMonths = [9];
+    captureConsole();
+    const { sender } = makeRecordingSender();
+    await importYutaiFull(db, [data, ...rest.map((s) => fetched(s.code)), fetched(NEW_HOLDER.code)], sender);
+    expect(sqlite.prepare("SELECT record_date FROM yutai_benefits WHERE stock_id=?").get(oneoff.id)).toEqual({ record_date: "2026-09-02" });
+    expect(sqlite.prepare("SELECT record_date FROM yutai_benefits WHERE stock_id=?").get(NEW_HOLDER.id)).toEqual({ record_date: null });
+  });
+
+  it.each(["changed", "missing"])("単発の同定を失う %s は削除前に止める", async (kind) => {
+    const [oneoff, ...rest] = HELD;
+    sqlite.prepare("UPDATE yutai_benefits SET record_date='2026-03-02' WHERE stock_id=?").run(oneoff.id);
+    const before = snapshot();
+    captureConsole();
+    const { calls, sender } = makeRecordingSender();
+    const data = rest.map((s) => fetched(s.code));
+    if (kind === "changed") data.push(fetched(oneoff.code, "変更後の掲載文"));
+    await expect(importYutaiFull(db, data, sender)).rejects.toThrow(/単発権利日.*削除前/);
+    expect(snapshot()).toEqual(before);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("planCarry (退避計画の純関数。原文抜粋)", () => {
   // RAW34TEXT は raw34 の原文抜粋 (pointer は raw34-excerpts.ts に cited)。
   const srcRow = (over: Partial<CarrySourceRow>): CarrySourceRow => ({
@@ -466,6 +493,7 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     description: RAW34TEXT["5929"],
     minShares: 100,
     recordMonth: 3,
+    recordDate: null,
     shortSummary: "優待品 500円相当",
     estimatedValue: 500,
     estimateValueSource: null,
@@ -612,6 +640,14 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     const rows = [srcRow({ shortSummary: null, estimatedValue: null })];
     const p = planCarry(rows, metaOf(rows), grpOf(rows));
     expect(p.carried.size).toBe(0);
+  });
+
+  it("同一contextで単発日と通常月の混在、不正暦日、欠落を拒否する", () => {
+    const row = srcRow({ recordDate: "2026-03-02" });
+    expect(() => planCarry([row, { ...row, recordDate: null }], metaOf([row]), grpOf([row]))).toThrow(/権利日が食い違う/);
+    for (const recordDate of ["2026-02-30", undefined]) {
+      expect(() => planCarry([{ ...row, recordDate } as CarrySourceRow], metaOf([row]), grpOf([row]))).toThrow(/単発基準日/);
+    }
   });
 });
 

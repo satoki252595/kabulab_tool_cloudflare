@@ -158,11 +158,18 @@ describe("groupBenefits", () => {
   const row = (over: Partial<BenefitRow>): BenefitRow => ({
     genre: { name: "食品・飲料", slug: "food" },
     minShares: 100,
-    recordMonth: 3,
+    recordMonth: 3, recordDate: null,
     summary: "3,000円相当",
     estimatedValue: 3000,
     estimateValueSource: null,
     ...over,
+  });
+
+  it("単発9/2は同じ要約の定常行と混ぜず、9月の月表示を作らない", () => {
+    const [g] = groupBenefits([row({ recordMonth: 6 }), row({ recordMonth: 9, recordDate: "2026-09-02" })]);
+    expect(g.allMonths).toEqual([6]);
+    expect(g.tiers[0].products).toHaveLength(2);
+    expect(g.tiers[0].products.find(p => p.recordDate !== null)).toMatchObject({ recordDate: "2026-09-02", months: [] });
   });
 
   it("同一株数・同一要約は 1 商品にまとめ、月を束ねる", () => {
@@ -177,7 +184,7 @@ describe("groupBenefits", () => {
   it("同一商品に複数の推定額があれば大きい方を残す (company のみ)", () => {
     const [g] = groupBenefits([
       row({ estimatedValue: 3000, estimateValueSource: "company" }),
-      row({ recordMonth: 9, estimatedValue: 5000, estimateValueSource: "company" }),
+      row({ recordMonth: 9, recordDate: null, estimatedValue: 5000, estimateValueSource: "company" }),
     ]);
     expect(g.tiers[0].products[0].estimatedValue).toBe(5000);
     expect(g.tiers[0].products[0].estimateValueSource).toBe("company");
@@ -186,7 +193,7 @@ describe("groupBenefits", () => {
   it("由来なしの値は公開に出さず、要約・月は残す", () => {
     const [g] = groupBenefits([
       row({ estimatedValue: 3000 }),
-      row({ recordMonth: 9, estimatedValue: 5000 }),
+      row({ recordMonth: 9, recordDate: null, estimatedValue: 5000 }),
     ]);
     const p = g.tiers[0].products[0];
     expect(p.estimatedValue).toBeNull();

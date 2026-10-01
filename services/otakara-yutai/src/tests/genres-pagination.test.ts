@@ -51,6 +51,7 @@ CREATE TABLE yutai_benefits (
   short_summary text,
   min_shares integer NOT NULL,
   record_month integer NOT NULL,
+  record_date text,
   estimated_value integer,
   estimate_value_source text,
   created_at integer NOT NULL DEFAULT (unixepoch()),

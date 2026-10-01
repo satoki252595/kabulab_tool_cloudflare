@@ -15,6 +15,7 @@
  * 再取得時に解釈を `(銘柄, 掲載文)` の内容キーで戻すので、文言が変わった行は
  * `short_summary` が NULL のまま入り、`missing` で拾えるから。
  */
+import { isRecordDate } from "../src/record-date.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { benefitKey } from "./benefit-key.js";
 import {
@@ -36,6 +37,7 @@ export type BenefitRow = {
   estimateValueSource: string | null;
   minShares: number;
   recordMonth: number;
+  recordDate: string | null;
   /** 更新時刻 (unix 秒)。 */
   updatedAt: number;
 };
@@ -48,18 +50,20 @@ export const TASK_ID_PATTERN = /^[0-9a-f]{16}$/;
 const RecipientContext = z.strictObject({
   minShares: z.number().check(z.int(), z.positive()),
   recordMonth: z.number().check(z.int(), z.minimum(1), z.maximum(12)),
+  recordDate: z.nullable(z.string()).check(z.refine(isRecordDate, { error: "不正な単発基準日" })),
 });
 
 /** 同じ掲載文を受け取る実際の株数・権利月。重複を除き順序を固定する。 */
 export function recipientContexts(
-  rows: readonly Pick<BenefitRow, "minShares" | "recordMonth">[],
+  rows: readonly Pick<BenefitRow, "minShares" | "recordMonth" | "recordDate">[],
 ): z.infer<typeof RecipientContext>[] {
   const contexts = new Map<string, z.infer<typeof RecipientContext>>();
-  for (const { minShares, recordMonth } of rows) {
-    contexts.set(`${minShares}:${recordMonth}`, { minShares, recordMonth });
+  for (const { minShares, recordMonth, recordDate } of rows) {
+    const context = RecipientContext.parse({ minShares, recordMonth, recordDate });
+    contexts.set(JSON.stringify([minShares, recordMonth, recordDate]), context);
   }
   return [...contexts.values()].sort((a, b) =>
-    a.minShares - b.minShares || a.recordMonth - b.recordMonth,
+    a.minShares - b.minShares || a.recordMonth - b.recordMonth || String(a.recordDate).localeCompare(String(b.recordDate)),
   );
 }
 
@@ -105,7 +109,7 @@ export function selectSummaryTasks(
   const groups = new Map<
     string,
     { stockCode: string; stockName: string; description: string; summaries: (string | null)[];
-      recipients: Pick<BenefitRow, "minShares" | "recordMonth">[] }
+      recipients: Pick<BenefitRow, "minShares" | "recordMonth" | "recordDate">[] }
   >();
   for (const r of rows) {
     const key = benefitKey(r.stockCode, r.description);
@@ -115,7 +119,7 @@ export function selectSummaryTasks(
       groups.set(key, g);
     }
     g.summaries.push(r.shortSummary);
-    g.recipients.push({ minShares: r.minShares, recordMonth: r.recordMonth });
+    g.recipients.push({ minShares: r.minShares, recordMonth: r.recordMonth, recordDate: r.recordDate });
   }
 
   const tasks: SummaryTask[] = [];

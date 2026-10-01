@@ -11,6 +11,7 @@
  * 原子性の単位は銘柄: 1 銘柄の全 UPDATE が 1 リクエスト。銘柄間の失敗は止めて
  * 同引数の再実行で回復する (適用済み銘柄は無変更・冪等)。
  */
+import { assertRecordDate } from "../src/record-date.js";
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
 import { INSTRUMENT_TYPE_EQUITY } from "../../../src/shared/jpx/instrument-type.js";
 import { buildBenefitUpdateStatements, type PlannedUpdate } from "./summary-import.js";
@@ -40,6 +41,7 @@ export type StockBenefitPreimage = {
   stockId: number;
   minShares: number;
   recordMonth: number;
+  recordDate: string | null;
   description: string;
   shortSummary: string | null;
   estimatedValue: number | null;
@@ -123,6 +125,7 @@ export function snapshotStockPreimages(
           stockId,
           minShares: b.minShares,
           recordMonth: b.recordMonth,
+          recordDate: b.recordDate,
           description: b.description,
           shortSummary: b.shortSummary,
           estimatedValue: b.estimatedValue,
@@ -168,6 +171,7 @@ export type VerifiedBenefitTuple = {
   stockCode: string;
   minShares: number;
   recordMonth: number;
+  recordDate: string | null;
   description: string;
   shortSummary: string | null;
   estimatedValue: number | null;
@@ -180,6 +184,7 @@ const VERIFIED_BENEFIT_COLUMNS = [
   "stockId",
   "minShares",
   "recordMonth",
+  "recordDate",
   "description",
   "shortSummary",
   "estimatedValue",
@@ -246,14 +251,15 @@ export function assertVerifiedBenefitsMatch(input: {
  * bind は snapshot JSON 1 + stockId 5 の計 6 (D1 上限 100/文に収まる)。
  */
 export function buildStockPreflightStatement(snapshot: StockPreimage): D1BatchStatement {
+  for (const b of snapshot.benefits) assertRecordDate(b.recordDate);
   const sql = [
     "-- preflight: 同銘柄の projection preimage (射影) が計画時と一致しなければ SQL エラーで batch 全体 rollback",
     "WITH snap(j) AS (VALUES (?)),",
-    "exp_ben(id, stock_id, min_shares, record_month, description, short_summary, estimated_value, estimate_value_source, updated_at) AS (",
-    "  SELECT json_extract(value, '$.id'), json_extract(value, '$.stockId'), json_extract(value, '$.minShares'), json_extract(value, '$.recordMonth'), json_extract(value, '$.description'), json_extract(value, '$.shortSummary'), json_extract(value, '$.estimatedValue'), json_extract(value, '$.estimateValueSource'), json_extract(value, '$.updatedAt') FROM json_each(json_extract((SELECT j FROM snap), '$.benefits'))",
+    "exp_ben(id, stock_id, min_shares, record_month, record_date, description, short_summary, estimated_value, estimate_value_source, updated_at) AS (",
+    "  SELECT json_extract(value, '$.id'), json_extract(value, '$.stockId'), json_extract(value, '$.minShares'), json_extract(value, '$.recordMonth'), json_extract(value, '$.recordDate'), json_extract(value, '$.description'), json_extract(value, '$.shortSummary'), json_extract(value, '$.estimatedValue'), json_extract(value, '$.estimateValueSource'), json_extract(value, '$.updatedAt') FROM json_each(json_extract((SELECT j FROM snap), '$.benefits'))",
     "),",
-    "act_ben(id, stock_id, min_shares, record_month, description, short_summary, estimated_value, estimate_value_source, updated_at) AS (",
-    "  SELECT id, stock_id, min_shares, record_month, description, short_summary, estimated_value, estimate_value_source, updated_at FROM yutai_benefits WHERE stock_id = ?",
+    "act_ben(id, stock_id, min_shares, record_month, record_date, description, short_summary, estimated_value, estimate_value_source, updated_at) AS (",
+    "  SELECT id, stock_id, min_shares, record_month, record_date, description, short_summary, estimated_value, estimate_value_source, updated_at FROM yutai_benefits WHERE stock_id = ?",
     "),",
     "fin_ok(ok) AS (",
     "  SELECT CASE WHEN json_extract((SELECT j FROM snap), '$.financial') IS NULL THEN (SELECT count(*) = 0 FROM otakara_stock_financials WHERE stock_id = ?) ELSE EXISTS (SELECT 1 FROM otakara_stock_financials WHERE stock_id = ? AND yutai_yield IS json_extract((SELECT j FROM snap), '$.financial.yutaiYield') AND data_date IS json_extract((SELECT j FROM snap), '$.financial.dataDate') AND price IS json_extract((SELECT j FROM snap), '$.financial.price') AND per IS json_extract((SELECT j FROM snap), '$.financial.per') AND pbr IS json_extract((SELECT j FROM snap), '$.financial.pbr') AND dividend_yield IS json_extract((SELECT j FROM snap), '$.financial.dividendYield') AND roe IS json_extract((SELECT j FROM snap), '$.financial.roe') AND ma_25 IS json_extract((SELECT j FROM snap), '$.financial.ma25') AND rsi_14 IS json_extract((SELECT j FROM snap), '$.financial.rsi14') AND macd IS json_extract((SELECT j FROM snap), '$.financial.macd') AND macd_signal IS json_extract((SELECT j FROM snap), '$.financial.macdSignal') AND fetched_at IS json_extract((SELECT j FROM snap), '$.financial.fetchedAt')) END",

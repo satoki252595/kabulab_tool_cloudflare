@@ -149,6 +149,7 @@ export function planSummaryImport(input: {
       sources: (string | null)[];
       minShares: number[];
       recordMonths: number[];
+      recordDates: (string | null)[];
     }
   >();
   for (const r of input.currentRows) {
@@ -161,6 +162,7 @@ export function planSummaryImport(input: {
       e.sources.push(r.estimateValueSource);
       e.minShares.push(r.minShares);
       e.recordMonths.push(r.recordMonth);
+      e.recordDates.push(r.recordDate);
     } else {
       current.set(key, {
         ids: [r.id],
@@ -170,6 +172,7 @@ export function planSummaryImport(input: {
         sources: [r.estimateValueSource],
         minShares: [r.minShares],
         recordMonths: [r.recordMonth],
+        recordDates: [r.recordDate],
       });
     }
   }
@@ -270,10 +273,10 @@ export function planSummaryImport(input: {
       continue;
     }
     const recipients = recipientContexts(row.minShares.map((minShares, i) => ({
-      minShares, recordMonth: row.recordMonths[i],
+      minShares, recordMonth: row.recordMonths[i], recordDate: row.recordDates[i],
     })));
     if (JSON.stringify(recipientContexts(task.recipients)) !== JSON.stringify(recipients)) {
-      reject("stale", "タスク発行後に株数・権利月の受取条件が変わった");
+      reject("stale", "タスク発行後に株数・権利月・単発基準日の受取条件が変わった");
       continue;
     }
     const summary = normalizeSummary(result.shortSummary);
