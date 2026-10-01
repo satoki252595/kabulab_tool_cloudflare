@@ -15,6 +15,7 @@
  *     [--upstream /tmp/c45/upstream] [--physical /tmp/physical34/manifest-34.json] \
  *     [--out /tmp/yutai-reentry-20260930/evidence.json]
  */
+import { assertRecordDate } from "../src/record-date.js";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -114,6 +115,7 @@ export type NamedRow = {
   stockCode: string;
   minShares: number;
   recordMonth: number;
+  recordDate: string | null;
   oldDescription: string;
   oldSha: string;
   shortSummary: string | null;
@@ -176,6 +178,7 @@ export function parseRowManifest(text: string): Map<number, NamedRow> {
     ) {
       fail("row-manifest 行の estimateValueSource が不正");
     }
+    assertRecordDate(r["recordDate"]);
     const p = asRecord(r["provenance"], "row-manifest provenance");
     for (const k of ["manifestHtmlSha", "manifestJsonSha", "localHtmlSha", "localJsonSha"]) {
       if (typeof p[k] !== "string") fail(`row-manifest provenance.${k} が文字列ではない`);
@@ -188,6 +191,7 @@ export function parseRowManifest(text: string): Map<number, NamedRow> {
       stockCode: r["stockCode"] as string,
       minShares: r["minShares"] as number,
       recordMonth: r["recordMonth"] as number,
+      recordDate: r["recordDate"],
       oldDescription: r["oldDescription"] as string,
       oldSha: r["oldSha"] as string,
       shortSummary: (r["shortSummary"] ?? null) as string | null,
@@ -337,6 +341,7 @@ export function parseAbcManifest(text: string): AbcParsed {
     if (preimage.stockId !== stockId || !Array.isArray(preimage.benefits)) {
       fail(`perStock ${stockId} の preimage 形状が不正`);
     }
+    for (const b of preimage.benefits) assertRecordDate(b.recordDate);
     preimages.set(stockId, preimage);
     let idx = 0;
     for (const s of statements.slice(1)) {
@@ -589,6 +594,7 @@ export async function proveAbcReentry(
         rowId: b.id,
         minShares: b.minShares,
         recordMonth: b.recordMonth,
+        recordDate: b.recordDate,
         description: b.description,
         shortSummary: b.shortSummary,
         estimatedValue: b.estimatedValue,
@@ -975,7 +981,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       const id = r["id"] as number;
       const p = byId.get(id);
       if (!p) fail(`v3 row ${id} が manifest preimage に無い`);
-      const cols: (keyof typeof p)[] = ["shortSummary", "estimatedValue", "estimateValueSource", "description", "minShares", "recordMonth", "updatedAt"];
+      const cols: (keyof typeof p)[] = ["shortSummary", "estimatedValue", "estimateValueSource", "description", "minShares", "recordMonth", "recordDate", "updatedAt"];
       for (const c of cols) {
         if ((p[c] as unknown) !== (r[c as string] as unknown)) {
           fail(`v3 row ${id} の ${c} が manifest preimage と不一致`);
@@ -1110,6 +1116,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       estimateValueSource: planned ? planned.estimateValueSource : r.estimateValueSource,
       minShares: r.minShares,
       recordMonth: r.recordMonth,
+      recordDate: r.recordDate,
       updatedAt: r.updatedAt,
     };
     currentRows.push({ ...base, description: ft ? ft.newFull : r.oldDescription });

@@ -88,6 +88,7 @@ yutai_benefits
 ├── short_summary   text?       # 手動解釈した短縮文言 (20-30 文字)
 ├── min_shares      integer     # 最低必要株数
 ├── record_month    integer     # 権利確定月 (1-12)
+├── record_date     text?       # 単発の実基準日 (YYYY-MM-DD)。NULL は従来の月表現
 ├── estimated_value integer?    # 推定金銭価値 (円)
 └── created_at / updated_at
 
@@ -106,6 +107,8 @@ otakara_stock_scores
 ├── yutai_months / yutai_genre_ids   text?  # 月次 rebuild が集計する昇順 JSON 配列 (0016。/api/screening の月・ジャンル絞り込み用)
 └── scored_at
 ```
+
+`record_date` がある行は、詳細画面に実基準日と単発優待の説明を表示し、定常の権利月・年間優待利回り・月次集計には含めない。日付を月末や毎年の月へ変換しない。不正な暦日や列の欠落は停止する。全量取込は同じ銘柄・掲載文・株数・月の既存実基準日を保持し、単発行を同定できない場合は削除前に停止する。要約契約 `2026-10-02.1` は受取条件に `recordDate` を必須とし、発行後の日付変更も stale として拒否する。
 
 > 過去には `public.stock_history` (月次 PER/PBR 推移) も持っていたが、
 > アプリ側から一切参照されていなかったため 2026-04 に削除した。

@@ -162,6 +162,15 @@ describe("planYieldRecompute", () => {
     ]);
   });
 
+  it("確定額面があっても単発基準日は年間分子とrecipient contextへ混ぜない", async () => {
+    sqlite.prepare("UPDATE yutai_benefits SET record_date = ? WHERE stock_id = ?").run("2026-09-02", STOCK_A);
+    const plan = await planYieldRecompute(db, [STOCK_A]);
+    expect(plan.entries[0].next).toBeNull();
+    const inputs = await fetchYieldInputs(db, [STOCK_A]);
+    const snap = snapshotStockPreimages(inputs, [STOCK_A]).get(STOCK_A)!;
+    expect(snap.benefits.every(b => b.recordDate === "2026-09-02")).toBe(true);
+  });
+
   it("overlay は書き込み予定値を仮適用する (dry-run の先見せ)", async () => {
     // 予定値は文言と整合するものだけ通る (2,000 円の額面に 2,000 円)。
     sqlite.prepare("UPDATE yutai_benefits SET description = ? WHERE stock_id = ?").run("架空ギフト 2,000円相当", STOCK_C);
@@ -186,7 +195,7 @@ describe("planYieldRecompute", () => {
               {
                 rowId: 7,
                 minShares: 100,
-                recordMonth: 3,
+                recordMonth: 3, recordDate: null,
                 description: "架空",
                 shortSummary: null,
                 estimatedValue: 1000,
@@ -217,7 +226,7 @@ describe("planYieldRecompute", () => {
               {
                 rowId: 7,
                 minShares: 100,
-                recordMonth: 3,
+                recordMonth: 3, recordDate: null,
                 description: "架空",
                 shortSummary: null,
                 estimatedValue: 1000,
@@ -248,7 +257,7 @@ describe("planYieldRecompute", () => {
               {
                 rowId: 7,
                 minShares: 100,
-                recordMonth: 3,
+                recordMonth: 3, recordDate: null,
                 description: "カタログより選択 5,000円相当",
                 shortSummary: null,
                 estimatedValue: 5000,
@@ -279,7 +288,7 @@ describe("planYieldRecompute", () => {
               {
                 rowId: 7,
                 minShares: 100,
-                recordMonth: 3,
+                recordMonth: 3, recordDate: null,
                 description: "架空ギフト 1,000円相当",
                 shortSummary: null,
                 estimatedValue: null,
@@ -310,7 +319,7 @@ describe("planYieldRecompute", () => {
               {
                 rowId: 7,
                 minShares: 100,
-                recordMonth: 3,
+                recordMonth: 3, recordDate: null,
                 description: "架空ギフト 1,000円相当",
                 shortSummary: null,
                 estimatedValue: 1000,
@@ -320,7 +329,7 @@ describe("planYieldRecompute", () => {
               {
                 rowId: 8,
                 minShares: 1000,
-                recordMonth: 3,
+                recordMonth: 3, recordDate: null,
                 description: "架空ギフト 1,000円相当",
                 shortSummary: null,
                 estimatedValue: null,

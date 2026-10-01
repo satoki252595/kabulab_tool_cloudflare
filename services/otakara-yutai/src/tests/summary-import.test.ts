@@ -47,7 +47,7 @@ const row = (over: Partial<BenefitRow>): BenefitRow => ({
   estimatedValue: 3000,
   estimateValueSource: null,
   minShares: 100,
-  recordMonth: 3,
+  recordMonth: 3, recordDate: null,
   updatedAt: 1,
   ...over,
 });
@@ -90,10 +90,10 @@ describe("selectSummaryTasks", () => {
     const rows = [ROWS[0], { ...ROWS[1], recordMonth: 9 }, { ...ROWS[0], id: 13 }];
     const tasks = selectSummaryTasks(rows);
     expect(tasks[0].recipients).toEqual([
-      { minShares: 100, recordMonth: 3 }, { minShares: 100, recordMonth: 9 },
+      { minShares: 100, recordMonth: 3, recordDate: null }, { minShares: 100, recordMonth: 9, recordDate: null },
     ]);
     expect(planSummaryImport({ tasks, currentRows: [...rows].reverse(), resultsText: result({}) }).updates).toHaveLength(1);
-    for (const changed of [{ minShares: 200 }, { recordMonth: 6 }]) {
+    for (const changed of [{ minShares: 200 }, { recordMonth: 6 }, { recordDate: "2026-09-02" }]) {
       const currentRows = rows.map((r, i) => i === 0 ? { ...r, ...changed } : r);
       const plan = planSummaryImport({ tasks, currentRows, resultsText: result({}) });
       expect(plan.updates).toEqual([]);

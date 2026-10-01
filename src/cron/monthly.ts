@@ -16,7 +16,8 @@
  *   - core_stock_financials が未作成の銘柄はスコア計算をスキップ (silent 0 にはしない)
  */
 
-import { sql, eq, and, isNotNull } from "drizzle-orm";
+import { isRecurringBenefit } from "../../services/otakara-yutai/src/record-date.js";
+import { sql, eq, and, isNotNull, isNull } from "drizzle-orm";
 import { createD1HttpBatchSender, createD1HttpDb } from "../shared/db/d1-http-client.js";
 import { activeEquityCondition } from "../shared/db/active-equity.js";
 
@@ -129,6 +130,7 @@ export async function runMonthlyRebuild(
       stockId: otakaraSchema.yutaiBenefits.stockId,
       minShares: otakaraSchema.yutaiBenefits.minShares,
       recordMonth: otakaraSchema.yutaiBenefits.recordMonth,
+      recordDate: otakaraSchema.yutaiBenefits.recordDate,
       description: otakaraSchema.yutaiBenefits.description,
       estimatedValue: otakaraSchema.yutaiBenefits.estimatedValue,
       estimateValueSource: otakaraSchema.yutaiBenefits.estimateValueSource,
@@ -136,6 +138,7 @@ export async function runMonthlyRebuild(
     .from(otakaraSchema.yutaiBenefits)
     .where(
       and(
+        isNull(otakaraSchema.yutaiBenefits.recordDate),
         isNotNull(otakaraSchema.yutaiBenefits.estimatedValue),
         eq(otakaraSchema.yutaiBenefits.estimateValueSource, "company"),
       ),
@@ -149,6 +152,7 @@ export async function runMonthlyRebuild(
     .select({
       stockId: otakaraSchema.yutaiBenefits.stockId,
       recordMonth: otakaraSchema.yutaiBenefits.recordMonth,
+      recordDate: otakaraSchema.yutaiBenefits.recordDate,
       genreId: otakaraSchema.yutaiBenefits.genreId,
       minShares: otakaraSchema.yutaiBenefits.minShares,
       description: otakaraSchema.yutaiBenefits.description,
@@ -158,6 +162,7 @@ export async function runMonthlyRebuild(
   // recipient context は全優待行から。SQL 述語で絞った分子候補に適用する。
   const groupCtx = new Map<string, { minShares: number[]; recordMonths: number[] }>();
   for (const b of monthGenreRows) {
+    if (!isRecurringBenefit(b)) continue;
     const key = `${b.stockId}\0${b.description}`;
     const g = groupCtx.get(key);
     if (g) {
@@ -362,11 +367,12 @@ function toJsonSet(set: Set<number> | undefined): string | null {
  * 行が無い銘柄は Map に載らない (呼び出し側が null にする)。
  */
 export function groupBenefitDisplaySets(
-  rows: readonly { stockId: number; recordMonth: number; genreId: number }[],
+  rows: readonly { stockId: number; recordMonth: number; recordDate: string | null; genreId: number }[],
 ): Map<number, { yutaiMonths: string | null; yutaiGenreIds: string | null }> {
   const monthMap = new Map<number, Set<number>>();
   const genreMap = new Map<number, Set<number>>();
   for (const b of rows) {
+    if (!isRecurringBenefit(b)) continue;
     let months = monthMap.get(b.stockId);
     if (!months) monthMap.set(b.stockId, (months = new Set()));
     months.add(b.recordMonth);

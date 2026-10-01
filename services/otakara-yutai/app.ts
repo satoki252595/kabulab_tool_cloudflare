@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { assertRecordDate, isRecurringBenefit } from "./src/record-date.js";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
 import { createMiddleware } from "hono/factory";
@@ -127,6 +128,7 @@ async function loadCardBenefits(
     stockId: yutaiBenefits.stockId,
     shortSummary: yutaiBenefits.shortSummary,
     recordMonth: yutaiBenefits.recordMonth,
+    recordDate: yutaiBenefits.recordDate,
     genreId: yutaiBenefits.genreId,
   }).from(yutaiBenefits).where(inArray(yutaiBenefits.stockId, stockIds));
 
@@ -136,7 +138,7 @@ async function loadCardBenefits(
   for (const id of stockIds) {
     const mine = rows.filter((b) => b.stockId === id);
     out.set(id, {
-      benefitMonths: [...new Set(mine.map((b) => b.recordMonth))].sort((a, b) => a - b),
+      benefitMonths: [...new Set(mine.filter(isRecurringBenefit).map((b) => b.recordMonth))].sort((a, b) => a - b),
       benefitSummary: publicSummaries(mine).join(" / "),
       genres: [...new Set(mine.map((b) => genreMap.get(b.genreId)).filter((n): n is string => Boolean(n)))],
     });
@@ -572,8 +574,9 @@ export const TIPS = {
   total: "総合スコア。ファンダメンタルズ（企業の実力）60%とテクニカル（チャートの動き）40%を組み合わせた独自指標。80以上が最有力。",
   fundamental: "企業の財務データから割安さを評価するスコア。PER・PBR・配当利回り・ROE・優待利回りを総合評価。",
   technical: "株価チャートの動きから割安タイミングを評価するスコア。RSI・移動平均乖離率・MACDを総合評価。",
-  yutai: "株主優待。一定株数を保有すると企業から商品券や食事券などがもらえる制度。権利確定月に保有が必要です。",
+  yutai: "株主優待。一定株数を保有すると企業から商品券や食事券などがもらえる制度。企業が定める基準日の株主名簿に記載されることが条件です。",
   yutai_yield: "優待利回り。1年分の株主優待の推定価値が、投資額（株価×最低必要株数）の何%にあたるかを示します。例: 株価1,000円×100株=10万円の投資で年3,000円相当の優待なら3%。優待の金額を推定できない銘柄では「-」になります。",
+  recorddate: "単発基準日。この日を基準に実施する一回限りの優待です。毎年同じ月に受けられる優待ではなく、年間の優待利回りには含めません。",
   recordmonth: "権利確定月。この月末時点で株を保有していると株主優待がもらえます。権利付最終日（月末2営業日前）までに購入が必要。",
   minshares: "最低必要株数。優待をもらうために最低限保有しなければならない株の数。通常100株単位です。",
   value_unknown: "この優待は商品名から金額を機械的に推定できません。自社製品・体験型・割引券・カタログギフトの一部などが該当します。「分からない=ダメ」ではなく、金額換算が難しいので投資判断はご自身で行ってください。",
@@ -591,6 +594,7 @@ export type BenefitRow = {
   genre: { name: string; slug: string } | null;
   minShares: number;
   recordMonth: number;
+  recordDate: string | null;
   /**
    * 公開してよい優待内容の要約 (`short_summary` 由来。publicSummary() を通した値)。
    * 出典サイトの掲載文 `description` をここに入れてはいけない。
@@ -613,6 +617,7 @@ type ProductGroup = {
   estimatedValue: number | null;
   estimateValueSource: string | null;
   months: number[];
+  recordDate: string | null;
 };
 type TierGroup = {
   minShares: number;
@@ -640,13 +645,14 @@ export function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
     // (表示テキストが無い行同士を 1 行に潰すと株数段階の情報が失われる)
     let anonSeq = 0;
     for (const b of list) {
-      monthsSet.add(b.recordMonth);
+      assertRecordDate(b.recordDate);
+      if (b.recordDate === null) monthsSet.add(b.recordMonth);
       if (!tierMap.has(b.minShares)) tierMap.set(b.minShares, new Map());
       const productMap = tierMap.get(b.minShares)!;
       // 表示テキスト単位でまとめる (以前は出典掲載文 description をキーにしていた)。
       // 原文が違っても要約が同じなら 1 行に畳まれる (意図的)。実データでは 17 組で、
       // いずれも推定額が一致するため金額は失われない。権利月は months に束ねる。
-      const key = b.summary || `\u0000anon:${anonSeq++}`;
+      const key = b.summary ? JSON.stringify([b.summary, b.recordDate]) : `\u0000anon:${anonSeq++}`;
       // 公開する金額は trust 境界を通った値だけ (company 以外は null → 正直な
       // 「金額換算が難しい優待」表示。要約・月・条件の文言は落とさない)。
       const trusted = trustedEstimateValue(b);
@@ -657,10 +663,11 @@ export function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
           estimatedValue: trusted,
           estimateValueSource: trustedSource,
           months: [],
+          recordDate: b.recordDate,
         });
       }
       const p = productMap.get(key)!;
-      p.months.push(b.recordMonth);
+      if (b.recordDate === null) p.months.push(b.recordMonth);
       // 最大の推定価値を残す（同一商品が月ごとに別値を持つ場合の保険）。
       // 値を差し替えるときは出典区分も一緒に差し替える (ルール1: 値と
       // 出典の対応を崩さない)。
@@ -678,6 +685,7 @@ export function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
           estimatedValue: p.estimatedValue,
           estimateValueSource: p.estimateValueSource,
           months: [...new Set(p.months)].sort((a, b) => a - b),
+          recordDate: p.recordDate,
         })),
       }));
     result.push({
@@ -804,7 +812,8 @@ function renderBenefitGroups(groups: GenreGroup[]): string {
         .map((t) => {
           const productsHtml = t.products
             .map((p) => {
-              const isPartial = p.months.length < g.allMonths.length;
+              const dateNote = p.recordDate === null ? "" : `<span class="product-months">${tip("recorddate", "単発基準日")} ${h(p.recordDate)}</span>`;
+              const isPartial = p.recordDate === null && p.months.length < g.allMonths.length;
               const monthNote = isPartial
                 ? `<span class="product-months">${p.months.map((m) => m + "月").join("・")}のみ</span>`
                 : "";
@@ -823,7 +832,7 @@ function renderBenefitGroups(groups: GenreGroup[]): string {
               const descHtml = p.summary
                 ? h(p.summary).replace(/\n/g, "<br>")
                 : `<span class="product-desc-empty">優待内容の要約なし（会社の発表をご確認ください）</span>`;
-              return `<li class="benefit-product"><div class="product-desc">${descHtml}</div><div class="product-meta">${valueNote}${monthNote}</div></li>`;
+              return `<li class="benefit-product"><div class="product-desc">${descHtml}</div><div class="product-meta">${valueNote}${dateNote}${monthNote}</div></li>`;
             })
             .join("");
           return `
@@ -999,13 +1008,13 @@ app.get("/genres/:slug", async (c) => {
   // (#17 で /api/screening から外したのと同じ理由・同じ判断)
   const pageIds = rows.map(r => r.id);
   const benefits = pageIds.length > 0
-    ? await db.select({ stockId: yutaiBenefits.stockId, shortSummary: yutaiBenefits.shortSummary, recordMonth: yutaiBenefits.recordMonth })
+    ? await db.select({ stockId: yutaiBenefits.stockId, shortSummary: yutaiBenefits.shortSummary, recordMonth: yutaiBenefits.recordMonth, recordDate: yutaiBenefits.recordDate })
         .from(yutaiBenefits).where(inArray(yutaiBenefits.stockId, pageIds))
     : [];
 
   const cards = rows.map(row => {
     const rowBenefits = benefits.filter(b => b.stockId === row.id);
-    const months = [...new Set(rowBenefits.map(b => b.recordMonth))].sort((a, b) => a - b);
+    const months = [...new Set(rowBenefits.filter(isRecurringBenefit).map(b => b.recordMonth))].sort((a, b) => a - b);
     const desc = publicSummaries(rowBenefits).join(" / ");
     return `
       <a href="${BP}/stocks/${row.code}" style="text-decoration:none;color:inherit">
@@ -1423,6 +1432,7 @@ app.get("/stocks/:code", async (c) => {
         columns: {
           minShares: true,
           recordMonth: true,
+          recordDate: true,
           shortSummary: true,
           estimatedValue: true,
           estimateValueSource: true,
@@ -1474,7 +1484,7 @@ app.get("/stocks/:code", async (c) => {
       ${renderFinGrid(fin)}
 
       <h3 style="margin-top:24px">${tip("yutai", "株主優待")}</h3>
-      <div class="guide">${tip("recordmonth", "権利確定月")}の月末に株を保有していると優待がもらえます。${tip("minshares", "最低株数")}以上の保有が必要です。</div>
+      <div class="guide">${stockData.benefits.some(b => b.recordDate !== null) ? `優待ごとの${tip("recordmonth", "権利確定月")}または${tip("recorddate", "単発基準日")}をご確認ください。` : `${tip("recordmonth", "権利確定月")}の月末に株を保有していると優待がもらえます。`}${tip("minshares", "最低株数")}以上の保有が必要です。</div>
       ${renderBenefitGroups(groupBenefits(
         // `any` にしない: `with.benefits.columns` から shortSummary を落とすと
         // publicSummary(b) が全行 "" になり、型でもテストでも気づけないまま
@@ -1483,6 +1493,7 @@ app.get("/stocks/:code", async (c) => {
           genre: { name: string; slug: string } | null;
           minShares: number;
           recordMonth: number;
+          recordDate: string | null;
           shortSummary: string | null;
           estimatedValue: number | null;
           estimateValueSource: string | null;
@@ -1490,6 +1501,7 @@ app.get("/stocks/:code", async (c) => {
           genre: b.genre ? { name: b.genre.name, slug: b.genre.slug } : null,
           minShares: b.minShares,
           recordMonth: b.recordMonth,
+          recordDate: b.recordDate,
           summary: publicSummary(b),
           estimatedValue: b.estimatedValue,
           // 列が無い時代は SQLite が識別子を文字列リテラルとして返していた
