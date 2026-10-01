@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchChart, type YahooChartRawCapture } from "./client.js";
+import { fetchChart, fetchDaily, fetchBars5m, fetchQuoteSummary, fetchStockRawData, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES, type YahooRawCapture, type YahooChartRawCapture } from "./client.js";
 
 /**
  * fetchChart の任意 raw-capture hook (onRaw) の検証。
@@ -143,5 +143,78 @@ describe("fetchChart previousClose (explicit-only)", () => {
     );
     const chart = await fetchChart("7203", "5y");
     expect(chart.previousClose).toBeNull();
+  });
+});
+
+
+describe("共有Yahoo取得のraw custody", () => {
+  it.each([
+    ["Chart", (onRaw: (c: YahooRawCapture) => void) => fetchChart("7203", "5y", { onRaw })],
+    ["QuoteSummary", (onRaw: (c: YahooRawCapture) => void) => fetchQuoteSummary("7203", { onRaw })],
+    ["daily", (onRaw: (c: YahooRawCapture) => void) => fetchDaily("7203", "10y", { onRaw })],
+    ["5m", (onRaw: (c: YahooRawCapture) => void) => fetchBars5m("7203", "5d", { onRaw })],
+  ])("%s HTTP/parse失敗でも最終応答原文を先にcapture", async (_name, fetchRaw) => {
+    useProxy();
+    for (const status of [200, 503]) {
+      const response = new Response("invalid JSON\nsource bytes", { status, headers: {
+        "Content-Type": "text/plain", "X-Kabulab-Yahoo-Status": "503", "Set-Cookie": "private-secret",
+      } });
+      Object.defineProperty(response, "url", { value: "https://test.invalid/api?crumb=private-secret&symbol=7203" });
+      vi.stubGlobal("fetch", vi.fn(async () => response));
+      const seen: YahooRawCapture[] = [];
+      await expect(fetchRaw((c) => { seen.push(c); })).rejects.toThrow();
+      expect(seen).toHaveLength(1);
+      expect(new TextDecoder().decode(seen[0].bytes)).toBe("invalid JSON\nsource bytes");
+      expect(seen[0].status).toBe(status);
+      expect(Number.isFinite(Date.parse(seen[0].receivedAt))).toBe(true);
+      expect(seen[0].headers).toEqual({ contentType: "text/plain", upstreamStatus: "503" });
+      expect(seen[0].url).not.toContain("private-secret");
+      expect(seen[0].url).toContain("symbol=7203");
+    }
+  });
+
+  it("proxy応答URL内のencoded crumbもmetadataのみ除去し、本文は保持", async () => {
+    useProxy();
+    const original = "crumb=原文内は保管する";
+    const response = new Response(original, { status: 503 });
+    Object.defineProperty(response, "url", { value: "https://test.invalid/proxy?url=https%3A%2F%2Fyahoo.invalid%2Fapi%3Fcrumb%3Dprivate-secret%26range%3D5y" });
+    vi.stubGlobal("fetch", vi.fn(async () => response));
+    const seen: YahooRawCapture[] = [];
+    await expect(fetchQuoteSummary("7203", { onRaw: (c) => { seen.push(c); } })).rejects.toThrow();
+    expect(seen[0].url).not.toContain("private-secret");
+    expect(new TextDecoder().decode(seen[0].bytes)).toBe(original);
+  });
+
+  it("片API失敗後も相方の取得/capture完了を待ち、追加GETしない", async () => {
+    useProxy();
+    let release: (() => void) | undefined;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const fetchFn = vi.fn(async (url: string) => {
+      if (decodeURIComponent(url).includes("quoteSummary")) { await waiting; return new Response("summary body", { status: 503 }); }
+      return new Response("chart body", { status: 503 });
+    });
+    vi.stubGlobal("fetch", fetchFn);
+    const events: string[] = [];
+    const result = fetchStockRawData("7203", "5y", {
+      onChartRaw: () => { events.push("chart"); }, onSummaryRaw: () => { events.push("summary"); },
+    }).catch((e) => { events.push("throw"); return e; });
+    await vi.waitFor(() => expect(events).toEqual(["chart"]));
+    release!();
+    expect(await result).toBeInstanceOf(Error);
+    expect(events).toEqual(["chart", "summary", "throw"]);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("8MiB超過は切詰captureせずSTOP、相方parse失敗に隠れない", async () => {
+    useProxy();
+    const fetchFn = vi.fn(async (url: string) => new Response(decodeURIComponent(url).includes("quoteSummary")
+      ? new Uint8Array(MAX_YAHOO_RAW_BYTES + 1) : "invalid chart JSON", { status: 200 }));
+    vi.stubGlobal("fetch", fetchFn);
+    const chartRaw = vi.fn(), summaryRaw = vi.fn();
+    await expect(fetchStockRawData("7203", "5y", { onChartRaw: chartRaw, onSummaryRaw: summaryRaw }))
+      .rejects.toBeInstanceOf(YahooRawTooLargeError);
+    expect(chartRaw).toHaveBeenCalledTimes(1);
+    expect(summaryRaw).not.toHaveBeenCalled();
+    expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 });

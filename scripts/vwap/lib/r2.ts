@@ -168,12 +168,14 @@ export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // レート制限 (YahooRateLimitError = 429/503) は即リトライで叩き返さず再スローし、
 // 呼び出し側 (ingest) がサーキットブレークで全体を中断する。Retry-After 無視の
 // 短時間リトライがブロックを延長していたため (低負荷化)。
-export async function retry<T>(fn: () => Promise<T>, n = 3, base = 1000): Promise<T> {
+export async function retry<T>(fn: () => Promise<T>, n = 3, base = 1000, shouldRetry?: (error: unknown) => boolean): Promise<T> {
   let last: unknown;
   for (let i = 0; i < n; i++) {
     try { return await fn(); }
     catch (e) {
       last = e;
+      // callerがrun-level STOPを検知した後は、残り試行へ進まない。
+      if (shouldRetry !== undefined && !shouldRetry(e)) throw e;
       if ((e as { name?: string })?.name === "YahooRateLimitError") throw e;
       // Yahoo 404 (上場廃止・コード変更) は待っても直らないので即 throw (L-57)。
       // 形状は src/shared/yahoo/client.ts の `yahoo ${status}`。

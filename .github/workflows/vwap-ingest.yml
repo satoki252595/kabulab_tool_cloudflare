@@ -1,35 +1,26 @@
 # 007 VWAP 取込を GitHub Actions で定期実行 → R2。
 #
-# Yahoo は **YAHOO_PROXY_BASE 経由 (Worker エッジの /api/ingest/yahoo)** で
-# 叩くため、GitHub ランナー(Azure 共有 IP)が Yahoo に直接弾かれる(429)ことはない。
-# Cloudflare エッジ IP 経由になるので runner IP は Yahoo から見えない。
-#
-# このワークフローは **default ブランチ(main)** から発火する。schedule を効かせるには
-# main にマージ済みであること。
-#
-# ⚠️ 実行時間/コスト: 全 ~4,445 銘柄を回す。**CONC=5 並列**(下の env)で 1パス ~30分、
-# daily+intra ~1h(旧 CONC=1 は ~5h で timeout 接近・月数千分だった)。日足+5分足 cron は
-# **週3(月/水/金)** なので概算 ~1h × 週3 ≈ 月 ~800 分 + margin 日次 (~1分×平日20 ≈ 月 ~20分)。stock-sync/catchup を足しても
-# 実行時間の目安: 差分時は数十分、バックフィル時は 2-3h 域 (timeout 300 分)。Yahoo は YAHOO_PROXY_BASE 経由 + MAX_RL ガードで
-# 並列でも 429 は抑制(stock-sync が同 CONC=5 で実証済み)。実測は run の所要時間で監視すること。
-#
-# ⚠️ 取込は **本番 R2(R2_BUCKET secret)** に直接書く(環境分離なし)。マージ剪定で冪等なので
-# 再実行は安全(既書込分は ts キーでマージされる)。
+# Yahoo取得は共有clientのYAHOO_PROXY_BASE経路。proxy/upstreamの429・ABORTは失敗として扱う。
+# 取得済本文は私有ローカル全parts保存・Notion物理照合後にだけR2へ保存する。
+# このworkflowのscheduleはdefault branch(main)から発火する。
+# 実行母集団は取得時のuniverseを使用し、CONC=5の取得を最大30銘柄ずつ保管する。
+# 原本保管の追加量/時間と料金条件: docs/test-logs/yahoo-raw-custody-20261002.md。
+# 本番R2へのPUTは取得時の版/不在に条件付ける。競合・結果不明は停止し、再送しない。
 #
 # 必要な GitHub Secrets (Settings → Secrets and variables → Actions):
 #   YAHOO_PROXY_BASE      … デプロイ済み Worker の URL 例 https://kabulab-cf.<sub>.workers.dev
 #   CRON_SECRET           … Worker secret と同値 (プロキシ認証)
 #   R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET … R2 書込 (S3 互換)
-#   NOTION_TOKEN / NOTION_ARCHIVE_PAGE_ID / NOTION_YUHO_TEXT_DB_ID … 信用残 PDF の一次データ記録 (ルール6)
+#   NOTION_TOKEN / NOTION_ARCHIVE_PAGE_ID / NOTION_YUHO_TEXT_DB_ID … Yahoo応答本文・信用残PDFの一次データ記録 (ルール6)
 name: vwap-ingest
 
 on:
   schedule:
     # 月/水/金 08:00 UTC (17:00 JST・東証引け後): 日足10年 + 5分足。Actions 分節約のため週5→週3に間引き。
-    # 5分足取込は毎回 range=5d で取得しマージするので、最大2営業日のギャップは次回が回収=取りこぼし無し。
+    # 5分足は通常range=5dを取得し、保存済windowとの適合と欠測を実データで確認する。
     - cron: "0 8 * * 1,3,5"
     # 平日 08:00 UTC (17:00 JST): 信用残高(日次。JPX 16:00 JST 公表後)。
-    # 祝日は公表が無いため前営業日分を冪等に再 PUT するだけ (キー同一・追記なし)。
+    # 公表日の実原文を基準に保存する（祝日カレンダーの推測で成功にしない）。
     - cron: "0 8 * * 1-5" # 信用残高(日次)
   workflow_dispatch:
     inputs:
@@ -58,12 +49,9 @@ permissions:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 300 # 60d バックフィル/日足+5分足 の逐次全銘柄は実測で 2-3h 域。GH 上限 360 内で余裕を持たせる
+    timeout-minutes: 300 # 原本保管追加後の全量時間は初回正常runで計測する。
     env:
-      # CONC=1(逐次)だと daily+intra で ~5h(timeout 接近で途中kill)・月数千分。stock-sync と同じ
-      # CONC=5 並列にして 1パス ~30分(daily+intra ~1h)へ短縮し、timeout/無料枠の両方を解消する。
-      # Yahoo は YAHOO_PROXY_BASE(Cloudflare エッジ)経由なので並列でも runner IP は 429 対象外、
-      # かつ Yahoo 側 429 は MAX_RL=5 連続中断ガードで保護(stock-sync が CONC=5 で実証済み)。
+      # 既存取得CONCを維持。HTTP失敗・MAX_RL到達・custody失敗は全件成功と扱わない。
       CONC: "5"
       DELAY_MS: "300"
       # 取込 knob の通常値 (必須宣言。コード側に黙示既定なし)。
