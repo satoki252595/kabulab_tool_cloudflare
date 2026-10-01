@@ -55,8 +55,8 @@ export const DEFAULT_RATE_LIMIT_BACKOFF_MS = 5_000;
 
 /**
  * Retry-After を絶対時刻へ変換する。source 実期限を保持し、30 秒への
- * 短縮はしない (待機 budget の cap は呼び出し側 — Node recovery の
- * MAX_RECOVERY_BACKOFF_MS — が担う)。非 finite は既定に倒す。
+ * 短縮はしない。Node recovery は MAX_RECOVERY_BACKOFF_MS の待機予算を
+ * 超える期限なら再取得を skip する。非 finite は既定に倒す。
  */
 function rateLimitRetryAt(response: Response): number | null {
   if (response.status !== 429 && response.status !== 503) return null;

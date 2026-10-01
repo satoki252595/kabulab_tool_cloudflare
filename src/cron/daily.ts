@@ -4,11 +4,12 @@
  * 3 サービス (001 RSI / 002 otakara / 003 swing) が必要とする日次データを 1 本の
  * 統一フローで取得・計算・書き込む。
  *
- * 実行形態（Workers Paid を使わない運用）:
+ * 実行形態（計算は Node、proxy / D1 は Workers Paid アカウントを利用）:
  *   - **Node で実行**（GitHub Actions / ローカル CLI）。D1 へは `createD1HttpDb`
  *     (sqlite-proxy → D1 REST) で直接書き込む。
  *   - Yahoo は共有クライアントが `YAHOO_PROXY_BASE`（Cloudflare エッジの
- *     `/api/ingest/yahoo`）経由で叩くため、自宅/CI IP の 429 を回避する。
+ *     `/api/ingest/yahoo`）経由で取得する。Yahoo 側の 429 は発生し得る。
+ *     proxy / D1 は Paid の包含枠と超過分の従量課金が適用される。
  *   - 起動: `pnpm sync:daily:core`（scripts/sync/daily.ts）/ GitHub Actions。
  *
  * フロー（母集団同期 Phase 0 は除外）:
@@ -28,8 +29,8 @@
  * `pnpm sync:universe`（src/cron/universe.ts）で別途同期する。
  *
  * D1 書込コスト対策: OHLCV は「既存 MAX(date) より新しい bar のみ」を増分 upsert
- * する。初回(空)は全 6mo backfill、以降は当日分 1〜2 行のみ。全銘柄日次の
- * rows-written を ~52 万 → ~3 万/日 に抑え D1 無料枠 (10 万/日) 内に収める。
+ * する。初回(空)は全 6mo backfill、以降は当日分 1〜2 行のみ。
+ * 実際の rows-written を減らし、Paid の包含枠と超過課金を管理する。
  *
  * CLAUDE.md のフォールバック禁止ルールに従い:
  *   - Yahoo の取得失敗は failure として明示し、上場状態は変更しない
@@ -271,7 +272,7 @@ export function runDateKeys(startedAt: number): {
     runMonday: isMondayUtc(at),
   };
 }
-/** upstream 指示や診断文字列が異常でも回復待機を30秒で止める。 */
+/** source期限が30秒の待機予算を超える回収は未試行で残す。 */
 const MAX_RECOVERY_BACKOFF_MS = 30_000;
 const MARKET_CONTEXT_CHART_SYMBOLS = [
   "^N225",
@@ -394,7 +395,7 @@ export type PrioritizedDailyRecoveryTarget<MacroTarget, StockTarget> =
   | { kind: "stock"; target: StockTarget };
 
 /**
- * 銘柄開始を平準化し、観測した429の Retry-After 中は未実行銘柄を止める。
+ * 銘柄開始を平準化し、観測した429/503の Retry-After 中は未実行銘柄を止める。
  * run 内の数値だけを共有し、外部callやretryは増やさない。source期限を短縮しない。
  */
 export function createDailyStockStartGate(startIntervalMs: number, deadlineMs?: number) {
@@ -402,20 +403,23 @@ export function createDailyStockStartGate(startIntervalMs: number, deadlineMs?: 
   let backoffUntil = 0;
 
   return {
-    async wait(): Promise<boolean> {
+    async wait(waitDeadlineMs?: number): Promise<boolean> {
       while (true) {
         const now = Date.now();
         const startAt = Math.max(now, nextStartAt, backoffUntil);
-        if (deadlineMs !== undefined && startAt >= deadlineMs) return false;
+        if ((deadlineMs !== undefined && startAt >= deadlineMs) ||
+          (waitDeadlineMs !== undefined && startAt >= waitDeadlineMs)) return false;
         nextStartAt = startAt + startIntervalMs;
         if (startAt <= now) return true;
         await sleep(startAt - now);
+        if ((deadlineMs !== undefined && Date.now() >= deadlineMs) ||
+          (waitDeadlineMs !== undefined && Date.now() >= waitDeadlineMs)) return false;
         if (backoffUntil <= startAt) return true;
       }
     },
     observeFailure(message: string): void {
       if (
-        !/^(?:Chart|QuoteSummary) API HTTP エラー \[[^\]]+\]: 429\b/.test(
+        !/^(?:Chart|QuoteSummary) API HTTP エラー \[[^\]]+\]: (?:429|503)\b/.test(
           message
         )
       ) {
@@ -478,7 +482,7 @@ export async function recoverTransientDailyFailures<T>(
   let attempted = 0;
   let recovered = 0;
   let skippedDueToLimit = 0;
-  const requestedRetryAt = Math.max(
+  let requestedRetryAt = Math.max(
     0,
     ...failures
       .filter(({ error }) => isTransientDailySyncFailure(error))
@@ -486,9 +490,8 @@ export async function recoverTransientDailyFailures<T>(
         ({ error }) => Number(/\bretry-at-ms=(\d+)\b/.exec(error)?.[1]) || 0
       )
   );
-  const cannotWait = requestedRetryAt > Date.now() + MAX_RECOVERY_BACKOFF_MS ||
-    (options.deadlineMs !== undefined && requestedRetryAt >= options.deadlineMs);
-  if (!cannotWait && requestedRetryAt > Date.now()) await sleep(requestedRetryAt - Date.now());
+  const cannotWait = () => requestedRetryAt > Date.now() + MAX_RECOVERY_BACKOFF_MS ||
+    (options.deadlineMs !== undefined && Math.max(Date.now(), requestedRetryAt) >= options.deadlineMs);
 
   for (const failure of failures) {
     // 原本保管STOPなどrun全体の条件は対象単位のcatchへ丸めない。
@@ -497,7 +500,14 @@ export async function recoverTransientDailyFailures<T>(
       unresolved.push(failure);
       continue;
     }
-    if (cannotWait || (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs)) {
+    if (cannotWait()) {
+      unresolved.push(failure);
+      skippedDueToLimit++;
+      continue;
+    }
+    if (requestedRetryAt > Date.now()) await sleep(requestedRetryAt - Date.now());
+    options.beforeAttempt?.();
+    if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
       unresolved.push(failure);
       skippedDueToLimit++;
       continue;
@@ -507,12 +517,17 @@ export async function recoverTransientDailyFailures<T>(
       await processTarget(failure.target);
       recovered++;
     } catch (error) {
+      const message = rootCauseMessage(error);
+      if (isTransientDailySyncFailure(message)) {
+        requestedRetryAt = Math.max(requestedRetryAt,
+          Number(/\bretry-at-ms=(\d+)\b/.exec(message)?.[1]) || 0);
+      }
       unresolved.push({
         target: failure.target,
-        error: rootCauseMessage(error),
+        error: message,
       });
     }
-    await sleep(DELAY_MS);
+    if (!cannotWait()) await sleep(DELAY_MS);
   }
 
   return {
@@ -676,7 +691,7 @@ export async function loadJssAnnualMap(
  * 増分フィルタ (`date > existingMaxDate`) は保存済み NULL 日を再送しないため、
  * 対象日をここで明示する。再送されるのは fresh スライス内に実終値がある日だけ
  * (`buildOhlcvRows`)。保存済みの有効値は遡及訂正でも自動では書き換えない。
- * 1 文で全件引く (rows_read は無料枠内。修復が進むほど返る行は減る)。
+ * 1 文で全件引く (rows_read は Paid の包含枠・超過課金の対象)。
  */
 export async function loadNullCloseDates(
   db: Db
@@ -1352,6 +1367,8 @@ async function runDailySyncAndRecord(
   );
   let recoveredStocks = 0;
   const recoveryAttempts = new Map<string, number>();
+  const recoveryDeadlineMs = Math.min(startedAt + RECOVERY_TIME_BUDGET_MS,
+    Date.parse(`${targetDate}T21:00:00Z`));
   const recovery = await recoverTransientDailyFailures(
     recoveryTargets,
     async (recoveryTarget) => {
@@ -1369,7 +1386,10 @@ async function runDailySyncAndRecord(
         }
         // 回収は件数が少ないので 1 行 flush のまま (初回パスと行 builder は共有)。
         const target = recoveryTarget.target;
-        await stockStartGate.wait();
+        if (!await stockStartGate.wait(Math.min(recoveryDeadlineMs, Date.now() + MAX_RECOVERY_BACKOFF_MS))) {
+          custodyStop = new Error("Yahooの取得開始期限が株式回収の待機予算またはrun期限以後のためSTOPします");
+          throw custodyStop;
+        }
         assertStockDeadline();
         const attempt = (recoveryAttempts.get(target.code) ?? 0) + 1;
         recoveryAttempts.set(target.code, attempt);
@@ -1418,7 +1438,7 @@ async function runDailySyncAndRecord(
         throw error;
       }
     },
-    { deadlineMs: startedAt + RECOVERY_TIME_BUDGET_MS, beforeAttempt: () => {
+    { deadlineMs: recoveryDeadlineMs, beforeAttempt: () => {
       if (custodyStop !== null) throw custodyStop;
       assertStockDeadline();
     } }

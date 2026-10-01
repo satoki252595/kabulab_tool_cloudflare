@@ -17,8 +17,8 @@
 | shared daily/5m | ensureOkでretryAfterMsのみを渡しretryAtMsを落とす | 既存絶対期限helperを再利用、数値/HTTP-date期限を保持 |
 | raw metadata | client/custodyともcontentType/upstreamStatusだけを保存 | safe Retry-Afterを両段のallowlistへ追加、認証headers除外維持 |
 | VWAP producers | 連続5のみでABORT、成功でcounter resetし未来期限を見ない | future retryAtを受けたら即ABORT、全inflight settled原文をcustody後にexit2 |
-| stock first pass | 初回429だけを30秒へclamp | 毎429のmax実期限を保持、開始予定が21UTC以後ならrun STOP |
-| stock recovery | 実120秒指示も30秒へ短縮し再取得 | 30秒待機予算/実行期限外は未試行skip、期限内だけ既存1回回収 |
+| stock first pass | 初回429だけを30秒へclamp | 毎429/503のmax実期限を保持、開始予定が21UTC以後ならrun STOP |
+| stock recovery | 実120秒指示も30秒へ短縮し再取得 | 初回/各回収で延長された実期限を毎回評価、30秒待機予算/回収期限/21UTC外は未試行skip |
 
 503は合法Retry-Afterがある場合に絶対期限を持つ。ヘッダ無しの503は従来のnull期限と
 連続数判定を維持する。raw CaptureはHTTP/parse失敗より前、custodyは全inflight完了後、
@@ -28,6 +28,8 @@ stock first-pass gateのSTOPは取得済全原文を保管した後にthrowし�
 既存のraw保管/readback後deadline checkと各D1 statementのbeforeWrite callbackは無変更。
 回収時の長い共通Yahoo期限では、一過性失敗の再処理も新Yahoo取得を含むため全件を
 skippedDueToLimitで残す。期限を超えて強行し、完全成功として扱う経路は追加しない。
+回収callerも開始gateのfalseを消費してrun STOPとする。原本保管/readback中に期限が
+延長された場合も、次対象の前に最新retryAtを再評価し、予算外の新sleep/GETを止める。
 
 ## 外部待機と実装の限界
 
@@ -47,5 +49,9 @@ Cloudflareはisolateの寿命と同一instanceへのroutingを保証しないた
   first-pass期限延長/21UTC開始停止、回収30秒予算外GET0、予算内の既存回収を確認。
 - 追加intra回帰ではfuture rateをMAX_RL前に検知し、相方inflightのsettledを待って
   原文保管、次wave GET0・R2 PUT0・exit2を確認。対象suite12 pass。
+- 最新mainの通常merge後、関連10 suites201 pass/3既存skip。
+  型検査・対象ESLintはexit0（既存12 warnings/0 errors）、Worker dry-runとdiff checkもpass。
+  stockの503期限も同じ規則に揃え、期限前STOP回帰を追加した。回収中の期限延長が
+  30秒/回収期限/21UTC外なら後続GET0とする実配線回帰、gate拒否の追加timer0を確認。
 - 検証は既存Nix project runtimeで実行。source/本番mutation/dispatch0。
-  型/lint/最新main通常merge後のCI結果はPRの最終headで確認する。
+  CI結果はPRの最終headで確認する。
