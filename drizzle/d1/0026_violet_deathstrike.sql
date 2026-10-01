@@ -1,0 +1,1 @@
+ALTER TABLE `yutai_benefits` ADD `record_date` text;

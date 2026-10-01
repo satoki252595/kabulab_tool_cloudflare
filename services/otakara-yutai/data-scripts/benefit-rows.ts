@@ -6,6 +6,7 @@
  * (片方だけ列や結合を変えるとキーが一致しなくなり、全件 stale ではじかれる)。
  */
 import "dotenv/config";
+import { assertRecordDate } from "../src/record-date.js";
 import { eq } from "drizzle-orm";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as schema from "../src/db/schema.js";
@@ -31,9 +32,13 @@ export async function loadBenefitRows(db: OtakaraD1): Promise<BenefitRow[]> {
       estimateValueSource: yutaiBenefits.estimateValueSource,
       minShares: yutaiBenefits.minShares,
       recordMonth: yutaiBenefits.recordMonth,
+      recordDate: yutaiBenefits.recordDate,
       updatedAt: yutaiBenefits.updatedAt,
     })
     .from(yutaiBenefits)
     .innerJoin(stocks, eq(yutaiBenefits.stockId, stocks.id));
-  return rows.map((r) => ({ ...r, updatedAt: Math.floor(r.updatedAt.getTime() / 1000) }));
+  return rows.map((r) => {
+    assertRecordDate(r.recordDate);
+    return { ...r, updatedAt: Math.floor(r.updatedAt.getTime() / 1000) };
+  });
 }

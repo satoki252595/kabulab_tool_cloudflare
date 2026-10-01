@@ -24,6 +24,7 @@
  *   plan (offline): node --import tsx services/otakara-yutai/data-scripts/probe-yutai-fresh-audit.ts
  *   live (grant 後のみ): 同 + --execute-live
  */
+import { assertRecordDate } from "../src/record-date.js";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
@@ -183,6 +184,7 @@ export const EXPECTED_KEYS: Record<CallKind, readonly string[]> = {
     "stock_id",
     "min_shares",
     "record_month",
+    "record_date",
     "description",
     "short_summary",
     "estimated_value",
@@ -420,6 +422,7 @@ export function buildExpectedCalls(chunks: [number[], number[]]): ExpectedCall[]
         stockId: yutaiBenefits.stockId,
         minShares: yutaiBenefits.minShares,
         recordMonth: yutaiBenefits.recordMonth,
+        recordDate: yutaiBenefits.recordDate,
         description: yutaiBenefits.description,
         shortSummary: yutaiBenefits.shortSummary,
         estimatedValue: yutaiBenefits.estimatedValue,
@@ -483,6 +486,7 @@ const COL_TYPES: Record<CallKind, Record<string, "number" | "string" | "number|n
     stock_id: "number",
     min_shares: "number",
     record_month: "number",
+    record_date: "string|null",
     description: "string",
     short_summary: "string|null",
     estimated_value: "number|null",
@@ -536,6 +540,7 @@ export function validateRawResponse(kind: CallKind, bytes: Buffer, chunkIds: rea
       fail(`${kind} 行 ${i} の列が想定外: [${keys.join(",")}] (want [${wantKeys.join(",")}])`);
     }
     for (const k of keys) checkColType(kind, k, row[k], `${kind} 行 ${i}.${k}`);
+    if (kind === "benefits") assertRecordDate(row["record_date"]);
     // 帰属: 行の銘柄が当該 chunk に属すること。一意性も同時に見る。
     const idKey = kind === "parent" ? "id" : "stock_id";
     const owner = row[idKey] as number;
@@ -690,6 +695,7 @@ export type ExpectedBenefitRow = {
   stockId: number;
   minShares: number;
   recordMonth: number;
+  recordDate: string | null;
   description: string;
   shortSummary: string | null;
   estimatedValue: number | null;
@@ -730,6 +736,8 @@ export function buildExpectedPost(
     if (desc === undefined) fail(`benefit ${bid} の期待掲載文の源が無い`);
     const minShares = pre?.minShares ?? nm?.minShares;
     const recordMonth = pre?.recordMonth ?? nm?.recordMonth;
+    const recordDate = pre === undefined ? nm?.recordDate : pre.recordDate;
+    assertRecordDate(recordDate);
     const updatedAtPre = pre?.updatedAt ?? nm?.updatedAt;
     if (minShares === undefined || recordMonth === undefined || updatedAtPre === undefined) {
       fail(`benefit ${bid} の期待行属性の源が無い`);
@@ -739,6 +747,7 @@ export function buildExpectedPost(
       stockId: m.stockId,
       minShares,
       recordMonth,
+      recordDate,
       description: desc,
       shortSummary: triple.shortSummary,
       estimatedValue: triple.estimatedValue,
@@ -788,6 +797,9 @@ export function compareBenefitFullSet(
     }
     if (f.row.minShares !== e.minShares) {
       content.push({ id: bid, field: "minShares", expected: fmt(e.minShares), fresh: fmt(f.row.minShares) });
+    }
+    if (f.row.recordDate !== e.recordDate) {
+      content.push({ id: bid, field: "recordDate", expected: fmt(e.recordDate), fresh: fmt(f.row.recordDate) });
     }
     if (f.row.recordMonth !== e.recordMonth) {
       content.push({ id: bid, field: "recordMonth", expected: fmt(e.recordMonth), fresh: fmt(f.row.recordMonth) });
@@ -1261,6 +1273,7 @@ async function runLive(args: ProbeArgs, scope: FreshScope): Promise<void> {
         estimateValueSource: b.estimateValueSource,
         minShares: b.minShares,
         recordMonth: b.recordMonth,
+        recordDate: b.recordDate,
         updatedAt: b.updatedAt,
       });
     }
