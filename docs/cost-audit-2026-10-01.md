@@ -2,20 +2,22 @@
 
 ## 判断と対象
 
-Workers Paid の既存契約を使えば、PR #195 の定時起動移行のために新しい
-Cloudflare プランやサーバを購入する必要はない。正常起動時の追加処理は月数十回の
+Workers Paid の既存契約を使えば、株式・マクロの定時起動移行のために新しい
+Cloudflare プランやサーバを購入する必要はない。正常起動時の追加処理は月88回の
 Worker 実行と R2 操作で、既知の通常取込もリクエスト数・R2 操作数は少ない。
-同日のダッシュボード読取で、現在の請求期間の requests・CPU・D1 read/write/保存・
-R2 A/B/Standard保存・Builds は、同一アカウントで他サービスを含めても各包含枠内に
-あることを確認した。この確認範囲では追加請求対象はなく、既知の通常負荷を理由に
-上位プランへ変更する根拠はない。Logs・外部AI・Notionなど未確認の費用を含めた
+2026-10-01〜02の認証済みダッシュボード読取で、現在の請求期間の requests・CPU・
+D1 read/write/保存・R2 A/B/Standard保存・Builds、および最後30日の Logs が各包含枠内に
+あることを確認した。Billingの使用量はaccount集計で、サービス別の帰属はできない。
+この確認範囲では追加請求対象はなく、既知の通常負荷を理由に上位プランへ変更する
+根拠はない。外部AI・Notionなど未確認の費用を含めた
 「全費用が必ず $5/月」「将来の追加費用も必ず $0」とは結論しない。
 
 - コード基準: main `7f1442972793051882d4c2d15771348eb6e4c647`。
-- 未反映の変更: [PR #195](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/195)
-  head `353c19419d7d680ecd3ebfd23ee0ff529f7b272c`。実装・マージ後に再確認する。
+- 定時起動変更: [PR #195](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/195)。
+  head `51dd661a56eac6d5a229a9a465fd5b9444d748f9` の株式・マクロ計4 Cronへの
+  更新を2026-10-02に読取確認し、負荷表へ反映。マージ後に再確認する。
 - 料金・制限の取得日: **2026-10-01**。金額は USD、税・為替換算を含めない。
-- ユーザーの Paid 契約申告に加え、同日のダッシュボード読取で Workers Paid を確認。
+- ユーザーの Paid 契約申告に加え、認証済みダッシュボード読取で Workers Paid を確認。
   請求画面・個人情報・他サービスの利用額は私有証跡とし公開 Git に保存しない。
 - GitHub API で当該 repo の `visibility=public` を確認。認証値は読まず、
   この調査ではプラン購入・設定変更・ジョブ起動を行っていない。
@@ -80,7 +82,7 @@ Standard/IA ともインターネット egress は無料。R2 は GB-month・操
 | 上記の合計 | `N × (44 + 26)` | 258,650 Worker inbound requests |
 | VWAP 日足 + 5分足 R2 | `N × 13 × 2` | GET 96,070、PUT 最大 96,070 |
 | 信用残日次 R2 | `22 × (GET 最大4 + PUT 最大2)` | GET 最大 88、PUT 最大 44 |
-| PR #195 スケジューラ | `22 × 2` | Cron 44 起動、PUT 44、GET 22 |
+| 株式・マクロ スケジューラ | `22 × 4` | Cron 88 起動、PUT 88、GET 44 |
 
 stock-sync の取得実装は [daily.ts](../src/cron/daily.ts) と
 [Yahoo client](../src/shared/yahoo/client.ts)。VWAP は
@@ -90,15 +92,18 @@ stock-sync の取得実装は [daily.ts](../src/cron/daily.ts) と
 [VWAP workflow](../.github/workflows/vwap-ingest.yml)。日足は毎回 10y を取得する。
 R2 の同値 skip があるので PUT は上限側の値である。
 
-PR #195 は 17:13 UTC に dispatch、21:05 UTC に完了確認する。正常な 1 日は
-R2 claim PUT + 結果 PUT + 完了確認 GET。実同期は従来の Actions のままで、
-旧株式 GitHub cron は同 PR で除く。receipt による重複拒否と再 POST 禁止を保てば
+株式は17:13 UTCにdispatch・21:05に完了確認、マクロは21:00にdispatch・22:05に
+完了確認する。正常な1日は各経路のR2 claim PUT + 結果 PUT + 完了確認 GETで、
+計4 PUT + 2 GET。株式とマクロのreceiptは別キーで、22平日では44件/月、保存容量の
+増分は数十KB程度の想定となる。receiptの累積容量は別に確認する。
+実同期は従来のActionsのままで、旧株式・マクロGitHub cronは除く。
+receiptによる重複拒否と再 POST禁止を保てば
 同期件数を二倍にしない。GitHub Jobs 読取は最大 10 ページに限定されている。
 [PR #195](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/195)
 
-上記だけなら R2 は Class A 最大 96,158、Class B 最大 96,180/月。
+上記だけなら R2 は Class A 最大 96,202、Class B 最大 96,202/月。
 含まれる操作枠の約 9.62% / 0.96%であり、proxy は Worker リクエスト枠の約 2.59%。
-この断面に macro、初回/修復、再取得、公開ページ/API のアクセス、他 Worker、
+この断面にマクロ本体の取得・保管、初回/修復、再取得、公開ページ/API のアクセス、他 Worker、
 `jp-stock-raw` / `jp-stock-supply` の処理、R2 list/head/multipart は含めていない。
 これらを 0 と扱わず実測へ加算する。
 
@@ -134,8 +139,9 @@ R2 PUT は SDK 内部も 1 試行で、曖昧な送信結果を自動再送し�
 
 Cloudflare Budget Alerts は超過を**通知するだけ**で、処理や請求を停止しない。
 通知はアカウント単位の従量料金が対象で、固定契約料は含まない。公式には $10 の
-既定通知の展開も告知されているが、このアカウントで設定済みとは仮定しない。
-日次処理なので翌日の通知になる。現在の設定・受信先を読取確認し、設定変更は別判断。
+既定通知の展開も告知されている。2026-10-02の認証済画面でこのアカウントの
+Budget Alerts設定済みを確認した。日次処理なので翌日の通知になる。
+設定・受信先の個別値は私有証跡とし、今回変更は行っていない。
 [Budget Alerts](https://developers.cloudflare.com/billing/manage/budget-alerts/)、
 [既定通知の告知](https://developers.cloudflare.com/changelog/post/2026-06-15-budget-alerts-default-on/)
 
@@ -165,6 +171,8 @@ I/O待機はCPUに含まれない。高額化の防止は CPU 上限だけでな
   ([既存記録 §12.8](./005-yuho-quant-business-tags.md))。`budget-min=20` は時間制限で、
   dry-runでも判定APIを呼ぶ。既定最大3 retryは最大4送信になり、曖昧な失敗で提供側に
   課金された量が成功応答のtoken集計に出ない可能性がある。請求/残credit確認が必要。
+  認証済consoleの2026-10-02読取ではtop-upの最低購入単位は$5。
+  今回の調査で購入は行わず、取込の再開はcreditの用意後に判断する。
   [TypeSafe公式モデル料金](https://docs.typesafe.ai/models)
 - **SemIf**: ローカル MLX 推論で外部API従量料はないが、端末・電力・稼働時間まで
   無料とはしない。通常のタグ判定を無断で他モデルに変更しない。
@@ -191,21 +199,27 @@ I/O待機はCPUに含まれない。高額化の防止は CPU 上限だけでな
 
 | 確認対象 | 本書作成時の状態 |
 |---|---|
-| Workers Paid契約 | ダッシュボード読取で確認済み |
-| Worker requests・CPU | rootが包含枠内を確認済み。account実数は私有、service別は未計測 |
-| Workers Logs | 未取得。請求表に表示されないことを0の証拠にしない |
-| D1容量・rows read/write | rootが包含枠内を確認済み。account実数は私有、当該DB別は未計測 |
-| R2 Standard容量・A/B | rootが包含枠内を確認済み。account実数は私有、bucket別は未計測 |
+| Workers Paid契約 | 認証済ダッシュボード読取で確認済み |
+| Worker requests・CPU | 認証済画面で包含枠内確認。account集計でservice別帰属不可、実数は私有 |
+| Workers Logs | 認証済画面の最後30日が包含枠内。account集計と対象Workerを確認、実数は私有 |
+| D1容量・rows read/write | 認証済画面で包含枠内確認。account集計で当該DB別帰属不可、実数は私有 |
+| R2 Standard容量・A/B | 認証済画面で包含枠内確認。account集計でbucket別帰属不可、実数は私有 |
 | R2 IA容量・retrieval | 使用状態未確認、Standard表で代用しない |
-| Workers Builds | rootが包含枠内を確認済み。project別分数は未計測 |
+| Workers Builds | 認証済画面で包含枠内確認。account集計でproject別帰属不可 |
 | GitHub runnerとvisibility | public/標準ubuntuを確認済み。保存課金は未確認 |
-| Jev入力tokens・credit・請求、Notion現在契約 | 未取得。過去の成功数・trial確認で代用しない |
-| 既存Budget Alerts/CPU limits | ダッシュボード値は未取得。設定変更なし |
+| Jev入力tokens・credit・請求、Notion現在契約 | Jev再開用creditの用意は別対応。月間tokens・請求とNotion現在契約は未取得 |
+| 既存Budget Alerts | 認証済画面で設定済み確認。hard capではなく通知のみ、変更なし |
+| 現在のCPU limits | ダッシュボード値は未取得。設定変更なし |
 
 月次概算は各製品の `max(使用量 − 含まれる量, 0) × 単価` の合計に
 既存 Workers $5 とその他の契約料を足す。R2は上記の切上げとIA条件を適用する。
 この合計は **アカウントの既存枠をどう消費するか** に依存するため、serviceだけの
 追加処理を丸ごと無料枠と比較した値を請求額としては出さない。
+
+Logsの新料金acceptance画面は未受諾のまま。画面には20M超過時に受諾しない場合の
+samplingが記載されているが、現在は枠内なのでこの調査で受諾・sampling変更は行わない。
+最後30日のObservability集計と請求期間は一致するとは限らず、将来の超過判定では
+対象期間と適用状態を再確認する。
 
 本調査で料金変更・ログ削減・CPU上限変更・新規購買は行っていない。
 service別実測を取得したら、検査日時・serviceの計数・確定範囲を追記して判断を更新する。
