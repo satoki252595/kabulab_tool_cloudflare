@@ -7,9 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
 import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { loadCodes } from "./lib/codes.js";
-import { fetchDaily, parseDailyChart } from "../../src/shared/yahoo/client.js";
+import { MAX_YAHOO_RAW_BYTES, YahooRawTooLargeError, parseDailyChart } from "../../src/shared/yahoo/client.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
+import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main, tenYearRange } from "./ingest-daily.js";
+
+const dailySource = vi.hoisted(() => vi.fn());
+const rawHook = vi.hoisted(() => ({ enabled: true, status: 200, size: 28 }));
 
 vi.mock("./lib/r2.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./lib/r2.js")>();
@@ -21,8 +25,14 @@ vi.mock("./lib/codes.js", async (importOriginal) => {
 });
 vi.mock("../../src/shared/yahoo/client.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../../src/shared/yahoo/client.js")>();
-  return { ...mod, fetchDaily: vi.fn() };
+  return { ...mod, fetchDaily: async (...args: Parameters<typeof mod.fetchDaily>) => {
+    if (rawHook.enabled) await args[2]?.onRaw?.({ symbol: args[0], status: rawHook.status,
+      bytes: new Uint8Array(rawHook.size),
+      url: "https://query1.finance.yahoo.com/v8/finance/chart/test", receivedAt: new Date().toISOString(), headers: {} });
+    return dailySource(...args);
+  } };
 });
+vi.mock("../../src/shared/yahoo/raw-custody.js", () => ({ archiveYahooRawBatch: vi.fn() }));
 vi.mock("../../src/shared/notion-archive/index.js", () => ({
   recordPrimaryData: vi.fn(),
 }));
@@ -42,7 +52,8 @@ vi.mock("../../src/shared/env.js", () => ({
 const mockR2Get = vi.mocked(r2GetVersion);
 const mockR2Put = vi.mocked(r2Put);
 const mockLoadCodes = vi.mocked(loadCodes);
-const mockFetchDaily = vi.mocked(fetchDaily);
+const mockFetchDaily = dailySource;
+const mockRawArchive = vi.mocked(archiveYahooRawBatch);
 const mockRecord = vi.mocked(recordPrimaryData);
 const recordedBody = (): Record<string, unknown> => {
   const input = mockRecord.mock.calls[0][0] as {
@@ -82,6 +93,10 @@ beforeEach(() => {
   process.exitCode = undefined;
   (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = undefined;
   mockRecord.mockResolvedValue({ outcome: "recorded", fileTooLarge: false } as never);
+  rawHook.enabled = true;
+  rawHook.status = 200;
+  rawHook.size = 28;
+  mockRawArchive.mockResolvedValue({ pages: ["test-page"], rawBytes: 1, compressedBytes: 1 });
   process.chdir(mkdtempSync(join(tmpdir(), "vwap-daily-")));
 });
 afterEach(() => {
@@ -105,7 +120,7 @@ describe("ingest-daily main flow", () => {
     await main();
     expect(mockR2Put).toHaveBeenCalledTimes(1);
     expect(mockR2Put.mock.calls[0][2]).toBe("opaque-multipart-2");
-    expect(mockFetchDaily).toHaveBeenCalledTimes(1);
+    expect(mockFetchDaily).toHaveBeenCalledTimes(1); // Bの保存済bodyは銘柄不一致でsource前に拒否。
     expect(process.exitCode).toBe(2);
   });
   it("normal positive + skip control (exit 0, all codes accounted)", async () => {
@@ -139,7 +154,7 @@ describe("ingest-daily main flow", () => {
     expect(recordedMetadata().unknownCount).toBe(0);
   });
 
-  it("first PUT timeout => PUT1/Yahoo0-more/unknown1/notStarted1/exit2 (archive still runs)", async () => {
+  it("first PUT timeout => PUT1/unknown1/prepared-notStarted1/exit2 (archive still runs)", async () => {
     mockLoadCodes.mockResolvedValue(["A", "B"]);
     mockR2Get.mockResolvedValue(null);
     mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
@@ -147,8 +162,8 @@ describe("ingest-daily main flow", () => {
     await main();
     expect(process.exitCode).toBe(2);
     expect(mockR2Put).toHaveBeenCalledTimes(1);
-    // B の Yahoo は叩かない。
-    expect(mockFetchDaily).toHaveBeenCalledTimes(1);
+    // B は同じ保管batchで取得済みだが、unknown後の新規取得/PUTはしない。
+    expect(mockFetchDaily).toHaveBeenCalledTimes(2);
     expect(mockFetchDaily.mock.calls[0][0]).toBe("A.T");
     // summary 保管は走り、unknown1/notStarted1 を記録する。
     expect(mockRecord).toHaveBeenCalledTimes(1);
@@ -175,33 +190,110 @@ describe("ingest-daily main flow", () => {
     }
   });
 
-  it("delayed worker rechecks fatal after GET await => no new stage", async () => {
+  it("chunk waits for delayed raw and custody failure stops all chunk writes and later fetches", async () => {
     (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 2, delayMs: 1, maxRateLimit: 5, keepDays: 365 };
+    rawHook.size = MAX_YAHOO_RAW_BYTES / 2;
     mockLoadCodes.mockResolvedValue(["A", "B", "C"]);
-    let openGate!: () => void;
-    const gate = new Promise<void>((r) => { openGate = r; });
-    mockR2Get.mockImplementation(async (key: string) => {
-      if (key === "daily/A.json") await gate;
-      return null;
+    mockR2Get.mockResolvedValue(null);
+    let release!: () => void;
+    const delayed = new Promise<void>((resolve) => { release = resolve; });
+    let ready!: () => void;
+    const second = new Promise<void>((resolve) => { ready = resolve; });
+    mockFetchDaily.mockImplementation(async (symbol: string) => {
+      if (symbol === "A.T") await delayed;
+      else ready();
+      return { bars: [BAR_A], splits: [], proof: FAKE_PROOF };
     });
-    mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
-    mockR2Put.mockImplementation(async (key: string) => {
-      if (key === "daily/B.json") {
-        openGate();
-        throw new R2PutUnknownError(key, "TimeoutError", "none", "test");
-      }
-      throw new Error(`unexpected PUT ${key}`);
-    });
-    await main();
+    mockRawArchive.mockRejectedValue(new Error("physical readback mismatch"));
+    const running = main();
+    await second;
+    expect(mockRawArchive).not.toHaveBeenCalled();
+    expect(mockR2Put).not.toHaveBeenCalled();
+    release();
+    await running;
+    expect(mockRawArchive).toHaveBeenCalledTimes(1);
+    expect(mockRawArchive.mock.calls[0][0].captures.map((r) => r.capture.symbol).sort()).toEqual(["A.T", "B.T"]);
+    expect(mockFetchDaily).toHaveBeenCalledTimes(2);
+    expect(mockR2Put).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(2);
-    expect(mockR2Put).toHaveBeenCalledTimes(1);
-    // A は GET 解決後に fatal 再確認で止まり、Yahoo を叩かない。C も未着手。
-    expect(mockFetchDaily).toHaveBeenCalledTimes(1);
-    expect(mockFetchDaily.mock.calls[0][0]).toBe("B.T");
-    const outcomes = recordedBody().outcomes as Record<string, { status: string; latestSourceBar: unknown }>;
-    expect(outcomes.A).toEqual({ status: "notStarted", latestSourceBar: null, bodySha: null });
-    expect(outcomes.B.status).toBe("unknown");
+    const outcomes = recordedBody().outcomes as Record<string, { status: string }>;
     expect(outcomes.C.status).toBe("notStarted");
+  });
+
+  it("normal PUT occurs only after its own raw custody returns", async () => {
+    mockLoadCodes.mockResolvedValue(["A"]);
+    mockR2Get.mockResolvedValue(null);
+    mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
+    mockR2Put.mockResolvedValue(undefined);
+    await main();
+    expect(mockRawArchive.mock.calls[0][0].captures[0].capture.symbol).toBe("A.T");
+    expect(mockRawArchive.mock.invocationCallOrder[0]).toBeLessThan(mockR2Put.mock.invocationCallOrder[0]);
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("at most thirty codes share one custody batch and the next offset is not skipped", async () => {
+    (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 5, delayMs: 1, maxRateLimit: 5, keepDays: 365 };
+    const codes = Array.from({ length: 31 }, (_, i) => String(1000 + i));
+    mockLoadCodes.mockResolvedValue(codes);
+    mockR2Get.mockResolvedValue(null);
+    mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
+    mockR2Put.mockResolvedValue(undefined);
+    await main();
+    expect(mockRawArchive.mock.calls.map(([input]) => input.captures.length)).toEqual([30, 1]);
+    expect(mockRawArchive.mock.calls.map(([input]) => input.stage)).toEqual(["vwap-daily-0", "vwap-daily-30"]);
+    expect(mockFetchDaily).toHaveBeenCalledTimes(31);
+    expect(mockR2Put).toHaveBeenCalledTimes(31);
+    expect(mockRawArchive.mock.invocationCallOrder[0]).toBeLessThan(mockR2Put.mock.invocationCallOrder[0]);
+    expect(mockRawArchive.mock.invocationCallOrder[1]).toBeLessThan(mockR2Put.mock.invocationCallOrder[30]);
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("8MiB collected in one wave seals custody before starting the next offset", async () => {
+    (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 2, delayMs: 1, maxRateLimit: 5, keepDays: 365 };
+    rawHook.size = MAX_YAHOO_RAW_BYTES / 2;
+    mockLoadCodes.mockResolvedValue(["A", "B", "C", "D", "E"]);
+    mockR2Get.mockResolvedValue(null);
+    mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
+    mockR2Put.mockResolvedValue(undefined);
+    await main();
+    expect(mockRawArchive.mock.calls.map(([input]) => input.captures.length)).toEqual([2, 2, 1]);
+    expect(mockRawArchive.mock.calls.map(([input]) => input.stage)).toEqual(["vwap-daily-0", "vwap-daily-2", "vwap-daily-4"]);
+    expect(mockRawArchive.mock.invocationCallOrder[0]).toBeLessThan(mockFetchDaily.mock.invocationCallOrder[2]);
+    expect(mockFetchDaily).toHaveBeenCalledTimes(5);
+    expect(mockR2Put).toHaveBeenCalledTimes(5);
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("HTTP rate-limit ABORT still archives the acquired body and sends no PUT", async () => {
+    rawHook.status = 429;
+    (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 1, delayMs: 1, maxRateLimit: 1, keepDays: 365 };
+    mockLoadCodes.mockResolvedValue(["A", "B"]);
+    mockR2Get.mockResolvedValue(null);
+    mockFetchDaily.mockRejectedValue(Object.assign(new Error("yahoo 429"), { name: "YahooRateLimitError" }));
+    await main();
+    expect(mockRawArchive.mock.calls[0][0].captures).toHaveLength(1);
+    expect(mockRawArchive.mock.calls[0][0].captures[0].capture.status).toBe(429);
+    expect(mockFetchDaily).toHaveBeenCalledTimes(1);
+    expect(mockR2Put).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("raw absent or single-body too large stops before PUT and later source", async () => {
+    for (const tooLarge of [false, true]) {
+      vi.clearAllMocks();
+      rawHook.enabled = false;
+      mockLoadCodes.mockResolvedValue(["A", "B"]);
+      mockR2Get.mockResolvedValue(null);
+      if (tooLarge) mockFetchDaily.mockRejectedValue(new YahooRawTooLargeError("A.T"));
+      else mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
+      await main();
+      expect(mockRawArchive.mock.calls[0][0].missing).toHaveLength(1);
+      expect(mockFetchDaily).toHaveBeenCalledTimes(1);
+      expect(mockR2Put).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(2);
+      // 2回目のlocal summaryを同keyで衝突させない。
+      process.chdir(mkdtempSync(join(tmpdir(), "vwap-daily-raw-")));
+    }
   });
 
   it("archive failure => exit 2 (intra must not run)", async () => {
