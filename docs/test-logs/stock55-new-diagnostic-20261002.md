@@ -40,7 +40,14 @@ D1 requestはこのSQL/parameter/1 SELECTだけを許し、D1 mutationは拒否�
 9720,9857,9867
 ```
 
-## root writer grant後の1回だけの実行
+## 失効した1回限りの実行枠
+
+この計画の新source開始期限は **10/1 16:50 UTC**。共有writerの空きとgrantが成立せず、
+期限までにexecuteしなかったため、この枠は失効した。execution receiptは未作成、
+新Yahoo GET / Notion mutation / D1 write / R2 writeはすべて0のまま。
+16:50/17:00の固定期限は変更せず、このrunnerを後からexecuteしない。
+
+以下は失効した枠の仕様を監査用に残したものであり、実行予定ではない。
 
 - 新しいprivate wx0600/fsync execution receiptを先に作り、同診断の再入実行を拒否する。
   旧receiptを消費/更新しない。新しいrun IDは実実行clockを使う。
@@ -67,4 +74,20 @@ D1 requestはこのSQL/parameter/1 SELECTだけを許し、D1 mutationは拒否�
 raw1 part＋summary1添付の通常経路は約12 Notion API呼出し・hosted readback2 GET。
 タイムアウト、追加status poll、429等は別であり、費用・時間の上限とはしない。
 
-現時点はPLANのみ。実行にはrootの共有writer grantが必要。
+## 通常runの保存原文を先に分類する
+
+17:13 UTC定時株式syncの、PR256適用後にNotionへ保存される通常run原文を先に読む。
+通常run自体の起動・writer排他はrootが管理する。診断側はsourceの再取得・POST・
+D1/R2書込みを行わず、既存Notionページとhosted添付をGETで読むだけとする。
+定時runの開始遅延や失敗を、この失効枠を再開する理由にはしない。
+
+対象は上記固定55コードの `stocks-first` Chart原文。ページのrun ID・stage・対象日・
+part集合・添付manifestを照合し、gzip全bytesと内部全memberのbyteLength/SHAを確認後、
+同じ保存Chart bytesを共有 `parseChartResponse` / `checkFreshClose` で分類する。
+原文が存在しないcode/attemptは未保管として明示し、別時刻の原文で補完しない。
+HTTP異常・parse異常・Chart全履歴guard・終値鮮度を区別する。
+
+この通常runの原文も、未保管だった旧run36879969126の同一応答とは扱わない。
+実取得clockを伴う新しい通常観測としてcounts・SHA・ページID・read時刻を記録する。
+診断summaryはprivate localへ残し、安全な集計と参照だけをこのrepoへ追記する。
+Notionへのsummary再POSTや公開artifactへの原文uploadは行わない。
