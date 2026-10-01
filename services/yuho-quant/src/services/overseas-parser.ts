@@ -251,7 +251,7 @@ function isBareOther(label: string): boolean {
  */
 const RX_TOTAL_COL = /連結.{0,8}計上額|^連結$|^合計$|連結計上額|^計$/;
 /**
- * 実績系の表題語。見出し window (表直前400字→末尾160字) は表題そのものではなく
+ * 実績系の表題語。見出し window (表直前の可視末尾160字) は表題そのものではなく
  * 前表の説明文を含み得るため、単純な含有ではなく **最寄り (最後) の表題語** で
  * 判定する (例: 「生産実績と同様、販売実績は…」と書かれた販売表を誤って落とさない)。
  */
@@ -2481,14 +2481,14 @@ function tablesWithHeading(
       const start = stack.pop();
       if (start === undefined) continue; // 壊れた HTML 防御
       const table = html.slice(start, re.lastIndex);
-      const before = html.slice(Math.max(0, start - 400), start);
-      const heading = strip(before).slice(-160);
-      // wide: 期首継承 (inheritSourceFiscal) 専用の広窓。表題近接型
+      // wide: 期首継承と近接headingが共有する可視窓。表題近接型
       // (TTUY/AO7M: 52-791 文字前) に加え、節表題型 (E00766 の(2)地域別の
       // 内訳ペア: 節表題が 25676-25680 文字前) も拾う。T 側は終期=pe の
       // 照合で保護される (不一致→unknown)。Z 側は pe 以前で確定。
       const wideBefore = html.slice(Math.max(0, start - 60000), start);
       const wide = strip(wideBefore);
+      // raw の style/タグ長で最寄り題名を切らず、可視160字を近接窓にする。
+      const heading = wide.slice(-160);
       // caption: 当該表と直前の表の間の原文 (表ローカル。別表の語を含まない)。
       // 単一行 geocols の限定分岐だけが使う (Sol確定: heading 窄窓 160字には
       // FY 表題が入らず、wide は別表の売上語を含むため両方とも不適)。
