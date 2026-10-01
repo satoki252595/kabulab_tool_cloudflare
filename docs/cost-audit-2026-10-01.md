@@ -16,8 +16,9 @@ D1 read/write/保存・R2 A/B/Standard保存・Builds、および最後30日の 
   Yahoo原文保管修正は[PR #256](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/256)、
   main `380e931e2305d9871e430cfccea3aa033c468e89`。追加負荷を末尾へ分けた。
 - 定時起動変更: [PR #195](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/195)。
-  head `40f500033db73e45c1c941e1c3ba21652c5b59f4` の株式・マクロ計4 Cronへの
-  更新を2026-10-02に読取確認し、負荷表へ反映。マージ後に再確認する。
+  head `79c41dd8ca29b24adb8ee7c670388d1bec22ec94` へ最新mainを通常mergeし、
+  3CI成功・独立レビューを確認。株式・マクロ計4 Cronの負荷表は変更なし。
+  Workerの専用token設定待ちで未merge。マージ後に実起動を確認する。
 - 料金・制限の取得日: **2026-10-01**。金額は USD、税・為替換算を含めない。
 - ユーザーの Paid 契約申告に加え、認証済みダッシュボード読取で Workers Paid を確認。
   請求画面・個人情報・他サービスの利用額は私有証跡とし公開 Git に保存しない。
@@ -251,3 +252,9 @@ VWAPはfetch並列5を維持し最大30銘柄/8 MiB到達までまとめる。�
 があるため、upload無制限を行数無制限とは解釈しない。原文を公開Actions artifactへ出さず、
 標準public runnerの実行分数は無料。初回の実保存量・ページ数・所要時間を記録して
 300分のjob期限を確認する。将来の利用増加・他サービス分の費用は現在の枠内観測から保証しない。
+
+初回の[通常VWAP受入](./test-logs/vwap-normal-acceptance-20261002.md)では、
+795応答の全原文105,967,254 bytesをgzip 38,145,883 bytes/27ページへ保管・全文照合した。
+日足stepは9分1秒、769件保存後にYahoo認証の429で停止し、5分足は未起動。
+この停止runの部分実測を全銘柄/月額へ比例外挿しない。429の保存本文はproxyの
+Yahoo credential error経路であり、Cloudflare Paid包含枠の不足を示すものではない。
