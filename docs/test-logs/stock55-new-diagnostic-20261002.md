@@ -91,3 +91,32 @@ HTTP異常・parse異常・Chart全履歴guard・終値鮮度を区別する。
 実取得clockを伴う新しい通常観測としてcounts・SHA・ページID・read時刻を記録する。
 診断summaryはprivate localへ残し、安全な集計と参照だけをこのrepoへ追記する。
 Notionへのsummary再POSTや公開artifactへの原文uploadは行わない。
+
+## 読取ツールの準備・開始待ち観測
+
+private readerは `/tmp/kabulab-stock55-archive-readonly-20261002.mts`、SHA
+`de37ea93bc8cb22481ac01bbe8208f2f42b93df13167eef5db0ef1f38f68df77`。
+既知run IDと全raw page IDだけを入力し、GET/pages・Notion-hosted添付GET以外を拒否する。
+run/stage/date/key/part集合、添付manifest fingerprint、gzipと内部原文の全byteLength/SHA、
+metadataのraw/compressed bytesを照合する。全partsが一致しなければSTOPする。
+照合済み原文と結果は既存 `writeSummaryLocal` の0700/wx0600/fsyncでprivate localへ保存する。
+
+既存原文54件を使ったoffline assertionは
+`/tmp/kabulab-stock55-reader-offline-20261002.mts`、SHA
+`b01b2b29894c3ddf75a1f9b885f915f6ced157cd40de806a33c2ff21c7d34b8d`。
+9/29診断manifestに対して54/54の原文byteLength/SHAを再照合し、10/1基準の純分類が
+54 `stale_last_date` となること、先頭の実Chartに不正SHAを渡すと拒否することをassertした。
+Nixの `pnpm exec tsx` で成功、通信0。旧captureに無い実取得clockは補完していない。
+これはreaderの検証であり、10/1旧通常runや今後の通常runの原因分類ではない。
+
+ID発見は既知normalrun/key prefixだけのNotion read-only searchを許可済み。
+index未反映時は既存DBへの厳密なKey starts_with read queryだけを別ツールで許可する。
+`ensureBackupDb` 等の作成経路は使わず、DB/page/file mutationは0。
+private discovery tool SHAは
+`f1551befc0205c134fc5c0c37850f1e66680abd5287afec5c3937968c28303a7`。
+readerのGET-only境界とは分けて、read query POSTを別計数する。
+
+10/1 **17:31:02 UTC** の `gh run list --workflow stock-sync.yml` でも、最新は旧手動run
+36879969126（14:53:47 UTC）だった。17:13定時runはまだ観測できていない。
+該当normalrun ID・原文ページが無いためID検索もreader実行も0、新source GET/Notion mutation/
+D1/R2 writeも0。通常原文の55診断結果と追加保管量の実測は未完である。
