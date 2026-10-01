@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
 import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { loadCodes } from "./lib/codes.js";
-import { YahooRawTooLargeError } from "../../src/shared/yahoo/client.js";
+import { YahooRawTooLargeError, YahooRateLimitError } from "../../src/shared/yahoo/client.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main } from "./ingest-intra.js";
@@ -202,6 +202,34 @@ describe("ingest-intra main flow", () => {
     expect(mockFetch5m.mock.calls.map(([symbol]) => symbol).sort()).toEqual(["A.T", "B.T", "C.T", "D.T"]);
     expect(mockRawArchive).toHaveBeenCalledTimes(1);
     expect(mockRawArchive.mock.calls[0][0].captures.map((r) => r.capture.symbol).sort()).toEqual(["A.T", "B.T", "C.T", "D.T"]);
+    expect(mockR2Put).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("future rate deadline waits for inflight capture, archives it, and stops later GET/PUT before MAX_RL", async () => {
+    (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 2, delayMs: 1, maxRateLimit: 5, keepDays: 365 };
+    mockLoadCodes.mockResolvedValue(["A", "B", "C"]);
+    let started!: () => void, release!: () => void;
+    const bothStarted = new Promise<void>((resolve) => { started = resolve; });
+    const inflight = new Promise<void>((resolve) => { release = resolve; });
+    mockFetch5m.mockImplementation(async (symbol: string) => {
+      if (symbol === "A.T") {
+        await bothStarted;
+        throw new YahooRateLimitError(429, 120_000, Date.now() + 120_000);
+      }
+      started();
+      await inflight;
+      return [BAR];
+    });
+    const running = main();
+    await bothStarted;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(mockRawArchive).not.toHaveBeenCalled();
+    expect(mockR2Put).not.toHaveBeenCalled();
+    release();
+    await running;
+    expect(mockFetch5m).toHaveBeenCalledTimes(2);
+    expect(mockRawArchive.mock.calls[0][0].captures).toHaveLength(2);
     expect(mockR2Put).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(2);
   });

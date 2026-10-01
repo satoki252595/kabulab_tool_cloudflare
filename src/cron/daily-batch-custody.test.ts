@@ -540,4 +540,19 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     expect(sqlite.prepare("SELECT count(*) AS n FROM swing_stock_indicators").get()).toMatchObject({ n: 0 });
   });
 
+  it.each([NOW_MS + 120_000, Date.parse("2026-09-28T21:00:00Z")])("回収中の429期限%sを保管後、次対象の新GET/D1 write0で未試行を残す", async (retryAt) => {
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-28")));
+    vi.mocked(fetchStockRawData).mockRejectedValueOnce(new Error("fetch failed"))
+      .mockRejectedValueOnce(new Error("fetch failed"))
+      .mockRejectedValue(new Error(`Chart API HTTP エラー [1301]: 429 Too Many Requests; retry-at-ms=${retryAt}`));
+    const db = freshDb(); seedTarget(1, "1301"); seedTarget(2, "1332");
+    const result = await runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) });
+    expect(fetchStockRawData).toHaveBeenCalledTimes(3);
+    const recovery = vi.mocked(archiveYahooRawBatch).mock.calls.filter(([r]) => r.stage.startsWith("stocks-recovery"));
+    expect(recovery).toHaveLength(1);
+    expect(recovery[0][0].missing).toHaveLength(2);
+    expect(result).toMatchObject({ failedStocks: 2, successStocks: 0 });
+    expect(sqlite.prepare("SELECT count(*) AS n FROM swing_stock_indicators").get()).toMatchObject({ n: 0 });
+  });
+
 });

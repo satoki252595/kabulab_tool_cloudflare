@@ -96,6 +96,7 @@ export async function archiveYahooRawBatch(input: YahooRawBatchInput): Promise<{
       const headers: YahooRawCapture["headers"] = {};
       if (c.headers.contentType !== undefined) headers.contentType = c.headers.contentType;
       if (c.headers.upstreamStatus !== undefined) headers.upstreamStatus = c.headers.upstreamStatus;
+      if (c.headers.retryAfter !== undefined) headers.retryAfter = c.headers.retryAfter;
       members.push({ api: item.api, attempt: item.attempt, symbol: c.symbol,
         status: c.status, receivedAt: c.receivedAt, url: redactYahooDiagnostic(c.url), headers,
         byteLength: c.bytes.length, sha256: await sha256HexBytes(c.bytes), bodyBase64: toBase64(c.bytes) });
