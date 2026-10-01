@@ -49,9 +49,10 @@ Cloudflareはisolateの寿命と同一instanceへのroutingを保証しないた
   first-pass期限延長/21UTC開始停止、回収30秒予算外GET0、予算内の既存回収を確認。
 - 追加intra回帰ではfuture rateをMAX_RL前に検知し、相方inflightのsettledを待って
   原文保管、次wave GET0・R2 PUT0・exit2を確認。対象suite12 pass。
-- 最新mainの通常merge後、関連10 suites201 pass/3既存skip。
+- 最新main `8f900b8` の通常merge後、関連10 suites202 pass/3既存skip。
   型検査・対象ESLintはexit0（既存12 warnings/0 errors）、Worker dry-runとdiff checkもpass。
   stockの503期限も同じ規則に揃え、期限前STOP回帰を追加した。回収中の期限延長が
   30秒/回収期限/21UTC外なら後続GET0とする実配線回帰、gate拒否の追加timer0を確認。
+  予定開始が期限内でも実起床が期限後の場合は開始を拒否する回帰もpass。
 - 検証は既存Nix project runtimeで実行。source/本番mutation/dispatch0。
   CI結果はPRの最終headで確認する。
