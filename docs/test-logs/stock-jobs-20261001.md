@@ -56,6 +56,31 @@ producerの正常実保存と後続sector-turnoverの同日実保存が揃うま
   再確認した。CIはpush後に別確認する。
 - credential設定・CFの定時発火・実dispatch・期限readcheckはこの調査の実施範囲外。
 
+## 通常時間帯の実受入（2026-10-01 15:32 UTCまで）
+
+- PR #195 head `51dd661` の CI `check` / `python-pipeline` と Workers Builds は全PASS。
+- Rootが排他で起動した[通常run36879969126](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/36879969126)
+  は14:54:08〜15:11:07 UTCの株式stepで3634/3689成功・55失敗となり非0。
+  sector33/context/moneyflowは全skip。同日連鎖保存の受入は未達。
+- [既存Notion failurebatch](https://www.notion.so/3ecd74ff84cd81d0b34dc354d3671e5b)
+  `price-sync-batch-36879969126.1`を全読戻し。7785 bytes/SHA256
+  `f7d8d0bd43ae10e9e1a91b2cf995a200b9c06f457b8a8ef51e59a7dba066fbe5`
+  が保管manifestと一致。54件は10/1実日足未取得、1件8303はnegative raw adjで
+  全応答拒否（metadata分類はsourcegap54/unknown1）。guardは保持する。
+- 15:19:34 UTCにD1 SELECT2本でactive+equity3689、10/1実close+volume3634、
+  indicator latest_date10/1も3634。欠落55はfailure全55と集合完全一致、全55の
+  latest_saved_ohlcvは9/29。sector-turnover全数coverage条件を満たさない。
+- 旧9/29診断manifestと原文54（55添付）を既存Notionから読戻し、全bytes/SHA一致。
+  旧54と今回の欠測54は重複15・旧のみ39・新のみ39。重複15の旧原本には
+  9/29 exact1行の実close/adj正値・volumeがあるが、10/1原本は未保管のため
+  今回のstale/null/forming細分類を推定しない。
+- 15:24:09 UTCのD1 SELECT2本で失敗55は全active+equity、発効済delist0。
+  5484（10/19）・9691（10/9）は未来予定で、欠測を理由に除外しない。
+  旧のみ39のうち14は公式発効済delistでinactive、残25はactive。
+- 通常株式の全Chart/QuoteSummary原文保管は未実装と判明した。failurebatchや
+  マクロraw保管を全株式custodyと読み替えない。この不足の修正は別PRで扱う。
+  本追跡のYahoo/source追加GET、Notion/D1/R2 mutation、追加dispatchは0。
+
 ## 公式仕様
 
 - [GitHub workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)：
