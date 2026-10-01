@@ -153,7 +153,7 @@ describe("validateRawResponse (raw bytes 厳密検証)", () => {
           id: 11,
           stock_id: 7,
           min_shares: 100,
-          record_month: 3,
+          record_month: 3, record_date: null,
           description: "架空文",
           short_summary: "架空要約",
           estimated_value: 1000,
@@ -291,7 +291,7 @@ const brow = (over: Partial<StockPreimage["benefits"][number]> = {}): StockPreim
   id: 11,
   stockId: 7,
   minShares: 100,
-  recordMonth: 3,
+  recordMonth: 3, recordDate: null,
   description: "架空文",
   shortSummary: "要約",
   estimatedValue: 1000,
@@ -584,7 +584,7 @@ describe("reconstructPreFtRows", () => {
     estimatedValue: 1000,
     estimateValueSource: null,
     minShares: 100,
-    recordMonth: 3,
+    recordMonth: 3, recordDate: null,
     updatedAt: 2,
     ...over,
   });
@@ -616,7 +616,7 @@ describe("proveNormal45 再利用 (fresh 正常系)", () => {
     stockName: "架空",
     description: DESC,
     rowCount: 1,
-    recipients: [{ minShares: 100, recordMonth: 3 }],
+    recipients: [{ minShares: 100, recordMonth: 3, recordDate: null }],
   });
   const crow = (): BenefitRow => ({
     id: 11,
@@ -628,7 +628,7 @@ describe("proveNormal45 再利用 (fresh 正常系)", () => {
     estimatedValue: 1000,
     estimateValueSource: null,
     minShares: 100,
-    recordMonth: 3,
+    recordMonth: 3, recordDate: null,
     updatedAt: 1,
   });
 

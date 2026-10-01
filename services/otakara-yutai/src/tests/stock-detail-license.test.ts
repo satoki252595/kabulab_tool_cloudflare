@@ -60,6 +60,7 @@ CREATE TABLE yutai_benefits (
   short_summary text,
   min_shares integer NOT NULL,
   record_month integer NOT NULL,
+  record_date text,
   estimated_value integer,
   estimate_value_source text,
   created_at integer NOT NULL DEFAULT (unixepoch()),
@@ -147,9 +148,10 @@ const CODE_NO_SECTOR33 = "6758";
 const CODE_EQUITY = "8058";
 
 let d1: unknown;
+let sqlite: DatabaseSync;
 
 beforeAll(() => {
-  const sqlite = new DatabaseSync(":memory:");
+  sqlite = new DatabaseSync(":memory:");
   sqlite.exec(DDL);
   sqlite.exec("INSERT INTO yutai_genres (id, name, slug) VALUES (1, 'QUOカード', 'quo')");
   const insertStock = sqlite.prepare(
@@ -229,6 +231,24 @@ async function detailHtml(code: string = CODE): Promise<string> {
 }
 
 describe("GET /stocks/:code のライセンス境界", () => {
+  it("単発の実基準日をtip付きで示し、月末guideとcard9月から除く", async () => {
+    sqlite.prepare("UPDATE yutai_benefits SET record_date = ?, record_month = 9 WHERE stock_id = 3").run("2026-09-02");
+    try {
+      const html = await detailHtml(CODE_EQUITY);
+      expect(html).toContain("2026-09-02");
+      expect(html).toContain("単発基準日");
+      expect(html).toContain("一回限りの優待");
+      expect(html).not.toContain("の月末に株を保有していると優待がもらえます");
+      expect(html).not.toContain('class="month-tag">9月');
+      const res = await otakaraYutaiApp.request("/api/screening?limit=50", {}, { DB: d1 });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { items: { code: string; benefitMonths: number[] }[] };
+      expect(body.items.find(x => x.code === CODE_EQUITY)?.benefitMonths).toEqual([]);
+    } finally {
+      sqlite.prepare("UPDATE yutai_benefits SET record_date = NULL, record_month = 3 WHERE stock_id = 3").run();
+    }
+  });
+
   it.each(Object.entries(SENTINELS))("%s の値が HTML に出ない", async (_column, sentinel) => {
     expect(await detailHtml()).not.toContain(sentinel);
   });

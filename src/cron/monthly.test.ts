@@ -60,7 +60,7 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
     estimatedValue: 1000,
     estimateValueSource: "company",
     description: "1,000円相当",
-    recordMonth: 3,
+    recordMonth: 3, recordDate: null,
     genreId: 1,
   }));
 
@@ -233,7 +233,7 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
     const desc = "1,000円相当";
     const all = [
       ...benefits,
-      { stockId: 4, minShares: 1000, estimatedValue: null, estimateValueSource: null, description: desc, recordMonth: 3, genreId: 1 },
+      { stockId: 4, minShares: 1000, estimatedValue: null, estimateValueSource: null, description: desc, recordMonth: 3, recordDate: null, genreId: 1 },
     ];
     const { db, calls } = makeStub(benefits, all as typeof benefits);
     await runMonthlyRebuild(db, { collectOverlay: fakeCollect, sendOverlayBatch: makeThrowingSender() });
@@ -247,19 +247,26 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
 });
 
 describe("groupBenefitDisplaySets (月次と repair-CAS の共有集計)", () => {
+  it("8508の単発9/2を定常9月へ入れず、通常6月は保持する", () => {
+    const got = groupBenefitDisplaySets([
+      { stockId: 8508, recordMonth: 6, recordDate: null, genreId: 1 },
+      { stockId: 8508, recordMonth: 9, recordDate: "2026-09-02", genreId: 1 },
+    ]);
+    expect(got.get(8508)?.yutaiMonths).toBe("[6]");
+  });
   it("銘柄ごとに月・ジャンルを昇順・重複なし JSON にする", () => {
     const got = groupBenefitDisplaySets([
-      { stockId: 1, recordMonth: 9, genreId: 3 },
-      { stockId: 1, recordMonth: 3, genreId: 3 },
-      { stockId: 1, recordMonth: 9, genreId: 5 },
-      { stockId: 2, recordMonth: 2, genreId: 7 },
+      { stockId: 1, recordMonth: 9, recordDate: null, genreId: 3 },
+      { stockId: 1, recordMonth: 3, recordDate: null, genreId: 3 },
+      { stockId: 1, recordMonth: 9, recordDate: null, genreId: 5 },
+      { stockId: 2, recordMonth: 2, recordDate: null, genreId: 7 },
     ]);
     expect(got.get(1)).toEqual({ yutaiMonths: "[3,9]", yutaiGenreIds: "[3,5]" });
     expect(got.get(2)).toEqual({ yutaiMonths: "[2]", yutaiGenreIds: "[7]" });
   });
 
   it("行が無い銘柄は載らない (呼び出し側が null にする)", () => {
-    const got = groupBenefitDisplaySets([{ stockId: 1, recordMonth: 3, genreId: 3 }]);
+    const got = groupBenefitDisplaySets([{ stockId: 1, recordMonth: 3, recordDate: null, genreId: 3 }]);
     expect(got.has(2)).toBe(false);
     expect(got.get(2)?.yutaiMonths ?? null).toBeNull();
   });
@@ -267,8 +274,8 @@ describe("groupBenefitDisplaySets (月次と repair-CAS の共有集計)", () =>
   it("phantom 削除の post-image で月が縮む (8022 の 9 月幽霊を落とす形)", () => {
     // 3 月行だけ残った post-image → [3]。削除前の [3,9] は残さない。
     const got = groupBenefitDisplaySets([
-      { stockId: 1461, recordMonth: 3, genreId: 10 },
-      { stockId: 1461, recordMonth: 3, genreId: 12 },
+      { stockId: 1461, recordMonth: 3, recordDate: null, genreId: 10 },
+      { stockId: 1461, recordMonth: 3, recordDate: null, genreId: 12 },
     ]);
     expect(got.get(1461)).toEqual({ yutaiMonths: "[3]", yutaiGenreIds: "[10,12]" });
   });

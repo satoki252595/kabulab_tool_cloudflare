@@ -89,3 +89,22 @@ producerの正常実保存と後続sector-turnoverの同日実保存が揃うま
   UTC起動とscheduled handlerを使用。cron変更の伝播に最大15分。
 - [R2 Workers API](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/)：
   conditional putでreceiptのclaim/CASを行い、競合時は再dispatchしない。
+
+## 最新 main との統合（2026-10-02 JST）
+
+- scheduler branch は clean を確認し、remote `40f5000` まで通常 FF した後、
+  main `81604b5` を通常 merge した。force push・rebase・本番 writer は使用しない。
+- main の通常 Yahoo 全原文 custody と単発優待 `record_date` を保持した。
+  daily の予定日検証は fetch 前、株式の 21:00 UTC callback は保管/readback 後と
+  各 write 直前で維持する。マクロ共通 helper は `expectedDate` と `beforeWrite`
+  を両方受け、default daily の callback と scheduled-context の予定日を区別した。
+- 旧 scheduler の session test 2 件も共有 raw capture helper を使い、原本必須条件を
+  緩めず対象日日足の不一致まで検証する。default daily のマクロ原本 readback 待機中に
+  21:00 UTC へ達する回帰では、原文保管後に macro D1 write 0 で停止する。
+- Nix Node 22.22.2 / pnpm 9.15.9 で関連 10 files / **225 tests PASS**。
+  scheduler / workflow / daily custody / macro / flush / Yahoo custody / record_date /
+  full-import の境界を含む。typecheck、lint、Wrangler 4.101.0 の deploy dry-run も PASS。
+  moneyflow selector の 14 ケースも PASS。
+- 4 Cron・receipt・dispatch・期限 readcheck は既存 scheduler 差分を保持した。
+  credential 発行/設定、live dispatch、PR merge、production deploy は未実施。
+  CI 3 checks の最新 head での成功は push 後に別確認する。

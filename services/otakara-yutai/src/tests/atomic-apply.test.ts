@@ -199,7 +199,7 @@ const scoreOfRow = (stockId: number) =>
 function readVerified(ids: number[]): Map<number, VerifiedBenefitTuple> {
   const out = new Map<number, VerifiedBenefitTuple>();
   const stmt = sqlite.prepare(
-    "SELECT b.id AS id, b.stock_id AS stock_id, s.code AS code, b.min_shares AS min_shares, b.record_month AS record_month, b.description AS description, b.short_summary AS short_summary, b.estimated_value AS estimated_value, b.estimate_value_source AS estimate_value_source, b.updated_at AS updated_at FROM yutai_benefits b INNER JOIN core_stocks s ON s.id = b.stock_id WHERE b.id = ?"
+    "SELECT b.id AS id, b.stock_id AS stock_id, s.code AS code, b.min_shares AS min_shares, b.record_month AS record_month, b.record_date AS record_date, b.description AS description, b.short_summary AS short_summary, b.estimated_value AS estimated_value, b.estimate_value_source AS estimate_value_source, b.updated_at AS updated_at FROM yutai_benefits b INNER JOIN core_stocks s ON s.id = b.stock_id WHERE b.id = ?"
   );
   for (const id of ids) {
     const r = stmt.get(id) as
@@ -209,6 +209,7 @@ function readVerified(ids: number[]): Map<number, VerifiedBenefitTuple> {
           code: string;
           min_shares: number;
           record_month: number;
+          record_date: string | null;
           description: string;
           short_summary: string | null;
           estimated_value: number | null;
@@ -223,6 +224,7 @@ function readVerified(ids: number[]): Map<number, VerifiedBenefitTuple> {
       stockCode: r.code,
       minShares: r.min_shares,
       recordMonth: r.record_month,
+      recordDate: r.record_date,
       description: r.description,
       shortSummary: r.short_summary,
       estimatedValue: r.estimated_value,
@@ -549,6 +551,7 @@ describe("preflight ガード", () => {
     ["要約の書き換え", () => sqlite.prepare("UPDATE yutai_benefits SET short_summary = '別要約' WHERE id = 1001").run()],
     ["掲載文の書き換え", () => sqlite.prepare("UPDATE yutai_benefits SET description = '架空書換' WHERE id = 1001").run()],
     ["株数条件の書き換え", () => sqlite.prepare("UPDATE yutai_benefits SET min_shares = 200 WHERE id = 1001").run()],
+    ["単発基準日の書き換え", () => sqlite.prepare("UPDATE yutai_benefits SET record_date = '2026-09-02' WHERE id = 1001").run()],
     ["権利月の書き換え", () => sqlite.prepare("UPDATE yutai_benefits SET record_month = 9 WHERE id = 1001").run()],
     ["出典の書き換え", () => sqlite.prepare("UPDATE yutai_benefits SET estimate_value_source = 'company' WHERE id = 1001").run()],
     ["更新時刻の書き換え", () => sqlite.prepare("UPDATE yutai_benefits SET updated_at = 2 WHERE id = 1001").run()],

@@ -29,7 +29,7 @@ import { HEADED_MARK } from "./estimated-value-guard.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-09-30.2";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-02.1";
 
 /**
  * 要約の % 表現が掲載文に裏づけられているか。

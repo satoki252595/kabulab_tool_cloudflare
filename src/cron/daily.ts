@@ -72,7 +72,10 @@ import { encodeCloses, isUsableClose } from "../shared/indicators/momentum-serie
 import {
   fetchChart,
   fetchStockRawData,
+  YahooRawTooLargeError,
+  type YahooRawCapture,
 } from "../shared/yahoo/client.js";
+import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../shared/yahoo/raw-custody.js";
 import { checkFreshClose } from "../shared/yahoo/bar-sanity.js";
 import { fetchNikkeiVi } from "../shared/yahoo/nikkei-vi.js";
 import { calculateAllRsiSeries } from "../shared/indicators/rsi.js";
@@ -517,7 +520,7 @@ export function isTransientDailySyncFailure(message: string): boolean {
 export async function recoverTransientDailyFailures<T>(
   failures: readonly DailyRecoveryFailure<T>[],
   processTarget: (target: T) => Promise<void>,
-  options: { deadlineMs?: number } = {}
+  options: { deadlineMs?: number; beforeAttempt?: () => void } = {}
 ): Promise<DailyRecoveryResult<T>> {
   const unresolved: DailyRecoveryFailure<T>[] = [];
   let attempted = 0;
@@ -538,6 +541,8 @@ export async function recoverTransientDailyFailures<T>(
   if (retryAt > Date.now()) await sleep(retryAt - Date.now());
 
   for (const failure of failures) {
+    // 原本保管STOPなどrun全体の条件は対象単位のcatchへ丸めない。
+    options.beforeAttempt?.();
     if (!isTransientDailySyncFailure(failure.error)) {
       unresolved.push(failure);
       continue;
@@ -1168,6 +1173,12 @@ async function runDailySyncAndRecord(
   const { runDate: targetDate, runMonday } = runDateKeys(startedAt);
   // CF scheduler 経由の run は予定日と対象日の一致を fetch 前に検証する。
   assertScheduledDate(targetDate);
+  const rawRunId = priceSyncBatchRunId(startedAt);
+  const assertStockDeadline = () => {
+    if (Date.now() >= Date.parse(`${targetDate}T21:00:00Z`)) {
+      throw new Error("株式同期が21:00 UTC期限に達したため新たな書込みを止めます");
+    }
+  };
   // 株式の時間窓・N225 対象日/fresh-close guard は全 stock パス共通
   // (stocksOnly でも default でも同じ。stocksOnly はマクロ有無だけを決める)。
   {
@@ -1178,7 +1189,24 @@ async function runDailySyncAndRecord(
     // 日本祝日カレンダーを推測しない。対象日の実日足 (日付 + 実終値) が
     // なければ全書込を止める。日付だけの gate では対象日の fresh null bar が
     // 通過し、古い終値で計算した指標を対象日付で保存してしまう (F-01)。
-    const session = await fetchChart("^N225", "1mo");
+    const captures: YahooRawAttempt[] = [];
+    const missing: YahooRawMissing[] = [];
+    let session;
+    try {
+      session = await fetchChart("^N225", "1mo", { onRaw: (capture) => { captures.push({ api: "chart", attempt: 0, capture }); } });
+      if (captures.length !== 1 || captures[0]?.capture.symbol !== "^N225") {
+        throw new Error("日経225の応答原本captureが一致しないためSTOP");
+      }
+      assertStockDeadline();
+    } catch (error) {
+      if (captures.length === 0) missing.push({ api: "chart", symbol: "^N225", attempt: 0,
+        error: rootCauseMessage(error), failedAt: new Date(Date.now()).toISOString() });
+      throw error;
+    } finally {
+      await archiveYahooRawBatch({ service: "stock-sync", runId: rawRunId, stage: "stocks-session",
+        expectedDate: targetDate, captures, missing });
+    }
+    assertStockDeadline();
     const sessionLatest = session.ohlcv.at(-1);
     const sessionFresh = checkFreshClose(sessionLatest, targetDate);
     if (!sessionFresh.ok) {
@@ -1202,7 +1230,10 @@ async function runDailySyncAndRecord(
     collect:
       collectOverlay ??
       withBasicEvidence((input) => collectUniverseOfficialEvents(input)),
-    sendBatch: sendOverlayBatch ?? createD1HttpBatchSender(),
+    sendBatch: (statements) => {
+      assertStockDeadline();
+      return (sendOverlayBatch ?? createD1HttpBatchSender())(statements);
+    },
   });
   if (overlay.applied) {
     console.info(
@@ -1264,15 +1295,44 @@ async function runDailySyncAndRecord(
   // Phase 3a: 取込プール。fetch だけ集め、書込は 3b で表ごとに畳む (L-56)。
   // 取れた snapshot を全部メモリに置く (~3,755 件で数十 MB。runner には十分)。
   const pending: FlushItem<(typeof targets)[number]>[] = [];
+  const firstCaptures: YahooRawAttempt[] = [];
+  const firstMissing: YahooRawMissing[] = [];
+  let custodyStop: Error | null = null;
+  async function capturedSnapshot(target: (typeof targets)[number], attempt: number,
+    captures: YahooRawAttempt[], missing: YahooRawMissing[]): Promise<StockSnapshot> {
+    const symbol = target.code;
+    const add = (api: string) => (capture: YahooRawCapture) => { captures.push({ api, attempt, capture }); };
+    const assertCaptured = () => {
+      if (!["chart", "quote-summary"].every((api) =>
+        captures.filter((c) => c.api === api && c.capture.symbol === symbol && c.attempt === attempt).length === 1)) {
+        custodyStop = new Error(`${target.code}: Chart/QuoteSummary応答原本captureが一致しないためSTOP`);
+        throw custodyStop;
+      }
+    };
+    try {
+      return await buildSnapshot(target.id, target.code, target.sector, targetDate,
+        jssAnnualByCode.get(target.code) ?? [], { onChartRaw: add("chart"), onSummaryRaw: add("quote-summary"), assertCaptured });
+    } catch (error) {
+      if (error instanceof YahooRawTooLargeError) custodyStop = error;
+      for (const api of ["chart", "quote-summary"]) {
+        if (!captures.some((c) => c.api === api && c.capture.symbol === symbol && c.attempt === attempt)) {
+          missing.push({ api, symbol, attempt, error: `${api}の原本captureなし。stock取得/計算エラー=${rootCauseMessage(error)}`,
+            failedAt: new Date(Date.now()).toISOString() });
+        }
+      }
+      throw error;
+    }
+  }
   async function worker(): Promise<void> {
-    while (queue.length > 0) {
+    while (queue.length > 0 && custodyStop === null) {
       const target = queue.shift();
       if (!target) break;
       try {
         await stockStartGate.wait();
-        const snap = await buildSnapshot(target.id, target.code, target.sector,
-          targetDate,
-          jssAnnualByCode.get(target.code) ?? []);
+        if (custodyStop !== null) break;
+        assertStockDeadline();
+        const snap = await capturedSnapshot(target, 0, firstCaptures, firstMissing);
+        assertStockDeadline();
         pending.push({
           target,
           snap,
@@ -1280,6 +1340,7 @@ async function runDailySyncAndRecord(
           correctionDates: nullCloseDatesByStock.get(target.id),
         });
       } catch (e) {
+        if (Date.now() >= Date.parse(`${targetDate}T21:00:00Z`)) custodyStop = e instanceof Error ? e : new Error(String(e));
         const msg = rootCauseMessage(e);
         stockStartGate.observeFailure(msg);
         firstPassFailures.push({ target, error: msg });
@@ -1288,6 +1349,14 @@ async function runDailySyncAndRecord(
     }
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+  // 相方APIと全inflight workerのcaptureを待ち、HTTP/parse失敗の原文も保管する。
+  // 保管・物理readbackが一つでも失敗したら初回D1 flushへ進まない。
+  if (firstCaptures.length > 0 || firstMissing.length > 0) {
+    await archiveYahooRawBatch({ service: "stock-sync", runId: rawRunId, stage: "stocks-first",
+      expectedDate: targetDate, captures: firstCaptures, missing: firstMissing });
+  }
+  if (custodyStop !== null) throw custodyStop;
+  assertStockDeadline();
 
   // Phase 3a.5: 過去行不存在の存在確認 (F-09 #163)。各 snap の保持 90 本窓内
   // の watermark 以前日を 1 文で問い合わせ、FlushItem へ載せる。
@@ -1309,9 +1378,11 @@ async function runDailySyncAndRecord(
   }
 
   // Phase 3b: 表ごとの multi-row flush。失敗は初回失敗に積んで回収へ回す。
+  assertStockDeadline();
   const flushFailures = await flushSnapshots(db, pending, {
     writeAnnual,
     runStartedSec,
+    beforeWrite: assertStockDeadline,
   });
   for (const f of flushFailures) {
     if (f.target !== undefined) {
@@ -1329,10 +1400,13 @@ async function runDailySyncAndRecord(
     firstPassFailures
   );
   let recoveredStocks = 0;
+  const recoveryAttempts = new Map<string, number>();
   const recovery = await recoverTransientDailyFailures(
     recoveryTargets,
     async (recoveryTarget) => {
       try {
+        if (custodyStop !== null) throw custodyStop;
+        assertStockDeadline();
         if (recoveryTarget.kind === "macro") {
           if (marketContext === null) throw new Error("株式専用同期でマクロ回収を要求しました");
           await fetchMarketContextTarget(
@@ -1345,9 +1419,29 @@ async function runDailySyncAndRecord(
         // 回収は件数が少ないので 1 行 flush のまま (初回パスと行 builder は共有)。
         const target = recoveryTarget.target;
         await stockStartGate.wait();
-        const snap = await buildSnapshot(target.id, target.code, target.sector,
-          targetDate,
-          jssAnnualByCode.get(target.code) ?? []);
+        assertStockDeadline();
+        const attempt = (recoveryAttempts.get(target.code) ?? 0) + 1;
+        recoveryAttempts.set(target.code, attempt);
+        const captures: YahooRawAttempt[] = [];
+        const missing: YahooRawMissing[] = [];
+        let source: { ok: true; snap: StockSnapshot } | { ok: false; error: unknown };
+        try {
+          const snap = await capturedSnapshot(target, attempt, captures, missing);
+          assertStockDeadline();
+          source = { ok: true, snap };
+        } catch (error) {
+          source = { ok: false, error };
+        }
+        try {
+          await archiveYahooRawBatch({ service: "stock-sync", runId: rawRunId,
+            stage: `stocks-recovery-${target.code}-${attempt}`, expectedDate: targetDate, captures, missing });
+        } catch (error) {
+          custodyStop = error instanceof Error ? error : new Error(String(error));
+          throw custodyStop;
+        }
+        if (!source.ok) throw source.error;
+        const { snap } = source;
+        assertStockDeadline();
         const gapDates = collectOhlcvGapCandidates(
           snap.ohlcv6mo,
           latestDateByStock.get(target.id),
@@ -1357,21 +1451,29 @@ async function runDailySyncAndRecord(
           db,
           gapDates.map((date) => ({ stockId: target.id, date }))
         );
+        assertStockDeadline();
         await writeStockSnapshot(db, snap, latestDateByStock.get(target.id), {
           writeAnnual,
           runStartedSec,
+          beforeWrite: assertStockDeadline,
           correctionDates: nullCloseDatesByStock.get(target.id),
           savedDates: gapSaved.get(target.id),
         });
         recoveredStocks++;
       } catch (error) {
+        if (Date.now() >= Date.parse(`${targetDate}T21:00:00Z`)) custodyStop = error instanceof Error ? error : new Error(String(error));
         // 2 パス目も 429 を尊重する (L-57)。初回と同じゲートへ観測を流す。
         stockStartGate.observeFailure(rootCauseMessage(error));
         throw error;
       }
     },
-    { deadlineMs: startedAt + RECOVERY_TIME_BUDGET_MS }
+    { deadlineMs: startedAt + RECOVERY_TIME_BUDGET_MS, beforeAttempt: () => {
+      if (custodyStop !== null) throw custodyStop;
+      assertStockDeadline();
+    } }
   );
+  if (custodyStop !== null) throw custodyStop;
+  assertStockDeadline();
   succeeded += recoveredStocks;
   const recoveredMacros = recovery.recovered - recoveredStocks;
   if (recovery.attempted > 0 || recovery.skippedDueToLimit > 0) {
@@ -1404,7 +1506,9 @@ async function runDailySyncAndRecord(
       db,
       startedAt,
       marketContext.draft,
-      marketContext.collector
+      marketContext.collector,
+      undefined,
+      assertStockDeadline
     );
   }
 
@@ -1412,7 +1516,7 @@ async function runDailySyncAndRecord(
   // Phase 3.5: 前 run 以前の entry_signals を 1 文で掃除 (L-52)。
   // 回収 (recovery) の後。銘柄ごとの DELETE 3,755 文の代替。
   // -----------------------------------------------------------------
-  const sweptSignals = await sweepStaleEntrySignals(db, runStartedSec);
+  const sweptSignals = await sweepStaleEntrySignals(db, runStartedSec, assertStockDeadline);
   console.info(
     `[sync-daily] Phase 3.5: entry_signals sweep: ${sweptSignals} 行を削除`
   );
@@ -1424,7 +1528,7 @@ async function runDailySyncAndRecord(
   console.info("[sync-daily] Phase 4: OHLCV 保持期間の prune");
   // run 開始時刻の曜日で判定する (Phase 実行時刻だと日跨ぎで skip され飢餓する。F-05)。
   if (runMonday) {
-    const pruned = await pruneOhlcvRetention(db);
+    const pruned = await pruneOhlcvRetention(db, OHLCV_RETENTION_DAYS, assertStockDeadline);
     if (pruned.prunedStocks > 0) {
       console.info(
         `[sync-daily]   保持本数超過: ${pruned.prunedStocks} 銘柄 / ` +
@@ -1452,7 +1556,7 @@ async function runDailySyncAndRecord(
         "sector_daily は前回値を保持します。"
     );
   } else {
-    await aggregateSectorDaily(db, sectorTradingDate);
+    await aggregateSectorDaily(db, sectorTradingDate, assertStockDeadline);
   }
 
   // -----------------------------------------------------------------
@@ -1464,7 +1568,7 @@ async function runDailySyncAndRecord(
   // /emh は前日の as_of を表示し続けるのに監視上は成功に見える。
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 6: モメンタム投影の仕上げ");
-  const projected = await rebuildMomentumProjection(db, runStartedSec);
+  const projected = await rebuildMomentumProjection(db, runStartedSec, assertStockDeadline);
   console.info(
     `[sync-daily]   投影 ${projected.projectedStocks} 行 (` +
       `as_of 上限 ${projected.sourceMaxDate ?? "—"} / 掃除 ${projected.removedStocks} 行)`
@@ -1472,7 +1576,7 @@ async function runDailySyncAndRecord(
 
   const elapsedSec = (Date.now() - startedAt) / 1000;
   if (marketContextOk === undefined) throw new Error("マクロ同期結果を確認できません");
-  if (Date.now() > Date.parse(`${targetDate}T21:00:00Z`)) {
+  if (Date.now() >= Date.parse(`${targetDate}T21:00:00Z`)) {
     throw new Error(
       `株式同期が ${targetDate} の翌06:00 JST基準を超えました。` +
       "基準後の値は過去レポートに使えません。日次レポートの欠損と同期遅延を確認してください。"
@@ -1617,7 +1721,8 @@ export async function loadIndicatorsMaxLatestDate(db: Db): Promise<string | null
  */
 export async function aggregateSectorDaily(
   db: Db,
-  today: string
+  today: string,
+  beforeWrite?: () => void
 ): Promise<number | null> {
   const [{ activeCount }] = await db
     .select({ activeCount: sql<number>`count(*)` })
@@ -1670,6 +1775,7 @@ export async function aggregateSectorDaily(
   )
     .toISOString()
     .split("T")[0];
+  beforeWrite?.();
   await db.delete(swingSchema.sectorDaily).where(
     or(
       eq(swingSchema.sectorDaily.date, today),
@@ -1677,6 +1783,7 @@ export async function aggregateSectorDaily(
     )
   );
   for (let i = 0; i < sectorAggs.length; i += SECTOR_CHUNK) {
+    beforeWrite?.();
     await db.insert(swingSchema.sectorDaily).values(
       sectorAggs.slice(i, i + SECTOR_CHUNK).map((a) => ({
         date: today,
@@ -1700,9 +1807,11 @@ async function buildSnapshot(
   sector: string | null,
   expectedDate: string,
   jssAnnualRows: JssAnnualRow[] = [],
+  rawOptions?: NonNullable<Parameters<typeof fetchStockRawData>[2]> & { assertCaptured: () => void },
 ): Promise<StockSnapshot> {
   // 1 回の Chart(5y) + QuoteSummary で全指標を賄う
-  const raw = await fetchStockRawData(code, "5y");
+  const raw = await fetchStockRawData(code, "5y", rawOptions);
+  rawOptions?.assertCaptured();
 
   // -- 6mo スライス (swing 用指標の入力。fresh gate の対象もここ) --
   const ohlcv6mo = raw.ohlcv.slice(-130);
@@ -1858,6 +1967,8 @@ async function buildSnapshot(
  * 呼び出し側で止められる形 (両者が同じ 1 行を upsert すると実行順で値が決まる)。
  */
 export interface WriteStockSnapshotOptions {
+  /** 日次producerの実期限。各D1文の開始前に検査し、失敗はrunへthrowする。 */
+  beforeWrite?: () => void;
   /**
    * ②断面 (`core_stock_financials`) を書くか。既定 true。
    * 年次は対象外 (別出所のため一緒に止めると売上推移が止まる)。
@@ -2402,6 +2513,8 @@ export async function flushSnapshots<T>(
     }
     for (let i = 0; i < built.length; i += spec.rowsPerStatement) {
       const chunk = built.slice(i, i + spec.rowsPerStatement);
+      // run全体の期限は銘柄単位save failureへ丸めない。
+      options.beforeWrite?.();
       try {
         await spec.upsert(
           db,
@@ -2453,7 +2566,8 @@ export async function writeStockSnapshot(
  */
 export async function sweepStaleEntrySignals(
   db: Db,
-  runStartedSec: number
+  runStartedSec: number,
+  beforeWrite?: () => void
 ): Promise<number> {
   const cutoff = new Date(runStartedSec * 1000);
   const [{ stale }] = await db
@@ -2461,6 +2575,7 @@ export async function sweepStaleEntrySignals(
     .from(swingSchema.entrySignals)
     .where(lt(swingSchema.entrySignals.computedAt, cutoff));
   if (stale > 0) {
+    beforeWrite?.();
     await db
       .delete(swingSchema.entrySignals)
       .where(lt(swingSchema.entrySignals.computedAt, cutoff));
@@ -2508,7 +2623,8 @@ export function selectOverRetentionStocks(
  */
 export async function pruneOhlcvRetention(
   db: Db,
-  retentionDays: number = OHLCV_RETENTION_DAYS
+  retentionDays: number = OHLCV_RETENTION_DAYS,
+  beforeWrite?: () => void
 ): Promise<{ prunedStocks: number; deletedRows: number }> {
   const counts = await db
     .select({
@@ -2527,6 +2643,7 @@ export async function pruneOhlcvRetention(
     // ROW_NUMBER で「新しい日付から数えて retentionDays 本目より古い行」を消す。
     // date 文字列から cutoff を引き算する方式は、欠損日 (取引所休場・取得欠け) で
     // 残る本数がぶれるので採らない。
+    beforeWrite?.();
     await db.run(sql`
       DELETE FROM swing_daily_ohlcv
       WHERE rowid IN (
@@ -2623,7 +2740,8 @@ export function buildMomentumRow(
  */
 export async function rebuildMomentumProjection(
   db: Db,
-  runStartedSec: number
+  runStartedSec: number,
+  beforeWrite?: () => void
 ): Promise<MomentumProjectionResult> {
   const projection = projectionSchema.momentumProjection;
 
@@ -2682,6 +2800,7 @@ export async function rebuildMomentumProjection(
   }
 
   // 今 run の行へ全体 MAX を backfill する。
+  beforeWrite?.();
   await db
     .update(projection)
     .set({ sourceMaxDate })
@@ -2695,6 +2814,7 @@ export async function rebuildMomentumProjection(
     .from(projection)
     .where(lte(projection.computedAt, staleBefore));
   if (staleCount > 0) {
+    beforeWrite?.();
     await db.delete(projection).where(lte(projection.computedAt, staleBefore));
   }
 
@@ -3005,8 +3125,10 @@ async function persistMarketContext(
 async function persistMarketContextWithDiagnostics(
   db: Db,
   draft: MarketContextDraft,
-  expectedDate?: string
+  expectedDate?: string,
+  beforeWrite?: () => void
 ): Promise<boolean> {
+  beforeWrite?.();
   try {
     return await persistMarketContext(db, draft, expectedDate);
   } catch (error) {
@@ -3042,10 +3164,11 @@ async function archiveAndPersistMarketContext(
   startedAt: number,
   draft: MarketContextDraft,
   attempts: readonly MacroRawAttempt[],
-  expectedDate?: string
+  expectedDate?: string,
+  beforeWrite?: () => void
 ): Promise<boolean> {
   await archiveMacroSourceBatch({ startedAt, draft, attempts, expectedDate });
-  return persistMarketContextWithDiagnostics(db, draft, expectedDate);
+  return persistMarketContextWithDiagnostics(db, draft, expectedDate, beforeWrite);
 }
 
 async function archiveMacroSourceBatch(args: {

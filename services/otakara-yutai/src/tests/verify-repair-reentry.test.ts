@@ -36,7 +36,7 @@ const row = (id: number, shortSummary: string | null, estimatedValue: number | n
   id,
   stockId: 101,
   minShares: 100,
-  recordMonth: 3,
+  recordMonth: 3, recordDate: null,
   description: `掲載文${id}`,
   shortSummary,
   estimatedValue,

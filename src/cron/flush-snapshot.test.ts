@@ -150,6 +150,15 @@ describe("flushSnapshots (L-56)", () => {
     expect(calls).toHaveLength(1 + 3 + 3 + 5 + 10 + 2);
   });
 
+  it("各D1文直前の期限検査は銘柄save failureへ丸めず後続文0", async () => {
+    const { db, calls } = makeRecordingDb();
+    const stop = new Error("21UTC deadline");
+    await expect(flushSnapshots(db, items, { beforeWrite: () => {
+      if (calls.length >= 2) throw stop;
+    } })).rejects.toBe(stop);
+    expect(calls).toHaveLength(2);
+  });
+
   it("全ての文の bind 数 (実測 params) が D1 上限 100 以下", async () => {
     const { db, calls } = makeRecordingDb();
     await flushSnapshots(db, items, { runStartedSec: 1 });

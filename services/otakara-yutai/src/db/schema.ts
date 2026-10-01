@@ -48,6 +48,8 @@ export const yutaiBenefits = sqliteTable(
     shortSummary: text("short_summary"),
     minShares: integer("min_shares").notNull(),
     recordMonth: integer("record_month").notNull(),
+    /** 単発の実基準日 (YYYY-MM-DD)。非NULL行は定常月・年間利回りから除外する。 */
+    recordDate: text("record_date"),
     estimatedValue: integer("estimated_value"),
     /**
      * estimated_value の根拠区分 (ルール1: 推定値と企業公表値を機械可読に分離)。

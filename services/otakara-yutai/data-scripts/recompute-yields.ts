@@ -16,6 +16,7 @@
  * もので、行全体の作り直しではないため、日付を進めると株価の鮮度を偽る)。
  * 値が変わらない銘柄には UPDATE を打たない (再実行で 0 件・冪等)。
  */
+import { isRecurringBenefit } from "../src/record-date.js";
 import { and, inArray } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import type { D1BatchStatement } from "../../../src/shared/db/d1-http-client.js";
@@ -76,6 +77,7 @@ export type YieldInputs = {
       rowId: number;
       minShares: number;
       recordMonth: number;
+      recordDate: string | null;
       description: string;
       shortSummary: string | null;
       estimatedValue: number | null;
@@ -168,6 +170,7 @@ export async function fetchYieldInputs(
         stockId: yutaiBenefits.stockId,
         minShares: yutaiBenefits.minShares,
         recordMonth: yutaiBenefits.recordMonth,
+        recordDate: yutaiBenefits.recordDate,
         description: yutaiBenefits.description,
         shortSummary: yutaiBenefits.shortSummary,
         estimatedValue: yutaiBenefits.estimatedValue,
@@ -216,7 +219,7 @@ export function computeYieldEntries(
     // overlay は post-image (値 + 出典) で上書きし、合成は上書き後に見る
     // (旧 source NULL の行への company 書き込み予定を落とさないため)。
     // recipient context は同一文言の群から (月・株数の混在は HOLD)。
-    const stockBenefits = inputs.benefits.get(stockId) ?? [];
+    const stockBenefits = (inputs.benefits.get(stockId) ?? []).filter(isRecurringBenefit);
     const groupOf = new Map<string, { minShares: number[]; recordMonths: number[] }>();
     for (const b of stockBenefits) {
       const g = groupOf.get(b.description);

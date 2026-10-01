@@ -6,6 +6,8 @@ import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { runDailySync, runMarketContextSync } from "./daily.js";
 import type { OverlayCollectFn } from "./universe-overlay.js";
 import { fakeOverlayCollect } from "./tests/overlay-batch.js";
+import { chartWithRaw, stockWithRaw } from "./tests/yahoo-capture.js";
+import { archiveYahooRawBatch } from "../shared/yahoo/raw-custody.js";
 import {
   makeRecordingSender,
   makeThrowingSender,
@@ -43,6 +45,7 @@ vi.mock("../shared/yahoo/client.js", async (original) => ({
   ...await original<typeof import("../shared/yahoo/client.js")>(),
   fetchChart: vi.fn(), fetchStockRawData: vi.fn(),
 }));
+vi.mock("../shared/yahoo/raw-custody.js", () => ({ archiveYahooRawBatch: vi.fn() }));
 vi.mock("../shared/yahoo/nikkei-vi.js", () => ({ fetchNikkeiVi: vi.fn() }));
 vi.mock("../shared/notion-archive/index.js", async (original) => ({
   ...await original<typeof import("../shared/notion-archive/index.js")>(),
@@ -58,6 +61,7 @@ const fxBytes = (name: string): Uint8Array => readFileSync(join(FX, name));
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(archiveYahooRawBatch).mockResolvedValue({ pages: ["raw-page"], rawBytes: 1, compressedBytes: 1 });
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-28T17:13:00Z"));
   vi.mocked(ensurePriceSyncDb).mockResolvedValue({ dbId: "test-db" });
@@ -125,7 +129,7 @@ function mockMacro(
       const f = files[symbol];
       if (!f) throw new Error(`テスト: 未定義 symbol ${symbol}`);
       if (!opts?.noRaw?.includes(symbol)) {
-        await options?.onRaw?.({ symbol, status: 200, bytes: fxBytes(f), url: `https://mock.test/chart/${symbol}` });
+        await options?.onRaw?.({ symbol, status: 200, bytes: fxBytes(f), url: `https://mock.test/chart/${symbol}`, receivedAt: new Date(Date.now()).toISOString(), headers: {} });
       }
       return chartFromFixture(symbol, f);
     }
@@ -252,7 +256,7 @@ function stockRaw(ohlcv: Array<{
 describe("株式とマクロの日次分離", () => {
   it.each(["2026-09-25", undefined])("実日足が対象日でなければD1を書かない (%s)", async (date) => {
     // dataDateが今日でも、実timestampの日足が無ければ祝日/障害を成功にしない。
-    vi.mocked(fetchChart).mockResolvedValue(chart(date));
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart(date)));
     const { db, calls } = recordingDb();
     await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect })).rejects.toThrow("日足を確認できません");
     expect(calls).toEqual([]);
@@ -265,11 +269,11 @@ describe("株式とマクロの日次分離", () => {
   it("実日足の日付が対象日でも実終値がなければD1を書かない (fresh null bar)", async () => {
     // 日付だけの gate では対象日の fresh null bar が通過し、古い終値で計算した
     // 指標を対象日付で保存してしまう (F-01)。checkFreshClose で実終値も要求する。
-    vi.mocked(fetchChart).mockResolvedValue({
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw({
       symbol: "^N225", price: 100, previousClose: 99, dataDate: "2026-09-28",
       ohlcv: [{ date: "2026-09-28", open: null, high: null, low: null,
         close: null, volume: null, adj: null }],
-    });
+    }));
     const { db, calls } = recordingDb();
     await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect })).rejects.toThrow("日足を確認できません");
     expect(calls).toEqual([]);
@@ -486,6 +490,22 @@ describe("株式とマクロの日次分離", () => {
     ).rejects.toThrow("notion down");
     expect(calls.filter((sql) => sql.includes("swing_market_context"))).toEqual([]);
   });
+
+  it("daily のマクロ原本readback待機中に21UTCへ到達したらマクロD1を書かない", async () => {
+    vi.setSystemTime(new Date("2026-09-30T17:13:00Z"));
+    mockMacro(ALIGNED);
+    vi.mocked(verifyArchivedAttachments).mockImplementation(async () => {
+      vi.setSystemTime(new Date("2026-09-30T21:00:00Z"));
+    });
+    const { db, calls } = recordingDb();
+    await expect(runDailySync(db, {
+      collectOverlay: fakeCollect,
+      sendOverlayBatch: makeRecordingSender({ batches: [] }),
+    })).rejects.toThrow("21:00 UTC期限");
+    expect(macroArchiveInputs()).toHaveLength(1);
+    expect(verifyArchivedAttachments).toHaveBeenCalled();
+    expect(calls.filter((sql) => sql.includes('insert into "swing_market_context"'))).toEqual([]);
+  });
 });
 
 describe("株式 guard の default パス共有 (stocksOnly 依存の除去)", () => {
@@ -506,7 +526,7 @@ describe("株式 guard の default パス共有 (stocksOnly 依存の除去)", (
     "default パスも対象日実日足がなければD1を書かない (%s)",
     async (date) => {
       vi.setSystemTime(new Date("2026-09-30T17:13:00Z"));
-      vi.mocked(fetchChart).mockResolvedValue(chart(date));
+      vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart(date)));
       const { db, calls } = recordingDb();
       await expect(runDailySync(db, {})).rejects.toThrow("日足を確認できません");
       expect(calls).toEqual([]);
@@ -515,11 +535,11 @@ describe("株式 guard の default パス共有 (stocksOnly 依存の除去)", (
 
   it("default パスも対象日の fresh null bar ではD1を書かない", async () => {
     vi.setSystemTime(new Date("2026-09-30T17:13:00Z"));
-    vi.mocked(fetchChart).mockResolvedValue({
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw({
       symbol: "^N225", price: 100, previousClose: 99, dataDate: "2026-09-30",
       ohlcv: [{ date: "2026-09-30", open: null, high: null, low: null,
         close: null, volume: null, adj: null }],
-    });
+    }));
     const { db, calls } = recordingDb();
     await expect(runDailySync(db, {})).rejects.toThrow("日足を確認できません");
     expect(calls).toEqual([]);
@@ -535,7 +555,7 @@ describe("株式 guard の default パス共有 (stocksOnly 依存の除去)", (
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-30T17:13:00Z"));
     mockMacro(ALIGNED);
-    vi.mocked(fetchStockRawData).mockResolvedValue(stockRaw(ohlcv));
+    vi.mocked(fetchStockRawData).mockImplementation(stockWithRaw(stockRaw(ohlcv)));
     const { db, calls } = recordingDbWithTargets();
     const batches: D1BatchStatement[][] = [];
     const result = await runDailySync(db, {
@@ -574,7 +594,7 @@ describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () 
     // system time 2026-09-28T17:13Z → targetDate 2026-09-28。
     process.env.SCHEDULED_DATE = "2026-09-28";
     process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
-    vi.mocked(fetchChart).mockResolvedValue(chart("2026-09-25"));
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart("2026-09-25")));
     const { db } = recordingDb();
     // 検証を通過し、既存の session guard (日足不一致) まで到達する。
     await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
@@ -601,7 +621,7 @@ describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () 
   it("手動 stocks の日付未指定は現契約どおり素通りする", async () => {
     delete process.env.SCHEDULED_DATE;
     process.env.STOCK_SYNC_TARGET = "stocks";
-    vi.mocked(fetchChart).mockResolvedValue(chart("2026-09-25"));
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart("2026-09-25")));
     const { db } = recordingDb();
     await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
       "日足を確認できません"

@@ -50,6 +50,7 @@ import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
 import { stockFinancials, stocks, yutaiBenefits, yutaiGenres } from "../src/db/schema.js";
 import { type AtomicBatchSender, snapshotStockPreimages } from "./atomic-apply.js";
 import { benefitKey } from "./benefit-key.js";
+import { assertRecordDate } from "../src/record-date.js";
 import {
   headedDescription,
   qualifyCompanyPerGrantValue,
@@ -189,6 +190,7 @@ export type CarrySourceRow = {
   description: string;
   minShares: number;
   recordMonth: number;
+  recordDate: string | null;
   shortSummary: string | null;
   estimatedValue: number | null;
   estimateValueSource: string | null;
@@ -197,6 +199,8 @@ export type CarrySourceRow = {
 /** `planCarry` の結果。副作用なし。 */
 export type CarryPlan = {
   carried: Map<string, CarriedInterpretation>;
+  /** 単発権利日も同じ掲載文・株数・月の行へ保持する。解釈なしの行も対象。 */
+  carriedRecordDates: Map<string, string | null>;
   /** 厳密判定に落ちて値ごと null で戻すキー (要約は保持)。 */
   nulledKeys: Set<string>;
   /** qualifier 通過で legacy-null から company に上がるキー。 */
@@ -234,11 +238,20 @@ export function planCarry(
   plannedGroups: PlannedRecipientGroups,
 ): CarryPlan {
   const carried = new Map<string, CarriedInterpretation>();
+  const carriedRecordDates = new Map<string, string | null>();
   const nulledKeys = new Set<string>();
   const promotedKeys = new Set<string>();
   for (const row of rows) {
-    if (row.shortSummary == null && row.estimatedValue == null) continue;
+    assertRecordDate(row.recordDate);
     const key = carryKey(row.code, carryBody(row.description), row.minShares, row.recordMonth);
+    if (carriedRecordDates.has(key) && carriedRecordDates.get(key) !== row.recordDate) {
+      throw new Error(`同一 context の権利日が食い違うため STOP (code=${row.code})`);
+    }
+    if (row.recordDate !== null && !plannedMeta.has(key)) {
+      throw new Error(`単発権利日の掲載文・株数・月を同定できないため削除前に STOP (code=${row.code})`);
+    }
+    carriedRecordDates.set(key, row.recordDate);
+    if (row.shortSummary == null && row.estimatedValue == null) continue;
     let estimatedValue = row.estimatedValue;
     let estimateValueSource = row.estimateValueSource;
     if (estimatedValue !== null) {
@@ -290,7 +303,7 @@ export function planCarry(
       estimateValueSource,
     });
   }
-  return { carried, nulledKeys, promotedKeys };
+  return { carried, carriedRecordDates, nulledKeys, promotedKeys };
 }
 
 export type YutaiFullImportResult = {
@@ -424,6 +437,7 @@ export async function importYutaiFull(
       description: yutaiBenefits.description,
       minShares: yutaiBenefits.minShares,
       recordMonth: yutaiBenefits.recordMonth,
+      recordDate: yutaiBenefits.recordDate,
       shortSummary: yutaiBenefits.shortSummary,
       estimatedValue: yutaiBenefits.estimatedValue,
       estimateValueSource: yutaiBenefits.estimateValueSource,
@@ -504,7 +518,7 @@ export async function importYutaiFull(
   // (掲載文 description は公開面に出せないため代わりが無い)。キーは (銘柄コード,
   // description, 株数, 権利月) の内容アドレスなので、context が変わらない限り
   // 作り直した行に戻せる。計画は純関数 `planCarry` (要約取込と同じ共有厳密判定)。
-  const { carried, nulledKeys, promotedKeys } = planCarry(existing, plannedMeta, plannedGroups);
+  const { carried, carriedRecordDates, nulledKeys, promotedKeys } = planCarry(existing, plannedMeta, plannedGroups);
   const droppedInterpretations = [...carried.keys()].filter((k) => !plannedKeys.has(k)).length;
   console.info(`  既存の解釈を退避: ${carried.size}件`);
   if (nulledKeys.size > 0) {
@@ -597,7 +611,8 @@ export async function importYutaiFull(
           // 同じ (銘柄, 文言, 株数, 権利月) なら退避した解釈をそのまま戻す。
           // 新規/文言変更/context 変更は未解釈のまま入り、次の要約タスク書き出し
           // (export-summary-tasks.ts) の対象になる。
-          const previous = carried.get(carryKey(p.data.code, carryBody(r.description), r.minShares, r.recordMonth));
+          const key = carryKey(p.data.code, carryBody(r.description), r.minShares, r.recordMonth);
+          const previous = carried.get(key);
           await db.insert(yutaiBenefits).values({
             stockId: p.stockId,
             genreId,
@@ -605,6 +620,7 @@ export async function importYutaiFull(
             shortSummary: previous === undefined ? null : previous.shortSummary,
             minShares: r.minShares,
             recordMonth: r.recordMonth,
+            recordDate: carriedRecordDates.has(key) ? carriedRecordDates.get(key)! : null,
             estimatedValue: previous === undefined ? null : previous.estimatedValue,
             estimateValueSource: previous === undefined ? null : previous.estimateValueSource,
           });
