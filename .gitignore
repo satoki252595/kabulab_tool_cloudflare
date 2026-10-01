@@ -153,3 +153,6 @@ services/moneyflow/lib/sources/fixtures/private/
 
 # 取得済みFSA/owner identity回帰の私有原本投影（未配置テストはskip）
 pipeline/tests/fixtures/edinet/issuer-binding/
+
+# Yahoo原本文bytesのrun-local private gzip。公開Git/artifactへ出さない。
+.yahoo-raw-custody/

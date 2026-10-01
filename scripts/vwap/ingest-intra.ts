@@ -5,12 +5,13 @@ import "dotenv/config";
 // 最大 60d まで提供するので、初回は INTRA_RANGE=60d でバックフィルし、以後 5d で延伸。
 // 実行: npx tsx scripts/ingest-intra.ts [--codes=...] [--limit=N] [--range=60d]   KEEP_DAYS=365
 import { fileURLToPath } from "node:url";
-import { fetchBars5m } from "../../src/shared/yahoo/client.js";
+import { fetchBars5m, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES } from "../../src/shared/yahoo/client.js";
 import { r2GetVersion, r2Put, mapLimit, sleep, retry, R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
 import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { archiveSummaryOrFatal, assertSavedIntraShape, bodyPin, buildIngestSummary, findInvalidBars, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome, type SavedIntra } from "./lib/ingest-guard.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
+import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../../src/shared/yahoo/raw-custody.js";
 
 export async function main() {
   // knob は main 内で型付き取得する (未設定・不正値は final catch で exit 2)。
@@ -32,6 +33,7 @@ export async function main() {
 
   const cutoffTs = Math.floor(Date.now() / 1000) - KEEP_DAYS * 86400;
   const startedAt = new Date().toISOString();
+  const runId = resolveRunId();
   let written = 0, empty = 0, errors = 0, rateLimited = 0, invalid = 0, skipped = 0, done = 0;
   let consecRL = 0, aborted = false, fatal = false;
   const unknownCodes: string[] = [];
@@ -47,113 +49,175 @@ export async function main() {
       console.error(`  ${code}: R2 fault のため新規作業を停止します: ${sanitizeLogText(text).slice(0, 200)}`);
     }
   };
-  await mapLimit(codes, CONC, async (code) => {
-    if (aborted || fatal) return;                        // ブロック/故障検知後は残りを叩かない
-    await sleep(DELAY + Math.floor(Math.random() * 400));  // ジッタで規則性を避ける
-    if (aborted || fatal) return;                        // delay 後に再確認してから source へ
-    done++;
-    // 途中で timeout kill されても進捗が分かるよう定期的に出す(60d バックフィルは長時間)。
-    if (done % 500 === 0) console.log(JSON.stringify({ progress: done, total: codes.length, range: RANGE, written, empty, errors, rateLimited }));
-    let fresh: Awaited<ReturnType<typeof fetchBars5m>>;
-    try {
-      fresh = await retry(() => fetchBars5m(`${code}.T`, RANGE), 3);
-    } catch (e) {
-      // レート制限は即リトライせず連続数を数え、しきい値で全体を中断する。
-      if ((e as { name?: string })?.name === "YahooRateLimitError") {
-        rateLimited++; consecRL++;
-        outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
-        if (consecRL >= MAX_RL && !aborted) {
-          aborted = true;
-          console.error(`[abort] Yahoo 429/503 が ${MAX_RL} 連続。IP がレート制限中のため中断します。別回線(テザリング等)か時間を空けて再実行してください。`);
+  for (let offset = 0; offset < codes.length && !aborted && !fatal;) {
+    const batchStart = offset;
+    let rawBytes = 0;
+    const captures: YahooRawAttempt[] = [];
+    const missing: YahooRawMissing[] = [];
+    const writes: Array<() => Promise<void>> = [];
+    // ponytail: 最大30銘柄まで先行取得し、Notion呼出しを減らす (PUT unknown検知前の取得済が最大30)。
+    for (let wave = 0; wave < 6 && offset < codes.length && !aborted && !fatal &&
+      offset - batchStart < 30 && rawBytes < MAX_YAHOO_RAW_BYTES; wave++) {
+      const waveCodes = codes.slice(offset, offset + Math.min(CONC, 30 - (offset - batchStart)));
+      offset += waveCodes.length;
+      const captureStart = captures.length;
+      const settled = await Promise.allSettled(waveCodes.map(async (code) => {
+        if (aborted || fatal) return;                        // ブロック/故障検知後は残りを叩かない
+        await sleep(DELAY + Math.floor(Math.random() * 400));  // ジッタで規則性を避ける
+        if (aborted || fatal) return;                        // delay 後に再確認してから source へ
+        done++;
+        // 途中で timeout kill されても進捗が分かるよう定期的に出す(60d バックフィルは長時間)。
+        if (done % 500 === 0) console.log(JSON.stringify({ progress: done, total: codes.length, range: RANGE, written, empty, errors, rateLimited }));
+        let fresh: Awaited<ReturnType<typeof fetchBars5m>>;
+        let attempt = 0;
+        try {
+          fresh = await retry(async () => {
+            if (fatal || aborted) throw new Error("新規Yahoo取得はraw/R2 faultまたはABORTで停止済みです");
+            attempt++;
+            let captured = false;
+            try {
+              const bars = await fetchBars5m(`${code}.T`, RANGE, {
+                onRaw: (capture) => {
+                  captures.push({ api: "intra", attempt, capture });
+                  captured = true;
+                  if (capture.symbol !== `${code}.T`) {
+                    fatal = true;
+                    throw new Error("Yahoo5分足の原本captureと要求銘柄が一致しません (raw custody STOP)");
+                  }
+                },
+              });
+              if (!captured) {
+                fatal = true;
+                throw new Error("Yahoo5分足が返りましたが原HTTP本文captureがありません (raw custody STOP)");
+              }
+              return bars;
+            } catch (e) {
+              if (e instanceof YahooRawTooLargeError) fatal = true;
+              if (!captured) missing.push({ api: "intra", symbol: `${code}.T`, attempt,
+                error: sanitizeLogText(e instanceof Error ? e.message : String(e)), failedAt: new Date().toISOString() });
+              throw e;
+            }
+          }, 3, 1000, () => !fatal && !aborted);
+        } catch (e) {
+          // レート制限は即リトライせず連続数を数え、しきい値で全体を中断する。
+          if ((e as { name?: string })?.name === "YahooRateLimitError") {
+            rateLimited++; consecRL++;
+            outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
+            if (consecRL >= MAX_RL && !aborted) {
+              aborted = true;
+              console.error(`[abort] Yahoo 429/503 が ${MAX_RL} 連続。IP がレート制限中のため中断します。別回線(テザリング等)か時間を空けて再実行してください。`);
+            }
+            return;
+          }
+          errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
+          outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
+          return;
         }
-        return;
+        consecRL = 0;                                        // 成功で連続カウントをリセット
+        if (aborted || fatal) return;                        // source await 中に counterpart が fatal 化しうる
+        // R2 GET fault は fatal。null は明示 NoSuchKey の正常 bootstrap のみ。
+        let existing: string | null;
+        let observedVersion: string | null;
+        try {
+          const current = await r2GetVersion(`intra/${code}.json`);
+          existing = current === null ? null : current.body;
+          observedVersion = current === null ? null : current.etag;
+        } catch (e) {
+          // GET fault は typed family のみ記録する (生 SDK cause を出さない)。
+          const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+          errors++; if (errors <= 5) console.error(`  ${code}: ${sanitizeLogText(text).slice(0, 200)}`);
+          outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
+          stopNewWork(code, text);
+          return;
+        }
+        // 既存は empty 判定より先に検証する。source empty でも腐敗を見逃さない。
+        // 空文字列は bootstrap ではなく腐敗 (=== null 判定。truthiness 禁止)。
+        let old: SavedIntra | null = null;
+        if (existing !== null) {
+          try {
+            old = assertSavedIntraShape(existing, `intra/${code}.json`, code);
+          } catch (e) {
+            errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
+            outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
+            return;
+          }
+        }
+        if (!fresh.length) { empty++; outcomes[code] = { status: "empty", latestSourceBar: null, bodySha: null }; return; }
+        // 実応答の最新 source ts (実秒の最大)。完了取引日の推定はしない。
+        let latest = -1;
+        for (const b of fresh) if (b.ts > latest) latest = b.ts;
+        // 保存前 invalid-price STOP: 壊れた実値は書かず数える (欠落と混同しない)。
+        const bad = findInvalidBars(fresh);
+        if (bad.length > 0) {
+          invalid++;
+          if (invalid <= 5) console.error(`  ${code}: invalid bars ${JSON.stringify(bad.slice(0, 3))}`);
+          outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: null };
+          return;
+        }
+        const map = new Map<number, any>();
+        if (old !== null) for (const b of old.bars) map.set(b.ts as number, b);
+        for (const b of fresh) map.set(b.ts, b);               // 当日/前日分を上書きマージ
+        const bars = [...map.values()].filter((b) => b.ts >= cutoffTs).sort((a, b) => a.ts - b.ts);
+        // same-cached-input 2回目は内容同一で PUT skip (updated 不変)。
+        // keep 剪定で集合が変われば内容が変わるため PUT する。
+        // 比較対象は保存 object そのもの (Sol HOLD1: code/bars/splits 抜粋禁止)。
+        const payload = { code, updated: new Date().toISOString(), bars };
+        const payloadJson = JSON.stringify(payload);
+        if (shouldSkipPut(existing, payload)) {
+          skipped++;
+          // skip の pin は standing の既存 bytes (新規 timestamp 付き payload ではない)。
+          outcomes[code] = { status: "skipped", latestSourceBar: latest, bodySha: existing === null ? null : bodyPin(existing) };
+          return;
+        }
+        if (aborted || fatal) {
+          // prepared だが send 前に停止。未送信として記録する。
+          outcomes[code] = { status: "notStarted", latestSourceBar: latest, bodySha: null };
+          return;
+        }
+        outcomes[code] = { status: "notStarted", latestSourceBar: latest, bodySha: null };
+        writes.push(async () => {
+          if (aborted || fatal) return;
+          try {
+            await r2Put(`intra/${code}.json`, payloadJson, observedVersion);
+          } catch (e) {
+            // PUT fault は全件 fatal。区別は正直計数する (unknown/rejected/想定外)。
+            if (e instanceof R2PutUnknownError) {
+              unknownCodes.push(code);
+              outcomes[code] = { status: "unknown", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
+            } else if (e instanceof R2PutRejectedError) {
+              rejectedCodes.push(code);
+              outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
+            } else {
+              const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+              errors++; if (errors <= 5) console.error(`  ${code}: ${sanitizeLogText(text).slice(0, 200)}`);
+              outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
+            }
+            stopNewWork(code, e instanceof Error ? e.message : String(e));
+            return;
+          }
+          written++;
+          outcomes[code] = { status: "written", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
+        });
+      }));
+      for (let i = captureStart; i < captures.length; i++) rawBytes += captures[i].capture.bytes.length;
+      if (settled.some((r) => r.status === "rejected")) {
+        fatal = true;
+        console.error("intra prepare が想定外に中断しました。取得済原本を保管してSTOPします");
       }
-      errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
-      outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
-      return;
     }
-    consecRL = 0;                                        // 成功で連続カウントをリセット
-    if (aborted || fatal) return;                        // source await 中に counterpart が fatal 化しうる
-    // R2 GET fault は fatal。null は明示 NoSuchKey の正常 bootstrap のみ。
-    let existing: string | null;
-    let observedVersion: string | null;
     try {
-      const current = await r2GetVersion(`intra/${code}.json`);
-      existing = current === null ? null : current.body;
-      observedVersion = current === null ? null : current.etag;
-    } catch (e) {
-      // GET fault は typed family のみ記録する (生 SDK cause を出さない)。
-      const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-      errors++; if (errors <= 5) console.error(`  ${code}: ${sanitizeLogText(text).slice(0, 200)}`);
-      outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
-      stopNewWork(code, text);
-      return;
-    }
-    // 既存は empty 判定より先に検証する。source empty でも腐敗を見逃さない。
-    // 空文字列は bootstrap ではなく腐敗 (=== null 判定。truthiness 禁止)。
-    let old: SavedIntra | null = null;
-    if (existing !== null) {
-      try {
-        old = assertSavedIntraShape(existing, `intra/${code}.json`, code);
-      } catch (e) {
-        errors++; if (errors <= 5) console.error(`  ${code}: ${e}`);
-        outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
-        return;
+      if (captures.length > 0 || missing.length > 0) {
+        const raw = await archiveYahooRawBatch({ service: "vwap-analysis", runId,
+          stage: `vwap-intra-${batchStart}`, captures, missing });
+        console.log(JSON.stringify({ rawCustody: "intra", pages: raw.pages.length,
+          rawBytes: raw.rawBytes, compressedBytes: raw.compressedBytes }));
       }
-    }
-    if (!fresh.length) { empty++; outcomes[code] = { status: "empty", latestSourceBar: null, bodySha: null }; return; }
-    // 実応答の最新 source ts (実秒の最大)。完了取引日の推定はしない。
-    let latest = -1;
-    for (const b of fresh) if (b.ts > latest) latest = b.ts;
-    // 保存前 invalid-price STOP: 壊れた実値は書かず数える (欠落と混同しない)。
-    const bad = findInvalidBars(fresh);
-    if (bad.length > 0) {
-      invalid++;
-      if (invalid <= 5) console.error(`  ${code}: invalid bars ${JSON.stringify(bad.slice(0, 3))}`);
-      outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: null };
-      return;
-    }
-    const map = new Map<number, any>();
-    if (old !== null) for (const b of old.bars) map.set(b.ts as number, b);
-    for (const b of fresh) map.set(b.ts, b);               // 当日/前日分を上書きマージ
-    const bars = [...map.values()].filter((b) => b.ts >= cutoffTs).sort((a, b) => a.ts - b.ts);
-    // same-cached-input 2回目は内容同一で PUT skip (updated 不変)。
-    // keep 剪定で集合が変われば内容が変わるため PUT する。
-    // 比較対象は保存 object そのもの (Sol HOLD1: code/bars/splits 抜粋禁止)。
-    const payload = { code, updated: new Date().toISOString(), bars };
-    const payloadJson = JSON.stringify(payload);
-    if (shouldSkipPut(existing, payload)) {
-      skipped++;
-      // skip の pin は standing の既存 bytes (新規 timestamp 付き payload ではない)。
-      outcomes[code] = { status: "skipped", latestSourceBar: latest, bodySha: existing === null ? null : bodyPin(existing) };
-      return;
-    }
-    if (aborted || fatal) {
-      // prepared だが send 前に停止。未送信として記録する。
-      outcomes[code] = { status: "notStarted", latestSourceBar: latest, bodySha: null };
-      return;
-    }
-    try {
-      await r2Put(`intra/${code}.json`, payloadJson, observedVersion);
     } catch (e) {
-      // PUT fault は全件 fatal。区別は正直計数する (unknown/rejected/想定外)。
-      if (e instanceof R2PutUnknownError) {
-        unknownCodes.push(code);
-        outcomes[code] = { status: "unknown", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
-      } else if (e instanceof R2PutRejectedError) {
-        rejectedCodes.push(code);
-        outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
-      } else {
-        const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-        errors++; if (errors <= 5) console.error(`  ${code}: ${sanitizeLogText(text).slice(0, 200)}`);
-        outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
-      }
-      stopNewWork(code, e instanceof Error ? e.message : String(e));
-      return;
+      fatal = true;
+      console.error(`intra raw custody STOP: ${sanitizeLogText(e instanceof Error ? e.message : String(e)).slice(0, 200)}`);
     }
-    written++;
-    outcomes[code] = { status: "written", latestSourceBar: latest, bodySha: bodyPin(payloadJson) };
-  });
+    await mapLimit(writes, CONC, async (write) => write());
+  }
   // 未着手の全件 accounting。prepared-but-stopped は上で latest 付き notStarted。
   for (const code of codes) {
     outcomes[code] ??= { status: "notStarted", latestSourceBar: null, bodySha: null };
@@ -166,7 +230,7 @@ export async function main() {
   console.log(JSON.stringify({ codes: codes.length, range: RANGE, written, skipped, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted, fatal, unknown: unknown.length, rejected: rejected.length }));
   // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 intra に必須接続。
   // 保管失敗は fatal exit 2 にする (未保管の成功なし)。
-  const summary = buildIngestSummary({ kind: "intra", range: RANGE, runId: resolveRunId(), codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
+  const summary = buildIngestSummary({ kind: "intra", range: RANGE, runId, codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
   const local = writeSummaryLocal(summary);
   if (!local.ok) {
     console.error(JSON.stringify({ archive: "local-failed", key: summary.key, reason: local.reason }));

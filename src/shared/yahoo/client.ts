@@ -109,6 +109,7 @@ async function readResponsePrefix(
 export function redactYahooDiagnostic(value: string): string {
   return value
     .replace(/([?&]crumb=)[^&\s"'<>]+/gi, "$1[redacted]")
+    .replace(/(crumb%3D)(?:(?!%26)[^&\s"'<>])+/gi, "$1[redacted]")
     .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
     .replace(/\b((?:Set-)?Cookie)\s*:\s*[^\r\n]*/gi, "$1: [redacted]");
 }
@@ -514,12 +515,65 @@ export interface YahooChartRawCapture {
   url: string;
 }
 
+/** 同一応答の原文と、body受信完了の実clock。認証headerは収集しない。 */
+export interface YahooRawCapture extends YahooChartRawCapture {
+  receivedAt: string;
+  headers: { contentType?: string; upstreamStatus?: string };
+}
+
+export const MAX_YAHOO_RAW_BYTES = 8 * 1024 * 1024;
+
+/** 単一原本の上限超過はrun全体のSTOP。省略して他銘柄を保存しない。 */
+export class YahooRawTooLargeError extends Error {
+  constructor(symbol: string) {
+    super(`Yahoo原本 [${symbol}] が8MiB上限を超過しました。原文を切詰めずrunを停止します`);
+    this.name = "YahooRawTooLargeError";
+  }
+}
+
+async function readRawBytes(response: Response, symbol: string): Promise<Uint8Array> {
+  const body = response.clone().body;
+  if (body === null) return new Uint8Array();
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const part = await reader.read();
+      if (part.done) break;
+      length += part.value.length;
+      if (length > MAX_YAHOO_RAW_BYTES) throw new YahooRawTooLargeError(symbol);
+      chunks.push(part.value);
+    }
+  } catch (error) {
+    // cloneの片側だけのcancelは相方の消費待ちになる。双方を同時に止める。
+    await Promise.allSettled([reader.cancel(), response.body?.cancel()]);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  return bytes;
+}
+
+function rawCapture(symbol: string, response: Response, bytes: Uint8Array, receivedAt: string): YahooRawCapture {
+  const headers: YahooRawCapture["headers"] = {};
+  const contentType = response.headers.get("Content-Type");
+  const upstreamStatus = response.headers.get("X-Kabulab-Yahoo-Status");
+  if (contentType !== null) headers.contentType = contentType;
+  if (upstreamStatus !== null) headers.upstreamStatus = upstreamStatus;
+  return { symbol, status: response.status, bytes, receivedAt, headers,
+    url: redactYahooDiagnostic(response.url) };
+}
+
 export interface FetchChartOptions {
   /**
    * 原文 capture の受取 (任意・1 件)。指定時のみ clone して呼ぶ
    * (未指定の通常呼出はバイト列に触れず従来どおり)。
    */
-  onRaw?: (capture: YahooChartRawCapture) => void | Promise<void>;
+  onRaw?: (capture: YahooRawCapture) => void | Promise<void>;
 }
 
 /** `parseChartResponse` の戻り値 (fetchChart と診断が共有する parse 結果)。 */
@@ -602,8 +656,8 @@ export async function fetchChart(
   const response = await yahooFetch(url);
 
   if (options?.onRaw) {
-    const bytes = new Uint8Array(await response.clone().arrayBuffer());
-    await options.onRaw({ symbol, status: response.status, bytes, url: response.url });
+    const bytes = await readRawBytes(response, symbol);
+    await options.onRaw(rawCapture(symbol, response, bytes, new Date().toISOString()));
   }
 
   if (!response.ok) {
@@ -925,8 +979,12 @@ function assertQuoteArrays(
 // 有効バー 0 かつ null 脱落あり → 欠落として throw (真正 empty にしない)。
 // 全行 v=0 (妥当 OHLC) → 意図的 business 除外の結果 [] (no-trade 観測。
 // 休日推定・v0 行の保持はしない)。
-export async function fetchBars5m(symbol: string, range = "5d"): Promise<Bar5m[]> {
+export async function fetchBars5m(symbol: string, range = "5d", options?: FetchChartOptions): Promise<Bar5m[]> {
   const r = await fetchYahooChartRaw(symbol, range, "5m", false);
+  if (options?.onRaw) {
+    const bytes = await readRawBytes(r, symbol);
+    await options.onRaw(rawCapture(symbol, r, bytes, new Date().toISOString()));
+  }
   ensureOk(r);
   const j = (await r.json()) as YahooChartJson;
   const { res, timestamps } = extractChartResult(symbol, j);
@@ -1012,11 +1070,11 @@ export async function fetchDaily(
 ): Promise<DailyResult> {
   const r = await fetchYahooChartRaw(symbol, range, "1d", true);
   // body 受信完了で bytes 確定 + clock。onRaw 有無に関わらず取得する (proof のため)。
-  const rawBytes = new Uint8Array(await r.clone().arrayBuffer());
+  const rawBytes = await readRawBytes(r, symbol);
   const observedAt = new Date().toISOString();
   // fetchChart と同一の原文 capture (durable-before-parse 用。未指定は従来どおり)。
   if (options?.onRaw) {
-    await options.onRaw({ symbol, status: r.status, bytes: rawBytes, url: r.url });
+    await options.onRaw(rawCapture(symbol, r, rawBytes, observedAt));
   }
   ensureOk(r);
   return parseDailyChart(symbol, range, rawBytes, observedAt);
@@ -1187,7 +1245,7 @@ export interface QuoteSummaryResult {
   annualFinancials: AnnualFinancial[];
 }
 
-export async function fetchQuoteSummary(code: string): Promise<QuoteSummaryResult> {
+export async function fetchQuoteSummary(code: string, options?: FetchChartOptions): Promise<QuoteSummaryResult> {
   if (!JP_STOCK_PATTERN.test(code)) {
     throw new Error(
       `不正な銘柄コード: ${code} (数字4桁または数字3桁+末尾英字である必要があります)`
@@ -1196,6 +1254,11 @@ export async function fetchQuoteSummary(code: string): Promise<QuoteSummaryResul
 
   const url = `${QUOTE_SUMMARY_API_BASE}/${code}.T?modules=${QUOTE_SUMMARY_MODULES}`;
   const response = await yahooFetch(url);
+
+  if (options?.onRaw) {
+    const bytes = await readRawBytes(response, code);
+    await options.onRaw(rawCapture(code, response, bytes, new Date().toISOString()));
+  }
 
   if (!response.ok) {
     throw new Error(
@@ -1318,7 +1381,8 @@ export async function fetchQuoteSummary(code: string): Promise<QuoteSummaryResul
  */
 export async function fetchStockRawData(
   code: string,
-  range = "5y"
+  range = "5y",
+  options?: { onChartRaw?: FetchChartOptions["onRaw"]; onSummaryRaw?: FetchChartOptions["onRaw"] }
 ): Promise<StockRawData> {
   if (!JP_STOCK_PATTERN.test(code)) {
     throw new Error(
@@ -1326,10 +1390,23 @@ export async function fetchStockRawData(
     );
   }
 
-  const [chart, summary] = await Promise.all([
-    fetchChart(code, range),
-    fetchQuoteSummary(code),
+  // 片方の失敗時も相方の原文captureを完了してからcallerへ失敗を返す。
+  const results = await Promise.allSettled([
+    fetchChart(code, range, { onRaw: options?.onChartRaw }),
+    fetchQuoteSummary(code, { onRaw: options?.onSummaryRaw }),
   ]);
+  // 相方のparse失敗に先行されても、原文超過のrun STOPを失わない。
+  for (const result of results) {
+    if (result.status === "rejected" && result.reason instanceof YahooRawTooLargeError) throw result.reason;
+  }
+  for (const result of results) if (result.status === "rejected") throw result.reason;
+  const chartResult = results[0];
+  const summaryResult = results[1];
+  if (chartResult.status !== "fulfilled" || summaryResult.status !== "fulfilled") {
+    throw new Error("Yahoo取得結果が確定しません");
+  }
+  const chart = chartResult.value;
+  const summary = summaryResult.value;
 
   return {
     price: chart.price,

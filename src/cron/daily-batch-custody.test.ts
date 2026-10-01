@@ -30,11 +30,13 @@ import {
 } from "./daily.js";
 import type { OverlayCollectFn } from "./universe-overlay.js";
 import { fakeOverlayCollect } from "./tests/overlay-batch.js";
+import { chartWithRaw, stockWithRaw } from "./tests/yahoo-capture.js";
+import { archiveYahooRawBatch } from "../shared/yahoo/raw-custody.js";
 import { makeTxBatchSender } from "./tests/overlay-test-sender.js";
 
 const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
 
-import { fetchChart, fetchStockRawData } from "../shared/yahoo/client.js";
+import { fetchChart, fetchStockRawData, YahooRawTooLargeError } from "../shared/yahoo/client.js";
 import "../shared/yahoo/nikkei-vi.js";
 import {
   ensurePriceSyncDb,
@@ -52,6 +54,7 @@ vi.mock("../shared/yahoo/client.js", async (original) => ({
   fetchChart: vi.fn(),
   fetchStockRawData: vi.fn(),
 }));
+vi.mock("../shared/yahoo/raw-custody.js", () => ({ archiveYahooRawBatch: vi.fn() }));
 vi.mock("../shared/yahoo/nikkei-vi.js", () => ({ fetchNikkeiVi: vi.fn() }));
 vi.mock("../shared/notion-archive/index.js", async (original) => ({
   ...await original<typeof import("../shared/notion-archive/index.js")>(),
@@ -66,6 +69,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
   _resetBatchRunIdForTests();
+  vi.mocked(archiveYahooRawBatch).mockResolvedValue({ pages: ["raw-page"], rawBytes: 1, compressedBytes: 1 });
   vi.mocked(ensurePriceSyncDb).mockResolvedValue({ dbId: "test-db" });
   vi.mocked(recordPrimaryData).mockResolvedValue({
     pageId: "page-1",
@@ -343,7 +347,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
   });
 
   it("例外時は元例外を保持し aborted バッチ (null 件数) を保管する", async () => {
-    vi.mocked(fetchChart).mockResolvedValue(sessionChart("2026-09-25"));
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-25")));
     const db = freshDb();
     await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) })).rejects.toThrow(
       "日足を確認できません"
@@ -373,7 +377,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
   });
 
   it("閾値超過の失敗でも結果 return 前に全件バッチを保管する (CLI throw の前)", async () => {
-    vi.mocked(fetchChart).mockResolvedValue(sessionChart("2026-09-28"));
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-28")));
     vi.mocked(fetchStockRawData).mockRejectedValue(
       new Error("対象 2026-09-28 の実日足が未取得です。")
     );
@@ -398,7 +402,7 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
   });
 
   it("完了保管 fileTooLarge→例外同キー skip でも保管成功を偽らない (元例外で非0)", async () => {
-    vi.mocked(fetchChart).mockResolvedValue(sessionChart("2026-09-28"));
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-28")));
     vi.mocked(fetchStockRawData).mockRejectedValue(
       new Error("対象 2026-09-28 の実日足が未取得です。")
     );
@@ -421,8 +425,8 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
   });
 
   it("成功時も空バッチを保管して batchKey を返す", async () => {
-    vi.mocked(fetchChart).mockResolvedValue(sessionChart("2026-09-28"));
-    vi.mocked(fetchStockRawData).mockResolvedValue(stockRaw(260, "2026-09-28"));
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-28")));
+    vi.mocked(fetchStockRawData).mockImplementation(stockWithRaw(stockRaw(260, "2026-09-28")));
     const db = freshDb();
     seedTarget(1, "1301");
     const result = await runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) });
@@ -436,4 +440,104 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     ) as { failures: unknown[] };
     expect(body.failures).toEqual([]);
   });
+
+  it("全inflight原本を待ち、初回原本保管/readback後だけD1をflushする", async () => {
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-28")));
+    let release: (() => void) | undefined;
+    const wait = new Promise<void>((resolve) => { release = resolve; });
+    vi.mocked(fetchStockRawData).mockImplementation(async (...args) => {
+      if (args[0] === "1332") await wait;
+      return stockWithRaw(stockRaw(260, "2026-09-28"))(...args);
+    });
+    const db = freshDb(); seedTarget(1, "1301"); seedTarget(2, "1332");
+    vi.mocked(archiveYahooRawBatch).mockImplementation(async (raw) => {
+      if (raw.stage === "stocks-first") {
+        expect(raw.captures).toHaveLength(4);
+        expect(sqlite.prepare("SELECT count(*) AS n FROM swing_stock_indicators").get()).toMatchObject({ n: 0 });
+      }
+      return { pages: ["verified-page"], rawBytes: 1, compressedBytes: 1 };
+    });
+    const running = runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) });
+    await vi.waitFor(() => expect(fetchStockRawData).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(archiveYahooRawBatch).mock.calls.map(([r]) => r.stage)).toEqual(["stocks-session"]);
+    release!();
+    const result = await running;
+    expect(result.successStocks).toBe(2);
+    expect(sqlite.prepare("SELECT count(*) AS n FROM swing_stock_indicators").get()).toMatchObject({ n: 2 });
+  });
+
+  it.each(["archive unknown", "hosted SHA mismatch"])("初回 %s はD1株式write0でabort", async (reason) => {
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-28")));
+    vi.mocked(fetchStockRawData).mockImplementation(stockWithRaw(stockRaw(260, "2026-09-28")));
+    vi.mocked(archiveYahooRawBatch).mockImplementation(async (raw) => {
+      if (raw.stage === "stocks-first") throw new Error(reason);
+      return { pages: ["p"], rawBytes: 1, compressedBytes: 1 };
+    });
+    const db = freshDb(); seedTarget(1, "1301");
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) })).rejects.toThrow(reason);
+    expect(sqlite.prepare("SELECT count(*) AS n FROM core_stock_financials").get()).toMatchObject({ n: 0 });
+    expect(sqlite.prepare("SELECT count(*) AS n FROM swing_daily_ohlcv").get()).toMatchObject({ n: 0 });
+    expect(fetchStockRawData).toHaveBeenCalledTimes(1);
+  });
+
+  it("session原本不明はスキーマ/overlay前STOP", async () => {
+    vi.mocked(fetchChart).mockResolvedValue(sessionChart("2026-09-28"));
+    const db = freshDb(); seedTarget(1, "1301");
+    const send = makeTxBatchSender(sqlite, { sends: 0 });
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: send })).rejects.toThrow("原本capture");
+    expect(fetchStockRawData).not.toHaveBeenCalled();
+    expect(vi.mocked(archiveYahooRawBatch).mock.calls[0][0]).toMatchObject({ stage: "stocks-session", captures: [], missing: [expect.objectContaining({ symbol: "^N225" })] });
+    expect(sqlite.prepare("SELECT events_fetched_at AS clock FROM universe_overlay_state").get()).toMatchObject({ clock: null });
+  });
+
+  it("parse成功でもChart/QuoteSummary capture不足は部分成功にせず全run STOP", async () => {
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-28")));
+    vi.mocked(fetchStockRawData).mockResolvedValue(stockRaw(260, "2026-09-28"));
+    const db = freshDb(); seedTarget(1, "1301"); seedTarget(2, "1332");
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) })).rejects.toThrow("原本capture");
+    expect(sqlite.prepare("SELECT count(*) AS n FROM swing_stock_indicators").get()).toMatchObject({ n: 0 });
+    const first = vi.mocked(archiveYahooRawBatch).mock.calls.find(([r]) => r.stage === "stocks-first")![0];
+    expect(first.captures).toEqual([]);
+    expect(first.missing!.map((m) => m.api).sort()).toEqual(["chart", "quote-summary"]);
+    expect(fetchStockRawData).toHaveBeenCalledTimes(1);
+  });
+
+  it("単一原文超過は新source GET停止/株式write0、実未取得診断を保管", async () => {
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-28")));
+    vi.mocked(fetchStockRawData).mockRejectedValue(new YahooRawTooLargeError("1301"));
+    const db = freshDb(); seedTarget(1, "1301"); seedTarget(2, "1332");
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) })).rejects.toBeInstanceOf(YahooRawTooLargeError);
+    expect(fetchStockRawData).toHaveBeenCalledTimes(1);
+    expect(sqlite.prepare("SELECT count(*) AS n FROM swing_stock_indicators").get()).toMatchObject({ n: 0 });
+    expect(vi.mocked(archiveYahooRawBatch).mock.calls.at(-1)![0].missing).toHaveLength(2);
+  });
+
+  it("custody待機中の21UTC到達は初回D1 write0", async () => {
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-28")));
+    vi.mocked(fetchStockRawData).mockImplementation(stockWithRaw(stockRaw(260, "2026-09-28")));
+    vi.mocked(archiveYahooRawBatch).mockImplementation(async (raw) => {
+      if (raw.stage === "stocks-first") vi.mocked(Date.now).mockReturnValue(Date.parse("2026-09-28T21:00:00Z"));
+      return { pages: ["p"], rawBytes: 1, compressedBytes: 1 };
+    });
+    const db = freshDb(); seedTarget(1, "1301");
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) })).rejects.toThrow("21:00 UTC期限");
+    expect(sqlite.prepare("SELECT count(*) AS n FROM core_stock_financials").get()).toMatchObject({ n: 0 });
+  });
+
+  it("回収原本保管失敗後は次対象の新GET/株式D1 write0", async () => {
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-28")));
+    vi.mocked(fetchStockRawData).mockRejectedValueOnce(new Error("fetch failed"))
+      .mockRejectedValueOnce(new Error("fetch failed"))
+      .mockImplementation(stockWithRaw(stockRaw(260, "2026-09-28")));
+    vi.mocked(archiveYahooRawBatch).mockImplementation(async (raw) => {
+      if (raw.stage.startsWith("stocks-recovery")) throw new Error("recovery archive unknown");
+      return { pages: ["p"], rawBytes: 1, compressedBytes: 1 };
+    });
+    const db = freshDb(); seedTarget(1, "1301"); seedTarget(2, "1332");
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) })).rejects.toThrow("recovery archive unknown");
+    expect(fetchStockRawData).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(archiveYahooRawBatch).mock.calls.at(-1)![0].captures).toHaveLength(2);
+    expect(sqlite.prepare("SELECT count(*) AS n FROM swing_stock_indicators").get()).toMatchObject({ n: 0 });
+  });
+
 });
