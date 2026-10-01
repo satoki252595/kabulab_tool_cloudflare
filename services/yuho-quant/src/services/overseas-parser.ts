@@ -36,6 +36,11 @@
  */
 import { unzip } from "./edinet/zip.js";
 import {
+  readFilingDurationContexts,
+  type DurationContext,
+  type FilingDurationContexts,
+} from "./edinet/duration-context.js";
+import {
   tableToGridExpanded,
   parseJpNumber,
   unitToYenFactor,
@@ -102,8 +107,7 @@ export interface OverseasExtraction {
 /**
  * 候補 table の診断レコード (非DB保存の任意 diagnostic。保存対象外)。
  * 全 field は実 selector の中間値そのもの (推測・複製なし。新 regex 0)。
- * dims は header 側 context 定義の解決が必要なため含めない (html-only の
- * 本 API では解決不能。contextRef までを運ぶ)。
+ * ZIP の単一行分岐では実 context 期間も運ぶ。dimensions は推測しない。
  */
 export interface OverseasCandidateCapture {
   /** 表開始 offset。 */
@@ -112,6 +116,8 @@ export interface OverseasCandidateCapture {
   textBlock: string | null;
   /** 囲み TextBlock の contextRef (context 証拠)。 */
   contextRef: string | null;
+  /** ZIP 由来の単一行期間証拠。HTML-only・他 reducer は未設定。 */
+  contextPeriod?: DurationContext;
   /** caption 末尾160字 (表ローカル証拠の原文断片。compact 表示用)。 */
   captionTail: string;
   /** caption 全文 (表ローカル証拠の原文。attribution 用)。 */
@@ -136,7 +142,7 @@ export interface OverseasCandidateCapture {
   trace?: ReducerTrace;
 }
 
-/** 文書単位の診断 (parseOverseasHtml の opts.capture に採取)。 */
+/** 文書単位の診断 (parseOverseasData/Html の opts.capture に採取)。 */
 export interface OverseasCapture {
   status: OverseasParseStatus | null;
   stopReason: string | null;
@@ -147,6 +153,7 @@ export interface OverseasCapture {
     kind: "rows" | "cols";
     labels: string[];
     amount: number | null;
+    contextPeriod?: DurationContext;
   }>;
 }
 
@@ -167,6 +174,8 @@ export interface GeoIncomplete {
    * null (金額不明。それでも fail-closed で却下する)。
    */
   amount: number | null;
+  /** 単一行 cols で期を証明した後の地理未分類拒否にだけ付く。 */
+  contextPeriod?: DurationContext;
 }
 
 /**
@@ -1774,11 +1783,13 @@ export function lastRangedFiscalTitle(caption: string): string | null {
 
 /**
  * 単一行 geocols の直接証明 (Root残gate)。TextBlock の contract と caption
- * 明示日の fiscal を候補 group へ渡し、通常の competition guard で競合
- * させる。fiscal は wide を見ない (前表からの継承禁止)。null (期表示なし)
- * はここに入らず tryGeoCols が fiscal-unknown STOP を返す。
+ * 明示日または同一 filing の実 context の fiscal を候補 group へ渡し、
+ * 通常の competition guard で競合させる。wide は見ない。どちらも証明
+ * できなければ tryGeoCols が fiscal-unknown STOP を返す。
  */
 export interface SingleRowProof {
+  /** contextRef 名の推測ではなく、同一 ZIP の実定義から解決した期間。 */
+  contextPeriod?: DurationContext;
   fiscal: SourceFiscal | "mismatch";
   contract: SalesContract;
 }
@@ -1824,8 +1835,9 @@ function tryGeoCols(
   heading: string,
   mode: RoundingMode,
   caption: string = "",
-  textBlock: string | null = null
-): ParsedTable | "single_row_fiscal_unknown" | GeoIncomplete | null {
+  textBlock: string | null = null,
+  contextPeriod?: DurationContext | null
+): ParsedTable | "single_row_fiscal_unknown" | "single_row_fiscal_mismatch" | GeoIncomplete | null {
   const flat = gridX.map((r) => r.join("")).join("");
   const unit = detectUnitOrNull(flat) ?? detectUnitOrNull(heading);
   if (!unit) return null;
@@ -1880,8 +1892,8 @@ function tryGeoCols(
     // 単一行 geocols の限定分岐 (Sol確定 + Root残gate): 地域 header +
     // 無ラベル数値行が唯一で、売上 TextBlock の囲み + 直前小見出しの sales
     // metric がある場合だけ値行として受理する (R98H 81/83 級)。期は
-    // caption 内明示日で確定し、wide (前表の証拠) は使わない。期表示なし
-    // は fiscal-unknown STOP (黙殺も wide 継承採用もしない)。以降は通常
+    // caption 内明示日または同一 filing の実 context で確定し、wide は
+    // 使わない。未証明は fiscal-unknown STOP。以降は通常
     // cols と同一の raw quantum・総額照合・候補競合 guard へ流す。
     // 資産/生産/受注は既存 R1 veto が先に弾く。
     valueRow = singleUnlabeledValueRow(
@@ -1895,12 +1907,38 @@ function tryGeoCols(
     );
     if (valueRow < 0) return null;
     const title = lastRangedFiscalTitle(caption);
-    const inh = title ? inheritSourceFiscal(caption, fiscalYearEnd) : null;
-    if (!title || inh === null) return "single_row_fiscal_unknown";
+    const printed = title ? inheritSourceFiscal(caption, fiscalYearEnd) : null;
+    let inh: FiscalResolution;
+    if (contextPeriod !== undefined) {
+      if (contextPeriod === null) return "single_row_fiscal_unknown";
+      if (contextPeriod.endDate > normPeriodEnd(fiscalYearEnd))
+        return "single_row_fiscal_mismatch";
+      inh = {
+        side: contextPeriod.endDate === normPeriodEnd(fiscalYearEnd) ? "T" : "Z",
+        date: contextPeriod.endDate,
+      };
+      const words = periodWordClassOf(caption, "");
+      if (words === "TZ" || (words !== "-" && words !== inh.side))
+        return "single_row_fiscal_mismatch";
+      if (title) {
+        const range = /自([^）)]*?)至([^）)]*?)[）)]/.exec(title);
+        if (!printed || printed === "mismatch" || printed.side !== inh.side ||
+          !range || endDateChunkToIso(range[1]) !== contextPeriod.startDate ||
+          endDateChunkToIso(range[2]) !== contextPeriod.endDate)
+          return "single_row_fiscal_mismatch";
+      }
+    } else {
+      if (!title || printed === null) return "single_row_fiscal_unknown";
+      inh = printed;
+    }
     // TextBlock 名の示す外部顧客売上 = Gate2 の "ext" (contractOf の
     // 外部顧客分岐と同一意味)。group キー・競合 guard は通常経路で使う。
-    singleRowProof = { fiscal: inh, contract: "ext" };
-    singleRowAxis = title;
+    singleRowProof = {
+      fiscal: inh,
+      contract: "ext",
+      ...(contextPeriod ? { contextPeriod } : {}),
+    };
+    singleRowAxis = title === null ? "" : title;
   }
 
   // 集計列 (連結/合計) と消去列 (調整額/消去) を収集。行パスと同型に、
@@ -2072,6 +2110,7 @@ function tryGeoCols(
         incompleteMissingLabels.length > 0
           ? null
           : badUnclassified.reduce((a, c) => a + Math.abs(c.value), 0),
+      ...(singleRowProof?.contextPeriod ? { contextPeriod: singleRowProof.contextPeriod } : {}),
     };
   }
   // P-hier-cols: 親ラベル重複は子階層 (次行) で grouping する。複数列の親は
@@ -2403,7 +2442,7 @@ function tablesWithHeading(
   const stack: number[] = [];
   // 開いている ix:nonNumeric の内側から見た TextBlock 名 (非 TextBlock は
   // null の深さ標識)。表を直接囲む TextBlock を contract の直接証明に使う。
-  // contextRef は diagnostic の parent/context 証拠 (選択には使わない)。
+  // contextRef は単一行だけ実 context 期間を結び付け、他は診断に運ぶ。
   const ixStack: Array<{ tb: string | null; contextRef: string | null }> = [];
   let m: RegExpExecArray | null;
   const strip = (s: string): string =>
@@ -2514,7 +2553,8 @@ function scoreCandidate(
  */
 export function parseOverseasData(
   zipBuf: Buffer,
-  reportPeriodEnd: string
+  reportPeriodEnd: string,
+  opts: { capture?: OverseasCapture } = {}
 ): OverseasExtraction {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(reportPeriodEnd)) {
     throw new Error(`reportPeriodEnd 形式が不正: ${reportPeriodEnd}`);
@@ -2522,6 +2562,12 @@ export function parseOverseasData(
   const entries = unzip(zipBuf);
   const picked = pickHonbunHtml(entries);
   if (!picked) {
+    if (opts.capture) {
+      opts.capture.status = "no_overseas_table";
+      opts.capture.stopReason = "no-signal";
+      opts.capture.candidates = [];
+      opts.capture.incomplete = [];
+    }
     return {
       status: "no_overseas_table",
       facts: [],
@@ -2537,7 +2583,11 @@ export function parseOverseasData(
   );
   const filingText = names.map((n) => entries.get(n)!.toString("utf8")).join("\n");
   const { mode } = detectRoundingMode(filingText);
-  const r = parseOverseasHtml(picked.html, reportPeriodEnd, { roundingMode: mode });
+  const r = parseOverseasHtml(picked.html, reportPeriodEnd, {
+    roundingMode: mode,
+    capture: opts.capture,
+    durationContexts: readFilingDurationContexts(entries, picked.name, reportPeriodEnd),
+  });
   return { ...r, honbunFile: picked.name };
 }
 
@@ -2639,7 +2689,7 @@ export function contractOf(
 
 /**
  * 候補の fiscal (期首フィルタ・pre-score STOP・group・tiebreak の共通入口)。
- * 単一行の直接証明がある候補は caption 明示日の確定値を使い、wide
+ * 単一行の直接証明がある候補は caption/実context の確定値を使い、wide
  * (前表の証拠) を見ない。それ以外は既存の確定鎖と同一。
  */
 function fiscalOfCand(
@@ -2947,7 +2997,11 @@ function pickCurrentOfFiscalPair(
 export function parseOverseasHtml(
   html: string,
   reportPeriodEnd: string,
-  opts: { roundingMode?: RoundingMode; capture?: OverseasCapture } = {}
+  opts: {
+    roundingMode?: RoundingMode;
+    capture?: OverseasCapture;
+    durationContexts?: FilingDurationContexts;
+  } = {}
 ): Omit<OverseasExtraction, "honbunFile"> {
   const mode = opts.roundingMode ?? detectRoundingMode(html).mode;
   const tables = tablesWithHeading(html);
@@ -3078,6 +3132,7 @@ export function parseOverseasHtml(
         kind,
         labels: inc.labels,
         amount: inc.amount,
+        ...(inc.contextPeriod ? { contextPeriod: inc.contextPeriod } : {}),
       });
     };
     {
@@ -3099,12 +3154,18 @@ export function parseOverseasHtml(
         heading,
         mode,
         caption,
-        textBlock
+        textBlock,
+        opts.durationContexts === undefined ? undefined :
+          contextRef === null ? null : (opts.durationContexts.get(contextRef) ?? null)
       );
-      // 単一行の売上直接証明はあるが caption に期表示なし → fiscal-unknown
-      // STOP (Root残gate)。黙殺せず、wide (前表) 継承で採用もしない。
+      // 単一行の売上直接証明はあるが caption/実context で期を証明できない
+      // → fiscal-unknown STOP。wide (前表) 継承で採用しない。
       if (cols === "single_row_fiscal_unknown") {
         markCap("geo_present_unstructured", "single-row-fiscal-unknown", null);
+        return { status: "geo_present_unstructured", facts: [], tablesScanned };
+      }
+      if (cols === "single_row_fiscal_mismatch") {
+        markCap("geo_present_unstructured", "single-row-fiscal-mismatch", null);
         return { status: "geo_present_unstructured", facts: [], tablesScanned };
       }
       if (cols && "marker" in cols) capReject("cols", cols);
@@ -3145,6 +3206,8 @@ export function parseOverseasHtml(
           start,
           textBlock,
           contextRef,
+          ...(cand.singleRowProof?.contextPeriod ?
+            { contextPeriod: cand.singleRowProof.contextPeriod } : {}),
           captionTail: caption.slice(-160),
           caption,
           gridScope,
