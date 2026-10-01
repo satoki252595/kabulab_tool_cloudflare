@@ -15,7 +15,11 @@ Notion読取133件・rateLimited0・transientRetries0。これは残件を読み
 
 対象コードは141A、151A、157A、196A、197A、2428、246A、2762、3242、3300、3457、
 378A、386A、4068、407A、4326、4767、584A、598A、6547、6888、6920、7812、9444、9565。
-実行前の最新行を再読し、書類変更・判定済への遷移を除外してから対象を再確定する。
+10/2にshared Notion readerで25行を再読し、D1最新書類とのdocIDは25/25一致した。
+すべて判定不能・attempts=2（上限到達0）。次回期日は14件10/2、11件10/3。
+現在有効な単語帳v5と保存4本文を通常`prefilter`/`buildJudgeInput`/`buildQuestion`へ渡すと、
+候補語は1〜8個で保存候補数と25/25一致し、すべて1batch。再構築state計138,977文字、
+JSON request payload計545,216 bytes。jev API呼出は0。
 
 - 直接呼出先は `api.typesafe.ai/v1/systemone`。CloudflareのPaid料金に含まれる
   Workers AIの呼出ではない。
@@ -25,7 +29,9 @@ Notion読取133件・rateLimited0・transientRetries0。これは残件を読み
   複数batchに分けて同じstateを送るので、25回という固定回数から費用を断定しない。
 - [公式MCA §8.2](https://typesafe.ai/legal/mca)ではCredits残高はアカウントで確認し、
   購入Creditsは原則購入後12か月または契約終了まで。自動補充はopt-in。
-  アカウントの残高、支払状態、購入最小単位、税はこの公開調査では確認できていない。
+  10/2の認証済[console billing](https://console.typesafe.ai/settings/billing)では、
+  購入inputの最小値USD5・自動補充OFF・カード未登録を確認した。個人の残高は公開しない。
+  最低補充額と今回の推論料金は別で、税を含む決済の最終金額は未確定。補充は未実施。
 - 復旧操作は同じAPIキーの所属する[公式console](https://console.typesafe.ai/)で残高・
   支払状態を確認し、必要な補充を確定すること。キーを交換する場合だけ `.env` と
   GitHub `TYPESAFE_API_KEY` Secretを同じ値に更新する。秘密値はログへ出さない。
@@ -33,6 +39,15 @@ Notion読取133件・rateLimited0・transientRetries0。これは残件を読み
   `--codes=`は期日・5回上限を解除しない。上限到達分の手動解除や再判定は、最新本文・
   既存行の保持条件・既存writerを確認した別の限定修復が必要。`--dry-run`でも有料の
   jev呼出があり、無料の残高確認手段としては使わない。
+
+この25件は10/3以降なら通常の`pnpm biztag run --codes=<上記25コード>`で再開できる。
+事前に残高復旧・最新行・docID・単語帳を再確認し、attemptsやretry日を強制変更しない。
+正確な入力tokenはAPI応答の`usage`で確定し、文字数やUTF-8 bytesをtokenと同一視しない。
+[公式64k/request上限](https://docs.typesafe.ai/models)を65,536tokenとして保守的に算出すると、
+25成功呼出の入力料金上限概算はUSD0.0688128。クライアントの最大3回retryまで全attemptが
+同じ上限で課金されると仮定した100attemptはUSD0.2752512。これは現行モデル・価格・
+各1batchが維持される25件だけの計算で、関門のgolden再評価・別銘柄・税・最低補充額を
+含まない。保存本文から組んだ予算準備であり、新しい判定成功や実課金tokenの測定ではない。
 
 今回のコード修正は、`attempts<5`によって課金ブロッカーが課金通知から消える条件を
 撤去した。上限到達通知と課金通知の両方を維持し、再試行や書込の対象は変更しない。
@@ -70,15 +85,19 @@ Notion読取133件・rateLimited0・transientRetries0。これは残件を読み
 
 | 銘柄 | 公式の追加調査先・判断に必要な点 |
 | --- | --- |
-| 2307 | [9/17制度・基準日変更PDF](https://www.xcat.co.jp/ja/ir/news/auto_20260917537890/pdfFile.pdf)。既存の[基本情報](https://www.xcat.co.jp/ja/ir/stock/basic.html)は9月基準を掲載しており、変更の適用開始日を旧5行と個別に対応付ける必要がある。 |
-| 2001 | [公式制度説明](https://www.nippn.co.jp/ir/stock/stockholder/)は2026年9月までと2027年3月からを明示する。旧6行の株数・継続保有・権利月を現行/将来別に照合する。将来制度を現在行として自動採用しない。 |
+| 2307 | [9/17制度・基準日変更PDF](https://www.xcat.co.jp/ja/ir/news/auto_20260917537890/pdfFile.pdf)の実原文は、初回2027/3/31、以後3月末、贈呈6月、額面/株数基準変更なし、2026/9/30は旧制度と明示。旧5行33181–33185はデジタルギフトと9月/12月発送が混在している。次回制度を全5行で厳密に対応付け、2026年の既存権利と混同しない限定修復候補。 |
+| 2001 | [公式制度説明](https://www.nippn.co.jp/ir/stock/stockholder/index.html)の実HTMLは2027年3月から9月優待を3月へ統合、株数/保有期間別4tierを明示。HOLD6は32973–32975・32977–32979。旧行の月コピー・旧金額を新4tierへそのまま流用せず、100株以上半年からの新しい資格を本文に保持して次回制度へ置換する候補。 |
 | 8508 | [公式株主還元](https://www.jt-corp.co.jp/ir/jstock/shareholders_reduce/)は2026年9月2日基準の特別優待を通常6月優待と別に掲載。単発の権利日を毎年9月の恒常優待へ変えない。 |
 | 3189 | [公式優待](https://www.anap.co.jp/ir/information/benefit/)は通常優待と抽選優待を別記。消失2行は旧原文・新原文・変更開示を対応付けてから処置を確定する。抽選額を確約の経済額にしない。 |
-| 6577 | [公式優待](https://www.best1cruise-corp.info/yuutai/)は旅行割引券とデジタルギフトを掲載。二次サイトとの不一致や今回スクレイプでの消失だけを廃止根拠とせず、旧1行と最新の適時開示を照合する。 |
+| 6577 | 10/2の[公式優待](https://www.best1cruise-corp.info/yuutai/)実HTMLは「2026年7月末基準分の配布をもって廃止」と明示した。9/30/10/1のブラウザキャッシュ観測とは分ける。旧デジタルギフト36656を将来の恒常行から除く候補で、2026年7月の既存権利の配布終了を推定しない。旅行割引3行は別条件として保持する。 |
 
-これらは参照先の確認であり、新しい原本の物理保管・全15行のqualification完了ではない。
-旧HOLD packetを回収して行ID・株数・月・原文を特定し、確定した処置だけを既存full-import/
-whole-writerへ渡す。PRE4表・原本を物理保管して全列条件・POST全列・再適用書込0を確認する。
+共有readerで保管済CAS68 PRE/POST packetをread-only回収した。PRE ZIP5,664,840 bytes・
+SHA`0c9e4440033977dc0c8dfea9fc0a2ee0bb1e03f218bdc6b3cc96c3bd6862171f`、
+POST ZIP6,704,121 bytes・SHA`1b817512e3b84cb4fa7b620a03688eac86fd54c9ec400f8f8ef8700692e3fd92`は
+既存証拠と一致し、旧HOLD15のID・原因を回収した。最新D1のcore/benefit2 SELECTも保存済み。
+公式5資料（2307 PDF・他4 HTML）を各1 GETで0600保存したが、追加原本の共有物理保管・
+全15行のqualification完了ではない。確定した処置だけを既存full-import/whole-writerへ渡す。
+最新PRE4表・原本を物理保管して全列条件・POST全列・再適用書込0を確認する。
 
 ## 海外売上の未資格・未保管
 
