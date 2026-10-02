@@ -3,6 +3,10 @@
 // フロント(SPA)は public/vwap-analysis/ を ASSETS が配信。ここは /api/* だけ。
 import { Hono } from "hono";
 import type { DailyFetchProof } from "../../src/shared/yahoo/client.js";
+import type { DailyBar } from "../../src/shared/yahoo/client.js";
+import { assertCorporateEventsShape, assertEventSourceProof, corporateEventPins, corporateSplitProjection,
+  currentEventRevisions, priceSnapshotJson, type CorporateEvents } from "../../src/shared/yahoo/corporate-events.js";
+import { sha256Hex } from "../../src/shared/sha256.js";
 import {
   intraWindowOf,
   isCalendarDateString,
@@ -69,6 +73,7 @@ type ValidDaily = {
   bars: unknown[];
   splits: Array<{ date: string; ratio: number }>;
   proof: DailyFetchProof | null;
+  corporateEvents: CorporateEvents | null;
 };
 
 /** 日足 object の strict 読取。欠落は null、形状不正は throw (reject)。 */
@@ -79,7 +84,7 @@ async function readDailyObject(
   const o = await bucket.get(`daily/${code}.json`);
   if (!o) return null;
   const body = JSON.parse(await o.text()) as {
-    code?: unknown; updated?: unknown; bars?: unknown; splits?: unknown; proof?: unknown;
+    code?: unknown; updated?: unknown; bars?: unknown; splits?: unknown; proof?: unknown; corporateEvents?: unknown;
   };
   if (body.code !== code) throw new Error(`daily object の code 不一致: ${code}`);
   if (!Array.isArray(body.bars)) throw new Error(`daily object の bars 非配列: ${code}`);
@@ -111,7 +116,21 @@ async function readDailyObject(
   if (proof !== null && proof.symbol !== `${code}.T`) {
     throw new Error(`daily proof の symbol 不一致: ${code}`);
   }
-  return { updated: body.updated ?? null, bars: body.bars, splits, proof };
+  let corporateEvents: CorporateEvents | null = null;
+  if (body.corporateEvents !== undefined) {
+    assertCorporateEventsShape(body.corporateEvents, `${code}.T`);
+    if (proof === null) throw new Error(`daily events の proof 欠落: ${code}`);
+    corporateEvents = body.corporateEvents;
+    assertEventSourceProof(corporateEvents, proof);
+    if (await sha256Hex(priceSnapshotJson(body.bars as DailyBar[])) !== corporateEvents.source.priceSnapshotSha256 ||
+      JSON.stringify(corporateSplitProjection(corporateEvents)) !== JSON.stringify(splits)) {
+      throw new Error(`daily events の価格/分割対応不一致: ${code}`);
+    }
+    for (const pin of corporateEventPins(corporateEvents)) {
+      if (await sha256Hex(pin.json) !== pin.sha256) throw new Error(`daily events の原値SHA不一致: ${code}`);
+    }
+  }
+  return { updated: body.updated ?? null, bars: body.bars, splits, proof, corporateEvents };
 }
 
 type ValidIntra = { updated: unknown; bars: unknown[]; window: IntraWindow | null };
@@ -194,8 +213,11 @@ app.get("/api/daily", async (c) => {
   const cached = (o: unknown) =>
     new Response(JSON.stringify(o), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=3600" } });
   const daily = await readDailyObject(c.env.BUCKET, code);
-  if (!daily) return cached({ code, bars: [], splits: [], note: "未取得（バックフィル待ち）", proof: null });
-  return cached({ code, updated: daily.updated, bars: daily.bars, splits: daily.splits, proof: daily.proof });
+  if (!daily) return cached({ code, bars: [], splits: [], dividends: null, corporateEvents: null,
+    corporateEventsStatus: "not-fetched", note: "未取得（バックフィル待ち）", proof: null });
+  return cached({ code, updated: daily.updated, bars: daily.bars, splits: daily.splits, proof: daily.proof,
+    corporateEvents: daily.corporateEvents, corporateEventsStatus: daily.corporateEvents === null ? "not-fetched" : "observed",
+    dividends: daily.corporateEvents === null ? null : currentEventRevisions(daily.corporateEvents.dividends) });
 });
 
 // 日次信用残高(R2)を集約。n=直近何営業日ぶん返すか(既定60・上限260=約1年)。
