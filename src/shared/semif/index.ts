@@ -7,7 +7,10 @@ export {
   SEMIF_MODEL,
   SEMIF_HF_MODEL,
   SEMIF_HF_REVISION,
+  SEMIF_SOURCE_REVISION,
+  SEMIF_MLX_VERSION,
+  SEMIF_MLX_LM_REVISION,
   SemifUnavailableError,
   createSemifClient,
 } from "./client.js";
-export type { CreateSemifClientOptions } from "./client.js";
+export type { CreateSemifClientOptions, SemifClient } from "./client.js";

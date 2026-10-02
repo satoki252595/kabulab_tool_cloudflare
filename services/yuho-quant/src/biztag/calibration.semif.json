@@ -1,0 +1,67 @@
+{
+  "model": "Qwen3.5-4B@851bf6e/semif-mlx",
+  "yesMin": 0.85,
+  "noMax": 0.2,
+  "calibratedAt": "2026-10-03",
+  "runtime": {
+    "hfModel": "Qwen/Qwen3.5-4B",
+    "hfRevision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+    "semifSourceRevision": "23cf1f39fc9534fe81437200959b6dfc7106e45a",
+    "mlxVersion": "0.32.2",
+    "mlxLmRevision": "a63e24c389382619eb6d9af656e3b46024be217a",
+    "backend": "mlx",
+    "quantization": null,
+    "maxInputTokens": 16000,
+    "batchSize": 20
+  },
+  "basis": {
+    "goldenSet": "golden/v1.json",
+    "vocabulary": "v1",
+    "companies": 87,
+    "expectedPairs": 858,
+    "scoredQuestions": 881,
+    "measurement": {
+      "researchResidentProcesses": 2,
+      "inferenceRequests": 94,
+      "elapsedMs": 183180,
+      "first66RequestsReplayedExactly": 73,
+      "last21NewRequests": 21,
+      "sourceRequests": 0,
+      "externalJudgeApiRequests": 0,
+      "productionWrites": 0,
+      "localHardwareCostUsd": null
+    },
+    "textBasis": {
+      "savedNotionWholeMetadataMatch": 85,
+      "sourceRecoveredCsv": 2,
+      "savedNotionWholeDefectHold": 2,
+      "judgeInputFourSectionsMatchForRecovered": true,
+      "recoveredOriginalManifestShaAndClock": "UNKNOWN"
+    },
+    "atChosenThresholds": {
+      "precisionYes": 0.9156626506024096,
+      "recallYes": 0.6298342541436464,
+      "mustHitRecall": 0.7619047619047619,
+      "mustNotViolations": 0,
+      "filterMissRate": 0,
+      "truePositive": 228,
+      "falsePositive": 21,
+      "trueNegative": 475,
+      "falseNegative": 134,
+      "yes": 249,
+      "uncertain": 227,
+      "no": 381,
+      "noCandidate": 1,
+      "precisionNo": 0.910761154855643,
+      "expectedTrueDefiniteNo": 34
+    },
+    "why": "新規初回専用。yesMin=0.80〜0.83は精度0.9未満、0.84〜0.85は同じ249件で精度0.9157。0.85を選び、高い閾値による再現率低下を抑える。noMax=0.20は0.25より正例の断定的除外を41件から34件に抑え、227件を要確認として保持する。旧Jevの精度・再現率・mustHitRecallとは同等ではない。語彙変更ゲートを再開する較正ではない。",
+    "probabilityMeaning": "yes/noの説明オプション間の条件付きsoftmax。較正済みの信頼度を意味しない。",
+    "evaluationSha256": "5e7b174bee4c116b888c5830d27b5b447e3fb02498c853fc76bc80f050bb251b",
+    "textMapSha256": "0e6ed4a866773c0a64de66f8e0a78e71e3cf1ec559147c56ea6548043b6c422b"
+  },
+  "sources": [
+    "https://github.com/TheoLeeCJ/SemIf-OpenJev",
+    "https://github.com/TheoLeeCJ/SemIf-OpenJev/blob/23cf1f39fc9534fe81437200959b6dfc7106e45a/docs/MLX.md"
+  ]
+}

@@ -18,7 +18,8 @@ import {
   type TagStatus,
 } from "../../../../src/shared/notion-archive/index.js";
 import type { StockTextSection } from "../../../../src/shared/notion-archive/stock-text.js";
-import { JevUnavailableError, type JevClient } from "../../../../src/shared/jev/index.js";
+import type { JevClient } from "../../../../src/shared/jev/index.js";
+import { SemifUnavailableError } from "../../../../src/shared/semif/index.js";
 import { addDaysJst } from "./date-jst.js";
 import { docTypeLabelOf } from "./doc-type.js";
 import { formatPeriodJa } from "./evidence.js";
@@ -312,7 +313,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         vocabVersion: deps.vocab.version,
         judgedAt: deps.today,
         candidateCount: 0,
-        judgeInput: `${item.initialTypeSafe ? "TypeSafe新規銘柄の初回判定：" : "機械照合："}候補語なし (キーワード照合で該当語なし・外部判定なし)`,
+        judgeInput: `${item.initialSemif ? "SemIf新規銘柄の初回判定：" : "機械照合："}候補語なし (キーワード照合で該当語なし・外部判定なし)`,
         error: null,
         attempts: 0,
         nextRetryAt: null,
@@ -336,16 +337,16 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     periodEnd: doc.periodEnd,
     docTypeLabel: docTypeLabelOf(doc.docTypeCode),
   };
-  let judgeInputSummary = item.initialTypeSafe
-    ? "TypeSafe新規銘柄の初回判定"
+  let judgeInputSummary = item.initialSemif
+    ? "SemIf新規銘柄の初回判定"
     : "機械照合：単語帳のキーワード一致・同文の除外語を確認 (AI確率なし)";
 
   try {
     let tagOutcome: TagOutcome;
     let stats = ZERO_JEV_STATS;
-    if (item.initialTypeSafe) {
+    if (item.initialSemif) {
       const judgeInput = buildJudgeInput(meta, sectionMap, result);
-      judgeInputSummary = `TypeSafe新規銘柄の初回判定：${judgeInput.inputSummary}`;
+      judgeInputSummary = `SemIf新規銘柄の初回判定：${judgeInput.inputSummary}`;
       const judged = await judgeCandidates(deps.jevClient, judgeInput,
         result.candidates.map((c) => c.term), deps.thresholds);
       tagOutcome = summarizeJudgments(deps.vocab, result.candidates, judged.judgments);
@@ -400,7 +401,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       ...stats,
     };
   } catch (e) {
-    if (!(e instanceof JevUnavailableError)) throw e;
+    if (!(e instanceof SemifUnavailableError)) throw e;
     return recordFailure(item, deps, {
       textStatus: "取得済",
       tagStatus: "判定不能",
@@ -411,7 +412,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       texts: textsByColumn,
       candidateCount,
       judgeInput: judgeInputSummary,
-      errorMessage: `jev 判定に失敗: ${e.message}`,
+      errorMessage: `SemIf 判定に失敗: ${e.message}`,
     });
   }
 }
@@ -456,8 +457,8 @@ async function recordFailure(item: WorkItem, deps: ProcessDeps, args: FailureArg
     vocabVersion: null,
     judgedAt: null,
     candidateCount: args.candidateCount,
-    judgeInput: item.initialTypeSafe && args.judgeInput === null
-      ? "TypeSafe新規銘柄の初回判定：本文読込失敗 (外部判定なし)" : args.judgeInput,
+    judgeInput: item.initialSemif && args.judgeInput === null
+      ? "SemIf新規銘柄の初回判定：本文読込失敗 (外部判定なし)" : args.judgeInput,
     // rich_text の実測上限に対する安全側の切り詰め (Notion API 側の 2000字/要素 は
     // splitRichText が分割するが、事業タグの「判定エラー」列は原因の要約で十分)。
     error: args.errorMessage.slice(0, 1900),

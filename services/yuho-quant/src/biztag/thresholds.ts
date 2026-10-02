@@ -1,8 +1,8 @@
 /**
- * jev モデル名・判定しきい値の読み込み。設計: docs/005-yuho-quant-business-tags.md §5.5・§11.4。
+ * 用途別のモデル名・判定しきい値の読み込み。設計: docs/005-yuho-quant-business-tags.md §5.5・§11.4。
  *
- * 較正済みの値はゴールデンセット (`pnpm biztag golden`) で精度を測ってから
- * 運営が `calibration.json` として用意する (このリポジトリのソースへ未較正の
+ * 較正済みの値は実データのゴールデンセットで精度を測ってから
+ * 運営が用途別の較正JSONとして用意する (このリポジトリのソースへ未較正の
  * マジックナンバーやダミー値を先置きしない — ルール1/2)。ファイルが無い・
  * 形式が不正な場合は明示的に throw する (黙って既定値で起動しない)。
  */
@@ -38,15 +38,16 @@ function isCalibrationFileShape(v: unknown): v is CalibrationFileShape {
  * このファイルを削除して次の較正が済むまで意図的に起動を止められる
  * (下の catch が既定値へフォールバックしない設計はそのまま活かす)。
  */
-export function loadCalibration(): Calibration {
-  const path = new URL("./calibration.json", import.meta.url);
+export function loadCalibration(judge: "jev" | "semif" = "jev"): Calibration {
+  const filename = judge === "semif" ? "calibration.semif.json" : "calibration.json";
+  const path = new URL(`./${filename}`, import.meta.url);
   let raw: string;
   try {
     raw = readFileSync(path, "utf-8");
   } catch (e) {
     throw new Error(
-      "services/yuho-quant/src/biztag/calibration.json が見つかりません。" +
-        "`pnpm biztag golden` でしきい値を較正し、運営が同ファイル " +
+      `services/yuho-quant/src/biztag/${filename} が見つかりません。` +
+        "実データ評価でしきい値を較正し、運営が同ファイル " +
         "({model, yesMin, noMax}) を用意してから実行してください " +
         "(docs/005-yuho-quant-business-tags.md §11.4)。既定値では起動しません。",
       { cause: e }
@@ -56,12 +57,15 @@ export function loadCalibration(): Calibration {
   try {
     json = JSON.parse(raw);
   } catch (e) {
-    throw new Error("calibration.json が JSON として解釈できません。", { cause: e });
+    throw new Error(`${filename} が JSON として解釈できません。`, { cause: e });
   }
   if (!isCalibrationFileShape(json)) {
     throw new Error(
-      "calibration.json の形式が不正です ({model: string, yesMin: number, noMax: number} が必要です)。"
+      `${filename} の形式が不正です ({model: string, yesMin: number, noMax: number} が必要です)。`
     );
+  }
+  if (!(json.noMax > 0 && json.noMax < json.yesMin && json.yesMin < 1)) {
+    throw new Error(`${filename} のしきい値が不正です (0 < noMax < yesMin < 1 が必要です)`);
   }
   return { model: json.model, thresholds: { yesMin: json.yesMin, noMax: json.noMax } };
 }

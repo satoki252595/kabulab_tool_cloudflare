@@ -33,6 +33,7 @@ import { rollback } from "../src/biztag/rollback.js";
 import { type BiztagSourceDb } from "../src/biztag/source.js";
 import { makeBudgetedVerifySources } from "../src/biztag/sources-verify.js";
 import { loadCalibration } from "../src/biztag/thresholds.js";
+import { withBiztagWriter } from "../../../scripts/biztag-local/runtime.js";
 import { parseVocabulary } from "../src/biztag/vocabulary/load.js";
 import { TEXT_SECTIONS } from "../src/services/edinet/text-sections.js";
 import * as yuhoSchema from "../src/db/schema.js";
@@ -93,7 +94,7 @@ function writeGithubStepSummary(markdown: string): void {
 }
 
 async function runCommand(): Promise<void> {
-  const { model, thresholds } = loadCalibration();
+  const { model, thresholds } = loadCalibration("semif");
   const budgetMin = arg("budget-min") ? Number(arg("budget-min")) : 20;
   const limit = arg("limit") ? Number(arg("limit")) : undefined;
   const codes = arg("codes")
@@ -110,6 +111,9 @@ async function runCommand(): Promise<void> {
     thresholds,
     model,
   });
+  if (summary.judge === undefined) {
+    throw new Error("SemIf の実行計測がありません。STOP");
+  }
 
   console.info(JSON.stringify(summary, null, 2));
   writeGithubStepSummary(
@@ -117,7 +121,7 @@ async function runCommand(): Promise<void> {
       `## biztag run`,
       `- 対象: ${summary.totalStocks} 銘柄 (処理 ${summary.processed} / 残 ${summary.remaining})`,
       `- 判定済率: ${(summary.coverage.ratio * 100).toFixed(1)}%`,
-      `- jev: ${summary.jev.calls}回 / 入力 ${summary.jev.inputTokens}tok / 概算 $${summary.jev.estimatedCostUsd.toFixed(4)}`,
+      `- SemIf: ${summary.judge.calls}回 / ローカル推論 (トークン数・計算費用未計測、外部判定API 0回)`,
       `- Notion: ${summary.notion.requests}リクエスト (429 ${summary.notion.rateLimited}回)`,
       `- 単語帳: ${summary.vocabVersion}${summary.vocabSeeded ? " (初回投入)" : ""}`,
       `- 失敗: ${summary.failures.length}件`,
@@ -496,7 +500,13 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+// 本番・手動とも同じMac/受入済みmain/環境/プロジェクト排他を通す。
+// 停止済み有料コマンドは環境読取より先に既存mainのpreflightで拒否する。
+if (["gate", "golden"].includes(subcommand) ||
+    (["competitors", "competitors-eval"].includes(subcommand) && judgeArg() === "jev")) {
+  assertTypeSafeEnabled();
+}
+await withBiztagWriter(main);
 // `--judge=semif` は常駐 Python プロセス (services/yuho-quant/scripts/semif_server.py)
 // を子プロセスとして持ち続ける。標準出力は上の各コマンドで既に同期的に
 // flush 済みのため、ここで明示的に終了してよい (child プロセスは標準入力の

@@ -15,7 +15,7 @@ import { assertBiztagDate } from "../env.js";
 
 /** 新規初回の外部判定の最大再試行回数。既存の機械判定には適用しない。 */
 export const MAX_RETRY_ATTEMPTS = 5;
-export const INITIAL_TYPESAFE_INPUT_PREFIX = "TypeSafe新規銘柄の初回判定";
+export const INITIAL_SEMIF_INPUT_PREFIX = "SemIf新規銘柄の初回判定";
 
 export type WorkItemKind =
   | "create_row"
@@ -44,7 +44,7 @@ export interface WorkItem {
    */
   retryExhausted?: boolean;
   /** 公式上場の資格と未完の初回判定が揃った項目だけ true。省略時は機械判定。 */
-  initialTypeSafe?: boolean;
+  initialSemif?: boolean;
   /** 入力資格/本文/保存済み結果が未確定。skip でも完了扱いにしないための明示。 */
   qualificationHeld?: boolean;
 }
@@ -66,13 +66,13 @@ function hasPreviousJudgment(row: SupplementRow | null): boolean {
   );
 }
 
-function canInitialTypeSafe(row: SupplementRow | null): boolean {
+function canInitialSemif(row: SupplementRow | null): boolean {
   if (row === null) return true;
   if (hasPreviousJudgment(row) || row.judgeInput === undefined) return false;
   if (row.attempts === 0 && row.error === null && row.tagStatus !== "判定不能" && row.tagStatus !== "読込失敗") return true;
   return (row.tagStatus === "判定不能" || row.tagStatus === "読込失敗") &&
     typeof row.attempts === "number" && Number.isInteger(row.attempts) && row.attempts > 0 &&
-    row.judgeInput !== null && row.judgeInput.startsWith(INITIAL_TYPESAFE_INPUT_PREFIX);
+    row.judgeInput !== null && row.judgeInput.startsWith(INITIAL_SEMIF_INPUT_PREFIX);
 }
 
 function planOne(
@@ -97,8 +97,8 @@ function planOne(
     if (!hasUsableText(latest.doc)) {
       return { ...base, kind: "create_row", qualificationHeld: true, reason: "補足行を本文なしで作成。初回判定は最新有報の本文取得まで HOLD" };
     }
-    const initialTypeSafe = eligibility?.eligibleCodes.has(latest.stockCode) === true;
-    return { ...base, kind: "sync_and_tag", initialTypeSafe, reason: initialTypeSafe
+    const initialSemif = eligibility?.eligibleCodes.has(latest.stockCode) === true;
+    return { ...base, kind: "sync_and_tag", initialSemif, reason: initialSemif
       ? "確認済み新規上場の未完の初回判定。最新有報の本文を使用"
       : "補足行なしの既存銘柄を最新有報から機械判定 (新規上場の資格なし)" };
   }
@@ -123,27 +123,27 @@ function planOne(
   if (hasPreviousJudgment(row)) {
     return { ...base, kind: "skip", qualificationHeld: true, reason: "既存タグ・根拠・判定記録があるが状態が未完のため HOLD。保存済み結果を上書きしない" };
   }
-  if (eligibility?.eligibleCodes.has(latest.stockCode) === true && !canInitialTypeSafe(row)) {
+  if (eligibility?.eligibleCodes.has(latest.stockCode) === true && !canInitialSemif(row)) {
     const knownPreviousFailure = (row.tagStatus === "判定不能" || row.tagStatus === "読込失敗") &&
       row.error !== null && row.error.trim().length > 0 && row.judgeInput !== undefined &&
-      (row.judgeInput === null || !row.judgeInput.startsWith(INITIAL_TYPESAFE_INPUT_PREFIX));
+      (row.judgeInput === null || !row.judgeInput.startsWith(INITIAL_SEMIF_INPUT_PREFIX));
     if (!knownPreviousFailure) {
       return { ...base, kind: "skip", qualificationHeld: true, reason: "新規上場の初回判定履歴が不明なため HOLD。機械判定の完了に置き換えない" };
     }
   }
-  if (eligibility?.eligibleCodes.has(latest.stockCode) === true && canInitialTypeSafe(row)) {
+  if (eligibility?.eligibleCodes.has(latest.stockCode) === true && canInitialSemif(row)) {
     if (row.attempts !== null && row.attempts > 0) {
       if (row.attempts >= MAX_RETRY_ATTEMPTS) {
-        return { ...base, kind: "skip", retryExhausted: true, reason: "TypeSafe新規銘柄の初回判定が再試行上限に到達" };
+        return { ...base, kind: "skip", retryExhausted: true, reason: "SemIf新規銘柄の初回判定が再試行上限に到達" };
       }
       if (row.nextRetryAt === null) {
-        return { ...base, kind: "skip", reason: "TypeSafe新規銘柄の初回判定の再試行期日が未到来" };
+        return { ...base, kind: "skip", reason: "SemIf新規銘柄の初回判定の再試行期日が未到来" };
       }
-      assertBiztagDate(row.nextRetryAt, "TypeSafe 初回 nextRetryAt");
-      if (row.nextRetryAt > today) return { ...base, kind: "skip", reason: "TypeSafe新規銘柄の初回判定の再試行期日が未到来" };
-      return { ...base, kind: "retry", initialTypeSafe: true, reason: "確認済み新規上場の初回判定を再試行 (専用の判定入力記録あり)" };
+      assertBiztagDate(row.nextRetryAt, "SemIf 初回 nextRetryAt");
+      if (row.nextRetryAt > today) return { ...base, kind: "skip", reason: "SemIf新規銘柄の初回判定の再試行期日が未到来" };
+      return { ...base, kind: "retry", initialSemif: true, reason: "確認済み新規上場の初回判定を再試行 (専用の判定入力記録あり)" };
     }
-    return { ...base, kind: "sync_and_tag", initialTypeSafe: true, reason: "確認済み新規上場の未完の初回判定。最新有報の本文を使用" };
+    return { ...base, kind: "sync_and_tag", initialSemif: true, reason: "確認済み新規上場の未完の初回判定。最新有報の本文を使用" };
   }
   if (row.docId !== doc.docId) {
     return {

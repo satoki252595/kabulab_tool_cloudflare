@@ -1,3 +1,4 @@
+import { SemifUnavailableError } from "../../../../src/shared/semif/index.js";
 /**
  * process.ts のテスト。設計 docs/005-yuho-quant-business-tags.md §5。
  * 依存は全てモック (実際の Notion/jev を叩かない)。実データは
@@ -5,7 +6,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { SupplementRow, SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
-import { JevUnavailableError, type JevAskResult, type JevClient } from "../../../../src/shared/jev/index.js";
+import { type JevAskResult, type JevClient } from "../../../../src/shared/jev/index.js";
 import type { WorkItem } from "./plan.js";
 import { processStock, type ProcessDeps } from "./process.js";
 import type { LatestDoc } from "./source.js";
@@ -188,7 +189,7 @@ describe("processStock", () => {
         readStockTextRow: () =>
           Promise.resolve([{ itemName: "事業の内容", sectionKey: "business", text: OKUMA_BUSINESS_TEXT }]),
       });
-      const outcome = await processStock(itemOf({ initialTypeSafe: true }), deps);
+      const outcome = await processStock(itemOf({ initialSemif: true }), deps);
       expect(outcome.tagStatus).toBe("判定済");
       expect(outcome.candidateCount).toBe(1);
       expect(outcome.jevCalls).toBe(1);
@@ -284,9 +285,9 @@ describe("processStock", () => {
       expect(callOrder).toEqual([]);
     });
 
-    it("jev 判定不能: JevUnavailableError なら 判定不能 + attempts+1 + 次回再試行日 (テキストは保存する)", async () => {
+    it("SemIf 判定不能: SemifUnavailableError なら 判定不能 + attempts+1 + 次回再試行日 (テキストは保存する)", async () => {
       const jevClient: JevClient = {
-        askNoul: () => Promise.reject(new JevUnavailableError("jev がリトライ上限に達した", { status: 529 })),
+        askNoul: () => Promise.reject(new SemifUnavailableError("SemIf 推論が失敗した")),
       };
       const { deps, updated } = makeDeps({
         jevClient,
@@ -294,7 +295,7 @@ describe("processStock", () => {
           Promise.resolve([{ itemName: "事業の内容", sectionKey: "business", text: OKUMA_BUSINESS_TEXT }]),
       });
       const row = rowOf({ attempts: 0 });
-      const outcome = await processStock(itemOf({ row, initialTypeSafe: true }), deps);
+      const outcome = await processStock(itemOf({ row, initialSemif: true }), deps);
       expect(outcome.tagStatus).toBe("判定不能");
       const write = updated.find((u) => u.pageId === row.pageId)?.input;
       expect(write?.textStatus).toBe("取得済"); // 本文の読込自体は成功している
@@ -303,9 +304,9 @@ describe("processStock", () => {
       expect(write?.nextRetryAt).toBe("2026-09-26"); // 2^(1-1)=1日後
       expect(write?.candidateCount).toBe(1); // 絞り込みまでは成功した事実を残す
       expect(write?.upstream).toEqual([]);
-      expect(write?.error).toContain("jev 判定に失敗");
-      expect(write?.judgeInput).toMatch(/^TypeSafe新規銘柄の初回判定/);
-      expect(outcome.error).toContain("jev 判定に失敗");
+      expect(write?.error).toContain("SemIf 判定に失敗");
+      expect(write?.judgeInput).toMatch(/^SemIf新規銘柄の初回判定/);
+      expect(outcome.error).toContain("SemIf 判定に失敗");
     });
 
     it("jev 以外の例外はそのまま伝播する (判定不能に丸め込まない)", async () => {
@@ -315,7 +316,7 @@ describe("processStock", () => {
         readStockTextRow: () =>
           Promise.resolve([{ itemName: "事業の内容", sectionKey: "business", text: OKUMA_BUSINESS_TEXT }]),
       });
-      await expect(processStock(itemOf({ initialTypeSafe: true }), deps)).rejects.toThrow("想定外のバグ");
+      await expect(processStock(itemOf({ initialSemif: true }), deps)).rejects.toThrow("想定外のバグ");
     });
   });
 

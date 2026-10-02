@@ -1,11 +1,10 @@
 /**
- * jev(TypeSafe System One)による事業タグ判定。
+ * 判定クライアントによる事業タグ判定 (通常の新規初回はSemIf)。
  * 設計: docs/005-yuho-quant-business-tags.md §5.5。
  *
- * 語ごとの質問を `bt.<termId>` の noul 質問としてまとめ、jev に投げる。
- * jev 呼び出し自体のリトライ・エラー処理は src/shared/jev/ の責務
- * (ここでは JevUnavailableError をそのまま呼び出し元へ伝播させ、
- * 呼び出し元(process.ts)が「判定不能」に読み替える)。
+ * 語ごとの質問を `bt.<termId>` の noul 質問としてまとめて渡す。
+ * 通信・常駐プロセスのエラーはクライアントからそのまま伝播し、
+ * 呼び出し元(process.ts)がSemIfの利用不可を「判定不能」に読み替える。
  */
 import type { JevClient, JevNoulQuestion } from "../../../../src/shared/jev/index.js";
 import type { JudgeInput } from "./excerpt.js";
@@ -32,18 +31,18 @@ function assertValidThresholds(t: BtThresholds): void {
   }
 }
 
-/** 語の id から jev の質問 id を作る唯一の場所。 */
+/** 語の id から判定の質問 id を作る唯一の場所。 */
 export function questionIdFor(termId: string): string {
   return `bt.${termId}`;
 }
 
 /**
- * 語の定義から jev の noul 質問を組み立てる。設計 §5.5 の指示文に固定する。
+ * 語の定義から noul 質問を組み立てる。設計 §5.5 の指示文に固定する。
  *
  * 抜粋には「事業の内容」に加えて MD&A・研究開発活動の当たった段落が入るため
  * (prefilter.ts の冒頭コメント)、研究段階・計画・需要の追い風・借入先などの
  * 言及を「いいえ」に倒すことを明示する。文言を変えたらゴールデンセットで
- * しきい値を測り直すこと (calibration.json)。
+ * しきい値を測り直すこと (用途別の較正JSON)。
  */
 export function buildQuestion(term: BusinessTerm): JevNoulQuestion {
   // 「他社製品の売買は数えない」を足した理由 (2026-09-25 ゴールデンセット予備測定):
@@ -82,7 +81,7 @@ export interface JudgeCandidatesResult {
 }
 
 /**
- * 候補語をまとめて jev に判定させる。
+ * 候補語をまとめて判定クライアントへ渡す。
  *
  * 1 往復で最大 `opts.batchSize`(既定 20)語まで。すべての呼び出しに同じ
  * `input.state` を渡す。モデルがバッチ間で変わったら throw する

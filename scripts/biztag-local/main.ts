@@ -48,7 +48,8 @@ async function run(): Promise<void> {
   const startedAt = new Date().toISOString();
   const receipt = join(state, `${startedAt.replaceAll(":", "-")}-${process.pid}.json`);
   const log = openSync(`${receipt}.log`, "wx", 0o600);
-  // CLIの本文/モデル診断は私有ログのみ。広いGitHub認証やTypeSafeキーを子へ渡さない。
+  // 本文/モデル診断は私有ログのみ。spawn環境から不要キーを除くがCLIは.envを再読込する。
+  // TypeSafeの利用停止はshared policyが保証する。
   const childEnv = { ...process.env };
   delete childEnv.GH_TOKEN;
   delete childEnv.GITHUB_TOKEN;
