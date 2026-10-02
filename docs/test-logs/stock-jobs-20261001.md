@@ -143,3 +143,28 @@ producerの正常実保存と後続sector-turnoverの同日実保存が揃うま
 - 株式旧55は10/1対象の欠測集合であり、10/2母集団・最新保存日の読取前に現残件数へ
   読み替えない。原本不足とfresh-close欠測・raw adj負値のguardを別々に確認する。
   ここでの新Yahoo/source GET、Notion mutation、D1/R2 writerは0。
+
+## 専用Actions資格設定・Issue272との最終統合（2026-10-02 22:52 JST以降）
+
+- ユーザーの明示承認によりGitHub fine-grained PAT
+  `kabulab-cf-stock-cron-20261002`を本人のログイン済み設定画面で作成した。
+  resource ownerはsatoki252595、対象repositoryは
+  `satoki252595/kabulab_tool_cloudflare`のみ、Actions Read and writeと必須Metadata Read-only。
+  User permissionsは0、有効期限は2026-12-31（90日）。保存済みのtoken metadata画面で確認した。
+  token値はチャット・画像・ログ・shell argvへ出していない。
+- 許可されたBrowser clipboardはsession内のみでOS clipboardへの転送は成立せず、
+  ローカル.env保存helperは書込前に安全に拒否した。TerminalのUI操作もツールの安全制御で
+  拒否されたため、迂回せずCloudflare Dashboardでproduction runtimeの
+  `GITHUB_ACTIONS_TOKEN`をシークレットとして追加・保存した。
+  本番ではWorker Secretsを正のソースとし、ローカル.envへの複製は行っていない。
+  session clipboardは元の空状態へ戻した。
+- Dashboardのproduction一覧に「シークレット / GITHUB_ACTIONS_TOKEN / 暗号化された値」を
+  確認。さらに既存Wrangler OAuthと.envの型付きaccount指定によるread-only secret listを
+  2026-10-02T13:52:02.290Zに実行し、同名secretの存在を独立確認した。
+  secretの値は読めないAPIを使用し、値の表示も0。
+- 資格のscope確認と保存は完了したが、実PATによるdispatchとdeadline readcheckは未実施。
+  この設定は既存Workerへのsecret更新であり、PR195の4 Cronコードの本番切替や定時受入の
+  成功とは扱わない。生成時の実clockを予定時刻へ書き換える処理もない。
+- Issue272のmain `e7a3dd2`を通常mergeし、release-noteの競合は両履歴を保持して解消した。
+  配当原値・過去分割/訂正履歴の実装を保持し、HTTP/auth/pacingは変更していない。
+  新Yahoo/source GET、Notion/D1/R2 writer、追加workflow dispatchは0。

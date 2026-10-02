@@ -29,6 +29,7 @@ import {
 import { STOCK_CODE_REGEX } from "../jpx/stock-code.js";
 import { sha256HexBytes } from "../sha256.js";
 import { fetchYahooWithSpacing } from "./request-spacing.js";
+import { parseCorporateEvents, yahooChartSourceUrl, type CorporateEvents } from "./corporate-events.js";
 
 /**
  * 日本株銘柄コード。
@@ -796,10 +797,7 @@ export async function fetchYahooChartRaw(
   interval: string,
   events = false
 ): Promise<Response> {
-  const ev = events ? "&events=split,div" : "";
-  const url =
-    `${CHART_API_BASE}/${encodeURIComponent(symbol)}` +
-    `?range=${range}&interval=${interval}${ev}`;
+  const url = yahooChartSourceUrl(symbol, range, interval, events);
   return yahooFetch(url);
 }
 
@@ -808,6 +806,7 @@ interface YahooChartJson {
   chart?: {
     result?: Array<{
       meta?: {
+        currency?: string;
         symbol?: string;
         range?: string;
         regularMarketPrice?: number | null;
@@ -825,6 +824,7 @@ interface YahooChartJson {
         adjclose?: Array<{ adjclose?: (number | null)[] }>;
       };
       events?: {
+        dividends?: Record<string, { date: number; amount: number }>;
         splits?: Record<
           string,
           { date: number; numerator: number; denominator: number }
@@ -867,6 +867,8 @@ export interface DailyResult {
   bars: DailyBar[];
   splits: { date: string; ratio: number }[];
   proof: DailyFetchProof;
+  /** legacy callers/保存物は欠落=未取得。fetchDailyは必ず生成する。 */
+  corporateEvents?: CorporateEvents;
 }
 
 export const jstDate = (ts: number) =>
@@ -1142,10 +1144,14 @@ export async function parseDailyChart(
   assertQuoteArrays(symbol, q as unknown as Record<string, unknown>, timestamps.length);
   // 真正 empty: 構造妥当 + timestamp 空配列のみ。proof は空 span で付ける。
   if (timestamps.length === 0) {
+    const corporateEvents = await parseCorporateEvents({ events: res.events, currency: res.meta?.currency,
+      symbol, range, observedAt, rawSha, bars: [] });
+    const splits = corporateEvents.splits.map(({ value }) => ({ date: value.date, ratio: value.ratio }));
     return {
       bars: [],
-      splits: [],
-      proof: { observedAt, rawSha, requestedRange: range, symbol, firstTs: null, lastTs: null, splits: [] },
+      splits,
+      proof: { observedAt, rawSha, requestedRange: range, symbol, firstTs: null, lastTs: null, splits },
+      corporateEvents,
     };
   }
   // raw-first 全行検査 (filter 前)。adj は見ない (VWAP demotion。
@@ -1186,59 +1192,9 @@ export async function parseDailyChart(
       `Chart API エラー [${symbol}]: 全行欠落のため空として採用しません (timestamps=${timestamps.length})。`
     );
   }
-  const splits: { date: string; ratio: number }[] = [];
-  // events/splits は提供されれば期待 object。欠落 (null/undefined) のみ
-  // no-events として空扱いする (文書化された不在形)。
-  const events = res.events as unknown;
-  if (events !== null && events !== undefined) {
-    if (typeof events !== "object" || Array.isArray(events)) {
-      throw new Error(
-        `Chart API エラー [${symbol}]: events 応答の形状が不正です。`
-      );
-    }
-    const ev = (events as { splits?: unknown }).splits;
-    if (ev !== null && ev !== undefined) {
-      if (typeof ev !== "object" || Array.isArray(ev)) {
-        throw new Error(
-          `Chart API エラー [${symbol}]: splits 応答の形状が不正です。`
-        );
-      }
-      for (const k of Object.keys(ev)) {
-        const s = (ev as Record<string, unknown>)[k] as {
-          date?: unknown;
-          numerator?: unknown;
-          denominator?: unknown;
-        } | null;
-        // 分割株数は負にならない: 分子・分母は各々有限正数。
-        // (負/負が見かけ正 ratio になる抜けを塞ぐ)
-        const badShape =
-          s == null ||
-          typeof s.date !== "number" ||
-          !Number.isFinite(s.date) ||
-          s.date <= 0 ||
-          Number.isNaN(new Date((s.date + 32400) * 1000).getTime()) ||
-          !Number.isFinite(s.numerator) ||
-          (s.numerator as number) <= 0 ||
-          !Number.isFinite(s.denominator) ||
-          (s.denominator as number) <= 0;
-        if (badShape) {
-          throw new Error(
-            `Chart API エラー [${symbol}]: splits 応答の形状が不正です (key=${k})。`
-          );
-        }
-        // 結果 ratio が有限正数であることを要求する (0/負・overflow
-        // Infinity の JSON null 化を保存前に拒否。保存側契約と同一)。
-        const ratio = (s as { numerator: number; denominator: number }).numerator /
-          (s as { numerator: number; denominator: number }).denominator;
-        if (!Number.isFinite(ratio) || ratio <= 0) {
-          throw new Error(
-            `Chart API エラー [${symbol}]: splits ratio が正の有限値ではありません (key=${k})。`
-          );
-        }
-        splits.push({ date: jstDate(s.date as number), ratio });
-      }
-    }
-  }
+  const corporateEvents = await parseCorporateEvents({ events: res.events, currency: res.meta?.currency,
+    symbol, range, observedAt, rawSha, bars });
+  const splits = corporateEvents.splits.map(({ value }) => ({ date: value.date, ratio: value.ratio }));
   // fetchChart と同じ応答整合 (R2 daily への別経路も書込前に拒否する)。
   {
     const latest = bars[bars.length - 1];
@@ -1252,6 +1208,7 @@ export async function parseDailyChart(
   return {
     bars,
     splits,
+    corporateEvents,
     proof: {
       observedAt,
       rawSha,

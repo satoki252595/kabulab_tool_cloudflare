@@ -12,6 +12,9 @@ import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, writeFileSync } f
 import { isDeepStrictEqual } from "node:util";
 import type { DailyFetchProof } from "../../../src/shared/yahoo/client.js";
 import { isDailyFetchProof } from "../../../src/shared/vwap/proof.js";
+import { assertCorporateEventsShape, assertEventSourceProof, corporateEventPins, corporateSplitProjection, priceSnapshotJson,
+  type CorporateEvents } from "../../../src/shared/yahoo/corporate-events.js";
+import type { DailyBar } from "../../../src/shared/yahoo/client.js";
 
 export type PricedBar = {
   o: number;
@@ -129,6 +132,7 @@ export type SavedDaily = {
   splits: Array<Record<string, unknown>>;
   /** この fetch の provenance (legacy object には無い。ある場合は形状 strict)。 */
   proof?: DailyFetchProof;
+  corporateEvents?: CorporateEvents;
 };
 
 export type SavedIntra = {
@@ -209,6 +213,16 @@ export function assertSavedDailyShape(raw: string, key: string, expectedCode: st
   // proof は legacy 欠落を許すが、ある場合は形状 strict (ONE contract)。
   if (o.proof !== undefined && !isDailyFetchProof(o.proof)) {
     throw new Error(`保存済み形状が不正です (proof 不正): ${key}`);
+  }
+  if (o.corporateEvents !== undefined) {
+    assertCorporateEventsShape(o.corporateEvents, `${expectedCode}.T`);
+    if (o.proof === undefined) throw new Error(`保存済みeventsにproofがありません: ${key}`);
+    assertEventSourceProof(o.corporateEvents, o.proof as DailyFetchProof);
+    if (bodyPin(priceSnapshotJson(o.bars as unknown as DailyBar[])) !== o.corporateEvents.source.priceSnapshotSha256 ||
+      corporateEventPins(o.corporateEvents).some((pin) => bodyPin(pin.json) !== pin.sha256) ||
+      JSON.stringify(corporateSplitProjection(o.corporateEvents)) !== JSON.stringify(o.splits)) {
+      throw new Error(`保存済みeventsのSHA不一致: ${key}`);
+    }
   }
   return o as unknown as SavedDaily;
 }
