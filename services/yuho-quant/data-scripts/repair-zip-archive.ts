@@ -67,8 +67,10 @@ for (const docId of docIds) {
   }
   try {
     let csvZip: Awaited<ReturnType<typeof downloadDocument>>;
+    let csvFetchedAt: string;
     try {
       csvZip = await downloadDocument(docId, 5);
+      csvFetchedAt = new Date().toISOString();
     } catch (e) {
       if (e instanceof EdinetNotFoundError) {
         console.warn(`[zip-repair] skip(EDINETに無い) ${docId}`);
@@ -78,8 +80,10 @@ for (const docId of docIds) {
       throw e;
     }
     let xbrlZip: Awaited<ReturnType<typeof downloadDocument>> | null = null;
+    let xbrlFetchedAt: string | null = null;
     try {
       xbrlZip = await downloadDocument(docId, 1);
+      xbrlFetchedAt = new Date().toISOString();
     } catch (e) {
       if (!(e instanceof EdinetNotFoundError)) throw e;
     }
@@ -89,14 +93,13 @@ for (const docId of docIds) {
         : new Date((row.submittedAt as unknown as number) * 1000);
     // type 別 key で各実体を記録する (共通契約)。各 key の既存は
     // recordPrimaryData 側で冪等スキップし、Type5 済みは Type1 を抑止しない。
-    const fetchedAt = submittedAt.toISOString();
     const metadata = {
       docID: docId,
       edinetCode: row.edinetCode,
       filerName: row.filerName,
       docTypeCode: row.docTypeCode,
       periodEnd: row.periodEnd,
-      submitDateTime: fetchedAt,
+      submitDateTime: submittedAt.toISOString(),
       repairedBy: "p6-zip-gap",
       // XBRL 未取得 (EdinetNotFound) = 公式未提供の文書化。T1 行不在時の
       // not-applicable 判定が同通 T5 行のこの flag を見る。
@@ -108,19 +111,20 @@ for (const docId of docIds) {
       type: 5,
       zip: csvZip,
       source: `EDINET API v2 /documents/${docId}?type=5`,
-      fetchedAt,
+      fetchedAt: csvFetchedAt,
       metadata,
       force,
     });
     let r1Outcome = "skipped_no_xbrl";
     if (xbrlZip) {
+      if (xbrlFetchedAt === null) throw new Error("XBRL受信完了時刻がありません");
       const r1 = await recordEdinetZip({
         service: "yuho-quant",
         docID: docId,
         type: 1,
         zip: xbrlZip,
         source: `EDINET API v2 /documents/${docId}?type=1`,
-        fetchedAt,
+        fetchedAt: xbrlFetchedAt,
         metadata,
         force,
       });

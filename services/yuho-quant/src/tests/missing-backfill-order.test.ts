@@ -273,6 +273,45 @@ function setupDeps(sqlite: DatabaseSync): {
 }
 
 describe("missing-docs raw-before-DB 契約", () => {
+  it("typeごとに受信完了時刻を記録し、提出時刻や後続の保管時刻と混同しない", async () => {
+    const restore = silenceConsole();
+    const { sqlite, db } = setupDb();
+    const csvReceivedAt = new Date();
+    const xbrlReceivedAt = new Date(csvReceivedAt.getTime() + 1000);
+    const archiveStartedAt = new Date(csvReceivedAt.getTime() + 2000);
+    vi.useFakeTimers();
+    try {
+      setupParserBridges();
+      const { deps, download, record } = setupDeps(sqlite);
+      const downloadResponse = download.getMockImplementation()!;
+      download.mockImplementation(async (...args) => {
+        const bytes = await downloadResponse(...args);
+        vi.setSystemTime(args[1] === 5 ? csvReceivedAt : xbrlReceivedAt);
+        return bytes;
+      });
+      const archiveResponse = record.getMockImplementation()!;
+      record.mockImplementation(async (...args) => {
+        vi.setSystemTime(archiveStartedAt);
+        return archiveResponse(...args);
+      });
+      const doc = annualDoc("S100MISS1");
+      await processMissingDoc(db, deps, { doc, stockId: 11, force: false });
+      expect(record.mock.calls.map(([args]) => [args.type, args.fetchedAt])).toEqual([
+        [5, csvReceivedAt.toISOString()],
+        [1, xbrlReceivedAt.toISOString()],
+      ]);
+      for (const [args] of record.mock.calls) {
+        expect(args.fetchedAt).not.toBe(archiveStartedAt.toISOString());
+        expect(args.metadata.submitDateTime).toBe(doc.submitDateTime);
+        expect(args.fetchedAt.slice(0, 10)).not.toBe(doc.submitDateTime!.slice(0, 10));
+      }
+    } finally {
+      vi.useRealTimers();
+      sqlite.close();
+      restore();
+    }
+  });
+
   it("記録 (T5+T1) → DB batch → text 保管の順で、metadata は DBid 非依存", async () => {
     const restore = silenceConsole();
     const { sqlite, db } = setupDb();

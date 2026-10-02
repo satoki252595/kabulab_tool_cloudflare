@@ -88,8 +88,10 @@ for (const r of targets) {
   let facts: ReturnType<typeof parseOverseasData>["facts"] = [];
   let proof: ReturnType<typeof parseOverseasData>["proof"];
   let zipBytes: Buffer | null = null;
+  let fetchedAt: string | null = null;
   try {
     const zip = await downloadDocument(r.docId, 1);
+    fetchedAt = new Date().toISOString();
     zipBytes = zip;
     const ex = parseOverseasData(zip, r.periodEnd);
     status = ex.status;
@@ -121,13 +123,14 @@ for (const r of targets) {
   // D1 書込より先に置く: 記録に失敗したら D1 は旧値のまま残り再実行できる。
   // 既存 key は recordPrimaryData 側で冪等スキップする。
   if (zipBytes) {
+    if (fetchedAt === null) throw new Error("XBRL受信完了時刻がありません");
     await recordEdinetZip({
       service: "yuho-quant",
       docID: r.docId,
       type: 1,
       zip: zipBytes,
       source: `EDINET API v2 /documents/${r.docId}?type=1`,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt,
       metadata: {
         docID: r.docId,
         filerName: r.filerName,

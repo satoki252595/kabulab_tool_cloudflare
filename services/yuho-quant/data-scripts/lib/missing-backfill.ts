@@ -240,6 +240,7 @@ export async function processMissingDoc(
       return;
     }
     const csvZip = await deps.downloadDocument(doc.docID, 5);
+    const csvFetchedAt = new Date().toISOString();
     let hasOrder = false;
     let hasOverseas = false;
     let csvError = false;
@@ -254,10 +255,12 @@ export async function processMissingDoc(
       csvError = true;
     }
     let xbrlZip: Buffer | null = null;
+    let xbrlFetchedAt: string | null = null;
     let xbrlUnavailable = false;
     if (hasOrder || hasOverseas) {
       try {
         xbrlZip = await deps.downloadDocument(doc.docID, 1);
+        xbrlFetchedAt = new Date().toISOString();
       } catch (e) {
         if (e instanceof EdinetNotFoundError) xbrlUnavailable = true;
         else throw e;
@@ -331,7 +334,6 @@ export async function processMissingDoc(
     // recordPrimaryData 側で冪等スキップし、Type5 済みは Type1 を抑止しない。
     // DB batch より先に置く: 記録に失敗したら D1 は旧値のまま残り再実行できる。
     const submittedAt = parseSubmitDateTime(doc.submitDateTime);
-    const fetchedAt = submittedAt.toISOString();
     const metadata = {
       docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
       filerName: doc.filerName, docTypeCode: doc.docTypeCode,
@@ -345,13 +347,14 @@ export async function processMissingDoc(
     await deps.recordEdinetZip({
       service: "yuho-quant", docID: doc.docID, type: 5, zip: csvZip,
       source: `EDINET API v2 /documents/${doc.docID}?type=5`,
-      fetchedAt, metadata,
+      fetchedAt: csvFetchedAt, metadata,
     });
     if (xbrlZip) {
+      if (xbrlFetchedAt === null) throw new Error("XBRL受信完了時刻がありません");
       await deps.recordEdinetZip({
         service: "yuho-quant", docID: doc.docID, type: 1, zip: xbrlZip,
         source: `EDINET API v2 /documents/${doc.docID}?type=1`,
-        fetchedAt, metadata,
+        fetchedAt: xbrlFetchedAt, metadata,
       });
     }
 
