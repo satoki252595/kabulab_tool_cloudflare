@@ -18,6 +18,8 @@ TypeSafeの現在の方針・設定・コードは変更していない。原文
 - 旧`/tmp`の母集団・原本packetは現在のローカルに無かったため、共有find-only検索・固定key一意照会・files読取を1回行い、保管済みbaselineの3添付を回収。Notion3/hosted3、全HTTP200、mutation/sourceGET/D1/R2/再送0。
 - baseline ZIP 16,579,214 bytes、SHA `e8948dc3453035c85b96c84c74cf72fa0b5e6d5fb1dbd644037bf15f74292f99` が既知pinと一致。全160 memberとpayload159件のbytes/SHA、別添member-list/pinsとZIP内の対応を照合した。2026-09-30T08:40:31.050Z時点の3675文書・21,245明細、一意docIDと文書別明細件数を復元できた。
 - このbaselineは過去のDB観測であり、全原ZIPの資格や現在の全件状態を証明しない。旧legacy10件のsource来歴・原bytes期待値を含む69件のpacketも復元できたとは扱わない。全体の無条件backfillは実行していない。
+- 旧legacy5文書のtype1/type5計10件を特定するため、復旧済みDB検索応答のIDを再利用し、`Service=yuho-quant`・`Key`末尾`:type5`・`Fetched At<2026-09-29`で最大6行のread-only照会を1回実施。HTTP200・37,333 bytesだったが、6行かつ`has_more=true`を検出したため直ちにHOLD。予定した5文書の特定には使えず、2本目のtype1照会・追加ページ・再送は0。
+- 当該6行は既存`_fileManifest`を持つ通常保管行も含み、取得日条件だけでは旧legacy5文書を隔離できない。旧10件のkey復元や来歴資格が成立したとは扱わない。Notion1/hosted0/sourceGET0/D1・R2・write0。既知S100YWM7のtype1/type5だけならexact keyの限定読取は可能だが、本調査では追加照会していない。
 
 ## 結果不明・公表待ち
 
@@ -34,5 +36,7 @@ TypeSafeの現在の方針・設定・コードは変更していない。原文
 | FSA実応答metadata | `16c14a1108f5a004d39cb8cf1e9101b99e9c66934b9388830a6f39b734eb17fa` |
 | FSA実保管・15通信 | `c49880ab0e2ed1aef744cca8ee15861961c252e83a1611a628a651f565564d75` |
 | FSA保管の独立照合 | `cd37cb948e2534db83dea63cd32385fa933e12477a21a3bcb0969022db89e01b` |
+| legacy限定照会のHTTP200応答 | `29d2d5c4d5be65a429fcebd810a2d5c81e883bfbc410c078c441308fae571956` |
+| legacy限定照会の停止実績 | `63b78b403566348d146a64eb8ff9cdb62d727f77161e3cc24dd5211fdbbfd43d` |
 
 上記の限定調査・物理保管は完了。海外全母集団の原本資格、旧来歴、過去UNKNOWN、公表前ファイルの本番取込の完了とは扱わない。
