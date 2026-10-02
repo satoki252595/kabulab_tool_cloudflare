@@ -833,6 +833,31 @@ describe("runDeadlineReadcheck", () => {
       "別 run の job"
     );
   });
+  it("壊れた必須job/step項目とsteps形を空値へ置換せず拒否する", async () => {
+    const base = syncJob(101);
+    const step = base.steps![0];
+    const malformed = [
+      { ...base, name: null },
+      { ...base, status: 1 },
+      { ...base, steps: [{ ...step, name: undefined }] },
+      { ...base, steps: [{ ...step, status: "" }] },
+      { ...base, steps: null },
+      { ...base, steps: [null] },
+      { ...base, steps: [{ ...step, completed_at: 1 }] },
+    ];
+    for (const job of malformed) {
+      const { fetchFn, calls } = makeFetch(() => jsonRes({ jobs: [job] }));
+      await expect(fetchAllJobs(fetchFn, TOKEN, 101)).rejects.toThrow("Jobs API");
+      expect(calls).toHaveLength(1);
+    }
+    const pending = { ...base, status: "in_progress", conclusion: null,
+      steps: [{ name: step.name, status: "queued" }] };
+    const { fetchFn } = makeFetch(() => jsonRes({ jobs: [pending] }));
+    const jobs = await fetchAllJobs(fetchFn, TOKEN, 101);
+    expect(jobs[0].conclusion).toBeNull();
+    expect(jobs[0].steps![0]).toEqual({ name: step.name, status: "queued", conclusion: null, completed_at: null });
+    expect(() => evaluateReadcheck(jobs, DATE)).toThrow("未完了");
+  });
   it("Jobs API 非 200 は落とす", async () => {
     const { bucket } = makeBucket({
       [receiptKey(DATE)]: JSON.stringify(dispatchedBody()),

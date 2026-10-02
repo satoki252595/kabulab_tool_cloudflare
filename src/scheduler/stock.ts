@@ -425,6 +425,19 @@ export interface RunJob {
   steps?: RunJobStep[];
 }
 
+function requiredJobString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`Jobs API の ${field} が空でない文字列ではありません`);
+  }
+  return value;
+}
+
+/** 未完了の null/省略は正当な状態。別の型を結果不明へ置き換えない。 */
+function nullableJobString(value: unknown, field: string): string | null {
+  if (value === null || value === undefined) return null;
+  return requiredJobString(value, field);
+}
+
 /**
  * Link ヘッダの rel=next を、固定 https api.github.com・対象 repo・
  * 同 run ID・jobs path に限定して辿る。外部 origin/HTTP へ Bearer を
@@ -513,30 +526,32 @@ export async function fetchAllJobs(
         throw new Error("Jobs API の job 要素が不正です");
       }
       const job = j as Record<string, unknown>;
-      if (typeof job["name"] !== "string") {
-        throw new Error("Jobs API の job に name がありません");
-      }
+      const name = requiredJobString(job["name"], "job name");
+      const status = requiredJobString(job["status"], "job status");
       // receipt/run 対応: 別 run の job が混ざったら検証しない。
       if (job["run_id"] !== runId) {
         throw new Error("Jobs API に別 run の job が混ざっています");
       }
-      jobs.push({
-        name: job["name"] as string,
-        status: typeof job["status"] === "string" ? job["status"] : "",
-        conclusion:
-          typeof job["conclusion"] === "string" ? job["conclusion"] : null,
-        run_id: runId,
-        steps: Array.isArray(job["steps"])
-          ? (job["steps"] as Array<Record<string, unknown>>).map((s) => ({
-              name: typeof s["name"] === "string" ? s["name"] : "",
-              status: typeof s["status"] === "string" ? s["status"] : "",
-              conclusion:
-                typeof s["conclusion"] === "string" ? s["conclusion"] : null,
-              completed_at:
-                typeof s["completed_at"] === "string" ? s["completed_at"] : null,
-            }))
-          : undefined,
-      });
+      const rawSteps = job["steps"];
+      let steps: RunJobStep[] | undefined;
+      if (rawSteps !== undefined) {
+        if (!Array.isArray(rawSteps)) {
+          throw new Error("Jobs API の job steps が配列ではありません");
+        }
+        steps = rawSteps.map((rawStep: unknown) => {
+          if (typeof rawStep !== "object" || rawStep === null || Array.isArray(rawStep)) {
+            throw new Error("Jobs API の step 要素が不正です");
+          }
+          const step = rawStep as Record<string, unknown>;
+          return {
+            name: requiredJobString(step["name"], "step name"),
+            status: requiredJobString(step["status"], "step status"),
+            conclusion: nullableJobString(step["conclusion"], "step conclusion"),
+            completed_at: nullableJobString(step["completed_at"], "step completed_at"),
+          };
+        });
+      }
+      jobs.push({ name, status, conclusion: nullableJobString(job["conclusion"], "job conclusion"), run_id: runId, steps });
     }
     url = nextPageUrl(res.headers.get("Link"), runId);
   }

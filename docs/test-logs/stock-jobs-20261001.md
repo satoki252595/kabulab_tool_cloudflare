@@ -168,3 +168,14 @@ producerの正常実保存と後続sector-turnoverの同日実保存が揃うま
 - Issue272のmain `e7a3dd2`を通常mergeし、release-noteの競合は両履歴を保持して解消した。
   配当原値・過去分割/訂正履歴の実装を保持し、HTTP/auth/pacingは変更していない。
   新Yahoo/source GET、Notion/D1/R2 writer、追加workflow dispatchは0。
+- 統合headのNix検証は関連14 files PASS / 1既存skip、265 tests PASS / 27既存skip。
+  scheduler/YAML、daily/macro custody、Yahoo原本/spacing/日足、VWAP proof/repair/
+  corporate-events/配信を確認した。typecheck、対象lint、Wrangler4.101.0 deploy dry-runもPASS。
+  この検証ではネットワーク上の株価取得や本番writerを起動していない。
+- Jobs API境界の必須job/step name/statusは非文字列・空値をthrowし、壊れたsteps形も
+  拒否する。未完了conclusion/completed_atの正当なnull/省略は明示的nullとして保持し、
+  数値などの不正な型を結果不明へ置換しない。1件の境界回帰で早期停止と未完了保持を確認。
+  修正後scheduler/YAML全46 tests、typecheck、scheduler lintはPASS。
+- 別途、Rootが期限付きで許可したN225単発診断だけ実施した。原本物理保管と全文readback後の
+  10/2 fresh close資格はPASS。個別株/VWAP全量の正常化やD1/R2保存の受入とは扱わない。
+  実clock・bytes/SHA・通信計数は `docs/test-logs/n225-once-20261002.md` を参照。
