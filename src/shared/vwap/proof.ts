@@ -128,7 +128,8 @@ export type ZeroSplitReason =
  *   (latest anchor。秒比較はしない — session-start 時刻と場中/引け
  *   時刻の直接比較は同日最終 session を誤却下するため)。
  * - intra の全 sessions が daily bar 日付に存在する。
- * - daily.splits が proof.splits と完全一致する。
+ * - 今回span前の保存済み旧split（proofにも無い）のみ比較対象外。
+ *   span内欠落・最終日後・proofが返したspan外splitは一致を必須とする。
  * - 保存窓の初日から日足の最終日までに分割がない。窓終了後の分割も
  *   現在の日足との株数基準を変えるため、未確認の旧5分足を適格にしない。
  * - proof.requestedRange が "10y" (full-10y のみ。構造の後・最後に見る)。
@@ -156,11 +157,13 @@ export function zeroSplitCovered(
   for (const s of window.sessions) {
     if (!have.has(s)) return { ok: false, reason: "sessions-uncovered" };
   }
-  if (dailySplits.length !== proof.splits.length) {
+  const proofDates = new Set(proof.splits.map((s) => s.date));
+  const coveredSplits = dailySplits.filter((s) => s.date >= barFirst || proofDates.has(s.date));
+  if (coveredSplits.length !== proof.splits.length) {
     return { ok: false, reason: "splits-mismatch" };
   }
   const byDate = (a: { date: string }, b: { date: string }): number => (a.date < b.date ? -1 : 1);
-  const ds = [...dailySplits].sort(byDate);
+  const ds = [...coveredSplits].sort(byDate);
   const ps = [...proof.splits].sort(byDate);
   for (let i = 0; i < ds.length; i++) {
     if (ds[i].date !== ps[i].date || ds[i].ratio !== ps[i].ratio) {
@@ -168,7 +171,7 @@ export function zeroSplitCovered(
     }
   }
   const first = window.sessions[0];
-  for (const s of proof.splits) {
+  for (const s of dailySplits) {
     if (s.date >= first && s.date <= barLast) return { ok: false, reason: "in-window-split" };
   }
   // full-10y のみ適格。最後に置く: 構造 HOLD の診断を range で潰さない。

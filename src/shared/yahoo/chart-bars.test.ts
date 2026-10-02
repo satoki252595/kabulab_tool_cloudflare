@@ -156,6 +156,7 @@ describe("fetchDaily", () => {
     stubChart(
       chartJson({
         timestamp: [],
+        events: undefined,
         indicators: {
           quote: [{ open: [], high: [], low: [], close: [], volume: [] }],
           adjclose: [{ adjclose: [] }],
@@ -174,6 +175,10 @@ describe("fetchDaily", () => {
         lastTs: null,
         splits: [],
       },
+      corporateEvents: expect.objectContaining({
+        observation: { dividends: "verified-none-in-response", splits: "verified-none-in-response" },
+        dividends: [], splits: [],
+      }),
     });
   });
 
@@ -257,7 +262,7 @@ describe("fetchDaily", () => {
         events: { splits: { "1": { date: 1757548800, numerator: 2, denominator: 0 } } },
       })
     );
-    await expect(fetchDaily("7203.T")).rejects.toThrow(/splits 応答の形状が不正/);
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/events.*不正/);
   });
 
   it("splits ratio 非正・overflow・日付不正・非 object は落とす", async () => {
@@ -272,10 +277,10 @@ describe("fetchDaily", () => {
     ];
     for (const [name, events] of cases) {
       stubChart(chartJson({ events }));
-      await expect(fetchDaily("7203.T"), name).rejects.toThrow(/splits/);
+      await expect(fetchDaily("7203.T"), name).rejects.toThrow(/events.*不正/);
     }
     stubChart(chartJson({ events: "xx" }));
-    await expect(fetchDaily("7203.T")).rejects.toThrow(/events 応答の形状が不正/);
+    await expect(fetchDaily("7203.T")).rejects.toThrow(/events.*不正/);
     // 欠落 (null/undefined) は文書化された no-events として空扱い。
     stubChart(chartJson({ events: undefined }));
     expect((await fetchDaily("7203.T")).splits).toEqual([]);

@@ -117,10 +117,11 @@ export async function main() {
         let bars: Awaited<ReturnType<typeof fetchDaily>>["bars"];
         let splits: Awaited<ReturnType<typeof fetchDaily>>["splits"];
         let proof: Awaited<ReturnType<typeof fetchDaily>>["proof"];
+        let corporateEvents: Awaited<ReturnType<typeof fetchDaily>>["corporateEvents"];
         let captured = false;
         try {
           // 1 社 1 回の単発取得 (producer 側の chart retry なし。失敗は error/HOLD 計数へ)。
-          ({ bars, splits, proof } = await fetchDaily(`${code}.T`, "10y", {
+          ({ bars, splits, proof, corporateEvents } = await fetchDaily(`${code}.T`, "10y", {
             onRaw: (capture) => {
               captures.push({ api: "daily", attempt: 1, capture });
               captured = true;
@@ -174,7 +175,7 @@ export async function main() {
           rp = buildRepairPost({
             code,
             oldRaw: existing ?? JSON.stringify({ code, bars: [], splits: [] }),
-            fresh: { bars, splits, proof },
+            fresh: { bars, splits, proof, corporateEvents },
             range: TEN_Y_RANGE,
             updatedAt: new Date().toISOString(),
           });
