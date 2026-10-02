@@ -9,19 +9,24 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-03
 
-- Mac定時処理のHEAD検証でAppleのgit shimが失敗する問題を、project NixへのGit追加で修正。LaunchAgentの登録後にCLI開始前で停止した実績を保持し、通常タグ処理の成功はmain反映後に再受入する。
+- 本番作業: 有報2通の原本文差分を検証し、正準Notion保存でも不可視文字の消失が再現したため旧状態へ復旧して保留。参照・索引・既存タグは変更せず、原本/PRE/復元POSTを物理保管・全文照合。記録 `docs/test-logs/yuho-text2-roundtrip-hold-20261003.md`。
+
+- 本番作業: Mac定時入口の通常処理が正常終了し、有報復旧4社のみ機械補完。旧判定済み3,618件保持・4社本文/根拠・次回全件skip、PRE/POST物理保管・全SHAを独立確認。AI0、本文不足90件の保留を維持。記録 `docs/test-logs/biztag-semif-new-stock-20261003.md`。
+- Mac定時処理のHEAD検証でAppleのgit shimが失敗する問題を、project NixへのGit追加で修正。LaunchAgentの登録後にCLI開始前で停止した実績を保持し、main反映後の真正通常処理は上記のとおり受入済み。#279
+- 本番作業: 有報欠落4社を実CSV/XBRLと正準取込で補修。Notion本文146節の全文・参照4件・派生を照合し、原本8ZIPとPRE/POSTを物理保管・全SHA確認。原本時計UNKNOWNと海外未構造化は保持。記録 `docs/test-logs/biztag-no-text94-20261002.md`。
 
 - 今後追加される新規銘柄の初回事業タグを、実87社で較正したローカルSemIfへ切替（yesMin0.85/noMax0.20、固定モデル・runtime pin）。既存タグの再利用と失敗のみ機械補完を維持し、外部有料判定は停止。旧Jev同等の品質とは扱わず、要確認を保持する。#278
 
 - EDINET原本の取得時刻を提出日時から分離し、CSV・XBRLそれぞれの受信完了時刻を保管する。通常取込・欠落文書回収・ZIP保管修復・海外売上再解析に適用し、既存原本の時計は上書きしない。
 
-- 事業タグの定時処理をMac/Nixの唯一writerへ移管する入口を追加し、Linux catchup/backfillのタグ起動を停止。承認済みmain・SemIf専用較正・同.env実体のkernel排他を必須にし、Jevの誤起動を止める。LaunchAgentの本番登録・真正実行は別途受入する。
+- 事業タグの定時処理をMac/Nixの唯一writerへ移管する入口を追加し、Linux catchup/backfillのタグ起動を停止。承認済みmain・SemIf専用較正・同.env実体のkernel排他を必須にし、Jevの誤起動を止める。LaunchAgentの本番登録・真正実行は上記の本番作業で受入済み。#276
 
 ## 2026-10-02
 
-- CF株式・マクロ定時起動のPRを最新mainへ再統合し、初回429/503停止・原文保管と予定日検証を両立。repo限定Actions tokenを本番Workerへ暗号化設定し、独立したsecret名の読取で存在確認済み。4 Cronのコード切替・実dispatch・期限readcheckの受入は別途確認する。#195
+- 本番作業: main `4440e78` のCF自動deploy・100%配信・4 Cron登録・repo限定Actions Secret継続・静的healthを確認。真正株式Cronは10/3 JST 02:13にdispatch・producer開始後、当日N225終値欠落で停止。別時刻の限定1callerの終値資格PASSと区別し、全量の重複manual起動0、マクロ06:00と期限確認06:05/07:05は未観測を維持。記録 `docs/test-logs/stock-scheduler-production-20261002.md` / `n225-once-20261002.md`。#195
+- 本番作業: 保存済み1333の原応答を再利用し、配当14件・分割1件の取得根拠を日足へ条件付き補完。価格・既存分割・proof・更新日時の不変、API配信、PRE/POST物理保管と独立再読を確認。Yahoo追加取得0、5分足HOLDを保持。記録 `docs/test-logs/yahoo-event1333-actual-20261002.md`（Issue272）。
 - 本番作業: 既存銘柄の課金エラー25件を保存済み本文と既存語彙の機械照合で補完。全25件の保存結果・マスタ連携と次回判定skipを独立照合し、PRE/POSTを物理保管・全文SHA確認。TypeSafe・原本追加取得0、設定変更なし。記録 `docs/test-logs/biztag-existing25-actual-20261002.md`。
-- 日足に配当原値・通貨出典・権利落ち日と取得根拠/価格basisを保存・配信し、過去の分割とイベント訂正履歴を差分更新で保持。未取得と応答内イベントなしを区別し、支払日を推定しない。本番バックフィルは未実施（Issue272）。
+- 日足に配当原値・通貨出典・権利落ち日と取得根拠/価格basisを保存・配信し、過去の分割とイベント訂正履歴を差分更新で保持。未取得と応答内イベントなしを区別し、支払日を推定しない。全銘柄バックフィルは未実施（Issue272）。
 - 本番作業: 10/2公式EDINETコードリストを共有Notionへ物理保管・全文照合し、622Aは当日原本でも未資格と確認。保存済み海外15原本の13資格/84明細・HOLD2を再現し、旧3675文書のDB観測baselineを復旧した。旧来歴・結果不明POST・JPX新様式公表後の受入は保留を維持。記録 `docs/test-logs/data-recovery-20261002.md`。
 
 - 事業タグのTypeSafe判定を、公式上場・世代・active・初回未完を証明できる今後追加の新規銘柄だけへ限定。既存の判定済みタグ・AI根拠は銘柄コードで再利用し、未設定/判定失敗だけキーワード一致で不足を補完する。語彙審査・精度測定・競合AIは停止を維持し、本番の全件更新・有料probeは未実施。
