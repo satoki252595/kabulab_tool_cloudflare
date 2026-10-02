@@ -7,6 +7,10 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ---
 
+## 2026-10-03
+
+- 事業タグの定時処理をMac/Nixの唯一writerへ移管する入口を追加し、Linux catchup/backfillのタグ起動を停止。承認済みmain・SemIf専用較正・同.env実体のkernel排他を必須にし、Jevの誤起動を止める。LaunchAgentの本番登録・真正実行は別途受入する。
+
 ## 2026-10-02
 
 - CF株式・マクロ定時起動のPRを最新mainへ再統合し、初回429/503停止・原文保管と予定日検証を両立。repo限定Actions tokenを本番Workerへ暗号化設定し、独立したsecret名の読取で存在確認済み。4 Cronのコード切替・実dispatch・期限readcheckの受入は別途確認する。#195
