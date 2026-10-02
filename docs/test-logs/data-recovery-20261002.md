@@ -19,7 +19,9 @@ TypeSafeの現在の方針・設定・コードは変更していない。原文
 - baseline ZIP 16,579,214 bytes、SHA `e8948dc3453035c85b96c84c74cf72fa0b5e6d5fb1dbd644037bf15f74292f99` が既知pinと一致。全160 memberとpayload159件のbytes/SHA、別添member-list/pinsとZIP内の対応を照合した。2026-09-30T08:40:31.050Z時点の3675文書・21,245明細、一意docIDと文書別明細件数を復元できた。
 - このbaselineは過去のDB観測であり、全原ZIPの資格や現在の全件状態を証明しない。旧legacy10件のsource来歴・原bytes期待値を含む69件のpacketも復元できたとは扱わない。全体の無条件backfillは実行していない。
 - 旧legacy5文書のtype1/type5計10件を特定するため、復旧済みDB検索応答のIDを再利用し、`Service=yuho-quant`・`Key`末尾`:type5`・`Fetched At<2026-09-29`で最大6行のread-only照会を1回実施。HTTP200・37,333 bytesだったが、6行かつ`has_more=true`を検出したため直ちにHOLD。予定した5文書の特定には使えず、2本目のtype1照会・追加ページ・再送は0。
-- 当該6行は既存`_fileManifest`を持つ通常保管行も含み、取得日条件だけでは旧legacy5文書を隔離できない。旧10件のkey復元や来歴資格が成立したとは扱わない。Notion1/hosted0/sourceGET0/D1・R2・write0。既知S100YWM7のtype1/type5だけならexact keyの限定読取は可能だが、本調査では追加照会していない。
+- 当該6行は既存`_fileManifest`を持つ通常保管行も含み、取得日条件だけでは旧legacy5文書を隔離できない。旧10件のkey復元や来歴資格が成立したとは扱わない。Notion1/hosted0/sourceGET0/D1・R2・write0。この停止runでは追加照会していない。
+- 後続read-onlyでS100YWM7:type1/type5をexact ORで1回照会し、active・unique各1、添付各1を確認。docID/type/期/Sourceは一致し、作成=編集は旧9/29観測と一致したが、両Metadataに`_fileManifest`・top-level bytes/SHAは無い。Date列を実取得clockの証拠とせず、原SHA・来歴はHOLDを維持した。応答SHA `eed9b9fc9f22badb672bfd854e6a2b142f5fb1d5147a930b63e7aac049592861`、独立offline照合SHA `2d7b10c0aa3e3492fe391cbbb9aba34490cb9c5bafdafe2bf5e4fd8513b85bb8`。
+- 保存済みschema・Metadata文字列をoffline確認したうえで、missing-manifest条件のbounded query1を実施。HTTP200・32,519 bytes、6件/`has_more=true`で即停止した。選択6件は実文字列にもmarker不在だが旧3675baselineへの包含0/6で、旧legacy5文書は未特定。応答SHA `b26df68749f42362bcea7dc27044ce11f7f735f2930340d07090440f0c321506`、停止実績SHA `5f8f4994582398464f2be024c2b400d39ff305161906c50598bde422b92e276d`。この後続2query合計はNotion2、hosted/sourceGET/write/D1/R2/retry/追加ページ0。既存の旧原本を上書きしていない。
 
 ## 結果不明・公表待ち
 
