@@ -284,6 +284,7 @@ export async function ingestDocument(
   let overseasProof: ReturnType<typeof parseOverseasData>["proof"];
 
   const csvZip = await downloadDocument(doc.docID, 5);
+  const csvFetchedAt = new Date().toISOString();
   let hasOrderKeyword = false;
   let hasOverseasKeyword = false;
   let csvError = false;
@@ -312,12 +313,14 @@ export async function ingestDocument(
   // (帯域節約)。1 通の XBRL を 1 回だけ取得し、受注と海外売上を並行して
   // 構造化する (二重ダウンロードしない)。
   let xbrlZip: Buffer | null = null;
+  let xbrlFetchedAt: string | null = null;
   let xbrlUnavailable = false;
   const wantXbrl =
     (!csvError && (hasOrderKeyword || hasOverseasKeyword)) || needT1;
   if (wantXbrl) {
     try {
       xbrlZip = await downloadDocument(doc.docID, 1);
+      xbrlFetchedAt = new Date().toISOString();
     } catch (e) {
       if (e instanceof EdinetNotFoundError) {
         // type=1 未提供は事実として記録 (捏造しない・ルール2)
@@ -442,7 +445,6 @@ export async function ingestDocument(
   // 記録失敗は throw が伝播し DB は旧値のまま (再実行可)。
   // metadata は DBid 非依存 (text ポインタのみ DBid 解決後)。
   if (archiveToNotion) {
-    const fetchedAt = parseSubmitDateTime(doc.submitDateTime).toISOString();
     const metadata = {
       docID: doc.docID,
       edinetCode: doc.edinetCode,
@@ -472,19 +474,20 @@ export async function ingestDocument(
         type: 5,
         zip: csvZip,
         source: `EDINET API v2 /documents/${doc.docID}?type=5`,
-        fetchedAt,
+        fetchedAt: csvFetchedAt,
         metadata,
         force,
       });
     }
     if (xbrlZip && (needT1 || needDbWork)) {
+      if (xbrlFetchedAt === null) throw new Error("XBRL受信完了時刻がありません");
       await recordEdinetZip({
         service: NOTION_SERVICE,
         docID: doc.docID,
         type: 1,
         zip: xbrlZip,
         source: `EDINET API v2 /documents/${doc.docID}?type=1`,
-        fetchedAt,
+        fetchedAt: xbrlFetchedAt,
         metadata,
         force,
       });
