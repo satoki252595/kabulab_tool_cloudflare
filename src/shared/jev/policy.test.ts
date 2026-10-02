@@ -11,10 +11,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("TypeSafe 利用停止 (実 policy)", () => {
+describe("TypeSafe 新規銘柄初回だけ許可 (実 policy)", () => {
   it("停止理由を明示し、既存結果を消去する処理を持たない", () => {
     expect(assertTypeSafeEnabled).toThrow(TypeSafeDisabledError);
-    expect(assertTypeSafeEnabled).toThrow("未判定は未判定のまま保持");
+    expect(assertTypeSafeEnabled).toThrow("新規銘柄の初回事業タグ");
   });
 
   it("キーと fetch を渡しても工場入口で停止し、引数の値も読まない", () => {
@@ -40,11 +40,11 @@ describe("TypeSafe 利用停止 (実 policy)", () => {
     expect(externalFetch).not.toHaveBeenCalled();
   });
 
-  it("キー・D1・Notion env が無くても事業タグは停止理由で先に失敗する", async () => {
+  it("事業タグは開始日未設定ならD1/Notion/判定APIより前に停止する", async () => {
     const externalFetch = vi.fn();
     vi.stubGlobal("fetch", externalFetch);
-    for (const key of ["TYPESAFE_API_KEY", "CLOUDFLARE_API_TOKEN", "NOTION_TOKEN"]) vi.stubEnv(key, "");
-    await expect(runBiztag({ budgetMs: 1, model: "unused", thresholds: { yesMin: 0.8, noMax: 0.2 } })).rejects.toThrow(TypeSafeDisabledError);
+    for (const key of ["BIZTAG_NEW_LISTING_FROM", "TYPESAFE_API_KEY", "CLOUDFLARE_API_TOKEN", "NOTION_TOKEN"]) vi.stubEnv(key, "");
+    await expect(runBiztag({ budgetMs: 1, model: "unused", thresholds: { yesMin: 0.8, noMax: 0.2 } })).rejects.toThrow("BIZTAG_NEW_LISTING_FROM");
     expect(externalFetch).not.toHaveBeenCalled();
   });
 
@@ -65,7 +65,6 @@ describe("TypeSafe 利用停止 (実 policy)", () => {
   });
 
   it.each([
-    ["run"],
     ["gate"],
     ["golden"],
     ["competitors"],
@@ -83,8 +82,21 @@ describe("TypeSafe 利用停止 (実 policy)", () => {
     });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("TypeSafeDisabledError: TypeSafe の外部判定は利用停止中");
+    expect(result.stderr).toContain("TypeSafeDisabledError: TypeSafe は新規銘柄の初回事業タグ");
     expect(result.stderr).not.toContain("NETWORK_REACHED");
     expect(result.stdout).toBe("");
+  });
+
+  it("新規事業タグの用途を明示したclientだけが依頼した時に通信する", async () => {
+    const externalFetch = vi.fn(async () => new Response(JSON.stringify({
+      model: "test-model", answers: { "bt.test": { type: "noul", noul: 0.9 } },
+      usage: { input_tokens: 10, output_tokens: 0 },
+    })));
+    const client = createJevClient({ usage: "new-stock-biztag", apiKey: "test-key",
+      model: "test-model", fetch: externalFetch });
+    expect(externalFetch).not.toHaveBeenCalled();
+    const result = await client.askNoul("test excerpt", { "bt.test": { instructions: "test instruction" } });
+    expect(result.answers["bt.test"]).toBe(0.9);
+    expect(externalFetch).toHaveBeenCalledTimes(1);
   });
 });

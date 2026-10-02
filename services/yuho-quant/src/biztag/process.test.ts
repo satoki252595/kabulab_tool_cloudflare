@@ -6,21 +6,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SupplementRow, SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
 import { JevUnavailableError, type JevAskResult, type JevClient } from "../../../../src/shared/jev/index.js";
-import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 import type { WorkItem } from "./plan.js";
 import { processStock, type ProcessDeps } from "./process.js";
 import type { LatestDoc } from "./source.js";
 import { MINI_VOCAB } from "./vocabulary/__fixtures__/mini-vocab.js";
-
-/** 39本文列が全て null (=明示的に空) であることを確かめる。 */
-function expectAllTextColumnsCleared(texts: Record<string, string | null> | undefined): void {
-  expect(texts).toBeDefined();
-  const keys = Object.keys(texts ?? {}).sort();
-  expect(keys).toEqual(TEXT_SECTIONS.map((s) => s.title).sort());
-  for (const s of TEXT_SECTIONS) {
-    expect(texts?.[s.title]).toBeNull();
-  }
-}
 
 const THRESHOLDS = { yesMin: 0.8, noMax: 0.2 };
 const TODAY = "2026-09-25";
@@ -180,27 +169,26 @@ describe("processStock", () => {
     expect(callOrder).toEqual(["createSupplementRow"]);
   });
 
-  it("no_text: 既存行を本文なし状態に更新し、根拠ブロックを削除する", async () => {
+  it("no_text: 既存書類・タグ・根拠を保持して保留する", async () => {
     const { deps, updated, evidenceCalls, callOrder } = makeDeps();
     const row = rowOf({ docId: "S100OLD", tagStatus: "判定済", upstream: ["工作機械"] });
     const outcome = await processStock(itemOf({ kind: "no_text", doc: null, row }), deps);
-    expect(outcome.tagStatus).toBe("本文なし");
-    expect(updated[0]?.input).toMatchObject({ textStatus: "本文なし", tagStatus: "本文なし", upstream: [], downstream: [] });
-    // 旧書類の39本文列が残らず、明示的に全て空になる (設計の状態遷移表)。
-    expectAllTextColumnsCleared(updated[0]?.input.texts);
-    expect(evidenceCalls).toEqual([{ pageId: row.pageId, block: null }]);
-    expect(callOrder).toEqual(["replaceEvidenceBlock", "updateSupplementRow"]);
+    expect(outcome.outcome).toBe("skipped");
+    expect(outcome.tagStatus).toBe("判定済");
+    expect(updated).toEqual([]);
+    expect(evidenceCalls).toEqual([]);
+    expect(callOrder).toEqual([]);
   });
 
   describe("sync_and_tag (実データ: オークマ 工作機械)", () => {
-    it("判定成功: タグ・根拠・判定日を書き込む (判定済)", async () => {
+    it("新規初回のAI判定成功: タグ・根拠・判定日を書き込む", async () => {
       const jevClient = jevAnswering({ "bt.B.MACH.MACHINE_TOOL": 0.95 });
       const { deps, created, evidenceCalls } = makeDeps({
         jevClient,
         readStockTextRow: () =>
           Promise.resolve([{ itemName: "事業の内容", sectionKey: "business", text: OKUMA_BUSINESS_TEXT }]),
       });
-      const outcome = await processStock(itemOf(), deps);
+      const outcome = await processStock(itemOf({ initialTypeSafe: true }), deps);
       expect(outcome.tagStatus).toBe("判定済");
       expect(outcome.candidateCount).toBe(1);
       expect(outcome.jevCalls).toBe(1);
@@ -285,24 +273,15 @@ describe("processStock", () => {
       expect(callOrder).toEqual(["replaceEvidenceBlock", "updateSupplementRow"]);
     });
 
-    it("読込失敗: Notion 読取が例外を投げたら 読込失敗 + attempts+1 + 次回再試行日", async () => {
+    it("既存の本文読込失敗はタグや根拠を消さず保留する", async () => {
       const { deps, updated, evidenceCalls, callOrder } = makeDeps({
         readStockTextRow: () => Promise.reject(new Error("Notion API error: 500")),
       });
       const row = rowOf({ attempts: 1 });
-      const outcome = await processStock(itemOf({ row }), deps);
-      expect(outcome.tagStatus).toBe("読込失敗");
-      const write = updated.find((u) => u.pageId === row.pageId)?.input;
-      expect(write?.textStatus).toBe("読込失敗");
-      expect(write?.tagStatus).toBe("読込失敗");
-      expect(write?.attempts).toBe(2); // 1回目失敗からの2回目
-      expect(write?.nextRetryAt).toBe("2026-09-27"); // 2^(2-1)=2日後
-      expect(write?.upstream).toEqual([]);
-      expect(write?.error).toContain("読込に失敗");
-      // 本文の読込自体に失敗しているので、旧書類の39本文列を残さず明示的に空にする。
-      expectAllTextColumnsCleared(write?.texts);
-      expect(evidenceCalls).toEqual([{ pageId: row.pageId, block: null }]);
-      expect(callOrder).toEqual(["replaceEvidenceBlock", "updateSupplementRow"]);
+      await expect(processStock(itemOf({ row }), deps)).rejects.toThrow("有報本文の読込を保留");
+      expect(updated).toEqual([]);
+      expect(evidenceCalls).toEqual([]);
+      expect(callOrder).toEqual([]);
     });
 
     it("jev 判定不能: JevUnavailableError なら 判定不能 + attempts+1 + 次回再試行日 (テキストは保存する)", async () => {
@@ -315,7 +294,7 @@ describe("processStock", () => {
           Promise.resolve([{ itemName: "事業の内容", sectionKey: "business", text: OKUMA_BUSINESS_TEXT }]),
       });
       const row = rowOf({ attempts: 0 });
-      const outcome = await processStock(itemOf({ row }), deps);
+      const outcome = await processStock(itemOf({ row, initialTypeSafe: true }), deps);
       expect(outcome.tagStatus).toBe("判定不能");
       const write = updated.find((u) => u.pageId === row.pageId)?.input;
       expect(write?.textStatus).toBe("取得済"); // 本文の読込自体は成功している
@@ -325,6 +304,8 @@ describe("processStock", () => {
       expect(write?.candidateCount).toBe(1); // 絞り込みまでは成功した事実を残す
       expect(write?.upstream).toEqual([]);
       expect(write?.error).toContain("jev 判定に失敗");
+      expect(write?.judgeInput).toMatch(/^TypeSafe新規銘柄の初回判定/);
+      expect(outcome.error).toContain("jev 判定に失敗");
     });
 
     it("jev 以外の例外はそのまま伝播する (判定不能に丸め込まない)", async () => {
@@ -334,7 +315,7 @@ describe("processStock", () => {
         readStockTextRow: () =>
           Promise.resolve([{ itemName: "事業の内容", sectionKey: "business", text: OKUMA_BUSINESS_TEXT }]),
       });
-      await expect(processStock(itemOf(), deps)).rejects.toThrow("想定外のバグ");
+      await expect(processStock(itemOf({ initialTypeSafe: true }), deps)).rejects.toThrow("想定外のバグ");
     });
   });
 
@@ -375,6 +356,33 @@ describe("processStock", () => {
 });
 
 describe("processStock (spy 呼び出し回数)", () => {
+  it.each(["sync_and_tag", "retag", "retry"] as const)("既存%sは機械照合し、API・確率を使わない", async (kind) => {
+    const askSpy = vi.fn(() => Promise.reject(new Error("既存の有料判定禁止")));
+    const { deps, updated, evidenceCalls } = makeDeps({
+      jevClient: { askNoul: askSpy },
+      readStockTextRow: async () => [{ itemName: "事業の内容", sectionKey: "business", text: OKUMA_BUSINESS_TEXT }],
+    });
+    const outcome = await processStock(itemOf({ kind, row: rowOf({ attempts: 5, error: "status=402" }) }), deps);
+    expect(askSpy).not.toHaveBeenCalled();
+    expect(outcome.jevCalls).toBe(0);
+    expect(updated[0].input.upstream).toEqual(["工作機械"]);
+    expect(updated[0].input.judgeInput).toContain("機械照合");
+    expect(updated[0].input.evidenceText).toContain("キーワード一致");
+    expect(updated[0].input.evidenceText).not.toContain("0.95");
+    expect(JSON.stringify(evidenceCalls)).toContain("キーワード一致");
+  });
+
+  it.each([{ sections: [] }, { sections: [{ itemName: "事業の内容", sectionKey: "business", text: "　 " }] }])("対象本文が空なら不一致判定や書込をせず保留する (%j)", async ({ sections }) => {
+    const askSpy = vi.fn();
+    const { deps, created, updated } = makeDeps({
+      jevClient: { askNoul: askSpy }, readStockTextRow: async () => sections,
+    });
+    await expect(processStock(itemOf(), deps)).rejects.toThrow("事業タグ対象の本文がありません");
+    expect(askSpy).not.toHaveBeenCalled();
+    expect(created).toEqual([]);
+    expect(updated).toEqual([]);
+  });
+
   it("create_row では readStockTextRow / jev を一切呼ばない", async () => {
     const readSpy = vi.fn(() => Promise.reject(new Error("呼ばれない想定")));
     const askSpy = vi.fn(() => Promise.reject(new Error("呼ばれない想定")));

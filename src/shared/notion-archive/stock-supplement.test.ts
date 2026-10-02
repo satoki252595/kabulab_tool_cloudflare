@@ -226,6 +226,16 @@ describe("stock-supplement (純粋関数)", () => {
       expect(second).toBe("要確認: 〇〇（確認不能 0.55）");
     });
 
+    it("キーワード一致は原文/書類を残し、AIの帯や確率を表示しない", () => {
+      const block = buildEvidenceBlock({ vocabVersion: "v1", docId: "S100W6XE", periodLabel: "2025年3月期",
+        items: [{ labelJa: "半導体パッケージ・基板材料", band: "keyword",
+          sentences: [{ text: "ABFは…", sectionTitle: "研究開発活動" }] }] });
+      const text = JSON.stringify(block);
+      expect(text).toContain("半導体パッケージ・基板材料（キーワード一致）");
+      expect(text).toContain("有報 S100W6XE 2025年3月期「研究開発活動」");
+      expect(text).not.toMatch(/probability|はい|確認不能|0\.93/);
+    });
+
     it("101 件を超えると throw", () => {
       const items = Array.from({ length: 101 }, (_, i) => ({
         labelJa: `語${i}`,
@@ -493,7 +503,7 @@ describe("stock-supplement (Notion 通信)", () => {
           単語帳の版: { select: { name: "v1" } },
           事業タグ判定日: { date: { start: "2026-09-25" } },
           候補語数: { number: 3 },
-          判定入力: { rich_text: [] },
+          判定入力: { rich_text: [{ plain_text: "TypeSafe新規銘柄の初回判定" }] },
           判定エラー: { rich_text: [] },
           再試行回数: { number: 0 },
           次回再試行日: { date: null },
@@ -520,6 +530,7 @@ describe("stock-supplement (Notion 通信)", () => {
         periodEnd: "2025-03-31",
         tagStatus: "判定済",
         candidateCount: 3,
+        judgeInput: "TypeSafe新規銘柄の初回判定",
         attempts: 0,
         nextRetryAt: null,
         masterLinked: true,
@@ -529,6 +540,22 @@ describe("stock-supplement (Notion 通信)", () => {
         texts: { 事業の内容: "自動車を製造する。" },
       });
       expect(rows[0]?.texts).not.toHaveProperty("対処すべき課題");
+      expect(new URL(calls[0].url).searchParams.getAll("filter_properties")).toContain("判定入力-id");
+    });
+
+    it.each([[], undefined])("判定入力がクリア/欠落ならreaderは明示nullを返す (%s)", async (rich) => {
+      const properties = {
+        銘柄名: { title: [{ plain_text: "テスト株式会社" }] },
+        銘柄コード: { rich_text: [{ plain_text: "1234" }] },
+        ...(rich === undefined ? {} : { 判定入力: { rich_text: rich } }),
+      };
+      route("POST", "/v1/databases/db-1/query", [
+        { results: [{ id: "row-1", properties }], has_more: false, next_cursor: null },
+      ]);
+      const { loadSupplementRows } = await load();
+      const [row] = await loadSupplementRows("db-1", propertyIds);
+      expect(row.judgeInput).toBeNull();
+      expect(Object.hasOwn(row, "judgeInput")).toBe(true);
     });
 
     it("想定外の select 値は throw する (書類種別)", async () => {

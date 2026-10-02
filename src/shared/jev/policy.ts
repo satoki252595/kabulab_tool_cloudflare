@@ -1,16 +1,15 @@
-/** 利用停止方針。API キーや呼び出し引数では解除しない。 */
+/** 新規銘柄の初回事業タグ以外の外部判定は停止する。 */
 export class TypeSafeDisabledError extends Error {
   constructor() {
     super(
-      "TypeSafe の外部判定は利用停止中です。新しい判定は実行せず、未判定は未判定のまま保持します。既存の事業タグ・競合他社の判定結果は変更しません。"
+      "TypeSafe は新規銘柄の初回事業タグに限って利用します。既存銘柄は保存タグを参照し、不足のみ機械照合します。語彙審査・精度測定・競合他社の外部判定は停止中です。"
     );
     this.name = "TypeSafeDisabledError";
   }
 }
 
-/** キー参照・D1/Notion 操作・外部通信より前に停止する。
- * void 契約で既存 wire/処理の型検査を保つが、実装は常に throw する。
- */
-export function assertTypeSafeEnabled(): void {
+/** 呼出側は公式上場・初回未完・本文の資格を成立させてから用途を渡す。 */
+export function assertTypeSafeEnabled(usage?: "new-stock-biztag"): void {
+  if (usage === "new-stock-biztag") return;
   throw new TypeSafeDisabledError();
 }

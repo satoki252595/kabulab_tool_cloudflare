@@ -167,21 +167,26 @@ I/O待機はCPUに含まれない。高額化の防止は CPU 上限だけでな
   有料runnerへ変更する必要はない。
   [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)、
   [runner料金](https://docs.github.com/en/billing/reference/actions-runner-pricing)
-- **TypeSafe Jev**: 2026-10-02の利用者方針により、外部APIによる新規判定を停止する。
-  APIキーが既存設定にあっても共有client・CLI・pipelineで通信前に止め、credit補充は
-  不要。保存済みの事業タグ・競合判定と未判定の状態を保持し、課金切れ25件を消したり
-  「該当なし」へ変えたりしない。SemIfへ自動で切り替えない。
-  以下は**停止前の料金・実装の記録**であり、再開や購入の案内ではない。
+- **TypeSafe Jev**: 2026-10-02の追加方針で、公式上場情報の対象開始日以後・同じ
+  世代・active・初回未完を証明できた新規銘柄の初回事業タグだけを有料対象にする。
+  APIキーはそのscope成立後だけlazy参照する。既存の判定済みタグ・AI根拠は銘柄コードで
+  再利用し、有報/語彙変更でも付け直さない。未設定/判定失敗だけkeywords/excludesで
+  不足を補完し、外部AI呼出し0。語彙審査・精度測定・競合AIは停止、旧課金切れ25件の有料
+  再開やそのためのcredit補充は不要。本文資格不足はHOLDで既存結果を保持する。
+  新規初回の実tokens・請求は未測定で、全体$0や月額固定とはしない。SemIf自動代替なし。
+  以下の一括費用は**旧仕様の記録**であり、現在の新規銘柄だけの月額見積りではない。
   公式 Jev 1.13 は入力 $0.042/Mtokens、出力無料。
   [client定数](../src/shared/jev/client.ts) と
   [見積式](../src/shared/jev/stats.ts) が一致。`費用 = 実入力tokens / 1,000,000 × 0.042`。
   既存の過去20社670,382入力tokensから全3,607社へ比例した $5.08 は一括実行の
   過去推定であり、月額実測ではない
   ([既存記録 §12.8](./005-yuho-quant-business-tags.md))。`budget-min=20` は時間制限で、
-  停止前はdry-runでも判定APIを呼んだ。既定最大3 retryは最大4送信になり、曖昧な失敗で提供側に
+  停止前はdry-runでも判定APIを呼び、既定最大3 retryは最大4送信になった。曖昧な失敗で提供側に
   課金された量が成功応答のtoken集計に出ない可能性があり、過去分の請求は未測定。
+  現行の新規初回はclientの同run再送を0にし、専用markerのある失敗だけ次回の上限付きretry対象にする。
   認証済consoleの2026-10-02読取ではtop-upの最低購入単位は$5。
-  今回の調査で購入は行っていない。現運用ではdry-runも通信前に停止する。
+  今回の調査で購入・有料probeは行っていない。現行の`run --dry-run`は新規初回を
+  明示HOLDにして有料判定を呼ばず、機械判定へも置き換えない。
   [TypeSafe公式モデル料金](https://docs.typesafe.ai/models)
 - **SemIf**: ローカル MLX 推論で外部API従量料はないが、端末・電力・稼働時間まで
   無料とはしない。通常のタグ判定を無断で他モデルに変更しない。
@@ -217,7 +222,7 @@ I/O待機はCPUに含まれない。高額化の防止は CPU 上限だけでな
 | R2 IA容量・retrieval | 使用状態未確認、Standard表で代用しない |
 | Workers Builds | 認証済画面で包含枠内確認。account集計でproject別帰属不可 |
 | GitHub runnerとvisibility | public/標準ubuntuを確認済み。保存課金は未確認 |
-| Jev入力tokens・credit・請求、Notion現在契約 | Jev新規判定は利用者方針で停止、補充不要。過去の月間tokens・請求は未取得。Notion既存Plus契約＋Business trialを認証済みで確認 |
+| Jev入力tokens・credit・請求、Notion現在契約 | Jevは今後の適格な新規初回事業タグだけ。既存保存タグは再利用し、不足補完/旧25件の有料呼出し0。新規実tokens・請求と過去月間請求は未取得。Notion既存Plus契約＋Business trialを認証済みで確認 |
 | 既存Budget Alerts | 認証済画面で設定済み確認。hard capではなく通知のみ、変更なし |
 | 現在のCPU limits | ダッシュボード値は未取得。設定変更なし |
 

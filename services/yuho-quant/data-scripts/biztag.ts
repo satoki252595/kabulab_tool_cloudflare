@@ -465,7 +465,7 @@ async function statsCommand(): Promise<void> {
 
 async function main(): Promise<void> {
   if (
-    ["run", "gate", "golden"].includes(subcommand) ||
+    ["gate", "golden"].includes(subcommand) ||
     (["competitors", "competitors-eval"].includes(subcommand) && judgeArg() === "jev")
   ) {
     assertTypeSafeEnabled();

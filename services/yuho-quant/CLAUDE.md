@@ -69,12 +69,16 @@ kabulabAgents 向け契約は
 [docs/005-yuho-quant-business-tags-contract.md](../../docs/005-yuho-quant-business-tags-contract.md)。
 mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反は commit 前に直す):
 
-- **2026-10-02の運用方針: TypeSafeの新規外部判定は停止**。
-  APIキーの有無にかかわらず共有client・CLI・pipelineでD1/Notion/判定APIのI/O前に
-  止める。credit補充や既定モデルの再起動を案内しない。保存済み判定と未判定を保持し、
-  未判定を「該当なし」に変えない。以下の較正・見直しは停止前の設計契約も含む。
+- **2026-10-02の運用方針: TypeSafeは今後の新規銘柄の初回事業タグのみ**。
+  必須設定 `BIZTAG_NEW_LISTING_FROM` と公式上場情報・同じ世代・active・初回未完で
+  scopeを証明した後だけAPIキーをlazyに参照する。既存の判定済みタグと根拠はNotion
+  銘柄マスタ（補足）の銘柄コードで再利用し、有報/語彙が変わっても付け直さない。
+  未設定/判定失敗だけkeywords/excludesの機械的一致で補完し、新しい機械根拠にAI確率を
+  付けない。本文資格不足はHOLDで結果保持。
+  語彙審査・精度測定・競合AIは停止を維持し、旧課金切れ25件を新規AIへ送らない。
+  停止前はdoc/vocab更新・retry・証拠欠けにもAIを使っていた履歴を正しく区別する。
 - **AI に事業内容を作文させない・LLM の生文を保存しない**。Notion へ書くのは
-  「単語帳の語(ID・名前)」「判定の確率と帯」「有報からコードで抜き出した原文の文
+  「単語帳の語(ID・名前)」「判定方式(AIは確率と帯、機械はキーワード一致)」「有報からコードで抜き出した原文の文
   (書類ID・会計期末つき)」の3つだけ。jev(判定モデル)の応答からそれ以外の自由文を
   そのまま保存する経路を作らない。
 - **状態は正直に記録する**(ルール2の帰結)。`未判定`・`本文なし`・`読込失敗`・
@@ -151,7 +155,7 @@ pnpm backfill:overseas      # 既存有報の海外埋め戻し (D1 HTTP)
 pnpm yuho:backfill:text     # 既存有報の開示テキスト埋め戻し (CSV のみ・D1 HTTP)
 pnpm yuho:backfill:missing  # 期間指定の取りこぼし回収 (日次上限で欠けた分。無制限・再開可能)
 pnpm audit:overseas         # 全銘柄の取りこぼし署名を集計
-pnpm biztag run             # 現在停止: TypeSafe通信・D1/Notion I/O前に終了
+pnpm biztag run             # 今後の新規初回だけAI / 保存タグ再利用・不足だけ機械補完 (開始日必須)
 pnpm biztag gate            # 現在停止: TypeSafeを使う見直し提案審査
 pnpm biztag golden          # 現在停止: TypeSafeを使う精度測定
 pnpm biztag rollback        # 単語帳を過去の版へ巻き戻す (--to=vN --reason=...)

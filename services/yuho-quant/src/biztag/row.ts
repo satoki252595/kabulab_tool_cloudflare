@@ -2,7 +2,7 @@
  * 語ごとの判定結果を、補足行(Notion)に書く形へまとめる。
  * 設計: docs/005-yuho-quant-business-tags.md §5.6・§3.1。
  *
- * 保存するのは常に「語の名前」「確率と帯」「原文から抜き出した文」の 3 つだけ
+ * 保存するのは「語の名前」「判定方式 (AIは確率と帯)」「原文から抜き出した文」だけ
  * (AI に事業内容を作文させない・ルール1)。
  */
 import type { EvidenceBlockInput } from "../../../../src/shared/notion-archive/index.js";
@@ -21,7 +21,7 @@ export interface TagOutcome {
   evidence: EvidenceBlockInput["items"];
   /**
    * 「事業タグの根拠文」列に書く平文 (§3.1)。`はい`/`要確認` の語ごとに
-   * `タグ名（はい 0.93）：「原文1〜2文」— 節名` の1行。語が無ければ null。
+   * `タグ名（はい 0.93／キーワード一致）：「原文1〜2文」— 節名` の1行。語が無ければ null。
    */
   evidenceText: string | null;
   /** Notion の rich_text 上限 (§EVIDENCE_TEXT_MAX_CHARS) のため一部を切り詰めたか。 */
@@ -42,16 +42,16 @@ const EVIDENCE_TEXT_TRUNCATE_NOTE =
   "\n…（文字数上限のため以下省略。全語の根拠はページ本文の根拠トグルを参照）";
 
 function formatEvidenceTextLine(item: EvidenceBlockInput["items"][number]): string {
-  const bandLabel = item.band === "yes" ? "はい" : "要確認";
+  const bandLabel = item.band === "keyword" ? "キーワード一致"
+    : `${item.band === "yes" ? "はい" : "要確認"} ${item.probability.toFixed(2)}`;
   const picked = item.sentences.slice(0, 2);
   const quote = picked.map((s) => s.text).join("");
   const sectionNames = [...new Set(picked.map((s) => s.sectionTitle))].join("・");
-  return `${item.labelJa}（${bandLabel} ${item.probability.toFixed(2)}）：「${quote}」— ${sectionNames}`;
+  return `${item.labelJa}（${bandLabel}）：「${quote}」— ${sectionNames}`;
 }
 
 /**
- * `はい`/`要確認` の語ごとの根拠文を組み立てる(純粋関数)。
- * `items` は `summarizeJudgments` が作る evidence 配列 (既に `いいえ` を除いている)。
+ * AIの`はい`/`要確認`または`キーワード一致`の根拠文を組み立てる(純粋関数)。
  */
 export function buildEvidenceText(
   items: EvidenceBlockInput["items"]
@@ -80,6 +80,34 @@ function evidenceSentences(hits: KeywordHit[]): Array<{ text: string; sectionTit
 
 function formatUncertain(labelJa: string, probability: number): string {
   return `${labelJa}（${probability.toFixed(2)}）`;
+}
+
+/** prefilterの一致語をタグへまとめる。事業の意味やAI確率の判定は行わない。 */
+export function summarizeKeywordMatches(
+  vocab: Vocabulary,
+  candidates: PrefilterResult["candidates"]
+): TagOutcome {
+  const hitsByTermId = new Map(candidates.map((c) => [c.term.id, c.hits] as const));
+  const matched = vocab.business.filter((term) => !term.deprecated && hitsByTermId.has(term.id));
+  if (matched.length !== candidates.length || candidates.some((c) => c.hits.length === 0)) {
+    throw new Error("summarizeKeywordMatches: 有効な単語帳/原文hitと候補が一致しません");
+  }
+  const evidence: EvidenceBlockInput["items"] = matched.map((term) => ({
+    labelJa: term.labelJa,
+    band: "keyword",
+    sentences: evidenceSentences(hitsByTermId.get(term.id)!),
+  }));
+  const { text: evidenceText, truncated: evidenceTextTruncated } = buildEvidenceText(evidence);
+  return {
+    upstream: matched.filter((term) => term.notionColumn === "upstream").map((term) => term.labelJa),
+    downstream: matched.filter((term) => term.notionColumn === "downstream").map((term) => term.labelJa),
+    distribution: matched.filter((term) => term.notionColumn === "distribution").map((term) => term.labelJa),
+    themes: deriveThemes(vocab, matched.map((term) => term.id)).map((term) => term.labelJa),
+    uncertainText: null,
+    evidence,
+    evidenceText,
+    evidenceTextTruncated,
+  };
 }
 
 /**

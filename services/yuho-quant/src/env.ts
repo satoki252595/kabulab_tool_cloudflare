@@ -22,7 +22,24 @@ function optional(key: string): string | undefined {
   return v && v.trim() !== "" ? v.trim() : undefined;
 }
 
+/** 比較に使う暦日。Date.parse の月末超過の正規化は許さない。 */
+export function assertBiztagDate(value: string, label: string): void {
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+    !Number.isFinite(Date.parse(`${value}T00:00:00.000Z`)) ||
+    new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) !== value
+  ) {
+    throw new Error(`${label}: 実在する YYYY-MM-DD が必要です`);
+  }
+}
+
 export const yuhoEnv = {
+  /** 新規上場の初回判定の固定開始日。実行日の代入や暗黙の既定値は禁止。 */
+  BIZTAG_NEW_LISTING_FROM: () => {
+    const value = required("BIZTAG_NEW_LISTING_FROM");
+    assertBiztagDate(value, "BIZTAG_NEW_LISTING_FROM");
+    return value;
+  },
   /** EDINET API v2 の Subscription-Key (金融庁 EDINET 利用登録で発行) */
   EDINET_API_KEY: () => required("EDINET_API_KEY"),
   // DATABASE_URL (Neon 接続文字列) は ADR-0001 の D1 移行で参照元が無くなった

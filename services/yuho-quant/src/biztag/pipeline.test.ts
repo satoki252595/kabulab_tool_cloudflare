@@ -1,28 +1,13 @@
 /**
- * pipeline.ts (`runBiztag`) の dry-run スコープのテスト。
- * 設計: docs/005-yuho-quant-business-tags.md §2・§7・§9・§11.2。
- *
- * `dryRun: true` は「銘柄マスタ（補足）」への書込だけでなく、単語帳の関門
- * (`runGate`)・見直し期限の通知・見直し材料 (`refreshReviewPacketLedger`) の
- * 台帳書込も止めなければならない (レビュー指摘: dry-run でも実際に版が進んで
- * しまうバグの回帰テスト)。判定・審査そのもの (jev 呼び出し・出典検査・
- * 見直し材料の内容比較) は dry-run でも実データで行われる前提のため、この
- * テストでは「未審査の提案が無い」シナリオに絞り、以下の 2 経路だけを検証する:
- *
- *   1. 見直し期限が過ぎていて未通知なら「通知」を台帳に書く経路
- *   2. 「見直し材料」が台帳に無ければ新規作成する経路 (review.ts)
- *
- * どちらも本来はレビュー指摘前は dryRun に関わらず実際に notion-archive の
- * `createLedgerEntry` (raw import) を呼んでいた。ここでは notion-archive
- * モジュール全体をモックし、その raw な `createLedgerEntry`/`updateLedgerEntry`/
- * `replaceLedgerJson` が dry-run 時には一切呼ばれないことを確かめる。
- *
- * D1・jev・単語帳解決・ゴールデンセット等の重い依存は全てモックし、
- * `latest`/`rows` を空にして `processStock` 自体が呼ばれない最小シナリオにする
- * (この経路は process.test.ts が別途保証している)。
+ * 実I/Oを置き換えてrunの境界を検証する。
+ * dry-runは台帳/補足を書かず新規の有料判定をHOLD。
+ * 既存は保存済みマスタをコード参照し、未設定・失敗だけ機械判定する。
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { LedgerEntry, SupplementRow } from "../../../../src/shared/notion-archive/index.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createJevClient, jevEnv } from "../../../../src/shared/jev/index.js";
+import { loadLatestDocs, loadNewStockEligibility, type LatestDoc } from "./source.js";
+import type { LedgerEntry, SupplementRow, SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
+import type { StockTextSection } from "../../../../src/shared/notion-archive/stock-text.js";
 import { makeBudgetedVerifySources } from "./sources-verify.js";
 import { MINI_VOCAB } from "./vocabulary/__fixtures__/mini-vocab.js";
 import { composeRunNotify, isBillingBlockedError, runBiztag, type RunSummary } from "./pipeline.js";
@@ -32,9 +17,6 @@ const notionMocks = vi.hoisted(() => ({
   updateLedgerEntry: vi.fn(),
   replaceLedgerJson: vi.fn(),
   listLedgerEntries: vi.fn(),
-  // 版の影響判定 (buildVocabDiffResolver) が旧版の JSON を読む経路のデフォルト。
-  // 中身は使わない (isImpacted は latest=[] のテストでは呼ばれない) が、
-  // parseVocabulary が通る形である必要はある。
   readLedgerJson: vi.fn(async () => MINI_VOCAB),
   ensureLedgerDb: vi.fn(async () => "ledger-db-id"),
   ensureSupplementDb: vi.fn(async () => ({ dbId: "supplement-db-id", created: false, propertyIds: {} })),
@@ -46,32 +28,37 @@ const notionMocks = vi.hoisted(() => ({
     ): Promise<SupplementRow[]> => []
   ),
   loadStockMasterIndex: vi.fn(async () => ({ index: new Map<string, string>(), duplicates: new Map<string, string[]>() })),
-  createSupplementRow: vi.fn(async () => "new-page"),
-  updateSupplementRow: vi.fn(async () => {}),
+  createSupplementRow: vi.fn(async (_dbId: string, _row: SupplementRowInput) => "new-page"),
+  updateSupplementRow: vi.fn(async (_pageId: string, _row: SupplementRowInput) => {}),
   replaceEvidenceBlock: vi.fn(async () => {}),
-  readStockTextRow: vi.fn(async () => []),
+  readStockTextRow: vi.fn(async (): Promise<StockTextSection[]> => []),
   notionStats: vi.fn(() => ({ requests: 0, rateLimited: 0, transientRetries: 0 })),
   resetNotionStats: vi.fn(),
 }));
 
-vi.mock("../../../../src/shared/notion-archive/index.js", () => notionMocks);
+vi.mock("../../../../src/shared/notion-archive/index.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../../../src/shared/notion-archive/index.js")>(),
+  ...notionMocks,
+}));
 
 vi.mock("../../../../src/shared/db/d1-http-client.js", () => ({
   createD1HttpDb: vi.fn(() => ({})),
 }));
 
-vi.mock("../../../../src/shared/jev/index.js", () => ({
+vi.mock("../../../../src/shared/jev/index.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../../../src/shared/jev/index.js")>(),
   // 停止 preflight は shared/jev/policy.test.ts の実 guard が検証する。
   assertTypeSafeEnabled: vi.fn(),
   createJevClient: vi.fn(() => ({ askNoul: vi.fn(async () => { throw new Error("jev は呼ばれない想定"); }) })),
   estimateCostUsd: vi.fn(() => 0),
-  jevEnv: { TYPESAFE_API_KEY: () => "test-key" },
+  jevEnv: { TYPESAFE_API_KEY: vi.fn(() => "test-key") },
 }));
 
 vi.mock("../db/schema.js", () => ({}));
 
 vi.mock("./source.js", () => ({
   loadLatestDocs: vi.fn(async () => []),
+  loadNewStockEligibility: vi.fn(async () => ({ eligibleCodes: new Set<string>(), heldCodes: new Set<string>() })),
 }));
 
 vi.mock("./active-vocab.js", () => ({
@@ -117,9 +104,7 @@ function versionEntry(): LedgerEntry {
 }
 
 /**
- * 置換済の旧版 (v0)。版の影響判定 (`buildVocabDiffResolver`) が
- * `vocabVersion: "v0"` の行を見たときに台帳から引けるようにするための
- * 最小レコード (pipeline-golden-texts.test.ts 等とは無関係の別テスト用)。
+ * 置換済の旧版 (v0)。保存済みタグ参照では本文・JSONを読み直さない。
  */
 function oldVersionEntry(): LedgerEntry {
   return {
@@ -153,8 +138,12 @@ function setupListLedgerEntries(): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv("BIZTAG_NEW_LISTING_FROM", "2026-09-01");
+  vi.mocked(loadLatestDocs).mockResolvedValue([]);
+  vi.mocked(loadNewStockEligibility).mockResolvedValue({ eligibleCodes: new Set(), heldCodes: new Set() });
   setupListLedgerEntries();
 });
+afterEach(() => vi.unstubAllEnvs());
 
 describe("runBiztag dry-run スコープ", () => {
   it("dryRun: true では台帳への書込 (通知・見直し材料) を一切行わない", async () => {
@@ -196,19 +185,65 @@ describe("runBiztag dry-run スコープ", () => {
     expect(kinds).toContain("見直し材料");
   });
 
-  it("出典検査 (verifySources) に opts.budgetMs から切り出した時間予算を持たせる (関門の長時間化対策)", async () => {
-    // レビュー指摘の回帰: runGate (出典検査を含む) が opts.budgetMs に縛られて
-    // いなかったため、悪意/不注意な提案が catchup.yml (60分)/backfill.yml
-    // (355分) のジョブタイムアウトまで実質ハングさせられた。
-    await runBiztag({
+  it("通常runは語彙の有料審査・golden・キー取得を行わず停止を明示する", async () => {
+    const summary = await runBiztag({
       budgetMs: 1_000,
       thresholds: { yesMin: 0.8, noMax: 0.2 },
       model: "test-model",
     });
-    // DEFAULT_VERIFY_SOURCES_BUDGET_MS (5分) より opts.budgetMs (1秒) の方が
-    // 小さいので、その小さい方が使われる (budgetMs をそのまま食い潰さない
-    // ための「独立した予算」であって「budgetMs を無視してよい」わけではない)。
-    expect(makeBudgetedVerifySources).toHaveBeenCalledWith(1_000);
+    expect(makeBudgetedVerifySources).not.toHaveBeenCalled();
+    expect(createJevClient).not.toHaveBeenCalled();
+    expect(summary.gate).toBeNull();
+    expect(summary.gateSkippedReason).toContain("停止中");
+    expect(jevEnv.TYPESAFE_API_KEY).not.toHaveBeenCalled();
+  });
+});
+
+describe("runBiztag 新規と既存の外部判定境界", () => {
+  const latest: LatestDoc = { stockCode: "0001", companyName: "判定境界テスト", sector33: null,
+    doc: { docId: "TEST_DOC", docTypeCode: "120", periodEnd: "2026-03-31",
+      submittedAt: "2026-06-25T00:00:00.000Z", notionDocPageId: "test-text", textParseStatus: "ok" } };
+  const opts = { budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: "test-model" };
+  const text = [{ itemName: "事業の内容", sectionKey: "business", text: "工作機械を製造・販売しております。" }];
+
+  it("既存の課金失敗は機械で復旧し、新規key/clientに触れない", async () => {
+    vi.mocked(loadLatestDocs).mockResolvedValue([latest]);
+    notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "0001", docId: "TEST_DOC",
+      tagStatus: "判定不能", attempts: 5, nextRetryAt: "2027-01-01", error: "status=402" })]);
+    notionMocks.readStockTextRow.mockResolvedValueOnce(text);
+    const summary = await runBiztag(opts);
+    expect(createJevClient).not.toHaveBeenCalled();
+    expect(jevEnv.TYPESAFE_API_KEY).not.toHaveBeenCalled();
+    expect(summary.jev.calls).toBe(0);
+    expect(summary.billingBlocked).toEqual([]);
+    expect(notionMocks.updateSupplementRow.mock.calls[0][1].judgeInput).toContain("機械照合");
+  });
+
+  it("新規資格成立の初回だけkeyを読み、専用用途・再送0で判定する", async () => {
+    vi.mocked(loadLatestDocs).mockResolvedValue([latest]);
+    vi.mocked(loadNewStockEligibility).mockResolvedValue({ eligibleCodes: new Set(["0001"]), heldCodes: new Set() });
+    notionMocks.readStockTextRow.mockResolvedValueOnce(text);
+    const askNoul = vi.fn(async () => ({ model: "test-model", answers: { "bt.B.MACH.MACHINE_TOOL": 0.95 },
+      inputTokens: 50, outputTokens: 0, latencyMs: 1, attempts: 1 }));
+    vi.mocked(createJevClient).mockReturnValueOnce({ askNoul });
+    const summary = await runBiztag(opts);
+    expect(jevEnv.TYPESAFE_API_KEY).toHaveBeenCalledTimes(1);
+    expect(createJevClient).toHaveBeenCalledWith({ usage: "new-stock-biztag", apiKey: "test-key", model: "test-model", maxRetries: 0 });
+    expect(askNoul).toHaveBeenCalledTimes(1);
+    expect(summary.jev.calls).toBe(1);
+    expect(notionMocks.createSupplementRow.mock.calls[0][1].judgeInput).toMatch(/^TypeSafe新規銘柄の初回判定/);
+  });
+
+  it("新規のdry-runは有料APIも機械への代替もせず保留する", async () => {
+    vi.mocked(loadLatestDocs).mockResolvedValue([latest]);
+    vi.mocked(loadNewStockEligibility).mockResolvedValue({ eligibleCodes: new Set(["0001"]), heldCodes: new Set() });
+    const summary = await runBiztag({ ...opts, dryRun: true });
+    expect(createJevClient).not.toHaveBeenCalled();
+    expect(jevEnv.TYPESAFE_API_KEY).not.toHaveBeenCalled();
+    expect(notionMocks.readStockTextRow).not.toHaveBeenCalled();
+    expect(notionMocks.createSupplementRow).not.toHaveBeenCalled();
+    expect(summary.qualificationHeld).toEqual(["0001"]);
+    expect(summary.countsByKind.paid_dry_run_hold).toBe(1);
   });
 });
 
@@ -244,76 +279,39 @@ function minimalRow(overrides: Partial<SupplementRow>): SupplementRow {
   };
 }
 
-describe("runBiztag — 版の影響判定 (stale rows) の本文列再取得", () => {
-  it("版が違う判定済み行が一部だけの時、その銘柄コードだけ本文列つきで読み直す (全件を読み直さない)", async () => {
-    // レビュー指摘の回帰: 旧実装は 1 行でも stale (判定済・版違い) なら
-    // 補足 DB の全行 (数千件) を本文列つきで読み直していたため、版を上げた
-    // 直後の移行期間 (数日〜数週間) の間、毎日の 20 分予算の大半が
-    // 「stale ではない大多数の行の重い本文列」の再取得に消える問題があった。
-    const stale = minimalRow({ stockCode: "1301", tagStatus: "判定済", vocabVersion: "v0" });
-    const fresh = minimalRow({ stockCode: "6103", tagStatus: "判定済", vocabVersion: MINI_VOCAB.version });
-    const notYetJudged = minimalRow({ stockCode: "9999", tagStatus: "本文なし", vocabVersion: null });
-    notionMocks.loadSupplementRows
-      .mockResolvedValueOnce([stale, fresh, notYetJudged])
-      .mockResolvedValueOnce([{ ...stale, texts: { 事業の内容: "本文" } }]);
-
-    await runBiztag({
-      budgetMs: 10_000,
-      thresholds: { yesMin: 0.8, noMax: 0.2 },
-      model: "test-model",
-    });
-
-    expect(notionMocks.loadSupplementRows).toHaveBeenCalledTimes(2);
-    // 1回目: 状態の列だけ (textColumns 無し)。
-    expect(notionMocks.loadSupplementRows.mock.calls[0]?.[2]).toBeUndefined();
-    // 2回目: stale な "1301" だけを codes で絞り、本文列つきで読む
-    // ("6103"・"9999" を含めない = 全件を読み直さない)。
-    expect(notionMocks.loadSupplementRows.mock.calls[1]?.[2]).toMatchObject({
-      codes: ["1301"],
-    });
-    const textColumns = (notionMocks.loadSupplementRows.mock.calls[1]?.[2] as { textColumns?: string[] })
-      ?.textColumns;
-    expect(textColumns?.length).toBeGreaterThan(0);
-  });
-
-  it("stale な行が無ければ、本文列つきの読み直しは一切行わない (1回だけ読む)", async () => {
-    const fresh = minimalRow({ stockCode: "6103", tagStatus: "判定済", vocabVersion: MINI_VOCAB.version });
-    notionMocks.loadSupplementRows.mockResolvedValueOnce([fresh]);
-
-    await runBiztag({
-      budgetMs: 10_000,
-      thresholds: { yesMin: 0.8, noMax: 0.2 },
-      model: "test-model",
-    });
-
+describe("runBiztag — 保存済みマスタの参照", () => {
+  it.each([
+    { docId: "OLD_DOC", vocabVersion: MINI_VOCAB.version },
+    { docId: "TEST_DOC", vocabVersion: "v0" },
+    { docId: "OLD_DOC", vocabVersion: "v0" },
+  ])("doc=$docId/版=$vocabVersionでも保存タグ・根拠を保持し、本文を再読しない", async ({ docId, vocabVersion }) => {
+    vi.mocked(loadLatestDocs).mockResolvedValue([{ stockCode: "6103", companyName: "保存タグ確認",
+      sector33: null, doc: { docId: "TEST_DOC", docTypeCode: "120", periodEnd: "2026-03-31",
+        submittedAt: "2026-06-25T00:00:00.000Z", notionDocPageId: "test-text", textParseStatus: "ok" } }]);
+    notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "6103", docId,
+      tagStatus: "判定済", tagDoc: docId, vocabVersion, upstream: ["工作機械"], evidenceText: "保存済み根拠" })]);
+    const summary = await runBiztag({ budgetMs: 10_000,
+      thresholds: { yesMin: 0.8, noMax: 0.2 }, model: "test-model" });
+    expect(summary.countsByKind.skip).toBe(1);
+    expect(summary.coverage.judged).toBe(1);
     expect(notionMocks.loadSupplementRows).toHaveBeenCalledTimes(1);
+    expect(notionMocks.loadSupplementRows.mock.calls[0]?.[2]).toBeUndefined();
+    expect(notionMocks.readStockTextRow).not.toHaveBeenCalled();
+    expect(notionMocks.readLedgerJson).not.toHaveBeenCalled();
+    expect(notionMocks.updateSupplementRow).not.toHaveBeenCalled();
+    expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
+    expect(createJevClient).not.toHaveBeenCalled();
   });
 
-  it("stale な銘柄コードが90件を超えると、Notion の compound filter 上限を避けるため複数回に分けて問い合わせる", async () => {
-    const staleRows = Array.from({ length: 95 }, (_, i) =>
-      minimalRow({ stockCode: `S${String(i).padStart(3, "0")}`, tagStatus: "判定済", vocabVersion: "v0" })
-    );
-    notionMocks.loadSupplementRows
-      .mockResolvedValueOnce(staleRows)
-      .mockImplementationOnce(async (_dbId?: string, _propertyIds?: Record<string, string>, opts?: { codes?: string[] }) =>
-        staleRows.filter((r) => opts?.codes?.includes(r.stockCode))
-      )
-      .mockImplementationOnce(async (_dbId?: string, _propertyIds?: Record<string, string>, opts?: { codes?: string[] }) =>
-        staleRows.filter((r) => opts?.codes?.includes(r.stockCode))
-      );
-
-    await runBiztag({
-      budgetMs: 10_000,
-      thresholds: { yesMin: 0.8, noMax: 0.2 },
-      model: "test-model",
-    });
-
-    // 1回目 (状態のみ) + チャンク分割された stale codes の問い合わせ (95件 ÷ 90件/チャンク → 2回)。
-    expect(notionMocks.loadSupplementRows).toHaveBeenCalledTimes(3);
-    const codesPerCall = notionMocks.loadSupplementRows.mock.calls
-      .slice(1)
-      .map((c) => (c[2] as { codes?: string[] }).codes?.length);
-    expect(codesPerCall).toEqual([90, 5]);
+  it("HOLD行の保存済み状態を現在の受入済み件数に加算しない", async () => {
+    vi.mocked(loadLatestDocs).mockResolvedValue([{ stockCode: "6103", companyName: "保留確認", sector33: null, doc: null }]);
+    vi.mocked(loadNewStockEligibility).mockResolvedValue({ eligibleCodes: new Set(), heldCodes: new Set(["6103"]) });
+    notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "6103", tagStatus: "判定済" })]);
+    const summary = await runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: "test-model" });
+    expect(summary.qualificationHeld).toEqual(["6103"]);
+    expect(summary.countsByTagStatus["判定済"]).toBe(1);
+    expect(summary.coverage.judged).toBe(0);
+    expect(notionMocks.updateSupplementRow).not.toHaveBeenCalled();
   });
 });
 

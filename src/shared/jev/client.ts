@@ -69,6 +69,8 @@ export interface JevClient {
 }
 
 export interface CreateJevClientOptions {
+  /** 公式上場・初回未完を確認した事業タグ処理だけが明示する。省略は停止。 */
+  usage?: "new-stock-biztag";
   apiKey: string;
   /** 固定するモデル名 (`jev-latest` のような別名は呼び出し側で解決してから渡すこと)。 */
   model: string;
@@ -235,7 +237,7 @@ async function fetchJevWithRetry(
 // ── createJevClient ─────────────────────────────────────────────────────
 
 export function createJevClient(o: CreateJevClientOptions): JevClient {
-  assertTypeSafeEnabled();
+  assertTypeSafeEnabled(o.usage);
   const {
     apiKey,
     model,
