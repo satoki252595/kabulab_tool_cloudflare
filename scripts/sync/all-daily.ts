@@ -1,8 +1,7 @@
 // 日次・全取込オーケストレータ（ローカル実行・手動/バックフィル用）。1コマンドで:
 //   core/rsi/swing 日次(Node→D1 REST) + VWAP(日足10年/5分足/信用残高→R2)
 // 通常運用は stock-sync.yml と vwap-ingest.yml が GitHub Actions で別々に実行する。
-// 本スクリプトは手動再実行用。各ステップは continue-on-error（1つ失敗しても次を
-// 実行し、最後に失敗数で非ゼロ終了）。
+// 本スクリプトは手動実行用。失敗時は後続取得を停止し、非ゼロで終了する。
 // 必要env(.env):
 //   CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID / D1_DATABASE_ID
 //   YAHOO_PROXY_BASE / CRON_SECRET
@@ -30,7 +29,11 @@ for (const [label, script] of steps) {
     stdio: "inherit",
     env: process.env,
   });
-  if (r.status !== 0) { failed++; console.error(`[daily] 失敗: ${label} (exit ${r.status})`); }
+  if (r.status !== 0) {
+    failed++;
+    console.error(`[daily] 失敗: ${label} (exit ${r.status})。後続取得を停止します。`);
+    break;
+  }
 }
 console.info(`\n[daily] 完了。失敗ステップ ${failed}/${steps.length}`);
 process.exit(failed ? 1 : 0);

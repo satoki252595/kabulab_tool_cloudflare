@@ -34,7 +34,7 @@ import {
   type SupplementRow,
   type SupplementSchemaSpec,
 } from "../../../../src/shared/notion-archive/index.js";
-import { createJevClient, estimateCostUsd, jevEnv, type JevClient } from "../../../../src/shared/jev/index.js";
+import { assertTypeSafeEnabled, createJevClient, estimateCostUsd, jevEnv, type JevClient } from "../../../../src/shared/jev/index.js";
 import { createMemoizedJevClient } from "../../../../src/shared/jev/memo.js";
 import * as yuhoSchema from "../db/schema.js";
 import { resolveActiveVocabulary } from "./active-vocab.js";
@@ -266,6 +266,7 @@ function makeDryRunLedgerWrites(): {
 }
 
 export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
+  assertTypeSafeEnabled();
   const start = Date.now();
   const startedAt = new Date(start).toISOString();
   resetNotionStats();

@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchChart, fetchQuoteSummary, yahooHttpErrorMessage } from "./client.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+let { fetchChart, fetchQuoteSummary, yahooHttpErrorMessage } = await import("./client.js");
 
 const ORIGINAL_PROXY_BASE = process.env.YAHOO_PROXY_BASE;
 const ORIGINAL_CRON_SECRET = process.env.CRON_SECRET;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ fetchChart, fetchQuoteSummary, yahooHttpErrorMessage } = await import("./client.js"));
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -191,7 +196,7 @@ describe("yahooHttpErrorMessage", () => {
 
       const message = await yahooHttpErrorMessage("Yahoo HTTP エラー", response);
 
-      expect(message).toContain(`retry-at-ms=${Date.now() + 5_000}`);
+      expect(message).toContain(`retry-at-ms=${Date.now() + 15 * 60_000}`);
     }
   );
 

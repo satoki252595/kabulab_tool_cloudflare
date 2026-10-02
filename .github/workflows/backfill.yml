@@ -3,15 +3,15 @@
 # 日次上限で取りこぼした分や新設テーブルへの埋め戻しを、無制限・再開可能・
 # 冪等な data-script で回収する。全ジョブは public repo のため Actions 分無料。
 # Notion への同時書込を抑えるため、多 sh 系統の同時起動は 3 系統以内にする
-# (共有 notion-archive クライアントが 429 を再試行するので壊れはしない)。
+# (共有 notion-archive の制限・結果不明時の停止を尊重する)。
 #
 # 必要 secrets: EDINET_API_KEY / CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID /
 #   D1_DATABASE_ID / NOTION_TOKEN / NOTION_ARCHIVE_PAGE_ID / NOTION_YUHO_TEXT_DB_ID
 #   (ir のみ) YANOSHIN_* 不要 (TDnet 鍵不要)
-#   (biztag* のみ) TYPESAFE_API_KEY / NOTION_STOCK_INFO_PAGE_ID / NOTION_DB_STOCK_MASTER /
+#   (biztag-rollback のみ) NOTION_STOCK_INFO_PAGE_ID / NOTION_DB_STOCK_MASTER /
 #     NOTION_STOCK_SUPPLEMENT_DB_ID / NOTION_BIZTAG_LEDGER_DB_ID
 #     (docs/005-yuho-quant-business-tags.md §7・§8)
-#     (biztag-competitors のみ) 上記のうち NOTION_BIZTAG_LEDGER_DB_ID は不要 (台帳に触れない)
+#   biztag/biztag-golden/biztag-competitors は取得前に明示STOP。
 name: backfill
 
 on:
@@ -91,12 +91,16 @@ jobs:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
       NOTION_YUHO_TEXT_DB_ID: ${{ secrets.NOTION_YUHO_TEXT_DB_ID }}
-      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
       NOTION_STOCK_INFO_PAGE_ID: ${{ secrets.NOTION_STOCK_INFO_PAGE_ID }}
       NOTION_DB_STOCK_MASTER: ${{ secrets.NOTION_DB_STOCK_MASTER }}
       NOTION_STOCK_SUPPLEMENT_DB_ID: ${{ secrets.NOTION_STOCK_SUPPLEMENT_DB_ID }}
       NOTION_BIZTAG_LEDGER_DB_ID: ${{ secrets.NOTION_BIZTAG_LEDGER_DB_ID }}
     steps:
+      - name: TypeSafe停止対象を取得前に拒否
+        if: contains(fromJson('["biztag","biztag-golden","biztag-competitors"]'), inputs.job)
+        run: |
+          echo "TypeSafeを使うbiztag/精度測定/競合推論は停止中です。" >&2
+          exit 1
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4

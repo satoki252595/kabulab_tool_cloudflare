@@ -71,7 +71,7 @@ pnpm install              # 依存インストール
 │   ├── financial-math/              # 004 (/financial-math) — core/swing を読み取り専用
 │   ├── yuho-quant/                  # 005 (/yuho-quant) — EDINET 受注高/残高 (D1: yuho_* テーブル)
 │   ├── ir-catalog/                  # 006 (/ir-catalog) — TDnet 適時開示 + PDF センチメント
-│   └── vwap-analysis/               # 007 (/vwap-analysis) — R2 の時系列を素通し配信 + 当日5分足は Yahoo 中継
+│   └── vwap-analysis/               # 007 (/vwap-analysis) — R2 の保存済み日足・5分足・信用残を配信
 ├── scripts/
 │   ├── sync/                        # universe / daily / monthly / all-daily / yuho-edinet / ir-tdnet
 │   └── vwap/                        # ingest-daily / ingest-intra / ingest-margin (→ R2)

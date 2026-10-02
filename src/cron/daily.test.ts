@@ -206,6 +206,19 @@ describe("isTransientDailySyncFailure", () => {
 });
 
 describe("recoverTransientDailyFailures", () => {
+  it("通常producerのretry:falseはHTTP/DB失敗を再処理・待機せず残す", async () => {
+    const processTarget = vi.fn();
+    const beforeAttempt = vi.fn();
+    const failures = [
+      { target: "A", error: `Chart API HTTP エラー [A]: 429; retry-at-ms=${Date.now() + 120_000}` },
+      { target: "B", error: "fetch failed" },
+      { target: "C", error: "permanent invalid close" },
+    ];
+    const result = await recoverTransientDailyFailures(failures, processTarget, { retry: false, beforeAttempt });
+    expect(result).toEqual({ attempted: 0, recovered: 0, skippedDueToLimit: 2, failures });
+    expect(processTarget).not.toHaveBeenCalled();
+    expect(beforeAttempt).not.toHaveBeenCalled();
+  });
   it("429を有界なRetry-After後に1回再処理して回復する", async () => {
     vi.useFakeTimers();
     try {

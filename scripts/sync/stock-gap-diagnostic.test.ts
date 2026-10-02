@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { $ZodError } from "zod/v4/core";
-import { fetchChart } from "../../src/shared/yahoo/client.js";
+let fetchChart: typeof import("../../src/shared/yahoo/client.js").fetchChart;
 import {
   STOCK_GAP_54_CODES,
   buildDiagBatch,
@@ -24,6 +24,12 @@ import {
  */
 
 const ORIGINAL_ENV = { ...process.env };
+
+beforeEach(async () => {
+  // 実clientのcooldownは維持し、独立した診断fixture間では状態を分離する。
+  vi.resetModules();
+  ({ fetchChart } = await import("../../src/shared/yahoo/client.js"));
+});
 
 afterEach(() => {
   process.env = { ...ORIGINAL_ENV };

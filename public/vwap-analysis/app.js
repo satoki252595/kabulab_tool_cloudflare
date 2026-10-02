@@ -92,7 +92,7 @@ function volumeProfile(bars, nbins, vaPct) {
   };
 }
 
-// /api/intra({bars}) と /api/chart(Yahoo応答の素通し中継。価格 basis の断定なし) を正準形 {ts,o,h,l,c,v}[] に
+// 保存済み日足・5分足の応答を正準形 {ts,o,h,l,c,v}[] に
 function parseYahoo(j) {
   const r = j && j.chart && j.chart.result && j.chart.result[0];
   if (!r || !r.timestamp) return [];

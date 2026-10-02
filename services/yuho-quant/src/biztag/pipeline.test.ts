@@ -61,6 +61,8 @@ vi.mock("../../../../src/shared/db/d1-http-client.js", () => ({
 }));
 
 vi.mock("../../../../src/shared/jev/index.js", () => ({
+  // 停止 preflight は shared/jev/policy.test.ts の実 guard が検証する。
+  assertTypeSafeEnabled: vi.fn(),
   createJevClient: vi.fn(() => ({ askNoul: vi.fn(async () => { throw new Error("jev は呼ばれない想定"); }) })),
   estimateCostUsd: vi.fn(() => 0),
   jevEnv: { TYPESAFE_API_KEY: () => "test-key" },
