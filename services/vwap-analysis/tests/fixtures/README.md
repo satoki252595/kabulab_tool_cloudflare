@@ -62,10 +62,13 @@ curl -s -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
   SHA256 `0b35e0df364f0b0c34ebc92ff9504104e22bdad02abe97beb7bce86be0431e5d`・
   body 完了 2026-09-30T11:01:08.585Z。2462 ts・splits なし)。
   用途: 実 bytes の adj demotion 証明 (GET0 再利用)。
-# Issue272 配当/分割回帰の私有原文（2026-10-02）
+
+## Issue272 配当/分割回帰の私有原文（2026-10-02）
 
 `services/vwap-analysis/corporate-events.test.ts` はrepoの `tmp/issue272-fixtures/chart-1333.T.json` と `capture-1333.T.json` がある場合だけ実物回帰を実行する。`tmp/` はGitignored。原本文・配当額・価格は公開Gitへ追加しない。Nix開発環境で関連Vitestを実行する。
 
 原器は既存Notion batch `yahoo-raw-36903916350.1-vwap-daily-0-part-0` のgzipで、SHA256 `388f21836e8b11c22fb91e2f1abe79a81fe872076356ce1dd77c39fa4955f7d3`。内部原文226,625 bytes、SHA256 `5d6109a75c8a7b8a14330914e198f8ad91303cf9b2e0eaf924da4319dc64305b`、実本文時計 `2026-10-01T18:03:15.537Z`、配当14/分割1。Notion-hosted全bytesと内部原文SHA照合済み。clockは保存captureから読み、現在clockやmtimeを代用しない。ネットワーク取得はテスト内で行わない。
 
 Yahoo原文の再配布は許可しない運用。出典・照合境界・取得通信数は [検証記録](../../../../docs/test-logs/yahoo-corporate-events-20261002.md) に残す。イベントなし1mo/訂正は純粋な境界試験で、実1mo再取得/実source訂正の証明とは区別する。
+
+価格basisはYahoo quote受信値＋既存OHLC2桁丸め、`adjclose`不使用・ローカル再調整なし。provider側の調整内容は未証明なので調整前価格とは扱わず、consumerの分割係数再適用は二重調整になり得る。
