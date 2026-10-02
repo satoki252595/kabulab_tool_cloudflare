@@ -16,7 +16,13 @@
 
 85通は保存本文の全節・正規codepoint文字数とメタデータが一致した。残る2通は保存本文のサステナビリティ節にU+200Bの欠落1文字・3文字があり、実CSV添付を回収し全ZIP CRC・全34節を照合した。両方とも判定入力の4節は保存本文と実CSVが完全一致した。評価では実CSV全節を `SOURCE_RECOVERED` と明示して使い、本文の補作・長さの許容・評価対象の削減は0。**保存Notionの全87通一致ではない。欠落2通は未修復HOLD、旧manifest・本文SHA・取得時計の来歴はUNKNOWNを維持する。**
 
-本文map SHA256: `0e6ed4a866773c0a64de66f8e0a78e71e3cf1ec559147c56ea6548043b6c422b`。本文・法人の財務値・Notion私有URL・認証情報・モデル入力は公開Gitへ保存しない。新たなAPI原レスポンスとモデル測定の私有証跡は物理保管の別受入対象。
+本文map SHA256: `0e6ed4a866773c0a64de66f8e0a78e71e3cf1ec559147c56ea6548043b6c422b`。本文・法人の財務値・Notion私有URL・認証情報・モデル入力は公開Gitへ保存しない。新たなAPI原レスポンスとモデル測定の一次保管は下記の実受入で閉鎖した。
+
+## 一次測定原本の物理保管
+
+2026-10-02 17:23:35.225〜17:23:46.896 UTC（JST 10/3）に、既存 `recordPrimaryData(force:false)` と `verifyArchivedAttachments` で1添付を保管・全文再取得照合した。実APIのrequest/response原bytes・取得時計・本文資格・モデルinput/output/実測を、全1218members・151320170原bytesのlossless tar.gzへ格納。添付は29708183bytes、SHA256 `b924b7c97556af9b216ed13cb90fb68a2ffeced907ee0963d21411e8bdb541ad`。全memberの元bytes/SHA roundtripとhosted添付全bytes/SHAが一致した。組立時計は原取得時計へ代用せず、旧UNKNOWNと欠落2通HOLDを維持する。
+
+初回は検索/queryの2読取後、空GET bodyの私有guard検証で通信前に停止（upload/page POST0・結果不明mutation0）。最小修正を別phaseで受け入れ、実11Notion＋hosted1で成功した。計13Notion＋hosted1＝14 native。OFFLINE検証のmock通信は含めず、本文取得240 nativeとの合計は254。推論・tar・市場原本の再取得/再作成、D1/R2・本番タグwriteは0。rootは実12HTTPの原response全bytes/SHAを独立照合した。実receipt SHA256: `0ecb869a224b0d8c44dc9341604ec6995aca32b504a77ae628df11b4330a85c4`。
 
 ## 実SemIf推論
 
@@ -46,4 +52,43 @@ SemIfの値は提示したyes/noオプション間の条件付きsoftmaxで、�
 
 ## 検証状況
 
-専用較正の回帰を含む関連7suites150/150 PASS、typecheck/変更TS17files ESLint（0error/0warning）/Python compile PASS。Wrangler4.101.0 `deploy --dry-run` PASS、1734.42KiB/gzip365.72KiB/15assets、upload0。独立コードレビューはlazy起動・保存結果保持・provider pin・timeout/close・Mac共通writer境界でblocking0。rootと独立レビューで全858ラベルの集計・専用較正・本文85＋2の区分を照合した。PR/CIとmerge後の真正Mac運用受入は後続。
+専用較正の回帰を含む関連7suites150/150 PASS、typecheck/変更TS17files ESLint（0error/0warning）/Python compile PASS。Wrangler4.101.0 `deploy --dry-run` PASS、1734.42KiB/gzip365.72KiB/15assets、upload0。独立コードレビューはlazy起動・保存結果保持・provider pin・timeout/close・Mac共通writer境界でblocking0。rootと独立レビューで全858ラベルの集計・専用較正・本文85＋2の区分を照合した。
+
+[PR278](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/278) の最終head `78452cc5e1a6b470ab32b1b9570dcb94f67b301c` は3CI SUCCESS、17:07:30 UTCにsquash merge（main `f115f0658b04afe5d45649cae0c682d1aa7b4d78`）。CFの自動反映はversion `17f427ee` が100% activeとroot認証済み確認。
+
+## Mac定時処理の実受入（継続中）
+
+専用のclean main worktree・同じ実体の0600 `.env`・Nix環境で厳密preflightを確認した。
+補修後のPREでは全補足3712行、現役3689銘柄を読み、判定済み3618行
+（現役3595＋対象外23）のタグ・AI根拠・マスタrelationを含む所管24列と
+実更新時刻を保存した。正準planの作業は機械補完4件、新規初回SemIf0件、
+保留90件。保留を完了へ置き換えていない。
+
+初回は所管外の競合relationの部分返却を検出しSchema1/query1でSTOP。
+原応答を再GETせず完全replayし、続きのquery37＋D1SELECT4で所管列を全件確認した。
+所管外の39本文列・競合relation論理全文の全件確認は行っていない。
+最後の件数検査は「現役3595」を全DB件数へ当てたためHOLDとなり、
+保存済みrawだけで3595＋23と分類して独立受入した。追加のreadやwriteは0。
+
+PREの一次保管は2026-10-02T18:13:18.593Zに全文readbackまで完了。
+154members・100623598原bytesのlossless gzip12563117bytes、SHA256
+`5967e27b2485ec17b989f80f2132140e504ed5b77eec16522eff623833f22042`。
+実Notion8＋添付GET1、secret混入0、タグ/D1/R2write0。
+原受信clockを組立clockで代用せず、最初の全rawも保持した。
+
+GH queued/in_progressの固定metadata GET2で双方0を確認し、kernel排他が空いている
+ことと既存登録なしを確認後、daily20:00 JST・RunAtLoadの実LaunchAgentを作成した。
+実plist1072bytes、SHA256
+`672970d4d994548f5e2941e1c77514cd601fff864c0fded9c9b461bc9815f7c0`。
+18:20:40.512Zにbootstrap1回で真正PIDを確認したが、18:24:47.671Zの読取では
+not running/last exit1。Nix devShellは開始できたものの、最初のHEAD検証で
+`git rev-parse HEAD`が`tool 'git' not found`となり、wrapper receipt・CLI・
+kernel writer開始前に終了した。タグ本番write・モデル起動は0。
+
+project NixへGitを追加した[PR279](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/279)は3CIすべて成功。
+GUI相当の最小環境でNix Git 2.51.2の実体とHEAD取得成功を確認した。mainへの取り込みと
+真正起動の再受入を待つ。通常処理4件の成功・POST全3618件保持・
+次回skip・定時運用の受入はまだ未完。追加kickstart・手動run・未知結果の再入は0。
+通常jobの外部source GETの実回数は未instrumentであり、通信停止のcode policyと
+実観測を分ける。ローカル計算費用・トークン数は未計測で、互換カウンター0を
+実測した総費用と扱わない。
