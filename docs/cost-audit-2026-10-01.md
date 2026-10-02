@@ -16,9 +16,11 @@ D1 read/write/保存・R2 A/B/Standard保存・Builds、および最後30日の 
   Yahoo原文保管修正は[PR #256](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/256)、
   main `380e931e2305d9871e430cfccea3aa033c468e89`。追加負荷を末尾へ分けた。
 - 定時起動変更: [PR #195](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/195)。
-  head `79c41dd8ca29b24adb8ee7c670388d1bec22ec94` へ最新mainを通常mergeし、
-  3CI成功・独立レビューを確認。株式・マクロ計4 Cronの負荷表は変更なし。
-  Workerの専用token設定待ちで未merge。マージ後に実起動を確認する。
+  専用repo限定PATをWorker Secretへ設定し、3CI成功後にmain `4440e78`へmerge済み。
+  自動deploy・traffic100%・4 Cron登録を確認した。株式・マクロ計4 Cronの負荷表は
+  変更なし。株式の真正定時dispatch/receiptとproducer開始を確認したが、
+  対象日の日経平均終値欠落で個別株取得前に停止した。マクロ・期限確認は未観測。
+  [本番設定受入](./test-logs/stock-scheduler-production-20261002.md)
 - 料金・制限の取得日: **2026-10-01**。金額は USD、税・為替換算を含めない。
 - ユーザーの Paid 契約申告に加え、認証済みダッシュボード読取で Workers Paid を確認。
   請求画面・個人情報・他サービスの利用額は私有証跡とし公開 Git に保存しない。
@@ -167,13 +169,13 @@ I/O待機はCPUに含まれない。高額化の防止は CPU 上限だけでな
   有料runnerへ変更する必要はない。
   [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)、
   [runner料金](https://docs.github.com/en/billing/reference/actions-runner-pricing)
-- **TypeSafe Jev**: 2026-10-02の追加方針で、公式上場情報の対象開始日以後・同じ
-  世代・active・初回未完を証明できた新規銘柄の初回事業タグだけを有料対象にする。
-  APIキーはそのscope成立後だけlazy参照する。既存の判定済みタグ・AI根拠は銘柄コードで
+- **TypeSafe Jev**: 2026-10-03の利用者方針で、今後追加される適格な新規銘柄の
+  初回事業タグもローカルSemIfへ変更する。TypeSafeの外部判定は停止を維持し、
+  有料APIへの自動切替やcredit補充は不要。既存の判定済みタグ・AI根拠は銘柄コードで
   再利用し、有報/語彙変更でも付け直さない。未設定/判定失敗だけkeywords/excludesで
-  不足を補完し、外部AI呼出し0。語彙審査・精度測定・競合AIは停止、旧課金切れ25件の有料
-  再開やそのためのcredit補充は不要。本文資格不足はHOLDで既存結果を保持する。
-  新規初回の実tokens・請求は未測定で、全体$0や月額固定とはしない。SemIf自動代替なし。
+  不足を補完する。語彙審査・定期精度測定・競合判定は再開せず、本文資格不足はHOLDで
+  既存結果を保持する。旧課金切れ25件は機械照合で補完・独立保存確認まで完了した。
+  [実績](./test-logs/biztag-existing25-actual-20261002.md)
   以下の一括費用は**旧仕様の記録**であり、現在の新規銘柄だけの月額見積りではない。
   公式 Jev 1.13 は入力 $0.042/Mtokens、出力無料。
   [client定数](../src/shared/jev/client.ts) と
@@ -183,13 +185,21 @@ I/O待機はCPUに含まれない。高額化の防止は CPU 上限だけでな
   ([既存記録 §12.8](./005-yuho-quant-business-tags.md))。`budget-min=20` は時間制限で、
   停止前はdry-runでも判定APIを呼び、既定最大3 retryは最大4送信になった。曖昧な失敗で提供側に
   課金された量が成功応答のtoken集計に出ない可能性があり、過去分の請求は未測定。
-  現行の新規初回はclientの同run再送を0にし、専用markerのある失敗だけ次回の上限付きretry対象にする。
+  新規初回をJevへ限定していた時点ではclientの同run再送を0にし、専用markerのある
+  失敗だけ次回の上限付きretry対象にしていた。
   認証済consoleの2026-10-02読取ではtop-upの最低購入単位は$5。
   今回の調査で購入・有料probeは行っていない。現行の`run --dry-run`は新規初回を
   明示HOLDにして有料判定を呼ばず、機械判定へも置き換えない。
   [TypeSafe公式モデル料金](https://docs.typesafe.ai/models)
-- **SemIf**: ローカル MLX 推論で外部API従量料はないが、端末・電力・稼働時間まで
-  無料とはしない。通常のタグ判定を無断で他モデルに変更しない。
+- **SemIf**: 利用者指定により、既存のMac/MLX環境とモデルcacheを新規初回事業タグへ
+  再利用する。ローカル推論に外部API従量料はなく、新規プラン・runner購入は不要。
+  端末・電力・稼働時間まで無料とはしない。移行時の実データ較正を定期ジョブへ追加せず、
+  適格な新規初回が0件ならモデルも起動しない。
+  移行較正は実87社・858ラベル、研究2resident・94calls・183,180msで完了し、
+  外部判定API・本番タグwriteは0。これは研究phaseの経過時間の和で、月間実測・
+  電力代・本番1runの所要時間ではない。ローカル費用は未計測として保持する。
+  [SemIf公式リポジトリ](https://github.com/TheoLeeCJ/SemIf-OpenJev)、
+  [Mac定時運用](./005-biztag-local-runtime.md)
 - **Cursor/外部生成AI**: 単語帳の年次レビューや優待要約はrepo外のautomationを
   利用する。Cloudflare Paidに含まれず、契約・実使用量が未取得なので金額未確定。
   [年次レビューの既存手順](./005-yuho-quant-business-tags.md)、
@@ -222,7 +232,7 @@ I/O待機はCPUに含まれない。高額化の防止は CPU 上限だけでな
 | R2 IA容量・retrieval | 使用状態未確認、Standard表で代用しない |
 | Workers Builds | 認証済画面で包含枠内確認。account集計でproject別帰属不可 |
 | GitHub runnerとvisibility | public/標準ubuntuを確認済み。保存課金は未確認 |
-| Jev入力tokens・credit・請求、Notion現在契約 | Jevは今後の適格な新規初回事業タグだけ。既存保存タグは再利用し、不足補完/旧25件の有料呼出し0。新規実tokens・請求と過去月間請求は未取得。Notion既存Plus契約＋Business trialを認証済みで確認 |
+| Jev入力tokens・credit・請求、Notion現在契約 | 新規初回もSemIfへ変更する方針でJev通信停止・credit補充不要。既存保存タグは再利用し、不足補完/旧25件の有料呼出し0。過去月間請求は未取得。Notion既存Plus契約＋Business trialを認証済みで確認 |
 | 既存Budget Alerts | 認証済画面で設定済み確認。hard capではなく通知のみ、変更なし |
 | 現在のCPU limits | ダッシュボード値は未取得。設定変更なし |
 
@@ -292,3 +302,26 @@ clientが429/期限付き503の絶対再試行期限を失わないよう修正�
 DB保存量・税・他経路は別である。PRE/POSTの新規Notion添付は計450,825 bytes、
 Notion呼出はPRE8/apply8、原本再取得・原ZIP/PRE再アップロード・R2通信は0。
 既存Plusで追加契約は不要。D1所要時間をWorker CPU料金へ換算せず、単発実績を月額へ外挿しない。
+
+## 10/3 JSTの有報補修実量
+
+本文欠落4社のCSV/XBRLは全8ZIPを物理保管し、正準取込・Notion全文146節・参照4件・
+派生確認・PRE/POSTの読戻しまで完了した。受信保存済みD1 metaの合計は
+HTTP20回、SQL60文、rows_read3,185 / rows_written478、max_attempts1。
+これらはAPI計数で文書・本文の件数とは別で、月額料金への外挿はしない。
+実XBRL publisher GET4、TypeSafe0、R2 write0、再送0。
+[原本と受入範囲](./test-logs/biztag-no-text94-20261002.md)。
+
+Mac/Nixの真正通常処理は3,689件中3,685件をskipし、復旧4件だけ機械補完した。
+実Notion109、rateLimited/transientRetries0、モデル/外部AI呼出し0。
+独立POSTの実Notion48・D1 SELECT4と物理保管を含むMac受入の累計は
+Notion212/hosted2。GH/CF CLI内部HTTPと金融原本GET実回数は未計測のため別扱いとする。
+NixへGitを追加したが、新規プラン購入・有料AI credit補充は0。
+ローカル機器の電力・減価償却を無料とは扱わない。
+[定時処理の実績](./test-logs/biztag-semif-new-stock-20261003.md)。
+
+[本文2通の限定修復](./test-logs/yuho-text2-roundtrip-hold-20261003.md)では、公式一覧2 GET、
+資格/PRE/POSTの物理保管・旧本文確認を含めてNotion44/hosted3、D1 SELECT6を観測した。
+実保存試行のphaseはNotion20/D1 SELECT3/hosted1で、全文不一致を検出し既知の旧状態へ復旧。
+新規原ZIP取得・R2 write・paid AI・同POST再送0、成功0を保留として記録する。
+これは単発実績で、将来の保存量や月額へ外挿せず、追加契約・credit補充は行っていない。
