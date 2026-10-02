@@ -32,6 +32,8 @@
             # Node は package.json 運用に合わせ 22 系。
             # python312 + uv: 収集パイプライン (pipeline/) 用。
             packages = [
+              # LaunchAgentでもAppleのgit shimに依存せず、runtimeのHEAD検証を行う。
+              pkgs.git
               pkgs.nodejs_22
               pkgs.pnpm_9
               pkgs.python312
