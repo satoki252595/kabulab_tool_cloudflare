@@ -22,8 +22,11 @@ import {
   isCalendarDate,
   type DiscardedOutOfRange,
   type SavedDaily,
+  bodyPin,
 } from "./ingest-guard.js";
 import type { DailyResult } from "../../../src/shared/yahoo/client.js";
+import { assertCorporateEventsShape, assertEventSourceProof, corporateEventPins, currentEventRevisions,
+  mergeCorporateEvents, priceSnapshotJson, type CorporateEvents } from "../../../src/shared/yahoo/corporate-events.js";
 
 export type RepairRange = { from: string; to: string };
 
@@ -112,13 +115,35 @@ export function buildRepairPost(args: {
     hold(`in-range 旧 ${missingOld.length} 件が fresh に欠落 (${head}${missingOld.length > 10 ? "…" : ""})`);
   }
 
+  // イベントは価格のwhole置換と異なり、当該応答に無い過去日を消さない。
+  const oldSplits = (o as { splits?: unknown }).splits;
+  if (!Array.isArray(oldSplits)) hold("old splits 非配列");
+  const splitByDate = new Map<string, { date: string; ratio: number }>();
+  for (const split of [...oldSplits as unknown[], ...fresh.splits] as Array<{ date: string; ratio: number }>) {
+    if (!isCalendarDate(split?.date) || !Number.isFinite(split.ratio) || split.ratio <= 0) hold("splits 不正");
+    splitByDate.set(split.date, { date: split.date, ratio: split.ratio });
+  }
+  let corporateEvents: CorporateEvents | undefined;
+  if (fresh.corporateEvents !== undefined) {
+    const previous = (o as { corporateEvents?: unknown }).corporateEvents;
+    if (previous !== undefined) assertCorporateEventsShape(previous, fresh.proof.symbol);
+    corporateEvents = mergeCorporateEvents(previous as CorporateEvents | undefined, fresh.corporateEvents,
+      oldSplits as Array<{ date: string; ratio: number }>);
+    assertEventSourceProof(corporateEvents, fresh.proof);
+    if (bodyPin(priceSnapshotJson(fresh.bars)) !== corporateEvents.source.priceSnapshotSha256 ||
+      corporateEventPins(corporateEvents).some((pin) => bodyPin(pin.json) !== pin.sha256)) hold("corporate events SHA 不一致");
+    const observed = currentEventRevisions(fresh.corporateEvents.splits).map(({ value }) => ({ date: value.date, ratio: value.ratio }));
+    if (JSON.stringify(observed) !== JSON.stringify(fresh.splits)) hold("corporate splits/proof 不一致");
+  } else if (o.corporateEvents !== undefined) hold("取得済みイベントを未取得へ戻せません");
+
   // 候補 post を既存保存形状で最終証明する。fresh の proof をそのまま継承する。
   const candidate = JSON.stringify({
     code,
     updated: updatedAt,
     bars: fresh.bars,
-    splits: fresh.splits,
+    splits: [...splitByDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
     proof: fresh.proof,
+    ...(corporateEvents === undefined ? {} : { corporateEvents }),
   });
   const post = assertSavedDailyShape(candidate, `daily/${code}.json`, code);
   return {
