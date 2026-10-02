@@ -8,10 +8,11 @@
 # 必要 secrets: EDINET_API_KEY / CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID /
 #   D1_DATABASE_ID / NOTION_TOKEN / NOTION_ARCHIVE_PAGE_ID / NOTION_YUHO_TEXT_DB_ID
 #   (ir のみ) YANOSHIN_* 不要 (TDnet 鍵不要)
-#   (biztag-rollback のみ) NOTION_STOCK_INFO_PAGE_ID / NOTION_DB_STOCK_MASTER /
+#   (biztag/biztag-rollback) NOTION_STOCK_INFO_PAGE_ID / NOTION_DB_STOCK_MASTER /
 #     NOTION_STOCK_SUPPLEMENT_DB_ID / NOTION_BIZTAG_LEDGER_DB_ID
 #     (docs/005-yuho-quant-business-tags.md §7・§8)
-#   biztag/biztag-golden/biztag-competitors は取得前に明示STOP。
+#   (biztag のみ) TYPESAFE_API_KEY / vars.BIZTAG_NEW_LISTING_FROM (新規初回だけ有料)
+#   biztag-golden/biztag-competitors は取得前に明示STOP。
 name: backfill
 
 on:
@@ -97,9 +98,9 @@ jobs:
       NOTION_BIZTAG_LEDGER_DB_ID: ${{ secrets.NOTION_BIZTAG_LEDGER_DB_ID }}
     steps:
       - name: TypeSafe停止対象を取得前に拒否
-        if: contains(fromJson('["biztag","biztag-golden","biztag-competitors"]'), inputs.job)
+        if: contains(fromJson('["biztag-golden","biztag-competitors"]'), inputs.job)
         run: |
-          echo "TypeSafeを使うbiztag/精度測定/競合推論は停止中です。" >&2
+          echo "TypeSafeを使う精度測定/競合推論は停止中です。" >&2
           exit 1
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -128,13 +129,15 @@ jobs:
           [ -n "${{ inputs.ticker }}" ] && args="$args --ticker=${{ inputs.ticker }}"
           [ "${{ inputs.rejudge_pdf }}" = "true" ] && args="$args --rejudge-pdf-sentiment"
           pnpm ir:backfill -- $args
-      - name: biztag (事業タグ全件バックフィル)
+      - name: biztag (新規初回AI / 保存タグ再利用・不足補完)
         id: biztag
         if: inputs.job == 'biztag'
         # 手入力の値 (limit) はシェルに直接埋め込まず環境変数で渡す
         # (biztag-rollback と同じ注入対策。値も数字のみに限定する)。
         env:
           BIZTAG_LIMIT: ${{ inputs.limit }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          BIZTAG_NEW_LISTING_FROM: ${{ vars.BIZTAG_NEW_LISTING_FROM }}
         run: |
           if [ -n "$BIZTAG_LIMIT" ] && ! [[ "$BIZTAG_LIMIT" =~ ^[0-9]+$ ]]; then
             echo "limit は数字のみ指定できます: $BIZTAG_LIMIT" >&2

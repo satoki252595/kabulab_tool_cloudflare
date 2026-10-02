@@ -26,7 +26,7 @@ import { buildJudgeInput, type DocMeta } from "./excerpt.js";
 import { judgeCandidates, type BtThresholds } from "./judge.js";
 import type { WorkItem } from "./plan.js";
 import { isPrefilterSection, prefilter, type PrefilterSectionKey } from "./prefilter.js";
-import { summarizeJudgments } from "./row.js";
+import { summarizeJudgments, summarizeKeywordMatches, type TagOutcome } from "./row.js";
 import type { LatestDoc } from "./source.js";
 import { deriveThemes } from "./themes.js";
 import type { Vocabulary } from "./vocabulary/schema.js";
@@ -58,6 +58,8 @@ export interface ProcessOutcome {
   jevCalls: number;
   jevInputTokens: number;
   jevOutputTokens: number;
+  /** 判定不能/読込失敗をサマリの失敗通知へ渡す。 */
+  error?: string;
 }
 
 const ZERO_JEV_STATS = { jevCalls: 0, jevInputTokens: 0, jevOutputTokens: 0 };
@@ -183,44 +185,13 @@ export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<P
       if (item.row === null) {
         throw new Error(`processStock: no_text だが既存行が無い (${item.stockCode})`);
       }
-      await writeRowWithEvidence(
-        item,
-        deps,
-        {
-          companyName: item.companyName,
-          stockCode: item.stockCode,
-          masterPageId: deps.resolveMasterPageId(item.stockCode),
-          sector33: item.sector33,
-          docId: item.doc?.docId ?? null,
-          docType: item.doc ? docTypeLabelOf(item.doc.docTypeCode) : null,
-          periodEnd: item.doc?.periodEnd ?? null,
-          submittedAt: item.doc?.submittedAt ?? null,
-          textStatus: "本文なし",
-          texts: allTextColumnsCleared(),
-          upstream: [],
-          downstream: [],
-          distribution: [],
-          themes: [],
-          uncertain: null,
-          evidenceText: null,
-          tagStatus: "本文なし",
-          tagDoc: null,
-          vocabVersion: null,
-          judgedAt: null,
-          candidateCount: null,
-          judgeInput: null,
-          error: null,
-          attempts: 0,
-          nextRetryAt: null,
-        },
-        null
-      );
+      // 新しい本文が読めないだけでは、以前の書類・タグ・根拠を消さない。
       return {
         stockCode: item.stockCode,
         kind: item.kind,
-        outcome: outcomeKindOf(item),
-        tagStatus: "本文なし",
-        candidateCount: null,
+        outcome: "skipped",
+        tagStatus: item.row.tagStatus,
+        candidateCount: item.row.candidateCount,
         ...ZERO_JEV_STATS,
       };
     }
@@ -270,6 +241,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
   try {
     sections = await deps.readStockTextRow(doc.notionDocPageId);
   } catch (e) {
+    if (item.row !== null) throw new Error(`有報本文の読込を保留 (${item.stockCode} ${doc.docId})`, { cause: e });
     return recordFailure(item, deps, {
       textStatus: "読込失敗",
       tagStatus: "読込失敗",
@@ -303,6 +275,9 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     }
   }
 
+  if (!Object.values(sectionMap).some((text) => text.trim().length > 0)) {
+    throw new Error(`事業タグ対象の本文がありません (${item.stockCode} ${doc.docId})。判定・既存結果の更新を保留します。`);
+  }
   const result = prefilter(deps.vocab, sectionMap);
   const candidateCount = result.candidates.length;
   const baseInput: SupplementRowInput = {
@@ -337,7 +312,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         vocabVersion: deps.vocab.version,
         judgedAt: deps.today,
         candidateCount: 0,
-        judgeInput: "候補語なし (絞り込みで該当語なし)",
+        judgeInput: `${item.initialTypeSafe ? "TypeSafe新規銘柄の初回判定：" : "機械照合："}候補語なし (キーワード照合で該当語なし・外部判定なし)`,
         error: null,
         attempts: 0,
         nextRetryAt: null,
@@ -361,16 +336,23 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     periodEnd: doc.periodEnd,
     docTypeLabel: docTypeLabelOf(doc.docTypeCode),
   };
-  const judgeInput = buildJudgeInput(meta, sectionMap, result);
+  let judgeInputSummary = item.initialTypeSafe
+    ? "TypeSafe新規銘柄の初回判定"
+    : "機械照合：単語帳のキーワード一致・同文の除外語を確認 (AI確率なし)";
 
   try {
-    const { judgments, calls, inputTokens, outputTokens } = await judgeCandidates(
-      deps.jevClient,
-      judgeInput,
-      result.candidates.map((c) => c.term),
-      deps.thresholds
-    );
-    const tagOutcome = summarizeJudgments(deps.vocab, result.candidates, judgments);
+    let tagOutcome: TagOutcome;
+    let stats = ZERO_JEV_STATS;
+    if (item.initialTypeSafe) {
+      const judgeInput = buildJudgeInput(meta, sectionMap, result);
+      judgeInputSummary = `TypeSafe新規銘柄の初回判定：${judgeInput.inputSummary}`;
+      const judged = await judgeCandidates(deps.jevClient, judgeInput,
+        result.candidates.map((c) => c.term), deps.thresholds);
+      tagOutcome = summarizeJudgments(deps.vocab, result.candidates, judged.judgments);
+      stats = { jevCalls: judged.calls, jevInputTokens: judged.inputTokens, jevOutputTokens: judged.outputTokens };
+    } else {
+      tagOutcome = summarizeKeywordMatches(deps.vocab, result.candidates);
+    }
     const evidenceItems: EvidenceBlockInput["items"] = tagOutcome.evidence;
     const evidenceBlock =
       evidenceItems.length > 0
@@ -384,9 +366,8 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     // 根拠文が Notion の rich_text 上限で切り詰められたときは、判定入力欄に
     // その事実を明記する(切り詰めを黙って残さない・ルール2)。ページ本文の
     // 根拠トグル(evidenceBlock)には全語が残るので情報は失われない。
-    const judgeInputSummary = tagOutcome.evidenceTextTruncated
-      ? `${judgeInput.inputSummary}／事業タグの根拠文は文字数上限のため一部省略(全語はページ本文の根拠トグル参照)`
-      : judgeInput.inputSummary;
+    if (tagOutcome.evidenceTextTruncated) judgeInputSummary +=
+      "／事業タグの根拠文は文字数上限のため一部省略(全語はページ本文の根拠トグル参照)";
     await writeRowWithEvidence(
       item,
       deps,
@@ -416,9 +397,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       outcome: outcomeKindOf(item),
       tagStatus: "判定済",
       candidateCount,
-      jevCalls: calls,
-      jevInputTokens: inputTokens,
-      jevOutputTokens: outputTokens,
+      ...stats,
     };
   } catch (e) {
     if (!(e instanceof JevUnavailableError)) throw e;
@@ -431,7 +410,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       submittedAt: doc.submittedAt,
       texts: textsByColumn,
       candidateCount,
-      judgeInput: judgeInput.inputSummary,
+      judgeInput: judgeInputSummary,
       errorMessage: `jev 判定に失敗: ${e.message}`,
     });
   }
@@ -477,7 +456,8 @@ async function recordFailure(item: WorkItem, deps: ProcessDeps, args: FailureArg
     vocabVersion: null,
     judgedAt: null,
     candidateCount: args.candidateCount,
-    judgeInput: args.judgeInput,
+    judgeInput: item.initialTypeSafe && args.judgeInput === null
+      ? "TypeSafe新規銘柄の初回判定：本文読込失敗 (外部判定なし)" : args.judgeInput,
     // rich_text の実測上限に対する安全側の切り詰め (Notion API 側の 2000字/要素 は
     // splitRichText が分割するが、事業タグの「判定エラー」列は原因の要約で十分)。
     error: args.errorMessage.slice(0, 1900),
@@ -493,6 +473,7 @@ async function recordFailure(item: WorkItem, deps: ProcessDeps, args: FailureArg
     outcome: outcomeKindOf(item),
     tagStatus: args.tagStatus,
     candidateCount: args.candidateCount,
+    error: args.errorMessage,
     ...ZERO_JEV_STATS,
   };
 }

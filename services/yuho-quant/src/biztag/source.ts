@@ -15,11 +15,15 @@
  * `yuho_text_sections` (索引テーブル。80万行規模) には一切触れない
  * (rows_read を抑える)。
  */
-import { and, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { stocks } from "../../../../src/shared/db/core-schema.js";
+import { listingOfficialEvents, universeOverlayState } from "../../../../src/shared/db/universe-events.js";
+import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import { yuhoDocuments } from "../db/schema.js";
+import { assertBiztagDate } from "../env.js";
+import { todayJst } from "./date-jst.js";
 
 export interface LatestDoc {
   stockCode: string;
@@ -44,6 +48,104 @@ export interface LatestDoc {
  * (`src/shared/db/active-equity.ts` の `CoreDb` と同じ形)。
  */
 export type BiztagSourceDb = BaseSQLiteDatabase<"async", unknown, Record<string, unknown>>;
+
+export interface NewStockEligibility {
+  eligibleCodes: ReadonlySet<string>;
+  heldCodes: ReadonlySet<string>;
+}
+
+function assertTimestamp(value: string, label: string): void {
+  if (typeof value !== "string") throw new Error(`loadNewStockEligibility: ${label} が不正です`);
+  assertBiztagDate(value.slice(0, 10), label);
+  if (
+    !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?Z$/.test(value) ||
+    !Number.isFinite(Date.parse(value))
+  ) {
+    throw new Error(`loadNewStockEligibility: ${label} が不正です`);
+  }
+}
+
+/**
+ * 新規上場資格だけを既存台帳の 2 SELECT で読む。core の現役普通株との交差は
+ * loadLatestDocs / planWork が行う。行の欠落・過去未判定は新規の根拠にしない。
+ * 不完全な世代は停止、開始日以後の取り消し/未来/保留イベントは per-code HOLD。
+ */
+export async function loadNewStockEligibility(
+  db: BiztagSourceDb,
+  from: string,
+  today: string
+): Promise<NewStockEligibility> {
+  assertBiztagDate(from, "BIZTAG_NEW_LISTING_FROM");
+  assertBiztagDate(today, "loadNewStockEligibility today");
+  const states = await db.select({
+    baseAsOf: universeOverlayState.baseAsOf,
+    eventsFetchedAt: universeOverlayState.eventsFetchedAt,
+    eventsSha: universeOverlayState.eventsSha,
+    eligibilityAsOf: universeOverlayState.eligibilityAsOf,
+    appliedAt: universeOverlayState.appliedAt,
+    heldListingCodes: universeOverlayState.heldListingCodes,
+  }).from(universeOverlayState).where(eq(universeOverlayState.id, 1));
+  const state = states[0];
+  if (
+    states.length !== 1 || state === undefined || state.baseAsOf === null ||
+    state.eventsFetchedAt === null || state.eventsSha === null ||
+    state.eligibilityAsOf === null || state.appliedAt === null ||
+    !/^[a-f0-9]{64}$/.test(state.eventsSha)
+  ) {
+    throw new Error("loadNewStockEligibility: 母集団の世代証拠が不完全です。判定停止");
+  }
+  assertBiztagDate(state.baseAsOf, "baseAsOf");
+  assertBiztagDate(state.eligibilityAsOf, "eligibilityAsOf");
+  assertTimestamp(state.eventsFetchedAt, "eventsFetchedAt");
+  assertTimestamp(state.appliedAt, "appliedAt");
+  const appliedAtMs = Date.parse(state.appliedAt);
+  if (state.baseAsOf > state.eligibilityAsOf || state.eligibilityAsOf > today ||
+      appliedAtMs < Date.parse(state.eventsFetchedAt) ||
+      todayJst(() => appliedAtMs) > today) {
+    throw new Error("loadNewStockEligibility: 母集団の世代日付が矛盾しています。判定停止");
+  }
+  const heldCodes = new Set<string>();
+  if (state.heldListingCodes !== null && state.heldListingCodes !== "") {
+    const held: unknown = JSON.parse(state.heldListingCodes);
+    if (!Array.isArray(held) || !held.every((code): code is string =>
+      typeof code === "string" && parseStockCode(code) === code) || new Set(held).size !== held.length) {
+      throw new Error("loadNewStockEligibility: IPO HOLD の形が不明です。判定停止");
+    }
+    for (const code of held) heldCodes.add(code);
+  }
+  const events = await db.select({
+    code: listingOfficialEvents.code,
+    effectiveDate: listingOfficialEvents.effectiveDate,
+    fetchedAt: listingOfficialEvents.fetchedAt,
+    rawSha: listingOfficialEvents.rawSha,
+    archiveKey: listingOfficialEvents.archiveKey,
+    lastSeenFetchedAt: listingOfficialEvents.lastSeenFetchedAt,
+  }).from(listingOfficialEvents).where(eq(listingOfficialEvents.kind, "listing"));
+  const eligibleCodes = new Set<string>();
+  const seen = new Set<string>();
+  for (const event of events) {
+    assertBiztagDate(event.effectiveDate, "listing effectiveDate");
+    if (event.effectiveDate < from) continue;
+    if (typeof event.code !== "string" || parseStockCode(event.code) !== event.code) {
+      throw new Error("loadNewStockEligibility: 上場銘柄コードが不正です。判定停止");
+    }
+    assertTimestamp(event.fetchedAt, "listing fetchedAt");
+    if (event.lastSeenFetchedAt !== null) assertTimestamp(event.lastSeenFetchedAt, "listing lastSeenFetchedAt");
+    if (
+      seen.has(event.code) || event.effectiveDate > state.eligibilityAsOf ||
+      event.lastSeenFetchedAt !== state.eventsFetchedAt ||
+      event.fetchedAt !== state.eventsFetchedAt ||
+      !/^[a-f0-9]{64}$/.test(event.rawSha) ||
+      event.archiveKey !== `universe-official-events-${state.baseAsOf}-${state.eligibilityAsOf}-sha-${state.eventsSha.slice(0, 12)}`
+    ) {
+      heldCodes.add(event.code);
+    }
+    seen.add(event.code);
+    if (!heldCodes.has(event.code)) eligibleCodes.add(event.code);
+  }
+  for (const code of heldCodes) eligibleCodes.delete(code);
+  return { eligibleCodes, heldCodes };
+}
 
 const DOC_TYPE_CODES = ["120", "130"] as const;
 
