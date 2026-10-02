@@ -3,9 +3,9 @@
 
 設計: docs/005-yuho-quant-business-tags.md「競合他社」節 §12.9 (judge=semif)。
 
-jev (TypeSafe System One) のクレジット枯渇時に、競合他社判定の残り銘柄を
-ローカル PC (Apple Silicon / MLX) 上の SemIf (https://github.com/TheoLeeCJ/SemIf)
-Qwen/Qwen3.5-4B で判定するための常駐プロセス。
+今後の新規銘柄の初回事業タグ判定と、明示指定した競合他社判定を
+ローカル PC (Apple Silicon / MLX) 上の SemIf (https://github.com/TheoLeeCJ/SemIf-OpenJev)
+Qwen/Qwen3.5-4B で処理する常駐プロセス。外部有料APIへ切り替えない。
 
 起動時に SemIf の MLX バックエンドでモデルを **1 回だけ** ロードし、以降は
 標準入力から JSONL リクエストを 1 行ずつ読み、標準出力へ JSONL レスポンスを
@@ -46,6 +46,9 @@ from __future__ import annotations
 
 import argparse
 import json
+from importlib.metadata import distribution, version
+from pathlib import Path
+import subprocess
 import sys
 import traceback
 
@@ -132,6 +135,13 @@ def main() -> None:
 
     eprint(f"[semif_server] モデルをロード中: {args.model}@{args.revision} (mlx, bits={args.mlx_bits})")
     from semif_phase1 import mlx_backend
+    # 実測したコード・カーネル版だけを使用。更新は別の較正を要する。
+    source_root = Path(mlx_backend.__file__).resolve().parents[2]
+    source_revision = subprocess.check_output(["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True).strip()
+    dirty = subprocess.check_output(["git", "-C", str(source_root), "status", "--porcelain", "--untracked-files=no"], text=True).strip()
+    mlx_lm_revision = json.loads(distribution("mlx-lm").read_text("direct_url.json"))["vcs_info"]["commit_id"]
+    if source_revision != "23cf1f39fc9534fe81437200959b6dfc7106e45a" or dirty or version("mlx") != "0.32.2" or mlx_lm_revision != "a63e24c389382619eb6d9af656e3b46024be217a":
+        raise RuntimeError("SemIf/MLX runtime does not match the calibrated source pins")
 
     load_kwargs = {}
     if args.mlx_cache_limit_mib is not None:
@@ -148,6 +158,9 @@ def main() -> None:
                 "revision": metadata.get("revision"),
                 "backend": "mlx",
                 "max_tokens": args.max_tokens,
+                "source_revision": source_revision,
+                "mlx_version": version("mlx"),
+                "mlx_lm_revision": mlx_lm_revision,
             }
         ),
         flush=True,

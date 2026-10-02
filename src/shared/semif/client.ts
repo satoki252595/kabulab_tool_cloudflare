@@ -34,15 +34,12 @@
  *     `no truncation allowed` として例外を投げる仕様。ここではそれを
  *     握りつぶさず、バッチ全体を失敗としてエラーメッセージ (どの qid が
  *     何トークンで上限を超えたか) をそのまま呼び出し側へ伝える。
- *   - **トークン数は計測できない (課金構造が無いため)**: SemIf はローカル
- *     推論で API 従量課金が存在しない。`inputTokens`/`outputTokens` は
- *     0 を返すが、これは「実費用ゼロ」という事実そのもの (ローカル計算
- *     コストのみで金銭コストは文字通り0円) であり、muse (サブスク契約で
- *     計測不能なだけで実費用はゼロではない) とは意味が異なる。呼び出し側
- *     (pipeline.ts) がこの違いを `costMetering: "not_metered_local"` として
- *     明示する。
+ *   - **ローカル計算は未計測**: APIの従量課金は発生しない。互換形式の
+ *     `inputTokens`/`outputTokens` の0は測定値ではない。呼出側は
+ *     `costMetering: "not_metered_local"` とトークン/ハードウェア費用nullを明示する。
  */
 import { spawn as nodeSpawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { z } from "../zod-mini.js";
 import type { JevAskResult, JevClient, JevNoulQuestion } from "../jev/client.js";
 import { semifEnv } from "./env.js";
@@ -52,6 +49,10 @@ export const SEMIF_MODEL = "Qwen3.5-4B@851bf6e/semif-mlx";
 /** `semif_server.py` の既定パス解決に使うモデル/リビジョン (SemIf docs/MLX.md 記載のピン留め値)。 */
 export const SEMIF_HF_MODEL = "Qwen/Qwen3.5-4B";
 export const SEMIF_HF_REVISION = "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a";
+/** 較正済みスコア計算のソース・MLXランタイム。モデル名だけの一致では起動しない。 */
+export const SEMIF_SOURCE_REVISION = "23cf1f39fc9534fe81437200959b6dfc7106e45a";
+export const SEMIF_MLX_VERSION = "0.32.2";
+export const SEMIF_MLX_LM_REVISION = "a63e24c389382619eb6d9af656e3b46024be217a";
 
 /**
  * SemIf が使えない (プロセス起動失敗・恒久エラー・タイムアウト・想定外の応答)
@@ -68,6 +69,11 @@ export class SemifUnavailableError extends Error {
 type SpawnFn = typeof nodeSpawn;
 type ChildProcess = ReturnType<SpawnFn>;
 
+export interface SemifClient extends JevClient {
+  /** 常駐モデルを解放する。未起動ならプロセスを作らない。 */
+  close(): void;
+}
+
 export interface CreateSemifClientOptions {
   /** SemIf 隔離venv内の python 実行ファイルの絶対パス (省略時は `semifEnv.SEMIF_PYTHON()` を都度参照)。 */
   pythonBin?: string;
@@ -79,7 +85,7 @@ export interface CreateSemifClientOptions {
   hfRevision?: string;
   /** 1行あたりの入力トークン上限 (既定16000。server.py 側の既定と揃える)。 */
   maxTokens?: number;
-  /** モデルロード完了 (`ready` 行) を待つ上限 (ms)。既定 5分 (初回HFダウンロード込みでも十分な余裕)。 */
+  /** 既存キャッシュからモデルをロードして `ready` 行を待つ上限 (ms)。既定5分。 */
   readyTimeoutMs?: number;
   /** 1回の askNoul (1バッチ) の応答を待つ上限 (ms)。既定 5分。 */
   requestTimeoutMs?: number;
@@ -99,6 +105,9 @@ const ReadyLineSchema = z.strictObject({
   revision: z.string(),
   backend: z.string(),
   max_tokens: z.number(),
+  source_revision: z.literal(SEMIF_SOURCE_REVISION),
+  mlx_version: z.literal(SEMIF_MLX_VERSION),
+  mlx_lm_revision: z.literal(SEMIF_MLX_LM_REVISION),
 });
 
 const AnswersSchema = z.record(z.string(), z.number().check(z.minimum(0), z.maximum(1)));
@@ -129,8 +138,9 @@ class SemifServerProcess {
   }) {}
 
   private ensureStarted(): Promise<void> {
+    if (this.deadError) return Promise.reject(this.deadError);
     if (this.readyPromise) return this.readyPromise;
-    this.readyPromise = this.start();
+    this.readyPromise = this.start().catch((e: Error) => { this.fail(e); throw e; });
     return this.readyPromise;
   }
 
@@ -147,7 +157,11 @@ class SemifServerProcess {
       ];
       let child: ChildProcess;
       try {
-        child = this.o.spawnFn(this.o.pythonBin, args, { stdio: ["pipe", "pipe", "pipe"] });
+        child = this.o.spawnFn(this.o.pythonBin, args, {
+          stdio: ["pipe", "pipe", "pipe"],
+          // 受入済みキャッシュのみを使う。欠落時のダウンロードで別観測を混ぜない。
+          env: { ...process.env, HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1" },
+        });
       } catch (err) {
         rejectReady(
           new SemifUnavailableError(
@@ -204,6 +218,13 @@ class SemifServerProcess {
               );
               return;
             }
+            if (parsedReady.data.model !== this.o.hfModel || parsedReady.data.revision !== this.o.hfRevision ||
+                parsedReady.data.backend !== "mlx" || parsedReady.data.max_tokens !== this.o.maxTokens) {
+              const err = new SemifUnavailableError("semif_server.py のモデル/版/バックエンド/入力上限が較正対象と一致しません");
+              this.fail(err);
+              rejectReady(err);
+              return;
+            }
             resolveReady();
             continue;
           }
@@ -244,6 +265,7 @@ class SemifServerProcess {
 
   /** プロセスが死んだ・使えなくなったことを記録し、保留中の全リクエストを reject する。 */
   private fail(err: Error): void {
+    const child = this.child;
     this.deadError = err;
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
@@ -252,6 +274,11 @@ class SemifServerProcess {
     this.pending.clear();
     this.readyPromise = null;
     this.child = null;
+    child?.kill("SIGTERM");
+  }
+
+  close(): void {
+    this.fail(new SemifUnavailableError("SemIf 常駐プロセスを終了しました"));
   }
 
   private handleResponseLine(line: string): void {
@@ -323,10 +350,8 @@ class SemifServerProcess {
 
     return new Promise<Record<string, number>>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(requestId);
-        reject(
-          new SemifUnavailableError(`semif_server.py の応答が ${this.o.requestTimeoutMs}ms 以内に届きませんでした`)
-        );
+        // 遅れて届く結果を別要求に混ぜず、このrunのモデルを停止する。
+        this.fail(new SemifUnavailableError(`semif_server.py の応答が ${this.o.requestTimeoutMs}ms 以内に届きませんでした`));
       }, this.o.requestTimeoutMs);
 
       this.pending.set(requestId, {
@@ -361,7 +386,7 @@ class SemifServerProcess {
   }
 }
 
-export function createSemifClient(o: CreateSemifClientOptions = {}): JevClient {
+export function createSemifClient(o: CreateSemifClientOptions = {}): SemifClient {
   const resolvedPythonBin = o.pythonBin ?? semifEnv.SEMIF_PYTHON();
   const resolvedScriptPath = o.serverScriptPath ?? defaultServerScriptPath();
   const proc = new SemifServerProcess({
@@ -378,6 +403,7 @@ export function createSemifClient(o: CreateSemifClientOptions = {}): JevClient {
   const now = o.now ?? (() => Date.now());
 
   return {
+    close: () => proc.close(),
     async askNoul(state: string, questions: Record<string, JevNoulQuestion>): Promise<JevAskResult> {
       const qids = Object.keys(questions);
       if (qids.length === 0) {
@@ -407,9 +433,8 @@ export function createSemifClient(o: CreateSemifClientOptions = {}): JevClient {
       return {
         model: SEMIF_MODEL,
         answers,
-        // SemIf はローカル推論で API 従量課金が存在しない。0 は「実費用ゼロ」
-        // という事実そのもの (ヘッダコメント参照。muse の「計測不能」とは
-        // 意味が異なる — 呼び出し側の costMetering で明示する)。
+        // 既存 JevClient 形式の互換値。トークン数・ローカル計算費用は未計測。
+        // 呼出側で not_metered_local と明記し、実測ゼロと解釈しない。
         inputTokens: 0,
         outputTokens: 0,
         latencyMs: now() - start,
@@ -420,8 +445,8 @@ export function createSemifClient(o: CreateSemifClientOptions = {}): JevClient {
 }
 
 function defaultServerScriptPath(): string {
-  return new URL(
+  return fileURLToPath(new URL(
     "../../../services/yuho-quant/scripts/semif_server.py",
     import.meta.url
-  ).pathname;
+  ));
 }

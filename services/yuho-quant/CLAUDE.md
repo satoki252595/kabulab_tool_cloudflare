@@ -69,9 +69,10 @@ kabulabAgents 向け契約は
 [docs/005-yuho-quant-business-tags-contract.md](../../docs/005-yuho-quant-business-tags-contract.md)。
 mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反は commit 前に直す):
 
-- **2026-10-02の運用方針: TypeSafeは今後の新規銘柄の初回事業タグのみ**。
+- **2026-10-03の運用方針: 今後の新規銘柄の初回事業タグはローカルSemIf**。
   必須設定 `BIZTAG_NEW_LISTING_FROM` と公式上場情報・同じ世代・active・初回未完で
-  scopeを証明した後だけAPIキーをlazyに参照する。既存の判定済みタグと根拠はNotion
+  scopeを証明し実本文候補が揃った後だけMLX常駐モデルをlazyに起動する。
+  TypeSafeは新規用途を含め停止し、代替への自動切替はしない。既存の判定済みタグと根拠はNotion
   銘柄マスタ（補足）の銘柄コードで再利用し、有報/語彙が変わっても付け直さない。
   未設定/判定失敗だけkeywords/excludesの機械的一致で補完し、新しい機械根拠にAI確率を
   付けない。本文資格不足はHOLDで結果保持。
@@ -85,9 +86,10 @@ mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反
   `判定不能` を「該当なし」や既定のタグで埋めない。タグ列が空でも
   `事業タグの状態 = 判定済` でなければ「業種の該当が無い」と確定させない
   (契約書 §4)。
-- **しきい値・モデルは `calibration.json` からのみ読む**
-  (`services/yuho-quant/src/biztag/thresholds.ts` の `loadCalibration()`)。
-  未較正のマジックナンバーをコードに埋め込まない。`calibration.json` はゴールデン
+- **しきい値・モデルは用途別の較正JSONからのみ読む**。
+  新規事業タグは `calibration.semif.json` (`loadCalibration("semif")`) を使い、
+  旧Jev用 `calibration.json` と競合他社用の較正値は流用しない。
+  未較正のマジックナンバーをコードに埋め込まない。較正JSONはゴールデン
   セット(`src/biztag/golden/`)で精度を測ってから運営が用意する(このリポジトリの
   ソースにダミー値を先置きしない)。
 - **単語帳(語彙)の変更経路は2つだけ**: (1) Cursor Automation の提案 →

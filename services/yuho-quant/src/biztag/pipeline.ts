@@ -33,7 +33,8 @@ import {
   type NotionStats,
   type SupplementSchemaSpec,
 } from "../../../../src/shared/notion-archive/index.js";
-import { createJevClient, estimateCostUsd, jevEnv, type JevClient } from "../../../../src/shared/jev/index.js";
+import type { JevClient } from "../../../../src/shared/jev/index.js";
+import { createSemifClient, SEMIF_MODEL, type SemifClient } from "../../../../src/shared/semif/index.js";
 import { createMemoizedJevClient } from "../../../../src/shared/jev/memo.js";
 import * as yuhoSchema from "../db/schema.js";
 import { yuhoEnv } from "../env.js";
@@ -60,7 +61,7 @@ export interface RunBiztagOptions {
   /**
    * true なら Notion への書込を一切行わない (安全な下見)。
    * 「銘柄マスタ（補足）」の行・根拠、見直し材料・期限通知の台帳書込を止める。
-   * 新規初回の有料判定は HOLD にし、既存の機械照合だけ実データで下見する。
+   * 新規初回のローカル判定は HOLD にし、既存の機械照合だけ実データで下見する。
    * DB 確保・単語帳解決は行う。
    */
   dryRun?: boolean;
@@ -80,6 +81,8 @@ export interface RunSummary {
   countsByTagStatus: Record<string, number>;
   coverage: { judged: number; total: number; ratio: number };
   jev: { calls: number; inputTokens: number; outputTokens: number; estimatedCostUsd: number };
+  /** jev は旧サマリとの互換キー。実際の判定/費用境界はこの欄に明記する。 */
+  judge?: { provider: "semif"; model: string; calls: number; costMetering: "not_metered_local"; externalApiCalls: 0; tokens: null; hardwareCostUsd: null };
   notion: NotionStats;
   vocabVersion: string;
   vocabSeeded: boolean;
@@ -233,6 +236,7 @@ function makeDryRunLedgerWrites(): {
 }
 
 export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
+  if (opts.model !== SEMIF_MODEL) throw new Error("新規銘柄の判定モデルがSemIf較正対象と一致しません");
   const listingFrom = yuhoEnv.BIZTAG_NEW_LISTING_FROM();
   const start = Date.now();
   const startedAt = new Date(start).toISOString();
@@ -241,15 +245,13 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const today = todayJst(() => start);
   const db = createD1HttpDb(yuhoSchema) as unknown as BiztagSourceDb;
   const newStockEligibility = await loadNewStockEligibility(db, listingFrom, today);
-  let initialClient: JevClient | null = null;
-  // 新規の実資格と本文候補が揃うまでキーを読まない。既存機械経路からは呼ばない。
+  let initialClient: SemifClient | null = null;
+  // 新規の実資格と本文候補が揃うまでPythonを起動しない。既存機械経路からは呼ばない。
   const jevClient: JevClient = { askNoul: async (state, questions) => {
-    if (initialClient === null) initialClient = createJevClient({
-      usage: "new-stock-biztag", apiKey: jevEnv.TYPESAFE_API_KEY(), model: opts.model,
-      maxRetries: 0, // 有料応答の結果不明時に同runで再送しない。
-    });
+    if (initialClient === null) initialClient = createSemifClient();
     return initialClient.askNoul(state, questions);
   } };
+  try {
   // dry-run は通知・見直し材料の台帳書込を no-op にする。
   const ledgerWrites = opts.dryRun
     ? makeDryRunLedgerWrites()
@@ -349,10 +351,10 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       }
       workBudgetLeft--;
     }
-    if (opts.dryRun && item.initialTypeSafe) {
-      // 新規の有料判定は下見で実行しない。機械判定へも切り替えず保留を明示。
+    if (opts.dryRun && item.initialSemif) {
+      // 新規初回は下見で推論しない。機械判定へも切り替えず保留を明示。
       qualificationHeld.push(item.stockCode);
-      countsByKind["paid_dry_run_hold"] = (countsByKind["paid_dry_run_hold"] ?? 0) + 1;
+      countsByKind["initial_judge_dry_run_hold"] = (countsByKind["initial_judge_dry_run_hold"] ?? 0) + 1;
       processed++;
       continue;
     }
@@ -401,7 +403,8 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     countsByKind,
     countsByTagStatus,
     coverage: { judged, total: items.length, ratio: items.length === 0 ? 0 : judged / items.length },
-    jev: { calls: jevCalls, inputTokens: jevInputTokens, outputTokens: jevOutputTokens, estimatedCostUsd: estimateCostUsd(jevInputTokens) },
+    jev: { calls: jevCalls, inputTokens: jevInputTokens, outputTokens: jevOutputTokens, estimatedCostUsd: 0 },
+    judge: { provider: "semif", model: opts.model, calls: jevCalls, costMetering: "not_metered_local", externalApiCalls: 0, tokens: null, hardwareCostUsd: null },
     notion: notionStats(),
     vocabVersion: vocab.version,
     vocabSeeded: seeded,
@@ -414,6 +417,10 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     deadline,
     failures,
   };
+  } finally {
+    // MLXの常駐モデルは1runで共有し、途中のNotion失敗でも解放する。
+    (initialClient as SemifClient | null)?.close();
+  }
 }
 
 export interface RunNotifyResult {

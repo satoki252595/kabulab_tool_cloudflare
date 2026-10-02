@@ -69,7 +69,7 @@ export interface JevClient {
 }
 
 export interface CreateJevClientOptions {
-  /** 公式上場・初回未完を確認した事業タグ処理だけが明示する。省略は停止。 */
+  /** 過去の用途指定との型互換。現在は指定有無にかかわらず停止する。 */
   usage?: "new-stock-biztag";
   apiKey: string;
   /** 固定するモデル名 (`jev-latest` のような別名は呼び出し側で解決してから渡すこと)。 */

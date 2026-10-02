@@ -13,8 +13,8 @@
  * - 質問0件は呼び出し側の実装ミスとして Error (プロセスも起動しない)
  */
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
-import { createSemifClient, SemifUnavailableError, SEMIF_MODEL } from "./client.js";
+import { describe, expect, it, vi } from "vitest";
+import { createSemifClient, SemifUnavailableError, SEMIF_MODEL, SEMIF_SOURCE_REVISION, SEMIF_MLX_VERSION, SEMIF_MLX_LM_REVISION } from "./client.js";
 import type { JevNoulQuestion } from "../jev/client.js";
 
 interface FakeRequest {
@@ -62,6 +62,9 @@ function makeFakeServerSpawn(opts: {
         revision: "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
         backend: "mlx",
         max_tokens: 16000,
+        source_revision: SEMIF_SOURCE_REVISION,
+        mlx_version: SEMIF_MLX_VERSION,
+        mlx_lm_revision: SEMIF_MLX_LM_REVISION,
       };
       child.stdout.emit("data", Buffer.from(`${JSON.stringify(ready)}\n`));
     });
@@ -83,6 +86,28 @@ const Q: Record<string, JevNoulQuestion> = {
 };
 
 describe("createSemifClient askNoul — 正常系", () => {
+  it("closeは起動前にはspawnせず、起動後には解放し再起動しない", async () => {
+    const { spawnFn, spawnCalls, children } = makeFakeServerSpawn({ respond: (req) => ({ id: req.id, answers: Object.fromEntries(req.questions.map(q => [q.qid, 0.5])) }) });
+    const unopened = createSemifClient({ pythonBin: "/fake/python", spawnFn });
+    unopened.close();
+    await expect(unopened.askNoul("state", Q)).rejects.toThrow("終了");
+    expect(spawnCalls).toHaveLength(0);
+    const client = createSemifClient({ pythonBin: "/fake/python", spawnFn });
+    await client.askNoul("state", Q);
+    const kill = vi.spyOn(children[0] as unknown as { kill(signal?: string): boolean }, "kill");
+    client.close();
+    expect(kill).toHaveBeenCalledWith("SIGTERM");
+    await expect(client.askNoul("state", Q)).rejects.toThrow("終了");
+    expect(spawnCalls).toHaveLength(1);
+  });
+
+  it.each(["model", "revision", "backend", "max_tokens", "source_revision", "mlx_version", "mlx_lm_revision"])("readyの%sが較正対象と異なれば推論前STOP", async (key) => {
+    const ready = { ready: true, model: "Qwen/Qwen3.5-4B", revision: "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a", backend: "mlx", max_tokens: 16000, source_revision: SEMIF_SOURCE_REVISION, mlx_version: SEMIF_MLX_VERSION, mlx_lm_revision: SEMIF_MLX_LM_REVISION };
+    const { spawnFn, writtenRequests } = makeFakeServerSpawn({ readyLine: { ...ready, [key]: key === "max_tokens" ? 1 : "mismatch" }, respond: () => "hang" });
+    const client = createSemifClient({ pythonBin: "/fake/python", spawnFn });
+    await expect(client.askNoul("state", Q)).rejects.toThrow(SemifUnavailableError);
+    expect(writtenRequests).toHaveLength(0);
+  });
   it("state/questions を SemIf の行プロトコルへ変換し、p_yes をそのまま返す", async () => {
     const { spawnFn, spawnCalls, writtenRequests } = makeFakeServerSpawn({
       respond: (req) => ({
