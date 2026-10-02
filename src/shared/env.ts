@@ -127,6 +127,20 @@ export const sharedEnv = {
    * (未設定フォールバックなし)。値は出さず名のみ。
    */
   VWAP_INTRA_RANGE: () => required("INTRA_RANGE"),
+  /**
+   * CF scheduler が workflow_dispatch で渡す予定 UTC 日 (YYYY-MM-DD)。
+   * 共有 producer 入口が形式と対象日一致だけを検証する (検証のみ。
+   * 時刻のバックデート・原本日付の上書きには使わない)。未設定は
+   * `undefined` (定時stocks/context targetのとき必須。それ以外は
+   * 設定時のみ検証し、未設定は素通りする)。
+   */
+  SCHEDULED_DATE: () => optional("SCHEDULED_DATE"),
+  /**
+   * stock-sync workflow の実行 target (dispatch input を env 経由で受ける)。
+   * `scheduled-stocks` / `scheduled-context` のとき SCHEDULED_DATE を必須にする。
+   * schedule 起動・手動 dispatch (stocks 等) は未設定でもよい。
+   */
+  STOCK_SYNC_TARGET: () => optional("STOCK_SYNC_TARGET"),
 };
 
 /**

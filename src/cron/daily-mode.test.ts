@@ -512,6 +512,22 @@ describe("株式とマクロの日次分離", () => {
     ).rejects.toThrow("notion down");
     expect(calls.filter((sql) => sql.includes("swing_market_context"))).toEqual([]);
   });
+
+  it("daily のマクロ原本readback待機中に21UTCへ到達したらマクロD1を書かない", async () => {
+    vi.setSystemTime(new Date("2026-09-30T17:13:00Z"));
+    mockMacro(ALIGNED);
+    vi.mocked(verifyArchivedAttachments).mockImplementation(async () => {
+      vi.setSystemTime(new Date("2026-09-30T21:00:00Z"));
+    });
+    const { db, calls } = recordingDb();
+    await expect(runDailySync(db, {
+      collectOverlay: fakeCollect,
+      sendOverlayBatch: makeRecordingSender({ batches: [] }),
+    })).rejects.toThrow("21:00 UTC期限");
+    expect(macroArchiveInputs()).toHaveLength(1);
+    expect(verifyArchivedAttachments).toHaveBeenCalled();
+    expect(calls.filter((sql) => sql.includes('insert into "swing_market_context"'))).toEqual([]);
+  });
 });
 
 describe("株式 guard の default パス共有 (stocksOnly 依存の除去)", () => {
@@ -583,5 +599,142 @@ describe("株式 guard の default パス共有 (stocksOnly 依存の除去)", (
     expect(batches).toHaveLength(1);
     expect(batches[0]?.length).toBe(2);
     expect(batches[0]?.[1]?.sql).toContain("universe_overlay_state");
+  });
+});
+
+describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () => {
+  const ORIGINAL_DATE = process.env.SCHEDULED_DATE;
+  const ORIGINAL_TARGET = process.env.STOCK_SYNC_TARGET;
+  afterEach(() => {
+    if (ORIGINAL_DATE === undefined) delete process.env.SCHEDULED_DATE;
+    else process.env.SCHEDULED_DATE = ORIGINAL_DATE;
+    if (ORIGINAL_TARGET === undefined) delete process.env.STOCK_SYNC_TARGET;
+    else process.env.STOCK_SYNC_TARGET = ORIGINAL_TARGET;
+  });
+
+  it("一致すれば通常フローへ進む (検証のみ・日付を上書きしない)", async () => {
+    // system time 2026-09-28T17:13Z → targetDate 2026-09-28。
+    process.env.SCHEDULED_DATE = "2026-09-28";
+    process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart("2026-09-25")));
+    const { db } = recordingDb();
+    // 検証を通過し、既存の session guard (日足不一致) まで到達する。
+    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
+      "日足を確認できません"
+    );
+    expect(fetchChart).toHaveBeenCalled();
+  });
+
+  it("scheduled-stocks の日付欠落・空・空白は fetch 前に落とす", async () => {
+    process.env.STOCK_SYNC_TARGET = "scheduled-stocks";
+    for (const value of [undefined, "", "   "] as const) {
+      if (value === undefined) delete process.env.SCHEDULED_DATE;
+      else process.env.SCHEDULED_DATE = value;
+      vi.mocked(fetchChart).mockClear();
+      const { db, calls } = recordingDb();
+      await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
+        "SCHEDULED_DATE が必須"
+      );
+      expect(fetchChart).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it("手動 stocks の日付未指定は現契約どおり素通りする", async () => {
+    delete process.env.SCHEDULED_DATE;
+    process.env.STOCK_SYNC_TARGET = "stocks";
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart("2026-09-25")));
+    const { db } = recordingDb();
+    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
+      "日足を確認できません"
+    );
+    expect(fetchChart).toHaveBeenCalled();
+  });
+
+  it("不一致・形式不正・実在しない日付は fetch 前に落とす", async () => {
+    for (const [value, msg] of [
+      ["2026-09-27", "一致しません"],
+      ["2026/09/28", "形式が不正"],
+      ["2026-02-30", "実在日ではありません"],
+    ] as const) {
+      process.env.SCHEDULED_DATE = value;
+      vi.mocked(fetchChart).mockClear();
+      const { db, calls } = recordingDb();
+      await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(msg);
+      expect(fetchChart).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    }
+  });
+});
+
+describe("定時マクロの予定日・開始窓・保存期限", () => {
+  beforeEach(() => {
+    vi.stubEnv("STOCK_SYNC_TARGET", "scheduled-context");
+    vi.stubEnv("SCHEDULED_DATE", "2026-09-29");
+    vi.setSystemTime(new Date("2026-09-29T21:00:30Z"));
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("予定日と原本確定日が一致すればcontextだけを保存する", async () => {
+    mockMacro(ALIGNED);
+    const { db, calls, params } = recordingDb();
+    expect(await runMarketContextSync(db)).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(params[0][0]).toBe("2026-09-29");
+    expect(fetchStockRawData).not.toHaveBeenCalled();
+    expect(recordPriceSyncLog).not.toHaveBeenCalled();
+  });
+
+  it("定時マクロの初回429でも予定日を原本へ保持し、保管後はD1を書かない", async () => {
+    vi.mocked(fetchChart).mockImplementation(async (symbol, _range, options) => {
+      await options?.onRaw?.({ symbol, status: 429, bytes: fxBytes(ALIGNED[symbol]),
+        url: "https://mock.test/chart", receivedAt: new Date().toISOString(), headers: {} });
+      throw new YahooRateLimitError(429, null);
+    });
+    const { db, calls } = recordingDb();
+    await expect(runMarketContextSync(db)).rejects.toBeInstanceOf(YahooRateLimitError);
+    expect(fetchChart).toHaveBeenCalledTimes(1);
+    expect(fetchNikkeiVi).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    const archived = macroArchiveInputs();
+    expect(archived).toHaveLength(1);
+    const manifest = JSON.parse(new TextDecoder().decode(archived[0].files!.find((f) => f.filename === "macro-manifest.json")!.bytes));
+    expect(manifest.expectedDate).toBe("2026-09-29");
+    expect(manifest.attempts[0].status).toBe(429);
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it("予定日欠落・形式不正・遅配は取得前に停止する", async () => {
+    const { db, calls } = recordingDb();
+    vi.stubEnv("SCHEDULED_DATE", "");
+    await expect(runMarketContextSync(db)).rejects.toThrow("必須");
+    vi.stubEnv("SCHEDULED_DATE", "2026/09/29");
+    await expect(runMarketContextSync(db)).rejects.toThrow("形式");
+    vi.stubEnv("SCHEDULED_DATE", "2026-09-29");
+    vi.setSystemTime(new Date("2026-09-29T21:31:00Z"));
+    await expect(runMarketContextSync(db)).rejects.toThrow("開始");
+    expect(fetchChart).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it("前日原本を予定日の成功にせず原本を保管してHOLDする", async () => {
+    vi.stubEnv("SCHEDULED_DATE", "2026-09-30");
+    vi.setSystemTime(new Date("2026-09-30T21:00:30Z"));
+    mockMacro(ALIGNED);
+    const { db, calls } = recordingDb();
+    expect(await runMarketContextSync(db)).toBe(false);
+    expect(calls).toEqual([]);
+    expect(manifestOf(macroArchiveInputs()[0]).gate.reason).toMatch(/GSPC 確定日 2026-09-29 ≠ 予定日 2026-09-30/);
+  });
+
+  it("原本保管後に22:00を超えればD1保存をしない", async () => {
+    mockMacro(ALIGNED);
+    vi.mocked(verifyArchivedAttachments).mockImplementation(async () => {
+      vi.setSystemTime(new Date("2026-09-29T22:00:00.001Z"));
+    });
+    const { db, calls } = recordingDb();
+    expect(await runMarketContextSync(db)).toBe(false);
+    expect(macroArchiveInputs()).toHaveLength(1);
+    expect(calls).toEqual([]);
   });
 });

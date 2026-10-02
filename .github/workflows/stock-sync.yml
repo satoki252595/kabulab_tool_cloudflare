@@ -27,8 +27,10 @@ name: stock-sync
 
 on:
   schedule:
-    - cron: "13 17 * * 1-5" # 翌02:13 JST: JP株式。06:00基準より前にD1保存を終える。
-    - cron: "0 21 * * 1-5" # 翌06:00 JST: 米国市場終了後のマクロのみ。
+    # 株式の旧 cron (13 17 * * 1-5) は廃止。起動は CF Cron Trigger
+    # (wrangler.toml [triggers] 13 17 MON-FRI) が workflow_dispatch
+    # target=scheduled-stocks で行う (docs/stock-scheduler.md)。
+    # マクロ起動も CF 21:00 UTC に移行し、22:05 UTC に別receiptで期限確認する。
     # JPX data_j.xlsx は毎月第3営業日以降に前月末版へ差し替わる。
     # 月初の旧版取得を避け、毎月10日 10:30 JST に母集団同期する。
     - cron: "30 1 10 * *"
@@ -41,9 +43,15 @@ on:
         options:
           - daily
           - stocks
+          - scheduled-stocks
+          - scheduled-context
           - context
           - monthly
           - all
+      scheduled_date:
+        description: "CF scheduler が渡す予定UTC日 (YYYY-MM-DD)。定時stocks/context用"
+        type: string
+        default: ""
 
 concurrency:
   group: stock-sync
@@ -90,8 +98,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # moneyflow 連鎖の取得元 selector (producer 起動前に確定)。
-      # dispatch=stocks → sector-turnover のみ。daily/all・既存 scheduled 株式
-      # run → 明示の空文字 (moneyflow 既存の全取得元を維持)。
+      # dispatch=stocks (手動) → sector-turnover のみ。dispatch=scheduled-stocks
+      # (CF scheduler) は旧 scheduled 株式 run と同じ明示の空文字 (moneyflow
+      # 既存の全取得元を維持)。daily/all・残 schedule → 明示の空文字。
       # context/monthly → 連鎖なし (trade_date 空で起動しない。値は空)。
       # 未知 event/target/schedule は producer 起動前に非0停止する。
       # 未知を空文字へ落とす fallback は禁止 (下の *)。
@@ -107,12 +116,12 @@ jobs:
             workflow_dispatch)
               case "$DISPATCH_TARGET" in
                 stocks) ONLY="sector-turnover" ;;
-                daily|all|context|monthly) ONLY="" ;;
+                daily|all|scheduled-stocks|scheduled-context|context|monthly) ONLY="" ;;
                 *) echo "::error::unknown dispatch target: $DISPATCH_TARGET"; exit 1 ;;
               esac ;;
             schedule)
               case "$EVENT_SCHEDULE" in
-                "13 17 * * 1-5"|"0 21 * * 1-5"|"30 1 10 * *") ONLY="" ;;
+                "30 1 10 * *") ONLY="" ;;
                 *) echo "::error::unknown schedule: $EVENT_SCHEDULE"; exit 1 ;;
               esac ;;
             *) echo "::error::unknown event: $EVENT_NAME"; exit 1 ;;
@@ -120,12 +129,15 @@ jobs:
           echo "only=${ONLY}" >> "$GITHUB_OUTPUT"
 
       # 株式は一日一度。米指数の取引中価格を朝のマクロへ上書きしない。
+      # 旧 schedule 起動は廃止。CF scheduler が target=scheduled-stocks で叩く。
       - name: stock daily sync
         id: daily
         if: >-
-          (github.event_name == 'schedule' && github.event.schedule == '13 17 * * 1-5') ||
-          (github.event_name == 'workflow_dispatch' &&
-            (github.event.inputs.target == 'daily' || github.event.inputs.target == 'stocks' || github.event.inputs.target == 'all'))
+          github.event_name == 'workflow_dispatch' &&
+            (github.event.inputs.target == 'daily' || github.event.inputs.target == 'stocks' || github.event.inputs.target == 'scheduled-stocks' || github.event.inputs.target == 'all')
+        env:
+          SCHEDULED_DATE: ${{ github.event.inputs.scheduled_date }}
+          STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}
         run: pnpm sync:daily:core --stocks-only
 
       # sector33 のみ同期。株式 daily 成功＋trade_date 非空の直後、moneyflow 前。
@@ -150,9 +162,11 @@ jobs:
 
       - name: market context sync
         if: >-
-          (github.event_name == 'schedule' && github.event.schedule == '0 21 * * 1-5') ||
-          (github.event_name == 'workflow_dispatch' &&
-            (github.event.inputs.target == 'daily' || github.event.inputs.target == 'context' || github.event.inputs.target == 'all'))
+          github.event_name == 'workflow_dispatch' &&
+            (github.event.inputs.target == 'daily' || github.event.inputs.target == 'context' || github.event.inputs.target == 'scheduled-context' || github.event.inputs.target == 'all')
+        env:
+          SCHEDULED_DATE: ${{ github.event.inputs.scheduled_date }}
+          STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}
         run: pnpm sync:daily:core --context-only
 
       # 月次: 母集団(JPX)同期 → otakara rebuild (月次 cron または dispatch=monthly/all)

@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-02
 
+- CF株式・マクロ定時起動のPRを最新mainへ再統合し、初回429/503停止・原文保管と予定日検証を両立。repo限定Actions tokenを本番Workerへ暗号化設定し、独立したsecret名の読取で存在確認済み。4 Cronのコード切替・実dispatch・期限readcheckの受入は別途確認する。#195
 - 本番作業: 既存銘柄の課金エラー25件を保存済み本文と既存語彙の機械照合で補完。全25件の保存結果・マスタ連携と次回判定skipを独立照合し、PRE/POSTを物理保管・全文SHA確認。TypeSafe・原本追加取得0、設定変更なし。記録 `docs/test-logs/biztag-existing25-actual-20261002.md`。
 - 日足に配当原値・通貨出典・権利落ち日と取得根拠/価格basisを保存・配信し、過去の分割とイベント訂正履歴を差分更新で保持。未取得と応答内イベントなしを区別し、支払日を推定しない。本番バックフィルは未実施（Issue272）。
 - 本番作業: 10/2公式EDINETコードリストを共有Notionへ物理保管・全文照合し、622Aは当日原本でも未資格と確認。保存済み海外15原本の13資格/84明細・HOLD2を再現し、旧3675文書のDB観測baselineを復旧した。旧来歴・結果不明POST・JPX新様式公表後の受入は保留を維持。記録 `docs/test-logs/data-recovery-20261002.md`。
@@ -39,6 +40,8 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - 本番作業: 646Aの業種を最新公式原本と通常資格判定から化学へ補完。優待4銘柄の旧HOLD14行を公式の次回制度へ限定修復し、選択・寄付・抽選の未評価は保持。原本/PRE/POSTを物理保管し、全列一致と実POST同writer再入0を確認。622Aの未資格と8508の単発モデルは残件。#255
 
 ## 2026-10-01
+
+- 株式・マクロの定時起動をCF Cronへ移行。株式の時間・原本guardと母集団overlayを維持し、マクロは専用receipt・予定日の原本一致・22:00 UTC保存期限で確認する。Workers Paid記載を更新。資格設定と定時実行確認は別途受入 (#195)。
 
 - 事業タグの課金切れ通知に、再試行上限へ到達したまま判定不能の銘柄も残す。外部API料金・原本不足・JPX新様式の公表待ちについて、確認済み根拠と再開条件を記録した。課金補充なし。コード修正は再試行条件を変更しない。#255
 
@@ -106,6 +109,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 - PIP-384 実 entry 再入の直接証跡を公開 proof として追記 (実 upsert 384 全 unchanged・書込 0、応答 strict 検証 395/395・query 全件 + search 全 sequence terminal false。旧比較 proof とは別証跡)。データ変更なし (#201, Refs #132 #146)。
 - C107 有報テキスト 10 文書・364 section を保存済み原文と read-only 精査し 10/10 MATCH (全文 SHA 一致・D1 索引重複 0、HTTP mutation 0)。証跡 `docs/test-logs/c107-yuho-text-audit-2026-09-29.md`。範囲外の主張なし。データ変更なし。
 - moneyflow 指標定義の未確認断定を除去: 財務省系列の「速報値で確報改定を反映しない」を版 (最終更新日) +直近 CSV 窓 upsert の実契約どおりの説明へ修正 (速報/確報の区別は原本未確認のため断定しない)。JSDA hako.pdf の docs 状態を「2026-09-27 取得・確認済み」へ是正。データ変更なし。
+- 株式 sync の起動を GH schedule から CF Cron Trigger へ移行 (17:13 dispatch + 21:05 期限 readcheck。旧株式 cron 廃止)。GH schedule 遅配 250/318 分×2 連続の根本対策。資格設定待ちのため未 merge・データ変更なし (#195)。
 - 需給 API 4経路 (REST latest/series・MCP latest/series) の `meta.attribution` をフィルタ適用後の返却データから算出 (JSF→日証金・JPX→JPX の厳密写像、空は `[]`、`personal-only` 維持)。MCP enum に `jpx_margin` を追加し説明で JSF貸借とJPX信用を区別。不正フィルタは 400/isError、未知返却データ・point 形状不正は 500/isError。データ変更なし (#193)。
 - Issue #163 の 9/29 欠損 47 replay 修復 PREP を追加（保管原文 replay・eligible 集合で保存対象を確定、行不存在 INSERT + CAS batch・receipt、最大 40 適用見込み）。日次増分判定の過去行不存在回収（保持 90 本窓）も修正。live 未実行、データ変更なし (#197)。
 - Issue #163 の 9/29 OHLCV 欠損 54 銘柄の固定診断 PREP を追加（Chart 5y/1d のみ 54 GET、7 分類全件判定、診断バッチ 1 行 custody + readback 照合、D1 SELECT のみ、`--execute` live gate）。live 未実行、データ変更なし (#192)。
