@@ -108,3 +108,38 @@ producerの正常実保存と後続sector-turnoverの同日実保存が揃うま
 - 4 Cron・receipt・dispatch・期限 readcheck は既存 scheduler 差分を保持した。
   credential 発行/設定、live dispatch、PR merge、production deploy は未実施。
   CI 3 checks の最新 head での成功は push 後に別確認する。
+
+
+## 最新 main との再統合・本番資格確認（2026-10-02 22時台 JST）
+
+- cleanなPR195 head `79c41dd` にmain `0728c67` を通常merge。stock-syncの説明は
+  実HTTP1秒間隔・初回429/503 STOP・全量時間未測定という最新mainの記述を採用した。
+  TypeSafeの新規銘柄限定方針はmainのままで、判定や認証値は変更していない。
+- マクロ共通原文保管helperへ予定日とbeforeWriteを別引数として渡す。
+  sourceStop時も予定日を物理manifestに保持し、保管/readback後のD1 writeを0にする。
+  定時マクロ初回429の回帰1件を追加して確認した。
+- Nix Node22.22.2/pnpm9.15.9で関連11 files /264 tests PASS。その後の新回帰を含む
+  daily-mode全36 tests、typecheck、対象lintがPASS。Wrangler4.101.0 dry-run、
+  moneyflow selector14ケースもPASS。本番deploy・workflow dispatchは0。
+- 本番Workerのsecret名を既存Wrangler OAuthで読取確認し、
+  `GITHUB_ACTIONS_TOKEN` が未登録であることを再確認した。ローカル.envにも
+  同名/GH_TOKEN/GITHUB_TOKENは無い。既存gh credentialはrepo/workflowを持つOAuthで
+  repo限定のActions read/write tokenではなく、Workerへ複製していない。
+  .envのCloudflare API tokenはWorker secrets resourceの読取権限が無かったため、
+  同一アカウントを明示した既存Wrangler OAuthでsecret listのみを実行した。
+- [最新株式run36930997317](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/36930997317)
+  は予定10/1 17:13 UTCに対し21:47:36イベント作成（274分遅配）。21:47:50のstock stepは
+  時間窓guardで停止し、21:47:57〜21:48:03にfailure batch/失敗通知を完了した。
+  個別株取得・全量回復の成功とは扱わない。
+- [最新マクロrun36946799827](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/36946799827)
+  は予定10/1 21:00 UTCに対し10/2 00:36:01作成。market context stepは00:36:23〜00:36:46。
+  N22510/1の確定実終値が無くHOLDし、株式・sector33・moneyflowはskipだった。
+  遅配改善と一次欠測改善は別条件であり、前日値で埋めない。
+- VWAP最新は上記既存`vwap-normal-acceptance-20261002.md`のrun36903916350のまま。
+  全27 raw partsとsummaryのNotion物理照合が既に完了しているが、旧/tmp私有コピーは
+  現環境に無い。769 written /4 HTTP200 captured未保存 /22制限 /2894 source未試行、
+  5分足未起動を維持する。既知Notion原文からの再読・再解析は追加Yahoo GETを必要としない。
+  Issue272実装と原文の整合を先に確認し、同runの全面再送や無条件全量取得は行わない。
+- 株式旧55は10/1対象の欠測集合であり、10/2母集団・最新保存日の読取前に現残件数へ
+  読み替えない。原本不足とfresh-close欠測・raw adj負値のguardを別々に確認する。
+  ここでの新Yahoo/source GET、Notion mutation、D1/R2 writerは0。

@@ -20,6 +20,7 @@ import {
   fetchChart,
   fetchStockRawData,
   parseChartResponse,
+  YahooRateLimitError,
   type ChartResult,
   type FetchChartOptions,
 } from "../shared/yahoo/client.js";
@@ -254,6 +255,27 @@ function stockRaw(ohlcv: Array<{
 }
 
 describe("株式とマクロの日次分離", () => {
+  it.each([429, 503])("macroの初回%sは後続Yahoo/VI/株式取得0、原文保管後D1 write0", async (status) => {
+    vi.setSystemTime(new Date("2026-09-30T01:55:26Z"));
+    vi.mocked(fetchChart).mockImplementation(async (symbol, _range, options) => {
+      await options?.onRaw?.({ symbol, status, bytes: fxBytes(ALIGNED[symbol]),
+        url: "https://mock.test/chart", receivedAt: new Date().toISOString(), headers: {} });
+      throw new YahooRateLimitError(status, null);
+    });
+    const { db, calls } = recordingDb();
+    await expect(runMarketContextSync(db)).rejects.toBeInstanceOf(YahooRateLimitError);
+    expect(fetchChart).toHaveBeenCalledTimes(1);
+    expect(fetchNikkeiVi).not.toHaveBeenCalled();
+    expect(fetchStockRawData).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    const archived = macroArchiveInputs();
+    expect(archived).toHaveLength(1);
+    const manifest = JSON.parse(new TextDecoder().decode(archived[0].files!.find((f) => f.filename === "macro-manifest.json")!.bytes));
+    expect(manifest.attempts).toHaveLength(1);
+    expect(manifest.attempts[0].status).toBe(status);
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["2026-09-25", undefined])("実日足が対象日でなければD1を書かない (%s)", async (date) => {
     // dataDateが今日でも、実timestampの日足が無ければ祝日/障害を成功にしない。
     vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart(date)));
@@ -661,6 +683,25 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
     expect(params[0][0]).toBe("2026-09-29");
     expect(fetchStockRawData).not.toHaveBeenCalled();
     expect(recordPriceSyncLog).not.toHaveBeenCalled();
+  });
+
+  it("定時マクロの初回429でも予定日を原本へ保持し、保管後はD1を書かない", async () => {
+    vi.mocked(fetchChart).mockImplementation(async (symbol, _range, options) => {
+      await options?.onRaw?.({ symbol, status: 429, bytes: fxBytes(ALIGNED[symbol]),
+        url: "https://mock.test/chart", receivedAt: new Date().toISOString(), headers: {} });
+      throw new YahooRateLimitError(429, null);
+    });
+    const { db, calls } = recordingDb();
+    await expect(runMarketContextSync(db)).rejects.toBeInstanceOf(YahooRateLimitError);
+    expect(fetchChart).toHaveBeenCalledTimes(1);
+    expect(fetchNikkeiVi).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    const archived = macroArchiveInputs();
+    expect(archived).toHaveLength(1);
+    const manifest = JSON.parse(new TextDecoder().decode(archived[0].files!.find((f) => f.filename === "macro-manifest.json")!.bytes));
+    expect(manifest.expectedDate).toBe("2026-09-29");
+    expect(manifest.attempts[0].status).toBe(429);
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
   });
 
   it("予定日欠落・形式不正・遅配は取得前に停止する", async () => {

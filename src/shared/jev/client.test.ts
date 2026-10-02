@@ -8,7 +8,10 @@
  * - モデル名は応答の echo をそのまま使う
  * - 空の questions は呼び出し側のバグとして Error
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+// 停止方針そのものは policy.test.ts の実 guard で検証する。
+// ここだけ無効化し、注入 fetch のみで過去の wire 契約を残す (実通信0)。
+vi.mock("./policy.js", () => ({ assertTypeSafeEnabled: vi.fn() }));
 import { JEV_ENDPOINT, JevUnavailableError, createJevClient } from "./client.js";
 import type { JevNoulQuestion } from "./client.js";
 

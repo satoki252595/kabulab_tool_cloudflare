@@ -29,7 +29,7 @@ afterEach(() => rmSync(localDir, { recursive: true, force: true }));
 const { writeSummaryLocal: realLocalWriter } = await vi.importActual<typeof import("../../../scripts/vwap/lib/ingest-guard.js")>("../../../scripts/vwap/lib/ingest-guard.js");
 const attempt = (symbol: string, bytes = new Uint8Array([0, 255, 10, 123])): YahooRawAttempt => ({
   api: "chart", attempt: 0, capture: { symbol, status: 429, bytes,
-    receivedAt: "2026-10-01T17:13:20.123Z", headers: { contentType: "application/octet-stream" },
+    receivedAt: "2026-10-01T17:13:20.123Z", headers: { contentType: "application/octet-stream", retryAfter: "120" },
     url: "https://test.invalid/api?crumb=secret&symbol=1301" },
 });
 const input = (captures: YahooRawAttempt[]): YahooRawBatchInput => ({ service: "stock-sync", runId: "12345.1",
@@ -58,6 +58,7 @@ describe("Yahoo原文batchの物理保管境界", () => {
     expect(record.fetchedAt).toBe("2026-10-01T17:13:20.123Z");
     const wrapper = await body(record);
     const member = wrapper.members[0];
+    expect(member.headers.retryAfter).toBe("120");
     expect(Uint8Array.from(atob(member.bodyBase64), (c) => c.charCodeAt(0))).toEqual(raw);
     expect(member.sha256).toBe(await sha256HexBytes(raw));
     expect(member.status).toBe(429);

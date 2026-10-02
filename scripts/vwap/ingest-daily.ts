@@ -41,7 +41,7 @@ export function tenYearRange(nowIso: string): { from: string; to: string } {
 export async function main() {
   // knob は main 内で型付き取得する (未設定・不正値は final catch で exit 2)。
   // 通常値は vwap-ingest.yml・.env.example で明示宣言。黙示既定なし。
-  const { conc: CONC, delayMs: DELAY, maxRateLimit: MAX_RL } = sharedEnv.vwapKnobs();
+  const { delayMs: DELAY } = sharedEnv.vwapKnobs();
   const universe = await loadCodes();
   const only = arg("codes");
   if (only) assertCodesInUniverse(only.split(","), universe);
@@ -49,6 +49,7 @@ export async function main() {
   const limit = arg("limit"); if (limit) codes = codes.slice(0, Number(limit));
 
   const startedAt = new Date().toISOString();
+  const CONC = 1; // Yahoo取得は環境変数によらず直列。実HTTP間隔は共有clientで制御。
   const runId = resolveRunId();
   const TEN_Y_RANGE = tenYearRange(startedAt); // run 内一定の明示 10y range
   let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0, invalid = 0, skipped = 0;
@@ -72,17 +73,17 @@ export async function main() {
     const captures: YahooRawAttempt[] = [];
     const missing: YahooRawMissing[] = [];
     const writes: Array<() => Promise<void>> = [];
-    // 各波は既存CONC件。8MiB到達・6波・30銘柄で収集を止め、全inflightを
+    // 各波は1件。8MiB到達・30波・30銘柄で収集を止め、全inflightを
     // settle後、同じ本文のNotion物理保管/readbackを通してからR2へ送る。
     // ponytail: 最大30銘柄まで先行取得し、Notion呼出しを減らす (PUT unknown検知前の取得済が最大30)。
-    for (let wave = 0; wave < 6 && offset < codes.length && !aborted && !fatal &&
+    for (let wave = 0; wave < 30 && offset < codes.length && !aborted && !fatal &&
       offset - batchStart < 30 && rawBytes < MAX_YAHOO_RAW_BYTES; wave++) {
       const waveCodes = codes.slice(offset, offset + Math.min(CONC, 30 - (offset - batchStart)));
       offset += waveCodes.length;
       const captureStart = captures.length;
       const settled = await Promise.allSettled(waveCodes.map(async (code) => {
         if (aborted || fatal) return;                        // ブロック/故障検知後は残りを叩かない
-        await sleep(DELAY + Math.floor(Math.random() * 400));  // ジッタで規則性を避ける
+        await sleep(DELAY);
         if (aborted || fatal) return;                        // delay 後に再確認してから R2 へ
         // R2 GET fault は fatal。null は明示 NoSuchKey の正常 bootstrap のみ。
         // 空文字列は bootstrap ではなく腐敗 (=== null 判定。truthiness 禁止)。
@@ -137,14 +138,14 @@ export async function main() {
           if (e instanceof YahooRawTooLargeError) fatal = true;
           if (!captured) missing.push({ api: "daily", symbol: `${code}.T`, attempt: 1,
             error: sanitizeLogText(e instanceof Error ? e.message : String(e)), failedAt: new Date().toISOString() });
-          // レート制限は「これ以上叩くな」のシグナル。即リトライせず連続数を数え、
-          // しきい値で全体を中断する (ブロックを延長しない / 低負荷化)。
+          // 429/503の初回で全体を中断する。期限や連続数に関係なく同run再取得なし。
           if ((e as { name?: string })?.name === "YahooRateLimitError") {
             rateLimited++; consecRL++;
             outcomes[code] = { status: "error", latestSourceBar: null, bodySha: null };
-            if (consecRL >= MAX_RL && !aborted) {
+            const retryAt = (e as { retryAtMs?: number | null }).retryAtMs;
+            if (!aborted) {
               aborted = true;
-              console.error(`[abort] Yahoo 429/503 が ${MAX_RL} 連続。IP がレート制限中のため中断します。別回線(テザリング等)か時間を空けて再実行してください。`);
+              console.error(`[abort] Yahoo 429/503 のため新規取得を停止します (retry-at-ms=${retryAt}, consecutive=${consecRL})。取得済原文を保管して終了します。`);
             }
             return;
           }
@@ -235,7 +236,7 @@ export async function main() {
       if (captures.length > 0 || missing.length > 0) {
         const raw = await archiveYahooRawBatch({ service: "vwap-analysis", runId,
           stage: `vwap-daily-${batchStart}`, captures, missing });
-        console.log(JSON.stringify({ rawCustody: "daily", pages: raw.pages.length,
+        console.info(JSON.stringify({ rawCustody: "daily", pages: raw.pages.length,
           rawBytes: raw.rawBytes, compressedBytes: raw.compressedBytes }));
       }
     } catch (e) {
@@ -253,7 +254,7 @@ export async function main() {
   const finishedAt = new Date().toISOString();
   const unknown = [...unknownCodes].sort();
   const rejected = [...rejectedCodes].sort();
-  console.log(JSON.stringify({ codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted, fatal, unknown: unknown.length, rejected: rejected.length }));
+  console.info(JSON.stringify({ codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted, fatal, unknown: unknown.length, rejected: rejected.length }));
   // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 daily に必須接続。
   // 保管失敗は fatal exit 2 にして後続 intra を走らせない (未保管の成功なし)。
   const summary = buildIngestSummary({ kind: "daily", range: "10y-full", runId, codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
@@ -263,15 +264,15 @@ export async function main() {
     process.exitCode = 2;
     return;
   }
-  console.log(JSON.stringify({ archive: "local", key: summary.key, path: local.path }));
-  console.log(JSON.stringify({ archive: "recording", key: summary.key }));
+  console.info(JSON.stringify({ archive: "local", key: summary.key, path: local.path }));
+  console.info(JSON.stringify({ archive: "recording", key: summary.key }));
   const archived = await archiveSummaryOrFatal(() => recordPrimaryData({ ...summary, force: false }));
   if (archived.code === 2) {
     console.error(JSON.stringify({ archive: "failed", key: summary.key, local: local.path, reason: archived.reason }));
     process.exitCode = 2;
     return;
   }
-  console.log(JSON.stringify({ archive: "recorded", key: summary.key }));
+  console.info(JSON.stringify({ archive: "recorded", key: summary.key }));
   // errors/invalid/rateLimited 計数があれば非0終了 (銘柄 PUT0 は上で確定済み)。
   // R2 fault (fatal) は 2。ワークフローは exit 2 で intra を走らせない。
   process.exitCode = resolveExitCode({ aborted, fatalUnknown: fatal, errors, invalid, rateLimited });

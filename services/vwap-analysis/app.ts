@@ -1,8 +1,7 @@
 // 007 VWAP Analysis — 5分足VWAP / 価格別出来高 / 日足10年 / 信用残高
-// 配信のみ（Hono サブアプリ）。時系列は R2(c.env.BUCKET)、当日5分足は Yahoo 中継。
+// 配信のみ（Hono サブアプリ）。時系列は R2(c.env.BUCKET) の保存済みデータ。
 // フロント(SPA)は public/vwap-analysis/ を ASSETS が配信。ここは /api/* だけ。
 import { Hono } from "hono";
-import { fetchYahooChartRaw } from "../../src/shared/yahoo/client.js";
 import type { DailyFetchProof } from "../../src/shared/yahoo/client.js";
 import {
   intraWindowOf,
@@ -25,21 +24,14 @@ export const BASE_PATH = "/vwap-analysis";
 type Bindings = { BUCKET: { get: (key: string) => Promise<{ body: ReadableStream; text: () => Promise<string> } | null> } };
 const app = new Hono<{ Bindings: Bindings }>({ strict: false });
 
-const SYMBOL_RE = /^[0-9A-Za-z]{1,6}\.[A-Z]{1,2}$/;
 const CODE_RE = /^[0-9A-Za-z]{4}$/;
 const json = (o: unknown, status = 200) =>
   new Response(JSON.stringify(o), { status, headers: { "Content-Type": "application/json" } });
 
-// 当日5分足: Yahoo をその場中継（ライブ・15-20分遅延）
-app.get("/api/chart", async (c) => {
-  const symbol = (c.req.query("symbol") || "").trim();
-  if (!SYMBOL_RE.test(symbol)) return json({ error: "bad symbol" }, 400);
-  const r = await fetchYahooChartRaw(symbol, c.req.query("range") || "60d", c.req.query("interval") || "5m");
-  return new Response(await r.text(), {
-    status: r.status,
-    headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=300" },
-  });
-});
+// 未使用のライブ入口を停止。画面閲覧で Yahoo 通信を発生させない。
+app.get("/api/chart", () => json({
+  error: "ライブ取得は停止しています。保存済みの日足・5分足を利用してください。",
+}, 410));
 
 // intra 価格 basis 契約: producer proof を検証して配信・適格化する。
 // 適格 (zero-split verified) は daily proof の実証 span が保存 intra

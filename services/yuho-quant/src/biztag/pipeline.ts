@@ -2,7 +2,7 @@
  * 実行オーケストレーション (`pnpm biztag run`)。
  * 設計: docs/005-yuho-quant-business-tags.md §2・§7・§9・§11.2。
  *
- * 1) 単語帳の関門 (未審査提案があれば審査)・見直し期限の検査
+ * 1) 公式上場の初回資格・見直し期限の検査 (語彙の有料審査は停止)
  * 2) 今の有効な単語帳を解決
  * 3) 「銘柄マスタ（補足）」DB を確保
  * 4) D1 の最新有報と補足行を突き合わせて作業一覧を作る (`plan.ts`)
@@ -31,25 +31,22 @@ import {
   updateSupplementRow,
   type LedgerEntry,
   type NotionStats,
-  type SupplementRow,
   type SupplementSchemaSpec,
 } from "../../../../src/shared/notion-archive/index.js";
 import { createJevClient, estimateCostUsd, jevEnv, type JevClient } from "../../../../src/shared/jev/index.js";
 import { createMemoizedJevClient } from "../../../../src/shared/jev/memo.js";
 import * as yuhoSchema from "../db/schema.js";
+import { yuhoEnv } from "../env.js";
 import { resolveActiveVocabulary } from "./active-vocab.js";
 import { todayJst } from "./date-jst.js";
-import { checkDeadline, runGate, type DeadlineCheckResult, type GateRunResult } from "./gate.js";
+import { checkDeadline, type DeadlineCheckResult, type GateRunResult } from "./gate.js";
 import { evaluateGolden, goldenItemKey, loadGoldenSet, type GoldenMetrics } from "./golden.js";
 import type { BtThresholds } from "./judge.js";
 import { MAX_RETRY_ATTEMPTS, planWork, type WorkItem } from "./plan.js";
 import { processStock, type ProcessDeps } from "./process.js";
-import { PREFILTER_SECTIONS, PREFILTER_SECTION_TITLE, isPrefilterSection, type PrefilterSectionKey } from "./prefilter.js";
+import { isPrefilterSection, type PrefilterSectionKey } from "./prefilter.js";
 import { buildReviewPacket, refreshReviewPacketLedger } from "./review.js";
-import { DEFAULT_VERIFY_SOURCES_BUDGET_MS, makeBudgetedVerifySources } from "./sources-verify.js";
-import { loadLatestDocs, type BiztagSourceDb } from "./source.js";
-import { diffVocabularies } from "./vocabulary/diff.js";
-import { parseVocabulary } from "./vocabulary/load.js";
+import { loadLatestDocs, loadNewStockEligibility, type BiztagSourceDb } from "./source.js";
 import type { Vocabulary } from "./vocabulary/schema.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 
@@ -62,10 +59,9 @@ export interface RunBiztagOptions {
   codes?: string[];
   /**
    * true なら Notion への書込を一切行わない (安全な下見)。
-   * スコープは「銘柄マスタ（補足）」の行・根拠だけでなく、単語帳の関門
-   * (`runGate` による版の確定・提案の状態更新)・見直し材料・見直し期限の
-   * 通知など**台帳への書込も含む** (判定・審査そのものは実データで行うため
-   * jev 呼び出し・出典検査は dry-run でも実際に発生する。DB 確保・単語帳解決も行う)。
+   * 「銘柄マスタ（補足）」の行・根拠、見直し材料・期限通知の台帳書込を止める。
+   * 新規初回の有料判定は HOLD にし、既存の機械照合だけ実データで下見する。
+   * DB 確保・単語帳解決は行う。
    */
   dryRun?: boolean;
   thresholds: BtThresholds;
@@ -87,7 +83,9 @@ export interface RunSummary {
   notion: NotionStats;
   vocabVersion: string;
   vocabSeeded: boolean;
-  gate: GateRunResult;
+  gate: GateRunResult | null;
+  /** nullの関門を実施済みと読まないための停止理由。 */
+  gateSkippedReason?: string;
   deadline: DeadlineCheckResult;
   failures: Array<{ stockCode: string; message: string }>;
   /** ① 銘柄マスタに同じ銘柄コードの行が複数あり、relation を付けなかった銘柄コード */
@@ -100,6 +98,7 @@ export interface RunSummary {
    * 読み違えないため。2026-09-29 実測 14 件が green のまま埋もれていた)。
    */
   billingBlocked: string[];
+  qualificationHeld?: string[];
 }
 
 /**
@@ -130,35 +129,6 @@ export function buildSchemaSpec(vocab: Vocabulary, sector33Options: string[]): S
     themeOptions: vocab.themes.filter((t) => !t.deprecated).map((t) => t.labelJa),
     versionOptions: [vocab.version],
     sector33Options,
-  };
-}
-
-/**
- * 補足行の `vocabVersion` (現在の版と異なるものだけ) から `VocabDiff` を
- * 引けるようにする。台帳の「版」履歴を読んで解決する (I/O はここでまとめて
- * 行い、`plan.ts` へは同期関数として渡す)。
- */
-async function buildVocabDiffResolver(
-  ledgerDbId: string,
-  neededVersions: Set<string>,
-  current: Vocabulary
-): Promise<(rowVersion: string) => import("./vocabulary/diff.js").VocabDiff> {
-  const map = new Map<string, import("./vocabulary/diff.js").VocabDiff>();
-  if (neededVersions.size > 0) {
-    const versionEntries = await listLedgerEntries(ledgerDbId, { kind: "版" });
-    for (const version of neededVersions) {
-      const entry = versionEntries.find((e) => e.version === version);
-      if (!entry) {
-        throw new Error(`buildVocabDiffResolver: 台帳に版 ${version} の記録がありません`);
-      }
-      const oldVocab = parseVocabulary(await readLedgerJson(entry));
-      map.set(version, diffVocabularies(oldVocab, current));
-    }
-  }
-  return (rowVersion: string) => {
-    const diff = map.get(rowVersion);
-    if (!diff) throw new Error(`vocabDiffFromRowVersion: 未解決の版です: ${rowVersion}`);
-    return diff;
   };
 }
 
@@ -233,11 +203,8 @@ export function makeEvaluateGoldenForVocab(
 }
 
 /**
- * dry-run 用の no-op 台帳書込。`runGate`・見直し期限の通知・
- * `refreshReviewPacketLedger` は、実データでの判定・比較 (jev 呼び出し・
- * 出典検査・見直し材料の内容比較) はそのまま行うが、Notion 台帳への実書込
- * (版の確定・提案の状態更新・通知の記録・見直し材料の差し替え) だけを
- * 差し替えて無効化する (dryRun のスコープを ProcessDeps だけに閉じない)。
+ * dry-run 用の no-op 台帳書込。期限検査・見直し材料の比較は行い、
+ * 通知の記録・見直し材料の差し替えを止める。
  */
 function makeDryRunLedgerWrites(): {
   createLedgerEntry: typeof createLedgerEntry;
@@ -266,44 +233,36 @@ function makeDryRunLedgerWrites(): {
 }
 
 export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
+  const listingFrom = yuhoEnv.BIZTAG_NEW_LISTING_FROM();
   const start = Date.now();
   const startedAt = new Date(start).toISOString();
   resetNotionStats();
 
   const today = todayJst(() => start);
   const db = createD1HttpDb(yuhoSchema) as unknown as BiztagSourceDb;
-  const jevClient = createJevClient({ apiKey: jevEnv.TYPESAFE_API_KEY(), model: opts.model });
-  const evaluateGoldenForVocab = makeEvaluateGoldenForVocab(db, jevClient, opts.thresholds);
-  // dry-run はここから先の台帳書込 (版の確定・提案の状態更新・通知・見直し材料の
-  // 差し替え) を全て no-op にする (判定・審査自体は実データで行う)。
+  const newStockEligibility = await loadNewStockEligibility(db, listingFrom, today);
+  let initialClient: JevClient | null = null;
+  // 新規の実資格と本文候補が揃うまでキーを読まない。既存機械経路からは呼ばない。
+  const jevClient: JevClient = { askNoul: async (state, questions) => {
+    if (initialClient === null) initialClient = createJevClient({
+      usage: "new-stock-biztag", apiKey: jevEnv.TYPESAFE_API_KEY(), model: opts.model,
+      maxRetries: 0, // 有料応答の結果不明時に同runで再送しない。
+    });
+    return initialClient.askNoul(state, questions);
+  } };
+  // dry-run は通知・見直し材料の台帳書込を no-op にする。
   const ledgerWrites = opts.dryRun
     ? makeDryRunLedgerWrites()
     : { createLedgerEntry, updateLedgerEntry, replaceLedgerJson };
 
-  // 1. 今の有効な単語帳 (台帳が空なら v1 を初回投入)。関門は有効な版を基準に審査する
-  //    ので、先に解決しておく。
+  // 1. 今の有効な単語帳 (台帳が空なら v1 を初回投入) を解決する。
   const ledgerDbId = await ensureLedgerDb();
   const initial = await resolveActiveVocabulary(today, { dryRun: opts.dryRun });
   const seeded = initial.seeded;
-  let vocab = initial.vocab;
+  const vocab = initial.vocab;
 
-  // 2. 単語帳の関門 + 見直し期限の検査。
-  // 出典検査 (verifySources) は提案内の URL を実際に fetch するため、
-  // opts.budgetMs から一部を専用予算として切り出す (opts.budgetMs をそのまま
-  // 使うと、後続の銘柄処理ループの予算が丸ごと出典検査に消費されうる)。
-  // 予算を使い切っても、審査自体 (runGate) は打ち切らず「その提案を
-  // 不採用にする」形で正直に終わらせる (sources-verify.ts 参照)。
-  const verifySourcesBudgetMs = Math.min(DEFAULT_VERIFY_SOURCES_BUDGET_MS, opts.budgetMs);
-  const gate = await runGate({
-    ledgerDbId,
-    listLedgerEntries,
-    readLedgerJson,
-    createLedgerEntry: ledgerWrites.createLedgerEntry,
-    updateLedgerEntry: ledgerWrites.updateLedgerEntry,
-    verifySources: makeBudgetedVerifySources(verifySourcesBudgetMs),
-    evaluateGoldenForVocab,
-    recordedAt: today,
-  });
+  // 2. 有料の語彙審査・golden評価は再開しない。現在の有効版と期限だけ読む。
+  const gate = null;
   const allLedgerEntries = await listLedgerEntries(ledgerDbId);
   const deadline = checkDeadline(today, allLedgerEntries);
   if (deadline.shouldNotify) {
@@ -320,11 +279,6 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     });
   }
 
-  // 関門が新しい版を採用したら、その版で以降を処理する (dry-run は採用を書かないので不要)。
-  if (gate.adopted.length > 0 && !opts.dryRun) {
-    ({ vocab } = await resolveActiveVocabulary(today));
-  }
-
   // 3. D1 の最新有報 (対象母集団)。
   let latest = await loadLatestDocs(db);
   if (opts.codes && opts.codes.length > 0) {
@@ -335,49 +289,17 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
 
   // 4. 補足 DB を確保し、既存行を読む。
   const { dbId: supplementDbId, propertyIds } = await ensureSupplementDb(buildSchemaSpec(vocab, sector33Options));
-  // 本文列は重い (1 行平均数万字) ので、版の影響判定が要る行 (= 版が違う判定済の
-  // 行) だけ本文列つきで読み直す。普段の日次はほぼ全行が「同じ版」で状態の列
-  // だけ読めば足りるが、版を上げた直後は「版が違う判定済」の行が数千件残る
-  // 移行期間 (§7 の日次予算では数日〜数週間かかる) が続くため、その間**毎日**
-  // 全行ぶんの本文列を読み直すと (`loadSupplementRows` の全件取得コストが
-  // 版の影響判定を受ける行の数に関わらず一定になり) 20分の日次予算を圧迫する。
-  // ここでは実際に影響判定が必要な行 (stale) の銘柄コードだけを絞って本文列を
-  // 読み直し、残りは状態の列だけの行のまま使う (`loadSupplementRows` の
-  // `codes` フィルタを利用)。
-  let rows = await loadSupplementRows(supplementDbId, propertyIds);
-  const staleCodes = rows
-    .filter((r) => r.tagStatus === "判定済" && r.vocabVersion !== null && r.vocabVersion !== vocab.version)
-    .map((r) => r.stockCode);
-  if (staleCodes.length > 0) {
-    const textColumns = PREFILTER_SECTIONS.map((k) => PREFILTER_SECTION_TITLE[k]);
-    const staleRowsByCode = new Map<string, SupplementRow>();
-    // Notion の compound filter (`codes` は or フィルタに展開される) は
-    // 1 クエリあたりの条件数に上限があるため、安全側でチャンクに分けて
-    // 問い合わせる (`loadSupplementRows` 自身は codes を分割しない)。
-    for (const codeBatch of chunk(staleCodes, 90)) {
-      const staleRows = await loadSupplementRows(supplementDbId, propertyIds, {
-        codes: codeBatch,
-        textColumns,
-      });
-      for (const r of staleRows) staleRowsByCode.set(r.stockCode, r);
-    }
-    rows = rows.map((r) => staleRowsByCode.get(r.stockCode) ?? r);
-  }
-
-  // 5. 版の違いの影響判定に必要な過去の単語帳を解決する。
-  const neededVersions = new Set(
-    rows.map((r) => r.vocabVersion).filter((v): v is string => v !== null && v !== vocab.version)
-  );
-  const vocabDiffFromRowVersion = await buildVocabDiffResolver(ledgerDbId, neededVersions, vocab);
-
-  const items = planWork(latest, rows, vocab, vocabDiffFromRowVersion, today);
+  // 銘柄コードで保存済みタグを参照する。判定済みの有報・語彙変更では本文を再取得しない。
+  const rows = await loadSupplementRows(supplementDbId, propertyIds);
+  const items = planWork(latest, rows, today, newStockEligibility);
   const retryExhausted = items.filter((i) => i.retryExhausted === true).map((i) => i.stockCode).sort();
   // 課金切れの未解決ブロッカーを台帳エラーから集計する。再試行期日の
   // 未来・到来・上限到達を問わない (skip も残件であり、完了ではない)。
-  const billingBlocked = rows
+  const billingBlocked = new Set(rows
     .filter((r) => r.tagStatus === "判定不能" && isBillingBlockedError(r.error))
     .map((r) => r.stockCode)
-    .sort();
+  );
+  const qualificationHeld = items.filter((item) => item.qualificationHeld).map((item) => item.stockCode).sort();
 
   // 6. 銘柄マスタ (relation 先) の索引。
   // ① 側で同じ銘柄コードが複数行ある銘柄は relation を空のままにする (どれかを選ばない)。
@@ -427,13 +349,26 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       }
       workBudgetLeft--;
     }
+    if (opts.dryRun && item.initialTypeSafe) {
+      // 新規の有料判定は下見で実行しない。機械判定へも切り替えず保留を明示。
+      qualificationHeld.push(item.stockCode);
+      countsByKind["paid_dry_run_hold"] = (countsByKind["paid_dry_run_hold"] ?? 0) + 1;
+      processed++;
+      continue;
+    }
     try {
       const outcome = await processStock(item, deps);
+      if (outcome.error) {
+        failures.push({ stockCode: item.stockCode, message: outcome.error });
+        if (isBillingBlockedError(outcome.error)) billingBlocked.add(item.stockCode);
+      } else if (outcome.tagStatus === "判定済" && !opts.dryRun) {
+        billingBlocked.delete(item.stockCode);
+      }
       processed++;
       countsByKind[outcome.kind] = (countsByKind[outcome.kind] ?? 0) + 1;
       if (outcome.tagStatus) {
         countsByTagStatus[outcome.tagStatus] = (countsByTagStatus[outcome.tagStatus] ?? 0) + 1;
-        if (outcome.tagStatus === "判定済") judged++;
+        if (outcome.tagStatus === "判定済" && !item.qualificationHeld) judged++;
       }
       jevCalls += outcome.jevCalls;
       jevInputTokens += outcome.jevInputTokens;
@@ -472,8 +407,10 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     vocabSeeded: seeded,
     masterDuplicates,
     retryExhausted,
-    billingBlocked,
+    billingBlocked: [...billingBlocked].sort(),
+    qualificationHeld,
     gate,
+    gateSkippedReason: "語彙審査・精度測定のTypeSafeは停止中",
     deadline,
     failures,
   };
@@ -500,6 +437,9 @@ export interface RunNotifyResult {
  */
 export function composeRunNotify(summary: RunSummary): RunNotifyResult {
   const notes: string[] = [];
+  if (summary.qualificationHeld && summary.qualificationHeld.length > 0) {
+    notes.push(`新規銘柄の資格または本文を確認できず保留: ${summary.qualificationHeld.length}件 (${summary.qualificationHeld.slice(0, 10).join(", ")})`);
+  }
   if (summary.failures.length > 0) {
     notes.push(
       `失敗した銘柄 (最大10件): ${summary.failures
@@ -554,7 +494,7 @@ export function composeRunNotify(summary: RunSummary): RunNotifyResult {
         }
       : null;
 
-  const primary = summary.gate.notify ?? deadlineNotify ?? retryExhaustedNotify ?? fallbackNotify;
+  const primary = summary.gate?.notify ?? deadlineNotify ?? retryExhaustedNotify ?? fallbackNotify;
   if (!primary) return { notify: false };
   return { notify: true, title: primary.title, summary: `${primary.summary}${extraNote}` };
 }

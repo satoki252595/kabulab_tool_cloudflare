@@ -30,6 +30,30 @@ afterEach(() => {
 });
 
 describe("GET /yahoo", () => {
+  it.each([
+    "https://query1.finance.yahoo.com/v1/test/getcrumb",
+    "http://query1.finance.yahoo.com/v8/finance/chart/7203.T",
+    "https://query1.finance.yahoo.com/v8/finance/chart/7203.T?crumb=injected",
+    "https://query1.finance.yahoo.com/v8/finance/chart/x%2F..%2F..%2Fv1%2Ftest%2Fgetcrumb",
+    "https://query1.finance.yahoo.com/v8/finance/chart/x%252Fgetcrumb",
+  ])("許可外endpointではYahoo通信0: %s", async (url) => {
+    const response = await ingestProxyRoute.request(
+      `https://proxy.example.test/yahoo?u=${encodeURIComponent(url)}`,
+      { headers: { Authorization: "Bearer test-secret" } }
+    );
+    expect(response.status).toBe(403);
+    expect(fetchYahoo).not.toHaveBeenCalled();
+  });
+
+  it("壊れたpercent encodeもYahoo通信前に拒否する", async () => {
+    const response = await ingestProxyRoute.request(
+      `https://proxy.example.test/yahoo?u=${encodeURIComponent("https://query1.finance.yahoo.com/v8/finance/chart/%")}`,
+      { headers: { Authorization: "Bearer test-secret" } }
+    );
+    expect(response.status).toBe(400);
+    expect(fetchYahoo).not.toHaveBeenCalled();
+  });
+
   it("Yahooのstatus・許可ヘッダ・本文と診断markerだけを中継する", async () => {
     fetchYahoo.mockResolvedValue(
       new Response('{"error":"upstream"}', {
@@ -132,7 +156,7 @@ describe("GET /yahoo", () => {
     });
   });
 
-  it("typed 503 は 429 に誤変換せず 502 のまま", async () => {
+  it("typed 503 は503と停止期限を伝播する", async () => {
     fetchYahoo.mockRejectedValue(new YahooRateLimitError(503, null, null));
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const target = encodeURIComponent(
@@ -144,12 +168,10 @@ describe("GET /yahoo", () => {
       { headers: { Authorization: "Bearer test-secret" } }
     );
 
-    expect(response.status).toBe(502);
-    expect(response.headers.get("Retry-After")).toBeNull();
-    expect(response.headers.get("X-Kabulab-Yahoo-Status")).toBeNull();
-    expect(await response.json()).toEqual({
-      error: "yahoo ingest proxy failed",
-    });
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe("900");
+    expect(response.headers.get("X-Kabulab-Yahoo-Status")).toBe("503");
+    expect((await response.json()).error).toContain("yahoo rate limited");
   });
 
   it("相対 deadline のみでも 429 + Retry-After を返す", async () => {

@@ -22,7 +22,7 @@ import {
   replaceLedgerJson,
   updateLedgerEntry,
 } from "../../../src/shared/notion-archive/index.js";
-import { createJevClient, jevEnv, type JevClient } from "../../../src/shared/jev/index.js";
+import { assertTypeSafeEnabled, createJevClient, jevEnv, type JevClient } from "../../../src/shared/jev/index.js";
 import { resolveActiveVocabulary } from "../src/biztag/active-vocab.js";
 import { todayJst } from "../src/biztag/date-jst.js";
 import { checkDeadline, runGate } from "../src/biztag/gate.js";
@@ -464,6 +464,12 @@ async function statsCommand(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (
+    ["gate", "golden"].includes(subcommand) ||
+    (["competitors", "competitors-eval"].includes(subcommand) && judgeArg() === "jev")
+  ) {
+    assertTypeSafeEnabled();
+  }
   switch (subcommand) {
     case "run":
       return runCommand();

@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prefilter, type PrefilterResult } from "./prefilter.js";
-import { buildEvidenceText, EVIDENCE_TEXT_MAX_CHARS, summarizeJudgments } from "./row.js";
+import { buildEvidenceText, EVIDENCE_TEXT_MAX_CHARS, summarizeJudgments, summarizeKeywordMatches } from "./row.js";
 import type { TermJudgment } from "./judge.js";
 import type { EvidenceBlockInput } from "../../../../src/shared/notion-archive/index.js";
 import type { BusinessTerm } from "./vocabulary/schema.js";
@@ -23,6 +23,48 @@ const vocab: Vocabulary = VocabularySchema.parse(rawVocab);
 const business = fx("4591-ribomic-business.txt");
 const segment = fx("4591-ribomic-segment-info.txt");
 const result: PrefilterResult = prefilter(vocab, { business, segment_info: segment });
+
+describe("summarizeKeywordMatches", () => {
+  it("実本文の一致語からタグ/テーマ/原文根拠を作り、確率を含めない", () => {
+    const outcome = summarizeKeywordMatches(vocab, result.candidates);
+    expect(outcome.downstream).toEqual(["核酸医薬", "医療用医薬品(新薬・先発品)"]);
+    expect(outcome.themes).toEqual(["創薬・新薬開発"]);
+    expect(outcome.upstream).toEqual([]);
+    expect(outcome.distribution).toEqual([]);
+    expect(outcome.uncertainText).toBeNull();
+    expect(outcome.evidence).toHaveLength(2);
+    for (const item of outcome.evidence) {
+      expect(item.band).toBe("keyword");
+      expect(Object.hasOwn(item, "probability")).toBe(false);
+      expect(item.sentences.length).toBeGreaterThan(0);
+      for (const sentence of item.sentences) {
+        expect(business.includes(sentence.text.replace(/^…|…$/g, ""))).toBe(true);
+      }
+    }
+    expect(outcome.evidenceText).toContain("核酸医薬（キーワード一致）：");
+    expect(outcome.evidenceText).not.toMatch(/はい|要確認|0\.95/);
+  });
+
+  it("上流の実ABF一致を保存し、実除外文の語はタグにしない", () => {
+    const abf = prefilter(vocab, { rnd: fx("2802-ajinomoto-rnd-abf.txt") });
+    expect(summarizeKeywordMatches(vocab, abf.candidates).upstream).toEqual(["半導体パッケージ基板・封止材"]);
+    const excluded = prefilter(vocab, { business: fx("4263-susmed-business-excerpt.txt") });
+    expect(summarizeKeywordMatches(vocab, excluded.candidates).downstream).not.toContain("医療用医薬品(新薬・先発品)");
+  });
+
+  it("単語帳に無い候補や原文hit不足を一致/不一致の結果に丸めない", () => {
+    expect(() => summarizeKeywordMatches({ ...vocab, business: [] }, result.candidates)).toThrow("候補が一致しません");
+    expect(() => summarizeKeywordMatches(vocab, [{ ...result.candidates[0], hits: [] }])).toThrow("候補が一致しません");
+  });
+
+  it("実本文の境界不一致はタグ/テーマ/根拠なしの機械結果になる", () => {
+    const noMatch = prefilter(vocab, { mda: fx("8364-shimizu-bank-mda-boundary.txt") });
+    expect(summarizeKeywordMatches(vocab, noMatch.candidates)).toEqual({
+      upstream: [], downstream: [], distribution: [], themes: [], uncertainText: null,
+      evidence: [], evidenceText: null, evidenceTextTruncated: false,
+    });
+  });
+});
 
 describe("summarizeJudgments", () => {
   it("『はい』は列(upstream/downstream)に、テーマは決定的に導出、根拠は原文の文を持つ", () => {
@@ -40,7 +82,7 @@ describe("summarizeJudgments", () => {
     expect(outcome.evidence).toHaveLength(2);
     const nucleic = outcome.evidence.find((e) => e.labelJa === "核酸医薬")!;
     expect(nucleic.band).toBe("yes");
-    expect(nucleic.probability).toBe(0.95);
+    expect(nucleic).toMatchObject({ band: "yes", probability: 0.95 });
     expect(nucleic.sentences.length).toBeGreaterThan(0);
     expect(nucleic.sentences.length).toBeLessThanOrEqual(3);
     for (const s of nucleic.sentences) {
@@ -145,6 +187,10 @@ describe("summarizeJudgments", () => {
     expect(outcome.downstream).toEqual([]);
     expect(outcome.distribution).toEqual(["人材紹介・派遣"]);
     expect(outcome.evidenceText).toContain("人材紹介・派遣（はい 0.90）");
+    const keyword = summarizeKeywordMatches({ version: "v1", business: [distributionTerm], themes: [] }, candidates);
+    expect(keyword.distribution).toEqual(["人材紹介・派遣"]);
+    expect(keyword.evidenceText).toContain("人材紹介・派遣（キーワード一致）");
+    expect(Object.hasOwn(keyword.evidence[0], "probability")).toBe(false);
   });
 
   it("『確認不能』は事業タグの根拠文列に「要確認」として残る", () => {
@@ -196,12 +242,11 @@ describe("buildEvidenceText", () => {
     );
   });
 
-  it("上限を超えたら切り詰め、末尾に正直な省略メモを残す(黙って削らない)", () => {
+  it.each(["yes", "keyword"] as const)("%sも上限を超えたら切り詰め、末尾に正直な省略メモを残す", (band) => {
     const items: EvidenceBlockInput["items"] = Array.from({ length: 5000 }, (_, i) => ({
       labelJa: `語${i}`,
-      band: "yes" as const,
-      probability: 0.9,
       sentences: [{ text: "あ".repeat(50), sectionTitle: "事業の内容" }],
+      ...(band === "keyword" ? { band: "keyword" as const } : { band: "yes" as const, probability: 0.9 }),
     }));
     const { text, truncated } = buildEvidenceText(items);
     expect(truncated).toBe(true);
@@ -209,6 +254,6 @@ describe("buildEvidenceText", () => {
     expect(text!.length).toBeLessThanOrEqual(EVIDENCE_TEXT_MAX_CHARS);
     expect(text).toContain("文字数上限のため以下省略");
     // 切り詰めても先頭の語は欠落しない
-    expect(text!.startsWith("語0（はい 0.90）")).toBe(true);
+    expect(text!.startsWith(band === "keyword" ? "語0（キーワード一致）" : "語0（はい 0.90）")).toBe(true);
   });
 });

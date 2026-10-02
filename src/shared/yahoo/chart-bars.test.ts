@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  fetchBars5m,
-  fetchDaily,
-  fetchYahooChartRaw,
-  YahooRateLimitError,
-} from "./client.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+type YahooClient = typeof import("./client.js");
+let fetchBars5m: YahooClient["fetchBars5m"];
+let fetchDaily: YahooClient["fetchDaily"];
+let fetchYahooChartRaw: YahooClient["fetchYahooChartRaw"];
+let YahooRateLimitError: YahooClient["YahooRateLimitError"];
 
 /**
  * L-60 で services/vwap-analysis/lib/yahoo.ts から移動した取得系の検証。
@@ -13,6 +13,12 @@ import {
  */
 
 const ORIGINAL_ENV = { ...process.env };
+
+beforeEach(async () => {
+  // ケース内のcooldownは実装どおり保持し、別HTTPケースへ持ち越さない。
+  vi.resetModules();
+  ({ fetchBars5m, fetchDaily, fetchYahooChartRaw, YahooRateLimitError } = await import("./client.js"));
+});
 
 afterEach(() => {
   process.env = { ...ORIGINAL_ENV };
@@ -677,11 +683,29 @@ describe("レート制限の投げ分け (旧 ensureOk と同一)", () => {
       "fetch",
       vi.fn(async () => new Response("slow down", { status: 429, headers: { "retry-after": "3" } }))
     );
+    const before = Date.now();
     const err = await fetchDaily("7203.T").catch((e) => e);
     expect(err).toBeInstanceOf(YahooRateLimitError);
     expect(err.name).toBe("YahooRateLimitError");
     expect(err.status).toBe(429);
     expect(err.retryAfterMs).toBe(3000);
+    expect(err.retryAtMs).toBeGreaterThanOrEqual(before + 3000);
+    expect(err.retryAtMs).toBeLessThanOrEqual(Date.now() + 3000);
+  });
+  it.each([429, 503])("HTTP-date Retry-Afterを%sの日足/5分足エラーへ保つ", async (status) => {
+    useProxy();
+    const retryAfter = new Date(Date.now() + 120_000).toUTCString();
+    const fetchFn = vi.fn(async () => new Response("slow down", { status, headers: { "Retry-After": retryAfter } }));
+    vi.stubGlobal("fetch", fetchFn);
+    for (const fetchBars of [() => fetchDaily("7203.T"), () => fetchBars5m("7203.T")]) {
+      // 2つの独立したHTTP-date契約を検証する。cooldown再入の検証ではない。
+      vi.resetModules();
+      ({ fetchBars5m, fetchDaily, fetchYahooChartRaw, YahooRateLimitError } = await import("./client.js"));
+      const err = await fetchBars().catch((error) => error);
+      expect(err).toBeInstanceOf(YahooRateLimitError);
+      expect(err.retryAtMs).toBe(Date.parse(retryAfter));
+    }
+    expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
   it("404 は `yahoo 404` の Error (retry が即 throw する形状)", async () => {

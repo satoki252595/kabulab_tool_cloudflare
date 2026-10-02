@@ -13,6 +13,7 @@
  *     欠けている場合も、既定値へのフォールバックは絶対にせず必ず throw する。
  */
 import { z } from "../zod-mini.js";
+import { assertTypeSafeEnabled } from "./policy.js";
 
 export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 /** 入力 100 万トークンあたりの USD 単価 (出力は無料。docs §5.5)。 */
@@ -68,6 +69,8 @@ export interface JevClient {
 }
 
 export interface CreateJevClientOptions {
+  /** 公式上場・初回未完を確認した事業タグ処理だけが明示する。省略は停止。 */
+  usage?: "new-stock-biztag";
   apiKey: string;
   /** 固定するモデル名 (`jev-latest` のような別名は呼び出し側で解決してから渡すこと)。 */
   model: string;
@@ -234,6 +237,7 @@ async function fetchJevWithRetry(
 // ── createJevClient ─────────────────────────────────────────────────────
 
 export function createJevClient(o: CreateJevClientOptions): JevClient {
+  assertTypeSafeEnabled(o.usage);
   const {
     apiKey,
     model,

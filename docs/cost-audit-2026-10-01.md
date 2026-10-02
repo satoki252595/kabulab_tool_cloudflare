@@ -16,8 +16,9 @@ D1 read/write/保存・R2 A/B/Standard保存・Builds、および最後30日の 
   Yahoo原文保管修正は[PR #256](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/256)、
   main `380e931e2305d9871e430cfccea3aa033c468e89`。追加負荷を末尾へ分けた。
 - 定時起動変更: [PR #195](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/195)。
-  head `40f500033db73e45c1c941e1c3ba21652c5b59f4` の株式・マクロ計4 Cronへの
-  更新を2026-10-02に読取確認し、負荷表へ反映。マージ後に再確認する。
+  head `79c41dd8ca29b24adb8ee7c670388d1bec22ec94` へ最新mainを通常mergeし、
+  3CI成功・独立レビューを確認。株式・マクロ計4 Cronの負荷表は変更なし。
+  Workerの専用token設定待ちで未merge。マージ後に実起動を確認する。
 - 料金・制限の取得日: **2026-10-01**。金額は USD、税・為替換算を含めない。
 - ユーザーの Paid 契約申告に加え、認証済みダッシュボード読取で Workers Paid を確認。
   請求画面・個人情報・他サービスの利用額は私有証跡とし公開 Git に保存しない。
@@ -166,16 +167,26 @@ I/O待機はCPUに含まれない。高額化の防止は CPU 上限だけでな
   有料runnerへ変更する必要はない。
   [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)、
   [runner料金](https://docs.github.com/en/billing/reference/actions-runner-pricing)
-- **TypeSafe Jev**: 公式 Jev 1.13 は入力 $0.042/Mtokens、出力無料。
+- **TypeSafe Jev**: 2026-10-02の追加方針で、公式上場情報の対象開始日以後・同じ
+  世代・active・初回未完を証明できた新規銘柄の初回事業タグだけを有料対象にする。
+  APIキーはそのscope成立後だけlazy参照する。既存の判定済みタグ・AI根拠は銘柄コードで
+  再利用し、有報/語彙変更でも付け直さない。未設定/判定失敗だけkeywords/excludesで
+  不足を補完し、外部AI呼出し0。語彙審査・精度測定・競合AIは停止、旧課金切れ25件の有料
+  再開やそのためのcredit補充は不要。本文資格不足はHOLDで既存結果を保持する。
+  新規初回の実tokens・請求は未測定で、全体$0や月額固定とはしない。SemIf自動代替なし。
+  以下の一括費用は**旧仕様の記録**であり、現在の新規銘柄だけの月額見積りではない。
+  公式 Jev 1.13 は入力 $0.042/Mtokens、出力無料。
   [client定数](../src/shared/jev/client.ts) と
   [見積式](../src/shared/jev/stats.ts) が一致。`費用 = 実入力tokens / 1,000,000 × 0.042`。
   既存の過去20社670,382入力tokensから全3,607社へ比例した $5.08 は一括実行の
   過去推定であり、月額実測ではない
   ([既存記録 §12.8](./005-yuho-quant-business-tags.md))。`budget-min=20` は時間制限で、
-  dry-runでも判定APIを呼ぶ。既定最大3 retryは最大4送信になり、曖昧な失敗で提供側に
-  課金された量が成功応答のtoken集計に出ない可能性がある。請求/残credit確認が必要。
+  停止前はdry-runでも判定APIを呼び、既定最大3 retryは最大4送信になった。曖昧な失敗で提供側に
+  課金された量が成功応答のtoken集計に出ない可能性があり、過去分の請求は未測定。
+  現行の新規初回はclientの同run再送を0にし、専用markerのある失敗だけ次回の上限付きretry対象にする。
   認証済consoleの2026-10-02読取ではtop-upの最低購入単位は$5。
-  今回の調査で購入は行わず、取込の再開はcreditの用意後に判断する。
+  今回の調査で購入・有料probeは行っていない。現行の`run --dry-run`は新規初回を
+  明示HOLDにして有料判定を呼ばず、機械判定へも置き換えない。
   [TypeSafe公式モデル料金](https://docs.typesafe.ai/models)
 - **SemIf**: ローカル MLX 推論で外部API従量料はないが、端末・電力・稼働時間まで
   無料とはしない。通常のタグ判定を無断で他モデルに変更しない。
@@ -211,7 +222,7 @@ I/O待機はCPUに含まれない。高額化の防止は CPU 上限だけでな
 | R2 IA容量・retrieval | 使用状態未確認、Standard表で代用しない |
 | Workers Builds | 認証済画面で包含枠内確認。account集計でproject別帰属不可 |
 | GitHub runnerとvisibility | public/標準ubuntuを確認済み。保存課金は未確認 |
-| Jev入力tokens・credit・請求、Notion現在契約 | Jev再開用creditの用意は別対応。月間tokens・請求は未取得。Notion既存Plus契約＋Business trialを認証済みで確認 |
+| Jev入力tokens・credit・請求、Notion現在契約 | Jevは今後の適格な新規初回事業タグだけ。既存保存タグは再利用し、不足補完/旧25件の有料呼出し0。新規実tokens・請求と過去月間請求は未取得。Notion既存Plus契約＋Business trialを認証済みで確認 |
 | 既存Budget Alerts | 認証済画面で設定済み確認。hard capではなく通知のみ、変更なし |
 | 現在のCPU limits | ダッシュボード値は未取得。設定変更なし |
 
@@ -251,3 +262,33 @@ VWAPはfetch並列5を維持し最大30銘柄/8 MiB到達までまとめる。�
 があるため、upload無制限を行数無制限とは解釈しない。原文を公開Actions artifactへ出さず、
 標準public runnerの実行分数は無料。初回の実保存量・ページ数・所要時間を記録して
 300分のjob期限を確認する。将来の利用増加・他サービス分の費用は現在の枠内観測から保証しない。
+
+初回の[通常VWAP受入](./test-logs/vwap-normal-acceptance-20261002.md)では、
+795応答の全原文105,967,254 bytesをgzip 38,145,883 bytes/27ページへ保管・全文照合した。
+日足stepは9分1秒、769件保存後にYahoo認証の429で停止し、5分足は未起動。
+この停止runの部分実測を全銘柄/月額へ比例外挿しない。429の保存本文はproxyの
+Yahoo credential error経路であり、Cloudflare Paid包含枠の不足を示すものではない。
+
+[PR #263](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/263)で、共通Yahoo
+clientが429/期限付き503の絶対再試行期限を失わないよう修正し、株式回収・VWAPは
+その期限を短縮して新規取得を始めない。期限のあるVWAP制限では次の取得波を停止し、
+同じ応答の原文・Retry-Afterを保管する。異常時の不要な取得を減らす修正であり、
+提供元の制限解除・全件取込の成功・月額の固定を保証するものではない。
+
+信用残の通常業種集計は[実行記録](./test-logs/moneyflow-margin-normal-20261002.md)で
+476件の記録と全件照合まで完了した。保存済み9/30の入力を使い、JPX原本の追加GETは0。
+入力2ファイルの実体保管と独立全文照合も完了した。単発の受入検証を月間負荷へ足さず、
+既存プラン内という現在の判断は、上記の確認範囲と観測時点に限定する。
+
+海外売上の[固定15文書の原本検証](./test-logs/overseas-next15-custody-20261002.md)では、
+未保管13文書を各1回取得し、原ZIP合計16,940,276 bytesを共有Notionへ実体保管・全文照合した。
+既存2文書は読取だけで再取得・再アップロード0。実通信はsource13／Notion83／hosted15で、
+この段階のCloudflare D1/R2通信・更新は0。全文の数値資格9／保留6を本番修復完了とは扱わない。
+この単発原本確認を月額へ外挿したり、原本不足を理由に新たな有料プランを購入したりしていない。
+
+その後の[固定13資格の実反映](./test-logs/overseas-qualified13-actual-20261002.md)は
+9文書更新・4文書同値、apply D1 142回/169 SQL、応答metaのread2,554/write328。
+仮に包含枠を使い切っていても、このread/write単価計算は合計約$0.000331で、
+DB保存量・税・他経路は別である。PRE/POSTの新規Notion添付は計450,825 bytes、
+Notion呼出はPRE8/apply8、原本再取得・原ZIP/PRE再アップロード・R2通信は0。
+既存Plusで追加契約は不要。D1所要時間をWorker CPU料金へ換算せず、単発実績を月額へ外挿しない。

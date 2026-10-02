@@ -4,7 +4,7 @@
  * 提供する API:
  *   - fetchChart(symbol, range)      : Chart API (日足 OHLCV)
  *   - fetchQuoteSummary(code)        : QuoteSummary API (PER/PBR/配当/営業利益率 等)
- *   - fetchStockRawData(code, range) : 上記 2 つを並列実行して統合した生データ
+ *   - fetchStockRawData(code, range) : 上記 2 つを逐次取得して統合した生データ
  *
  * CLAUDE.md のフォールバック禁止ルールに従い、HTTP エラー / パース失敗 /
  * crumb 取得失敗はすべて throw する。無認証 fetch への silent fallback は行わない。
@@ -28,6 +28,7 @@ import {
 } from "./bar-sanity.js";
 import { STOCK_CODE_REGEX } from "../jpx/stock-code.js";
 import { sha256HexBytes } from "../sha256.js";
+import { fetchYahooWithSpacing } from "./request-spacing.js";
 
 /**
  * 日本株銘柄コード。
@@ -51,25 +52,25 @@ const QUOTE_SUMMARY_MODULES =
   "financialData,defaultKeyStatistics,summaryDetail,incomeStatementHistory";
 const HTTP_ERROR_BODY_MAX_BYTES = 300;
 /** Retry-After が無い 429 の既定待ち (Yahoo 指定ではなく既定。実測調整可)。 */
-export const DEFAULT_RATE_LIMIT_BACKOFF_MS = 5_000;
+export const DEFAULT_RATE_LIMIT_BACKOFF_MS = 15 * 60_000;
 
 /**
  * Retry-After を絶対時刻へ変換する。source 実期限を保持し、30 秒への
- * 短縮はしない (待機 budget の cap は呼び出し側 — Node recovery の
- * MAX_RECOVERY_BACKOFF_MS — が担う)。非 finite は既定に倒す。
+ * 短縮はしない。Node recovery は MAX_RECOVERY_BACKOFF_MS の待機予算を
+ * 超える期限なら再取得を skip する。非 finite は既定に倒す。
  */
 function rateLimitRetryAt(response: Response): number | null {
-  if (response.status !== 429) return null;
+  if (response.status !== 429 && response.status !== 503) return null;
 
   const now = Date.now();
   const value = response.headers.get("Retry-After")?.trim();
-  let delayMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
+  let delayMs: number | null = DEFAULT_RATE_LIMIT_BACKOFF_MS;
   if (value && /^\d+$/.test(value)) {
     const seconds = Number(value);
     delayMs =
       Number.isFinite(seconds) && Number.isFinite(seconds * 1_000)
         ? seconds * 1_000
-        : DEFAULT_RATE_LIMIT_BACKOFF_MS;
+        : delayMs;
   } else if (value) {
     const retryAt = Date.parse(value);
     if (
@@ -80,6 +81,7 @@ function rateLimitRetryAt(response: Response): number | null {
     }
   }
 
+  if (delayMs === null) return null;
   const retryAt = now + delayMs;
   return Number.isFinite(retryAt) ? retryAt : now + DEFAULT_RATE_LIMIT_BACKOFF_MS;
 }
@@ -152,6 +154,16 @@ export async function yahooHttpErrorMessage(
   return `${label}: ${response.status} ${response.statusText}; ${details.join("; ")}`;
 }
 
+async function throwYahooHttpError(label: string, response: Response): Promise<never> {
+  const message = await yahooHttpErrorMessage(label, response);
+  if (response.status === 429 || response.status === 503) {
+    const error = new YahooRateLimitError(response.status, parseRetryAfter(response), rateLimitRetryAt(response));
+    error.message = message;
+    throw error;
+  }
+  throw new Error(message);
+}
+
 interface YahooCredential {
   crumb: string;
   cookie: string;
@@ -166,12 +178,40 @@ let credentialRefreshInProgress = false;
 let credentialRefreshAttempt = 0;
 let credentialRefreshStartedAt = 0;
 const credentialRefreshErrors: Record<number, Error> = {};
-/** crumb 429 の期限付き失敗。期限内は同一 typed error を投げ、bootstrap しない。 */
+/** page/crumb/chart/summary 共通の期限付き停止。期限内は実通信しない。 */
 let credentialRateLimitedUntil = 0;
 let credentialRateLimitError: YahooRateLimitError | null = null;
 const credentialRefreshWaiterCounts: Record<number, number> = {};
 const CREDENTIAL_REFRESH_POLL_MS = 100;
 const MAX_CREDENTIAL_REFRESH_MS = 30_000;
+
+function rememberYahooRateLimit(error: YahooRateLimitError): YahooRateLimitError {
+  const retryAt = error.retryAtMs !== null ? error.retryAtMs : Date.now() + DEFAULT_RATE_LIMIT_BACKOFF_MS;
+  // 遅れて届いた短い期限で、既知の長い停止期限を短縮しない。
+  if (retryAt >= credentialRateLimitedUntil) {
+    credentialRateLimitedUntil = retryAt;
+    credentialRateLimitError = error;
+  }
+  if (credentialRateLimitError === null) throw new Error("Yahoo 停止状態がありません");
+  return credentialRateLimitError;
+}
+
+/** Yahoo 実通信と Node のプロキシ送信を同じ間隔・停止境界へ通す。 */
+async function pacedYahooFetch(url: string, init: RequestInit): Promise<Response> {
+  const assertNotRateLimited = () => {
+    if (credentialRateLimitError !== null && Date.now() < credentialRateLimitedUntil) {
+      throw credentialRateLimitError;
+    }
+  };
+  assertNotRateLimited();
+  const response = await fetchYahooWithSpacing(url, init, assertNotRateLimited);
+  if (response.status === 429 || response.status === 503) {
+    const retryAt = rateLimitRetryAt(response);
+    if (retryAt === null) throw new Error("Yahoo 制限応答の停止期限がありません");
+    rememberYahooRateLimit(new YahooRateLimitError(response.status, parseRetryAfter(response), retryAt));
+  }
+  return response;
+}
 
 /**
  * 日本株コードは ".T" を付けて Yahoo シンボルに正規化する。
@@ -254,7 +294,7 @@ async function bootstrapYahooCredential(
   crumb: string;
   cookie: string;
 }> {
-  const pageRes = await fetch("https://finance.yahoo.com/quote/AAPL", {
+  const pageRes = await pacedYahooFetch("https://finance.yahoo.com/quote/AAPL", {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -264,11 +304,14 @@ async function bootstrapYahooCredential(
     signal,
   });
   assertCredentialRefreshOwner(refreshAttempt);
+  if (pageRes.status === 429 || pageRes.status === 503) {
+    ensureOk(pageRes);
+  }
 
   const cookies = pageRes.headers.getSetCookie?.() ?? [];
   const cookieStr = cookies.map((c) => c.split(";")[0]).join("; ");
 
-  const crumbRes = await fetch(
+  const crumbRes = await pacedYahooFetch(
     "https://query2.finance.yahoo.com/v1/test/getcrumb",
     {
       headers: {
@@ -281,9 +324,9 @@ async function bootstrapYahooCredential(
   );
   assertCredentialRefreshOwner(refreshAttempt);
 
-  if (crumbRes.status === 429) {
+  if (crumbRes.status === 429 || crumbRes.status === 503) {
     throw new YahooRateLimitError(
-      429,
+      crumbRes.status,
       parseRetryAfter(crumbRes),
       rateLimitRetryAt(crumbRes)
     );
@@ -356,31 +399,25 @@ async function getYahooCredential(): Promise<YahooCredential> {
     };
     cachedCredential = credential;
     credentialExpiry = Date.now() + 30 * 60 * 1000;
-    credentialRateLimitedUntil = 0;
-    credentialRateLimitError = null;
     return credential;
   } catch (error) {
+    const failure = error instanceof YahooRateLimitError ? rememberYahooRateLimit(error) : error;
     if (credentialRefreshAttempt === refreshAttempt) {
       // waiter 共有は typed 429 の同一 instance か、redact 済み Error の
       // いずれか。非 typed の原文・raw cause は共有しない (秘密露出防止)。
       recordCredentialRefreshError(
         refreshAttempt,
-        error instanceof YahooRateLimitError
-          ? error
+        failure instanceof YahooRateLimitError
+          ? failure
           : new Error(
               redactYahooDiagnostic(
-                error instanceof Error ? error.message : String(error)
+                failure instanceof Error ? failure.message : String(failure)
               )
             )
       );
     }
-    if (error instanceof YahooRateLimitError) {
-      credentialRateLimitedUntil =
-        error.retryAtMs ?? Date.now() + DEFAULT_RATE_LIMIT_BACKOFF_MS;
-      credentialRateLimitError = error;
-    }
-    if (error instanceof Error) throw error;
-    throw new Error(redactYahooDiagnostic(String(error)), { cause: error });
+    if (failure instanceof Error) throw failure;
+    throw new Error(redactYahooDiagnostic(String(failure)), { cause: error });
   } finally {
     if (credentialRefreshAttempt === refreshAttempt) {
       credentialRefreshInProgress = false;
@@ -407,7 +444,7 @@ export async function yahooFetchDirect(url: string): Promise<Response> {
   const separator = url.includes("?") ? "&" : "?";
   const authUrl = `${url}${separator}crumb=${encodeURIComponent(credential.crumb)}`;
 
-  const res = await fetch(authUrl, {
+  const res = await pacedYahooFetch(authUrl, {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -419,7 +456,7 @@ export async function yahooFetchDirect(url: string): Promise<Response> {
     invalidateYahooCredential(credential);
     const fresh = await getYahooCredential();
     const retryUrl = `${url}${separator}crumb=${encodeURIComponent(fresh.crumb)}`;
-    return fetch(retryUrl, {
+    return pacedYahooFetch(retryUrl, {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -435,8 +472,8 @@ export async function yahooFetchDirect(url: string): Promise<Response> {
  * 認証付き fetch。
  *
  * - **Node 取込 (GitHub Actions / ローカル)**: `YAHOO_PROXY_BASE` が設定されていれば
- *   Cloudflare エッジの取込プロキシ (`/api/ingest/yahoo`) 経由で叩き、自宅/CI IP の
- *   429 を回避する。crumb/cookie はエッジ側 (yahooFetchDirect) が処理する。
+ *   Cloudflare エッジの取込プロキシ (`/api/ingest/yahoo`) へ委譲する。
+ *   crumb/cookie と上流の制限停止はエッジ側 (yahooFetchDirect) が処理する。
  * - **エッジ (Worker) / プロキシ未設定**: そのまま直接 fetch (yahooFetchDirect)。
  *
  * CLAUDE.md ルール2: プロキシ未到達でも別値で握り潰さず、エラーはそのまま伝播させる。
@@ -452,7 +489,7 @@ async function yahooFetch(url: string): Promise<Response> {
   }
   if (proxyBase && secret) {
     const proxied = `${proxyBase.replace(/\/$/, "")}/api/ingest/yahoo?u=${encodeURIComponent(url)}`;
-    return fetch(proxied, {
+    return pacedYahooFetch(proxied, {
       headers: { Authorization: `Bearer ${secret}` },
     });
   }
@@ -518,7 +555,7 @@ export interface YahooChartRawCapture {
 /** 同一応答の原文と、body受信完了の実clock。認証headerは収集しない。 */
 export interface YahooRawCapture extends YahooChartRawCapture {
   receivedAt: string;
-  headers: { contentType?: string; upstreamStatus?: string };
+  headers: { contentType?: string; upstreamStatus?: string; retryAfter?: string };
 }
 
 export const MAX_YAHOO_RAW_BYTES = 8 * 1024 * 1024;
@@ -562,8 +599,10 @@ function rawCapture(symbol: string, response: Response, bytes: Uint8Array, recei
   const headers: YahooRawCapture["headers"] = {};
   const contentType = response.headers.get("Content-Type");
   const upstreamStatus = response.headers.get("X-Kabulab-Yahoo-Status");
+  const retryAfter = response.headers.get("Retry-After");
   if (contentType !== null) headers.contentType = contentType;
   if (upstreamStatus !== null) headers.upstreamStatus = upstreamStatus;
+  if (retryAfter !== null) headers.retryAfter = retryAfter;
   return { symbol, status: response.status, bytes, receivedAt, headers,
     url: redactYahooDiagnostic(response.url) };
 }
@@ -661,9 +700,7 @@ export async function fetchChart(
   }
 
   if (!response.ok) {
-    throw new Error(
-      await yahooHttpErrorMessage(`Chart API HTTP エラー [${symbol}]`, response)
-    );
+    await throwYahooHttpError(`Chart API HTTP エラー [${symbol}]`, response);
   }
 
   const json = await response.json();
@@ -740,13 +777,13 @@ function parseRetryAfter(r: Response): number | null {
 function ensureOk(r: Response): void {
   if (r.ok) return;
   if (r.status === 429 || r.status === 503) {
-    throw new YahooRateLimitError(r.status, parseRetryAfter(r));
+    throw new YahooRateLimitError(r.status, parseRetryAfter(r), rateLimitRetryAt(r));
   }
   throw new Error(`yahoo ${r.status}`);
 }
 
 /**
- * chart 生レスポンスを取得する (007 の当日 5 分足中継 + 取込 CLI 用)。
+ * chart 生レスポンスを取得する (取込 CLI 用)。
  *
  * 共有の yahooFetch (プロキシ対応・crumb 付き) を使う。`symbol` は Yahoo 形式の
  * 完全形 ("7203.T" / "^N225" 等) で渡す (fetchChart のような正規化はしない)。
@@ -1261,12 +1298,7 @@ export async function fetchQuoteSummary(code: string, options?: FetchChartOption
   }
 
   if (!response.ok) {
-    throw new Error(
-      await yahooHttpErrorMessage(
-        `QuoteSummary API HTTP エラー [${code}]`,
-        response
-      )
-    );
+    await throwYahooHttpError(`QuoteSummary API HTTP エラー [${code}]`, response);
   }
 
   const json = await response.json();
@@ -1367,7 +1399,7 @@ export async function fetchQuoteSummary(code: string, options?: FetchChartOption
 }
 
 // -----------------------------------------------------------------------------
-// fetchStockRawData — Chart + QuoteSummary を並列実行して統合
+// fetchStockRawData — Chart + QuoteSummary を逐次取得して統合
 // -----------------------------------------------------------------------------
 
 /**
@@ -1390,18 +1422,26 @@ export async function fetchStockRawData(
     );
   }
 
-  // 片方の失敗時も相方の原文captureを完了してからcallerへ失敗を返す。
+  // Yahoo に並列送信しない。制限なら相方を取得せず STOP。
+  // 非制限の parse 失敗では従来どおり相方の原文を capture してから失敗を返す。
   const results = await Promise.allSettled([
     fetchChart(code, range, { onRaw: options?.onChartRaw }),
+  ]);
+  const chartAttempt = results[0];
+  if (chartAttempt.status === "rejected" &&
+      (chartAttempt.reason instanceof YahooRateLimitError || chartAttempt.reason instanceof YahooRawTooLargeError)) {
+    throw chartAttempt.reason;
+  }
+  const summaryResults = await Promise.allSettled([
     fetchQuoteSummary(code, { onRaw: options?.onSummaryRaw }),
   ]);
   // 相方のparse失敗に先行されても、原文超過のrun STOPを失わない。
-  for (const result of results) {
+  for (const result of [...results, ...summaryResults]) {
     if (result.status === "rejected" && result.reason instanceof YahooRawTooLargeError) throw result.reason;
   }
-  for (const result of results) if (result.status === "rejected") throw result.reason;
+  for (const result of [...results, ...summaryResults]) if (result.status === "rejected") throw result.reason;
   const chartResult = results[0];
-  const summaryResult = results[1];
+  const summaryResult = summaryResults[0];
   if (chartResult.status !== "fulfilled" || summaryResult.status !== "fulfilled") {
     throw new Error("Yahoo取得結果が確定しません");
   }

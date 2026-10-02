@@ -69,8 +69,16 @@ kabulabAgents 向け契約は
 [docs/005-yuho-quant-business-tags-contract.md](../../docs/005-yuho-quant-business-tags-contract.md)。
 mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反は commit 前に直す):
 
+- **2026-10-02の運用方針: TypeSafeは今後の新規銘柄の初回事業タグのみ**。
+  必須設定 `BIZTAG_NEW_LISTING_FROM` と公式上場情報・同じ世代・active・初回未完で
+  scopeを証明した後だけAPIキーをlazyに参照する。既存の判定済みタグと根拠はNotion
+  銘柄マスタ（補足）の銘柄コードで再利用し、有報/語彙が変わっても付け直さない。
+  未設定/判定失敗だけkeywords/excludesの機械的一致で補完し、新しい機械根拠にAI確率を
+  付けない。本文資格不足はHOLDで結果保持。
+  語彙審査・精度測定・競合AIは停止を維持し、旧課金切れ25件を新規AIへ送らない。
+  停止前はdoc/vocab更新・retry・証拠欠けにもAIを使っていた履歴を正しく区別する。
 - **AI に事業内容を作文させない・LLM の生文を保存しない**。Notion へ書くのは
-  「単語帳の語(ID・名前)」「判定の確率と帯」「有報からコードで抜き出した原文の文
+  「単語帳の語(ID・名前)」「判定方式(AIは確率と帯、機械はキーワード一致)」「有報からコードで抜き出した原文の文
   (書類ID・会計期末つき)」の3つだけ。jev(判定モデル)の応答からそれ以外の自由文を
   そのまま保存する経路を作らない。
 - **状態は正直に記録する**(ルール2の帰結)。`未判定`・`本文なし`・`読込失敗`・
@@ -107,9 +115,9 @@ mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反
   (`competitors/calibration.json`=jev / `calibration.semif.json`=semif) からのみ
   読む (`competitors/calibration.ts` の `loadCompetitorCalibration(judge)`)。
   未較正の値をコードに埋め込まない。
-- 判定モデル (judge) は `jev` (既定) と `semif` (ローカル MLX 推論。
-  jev のクレジット枯渇時の代替。`src/shared/semif/`) を選べる
-  (`--judge=`)。どちらも `JevClient.askNoul` を実装するだけの差し替えで、
+- 判定モデル (judge) の `jev` (既定) は現在停止する。`semif` (ローカル MLX 推論。
+  `src/shared/semif/`) は既存の明示 `--judge=semif` 経路だけを維持し、自動代替しない。
+  環境・依存の構築はNixで行う。どちらも `JevClient.askNoul` を実装する設計で、
   候補生成・しきい値判定・relation書込のロジックは共通 (§12.9)。
 - A→B の relation は**片方向のみ** (自動でミラーしない。§12.5)。
 - `NOTION_BIZTAG_LEDGER_DB_ID`(単語帳台帳)には触れない (D1 も読まない)。
@@ -147,11 +155,11 @@ pnpm backfill:overseas      # 既存有報の海外埋め戻し (D1 HTTP)
 pnpm yuho:backfill:text     # 既存有報の開示テキスト埋め戻し (CSV のみ・D1 HTTP)
 pnpm yuho:backfill:missing  # 期間指定の取りこぼし回収 (日次上限で欠けた分。無制限・再開可能)
 pnpm audit:overseas         # 全銘柄の取りこぼし署名を集計
-pnpm biztag run             # 事業タグ判定 (差分処理。catchup.yml が平日実行)
-pnpm biztag gate            # 単語帳の見直し提案の審査 (通常は run の冒頭が呼ぶ)
-pnpm biztag golden          # ゴールデンセットで精度測定 (しきい値較正用)
+pnpm biztag run             # 今後の新規初回だけAI / 保存タグ再利用・不足だけ機械補完 (開始日必須)
+pnpm biztag gate            # 現在停止: TypeSafeを使う見直し提案審査
+pnpm biztag golden          # 現在停止: TypeSafeを使う精度測定
 pnpm biztag rollback        # 単語帳を過去の版へ巻き戻す (--to=vN --reason=...)
-pnpm biztag competitors     # 競合他社の判定・relation書込 (差分方式。--dry-run/--codes/--limit/--budget-min/
+pnpm biztag competitors     # 既定jevは停止。明示semif経路のみ維持 (--dry-run/--codes/--limit/--budget-min/
                             #   --judge=jev|semif/--only-unjudged/--concurrency)
 pnpm biztag competitors-eval # 競合他社の評価セットで精度測定 (しきい値較正用。--judge=jev|semif)
 pnpm test / pnpm typecheck / pnpm lint

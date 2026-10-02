@@ -1,6 +1,6 @@
 # 残件の本番確認と費用 — 2026-10-02
 
-Refs #98 #117 #132 #146 #163 #196。公開Gitには集計・SHA・実行リンクだけを保存する。
+Refs #98 #102 #117 #132 #146 #160 #163 #196。公開Gitには集計・SHA・実行リンクだけを保存する。
 原文・請求画面・アカウント財務・認証値は公開しない。
 
 ## 有報の通常Node入口
@@ -27,15 +27,28 @@ Refs #98 #117 #132 #146 #163 #196。公開Gitには集計・SHA・実行リン�
 
 実jobログは私有0600で保持した。再dispatch・未知の過去POST再送は行っていない。
 
+その後、[定時catchup](catchup-scheduled-20261002.md)はTDnet・EDINET・biztagまで成功。
+TDnetの期限到達とEDINETのcap、課金切れ25件は残っており、全履歴完了とは扱わない。
+その後、TypeSafeの新規判定は利用者方針で一旦停止へ変更した。25件の過去状態は保持し、
+入金待ちとして再開を促さない。[低負荷・判定停止の記録](yahoo-low-load-typesafe-disabled-20261002.md)。
+停止前は最低top-up $5と25件の推論費概算約$0.069（最大retry仮定約$0.276）を区別し、
+補充成立後の限定再開を検討していた。この過去の見積りは現在の購入・再開方針ではない。
+追加方針で[新規銘柄の初回事業タグだけAI](biztag-new-stock-only-20261002.md)を許可し、
+既存の判定済みタグは銘柄コードで再利用し、有報/語彙変更でも付け直さない。未設定/判定失敗
+だけ機械的一致で不足を補完する。旧25件を新規AI対象にせず、本番の全件更新は未実施。
+
 ## 限定修復と残件
 
 | 対象 | 10/2の確認済み状態 |
 | --- | --- |
 | 646A | 最新FSA原本→通常資格判定でsector33を化学へ修復。全56cells一致・再入SQL0・原本/PRE/POST全文保管。[実績](issuer646-actual-20261002.md) |
 | 優待2307/2001/3189/6577 | 旧HOLD14行の制度/行生成を修復。実POST467cells一致・再入SQL0・全原本保管。選択/寄付/抽選の金額NULLを保持。[実績](yutai-hold14-actual-20261002.md) |
-| 株式10/1 | 通常runは3634/3689成功、55失敗。55は現在active equity、将来廃止を前倒ししない。原本欠落の修正後に受入確認が必要 |
+| 株式10/1 | 以前の3634/3689成功・55失敗は未修復。原文保管修正後の通常入口はN225終値nullで停止、個別株/D1/R2書込0。[実受入](stock-normal-acceptance-20261002.md)。[PR263](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/263)で再試行期限と回収中の取得停止を修正したが、修正後の通常全量成功・55件の新原文分類は未確認。将来廃止を前倒ししない |
+| VWAP | 通常入口の全795応答/27partsとsummaryを全文照合。769保存後にYahoo認証429で停止、5分足未起動。[実受入](vwap-normal-acceptance-20261002.md)。株式/VWAP共通PR263は3CI成功・main `0fe0a71`へmerge済み。19:12UTC頃にrootがCloudflare UIでBuild SUCCESS・version `eb298192`・本番traffic100%を確認。新source GET0で、Yahoo制限解除・通常全量日足/5分足成功は未確認。Cloudflare Paid不足と混同しない |
+| 信用残 | 旧週次PDFを同SHA/4230行で再解析し、既存定時日次成功の9/30 PDF/4260行とR2全文一致を確認。[実績](vwap-margin-weekly-readback-20261002.md)。既存7認証設定を接続した[通常業種集計run](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/36908547972)は18:48:43UTCに成功、入力2添付の独立全文照合と476件再解析も19:04:54–57UTCにPASS。Producerの全476POST照合成功とは別の証拠。保存済み9/30入力の新実績であり、旧9/28 UNKNOWNの再送・解決や全moneyflow/sector-turnover正常化とは扱わない |
+| 海外売上 | S100YJVF1通の4連結区分差は[実照合済み](overseas-pilot-actual-20261002.md)。後続固定15通の[修正前原本検証9資格/57明細・HOLD6](overseas-next15-custody-20261002.md)を保持し、PR266の統合全文解析で13資格/84明細・HOLD2へ更新。実反映は9APPLIED/4MATCH、全13文書16列・84明細12列・変更9銘柄の集計32列・同文書再入sender0・PRE/POST実体と全SHAの独立照合がPASS。[本番実績](overseas-qualified13-actual-20261002.md)。HOLD2と旧3611全体は未完 |
 | 8508 | PR258で単発日を別列へ保持し年間利回り/定常月から分離。実1件の9/2日付修復、全97cells一致・再入SQL0・通常6月4件保持・全原本/PRE/POST保管と本番UI確認を完了。[実績](yutai-oneoff-actual-20261002.md) |
-| 課金切れ25銘柄 | 通知欠落をPR255で修正。補充未実施。最低top-up $5と25件の推論費概算上限約$0.069（最大retry仮定約$0.276）は別。10/3以後なら現retry条件のまま限定再開可能 |
+| 課金切れ25銘柄 | 通知欠落をPR255で修正した過去状態を保持。新規AIの対象外で、その有料再開/credit補充は不要。未設定/失敗の不足補完は本文資格成立後の機械的一致だけ、判定済みの保存タグは再利用する。HOLDを「判定済」や「該当なし」へ変えない。本番の全件更新は未実施。[新方針](biztag-new-stock-only-20261002.md) |
 | 定時起動PR195 | 3CI成功・レビュー済み。WorkerのGITHUB_ACTIONS_TOKENが未設定のため未merge。既存cronを消すだけの状態へ移行しない |
 | 622A/海外未資格/信用残UNKNOWN/JPX新様式 | [公式根拠・再開条件](data-remaining-investigation-20261001.md)を維持。公表前の実ファイルや過去POST結果を作らない |
 

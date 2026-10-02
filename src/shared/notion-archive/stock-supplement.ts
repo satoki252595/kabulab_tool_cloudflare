@@ -317,6 +317,8 @@ export interface SupplementRow {
   vocabVersion: string | null;
   judgedAt: string | null;
   candidateCount: number | null;
+  /** 既存の判定入力列。旧unit行の未読取はundefinedであり、新規判定の証明ではない。 */
+  judgeInput?: string | null;
   attempts: number | null;
   nextRetryAt: string | null;
   error: string | null;
@@ -399,6 +401,7 @@ function parseSupplementRow(page: NotionPage, textColumns: string[]): Supplement
     vocabVersion: p[SUPPLEMENT_PROPS.vocabVersion]?.select?.name ?? null,
     judgedAt: readDate(p[SUPPLEMENT_PROPS.judgedAt]),
     candidateCount: readNumber(p[SUPPLEMENT_PROPS.candidateCount]),
+    judgeInput: readRich(p[SUPPLEMENT_PROPS.judgeInput]) || null,
     attempts: readNumber(p[SUPPLEMENT_PROPS.attempts]),
     nextRetryAt: readDate(p[SUPPLEMENT_PROPS.nextRetryAt]),
     error: readRich(p[SUPPLEMENT_PROPS.error]) || null,
@@ -847,12 +850,10 @@ export async function updateSupplementRow(
 
 export const EVIDENCE_TITLE_PREFIX = "事業タグの根拠";
 
-export interface EvidenceItem {
+export type EvidenceItem = {
   labelJa: string;
-  band: "yes" | "uncertain";
-  probability: number;
   sentences: Array<{ text: string; sectionTitle: string }>;
-}
+} & ({ band: "yes" | "uncertain"; probability: number } | { band: "keyword" });
 export interface EvidenceBlockInput {
   vocabVersion: string;
   docId: string;
@@ -877,7 +878,9 @@ export function buildEvidenceBlock(input: EvidenceBlockInput): unknown {
   const heading = `${EVIDENCE_TITLE_PREFIX}（単語帳 ${input.vocabVersion}・有報 ${input.docId} ${input.periodLabel}）`;
   const children = input.items.map((item) => {
     const firstLine =
-      item.band === "yes"
+      item.band === "keyword"
+        ? `${item.labelJa}（キーワード一致）`
+        : item.band === "yes"
         ? `${item.labelJa}（はい ${item.probability.toFixed(2)}）`
         : `要確認: ${item.labelJa}（確認不能 ${item.probability.toFixed(2)}）`;
     const lines = [

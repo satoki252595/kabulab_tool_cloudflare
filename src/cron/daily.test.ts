@@ -51,7 +51,7 @@ describe("createDailyStockStartGate", () => {
     }
   });
 
-  it("待機中に観測した最初の429だけで後続を最大30秒止める", async () => {
+  it("後続の429でsource期限が延びても30秒へ短縮せず取得を止める", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-09-05T00:00:00.000Z"));
@@ -76,15 +76,39 @@ describe("createDailyStockStartGate", () => {
           `retry-at-ms=${Date.now() + 60_000}`
       );
 
-      await vi.advanceTimersByTimeAsync(29_040);
+      await vi.advanceTimersByTimeAsync(60_030);
       await pending;
 
       expect(startedAt.map((value) => value - base)).toEqual([
-        0, 30_010, 30_040,
+        0, 61_000, 61_030,
       ]);
     } finally {
       vi.useRealTimers();
     }
+  });
+  it.each([429, 503])("%sのsource期限がrun期限以後なら待機/新GET前にfalseを返す", async (status) => {
+    const now = Date.now(), gate = createDailyStockStartGate(30, now + 30_000);
+    gate.observeFailure(`Chart API HTTP エラー [7203]: ${status} rate limited; retry-at-ms=${now + 120_000}`);
+    expect(await gate.wait()).toBe(false);
+  });
+  it("回収の待機予算以後なら21UTC前でも新sleep/GET前にfalseを返す", async () => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.now(), gate = createDailyStockStartGate(30, now + 3_600_000);
+      gate.observeFailure(`Chart API HTTP エラー [7203]: 429 rate limited; retry-at-ms=${now + 120_000}`);
+      expect(await gate.wait(now + 30_000)).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+  it("予定開始は期限内でも実際の起床が期限後なら新GET前にfalseを返す", async () => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.now(), gate = createDailyStockStartGate(30);
+      expect(await gate.wait(now + 100)).toBe(true);
+      const pending = gate.wait(now + 100);
+      vi.advanceTimersByTime(101);
+      expect(await pending).toBe(false);
+    } finally { vi.useRealTimers(); }
   });
 });
 
@@ -182,10 +206,23 @@ describe("isTransientDailySyncFailure", () => {
 });
 
 describe("recoverTransientDailyFailures", () => {
+  it("通常producerのretry:falseはHTTP/DB失敗を再処理・待機せず残す", async () => {
+    const processTarget = vi.fn();
+    const beforeAttempt = vi.fn();
+    const failures = [
+      { target: "A", error: `Chart API HTTP エラー [A]: 429; retry-at-ms=${Date.now() + 120_000}` },
+      { target: "B", error: "fetch failed" },
+      { target: "C", error: "permanent invalid close" },
+    ];
+    const result = await recoverTransientDailyFailures(failures, processTarget, { retry: false, beforeAttempt });
+    expect(result).toEqual({ attempted: 0, recovered: 0, skippedDueToLimit: 2, failures });
+    expect(processTarget).not.toHaveBeenCalled();
+    expect(beforeAttempt).not.toHaveBeenCalled();
+  });
   it("429を有界なRetry-After後に1回再処理して回復する", async () => {
     vi.useFakeTimers();
     try {
-      const retryAt = Date.now() + 60_000;
+      const retryAt = Date.now() + 5_000;
       const processed: string[] = [];
       const pending = recoverTransientDailyFailures(
         [
@@ -201,7 +238,7 @@ describe("recoverTransientDailyFailures", () => {
         }
       );
 
-      await vi.advanceTimersByTimeAsync(29_999);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(processed).toEqual([]);
       await vi.advanceTimersByTimeAsync(1);
       expect(processed).toEqual(["2418"]);
@@ -214,6 +251,28 @@ describe("recoverTransientDailyFailures", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+  it("120秒のsource期限を30秒へ短縮せず回収対象を未試行で残す", async () => {
+    const processTarget = vi.fn();
+    const failure = { target: "7203", error: `Chart API HTTP エラー [7203]: 429 Too Many Requests; retry-at-ms=${Date.now() + 120_000}` };
+    const result = await recoverTransientDailyFailures([failure], processTarget);
+    expect(processTarget).not.toHaveBeenCalled();
+    expect(result).toEqual({ attempted: 0, recovered: 0, skippedDueToLimit: 1, failures: [failure] });
+  });
+  it.each([120_000, 20_000])("回収中に延びたsource期限%s msが待機/全体予算外なら次対象の新GET/sleep0", async (delay) => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.now();
+      const failures = ["7203", "7201"].map((target) => ({ target, error: "fetch failed" }));
+      const processTarget = vi.fn(async () => {
+        throw new Error(`Chart API HTTP エラー [7203]: 429 Too Many Requests; retry-at-ms=${now + delay}`);
+      });
+      const result = await recoverTransientDailyFailures(failures, processTarget, { deadlineMs: now + 20_000 });
+      expect(processTarget).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(result).toMatchObject({ attempted: 1, recovered: 0, skippedDueToLimit: 1 });
+      expect(result.failures[1]).toEqual(failures[1]);
+    } finally { vi.useRealTimers(); }
   });
 
   it("429が再処理後も続けば成功扱いせず最新失敗を残す", async () => {

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
 import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { loadCodes } from "./lib/codes.js";
-import { YahooRawTooLargeError } from "../../src/shared/yahoo/client.js";
+import { YahooRawTooLargeError, YahooRateLimitError } from "../../src/shared/yahoo/client.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main } from "./ingest-intra.js";
@@ -72,7 +72,7 @@ const SAVED_CWD = process.cwd();
 // main() は cwd/.vwap-summaries/ へ原本を書く。repo 汚染防止で tmp へ chdir。
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   process.argv = ["node", "vitest"];
   process.exitCode = undefined;
@@ -126,6 +126,21 @@ describe("ingest-intra main flow", () => {
     expect(local.kind).toBe("intra");
   });
 
+  it("validated timestamp keys sort/prune while preserving all surviving bar fields", async () => {
+    mockLoadCodes.mockResolvedValue(["A"]);
+    const oldKept = { ...BAR, ts: TS - 60, sourceTag: "retained" };
+    const oldExpired = { ...BAR, ts: TS - 366 * 86400, sourceTag: "expired" };
+    const oldReplaced = { ...BAR, sourceTag: "replaced" };
+    const newBar = { ...BAR, sourceTag: "fresh", extra: { captured: true } };
+    mockR2Get.mockResolvedValue({ body: JSON.stringify({ code: "A", updated: "2026-09-28T00:00:00.000Z",
+      bars: [oldReplaced, oldExpired, oldKept] }), etag: "version-A" });
+    mockFetch5m.mockResolvedValue([newBar]);
+    await main();
+    expect(mockR2Put).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(mockR2Put.mock.calls[0][1]).bars).toEqual([oldKept, newBar]);
+    expect(process.exitCode).toBe(0);
+  });
+
   it("GET fault after source await => PUT0/exit2 (second code never fetched)", async () => {
     mockLoadCodes.mockResolvedValue(["A", "B"]);
     mockFetch5m.mockResolvedValue([BAR]);
@@ -158,15 +173,15 @@ describe("ingest-intra main flow", () => {
 
   it("custody failure archives current chunk attempts but prevents chunk PUT and next chunk source", async () => {
     (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 2, delayMs: 1, maxRateLimit: 5, keepDays: 365 };
-    const codes = Array.from({ length: 13 }, (_, i) => String(1000 + i));
+    const codes = Array.from({ length: 31 }, (_, i) => String(1000 + i));
     mockLoadCodes.mockResolvedValue(codes);
     mockFetch5m.mockResolvedValue([BAR]);
     mockR2Get.mockResolvedValue(null);
     mockRawArchive.mockRejectedValue(new Error("unknown Notion result; no resend"));
     await main();
     expect(mockRawArchive).toHaveBeenCalledTimes(1);
-    expect(mockRawArchive.mock.calls[0][0].captures.map((r) => r.capture.symbol).sort()).toEqual(codes.slice(0, 12).map((c) => `${c}.T`));
-    expect(mockFetch5m).toHaveBeenCalledTimes(12);
+    expect(mockRawArchive.mock.calls[0][0].captures.map((r) => r.capture.symbol).sort()).toEqual(codes.slice(0, 30).map((c) => `${c}.T`));
+    expect(mockFetch5m).toHaveBeenCalledTimes(30);
     expect(mockR2Put).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(2);
   });
@@ -182,41 +197,40 @@ describe("ingest-intra main flow", () => {
     expect(process.exitCode).toBe(0);
   });
 
-  it("second-wave fatal waits for all captured raw and prevents third-wave source and batch PUT", async () => {
-    (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 2, delayMs: 1, maxRateLimit: 5, keepDays: 365 };
-    mockLoadCodes.mockResolvedValue(["A", "B", "C", "D", "E", "F"]);
-    let ready!: () => void;
-    const secondWaveReady = new Promise<void>((resolve) => { ready = resolve; });
-    mockFetch5m.mockImplementation(async (symbol: string) => {
-      if (symbol === "D.T") ready();
-      return [BAR];
-    });
+  it("sequential acquisition ignores higher CONC and R2 fault stops the next source", async () => {
+    (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 5, delayMs: 1, maxRateLimit: 5, keepDays: 365 };
+    mockLoadCodes.mockResolvedValue(["A", "B", "C", "D"]);
+    mockFetch5m.mockResolvedValue([BAR]);
     mockR2Get.mockImplementation(async (key: string) => {
-      if (key === "intra/C.json") {
-        await secondWaveReady;
-        throw new Error("R2 GET transport fault");
-      }
+      if (key === "intra/C.json") throw new Error("R2 GET transport fault");
       return null;
     });
     await main();
-    expect(mockFetch5m.mock.calls.map(([symbol]) => symbol).sort()).toEqual(["A.T", "B.T", "C.T", "D.T"]);
-    expect(mockRawArchive).toHaveBeenCalledTimes(1);
-    expect(mockRawArchive.mock.calls[0][0].captures.map((r) => r.capture.symbol).sort()).toEqual(["A.T", "B.T", "C.T", "D.T"]);
+    expect(mockFetch5m.mock.calls.map(([symbol]) => symbol)).toEqual(["A.T", "B.T", "C.T"]);
+    expect(mockRawArchive.mock.calls[0][0].captures.map((r) => r.capture.symbol)).toEqual(["A.T", "B.T", "C.T"]);
     expect(mockR2Put).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(2);
   });
 
-  it("parse failures preserve every received retry body before successful PUT", async () => {
-    mockLoadCodes.mockResolvedValue(["A"]);
-    mockR2Get.mockResolvedValue(null);
-    mockFetch5m.mockRejectedValueOnce(new Error("JSON parse failure"))
-      .mockRejectedValueOnce(new Error("bar guard failure")).mockResolvedValueOnce([BAR]);
-    mockR2Put.mockResolvedValue(undefined);
+  it.each([null, Date.now() + 120_000])("first rate response deadline %s seals raw before stopping GET/PUT", async (retryAt) => {
+    (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 5, delayMs: 1, maxRateLimit: 5, keepDays: 365 };
+    mockLoadCodes.mockResolvedValue(["A", "B", "C"]);
+    mockFetch5m.mockRejectedValue(new YahooRateLimitError(429, 120_000, retryAt));
     await main();
-    expect(mockRawArchive.mock.calls[0][0].captures.map((r) => r.attempt)).toEqual([1, 2, 3]);
-    expect(mockFetch5m).toHaveBeenCalledTimes(3);
-    expect(mockR2Put).toHaveBeenCalledTimes(1);
-    expect(process.exitCode).toBe(0);
+    expect(mockFetch5m).toHaveBeenCalledTimes(1);
+    expect(mockRawArchive.mock.calls[0][0].captures).toHaveLength(1);
+    expect(mockR2Put).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("parse failure preserves the received body without another source attempt", async () => {
+    mockLoadCodes.mockResolvedValue(["A"]);
+    mockFetch5m.mockRejectedValueOnce(new Error("JSON parse failure")).mockResolvedValueOnce([BAR]);
+    await main();
+    expect(mockRawArchive.mock.calls[0][0].captures.map((r) => r.attempt)).toEqual([1]);
+    expect(mockFetch5m).toHaveBeenCalledTimes(1);
+    expect(mockR2Put).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
   });
 
   it("raw absent or too large aborts without retrying source or sending PUT", async () => {
@@ -236,14 +250,14 @@ describe("ingest-intra main flow", () => {
     }
   });
 
-  it("transport retries without a response record explicit missing attempts and never PUT", async () => {
+  it("transport failure records one explicit missing attempt without retry or PUT", async () => {
     rawHook.enabled = false;
     mockLoadCodes.mockResolvedValue(["A"]);
     mockFetch5m.mockRejectedValue(new Error("transport connection reset"));
     await main();
     const input = mockRawArchive.mock.calls[0][0];
     expect(input.captures).toEqual([]);
-    expect(input.missing?.map((r) => r.attempt)).toEqual([1, 2, 3]);
+    expect(input.missing?.map((r) => r.attempt)).toEqual([1]);
     expect(mockR2Put).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
