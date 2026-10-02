@@ -4,7 +4,7 @@
 # - TDnet(006): PDF センチメントが kuromoji(Node 専用)依存のため Node で実行し
 #   D1 へ HTTP API で書く。取込元 TDnet はホストが異なり 429 されないのでプロキシ不要。
 # - EDINET(005): Node が共通取込を直接実行。D1 HTTP atomic sender と既存 Notion 保管を使用。
-# - biztag(005): 今後追加される新規上場の初回事業タグだけTypeSafe。
+# - biztag(005): Mac LaunchAgentへ移管。新規初回はローカルSemIf。
 #   既存の判定済みタグは銘柄コードで再利用し、未設定/判定失敗だけ語句一致で補完する。
 #   語彙審査・精度測定・競合判定は停止を維持する。
 #
@@ -14,11 +14,7 @@
 #   CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID / D1_DATABASE_ID … TDnet の D1 REST 書込
 #   NOTION_TOKEN / NOTION_ARCHIVE_PAGE_ID / NOTION_YUHO_TEXT_DB_ID  … 一次データ Notion アーカイブ(ルール6)
 #   EDINET_API_KEY … EDINET API v2 (backfill と同じ Secret)
-#   TYPESAFE_API_KEY … 適格な新規上場の初回事業タグのみ (biztag job限定)
-#   NOTION_STOCK_INFO_PAGE_ID / NOTION_DB_STOCK_MASTER
-#     / NOTION_STOCK_SUPPLEMENT_DB_ID / NOTION_BIZTAG_LEDGER_DB_ID … biztag の Notion 先
-# 必要な GitHub Variables:
-#   BIZTAG_NEW_LISTING_FROM … 新規上場の対象開始日 (YYYY-MM-DD、未設定時は停止)
+# biztagの補足DB/台帳はMacの唯一writerだけが更新する。
 name: catchup
 
 on:
@@ -95,53 +91,17 @@ jobs:
           title: "[ジョブ失敗] ${{ github.workflow }}"
           summary: "${{ github.workflow }} が失敗しました。"
 
-  # 既存D1の本文を読むため、親取込の失敗/対象外skipでもbiztag単独は実行可能。
-  # 補足行/台帳のread-check-writeはbackfillのbiztag系と同じgroupで直列化する。
+  # LinuxではMLXを実行しない。scheduleのbiztagはMacの20:00 JSTに移管。
+  # 手動target=biztag/allも取得前に止め、二重writerを作らない。
   biztag:
     needs: catchup
     if: >-
-      always() && needs.catchup.result != 'cancelled' &&
-      (github.event_name == 'schedule' ||
-        (github.event_name == 'workflow_dispatch' &&
-          (github.event.inputs.target == 'biztag' || github.event.inputs.target == 'all')))
+      always() && github.event_name == 'workflow_dispatch' &&
+      (github.event.inputs.target == 'biztag' || github.event.inputs.target == 'all')
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    concurrency:
-      group: biztag-notion
-      cancel-in-progress: false
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
-      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-      NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
-      NOTION_YUHO_TEXT_DB_ID: ${{ secrets.NOTION_YUHO_TEXT_DB_ID }}
-      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-      BIZTAG_NEW_LISTING_FROM: ${{ vars.BIZTAG_NEW_LISTING_FROM }}
-      NOTION_STOCK_INFO_PAGE_ID: ${{ secrets.NOTION_STOCK_INFO_PAGE_ID }}
-      NOTION_DB_STOCK_MASTER: ${{ secrets.NOTION_DB_STOCK_MASTER }}
-      NOTION_STOCK_SUPPLEMENT_DB_ID: ${{ secrets.NOTION_STOCK_SUPPLEMENT_DB_ID }}
-      NOTION_BIZTAG_LEDGER_DB_ID: ${{ secrets.NOTION_BIZTAG_LEDGER_DB_ID }}
+    timeout-minutes: 1
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: biztag (新規初回AI / 保存タグ再利用・不足補完)
-        id: biztag
-        run: pnpm biztag run --budget-min=20
-      - name: biztag の通知 (要確認の残件)
-        if: steps.biztag.outputs.notify == 'true'
-        uses: ./.github/actions/notify-failure
-        with:
-          title: ${{ steps.biztag.outputs.notify_title }}
-          summary: ${{ steps.biztag.outputs.notify_summary }}
-      - name: 失敗したら Issue を立てる
-        if: failure()
-        uses: ./.github/actions/notify-failure
-        with:
-          title: "[ジョブ失敗] ${{ github.workflow }} (biztag)"
-          summary: "${{ github.workflow }} (biztag) が失敗しました。"
+      - name: Mac専用biztag writerへ案内して取得前停止
+        run: |
+          echo "biztagは承認済みmainのMac LaunchAgentへ移管済みです。Linuxからは取得・保存しません。docs/005-biztag-local-runtime.mdを参照してください。" >&2
+          exit 1
