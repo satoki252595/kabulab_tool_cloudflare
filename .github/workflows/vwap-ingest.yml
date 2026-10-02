@@ -3,7 +3,7 @@
 # Yahoo取得は共有clientのYAHOO_PROXY_BASE経路。proxy/upstreamの429・ABORTは失敗として扱う。
 # 取得済本文は私有ローカル全parts保存・Notion物理照合後にだけR2へ保存する。
 # このworkflowのscheduleはdefault branch(main)から発火する。
-# 実行母集団は取得時のuniverseを使用し、CONC=5の取得を最大30銘柄ずつ保管する。
+# 実行母集団は取得時のuniverseを使用し、CONC=1の取得を最大30銘柄ずつ保管する。
 # 原本保管の追加量/時間と料金条件: docs/test-logs/yahoo-raw-custody-20261002.md。
 # 本番R2へのPUTは取得時の版/不在に条件付ける。競合・結果不明は停止し、再送しない。
 #
@@ -48,14 +48,18 @@ permissions:
 
 jobs:
   ingest:
+    # producerだけが保持し、stock-syncのreusable moneyflow呼出し前に解放する。
+    concurrency:
+      group: yahoo-source
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 300 # 原本保管追加後の全量時間は初回正常runで計測する。
     env:
-      # 既存取得CONCを維持。HTTP失敗・MAX_RL到達・custody失敗は全件成功と扱わない。
-      CONC: "5"
+      # Yahoo取得は直列。初回429/503・custody失敗は後続取得/PUTを停止する。
+      CONC: "1"
       DELAY_MS: "300"
       # 取込 knob の通常値 (必須宣言。コード側に黙示既定なし)。
-      MAX_RATE_LIMIT: "5"
+      MAX_RATE_LIMIT: "1"
       KEEP_DAYS: "365"
       INTRA_RANGE: "5d"
       YAHOO_PROXY_BASE: ${{ secrets.YAHOO_PROXY_BASE }}

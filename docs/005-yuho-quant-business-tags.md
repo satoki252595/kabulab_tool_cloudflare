@@ -1,5 +1,11 @@
 # 005 yuho-quant — 銘柄マスタ（補足）と事業タグ（設計書）
 
+**現運用（2026-10-02、[Issue #268](https://github.com/satoki252595/kabulab_tool_cloudflare/issues/268)）**:
+利用者方針でTypeSafeの新規外部判定を停止する。共有client・CLI・pipelineはAPIキーが
+あってもD1/Notion/判定APIのI/O前に終了し、credit補充は不要。保存済みの事業タグ・
+競合判定、未判定、過去の課金エラーを保持する。`--judge=semif` の既存明示経路は維持
+するが、自動代替・全量再判定は行わない。以下の設計・実験・実測は停止前の履歴を含む。
+
 有報（EDINET 有価証券報告書）の開示テキスト 39 項目を **1 銘柄 1 行**の Notion
 データベース「銘柄マスタ（補足）」に構造化して置き、「事業の内容」（＋セグメント情報・MD&A・研究開発活動の該当箇所）
 から**単語帳（語彙）に沿った事業タグ**を jev（TypeSafe System One）で判定して
@@ -373,11 +379,16 @@ Notion のリクエスト数と 429 回数、処理時間。精度（ゴール�
 
 ## 11. 運用手順（runbook）
 
+現在はTypeSafeを使う `run` / `gate` / `golden` / 既定judgeの `competitors` /
+`competitors-eval` を停止する。`--dry-run` も同じ停止対象で、定時catchupからの
+事業タグ判定は起動しない。以下のTypeSafeセットアップ・再判定手順は停止前の記録であり、
+APIキー登録・入金・手動バックフィルの実施案内ではない。
+
 CLI は全て `pnpm biztag <subcommand>`（リポジトリルートから。実体は
 `services/yuho-quant/data-scripts/biztag.ts`）。標準出力に JSON サマリ、CI 実行時は
 `$GITHUB_STEP_SUMMARY` に markdown も出る。
 
-### 11.1 初期セットアップ（最初の1回だけ）
+### 11.1 停止前の初期セットアップ記録
 
 1. **`.env` に最低限の値を用意する**（`.env.example` 参照）: 既存の `NOTION_TOKEN` /
    `NOTION_STOCK_INFO_PAGE_ID`（既に「株式情報」ページ用に存在するはず）/
@@ -414,7 +425,7 @@ CLI は全て `pnpm biztag <subcommand>`（リポジトリルートから。実�
    `KABULAB_CF_ORIGIN`（Worker の本番 URL）と `KABULAB_CF_VOCAB_TOKEN`（手順5の `$TOKEN`）を
    登録する。
 
-### 11.2 日次運用
+### 11.2 停止前の日次運用記録
 
 - 平日 `catchup.yml` が EDINET 取込の直後に `pnpm biztag run --budget-min=20` を実行する
   （§7）。何もしなくてよい。1回の予算で終わらなかった銘柄は、翌日の実行が
@@ -425,10 +436,10 @@ CLI は全て `pnpm biztag <subcommand>`（リポジトリルートから。実�
   「銘柄マスタ（補足）」DB を直接見る（§4 の状態列の意味は
   [契約書](./005-yuho-quant-business-tags-contract.md) §4 も参照）。
 
-### 11.3 バックフィル（手動）
+### 11.3 バックフィル（TypeSafe判定は現在停止）
 
-`backfill.yml` を `workflow_dispatch` で手動起動する（`gh workflow run backfill.yml
--f job=biztag ...` または GitHub UI）。
+以下は既存jobの対応表。`biztag` / `biztag-golden` / `biztag-competitors` は現在停止し、
+`biztag-rollback` は判定を伴わない既存経路を保持する。
 
 | `job` | 実行内容 | 使う場面 |
 |---|---|---|
@@ -491,10 +502,10 @@ pnpm biztag rollback --to=v1 --reason="v3 で追加した語の精度が低い�
     失敗している銘柄。Notion の該当行の「判定エラー」列を見て原因を切り分ける
     （EDINET 側の本文抽出失敗、jev 側の恒常的エラー 等）。
   - **課金切れ（jev 402/billing_error）で判定不能の銘柄がある**: 再試行期日が未来、
-    または再試行上限に達した行も通知に残す。Cloudflare Workers Paidとは別の
-    TypeSafeアカウントのCreditsを確認する。上限到達は課金問題の解消を意味しない。
-    `--codes=`は再試行期日・上限を解除しない。`--dry-run`でもjevへの有料呼出は
-    発生するため、課金復旧の確認にはアカウント残高・支払状態を先に確認する。
+    または再試行上限に達した行も過去の状態として残す。2026-10-02からは利用者方針で
+    TypeSafeの新規判定を停止し、入金・有料再判定は不要。`--codes=`で既存状態を解除
+    せず、`--dry-run`も外部通信前に停止する。課金切れを「判定済」や「該当なし」へ
+    変えない。Cloudflare Workers Paidの容量不足とは別の事象である。
     [2026-10-01の残件調査](test-logs/data-remaining-investigation-20261001.md)を参照。
 
 ## 12. 競合他社 (competitors)
@@ -813,9 +824,12 @@ JAL→ANA/スカイマーク/スターフライヤー、アドバンテスト→
   実測のため、より小規模・情報量の少ない銘柄が多い残り母集団では1社あたりの
   トークン数がさらに下がる可能性がある）。
 
-## 12.9 ローカル SemIf (`judge=semif`) — jev クレジット枯渇時の代替判定
+## 12.9 ローカル SemIf (`judge=semif`) — 明示選択の経路と過去実験
 
-2026-09-26 追加。全銘柄一括実行 (§12.6) の途中で jev (TypeSafe System One) の
+現在は明示 `--judge=semif` の既存経路だけを維持する。TypeSafe停止時の自動代替や
+未判定全件への自動実行はしない。以下の件数・モデル・所要時間は過去の実験記録。
+
+2026-09-26に追加した当時、全銘柄一括実行 (§12.6) の途中で jev (TypeSafe System One) の
 クレジットが枯渇 (HTTP 402) し、3,607社中 **1,993社だけ判定済のまま停止**した
 （残り **1,614社**）。運営がすぐには追加課金できないため、残りをこの Apple
 Silicon (M5 Max・128GB) ローカル PC 上で
@@ -831,17 +845,12 @@ evaluate.ts) は `JevClient`（`askNoul(state, questions)`）だけに依存し�
 `--judge=jev|semif` で判定クライアントを差し替えるだけで動く。候補生成
 (§12.2)・relation書込・増分方式 (§12.6) はどちらの judge でも完全に共通。
 
-### 12.9.1 SemIf のインストール（リポジトリ**外**の隔離venv）
+### 12.9.1 SemIf の環境（Nixで管理）
 
-このリポジトリの nix 管理下 (`/nix/store`) には置かない。SemIf は Python
-3.10+・MLX 依存で、モデル重みも約9GBあるため、**リポジトリ外の隔離venv**
-（例 `~/.local/share/semif`）へインストールする:
-
-```bash
-git clone https://github.com/TheoLeeCJ/SemIf.git ~/.local/share/semif/SemIf
-python3 -m venv ~/.local/share/semif/.venv
-cd ~/.local/share/semif/SemIf && ~/.local/share/semif/.venv/bin/pip install -e '.[test,mlx]'
-```
+環境構築・依存追加はプロジェクト単位のNixで行う（[AGENTS.md](../AGENTS.md)）。
+SemIfのPython・MLX依存も対象で、user領域への直接pip導入は案内しない。
+この変更では新しいSemIf環境を構築しておらず、Nix/MLXの動作確認済みとはしない。
+以下のvenvパスを含むsmoke例は停止前の実験記録として保持する。
 
 初回の判定実行時（`semif_server.py` 起動時）に Hugging Face キャッシュ
 (`~/.cache/huggingface`) へモデル重み（約9GB、BF16）が自動ダウンロードされる
@@ -855,7 +864,8 @@ cd ~/.local/share/semif/SemIf && ~/.local/share/semif/.venv/bin/pip install -e '
   --output /tmp/semif-smoke.jsonl
 ```
 
-`.env` に隔離venv内 python の絶対パスを設定する（`.env.example` 参照。
+明示SemIf経路では `.env` の `SEMIF_PYTHON` に使用するPythonの絶対パスを設定する
+（新規環境はNixで管理。以下の値は過去の配置例、`.env.example` 参照。
 `src/shared/semif/env.ts` の `semifEnv.SEMIF_PYTHON()` 経由でのみ参照する。
 CLAUDE.md ルール3）:
 

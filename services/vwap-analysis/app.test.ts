@@ -4,8 +4,23 @@
  * 日次スナップショット (`margin/daily/YYYY-MM-DD.json` + `margin/dates.json`)
  * を R2 モックに載せ、同一ティッカー複数行の除外日表示と正常日の保護を検証する。
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "./app.js";
+
+it("ライブ入口は任意パラメータでも410、外部取得もR2読取も0", async () => {
+  const fetch = vi.fn(async () => { throw new Error("unexpected source GET"); });
+  const get = vi.fn(async () => { throw new Error("unexpected R2 GET"); });
+  vi.stubGlobal("fetch", fetch);
+  try {
+    const response = await app.request("https://test.invalid/api/chart?symbol=7203.T&range=10y&interval=1m", {}, { BUCKET: { get } });
+    expect(response.status).toBe(410);
+    expect((await response.json()).error).toContain("ライブ取得は停止");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 function row(sourceCode: string, ordinaryTicker: string | null, sell: number, buy: number) {
   const fig = (s: number, b: number) => ({

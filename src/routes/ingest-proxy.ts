@@ -15,10 +15,10 @@ import {
 
 /**
  * 取込プロキシ — Node(GitHub Actions / ローカル)からの Yahoo 取得を Cloudflare
- * エッジ経由にするための認証ルート（ADR-0001・Workers Paid を使わない運用）。
+ * エッジ経由にするための認証ルート（ADR-0001）。
  *
- * 自宅/CI の IP は Yahoo に 429 されるため、Node 側の共有 Yahoo クライアントは
- * `YAHOO_PROXY_BASE` が設定されていると Yahoo API URL をこのルートに委譲する。
+ * Node 側の共有 Yahoo クライアントは `YAHOO_PROXY_BASE` が設定されていると
+ * Yahoo API URL をこのルートに委譲し、認証・取得間隔・制限停止を共有する。
  * crumb/cookie の取得・付与はエッジ側 (`yahooFetchDirect`) が行い、生レスポンスを
  * そのまま返す（パースは呼び出し側の共有クライアントが従来どおり行う）。
  *
@@ -45,12 +45,17 @@ ingestProxyRoute.get("/yahoo", async (c) => {
   if (!u) return c.json({ error: "missing u" }, 400);
 
   let target: URL;
+  let decodedPath: string;
   try {
     target = new URL(u);
+    decodedPath = decodeURIComponent(target.pathname);
   } catch {
     return c.json({ error: "bad url" }, 400);
   }
-  if (!ALLOWED_HOSTS.has(target.hostname)) {
+  if (target.protocol !== "https:" || target.port !== "" || target.username || target.password ||
+      !ALLOWED_HOSTS.has(target.hostname) ||
+      !/^\/v(?:8\/finance\/chart|10\/finance\/quoteSummary)\/[A-Za-z0-9.^=+-]+$/.test(decodedPath) ||
+      target.searchParams.has("crumb")) {
     return c.json({ error: `host not allowed: ${target.hostname}` }, 403);
   }
 
@@ -61,7 +66,7 @@ ingestProxyRoute.get("/yahoo", async (c) => {
   try {
     res = await yahooFetchDirect(u);
   } catch (error) {
-    if (error instanceof YahooRateLimitError && error.status === 429) {
+    if (error instanceof YahooRateLimitError) {
       const remainingMs =
         error.retryAtMs !== null
           ? error.retryAtMs - Date.now()
@@ -82,7 +87,7 @@ ingestProxyRoute.get("/yahoo", async (c) => {
         {
           error: `yahoo rate limited: ${redactYahooDiagnostic(rootCauseMessage(error)).slice(0, 200)}`,
         },
-        429,
+        error.status === 503 ? 503 : 429,
         {
           "Retry-After": String(retryAfterSec),
           "X-Kabulab-Yahoo-Status": String(error.status),

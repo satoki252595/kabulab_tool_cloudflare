@@ -69,6 +69,10 @@ kabulabAgents 向け契約は
 [docs/005-yuho-quant-business-tags-contract.md](../../docs/005-yuho-quant-business-tags-contract.md)。
 mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反は commit 前に直す):
 
+- **2026-10-02の運用方針: TypeSafeの新規外部判定は停止**。
+  APIキーの有無にかかわらず共有client・CLI・pipelineでD1/Notion/判定APIのI/O前に
+  止める。credit補充や既定モデルの再起動を案内しない。保存済み判定と未判定を保持し、
+  未判定を「該当なし」に変えない。以下の較正・見直しは停止前の設計契約も含む。
 - **AI に事業内容を作文させない・LLM の生文を保存しない**。Notion へ書くのは
   「単語帳の語(ID・名前)」「判定の確率と帯」「有報からコードで抜き出した原文の文
   (書類ID・会計期末つき)」の3つだけ。jev(判定モデル)の応答からそれ以外の自由文を
@@ -107,9 +111,9 @@ mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反
   (`competitors/calibration.json`=jev / `calibration.semif.json`=semif) からのみ
   読む (`competitors/calibration.ts` の `loadCompetitorCalibration(judge)`)。
   未較正の値をコードに埋め込まない。
-- 判定モデル (judge) は `jev` (既定) と `semif` (ローカル MLX 推論。
-  jev のクレジット枯渇時の代替。`src/shared/semif/`) を選べる
-  (`--judge=`)。どちらも `JevClient.askNoul` を実装するだけの差し替えで、
+- 判定モデル (judge) の `jev` (既定) は現在停止する。`semif` (ローカル MLX 推論。
+  `src/shared/semif/`) は既存の明示 `--judge=semif` 経路だけを維持し、自動代替しない。
+  環境・依存の構築はNixで行う。どちらも `JevClient.askNoul` を実装する設計で、
   候補生成・しきい値判定・relation書込のロジックは共通 (§12.9)。
 - A→B の relation は**片方向のみ** (自動でミラーしない。§12.5)。
 - `NOTION_BIZTAG_LEDGER_DB_ID`(単語帳台帳)には触れない (D1 も読まない)。
@@ -147,11 +151,11 @@ pnpm backfill:overseas      # 既存有報の海外埋め戻し (D1 HTTP)
 pnpm yuho:backfill:text     # 既存有報の開示テキスト埋め戻し (CSV のみ・D1 HTTP)
 pnpm yuho:backfill:missing  # 期間指定の取りこぼし回収 (日次上限で欠けた分。無制限・再開可能)
 pnpm audit:overseas         # 全銘柄の取りこぼし署名を集計
-pnpm biztag run             # 事業タグ判定 (差分処理。catchup.yml が平日実行)
-pnpm biztag gate            # 単語帳の見直し提案の審査 (通常は run の冒頭が呼ぶ)
-pnpm biztag golden          # ゴールデンセットで精度測定 (しきい値較正用)
+pnpm biztag run             # 現在停止: TypeSafe通信・D1/Notion I/O前に終了
+pnpm biztag gate            # 現在停止: TypeSafeを使う見直し提案審査
+pnpm biztag golden          # 現在停止: TypeSafeを使う精度測定
 pnpm biztag rollback        # 単語帳を過去の版へ巻き戻す (--to=vN --reason=...)
-pnpm biztag competitors     # 競合他社の判定・relation書込 (差分方式。--dry-run/--codes/--limit/--budget-min/
+pnpm biztag competitors     # 既定jevは停止。明示semif経路のみ維持 (--dry-run/--codes/--limit/--budget-min/
                             #   --judge=jev|semif/--only-unjudged/--concurrency)
 pnpm biztag competitors-eval # 競合他社の評価セットで精度測定 (しきい値較正用。--judge=jev|semif)
 pnpm test / pnpm typecheck / pnpm lint

@@ -29,6 +29,10 @@ Refs #98 #102 #117 #132 #146 #160 #163 #196。公開Gitには集計・SHA・実�
 
 その後、[定時catchup](catchup-scheduled-20261002.md)はTDnet・EDINET・biztagまで成功。
 TDnetの期限到達とEDINETのcap、課金切れ25件は残っており、全履歴完了とは扱わない。
+その後、TypeSafeの新規判定は利用者方針で停止へ変更した。25件の過去状態は保持し、
+入金待ちとして再開を促さない。[低負荷・判定停止の記録](yahoo-low-load-typesafe-disabled-20261002.md)。
+停止前は最低top-up $5と25件の推論費概算約$0.069（最大retry仮定約$0.276）を区別し、
+補充成立後の限定再開を検討していた。この過去の見積りは現在の購入・再開方針ではない。
 
 ## 限定修復と残件
 
@@ -41,7 +45,7 @@ TDnetの期限到達とEDINETのcap、課金切れ25件は残っており、全�
 | 信用残 | 旧週次PDFを同SHA/4230行で再解析し、既存定時日次成功の9/30 PDF/4260行とR2全文一致を確認。[実績](vwap-margin-weekly-readback-20261002.md)。既存7認証設定を接続した[通常業種集計run](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/36908547972)は18:48:43UTCに成功、入力2添付の独立全文照合と476件再解析も19:04:54–57UTCにPASS。Producerの全476POST照合成功とは別の証拠。保存済み9/30入力の新実績であり、旧9/28 UNKNOWNの再送・解決や全moneyflow/sector-turnover正常化とは扱わない |
 | 海外売上 | S100YJVF1通の4連結区分差は[実照合済み](overseas-pilot-actual-20261002.md)。後続固定15通の[修正前原本検証9資格/57明細・HOLD6](overseas-next15-custody-20261002.md)を保持し、PR266の統合全文解析で13資格/84明細・HOLD2へ更新。実反映は9APPLIED/4MATCH、全13文書16列・84明細12列・変更9銘柄の集計32列・同文書再入sender0・PRE/POST実体と全SHAの独立照合がPASS。[本番実績](overseas-qualified13-actual-20261002.md)。HOLD2と旧3611全体は未完 |
 | 8508 | PR258で単発日を別列へ保持し年間利回り/定常月から分離。実1件の9/2日付修復、全97cells一致・再入SQL0・通常6月4件保持・全原本/PRE/POST保管と本番UI確認を完了。[実績](yutai-oneoff-actual-20261002.md) |
-| 課金切れ25銘柄 | 通知欠落をPR255で修正。Jevのcredit補充は人手判断待ちで未実施。最低top-up $5と25件の推論費概算上限約$0.069（最大retry仮定約$0.276）は別。補充成立後、10/3以後なら現retry条件のまま限定再開可能 |
+| 課金切れ25銘柄 | 通知欠落をPR255で修正した過去状態を保持。利用者方針でTypeSafeの新規判定を停止し、credit補充・有料再判定は不要。既存の事業タグ・競合判定を保持し、未判定を「該当なし」に変更しない。停止前の費用調査は[費用記録](../cost-audit-2026-10-01.md)に保持 |
 | 定時起動PR195 | 3CI成功・レビュー済み。WorkerのGITHUB_ACTIONS_TOKENが未設定のため未merge。既存cronを消すだけの状態へ移行しない |
 | 622A/海外未資格/信用残UNKNOWN/JPX新様式 | [公式根拠・再開条件](data-remaining-investigation-20261001.md)を維持。公表前の実ファイルや過去POST結果を作らない |
 

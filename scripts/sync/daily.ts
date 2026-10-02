@@ -2,8 +2,8 @@
  * 日次データ取得エントリポイント (Node / GitHub Actions)
  *
  * core/rsi/swing が必要とする財務・指標・OHLCV を Yahoo から取得し D1 へ書き込む。
- * Yahoo は共有クライアントが `YAHOO_PROXY_BASE`(Worker エッジ)経由で叩き、自宅/CI の
- * IP の 429 を回避する。D1 へは `createD1HttpDb`(CLOUDFLARE_* env)。
+ * Yahoo は共有クライアントが `YAHOO_PROXY_BASE`(Worker エッジ)経由で取得し、上流の制限を尊重する。
+ * 同じrunのYahoo再取得は行わない。D1 へは `createD1HttpDb`(CLOUDFLARE_* env)。
  * 実装本体は src/cron/daily.ts。
  *
  * 母集団 (core_stocks) の JPX 同期は xlsx が Node 専用のため別途 `pnpm sync:universe`。

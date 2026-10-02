@@ -73,6 +73,7 @@ import { encodeCloses, isUsableClose } from "../shared/indicators/momentum-serie
 import {
   fetchChart,
   fetchStockRawData,
+  YahooRateLimitError,
   YahooRawTooLargeError,
   type YahooRawCapture,
 } from "../shared/yahoo/client.js";
@@ -226,18 +227,16 @@ interface StockSnapshot {
 // -----------------------------------------------------------------------------
 
 /** ワーカー並列度 (Yahoo はエッジプロキシ経由でも upstream 制限に配慮) */
-const CONCURRENCY = 5;
+const CONCURRENCY = 1;
 /** ワーカー間隔 (ms) */
 const DELAY_MS = 150;
-/** 5 worker の既存待機量を均した、銘柄開始の最小間隔。 */
+/** 銘柄開始の間隔。実HTTPの間隔は共有Yahooクライアントが制御する。 */
 const STOCK_START_INTERVAL_MS = DELAY_MS / CONCURRENCY;
 /**
  * 一過性失敗の回収に使える時間予算 (ms)。run 開始からの経過で見る。
  *
- * 90 分の Actions 上限 (stock-sync.yml の timeout-minutes) から、後段
- * (Phase 4〜6 + 余裕) の 30 分を引いた 60 分。件数上限 (旧 100 件) だと
- * 失敗の規模で回収が頭打ちになり、52% の run が失敗扱いになっていた (L-57)。
- * timeout-minutes を変えたらここも変えること。
+ * 通常producerは retry:false で同一runの再取得を停止する。
+ * 明示的に回収する呼出しだけがこの予算を使用する。
  */
 const RECOVERY_TIME_BUDGET_MS = 3_600_000;
 /** 失敗率がこの以下なら run 成功扱いにする (L-57。Issue にはコメントする)。 */
@@ -469,15 +468,21 @@ export function isTransientDailySyncFailure(message: string): boolean {
  * 永続エラーは再試行せず、再処理にも失敗した対象は最新原因を返す。
  *
  * 回収量は件数ではなく時間予算 (`deadlineMs`) で区切る (L-57)。
- * 予算切れで手を付けなかった対象は `skippedDueToLimit` に数える。
+ * 予算切れまたはretry:falseで手を付けなかった対象は `skippedDueToLimit` に数える。
+ * 通常のstock/macro producerはretry:falseで失敗をそのまま残す。
  * 2パス目もsource期限を尊重する。30秒の待機予算外なら取得を省略し期限を短縮しない。
  * `deadlineMs` 未指定時もsource期限と30秒の待機予算は守る。
  */
 export async function recoverTransientDailyFailures<T>(
   failures: readonly DailyRecoveryFailure<T>[],
   processTarget: (target: T) => Promise<void>,
-  options: { deadlineMs?: number; beforeAttempt?: () => void } = {}
+  options: { deadlineMs?: number; beforeAttempt?: () => void; retry?: boolean } = {}
 ): Promise<DailyRecoveryResult<T>> {
+  if (options.retry === false) return {
+    attempted: 0, recovered: 0,
+    skippedDueToLimit: failures.filter(({ error }) => isTransientDailySyncFailure(error)).length,
+    failures: [...failures],
+  };
   const unresolved: DailyRecoveryFailure<T>[] = [];
   let attempted = 0;
   let recovered = 0;
@@ -1232,9 +1237,13 @@ async function runDailySyncAndRecord(
   // -----------------------------------------------------------------
   console.info(`[sync-daily] Phase 2: マクロコンテキスト${stocksOnly ? "対象外" : "取得"}`);
   const marketContext = stocksOnly ? null : await fetchMarketContextDraft();
+  if (marketContext?.sourceStop) {
+    await archiveAndPersistMarketContext(db, startedAt, marketContext.draft, marketContext.collector,
+      () => { throw marketContext.sourceStop; });
+    throw marketContext.sourceStop;
+  }
   let marketContextOk: boolean | null | undefined = stocksOnly ? null : undefined;
-  // Phase 2 では persist しない。回収後の最終 draft を下流で 1 回だけ
-  // 保管+保存する (初回保存と回収後保存の集約。銘柄の保存順序は不変)。
+  // Phase 2 では persist しない。取得済draftを下流で1回だけ保管+保存する。
 
   // -----------------------------------------------------------------
   // Phase 3: 銘柄ごとのフェッチ + 計算 + DB 書き込み (worker pool)
@@ -1306,6 +1315,7 @@ async function runDailySyncAndRecord(
           correctionDates: nullCloseDatesByStock.get(target.id),
         });
       } catch (e) {
+        if (isYahooSourceStop(e)) custodyStop = e instanceof Error ? e : new Error(String(e));
         if (Date.now() >= Date.parse(`${targetDate}T21:00:00Z`)) custodyStop = e instanceof Error ? e : new Error(String(e));
         const msg = rootCauseMessage(e);
         stockStartGate.observeFailure(msg);
@@ -1343,7 +1353,7 @@ async function runDailySyncAndRecord(
     }
   }
 
-  // Phase 3b: 表ごとの multi-row flush。失敗は初回失敗に積んで回収へ回す。
+  // Phase 3b: 表ごとの multi-row flush。失敗は初回失敗として残し、同run再取得しない。
   assertStockDeadline();
   const flushFailures = await flushSnapshots(db, pending, {
     writeAnnual,
@@ -1438,7 +1448,7 @@ async function runDailySyncAndRecord(
         throw error;
       }
     },
-    { deadlineMs: recoveryDeadlineMs, beforeAttempt: () => {
+    { retry: false, deadlineMs: recoveryDeadlineMs, beforeAttempt: () => {
       if (custodyStop !== null) throw custodyStop;
       assertStockDeadline();
     } }
@@ -1452,7 +1462,7 @@ async function runDailySyncAndRecord(
       `[sync-daily]   一過性失敗の回収: 実行=${recovery.attempted} ` +
         `回復=${recovery.recovered} (macro=${recoveredMacros}, stock=${recoveredStocks}) ` +
         `未回復=${recovery.attempted - recovery.recovered + recovery.skippedDueToLimit} ` +
-        `予算超過=${recovery.skippedDueToLimit}`
+        `同一run再取得停止=${recovery.skippedDueToLimit}`
     );
   }
   const failures: DailySyncResult["failures"] = [];
@@ -1616,12 +1626,15 @@ export async function runMarketContextSync(db: Db): Promise<boolean> {
   const recovery = await recoverTransientDailyFailures(
     context.failures,
     (target) => fetchMarketContextTarget(context.draft, target, context.collector),
-    { deadlineMs: startedAt + RECOVERY_TIME_BUDGET_MS },
+    { retry: false, deadlineMs: startedAt + RECOVERY_TIME_BUDGET_MS },
   );
   for (const failure of recovery.failures) {
     console.warn(`[sync-context] マクロ未回復 ${failure.target}:`, failure.error);
   }
-  return archiveAndPersistMarketContext(db, startedAt, context.draft, context.collector);
+  const saved = await archiveAndPersistMarketContext(db, startedAt, context.draft, context.collector,
+    context.sourceStop ? () => { throw context.sourceStop; } : undefined);
+  if (context.sourceStop) throw context.sourceStop;
+  return saved;
 }
 
 /**
@@ -2916,10 +2929,15 @@ async function fetchMarketContextTarget(
   }
 }
 
+function isYahooSourceStop(error: unknown): boolean {
+  return error instanceof YahooRateLimitError || /(?:Yahoo|Chart|QuoteSummary).*\b(?:429|503)\b/.test(rootCauseMessage(error));
+}
+
 async function fetchMarketContextDraft(): Promise<{
   draft: MarketContextDraft;
   failures: DailyRecoveryFailure<MarketContextTarget>[];
   collector: MacroRawAttempt[];
+  sourceStop: Error | null;
 }> {
   const draft = createMarketContextDraft();
   const collector: MacroRawAttempt[] = [];
@@ -2929,19 +2947,22 @@ async function fetchMarketContextDraft(): Promise<{
     NIKKEI_VI_TARGET,
   ];
 
-  await Promise.all(
-    targets.map(async (target) => {
-      try {
-        await fetchMarketContextTarget(draft, target, collector);
-      } catch (error) {
-        const message = rootCauseMessage(error);
-        failures.push({ target, error: message });
-        console.warn(`[sync-daily]   マクロ取得失敗 ${target}:`, message);
+  let sourceStop: Error | null = null;
+  for (const target of targets) {
+    try {
+      await fetchMarketContextTarget(draft, target, collector);
+    } catch (error) {
+      const message = rootCauseMessage(error);
+      failures.push({ target, error: message });
+      console.warn(`[sync-daily]   マクロ取得失敗 ${target}:`, message);
+      if (isYahooSourceStop(error)) {
+        sourceStop = error instanceof Error ? error : new Error(String(error));
+        break;
       }
-    })
-  );
+    }
+  }
 
-  return { draft, failures, collector };
+  return { draft, failures, collector, sourceStop };
 }
 
 interface MarketContextGate {

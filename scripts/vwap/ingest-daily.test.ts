@@ -87,7 +87,7 @@ const SAVED_CWD = process.cwd();
 // main() は cwd/.vwap-summaries/ へ原本を書く。repo 汚染防止で tmp へ chdir。
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   process.argv = ["node", "vitest"];
   process.exitCode = undefined;
@@ -198,15 +198,15 @@ describe("ingest-daily main flow", () => {
     let release!: () => void;
     const delayed = new Promise<void>((resolve) => { release = resolve; });
     let ready!: () => void;
-    const second = new Promise<void>((resolve) => { ready = resolve; });
+    const first = new Promise<void>((resolve) => { ready = resolve; });
     mockFetchDaily.mockImplementation(async (symbol: string) => {
-      if (symbol === "A.T") await delayed;
-      else ready();
+      if (symbol === "A.T") { ready(); await delayed; }
       return { bars: [BAR_A], splits: [], proof: FAKE_PROOF };
     });
     mockRawArchive.mockRejectedValue(new Error("physical readback mismatch"));
     const running = main();
-    await second;
+    await first;
+    expect(mockFetchDaily).toHaveBeenCalledTimes(1);
     expect(mockRawArchive).not.toHaveBeenCalled();
     expect(mockR2Put).not.toHaveBeenCalled();
     release();
@@ -264,12 +264,12 @@ describe("ingest-daily main flow", () => {
     expect(process.exitCode).toBe(0);
   });
 
-  it("future rate deadline aborts before MAX_RL, archives the body and sends no PUT", async () => {
+  it.each([undefined, Date.now() + 120_000])("first rate response with deadline %s archives and stops GET/PUT regardless of MAX_RL", async (retryAt) => {
     rawHook.status = 429;
     (globalThis as { __vwapKnobs?: unknown }).__vwapKnobs = { conc: 1, delayMs: 1, maxRateLimit: 5, keepDays: 365 };
     mockLoadCodes.mockResolvedValue(["A", "B"]);
     mockR2Get.mockResolvedValue(null);
-    mockFetchDaily.mockRejectedValue(Object.assign(new Error("yahoo 429"), { name: "YahooRateLimitError", retryAtMs: Date.now() + 120_000 }));
+    mockFetchDaily.mockRejectedValue(Object.assign(new Error("yahoo 429"), { name: "YahooRateLimitError", retryAtMs: retryAt }));
     await main();
     expect(mockRawArchive.mock.calls[0][0].captures).toHaveLength(1);
     expect(mockRawArchive.mock.calls[0][0].captures[0].capture.status).toBe(429);

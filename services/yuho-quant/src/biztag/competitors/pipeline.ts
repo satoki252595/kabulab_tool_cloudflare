@@ -20,7 +20,7 @@ import {
   writeCompetitorRelation,
   SUPPLEMENT_PROPS,
 } from "../../../../../src/shared/notion-archive/index.js";
-import { createJevClient, estimateCostUsd, jevEnv, type JevClient } from "../../../../../src/shared/jev/index.js";
+import { assertTypeSafeEnabled, createJevClient, estimateCostUsd, jevEnv, type JevClient } from "../../../../../src/shared/jev/index.js";
 import { createSemifClient } from "../../../../../src/shared/semif/index.js";
 import { resolveActiveVocabulary } from "../active-vocab.js";
 import { todayJst } from "../date-jst.js";
@@ -109,6 +109,7 @@ export function needsRecompute(
 }
 
 export async function runCompetitors(opts: RunCompetitorsOptions): Promise<RunCompetitorsSummary> {
+  if (opts.judge === undefined || opts.judge === "jev") assertTypeSafeEnabled();
   const start = Date.now();
   const startedAt = new Date(start).toISOString();
   const today = todayJst(() => start);

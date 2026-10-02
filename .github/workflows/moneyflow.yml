@@ -107,6 +107,10 @@ permissions:
 
 jobs:
   ingest:
+    # producerだけが保持し、stock-syncのreusable moneyflow呼出し前に解放する。
+    concurrency:
+      group: yahoo-source
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:

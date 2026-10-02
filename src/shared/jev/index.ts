@@ -3,6 +3,7 @@
  * 事業タグ判定 (biztag) 等の呼び出し側はここから import する。
  */
 export { jevEnv } from "./env.js";
+export { assertTypeSafeEnabled, TypeSafeDisabledError } from "./policy.js";
 export {
   JEV_ENDPOINT,
   JEV_PRICE_PER_MTOK_INPUT_USD,

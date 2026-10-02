@@ -11,6 +11,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    setupFiles: ["./src/shared/yahoo/test-setup.ts"],
     // scripts/** は Node 側の取込スクリプト (scripts/moneyflow/ingest.ts 等) の
     // 純関数テスト用。tsconfig は scripts/**/*.ts を型検査しているのに vitest が
     // 拾わないと「書いたテストが CI で一度も走らない」死角になるため含める。

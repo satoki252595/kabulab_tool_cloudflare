@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// 認証の協調テストは間隔だけ省略。実際の間隔は request-spacing.test.ts で検証する。
+vi.mock("./request-spacing.js", () => ({
+  fetchYahooWithSpacing: vi.fn(async (url: string, init: RequestInit, assertAllowed: () => void) => {
+    assertAllowed();
+    return fetch(url, init);
+  }),
+}));
+
 const ORIGINAL_PROXY_BASE = process.env.YAHOO_PROXY_BASE;
 const ORIGINAL_CRON_SECRET = process.env.CRON_SECRET;
 
@@ -370,8 +378,8 @@ describe("crumb 429 cooldown", () => {
     expect(err).toBeInstanceOf(YahooRateLimitError);
     const typed = err as InstanceType<typeof YahooRateLimitError>;
     expect(typed.status).toBe(429);
-    expect(typed.retryAtMs).toBeGreaterThanOrEqual(before + 5_000 - 100);
-    expect(typed.retryAtMs).toBeLessThanOrEqual(Date.now() + 5_000);
+    expect(typed.retryAtMs).toBeGreaterThanOrEqual(before + 15 * 60_000 - 100);
+    expect(typed.retryAtMs).toBeLessThanOrEqual(Date.now() + 15 * 60_000);
     expect(String(err)).toContain(`retry-at-ms=${typed.retryAtMs}`);
     expect(String(err)).not.toContain("secret-cookie");
   });
@@ -538,7 +546,7 @@ describe("crumb 429 cooldown", () => {
     const { yahooFetchDirect, YahooRateLimitError } = await import("./client.js");
     const failed = await yahooFetchDirect(TARGET).catch((e: unknown) => e);
     expect(failed).toBeInstanceOf(YahooRateLimitError);
-    now += 6_000;
+    now += 15 * 60_000 + 1;
     const recovered = await yahooFetchDirect(TARGET);
     expect(recovered.status).toBe(200);
     expect(pageCalls).toBe(2);
@@ -603,5 +611,115 @@ describe("crumb 429 cooldown", () => {
     expect(waiter).toBeInstanceOf(Error);
     expect(waiter).not.toBeInstanceOf(YahooRateLimitError);
     expect((waiter as Error & { cause?: unknown }).cause).toBeUndefined();
+  });
+});
+
+describe("全Yahoo endpointの共通停止", () => {
+  it.each([429, 503])("認証ページ%sではcrumbを取得しない", async (status) => {
+    const fetchMock = vi.fn(async () => new Response("slow down", { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { yahooFetchDirect, YahooRateLimitError } = await import("./client.js");
+    const target = "https://query1.finance.yahoo.com/v8/finance/chart/7203.T";
+    await expect(yahooFetchDirect(target)).rejects.toBeInstanceOf(YahooRateLimitError);
+    await expect(yahooFetchDirect(target)).rejects.toBeInstanceOf(YahooRateLimitError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([429, 503])("chart/summaryの%sも認証cacheを残したまま後続通信0にする", async (status) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url === "https://finance.yahoo.com/quote/AAPL") return pageResponse("A1=c; Path=/");
+      if (url === "https://query2.finance.yahoo.com/v1/test/getcrumb") return new Response("crumb");
+      return new Response("slow down", { status, headers: { "Retry-After": "3600" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { yahooFetchDirect, YahooRateLimitError } = await import("./client.js");
+    const target = "https://query1.finance.yahoo.com/v8/finance/chart/7203.T";
+    expect((await yahooFetchDirect(target)).status).toBe(status);
+    const stopped = await yahooFetchDirect("https://query1.finance.yahoo.com/v10/finance/quoteSummary/7203.T").catch((e: unknown) => e);
+    expect(stopped).toBeInstanceOf(YahooRateLimitError);
+    expect((stopped as InstanceType<typeof YahooRateLimitError>).retryAtMs).toBeGreaterThan(Date.now() + 3_599_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("inflight の短い429が後着しても長い停止期限を短縮しない", async () => {
+    let now = 1_790_727_043_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const longResponse = deferred<Response>();
+    const shortResponse = deferred<Response>();
+    const longEntered = deferred<void>();
+    const shortEntered = deferred<void>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url === "https://finance.yahoo.com/quote/AAPL") return pageResponse("A1=c; Path=/");
+      if (url === "https://query2.finance.yahoo.com/v1/test/getcrumb") return new Response("crumb");
+      if (url.includes("/warm?")) return new Response("ok");
+      if (url.includes("/long?")) { longEntered.resolve(undefined); return longResponse.promise; }
+      if (url.includes("/short?")) { shortEntered.resolve(undefined); return shortResponse.promise; }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { yahooFetchDirect, YahooRateLimitError } = await import("./client.js");
+    const base = "https://query1.finance.yahoo.com/v8/test/";
+    await yahooFetchDirect(`${base}warm`);
+    const longAttempt = yahooFetchDirect(`${base}long`);
+    const shortAttempt = yahooFetchDirect(`${base}short`);
+    await Promise.all([longEntered.promise, shortEntered.promise]);
+    longResponse.resolve(new Response("long cooldown", { status: 429, headers: { "Retry-After": "3600" } }));
+    expect((await longAttempt).status).toBe(429);
+    shortResponse.resolve(new Response("short cooldown", { status: 429, headers: { "Retry-After": "2" } }));
+    expect((await shortAttempt).status).toBe(429);
+
+    now += 3_000;
+    const stopped = await yahooFetchDirect(`${base}blocked`).catch((e: unknown) => e);
+    expect(stopped).toBeInstanceOf(YahooRateLimitError);
+    expect((stopped as InstanceType<typeof YahooRateLimitError>).retryAtMs).toBe(1_790_727_043_000 + 3_600_000);
+    expect(fetchMock).toHaveBeenCalledTimes(5); // bootstrap2 + warm1 + inflight2、後続0。
+  });
+
+  it("401更新中のcrumb200が後着しても別target429の停止を消さずretry取得0", async () => {
+    const now = 1_790_727_043_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const rateResponse = deferred<Response>();
+    const rateEntered = deferred<void>();
+    const freshCrumb = deferred<Response>();
+    const freshCrumbEntered = deferred<void>();
+    let pageCalls = 0;
+    let crumbCalls = 0;
+    let retryTargetCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url === "https://finance.yahoo.com/quote/AAPL") return pageResponse(`A1=c${++pageCalls}; Path=/`);
+      if (url === "https://query2.finance.yahoo.com/v1/test/getcrumb") {
+        if (++crumbCalls === 1) return new Response("old-crumb");
+        freshCrumbEntered.resolve(undefined);
+        return freshCrumb.promise;
+      }
+      if (url.includes("/warm?")) return new Response("ok");
+      if (url.includes("/rate?")) { rateEntered.resolve(undefined); return rateResponse.promise; }
+      if (url.includes("/renew?") && url.includes("crumb=old-crumb")) return new Response("unauthorized", { status: 401 });
+      if (url.includes("/renew?") && url.includes("crumb=fresh-crumb")) { retryTargetCalls++; return new Response("ok"); }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { yahooFetchDirect, YahooRateLimitError } = await import("./client.js");
+    const base = "https://query1.finance.yahoo.com/v8/test/";
+    await yahooFetchDirect(`${base}warm`);
+    const rateAttempt = yahooFetchDirect(`${base}rate`);
+    await rateEntered.promise;
+    const renewal = yahooFetchDirect(`${base}renew`).catch((e: unknown) => e);
+    await freshCrumbEntered.promise;
+    rateResponse.resolve(new Response("long cooldown", { status: 429, headers: { "Retry-After": "3600" } }));
+    expect((await rateAttempt).status).toBe(429);
+    freshCrumb.resolve(new Response("fresh-crumb"));
+
+    const stopped = await renewal;
+    expect(stopped).toBeInstanceOf(YahooRateLimitError);
+    expect((stopped as InstanceType<typeof YahooRateLimitError>).retryAtMs).toBe(now + 3_600_000);
+    await expect(yahooFetchDirect(`${base}blocked`)).rejects.toBeInstanceOf(YahooRateLimitError);
+    expect(retryTargetCalls).toBe(0);
+    expect(pageCalls).toBe(2);
+    expect(crumbCalls).toBe(2);
+    expect(fetchMock).toHaveBeenCalledTimes(7); // refreshは制限判明前のinflight、retry/後続0。
   });
 });

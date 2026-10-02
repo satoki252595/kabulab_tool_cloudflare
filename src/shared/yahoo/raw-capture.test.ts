@@ -1,5 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchChart, fetchDaily, fetchBars5m, fetchQuoteSummary, fetchStockRawData, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES, type YahooRawCapture, type YahooChartRawCapture } from "./client.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { YahooRawCapture, YahooChartRawCapture } from "./client.js";
+
+type YahooClient = typeof import("./client.js");
+let fetchChart: YahooClient["fetchChart"];
+let fetchDaily: YahooClient["fetchDaily"];
+let fetchBars5m: YahooClient["fetchBars5m"];
+let fetchQuoteSummary: YahooClient["fetchQuoteSummary"];
+let fetchStockRawData: YahooClient["fetchStockRawData"];
+let YahooRawTooLargeError: YahooClient["YahooRawTooLargeError"];
+let MAX_YAHOO_RAW_BYTES: YahooClient["MAX_YAHOO_RAW_BYTES"];
 
 /**
  * fetchChart の任意 raw-capture hook (onRaw) の検証。
@@ -8,6 +17,12 @@ import { fetchChart, fetchDaily, fetchBars5m, fetchQuoteSummary, fetchStockRawDa
  */
 
 const ORIGINAL_ENV = { ...process.env };
+
+beforeEach(async () => {
+  // ケース内のcooldownは実装どおり保持し、別HTTPケースへ持ち越さない。
+  vi.resetModules();
+  ({ fetchChart, fetchDaily, fetchBars5m, fetchQuoteSummary, fetchStockRawData, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES } = await import("./client.js"));
+});
 
 afterEach(() => {
   process.env = { ...ORIGINAL_ENV };
@@ -185,13 +200,13 @@ describe("共有Yahoo取得のraw custody", () => {
     expect(new TextDecoder().decode(seen[0].bytes)).toBe(original);
   });
 
-  it("片API失敗後も相方の取得/capture完了を待ち、追加GETしない", async () => {
+  it("非制限エラーでは相方の取得/capture完了を待ち、追加GETしない", async () => {
     useProxy();
     let release: (() => void) | undefined;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
     const fetchFn = vi.fn(async (url: string) => {
-      if (decodeURIComponent(url).includes("quoteSummary")) { await waiting; return new Response("summary body", { status: 503 }); }
-      return new Response("chart body", { status: 503 });
+      if (decodeURIComponent(url).includes("quoteSummary")) { await waiting; return new Response("summary body", { status: 500 }); }
+      return new Response("chart body", { status: 500 });
     });
     vi.stubGlobal("fetch", fetchFn);
     const events: string[] = [];
@@ -205,6 +220,19 @@ describe("共有Yahoo取得のraw custody", () => {
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
+  it.each([429, 503])("chart %s は原文capture後に停止し、summary取得0", async (status) => {
+    useProxy();
+    const fetchFn = vi.fn(async () => new Response("slow down", { status }));
+    vi.stubGlobal("fetch", fetchFn);
+    const chartRaw = vi.fn(), summaryRaw = vi.fn();
+    await expect(fetchStockRawData("7203", "5y", { onChartRaw: chartRaw, onSummaryRaw: summaryRaw }))
+      .rejects.toMatchObject({ name: "YahooRateLimitError", status });
+    expect(chartRaw).toHaveBeenCalledTimes(1);
+    expect(new TextDecoder().decode(chartRaw.mock.calls[0][0].bytes)).toBe("slow down");
+    expect(summaryRaw).not.toHaveBeenCalled();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
   it("8MiB超過は切詰captureせずSTOP、相方parse失敗に隠れない", async () => {
     useProxy();
     const fetchFn = vi.fn(async (url: string) => new Response(decodeURIComponent(url).includes("quoteSummary")
@@ -216,5 +244,17 @@ describe("共有Yahoo取得のraw custody", () => {
     expect(chartRaw).toHaveBeenCalledTimes(1);
     expect(summaryRaw).not.toHaveBeenCalled();
     expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("chart原本の8MiB超過はsummary取得前にSTOP", async () => {
+    useProxy();
+    const fetchFn = vi.fn(async () => new Response(new Uint8Array(MAX_YAHOO_RAW_BYTES + 1)));
+    vi.stubGlobal("fetch", fetchFn);
+    const chartRaw = vi.fn(), summaryRaw = vi.fn();
+    await expect(fetchStockRawData("7203", "5y", { onChartRaw: chartRaw, onSummaryRaw: summaryRaw }))
+      .rejects.toBeInstanceOf(YahooRawTooLargeError);
+    expect(chartRaw).not.toHaveBeenCalled();
+    expect(summaryRaw).not.toHaveBeenCalled();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 });
