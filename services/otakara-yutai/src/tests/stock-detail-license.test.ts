@@ -231,6 +231,25 @@ async function detailHtml(code: string = CODE): Promise<string> {
 }
 
 describe("GET /stocks/:code のライセンス境界", () => {
+  it("随時は説明付きで公開し、0月・月末guide・当月検索へ混ぜない", async () => {
+    sqlite.prepare("UPDATE yutai_benefits SET record_month = 0 WHERE stock_id = 3").run();
+    try {
+      const html = await detailHtml(CODE_EQUITY);
+      expect(html).toContain("随時");
+      expect(html).toContain('role="tooltip"');
+      expect(html).toContain("年間優待利回りには加算しません");
+      expect(html).not.toContain("0月");
+      expect(html).not.toContain("の月末に株を保有していると優待がもらえます");
+      const res = await otakaraYutaiApp.request("/api/screening?limit=50", {}, { DB: d1 });
+      const body = await res.json() as { items: { code: string; benefitMonths: number[]; hasAnytimeBenefit: boolean }[] };
+      expect(body.items.find(x => x.code === CODE_EQUITY)).toMatchObject({ benefitMonths: [], hasAnytimeBenefit: true });
+      const monthly = await otakaraYutaiApp.request("/api/screening?month=3", {}, { DB: d1 });
+      expect((await monthly.json() as { items: unknown[] }).items).toEqual([]);
+    } finally {
+      sqlite.prepare("UPDATE yutai_benefits SET record_month = 3 WHERE stock_id = 3").run();
+    }
+  });
+
   it("単発の実基準日をtip付きで示し、月末guideとcard9月から除く", async () => {
     sqlite.prepare("UPDATE yutai_benefits SET record_date = ?, record_month = 9 WHERE stock_id = 3").run("2026-09-02");
     try {

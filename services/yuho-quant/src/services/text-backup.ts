@@ -32,6 +32,14 @@ export interface BackupDocTextResult {
   outcome: "recorded" | "skipped_existing" | "skipped_empty";
 }
 
+/** 送信していない既存行の、完全読取後の純全文不一致だけを区別する。 */
+export class ExistingTextReadbackMismatchError extends Error {
+  constructor() {
+    super("既存有報テキストの読み戻し全文が不一致");
+    this.name = "ExistingTextReadbackMismatchError";
+  }
+}
+
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("有報テキストの読み戻しメタデータ型が不正");
@@ -120,10 +128,18 @@ export async function backupDocTextToNotion(args: {
       record(property("抽出状態", "select").select).name !== textParseStatus) {
     throw new Error("有報テキストの読み戻し7プロパティが不一致");
   }
-  const readback = await readStockTextRow(rowPageId);
-  if (!Array.isArray(readback) || readback.length !== sections.length ||
+  const readback = await readStockTextRow(rowPageId, true);
+  if (!Array.isArray(readback) || readback.some((section) => !section ||
+      typeof section.itemName !== "string" || typeof section.sectionKey !== "string" ||
+      typeof section.text !== "string")) {
+    throw new Error("有報テキストの読み戻し本文型が不正");
+  }
+  if (readback.length !== sections.length ||
       readback.some((section, index) => section.itemName !== sections[index]!.itemName ||
         section.sectionKey !== sections[index]!.sectionKey || section.text !== sections[index]!.text)) {
+    if (outcome === "skipped_existing" && !force) {
+      throw new ExistingTextReadbackMismatchError();
+    }
     throw new Error("有報テキストの読み戻し全文が不一致");
   }
   return { rowPageId, outcome };

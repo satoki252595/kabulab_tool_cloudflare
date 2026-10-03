@@ -98,4 +98,18 @@ Mac優待要約21時LaunchAgentを18:29:19Zにbootstrap、通常runは18:29:20.5
 
 新しい先頭20件と旧bare2〜86の1,691件は、保存原本だけの比較で計1,711件・重複0・全体コード昇順が一致した。異なる取得時計の資料比較であり、新しい通常全量取得の成功とは扱わない。次の修正は公式の空orderを取得入口とページ送りへ明示し、全件数・重複・不明時停止の検証を維持する。修正後の全詳細取得・D1全取込の受入は未実施。
 
-同mainの契約2026-10-04.2でMac優待要約を20:09:45.990→20:10:12.732Zに通常1回実行。選択11群・受入1群1行・保留10群、未要約11→10、モデル11呼出/1resident、source・外部有料API0、終了は部分保留によるexit1で未知書込みmarkerは残らなかった。原金額NULLを維持し、保存済み入力・POSTの独立PURE照合は後続確認とする。
+同mainの契約2026-10-04.2でMac優待要約を20:09:45.990→20:10:12.732Zに通常1回実行。選択11群・受入1群1行・保留10群、未要約11→10、モデル11呼出/1resident、source・外部有料API0、終了は部分保留によるexit1で未知書込みmarkerは残らなかった。独立PUREで11群の全task・受取14行・現行guard・全POST8,182行のUnicodeを照合し、1行だけ更新、残13行の全項目不変、原金額NULLを確認。HOLDは選択条件不足1群・数値未根拠9群。PRE/POSTのhosted原bytesも全文一致（独立Notion2/hosted2）、追加推論0。PURE receipt SHA `855a4c2cffde25b3f04cc81bd712522477cba27b1b8263037459abca995774b7`。この監査の更新前原文は選択14行に限定し、scope外全行のPRE/POST独立一致は主張しない。
+
+## PR289反映後の通常取得停止と有報1文書の修復
+
+[PR289](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/289)は20:23:56Zにmain `9d0c75fd18a39fb9180dfe0095d09a7c2ed6f422`へsquash merge。PRと[同main CI37151392836](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37151392836)の全CI成功、CF version `151b2f7e…` / deployment `ff34581d…`の20:24:24Z・100%配信を確認した。公式の空orderによる通常取得は20:25:56.266→20:28:56.743Zに1回実行し、一覧86＋詳細33の119応答がすべてHTTP200。一覧1,711件は全件一意、詳細32件を解析後、1766の権利日「随時」1件で停止した。該当DOM表の先頭2spanにある掲載値であり、regexの読取失敗ではなく、月1〜12を要求する現行形式の未対応である。他表の月を代入せず、不明・未対応を優待廃止と扱わない。随時の保存表示・年利回り除外かHOLD維持かは方針未決定で、コード変更・D1取込・再計算は0。原応答gzip6,764,077B SHA `5224b82d995703fdfef00466a896ffc01760b090c312412a9acee6744daa2feb`を共有保管し、独立Notion1/hosted1で全文照合した（closure receipt1,242B / SHA `f1705390c5b9c3026e7b8bef7f0fb22e1e8d2296df62ee3d45da59f54ed04e56`）。
+
+有報の通常run2〜5は保存一覧と進捗からcap範囲で続行し、run6後の台帳は完了181文書・未完17日・識別保留7件・inFlight1文書（S100Z2Z6）だった。該当文書の署名付き保管URLから2原本を全文/SHA・ZIP CRCで確認し、本文の7属性は一致したが、35節の原文50,206文字に対して保存本文は50,205文字でU+200Bが1文字欠落していた。厳密な本文照合で停止する不一致を確認した一方、元runが投げた例外classと正確な停止phaseはUNKNOWNを維持する。修復前の51membersを997,005B gzipへ実体保管・全文読戻し済み（Notion8/hosted1、SHA `6aeb5d8122c7868b508efac94911bb132e57320ef4fd4b60d7907d6127088785`）。
+
+20:33:29.518Z、同文書だけを可逆v2へ再保存し、全35節・50,206文字を原文と完全照合した（Notion6/D1 3、原本再GET0）。本文pointer更新とcompleted1件追加・inFlight解除を原子的に確認し、本文索引・受注/海外財務値・タグは不変、修復前の全PREも保持。50membersのPOSTを211,256B gzipへ共有物理保管・全文照合した（Notion8/hosted1、SHA `a65ac815a190e016e782495015e65d6f38edf400a6cd022479623349e5e514ad`）。20:40:33.207Zの全台帳読戻しはcompleted182・inFlight0・未完17日・識別保留7件。[通常run7 37152437318](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37152437318)は同main9d0で再開したが、catchup全体の成功はまだ未観測。旧失敗の例外class/phase UNKNOWNは修復結果で置き換えない。
+
+同mainの通常run7はknown cap・完了204文書となり、新規一覧6件の実体全照合後、[run8 37153006869](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37153006869)へ続行した。run8もknown capで完了231文書、保存一覧50・識別保留7・未完11日・inFlight0。既受入50一覧の再GETは0。[run9 37153551324](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37153551324)はS100Z3BY（9/24）の開始後にCLI exit2で停止、21:04:13Zの台帳は完了237・inFlight0・未完11日・識別保留7。該当時刻・文書の失敗HTTP保管検索は1queryで0行で、受信前の源GET失敗と整合するが、元class/phaseはUNKNOWNを維持し、追加dispatch・源再取得は停止した。
+
+「随時」は原文どおり保存・表示し、年間回数を推定せず年間利回りと月別カレンダーから除外する。0は明記された随時専用の内部enumで、不明月や単発日との混在は拒否する。JSSは実月と非定期を区別し、モデル契約2026-10-04.3は0月を拒否する。保存済み33詳細のPURE再解析では33件受理・既存32結果不変（新規source/DB/model0、receipt SHA `a5ffe9629a32b42e608f49d0b5b9f6a0aca1e534b69d46a3b67ed58b9adfff97`）。関連212テスト・JSS12テスト・両型検査・lint・Python ASTはPASS。全量詳細・本番取込は反映後の通常処理で確認する。
+
+既存有報本文の全文不一致は、未送信の既存行・全7属性一致・native全頁の完全な形式と原文を確認した場合だけ`text_readback_mismatch`へ保留し、後続文書を進める。本文を自動forceせず、新規保存・通信・native形式/件数不正は未知の停止を維持する。関連93テストとlint PASS、追加したlegacy見出し/件数不正の反証を含む3suite71テストもPASS。

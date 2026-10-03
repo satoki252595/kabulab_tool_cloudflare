@@ -145,6 +145,17 @@ describe("parseStockDetail は表ローカル月を優待に付ける", () => {
     expect(data.benefits[2].description).toBe("2,000円相当");
   });
 
+  it("明記された随時だけを専用enumへ取り込み、他表の実月・本文は保持する", () => {
+    // 表の時期だけを実観測した「随時」へ変えた契約回帰。
+    const anytime = GOLF8022.replace('size_s">3月</span>', 'size_s">随時</span>');
+    const data = unwrapOk(parseStockDetail("8022", `${FITTING8022}\n${anytime}`));
+    expect(data.benefits.map(b => b.localRecordMonths)).toEqual([[3, 9], [0]]);
+    expect(data.benefits[1].description).toBe(unwrapOk(parseStockDetail("8022", GOLF8022)).benefits[0].description);
+    for (const unknown of ["未定", "随時,3月"]) {
+      expect(parseStockDetail("8022", anytime.replace("随時</span>", `${unknown}</span>`)).status).toBe("unknown");
+    }
+  });
+
   it("表があるのに月 span が無いセクションは unknown (推測しない)", () => {
     const noSpan = GOLF8022.replace(/優待権利確定月：<span[^>]*>[^<]+<\/span>/, "");
     expect(parseStockDetail("8022", noSpan)).toEqual({

@@ -517,6 +517,7 @@ export async function ingestDocument(
         force,
       });
     }
+    console.info(`[ingest] 原本保管処理終了 docID=${doc.docID}`);
   }
 
   if (needDbWork) {
@@ -684,10 +685,12 @@ export async function ingestDocument(
         `[ingest] notion text backup 失敗(行 ID 未取得) docID=${doc.docID}: outcome=${r.outcome}`
       );
     }
+    console.info(`[ingest] 本文往復照合終了 docID=${doc.docID}`);
     await db
       .update(yuhoDocuments)
       .set({ notionDocPageId: r.rowPageId })
       .where(eq(yuhoDocuments.id, id));
+    console.info(`[ingest] 本文ポインタ更新応答受信 docID=${doc.docID}`);
   }
 
   return {

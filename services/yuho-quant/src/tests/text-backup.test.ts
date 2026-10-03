@@ -12,7 +12,7 @@ import {
   upsertStockTextRow,
 } from "../../../../src/shared/notion-archive/index.js";
 import { notionRequest } from "../../../../src/shared/notion-archive/client.js";
-import { backupDocTextToNotion } from "../services/text-backup.js";
+import { backupDocTextToNotion, ExistingTextReadbackMismatchError } from "../services/text-backup.js";
 
 vi.mock("../../../../src/shared/notion-archive/index.js", () => ({
   ensureStockTextDb: vi.fn(),
@@ -81,7 +81,7 @@ describe("text-backup", () => {
       force: undefined,
     });
     expect(notionRequest).toHaveBeenCalledWith("GET", `/pages/${rowPageId}`);
-    expect(readStockTextRow).toHaveBeenCalledWith(rowPageId);
+    expect(readStockTextRow).toHaveBeenCalledWith(rowPageId, true);
   });
 
   it("force を透過する", async () => {
@@ -96,9 +96,32 @@ describe("text-backup", () => {
     vi.mocked(readStockTextRow).mockResolvedValue([
       { ...sections[0]!, text: sections[0]!.text.replace("\u200b", "") },
     ]);
-    await expect(backupDocTextToNotion({ ...doc, sections })).rejects.toThrow("読み戻し全文が不一致");
+    await expect(backupDocTextToNotion({ ...doc, sections })).rejects.toBeInstanceOf(ExistingTextReadbackMismatchError);
     expect(upsertStockTextRow).toHaveBeenCalledTimes(1);
     expect(upsertStockTextRow).toHaveBeenCalledWith(expect.objectContaining({ force: undefined }));
+  });
+
+  it.each([
+    { outcome: "recorded" as const, force: undefined },
+    { outcome: "recorded" as const, force: true },
+    { outcome: "skipped_existing" as const, force: true },
+  ])("新規/forceの全文不一致は既存HOLDへ分類しない: %j", async ({ outcome, force }) => {
+    vi.mocked(upsertStockTextRow).mockResolvedValue({ rowPageId, outcome });
+    vi.mocked(readStockTextRow).mockResolvedValue([{ ...sections[0]!, text: "不一致" }]);
+    const error = await backupDocTextToNotion({ ...doc, sections, force }).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(ExistingTextReadbackMismatchError);
+  });
+
+  it("既存行でもnative読取失敗/不正な3fieldは純全文HOLDへ分類しない", async () => {
+    vi.mocked(upsertStockTextRow).mockResolvedValue({ rowPageId, outcome: "skipped_existing" });
+    const failure = new Error("native shape failure");
+    vi.mocked(readStockTextRow).mockRejectedValueOnce(failure);
+    await expect(backupDocTextToNotion({ ...doc, sections })).rejects.toBe(failure);
+    vi.mocked(readStockTextRow).mockResolvedValue([{ ...sections[0]!, text: null }] as never);
+    const error = await backupDocTextToNotion({ ...doc, sections }).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(ExistingTextReadbackMismatchError);
   });
 
   it("新規行の ACK 後も読み戻し完了まで pointer は返さない", async () => {
@@ -134,6 +157,7 @@ describe("text-backup", () => {
     ["文字数合計", { type: "number", number: sections[0]!.text.length }],
     ["抽出状態", { type: "select", select: { name: "parse_error" } }],
   ])("%s が異なる既存行から pointer を採用しない", async (name, value) => {
+    vi.mocked(upsertStockTextRow).mockResolvedValue({ rowPageId, outcome: "skipped_existing" });
     const page = fullPage();
     vi.mocked(notionRequest).mockResolvedValue({ ...page, properties: { ...page.properties, [name]: value } });
     await expect(backupDocTextToNotion({ ...doc, sections })).rejects.toThrow("読み戻し7プロパティが不一致");

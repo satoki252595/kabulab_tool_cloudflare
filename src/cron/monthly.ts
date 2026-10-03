@@ -174,6 +174,7 @@ export async function runMonthlyRebuild(
   }
   const benefitMap = new Map<number, { minShares: number; estimatedValue: number }[]>();
   for (const b of benefitRows) {
+    if (!isRecurringBenefit(b)) continue;
     const estimatedValue = trustedCompanyYieldValue(
       b,
       groupCtx.get(`${b.stockId}\0${b.description}`) ?? { minShares: [b.minShares], recordMonths: [b.recordMonth] }
@@ -372,18 +373,22 @@ export function groupBenefitDisplaySets(
   const monthMap = new Map<number, Set<number>>();
   const genreMap = new Map<number, Set<number>>();
   for (const b of rows) {
-    if (!isRecurringBenefit(b)) continue;
-    let months = monthMap.get(b.stockId);
-    if (!months) monthMap.set(b.stockId, (months = new Set()));
-    months.add(b.recordMonth);
+    const recurring = isRecurringBenefit(b);
+    if (b.recordDate !== null) continue;
+    if (recurring) {
+      let months = monthMap.get(b.stockId);
+      if (!months) monthMap.set(b.stockId, (months = new Set()));
+      months.add(b.recordMonth);
+    }
+    // 随時は月カレンダーに載せず、優待ジャンルは保持する。
     let genres = genreMap.get(b.stockId);
     if (!genres) genreMap.set(b.stockId, (genres = new Set()));
     genres.add(b.genreId);
   }
   const out = new Map<number, { yutaiMonths: string | null; yutaiGenreIds: string | null }>();
-  for (const [stockId, months] of monthMap) {
+  for (const [stockId] of genreMap) {
     out.set(stockId, {
-      yutaiMonths: toJsonSet(months),
+      yutaiMonths: toJsonSet(monthMap.get(stockId)),
       yutaiGenreIds: toJsonSet(genreMap.get(stockId)),
     });
   }

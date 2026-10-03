@@ -29,7 +29,7 @@ import { HEADED_MARK } from "./estimated-value-guard.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-04.2";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-04.3";
 
 /**
  * 要約の % 表現が掲載文に裏づけられているか。
@@ -79,6 +79,7 @@ export function isSummaryNumbersGrounded(
     if (!Number.isFinite(wanted.value)) return false;
     if (wanted.unit === "株") return context.minShares.length > 0 && context.minShares.every((value) => value === wanted.value);
     // 暦の月だけを権利月で裏づける。期間「か月」は掲載文の同じ単位を要する。
+    if (wanted.unit === "月" && wanted.value === 0) return false;
     if (wanted.unit === "月" && context.recordMonths.includes(wanted.value)) return true;
     return have.some((source) => source.value === wanted.value && source.unit === wanted.unit);
   });

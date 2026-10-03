@@ -24,6 +24,7 @@ import {
 } from "../../services/yuho-quant/src/services/edinet/types.js";
 import { loadEdinetTickerMap, loadKnownStockCodes, resolveAnnualTicker } from "../../services/yuho-quant/src/services/edinet/identity.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
+import { ExistingTextReadbackMismatchError } from "../../services/yuho-quant/src/services/text-backup.js";
 import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
 import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
 
@@ -60,7 +61,7 @@ export interface YuhoEdinetResult {
    * このシャードの担当分だけを数える。
    */
   outOfUniverse: number;
-  /** 未解決 identity/metadata/parser は未提出扱いせず、保存 snapshot に保留。 */
+  /** 未解決 identity/metadata/parser・既存本文不一致は保存 snapshot に保留。 */
   pendingDocuments: number;
   byStatus: Record<string, number>;
   reachedCap: boolean;
@@ -237,6 +238,14 @@ export async function runYuhoEdinetCatchup(
         r = await ingestDocument(db, {stockId, stockCode: code, doc,
           archiveToNotion: true, custody: custodyByDoc.get(doc.docID), d1HttpBatch});
       } catch (error) {
+        if (error instanceof ExistingTextReadbackMismatchError) {
+          putPending("text_readback_mismatch");
+          row = await saveProgress(db, row, {completedIds: JSON.stringify(completed),
+            pendingIds: JSON.stringify(pending), inFlightDocId: null});
+          console.warn(`[yuho-edinet] 既存本文不一致HOLD ${date} docID=${doc.docID}`);
+          await sleep(300);
+          continue;
+        }
         if (error instanceof EdinetDocumentFetchError) {
           // 未確定archive/DB送信はこの型にならない。既知源失敗だけ次定時runへ。
           await saveProgress(db, row, {inFlightDocId: null});

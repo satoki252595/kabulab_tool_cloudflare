@@ -71,6 +71,14 @@ const result = (over: Record<string, unknown>) =>
   JSON.stringify({ taskId: K_CATALOG, contractVersion: SUMMARY_CONTRACT_VERSION, shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, ...over });
 
 describe("selectSummaryTasks", () => {
+  it("随時のrecipient0を同じ条件のまま書出し・読戻しし、未知月は止める", () => {
+    const tasks = selectSummaryTasks([row({ recordMonth: 0, shortSummary: null })]);
+    expect(tasks[0].recipients).toEqual([{ minShares: 100, recordMonth: 0, recordDate: null }]);
+    expect(parseTaskFile(serializeTasks(tasks))).toEqual(tasks);
+    expect(() => selectSummaryTasks([row({ recordMonth: 13, shortSummary: null })])).toThrow();
+    expect(() => selectSummaryTasks([row({ recordMonth: 0, recordDate: "2026-09-02", shortSummary: null })])).toThrow();
+  });
+
   it("要約が無い文言と契約違反の文言だけを、(銘柄, 掲載文) 単位で選ぶ", () => {
     const tasks = selectSummaryTasks(ROWS);
     expect(tasks.map((t) => [t.taskId, t.reason, t.rowCount])).toEqual([

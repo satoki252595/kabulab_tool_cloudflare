@@ -7,7 +7,7 @@ import { listSnapshotSchema } from "./list-snapshot.js";
 
 const idsSchema = z.array(z.string());
 const pendingSchema = z.array(z.object({docId: z.string(), reason: z.enum([
-  "identity_unresolved", "metadata_unresolved", "parse_error",
+  "identity_unresolved", "metadata_unresolved", "parse_error", "text_readback_mismatch",
 ])}));
 export type PendingDocument = z.infer<typeof pendingSchema>[number];
 export type Progress = typeof table.$inferSelect;

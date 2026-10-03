@@ -171,6 +171,14 @@ describe("planYieldRecompute", () => {
     expect(snap.benefits.every(b => b.recordDate === "2026-09-02")).toBe(true);
   });
 
+  it("随時の確定額面は年間回数を仮定せず、定期優待の再計算は維持する", async () => {
+    sqlite.prepare("UPDATE yutai_benefits SET record_month = 0 WHERE stock_id = ?").run(STOCK_A);
+    const plan = await planYieldRecompute(db, [STOCK_A, STOCK_C]);
+    expect(plan.entries.find(e => e.stockId === STOCK_A)?.next).toBeNull();
+    expect(plan.entries.find(e => e.stockId === STOCK_C)?.next).toBe(1.0);
+    expect((await fetchYieldInputs(db, [STOCK_A])).benefits.get(STOCK_A)?.[0].recordMonth).toBe(0);
+  });
+
   it("overlay は書き込み予定値を仮適用する (dry-run の先見せ)", async () => {
     // 予定値は文言と整合するものだけ通る (2,000 円の額面に 2,000 円)。
     sqlite.prepare("UPDATE yutai_benefits SET description = ? WHERE stock_id = ?").run("架空ギフト 2,000円相当", STOCK_C);
