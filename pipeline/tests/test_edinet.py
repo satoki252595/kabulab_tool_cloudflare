@@ -58,6 +58,28 @@ class TestDocTypeMapping:
         assert "999" not in mod.TARGET_DOC_TYPE_CODES
 
 
+class TestNullAnnualIdentity:
+    """実476Aの公式NULL secCodeを、①提出者逆引きのみで解決する。"""
+
+    def test_real_null_annual_and_unobserved_identity(self):
+        from pathlib import Path
+
+        fixture = Path(__file__).resolve().parents[2] / "tests/fixtures/edinet-null-sec-code-476A.json"
+        actual = json.loads(fixture.read_text())
+        doc = actual["primary"]
+        assert mod.has_identifiable_company(doc)
+        assert mod.company_edinet_code(doc) == doc["edinetCode"]
+        assert mod.resolve_company_code(doc, {doc["edinetCode"]: actual["stockCode"]}) == actual["stockCode"]
+        assert mod.resolve_company_code(doc, {}) is None
+        assert doc["secCode"] is None
+        assert mod.resolve_company_code({**doc, "secCode": "25935"}, {doc["edinetCode"]: actual["stockCode"]}) is None
+        assert mod.company_edinet_code({**doc, "docTypeCode": "140"}) is None
+
+    def test_invalid_reverse_code_is_rejected(self):
+        with pytest.raises(ValueError, match="逆引き"):
+            mod.resolve_company_code({"secCode": None, "docTypeCode": "120", "ordinanceCode": "010", "formCode": "030000", "withdrawalStatus": "0", "docInfoEditStatus": "0", "disclosureStatus": "0", "edinetCode": "E04369"}, {"E04369": ""})
+
+
 class TestApiKeyRequired:
     def test_list_documents_requires_key(self, tmp_path):
         settings = _settings(tmp_path, api_key=None)

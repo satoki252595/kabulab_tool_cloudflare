@@ -8,7 +8,7 @@ import { runYuhoEdinetCatchup } from "../../src/cron/yuho-edinet.js";
 import { yuhoEnv } from "../../services/yuho-quant/src/env.js";
 import { notionEnv } from "../../src/shared/notion-archive/env.js";
 vi.mock("../../src/shared/db/d1-http-client.js", () => ({createD1HttpDb: vi.fn(), createD1HttpBatchSender: vi.fn()}));
-vi.mock("../../src/cron/yuho-edinet.js", () => ({runYuhoEdinetCatchup: vi.fn(), catchupHttpStatus: (r: {listErrors: string[]; ingestErrors: string[]}) => r.listErrors.length || r.ingestErrors.length ? 500 : 200}));
+vi.mock("../../src/cron/yuho-edinet.js", async () => ({...await vi.importActual<typeof import("../../src/cron/yuho-edinet.js")>("../../src/cron/yuho-edinet.js"), runYuhoEdinetCatchup: vi.fn()}));
 vi.mock("../../services/yuho-quant/src/env.js", () => ({yuhoEnv: {EDINET_API_KEY: vi.fn()}}));
 vi.mock("../../src/shared/notion-archive/env.js", () => ({notionEnv: {NOTION_TOKEN: vi.fn(), NOTION_ARCHIVE_PAGE_ID: vi.fn(), NOTION_YUHO_TEXT_DB_ID: vi.fn()}}));
 beforeEach(() => vi.resetAllMocks());
@@ -22,12 +22,16 @@ describe("direct Node catchup", () => {
     const db = {}, sender = vi.fn();
     vi.mocked(createD1HttpDb).mockReturnValue(db as never);
     vi.mocked(createD1HttpBatchSender).mockReturnValue(sender);
-    vi.mocked(runYuhoEdinetCatchup).mockResolvedValue({listErrors: [], ingestErrors: []} as never);
+    vi.mocked(runYuhoEdinetCatchup).mockResolvedValue({listErrors: [], ingestErrors: [], reachedCap: false, pendingDocuments: 0} as never);
     const log = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       expect(await main(["--part=0", "--of=8"])).toBe(0);
       expect(runYuhoEdinetCatchup).toHaveBeenCalledWith(db, {part: 0, of: 8}, sender);
       vi.mocked(runYuhoEdinetCatchup).mockResolvedValue({listErrors: ["2026-09-30"], ingestErrors: []} as never);
+      expect(await main([])).toBe(1);
+      vi.mocked(runYuhoEdinetCatchup).mockResolvedValue({listErrors: [], ingestErrors: [], reachedCap: true, pendingDocuments: 0} as never);
+      expect(await main([])).toBe(1);
+      vi.mocked(runYuhoEdinetCatchup).mockResolvedValue({listErrors: [], ingestErrors: [], reachedCap: false, pendingDocuments: 1} as never);
       expect(await main([])).toBe(1);
     } finally { log.mockRestore(); }
   });

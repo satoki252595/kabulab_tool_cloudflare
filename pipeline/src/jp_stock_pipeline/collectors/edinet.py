@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date, datetime
 
 from ..config import ConfigError, Settings
@@ -21,6 +22,7 @@ from ..licensing import LicenseTag
 from ..models import JST, DisclosureRecord, Provenance, RawArtifact, Source, now_jst
 from ..rawstore import save_raw
 from .edinet_codelist import normalize_sec_code
+from ..contracts.stock_code import parse_stock_code
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +118,40 @@ def has_identifiable_company(doc: dict) -> bool:
     """
     if has_sec_code(doc):
         return True
-    return is_large_holding(doc) and issuer_edinet_code(doc) is not None
+    return company_edinet_code(doc) is not None
+
+
+def company_edinet_code(doc: dict) -> str | None:
+    """提出者と対象会社を混同せず、NULL証券コードの識別キーを読む。"""
+    if is_large_holding(doc):
+        return issuer_edinet_code(doc)
+    if (
+        doc.get("secCode") is not None
+        or doc.get("docTypeCode") not in ("120", "130")
+        or doc.get("ordinanceCode") != "010"
+        or doc.get("formCode") not in ("030000", "030001")
+        or doc.get("withdrawalStatus") != "0"
+        or doc.get("docInfoEditStatus") != "0"
+        or doc.get("disclosureStatus") != "0"
+    ):
+        return None
+    value = doc.get("edinetCode")
+    return value if isinstance(value, str) and re.fullmatch(r"E\d{5}", value) else None
+
+
+def resolve_company_code(doc: dict, edinet_map: dict[str, str]) -> str | None:
+    """証券コード又は実マスタの一意な提出者逆引き。原docは変更しない。"""
+    if doc.get("secCode") is not None:
+        return normalize_sec_code(doc.get("secCode"))
+    issuer = company_edinet_code(doc)
+    if issuer is None:
+        return None
+    code = edinet_map.get(issuer)
+    if code is None:
+        return None
+    if parse_stock_code(code) != code:
+        raise ValueError("① EDINETコード逆引きの銘柄コードが不正")
+    return code
 
 
 def _require_api_key(settings: Settings) -> str:

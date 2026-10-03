@@ -32,7 +32,7 @@ export const EDINET_LIST_TIMEOUT_MS = 15_000;
  * 打ち切りを無力化しない (#98: 2026-09-28 の定期実行は 15 件を ~20s/件で
  * 進めた後に 5 分超停滞し、トリガの 600s 期限切れで失敗した。予算検査は
  * await 間でしか発火しないため、fetch 自体に期限が要る)。
- * 再試行は呼び出し側の 60 日窓 + docId 冪等に委ね、ここではしない
+ * 次回再開は呼び出し側の保存済み進捗 + docId 冪等に委ね、ここではしない
  * (単発 GET に副作用は無く、次回実行が未完了分を拾う)。
  */
 export const EDINET_DOWNLOAD_TIMEOUT_MS = 60_000;
@@ -84,6 +84,32 @@ export async function listDocuments(
   date: string,
   opts: EdinetRequestOpts = {}
 ): Promise<EdinetListResponse> {
+  const observation = await observeDocuments(date, opts);
+  if (observation.httpStatus !== 200) throw new Error(`EDINET 書類一覧 HTTP status=${observation.httpStatus} date=${date}`);
+  const parsed = edinetListResponseSchema.parse(JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(observation.bytes)));
+  if (parsed.metadata.status !== "200" || parsed.metadata.resultset.count !== parsed.results.length) {
+    throw new Error(`EDINET 書類一覧のAPI status/件数が不一致 date=${date}`);
+  }
+  return parsed;
+}
+
+export interface EdinetListObservation {
+  date: string;
+  fetchedAt: string;
+  bytes: Uint8Array<ArrayBuffer>;
+  httpStatus: number;
+}
+
+/** 副作用のない一覧GETが完了しなかった。取得済bytesは存在せず、同run再送禁止。 */
+export class EdinetListFetchError extends Error {
+  constructor(message: string, options?: ErrorOptions) {super(message, options); this.name = "EdinetListFetchError";}
+}
+
+/** 成功・失敗HTTPとも型付け前の本文全bytes/状態/受信時計を保持。APIキーは返さない。 */
+export async function observeDocuments(
+  date: string,
+  opts: EdinetRequestOpts = {}
+): Promise<EdinetListObservation> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     throw new Error(`listDocuments: 日付形式が不正です: ${date}`);
   }
@@ -95,32 +121,15 @@ export async function listDocuments(
   const signal = AbortSignal.timeout(timeoutMs);
   const timeoutMessage = `EDINET 書類一覧 API タイムアウト date=${date} timeoutMs=${timeoutMs}`;
   let res: Response;
+  let bytes: Uint8Array<ArrayBuffer>;
   try {
-    res = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal,
-    });
+    res = await fetch(url, {headers: {Accept: "application/json"}, signal, redirect: "manual"});
+    bytes = new Uint8Array(await res.arrayBuffer());
   } catch (e) {
-    rethrowTimeoutOnly(signal, e, timeoutMessage);
+    throw new EdinetListFetchError(signal.aborted ? timeoutMessage
+      : `EDINET 書類一覧 GET未完 date=${date} (同run再送なし)`, {cause: e});
   }
-  if (!res.ok) {
-    throw new Error(
-      `EDINET 書類一覧 API エラー date=${date} status=${res.status} ${res.statusText}`
-    );
-  }
-  let json: unknown;
-  try {
-    json = await res.json();
-  } catch (e) {
-    rethrowTimeoutOnly(signal, e, timeoutMessage);
-  }
-  const parsed = edinetListResponseSchema.parse(json);
-  if (parsed.metadata.status !== "200") {
-    throw new Error(
-      `EDINET 書類一覧 API status=${parsed.metadata.status} message=${parsed.metadata.message} (date=${date})`
-    );
-  }
-  return parsed;
+  return {date, fetchedAt: new Date().toISOString(), bytes, httpStatus: res.status};
 }
 
 /**
@@ -144,7 +153,7 @@ export async function downloadDocument(
   const timeoutMessage = `EDINET 書類取得 API タイムアウト docID=${docId} type=${docType} timeoutMs=${timeoutMs}`;
   let res: Response;
   try {
-    res = await fetch(url, { signal });
+    res = await fetch(url, { signal, redirect: "manual" });
   } catch (e) {
     rethrowTimeoutOnly(signal, e, timeoutMessage);
   }

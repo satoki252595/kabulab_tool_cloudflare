@@ -127,6 +127,10 @@
       "kind": "uniform",
       "tag": "commercial-ok"
     },
+    "yuho_edinet_catchup_progress": {
+      "kind": "operational",
+      "tag": "commercial-ok"
+    },
     "yuho_order_facts": {
       "kind": "uniform",
       "tag": "commercial-ok"

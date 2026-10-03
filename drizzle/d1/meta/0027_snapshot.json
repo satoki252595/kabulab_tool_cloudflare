@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "1291619a-1370-4c6c-bd71-9947851a04a0",
-  "prevId": "502f2370-043c-471c-87de-e75af16322a0",
+  "id": "64135f54-e399-4e02-b43c-b77d04aa437f",
+  "prevId": "1291619a-1370-4c6c-bd71-9947851a04a0",
   "tables": {
     "core_stock_annual_financials": {
       "name": "core_stock_annual_financials",
@@ -768,6 +768,118 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "yuho_edinet_catchup_progress": {
+      "name": "yuho_edinet_catchup_progress",
+      "columns": {
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "date": {
+          "name": "date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "snapshot": {
+          "name": "snapshot",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "completed_ids": {
+          "name": "completed_ids",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
+        "pending_ids": {
+          "name": "pending_ids",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
+        "finished": {
+          "name": "finished",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "sealed": {
+          "name": "sealed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "in_flight_doc_id": {
+          "name": "in_flight_doc_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "pending_checked_date": {
+          "name": "pending_checked_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch())"
+        }
+      },
+      "indexes": {
+        "yuho_edinet_progress_queue_idx": {
+          "name": "yuho_edinet_progress_queue_idx",
+          "columns": [
+            "scope",
+            "finished",
+            "sealed",
+            "date"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "yuho_edinet_catchup_progress_scope_date_pk": {
+          "columns": [
+            "scope",
+            "date"
+          ],
+          "name": "yuho_edinet_catchup_progress_scope_date_pk"
+        }
+      },
       "uniqueConstraints": {},
       "checkConstraints": {}
     },

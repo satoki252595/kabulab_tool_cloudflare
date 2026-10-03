@@ -9,6 +9,7 @@
  * 同一確認つき) を DB batch より先に行い、記録失敗は DB を旧値のまま残す。
  */
 import { eq, sql } from "drizzle-orm";
+import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 import type { Database } from "../../src/db/client.js";
 import {
   orderFacts,
@@ -222,11 +223,15 @@ export interface MissingDocProcessDeps {
 export async function processMissingDoc(
   db: Database,
   deps: MissingDocProcessDeps,
-  input: { doc: EdinetDoc; stockId: number; force: boolean }
+  input: { doc: EdinetDoc; stockId: number; stockCode?: string; force: boolean }
 ): Promise<void> {
   const { doc, stockId, force } = input;
   const tag = `docID=${doc.docID} ${doc.filerName}`;
   try {
+    if (input.stockCode !== undefined && (parseStockCode(input.stockCode) !== input.stockCode ||
+        (doc.secCode !== null && secCodeToTicker(doc.secCode) !== input.stockCode))) {
+      throw new Error("本文補完の明示銘柄コードが原本と不一致");
+    }
     // 有報として最低限必要なメタが欠ける異常エントリは捏造せず明示スキップ
     // (ingest.ts の skipped_invalid_meta と同じ。ルール2)。
     if (!doc.filerName || !doc.docTypeCode || !doc.edinetCode || !doc.submitDateTime) {
@@ -393,7 +398,7 @@ export async function processMissingDoc(
     // 失敗は当該通の警告に留める (ポインタ NULL の通は P3 が回収)。
     if (sections.length > 0) {
       try {
-        const ticker = secCodeToTicker(doc.secCode);
+        const ticker = input.stockCode === undefined ? secCodeToTicker(doc.secCode) : input.stockCode;
         if (ticker === null) {
           console.warn(`[missing] notion text skip(コード不明) docID=${doc.docID}`);
           deps.tally("notion_text_no_code");

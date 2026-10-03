@@ -839,6 +839,19 @@ class TestWorkflowManualDate:
 
 
 class TestRunJobExit:
+    @pytest.mark.parametrize("missing", ["CF_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "CF_API_TOKEN", "CF_D1_DATABASE_ID"])
+    def test_required_cloud_missing_stops_before_clients_or_source(self, monkeypatch, tmp_path, missing):
+        from jp_stock_pipeline.config import ConfigError
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("取得前停止に反してclient/sourceが起動した")
+
+        monkeypatch.setattr(runner, "NotionClient", forbidden)
+        env = {**_env(tmp_path), **dict.fromkeys(["CF_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "CF_API_TOKEN", "CF_D1_DATABASE_ID"], "configured")}
+        env.pop(missing)
+        with pytest.raises(ConfigError, match=missing):
+            runner.run_job("edinet_daily", forbidden, ["--require-cloud"], env=env)
+
     """共有 runner 終了コード: 成功だけ 0、それ以外は 1 (9 caller 共通)。
 
     source 一部失敗・実 CF 書き込み失敗 (False/例外)・実行履歴の記録失敗は

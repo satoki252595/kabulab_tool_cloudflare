@@ -5,28 +5,30 @@
  */
 import {
   isAnnualSecuritiesReport,
-  secCodeToTicker,
   type EdinetDoc,
 } from "./types.js";
 import type { DocCustody } from "./archive.js";
+import { resolveAnnualTicker } from "./identity.js";
 
 export interface MissingDoc {
   doc: EdinetDoc;
   stockId: number;
+  stockCode: string;
 }
 
 export function selectMissingDocs(
   listed: EdinetDoc[],
   existingIds: Set<string>,
   codeToId: Map<string, number>,
-  includeExisting: boolean
+  includeExisting: boolean,
+  edinetToTicker: ReadonlyMap<string, string> = new Map()
 ): { missing: MissingDoc[]; skippedExisting: number; outOfUniverse: number } {
   const missing: MissingDoc[] = [];
   let skippedExisting = 0;
   let outOfUniverse = 0;
   for (const doc of listed) {
     if (!isAnnualSecuritiesReport(doc)) continue;
-    const t = secCodeToTicker(doc.secCode);
+    const t = resolveAnnualTicker(doc, edinetToTicker);
     const stockId = t === null ? undefined : codeToId.get(t);
     if (stockId === undefined) {
       outOfUniverse++;
@@ -36,7 +38,7 @@ export function selectMissingDocs(
       skippedExisting++;
       continue;
     }
-    missing.push({ doc, stockId });
+    missing.push({ doc, stockId, stockCode: t! });
   }
   return { missing, skippedExisting, outOfUniverse };
 }
