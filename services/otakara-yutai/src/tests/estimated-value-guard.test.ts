@@ -45,7 +45,7 @@ describe("extractYenAmounts (全角数字の正規化)", () => {
   });
 });
 
-describe("複合円額の拒否 (合成。未対応表記の部分額を採らない)", () => {
+describe("未対応円額表記の拒否 (合成。部分額を採らない)", () => {
   const context = { minShares: [100], recordMonths: [3] };
 
   it.each([
@@ -55,35 +55,47 @@ describe("複合円額の拒否 (合成。未対応表記の部分額を採ら�
     ["1万5千500円相当", 500],
     ["１万５千円相当", 5000],
     ["1 万 5 千 円相当", 5000],
+    ["1億5千円相当", 5000],
+    ["1百50円相当", 50],
+    ["1兆5000円相当", 5000],
+    ["1万0.5千円相当", 5000],
+    ["1万０．５千円相当", 5000],
+    ["1,2円相当", 12],
+    ["1,,000円相当", 1000],
+    ["1,0000円相当", 10000],
+    [",500円相当", 500],
+    ["１，２円相当", 12],
+    ["1,2千円相当", 12000],
+    ["1,2.5円相当", 5],
   ] as const)("%s の tail を円額候補・低額値にしない", (description, tail) => {
     expect(extractYenSpans(description)).toEqual([]);
     expect(extractYenAmounts(description)).toEqual([]);
     expect(extractStrictYenAmounts(description)).toEqual([]);
     expect(sanitizeEstimatedValue(description, tail)).toBeNull();
-    expect(verdictOf(qualifyCompanyNominal(description, tail))).toBe("hold:unsupported_compound_yen");
+    expect(verdictOf(qualifyCompanyNominal(description, tail))).toBe("hold:unsupported_yen_notation");
     // 複合額の足し算を新たに実装したわけではなく、全額候補も保留する。
     expect(qualifyCompanyNominal(description, 15000).qualified).toBe(false);
   });
 
   it("券・単価・明示積・見出し経路でも部分額を認定しない", () => {
     for (const description of ["1万5千円券3枚", "1枚当たり1万5千円相当の券3枚", "1万5千円×3枚"]) {
-      expect(verdictOf(qualifyCompanyNominal(description, 15000))).toBe("hold:unsupported_compound_yen");
-      expect(verdictOf(qualifyCompanyPerGrantValue(description, 15000, context))).toBe("hold:unsupported_compound_yen");
+      expect(verdictOf(qualifyCompanyNominal(description, 15000))).toBe("hold:unsupported_yen_notation");
+      expect(verdictOf(qualifyCompanyPerGrantValue(description, 15000, context))).toBe("hold:unsupported_yen_notation");
     }
     for (const description of [headedDescription("1万5千円券", "3枚"), headedDescription("500円券", "1万5千円相当")]) {
-      expect(verdictOf(qualifyCompanyPerGrantValue(description, 15000, context))).toBe("hold:unsupported_compound_yen");
+      expect(verdictOf(qualifyCompanyPerGrantValue(description, 15000, context))).toBe("hold:unsupported_yen_notation");
     }
     expect(verdictOf(qualifyCompanyPerGrantValue("3枚", 15000, { ...context, headings: ["1万5千円券"] }))).toBe(
-      "hold:unsupported_compound_yen"
+      "hold:unsupported_yen_notation"
     );
     expect(trustedCompanyYieldValue({ description: "1万5千円相当", estimatedValue: 5000, estimateValueSource: "company" }, context)).toBeNull();
     // 別の対応済み金額があっても部分摘みで company に上げない。
     expect(extractYenAmounts("1万5千円相当。500円相当")).toEqual([]);
-    expect(verdictOf(qualifyCompanyNominal("1万5千円相当。500円相当", 500))).toBe("hold:unsupported_compound_yen");
+    expect(verdictOf(qualifyCompanyNominal("1万5千円相当。500円相当", 500))).toBe("hold:unsupported_yen_notation");
   });
 
   it("単一単位の円額と券×数量は維持する", () => {
-    for (const [description, value] of [["1万円相当", 10000], ["5千円相当", 5000]] as const) {
+    for (const [description, value] of [["1万円相当", 10000], ["5千円相当", 5000], ["1,000円相当", 1000]] as const) {
       expect(extractYenAmounts(description)).toEqual([value]);
       expect(extractStrictYenAmounts(description)).toEqual([value]);
       expect(sanitizeEstimatedValue(description, value)).toBe(value);
