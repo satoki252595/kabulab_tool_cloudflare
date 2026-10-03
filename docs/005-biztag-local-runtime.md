@@ -1,6 +1,6 @@
-# 事業タグのMac定時運用
+# 事業タグ・優待要約のMac定時運用
 
-更新: 2026-10-03。事業タグの唯一の定時writerをApple Silicon Macへ移す。
+更新: 2026-10-04。事業タグの唯一の定時writerをApple Silicon Macへ移す。
 新規銘柄の初回だけSemIf/MLXを使い、既存の保存タグを再利用し、旧失敗・不足は
 従来のkeywords/excludes一致で補完する。TypeSafeへの自動代替、語彙審査、
 goldenの定期実行、競合判定は再開しない。
@@ -9,6 +9,9 @@ goldenの定期実行、競合判定は再開しない。
 
 `com.kabulab-cf.biztag` LaunchAgentが毎日Macの現地時刻20:00に起動する。
 このMacはAsia/Tokyo。ログイン時の`RunAtLoad`も同じ入口を通る。
+優待要約は別label `com.kabulab-cf.yutai-summary`で毎日21:00に同じ入口の
+`run yutai-summary`を実行する。原文変更・未要約・契約違反の最大60群を既存固定モデルで処理し、
+新しい有料APIは使わない。`tmp/yutai-local`にprivate進捗・原本・送信中記録を残す。
 実行コードはCIを確認してmainへmergeした専用runtime worktreeに固定し、
 自動pull/resetや未レビューのPR実行はしない。
 
@@ -37,6 +40,8 @@ checkout/一次データ取得前に明示停止する。MacのwriterへGitHub�
 ```bash
 nix develop --command pnpm exec tsx scripts/biztag-local/main.ts preflight
 nix develop --command pnpm exec tsx scripts/biztag-local/main.ts install
+# 優待要約も同じ承認SHAのruntimeから作成する（このコマンドでは実処理しない）。
+nix develop --command pnpm exec tsx scripts/biztag-local/main.ts install yutai-summary
 ```
 
 `install`はplist作成・構文検証まで。既存plistを黙って上書きしない。
@@ -57,7 +62,7 @@ bootstrapは`RunAtLoad`の実処理を起動する。設定が存在すること
 
 ## 排他と停止時の扱い
 
-手動の`biztag run`・台帳writerも同じ`withBiztagWriter`を通す。
+手動の`biztag run`・台帳writer・優待要約も同じ`withBiztagWriter`を通す。
 private `.env`の実体を基点に`tmp/biztag-local/writer.lock`を共有するため、
 同じサービスの別worktreeから実行しても同じkernel排他になる。
 lockfileを削除/差替えず、所有するNodeのFDを全処理が終わるまで保持する。
@@ -71,6 +76,8 @@ Python子はNodeのFDと同じopen file descriptionを共有し、明示`LOCK_UN
 kernelがbusyなら取得・モデル・保存を開始しない。ファイルが残っているだけでは
 runningと判定しない。Node終端でkernel handleが解放され、次の実行は保存済み結果を
 確認して再開する。ownerの実PID/開始identityと旧handle終了は私有診断として残す。
+優待の適用・POST原本照合が未完なら`pending-write.json`を保持し、翌日の自動再送を止める。
+月次Actionsの原文取込は10:30 JST、要約は21:00で通常時刻を分ける。手動で両処理を同時に始めない。
 取得通知が不正/不明ならfailし、保存を始めない。同run再試行とKeepAliveは無い。
 
 runtime HEADが承認SHAと不一致、SemIf専用較正modelが不一致/未配置、追跡対象がdirty、承認SHAが取得済みorigin/mainの
