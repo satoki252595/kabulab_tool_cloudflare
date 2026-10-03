@@ -110,6 +110,121 @@ function workbookBytes(wb: XLSX.WorkBook): Uint8Array {
   return new Uint8Array(XLSX.write(wb, { type: "array", bookType: "xlsx" }));
 }
 
+// 数値は単体試験専用の合成入力。公開fixtureには公式の見出しだけを保存する。
+function monthlyHeaderWorkbook(): XLSX.WorkBook {
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL("./fixtures/jpx-investor-monthly-headers.json", import.meta.url),
+      "utf8",
+    ),
+  ) as { headers: { stock: unknown[][] } };
+  const rows = structuredClone(fixture.headers.stock);
+  for (const market of [
+    "東証プライム",
+    "東証スタンダード",
+    "東証グロース",
+    "二市場",
+  ]) {
+    for (const metric of ["株数 Shares", "金額 Value"])
+      rows.push([
+        "202604",
+        market,
+        metric,
+        ...Array.from({ length: 14 }, () => [7, 11, 4, 18]).flat(),
+      ]);
+  }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "sheet1");
+  return wb;
+}
+
+describe("月次新様式の見出し/契約 (合成数値、CI実行)", () => {
+  it("原年月を確定し、実集計日をNULL pairにする。14葉以外を合成しない", () => {
+    const rows = parseInvestorEquityWorkbook(
+      workbookBytes(monthlyHeaderWorkbook()),
+      "stock_1_m202604.xlsx",
+    );
+    expect(rows).toHaveLength(112);
+    expect(
+      rows.every(
+        (r) =>
+          r.periodType === "monthly" &&
+          r.periodMonth === "2026-04" &&
+          r.periodStart === null &&
+          r.periodEnd === null &&
+          !r.isAggregateCategory,
+      ),
+    ).toBe(true);
+    expect(rows[0]).toMatchObject({ sell: 7, buy: 11, net: 4, total: 18 });
+  });
+  it("本文と数字ファイル名の年月が違えばSTOP", () => {
+    expect(() =>
+      parseInvestorEquityWorkbook(
+        workbookBytes(monthlyHeaderWorkbook()),
+        "stock_1_m202609.xlsx",
+      ),
+    ).toThrow(/年月が一致/);
+  });
+  it("現金/信用の列交換、合計不整合、行欠けを拒否する", () => {
+    const swapped = monthlyHeaderWorkbook();
+    swapped.Sheets.sheet1.D6 = { t: "s", v: "信用取引 Margin" };
+    expect(() =>
+      parseInvestorEquityWorkbook(
+        workbookBytes(swapped),
+        "stock_1_m202604.xlsx",
+      ),
+    ).toThrow(/見出し/);
+    const badTotal = monthlyHeaderWorkbook();
+    badTotal.Sheets.sheet1.G8 = { t: "n", v: 19 };
+    expect(() =>
+      parseInvestorEquityWorkbook(
+        workbookBytes(badTotal),
+        "stock_1_m202604.xlsx",
+      ),
+    ).toThrow(/合計の不整合/);
+    const missing = monthlyHeaderWorkbook();
+    missing.Sheets.sheet1["!ref"] = "A1:BG14";
+    expect(() =>
+      parseInvestorEquityWorkbook(
+        workbookBytes(missing),
+        "stock_1_m202604.xlsx",
+      ),
+    ).toThrow(/行が/);
+    const extra = monthlyHeaderWorkbook(); extra.Sheets.sheet1.BH8 = {t: "n", v: 1}; extra.Sheets.sheet1["!ref"] = "A1:BH15";
+    expect(() => parseInvestorEquityWorkbook(workbookBytes(extra), "stock_1_m202604.xlsx")).toThrow(/59列外/);
+  });
+  it("数字の新リンクを最新にし、サンプル名・新旧同月混在・不正月を拒否する", () => {
+    const head = '<th class="w-space">2026年</th>';
+    const links =
+      head +
+      '<a href="/x/stock_val_1_m2608.xls">Excel</a><a href="/x/stock_vol_1_m2608.xls">Excel</a><a href="/x/stock_1_m202609.xlsx">Excel</a><a href="/x/stock_1_mYYYYMM.xlsx">サンプル</a>';
+    expect(
+      pickLatestPublishedMonth(parseMonthlyIndexHtml(links)),
+    ).toMatchObject({
+      year: 2026,
+      month: 9,
+      unifiedXlsxUrl: "https://www.jpx.co.jp/x/stock_1_m202609.xlsx",
+    });
+    expect(() =>
+      parseMonthlyIndexHtml(
+        head + '<a href="/x/stock_1_mYYYYMM.xlsx">サンプル</a>',
+      ),
+    ).toThrow();
+    expect(() =>
+      parseMonthlyIndexHtml(
+        links + '<a href="/x/stock_val_1_m2609.xls">Excel</a>',
+      ),
+    ).toThrow(/混在/);
+    expect(() =>
+      parseMonthlyIndexHtml(links.replace("202609.xlsx", "202613.xlsx")),
+    ).toThrow(/年月が不正/);
+  });
+  it("より新しい数字PDFだけが載れば旧Excelの月へ戻らずSTOP", () => {
+    const html = '<th class="w-space">2026年</th><a href="/x/stock_1_m202609.xlsx">Excel</a><a href="/x/stock_1_m202610.pdf">PDF</a><a href="/x/stock_1_mYYYYMM.pdf">サンプル</a>';
+    expect(() => parseMonthlyIndexHtml(html)).toThrow(/PDFの月にExcelが未掲載/);
+  });
+});
+
 function find(
   records: readonly InvestorEquityRecord[],
   market: InvestorEquityRecord["market"],
@@ -362,17 +477,19 @@ describe.skipIf(!(hasUnifiedSample))("新様式パーサ (JPX公式サンプル�
   });
 });
 
-describe.skipIf(!(hasMonthlySample))("月次専用の新様式サンプル (2026-10-08 掲載分から予告。週次の新様式(2026-09-29)とは" +
-  "別建てのJPX公式サンプル。実データではなく仕様サンプル)", () => {
-  it("ヘッダ行が「年月週」ではなく「年月」で始まる別レイアウトのため、現行の" +
-    "parseUnifiedSheet(週次新様式用)はヘッダ行を検知できず throw する " +
-    "(フォールバックして誤った値を返さない。ルール2)", () => {
-    const bytes = loadBytes("monthly-unified-sample-jpx-official.xlsx");
-    expect(() => parseInvestorEquityWorkbook(bytes, "stock_1_mYYYYMM.xlsx")).toThrow(
-      /ヘッダ行/
-    );
-  });
-});
+describe.skipIf(!hasMonthlySample)(
+  "公式月次サンプルは構造確認だけに使う",
+  () => {
+    it("原本の過大な数値は千円/千株として黙って保存しない", () => {
+      expect(() =>
+        parseInvestorEquityWorkbook(
+          loadBytes("monthly-unified-sample-jpx-official.xlsx"),
+          "stock_1_mYYYYMM.xlsx",
+        ),
+      ).toThrow(/桁としてありえません/);
+    });
+  },
+);
 
 describe("parseUnifiedFilenamePeriod", () => {
   it("実ファイル名からISO日付を復元する", () => {
@@ -760,47 +877,75 @@ describe.skipIf(!(hasWeeklyIndex27))("週次一覧: 新様式の行を読み飛�
   });
 });
 
-describe.skipIf(!(hasMonthlyIndex27))("月次一覧: 新様式の月を「未公表」と誤認しない (実ページ 2026-09-27 の9月欄を書き換え)", () => {
-  let html: string;
-  beforeAll(() => {
-    html = loadText("monthly-index-2026-09-27.html");
-  });
-  /** 4行 (株数PDF/株数Excel/金額PDF/金額Excel) それぞれの9月欄 (各行で最初の "-") を置換する */
-  const replaceSeptemberCells = (make: (rowIdx: number) => string): string => {
-    let n = 0;
-    return html.replace(/<td class="a-center (tb-color00[12])">-<\/td>/g, (m, cls: string) => {
-      n++;
-      return n % 4 === 1 ? `<td class="a-center ${cls}">${make((n - 1) / 4)}</td>` : m;
+describe.skipIf(!hasMonthlyIndex27)(
+  "月次一覧: 新様式の月を「未公表」と誤認しない (実ページ 2026-09-27 の9月欄を書き換え)",
+  () => {
+    let html: string;
+    beforeAll(() => {
+      html = loadText("monthly-index-2026-09-27.html");
     });
-  };
-  const AUG_VALUE_XLS_CELL =
-    /(<td class="a-center tb-color002">)<a href="[^"]*stock_val_1_m2608\.xls"[^>]*>[\s\S]*?<\/a>(<\/td>)/;
+    /** 4行 (株数PDF/株数Excel/金額PDF/金額Excel) それぞれの9月欄 (各行で最初の "-") を置換する */
+    const replaceSeptemberCells = (
+      make: (rowIdx: number) => string,
+    ): string => {
+      let n = 0;
+      return html.replace(
+        /<td class="a-center (tb-color00[12])">-<\/td>/g,
+        (m, cls: string) => {
+          n++;
+          return n % 4 === 1
+            ? `<td class="a-center ${cls}">${make((n - 1) / 4)}</td>`
+            : m;
+        },
+      );
+    };
+    const AUG_VALUE_XLS_CELL =
+      /(<td class="a-center tb-color002">)<a href="[^"]*stock_val_1_m2608\.xls"[^>]*>[\s\S]*?<\/a>(<\/td>)/;
 
-  it("告知どおりの新様式ファイル (stock_1_m<数字>) が載ったら throw する", () => {
-    // 修正前は9月を未公表とみなし、8月を最新として黙って返していた (再検証で再現)。
-    const newFormat = replaceSeptemberCells(
-      (i) => `<a href="/x/stock_1_m202609.${i % 2 === 0 ? "pdf" : "xlsx"}" rel="external">x</a>`
-    );
-    expect(() => parseMonthlyIndexHtml(newFormat)).toThrow(/新様式のファイル/);
-  });
+    it("告知どおりの新様式ファイルの掲載を最新月として識別する", () => {
+      // 修正前は9月を未公表とみなし、8月を最新として黙って返していた (再検証で再現)。
+      const newFormat = replaceSeptemberCells(
+        (i) =>
+          `<a href="/x/stock_1_m202609.${i % 2 === 0 ? "pdf" : "xlsx"}" rel="external">x</a>`,
+      );
+      expect(
+        pickLatestPublishedMonth(parseMonthlyIndexHtml(newFormat)),
+      ).toMatchObject({
+        year: 2026,
+        month: 9,
+        unifiedXlsxUrl: "https://www.jpx.co.jp/x/stock_1_m202609.xlsx",
+      });
+    });
 
-  it('月欄が "-" でも旧様式のその月のリンクでもなければ throw する', () => {
-    const unexpected = replaceSeptemberCells(() => `<a href="/x/stock_all_1_m2609.xlsx">x</a>`);
-    expect(() => parseMonthlyIndexHtml(unexpected)).toThrow(/旧様式ファイルへのリンクでもありません/);
-  });
+    it('月欄が "-" でも旧様式のその月のリンクでもなければ throw する', () => {
+      const unexpected = replaceSeptemberCells(
+        () => `<a href="/x/stock_all_1_m2609.xlsx">x</a>`,
+      );
+      expect(() => parseMonthlyIndexHtml(unexpected)).toThrow(
+        /旧様式ファイルへのリンクでもありません/,
+      );
+    });
 
-  it("別の月のファイルが入っていれば throw する (列ずれの検知)", () => {
-    const shifted = html.replace(AUG_VALUE_XLS_CELL, '$1<a href="/x/stock_val_1_m2607.xls">x</a>$2');
-    expect(shifted).not.toBe(html);
-    expect(() => parseMonthlyIndexHtml(shifted)).toThrow(/旧様式ファイルへのリンクでもありません/);
-  });
+    it("別の月のファイルが入っていれば throw する (列ずれの検知)", () => {
+      const shifted = html.replace(
+        AUG_VALUE_XLS_CELL,
+        '$1<a href="/x/stock_val_1_m2607.xls">x</a>$2',
+      );
+      expect(shifted).not.toBe(html);
+      expect(() => parseMonthlyIndexHtml(shifted)).toThrow(
+        /旧様式ファイルへのリンクでもありません/,
+      );
+    });
 
-  it("PDF と Excel で公表済みの月が食い違えば throw する", () => {
-    const partial = html.replace(AUG_VALUE_XLS_CELL, "$1-$2");
-    expect(partial).not.toBe(html);
-    expect(() => parseMonthlyIndexHtml(partial)).toThrow(/公表済みの月が一致しません/);
-  });
-});
+    it("PDF と Excel で公表済みの月が食い違えば throw する", () => {
+      const partial = html.replace(AUG_VALUE_XLS_CELL, "$1-$2");
+      expect(partial).not.toBe(html);
+      expect(() => parseMonthlyIndexHtml(partial)).toThrow(
+        /公表済みの月が一致しません/,
+      );
+    });
+  },
+);
 
 describe.skipIf(!(hasW2))("mergeValueAndVolumeRecords (金額ファイル+株数ファイルを1バッチに)", () => {
   let value: InvestorEquityRecord[];

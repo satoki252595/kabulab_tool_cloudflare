@@ -522,6 +522,23 @@ describe("notion-archive moneyflow", () => {
       expect(calls.filter((c) => c.init.method === "PATCH")).toHaveLength(0);
     });
 
+    it("月次の未記載期間をdate:nullで保存し、同じ欠損の再入は書き込まない", async () => {
+      const input = {...sameInput, periodStart: null, periodEnd: null};
+      const props = existingProps({期間開始: {type: "date", date: null}, 期間終了: {type: "date", date: null}});
+      route("POST", `/v1/databases/${dbId}/query`, [
+        {results: [], has_more: false, next_cursor: null},
+        {results: [{id: "obs-null-date", properties: props}], has_more: false, next_cursor: null},
+      ]);
+      route("POST", "/v1/pages", [ackPage("obs-null-date", props)]);
+      const {upsertObservation} = await load();
+      expect(await upsertObservation(dbId, input)).toEqual({pageId: "obs-null-date", outcome: "created"});
+      const payload = JSON.parse(String(calls.find((c) => c.url.endsWith("/v1/pages"))?.init.body));
+      expect(payload.properties.期間開始).toEqual({date: null});
+      expect(payload.properties.期間終了).toEqual({date: null});
+      expect(await upsertObservation(dbId, input)).toEqual({pageId: "obs-null-date", outcome: "unchanged"});
+      expect(calls.filter((c) => c.url.endsWith("/v1/pages"))).toHaveLength(1);
+    });
+
     it("値が 1 つでも違えば上書きする", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
         { results: [{ id: "obs-diff", properties: existingProps({ 値: { type: "number", number: 1 } }) }] , has_more: false, next_cursor: null },

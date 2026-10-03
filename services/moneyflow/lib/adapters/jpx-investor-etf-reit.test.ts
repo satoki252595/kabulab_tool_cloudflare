@@ -256,6 +256,90 @@ const KNOWN_LABELS = JPX_INVESTOR_ETF_REIT_CATEGORIES.map((c) => c.label);
 const SYNTHETIC_FILE: SpecFile[] = [{ filename: "etf_m2603.xls", bytes: new Uint8Array([0]) }];
 const SYNTHETIC_KEY = "jpx-investor-etf-reit-etf-2026-03";
 
+describe("新様式13葉の名前付き観測 (CI用合成入力)", () => {
+  function unifiedReport(): JpxInvestorReport {
+    const report = syntheticReport(
+      "etf",
+      source.JPX_INVESTOR_UNIFIED_GROUPS.map((group) => group.label),
+    );
+    report.formatVersion = "unified_single_sheet";
+    for (const sheet of [report.value, report.volume]) {
+      sheet.rangeStart = null;
+      sheet.rangeEnd = null;
+      sheet.marketTotal = null;
+      for (const row of sheet.categories) {
+        row.salesRatioPercent = null;
+        row.purchasesRatioPercent = null;
+        row.totalRatioPercent = null;
+      }
+    }
+    return report;
+  }
+  const files: SpecFile[] = [
+    { filename: "etf_m202603.xlsx", bytes: new Uint8Array([0]) },
+  ];
+  it("月次NULL pairを維持し13部門×net/grossのみ。市場全体や親値を作らない", () => {
+    vi.mocked(source.parseJpxInvestorWorkbook).mockReturnValueOnce(
+      unifiedReport(),
+    );
+    const drafts = jpxInvestorEtfSpec.toObservations({
+      key: SYNTHETIC_KEY,
+      files,
+    });
+    validateDrafts(
+      jpxInvestorEtfSpec.name,
+      drafts,
+      jpxInvestorEtfSpec.indicators,
+    );
+    expect(drafts).toHaveLength(26);
+    expect(
+      drafts.every(
+        (row) =>
+          row.periodStart === null &&
+          row.periodEnd === null &&
+          row.categoryLevel === 1 &&
+          row.publicationDate === null,
+      ),
+    ).toBe(true);
+    expect(drafts[0]).toMatchObject({
+      category: "自己現金",
+      marketSegment: "東証",
+      investorCategory: "自己現金",
+      tradeType: "現金",
+      value: 500000,
+    });
+    expect(drafts.find((row) => row.investorCategory === "銀行"))
+      .toMatchObject({ parentCategory: "金融機関" });
+    expect(drafts.find((row) => row.investorCategory === "証券会社"))
+      .toMatchObject({ parentCategory: "委託計" });
+    expect(
+      drafts.some(
+        (row) => row.category === "総計" || row.category === "市場全体",
+      ),
+    ).toBe(false);
+  });
+  it("サンプル名・葉欠落・片側日付だけ既知ならSTOP", () => {
+    expect(() =>
+      jpxInvestorEtfSpec.toObservations({
+        key: SYNTHETIC_KEY,
+        files: [{ ...files[0], filename: "etf_mYYYYMM.xlsx" }],
+      }),
+    ).toThrow();
+    const missing = unifiedReport();
+    missing.value.categories.pop();
+    vi.mocked(source.parseJpxInvestorWorkbook).mockReturnValueOnce(missing);
+    expect(() =>
+      jpxInvestorEtfSpec.toObservations({ key: SYNTHETIC_KEY, files }),
+    ).toThrow(/欠け/);
+    const partial = unifiedReport();
+    partial.value.rangeStart = "2026-03-01";
+    vi.mocked(source.parseJpxInvestorWorkbook).mockReturnValueOnce(partial);
+    expect(() =>
+      jpxInvestorEtfSpec.toObservations({ key: SYNTHETIC_KEY, files }),
+    ).toThrow(/片側/);
+  });
+});
+
 describe("写像 (合成テストデータ・CI で実行)", () => {
   it("区分ごとに買い越し (買い−売り) と売買代金 (売り+買い) を千円→円で出し、市場全体を最後に置く", () => {
     vi.mocked(source.parseJpxInvestorWorkbook).mockReturnValueOnce(syntheticReport("etf", KNOWN_LABELS));

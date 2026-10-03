@@ -12,8 +12,7 @@
  * investor-type/02.html, 03.html 上で「2026年10月13日掲載分からの新様式」
  * として公式に先行公開しているサンプルファイルそのもの (再ダウンロード)。
  * 中の数値は JPX 自身のプレースホルダ例示であり実際の取引結果ではないため、
- * 「現行パーサがこれを渡されたら明示的に throw する」ことの確認にのみ使う
- * (実測値としては扱わない)。
+ * 見出し/単位/13葉の構造確認だけに使う (実測値としては扱わない)。
  *
  * JPX の配布ファイルは再配布不可のため commit しない (`.gitignore` 済み)。置いていない
  * 環境 (CI) では、実ファイルを読むテストだけを `describe.skipIf(!hasFixtures)` で skip する。
@@ -52,6 +51,113 @@ function loadFixtureText(filename: string): string {
   return readFileSync(`${FIXTURES_DIR}${filename}`, "utf-8");
 }
 
+// 数値は試験専用の合成入力。公開fixtureは公式の見出しだけ。
+function newFormatWorkbook(product: "etf" | "reit"): XLSX.WorkBook {
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL("./fixtures/jpx-investor-monthly-headers.json", import.meta.url),
+      "utf8",
+    ),
+  ) as { headers: Record<"etf" | "reit", unknown[][]> };
+  const rows = structuredClone(fixture.headers[product]);
+  for (const metric of ["口数 Volume", "金額 Value"])
+    rows.push([
+      "202604",
+      metric,
+      ...Array.from({ length: 13 }, () => [7, 11, 4, 18]).flat(),
+    ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "sheet1");
+  return wb;
+}
+function newFormatBytes(wb: XLSX.WorkBook): Uint8Array {
+  return new Uint8Array(XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+}
+
+describe("ETF/REIT月次新様式 (公式見出し+試験用合成数値、CI実行)", () => {
+  it.each(["etf", "reit"] as const)(
+    "%s の13葉原値だけを読み、日付・比率・親/市場集計をNULLとする",
+    (product) => {
+      const report = parseJpxInvestorWorkbook(
+        newFormatBytes(newFormatWorkbook(product)),
+        product,
+        "https://www.jpx.co.jp/markets/statistics-equities/investor-type/",
+      );
+      expect(report.yearMonth).toBe("2026-04");
+      expect(report.volume.unit).toBe(
+        product === "etf" ? "lot_100units" : "unit",
+      );
+      expect(report.value.categories).toHaveLength(13);
+      expect(report.value.rangeStart).toBeNull();
+      expect(report.value.rangeEnd).toBeNull();
+      expect(report.value.marketTotal).toBeNull();
+      expect(report.value.categories[0]).toMatchObject({
+        category: "自己現金",
+        sales: 7,
+        purchases: 11,
+        balance: 4,
+        total: 18,
+        salesRatioPercent: null,
+        purchasesRatioPercent: null,
+        totalRatioPercent: null,
+      });
+      const rows = toJpxInvestorObservationRows(report);
+      expect(rows).toHaveLength(52);
+      expect(rows.some((r) => r.category === "市場全体")).toBe(false);
+    },
+  );
+  it("商品/単位の取り違え・部門見出しずれ・差引矛盾・指標欠けをSTOP", () => {
+    expect(() =>
+      parseJpxInvestorWorkbook(
+        newFormatBytes(newFormatWorkbook("reit")),
+        "etf",
+        "https://www.jpx.co.jp/",
+      ),
+    ).toThrow(/表題/);
+    const wrongUnit = newFormatWorkbook("reit");
+    wrongUnit.Sheets.sheet1.B7 = {
+      t: "s",
+      v: "口数／金額 Volume／Value 百口／千円",
+    };
+    expect(() =>
+      parseJpxInvestorWorkbook(
+        newFormatBytes(wrongUnit),
+        "reit",
+        "https://www.jpx.co.jp/",
+      ),
+    ).toThrow(/単位/);
+    const wrongHeader = newFormatWorkbook("etf");
+    wrongHeader.Sheets.sheet1.C6 = { t: "s", v: "信用取引 Margin" };
+    expect(() =>
+      parseJpxInvestorWorkbook(
+        newFormatBytes(wrongHeader),
+        "etf",
+        "https://www.jpx.co.jp/",
+      ),
+    ).toThrow(/見出し/);
+    const wrongBalance = newFormatWorkbook("etf");
+    wrongBalance.Sheets.sheet1.E8 = { t: "n", v: 5 };
+    expect(() =>
+      parseJpxInvestorWorkbook(
+        newFormatBytes(wrongBalance),
+        "etf",
+        "https://www.jpx.co.jp/",
+      ),
+    ).toThrow(/不整合/);
+    const missing = newFormatWorkbook("etf");
+    missing.Sheets.sheet1["!ref"] = "A1:BB8";
+    expect(() =>
+      parseJpxInvestorWorkbook(
+        newFormatBytes(missing),
+        "etf",
+        "https://www.jpx.co.jp/",
+      ),
+    ).toThrow(/欠け/);
+    const extra = newFormatWorkbook("etf"); extra.Sheets.sheet1.BC8 = {t: "n", v: 1}; extra.Sheets.sheet1["!ref"] = "A1:BC9";
+    expect(() => parseJpxInvestorWorkbook(newFormatBytes(extra), "etf", "https://www.jpx.co.jp/")).toThrow(/54列外/);
+  });
+});
+
 /**
  * 実ファイルを読み込み、指定セルだけを書き換えた (または消した) ワークブックを
  * xlsx バイト列として返す。様式崩れ・位置ずれ時に throw することを確かめる
@@ -75,9 +181,11 @@ function mutateFixtureWorkbook(
   return new Uint8Array(out);
 }
 
-describe.skipIf(!hasFixtures)("parseJpxInvestorWorkbook — ETF (実ファイル etf_m2608.xls, 2026年8月)", () => {
-  let report: ReturnType<typeof parseJpxInvestorWorkbook>;
-  beforeAll(() => {
+describe.skipIf(!hasFixtures)(
+  "parseJpxInvestorWorkbook — ETF (実ファイル etf_m2608.xls, 2026年8月)",
+  () => {
+    let report: ReturnType<typeof parseJpxInvestorWorkbook>;
+    beforeAll(() => {
     report = parseJpxInvestorWorkbook(
       loadFixtureBytes("etf_m2608.xls"),
       "etf",
@@ -85,19 +193,19 @@ describe.skipIf(!hasFixtures)("parseJpxInvestorWorkbook — ETF (実ファイル
     );
   });
 
-  it("対象期間を正しく読む", () => {
+    it("対象期間を正しく読む", () => {
     expect(report.yearMonth).toBe("2026-08");
     expect(report.value.rangeStart).toBe("2026-08-03");
     expect(report.value.rangeEnd).toBe("2026-08-31");
   });
 
-  it("総売買代金 (金額シート) が原本 (xls・PDF双方) と一致する", () => {
+    it("総売買代金 (金額シート) が原本 (xls・PDF双方) と一致する", () => {
     // PDF (etf_m2608.pdf, unpdf抽出) より: "14,633,061,770 99.47% 3.62% 95.85%"
     expect(report.value.marketTotal).toBe(14_633_061_770);
     expect(report.value.unit).toBe("thousand_yen");
   });
 
-  it("海外投資家 (Foreigners) の金額を原本と一致させ、買い越しと判定する", () => {
+    it("海外投資家 (Foreigners) の金額を原本と一致させ、買い越しと判定する", () => {
     // PDF より: "海外投資家 売り Sales 3,932,263,296 55.64 Foreigners 買い Purchases 4,061,605,020 58.36 129,341,724"
     const foreigners = report.value.categories.find((c) => c.category === "海外投資家");
     expect(foreigners).toBeDefined();
@@ -107,39 +215,42 @@ describe.skipIf(!hasFixtures)("parseJpxInvestorWorkbook — ETF (実ファイル
     expect(foreigners?.balance).toBeGreaterThan(0); // 買い越し
   });
 
-  it("個人 (Individuals) の差引を原本と一致させ、売り越しと判定する", () => {
+    it("個人 (Individuals) の差引を原本と一致させ、売り越しと判定する", () => {
     // PDF より: "個 人 売り Sales 2,521,010,902 35.67 個人 買い Purchases 2,482,254,533 35.67 -38,756,369"
     const individuals = report.value.categories.find((c) => c.category === "個人");
     expect(individuals?.balance).toBe(-38_756_369);
     expect(individuals?.balance).toBeLessThan(0); // 売り越し
   });
 
-  it("総売買高 (口数シート) が原本と一致する", () => {
+    it("総売買高 (口数シート) が原本と一致する", () => {
     // PDF (Volume) より: "111,242,010 99.34% 3.10% 96.23%"
     expect(report.volume.marketTotal).toBe(111_242_010);
     expect(report.volume.unit).toBe("lot_100units");
   });
 
-  it("カテゴリの合計が売り+買いと一致する不変条件を保つ", () => {
+    it("カテゴリの合計が売り+買いと一致する不変条件を保つ", () => {
     for (const c of [...report.value.categories, ...report.volume.categories]) {
       expect(c.total).toBe(c.sales + c.purchases);
       expect(c.balance).toBe(c.purchases - c.sales);
     }
   });
 
-  it("marketTotal は投資部門別「総計」(資本金30億円以上の参加者限定) とは母集団が異なり一致しない", () => {
-    // 総計 = 自己計 + 委託計 (資本金30億円以上の取引参加者のみを対象とした投資部門別集計)。
-    // marketTotal (シート冒頭の総売買代金) はそれより広い市場参加者全体の実測合計であり、
-    // 同じ値にはならない (実測ではおおむね0.5%前後 marketTotal の方が大きい)。
-    const total = report.value.categories.find((c) => c.group === null && c.category === "総計");
-    expect(total).toBeDefined();
-    expect(total?.total).not.toBe(report.value.marketTotal);
-    expect(report.value.marketTotal).toBeGreaterThan(total!.total);
-    const diffRatio = (report.value.marketTotal - total!.total) / report.value.marketTotal;
-    expect(diffRatio).toBeGreaterThan(0);
-    expect(diffRatio).toBeLessThan(0.01); // 差はおおむね0.5%前後 (1%未満)
-  });
-});
+    it("marketTotal は投資部門別「総計」(資本金30億円以上の参加者限定) とは母集団が異なり一致しない", () => {
+      // 総計 = 自己計 + 委託計 (資本金30億円以上の取引参加者のみを対象とした投資部門別集計)。
+      // marketTotal (シート冒頭の総売買代金) はそれより広い市場参加者全体の実測合計であり、
+      // 同じ値にはならない (実測ではおおむね0.5%前後 marketTotal の方が大きい)。
+      const total = report.value.categories.find((c) => c.group === null && c.category === "総計");
+      expect(total).toBeDefined();
+      expect(total?.total).not.toBe(report.value.marketTotal);
+      expect(report.value.marketTotal).toBeGreaterThan(total!.total);
+      if (report.value.marketTotal === null)
+        throw new Error("旧実ファイルの市場値が欠落");
+      const diffRatio = (report.value.marketTotal - total!.total) / report.value.marketTotal;
+      expect(diffRatio).toBeGreaterThan(0);
+      expect(diffRatio).toBeLessThan(0.01); // 差はおおむね0.5%前後 (1%未満)
+    });
+  },
+);
 
 describe.skipIf(!hasFixtures)("parseJpxInvestorWorkbook — REIT (実ファイル reit_m2608.xls, 2026年8月)", () => {
   let report: ReturnType<typeof parseJpxInvestorWorkbook>;
@@ -179,21 +290,36 @@ describe.skipIf(!hasFixtures)("parseJpxInvestorWorkbook — REIT (実ファイ�
   });
 });
 
-describe.skipIf(!hasFixtures)("parseJpxInvestorWorkbook — 様式が変わった場合は throw する", () => {
-  it("JPXが2026-10-13掲載分から先行公開している新様式サンプル(ETF)を渡すと throw する", () => {
-    // 数値はJPX自身のプレースホルダ例示 (実測値ではない)。構造検証のみに使う。
-    const bytes = loadFixtureBytes("etf_mYYYYMM_sample-new-format.xlsx");
-    expect(() => parseJpxInvestorWorkbook(bytes, "etf", "https://example.invalid/sample")).toThrow(
-      /未対応のシート構成|2026年10月13日/
-    );
-  });
-
-  it("JPXが2026-10-13掲載分から先行公開している新様式サンプル(REIT)を渡すと throw する", () => {
-    const bytes = loadFixtureBytes("reit_mYYYYMM_sample-new-format.xlsx");
-    expect(() => parseJpxInvestorWorkbook(bytes, "reit", "https://example.invalid/sample")).toThrow(
-      /未対応のシート構成/
-    );
-  });
+describe.skipIf(!["etf", "reit"].every((p) => existsSync(`${FIXTURES_DIR}${p}_mYYYYMM_sample-new-format.xlsx`)))("公式サンプルは構造確認だけに使う", () => {
+  it.each(["etf", "reit"] as const)(
+    "%s 新様式の未掲載日付・比率・市場全体はNULL",
+    (product) => {
+      const report = parseJpxInvestorWorkbook(
+        loadFixtureBytes(`${product}_mYYYYMM_sample-new-format.xlsx`),
+        product,
+        "https://www.jpx.co.jp/markets/statistics-equities/investor-type/",
+      );
+      expect(report.formatVersion).toBe("unified_single_sheet");
+      for (const sheet of [report.value, report.volume]) {
+        expect(sheet.rangeStart).toBeNull();
+        expect(sheet.rangeEnd).toBeNull();
+        expect(sheet.marketTotal).toBeNull();
+        expect(sheet.categories).toHaveLength(13);
+        const workbook = XLSX.read(loadFixtureBytes(`${product}_mYYYYMM_sample-new-format.xlsx`), {type: "array"});
+        const sourceRows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets.sheet1, {header: 1, defval: ""});
+        const originalRow = sourceRows[sheet.metric === "volume" ? 7 : 8];
+        expect(sheet.categories.every((row, index) => [row.sales, row.purchases, row.balance, row.total].every((value, offset) => value === originalRow[2 + index * 4 + offset]))).toBe(true);
+        expect(
+          sheet.categories.every(
+            (row) =>
+              row.salesRatioPercent === null &&
+              row.purchasesRatioPercent === null &&
+              row.totalRatioPercent === null,
+          ),
+        ).toBe(true);
+      }
+    },
+  );
 });
 
 describe.skipIf(!hasFixtures)("parseJpxInvestorWorkbook — 位置ずれ・取り違えを黙って通さない", () => {
@@ -241,9 +367,11 @@ describe.skipIf(!hasFixtures)("parseJpxInvestorWorkbook — 位置ずれ・取�
   });
 });
 
-describe.skipIf(!hasFixtures)("区分の入れ子構造と構成比 (実ファイル 2026年8月, 指標定義の記述の裏付け)", () => {
-  let reports: ReturnType<typeof parseJpxInvestorWorkbook>[];
-  beforeAll(() => {
+describe.skipIf(!hasFixtures)(
+  "区分の入れ子構造と構成比 (実ファイル 2026年8月, 指標定義の記述の裏付け)",
+  () => {
+    let reports: ReturnType<typeof parseJpxInvestorWorkbook>[];
+    beforeAll(() => {
     reports = (["etf", "reit"] as const).map((product) =>
       parseJpxInvestorWorkbook(
         loadFixtureBytes(`${product}_m2608.xls`),
@@ -252,14 +380,14 @@ describe.skipIf(!hasFixtures)("区分の入れ子構造と構成比 (実ファ�
       )
     );
   });
-  const hierarchy: Record<string, string[]> = {
+    const hierarchy: Record<string, string[]> = {
     総計: ["自己計", "委託計"],
     委託計: ["法人", "個人", "海外投資家", "証券会社"],
     法人: ["投資信託", "事業法人", "その他法人等", "金融機関"],
     金融機関: ["生保・損保", "銀行", "その他金融機関"],
   };
 
-  it("総計=自己計+委託計 等、区分は入れ子で売り・買いとも子の合計と完全一致する (足すと二重計上)", () => {
+    it("総計=自己計+委託計 等、区分は入れ子で売り・買いとも子の合計と完全一致する (足すと二重計上)", () => {
     for (const report of reports) {
       for (const sheet of [report.value, report.volume]) {
         const byName = new Map(sheet.categories.map((c) => [c.category, c]));
@@ -278,7 +406,7 @@ describe.skipIf(!hasFixtures)("区分の入れ子構造と構成比 (実ファ�
     }
   });
 
-  it("構成比は 自己計・委託計=総計に対する比率、各投資部門=委託計に対する比率 (定義文と一致)", () => {
+    it("構成比は 自己計・委託計=総計に対する比率、各投資部門=委託計に対する比率 (定義文と一致)", () => {
     for (const report of reports) {
       const byName = new Map(report.value.categories.map((c) => [c.category, c]));
       const pct = (a: number, b: number) => Math.round((a / b) * 10000) / 100;
@@ -300,24 +428,27 @@ describe.skipIf(!hasFixtures)("区分の入れ子構造と構成比 (実ファ�
     }
   });
 
-  it("市場全体の総売買代金は売り・買いの両側を数えた値 (総計の売り≒買いで、合計はその約2倍)", () => {
-    for (const report of reports) {
-      const total = report.value.categories.find((c) => c.category === "総計")!;
-      // 売り側と買い側はほぼ同額 (1回の売買に売り手と買い手が1人ずついるため)
-      expect(Math.abs(total.sales - total.purchases) / total.sales).toBeLessThan(0.01);
-      // 原本「総売買代金に占める合計」比率 (ETF 99.47% / REIT 99.48%) と一致
-      const coverage = Math.round((total.total / report.value.marketTotal) * 10000) / 100;
-      expect(coverage).toBe(report.product === "etf" ? 99.47 : 99.48);
-    }
-    for (const product of ["etf", "reit"] as const) {
+    it("市場全体の総売買代金は売り・買いの両側を数えた値 (総計の売り≒買いで、合計はその約2倍)", () => {
+      for (const report of reports) {
+        const total = report.value.categories.find((c) => c.category === "総計")!;
+        // 売り側と買い側はほぼ同額 (1回の売買に売り手と買い手が1人ずついるため)
+        expect(Math.abs(total.sales - total.purchases) / total.sales).toBeLessThan(0.01);
+        // 原本「総売買代金に占める合計」比率 (ETF 99.47% / REIT 99.48%) と一致
+        if (report.value.marketTotal === null)
+          throw new Error("旧実ファイルの市場値が欠落");
+        const coverage = Math.round((total.total / report.value.marketTotal) * 10000) / 100;
+        expect(coverage).toBe(report.product === "etf" ? 99.47 : 99.48);
+      }
+      for (const product of ["etf", "reit"] as const) {
       const marketDef = jpxInvestorIndicatorDefinitions(product).find(
         (d) => d.key === `jpx-${product}-market-turnover-value`
       );
       expect(marketDef?.plainDescription).toContain("2倍");
       expect(marketDef?.plainDescription).toContain("お金が流れ込んだ量ではない");
     }
-  });
-});
+    });
+  },
+);
 
 describe.skipIf(!hasFixtures)("parseJpxInvestorMonthLinks (実ページの抜粋)", () => {
   it("ETF一覧ページの抜粋から月次リンクを年月昇順で抽出し、最新が2026-08になる", () => {

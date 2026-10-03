@@ -10,8 +10,8 @@
 import { createHash } from "node:crypto";
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import type { DailyFetchProof } from "../../../src/shared/yahoo/client.js";
-import { isDailyFetchProof } from "../../../src/shared/vwap/proof.js";
+import type { DailyFetchProof, DailyResult, YahooRawCapture } from "../../../src/shared/yahoo/client.js";
+import { isDailyFetchProof, jstDateSec } from "../../../src/shared/vwap/proof.js";
 import { assertCorporateEventsShape, assertEventSourceProof, corporateEventPins, corporateSplitProjection, priceSnapshotJson,
   type CorporateEvents } from "../../../src/shared/yahoo/corporate-events.js";
 import type { DailyBar } from "../../../src/shared/yahoo/client.js";
@@ -133,7 +133,67 @@ export type SavedDaily = {
   /** この fetch の provenance (legacy object には無い。ある場合は形状 strict)。 */
   proof?: DailyFetchProof;
   corporateEvents?: CorporateEvents;
+  /** 同じ明示range/対象日の再開専用。session確定と全raw行の採用を証明。 */
+  completedFetch?: CompletedDailyFetch;
 };
+
+export type CompletedDailyFetch = {
+  from: string; to: string;
+  regularStart: number; regularEnd: number; regularMarketTime: number;
+  bars: number; rawSha: string; priceSnapshotSha256: string;
+};
+
+/** 原本を再取得せず、取得済み同一応答からだけ再開証跡を作る。欠落は未適格。 */
+export function completedDailyFetch(
+  fresh: DailyResult, capture: YahooRawCapture | undefined, range: { from: string; to: string }
+): CompletedDailyFetch | null {
+  if (fresh.corporateEvents === undefined) return null; // legacy callerは証跡不足。
+  if (capture === undefined || capture.status !== 200 || capture.symbol !== fresh.proof.symbol ||
+      createHash("sha256").update(capture.bytes).digest("hex") !== fresh.proof.rawSha) {
+    throw new Error("daily completion: 同一取得原本の証跡不一致");
+  }
+  const raw = JSON.parse(new TextDecoder().decode(capture.bytes)) as {
+    chart?: { result?: Array<{ meta?: { symbol?: unknown; range?: unknown; dataGranularity?: unknown;
+      exchangeTimezoneName?: unknown; regularMarketTime?: unknown;
+      currentTradingPeriod?: { regular?: { start?: unknown; end?: unknown } } }; timestamp?: unknown }> };
+  };
+  const result = raw.chart?.result?.[0], meta = result?.meta;
+  const start = meta?.currentTradingPeriod?.regular?.start;
+  const end = meta?.currentTradingPeriod?.regular?.end, marketTime = meta?.regularMarketTime;
+  const ts = result?.timestamp;
+  if (meta?.symbol !== fresh.proof.symbol || meta?.range !== "10y" || meta?.dataGranularity !== "1d" ||
+      meta?.exchangeTimezoneName !== "Asia/Tokyo" || !Array.isArray(ts) || ts.length !== fresh.bars.length ||
+      ![start, end, marketTime].every((v) => typeof v === "number" && Number.isSafeInteger(v) && v > 0)) return null;
+  const proof: CompletedDailyFetch = { ...range, regularStart: start as number, regularEnd: end as number,
+    regularMarketTime: marketTime as number, bars: fresh.bars.length, rawSha: fresh.proof.rawSha,
+    priceSnapshotSha256: bodyPin(priceSnapshotJson(fresh.bars)) };
+  const saved: SavedDaily = { code: fresh.proof.symbol.replace(/\.T$/, ""), ...fresh,
+    bars: fresh.bars.map((b) => ({ ...b })), completedFetch: proof };
+  // 全timestampが採用barと1:1で一致すること。null脱落・重複・順序崩れを成功へしない。
+  if (ts.some((t, i) => typeof t !== "number" || !Number.isSafeInteger(t) || t <= 0 ||
+      jstDateSec(t) !== fresh.bars[i].date || (i > 0 && ts[i - 1] >= t)) ||
+      ts[0] !== fresh.proof.firstTs || ts[ts.length - 1] !== fresh.proof.lastTs ||
+      !hasCompletedDailyFetch(saved, range)) return null;
+  return proof;
+}
+
+/** wall clock/mtimeだけではskipしない。明示対象日と確定session/全bars/SHAが一致する時だけ。 */
+export function hasCompletedDailyFetch(saved: SavedDaily, range: { from: string; to: string }): boolean {
+  const c = saved.completedFetch, p = saved.proof;
+  if (c === undefined || !isDailyFetchProof(p) || saved.corporateEvents === undefined) return false;
+  if (c.from !== range.from || c.to !== range.to || !isCalendarDate(c.from) || !isCalendarDate(c.to) ||
+      p.requestedRange !== "10y" || p.symbol !== `${saved.code}.T` || c.rawSha !== p.rawSha ||
+      !Number.isSafeInteger(c.bars) || c.bars <= 0 || c.bars !== saved.bars.length ||
+      ![c.regularStart, c.regularEnd, c.regularMarketTime].every((t) => Number.isSafeInteger(t) && t > 0) ||
+      c.regularStart >= c.regularEnd || c.regularMarketTime < c.regularEnd ||
+      jstDateSec(c.regularStart) !== range.to || jstDateSec(c.regularEnd) !== range.to ||
+      jstDateSec(c.regularMarketTime) !== range.to || Date.parse(p.observedAt) / 1000 < c.regularMarketTime ||
+      p.firstTs === null || p.lastTs === null || c.priceSnapshotSha256 !== bodyPin(priceSnapshotJson(saved.bars as unknown as DailyBar[])) ||
+      c.priceSnapshotSha256 !== saved.corporateEvents.source.priceSnapshotSha256) return false;
+  const dates = saved.bars.map((b) => b.date as string);
+  return dates[0] === jstDateSec(p.firstTs) && dates[dates.length - 1] === jstDateSec(p.lastTs) &&
+    dates[dates.length - 1] === range.to && dates.every((d, i) => d >= range.from && d <= range.to && (i === 0 || dates[i - 1] < d));
+}
 
 export type SavedIntra = {
   code: string;
@@ -222,6 +282,13 @@ export function assertSavedDailyShape(raw: string, key: string, expectedCode: st
       corporateEventPins(o.corporateEvents).some((pin) => bodyPin(pin.json) !== pin.sha256) ||
       JSON.stringify(corporateSplitProjection(o.corporateEvents)) !== JSON.stringify(o.splits)) {
       throw new Error(`保存済みeventsのSHA不一致: ${key}`);
+    }
+  }
+  if (o.completedFetch !== undefined) {
+    const c = o.completedFetch;
+    if (c === null || typeof c !== "object" || Array.isArray(c) ||
+        !hasCompletedDailyFetch(o as unknown as SavedDaily, c as CompletedDailyFetch)) {
+      throw new Error(`保存済み形状が不正です (completedFetch 不正): ${key}`);
     }
   }
   return o as unknown as SavedDaily;
@@ -357,6 +424,8 @@ export type IngestCodeOutcome = {
   latestSourceBar: string | number | null;
   bodySha: string | null;
   discardedOutOfRange?: DiscardedOutOfRange;
+  /** 確定済み保存物でsource前skipした時のみfalse。今回のsource観測とは数えない。 */
+  sourceFetched?: false;
 };
 
 export type IngestRunStats = {
@@ -397,6 +466,7 @@ export function sourceObservedAggregate(
   let maxDate: string | null = null;
   let maxTs: number | null = null;
   for (const code of Object.keys(outcomes)) {
+    if (outcomes[code].sourceFetched === false) continue;
     const v = outcomes[code].latestSourceBar;
     if (v === null || v === undefined) continue;
     count++;
