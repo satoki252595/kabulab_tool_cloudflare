@@ -13,6 +13,7 @@ import {
   companyNameFromCell,
   extractBackNumber,
   extractTables,
+  parseIsoDate,
   parseOfficialCode,
   parseStrictDate,
   type RawTable,
@@ -55,6 +56,13 @@ export type TransferRow = {
   fromMarket: string;
   toMarket: string;
   note: string;
+};
+
+/** 単日が未確定の将来予定。exact-date event のキーには変換しない。 */
+export type FutureUncertainTransfer = Omit<TransferRow, "effectiveDate"> & {
+  dateText: string;
+  earliestDate: string;
+  latestDate: string;
 };
 
 /** 実測 thead cellText (2026-09-30)。完全一致のみ受理。 */
@@ -101,8 +109,16 @@ function knownMarket(text: string): boolean {
 
 export function parseTransfersHtml(
   bytes: Uint8Array,
-  opts: { yearWindow: readonly string[] }
-): { rows: TransferRow[]; coveredYears: string[]; tableIndex: number } {
+  opts: { yearWindow: readonly string[]; eligibilityAsOf?: string }
+): {
+  rows: TransferRow[];
+  futureUncertainScheduled: FutureUncertainTransfer[];
+  coveredYears: string[];
+  tableIndex: number;
+} {
+  if (opts.eligibilityAsOf !== undefined && parseIsoDate(opts.eligibilityAsOf) === null) {
+    throw new Error("transfers: eligibilityAsOf が実在する ISO 日付ではありません");
+  }
   const html = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   assertPageTitle(html, JPX_TRANSFERS_TITLE, "transfers");
   const backNumber = extractBackNumber(html, JPX_TRANSFERS_PATH, "transfers");
@@ -110,6 +126,7 @@ export function parseTransfersHtml(
   const table = selectTransfersTable(extractTables(html));
 
   const rows: TransferRow[] = [];
+  const futureUncertainScheduled: FutureUncertainTransfer[] = [];
   for (let i = 0; i < table.body.length; i++) {
     const row = table.body[i] as { text: string; html: string }[];
     if (row.length !== 7) {
@@ -117,11 +134,6 @@ export function parseTransfersHtml(
     }
     const dateText = row[0]?.text ?? "";
     const effectiveDate = parseStrictDate(dateText);
-    if (effectiveDate === null) {
-      throw new Error(
-        `transfers 行 ${i}: 変更日の厳密パースに失敗 (${JSON.stringify(dateText)})`
-      );
-    }
     const ctx = `transfers 行 ${i}`;
     const code = parseOfficialCode(row[2]?.text ?? "", ctx);
     const nameCell = row[1];
@@ -135,20 +147,34 @@ export function parseTransfersHtml(
         `${ctx}: 未知の市場 (${JSON.stringify(fromMarket)}→${JSON.stringify(toMarket)})`
       );
     }
-    rows.push({
+    const common = {
       code,
       companyName: companyNameFromCell(nameCell),
-      effectiveDate,
       fromMarket,
       toMarket,
       note: row
         .map((c) => c.text)
         .filter((t) => t.length > 0)
         .join(" / "),
-    });
+    };
+    if (effectiveDate !== null) {
+      rows.push({ ...common, effectiveDate });
+      continue;
+    }
+    const range = dateText.match(/^(.+?)\s*～\s*(.+)$/);
+    const earliestDate = range ? parseStrictDate(range[1]!.trim()) : null;
+    const latestDate = range ? parseStrictDate(range[2]!.trim()) : null;
+    if (opts.eligibilityAsOf === undefined || earliestDate === null || latestDate === null ||
+      earliestDate > latestDate || earliestDate <= opts.eligibilityAsOf) {
+      throw new Error(
+        `transfers 行 ${i}: 変更日の厳密パースに失敗 (${JSON.stringify(dateText)})`
+      );
+    }
+    futureUncertainScheduled.push({ ...common, dateText, earliestDate, latestDate });
   }
   return {
     rows,
+    futureUncertainScheduled,
     coveredYears: [backNumber.coveredYear],
     tableIndex: table.tableIndex,
   };

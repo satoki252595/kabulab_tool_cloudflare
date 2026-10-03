@@ -103,6 +103,40 @@ describe("transfers", () => {
       parseTransfersHtml(fixture("transfers"), { yearWindow: ["2027"] })
     ).toThrow(/HOLD/);
   });
+
+  it("実原本の未来範囲を原情報で保持し、単日eventを作らない", () => {
+    const bytes = fixture("transfers-future-range");
+    const got = parseTransfersHtml(bytes, {
+      yearWindow: WIN_2026, eligibilityAsOf: "2026-10-04",
+    });
+    expect(got.rows).toEqual([]);
+    expect(got.coveredYears).toEqual(WIN_2026);
+    expect(got.futureUncertainScheduled).toHaveLength(1);
+    expect(got.futureUncertainScheduled[0]).toMatchObject({
+      dateText: "2026/10/20 ～ 2026/10/22",
+      earliestDate: "2026-10-20", latestDate: "2026-10-22",
+    });
+    expect(got.futureUncertainScheduled[0]).not.toHaveProperty("effectiveDate");
+    // cutoff 欠落・開始境界・範囲内・範囲後は曖昧な日付を採用しない。
+    expect(() => parseTransfersHtml(bytes, { yearWindow: WIN_2026 })).toThrow(/変更日/);
+    for (const eligibilityAsOf of ["2026-10-20", "2026-10-21", "2026-10-23", "2026-02-30"]) {
+      expect(() => parseTransfersHtml(bytes, { yearWindow: WIN_2026, eligibilityAsOf })).toThrow();
+    }
+    const html = new TextDecoder().decode(bytes);
+    for (const invalid of [
+      html.replace(/2026\/10\/(20|22)/g, (_, day: string) => `2026/10/${day === "20" ? "22" : "20"}`),
+      html.replace("2026/10/20", "2026/02/30"),
+      html.replace("2026/10/22", "未定"),
+    ]) {
+      expect(invalid !== html).toBe(true);
+      expect(() => parseTransfersHtml(new TextEncoder().encode(invalid), {
+        yearWindow: WIN_2026, eligibilityAsOf: "2026-10-04",
+      })).toThrow(/変更日/);
+    }
+    const exact = parseTransfersHtml(fixture("transfers"), { yearWindow: WIN_2026, eligibilityAsOf: "2026-10-04" });
+    expect(exact.rows).toHaveLength(2);
+    expect(exact.futureUncertainScheduled).toEqual([]);
+  });
 });
 
 describe("strict span", () => {

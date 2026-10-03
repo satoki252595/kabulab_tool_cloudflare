@@ -113,3 +113,27 @@ Mac優待要約21時LaunchAgentを18:29:19Zにbootstrap、通常runは18:29:20.5
 「随時」は原文どおり保存・表示し、年間回数を推定せず年間利回りと月別カレンダーから除外する。0は明記された随時専用の内部enumで、不明月や単発日との混在は拒否する。JSSは実月と非定期を区別し、モデル契約2026-10-04.3は0月を拒否する。保存済み33詳細のPURE再解析では33件受理・既存32結果不変（新規source/DB/model0、receipt SHA `a5ffe9629a32b42e608f49d0b5b9f6a0aca1e534b69d46a3b67ed58b9adfff97`）。関連212テスト・JSS12テスト・両型検査・lint・Python ASTはPASS。全量詳細・本番取込は反映後の通常処理で確認する。
 
 既存有報本文の全文不一致は、未送信の既存行・全7属性一致・native全頁の完全な形式と原文を確認した場合だけ`text_readback_mismatch`へ保留し、後続文書を進める。本文を自動forceせず、新規保存・通信・native形式/件数不正は未知の停止を維持する。関連93テストとlint PASS、追加したlegacy見出し/件数不正の反証を含む3suite71テストもPASS。
+
+## PR290と連携APIの本番反映
+
+[PR290](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/290)は21:18:21Zにmain `c210b8f22eb5378620d1c43039a3e7af4cf9dd71`へsquash merge。PRと[同main CI37154637238](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37154637238)の全CI成功、GitHub checkで同SHAに結合したCF version `86db73c4-00b0-4195-be4d-dcdaf5e33945`をnative deploymentで21:19:03Z・100%配信と確認した。Macも同main/clean/.env0600/accepted revision一致でpreflight PASS。
+
+JSS privateは独立した既存Workerのため、同mainから既存設定・依存・秘密設定を保持して別途1回デプロイした。21:26:43Z作成のversion `596ecada-3922-4ecc-af60-b96bc86f95e8`を100%配信、全bindingのPRE/POST一致と21:31:57Zのhealth HTTP200を確認。新規Worker・秘密値の読出し・取得元問い合わせは0。healthは随時の実優待行を認証付きAPIで返す受入の代わりにはしない。
+
+有報run2〜9の原ログ・台帳・物理原本の参照等709membersを共有Notionへ実体保管・全文照合した（gzip1,108,595B、SHA `f4d30143d5a8d070d840e97a265a98c9aa50f890e3ebf21160a7f3443bbabb58`、21:23:12Z closed）。既存原本は再取得せず参照を保管した。旧run6修復PREには保管URLから確認したCSV/XBRLの2ZIP実体が含まれているため、物理原本の重複が0だったとは扱わない。publisherへの追加問い合わせは0。
+
+地方2銘柄は福岡証取の公式個社・月次一覧等とJPX公式一覧の計8応答を実体保管・全文照合した（gzip603,743B、SHA `6d038c9da83649750b7018686d627e0c688b0c1abdb097a65b5bcd69a8105c34`、21:34:58Z closed）。3824/353Aの証券コードを実提出一覧の書類へ直接結合できるが、JPX側の現ファイルは8/31基準で両銘柄は未収録。21:39:23Zの本番3SELECTでcore/eventとも対象行0、overlay適用日は10/1だったため、現在10/4の資格は未成立として補完を保留した。正常overlay完了時の`held_listing_codes=NULL`は既存仕様だが、この古いstate単体から現在の保留なしを推測しない。業務書込・再queue・原本再取得は0。
+
+## 将来の期間表記と1株優待の根因修正
+
+22:01:31Zの正常overlay入口は、公式3GET・Notion17・hosted4・D1 SELECT3の全27応答がHTTP200で、DBbatch0のまま解析停止した。JPX市場変更の実1行が`2026/10/20 ～ 2026/10/22`という将来期間だったことが原因。3原HTMLとincomplete manifestの実体4添付を保存原本と全バイト照合した。単日を選ばず、両端が実在日かつ開始が適用日より未来の場合だけ原期間・銘柄・市場を別の未確定予定へ保管する。境界を跨ぐ期間・無効日・逆順は停止を維持する。保存実48行は単日47行の全項目不変＋明示保留1行としてPURE受理、関連64テスト・型・lint PASS。旧STOP/10月1日stateは書き換えていない。
+
+地方2銘柄の補完は、価格対象を増やす操作と開示取込用のID登録を区別する。既存契約の`inactive＋instrument_type=NULL`による登録には、JPX overlayが現在まで正常commit済みという条件はない。保存3HTMLの正準tableと全コード（廃止137・新規46・市場変更48、将来期間行も含む）に両コードが無いことをPURE確認した。前段の現在日gateは私有readerが加えた過剰な条件だったため登録資格の必須条件から外す。価格・優待のactive普通株母集団や旧stateを推定で更新する資格ではない。
+
+優待の通常取得は22:04:50.271→22:10:38.968Zに1回実行、一覧86＋詳細126の計212応答すべてHTTP200で、2337の明記された「1株以上」を2桁以上を要求する正規表現が読み落として停止した。取込・モデル実行・再実行0、unknown markerなし。原body40,236,217B、JSONL53,686,801B（SHA `347bacadafad70545ebde23132b65e7aa127a915a6082b0b130d834c8f90eb0c`）、gzip11,733,244B（SHA `2f6abbe426cf58c4c3c572d441debd9ee71c2d5b285aa90fdbdf7063e9336dc4`）を保管し、独立Notion query1/hosted1でmetadata・manifest・全bytesを一致確認した（receipt SHA `5240855792227ae374557cf23347de70549463379e50be5f979f5c186ffbc33e`）。
+
+共有株数解析を1桁にも対応させ、セル先頭の整数・正しいカンマ区切りを厳密に確認する。0/安全整数外/小数/負数/不正カンマはUNKNOWNとして停止する。停止時は銘柄コードと固定理由をログへ残す。保存126詳細のPURE再解析は126受理、旧125内122件は全結果不変、1518/2001/2168は従来落ちた1桁条件各1行だけ追加し、従来採用済み全行・その他項目は不変。2337は1株と原月・本文・備考が一致。関連21テスト・型・lint PASS、PURE receipt SHA `1473d74ed6cfec880f4342e9b7459134000793b4e360c8fe926195b3b65b1f0c`。全1,711詳細・本番取込は未受入。212応答の受信区間341秒から源1797callerを単純外挿すると約48分であり、原本保管・原子取込・再計算の余裕を確保する次検証の上限は90分とする。実完了時間の保証ではない。
+
+有報の22:03:40Zの再開前確認はGH main1・重複run1・D1全台帳SELECT1のread-only3通信で、main c210/重複0/inFlight0/completed237/未完11日/識別保留7を確認した。既存内部の例外分類はCLIが例外objectを捨てる前に行われ、既知の源取得失敗だけmarkerを解除する。保存済み9/24一覧から通常入口で再開できる一方、元run9のclass/phase UNKNOWNは保持する。追加dispatch・publisher問い合わせ・業務書込は0。現定時は平日20時JSTで、10/4日曜の定時は定義されていない。
+
+地方2銘柄の開示ID登録は22:35:48.780Zに正常完了した。直前の対象core/event/stateの3SELECT、原子batch1、対象全11列POST1の計5応答がすべてHTTP200。3824/353Aの実名称・福岡市場を`inactive＋instrument_type=NULL`で2行新規登録し、全11列を照合した（POST SHA `dec8a8bb1d7d257871f776c32bd3816592347385b1f766532820fec612874baf`）。D1の物理rows_writtenは各INSERT4・合計8で、論理追加行数2とは区別する。旧core・JPX state・価格・優待・事業タグ・台帳は変更せず、再queueは別途確認後に行う。

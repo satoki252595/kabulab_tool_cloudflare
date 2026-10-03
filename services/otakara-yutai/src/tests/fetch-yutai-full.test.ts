@@ -111,6 +111,28 @@ const QUO3512 = `<h3 class="ulno">オリジナルQUOカード</h3>
         </tbody>
       </table>`;
 
+/** 2337 実応答の h3・権利月・1株表の連続抜粋。
+ * source body SHA256 7ce495a76643fcef919e9d7093c043ef5018d8db96c8a43e5f1116a3123ff989
+ * receivedAt 2026-10-03T22:10:31.318Z (保存原本からの抜粋、追加取得なし)。 */
+const ONE_SHARE2337 = `<h3 class="ulno">「いちご THANKS!マンスリープレゼント」※抽選</h3>
+    <span class="flr fwb fcgl mt5"><i class="mr5 fa-solid fa-caret-right"></i>優待権利確定月：<span class="md_ico_tx theme_normal size_s">2月,8月</span></span>
+  </div>
+    <div class="md_table_wrapper">
+      <table class="md_table vborder">
+        <tbody>
+          <tr>
+            <th class="ly_colsize_2_fix">必要株数</th>
+            <th class="ly_colsize_5_fix">優待内容</th>
+            <th class="ly_colsize_5_fix">備考</th>
+          </tr>
+          <tr>
+            <td>1株以上</td>
+            <td>◇2026年6月より12月まで毎月1回、継続して実施。当社事業で扱う農産物等をプレゼント（抽選：50名）<br /><br /></td>
+            <td rowspan="1">※「いちご Thanks!応募サイト」（2026年6月1日公開）<br />https://www.ichigo-thanks.jp/<br />《案内時期》<br />中間、期末の株主通信(Business Report)とあわせて案内。<br />応募開始可能日は、対象期末時点から4か月後の月初からとなり、6か月間応募が可能です。</td>
+          </tr>
+        </tbody>
+      </table>`;
+
 /** ok を開く。unknown ならテストを落とす。 */
 function unwrapOk(r: StockDetailResult): StockYutaiData {
   expect(r.status).toBe("ok");
@@ -129,6 +151,22 @@ describe("parseStockDetail は表ローカル月を優待に付ける", () => {
     // ゴルフ表の文言は原文のまま (3,300 円は入会金免除の表記)。
     expect(data.benefits[1].description).toBe("3,300円相当\n※月会費、レッスン受講料は各会場で異なります。");
     expect(data.benefits[1].notes).toContain("■利用可能施設");
+  });
+
+  it("2337: 明記された1株以上の原月・本文を採用し、0株と安全整数外は止める", () => {
+    const data = unwrapOk(parseStockDetail("2337", ONE_SHARE2337));
+    expect(data.benefits).toEqual([{
+      minShares: 1,
+      localRecordMonths: [2, 8],
+      description: "◇2026年6月より12月まで毎月1回、継続して実施。当社事業で扱う農産物等をプレゼント（抽選：50名）",
+      notes: "※「いちご Thanks!応募サイト」（2026年6月1日公開）\nhttps://www.ichigo-thanks.jp/\n《案内時期》\n中間、期末の株主通信(Business Report)とあわせて案内。\n応募開始可能日は、対象期末時点から4か月後の月初からとなり、6か月間応募が可能です。",
+      heading: "「いちご THANKS!マンスリープレゼント」※抽選",
+    }]);
+    for (const shares of ["0", "9007199254740992", "0.5", "-1", "1,2", "1,,000"]) {
+      expect(parseStockDetail("2337", ONE_SHARE2337.replace("1株以上", `${shares}株以上`))).toEqual({
+        status: "unknown", code: "2337", reason: "invalid-min-shares",
+      });
+    }
   });
 
   it("3512: 単一表の全 tier に [3] を付け、rowspan 備考を継承する", () => {
