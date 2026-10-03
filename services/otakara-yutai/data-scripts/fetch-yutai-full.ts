@@ -122,8 +122,8 @@ export function parseStockListPage(html: string, page: number): { codes: string[
   const url = new URL(href[1].replaceAll("&amp;", "&"), "https://minkabu.jp");
   const pages = url.searchParams.getAll("page");
   const orders = url.searchParams.getAll("order");
-  // 通常取得は同じ公式sortを維持する。
-  const orderMatches = orders.length === 1 && orders[0] === "yutai_yield_desc";
+  // 公式「並び替え」の空optionを明示する。利回り順はページ境界の重複・欠落を実観測した。
+  const orderMatches = orders.length === 1 && orders[0] === "";
   if (url.origin !== "https://minkabu.jp" || url.pathname !== "/yutai/search" || url.hash ||
       pages.length !== 1 || !/^\d+$/.test(pages[0]) || Number(pages[0]) !== page + 1 ||
       !orderMatches ||
@@ -139,7 +139,7 @@ export function parseStockListPage(html: string, page: number): { codes: string[
  */
 export async function collectAllStockCodes(
   fetchListPage: (page: number) => Promise<string> = (p) =>
-    fetchPage(`https://minkabu.jp/yutai/search?order=yutai_yield_desc&page=${p}`),
+    fetchPage(`https://minkabu.jp/yutai/search?order=&page=${p}`),
 ): Promise<string[]> {
   const allCodes = new Set<string>();
   const seenPages = new Set<string>();
@@ -373,7 +373,7 @@ export async function main() {
   try {
     // 毎回現行一覧を確認する。期限のない共有/tmpキャッシュでは新規・廃止を検出できない。
     log.info("📋 Phase 1: 全銘柄コードを収集中...");
-    const codes = await collectAllStockCodes((page) => fetchPage(`https://minkabu.jp/yutai/search?order=yutai_yield_desc&page=${page}`, capture));
+    const codes = await collectAllStockCodes((page) => fetchPage(`https://minkabu.jp/yutai/search?order=&page=${page}`, capture));
     log.info(`\n✅ ${codes.length}銘柄のコードを収集\n`);
     log.info("📊 Phase 2: 各銘柄の詳細データを取得中...");
     allData = await collectStockDetails(codes, (code) => fetchStockDetail(code, capture));

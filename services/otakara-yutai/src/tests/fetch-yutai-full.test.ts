@@ -267,7 +267,7 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
     codes.map((c) => `<li class="yutai_rank_style"><a href="/stock/${c}/yutai" class="empty_link_area"></a></li>`).join("\n") +
     `</ul></div><div class="paginate_box ui-paginate-box"><span class="current">${page}</span>` +
     (next === null ? `<span class="disabled next_page">次へ&nbsp;»</span>` :
-      `<a class="next_page" rel="next" href="/yutai/search?order=yutai_yield_desc&amp;page=${next}">次へ&nbsp;»</a>`) +
+      `<a class="next_page" rel="next" href="/yutai/search?order=&amp;page=${next}">次へ&nbsp;»</a>`) +
     `</div></div>`;
 
   it("最終disabled next_pageで止まり、一覧外の推薦リンクと次の404を取得しない", async () => {
@@ -280,7 +280,7 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
     expect(fetcher.mock.calls.map(([page]) => page)).toEqual([1, 2]);
   });
 
-  it("default入口もmainと同じ未絞込の公式sortを全ページで保持する", async () => {
+  it("default入口もmainと同じ公式の空sort optionを全ページで保持する", async () => {
     const fetched = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = new URL(String(input));
       const page = Number(url.searchParams.get("page"));
@@ -289,8 +289,8 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
     try {
       expect(await collectAllStockCodes()).toEqual(["130A", "9101"]);
       expect(fetched.mock.calls.map(([url]) => url)).toEqual([
-        "https://minkabu.jp/yutai/search?order=yutai_yield_desc&page=1",
-        "https://minkabu.jp/yutai/search?order=yutai_yield_desc&page=2",
+        "https://minkabu.jp/yutai/search?order=&page=1",
+        "https://minkabu.jp/yutai/search?order=&page=2",
       ]);
     } finally { fetched.mockRestore(); }
   });
@@ -310,6 +310,14 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
     expect(fetchListPage).toHaveBeenCalledTimes(2);
   });
 
+  it("総カード数が一致してもページ間の部分重複による一意集合不足を完成扱いにしない", async () => {
+    const fetcher = vi.fn(async (page: number) =>
+      pageWith(page, page === 1 ? 2 : null, ...(page === 1 ? ["9100", "9101"] : ["9101", "130A"]))
+        .replace("全2件", "全4件"));
+    await expect(collectAllStockCodes(fetcher)).rejects.toThrow(/全件数と銘柄集合が一致しない/);
+    expect(fetcher.mock.calls.map(([page]) => page)).toEqual([1, 2]);
+  });
+
   it("検索トップ・欠落したpager・不一致のcurrent/next/総数はUNKNOWNとして止める", async () => {
     const valid = pageWith(1, 2, "9100");
     const malformed = [
@@ -318,9 +326,10 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
       valid.replace('class="current">1', 'class="current">2'),
       valid.replace('&amp;page=2', '&amp;page=3'),
       valid.replace(/<a class="next_page"[\s\S]*?<\/a>/, ""),
-      valid.replace('order=yutai_yield_desc&amp;page=2', 'page=2'),
-      valid.replace('order=yutai_yield_desc', 'order=dividend_yield_desc'),
+      valid.replace('order=&amp;page=2', 'page=2'),
+      valid.replace('order=&amp;', 'order=yutai_yield_desc&amp;'),
       valid.replace('&amp;page=2', '&amp;page=2&amp;page=2'),
+      valid.replace('order=&amp;', 'order=&amp;order=&amp;'),
       valid.replace('&amp;page=2', '&amp;page=2&amp;keyword=other'),
       valid.replace('/yutai/search?order=', 'https://example.org/yutai/search?order='),
     ];
@@ -356,8 +365,8 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
       await expect(main()).rejects.toThrow(/page=2/);
       expect(fetched).toHaveBeenCalledTimes(2);
       expect(fetched.mock.calls.map(([url]) => url)).toEqual([
-        "https://minkabu.jp/yutai/search?order=yutai_yield_desc&page=1",
-        "https://minkabu.jp/yutai/search?order=yutai_yield_desc&page=2",
+        "https://minkabu.jp/yutai/search?order=&page=1",
+        "https://minkabu.jp/yutai/search?order=&page=2",
       ]);
       expect(createD1HttpDb).not.toHaveBeenCalled();
       expect(recordPrimaryData).toHaveBeenCalledTimes(1);
