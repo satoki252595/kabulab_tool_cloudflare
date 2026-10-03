@@ -142,6 +142,8 @@ describe("daily source前の同日確定済み再開", () => {
   it("成功済みprefixはYahoo/PUT0、legacy未完だけ取得・保管し、再開後は全件source0", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(COMPLETED_AT));
+    vi.stubEnv("GITHUB_RUN_ID", "1");
+    vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
     try {
       const a = await completedSaved("A"), b = await completedSaved("B");
       delete (b as { completedFetch?: unknown }).completedFetch; // 旧proofのみでは確定扱い不可。
@@ -160,6 +162,7 @@ describe("daily source前の同日確定済み再開", () => {
       expect((recordedBody().outcomes as Record<string, unknown>).A).toMatchObject({ status: "skipped", sourceFetched: false });
       vi.clearAllMocks();
       rawHook.body = null;
+      vi.stubEnv("GITHUB_RUN_ATTEMPT", "2"); // 再開は別attempt。同じ原本名のwx再保存を避ける。
       await main();
       expect(process.exitCode).toBe(0);
       expect(mockFetchDaily).not.toHaveBeenCalled();
@@ -167,7 +170,7 @@ describe("daily source前の同日確定済み再開", () => {
       expect(mockRawArchive).not.toHaveBeenCalled();
       expect(recordedMetadata().sourceObserved).toMatchObject({ count: 0 });
       expect(recordedBody().skipped).toBe(2);
-    } finally { vi.useRealTimers(); }
+    } finally { vi.unstubAllEnvs(); vi.useRealTimers(); }
   });
 
   it("翌日・10y条件違い・形成中session・原本のnull脱落はskip資格を持たない", async () => {

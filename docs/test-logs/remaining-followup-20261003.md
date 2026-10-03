@@ -64,7 +64,7 @@ rootも全8応答・3添付manifest・gzip原文・全銘柄集合を独立検�
 EDINET 242文書ID・TDnet 33を確認した。財務の本決算ラベル117件を有報資格とは扱わない。
 実提出日98日と候補117 IDに限定した3 SELECT/1 HTTPでは、候補ZIP索引0、
 日付一覧1件が既保存原文と同SHAだったため追加原本GETは0。
-全照会はread-only・各LIMIT 5001 sentinel・maxAttempts 1で実施し、数値財務列を取得しない。
+ここまでの照会はread-only・各LIMIT 5001 sentinel・maxAttempts 1で実施し、数値財務列を取得しない。
 成功8 SELECTの実rows_readは621+585+217=1,423、rows_writtenは0。最初のCPU制限応答の
 読取課金量は結果に含まれずUNKNOWNを保持する。
 その後、銘柄ごとの最新候補67文書を実提出日30日に絞り、既保存15日との重複0を確認して
@@ -87,12 +87,43 @@ metadata全文・Fetched At・manifest・添付全bytes・gzip全member/inputを
 root証明353 B SHA `6ee53fa92d35df4543f717a45d1ede27208e96f7f5339ae800f203e556324427`。
 本文補完の成功とは区別する。
 
+続く既存⑤原本DBのschema 1 GET・財務metadataのSHA67 exact OR query 1で、
+全67件の元ページ参照・銘柄・CSV種別・EDINET source・提出日・ZIP添付名/サイズが一致した。
+metadata候補67、欠落/不一致0。原CSV本体の検証は次段とし、今回のpublisher GET・hosted・
+書込・再試行は0。新規ダウンロード前にこの保存済み原本を再利用する。
+
+続いてその67添付だけを1回ずつ再読し、計6,084,381 BのSHA・全ZIP CRC・提出者/期末/提出日の
+公式ファイル名を検証した。正準CSV parserから本文2,401節・3,842,914文字を回収し、
+二者が全節の値・並び・serialized bytesを独立再計算して一致した。解析エラー0、U+200B 0。
+元publisher時計の報告値と今回のstore読取時計を分離し、旧publisher時計の検証状態UNKNOWNを
+全67件で保持する。root全件証明36,031 B SHA
+`cbb5e6957397cb70332aa8a26b889d2fd60d730b0ea728fcd7eb7611c0f4b84f`。
+この段階は本文の本番保存前で、publisher追加GET・Notion/D1/R2書込・再試行は0。
+
+本文不足23件の既知提出日から未保存の2日だけを公式一覧GETし、観測5文書・厳密有報資格0を
+確認した。別の保存済み一覧には銘柄コードNULLの有報1件があるが、原NULLを推測コードに
+置換せず、提出者の明示的な資格照合を別対象とする。残23件を未提出とは断定しない。
+受注/海外解析が必要な67件のXBRLは、既存共有保管DBのtyped/bare計134 exact keysを
+4 queryで照会して0件。以降の原本取得はこの必要文書だけに限定する。
+
+本番補完前の7 indexed SELECT/1 HTTPでは、対象90 core行・有報関連5表各0行と、
+財務275行の全列を捕捉した。ここでは不変比較のため財務値を私有保存し、公開Gitへ載せない。
+マスタ・タグ・既存財務を更新せず、正準有報4表と本文参照だけの補完に限定する。
+
 ## 検証
 
 Nixで全体の型・lint・監査レポート検査が成功。全vitestは267ファイル成功/1ファイルSKIP、
 4,436 PASS/430既存条件付きSKIP（実行17:37:33 JST、49.16秒）。JPXの新しい見出し/契約・
 未知幅/PDFのみ/不一致停止とVWAPの同日未完だけ取得・再入取得0はCI対象の回帰で確認した。
 JPX関連4suiteは70 PASS/131既存条件付きSKIP。仕様サンプルの構造検証を本番実値受入と混同しない。
+WorkerのWrangler dry-runもexit0（upload 1,729.92 KiB/gzip 365.86 KiB）、本番deployはこの検査では行わない。
+
+PR #283の初回CIはpython/Workers Builds成功、checkが新しい再開testだけ失敗した。
+固定`GITHUB_RUN_ID`/attemptを継承して同じ原本名へ`wx`保存する衝突が原因で、CI環境で
+再現した。testのrunIDを分離し、同test内の再開を別attemptにして環境を復元する最小修正で、
+本番コードの変更は0。同じCI環境の関連3 suiteは69 PASS/3既存SKIP、型・lintも成功した。
+初回失敗は[run 37112014346](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37112014346)
+として保持し、新headのCIで受入を確認する。
 
 ## 株式・マクロ・費用の確認範囲
 
