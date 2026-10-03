@@ -152,3 +152,20 @@ it("生成した円額・枚数・株数・保有条件を単位ごとに照合�
   expect(isSummaryNumbersGrounded("新米5kg", "新米 5kg", context)).toBe(true);
   expect(isSummaryNumbersGrounded("新米5kg", "新米 3kg", context)).toBe(false);
 });
+
+it("原文と同じ日数・か月期間だけを裏づけ、権利月や換算から期間を補わない", () => {
+  const context = { minShares: [100], recordMonths: [3] };
+  expect(isSummaryNumbersGrounded("利用期限30日", "30日間利用可能", context)).toBe(true);
+  expect(isSummaryNumbersGrounded("6か月以上継続保有", "6か月以上保有", context)).toBe(true);
+  expect(isSummaryNumbersGrounded("利用券", "30日間利用可能", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("利用期限30日", "60日間利用可能", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("継続保有で贈呈", "3か月以上保有", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("6か月以上継続保有", "3か月以上保有", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("3月に贈呈", "3か月以上保有", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("3か月以上保有", "3月に贈呈", { ...context, recordMonths: [] })).toBe(false);
+  expect(isSummaryNumbersGrounded("1年以上保有", "12か月以上保有", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("3か月以上保有", "90日以上保有", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("1日間利用可能", "一日間利用可能", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("6か月以上保有", "6ヶ月以上保有", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("6か月以上保有", "6カ月以上保有", context)).toBe(false);
+});
