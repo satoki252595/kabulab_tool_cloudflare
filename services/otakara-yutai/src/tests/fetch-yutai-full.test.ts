@@ -25,6 +25,7 @@ import {
   fetchStockDetail,
   main,
   parseStockDetail,
+  parseStockListPage,
   type StockDetailResult,
 } from "../../data-scripts/fetch-yutai-full.js";
 import type { StockYutaiData } from "../../data-scripts/yutai-full-import.js";
@@ -257,36 +258,66 @@ describe("collectStockDetails は unknown を import の前に止める", () => 
   });
 });
 
-describe("collectAllStockCodes は取得失敗を空ページに数えない", () => {
-  const pageWith = (...codes: string[]) =>
-    codes.map((c) => `<a href="/stock/${c}/yutai">x</a>`).join("\n");
+describe("collectAllStockCodes は既知の最終ページだけで完了する", () => {
+  // 2026-10-03取得原本の yutai_search / cont_search / pagination 構造。
+  // 境界ケースはページ番号・銘柄リンク・総数だけを変形する。
+  const pageWith = (page: number, next: number | null, ...codes: string[]) =>
+    `<div id= "yutai_search" class="result ly_content_wrapper"><h2>検索結果</h2>全2件
+      <div class="md_box md_card cont_search clearfix"><ul class="md_list">` +
+    codes.map((c) => `<li class="yutai_rank_style"><a href="/stock/${c}/yutai" class="empty_link_area"></a></li>`).join("\n") +
+    `</ul></div><div class="paginate_box ui-paginate-box"><span class="current">${page}</span>` +
+    (next === null ? `<span class="disabled next_page">次へ&nbsp;»</span>` :
+      `<a class="next_page" rel="next" href="/yutai/search?page=${next}">次へ&nbsp;»</a>`) +
+    `</div></div>`;
 
-  it("正常取得の連続 3 空ページで打ち切り、重複なくソートして返す", async () => {
-    const pages = [pageWith("9101", "9100", "9101"), pageWith("130A"), "", "", ""];
-    const codes = await collectAllStockCodes(async (page) => pages[page - 1] ?? "");
-    expect(codes).toEqual(["130A", "9100", "9101"]);
+  it("最終disabled next_pageで止まり、一覧外の推薦リンクと次の404を取得しない", async () => {
+    const fetcher = vi.fn(async (page: number) => {
+      if (page === 3) throw new Error("HTTP 404");
+      return pageWith(page, page === 1 ? 2 : null, page === 1 ? "9101" : "130A") +
+        `<a href="/stock/9100/yutai">推薦欄</a>`;
+    });
+    expect(await collectAllStockCodes(fetcher)).toEqual(["130A", "9101"]);
+    expect(fetcher.mock.calls.map(([page]) => page)).toEqual([1, 2]);
   });
 
-  it("取得失敗は部分リストを返さず止める (空ページ扱いにしない)", async () => {
-    const fetchListPage = async (page: number) => {
-      if (page === 2) throw new Error("HTTP 429");
-      return pageWith("9100");
-    };
-    await expect(collectAllStockCodes(fetchListPage)).rejects.toThrow(/page=2/);
-    await expect(collectAllStockCodes(fetchListPage)).rejects.toThrow(/部分リストを完成扱い・キャッシュしません/);
+  it("取得失敗は部分リストを返さず止める (404も空ページ扱いにしない)", async () => {
+    const fetchListPage = vi.fn(async (page: number) => {
+      if (page === 2) throw new Error("HTTP 404");
+      return pageWith(1, 2, "9100");
+    });
+    await expect(collectAllStockCodes(fetchListPage)).rejects.toThrow(/page=2.*部分リストを完成扱い・キャッシュしません/);
+    expect(fetchListPage).toHaveBeenCalledTimes(2);
   });
 
-  it("ページ引数を無視した重複応答では取得を続けない", async () => {
-    const fetchListPage = vi.fn(async () => pageWith("9100"));
+  it("ページ引数を無視した銘柄集合重複では取得を続けない", async () => {
+    const fetchListPage = vi.fn(async (page: number) => pageWith(page, page + 1, "9100"));
     await expect(collectAllStockCodes(fetchListPage)).rejects.toThrow(/重複/);
     expect(fetchListPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("検索トップ・欠落したpager・不一致のcurrent/next/総数はUNKNOWNとして止める", async () => {
+    const valid = pageWith(1, 2, "9100");
+    const malformed = [
+      `<a href="/stock/9100/yutai">推薦リンクだけの検索トップ</a>`,
+      valid.replace(/<div class="paginate_box[\s\S]*?<\/div>/, ""),
+      valid.replace('class="current">1', 'class="current">2'),
+      valid.replace('search?page=2', 'search?page=3'),
+      valid.replace(/<a class="next_page"[\s\S]*?<\/a>/, ""),
+    ];
+    for (const html of malformed) {
+      const fetcher = vi.fn(async () => html);
+      await expect(collectAllStockCodes(fetcher)).rejects.toThrow(/STOP/);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    }
+    expect(() => parseStockListPage(pageWith(1, null, "9100"), 1)).not.toThrow();
+    await expect(collectAllStockCodes(async () => pageWith(1, null, "9100"))).rejects.toThrow(/全件数/);
   });
 
   it("次GET失敗より先に原本をprivate保存し、終端stream gzipは全bytesを保管してD1へ進まない", async () => {
     const cwd = process.cwd();
     const dir = mkdtempSync(join(tmpdir(), "yutai-source-unit-"));
     const rawDir = join(dir, "services/otakara-yutai/data-scripts/data/raw");
-    const first = Buffer.from(pageWith("9100") + "\n\0");
+    const first = Buffer.from(pageWith(1, 2, "9100") + "\n\0");
     const failed = Buffer.from([0, 255, 10, 13]);
     let calls = 0;
     const fetched = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {

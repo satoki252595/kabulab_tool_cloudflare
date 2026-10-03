@@ -85,12 +85,48 @@ async function archiveRawFile(path: string, runId: string, source: string, pages
   return { pageId: archived.pageId, files };
 }
 
+/** 検索結果と明示ページ送りだけを読む。推薦欄・欠落したページ送りは採用しない。 */
+export function parseStockListPage(html: string, page: number): { codes: string[]; nextPage: number | null; total: number } {
+  const results = [...html.matchAll(/<div\b[^>]*\bid\s*=\s*["']yutai_search["'][^>]*>/g)];
+  const paginations = [...html.matchAll(/<div\b[^>]*class=["'][^"']*\bpaginate_box\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/g)];
+  if (results.length !== 1 || paginations.length !== 1 || results[0].index >= paginations[0].index) {
+    throw new Error(`検索結果・ページ送り領域が未確定のためSTOP (page=${page})`);
+  }
+  const result = html.slice(results[0].index, paginations[0].index);
+  const lists = [...result.matchAll(/<div\b[^>]*class=["'][^"']*\bcont_search\b[^"']*["'][^>]*>[\s\S]*?<ul\b[^>]*>([\s\S]*?)<\/ul>/g)];
+  const totals = [...result.matchAll(/全(\d+)件/g)];
+  if (lists.length !== 1 || totals.length !== 1 || !/<h2>検索結果<\/h2>/.test(result)) {
+    throw new Error(`検索結果一覧・全件数が未確定のためSTOP (page=${page})`);
+  }
+  const cards = [...lists[0][1].matchAll(/<a\b[^>]*class=["']empty_link_area["'][^>]*>/g)];
+  const codes = cards.map(([tag]) => {
+    const href = tag.match(/\bhref=["']\/stock\/(\d{3}[0-9A-Z])\/yutai["']/);
+    if (!href) throw new Error(`検索結果の銘柄リンクが未確定のためSTOP (page=${page})`);
+    return href[1];
+  });
+  const total = Number(totals[0][1]);
+  if (!Number.isSafeInteger(total) || total <= 0 || codes.length === 0 || new Set(codes).size !== codes.length) {
+    throw new Error(`検索結果の銘柄集合が不正・重複のためSTOP (page=${page})`);
+  }
+  const pagination = paginations[0][1];
+  const current = [...pagination.matchAll(/<span\b[^>]*class=["']current["'][^>]*>(\d+)<\/span>/g)];
+  const next = [...pagination.matchAll(/<(?:a|span)\b[^>]*class=["'][^"']*\bnext_page\b[^"']*["'][^>]*>[\s\S]*?<\/(?:a|span)>/g)];
+  if (current.length !== 1 || Number(current[0][1]) !== page || next.length !== 1) {
+    throw new Error(`現在ページ・次ページが未確定のためSTOP (page=${page})`);
+  }
+  if (/^<span\b[^>]*class=["']disabled next_page["']/.test(next[0][0])) {
+    return { codes, nextPage: null, total }; // 既知の最終ページだけ。404/空HTMLは末尾ではない。
+  }
+  const href = next[0][0].match(/^<a\b[^>]*\bhref=["']\/yutai\/search\?page=(\d+)["']/);
+  if (!href || Number(href[1]) !== page + 1) {
+    throw new Error(`次ページのリンクが不整合のためSTOP (page=${page})`);
+  }
+  return { codes, nextPage: Number(href[1]), total };
+}
+
 /**
- * Phase 1: 全銘柄コードを検索ページから収集 (テスト用に fetcher 注入可)。
- *
- * 取得失敗は空ページの証拠ではない。例外を投げて run を止め、部分リストを
- * 完成扱いにしない (未確定の欠落を廃止として消さない。キャッシュも書かない)。
- * 連続 3 空ページの打ち切りは、正常取得の空ページだけ数える。
+ * Phase 1: 検索結果から全銘柄コードを収集。既知のページ送りの最終信号で終える。
+ * 取得・構造失敗は部分リストを完成扱いにしない (廃止判定・D1取込へ進まない)。
  */
 export async function collectAllStockCodes(
   fetchListPage: (page: number) => Promise<string> = (p) =>
@@ -99,9 +135,8 @@ export async function collectAllStockCodes(
   const allCodes = new Set<string>();
   const seenPages = new Set<string>();
   let page = 1;
-  let emptyCount = 0;
-
-  while (emptyCount < 3) {
+  let expectedTotal: number | undefined;
+  while (true) {
     let html: string;
     try {
       html = await fetchListPage(page);
@@ -112,29 +147,21 @@ export async function collectAllStockCodes(
         { cause: e },
       );
     }
-    // 数字 4 桁 + JPX 英数字コード (例: 130A) の両方を拾う (cf. src/shared/jpx)
-    const codes = [...html.matchAll(/\/stock\/(\d{3}[0-9A-Z])\/yutai/g)].map(m => m[1]);
-    const unique = [...new Set(codes)];
-
-    if (unique.length === 0) {
-      emptyCount++;
-    } else {
-      const signature = [...unique].sort().join(",");
-      if (seenPages.has(signature)) throw new Error(`検索ページの銘柄集合が重複したためSTOP (page=${page})`);
-      seenPages.add(signature);
-      emptyCount = 0;
-      for (const c of unique) allCodes.add(c);
+    const parsed = parseStockListPage(html, page);
+    if (expectedTotal !== undefined && parsed.total !== expectedTotal) throw new Error("検索全件数が途中で変化したためSTOP");
+    expectedTotal = parsed.total;
+    const signature = [...parsed.codes].sort().join(",");
+    if (seenPages.has(signature)) throw new Error(`検索ページの銘柄集合が重複したためSTOP (page=${page})`);
+    seenPages.add(signature);
+    for (const code of parsed.codes) allCodes.add(code);
+    if (page % 10 === 0) log.info(`  Page ${page}: 累計 ${allCodes.size}銘柄`);
+    if (parsed.nextPage === null) {
+      if (allCodes.size !== expectedTotal) throw new Error("検索結果の全件数と銘柄集合が一致しないためSTOP");
+      return [...allCodes].sort();
     }
-
-    if (page % 10 === 0) {
-      log.info(`  Page ${page}: 累計 ${allCodes.size}銘柄`);
-    }
-
-    page++;
-    if (emptyCount < 3) await new Promise(r => setTimeout(r, 1_000));
+    page = parsed.nextPage;
+    await new Promise(r => setTimeout(r, 1_000));
   }
-
-  return [...allCodes].sort();
 }
 
 /**
