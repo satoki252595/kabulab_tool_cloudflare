@@ -13,14 +13,29 @@
  * 値は原文と同一)。欠落系だけ抜粋への合成変形で作る。
  */
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
+import { createD1HttpDb } from "../../../../src/shared/db/d1-http-client.js";
+import { recordPrimaryData, verifyArchivedAttachments } from "../../../../src/shared/notion-archive/index.js";
 import {
   collectAllStockCodes,
   collectStockDetails,
   fetchStockDetail,
+  main,
   parseStockDetail,
   type StockDetailResult,
 } from "../../data-scripts/fetch-yutai-full.js";
 import type { StockYutaiData } from "../../data-scripts/yutai-full-import.js";
+
+vi.mock("../../../../src/shared/db/d1-http-client.js", async (original) => ({
+  ...await original<typeof import("../../../../src/shared/db/d1-http-client.js")>(),
+  createD1HttpDb: vi.fn(() => { throw new Error("unexpected_D1"); }),
+}));
+vi.mock("../../../../src/shared/notion-archive/index.js", () => ({
+  recordPrimaryData: vi.fn(), verifyArchivedAttachments: vi.fn(), moveToTrash: vi.fn(),
+}));
 
 /** 8022 valuations の union (原本 byte 66863 付近。被せてはならない decoy)。 */
 const UNION8022 = `<tr>
@@ -265,5 +280,48 @@ describe("collectAllStockCodes は取得失敗を空ページに数えない", (
     const fetchListPage = vi.fn(async () => pageWith("9100"));
     await expect(collectAllStockCodes(fetchListPage)).rejects.toThrow(/重複/);
     expect(fetchListPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("次GET失敗より先に原本をprivate保存し、終端stream gzipは全bytesを保管してD1へ進まない", async () => {
+    const cwd = process.cwd();
+    const dir = mkdtempSync(join(tmpdir(), "yutai-source-unit-"));
+    const rawDir = join(dir, "services/otakara-yutai/data-scripts/data/raw");
+    const first = Buffer.from(pageWith("9100") + "\n\0");
+    const failed = Buffer.from([0, 255, 10, 13]);
+    let calls = 0;
+    const fetched = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      if (++calls === 1) return new Response(first);
+      const path = join(rawDir, readdirSync(rawDir).find(name => name.endsWith(".jsonl"))!);
+      expect(statSync(rawDir).mode & 0o777).toBe(0o700);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      const saved = JSON.parse(readFileSync(path, "utf8").trim());
+      expect(Buffer.from(saved.bodyBase64, "base64")).toEqual(first);
+      return new Response(failed, { status: 429 });
+    });
+    vi.mocked(recordPrimaryData).mockResolvedValue({ pageId: "unit-page", outcome: "recorded", fileTooLarge: false, manifestMatch: "written" });
+    vi.mocked(verifyArchivedAttachments).mockResolvedValue();
+    try {
+      process.chdir(dir);
+      await expect(main()).rejects.toThrow(/page=2/);
+      expect(fetched).toHaveBeenCalledTimes(2);
+      expect(createD1HttpDb).not.toHaveBeenCalled();
+      expect(recordPrimaryData).toHaveBeenCalledTimes(1);
+      const input = vi.mocked(recordPrimaryData).mock.calls[0][0];
+      const file = input.files![0];
+      const rawPath = join(rawDir, file.filename.slice(0, -3));
+      const plain = gunzipSync(file.bytes);
+      expect(plain).toEqual(readFileSync(rawPath));
+      expect(readFileSync(join(rawDir, file.filename))).toEqual(Buffer.from(file.bytes));
+      expect(statSync(join(rawDir, file.filename)).mode & 0o777).toBe(0o600);
+      const records = plain.toString("utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(records.map(r => r.status)).toEqual([200, 429]);
+      expect(records.map(r => Buffer.from(r.bodyBase64, "base64"))).toEqual([first, failed]);
+      expect(verifyArchivedAttachments).toHaveBeenCalledWith("unit-page", input.files, "優待取得原本");
+    } finally {
+      process.chdir(cwd);
+      fetched.mockRestore();
+      vi.clearAllMocks();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
