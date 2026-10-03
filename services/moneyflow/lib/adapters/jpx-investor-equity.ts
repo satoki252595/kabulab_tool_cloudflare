@@ -26,9 +26,8 @@
  * 週次は 2026-09-29 掲載分から単一ファイルの新様式になり、実ファイル
  * (`stock_1_w_20260914_20260918.xlsx`、2026年9月第3週分) で検証済み
  * (単位は見出しどおり千株/千円、112件全件で買い-売り=差引・売り+買い=合計が一致)。
- * 本アダプタは週次の新旧どちらの様式も受け付ける。月次は 2026-10-08 掲載分からの
- * 新様式が未公表のため、新様式の月次レコードは受け付けずに throw する
- * (unknown-reject。公表後に実ファイルで検証して対応する)。
+ * 本アダプタは週次・月次の新旧様式を受け付ける。月次新様式は公式サンプルで
+ * 構造確認済み、実ファイルは未受入。未掲載の実集計日はNULL pairで記録する。
  *
  * 新旧の投資部門名: 両様式で名前が同じ8部門 (証券会社・投資信託・事業法人・
  * その他法人等・生保・損保・都銀・地銀等・信託銀行・その他金融機関) は JPX の定義が
@@ -122,8 +121,8 @@ const COMMON_LIMITATIONS =
   "様式変更: 週次は 2026-09-29 掲載分から単一ファイルの新様式になり、実ファイル" +
   "(2026年9月第3週分) で検証済み (単位は見出しどおり千株/千円。新旧で名前が同じ8部門は" +
   " JPX の定義が同一のため同じ系列、それ以外は名前が違うため混ざらない)。月次は" +
-  " 2026-10-08 掲載分からの新様式が未公表のため、新様式の月次は取込を停止する" +
-  " (失敗として記録される。公表後に実ファイルで検証して対応する)。";
+  " 2026-10-08 掲載分からの月次新様式は公式サンプルの構造で対応準備済み。実ファイルは未受入。" +
+  "月次新様式に実集計日は掲載されていないため開始・終了はNULL、暦月初末では補わない。";
 
 const WEEKLY_LIMITATIONS =
   COMMON_LIMITATIONS +
@@ -138,7 +137,7 @@ const MONTHLY_LIMITATIONS =
   "公表: 翌月、前月最終週の週次発表と同日の午後3時30分。" +
   "対象期間ラベル (YYYY-MM) は JPX がその月次に帰属させた年月で、集計期間は週単位で" +
   "区切られ暦月と一致しない (例: 2026年8月 = 8/3〜8/28。8/31 は9月分に入る)。" +
-  "期間開始・終了にはファイルに書かれた実際の集計期間を記録する。";
+  "期間開始・終了にはファイルに書かれた実際の集計期間を記録し、未掲載ならNULL pairとする。";
 
 type IndicatorKind =
   | "net_flow_value"
@@ -242,7 +241,7 @@ const KINDS: readonly IndicatorKind[] = [
 ];
 
 /**
- * 新様式の公式売付/買付セル用 (週次のみ。月次は future 0 のため付けない)。
+ * 新様式の公式売付/買付セル用 (週次・月次)。旧様式では出力しない。
  * カタログ定義だけ先行し、観測行の配線 (toDrafts) は新週次パーサ側 (C) が行う。
  */
 const WEEKLY_EXTRA_KINDS: readonly IndicatorKind[] = [
@@ -261,10 +260,12 @@ function indicatorKey(kind: IndicatorKind, periodType: InvestorEquityPeriodType)
   return `jpx_investor_equity_${kind}_${periodType}`;
 }
 
-function buildIndicators(periodType: InvestorEquityPeriodType): IndicatorDefInput[] {
+function buildIndicators(
+  periodType: InvestorEquityPeriodType,
+): IndicatorDefInput[] {
   const frequency: MoneyflowFrequency = periodType === "weekly" ? "週次" : "月次";
   const label = periodType === "weekly" ? "週次" : "月次";
-  const kinds = periodType === "weekly" ? [...KINDS, ...WEEKLY_EXTRA_KINDS] : KINDS;
+  const kinds = [...KINDS, ...WEEKLY_EXTRA_KINDS];
   const baseLimitations = periodType === "weekly" ? WEEKLY_LIMITATIONS : MONTHLY_LIMITATIONS;
   return kinds.map((kind) => ({
     key: indicatorKey(kind, periodType),
@@ -277,7 +278,7 @@ function buildIndicators(periodType: InvestorEquityPeriodType): IndicatorDefInpu
     frequency,
     limitations: WEEKLY_EXTRA_KINDS.includes(kind)
       ? baseLimitations +
-        "この指標は新様式ファイル (2026-09-29 掲載分〜) の公式売付/買付セルを直接" +
+        "この指標は新様式ファイル (週次2026-09-29・月次2026-10-08掲載分〜) の公式売付/買付セルを直接" +
         "記録する。旧様式系列 (net/gross) とは定義が違い、無言で合流しない。"
       : baseLimitations,
   }));
@@ -478,13 +479,13 @@ const RECORD_LABEL_RE = /^(\d{4})年(\d{1,2})月(?:第\d週)?$/;
 
 interface ParsedBatch {
   period: string;
-  periodStart: string;
-  periodEnd: string;
+  periodStart: string | null;
+  periodEnd: string | null;
   records: InvestorEquityRecord[];
 }
 
 /**
- * 金額ファイル・株数ファイル (旧様式) または単一ファイル (新様式・週次のみ) を解析し、
+ * 金額ファイル・株数ファイル (旧様式) または単一ファイル (新様式・週次/月次) を解析し、
  * 1 バッチ (同じ期間・同じ様式) であることを確かめる。
  * 期間ラベル (週次 YYYY-Www / 月次 YYYY-MM) はファイルの中身から決める。
  */
@@ -541,23 +542,26 @@ function parseBatch(files: readonly SpecFile[], periodType: InvestorEquityPeriod
 }
 
 /**
- * 新様式の単一ファイルを解析し、1 バッチ (同じ期間・週次) であることを確かめる。
- * 月次の新様式 (2026-10-08 掲載分〜) は未公表のため受け付けず throw する。
+ * 新様式の単一ファイルを解析し、1 バッチ (同じ期間・同じ期間種別) であることを確かめる。
+ * 月次の新様式は年月だけを確定し、未掲載の実集計日はNULL pairで記録する。
  */
 function parseUnifiedBatch(
   files: readonly SpecFile[],
   unifiedFile: SpecFile,
-  periodType: InvestorEquityPeriodType
+  periodType: InvestorEquityPeriodType,
 ): ParsedBatch {
   if (files.length !== 1) {
     throw new Error(
       `JPX 投資部門別売買状況: 新様式の単一ファイル (${unifiedFile.filename}) と他のファイルが混ざっています`
     );
   }
-  if (periodType !== "weekly") {
+  const originalName = unifiedFile.filename.slice(UNIFIED_FILE_PREFIX.length);
+  if (
+    periodType === "monthly" &&
+    !/^stock_1_m20\d{2}(?:0[1-9]|1[0-2])\.xlsx$/.test(originalName)
+  ) {
     throw new Error(
-      "JPX 投資部門別売買状況: 月次の新様式ファイルです。月次の新様式 (2026-10-08 掲載分〜) は" +
-        "未公表のため実ファイルで検証するまで取り込みません"
+      "JPX 投資部門別売買状況: 月次の数字ファイル名が必要です (仕様サンプルは取込対象外)",
     );
   }
   const records = parseInvestorEquityWorkbook(
@@ -582,10 +586,18 @@ function parseUnifiedBatch(
   if (first.periodType !== periodType) {
     throw new Error(`JPX 投資部門別売買状況: ${periodType} のはずが ${first.periodType} のファイルでした`);
   }
-  if (first.periodStart === null || first.periodEnd === null) {
+  if (
+    periodType === "weekly" &&
+    (first.periodStart === null || first.periodEnd === null)
+  ) {
     throw new Error(`JPX 投資部門別売買状況: ${first.periodLabel} の集計期間 (開始/終了) が不明です`);
   }
-  const period = isoWeekLabelOf(new Date(`${first.periodEnd}T00:00:00Z`));
+  if ((first.periodStart === null) !== (first.periodEnd === null))
+    throw new Error("JPX 投資部門別売買状況: 期間の片側だけが不明です");
+  const period =
+    periodType === "monthly"
+      ? first.periodMonth
+      : isoWeekLabelOf(new Date(`${first.periodEnd}T00:00:00Z`));
   return { period, periodStart: first.periodStart, periodEnd: first.periodEnd, records };
 }
 
@@ -627,8 +639,7 @@ function toDrafts(key: string, files: readonly SpecFile[], periodType: InvestorE
       value: rec.total * 1000,
     });
     if (isUnified) {
-      // 新様式の公式売付/買付セルを直接記録する (sell/buy キーは週次のみ。
-      // parseUnifiedBatch が週次を強制しているため、ここでは *_weekly が付く)。
+      // 新様式の公式売付/買付セルを直接記録する (親合計は計算しない)。
       drafts.push({ ...common, indicatorKey: indicatorKey(`sell_${suffix}`, periodType), value: rec.sell * 1000 });
       drafts.push({ ...common, indicatorKey: indicatorKey(`buy_${suffix}`, periodType), value: rec.buy * 1000 });
     }
@@ -724,12 +735,27 @@ export const JPX_INVESTOR_EQUITY_MONTHLY_SPEC: MoneyflowSourceSpec = {
   async resolve() {
     const html = await (await fetchOk(MONTHLY_INDEX_URL)).text();
     const latest = pickLatestPublishedMonth(parseMonthlyIndexHtml(html));
+    const key = `${MONTHLY_SPEC_NAME}-${latest.year}-${pad2(latest.month)}`;
+    const unifiedXlsxUrl = latest.unifiedXlsxUrl;
+    if (unifiedXlsxUrl !== undefined) {
+      return {
+        key,
+        fetch: () =>
+          fetchBatch({
+            key,
+            periodType: "monthly",
+            indexUrl: MONTHLY_INDEX_URL,
+            indexLabel: `${latest.year}年${latest.month}月`,
+            kind: "unified",
+            unifiedUrl: unifiedXlsxUrl,
+          }),
+      };
+    }
     const { valueXlsUrl, volumeXlsUrl } = latest;
     if (valueXlsUrl === null || volumeXlsUrl === null) {
       // pickLatestPublishedMonth が保証する。型を絞るための検査
       throw new Error(`JPX 投資部門別売買状況 (月次): ${latest.year}年${latest.month}月のファイル URL が揃っていません`);
     }
-    const key = `${MONTHLY_SPEC_NAME}-${latest.year}-${pad2(latest.month)}`;
     return {
       key,
       fetch: () =>

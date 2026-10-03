@@ -16,13 +16,9 @@
  *     カテゴリごとに [売り, 買い, 合計] の 3 行が並ぶ固定テンプレート。
  *   - セルは数値も含めてテキスト (カンマ区切り文字列) として格納されている。
  *
- * **既知の様式変更 (未対応)**: JPX は 2026年10月13日掲載分 (=2026年9月分の
- * データ) から、PDF は 1 ページ、Excel は 1 シートへ統合すると告知済み
- * (`etf_mYYYYMM.xlsx` / `reit_mYYYYMM.xlsx` としてサンプルファイルを先行公開)。
- * 新様式は列見出しが多段のワイドテーブルで、現行の行ベース様式とは非互換。
- * 本パーサは **現行様式のみ** に対応し、新様式のファイルを渡すと明示的に
- * throw する (ルール2: 誤った行として読み違えるより、様式が変わったことを
- * 分からせて止める)。新様式への対応は別途この関数を更新すること。
+ * 新様式: 2026年10月13日掲載分から1シートに統合。公式サンプルの見出し・
+ * 単位・13葉部門で対応準備済み (実ファイルは未受入)。年月は原コードから確定し、
+ * 未掲載の実集計日・親合計・比率・市場全体値はNULLとする。サンプルは本番取得から除外。
  *
  * 利用条件: JPX利用規約により、無許諾での商用データ収集・二次利用・再配信は
  * 禁止 (`commercial_use: prohibited`)。非公開の範囲に限る (`personal-only`)。
@@ -272,16 +268,16 @@ export interface JpxInvestorCategoryRow {
   group: string | null;
   /** 売付 */
   sales: number;
-  salesRatioPercent: number;
+  salesRatioPercent: number | null;
   /** 買付 */
   purchases: number;
-  purchasesRatioPercent: number;
+  purchasesRatioPercent: number | null;
   /** 買付 - 売付。プラス=買い越し、マイナス=売り越し。JPX原文の「差引」欄と
    * 一致することを検証済み (一致しなければ parseJpxInvestorWorkbook が throw) */
   balance: number;
   /** 売付 + 買付 (合計・取引の活発さ) */
   total: number;
-  totalRatioPercent: number;
+  totalRatioPercent: number | null;
 }
 
 export interface JpxInvestorSheet {
@@ -291,14 +287,15 @@ export interface JpxInvestorSheet {
   periodLabel: string;
   /** "2026-08" */
   yearMonth: string;
-  rangeStart: string;
-  rangeEnd: string;
+  rangeStart: string | null;
+  rangeEnd: string | null;
   /** シート冒頭の「総売買代金」「総売買高」(自己+委託・売り+買いの市場全体合計) */
-  marketTotal: number;
+  marketTotal: number | null;
   categories: JpxInvestorCategoryRow[];
 }
 
 export interface JpxInvestorReport {
+  formatVersion?: "legacy_split_sheets" | "unified_single_sheet";
   product: JpxInvestorProduct;
   sourceUrl: string;
   yearMonth: string;
@@ -325,7 +322,189 @@ function parseSignedNumber(text: string, context: string): number {
       `JPX investor-type: 数値として解釈できないセルです: "${text}" (${context})`
     );
   }
-  return Number(normalized);
+  const value = Number(normalized);
+  if (!Number.isFinite(value))
+    throw new Error(`JPX investor-type: 数値が有限ではありません (${context})`);
+  return value;
+}
+
+/** JPX公式新様式の13葉部門。親の合計/比率/市場全体は掲載されていない。 */
+export const JPX_INVESTOR_UNIFIED_GROUPS = [
+  { label: "自己現金", parent: "自己", leaf: "現金取引", tradeType: "現金" },
+  { label: "自己信用", parent: "自己", leaf: "信用取引", tradeType: "信用" },
+  { label: "個人現金", parent: "個人", leaf: "現金取引", tradeType: "現金" },
+  { label: "個人信用", parent: "個人", leaf: "信用取引", tradeType: "信用" },
+  {
+    label: "海外投資家法人",
+    parent: "海外投資家",
+    leaf: "法人",
+    tradeType: null,
+  },
+  {
+    label: "海外投資家個人",
+    parent: "海外投資家",
+    leaf: "個人",
+    tradeType: null,
+  },
+  { label: "証券会社", parent: "証券会社", leaf: "証券会社", tradeType: null },
+  { label: "投資信託", parent: "法人", leaf: "投資信託", tradeType: null },
+  { label: "事業法人", parent: "法人", leaf: "事業法人", tradeType: null },
+  {
+    label: "その他法人等",
+    parent: "法人",
+    leaf: "その他法人等",
+    tradeType: null,
+  },
+  { label: "生保・損保", parent: "法人", leaf: "生保", tradeType: null },
+  { label: "銀行", parent: "法人", leaf: "銀行", tradeType: null },
+  {
+    label: "その他金融機関",
+    parent: "法人",
+    leaf: "その他金融機関",
+    tradeType: null,
+  },
+] as const;
+
+function parseUnifiedInvestorSheet(
+  rows: unknown[][],
+  product: JpxInvestorProduct,
+): { value: JpxInvestorSheet; volume: JpxInvestorSheet } {
+  assertSheetTitleMatchesProduct(rows, product, "sheet1");
+  const headerIndex = rows.findIndex(
+    (row) => cell(row, 0).trim() === "年月 Year, Month",
+  );
+  if (headerIndex < 4)
+    throw new Error(
+      `JPX ${product} investor-type: 新様式の年月ヘッダがありません`,
+    );
+  const header = rows[headerIndex];
+  if (rows.slice(headerIndex - 3).some((row) => row.slice(54).some((value) => value !== "" && value !== null && value !== undefined))) {
+    throw new Error(`JPX ${product} investor-type: 新様式の54列外に未知の非空セルがあります`);
+  }
+  const unitHeader = cell(header, 1);
+  const expectedVolume = product === "etf" ? "百口／千円" : "口／千円";
+  if (
+    !unitHeader.includes(expectedVolume) ||
+    (product === "reit" && unitHeader.includes("百口"))
+  )
+    throw new Error(`JPX ${product} investor-type: 新様式の単位が想定外です`);
+  const parentRow = rows[headerIndex - 3];
+  const leafRow = rows[headerIndex - 1];
+  if (!cell(rows[headerIndex - 2], 42).startsWith("金融機関")) throw new Error(`JPX ${product} investor-type: 新様式の金融機関中段見出しが想定外です`);
+  const subHeaders = ["売 Sales", "買 Purchases", "差引 Balance", "合計 Total"];
+  for (const [index, group] of JPX_INVESTOR_UNIFIED_GROUPS.entries()) {
+    const col = 2 + index * 4;
+    let parent: string | null = null;
+    for (let c = col; c >= 0; c--) {
+      if (cell(parentRow, c).trim() !== "") {
+        parent = cell(parentRow, c);
+        break;
+      }
+    }
+    if (
+      parent === null ||
+      !parent.startsWith(group.parent) ||
+      !cell(leafRow, col).includes(group.leaf)
+    )
+      throw new Error(
+        `JPX ${product} investor-type: 新様式の部門見出しが想定外です (列${col})`,
+      );
+    for (let j = 0; j < 4; j++)
+      if (cell(header, col + j).trim() !== subHeaders[j])
+        throw new Error(
+          `JPX ${product} investor-type: 新様式の売/買/差引/合計見出しが想定外です`,
+        );
+  }
+  let yearMonth: string | null = null;
+  const sheets = new Map<JpxInvestorMetric, JpxInvestorSheet>();
+  for (let i = headerIndex + 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (
+      row.every(
+        (value) => value === "" || value === null || value === undefined,
+      )
+    )
+      continue;
+    const code = cell(row, 0).trim();
+    if (code !== "") {
+      const match = /^(20\d{2})(0[1-9]|1[0-2])$/.exec(code);
+      if (match === null)
+        throw new Error(
+          `JPX ${product} investor-type: 新様式の年月コードが不正です`,
+        );
+      const parsed = `${match[1]}-${match[2]}`;
+      if (yearMonth !== null && yearMonth !== parsed)
+        throw new Error(
+          `JPX ${product} investor-type: 新様式の年月が複数あります`,
+        );
+      yearMonth = parsed;
+    }
+    if (yearMonth === null)
+      throw new Error(`JPX ${product} investor-type: 新様式の年月が未確定です`);
+    const metricLabel = cell(row, 1).trim();
+    const metric = metricLabel.startsWith("口数")
+      ? "volume"
+      : metricLabel.startsWith("金額")
+        ? "value"
+        : null;
+    if (metric === null || sheets.has(metric))
+      throw new Error(
+        `JPX ${product} investor-type: 新様式の口数/金額行が不明又は重複しています`,
+      );
+    const categories = JPX_INVESTOR_UNIFIED_GROUPS.map(
+      (group, index): JpxInvestorCategoryRow => {
+        const col = 2 + index * 4;
+        const [sales, purchases, balance, total] = [0, 1, 2, 3].map((j) =>
+          parseSignedNumber(
+            cell(row, col + j),
+            `${product}/${metric}/${group.label}`,
+          ),
+        );
+        if (
+          ![sales, purchases, balance, total].every(Number.isSafeInteger) ||
+          sales < 0 ||
+          purchases < 0 ||
+          total < 0 ||
+          sales + purchases !== total ||
+          purchases - sales !== balance
+        )
+          throw new Error(
+            `JPX ${product} investor-type: 新様式の部門値/差引/合計が不整合です`,
+          );
+        return {
+          category: group.label,
+          categoryEn: cell(leafRow, col)
+            .replace(/^.*?\s+/, "")
+            .trim(),
+          group: index >= 10 ? "金融機関" : group.parent,
+          sales,
+          purchases,
+          balance,
+          total,
+          salesRatioPercent: null,
+          purchasesRatioPercent: null,
+          totalRatioPercent: null,
+        };
+      },
+    );
+    sheets.set(metric, {
+      metric,
+      unit: metric === "value" ? "thousand_yen" : VOLUME_UNIT[product],
+      periodLabel: `${yearMonth.slice(0, 4)}年${Number(yearMonth.slice(5))}月`,
+      yearMonth,
+      rangeStart: null,
+      rangeEnd: null,
+      marketTotal: null,
+      categories,
+    });
+  }
+  const value = sheets.get("value"),
+    volume = sheets.get("volume");
+  if (value === undefined || volume === undefined)
+    throw new Error(
+      `JPX ${product} investor-type: 新様式の口数/金額行が欠けています`,
+    );
+  return { value, volume };
 }
 
 const PERIOD_RE =
@@ -559,27 +738,44 @@ function assertSheetTitleMatchesProduct(
 /**
  * xls/xlsx バイト列から投資部門別売買状況を抽出する純関数。
  *
- * @throws シート構成が現行様式 (Volume + Value の2シート) と異なる場合。
- *   2026年10月13日掲載分からの新様式 (1シート統合) は本パーサでは未対応で、
- *   これに該当する場合は原因を明示して throw する。
+ * @throws シート構成が旧2シート/新1シートの既知見出しと一致しない場合。
  * @throws 期間行・単位・カテゴリブロックの行構成など、様式の前提が崩れている場合
  * @throws 差引き/合計がJPX原文の値と一致しない場合 (パース位置ズレの検知)
  */
 export function parseJpxInvestorWorkbook(
   bytes: Uint8Array,
   product: JpxInvestorProduct,
-  sourceUrl: string
+  sourceUrl: string,
 ): JpxInvestorReport {
   const workbook = XLSX.read(bytes, { type: "array" });
   const sheetNames = workbook.SheetNames;
   const hasCurrentShape =
-    sheetNames.includes("Volume") && sheetNames.includes("Value");
+    sheetNames.length === 2 && sheetNames.includes("Volume") && sheetNames.includes("Value");
+  if (sheetNames.length === 1) {
+    const sheet = workbook.Sheets[sheetNames[0]];
+    if (sheet === undefined)
+      throw new Error(`JPX ${product} investor-type: シートがありません`);
+    const { value, volume } = parseUnifiedInvestorSheet(
+      XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+        header: 1,
+        defval: "",
+        raw: true,
+      }),
+      product,
+    );
+    return {
+      formatVersion: "unified_single_sheet",
+      product,
+      sourceUrl,
+      yearMonth: value.yearMonth,
+      value,
+      volume,
+    };
+  }
   if (!hasCurrentShape) {
     throw new Error(
       `JPX ${product} investor-type: 未対応のシート構成です (シート: [${sheetNames.join(", ")}])。` +
-        "JPXは2026年10月13日掲載分からExcelをVolume/Valueの2シートから1シートへ統合すると告知している。" +
-        "この形なら新様式の可能性が高い。新様式に対応するには " +
-        "services/moneyflow/lib/sources/jpx-investor-etf-reit.ts の parseJpxInvestorWorkbook を更新すること。"
+        "旧Volume/Value2シート・新統合1シートの既知構造と一致しません。"
     );
   }
 
@@ -712,7 +908,8 @@ export interface JpxInvestorIndicatorDefinition {
 
 const FORMAT_CHANGE_NOTE =
   "JPXは2026年10月13日掲載分からExcel様式を1シートへ統合すると告知しており、" +
-  "本パーサは現行様式 (〜2026年9月分掲載) のみ対応。";
+  "旧2シートと新1シートの13葉部門に対応。新様式は公式サンプルで構造確認済み、実ファイル未受入。" +
+  "新様式に未掲載の実集計日・親合計・比率・市場全体の値はNULLとし、暦月初末や葉合算で補わない。";
 
 /**
  * 集計範囲の注記 (原本の(注) と JPX「資料の見方」ページ
@@ -739,8 +936,8 @@ function categoryLimitations(product: JpxInvestorProduct): string {
     "集計対象は資本金30億円以上の取引参加者のみ (全数調査ではない。市場全体の" +
     "総売買代金に対するカバー率は2026年8月で約99.5%)。" +
     CATEGORY_HIERARCHY_NOTE +
-    "個人/自己内の現金・信用取引別、海外投資家内の法人/個人別の内訳は原本には" +
-    "存在するが本パーサでは未抽出。" +
+    "旧様式の個人/自己内の現金・信用取引別、海外投資家内の法人/個人別の内訳は未抽出。" +
+    "新様式はこれらを含む13葉部門のみを抽出し、旧様式の親集計系列は更新しない。" +
     SCOPE_NOTE[product] +
     FORMAT_CHANGE_NOTE
   );
@@ -932,7 +1129,7 @@ export interface JpxInvestorObservationRow {
 
 /** JpxInvestorReport を観測ログ用の縦長レコードへ変換する。Notion書込は行わない (統合担当の責務)。 */
 export function toJpxInvestorObservationRows(
-  report: JpxInvestorReport
+  report: JpxInvestorReport,
 ): JpxInvestorObservationRow[] {
   const rows: JpxInvestorObservationRow[] = [];
   const push = (
@@ -959,7 +1156,8 @@ export function toJpxInvestorObservationRows(
     const marketKey = `jpx-${report.product}-market-turnover-${sheet.metric}`;
     // 市場全体の総売買代金/総売買高は資本金30億円未満の参加者も含む実測合計
     // (投資部門別の内訳とは異なり全数に近い) — isApproximate=false。
-    push(marketKey, "市場全体", sheet.marketTotal, sheet.unit, false);
+    if (sheet.marketTotal !== null)
+      push(marketKey, "市場全体", sheet.marketTotal, sheet.unit, false);
     for (const category of sheet.categories) {
       push(netKey, category.category, category.balance, sheet.unit, true);
       push(turnoverKey, category.category, category.total, sheet.unit, true);

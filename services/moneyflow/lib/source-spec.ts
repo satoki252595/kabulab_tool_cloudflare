@@ -141,7 +141,13 @@ export function validateDrafts(
     if (d.changeFromPrev !== null && !Number.isFinite(d.changeFromPrev)) {
       problems.push(`${where}: 前期比が有限数でない (${d.changeFromPrev})`);
     }
-    if (!DATE_RE.test(d.periodStart) || !DATE_RE.test(d.periodEnd)) {
+    if (d.periodStart === null || d.periodEnd === null) {
+      if (!(d.periodStart === null && d.periodEnd === null &&
+          /^\d{4}-(0[1-9]|1[0-2])$/.test(d.period) &&
+          indicators.some((indicator) => indicator.key === d.indicatorKey && indicator.frequency === "月次"))) {
+        problems.push(`${where}: 期間日付の欠損は年月が確定した月次の両端nullのみ許可します`);
+      }
+    } else if (!DATE_RE.test(d.periodStart) || !DATE_RE.test(d.periodEnd)) {
       problems.push(`${where}: 期間開始/終了が YYYY-MM-DD でない (${d.periodStart}〜${d.periodEnd})`);
     } else if (d.periodStart > d.periodEnd) {
       problems.push(`${where}: 期間開始 ${d.periodStart} が期間終了 ${d.periodEnd} より後`);

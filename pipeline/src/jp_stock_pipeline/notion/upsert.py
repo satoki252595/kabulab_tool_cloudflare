@@ -767,6 +767,11 @@ def _edinet_map_from_pages(pages: list[dict]) -> dict[str, str]:
         code = _master_code_of(page)
         edinet_code = _edinet_code_of(props)
         if code and edinet_code:
+            previous = out.get(edinet_code)
+            if previous is not None and previous != code:
+                raise ValueError(
+                    f"① EDINETコード逆引きが競合: {edinet_code} → {previous}/{code}"
+                )
             out[edinet_code] = code
     return out
 

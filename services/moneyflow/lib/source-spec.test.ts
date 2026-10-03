@@ -34,6 +34,15 @@ describe("validateDrafts", () => {
     expect(() => validateDrafts("s", [draft(), draft({ category: "個人" })], [IND])).not.toThrow();
   });
 
+  it("年月のみの月次原本は両端nullを保持し、片端欠落・週次・不正年月は拒否する", () => {
+    const monthly = draft({ periodStart: null, periodEnd: null });
+    expect(() => validateDrafts("s", [monthly], [IND])).not.toThrow();
+    for (const bad of [draft({ periodStart: null }), {...monthly, period: "2026-W38"}, {...monthly, period: "2026-13"}]) {
+      expect(() => validateDrafts("s", [bad], [IND])).toThrow(/両端null/);
+    }
+    expect(() => validateDrafts("s", [monthly], [{...IND, frequency: "週次"}])).toThrow(/両端null/);
+  });
+
   it("0 行は異常として throw する (様式変更で何も読めなかった回を成功扱いにしない)", () => {
     expect(() => validateDrafts("s", [], [IND])).toThrow(/0 件/);
   });

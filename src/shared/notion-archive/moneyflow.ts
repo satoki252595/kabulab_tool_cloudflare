@@ -619,8 +619,9 @@ export async function ensureObservationsDb(): Promise<{ dbId: string }> {
 export interface ObservationInput {
   /** 対象期間の表示ラベル (例: "2026-W38"、月次なら "2026-08" 等)。 */
   period: string;
-  periodStart: string;
-  periodEnd: string;
+  /** 月次原本が年月のみを示す場合は両端を null で保持する。 */
+  periodStart: string | null;
+  periodEnd: string | null;
   /** 冪等キーの一部として使う指標キー (`IndicatorDefInput.key` と同じ値)。 */
   indicatorKey: string;
   /** upsertIndicatorDef の結果 pageId (「指標」relation の値)。 */
@@ -691,12 +692,16 @@ export function observationKey(
 }
 
 function buildObsRowProperties(input: ObservationInput): Record<string, unknown> {
+  if ((input.periodStart === null || input.periodEnd === null) &&
+      !(input.periodStart === null && input.periodEnd === null && /^\d{4}-(0[1-9]|1[0-2])$/.test(input.period))) {
+    throw new Error("moneyflow 観測: 期間日付の欠損は年月が確定した月次の両端nullのみ許可します");
+  }
   return {
     [MONEYFLOW_OBS_PROPS.key]: { title: [{ text: { content: observationKey(input) } }] },
     [MONEYFLOW_OBS_PROPS.indicator]: { relation: [{ id: input.indicatorPageId }] },
     [MONEYFLOW_OBS_PROPS.period]: { rich_text: splitRichText(input.period) },
-    [MONEYFLOW_OBS_PROPS.periodStart]: { date: { start: input.periodStart } },
-    [MONEYFLOW_OBS_PROPS.periodEnd]: { date: { start: input.periodEnd } },
+    [MONEYFLOW_OBS_PROPS.periodStart]: { date: input.periodStart === null ? null : { start: input.periodStart } },
+    [MONEYFLOW_OBS_PROPS.periodEnd]: { date: input.periodEnd === null ? null : { start: input.periodEnd } },
     [MONEYFLOW_OBS_PROPS.category]: { rich_text: splitRichText(input.category) },
     [MONEYFLOW_OBS_PROPS.categoryKind]: { select: { name: input.categoryKind } },
     [MONEYFLOW_OBS_PROPS.marketSegment]: { rich_text: splitRichText(input.marketSegment ?? "") },
@@ -835,8 +840,8 @@ export function observationRowMatches(
     plainOf(existing[p.key]?.title) === observationKey(input),
     JSON.stringify(rel(p.indicator)) === JSON.stringify([normalizeId(input.indicatorPageId)]),
     plainOf(existing[p.period]?.rich_text) === input.period,
-    existing[p.periodStart]?.date?.start === input.periodStart,
-    existing[p.periodEnd]?.date?.start === input.periodEnd,
+    input.periodStart === null ? existing[p.periodStart]?.date === null : existing[p.periodStart]?.date?.start === input.periodStart,
+    input.periodEnd === null ? existing[p.periodEnd]?.date === null : existing[p.periodEnd]?.date?.start === input.periodEnd,
     plainOf(existing[p.category]?.rich_text) === input.category,
     existing[p.categoryKind]?.select?.name === input.categoryKind,
     (plainOf(existing[p.marketSegment]?.rich_text) ?? "") === (input.marketSegment ?? ""),
@@ -1155,4 +1160,3 @@ export async function recordRunLog(
   });
   return { pageId: created.id };
 }
-

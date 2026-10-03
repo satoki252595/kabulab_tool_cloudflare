@@ -339,3 +339,47 @@ D1の保存応答metaは今回stage全体でrows_read1,435 / rows_written2、max
 実置換phaseだけではSQL9 / rows_read1,315 / rows_written2。rootの独立全文・manifest・
 実meta照合と第二者の独立照合はPASS。追加費用を0と断定しない。
 旧修復phaseの件数・失敗実績を変更せず、単発PRE容量を月額へ外挿しない。
+
+## 10/3 JSTの追加68文書
+
+[本文68件の本番補完](./test-logs/remaining-followup-20261003.md)の更新phaseは、実D1 HTTP281・
+SQL989文、保存応答metaのrows_read33,128 / rows_written8,075、全total_attempts1だった。
+2026-10-03に再確認した[公式D1料金](https://developers.cloudflare.com/d1/platform/pricing/)の
+超過単価で、包含枠をすべて使い切っていると仮定しても、このread/writeだけは約$0.008108。
+DB保存量・税・他phase・他サービスは別であり、実請求額とは扱わない。初回調査のCPU制限429は
+使用量UNKNOWNを保持し、成功読取1,423+1,160行とこの更新phaseを混同しない。
+
+原本136 ZIPは70,421,539 B、PRE gzipは5,319,932 B、POST gzipは26,428,504 Bを物理保管した。
+POSTだけ20 MiBを超えたため、既存multipartの3 partで保管・全読戻しし、原本/本文/D1の再送0。
+新規プラン購入・TypeSafe credit補充・有料AI・R2更新は0。旧CSVを再利用し、必要XBRL67と
+明示対応1文書のCSV/XBRL2 GETだけを追加した。単発補完を月額へ外挿しない。
+
+後発の訂正有報1件は、既知キャッシュ2 queryの未観測後に必要CSV/XBRL各1 GETだけ取得した。
+更新phaseはD1 HTTP12/SQL41、rows_read12,343 / rows_written123・全total_attempts1で、
+同じ超過単価換算は約$0.000135。68件とこの訂正の更新phase合計は約$0.008243で、
+実請求額・保存量・税・他phaseとは区別する。訂正の原本2 ZIPは1,031,973 B、PRE/POST gzipは
+1,006,500/1,771,952 Bを物理保管・全読戻しし、旧136 ZIP・旧26 MB POSTの再送は0。
+この段階の新規プラン購入・有料AI・TypeSafe・R2更新は0。タグPREの読取4SQLは
+rows_read51,600/write0、訂正の新PRE読取7SQLはrows_read3,832/write0として別に保持する。
+
+646Aマスタ修復の更新phaseはD1 HTTP3/SQL12、rows_read5,147 / rows_written4・全attempts1。
+同じ超過単価で読み書きだけ約$0.000009、本文68件・訂正1件・この修復の更新phase合計は
+約$0.008253。3マップ変更に伴うindex等を含む実metaを使い、4を銘柄更新数とは扱わない。
+646Aの新PRE読取はrows_read624/write0、訂正後の新タグPREはrows_read51,601/write0。
+どちらも読み書きの更新phase合計には含めず、保存量・税・他経路とともに別に保持する。
+新規契約・原本再取得・モデル・有料AI・R2更新は0。
+646A修復のPRE/POST gzipは160,796/396,185 Bを物理保管・全文照合し、各Notion8/hosted1。
+更新phaseのNotion5と合わせてNotion21/hosted2で、既存原本ZIP・本文証跡束の再アップロード0。
+
+補完68銘柄のMac通常タグ処理は実Notion370/D1 SELECT4、rows_read51,601/write0。
+新PREは64 member/gzip 1,928,630 BでNotion8/hosted1、原本や旧証跡束の再アップロード0。
+有料AI・ローカルモデル起動・新原本取得・D1/R2更新・再試行0、ローカル機器の費用は別扱い。
+このSELECT分の超過単価換算は約$0.000052で、単発実績を月額料金へ外挿しない。
+現行68行の本文・判定根拠・次回skipの独立POST読取はNotion136、D1/原本/モデル/有料AI/
+データ書込/再試行0。既存3,622判定の保持は通常処理で既に得た全行と既存受入証跡を比較し、
+追加のglobal GET・旧原本束の再アップロードは0。
+通常処理とPOST読取の全原応答・独立照合は2,065 member・原量174,243,624 Bとして保管した。
+POST gzip 55,137,525 Bは共有multipartの6 partで物理保管・全読戻し（Notion14/hosted1）。
+訂正後の新タグPREからここまでの実累計はNotion530/hosted2/D1 SELECT8、
+rows_read103,202/write0。古い未使用計画や訂正前のPRE読取はこの累計に混ぜない。
+旧原本ZIP・本文束・PREの再アップロード0、新契約・有料AI・モデル起動も0。

@@ -11,9 +11,10 @@ import { MAX_YAHOO_RAW_BYTES, YahooRawTooLargeError, parseDailyChart } from "../
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main, tenYearRange } from "./ingest-daily.js";
+import { assertSavedDailyShape, completedDailyFetch, hasCompletedDailyFetch } from "./lib/ingest-guard.js";
 
 const dailySource = vi.hoisted(() => vi.fn());
-const rawHook = vi.hoisted(() => ({ enabled: true, status: 200, size: 28 }));
+const rawHook = vi.hoisted(() => ({ enabled: true, status: 200, size: 28, body: null as Uint8Array | null }));
 
 vi.mock("./lib/r2.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./lib/r2.js")>();
@@ -27,7 +28,7 @@ vi.mock("../../src/shared/yahoo/client.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../../src/shared/yahoo/client.js")>();
   return { ...mod, fetchDaily: async (...args: Parameters<typeof mod.fetchDaily>) => {
     if (rawHook.enabled) await args[2]?.onRaw?.({ symbol: args[0], status: rawHook.status,
-      bytes: new Uint8Array(rawHook.size),
+      bytes: rawHook.body === null ? new Uint8Array(rawHook.size) : rawHook.body,
       url: "https://query1.finance.yahoo.com/v8/finance/chart/test", receivedAt: new Date().toISOString(), headers: {} });
     return dailySource(...args);
   } };
@@ -96,6 +97,7 @@ beforeEach(() => {
   rawHook.enabled = true;
   rawHook.status = 200;
   rawHook.size = 28;
+  rawHook.body = null;
   mockRawArchive.mockResolvedValue({ pages: ["test-page"], rawBytes: 1, compressedBytes: 1 });
   process.chdir(mkdtempSync(join(tmpdir(), "vwap-daily-")));
 });
@@ -110,6 +112,85 @@ const localSummaryBody = (): Record<string, unknown> => {
   expect(files).toHaveLength(1);
   return JSON.parse(readFileSync(join(".vwap-summaries", files[0]), "utf-8")) as Record<string, unknown>;
 };
+
+// 構造分岐を検証する入力。市場事実・観測値としては使わない。
+const COMPLETED_AT = "2026-10-02T08:00:00.000Z";
+const completionRaw = (symbol: string, missingMiddle = false): Uint8Array => new TextEncoder().encode(JSON.stringify({
+  chart: { error: null, result: [{
+    meta: { symbol, range: "10y", dataGranularity: "1d", exchangeTimezoneName: "Asia/Tokyo", currency: "JPY",
+      regularMarketPrice: BAR_A.c, regularMarketTime: 1790922601,
+      currentTradingPeriod: { regular: { start: 1790899200, end: 1790922600 } } },
+    timestamp: [1790726400, 1790812800, 1790899200],
+    indicators: { quote: [{ open: [BAR_A.o, BAR_A.o, BAR_A.o], high: [BAR_A.h, BAR_A.h, BAR_A.h],
+      low: [BAR_A.l, BAR_A.l, BAR_A.l], close: [BAR_A.c, missingMiddle ? null : BAR_A.c, BAR_A.c],
+      volume: [BAR_A.v, BAR_A.v, BAR_A.v] }] },
+  }] },
+}));
+const completionCapture = (symbol: string, bytes: Uint8Array) => ({
+  symbol, bytes, status: 200, receivedAt: COMPLETED_AT, headers: {},
+  url: `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=10y&interval=1d&events=split,div`,
+});
+const completedSaved = async (code: string) => {
+  const bytes = completionRaw(`${code}.T`);
+  const fresh = await parseDailyChart(`${code}.T`, "10y", bytes, COMPLETED_AT);
+  const completedFetch = completedDailyFetch(fresh, completionCapture(`${code}.T`, bytes), tenYearRange(COMPLETED_AT));
+  expect(completedFetch).not.toBeNull();
+  return assertSavedDailyShape(JSON.stringify({ code, updated: COMPLETED_AT, ...fresh, completedFetch }), `daily/${code}.json`, code);
+};
+
+describe("daily source前の同日確定済み再開", () => {
+  it("成功済みprefixはYahoo/PUT0、legacy未完だけ取得・保管し、再開後は全件source0", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(COMPLETED_AT));
+    vi.stubEnv("GITHUB_RUN_ID", "1");
+    vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    try {
+      const a = await completedSaved("A"), b = await completedSaved("B");
+      delete (b as { completedFetch?: unknown }).completedFetch; // 旧proofのみでは確定扱い不可。
+      const store = new Map([["daily/A.json", JSON.stringify(a)], ["daily/B.json", JSON.stringify(b)]]);
+      mockLoadCodes.mockResolvedValue(["A", "B"]);
+      mockR2Get.mockImplementation(async (key) => ({ body: store.get(key)!, etag: "observed-version" }));
+      mockR2Put.mockImplementation(async (key, body) => { store.set(key, body); });
+      rawHook.body = completionRaw("B.T");
+      mockFetchDaily.mockResolvedValue(await parseDailyChart("B.T", "10y", rawHook.body, COMPLETED_AT));
+      await main();
+      expect(process.exitCode).toBe(0);
+      expect(mockFetchDaily.mock.calls.map(([symbol]) => symbol)).toEqual(["B.T"]);
+      expect(mockR2Put.mock.calls.map(([key]) => key)).toEqual(["daily/B.json"]);
+      expect(mockRawArchive).toHaveBeenCalledTimes(1);
+      expect(recordedMetadata().sourceObserved).toMatchObject({ count: 1 });
+      expect((recordedBody().outcomes as Record<string, unknown>).A).toMatchObject({ status: "skipped", sourceFetched: false });
+      vi.clearAllMocks();
+      rawHook.body = null;
+      vi.stubEnv("GITHUB_RUN_ATTEMPT", "2"); // 再開は別attempt。同じ原本名のwx再保存を避ける。
+      await main();
+      expect(process.exitCode).toBe(0);
+      expect(mockFetchDaily).not.toHaveBeenCalled();
+      expect(mockR2Put).not.toHaveBeenCalled();
+      expect(mockRawArchive).not.toHaveBeenCalled();
+      expect(recordedMetadata().sourceObserved).toMatchObject({ count: 0 });
+      expect(recordedBody().skipped).toBe(2);
+    } finally { vi.unstubAllEnvs(); vi.useRealTimers(); }
+  });
+
+  it("翌日・10y条件違い・形成中session・原本のnull脱落はskip資格を持たない", async () => {
+    const saved = await completedSaved("A");
+    const range = tenYearRange(COMPLETED_AT);
+    expect(hasCompletedDailyFetch(saved, range)).toBe(true);
+    expect(hasCompletedDailyFetch(saved, tenYearRange("2026-10-03T08:00:00.000Z"))).toBe(false);
+    expect(hasCompletedDailyFetch({ ...saved, proof: { ...saved.proof!, requestedRange: "5y" } }, range)).toBe(false);
+    const forming = { ...saved, completedFetch: { ...saved.completedFetch!, regularMarketTime: 1790922599 } };
+    expect(hasCompletedDailyFetch(forming, range)).toBe(false);
+    expect(() => assertSavedDailyShape(JSON.stringify(forming), "daily/A.json", "A")).toThrow("completedFetch");
+    const missing = completionRaw("A.T", true);
+    const fresh = await parseDailyChart("A.T", "10y", missing, COMPLETED_AT);
+    expect(fresh.bars).toHaveLength(2);
+    expect(completedDailyFetch(fresh, completionCapture("A.T", missing), range)).toBeNull();
+    const bytes = completionRaw("A.T");
+    const good = await parseDailyChart("A.T", "10y", bytes, COMPLETED_AT);
+    expect(() => completedDailyFetch(good, completionCapture("A.T", missing), range)).toThrow("証跡不一致");
+  });
+});
 
 describe("ingest-daily main flow", () => {
   it("concurrent replacement rejects the exact observed version and stops remaining codes", async () => {

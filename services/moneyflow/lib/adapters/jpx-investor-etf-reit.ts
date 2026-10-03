@@ -15,8 +15,9 @@
  *
  * ## 1 バッチの中身 (29 行 / spec)
  * 金額シート (Value) の 14 区分 (自己計・委託計・総計と委託・法人・金融機関の内訳) ×
- * 「買い越し額」「売買代金」の 2 指標 = 28 行 + 市場全体の総売買代金 1 行。
- * 区分は固定の 14 語 ({@link JPX_INVESTOR_ETF_REIT_CATEGORIES}) と完全一致を要求し、
+ * 旧様式:「買い越し額」「売買代金」の2指標=28行＋市場全体1行。
+ * 新様式: 名前付き13葉×2指標=26行。未掲載の親/市場全体値は出力しない。
+ * 区分は旧14語/新13葉 ({@link JPX_INVESTOR_ETF_REIT_CATEGORIES}) の既知集合と完全一致を要求し、
  * 未知の区分・欠けた区分があれば throw する (黙って捨てない・黙って増やさない)。
  *
  * **口数シート (Volume) は取り込まない**: 観測ログの単位 (`MoneyflowUnit`) に ETF・REIT の
@@ -46,6 +47,7 @@ import {
   jpxInvestorListingUrl,
   latestJpxInvestorMonthLink,
   parseJpxInvestorWorkbook,
+  JPX_INVESTOR_UNIFIED_GROUPS,
   type JpxInvestorCategoryRow,
   type JpxInvestorFlowType,
   type JpxInvestorIndicatorDefinition,
@@ -210,7 +212,7 @@ function adapterLimitations(product: JpxInvestorProduct): string {
     "更新停止・様式変更を疑って取込を失敗させる。" +
     `同じ月のファイル (${prefix}YYMM.xls、新様式は ${prefix}YYYYMM.xlsx) が訂正で差し替えられても、同じ月は取り直さない` +
     " (訂正は反映されない)。" +
-    "買い付け・売り付けそれぞれの金額と構成比(%)は原本にあるが観測ログには記録しない。"
+    "買い付け・売り付けそれぞれの金額は観測ログに記録しない。構成比は旧様式のみ掲載され、新様式では未掲載NULL。実集計日も新様式ではNULL pairのまま記録する。"
   );
 }
 
@@ -355,7 +357,11 @@ function thousandYenToYen(v: number, context: string): number {
   return yen;
 }
 
-function toObservations(product: JpxInvestorProduct, key: string, files: readonly SpecFile[]): ObservationDraft[] {
+function toObservations(
+  product: JpxInvestorProduct,
+  key: string,
+  files: readonly SpecFile[],
+): ObservationDraft[] {
   const spec = SPEC_NAME[product];
   const period = periodOfKey(product, key);
   const accepted = jpxInvestorEtfReitFilenames(product, period);
@@ -378,10 +384,19 @@ function toObservations(product: JpxInvestorProduct, key: string, files: readonl
     throw new Error(`[${spec}] 金額シートの単位が千円ではありません (${sheet.unit})`);
   }
   const month = monthRange(period);
+  if ((sheet.rangeStart === null) !== (sheet.rangeEnd === null))
+    throw new Error(`[${spec}] 集計期間の片側だけが不明です`);
   if (
-    sheet.rangeStart < month.start ||
-    sheet.rangeEnd > month.end ||
-    sheet.rangeStart > sheet.rangeEnd
+    report.formatVersion !== "unified_single_sheet" &&
+    sheet.rangeStart === null
+  )
+    throw new Error(`[${spec}] 旧様式の集計期間が不明です`);
+  if (
+    sheet.rangeStart !== null &&
+    sheet.rangeEnd !== null &&
+    (sheet.rangeStart < month.start ||
+      sheet.rangeEnd > month.end ||
+      sheet.rangeStart > sheet.rangeEnd)
   ) {
     throw new Error(
       `[${spec}] 集計期間 ${sheet.rangeStart}〜${sheet.rangeEnd} が対象月 ${period} の範囲に収まっていません`
@@ -393,7 +408,14 @@ function toObservations(product: JpxInvestorProduct, key: string, files: readonl
     if (byLabel.has(c.category)) throw new Error(`[${spec}] 区分「${c.category}」が重複しています`);
     byLabel.set(c.category, c);
   }
-  const knownLabels = new Set(JPX_INVESTOR_ETF_REIT_CATEGORIES.map((c) => c.label));
+  const isUnified = report.formatVersion === "unified_single_sheet";
+  const categories: readonly CategoryInfo[] = isUnified
+    ? JPX_INVESTOR_UNIFIED_GROUPS.map((group) => ({
+        label: group.label,
+        kind: "投資部門",
+      }))
+    : JPX_INVESTOR_ETF_REIT_CATEGORIES;
+  const knownLabels = new Set(categories.map((c) => c.label));
   const unknown = [...byLabel.keys()].filter((l) => !knownLabels.has(l));
   if (unknown.length > 0) {
     throw new Error(
@@ -424,25 +446,49 @@ function toObservations(product: JpxInvestorProduct, key: string, files: readonl
     [netKey, (c: JpxInvestorCategoryRow) => c.balance],
     [turnoverKey, (c: JpxInvestorCategoryRow) => c.total],
   ] as const) {
-    for (const info of JPX_INVESTOR_ETF_REIT_CATEGORIES) {
+    for (const info of categories) {
       const row = byLabel.get(info.label) as JpxInvestorCategoryRow;
+      const group = isUnified
+        ? JPX_INVESTOR_UNIFIED_GROUPS.find(
+            (group) => group.label === info.label,
+          )
+        : undefined;
+      if (isUnified && group === undefined)
+        throw new Error(`[${spec}] 新様式の部門対応が未定義です`);
       out.push({
         ...base,
         indicatorKey,
         category: info.label,
         categoryKind: info.kind,
+        ...(group === undefined
+          ? {}
+          : {
+              marketSegment: "東証",
+              investorCategory: group.label,
+              tradeType: group.tradeType,
+              parentCategory:
+                group.parent === "自己" ? "自己計" :
+                group.label === "証券会社" ? "委託計" :
+                ["生保・損保", "銀行", "その他金融機関"].includes(group.label)
+                  ? "金融機関" : group.parent,
+              categoryLevel: 1,
+              publicationDate: null,
+            }),
         value: thousandYenToYen(pick(row), `[${spec}] ${indicatorKey} ${info.label}`),
       });
     }
   }
-  // 最後の行 (取込完了の印) は市場全体の総売買代金。
-  out.push({
-    ...base,
-    indicatorKey: marketKey,
-    category: MARKET_CATEGORY.label,
-    categoryKind: MARKET_CATEGORY.kind,
-    value: thousandYenToYen(sheet.marketTotal, `[${spec}] ${marketKey}`),
-  });
+  // 市場全体の原値がある旧様式だけ出力する。新13葉から合成しない。
+  if (sheet.marketTotal !== null)
+    out.push({
+      ...base,
+      indicatorKey: marketKey,
+      category: MARKET_CATEGORY.label,
+      categoryKind: MARKET_CATEGORY.kind,
+      value: thousandYenToYen(sheet.marketTotal, `[${spec}] ${marketKey}`),
+    });
+  else if (!isUnified)
+    throw new Error(`[${spec}] 旧様式の市場全体値が不明です`);
   return out;
 }
 

@@ -77,9 +77,9 @@ afterEach(() => {
 describe("指標定義", () => {
   it("全指標が enum ガードを通り、キーが一意・https・日本語の説明と限界を持つ", () => {
     const all = JPX_INVESTOR_EQUITY_SPECS.flatMap((s) => s.indicators);
-    expect(all).toHaveLength(12);
+    expect(all).toHaveLength(16);
     expect(JPX_INVESTOR_EQUITY_WEEKLY_SPEC.indicators).toHaveLength(8);
-    expect(JPX_INVESTOR_EQUITY_MONTHLY_SPEC.indicators).toHaveLength(4);
+    expect(JPX_INVESTOR_EQUITY_MONTHLY_SPEC.indicators).toHaveLength(8);
     expect(new Set(all.map((i) => i.key)).size).toBe(all.length);
     for (const ind of all) {
       expect(isMoneyflowFlowType(ind.flowType)).toBe(true);
@@ -114,7 +114,7 @@ describe("指標定義", () => {
     }
   });
 
-  it("週次に売付/買付の4キーを含み、net/gross と unit・source・定義が整合する (月次は付けない)", () => {
+  it("週次に売付/買付の4キーを含み、net/gross と unit・source・定義が整合する (月次にも新様式分を定義)", () => {
     const weekly = JPX_INVESTOR_EQUITY_WEEKLY_SPEC.indicators;
     const monthlyKeys = new Set(JPX_INVESTOR_EQUITY_MONTHLY_SPEC.indicators.map((i) => i.key));
     for (const kind of ["sell_value", "buy_value", "sell_volume", "buy_volume"] as const) {
@@ -125,7 +125,7 @@ describe("指標定義", () => {
       expect(found!.license).toBe("personal-only");
       expect(found!.sourceUrl).toMatch(/^https:\/\/www\.jpx\.co\.jp\/markets\/statistics-equities\/investor-type\//);
       expect(found!.limitations).toMatch(/新様式ファイル/);
-      expect(monthlyKeys.has(`jpx_investor_equity_${kind}_monthly`)).toBe(false);
+      expect(monthlyKeys.has(`jpx_investor_equity_${kind}_monthly`)).toBe(true);
     }
     const sellValue = weekly.find((i) => i.key === "jpx_investor_equity_sell_value_weekly")!;
     const buyVolume = weekly.find((i) => i.key === "jpx_investor_equity_buy_volume_weekly")!;
@@ -265,6 +265,88 @@ const SYNTH_UNIFIED_FILES: SpecFile[] = [
   { filename: "investor-equity-unified-synthetic.xlsx", bytes: new Uint8Array([3]) },
 ];
 
+describe("月次新様式の名前付き葉観測 (CI用合成入力)", () => {
+  const files: SpecFile[] = [
+    {
+      filename: "investor-equity-unified-stock_1_m202609.xlsx",
+      bytes: new Uint8Array([3]),
+    },
+  ];
+  const records = (): InvestorEquityRecord[] =>
+    syntheticUnifiedRecords().map((row) => ({
+      ...row,
+      periodType: "monthly",
+      periodLabel: "2026年9月",
+      periodMonth: "2026-09",
+      periodStart: null,
+      periodEnd: null,
+    }));
+  it("実日付NULL、親数値を合成せずnet/gross/sell/buy全448葉を記録する", () => {
+    mockParseOnce(records());
+    const drafts = JPX_INVESTOR_EQUITY_MONTHLY_SPEC.toObservations({
+      key: "jpx-investor-equity-monthly-2026-09",
+      files,
+    });
+    validateDrafts(
+      JPX_INVESTOR_EQUITY_MONTHLY_SPEC.name,
+      drafts,
+      JPX_INVESTOR_EQUITY_MONTHLY_SPEC.indicators,
+    );
+    expect(drafts).toHaveLength(448);
+    expect(
+      drafts.every(
+        (d) =>
+          d.period === "2026-09" &&
+          d.periodStart === null &&
+          d.periodEnd === null &&
+          d.categoryLevel === 1,
+      ),
+    ).toBe(true);
+    expect(
+      drafts.find(
+        (d) => d.indicatorKey === "jpx_investor_equity_sell_value_monthly",
+      ),
+    ).toMatchObject({
+      value: 100000,
+      marketSegment: "東証プライム",
+      investorCategory: "自己現金",
+      tradeType: "現金",
+      parentCategory: "自己計",
+      publicationDate: null,
+    });
+    expect(drafts.some((d) => d.investorCategory === "総計")).toBe(false);
+  });
+  it("サンプル名・キー月不一致・片側だけNULLはSTOP", () => {
+    expect(() =>
+      JPX_INVESTOR_EQUITY_MONTHLY_SPEC.toObservations({
+        key: "jpx-investor-equity-monthly-2026-09",
+        files: [
+          {
+            ...files[0],
+            filename: "investor-equity-unified-stock_1_mYYYYMM.xlsx",
+          },
+        ],
+      }),
+    ).toThrow(/仕様サンプル/);
+    mockParseOnce(records());
+    expect(() =>
+      JPX_INVESTOR_EQUITY_MONTHLY_SPEC.toObservations({
+        key: "jpx-investor-equity-monthly-2026-08",
+        files,
+      }),
+    ).toThrow(/一致しません/);
+    mockParseOnce(
+      records().map((row) => ({ ...row, periodStart: "2026-09-01" })),
+    );
+    expect(() =>
+      JPX_INVESTOR_EQUITY_MONTHLY_SPEC.toObservations({
+        key: "jpx-investor-equity-monthly-2026-09",
+        files,
+      }),
+    ).toThrow(/片側/);
+  });
+});
+
 function mockParseOnce(records: InvestorEquityRecord[]): void {
   vi.mocked(sourceModule.parseInvestorEquityWorkbook).mockImplementationOnce(() => records);
 }
@@ -394,7 +476,7 @@ describe("toObservations の写像 (合成入力・CI 用)", () => {
     ).toThrow(/様式が不一致/);
   });
 
-  it("新様式ファイルを月次 spec に渡すと throw (月次新様式は未公表)", () => {
+  it("週次名の新様式ファイルを月次 spec に渡すと throw", () => {
     // 期間種別の検査は解析より先のため、parse の mock は積まない
     // (積むと消費されず後続テストへ漏れる)。
     expect(() =>
@@ -402,7 +484,7 @@ describe("toObservations の写像 (合成入力・CI 用)", () => {
         key: "jpx-investor-equity-monthly-2026-09",
         files: SYNTH_UNIFIED_FILES,
       })
-    ).toThrow(/月次の新様式/);
+    ).toThrow(/月次の数字ファイル名/);
   });
 
   it("新様式ファイルと他のファイルが混ざれば throw", () => {

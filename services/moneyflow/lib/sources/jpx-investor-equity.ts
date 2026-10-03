@@ -27,17 +27,9 @@
  * 週次とは別建てで、2026-10-08 掲載分から月次ファイルを株数/金額の2ファイルから
  * 1ファイルに統合し、ファイル名も `stock_1_mYYYYMM.xlsx` (週の概念なし) に変える
  * 予告が掲載されている (公式サンプル `stock_1_mYYYYMM.xlsx` で構造を確認済み)。
- * この新様式はヘッダ行が「年月週 Year, Month, Week」ではなく「年月 Year, Month」で
- * 始まるため、`parseUnifiedSheet` (週次の新様式用) では読めずヘッダ行が見つからず
- * throw する。月次専用の新様式パーサは未実装 (KNOWN_LIMITATIONS 参照)。
- *
- * 【新様式の検知】取込経路で実際に最初に新様式を目にするのはファイルではなく
- * 一覧ページ。週次は新旧の行をどちらも読む (上記)。月次は新様式 (2026-10-08 掲載分
- * から) が未検証のため、`parseMonthlyIndexHtml` は告知どおりのファイル名
- * (`stock_1_m<数字>`) のリンクや、表の中の想定外の行・セルを見つけた時点で throw
- * する (ルール2: 古い期間で黙って埋めない。旧様式だけを拾う実装のままだと新様式の
- * セルを読み飛ばして「1つ前の旧様式の月」を最新として黙って返してしまう — 再検証で
- * 実ページに新様式のセルを差し込んで再現済み)。
+ * 公式サンプルの「年月 Year, Month」・14葉部門で対応準備済み (月次実ファイル未受入)。
+ * 年月は原コードと数字ファイル名で同値確認し、未掲載の実集計日はNULLで記録する。
+ * 一覧は新旧の実リンクを比較し、文字YYYYMMの仕様サンプルは本番取得から除外する。
  *
  * 利用条件: JPX 利用規約により、許諾なしの商用二次利用・再配信・生成AIによる
  * 学習/解析利用は禁止されている。kabulab では「資金フロー」Notion ページ
@@ -535,19 +527,35 @@ const UNIFIED_IMPLAUSIBLE_ABS: Record<InvestorEquityMetric, number> = {
   volume: 2e9, // 千株 (= 2兆株)
 };
 
-function parseUnifiedPeriodCode(code: unknown): { periodLabel: string; year: number; month: number; week: number } {
+function parseUnifiedPeriodCode(
+  code: unknown,
+  periodType: InvestorEquityPeriodType,
+): { periodLabel: string; year: number; month: number } {
   const s = String(code ?? "").trim();
-  const m = /^(\d{4})(\d{2})(\d)$/.exec(s);
+  const m = (
+    periodType === "weekly" ? /^(\d{4})(\d{2})(\d)$/ : /^(\d{4})(\d{2})$/
+  ).exec(s);
   if (!m) {
     throw new Error(`JPX 投資部門別売買状況 (新様式): 年月週コードの様式が想定外です: "${s}"`);
   }
   const year = Number(m[1]);
   const month = Number(m[2]);
-  const week = Number(m[3]);
-  if (month < 1 || month > 12 || week < 1 || week > 6) {
+  const week = periodType === "weekly" ? Number(m[3]) : null;
+  if (
+    year < 2000 ||
+    year > 2099 ||
+    month < 1 ||
+    month > 12 ||
+    (week !== null && (week < 1 || week > 6))
+  ) {
     throw new Error(`JPX 投資部門別売買状況 (新様式): 年月週コードの月/週が範囲外です: "${s}"`);
   }
-  return { periodLabel: `${year}年${month}月第${week}週`, year, month, week };
+  return {
+    periodLabel:
+      week === null ? `${year}年${month}月` : `${year}年${month}月第${week}週`,
+    year,
+    month,
+  };
 }
 
 /** ファイル名 `stock_1_w_YYYYMMDD_YYYYMMDD.xlsx` から期間の開始日・終了日を取る。
@@ -587,10 +595,12 @@ function nearestLeftText(row: readonly unknown[], col: number): string | null {
 
 function parseUnifiedSheet(
   rows: unknown[][],
-  filename: string | undefined
+  filename: string | undefined,
 ): Omit<InvestorEquityRecord, "formatVersion">[] {
   const headerRowIdx = rows.findIndex(
-    (r) => typeof r[0] === "string" && r[0].startsWith("年月週")
+    (r) =>
+      typeof r[0] === "string" &&
+      (r[0].startsWith("年月週") || r[0].trim() === "年月 Year, Month"),
   );
   if (headerRowIdx < 4) {
     throw new Error(
@@ -598,6 +608,26 @@ function parseUnifiedSheet(
     );
   }
   const headerRow = rows[headerRowIdx] ?? [];
+  if (rows.slice(headerRowIdx - 3).some((row) => row.slice(59).some((value) => !isBlankCell(value)))) {
+    throw new Error("JPX 投資部門別売買状況 (新様式): 59列外に未知の非空セルがあります");
+  }
+  const periodType: InvestorEquityPeriodType = String(headerRow[0]).startsWith(
+    "年月週",
+  )
+    ? "weekly"
+    : "monthly";
+  const monthlyFilename =
+    filename === undefined ? null : /^stock_1_m(\d{6})\.xlsx$/.exec(filename);
+  if (
+    periodType === "monthly" &&
+    filename !== undefined &&
+    monthlyFilename === null &&
+    filename !== "stock_1_mYYYYMM.xlsx"
+  ) {
+    throw new Error(
+      "JPX 投資部門別売買状況 (新様式): 月次ファイル名が想定外です",
+    );
+  }
 
   // 単位は見出しセル (サンプル: "株数／金額 Shares／Value 千株／千円 1,000 Shares／1,000 yen")
   // を正のソースにする。千株/千円 以外の表記なら throw (値の桁を決め打ちしない)。
@@ -635,7 +665,10 @@ function parseUnifiedSheet(
     }
   }
 
-  const filenamePeriod = filename ? parseUnifiedFilenamePeriod(filename) : null;
+  const filenamePeriod =
+    periodType === "weekly" && filename
+      ? parseUnifiedFilenamePeriod(filename)
+      : null;
 
   // 元シートは「年月週」(col0) と「市場」(col1) を複数行 (株数行・金額行の2行) に
   // またがるマージセルで表現しており、2行目以降は空文字になる。直前に見つかった
@@ -664,8 +697,16 @@ function parseUnifiedSheet(
     if (periodCode === null) {
       throw new Error(`JPX 投資部門別売買状況 (新様式): 年月週コードが確定していません (行${i})`);
     }
-    const { periodLabel, year, month } = parseUnifiedPeriodCode(periodCode);
+    const { periodLabel, year, month } = parseUnifiedPeriodCode(
+      periodCode,
+      periodType,
+    );
     const periodMonth = `${year}-${pad2(month)}`;
+    if (monthlyFilename !== null && monthlyFilename[1] !== periodCode) {
+      throw new Error(
+        "JPX 投資部門別売買状況 (新様式): 月次ファイル名と本文の年月が一致しません",
+      );
+    }
     if (filenamePeriod !== null) {
       // 週の日付 (ファイル名) は年月週コードの月と重なっていなければならない
       // (月またぎの週がどちらの月に属するかは決め打ちせず、重なりだけを確かめる)。
@@ -742,7 +783,7 @@ function parseUnifiedSheet(
       }
 
       records.push({
-        periodType: "weekly",
+        periodType,
         periodLabel,
         periodMonth,
         periodStart: filenamePeriod === null ? null : filenamePeriod.periodStart,
@@ -878,9 +919,6 @@ const LEADING_HREF_RE = /^<a href="([^"]+)"/;
  *  一覧ページ下部のサンプルファイルは "YYYYMMDD" の文字のままなので一致しない。
  *  資料の表の特定に使う (行の読解は UNIFIED_ROW_FILE_RE 側で行う)。 */
 const WEEKLY_NEW_FORMAT_FILE_RE = /stock_1_w_\d{8}_\d{8}\.(?:xlsx|pdf)/;
-/** 告知された新様式ファイル名 (月次 2026-10-08〜: stock_1_mYYYYMM.pdf/.xlsx)。
- *  サンプル (stock_1_mYYYYMM.*) は文字のままなので一致しない。 */
-const MONTHLY_NEW_FORMAT_FILE_RE = /stock_1_m\d+\.(?:xlsx|pdf)/;
 
 /** <table> 内の各行の <td> の中身 (前後空白除去) を返す。<th> だけの見出し行は除く。 */
 function tableRowsCells(tableHtml: string): string[][] {
@@ -1135,6 +1173,8 @@ export interface MonthlyIndexEntry {
   /** null = その月はまだ公表されていない (ページ上でリンクが無い/"-" 表示) */
   valueXlsUrl: string | null;
   volumeXlsUrl: string | null;
+  /** 単一ファイルの新様式。旧様式では未指定。文字 YYYYMM の公式サンプルは含めない。 */
+  unifiedXlsxUrl?: string;
 }
 
 // 旧様式の月次表: 株数 (PDF行・Excel行)、金額 (PDF行・Excel行) の4行 × 1〜12月。
@@ -1153,18 +1193,11 @@ const MONTHLY_TABLE_ROWS: ReadonlyArray<{ metric: "vol" | "val"; ext: "pdf" | "x
  *
  * 「リンクが無い = 未公表」と言い切るため、表の全48セル (4行×12か月) が
  * 「"-"」か「その行・その月の旧様式ファイル (stock_{vol|val}_1_mYYMM.{pdf|xls}) への
- * リンク」のどちらかであることを確かめ、それ以外 (告知どおりの新様式ファイル
- * stock_1_m<数字> を含む) があれば throw する。新様式の月を「未公表」と誤認して
- * 1つ前の旧様式の月を最新として返さないため (ルール2)。
+ * リンク」のどちらかであることを確かめる。数字の新様式リンクが載った場合は
+ * 新旧の実ファイル年月を比較し、PDFだけ掲載/新旧同月/未知命名はSTOPする。
+ * 仕様サンプルの文字YYYYMMは本番対象に含めない。
  */
 export function parseMonthlyIndexHtml(html: string): MonthlyIndexEntry[] {
-  const newFormat = MONTHLY_NEW_FORMAT_FILE_RE.exec(html);
-  if (newFormat) {
-    throw new Error(
-      `JPX 投資部門別売買状況 (月次一覧): 新様式のファイル (${newFormat[0]}) が掲載されています。` +
-        "旧様式のリンクだけを読むと最新月を取り違えるため停止します。月次新様式への対応が必要です。"
-    );
-  }
   const yearMatch = /<th class="w-space">(\d{4})年<\/th>/.exec(html);
   if (!yearMatch) {
     throw new Error(
@@ -1173,6 +1206,78 @@ export function parseMonthlyIndexHtml(html: string): MonthlyIndexEntry[] {
   }
   const year = Number(yearMatch[1]);
   const yy = String(year).slice(2);
+  const unifiedLinks = new Map<number, string>();
+  const unifiedPdfMonths = new Set<number>();
+  const legacyLinks = new Map<number, { val?: string; vol?: string }>();
+  for (const match of html.matchAll(/href=["']([^"']+)["']/gi)) {
+    const href = match[1];
+    const name = href.split("/").pop();
+    if (
+      !name ||
+      !/^stock_(?:1_m|(?:val|vol)_1_m)/.test(name) ||
+      !/\.(?:xlsx?|pdf)$/.test(name)
+    )
+      continue;
+    if (/^stock_1_mYYYYMM\.(?:xlsx|pdf)$/.test(name)) continue;
+    if (/^stock_(?:val|vol)_1_m.*\.pdf$/.test(name)) continue; // 旧PDFは旧4行表で厳密照合する
+    const unified = /^stock_1_m(\d{4})(\d{2})\.(xlsx|pdf)$/.exec(name);
+    const legacy = /^stock_(val|vol)_1_m(\d{2})(\d{2})\.xls$/.exec(name);
+    if (unified === null && legacy === null)
+      throw new Error(
+        "JPX 投資部門別売買状況 (月次一覧): 月次ファイル名が想定外です",
+      );
+    const linkYear =
+      unified !== null ? Number(unified[1]) : 2000 + Number(legacy![2]);
+    const month = Number(unified !== null ? unified[2] : legacy![3]);
+    if (month < 1 || month > 12 || linkYear < 2000 || linkYear > 2099)
+      throw new Error(
+        "JPX 投資部門別売買状況 (月次一覧): ファイルの年月が不正です",
+      );
+    if (linkYear !== year) continue;
+    const url = toAbsoluteUrl(href);
+    if (unified !== null) {
+      if (unified[3] === "pdf") { unifiedPdfMonths.add(month); continue; }
+      const previous = unifiedLinks.get(month);
+      if (previous !== undefined && previous !== url)
+        throw new Error(
+          "JPX 投資部門別売買状況 (月次一覧): 同月の新様式リンクが競合しています",
+        );
+      unifiedLinks.set(month, url);
+    } else {
+      const metric = legacy![1] as "val" | "vol";
+      const pair = legacyLinks.get(month) ?? {};
+      if (pair[metric] !== undefined && pair[metric] !== url)
+        throw new Error(
+          "JPX 投資部門別売買状況 (月次一覧): 同月の旧様式リンクが競合しています",
+        );
+      pair[metric] = url;
+      legacyLinks.set(month, pair);
+    }
+  }
+  if ([...unifiedPdfMonths].some((month) => !unifiedLinks.has(month))) {
+    throw new Error("JPX 投資部門別売買状況 (月次一覧): 新様式PDFの月にExcelが未掲載です。旧月へ戻らず停止します");
+  }
+  // 新様式の表行数は推測しない。数字の実ファイル名にある年月を正とし、
+  // 旧様式との混在も比較する。本文の年月は取得後に別途完全一致を要求する。
+  if (unifiedLinks.size > 0) {
+    const entries: MonthlyIndexEntry[] = [];
+    for (let month = 1; month <= 12; month++) {
+      const unifiedXlsxUrl = unifiedLinks.get(month);
+      const pair = legacyLinks.get(month);
+      if (unifiedXlsxUrl !== undefined && pair !== undefined)
+        throw new Error(
+          "JPX 投資部門別売買状況 (月次一覧): 同月に新旧ファイルが混在しています",
+        );
+      entries.push({
+        year,
+        month,
+        valueXlsUrl: pair?.val === undefined ? null : pair.val,
+        volumeXlsUrl: pair?.vol === undefined ? null : pair.vol,
+        ...(unifiedXlsxUrl === undefined ? {} : { unifiedXlsxUrl }),
+      });
+    }
+    return entries;
+  }
   const tables = [...html.matchAll(HTML_TABLE_RE)].map((m) => m[1]).filter((t) => t.includes(yearMatch[0]));
   if (tables.length !== 1) {
     throw new Error(
@@ -1261,14 +1366,24 @@ export function parseMonthlyIndexHtml(html: string): MonthlyIndexEntry[] {
  * 公表されている (想定外の部分公開) 場合も throw する — 前の月へ黙って
  * フォールバックしない (ルール2)。
  */
-export function pickLatestPublishedMonth(entries: readonly MonthlyIndexEntry[]): MonthlyIndexEntry {
-  const published = entries.filter((e) => e.valueXlsUrl !== null || e.volumeXlsUrl !== null);
+export function pickLatestPublishedMonth(
+  entries: readonly MonthlyIndexEntry[],
+): MonthlyIndexEntry {
+  const published = entries.filter(
+    (e) =>
+      e.unifiedXlsxUrl !== undefined ||
+      e.valueXlsUrl !== null ||
+      e.volumeXlsUrl !== null,
+  );
   if (published.length === 0) {
     const year = entries[0]?.year;
     throw new Error(`JPX 投資部門別売買状況 (月次一覧): ${year ?? "?"}年の月次データがまだ1件も公表されていません`);
   }
   const latest = published[published.length - 1];
-  if (latest.valueXlsUrl === null || latest.volumeXlsUrl === null) {
+  if (
+    latest.unifiedXlsxUrl === undefined &&
+    (latest.valueXlsUrl === null || latest.volumeXlsUrl === null)
+  ) {
     throw new Error(
       `JPX 投資部門別売買状況 (月次一覧): ${latest.year}年${latest.month}月分は金額/株数の` +
         `一方のみ公表されており想定外です (value=${latest.valueXlsUrl ?? "null"}, ` +
@@ -1403,6 +1518,25 @@ export async function fetchLatestJpxInvestorEquityMonthly(): Promise<FetchedInve
   const html = await fetchText(MONTHLY_INDEX_URL);
   const entries = parseMonthlyIndexHtml(html);
   const latest = pickLatestPublishedMonth(entries);
+  if (latest.unifiedXlsxUrl !== undefined) {
+    const unifiedBytes = await fetchBytes(latest.unifiedXlsxUrl);
+    const records = parseInvestorEquityWorkbook(
+      unifiedBytes,
+      urlBasename(latest.unifiedXlsxUrl),
+    );
+    const first = assertSinglePeriod(records, "monthly");
+    if (first.periodMonth !== `${latest.year}-${pad2(latest.month)}`)
+      throw new Error(
+        "JPX 投資部門別売買状況 (月次): 一覧と本文の年月が一致しません",
+      );
+    return {
+      kind: "unified",
+      periodType: "monthly",
+      unifiedUrl: latest.unifiedXlsxUrl,
+      unifiedBytes,
+      records,
+    };
+  }
   const valueXlsUrl = latest.valueXlsUrl;
   const volumeXlsUrl = latest.volumeXlsUrl;
   if (valueXlsUrl === null || volumeXlsUrl === null) {
@@ -1581,7 +1715,7 @@ export const JPX_INVESTOR_EQUITY_INDICATORS: readonly MoneyflowIndicatorDef[] = 
       "33業種別の内訳は存在しない" +
       "(市場区分別のみ)。週次は2026-09-29公表分から単一ファイルの新様式になり、" +
       "実ファイル(2026年9月第3週分)で検証済み。月次の新様式(2026-10-08公表分〜)は" +
-      "未公表のため未対応。",
+      "公式サンプルの構造で対応準備済み、実ファイルは未受入。実集計日が未掲載ならNULL pair。",
   },
   {
     key: "jpx_investor_equity_gross_turnover_value",
@@ -1705,15 +1839,9 @@ export const KNOWN_LIMITATIONS: readonly string[] = [
     "(カレンダー/祝日推定はしない)。月次は年間テーブルのセルが空(ハイフン表示)であることで判定。",
   "月次一覧ページは当年の1テーブルのみ解析対象。年またぎ (12月→翌1月) の過去年" +
     "アーカイブページ (00-01-archives-*.html) の解析は未対応。",
-  "週次の様式変更 (2026-09-29) とは別に、月次一覧ページ (00-01.html) には " +
-    "2026-10-08 掲載分から月次ファイルを株数/金額の2ファイルから1ファイルに統合し、" +
-    "ファイル名も stock_1_mYYYYMM.xlsx に変える予告が掲載されている (JPX公式サンプル " +
-    "stock_1_mYYYYMM.xlsx で確認済み)。サンプルはヘッダ行が「年月」(コード YYYYMM) で" +
-    "ある以外は週次新様式と同じ列構成だが、parseUnifiedSheet (週次新様式用) はヘッダ行を" +
-    "検知できず throw する (月次専用の新様式パーサは未実装)。取込経路では、一覧ページに" +
-    "stock_1_m<数字> のリンクが載った時点で parseMonthlyIndexHtml が throw する" +
-    "(旧様式の前月を最新として黙って返さない)。10/8以降、実ページ・実ファイルでの" +
-    "月次新様式対応が必須。",
+  "月次新様式は公式サンプル (stock_1_mYYYYMM.xlsx) の構造で対応準備済み。" +
+    "月次実ファイルは未受入。年月コードと数字ファイル名を比較し、未掲載の実集計日はNULL pairにする。" +
+    "文字YYYYMMの仕様サンプルは本番取得から除外する。",
   "週次一覧ページは新旧の行が同じ表に混在する (2026-09-29 の実ページで確認。新様式行が" +
     "先頭側)。新様式行は [日付ラベル, PDF, Excel] (+ 空セルは \"-\" のみ) を読み、PDF と" +
     " Excel が同じ週・日付ラベルの期間とファイル名の期間が一致することを確かめる。" +
