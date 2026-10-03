@@ -87,3 +87,15 @@ Mac優待要約21時LaunchAgentを18:29:19Zにbootstrap、通常runは18:29:20.5
 掲載済みの正式な並び順パラメータ`order=yutai_yield_desc`を絞込なしで要求する新URLを、別の1GETだけで確認した。19:25:28.018ZにHTTP200、最終URL一致/redirectなし/LocationNULL、正式検索領域・現在1ページ・全1,711件・一意20カード・同orderを保持する次ページ2リンクを認定した。原body211,293B SHA `26451da8cdec074214ee0930e020b5b525fddc14bf6eff0e1270948272a36665`、原応答gzip56,981B SHA `e648e6becb129816fef8f597cc2a50151dad962d30bc5a8ee6a11fb84a602476`を共有実体保管・全文照合（source1/Notion8/hosted1、D1・推論・retry0）。資格receipt925B SHA `2c8ea7068c92da5093846f2c3678a0ab3820b72e598f9be9bfe88b4f766e9279`。正式入口をこの並び順指定へ修正し、ページ送りも同条件を検証する。これは入口の実資格であり、後続全86ページ・全詳細・D1全取込の受入は通常処理で別途確認する。
 
 最終解析は同orderの次リンクだけを受理し、別origin・条件付きquery・重複page/orderを拒否する。旧bare-pageを通す切替は本番コードに残さず、85ページの証明は上の歴史headに限定した。最終module SHA `2bec97e1dd635034b190dd22c10cdf08ca6503374c2602f5618c5bf713540184`で実order付き1ページ目の同bytesを独立再解析しPASS（source0、750B receipt SHA `8fa5099e4a6d9c00e5994f6066f6f2af29822d730738db9bda812fa2aa3d8753`）。対象18tests/typecheck/ESLint/diff check PASS、default入口とmainの両方の取得URLを回帰検証した。
+
+## PR288反映後の全量停止と既定順の確認
+
+[PR288](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/288)は19:43:58Zにmain `25ec36513f9249ff3d1ba44d61460c7b5d5db774`へsquash merge。最終head83a8219の3CI成功、同mainに結合したCF version `39067a1c-ac6d-4dca-8467-f78294d02bff`の100%配信とMac通常入口のpreflightを確認した。
+
+利回り降順の通常全量取得は19:47:58.867→19:50:08.474Zに1回実行し、一覧86応答すべてHTTP200、掲載1,711件・実カード1,711件だった。一意銘柄は1,684件で、ページ間重複27件により全件数照合で停止。詳細取得・D1取込・推論は0、再実行0。原body18,201,648Bを逐次保存し、JSONL24,286,441Bとgzip4,767,551Bを共有物理保管した。独立Notion query1/hosted1で全bytes・metadata・manifest一致を確認（gzip SHA `db9adec6bdce274bdc6e4c91ac3812bd9e65076e676d964c18f25b31a96c70b8`）。取得済み86応答を同じ正準解析で通信0再生し、全件数不一致の停止を再現した。利回りの同率やcacheの具体的挙動は断定しない。
+
+保存HTMLに掲載された[公式JS](https://minkabu.jp/assets/jsbundling/application-473418caf8de27216b70573e1aefe823c2d433836822568e3cb146afeda76516.js)を1GETで確認。並び替えの未指定optionは空値で、公式handlerが`order`へその空値を設定する。未掲載のコード順enumは推測しない。この正式操作による[空orderの1ページ目](https://minkabu.jp/yutai/search?order=&page=1)も別の1GETでHTTP200、最終URL一致・LocationNULL・現在1ページ・全1,711件・一意20カードのコード昇順を認定した。次リンクは`/yutai/search?order=&page=2`で、空orderを明示保持する。JS原body1,848,236Bと一覧原body221,532Bは各々共有gzip実体保管・全文読戻し済み（各source1/Notion8/hosted1、D1・推論・retry0）。一覧原body SHA `3db70c306c4e464a41184df4893a89f5336c8d3683cf40da84a188a12d037ff4`。
+
+新しい先頭20件と旧bare2〜86の1,691件は、保存原本だけの比較で計1,711件・重複0・全体コード昇順が一致した。異なる取得時計の資料比較であり、新しい通常全量取得の成功とは扱わない。次の修正は公式の空orderを取得入口とページ送りへ明示し、全件数・重複・不明時停止の検証を維持する。修正後の全詳細取得・D1全取込の受入は未実施。
+
+同mainの契約2026-10-04.2でMac優待要約を20:09:45.990→20:10:12.732Zに通常1回実行。選択11群・受入1群1行・保留10群、未要約11→10、モデル11呼出/1resident、source・外部有料API0、終了は部分保留によるexit1で未知書込みmarkerは残らなかった。原金額NULLを維持し、保存済み入力・POSTの独立PURE照合は後続確認とする。
