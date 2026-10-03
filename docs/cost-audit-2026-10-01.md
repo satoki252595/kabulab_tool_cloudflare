@@ -19,7 +19,9 @@ D1 read/write/保存・R2 A/B/Standard保存・Builds、および最後30日の 
   専用repo限定PATをWorker Secretへ設定し、3CI成功後にmain `4440e78`へmerge済み。
   自動deploy・traffic100%・4 Cron登録を確認した。株式・マクロ計4 Cronの負荷表は
   変更なし。株式の真正定時dispatch/receiptとproducer開始を確認したが、
-  対象日の日経平均終値欠落で個別株取得前に停止した。マクロ・期限確認は未観測。
+  対象日の日経平均終値欠落で個別株取得前に停止した。後続の真正マクロdispatchと
+  株式・マクロ期限確認も発火・失敗検知を確認したが、producer保存成功は未受入。
+  [後続実績](./test-logs/stock-macro-deadline-20261003.md)
   [本番設定受入](./test-logs/stock-scheduler-production-20261002.md)
 - 料金・制限の取得日: **2026-10-01**。金額は USD、税・為替換算を含めない。
 - ユーザーの Paid 契約申告に加え、認証済みダッシュボード読取で Workers Paid を確認。
@@ -261,7 +263,10 @@ gzipへまとめて共有Notionへ保管する修正を進めた。追加のYaho
 QuoteSummary・回収・実本番wrapperの全metadataを含めない。VWAPの10年/5分足原文は
 全量実測前で、同じ圧縮率を適用しない。
 
-VWAPはfetch並列5を維持し最大30銘柄/8 MiB到達までまとめる。各batchが1添付で足りる
+原文保管修正時のVWAPはfetch並列5で最大30銘柄/8 MiB到達までまとめる設計だった。
+現mainでは[PR #269](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/269)で
+上流への取得負荷を抑えるため並列1・実HTTP間隔1秒へ変更し、最大30銘柄/8 MiBの保管上限は維持した。
+以下の過去試算は同じ保管batch上限によるもので、取得所要時間の実測ではない。各batchが1添付で足りる
 正常シナリオなら `ceil(3695/30)×13×2 = 3,224` ページ/月、約19,344 Notion API呼出。
 既存380 ms limiterの間隔相当は約2.04時間/月（保守2.5 req/sでは約2.15時間）。
 5銘柄ずつ保管する案の約19,214ページ/月より約83%減る。8 MiB分割、初回探索、転送、
@@ -325,3 +330,12 @@ NixへGitを追加したが、新規プラン購入・有料AI credit補充は0�
 実保存試行のphaseはNotion20/D1 SELECT3/hosted1で、全文不一致を検出し既知の旧状態へ復旧。
 新規原ZIP取得・R2 write・paid AI・同POST再送0、成功0を保留として記録する。
 これは単発実績で、将来の保存量や月額へ外挿せず、追加契約・credit補充は行っていない。
+
+後続の[可逆形式による再保存](./test-logs/yuho-text2-lossless-actual-20261003.md)では、
+新PRE112memberを6,028,433 bytesのgzipへ物理保管・全文照合し、実Notion8/hosted1を観測した。
+実置換・pointer更新・POST物理保管はNotion23/D1 HTTP7/hosted1で完了し、
+今回stage累計はNotion37/D1 HTTP10/hosted2、SQL12。POST gzipは1,418,091 bytes。
+D1の保存応答metaは今回stage全体でrows_read1,435 / rows_written2、max_attempts1。
+実置換phaseだけではSQL9 / rows_read1,315 / rows_written2。rootの独立全文・manifest・
+実meta照合と第二者の独立照合はPASS。追加費用を0と断定しない。
+旧修復phaseの件数・失敗実績を変更せず、単発PRE容量を月額へ外挿しない。

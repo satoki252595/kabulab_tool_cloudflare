@@ -9,8 +9,8 @@ Refs #98 #102 #117 #132 #146 #160 #163 #195 #196 #272。公開Gitには集計・
 既存の保存済みタグは再利用し、不足だけ機械的一致で補完する。TypeSafeの外部通信は停止し、
 credit補充は不要。実87社・858ラベルで専用閾値yesMin0.85/noMax0.20を評価し、
 「はい」精度0.9157・再現率0.6298、要確認227件・mustNot誤検出0を確認した。
-旧Jevと同等の精度・再現率とは扱わない。本文85通は保存メタデータと全文一致、2通は
-実CSVを回収して評価し、保存本文の欠落と旧来歴UNKNOWNはHOLDのまま保持する。
+旧Jevと同等の精度・再現率とは扱わない。較正時点の本文85通は保存メタデータと全文一致、2通は
+実CSVを回収して評価し、当時の保存本文欠落HOLDと旧来歴UNKNOWNを履歴として保持する。
 rootの全858ラベル独立再計算も一致した。PR278は3CI成功後にmain `f115f065`へmergeし、
 自動build・本番version `17f427ee`のtraffic100%を確認した。較正の全1,218memberは
 物理保管・全SHA照合済み。PR279でproject NixへGitを追加し、main `ecf9fd8`の
@@ -56,7 +56,9 @@ main `4440e782238f4f0946935fedf94c9c1d5855adad`の自動deploy・traffic100%・4
 Secret継続・静的health HTTP200を確認した。真正株式Cronは10/3 JST 02:13にdispatchし、
 main `f115f065`の[run 37039278807](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37039278807)
 が開始したが、日経平均の対象日終値欠落で17:14:10 UTCに停止した。
-マクロ06:00、期限確認06:05/07:05は未観測。[本番設定受入](stock-scheduler-production-20261002.md)。
+マクロ06:00と期限確認06:05/07:05も真正発火を観測し、producer失敗を検知した。
+マクロ実保存の成功は未受入。[本番設定受入](stock-scheduler-production-20261002.md)・
+[後続のマクロ・期限実績](stock-macro-deadline-20261003.md)。
 追加の全量manual起動は0。N225の通常caller1回はHTTP200・10/2実終値資格PASSとなったが、
 全銘柄/VWAPの制限解除には外挿しない。[限定診断](n225-once-20261002.md)。
 
@@ -107,7 +109,7 @@ TDnetの期限到達とEDINETのcap、課金切れ25件は残っており、全�
 | 海外売上 | S100YJVF1通の4連結区分差は[実照合済み](overseas-pilot-actual-20261002.md)。後続固定15通の[修正前原本検証9資格/57明細・HOLD6](overseas-next15-custody-20261002.md)を保持し、PR266の統合全文解析で13資格/84明細・HOLD2へ更新。実反映は9APPLIED/4MATCH、全13文書16列・84明細12列・変更9銘柄の集計32列・同文書再入sender0・PRE/POST実体と全SHAの独立照合がPASS。[本番実績](overseas-qualified13-actual-20261002.md)。HOLD2と旧3611全体は未完 |
 | 8508 | PR258で単発日を別列へ保持し年間利回り/定常月から分離。実1件の9/2日付修復、全97cells一致・再入SQL0・通常6月4件保持・全原本/PRE/POST保管と本番UI確認を完了。[実績](yutai-oneoff-actual-20261002.md) |
 | 課金切れ25銘柄 | 保存済み本文と既存語彙の機械照合で全25件の補完・独立再読・次回skipを確認済み。PRE/POST物理保管・全SHA一致、TypeSafe/追加原本取得0。[実績](biztag-existing25-actual-20261002.md)。現在の新規初回限定設定を維持し、credit補充は不要 |
-| 定時起動PR195 | 3CI成功・merge・本番100%配信・4 Cron登録・repo限定Secret継続を確認。[設定受入](stock-scheduler-production-20261002.md)。真正株式dispatch/receipt/producer開始を確認、対象日終値欠落で停止。マクロと期限readcheckは未観測 |
+| 定時起動PR195 | 3CI成功・merge・本番100%配信・4 Cron登録・repo限定Secret継続を確認。[設定受入](stock-scheduler-production-20261002.md)。真正株式dispatch/receipt/producer開始を確認、対象日終値欠落で停止。マクロdispatchと株式・マクロ期限readcheckも真正発火・失敗検知を確認。[後続実績](stock-macro-deadline-20261003.md)。producer保存成功は未受入 |
 | 配当・分割 #272 | 保存/API契約をPR274で修正し、保存済み1333のイベント補完・PRE/POST保管・独立本番再読を完了。[実績](yahoo-event1333-actual-20261002.md)。全銘柄バックフィル・5分足再資格化は本受入の対象外 |
 | 622A/海外未資格/信用残UNKNOWN/JPX新様式 | [公式根拠・再開条件](data-remaining-investigation-20261001.md)を維持。公表前の実ファイルや過去POST結果を作らない |
 
@@ -128,15 +130,21 @@ TDnetの期限到達とEDINETのcap、課金切れ25件は残っており、全�
 組立時計を原取得時計に代用せず、原金融データは各serviceの既存保管を参照する。
 この保管phaseのsource/model/D1/R2/tag更新・再実行は0。
 
-## 本文2通の保存制約
+## 本文2通の保存制約と後続受入
 
 [2通の限定修復](yuho-text2-roundtrip-hold-20261003.md)では公式一覧・元CSV・現行D1全量と
 旧本文を物理保管し、全文差分が不可視文字U+200Bの計4文字だけであることを確認した。
 第一1通の正準保存で1文字の消失が再現したため、参照UPDATEを送らず、旧行のactive復旧・
 新行のarchivedを実GETで確認して停止。第二は未送信、本文修復成功0・既存タグ更新0。
 全24HTTP応答、D1の2銘柄/28文書/68索引の不変、POST67memberの物理読戻しを独立照合した。
-原本文を改変せず完全復元できる方法の実証を再開条件とし、stripや同じPOSTの反復は行わない。
-この2通の制約と、本文不足90銘柄は別の保留であり、87社の過去較正を再判定していない。
+
+PR281の可逆JSON保存を使う後続受入では、現在の旧状態を再確認し、新PRE全112memberの
+物理保管・独立照合後、2通の全68節・296,260文字の実往復一致、pointer2件だけの条件付き更新、
+POST物理保管・全文読戻しが成立した。rootと第二者の独立全raw照合もPASS。旧HOLD履歴と
+初回publisher時計・旧manifest/SHAのUNKNOWNを維持する。[後続実行](yuho-text2-lossless-actual-20261003.md)。
+旧試行では原本文を改変せず完全復元できる方法の実証を再開条件としていた。
+後続受入でこの2通の保存制約は解消した。stripや同じPOSTの反復は行っていない。
+本文不足90銘柄・旧来歴UNKNOWNは別の未完で、87社の過去較正を再判定していない。
 
 ## コストの判断
 
