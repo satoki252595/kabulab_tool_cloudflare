@@ -6,7 +6,7 @@
  * 要約は「掲載文から抜き出した事実」でなければならず、掲載文の注記ブロックや
  * 説明文をそのまま持ち込んではいけない。
  *
- * 要約はリポジトリの外のクラウド LLM (Cursor Automations 等) が作る
+ * 要約は固定ローカルMLXモデルまたは外部エージェントが作る
  * (`docs/llm-summary-task.md`)。LLM の出力は信用しない前提なので、DB へ書く
  * 唯一の経路 `import-summary-results.ts` が**公開面に一番近いここを最終ゲート**
  * にする (ルール2: 黙って切り詰めず、違反は明示的にはじく)。
@@ -29,7 +29,7 @@ import { HEADED_MARK } from "./estimated-value-guard.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-02.1";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-04.1";
 
 /**
  * 要約の % 表現が掲載文に裏づけられているか。
@@ -53,6 +53,34 @@ export function isSummaryPercentGrounded(description: string, shortSummary: stri
   if (wanted.length === 0) return true;
   const have = percents(description);
   return wanted.every((w) => have.some((h) => h === w));
+}
+
+/** 要約の額・数量・条件を単位付きで照合する。桁表現だけ正規化し、計算はしない。 */
+export function isSummaryNumbersGrounded(
+  description: string,
+  shortSummary: string,
+  context: { minShares: readonly number[]; recordMonths: readonly number[] },
+): boolean {
+  const facts = (text: string, strict: boolean): { value: number; unit: string }[] | null => {
+    const normalized = text.normalize("NFKC");
+    // 1万5千円の末尾5千円だけ、1億円の一部などを根拠にしない。
+    const pattern = /(?<![0-9.,万千百億兆])((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)\s*(万|千|百)?\s*(円|ポイント|枚|個|株|年|月|回|名|人|点|口|泊|食|本|件|時間|kg|g|ml|L|%)/g;
+    const matches = [...normalized.matchAll(pattern)];
+    const remainder = normalized.replace(pattern, "");
+    if (strict && (/[0-9]/.test(remainder) ||
+      /[〇零一二三四五六七八九十百千万億兆]+\s*(円|ポイント|枚|個|株|年|月|回|名|人|点|口|泊|食|本|件|時間|kg|g|ml|L|%)/.test(remainder))) return null;
+    return matches.map((m) => ({ value: Number(m[1].replaceAll(",", "")) * (m[2] === "万" ? 10000 : m[2] === "千" ? 1000 : m[2] === "百" ? 100 : 1),
+      unit: m[3] === "名" ? "人" : m[3] }));
+  };
+  const have = facts(description, false);
+  const wanted = facts(shortSummary, true);
+  if (have === null || wanted === null) return false;
+  return wanted.every((wanted) => {
+    if (!Number.isFinite(wanted.value)) return false;
+    if (wanted.unit === "株") return context.minShares.length > 0 && context.minShares.every((value) => value === wanted.value);
+    if (wanted.unit === "月" && context.recordMonths.includes(wanted.value)) return true;
+    return have.some((source) => source.value === wanted.value && source.unit === wanted.unit);
+  });
 }
 
 /**

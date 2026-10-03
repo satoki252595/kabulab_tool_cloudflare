@@ -169,14 +169,16 @@ jobs:
           STOCK_SYNC_TARGET: ${{ github.event.inputs.target }}
         run: pnpm sync:daily:core --context-only
 
-      # 月次: 母集団(JPX)同期 → otakara rebuild (月次 cron または dispatch=monthly/all)
-      - name: monthly universe + rebuild
+      # 月次: 母集団 → 優待原文取得/物理照合 → 派生再計算。
+      # 要約はMacの21時定時jobが変更・未要約分だけ処理する（追加有料APIなし）。
+      - name: monthly universe + benefits + rebuild
         if: >-
           (github.event_name == 'schedule' && github.event.schedule == '30 1 10 * *') ||
           (github.event_name == 'workflow_dispatch' &&
             (github.event.inputs.target == 'monthly' || github.event.inputs.target == 'all'))
         run: |
           pnpm sync:universe
+          pnpm yutai:fetch
           pnpm sync:monthly:core
       - name: 失敗したら Issue を立てる
         if: failure()

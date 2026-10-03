@@ -500,10 +500,16 @@ describe("planSummaryImport の共有厳密判定 (原文抜粋)", () => {
     ];
     const p2 = planWith(
       rows7075,
-      result({ taskId: keyOf("9105", desc7075), shortSummary: "優待品 5,000円相当", estimatedValue: 5000 })
+      result({ taskId: keyOf("9105", desc7075), shortSummary: "優待品", estimatedValue: 5000 })
     );
     expect(p2.updates).toEqual([]);
     expect(p2.rejections.map((r) => r.reason)).toEqual(["value_ungrounded"]);
+
+    // 金額列をNULLにしても、要約に原文に無い額を書く抜け道は許さない。
+    const p3 = planWith(rows7075,
+      result({ taskId: keyOf("9105", desc7075), shortSummary: "優待品 5,000円相当", estimatedValue: null }));
+    expect(p3.updates).toEqual([]);
+    expect(p3.rejections.map((r) => r.reason)).toEqual(["summary_ungrounded"]);
   });
 
   it("同一文言で株数条件が混ざる group は全体を落とす (5929)", () => {

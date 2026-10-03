@@ -10,6 +10,7 @@ import {
   checkSummary,
   formatViolations,
   isSummaryPercentGrounded,
+  isSummaryNumbersGrounded,
   isVerbatimCopy,
 } from "../../data-scripts/summary-contract.js";
 
@@ -130,4 +131,24 @@ describe("isSummaryPercentGrounded — 要約の % は掲載文の % で裏づ�
     expect(isSummaryPercentGrounded("平日10%・土曜20%の割引券", "土曜20%割引券")).toBe(true);
     expect(isSummaryPercentGrounded("平日10%・土曜20%の割引券", "日曜30%割引券")).toBe(false);
   });
+});
+
+it("生成した円額・枚数・株数・保有条件を単位ごとに照合し、別単位や計算値を採用しない", () => {
+  const context = { minShares: [100], recordMonths: [3, 9] };
+  const source = "1年以上保有で2千円分の券2枚、20名に贈呈";
+  expect(isSummaryNumbersGrounded(source, "100株・1年以上:2,000円の券2枚", context)).toBe(true);
+  expect(isSummaryNumbersGrounded(source, "券4,000円分", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, "券3枚", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, "20%割引", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, "300株:券2枚", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, "3年以上:券2枚", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, "3月・9月:券2枚", context)).toBe(true);
+  expect(isSummaryNumbersGrounded(source, "100株:券2枚", { ...context, minShares: [100, 300] })).toBe(false);
+  expect(isSummaryNumbersGrounded("1,2枚から選択", "券12枚", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("500円相当", "商品券1億円相当", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("5000円相当", "商品券1万5千円相当", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("1万5千円相当", "商品券5000円相当", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("500円相当", "商品券一万円相当", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("新米5kg", "新米 5kg", context)).toBe(true);
+  expect(isSummaryNumbersGrounded("新米5kg", "新米 3kg", context)).toBe(false);
 });

@@ -4,7 +4,7 @@
 （Cursor Automations などのクラウド上の LLM）向けの仕様書です。この文書と
 タスクファイルがあれば作業できるように書いてあります。
 
-- 契約の版: **`2026-10-02.1`**（`services/otakara-yutai/data-scripts/summary-contract.ts` の `SUMMARY_CONTRACT_VERSION`）
+- 契約の版: **`2026-10-04.1`**（`services/otakara-yutai/data-scripts/summary-contract.ts` の `SUMMARY_CONTRACT_VERSION`）
 - 書き出し: `pnpm yutai:summary:export`（`--violations-only` で契約違反の既存要約だけ）
 - 取り込み: `pnpm yutai:summary:import --tasks <タスク> --results <結果>`（既定は dry-run、`--apply` で書き込み）
 
@@ -134,7 +134,7 @@
 | `prose` | **`です。` `ます。` `ください` `いたします`** のどれかを含む（説明文調） |
 | `internal` | 内部 marker **`【種別：`** を含む（タスク掲載文先頭の表見出し行の記号列を書き写さない。見出しの読みやすい条件文言自体は書いてよい） |
 | `verbatim` | 40 字以上あり、その全体が掲載文にそのまま含まれている（掲載文の書き写し） |
-| `summary_ungrounded` | 要約の `%` の数値が掲載文の `%` の数値と一致しない（別群の割引要約の貼り付け。掲載文の人数「20名」で要約の率「20%」は根拠づけられない） |
+| `summary_ungrounded` | 要約の単位付き数値（円額・枚数・株数・年数・月・回数・点数・人数等）が掲載文・実受取条件と一致しない。桁の表記揺れだけ正規化し、掛算・年間換算や別条件の株数を補わない。人数「20名」で率「20%」は根拠づけられない |
 
 全角の英数字は取り込み時に半角へ揃えるので、どちらで書いても構いません。
 

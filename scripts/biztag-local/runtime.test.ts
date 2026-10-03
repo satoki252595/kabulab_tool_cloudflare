@@ -5,8 +5,17 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { assertRevision } from "./runtime.js";
+import { localJob } from "./main.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
+
+it("優待要約は21時の専用jobで起動し、既存事業タグの時刻と未知job拒否を維持する", () => {
+  expect(localJob(undefined)).toEqual(localJob("biztag"));
+  expect(localJob("biztag").hour).toBe(20);
+  expect(localJob("yutai-summary")).toMatchObject({ hour: 21,
+    label: "com.kabulab-cf.yutai-summary", script: "services/otakara-yutai/data-scripts/summary-local.ts" });
+  expect(() => localJob("unknown")).toThrow("job");
+});
 
 it("承認済みHEADの変更・追跡対象の変更ではwriterを開始しない", () => {
   const revision = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout.trim();

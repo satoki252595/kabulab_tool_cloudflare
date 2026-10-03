@@ -75,8 +75,8 @@ CF の数字曜日は 1=日曜で GitHub と違うため):
 - `src/scheduler/*.test.ts`: 曜日・日跨ぎ・期限・重複・曖昧 POST・200 正常・
   target routing・date mismatch・false-green を固定 (mock のみ。live POST なし)。
 - `pnpm typecheck` / `pnpm lint` / `wrangler deploy --dry-run` 成功。
-- PR の CI 3 緑。**PR は資格設定待ちで未 merge** (下記手順の後、Root が merge)。
-- merge 後: 翌平日の dispatch receipt・Actions run・readcheck OK を確認する。
+- [PR #283](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/283) は資格設定後にmainへマージ済み。2026-10-03の本番version `d5027aee-ef18-4b34-b6c8-da87ea37b22f` はmerged SHA `f53e572928b8d73b800a7b1693571a7c2d1f84d3` に対応し、100%配信を確認した。
+- 自動定時実行の受入は、次の平日のdispatch receipt・Actions run・readcheckの実成功で判定する。設定済み・デプロイ済みをデータ更新完了とは扱わない。
 
 ## 制限
 
