@@ -69,6 +69,7 @@ import {
   JPX_TRANSFERS_URL,
   fetchTransfersHtml,
   parseTransfersHtml,
+  type FutureUncertainTransfer,
   type TransferRow,
   type TransfersFetch,
 } from "../shared/jpx/transfers.js";
@@ -109,6 +110,8 @@ export interface UniverseOfficialEventsBatch {
   archiveKey: string;
   pageId: string;
   coverage: { years: string[]; bootstrapPartial: boolean };
+  /** 単日未確定かつ範囲全体が eligibility より未来。原情報は保管し、event rows に入れない。 */
+  futureUncertainScheduled?: FutureUncertainTransfer[];
   sources: {
     delisted: { rows: DelistedRow[]; coveredYears: string[]; rawSha: string; sourceUrl: string };
     newListings: { rows: NewListingRow[]; coveredYears: string[]; rawSha: string; sourceUrl: string };
@@ -181,7 +184,8 @@ function buildManifest(
   years: string[],
   bootstrapPartial: boolean,
   failure: ManifestFailure,
-  entries: ManifestSourceEntry[]
+  entries: ManifestSourceEntry[],
+  futureUncertainScheduled: readonly FutureUncertainTransfer[]
 ): Uint8Array {
   // 決定的: 固定 key 順・固定 source 順。時刻・run・ID・署名 URL なし。
   // 例外文等の volatile text は入れない (診断詳細は record metadata 側)。
@@ -193,6 +197,7 @@ function buildManifest(
     coverage: { years: [...years], bootstrapPartial },
     failure,
     sources: entries.map((e) => ({ ...e })),
+    ...(futureUncertainScheduled.length > 0 ? { futureUncertainScheduled } : {}),
   };
   return new TextEncoder().encode(JSON.stringify(manifest));
 }
@@ -330,17 +335,22 @@ export async function collectUniverseOfficialEvents(
 
   // 3 parse 共通 yearWindow。200 のみ・固定順で最初の失敗まで (決定的)。
   const parsed = new Map<SourceKey, VerifiedSource["parsed"]>();
+  let futureUncertainScheduled: FutureUncertainTransfer[] = [];
   let parseFailure: { key: SourceKey; message: string } | null = null;
   for (const key of SOURCE_ORDER) {
     const f = verified.get(key);
     if (!f || httpErrors.has(key)) continue;
     try {
-      const out =
-        key === "delisted"
-          ? parseDelistedHtml(f.bytes, { yearWindow: years })
-          : key === "newListings"
-            ? parseNewListingsHtml(f.bytes, { yearWindow: years })
-            : parseTransfersHtml(f.bytes, { yearWindow: years });
+      let out: VerifiedSource["parsed"];
+      if (key === "delisted") out = parseDelistedHtml(f.bytes, { yearWindow: years });
+      else if (key === "newListings") out = parseNewListingsHtml(f.bytes, { yearWindow: years });
+      else {
+        const transfers = parseTransfersHtml(f.bytes, {
+          yearWindow: years, eligibilityAsOf: input.eligibilityAsOf,
+        });
+        futureUncertainScheduled = transfers.futureUncertainScheduled;
+        out = transfers;
+      }
       parsed.set(key, out);
     } catch (e) {
       parseFailure = { key, message: rootCause(e).slice(0, 200) };
@@ -442,7 +452,8 @@ export async function collectUniverseOfficialEvents(
       years,
       bootstrapPartial,
       failureOf(),
-      entries
+      entries,
+      futureUncertainScheduled
     );
     // incomplete key は完全形と衝突させない。manifest 全 bytes の署名付き。
     const manifestShaFull = await sha256HexBytes(Uint8Array.from(manifestBytes));
@@ -497,7 +508,8 @@ export async function collectUniverseOfficialEvents(
     years,
     bootstrapPartial,
     null,
-    entries
+    entries,
+    futureUncertainScheduled
   );
   const getV = (key: SourceKey): FetchBundle => {
     const v = verified.get(key);
@@ -529,6 +541,7 @@ export async function collectUniverseOfficialEvents(
       delistedFetchedAt: getV("delisted").fetchedAt,
       newListingsFetchedAt: getV("newListings").fetchedAt,
       transfersFetchedAt: getV("transfers").fetchedAt,
+      ...(futureUncertainScheduled.length > 0 ? { futureUncertainScheduled } : {}),
     },
     files,
     "universe official events"
@@ -539,6 +552,11 @@ export async function collectUniverseOfficialEvents(
     if (!p) throw new Error(`内部不整合: ${key} の parse 結果なし`);
     return p;
   };
+  if (futureUncertainScheduled.length > 0) {
+    console.warn(
+      `[universe-overlay] 市場変更の単日未確定の将来予定 ${futureUncertainScheduled.length} 件を原範囲で保管。現在の適用対象から除外します。`
+    );
+  }
   return {
     baseAsOf: input.baseAsOf,
     eligibilityAsOf: input.eligibilityAsOf,
@@ -547,6 +565,7 @@ export async function collectUniverseOfficialEvents(
     archiveKey: completeKey,
     pageId,
     coverage: { years, bootstrapPartial },
+    ...(futureUncertainScheduled.length > 0 ? { futureUncertainScheduled } : {}),
     sources: {
       delisted: {
         rows: rowsOf("delisted").rows as DelistedRow[],

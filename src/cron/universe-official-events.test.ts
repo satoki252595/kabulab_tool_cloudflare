@@ -99,6 +99,26 @@ const manifestOf = (h: Harness) => {
 };
 
 describe("collectUniverseOfficialEvents 完全形", () => {
+  it("実未来範囲をmanifest/metadata/resultで明示保管して全原本を照合する", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bytes = fixture("transfers-future-range");
+    const h = await harness({ fetchTransfers: async () => makeFetch(
+      "https://www.jpx.co.jp/listing/stocks/transfers/index.html", bytes, "2026-10-03T22:01:33.000Z"
+    ) });
+    const got = await collectUniverseOfficialEvents(
+      { baseAsOf: "2026-08-31", eligibilityAsOf: "2026-10-04" }, h.deps
+    );
+    expect(got.sources.transfers.rows).toEqual([]);
+    expect(got.futureUncertainScheduled).toHaveLength(1);
+    expect(manifestOf(h).json["futureUncertainScheduled"]).toEqual(got.futureUncertainScheduled);
+    expect(h.recorded.current?.metadata["futureUncertainScheduled"]).toEqual(got.futureUncertainScheduled);
+    expect(h.recorded.current?.files.find(f => f.filename === "transfers.html")?.bytes).toEqual(bytes);
+    expect(h.downloadCalls).toHaveLength(4);
+    expect(manifestOf(h).json["complete"]).toBe(true);
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
   it("実 3 件を exact-4-files custody し、全行 (未来含む) を返す", async () => {
     const h = await harness();
     const got = await collectUniverseOfficialEvents(

@@ -216,6 +216,7 @@ export async function collectStockDetails(
     const r = await fetchDetail(code);
     if (r.status === "unknown") {
       // 最初の取得・パース失敗で以後の新取得を止める。部分取込・廃止判定は禁止。
+      console.error(JSON.stringify({ event: "YUTAI_DETAIL_UNKNOWN", code: r.code, reason: r.reason.split(":")[0] }));
       throw new Error(`個別ページの取得・パースに未確定 (UNKNOWN) が 1 件あります。` +
         `未確定を廃止として削除しないため、取り込みません: ${r.code} (${r.reason})`);
     }
@@ -333,9 +334,18 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
       if (cells[0] === "必要株数" || cells.length < 2) continue;
 
       // 株数パース
-      const sharesMatch = cells[0]?.match(/(\d[\d,]+)\s*株/);
-      if (!sharesMatch) continue;
+      const shareCell = cells[0]!; // cells.length >= 2 は上で確認済み。
+      const sharesMatch = shareCell.match(/^(\d{1,3}(?:,\d{3})+|\d+)\s*株/);
+      if (!sharesMatch) {
+        if (/\d[\d,.]*\s*株/.test(shareCell)) {
+          return { status: "unknown", code, reason: "invalid-min-shares" };
+        }
+        continue; // 非株数の継続行は従前どおり。
+      }
       const minShares = parseInt(sharesMatch[1].replace(/,/g, ""), 10);
+      if (!Number.isSafeInteger(minShares) || minShares <= 0) {
+        return { status: "unknown", code, reason: "invalid-min-shares" };
+      }
 
       const description = cells[1] || "";
       const notes = cells[2] || lastNotes;
