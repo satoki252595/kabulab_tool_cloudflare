@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { runDailySync, runMarketContextSync } from "./daily.js";
+import * as dailyModule from "./daily.js";
 import type { OverlayCollectFn } from "./universe-overlay.js";
 import { fakeOverlayCollect } from "./tests/overlay-batch.js";
 import { chartWithRaw, stockWithRaw } from "./tests/yahoo-capture.js";
@@ -472,13 +473,39 @@ describe("株式とマクロの日次分離", () => {
     vi.setSystemTime(new Date("2026-09-30T01:55:26Z"));
     mockMacro({ ...ALIGNED, "^N225": "n225-20260929.json" });
     const { db, calls } = recordingDb();
-    expect(await runMarketContextSync(db)).toBe(false);
+    const createDb = vi.spyOn(dailyModule, "createDailyDb").mockReturnValue(db);
+    const argv = process.argv;
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("YAHOO_PROXY_BASE", "https://proxy.test");
+    vi.stubEnv("CRON_SECRET", "test-secret");
+    try {
+      process.argv = [argv[0], "scripts/sync/daily.ts", "--context-only"];
+      await import("../../scripts/sync/daily.js");
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+      expect(errors).toHaveBeenCalledWith("[sync-daily] エラー:", "マクロ同期が不完全です");
+    } finally {
+      process.argv = argv;
+      createDb.mockRestore();
+      exit.mockRestore();
+      errors.mockRestore();
+      vi.unstubAllEnvs();
+    }
+    expect(fetchChart).toHaveBeenCalledTimes(1);
+    expect(fetchChart).toHaveBeenCalledWith("^N225", "1mo", expect.any(Object));
+    expect(fetchNikkeiVi).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
     const archived = macroArchiveInputs();
     expect(archived).toHaveLength(1);
     const manifest = manifestOf(archived[0]);
     expect(manifest.draft.charts["^N225"].date).toBeNull();
     expect(manifest.gate.reason).toMatch(/N225 確定日が無い/);
+    expect(manifest.attempts).toHaveLength(1);
+    expect(archived[0].files?.map((f) => f.filename)).toEqual([
+      "macro-N225-attempt0.json", "macro-manifest.json",
+    ]);
+    expect(bytesEqual(archived[0].files![0].bytes, fxBytes("n225-20260929.json"))).toBe(true);
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
   });
 
   it("09:10 境界の symbolic N225 は直前実バー 9/29 で確定する", async () => {
