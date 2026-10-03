@@ -161,6 +161,7 @@ describe("parseStockDetail は表ローカル月を優待に付ける", () => {
     const span = "優待権利確定月：<span>3月</span>";
     const data = unwrapOk(parseStockDetail("8022", `${UNION8022}\n${span}\n${tableOnly}`));
     expect(data.benefits.map((b) => [b.heading, b.localRecordMonths])).toEqual([["", [3]]]);
+    expect([data.name, data.market, data.category]).toEqual([null, null, null]);
   });
 
   it("最初の h3 より前で span が無い優待テーブルは unknown (union 推測しない)", () => {

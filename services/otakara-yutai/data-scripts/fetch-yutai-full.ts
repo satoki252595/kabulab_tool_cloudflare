@@ -206,7 +206,7 @@ function parseMonths(text: string): number[] {
  */
 export function parseStockDetail(code: string, html: string): StockDetailResult {
   // 銘柄名（複数パターンで取得）
-  let name = `銘柄${code}`;
+  let name: string | null = null;
   const namePatterns = [
     /class="md_stockBoard_stockName"[^>]*>([^<]+)/,
     /class="stock_name"[^>]*>([^<]+)/,
@@ -222,14 +222,14 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
   }
 
   // 市場
-  let market = "東証";
+  let market: string | null = null;
   if (html.includes("プライム")) market = "東証プライム";
   else if (html.includes("スタンダード")) market = "東証スタンダード";
   else if (html.includes("グロース")) market = "東証グロース";
 
   // カテゴリ/タイトル
   const titleMatch = html.match(/<h3[^>]*class="ulno"[^>]*>([^<]+)/);
-  const category = titleMatch ? titleMatch[1].trim() : "株主優待";
+  const category = titleMatch ? titleMatch[1].trim() : null;
 
   // h3 / 月 span / テーブルを文書順に辿り、表ごとに直近の適用 span を取る。
   // 同一セクション内の後発 span はその表だけに優先 (表ローカル override)、

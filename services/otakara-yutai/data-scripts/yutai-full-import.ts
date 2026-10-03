@@ -96,9 +96,9 @@ export type BenefitDetail = {
 /** 個別ページ 1 銘柄ぶんの取得結果 (fetch-yutai-full.ts の Phase 2)。 */
 export type StockYutaiData = {
   code: string;
-  name: string;
-  market: string;
-  category: string;
+  name: string | null;
+  market: string | null;
+  category: string | null;
   benefits: BenefitDetail[];
 };
 
@@ -134,8 +134,8 @@ export const GENRE_SLUG_MAP: Record<string, string> = {
   "社会貢献": "social", "寄付": "social",
 };
 
-export function guessGenreSlug(title: string, description: string): string {
-  const text = title + " " + description;
+export function guessGenreSlug(title: string | null, description: string): string {
+  const text = [title, description].filter((part) => part !== null).join(" ");
   for (const [keyword, slug] of Object.entries(GENRE_SLUG_MAP)) {
     if (text.includes(keyword)) return slug;
   }
