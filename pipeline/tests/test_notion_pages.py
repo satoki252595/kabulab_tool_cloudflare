@@ -83,8 +83,10 @@ def _master_ctx(*, dry_run: bool = False, limit=None, d1: bool = True):
     )
     failures: list[tuple[str, str]] = []
     return SimpleNamespace(
+        client=object(),
         settings=SimpleNamespace(cloud_store=cloud, dry_run=dry_run),
         args=SimpleNamespace(limit=limit),
+        notion_failed=0,
         failures=failures,
         add_failure=lambda code, reason="": failures.append((code, reason)),
     )
@@ -95,6 +97,7 @@ def _entries():
         "7203": (
             "p-7203",
             {
+                NS.MASTER_PROP_CODE: {"rich_text": [{"plain_text": "7203"}]},
                 NS.MASTER_PROP_EDINET_CODE: {
                     "rich_text": [{"plain_text": "E02144"}]
                 }
@@ -106,6 +109,10 @@ def _entries():
 
 class TestSyncNotionPages:
     """master_sync が月次で写しを書く。"""
+
+    @pytest.fixture(autouse=True)
+    def post_scan(self, monkeypatch):
+        monkeypatch.setattr(master_sync.upsert, "load_stock_master_entries", lambda *a: _entries())
 
     def test_両区画を書く(self, monkeypatch) -> None:
         store = _FakeStore()
@@ -150,3 +157,77 @@ class TestSyncNotionPages:
         ctx = _master_ctx()
         master_sync._sync_notion_pages(ctx, _entries(), True)
         assert [c for c, _ in ctx.failures] == ["jss_notion_pages"]
+
+    def test_更新前の逆引きではなく実POSTを写す(self, monkeypatch) -> None:
+        def entry(code):
+            return (f"p-{code}", {
+                NS.MASTER_PROP_CODE: {"rich_text": [{"plain_text": code}]},
+                NS.MASTER_PROP_EDINET_CODE: {"rich_text": [{"plain_text": "E42126"}]},
+            })
+
+        pre = {"0000": entry("0000")}
+        post = {"646A": entry("646A")}
+        reads = []
+        monkeypatch.setattr(master_sync.upsert, "load_stock_master_entries",
+                            lambda *a: reads.append(True) or post)
+        store = _FakeStore()
+        npages.save_map(store, npages.DB_STOCK_MASTER_BY_EDINET, {"E42126": "0000"},
+                        updated_at=1)
+        monkeypatch.setattr(master_sync, "D1Store", lambda *a, **k: store)
+        ctx = _master_ctx()
+        master_sync._sync_notion_pages(ctx, pre, True)
+        assert reads == [True]
+        assert npages.load_stock_master_map(store) == {"646A": "p-646A"}
+        assert npages.load_edinet_code_map(store) == {"E42126": "646A"}
+        assert pre["0000"][1][NS.MASTER_PROP_CODE]["rich_text"][0]["plain_text"] == "0000"
+        assert ctx.failures == []
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_逆引き競合では両区画の書込ゼロ(self, monkeypatch, reverse) -> None:
+        entries = {
+            code: (f"p-{code}", {
+                NS.MASTER_PROP_CODE: {"rich_text": [{"plain_text": code}]},
+                NS.MASTER_PROP_EDINET_CODE: {"rich_text": [{"plain_text": "E42126"}]},
+            }) for code in ("0000", "646A")
+        }
+        if reverse:
+            entries = dict(reversed(list(entries.items())))
+        monkeypatch.setattr(master_sync.upsert, "load_stock_master_entries", lambda *a: entries)
+        store = _FakeStore()
+        monkeypatch.setattr(master_sync, "D1Store", lambda *a, **k: store)
+        ctx = _master_ctx()
+        master_sync._sync_notion_pages(ctx, _entries(), True)
+        assert store.sql_log == []
+        assert [c for c, _ in ctx.failures] == ["jss_notion_pages"]
+        assert "逆引きが競合" in ctx.failures[0][1]
+
+    def test_POST読取失敗では両区画の書込ゼロ(self, monkeypatch) -> None:
+        def failed(*a):
+            raise RuntimeError("POST 読取失敗")
+
+        monkeypatch.setattr(master_sync.upsert, "load_stock_master_entries", failed)
+        store = _FakeStore()
+        monkeypatch.setattr(master_sync, "D1Store", lambda *a, **k: store)
+        ctx = _master_ctx()
+        master_sync._sync_notion_pages(ctx, _entries(), True)
+        assert store.sql_log == []
+        assert [c for c, _ in ctx.failures] == ["jss_notion_pages"]
+
+    def test_Notion失敗ではPOST再読も写し書込もしない(self, monkeypatch) -> None:
+        def forbidden(*a):
+            raise AssertionError("失敗後の POST 再読は禁止")
+
+        monkeypatch.setattr(master_sync.upsert, "load_stock_master_entries", forbidden)
+        store = _FakeStore()
+        monkeypatch.setattr(master_sync, "D1Store", lambda *a, **k: store)
+        ctx = _master_ctx()
+        ctx.notion_failed = 1
+        master_sync._sync_notion_pages(ctx, _entries(), True)
+        assert store.sql_log == []
+        assert ctx.failures == [("jss_notion_pages", "① Notion upsert 失敗があるため写しを書かない")]
+
+    def test_同じEDINETと同じ銘柄の重複は逆引きが一致(self) -> None:
+        pid, props = _entries()["7203"]
+        assert master_sync.upsert._edinet_map_from_pages([
+            {"id": pid, "properties": props}, {"id": "duplicate-page", "properties": props}
+        ]) == {"E02144": "7203"}

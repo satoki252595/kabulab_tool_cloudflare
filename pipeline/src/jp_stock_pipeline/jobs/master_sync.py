@@ -200,25 +200,34 @@ def _sync_notion_pages(
 ) -> None:
     """① の {コード: page_id} 写しを D1 へ書く（L-20。読むのは tdnet/edinet）。
 
-    同じスキャンから EDINET 逆引きも写す（追加の req は出ない）。
+    upsert 前の props は古いため、書込後の①を1回全件スキャンし、両写しを作る。
     `--dry-run` / `--limit` では書かない（sector33 と同じ扱い）。
-    マップ取得に失敗していたら書かない（`{}` で上書きしない）。
+    マップ取得失敗・Notion upsert 失敗・逆引き競合では両写しを書かない。
     D1 の失敗は記録だけして同期は止めない（写しが古くても読み手は
     Notion スキャンへフォールバックする）。
     """
     if ctx.settings.dry_run or ctx.args.limit:
         return
-    if not map_ok or not master_entries:
+    if not map_ok:
         return
     store = _sector33_store(ctx)
     if store is None:
         return
-    stock_map = {code: pid for code, (pid, _props) in master_entries.items()}
-    edinet_map = {
-        edinet_code: code
-        for code, (_pid, props) in master_entries.items()
-        if (edinet_code := upsert._edinet_code_of(props))
-    }
+    if ctx.notion_failed:
+        ctx.add_failure("jss_notion_pages", "① Notion upsert 失敗があるため写しを書かない")
+        return
+    try:
+        post_entries = upsert.load_stock_master_entries(ctx.client, ctx.settings)
+        if not post_entries:
+            raise ValueError("① POST 全件マップが空")
+        stock_map = {code: pid for code, (pid, _props) in post_entries.items()}
+        edinet_map = upsert._edinet_map_from_pages([
+            {"id": pid, "properties": props}
+            for pid, props in post_entries.values()
+        ])
+    except Exception as exc:  # noqa: BLE001 - 未確定/競合マップで両区画を書かない
+        ctx.add_failure("jss_notion_pages", f"① POST マップ未確定: {exc}")
+        return
     try:
         now = int(time.time())
         n_stock = notion_pages.save_map(
