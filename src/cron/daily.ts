@@ -3008,6 +3008,12 @@ async function fetchMarketContextDraft(): Promise<{
   for (const target of targets) {
     try {
       await fetchMarketContextTarget(draft, target, collector);
+      // 必須N225の確定終値がHOLDなら、残り4取得元を叩いても保存できない。
+      // 同一応答原本の保管・readbackは呼出側で続け、古値で補わず失敗を返す。
+      if (target === "^N225" && draft.charts[target].date === null) {
+        console.warn("[sync-daily]   N225確定終値HOLDのため後続マクロ取得を停止します");
+        break;
+      }
     } catch (error) {
       const message = rootCauseMessage(error);
       failures.push({ target, error: message });
@@ -3042,6 +3048,9 @@ function decideMarketContextGate(draft: MarketContextDraft, expectedDate?: strin
   const vix = draft.charts["^VIX"];
   const gspc = draft.charts["^GSPC"];
   const niy = draft.charts["NIY=F"];
+  if (n225.date === null) {
+    return { ok: false, key, reason: "N225 確定日が無い (取得失敗または session 不足)" };
+  }
   if (key === null) {
     return { ok: false, key: null, reason: "GSPC 確定日が無い (取得失敗または session 不足)" };
   }
