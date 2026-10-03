@@ -9,7 +9,7 @@
 - 東証対象銘柄の株主優待を分類・スクリーニング
 - 独自スコアリング (ファンダ 60% + テクニカル 40%) で「割安な優待銘柄」を自動ランク付け
 - モバイルファーストの PWA 対応 UI で投資判断を支援
-- 優待内容は手動解釈した短縮サマリー (`shortSummary`) をカード表示に活用
+- 優待内容は原文・受取条件と照合した短縮サマリー (`shortSummary`) をカード表示に活用
 
 ## ディレクトリ構成
 
@@ -85,7 +85,7 @@ yutai_benefits
 ├── stock_id    FK → core_stocks(id)
 ├── genre_id    FK → yutai_genres
 ├── description     text        # スクレイピング元テキスト (長文)
-├── short_summary   text?       # 手動解釈した短縮文言 (20-30 文字)
+├── short_summary   text?       # 契約検証済みの短縮文言 (60文字以内)
 ├── min_shares      integer     # 最低必要株数
 ├── record_month    integer     # 権利確定月 (1-12)
 ├── record_date     text?       # 単発の実基準日 (YYYY-MM-DD)。NULL は従来の月表現
@@ -158,7 +158,11 @@ GitHub Actions 月次
   Phase 1: pnpm sync:universe
            JPX 公式 XLS → core_stocks を東証内国普通株 ~3,700 に同期
            (新規 upsert + name/market/sector 更新 + JPX 基準の対象外化)
-  Phase 2: pnpm sync:monthly:core
+  Phase 2: pnpm yutai:fetch
+           現行一覧→個別ページ（直列1秒、最初の失敗で後続停止）
+           原応答・更新前全優待行をNotionへ物理保管・全バイト照合
+           銘柄ごとのD1原子batchで取込。真廃止だけ優待削除・フラグ解除
+  Phase 3: pnpm sync:monthly:core
     for each core_stocks (is_active AND is_yutai):   # 優待銘柄のみ ~1,600
       - core_stock_financials から PER/PBR/配当/EPS/BPS/ROE/時価総額 を取得
       - swing_stock_indicators から MA5/25/75 / RSI14 / MACD/Signal を取得
@@ -170,13 +174,19 @@ GitHub Actions 月次
 
 > **母集団について**: 2026-05 に sync 母集団は「優待縛り ~1,600」から **東証プライム／スタンダード／グロースの内国株式（共有4文字コード、約3,700）** へ拡張された (004 financial-math が一般日本株を要するため)。地域市場の単独上場銘柄と5桁種類株は対象外。`core_stocks` には非優待銘柄も含まれるが、002 otakara は一覧・カウント・詳細・スコアいずれも `is_yutai=true` で絞るため、優待サービスとしての見え方は不変。`is_yutai` フラグの writer は優待スクレイパー [services/otakara-yutai/data-scripts/fetch-yutai-full.ts](../services/otakara-yutai/data-scripts/fetch-yutai-full.ts) (core_stocks は削除せず upsert + フラグ更新)。
 
-自動実行: GitHub Actions の [.github/workflows/stock-sync.yml](../.github/workflows/stock-sync.yml) の月次 cron (**毎月10日 01:30 UTC = JST 10:30**) で universe seed + monthly rebuild ([src/cron/monthly.ts](../src/cron/monthly.ts)) が走る。JPX の前月末版が第3営業日以降に公開されるため、旧版を翌月分として扱わない日程にしている。Node から `createD1HttpDb` (D1 REST) で書き込む。
+自動実行: GitHub Actions の [.github/workflows/stock-sync.yml](../.github/workflows/stock-sync.yml) の月次 cron (**毎月10日 01:30 UTC = JST 10:30**) で universe seed → 優待取得・取込 → monthly rebuild が走る。JPXの旧版を翌月分として扱わず、原本未公表・取得失敗では後続を停止する。NodeからD1 RESTで書き込む。
 
 > ※ 日次の Yahoo データ取得は統一 daily sync ([src/cron/daily.ts](../src/cron/daily.ts)) が `core_stock_financials` / `swing_stock_indicators` を更新することで間接的に本サービスにも反映される。本サービス独自の Yahoo 呼び出しはゼロ。
 
 ## 優待データの短縮サマリー (`shortSummary`)
 
-ユニークな優待 description について、モバイル表示向けの短縮文言 (`shortSummary`) と推定金銭価値 (`estimatedValue`) を **リポジトリ外のクラウド LLM (Cursor Automations 等)** が作る (2026-09-13 から)。
+変更・未要約の優待について、Macの `com.kabulab-cf.yutai-summary` が毎日21時に最大60群ずつ処理する。既存の固定Qwen3.5-4B/MLXキャッシュを使い、モデルや依存を自動取得しない。事業タグと同じ承認済みmain・Nix環境・kernel排他を通す。Macの稼働が必要で、Cloudflare Worker単独ではモデル処理を実行しない。
+
+生成するのは `shortSummary` だけ。`estimatedValue` は既存の `qualifyCompanyPerGrantValue` で一意に認定できた企業提示の1回分額面だけを採用し、曖昧なものは理由とともにNULLを保持する。原文・受取条件と異なる単位付き数値、60字超、転載、内部ラベル、旧版結果を同じ共有契約で拒否する。拒否された群は前値を保持し、未処理数を記録して非0終了する。private進捗で先頭の拒否群が後続を永久に妨げないようにする。
+
+入力・実モデル応答・適用計画・PRE/POSTはprivateに保存し、D1更新前のNotion実体保管と全バイト照合、銘柄単位の原子適用、実POST再読を必須にする。未確定の書込みやPOST保管の失敗は保留マーカーを残し、翌日の自動再送を止める。対象0群ならモデル・Notion・業務書込みは0。TypeSafeの設定は変更しない。
+
+外部エージェントによる個別修復にも、次の既存経路を引き続き使える。
 
 1. `pnpm yutai:summary:export` が要約の要る `(銘柄, 掲載文)` をタスク JSONL に書き出す (要約が NULL / 既存要約が契約違反。`--violations-only` で後者だけ)。`--retask-keys` で内容キー指定の作り直し (`rework`) も出せる (2026-09-28。契約上有効だが別群の要約・tier 違いの修復用)。
 2. 外部エージェントが [作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md) に従って結果 JSONL を返す。
@@ -186,7 +196,7 @@ fetch (`fetch-yutai-full.ts`) は掲載文・株数・権利月が一致する�
 
 タスク / 結果ファイルは掲載文を含むので gitignore 済みの `data-scripts/data/` かリポジトリ外にしか置けない (`private-path.ts` が git に確かめて止める)。
 
-経緯: `claude -p` (サブスク CLI) → node-llama-cpp によるローカル LLM (ELYZA-JP-8B、初回に数 GB を DL) → クラウド LLM。ローカル経路は生成側に長さチェックの退路があり、契約違反の要約 85 行 (8,314 行中) を公開面に残していた。クラウド LLM の費用は Cursor 等の契約側で発生し、このリポジトリの原価ではない。
+旧ローカル経路には長さチェックの退路があり、契約違反の要約85行を残していた。現行の自動経路には切詰めや有料APIへの切替を入れず、外部修復と同じ契約・金額判定・原子適用を使う。ローカルの電力・実行時間は無料とは扱わず、追加のモデルAPI従量課金が無いことと区別する。
 
 - 例: `"QUOカード 1,000円相当"` / `"ゼンショー食事券 6,000円(年12,000円)"` / `"高島屋10%割引(限度30万円)"`
 - `estimatedValue`: その権利月に受け取る優待全体の1回分の円建て額面。原文から一意に決められないものは `null`

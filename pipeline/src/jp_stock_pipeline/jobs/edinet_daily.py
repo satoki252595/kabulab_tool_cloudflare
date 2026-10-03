@@ -23,7 +23,6 @@ from pathlib import Path
 from ..cloud_store import notion_pages
 from ..cloud_store.d1 import D1Error, D1Store
 from ..collectors import edinet
-from ..collectors.edinet_codelist import normalize_sec_code
 from ..convert import json_to_parquet, xbrl_to_csv
 from ..http import FetchError
 from ..licensing import LicenseTag, source_license
@@ -191,13 +190,11 @@ def _process_document(
     master_map = master_map or {}
     disc_map = disc_map or {}
     doc_id = doc["docID"]
-    code = normalize_sec_code(doc.get("secCode")) or ""
-    if not code:
-        # 大量保有報告書は発行者の EDINETコードでしか対象会社を辿れない。
-        # ① に該当が無ければ code は空のまま（④には残すが relation は張らない）。
-        issuer = edinet.issuer_edinet_code(doc)
-        if issuer:
-            code = (edinet_map or {}).get(issuer, "")
+    resolved = edinet.resolve_company_code(doc, edinet_map if edinet_map is not None else {})
+    if resolved is None and doc.get("secCode") is None and doc.get("docTypeCode") in ("120", "130"):
+        # 原本を取る前に停止。未観測の提出者を別銘柄へ補完しない。
+        raise ValueError("NULL証券コードの年次書類を①マスタで一意に特定できない")
+    code = resolved if resolved is not None else ""
     doc_type_code = str(doc.get("docTypeCode") or "")
     submit = doc.get("submitDateTime") or ""
     data_date: date | None = None
@@ -237,6 +234,8 @@ def _process_document(
     # ④ 開示書類 upsert (キー=docID)。原本は書類自身 → 無ければ一覧原本
     # (財務系以外のみ。一覧/PDF は実 ZIP の代用にしない)。
     record = edinet.to_disclosure_record(doc, raw_page_id=doc_raw_page or list_page_id)
+    if doc.get("secCode") is None and doc.get("docTypeCode") in ("120", "130"):
+        record.code = resolved  # マスタからの明示識別。raw secCode は NULL のまま。
     # ① relation 解決。事前マップがあれば per-record 検索を省く(§8.3)。マップ miss は
     # relation 欠落のみ(重複は起きない)なので benign degrade。マップ未取得時は従来の
     # per-record 検索へフォールバック。

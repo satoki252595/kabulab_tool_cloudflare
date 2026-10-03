@@ -15,24 +15,65 @@ import {
   type BenefitDetail,
   type StockYutaiData,
 } from "./yutai-full-import.js";
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { pathToFileURL } from "node:url";
+import { moveToTrash, recordPrimaryData, verifyArchivedAttachments } from "../../../src/shared/notion-archive/index.js";
+import { sha256HexBytes } from "../../../src/shared/sha256.js";
+import { resolveRunId, writeSummaryLocal } from "../../../scripts/vwap/lib/ingest-guard.js";
 import "dotenv/config";
 
 // Schema は src/db/schema.ts に集約済み (D1/SQLite 版 — ADR-0001)。
 // 銘柄マスタ stocks は core_stocks の再 export、yutai_genres / yutai_benefits は
 // otakara 固有テーブル。インラインの pgTable 定義は廃止した。
 
-async function fetchPage(url: string): Promise<string> {
+type RawPage = {
+  url: string; receivedAt: string; status: number | null; contentType: string | null;
+  byteLength: number; bodyBase64: string;
+};
+type CapturePage = (page: RawPage) => void;
+
+async function fetchPage(url: string, onRaw?: CapturePage): Promise<string> {
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(20_000),
     headers: {
       "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       "Accept": "text/html,application/xhtml+xml",
       "Accept-Language": "ja,en;q=0.9",
     },
   });
+  const bytes = Buffer.from(await res.arrayBuffer());
+  onRaw?.({ url, receivedAt: new Date().toISOString(), status: res.status,
+    contentType: res.headers.get("content-type"), byteLength: bytes.length,
+    bodyBase64: bytes.toString("base64") });
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
-  return res.text();
+  return bytes.toString("utf-8");
+}
+
+/** 部分取得も物理保管する。保管・全バイト照合に失敗したらD1取込へ進まない。 */
+async function archivePages(pages: readonly RawPage[], runId: string, source: string): Promise<{ pageId: string; files: { filename: string; bytes: Uint8Array; contentType: string }[] } | undefined> {
+  if (pages.length === 0) return undefined; // 応答前の通信失敗は原本未取得。
+  const bytes = gzipSync(pages.map((page) => JSON.stringify(page)).join("\n") + "\n");
+  const key = `yutai-source-${runId}`;
+  const filename = `${key}.jsonl.gz`;
+  const files = [{ filename, bytes: Uint8Array.from(bytes), contentType: "application/gzip" }];
+  const local = writeSummaryLocal({ key, files }, "services/otakara-yutai/data-scripts/data/raw");
+  if (!local.ok) throw new Error("優待原本のprivate保存に失敗したためSTOP");
+  const saved = Uint8Array.from(readFileSync(local.path));
+  if (await sha256HexBytes(saved) !== await sha256HexBytes(bytes)) {
+    throw new Error("優待原本のprivate保存SHAが一致しないためSTOP");
+  }
+  const archived = await recordPrimaryData({ service: "otakara-yutai", key,
+    source,
+    fetchedAt: pages[pages.length - 1].receivedAt,
+    metadata: { runId, pages: pages.length, bytes: bytes.length,
+      rawBytes: pages.reduce((sum, page) => sum + page.byteLength, 0),
+      sha256: await sha256HexBytes(bytes) }, files, force: false });
+  if (archived.outcome !== "recorded" || archived.fileTooLarge) {
+    throw new Error("優待原本の物理保管が確定しないためSTOP");
+  }
+  await verifyArchivedAttachments(archived.pageId, files, "優待取得原本");
+  return { pageId: archived.pageId, files };
 }
 
 /**
@@ -47,6 +88,7 @@ export async function collectAllStockCodes(
     fetchPage(`https://minkabu.jp/yutai/search?page=${p}`),
 ): Promise<string[]> {
   const allCodes = new Set<string>();
+  const seenPages = new Set<string>();
   let page = 1;
   let emptyCount = 0;
 
@@ -68,6 +110,9 @@ export async function collectAllStockCodes(
     if (unique.length === 0) {
       emptyCount++;
     } else {
+      const signature = [...unique].sort().join(",");
+      if (seenPages.has(signature)) throw new Error(`検索ページの銘柄集合が重複したためSTOP (page=${page})`);
+      seenPages.add(signature);
       emptyCount = 0;
       for (const c of unique) allCodes.add(c);
     }
@@ -77,7 +122,7 @@ export async function collectAllStockCodes(
     }
 
     page++;
-    await new Promise(r => setTimeout(r, 500));
+    if (emptyCount < 3) await new Promise(r => setTimeout(r, 1_000));
   }
 
   return [...allCodes].sort();
@@ -86,7 +131,7 @@ export async function collectAllStockCodes(
 /**
  * Phase 2: 個別銘柄ページから詳細データ取得。
  * 限定 READ (切詰め対応の突合せ等) のため export する。呼出側で 400ms 以上の
- * 間隔を空けること (本ファイル main と同じ rate 制限)。
+ * 間隔を空けること。本ファイルmainは1秒間隔の直列取得。
  * `unknown` は取得・パースの未確定 (廃止ではない)。落とさず run を止めること。
  */
 /**
@@ -99,13 +144,12 @@ export type StockDetailResult =
   | { status: "ok"; data: StockYutaiData }
   | { status: "unknown"; code: string; reason: string };
 
-export async function fetchStockDetail(code: string): Promise<StockDetailResult> {
+export async function fetchStockDetail(code: string, onRaw?: CapturePage): Promise<StockDetailResult> {
   let html: string;
   try {
-    html = await fetchPage(`https://minkabu.jp/stock/${code}/yutai`);
+    html = await fetchPage(`https://minkabu.jp/stock/${code}/yutai`, onRaw);
   } catch (e) {
     const reason = `fetch: ${e instanceof Error ? e.message : String(e)}`.slice(0, 160);
-    console.error(`  ${code} 取得失敗:`, reason);
     return { status: "unknown", code, reason };
   }
   return parseStockDetail(code, html);
@@ -121,24 +165,20 @@ export async function collectStockDetails(
   fetchDetail: (code: string) => Promise<StockDetailResult>,
 ): Promise<StockYutaiData[]> {
   const allData: StockYutaiData[] = [];
-  const unknowns: string[] = [];
   let progress = 0;
   for (const code of codes) {
     const r = await fetchDetail(code);
-    if (r.status === "unknown") unknowns.push(`${r.code} (${r.reason})`);
-    else allData.push(r.data);
+    if (r.status === "unknown") {
+      // 最初の取得・パース失敗で以後の新取得を止める。部分取込・廃止判定は禁止。
+      throw new Error(`個別ページの取得・パースに未確定 (UNKNOWN) が 1 件あります。` +
+        `未確定を廃止として削除しないため、取り込みません: ${r.code} (${r.reason})`);
+    }
+    allData.push(r.data);
     progress++;
     if (progress % 50 === 0) {
-      log.info(`  ${progress}/${codes.length} (成功: ${allData.length}, 未確定: ${unknowns.length})`);
+      log.info(`  ${progress}/${codes.length} (成功: ${allData.length})`);
     }
-    await new Promise((r) => setTimeout(r, 400)); // レート制限
-  }
-  if (unknowns.length > 0) {
-    throw new Error(
-      `個別ページの取得・パースに未確定 (UNKNOWN) が ${unknowns.length} 件あります。` +
-        `未確定を廃止として削除しないため、取り込みません: ${unknowns.slice(0, 20).join(", ")}` +
-        `${unknowns.length > 20 ? " ..." : ""}`,
-    );
+    if (progress < codes.length) await new Promise((r) => setTimeout(r, 1_000)); // 直列取得、再試行なし。
   }
   return allData;
 }
@@ -166,7 +206,7 @@ function parseMonths(text: string): number[] {
  */
 export function parseStockDetail(code: string, html: string): StockDetailResult {
   // 銘柄名（複数パターンで取得）
-  let name = `銘柄${code}`;
+  let name: string | null = null;
   const namePatterns = [
     /class="md_stockBoard_stockName"[^>]*>([^<]+)/,
     /class="stock_name"[^>]*>([^<]+)/,
@@ -182,14 +222,14 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
   }
 
   // 市場
-  let market = "東証";
+  let market: string | null = null;
   if (html.includes("プライム")) market = "東証プライム";
   else if (html.includes("スタンダード")) market = "東証スタンダード";
   else if (html.includes("グロース")) market = "東証グロース";
 
   // カテゴリ/タイトル
   const titleMatch = html.match(/<h3[^>]*class="ulno"[^>]*>([^<]+)/);
-  const category = titleMatch ? titleMatch[1].trim() : "株主優待";
+  const category = titleMatch ? titleMatch[1].trim() : null;
 
   // h3 / 月 span / テーブルを文書順に辿り、表ごとに直近の適用 span を取る。
   // 同一セクション内の後発 span はその表だけに優先 (表ローカル override)、
@@ -267,23 +307,21 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
 async function main() {
   log.info("🚀 優待銘柄データ全量取得 v2\n");
 
-  // Phase 1: 銘柄コード収集（キャッシュ利用可）
-  const CACHE_FILE = "/tmp/yutai-codes-cache.json";
-  let codes: string[];
-  if (existsSync(CACHE_FILE)) {
-    codes = JSON.parse(readFileSync(CACHE_FILE, "utf-8"));
-    log.info(`📋 Phase 1: キャッシュから ${codes.length}銘柄のコードを読込\n`);
-  } else {
+  const pages: RawPage[] = [];
+  const runId = resolveRunId();
+  const capture: CapturePage = (page) => pages.push(page);
+  let allData: StockYutaiData[];
+  try {
+    // 毎回現行一覧を確認する。期限のない共有/tmpキャッシュでは新規・廃止を検出できない。
     log.info("📋 Phase 1: 全銘柄コードを収集中...");
-    codes = await collectAllStockCodes();
-    writeFileSync(CACHE_FILE, JSON.stringify(codes));
+    const codes = await collectAllStockCodes((page) => fetchPage(`https://minkabu.jp/yutai/search?page=${page}`, capture));
     log.info(`\n✅ ${codes.length}銘柄のコードを収集\n`);
+    log.info("📊 Phase 2: 各銘柄の詳細データを取得中...");
+    allData = await collectStockDetails(codes, (code) => fetchStockDetail(code, capture));
+  } finally {
+    // UNKNOWNでも取得済み原本を残す。成功時もD1更新より先に保管・照合する。
+    await archivePages(pages, runId, "minkabu search/detail response bytes (gzip lossless)");
   }
-
-  // Phase 2: 個別ページから詳細取得。1 件でも unknown があれば
-  // Phase 3 (import) の前に throw する (未確定を廃止として消さない)。
-  log.info("📊 Phase 2: 各銘柄の詳細データを取得中...");
-  const allData = await collectStockDetails(codes, fetchStockDetail);
   log.info(`\n✅ ${allData.length}銘柄の詳細データを取得\n`);
 
   // データ品質サマリー (表示用の union。合成には表ローカル月だけを使う)
@@ -293,24 +331,30 @@ async function main() {
   const multiShare = allData.filter(d => d.benefits.length > 1).length;
   log.info(`  複数権利月: ${multiMonth}銘柄`);
   log.info(`  複数株数条件: ${multiShare}銘柄`);
-  log.info(`  サンプル: ${allData[0]?.name} (${allData[0]?.code})`);
-  if (allData[0]) {
-    log.info(`    権利月: ${monthsOf(allData[0]).join(",")}`);
-    for (const b of allData[0].benefits) {
-      log.info(`    ${b.minShares}株: ${b.description.substring(0, 50)}`);
-    }
-  }
 
   // Phase 3: DB import
   log.info("\n📦 Phase 3: DBにインポート中...");
-  const result = await importYutaiFull(createD1HttpDb(schema), allData, createD1HttpBatchSender());
+  const db = createD1HttpDb(schema);
+  // 取得経路だけでなく上書き前の全優待行を復元可能にする。原文・解釈をログには出さない。
+  const previous = await db.select().from(schema.yutaiBenefits);
+  const preimageBytes = Buffer.from(JSON.stringify(previous));
+  const preimage = await archivePages([{
+    url: "D1:yutai_benefits before source import", receivedAt: new Date().toISOString(),
+    status: null, contentType: "application/json", byteLength: preimageBytes.length,
+    bodyBase64: preimageBytes.toString("base64"),
+  }], `${runId}-preimage`, "D1 yutai_benefits complete row snapshot before source import (HTTP status not exposed)");
+  if (preimage === undefined) throw new Error("優待の更新前スナップショットが無いためSTOP");
+  const result = await importYutaiFull(db, allData, createD1HttpBatchSender());
+  const retired = await moveToTrash({ service: "otakara-yutai", originPageId: preimage.pageId,
+    reason: `優待原文取込 ${runId} が成功。更新前の全行スナップショットを復元用に保管。` });
+  await verifyArchivedAttachments(retired.trashPageId, preimage.files, "優待更新前スナップショット退避");
 
   log.info("\n" + "=".repeat(60));
   log.info("📊 最終結果:");
   log.info(`  銘柄数: ${result.stockCount}`);
   log.info(`  優待レコード数: ${result.benefitCount}`);
   console.info(`  母集団に無く飛ばした銘柄 (既存の優待行は保持): ${result.outOfUniverse.length}`);
-  console.info(`  取得できず優待行を消した銘柄: ${result.abolishedCount}`);
+  console.info(`  現行一覧に無く優待廃止を反映した銘柄: ${result.abolishedCount}`);
   console.info(`  戻せなかった解釈: ${result.droppedInterpretations}`);
   console.info(`  取り込み失敗: ${result.failedCodes.length}`);
   console.info(`  利回り再計算を適用: ${result.recompute.updated}銘柄 / スコア: ${result.recompute.scoresUpdated}銘柄`);
@@ -324,5 +368,5 @@ async function main() {
 
 // CLI として直接実行されたときだけ動かす (限定 READ 再利用のため import 可能にする)。
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(e => { console.error("❌ Fatal:", e); process.exit(1); });
+  main().catch(() => { console.error("優待取得・原本保管・取込のいずれかが失敗しました。取込開始後は更新済み銘柄があり得ます。原本と更新前スナップショットを保持してSTOP。"); process.exit(1); });
 }

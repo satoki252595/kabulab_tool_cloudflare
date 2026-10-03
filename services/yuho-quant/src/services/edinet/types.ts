@@ -37,6 +37,9 @@ export const edinetDocSchema = z.object({
   csvFlag: z.string(),
   /** "1"=取下げ — 取下げ書類は無効として扱う */
   withdrawalStatus: z.string(),
+  /** 歴史一覧で欠けても補作しない。NULLコードの新しい資格には実0を要求。 */
+  docInfoEditStatus: z.optional(z.string()),
+  disclosureStatus: z.optional(z.string()),
 });
 
 export type EdinetDoc = z.infer<typeof edinetDocSchema>;

@@ -41,6 +41,8 @@ import {
   listDocuments,
 } from "../src/services/edinet/client.js";
 import type { EdinetDoc } from "../src/services/edinet/types.js";
+import { isAnnualSecuritiesReport } from "../src/services/edinet/types.js";
+import { loadEdinetTickerMap } from "../src/services/edinet/identity.js";
 import { backupDocTextToNotion } from "../src/services/text-backup.js";
 import type { Database } from "../src/db/client.js";
 import { applyCompletionFilter, selectMissingDocs } from "../src/services/edinet/missing.js";
@@ -144,14 +146,17 @@ for (const date of eachDay(fromArg, toArg)) {
     listed,
     effectiveExisting,
     codeToId,
-    force
+    force,
+    await loadEdinetTickerMap(db, listed
+      .filter((doc) => isAnnualSecuritiesReport(doc) && doc.secCode === null && doc.edinetCode !== null)
+      .map((doc) => doc.edinetCode!))
   );
   if (dryRun) {
     console.info(`[missing:dry] ${date} listed=${listed.length} missing=${missing.length} skipped=${skippedExisting} outOfUniverse=${outOfUniverse}`);
     target += missing.length;
     continue;
   }
-  for (const { doc, stockId } of missing) {
+  for (const { doc, stockId, stockCode } of missing) {
     if (target >= limit) break;
     target++;
     // 1 通処理の正本は lib/missing-backfill.ts processMissingDoc (IO 境界は
@@ -167,7 +172,7 @@ for (const date of eachDay(fromArg, toArg)) {
           tally[key] = (tally[key] ?? 0) + 1;
         },
       },
-      { doc, stockId, force }
+      { doc, stockId, stockCode, force }
     );
     done++;
     if (done % 50 === 0) {

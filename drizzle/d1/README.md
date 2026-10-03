@@ -42,6 +42,18 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 | `0023` | `core_stocks.sector17` の DROP COLUMN。書込経路も参照も無く、本番 3,810 行で非 NULL 0 件と実測済み (2026-09-24) | **適用済み** (09-24 に手動適用。PRAGMA で 20 列を確認、`jss_column_license` の sector17 行も削除) |
 | `0024` | `core_stocks` の 9 列 (`edinet_code` / `listing_status` / `listing_date` / `delisting_date` / `license_tag` / `src_source` / `src_data_date` / `src_fetched_at` / `quality`) + 部分索引 `idx_core_stocks_edinet` の DROP。書込経路・参照経路とも無く、本番 3,810 行で非 NULL 0 件と実測済み (2026-09-25)。同じファイルで `yutai_benefits.estimate_source_url` の DROP も行う (本番 8,295 行で非 NULL 0 件。`estimate_value_source` は 50 行が非 NULL の現役列なので DROP しない) | **未適用**。pipeline 側 `cloud_store/core_stocks.py` の `NEW_COLUMNS`/`NEW_INDEXES`、`schema.py` の `MIXED_LICENSE_COLUMNS["core_stocks"]`、関連テスト、共有契約 `tests/fixtures/contracts/d1-license-map.json` は**同じ PR で追随済み**。適用はマージ直後に (sector17 と同じ運用: `core_stocks_migrate.py --verify` が両方向 failure なので、SQL 適用がずれた場合の窓は次の daily ops_check(14:30 UTC) より前に閉じること。ファイル冒頭コメント参照) |
 
+### 0027 — EDINET catchup の日付・文書進捗
+
+`0027_edinet_catchup_progress.sql` は `yuho_edinet_catchup_progress` 一表と
+queue用索引のCREATEだけ。既存表へのDROP/UPDATEはない。**本番は2026-10-04適用済み**。
+実表11列・複合PK・索引4列・空の初期行数を読戻し確認した。
+0027生成後の直前0026 snapshotはルール4に従って削除し、journalと0026 SQLは保持する。
+既存のさらに古いsnapshot整理はこの変更に含めない。
+新catchupコードとTABLE_LICENSE宣言を反映する切替で、SQL適用と実表確認を
+合わせる。未適用のまま次の定期取込やops_checkを動かさない。
+ローカル回帰と未完・未知送信の境界は
+[EDINET自動取得の検証記録](../../docs/test-logs/edinet-automatic-coverage-20261004.md)を参照。
+
 0013〜0016 は本番 `sqlite_master` で適用状態を確かめてから、未適用のものだけ
 番号順に流す。0012 と同じく stockStock の地図 (`TABLE_LICENSE`) との突合 (P6)
 が前提。0017 は適用済みなので流さない。

@@ -62,8 +62,19 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # 共通保存資格はTDnet/EDINET双方の取得前に確認。失敗時は後続取得0。
+      - name: D1 / Notion 共通設定の事前確認
+        run: >-
+          pnpm exec tsx -e 'import "dotenv/config";
+          import {sharedEnv} from "./src/shared/env.ts";
+          import {notionEnv} from "./src/shared/notion-archive/env.ts";
+          try { sharedEnv.CLOUDFLARE_API_TOKEN(); sharedEnv.CLOUDFLARE_ACCOUNT_ID(); sharedEnv.D1_DATABASE_ID();
+          notionEnv.NOTION_TOKEN(); notionEnv.NOTION_ARCHIVE_PAGE_ID(); }
+          catch { console.error("D1/Notion共通設定が不足または不正。取得前に停止しました。"); process.exit(1); }'
+
       # 006 TDnet 適時開示 (Node + kuromoji → D1 HTTP)
       - name: ir-catalog TDnet catchup
+        id: tdnet
         if: >-
           github.event_name == 'schedule' ||
           (github.event_name == 'workflow_dispatch' &&
@@ -74,9 +85,10 @@ jobs:
       # 同じ有報 1 通から並行構造化するため、本ステップ 1 つで両方が取り込まれる。
       - name: yuho-quant EDINET catchup (受注 + 海外売上)
         if: >-
-          github.event_name == 'schedule' ||
-          (github.event_name == 'workflow_dispatch' &&
-            (github.event.inputs.target == 'edinet' || github.event.inputs.target == 'all'))
+          (success() || steps.tdnet.outcome == 'failure') &&
+          (github.event_name == 'schedule' ||
+            (github.event_name == 'workflow_dispatch' &&
+              (github.event.inputs.target == 'edinet' || github.event.inputs.target == 'all')))
         run: pnpm ingest:yuho-edinet
 
       # 定期ジョブの失敗に気づく唯一の経路。これまで 14 workflow に

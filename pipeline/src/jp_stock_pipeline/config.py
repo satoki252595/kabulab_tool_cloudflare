@@ -178,6 +178,19 @@ class CloudStoreSettings:
     def enabled(self) -> bool:
         return self.r2_enabled() or self.d1_enabled()
 
+    def require_complete(self) -> None:
+        """本番ジョブはD1/R2の両方が必須。秘密値をエラーへ出さない。"""
+        required = {
+            "CF_ACCOUNT_ID": self.cf_account_id,
+            "R2_ACCESS_KEY_ID": self.r2_access_key_id,
+            "R2_SECRET_ACCESS_KEY": self.r2_secret_access_key,
+            "CF_API_TOKEN": self.cf_api_token,
+            "CF_D1_DATABASE_ID": self.d1_database_id,
+        }
+        missing = [key for key, value in required.items() if not value or not value.strip()]
+        if missing:
+            raise ConfigError("Cloudflare本番保存の必須設定が不足: " + ", ".join(missing))
+
 
 def _load_cloud_store(env: dict[str, str]) -> CloudStoreSettings:
     return CloudStoreSettings(

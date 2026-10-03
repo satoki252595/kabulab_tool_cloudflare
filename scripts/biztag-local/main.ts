@@ -1,5 +1,5 @@
 /**
- * Mac専用の事業タグ定時処理。
+ * Mac専用の事業タグ・優待要約定時処理。
  * Nix shell内から preflight / install / run を呼ぶ。自動更新・再試行はしない。
  */
 import { spawn, execFileSync } from "node:child_process";
@@ -10,19 +10,40 @@ import { fileURLToPath } from "node:url";
 import { preflight } from "./runtime.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const label = "com.kabulab-cf.biztag";
+/** 許可した2処理だけを起動する。未知のjobを取得前に拒否する。 */
+export function localJob(kind: string | undefined): { label: string; hour: number; script: string; args: string[] } {
+  if (kind === undefined || kind === "biztag") {
+    return { label: "com.kabulab-cf.biztag", hour: 20,
+      script: "services/yuho-quant/data-scripts/biztag.ts", args: ["run", "--budget-min=20"] };
+  }
+  if (kind === "yutai-summary") {
+    return { label: "com.kabulab-cf.yutai-summary", hour: 21,
+      script: "services/otakara-yutai/data-scripts/summary-local.ts", args: ["--limit", "60"] };
+  }
+  throw new Error("jobはbiztag / yutai-summaryのいずれかを指定してください。");
+}
+
+function jobState(state: string, kind: string | undefined): string {
+  const path = kind === "yutai-summary" ? join(dirname(state), "yutai-local") : state;
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  return path;
+}
 
 function xml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
 }
 
-function install(): void {
-  const { revision, state } = preflight(root);
+function install(kind: string | undefined): void {
+  const { label, hour } = localJob(kind);
+  const flight = preflight(root);
+  const revision = flight.revision;
+  const state = jobState(flight.state, kind);
   const nix = execFileSync("which", ["nix"], { encoding: "utf8" }).trim();
   if (!nix.startsWith("/nix/")) throw new Error("Nix管理のnix実行ファイルが必要です。");
   const plist = join(homedir(), "Library/LaunchAgents", `${label}.plist`);
   if (existsSync(plist)) throw new Error("既存LaunchAgentがあります。停止・内容確認後に更新してください。");
   const args = [nix, "develop", "--offline", "--command", "pnpm", "exec", "tsx", "scripts/biztag-local/main.ts", "run"];
+  if (kind !== undefined) args.push(kind);
   const content = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -30,7 +51,7 @@ function install(): void {
 <key>ProgramArguments</key><array>${args.map((v) => `<string>${xml(v)}</string>`).join("")}</array>
 <key>WorkingDirectory</key><string>${xml(root)}</string>
 <key>RunAtLoad</key><true/>
-<key>StartCalendarInterval</key><dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
+<key>StartCalendarInterval</key><dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>0</integer></dict>
 <key>StandardOutPath</key><string>${xml(join(state, "launchd.log"))}</string>
 <key>StandardErrorPath</key><string>${xml(join(state, "launchd-error.log"))}</string>
 <key>Umask</key><integer>63</integer>
@@ -40,11 +61,16 @@ function install(): void {
   writeFileSync(plist, content, { mode: 0o600, flag: "wx" });
   execFileSync("plutil", ["-lint", plist], { stdio: "ignore" });
   // bootstrapはRunAtLoadの実処理を始める。installでは作成だけに留める。
-  console.info(JSON.stringify({ status: "prepared", revision, label, localTime: "20:00", runAtLoad: true, bootstrapped: false }));
+  console.info(JSON.stringify({ status: "prepared", revision, label, localTime: `${hour}:00`, runAtLoad: true, bootstrapped: false }));
 }
 
-async function run(): Promise<void> {
-  const { revision, state } = preflight(root);
+async function run(kind: string | undefined): Promise<void> {
+  const job = localJob(kind);
+  const flight = preflight(root);
+  const revision = flight.revision;
+  const state = jobState(flight.state, kind);
+  const args = [...job.args];
+  if (kind === "yutai-summary") args.push("--state-dir", state);
   const startedAt = new Date().toISOString();
   const receipt = join(state, `${startedAt.replaceAll(":", "-")}-${process.pid}.json`);
   const log = openSync(`${receipt}.log`, "wx", 0o600);
@@ -57,7 +83,7 @@ async function run(): Promise<void> {
   delete childEnv.TYPESAFE_API_KEY;
   // writer lockはCLIのwithBiztagWriterが保有する。手動CLIも同じ排他境界を通る。
   try {
-    const child = spawn("pnpm", ["exec", "tsx", "services/yuho-quant/data-scripts/biztag.ts", "run", "--budget-min=20"], {
+    const child = spawn("pnpm", ["exec", "tsx", job.script, ...args], {
       cwd: root, env: childEnv, stdio: ["ignore", log, log], detached: true,
     });
     const stop = (): void => { if (child.pid !== undefined) process.kill(-child.pid, "SIGTERM"); };
@@ -83,15 +109,16 @@ async function run(): Promise<void> {
   }
 }
 
-export async function main(mode: string | undefined): Promise<void> {
+export async function main(mode: string | undefined, kind?: string): Promise<void> {
+  localJob(kind);
   if (mode === "preflight") console.info(JSON.stringify({ status: "preflight_pass", revision: preflight(root).revision, networkRequests: 0, writesToData: 0 }));
-  else if (mode === "install") install();
-  else if (mode === "run") await run();
+  else if (mode === "install") install(kind);
+  else if (mode === "run") await run(kind);
   else throw new Error("preflight / install / run のいずれかを指定してください。");
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
-  main(process.argv[2]).catch((error: unknown) => {
+  main(process.argv[2], process.argv[3]).catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : "biztagローカル処理が失敗しました。");
     process.exitCode = 1;
   });

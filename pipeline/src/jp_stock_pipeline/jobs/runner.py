@@ -260,6 +260,7 @@ class JobContext:
 def build_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dry-run", action="store_true", help="Notion へ書き込まない (§3-6)")
+    parser.add_argument("--require-cloud", action="store_true", help="本番保存にD1/R2の両資格情報を必須とする")
     parser.add_argument(
         "--date", type=lambda s: datetime.strptime(s, "%Y-%m-%d").date(), default=None,
         help="対象日 (省略時はジョブ毎の既定)",
@@ -314,6 +315,8 @@ def run_job(
     args = parser.parse_args(argv)
     resolved_env = dict(os.environ) if env is None else env
     settings = load_settings(dry_run=True if args.dry_run else None, env=resolved_env)
+    if args.require_cloud:
+        settings.cloud_store.require_complete()
 
     if settings.dry_run:
         # DB ID 未設定でも dry-run は完走させる（書き込みは記録のみ §3-6）

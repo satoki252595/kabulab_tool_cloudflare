@@ -29,6 +29,8 @@
     "ingest:vwap-daily": "tsx scripts/vwap/ingest-daily.ts",
     "ingest:vwap-intra": "tsx scripts/vwap/ingest-intra.ts",
     "ingest:vwap-margin": "tsx scripts/vwap/ingest-margin.ts",
+    "yutai:fetch": "tsx --env-file-if-exists=.env services/otakara-yutai/data-scripts/fetch-yutai-full.ts",
+    "yutai:summary:local": "tsx --env-file-if-exists=.env services/otakara-yutai/data-scripts/summary-local.ts",
     "yutai:summary:export": "tsx services/otakara-yutai/data-scripts/export-summary-tasks.ts",
     "yutai:summary:import": "tsx services/otakara-yutai/data-scripts/import-summary-results.ts",
     "yuho:backfill": "tsx services/yuho-quant/data-scripts/backfill.ts",

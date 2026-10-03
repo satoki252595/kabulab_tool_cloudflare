@@ -19,6 +19,7 @@
  *     DB に冪等記録し、物理ファイルは実体アップロードする
  */
 import { eq, sql } from "drizzle-orm";
+import { z } from "../../../../src/shared/zod-mini.js";
 import type { Database } from "../db/client.js";
 import type { createD1HttpBatchSender } from "../../../../src/shared/db/d1-http-client.js";
 import { toD1BatchStatements } from "../../../../src/shared/db/d1-http-client.js";
@@ -29,7 +30,7 @@ import {
   textSections,
 } from "../db/schema.js";
 import { backupDocTextToNotion } from "./text-backup.js";
-import { downloadDocument, EdinetNotFoundError } from "./edinet/client.js";
+import { downloadDocument, EdinetNotFoundError, EdinetDocumentFetchError } from "./edinet/client.js";
 import {
   assertNoMetadataOnly,
   checkDocCustody,
@@ -69,19 +70,31 @@ export type IngestOutcome =
 /** 005 のサービス識別子 (Notion アーカイブのサービス別 DB 名に使う) */
 const NOTION_SERVICE = "yuho-quant";
 
-export interface IngestResult {
-  outcome: IngestOutcome;
+interface IngestDetails {
   parseStatus: ParseStatus | "parse_error";
   factCount: number;
   /** 海外売上の構造化結果 (同じ有報から並行構造化)。 */
-  overseasParseStatus: OverseasParseStatus | "parse_error";
   overseasFactCount: number;
   /** 定性セクションの抽出結果 (CSV のみ・追加ダウンロードなし)。 */
-  textParseStatus: TextParseStatus | "parse_error";
   textSectionCount: number;
   /** 確定した会計期末 (訂正有報は docDescription から導出)。不明時 null */
   periodEnd: string | null;
 }
+export type IngestResult = IngestDetails & ({
+  outcome: Exclude<IngestOutcome, "skipped_existing">;
+  overseasParseStatus: OverseasParseStatus | "parse_error";
+  textParseStatus: TextParseStatus | "parse_error";
+} | {
+  outcome: "skipped_existing";
+  /** 旧列は未観測NULLのまま返す。no_table等に置き換えない。 */
+  overseasParseStatus: OverseasParseStatus | "parse_error" | null;
+  textParseStatus: TextParseStatus | null;
+});
+const savedOrderStatus = z.enum(["ok_pattern_a", "ok_pattern_b", "ok_pattern_c",
+  "ok_total_only", "orders_only", "table_unrecognized", "no_order_table", "parse_error"]);
+const savedOverseasStatus = z.nullable(z.enum(["ok_geo_rows", "ok_geo_cols",
+  "geo_present_unstructured", "no_overseas_table", "parse_error"]));
+const savedTextStatus = z.nullable(z.enum(["ok", "no_text_sections", "parse_error"]));
 
 // 保存行変換は共有正準 (overseas-save-rows.ts) を使用する。
 // (toYen は orders 系が共用。orders の振舞い変更なし。)
@@ -176,7 +189,10 @@ export async function ingestDocument(
   const existing = await db
     .select({
       id: yuhoDocuments.id,
+      parseStatus: yuhoDocuments.parseStatus,
+      overseasParseStatus: yuhoDocuments.overseasParseStatus,
       textParseStatus: yuhoDocuments.textParseStatus,
+      periodEnd: yuhoDocuments.periodEnd,
       notionDocPageId: yuhoDocuments.notionDocPageId,
     })
     .from(yuhoDocuments)
@@ -210,15 +226,16 @@ export async function ingestDocument(
   const needArchive = needT1 || needT5;
 
   if (!needDbWork && !needArchive) {
+    if (!existingRow) throw new Error("既取込文書の保存状態が欠落");
     return {
       outcome: "skipped_existing",
-      parseStatus: "no_order_table",
-      overseasParseStatus: "no_overseas_table",
-      textParseStatus: "no_text_sections",
+      parseStatus: savedOrderStatus.parse(existingRow.parseStatus),
+      overseasParseStatus: savedOverseasStatus.parse(existingRow.overseasParseStatus),
+      textParseStatus: savedTextStatus.parse(existingRow.textParseStatus),
       factCount: 0,
       overseasFactCount: 0,
       textSectionCount: 0,
-      periodEnd: doc.periodEnd ?? null,
+      periodEnd: existingRow.periodEnd,
     };
   }
 
@@ -329,6 +346,14 @@ export async function ingestDocument(
           `[ingest] xbrl unavailable docID=${doc.docID} ${doc.filerName}`
         );
       } else {
+        if (e instanceof EdinetDocumentFetchError && archiveToNotion) {
+          // T1の既知源失敗でも取得済CSVを失わない。保管未知はこのthrowより先に伝播。
+          await recordEdinetZip({service: NOTION_SERVICE, docID: doc.docID, type: 5, zip: csvZip,
+            source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt,
+            metadata: {docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
+              filerName: doc.filerName, docTypeCode: doc.docTypeCode, periodEnd,
+              submitDateTime: doc.submitDateTime, ingestPhase: "partial-source", failedType: 1}, force});
+        }
         throw e;
       }
     }

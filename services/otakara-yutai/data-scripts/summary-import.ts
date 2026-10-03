@@ -47,6 +47,7 @@ import {
   checkSummary,
   formatViolations,
   isSummaryPercentGrounded,
+  isSummaryNumbersGrounded,
   isVerbatimCopy,
   normalizeSummary,
 } from "./summary-contract.js";
@@ -292,9 +293,11 @@ export function planSummaryImport(input: {
       reject("verbatim", `掲載文の ${summary.length} 字の逐語コピー`);
       continue;
     }
-    // 要約の % は掲載文の % で裏づけられていること (別群の割引要約の貼り付け)
-    if (!isSummaryPercentGrounded(row.description, summary)) {
-      reject("summary_ungrounded", "要約の % が掲載文に無い (別群の割引要約の疑い)");
+    // 要約の単位付き数値も原文・受取条件で裏づける。金額列NULLでも架空額は不可。
+    if (!isSummaryPercentGrounded(row.description, summary) || !isSummaryNumbersGrounded(row.description, summary, {
+      minShares: row.minShares, recordMonths: row.recordMonths,
+    })) {
+      reject("summary_ungrounded", "要約の単位付き数値が掲載文・実受取条件に無い");
       continue;
     }
     if (sanitizeEstimatedValue(row.description, result.estimatedValue) !== result.estimatedValue) {

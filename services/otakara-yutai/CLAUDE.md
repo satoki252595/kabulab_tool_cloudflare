@@ -80,12 +80,13 @@ services/otakara-yutai/
 ```bash
 pnpm dev                  # ローカル開発サーバー起動 (wrangler dev)
 pnpm sync:monthly:core    # is_yutai=true のみ otakara_stock_scores 再計算
-# 優待データ取込パイプライン (data-scripts、GitHub Actions 非対象・ローカル手動):
-#   1. pnpm exec tsx services/otakara-yutai/data-scripts/fetch-yutai-full.ts
-#   2. pnpm exec tsx services/otakara-yutai/data-scripts/export-benefit-descriptions.ts
-#   3. pnpm yutai:summary:export [--violations-only]
-#      → 要約はリポジトリ外のクラウド LLM が docs/llm-summary-task.md に従って作る
-#   4. pnpm yutai:summary:import --tasks <タスク> --results <結果> [--apply]
+# 月次Actions: universe → pnpm yutai:fetch → sync:monthly:core
+# Mac毎日21時: yutai:summary:local（変更・未要約分、最大60件を公平に処理）
+pnpm yutai:fetch           # 原本・更新前全行をNotion物理照合してから取込
+pnpm exec tsx --env-file=.env scripts/biztag-local/main.ts run yutai-summary
+# 既存固定MLXモデル。金額は共有厳密判定のみ。専用private stateは入口で選ぶ。
+# 外部エージェントでの個別再作成は引き続き export/import を使える。
+# tasks/resultsはprivateのみ。自動経路も同じ契約・原子適用を通す。
 pnpm test / pnpm typecheck / pnpm lint
 ```
 

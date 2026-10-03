@@ -5,19 +5,32 @@
  * トリガの 600s 期限切れで失敗した (run 36465347557。9/24・9/25 も同型)。
  * Worker の TIME_BUDGET 検査は await 間でしか発火しないため、EDINET への
  * fetch 自体に期限が要る。期限切れは文脈付きで throw し (ルール2)、
- * 未完了分は次回実行の 60 日窓 + docId 冪等が拾う。
+ * 未完了分は保存済み進捗と docId 冪等が次回実行へ引き継ぐ。
  *
  * 本テストは外部通信しない。fetch を差し替えて「応答しない EDINET」を
  * 再現し、短縮期限で打ち切られること・正常時は signal 付きで送ること・
- * 非タイムアウト失敗の形を変えないことを固定する。
+ * 一覧の副作用なし未完と書類取得の元エラーを区別することを固定する。
  */
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import {gunzipSync} from "node:zlib";
 import {
   downloadDocument,
   listDocuments,
   EDINET_LIST_TIMEOUT_MS,
   EDINET_DOWNLOAD_TIMEOUT_MS,
+  EdinetListFetchError,
+  EdinetDocumentFetchError,
+  EdinetDocumentArchiveError,
+  EdinetNotFoundError,
 } from "../services/edinet/client.js";
+import {recordPrimaryData, verifyArchivedAttachments} from "../../../../src/shared/notion-archive/index.js";
+vi.mock("../../../../src/shared/notion-archive/index.js", () => ({recordPrimaryData: vi.fn(), verifyArchivedAttachments: vi.fn()}));
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(recordPrimaryData).mockResolvedValue({pageId: "00000000-0000-4000-8000-000000000001",
+    outcome: "recorded", manifestMatch: "match"} as never);
+  vi.mocked(verifyArchivedAttachments).mockResolvedValue(undefined);
+});
 
 const realFetch = globalThis.fetch;
 
@@ -117,14 +130,47 @@ describe("EDINET 要求期限", () => {
     expect(Date.now() - started).toBeLessThan(5000);
   });
 
-  it("非タイムアウトの fetch 失敗は包まず素通しする", async () => {
+  it("一覧/書類GET未完は再開可能な型に分類し、元エラーはcauseへ保持", async () => {
     useTestKey();
     const failure = new TypeError("fetch failed");
     globalThis.fetch = (async () => {
       throw failure;
     }) as unknown as typeof fetch;
-    await expect(listDocuments("2026-09-28")).rejects.toBe(failure);
-    await expect(downloadDocument("S100J2E7", 1)).rejects.toBe(failure);
+    const failedList = listDocuments("2026-09-28");
+    await expect(failedList).rejects.toMatchObject({
+      name: "EdinetListFetchError", cause: failure,
+    });
+    await expect(failedList).rejects.toBeInstanceOf(EdinetListFetchError);
+    await expect(downloadDocument("S100J2E7", 1)).rejects.toMatchObject({
+      name: "EdinetDocumentFetchError", cause: failure, docId: "S100J2E7", docType: 1,
+    });
+    expect(recordPrimaryData).not.toHaveBeenCalled();
+  });
+
+  it.each([403, 200])("受信した失敗本文は非ZIP原bytesで保管・読戻し後にtyped失敗 (%i)", async (status) => {
+    useTestKey();
+    const raw = new TextEncoder().encode('{"metadata":{"status":"403"}}');
+    globalThis.fetch = vi.fn(async () => new Response(raw, {status, headers: {"content-type": "application/json"}})) as typeof fetch;
+    await expect(downloadDocument("S100J2E7", 5)).rejects.toBeInstanceOf(EdinetDocumentFetchError);
+    const input = vi.mocked(recordPrimaryData).mock.calls[0][0];
+    expect(new Uint8Array(gunzipSync(input.files![0].bytes))).toEqual(raw);
+    expect(input.files![0].filename).toMatch(/\.response\.bin\.gz$/);
+    expect(input.metadata).toMatchObject({httpStatus: status, rawBytes: raw.length});
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("404も原HTTP保管後に既存型を保持し、保管結果不明をsource失敗へ分類しない", async () => {
+    useTestKey();
+    globalThis.fetch = vi.fn(async () => new Response("", {status: 404})) as typeof fetch;
+    await expect(downloadDocument("S100J2E7", 1)).rejects.toBeInstanceOf(EdinetNotFoundError);
+    const empty = vi.mocked(recordPrimaryData).mock.calls[0][0].files![0];
+    expect(empty.bytes.length).toBeGreaterThan(0);
+    expect(gunzipSync(empty.bytes).length).toBe(0);
+    vi.mocked(verifyArchivedAttachments).mockRejectedValueOnce(new Error("unknown readback"));
+    const failed = downloadDocument("S100J2E7", 1);
+    await expect(failed).rejects.toBeInstanceOf(EdinetDocumentArchiveError);
+    await expect(failed).rejects.not.toBeInstanceOf(EdinetDocumentFetchError);
   });
 
   it("既定の期限は一覧 15s・取得 60s (定数の退行防止)", () => {

@@ -7,8 +7,8 @@
  *      解釈 (short_summary / estimated_value) は内容キーで戻す。値は要約取込と
  *      同じ共有厳密判定で company 適格を見て、不認定は値ごと null で戻す
  *      (provenance 付け替えで値を温存しない)。
- *   1b. write/end・write-error/end に post-image から利回り・スコアを 1 回だけ
- *      追随させる (既存 builders)。書き込み前の STOP では送らない。
+ *   1b. 全保存成功後に post-image から利回り・スコアを 1 回だけ追随させる。
+ *      batch失敗・応答不明は後続保存/再計算を送らず、旧行/flagを廃止扱いしない。
  *   2. 母集団外の銘柄 (上場廃止・区分が NULL・非普通株) は、取得結果に載っていても
  *      取り込まず、既存の優待行 (解釈を含む) と is_yutai に触らない。
  *   3. 母集団の銘柄で、優待行を持っていたのに今回取得できなかったものは、優待行を消して
@@ -75,14 +75,14 @@ function makeProxyDb(target: DatabaseSync) {
   });
 }
 
-/** 送信ダブル (記録のみ。適用しない)。 */
+/** 本体batchも適用し、記録する。noopでは原子取込の値検証にならない。 */
 function makeRecordingSender(): { calls: D1BatchStatement[][]; sender: AtomicBatchSender } {
-  const calls: D1BatchStatement[][] = [];
-  const sender: AtomicBatchSender = async (statements) => {
-    calls.push(statements.map((s) => ({ sql: s.sql, params: [...s.params] })));
-  };
-  return { calls, sender };
+  return makeAtomicSender();
 }
+
+/** 既存の送信数契約は利回り・スコアlaneの件数。本体のstockbatchと区別する。 */
+const yieldCalls = (calls: D1BatchStatement[][]) =>
+  calls.filter((batch) => batch[0].sql.startsWith("-- preflight"));
 
 /**
  * 実証済み REST batch の all-or-nothing を模す送信ダブル (1 送信 = 1 トランザクション)。
@@ -246,7 +246,8 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
       },
     });
     // 財務行が無いので再計算の送信は無い
-    expect(calls).toEqual([]);
+    expect(yieldCalls(calls)).toEqual([]);
+    expect(calls).toHaveLength(HELD.length + 1);
     const after = snapshot();
 
     // 母集団外の優待行は id まで同じ (消して入れ直していない)。解釈も残る。
@@ -273,11 +274,11 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
     expect(logs.some((l) => l.includes("飛ばすコード") && l.includes(ABSENT_CODE))).toBe(true);
   });
 
-  it("優待行を持っていたのに今回取得できなかった母集団の銘柄は、優待行を消して is_yutai を落とす", async () => {
+  it("完全収集した一覧に無い母集団の銘柄だけ、優待行とis_yutaiを同batchで廃止する", async () => {
     const before = snapshot();
     captureConsole();
     const [abolished, ...rest] = HELD;
-    const { sender } = makeRecordingSender();
+    const { calls, sender } = makeRecordingSender();
 
     const result = await importYutaiFull(db, rest.map((s) => fetched(s.code)), sender);
 
@@ -293,6 +294,25 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
     // 母集団外は取得結果に無くても消さない
     expect(benefitsOf(after.benefits, OUTSIDE_IDS)).toEqual(benefitsOf(before.benefits, OUTSIDE_IDS));
     for (const s of OUTSIDE) expect(isYutaiOf(s.id), s.code).toBe(1);
+    const removal = calls.at(-1)!;
+    expect(removal).toHaveLength(2);
+    expect(removal[0].sql).toMatch(/delete from "yutai_benefits"/);
+    expect(removal[1].sql).toMatch(/update "core_stocks"/);
+  });
+
+  it("真廃止のflag更新が失敗しても同batchの旧優待行削除をrollbackする", async () => {
+    const [abolished, ...rest] = HELD;
+    const before = snapshot();
+    captureConsole();
+    sqlite.exec(`CREATE TRIGGER reject_abolish BEFORE UPDATE OF is_yutai ON core_stocks
+      WHEN NEW.id=${abolished.id} AND NEW.is_yutai=0
+      BEGIN SELECT RAISE(ABORT, 'abolish write failure'); END;`);
+    const { calls, sender } = makeAtomicSender();
+    await expect(importYutaiFull(db, rest.map((s) => fetched(s.code)), sender)).rejects.toThrow("abolish write failure");
+    expect(benefitsOf(snapshot().benefits, [abolished.id])).toEqual(benefitsOf(before.benefits, [abolished.id]));
+    expect(isYutaiOf(abolished.id)).toBe(1);
+    expect(calls).toHaveLength(HELD.length);
+    expect(yieldCalls(calls)).toEqual([]);
   });
 
   it("掲載文が変わった優待は未解釈で入り、戻せなかった解釈の件数を返す", async () => {
@@ -812,16 +832,16 @@ describe("importYutaiFull の post-image 利回り追随", () => {
     // 財務行の無い 20 銘柄は対象外カウントが明示される
     expect(result.recompute.skippedNoRow).toEqual(HELD.map((s) => s.id));
     // 1 銘柄 1 送信 (preflight + 利回り + スコア。スコア不変なら 2 文)
-    expect(calls.length).toBe(1);
+    expect(yieldCalls(calls)).toHaveLength(1);
     const scoreChanged =
       prevScore.fundamental_score !== expectedScore(null).fundamental_score ||
       prevScore.technical_score !== expectedScore(null).technical_score ||
       prevScore.total_score !== expectedScore(null).total_score;
-    expect(calls[0].length).toBe(scoreChanged ? 3 : 2);
-    expect(calls[0][0].sql.startsWith("-- preflight")).toBe(true);
+    expect(yieldCalls(calls)[0].length).toBe(scoreChanged ? 3 : 2);
+    expect(yieldCalls(calls)[0][0].sql.startsWith("-- preflight")).toBe(true);
   });
 
-  it("変わらない再実行は 0 送信 (冪等)", async () => {
+  it("変わらない再実行は利回りlane 0 送信 (冪等)", async () => {
     seedFinancialStock(401, "9301", 9.99);
     seedBenefit(401, descOf("9301"), 1000, null);
     captureConsole();
@@ -830,55 +850,59 @@ describe("importYutaiFull の post-image 利回り追随", () => {
     const first = makeAtomicSender();
     const r1 = await importYutaiFull(db, targets, first.sender);
     expect(r1.recompute.updated).toBe(1);
-    expect(first.calls.length).toBe(1);
+    expect(yieldCalls(first.calls)).toHaveLength(1);
     expect(finOf(401).yutai_yield).toBeCloseTo(1.0, 12);
 
     const second = makeAtomicSender();
     const r2 = await importYutaiFull(db, targets, second.sender);
     expect(r2.recompute.updated).toBe(0);
     expect(r2.recompute.scoresUpdated).toBe(0);
-    expect(second.calls).toEqual([]);
+    expect(yieldCalls(second.calls)).toEqual([]);
+    expect(second.calls).toHaveLength(targets.length);
   });
 
-  it("全件失敗でも post-image 再計算は走り、元の失敗を保つ (AggregateError にしない)", async () => {
+  it("同銘柄の途中INSERT失敗は旧全行/flagを保持し、後続保存・再計算を送らない", async () => {
     seedFinancialStock(HELD[0].id, HELD[0].code, 1.0, { insertCore: false });
     captureConsole();
     const { calls, sender } = makeAtomicSender();
-
-    const err = await importYutaiFull(db, HELD.map((s) => failingFetched(s.code)), sender).then(
+    const before = snapshot();
+    const beforeFin = finOf(HELD[0].id);
+    const partial = fetched(HELD[0].code);
+    partial.benefits.push(...failingFetched(HELD[0].code).benefits);
+    const err = await importYutaiFull(db, [partial, ...HELD.slice(1).map((s) => fetched(s.code))], sender).then(
       () => null,
       (e: unknown) => e
     );
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(AggregateError);
-    expect((err as Error).message).toMatch(/優待銘柄を 1 件も取り込めませんでした/);
-    // post-image (優待行なし) で再計算され、stale 利回りは null に直る
+    expect((err as Error).message).toMatch(/NOT NULL/);
     expect(calls.length).toBe(1);
-    expect(finOf(HELD[0].id).yutai_yield).toBe(null);
-    expect(scoreOf(HELD[0].id)).toEqual(expectedScore(null));
+    expect(yieldCalls(calls)).toEqual([]);
+    expect(snapshot()).toEqual(before);
+    expect(finOf(HELD[0].id)).toEqual(beforeFin);
   });
 
-  it("部分失敗は再計算の適用後に明示的に落とす。失敗銘柄は imported に数えない", async () => {
+  it("別銘柄の成功後にbatch失敗しても、失敗銘柄/後続/母集団外は旧行とflagを保つ", async () => {
     seedFinancialStock(HELD[0].id, HELD[0].code, 1.0, { insertCore: false });
     captureConsole();
     const { calls, sender } = makeAtomicSender();
-    const [failed, ...rest] = HELD;
+    const [success, failed, ...rest] = HELD;
+    const before = snapshot();
 
     const err = await importYutaiFull(
       db,
-      [failingFetched(failed.code), ...rest.map((s) => fetched(s.code))],
+      [fetched(success.code), failingFetched(failed.code), ...rest.map((s) => fetched(s.code))],
       sender
     ).then(
       () => null,
       (e: unknown) => e
     );
-    expect((err as Error).message).toMatch(/優待の取り込みに 1 件失敗しました/);
-    expect((err as Error).message).toMatch(/利回り再計算は post-image に適用済みです/);
-    // 再計算は走っている (失敗銘柄の stale 利回りを null に直す)
-    expect(calls.length).toBe(1);
-    expect(finOf(failed.id).yutai_yield).toBe(null);
-    // 失敗銘柄は成功扱いにしない (is_yutai を落とす)。成功銘柄は立つ。
-    expect(isYutaiOf(failed.id)).toBe(0);
+    expect((err as Error).message).toMatch(/NOT NULL/);
+    expect(calls).toHaveLength(2);
+    expect(yieldCalls(calls)).toEqual([]);
+    const protectedIds = [failed.id, ...rest.map((s) => s.id), ...OUTSIDE_IDS];
+    expect(benefitsOf(snapshot().benefits, protectedIds)).toEqual(benefitsOf(before.benefits, protectedIds));
+    expect(isYutaiOf(failed.id)).toBe(1);
     expect(isYutaiOf(rest[0].id)).toBe(1);
   });
 
@@ -911,7 +935,7 @@ describe("importYutaiFull の post-image 利回り追随", () => {
     const first = makeAtomicSender();
     const r1 = await importYutaiFull(db, targets, first.sender);
     expect(r1.recompute.updated).toBe(1);
-    expect(first.calls.length).toBe(1);
+    expect(yieldCalls(first.calls)).toHaveLength(1);
     expect(finOf(403).yutai_yield).toBe(null);
     expect(scoreOf(403)).toEqual(expectedScore(null));
     expect(finOf(403).price).toBe(1000);
@@ -926,26 +950,23 @@ describe("importYutaiFull の post-image 利回り追随", () => {
     const r2 = await importYutaiFull(db, targets, second.sender);
     expect(r2.recompute.updated).toBe(0);
     expect(r2.recompute.scoresUpdated).toBe(0);
-    expect(second.calls).toEqual([]);
+    expect(yieldCalls(second.calls)).toEqual([]);
   });
 
-  it("書き込み失敗 + 再計算失敗は両方を保つ (AggregateError)", async () => {
-    // 再計算が送信まで進むよう stale 利回りを置く (送信が無ければ再計算は成功する)
+  it("応答不明のsender throwは1送信で止まり、廃止/後続/再計算の追加writeをしない", async () => {
     seedFinancialStock(HELD[0].id, HELD[0].code, 1.0, { insertCore: false });
     const logs = captureConsole();
-    const sender: AtomicBatchSender = async () => {
-      throw new Error("送信失敗 (テスト)");
-    };
+    const before = snapshot();
+    const sender = vi.fn<AtomicBatchSender>(async () => { throw new Error("応答不明 (テスト)"); });
 
     const err = await importYutaiFull(db, HELD.map((s) => failingFetched(s.code)), sender).then(
       () => null,
       (e: unknown) => e
     );
-    expect(err).toBeInstanceOf(AggregateError);
-    const agg = err as AggregateError;
-    expect(agg.errors).toHaveLength(2);
-    expect(String((agg.errors[0] as Error).message)).toMatch(/優待銘柄を 1 件も取り込めませんでした/);
-    expect(String((agg.errors[1] as Error).message)).toMatch(/送信失敗/);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("応答不明 (テスト)");
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(snapshot()).toEqual(before);
     expect(logs.some((l) => l.includes("利回り再計算を適用"))).toBe(false);
   });
 });

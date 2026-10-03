@@ -28,8 +28,27 @@ import {
   real,
   index,
   uniqueIndex,
+  primaryKey,
 } from "drizzle-orm/sqlite-core";
 import { stocks } from "../../../../src/shared/db/core-schema.js";
+
+/** 日付一覧の実体と通ごとの完了を保持。未完日を rolling window で削除しない。 */
+export const edinetCatchupProgress = sqliteTable("yuho_edinet_catchup_progress", {
+  scope: text("scope").notNull(),
+  date: text("date").notNull(),
+  snapshot: text("snapshot"),
+  completedIds: text("completed_ids").notNull().default("[]"),
+  pendingIds: text("pending_ids").notNull().default("[]"),
+  finished: integer("finished", {mode: "boolean"}).notNull().default(false),
+  sealed: integer("sealed", {mode: "boolean"}).notNull().default(false),
+  inFlightDocId: text("in_flight_doc_id"),
+  revision: integer("revision").notNull().default(0),
+  pendingCheckedDate: text("pending_checked_date"),
+  updatedAt: integer("updated_at").notNull().default(sql`(unixepoch())`),
+}, (t) => [
+  primaryKey({columns: [t.scope, t.date]}),
+  index("yuho_edinet_progress_queue_idx").on(t.scope, t.finished, t.sealed, t.date),
+]);
 
 /**
  * 取り込んだ有価証券報告書 1 通 = 1 行。docId が EDINET 上の一意キーで、

@@ -16,7 +16,16 @@
 nix develop               # Node 22 + pnpm 9 の dev shell
 pnpm install && pnpm dev  # 依存導入 + ローカル開発サーバー
 pnpm sync:monthly:core    # 手動月次 rebuild (通常は GitHub Actions が実行)
+pnpm yutai:fetch          # 月次Actionsと同じ原文取得・物理保管・取込
+pnpm exec tsx --env-file=.env scripts/biztag-local/main.ts run yutai-summary
+# Mac21時jobと同じ変更・未要約分のローカル要約。private stateは入口で選ぶ。
 ```
+
+本番の原文取得は毎月10日10:30 JSTのActionsへ接続する。変更・未要約分はMacの
+`com.kabulab-cf.yutai-summary` が毎日21時に最大60件ずつ処理する。Macが稼働して
+いることが必要。既存の固定MLXモデルだけを使い、新規の有料APIへ切り替えない。
+原文・生成結果を公開ログへ出さず、共有契約の検証・Notion物理照合・銘柄単位の
+原子適用を通す。判定不能は金額NULL・理由つき保留とし、未確定の適用を自動再送しない。
 
 ## 内部API
 

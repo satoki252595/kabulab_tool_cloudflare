@@ -16,6 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   collectAllStockCodes,
   collectStockDetails,
+  fetchStockDetail,
   parseStockDetail,
   type StockDetailResult,
 } from "../../data-scripts/fetch-yutai-full.js";
@@ -160,6 +161,7 @@ describe("parseStockDetail は表ローカル月を優待に付ける", () => {
     const span = "優待権利確定月：<span>3月</span>";
     const data = unwrapOk(parseStockDetail("8022", `${UNION8022}\n${span}\n${tableOnly}`));
     expect(data.benefits.map((b) => [b.heading, b.localRecordMonths])).toEqual([["", [3]]]);
+    expect([data.name, data.market, data.category]).toEqual([null, null, null]);
   });
 
   it("最初の h3 より前で span が無い優待テーブルは unknown (union 推測しない)", () => {
@@ -219,9 +221,24 @@ describe("collectStockDetails は unknown を import の前に止める", () => 
   });
 
   it("取得失敗の unknown も落とさず止める", async () => {
-    const fetchDetail = async (code: string): Promise<StockDetailResult> =>
-      code === "9101" ? { status: "unknown", code, reason: "fetch: HTTP 429" } : okOf(code);
-    await expect(collectStockDetails(["9100", "9101"], fetchDetail)).rejects.toThrow(/9101 \(fetch: HTTP 429\)/);
+    const fetchDetail = vi.fn(async (code: string): Promise<StockDetailResult> =>
+      code === "9101" ? { status: "unknown", code, reason: "fetch: HTTP 429" } : okOf(code));
+    await expect(collectStockDetails(["9100", "9101", "9102"], fetchDetail)).rejects.toThrow(/9101 \(fetch: HTTP 429\)/);
+    expect(fetchDetail.mock.calls.map(([code]) => code)).toEqual(["9100", "9101"]);
+  });
+
+  it("HTTP429も同じ応答bytesを原本captureへ渡し、再送しない", async () => {
+    const bytes = new Uint8Array([0, 255, 10, 13]);
+    const fetched = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(bytes, { status: 429 }));
+    const capture = vi.fn();
+    try {
+      expect(await fetchStockDetail("9100", capture)).toMatchObject({ status: "unknown", code: "9100" });
+      expect(fetched).toHaveBeenCalledTimes(1);
+      expect(capture).toHaveBeenCalledTimes(1);
+      const raw = capture.mock.calls[0][0] as { bodyBase64: string; byteLength: number; status: number };
+      expect(Buffer.from(raw.bodyBase64, "base64")).toEqual(Buffer.from(bytes));
+      expect(raw).toMatchObject({ byteLength: bytes.length, status: 429 });
+    } finally { fetched.mockRestore(); }
   });
 });
 
@@ -242,5 +259,11 @@ describe("collectAllStockCodes は取得失敗を空ページに数えない", (
     };
     await expect(collectAllStockCodes(fetchListPage)).rejects.toThrow(/page=2/);
     await expect(collectAllStockCodes(fetchListPage)).rejects.toThrow(/部分リストを完成扱い・キャッシュしません/);
+  });
+
+  it("ページ引数を無視した重複応答では取得を続けない", async () => {
+    const fetchListPage = vi.fn(async () => pageWith("9100"));
+    await expect(collectAllStockCodes(fetchListPage)).rejects.toThrow(/重複/);
+    expect(fetchListPage).toHaveBeenCalledTimes(2);
   });
 });

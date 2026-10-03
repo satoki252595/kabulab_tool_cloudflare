@@ -1,4 +1,4 @@
-/** Mac の事業タグ定時処理。ローカル .env だけを設定元にする。 */
+/** Mac の事業タグ・優待要約定時処理。ローカル .env だけを設定元にする。 */
 export const biztagLocalEnv = {
   acceptedRevision(): string {
     const value = process.env.BIZTAG_LOCAL_ACCEPTED_REVISION;
