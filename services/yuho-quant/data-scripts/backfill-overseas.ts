@@ -32,6 +32,8 @@ import {
 import {
   downloadDocument,
   EdinetNotFoundError,
+  EdinetDocumentFetchError,
+  EdinetDocumentArchiveError,
 } from "../src/services/edinet/client.js";
 import { recordEdinetZip } from "../src/services/edinet/archive.js";
 import {
@@ -99,6 +101,8 @@ for (const r of targets) {
     facts = ex.facts;
     proof = ex.proof;
   } catch (e) {
+    if (e instanceof EdinetDocumentArchiveError ||
+        (e instanceof EdinetDocumentFetchError && !(e instanceof EdinetNotFoundError))) throw e;
     if (e instanceof EdinetNotFoundError) {
       status = "parse_error"; // type=1 未提供 → 構造化不能を正直に記録
     } else {

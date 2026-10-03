@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { ROOT } from "../shared/db/tests/source-scan.js";
 import { INSTRUMENT_TYPES } from "../shared/jpx/instrument-type.js";
-import { listDocuments, EdinetListFetchError } from "../../services/yuho-quant/src/services/edinet/client.js";
+import { listDocuments, EdinetListFetchError, EdinetDocumentFetchError } from "../../services/yuho-quant/src/services/edinet/client.js";
 import { captureListSnapshot, EdinetListQualificationError } from "../../services/yuho-quant/src/services/edinet/list-snapshot.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
 import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
@@ -27,6 +27,9 @@ import {
 vi.mock("../../services/yuho-quant/src/services/edinet/client.js", () => ({
   listDocuments: vi.fn(),
   EdinetListFetchError: class EdinetListFetchError extends Error {},
+  EdinetDocumentFetchError: class EdinetDocumentFetchError extends Error {
+    constructor(_docId: string, _type: number, message: string) {super(message);}
+  },
 }));
 vi.mock("../../services/yuho-quant/src/services/edinet/list-snapshot.js", async () => {
   const client = await import("../../services/yuho-quant/src/services/edinet/client.js");
@@ -163,6 +166,19 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     await expect(runCatchup()).rejects.toThrow("in-flight");
     expect(listDocuments).toHaveBeenCalledTimes(sourceCalls);
     expect(ingestDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it("文書の既知源失敗だけ予約解除し、同run停止・次run同snapshotから再開", async () => {
+    vi.mocked(listDocuments).mockResolvedValueOnce({results: [annualDoc("7203")]} as never)
+      .mockResolvedValue({results: []} as never);
+    vi.mocked(ingestDocument).mockRejectedValueOnce(new EdinetDocumentFetchError("S1007203", 5, "known source failure"))
+      .mockResolvedValue({outcome: "ingested", parseStatus: "no_order_table",
+        overseasParseStatus: "no_overseas_table", textParseStatus: "no_text_sections"} as never);
+    await expect(runCatchup()).rejects.toThrow("known source failure");
+    expect(ingestDocument).toHaveBeenCalledTimes(1);
+    const date = vi.mocked(listDocuments).mock.calls[0][0];
+    expect((await runCatchup()).ingested).toBe(1);
+    expect(vi.mocked(listDocuments).mock.calls.filter(([d]) => d === date)).toHaveLength(1);
   });
 
   it("既保存parse_errorは原本再取得せず保留に残し、その日に再実行しても成功扱いしない", async () => {

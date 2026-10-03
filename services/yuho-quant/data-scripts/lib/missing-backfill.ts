@@ -17,7 +17,7 @@ import {
   textSections,
   yuhoDocuments,
 } from "../../src/db/schema.js";
-import { EdinetNotFoundError } from "../../src/services/edinet/client.js";
+import { EdinetNotFoundError, EdinetDocumentFetchError, EdinetDocumentArchiveError } from "../../src/services/edinet/client.js";
 import { parseEdinetCsvZip } from "../../src/services/edinet/csv.js";
 import {
   parseOrderData,
@@ -268,7 +268,17 @@ export async function processMissingDoc(
         xbrlFetchedAt = new Date().toISOString();
       } catch (e) {
         if (e instanceof EdinetNotFoundError) xbrlUnavailable = true;
-        else throw e;
+        else {
+          if (e instanceof EdinetDocumentFetchError) {
+            try {await deps.recordEdinetZip({service: "yuho-quant", docID: doc.docID, type: 5, zip: csvZip,
+              source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt,
+              metadata: {docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
+                filerName: doc.filerName, docTypeCode: doc.docTypeCode, periodEnd,
+                submitDateTime: doc.submitDateTime, ingestPhase: "partial-source", failedType: 1}});
+            } catch (cause) {throw new EdinetDocumentArchiveError({cause});}
+          }
+          throw e;
+        }
       }
     }
 
@@ -432,5 +442,6 @@ export async function processMissingDoc(
   } catch (e) {
     deps.tally("error");
     console.warn(`[missing] 失敗 ${tag}: ${(e as Error).message}`);
+    if (e instanceof EdinetDocumentFetchError || e instanceof EdinetDocumentArchiveError) throw e;
   }
 }

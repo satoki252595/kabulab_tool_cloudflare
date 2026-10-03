@@ -18,7 +18,7 @@ import type { Database } from "../../services/yuho-quant/src/db/client.js";
 import { loadIngestCodeToId } from "../shared/db/active-equity.js";
 import { captureListSnapshot, readListSnapshot, EdinetListQualificationError } from "../../services/yuho-quant/src/services/edinet/list-snapshot.js";
 import { enqueueDates, progressQueue, progressContents, progressSummary, saveProgress, jstDate, type PendingDocument } from "../../services/yuho-quant/src/services/edinet/catchup-progress.js";
-import { EdinetListFetchError } from "../../services/yuho-quant/src/services/edinet/client.js";
+import { EdinetListFetchError, EdinetDocumentFetchError } from "../../services/yuho-quant/src/services/edinet/client.js";
 import {
   isAnnualSecuritiesReport,
 } from "../../services/yuho-quant/src/services/edinet/types.js";
@@ -232,8 +232,17 @@ export async function runYuhoEdinetCatchup(
       row = await saveProgress(db, row, {completedIds: JSON.stringify(completed),
         pendingIds: JSON.stringify(pending), inFlightDocId: doc.docID});
       console.info(`[yuho-edinet] ingest 開始 ${date} docID=${doc.docID}`);
-      const r = await ingestDocument(db, {stockId, stockCode: code, doc,
-        archiveToNotion: true, custody: custodyByDoc.get(doc.docID), d1HttpBatch});
+      let r;
+      try {
+        r = await ingestDocument(db, {stockId, stockCode: code, doc,
+          archiveToNotion: true, custody: custodyByDoc.get(doc.docID), d1HttpBatch});
+      } catch (error) {
+        if (error instanceof EdinetDocumentFetchError) {
+          // 未確定archive/DB送信はこの型にならない。既知源失敗だけ次定時runへ。
+          await saveProgress(db, row, {inFlightDocId: null});
+        }
+        throw error; // 同runの次文書/source/L2へ進まない。
+      }
       if (r.outcome !== "skipped_existing") {
         byStatus[r.parseStatus] = (byStatus[r.parseStatus] ?? 0) + 1;
         const ok = `oseas:${r.overseasParseStatus}`;

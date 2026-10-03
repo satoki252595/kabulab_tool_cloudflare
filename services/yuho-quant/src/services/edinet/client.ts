@@ -12,6 +12,9 @@
  *   - ルール3: API キーは yuhoEnv 経由でのみ取得 (process.env 直参照しない)。
  */
 import { yuhoEnv } from "../../env.js";
+import { gzipSync } from "node:zlib";
+import { recordPrimaryData, verifyArchivedAttachments } from "../../../../../src/shared/notion-archive/index.js";
+import { sha256HexBytes } from "../../../../../src/shared/sha256.js";
 import {
   edinetListResponseSchema,
   type EdinetListResponse,
@@ -42,31 +45,22 @@ export interface EdinetRequestOpts {
   timeoutMs?: number;
 }
 
-/**
- * fetch 失敗を期限切れだけ文脈付きで投げ直す (握りつぶさない — ルール2)。
- * cause は timer 由来の TimeoutError で秘密を含まない。それ以外の失敗は
- * 素通しし、呼び出し側の既存の分類を変えない。header 到着後の body 読取
- * (json/text/arrayBuffer) も同じ signal の期限内にあり、停滞はここで
- * 文脈付きになる。
- */
-function rethrowTimeoutOnly(
-  signal: AbortSignal,
-  e: unknown,
-  message: string
-): never {
-  if (signal.aborted) {
-    throw new Error(message, { cause: e });
-  }
-  throw e;
+/** 源GETの既知失敗。受信済み失敗原文がある場合は全文物理保管後だけ返す。 */
+export class EdinetDocumentFetchError extends Error {
+  constructor(public readonly docId: string, public readonly docType: number,
+    message: string, options?: ErrorOptions) {super(message, options); this.name = "EdinetDocumentFetchError";}
 }
-
+/** 失敗原文の物理保管が未確定。sourceだけの失敗と混同して再送しない。 */
+export class EdinetDocumentArchiveError extends Error {
+  constructor(options: ErrorOptions) {super("EDINET失敗原応答の保管未完 (再送なし)", options); this.name = "EdinetDocumentArchiveError";}
+}
 /** EDINET が当該書類タイプを保持していない (404) ことを表す型付きエラー */
-export class EdinetNotFoundError extends Error {
+export class EdinetNotFoundError extends EdinetDocumentFetchError {
   constructor(
-    public readonly docId: string,
-    public readonly docType: number
+    docId: string,
+    docType: number
   ) {
-    super(`EDINET 書類が存在しません docID=${docId} type=${docType}`);
+    super(docId, docType, `EDINET 書類が存在しません docID=${docId} type=${docType}`);
     this.name = "EdinetNotFoundError";
   }
 }
@@ -152,43 +146,36 @@ export async function downloadDocument(
   const signal = AbortSignal.timeout(timeoutMs);
   const timeoutMessage = `EDINET 書類取得 API タイムアウト docID=${docId} type=${docType} timeoutMs=${timeoutMs}`;
   let res: Response;
-  try {
-    res = await fetch(url, { signal, redirect: "manual" });
-  } catch (e) {
-    rethrowTimeoutOnly(signal, e, timeoutMessage);
-  }
-  if (res.status === 404) {
-    throw new EdinetNotFoundError(docId, docType);
-  }
-  if (!res.ok) {
-    throw new Error(
-      `EDINET 書類取得 API エラー docID=${docId} type=${docType} status=${res.status} ${res.statusText}`
-    );
-  }
-  const ct = res.headers.get("content-type") ?? "";
-  // 正常時は application/octet-stream (ZIP)。JSON が返るのは API エラー応答。
-  if (ct.includes("application/json")) {
-    let body: string;
-    try {
-      body = await res.text();
-    } catch (e) {
-      rethrowTimeoutOnly(signal, e, timeoutMessage);
-    }
-    throw new Error(
-      `EDINET 書類取得が JSON エラーを返しました docID=${docId} type=${docType}: ${body.slice(0, 300)}`
-    );
-  }
   let raw: ArrayBuffer;
   try {
+    res = await fetch(url, { signal, redirect: "manual" });
     raw = await res.arrayBuffer();
   } catch (e) {
-    rethrowTimeoutOnly(signal, e, timeoutMessage);
+    throw new EdinetDocumentFetchError(docId, docType, signal.aborted ? timeoutMessage
+      : `EDINET 書類GET未完 docID=${docId} type=${docType} (同run再送なし)`, {cause: e});
   }
   const buf = Buffer.from(raw);
-  if (buf.length === 0) {
-    throw new Error(
-      `EDINET 書類取得が空応答 docID=${docId} type=${docType}`
-    );
+  const ct = res.headers.get("content-type");
+  if (!res.ok || ct?.includes("application/json") || buf.length === 0) {
+    const fetchedAt = new Date().toISOString();
+    const rawSha256 = await sha256HexBytes(buf);
+    const filename = `${docId}-type${docType}-failed-http.response.bin.gz`;
+    const file = {filename, bytes: new Uint8Array(gzipSync(buf)), contentType: "application/gzip"};
+    // 非ZIPの失敗本文をZIPと偽らず、全caller共通で型エラーより前に実体保管する。
+    try {
+      const saved = await recordPrimaryData({service: "yuho-quant",
+        key: `${docId}:type${docType}:failed-http:${fetchedAt}:${rawSha256}`,
+        source: `EDINET API v2 /documents/${docId}?type=${docType} (失敗HTTP原本文)`, fetchedAt,
+        metadata: {docID: docId, edinetDocType: docType, httpStatus: res.status,
+          sourceContentType: ct, rawBytes: buf.length, rawSha256}, files: [file], force: false});
+      if (saved.fileTooLarge || saved.manifestMatch === "unknown") throw new Error("失敗原文保管未証明");
+      await verifyArchivedAttachments(saved.pageId, [file], "EDINET失敗原応答");
+    } catch (cause) {
+      throw new EdinetDocumentArchiveError({cause});
+    }
+    if (res.status === 404) throw new EdinetNotFoundError(docId, docType);
+    throw new EdinetDocumentFetchError(docId, docType,
+      `EDINET 書類取得のHTTP/本文資格未成立 docID=${docId} type=${docType} status=${res.status} (原応答保管済み)`);
   }
   return buf;
 }

@@ -20,6 +20,8 @@ import { recordEdinetZip } from "../src/services/edinet/archive.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
+  EdinetDocumentFetchError,
+  EdinetDocumentArchiveError,
 } from "../src/services/edinet/client.js";
 import * as yuhoSchema from "../src/db/schema.js";
 
@@ -85,7 +87,19 @@ for (const docId of docIds) {
       xbrlZip = await downloadDocument(docId, 1);
       xbrlFetchedAt = new Date().toISOString();
     } catch (e) {
-      if (!(e instanceof EdinetNotFoundError)) throw e;
+      if (!(e instanceof EdinetNotFoundError)) {
+        if (e instanceof EdinetDocumentFetchError) {
+          try {await recordEdinetZip({service: "yuho-quant", docID: docId, type: 5, zip: csvZip,
+            source: `EDINET API v2 /documents/${docId}?type=5`, fetchedAt: csvFetchedAt,
+            metadata: {docID: docId, edinetCode: row.edinetCode, filerName: row.filerName,
+              docTypeCode: row.docTypeCode, periodEnd: row.periodEnd,
+              submitDateTime: row.submittedAt instanceof Date ? row.submittedAt.toISOString()
+                : new Date((row.submittedAt as unknown as number) * 1000).toISOString(),
+              repairedBy: "p6-zip-gap", ingestPhase: "partial-source", failedType: 1}, force});
+          } catch (cause) {throw new EdinetDocumentArchiveError({cause});}
+        }
+        throw e;
+      }
     }
     const submittedAt =
       row.submittedAt instanceof Date
@@ -139,6 +153,7 @@ for (const docId of docIds) {
   } catch (e) {
     tally.error += 1;
     console.warn(`[zip-repair] 失敗 ${docId}: ${(e as Error).message}`);
+    if (e instanceof EdinetDocumentFetchError || e instanceof EdinetDocumentArchiveError) throw e;
   }
 }
 
