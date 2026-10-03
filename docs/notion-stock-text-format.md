@@ -10,4 +10,4 @@ v2は未知のmarker・不正JSON・見出し/本文の型違い・fragment欠�
 
 取得済み2通の68節・296,260codepoint・U+200B4文字を使った純粋検証では、全3fieldと既知U+200B削除条件への投影後の全文が一致した。block数は154/111で、各通の本文書込み2回・読取り2ページを維持する。原文・私有ID・取得鍵は公開しない。
 
-この純粋検証はNotionサーバーでv2形式が受け入れられた証明ではない。本番の2通再保存・実全文往復・参照先更新は未実施で、[既存HOLD記録](test-logs/yuho-text2-roundtrip-hold-20261003.md)を保持する。再開時は旧全文/PREの物理保管、排他、v2の原本文完全一致、全D1 PREに対するpointerのみの条件付き更新、POSTの物理保管を別途受け入れる。元publisher取得時計UNKNOWNは保存形式の変更で補完しない。
+この純粋検証だけではNotionサーバーでv2形式が受け入れられた証明にならない。[後続の本番実行](test-logs/yuho-text2-lossless-actual-20261003.md)では新PRE全112memberを物理保管・独立照合後、2通の全68節を原本文と実往復照合し、全D1 PREに対するpointer2件のみの条件付き更新とPOST物理保管・全文読戻しが成立した。rootと第二者の独立全raw照合もPASS。[既存HOLD記録](test-logs/yuho-text2-roundtrip-hold-20261003.md)は履歴として保持し、元publisher取得時計・旧manifest/SHAのUNKNOWNを保存形式の変更で補完しない。
