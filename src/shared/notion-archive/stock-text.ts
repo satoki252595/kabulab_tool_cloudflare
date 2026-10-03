@@ -11,7 +11,7 @@
  *   └─ 有報テキスト (単一 DB。ID = NOTION_YUHO_TEXT_DB_ID。1 行 = 1 通)
  *      ├─ プロパティ: D1 構造の鏡像 (文書・D1文書ID・銘柄コード・
  *      │  会計期末・セクション件数・文字数合計・抽出状態)
- *      └─ 本文: heading_2 目印 + セクション毎に heading_3 + code block 群
+ *      └─ 本文: 版付き heading_2 + セクション毎の JSON 見出し/本文 code block 群
  *
  * 旧設計は証券コード毎に子ページ+子DB を作っていたが、数千件の子ページが
  * 累積して親ページ (旧「バックアップ」) が Notion 上で開けなくなり、
@@ -116,6 +116,25 @@ function richText(content: string): { text: { content: string } } {
   return { text: { content } };
 }
 
+/** Notion が除去する不可視文字と、分割で壊れる surrogate を JSON 上で保護する。 */
+function encodeTextJson(value: unknown): string {
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) throw new Error("有報テキストの JSON 値が不正");
+  const escapeUnit = (unit: string) =>
+    `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`;
+  return encoded
+    .replace(/\p{Cf}/gu, (value) => value.split("").map(escapeUnit).join(""))
+    .replace(/[\uD800-\uDFFF]/g, escapeUnit);
+}
+
+function decodeTextJson(encoded: string): unknown {
+  const decoded: unknown = JSON.parse(encoded);
+  if (encodeTextJson(decoded) !== encoded) {
+    throw new Error("有報テキストの JSON 表現が非正準");
+  }
+  return decoded;
+}
+
 /** 文字列を rich_text 上限で code block 群に分割 (欠落させない) */
 function textToCodeBlocks(text: string): unknown[] {
   const blocks: unknown[] = [];
@@ -143,9 +162,16 @@ function textToCodeBlocks(text: string): unknown[] {
 
 /**
  * 1 通分の本文ブロック列を作る (純粋関数)。
- * heading_2 目印 + セクション毎に heading_3 + code block 群。
+ * json-escaped-v2: heading は [項目名, キー]、本文は JSON string。
+ * code block は JSON 表現を分割し、読取時は全連結後に decode する。
  */
 export function buildTextBodyBlocks(sections: StockTextSection[]): unknown[] {
+  if (!Array.isArray(sections) || sections.some((section) => !section ||
+      typeof section.itemName !== "string" || typeof section.sectionKey !== "string" ||
+      typeof section.text !== "string") ||
+      new Set(sections.map((section) => section.sectionKey)).size !== sections.length) {
+    throw new Error("有報テキストの入力型またはキー重複が不正");
+  }
   const blocks: unknown[] = [
     {
       object: "block",
@@ -154,7 +180,7 @@ export function buildTextBodyBlocks(sections: StockTextSection[]): unknown[] {
         rich_text: [
           {
             type: "text",
-            ...richText(`${TEXT_BODY_MARKER} (${sections.length}項目)`),
+            ...richText(`${TEXT_BODY_MARKER} (${sections.length}項目) [json-escaped-v2]`),
           },
         ],
       },
@@ -166,11 +192,11 @@ export function buildTextBodyBlocks(sections: StockTextSection[]): unknown[] {
       type: "heading_3",
       heading_3: {
         rich_text: [
-          { type: "text", ...richText(`${s.itemName} (${s.sectionKey})`) },
+          { type: "text", ...richText(encodeTextJson([s.itemName, s.sectionKey])) },
         ],
       },
     });
-    blocks.push(...textToCodeBlocks(s.text));
+    blocks.push(...textToCodeBlocks(encodeTextJson(s.text)));
   }
   return blocks;
 }
@@ -265,14 +291,16 @@ export async function upsertStockTextRow(args: {
   if (existing && !force) {
     return { rowPageId: existing, outcome: "skipped_existing" };
   }
+  // 入力不正で旧 active 行を消さない。pure 組立をすべて mutation より前に行う。
+  const blocks = buildTextBodyBlocks(sections);
+  const properties = rowProperties(doc, sections);
   if (existing && force) {
     await notionRequest("PATCH", `/pages/${existing}`, { archived: true });
   }
-  const blocks = buildTextBodyBlocks(sections);
   const [first, ...rest] = chunk(blocks, CHILDREN_PER_REQUEST);
   const created = await notionRequest<{ id: string }>("POST", "/pages", {
     parent: { database_id: dbId },
-    properties: rowProperties(doc, sections),
+    properties,
     children: first ?? [],
   });
   for (const part of rest) {
@@ -284,16 +312,37 @@ export async function upsertStockTextRow(args: {
 }
 
 function blockText(
-  rich: Array<{ plain_text?: string; text?: { content: string } }> | undefined
+  rich: Array<{ plain_text?: string; text?: { content: string } }> | undefined,
+  strict: boolean
 ): string {
-  return (rich ?? [])
-    .map((r) => r.plain_text ?? r.text?.content ?? "")
-    .join("");
+  if (!strict) {
+    return (rich ?? [])
+      .map((r) => r.plain_text ?? r.text?.content ?? "")
+      .join("");
+  }
+  if (!Array.isArray(rich) || rich.length === 0) {
+    throw new Error("有報テキストの JSON rich_text が欠落");
+  }
+  return rich.map((r) => {
+    if (!r || (r.plain_text !== undefined && typeof r.plain_text !== "string") ||
+        (r.text !== undefined && typeof r.text?.content !== "string")) {
+      throw new Error("有報テキストの JSON fragment 型が不正");
+    }
+    const plain = r.plain_text, content = r.text?.content;
+    if (typeof plain === "string" && typeof content === "string" && plain !== content) {
+      throw new Error("有報テキストの JSON fragment が不一致");
+    }
+    const text = typeof plain === "string" ? plain : content;
+    if (typeof text !== "string" || text.length === 0) {
+      throw new Error("有報テキストの JSON fragment が欠落");
+    }
+    return text;
+  }).join("");
 }
 
 /**
  * 行の本文ブロックを読み戻してセクション列に復元する (P2 の読み経路用)。
- * 先頭が目印 heading_2 でなければ throw (別形式の行を黙って解釈しない)。
+ * 旧 plain-v1 と json-escaped-v2 を明示判別し、未知形式は throw する。
  */
 export async function readStockTextRow(
   rowPageId: string
@@ -320,32 +369,50 @@ export async function readStockTextRow(
     cursor = res.next_cursor as string;
   }
   const [marker, ...rest] = blocks;
-  if (
-    marker?.type !== "heading_2" ||
-    !blockText(marker.heading_2?.rich_text).startsWith(TEXT_BODY_MARKER)
-  ) {
+  const markerText = blockText(marker?.heading_2?.rich_text, false);
+  const legacy = /^抽出テキスト全文 \((0|[1-9]\d*)項目\)$/.exec(markerText);
+  const encoded = /^抽出テキスト全文 \((0|[1-9]\d*)項目\) \[json-escaped-v2\]$/.exec(markerText);
+  if (marker?.type !== "heading_2" || (!legacy && !encoded)) {
     throw new Error(
       `Notion 有報テキスト行の形式が違う (先頭が目印ではない): page=${rowPageId}`
     );
   }
+  if (encoded) blockText(marker.heading_2?.rich_text, true);
   const sections: StockTextSection[] = [];
   let current: StockTextSection | null = null;
   const flush = () => {
-    if (current) sections.push(current);
+    if (current) {
+      if (encoded) {
+        const text = decodeTextJson(current.text);
+        if (typeof text !== "string") throw new Error("有報テキストの本文 JSON 型が不正");
+        current.text = text;
+      }
+      sections.push(current);
+    }
     current = null;
   };
   for (const b of rest) {
     if (b.type === "heading_3") {
       flush();
-      const heading = blockText(b.heading_3?.rich_text);
-      const m = /^(.*) \(([^()]+)\)$/.exec(heading);
-      current = {
-        itemName: m ? m[1]! : heading,
-        sectionKey: m ? m[2]! : "",
-        text: "",
-      };
+      const heading = blockText(b.heading_3?.rich_text, encoded !== null);
+      if (encoded) {
+        const fields = decodeTextJson(heading);
+        if (!Array.isArray(fields) || fields.length !== 2 ||
+            !fields.every((field) => typeof field === "string")) {
+          throw new Error("有報テキストの見出し JSON 型が不正");
+        }
+        current = { itemName: fields[0], sectionKey: fields[1], text: "" };
+      } else {
+        // plain-v1 は JSON として解釈せず、保存された原文をそのまま返す。
+        const m = /^(.*) \(([^()]+)\)$/.exec(heading);
+        current = {
+          itemName: m ? m[1]! : heading,
+          sectionKey: m ? m[2]! : "",
+          text: "",
+        };
+      }
     } else if (b.type === "code" && current) {
-      current.text += blockText(b.code?.rich_text);
+      current.text += blockText(b.code?.rich_text, encoded !== null);
     } else if (b.type === "code" && !current) {
       throw new Error(
         `Notion 有報テキスト行の形式が違う (見出しの無い本文): page=${rowPageId}`
@@ -359,5 +426,9 @@ export async function readStockTextRow(
     }
   }
   flush();
+  if (encoded && (sections.length !== Number(encoded[1]) ||
+      new Set(sections.map((section) => section.sectionKey)).size !== sections.length)) {
+    throw new Error("有報テキストの件数またはキー重複が不正");
+  }
   return sections;
 }

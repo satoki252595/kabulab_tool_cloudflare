@@ -93,12 +93,12 @@ describe("notion-archive stock-text", () => {
         "code",
       ]);
       expect(blocks[0]?.heading_2?.rich_text[0]?.text.content).toBe(
-        "抽出テキスト全文 (2項目)"
+        "抽出テキスト全文 (2項目) [json-escaped-v2]"
       );
       expect(blocks[1]?.heading_3?.rich_text[0]?.text.content).toBe(
-        "事業の内容 (business)"
+        '["事業の内容","business"]'
       );
-      expect(blocks[2]?.code?.rich_text[0]?.text.content).toBe("本文A");
+      expect(blocks[2]?.code?.rich_text[0]?.text.content).toBe('"本文A"');
     });
 
     it("2000 文字超は code block に分割し欠落させない", async () => {
@@ -110,7 +110,7 @@ describe("notion-archive stock-text", () => {
       const codes = blocks.filter((b) => b.type === "code");
       expect(codes).toHaveLength(3);
       expect(
-        codes.map((b) => b.code?.rich_text[0]?.text.content).join("")
+        JSON.parse(codes.map((b) => b.code?.rich_text[0]?.text.content).join(""))
       ).toBe(text);
       for (const b of codes) {
         expect(
@@ -129,6 +129,12 @@ describe("notion-archive stock-text", () => {
         "heading_3",
         "code",
       ]);
+    });
+
+    it.each(["itemName", "sectionKey", "text"])("非string %s は保存前に拒否する", async (field) => {
+      const { buildTextBodyBlocks } = await load();
+      const section = { itemName: "事業の内容", sectionKey: "business", text: "本文A", [field]: 0 };
+      expect(() => buildTextBodyBlocks([section] as never)).toThrow("入力型");
     });
   });
 
@@ -276,6 +282,16 @@ describe("notion-archive stock-text", () => {
       };
       expect(archived).toEqual({ archived: true });
     });
+
+    it("force の入力不正は旧 archive・新 create の前に停止する", async () => {
+      route("POST", "/v1/databases/db-7203/query", [dbQuery(["row-old"])]);
+      const { upsertStockTextRow } = await load();
+      await expect(upsertStockTextRow({
+        dbId: "db-7203", doc, sections: [sections[0]!, sections[0]!], force: true,
+      })).rejects.toThrow("キー重複");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://api.notion.com/v1/databases/db-7203/query");
+    });
   });
 
   describe("readStockTextRow", () => {
@@ -295,6 +311,75 @@ describe("notion-archive stock-text", () => {
       code: { rich_text: [{ plain_text: text }] },
     });
 
+    it("v2 は既知 U+200B 除去後も、分割した JSON と補助文字を原文へ復元する", async () => {
+      const { buildTextBodyBlocks, readStockTextRow } = await load();
+      // 原本で再現した消失条件を文法境界として固定する。報告書データではない。
+      const sections = [{
+        itemName: "事業\u200bの内容",
+        sectionKey: "business",
+        text: "あ".repeat(1995) + "\u200b😀\u{E0001}\\u200b\n\t\"",
+      }, { itemName: "空", sectionKey: "empty", text: "" }];
+      const blocks = buildTextBodyBlocks(sections) as Array<{
+        type: "heading_2" | "heading_3" | "code";
+        heading_2?: { rich_text: Array<{ text: { content: string } }> };
+        heading_3?: { rich_text: Array<{ text: { content: string } }> };
+        code?: { rich_text: Array<{ text: { content: string } }> };
+      }>;
+      const returned = blocks.map((block, i) => {
+        const body = block[block.type]!;
+        for (const rich of body.rich_text) {
+          expect(rich.text.content.length).toBeLessThanOrEqual(2000);
+          expect(rich.text.content).not.toMatch(/\p{Cf}/u);
+          expect(rich.text.content).not.toMatch(/[\uD800-\uDFFF]/);
+        }
+        return {
+          id: `b${i}`, type: block.type,
+          [block.type]: { rich_text: body.rich_text.map((rich) => ({
+            plain_text: rich.text.content.replaceAll("\u200b", ""),
+          })) },
+        };
+      });
+      route("GET", "/v1/blocks/row-1/children", [childrenPage(returned)]);
+      expect(await readStockTextRow("row-1")).toEqual(sections);
+    });
+
+    it.each([
+      { marker: "抽出テキスト全文 (1項目) [json-escaped-v3]", heading: '["A","a"]', text: '"本文"' },
+      { marker: "抽出テキスト全文 (2項目) [json-escaped-v2]", heading: '["A","a"]', text: '"本文"' },
+      { marker: "抽出テキスト全文 (1項目) [json-escaped-v2]", heading: '["A"]', text: '"本文"' },
+      { marker: "抽出テキスト全文 (1項目) [json-escaped-v2]", heading: '["A","a"]', text: "0" },
+      { marker: "抽出テキスト全文 (1項目) [json-escaped-v2]", heading: '["A","a"]', text: '"未終端' },
+      { marker: "抽出テキスト全文 (1項目) [json-escaped-v2]", heading: '["A","a"]', text: '"\\u200B"' },
+    ])("v2 の未知版・件数矛盾・不正 payload は停止する: $marker / $text", async ({ marker, heading, text }) => {
+      route("GET", "/v1/blocks/row-1/children", [
+        childrenPage([h2(marker), h3("b1", heading), code("b2", text)]),
+      ]);
+      const { readStockTextRow } = await load();
+      await expect(readStockTextRow("row-1")).rejects.toThrow();
+    });
+
+    it("v2 の重複 sectionKey は部分成功にしない", async () => {
+      route("GET", "/v1/blocks/row-1/children", [childrenPage([
+        h2("抽出テキスト全文 (2項目) [json-escaped-v2]"),
+        h3("b1", '["A","a"]'), code("b2", '"前半"'),
+        h3("b3", '["B","a"]'), code("b4", '"後半"'),
+      ])]);
+      const { readStockTextRow } = await load();
+      await expect(readStockTextRow("row-1")).rejects.toThrow("キー重複");
+    });
+
+    it.each([undefined, [], [{}], [{ plain_text: "" }], [{ plain_text: "省略", text: { content: "原文" } }]])(
+      "v2 の途中 fragment 欠落/不一致を空文字で埋めない: %j", async (rich_text) => {
+        route("GET", "/v1/blocks/row-1/children", [childrenPage([
+          h2("抽出テキスト全文 (1項目) [json-escaped-v2]"),
+          h3("b1", '["A","a"]'), code("b2", '"前'),
+          { id: "b3", type: "code", code: { rich_text } }, code("b4", '後"'),
+        ])]);
+        const { readStockTextRow } = await load();
+        await expect(readStockTextRow("row-1")).rejects.toThrow();
+      }
+    );
+
     it("本文を見出しで区切って復元する (複数ブロック連結)", async () => {
       route("GET", "/v1/blocks/row-1/children", [
         childrenPage([
@@ -311,6 +396,18 @@ describe("notion-archive stock-text", () => {
       expect(got).toEqual([
         { itemName: "事業の内容", sectionKey: "business", text: "前半後半" },
         { itemName: "リスク", sectionKey: "risks", text: "本文B" },
+      ]);
+    });
+
+    it("旧 plain-v1 の JSON 風文字列は decode せず保持する", async () => {
+      const text = '"\\u200b"';
+      route("GET", "/v1/blocks/row-1/children", [childrenPage([
+        h2("抽出テキスト全文 (1項目)"),
+        h3("b1", "A (a)"), code("b2", text),
+      ])]);
+      const { readStockTextRow } = await load();
+      expect(await readStockTextRow("row-1")).toEqual([
+        { itemName: "A", sectionKey: "a", text },
       ]);
     });
 
