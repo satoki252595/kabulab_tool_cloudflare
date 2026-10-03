@@ -45,6 +45,8 @@ import { archiveTallyFailed } from "../src/services/edinet/archive.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
+  EdinetDocumentFetchError,
+  EdinetDocumentArchiveError,
 } from "../src/services/edinet/client.js";
 import { parseEdinetCsvZip } from "../src/services/edinet/csv.js";
 import { extractTextSections } from "../src/services/edinet/text-sections.js";
@@ -124,6 +126,8 @@ for (const r of targets) {
       sections = extractTextSections(rows);
       status = sections.length > 0 ? "ok" : "no_text_sections";
     } catch (e) {
+      if (e instanceof EdinetDocumentArchiveError ||
+          (e instanceof EdinetDocumentFetchError && !(e instanceof EdinetNotFoundError))) throw e;
       if (e instanceof EdinetNotFoundError) {
         status = "parse_error"; // type=5 未提供 → 抽出不能を正直に記録
       } else {
@@ -181,6 +185,7 @@ for (const r of targets) {
       }
     }
   } catch (e) {
+    if (e instanceof EdinetDocumentFetchError || e instanceof EdinetDocumentArchiveError) throw e;
     tally.error = (tally.error ?? 0) + 1;
     console.warn(`[text-backfill] 失敗 ${r.docId}: ${(e as Error).message}`);
   }

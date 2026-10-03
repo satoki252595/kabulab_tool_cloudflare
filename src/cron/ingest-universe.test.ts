@@ -73,6 +73,7 @@ vi.mock("../shared/notion-archive/index.js", () => ({
 vi.mock("../../services/yuho-quant/src/services/edinet/client.js", () => ({
   listDocuments: vi.fn(),
   EdinetListFetchError: class EdinetListFetchError extends Error {},
+  EdinetDocumentFetchError: class EdinetDocumentFetchError extends Error {},
 }));
 vi.mock("../../services/yuho-quant/src/services/edinet/list-snapshot.js", async () => {
   const client = await import("../../services/yuho-quant/src/services/edinet/client.js");

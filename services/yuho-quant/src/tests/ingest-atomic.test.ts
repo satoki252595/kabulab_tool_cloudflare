@@ -47,6 +47,7 @@ import { createDb, type Database } from "../db/client.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
+  EdinetDocumentFetchError,
 } from "../services/edinet/client.js";
 import {
   findBackupRowsByKeys,
@@ -773,6 +774,31 @@ describe("raw-before-DB 契約 (原本 mandatory)", () => {
       sqlite.close();
       restore();
     }
+  });
+
+  it.each([false, true])("T1既知源失敗でCSV全文を先行保管、保管未知なら再開型を返さない (%s)", async (archiveUnknown) => {
+    const restore = silenceConsole();
+    const {sqlite, db, counters} = setupBindingDb();
+    try {
+      setupParserBridges();
+      const failure = new EdinetDocumentFetchError("S100PART1", 1, "known source failure");
+      const csv = Buffer.from("csv-bytes");
+      vi.mocked(downloadDocument).mockImplementation(async (_docId, type) => {
+        if (type === 1) throw failure;
+        return csv;
+      });
+      if (archiveUnknown) vi.mocked(verifyArchivedAttachments).mockRejectedValueOnce(new Error("unknown archive"));
+      const run = ingestDocument(db, {stockId: 11, stockCode: "1001", doc: annualDoc("S100PART1")});
+      if (archiveUnknown) await expect(run).rejects.toThrow("unknown archive");
+      else await expect(run).rejects.toBe(failure);
+      const call = vi.mocked(recordPrimaryData).mock.calls[0][0];
+      expect(call.key).toBe("S100PART1:type5");
+      expect(call.files![0].bytes).toEqual(new Uint8Array(csv));
+      expect(call.metadata).toMatchObject({ingestPhase: "partial-source", failedType: 1});
+      expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+      expect(counters.batches).toBe(0);
+      expect(sqlite.prepare("SELECT count(*) AS n FROM yuho_documents").get()).toEqual({n: 0});
+    } finally {sqlite.close(); restore();}
   });
 
   it("text 本文は DBid 解決後に保管し、実 id を渡して書戻す", async () => {

@@ -30,7 +30,7 @@ import {
   textSections,
 } from "../db/schema.js";
 import { backupDocTextToNotion } from "./text-backup.js";
-import { downloadDocument, EdinetNotFoundError } from "./edinet/client.js";
+import { downloadDocument, EdinetNotFoundError, EdinetDocumentFetchError } from "./edinet/client.js";
 import {
   assertNoMetadataOnly,
   checkDocCustody,
@@ -346,6 +346,14 @@ export async function ingestDocument(
           `[ingest] xbrl unavailable docID=${doc.docID} ${doc.filerName}`
         );
       } else {
+        if (e instanceof EdinetDocumentFetchError && archiveToNotion) {
+          // T1の既知源失敗でも取得済CSVを失わない。保管未知はこのthrowより先に伝播。
+          await recordEdinetZip({service: NOTION_SERVICE, docID: doc.docID, type: 5, zip: csvZip,
+            source: `EDINET API v2 /documents/${doc.docID}?type=5`, fetchedAt: csvFetchedAt,
+            metadata: {docID: doc.docID, edinetCode: doc.edinetCode, secCode: doc.secCode,
+              filerName: doc.filerName, docTypeCode: doc.docTypeCode, periodEnd,
+              submitDateTime: doc.submitDateTime, ingestPhase: "partial-source", failedType: 1}, force});
+        }
         throw e;
       }
     }

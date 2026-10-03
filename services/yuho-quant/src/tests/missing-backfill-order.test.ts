@@ -27,6 +27,8 @@ import { createDb, type Database } from "../db/client.js";
 import {
   downloadDocument,
   EdinetNotFoundError,
+  EdinetDocumentFetchError,
+  EdinetDocumentArchiveError,
 } from "../services/edinet/client.js";
 import { recordEdinetZip } from "../services/edinet/archive.js";
 import { backupDocTextToNotion } from "../services/text-backup.js";
@@ -465,6 +467,28 @@ describe("missing-docs raw-before-DB 契約", () => {
       sqlite.close();
       restore();
     }
+  });
+
+  it.each([false, true])("manual T1既知源失敗もCSV保管後STOP、保管未知をsource再開にしない (%s)", async (archiveUnknown) => {
+    const restore = silenceConsole();
+    const {sqlite, db} = setupDb();
+    try {
+      setupParserBridges();
+      const {deps, download, record, sender, tally} = setupDeps(sqlite);
+      const failure = new EdinetDocumentFetchError("S100MPART1", 1, "known source failure");
+      download.mockImplementation(async (_docId, type) => {
+        if (type === 1) throw failure;
+        return Buffer.from("zip-type5");
+      });
+      if (archiveUnknown) record.mockRejectedValueOnce(new Error("unknown archive"));
+      const run = processMissingDoc(db, deps, {doc: annualDoc("S100MPART1"), stockId: 11, force: false});
+      if (archiveUnknown) await expect(run).rejects.toBeInstanceOf(EdinetDocumentArchiveError);
+      else await expect(run).rejects.toBe(failure);
+      expect(tally).toEqual({error: 1});
+      expect(record.mock.calls.map(([a]) => a.type)).toEqual([5]);
+      expect(sender).not.toHaveBeenCalled();
+      expect(sqlite.prepare("SELECT count(*) AS n FROM yuho_documents").get()).toEqual({n: 0});
+    } finally {sqlite.close(); restore();}
   });
 
   it("meta 不備は明示スキップし、fetch も DB も触らない", async () => {
