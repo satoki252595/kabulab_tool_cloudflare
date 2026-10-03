@@ -47,3 +47,13 @@ v3私有品質receipt SHA256: `ffa40dcb4fcbbdb0b2d073973929d0c3e72a0e49c4128c937
 公式年次書類を観測できない銘柄、未公表JPX月次ファイル、取得元のNULL/429、資格不明な要約はHOLDとして残す。既存の年次未観測22銘柄を「未提出」とは断定しない。定時dispatch/readcheckの新設定後の実成功は次の平日に別途確認する。
 
 価格全量の正常入口は実UTC日と日経平均当日確定バーを要求する。10/3・10/4の週末を10/2へ置換して取得する入口はない。次の既存株式Cronは10/5 17:13 UTC（10/6 02:13 JST）、業種・資金フローを含む終了判定は10/5 21:00 UTCまで。マクロは10/5 21:00 UTC、readcheckは22:05 UTC。dispatchだけでは受入済みにしない。
+
+## 本番0027の適用
+
+2026-10-03T18:02:06Z（10/4 03:02 JST）、レビュー済みCREATE2文だけを1回適用、exit0 / success=true。実行receipt 915B / SHA256 `16c97a1f520ab53c5a5b875db2aa01c3e305100a31993424a0dce9a2d7279208`、D1 read3/write4（DDL内部）/attempts1。既存業務行のUPDATE/DELETEは0。
+
+18:03:15Zの読戻しでCREATE全文、実11列、PK(scope,date)、索引(scope,finished,sealed,date)がSQLと一致、進捗表の初期行数0。POST receipt 4,770B / SHA256 `dbbc7f13a7afc9ace9cb319eaed6be6f7c6038837d59c5ff3ec15e587d521c33`、read87/write0。各時計はCLI受信完了を観測したもので、HTTP packet時計はUNKNOWN。新コードの通常catchupによる進捗生成は未受入。
+
+優待要約の既存pending markerは最初のNotion保管より前に保存する。原本保管の結果不明でも翌日の新UUIDによる再生成・自動再送を止め、更新0件を含む正常物理閉鎖後だけ解除する。対象14テストで確認した。
+
+最終統合検証はTypeScript 271 suite / 4,514 PASS / 433 SKIP（既存fixture条件）、typecheck・全体ESLintと変更scriptsのESLint・監査生成物check・Drizzle再生成no changes・Worker dry-run PASS。全体検査で検出した2件の旧test契約不整合を修正し、保存済parse_error/NULLの保持と新しいマスタ存在照会の公開列境界を確認した。SKIPは実データの受入に数えない。

@@ -345,19 +345,20 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
   const bundle = gzipSync(plain);
   if (!gunzipSync(bundle).equals(plain)) throw new Error("bundle_roundtrip");
   writePrivate(join(runDir, "pre-import.json.gz"), bundle);
+  // Notion保管も結果不明になり得る。最初の外部書込みより前に再入を止める。
+  writePrivate(
+    pendingWrite,
+    JSON.stringify({
+      clock,
+      bundleSHA256: sha(bundle),
+      run: runDir.split("/").at(-1),
+    }),
+  );
   await deps.archive(bundle, clock, "pre"); // No D1 mutation if physical/archive/readback fails.
   const nextCursor = join(state, `progress-${randomUUID()}.json`);
   writePrivate(nextCursor, JSON.stringify({ cursor: tasks[tasks.length - 1].taskId }));
   renameSync(nextCursor, cursorPath);
   if (plan.updates.length > 0) {
-    writePrivate(
-      pendingWrite,
-      JSON.stringify({
-        clock,
-        bundleSHA256: sha(bundle),
-        run: runDir.split("/").at(-1),
-      }),
-    );
     await deps.apply(fresh, plan);
   }
   const post = plan.updates.length > 0 ? await deps.loadRows() : fresh;
@@ -421,9 +422,9 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     if (!gunzipSync(postBundle).equals(postPlain)) throw new Error("bundle_roundtrip");
     writePrivate(join(runDir, "post-import.json.gz"), postBundle);
     await deps.archive(postBundle, postClock, "post");
-    unlinkSync(pendingWrite);
   }
   writePrivate(join(runDir, "complete.json"), JSON.stringify(report));
+  unlinkSync(pendingWrite);
   return report;
 }
 

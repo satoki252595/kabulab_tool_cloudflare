@@ -247,7 +247,10 @@ describe("T4: 原子失敗 (単一 batch・部分書込なし・再送なし・�
 });
 
 describe("T5: 同一入力の完了/再入場なし", () => {
-  it("2 回目は skipped_existing で sender・EDINET 追加 0", async () => {
+  it.each([
+    { parseStatus: "parse_error", overseasParseStatus: "parse_error", textParseStatus: "parse_error" },
+    { parseStatus: "no_order_table", overseasParseStatus: null, textParseStatus: null },
+  ] as const)("2 回目は保存状態 $parseStatus/$overseasParseStatus/$textParseStatus を保持し sender・EDINET 追加 0", async (saved) => {
     const restore = silenceConsole();
     try {
       download.mockResolvedValue(Buffer.from([0, 1, 2, 3]));
@@ -256,7 +259,9 @@ describe("T5: 同一入力の完了/再入場なし", () => {
       let exists = false;
       const { db } = proxyDb((sql) => {
         if (/^\s*select/i.test(sql) && /yuho_documents/.test(sql) && exists) {
-          return [[7, "no_text_sections", "page-x"]];
+          // 実 SELECT 順: id / 受注 / 海外 / 本文 / 会計期末 / Notion pointer。
+          return [[7, saved.parseStatus, saved.overseasParseStatus, saved.textParseStatus,
+            annualDoc().periodEnd, "page-x"]];
         }
         return [];
       });
@@ -275,7 +280,14 @@ describe("T5: 同一入力の完了/再入場なし", () => {
 
       exists = true;
       const r2 = await ingestDocument(db as unknown as Database, args);
-      expect(r2.outcome).toBe("skipped_existing");
+      expect(r2).toEqual({
+        outcome: "skipped_existing",
+        ...saved,
+        factCount: 0,
+        overseasFactCount: 0,
+        textSectionCount: 0,
+        periodEnd: annualDoc().periodEnd,
+      });
       expect(sender.calls).toHaveLength(1);
       expect(download).toHaveBeenCalledTimes(1);
     } finally {

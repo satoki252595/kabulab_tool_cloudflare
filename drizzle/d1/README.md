@@ -45,7 +45,8 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 ### 0027 — EDINET catchup の日付・文書進捗
 
 `0027_edinet_catchup_progress.sql` は `yuho_edinet_catchup_progress` 一表と
-queue用索引のCREATEだけ。既存表へのDROP/UPDATEはない。**本番は未適用**。
+queue用索引のCREATEだけ。既存表へのDROP/UPDATEはない。**本番は2026-10-04適用済み**。
+実表11列・複合PK・索引4列・空の初期行数を読戻し確認した。
 0027生成後の直前0026 snapshotはルール4に従って削除し、journalと0026 SQLは保持する。
 既存のさらに古いsnapshot整理はこの変更に含めない。
 新catchupコードとTABLE_LICENSE宣言を反映する切替で、SQL適用と実表確認を

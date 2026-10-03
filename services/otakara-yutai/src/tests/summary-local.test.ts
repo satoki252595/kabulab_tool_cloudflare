@@ -143,11 +143,14 @@ describe("local summary generation/import boundary", () => {
       estimatedValue: 5000,
       estimateValueSource: "company",
     });
-    const { deps, rows } = dependencies([old]);
-    const report = await runLocalSummary({ stateDir: state(), limit: 60 }, deps);
+    const { deps, events, rows } = dependencies([old]);
+    const dir = state();
+    const report = await runLocalSummary({ stateDir: dir, limit: 60 }, deps);
     expect(report).toMatchObject({ accepted: 0, rejected: 1, pendingAfter: 1, outcome: "partial_rejection" });
     expect(deps.apply).not.toHaveBeenCalled();
     expect(rows()[0]).toEqual(old);
+    expect(events).toEqual(["generate", "archive-pre"]);
+    expect(readdirSync(dir)).not.toContain("pending-write.json");
   });
   it("caps the CLI at60, requires private state, and rejects unknown flags", () => {
     expect(parseLocalArgs(["--state-dir", "/private/unit"])).toMatchObject({
@@ -240,15 +243,25 @@ describe("local summary generation/import boundary", () => {
     expect(statSync(join(dir, run)).mode & 0o777).toBe(0o700);
     expect(statSync(join(dir, run, "generation.jsonl")).mode & 0o777).toBe(0o600);
   });
-  it("archive failure performs no mutation and no progress substitution", async () => {
+  it("unknown pre archive retains the latch; next execution performs no read, generation, archive, or mutation", async () => {
     const { deps } = dependencies([row()]);
-    deps.archive = vi.fn(async () => {
-      throw new Error("hosted_mismatch");
-    });
     const dir = state();
-    await expect(runLocalSummary({ stateDir: dir, limit: 60 }, deps)).rejects.toThrow("hosted_mismatch");
+    deps.archive = vi.fn(async () => {
+      expect(statSync(join(dir, "pending-write.json")).mode & 0o777).toBe(0o600);
+      throw new Error("unknown_archive");
+    });
+    await expect(runLocalSummary({ stateDir: dir, limit: 60 }, deps)).rejects.toThrow("unknown_archive");
     expect(deps.apply).not.toHaveBeenCalled();
     expect(readdirSync(dir)).not.toContain("progress.json");
+    expect(readdirSync(dir)).toContain("pending-write.json");
+    vi.mocked(deps.loadRows).mockClear();
+    vi.mocked(deps.generate).mockClear();
+    vi.mocked(deps.archive).mockClear();
+    await expect(runLocalSummary({ stateDir: dir, limit: 60 }, deps)).rejects.toThrow("previous_write_unresolved");
+    expect(deps.loadRows).not.toHaveBeenCalled();
+    expect(deps.generate).not.toHaveBeenCalled();
+    expect(deps.archive).not.toHaveBeenCalled();
+    expect(deps.apply).not.toHaveBeenCalled();
   });
   it("partial rejection retains the previous row and records remaining work", async () => {
     const old = row(2, {

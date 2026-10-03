@@ -131,6 +131,8 @@ const PUBLIC_SURFACE = [
   "services/ir-catalog/src/services/query.ts",
   "services/yuho-quant/src/services/order-query.ts",
   "services/yuho-quant/src/services/overseas-query.ts",
+  // EDINET の提出者逆引きに先立つマスタ存在確認。code 列のみを読む。
+  "services/yuho-quant/src/services/edinet/identity.ts",
   // 以下 3 件は Worker の中で `core_stocks` を引くが、レスポンスを直接
   // 組み立てるのではなく取込 / キャッシュ充填の層。除外する理由を書き分けるより
   // 検査を受けさせた方が安い (現状どれも識別子を参照していない)。
