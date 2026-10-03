@@ -15,8 +15,9 @@ import {
   type BenefitDetail,
   type StockYutaiData,
 } from "./yutai-full-import.js";
-import { readFileSync } from "node:fs";
-import { gzipSync } from "node:zlib";
+import { chmodSync, closeSync, createReadStream, createWriteStream, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { pipeline } from "node:stream/promises";
+import { createGzip, gzipSync } from "node:zlib";
 import { pathToFileURL } from "node:url";
 import { moveToTrash, recordPrimaryData, verifyArchivedAttachments } from "../../../src/shared/notion-archive/index.js";
 import { sha256HexBytes } from "../../../src/shared/sha256.js";
@@ -63,11 +64,19 @@ async function archivePages(pages: readonly RawPage[], runId: string, source: st
   if (await sha256HexBytes(saved) !== await sha256HexBytes(bytes)) {
     throw new Error("優待原本のprivate保存SHAが一致しないためSTOP");
   }
+  return archiveRawFile(local.path, runId, source, pages.length,
+    pages.reduce((sum, page) => sum + page.byteLength, 0), pages[pages.length - 1].receivedAt);
+}
+
+/** 確定済みprivate gzipだけを共有保管へ渡し、全bytes照合まで取込を止める。 */
+async function archiveRawFile(path: string, runId: string, source: string, pages: number, rawBytes: number, fetchedAt: string) {
+  const bytes = Uint8Array.from(readFileSync(path));
+  const key = `yutai-source-${runId}`;
+  const files = [{ filename: `${key}.jsonl.gz`, bytes, contentType: "application/gzip" }];
   const archived = await recordPrimaryData({ service: "otakara-yutai", key,
     source,
-    fetchedAt: pages[pages.length - 1].receivedAt,
-    metadata: { runId, pages: pages.length, bytes: bytes.length,
-      rawBytes: pages.reduce((sum, page) => sum + page.byteLength, 0),
+    fetchedAt,
+    metadata: { runId, pages, bytes: bytes.length, rawBytes,
       sha256: await sha256HexBytes(bytes) }, files, force: false });
   if (archived.outcome !== "recorded" || archived.fileTooLarge) {
     throw new Error("優待原本の物理保管が確定しないためSTOP");
@@ -304,12 +313,26 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
 }
 
 // ===== Main =====
-async function main() {
+export async function main() {
   log.info("🚀 優待銘柄データ全量取得 v2\n");
 
-  const pages: RawPage[] = [];
   const runId = resolveRunId();
-  const capture: CapturePage = (page) => pages.push(page);
+  const dir = "services/otakara-yutai/data-scripts/data/raw";
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  const path = `${dir}/yutai-source-${runId}.jsonl`;
+  const fd = openSync(path, "wx", 0o600);
+  let pages = 0;
+  let rawBytes = 0;
+  let lastClock: string | null = null;
+  const capture: CapturePage = (page) => {
+    // 次GETより先に全bytesをdurable保存。全量base64をRAMへ保持しない。
+    writeFileSync(fd, JSON.stringify(page) + "\n");
+    fsyncSync(fd);
+    pages++;
+    rawBytes += page.byteLength;
+    lastClock = page.receivedAt;
+  };
   let allData: StockYutaiData[];
   try {
     // 毎回現行一覧を確認する。期限のない共有/tmpキャッシュでは新規・廃止を検出できない。
@@ -319,8 +342,17 @@ async function main() {
     log.info("📊 Phase 2: 各銘柄の詳細データを取得中...");
     allData = await collectStockDetails(codes, (code) => fetchStockDetail(code, capture));
   } finally {
+    closeSync(fd);
     // UNKNOWNでも取得済み原本を残す。成功時もD1更新より先に保管・照合する。
-    await archivePages(pages, runId, "minkabu search/detail response bytes (gzip lossless)");
+    if (pages > 0 && lastClock !== null) {
+      const gzipPath = `${path}.gz`;
+      const gzipFd = openSync(gzipPath, "wx", 0o600);
+      try {
+        await pipeline(createReadStream(path), createGzip(), createWriteStream(gzipPath, { fd: gzipFd, autoClose: false }));
+        fsyncSync(gzipFd);
+      } finally { closeSync(gzipFd); }
+      await archiveRawFile(gzipPath, runId, "minkabu search/detail response bytes (gzip lossless)", pages, rawBytes, lastClock);
+    }
   }
   log.info(`\n✅ ${allData.length}銘柄の詳細データを取得\n`);
 

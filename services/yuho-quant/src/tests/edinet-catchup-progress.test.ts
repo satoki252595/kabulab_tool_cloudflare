@@ -7,10 +7,14 @@ import {enqueueDates, progressQueue, progressSummary, saveProgress, jstDate} fro
 
 let sqlite: DatabaseSync;
 let db: Database;
+let insertCalls: number;
 beforeEach(() => {
   sqlite = new DatabaseSync(":memory:");
+  insertCalls = 0;
   sqlite.exec(readFileSync(new URL("../../../../drizzle/d1/0027_edinet_catchup_progress.sql", import.meta.url), "utf8").replaceAll("--> statement-breakpoint", ""));
   db = drizzle(async (query, args, method) => {
+    expect(args.length).toBeLessThanOrEqual(100); // 実生成SQLの既定値bindもD1上限に含む。
+    if (/^insert\b/i.test(query)) insertCalls++;
     const stmt = sqlite.prepare(query);
     const bind = args as (string | number | null)[];
     if (method === "run") {stmt.run(...bind); return {rows: []};}
@@ -22,6 +26,10 @@ beforeEach(() => {
 describe("EDINET durable day/doc checkpoint", () => {
   it("60日をseed後、古い未完を削除せず保存末日の翌日から有限追加", async () => {
     expect(await enqueueDates(db, "main", "2026-06-12")).toBe(false);
+    expect(sqlite.prepare("SELECT count(*) AS n FROM yuho_edinet_catchup_progress").get()).toEqual({n: 60});
+    const seededInsertCalls = insertCalls;
+    expect(await enqueueDates(db, "main", "2026-06-12")).toBe(false);
+    expect(insertCalls).toBe(seededInsertCalls);
     const first = sqlite.prepare("SELECT min(date) AS date FROM yuho_edinet_catchup_progress").get();
     expect(await enqueueDates(db, "main", "2026-10-04")).toBe(true);
     expect(sqlite.prepare("SELECT min(date) AS date FROM yuho_edinet_catchup_progress").get()).toEqual(first);

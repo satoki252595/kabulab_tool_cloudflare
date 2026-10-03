@@ -57,3 +57,17 @@ v3私有品質receipt SHA256: `ffa40dcb4fcbbdb0b2d073973929d0c3e72a0e49c4128c937
 優待要約の既存pending markerは最初のNotion保管より前に保存する。原本保管の結果不明でも翌日の新UUIDによる再生成・自動再送を止め、更新0件を含む正常物理閉鎖後だけ解除する。対象14テストで確認した。
 
 最終統合検証はTypeScript 271 suite / 4,514 PASS / 433 SKIP（既存fixture条件）、typecheck・全体ESLintと変更scriptsのESLint・監査生成物check・Drizzle再生成no changes・Worker dry-run PASS。全体検査で検出した2件の旧test契約不整合を修正し、保存済parse_error/NULLの保持と新しいマスタ存在照会の公開列境界を確認した。SKIPは実データの受入に数えない。
+
+## PR285反映後の真正通常処理
+
+[PR285](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/285)は18:15:57Zにsquash merge、main `8de6525dfcbf9b9c3298c77d5e9b66601042055e`。PRのcheck/python-pipeline/Workers Buildsとmain CI37143541922が全成功。mainのWorkers Builds `a298b60f-8d77-4bbc-af37-b3ff97098168`のGitHub check原応答に同SHAとversion `79bfcaf4-6215-4d98-bcfc-e8e2ddbda20a`を明記、native deploymentsで18:16:33Z作成の100%配信を確認した。check原応答SHA `7070f17c1882aeb5c74859f691b300443ab2f64ef6ec21395b642f4fb1f200cb`。Macも同main/clean/.env0600 accepted revisionでpreflight PASS。
+
+0027のPRE/適用/POST・SQL原文等9membersを共有Notionへgzip実体保管し、全member/hosted bytesとmanifestを照合した。4,605B / SHA `df7b1fa077a031f1ef61c323b1b31a039a283aa53641073045a9d608eb4e09d7`、Notion8/hosted1、18:12:29Z closed。source再取得・D1業務書込0、pre/CLI内部HTTP時計UNKNOWNを維持した。
+
+[通常マクロrun37143967756](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37143967756)はmain8de/target=context/定時日付指定なしで成功。5源caller（Yahoo4＋VI1）/raw105,041B、同世代の5原本＋manifest全bytes/SHA一致、共有parser/確定バー/VIの通信0 replay、2026-10-02のD1全11列一致を独立確認した。未対応topixTurnoverRatioはNULL。独立readbackはNotion2/hosted6/D1SELECT1/source0/write0/retry0、receipt761B / SHA `4ab6bc6fb8ac6eebb85d5aea498c784f4bc61dca833c18915d72616c62d55163`。定時CF発火や全株/VWAPの受入とは区別する。
+
+[初回通常有報run37143803966](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37143803966)はmain8de、セットアップ・共通設定step成功後に初期処理で失敗/CLI exit2。原本取得開始0、POST進捗0行/snapshot0/inFlight0/pending0。生成SQLはDrizzleの既定値もbindされ、1行7個・40行280個で[公式D1上限100](https://developers.cloudflare.com/d1/platform/limits/)を超えていた。10行70個へ分割し、全生成SQLのparams<=100と60日seed・同日再入INSERT0をSQLiteで確認した。内部の元例外本文がCLIに残らないため、生成SQLの根因修正とGH Secretの実権限成功は分けて扱う。失敗run/2実D1読取など37membersは共有物理保管・全文照合済み（gzip40,404B、Notion8/hosted1）。修正後の通常runは未実施。
+
+Mac優待要約21時LaunchAgentを18:29:19Zにbootstrap、通常runは18:29:20.542→49.141Z。14群選択/3群受入/11群保留、pending14→11、1resident/14生成、再試行0。有料AI・source新取得0。原本/計画PRE4,750B SHA `2d3aaf7e967d67568debabf4a50e20b5243deff6409af39e23ede25c9e5cded0`と8,182行POST494,892B SHA `02fcd5c22d13cd57a4ad4caa6775356c871bbaaf0aec1831cb5bc9ca7c956b1f`を物理保管・全読戻し後にmarkerを解除。partial_rejectionによりexit1を返し、11群のHOLDを成功化しない。意味・数値の保証は判定契約の範囲であり全量品質PASSではない。
+
+優待source全量は未開始。全HTTP原本文をRAM配列へ保持して最後にJSONL joinしていたため、Nodeの文字列上限到達時に保存前の喪失が起こり得た。各受信応答を次GETより前にwx0600 JSONLへfsyncし、終端はstdlib stream gzipで共有物理保管する。個別HTTP bodyと共有upload向け圧縮bytesはRAMを使用するが、全量base64配列/joinは除去。失敗時も私有JSONL/gzipを保持し、源の再取得で復元しない。GET間隔・再試行0・原子取込順は維持した。

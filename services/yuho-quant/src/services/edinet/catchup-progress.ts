@@ -43,8 +43,9 @@ export async function enqueueDates(db: Database, scope: string, today: string): 
   let date = last ? shiftDate(last.date, 1) : shiftDate(today, -59);
   const dates: string[] = [];
   while (date <= today && dates.length < 60) { dates.push(date); date = shiftDate(date, 1); }
-  for (let i = 0; i < dates.length; i += 40) {
-    await db.insert(table).values(dates.slice(i, i + 40).map((date) => ({scope, date})))
+  // Drizzle は既定値も bind する (現スキーマ7個/行)。D1 の上限100以内。
+  for (let i = 0; i < dates.length; i += 10) {
+    await db.insert(table).values(dates.slice(i, i + 10).map((date) => ({scope, date})))
       .onConflictDoNothing();
   }
   return date <= today;
