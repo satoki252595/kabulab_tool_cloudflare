@@ -1,0 +1,25 @@
+{
+  "stockCode": "476A",
+  "sourceDate": "2025-12-26",
+  "originalRecordSha256": "1ced321e9dc537e7f06839075f975d6ded1e1e1a470024cbd5d929cea6d76f1c",
+  "primary": {
+    "seqNumber": 475,
+    "docID": "S100XDEA",
+    "edinetCode": "E40991",
+    "secCode": null,
+    "JCN": "2011001073585",
+    "filerName": "辻・本郷ＩＴコンサルティング株式会社",
+    "ordinanceCode": "010",
+    "formCode": "030000",
+    "docTypeCode": "120",
+    "periodStart": "2024-10-01",
+    "periodEnd": "2025-09-30",
+    "submitDateTime": "2025-12-26 15:48",
+    "docDescription": "有価証券報告書－第14期(2024/10/01－2025/09/30)",
+    "xbrlFlag": "1",
+    "csvFlag": "1",
+    "withdrawalStatus": "0",
+    "docInfoEditStatus": "0",
+    "disclosureStatus": "0"
+  }
+}

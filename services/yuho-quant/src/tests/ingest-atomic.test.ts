@@ -523,6 +523,15 @@ describe("実SQLite 原子性 (HOLD2)", () => {
       expect(vi.mocked(downloadDocument).mock.calls.length).toBe(downloadsAfterSuccess);
       // 既存 cache の再入は archive 呼出も 0 増 (早期 skip 維持)。
       expect(vi.mocked(recordPrimaryData).mock.calls.length).toBe(recordsAfterSuccess);
+      // 旧列のparse_error/未観測NULLをno_table成功へ置換しない。再取得/書込は0。
+      sqlite.prepare("UPDATE yuho_documents SET parse_status='parse_error',overseas_parse_status=NULL WHERE doc_id=?")
+        .run(argsA.doc.docID);
+      const legacyHold = await ingestDocument(dbA, argsA);
+      expect(legacyHold).toMatchObject({outcome: "skipped_existing", parseStatus: "parse_error", overseasParseStatus: null});
+      expect(vi.mocked(downloadDocument).mock.calls.length).toBe(downloadsAfterSuccess);
+      expect(counters.batches).toBe(batchesAfterSuccess);
+      sqlite.prepare("UPDATE yuho_documents SET parse_status=?,overseas_parse_status=? WHERE doc_id=?")
+        .run(rA.parseStatus, rA.overseasParseStatus, argsA.doc.docID);
 
       // ---- Phase B: Node sender 経路 (proxy 読取 + 明示 sender 書込)。
       // 試験 sender は受信した本番生成 SQL を実 SQLite へ逐次実行する。

@@ -72,7 +72,24 @@ vi.mock("../shared/notion-archive/index.js", () => ({
 }));
 vi.mock("../../services/yuho-quant/src/services/edinet/client.js", () => ({
   listDocuments: vi.fn(),
+  EdinetListFetchError: class EdinetListFetchError extends Error {},
 }));
+vi.mock("../../services/yuho-quant/src/services/edinet/list-snapshot.js", async () => {
+  const client = await import("../../services/yuho-quant/src/services/edinet/client.js");
+  const original = await vi.importActual<typeof import("../../services/yuho-quant/src/services/edinet/list-snapshot.js")>("../../services/yuho-quant/src/services/edinet/list-snapshot.js");
+  const saved = new Map<string, unknown>();
+  return {...original, captureListSnapshot: vi.fn(async (date: string) => {
+    const list = await client.listDocuments(date);
+    const pageId = `00000000-0000-4000-8000-${date.replaceAll("-", "").padStart(12,"0")}`;
+    saved.set(pageId, list);
+    return {list, snapshot: {date, pageId, filename: `edinet-list-${date}.json.gz`,
+      gzipSha256: "0".repeat(64), rawSha256: "0".repeat(64), rawBytes: 1, httpStatus: 200, qualified: true,
+      fetchedAt: new Date().toISOString()}};
+  }), readListSnapshot: vi.fn(async (snapshot: {pageId: string}) => {
+    if (!saved.has(snapshot.pageId)) throw new Error("snapshot missing");
+    return saved.get(snapshot.pageId);
+  })};
+});
 vi.mock("../../services/yuho-quant/src/services/ingest.js", () => ({
   ingestDocument: vi.fn(),
 }));
@@ -272,12 +289,13 @@ describe("EDINET の取込は母集団外の有報を取り込まない", () => 
     expect(vi.mocked(ingestDocument).mock.calls.map(([, opts]) => opts.stockId)).toEqual(
       INGESTED.map((s) => s.id)
     );
-    // 母集団外の 4 件は取り込まず、落とした件数を戻り値に出す
+    // 既知の母集団外3件を除外。マスタ未到着1件は保留として後日再照合。
     expect({ matched: r.matched, ingested: r.ingested, outOfUniverse: r.outOfUniverse }).toEqual({
       matched: INGESTED.length,
       ingested: INGESTED.length,
-      outOfUniverse: ALL_CODES.length - INGESTED.length,
+      outOfUniverse: ALL_CODES.length - INGESTED.length - 1,
     });
+    expect(r.pendingDocuments).toBe(1);
   });
 });
 

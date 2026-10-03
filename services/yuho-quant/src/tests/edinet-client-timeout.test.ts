@@ -5,11 +5,11 @@
  * トリガの 600s 期限切れで失敗した (run 36465347557。9/24・9/25 も同型)。
  * Worker の TIME_BUDGET 検査は await 間でしか発火しないため、EDINET への
  * fetch 自体に期限が要る。期限切れは文脈付きで throw し (ルール2)、
- * 未完了分は次回実行の 60 日窓 + docId 冪等が拾う。
+ * 未完了分は保存済み進捗と docId 冪等が次回実行へ引き継ぐ。
  *
  * 本テストは外部通信しない。fetch を差し替えて「応答しない EDINET」を
  * 再現し、短縮期限で打ち切られること・正常時は signal 付きで送ること・
- * 非タイムアウト失敗の形を変えないことを固定する。
+ * 一覧の副作用なし未完と書類取得の元エラーを区別することを固定する。
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
@@ -17,6 +17,7 @@ import {
   listDocuments,
   EDINET_LIST_TIMEOUT_MS,
   EDINET_DOWNLOAD_TIMEOUT_MS,
+  EdinetListFetchError,
 } from "../services/edinet/client.js";
 
 const realFetch = globalThis.fetch;
@@ -117,13 +118,17 @@ describe("EDINET 要求期限", () => {
     expect(Date.now() - started).toBeLessThan(5000);
   });
 
-  it("非タイムアウトの fetch 失敗は包まず素通しする", async () => {
+  it("一覧GET未完は再開可能な型に分類し、書類取得の元エラーは保持", async () => {
     useTestKey();
     const failure = new TypeError("fetch failed");
     globalThis.fetch = (async () => {
       throw failure;
     }) as unknown as typeof fetch;
-    await expect(listDocuments("2026-09-28")).rejects.toBe(failure);
+    const failedList = listDocuments("2026-09-28");
+    await expect(failedList).rejects.toMatchObject({
+      name: "EdinetListFetchError", cause: failure,
+    });
+    await expect(failedList).rejects.toBeInstanceOf(EdinetListFetchError);
     await expect(downloadDocument("S100J2E7", 1)).rejects.toBe(failure);
   });
 
