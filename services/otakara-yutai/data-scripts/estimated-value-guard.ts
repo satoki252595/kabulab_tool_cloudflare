@@ -22,9 +22,13 @@ function normalizeNumeric(s: string): string {
     .replace(/，/g, ",");
 }
 
-/** 複合円額は未対応。1万5千円の末尾だけを5千円として採らず、全文を HOLD にする。 */
-function hasCompoundYenAmount(s: string): boolean {
-  return /[万千]\s*[0-9][0-9,]*(?:\s*[万千])?\s*円/.test(normalizeNumeric(s));
+/** 未対応の複合円額・異常な桁区切りから部分額を採らず、全文を HOLD にする。 */
+function hasUnsupportedYenAmount(s: string): boolean {
+  const desc = normalizeNumeric(s);
+  if (/[百千万億兆]\s*[0-9][0-9,.．]*(?:\s*[百千万億兆])?\s*円/.test(desc)) return true;
+  return [...desc.matchAll(/([0-9,.．]+)\s*(?:[百千万億兆]\s*)?円/g)].some(
+    (m) => m[1].includes(",") && !/^[0-9]{1,3}(?:,[0-9]{3})+$/.test(m[1])
+  );
 }
 
 /**
@@ -78,7 +82,7 @@ export type YenSpan = {
  * を要するため位置を残す。
  */
 export function extractYenSpans(descRaw: string): YenSpan[] {
-  if (hasCompoundYenAmount(descRaw)) return [];
+  if (hasUnsupportedYenAmount(descRaw)) return [];
   const desc = normalizeNumeric(descRaw);
   const spans: YenSpan[] = [];
   const num = (m: string): number => Number(m.replace(/,/g, ""));
@@ -280,7 +284,7 @@ function hasResaleMarker(descRaw: string): boolean {
  * points-rate 規則で別に見る)。
  */
 function extractStrictYenSpans(descRaw: string): YenSpan[] {
-  if (hasCompoundYenAmount(descRaw)) return [];
+  if (hasUnsupportedYenAmount(descRaw)) return [];
   const desc = normalizeNumeric(descRaw);
   const spans: YenSpan[] = [];
   const num = (m: string): number => Number(m.replace(/,/g, ""));
@@ -615,8 +619,8 @@ export function qualifyCompanyNominal(descRaw: string, value: number | null): Co
   if (value === null || !Number.isInteger(value) || value <= 0) {
     return { qualified: false, code: "no-value", detail: "値が無いか非正整数" };
   }
-  if (hasCompoundYenAmount(descRaw)) {
-    return { qualified: false, code: "unsupported_compound_yen", detail: "複合円額は未対応 (末尾の部分額や推定積を採らない)" };
+  if (hasUnsupportedYenAmount(descRaw)) {
+    return { qualified: false, code: "unsupported_yen_notation", detail: "複合円額・異常な桁区切りは未対応 (部分額や推定積を採らない)" };
   }
   if (hasApproxMarker(descRaw)) {
     return { qualified: false, code: "approx", detail: "≒/約つき (概算の企業提示ではない)" };
@@ -722,8 +726,8 @@ export type PerGrantContext = {
  * 型付き券 unit 規則の後に、見出し+本文の joint で別に見る。
  */
 function headingScopeHold(heading: string, value: number | null): CompanyNominalVerdict | null {
-  if (hasCompoundYenAmount(heading)) {
-    return { qualified: false, code: "unsupported_compound_yen", detail: "見出しに未対応の複合円額" };
+  if (hasUnsupportedYenAmount(heading)) {
+    return { qualified: false, code: "unsupported_yen_notation", detail: "見出しに未対応の円額表記" };
   }
   if (hasApproxMarker(heading)) {
     return { qualified: false, code: "approx", detail: "見出しに概算表記" };
@@ -1036,7 +1040,7 @@ export function sanitizeEstimatedValue(
 ): number | null {
   if (value === null) return null;
   if (!Number.isInteger(value) || value <= 0) return null;
-  if (hasCompoundYenAmount(descRaw)) return null;
+  if (hasUnsupportedYenAmount(descRaw)) return null;
   if (isDiscountWithoutRedeemable(descRaw)) return null;
   if (isLotteryPrizeAmount(descRaw, value)) return null;
   if (isUnconvertedForeignAmount(descRaw, value)) return null;
