@@ -169,3 +169,12 @@ it("原文と同じ日数・か月期間だけを裏づけ、権利月や換算�
   expect(isSummaryNumbersGrounded("6か月以上保有", "6ヶ月以上保有", context)).toBe(false);
   expect(isSummaryNumbersGrounded("6か月以上保有", "6カ月以上保有", context)).toBe(false);
 });
+
+it("随時のrecipient0を暦0月の根拠にせず、他の実月・期間は同じ契約を保つ", () => {
+  const context = { minShares: [100], recordMonths: [0, 3] };
+  expect(isSummaryNumbersGrounded("随時利用できるサービス", "随時利用可能", context)).toBe(true);
+  expect(isSummaryNumbersGrounded("随時利用できるサービス", "0月に利用可能", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("誤記0月", "0月に利用可能", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("サービス", "3月に利用可能", context)).toBe(true);
+  expect(isSummaryNumbersGrounded("サービス", "3か月利用可能", context)).toBe(false);
+});

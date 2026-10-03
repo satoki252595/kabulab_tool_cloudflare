@@ -171,6 +171,20 @@ describe("runMonthlyRebuild batch writes (L-56)", () => {
     expect(scores.map((c) => c.rowCount)).toEqual([16, 16, 8]);
   });
 
+  it("随時は金額が認定済でも年間利回りと月別母集団へ入れずジャンルを保持する", async () => {
+    const rows = benefits.map(b => b.stockId === 1 ? { ...b, recordMonth: 0 } : b);
+    const { db, calls } = makeStub(rows);
+    await runMonthlyRebuild(db, { collectOverlay: fakeCollect, sendOverlayBatch: makeThrowingSender() });
+    const fin = calls.filter(c => c.table === otakaraSchema.stockFinancials)
+      .flatMap(c => c.rows as { stockId: number; yutaiYield: number | null }[]);
+    const scores = calls.filter(c => c.table === otakaraSchema.stockScores)
+      .flatMap(c => c.rows as { stockId: number; yutaiMonths: string | null; yutaiGenreIds: string | null }[]);
+    expect(fin.find(r => r.stockId === 1)?.yutaiYield).toBeNull();
+    expect(fin.find(r => r.stockId === 2)?.yutaiYield).toBe(1);
+    expect(scores.find(r => r.stockId === 1)).toMatchObject({ yutaiMonths: null, yutaiGenreIds: "[1]" });
+    expect(scores.find(r => r.stockId === 2)?.yutaiMonths).toBe("[3]");
+  });
+
   it("チャンク行数は D1 bind 上限 (100/文) を超えない", async () => {
     const { db, calls } = makeStub();
     await runMonthlyRebuild(db, { collectOverlay: fakeCollect, sendOverlayBatch: makeThrowingSender() });

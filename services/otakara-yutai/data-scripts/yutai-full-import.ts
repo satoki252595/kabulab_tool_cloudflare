@@ -50,7 +50,7 @@ import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
 import { stockFinancials, stocks, yutaiBenefits, yutaiGenres } from "../src/db/schema.js";
 import { type AtomicBatchSender, snapshotStockPreimages } from "./atomic-apply.js";
 import { benefitKey } from "./benefit-key.js";
-import { assertRecordDate } from "../src/record-date.js";
+import { assertBenefitSchedule, assertRecordMonth } from "../src/record-date.js";
 import {
   headedDescription,
   qualifyCompanyPerGrantValue,
@@ -86,7 +86,8 @@ export type BenefitDetail = {
   /**
    * この優待が載る表のローカルな権利月 (h3 セクションの「優待権利確定月」)。
    * ページ全体の union を全優待に被せる旧形は 8022 の 9 月幽霊行を作ったため廃止。
-   * 空は「表の月が不明/曖昧」= 合成不能 (HOLD)。呼び出し側が月を推測で補わないこと。
+   * 0 は公式「随時」専用 enum。空は「表の月が不明/曖昧」= 合成不能 (HOLD)。
+   * 呼び出し側が月を推測で補わないこと。
    */
   localRecordMonths: number[];
   /** 由来 (h3 見出しの原文)。表の特定用で、判定には使わない。 */
@@ -239,7 +240,7 @@ export function planCarry(
   const nulledKeys = new Set<string>();
   const promotedKeys = new Set<string>();
   for (const row of rows) {
-    assertRecordDate(row.recordDate);
+    assertBenefitSchedule(row);
     const key = carryKey(row.code, carryBody(row.description), row.minShares, row.recordMonth);
     if (carriedRecordDates.has(key) && carriedRecordDates.get(key) !== row.recordDate) {
       throw new Error(`同一 context の権利日が食い違うため STOP (code=${row.code})`);
@@ -368,6 +369,7 @@ export function benefitRowsOf(
       continue;
     }
     for (const month of benefit.localRecordMonths) {
+      assertRecordMonth(month);
       const body = benefit.notes ? `${benefit.description}\n${benefit.notes}` : benefit.description;
       const desc = headedDescription(benefit.heading, body);
       rows.push({ recordMonth: month, minShares: benefit.minShares, description: desc, heading: benefit.heading });

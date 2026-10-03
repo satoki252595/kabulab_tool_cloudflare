@@ -28,6 +28,36 @@ function env(overrides: Partial<PrivateEnv> = {}): PrivateEnv {
 
 const AUTH = { headers: { "X-API-Key": "secret-key" } };
 
+describe("内部面の優待時期", () => {
+  it("実月・随時・単発日を区別し、内部0を暦月として返さない", async () => {
+    const rows = [
+      { genre_id: 1, min_shares: 100, record_month: 3, record_date: null },
+      { genre_id: 1, min_shares: 100, record_month: 0, record_date: null },
+      { genre_id: 1, min_shares: 100, record_month: 9, record_date: "2026-09-02" },
+    ];
+    const res = await app.request("/v1/yutai/7203", AUTH, env({ DB: stubD1(() => rows) }));
+    expect(res.status).toBe(200);
+    const body = await res.json() as { data: Record<string, unknown>[] };
+    expect(body.data).toEqual([
+      { ...rows[0], schedule: "monthly" },
+      { ...rows[1], record_month: null, schedule: "anytime" },
+      { ...rows[2], schedule: "one_off" },
+    ]);
+  });
+
+  it("不正月や随時と単発日の混在を正常データとして配信しない", async () => {
+    for (const schedule of [
+      { record_month: 13, record_date: null },
+      { record_month: 0, record_date: "2026-09-02" },
+    ]) {
+      const res = await app.request("/v1/yutai/7203", AUTH, env({
+        DB: stubD1(() => [{ genre_id: 1, min_shares: 100, ...schedule }]),
+      }));
+      expect(res.status).toBe(500);
+    }
+  });
+});
+
 describe("内部面の認証", () => {
   it("APIキー未設定なら fail-closed で 503（素通しにしない）", async () => {
     const res = await app.request("/v1/supply/latest", {}, env({ JSS_API_KEYS: undefined }));

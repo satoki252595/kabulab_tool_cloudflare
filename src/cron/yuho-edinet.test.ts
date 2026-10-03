@@ -16,6 +16,7 @@ import { INSTRUMENT_TYPES } from "../shared/jpx/instrument-type.js";
 import { listDocuments, EdinetListFetchError, EdinetDocumentFetchError } from "../../services/yuho-quant/src/services/edinet/client.js";
 import { captureListSnapshot, EdinetListQualificationError } from "../../services/yuho-quant/src/services/edinet/list-snapshot.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
+import { ExistingTextReadbackMismatchError } from "../../services/yuho-quant/src/services/text-backup.js";
 import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
 import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
 import type { Database as YuhoDatabase } from "../../services/yuho-quant/src/db/client.js";
@@ -179,6 +180,28 @@ describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
     const date = vi.mocked(listDocuments).mock.calls[0][0];
     expect((await runCatchup()).ingested).toBe(1);
     expect(vi.mocked(listDocuments).mock.calls.filter(([d]) => d === date)).toHaveLength(1);
+  });
+
+  it("既存本文の純不一致は理由付きHOLDとし、完了集合を保持して次文書へ進む", async () => {
+    const docs = ["FIRST", "HOLD", "LAST"].map((suffix) => ({ ...annualDoc("7203"), docID: `S1007203${suffix}` }));
+    vi.mocked(listDocuments).mockResolvedValueOnce({ results: docs } as never)
+      .mockResolvedValue({ results: [] } as never);
+    const success = { outcome: "skipped_existing", parseStatus: "no_order_table",
+      overseasParseStatus: "no_overseas_table", textParseStatus: "ok" } as never;
+    vi.mocked(ingestDocument).mockResolvedValueOnce(success)
+      .mockRejectedValueOnce(new ExistingTextReadbackMismatchError()).mockResolvedValue(success);
+    const first = await runCatchup();
+    expect(first.pendingDocuments).toBe(1);
+    expect(catchupHttpStatus(first)).toBe(500);
+    expect(vi.mocked(ingestDocument).mock.calls.map(([, args]) => args.doc.docID)).toEqual(docs.map((doc) => doc.docID));
+    const date = vi.mocked(listDocuments).mock.calls[0][0];
+    const row = sqlite.prepare("SELECT completed_ids,pending_ids,in_flight_doc_id FROM yuho_edinet_catchup_progress WHERE date=?").get(date)!;
+    expect(JSON.parse(row.completed_ids as string)).toEqual([docs[0].docID, docs[2].docID]);
+    expect(JSON.parse(row.pending_ids as string)).toEqual([{ docId: docs[1].docID, reason: "text_readback_mismatch" }]);
+    expect(row.in_flight_doc_id).toBeNull();
+    const calls = vi.mocked(ingestDocument).mock.calls.length;
+    expect((await runCatchup()).pendingDocuments).toBe(1);
+    expect(ingestDocument).toHaveBeenCalledTimes(calls); // 当日はHOLDを再送しない。
   });
 
   it("既保存parse_errorは原本再取得せず保留に残し、その日に再実行しても成功扱いしない", async () => {

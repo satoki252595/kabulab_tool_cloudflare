@@ -672,6 +672,20 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
 });
 
 describe("benefitRowsOf は表ローカル月でのみ合成する (8022 の幽霊 9 月行を作らない)", () => {
+  it("公式随時は0の専用行を保ち、不正enumを保存前に止める", () => {
+    const data = fetched("8022");
+    data.benefits[0].localRecordMonths = [0];
+    const got = benefitRowsOf(data);
+    expect(got.heldBenefits).toBe(0);
+    expect(got.rows).toHaveLength(1);
+    expect(got.rows[0]).toMatchObject({ recordMonth: 0, minShares: data.benefits[0].minShares });
+    expect(got.rows[0].description).toBe(headedDescription(data.benefits[0].heading, data.benefits[0].description));
+    for (const invalid of [-1, 13, 0.5]) {
+      data.benefits[0].localRecordMonths = [invalid];
+      expect(() => benefitRowsOf(data)).toThrow(/権利時期が不正/);
+    }
+  });
+
   it("優待ごとに自分の表の月だけで行を作る (union 展開しない)", () => {
     const data: StockYutaiData = {
       ...fetched("8022"),

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { assertBenefitSchedule } from "../../../otakara-yutai/src/record-date.js";
 
 import { envelope, errorBody } from "./envelope";
 import { isPublishableInFull, redactColumns } from "./license";
@@ -15,6 +16,15 @@ import {
   supplySourcesFromSeries,
 } from "./supply";
 import type { AnyEnv, PrivateEnv } from "./types";
+
+/** 外部の月は実月のみ。公式「随時」は NULL と schedule で明示する。 */
+type YutaiBenefitResponse = {
+  genre_id: number;
+  min_shares: number;
+  record_month: number | null;
+  record_date: string | null;
+  schedule: "one_off" | "anytime" | "monthly";
+};
 
 /** D1 の COUNT 等で 1 行だけ欲しいときの薄いヘルパ。 */
 async function first<T>(stmt: D1PreparedStatement): Promise<T | null> {
@@ -379,9 +389,18 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
     }
     // みんかぶ掲載文の列は SELECT しない（規約上、取得も公開も不可）。
     const { results } = await c.env.DB.prepare(
-      "SELECT b.genre_id, b.min_shares, b.record_month FROM yutai_benefits b" +
+      "SELECT b.genre_id, b.min_shares, b.record_month, b.record_date FROM yutai_benefits b" +
         " JOIN core_stocks s ON s.id = b.stock_id WHERE s.code = ? LIMIT 50",
-    ).bind(code).all<Record<string, unknown>>();
-    return c.json(envelope(results.map((r) => redactColumns("yutai_benefits", r))));
+    ).bind(code).all<Omit<YutaiBenefitResponse, "schedule">>();
+    return c.json(envelope(results.map((r): YutaiBenefitResponse => {
+      const schedule = { recordMonth: r.record_month, recordDate: r.record_date };
+      assertBenefitSchedule(schedule);
+      // 外部 API は暦月と非定期を区別する。内部 enum 0 を月として出さない。
+      return redactColumns("yutai_benefits", {
+        ...r,
+        record_month: schedule.recordMonth === 0 ? null : schedule.recordMonth,
+        schedule: r.record_date !== null ? "one_off" : r.record_month === 0 ? "anytime" : "monthly",
+      });
+    })));
   });
 }

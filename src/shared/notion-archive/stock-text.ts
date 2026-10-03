@@ -345,7 +345,8 @@ function blockText(
  * 旧 plain-v1 と json-escaped-v2 を明示判別し、未知形式は throw する。
  */
 export async function readStockTextRow(
-  rowPageId: string
+  rowPageId: string,
+  strictNative = false
 ): Promise<StockTextSection[]> {
   const blocks: HeadingBlock[] = [];
   const seenCursors = new Set<string>();
@@ -367,6 +368,27 @@ export async function readStockTextRow(
     blocks.push(...res.results);
     if (res.has_more === false) break;
     cursor = res.next_cursor as string;
+  }
+  // 保管ヘルパーの純全文比較は native の型不正と区別する。既存読取の
+  // plain-v1 互換は維持し、この入口だけ全ページ終端後に厳密検査する。
+  if (strictNative) {
+    for (const block of blocks) {
+      if (!block || typeof block !== "object" || Array.isArray(block) ||
+          (block as { object?: unknown }).object !== "block" ||
+          (block as { has_children?: unknown }).has_children !== false ||
+          typeof block.id !== "string" || !/^(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.test(block.id) ||
+          !["heading_2", "heading_3", "code"].includes(block.type)) {
+        throw new Error("有報テキストの native block 型が不正");
+      }
+      const rich = block.type === "heading_2" ? block.heading_2?.rich_text
+        : block.type === "heading_3" ? block.heading_3?.rich_text : block.code?.rich_text;
+      if (!Array.isArray(rich) || rich.some((fragment) => !fragment ||
+          (fragment as { type?: unknown }).type !== "text" ||
+          typeof fragment.plain_text !== "string" || typeof fragment.text?.content !== "string")) {
+        throw new Error("有報テキストの native rich_text 型が不正");
+      }
+      blockText(rich, true);
+    }
   }
   const [marker, ...rest] = blocks;
   const markerText = blockText(marker?.heading_2?.rich_text, false);
@@ -405,6 +427,7 @@ export async function readStockTextRow(
       } else {
         // plain-v1 は JSON として解釈せず、保存された原文をそのまま返す。
         const m = /^(.*) \(([^()]+)\)$/.exec(heading);
+        if (strictNative && !m) throw new Error("有報テキストの native 見出しが不正");
         current = {
           itemName: m ? m[1]! : heading,
           sectionKey: m ? m[2]! : "",
@@ -426,7 +449,8 @@ export async function readStockTextRow(
     }
   }
   flush();
-  if (encoded && (sections.length !== Number(encoded[1]) ||
+  const declared = encoded ?? (strictNative ? legacy : null);
+  if (declared && (sections.length !== Number(declared[1]) ||
       new Set(sections.map((section) => section.sectionKey)).size !== sections.length)) {
     throw new Error("有報テキストの件数またはキー重複が不正");
   }

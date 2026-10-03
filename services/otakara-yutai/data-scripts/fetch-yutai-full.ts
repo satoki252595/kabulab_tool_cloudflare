@@ -23,6 +23,7 @@ import { moveToTrash, recordPrimaryData, verifyArchivedAttachments } from "../..
 import { sha256HexBytes } from "../../../src/shared/sha256.js";
 import { resolveRunId, writeSummaryLocal } from "../../../scripts/vwap/lib/ingest-guard.js";
 import "dotenv/config";
+import { ANYTIME_RECORD_MONTH } from "../src/record-date.js";
 
 // Schema は src/db/schema.ts に集約済み (D1/SQLite 版 — ADR-0001)。
 // 銘柄マスタ stocks は core_stocks の再 export、yutai_genres / yutai_benefits は
@@ -228,8 +229,11 @@ export async function collectStockDetails(
   return allData;
 }
 
-/** 「3月」「3月,9月」→ [3] / [3, 9]。1〜12 以外は落とす。 */
+/** 公式「随時」は専用 enum、実月は 1〜12。未知表示は補わない。 */
 function parseMonths(text: string): number[] {
+  // 明記された非定期だけを専用 enum にする。他の無月・不明表示は補わない。
+  if (text.trim() === "随時") return [ANYTIME_RECORD_MONTH];
+  if (text.includes("随時")) return []; // 実月との混在など、意味が未確定な表示は HOLD。
   const months: number[] = [];
   for (const m of text.match(/(\d{1,2})月/g) ?? []) {
     const num = parseInt(m.replace("月", ""), 10);
@@ -246,7 +250,7 @@ function parseMonths(text: string): number[] {
  * 継承)、表ごとの span があればそちらが優先する (表ローカル override)。
  * h3 を跨いだ span は適用しない。ページ上部の valuations の union を
  * 推測で被せない (旧形は 8022 の 3 月限定の表に 9 月行 37956 を誤合成した)。
- * span が無い表、表が無いページは `unknown`
+ * 公式 span の「随時」は専用 enum 0。span が無い表、表が無いページは `unknown`
  * (月の推測・100 株の仮優待フォールバックはしない。廃止の意味では使わない)。
  */
 export function parseStockDetail(code: string, html: string): StockDetailResult {

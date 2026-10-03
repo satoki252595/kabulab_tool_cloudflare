@@ -47,6 +47,7 @@ export const yutaiBenefits = sqliteTable(
     description: text("description").notNull(),
     shortSummary: text("short_summary"),
     minShares: integer("min_shares").notNull(),
+    /** 1〜12 は実月、0 は公式掲載が「随時」の専用 enum。未知月は保存しない。 */
     recordMonth: integer("record_month").notNull(),
     /** 単発の実基準日 (YYYY-MM-DD)。非NULL行は定常月・年間利回りから除外する。 */
     recordDate: text("record_date"),

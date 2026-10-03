@@ -172,6 +172,13 @@ describe("groupBenefits", () => {
     expect(g.tiers[0].products.find(p => p.recordDate !== null)).toMatchObject({ recordDate: "2026-09-02", months: [] });
   });
 
+  it("随時は同じ要約の定期優待と別条件を保ち、単発日との混在を止める", () => {
+    const [g] = groupBenefits([row({ recordMonth: 0 }), row({ recordMonth: 3 })]);
+    expect(g.allMonths).toEqual([0, 3]); // 表示時だけ0を「随時」とする。
+    expect(g.tiers[0].products.map(p => p.months)).toEqual([[0], [3]]);
+    expect(() => groupBenefits([row({ recordMonth: 0, recordDate: "2026-09-02" })])).toThrow(/混在/);
+  });
+
   it("同一株数・同一要約は 1 商品にまとめ、月を束ねる", () => {
     const [g] = groupBenefits([row({ recordMonth: 3 }), row({ recordMonth: 9 })]);
     expect(g.tiers).toHaveLength(1);

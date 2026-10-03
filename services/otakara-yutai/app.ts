@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
-import { assertRecordDate, isRecurringBenefit } from "./src/record-date.js";
+import { assertBenefitSchedule, formatRecordMonth, isRecurringBenefit } from "./src/record-date.js";
+import { termTip, TERM_TIP_STYLES } from "../../src/shared/term-tip.js";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
 import { createMiddleware } from "hono/factory";
@@ -120,8 +121,8 @@ export const SCREENING_MAX_LIMIT = 100;
 async function loadCardBenefits(
   db: Database,
   stockIds: number[],
-): Promise<Map<number, { benefitMonths: number[]; benefitSummary: string; genres: string[] }>> {
-  const out = new Map<number, { benefitMonths: number[]; benefitSummary: string; genres: string[] }>();
+): Promise<Map<number, { benefitMonths: number[]; hasAnytimeBenefit: boolean; benefitSummary: string; genres: string[] }>> {
+  const out = new Map<number, { benefitMonths: number[]; hasAnytimeBenefit: boolean; benefitSummary: string; genres: string[] }>();
   if (stockIds.length === 0) return out;
 
   const rows = await db.select({
@@ -139,6 +140,7 @@ async function loadCardBenefits(
     const mine = rows.filter((b) => b.stockId === id);
     out.set(id, {
       benefitMonths: [...new Set(mine.filter(isRecurringBenefit).map((b) => b.recordMonth))].sort((a, b) => a - b),
+      hasAnytimeBenefit: mine.some((b) => b.recordMonth === 0 && b.recordDate === null),
       benefitSummary: publicSummaries(mine).join(" / "),
       genres: [...new Set(mine.map((b) => genreMap.get(b.genreId)).filter((n): n is string => Boolean(n)))],
     });
@@ -282,12 +284,13 @@ app.get("/api/screening", async (c) => {
 
   const items = rows.map(row => {
     const b = cardBenefits.get(row.id);
+    if (b === undefined) throw new Error("一覧の優待集計が欠落しています");
     return {
       code: row.code, name: row.name, market: row.market, sector: row.sector,
       price: row.price, per: row.per, pbr: row.pbr, dividendYield: row.dividendYield,
       yutaiYield: row.yutaiYield, rsi14: row.rsi14,
       fundamentalScore: row.fundamentalScore, technicalScore: row.technicalScore, totalScore: row.totalScore,
-      benefitMonths: b?.benefitMonths ?? [], benefitSummary: b?.benefitSummary ?? "", genres: b?.genres ?? [],
+      benefitMonths: b.benefitMonths, hasAnytimeBenefit: b.hasAnytimeBenefit, benefitSummary: b.benefitSummary, genres: b.genres,
     };
   });
 
@@ -443,11 +446,7 @@ td{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-weight:50
 .sort-bar a.active{background:var(--bg-invert);color:var(--text-invert);border-color:var(--border)}
 
 /* === Tooltip === */
-.tip{position:relative;display:inline-block;cursor:help;border-bottom:2px dotted var(--text-muted);font-weight:600}
-.tip .tip-text{visibility:hidden;opacity:0;position:absolute;z-index:50;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);width:max-content;max-width:min(320px,calc(100vw - 32px));background:var(--bg-invert);color:var(--text-invert);font-size:14px;line-height:1.65;padding:14px 16px;border-radius:var(--radius);transition:opacity .15s;pointer-events:none;font-weight:400;border:2px solid var(--border);white-space:normal;text-align:left;word-break:break-word}
-.tip .tip-text::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:8px solid transparent;border-top-color:var(--bg-invert)}
-.tip:hover .tip-text,.tip:focus .tip-text,.tip:focus-within .tip-text,.tip:active .tip-text{visibility:visible;opacity:1}
-@media(max-width:600px){.tip .tip-text{font-size:13px;padding:12px 14px;left:0;transform:none;max-width:min(280px,calc(100vw - 32px))}.tip .tip-text::after{left:22px;transform:none}}
+${TERM_TIP_STYLES}
 
 /* === Financial indicator grid === */
 .fin-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}
@@ -577,16 +576,19 @@ export const TIPS = {
   yutai: "株主優待。一定株数を保有すると企業から商品券や食事券などがもらえる制度。企業が定める基準日の株主名簿に記載されることが条件です。",
   yutai_yield: "優待利回り。1年分の株主優待の推定価値が、投資額（株価×最低必要株数）の何%にあたるかを示します。例: 株価1,000円×100株=10万円の投資で年3,000円相当の優待なら3%。優待の金額を推定できない銘柄では「-」になります。",
   recorddate: "単発基準日。この日を基準に実施する一回限りの優待です。毎年同じ月に受けられる優待ではなく、年間の優待利回りには含めません。",
+  anytime: "決まった権利確定月がない優待です。受取条件は会社の発表で確認してください。受取回数が未確定なため、年間優待利回りには加算しません。",
   recordmonth: "権利確定月。この月末時点で株を保有していると株主優待がもらえます。権利付最終日（月末2営業日前）までに購入が必要。",
   minshares: "最低必要株数。優待をもらうために最低限保有しなければならない株の数。通常100株単位です。",
   value_unknown: "この優待は商品名から金額を機械的に推定できません。自社製品・体験型・割引券・カタログギフトの一部などが該当します。「分からない=ダメ」ではなく、金額換算が難しいので投資判断はご自身で行ってください。",
 } as const;
 
 function tip(key: keyof typeof TIPS, label: string): string {
-  const text = TIPS[key];
-  // role/aria-label は共有 term-tip.ts と同等のスクリーンリーダ対応 (ルール7-4)。
-  // バルーン本文は visibility:hidden で SR に読まれないため aria-label に全文を載せる。
-  return `<span class="tip" tabindex="0" role="note" aria-label="${label}: ${text}">${label}<span class="tip-text">${text}</span></span>`;
+  return termTip(label, TIPS[key]);
+}
+
+function recordMonthHtml(month: number): string {
+  const label = formatRecordMonth(month);
+  return month === 0 ? termTip(label, TIPS.anytime) : label;
 }
 
 /** 優待行（DBから取得された1行） */
@@ -645,14 +647,14 @@ export function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
     // (表示テキストが無い行同士を 1 行に潰すと株数段階の情報が失われる)
     let anonSeq = 0;
     for (const b of list) {
-      assertRecordDate(b.recordDate);
+      assertBenefitSchedule(b);
       if (b.recordDate === null) monthsSet.add(b.recordMonth);
       if (!tierMap.has(b.minShares)) tierMap.set(b.minShares, new Map());
       const productMap = tierMap.get(b.minShares)!;
       // 表示テキスト単位でまとめる (以前は出典掲載文 description をキーにしていた)。
       // 原文が違っても要約が同じなら 1 行に畳まれる (意図的)。実データでは 17 組で、
       // いずれも推定額が一致するため金額は失われない。権利月は months に束ねる。
-      const key = b.summary ? JSON.stringify([b.summary, b.recordDate]) : `\u0000anon:${anonSeq++}`;
+      const key = b.summary ? JSON.stringify([b.summary, b.recordDate, b.recordMonth === 0]) : `\u0000anon:${anonSeq++}`;
       // 公開する金額は trust 境界を通った値だけ (company 以外は null → 正直な
       // 「金額換算が難しい優待」表示。要約・月・条件の文言は落とさない)。
       const trusted = trustedEstimateValue(b);
@@ -807,7 +809,7 @@ function renderBenefitGroups(groups: GenreGroup[]): string {
   if (groups.length === 0) return `<p style="color:var(--text-muted);margin:16px 0">優待情報がありません</p>`;
   return groups
     .map((g) => {
-      const monthsHtml = g.allMonths.map((m) => `<span class="month-tag">${m}月</span>`).join("");
+      const monthsHtml = g.allMonths.map((m) => `<span class="month-tag">${recordMonthHtml(m)}</span>`).join("");
       const tiersHtml = g.tiers
         .map((t) => {
           const productsHtml = t.products
@@ -815,7 +817,7 @@ function renderBenefitGroups(groups: GenreGroup[]): string {
               const dateNote = p.recordDate === null ? "" : `<span class="product-months">${tip("recorddate", "単発基準日")} ${h(p.recordDate)}</span>`;
               const isPartial = p.recordDate === null && p.months.length < g.allMonths.length;
               const monthNote = isPartial
-                ? `<span class="product-months">${p.months.map((m) => m + "月").join("・")}のみ</span>`
+                ? `<span class="product-months">${p.months.map(recordMonthHtml).join("・")}のみ</span>`
                 : "";
               // estimatedValue=null は「金額推定不能」の正直表示 (ルール1/2)。
               // 旧実装はバッジを silent に消して「価値ゼロ」「未取得」「推定不能」
@@ -1021,7 +1023,7 @@ app.get("/genres/:slug", async (c) => {
         <div class="stock-card">
           <div class="stock-header">
             <div class="stock-id"><span class="stock-code">${h(row.code)}</span><span class="stock-name">${h(row.name)}</span></div>
-            <div>${months.map(m => `<span class="tag">${m}月</span>`).join("")}</div>
+            <div>${months.map(m => `<span class="tag">${recordMonthHtml(m)}</span>`).join("")}${rowBenefits.some(b => b.recordMonth === 0 && b.recordDate === null) ? `<span class="tag">${recordMonthHtml(0)}</span>` : ""}</div>
           </div>
           <div class="scores">
             ${scoreBadge(row.totalScore, tip("total", "総合"))}
@@ -1154,12 +1156,13 @@ app.get("/screening", async (c) => {
   const initialBenefits = await loadCardBenefits(db, rows.map(r => r.id));
   const stocksData = rows.map(row => {
     const b = initialBenefits.get(row.id);
+    if (b === undefined) throw new Error("一覧の優待集計が欠落しています");
     return {
       code: row.code, name: row.name,
       price: row.price, per: row.per, pbr: row.pbr, dividendYield: row.dividendYield,
       yutaiYield: row.yutaiYield, rsi14: row.rsi14,
       fundamentalScore: row.fundamentalScore, technicalScore: row.technicalScore, totalScore: row.totalScore,
-      benefitMonths: b?.benefitMonths ?? [], benefitSummary: b?.benefitSummary ?? "", genres: b?.genres ?? [],
+      benefitMonths: b.benefitMonths, hasAnytimeBenefit: b.hasAnytimeBenefit, benefitSummary: b.benefitSummary, genres: b.genres,
     };
   });
 
@@ -1221,6 +1224,7 @@ app.get("/screening", async (c) => {
     for (var i = 0; i < stocks.length; i++) {
       var s = stocks[i];
       var months = s.benefitMonths.length > 0 ? s.benefitMonths.map(function(m){return '<span class="tag">'+m+'月</span>'}).join('') : '';
+      if (s.hasAnytimeBenefit) months += '<span class="tag">' + ${JSON.stringify(recordMonthHtml(0))} + '</span>';
       var genres = s.genres && s.genres.length > 0 ? s.genres.map(function(g){return '<span class="genre-tag">'+esc(g)+'</span>'}).join('') : '';
       html += '<a href="${BP}/stocks/' + encodeURIComponent(s.code) + '?from=screening" style="text-decoration:none;color:inherit"><div class="stock-card">' +
         '<div class="stock-header"><div class="stock-id"><span class="stock-code">' + esc(s.code) + '</span><span class="stock-name">' + esc(s.name) + '</span></div><div>' + months + '</div></div>' +
@@ -1484,7 +1488,7 @@ app.get("/stocks/:code", async (c) => {
       ${renderFinGrid(fin)}
 
       <h3 style="margin-top:24px">${tip("yutai", "株主優待")}</h3>
-      <div class="guide">${stockData.benefits.some(b => b.recordDate !== null) ? `優待ごとの${tip("recordmonth", "権利確定月")}または${tip("recorddate", "単発基準日")}をご確認ください。` : `${tip("recordmonth", "権利確定月")}の月末に株を保有していると優待がもらえます。`}${tip("minshares", "最低株数")}以上の保有が必要です。</div>
+      <div class="guide">${stockData.benefits.some(b => b.recordDate !== null || b.recordMonth === 0) ? `優待ごとの${tip("recordmonth", "権利確定月")}${stockData.benefits.some(b => b.recordMonth === 0 && b.recordDate === null) ? `、${recordMonthHtml(0)}の条件` : ""}${stockData.benefits.some(b => b.recordDate !== null) ? `、${tip("recorddate", "単発基準日")}` : ""}をご確認ください。` : `${tip("recordmonth", "権利確定月")}の月末に株を保有していると優待がもらえます。`}${tip("minshares", "最低株数")}以上の保有が必要です。</div>
       ${renderBenefitGroups(groupBenefits(
         // `any` にしない: `with.benefits.columns` から shortSummary を落とすと
         // publicSummary(b) が全行 "" になり、型でもテストでも気づけないまま

@@ -411,6 +411,40 @@ describe("notion-archive stock-text", () => {
       ]);
     });
 
+    it("backup専用strict nativeはlegacy原文を保持し、欠落fragment/不正childを空本文へ変換しない", async () => {
+      const text = ' "\\u200b" \u200b𠮷';
+      const native = [h2("抽出テキスト全文 (1項目)"), h3("b1", "A (a)"), code("b2", text)]
+        .map((block, i) => ({ ...block, object: "block", has_children: false,
+          id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+          [block.type]: { rich_text: [{ type: "text", plain_text: i === 0 ? "抽出テキスト全文 (1項目)" : i === 1 ? "A (a)" : text,
+            text: { content: i === 0 ? "抽出テキスト全文 (1項目)" : i === 1 ? "A (a)" : text } }] },
+        }));
+      route("GET", "/v1/blocks/row-strict/children", [childrenPage(native)]);
+      const { readStockTextRow } = await load();
+      expect(await readStockTextRow("row-strict", true)).toEqual([{ itemName: "A", sectionKey: "a", text }]);
+      const malformed = { ...native[2], code: { rich_text: [{}] } };
+      route("GET", "/v1/blocks/row-legacy/children", [childrenPage([native[0], native[1], malformed])]);
+      expect(await readStockTextRow("row-legacy")).toEqual([{ itemName: "A", sectionKey: "a", text: "" }]);
+      for (const [i, bad] of [malformed, { ...native[2], object: "page" },
+        { ...native[2], id: "invalid" }, { ...native[2], has_children: true }].entries()) {
+        route("GET", `/v1/blocks/row-bad-${i}/children`, [
+          childrenPage([native[0], native[1]], true, "next"), childrenPage([bad]),
+        ]);
+        const before = calls.length;
+        await expect(readStockTextRow(`row-bad-${i}`, true)).rejects.toThrow("native");
+        expect(calls.length - before).toBe(2); // 全終端を既読したshape不正。再送なし。
+      }
+      const rich = (content: string) => [{ type: "text", plain_text: content, text: { content } }];
+      route("GET", "/v1/blocks/row-bad-heading/children", [childrenPage([
+        native[0], { ...native[1], heading_3: { rich_text: rich("キーのない見出し") } }, native[2],
+      ])]);
+      await expect(readStockTextRow("row-bad-heading", true)).rejects.toThrow("native 見出し");
+      route("GET", "/v1/blocks/row-bad-count/children", [childrenPage([
+        { ...native[0], heading_2: { rich_text: rich("抽出テキスト全文 (2項目)") } }, native[1], native[2],
+      ])]);
+      await expect(readStockTextRow("row-bad-count", true)).rejects.toThrow("件数またはキー重複");
+    });
+
     it("ページネーションを辿る", async () => {
       route("GET", "/v1/blocks/row-1/children", [
         childrenPage([h2("抽出テキスト全文 (1項目)"), h3("b1", "A (a)")], true, "c"),

@@ -49,9 +49,10 @@ export const TASK_ID_PATTERN = /^[0-9a-f]{16}$/;
 
 const RecipientContext = z.strictObject({
   minShares: z.number().check(z.int(), z.positive()),
-  recordMonth: z.number().check(z.int(), z.minimum(1), z.maximum(12)),
+  // 0 は公式「随時」専用。暦の 0 月という意味ではない。
+  recordMonth: z.number().check(z.int(), z.minimum(0), z.maximum(12)),
   recordDate: z.nullable(z.string()).check(z.refine(isRecordDate, { error: "不正な単発基準日" })),
-});
+}).check(z.refine(r => r.recordMonth !== 0 || r.recordDate === null, { error: "随時と単発基準日の混在" }));
 
 /** 同じ掲載文を受け取る実際の株数・権利月。重複を除き順序を固定する。 */
 export function recipientContexts(
