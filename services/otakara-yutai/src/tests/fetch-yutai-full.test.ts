@@ -267,7 +267,7 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
     codes.map((c) => `<li class="yutai_rank_style"><a href="/stock/${c}/yutai" class="empty_link_area"></a></li>`).join("\n") +
     `</ul></div><div class="paginate_box ui-paginate-box"><span class="current">${page}</span>` +
     (next === null ? `<span class="disabled next_page">次へ&nbsp;»</span>` :
-      `<a class="next_page" rel="next" href="/yutai/search?page=${next}">次へ&nbsp;»</a>`) +
+      `<a class="next_page" rel="next" href="/yutai/search?order=yutai_yield_desc&amp;page=${next}">次へ&nbsp;»</a>`) +
     `</div></div>`;
 
   it("最終disabled next_pageで止まり、一覧外の推薦リンクと次の404を取得しない", async () => {
@@ -278,6 +278,21 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
     });
     expect(await collectAllStockCodes(fetcher)).toEqual(["130A", "9101"]);
     expect(fetcher.mock.calls.map(([page]) => page)).toEqual([1, 2]);
+  });
+
+  it("default入口もmainと同じ未絞込の公式sortを全ページで保持する", async () => {
+    const fetched = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      const page = Number(url.searchParams.get("page"));
+      return new Response(pageWith(page, page === 1 ? 2 : null, page === 1 ? "9101" : "130A"));
+    });
+    try {
+      expect(await collectAllStockCodes()).toEqual(["130A", "9101"]);
+      expect(fetched.mock.calls.map(([url]) => url)).toEqual([
+        "https://minkabu.jp/yutai/search?order=yutai_yield_desc&page=1",
+        "https://minkabu.jp/yutai/search?order=yutai_yield_desc&page=2",
+      ]);
+    } finally { fetched.mockRestore(); }
   });
 
   it("取得失敗は部分リストを返さず止める (404も空ページ扱いにしない)", async () => {
@@ -301,8 +316,13 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
       `<a href="/stock/9100/yutai">推薦リンクだけの検索トップ</a>`,
       valid.replace(/<div class="paginate_box[\s\S]*?<\/div>/, ""),
       valid.replace('class="current">1', 'class="current">2'),
-      valid.replace('search?page=2', 'search?page=3'),
+      valid.replace('&amp;page=2', '&amp;page=3'),
       valid.replace(/<a class="next_page"[\s\S]*?<\/a>/, ""),
+      valid.replace('order=yutai_yield_desc&amp;page=2', 'page=2'),
+      valid.replace('order=yutai_yield_desc', 'order=dividend_yield_desc'),
+      valid.replace('&amp;page=2', '&amp;page=2&amp;page=2'),
+      valid.replace('&amp;page=2', '&amp;page=2&amp;keyword=other'),
+      valid.replace('/yutai/search?order=', 'https://example.org/yutai/search?order='),
     ];
     for (const html of malformed) {
       const fetcher = vi.fn(async () => html);
@@ -335,6 +355,10 @@ describe("collectAllStockCodes は既知の最終ページだけで完了する"
       process.chdir(dir);
       await expect(main()).rejects.toThrow(/page=2/);
       expect(fetched).toHaveBeenCalledTimes(2);
+      expect(fetched.mock.calls.map(([url]) => url)).toEqual([
+        "https://minkabu.jp/yutai/search?order=yutai_yield_desc&page=1",
+        "https://minkabu.jp/yutai/search?order=yutai_yield_desc&page=2",
+      ]);
       expect(createD1HttpDb).not.toHaveBeenCalled();
       expect(recordPrimaryData).toHaveBeenCalledTimes(1);
       const input = vi.mocked(recordPrimaryData).mock.calls[0][0];

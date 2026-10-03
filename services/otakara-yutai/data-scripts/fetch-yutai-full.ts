@@ -117,11 +117,20 @@ export function parseStockListPage(html: string, page: number): { codes: string[
   if (/^<span\b[^>]*class=["']disabled next_page["']/.test(next[0][0])) {
     return { codes, nextPage: null, total }; // 既知の最終ページだけ。404/空HTMLは末尾ではない。
   }
-  const href = next[0][0].match(/^<a\b[^>]*\bhref=["']\/yutai\/search\?page=(\d+)["']/);
-  if (!href || Number(href[1]) !== page + 1) {
+  const href = next[0][0].match(/^<a\b[^>]*\bhref=["']([^"']+)["']/);
+  if (!href) throw new Error(`次ページのリンクが未確定のためSTOP (page=${page})`);
+  const url = new URL(href[1].replaceAll("&amp;", "&"), "https://minkabu.jp");
+  const pages = url.searchParams.getAll("page");
+  const orders = url.searchParams.getAll("order");
+  // 通常取得は同じ公式sortを維持する。
+  const orderMatches = orders.length === 1 && orders[0] === "yutai_yield_desc";
+  if (url.origin !== "https://minkabu.jp" || url.pathname !== "/yutai/search" || url.hash ||
+      pages.length !== 1 || !/^\d+$/.test(pages[0]) || Number(pages[0]) !== page + 1 ||
+      !orderMatches ||
+      [...url.searchParams.keys()].some(key => key !== "page" && key !== "order")) {
     throw new Error(`次ページのリンクが不整合のためSTOP (page=${page})`);
   }
-  return { codes, nextPage: Number(href[1]), total };
+  return { codes, nextPage: Number(pages[0]), total };
 }
 
 /**
@@ -130,7 +139,7 @@ export function parseStockListPage(html: string, page: number): { codes: string[
  */
 export async function collectAllStockCodes(
   fetchListPage: (page: number) => Promise<string> = (p) =>
-    fetchPage(`https://minkabu.jp/yutai/search?page=${p}`),
+    fetchPage(`https://minkabu.jp/yutai/search?order=yutai_yield_desc&page=${p}`),
 ): Promise<string[]> {
   const allCodes = new Set<string>();
   const seenPages = new Set<string>();
@@ -364,7 +373,7 @@ export async function main() {
   try {
     // 毎回現行一覧を確認する。期限のない共有/tmpキャッシュでは新規・廃止を検出できない。
     log.info("📋 Phase 1: 全銘柄コードを収集中...");
-    const codes = await collectAllStockCodes((page) => fetchPage(`https://minkabu.jp/yutai/search?page=${page}`, capture));
+    const codes = await collectAllStockCodes((page) => fetchPage(`https://minkabu.jp/yutai/search?order=yutai_yield_desc&page=${page}`, capture));
     log.info(`\n✅ ${codes.length}銘柄のコードを収集\n`);
     log.info("📊 Phase 2: 各銘柄の詳細データを取得中...");
     allData = await collectStockDetails(codes, (code) => fetchStockDetail(code, capture));
