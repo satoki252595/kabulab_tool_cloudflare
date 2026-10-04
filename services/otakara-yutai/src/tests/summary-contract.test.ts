@@ -282,13 +282,17 @@ it.each(["袋", "パック", "セット", "冊", "ケース", "リットル", "�
   expect(isSummaryNumbersGrounded("合成商品", `商品2${unit}`, context)).toBe(false);
 });
 
-it("品目・品種を品の数量に切り出さず、未確認の尾を裏づけない", () => {
+it("品目・品種・缶目・缶詰を数量に切り出さず、未確認の尾を裏づけない", () => {
   const context = { minShares: [100], recordMonths: [3] };
   for (const source of ["1品目", "1品種"]) {
     expect(isSummaryNumbersGrounded(source, "1品", context)).toBe(false);
   }
   for (const summary of ["1品目", "1品種", "1尾"]) {
     expect(isSummaryNumbersGrounded("1品", summary, context)).toBe(false);
+  }
+  for (const source of ["1缶目", "1缶詰"]) {
+    expect(isSummaryNumbersGrounded(source, "1缶", context)).toBe(false);
+    expect(isSummaryNumbersGrounded("1缶", source, context)).toBe(false);
   }
   expect(isSummaryNumbersGrounded("1缶", "1尾", context)).toBe(false);
 });
