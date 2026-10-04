@@ -166,7 +166,7 @@ beforeEach(() => {
     "INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month, estimated_value) VALUES (?, ?, ?, ?, 100, 3, ?)",
   );
   // 推定値は掲載文の額面と一致させる (共有厳密判定を通る「正常な解釈」)。
-  HELD.forEach((s) => insBenefit.run(s.id, otherId, descOf(s.code), `要約${s.code}`, 1000));
+  HELD.forEach((s) => insBenefit.run(s.id, otherId, descOf(s.code), "要約", 1000));
   OUTSIDE.forEach((s, i) => insBenefit.run(s.id, otherId, descOf(s.code), `要約${s.code}`, 5000 + i));
 
   db = makeProxyDb(sqlite) as unknown as YutaiFullImportDb;
@@ -256,7 +256,7 @@ describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", 
     const heldIds = HELD.map((s) => s.id);
     const heldAfter = benefitsOf(after.benefits, heldIds);
     expect(heldAfter.map((b) => [b.stock_id, b.short_summary, b.estimated_value])).toEqual(
-      HELD.map((s) => [s.id, `要約${s.code}`, 1000]),
+      HELD.map((s) => [s.id, "要約", 1000]),
     );
     const maxIdBefore = Math.max(...before.benefits.map((b) => Number(b.id)));
     expect(heldAfter.every((b) => Number(b.id) > maxIdBefore)).toBe(true);
@@ -451,14 +451,14 @@ describe("importYutaiFull の解釈の退避", () => {
     // 要約は保持、値だけ null
     expect(
       benefitsOf(after.benefits, [zeroRow.id]).map((b) => [b.short_summary, b.estimated_value])
-    ).toEqual([[`要約${zeroRow.code}`, null]]);
+    ).toEqual([["要約", null]]);
     expect(
       benefitsOf(after.benefits, [lotteryRow.id]).map((b) => [b.short_summary, b.estimated_value])
     ).toEqual([[null, null]]);
     // 正常な解釈はそのまま戻る
     expect(
       benefitsOf(after.benefits, [rest[0].id]).map((b) => [b.short_summary, b.estimated_value])
-    ).toEqual([[`要約${rest[0].code}`, 1000]]);
+    ).toEqual([["要約", 1000]]);
     expect(logs.some((l) => l.includes("不認定の推定値") && l.includes("2件"))).toBe(true);
     // 残り 18 行は legacy-null から company に上がる
     expect(sourceOf(rest[0].id)).toEqual(["company"]);
@@ -682,12 +682,36 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     expect(p.carriedRecordDates.get(key)).toBeNull();
   });
 
+  it("原文に無い数量の旧要約は値ごと null に戻して再作成へ回す", () => {
+    const rows = [srcRow({ shortSummary: "2年未満保有で優待品501円相当" })];
+    const key = carryKey(rows[0].code, rows[0].description, 100, 3);
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
+    expect(p.carried.get(key)).toEqual({ shortSummary: null, estimatedValue: null, estimateValueSource: null });
+    expect(p.nulledKeys).toEqual(new Set([key]));
+    expect(p.promotedKeys).toEqual(new Set());
+  });
+
+  it("数値の株数・権利月根拠は各行で判定し、別 context の正しい要約を保持する", () => {
+    const rows = [
+      srcRow({ shortSummary: "100株・3月、2年未満保有で優待品500円相当" }),
+      srcRow({ minShares: 1000, recordMonth: 9, shortSummary: "1000株・9月、2年未満保有で優待品500円相当" }),
+    ];
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
+    for (const row of rows) {
+      const key = carryKey(row.code, row.description, row.minShares, row.recordMonth);
+      expect(p.carried.get(key)?.shortSummary).toBe(row.shortSummary);
+      // company 値は同一文言の混在群なので、従来の群全体判定で null のまま。
+      expect(p.carried.get(key)?.estimatedValue).toBeNull();
+    }
+  });
+
   it("見出しの金額は額面根拠にならない (裸の値は上げない)", () => {
     // 文言に金額が無く値は不一致。見出しに同額があっても positive にしない。
     const rows = [srcRow({ description: "優待品の引換", estimatedValue: 3300 })];
     const key = carryKey("5929", "優待品の引換", 100, 3);
     const p = planCarry(rows, new Map([[key, ["3,300円相当の優待"]]]), grpOf(rows));
-    expect(p.carried.get(key)).toEqual({ shortSummary: "2年未満保有で優待品 500円相当", estimatedValue: null, estimateValueSource: null });
+    // 要約の 2年・500円も新本文には無いため、数値判定で要約ごと null。
+    expect(p.carried.get(key)).toEqual({ shortSummary: null, estimatedValue: null, estimateValueSource: null });
     expect(p.promotedKeys).toEqual(new Set());
   });
 
@@ -909,7 +933,7 @@ describe("importYutaiFull の post-image 利回り追随", () => {
     const otherId = YUTAI_GENRES.findIndex((g) => g.slug === "other") + 1;
     sqlite
       .prepare("INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month, estimated_value, estimate_value_source) VALUES (?, ?, ?, ?, 100, 3, ?, ?)")
-      .run(stockId, otherId, description, `旧要約${stockId}`, value, source);
+      .run(stockId, otherId, description, "旧要約", value, source);
   };
   const expectedScore = (yutaiYield: number | null) => {
     const s = scoreStock({

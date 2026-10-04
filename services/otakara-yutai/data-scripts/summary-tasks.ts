@@ -22,6 +22,7 @@ import {
   SUMMARY_CONTRACT_VERSION,
   checkSummary,
   missingSummaryConditions,
+  isSummaryNumbersGrounded,
   type SummaryViolation,
 } from "./summary-contract.js";
 
@@ -138,6 +139,13 @@ export function selectSummaryTasks(
       if (rules.size > 0) reason = "contract_violation";
     }
     if (reason === null && g.summaries.some(s => missingSummaryConditions(g.description, s as string).length > 0)) reason = "rework";
+    // 既存要約は行ごとの実recipientで照合する。株数・月の異なる別行を
+    // まとめた新規生成のcontextに読み替えて、正しい旧要約を誤拒否しない。
+    if (reason === null && g.summaries.some((summary, index) =>
+      !isSummaryNumbersGrounded(g.description, summary as string, {
+        minShares: [g.recipients[index].minShares],
+        recordMonths: [g.recipients[index].recordMonth],
+      }))) reason = "rework";
     if (reason === null && opts.retaskKeys?.has(taskId)) reason = "rework";
     if (reason === null) continue;
     if (opts.violationsOnly && reason !== "contract_violation") continue;
