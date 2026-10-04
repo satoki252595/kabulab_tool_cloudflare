@@ -409,8 +409,9 @@ class NotionClient:
             if response.status_code != 200:
                 raise NotionRequestError(f"Notion 添付読戻し HTTP {response.status_code}")
             return response.content
-        except requests.RequestException as exc:
-            raise NotionRequestError("Notion 添付読戻しの結果不明。再試行しません") from exc
+        except requests.RequestException:
+            # presigned URL の認証queryを、ジョブの例外traceへ持ち出さない。
+            raise NotionRequestError("Notion 添付読戻しの結果不明。再試行しません") from None
 
     def list_page_property_items(self, page_id: str, property_id: str) -> list[dict]:
         """ページの 1 プロパティを「プロパティ取得 API」で全件読む（読み取りのみ）。
