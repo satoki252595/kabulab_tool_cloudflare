@@ -46,7 +46,7 @@ v3私有品質receipt SHA256: `ffa40dcb4fcbbdb0b2d073973929d0c3e72a0e49c4128c937
 
 公式年次書類を観測できない銘柄、未公表JPX月次ファイル、取得元のNULL/429、資格不明な要約はHOLDとして残す。既存の年次未観測22銘柄を「未提出」とは断定しない。定時dispatch/readcheckの新設定後の実成功は次の平日に別途確認する。
 
-価格全量の正常入口は実UTC日と日経平均当日確定バーを要求する。10/3・10/4の週末を10/2へ置換して取得する入口はない。次の既存株式Cronは10/5 17:13 UTC（10/6 02:13 JST）、業種・資金フローを含む終了判定は10/5 21:00 UTCまで。マクロは10/5 21:00 UTC、readcheckは22:05 UTC。dispatchだけでは受入済みにしない。
+価格全量の正常入口は実UTC日と日経平均当日確定バーを要求する。10/3・10/4の週末を10/2へ置換して取得する入口はない。次の既存株式Cronは10/5 17:13 UTC（10/6 02:13 JST）、株価stepの完了期限は10/5 21:00 UTC、株価readcheckは21:05 UTC（10/6 06:05 JST）。業種・別moneyflowを含む全連鎖成功は別受入である。マクロは10/5 21:00 UTC、完了期限22:00 UTC、readcheckは22:05 UTC（10/6 07:05 JST）。dispatchだけでは受入済みにしない。
 
 ## 本番0027の適用
 
@@ -161,3 +161,33 @@ JPXの正常overlayは23:13:03→23:13:14Zに公式3/Notion17/hosted4/D1 SELECT6
 5283の保存原文には、h3の`なめ茸「志賀の郷」`、権利月6月、正式な必要株数1列・200株以上が明記されていた（body165,331B、SHA `f2e4911dd575b69284443c2f5563b1bf118b72930dd692f562d6787a59cb622a`）。共有解析が2列未満を除外していたため、この明記された1列表だけ見出しを優待内容として採用する。月・見出しの欠落、正式headerでない表、列数不整合、株数不正はUNKNOWNを維持する。実原文抜粋を使う回帰を含む22テスト・全型チェック・対象lintがPASS。全量取込はまだ未受入。
 
 独立した全原文PURE比較では、旧正常787ページ・5283だけUNKNOWNから、修正後は788ページすべて正常となった。旧優待2,464行の全tupleを順序付きで保持し、全他fieldも一致。追加は原h3・6月・200株を持つ5283の1行だけ。TS ASTが復元した回帰fixtureも同原bodyの連続抜粋と完全一致した。追加通信・DB書込・モデル利用0、元source STOPは成功へ書き換えていない。
+
+[PR295](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/295)は全3CI成功後、00:43:48Zにmain `bcce32a6ff683892b6db1bd64ba7e352a02d33b2`へsquash mergeした。[同main CI37165835877](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37165835877)も全ジョブ成功。GitHub check111328511145の同SHAからCF build `6eb42f7f-041c-43ff-bcbe-3f83759c4335`・version `7428571c-4788-4605-abf6-ad5e610956a0`を特定し、native deployment `467b7457-8f08-47c7-8af6-7ca10d051845`は00:44:24Z作成・100%配信と確認した。Mac runtimeを同main/cleanへ更新し、writer kernelが空いている間にcanonical .envのaccepted revisionだけを原子的に置換した（0600、他bytes不変）。preflightは通信0・業務書込0でPASS。全量優待取得の受入は次の通常処理で確認する。
+
+地方市場4銘柄の資格確認には、既存のFSA・提出一覧原本に加え、福岡・札幌・名古屋証取と会社公式の7応答を用いた。全7応答はHTTP200・追加再試行0、52membersの341,406Bを97,796B gzip（SHA `3b8c1a6c088222d2e51d725fbd82c77aeafeca3a123f2152f93a312d8408a352`）へまとめた。00:48:19Z、共有Notion8/hosted1の全metadata・manifest・全gzip bytes一致を確認した（closure receipt SHA `825addc9adc024da467f5d2da1b120d54e94ba3cea7fb76fb5bb16a762f38f67`）。公式名称・市場・コードの根拠は1999/3808/2172/624Aに一致するが、この原本保管だけでは登録・有報取得済みとは扱わない。
+
+00:58:03.681→00:58:04.340Z、直前3SELECT・原子batch1・全11列POST1の5D1応答すべてHTTP200で、同4銘柄の開示IDを新規登録した。実ID18170〜18173、公式名称・市場、`is_active=0/is_yutai=0/instrument_type=NULL/sector=NULL/sector33=NULL`を全項目で確認した（POST892B、SHA `c9f9ad5a1e6d8fb2e4bd3dcdebbace44b6510d9200676a6a1d64e1c49fbdad16`）。旧core/state/eventの変更・源再取得・Notion追加・モデル呼出・再試行0。保存済み5原HTTPの独立照合もPASS（receipt SHA `b2cc8398fb2b4adf40f33beb96aa4b759334603d97e4ed5308c92a296737e5eb`）。有報の取得完了とは区別し、運用PRE/POSTは最終の一束へまとめて保管する。
+
+01:01:11.122→01:01:11.978Z、9/28・9/29・9/30のfresh3読取＋既存`saveProgress` CAS2＋全11列POST3の計8D1応答すべてHTTP200で再判定を準備した。finished/sealedで同日再確認済みの2行だけpendingCheckedDateをNULLへ戻し、revision+1/実updatedAt以外を保持。9/30は未finishedのため全文不変・更新0。全pending/completed/snapshot/finished/sealedは保持し、独立した保存8原HTTP照合もPASS（receipt SHA `aa14967ecf1792224e2bc4e1e19130942da39ef5a0358613743fa5f4963dc345`）。日付単位の再確認なので、同日の他の保留文書も通常の再判定対象となる。有報の原本取得成功は後続の通常runで確認する。
+
+同mainの新しい全量優待取得は01:02:22→01:08:51Zに1回実行、一覧86ページの実1,707銘柄は全件一意だった。詳細160件を正常解析した後、2533の源GETでHTTP503を01:08:44.507Zに受信して停止した。全247応答はHTTP200×246＋503×1。Phase3/DB取込・モデル・再試行0、未知書込markerなし。JSONL61,392,776Bとgzip13,579,659Bを保持し、終了receipt SHA `efbe8262941a35c5262e9d1d04057988b6070a1ac0aa4044c0dafea59663017a`を記録した。旧全量未完と今回の取得元停止は保持し、新しい原文全量・「随時」「1株優待」の本番保存表示・契約.3要約はまだ受入済みとしない。503の詳細本文・実体保管の独立照合は後続で確認する。
+
+保存した503本文4,642B（SHA `73a2b64b84ef2414bad601090e3ef1c909474e4d5372cfebcdd4ad004cea1c7d`）は、みんかぶのメンテナンス案内で、復旧時刻やリンクの記載は無かった。追加GET0で確認した。JSONL SHA `e73cc6e2516ae67273c919f7d8867d346063c63eccd2f01084d041c1454680e0`、gzip SHA `ffeae2eb90249b84a3efd20279e2048ca9d43e86086cba5f23335aefc6992476`を全損失なしと照合し、01:18:20Zに独立Notion1/hosted1のmetadata・manifest・原取得clock・全gzip bytesも一致した（closure receipt SHA `f5bd6cae840386cb9b451d7ea90656ea79618b0d8f4297dc34ed8359df083ef8`）。取得元停止・全量未完を保持し、有報の通常run15以後を同mainから再開する。
+
+[有報run15](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37167681207)は21通取込・処理量上限で停止し、[run16](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37168177030)は9通取込・上限未到達で終了した。両runともlist/ingest errors0。01:35:55.668Zの全60日台帳はcompleted380・finished60・sealed59・queuedDays0・inFlight0・identity保留15。保存台帳から同日再確認が必要な保留日数も0と独立再計算した。当日の1日は翌日再確認まで未sealed、識別保留15件は成功や削除へ変更していない。追加登録した地方市場6銘柄の対象書類はすべて同日completedに入った。新しい一覧はrun15の1件とrun16の3件だけをNotion/hosted各1・各3で全文照合し、60一覧の資格を保持、旧56件の再GET0。run15の新規識別保留1件は保存FSA全11,402行・ZIP全CRC・提出者名/JCN一意一致から非上場・コード空欄を確認した（独立receipt SHA `84969e20f84678156fa0518587ba84543617313cc6dcc1ff2febaee386ff9b33`）。run17は起動していない。
+
+取得元の復旧確認は2533の詳細だけ1回行い、01:39:09.925Zに再びHTTP503・同4,642B/同SHAを受信した。全量取得を再開せず、再試行0・DB取込0・モデル0を維持した。原応答は共有Notion8/hosted1の全200、metadata・manifest・全gzip bytes一致を01:39:16Zに確認した（gzip4,344B、SHA `43bc7023ee3c38fc750fb0e40fcfc0b5c2d61a336658693cc573f81b892c0d1e`、closure SHA `6e0d32c65426d4d42124d9c2725bbeb547a50d84270511e664a52ef378e1fb36`）。終了時刻は依然不明。次の全量取得は既存の月次10日10:30JSTであり、その成功や随時優待の本番行・表示を確認したとは扱わない。
+
+全量源取得の成功を私有要約planの必須条件にしていたが、通常の21時要約入口は既存D1の現在原文を独立して処理する。取込0で旧原文が保持されたことを確認し、この余計な前提だけを外して契約.3の通常入口を01:43:22.883→01:44:15.184Zに1回実行した。run `f2ff4408-d348-4cd6-9106-a6ab37b29e39`は10群から1群受入・9群保留、pending10→9。実13受取行のうち2001の1行だけshortSummary/updatedAtを更新し、推定金額NULLを保持、残り12行の全tupleは不変。生成保留は受取条件欠落1群、取込保留は数値照合不一致7群・契約違反1群。旧.2出力の流用0、Qwen3.5-4Bはresident1/calls10/input3,582/output340/model elapsed29,029ms、paid API・源GET・モデル追加再試行0、未知書込markerなし。独立PURE再計算は新task/protocol/qualification/import plan/全POST8,182行に一致した（receipt6,928B、SHA `6c6e4fc061df1b7bc6449ee73c2ff09be5c979c3b037643a24aa4634d8fab1f5`）。PREは選択13行だけなので、非選択全行の独立full-before一致は主張しない。
+
+同要約のPRE4,125B（SHA `21df953463e6151859445d1122337fb471756efcd1647b4d04cba82965a11f4f`）とPOST494,836B（SHA `46c4a46897a27e62f7df3a5e8dc6a02377d6a59fa1345be2b124b27c1a768daf`）を01:52:38Zに独立Notion2/hosted2で確認し、原clock・service/status・全metadata/manifest・実ファイル全bytesが一致した（closure985B、SHA `692db33ff9805f71be4d4a902f54ced4c48961884942a95ad6999336074e580f`）。これは現在DBの通常要約の部分受入であり、未完の全量源・随時優待・1株優待・SSRの受入証跡ではない。21時処理はMacが起動している場合のローカル処理である。
+
+[PR296](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/296)は全3CI成功後、01:52:35Zにmain `2807e0a6e8579534cd56356c16321c9334569cb7`へsquash mergeした。共有マクロdraftで必須N225のdate/price/prevClose欠損と取得・解析throwを即停止し、後続4原本を取得しない。正常5源・原本物理保管・不成立時DB更新0は保持する。両実callerと再取得設定を独立追跡し、実原文による3回帰を含む96関連テスト・型・対象lintがPASS、追加の実Yahoo probe0。GitHub check111339051592の同SHAからCF build `8c97898c-38b8-4c47-8f82-fafc674d579b`・version `ad841610-1669-419f-bc84-f25d05d084cd`を特定、native deployment `ec928a8b-7e02-49b7-b48d-5275f7589efa`は01:53:44Z作成・100%配信と確認した。Mac runtimeは同main/clean、writer idle時のaccepted revision原子置換は.env0600・他bytes不変、preflightは通信0・業務書込0でPASS。
+
+Yahooの共有制御はprocess/isolate内の取得開始を1秒間隔とし、GitHubのstock/VWAP/moneyflowは共通concurrencyで重複を避ける。401では既存の認証更新後に1回再送する経路があるため、全origin通信の再試行0やisolate間の世界共通制限とは主張しない。429/503の抑止期限と既存原本による確定済み日の再取得防止を維持した。次の平日の全銘柄株価・VWAP完走と新CF dispatch/readcheck成功は未観測であり、過去の1件成功・今回のデプロイを制限全面解除へ読み替えない。
+
+PR296の[main CI37169328154](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37169328154)も全ジョブ成功を確認した。
+
+02:00:46Z、有報run10〜16・JPX overlay・地方4銘柄の登録/CAS・停止した優待原文取得と復旧確認・契約.3要約の運用証跡595membersを最後の一束で共有Notionへ保管した。元member3,779,875B、gzip1,973,225B（SHA `a6b02a03460b5f4d4f1f72d884869e36a58a1999764907b818c0f3e630ae80b9`）、metadata124,237B。共有Notion8/hosted1の原9応答はすべて200・attempt1、全metadata/manifest・全hosted gzipと全member復元bytesが一致した（closure318B、SHA `2d1e1f93134bf1453a81fa61e5b507bd3c9f6b61c63a851b80d37cd2bfc7a347`）。保存済み源ZIP/JSONL/gzip・モデル入出力・PRE/POST原本とhosted読戻しbodyは参照だけを含め、追加の取得元通信・D1/R2業務書込・モデル・再試行0。元UNKNOWN/private false STOP/503/識別・品質保留を保持し、archive成功を業務データ全量成功に読み替えていない。要約のexact task/protocol/resultsTextとPRE/全POSTは元物理束の内容として照合済み、派生qualification等の別file serializationを個別hosted GETしたとは扱わない。
+
+本日時点の実施可能な修正・原本保管・main反映は完了。残る外部供給・将来の実受入は、みんかぶメンテナンス復旧後の優待全量取得（現在取込0、随時/1株優待の実行・表示未確認）、次の平日の全株価/VWAP/全連鎖とCF定時dispatch/readcheck、未公表JPX資料・未観測年次書類である。識別15件・要約9群は保留であり、完了数や新規取得成功には加えない。
