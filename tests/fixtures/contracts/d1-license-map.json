@@ -19,11 +19,16 @@
   "column_license": {
     "core_stocks": {
       "code": "commercial-ok",
+      "created_at": "commercial-ok",
+      "id": "commercial-ok",
       "instrument_type": "personal-only",
+      "is_active": "personal-only",
+      "is_yutai": "personal-only",
       "market": "personal-only",
       "name": "commercial-ok",
       "sector": "personal-only",
-      "sector33": "commercial-ok"
+      "sector33": "commercial-ok",
+      "updated_at": "commercial-ok"
     }
   },
   "table_license": {
@@ -123,6 +128,14 @@
       "kind": "uniform",
       "tag": "personal-only"
     },
+    "universe_official_events": {
+      "kind": "uniform",
+      "tag": "personal-only"
+    },
+    "universe_overlay_state": {
+      "kind": "uniform",
+      "tag": "personal-only"
+    },
     "yuho_documents": {
       "kind": "uniform",
       "tag": "commercial-ok"
@@ -148,8 +161,8 @@
       "tag": "personal-only"
     },
     "yutai_genres": {
-      "kind": "unclassified",
-      "tag": null
+      "kind": "uniform",
+      "tag": "commercial-ok"
     }
   },
   "$writer_claim_note": "jss_writer_claims の column_group の語彙をここで固定する。PK が (dataset, column_group) なので、後から値を改名すると DELETE + INSERT の破壊的書換になる。宣言するのは「今日実際に writer が居る (dataset, column_group)」だけで、writer の居ない列群には行を作らない。core_stocks は base（行の作成と既存列）を kabulab-cf、enrich（P4a で足した 12 列のうち instrument_type を除く 11 列を、既存行の UPDATE だけで書く群）を stockStock とする。instrument_type は 2026-09-13 の kabulab-cf #27 から universe.ts が行の作成と同じ upsert で書くので base に数える（claim の行は変わらない）。base を stockStock と宣言すると universe.ts の照合が毎回 throw して JPX 母集団同期が止まるので動かさない。enrich は 2026-09-13 から stockStock master_sync が sector33 を updated_at を進めずに埋める（残り 10 列は P4b）。照合は warn → fail の 2 段リリースで、2026-09-13 から 2 段目（食い違い・宣言漏れ・宣言外の claim はジョブを失敗させる）。照合は必ず投入のあとに行う（claim を投入するのも書込ジョブなので、照合を投入より前に置くと claim 行の無い DB への最初の実行が異常終了してブートストラップ不能）。",

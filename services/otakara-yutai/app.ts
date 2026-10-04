@@ -23,7 +23,7 @@ import {
   publicStockMetaFromRow,
   publicStockMetaLabel,
 } from "../../src/shared/db/public-columns.js";
-import { activeEquityCondition } from "../../src/shared/db/active-equity.js";
+import { activeEquityCondition, yutaiExistsCondition } from "../../src/shared/db/active-equity.js";
 import { trustedEstimateValue } from "../../src/shared/trusted-value.js";
 
 /**
@@ -188,7 +188,7 @@ app.get("/api/screening", async (c) => {
 
   // 母集団は日次・月次の対象と同じ active かつ equity (src/shared/db/active-equity.ts)。
   // otakara は優待サービスなので、その中の is_yutai=true に限定する。
-  const whereClauses: unknown[] = [activeEquityCondition(), eq(stocks.isYutai, true)];
+  const whereClauses: unknown[] = [activeEquityCondition(), yutaiExistsCondition()];
 
   // ジャンル/権利月フィルター (L-51)。月次 rebuild の集計列を引く。
   // ジャンル∩権利月は 2 つの述語を AND で重ねることで表現する。
@@ -883,7 +883,7 @@ app.get("/", async (c) => {
   const genres = await db.select().from(yutaiGenres).orderBy(yutaiGenres.name);
   // 銘柄数は一覧の母集団と同じ述語で数える。
   const [{ count: totalStocks }] = await db.select({ count: count() }).from(stocks)
-    .where(and(activeEquityCondition(), eq(stocks.isYutai, true)));
+    .where(and(activeEquityCondition(), yutaiExistsCondition()));
 
   const cards = genres.map(g =>
     `<a href="${BP}/genres/${h(g.slug)}" style="text-decoration:none;color:inherit"><div class="card"><h3>${h(g.name)}</h3><p>${h(g.description || "")}</p></div></a>`
@@ -1131,7 +1131,7 @@ app.get("/screening", async (c) => {
   // 第2キーの id は API 側と同じ理由 (同値行の順序を固定してページ跨ぎの
   // 重複/取りこぼしを防ぐ) で必要。
   // 母集団の述語は /api/screening と同じ (active かつ equity のうち is_yutai)。
-  const initialWhere = and(activeEquityCondition(), eq(stocks.isYutai, true));
+  const initialWhere = and(activeEquityCondition(), yutaiExistsCondition());
   const rows = await db.select({
     id: stocks.id, code: stocks.code, name: stocks.name,
     price: stockFinancials.price, per: stockFinancials.per, pbr: stockFinancials.pbr,
@@ -1428,7 +1428,7 @@ app.get("/stocks/:code", async (c) => {
     // ここは `columns` で塞ぐ (禁止は core-stocks-license-boundary.test.ts、
     // 出力が漏れないことは src/tests/stock-detail-license.test.ts が見ている)。
     columns: { id: true, name: true, ...publicStockRelationalColumns },
-    where: and(eq(stocks.code, code), eq(stocks.isYutai, true)),
+    where: and(eq(stocks.code, code), yutaiExistsCondition()),
     with: {
       // description (出典サイトの掲載文) は**列ごと引かない**。うっかり
       // stockData をそのまま返しても公開面に出ない多層防御にする。

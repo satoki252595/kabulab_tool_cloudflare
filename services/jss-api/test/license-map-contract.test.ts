@@ -15,7 +15,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { PERSONAL_ONLY, RESTRICTED_COLUMNS } from "../src/shared/license";
+import { PERSONAL_ONLY, RESTRICTED_COLUMNS, redactColumns } from "../src/shared/license";
 
 const MAP_PATH = new URL(
   "../../../tests/fixtures/contracts/d1-license-map.json",
@@ -40,5 +40,13 @@ describe("RESTRICTED_COLUMNS は列単位ライセンス地図と一致する", 
       throw new Error("RESTRICTED_COLUMNS に core_stocks が無い");
     }
     expect([...restricted].sort()).toEqual(masked);
+  });
+
+  it("派生フラグの値を伏せても自作 DB metadata は保持する", () => {
+    const input = { id: 1, is_active: 1, is_yutai: 1, created_at: 1, updated_at: 2 };
+    expect(redactColumns("core_stocks", input)).toEqual({
+      id: 1, is_active: null, is_yutai: null, created_at: 1, updated_at: 2,
+    });
+    expect(input.is_active).toBe(1);
   });
 });

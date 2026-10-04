@@ -9,7 +9,8 @@
  * ⚠️ 2026-09-25: `license_tag` / `src_source` / `quality`（判断そのものの3列）
  * と `edinet_code`（EDINET 由来の commercial-ok 列）は書込経路が無く全行 NULL
  * だったため列ごと DROP した（本番実測。core-schema.ts 参照）。列が存在しない
- * ので、以下のガードは `market` / `sector` / `instrument_type` の3列だけを見る。
+ * ので、以下のガードは現存列だけを見る。2026-10-05 に出自を確認した
+ * `is_active` / `is_yutai` も personal-only とし、値の公開を拒否する。
  *
 
  * ## 2026-09-13 に検査範囲を変えた
@@ -34,8 +35,7 @@
  * 日次取込と公開面の一覧を普通株に絞るため、`instrument_type` (personal-only のまま)
  * を WHERE / JOIN の ON で使う。WHERE は D1 の中で評価されるので値は Worker にも
  * レスポンスにも載らず、外から観測できるのは「一覧に載るかどうか」の 1 bit だけ
- * (公開面が述語に使っている `is_active` はライセンス未宣言の列で、前例にはならない。
- * 判断の根拠と承認待ちであることは src/shared/db/active-equity.ts §2)。よって
+ * (`is_active` / `is_yutai` も値は返さず、共有 active-equity.ts の述語を使う)。よって
  * src/shared/db/public-columns.ts の「値を載せない・出さない」方針に反しない。
  * ただし述語は src/shared/db/active-equity.ts の 1 箇所を経由する場合に限る。
  * 値の select と、`market` / `sector` を述語に使うことは引き続き禁止。
@@ -499,6 +499,9 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
     expect(findQualifiedPersonalOnlyRefs("marketContext.date")).toEqual([]);
     // `sector33` は commercial-ok なので対象外 (冒頭コメント)。
     expect(findQualifiedPersonalOnlyRefs("stocks.sector33")).toEqual([]);
+    expect(findQualifiedPersonalOnlyRefs("db.select({ active: stocks.isActive, benefit: stocks.isYutai })")).toEqual([
+      "stocks.isActive", "stocks.isYutai",
+    ]);
     // コメント中の例示で落ちない
     expect(findQualifiedPersonalOnlyRefs("// stocks.market は禁止")).toEqual([]);
   });
@@ -512,6 +515,9 @@ describe("core_stocks の personal-only 列を公開面へ出さない", () => {
         "db.query.stocks.findFirst({ columns: { id: true, name: true, sector: true } })",
       ),
     ).toEqual(["sector"]);
+    expect(findPersonalOnlyRelationalColumns(
+      "db.query.stocks.findFirst({ columns: { isActive: true, isYutai: true } })",
+    )).toEqual(["isActive", "isYutai"]);
     // 出してよい列だけなら通る
     expect(
       findPersonalOnlyRelationalColumns(

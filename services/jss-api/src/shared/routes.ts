@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { assertBenefitSchedule } from "../../../otakara-yutai/src/record-date.js";
 
 import { envelope, errorBody } from "./envelope";
-import { isPublishableInFull, redactColumns } from "./license";
+import { isPublishableAsMetadata, isPublishableInFull, redactColumns } from "./license";
 import {
   OHLCV_CACHE_TTL_SECS,
   fetchAdjustedOhlcvCached,
@@ -177,7 +177,7 @@ export function mountCommon(app: Hono<{ Bindings: AnyEnv }>) {
         " bytes, license_tag, updated_at FROM jss_dataset_freshness ORDER BY dataset",
     ).all<Record<string, unknown>>();
     const rows = c.env.SURFACE === "public"
-      ? results.filter((r) => String(r.license_tag ?? "") !== "personal-only")
+      ? results.filter((r) => isPublishableAsMetadata(String(r.license_tag ?? "")))
       : results;
     return c.json(envelope(rows, { licenses: rows.map((r) => String(r.license_tag ?? "")) }));
   });

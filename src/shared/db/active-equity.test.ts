@@ -28,7 +28,7 @@ import { join, relative, sep } from "node:path";
 import { SQLiteSyncDialect } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 import { INSTRUMENT_TYPE_EQUITY } from "../jpx/instrument-type.js";
-import { activeEquityCondition, disclosureIngestCondition } from "./active-equity.js";
+import { activeEquityCondition, disclosureIngestCondition, yutaiExistsCondition } from "./active-equity.js";
 import {
   NOT_PUBLIC_SURFACE,
   PUBLIC_SURFACE_DIRS,
@@ -86,6 +86,15 @@ describe("activeEquityCondition", () => {
 
   it("呼ぶたびに新しい SQL を返す (インスタンスを共有しない)", () => {
     expect(activeEquityCondition()).not.toBe(activeEquityCondition());
+  });
+});
+
+describe("yutaiExistsCondition", () => {
+  it("既存の優待有無の WHERE と同じ SQL / bind を返す", () => {
+    expect(new SQLiteSyncDialect().sqlToQuery(yutaiExistsCondition())).toMatchObject({
+      sql: '"core_stocks"."is_yutai" = ?',
+      params: [1],
+    });
   });
 });
 

@@ -107,4 +107,8 @@ export const PERSONAL_ONLY_COLUMNS = [
   "sector",
   "instrumentType",
   "instrument_type",
+  "isActive",
+  "is_active",
+  "isYutai",
+  "is_yutai",
 ] as const;

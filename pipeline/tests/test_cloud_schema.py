@@ -129,6 +129,10 @@ class TestColumnLicense:
         by_column = {c: tag for t, c, tag in rows if t == "core_stocks"}
         assert by_column["sector33"] == LicenseTag.COMMERCIAL_OK.value
         assert by_column["market"] == LicenseTag.PERSONAL_ONLY.value
+        for column in ("is_active", "is_yutai"):
+            assert by_column[column] == LicenseTag.PERSONAL_ONLY.value
+        for column in ("id", "created_at", "updated_at"):
+            assert by_column[column] == LicenseTag.COMMERCIAL_OK.value
 
     def test_sector_and_sector33_are_tagged_by_provenance_not_by_name(self):
         """`sector` と `sector33` は名前が似ているだけで writer も一次ソースも違う。

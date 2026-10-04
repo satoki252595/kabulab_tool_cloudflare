@@ -31,6 +31,11 @@ export function activeEquityCondition(): SQL {
   ) as SQL;
 }
 
+/** 優待の有無は述語だけで使い、private 由来フラグの値は公開投影しない。 */
+export function yutaiExistsCondition(): SQL {
+  return eq(stocks.isYutai, true);
+}
+
 /**
  * `core_stocks` にアクセスできれば足りる最小の drizzle db 型。Worker のバインディング版
  * (DrizzleD1Database) と Node の D1 HTTP 版 (sqlite-proxy) のどちらも渡せる

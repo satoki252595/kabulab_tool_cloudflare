@@ -331,21 +331,19 @@ MIXED_LICENSE_COLUMNS: dict[str, dict[str, LicenseTag]] = {
         "market": LicenseTag.PERSONAL_ONLY,
         "sector": LicenseTag.PERSONAL_ONLY,  # kabulab-cf が JPX 33業種を書く既存列
         "instrument_type": LicenseTag.PERSONAL_ONLY,
+        # 値の有無から派生するフラグも入力元の制約を継承する。
+        "is_active": LicenseTag.PERSONAL_ONLY,  # universe / overlay の JPX 母集団
+        "is_yutai": LicenseTag.PERSONAL_ONLY,  # yutai_benefits の存在（みんかぶ）
+        # 自作の行識別子と DB 更新時計。公開 API の投影可否とは別の区分。
+        "id": LicenseTag.COMMERCIAL_OK,
+        "created_at": LicenseTag.COMMERCIAL_OK,
+        "updated_at": LicenseTag.COMMERCIAL_OK,
         # 2026-09-25: `edinet_code` / `listing_status` / `listing_date` /
         # `delisting_date` / `license_tag` / `src_source` / `src_data_date` /
         # `src_fetched_at` / `quality` の9列はここから削除した。P4b の充填
         # 計画が D-14-1 で中止済みで、どの collector からも書かれず本番全行
         # NULL のまま推移していたため、kabulab-cf 側 drizzle `0024` で列ごと
         # DROP する（cloud_store/core_stocks.py の NEW_COLUMNS コメント参照）。
-        # 宣言しない 5 列: `id` / `is_active` / `is_yutai` / `created_at` /
-        # `updated_at`。いずれも kabulab-cf が書く既存列で、タグを決めるには
-        # 派生元の判断が要る（`is_active` は JPX data_j に載っているかで決まる
-        # ので継承すれば personal-only、`is_yutai` は yutai_benefits（みんかぶ）
-        # 由来。ただしどちらも「上場している」「優待がある」という公開の事実
-        # でもあり、EDINET 上場区分から独立に作れる）。**推測で埋めない**
-        # （§3-1）。未宣言の列は「公開してよいと決まっていない」= 公開投影に
-        # 入らないので、漏れる方向には倒れない。`jobs/license_map.py` が
-        # 毎日この 5 列を名前つきで報告する。
     },
 }
 
