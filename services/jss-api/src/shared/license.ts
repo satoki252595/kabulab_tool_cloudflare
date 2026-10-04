@@ -45,8 +45,9 @@ export const RESTRICTED_COLUMNS: Record<string, readonly string[]> = {
   // `core_stocks.sector33` は stockStock の master_sync (EDINET, 2026-09-13〜) が
   // 充填済み (2026-09-24 時点で現役普通株 3,700 件は NULL 0 件)。公開面の業種は
   // 既に `sector` から `sector33` へ切替済み (src/shared/db/public-columns.ts)。
-  core_stocks: ["market", "sector", "instrument_type"],
-  // みんかぶ掲載文。規約上、取得も公開も不可（TDnet 由来へ移行済み）。
+  // 派生フラグも原入力の制約を継承する。WHERE 述語と値の公開は別の判断。
+  core_stocks: ["market", "sector", "instrument_type", "is_active", "is_yutai"],
+  // みんかぶ掲載文とその派生。私的利用の列を公開面では返さない。
   yutai_benefits: ["description", "short_summary", "estimated_value"],
 };
 

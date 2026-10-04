@@ -36,8 +36,8 @@
 
 `swing_*` / `otakara_*` / `rsi_percentile` / `finmath_*` は Yahoo 日足からの
 派生なので `personal-only`。`is_active` のような「入力の存在から決まる真偽値」も
-同じ規則に従うが、**それが本当に派生か**は列ごとに判断が要るので、決まって
-いないものは宣言しない（推測で埋めない §3-1）。
+同じ規則に従う。実 writer を追って派生元が確認できた列だけ宣言する
+（推測で埋めない §3-1）。
 
 ## スナップショットの所有と更新手順（fail open / closed の境界）
 
@@ -139,6 +139,16 @@ TABLE_LICENSE: dict[str, TableLicense] = {
         source="EDINET コードリスト + JPX data_j.xlsx",
         evidence="schema.MIXED_LICENSE_COLUMNS が正。E7 の列定義ドリフト検出つき",
     ),
+    "universe_official_events": _uniform(
+        LicenseTag.PERSONAL_ONLY,
+        "JPX 公式の上場・上場廃止・市場区分変更一覧",
+        "src/shared/db/universe-events.ts / src/cron/universe-overlay.ts。原市場セルを保持",
+    ),
+    "universe_overlay_state": _uniform(
+        LicenseTag.PERSONAL_ONLY,
+        "JPX 月末銘柄一覧と公式イベントからの派生",
+        "src/cron/universe-overlay.ts。base_as_of / held_listing_codes を含むため表全体で継承",
+    ),
     # --- kabulab-cf 所有の派生断面・時系列（Yahoo 由来）---------------------
     "core_stock_financials": _uniform(LicenseTag.PERSONAL_ONLY, _YAHOO, _CHILD),
     "core_stock_annual_financials": _uniform(LicenseTag.PERSONAL_ONLY, _YAHOO, _CHILD),
@@ -183,7 +193,7 @@ TABLE_LICENSE: dict[str, TableLicense] = {
     # short_summary / estimated_value を列単位で伏せている（そちらが実効的な防御）。
     "yutai_benefits": _uniform(
         LicenseTag.PERSONAL_ONLY,
-        "みんかぶ掲載文（取得停止済み。TDnet 由来へ移行中）",
+        "みんかぶ掲載文とその派生（要約・金額）",
         f"{_CHILD} / datasets.py の yutai_benefits も personal-only",
     ),
     # --- kabulab-cf 所有の EDINET 有報 -------------------------------------
@@ -247,17 +257,11 @@ TABLE_LICENSE: dict[str, TableLicense] = {
         "旧 pct_5d 列は kabulab-cf K5d の 0018 で DROP（P4 適用で確定）。"
         "sector は core_stocks.sector と同じ JPX 由来なので personal-only",
     ),
-    # 優待ジャンル。`description` は kabulab-cf が自作して公開面に出している
-    # （あちらの services/otakara-yutai/src/tests/public-summary-safety.test.ts が
-    # `yutai_genres.description` を「自作説明」として扱っている）。ただしジャンル
-    # 分類そのものがみんかぶ由来かは未確認なので、**推測で uniform にしない**。
-    # 未分類 = 公開しない扱いなので漏れる方向には倒れない（§3-1）。
-    "yutai_genres": TableLicense(
-        kind=TableKind.UNCLASSIFIED,
-        tag=None,
-        source="kabulab-cf 所有（ジャンル名・slug・自作説明）",
-        evidence="本番 DDL は id/name/slug/description/created_at のみ"
-        "（2026-09-13 sqlite_master 実測）。分類の出自が未確認なので未分類で登録",
+    "yutai_genres": _uniform(
+        LicenseTag.COMMERCIAL_OK,
+        "kabulab-cf 自作の固定ジャンル名・slug・説明と DB メタデータ",
+        "services/otakara-yutai/data-scripts/yutai-full-import.ts の YUTAI_GENRES。"
+        "2026-10-05 本番 readonly 全16行の name/slug/description が固定値と完全一致",
     ),
 }
 
@@ -276,7 +280,9 @@ ROW_TAG_COLUMN = "license_tag"
 # 不在）を地図から外し 28 表にした。物理 DROP は別途手順で本番へ流す。
 # それまでの間、本番にはまだ 30 表あるが「地図に無い表 = warning」に留まる
 # （declared 側を先に減らしたことで vanished=failure 方向にはならない）。
-OBSERVED_TABLE_COUNT = 28
+# 2026-10-05: 通常 ops_check の実測33表（有報本文・catchup等の3表と
+# JPX overlay の2表を含む）。出自未分類だったのは overlay 2表のみ。
+OBSERVED_TABLE_COUNT = 33
 
 # 本番 `sqlite_master` から除く名前。SQLite と D1 の内部表。
 _INTERNAL_PREFIXES = ("sqlite_", "_cf_", "d1_", "__drizzle")
