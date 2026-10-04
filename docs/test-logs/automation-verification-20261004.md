@@ -17,7 +17,7 @@ TypeSafe設定、新規の有料AI契約は変更しない。
 | CI | PR300/301/303/304/306/307/308/310/311および各mainのCIを確認。実資料未配置の既存skipは保持。 |
 | cloud_check | 修正後37202784871でR2両bucket・必須9表、processed3 / failed0。 |
 | stock-sync | 株式日次は実休日10/4とN22510/2の不一致で保存前停止。macroは原本・必須6値・D1読戻しを確認。月次の正規3処理は銘柄同期3,631・優待全7,979行・再計算1,650銘柄を受入。 |
-| vwap-ingest | 日足原文3,689全件を観測、適合3,653 / 品質保留36。native全照合3,660は旧7品質保留を含む。信用残4,250行を確認。通常5分足5日は37220566689で実行中。 |
+| vwap-ingest | 日足原文3,689全件を観測、適合3,653 / 品質保留36。native全照合3,660は旧7品質保留を含む。信用残4,250行を確認。通常5分足5日は1,242保存・5同値・2原文保留、4368のR2 PUT結果不明で後続2,439を停止。保存済み本文の全照合は進行中。 |
 | moneyflow | 通常29取得元で26成功、sector-turnoverは株価55不足、CFD月次・年次の新商品/欠測表記の修正を本番反映し、同原文から通常保存を実行中。TFX共通rawの全bytes実体保管は修正後の通常1回で確認済み。 |
 | supply_daily | 4,352銘柄・failed0。実申込日10/1、同値R2書込0。 |
 | edinet_daily | 実日曜10/4の一覧0件で明示停止。源日を営業日へ置換せず#305に記録。 |
@@ -309,6 +309,10 @@ exact mainのWorkers Build `4a3915a7-7884-4bfd-a273-375ee23e2139`は17:35:07Zに
 ## 5分足5日の通常全量
 
 17:27:15.161Zに[37220566689](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37220566689)を `target=intra / intra_range=5d` で1回dispatchした。起動時のmainと実GHA HEADはd34、通常step開始17:27:34Z。後のPR310 main更新で実行中のHEADを変更せず、重複起動0。17:35:40Zのmetadataでは通常stepが実行中で、取得件数・品質・429・書込回数のpacketカウンタは未観測。進捗確認のためのNotion query・追加publisher GETは0。正常終端の原log・summary・全native本文を後続で確認する。
+
+通常CLIは18:05:10.023Zにsummaryを確定し、job/workflowは18:05:18Zにfailureで終端した。全3,689対象の会計はwritten1,242 / skipped5 / errors2 / invalid0 / unknown1 / notStarted2,439、rateLimited0・aborted=false、exit2。4368のnative R2 PUTがInternalError/502で保存結果不明となり、正常guardが再送・後続保存を停止した。取得元429/503を原因とはしない。2原文保留は1992の全行欠測（NULL317・volume0除外4・全timestamp321）と3477のtimestamp非配列で、架空のbarへ補完しない。後続2,439のうち10は既にsource barを観測済み、2,429は未観測として区別する。
+
+原終端log51,412B/SHA `88989d9de63f89cf0408535b3dd2943bab796dec3d9cca7182d29323f68a3652`と正常summaryの全会計を照合した。UTC day/keyは実20261004で、通常保管したsummary全336,127B/SHA `264fc8976006fa0aabe8470765ae5d31ec9e661fd7fa77b0b22f10b2e9823885`を全文読戻した。正常rawCustodyの42batch成功は原logの根拠であり、独立した全取得native packetの件数としては扱わない。成功/同値1,247のnative本文を追加取得元・書込0の1passで照合中。4368は未知のまま保持し、原5日bodyだけから未保存の旧365日PREや書込時計を推測再構築せず、別のreadonly判定準備へ進む。
 
 ## TFX月次の通常原本受入と新リセット商品
 
