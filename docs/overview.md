@@ -25,7 +25,7 @@
 | レイヤー | 技術 |
 |---|---|
 | Runtime (配信) | Cloudflare Workers (Hono root app を fetch ハンドラとして公開) |
-| Runtime (取込/書込) | Node.js (ESM) — GitHub Actions 上で sync / ingest を実行 |
+| Runtime (取込/書込) | Node.js (ESM) / Python — GitHub Actions 上で収集・同期、MacのLaunchAgentでローカル判定を実行 |
 | Web Framework | Hono v4 (mono-repo: 1 root app + 複数 sub-app) |
 | Database | Cloudflare D1 (SQLite) — 単一 DB `kabulab-cf` に接頭辞テーブルで全サービス同居 |
 | ORM | Drizzle ORM (`drizzle-orm/d1` + sqlite-core)。Worker は `c.env.DB` バインディング、取込は `createD1HttpDb` (D1 REST) |
@@ -34,8 +34,8 @@
 | Validation | Zod v4 + `@hono/zod-validator` |
 | View | Hono が直接 HTML 文字列を返却（**JSX 不可** — mono-repo 方針として Workers/esbuild バンドルでも template literal を踏襲する） |
 | Language | TypeScript (strict mode) |
-| Deploy | Cloudflare Workers Builds (Git 連携。main push で無料自動デプロイ。手動は `wrangler deploy`) |
-| 自動化 | GitHub Actions 4 本: 取込 3 (stock-sync / vwap-ingest / catchup。Node) + CI 1 (ci) |
+| Deploy | Cloudflare Workers Builds (Git連携。mainへのマージで自動デプロイ。手動は `wrangler deploy`) |
+| 自動化 | GitHub Actions 12本（収集・同期8、疎通診断・監視2、手動backfill1、CI1）。Cloudflare cronが株式・マクロをdispatchし、MacのLaunchAgent2本が事業タグ・優待要約を実行 |
 | Test | Vitest |
 | Package Manager | pnpm 9 (Nix Flake で固定。`nix develop` で Node 22 + pnpm 9) |
 
@@ -161,7 +161,7 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 | `/yuho-quant/*` | 005 サブアプリ ([services/yuho-quant/app.ts](../services/yuho-quant/app.ts))。`/yuho-quant/admin/catchup` は EDINET 取込の認証ルート (GitHub Actions catchup が叩く) |
 | `/ir-catalog/*` | 006 サブアプリ ([services/ir-catalog/app.ts](../services/ir-catalog/app.ts)) |
 | `/vwap-analysis/*` | 007 サブアプリ ([services/vwap-analysis/app.ts](../services/vwap-analysis/app.ts))。R2 時系列を `c.env.BUCKET` 経由で読取 |
-| `/api/ingest/*` | 内部認証付きルート群 ([src/routes/ingest-proxy.ts](../src/routes/ingest-proxy.ts))。`/yahoo` は GitHub Actions(Node) の Yahoo 取得を Cloudflare エッジ経由にして 429 を回避。`/moneyflow-sector` (008) は既存 D1 (`swing_daily_ohlcv`×`core_stocks.sector`) を週単位に集計して返す (personal-only 列を使うため内部限定)。いずれも `CRON_SECRET` で認証 |
+| `/api/ingest/*` | 内部認証付きルート群 ([src/routes/ingest-proxy.ts](../src/routes/ingest-proxy.ts))。`/yahoo` は GitHub Actions(Node) の Yahoo 取得をCloudflare経由にし、認証・取得間隔・制限時の停止を共有する。`/moneyflow-sector` (008) は既存 D1 (`swing_daily_ohlcv`×`core_stocks.sector`) を週単位に集計して返す (personal-only 列を使うため内部限定)。いずれも `CRON_SECRET` で認証 |
 
 トレーリングスラッシュの有無を吸収するため、ルートおよびサブアプリは `new Hono({ strict: false })` で生成している。日次/月次の指標計算・VWAP 取込は Worker 上の cron ではなく **GitHub Actions(Node)** が担い、D1 へは `createD1HttpDb` (D1 REST) で直接書き込む (Workers Paid / Workers Cron を使わない無料運用)。
 
