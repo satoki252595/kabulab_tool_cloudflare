@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import {
   r2GetVersion,
   r2Put,
@@ -16,7 +16,7 @@ vi.mock("../../../src/shared/env.js", () => ({
     R2_SECRET_ACCESS_KEY: () => "test-secret",
   },
 }));
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 const okGet = () => ({
   ETag: '"native-etag"',
@@ -152,6 +152,28 @@ describe("SDK retry disabled", () => {
 });
 
 describe("r2GetVersion contract", () => {
+  it("native transient GET failure retries only the read and keeps the returned version", async () => {
+    vi.useFakeTimers();
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValueOnce(svcError("InternalError", 500)).mockImplementationOnce(async () => okGet());
+    const result = expect(r2GetVersion("daily/9409.json")).resolves.toEqual({ body: "original bytes", etag: '"native-etag"' });
+    await vi.runAllTimersAsync();
+    await result;
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls.every(([command]) => command instanceof GetObjectCommand)).toBe(true);
+  });
+
+  it("three failed native GET attempts remain a fault and never become a missing object", async () => {
+    vi.useFakeTimers();
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValue(svcError("InternalError", 500));
+    const rejected = expect(r2GetVersion("daily/9409.json")).rejects.toThrow("InternalError");
+    await vi.runAllTimersAsync();
+    await rejected;
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(send.mock.calls.every(([command]) => command instanceof GetObjectCommand)).toBe(true);
+  });
+
   it("explicit NoSuchKey is normal bootstrap (null)", async () => {
     const send = vi.spyOn(S3Client.prototype, "send");
     send.mockRejectedValueOnce(svcError("NoSuchKey", 404));

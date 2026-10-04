@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import type { DailyFetchProof, DailyResult, YahooRawCapture } from "../../../src/shared/yahoo/client.js";
-import { isDailyFetchProof, jstDateSec } from "../../../src/shared/vwap/proof.js";
+import { isDailyFetchProof, isStrictIsoUtc, jstDateSec } from "../../../src/shared/vwap/proof.js";
 import { assertCorporateEventsShape, assertEventSourceProof, corporateEventPins, corporateSplitProjection, priceSnapshotJson,
   type CorporateEvents } from "../../../src/shared/yahoo/corporate-events.js";
 import type { DailyBar } from "../../../src/shared/yahoo/client.js";
@@ -141,14 +141,20 @@ export type CompletedDailyFetch = {
   from: string; to: string;
   regularStart: number; regularEnd: number; regularMarketTime: number;
   bars: number; rawSha: string; priceSnapshotSha256: string;
+  /** 照合済み独立benchmark。最終約定時刻を閉場時刻と混同しない。 */
+  sessionReference?: DailySessionReference;
 };
+/** observedAtは実原本の観測完了clock。HTTP受領精度の読み替えはしない。 */
+export type DailySessionReference = { date: string; observedAt: string; rawSha: string };
 
 /** 原本を再取得せず、取得済み同一応答からだけ再開証跡を作る。欠落は未適格。 */
 export function completedDailyFetch(
-  fresh: DailyResult, capture: YahooRawCapture | undefined, range: { from: string; to: string }
+  fresh: DailyResult, capture: YahooRawCapture | undefined, range: { from: string; to: string },
+  sessionReference?: DailySessionReference
 ): CompletedDailyFetch | null {
   if (fresh.corporateEvents === undefined) return null; // legacy callerは証跡不足。
   if (capture === undefined || capture.status !== 200 || capture.symbol !== fresh.proof.symbol ||
+      capture.receivedAt !== fresh.proof.observedAt ||
       createHash("sha256").update(capture.bytes).digest("hex") !== fresh.proof.rawSha) {
     throw new Error("daily completion: 同一取得原本の証跡不一致");
   }
@@ -166,7 +172,8 @@ export function completedDailyFetch(
       ![start, end, marketTime].every((v) => typeof v === "number" && Number.isSafeInteger(v) && v > 0)) return null;
   const proof: CompletedDailyFetch = { ...range, regularStart: start as number, regularEnd: end as number,
     regularMarketTime: marketTime as number, bars: fresh.bars.length, rawSha: fresh.proof.rawSha,
-    priceSnapshotSha256: bodyPin(priceSnapshotJson(fresh.bars)) };
+    priceSnapshotSha256: bodyPin(priceSnapshotJson(fresh.bars)),
+    ...(sessionReference === undefined ? {} : { sessionReference: { ...sessionReference } }) };
   const saved: SavedDaily = { code: fresh.proof.symbol.replace(/\.T$/, ""), ...fresh,
     bars: fresh.bars.map((b) => ({ ...b })), completedFetch: proof };
   // 全timestampが採用barと1:1で一致すること。null脱落・重複・順序崩れを成功へしない。
@@ -185,11 +192,20 @@ export function hasCompletedDailyFetch(saved: SavedDaily, range: { from: string;
       p.requestedRange !== "10y" || p.symbol !== `${saved.code}.T` || c.rawSha !== p.rawSha ||
       !Number.isSafeInteger(c.bars) || c.bars <= 0 || c.bars !== saved.bars.length ||
       ![c.regularStart, c.regularEnd, c.regularMarketTime].every((t) => Number.isSafeInteger(t) && t > 0) ||
-      c.regularStart >= c.regularEnd || c.regularMarketTime < c.regularEnd ||
+      c.regularStart >= c.regularEnd || c.regularMarketTime < c.regularStart ||
       jstDateSec(c.regularStart) !== range.to || jstDateSec(c.regularEnd) !== range.to ||
       jstDateSec(c.regularMarketTime) !== range.to || Date.parse(p.observedAt) / 1000 < c.regularMarketTime ||
       p.firstTs === null || p.lastTs === null || c.priceSnapshotSha256 !== bodyPin(priceSnapshotJson(saved.bars as unknown as DailyBar[])) ||
       c.priceSnapshotSha256 !== saved.corporateEvents.source.priceSnapshotSha256) return false;
+  const reference = c.sessionReference;
+  if (reference === undefined) {
+    if (c.regularMarketTime < c.regularEnd) return false; // legacy証拠だけでは従来条件を維持。
+  } else if (reference === null || reference.date !== range.to || !isStrictIsoUtc(reference.observedAt) ||
+      typeof reference.rawSha !== "string" || !/^[0-9a-f]{64}$/.test(reference.rawSha) || Date.parse(reference.observedAt) / 1000 < c.regularEnd ||
+      Date.parse(reference.observedAt) > Date.parse(p.observedAt) ||
+      jstDateSec(Date.parse(reference.observedAt) / 1000) !== jstDateSec(Date.parse(p.observedAt) / 1000)) {
+    return false;
+  }
   const dates = saved.bars.map((b) => b.date as string);
   return dates[0] === jstDateSec(p.firstTs) && dates[dates.length - 1] === jstDateSec(p.lastTs) &&
     dates[dates.length - 1] === range.to && dates.every((d, i) => d >= range.from && d <= range.to && (i === 0 || dates[i - 1] < d));

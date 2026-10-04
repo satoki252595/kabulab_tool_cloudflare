@@ -15,7 +15,7 @@ function client(): S3Client {
   if (!s3) {
     s3 = new S3Client({
       region: "auto",
-      // SDK 内部 retry を止める。mutation/read とも 1 試行のみ。
+      // SDK 内部 retry を止める。read の既知一過性障害だけ下記の明示3試行。
       // 呼び出し側の retry() 包みも禁止 (mutation)。
       maxAttempts: 1,
       endpoint: `https://${sharedEnv.R2_ACCOUNT_ID()}.r2.cloudflarestorage.com`,
@@ -134,7 +134,14 @@ export async function r2GetVersion(key: string): Promise<{ body: string; etag: s
   // ならないため fault として throw する。
   // 成功 envelope は strict 200 + body + nonempty ETag を要求する。
   try {
-    const r = await client().send(new GetObjectCommand({ Bucket: sharedEnv.R2_BUCKET(), Key: key }));
+    // GET は mutation と異なり再読しても適用結果が曖昧にならない。
+    // nativeな既知5xx familyだけ既存backoffへ接続し、認可/404/未知schemaは即STOP。
+    const r = await retry(() => client().send(new GetObjectCommand({ Bucket: sharedEnv.R2_BUCKET(), Key: key })),
+      3, 1000, (e) => {
+        const { code, status } = r2CauseOf(e);
+        return ["InternalError", "InternalServerError", "ServiceUnavailable", "SlowDown"].includes(code) &&
+          [500, 502, 503, 504].includes(status as number);
+      });
     const status = (r as { $metadata?: { httpStatusCode?: unknown } }).$metadata?.httpStatusCode;
     const etag = r.ETag;
     if (status !== 200 || !r.Body || typeof etag !== "string" || etag.length === 0) {
