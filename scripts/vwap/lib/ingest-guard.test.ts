@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { NotionUnknownResultError } from "../../../src/shared/notion-archive/client.js";
+import { NotionConfigError } from "../../../src/shared/notion-archive/env.js";
 import {
   archiveSummaryOrFatal,
   assertSavedDailyShape,
@@ -285,6 +286,7 @@ describe("archiveSummaryOrFatal", () => {
   it("previous Notion UNKNOWN prevents callback; known custody errors still archive", async () => {
     const record = vi.fn(async () => ({ outcome: "recorded", fileTooLarge: false }));
     await expect(archiveSummaryOrFatal(record, new NotionUnknownResultError("unknown create"))).resolves.toMatchObject({ code: 2 });
+    await expect(archiveSummaryOrFatal(record, new NotionConfigError("malformed read envelope"))).resolves.toMatchObject({ code: 2 });
     expect(record).not.toHaveBeenCalled();
     await expect(archiveSummaryOrFatal(record, new Error("file too large"))).resolves.toEqual({ code: 0, reason: null });
     expect(record).toHaveBeenCalledTimes(1);

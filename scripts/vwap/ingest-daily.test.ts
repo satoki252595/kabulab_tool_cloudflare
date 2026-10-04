@@ -10,6 +10,7 @@ import { loadCodes } from "./lib/codes.js";
 import { MAX_YAHOO_RAW_BYTES, YahooRawTooLargeError, parseDailyChart } from "../../src/shared/yahoo/client.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { NotionUnknownResultError } from "../../src/shared/notion-archive/client.js";
+import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
 import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main, tenYearRange } from "./ingest-daily.js";
 import { assertSavedDailyShape, completedDailyFetch, hasCompletedDailyFetch } from "./lib/ingest-guard.js";
@@ -385,12 +386,15 @@ describe("ingest-daily main flow", () => {
     expect(outcomes.C.status).toBe("notStarted");
   });
 
-  it("raw custody UNKNOWN keeps the local summary and sends no later Notion/R2/source work", async () => {
+  it.each([
+    ["UNKNOWN", new NotionUnknownResultError("unknown create; no resend")],
+    ["CONFIG", new NotionConfigError("malformed Notion read envelope")],
+  ])("raw custody %s keeps the local summary and sends no later Notion/R2/source work", async (_kind, error) => {
     const codes = Array.from({ length: 31 }, (_, i) => String(1000 + i));
     mockLoadCodes.mockResolvedValue(codes);
     mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
     mockR2Get.mockResolvedValue(null);
-    mockRawArchive.mockRejectedValue(new NotionUnknownResultError("unknown create; no resend"));
+    mockRawArchive.mockRejectedValue(error);
     await main();
     expect(mockRawArchive).toHaveBeenCalledTimes(1);
     expect(mockFetchDaily).toHaveBeenCalledTimes(30);

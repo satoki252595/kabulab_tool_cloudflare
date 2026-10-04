@@ -9,6 +9,7 @@
  */
 import { createHash } from "node:crypto";
 import { NotionUnknownResultError } from "../../../src/shared/notion-archive/client.js";
+import { NotionConfigError } from "../../../src/shared/notion-archive/env.js";
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import type { DailyFetchProof, DailyResult, YahooRawCapture } from "../../../src/shared/yahoo/client.js";
@@ -98,9 +99,11 @@ export async function archiveSummaryOrFatal(
   record: () => Promise<{ outcome: string; fileTooLarge: boolean }>,
   previousError?: unknown
 ): Promise<ArchiveResult> {
-  // 原本書込が未確定なら、新しいsummaryも送信しない。callerのlocal原文を保持する。
-  if (previousError instanceof NotionUnknownResultError) {
-    return { code: 2, reason: "previous:NotionUnknownResultError (local summary retained; no new Notion write)" };
+  // 原本書込が未確定、またはNotion設定/読取形状が不正なら、新summaryを送らない。
+  // callerのlocal原文を保持し、既知市場品質エラー/R2unknownの正常保管は維持する。
+  if (previousError instanceof NotionUnknownResultError || previousError instanceof NotionConfigError) {
+    const name = previousError instanceof NotionUnknownResultError ? "NotionUnknownResultError" : "NotionConfigError";
+    return { code: 2, reason: `previous:${name} (local summary retained; no new Notion write)` };
   }
   let r: { outcome: string; fileTooLarge: boolean };
   try {
