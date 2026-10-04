@@ -9,7 +9,7 @@ import { fetchBars5m, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES } from "../../s
 import { r2GetVersion, r2Put, mapLimit, sleep, retry, R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
 import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
-import { archiveSummaryOrFatal, assertSavedIntraShape, bodyPin, buildIngestSummary, findInvalidBars, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome, type SavedIntra } from "./lib/ingest-guard.js";
+import { archiveSummaryOrFatal, assertSavedIntraShape, bodyPin, buildIngestSummary, findInvalidBars, mergeIntraBars, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome, type SavedIntra } from "./lib/ingest-guard.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../../src/shared/yahoo/raw-custody.js";
 
@@ -157,10 +157,7 @@ export async function main() {
           outcomes[code] = { status: "error", latestSourceBar: latest, bodySha: null };
           return;
         }
-        const map = new Map<number, unknown>();
-        if (old !== null) for (const b of old.bars) map.set(b.ts as number, b);
-        for (const b of fresh) map.set(b.ts, b);               // 当日/前日分を上書きマージ
-        const bars = [...map].filter(([ts]) => ts >= cutoffTs).sort(([a], [b]) => a - b).map(([, bar]) => bar);
+        const bars = mergeIntraBars(old, fresh, cutoffTs);
         // same-cached-input 2回目は内容同一で PUT skip (updated 不変)。
         // keep 剪定で集合が変われば内容が変わるため PUT する。
         // 比較対象は保存 object そのもの (Sol HOLD1: code/bars/splits 抜粋禁止)。

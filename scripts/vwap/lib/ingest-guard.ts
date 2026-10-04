@@ -12,7 +12,7 @@ import { NotionUnknownResultError } from "../../../src/shared/notion-archive/cli
 import { NotionConfigError } from "../../../src/shared/notion-archive/env.js";
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import type { DailyFetchProof, DailyResult, YahooRawCapture } from "../../../src/shared/yahoo/client.js";
+import type { Bar5m, DailyFetchProof, DailyResult, YahooRawCapture } from "../../../src/shared/yahoo/client.js";
 import { isDailyFetchProof, isStrictIsoUtc, jstDateSec } from "../../../src/shared/vwap/proof.js";
 import { assertCorporateEventsShape, assertEventSourceProof, corporateEventPins, corporateSplitProjection, priceSnapshotJson,
   type CorporateEvents } from "../../../src/shared/yahoo/corporate-events.js";
@@ -241,6 +241,16 @@ export type SavedIntra = {
   code: string;
   bars: Array<Record<string, unknown>>;
 };
+
+/** 通常取得と保存原文の修復で、同じts上書き・保持期間剪定を使う。 */
+export function mergeIntraBars(
+  old: SavedIntra | null, fresh: readonly Bar5m[], cutoffTs: number
+): SavedIntra["bars"] {
+  const map = new Map<number, Record<string, unknown>>();
+  if (old !== null) for (const b of old.bars) map.set(b.ts as number, b);
+  for (const b of fresh) map.set(b.ts, { ...b });
+  return [...map].filter(([ts]) => ts >= cutoffTs).sort(([a], [b]) => a - b).map(([, bar]) => bar);
+}
 
 /** YYYY-MM-DD の暦妥当性 (存在する日付のみ)。 */
 export function isCalendarDate(d: string): boolean {
