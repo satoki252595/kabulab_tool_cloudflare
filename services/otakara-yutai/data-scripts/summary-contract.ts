@@ -89,9 +89,9 @@ export function isSummaryNumbersGrounded(
   // 実製品名の3Dは数量ではない。同じ製品語が原文にもある場合だけを
   // 数値検査から外し、33D/13Dや語の後の額・率・数量には触れない。
   const productName = /(?<![0-9A-Za-z.,+\-万千百億兆])3Dプリンター住宅/g;
-  const sourceProductNames = new Set([...description.normalize("NFKC").matchAll(productName)].map(m => m[0]));
+  const sourceHasProductName = description.normalize("NFKC").match(productName) !== null;
   const normalizedSummary = shortSummary.normalize("NFKC").replace(productName, name =>
-    sourceProductNames.has(name) ? name.slice(2) : name);
+    sourceHasProductName ? name.slice(2) : name);
   // 上限株数はrecipientの下限ではない。原文と同じ完全な範囲だけを
   // 下限recipientに結び付け、上限単体や別tierを根拠にしない。
   const shareRange = /(?<![0-9.,+\-万千百億兆])([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*株\s*以上\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*株\s*未満/g;

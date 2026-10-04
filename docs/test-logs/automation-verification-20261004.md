@@ -107,6 +107,16 @@ PR #304は全3CI成功後、13:44:24Zにmain `d97238eb4d41cf7070cc5487a4ab2660f7
 
 POST証跡のNotion実体保管・全文読戻しも14:11:02.701Zに終了0。Notion8 / hosted1の全9応答は200、1,884member・元55,445,320Bをgzip8,302,911B/SHA `0c6052bc6ca13c40a987c31132156fe90042d0d5573f3742bd4b8a9eb6d1aefa`として保管し、全memberの原bytes・metadata・manifest・native時計を独立照合した。既PREの13添付は参照だけを記録し、新たな独立添付として数えない。
 
+## 優待要約の通常60件と製品名の誤判定
+
+Macの通常`main.ts run yutai-summary`をdefault60のまま契約`.7`で1回実行し、14:14:51.052Zに終了した。固定済みの既存SemIfモデル1 resident / 60 callsで、32群を採用・28群を品質保留し、pendingは3,645→3,613。採用32群の37行だけを更新し、残る7,942行・8508単発の全列を保持した。外側exit1はpartial_rejectionで、通信・未確定書込の失敗ではない。
+
+原40 HTTPの全要求・応答のbytes/SHAを独立FSで照合した。全応答200、Notion14の最小開始間隔4,000.478ms、unknown0、wrapper retry0 / child1、pending-writeなし。通常PRE/POSTのNotion実体保管・全バイト読戻しも完了し、closure receipt SHA `53fb67e6597b557aa10fe14a91f7cb0277f2349e593d662a678954adb2501c2f`にtasks・モデルprotocol/results・planと全7,979行の結び付きを記録した。取得元への追加GET・有料AI呼出しは0。
+
+保留の内訳は生成側17（JSON形式2、保有条件8、申込条件1、選択/保有2、選択4）と取込側11（数値10、文字数1）。全保存出力43件のoffline確認で、1431の3件だけ原文と同じ製品名「3Dプリンター住宅」を数量3と誤認していた。共通数値guardで原文と一致する同製品語内の3Dだけを除き、33D/13D/A3D、源文にない製品語、後続の額・率・数量・株数・保有条件の変更を拒否する。契約`.8`と仕様を更新し、旧`.7`結果は再適用しない。
+
+既存回帰は旧d972で失敗し、修正後の関連110テスト・型検査・静的検査が成功。実保存出力の純再検証は該当3件だけfalse→true、他7件の数値保留を保持した。root統合で固定1語の集合をbooleanへ簡素化し、変更2suite96テストが成功した。更新後の新しい通常生成・保存は後続で確認する。
+
 ## VWAP全量実行で見つかった不具合
 
 [通常all 37202207552](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37202207552)はdailyの3,689対象中written838 / errors2,619 / sourceObserved3,456で、13:54Zに終了2。9409のnative R2 GETがInternalErrorとなり、intraは未実行、marginはskipだった。成功した838件は追加取得・書込0の全R2本文読戻しで形状・全bytesを確認した。部分成功を全量完了には扱わない。
