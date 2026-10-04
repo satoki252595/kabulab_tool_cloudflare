@@ -507,10 +507,10 @@ def _workflow_text(name: str) -> str:
 
 
 class TestWorkflowCrons:
-    """§8.2 スケジュール (JST) と cron (UTC) の対応検証。"""
+    """§8.2 スケジュール (JST) と cron/timezone の対応検証。"""
 
     EXPECTED = {
-        "master_sync": "0 21 1 * *",
+        "master_sync": "0 6 1 * *",
         "tdnet_hourly": "0 0-10 * * 1-5",
         "edinet_daily": "0 12 * * 1-5",
         "supply_daily": "17 3 * * 1-5",
@@ -527,6 +527,8 @@ class TestWorkflowCrons:
         m = re.search(r'cron:\s*"([^"]+)"', live)
         assert m, f"{name}.yml に live の cron が無い"
         assert m.group(1) == self.EXPECTED[name]
+        if name == "master_sync":
+            assert re.search(r'timezone:\s*["\']?Asia/Tokyo["\']?', live)
         assert "workflow_dispatch" in text  # 手動実行可
         assert f"jp_stock_pipeline.jobs.{name}" in text
 

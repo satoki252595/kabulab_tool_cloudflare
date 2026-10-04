@@ -49,4 +49,6 @@ NodeのTDnet通常取得・backfillは原HTTPを解析前に実体保管し、�
 
 独立レビューで、PDF抽出器が原本のArrayBufferをdetachし、後段照合で正常なPDFも不一致になる経路を検出した。共有の抽出入口で`bytes.slice()`を渡し、通常分類の全callerで原本を保持する。native transferを行う回帰テストは旧コードで失敗し、修正後は関連3suite51テストが成功した。
 
+保管済みのJPX信用残PDF1件をhostedから読戻してmanifest全一致を確認し、新抽出入口でoffline解析した。1,772,736B・SHA `d0d32ee816d463bab348d2cd357d10e21afb911db996ac1129af0bd62a8072bc`が解析前後で一致し、解析中の通信0・取得元再GET0だった。PR301初回CIはPython 1,552成功/73skip・月次cronの旧期待値1件失敗。既存テストと正本設計の時刻を更新し、関連48成功/2既存skipを確認した。
+
 PR #300は12:36:58Zにmain`79e6bbe63031ca8ddf86e571c8b4123654ed9058`へマージし、mainのCI3件成功、12:37:31Zのnative deploymentがversion`4d307582-410e-4705-b0cb-99d4b9939bcc`の100%配信であることを確認した。Macのkernel排他下で同mainへ更新し、canonical.envのaccepted revision以外は保持。通常の[cloud_check再実行37202784871](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37202784871)はR2両bucket・必須9表、processed=3 / failed=0で完了し、#299を閉じた。
