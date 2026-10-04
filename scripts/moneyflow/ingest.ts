@@ -602,7 +602,10 @@ export async function main(): Promise<void> {
 
   console.info(JSON.stringify({ dryRun: DRY_RUN, only: ONLY, outcomes }, null, 2));
 
-  if (DRY_RUN) return;
+  if (DRY_RUN) {
+    if (failures.length > 0) process.exitCode = 1;
+    return;
+  }
 
   const failedCount = await writeRunLog(ONLY, outcomes, failures);
   if (failedCount > 0) process.exitCode = 1;
