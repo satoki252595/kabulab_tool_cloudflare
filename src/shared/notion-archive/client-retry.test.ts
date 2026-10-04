@@ -150,6 +150,16 @@ describe("notion-archive client retry", () => {
     expect(fetchCount).toBe(1);
   });
 
+  it.each([["POST", "/pages"], ["POST", "/databases"], ["PATCH", "/pages/existing"]] as const)("%s %s の成功応答がJSON不正なら型付きの結果不明で再送しない", async (method, path) => {
+    globalThis.fetch = async () => {
+      fetchCount++;
+      return new Response("{", { status: 200 });
+    };
+    const { notionRequest, NotionUnknownResultError } = await load();
+    await expect(notionRequest(method, path, {})).rejects.toThrow(NotionUnknownResultError);
+    expect(fetchCount).toBe(1);
+  });
+
   it("POST /pages の明示 429 は拒否 (未作成確定) のため再送可", async () => {
     script = [
       { status: 429, retryAfter: "0" },
