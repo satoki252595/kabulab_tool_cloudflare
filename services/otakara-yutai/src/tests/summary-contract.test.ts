@@ -28,6 +28,9 @@ it("選択・保有・抽選・応募条件を全経路で検証し、株数を�
   expect(missingSummaryConditions("商品又は寄付を選択", "商品")).toEqual(["choice_condition_missing"]);
   expect(missingSummaryConditions("応募株主から抽選で贈呈", "商品")).toEqual(["lottery_condition_missing", "application_condition_missing"]);
   expect(missingSummaryConditions("応募株主から抽選で贈呈", "応募して抽選で商品")).toEqual([]);
+  expect(missingSummaryConditions("応募株主から抽選で贈呈", "抽選で商品")).toEqual(["application_condition_missing"]);
+  expect(missingSummaryConditions("申し込みが必要な商品", "商品")).toEqual(["application_condition_missing"]);
+  expect(missingSummaryConditions("申込株主から抽選で贈呈", "申込後に抽選で商品")).toEqual([]);
   expect(missingSummaryConditions("半年以上保有し株主名簿に記載又は記録された株主に商品", "半年以上保有で商品")).toEqual([]);
   expect(missingSummaryConditions("株主名簿に記載又は記録された株主は商品又は寄付を選択", "商品")).toEqual(["choice_condition_missing"]);
 });

@@ -29,7 +29,7 @@ import { HEADED_MARK } from "./estimated-value-guard.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-04.6";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-04.7";
 
 /** 全生成・取込経路で、選択・保有・抽選・応募条件の欠落を保留する。 */
 export function missingSummaryConditions(description: string, summary: string): string[] {
@@ -51,7 +51,8 @@ export function missingSummaryConditions(description: string, summary: string): 
     missing.push("holding_condition_missing");
   }
   if (/抽選|当選/.test(source) && !/抽選|当選/.test(text)) missing.push("lottery_condition_missing");
-  if (/応募/.test(source) && !/応募|抽選|当選/.test(text)) missing.push("application_condition_missing");
+  const application = /応募|申(?:し)?込/;
+  if (application.test(source) && !application.test(text)) missing.push("application_condition_missing");
   return missing;
 }
 
