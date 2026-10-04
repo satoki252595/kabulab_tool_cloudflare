@@ -15,6 +15,7 @@ afterEach(() => { vi.clearAllMocks(); vi.restoreAllMocks(); });
 
 // 構造/時刻分岐用。市場の観測値としては使用しない。
 const RECEIVED = "2026-10-04T12:28:34.484Z", START = 1790899200, END = 1790922600;
+const PRE_OPEN = "2026-10-04T15:32:42.328Z", NEXT_START = 1791158400, NEXT_END = 1791181800;
 const symbol = "1301.T", reference = { date: "2026-10-02", observedAt: "2026-10-04T12:14:55.189Z", rawSha: "1".repeat(64) };
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 function raw(over: Record<string, unknown> = {}, timestamp = [1475452800, START]) {
@@ -116,9 +117,72 @@ describe("source 10y bounds and independent session", () => {
     const noTradeParsed = await fresh(noTrade);
     expect(() => qualifyDailySourceRange(noTradeParsed, capture(noTrade), reference)).toThrow("全原本行");
   });
+  it("before opening, the next period remains raw metadata while the witnessed prior day's full body qualifies", async () => {
+    const bytes = raw({ regularMarketTime: START,
+      currentTradingPeriod: { regular: { start: NEXT_START, end: NEXT_END, timezone: "JST", gmtoffset: 32400 } } });
+    const parsed = await fresh(bytes, PRE_OPEN), c = capture(bytes, PRE_OPEN);
+    const witness = { ...reference, observedAt: PRE_OPEN }, range = tenYearRangeForDate(reference.date);
+    expect(completedDailyFetch(parsed, c, range)).toBeNull(); // legacy is unchanged.
+    expect(qualifyDailySourceRange(parsed, c, witness)).toEqual(range);
+    const completion = completedDailyFetch(parsed, c, range, witness)!;
+    expect(completion).toMatchObject({ regularStart: NEXT_START, regularEnd: NEXT_END, regularMarketTime: START });
+    const saved = assertSavedDailyShape(JSON.stringify({ code: "1301", ...parsed, completedFetch: completion }), "daily/1301.json", "1301");
+    expect(hasCompletedDailyFetch(saved, range)).toBe(true);
+    expect(hasCompletedDailyFetch(saved, tenYearRangeForDate("2026-10-05"))).toBe(false);
+    expect(saved.proof).toEqual(parsed.proof);
+    expect(saved.corporateEvents).toEqual(parsed.corporateEvents);
+    expect(sha(bytes)).toBe(parsed.proof.rawSha);
+    const sourceAfterOpening = { ...saved, proof: { ...saved.proof!, observedAt: "2026-10-05T00:00:00.000Z" } };
+    expect(hasCompletedDailyFetch(sourceAfterOpening, range)).toBe(false); // benchmark alone being pre-open is insufficient.
+    const laterRawBar = raw({ regularMarketTime: START,
+      currentTradingPeriod: { regular: { start: NEXT_START, end: NEXT_END, timezone: "JST", gmtoffset: 32400 } } }, [1475452800, START + 1]);
+    const inconsistent = await fresh(laterRawBar, PRE_OPEN);
+    expect(() => qualifyDailySourceRange(inconsistent, capture(laterRawBar, PRE_OPEN), witness)).toThrow("全原本行");
+    for (const at of ["2026-10-05T00:00:00.000Z", "2026-10-05T03:00:00.000Z", "2026-10-03T15:00:00.000Z"]) {
+      const invalid = { ...saved, proof: { ...saved.proof!, observedAt: at },
+        completedFetch: { ...completion, sessionReference: { ...witness, observedAt: at } } };
+      expect(hasCompletedDailyFetch(invalid, range)).toBe(false);
+      expect(() => assertSavedDailyShape(JSON.stringify(invalid), "daily/1301.json", "1301")).toThrow();
+    }
+  });
 });
 
 describe("normal benchmark capture before stock ingestion", () => {
+  it("pre-open metadata retains the prior closed day selected by the existing source-only helper", async () => {
+    const bytes = raw({ symbol: "^N225", range: "1mo",
+      currentTradingPeriod: { regular: { start: NEXT_START, end: NEXT_END, timezone: "JST", gmtoffset: 32400 } } });
+    vi.mocked(fetchChart).mockImplementationOnce(async (_s, _r, options) => {
+      await options!.onRaw!({ ...capture(bytes, PRE_OPEN), symbol: "^N225" });
+      return { symbol: "^N225", price: 100, previousClose: null, dataDate: "2026-10-02",
+        ohlcv: [{ date: "2016-10-03", open: 100, high: 100, low: 100, close: 100, volume: 1000, adj: null },
+          { date: "2026-10-02", open: 100, high: 100, low: 100, close: 100, volume: 1000, adj: null }] };
+    });
+    vi.mocked(archiveYahooRawBatch).mockResolvedValueOnce({ pages: ["physical"], rawBytes: bytes.length, compressedBytes: 1 });
+    expect(await fetchDailySessionReference("1.1")).toEqual({ date: "2026-10-02", observedAt: PRE_OPEN, rawSha: sha(bytes) });
+    expect(fetchChart).toHaveBeenCalledTimes(1);
+    expect(archiveYahooRawBatch).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    ["opening has begun", "2026-10-05T00:00:00.000Z", NEXT_START, NEXT_END, END, [START]],
+    ["period is a different future day", PRE_OPEN, NEXT_START + 86400, NEXT_END + 86400, END, [START]],
+    ["raw already contains the future period", PRE_OPEN, NEXT_START, NEXT_END, END, [START, NEXT_START]],
+    ["quote is in the future", PRE_OPEN, NEXT_START, NEXT_END, NEXT_START, [START]],
+    ["quote day differs from confirmed bar", PRE_OPEN, NEXT_START, NEXT_END, END - 86400, [START]],
+    ["period end crosses into a different day", PRE_OPEN, NEXT_START, NEXT_END + 86400, END, [START]],
+  ] as const)("pre-open %s is archived and remains HOLD", async (_why, observedAt, start, end, marketTime, stamps) => {
+    const bytes = raw({ symbol: "^N225", range: "1mo", regularMarketTime: marketTime,
+      currentTradingPeriod: { regular: { start, end, timezone: "JST", gmtoffset: 32400 } } }, [...stamps]);
+    vi.mocked(fetchChart).mockImplementationOnce(async (_s, _r, options) => {
+      await options!.onRaw!({ ...capture(bytes, observedAt), symbol: "^N225" });
+      return { symbol: "^N225", price: 100, previousClose: null, dataDate: "2026-10-02",
+        ohlcv: stamps.map(t => ({ date: new Date(t * 1000).toISOString().slice(0, 10), open: 100, high: 100,
+          low: 100, close: 100, volume: 1000, adj: null })) };
+    });
+    vi.mocked(archiveYahooRawBatch).mockResolvedValueOnce({ pages: ["physical"], rawBytes: bytes.length, compressedBytes: 1 });
+    await expect(fetchDailySessionReference("1.1")).rejects.toThrow(/HOLD/);
+    expect(fetchChart).toHaveBeenCalledTimes(1);
+    expect(archiveYahooRawBatch).toHaveBeenCalledTimes(1);
+  });
   it("one shared benchmark and one physical archive settle before returning its independent date", async () => {
     const bytes = raw({ symbol: "^N225", range: "1mo" });
     vi.mocked(fetchChart).mockImplementationOnce(async (_s, _r, options) => {
