@@ -1,5 +1,5 @@
 import "dotenv/config";
-// 全銘柄の日足を更新。同じ対象日の確定済み10y証跡があればsource前skipし、未完だけ取得。
+// 全銘柄の日足を更新。同じ確定sessionの10y証跡があればsource前skipし、未完だけ取得。
 // 実行: npx tsx scripts/ingest-daily.ts [--codes=7203,6758] [--limit=50]
 import { fileURLToPath } from "node:url";
 import { fetchDaily, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
@@ -8,12 +8,13 @@ import { buildRepairPost } from "./lib/repair-daily.js";
 import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { archiveSummaryOrFatal, assertSavedDailyShape, bodyPin, buildIngestSummary, completedDailyFetch, findInvalidBars, hasCompletedDailyFetch, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome } from "./lib/ingest-guard.js";
-import { isCalendarDateString, isStrictIsoUtc, jstDateSec } from "../../src/shared/vwap/proof.js";
+import { isStrictIsoUtc, jstDateSec, tenYearRangeForDate } from "../../src/shared/vwap/proof.js";
+import { fetchDailySessionReference, qualifyDailySourceRange } from "./lib/daily-session.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../../src/shared/yahoo/raw-custody.js";
 
 /**
- * 明示 10y range (run 起点の JST 暦日)。応答からの導出は禁止
+ * 明示 10y range (run 起点の JST 暦日。repair保護上限/従来skip用)。先頭barからの導出は禁止
  * (fresh 先頭日からの from 推定は欠落隠しになる)。
  */
 export function tenYearRange(nowIso: string): { from: string; to: string } {
@@ -22,20 +23,7 @@ export function tenYearRange(nowIso: string): { from: string; to: string } {
     throw new Error(`tenYearRange: 無効な now のため HOLD`);
   }
   const ms = Date.parse(nowIso);
-  const to = jstDateSec(Math.floor(ms / 1000));
-  if (!isCalendarDateString(to)) {
-    throw new Error(`tenYearRange: 無効な to のため HOLD`);
-  }
-  const [y, m, d] = to.split("-").map(Number);
-  // うるう日 (02-29) のみ明示 rule: target 年に 02-29 は存在しない
-  // (10 年差はうるう年同士になり得ない) ため 02-28 に倒す。
-  if (m === 2 && d === 29) return { from: `${y - 10}-02-28`, to };
-  const from = `${y - 10}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  // 構造上ここは常に有効 (02-29 は上で処理済み)。念のため HOLD。
-  if (!isCalendarDateString(from)) {
-    throw new Error(`tenYearRange: 無効な from のため HOLD (now=${nowIso})`);
-  }
-  return { from, to };
+  return tenYearRangeForDate(jstDateSec(Math.floor(ms / 1000)));
 }
 
 export async function main() {
@@ -52,6 +40,8 @@ export async function main() {
   const CONC = 1; // Yahoo取得は環境変数によらず直列。実HTTP間隔は共有clientで制御。
   const runId = resolveRunId();
   const TEN_Y_RANGE = tenYearRange(startedAt); // run 内一定の明示 10y range
+  const reference = await fetchDailySessionReference(runId); // runに1回。原本照合済み独立session。
+  const SOURCE_RANGE = tenYearRangeForDate(reference.date);
   let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0, invalid = 0, skipped = 0;
   let consecRL = 0, aborted = false, fatal = false;
   const unknownCodes: string[] = [];
@@ -106,10 +96,10 @@ export async function main() {
         if (existing !== null) {
           try {
             const saved = assertSavedDailyShape(existing, `daily/${code}.json`, code);
-            // ponytail: 同日のvendor訂正は追跡しない。未完再開専用で、訂正取得は別scope。
-            if (hasCompletedDailyFetch(saved, TEN_Y_RANGE)) {
+            // ponytail: 同じ確定sessionのvendor訂正は自動追跡しない。訂正取得は明示別scope。
+            if (hasCompletedDailyFetch(saved, SOURCE_RANGE)) {
               skipped++;
-              outcomes[code] = { status: "skipped", latestSourceBar: TEN_Y_RANGE.to,
+              outcomes[code] = { status: "skipped", latestSourceBar: SOURCE_RANGE.to,
                 bodySha: bodyPin(existing), sourceFetched: false };
               return;
             }
@@ -182,14 +172,15 @@ export async function main() {
         let rp: ReturnType<typeof buildRepairPost>;
         let postJson: string;
         try {
+          const sourceRange = qualifyDailySourceRange({ bars, splits, proof, corporateEvents }, sourceCapture, reference);
           rp = buildRepairPost({
             code,
             oldRaw: existing ?? JSON.stringify({ code, bars: [], splits: [] }),
             fresh: { bars, splits, proof, corporateEvents },
-            range: TEN_Y_RANGE,
+            range: { from: sourceRange.from, to: TEN_Y_RANGE.to },
             updatedAt: new Date().toISOString(),
           });
-          const completedFetch = completedDailyFetch({ bars, splits, proof, corporateEvents }, sourceCapture, TEN_Y_RANGE);
+          const completedFetch = completedDailyFetch({ bars, splits, proof, corporateEvents }, sourceCapture, sourceRange, reference);
           postJson = completedFetch === null ? rp.postJson : JSON.stringify({ ...rp.post, completedFetch });
           assertSavedDailyShape(postJson, `daily/${code}.json`, code);
         } catch (e) {
