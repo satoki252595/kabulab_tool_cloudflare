@@ -71,6 +71,31 @@ const result = (over: Record<string, unknown>) =>
   JSON.stringify({ taskId: K_CATALOG, contractVersion: SUMMARY_CONTRACT_VERSION, shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, ...over });
 
 describe("selectSummaryTasks", () => {
+  it.each([
+    ["合成優待券2枚", "優待券3枚"],
+    ["合成施設20%割引", "施設10%割引"],
+    ["合成優待券2枚", "200株:優待券2枚"],
+  ])("既存の単位付き数値の不一致を自動再作成へ回す: %s", (description, shortSummary) => {
+    const current = row({ description, shortSummary, estimatedValue: null });
+    const tasks = selectSummaryTasks([current]);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].reason).toBe("rework");
+    expect(tasks[0].violations).toEqual([]);
+    expect(selectSummaryTasks([current], { violationsOnly: true })).toEqual([]);
+    const plan = planSummaryImport({ tasks, currentRows: [current], resultsText: result({ taskId: tasks[0].taskId, shortSummary, estimatedValue: null }) });
+    expect(plan.updates).toEqual([]);
+    expect(plan.rejections[0].reason).toBe("summary_ungrounded");
+  });
+  it("既存の株数別・権利月別の要約は各実recipientに照合し、正しい別行を誤拒否しない", () => {
+    const description = "合成優待券2枚";
+    const current = [
+      row({ id: 1, description, shortSummary: "100株:3月の優待券2枚", estimatedValue: null }),
+      row({ id: 2, description, shortSummary: "300株:9月の優待券2枚", minShares: 300, recordMonth: 9, estimatedValue: null }),
+    ];
+    expect(selectSummaryTasks(current)).toEqual([]);
+    expect(selectSummaryTasks([{ ...current[0], shortSummary: "300株:3月の優待券2枚" }, current[1]])[0].reason).toBe("rework");
+    expect(selectSummaryTasks([{ ...current[0], shortSummary: "100株:9月の優待券2枚" }, current[1]])[0].reason).toBe("rework");
+  });
   it("原文と同じ3D住宅の結果を共通取込で受理し、旧版や数字・保有条件の変更は止める", () => {
     const description = "合成優待:3Dプリンター住宅の1%割引券2枚、100株以上、1年以上保有";
     const current = row({ description, shortSummary: null, estimatedValue: null, recordMonth: 6 });

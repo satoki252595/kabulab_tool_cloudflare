@@ -236,6 +236,16 @@ it("原文と同じ日数・か月期間だけを裏づけ、権利月や換算�
   expect(isSummaryNumbersGrounded("6か月以上保有", "6カ月以上保有", context)).toBe(true);
 });
 
+it.each(["袋", "パック", "セット", "冊"])("実在する数量単位%sを同数・同単位だけで照合する", (unit) => {
+  const context = { minShares: [100], recordMonths: [3] };
+  const source = `合成優待商品2${unit}`;
+  expect(isSummaryNumbersGrounded(source, `商品2${unit}`, context)).toBe(true);
+  expect(isSummaryNumbersGrounded(source, `商品3${unit}`, context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, "商品2枚", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, `商品二${unit}`, context)).toBe(false);
+  expect(isSummaryNumbersGrounded("合成商品", `商品2${unit}`, context)).toBe(false);
+});
+
 it("随時のrecipient0を暦0月の根拠にせず、他の実月・期間は同じ契約を保つ", () => {
   const context = { minShares: [100], recordMonths: [0, 3] };
   expect(isSummaryNumbersGrounded("随時利用できるサービス", "随時利用可能", context)).toBe(true);
