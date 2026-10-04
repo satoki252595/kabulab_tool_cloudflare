@@ -274,7 +274,7 @@ JPX 公式 `data_j.xlsx` の東証内国株 (プライム/スタンダード/グ
   - Yahoo の個別取得失敗はコードと根本原因を記録し、`is_active` は変更しない
 - Phase 4: セクター集計。`core_stocks ⋈ swing_stock_indicators` を D1 から再読込し、本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留 (前回値維持)・警告。`swing_sector_daily` 書き直し
 
-母集団 ~3,700 を 1 回の Node 実行で回す。個別銘柄またはマクロに欠損があれば終了コードを非ゼロにして、部分成功を正常終了として扱わない。現行stock-syncのジョブ上限は210分で、これは実所要時間や完了保証ではない。public repoの標準runnerの分課金条件は[費用確認](./cost-audit-2026-10-01.md)を参照する。
+母集団 ~3,700 を 1 回の Node 実行で回す。空母集団・件数不整合・マクロ失敗・個別銘柄の失敗率1%超は非ゼロで終了する。既存L-57契約では1%以下の個別失敗をtrace付きで成功扱いにするが、後続moneyflowは起動しない。現行stock-syncのジョブ上限は210分で、これは実所要時間や完了保証ではない。public repoの標準runnerの分課金条件は[費用確認](./cost-audit-2026-10-01.md)を参照する。
 
 `pnpm sync:daily` はローカル手動用のフルオーケストレータで、この core 同期に加えて
 VWAP の日足10年・5分足・信用残高を順に実行する。定常運用では stock-sync と
@@ -297,7 +297,7 @@ stock-sync の月次ジョブは次の順に別コマンドとして実行する
 
 ### その他の取込ワークフロー (GitHub Actions)
 
-- **007 VWAP** ([`.github/workflows/vwap-ingest.yml`](../.github/workflows/vwap-ingest.yml)): 月・水・金08:00 UTCに日足10年＋通常5分足5d、平日08:00 UTCに日次信用残を取得し、R2の `daily/{code}.json` / `intra/{code}.json` / `margin/daily/{基準日}.json` へ保存する。Yahooは共有proxy・直列取得を使い、stock/moneyflowと取得を重複させない。
+- **007 VWAP** ([`.github/workflows/vwap-ingest.yml`](../.github/workflows/vwap-ingest.yml)): 月・水・金08:00 UTCに日足10年＋通常5分足5d、平日08:00 UTCに日次信用残を取得し、R2の `daily/{code}.json` / `intra/{code}.json` / `margin/daily/{基準日}.json` へ保存する。Yahooは共有proxy・直列取得を使い、`yahoo-source` groupでstock/moneyflowとの同時実行を防ぐ。
 - **005 EDINET + 006 TDnet** ([`.github/workflows/catchup.yml`](../.github/workflows/catchup.yml)): 平日11:00 UTCにNodeの共通CLIから実行する。TDnetは既定8日窓・二次処理12分枠、EDINETはD1の未完進捗から再開し、原本のNotion実体照合後にD1へ保存する。Python版の日次workflowとは別経路。
 - **002 優待要約**はMacのLaunchAgentが毎日21時に固定Qwen3.5-4B/MLXで通常最大60群を生成・検証・取込する。事業タグの20時処理と共通writer lockを使う。原文条件が欠ける出力は保留し、実体保管・全文照合と原子取込を行う ([作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md))。
 - **008 moneyflow** ([`.github/workflows/moneyflow.yml`](../.github/workflows/moneyflow.yml)): 定時の株式sync成功後に実取引日を受けて全29取得元（Phase1 3＋spec26）を逐次実行する。手動 `stocks` の連鎖はsector-turnoverのみ。独立cronは廃止済み。日次信用残は保存済みR2原本を再利用する。観測全行を照合し同値の書込を省き、原本・保存結果が不明なら後続取得を止める。非公開Notion運用と内部読取 `/api/ingest/moneyflow-sector` を使う ([docs/moneyflow.md](./moneyflow.md))。
