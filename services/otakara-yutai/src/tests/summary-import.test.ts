@@ -80,6 +80,14 @@ describe("selectSummaryTasks", () => {
     expect(plan.updates).toEqual([]);
     expect(plan.rejections[0].reason).toBe("summary_conditions");
   });
+  it("抽選だけの旧要約では応募要件を満たしたことにせず再作成・取込保留する", () => {
+    const current = row({ description: "応募株主から抽選で合成商品を贈呈", shortSummary: "抽選で合成商品", estimatedValue: null });
+    const tasks = selectSummaryTasks([current]);
+    expect(tasks[0].reason).toBe("rework");
+    const plan = planSummaryImport({ tasks, currentRows: [current], resultsText: result({ taskId: tasks[0].taskId, shortSummary: current.shortSummary, estimatedValue: null }) });
+    expect(plan.updates).toEqual([]);
+    expect(plan.rejections[0]).toMatchObject({ reason: "summary_conditions", detail: "application_condition_missing" });
+  });
   it("随時のrecipient0を同じ条件のまま書出し・読戻しし、未知月は止める", () => {
     const tasks = selectSummaryTasks([row({ recordMonth: 0, shortSummary: null })]);
     expect(tasks[0].recipients).toEqual([{ minShares: 100, recordMonth: 0, recordDate: null }]);
