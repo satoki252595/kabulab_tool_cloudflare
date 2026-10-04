@@ -1,5 +1,6 @@
 // JPX 信用残高 (日次 mtall PDF) → Notion 一次データ保管 → R2 保存。
 // 週次版は公表廃止のため通常取込では使わない (旧 R2 オブジェクトは残すが読まない)。
+import "dotenv/config";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
