@@ -245,11 +245,14 @@ def test_hosted_readback_is_uncredentialed_and_never_retries(client, monkeypatch
 
 
 def test_hosted_unknown_readback_is_not_retried(client, monkeypatch):
+    import traceback
+
     get = Mock(side_effect=requests.Timeout("private signed URL omitted"))
     monkeypatch.setattr(module.requests, "get", get)
     with pytest.raises(module.NotionRequestError, match="結果不明") as failure:
         client.download_file("https://files.example/attachment")
     assert "private signed" not in str(failure.value)
+    assert "private signed" not in "".join(traceback.format_exception(failure.value))
     assert get.call_count == 1
 
 
