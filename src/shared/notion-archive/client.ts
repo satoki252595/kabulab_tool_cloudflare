@@ -374,7 +374,14 @@ export async function notionRequest<T = unknown>(
     );
     const family = readListFamily(method, path);
     if (family === null) {
-      return (await res.json()) as T;
+      try {
+        return (await res.json()) as T;
+      } catch (cause) {
+        if (method !== "GET") {
+          throw new NotionUnknownResultError(`Notion ${method} ${path}: 成功応答を読めず結果不明のため再送しません`, { cause });
+        }
+        throw cause;
+      }
     }
     // read-list のみ strict guard (doFetch retry ループの外。fetch 1 回で即 STOP)。
     let parsed: unknown;

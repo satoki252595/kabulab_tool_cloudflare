@@ -42,6 +42,8 @@ import {
 } from "../../src/shared/notion-archive/index.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { rootCauseMessage } from "../../src/shared/errors.js";
+import { NotionUnknownResultError } from "../../src/shared/notion-archive/client.js";
+import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
 import { MONEYFLOW_INDICATORS } from "../../services/moneyflow/lib/indicators.js";
 import {
   fetchSectorMarketCap,
@@ -585,6 +587,8 @@ export async function main(): Promise<void> {
     try {
       await syncIndicatorCatalog(ONLY);
     } catch (error) {
+      // 結果不明や設定不備は取込ログも追加送信せず、共有のSTOP型を保つ。
+      if (error instanceof NotionUnknownResultError || error instanceof NotionConfigError) throw error;
       // 指標カタログの同期失敗は全取得元の失敗として取込ログへ記録する。
       // ここで記録せず落ちると、DB だけ作って 0 行の無痕跡状態になり、
       // 後の調査で「未実行」と「失敗」の区別が付かなくなる。
@@ -604,6 +608,8 @@ export async function main(): Promise<void> {
     try {
       outcomes.push(await runSource(source, now));
     } catch (error) {
+      // 結果不明や設定不備では、後続sourceの取得・書込も止める。
+      if (error instanceof NotionUnknownResultError || error instanceof NotionConfigError) throw error;
       const message = rootCauseMessage(error);
       console.error(`[moneyflow:${source}] エラー: ${message}`);
       outcomes.push({ source, ok: false, detail: message });

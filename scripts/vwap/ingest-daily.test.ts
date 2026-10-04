@@ -9,9 +9,12 @@ import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { loadCodes } from "./lib/codes.js";
 import { MAX_YAHOO_RAW_BYTES, YahooRawTooLargeError, parseDailyChart } from "../../src/shared/yahoo/client.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
+import { NotionUnknownResultError } from "../../src/shared/notion-archive/client.js";
+import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
 import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main, tenYearRange } from "./ingest-daily.js";
 import { assertSavedDailyShape, completedDailyFetch, hasCompletedDailyFetch } from "./lib/ingest-guard.js";
+import { fetchDailySessionReference, qualifyDailySourceRange } from "./lib/daily-session.js";
 
 const dailySource = vi.hoisted(() => vi.fn());
 const rawHook = vi.hoisted(() => ({ enabled: true, status: 200, size: 28, body: null as Uint8Array | null }));
@@ -24,12 +27,20 @@ vi.mock("./lib/codes.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./lib/codes.js")>();
   return { ...mod, loadCodes: vi.fn() };
 });
+// この配管suiteは資格済みsessionを入力する。実原本/休日/形成中の資格はdaily-session.testで検証。
+vi.mock("./lib/daily-session.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("./lib/daily-session.js")>();
+  return { ...mod,
+    fetchDailySessionReference: vi.fn(async () => ({ date: tenYearRange(new Date().toISOString()).to,
+      observedAt: new Date().toISOString(), rawSha: "1".repeat(64) })),
+    qualifyDailySourceRange: vi.fn(() => tenYearRange(new Date().toISOString())) };
+});
 vi.mock("../../src/shared/yahoo/client.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../../src/shared/yahoo/client.js")>();
   return { ...mod, fetchDaily: async (...args: Parameters<typeof mod.fetchDaily>) => {
     if (rawHook.enabled) await args[2]?.onRaw?.({ symbol: args[0], status: rawHook.status,
       bytes: rawHook.body === null ? new Uint8Array(rawHook.size) : rawHook.body,
-      url: "https://query1.finance.yahoo.com/v8/finance/chart/test", receivedAt: new Date().toISOString(), headers: {} });
+      url: `https://query1.finance.yahoo.com/v8/finance/chart/${args[0]}?range=${args[1]}&interval=1d&events=split,div`, receivedAt: new Date().toISOString(), headers: {} });
     return dailySource(...args);
   } };
 });
@@ -119,7 +130,7 @@ const completionRaw = (symbol: string, missingMiddle = false): Uint8Array => new
   chart: { error: null, result: [{
     meta: { symbol, range: "10y", dataGranularity: "1d", exchangeTimezoneName: "Asia/Tokyo", currency: "JPY",
       regularMarketPrice: BAR_A.c, regularMarketTime: 1790922601,
-      currentTradingPeriod: { regular: { start: 1790899200, end: 1790922600 } } },
+      currentTradingPeriod: { regular: { start: 1790899200, end: 1790922600, timezone: "JST", gmtoffset: 32400 } } },
     timestamp: [1790726400, 1790812800, 1790899200],
     indicators: { quote: [{ open: [BAR_A.o, BAR_A.o, BAR_A.o], high: [BAR_A.h, BAR_A.h, BAR_A.h],
       low: [BAR_A.l, BAR_A.l, BAR_A.l], close: [BAR_A.c, missingMiddle ? null : BAR_A.c, BAR_A.c],
@@ -139,6 +150,80 @@ const completedSaved = async (code: string) => {
 };
 
 describe("daily source前の同日確定済み再開", () => {
+  it("normal main uses one independent closed-session reference without trimming a Sunday 10y response", async () => {
+    const observedAt = "2026-10-04T12:28:34.484Z";
+    vi.stubEnv("GITHUB_RUN_ID", "100");
+    vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(observedAt));
+    try {
+      const body = JSON.parse(new TextDecoder().decode(completionRaw("A.T")));
+      body.chart.result[0].timestamp[0] = 1475452800; // 明示構造分岐: 2016-10-03。
+      rawHook.body = new TextEncoder().encode(JSON.stringify(body));
+      mockLoadCodes.mockResolvedValue(["A"]);
+      mockR2Get.mockResolvedValue(null);
+      mockFetchDaily.mockResolvedValue(await parseDailyChart("A.T", "10y", rawHook.body, observedAt));
+      vi.mocked(fetchDailySessionReference).mockResolvedValueOnce({ date: "2026-10-02",
+        observedAt: "2026-10-04T12:14:55.189Z", rawSha: "1".repeat(64) });
+      const actual = await vi.importActual<typeof import("./lib/daily-session.js")>("./lib/daily-session.js");
+      vi.mocked(qualifyDailySourceRange).mockImplementationOnce(actual.qualifyDailySourceRange);
+      // 元HTTP契約も正常dailyと同じ形でcaptureする。
+      const original = rawHook.body;
+      await main();
+      expect(process.exitCode).toBe(0);
+      expect(fetchDailySessionReference).toHaveBeenCalledTimes(1);
+      expect(mockFetchDaily).toHaveBeenCalledTimes(1);
+      expect(mockR2Put).toHaveBeenCalledTimes(1);
+      const saved = assertSavedDailyShape(mockR2Put.mock.calls[0][1], "daily/A.json", "A");
+      expect(saved.bars.map((b) => b.date)).toEqual(["2016-10-03", "2026-10-01", "2026-10-02"]);
+      expect(saved.proof?.observedAt).toBe(observedAt);
+      expect(saved.completedFetch?.to).toBe("2026-10-02");
+      expect(rawHook.body).toBe(original);
+      const savedBody = mockR2Put.mock.calls[0][1];
+      vi.clearAllMocks();
+      vi.stubEnv("GITHUB_RUN_ID", "101");
+      vi.setSystemTime(new Date("2026-10-04T13:00:00.000Z"));
+      mockR2Get.mockResolvedValue({ body: savedBody, etag: "preserved-version" });
+      vi.mocked(fetchDailySessionReference).mockResolvedValueOnce({ date: "2026-10-02",
+        observedAt: "2026-10-04T12:59:00.000Z", rawSha: "2".repeat(64) });
+      await main();
+      expect(mockFetchDaily).not.toHaveBeenCalled();
+      expect(mockR2Put).not.toHaveBeenCalled();
+      expect(recordedMetadata().sourceObserved).toMatchObject({ count: 0 });
+      expect((recordedBody().outcomes as Record<string, unknown>).A).toMatchObject({ status: "skipped", sourceFetched: false, latestSourceBar: "2026-10-02" });
+      expect(saved.proof?.observedAt).toBe(observedAt);
+
+      vi.clearAllMocks();
+      vi.stubEnv("GITHUB_RUN_ID", "102");
+      const nextObserved = "2026-10-05T12:28:34.484Z";
+      vi.setSystemTime(new Date(nextObserved));
+      const next = body.chart.result[0];
+      next.meta.regularMarketTime += 3 * 86400;
+      next.meta.currentTradingPeriod.regular.start += 3 * 86400;
+      next.meta.currentTradingPeriod.regular.end += 3 * 86400;
+      next.timestamp = [1475625600, 1790812800, 1790899200, 1791158400];
+      for (const field of ["open", "high", "low", "close", "volume"]) next.indicators.quote[0][field].push(next.indicators.quote[0][field][0]);
+      rawHook.body = new TextEncoder().encode(JSON.stringify(body));
+      mockFetchDaily.mockResolvedValue(await parseDailyChart("A.T", "10y", rawHook.body, nextObserved));
+      vi.mocked(fetchDailySessionReference).mockResolvedValueOnce({ date: "2026-10-05",
+        observedAt: "2026-10-05T12:14:55.189Z", rawSha: "3".repeat(64) });
+      vi.mocked(qualifyDailySourceRange).mockImplementationOnce(actual.qualifyDailySourceRange);
+      await main();
+      expect(mockFetchDaily).toHaveBeenCalledTimes(1); // 確定sessionが変わればsourceを取得する。
+      expect(mockR2Put).toHaveBeenCalledTimes(1);
+      expect(assertSavedDailyShape(mockR2Put.mock.calls[0][1], "daily/A.json", "A").bars.at(-1)?.date).toBe("2026-10-05");
+
+      vi.clearAllMocks();
+      vi.stubEnv("GITHUB_RUN_ID", "103");
+      vi.setSystemTime(new Date("2026-10-05T13:00:00.000Z"));
+      const broken = { ...saved, completedFetch: { ...saved.completedFetch!, sessionReference: { ...saved.completedFetch!.sessionReference!, rawSha: "invalid" } } };
+      mockR2Get.mockResolvedValue({ body: JSON.stringify(broken), etag: "broken-witness" });
+      await main();
+      expect(mockFetchDaily).not.toHaveBeenCalled();
+      expect(mockR2Put).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+    } finally { vi.useRealTimers(); vi.unstubAllEnvs(); }
+  });
   it("成功済みprefixはYahoo/PUT0、legacy未完だけ取得・保管し、再開後は全件source0", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(COMPLETED_AT));
@@ -299,6 +384,28 @@ describe("ingest-daily main flow", () => {
     expect(process.exitCode).toBe(2);
     const outcomes = recordedBody().outcomes as Record<string, { status: string }>;
     expect(outcomes.C.status).toBe("notStarted");
+  });
+
+  it.each([
+    ["UNKNOWN", new NotionUnknownResultError("unknown create; no resend")],
+    ["CONFIG", new NotionConfigError("malformed Notion read envelope")],
+  ])("raw custody %s keeps the local summary and sends no later Notion/R2/source work", async (_kind, error) => {
+    const codes = Array.from({ length: 31 }, (_, i) => String(1000 + i));
+    mockLoadCodes.mockResolvedValue(codes);
+    mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
+    mockR2Get.mockResolvedValue(null);
+    mockRawArchive.mockRejectedValue(error);
+    await main();
+    expect(mockRawArchive).toHaveBeenCalledTimes(1);
+    expect(mockFetchDaily).toHaveBeenCalledTimes(30);
+    expect(mockR2Put).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(2);
+    const files = readdirSync(".vwap-summaries");
+    expect(files).toHaveLength(1);
+    const local = JSON.parse(readFileSync(join(".vwap-summaries", files[0]), "utf-8")) as { outcomes: Record<string, { status: string }> };
+    expect(Object.keys(local.outcomes)).toHaveLength(31);
+    expect(local.outcomes[codes[30]].status).toBe("notStarted");
   });
 
   it("normal PUT occurs only after its own raw custody returns", async () => {

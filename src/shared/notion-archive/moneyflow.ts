@@ -414,10 +414,13 @@ export async function upsertIndicatorDef(
     await notionRequest("PATCH", `/pages/${existing.id}`, { properties: props });
     return { pageId: existing.id, outcome: "updated" };
   }
-  const created = await notionRequest<{ id: string }>("POST", "/pages", {
+  const created = await notionRequest<{ id?: unknown } | null>("POST", "/pages", {
     parent: { database_id: dbId },
     properties: props,
   });
+  if (typeof created?.id !== "string" || created.id.trim().length === 0) {
+    throw new NotionUnknownResultError(`moneyflow 指標定義の作成応答に有効なIDがないため保全停止 (再送しない): key=${input.key}`);
+  }
   return { pageId: created.id, outcome: "created" };
 }
 
@@ -886,7 +889,7 @@ function assertObservationAck(
 ): string {
   const key = observationKey(input);
   const bad = (why: string): never => {
-    throw new Error(
+    throw new NotionUnknownResultError(
       `moneyflow 観測ログの${context.op}応答が不正のため保全停止 (再送しない・成功数に加えない): ${why} key=${key}`
     );
   };

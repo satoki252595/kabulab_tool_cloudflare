@@ -35,6 +35,16 @@ export function isStrictIsoUtc(s: unknown): s is string {
 export const jstDateSec = (ts: number): string =>
   new Date((ts + 32400) * 1000).toISOString().slice(0, 10);
 
+/** 明示的な暦日から10年境界を作る。bar先頭日からは算出しない。 */
+export function tenYearRangeForDate(to: string): { from: string; to: string } {
+  if (!isCalendarDateString(to)) throw new Error("tenYearRange: 無効な to のため HOLD");
+  const [y, m, d] = to.split("-").map(Number);
+  const from = m === 2 && d === 29 ? `${y - 10}-02-28` :
+    `${y - 10}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  if (!isCalendarDateString(from)) throw new Error("tenYearRange: 無効な from のため HOLD");
+  return { from, to };
+}
+
 /** DailyFetchProof の形状検証 (保存物・応答物の strict-when-present 用)。 */
 export function isDailyFetchProof(p: unknown): p is DailyFetchProof {
   if (p === null || typeof p !== "object" || Array.isArray(p)) return false;

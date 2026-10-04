@@ -48,7 +48,8 @@ describe("notion-archive moneyflow", () => {
       const key = `${init?.method ?? "GET"} ${u.pathname}`;
       const q = routes.get(key);
       if (!q || q.length === 0) throw new Error(`テスト: 未定義ルートへの fetch: ${key}`);
-      return jsonResponse(q.shift());
+      const next = q.shift();
+      return next instanceof Response ? next : jsonResponse(next);
     }) as typeof fetch;
   });
 
@@ -135,6 +136,19 @@ describe("notion-archive moneyflow", () => {
         limitations: "限界",
       });
       expect(result).toEqual({ pageId: "def-existing", outcome: "updated" });
+    });
+
+    it("作成成功応答のIDが無ければ結果不明として停止し、再送しない", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [], has_more: false, next_cursor: null }]);
+      route("POST", "/v1/pages", [{}]);
+      const { upsertIndicatorDef } = await load();
+      const { NotionUnknownResultError } = await import("./client.js");
+      await expect(upsertIndicatorDef(dbId, {
+        key: "sector_turnover", displayName: "業種別売買代金", requirement: "R1", flowType: "売買代金",
+        description: "説明", sourceUrl: "https://example.test/source", license: "personal-only",
+        frequency: "週次", limitations: "限界",
+      })).rejects.toBeInstanceOf(NotionUnknownResultError);
+      expect(calls).toHaveLength(2);
     });
 
     it("同一キーが2件ならどれも選ばず throw する (先頭選択禁止)", async () => {
@@ -565,7 +579,10 @@ describe("notion-archive moneyflow", () => {
       route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: "obs-row-9", archived: false, in_trash: false }]);
       const { upsertObservation } = await load();
-      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/作成応答が不正.*propertiesなし/);
+      const { NotionUnknownResultError } = await import("./client.js");
+      const error = await upsertObservation(dbId, sameInput).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(NotionUnknownResultError);
+      expect(error).toMatchObject({ message: expect.stringMatching(/作成応答が不正.*propertiesなし/) });
       expect(calls).toHaveLength(2);
     });
 
@@ -823,6 +840,7 @@ describe("notion-archive moneyflow", () => {
         (e: Error) => e
       )) as Error | null;
       expect(err).not.toBeInstanceOf(NotionUnknownResultError);
+      expect(err?.message).toContain("validation_error");
       expect(err?.message).not.toContain("観測の作成");
       expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(1);
     });

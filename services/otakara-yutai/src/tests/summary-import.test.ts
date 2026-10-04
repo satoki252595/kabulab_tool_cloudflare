@@ -71,6 +71,24 @@ const result = (over: Record<string, unknown>) =>
   JSON.stringify({ taskId: K_CATALOG, contractVersion: SUMMARY_CONTRACT_VERSION, shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, ...over });
 
 describe("selectSummaryTasks", () => {
+  it("原文と同じ3D住宅の結果を共通取込で受理し、旧版や数字・保有条件の変更は止める", () => {
+    const description = "合成優待:3Dプリンター住宅の1%割引券2枚、100株以上、1年以上保有";
+    const current = row({ description, shortSummary: null, estimatedValue: null, recordMonth: 6 });
+    const tasks = selectSummaryTasks([current]);
+    const summary = "3Dプリンター住宅1%割引券2枚、100株以上、1年以上保有";
+    const plan = (shortSummary: string, contractVersion = SUMMARY_CONTRACT_VERSION) => planSummaryImport({
+      tasks, currentRows: [current], resultsText: result({ taskId: tasks[0].taskId, shortSummary, estimatedValue: null, contractVersion }),
+    });
+    expect(plan(summary).updates).toHaveLength(1);
+    expect(plan(summary, "2026-10-04.7").rejections[0].reason).toBe("contract_version");
+    for (const changed of ["33D", "13D"]) {
+      expect(plan(summary.replace("3D", changed)).rejections[0].reason).toBe("summary_ungrounded");
+    }
+    for (const [before, after] of [["1%", "2%"], ["2枚", "3枚"], ["100株", "200株"], ["1年以上", "2年以上"]]) {
+      expect(plan(summary.replace(before, after)).rejections[0].reason).toBe("summary_ungrounded");
+    }
+    expect(plan(summary.replace("、1年以上保有", "")).rejections[0].reason).toBe("summary_conditions");
+  });
   it("形式上有効でも保有条件を落とした既存要約を自動的に再作成へ回す", () => {
     const current = row({ description: "5年以上継続保有で合成商品3万円相当", shortSummary: "合成商品3万円相当" });
     const tasks = selectSummaryTasks([current]);
