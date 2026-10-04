@@ -99,6 +99,14 @@ PR #304は全3CI成功後、13:44:24Zにmain `d97238eb4d41cf7070cc5487a4ab2660f7
 
 14:02:05Zの保存済全POSTと通常recompute入力のoffline確認では、1766の「随時」4行と8617の「随時」1行が権利月0・日付NULLのまま保存され、年間利回りの対象から除かれた。1766の通常4月7行と8508の通常4行は年間対象、8508の単発1行は年間除外。1766/8617の価格行はこの時点で未生成のため、通常再計算はnoFinancialRowとして保持し、価格を補っていない。追加の取得元・D1・Notion・モデル呼出しは0。
 
+## 月次の利回り・スコア再計算
+
+新main d972で既存`runMonthlyRebuild(createMonthlyRebuildDb())`を1回実行し、14:07:50.042Zに終了0。scoredStocks=1,650 / isYutai変更0、取得元・モデル0。更新前の正準9表をgzip実体保管・全文照合してから通常再計算へ進んだ。元470 HTTPは全200（D1 SELECT26 / write435、PRE Notion8 / hosted1）、D1 metaはrows_read=86,751 / rows_written=3,300。
+
+保存した正準normal443 SQL/paramsを独立再現し、対象1,650件のfinancial18列・score6列と全POSTを比較した。元財務・指標・優待・genreの4表、overlay全列、core保護9列、非対象の派生行は保持した。再計算dataDateは2026-10-04 UTCで、元財務の取得日を更新した意味にはしない。全POST15,948,766B/SHA `121ddd36a88fa507496c9daaf1deb7e48149108412801fdf871ab4b27d2e2a09`を確認した。
+
+POST証跡のNotion実体保管・全文読戻しも14:11:02.701Zに終了0。Notion8 / hosted1の全9応答は200、1,884member・元55,445,320Bをgzip8,302,911B/SHA `0c6052bc6ca13c40a987c31132156fe90042d0d5573f3742bd4b8a9eb6d1aefa`として保管し、全memberの原bytes・metadata・manifest・native時計を独立照合した。既PREの13添付は参照だけを記録し、新たな独立添付として数えない。
+
 ## VWAP全量実行で見つかった不具合
 
 [通常all 37202207552](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37202207552)はdailyの3,689対象中written838 / errors2,619 / sourceObserved3,456で、13:54Zに終了2。9409のnative R2 GETがInternalErrorとなり、intraは未実行、marginはskipだった。成功した838件は追加取得・書込0の全R2本文読戻しで形状・全bytesを確認した。部分成功を全量完了には扱わない。
