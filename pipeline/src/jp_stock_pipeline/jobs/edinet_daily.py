@@ -110,7 +110,7 @@ def _export_kabumcp_cache(ctx: JobContext, artifact: RawArtifact, doc_id: str) -
     if artifact.datatype == "xbrl":
         # 任意 cache-export の正式対象外。合法 skip として情報記録のみ
         # (失敗計上しない — exit 非0 の根拠にしない)。
-        logger.info("kabuMCP cache skip: type1 fallback は連携対象外 doc_id=%s", doc_id)
+        logger.info("kabuMCP cache skip: type1 原本は連携対象外 doc_id=%s", doc_id)
         return
     try:
         result = _copy_kabumcp_csv(artifact, doc_id, cache_dir)
@@ -120,23 +120,25 @@ def _export_kabumcp_cache(ctx: JobContext, artifact: RawArtifact, doc_id: str) -
 
 
 def _fetch_financial_tidy(
-    ctx: JobContext, doc_id: str, code: str, data_date: date | None
+    ctx: JobContext, doc_id: str, code: str, data_date: date | None, csv_flag: object
 ):
-    """type=5 CSV 優先 → 無ければ type=1 XBRL (§5.2)。(artifact, tidy|None) を返す。
+    """一覧の CSV 提供フラグに従い type=5 または type=1 を取得する。
 
     tidy 変換の失敗では原本を失わない: convert_status=失敗 を記録して
     原本はそのまま ⑤ アップロードに進める (§5.2「変換失敗時も原本保存は成立」)。
     """
-    try:
+    if csv_flag == "1":
         artifact = edinet.fetch_document(
             ctx.settings, doc_id, 5, code=code, data_date=data_date
         )
         parser = xbrl_to_csv.edinet_csv_zip_to_tidy
-    except FetchError:
+    elif csv_flag == "0":
         artifact = edinet.fetch_document(
             ctx.settings, doc_id, 1, code=code, data_date=data_date
         )
         parser = xbrl_to_csv.xbrl_zip_to_tidy
+    else:
+        raise FetchError("EDINET 一覧の CSV 提供フラグが未取得・不正")
 
     tidy = None
     try:
@@ -213,11 +215,12 @@ def _process_document(
     # ③④ 構造化保存の前提条件。本番共通 strict のため Notion 未保管はこの場で
     # 送出され、PDF/構造化保存より前に書類単位を中止する (§8.1-4)。
     if doc_type_code in FINANCIAL_DOC_TYPES:
-        tidy_artifact, tidy = _fetch_financial_tidy(ctx, doc_id, code, data_date)
+        tidy_artifact, tidy = _fetch_financial_tidy(ctx, doc_id, code, data_date, doc.get("csvFlag"))
         doc_raw_page = ctx.upload_raw(tidy_artifact, sha_map=sha_map, sha_map_date=target_date)
 
-    # PDF 原本 (§4 書類一覧の対象すべて)。失敗しても書類処理自体は継続
-    try:
+    # 一覧に未提供と明示された PDF は要求しない。通信・保管失敗は続行しない。
+    pdf_flag = doc.get("pdfFlag")
+    if pdf_flag == "1":
         pdf_artifact = edinet.fetch_document(
             ctx.settings, doc_id, 2, code=code, data_date=data_date
         )
@@ -228,8 +231,10 @@ def _process_document(
             # 別目的の原本として ⑤ へ残すが、財務系 ④ の指し先にしない
             # (一覧/PDF による実 ZIP 代替の不可 §8.1-4)。
             doc_raw_page = doc_raw_page or pdf_page
-    except (FetchError, file_upload.RawUploadError) as exc:
-        logger.warning("PDF取得/UL失敗 (書類処理は継続 doc_id=%s): %s", doc_id, exc)
+    elif pdf_flag == "0":
+        logger.info("PDF 未提供 (一覧 pdfFlag=0): doc_id=%s", doc_id)
+    else:
+        raise FetchError("EDINET 一覧の PDF 提供フラグが未取得・不正")
 
     # ④ 開示書類 upsert (キー=docID)。原本は書類自身 → 無ければ一覧原本
     # (財務系以外のみ。一覧/PDF は実 ZIP の代用にしない)。
@@ -391,6 +396,8 @@ def execute(ctx: JobContext) -> None:
                 sha_map=sha_map,
             )
             ctx.add_success()
+        except (FetchError, file_upload.RawUploadError):
+            raise  # 取得・原本保管が不明なまま次の書類を取得しない。
         except Exception as exc:
             ctx.add_failure(doc.get("docID", "?"), f"書類処理失敗: {exc}")
 

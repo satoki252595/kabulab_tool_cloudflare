@@ -576,6 +576,7 @@ class TestEdinetDailyWiring:
         doc = {
             "docID": "S1001234", "docTypeCode": "120", "secCode": "72030",
             "submitDateTime": "2026-06-25 15:00",
+            "pdfFlag": "0",
         }
         job._process_document(ctx, doc, "list-page", master_map_ok=True)
         return cloud, digest

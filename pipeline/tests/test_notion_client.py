@@ -229,6 +229,30 @@ def test_dry_run_archive_is_recorded_without_network(dry_client):
     ]
 
 
+@pytest.mark.parametrize("status", [200, 302, 503])
+def test_hosted_readback_is_uncredentialed_and_never_retries(client, monkeypatch, status):
+    from types import SimpleNamespace
+
+    get = Mock(return_value=SimpleNamespace(status_code=status, content=b"whole-file-protocol"))
+    monkeypatch.setattr(module.requests, "get", get)
+    if status == 200:
+        assert client.download_file("https://files.example/attachment") == b"whole-file-protocol"
+    else:
+        with pytest.raises(module.NotionRequestError, match=f"HTTP {status}"):
+            client.download_file("https://files.example/attachment")
+    get.assert_called_once_with("https://files.example/attachment", timeout=120,
+                                allow_redirects=False)
+
+
+def test_hosted_unknown_readback_is_not_retried(client, monkeypatch):
+    get = Mock(side_effect=requests.Timeout("private signed URL omitted"))
+    monkeypatch.setattr(module.requests, "get", get)
+    with pytest.raises(module.NotionRequestError, match="結果不明") as failure:
+        client.download_file("https://files.example/attachment")
+    assert "private signed" not in str(failure.value)
+    assert get.call_count == 1
+
+
 class TestPostJsonErrorDetail:
     """4xx の応答本文を握り潰さない。どの権限が足りないかは本文にしか無い。"""
 

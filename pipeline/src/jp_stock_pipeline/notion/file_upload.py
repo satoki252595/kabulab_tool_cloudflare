@@ -5,8 +5,7 @@ CONTRACTS.md「⑤ 原本アップロードの契約」の実装:
     upload_raw_artifact(client, settings, artifact: RawArtifact) -> str  # ⑤の page_id
 
 手順:
-1. ⑤ を SHA256 プロパティで query → 既存ならその page_id を
-   artifact.notion_page_id に設定して返す (重複スキップ §8.1-2)
+1. ⑤ を SHA256 プロパティで query → 既存なら再アップロードしない
 2. File Upload API (notion-client 未対応のため client.raw_api() 経由):
    - 20MB 以下: mode=single_part → send 1回
    - 20MB 超: mode=multi_part (part_size 10MB) → part_number 毎に send → complete
@@ -15,7 +14,8 @@ CONTRACTS.md「⑤ 原本アップロードの契約」の実装:
 3. ⑤ へ行作成: ファイル名(title=命名規則名 §5.2)/ファイル(file_upload 添付)/
    データ種別/対象銘柄コード/対象期間/取得URL/SHA256/サイズ/変換状態/
    ソース/ライセンスタグ/データ基準日/取得日時
-4. 失敗時は RawUploadError を送出。呼び出し側 (ジョブ) はその取得単位の
+4. 新規・既存ともページと全添付を読み戻し、全バイト一致後だけ page_id を返す
+5. 失敗時は RawUploadError を送出。呼び出し側 (ジョブ) はその取得単位の
    構造化データ書き込みを中止する (§8.1-4 原本必須の保証)
 
 dry-run では client が操作を記録のみ行い合成ID ("dry-run-*") を返す前提で動作する。
@@ -24,6 +24,8 @@ dry-run では client が操作を記録のみ行い合成ID ("dry-run-*") を�
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import io
 import logging
 import math
 import mimetypes
@@ -273,6 +275,53 @@ def load_raw_page_map(
     return _oldest_page_ids(pages, sha_of)
 
 
+def _verify_raw_files(client: NotionClient, page_id: str, artifact: RawArtifact) -> None:
+    """作成 ACK や SHA 索引だけでは保管済みとせず、原本・変換版の全実体を照合する。"""
+    if client.dry_run:
+        return
+    page = client.get_page(page_id)
+    if page.get("object") != "page" or page.get("id") != page_id or page.get("archived") is not False:
+        raise RawUploadError("⑤ 読戻しページの形式・状態が不正")
+    if page.get("in_trash") is True:
+        raise RawUploadError("⑤ 読戻しページがごみにある")
+    props = page["properties"]
+    sha_prop = props[S.RAW_PROP_SHA256]
+    rich = sha_prop["rich_text"]
+    if sha_prop.get("type") != "rich_text" or not isinstance(rich, list):
+        raise RawUploadError("⑤ 読戻し SHA プロパティの形式が不正")
+    sha = "".join(fragment["plain_text"] for fragment in rich)
+    size = props[S.RAW_PROP_SIZE]
+    if sha != artifact.sha256 or size.get("type") != "number" or size["number"] != artifact.size_bytes:
+        raise RawUploadError("⑤ 読戻し SHA・サイズ不一致")
+    raw = artifact.local_path.read_bytes()
+    if len(raw) != artifact.size_bytes or hashlib.sha256(raw).hexdigest() != artifact.sha256:
+        raise RawUploadError("⑤ ローカル原本 SHA・サイズ不一致")
+    files_prop_value = props[S.RAW_PROP_FILES]
+    files = files_prop_value["files"]
+    if files_prop_value.get("type") != "files" or not isinstance(files, list):
+        raise RawUploadError("⑤ 読戻し添付プロパティの形式が不正")
+    by_name = {f["name"]: f for f in files}
+    if len(by_name) != len(files):
+        raise RawUploadError("⑤ 読戻し添付名が重複")
+    paths = [artifact.local_path, *artifact.converted_paths]
+    for path in paths:
+        ext = path.suffix.lstrip(".").lower()
+        wrapped = bool(ext and ext not in NOTION_UPLOAD_EXTENSIONS)
+        name = f"{path.name}.zip" if wrapped else path.name
+        attachment = by_name[name]
+        if attachment.get("type") != "file":
+            raise RawUploadError("⑤ 読戻し添付が物理ファイルでない")
+        content = client.download_file(attachment["file"]["url"])
+        if wrapped:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                if zf.namelist() != [path.name] or zf.testzip() is not None:
+                    raise RawUploadError("⑤ 読戻し ZIP ラップの形式・CRC 不一致")
+                content = zf.read(path.name)
+        if content != path.read_bytes():
+            raise RawUploadError("⑤ 読戻し添付の全バイト不一致")
+    logger.info("⑤ 物理読戻し全バイト一致: 添付 %d ファイル", len(paths))
+
+
 def upload_raw_artifact(
     client: NotionClient, settings: Settings, artifact: RawArtifact,
     *,
@@ -281,7 +330,8 @@ def upload_raw_artifact(
 ) -> str:
     """原本+変換版を ⑤ へアップロードし行作成、page_id を返す (契約 §8.1-2〜4)。
 
-    - SHA256 一致の既存行があれば再アップロードせずその page_id を返す (冪等)
+    - SHA256 一致の既存行があれば再アップロードしない (冪等)
+    - 新規・既存とも全添付の全バイト読戻し一致後だけ page_id を返す
     - 失敗時は RawUploadError (呼び出し側は構造化書き込みを中止すること)
     - 成功時は artifact.notion_page_id を設定する
 
@@ -304,6 +354,7 @@ def upload_raw_artifact(
             # 漏らさず、呼び出し側は RawUploadError のみ握れば取得単位を degrade できる)
             existing = find_raw_page_by_sha256(client, settings, artifact.sha256)
         if existing:
+            _verify_raw_files(client, existing, artifact)
             logger.info("⑤ 重複スキップ (SHA256=%s): %s", artifact.sha256[:12], existing)
             artifact.notion_page_id = existing
             return existing
@@ -319,6 +370,7 @@ def upload_raw_artifact(
         page_id = page.get("id")
         if not page_id:
             raise RawUploadError(f"⑤ 行作成応答に id が無い: {artifact.filename}: {page}")
+        _verify_raw_files(client, page_id, artifact)
     except RawUploadError:
         raise
     except Exception as exc:  # 重複クエリ/アップロード/行作成のあらゆる失敗を契約例外に揃える

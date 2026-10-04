@@ -18,6 +18,7 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import requests
@@ -397,6 +398,19 @@ class NotionClient:
         if self._client is None:
             return {}
         return self._call(self._client.pages.retrieve, page_id=page_id)
+
+    def download_file(self, url: str) -> bytes:
+        """Notion が返した添付の全実体を、認証ヘッダ・再試行・redirect 無しで読む。"""
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise NotionConfigError("Notion 添付 URL の形式が不正")
+        try:
+            response = requests.get(url, timeout=120, allow_redirects=False)
+            if response.status_code != 200:
+                raise NotionRequestError(f"Notion 添付読戻し HTTP {response.status_code}")
+            return response.content
+        except requests.RequestException as exc:
+            raise NotionRequestError("Notion 添付読戻しの結果不明。再試行しません") from exc
 
     def list_page_property_items(self, page_id: str, property_id: str) -> list[dict]:
         """ページの 1 プロパティを「プロパティ取得 API」で全件読む（読み取りのみ）。

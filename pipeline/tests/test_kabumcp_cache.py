@@ -96,7 +96,7 @@ def test_bad_zip_and_optional_modes(tmp_path, artifact, caplog):
     assert _status(ctx, False) == STATUS_PARTIAL
     caplog.set_level("INFO")
     job._export_kabumcp_cache(ctx, replace(artifact, datatype="xbrl"), DOC_ID)
-    assert "type1 fallback" in caplog.text
+    assert "type1 原本" in caplog.text
     assert not cache.exists()
 
 
@@ -123,7 +123,7 @@ def test_cache_only_after_persistence(tmp_path, artifact, monkeypatch, raw_saved
     ))
     monkeypatch.setattr(ctx, "persist", lambda *a, **kw: events.append("disclosure") or True)
     monkeypatch.setattr(job, "_export_kabumcp_cache", lambda *a: events.append("cache"))
-    doc = {"docID": DOC_ID, "docTypeCode": doc_type, "secCode": "72030"}
+    doc = {"docID": DOC_ID, "docTypeCode": doc_type, "secCode": "72030", "pdfFlag": "0"}
     assert job.edinet.is_target_document(doc)
     if raw_saved:
         job._process_document(ctx, doc, "list-page", master_map_ok=True)
@@ -139,7 +139,7 @@ def test_cache_only_after_persistence(tmp_path, artifact, monkeypatch, raw_saved
 def test_amended_interim_reports_use_financial_pipeline(
     tmp_path, artifact, monkeypatch, doc_type, doc_type_label, fallback,
 ):
-    """訂正報告も type5→type1、⑤原本→③財務→任意キャッシュの既存経路を通る。"""
+    """訂正報告も CSV 提供有無に対応する正規形式から⑤→③→任意キャッシュへ進む。"""
     ctx = context(tmp_path / "cache")
     fetch_types, persisted = [], []
     selected = replace(artifact, datatype="xbrl") if fallback else artifact
@@ -147,7 +147,7 @@ def test_amended_interim_reports_use_financial_pipeline(
 
     def fetch_document(settings, doc_id, fetch_type, **kw):
         fetch_types.append(fetch_type)
-        if fetch_type == 2 or (fetch_type == 5 and fallback):
+        if fetch_type == 2:
             raise FetchError("unavailable")
         return selected
 
@@ -169,13 +169,39 @@ def test_amended_interim_reports_use_financial_pipeline(
     doc = {
         "docID": DOC_ID, "docTypeCode": doc_type, "secCode": "72030",
         "submitDateTime": "2026-09-04 09:00",
+        "csvFlag": "0" if fallback else "1",
+        "pdfFlag": "0",
     }
     job._process_document(ctx, doc, "list-page", master_map_ok=True)
-    assert fetch_types == ([5, 1, 2] if fallback else [5, 2])
+    assert fetch_types == ([1] if fallback else [5])
     assert persisted[0] == "raw" and persisted[-1] is financial
     # 170 (訂正半期報告書) は「半期報告」。以前は④に選択肢が無く「四半期報告」へ寄せていた。
     assert persisted[1].doc_type == doc_type_label
-    # type1 fallback は連携対象外の合法 skip。保存済みでも失敗計上しない
+    # 明示未提供 CSV の type1 原本は連携対象外の合法 skip。保存済みでも失敗計上しない
     # (情報ログに残す。exit 非0 の根拠にしない)。
     assert ctx.failed == 0
     assert (tmp_path / "cache" / f"{DOC_ID}.zip").exists() is not fallback
+
+
+@pytest.mark.parametrize("csv_flag", [None, "invalid", "1"])
+def test_csv_unknown_or_server_failure_never_requests_alternate_format(monkeypatch, csv_flag):
+    calls = []
+
+    def fail(settings, doc_id, fetch_type, **kw):
+        calls.append(fetch_type)
+        raise FetchError("HTTP 503")
+
+    monkeypatch.setattr(job.edinet, "fetch_document", fail)
+    with pytest.raises((FetchError, ValueError)):
+        job._fetch_financial_tidy(context(None), DOC_ID, "7203", None, csv_flag)
+    assert calls == ([5] if csv_flag == "1" else [])
+
+
+def test_explicit_unavailable_csv_uses_type1_without_type5(monkeypatch):
+    selected = SimpleNamespace(convert_status=None)
+    calls = []
+    monkeypatch.setattr(job.edinet, "fetch_document", lambda s, d, t, **kw: (
+        calls.append(t) or selected
+    ))
+    result, tidy = job._fetch_financial_tidy(context(None), DOC_ID, "7203", None, "0")
+    assert calls == [1] and result is selected and tidy is None
