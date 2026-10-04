@@ -236,7 +236,7 @@ it("原文と同じ日数・か月期間だけを裏づけ、権利月や換算�
   expect(isSummaryNumbersGrounded("6か月以上保有", "6カ月以上保有", context)).toBe(true);
 });
 
-it.each(["袋", "パック", "セット", "冊"])("実在する数量単位%sを同数・同単位だけで照合する", (unit) => {
+it.each(["袋", "パック", "セット", "冊", "ケース", "リットル", "室", "杯", "台", "箱", "ゲーム", "ホール"])("実在する数量単位%sを同数・同単位だけで照合する", (unit) => {
   const context = { minShares: [100], recordMonths: [3] };
   const source = `合成優待商品2${unit}`;
   expect(isSummaryNumbersGrounded(source, `商品2${unit}`, context)).toBe(true);
