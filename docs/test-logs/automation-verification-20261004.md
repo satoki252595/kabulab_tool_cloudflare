@@ -62,3 +62,15 @@ PR301は全3CI成功後、13:14:25Zにmain`64070f1076205195b550a917c8ed8a3cb1708
 後続の資金フローを追跡し、既存原本の読取が外部URLを受け入れる経路を検出した。完全キー・当月prefix・共通spec取込が通る`toArchivedRecord()`でNotion-hostedの実体添付だけを受け入れ、外部リンクを取得元へ再GETしない。既存2経路の回帰は旧コードで2件失敗、修正後は関連3suite41テスト・型検査が成功。通常hostedの同期間再利用と全文照合は維持する。
 
 PR #300は12:36:58Zにmain`79e6bbe63031ca8ddf86e571c8b4123654ed9058`へマージし、mainのCI3件成功、12:37:31Zのnative deploymentがversion`4d307582-410e-4705-b0cb-99d4b9939bcc`の100%配信であることを確認した。Macのkernel排他下で同mainへ更新し、canonical.envのaccepted revision以外は保持。通常の[cloud_check再実行37202784871](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37202784871)はR2両bucket・必須9表、processed=3 / failed=0で完了し、#299を閉じた。
+
+## 本番への反映と続く実受入
+
+PR #301のmain CI [37204907318](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37204907318)と、同commitのWorkers Build `2bf237d5-5d45-41fb-9b1c-7dfd0c8b5291`は成功した。native deployment `8299732d-2e7a-4306-ae0d-25c40c10ea29`は13:14:54Zにversion `6b0af90e-1e80-465b-868b-56f18f78a06c`の100%配信を示した。月次cronの旧期待値によるCI失敗 #302は、後続mainの成功を確認して閉じた。
+
+PR #303も全3CI成功後、13:23:25Zにmain `298add924ee191d07cd8c6a503a85def23aff0ab`へマージした。main CI [37205449164](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37205449164)と同commitのWorkers Build `cb8f45b8-892b-47a4-a69f-0753b4bc804b`が成功。13:27:44Zのnative読取はdeployment `752f6336-05e8-4741-b336-98c94de47f7f`（作成13:23:51Z）、version `a9f2f0a6-b481-4dfe-878c-729621a9bbaa`の100%配信を示した。native metadataにはGit SHAがないため、exact commitのBuild成功とdeployment作成時刻を合わせて確認した。13:28:01ZにMacのkernel排他下で同mainを受理し、clean、canonical.env 0600、accepted revision以外の設定と登録を保持した。更新receipt SHAは `1322e1306681385772755c84245736bff3628ccef67c430ea9b0a8ea46534220`。
+
+13:28Z時点でVWAP通常allは進行し、Notion保管は80分割・daily最大offset 2,370まで前進した。これは原本保管の途中経過であり、全量R2保存・読戻しの完了ではない。同時の他heavy writerは0。残る月次の通常処理は、追加のローカルwriterを1本だけ、Notion実通信（共有再試行も含む）の開始間隔4秒以上で順番に実行する。共有clientのRetry-After・未知の書込結果停止、Yahooの直列取得と1秒間隔は保持する。
+
+優待8508は読み取り1回で、現D1の単発行が基準日2026-09-02のまま存在し、新原本の通常4行とは掲載文・株数・月のキーが一致しないことを確認した。原文を推測で同定したり単発日付を通常優待へ移したりせず、通常取込の削除前停止を保持して原因を調査している。この時点で全量取込・月次派生・新契約の通常要約は未完了。
+
+保存済み公式原本のoffline確認では、9/2は資格基準日であり、受取期限は2027年1月18日23:59だった。従って期限終了による削除は採らず、月次取得元に載らなくなった過去基準日の単発行を原12列・ID不変で保持する。月次監視も非単発行の最古`created_at`だけを測り、保持する単発行は総件数に含める。既存SQLite回帰で単発行の古い時刻を除いても件数を消さず、非単発行の部分取込・要約更新による誤成功を引き続き拒否することを確認した。監視の既存91テストが成功。

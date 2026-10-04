@@ -234,14 +234,16 @@ DATASET_SOURCES: tuple[DatasetSource, ...] = (
         # claim は `governance.WRITER_CLAIMS` の `yutai_benefits/base`。
         writer="kabulab-cf",
         sql=(
-            "SELECT NULL AS latest_date, MIN(y.created_at) AS source_epoch,"
+            "SELECT NULL AS latest_date,"
+            " MIN(CASE WHEN y.record_date IS NULL THEN y.created_at END) AS source_epoch,"
             " COUNT(*) AS n FROM yutai_benefits y JOIN core_stocks s ON s.id = y.stock_id"
             " WHERE s.is_active = 1 AND s.instrument_type = 'equity'"
         ),
         license_tag=_uniform_tag("yutai_benefits"),
         note=(
             "月次全量取込は対象銘柄の行を原子的に再作成するためcreated_atを使う。"
-            "active普通株の最古行で部分取込を検知し、保持する母集団外の旧行は除く。"
+            "active普通株の非単発行の最古時刻で部分取込を検知する。"
+            "保持する単発行と母集団外の旧行は月次取得時刻に含めない。件数は対象全行。"
             "要約だけでも進むupdated_atは使わない。みんかぶ由来でpersonal-only"
         ),
     ),

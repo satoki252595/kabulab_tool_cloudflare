@@ -169,7 +169,7 @@ SSR 画面 (「鮮度不足で除外 N 件」) に出す — 黙って落とす�
 pnpm sync:daily:core # core/rsi/swing 単体の手動実行
 ```
 
-自動実行: GitHub Actions (`.github/workflows/stock-sync.yml`) が日次で `pnpm sync:daily:core` を実行し、全 active を一括処理する (Workers Cron / Workers Paid は不使用)。`pnpm sync:daily` はこれに VWAP 3 工程を加えたローカル手動フル実行。
+自動実行: Cloudflare CronがGitHub Actions (`.github/workflows/stock-sync.yml`) を起動し、Nodeで日次の `pnpm sync:daily:core` を実行する。対象はactive普通株。起動・完了期限は[stock-scheduler](./stock-scheduler.md)を参照。`pnpm sync:daily` はこれに VWAP 3 工程を加えたローカル手動フル実行。
 
 ## 優良株判定ロジック
 

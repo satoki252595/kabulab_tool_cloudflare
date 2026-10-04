@@ -36,7 +36,7 @@ _LEGACY_DDL: tuple[str, ...] = (
     "CREATE TABLE core_stocks (id INTEGER PRIMARY KEY, code TEXT, updated_at INTEGER,"
     " is_active INTEGER DEFAULT 1, instrument_type TEXT DEFAULT 'equity')",
     "CREATE TABLE yutai_benefits"
-    " (id INTEGER PRIMARY KEY, stock_id INTEGER, created_at INTEGER, updated_at INTEGER)",
+    " (id INTEGER PRIMARY KEY, stock_id INTEGER, record_date TEXT, created_at INTEGER, updated_at INTEGER)",
 )
 
 
@@ -659,6 +659,22 @@ class TestFreshnessProbe:
             "yutai_benefits", latest_data_date=None, source_epoch=row["source_epoch"],
             row_count=row["n"], now=NOW,
         ) == "red"
+
+    def test_保持する単発行は月次時刻を古くしないが件数から消さない(self) -> None:
+        store = _FakeStore()
+        old, recent = _epoch_days_ago(82), _epoch_days_ago(0.1)
+        self._seed_all(store, prices_fetched_at=recent)
+        store.query(
+            "INSERT INTO yutai_benefits (stock_id, record_date, created_at, updated_at)"
+            " VALUES (1, '2026-09-02', ?, ?)",
+            [old, old],
+        )
+        row = store.query(datasets.DATASET_SOURCE_BY_NAME["yutai_benefits"].sql)[0]
+        assert row == {"latest_date": None, "source_epoch": recent, "n": 2}
+        assert slo.judge_observation(
+            "yutai_benefits", latest_data_date=None, source_epoch=row["source_epoch"],
+            row_count=row["n"], now=NOW,
+        ) == "green"
 
     def test_記録するupdated_atは実表のepochで記録時刻ではない(self, monkeypatch) -> None:
         """偽の緑の回帰テスト。
