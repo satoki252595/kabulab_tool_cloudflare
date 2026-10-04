@@ -539,16 +539,20 @@ describe("resolve()/fetch() (fetch をスタブ・合成テストデータ)", ()
     expect(() => validateDrafts(tfxClick365FxSpec.name, drafts, tfxClick365FxSpec.indicators)).not.toThrow();
   });
 
-  it.each([tfxClick365CfdSpec, tfxClick365CfdAnnualSpec])("$name は期間を解析できない原文も先に全文保管・照合する", async (spec) => {
+  it.each([tfxClick365FxSpec, tfxClick365FxAnnualSpec, tfxClick365CfdSpec, tfxClick365CfdAnnualSpec])("$name は期間を解析できない原文も100文字以内の添付名で先に全文保管・照合する", async (spec) => {
     const bytes = utf8("<html>解析不能な原文</html>");
-    const fn = stubFetch({ [TFX_CLICKKABU365_CFD_URL]: bytes });
+    const url = spec.name.includes("cfd") ? TFX_CLICKKABU365_CFD_URL : TFX_CLICK365_FX_URL;
+    const fn = stubFetch({ [url]: bytes });
     await expect(spec.resolve(NOW_2026_09_27)).rejects.toThrow(/<table>/);
     expect(fn).toHaveBeenCalledTimes(1);
     expect(custody.record).toHaveBeenCalledTimes(1);
     const input = custody.record.mock.calls[0]![0];
-    expect(input).toMatchObject({ service: "moneyflow", source: TFX_CLICKKABU365_CFD_URL, force: false, metadata: { status: 200, bytes: bytes.length } });
+    expect(input).toMatchObject({ service: "moneyflow", source: url, force: false, metadata: { status: 200, bytes: bytes.length } });
     expect(sameBytes(input.files[0].bytes, bytes)).toBe(true);
-    expect(input.key).toMatch(/^tfx-clickkabu365_cfd-raw-http-200-sha256-[a-f0-9]{64}$/);
+    expect(input.key).toMatch(/^tfx-(click365_fx|clickkabu365_cfd)-raw-http-200-sha256-[a-f0-9]{64}$/);
+    const upload = toNotionUpload(input.files[0].filename, input.files[0].contentType);
+    expect(upload.filename.length).toBeLessThanOrEqual(100);
+    expect(upload.filename).toContain(input.metadata.sha256);
     expect(custody.verify).toHaveBeenCalledWith("raw-page", input.files, "TFX 原本");
   });
 
@@ -575,6 +579,7 @@ describe("resolve()/fetch() (fetch をスタブ・合成テストデータ)", ()
     expect(input.metadata).toMatchObject({ status: 503, bytes: bytes.length, archiveEncoding: "gzip" });
     expect(sameBytes(gunzipSync(f.bytes), bytes)).toBe(true);
     expect(toNotionUpload(f.filename, f.contentType)).toEqual({ filename: f.filename, contentType: "application/gzip" });
+    expect(f.filename.length).toBeLessThanOrEqual(100);
     expect(custody.verify).toHaveBeenCalledWith("raw-page", input.files, "TFX 原本");
   });
 

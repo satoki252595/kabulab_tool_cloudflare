@@ -549,7 +549,8 @@ async function fetchPageBytes(cfg: MarketConfig, dryRun: boolean): Promise<Fetch
       new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"))
     ).arrayBuffer());
     const key = `tfx-${cfg.market}-raw-http-${res.status}-sha256-${sha256}`;
-    const files = [{ bytes: archiveBytes, filename: `${key}.${identity ? "html" : "gz"}`, contentType: identity ? HTML_CONTENT_TYPE : "application/gzip" }];
+    // Files プロパティの name は100文字まで。市場はkey/metadataに保持し、全文SHAは省略しない。
+    const files = [{ bytes: archiveBytes, filename: `tfx-raw-http-${res.status}-${sha256}.${identity ? "html" : "gz"}`, contentType: identity ? HTML_CONTENT_TYPE : "application/gzip" }];
     try {
       const archive = await recordPrimaryData({ service: "moneyflow", key, source: url, fetchedAt,
         metadata: { market: cfg.market, status: res.status, responseUrl: res.url, contentType: res.headers.get("content-type"), bytes: bytes.length, sha256, archiveEncoding: identity ? "identity" : "gzip" },
