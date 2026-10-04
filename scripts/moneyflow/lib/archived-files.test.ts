@@ -60,7 +60,7 @@ describe("moneyflow archived-files", () => {
       id,
       properties: {
         Key: { title: [{ plain_text: key }] },
-        Files: { files: [{ name: "a.json", file: { url: "https://files.example.test/a.json" } }] },
+        Files: { files: [{ name: "a.json", type: "file", file: { url: "https://files.example.test/a.json" } }] },
       },
     });
 
@@ -88,6 +88,29 @@ describe("moneyflow archived-files", () => {
       await expect(findArchivedRecordByKey(dbId, "k1")).rejects.toThrow(
         /保管済みレコードの重複 key=k1 を選ばず保全停止/
       );
+      expect(calls).toHaveLength(1);
+    });
+
+    it.each(["exact", "prefix"])("%s の既存原本に外部リンクがあれば再取得せず停止する", async (lookup) => {
+      const external = {
+        ...row("page-1", "k1"),
+        properties: {
+          Key: { title: [{ plain_text: "k1" }] },
+          Files: { files: [{
+            name: "a.json",
+            type: "external",
+            external: { url: "https://publisher.example.test/a.json" },
+          }] },
+        },
+      };
+      route("POST", `/v1/databases/${dbId}/query`, [
+        { results: [external], has_more: false, next_cursor: null },
+      ]);
+      const { findArchivedRecordByKey, listArchivedRecordsByPrefix } = await load();
+      const result = lookup === "exact"
+        ? findArchivedRecordByKey(dbId, "k1")
+        : listArchivedRecordsByPrefix(dbId, "k");
+      await expect(result).rejects.toThrow(/Notion-hosted 添付ではありません/);
       expect(calls).toHaveLength(1);
     });
   });

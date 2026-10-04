@@ -45,7 +45,7 @@ interface PrimaryRowResponse {
     id: string;
     properties: {
       Key?: { title?: Array<{ plain_text?: string }> };
-      Files?: { files?: Array<{ name: string; file?: { url: string }; external?: { url: string } }> };
+      Files?: { files?: Array<{ name: string; type: string; file?: { url: string }; external?: { url: string } }> };
     };
   }>;
   has_more: boolean;
@@ -55,7 +55,10 @@ interface PrimaryRowResponse {
 function toArchivedRecord(r: PrimaryRowResponse["results"][number]): ArchivedRecord {
   const key = (r.properties.Key?.title ?? []).map((t) => t.plain_text ?? "").join("");
   const files = (r.properties.Files?.files ?? []).map((f) => {
-    const url = f.file?.url ?? f.external?.url;
+    if (f.type !== "file") {
+      throw new Error(`一次データ page ${r.id} (key=${key}) のファイル「${f.name}」が Notion-hosted 添付ではありません`);
+    }
+    const url = f.file?.url;
     if (!url) {
       throw new Error(`一次データ page ${r.id} (key=${key}) のファイル「${f.name}」に URL がありません`);
     }
