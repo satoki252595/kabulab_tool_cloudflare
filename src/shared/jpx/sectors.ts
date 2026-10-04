@@ -78,23 +78,28 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
   const buf = new Uint8Array(await res.arrayBuffer());
   const fetchedAt = new Date().toISOString();
   const sha256 = await sha256HexBytes(buf);
+  // 非200原文は受理形式gzipへlossless包装し、空bodyも実体保管する。
+  const archiveBytes = res.status === 200 ? buf : new Uint8Array(await new Response(
+    new Blob([buf]).stream().pipeThrough(new CompressionStream("gzip"))
+  ).arrayBuffer());
   // 同じ基準月の訂正版も別原本として保存する。旧月キーの原本は保持する。
   // パーサ由来の基準日・件数は、物理照合前のメタデータへ補作しない。
   const files = [{
-    bytes: buf,
-    filename: `data_j-${sha256}.${res.status === 200 ? "xlsx" : "bin"}`,
+    bytes: archiveBytes,
+    filename: res.status === 200 ? `data_j-${sha256}.xlsx` : `data_j-http-${res.status}-${sha256}.gz`,
     contentType: res.status === 200
       ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-      : "application/octet-stream",
+      : "application/gzip",
   }];
   const archived = await recordPrimaryData({
     service: "universe",
-    key: `jpx-listing-sha256-${sha256}`,
+    key: res.status === 200 ? `jpx-listing-sha256-${sha256}` : `jpx-listing-http-${res.status}-sha256-${sha256}`,
     source: JPX_LISTING_URL,
     fetchedAt,
     metadata: {
       status: res.status, responseUrl: res.url,
       contentType: res.headers.get("content-type"), bytes: buf.byteLength, sha256,
+      archiveEncoding: res.status === 200 ? "identity" : "gzip",
     },
     files,
     force: false,

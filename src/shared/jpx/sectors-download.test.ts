@@ -24,6 +24,7 @@ vi.mock("../notion-archive/index.js", () => ({
 
 const { downloadJpxListing, isListedEquity } = await import("./sectors.js");
 const { sha256HexBytes } = await import("../sha256.js");
+const { toNotionUpload } = await import("../notion-archive/file-upload.js");
 
 /** data_j.xlsx の実列名でシートを組み、xlsx バイト列にする。 */
 function xlsxBytes(rows: Record<string, unknown>[]): Uint8Array {
@@ -152,7 +153,7 @@ describe("downloadJpxListing", () => {
     await expect(downloadJpxListing()).rejects.toThrow("データ行が 0 件");
   });
 
-  it("HTTP エラーは throw する (404 は配布形式の差替えを示唆する)", async () => {
+  it.each([new Uint8Array(), new Uint8Array([0, 255, 195, 13, 10])])("HTTP エラーは原bodyをgzip保管してthrowする (404 は配布形式の差替えを示唆)", async (original) => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -161,11 +162,24 @@ describe("downloadJpxListing", () => {
         statusText: "Not Found",
         url: "https://www.jpx.co.jp/data_j.xlsx",
         headers: new Headers({ "content-type": "text/plain" }),
-        arrayBuffer: async () => new TextEncoder().encode("Not Found").buffer,
+        arrayBuffer: async () => original.buffer,
       })
     );
     await expect(downloadJpxListing()).rejects.toThrow("拡張子/URL が変わっていないか");
-    expect(recordPrimaryData.mock.calls[0][0].metadata.status).toBe(404);
+    const input = recordPrimaryData.mock.calls[0][0];
+    const file = input.files[0];
+    expect(input.metadata.status).toBe(404);
+    expect(input.metadata.archiveEncoding).toBe("gzip");
+    expect(input.metadata.bytes).toBe(original.byteLength);
+    expect(input.metadata.sha256).toBe(await sha256HexBytes(original));
+    expect(file.bytes.length).toBeGreaterThan(0);
+    // 共有アップロード実関数の受理形式と、UTF-8に依存しない原bytesの復元を検査。
+    expect(toNotionUpload(file.filename, file.contentType)).toEqual({ filename: file.filename, contentType: "application/gzip" });
+    const decoded = new Uint8Array(await new Response(
+      new Blob([Uint8Array.from(file.bytes)]).stream().pipeThrough(new DecompressionStream("gzip"))
+    ).arrayBuffer());
+    expect(Array.from(decoded)).toEqual(Array.from(original));
+    expect(verifyArchivedAttachments).toHaveBeenCalledWith("archive-page", input.files, "JPX listing 原本");
     expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
@@ -183,6 +197,7 @@ describe("downloadJpxListing", () => {
     expect(arg.metadata.bytes).toBe(bytes.byteLength);
     expect(arg.metadata).not.toHaveProperty("sourceAsOf");
     expect(arg.files[0].filename).toBe(`data_j-${sha256}.xlsx`);
+    expect(toNotionUpload(arg.files[0].filename, arg.files[0].contentType)).toEqual({ filename: arg.files[0].filename, contentType: arg.files[0].contentType });
     expect(arg.files[0].bytes.byteLength).toBe(bytes.byteLength);
     expect(await sha256HexBytes(Uint8Array.from(arg.files[0].bytes))).toBe(sha256);
     expect(verifyArchivedAttachments).toHaveBeenCalledWith("archive-page", arg.files, "JPX listing 原本");
@@ -202,6 +217,22 @@ describe("downloadJpxListing", () => {
     expect(keys[0]).not.toBe(keys[1]);
     expect(keys[0]).toBe(keys[2]);
     expect(verifyArchivedAttachments).toHaveBeenCalledTimes(3);
+  });
+
+  it("同じbytesでも非200のgzipと200のXLSXは同じkeyを使わない", async () => {
+    const bytes = xlsxBytes([TOYOTA]);
+    stubFetch(bytes);
+    await downloadJpxListing();
+    vi.mocked(fetch).mockResolvedValue({
+      status: 503, statusText: "Service Unavailable", url: "https://www.jpx.co.jp/data_j.xlsx",
+      headers: new Headers(), arrayBuffer: async () => bytes.buffer.slice(0),
+    } as Response);
+    await expect(downloadJpxListing()).rejects.toThrow("HTTP エラー: 503");
+    const [ok, error] = recordPrimaryData.mock.calls.map(([arg]) => arg);
+    expect(ok.metadata.sha256).toBe(error.metadata.sha256);
+    expect(ok.key).not.toBe(error.key);
+    expect(error.key).toContain("http-503-sha256-");
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(2);
   });
 
   it("既知の不正XLSも保管し、readback不明なら解析より先に停止する", async () => {
