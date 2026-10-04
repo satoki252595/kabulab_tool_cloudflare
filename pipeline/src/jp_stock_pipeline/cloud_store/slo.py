@@ -132,7 +132,11 @@ SLOS: tuple[FreshnessSlo, ...] = (
         "空くなら閾値を緩める（受容宣言に戻すのではなく）",
         business_days=True,
     ),
-    # yutai_benefits はここに無い。下の NOT_REFRESHED を参照。
+    FreshnessSlo(
+        "yutai_benefits", 40 * _DAY, 50 * _DAY,
+        "月次全量取込を再開したため鮮度判定へ戻す。active普通株の最古created_atを測り、"
+        "日次の要約更新を原本再取得として数えない。未取得・部分取込は警告する",
+    ),
 )
 
 SLO_BY_DATASET: dict[str, FreshnessSlo] = {s.dataset: s for s in SLOS}
@@ -142,10 +146,7 @@ SLO_BY_DATASET: dict[str, FreshnessSlo] = {s.dataset: s for s in SLOS}
 # 既知の赤を毎日 exit 1 にすると Issue にコメントが積まれ、(1) 通知を見なくなる
 # (2) 新しい赤が埋もれる の二重の害がある。だから「宣言済み」として警告に落とす。
 #
-# **2026-09-13 に空になった。** 最後の 1 件だった `yutai_benefits` は「いつか直す
-# 赤」ではなく「そもそも更新しない」と決まったので `NOT_REFRESHED` へ移した。
-# 仕組みは残す（新しく「分かっていて今は直せない赤」が出たときの置き場で、
-# 置き場が無いと ops_check を黙らせる別の手段が生まれる）。
+# 現在の受容宣言は空。月次優待も取得writerの再開に合わせて通常判定する。
 #
 # **`financials` は 2026-09-13 に外した。** writer（`cloud_store/financials.py`）が
 # 出来たので、`jss_financials` が 0 行のままなら**それは本物の赤**である
@@ -161,48 +162,9 @@ SLO_BY_DATASET: dict[str, FreshnessSlo] = {s.dataset: s for s in SLOS}
 # 「期限が来たのでまた鳴る」だけになる。代わりに**何が決まれば外せるか**を書く。
 ACCEPTED_RED: dict[str, str] = {}
 
-# 「そもそも更新しない」データセット。**鮮度を判定しない**（観測は続ける）。
-#
-# `ACCEPTED_RED` と分けたのは意味が違うからである。受容済みの赤は「直るはず」の
-# 状態で、直ったら宣言を外せと ops_check が言う。こちらは**直る予定が無い**
-# ので、閾値を持たせること自体が嘘になる（旧 `yutai_benefits` の 40/50 日は
-# 「更新されない表」に対して何の意味も持たなかった）。だから `SLOS` から行ごと
-# 外し、閾値を残さない。
-#
-# ## 判定から外すのは「加齢」だけ
-#
-# `judge_observation` の (a)(b) は残す。0 行は `red`、測れていなければ
-# `unknown` のまま。**更新しないことと、消えてよいことは違う。** 優待は
-# 再取得不能な資産なので、表が空になった（kabulab-cf 側の全削除→再投入など）
-# ことは加齢と無関係に報告すべき異常である。
-#
-# ## 観測は続ける
-#
-# `datasets.DATASET_SOURCES` からは外さない。件数と as_of が
-# `jss_dataset_freshness` に残るのは有用で、ops_check のログにも「判定対象外」と
-# 理由つきで出す。`DATASET_SOURCES` のキー集合は `SLO_BY_DATASET` と
-# `NOT_REFRESHED` の**和**と等号で一致させる（片方だけ増えると「測っているが
-# 判定も除外もされていない」データセットが静かに生まれる）。
-#
-# **理由の文字列を必須にする**（`ACCEPTED_RED` と同じ理由: 理由の無い除外は消音と
-# 区別できない）。何が変われば判定に戻すかも書く。
-#
-# ## 採らなかった案
-#
-# - `ACCEPTED_RED` に残す: 「いつか直す」と読まれ、ops_check が直ったら外せと
-#   言う前提の区分に、直す予定の無いものが恒久的に居座る。区分の意味が崩れる。
-# - 閾値を無限大にして `SLOS` に残す: 判定は緑になり、「更新していない表」が
-#   ダッシュボード上で「新鮮」と読まれる。偽の緑を作る。
-# - 観測（`DATASET_SOURCES`）からも外す: 件数が見えなくなり、上の「空になった」を
-#   検知する手段が無くなる。
-NOT_REFRESHED: dict[str, str] = {
-    "yutai_benefits": (
-        "更新しないデータセット（2026-09-13 ユーザ判断）。優待の一次ソース"
-        "（みんかぶ）は規約上再取得できず、kabulab-cf の LLM 推定値が再取得不能な"
-        "資産として残っているだけで、2026-06-22 以降は更新していない。"
-        "代替の一次ソースを決めて writer を入れたら SLOS へ戻す"
-    ),
-}
+# 更新しないと明示したデータセットだけ加齢判定から除く。現在は該当なし。
+# 観測・0行・不明の検知は続け、理由なしやSLOSとの重複は許さない。
+NOT_REFRESHED: dict[str, str] = {}
 
 
 def validate_declarations(

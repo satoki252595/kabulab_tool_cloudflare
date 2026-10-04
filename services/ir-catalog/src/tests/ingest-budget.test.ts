@@ -10,6 +10,7 @@ vi.mock("../../../../src/shared/notion-archive/index.js", () => ({
     outcome: "recorded",
     fileTooLarge: false,
   }),
+  verifyArchivedAttachments: vi.fn().mockResolvedValue(undefined),
   upsertDisclosuresByStock: vi.fn().mockResolvedValue({
     parentDbId: "db1",
     stocksTouched: 0,
@@ -32,6 +33,7 @@ vi.mock("../../../../src/shared/notion-archive/index.js", () => ({
  */
 import {
   recordPrimaryData,
+  verifyArchivedAttachments,
   upsertDisclosuresByStock,
 } from "../../../../src/shared/notion-archive/index.js";
 import { ingestBatch } from "../services/ingest.js";
@@ -139,5 +141,45 @@ describe("ingestBatch の二次予算", () => {
     const abs = Date.now() + 3_600_000;
     const input = await run({ notionByStockDeadlineMs: abs });
     expect(input.deadlineMs).toBe(abs);
+  });
+
+  it("一次添付の全 bytes 読戻しを D1 書込前に完了する", async () => {
+    vi.mocked(verifyArchivedAttachments).mockImplementationOnce(async (_page, files) => {
+      expect(sqlite.prepare("SELECT count(*) AS n FROM ir_disclosures").get()?.n).toBe(0);
+      expect(files).toEqual(vi.mocked(recordPrimaryData).mock.calls[0][0].files);
+    });
+    await run({});
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+    expect(sqlite.prepare("SELECT count(*) AS n FROM ir_disclosures").get()?.n).toBe(1);
+  });
+
+  it.each(["record", "readback", "too_large"])("一次 %s 失敗は D1・二次取得より前に停止", async (phase) => {
+    if (phase === "record") vi.mocked(recordPrimaryData).mockRejectedValueOnce(new Error("archive unknown"));
+    if (phase === "readback") vi.mocked(verifyArchivedAttachments).mockRejectedValueOnce(new Error("readback mismatch"));
+    if (phase === "too_large") vi.mocked(recordPrimaryData).mockResolvedValueOnce({
+      pageId: "p1", outcome: "recorded", fileTooLarge: true,
+      manifestMatch: "written",
+    });
+    await expect(run({})).rejects.toThrow();
+    expect(sqlite.prepare("SELECT count(*) AS n FROM ir_disclosures").get()?.n).toBe(0);
+    expect(upsertDisclosuresByStock).not.toHaveBeenCalled();
+  });
+
+  it("二次記録の例外も成功結果に変換しない", async () => {
+    const failure = new Error("secondary unknown");
+    vi.mocked(upsertDisclosuresByStock).mockRejectedValueOnce(failure);
+    await expect(run({})).rejects.toBe(failure);
+  });
+
+  it.each(["write_failure", "missing_row"])("PDF 本文の %s は状態補作・黙殺で成功化しない", async (phase) => {
+    vi.mocked(upsertDisclosuresByStock).mockImplementationOnce(async (input) => {
+      input.onPdfClassified?.("T0001", { sentiment: "unknown", method: null, score: null, text: "試験本文𠮷" });
+      if (phase === "missing_row") sqlite.exec("DELETE FROM ir_disclosures");
+      return { parentDbId: "db1", stocksTouched: 1, created: 1, updated: 0, skippedExisting: 0, skippedNoFile: 0, rejudged: 0, rowErrors: 0, reachedDeadline: false };
+    });
+    // write_failure は本文 table 未作成で INSERT が失敗する。
+    await expect(run({})).rejects.toThrow();
+    const hit = sqlite.prepare("SELECT pdf_text_status FROM ir_disclosures").get();
+    expect(hit === undefined || hit.pdf_text_status === null).toBe(true);
   });
 });

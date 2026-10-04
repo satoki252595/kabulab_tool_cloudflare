@@ -25,9 +25,10 @@
  * too_large は終端 skip、error/未添付は PATCH 更新で再実行収束。
  * 捏造・既定値埋めはしない (ルール2)。
  */
-import { assertCursorProgress, notionRequest } from "./client.js";
-import { notionEnv } from "./env.js";
+import { assertCursorProgress, notionRequest, NotionUnknownResultError } from "./client.js";
+import { notionEnv, NotionConfigError } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
+import { verifyArchivedAttachments } from "./readback.js";
 import {
   assertAdoptedDatabaseSchema,
   createDatabaseOrAdopt,
@@ -630,7 +631,7 @@ export async function upsertDisclosuresByStock(
   let skippedExisting = 0;
   let skippedNoFile = 0;
   let rejudged = 0;
-  let rowErrors = 0;
+  const rowErrors = 0;
   let reachedDeadline = false;
   let stocksTouched = 0;
   const overDeadline = () =>
@@ -666,22 +667,7 @@ export async function upsertDisclosuresByStock(
 
     // 親 DB の銘柄ページ + その下の子 DB を確保 (プロセス内キャッシュで
     // 全実行を通じて 1 銘柄あたり 1 回だけ解決)
-    let childDbId: string;
-    try {
-      ({ childDbId } = await resolveStock(
-        parentDbId,
-        rows[0],
-        input.tagOptions
-      ));
-    } catch (e) {
-      // この銘柄のページ/子DB 解決が失敗したらその銘柄分の rows を行
-      // 単位エラーとして計上し、他銘柄へ継続 (バッチを落とさない)
-      rowErrors += rows.length;
-      console.error(
-        `[notion-bystock] 銘柄解決失敗 ${rows[0].ticker} (rows=${rows.length}): ${(e as Error).message}`
-      );
-      continue;
-    }
+    const { childDbId } = await resolveStock(parentDbId, rows[0], input.tagOptions);
     // 銘柄解決成功後にカウント (= 実際に書き込み試行へ到達した銘柄数)
     stocksTouched++;
 
@@ -711,23 +697,23 @@ export async function upsertDisclosuresByStock(
             rejudgePdfFetch !== "unavailable" &&
             rejudgePdfFetch !== "transient"
           ) {
+            let cls: PdfClassification;
             try {
-              const cls = await input.classifyPdf(
-                rejudgePdfFetch.bytes,
-                row.primaryTag
-              );
-              await notionRequest("PATCH", `/pages/${ex.pageId}`, {
-                properties: {
-                  PDF判定: { select: { name: cls.sentiment } },
-                },
-              });
-              input.onPdfClassified?.(row.key, cls);
-              rejudged++;
+              cls = await input.classifyPdf(rejudgePdfFetch.bytes, row.primaryTag);
             } catch (e) {
+              if (e instanceof NotionUnknownResultError || e instanceof NotionConfigError) throw e;
               console.error(
                 `[pdf-sentiment rejudge] ${row.ticker} ${row.key} 失敗: ${(e as Error).message}`
               );
+              skippedExisting++;
+              continue;
             }
+            // 判定不能と Notion 送信結果不明を混同しない。PATCH 失敗は伝播。
+            await notionRequest("PATCH", `/pages/${ex.pageId}`, {
+              properties: { PDF判定: { select: { name: cls.sentiment } } },
+            });
+            input.onPdfClassified?.(row.key, cls);
+            rejudged++;
           }
         }
         skippedExisting++;
@@ -794,15 +780,9 @@ export async function upsertDisclosuresByStock(
           irStatus = "uploaded";
           pdfBytesForClassify = pdf.bytes;
         } catch (e) {
-          if (e instanceof NotionFileTooLargeError) {
-            console.warn(`[ir-pdf] WS 上限超過で添付不可: ${pdf.filename}`);
-            irStatus = "too_large";
-          } else {
-            console.error(
-              `[ir-pdf] アップロード失敗 ${row.key} ${pdf.filename}: ${(e as Error).message}`
-            );
-            irStatus = "error";
-          }
+          if (!(e instanceof NotionFileTooLargeError)) throw e;
+          console.warn(`[ir-pdf] WS 上限超過で添付不可: ${pdf.filename}`);
+          irStatus = "too_large";
         }
       }
 
@@ -865,51 +845,50 @@ export async function upsertDisclosuresByStock(
         };
       }
 
-      // 1 行の記録失敗 (ページ作成/更新の恒久エラー等) でバッチ全体を
-      // 落とさない。握りつぶさず console.error + rowErrors で可視化し
-      // 次行へ継続 (再実行で未作成/未添付行から収束 — ルール2)。
-      try {
-        let pageId: string;
-        if (ex) {
-          await notionRequest("PATCH", `/pages/${ex.pageId}`, { properties });
-          updated++;
-          pageId = ex.pageId;
-        } else {
-          const createdPage = await notionRequest<{ id: string }>(
-            "POST",
-            "/pages",
-            { parent: { database_id: childDbId }, properties }
-          );
-          created++;
-          pageId = createdPage.id;
-        }
-        const writtenTitle = row.title.slice(0, 1900);
-        const persisted: ExistingRow = {
+      // 記録失敗は後続 PDF 取得へ進まず呼出元へ伝播する。
+      let pageId: string;
+      if (ex) {
+        await notionRequest("PATCH", `/pages/${ex.pageId}`, { properties });
+        pageId = ex.pageId;
+      } else {
+        const createdPage = await notionRequest<{ id: string }>(
+          "POST",
+          "/pages",
+          { parent: { database_id: childDbId }, properties }
+        );
+        pageId = createdPage.id;
+      }
+      if (pdfBytesForClassify !== null) {
+        await verifyArchivedAttachments(
           pageId,
-          status: irStatus,
-          hasFile: irFile.length > 0,
-          title: writtenTitle,
-          pubdate: row.pubdate,
-        };
-        existing.byKey.set(row.key, persisted);
-        existing.byTitlePubdate.set(
-          titlePubdateKey(writtenTitle, row.pubdate),
-          persisted
+          [{ filename: irFile[0].name, bytes: pdfBytesForClassify }],
+          "TDnet 開示 PDF",
+          "IR資料"
         );
-        // 呼び出し側 (ingest) が (tdnet_id → page_id) を Postgres へ
-        // 書き戻すための通知。ファイルプロキシ endpoint が page_id 経由で
-        // Notion から最新 signed URL を取得するための索引になる。
-        input.onPagePersisted?.(row.key, pageId);
-        // PDF 判定結果が確定したら ingest 側で Postgres 4 列へバルク反映する
-        // ための通知 (skipped/unknown も正直に書き戻す — ルール2)。
-        if (pdfClassification !== null) {
-          input.onPdfClassified?.(row.key, pdfClassification);
-        }
-      } catch (e) {
-        rowErrors++;
-        console.error(
-          `[notion-bystock] 行記録失敗 ${row.ticker} ${row.key}: ${(e as Error).message}`
-        );
+      }
+      if (ex) updated++;
+      else created++;
+      const writtenTitle = row.title.slice(0, 1900);
+      const persisted: ExistingRow = {
+        pageId,
+        status: irStatus,
+        hasFile: irFile.length > 0,
+        title: writtenTitle,
+        pubdate: row.pubdate,
+      };
+      existing.byKey.set(row.key, persisted);
+      existing.byTitlePubdate.set(
+        titlePubdateKey(writtenTitle, row.pubdate),
+        persisted
+      );
+      // 呼び出し側 (ingest) が (tdnet_id → page_id) を Postgres へ
+      // 書き戻すための通知。ファイルプロキシ endpoint が page_id 経由で
+      // Notion から最新 signed URL を取得するための索引になる。
+      input.onPagePersisted?.(row.key, pageId);
+      // PDF 判定結果が確定したら ingest 側で Postgres 4 列へバルク反映する
+      // ための通知 (skipped/unknown も正直に書き戻す — ルール2)。
+      if (pdfClassification !== null) {
+        input.onPdfClassified?.(row.key, pdfClassification);
       }
     }
     if (reachedDeadline) break;

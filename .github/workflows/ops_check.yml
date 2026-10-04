@@ -77,6 +77,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
       - name: Sync dependencies
         run: nix develop -c bash -c 'cd pipeline && uv sync --frozen'
 

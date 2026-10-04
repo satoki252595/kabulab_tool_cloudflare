@@ -388,6 +388,66 @@ class TestMultipart:
 
 
 class TestRawUploadError:
+    @pytest.mark.parametrize("existing", [False, True])
+    @pytest.mark.parametrize("tampered", [False, True])
+    def test_all_physical_bytes_verified_before_publishing_page_id(
+        self, tmp_path, monkeypatch, existing, tampered
+    ):
+        """作成 ACK と SHA 重複索引の両方で、全添付一致だけが保管済みになる。"""
+        import io
+        import zipfile
+        from types import SimpleNamespace
+
+        settings = make_settings()
+        artifact = make_artifact(tmp_path, with_converted=True)
+        parquet = tmp_path / "converted.parquet"
+        parquet.write_bytes(b"conversion-format-protocol")
+        artifact.converted_paths.append(parquet)
+        wrapped = io.BytesIO()
+        with zipfile.ZipFile(wrapped, "w") as zf:
+            zf.writestr(parquet.name, parquet.read_bytes())
+        blobs = [artifact.local_path.read_bytes(), artifact.converted_paths[0].read_bytes(),
+                 wrapped.getvalue()]
+        if tampered:
+            blobs[1] += b"unexpected"
+        names = [artifact.filename, artifact.converted_paths[0].name, f"{parquet.name}.zip"]
+        if existing:
+            names[0] = "previous-capture.zip"
+            names[1] = "previous-capture_converted.csv"
+        calls = []
+        page = {"object": "page", "id": "page-protocol", "archived": False,
+                "properties": {
+                    S.RAW_PROP_FILENAME: {"type": "title", "title": [{"plain_text": names[0]}]},
+                    S.RAW_PROP_SHA256: {"type": "rich_text", "rich_text": [
+                        {"plain_text": artifact.sha256}]},
+                    S.RAW_PROP_SIZE: {"type": "number", "number": artifact.size_bytes},
+                    S.RAW_PROP_FILES: {"type": "files", "files": [
+                        {"name": n, "type": "file", "file": {"url": str(i)}}
+                        for i, n in enumerate(names)]},
+                }}
+        client = SimpleNamespace(
+            dry_run=False,
+            query_database=lambda *a, **k: [{"id": "page-protocol"}] if existing else [],
+            create_page=lambda **k: calls.append("create") or {"id": "page-protocol"},
+            get_page=lambda page_id: calls.append("read-page") or page,
+            download_file=lambda url: calls.append(f"read-{url}") or blobs[int(url)],
+        )
+        monkeypatch.setattr(file_upload, "upload_file", lambda c, p: (
+            calls.append("upload") or "upload-protocol",
+            f"{p.name}.zip" if p == parquet else p.name,
+        ))
+        if tampered:
+            with pytest.raises(file_upload.RawUploadError, match="全バイト不一致"):
+                file_upload.upload_raw_artifact(client, settings, artifact)
+            assert artifact.notion_page_id is None
+            assert "read-2" not in calls
+        else:
+            assert file_upload.upload_raw_artifact(client, settings, artifact) == "page-protocol"
+            assert calls[-4:] == ["read-page", "read-0", "read-1", "read-2"]
+            assert artifact.notion_page_id == "page-protocol"
+        assert calls.count("upload") == (0 if existing else 3)
+        assert calls.count("create") == (0 if existing else 1)
+
     def test_ambiguous_page_creation_degrades_without_second_post(
         self, dry_client, tmp_path, monkeypatch
     ):

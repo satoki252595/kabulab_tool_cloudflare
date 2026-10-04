@@ -90,12 +90,12 @@ def record_freshness(
     （空なら少なくとも「空だ」と分かる）。
 
     `latest_data_date` も同様にデータ基準日であり、判定はこちらを優先する
-    （`slo.judge_observation` の (c)）。`updated_at` は基準日の列が無い表の
+    （`slo.judge_observation` の (d)）。`updated_at` は基準日の列が無い表の
     フォールバックにしか使わない。
 
-    そのフォールバックの限界も書いておく: 基準日の列が無い表（`core_stocks` /
-    `yutai_benefits`）で渡せるのは、その表自身の `updated_at`＝**その表の writer が
-    行を書いた時刻**である。観測ジョブの `now` ではないので「記録のたびに進む」
+    基準日の列が無い表はwriterの実時刻を渡す。`core_stocks`は自身のupdated_at、
+    `yutai_benefits`はactive普通株のMIN(created_at)で、要約だけの更新を数えない。
+    観測ジョブの `now` ではないので「記録のたびに進む」
     ことは無いが、writer が同じ値を書き直すだけでも進むため「取得はできたが中身が
     更新されていない」は検知できない。日付列が埋まったらそちらへ寄せる。
     """

@@ -146,6 +146,8 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
         if: steps.daily.conclusion == 'success' && steps.daily.outputs.trade_date != ''
       - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
         if: steps.daily.conclusion == 'success' && steps.daily.outputs.trade_date != ''
       - name: Sync pipeline dependencies
         if: steps.daily.conclusion == 'success' && steps.daily.outputs.trade_date != ''

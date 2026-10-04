@@ -7,18 +7,24 @@
  * XLSX から `JpxRow[]` を作る本体 (コード正規化・行を落とさない不変条件・
  * 基準日の一意性) には 1 件もテストが無く、コード正規化を触る足場が無かった。
  *
- * fetch と Notion 原本アーカイブはモックする。ここで固定したいのは
- * 「シートの中身をどう行に変換するか」だけ。
+ * fetch と Notion 原本アーカイブはモックする。原文の物理照合が済むまで
+ * 解析・母集団への返却へ進まない境界も固定する。
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as XLSX from "xlsx";
 
-const recordPrimaryData = vi.fn().mockResolvedValue(undefined);
+const recordPrimaryData = vi.fn();
+const verifyArchivedAttachments = vi.fn();
+const archivePage = vi.fn();
 vi.mock("../notion-archive/index.js", () => ({
   recordPrimaryData: (...args: unknown[]) => recordPrimaryData(...args),
+  verifyArchivedAttachments: (...args: unknown[]) => verifyArchivedAttachments(...args),
+  notionEnv: { NOTION_TOKEN: vi.fn(), NOTION_ARCHIVE_PAGE_ID: () => archivePage() },
 }));
 
 const { downloadJpxListing, isListedEquity } = await import("./sectors.js");
+const { sha256HexBytes } = await import("../sha256.js");
+const { toNotionUpload } = await import("../notion-archive/file-upload.js");
 
 /** data_j.xlsx の実列名でシートを組み、xlsx バイト列にする。 */
 function xlsxBytes(rows: Record<string, unknown>[]): Uint8Array {
@@ -44,6 +50,8 @@ function stubFetch(bytes: Uint8Array) {
       ok: true,
       status: 200,
       statusText: "OK",
+      url: "https://www.jpx.co.jp/data_j.xlsx",
+      headers: new Headers({ "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
       arrayBuffer: async () => bytes.buffer.slice(0),
     })
   );
@@ -60,7 +68,9 @@ const SYNTHETIC_ETF = row(1202, "合成テスト指数連動型ＥＴＦ", "ETF�
 describe("downloadJpxListing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    recordPrimaryData.mockResolvedValue(undefined);
+    recordPrimaryData.mockResolvedValue({ pageId: "archive-page", outcome: "recorded", fileTooLarge: false, manifestMatch: "written" });
+    verifyArchivedAttachments.mockResolvedValue(undefined);
+    archivePage.mockReturnValue("archive-parent");
   });
 
   it("実列名を JpxRow へ写し、基準日を ISO 化する", async () => {
@@ -143,32 +153,115 @@ describe("downloadJpxListing", () => {
     await expect(downloadJpxListing()).rejects.toThrow("データ行が 0 件");
   });
 
-  it("HTTP エラーは throw する (404 は配布形式の差替えを示唆する)", async () => {
+  it.each([new Uint8Array(), new Uint8Array([0, 255, 195, 13, 10])])("HTTP エラーは原bodyをgzip保管してthrowする (404 は配布形式の差替えを示唆)", async (original) => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: false,
         status: 404,
         statusText: "Not Found",
-        arrayBuffer: async () => new ArrayBuffer(0),
+        url: "https://www.jpx.co.jp/data_j.xlsx",
+        headers: new Headers({ "content-type": "text/plain" }),
+        arrayBuffer: async () => original.buffer,
       })
     );
     await expect(downloadJpxListing()).rejects.toThrow("拡張子/URL が変わっていないか");
+    const input = recordPrimaryData.mock.calls[0][0];
+    const file = input.files[0];
+    expect(input.metadata.status).toBe(404);
+    expect(input.metadata.archiveEncoding).toBe("gzip");
+    expect(input.metadata.bytes).toBe(original.byteLength);
+    expect(input.metadata.sha256).toBe(await sha256HexBytes(original));
+    expect(file.bytes.length).toBeGreaterThan(0);
+    // 共有アップロード実関数の受理形式と、UTF-8に依存しない原bytesの復元を検査。
+    expect(toNotionUpload(file.filename, file.contentType)).toEqual({ filename: file.filename, contentType: "application/gzip" });
+    const decoded = new Uint8Array(await new Response(
+      new Blob([Uint8Array.from(file.bytes)]).stream().pipeThrough(new DecompressionStream("gzip"))
+    ).arrayBuffer());
+    expect(Array.from(decoded)).toEqual(Array.from(original));
+    expect(verifyArchivedAttachments).toHaveBeenCalledWith("archive-page", input.files, "JPX listing 原本");
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("一次取得物を基準月キーで Notion へ原本アーカイブする", async () => {
-    stubFetch(xlsxBytes([TOYOTA, ITO_EN_PREFERRED, SYNTHETIC_ETF]));
+  it("一次取得全bytesをSHAキーで物理照合してから解析する", async () => {
+    const bytes = xlsxBytes([TOYOTA, ITO_EN_PREFERRED, SYNTHETIC_ETF]);
+    const sha256 = await sha256HexBytes(Uint8Array.from(bytes));
+    stubFetch(bytes);
     await downloadJpxListing();
     expect(recordPrimaryData).toHaveBeenCalledTimes(1);
-    const arg = recordPrimaryData.mock.calls[0][0] as {
-      key: string;
-      metadata: { rowCount: number; listedEquityCount: number; sourceAsOf: string };
-      files: { filename: string }[];
-    };
-    expect(arg.key).toBe("jpx-listing-2026-06");
-    expect(arg.metadata.rowCount).toBe(3);
-    expect(arg.metadata.listedEquityCount).toBe(1);
-    expect(arg.metadata.sourceAsOf).toBe("2026-06-30");
-    expect(arg.files[0].filename).toBe("data_j-2026-06-30.xlsx");
+    const arg = recordPrimaryData.mock.calls[0][0];
+    expect(arg.key).toBe(`jpx-listing-sha256-${sha256}`);
+    expect(arg.force).toBe(false);
+    expect(arg.metadata.sha256).toBe(sha256);
+    expect(arg.metadata.bytes).toBe(bytes.byteLength);
+    expect(arg.metadata).not.toHaveProperty("sourceAsOf");
+    expect(arg.files[0].filename).toBe(`data_j-${sha256}.xlsx`);
+    expect(toNotionUpload(arg.files[0].filename, arg.files[0].contentType)).toEqual({ filename: arg.files[0].filename, contentType: arg.files[0].contentType });
+    expect(arg.files[0].bytes.byteLength).toBe(bytes.byteLength);
+    expect(await sha256HexBytes(Uint8Array.from(arg.files[0].bytes))).toBe(sha256);
+    expect(verifyArchivedAttachments).toHaveBeenCalledWith("archive-page", arg.files, "JPX listing 原本");
+    expect(recordPrimaryData.mock.invocationCallOrder[0]).toBeLessThan(verifyArchivedAttachments.mock.invocationCallOrder[0]);
+    expect(vi.mocked(fetch).mock.calls[0][1]).toMatchObject({ redirect: "manual", signal: expect.any(AbortSignal) });
+  });
+
+  it("同月の別bytesは別キー、同じbytesの再用も全物理照合する", async () => {
+    const first = xlsxBytes([TOYOTA]);
+    const changed = xlsxBytes([TOYOTA, VERITAS]);
+    for (const bytes of [first, changed, first]) {
+      stubFetch(bytes);
+      await downloadJpxListing();
+      recordPrimaryData.mockResolvedValue({ pageId: "archive-page", outcome: "skipped_existing", fileTooLarge: false, manifestMatch: "same" });
+    }
+    const keys = recordPrimaryData.mock.calls.map(([arg]) => arg.key);
+    expect(keys[0]).not.toBe(keys[1]);
+    expect(keys[0]).toBe(keys[2]);
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(3);
+  });
+
+  it("同じbytesでも非200のgzipと200のXLSXは同じkeyを使わない", async () => {
+    const bytes = xlsxBytes([TOYOTA]);
+    stubFetch(bytes);
+    await downloadJpxListing();
+    vi.mocked(fetch).mockResolvedValue({
+      status: 503, statusText: "Service Unavailable", url: "https://www.jpx.co.jp/data_j.xlsx",
+      headers: new Headers(), arrayBuffer: async () => bytes.buffer.slice(0),
+    } as Response);
+    await expect(downloadJpxListing()).rejects.toThrow("HTTP エラー: 503");
+    const [ok, error] = recordPrimaryData.mock.calls.map(([arg]) => arg);
+    expect(ok.metadata.sha256).toBe(error.metadata.sha256);
+    expect(ok.key).not.toBe(error.key);
+    expect(error.key).toContain("http-503-sha256-");
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(2);
+  });
+
+  it("既知の不正XLSも保管し、readback不明なら解析より先に停止する", async () => {
+    stubFetch(xlsxBytes([{ ...TOYOTA, 日付: 20260230 }]));
+    verifyArchivedAttachments.mockRejectedValue(new Error("readback unknown"));
+    await expect(downloadJpxListing()).rejects.toThrow("readback unknown");
+    expect(recordPrimaryData).toHaveBeenCalledTimes(1);
+    verifyArchivedAttachments.mockResolvedValue(undefined);
+    await expect(downloadJpxListing()).rejects.toThrow("実在しない日付");
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(2);
+  });
+
+  it("容量上限と保管不明は解析へ進まずsourceを再取得しない", async () => {
+    stubFetch(xlsxBytes([TOYOTA]));
+    recordPrimaryData.mockResolvedValue({ pageId: "archive-page", outcome: "recorded", fileTooLarge: true, manifestMatch: "written" });
+    await expect(downloadJpxListing()).rejects.toThrow("容量上限");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(verifyArchivedAttachments).not.toHaveBeenCalled();
+    recordPrimaryData.mockRejectedValue(new Error("archive unknown"));
+    await expect(downloadJpxListing()).rejects.toThrow("archive unknown");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(verifyArchivedAttachments).not.toHaveBeenCalled();
+  });
+
+  it("保管設定が不明ならsource取得前に停止する", async () => {
+    stubFetch(xlsxBytes([TOYOTA]));
+    archivePage.mockImplementation(() => { throw new Error("archive config missing"); });
+    await expect(downloadJpxListing()).rejects.toThrow("archive config missing");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(recordPrimaryData).not.toHaveBeenCalled();
   });
 });

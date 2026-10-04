@@ -507,10 +507,10 @@ def _workflow_text(name: str) -> str:
 
 
 class TestWorkflowCrons:
-    """§8.2 スケジュール (JST) と cron (UTC) の対応検証。"""
+    """§8.2 スケジュール (JST) と cron/timezone の対応検証。"""
 
     EXPECTED = {
-        "master_sync": "0 21 1 * *",
+        "master_sync": "0 6 1 * *",
         "tdnet_hourly": "0 0-10 * * 1-5",
         "edinet_daily": "0 12 * * 1-5",
         "supply_daily": "17 3 * * 1-5",
@@ -527,6 +527,8 @@ class TestWorkflowCrons:
         m = re.search(r'cron:\s*"([^"]+)"', live)
         assert m, f"{name}.yml に live の cron が無い"
         assert m.group(1) == self.EXPECTED[name]
+        if name == "master_sync":
+            assert re.search(r'timezone:\s*["\']?Asia/Tokyo["\']?', live)
         assert "workflow_dispatch" in text  # 手動実行可
         assert f"jp_stock_pipeline.jobs.{name}" in text
 
@@ -739,7 +741,7 @@ class TestCommonStrictCustody:
         monkeypatch.setattr(
             edinet_daily,
             "_fetch_financial_tidy",
-            lambda ctx_, doc_id, code, data_date: (self._artifact(tmp_path), None),
+            lambda ctx_, doc_id, code, data_date, csv_flag: (self._artifact(tmp_path), None),
         )
         pdf_calls: list = []
         monkeypatch.setattr(edinet, "fetch_document", lambda *a, **k: pdf_calls.append(a) or None)
@@ -766,13 +768,39 @@ class TestCommonStrictCustody:
         monkeypatch.setattr(
             edinet_daily,
             "_fetch_financial_tidy",
-            lambda ctx_, doc_id, code, data_date: (tidy_artifact, None),
+            lambda ctx_, doc_id, code, data_date, csv_flag: (tidy_artifact, None),
         )
         monkeypatch.setattr(edinet, "fetch_document", lambda *a, **k: tidy_artifact)
         monkeypatch.setattr(edinet_daily.json_to_parquet, "convert_artifact", lambda *a: None)
         doc = dict(TestEdinetLargeHolding.REAL_120)
+        doc["pdfFlag"] = "1"
         edinet_daily._process_document(ctx, doc, "list-page", **self._process_kwargs())
         assert [r.provenance.raw_page_id for r in persisted] == ["tidy-page"]
+
+    @pytest.mark.parametrize("failure_type", [edinet_daily.FetchError, file_upload.RawUploadError])
+    def test_edinet_fetch_or_archive_unknown_stops_before_next_document(
+        self, monkeypatch, tmp_path, failure_type
+    ):
+        from argparse import Namespace
+
+        ctx = self._ctx(tmp_path)
+        ctx.args = Namespace(date=date(2026, 9, 10), limit=None)
+        doc = dict(TestEdinetLargeHolding.REAL_120)
+        monkeypatch.setattr(edinet, "list_documents", lambda *a: (self._artifact(tmp_path), [doc, doc]))
+        monkeypatch.setattr(edinet_daily.json_to_parquet, "convert_artifact", lambda *a: None)
+        monkeypatch.setattr(ctx, "upload_raw", lambda *a, **k: "raw-page")
+        monkeypatch.setattr(edinet_daily, "_load_master_maps", lambda *a: ({}, {}, True))
+        monkeypatch.setattr(edinet_daily, "_load_map_guarded", lambda *a: ({}, True))
+        calls = []
+
+        def fail(*a, **k):
+            calls.append(True)
+            raise failure_type("unknown protocol")
+
+        monkeypatch.setattr(edinet_daily, "_process_document", fail)
+        with pytest.raises(failure_type):
+            edinet_daily.execute(ctx)
+        assert calls == [True] and ctx.processed == 0
 
     def test_master_sync_notion_failure_aborts_before_upsert(self, monkeypatch, tmp_path):
         """master: 原本保管失敗 → parse/① upsert より前に中止する。"""

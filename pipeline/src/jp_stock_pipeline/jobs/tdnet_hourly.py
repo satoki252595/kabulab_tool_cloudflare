@@ -34,36 +34,30 @@ YANOSHIN_LIMIT = 1000
 
 
 def _collect(ctx: JobContext, target_date: date) -> list[tuple[RawArtifact, list[DisclosureRecord], dict[str, str]]]:
-    """一覧取得。やのしん → 失敗時は公式ページ (§11)、上限到達時は公式で補完。
+    """一覧取得。やのしん一覧を取得し、既知の件数上限到達時だけ公式で coverage を補完。
 
     返り値: [(原本, records, doc_id→XBRL URL), ...]（公式は1ページ=1原本 §5.1）
     """
     target = target_date.strftime("%Y%m%d")
-    try:
-        artifact, records = tdnet_yanoshin.list_disclosures(
-            ctx.settings, target, limit=YANOSHIN_LIMIT
+    artifact, records = tdnet_yanoshin.list_disclosures(
+        ctx.settings, target, limit=YANOSHIN_LIMIT
+    )
+    payload = json.loads(artifact.local_path.read_bytes())
+    convert_artifact(artifact, "json")  # §5.2 ペア保存 (JSON→CSV+Parquet)
+    batches = [(artifact, records, tdnet_yanoshin.xbrl_url_map(payload))]
+    if len(records) >= YANOSHIN_LIMIT:
+        logger.warning(
+            "やのしん一覧が上限 %d 件に到達。公式TDnetページで補完する (§11)",
+            YANOSHIN_LIMIT,
         )
-        payload = json.loads(artifact.local_path.read_bytes())
-        convert_artifact(artifact, "json")  # §5.2 ペア保存 (JSON→CSV+Parquet)
-        batches = [(artifact, records, tdnet_yanoshin.xbrl_url_map(payload))]
-        if len(records) >= YANOSHIN_LIMIT:
-            logger.warning(
-                "やのしん一覧が上限 %d 件に到達。公式TDnetページで補完する (§11)",
-                YANOSHIN_LIMIT,
-            )
-            seen = {r.doc_id for r in records}
-            for page_artifact, page_records in tdnet_official_fallback.fetch_list_pages(
-                ctx.settings, target_date
-            ):
-                extra = [r for r in page_records if r.doc_id not in seen]
-                seen |= {r.doc_id for r in extra}
-                batches.append((page_artifact, extra, {}))
-        return batches
-    except (FetchError, ValueError) as exc:
-        logger.warning("やのしんAPI失敗 → 公式TDnetページへフォールバック (§11): %s", exc)
-        pages = tdnet_official_fallback.fetch_list_pages(ctx.settings, target_date)
-        # 公式一覧から XBRL URL は取得しない（リンク有無のみ）。③反映はEDINET日次で補完
-        return [(artifact, records, {}) for artifact, records in pages]
+        seen = {r.doc_id for r in records}
+        for page_artifact, page_records in tdnet_official_fallback.fetch_list_pages(
+            ctx.settings, target_date
+        ):
+            extra = [r for r in page_records if r.doc_id not in seen]
+            seen |= {r.doc_id for r in extra}
+            batches.append((page_artifact, extra, {}))
+    return batches
 
 
 def _process_financial_xbrl(
@@ -259,6 +253,8 @@ def execute(ctx: JobContext) -> None:
                         master_id=master_id, master_resolved=master_resolved,
                         sha_map=sha_map, sha_map_date=target_date,
                     )
+                except (FetchError, file_upload.RawUploadError):
+                    raise  # 取得・原本保管が不明なまま次の開示を取得しない。
                 except Exception as exc:
                     # ③ 反映失敗は欠損として記録 (④ は成立済み。ダミーで埋めない §3-1)
                     ctx.add_failure(record.doc_id, f"短信XBRL→③失敗: {exc}")

@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+from .guards import check_no_regression
 from .r2 import R2Store
 
 logger = logging.getLogger(__name__)
@@ -68,14 +69,25 @@ def build_payload(
 def upsert_supply_series(
     store: R2Store, code: str, by_type: dict[str, list[dict]], *, updated: date
 ) -> str:
-    """1 銘柄ぶんの系列を R2 へ書く。書いたキーを返す。"""
+    """1 銘柄ぶんの系列を保存する。取得時計だけの差なら旧実体を保持する。"""
     from .keys import supply_key  # noqa: PLC0415 - 循環 import 回避
 
     key = supply_key(code)
-    existing, _found = store.get_json(key)
+    existing, found = store.get_json(key)
+    if found and not isinstance(existing, dict):
+        raise ValueError("既存需給オブジェクトが辞書でない（更新せず停止）")
     payload = build_payload(
         code, existing=existing, by_type=by_type, updated=updated, writer=store.writer
     )
+    if existing is not None and (
+        {k: v for k, v in existing.items() if k != "updated"}
+        == {k: v for k, v in payload.items() if k != "updated"}
+    ):
+        check_no_regression(existing, payload, writer=store.writer, contract=CONTRACT)
+        # 新取得時計は⑤原本とD1断面の fetched_at に記録される。
+        # 同じ市場データの旧 updated を新しい市場日へ見せかけない。
+        logger.info("R2 supply 同値保持: %s", key)
+        return key
     store.put_json_guarded(key, payload, contract=CONTRACT)
     return key
 

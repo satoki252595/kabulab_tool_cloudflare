@@ -54,7 +54,7 @@ export async function extractPdfText(
 }
 
 async function extract(bytes: Uint8Array): Promise<string | null> {
-  const doc = await getDocumentProxy(bytes);
+  const doc = await getDocumentProxy(bytes.slice());
   const { text } = await extractText(doc, { mergePages: true });
   const merged = Array.isArray(text) ? text.join("\n") : text;
   const trimmed = (merged ?? "").trim();

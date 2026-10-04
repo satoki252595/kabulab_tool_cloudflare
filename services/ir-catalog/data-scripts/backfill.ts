@@ -153,22 +153,8 @@ async function main(): Promise<void> {
       lastDay(cur.y, cur.m)
     )}`;
 
-    let items;
-    try {
-      items = await listRange(range);
-    } catch (e) {
-      // 一過性の可能性。握り潰さず記録し、この月は次回再実行で拾う
-      console.error(
-        `[ir:backfill] ${monthKey} 取得失敗: ${(e as Error).message} — この月は次回再実行で回収`
-      );
-      if (cur.m === 1) {
-        cur.y--;
-        cur.m = 12;
-      } else {
-        cur.m--;
-      }
-      continue;
-    }
+    // 原文保管または源取得の未知失敗は次月へ継続しない。
+    const items = await listRange(range);
 
     if (items.length === 0) {
       consecutiveEmpty++;

@@ -7,22 +7,22 @@
  *      ユニバース外 (ETF/REIT 等の非普通株・区分が NULL の active 行・core_stocks に無い
  *      コード) は正直に切り捨てる — 推測しない。is_active=0 (上場廃止など) の銘柄は取り込む
  *   2. タイトルを決定論的に分類 (classify)。未分類は tags=[] のまま
- *   3. ir_catalog.disclosures へ冪等 upsert (tdnet_id 一意)
- *   4. ルール6: 取得バッチ単位の確定 JSONL を「一次データ｜ir-catalog」へ
+ *   3. ルール6: 取得バッチ単位の確定 JSON を「一次データ｜ir-catalog」へ
  *      物理アップロード (1 開示=1Notion 行にすると上限超過するため、
  *      高頻度・大量取得は「バッチ単位の確定ファイル」粒度で記録する —
- *      CLAUDE.md ルール6「高頻度・大量取得の境界」の帰結)
+ *      CLAUDE.md ルール6「高頻度・大量取得の境界」の帰結)。全添付を読戻し照合。
+ *   4. ir_catalog.disclosures へ冪等 upsert (tdnet_id 一意)
  *   5. 高シグナル開示 (増配/上方修正/自社株買い 等) のみ人間可読な
  *      Notion 高シグナル DB へ冪等記録 (tag/コード/名称[バフェ・リンク]/
  *      発表日 列)
  *
- * 失敗は握りつぶさない (ルール2): DB upsert 失敗は throw。Notion 記録は
- * DB 取込とは独立し、失敗しても DB 取込結果は返すが error を結果に載せて
- * 運用者が気づけるようにする (黙殺しない)。
+ * 一次保管・読戻しの失敗は D1 書込前に throw。二次記録・D1 反映の
+ * 例外も呼出元へ伝播し、CLI の失敗と後続取得の停止につなげる。
  */
 import { eq, sql } from "drizzle-orm";
 import {
   recordPrimaryData,
+  verifyArchivedAttachments,
   upsertDisclosuresByStock,
   type ByStockRow,
   type PdfClassification,
@@ -152,8 +152,7 @@ async function persistPdfSentiments(
  * (tdnet_id → 抽出テキスト) を `ir_disclosure_texts` へ冪等保存する。
  * テキストあり → upsert + pdf_text_status=ok。テキストなし (画像化/
  * 暗号化等で抽出 0 文字) → 行なし + pdf_text_status=no_text。
- * 1 行の保存失敗でバッチを落とさず error を記録して継続する
- * (rowErrors の流儀 — ルール2)。
+ * 保存結果不明や対応 D1 行の不存在は throw。別の状態を書いて成功にしない。
  */
 async function persistPdfTexts(
   db: Database,
@@ -164,50 +163,36 @@ async function persistPdfTexts(
   );
   if (entries.length === 0) return;
   for (const [tdnetId, c] of entries) {
-    try {
-      if (c.text === null || c.text === undefined || c.text.length === 0) {
-        await db
-          .update(disclosures)
-          .set({ pdfTextStatus: "no_text" })
-          .where(eq(disclosures.tdnetId, tdnetId));
-        continue;
-      }
-      const hit = await db
-        .select({ id: disclosures.id })
-        .from(disclosures)
-        .where(eq(disclosures.tdnetId, tdnetId))
-        .limit(1);
-      if (hit.length === 0) continue; // D1 行なし (あり得ないが捏造しない)
-      const disclosureId = hit[0]!.id;
-      await db
-        .insert(disclosureTexts)
-        .values({
-          disclosureId,
-          tdnetId,
-          text: c.text,
-          charCount: c.text.length,
-        })
-        .onConflictDoUpdate({
-          target: disclosureTexts.disclosureId,
-          set: { text: c.text, charCount: c.text.length, tdnetId },
-        });
+    const hit = await db
+      .select({ id: disclosures.id })
+      .from(disclosures)
+      .where(eq(disclosures.tdnetId, tdnetId))
+      .limit(1);
+    if (hit.length !== 1) throw new Error(`PDF 本文の対応 D1 行がないため停止 tdnetId=${tdnetId}`);
+    const disclosureId = hit[0]!.id;
+    if (c.text === null || c.text === undefined || c.text.length === 0) {
       await db
         .update(disclosures)
-        .set({ pdfTextStatus: "ok" })
-        .where(eq(disclosures.id, disclosureId));
-    } catch (e) {
-      console.error(
-        `[ir-catalog] pdf_text 保存失敗 ${tdnetId}: ${(e as Error).message}`
-      );
-      try {
-        await db
-          .update(disclosures)
-          .set({ pdfTextStatus: "error" })
-          .where(eq(disclosures.tdnetId, tdnetId));
-      } catch {
-        // 状態記録自体に失敗したら諦める (NULL のまま = 未処理扱い)
-      }
+        .set({ pdfTextStatus: "no_text" })
+        .where(eq(disclosures.tdnetId, tdnetId));
+      continue;
     }
+    await db
+      .insert(disclosureTexts)
+      .values({
+        disclosureId,
+        tdnetId,
+        text: c.text,
+        charCount: c.text.length,
+      })
+      .onConflictDoUpdate({
+        target: disclosureTexts.disclosureId,
+        set: { text: c.text, charCount: c.text.length, tdnetId },
+      });
+    await db
+      .update(disclosures)
+      .set({ pdfTextStatus: "ok" })
+      .where(eq(disclosures.id, disclosureId));
   }
 }
 
@@ -289,6 +274,47 @@ export async function ingestBatch(
     else byPrimaryTag[p.primaryTag] = (byPrimaryTag[p.primaryTag] ?? 0) + 1;
   }
 
+  // 確定 JSON の物理保管・全 bytes 照合が閉じるまで D1 は書かない。
+  let notionArchive: IngestResult["notionArchive"] = null;
+  if (opts.archiveToNotion) {
+    const fileJson = JSON.stringify(
+      prepared.map((p) => ({
+        tdnet_id: p.tdnetId,
+        ticker: p.ticker,
+        company_code: p.companyCode,
+        company_name: p.companyName,
+        pubdate: p.pubdate.toISOString(),
+        title: p.title,
+        tags: p.tags,
+        primary_tag: p.primaryTag,
+        document_url: p.documentUrl,
+        xbrl_url: p.xbrlUrl,
+        markets: p.marketsString,
+      }))
+    );
+    const files = [{
+      bytes: new TextEncoder().encode(fileJson),
+      filename: `${opts.batchKey}.json`,
+      contentType: "application/json",
+    }];
+    const r = await recordPrimaryData({
+      service: "ir-catalog",
+      key: opts.batchKey,
+      source: opts.source,
+      metadata: {
+        batchKey: opts.batchKey,
+        fetched: items.length,
+        inUniverse: prepared.length,
+        unclassified,
+        byPrimaryTag,
+      },
+      files,
+    });
+    if (r.fileTooLarge) throw new Error("TDnet 一次データが容量上限で未保管のため停止");
+    await verifyArchivedAttachments(r.pageId, files, "TDnet 確定バッチ");
+    notionArchive = { outcome: r.outcome, fileTooLarge: r.fileTooLarge };
+  }
+
   // DB へ冪等 upsert (tdnet_id 一意)。タイトル訂正等に追従するため
   // 内容列は更新、ingested_at は据え置き。D1 の bind 変数上限は 100 で、
   // 1 行 11 列なので 9 行(=99 bind)ずつに分割する(ADR-0001)。
@@ -339,55 +365,6 @@ export async function ingestBatch(
     upserted += slice.length;
   }
 
-  // ルール6: バッチ確定 JSONL を Notion 一次データへ実体アップロード (冪等)
-  let notionArchive: IngestResult["notionArchive"] = null;
-  if (opts.archiveToNotion) {
-    try {
-      // Notion File Upload API は拡張子で検証し .jsonl を拒否するため、
-      // 標準 JSON 配列 (.json) で確定バッチを実体保存する (再取込も容易)。
-      const fileJson = JSON.stringify(
-        prepared.map((p) => ({
-          tdnet_id: p.tdnetId,
-          ticker: p.ticker,
-          company_code: p.companyCode,
-          company_name: p.companyName,
-          pubdate: p.pubdate.toISOString(),
-          title: p.title,
-          tags: p.tags,
-          primary_tag: p.primaryTag,
-          document_url: p.documentUrl,
-          xbrl_url: p.xbrlUrl,
-          markets: p.marketsString,
-        })),
-        null,
-        0
-      );
-      const r = await recordPrimaryData({
-        service: "ir-catalog",
-        key: opts.batchKey,
-        source: opts.source,
-        metadata: {
-          batchKey: opts.batchKey,
-          fetched: items.length,
-          inUniverse: prepared.length,
-          unclassified,
-          byPrimaryTag,
-        },
-        files: [
-          {
-            bytes: new TextEncoder().encode(fileJson),
-            filename: `${opts.batchKey}.json`,
-            contentType: "application/json",
-          },
-        ],
-      });
-      notionArchive = { outcome: r.outcome, fileTooLarge: r.fileTooLarge };
-    } catch (e) {
-      notionArchive = { error: (e as Error).message };
-      console.error(`[ir-catalog] Notion 一次データ記録失敗 ${opts.batchKey}: ${(e as Error).message}`);
-    }
-  }
-
   // 二次データ: 全 IR を Notion「銘柄一覧→銘柄別子DB」へ 1IR=1行で冪等記録
   // (全タグ。一次データ Postgres 格納と同タイミング = TDnet へ追加負荷なし)
   const byStockRows: ByStockRow[] = prepared.map((p) => ({
@@ -421,68 +398,42 @@ export async function ingestBatch(
             )
           : Date.now() + opts.notionByStockBudgetMs
         : opts.notionByStockDeadlineMs;
-    try {
-      const r = await upsertDisclosuresByStock({
-        service: "ir-catalog",
-        tagOptions: notionTagOptions(),
-        rows: byStockRows,
-        deadlineMs: phaseDeadline,
-        onPagePersisted: (key, pageId) => pageIdMap.set(key, pageId),
-        // PDF 本文を OSS 軽量実装 (数値ルール + 東北大極性辞書) で判定し、
-        // Notion 列 + PG 4 列に反映。失敗時は呼ばれた側で unknown を返す
-        // (バッチを止めない — ルール2)。抽出テキストも添えて返し、D1 の
-        // `ir_disclosure_texts` へ保存する (同じ bytes を使い回し二重取得なし)。
-        classifyPdf: async (bytes, primaryTag) => {
-          const { result, text } = await classifyPdfSentimentWithText(
-            bytes,
-            primaryTag
-          );
-          return { ...result, text };
-        },
-        onPdfClassified: (key, c) => pdfMap.set(key, c),
-        rejudgePdf: opts.rejudgePdfSentiment ?? false,
-      });
-      notionByStock = {
-        stocksTouched: r.stocksTouched,
-        created: r.created,
-        updated: r.updated,
-        skippedExisting: r.skippedExisting,
-        skippedNoFile: r.skippedNoFile,
-        rejudged: r.rejudged,
-        rowErrors: r.rowErrors,
-        reachedDeadline: r.reachedDeadline,
-      };
-    } catch (e) {
-      notionByStock = { error: (e as Error).message };
-      console.error(
-        `[ir-catalog] Notion 銘柄別記録失敗 ${opts.batchKey}: ${(e as Error).message}`
-      );
-    }
-    // 例外時も貯まった分は反映 (途中まで成功した行はリンクできる)
-    if (pageIdMap.size > 0) {
-      try {
-        await persistNotionPageIds(db, pageIdMap);
-      } catch (e) {
-        console.error(
-          `[ir-catalog] notion_page_id 反映失敗 ${opts.batchKey}: ${(e as Error).message}`
+    const r = await upsertDisclosuresByStock({
+      service: "ir-catalog",
+      tagOptions: notionTagOptions(),
+      rows: byStockRows,
+      deadlineMs: phaseDeadline,
+      onPagePersisted: (key, pageId) => pageIdMap.set(key, pageId),
+      // PDF 本文を OSS 軽量実装 (数値ルール + 東北大極性辞書) で判定し、
+      // Notion 列 + PG 4 列に反映。失敗時は呼ばれた側で unknown を返す
+      // (バッチを止めない — ルール2)。抽出テキストも添えて返し、D1 の
+      // `ir_disclosure_texts` へ保存する (同じ bytes を使い回し二重取得なし)。
+      classifyPdf: async (bytes, primaryTag) => {
+        const { result, text } = await classifyPdfSentimentWithText(
+          bytes,
+          primaryTag
         );
-      }
+        return { ...result, text };
+      },
+      onPdfClassified: (key, c) => pdfMap.set(key, c),
+      rejudgePdf: opts.rejudgePdfSentiment ?? false,
+    });
+    notionByStock = {
+      stocksTouched: r.stocksTouched,
+      created: r.created,
+      updated: r.updated,
+      skippedExisting: r.skippedExisting,
+      skippedNoFile: r.skippedNoFile,
+      rejudged: r.rejudged,
+      rowErrors: r.rowErrors,
+      reachedDeadline: r.reachedDeadline,
+    };
+    if (pageIdMap.size > 0) {
+      await persistNotionPageIds(db, pageIdMap);
     }
     if (pdfMap.size > 0) {
-      try {
-        await persistPdfSentiments(db, pdfMap);
-      } catch (e) {
-        console.error(
-          `[ir-catalog] pdf_sentiment 反映失敗 ${opts.batchKey}: ${(e as Error).message}`
-        );
-      }
-      try {
-        await persistPdfTexts(db, pdfMap);
-      } catch (e) {
-        console.error(
-          `[ir-catalog] pdf_text 反映失敗 ${opts.batchKey}: ${(e as Error).message}`
-        );
-      }
+      await persistPdfSentiments(db, pdfMap);
+      await persistPdfTexts(db, pdfMap);
     }
   } else if (opts.notionByStock) {
     notionByStock = {

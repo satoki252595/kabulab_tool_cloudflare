@@ -186,7 +186,7 @@ def execute(ctx: JobContext) -> None:
         ctx.add_failure("zandaka", f"取得失敗: {exc}")
         return
 
-    # 2. shina (逆日歩・任意)。取れなくても zandaka は書き切る。
+    # 2. shina (逆日歩)。取得の不明結果で次の源・系列書込みへ進まない。
     try:
         _artifact, content = _fetch_and_store(ctx, "shina", "shina")
         shina_rows = jsf.parse_shina(content)
@@ -194,13 +194,15 @@ def execute(ctx: JobContext) -> None:
         for code, points in _shina_points(shina_rows).items():
             by_code.setdefault(code, {})["jsf_shina"] = points
     except FetchError as exc:
-        ctx.add_failure("shina", f"取得失敗（zandaka は継続）: {exc}")
+        ctx.add_failure("shina", f"取得失敗（後続取得・系列反映は中止）: {exc}")
+        return
 
-    # 3. meigara (貸借銘柄区分・任意)。原本として残すだけで系列には積まない。
+    # 3. meigara (貸借銘柄区分)。原本として残すだけで系列には積まない。
     try:
         _fetch_and_store(ctx, "meigara", "meigara")
     except FetchError as exc:
-        ctx.add_failure("meigara", f"取得失敗（継続）: {exc}")
+        ctx.add_failure("meigara", f"取得失敗（系列反映は中止）: {exc}")
+        return
 
     codes = apply_limit(sorted(by_code), ctx.args.limit)
     logger.info("R2 supply/ へ %d 銘柄を書き込む", len(codes))

@@ -7,7 +7,8 @@
  */
 
 import * as XLSX from "xlsx";
-import { recordPrimaryData } from "../notion-archive/index.js";
+import { notionEnv, recordPrimaryData, verifyArchivedAttachments } from "../notion-archive/index.js";
+import { sha256HexBytes } from "../sha256.js";
 import { isValidStockCode, normalizeStockCode } from "./stock-code.js";
 
 // JPX は 2026-08-10 〜 2026-09-10 の間に配布形式を .xls から .xlsx へ差し替えた。
@@ -61,7 +62,12 @@ export function parseJpxAsOf(value: unknown): string {
  * @throws HTTP エラー / XLS パース失敗時
  */
 export async function downloadJpxListing(): Promise<JpxRow[]> {
+  // 未設定の保管先で一次取得を始めない。解析失敗の原文も同じ窓口で残す。
+  notionEnv.NOTION_TOKEN();
+  notionEnv.NOTION_ARCHIVE_PAGE_ID();
   const res = await fetch(JPX_LISTING_URL, {
+    redirect: "manual",
+    signal: AbortSignal.timeout(30_000),
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0",
@@ -69,7 +75,40 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,*/*",
     },
   });
-  if (!res.ok) {
+  const buf = new Uint8Array(await res.arrayBuffer());
+  const fetchedAt = new Date().toISOString();
+  const sha256 = await sha256HexBytes(buf);
+  // 非200原文は受理形式gzipへlossless包装し、空bodyも実体保管する。
+  const archiveBytes = res.status === 200 ? buf : new Uint8Array(await new Response(
+    new Blob([buf]).stream().pipeThrough(new CompressionStream("gzip"))
+  ).arrayBuffer());
+  // 同じ基準月の訂正版も別原本として保存する。旧月キーの原本は保持する。
+  // パーサ由来の基準日・件数は、物理照合前のメタデータへ補作しない。
+  const files = [{
+    bytes: archiveBytes,
+    filename: res.status === 200 ? `data_j-${sha256}.xlsx` : `data_j-http-${res.status}-${sha256}.gz`,
+    contentType: res.status === 200
+      ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      : "application/gzip",
+  }];
+  const archived = await recordPrimaryData({
+    service: "universe",
+    key: res.status === 200 ? `jpx-listing-sha256-${sha256}` : `jpx-listing-http-${res.status}-sha256-${sha256}`,
+    source: JPX_LISTING_URL,
+    fetchedAt,
+    metadata: {
+      status: res.status, responseUrl: res.url,
+      contentType: res.headers.get("content-type"), bytes: buf.byteLength, sha256,
+      archiveEncoding: res.status === 200 ? "identity" : "gzip",
+    },
+    files,
+    force: false,
+  });
+  if (archived.fileTooLarge) {
+    throw new Error("JPX listing 原本が容量上限で未保管のため停止");
+  }
+  await verifyArchivedAttachments(archived.pageId, files, "JPX listing 原本");
+  if (res.status !== 200) {
     // 404 は配布形式の差し替えを真っ先に疑う (2026-09 に .xls → .xlsx が起きた)。
     // ここで黙って空配列を返すと母集団が全滅するので必ず throw する。
     throw new Error(
@@ -79,8 +118,6 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
           : "")
     );
   }
-  const buf = new Uint8Array(await res.arrayBuffer());
-
   const workbook = XLSX.read(buf, { type: "array" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!sheet) {
@@ -134,34 +171,6 @@ export async function downloadJpxListing(): Promise<JpxRow[]> {
       `JPX XLS: 基準日が複数混在しています: ${[...sourceDates].join(", ")}`
     );
   }
-  const sourceAsOf = rows[0].asOf;
-  const sourceMonth = sourceAsOf.slice(0, 7);
-
-  // ルール6: JPX 公式 XLS は物理ファイルの一次取得物。母集団 (universe)
-  // の正本ソースなので、その実体を Notion へ必ずアップロードする。
-  // 実行月ではなくファイル内の基準月をキーにする。公開差替え前の旧ファイルを
-  // 翌月名で誤アーカイブせず、同一の一次データは冪等に skip する。
-  await recordPrimaryData({
-    service: "universe",
-    key: `jpx-listing-${sourceMonth}`,
-    source: JPX_LISTING_URL,
-    metadata: {
-      rowCount: rows.length,
-      listedEquityCount: rows.filter(isListedEquity).length,
-      bytes: buf.byteLength,
-      sourceAsOf,
-      sourceMonth,
-    },
-    files: [
-      {
-        bytes: buf,
-        filename: `data_j-${sourceAsOf}.xlsx`,
-        contentType:
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      },
-    ],
-  });
-
   return rows;
 }
 
