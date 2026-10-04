@@ -177,7 +177,7 @@ JPX 告知 (2026-07-06)「信用取引残高の公表情報の変更日及び今
   にして既存 `期間|指標|区分` キーを維持する (key 契約)。公式数量/金額 SUM、
   公式率の SUM 禁止、派生率は式・分母を明示 (`売/(売+買)`・分母 0 は失敗)、
   NULL 前日比は 0 埋めせず null 伝播、分類不明・coverage 不足は成功にしない。
-  JPX 原本への再取得なし (初回取込・readback は別途 grant 待ち)。
+  JPX原本への再取得なし。通常信用残と資金フローの実受入・readbackは[自動処理の実行検証](./test-logs/automation-verification-20261004.md)に記録する。
 
 ## 実装ファイル一覧 (Phase 0/1)
 
@@ -205,10 +205,10 @@ DB へのつなぎ (`services/moneyflow/lib/adapters/<key>.ts`)」の 2 層で�
 
 ### 取込の流れ (`scripts/moneyflow/lib/run-spec.ts`)
 
-1. `resolve()` で公表済みの最新バッチの冪等キーを決める (一覧ページ等の軽い取得)
+1. `resolve()`で公表済みの最新バッチの冪等キーを決める（一覧等の取得。TFX等は本体が必要）
 2. 未保管のキー → 本体を取得 → **先に** `recordPrimaryData()` で原ファイルを実体保管
    (解析が様式変更で失敗しても原本は残る) → 解析・検証 (`validateDrafts`) → 観測ログへ upsert
-3. 保管済みのキー → 取得元へは行かず、Notion の保管ファイルから再解析し、全観測行を照合する。
+3. 保管済みのキー → `resolve()`後の本体追加取得をせず、Notionの保管ファイルから再解析し、全観測行を照合する。
    同値の行は書かず、途中欠落や値・relationの不一致だけを修復する。
 
 Notionの書込結果不明や成功応答の不正ACKは、共有の `NotionUnknownResultError` で

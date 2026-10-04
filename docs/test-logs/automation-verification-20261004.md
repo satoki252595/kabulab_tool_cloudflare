@@ -258,3 +258,25 @@ native読取17:14:06Zはdeployment `d72e14f3-f2f3-482a-a55f-7708190b597c`（作�
 Node EDINETの通常stepは17:09:38–17:11:49Z、jobは17:11:55Zにfailureで終端した。正常JSONはscanned7 / matched0 / ingested0 / skipped0 / outOfUniverse0 / pending15 / cap=false / elapsed128.894秒、全体L2投影1,394。listErrors・ingestErrors0、原logのUnknown/Config・固定fatal文・HTTP429/503記載0で、15既存保留を理由に通常CLI1を維持した。保存一覧5日を再開し、実10/4・10/5の新一覧を各1回取得、文書源GET0。原log37,547B/SHA `d3fa0982670b4c6183772d6cf5c615d85dd706bdaed6b0baf5fe10cfc25974a1`。
 
 17:16:50.702Zに保存進捗をD1 SELECT1回だけで読み、全7tuple・15文書のstored reasonが`identity_unresolved`、inFlight0・完了集合との衝突0・同日再判定対象0を確認した。rows_read61 / rows_written0、追加取得元・Notion・モデル0。実10/4・10/5のqualified snapshot参照も保存し、D1原応答6,761B/SHA `1d3b5222cd0fd8687384ed25c56a48e48bbadaccbe6fea0d7f0e28bee7d9c52b`と全tupleを照合した（FS receipt SHA `986a2b66f27b78cb01c349b02d673b3338e887cb11616d98abf8bbc7c736bae3`）。stored reasonだけを真の同定不足と断定せず、保存原文・現在マスタとの原因分析を後続で記録する。
+
+## Node EDINETの15保留の原因確認
+
+全15文書を既存5日分のgzip原一覧へraw/gzipの全SHA・bytes・doc membershipで結び付けた。全て証券コードNULLで、年次種別・会計期末・状態3項目も正準schemaで照合した。保管済み10/2現在の金融庁公式マスタもZIPのCRCを含め全bytes確認し、提出者コード・法人名・法人番号が一意に一致し、当該時点の非上場・証券コード空欄と矛盾しなかった。当該過去マスタだけで現在の恒久除外へ変更はしない。
+
+17:25:50.391Zにwanted15提出者だけを現在の逆引きとcore・正準取込母集団へJOINするD1 SELECT1回を実行し、逆引き登録0行を確認した。HTTP200・rows_read15 / rows_written0 / retry0、原応答364B/SHA `6d927f91f9205aed9b2c319d4d72b61b540d0f721ff6a0994c89cd44aaa8d787`。元証券コードNULLと現在mapの正常resolverは全15NULLだった。
+
+前回の保存進捗と今回の15保留のdate/docId/reason集合は同じで、5保留日はfinished/sealed・checkedDate10/5、inFlight・完了集合衝突・同日再照合対象0。原一覧・元時計・IDを保持し、追加取得元・Notion・モデル・業務書込0。全native原tupleとalias、元schema・preflight pinのFS receipt4,315B/SHA `a99e2c559b7bf6374370f4f8507731f0281cadc1626483b43d962c921ab0134b`。今回の実証では新コード不具合はなく、源のコード未提供・現在逆引き不足として保留を維持する。
+
+## TFX原本の添付名上限
+
+PR308反映後の通常CFD月次だけを[37220188962](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37220188962)へ1回dispatchした。実HEAD d34、通常step17:21:30–17:21:42Z、job17:21:47Zにfailureで終端。Notion page作成が既知HTTP400 `validation_error` となり、ファイル名115文字が上限100文字を超えていた。
+
+これは数量「-」の解析前に保管が停止した結果で、finalJSON・rawの物理閉鎖・源本文のlocal保存は未達。原uploadはページへ添付されず、成功保管として数えない。受領source bodyとfull時計はGHA RAMから失われたため、後から運用時刻で補わない。NotionConfigErrorは元causeを保持し、解析・後続取得元0を確認した。原log39,925B/SHA `a229de1fe5e22ccbeae0b6c6ab262e56f5dc75eb57f4b544d82865830cc56c8e`、終端境界receipt SHA `4d339ab05a6d5e904f7105e90692b811671c649c1a375cfc4c4f7e81d12f3662`。
+
+共通TFX取得入口の添付名だけを100文字以内へ短縮し、原SHA・status・市場・immutableキーと期間キーを維持する修正を進める。raw readonly helperは条件不成立なので未実行。同grant再入・年次GET・成功26取得元の再取得・全文保管済みとの誤認は0。
+
+上限の修正は共通入口1箇所で4callerに適用し、HTML名86文字・gzip名84文字に収めた。HTTP status・64桁SHAを残し、市場は元キーとmetadataに保持する。旧実装で5回帰FAIL、新実装は4suite83 pass / 35既存実資料未配置skip・型・静的検査成功。全source/log pinのreceipt SHA `aa48cff3c6ff8a0ee872dcb96395d611b86274e922091ef9bf688c74490748f7`と独立レビューblocking0を確認した。
+
+[PR310](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/310)はHEAD `857d94ce7bc533a95b5df480f5a768673ffc6cf8`の全3チェック成功後、17:34:31Zにmain `247678cd2601cf9f6672e649ee41fc226c4d676a`へマージした。Macは17:34:48.377Zに同mainを受理し、clean/0600・accepted revisionのみ変更・登録不変、bootstrap/job0、receipt SHA `25287174d73f5cd895a26e3a0d9d6132b8bf10af4cfbf5accd05318f1813c177`。
+
+exact mainのWorkers Build `4a3915a7-7884-4bfd-a273-375ee23e2139`は17:35:07Zに成功。native読取17:35:27.497Zはdeployment `118350eb-79f8-412c-8e89-80778a7b2cf8`（作成17:35:02.686874Z）、version `29689192-9a41-4f2b-9ee7-36e98d046acf`の100%配信を確認した。versionの作成17:35:01.393048Zも照合し、Git SHAの無いnative注釈単独でcommit一致とは扱わない。通常TFX月次の次の1回は原HTTPを受信直後からlocalにも全bytes保存する準備をしており、ここでは実取得0。
