@@ -143,17 +143,19 @@ class TestFailOpenClosedBoundary:
     def test_タグ未宣言の列は名前つきで警告する(self) -> None:
         """未宣言 = 公開してよいと決まっていない = 公開しない（漏れる方向に倒れない）。
 
-        `core_stocks` の `id` / `is_active` / `is_yutai` / `created_at` /
-        `updated_at` は kabulab-cf が書く既存列で、タグを決めるには派生元の判断が
-        要る。推測で埋めず、決まっていないことを毎日見えるようにする。
+        既存11列は出自確認済み。新しい未宣言列は名前付きで報告し続ける。
         """
-        report = G.coverage(_observed())
+        observed = _observed()
+        observed["core_stocks"] = CORE_STOCKS_DDL.replace(
+            ", `sector33` TEXT)", ", `sector33` TEXT, `new_unclassified` TEXT)"
+        )
+        report = G.coverage(observed)
         undeclared = [w for w in report.warnings if "タグ未宣言の列" in w]
         assert len(undeclared) == 1, report.warnings
-        for column in ("id", "is_active", "is_yutai", "created_at", "updated_at"):
-            assert column in undeclared[0], column
+        assert "new_unclassified" in undeclared[0]
         # 決めた列が「未宣言」に混ざっていないこと
-        for column in ("sector33", "sector", "instrument_type", "market"):
+        for column in ("id", "is_active", "is_yutai", "created_at", "updated_at",
+                       "sector33", "sector", "instrument_type", "market"):
             assert f"'{column}'" not in undeclared[0], column
 
     def test_2_つの地図が食い違ったら失敗させる(self, monkeypatch) -> None:
@@ -195,14 +197,15 @@ PROD_TABLE_NAMES: frozenset[str] = frozenset(
         "swing_daily_ohlcv", "swing_entry_signals", "swing_market_context",
         "swing_sector_daily", "swing_stock_indicators",
         "yuho_documents", "yuho_order_facts", "yuho_overseas_facts",
+        "ir_disclosure_texts", "yuho_text_sections", "yuho_edinet_catchup_progress",
         "yutai_benefits", "yutai_genres",
+        "universe_official_events", "universe_overlay_state",
     }
 )
 
 
 class TestProductionSnapshot:
-    """地図が持つべき 28 表すべてに区分があること（2026-09-25 に 30→28。
-    `jss_xbrl_documents` / `jss_xbrl_elements` の退役。詳細は上のコメント）。
+    """通常 ops_check の実測33表すべてに区分があること。
 
     当初は「本番 PRAGMA を読めないので 27 表しか登録できない」としていたが、
     読み取り専用の `sqlite_master` 照会で残り 3 表（`swing_market_context` /
@@ -236,6 +239,13 @@ class TestProductionSnapshot:
 
 
 class TestClassification:
+    def test_自作ジャンルと_JPX_派生は異なる出自を保つ(self) -> None:
+        assert G.TABLE_LICENSE["yutai_genres"].kind is G.TableKind.UNIFORM
+        assert G.TABLE_LICENSE["yutai_genres"].tag is LicenseTag.COMMERCIAL_OK
+        for table in ("universe_official_events", "universe_overlay_state"):
+            assert G.TABLE_LICENSE[table].tag is LicenseTag.PERSONAL_ONLY
+        assert not [w for w in G.coverage(_observed()).warnings if "未宣言" in w]
+
     def test_子表_14_本と_jss_10_本すべてに区分がある(self) -> None:
         """実測で名前が裏付けられている表を取りこぼしていないこと。"""
         for table in cs.CHILD_TABLES:

@@ -50,13 +50,18 @@ describe("公開面", () => {
     expect(body.meta.attribution[0]).toContain("EDINET");
   });
 
-  it("鮮度から personal-only の行を落とす", async () => {
+  it("鮮度は明示の公開可能タグ2種だけを返す", async () => {
     const res = await app.request("/v1/meta/freshness", {}, env([
       { dataset: "d1_core_stock_financials", license_tag: "personal-only" },
       { dataset: "ir_disclosures", license_tag: "factual-cite" },
+      { dataset: "yuho_documents", license_tag: "commercial-ok" },
+      { dataset: "unclassified_null", license_tag: null },
+      { dataset: "unclassified_empty", license_tag: "" },
+      { dataset: "unclassified_unknown", license_tag: "unknown" },
+      { dataset: "unclassified_absent" },
     ]));
     const body = await res.json() as { data: { dataset: string }[] };
-    expect(body.data.map((r) => r.dataset)).toEqual(["ir_disclosures"]);
+    expect(body.data.map((r) => r.dataset)).toEqual(["ir_disclosures", "yuho_documents"]);
   });
 
   it("不正な sha256 を 400 で弾く", async () => {

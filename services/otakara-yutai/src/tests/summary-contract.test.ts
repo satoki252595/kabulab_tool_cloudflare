@@ -35,6 +35,24 @@ it("選択・保有・抽選・応募条件を全経路で検証し、株数を�
   expect(missingSummaryConditions("株主名簿に記載又は記録された株主は商品又は寄付を選択", "商品")).toEqual(["choice_condition_missing"]);
 });
 
+it.each(["6カ月以上保有", "6カ月以上保有、6か月以上継続保有"])(
+  "実期間の同値表記 %s を閾値・比較条件を保って照合する", (source) => {
+    // 2026-10-05 の同原文生成で、正しい6か月表記が期間欠落として拒否された。
+    const context = { minShares: [100], recordMonths: [3] };
+    for (const unit of ["か月", "ヶ月", "カ月", "ヵ月"]) {
+      const summary = `6${unit}以上保有`;
+      expect(missingSummaryConditions(source, summary)).toEqual([]);
+      expect(isSummaryNumbersGrounded(source, summary, context)).toBe(true);
+    }
+    for (const summary of ["3か月以上保有", "6か月未満保有", "6か月以下保有", "6年保有", "180日保有", "6月保有"]) {
+      expect(missingSummaryConditions(source, summary)).toEqual(["holding_condition_missing"]);
+    }
+    for (const summary of ["3か月以上保有", "6年保有", "180日保有", "2026-6か月以上保有"]) {
+      expect(isSummaryNumbersGrounded(source, summary, context)).toBe(false);
+    }
+  },
+);
+
 describe("checkSummary — 本番で実在した違反", () => {
   it("注記記号の取り込みを検出する", () => {
     // 9042: 利用方法の説明文をそのまま持ち込んでいた
@@ -214,8 +232,8 @@ it("原文と同じ日数・か月期間だけを裏づけ、権利月や換算�
   expect(isSummaryNumbersGrounded("1年以上保有", "12か月以上保有", context)).toBe(false);
   expect(isSummaryNumbersGrounded("3か月以上保有", "90日以上保有", context)).toBe(false);
   expect(isSummaryNumbersGrounded("1日間利用可能", "一日間利用可能", context)).toBe(false);
-  expect(isSummaryNumbersGrounded("6か月以上保有", "6ヶ月以上保有", context)).toBe(false);
-  expect(isSummaryNumbersGrounded("6か月以上保有", "6カ月以上保有", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("6か月以上保有", "6ヶ月以上保有", context)).toBe(true);
+  expect(isSummaryNumbersGrounded("6か月以上保有", "6カ月以上保有", context)).toBe(true);
 });
 
 it("随時のrecipient0を暦0月の根拠にせず、他の実月・期間は同じ契約を保つ", () => {
