@@ -16,6 +16,7 @@ import logging
 
 from ..cloud_store.d1 import D1Error, D1Store
 from ..cloud_store.r2 import R2Error, R2Store
+from ..cloud_store.schema import JSS_TABLES_SQL, declared_tables
 from .runner import JobContext, build_parser, main_exit, run_job
 
 logger = logging.getLogger(__name__)
@@ -58,16 +59,15 @@ def execute(ctx: JobContext) -> None:
         return
     store = D1Store(settings, writer=JOB_NAME)
     try:
-        rows = store.query(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'jss_%' ORDER BY name"
-        )
+        rows = store.query(JSS_TABLES_SQL)
     except D1Error as exc:
         ctx.add_failure("D1", f"到達不能または権限不足: {exc}")
         return
     names = [r.get("name") for r in rows]
     logger.info("D1: 疎通OK jss_ テーブル %d 件: %s", len(names), ", ".join(names))
-    if len(names) < 10:
-        ctx.add_failure("D1", f"jss_ テーブルが {len(names)} 件しかない (期待 10 件)")
+    missing = sorted(declared_tables() - set(names))
+    if missing:
+        ctx.add_failure("D1", f"必須テーブルが不足: {', '.join(missing)}")
         return
     ctx.add_success()
 
