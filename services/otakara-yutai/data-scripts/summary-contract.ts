@@ -29,7 +29,7 @@ import { HEADED_MARK } from "./estimated-value-guard.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-05.10";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-05.11";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -47,7 +47,26 @@ export function missingSummaryConditions(description: string, summary: string): 
   if (choice.test(choices) && !choice.test(text)) missing.push("choice_condition_missing");
   const period = /(?<![0-9.,])([0-9]+|半)\s*(年|か月|ヶ月|カ月|ヵ月)\s*(以上|未満|以下|超)/g;
   const periods = (s: string): string[] => [...s.matchAll(period)].map(m => `${m[1]}${m[2]}${m[3]}`);
-  const requiredPeriods = [...new Set(periods(source))];
+  let periodSource = source;
+  const noteStart = source.indexOf("\n■継続保有期間について");
+  if (noteStart >= 0) {
+    // 実対象の期間見出しと定義欄が双方明示された場合だけ、別tierの
+    // 独立定義ラベルを条件に数えない。本文・例外・曖昧な説明は残す。
+    const headings = [...source.slice(0, noteStart).matchAll(/^【((?:[0-9]+|半)\s*(?:年|か月)\s*(?:以上|未満|以下|超))\s*(?:継続)?保有(?:株主)?】$/gm)];
+    const headingPeriods = [...new Set(headings.flatMap(m => periods(m[1])))];
+    if (headingPeriods.length === 1) {
+      const noteEnd = source.indexOf("\n■", noteStart + 1);
+      const end = noteEnd < 0 ? source.length : noteEnd;
+      const definition = /^((?:[0-9]+|半)\s*(?:年|か月)\s*(?:以上|未満|以下|超))\s*(?:継続)?保有(?:株主)?\s*(?:とは(?=[、,]?[ \t]*株主名簿(?:\(毎年[0-9]+月[0-9]+日(?:及び|および|・)[0-9]+月[0-9]+日\))?に[0-9]+株以上の保有が同一株主番号で[0-9]+回以上連続して(?:記録|記載)されたことをいいます[。]?[ \t]*$)|:(?=[ \t]*連続(?:して)?[ \t]*[0-9]+[ \t]*回以上[。]?[ \t]*$))/gm;
+      let note = source.slice(noteStart, end);
+      if ([...note.matchAll(definition)].some(m => periods(m[1])[0] === headingPeriods[0])) {
+        note = note.replace(definition,
+          (label, threshold: string) => periods(threshold)[0] === headingPeriods[0] ? label : label.slice(threshold.length));
+      }
+      periodSource = source.slice(0, noteStart) + note + source.slice(end);
+    }
+  }
+  const requiredPeriods = [...new Set(periods(periodSource))];
   const claimedPeriods = periods(text);
   const generalHolding = /保有期間(?:に応じ|別|により|によって)/.test(text) && !/[0-9]+[,.0-9]*\s*(?:万|千|百)?\s*(?:円|ポイント)/.test(text);
   if ((/保有期間|継続保有|長期保有/.test(source) || requiredPeriods.length > 0) &&
@@ -115,15 +134,17 @@ export function isSummaryNumbersGrounded(
   });
   if (!rangesGrounded) return false;
   const facts = (text: string, strict: boolean): { value: number; unit: string }[] | null => {
-    const normalized = normalizeMonthPeriods(text);
+    // Unicode省略記号は数値前の区切りだけで扱い、小数・桁区切りの
+    // 直後や数値間の省略を別の数値の根拠へ変えない。
+    const normalized = normalizeMonthPeriods(text.replace(/(?<![0-9０-９.,．，〇零一二三四五六七八九十百千万億兆])…(?=[0-9０-９])/g, " "));
     // 1万5千円の末尾5千円だけ、1億円の一部などを根拠にしない。
-    const pattern = /(?<![0-9.,万千百億兆])((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)\s*(万|千|百)?\s*(円|ポイント|枚|個|袋|パック|セット|冊|ケース|リットル|室|杯|台|箱|ゲーム|ホール|株|年|か月|月|日|回|名|人|点|口|泊|食|本|部|件|時間|kg|g|ml|L|%)/g;
+    const pattern = /(?<![0-9.,万千百億兆])((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)\s*(万|千|百)?\s*(円|ポイント|枚|個|袋|パック|セット|冊|ケース|リットル|室|杯|台|箱|ゲーム|ホール|商品|親等|種類|株|年|か月|月|日|回|名|人|点|口|泊|食|本|部|件|時間|kg|Kg|g|ml|L|%)/g;
     const matches = [...normalized.matchAll(pattern)];
     const remainder = normalized.replace(pattern, "");
     if (strict && (/[0-9]/.test(remainder) ||
-      /[〇零一二三四五六七八九十百千万億兆]+\s*(円|ポイント|枚|個|袋|パック|セット|冊|ケース|リットル|室|杯|台|箱|ゲーム|ホール|株|年|か月|月|日|回|名|人|点|口|泊|食|本|件|時間|kg|g|ml|L|%)/.test(remainder))) return null;
+      /[〇零一二三四五六七八九十百千万億兆]+\s*(円|ポイント|枚|個|袋|パック|セット|冊|ケース|リットル|室|杯|台|箱|ゲーム|ホール|商品|親等|種類|株|年|か月|月|日|回|名|人|点|口|泊|食|本|件|時間|kg|Kg|g|ml|L|%)/.test(remainder))) return null;
     return matches.map((m) => ({ value: Number(m[1].replaceAll(",", "")) * (m[2] === "万" ? 10000 : m[2] === "千" ? 1000 : m[2] === "百" ? 100 : 1),
-      unit: m[3] === "名" ? "人" : m[3] }));
+      unit: m[3] === "名" ? "人" : m[3] === "Kg" ? "kg" : m[3] }));
   };
   const have = facts(description, false);
   const wanted = facts(summaryWithoutRanges, true);
