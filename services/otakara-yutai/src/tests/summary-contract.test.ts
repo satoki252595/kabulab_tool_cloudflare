@@ -153,6 +153,17 @@ it("生成した円額・枚数・株数・保有条件を単位ごとに照合�
   expect(isSummaryNumbersGrounded("新米5kg", "新米 3kg", context)).toBe(false);
 });
 
+it("実原文の数量「1部」を照合し、数値・単位の変更は採用しない", () => {
+  // 2026-10-04 の通常 .3 実測で、原文と同じ「1部」が未対応単位として拒否された。
+  const source = "1部";
+  const context = { minShares: [100], recordMonths: [3] };
+  expect(isSummaryNumbersGrounded(source, "1部", context)).toBe(true);
+  expect(isSummaryNumbersGrounded(source, "１部", context)).toBe(true);
+  expect(isSummaryNumbersGrounded(source, "2部", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, "1本", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("一部は対象外", "一部は対象外", context)).toBe(true);
+});
+
 it("原文と同じ日数・か月期間だけを裏づけ、権利月や換算から期間を補わない", () => {
   const context = { minShares: [100], recordMonths: [3] };
   expect(isSummaryNumbersGrounded("利用期限30日", "30日間利用可能", context)).toBe(true);
