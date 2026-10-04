@@ -29,12 +29,17 @@ import { HEADED_MARK } from "./estimated-value-guard.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-04.8";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-05.9";
+
+/** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
+function normalizeMonthPeriods(text: string): string {
+  return text.normalize("NFKC").replace(/[ヶカヵ]月/g, "か月");
+}
 
 /** 全生成・取込経路で、選択・保有・抽選・応募条件の欠落を保留する。 */
 export function missingSummaryConditions(description: string, summary: string): string[] {
-  const source = description.normalize("NFKC");
-  const text = summary.normalize("NFKC");
+  const source = normalizeMonthPeriods(description);
+  const text = normalizeMonthPeriods(summary);
   const missing: string[] = [];
   const choice = /選[択べんぶび]|いずれか|または|又は/;
   // 株主名簿の「記載又は記録」は優待の選択肢ではない。
@@ -110,7 +115,7 @@ export function isSummaryNumbersGrounded(
   });
   if (!rangesGrounded) return false;
   const facts = (text: string, strict: boolean): { value: number; unit: string }[] | null => {
-    const normalized = text.normalize("NFKC");
+    const normalized = normalizeMonthPeriods(text);
     // 1万5千円の末尾5千円だけ、1億円の一部などを根拠にしない。
     const pattern = /(?<![0-9.,万千百億兆])((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)\s*(万|千|百)?\s*(円|ポイント|枚|個|株|年|か月|月|日|回|名|人|点|口|泊|食|本|部|件|時間|kg|g|ml|L|%)/g;
     const matches = [...normalized.matchAll(pattern)];
