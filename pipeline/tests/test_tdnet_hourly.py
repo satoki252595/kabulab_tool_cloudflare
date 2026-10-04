@@ -24,6 +24,19 @@ from jp_stock_pipeline.notion.client import NotionClient
 UTC = timezone.utc
 
 
+@pytest.mark.parametrize("failure", [mod.FetchError("HTTP 503"), ValueError("invalid response")])
+def test_unexpected_list_failure_stops_without_official_fallback(monkeypatch, tmp_path, failure):
+    from unittest.mock import Mock
+
+    listing = Mock(side_effect=failure)
+    official = Mock(side_effect=AssertionError("追加源取得禁止"))
+    monkeypatch.setattr(mod.tdnet_yanoshin, "list_disclosures", listing)
+    monkeypatch.setattr(mod.tdnet_official_fallback, "fetch_list_pages", official)
+    with pytest.raises(type(failure)):
+        mod._collect(_ctx(str(tmp_path)), date(2026, 6, 10))
+    assert listing.call_count == 1 and official.call_count == 0
+
+
 def _ctx(raw_data_dir: str, *, dry_run: bool = True) -> JobContext:
     settings = load_settings(env={"RAW_DATA_DIR": raw_data_dir}, dry_run=dry_run)
     # client は未使用のコラボレータ (dry_run=True 固定で token 不要)。本番性の
