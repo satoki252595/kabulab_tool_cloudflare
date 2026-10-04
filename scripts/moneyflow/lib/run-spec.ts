@@ -117,7 +117,7 @@ function parseAndValidate(
  * 取得元 1 件を実行し、取込ログ用の詳細文を返す。失敗は throw (呼び出し側で集計)。
  */
 export async function runSpec(spec: MoneyflowSourceSpec, ctx: SpecRunContext): Promise<string> {
-  const resolved = await spec.resolve(ctx.now);
+  const resolved = await spec.resolve(ctx.now, ctx.dryRun);
   const key = resolved.key;
 
   if (ctx.dryRun) {

@@ -15,9 +15,25 @@
  * テスト内で組み立てた **合成テストデータ** の HTML を使う (値は実データではない)。
  */
 import { existsSync, readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
+import { toNotionUpload } from "../../../../src/shared/notion-archive/file-upload.js";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NotionConfigError } from "../../../../src/shared/notion-archive/env.js";
+import { NotionUnknownResultError } from "../../../../src/shared/notion-archive/client.js";
+
+const custody = vi.hoisted(() => ({ record: vi.fn(), verify: vi.fn() }));
+vi.mock("../../../../src/shared/notion-archive/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../src/shared/notion-archive/index.js")>()),
+  recordPrimaryData: (...args: unknown[]) => custody.record(...args),
+  verifyArchivedAttachments: (...args: unknown[]) => custody.verify(...args),
+  notionEnv: { NOTION_TOKEN: vi.fn(), NOTION_ARCHIVE_PAGE_ID: vi.fn() },
+}));
+beforeEach(() => {
+  custody.record.mockReset().mockResolvedValue({ pageId: "raw-page", fileTooLarge: false });
+  custody.verify.mockReset().mockResolvedValue(undefined);
+});
 import {
   isMoneyflowFlowType,
   isMoneyflowFrequency,
@@ -521,6 +537,59 @@ describe("resolve()/fetch() (fetch をスタブ・合成テストデータ)", ()
     expect(init.headers["User-Agent"]).toMatch(/Mozilla\/5\.0/);
     const drafts = tfxClick365FxSpec.toObservations({ key: batch.key, files: batch.files });
     expect(() => validateDrafts(tfxClick365FxSpec.name, drafts, tfxClick365FxSpec.indicators)).not.toThrow();
+  });
+
+  it.each([tfxClick365CfdSpec, tfxClick365CfdAnnualSpec])("$name は期間を解析できない原文も先に全文保管・照合する", async (spec) => {
+    const bytes = utf8("<html>解析不能な原文</html>");
+    const fn = stubFetch({ [TFX_CLICKKABU365_CFD_URL]: bytes });
+    await expect(spec.resolve(NOW_2026_09_27)).rejects.toThrow(/<table>/);
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(custody.record).toHaveBeenCalledTimes(1);
+    const input = custody.record.mock.calls[0]![0];
+    expect(input).toMatchObject({ service: "moneyflow", source: TFX_CLICKKABU365_CFD_URL, force: false, metadata: { status: 200, bytes: bytes.length } });
+    expect(sameBytes(input.files[0].bytes, bytes)).toBe(true);
+    expect(input.key).toMatch(/^tfx-clickkabu365_cfd-raw-http-200-sha256-[a-f0-9]{64}$/);
+    expect(custody.verify).toHaveBeenCalledWith("raw-page", input.files, "TFX 原本");
+  });
+
+  it.each([new NotionUnknownResultError("unknown"), new NotionConfigError("config")])("原本保管のSTOP型は同一objectで伝播し解析へ進まない", async (error) => {
+    stubFetch({ [TFX_CLICK365_FX_URL]: utf8("解析不能な原文") });
+    custody.record.mockRejectedValueOnce(error);
+    await expect(tfxClick365FxSpec.resolve(NOW_2026_09_27)).rejects.toBe(error);
+    expect(custody.verify).not.toHaveBeenCalled();
+  });
+
+  it("原本readback不一致は品質エラー扱いで次sourceへ進ませず、元errorをcauseに保持する", async () => {
+    stubFetch({ [TFX_CLICK365_FX_URL]: utf8("解析不能な原文") });
+    const original = new Error("bytes mismatch");
+    custody.verify.mockRejectedValueOnce(original);
+    await expect(tfxClick365FxSpec.resolve(NOW_2026_09_27)).rejects.toMatchObject({ name: "NotionConfigError", cause: original });
+  });
+
+  it("非200原bodyはNotion受理gzipの全byte照合後にHTTPエラーを返す", async () => {
+    const bytes = utf8("HTTP失敗の原文");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array(bytes), { status: 503 })));
+    await expect(tfxClick365CfdSpec.resolve(NOW_2026_09_27)).rejects.toThrow(/HTTP 503/);
+    const input = custody.record.mock.calls[0]![0];
+    const f = input.files[0];
+    expect(input.metadata).toMatchObject({ status: 503, bytes: bytes.length, archiveEncoding: "gzip" });
+    expect(sameBytes(gunzipSync(f.bytes), bytes)).toBe(true);
+    expect(toNotionUpload(f.filename, f.contentType)).toEqual({ filename: f.filename, contentType: "application/gzip" });
+    expect(custody.verify).toHaveBeenCalledWith("raw-page", input.files, "TFX 原本");
+  });
+
+  it("容量上限はparse不成立に混ぜず後続sourceを停止する", async () => {
+    stubFetch({ [TFX_CLICK365_FX_URL]: fxBytes });
+    custody.record.mockResolvedValueOnce({ pageId: "raw-page", fileTooLarge: true });
+    await expect(tfxClick365FxSpec.resolve(NOW_2026_09_27)).rejects.toBeInstanceOf(NotionConfigError);
+    expect(custody.verify).not.toHaveBeenCalled();
+  });
+
+  it("dry-runは原本保管へ送信しない", async () => {
+    stubFetch({ [TFX_CLICK365_FX_URL]: fxBytes });
+    await tfxClick365FxSpec.resolve(NOW_2026_09_27, true);
+    expect(custody.record).not.toHaveBeenCalled();
+    expect(custody.verify).not.toHaveBeenCalled();
   });
 
   it("年次: 最新年からキーを決める", async () => {
