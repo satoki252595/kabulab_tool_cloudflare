@@ -243,6 +243,8 @@ Notionの書込結果不明や成功応答の不正ACKは、共有の `NotionUnk
 | World Bank 上場企業時価総額 | `worldbank-marketcap` | R4 | 年次 | 127 (最大154) | attribution-required (CC BY 4.0) |
 | 世界の主要指数・為替・金利・金・原油 (Yahoo) | `global-indices` | R4 | 週次 | 最大221 | personal-only |
 
+TFX の通常取込は、期間・数量の解析前に HTTP 原文と実受信時刻・status・SHA を実体保管し、Notion 添付を全文照合する。同じ原文は SHA キーで再利用し、月次・年次の期間キーは従来どおり維持する。非200原文も lossless gzip で残し、保管結果不明・設定不備・照合不一致では後続取得を停止する。数量の「-」は意味を推測して 0 にしない。dry-run は取得・解析のみで Notion へ送信しない。
+
 IMF CPIS・BIS・World Bank・日銀ストック表は **残高 (ストック)** であり、流れそのものではない
 (指標定義の「限界」に近似であることを明記)。各指標の定義・限界の全文は Notion「資金フロー｜指標定義」。
 

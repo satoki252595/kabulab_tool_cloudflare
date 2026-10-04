@@ -17,7 +17,8 @@
  * 冪等キー: 月次 `<spec名>-YYYY-MM` (ページの最新月)、年次 `<spec名>-YYYY` (ページの最新年)。
  * ページには更新日の記載も軽い一覧 API も無いため、`resolve()` で本体ページを 1 回だけ
  * 取得して最新期間からキーを決め、`fetch()` はそのバイト列をそのまま返す
- * (月次 spec と年次 spec は同じページをそれぞれ 1 回ずつ取得する)。
+ * (月次 spec と年次 spec は同じページをそれぞれ 1 回ずつ取得する)。通常実行は解析前に
+ * SHAキーの原本を実体保管・全文照合し、期間キーの冪等取込も従来どおり保つ。
  *
  * 1 バッチで記録するのは「ページに載っている全期間」(月次=7か月、年次=3年)。
  * ページは古い期間から順に消えていくため、毎回すべて送り直して、原資料の訂正と
@@ -41,6 +42,10 @@ import {
   type TfxMarket,
 } from "../sources/tfx-click365.js";
 import type { IndicatorDefInput, MoneyflowCategoryKind } from "../../../../src/shared/notion-archive/index.js";
+import { notionEnv, recordPrimaryData, verifyArchivedAttachments } from "../../../../src/shared/notion-archive/index.js";
+import { NotionConfigError } from "../../../../src/shared/notion-archive/env.js";
+import { NotionUnknownResultError } from "../../../../src/shared/notion-archive/client.js";
+import { sha256HexBytes } from "../../../../src/shared/sha256.js";
 import {
   monthRange,
   requireSpecFile,
@@ -526,17 +531,46 @@ interface FetchedPage {
  * ページを取得したままのバイト列で返す (1 回の GET)。
  * @throws HTTP エラー・本文が空の場合
  */
-async function fetchPageBytes(cfg: MarketConfig): Promise<FetchedPage> {
+async function fetchPageBytes(cfg: MarketConfig, dryRun: boolean): Promise<FetchedPage> {
+  if (!dryRun) {
+    notionEnv.NOTION_TOKEN();
+    notionEnv.NOTION_ARCHIVE_PAGE_ID();
+  }
   const url = resolveTfxClick365Url(cfg.market);
-  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT }, redirect: "manual", signal: AbortSignal.timeout(30_000) });
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const fetchedAt = new Date().toISOString();
+  if (!dryRun) {
+    // 期間の解決・数値の解析より先に、受信した原文をimmutable SHAキーで残す。
+    // 非200/空bodyもgzip包装し、原文の欠損や数値を補完しない。
+    const sha256 = await sha256HexBytes(bytes);
+    const identity = res.status === 200 && bytes.length > 0;
+    const archiveBytes = identity ? bytes : new Uint8Array(await new Response(
+      new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"))
+    ).arrayBuffer());
+    const key = `tfx-${cfg.market}-raw-http-${res.status}-sha256-${sha256}`;
+    const files = [{ bytes: archiveBytes, filename: `${key}.${identity ? "html" : "gz"}`, contentType: identity ? HTML_CONTENT_TYPE : "application/gzip" }];
+    try {
+      const archive = await recordPrimaryData({ service: "moneyflow", key, source: url, fetchedAt,
+        metadata: { market: cfg.market, status: res.status, responseUrl: res.url, contentType: res.headers.get("content-type"), bytes: bytes.length, sha256, archiveEncoding: identity ? "identity" : "gzip" },
+        files, force: false });
+      if (archive.fileTooLarge) throw new NotionConfigError("TFX 原本が容量上限で未保管のため停止");
+      await verifyArchivedAttachments(archive.pageId, files, "TFX 原本");
+    } catch (error) {
+      if (error instanceof NotionUnknownResultError || error instanceof NotionConfigError) throw error;
+      // readbackのgeneric不一致もknown parse errorへ落とさず、後続sourceを停止。
+      const stop = new NotionConfigError("TFX 原本の保管・全文照合に失敗したため停止");
+      stop.cause = error;
+      throw stop;
+    }
+  }
   if (!res.ok) {
     throw new Error(`[${cfg.monthlySpecName}] TFX ページの取得に失敗しました: HTTP ${res.status} ${res.statusText} (${url})`);
   }
-  const bytes = new Uint8Array(await res.arrayBuffer());
   if (bytes.byteLength === 0) {
     throw new Error(`[${cfg.monthlySpecName}] TFX ページの本文が空です (${url})`);
   }
-  return { url, bytes, fetchedAt: new Date().toISOString() };
+  return { url, bytes, fetchedAt };
 }
 
 /**
@@ -814,9 +848,9 @@ function monthlySpec(cfg: MarketConfig): MoneyflowSourceSpec {
   return {
     name: cfg.monthlySpecName,
     indicators: cfg.monthlyIndicators,
-    async resolve(now) {
+    async resolve(now, dryRun = false) {
       const context = `[${cfg.monthlySpecName}]`;
-      const page = await fetchPageBytes(cfg);
+      const page = await fetchPageBytes(cfg, dryRun);
       const data = parsePage(page.bytes, cfg, context, page.fetchedAt);
       const latest = latestTfxPublishedPeriod(data.monthlyVolume);
       assertFresh(latest, now, context);
@@ -834,9 +868,9 @@ function annualSpec(cfg: MarketConfig): MoneyflowSourceSpec {
   return {
     name: cfg.annualSpecName,
     indicators: cfg.annualIndicators,
-    async resolve(now) {
+    async resolve(now, dryRun = false) {
       const context = `[${cfg.annualSpecName}]`;
-      const page = await fetchPageBytes(cfg);
+      const page = await fetchPageBytes(cfg, dryRun);
       const data = parsePage(page.bytes, cfg, context, page.fetchedAt);
       // ページ自体が更新され続けているか (月次の最新月) も確かめる
       const latestMonth = latestTfxPublishedPeriod(data.monthlyVolume);

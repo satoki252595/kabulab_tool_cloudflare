@@ -177,7 +177,9 @@ describe("runSpec", () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const { runSpec } = await import("./run-spec.js");
     const { spec, fetchImpl } = makeSpec();
+    const resolve = vi.spyOn(spec, "resolve");
     const detail = await runSpec(spec, ctx(true));
+    expect(resolve).toHaveBeenCalledWith(expect.any(Date), true);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     for (const fn of [notion.isArchived, notion.recordPrimaryData, notion.upsertObservation, notion.ensureObservationsDb, notion.verifyObservedBatch]) {
       expect(fn).not.toHaveBeenCalled();
