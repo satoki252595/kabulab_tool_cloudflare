@@ -200,7 +200,7 @@ export type CarryPlan = {
   carried: Map<string, CarriedInterpretation>;
   /** 単発権利日も同じ掲載文・株数・月の行へ保持する。解釈なしの行も対象。 */
   carriedRecordDates: Map<string, string | null>;
-  /** 厳密判定に落ちて値ごと null で戻すキー (要約は保持)。 */
+  /** 厳密判定・条件欠落で null に戻すキー。条件欠落は要約も再作成へ回す。 */
   nulledKeys: Set<string>;
   /** qualifier 通過で legacy-null から company に上がるキー。 */
   promotedKeys: Set<string>;
@@ -539,10 +539,9 @@ export async function importYutaiFull(
   const droppedInterpretations = [...carried.keys()].filter((k) => !plannedKeys.has(k)).length;
   console.info(`  既存の解釈を退避: ${carried.size}件`);
   if (nulledKeys.size > 0) {
-    // 共有厳密判定に落ちた値 (tier-pick・選択肢・概算・根拠なし等) は要約だけ
-    // 戻し、値ごと null で戻す (source 付け替えで値を温存しない)。
-    // null は有効な終端状態なので再 task 化は要らない。
-    console.warn(`  不認定の推定値を null で戻す (要約は保持): ${nulledKeys.size}件`);
+    // 値だけの不認定は要約を保持。適用条件が落ちた要約は値・出典も null にし、
+    // 次の自動要約で再作成する。source 付け替えで未確認の値を温存しない。
+    console.warn(`  不認定の推定値・条件欠落の解釈を null で戻す: ${nulledKeys.size}件`);
   }
   if (promotedKeys.size > 0) {
     console.info(`  厳密判定を通過した legacy-null を company に昇格: ${promotedKeys.size}件`);
