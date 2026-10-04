@@ -143,4 +143,8 @@ PR306の初回CIはPython成功、TypeScript側4,610 pass・既存433 skip・新
 
 共有Notion入口でも、非読取の成功応答本文をdecodeできない場合は書込結果不明として再送0で停止する。read-listの厳密検証・GETの従来エラー・既知HTTP400/429の扱いを保持する。新回帰は旧実装の後続継続・ID未確定成功・SyntaxErrorで失敗し、統合8suite148テストは成功した。通常allは29取得元・定義163、実株価10/1を固定入力として1回実行する準備を済ませ、実行前の取得元・モデル・Notionは0。
 
+同じ原本保管callerのdaily/intraは、保管結果不明の後に最終summaryをNotionへ追加送信していた。元errorを既存`archiveSummaryOrFatal()`へ渡し、同型unknownだけcallback前に終了2とする。私有local summaryと全対象accountingは維持し、既知の原文エラー・R2結果不明では従来のNotion証跡経路を保持する。旧実装の新配管2回帰はUNKNOWN後の追加POSTで失敗し、修正3suite73 pass・既存3 skip、型・静的検査が成功。独立レビューもblocking0。
+
+Node TDnet通常8日[37210263415](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37210263415)は14:57:45Zに成功。実範囲20260927–20261004の一覧1,480件・対象母集団1,292件をD1へ登録した。銘柄別243社の二次処理はcreated99 / skipExisting345 / rowErrors0で、既定12分枠のreachedDeadline=true、未分類488を保持した。全二次処理の完了とは扱わず、次定時の再開経路を確認する。原本/PDFの全文照合は通常コード経路がエラーなく通った根拠として記録し、Pythonの明示読戻しログとは区別する。
+
 VWAP修復前のreadonly PREは14:50:38.106Zに全2,592件を完了し、範囲保護の全件適合・native読取障害0。旧本文447,244,325Bと保存版、提案本文464,125,156Bを私有fsyncで確認した（明示不存在1件）。receipt SHA `67a7e7defdb21e35342666a27ee7da0c1ccae1508460b3633e765d220171b96a`を固定し、取得元・Notion・PUT0のまま、新main反映後の原本保全と通常保存を待つ。
