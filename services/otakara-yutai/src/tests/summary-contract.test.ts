@@ -164,6 +164,24 @@ it("実原文の数量「1部」を照合し、数値・単位の変更は採用
   expect(isSummaryNumbersGrounded("一部は対象外", "一部は対象外", context)).toBe(true);
 });
 
+it("実在の株数範囲は下限recipientと原文の全範囲で照合する", () => {
+  // 2026-10-04の21時定時実行で、正しい範囲が上限株数だけで誤拒否された。
+  const source = "100株以上200株未満";
+  const context = { minShares: [100], recordMonths: [3] };
+  expect(isSummaryNumbersGrounded(source, source, context)).toBe(true);
+  expect(isSummaryNumbersGrounded("1,000株以上2,000株未満", "1000株以上2000株未満", { ...context, minShares: [1000] })).toBe(true);
+  expect(isSummaryNumbersGrounded(source, "100株以上300株未満", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, "100株以上200株以下", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, "200株", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, source, { ...context, minShares: [100, 200] })).toBe(false);
+  expect(isSummaryNumbersGrounded(source, source, { ...context, minShares: [] })).toBe(false);
+  expect(isSummaryNumbersGrounded("100株以上・別条件200株未満", source, context)).toBe(false);
+  expect(isSummaryNumbersGrounded("100株以上100株未満", "100株以上100株未満", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("1,2株以上200株未満", "12株以上200株未満", { ...context, minShares: [12] })).toBe(false);
+  expect(isSummaryNumbersGrounded("-100株以上200株未満", source, context)).toBe(false);
+  expect(isSummaryNumbersGrounded("1万100株以上200株未満", source, context)).toBe(false);
+});
+
 it("原文と同じ日数・か月期間だけを裏づけ、権利月や換算から期間を補わない", () => {
   const context = { minShares: [100], recordMonths: [3] };
   expect(isSummaryNumbersGrounded("利用期限30日", "30日間利用可能", context)).toBe(true);
