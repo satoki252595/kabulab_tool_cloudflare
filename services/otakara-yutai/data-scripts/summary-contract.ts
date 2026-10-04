@@ -29,7 +29,7 @@ import { HEADED_MARK } from "./estimated-value-guard.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-04.7";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-04.8";
 
 /** 全生成・取込経路で、選択・保有・抽選・応募条件の欠落を保留する。 */
 export function missingSummaryConditions(description: string, summary: string): string[] {
@@ -86,13 +86,19 @@ export function isSummaryNumbersGrounded(
   shortSummary: string,
   context: { minShares: readonly number[]; recordMonths: readonly number[] },
 ): boolean {
+  // 実製品名の3Dは数量ではない。同じ製品語が原文にもある場合だけを
+  // 数値検査から外し、33D/13Dや語の後の額・率・数量には触れない。
+  const productName = /(?<![0-9A-Za-z.,+\-万千百億兆])3Dプリンター住宅/g;
+  const sourceProductNames = new Set([...description.normalize("NFKC").matchAll(productName)].map(m => m[0]));
+  const normalizedSummary = shortSummary.normalize("NFKC").replace(productName, name =>
+    sourceProductNames.has(name) ? name.slice(2) : name);
   // 上限株数はrecipientの下限ではない。原文と同じ完全な範囲だけを
   // 下限recipientに結び付け、上限単体や別tierを根拠にしない。
   const shareRange = /(?<![0-9.,+\-万千百億兆])([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*株\s*以上\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*株\s*未満/g;
   const ranges = [...description.normalize("NFKC").matchAll(shareRange)].map((m) =>
     [Number(m[1].replaceAll(",", "")), Number(m[2].replaceAll(",", ""))]);
   let rangesGrounded = true;
-  const summaryWithoutRanges = shortSummary.normalize("NFKC").replace(shareRange, (_, low: string, high: string) => {
+  const summaryWithoutRanges = normalizedSummary.replace(shareRange, (_, low: string, high: string) => {
     const lower = Number(low.replaceAll(",", ""));
     const upper = Number(high.replaceAll(",", ""));
     if (!Number.isSafeInteger(lower) || !Number.isSafeInteger(upper) || lower <= 0 || lower >= upper ||

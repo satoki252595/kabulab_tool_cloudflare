@@ -226,3 +226,28 @@ it("随時のrecipient0を暦0月の根拠にせず、他の実月・期間は�
   expect(isSummaryNumbersGrounded("サービス", "3月に利用可能", context)).toBe(true);
   expect(isSummaryNumbersGrounded("サービス", "3か月利用可能", context)).toBe(false);
 });
+
+it("原文と同じ3D住宅製品語の数字を数量と誤認せず、他の数字と条件を検証する", () => {
+  const context = { minShares: [100], recordMonths: [6] };
+  const source = "合成優待:3Dプリンター住宅の1%割引券2枚、100株以上、1年以上保有";
+  const summary = "3Dプリンター住宅1%割引券2枚、100株以上、1年以上保有";
+  expect(isSummaryNumbersGrounded(source, summary, context)).toBe(true);
+  expect(isSummaryNumbersGrounded(source.replace("3D", "３Ｄ"), summary, context)).toBe(true);
+  for (const changed of [
+    source.replace("3Dプリンター住宅", "住宅"),
+    source.replace("3D", "33D"),
+    source.replace("3D", "13D"),
+    source.replace("3D", "A3D"),
+  ]) expect(isSummaryNumbersGrounded(changed, summary, context)).toBe(false);
+  for (const changed of [
+    summary.replace("3D", "33D"),
+    summary.replace("3D", "13D"),
+    summary.replace("住宅", "車両"),
+    summary.replace("1%", "2%"),
+    summary.replace("2枚", "3枚"),
+    summary.replace("100株", "200株"),
+    summary.replace("1年以上", "2年以上"),
+    `${summary}500円`,
+    `${summary}2台`,
+  ]) expect(isSummaryNumbersGrounded(source, changed, context)).toBe(false);
+});
