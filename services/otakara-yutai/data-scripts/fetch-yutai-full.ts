@@ -70,7 +70,7 @@ async function archivePages(pages: readonly RawPage[], runId: string, source: st
 }
 
 /** 確定済みprivate gzipだけを共有保管へ渡し、全bytes照合まで取込を止める。 */
-async function archiveRawFile(path: string, runId: string, source: string, pages: number, rawBytes: number, fetchedAt: string) {
+export async function archiveRawFile(path: string, runId: string, source: string, pages: number, rawBytes: number, fetchedAt: string) {
   const bytes = Uint8Array.from(readFileSync(path));
   const key = `yutai-source-${runId}`;
   const files = [{ filename: `${key}.jsonl.gz`, bytes, contentType: "application/gzip" }];
