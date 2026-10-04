@@ -55,6 +55,7 @@ import {
   tfxClick365FxAnnualSpec,
   tfxClick365FxSpec,
   tfxPageFilename,
+  resolveTfxClick365Page,
 } from "./tfx-click365.js";
 
 const FIXTURE_DIR = fileURLToPath(new URL("../sources/fixtures/private/tfx-click365/", import.meta.url));
@@ -162,7 +163,9 @@ describe("指標定義", () => {
     }
     for (const i of [...TFX_CLICK365_CFD_INDICATORS, ...TFX_CLICK365_CFD_ANNUAL_INDICATORS]) {
       expect(i.sourceUrl).toBe(TFX_CLICKKABU365_CFD_URL);
-      expect(i.limitations).toMatch(/「／26」/);
+      expect(i.limitations).toMatch(/／26・／27/);
+      expect(i.limitations).toMatch(/2026-09-14/);
+      expect(i.limitations).toMatch(/上書きしない/);
     }
     // くりっく株365 の 2025 年分は年の途中からの値 (年間取引数量÷1日平均 = 74〜78 営業日)
     for (const i of TFX_CLICK365_CFD_ANNUAL_INDICATORS) {
@@ -183,9 +186,9 @@ describe("指標定義", () => {
     expect(tfxClick365CfdSpec.indicators).toBe(TFX_CLICK365_CFD_INDICATORS);
     expect(tfxClick365CfdAnnualSpec.indicators).toBe(TFX_CLICK365_CFD_ANNUAL_INDICATORS);
     expect(TFX_FX_INSTRUMENTS).toHaveLength(33);
-    expect(TFX_CFD_INSTRUMENTS).toHaveLength(11);
+    expect(TFX_CFD_INSTRUMENTS).toHaveLength(22);
     expect(new Set(TFX_FX_INSTRUMENTS).size).toBe(33);
-    expect(new Set(TFX_CFD_INSTRUMENTS).size).toBe(11);
+    expect(new Set(TFX_CFD_INSTRUMENTS).size).toBe(22);
   });
 });
 
@@ -198,7 +201,7 @@ const CFD_LABEL = "取引所株価指数証拠金取引（くりっく株３６�
 
 interface SynRow {
   label: string;
-  values: ReadonlyArray<number | null>;
+  values: ReadonlyArray<number | null | "-">;
 }
 
 const fmt = (v: number): string => v.toLocaleString("en-US");
@@ -213,10 +216,10 @@ function synTable(marketLabel: string, periodLabels: readonly string[], rows: re
     .map((r) => {
       const main =
         `<tr><th${withAvg ? ' rowspan="2"' : ""}>${r.label}</th>` +
-        r.values.map((v) => `<td>${v === null ? "" : fmt(v)}</td>`).join("") +
+        r.values.map((v) => `<td>${v === null ? "" : v === "-" ? v : fmt(v)}</td>`).join("") +
         `</tr>`;
       const avg = withAvg
-        ? `<tr>${r.values.map((v) => `<td>${v === null ? "(-)" : `(${fmt(Math.floor(v / 20))})`}</td>`).join("")}</tr>`
+        ? `<tr>${r.values.map((v) => `<td>${v === null || v === "-" ? "(-)" : `(${fmt(Math.floor(v / 20))})`}</td>`).join("")}</tr>`
         : "";
       return main + avg;
     })
@@ -251,6 +254,7 @@ function synPage(opts: {
   latestYear?: number;
   yearCount?: number;
   blank?: ReadonlyArray<{ instrument: string; period: string }>;
+  dash?: ReadonlyArray<{ instrument: string; period: string }>;
 }): string {
   const months = monthsDesc(opts.latestMonth ?? "2026-08", opts.monthCount ?? 7);
   const latestYear = opts.latestYear ?? 2025;
@@ -260,7 +264,9 @@ function synPage(opts: {
   const rows = (periods: readonly string[], base: number, step: number): SynRow[] =>
     opts.instruments.map((label, i) => ({
       label,
-      values: periods.map((p, j) => (isBlank(label, p) ? null : (i + 1) * step + base + j)),
+      values: periods.map((p, j) =>
+        (opts.dash ?? []).some((d) => d.instrument === label && d.period === p)
+          ? "-" : isBlank(label, p) ? null : (i + 1) * step + base + j),
     }));
   const monthPeriods = months.map((m) => m.period);
   const monthLabels = months.map((m) => m.label);
@@ -286,6 +292,50 @@ const SYN_CFD_INSTRUMENTS = ["金ETF リセット付証拠金取引／26", "日�
 const file = (key: string, html: string | Uint8Array): SpecFile => ({
   filename: tfxPageFilename(key),
   bytes: typeof html === "string" ? utf8(html) : html,
+});
+
+describe("2027年リセット銘柄の原名と上場前欠測", () => {
+  const oldName = "日経 225 リセット付証拠金取引／26";
+  const newName = "日経 225 リセット付証拠金取引／27";
+  const missing = monthsDesc("2026-09", 7).slice(1).map(({ period }) => ({ instrument: newName, period }));
+  const html = () => synPage({ marketLabel: CFD_LABEL, instruments: [oldName, newName], latestMonth: "2026-09", dash: missing,
+    blank: ["2025", "2024", "2023"].map((period) => ({ instrument: newName, period })) });
+
+  it("／26の全値を保ち、／27の9月原値だけ別区分で記録し、上場前を0にしない", () => {
+    const key = "tfx-click365-cfd-2026-09";
+    const drafts = tfxClick365CfdSpec.toObservations({ key, files: [file(key, html())] });
+    const original = tfxClick365CfdSpec.toObservations({ key, files: [file(key, synPage({ marketLabel: CFD_LABEL, instruments: [oldName], latestMonth: "2026-09" }))] });
+    expect(drafts.filter((d) => d.category === oldName)).toEqual(original);
+    expect(drafts.filter((d) => d.category === newName)).toHaveLength(2);
+    expect(drafts.filter((d) => d.category === newName).every((d) => d.period === "2026-09" && d.value > 0)).toBe(true);
+    const annualKey = "tfx-click365-cfd-annual-2025";
+    expect(tfxClick365CfdAnnualSpec.toObservations({ key: annualKey, files: [file(annualKey, html())] }).every((d) => d.category === oldName)).toBe(true);
+  });
+
+  it("最新月dash、未知／28、別市場dash、不正数量、欠測なのに数値の平均を拒否する", () => {
+    const key = "tfx-click365-cfd-2026-09", parse = (h: string) => tfxClick365CfdSpec.toObservations({ key, files: [file(key, h)] });
+    expect(() => parse(synPage({ marketLabel: CFD_LABEL, instruments: [newName], latestMonth: "2026-09", dash: [{ instrument: newName, period: "2026-09" }] }))).toThrow(/数量セル/);
+    expect(() => parse(html().replaceAll("／27", "／28").replaceAll("<td>-</td>", "<td></td>"))).toThrow(/未知/);
+    expect(() => parse(html().replace("<td></td>", "<td>-</td>"))).toThrow(/数量セル/);
+    expect(() => tfxClick365FxSpec.toObservations({ key: "tfx-click365-fx-2026-09", files: [file("tfx-click365-fx-2026-09", synPage({ marketLabel: FX_LABEL, instruments: ["米ドル／円"], latestMonth: "2026-09", dash: [{ instrument: "米ドル／円", period: "2026-08" }] }))] })).toThrow(/数量セル/);
+    expect(() => parse(html().replace("<td>-</td>", "<td>N/A</td>"))).toThrow(/数量セル/);
+    expect(() => parse(html().replace("<td>(-)</td>", "<td>(1)</td>"))).toThrow(/1日平均/);
+  });
+});
+
+describe("受信済み原本から正準resolve純部を再用", () => {
+  it.each(TFX_CLICK365_SPECS)("$name はHTTPなしで原時計と同bytesを保持する", async (spec) => {
+    const market = spec.name.includes("-cfd") ? "clickkabu365_cfd" : "click365_fx";
+    const kind = spec.name.endsWith("-annual") ? "year" : "month";
+    const bytes = utf8(synPage({ marketLabel: market === "click365_fx" ? FX_LABEL : CFD_LABEL, instruments: market === "click365_fx" ? SYN_FX_INSTRUMENTS : SYN_CFD_INSTRUMENTS }));
+    const sourceClock = "2026-09-27T03:00:01.123Z", url = market === "click365_fx" ? TFX_CLICK365_FX_URL : TFX_CLICKKABU365_CFD_URL;
+    const fetch = vi.fn(() => { throw new Error("HTTP禁止"); });vi.stubGlobal("fetch", fetch);
+    const resolved = resolveTfxClick365Page(market, kind, { url, bytes, fetchedAt: sourceClock }, NOW_2026_09_27);
+    const batch = await resolved.fetch();expect(batch.key).toBe(`${spec.name}-${kind === "month" ? "2026-08" : "2025"}`);
+    expect(batch.metadata.fetchedAt).toBe(sourceClock);expect(batch.metadata.resolvedAt).toBe(NOW_2026_09_27.toISOString());expect(sameBytes(batch.files[0]?.bytes, bytes)).toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(() => resolveTfxClick365Page(market, kind, { url: TFX_CLICK365_FX_URL + "/別URL", bytes, fetchedAt: sourceClock }, NOW_2026_09_27)).toThrow(/URL/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -463,10 +513,10 @@ describe("想定外の入力で throw する", () => {
     );
   });
 
-  it("未知の通貨ペア・銘柄 (新規上場・名称変更・「／26」の表記替え)", () => {
+  it("未知の通貨ペア・銘柄 (新規上場・名称変更・未確認のリセット年)", () => {
     const fx = synPage({ marketLabel: FX_LABEL, instruments: ["米ドル／円", "ビットコイン／円"] });
     expect(() => tfxClick365FxSpec.toObservations({ key: fxKey, files: [file(fxKey, fx)] })).toThrow(/未知の通貨ペア/);
-    const cfd = synPage({ marketLabel: CFD_LABEL, instruments: ["日経 225 リセット付証拠金取引／27"] });
+    const cfd = synPage({ marketLabel: CFD_LABEL, instruments: ["日経 225 リセット付証拠金取引／28"] });
     const cKey = "tfx-click365-cfd-2026-08";
     expect(() => tfxClick365CfdSpec.toObservations({ key: cKey, files: [file(cKey, cfd)] })).toThrow(/未知の銘柄/);
   });

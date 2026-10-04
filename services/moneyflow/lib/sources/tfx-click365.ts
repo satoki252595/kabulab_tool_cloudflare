@@ -109,7 +109,7 @@ export type TfxPeriodKind = "month" | "year";
 /**
  * 通貨ペア/銘柄 × 期間 1 セル分の出来高。
  *
- * - `total` が `undefined` のセルは「原資料が空欄」= その通貨ペア/銘柄が
+ * - `total` が `undefined` のセルは「原資料が空欄」または確認済みCFD／27の上場前「-」= その通貨ペア/銘柄が
  *   その期間にまだ上場していなかった(取扱いがなかった)ことを示す実際の
  *   欠損であり、0 で埋めない (ルール2)。
  * - `dailyAvg` は `total` があるときのみ意味を持つ。原資料が `(-)`
@@ -398,13 +398,21 @@ export function parseTfxClick365Html(
 
   const marketLabel = monthlyVolumeTable[0]!.marketLabel;
 
+  // 2026-08-14の公式発表で／27全11商品の取引開始は2026-09-14。
+  // 実原本の3～8月「-」は上場前欠測と解釈し、数量0とはしない。
+  // 他市場・年次・未確認リセット年・上場月以後の「-」は従来どおりSTOP。
+  function countOrMissing(raw: string | null, table: ParsedTable, instrument: string, period: string): number | undefined {
+    if (raw === null || (raw === "-" && market === "clickkabu365_cfd" && table.periodKind === "month" && instrument.endsWith("／27") && period < "2026-09")) return undefined;
+    return parseCount(raw);
+  }
+
   function toVolumeCells(table: ParsedTable): TfxVolumeCell[] {
     const cells: TfxVolumeCell[] = [];
     for (const row of table.volumeRows) {
       for (let idx = 0; idx < table.periods.length; idx++) {
         const period = table.periods[idx]!;
         const rawTotal = row.totals[idx]!;
-        const total = rawTotal === null ? undefined : parseCount(rawTotal);
+        const total = countOrMissing(rawTotal, table, row.instrument, period);
         if (!row.avgs) {
           throw new Error(`TFX: 出来高表の「${row.instrument}」に1日平均行がありません (想定外の構造)`);
         }
@@ -443,7 +451,7 @@ export function parseTfxClick365Html(
       for (let idx = 0; idx < table.periods.length; idx++) {
         const period = table.periods[idx]!;
         const rawTotal = row.totals[idx]!;
-        const value = rawTotal === null ? undefined : parseCount(rawTotal);
+        const value = countOrMissing(rawTotal, table, row.instrument, period);
         cells.push({ instrument: row.instrument, period, periodKind: table.periodKind, value });
       }
     }
