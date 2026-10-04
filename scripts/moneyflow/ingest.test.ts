@@ -209,6 +209,7 @@ describe("main() の --dry-run 契約", () => {
     for (const name of Object.keys(spies)) {
       expect(spies[name], `${name} が呼ばれていないこと`).not.toHaveBeenCalled();
     }
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("指標カタログの同期に失敗したら取込ログへ「失敗」を記録して exit 1 (無痕跡にしない)", async () => {
@@ -257,7 +258,7 @@ describe("main() の --dry-run 契約", () => {
     process.exitCode = undefined;
   });
 
-  it("dry-run でも検証を先に通し、不合格は ok:false にする (成功にしない)", async () => {
+  it("dry-run でも検証を先に通し、不合格は ok:false・exit 1 にする", async () => {
     vi.resetModules();
     process.argv = [...ORIGINAL_ARGV, "--dry-run", "--only=sector-turnover"];
 
@@ -307,6 +308,7 @@ describe("main() の --dry-run 契約", () => {
       expect(outcomes?.[0]?.ok).toBe(false);
       expect(outcomes?.[0]?.detail).toMatch(/実日足が母集団に足りません/);
       expect(ensureObservationsDb).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
     } finally {
       if (prevWorkerBase === undefined) delete process.env.WORKER_BASE_URL;
       else process.env.WORKER_BASE_URL = prevWorkerBase;
