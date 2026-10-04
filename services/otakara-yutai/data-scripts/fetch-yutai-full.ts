@@ -413,6 +413,11 @@ export async function main() {
       await archiveRawFile(gzipPath, runId, "minkabu search/detail response bytes (gzip lossless)", pages, rawBytes, lastClock);
     }
   }
+  await importCollectedYutaiData(allData, runId);
+}
+
+/** 全量・物理原本の照合済み収集結果を、通常のPRE保管・原子取込へ渡す。 */
+export async function importCollectedYutaiData(allData: StockYutaiData[], runId: string): Promise<void> {
   log.info(`\n✅ ${allData.length}銘柄の詳細データを取得\n`);
 
   // データ品質サマリー (表示用の union。合成には表ローカル月だけを使う)
