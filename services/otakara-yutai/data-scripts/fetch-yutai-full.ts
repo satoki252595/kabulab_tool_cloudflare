@@ -249,6 +249,8 @@ function parseMonths(text: string): number[] {
  * 権利月は各優待テーブルに直近で先行する「優待権利確定月」span から取る。
  * セクション先頭の span は配下の表への明示スコープとして継承でき (親スコープ
  * 継承)、表ごとの span があればそちらが優先する (表ローカル override)。
+ * 単一額面の全文セルに独立した末尾「(n月のみ)」がある実形は、表の月の
+ * subsetとしてその行だけに適用する。利用・申込等の時期は権利月と推定しない。
  * h3 を跨いだ span は適用しない。ページ上部の valuations の union を
  * 推測で被せない (旧形は 8022 の 3 月限定の表に 9 月行 37956 を誤合成した)。
  * 公式 span の「随時」は専用 enum 0。span が無い表、表が無いページは `unknown`
@@ -319,7 +321,7 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
       const where = heading ? `h3=${heading.slice(0, 60)}` : "pre-h3";
       return { status: "unknown", code, reason: `no-local-month: ${where}` };
     }
-    const localRecordMonths = scopeMonths;
+    const tableRecordMonths = scopeMonths;
     const rows = ev.tableHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi);
     let lastNotes = "";
     let shareOnly = false;
@@ -357,6 +359,20 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
       }
 
       const description = shareOnly ? heading : cells[1] || "";
+      let localRecordMonths = tableRecordMonths;
+      // 実原本の「1,000円相当\n（3月のみ）」「500円相当（3月のみ）」は
+      // 行全体の適用月。複数商品や利用・開催・申込・発送の月は拾わない。
+      const rowMonth = description.normalize("NFKC").match(
+        /^(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)円相当\s*\(([0-9]{1,2})月のみ\)$/,
+      );
+      if (rowMonth !== null) {
+        const month = Number(rowMonth[1]);
+        if (month < 1 || month > 12 || tableRecordMonths.includes(ANYTIME_RECORD_MONTH) ||
+            !tableRecordMonths.includes(month)) {
+          return { status: "unknown", code, reason: "row-month-scope-conflict" };
+        }
+        localRecordMonths = [month];
+      }
       const notes = cells[2] || lastNotes;
       if (cells[2]) lastNotes = cells[2];
 
