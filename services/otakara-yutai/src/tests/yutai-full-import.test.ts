@@ -480,6 +480,99 @@ describe("importYutaiFull の解釈の退避", () => {
 });
 
 describe("単発権利日の全量取込", () => {
+  const fullRowsOf = (stockId: number) => sqlite.prepare("SELECT * FROM yutai_benefits WHERE stock_id=? ORDER BY id").all(stockId);
+  const markPastOneoff = (stockId: number, recordDate = "2026-09-02") => {
+    sqlite.prepare("UPDATE yutai_benefits SET record_month=6, record_date=?, estimate_value_source='company', created_at=1750000000, updated_at=1760000000 WHERE stock_id=?")
+      .run(recordDate, stockId);
+  };
+  // 8508 の実基準日9/2・取得日10/4・新通常4tierを、既存の架空DB fixtureで再現する。
+  // provider原文はprivateに保持し、転載しない。基準日は受取期限ではない。
+  const changedFourTiers = (code: string): StockYutaiData => ({
+    ...fetched(code),
+    benefits: [100, 500, 10000, 20000].map(minShares => ({
+      minShares, description: "変更後の架空優待", notes: "", localRecordMonths: [6], heading: "株主優待",
+    })),
+  });
+  const actualSourceClock = "2026-10-04T13:06:24.774Z";
+
+  it("新掲載に無い過去単発は原12列・ID不変で残し、通常4行へ日付を転送しない", async () => {
+    const [oneoff, ...rest] = HELD;
+    markPastOneoff(oneoff.id);
+    const before = fullRowsOf(oneoff.id);
+    expect(Object.keys(before[0])).toHaveLength(12);
+    captureConsole();
+    const { sender } = makeAtomicSender();
+    await importYutaiFull(db, [changedFourTiers(oneoff.code), ...rest.map(s => fetched(s.code))], sender, actualSourceClock);
+    const after = fullRowsOf(oneoff.id);
+    expect(after).toHaveLength(5);
+    expect(after.filter(r => r.record_date !== null)).toEqual(before);
+    expect(after.filter(r => r.record_date === null).map(r => [r.min_shares, r.record_month])).toEqual([
+      [100, 6], [500, 6], [10000, 6], [20000, 6],
+    ]);
+    expect(isYutaiOf(oneoff.id)).toBe(1);
+  });
+
+  it("一覧全体に無い銘柄でも過去単発を原行で保持し、年間利回りから除外する", async () => {
+    const [oneoff, ...rest] = HELD;
+    markPastOneoff(oneoff.id);
+    const before = fullRowsOf(oneoff.id);
+    sqlite.prepare("UPDATE core_stocks SET is_yutai=0 WHERE id=?").run(oneoff.id);
+    sqlite.prepare("INSERT INTO otakara_stock_financials (stock_id, price, yutai_yield, data_date) VALUES (?, 1000, 1, '2026-10-02')").run(oneoff.id);
+    captureConsole();
+    const { sender } = makeAtomicSender();
+    const result = await importYutaiFull(db, rest.map(s => fetched(s.code)), sender, actualSourceClock);
+    expect(fullRowsOf(oneoff.id)).toEqual(before);
+    expect(isYutaiOf(oneoff.id)).toBe(1);
+    expect(result.abolishedCount).toBe(0);
+    expect(result.droppedInterpretations).toBe(0);
+    expect(sqlite.prepare("SELECT yutai_yield FROM otakara_stock_financials WHERE stock_id=?").get(oneoff.id))
+      .toEqual({ yutai_yield: null });
+  });
+
+  it("過去判定は原本の日本日付を使い、実行時計やUTC日付で補わない", async () => {
+    const [oneoff, ...rest] = HELD;
+    markPastOneoff(oneoff.id, "2026-10-03");
+    const before = fullRowsOf(oneoff.id);
+    captureConsole();
+    const { sender } = makeAtomicSender();
+    await importYutaiFull(db, [changedFourTiers(oneoff.code), ...rest.map(s => fetched(s.code))], sender, "2026-10-03T15:00:00.000Z");
+    expect(fullRowsOf(oneoff.id).filter(r => r.record_date !== null)).toEqual(before);
+  });
+
+  it.each(["2026-10-04", "2026-10-05"])("当日・未来の単発 %s の同定喪失は従来どおり削除前STOP", async recordDate => {
+    const [oneoff, ...rest] = HELD;
+    markPastOneoff(oneoff.id, recordDate);
+    const before = snapshot();
+    captureConsole();
+    const { sender, calls } = makeAtomicSender();
+    await expect(importYutaiFull(db, [changedFourTiers(oneoff.code), ...rest.map(s => fetched(s.code))], sender, actualSourceClock))
+      .rejects.toThrow(/単発権利日.*削除前/);
+    expect(snapshot()).toEqual(before);
+    expect(calls).toEqual([]);
+  });
+
+  it.each(["", "2026-02-30T00:00:00.000Z", "2026-10-04"])("不正な実取得時計 %s は削除前STOP", async clock => {
+    const before = snapshot();
+    const { sender, calls } = makeAtomicSender();
+    await expect(importYutaiFull(db, HELD.map(s => fetched(s.code)), sender, clock)).rejects.toThrow(/実取得時計/);
+    expect(snapshot()).toEqual(before);
+    expect(calls).toEqual([]);
+  });
+
+  it("過去単発の分離でも同一contextの通常月混在を隠さずSTOP", async () => {
+    const [oneoff, ...rest] = HELD;
+    markPastOneoff(oneoff.id);
+    sqlite.prepare("INSERT INTO yutai_benefits (stock_id, genre_id, description, short_summary, min_shares, record_month, estimated_value, estimate_value_source) SELECT stock_id, genre_id, description, short_summary, min_shares, record_month, estimated_value, estimate_value_source FROM yutai_benefits WHERE stock_id=?")
+      .run(oneoff.id);
+    const before = snapshot();
+    captureConsole();
+    const { sender, calls } = makeAtomicSender();
+    await expect(importYutaiFull(db, [changedFourTiers(oneoff.code), ...rest.map(s => fetched(s.code))], sender, actualSourceClock))
+      .rejects.toThrow(/権利日が食い違う/);
+    expect(snapshot()).toEqual(before);
+    expect(calls).toEqual([]);
+  });
+
   it("同一掲載文・株数・月の単発日を解釈なしでも保持し、新規通常行はNULLで入れる", async () => {
     const [oneoff, ...rest] = HELD;
     sqlite.prepare("UPDATE yutai_benefits SET record_month=9, record_date='2026-09-02', short_summary=NULL, estimated_value=NULL WHERE stock_id=?").run(oneoff.id);
