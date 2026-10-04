@@ -57,4 +57,8 @@ NodeのTDnet通常取得・backfillは原HTTPを解析前に実体保管し、�
 
 13:06:24Zまでの優待通常取得は一覧86＋詳細1,711の全1,797 GETがHTTP200で完走し、Notion/D1前のゲートで停止した。全量原文のoffline再解析は8,008予定行・権利月不明0、随時は1766/8617。gzip96,620,903B/SHA `17670fccfaebd81fb08241e818d96036c0ca30f26fd4a62f6836068905a8fbe9`と未圧縮JSONLの全バイト一致を確認し、canonical private tmpへ保存した。これは取得完了であり、原本のNotion保管とD1適用はまだ未実施。通常保管関数もexportの1行だけで再利用可能にし、新mainから同じ原本を渡して再GETを避ける。
 
+PR301は全3CI成功後、13:14:25Zにmain`64070f1076205195b550a917c8ed8a3cb1708c4a`へマージした。優待の旧取得プロセスは13:09:56Zに両permit未発行・Notion/D1 0で終了し、全原本とhandoffをcanonical private tmpへ保持した。
+
+後続の資金フローを追跡し、既存原本の読取が外部URLを受け入れる経路を検出した。完全キー・当月prefix・共通spec取込が通る`toArchivedRecord()`でNotion-hostedの実体添付だけを受け入れ、外部リンクを取得元へ再GETしない。既存2経路の回帰は旧コードで2件失敗、修正後は関連3suite41テスト・型検査が成功。通常hostedの同期間再利用と全文照合は維持する。
+
 PR #300は12:36:58Zにmain`79e6bbe63031ca8ddf86e571c8b4123654ed9058`へマージし、mainのCI3件成功、12:37:31Zのnative deploymentがversion`4d307582-410e-4705-b0cb-99d4b9939bcc`の100%配信であることを確認した。Macのkernel排他下で同mainへ更新し、canonical.envのaccepted revision以外は保持。通常の[cloud_check再実行37202784871](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37202784871)はR2両bucket・必須9表、processed=3 / failed=0で完了し、#299を閉じた。
