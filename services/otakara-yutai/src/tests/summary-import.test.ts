@@ -283,11 +283,11 @@ describe("planSummaryImport", () => {
     expect(p.updates[0].ids).toEqual([1011, 1012]);
   });
 
-  it("旧.3の結果・タスクを現行契約として取り込まない", () => {
-    const p = plan(result({ contractVersion: "2026-10-04.3" }));
+  it.each(["2026-10-04.3", "2026-10-05.10"])("旧%sの結果・タスクを現行契約として取り込まない", (contractVersion) => {
+    const p = plan(result({ contractVersion }));
     expect(p.updates).toEqual([]);
     expect(p.rejections.map((r) => r.reason)).toEqual(["contract_version"]);
-    const oldTasks = selectSummaryTasks(ROWS).map((task) => ({ ...task, contractVersion: "2026-10-04.3" }));
+    const oldTasks = selectSummaryTasks(ROWS).map((task) => ({ ...task, contractVersion }));
     const oldTaskPlan = planSummaryImport({ tasks: oldTasks, resultsText: result({}), currentRows: ROWS });
     expect(oldTaskPlan.updates).toEqual([]);
     expect(oldTaskPlan.rejections.map((r) => r.reason)).toEqual(["contract_version"]);
