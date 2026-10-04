@@ -152,8 +152,7 @@ async function persistPdfSentiments(
  * (tdnet_id → 抽出テキスト) を `ir_disclosure_texts` へ冪等保存する。
  * テキストあり → upsert + pdf_text_status=ok。テキストなし (画像化/
  * 暗号化等で抽出 0 文字) → 行なし + pdf_text_status=no_text。
- * 1 行の保存失敗でバッチを落とさず error を記録して継続する
- * (rowErrors の流儀 — ルール2)。
+ * 保存結果不明や対応 D1 行の不存在は throw。別の状態を書いて成功にしない。
  */
 async function persistPdfTexts(
   db: Database,
@@ -164,50 +163,36 @@ async function persistPdfTexts(
   );
   if (entries.length === 0) return;
   for (const [tdnetId, c] of entries) {
-    try {
-      if (c.text === null || c.text === undefined || c.text.length === 0) {
-        await db
-          .update(disclosures)
-          .set({ pdfTextStatus: "no_text" })
-          .where(eq(disclosures.tdnetId, tdnetId));
-        continue;
-      }
-      const hit = await db
-        .select({ id: disclosures.id })
-        .from(disclosures)
-        .where(eq(disclosures.tdnetId, tdnetId))
-        .limit(1);
-      if (hit.length === 0) continue; // D1 行なし (あり得ないが捏造しない)
-      const disclosureId = hit[0]!.id;
-      await db
-        .insert(disclosureTexts)
-        .values({
-          disclosureId,
-          tdnetId,
-          text: c.text,
-          charCount: c.text.length,
-        })
-        .onConflictDoUpdate({
-          target: disclosureTexts.disclosureId,
-          set: { text: c.text, charCount: c.text.length, tdnetId },
-        });
+    const hit = await db
+      .select({ id: disclosures.id })
+      .from(disclosures)
+      .where(eq(disclosures.tdnetId, tdnetId))
+      .limit(1);
+    if (hit.length !== 1) throw new Error(`PDF 本文の対応 D1 行がないため停止 tdnetId=${tdnetId}`);
+    const disclosureId = hit[0]!.id;
+    if (c.text === null || c.text === undefined || c.text.length === 0) {
       await db
         .update(disclosures)
-        .set({ pdfTextStatus: "ok" })
-        .where(eq(disclosures.id, disclosureId));
-    } catch (e) {
-      console.error(
-        `[ir-catalog] pdf_text 保存失敗 ${tdnetId}: ${(e as Error).message}`
-      );
-      try {
-        await db
-          .update(disclosures)
-          .set({ pdfTextStatus: "error" })
-          .where(eq(disclosures.tdnetId, tdnetId));
-      } catch {
-        // 状態記録自体に失敗したら諦める (NULL のまま = 未処理扱い)
-      }
+        .set({ pdfTextStatus: "no_text" })
+        .where(eq(disclosures.tdnetId, tdnetId));
+      continue;
     }
+    await db
+      .insert(disclosureTexts)
+      .values({
+        disclosureId,
+        tdnetId,
+        text: c.text,
+        charCount: c.text.length,
+      })
+      .onConflictDoUpdate({
+        target: disclosureTexts.disclosureId,
+        set: { text: c.text, charCount: c.text.length, tdnetId },
+      });
+    await db
+      .update(disclosures)
+      .set({ pdfTextStatus: "ok" })
+      .where(eq(disclosures.id, disclosureId));
   }
 }
 

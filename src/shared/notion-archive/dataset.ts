@@ -28,6 +28,7 @@
 import { assertCursorProgress, notionRequest, NotionUnknownResultError } from "./client.js";
 import { notionEnv, NotionConfigError } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
+import { verifyArchivedAttachments } from "./readback.js";
 import {
   assertAdoptedDatabaseSchema,
   createDatabaseOrAdopt,
@@ -848,7 +849,6 @@ export async function upsertDisclosuresByStock(
       let pageId: string;
       if (ex) {
         await notionRequest("PATCH", `/pages/${ex.pageId}`, { properties });
-        updated++;
         pageId = ex.pageId;
       } else {
         const createdPage = await notionRequest<{ id: string }>(
@@ -856,9 +856,18 @@ export async function upsertDisclosuresByStock(
           "/pages",
           { parent: { database_id: childDbId }, properties }
         );
-        created++;
         pageId = createdPage.id;
       }
+      if (pdfBytesForClassify !== null) {
+        await verifyArchivedAttachments(
+          pageId,
+          [{ filename: irFile[0].name, bytes: pdfBytesForClassify }],
+          "TDnet 開示 PDF",
+          "IR資料"
+        );
+      }
+      if (ex) updated++;
+      else created++;
       const writtenTitle = row.title.slice(0, 1900);
       const persisted: ExistingRow = {
         pageId,
