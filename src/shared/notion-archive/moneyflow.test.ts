@@ -138,6 +138,19 @@ describe("notion-archive moneyflow", () => {
       expect(result).toEqual({ pageId: "def-existing", outcome: "updated" });
     });
 
+    it("作成成功応答のIDが無ければ結果不明として停止し、再送しない", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [], has_more: false, next_cursor: null }]);
+      route("POST", "/v1/pages", [{}]);
+      const { upsertIndicatorDef } = await load();
+      const { NotionUnknownResultError } = await import("./client.js");
+      await expect(upsertIndicatorDef(dbId, {
+        key: "sector_turnover", displayName: "業種別売買代金", requirement: "R1", flowType: "売買代金",
+        description: "説明", sourceUrl: "https://example.test/source", license: "personal-only",
+        frequency: "週次", limitations: "限界",
+      })).rejects.toBeInstanceOf(NotionUnknownResultError);
+      expect(calls).toHaveLength(2);
+    });
+
     it("同一キーが2件ならどれも選ばず throw する (先頭選択禁止)", async () => {
       route("POST", `/v1/databases/${dbId}/query`, [
         { results: [{ id: "def-a" }, { id: "def-b" }] , has_more: false, next_cursor: null },
