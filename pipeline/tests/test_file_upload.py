@@ -411,9 +411,13 @@ class TestRawUploadError:
         if tampered:
             blobs[1] += b"unexpected"
         names = [artifact.filename, artifact.converted_paths[0].name, f"{parquet.name}.zip"]
+        if existing:
+            names[0] = "previous-capture.zip"
+            names[1] = "previous-capture_converted.csv"
         calls = []
         page = {"object": "page", "id": "page-protocol", "archived": False,
                 "properties": {
+                    S.RAW_PROP_FILENAME: {"type": "title", "title": [{"plain_text": names[0]}]},
                     S.RAW_PROP_SHA256: {"type": "rich_text", "rich_text": [
                         {"plain_text": artifact.sha256}]},
                     S.RAW_PROP_SIZE: {"type": "number", "number": artifact.size_bytes},

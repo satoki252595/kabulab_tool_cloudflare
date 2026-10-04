@@ -285,6 +285,12 @@ def _verify_raw_files(client: NotionClient, page_id: str, artifact: RawArtifact)
     if page.get("in_trash") is True:
         raise RawUploadError("⑤ 読戻しページがごみにある")
     props = page["properties"]
+    title = props[S.RAW_PROP_FILENAME]
+    if title.get("type") != "title" or not isinstance(title["title"], list):
+        raise RawUploadError("⑤ 読戻し原本ファイル名の形式が不正")
+    original_name = "".join(fragment["plain_text"] for fragment in title["title"])
+    if not original_name or Path(original_name).name != original_name:
+        raise RawUploadError("⑤ 読戻し原本ファイル名が不正")
     sha_prop = props[S.RAW_PROP_SHA256]
     rich = sha_prop["rich_text"]
     if sha_prop.get("type") != "rich_text" or not isinstance(rich, list):
@@ -307,16 +313,24 @@ def _verify_raw_files(client: NotionClient, page_id: str, artifact: RawArtifact)
     for path in paths:
         ext = path.suffix.lstrip(".").lower()
         wrapped = bool(ext and ext not in NOTION_UPLOAD_EXTENSIONS)
-        name = f"{path.name}.zip" if wrapped else path.name
+        # SHA 冪等キーは取得日をまたぐ。旧原本の実添付名を正本にし、
+        # 正規の変換版命名だけ同じ原本 stem に対応させる（値は全バイト照合）。
+        if path == artifact.local_path:
+            file_name = original_name
+        elif path.name.startswith(f"{artifact.local_path.stem}_converted."):
+            file_name = f"{Path(original_name).stem}{path.name[len(artifact.local_path.stem):]}"
+        else:
+            file_name = path.name
+        name = f"{file_name}.zip" if wrapped else file_name
         attachment = by_name[name]
         if attachment.get("type") != "file":
             raise RawUploadError("⑤ 読戻し添付が物理ファイルでない")
         content = client.download_file(attachment["file"]["url"])
         if wrapped:
             with zipfile.ZipFile(io.BytesIO(content)) as zf:
-                if zf.namelist() != [path.name] or zf.testzip() is not None:
+                if zf.namelist() != [file_name] or zf.testzip() is not None:
                     raise RawUploadError("⑤ 読戻し ZIP ラップの形式・CRC 不一致")
-                content = zf.read(path.name)
+                content = zf.read(file_name)
         if content != path.read_bytes():
             raise RawUploadError("⑤ 読戻し添付の全バイト不一致")
     logger.info("⑤ 物理読戻し全バイト一致: 添付 %d ファイル", len(paths))
