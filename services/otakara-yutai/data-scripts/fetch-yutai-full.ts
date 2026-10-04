@@ -413,11 +413,12 @@ export async function main() {
       await archiveRawFile(gzipPath, runId, "minkabu search/detail response bytes (gzip lossless)", pages, rawBytes, lastClock);
     }
   }
-  await importCollectedYutaiData(allData, runId);
+  if (lastClock === null) throw new Error("優待原本の実取得時計が無いためSTOP");
+  await importCollectedYutaiData(allData, runId, lastClock);
 }
 
 /** 全量・物理原本の照合済み収集結果を、通常のPRE保管・原子取込へ渡す。 */
-export async function importCollectedYutaiData(allData: StockYutaiData[], runId: string): Promise<void> {
+export async function importCollectedYutaiData(allData: StockYutaiData[], runId: string, sourceFetchedAt: string): Promise<void> {
   log.info(`\n✅ ${allData.length}銘柄の詳細データを取得\n`);
 
   // データ品質サマリー (表示用の union。合成には表ローカル月だけを使う)
@@ -440,7 +441,7 @@ export async function importCollectedYutaiData(allData: StockYutaiData[], runId:
     bodyBase64: preimageBytes.toString("base64"),
   }], `${runId}-preimage`, "D1 yutai_benefits complete row snapshot before source import (HTTP status not exposed)");
   if (preimage === undefined) throw new Error("優待の更新前スナップショットが無いためSTOP");
-  const result = await importYutaiFull(db, allData, createD1HttpBatchSender());
+  const result = await importYutaiFull(db, allData, createD1HttpBatchSender(), sourceFetchedAt);
   const retired = await moveToTrash({ service: "otakara-yutai", originPageId: preimage.pageId,
     reason: `優待原文取込 ${runId} が成功。更新前の全行スナップショットを復元用に保管。` });
   await verifyArchivedAttachments(retired.trashPageId, preimage.files, "優待更新前スナップショット退避");

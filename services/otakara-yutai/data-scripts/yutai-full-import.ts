@@ -12,7 +12,8 @@
  *
  * - 母集団の銘柄: 優待行を消して、今回の取得結果で作り直す。退避した解釈は内容キーで
  *   戻す。優待行を持っていたのに完全収集した一覧に無い銘柄は、優待行を消して is_yutai を
- *   false に落とす (優待の廃止)。
+ *   false に落とす (優待の廃止)。実取得日の日本日付より前の単発で新掲載に同定できない
+ *   行は元 ID・全列のまま残す。基準日経過を受取期限終了とは扱わない。
  * - 母集団外の銘柄 (is_active=0 = 東証の上場銘柄一覧に無い。地域取引所にだけ上場を続ける
  *   会社を含む / 非普通株 / 区分が NULL): 取得結果に載っていても取り込まず、既存の
  *   優待行と is_yutai にも触らない。
@@ -43,7 +44,7 @@
  * 廃止・中断再入の stale 利回りを直す。書き込み前の STOP では走らせない。
  * 書くのは yield + fetched_at / score3 だけ (price・data_date 等は不変)。
  */
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, notInArray, sql } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { toD1BatchStatements } from "../../../src/shared/db/d1-http-client.js";
 import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
@@ -231,28 +232,51 @@ export type PlannedRecipientGroups = ReadonlyMap<
   ReadonlyMap<string, { minShares: readonly number[]; recordMonths: readonly number[] }>
 >;
 
-export function planCarry(
-  rows: readonly CarrySourceRow[],
-  plannedMeta: ReadonlyMap<string, readonly string[]>,
-  plannedGroups: PlannedRecipientGroups,
-): CarryPlan {
-  const carried = new Map<string, CarriedInterpretation>();
-  const carriedRecordDates = new Map<string, string | null>();
-  const nulledKeys = new Set<string>();
-  const promotedKeys = new Set<string>();
+/** 過去単発を分離する前にも、壊れた日付・同一 context の曖昧さを拒否する。 */
+function assertCarryRowsCompatible(rows: readonly CarrySourceRow[]): void {
   const originals = new Map<string, CarrySourceRow>();
   for (const row of rows) {
     assertBenefitSchedule(row);
     const key = carryKey(row.code, carryBody(row.description), row.minShares, row.recordMonth);
     const original = originals.get(key);
-    if (original !== undefined && (original.shortSummary !== row.shortSummary ||
-        original.estimatedValue !== row.estimatedValue || original.estimateValueSource !== row.estimateValueSource)) {
-      throw new Error(`同一 context の元解釈が食い違うため STOP (code=${row.code})`);
+    if (original !== undefined) {
+      if (original.shortSummary !== row.shortSummary || original.estimatedValue !== row.estimatedValue ||
+          original.estimateValueSource !== row.estimateValueSource) {
+        throw new Error(`同一 context の元解釈が食い違うため STOP (code=${row.code})`);
+      }
+      if (original.recordDate !== row.recordDate) {
+        throw new Error(`同一 context の権利日が食い違うため STOP (code=${row.code})`);
+      }
     }
     originals.set(key, row);
-    if (carriedRecordDates.has(key) && carriedRecordDates.get(key) !== row.recordDate) {
-      throw new Error(`同一 context の権利日が食い違うため STOP (code=${row.code})`);
-    }
+  }
+}
+
+/** 原本の実取得時計だけを日本日付へ変換する。欠落時に実行日で補わない。 */
+function sourceJapanDate(sourceFetchedAt: string | undefined): string | undefined {
+  if (sourceFetchedAt === undefined) return undefined;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(sourceFetchedAt)) {
+    throw new Error("優待原本の実取得時計が不明または不正なため STOP");
+  }
+  const clock = new Date(sourceFetchedAt);
+  if (!Number.isFinite(clock.getTime()) || clock.toISOString() !== sourceFetchedAt) {
+    throw new Error("優待原本の実取得時計が不明または不正なため STOP");
+  }
+  return new Date(clock.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+export function planCarry(
+  rows: readonly CarrySourceRow[],
+  plannedMeta: ReadonlyMap<string, readonly string[]>,
+  plannedGroups: PlannedRecipientGroups,
+): CarryPlan {
+  assertCarryRowsCompatible(rows);
+  const carried = new Map<string, CarriedInterpretation>();
+  const carriedRecordDates = new Map<string, string | null>();
+  const nulledKeys = new Set<string>();
+  const promotedKeys = new Set<string>();
+  for (const row of rows) {
+    const key = carryKey(row.code, carryBody(row.description), row.minShares, row.recordMonth);
     if (row.recordDate !== null && !plannedMeta.has(key)) {
       throw new Error(`単発権利日の掲載文・株数・月を同定できないため削除前に STOP (code=${row.code})`);
     }
@@ -407,12 +431,16 @@ export function benefitRowsOf(
  * (本番は `createD1HttpBatchSender()`。省略時の silent skip はしない)。
  * 銘柄単位の batch が失敗したら後続保存・再計算を行わず throw する。
  * 応答不明を失敗銘柄の廃止として扱わず、自動再送もしない。
+ * `sourceFetchedAt` は物理保管済み原本の実受信時計。欠落時に現在時計で補わず、
+ * 新掲載で同定できない単発は従来の guard で STOP する。
  */
 export async function importYutaiFull(
   db: YutaiFullImportDb,
   allData: StockYutaiData[],
   sender: AtomicBatchSender,
+  sourceFetchedAt?: string,
 ): Promise<YutaiFullImportResult> {
+  const sourceDate = sourceJapanDate(sourceFetchedAt);
   // ---- 読み取り (ここから「書き込み」までは D1 に書かない) ----
 
   // 母集団と is_yutai を 1 回で引く。1 コードずつ引く形 (約 1,600 往復) にしない。
@@ -449,6 +477,7 @@ export async function importYutaiFull(
   // 母集団の銘柄の既存の優待行。消すのはこの行だけで、解釈もこの行から退避する。
   const existing = await db
     .select({
+      id: yutaiBenefits.id,
       stockId: yutaiBenefits.stockId,
       code: stocks.code,
       description: yutaiBenefits.description,
@@ -466,9 +495,9 @@ export async function importYutaiFull(
   const heldIds = new Set(existing.map((r) => r.stockId));
   const targetIds = new Set(targets.map((t) => t.stockId));
   const retained = [...heldIds].filter((id) => targetIds.has(id)).length;
-  const abolishedCount = heldIds.size - retained;
+  const missingCount = heldIds.size - retained;
   console.info(
-    `  優待行を持つ母集団の銘柄: ${heldIds.size}件 / うち今回も取得: ${retained}件 / 取得できず優待行を消す: ${abolishedCount}件`,
+    `  優待行を持つ母集団の銘柄: ${heldIds.size}件 / うち今回も取得: ${retained}件 / 今回の一覧に無い: ${missingCount}件`,
   );
   // 整数で比べる (retained / held < 0.95 を浮動小数で比べない)。
   if (retained * 100 < heldIds.size * MIN_YUTAI_COVERAGE_PERCENT) {
@@ -535,7 +564,23 @@ export async function importYutaiFull(
   // (掲載文 description は公開面に出せないため代わりが無い)。キーは (銘柄コード,
   // description, 株数, 権利月) の内容アドレスなので、context が変わらない限り
   // 作り直した行に戻せる。計画は純関数 `planCarry` (要約取込と同じ共有厳密判定)。
-  const { carried, carriedRecordDates, nulledKeys, promotedKeys } = planCarry(existing, plannedMeta, plannedGroups);
+  // 基準日が過ぎても受取期限が終わったとは限らない。新掲載文に同定できない過去単発は、
+  // 実取得日の日本日付より前のものだけ元 ID・全列のまま残す。通常行へ日付を移さない。
+  // 時計欠落・当日・未来は分離せず、planCarry の従来の同定不能 STOP に渡す。
+  assertCarryRowsCompatible(existing);
+  const preserved = existing.filter((r) => r.recordDate !== null && sourceDate !== undefined &&
+    r.recordDate < sourceDate && !plannedMeta.has(carryKey(r.code, carryBody(r.description), r.minShares, r.recordMonth)));
+  const preservedIds = new Set(preserved.map((r) => r.id));
+  const preservedByStock = new Map<number, number[]>();
+  for (const row of preserved) {
+    const ids = preservedByStock.get(row.stockId);
+    if (ids === undefined) preservedByStock.set(row.stockId, [row.id]);
+    else ids.push(row.id);
+  }
+  const abolishedCount = [...heldIds].filter((id) => !targetIds.has(id) && !preservedByStock.has(id)).length;
+  console.info(`  新掲載に無い過去単発を元行のまま保持: ${preserved.length}件`);
+  const { carried, carriedRecordDates, nulledKeys, promotedKeys } = planCarry(
+    existing.filter((r) => !preservedIds.has(r.id)), plannedMeta, plannedGroups);
   const droppedInterpretations = [...carried.keys()].filter((k) => !plannedKeys.has(k)).length;
   console.info(`  既存の解釈を退避: ${carried.size}件`);
   if (nulledKeys.size > 0) {
@@ -588,6 +633,11 @@ export async function importYutaiFull(
 
   let benefitCount = 0;
   const importedIds = new Set<number>();
+  const deleteMonthlyRows = (stockId: number) => {
+    const ids = preservedByStock.get(stockId);
+    return db.delete(yutaiBenefits).where(ids === undefined ? eq(yutaiBenefits.stockId, stockId) :
+      and(eq(yutaiBenefits.stockId, stockId), notInArray(yutaiBenefits.id, ids)));
+  };
   // ジャンルは slug で upsert し、消さない。母集団外の優待行が genre_id で参照しており
   // (外部キー ON DELETE no action)、id も変えない。
   const genreIds = new Map<string, number>();
@@ -612,7 +662,7 @@ export async function importYutaiFull(
     // 同じ銘柄の旧行削除・全新行・flag を1batchへまとめる。
     // INSERTが途中で失敗しても、旧行とflagを部分破壊しない。
     const builders: Parameters<typeof toD1BatchStatements>[0] = [
-      db.delete(yutaiBenefits).where(eq(yutaiBenefits.stockId, p.stockId)),
+      deleteMonthlyRows(p.stockId),
     ];
     // 各権利月 × 各株数条件で優待レコードを作成
     for (const r of p.rows) {
@@ -647,14 +697,15 @@ export async function importYutaiFull(
     importedIds.add(p.stockId);
   }
 
-  // 収集が完了した一覧に無い銘柄だけ廃止。SQL失敗銘柄をこの集合へ混ぜない。
+  // 一覧に無い銘柄の通常優待は廃止。過去単発が残る銘柄は flag を維持する。
+  // SQL失敗銘柄をこの集合へ混ぜない。
   const abolished = universe.filter((s) =>
     !targetIds.has(s.id) && (s.isYutai || heldIds.has(s.id))
   );
   for (const stock of abolished) {
     await sender(toD1BatchStatements([
-      db.delete(yutaiBenefits).where(eq(yutaiBenefits.stockId, stock.id)),
-      db.update(stocks).set({ isYutai: false, updatedAt: sql`(unixepoch())` })
+      deleteMonthlyRows(stock.id),
+      db.update(stocks).set({ isYutai: preservedByStock.has(stock.id), updatedAt: sql`(unixepoch())` })
         .where(eq(stocks.id, stock.id)),
     ]));
   }
