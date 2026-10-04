@@ -4,7 +4,7 @@ import { fetchChart, type DailyResult, type YahooRawCapture } from "../../../src
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../../../src/shared/yahoo/raw-custody.js";
 import { selectConfirmedCloses } from "../../../src/cron/macro-session.js";
 import { isCalendarDateString, isStrictIsoUtc, jstDateSec, tenYearRangeForDate } from "../../../src/shared/vwap/proof.js";
-import { completedDailyFetch, sanitizeLogText, type DailySessionReference } from "./ingest-guard.js";
+import { completedDailyFetch, isBeforeOpenHistoricalSession, sanitizeLogText, type DailySessionReference } from "./ingest-guard.js";
 
 export type { DailySessionReference } from "./ingest-guard.js";
 
@@ -21,15 +21,20 @@ export async function fetchDailySessionReference(runId: string): Promise<DailySe
       throw new Error("daily session HOLD: benchmarkの同一HTTP原本がありません");
     }
     const confirmed = selectConfirmedCloses(capture.bytes, chart.ohlcv, "^N225");
-    const meta = JSON.parse(new TextDecoder().decode(capture.bytes)).chart?.result?.[0]?.meta;
+    const result = JSON.parse(new TextDecoder().decode(capture.bytes)).chart?.result?.[0], meta = result?.meta;
     const regular = meta?.currentTradingPeriod?.regular;
     if (!isStrictIsoUtc(capture.receivedAt) || meta?.range !== "1mo" || meta?.exchangeTimezoneName !== "Asia/Tokyo" ||
         ![regular?.start, regular?.end, meta?.regularMarketTime].every((t) => typeof t === "number" && Number.isSafeInteger(t) && t > 0) ||
         regular.start >= regular.end || regular.timezone !== "JST" || regular.gmtoffset !== 32400 ||
-        meta.regularMarketTime < regular.end || Date.parse(capture.receivedAt) / 1000 < meta.regularMarketTime ||
-        [regular.start, regular.end, meta.regularMarketTime].some((t) => jstDateSec(t) !== confirmed.date)) {
+        Date.parse(capture.receivedAt) / 1000 < meta.regularMarketTime || jstDateSec(meta.regularMarketTime) !== confirmed.date ||
+        !Number.isSafeInteger(result.timestamp.at(-1)) || result.timestamp.at(-1) > meta.regularMarketTime ||
+        jstDateSec(result.timestamp.at(-1)) !== confirmed.date || chart.ohlcv.at(-1)?.date !== confirmed.date) {
       throw new Error("daily session HOLD: benchmarkの現在sessionが閉場済みではありません");
     }
+    const sameClosedSession = meta.regularMarketTime >= regular.end &&
+      jstDateSec(regular.start) === confirmed.date && jstDateSec(regular.end) === confirmed.date;
+    if (!sameClosedSession && !isBeforeOpenHistoricalSession(regular.start, regular.end, meta.regularMarketTime,
+      confirmed.date, capture.receivedAt)) throw new Error("daily session HOLD: benchmarkの現在sessionが閉場済みではありません");
     return { date: confirmed.date, observedAt: capture.receivedAt,
       rawSha: createHash("sha256").update(capture.bytes).digest("hex") };
   } catch (e) {
