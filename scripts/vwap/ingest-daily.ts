@@ -44,6 +44,7 @@ export async function main() {
   const SOURCE_RANGE = tenYearRangeForDate(reference.date);
   let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0, invalid = 0, skipped = 0;
   let consecRL = 0, aborted = false, fatal = false;
+  let rawCustodyError: unknown;
   const unknownCodes: string[] = [];
   const rejectedCodes: string[] = [];
   const outcomes: Record<string, IngestCodeOutcome> = {};
@@ -245,6 +246,7 @@ export async function main() {
       }
     } catch (e) {
       fatal = true;
+      rawCustodyError = e;
       console.error(`daily raw custody STOP: ${sanitizeLogText(e instanceof Error ? e.message : String(e)).slice(0, 200)}`);
     }
     await mapLimit(writes, CONC, async (write) => write());
@@ -270,7 +272,7 @@ export async function main() {
   }
   console.info(JSON.stringify({ archive: "local", key: summary.key, path: local.path }));
   console.info(JSON.stringify({ archive: "recording", key: summary.key }));
-  const archived = await archiveSummaryOrFatal(() => recordPrimaryData({ ...summary, force: false }));
+  const archived = await archiveSummaryOrFatal(() => recordPrimaryData({ ...summary, force: false }), rawCustodyError);
   if (archived.code === 2) {
     console.error(JSON.stringify({ archive: "failed", key: summary.key, local: local.path, reason: archived.reason }));
     process.exitCode = 2;

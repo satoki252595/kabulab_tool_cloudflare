@@ -7,6 +7,7 @@ import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { loadCodes } from "./lib/codes.js";
 import { YahooRawTooLargeError, YahooRateLimitError } from "../../src/shared/yahoo/client.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
+import { NotionUnknownResultError } from "../../src/shared/notion-archive/client.js";
 import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main } from "./ingest-intra.js";
 
@@ -184,6 +185,25 @@ describe("ingest-intra main flow", () => {
     expect(mockFetch5m).toHaveBeenCalledTimes(30);
     expect(mockR2Put).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(2);
+  });
+
+  it("raw custody UNKNOWN keeps the local summary and sends no later Notion/R2/source work", async () => {
+    const codes = Array.from({ length: 31 }, (_, i) => String(1000 + i));
+    mockLoadCodes.mockResolvedValue(codes);
+    mockFetch5m.mockResolvedValue([BAR]);
+    mockR2Get.mockResolvedValue(null);
+    mockRawArchive.mockRejectedValue(new NotionUnknownResultError("unknown create; no resend"));
+    await main();
+    expect(mockRawArchive).toHaveBeenCalledTimes(1);
+    expect(mockFetch5m).toHaveBeenCalledTimes(30);
+    expect(mockR2Put).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(2);
+    const files = readdirSync(".vwap-summaries");
+    expect(files).toHaveLength(1);
+    const local = JSON.parse(readFileSync(join(".vwap-summaries", files[0]), "utf-8")) as { outcomes: Record<string, { status: string }> };
+    expect(Object.keys(local.outcomes)).toHaveLength(31);
+    expect(local.outcomes[codes[30]].status).toBe("notStarted");
   });
 
   it("normal PUT follows its own raw custody", async () => {

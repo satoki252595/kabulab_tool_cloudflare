@@ -8,6 +8,7 @@
  *   (CLAUDE 高頻度ポーリング則)。summary JSON 自体を 1 ファイル添付する。
  */
 import { createHash } from "node:crypto";
+import { NotionUnknownResultError } from "../../../src/shared/notion-archive/client.js";
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import type { DailyFetchProof, DailyResult, YahooRawCapture } from "../../../src/shared/yahoo/client.js";
@@ -94,8 +95,13 @@ export type ArchiveResult = { code: 0 | 2; reason: string | null };
  * source archive の証拠を握り潰さない。
  */
 export async function archiveSummaryOrFatal(
-  record: () => Promise<{ outcome: string; fileTooLarge: boolean }>
+  record: () => Promise<{ outcome: string; fileTooLarge: boolean }>,
+  previousError?: unknown
 ): Promise<ArchiveResult> {
+  // 原本書込が未確定なら、新しいsummaryも送信しない。callerのlocal原文を保持する。
+  if (previousError instanceof NotionUnknownResultError) {
+    return { code: 2, reason: "previous:NotionUnknownResultError (local summary retained; no new Notion write)" };
+  }
   let r: { outcome: string; fileTooLarge: boolean };
   try {
     r = await record();
