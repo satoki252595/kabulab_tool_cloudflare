@@ -50,6 +50,7 @@ import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
 import { stockFinancials, stocks, yutaiBenefits, yutaiGenres } from "../src/db/schema.js";
 import { type AtomicBatchSender, snapshotStockPreimages } from "./atomic-apply.js";
 import { benefitKey } from "./benefit-key.js";
+import { missingSummaryConditions } from "./summary-contract.js";
 import { assertBenefitSchedule, assertRecordMonth } from "../src/record-date.js";
 import {
   headedDescription,
@@ -239,9 +240,16 @@ export function planCarry(
   const carriedRecordDates = new Map<string, string | null>();
   const nulledKeys = new Set<string>();
   const promotedKeys = new Set<string>();
+  const originals = new Map<string, CarrySourceRow>();
   for (const row of rows) {
     assertBenefitSchedule(row);
     const key = carryKey(row.code, carryBody(row.description), row.minShares, row.recordMonth);
+    const original = originals.get(key);
+    if (original !== undefined && (original.shortSummary !== row.shortSummary ||
+        original.estimatedValue !== row.estimatedValue || original.estimateValueSource !== row.estimateValueSource)) {
+      throw new Error(`同一 context の元解釈が食い違うため STOP (code=${row.code})`);
+    }
+    originals.set(key, row);
     if (carriedRecordDates.has(key) && carriedRecordDates.get(key) !== row.recordDate) {
       throw new Error(`同一 context の権利日が食い違うため STOP (code=${row.code})`);
     }
@@ -250,6 +258,7 @@ export function planCarry(
     }
     carriedRecordDates.set(key, row.recordDate);
     if (row.shortSummary == null && row.estimatedValue == null) continue;
+    let shortSummary = row.shortSummary;
     let estimatedValue = row.estimatedValue;
     let estimateValueSource = row.estimateValueSource;
     if (estimatedValue !== null) {
@@ -279,10 +288,19 @@ export function planCarry(
         promotedKeys.add(key);
       }
     }
+    const headings = plannedMeta.get(key);
+    const conditions = headings === undefined ? row.description : [...headings, row.description].join("\n");
+    if (missingSummaryConditions(conditions, shortSummary === null ? "" : shortSummary).length > 0) {
+      shortSummary = null;
+      estimatedValue = null;
+      estimateValueSource = null;
+      nulledKeys.add(key);
+      promotedKeys.delete(key);
+    }
     const prev = carried.get(key);
     if (prev !== undefined) {
       if (
-        prev.shortSummary !== row.shortSummary ||
+        prev.shortSummary !== shortSummary ||
         prev.estimatedValue !== estimatedValue ||
         prev.estimateValueSource !== estimateValueSource
       ) {
@@ -296,7 +314,7 @@ export function planCarry(
       continue;
     }
     carried.set(key, {
-      shortSummary: row.shortSummary,
+      shortSummary,
       estimatedValue,
       estimateValueSource,
     });

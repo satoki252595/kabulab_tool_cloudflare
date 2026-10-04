@@ -14,12 +14,12 @@ import {
 import {
   buildLocalResults,
   companyValue,
-  missingSummaryConditions,
   parseLocalArgs,
   runLocalSummary,
   selectFairBatch,
   type LocalDependencies,
 } from "../../data-scripts/summary-local.js";
+import { missingSummaryConditions } from "../../data-scripts/summary-contract.js";
 import {
   parseTaskFile,
   selectSummaryTasks,

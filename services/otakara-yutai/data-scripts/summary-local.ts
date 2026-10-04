@@ -35,6 +35,7 @@ import { extractYenAmounts, qualifyCompanyPerGrantValue } from "./estimated-valu
 import { applyImportAtomically } from "./import-summary-results.js";
 import { assertNotCommittable } from "./private-path.js";
 import { SummaryResult, planSummaryImport, type ImportPlan } from "./summary-import.js";
+import { missingSummaryConditions } from "./summary-contract.js";
 import {
   parseTaskFile,
   selectSummaryTasks,
@@ -123,19 +124,6 @@ export function companyValue(task: SummaryTask): {
           ? "no_source_yen_amount"
           : [...new Set(verdicts.map((v) => (v.verdict.qualified ? "qualified" : v.verdict.code)))].join(","),
   };
-}
-
-/** Conservative local-generation HOLD. Never fill a missing condition with a fixed summary. */
-export function missingSummaryConditions(description: string, summary: string): string[] {
-  const missing: string[] = [];
-  const choice = /選[択べんぶび]|いずれか|または|又は/;
-  if (choice.test(description) && !choice.test(summary)) missing.push("choice_condition_missing");
-  const holding = /保有期間|継続保有|長期保有|以上|未満/;
-  if (holding.test(description) && !/保有|継続|長期|以上|未満|条件別/.test(summary))
-    missing.push("holding_condition_missing");
-  if (/抽選|当選/.test(description) && !/抽選|当選/.test(summary)) missing.push("lottery_condition_missing");
-  if (/応募/.test(description) && !/応募|抽選|当選/.test(summary)) missing.push("application_condition_missing");
-  return missing;
 }
 
 /** Entire protocol must correspond to the issued batch. Individual malformed summaries stay pending. */

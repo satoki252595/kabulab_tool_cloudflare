@@ -21,6 +21,7 @@ import { benefitKey } from "./benefit-key.js";
 import {
   SUMMARY_CONTRACT_VERSION,
   checkSummary,
+  missingSummaryConditions,
   type SummaryViolation,
 } from "./summary-contract.js";
 
@@ -136,6 +137,7 @@ export function selectSummaryTasks(
       }
       if (rules.size > 0) reason = "contract_violation";
     }
+    if (reason === null && g.summaries.some(s => missingSummaryConditions(g.description, s as string).length > 0)) reason = "rework";
     if (reason === null && opts.retaskKeys?.has(taskId)) reason = "rework";
     if (reason === null) continue;
     if (opts.violationsOnly && reason !== "contract_violation") continue;

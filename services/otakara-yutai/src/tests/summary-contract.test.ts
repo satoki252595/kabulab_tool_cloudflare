@@ -11,10 +11,26 @@ import {
   formatViolations,
   isSummaryPercentGrounded,
   isSummaryNumbersGrounded,
+  missingSummaryConditions,
   isVerbatimCopy,
 } from "../../data-scripts/summary-contract.js";
 
 const rules = (s: string) => checkSummary(s).map((v) => v.rule).sort();
+
+it("選択・保有・抽選・応募条件を全経路で検証し、株数を保有期間にしない", () => {
+  expect(missingSummaryConditions("100株以上の株主に商品", "商品")).toEqual([]);
+  expect(missingSummaryConditions("5年以上継続保有で商品3万円相当", "商品3万円相当")).toEqual(["holding_condition_missing"]);
+  expect(missingSummaryConditions("5年以上継続保有で商品3万円相当", "長期保有で商品3万円相当")).toEqual(["holding_condition_missing"]);
+  expect(missingSummaryConditions("5年以上継続保有で商品3万円相当", "5年以上保有で商品3万円相当")).toEqual([]);
+  expect(missingSummaryConditions("5年以上継続保有で商品3万円相当", "3年以上保有で商品3万円相当")).toEqual(["holding_condition_missing"]);
+  expect(missingSummaryConditions("1年未満2千円・1年以上5千円のカタログ", "保有期間に応じたカタログ")).toEqual([]);
+  expect(missingSummaryConditions("1年未満2千円・1年以上5千円のカタログ", "保有期間別のカタログ5千円")).toEqual(["holding_condition_missing"]);
+  expect(missingSummaryConditions("商品又は寄付を選択", "商品")).toEqual(["choice_condition_missing"]);
+  expect(missingSummaryConditions("応募株主から抽選で贈呈", "商品")).toEqual(["lottery_condition_missing", "application_condition_missing"]);
+  expect(missingSummaryConditions("応募株主から抽選で贈呈", "応募して抽選で商品")).toEqual([]);
+  expect(missingSummaryConditions("半年以上保有し株主名簿に記載又は記録された株主に商品", "半年以上保有で商品")).toEqual([]);
+  expect(missingSummaryConditions("株主名簿に記載又は記録された株主は商品又は寄付を選択", "商品")).toEqual(["choice_condition_missing"]);
+});
 
 describe("checkSummary — 本番で実在した違反", () => {
   it("注記記号の取り込みを検出する", () => {
