@@ -51,7 +51,7 @@ import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
 import { stockFinancials, stocks, yutaiBenefits, yutaiGenres } from "../src/db/schema.js";
 import { type AtomicBatchSender, snapshotStockPreimages } from "./atomic-apply.js";
 import { benefitKey } from "./benefit-key.js";
-import { missingSummaryConditions } from "./summary-contract.js";
+import { isSummaryNumbersGrounded, missingSummaryConditions } from "./summary-contract.js";
 import { assertBenefitSchedule, assertRecordMonth } from "../src/record-date.js";
 import {
   headedDescription,
@@ -314,7 +314,10 @@ export function planCarry(
     }
     const headings = plannedMeta.get(key);
     const conditions = headings === undefined ? row.description : [...headings, row.description].join("\n");
-    if (missingSummaryConditions(conditions, shortSummary === null ? "" : shortSummary).length > 0) {
+    if (missingSummaryConditions(conditions, shortSummary === null ? "" : shortSummary).length > 0 ||
+        (shortSummary !== null && !isSummaryNumbersGrounded(conditions, shortSummary, {
+          minShares: [row.minShares], recordMonths: [row.recordMonth],
+        }))) {
       shortSummary = null;
       estimatedValue = null;
       estimateValueSource = null;
