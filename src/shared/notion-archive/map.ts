@@ -59,7 +59,7 @@ export const ARCHIVE_SECTIONS: IndexSection[] = [
       {
         title: "一次データ｜universe",
         detail:
-          "JPX 上場銘柄 XLS (実体)。key=jpx-listing-YYYY-MM (ファイル内基準月)。書き手: src/shared/jpx/sectors.ts",
+          "JPX 上場銘柄 XLS (実体)。key=jpx-listing-sha256-<全文SHA>。旧基準月キーの原本も保持。書き手: src/shared/jpx/sectors.ts",
       },
     ],
   },
