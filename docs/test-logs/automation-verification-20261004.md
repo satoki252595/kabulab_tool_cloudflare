@@ -40,3 +40,7 @@ Python原本保管は新規・既存SHAともページと原本/変換添付の�
 監視の既存90テストと静的検査が成功した。原文全量・VWAP・Python/Nodeの実収集は進行中であり、監視ジョブの成功だけでそれらの完了とはしない。
 
 実行ログでNixキャッシュが未認証のFlakeHub接続を試みていたため、8workflowの既存actionに`use-flakehub: false`を明示する。GitHubの既存キャッシュは維持し、追加契約・秘密値・依存の導入はない。[公式actionの設定](https://github.com/DeterminateSystems/magic-nix-cache-action#action-options)に従い、8件のYAML構文を検証した。
+
+マスタ月次cronは旧`0 21 1 * *`（UTC）だと日本時間2日06時で、定義の1日06時から1日ずれていた。`0 6 1 * *`と`timezone: Asia/Tokyo`に修正し、独自の末日判定は追加しない。[GitHubの公式timezone対応](https://github.blog/changelog/2026-03-19-github-actions-late-march-2026-updates/)に従う。
+
+PR #300は12:36:58Zにmain`79e6bbe63031ca8ddf86e571c8b4123654ed9058`へマージし、mainのCI3件成功、12:37:31Zのnative deploymentがversion`4d307582-410e-4705-b0cb-99d4b9939bcc`の100%配信であることを確認した。Macのkernel排他下で同mainへ更新し、canonical.envのaccepted revision以外は保持。通常の[cloud_check再実行37202784871](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37202784871)はR2両bucket・必須9表、processed=3 / failed=0で完了し、#299を閉じた。

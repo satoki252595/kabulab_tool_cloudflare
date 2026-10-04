@@ -1,9 +1,10 @@
-# 毎月1日 6:00 JST (DESIGN.md §8.2)。cron は UTC 表記
+# 毎月1日 6:00 JST (DESIGN.md §8.2)。GitHubのnative timezone指定を使う
 name: master_sync
 
 on:
   schedule:
-    - cron: "0 21 1 * *"
+    - cron: "0 6 1 * *"
+      timezone: "Asia/Tokyo"
   workflow_dispatch:
 
 concurrency:
