@@ -3008,10 +3008,12 @@ async function fetchMarketContextDraft(): Promise<{
   for (const target of targets) {
     try {
       await fetchMarketContextTarget(draft, target, collector);
-      // 必須N225の確定終値がHOLDなら、残り4取得元を叩いても保存できない。
+      // 必須N225の確定日・終値・前日終値がHOLDなら、残り4取得元を叩いても保存できない。
       // 同一応答原本の保管・readbackは呼出側で続け、古値で補わず失敗を返す。
-      if (target === "^N225" && draft.charts[target].date === null) {
-        console.warn("[sync-daily]   N225確定終値HOLDのため後続マクロ取得を停止します");
+      if (target === "^N225" &&
+          (draft.charts[target].date === null || draft.charts[target].price === null ||
+           draft.charts[target].prevClose === null)) {
+        console.warn("[sync-daily]   N225必須確定値HOLDのため後続マクロ取得を停止します");
         break;
       }
     } catch (error) {
@@ -3022,6 +3024,8 @@ async function fetchMarketContextDraft(): Promise<{
         sourceStop = error instanceof Error ? error : new Error(String(error));
         break;
       }
+      // N225の取得自体が失敗した場合も保存できない。欠損レポートを残して後続を止める。
+      if (target === "^N225") break;
     }
   }
 
