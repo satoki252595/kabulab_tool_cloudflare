@@ -33,9 +33,10 @@ _LEGACY_DDL: tuple[str, ...] = (
     # 取得時刻の列は宣言しない。設計書にも既存コードにも出てこないので、
     # マニフェストがそれを参照していたらここで `no such column` にして落とす。
     "CREATE TABLE ir_disclosures (tdnet_id TEXT, pubdate INTEGER)",
-    "CREATE TABLE core_stocks (id INTEGER PRIMARY KEY, code TEXT, updated_at INTEGER)",
+    "CREATE TABLE core_stocks (id INTEGER PRIMARY KEY, code TEXT, updated_at INTEGER,"
+    " is_active INTEGER DEFAULT 1, instrument_type TEXT DEFAULT 'equity')",
     "CREATE TABLE yutai_benefits"
-    " (id INTEGER PRIMARY KEY, stock_id INTEGER, updated_at INTEGER)",
+    " (id INTEGER PRIMARY KEY, stock_id INTEGER, created_at INTEGER, updated_at INTEGER)",
 )
 
 
@@ -91,14 +92,20 @@ class TestFreshnessSlo:
     def test_全データセットに閾値がある(self) -> None:
         """閾値が無いと「33日古い」が異常か判定できない。
 
-        `yutai_benefits` は「更新しない」と決まり閾値ごと `NOT_REFRESHED` へ移した
-        ので、`SLOS` 単独の件数は 6 になった。守りたいのは「観測する全データセットが
-        閾値を持つか、判定しない理由を持つか」なので、和で 7 件を下回らないことを見る。
+        観測する全データセットが閾値か、判定しない理由を持つことを守る。
         """
         assert len(slo.SLOS) + len(slo.NOT_REFRESHED) >= 7
         for s in slo.SLOS:
             assert s.green_hours < s.yellow_hours, s.dataset
             assert s.note, s.dataset
+
+    @pytest.mark.parametrize("days, verdict", [(30, "green"), (41, "yellow"), (51, "red")])
+    def test_再開した優待原本は月次の加齢を判定する(self, days, verdict) -> None:
+        assert "yutai_benefits" not in slo.NOT_REFRESHED
+        assert slo.judge_observation(
+            "yutai_benefits", latest_data_date=None, source_epoch=_epoch_days_ago(days),
+            row_count=7921, now=NOW,
+        ) == verdict
 
     def test_未定義のデータセットは緑にしない(self) -> None:
         """知らないものを「問題なし」に倒さない。"""
@@ -260,7 +267,7 @@ class TestDatasetManifest:
             # n は件数 (COUNT) か存在 (CASE WHEN MAX..IS NULL) のどちらか。
             # 大きい表は存在判定にしないと索引シークが全走査に落ちる (L-17)。
             assert "COUNT(" in upper or "CASE WHEN MAX(" in upper, src.dataset
-            assert "MAX(" in upper, src.dataset
+            assert "MAX(" in upper or "MIN(" in upper, src.dataset
             assert "SELECT *" not in upper, src.dataset
             for forbidden in ("UNION", "INTERSECT", "EXCEPT"):
                 assert forbidden not in upper, f"{src.dataset}: {forbidden}"
@@ -481,11 +488,15 @@ class TestAcceptedRed:
 class TestNotRefreshed:
     """「そもそも更新しない」データセット。判定から外すのは加齢だけ。"""
 
-    def test_優待は受容済みの赤ではなく更新しないデータセット(self) -> None:
-        """2026-09-13 のユーザ判断。いつか直す赤（ACCEPTED_RED）とは区分が違う。"""
-        assert "yutai_benefits" in slo.NOT_REFRESHED
-        assert "yutai_benefits" not in slo.ACCEPTED_RED
-        assert "yutai_benefits" not in slo.SLO_BY_DATASET, "閾値を残すと嘘の閾値になる"
+    @pytest.fixture(autouse=True)
+    def _declared_exemption(self, monkeypatch) -> None:
+        """除外機能は明示した独立条件で試し、現在の月次優待を除外しない。"""
+        monkeypatch.setattr(slo, "SLO_BY_DATASET", {
+            k: v for k, v in slo.SLO_BY_DATASET.items() if k != "yutai_benefits"
+        })
+        monkeypatch.setattr(slo, "NOT_REFRESHED", {
+            "yutai_benefits": "テスト内だけ更新停止を明示し、件数と不明の監視を維持する"
+        })
 
     def test_理由が必須(self) -> None:
         for dataset, reason in slo.NOT_REFRESHED.items():
@@ -524,6 +535,10 @@ class TestNotRefreshed:
         src = src.replace(
             original,
             'ACCEPTED_RED: dict[str, str] = {"yutai_benefits": "矛盾させるための受容理由"}',
+        )
+        src = src.replace(
+            "NOT_REFRESHED: dict[str, str] = {}",
+            'NOT_REFRESHED: dict[str, str] = {"yutai_benefits": "矛盾させるための除外理由"}',
         )
         name = "jp_stock_pipeline.cloud_store._slo_contradiction_probe"
         module = types.ModuleType(name)
@@ -609,8 +624,8 @@ class TestFreshnessProbe:
             [prices_fetched_at],
         )
         store.query(
-            "INSERT INTO yutai_benefits (stock_id, updated_at) VALUES (1, ?)",
-            [prices_fetched_at],
+            "INSERT INTO yutai_benefits (stock_id, created_at, updated_at) VALUES (1, ?, ?)",
+            [prices_fetched_at, prices_fetched_at],
         )
         store.query(
             "INSERT INTO jss_supply_latest"
@@ -627,6 +642,23 @@ class TestFreshnessProbe:
             [today, prices_fetched_at, prices_fetched_at],
         )
         # financials (jss_financials) は本番同様 0 行のままにしておく
+
+    def test_要約の更新で古い原本を新鮮と誤認しない(self) -> None:
+        store = _FakeStore()
+        old, recent = _epoch_days_ago(82), _epoch_days_ago(0.1)
+        self._seed_all(store, prices_fetched_at=old)
+        store.query("INSERT INTO core_stocks (id, code, is_active) VALUES (2, '7204', 1), (3, '7205', 0)")
+        store.query(
+            "INSERT INTO yutai_benefits (stock_id, created_at, updated_at) VALUES (2, ?, ?), (3, 1, 1)",
+            [recent, recent],
+        )
+        store.query("UPDATE yutai_benefits SET updated_at = ? WHERE stock_id = 1", [recent])
+        row = store.query(datasets.DATASET_SOURCE_BY_NAME["yutai_benefits"].sql)[0]
+        assert row == {"latest_date": None, "source_epoch": old, "n": 2}
+        assert slo.judge_observation(
+            "yutai_benefits", latest_data_date=None, source_epoch=row["source_epoch"],
+            row_count=row["n"], now=NOW,
+        ) == "red"
 
     def test_記録するupdated_atは実表のepochで記録時刻ではない(self, monkeypatch) -> None:
         """偽の緑の回帰テスト。
@@ -680,7 +712,7 @@ class TestFreshnessProbe:
             if r["dataset"] == freshness_probe.CAPACITY_DATASET
         ] == [None]
 
-    def test_1表が壊れても他7件は記録されジョブは失敗する(self, monkeypatch) -> None:
+    def test_母集団表が壊れると依存観測も失敗し他6件は記録する(self, monkeypatch) -> None:
         """runner は failed>0 & processed>0 を exit 0 にするので、素直に書くと
 
         表名のタイプミスで 1 件落ちても Issue が立たず、凍結した行が SLO を
@@ -695,7 +727,7 @@ class TestFreshnessProbe:
             r["dataset"]
             for r in store.query("SELECT dataset FROM jss_dataset_freshness")
         }
-        assert recorded == (_OBSERVED - {"core_stocks"}) | {freshness_probe.CAPACITY_DATASET}
+        assert recorded == (_OBSERVED - {"core_stocks", "yutai_benefits"}) | {freshness_probe.CAPACITY_DATASET}
         assert code == 1, "1 件でも測れなければジョブ全体を失敗にする"
 
     def test_dry_runは1文も書き込まない(self, monkeypatch) -> None:
@@ -717,17 +749,7 @@ class TestOpsCheck:
     """判定ジョブ。何も書かず、異常だけを報告する。"""
 
     def _seed_freshness(self, store: _FakeStore, *, overrides=None) -> None:
-        """全 7 データセットを「判定対象外 1 件 + 緑 6 件」で埋める。
-
-        `yutai_benefits` は「更新しない」と決まり `slo.NOT_REFRESHED` へ移ったので、
-        82 日止まっていても判定されない（以前はここが「宣言済みの赤」だった）。
-
-        `financials` は writer（`cloud_store/financials.py`）が出来たので
-        `slo.ACCEPTED_RED` から外れた。したがって 0 行はもう「宣言済みの赤」では
-        なく**本物の赤**であり、この土台では緑（行がある状態）に置く。
-        0 行が exit 1 になることは
-        `test_financialsの0行は宣言外の赤としてexit1` が別に固定する。
-        """
+        """全7データセットを緑で置く。古い原本と0行は個別に試す。"""
         today = _jst_today().isoformat()
         recent = int(datetime.now(UTC).timestamp()) - 3600
         rows = {
@@ -737,9 +759,7 @@ class TestOpsCheck:
             "jsf_supply": (today, 4351, recent),
             "core_stocks": (None, 4445, recent),
             "financials": (today, 12000, recent),
-            "yutai_benefits": (
-                None, 8314, int((datetime.now(UTC) - timedelta(days=82)).timestamp()),
-            ),  # 判定対象外（更新しないデータセット）
+            "yutai_benefits": (None, 8314, recent),
         }
         rows.update(overrides or {})
         for dataset, (latest, n, epoch) in rows.items():
@@ -859,7 +879,7 @@ class TestOpsCheck:
     def test_宣言済みの赤だけならexit0(self, monkeypatch) -> None:
         """毎日必ず鳴る判定は通知を殺す。既知の赤は警告に落とす。
 
-        本番の `ACCEPTED_RED` は空になった（優待は NOT_REFRESHED へ移った）が、
+        本番の `ACCEPTED_RED` は空だが、
         仕組みは残しているので、受容を差し込んで仕組みそのものを確かめる。
         """
         store = _FakeStore()
@@ -875,7 +895,13 @@ class TestOpsCheck:
         import logging
 
         store = _FakeStore()
-        self._seed_freshness(store)  # yutai_benefits は 82 日前
+        monkeypatch.setattr(slo, "SLO_BY_DATASET", {
+            k: v for k, v in slo.SLO_BY_DATASET.items() if k != "yutai_benefits"
+        })
+        monkeypatch.setattr(slo, "NOT_REFRESHED", {"yutai_benefits": "テスト内だけの更新停止理由"})
+        self._seed_freshness(store, overrides={
+            "yutai_benefits": (None, 8314, int((datetime.now(UTC) - timedelta(days=82)).timestamp()))
+        })
         self._seed_probe_ok(store)
         _wire(monkeypatch, store, ops_check)
         with caplog.at_level(logging.INFO):

@@ -13,8 +13,7 @@ writer の自己申告は「今さっき更新した」になる（実際には1
 
 ## SQL の制約（構造的に守る）
 
-- 1 データセット = **1 文の集約**。`MAX(...) AS latest_date` /
-  `MAX(...) AS source_epoch` / `COUNT(*) AS n` の3列だけを返す。
+- 1 データセット = **1 文の集約**。latest_date / source_epoch / n の3列だけを返す。
 - **UNION を使わない**。D1 の compound SELECT 上限は
   `d1.MAX_COMPOUND_SELECT_TERMS = 5`（本番実測。素の SQLite の 500 ではない）で、
   「7 データセットを1文で数える」は構造的に上限へ抵触する。1文ずつ7回投げる。
@@ -235,13 +234,15 @@ DATASET_SOURCES: tuple[DatasetSource, ...] = (
         # claim は `governance.WRITER_CLAIMS` の `yutai_benefits/base`。
         writer="kabulab-cf",
         sql=(
-            "SELECT NULL AS latest_date, MAX(updated_at) AS source_epoch,"
-            " COUNT(*) AS n FROM yutai_benefits"
+            "SELECT NULL AS latest_date, MIN(y.created_at) AS source_epoch,"
+            " COUNT(*) AS n FROM yutai_benefits y JOIN core_stocks s ON s.id = y.stock_id"
+            " WHERE s.is_active = 1 AND s.instrument_type = 'equity'"
         ),
         license_tag=_uniform_tag("yutai_benefits"),
         note=(
-            "データ基準日の列が無い。みんかぶ由来で personal-only。"
-            "`updated_at` は core_stocks と同じく記録時刻寄りの列である点に注意"
+            "月次全量取込は対象銘柄の行を原子的に再作成するためcreated_atを使う。"
+            "active普通株の最古行で部分取込を検知し、保持する母集団外の旧行は除く。"
+            "要約だけでも進むupdated_atは使わない。みんかぶ由来でpersonal-only"
         ),
     ),
 )
