@@ -28,6 +28,74 @@ describe("parseOnlyArg", () => {
   });
 });
 
+describe("main() の Phase1 原本保管失敗", () => {
+  const originalArgv = [...process.argv];
+  afterEach(() => {
+    process.argv = [...originalArgv];
+    process.exitCode = undefined;
+    for (const path of [
+      "../../services/moneyflow/lib/jpx-sector-marketcap.js",
+      "../../services/moneyflow/lib/jpx-short-selling.js",
+      "../../src/shared/notion-archive/index.js",
+      "./lib/archived-files.js",
+    ]) vi.doUnmock(path);
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it.each([
+    ["jpx-sector-marketcap", "too_large"],
+    ["jpx-short-selling", "too_large"],
+    ["jpx-sector-marketcap", "attachment_mismatch"],
+    ["jpx-short-selling", "attachment_mismatch"],
+  ])("%s の %s は観測値を書かず取込失敗を記録する", async (source, failure) => {
+    vi.resetModules();
+    process.argv = [...originalArgv, `--only=${source}`];
+    const ensureObservationsDb = vi.fn(async () => ({ dbId: "obs-db" }));
+    const upsertObservation = vi.fn(async () => ({ pageId: "obs-1" }));
+    const recordRunLog = vi.fn().mockResolvedValue({ pageId: "run-1" });
+    vi.doMock("../../src/shared/notion-archive/index.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../src/shared/notion-archive/index.js")>()),
+      ensureIndicatorDefsDb: vi.fn(async () => ({ dbId: "defs-db" })),
+      upsertIndicatorDef: vi.fn(async () => ({ pageId: "def-1" })),
+      ensureRunLogDb: vi.fn(async () => ({ dbId: "run-db" })), recordRunLog,
+      isArchived: vi.fn(async () => false),
+      recordPrimaryData: vi.fn(async () => ({ pageId: "primary-1", fileTooLarge: failure === "too_large" })),
+      ensureObservationsDb, upsertObservation,
+    }));
+    vi.doMock("./lib/archived-files.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./lib/archived-files.js")>()),
+      requirePrimaryDataDbId: vi.fn(async () => "primary-db"),
+      listArchivedRecordsByPrefix: vi.fn(async () => []),
+      verifyArchivedAttachments: vi.fn(async () => { throw new Error("attachment_mismatch"); }),
+    }));
+    vi.doMock("../../services/moneyflow/lib/jpx-sector-marketcap.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../services/moneyflow/lib/jpx-sector-marketcap.js")>()),
+      latestSectorMarketCapPdfUrl: vi.fn(async () => ({ yearMonth: "202608" })),
+      fetchSectorMarketCap: vi.fn(async () => ({ asOfDate: "2026-08-31", sectors: [
+        { sector: "電気機器", companies: 123, marketCapMillionYen: 279_083_685 },
+      ], segments: {}, pdfBytes: new Uint8Array(), pdfUrl: "https://www.jpx.co.jp/markets/statistics-equities/misc/202608.pdf" })),
+    }));
+    vi.doMock("../../services/moneyflow/lib/jpx-short-selling.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../services/moneyflow/lib/jpx-short-selling.js")>()),
+      fetchShortSellingSector: vi.fn(async () => ({ date: "2026-09-25", sectors: [], other: {},
+        pdfBytes: new Uint8Array(), pdfUrl: "https://www.jpx.co.jp/markets/statistics-equities/short-selling/260925-g.pdf" })),
+      aggregateMonthlyShortSellingRatio: vi.fn(() => ({ month: "2026-09", sectors: [
+        { sector: "電気機器", shortRatio: (902_200 + 416_524) / 3_290_330, totalTurnover: 3_290_330, tradingDays: 1 },
+      ] })),
+    }));
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const mod = await import("./ingest.js");
+    await mod.main();
+    expect(ensureObservationsDb).not.toHaveBeenCalled();
+    expect(upsertObservation).not.toHaveBeenCalled();
+    expect(recordRunLog.mock.calls[0]?.[1]).toMatchObject({ status: "失敗", successCount: 0, failedCount: 1 });
+    expect(recordRunLog.mock.calls[0]?.[1].reason).toContain(failure === "too_large" ? "file_too_large" : "attachment_mismatch");
+    expect(process.exitCode).toBe(1);
+  });
+});
+
 describe("classifyRunStatus", () => {
   it("失敗0件なら「完了」", () => {
     expect(classifyRunStatus(3, 0)).toBe("完了");

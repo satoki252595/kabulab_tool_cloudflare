@@ -67,6 +67,7 @@ import {
   findArchivedRecordByKey,
   listArchivedRecordsByPrefix,
   requirePrimaryDataDbId,
+  verifyArchivedAttachments,
   type ArchivedRecord,
 } from "./lib/archived-files.js";
 import { runSpec } from "./lib/run-spec.js";
@@ -272,7 +273,12 @@ async function runSectorMarketCap(): Promise<RunOutcome> {
     detail = sectorMarketCapSkipDetail(period);
   } else {
     const data = await fetchSectorMarketCap();
-    const archive = await recordPrimaryData(sectorMarketCapArchiveInput(data));
+    const input = sectorMarketCapArchiveInput(data);
+    const archive = await recordPrimaryData(input);
+    if (archive.fileTooLarge) {
+      throw new Error(`[jpx-sector-marketcap] ${input.key} は file_too_large のため観測ログを書きません`);
+    }
+    await verifyArchivedAttachments(archive.pageId, "[jpx-sector-marketcap]", input.key, input.files);
     asOfDate = data.asOfDate;
     sectors = data.sectors;
     primaryDataPageId = archive.pageId;
@@ -323,7 +329,12 @@ async function runShortSelling(): Promise<RunOutcome> {
     return { source: "jpx-short-selling", ok: true, detail: `dry-run date=${data.date}` };
   }
 
-  const archive = await recordPrimaryData(shortSellingArchiveInput(data));
+  const input = shortSellingArchiveInput(data);
+  const archive = await recordPrimaryData(input);
+  if (archive.fileTooLarge) {
+    throw new Error(`[jpx-short-selling] ${input.key} は file_too_large のため観測ログを書きません`);
+  }
+  await verifyArchivedAttachments(archive.pageId, "[jpx-short-selling]", input.key, input.files);
   const archivedNote =
     archive.outcome === "skipped_existing" ? "既取得PDFを再利用" : "新規PDFを記録";
 
