@@ -369,3 +369,11 @@ exec12247の正常exit0と共有`finally`解放のreceipt572B/SHA `864e7aa749fbf
 DB定義は11列・索引2件・全子表の孤児0、G-core-5/E7を満たす。ライセンス照合は列地図6行とwriter claim17件が一致したが、本番33表/402列に対する未宣言2表（universe_official_events、universe_overlay_state）、未決yutai_genres、core_stocksのmetadata5列（created_at、id、is_active、is_yutai、updated_at）の警告を保持する。未宣言は公開未許可として扱う既存契約で、successを全分類完了とは読み替えない。SLO違反Issueはopen0と返却され、既存の品質保留Issueを自動closeしていない。
 
 終端の原metadata3,205Bと全log137,458B/SHA `1fc664a9186e094d87b7d32e0e9b9ee8ed234719420c14f5356a75b432a659b6`をwx0600/fsync保存した。CLI予約/終了時計とGitHubのnative開始/終了時計を区別し、未記録のHTTP packet時刻・通信試行回数は補作しない。全4層の成功は、intraの未開始2,439件・日足品質36件・株価不足55件・EDINET識別15件・要約残3,592群・TDnet未走査848件・今後の真正CF定時receiptを解消した証拠ではない。
+
+## 最後の実行証跡保管
+
+信用残・29取得元・Node EDINET・TFXの旧239項目に、TFX通常420 packet/全198観測・実kernel probe、intraの原終端/全資格control、最終opsの全4層を加えた2,040項目を一束で保管した。元bytes計8,375,858B、gzip2,196,415B/SHA `6f786e536dfc8fbb2caf0d1a4aa59b2c6f5d785df4ecbb5c66b64174ba69e5dc`、plain11,779,656B/SHA `c9e398876b031eefe6c893f6b68cfdd1cb0961be785bb32002fb44a6bb65c167`。全memberと元ファイル、manifest全項目、25コードpin、7原本/派生参照をrootと独立FS検査で照合し、秘密値・原本の重複埋込0を確認した。独立proof3,115B/SHA `17d4ddb78c105230aa518b808b54786b4dc01385bf3eff6f2c00c6f03bd9afe2`。
+
+TFX原HTMLとupload本文6ファイル、intra原42gzip/全1,260応答と既保存1,247/不明1本文は既存の実体/全SHA参照に限定し、同じ主原本を新しい保管束へ再アップロードしていない。年次の未記録manifest、元400/dash/EXIT2・4368不一致・品質保留・ライセンス警告を保持する。
+
+通常共有`recordPrimaryData`/`verifyArchivedAttachments`、force=false、sole writerで18:52:01.259Zに1回開始し、18:52:31.857Zに実体照合を完了、18:52:31.893Zに正常exit0・共有finally解放で終端した。Notion8/hosted1の全9応答200、429・unknown・再送0、取得元・D1・モデル・同run再入0。rootも原9 request/responseの全bytes/SHAとhosted全gzipを照合し、全2,040memberが元ファイルと一致した。今回の通常手動受入は全量適合・全供給・未来の真正CF定時成功を一括保証しない。
