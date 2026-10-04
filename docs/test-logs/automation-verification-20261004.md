@@ -145,6 +145,12 @@ PR306の初回CIはPython成功、TypeScript側4,610 pass・既存433 skip・新
 
 同じ原本保管callerのdaily/intraは、保管結果不明の後に最終summaryをNotionへ追加送信していた。元errorを既存`archiveSummaryOrFatal()`へ渡し、同型unknownだけcallback前に終了2とする。私有local summaryと全対象accountingは維持し、既知の原文エラー・R2結果不明では従来のNotion証跡経路を保持する。旧実装の新配管2回帰はUNKNOWN後の追加POSTで失敗し、修正3suite73 pass・既存3 skip、型・静的検査が成功。独立レビューもblocking0。
 
+独立した通常allのpreflightで、共有設定不正・不正read応答の`NotionConfigError`も同じ無駄な後続取得を起こすため、既存2つのSTOP型だけを通常moneyflowと共有summaryへ接続した。新しいretry・状態機構は追加せず、既知市場品質エラーの会計は維持する。旧2回帰は失敗し、追随moneyflow3suite84 pass、VWAP3suite75 pass・既存3 skip、型・静的検査・独立レビューが成功した。
+
 Node TDnet通常8日[37210263415](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37210263415)は14:57:45Zに成功。実範囲20260927–20261004の一覧1,480件・対象母集団1,292件をD1へ登録した。銘柄別243社の二次処理はcreated99 / skipExisting345 / rowErrors0で、既定12分枠のreachedDeadline=true、未分類488を保持した。全二次処理の完了とは扱わず、次定時の再開経路を確認する。原本/PDFの全文照合は通常コード経路がエラーなく通った根拠として記録し、Pythonの明示読戻しログとは区別する。
+
+保存済み出力と通常counterのoffline照合では、1,292件中444件を今回処理し、848件は未走査で既存Notion有無も未観測。488件は表題規則のprimary_tag=NULLで未保管数ではない。次平日20時JSTの通常8日窓は既存の終端をskipして残へ進むが、rolling窓から外れる古い残全件の完了保証はない。D1は二次入力全項目を保持するものの、一覧再取得0の専用CLIは未実装として記録する。
+
+Python4本・Node1本の原CLI/log/metadata/clockと検証出力174ファイルを薄い1束へまとめ、15:02:46.052ZにNotion実体保管・全文読戻しを終了0で完了した。gzip255,949B/SHA `4b9278292510cfc9c153d0df3284a01a4c217b102b928a531edf2640a772c067`、Notion8 / hosted1、全9応答200。全member・manifest・native時計・module pinを独立FSで照合し、一次CSV/ZIP/PDFの重複アップロードと追加取得元・D1・モデルは0。
 
 VWAP修復前のreadonly PREは14:50:38.106Zに全2,592件を完了し、範囲保護の全件適合・native読取障害0。旧本文447,244,325Bと保存版、提案本文464,125,156Bを私有fsyncで確認した（明示不存在1件）。receipt SHA `67a7e7defdb21e35342666a27ee7da0c1ccae1508460b3633e765d220171b96a`を固定し、取得元・Notion・PUT0のまま、新main反映後の原本保全と通常保存を待つ。
