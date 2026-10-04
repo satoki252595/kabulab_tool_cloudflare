@@ -48,7 +48,8 @@ describe("notion-archive moneyflow", () => {
       const key = `${init?.method ?? "GET"} ${u.pathname}`;
       const q = routes.get(key);
       if (!q || q.length === 0) throw new Error(`テスト: 未定義ルートへの fetch: ${key}`);
-      return jsonResponse(q.shift());
+      const next = q.shift();
+      return next instanceof Response ? next : jsonResponse(next);
     }) as typeof fetch;
   });
 
@@ -565,7 +566,10 @@ describe("notion-archive moneyflow", () => {
       route("POST", `/v1/databases/${dbId}/query`, [{ results: [] , has_more: false, next_cursor: null }]);
       route("POST", "/v1/pages", [{ id: "obs-row-9", archived: false, in_trash: false }]);
       const { upsertObservation } = await load();
-      await expect(upsertObservation(dbId, sameInput)).rejects.toThrow(/作成応答が不正.*propertiesなし/);
+      const { NotionUnknownResultError } = await import("./client.js");
+      const error = await upsertObservation(dbId, sameInput).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(NotionUnknownResultError);
+      expect(error).toMatchObject({ message: expect.stringMatching(/作成応答が不正.*propertiesなし/) });
       expect(calls).toHaveLength(2);
     });
 
@@ -823,6 +827,7 @@ describe("notion-archive moneyflow", () => {
         (e: Error) => e
       )) as Error | null;
       expect(err).not.toBeInstanceOf(NotionUnknownResultError);
+      expect(err?.message).toContain("validation_error");
       expect(err?.message).not.toContain("観測の作成");
       expect(calls.filter((c) => new URL(c.url).pathname === "/v1/pages")).toHaveLength(1);
     });

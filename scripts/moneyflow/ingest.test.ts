@@ -28,6 +28,58 @@ describe("parseOnlyArg", () => {
   });
 });
 
+describe("main() の結果不明時の保全停止", () => {
+  const originalArgv = [...process.argv];
+  afterEach(() => {
+    process.argv = [...originalArgv];
+    process.exitCode = undefined;
+    vi.doUnmock("../../src/shared/notion-archive/index.js");
+    vi.doUnmock("./lib/run-spec.js");
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  async function prepare(failure: "catalog_unknown" | "source_unknown" | "source_quality") {
+    vi.resetModules();
+    process.argv = [...originalArgv, "--only=coingecko-global,global-indices", "--as-of=2026-10-01"];
+    const { NotionUnknownResultError } = await import("../../src/shared/notion-archive/client.js");
+    const error = failure === "source_quality" ? new Error("掲載原本のcoverage不足") : new NotionUnknownResultError("送信結果不明");
+    const upsertIndicatorDef = vi.fn().mockResolvedValue({ pageId: "def-1" });
+    const runSpec = vi.fn().mockResolvedValue("保管済み原本を確認");
+    if (failure === "catalog_unknown") upsertIndicatorDef.mockRejectedValueOnce(error);
+    else runSpec.mockRejectedValueOnce(error);
+    const ensureRunLogDb = vi.fn().mockResolvedValue({ dbId: "run-db" });
+    const recordRunLog = vi.fn().mockResolvedValue({ pageId: "run-1" });
+    vi.doMock("../../src/shared/notion-archive/index.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../src/shared/notion-archive/index.js")>()),
+      ensureIndicatorDefsDb: vi.fn(async () => ({ dbId: "defs-db" })),
+      upsertIndicatorDef, ensureRunLogDb, recordRunLog,
+    }));
+    vi.doMock("./lib/run-spec.js", () => ({ runSpec }));
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { main } = await import("./ingest.js");
+    return { main, error, runSpec, ensureRunLogDb, recordRunLog };
+  }
+
+  it.each(["catalog_unknown", "source_unknown"] as const)("%s なら同型で停止し、後続sourceとrun-logを送信しない", async failure => {
+    const { main, error, runSpec, ensureRunLogDb, recordRunLog } = await prepare(failure);
+    await expect(main()).rejects.toBe(error);
+    expect(runSpec).toHaveBeenCalledTimes(failure === "catalog_unknown" ? 0 : 1);
+    expect(ensureRunLogDb).not.toHaveBeenCalled();
+    expect(recordRunLog).not.toHaveBeenCalled();
+  });
+
+  it("既知の原本品質不足は後続sourceを処理し、一部失敗を正直に記録する", async () => {
+    const { main, runSpec, recordRunLog } = await prepare("source_quality");
+    await main();
+    expect(runSpec).toHaveBeenCalledTimes(2);
+    expect(recordRunLog.mock.calls[0]?.[1]).toMatchObject({ status: "一部失敗", successCount: 1, failedCount: 1 });
+    expect(recordRunLog.mock.calls[0]?.[1].reason).toContain("coverage不足");
+    expect(process.exitCode).toBe(1);
+  });
+});
+
 describe("main() の Phase1 原本保管失敗", () => {
   const originalArgv = [...process.argv];
   afterEach(() => {

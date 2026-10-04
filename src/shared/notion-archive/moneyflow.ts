@@ -886,7 +886,7 @@ function assertObservationAck(
 ): string {
   const key = observationKey(input);
   const bad = (why: string): never => {
-    throw new Error(
+    throw new NotionUnknownResultError(
       `moneyflow 観測ログの${context.op}応答が不正のため保全停止 (再送しない・成功数に加えない): ${why} key=${key}`
     );
   };
