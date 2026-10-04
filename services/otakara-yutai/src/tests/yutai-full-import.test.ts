@@ -454,7 +454,7 @@ describe("importYutaiFull の解釈の退避", () => {
     ).toEqual([[`要約${zeroRow.code}`, null]]);
     expect(
       benefitsOf(after.benefits, [lotteryRow.id]).map((b) => [b.short_summary, b.estimated_value])
-    ).toEqual([[`要約${lotteryRow.code}`, null]]);
+    ).toEqual([[null, null]]);
     // 正常な解釈はそのまま戻る
     expect(
       benefitsOf(after.benefits, [rest[0].id]).map((b) => [b.short_summary, b.estimated_value])
@@ -514,7 +514,7 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     minShares: 100,
     recordMonth: 3,
     recordDate: null,
-    shortSummary: "優待品 500円相当",
+    shortSummary: "2年未満保有で優待品 500円相当",
     estimatedValue: 500,
     estimateValueSource: null,
     ...over,
@@ -541,7 +541,7 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     const rows = [srcRow({})];
     const p = planCarry(rows, metaOf(rows), grpOf(rows));
     const key = carryKey("5929", RAW34TEXT["5929"], 100, 3);
-    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: 500, estimateValueSource: "company" });
+    expect(p.carried.get(key)).toEqual({ shortSummary: "2年未満保有で優待品 500円相当", estimatedValue: 500, estimateValueSource: "company" });
     expect(p.promotedKeys).toEqual(new Set([key]));
     expect(p.nulledKeys).toEqual(new Set());
   });
@@ -552,7 +552,7 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     // 呼び出し側は planned 側を carryBody でキー化する (= 素文キー)。
     const p = planCarry(headed, metaOf(plain), grpOf(plain));
     const key = carryKey("5929", RAW34TEXT["5929"], 100, 3);
-    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: 500, estimateValueSource: "company" });
+    expect(p.carried.get(key)).toEqual({ shortSummary: "2年未満保有で優待品 500円相当", estimatedValue: 500, estimateValueSource: "company" });
     expect(p.promotedKeys).toEqual(new Set([key]));
   });
 
@@ -566,7 +566,7 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     const rows = [srcRow({ recordMonth: 9 })];
     const p = planCarry(rows, new Map(), grpOf(rows));
     const key = carryKey("5929", RAW34TEXT["5929"], 100, 9);
-    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: 500, estimateValueSource: null });
+    expect(p.carried.get(key)).toEqual({ shortSummary: "2年未満保有で優待品 500円相当", estimatedValue: 500, estimateValueSource: null });
     expect(p.promotedKeys).toEqual(new Set());
   });
 
@@ -575,9 +575,18 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     const rows = [srcRow({})];
     const key = carryKey("5929", RAW34TEXT["5929"], 100, 3);
     const p = planCarry(rows, new Map([[key, ["優待品カタログより選択"]]]), grpOf(rows));
-    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
+    expect(p.carried.get(key)).toEqual({ shortSummary: null, estimatedValue: null, estimateValueSource: null });
     expect(p.nulledKeys).toEqual(new Set([key]));
     expect(p.promotedKeys).toEqual(new Set());
+  });
+
+  it("保有期間の落ちた旧要約と金額を持ち越さず、原文と条件を保持して再作成へ回す", () => {
+    const rows = [srcRow({ description: "5年以上継続保有で合成商品3万円相当", shortSummary: "合成商品3万円相当", estimatedValue: 30000, estimateValueSource: "company" })];
+    const p = planCarry(rows, metaOf(rows), grpOf(rows));
+    const key = carryKey(rows[0].code, rows[0].description, 100, 3);
+    expect(p.carried.get(key)).toEqual({ shortSummary: null, estimatedValue: null, estimateValueSource: null });
+    expect(p.nulledKeys.has(key)).toBe(true);
+    expect(p.carriedRecordDates.get(key)).toBeNull();
   });
 
   it("見出しの金額は額面根拠にならない (裸の値は上げない)", () => {
@@ -585,7 +594,7 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     const rows = [srcRow({ description: "優待品の引換", estimatedValue: 3300 })];
     const key = carryKey("5929", "優待品の引換", 100, 3);
     const p = planCarry(rows, new Map([[key, ["3,300円相当の優待"]]]), grpOf(rows));
-    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
+    expect(p.carried.get(key)).toEqual({ shortSummary: "2年未満保有で優待品 500円相当", estimatedValue: null, estimateValueSource: null });
     expect(p.promotedKeys).toEqual(new Set());
   });
 
@@ -597,7 +606,7 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
       ["5929", new Map([[RAW34TEXT["5929"], { minShares: [100, 1000], recordMonths: [3, 3] }]])],
     ]);
     const p = planCarry(rows, new Map([[key, ["株主優待"]]]), groups);
-    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
+    expect(p.carried.get(key)).toEqual({ shortSummary: "2年未満保有で優待品 500円相当", estimatedValue: null, estimateValueSource: null });
     expect(p.nulledKeys).toEqual(new Set([key]));
     expect(p.promotedKeys).toEqual(new Set());
   });
@@ -606,12 +615,12 @@ describe("planCarry (退避計画の純関数。原文抜粋)", () => {
     // 掲載文は 8153 原文の alias、銘柄コードは合成 (pure carry test に実コード不要)。
     const desc = RAW8153;
     const rows = [
-      srcRow({ code: ABSENT_CODE, description: desc, estimatedValue: 500, estimateValueSource: "company" }),
+      srcRow({ code: ABSENT_CODE, description: desc, shortSummary: "保有期間に応じた優待券", estimatedValue: 500, estimateValueSource: "company" }),
     ];
     const p = planCarry(rows, metaOf(rows), grpOf(rows));
     const key = carryKey(ABSENT_CODE, desc, 100, 3);
-    // 要約は保持、値と出典は null (provenance 隠しで値を残さない)
-    expect(p.carried.get(key)).toEqual({ shortSummary: "優待品 500円相当", estimatedValue: null, estimateValueSource: null });
+    // 保有条件を残した要約は保持、値と出典は null。
+    expect(p.carried.get(key)).toEqual({ shortSummary: "保有期間に応じた優待券", estimatedValue: null, estimateValueSource: null });
     expect(p.nulledKeys).toEqual(new Set([key]));
     expect(p.promotedKeys).toEqual(new Set());
   });

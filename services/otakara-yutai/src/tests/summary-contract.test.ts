@@ -11,10 +11,29 @@ import {
   formatViolations,
   isSummaryPercentGrounded,
   isSummaryNumbersGrounded,
+  missingSummaryConditions,
   isVerbatimCopy,
 } from "../../data-scripts/summary-contract.js";
 
 const rules = (s: string) => checkSummary(s).map((v) => v.rule).sort();
+
+it("選択・保有・抽選・応募条件を全経路で検証し、株数を保有期間にしない", () => {
+  expect(missingSummaryConditions("100株以上の株主に商品", "商品")).toEqual([]);
+  expect(missingSummaryConditions("5年以上継続保有で商品3万円相当", "商品3万円相当")).toEqual(["holding_condition_missing"]);
+  expect(missingSummaryConditions("5年以上継続保有で商品3万円相当", "長期保有で商品3万円相当")).toEqual(["holding_condition_missing"]);
+  expect(missingSummaryConditions("5年以上継続保有で商品3万円相当", "5年以上保有で商品3万円相当")).toEqual([]);
+  expect(missingSummaryConditions("5年以上継続保有で商品3万円相当", "3年以上保有で商品3万円相当")).toEqual(["holding_condition_missing"]);
+  expect(missingSummaryConditions("1年未満2千円・1年以上5千円のカタログ", "保有期間に応じたカタログ")).toEqual([]);
+  expect(missingSummaryConditions("1年未満2千円・1年以上5千円のカタログ", "保有期間別のカタログ5千円")).toEqual(["holding_condition_missing"]);
+  expect(missingSummaryConditions("商品又は寄付を選択", "商品")).toEqual(["choice_condition_missing"]);
+  expect(missingSummaryConditions("応募株主から抽選で贈呈", "商品")).toEqual(["lottery_condition_missing", "application_condition_missing"]);
+  expect(missingSummaryConditions("応募株主から抽選で贈呈", "応募して抽選で商品")).toEqual([]);
+  expect(missingSummaryConditions("応募株主から抽選で贈呈", "抽選で商品")).toEqual(["application_condition_missing"]);
+  expect(missingSummaryConditions("申し込みが必要な商品", "商品")).toEqual(["application_condition_missing"]);
+  expect(missingSummaryConditions("申込株主から抽選で贈呈", "申込後に抽選で商品")).toEqual([]);
+  expect(missingSummaryConditions("半年以上保有し株主名簿に記載又は記録された株主に商品", "半年以上保有で商品")).toEqual([]);
+  expect(missingSummaryConditions("株主名簿に記載又は記録された株主は商品又は寄付を選択", "商品")).toEqual(["choice_condition_missing"]);
+});
 
 describe("checkSummary — 本番で実在した違反", () => {
   it("注記記号の取り込みを検出する", () => {
@@ -162,6 +181,24 @@ it("実原文の数量「1部」を照合し、数値・単位の変更は採用
   expect(isSummaryNumbersGrounded(source, "2部", context)).toBe(false);
   expect(isSummaryNumbersGrounded(source, "1本", context)).toBe(false);
   expect(isSummaryNumbersGrounded("一部は対象外", "一部は対象外", context)).toBe(true);
+});
+
+it("実在の株数範囲は下限recipientと原文の全範囲で照合する", () => {
+  // 2026-10-04の21時定時実行で、正しい範囲が上限株数だけで誤拒否された。
+  const source = "100株以上200株未満";
+  const context = { minShares: [100], recordMonths: [3] };
+  expect(isSummaryNumbersGrounded(source, source, context)).toBe(true);
+  expect(isSummaryNumbersGrounded("1,000株以上2,000株未満", "1000株以上2000株未満", { ...context, minShares: [1000] })).toBe(true);
+  expect(isSummaryNumbersGrounded(source, "100株以上300株未満", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, "100株以上200株以下", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, "200株", context)).toBe(false);
+  expect(isSummaryNumbersGrounded(source, source, { ...context, minShares: [100, 200] })).toBe(false);
+  expect(isSummaryNumbersGrounded(source, source, { ...context, minShares: [] })).toBe(false);
+  expect(isSummaryNumbersGrounded("100株以上・別条件200株未満", source, context)).toBe(false);
+  expect(isSummaryNumbersGrounded("100株以上100株未満", "100株以上100株未満", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("1,2株以上200株未満", "12株以上200株未満", { ...context, minShares: [12] })).toBe(false);
+  expect(isSummaryNumbersGrounded("-100株以上200株未満", source, context)).toBe(false);
+  expect(isSummaryNumbersGrounded("1万100株以上200株未満", source, context)).toBe(false);
 });
 
 it("原文と同じ日数・か月期間だけを裏づけ、権利月や換算から期間を補わない", () => {

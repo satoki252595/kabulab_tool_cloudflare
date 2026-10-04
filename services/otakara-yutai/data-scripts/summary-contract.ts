@@ -29,7 +29,32 @@ import { HEADED_MARK } from "./estimated-value-guard.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-04.4";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-04.7";
+
+/** 全生成・取込経路で、選択・保有・抽選・応募条件の欠落を保留する。 */
+export function missingSummaryConditions(description: string, summary: string): string[] {
+  const source = description.normalize("NFKC");
+  const text = summary.normalize("NFKC");
+  const missing: string[] = [];
+  const choice = /選[択べんぶび]|いずれか|または|又は/;
+  // 株主名簿の「記載又は記録」は優待の選択肢ではない。
+  const choices = source.replace(/記載\s*(?:または|又は)\s*記録/g, "");
+  if (choice.test(choices) && !choice.test(text)) missing.push("choice_condition_missing");
+  const period = /(?<![0-9.,])([0-9]+|半)\s*(年|か月|ヶ月|カ月|ヵ月)\s*(以上|未満|以下|超)/g;
+  const periods = (s: string): string[] => [...s.matchAll(period)].map(m => `${m[1]}${m[2]}${m[3]}`);
+  const requiredPeriods = [...new Set(periods(source))];
+  const claimedPeriods = periods(text);
+  const generalHolding = /保有期間(?:に応じ|別|により|によって)/.test(text) && !/[0-9]+[,.0-9]*\s*(?:万|千|百)?\s*(?:円|ポイント)/.test(text);
+  if ((/保有期間|継続保有|長期保有/.test(source) || requiredPeriods.length > 0) &&
+      ((!/保有|継続|長期/.test(text) && claimedPeriods.length === 0) ||
+       (requiredPeriods.some(p => !claimedPeriods.includes(p)) && !(requiredPeriods.length > 1 && generalHolding)))) {
+    missing.push("holding_condition_missing");
+  }
+  if (/抽選|当選/.test(source) && !/抽選|当選/.test(text)) missing.push("lottery_condition_missing");
+  const application = /応募|申(?:し)?込/;
+  if (application.test(source) && !application.test(text)) missing.push("application_condition_missing");
+  return missing;
+}
 
 /**
  * 要約の % 表現が掲載文に裏づけられているか。
@@ -61,6 +86,23 @@ export function isSummaryNumbersGrounded(
   shortSummary: string,
   context: { minShares: readonly number[]; recordMonths: readonly number[] },
 ): boolean {
+  // 上限株数はrecipientの下限ではない。原文と同じ完全な範囲だけを
+  // 下限recipientに結び付け、上限単体や別tierを根拠にしない。
+  const shareRange = /(?<![0-9.,+\-万千百億兆])([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*株\s*以上\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*株\s*未満/g;
+  const ranges = [...description.normalize("NFKC").matchAll(shareRange)].map((m) =>
+    [Number(m[1].replaceAll(",", "")), Number(m[2].replaceAll(",", ""))]);
+  let rangesGrounded = true;
+  const summaryWithoutRanges = shortSummary.normalize("NFKC").replace(shareRange, (_, low: string, high: string) => {
+    const lower = Number(low.replaceAll(",", ""));
+    const upper = Number(high.replaceAll(",", ""));
+    if (!Number.isSafeInteger(lower) || !Number.isSafeInteger(upper) || lower <= 0 || lower >= upper ||
+        context.minShares.length === 0 || !context.minShares.every((value) => value === lower) ||
+        !ranges.some(([sourceLower, sourceUpper]) => sourceLower === lower && sourceUpper === upper)) {
+      rangesGrounded = false;
+    }
+    return "";
+  });
+  if (!rangesGrounded) return false;
   const facts = (text: string, strict: boolean): { value: number; unit: string }[] | null => {
     const normalized = text.normalize("NFKC");
     // 1万5千円の末尾5千円だけ、1億円の一部などを根拠にしない。
@@ -73,7 +115,7 @@ export function isSummaryNumbersGrounded(
       unit: m[3] === "名" ? "人" : m[3] }));
   };
   const have = facts(description, false);
-  const wanted = facts(shortSummary, true);
+  const wanted = facts(summaryWithoutRanges, true);
   if (have === null || wanted === null) return false;
   return wanted.every((wanted) => {
     if (!Number.isFinite(wanted.value)) return false;
