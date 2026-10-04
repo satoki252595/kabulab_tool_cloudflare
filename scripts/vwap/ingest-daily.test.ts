@@ -150,6 +150,8 @@ const completedSaved = async (code: string) => {
 describe("daily source前の同日確定済み再開", () => {
   it("normal main uses one independent closed-session reference without trimming a Sunday 10y response", async () => {
     const observedAt = "2026-10-04T12:28:34.484Z";
+    vi.stubEnv("GITHUB_RUN_ID", "100");
+    vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(observedAt));
     try {
@@ -177,6 +179,7 @@ describe("daily source前の同日確定済み再開", () => {
       expect(rawHook.body).toBe(original);
       const savedBody = mockR2Put.mock.calls[0][1];
       vi.clearAllMocks();
+      vi.stubEnv("GITHUB_RUN_ID", "101");
       vi.setSystemTime(new Date("2026-10-04T13:00:00.000Z"));
       mockR2Get.mockResolvedValue({ body: savedBody, etag: "preserved-version" });
       vi.mocked(fetchDailySessionReference).mockResolvedValueOnce({ date: "2026-10-02",
@@ -189,6 +192,7 @@ describe("daily source前の同日確定済み再開", () => {
       expect(saved.proof?.observedAt).toBe(observedAt);
 
       vi.clearAllMocks();
+      vi.stubEnv("GITHUB_RUN_ID", "102");
       const nextObserved = "2026-10-05T12:28:34.484Z";
       vi.setSystemTime(new Date(nextObserved));
       const next = body.chart.result[0];
@@ -208,6 +212,7 @@ describe("daily source前の同日確定済み再開", () => {
       expect(assertSavedDailyShape(mockR2Put.mock.calls[0][1], "daily/A.json", "A").bars.at(-1)?.date).toBe("2026-10-05");
 
       vi.clearAllMocks();
+      vi.stubEnv("GITHUB_RUN_ID", "103");
       vi.setSystemTime(new Date("2026-10-05T13:00:00.000Z"));
       const broken = { ...saved, completedFetch: { ...saved.completedFetch!, sessionReference: { ...saved.completedFetch!.sessionReference!, rawSha: "invalid" } } };
       mockR2Get.mockResolvedValue({ body: JSON.stringify(broken), etag: "broken-witness" });
@@ -215,7 +220,7 @@ describe("daily source前の同日確定済み再開", () => {
       expect(mockFetchDaily).not.toHaveBeenCalled();
       expect(mockR2Put).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
-    } finally { vi.useRealTimers(); }
+    } finally { vi.useRealTimers(); vi.unstubAllEnvs(); }
   });
   it("成功済みprefixはYahoo/PUT0、legacy未完だけ取得・保管し、再開後は全件source0", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

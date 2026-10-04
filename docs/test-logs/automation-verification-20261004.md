@@ -129,6 +129,8 @@ Macの通常`main.ts run yutai-summary`をdefault60のまま契約`.7`で1回実
 
 統合変更の7suiteは195 pass・既存3 skip、型検査は終了0。独立レビューで1380/1383の実原本・時計・SHAを照合し、休日の再開時にも成功済み個別原文を再取得しないことを確認した。
 
+PR306の初回CIはPython成功、TypeScript側4,610 pass・既存433 skip・新設テスト1 failure。同じtest内の4論理runがCIの固定GITHUB_RUN_IDを共有し、通常summaryのwx再入防止で2回目の保管前に停止した。各論理runのIDを明示して既存保全を維持し、CI環境変数を再現した同suiteは20 pass・既存3 skipで成功した。
+
 ## Python定時4処理とTDnet
 
 通常default・実日付のまま4 workflowを直列に1回ずつ実行した。[需給37208518323](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37208518323)は4,352銘柄・失敗0、原申込日2026-10-01を保持し、同値のR2再書込0。[EDINET37209089832](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37209089832)は実10/4の日曜一覧0件で既存の明示停止となり、処理0・失敗1を保持した。[TDnet37209424609](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37209424609)は日曜の原一覧0件・処理0・失敗0で成功。[マスタ37209792039](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37209792039)は3,818件・失敗0、同値3,816件のPATCHを省き実差分2件だけを更新した。
