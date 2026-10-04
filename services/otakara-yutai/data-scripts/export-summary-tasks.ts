@@ -75,7 +75,7 @@ async function main(): Promise<void> {
   // D1 を読む前に確かめる (読んでから止まると無駄な往復になる)。
   assertNotCommittable(out);
 
-  const rows = await loadBenefitRows(openOtakaraD1());
+  const rows = await loadBenefitRows(openOtakaraD1(), "active-equity");
   const tasks = selectSummaryTasks(rows, { violationsOnly, limit, retaskKeys });
 
   mkdirSync(dirname(out), { recursive: true });
