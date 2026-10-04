@@ -716,6 +716,8 @@ export async function upsertDisclosuresByStock(
             rejudged++;
           }
         }
+        // 終端の既存行も D1 の参照へ戻す。再開時の未観測と区別する。
+        input.onPagePersisted?.(row.key, ex.pageId);
         skippedExisting++;
         continue;
       }

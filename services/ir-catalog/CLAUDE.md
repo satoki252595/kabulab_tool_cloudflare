@@ -91,5 +91,6 @@ services/ir-catalog/
 ```bash
 pnpm ir:backfill -- --from=YYYY-MM --to=YYYY-MM  # 全履歴 (冪等・再開可能)
 pnpm ingest:ir-tdnet                            # 手動キャッチアップ (通常は catchup.yml)
+pnpm ingest:ir-tdnet --resume-from=YYYY-MM-DD --resume-to=YYYY-MM-DD # 保存D1から二次保管のみ再開（両端を含む）
 pnpm test / pnpm typecheck / pnpm lint
 ```

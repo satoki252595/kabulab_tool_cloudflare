@@ -36,7 +36,11 @@ import {
   verifyArchivedAttachments,
   upsertDisclosuresByStock,
 } from "../../../../src/shared/notion-archive/index.js";
-import { ingestBatch } from "../services/ingest.js";
+vi.mock("../../../../src/shared/db/active-equity.js", () => ({
+  loadIngestCodeToId: vi.fn(async () => new Map([["1001", 1]])),
+}));
+
+import { ingestBatch, resumeNotionByStock } from "../services/ingest.js";
 
 const DDL = `
 CREATE TABLE ir_disclosures (
@@ -69,6 +73,12 @@ function createD1(sqlite: DatabaseSync): unknown {
       all: async () => ({ results: sqlite.prepare(query).all(...(params as any[])), success: true, meta: {} }),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       run: async () => ({ results: [], success: true, meta: sqlite.prepare(query).run(...(params as any[])) }),
+      // SELECT の列順を D1 raw() と同じ配列で返す。
+      raw: async () => {
+        const statement = sqlite.prepare(query);
+        statement.setReturnArrays(true);
+        return statement.all(...params as never[]);
+      },
       bind: (...next: unknown[]) => make(next),
     });
     return make([]);
@@ -120,6 +130,21 @@ describe("ingestBatch の二次予算", () => {
     expect(vi.mocked(upsertDisclosuresByStock)).toHaveBeenCalledTimes(1);
     return vi.mocked(upsertDisclosuresByStock).mock.calls[0]![0]!;
   }
+
+  it("保存済み入力の再開は一次取得/再投入なしで全件の二次保管へ渡す", async () => {
+    const db = makeDb(createD1(sqlite));
+    await ingestBatch(db as never, [ITEM], {batchKey: "saved", source: "test",
+      archiveToNotion: false, notionByStock: false, codeToId: new Map([["1001", 1]])});
+    const before = sqlite.prepare("SELECT * FROM ir_disclosures").all();
+    await resumeNotionByStock(db as never, new Date("2026-09-18T00:00:00+09:00"), new Date("2026-09-19T00:00:00+09:00"));
+    expect(recordPrimaryData).not.toHaveBeenCalled();
+    expect(upsertDisclosuresByStock).toHaveBeenCalledTimes(1);
+    const input = vi.mocked(upsertDisclosuresByStock).mock.calls[0][0];
+    expect(input.rows).toEqual([expect.objectContaining({key: ITEM.id, ticker: "1001", title: ITEM.title,
+      documentUrl: ITEM.document_url, pubdate: "2026-09-18T11:00:00.000Z"})]);
+    expect(input.deadlineMs).toBeUndefined();
+    expect(sqlite.prepare("SELECT * FROM ir_disclosures").all()).toEqual(before);
+  });
 
   it("相対予算は二次フェーズ開始から測る (D1 所要に依らない)", async () => {
     const before = Date.now();

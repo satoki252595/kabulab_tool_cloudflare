@@ -66,6 +66,23 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("既存終端の page ID を源GETなしで呼出元へ返し、再開の参照欠けを解消する", async () => {
+    const base = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (path.endsWith("/query")) return {results: [{id: "existing", properties: {
+        "TDnet ID": {rich_text: [{plain_text: row.key}]},
+        "IR資料状態": {select: {name: "uploaded"}}, "IR資料": {files: [{name: "real.pdf"}]},
+      }}], has_more: false} as never;
+      return base(method, path, body);
+    });
+    const persisted = vi.fn();
+    const { upsertDisclosuresByStock } = await import("./dataset.js");
+    const result = await upsertDisclosuresByStock({service: "test", tagOptions: [], rows: [row], onPagePersisted: persisted});
+    expect(result.skippedExisting).toBe(1);
+    expect(persisted).toHaveBeenCalledWith("T1", "existing");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("既知の PDF 不在は明示 skippedNoFile で保持する", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 404 })));
     const { upsertDisclosuresByStock } = await import("./dataset.js");

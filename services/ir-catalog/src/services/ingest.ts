@@ -19,7 +19,7 @@
  * 一次保管・読戻しの失敗は D1 書込前に throw。二次記録・D1 反映の
  * 例外も呼出元へ伝播し、CLI の失敗と後続取得の停止につなげる。
  */
-import { eq, sql } from "drizzle-orm";
+import { and, eq, gte, lt, sql } from "drizzle-orm";
 import {
   recordPrimaryData,
   verifyArchivedAttachments,
@@ -380,6 +380,47 @@ export async function ingestBatch(
     markets: p.marketsString,
   }));
 
+  const notionByStock = await archiveDisclosuresByStock(db, byStockRows, opts);
+
+  return {
+    fetched: items.length,
+    inUniverse: prepared.length,
+    upserted,
+    unclassified,
+    byPrimaryTag,
+    notionArchive,
+    notionByStock,
+  };
+}
+
+/** 保存済み D1 入力から二次保管を再開する。TDnet 一覧は再取得しない。 */
+export async function resumeNotionByStock(
+  db: Database, from: Date, toExclusive: Date
+): Promise<IngestResult["notionByStock"]> {
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(toExclusive.getTime())
+    || from >= toExclusive) throw new Error("TDnet 再開期間が不正です。");
+  const stored = await db.select().from(disclosures)
+    .where(and(gte(disclosures.pubdate, from), lt(disclosures.pubdate, toExclusive)))
+    .orderBy(disclosures.pubdate, disclosures.tdnetId);
+  const codeToId = await loadIngestCodeToId(db);
+  const rows: ByStockRow[] = stored.map((p) => {
+    const ticker = companyCodeToTicker(p.companyCode);
+    if (ticker === null || codeToId.get(ticker) !== p.stockId) {
+      throw new Error(`TDnet 保存行の銘柄対応が不一致: ${p.tdnetId}`);
+    }
+    return {key: p.tdnetId, ticker, companyName: p.companyName,
+      companyUrl: buffettCodeUrl(ticker), tags: p.tags, primaryTag: p.primaryTag,
+      pubdate: p.pubdate.toISOString(), title: p.title,
+      documentUrl: p.documentUrl, markets: p.marketsString};
+  });
+  console.info(`[ir-tdnet] 保存済み二次入力 ${rows.length}件（一覧取得0）`);
+  return archiveDisclosuresByStock(db, rows, {notionByStock: true});
+}
+
+async function archiveDisclosuresByStock(
+  db: Database, byStockRows: ByStockRow[],
+  opts: Pick<IngestOptions, "notionByStock" | "notionByStockBudgetMs" | "notionByStockDeadlineMs" | "rejudgePdfSentiment">
+): Promise<IngestResult["notionByStock"]> {
   let notionByStock: IngestResult["notionByStock"] = null;
   if (opts.notionByStock && byStockRows.length > 0) {
     // ファイルプロキシ用に (tdnet_id → notion_page_id) を収集して Postgres
@@ -448,13 +489,5 @@ export async function ingestBatch(
     };
   }
 
-  return {
-    fetched: items.length,
-    inUniverse: prepared.length,
-    upserted,
-    unclassified,
-    byPrimaryTag,
-    notionArchive,
-    notionByStock,
-  };
+  return notionByStock;
 }
