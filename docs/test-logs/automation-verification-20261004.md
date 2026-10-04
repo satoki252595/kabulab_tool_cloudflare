@@ -136,3 +136,11 @@ PR306の初回CIはPython成功、TypeScript側4,610 pass・既存433 skip・新
 通常default・実日付のまま4 workflowを直列に1回ずつ実行した。[需給37208518323](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37208518323)は4,352銘柄・失敗0、原申込日2026-10-01を保持し、同値のR2再書込0。[EDINET37209089832](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37209089832)は実10/4の日曜一覧0件で既存の明示停止となり、処理0・失敗1を保持した。[TDnet37209424609](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37209424609)は日曜の原一覧0件・処理0・失敗0で成功。[マスタ37209792039](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37209792039)は3,818件・失敗0、同値3,816件のPATCHを省き実差分2件だけを更新した。
 
 各通常経路で原本のNotion実体添付と全文読戻しを確認し、429・不明書込0。マスタPOSTはstock/EDINET各3,857行、sector33更新0。Node版TDnetの既定8日catchupは後続の1回として実行中で、完了済みEDINETやbiztagを重複起動しない。
+
+## 保存結果不明時の資金フロー停止
+
+通常all入口の指標同期・取得元loopが`NotionUnknownResultError`を通常エラーと同じ扱いにしていたため、未知の書込後にも後続取得元と最終取込ログへ進んでいた。既存型のまま即throwし、既知の原本品質不足は従来どおり全取得元の一部失敗へ集計する。観測の不正な成功ACKと指標の新規作成ID欠損も同型へ統一した。
+
+共有Notion入口でも、非読取の成功応答本文をdecodeできない場合は書込結果不明として再送0で停止する。read-listの厳密検証・GETの従来エラー・既知HTTP400/429の扱いを保持する。新回帰は旧実装の後続継続・ID未確定成功・SyntaxErrorで失敗し、統合8suite148テストは成功した。通常allは29取得元・定義163、実株価10/1を固定入力として1回実行する準備を済ませ、実行前の取得元・モデル・Notionは0。
+
+VWAP修復前のreadonly PREは14:50:38.106Zに全2,592件を完了し、範囲保護の全件適合・native読取障害0。旧本文447,244,325Bと保存版、提案本文464,125,156Bを私有fsyncで確認した（明示不存在1件）。receipt SHA `67a7e7defdb21e35342666a27ee7da0c1ccae1508460b3633e765d220171b96a`を固定し、取得元・Notion・PUT0のまま、新main反映後の原本保全と通常保存を待つ。
