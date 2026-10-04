@@ -47,4 +47,6 @@ NodeのTDnet通常取得・backfillは原HTTPを解析前に実体保管し、�
 
 この経路の既存Vitestに、原本保管前のD1書込禁止・PDF照合失敗後の次PDF取得禁止・本文保存失敗・対応行欠落の回帰検証を追加した。関連5suite47テスト、型検査・静的検査が成功。Python原本・月次鮮度を合わせた全テストも成功し、既存の実資料がない73件のskipは保持した。これらはコード検証であり、更新後の通常収集・実データ受入の結果は後続に記録する。
 
+独立レビューで、PDF抽出器が原本のArrayBufferをdetachし、後段照合で正常なPDFも不一致になる経路を検出した。共有の抽出入口で`bytes.slice()`を渡し、通常分類の全callerで原本を保持する。native transferを行う回帰テストは旧コードで失敗し、修正後は関連3suite51テストが成功した。
+
 PR #300は12:36:58Zにmain`79e6bbe63031ca8ddf86e571c8b4123654ed9058`へマージし、mainのCI3件成功、12:37:31Zのnative deploymentがversion`4d307582-410e-4705-b0cb-99d4b9939bcc`の100%配信であることを確認した。Macのkernel排他下で同mainへ更新し、canonical.envのaccepted revision以外は保持。通常の[cloud_check再実行37202784871](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37202784871)はR2両bucket・必須9表、processed=3 / failed=0で完了し、#299を閉じた。

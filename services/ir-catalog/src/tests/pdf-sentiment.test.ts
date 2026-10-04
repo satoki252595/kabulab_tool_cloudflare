@@ -11,7 +11,9 @@
  * 実 PDF (バイナリ) は使わない。すべて手書きの合成テキストで挙動を固定。
  * kuromoji 初期化 (~500-1000ms) があるため Engine 2 テストは少し遅い。
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as unpdf from "unpdf";
+import { extractPdfText } from "../services/pdf-sentiment/extract-text.js";
 import { classifyForecastRevision } from "../services/pdf-sentiment/rules/forecast-revision.js";
 import { classifyDividendRevision } from "../services/pdf-sentiment/rules/dividend-revision.js";
 import { classifyExtraordinaryPL } from "../services/pdf-sentiment/rules/extraordinary-pl.js";
@@ -21,6 +23,25 @@ import {
   parseAmount,
   parseJpNumber,
 } from "../services/pdf-sentiment/rules/numbers.js";
+vi.mock("unpdf", { spy: true });
+
+it("PDF抽出器がArrayBufferをdetachしても原本の全文照合用bytesを保持する", async () => {
+  const bytes = new TextEncoder().encode("%PDF-detach-test");
+  const original = bytes.slice();
+  const proxy = vi.spyOn(unpdf, "getDocumentProxy").mockImplementation(async (input) => {
+    if (!(input instanceof Uint8Array)) throw new Error("Expected PDF bytes");
+    structuredClone(input, { transfer: [input.buffer] });
+    return {} as never;
+  });
+  const text = vi.spyOn(unpdf, "extractText").mockResolvedValue({ text: "extracted" } as never);
+  try {
+    expect(await extractPdfText(bytes)).toBe("extracted");
+    expect(bytes).toEqual(original);
+  } finally {
+    proxy.mockRestore();
+    text.mockRestore();
+  }
+});
 
 describe("numbers.parseJpNumber", () => {
   it("半角・全角・カンマ・小数を扱う", () => {
