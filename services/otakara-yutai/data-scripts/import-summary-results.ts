@@ -132,7 +132,7 @@ async function main(): Promise<void> {
   const tasks = parseTaskFile(readFileSync(tasksPath, "utf-8"));
   const resultsText = readFileSync(resultsPath, "utf-8");
   const db = openOtakaraD1();
-  const currentRows = await loadBenefitRows(db);
+  const currentRows = await loadBenefitRows(db, "active-equity");
 
   const plan = planSummaryImport({ tasks, resultsText, currentRows, includeText: showText });
   console.info(`[summary:import] タスク ${tasks.length} 件 / D1 の優待行 ${currentRows.length}`);

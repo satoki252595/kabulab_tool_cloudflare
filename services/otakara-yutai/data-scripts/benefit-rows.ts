@@ -7,6 +7,7 @@
  */
 import "dotenv/config";
 import { assertRecordDate } from "../src/record-date.js";
+import { activeEquityCondition } from "../../../src/shared/db/active-equity.js";
 import { eq } from "drizzle-orm";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as schema from "../src/db/schema.js";
@@ -19,8 +20,12 @@ export function openOtakaraD1(): OtakaraD1 {
   return createD1HttpDb(schema);
 }
 
-export async function loadBenefitRows(db: OtakaraD1): Promise<BenefitRow[]> {
-  const rows = await db
+/** 要約consumerはactive-equityを明示する。全行退避はallで母集団外の履歴も読む。 */
+export async function loadBenefitRows(
+  db: OtakaraD1,
+  scope: "all" | "active-equity" = "all",
+): Promise<BenefitRow[]> {
+  const query = db
     .select({
       id: yutaiBenefits.id,
       stockId: yutaiBenefits.stockId,
@@ -37,6 +42,7 @@ export async function loadBenefitRows(db: OtakaraD1): Promise<BenefitRow[]> {
     })
     .from(yutaiBenefits)
     .innerJoin(stocks, eq(yutaiBenefits.stockId, stocks.id));
+  const rows = scope === "active-equity" ? await query.where(activeEquityCondition()) : await query;
   return rows.map((r) => {
     assertRecordDate(r.recordDate);
     return { ...r, updatedAt: Math.floor(r.updatedAt.getTime() / 1000) };

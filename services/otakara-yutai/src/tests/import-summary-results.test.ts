@@ -17,6 +17,7 @@ import {
   parseImportArgs,
   resolveTargetIds,
 } from "../../data-scripts/import-summary-results.js";
+import { loadBenefitRows, type OtakaraD1 } from "../../data-scripts/benefit-rows.js";
 import { benefitKey } from "../../data-scripts/benefit-key.js";
 import { ROOT } from "../../../../src/shared/db/tests/source-scan.js";
 
@@ -108,6 +109,25 @@ describe("makeSummaryWriter", () => {
 
   afterEach(() => {
     sqlite.close();
+  });
+
+  it.each([
+    { isActive: 0, instrumentType: "equity" },
+    { isActive: 1, instrumentType: "etf" },
+  ])("要約対象は正常母集団に絞り、全行退避では母集団外を保持する ($isActive/$instrumentType)", async ({ isActive, instrumentType }) => {
+    sqlite.prepare("UPDATE core_stocks SET is_active = ?, instrument_type = ? WHERE id = 1")
+      .run(isActive, instrumentType);
+    const before = sqlite.prepare("SELECT * FROM yutai_benefits").all();
+    const db = drizzle(async (query, params) => {
+      const stmt = sqlite.prepare(query);
+      stmt.setReturnArrays(true);
+      return { rows: stmt.all(...params as (null | number | bigint | string | Uint8Array)[]) };
+    }) as unknown as OtakaraD1;
+    expect(await loadBenefitRows(db, "active-equity")).toEqual([]);
+    expect(await loadBenefitRows(db)).toHaveLength(1);
+    sqlite.prepare("UPDATE core_stocks SET is_active = 1, instrument_type = 'equity' WHERE id = 1").run();
+    expect(await loadBenefitRows(db, "active-equity")).toHaveLength(1);
+    expect(sqlite.prepare("SELECT * FROM yutai_benefits").all()).toEqual(before);
   });
 
   it("4 列 (要約・推定値・出典・更新日時) を書く", async () => {

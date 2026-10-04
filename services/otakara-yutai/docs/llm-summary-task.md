@@ -4,6 +4,7 @@
 （Cursor Automations などのクラウド上の LLM）向けの仕様書です。この文書と
 タスクファイルがあれば作業できるように書いてあります。
 
+- 要約生成・書出し・取込は正常母集団（active かつ equity）の優待行を対象とする。母集団外の既存優待は全行退避に保持し、再生成・更新しない。
 - 契約の版: **`2026-10-05.12`**（`services/otakara-yutai/data-scripts/summary-contract.ts` の `SUMMARY_CONTRACT_VERSION`）
 - 書き出し: `pnpm yutai:summary:export`（`--violations-only` で契約違反の既存要約だけ）
 - 取り込み: `pnpm yutai:summary:import --tasks <タスク> --results <結果>`（既定は dry-run、`--apply` で書き込み）

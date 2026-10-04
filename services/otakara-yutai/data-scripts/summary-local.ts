@@ -461,7 +461,7 @@ function generate(tasksPath: string, runDir: string): Promise<string> {
 function dependencies(): LocalDependencies {
   const db = openOtakaraD1();
   return {
-    loadRows: () => loadBenefitRows(db),
+    loadRows: () => loadBenefitRows(db, "active-equity"),
     generate,
     async archive(bytes, clock, phase) {
       const file = {
