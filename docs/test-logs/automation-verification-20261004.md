@@ -121,4 +121,16 @@ Macの通常`main.ts run yutai-summary`をdefault60のまま契約`.7`で1回実
 
 [通常all 37202207552](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37202207552)はdailyの3,689対象中written838 / errors2,619 / sourceObserved3,456で、13:54Zに終了2。9409のnative R2 GETがInternalErrorとなり、intraは未実行、marginはskipだった。成功した838件は追加取得・書込0の全R2本文読戻しで形状・全bytesを確認した。部分成功を全量完了には扱わない。
 
-保管済み最初の30原文はgzip1,427,803B/SHA `f08daf6d28406741ffbae5f570795705e690aa27e9d466d30bdd6cc96af87947`の全文読戻しで全memberが一致した。1301の元受領時刻12:28:34.484Zとrange=10yの原応答では、確定session・末尾barは実10/2、先頭barは2016/10/3。日曜10/4の壁時計を使ったcallerが下限2016/10/4を契約にしており、10年取得範囲を誤拒否していた。原bars/eventsを切り詰めず、実sessionの契約を検証する共通修正を進める。取得元へのall再GETは実施しない。
+保管済み最初の30原文はgzip1,427,803B/SHA `f08daf6d28406741ffbae5f570795705e690aa27e9d466d30bdd6cc96af87947`の全文読戻しで全memberが一致した。1301の元受領時刻12:28:34.484Zとrange=10yの原応答では、確定session・末尾barは実10/2、先頭barは2016/10/3。日曜10/4の壁時計を使ったcallerが下限2016/10/4を契約にしており、10年取得範囲を誤拒否していた。
+
+共通修正では、通常実行の先頭で日経平均の原応答を1回だけ取得・実体保管して確定sessionを独立検証し、その日付から10年範囲を求める。個別銘柄の最終取引時刻が当日の終了時刻より前でも、確定済みの独立session・同日・元受領順序が全て一致した場合だけ受け入れる。日付が違う原文、欠けたbar、形成中の原文、出所・時計が不明な証跡は引き続き停止する。同一sessionの保存済み全行一致は個別Yahoo取得前にskipし、元取得時刻を保持する。R2 GETの既知一時障害は既存retryを最大3試行で使い、PUT・条件付き書込・不明結果の停止は変更しない。
+
+14:24:33Zまでに全3,456原文を116 gzipの全バイト読戻しで確認した（原bytes計471,923,669B、追加publisher/R2/write0、Notion3・4290）。同じ通常macroの実日経原本と保存済み完了時刻を使ったoffline再判定は3,423件適合・33件保留。既成功838件を除いた2,592件は修復候補で、旧R2の範囲・ETag検証とPRE実体保管を通過してから保存する。保留は日付不一致28件・原文NULL行5件で、価格や行を補わない。未観測233件、intra、marginの実受入はこの記録時点では未完。原文のall再GETは実施しない。
+
+統合変更の7suiteは195 pass・既存3 skip、型検査は終了0。独立レビューで1380/1383の実原本・時計・SHAを照合し、休日の再開時にも成功済み個別原文を再取得しないことを確認した。
+
+## Python定時4処理とTDnet
+
+通常default・実日付のまま4 workflowを直列に1回ずつ実行した。[需給37208518323](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37208518323)は4,352銘柄・失敗0、原申込日2026-10-01を保持し、同値のR2再書込0。[EDINET37209089832](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37209089832)は実10/4の日曜一覧0件で既存の明示停止となり、処理0・失敗1を保持した。[TDnet37209424609](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37209424609)は日曜の原一覧0件・処理0・失敗0で成功。[マスタ37209792039](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37209792039)は3,818件・失敗0、同値3,816件のPATCHを省き実差分2件だけを更新した。
+
+各通常経路で原本のNotion実体添付と全文読戻しを確認し、429・不明書込0。マスタPOSTはstock/EDINET各3,857行、sector33更新0。Node版TDnetの既定8日catchupは後続の1回として実行中で、完了済みEDINETやbiztagを重複起動しない。
