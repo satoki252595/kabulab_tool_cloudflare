@@ -85,7 +85,7 @@ jobs:
       # 同じ有報 1 通から並行構造化するため、本ステップ 1 つで両方が取り込まれる。
       - name: yuho-quant EDINET catchup (受注 + 海外売上)
         if: >-
-          (success() || steps.tdnet.outcome == 'failure') &&
+          success() &&
           (github.event_name == 'schedule' ||
             (github.event_name == 'workflow_dispatch' &&
               (github.event.inputs.target == 'edinet' || github.event.inputs.target == 'all')))

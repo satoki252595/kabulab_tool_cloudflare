@@ -67,6 +67,7 @@ vi.mock("../../services/ir-catalog/src/services/tdnet/client.js", () => ({
 }));
 vi.mock("../shared/notion-archive/index.js", () => ({
   recordPrimaryData: vi.fn(),
+  verifyArchivedAttachments: vi.fn().mockResolvedValue(undefined),
   upsertDisclosuresByStock: vi.fn(),
   findBackupRowsByKeys: vi.fn(async () => []),
 }));
@@ -196,6 +197,7 @@ describe("TDnet の取込は母集団外の開示を書かず、Notion にも渡
   it("runIrCatalogCatchup (日次キャッチアップ)", async () => {
     vi.mocked(listRange).mockResolvedValue(ALL_CODES.map(tdnetItem));
     vi.mocked(recordPrimaryData).mockResolvedValue({
+      pageId: "p1",
       outcome: "created",
       fileTooLarge: false,
     } as never);
