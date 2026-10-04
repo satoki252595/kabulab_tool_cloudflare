@@ -91,11 +91,18 @@ export function parseLocalArgs(argv: readonly string[]): LocalOptions {
   };
 }
 
-/** Continue after the last attempted key, including rejected tasks, so a bad first60 cannot starve others. */
-export function selectFairBatch(tasks: readonly SummaryTask[], cursor: string | null, limit: number): SummaryTask[] {
+/** 採用済みの cursor も元行で位置を確かめ、保留群の反復で未処理群を遅らせない。 */
+export function selectFairBatch(
+  tasks: readonly SummaryTask[], cursor: string | null, limit: number,
+  rows: readonly Pick<SummaryTask, "stockCode" | "description">[],
+): SummaryTask[] {
   if (!Number.isInteger(limit) || limit < 1 || limit > 60) throw new Error("invalid_limit");
-  const index = cursor === null ? -1 : tasks.findIndex((task) => task.taskId === cursor);
-  const start = index < 0 ? 0 : index + 1;
+  const previous = cursor === null ? undefined : rows.find(row => benefitKey(row.stockCode, row.description) === cursor);
+  // 月次原本の変更で cursor 自体が消えた場合は、新しい対象の先頭から一巡する。
+  const index = previous === undefined ? 0 : tasks.findIndex(task =>
+    task.stockCode > previous.stockCode ||
+    (task.stockCode === previous.stockCode && task.description > previous.description));
+  const start = index < 0 ? tasks.length : index;
   return [...tasks.slice(start), ...tasks.slice(0, start)].slice(0, limit);
 }
 
@@ -291,7 +298,7 @@ export async function runLocalSummary(options: LocalOptions, deps: LocalDependen
     if (!parsed.success) throw new Error("invalid_progress");
     cursor = parsed.data.cursor;
   }
-  const tasks = selectFairBatch(allTasks, cursor, options.limit);
+  const tasks = selectFairBatch(allTasks, cursor, options.limit, rows);
   const clock = new Date().toISOString();
   const runDir = join(state, randomUUID());
   privateDir(runDir);
