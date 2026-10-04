@@ -272,7 +272,7 @@ it("原文と同じ日数・か月期間だけを裏づけ、権利月や換算�
   expect(isSummaryNumbersGrounded("6か月以上保有", "6カ月以上保有", context)).toBe(true);
 });
 
-it.each(["袋", "パック", "セット", "冊", "ケース", "リットル", "室", "杯", "台", "箱", "ゲーム", "ホール", "商品", "親等", "種類"])("実在する数量単位%sを同数・同単位だけで照合する", (unit) => {
+it.each(["袋", "パック", "セット", "冊", "ケース", "リットル", "室", "杯", "台", "箱", "ゲーム", "ホール", "商品", "親等", "種類", "品", "缶"])("実在する数量単位%sを同数・同単位だけで照合する", (unit) => {
   const context = { minShares: [100], recordMonths: [3] };
   const source = `合成優待商品2${unit}`;
   expect(isSummaryNumbersGrounded(source, `商品2${unit}`, context)).toBe(true);
@@ -280,6 +280,21 @@ it.each(["袋", "パック", "セット", "冊", "ケース", "リットル", "�
   expect(isSummaryNumbersGrounded(source, "商品2枚", context)).toBe(false);
   expect(isSummaryNumbersGrounded(source, `商品二${unit}`, context)).toBe(false);
   expect(isSummaryNumbersGrounded("合成商品", `商品2${unit}`, context)).toBe(false);
+});
+
+it("品目・品種・缶目・缶詰を数量に切り出さず、未確認の尾を裏づけない", () => {
+  const context = { minShares: [100], recordMonths: [3] };
+  for (const source of ["1品目", "1品種"]) {
+    expect(isSummaryNumbersGrounded(source, "1品", context)).toBe(false);
+  }
+  for (const summary of ["1品目", "1品種", "1尾"]) {
+    expect(isSummaryNumbersGrounded("1品", summary, context)).toBe(false);
+  }
+  for (const source of ["1缶目", "1缶詰"]) {
+    expect(isSummaryNumbersGrounded(source, "1缶", context)).toBe(false);
+    expect(isSummaryNumbersGrounded("1缶", source, context)).toBe(false);
+  }
+  expect(isSummaryNumbersGrounded("1缶", "1尾", context)).toBe(false);
 });
 
 it("実原文のkg/Kgだけを同義照合し、重量の変更・換算・未観測大小文字を認めない", () => {
