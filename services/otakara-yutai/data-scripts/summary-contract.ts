@@ -29,7 +29,7 @@ import { HEADED_MARK } from "./estimated-value-guard.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-04.3";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-04.4";
 
 /**
  * 要約の % 表現が掲載文に裏づけられているか。
@@ -64,7 +64,7 @@ export function isSummaryNumbersGrounded(
   const facts = (text: string, strict: boolean): { value: number; unit: string }[] | null => {
     const normalized = text.normalize("NFKC");
     // 1万5千円の末尾5千円だけ、1億円の一部などを根拠にしない。
-    const pattern = /(?<![0-9.,万千百億兆])((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)\s*(万|千|百)?\s*(円|ポイント|枚|個|株|年|か月|月|日|回|名|人|点|口|泊|食|本|件|時間|kg|g|ml|L|%)/g;
+    const pattern = /(?<![0-9.,万千百億兆])((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)\s*(万|千|百)?\s*(円|ポイント|枚|個|株|年|か月|月|日|回|名|人|点|口|泊|食|本|部|件|時間|kg|g|ml|L|%)/g;
     const matches = [...normalized.matchAll(pattern)];
     const remainder = normalized.replace(pattern, "");
     if (strict && (/[0-9]/.test(remainder) ||
