@@ -457,37 +457,46 @@ class TestEdinetDailyTargetDate:
     def test_default_target_date_follows_schedule_not_start_time(self, started, expected):
         assert edinet_daily.default_target_date(started) == expected
 
-    def test_empty_document_list_is_recorded_as_failure(
-        self, monkeypatch, tmp_path
+    @pytest.mark.parametrize("archive_outcome", ["closed", "notion_unknown", "cloud_index_failure"])
+    def test_verified_empty_list_succeeds_only_after_raw_custody(
+        self, monkeypatch, tmp_path, captured_clients, caplog, archive_outcome
     ):
-        """一覧 0 件を「成功」で黙って終えない (§3-2 欠損を隠さない)。
+        """公式仕様の空例を実 collector 経由で検証。保管不明/索引失敗は非0のまま。"""
+        from types import SimpleNamespace
 
-        取得単位が 1 件も成立していないので runner の規則どおり「失敗」= 終了コード 1。
-        国民の祝日は EDINET 提出が 0 件のため、この経路で毎回赤くなるのは想定内で、
-        エラー通知が未実装の現状ではこれが唯一の生存確認を兼ねる (README に明記)。
-        実行履歴は D1 jss_job_runs に残る（Notion ⑦ は廃止）。
-        """
-        payload = b'{"metadata": {"status": "200"}, "results": []}'
+        payload = (Path(__file__).parent
+                   / "fixtures/edinet/documents_empty_api_v2_example.json").read_bytes()
+        monkeypatch.setattr(edinet, "fetch", lambda *a, **kw: SimpleNamespace(
+            content=payload, status_code=200,
+        ))
+        if archive_outcome == "notion_unknown":
+            def fail_upload(*a, **kw):
+                raise file_upload.RawUploadError("保管結果不明")
 
-        def fake_list(settings, target_date):
-            artifact = save_raw(
-                payload,
-                source=Source.EDINET,
-                datatype="documents_list",
-                scope="ALL",
-                data_date=target_date,
-                url="fixture://edinet/empty",
-                ext="json",
-                license_tag=source_license(Source.EDINET),
-                base_dir=settings.raw_data_dir,
+            monkeypatch.setattr(file_upload, "upload_raw_artifact", fail_upload)
+        elif archive_outcome == "cloud_index_failure":
+            def fail_cloud(ctx, *a, **kw):
+                ctx.cloud_failed += 1
+                return False
+
+            monkeypatch.setattr(runner.JobContext, "_cloud", fail_cloud)
+        # 空一覧では①④の読取にも書類本体取得にも進まない。
+        def forbidden(*a, **kw):
+            raise AssertionError("空一覧後の不要な取得")
+
+        monkeypatch.setattr(edinet_daily, "_load_master_maps", forbidden)
+        monkeypatch.setattr(edinet, "fetch_document", forbidden)
+        with caplog.at_level("INFO"):
+            code = edinet_daily.main(
+                ["--dry-run", "--date", "2023-04-03"],
+                env={**_env(tmp_path), "EDINET_API_KEY": "test-key"},
             )
-            return artifact, []
-
-        monkeypatch.setattr(edinet, "list_documents", fake_list)
-        code = edinet_daily.main(
-            ["--dry-run", "--date", "2026-09-10"], env=_env(tmp_path)
-        )
-        assert code == 1  # 黙って success で終わらない（11営業日の無言欠測の再発防止）
+        assert code == (0 if archive_outcome == "closed" else 1)
+        if archive_outcome == "closed":
+            assert "検証済み空一覧" in caplog.text
+            assert "processed=0 failed=0" in caplog.text
+            assert len(_ops_with_prop(captured_clients[0], S.RAW_PROP_SHA256)) == 1
+        assert _ops_with_prop(captured_clients[0], S.DISC_PROP_DOC_ID) == []
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

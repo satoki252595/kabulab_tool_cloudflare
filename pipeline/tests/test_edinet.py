@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import dry_settings, fixture_path
@@ -100,6 +102,7 @@ class TestErrorResponses:
 
         class _Resp:
             content = data
+            status_code = 200
             headers = {"Content-Type": "application/json; charset=utf-8"}  # 実レスポンスの値
 
         return _Resp()
@@ -124,6 +127,78 @@ class TestErrorResponses:
     def test_invalid_fetch_type_rejected(self, tmp_path):
         with pytest.raises(ValueError):
             mod.fetch_document(_settings(tmp_path), "S100ABCD", 3)
+
+
+class TestDocumentsListContract:
+    """公式 API v2 仕様書の空応答例 (PDF p.54)。実取得の日曜応答とは区別する。
+
+    https://disclosure2dl.edinet-fsa.go.jp/guide/static/disclosure/download/ESE140206.pdf
+    """
+
+    EXAMPLE = Path(__file__).parent / "fixtures/edinet/documents_empty_api_v2_example.json"
+
+    def test_official_empty_example_preserves_raw(self, tmp_path, monkeypatch):
+        data = self.EXAMPLE.read_bytes()
+        monkeypatch.setattr(mod, "fetch", lambda *a, **kw: SimpleNamespace(
+            content=data, status_code=200,
+        ))
+        artifact, results = mod.list_documents(_settings(tmp_path), date(2023, 4, 3))
+        assert results == []
+        assert artifact.local_path.read_bytes() == data
+        assert artifact.data_date == date(2023, 4, 3)
+        assert "Subscription-Key" not in artifact.url
+
+    @pytest.mark.parametrize("invalid", [
+        "http", "body", "metadata", "parameter", "date", "type", "resultset",
+        "boolean_count", "negative_count", "count_mismatch", "status", "message",
+        "process_missing", "process_format", "process_calendar", "results", "result_shape",
+    ])
+    def test_unqualified_response_is_not_an_empty_success(self, tmp_path, monkeypatch, invalid):
+        body = json.loads(self.EXAMPLE.read_bytes())
+        metadata = body["metadata"]
+        status_code = 200
+        if invalid == "http":
+            status_code = 206
+        elif invalid == "body":
+            body = []
+        elif invalid == "metadata":
+            body["metadata"] = None
+        elif invalid == "parameter":
+            metadata["parameter"] = []
+        elif invalid == "date":
+            metadata["parameter"]["date"] = "2023-04-04"
+        elif invalid == "type":
+            metadata["parameter"]["type"] = 2
+        elif invalid == "resultset":
+            metadata["resultset"] = None
+        elif invalid == "boolean_count":
+            metadata["resultset"]["count"] = False
+        elif invalid == "negative_count":
+            metadata["resultset"]["count"] = -1
+        elif invalid == "count_mismatch":
+            metadata["resultset"]["count"] = 1
+        elif invalid == "status":
+            metadata["status"] = 200
+        elif invalid == "message":
+            metadata["message"] = ""
+        elif invalid == "process_missing":
+            del metadata["processDateTime"]
+        elif invalid == "process_format":
+            metadata["processDateTime"] = "2023-04-03 13:01:00"
+        elif invalid == "process_calendar":
+            metadata["processDateTime"] = "2023-02-30 13:01"
+        elif invalid == "results":
+            body["results"] = None
+        elif invalid == "result_shape":
+            body["results"] = [None]
+            metadata["resultset"]["count"] = 1
+        data = json.dumps(body).encode()
+        monkeypatch.setattr(mod, "fetch", lambda *a, **kw: SimpleNamespace(
+            content=data, status_code=status_code,
+        ))
+        with pytest.raises(FetchError):
+            mod.list_documents(_settings(tmp_path), date(2023, 4, 3))
+        assert list(tmp_path.iterdir()) == []
 
 
 class TestFetchDocumentPassesDocId:
@@ -164,6 +239,7 @@ class TestWithRealDocumentsList:
 
         class _Resp:
             content = data
+            status_code = 200
             headers = {"Content-Type": "application/json; charset=utf-8"}
 
         monkeypatch.setattr(mod, "fetch", lambda url, **kw: _Resp())
