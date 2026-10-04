@@ -37,6 +37,10 @@ on:
         description: "5分足の取得範囲 (target=intra のバックフィル用。例 5d / 60d。Yahoo上限60d)"
         type: string
         default: "60d"
+      intra_codes:
+        description: "target=intra の対象コード（カンマ区切り）。空欄は通常の全母集団"
+        type: string
+        default: ""
 
 concurrency:
   group: vwap-ingest
@@ -118,7 +122,13 @@ jobs:
           github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'intra'
         env:
           INTRA_RANGE: ${{ github.event.inputs.intra_range }}
-        run: pnpm ingest:vwap-intra
+          INTRA_CODES: ${{ github.event.inputs.intra_codes }}
+        run: |
+          if [ -n "$INTRA_CODES" ]; then
+            pnpm ingest:vwap-intra --codes="$INTRA_CODES"
+          else
+            pnpm ingest:vwap-intra
+          fi
 
       # 信用残高 日次 (平日 cron または dispatch=margin/all)
       - name: VWAP margin (daily) → R2

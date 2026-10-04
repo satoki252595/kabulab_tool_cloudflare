@@ -163,10 +163,29 @@ describe("local summary generation/import boundary", () => {
   });
   it("rotates rejected first60 so later pending tasks are attempted", () => {
     const tasks = selectSummaryTasks(Array.from({ length: 65 }, (_, i) => row(i + 1)));
-    const first = selectFairBatch(tasks, null, 60);
-    const second = selectFairBatch(tasks, first.at(-1)!.taskId, 60);
+    const first = selectFairBatch(tasks, null, 60, tasks);
+    const second = selectFairBatch(tasks, first.at(-1)!.taskId, 60, tasks);
     expect(new Set([...first, ...second].map((t) => t.taskId)).size).toBe(65);
     expect(second.slice(0, 5)).toEqual(tasks.slice(60));
+  });
+  it("continues after an accepted cursor disappears from pending instead of repeating an earlier rejection", async () => {
+    const { deps, rows } = dependencies([row(1), row(2), row(3)]);
+    const batches: string[][] = [];
+    deps.generate = async (path) => {
+      const tasks = parseTaskFile(readFileSync(path, "utf8"));
+      batches.push(tasks.map(task => task.stockCode));
+      const lines = protocol(tasks).trim().split("\n").map(line => JSON.parse(line));
+      for (let i = 0; i < tasks.length; i++) {
+        if (tasks[i].stockCode === "9001") lines[i + 1].text = '{"shortSummary":"※注記を残す合成商品"}';
+      }
+      return lines.map(line => JSON.stringify(line)).join("\n");
+    };
+    const dir = state();
+    expect(await runLocalSummary({ stateDir: dir, limit: 2 }, deps)).toMatchObject({ accepted: 1, rejected: 1, pendingAfter: 2 });
+    expect(selectSummaryTasks(rows()).map(task => task.stockCode)).toEqual(["9001", "9003"]);
+    expect(await runLocalSummary({ stateDir: dir, limit: 2 }, deps)).toMatchObject({ accepted: 1, rejected: 1, pendingAfter: 1 });
+    expect(batches).toEqual([["9001", "9002"], ["9003", "9001"]]);
+    expect(rows()[0]).toEqual(row(1));
   });
   it("does not permit the generator to supply any amount or a substituted task", () => {
     const tasks = selectSummaryTasks([row()]);
