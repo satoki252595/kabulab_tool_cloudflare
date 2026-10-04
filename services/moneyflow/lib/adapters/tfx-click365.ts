@@ -52,6 +52,7 @@ import {
   type FetchedBatch,
   type MoneyflowSourceSpec,
   type ObservationDraft,
+  type ResolvedBatch,
   type SpecFile,
 } from "../source-spec.js";
 
@@ -133,7 +134,7 @@ export const TFX_FX_INSTRUMENTS: readonly string[] = [
   "ユーロ／米国ドル（ラージ）",
 ];
 
-/** くりっく株365 の銘柄 (原資料の表記・掲載順。末尾の「／26」も原資料のまま)。 */
+/** くりっく株365 の確認済み銘柄。リセット年26/27を原名のまま別区分として保持。 */
 export const TFX_CFD_INSTRUMENTS: readonly string[] = [
   "日経 225 リセット付証拠金取引／26",
   "日経 225 マイクロ リセット付証拠金取引／26",
@@ -146,6 +147,17 @@ export const TFX_CFD_INSTRUMENTS: readonly string[] = [
   "銀ETFリセット付証拠金取引／26",
   "プラチナETFリセット付証拠金取引／26",
   "原油ETF リセット付証拠金取引／26",
+  "日経 225 リセット付証拠金取引／27",
+  "日経 225 マイクロ リセット付証拠金取引／27",
+  "NYダウ リセット付証拠金取引／27",
+  "NASDAQ-100 リセット付証拠金取引／27",
+  "ラッセル2000リセット付証拠金取引／27",
+  "DAX(R) リセット付証拠金取引／27",
+  "FTSE100 リセット付証拠金取引／27",
+  "金ETF リセット付証拠金取引／27",
+  "銀ETFリセット付証拠金取引／27",
+  "プラチナETFリセット付証拠金取引／27",
+  "原油ETF リセット付証拠金取引／27",
 ];
 
 // ---------------------------------------------------------------------------
@@ -181,10 +193,11 @@ const FX_SCOPE =
 const CFD_SCOPE =
   "取得元: TFX「取引所株価指数証拠金取引 出来高推移」ページ(HTMLの表)。対象はくりっく株365" +
   "(取引所CFD)だけで、証券会社の店頭CFDや、大阪取引所の日経225先物などは含まない。" +
-  "銘柄名は原資料の表記どおりで、末尾の「／26」も含めて2026-09-27時点の11銘柄に固定する。" +
-  "「／26」が何を表すかは原資料に説明が無く未確認。表記が変わる(例: 「／27」)と未知の銘柄" +
-  "として取込を失敗させるので、そのときに旧表記と同じ区分として続けて扱うかを判断して" +
-  "対応表を更新する(同じ月が別の区分名で二重に記録されないよう注意)。" +
+  "銘柄名は原資料の表記どおり、確認済みの／26・／27各11商品を別区分で保持する。" +
+  "末尾はリセット年で、旧新商品は約3か月重複して取引され自動で移行しない。" +
+  "2027年リセット商品の取引開始は2026-09-14（2026-08-14公式発表: " +
+  "https://www.clickkabu365.jp/newsfile/article/20260814-10）。／27の上場前月次「-」は欠測であり0にしない。" +
+  "未確認のリセット年（／28等）・商品名は取込を停止し、旧／26の履歴へ新／27を上書きしない。" +
   "1枚の大きさは銘柄で異なるため、銘柄どうしの枚数の合計・比較は規模を表さない。";
 
 const MONTHLY_WINDOW_NOTE =
@@ -521,7 +534,7 @@ export function tfxPageFilename(key: string): string {
 // 取得・解析 (共通)
 // ---------------------------------------------------------------------------
 
-interface FetchedPage {
+export interface FetchedPage {
   url: string;
   bytes: Uint8Array;
   fetchedAt: string;
@@ -845,21 +858,31 @@ function annualObservations(cfg: MarketConfig, key: string, files: readonly Spec
 // spec
 // ---------------------------------------------------------------------------
 
+/** 通常4callerと保管済み原本の受入で共用する純部。取得・保管は行わず、元受信時計を保持する。 */
+export function resolveTfxClick365Page(market: TfxMarket, kind: "month" | "year", page: FetchedPage, now: Date): ResolvedBatch {
+  const cfg = market === "click365_fx" ? FX_CONFIG : market === "clickkabu365_cfd" ? CFD_CONFIG : undefined;
+  if (!cfg || (kind !== "month" && kind !== "year")) throw new Error("TFX: 市場・期間種別が不正です");
+  if (page.url !== resolveTfxClick365Url(market)) throw new Error("TFX: 原本URLが市場の正準URLと一致しません");
+  const observed = new Date(page.fetchedAt);
+  if (!Number.isFinite(observed.getTime()) || observed.toISOString() !== page.fetchedAt) throw new Error("TFX: 原本の取得時計がfull ISO形式ではありません");
+  const specName = kind === "month" ? cfg.monthlySpecName : cfg.annualSpecName, context = `[${specName}]`;
+  const data = parsePage(page.bytes, cfg, context, page.fetchedAt);
+  const latestMonth = latestTfxPublishedPeriod(data.monthlyVolume);
+  assertFresh(latestMonth, now, context);
+  const latest = kind === "month" ? latestMonth : latestTfxPublishedPeriod(data.annualVolume);
+  if (kind === "year") assertAnnualConsistent(latest, latestMonth, context);
+  assertLatestColumnsFilled(data, kind, latest, context);
+  const key = `${specName}-${latest}`, batch = buildBatch({ cfg, specName, key, page, latestPeriod: latest, now });
+  return { key, fetch: async () => batch };
+}
+
 function monthlySpec(cfg: MarketConfig): MoneyflowSourceSpec {
   return {
     name: cfg.monthlySpecName,
     indicators: cfg.monthlyIndicators,
     async resolve(now, dryRun = false) {
-      const context = `[${cfg.monthlySpecName}]`;
       const page = await fetchPageBytes(cfg, dryRun);
-      const data = parsePage(page.bytes, cfg, context, page.fetchedAt);
-      const latest = latestTfxPublishedPeriod(data.monthlyVolume);
-      assertFresh(latest, now, context);
-      // 値の無い列からキーを作って保管すると、そのキーは後で値が埋まっても取り込まれない
-      assertLatestColumnsFilled(data, "month", latest, context);
-      const key = `${cfg.monthlySpecName}-${latest}`;
-      const batch = buildBatch({ cfg, specName: cfg.monthlySpecName, key, page, latestPeriod: latest, now });
-      return { key, fetch: async () => batch };
+      return resolveTfxClick365Page(cfg.market, "month", page, now);
     },
     toObservations: ({ key, files }) => monthlyObservations(cfg, key, files),
   };
@@ -870,18 +893,8 @@ function annualSpec(cfg: MarketConfig): MoneyflowSourceSpec {
     name: cfg.annualSpecName,
     indicators: cfg.annualIndicators,
     async resolve(now, dryRun = false) {
-      const context = `[${cfg.annualSpecName}]`;
       const page = await fetchPageBytes(cfg, dryRun);
-      const data = parsePage(page.bytes, cfg, context, page.fetchedAt);
-      // ページ自体が更新され続けているか (月次の最新月) も確かめる
-      const latestMonth = latestTfxPublishedPeriod(data.monthlyVolume);
-      assertFresh(latestMonth, now, context);
-      const latestYear = latestTfxPublishedPeriod(data.annualVolume);
-      assertAnnualConsistent(latestYear, latestMonth, context);
-      assertLatestColumnsFilled(data, "year", latestYear, context);
-      const key = `${cfg.annualSpecName}-${latestYear}`;
-      const batch = buildBatch({ cfg, specName: cfg.annualSpecName, key, page, latestPeriod: latestYear, now });
-      return { key, fetch: async () => batch };
+      return resolveTfxClick365Page(cfg.market, "year", page, now);
     },
     toObservations: ({ key, files }) => annualObservations(cfg, key, files),
   };
