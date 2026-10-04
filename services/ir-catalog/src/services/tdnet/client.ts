@@ -13,11 +13,14 @@
  *
  * サイトに負荷をかけない方針 (ユーザ要件):
  *   - 全リクエストをプロセス内で直列化し最小間隔を強制
- *   - 一過性失敗 (5xx/429/ネットワーク) は指数バックオフで再試行
+ *   - 受信原 bytes を物理保管・読戻し照合してから parse。未知失敗は後続取得を停止
  *   - 恒久的失敗 (4xx) は throw (ルール2: 既定値で握りつぶさない)
  *   - 1 日が DAY_LIMIT 以上 = API 仕様変更の疑い → 黙って切り捨てず throw
  */
 import type { TdnetItemRaw } from "./types.js";
+import { recordPrimaryData, verifyArchivedAttachments } from "../../../../../src/shared/notion-archive/index.js";
+import { notionEnv } from "../../../../../src/shared/notion-archive/env.js";
+import { sha256HexBytes } from "../../../../../src/shared/sha256.js";
 import { normalizeTdnetItem } from "./types.js";
 
 const API_BASE = "https://webapi.yanoshin.jp/webapi/tdnet/list";
@@ -25,7 +28,6 @@ const API_BASE = "https://webapi.yanoshin.jp/webapi/tdnet/list";
 const DAY_LIMIT = 8000;
 /** サイト負荷軽減のためのリクエスト間最小間隔 */
 const MIN_INTERVAL_MS = 750;
-const MAX_RETRY = 5;
 
 let chain: Promise<unknown> = Promise.resolve();
 let lastStart = 0;
@@ -55,71 +57,68 @@ interface RawResponse {
 async function fetchDay(ymd: string): Promise<TdnetItemRaw[]> {
   return schedule(async () => {
     const url = `${API_BASE}/${ymd}.json?limit=${DAY_LIMIT}`;
-    let attempt = 0;
-    for (;;) {
-      attempt++;
-      let res: Response;
-      try {
-        res = await fetch(url, {
-          headers: {
-            "User-Agent":
-              "kabulab-ir-catalog/1.0 (+https://kabulab-cf.satoki252595.workers.dev/ir-catalog/)",
-          },
-        });
-      } catch (e) {
-        if (attempt > MAX_RETRY) {
-          throw new Error(
-            `TDnet 通信失敗 ${ymd} ${MAX_RETRY} 回再試行後も失敗: ${(e as Error).message}`,
-            { cause: e }
-          );
-        }
-        await sleep(Math.min(20_000, 800 * 2 ** attempt));
-        continue;
-      }
-      if (res.ok) {
-        const json = (await res.json()) as RawResponse;
-        if (!Array.isArray(json.items)) {
-          throw new Error(
-            `TDnet レスポンス形式が不正 ${ymd}: items が配列でない`
-          );
-        }
-        const raw = json.items.length;
-        const items: TdnetItemRaw[] = [];
-        for (const it of json.items) {
-          const n = normalizeTdnetItem(it, ymd);
-          if (n) items.push(n);
-        }
-        const skipped = raw - items.length;
-        if (skipped > 0) {
-          // 異常入力を黙殺せず件数を運用者に可視化 (ルール2)。バッチ全体は
-          // 落とさない (1 件の異常で日/月を失わない)。
-          console.warn(
-            `[tdnet] ${ymd}: ${skipped}/${raw} 件を異常入力として除外`
-          );
-        }
-        // 上限到達は取りこぼしの可能性。捏造/切り捨てせず throw (ルール2)。
-        if (raw >= DAY_LIMIT) {
-          throw new Error(
-            `TDnet ${ymd} が DAY_LIMIT(${DAY_LIMIT}) に到達 (${raw})。` +
-              `API 仕様変更の疑い — 黙って切り捨てない (ルール2)`
-          );
-        }
-        return items;
-      }
-      // 4xx (429 除く) は恒久エラー
-      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-        const body = await res.text().catch(() => "");
-        throw new Error(
-          `TDnet API エラー ${ymd} status=${res.status} ${body.slice(0, 200)}`
-        );
-      }
-      if (attempt > MAX_RETRY) {
-        throw new Error(
-          `TDnet API ${ymd} status=${res.status} ${MAX_RETRY} 回再試行後も失敗`
-        );
-      }
-      await sleep(Math.min(20_000, 800 * 2 ** attempt));
+    const res = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000),
+      headers: {
+        "User-Agent":
+          "kabulab-ir-catalog/1.0 (+https://kabulab-cf.satoki252595.workers.dev/ir-catalog/)",
+      },
+    });
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const fetchedAt = new Date().toISOString();
+    const sha256 = await sha256HexBytes(bytes);
+    const key = `tdnet-source-${ymd}-${res.status}-${sha256}`;
+    const files = [{ bytes, filename: `${key}.txt`, contentType: "text/plain" }];
+    // HTTP 原文 (ラッパ・未解釈 fields・空白も含む) は DTO に代替しない。
+    // 非200も保管し、保管未知は HTTP 再取得せずこのまま throw。
+    const archive = await recordPrimaryData({
+      service: "ir-catalog",
+      key,
+      source: url,
+      fetchedAt,
+      metadata: {
+        ymd, status: res.status, responseUrl: res.url,
+        contentType: res.headers.get("content-type"), sha256, byteLength: bytes.length,
+      },
+      files,
+    });
+    if (archive.fileTooLarge) throw new Error("TDnet HTTP 原文が容量上限で未保管のため停止");
+    await verifyArchivedAttachments(archive.pageId, files, "TDnet HTTP 原文");
+    if (res.status !== 200) throw new Error(`TDnet API エラー ${ymd} status=${res.status}`);
+    let json: RawResponse;
+    try {
+      json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as RawResponse;
+    } catch {
+      throw new Error(`TDnet HTTP 原文を JSON として解釈できないため停止 ${ymd}`);
     }
+    if (!json || !Array.isArray(json.items)) {
+      throw new Error(
+        `TDnet レスポンス形式が不正 ${ymd}: items が配列でない`
+      );
+    }
+    const raw = json.items.length;
+    const items: TdnetItemRaw[] = [];
+    for (const it of json.items) {
+      const n = normalizeTdnetItem(it, ymd);
+      if (n) items.push(n);
+    }
+    const skipped = raw - items.length;
+    if (skipped > 0) {
+      // 異常入力を黙殺せず件数を運用者に可視化 (ルール2)。バッチ全体は
+      // 落とさない (1 件の異常で日/月を失わない)。
+      console.warn(
+        `[tdnet] ${ymd}: ${skipped}/${raw} 件を異常入力として除外`
+      );
+    }
+    // 上限到達は取りこぼしの可能性。捏造/切り捨てせず throw (ルール2)。
+    if (raw >= DAY_LIMIT) {
+      throw new Error(
+        `TDnet ${ymd} が DAY_LIMIT(${DAY_LIMIT}) に到達 (${raw})。` +
+          `API 仕様変更の疑い — 黙って切り捨てない (ルール2)`
+      );
+    }
+    return items;
   });
 }
 
@@ -146,6 +145,9 @@ function dateToYmd(d: Date): string {
  * 切られるため、取りこぼさない唯一の確実な方法が日次取得。
  */
 export async function listRange(range: string): Promise<TdnetItemRaw[]> {
+  // normal/backfill とも原文保管の設定を源取得より前に検査する。
+  notionEnv.NOTION_TOKEN();
+  notionEnv.NOTION_ARCHIVE_PAGE_ID();
   const m = /^(\d{8})(?:-(\d{8}))?$/.exec(range.trim());
   if (!m) {
     throw new Error(
