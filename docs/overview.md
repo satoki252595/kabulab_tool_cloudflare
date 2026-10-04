@@ -135,8 +135,8 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 │   │   ├── daily.ts                   # pnpm sync:daily:core (core/rsi/swing → D1。GitHub Actions)
 │   │   ├── monthly.ts                 # pnpm sync:monthly:core (otakara 派生テーブル rebuild → D1)
 │   │   ├── all-daily.ts               # pnpm sync:daily (core + VWAP のローカル手動フル)
-│   │   ├── all-monthly.ts             # pnpm sync:monthly (rebuild + 優待4工程のローカル手動フル)
-│   │   ├── yuho-edinet.ts             # pnpm ingest:yuho-edinet (Worker /yuho-quant/admin/catchup を叩く)
+│   │   ├── all-monthly.ts             # pnpm sync:monthly (優待取得→派生再計算→Macローカル要約)
+│   │   ├── yuho-edinet.ts             # pnpm ingest:yuho-edinet (Node共通取込→Notion/D1)
 │   │   └── ir-tdnet.ts                # pnpm ingest:ir-tdnet (TDnet + kuromoji → D1 HTTP)
 │   └── vwap/                          # 007 VWAP 取込 → R2 (GitHub Actions で定期実行)
 ├── drizzle/                           # マイグレーション SQL。drizzle/d1/*.sql が D1 へ適用する正本
@@ -144,7 +144,7 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 ├── drizzle.d1.config.ts               # D1 スキーマ生成用 drizzle-kit 設定 (sqlite dialect)
 ├── package.json
 ├── wrangler.toml                      # Worker 設定 (DB=D1 / BUCKET=R2 / ASSETS=public バインディング)
-├── .github/workflows/                # GitHub Actions 4 本: stock-sync / vwap-ingest / catchup / ci
+├── .github/workflows/                # GitHub Actions 12定義 (Node/Python取込・CI・監視・手動復旧)
 └── tsconfig.json / vitest.config.ts / eslint.config.js
 ```
 
@@ -158,12 +158,12 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 | `/rsi-screening/*` | 001 サブアプリ ([services/rsi-screening/app.ts](../services/rsi-screening/app.ts)) |
 | `/swing-trading/*` | 003 サブアプリ ([services/swing-trading/app.ts](../services/swing-trading/app.ts)) |
 | `/financial-math/*` | 004 サブアプリ ([services/financial-math/app.ts](../services/financial-math/app.ts)) |
-| `/yuho-quant/*` | 005 サブアプリ ([services/yuho-quant/app.ts](../services/yuho-quant/app.ts))。`/yuho-quant/admin/catchup` は EDINET 取込の認証ルート (GitHub Actions catchup が叩く) |
+| `/yuho-quant/*` | 005 サブアプリ ([services/yuho-quant/app.ts](../services/yuho-quant/app.ts))。`/yuho-quant/admin/catchup` は EDINET 取込の認証ルート。現行ActionsはNodeの共通取込CLIを直接実行する |
 | `/ir-catalog/*` | 006 サブアプリ ([services/ir-catalog/app.ts](../services/ir-catalog/app.ts)) |
 | `/vwap-analysis/*` | 007 サブアプリ ([services/vwap-analysis/app.ts](../services/vwap-analysis/app.ts))。R2 時系列を `c.env.BUCKET` 経由で読取 |
 | `/api/ingest/*` | 内部認証付きルート群 ([src/routes/ingest-proxy.ts](../src/routes/ingest-proxy.ts))。`/yahoo` は GitHub Actions(Node) の Yahoo 取得をCloudflare経由にし、認証・取得間隔・制限時の停止を共有する。`/moneyflow-sector` (008) は既存 D1 (`swing_daily_ohlcv`×`core_stocks.sector`) を週単位に集計して返す (personal-only 列を使うため内部限定)。いずれも `CRON_SECRET` で認証 |
 
-トレーリングスラッシュの有無を吸収するため、ルートおよびサブアプリは `new Hono({ strict: false })` で生成している。日次/月次の指標計算・VWAP 取込は Worker 上の cron ではなく **GitHub Actions(Node)** が担い、D1 へは `createD1HttpDb` (D1 REST) で直接書き込む (Workers Paid / Workers Cron を使わない無料運用)。
+トレーリングスラッシュの有無を吸収するため、ルートおよびサブアプリは `new Hono({ strict: false })` で生成している。日次/月次の指標計算・VWAP取込は **GitHub Actions(Node)** が担い、D1へは `createD1HttpDb` (D1 REST) で書き込む。Workers PaidのCronは株式・マクロの起動と期限確認を担当する ([stock-scheduler](./stock-scheduler.md))。
 
 ## DB 設計 — 単一 source of truth
 
@@ -264,9 +264,9 @@ JPX 公式 `data_j.xlsx` の東証内国株 (プライム/スタンダード/グ
 1 銘柄につき Yahoo を **Chart(5y) 1 回 + QuoteSummary 1 回** だけ叩き、in-memory で全サービス分の指標を計算して D1 に書き込む。
 
 - Phase 1: 必須 D1 スキーマを検証し、`core_stocks` から active 銘柄を取得
-- Phase 2: マクロ指数 (^N225 / ^VIX / ^GSPC / NIY=F) + 日経VI を並列取得
-- Phase 3: worker pool (CONCURRENCY=5, DELAY_MS=150) で:
-  - Yahoo `fetchStockRawData(code, "5y")` = Chart + QuoteSummary 並列 (`YAHOO_PROXY_BASE` 経由)
+- Phase 2: 必須の日経平均を確認してから他のマクロ指数 (^VIX / ^GSPC / NIY=F) + 日経VIへ進み、資格が欠ければ後続取得を止める
+- Phase 3: worker pool (CONCURRENCY=1, DELAY_MS=150) で:
+  - Yahoo `fetchStockRawData(code, "5y")` = Chart + QuoteSummary (`YAHOO_PROXY_BASE` 経由)。実HTTPは共有clientの1秒間隔・直列取得に従う
   - 5y OHLCV → RSI(10/40/120) 時系列 + percentile snapshot + 優良株判定
   - 6mo スライス → SMA(5/20/25/60/75) + ATR14 + RSI14 + MACD + Fib + volume/turnover + 前日比%
   - 5 条件 screening と E&E 6 パターン判定
@@ -274,7 +274,7 @@ JPX 公式 `data_j.xlsx` の東証内国株 (プライム/スタンダード/グ
   - Yahoo の個別取得失敗はコードと根本原因を記録し、`is_active` は変更しない
 - Phase 4: セクター集計。`core_stocks ⋈ swing_stock_indicators` を D1 から再読込し、本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留 (前回値維持)・警告。`swing_sector_daily` 書き直し
 
-母集団 ~3,700 を 1 回の Node 実行で回す。個別銘柄またはマクロに欠損があれば終了コードを非ゼロにして、部分成功を正常終了として扱わない。GitHub Actions ジョブの `timeout-minutes: 90` (~40-50 分/回) 内で完結する (public repo のため Actions 分課金は無し)。
+母集団 ~3,700 を 1 回の Node 実行で回す。空母集団・件数不整合・マクロ失敗・個別銘柄の失敗率1%超は非ゼロで終了する。既存L-57契約では1%以下の個別失敗をtrace付きで成功扱いにするが、後続moneyflowは起動しない。現行stock-syncのジョブ上限は210分で、これは実所要時間や完了保証ではない。public repoの標準runnerの分課金条件は[費用確認](./cost-audit-2026-10-01.md)を参照する。
 
 `pnpm sync:daily` はローカル手動用のフルオーケストレータで、この core 同期に加えて
 VWAP の日足10年・5分足・信用残高を順に実行する。定常運用では stock-sync と
@@ -290,18 +290,17 @@ vwap-ingest の各 GitHub Actions が別々に担当する。
 stock-sync の月次ジョブは次の順に別コマンドとして実行する。
 
 1. `pnpm sync:universe` — JPX `data_j.xlsx` から東証母集団を同期
-2. `pnpm sync:monthly:core` — otakara 派生テーブルを rebuild
+2. `pnpm yutai:fetch` — 優待原文の全量取得・実体保管・取込
+3. `pnpm sync:monthly:core` — otakara 派生テーブルを rebuild
 
-`pnpm sync:monthly` はローカル手動用のフルオーケストレータで、core rebuild に加え、
-優待取得、記述抽出、要約タスクの書き出しを順に実行する (要約そのものは外部のクラウド LLM が行い、
-`pnpm yutai:summary:import` で検証して取り込む。要約が未反映でも月次同期は失敗させない)。
+`pnpm sync:monthly` はMacの手動用で、優待取得→派生再計算→通常ローカル要約を順に実行し、失敗時は後続を止める。定時運用はActionsの月次取得とMacの21時要約に分かれる。
 
 ### その他の取込ワークフロー (GitHub Actions)
 
-- **007 VWAP** ([`.github/workflows/vwap-ingest.yml`](../.github/workflows/vwap-ingest.yml)): 月・水・金 08:00 UTC に日足10年 + 5分足、土 09:00 UTC に信用残高 (週次) を取得し **R2** (`vwap-data` バケット、`daily/{code}.json` / `intra/{code}.json` / `margin/{week}.json`) へ書き込む。Yahoo は `YAHOO_PROXY_BASE` (Worker エッジ `/api/ingest/yahoo`) 経由。
-- **005 EDINET + 006 TDnet** ([`.github/workflows/catchup.yml`](../.github/workflows/catchup.yml)): 平日 11:00 UTC に当日の開示をキャッチアップ。006 TDnet は kuromoji (Node 専用) のセンチメント判定込みで Node 実行 → D1 HTTP 書込。005 EDINET は Worker の認証ルート `/yuho-quant/admin/catchup` を叩く薄いトリガ (EDINET fetch + Notion アーカイブ + D1 書込は Worker 側が時間予算内で実行)。
-- **002 優待の LLM 要約**はリポジトリ外のクラウド LLM (Cursor Automations 等) で行う。このリポジトリのコマンドはタスク書き出し (`pnpm yutai:summary:export`) と取り込み (`pnpm yutai:summary:import`、既定 dry-run) だけ ([作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md))。
-- **008 moneyflow** ([`.github/workflows/moneyflow.yml`](../.github/workflows/moneyflow.yml)): 平日 08:30 UTC (17:30 JST) に JPX 業種別時価総額 (月次PDF)・空売り業種別集計 (日次PDF+当月の月次集計)・既存 D1 の週次売買代金等に加え、Phase 2〜5 の取得元 17 件 (投資部門別・対外対内証券・国際収支・投信/公社債・資金循環・FX・暗号資産・CFTC・IMF/BIS/World Bank・世界の主要指数) を取得し、Notion「株式情報」直下の「資金フロー｜観測ログ」等へ記録する ([docs/moneyflow.md](./moneyflow.md))。公開面のサブアプリは持たず (Notion で閲覧)、内部読取エンドポイントは `/api/ingest/moneyflow-sector`。信用残の日次化 (2026-09-28〜) は未実装 (docs/moneyflow.md の TODO)。
+- **007 VWAP** ([`.github/workflows/vwap-ingest.yml`](../.github/workflows/vwap-ingest.yml)): 月・水・金08:00 UTCに日足10年＋通常5分足5d、平日08:00 UTCに日次信用残を取得し、R2の `daily/{code}.json` / `intra/{code}.json` / `margin/daily/{基準日}.json` へ保存する。Yahooは共有proxy・直列取得を使い、`yahoo-source` groupでstock/moneyflowとの同時実行を防ぐ。
+- **005 EDINET + 006 TDnet** ([`.github/workflows/catchup.yml`](../.github/workflows/catchup.yml)): 平日11:00 UTCにNodeの共通CLIから実行する。TDnetは既定8日窓・二次処理12分枠、EDINETはD1の未完進捗から再開し、原本のNotion実体照合後にD1へ保存する。Python版の日次workflowとは別経路。
+- **002 優待要約**はMacのLaunchAgentが毎日21時に固定Qwen3.5-4B/MLXで通常最大60群を生成・検証・取込する。事業タグの20時処理と共通writer lockを使う。原文条件が欠ける出力は保留し、実体保管・全文照合と原子取込を行う ([作業仕様書](../services/otakara-yutai/docs/llm-summary-task.md))。
+- **008 moneyflow** ([`.github/workflows/moneyflow.yml`](../.github/workflows/moneyflow.yml)): 定時の株式sync成功後に実取引日を受けて全29取得元（Phase1 3＋spec26）を逐次実行する。手動 `stocks` の連鎖はsector-turnoverのみ。独立cronは廃止済み。日次信用残は保存済みR2原本を再利用する。観測全行を照合し同値の書込を省き、原本・保存結果が不明なら後続取得を止める。非公開Notion運用と内部読取 `/api/ingest/moneyflow-sector` を使う ([docs/moneyflow.md](./moneyflow.md))。
 
 ## 認証
 
@@ -365,13 +364,13 @@ pnpm db:generate:d1         # D1(SQLite) スキーマ生成 → drizzle/d1/*.sql
 pnpm sync:daily:core        # 全 active ~3,700 + マクロ + 全サービス指標・パターン・セクター
 pnpm sync:daily             # 手動フル日次: core + VWAP 日足/5分足/信用残高
 pnpm sync:monthly:core      # 優待 (is_yutai) 再スコア (Yahoo なし)
-pnpm sync:monthly           # 手動フル月次: rebuild + 優待取得/抽出/LLM解釈/DB反映
+pnpm sync:monthly           # Mac手動月次: 優待取得→派生再計算→ローカル要約
 pnpm sync:universe          # 東証母集団 (core_stocks) を seed/更新 (月次 rebuild の前段。手動 seed/復旧にも使う)
 
 # 取込 (GitHub Actions / Node)
 pnpm ingest:vwap-daily / :vwap-intra / :vwap-margin   # 007 VWAP → R2
 pnpm ingest:ir-tdnet        # 006 TDnet 適時開示 (kuromoji) → D1
-pnpm ingest:yuho-edinet     # 005 EDINET 有報トリガ (Worker /yuho-quant/admin/catchup)
+pnpm ingest:yuho-edinet     # 005 EDINET 有報のNode取込 (Notion原本照合→D1)
 ```
 
 ## 新プロジェクト追加時のパターン
@@ -386,7 +385,7 @@ pnpm ingest:yuho-edinet     # 005 EDINET 有報トリガ (Worker /yuho-quant/adm
 6. `src/index.ts` に `app.route(BASE_PATH, mySubApp)` を追加
 7. `SERVICES` 配列にカードを追加（src/index.ts 内）
 8. PWA / 静的アセットは `public/<slug>/` に配置
-9. **定期実行が必要なら Worker 上の cron ではなく GitHub Actions(Node) の既存ワークフロー (stock-sync / vwap-ingest / catchup。ci は取込を持たない) に相乗りさせる**。Workers Cron は使わない (無料運用方針)。指標計算は Node で行い D1 へは `createD1HttpDb` で書く
+9. **大量取得・指標計算はGitHub Actions(Node)の既存workflowへ接続する** (stock-sync / vwap-ingest / catchup。ciは取込を持たない)。Cloudflare Cronは既存の起動・期限確認を担当し、D1書込は `createD1HttpDb` を使う。ローカルモデルはMacの既存LaunchAgentへ接続する
 10. **JSX は使えない** — ビューは template literal を返す `.ts` 関数として実装する (mono-repo 方針として Workers/esbuild バンドルでも踏襲)
 11. **POST フォームの optional フィールド**は `z.preprocess((v) => v === "" ? undefined : v, ...)` で空文字列を吸収する (HTML form の標準挙動でフォーム未入力は `""` 送信)。`z.coerce.number().optional()` 単独だと `""` が `0` に変換されるバグの温床になるので注意。
 12. **DB アクセス** — Worker (読取) は `c.env.DB` を `createServiceDb(c.env.DB, ownSchema)` でラップ、取込 (書込) は Node 側で `createD1HttpDb` (D1 REST) を使う。共有 core スキーマ + サービス固有スキーマはいずれも sqlite-core で定義する。

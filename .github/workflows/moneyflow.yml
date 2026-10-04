@@ -13,9 +13,10 @@
 #   - 上記を Notion「資金フロー｜観測ログ」へ upsert、実行結果を
 #     「資金フロー｜取込ログ」へ記録
 #
-#   - Phase 2〜5 の取得元 (scripts/moneyflow/sources.ts に登録した 17 取得元の spec) を
-#     共通フロー (scripts/moneyflow/lib/run-spec.ts) で実行。月次・四半期等の取得元は
-#     公表済みの最新期間が取込済みなら取得元へ行かずにスキップする (大半の日は数分で終わる)
+#   - Phase 2〜5 の取得元 (scripts/moneyflow/sources.ts に登録した 26 取得元の spec) を
+#     共通フロー (scripts/moneyflow/lib/run-spec.ts) で実行。期間キー解決の取得後、
+#     保管済みの本体を再利用し、全観測行を照合して同値書込を省く。
+#     TFXはキー解決に本体GETが必要。全行queryの時間も必要 (旧目安約5300行)。
 #
 # 必要な GitHub Secrets (既存名を流用。新規は任意の CoinGecko キーのみ):
 #   NOTION_TOKEN            … 既存 (vwap-ingest.yml 等と共通)

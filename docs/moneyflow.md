@@ -177,7 +177,7 @@ JPX 告知 (2026-07-06)「信用取引残高の公表情報の変更日及び今
   にして既存 `期間|指標|区分` キーを維持する (key 契約)。公式数量/金額 SUM、
   公式率の SUM 禁止、派生率は式・分母を明示 (`売/(売+買)`・分母 0 は失敗)、
   NULL 前日比は 0 埋めせず null 伝播、分類不明・coverage 不足は成功にしない。
-  JPX 原本への再取得なし (初回取込・readback は別途 grant 待ち)。
+  JPX原本への再取得なし。通常信用残と資金フローの実受入・readbackは[自動処理の実行検証](./test-logs/automation-verification-20261004.md)に記録する。
 
 ## 実装ファイル一覧 (Phase 0/1)
 
@@ -197,7 +197,7 @@ JPX 告知 (2026-07-06)「信用取引残高の公表情報の変更日及び今
 
 ## Phase 2〜5 取得元 (2026-09-27 実装)
 
-計画書の Phase 2〜5 の取得元 17 件を、共通の取込フロー (`MoneyflowSourceSpec`) に載せた。
+当初のPhase 2〜5の17取得元から拡張し、現在は26 specを共通の取込フロー (`MoneyflowSourceSpec`) に載せている。Phase1の3取得元と合わせ、通常allは29取得元。
 各取得元は「取得・解析 (`services/moneyflow/lib/sources/<key>.ts`)」と「Phase 1 の Notion
 DB へのつなぎ (`services/moneyflow/lib/adapters/<key>.ts`)」の 2 層で、取込 CLI への登録は
 `scripts/moneyflow/sources.ts`。統一規約 (単位・期間ラベル・区分表記・行数上限) は
@@ -205,10 +205,10 @@ DB へのつなぎ (`services/moneyflow/lib/adapters/<key>.ts`)」の 2 層で�
 
 ### 取込の流れ (`scripts/moneyflow/lib/run-spec.ts`)
 
-1. `resolve()` で公表済みの最新バッチの冪等キーを決める (一覧ページ等の軽い取得)
+1. `resolve()`で公表済みの最新バッチの冪等キーを決める（一覧等の取得。TFX等は本体が必要）
 2. 未保管のキー → 本体を取得 → **先に** `recordPrimaryData()` で原ファイルを実体保管
    (解析が様式変更で失敗しても原本は残る) → 解析・検証 (`validateDrafts`) → 観測ログへ upsert
-3. 保管済みのキー → 取得元へは行かず、Notion の保管ファイルから再解析し、全観測行を照合する。
+3. 保管済みのキー → `resolve()`後の本体追加取得をせず、Notionの保管ファイルから再解析し、全観測行を照合する。
    同値の行は書かず、途中欠落や値・relationの不一致だけを修復する。
 
 Notionの書込結果不明や成功応答の不正ACKは、共有の `NotionUnknownResultError` で
@@ -217,9 +217,8 @@ Notionの書込結果不明や成功応答の不正ACKは、共有の `NotionUnk
 結果不明後は後続取得元・取込ログも追加送信せず、取得済み原本と実行ログを保持する。
 既知の原本品質不足は従来どおり全取得元の成否を集計し、一部失敗として記録する。
 
-平日の定時実行では、大半の取得元が 2〜3 リクエストでスキップになる。**初回だけ** 全取得元の
-最新期間 (合計 約 5,300 行) を書くため 1 時間強かかり、ワークフローがタイムアウトしても次回が
-途中から再開する。
+定時実行でも期間キー解決の取得と観測全行のquery照合が必要で、保管済み期間の確認だけで数分とは限らない。TFXは期間を得るため本体HTMLを各specで取得し、取得元再GET0という共通説明の例外となる。
+旧目安約5,300行では380msの共有間隔だけで同値照合約34分、新規query＋writeは約67分を要し、HTTP・原本保管が加わる。workflow全体の上限は120分。同値行を書かず、部分取込は次の通常実行で再照合する。
 
 ### 取得元一覧 (spec 名 = `--only=` に指定する名前)
 
@@ -234,7 +233,7 @@ Notionの書込結果不明や成功応答の不正ACKは、共有の `NotionUnk
 | JSDA 公社債発行額・償還額 | `jsda-bonds` | R2 | 月次 | 240 | 要確認 |
 | 日銀 資金循環統計 (速報) | `boj-flow-of-funds` | R2/R3 | 四半期 | 282 (上限432) | attribution-required (商用は日銀へ事前相談) |
 | FFAJ 店頭FX月次速報 | `ffaj-otc-fx` | R3 | 月次 | 384 | 要確認 |
-| TFX くりっく365 / くりっく株365 | `tfx-click365-fx` / `-fx-annual` / `-cfd` / `-cfd-annual` | R3 | 月次/年次 | 462 / 186 / 154 / 22 | 要確認 (personal-only 運用。公開面へは出さない) |
+| TFX くりっく365 / くりっく株365 | `tfx-click365-fx` / `-fx-annual` / `-cfd` / `-cfd-annual` | R3 | 月次/年次 | 462 / 186 / 176 / 22 | 要確認 (personal-only 運用。公開面へは出さない) |
 | JVCEA 会員統計 (暗号資産) | `jvcea-crypto` | R3 | 月次 | 156 | 要確認 |
 | CoinGecko グローバル | `coingecko-global` | R3 | 日次 (取込日) | 13 | 要確認 (表示時「Powered by CoinGecko」必須) |
 | CFTC COT 円・日経平均先物 | `cftc-cot-jpy` | R3/R4 | 週次 | 10 | public-domain |
@@ -294,6 +293,4 @@ IMF CPIS・BIS・World Bank・日銀ストック表は **残高 (ストック)**
 
 ## Phase 2 以降の予定 (計画書どおり)
 
-Phase 2〜5 は上記のとおり 2026-09-27 に実装した。残りは信用残の日次化 (上記 TODO、A担当) と、
-JPX 新様式への追従 (投資部門別株式の週次は 2026-09-29 実ファイルで検証済み・新spec適用中=C担当、
-月次/ETF・REIT は公表待ちで unknown-reject 維持)、JPX 業種別指数の過去値 (見送り中) の再判断。
+Phase 2〜5と信用残の日次取込・33業種集計は実装済み。通常実行の実受入と品質保留は[自動処理の実行検証](./test-logs/automation-verification-20261004.md)に記録する。JPX新様式の月次/ETF・REITは公表待ちでunknown-rejectを維持し、業種別指数の過去値は見送り中。

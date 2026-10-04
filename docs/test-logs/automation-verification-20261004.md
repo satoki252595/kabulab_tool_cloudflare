@@ -1,10 +1,35 @@
-# 自動処理の実行検証（2026-10-04）
+# 自動処理の実行検証（2026-10-04〜05）
 
 ユーザー指示で定義済みの自動処理を通常経路から実行し、失敗原因を修正する。
 開始時の本番mainは `ee906280571b1d37a6a649f4a7b81427c37a9990`。
 日曜の休場・未公表資料・品質保留を成功へ置換しない。
 取得元を重複実行せず、一次原本は非公開の既存Notion保管・全文照合を使う。
 TypeSafe設定、新規の有料AI契約は変更しない。
+
+確認対象はGitHub Actions 12定義、Cloudflareの既存4 cron、Macの20時事業タグ・21時優待要約。手動復旧用backfillは設定・既存検証を確認し、新たな全量取得は起動しない。CFの予定時刻・実日付のguardは保持し、今回の通常手動実行と将来の真正定時receiptを区別する。
+
+## 現在の確認範囲
+
+以下は各定義の通常処理と結果の対応で、エラー0や取得元全件成功を一括で宣言する表ではない。実行revision・原文保管・全行照合の根拠は後続に記録する。
+
+| 定義 | 通常処理の確認結果 |
+| --- | --- |
+| CI | PR300/301/303/304/306/307/308/310/311および各mainのCIを確認。実資料未配置の既存skipは保持。 |
+| cloud_check | 修正後37202784871でR2両bucket・必須9表、processed3 / failed0。 |
+| stock-sync | 株式日次は実休日10/4とN22510/2の不一致で保存前停止。macroは原本・必須6値・D1読戻しを確認。月次の正規3処理は銘柄同期3,631・優待全7,979行・再計算1,650銘柄を受入。 |
+| vwap-ingest | 日足原文3,689全件を観測、適合3,653 / 品質保留36。native全照合3,660は旧7品質保留を含む。信用残4,250行を確認。通常5分足5日は1,242保存・5同値の全本文を照合済み。2原文保留・4368のR2 PUT結果不明で後続2,439を停止し、4368の現本文は送信SHAと不一致のため保留を維持。 |
+| moneyflow | 通常29取得元の初回26成功に加え、修正後の同原文からCFD月次176行・年次22行の通常受入を完了し、全198fields/relationsを照合。sector-turnoverの株価55不足は保持。年次の旧manifest/過去保存時SHAは未記録と明示し、現在原本・旧時計・全22同値を確認。 |
+| supply_daily | 4,352銘柄・failed0。実申込日10/1、同値R2書込0。 |
+| edinet_daily | 実日曜10/4の一覧0件で明示停止。源日を営業日へ置換せず#305に記録。 |
+| tdnet_hourly | 実日曜の一覧0件・processed0 / failed0。原本全文照合。 |
+| master_sync | 3,818件・failed0。同値3,816件のPATCHを省き、差分2件更新。 |
+| catchup | Node TDnetは通常8日・12分枠で二次444件を処理、848件未走査を保持。Node EDINETは全体L2投影1,394、証券コード/逆引きのない15文書を保留。事業タグはMac通常入口で別に確認。 |
+| ops_check | 最終の通常37225265192で鮮度8件・SLO・DB定義・ライセンス照合の4層成功。優待7,718行の非単発原文MIN時刻から0.2日を確認。未宣言表・未決タグ・未宣言列の警告は未解決のまま保持。 |
+| backfill | 手動復旧定義・既存検証を確認。新たな歴史全量取得を起動しない。 |
+| Mac 20時/21時 | 事業タグは既判定3,667・本文不足22を保持しモデル0で通常終了。優待要約は新契約`.8`の通常60群で21群24行を採用、39群保留、残3,592群。全7,979行とPRE/POST実体を照合。 |
+| Cloudflare 4 cron | 本番定義・設定・100%配信とMac受入を確認。修正後の真正営業日dispatch/producer/readcheck成功は今後の予定時刻の実証と分ける。 |
+
+TypeSafe設定・既存ローカルモデルを維持し、新規の有料AI呼出し・契約0。費用の包含枠・現行契約の調査は[費用記録](../cost-audit-2026-10-01.md)を参照し、今回の全アカウント請求額を未実測のまま0とはしない。
 
 ## 初回の実行と原因
 
@@ -97,7 +122,7 @@ PR #304は全3CI成功後、13:44:24Zにmain `d97238eb4d41cf7070cc5487a4ab2660f7
 
 非公開の最初のsource-physical receiptはオブジェクト展開で検証開始時刻が閉鎖時刻を上書きしたため、元receiptを保持し別のtiming-correctionで上記native受信時刻・ファイルmtime・後続D1要求時刻を結び付けた。業務データへ渡した実原文受信時刻・保管前書込禁止の経路は変えていない。
 
-14:02:05Zの保存済全POSTと通常recompute入力のoffline確認では、1766の「随時」4行と8617の「随時」1行が権利月0・日付NULLのまま保存され、年間利回りの対象から除かれた。1766の通常4月7行と8508の通常4行は年間対象、8508の単発1行は年間除外。1766/8617の価格行はこの時点で未生成のため、通常再計算はnoFinancialRowとして保持し、価格を補っていない。追加の取得元・D1・Notion・モデル呼出しは0。
+14:02:05Zの保存済全POSTと通常recompute入力のoffline確認では、1766の「随時」4行と8617の「随時」1行が権利月0・日付NULLのまま保存され、年間利回りの対象から除かれた。1766の通常4月7行と8508の通常4行は年間対象、8508の単発1行は年間除外。1766/8617の通常再計算に必要な派生財務行はこの時点で未生成のため、noFinancialRowとして保持した。core株価の不存在を主張せず、価格の補完も行っていない。追加の取得元・D1・Notion・モデル呼出しは0。
 
 ## 月次の利回り・スコア再計算
 
@@ -125,7 +150,7 @@ Macの通常`main.ts run yutai-summary`をdefault60のまま契約`.7`で1回実
 
 共通修正では、通常実行の先頭で日経平均の原応答を1回だけ取得・実体保管して確定sessionを独立検証し、その日付から10年範囲を求める。個別銘柄の最終取引時刻が当日の終了時刻より前でも、確定済みの独立session・同日・元受領順序が全て一致した場合だけ受け入れる。日付が違う原文、欠けたbar、形成中の原文、出所・時計が不明な証跡は引き続き停止する。同一sessionの保存済み全行一致は個別Yahoo取得前にskipし、元取得時刻を保持する。R2 GETの既知一時障害は既存retryを最大3試行で使い、PUT・条件付き書込・不明結果の停止は変更しない。
 
-14:24:33Zまでに全3,456原文を116 gzipの全バイト読戻しで確認した（原bytes計471,923,669B、追加publisher/R2/write0、Notion3・4290）。同じ通常macroの実日経原本と保存済み完了時刻を使ったoffline再判定は3,423件適合・33件保留。既成功838件を除いた2,592件は修復候補で、旧R2の範囲・ETag検証とPRE実体保管を通過してから保存する。保留は日付不一致28件・原文NULL行5件で、価格や行を補わない。未観測233件、intra、marginの実受入はこの記録時点では未完。原文のall再GETは実施しない。
+14:24:33Zまでに全3,456原文を116 gzipの全バイト読戻しで確認した（原bytes計471,923,669B、追加publisher/R2/write0、Notion3・4290）。同じ通常macroの実日経原本と保存済み完了時刻を使ったoffline再判定は3,423件適合・33件保留。旧contextにexact onRaw.receivedAtは未記録で、元attempt.completedAt12:14:55.189Zをcollection-complete observedAtとして保持しており、HTTP受領時刻の精度へ読み替えない。新233件のwitnessには元onRaw.receivedAt16:58:25.439Zが記録されている。既成功838件を除いた2,592件は修復候補で、旧R2の範囲・ETag検証とPRE実体保管を通過してから保存する。保留は日付不一致28件・原文NULL行5件で、価格や行を補わない。未観測233件、intra、marginの実受入はこの記録時点では未完。原文のall再GETは実施しない。
 
 統合変更の7suiteは195 pass・既存3 skip、型検査は終了0。独立レビューで1380/1383の実原本・時計・SHAを照合し、休日の再開時にも成功済み個別原文を再取得しないことを確認した。
 
@@ -192,3 +217,163 @@ PR304/306のMERGEDとremote末端SHAの完全一致を確認し、対応する�
 [margin37213741168](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37213741168)はmain b83で1回実行し成功した。通常stepは15:38:23–15:38:31Z、基準日2026-10-01・4,250行、同値のR2 PUT0。daily/intraはskip。正常`verifyCustodyEntity()`経路でNotion原実体の全bytes/SHAを各R2判断前に照合し、追加の独立原文GETは行っていない。
 
 全native log32,534B/SHA `2441cf9884ec513236fbb44c3b4155a2629044f3d7bd13498d70e64a65da0342`、offline検証receipt SHA `7fa5c940173dc6bf61b8d4d2f9ae14deeab7a6507c631e973f52928bd5959477`。native HTTP総数と公表日はログ未計測のためUNKNOWNを保持し、基準日を公表日へ読み替えない。
+
+## PR307の本番反映
+
+HEAD `cfa0a7715c145e612a41afdba1d1f9aef3a6bd07`の[CI37214174685](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37214174685)全3チェック成功後、[PR307](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/307)を15:51:00Zにmain `ae638acb97a6e12281475f7747f7fde5fd55841c`へマージした。Macは15:51:10.843Zに同mainを受理し、clean/0600・accepted revision以外の設定・登録不変、receipt SHA `0feefd44a37b09c5c1cc13a2880ab46912589d1b2a9323c372693cbd3ba2fff9`。
+
+同commitのWorkers Build `70e2f284-dced-4b1f-80f8-80c3ad68c018`は15:51:37Zに成功。native読取15:52:22Zはdeployment `9026e18e-4cec-452e-9e29-769c63113e39`（作成15:51:33Z）、version `94b45e58-1ad2-4fc0-8622-61b17adf6b6f`の100%配信を確認した。native versionの作成15:51:32Zと同commit Buildの時刻を結び付け、注釈自体にGit SHAがあるとは扱わない。
+
+mainの[CI37214551351](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37214551351)も全チェック成功。新mainの233通常wrapperと2,592修復helperは追加通信・書込0の純preflightを通過し、原本・PRE・全候補と実run上限を保持した。
+
+## 保存済み原本による2,592件の修復
+
+Moneyflowの初回全行照合と並行し、16:13:16.277Zにpublisher0の修復を1回開始した。R2キーは非交差、唯一のlocal kernel writer、全Notion通信開始を再試行込み4秒以上とし、native側380msの約158/min＋local15/minで約173/min。新しいYahoo取得・モデル呼出し・同run再入は0。
+
+16:26:43.796Zに全11分割・旧2,592本文と元ETagのNotion実体保管→`moveToTrash()`→両方の全文読戻しを閉鎖した。この時点でR2 write0。旧本文447,244,325Bを損失なく包んだ実gzip合計121,151,770Bもrootが全SHA・全対象・退避先区別で独立FS照合し、gate receipt SHA `6e999b0c6551221c3911ee6f332fe14a2a349a47de016ad7353e62ef4f375cde`を確認した。元Yahoo原本は再取得・移動していない。
+
+全PRE閉鎖後だけ、観測ETagを条件に各1回のCASを実施した。源の実受領時刻・URL・SHAを保持し、新しい運用時計を源日へ代入しない。全2,592件・464,125,156Bのnative本文が提案版と完全一致し、共有shape検査も全件通過。written/postReads各2,592、held/notStarted/Unknown/rejected/STOP0、元838件は対象外。
+
+通常summary557,021B/SHA `a60d2f32e002a283b5da28dae10dd1e9ac796826d6a821d1c7701d964e33fa63`の実体保管・全バイト読戻し後に終了0。summary生成は16:51:24.833Z、completeのdurable時刻は16:51:46.184Zで、後者を物理閉鎖の上限として記録する。Notion185 / hosted45 / 4290、全Notion開始間隔最小4,000.236ms、取得元・モデル0。
+
+complete SHA `e61dc2d1de1dcd30ebd322767c1681f964bbe2c0db5c9b450878e40e0060a284`をrootが全項目照合した。全native POST manifest SHA `333378c1824429b2a71977f6df170cd883bcd5e05d9ffde30cfba0e2d0771680`、全FS closure SHA `4c1ebb500cc48a4c7f3ce2681f345e3ea3274fec99dc8fad296005c917565711`。16:54:10Zの実fcntl非block取得・解放とmetadata不変でkernel FREEを確認し、receipt SHA `34ede74d5ad148cbf781ae073fbe5ece61b1885405679a29403441b0c7b5b000`。次の233銘柄はMoneyflow終端の結果・抑止状況を確認してから別の通常1回を開始する。
+
+## 「随時」優待の本番表示
+
+16:35:21Zに正確な `/otakara-yutai/stocks/1766` と `/otakara-yutai/stocks/8617` を各1回GETし、両HTTP200の原HTMLを保存・全文SHA照合した。両銘柄で「随時」と年間利回りに加算しない説明が表示され、0月表示はない。1766は11優待・8617は1優待、優待利回りはともに未算出の「-」。年間加算除外そのものは上記全POSTと通常計算入力の照合で確認している。
+
+株価は1766の13,070円・8617の606円が既存財務データから表示された。原HTMLは52,612B/SHA `9e40c0dfd874cfdfc61e8cdb8f047aac05f0b5a3bb462e3afc6846e02dac727c`、39,406B/SHA `b2b1494e1fa3f1ed0368467c2abf5d5eccb01a9a93d7a3f8f720481411068c4d`。通常ルートはD1 readonlyだけで、JS実行・取得元・Notion・モデル・書込0、HTTP計2。独立FS proof SHA `01978c42e8e1a3d200f93f5ffa7d39ce2a1045fa0be7053fbc5a450033893c9a`をrootも全文確認した。
+
+## 資金フロー29取得元の通常all
+
+[37214015516](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37214015516)を15:42:30Zに1回dispatchし、源code HEADはPR306のmain b83。`dry_run=false / only空 / trade_date=2026-10-01`は保存済み株価の実日付を入力に使う。後のPR307・Mac accepted aeとは実行revisionを区別する。
+
+通常stepは15:42:46–16:52:50Z、jobは16:52:55Zにfailureで終端した。全29取得元の最終JSONは26成功・3失敗。sector-turnoverは3,634/3,689 coverage・55銘柄不足を明示し、価格を補完しない。TFX CFD月次・年次は数量セルの「-」を数値として受理できず停止した。global-indicesは保管済み2026-W39・221行同値を照合し、Yahoo再取得0だった。
+
+原log54,854B/SHA `6bb33113fc517c2ea888ce423dbee0963f0fb30d4e7831dd0386b0e8b03d2f83`と全29結果を照合し、Notion結果不明・設定STOPの型名、HTTP429/503の記載0を確認した。これは正常CLIとコード経路の資格確認で、全native HTTPのpacket計測ではない。Yahooの抑止期限は原文再取得が無いためUNOBSERVEDを保持する。終端境界receipt SHA `26b080ab96bd99c8a5f6d241a6580cf0f179b342c332515dbba441d77b61d1d8`。
+
+TFXの両callerは期間キーを決めるため`resolve()`内で先に全HTMLを解析し、解析後の共通取込で原本を保管していた。そのため今回失敗したHTMLはRAMから失われ、Notionの原本参照・期間・表・商品は未観測だった。数量「-」を0や過去期間へ置換せず、共通のページ取得入口で受信body/status/clockを先に実体保管・全文照合する修正を進める。既存26成功の再取得はしない。
+
+資金フロー終端とlocal kernel FREEの確認後、16:58:22.636Zに未観測233銘柄だけを別grantで通常1回開始した。実^N225の10/2確定sessionが新guardと通常原本保管を通過し、個別取得へ進んだ。全POST・通常summaryの物理閉鎖は後続で確認する。
+
+## 未観測233銘柄の通常実受入
+
+17:08:58.002Zに通常exit1で終端し、written230 / errors3 / skipped0 / invalid0。fatal・aborted・Notion結果不明・429/503は0。取得元は独立benchmark1＋233銘柄各1回の234 GETで、既成功838件・修復2,592件との対象交差0だった。原本全35,367,206B・9gzipを通常保管・全文照合し、正常summary SHA `4f16e50334d30500f8b0da466d79e1e61bc92887c5d1437d067d0d194016a2a8`も全バイト読戻した。
+
+全230件・40,030,849Bのnative POSTと保存版・SHA・共有shapeが一致した。Notion64 / hosted10 / D1 read1、Notion最小開始間隔4,000.578ms。3保留は9720のquote9/30（実受領17:02:37.154Z）、9820のquote10/1（17:04:19.868Z）、9996のquote10/1（17:06:39.869Z）。全て最終raw日10/2・NULL0だが独立benchmark10/2とquote日が一致せず、個別保存0を維持した。
+
+complete SHA `47044072c34f278608260103dfdc9410aae4f49967390d8237e802861a656e5d`、native全POST manifest SHA `0cff92bc98ed8cccc1af0192bed713286e352f0b54fa43e492963bcb01a698e9`、FS closure SHA `3d7de23ab630e411b6394d49ad345746796200dd802010967922c07aaa09dff2`。complete内の`writes:0`は始動planの初期counterを継承した値で、最終R2書込0を意味しない。通常CAS経路230・written230・native230と、未計測のtransport attempt数を区別してcompanionに記録した。17:10:59.757Zの実kernel取得・解放とmetadata不変でFREEを確認し、receipt SHA `3aff543d98baa7a371dc7e2829cd137a49ccfe04f1e0fd78dabbc30ce6c6bc47`。
+
+これで日足は元3,456＋新233＝母集団3,689全原文を観測済み。source資格3,653適合 / 36保留（日付不一致31・原文NULL5）。native本文の全照合は旧838＋修復2,592＋新230＝3,660件だが、旧838内の既知7品質保留は保持したままであり、3,660件全てが新鮮とは扱わない。
+
+TFXの共通取得入口の修正は、旧コードで月次・年次の2回帰が失敗し、新コードは関連4suite81 pass / 35既存実資料未配置skip・型・静的検査が成功した。新しい依存・キャッシュは追加せず、dry-runのNotion送信0と期間キーを維持する。[PR308](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/308)のHEAD `9b4d185e1a1897f66354a5609135aaef081beecd`・[CI37219304558](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37219304558)全3チェックも成功した。実CFD原文の追加取得・解釈確認は本番反映後の1回として準備する。
+
+Node EDINETはPython版とは別経路で、今回のphaseでは未実施だった。通常 `catchup target=edinet` だけを新たに[37219427991](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37219427991)へ1回dispatchし、17:09:24.897Zに実HEAD ae638との一致を確認した。TDnet・biztagを起動せず、既存5分の新規開始予算・60通上限・保存進捗・結果不明markerを維持する。終端と全体L2の結果は後続に記録する。
+
+日足233の独立FSレビューも全件PASS。原本から共有関数で230全本文・版・SHA・時計・全OHLCV/eventsを再構築し、現runtime d34の関連9moduleが実行元ae638と全bytes一致することを確認した。全234原本と対象非交差、3保留・通常終了1、原本/summaryの正常全文readback、FREEの保存receiptも一致。追加API・取得元・書込・モデル0、独立receipt3,357B/SHA `b2334cddd8155ecc5a932265427db9d52bf86cccc360532f1be18e78f0d6f5ec`。
+
+## PR308の本番反映とNode EDINETの終端
+
+TFX原文保管の独立レビューはblocking0。[PR308](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/308)を17:12:43Zにmain `d34c1473277fe8798f59c542807984b0b08158f9`へマージし、[main CI37219642039](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37219642039)も全チェック成功。Workers Build `811c2d67-1885-4926-a80f-1aa597f40253`は17:13:18Zに成功した。
+
+native読取17:14:06Zはdeployment `d72e14f3-f2f3-482a-a55f-7708190b597c`（作成17:13:13.027755Z）、version `edea778f-ae0b-4439-9565-72b25b553611`の100%配信。versionの作成は17:13:11.853027Zで、Git SHAの無い注釈だけでcommit一致とは扱わずexact Buildと時刻を結び付けた。Macは17:12:56.811Zに同mainを受理し、clean/0600・accepted revision以外の設定・登録不変、receipt SHA `0963862cfe87d1db0247cc51d9466e1d1ab7de1650b502f620f05b108b0b5190`。MERGEDとremote末端9b4d185の完全一致後、PR308の不要remote枝を削除し、私有証跡・worktreeは保持した。
+
+Node EDINETの通常stepは17:09:38–17:11:49Z、jobは17:11:55Zにfailureで終端した。正常JSONはscanned7 / matched0 / ingested0 / skipped0 / outOfUniverse0 / pending15 / cap=false / elapsed128.894秒、全体L2投影1,394。listErrors・ingestErrors0、原logのUnknown/Config・固定fatal文・HTTP429/503記載0で、15既存保留を理由に通常CLI1を維持した。保存一覧5日を再開し、実10/4・10/5の新一覧を各1回取得、文書源GET0。原log37,547B/SHA `d3fa0982670b4c6183772d6cf5c615d85dd706bdaed6b0baf5fe10cfc25974a1`。
+
+17:16:50.702Zに保存進捗をD1 SELECT1回だけで読み、全7tuple・15文書のstored reasonが`identity_unresolved`、inFlight0・完了集合との衝突0・同日再判定対象0を確認した。rows_read61 / rows_written0、追加取得元・Notion・モデル0。実10/4・10/5のqualified snapshot参照も保存し、D1原応答6,761B/SHA `1d3b5222cd0fd8687384ed25c56a48e48bbadaccbe6fea0d7f0e28bee7d9c52b`と全tupleを照合した（FS receipt SHA `986a2b66f27b78cb01c349b02d673b3338e887cb11616d98abf8bbc7c736bae3`）。stored reasonだけを真の同定不足と断定せず、保存原文・現在マスタとの原因分析を後続で記録する。
+
+## Node EDINETの15保留の原因確認
+
+全15文書を既存5日分のgzip原一覧へraw/gzipの全SHA・bytes・doc membershipで結び付けた。全て証券コードNULLで、年次種別・会計期末・状態3項目も正準schemaで照合した。保管済み10/2現在の金融庁公式マスタもZIPのCRCを含め全bytes確認し、提出者コード・法人名・法人番号が一意に一致し、当該時点の非上場・証券コード空欄と矛盾しなかった。当該過去マスタだけで現在の恒久除外へ変更はしない。
+
+17:25:50.391Zにwanted15提出者だけを現在の逆引きとcore・正準取込母集団へJOINするD1 SELECT1回を実行し、逆引き登録0行を確認した。HTTP200・rows_read15 / rows_written0 / retry0、原応答364B/SHA `6d927f91f9205aed9b2c319d4d72b61b540d0f721ff6a0994c89cd44aaa8d787`。元証券コードNULLと現在mapの正常resolverは全15NULLだった。
+
+前回の保存進捗と今回の15保留のdate/docId/reason集合は同じで、5保留日はfinished/sealed・checkedDate10/5、inFlight・完了集合衝突・同日再照合対象0。原一覧・元時計・IDを保持し、追加取得元・Notion・モデル・業務書込0。全native原tupleとalias、元schema・preflight pinのFS receipt4,315B/SHA `a99e2c559b7bf6374370f4f8507731f0281cadc1626483b43d962c921ab0134b`。今回の実証では新コード不具合はなく、源のコード未提供・現在逆引き不足として保留を維持する。
+
+## TFX原本の添付名上限
+
+PR308反映後の通常CFD月次だけを[37220188962](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37220188962)へ1回dispatchした。実HEAD d34、通常step17:21:30–17:21:42Z、job17:21:47Zにfailureで終端。Notion page作成が既知HTTP400 `validation_error` となり、ファイル名115文字が上限100文字を超えていた。
+
+これは数量「-」の解析前に保管が停止した結果で、finalJSON・rawの物理閉鎖・源本文のlocal保存は未達。原uploadはページへ添付されず、成功保管として数えない。受領source bodyとfull時計はGHA RAMから失われたため、後から運用時刻で補わない。NotionConfigErrorは元causeを保持し、解析・後続取得元0を確認した。原log39,925B/SHA `a229de1fe5e22ccbeae0b6c6ab262e56f5dc75eb57f4b544d82865830cc56c8e`、終端境界receipt SHA `4d339ab05a6d5e904f7105e90692b811671c649c1a375cfc4c4f7e81d12f3662`。
+
+共通TFX取得入口の添付名だけを100文字以内へ短縮し、原SHA・status・市場・immutableキーと期間キーを維持する修正を進める。raw readonly helperは条件不成立なので未実行。同grant再入・年次GET・成功26取得元の再取得・全文保管済みとの誤認は0。
+
+上限の修正は共通入口1箇所で4callerに適用し、HTML名86文字・gzip名84文字に収めた。HTTP status・64桁SHAを残し、市場は元キーとmetadataに保持する。旧実装で5回帰FAIL、新実装は4suite83 pass / 35既存実資料未配置skip・型・静的検査成功。全source/log pinのreceipt SHA `aa48cff3c6ff8a0ee872dcb96395d611b86274e922091ef9bf688c74490748f7`と独立レビューblocking0を確認した。
+
+[PR310](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/310)はHEAD `857d94ce7bc533a95b5df480f5a768673ffc6cf8`の全3チェック成功後、17:34:31Zにmain `247678cd2601cf9f6672e649ee41fc226c4d676a`へマージした。Macは17:34:48.377Zに同mainを受理し、clean/0600・accepted revisionのみ変更・登録不変、bootstrap/job0、receipt SHA `25287174d73f5cd895a26e3a0d9d6132b8bf10af4cfbf5accd05318f1813c177`。
+
+exact mainのWorkers Build `4a3915a7-7884-4bfd-a273-375ee23e2139`は17:35:07Zに成功。native読取17:35:27.497Zはdeployment `118350eb-79f8-412c-8e89-80778a7b2cf8`（作成17:35:02.686874Z）、version `29689192-9a41-4f2b-9ee7-36e98d046acf`の100%配信を確認した。versionの作成17:35:01.393048Zも照合し、Git SHAの無いnative注釈単独でcommit一致とは扱わない。通常TFX月次の次の1回は原HTTPを受信直後からlocalにも全bytes保存する準備をしており、ここでは実取得0。
+
+[main CI37221033328](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37221033328)もPython終了17:37:04Z・TypeScript終了17:38:41Zの全成功を確認した。MERGEDとremote末端857d94の完全一致後、PR310の不要remote枝だけを削除し、私有原本・worktreeは保持した。17:38:51Zに独立blocking0の固定通常入口・33現runtime pinsへ1回の実行grantを発行し、元GETは月次1・年次0・他26取得元0、Notion全native開始4秒以上、正常main全体のkernel排他を条件に実行を開始する。受信の運用時計・正常取得関数のfull fetchedAt・Notion読戻しの実精度を別に保存する。
+
+## 5分足5日の通常全量
+
+17:27:15.161Zに[37220566689](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37220566689)を `target=intra / intra_range=5d` で1回dispatchした。起動時のmainと実GHA HEADはd34、通常step開始17:27:34Z。後のPR310 main更新で実行中のHEADを変更せず、重複起動0。17:35:40Zのmetadataでは通常stepが実行中で、取得件数・品質・429・書込回数のpacketカウンタは未観測。進捗確認のためのNotion query・追加publisher GETは0。正常終端の原log・summary・全native本文を後続で確認する。
+
+通常CLIは18:05:10.023Zにsummaryを確定し、job/workflowは18:05:18Zにfailureで終端した。全3,689対象の会計はwritten1,242 / skipped5 / errors2 / invalid0 / unknown1 / notStarted2,439、rateLimited0・aborted=false、exit2。4368のnative R2 PUTがInternalError/502で保存結果不明となり、正常guardが再送・後続保存を停止した。取得元429/503を原因とはしない。2原文保留は1992の全行欠測（NULL317・volume0除外4・全timestamp321）と3477のtimestamp非配列で、架空のbarへ補完しない。後続2,439のうち10は既にsource barを観測済み、2,429は未観測として区別する。
+
+原終端log51,412B/SHA `88989d9de63f89cf0408535b3dd2943bab796dec3d9cca7182d29323f68a3652`と正常summaryの全会計を照合した。UTC day/keyは実20261004で、通常保管したsummary全336,127B/SHA `264fc8976006fa0aabe8470765ae5d31ec9e661fd7fa77b0b22f10b2e9823885`を全文読戻した。正常rawCustodyの42batch成功は原logの根拠であり、独立した全取得native packetの件数としては扱わない。成功/同値1,247のnative本文を追加取得元・書込0の1passで照合中。4368は未知のまま保持し、原5日bodyだけから未保存の旧365日PREや書込時計を推測再構築せず、別のreadonly判定準備へ進む。
+
+nativeの成功/同値1,247本文は18:17:31.002Zにreadonly 1pass・exit0で終了した。全367,488,244Bを私有wx/fsync保存し、正常summaryの全SHAと共有shapeに一致。proof SHA `65860214d9cc6293450c0d925e6fc971c6de271db7932ace41947c841aed0507`、取得元・書込・モデル0。ETagはこの全件検証では返却値を記録していないため未観測とする。
+
+4368だけのreadonly確認は18:19:28.655–18:19:30.786Zに1logical GETで終了0。現native全505,636B/SHA `b36d9d0bfc044d2b87f516d2bb513f575a16c68574efccab95394ae0081cd8ce`はshape適合だが元試行SHA `7137ccfa414ec86966be3a097380dd41ce327aeec2b5b7acc6437c72f51f8530`と一致せず、保留を維持した。opaque ETag原値と時計は非公開receipt859B/SHA `2e6f8518ccb445077c31f3e69a73f8bb288045e5b5ae0dabed5c228f85db8324`へ保存。既存GETの既知5xx上限3試行を使い、新しいretryは追加せず、実transport試行数は未計測。取得元・Notion・PUT・モデル0、元unknown1・正常exit2は改変しない。原42gzip/1,260 source memberの全文読戻しを別のreadonly 1回で開始し、取得元への再GETと派生書込0を維持する。
+
+原本読戻しの初回は、私有read許可から共有の`POST /search`が漏れてnative通信0で停止した。共有clientの局所再呼出し6回をnative6通信とは数えず、旧attemptを保持する。実際の2read callerだけを許可する別入口・別grantで18:23:54.315Zに終了0。全42gzip4,180,044B・1,260原body21,283,087Bの全SHA・正準5d/5m URL・実取得時計・metadataとNotion返却日時の実精度を一致確認した。Notion2 / hosted42 / 4290、reported開始間隔最小4,002.010ms、取得元・R2・書込・モデル0。receipt SHA `19d8b8242db841e44f8e0223de875afca76baf30aad0b3217fa6772b0b9f04ad`。
+
+全source集合は成功/同値1,247＋原文保留2＋unknown1＋未書込の既観測10＝1,260と全joinで一致した。保存済み本文内の直近231,171行は原OHLCVと全一致し、正常契約で除いたNULL249,178行・volume0の6,592行も原本に保持した。欠測の補完や、未保存の旧365日PREから全historyを再構築したという主張はしない。独立FSの全native1,247/5,942,082 bars receipt SHA `1a28d8e78cf4c9ff4649ceaf54b3eaaaa239c7c3ac18ff734aa0aa29a593b297`、全raw/直近OHLCV receipt SHA `972699b278d2f206c6638e4f1c1b6bc28110e8d3375794d50e4463476dc02319`。現在runtime dacf85と実producer d34の関連共有6module全bytesも一致し、追加API0。rootも全native367MB・全42gzip/1,260原bodyの全SHA/bytesをFSで照合した。
+
+終端GH metadataの旧18:07観測はFSへ未固定だったため、原start snapshotを保持し18:29:42.605–18:29:43.436Zにrun/jobs各1回を新しい現在clockで読戻した。原run13,721B/SHA `22b0e1ca98c8a9daf401ed2cd024372019959ebceb292937a25bb11b6f4d19b9`とjobs3,321B/SHA `b8d7699fdd7954d1273a6a2cbf61ad3bf5a40652046c803c3a8453ee7ae8031f`はcompleted/failure・実HEAD d34・job終了18:05:18Zを示す。旧clockへbackdateせず、GH2logical GET/transport試行数未計測と取得元・Notion・R2・PUT0を区別した。最終control索引6,375B/SHA `4c6b6fb8602904c46a475e5fb09103f991c4d7bd5f00f0cbf2b52afe1c02661a`に全38controlと2独立原proofの参照を固定した。
+
+## TFX月次の通常原本受入と新リセット商品
+
+新main247678の正規CLIを17:39:15Zに1回開始し、17:40:19.334Zに通常exit1で終端した。取得元1回はHTTP200、44,744B/SHA `7c1c184c120a3290d074074620fa7cd622cc11b6e5dda952576393b056a30014`。原受信bodyを即時fsyncし、正常共有保管のmanifest・添付名86文字・metadataと唯一hosted44,744Bを全bytes照合した。Notion16/hosted1・全18native200、429/再試行/結果不明/設定STOP0、Notion実開始間隔最小4,000.012ms。
+
+元の正常`fetchedAt=17:39:33.457Z`、wrapper受信運用時計`17:39:33.441Z`、Notionが返した実精度`17:39:00.000+00:00`を別に保存した。最終JSONは対象月次1件・数量「-」でok=false、正規exit1を保持。sourcegroup/kernelは解放済み、再入・年次GET・他26取得元・D1・モデル0。原receipt10,655B/SHA `37fa3804ae6945818f67a7a52c4681d125aa913fb2482291cb1a86c048244af2`と全18原要求/応答・添付をrootも全SHA/bytes照合した。
+
+同じ保存bodyをofflineで確認すると、月次出来高・月末建玉の新「／27」11商品だけ、2026年9月列に数値・それより前の6か月列に「-」があり、年次の2表は「-」なしだった。[TFX公式の2027年リセット取引開始通知](https://www.clickkabu365.jp/newsfile/article/20260814-10)（発行2026-08-14、調査2026-10-05 JST）は全11商品の取引開始を2026-09-14とする。従って当該6か月列は取扱い前の欠測と推論できる。実「／26」の歴史と「／27」の数値を別の原商品名で保持し、上場前欠測を0や過去商品へ置換しない共通修正を準備する。関連告知のweb調査は元historicalページの再GET・追加の取込・有料APIではない。
+
+## TFX新商品の修正と本番反映
+
+同rawの4表全440数量セル・220平均セルを独立照合し、198数値の不変・242欠測を確認した。月次176行は旧／26の154行と新／27の22行、年次22行は旧／26だけで、新／27の上場前セルは全て欠測。元bytes/SHAとfull source時計を保持し、追加HTTP0。純receipt775B/SHA `58483c4a9b121194649a3dbd5c5bf84564caa73d8810e667aa6dc227a65f9037`。
+
+共通数量変換はCFD・月次・／27・2026-09より前のliteral「-」だけを既存undefinedへ渡す。平均との不整合・年次/FX/上場月以後の「-」・未知／28・不正数量は停止する。既知の26/27各11原名を別区分で保持する。正常4callerの既存resolve純部だけを共用し、保管原本からも正準URL・fullISO取得時計・鮮度・最新列・年次整合・期間keyを検証する。新しいキャッシュ・依存・正常mainの設定入口は追加しない。
+
+旧7回帰FAIL（数量1・平均検査へ到達不能1・商品数1・新export不在4）から、関連4suite89 pass / 35既存実資料未配置skip・型・静的・diff検査成功。全5file/6proofをrootと独立レビューで確認し、blocking0、checks receipt3,261B/SHA `5d81780a17ece7efa3e9773a5dc00f8b5dbe05c1cc39ff9f99aa98357f58eceb`。[PR311](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/311)のHEAD `f30e4400c35a57916f40a573366d7f8d23873aab`は[CI37222223543](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37222223543)全3チェック成功後、17:57:21Zにmain `dacf85d53019589e857b64af758c71bf31822a82`へマージした。
+
+Macは17:57:32.808Zに同mainを受理し、clean/0600・accepted revision以外不変・登録不変・bootstrap/job0、receipt SHA `e8f59a3d1ef71956898fce4505da3826c75b57a11b121d38214d03d586596ad4`。exact Workers Build `e502a439-1f99-4b1b-8f4a-bbcf9238aa7b`は17:57:53Zに成功。native読取17:58:14.567Zはdeployment `79a38d32-362f-4c7d-88ae-e8f0c60400ed`（作成17:57:49.002499Z）、version `fadca433-ef1a-4ccc-9f75-1d9414e9b029`の100%配信。versionの作成17:57:48.079980Zとexact Buildを結び付け、SHAの無いnative注釈単独で一致とは扱わない。MERGEDとremote末端f30e440の一致後、PR311の不要remote枝だけ削除した。
+
+同原文の通常main受入は取得元0・対象月次/年次2件・指標定義4件だけに絞って準備する。原clock17:39:33.457Zを正準純部へ渡し、既存runSpecの物理保管・全観測行保存/照合・正常run-logを再用する。年次の既存2025原本を再用する場合はその実SHA・元時計を維持し、22全行が現在原文の期待値と一致した場合だけ受入とする。年次を新原文SHAや新鮮な源時計へ置換したとは扱わない。ここでは本番観測行への書込0、main CI終了後の別1回が必要。
+
+[main CI37222485314](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37222485314)もPython終了17:58:52Z・TypeScript終了18:00:49Zの全成功を確認した。現runtime33code・4source pinと原fullclockをrootが全SHA/bytes照合し、immutable plan12,754B/SHA `8c8e6d46833f120889cb5e32166ce00b0da1beb31ee5c326e699e29a7a434611`へ18:01:08.771Zに別1回のgrantを発行した。同原文の通常月次/年次受入を開始し、追加取得元0・全Notion native開始4秒以上・sole kernelを維持する。取得時計は17:39:33.457Zを保持する。終端・全198観測行・実primary/源時計・全FS closureは後続に記録する。
+
+## TFX月次・年次の通常全198行受入
+
+18:29:24.854Zに正常CLI exit0で終端した。Notion418 / hosted2の全420応答200、429・共有retry・exception・設定/結果不明STOP0、取得元・D1・モデル0。reported native-start performanceの最小間隔4,000.010msは固定runnerの計測で、pacer前に保存した予約時計から独立再計測できたとは扱わない。正常complete641B/SHA `fce5fd5cede6895d75da74b4cb84d3352d0321443374d2bfac5807e1eeab0e60`。
+
+月次176行は新規44・更新132、年次22行は全同値で書込0。全198観測の全fieldとprimary/indicator relation、変更176のACKとfresh query、既存22のlookupを共有の正常比較で一致確認した。月次原本は44,744B/SHA `7c1c184c120a3290d074074620fa7cd622cc11b6e5dda952576393b056a30014`、元metadataのsourceclock17:39:33.457Zを維持。月次primaryの`Fetched At`は通常保管時の実返却18:02:00.000+00:00で、原sourceclockへ読み替えない。
+
+年次は旧2025 primaryの31,381B/SHA `a224a9f2f0f86a3a7403b95e9ddea8a04a79da33a139262376c0f258dda8b4f7`を現在hostedから全文保存・照合した。元metadataのsourceclock2026-09-28T18:15:26.316Z、実返却`Fetched At`18:15:00.000+00:00を保持し、現在原文SHAや新しい源時計を付け直していない。原query ordinals391/393のprimary ID・全metadata・date・file名/typeが不変で、旧本文の全22draftsは今回原文の期待値と一致した。旧metadataには`_fileManifest`が元々無かったため、過去保存時の期待SHAとの照合はUNKNOWN/nullを保持し、後から補作しない。現在の全文SHA・全値の一致と、過去時点で未記録の証跡を区別する。
+
+検証用v2は旧年次manifest不存在で私有FS検査が停止しただけで、本番の正常exit0や保存内容を変更しない。月次manifest必須を保持し、旧年次だけ未記録を明示する最小v3で全198を照合した。proof3,246B/SHA `1022b9d7e2667516240d5486499f9f9882dc455ca70caf6a4acd5e3577496f0a`。原CLI唯一JSON・指標定義4件の全9field・取込ログのACK全7property・原37pins before/afterの全文不変も純FSで一致し、aux10,219B/SHA `e637f1435a3e919bf408c69ba80634e105decf64d7a1a54ad3923147d95cccbf`。取込ログの追加GETは行わず、正常ACKを照合した根拠として記録する。
+
+exec12247の正常exit0と共有`finally`解放のreceipt572B/SHA `864e7aa749fbf005f44a22978278bb1190bb4e04790d354b976d8d236faab223`を保持した。さらに既存の空callbackで18:35:28.105Zに実kernelを取得、28.109Zにfinally解放した。正常owner/historyの診断更新だけをbefore/after原bytesで記録し、元history prefix・canonical.env全bytes/0600・登録plist2・runtime・lock本体・正常ログ/proofを保持した。actual probe2,127B/SHA `94a7dc1c25568c1c911f1bc3e9528b9cd9b640784a4319fea136bc33f2801e44`、producer・API・取得元・モデル・同正常run再入0。
+
+ここまでの通常all初回26成功と今回のCFD2件受入を合わせ、29取得元のうちsector-turnoverの55価格不足を保留する。初回のallジョブを成功へ変更したり、29取得元をもう一度全取得したとは扱わない。全producerの終端後、最終ops_check通常1回を別grantで確認する。
+
+## 最終の通常監視
+
+全producerの終端と共有kernelの実FREE確認後、[ops_check37225265192](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37225265192)をmain `dacf85d53019589e857b64af758c71bf31822a82`・入力指定なしで通常1回起動した。dispatchは1回・再送0、jobは18:39:26〜18:42:09Z、workflowの実更新18:42:10Zにsuccessで終端した。freshness_probeは8件・失敗0、SLO判定・core_stocksのverify・license_mapを含む全4層success。取得元・モデルへの追加通信0。
+
+優待はactive普通株の7,718行（既存単発を含む件数）、非単発原文のMIN epoch1791121906から0.2日と判定し、要約の更新時刻では加齢を隠していない。core_stocksは3,828行・取得から0.2日。金融3,768行/基準日10/1、TDnet1行/10/2、EDINET1,453行/10/4、JSF4,369行/10/1、financials34,730行/10/2は各既存営業日補正・遅延契約で1.2日、判定対象7datasetすべてgreen、宣言済み赤0・対象外0。これら監視母集団の件数は今回の個別正常取込件数と区別する。優待は40/50暦日、coreは40/45暦日など既存閾値を維持した。D1容量は実ログの0.5GB/10GB。
+
+DB定義は11列・索引2件・全子表の孤児0、G-core-5/E7を満たす。ライセンス照合は列地図6行とwriter claim17件が一致したが、本番33表/402列に対する未宣言2表（universe_official_events、universe_overlay_state）、未決yutai_genres、core_stocksのmetadata5列（created_at、id、is_active、is_yutai、updated_at）の警告を保持する。未宣言は公開未許可として扱う既存契約で、successを全分類完了とは読み替えない。SLO違反Issueはopen0と返却され、既存の品質保留Issueを自動closeしていない。
+
+終端の原metadata3,205Bと全log137,458B/SHA `1fc664a9186e094d87b7d32e0e9b9ee8ed234719420c14f5356a75b432a659b6`をwx0600/fsync保存した。CLI予約/終了時計とGitHubのnative開始/終了時計を区別し、未記録のHTTP packet時刻・通信試行回数は補作しない。全4層の成功は、intraの未開始2,439件・日足品質36件・株価不足55件・EDINET識別15件・要約残3,592群・TDnet未走査848件・今後の真正CF定時receiptを解消した証拠ではない。
+
+## 最後の実行証跡保管
+
+信用残・29取得元・Node EDINET・TFXの旧239項目に、TFX通常420 packet/全198観測・実kernel probe、intraの原終端/全資格control、最終opsの全4層を加えた2,040項目を一束で保管した。元bytes計8,375,858B、gzip2,196,415B/SHA `6f786e536dfc8fbb2caf0d1a4aa59b2c6f5d785df4ecbb5c66b64174ba69e5dc`、plain11,779,656B/SHA `c9e398876b031eefe6c893f6b68cfdd1cb0961be785bb32002fb44a6bb65c167`。全memberと元ファイル、manifest全項目、25コードpin、7原本/派生参照をrootと独立FS検査で照合し、秘密値・原本の重複埋込0を確認した。独立proof3,115B/SHA `17d4ddb78c105230aa518b808b54786b4dc01385bf3eff6f2c00c6f03bd9afe2`。
+
+TFX原HTMLとupload本文6ファイル、intra原42gzip/全1,260応答と既保存1,247/不明1本文は既存の実体/全SHA参照に限定し、同じ主原本を新しい保管束へ再アップロードしていない。年次の未記録manifest、元400/dash/EXIT2・4368不一致・品質保留・ライセンス警告を保持する。
+
+通常共有`recordPrimaryData`/`verifyArchivedAttachments`、force=false、sole writerで18:52:01.259Zに1回開始し、18:52:31.857Zに実体照合を完了、18:52:31.893Zに正常exit0・共有finally解放で終端した。Notion8/hosted1の全9応答200、429・unknown・再送0、取得元・D1・モデル・同run再入0。rootも原9 request/responseの全bytes/SHAとhosted全gzipを照合し、全2,040memberが元ファイルと一致した。今回の通常手動受入は全量適合・全供給・未来の真正CF定時成功を一括保証しない。
