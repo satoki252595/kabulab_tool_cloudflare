@@ -29,7 +29,31 @@ import { HEADED_MARK } from "./estimated-value-guard.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-04.5";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-04.6";
+
+/** 全生成・取込経路で、選択・保有・抽選・応募条件の欠落を保留する。 */
+export function missingSummaryConditions(description: string, summary: string): string[] {
+  const source = description.normalize("NFKC");
+  const text = summary.normalize("NFKC");
+  const missing: string[] = [];
+  const choice = /選[択べんぶび]|いずれか|または|又は/;
+  // 株主名簿の「記載又は記録」は優待の選択肢ではない。
+  const choices = source.replace(/記載\s*(?:または|又は)\s*記録/g, "");
+  if (choice.test(choices) && !choice.test(text)) missing.push("choice_condition_missing");
+  const period = /(?<![0-9.,])([0-9]+|半)\s*(年|か月|ヶ月|カ月|ヵ月)\s*(以上|未満|以下|超)/g;
+  const periods = (s: string): string[] => [...s.matchAll(period)].map(m => `${m[1]}${m[2]}${m[3]}`);
+  const requiredPeriods = [...new Set(periods(source))];
+  const claimedPeriods = periods(text);
+  const generalHolding = /保有期間(?:に応じ|別|により|によって)/.test(text) && !/[0-9]+[,.0-9]*\s*(?:万|千|百)?\s*(?:円|ポイント)/.test(text);
+  if ((/保有期間|継続保有|長期保有/.test(source) || requiredPeriods.length > 0) &&
+      ((!/保有|継続|長期/.test(text) && claimedPeriods.length === 0) ||
+       (requiredPeriods.some(p => !claimedPeriods.includes(p)) && !(requiredPeriods.length > 1 && generalHolding)))) {
+    missing.push("holding_condition_missing");
+  }
+  if (/抽選|当選/.test(source) && !/抽選|当選/.test(text)) missing.push("lottery_condition_missing");
+  if (/応募/.test(source) && !/応募|抽選|当選/.test(text)) missing.push("application_condition_missing");
+  return missing;
+}
 
 /**
  * 要約の % 表現が掲載文に裏づけられているか。

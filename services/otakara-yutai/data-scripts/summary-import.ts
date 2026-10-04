@@ -50,6 +50,7 @@ import {
   isSummaryNumbersGrounded,
   isVerbatimCopy,
   normalizeSummary,
+  missingSummaryConditions,
 } from "./summary-contract.js";
 import { TASK_ID_PATTERN, recipientContexts, type BenefitRow, type SummaryTask } from "./summary-tasks.js";
 
@@ -79,6 +80,7 @@ export type RejectReason =
   | "contract"
   | "verbatim"
   | "summary_ungrounded"
+  | "summary_conditions"
   | "value_guard"
   | "value_ungrounded";
 
@@ -320,6 +322,11 @@ export function planSummaryImport(input: {
         reject("value_ungrounded", `company 不認定 (${q.code}): ${q.detail}`);
         continue;
       }
+    }
+    const missingConditions = missingSummaryConditions(row.description, summary);
+    if (missingConditions.length > 0) {
+      reject("summary_conditions", missingConditions.join(","));
+      continue;
     }
     const plannedSource = result.estimatedValue !== null ? "company" : null;
     const alreadyApplied = row.ids.every(

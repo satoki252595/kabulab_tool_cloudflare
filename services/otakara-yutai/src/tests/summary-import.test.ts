@@ -71,6 +71,15 @@ const result = (over: Record<string, unknown>) =>
   JSON.stringify({ taskId: K_CATALOG, contractVersion: SUMMARY_CONTRACT_VERSION, shortSummary: "カタログギフト 3,000円相当", estimatedValue: 3000, ...over });
 
 describe("selectSummaryTasks", () => {
+  it("形式上有効でも保有条件を落とした既存要約を自動的に再作成へ回す", () => {
+    const current = row({ description: "5年以上継続保有で合成商品3万円相当", shortSummary: "合成商品3万円相当" });
+    const tasks = selectSummaryTasks([current]);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].reason).toBe("rework");
+    const plan = planSummaryImport({ tasks, currentRows: [current], resultsText: result({ taskId: tasks[0].taskId, shortSummary: "合成商品3万円相当", estimatedValue: null }) });
+    expect(plan.updates).toEqual([]);
+    expect(plan.rejections[0].reason).toBe("summary_conditions");
+  });
   it("随時のrecipient0を同じ条件のまま書出し・読戻しし、未知月は止める", () => {
     const tasks = selectSummaryTasks([row({ recordMonth: 0, shortSummary: null })]);
     expect(tasks[0].recipients).toEqual([{ minShares: 100, recordMonth: 0, recordDate: null }]);
@@ -303,7 +312,7 @@ describe("planSummaryImport", () => {
     const km = keyOf("9997", mixed);
     const p = planSummaryImport({
       tasks: selectSummaryTasks(rows),
-      resultsText: result({ taskId: km, shortSummary: "電子マネー 2,000円相当", estimatedValue: 2000 }),
+      resultsText: result({ taskId: km, shortSummary: "電子マネー 2,000円相当、抽選で体験チケット", estimatedValue: 2000 }),
       currentRows: rows,
     });
     expect(p.rejections).toEqual([]);
@@ -431,11 +440,11 @@ describe("planSummaryImport の共有厳密判定 (原文抜粋)", () => {
     const taskId = keyOf("9101", desc);
     const p = planWith(
       rows,
-      result({ taskId, shortSummary: "優待品 500円相当", estimatedValue: 500 })
+      result({ taskId, shortSummary: "2年未満保有で優待品 500円相当", estimatedValue: 500 })
     );
     expect(p.rejections).toEqual([]);
     expect(p.updates).toEqual([
-      { taskId, ids: [71], shortSummary: "優待品 500円相当", estimatedValue: 500, estimateValueSource: "company" },
+      { taskId, ids: [71], shortSummary: "2年未満保有で優待品 500円相当", estimatedValue: 500, estimateValueSource: "company" },
     ]);
 
     const desc7075 = RAW34TEXT["7075"];
@@ -452,14 +461,14 @@ describe("planSummaryImport の共有厳密判定 (原文抜粋)", () => {
     const taskId7075 = keyOf("9102", desc7075);
     const p2 = planWith(
       rows7075,
-      result({ taskId: taskId7075, shortSummary: "優待品 6,500円相当", estimatedValue: 6500 })
+      result({ taskId: taskId7075, shortSummary: "半年以上保有で優待品 6,500円相当", estimatedValue: 6500 })
     );
     expect(p2.rejections).toEqual([]);
     expect(p2.updates).toEqual([
       {
         taskId: taskId7075,
         ids: [72],
-        shortSummary: "優待品 6,500円相当",
+        shortSummary: "半年以上保有で優待品 6,500円相当",
         estimatedValue: 6500,
         estimateValueSource: "company",
       },
@@ -533,7 +542,7 @@ describe("planSummaryImport の共有厳密判定 (原文抜粋)", () => {
     ];
     const p = planWith(
       rows,
-      result({ taskId: keyOf("9106", desc), shortSummary: "優待品 500円相当", estimatedValue: 500 })
+      result({ taskId: keyOf("9106", desc), shortSummary: "2年未満保有で優待品 500円相当", estimatedValue: 500 })
     );
     expect(p.updates).toEqual([]);
     expect(p.rejections.map((r) => r.reason)).toEqual(["value_ungrounded"]);
