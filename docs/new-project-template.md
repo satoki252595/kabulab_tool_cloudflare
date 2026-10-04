@@ -212,7 +212,7 @@ app.get("/api/some-protected", cronAuthMiddleware, async (c) => { ... });
 
 **サービス独自の `sync-daily` / `sync-monthly` は作らない**。日次/月次 sync は root の [src/cron/daily.ts](../src/cron/daily.ts) / [src/cron/monthly.ts](../src/cron/monthly.ts) に実装が一本化され、母集団 seed は [src/cron/universe.ts](../src/cron/universe.ts) (`sync:universe`) にある。母集団は東証内国普通株の共有4文字コード約3,700銘柄 (xlsx パースは Node 専用)。地域市場の単独上場銘柄を追加する場合は、市場マスターと対応プロバイダーを別途設計し、`.T` への一律変換や suffix 推測は行わない。
 
-自動実行は **GitHub Actions (Node)** が担う ([.github/workflows/stock-sync.yml](../.github/workflows/stock-sync.yml) — 日次 core/rsi/swing + 月次 universe/otakara rebuild)。Workers Paid を使わないため **Workers Cron は使わない** (無料枠の subrequest 上限では Worker 上で全銘柄 sync を捌けない)。Node からの書込は [src/shared/db/d1-http-client.ts](../src/shared/db/d1-http-client.ts) の `createD1HttpDb` (D1 REST) 経由、Yahoo は共有クライアントが `YAHOO_PROXY_BASE` (Worker エッジ `/api/ingest/yahoo`) 経由で叩き 429 を回避する。手動実行・バックフィルは `pnpm sync:daily:core` / `pnpm sync:monthly:core` を使う。`:core` なしは VWAP や優待4工程も動かすローカル手動フル実行。
+自動実行の全銘柄処理は **GitHub Actions (Node)** が担う ([.github/workflows/stock-sync.yml](../.github/workflows/stock-sync.yml) — 日次 core/rsi/swing + 月次 universe/otakara rebuild)。株式日次とマクロの起動・期限確認はCloudflare Cron、月次はActions scheduleを使う。[stock-scheduler](./stock-scheduler.md)の既存起動経路へ相乗りする。Node からの書込は [src/shared/db/d1-http-client.ts](../src/shared/db/d1-http-client.ts) の `createD1HttpDb` (D1 REST) 経由、Yahoo は共有クライアントが `YAHOO_PROXY_BASE` (Worker エッジ `/api/ingest/yahoo`) 経由で取得し、直列・間隔制御と429時の停止を共有する。手動実行・バックフィルは `pnpm sync:daily:core` / `pnpm sync:monthly:core` を使う。`:core` なしは VWAP や優待4工程も動かすローカル手動フル実行。
 
 ### 新サービスが日次データを必要とする場合
 

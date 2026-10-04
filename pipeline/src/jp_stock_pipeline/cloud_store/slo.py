@@ -134,7 +134,7 @@ SLOS: tuple[FreshnessSlo, ...] = (
     ),
     FreshnessSlo(
         "yutai_benefits", 40 * _DAY, 50 * _DAY,
-        "月次全量取込を再開したため鮮度判定へ戻す。active普通株の最古created_atを測り、"
+        "月次全量取込を再開したため鮮度判定へ戻す。active普通株の非単発行の最古created_atを測り、"
         "日次の要約更新を原本再取得として数えない。未取得・部分取込は警告する",
     ),
 )

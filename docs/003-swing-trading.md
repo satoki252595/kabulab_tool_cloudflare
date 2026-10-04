@@ -149,7 +149,7 @@ Notion ガイドの例題を再現:
 pnpm sync:daily:core   # core/rsi/swing 単体の手動実行 (全 active ~3,700)
 ```
 
-自動実行: **GitHub Actions** `stock-sync.yml` が日次で `sync:daily:core` (core/rsi/swing) を、月次で universe / otakara rebuild を実行する。`sync:daily` は core に VWAP 3 工程を加えたローカル手動フル実行。母集団 ~3,700 を Node ランナー上で一括処理するため、Workers Cron / Workers Paid は使わない。VWAP 時系列 (007) は `vwap-ingest.yml`、005 EDINET / 006 TDnet は `catchup.yml` が担当する。
+自動実行: Cloudflare Cronが **GitHub Actions** `stock-sync.yml` の株式日次とマクロを起動する。全銘柄の処理はNodeランナーで行い、月次 universe / otakara rebuild は同workflowの月次scheduleが担当する。起動・完了期限は[stock-scheduler](./stock-scheduler.md)を参照。`sync:daily` は core に VWAP 3 工程を加えたローカル手動フル実行。VWAP 時系列 (007) は `vwap-ingest.yml`、005 EDINET / 006 TDnet は `catchup.yml` が担当する。
 
 ## スコープ外の明示
 

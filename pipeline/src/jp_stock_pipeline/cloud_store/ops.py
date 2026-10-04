@@ -94,7 +94,7 @@ def record_freshness(
     フォールバックにしか使わない。
 
     基準日の列が無い表はwriterの実時刻を渡す。`core_stocks`は自身のupdated_at、
-    `yutai_benefits`はactive普通株のMIN(created_at)で、要約だけの更新を数えない。
+    `yutai_benefits`はactive普通株の非単発行のMIN(created_at)で、要約だけの更新を数えない。
     観測ジョブの `now` ではないので「記録のたびに進む」
     ことは無いが、writer が同じ値を書き直すだけでも進むため「取得はできたが中身が
     更新されていない」は検知できない。日付列が埋まったらそちらへ寄せる。
