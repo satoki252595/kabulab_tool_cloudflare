@@ -322,6 +322,7 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
     const localRecordMonths = scopeMonths;
     const rows = ev.tableHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi);
     let lastNotes = "";
+    let shareOnly = false;
 
     for (const row of rows) {
       const cells: string[] = [];
@@ -330,16 +331,24 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
         cells.push(cell[1].replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]*>/g, "").trim());
       }
 
-      // ヘッダー行スキップ
-      if (cells[0] === "必要株数" || cells.length < 2) continue;
+      // 必要株数だけの公式表では優待名がh3に明記される専用形式。
+      if (cells[0] === "必要株数") {
+        shareOnly = cells.length === 1 && /<th\b/i.test(row[1]);
+        continue;
+      }
+      if (shareOnly && (cells.length !== 1 || !heading)) {
+        return { status: "unknown", code, reason: "invalid-share-only-table" };
+      }
+      if (!shareOnly && cells.length < 2) continue;
 
       // 株数パース
-      const shareCell = cells[0]!; // cells.length >= 2 は上で確認済み。
+      const shareCell = cells[0]!; // 通常表は2列以上、株数のみの表は1列を確認済み。
       const sharesMatch = shareCell.match(/^(\d{1,3}(?:,\d{3})+|\d+)\s*株/);
       if (!sharesMatch) {
         if (/\d[\d,.]*\s*株/.test(shareCell)) {
           return { status: "unknown", code, reason: "invalid-min-shares" };
         }
+        if (shareOnly) return { status: "unknown", code, reason: "invalid-share-only-table" };
         continue; // 非株数の継続行は従前どおり。
       }
       const minShares = parseInt(sharesMatch[1].replace(/,/g, ""), 10);
@@ -347,7 +356,7 @@ export function parseStockDetail(code: string, html: string): StockDetailResult 
         return { status: "unknown", code, reason: "invalid-min-shares" };
       }
 
-      const description = cells[1] || "";
+      const description = shareOnly ? heading : cells[1] || "";
       const notes = cells[2] || lastNotes;
       if (cells[2]) lastNotes = cells[2];
 

@@ -133,6 +133,28 @@ const ONE_SHARE2337 = `<h3 class="ulno">「いちご THANKS!マンスリープ�
         </tbody>
       </table>`;
 
+/** 5283 実応答のh3・権利月・株数だけの表を連続抜粋。
+ * source body SHA256 f2e4911dd575b69284443c2f5563b1bf118b72930dd692f562d6787a59cb622a
+ * receivedAt 2026-10-04T00:24:48.222Z (保存原本からの抜粋、追加取得なし)。 */
+const SHARE_ONLY5283 = `<h3 class="ulno">なめ茸「志賀の郷」</h3>
+    <span class="flr fwb fcgl mt5"><i class="mr5 fa-solid fa-caret-right"></i>優待権利確定月：<span class="md_ico_tx theme_normal size_s">6月</span></span>
+  </div>
+    <div class="md_table_wrapper">
+      <table class="md_table vborder">
+        <tbody>
+          <tr>
+            <th class="ly_colsize_2_fix">必要株数</th>
+           \u0020
+           \u0020
+          </tr>
+          <tr>
+            <td>200株以上</td>
+           \u0020
+           \u0020
+          </tr>
+        </tbody>
+      </table>`;
+
 /** ok を開く。unknown ならテストを落とす。 */
 function unwrapOk(r: StockDetailResult): StockYutaiData {
   expect(r.status).toBe("ok");
@@ -181,6 +203,21 @@ describe("parseStockDetail は表ローカル月を優待に付ける", () => {
     expect(data.benefits[1].notes).toContain("■継続保有期間について");
     expect(data.benefits[2].notes).toContain("■贈呈時期");
     expect(data.benefits[2].description).toBe("2,000円相当");
+  });
+
+  it("5283: 株数だけの公式表は明記された見出しを優待内容として取り込む", () => {
+    expect(unwrapOk(parseStockDetail("5283", SHARE_ONLY5283)).benefits).toEqual([{
+      minShares: 200, description: "なめ茸「志賀の郷」", notes: "",
+      localRecordMonths: [6], heading: "なめ茸「志賀の郷」",
+    }]);
+    for (const invalid of [
+      SHARE_ONLY5283.replace('なめ茸「志賀の郷」</h3>', '</h3>'),
+      SHARE_ONLY5283.replace('<td>200株以上</td>', '<td>200株以上</td><td>内容不明</td>'),
+      SHARE_ONLY5283.replace('200株以上', '条件不明'),
+      SHARE_ONLY5283.replace('必要株数</th>', '必要株数</th><th>優待内容</th>'),
+      SHARE_ONLY5283.replace('<th class="ly_colsize_2_fix">必要株数</th>', '<td>必要株数</td>'),
+      SHARE_ONLY5283.replace(/優待権利確定月：<span[^>]*>[^<]+<\/span>/, ''),
+    ]) expect(parseStockDetail("5283", invalid).status).toBe("unknown");
   });
 
   it("明記された随時だけを専用enumへ取り込み、他表の実月・本文は保持する", () => {

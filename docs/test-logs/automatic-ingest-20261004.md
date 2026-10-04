@@ -137,3 +137,27 @@ JSS privateは独立した既存Workerのため、同mainから既存設定・�
 有報の22:03:40Zの再開前確認はGH main1・重複run1・D1全台帳SELECT1のread-only3通信で、main c210/重複0/inFlight0/completed237/未完11日/識別保留7を確認した。既存内部の例外分類はCLIが例外objectを捨てる前に行われ、既知の源取得失敗だけmarkerを解除する。保存済み9/24一覧から通常入口で再開できる一方、元run9のclass/phase UNKNOWNは保持する。追加dispatch・publisher問い合わせ・業務書込は0。現定時は平日20時JSTで、10/4日曜の定時は定義されていない。
 
 地方2銘柄の開示ID登録は22:35:48.780Zに正常完了した。直前の対象core/event/stateの3SELECT、原子batch1、対象全11列POST1の計5応答がすべてHTTP200。3824/353Aの実名称・福岡市場を`inactive＋instrument_type=NULL`で2行新規登録し、全11列を照合した（POST SHA `dec8a8bb1d7d257871f776c32bd3816592347385b1f766532820fec612874baf`）。D1の物理rows_writtenは各INSERT4・合計8で、論理追加行数2とは区別する。旧core・JPX state・価格・優待・事業タグ・台帳は変更せず、再queueは別途確認後に行う。
+
+## PR294と限定再開の本番観測
+
+[PR294](https://github.com/satoki252595/kabulab_tool_cloudflare/pull/294)は全3CI成功後、22:57:10Zにmain `e03f39d2b565698a6ac5ff3e8758a7befb9a26fd`へsquash mergeした。同SHAのGitHub check111311933207はCF build `8d812708-93d2-439c-a5a5-fe2be387a0c0`・version `501f8dee-efe5-4c9f-8d19-bda7f6be56c6`へ結合し、native deployment `3e571ab8-acd9-40b1-a752-aa4f464c70db`を22:58:17Z作成・100%配信と確認した。[同main CI37160154433](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37160154433)も全ジョブ成功。Mac runtimeも同main/clean/.env0600/accepted revision一致へ更新し、取得前preflightは通信0・業務書込0でPASSした。
+
+地方2銘柄登録の5通信と全PRE/POST等29membersの運用束を22:51:05Zに共有Notionへ実体保管・全bytes照合した（gzip23,585B、SHA `38720ce7cb507e4603d464b1d35906fa7bcf1acffbc2b6ac67dc0b570e307a8c`）。8/26・8/28だけ既存`saveProgress`のfresh11列/CASで`pendingCheckedDate=NULL`へ戻し、revision+1/updatedAt以外の全9列・保留7件を保持した。22:55:12Zの6D1応答は全200、2更新それぞれrows_written1、全POSTはCAS応答と一致。再queue運用30membersも22:58:15Zに実体保管・全文照合した（gzip11,188B、SHA `9aff7a35b05222918be78f2030ee6d1f115cd337f3e70a081fdc17726c102d8c`）。登録・再queueは受理済み有報書類を取得済みにする操作ではなく、通常取得で改めて確認する。
+
+有報の[run10 37160447949](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37160447949)は同mainから23:03:00Zに開始し、22通取込・既存1通確認で処理量上限に達した（list/ingest errors0、elapsed387.317秒）。23:10:58Zの全台帳はcompleted260・未完10日・identity保留8・inFlight0。新しい提出一覧1件は23:11:16ZにNotion1/hosted1の全量照合、旧50件の再GET0。元run9でclass/phase UNKNOWNだったS100Z3BYは、今回の通常入口で原本・本文照合・本文ポインタの3段階応答が確認できた。元UNKNOWN履歴を成功へ書き換えてはいない。
+
+JPXの正常overlayは23:13:03→23:13:14Zに公式3/Notion17/hosted4/D1 SELECT6・batch1の計31応答すべてHTTP200で、一次4原本の全文照合後に28 statementsを原子適用した。適用日は10/4、held listingはNULL、core変更0。私有検証のPRE guard.state配列と正準POST.state objectの取り違えで、保存後のlocal predicateだけがSTOPした。再取得・再送は行わず、元STOPを保持して実全PRE/POSTを比較し、全3,824 coreの11列・FSE2行は完全不変、230 eventの意味項目とIDは不変、原本に結合した観測時刻・archive key等だけ更新、state全10列がcompiled入力と一致と確認した。単日未確定の将来1期間は物理manifestに保管し、日付を推定してeventにしなかった。運用POST束は後でまとめて保管する。
+
+[run11 37161524529](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37161524529)は19通取込・既存2通確認、[run12 37162084451](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37162084451)は20通取込・既存2通確認で、両方とも既知の処理量上限・list/ingest errors0。23:40:19Zの全台帳はcompleted303・未完7日・識別保留10・inFlight0。run11の新一覧3件はNotion/hosted各3で全量照合、run12の新一覧0件と旧54件のdescriptor一致を確認し、旧原本の再GETは行っていない。
+
+[run13 37162563263](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37162563263)は20通取込・既存4通確認、[run14 37163084183](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37163084183)は19通取込・既存4通確認。両方とも既知の上限・list/ingest errors0。23:59:35Zの全台帳はcompleted350・未完5日・識別保留20・inFlight0。各新一覧1件の実体をNotion/hosted各1で全量照合し、保存済み56一覧を保持した。優待取得と書込みを重ねないため、run15はまだ起動していない。
+
+## 優待の株数1列表による停止と修正
+
+同mainの通常優待取得を00:00:29→00:25:05Zに1回実行した。一覧86ページは今回の公式全件数1,707とunionが一致し、重複0。前回1,711件との保存原文比較は追加0・削除4（3670/4171/9223/9914）、残存コードの順序も一致した。実受信874応答は全200で、一覧86＋詳細788。詳細787件は正常だが、末尾5283だけ`no-benefit-tables`で停止した。Phase3/DB取込0・モデル0・再取得0・未知書込markerなし。予測値1,711を今回の受入件数へ置き換えてはいない。
+
+原応答はHTML計151,844,250B、JSONL202,614,985B（SHA `96ac0c4f4b9ddfb710c3dfa471fbd2ef463ab708069ff566d3a4c4bc3703ba20`）、gzip47,182,015B（SHA `7b79a6bdca9e94078855944a272d81f4acee237c35aac27a21b31be466818a8c`）。共有原本保管後、00:34:55ZにNotion1/hosted1の全200・全metadata/manifest/全gzip bytesを独立照合した。原取得UTC00:00:33.847→00:24:48.222、元UNKNOWN・未完状態を保持する。
+
+5283の保存原文には、h3の`なめ茸「志賀の郷」`、権利月6月、正式な必要株数1列・200株以上が明記されていた（body165,331B、SHA `f2e4911dd575b69284443c2f5563b1bf118b72930dd692f562d6787a59cb622a`）。共有解析が2列未満を除外していたため、この明記された1列表だけ見出しを優待内容として採用する。月・見出しの欠落、正式headerでない表、列数不整合、株数不正はUNKNOWNを維持する。実原文抜粋を使う回帰を含む22テスト・全型チェック・対象lintがPASS。全量取込はまだ未受入。
+
+独立した全原文PURE比較では、旧正常787ページ・5283だけUNKNOWNから、修正後は788ページすべて正常となった。旧優待2,464行の全tupleを順序付きで保持し、全他fieldも一致。追加は原h3・6月・200株を持つ5283の1行だけ。TS ASTが復元した回帰fixtureも同原bodyの連続抜粋と完全一致した。追加通信・DB書込・モデル利用0、元source STOPは成功へ書き換えていない。
