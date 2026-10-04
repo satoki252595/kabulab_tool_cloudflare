@@ -182,3 +182,13 @@ PR304/306のMERGEDとremote末端SHAの完全一致を確認し、対応する�
 233銘柄だけの通常取得は15:33:11.093Zにbenchmark検証で終了2。実受領15:32:42.328ZのYahoo原本は、currentTradingPeriodが実10/5の09:00–15:30 JST、最終quoteが10/2 15:45:03 JST、最終barが10/2 09:00 JSTだった。既存`selectConfirmedCloses()`は10/2を選ぶが、追加した閉場guardは現在periodと過去確定日が同じことを要求し、平日未開始時に誤拒否した。
 
 取得元は日経1回だけ、個別233の取得0、Notion8、D1 read1、R2 read/PUT0、429・結果不明0。原2,946B/SHA `edef16ff23d03b6b63cc457295aef97f312d84394c22c03b490bbad5ed62f942`は通常finallyでNotion実体保管・全文読戻しを完了し、receipt SHA `3820c6f4801e83e0dfb9ede78cc96e2759289d9da105a3e9e8bf7620fd982459`。旧838件・修復候補2,592件は変更していない。同grant再入と個別再GETは0で、原文と時計を保持したoffline修正を進める。
+
+根因をbenchmarkと個別completion/skipが使う共通判定で修正した。既存の確定bar選択を再利用し、実観測当日の未開始period・過去の同一quote/bar日・独立witness・全原文一致を要求する。源日とregularStart/endは元値を保持する。witness無しlegacyは従来の同period閉場条件を維持し、開始時刻到達・形成中・未来bar・NULL/脱落・別日のfuture period・証跡不一致は停止する。
+
+旧b83で新2回帰が失敗し、修正後5suite115 pass・既存3 skip、型・静的検査・独立レビューが成功した。実原benchmarkも旧関数HOLD→新関数10/2をsource/Notion/PUT/model0で再現し、原bytes・実受領clockを保持した（receipt SHA `014def54421b5eae04942b47d74cbc3dc69c3008197c159d0f99d923e3194dbf`）。さらに保存済3,456原本全行の判定・時計・SHA・URL・bars・eventsが旧判定と完全一致し、3,423適合/33保留・838除外/2,592候補を維持した（exact closure SHA `c8868941273629712f46097359a8f13a16b0f45a04ae2a2a0b9d0c6e662bcbba`）。個別233の新しい通常実行は、修正の本番受入と資金フローの終端後に行う。
+
+## 信用残の通常実行
+
+[margin37213741168](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37213741168)はmain b83で1回実行し成功した。通常stepは15:38:23–15:38:31Z、基準日2026-10-01・4,250行、同値のR2 PUT0。daily/intraはskip。正常`verifyCustodyEntity()`経路でNotion原実体の全bytes/SHAを各R2判断前に照合し、追加の独立原文GETは行っていない。
+
+全native log32,534B/SHA `2441cf9884ec513236fbb44c3b4155a2629044f3d7bd13498d70e64a65da0342`、offline検証receipt SHA `7fa5c940173dc6bf61b8d4d2f9ae14deeab7a6507c631e973f52928bd5959477`。native HTTP総数と公表日はログ未計測のためUNKNOWNを保持し、基準日を公表日へ読み替えない。
