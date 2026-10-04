@@ -1025,7 +1025,12 @@ export async function fetchBars5m(symbol: string, range = "5d", options?: FetchC
     await options.onRaw(rawCapture(symbol, r, bytes, new Date().toISOString()));
   }
   ensureOk(r);
-  const j = (await r.json()) as YahooChartJson;
+  return parseBars5m(await r.json(), symbol);
+}
+
+/** 保存済みの原応答も同じ検査で解析する。HTTP取得・受領時計の再生成はしない。 */
+export function parseBars5m(json: unknown, symbol: string): Bar5m[] {
+  const j = json as YahooChartJson;
   const { res, timestamps } = extractChartResult(symbol, j);
   // quote 欠落は仕様変更の疑い。空で黙殺せず落とす (旧実装は TypeError)。
   const q = res.indicators?.quote?.[0];
