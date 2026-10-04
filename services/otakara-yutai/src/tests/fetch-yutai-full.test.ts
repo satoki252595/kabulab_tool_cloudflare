@@ -28,7 +28,7 @@ import {
   parseStockListPage,
   type StockDetailResult,
 } from "../../data-scripts/fetch-yutai-full.js";
-import type { StockYutaiData } from "../../data-scripts/yutai-full-import.js";
+import { benefitRowsOf, type StockYutaiData } from "../../data-scripts/yutai-full-import.js";
 
 vi.mock("../../../../src/shared/db/d1-http-client.js", async (original) => ({
   ...await original<typeof import("../../../../src/shared/db/d1-http-client.js")>(),
@@ -163,6 +163,34 @@ function unwrapOk(r: StockDetailResult): StockYutaiData {
 }
 
 describe("parseStockDetail は表ローカル月を優待に付ける", () => {
+  // 保存原本で観測した全文セル2形。既存の実HTML抜粋へのセル差替えだけで
+  // table [3,9] と行自身の独立した適用月の優先境界を検証する。
+  const rowMonthHtml = (description: string, months = "3月,9月") => GOLF8022
+    .replace('size_s">3月</span>', `size_s">${months}</span>`)
+    .replace('3,300円相当<br />※月会費、レッスン受講料は各会場で異なります。', description);
+
+  it.each(["1,000円相当<br />（3月のみ）", "500円相当（3月のみ）"])(
+    "行全体の単一額面に明示された権利月だけを投影する: %s", (description) => {
+      const data = unwrapOk(parseStockDetail("8022", rowMonthHtml(description)));
+      expect(data.benefits[0].description).toBe(description.replace('<br />', '\n'));
+      expect(data.benefits[0].localRecordMonths).toEqual([3]);
+      expect(benefitRowsOf(data).rows.map(row => row.recordMonth)).toEqual([3]);
+    });
+
+  it.each([
+    "1,000円相当（3月のみ利用）", "1,000円相当（3月のみ開催）",
+    "1,000円相当（3月のみ申込）", "1,000円相当（3月のみ発送）",
+    "1,000円相当（3月のみ）<br />500円相当（9月のみ）",
+    "1,000円相当（3月のみ）または500円相当", "1,000円相当（3月・9月のみ）",
+  ])("利用時期・複数額面・複数期間から権利月を推定しない: %s", (description) => {
+    const data = unwrapOk(parseStockDetail("8022", rowMonthHtml(description)));
+    expect(data.benefits[0].localRecordMonths).toEqual([3, 9]);
+  });
+
+  it.each(["2月", "随時", "随時,3月"])("行の月とtable scopeが矛盾すれば止める: %s", (months) => {
+    expect(parseStockDetail("8022", rowMonthHtml("1,000円相当（3月のみ）", months)).status).toBe("unknown");
+  });
+
   it("8022: union decoy を無視し、表ごとに [3,9] / [3] を付ける", () => {
     const data = unwrapOk(parseStockDetail("8022", `${UNION8022}\n${FITTING8022}\n${GOLF8022}`));
     expect(data.code).toBe("8022");
