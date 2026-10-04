@@ -365,12 +365,13 @@ def execute(ctx: JobContext) -> None:
     logger.info("対象書類 %d / 一覧 %d 件", len(targets), len(docs))
 
     if not docs:
-        # 0 件は「休場日なら正常・営業日なら異常」で、成功として黙って終えると
-        # 対象日ずれ等の事故が検知できない (実績あり)。⑦ に残して可視化する (§3-2)。
-        ctx.add_failure(
-            f"EDINET一覧_{target_date.isoformat()}",
-            "書類一覧が0件。休場日なら正常だが、営業日で continue するなら対象日ずれを疑う",
+        # 公式 v2 の正常な空応答。原本保管後、実行履歴は processed=0 のまま残す。
+        # 連続空振りは既存 ops_check (直近5実行中3件) が検知する。日全体の確定ではない。
+        logger.warning(
+            "EDINET 検証済み空一覧: date=%s count=0（この観測時点の提出書類なし）",
+            target_date.isoformat(),
         )
+        return
 
     # ① relation マップ(全件・有界)と ④ dedup マップ(対象日のみ)を1回ずつ事前ロード。
     # 書類ごとの ① 検索・④ 検索(各1req)を排除する(§8.3。繁忙日=有報集中の timeout 対策)。

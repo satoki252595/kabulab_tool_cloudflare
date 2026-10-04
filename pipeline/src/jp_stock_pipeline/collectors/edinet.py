@@ -165,27 +165,46 @@ def list_documents(
 ) -> tuple[RawArtifact, list[dict]]:
     """指定日の書類一覧を取得し、原本保存して (RawArtifact, results) を返す (§8.1)。
 
-    type=2 で提出書類一覧+メタデータを取得する。エラーレスポンス
-    （metadata.status != "200" / results 欠落）は実データではないため
-    保存せず FetchError とする (§3)。
+    type=2 の日付・件数・処理時刻まで検証する。公式仕様の count=0/results=[]
+    も正常な一覧原本。不正な応答は保存せず FetchError とする (§3)。
     """
     key = _require_api_key(settings)
     datestr = target_date.isoformat()
     url = f"{EDINET_API_BASE}/documents.json"
     resp = fetch(url, params={"date": datestr, "type": 2, "Subscription-Key": key})
+    if resp.status_code != 200:
+        raise FetchError(f"EDINET 書類一覧 HTTP 状態不正: date={datestr}")
     try:
         body = json.loads(resp.content)
     except ValueError as exc:
         raise FetchError(f"EDINET 書類一覧が JSON でない: date={datestr}") from exc
 
-    status = str(body.get("metadata", {}).get("status", body.get("StatusCode", "")))
+    if not isinstance(body, dict) or not isinstance(body.get("metadata"), dict):
+        raise FetchError(f"EDINET 書類一覧 metadata 不正: date={datestr}")
+    metadata = body["metadata"]
+    parameter = metadata.get("parameter")
+    resultset = metadata.get("resultset")
     results = body.get("results")
-    if status != "200" or not isinstance(results, list):
-        # 例: キー不正時は {"StatusCode": 401, "message": ...}（実レスポンス確認済み）
-        raise FetchError(
-            f"EDINET 書類一覧エラーレスポンス: date={datestr} status={status} "
-            f"message={body.get('message', '')!r}"
-        )
+    if (
+        not isinstance(metadata.get("title"), str) or not metadata["title"]
+        or metadata.get("status") != "200" or metadata.get("message") != "OK"
+        or not isinstance(parameter, dict) or parameter.get("date") != datestr
+        or parameter.get("type") != "2"
+        or not isinstance(resultset, dict) or type(resultset.get("count")) is not int
+        or resultset["count"] < 0
+        or not isinstance(results, list) or resultset["count"] != len(results)
+        or any(not isinstance(doc, dict) for doc in results)
+    ):
+        raise FetchError(f"EDINET 書類一覧の応答契約不一致: date={datestr}")
+    process_time = metadata.get("processDateTime")
+    if not isinstance(process_time, str) or not re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}", process_time
+    ):
+        raise FetchError(f"EDINET 書類一覧の処理時刻形式不正: date={datestr}")
+    try:
+        datetime.strptime(process_time, "%Y-%m-%d %H:%M")
+    except ValueError as exc:
+        raise FetchError(f"EDINET 書類一覧の処理時刻不正: date={datestr}") from exc
 
     artifact = save_raw(
         resp.content,
