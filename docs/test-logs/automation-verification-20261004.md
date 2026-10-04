@@ -17,7 +17,7 @@ TypeSafe設定、新規の有料AI契約は変更しない。
 | CI | PR300/301/303/304/306/307/308/310/311および各mainのCIを確認。実資料未配置の既存skipは保持。 |
 | cloud_check | 修正後37202784871でR2両bucket・必須9表、processed3 / failed0。 |
 | stock-sync | 株式日次は実休日10/4とN22510/2の不一致で保存前停止。macroは原本・必須6値・D1読戻しを確認。月次の正規3処理は銘柄同期3,631・優待全7,979行・再計算1,650銘柄を受入。 |
-| vwap-ingest | 日足原文3,689全件を観測、適合3,653 / 品質保留36。native全照合3,660は旧7品質保留を含む。信用残4,250行を確認。通常5分足5日は1,242保存・5同値・2原文保留、4368のR2 PUT結果不明で後続2,439を停止。保存済み本文の全照合は進行中。 |
+| vwap-ingest | 日足原文3,689全件を観測、適合3,653 / 品質保留36。native全照合3,660は旧7品質保留を含む。信用残4,250行を確認。通常5分足5日は1,242保存・5同値の全本文を照合済み。2原文保留・4368のR2 PUT結果不明で後続2,439を停止し、4368の現本文は送信SHAと不一致のため保留を維持。 |
 | moneyflow | 通常29取得元で26成功、sector-turnoverは株価55不足、CFD月次・年次の新商品/欠測表記の修正を本番反映し、同原文から通常保存を実行中。TFX共通rawの全bytes実体保管は修正後の通常1回で確認済み。 |
 | supply_daily | 4,352銘柄・failed0。実申込日10/1、同値R2書込0。 |
 | edinet_daily | 実日曜10/4の一覧0件で明示停止。源日を営業日へ置換せず#305に記録。 |
@@ -313,6 +313,16 @@ exact mainのWorkers Build `4a3915a7-7884-4bfd-a273-375ee23e2139`は17:35:07Zに
 通常CLIは18:05:10.023Zにsummaryを確定し、job/workflowは18:05:18Zにfailureで終端した。全3,689対象の会計はwritten1,242 / skipped5 / errors2 / invalid0 / unknown1 / notStarted2,439、rateLimited0・aborted=false、exit2。4368のnative R2 PUTがInternalError/502で保存結果不明となり、正常guardが再送・後続保存を停止した。取得元429/503を原因とはしない。2原文保留は1992の全行欠測（NULL317・volume0除外4・全timestamp321）と3477のtimestamp非配列で、架空のbarへ補完しない。後続2,439のうち10は既にsource barを観測済み、2,429は未観測として区別する。
 
 原終端log51,412B/SHA `88989d9de63f89cf0408535b3dd2943bab796dec3d9cca7182d29323f68a3652`と正常summaryの全会計を照合した。UTC day/keyは実20261004で、通常保管したsummary全336,127B/SHA `264fc8976006fa0aabe8470765ae5d31ec9e661fd7fa77b0b22f10b2e9823885`を全文読戻した。正常rawCustodyの42batch成功は原logの根拠であり、独立した全取得native packetの件数としては扱わない。成功/同値1,247のnative本文を追加取得元・書込0の1passで照合中。4368は未知のまま保持し、原5日bodyだけから未保存の旧365日PREや書込時計を推測再構築せず、別のreadonly判定準備へ進む。
+
+nativeの成功/同値1,247本文は18:17:31.002Zにreadonly 1pass・exit0で終了した。全367,488,244Bを私有wx/fsync保存し、正常summaryの全SHAと共有shapeに一致。proof SHA `65860214d9cc6293450c0d925e6fc971c6de271db7932ace41947c841aed0507`、取得元・書込・モデル0。ETagはこの全件検証では返却値を記録していないため未観測とする。
+
+4368だけのreadonly確認は18:19:28.655–18:19:30.786Zに1logical GETで終了0。現native全505,636B/SHA `b36d9d0bfc044d2b87f516d2bb513f575a16c68574efccab95394ae0081cd8ce`はshape適合だが元試行SHA `7137ccfa414ec86966be3a097380dd41ce327aeec2b5b7acc6437c72f51f8530`と一致せず、保留を維持した。opaque ETag原値と時計は非公開receipt859B/SHA `2e6f8518ccb445077c31f3e69a73f8bb288045e5b5ae0dabed5c228f85db8324`へ保存。既存GETの既知5xx上限3試行を使い、新しいretryは追加せず、実transport試行数は未計測。取得元・Notion・PUT・モデル0、元unknown1・正常exit2は改変しない。原42gzip/1,260 source memberの全文読戻しを別のreadonly 1回で開始し、取得元への再GETと派生書込0を維持する。
+
+原本読戻しの初回は、私有read許可から共有の`POST /search`が漏れてnative通信0で停止した。共有clientの局所再呼出し6回をnative6通信とは数えず、旧attemptを保持する。実際の2read callerだけを許可する別入口・別grantで18:23:54.315Zに終了0。全42gzip4,180,044B・1,260原body21,283,087Bの全SHA・正準5d/5m URL・実取得時計・metadataとNotion返却日時の実精度を一致確認した。Notion2 / hosted42 / 4290、reported開始間隔最小4,002.010ms、取得元・R2・書込・モデル0。receipt SHA `19d8b8242db841e44f8e0223de875afca76baf30aad0b3217fa6772b0b9f04ad`。
+
+全source集合は成功/同値1,247＋原文保留2＋unknown1＋未書込の既観測10＝1,260と全joinで一致した。保存済み本文内の直近231,171行は原OHLCVと全一致し、正常契約で除いたNULL249,178行・volume0の6,592行も原本に保持した。欠測の補完や、未保存の旧365日PREから全historyを再構築したという主張はしない。独立FSの全native1,247/5,942,082 bars receipt SHA `1a28d8e78cf4c9ff4649ceaf54b3eaaaa239c7c3ac18ff734aa0aa29a593b297`、全raw/直近OHLCV receipt SHA `972699b278d2f206c6638e4f1c1b6bc28110e8d3375794d50e4463476dc02319`。現在runtime dacf85と実producer d34の関連共有6module全bytesも一致し、追加API0。rootも全native367MB・全42gzip/1,260原bodyの全SHA/bytesをFSで照合した。
+
+終端GH metadataの旧18:07観測はFSへ未固定だったため、原start snapshotを保持し18:29:42.605–18:29:43.436Zにrun/jobs各1回を新しい現在clockで読戻した。原run13,721B/SHA `22b0e1ca98c8a9daf401ed2cd024372019959ebceb292937a25bb11b6f4d19b9`とjobs3,321B/SHA `b8d7699fdd7954d1273a6a2cbf61ad3bf5a40652046c803c3a8453ee7ae8031f`はcompleted/failure・実HEAD d34・job終了18:05:18Zを示す。旧clockへbackdateせず、GH2logical GET/transport試行数未計測と取得元・Notion・R2・PUT0を区別した。最終control索引6,375B/SHA `4c6b6fb8602904c46a475e5fb09103f991c4d7bd5f00f0cbf2b52afe1c02661a`に全38controlと2独立原proofの参照を固定した。
 
 ## TFX月次の通常原本受入と新リセット商品
 
