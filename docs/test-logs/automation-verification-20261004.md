@@ -53,4 +53,8 @@ NodeのTDnet通常取得・backfillは原HTTPを解析前に実体保管し、�
 
 月次の母集団取込も、JPX XLSを解析前に実体保管・全文照合する。同月の差替えを旧月キーで既存扱いにしてしまわないよう、全文SHAで冪等化し旧原本は保持する。容量上限・設定不足・照合不明でD1へ進まない。関連4suite54テスト・型検査・静的検査が成功。Pythonマスタ同期はNotionマスタ・業種・逆引き写しの処理で、Nodeの母集団同期と月次派生再構築は別に実受入を確認する。
 
+非200の不透明`.bin`は共有アップロードが拒否するため、HTTPエラー原文だけnative gzipで包み、status付きSHAキーで区別する。元bodyのbytes/SHAを保持し、空body・非UTF8 bodyでも共有の実アップロード形式検証とgzip復元の全一致を確認した。関連4suite56テストが成功。正常XLSX・旧原本・戻り値の契約は保持する。
+
+13:06:24Zまでの優待通常取得は一覧86＋詳細1,711の全1,797 GETがHTTP200で完走し、Notion/D1前のゲートで停止した。全量原文のoffline再解析は8,008予定行・権利月不明0、随時は1766/8617。gzip96,620,903B/SHA `17670fccfaebd81fb08241e818d96036c0ca30f26fd4a62f6836068905a8fbe9`と未圧縮JSONLの全バイト一致を確認し、canonical private tmpへ保存した。これは取得完了であり、原本のNotion保管とD1適用はまだ未実施。通常保管関数もexportの1行だけで再利用可能にし、新mainから同じ原本を渡して再GETを避ける。
+
 PR #300は12:36:58Zにmain`79e6bbe63031ca8ddf86e571c8b4123654ed9058`へマージし、mainのCI3件成功、12:37:31Zのnative deploymentがversion`4d307582-410e-4705-b0cb-99d4b9939bcc`の100%配信であることを確認した。Macのkernel排他下で同mainへ更新し、canonical.envのaccepted revision以外は保持。通常の[cloud_check再実行37202784871](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37202784871)はR2両bucket・必須9表、processed=3 / failed=0で完了し、#299を閉じた。
