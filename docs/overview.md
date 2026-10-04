@@ -144,7 +144,7 @@ kabulab-cf/                            (git: satoki252595/kabulab-cf)
 ├── drizzle.d1.config.ts               # D1 スキーマ生成用 drizzle-kit 設定 (sqlite dialect)
 ├── package.json
 ├── wrangler.toml                      # Worker 設定 (DB=D1 / BUCKET=R2 / ASSETS=public バインディング)
-├── .github/workflows/                # GitHub Actions 4 本: stock-sync / vwap-ingest / catchup / ci
+├── .github/workflows/                # GitHub Actions 12定義 (Node/Python取込・CI・監視・手動復旧)
 └── tsconfig.json / vitest.config.ts / eslint.config.js
 ```
 
@@ -264,9 +264,9 @@ JPX 公式 `data_j.xlsx` の東証内国株 (プライム/スタンダード/グ
 1 銘柄につき Yahoo を **Chart(5y) 1 回 + QuoteSummary 1 回** だけ叩き、in-memory で全サービス分の指標を計算して D1 に書き込む。
 
 - Phase 1: 必須 D1 スキーマを検証し、`core_stocks` から active 銘柄を取得
-- Phase 2: マクロ指数 (^N225 / ^VIX / ^GSPC / NIY=F) + 日経VI を並列取得
-- Phase 3: worker pool (CONCURRENCY=5, DELAY_MS=150) で:
-  - Yahoo `fetchStockRawData(code, "5y")` = Chart + QuoteSummary 並列 (`YAHOO_PROXY_BASE` 経由)
+- Phase 2: 必須の日経平均を確認してから他のマクロ指数 (^VIX / ^GSPC / NIY=F) + 日経VIへ進み、資格が欠ければ後続取得を止める
+- Phase 3: worker pool (CONCURRENCY=1, DELAY_MS=150) で:
+  - Yahoo `fetchStockRawData(code, "5y")` = Chart + QuoteSummary (`YAHOO_PROXY_BASE` 経由)。実HTTPは共有clientの1秒間隔・直列取得に従う
   - 5y OHLCV → RSI(10/40/120) 時系列 + percentile snapshot + 優良株判定
   - 6mo スライス → SMA(5/20/25/60/75) + ATR14 + RSI14 + MACD + Fib + volume/turnover + 前日比%
   - 5 条件 screening と E&E 6 パターン判定
@@ -274,7 +274,7 @@ JPX 公式 `data_j.xlsx` の東証内国株 (プライム/スタンダード/グ
   - Yahoo の個別取得失敗はコードと根本原因を記録し、`is_active` は変更しない
 - Phase 4: セクター集計。`core_stocks ⋈ swing_stock_indicators` を D1 から再読込し、本日更新分のカバレッジ 90% 未満なら誤集計を避けて保留 (前回値維持)・警告。`swing_sector_daily` 書き直し
 
-母集団 ~3,700 を 1 回の Node 実行で回す。個別銘柄またはマクロに欠損があれば終了コードを非ゼロにして、部分成功を正常終了として扱わない。GitHub Actions ジョブの `timeout-minutes: 90` (~40-50 分/回) 内で完結する (public repo のため Actions 分課金は無し)。
+母集団 ~3,700 を 1 回の Node 実行で回す。個別銘柄またはマクロに欠損があれば終了コードを非ゼロにして、部分成功を正常終了として扱わない。現行stock-syncのジョブ上限は210分で、これは実所要時間や完了保証ではない。public repoの標準runnerの分課金条件は[費用確認](./cost-audit-2026-10-01.md)を参照する。
 
 `pnpm sync:daily` はローカル手動用のフルオーケストレータで、この core 同期に加えて
 VWAP の日足10年・5分足・信用残高を順に実行する。定常運用では stock-sync と

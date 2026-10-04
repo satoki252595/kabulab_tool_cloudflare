@@ -233,7 +233,7 @@ Notionの書込結果不明や成功応答の不正ACKは、共有の `NotionUnk
 | JSDA 公社債発行額・償還額 | `jsda-bonds` | R2 | 月次 | 240 | 要確認 |
 | 日銀 資金循環統計 (速報) | `boj-flow-of-funds` | R2/R3 | 四半期 | 282 (上限432) | attribution-required (商用は日銀へ事前相談) |
 | FFAJ 店頭FX月次速報 | `ffaj-otc-fx` | R3 | 月次 | 384 | 要確認 |
-| TFX くりっく365 / くりっく株365 | `tfx-click365-fx` / `-fx-annual` / `-cfd` / `-cfd-annual` | R3 | 月次/年次 | 462 / 186 / 154 / 22 | 要確認 (personal-only 運用。公開面へは出さない) |
+| TFX くりっく365 / くりっく株365 | `tfx-click365-fx` / `-fx-annual` / `-cfd` / `-cfd-annual` | R3 | 月次/年次 | 462 / 186 / 176 / 22 | 要確認 (personal-only 運用。公開面へは出さない) |
 | JVCEA 会員統計 (暗号資産) | `jvcea-crypto` | R3 | 月次 | 156 | 要確認 |
 | CoinGecko グローバル | `coingecko-global` | R3 | 日次 (取込日) | 13 | 要確認 (表示時「Powered by CoinGecko」必須) |
 | CFTC COT 円・日経平均先物 | `cftc-cot-jpy` | R3/R4 | 週次 | 10 | public-domain |
