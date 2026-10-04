@@ -43,4 +43,8 @@ Python原本保管は新規・既存SHAともページと原本/変換添付の�
 
 マスタ月次cronは旧`0 21 1 * *`（UTC）だと日本時間2日06時で、定義の1日06時から1日ずれていた。`0 6 1 * *`と`timezone: Asia/Tokyo`に修正し、独自の末日判定は追加しない。[GitHubの公式timezone対応](https://github.blog/changelog/2026-03-19-github-actions-late-march-2026-updates/)に従う。
 
+NodeのTDnet通常取得・backfillは原HTTPを解析前に実体保管し、構造化した同じ入力も全文照合してからD1へ渡す。PDFは既存の`IR資料`添付を全バイト照合した後だけ分類・本文をD1へ保存する。DB行の不存在・本文保存・Notionページ更新の不明結果を握りつぶさず、後続取得を停止する。共有の照合関数を再利用し、既存の銘柄別DB構成は変更しない。資金フローのPhase1も原本上限超過・添付不一致で観測値保存へ進まない。
+
+この経路の既存Vitestに、原本保管前のD1書込禁止・PDF照合失敗後の次PDF取得禁止・本文保存失敗・対応行欠落の回帰検証を追加した。関連5suite47テスト、型検査・静的検査が成功。Python原本・月次鮮度を合わせた全テストも成功し、既存の実資料がない73件のskipは保持した。これらはコード検証であり、更新後の通常収集・実データ受入の結果は後続に記録する。
+
 PR #300は12:36:58Zにmain`79e6bbe63031ca8ddf86e571c8b4123654ed9058`へマージし、mainのCI3件成功、12:37:31Zのnative deploymentがversion`4d307582-410e-4705-b0cb-99d4b9939bcc`の100%配信であることを確認した。Macのkernel排他下で同mainへ更新し、canonical.envのaccepted revision以外は保持。通常の[cloud_check再実行37202784871](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/37202784871)はR2両bucket・必須9表、processed=3 / failed=0で完了し、#299を閉じた。
