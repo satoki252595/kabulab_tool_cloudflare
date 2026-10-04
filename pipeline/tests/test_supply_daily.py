@@ -80,6 +80,42 @@ def _FakeR2(objects: dict | None = None) -> FakeR2:
 
 
 class TestUpsertSupplySeries:
+    def test_identical_market_payload_retains_original_timestamp_without_put(self):
+        import copy
+
+        payload = supply.build_payload(
+            "7203", existing=None,
+            by_type={"jsf_zandaka": [{"d": "2026-09-10", "ex": "東証"}]},
+            updated=date(2026, 9, 11), writer="supply_daily",
+        )
+        before = copy.deepcopy(payload)
+        store = _FakeR2({"supply/7203.json": payload})
+        assert supply.upsert_supply_series(
+            store, "7203", payload["series"], updated=date(2026, 9, 12)
+        ) == "supply/7203.json"
+        assert store.puts == [] and store.objects["supply/7203.json"] == before
+
+    def test_real_source_change_is_written_and_previous_points_remain(self):
+        old = {"jsf_zandaka": [{"d": "2026-09-10", "ex": "東証"}]}
+        payload = supply.build_payload(
+            "7203", existing=None, by_type=old,
+            updated=date(2026, 9, 11), writer="supply_daily",
+        )
+        store = _FakeR2({"supply/7203.json": payload})
+        supply.upsert_supply_series(
+            store, "7203", {"jsf_zandaka": [{"d": "2026-09-11", "ex": "東証"}]},
+            updated=date(2026, 9, 12),
+        )
+        assert store.puts == ["supply/7203.json"]
+        assert store.objects["supply/7203.json"]["series"]["jsf_zandaka"] == [
+            *old["jsf_zandaka"], {"d": "2026-09-11", "ex": "東証"}]
+
+    def test_null_existing_object_is_unknown_and_never_replaced(self):
+        store = _FakeR2({"supply/7203.json": None})
+        with pytest.raises(ValueError, match="更新せず停止"):
+            supply.upsert_supply_series(store, "7203", {}, updated=date(2026, 9, 12))
+        assert store.puts == []
+
     def test_writes_to_supply_prefix(self):
         store = _FakeR2()
         key = supply.upsert_supply_series(
@@ -255,6 +291,37 @@ class TestParallelWrites:
                 else:
                     ctx.add_failure(code, f"R2 supply/ へ書けず: {error}")
         return ctx, codes
+
+
+@pytest.mark.parametrize("failed_source", ["shina", "meigara"])
+def test_source_failure_stops_before_next_source_and_any_series_write(monkeypatch, failed_source):
+    import argparse
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from jp_stock_pipeline.config import load_settings
+    from jp_stock_pipeline.jobs.runner import JobContext
+
+    calls = []
+
+    def capture(ctx, name, datatype):
+        calls.append(name)
+        if name == failed_source:
+            raise supply_daily.FetchError("HTTP 503")
+        return None, b"source-protocol"
+
+    monkeypatch.setattr(supply_daily, "_fetch_and_store", capture)
+    monkeypatch.setattr(supply_daily.jsf, "parse_zandaka", lambda c: [])
+    monkeypatch.setattr(supply_daily.jsf, "parse_shina", lambda c: [])
+    write = Mock(side_effect=AssertionError("源が不明なので書込み禁止"))
+    monkeypatch.setattr(supply_daily, "R2Store", write)
+    cloud = SimpleNamespace(settings=SimpleNamespace(r2_enabled=lambda: True), d1=write)
+    ctx = JobContext(settings=load_settings(env={}, dry_run=True), client=None,
+                     args=argparse.Namespace(limit=None), cloud=cloud)
+    supply_daily.execute(ctx)
+    assert calls == (["zandaka", "shina"] if failed_source == "shina"
+                     else ["zandaka", "shina", "meigara"])
+    assert ctx.failed == 1 and ctx.processed == 0 and write.call_count == 0
 
 
 class TestR2ClientIsPerThread:
