@@ -39,14 +39,16 @@ describe("main() の結果不明時の保全停止", () => {
     vi.resetModules();
   });
 
-  async function prepare(failure: "catalog_unknown" | "source_unknown" | "source_quality") {
+  async function prepare(failure: "catalog_unknown" | "source_unknown" | "catalog_config" | "source_config" | "source_quality") {
     vi.resetModules();
     process.argv = [...originalArgv, "--only=coingecko-global,global-indices", "--as-of=2026-10-01"];
     const { NotionUnknownResultError } = await import("../../src/shared/notion-archive/client.js");
-    const error = failure === "source_quality" ? new Error("掲載原本のcoverage不足") : new NotionUnknownResultError("送信結果不明");
+    const { NotionConfigError } = await import("../../src/shared/notion-archive/env.js");
+    const error = failure === "source_quality" ? new Error("掲載原本のcoverage不足") :
+      failure.endsWith("_config") ? new NotionConfigError("Notion設定不備") : new NotionUnknownResultError("送信結果不明");
     const upsertIndicatorDef = vi.fn().mockResolvedValue({ pageId: "def-1" });
     const runSpec = vi.fn().mockResolvedValue("保管済み原本を確認");
-    if (failure === "catalog_unknown") upsertIndicatorDef.mockRejectedValueOnce(error);
+    if (failure.startsWith("catalog_")) upsertIndicatorDef.mockRejectedValueOnce(error);
     else runSpec.mockRejectedValueOnce(error);
     const ensureRunLogDb = vi.fn().mockResolvedValue({ dbId: "run-db" });
     const recordRunLog = vi.fn().mockResolvedValue({ pageId: "run-1" });
@@ -62,10 +64,10 @@ describe("main() の結果不明時の保全停止", () => {
     return { main, error, runSpec, ensureRunLogDb, recordRunLog };
   }
 
-  it.each(["catalog_unknown", "source_unknown"] as const)("%s なら同型で停止し、後続sourceとrun-logを送信しない", async failure => {
+  it.each(["catalog_unknown", "source_unknown", "catalog_config", "source_config"] as const)("%s なら同型で停止し、後続sourceとrun-logを送信しない", async failure => {
     const { main, error, runSpec, ensureRunLogDb, recordRunLog } = await prepare(failure);
     await expect(main()).rejects.toBe(error);
-    expect(runSpec).toHaveBeenCalledTimes(failure === "catalog_unknown" ? 0 : 1);
+    expect(runSpec).toHaveBeenCalledTimes(failure.startsWith("catalog_") ? 0 : 1);
     expect(ensureRunLogDb).not.toHaveBeenCalled();
     expect(recordRunLog).not.toHaveBeenCalled();
   });
