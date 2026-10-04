@@ -256,6 +256,53 @@ function stockRaw(ohlcv: Array<{
 }
 
 describe("株式とマクロの日次分離", () => {
+  it.each(["normal", "throw", "prev-null"] as const)(
+    "N225必須資格 %s: 正常5源を維持し、不合格は後続4源を取得せず原本/欠損を保管する",
+    async (mode) => {
+      vi.setSystemTime(new Date("2026-09-30T01:55:26Z"));
+      mockMacro(ALIGNED);
+      const fetchActual = vi.mocked(fetchChart).getMockImplementation();
+      if (fetchActual === undefined) throw new Error("テスト: 原文fixture取得が未設定");
+      let n225Raw = fxBytes("n225-20260930.json");
+      vi.mocked(fetchChart).mockImplementation(async (symbol, range, options) => {
+        if (symbol !== "^N225" || mode === "normal") return fetchActual(symbol, range, options);
+        if (mode === "throw") throw new Error("fetch failed");
+        // 実fixtureへのtest-only欠損注入。直前実バーのcloseだけをNULLへ変え、古値で補わない。
+        const json = JSON.parse(new TextDecoder().decode(n225Raw));
+        json.chart.result[0].indicators.quote[0].close[0] = null;
+        n225Raw = new TextEncoder().encode(JSON.stringify(json));
+        const parsed = parseChartResponse(json, symbol);
+        const chart = { ...chartFromFixture(symbol, ALIGNED[symbol]),
+          ohlcv: [...guardChartBars(parsed.bars, parsed.meta.regularMarketPrice, symbol).bars] };
+        expect(selectConfirmedCloses(n225Raw, chart.ohlcv, symbol).prev).toBeNull();
+        await options?.onRaw?.({ symbol, status: 200, bytes: n225Raw,
+          url: "https://mock.test/chart", receivedAt: new Date().toISOString(), headers: {} });
+        return chart;
+      });
+      const { db, calls } = recordingDb();
+      expect(await runMarketContextSync(db)).toBe(mode === "normal");
+      expect(fetchChart).toHaveBeenCalledTimes(mode === "normal" ? 4 : 1);
+      expect(fetchNikkeiVi).toHaveBeenCalledTimes(mode === "normal" ? 1 : 0);
+      expect(fetchStockRawData).not.toHaveBeenCalled();
+      expect(calls).toHaveLength(mode === "normal" ? 1 : 0);
+      const archived = macroArchiveInputs();
+      expect(archived).toHaveLength(1);
+      expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+      const manifest = manifestOf(archived[0]);
+      expect(manifest.attempts).toHaveLength(mode === "normal" ? 5 : 1);
+      expect(manifest.gate.ok).toBe(mode === "normal");
+      if (mode === "throw") {
+        expect(manifest.attempts[0].filename).toBeNull();
+        expect(manifest.attempts[0].noBodyReason).toContain("fetch failed");
+      } else {
+        const raw = archived[0].files?.find((f) => f.filename === "macro-N225-attempt0.json");
+        if (raw === undefined) throw new Error("テスト: N225原本が無い");
+        expect(bytesEqual(raw.bytes, n225Raw)).toBe(true);
+      }
+      if (mode === "prev-null") expect(manifest.gate.reason).toContain("GSPC 確定日が無い");
+    }
+  );
+
   it.each([429, 503])("macroの初回%sは後続Yahoo/VI/株式取得0、原文保管後D1 write0", async (status) => {
     vi.setSystemTime(new Date("2026-09-30T01:55:26Z"));
     vi.mocked(fetchChart).mockImplementation(async (symbol, _range, options) => {
