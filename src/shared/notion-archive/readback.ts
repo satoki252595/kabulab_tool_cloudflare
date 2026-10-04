@@ -20,14 +20,15 @@ export interface ArchivedFileInput {
 export async function verifyArchivedAttachments(
   pageId: string,
   files: readonly ArchivedFileInput[],
-  label: string
+  label: string,
+  propertyName: string = "Files"
 ): Promise<void> {
   const fail = (why: string): never => {
     throw new Error(`${label}の readback 照合に失敗したため HOLD: ${why}`);
   };
   const names = files.map((f) => f.filename);
   if (new Set(names).size !== names.length) fail("添付名の重複 (内部不整合)");
-  const hosted = await listPageFiles(pageId, "Files");
+  const hosted = await listPageFiles(pageId, propertyName);
   if (hosted.length !== files.length) {
     fail(`添付 ${hosted.length} 件 ≠ 記録 ${files.length} 件`);
   }
