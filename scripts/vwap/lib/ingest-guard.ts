@@ -156,6 +156,17 @@ export type CompletedDailyFetch = {
 /** observedAtは実原本の観測完了clock。HTTP受領精度の読み替えはしない。 */
 export type DailySessionReference = { date: string; observedAt: string; rawSha: string };
 
+/** 当日未開始のperiodと、実観測日より前の源日を区別する。過去の閉場時刻は作らない。 */
+export function isBeforeOpenHistoricalSession(
+  start: number, end: number, marketTime: number, date: string, observedAt: string
+): boolean {
+  if (!isStrictIsoUtc(observedAt) || !isCalendarDate(date) ||
+      ![start, end, marketTime].every((t) => Number.isSafeInteger(t) && t > 0) || start >= end) return false;
+  const observed = Date.parse(observedAt) / 1000, observationDay = jstDateSec(observed);
+  return jstDateSec(start) === observationDay && jstDateSec(end) === observationDay &&
+    date < observationDay && jstDateSec(marketTime) === date && marketTime <= observed && observed < start;
+}
+
 /** 原本を再取得せず、取得済み同一応答からだけ再開証跡を作る。欠落は未適格。 */
 export function completedDailyFetch(
   fresh: DailyResult, capture: YahooRawCapture | undefined, range: { from: string; to: string },
@@ -201,18 +212,24 @@ export function hasCompletedDailyFetch(saved: SavedDaily, range: { from: string;
       p.requestedRange !== "10y" || p.symbol !== `${saved.code}.T` || c.rawSha !== p.rawSha ||
       !Number.isSafeInteger(c.bars) || c.bars <= 0 || c.bars !== saved.bars.length ||
       ![c.regularStart, c.regularEnd, c.regularMarketTime].every((t) => Number.isSafeInteger(t) && t > 0) ||
-      c.regularStart >= c.regularEnd || c.regularMarketTime < c.regularStart ||
-      jstDateSec(c.regularStart) !== range.to || jstDateSec(c.regularEnd) !== range.to ||
+      c.regularStart >= c.regularEnd ||
       jstDateSec(c.regularMarketTime) !== range.to || Date.parse(p.observedAt) / 1000 < c.regularMarketTime ||
-      p.firstTs === null || p.lastTs === null || c.priceSnapshotSha256 !== bodyPin(priceSnapshotJson(saved.bars as unknown as DailyBar[])) ||
+      p.firstTs === null || p.lastTs === null || c.regularMarketTime < p.lastTs ||
+      c.priceSnapshotSha256 !== bodyPin(priceSnapshotJson(saved.bars as unknown as DailyBar[])) ||
       c.priceSnapshotSha256 !== saved.corporateEvents.source.priceSnapshotSha256) return false;
+  const sameSession = jstDateSec(c.regularStart) === range.to && jstDateSec(c.regularEnd) === range.to &&
+    c.regularMarketTime >= c.regularStart;
   const reference = c.sessionReference;
   if (reference === undefined) {
-    if (c.regularMarketTime < c.regularEnd) return false; // legacy証拠だけでは従来条件を維持。
+    if (!sameSession || c.regularMarketTime < c.regularEnd) return false; // legacy証拠だけでは従来条件を維持。
   } else if (reference === null || reference.date !== range.to || !isStrictIsoUtc(reference.observedAt) ||
-      typeof reference.rawSha !== "string" || !/^[0-9a-f]{64}$/.test(reference.rawSha) || Date.parse(reference.observedAt) / 1000 < c.regularEnd ||
+      typeof reference.rawSha !== "string" || !/^[0-9a-f]{64}$/.test(reference.rawSha) ||
       Date.parse(reference.observedAt) > Date.parse(p.observedAt) ||
       jstDateSec(Date.parse(reference.observedAt) / 1000) !== jstDateSec(Date.parse(p.observedAt) / 1000)) {
+    return false;
+  } else if (sameSession ? Date.parse(reference.observedAt) / 1000 < c.regularEnd :
+      !isBeforeOpenHistoricalSession(c.regularStart, c.regularEnd, c.regularMarketTime, range.to, reference.observedAt) ||
+      !isBeforeOpenHistoricalSession(c.regularStart, c.regularEnd, c.regularMarketTime, range.to, p.observedAt)) {
     return false;
   }
   const dates = saved.bars.map((b) => b.date as string);
