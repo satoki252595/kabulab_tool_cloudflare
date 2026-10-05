@@ -25,10 +25,11 @@
  * too_large は終端 skip、error/未添付は PATCH 更新で再実行収束。
  * 捏造・既定値埋めはしない (ルール2)。
  */
-import { assertCursorProgress, notionRequest, NotionUnknownResultError } from "./client.js";
-import { notionEnv, NotionConfigError } from "./env.js";
+import { assertCursorProgress, notionRequest } from "./client.js";
+import { notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
 import { verifyArchivedAttachments } from "./readback.js";
+import { listPageFiles } from "./page-file.js";
 import {
   assertAdoptedDatabaseSchema,
   createDatabaseOrAdopt,
@@ -130,13 +131,14 @@ export interface ByStockInput {
    */
   onPdfClassified?: (key: string, c: PdfClassification) => void;
   /**
-   * 既に terminal (uploaded+hasFile) な行に対しても PDF を再 fetch して
-   * 再判定する。`classifyPdf` が指定されている時のみ有効。判定対象は
-   * 「現在 terminal の行」で、PDF 入手不能 (TDnet purge 等) はスキップ。
+   * 既に terminal (uploaded+hasFile) な行も保管済み添付から再判定する。
+   * `classifyPdf` が指定されている時のみ有効。原本サイトへは再取得しない。
    * 既存添付ファイルは再アップロードしない (PATCH は PDF判定 列のみ)。
    * デフォルト false: 通常 backfill では既存 terminal 行は冪等スキップ。
    */
   rejudgePdf?: boolean;
+  /** D1 本文保存が未完了の既存添付を再抽出する。発行元 PDF は再取得しない。 */
+  recoverPdfTextKeys?: ReadonlySet<string>;
 }
 
 export interface ByStockResult {
@@ -504,6 +506,25 @@ async function fetchIrPdf(
   };
 }
 
+/** 保存済み添付からの再開。添付の矛盾・取得失敗は発行元へ切り替えず停止する。 */
+async function fetchArchivedIrPdf(pageId: string): Promise<Uint8Array> {
+  const files = await listPageFiles(pageId, "IR資料");
+  if (files.length !== 1 || files[0].kind !== "file") {
+    throw new Error(`保管済み IR資料が単一の実添付ではありません: ${pageId}`);
+  }
+  const url = new URL(files[0].url);
+  if (url.protocol !== "https:" || url.username || url.password) {
+    throw new Error(`保管済み IR資料の URL が不正です: ${pageId}`);
+  }
+  const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error(`保管済み IR資料の取得失敗: ${pageId} status=${response.status}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.length <= 5 || !PDF_HEADER.every((b, i) => bytes[i] === b)) {
+    throw new Error(`保管済み IR資料が PDF ではありません: ${pageId}`);
+  }
+  return bytes;
+}
+
 
 interface QueryPage {
   id: string;
@@ -680,41 +701,24 @@ export async function upsertDisclosuresByStock(
     const existing = await loadExistingInRange(childDbId, minISO, maxISO);
 
     for (const row of rows) {
+      if (overDeadline()) {
+        reachedDeadline = true;
+        break;
+      }
       const ex = existing.byKey.get(row.key);
       if (ex && isTerminal(ex)) {
-        // `rejudgePdf=true` モード: 既存 terminal 行に対して PDF を再 fetch し
-        // 本文を再判定 → Notion `PDF判定` 列のみ PATCH + onPdfClassified で PG
-        // へ書き戻す。既存添付ファイル (IR資料) は触らない (差分最小化)。
-        // PDF 入手不能 (TDnet purge ≥31日 / transient) はスキップして既存行を
-        // そのまま残す。判定済の skipped/uploaded を上書きしないため、
-        // 呼び出し側で対象範囲を絞ること (--from/--to/--ticker)。
-        if (input.rejudgePdf && input.classifyPdf) {
-          const rejudgePdfFetch = await fetchIrPdf(
-            row.documentUrl,
-            `${row.ticker}_${row.pubdate.slice(0, 10)}_${row.key}`
-          );
-          if (
-            rejudgePdfFetch !== "unavailable" &&
-            rejudgePdfFetch !== "transient"
-          ) {
-            let cls: PdfClassification;
-            try {
-              cls = await input.classifyPdf(rejudgePdfFetch.bytes, row.primaryTag);
-            } catch (e) {
-              if (e instanceof NotionUnknownResultError || e instanceof NotionConfigError) throw e;
-              console.error(
-                `[pdf-sentiment rejudge] ${row.ticker} ${row.key} 失敗: ${(e as Error).message}`
-              );
-              skippedExisting++;
-              continue;
-            }
-            // 判定不能と Notion 送信結果不明を混同しない。PATCH 失敗は伝播。
+        // 本文保存の中断と再判定は、既に物理保管した同じ PDF から再開する。
+        if (ex.status === "uploaded" && ex.hasFile && input.classifyPdf &&
+          (input.rejudgePdf || input.recoverPdfTextKeys?.has(row.key))) {
+          const bytes = await fetchArchivedIrPdf(ex.pageId);
+          const cls = await input.classifyPdf(bytes, row.primaryTag);
+          if (input.rejudgePdf) {
             await notionRequest("PATCH", `/pages/${ex.pageId}`, {
               properties: { PDF判定: { select: { name: cls.sentiment } } },
             });
-            input.onPdfClassified?.(row.key, cls);
             rejudged++;
           }
+          input.onPdfClassified?.(row.key, cls);
         }
         // 終端の既存行も D1 の参照へ戻す。再開時の未観測と区別する。
         input.onPagePersisted?.(row.key, ex.pageId);
@@ -737,11 +741,6 @@ export async function upsertDisclosuresByStock(
           continue;
         }
       }
-      if (overDeadline()) {
-        reachedDeadline = true;
-        break;
-      }
-
       // 新規行で発表日が TDnet purge 期間 (~31日) より古い場合は、PDF を
       // 取りに行っても 404 確定 → 無駄な GET を避けて即 skip (cost 最適化)。
       // 既存行 (ex) は引き続き fetch して error→uploaded の昇格を試みる。

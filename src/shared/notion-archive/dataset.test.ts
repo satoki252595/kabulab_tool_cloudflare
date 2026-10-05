@@ -83,6 +83,62 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it.each(["recover", "rejudge"])("%s は単一の保管済み PDF を使い、発行元再取得・再添付をしない", async (mode) => {
+    pageError = null;
+    const base = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (path.endsWith("/query")) return {results: [{id: "existing", properties: {
+        "TDnet ID": {rich_text: [{plain_text: row.key}]},
+        "IR資料状態": {select: {name: "uploaded"}}, "IR資料": {files: [{name: "real.pdf"}]},
+      }}], has_more: false} as never;
+      if (method === "GET" && path === "/pages/existing") return {properties: {"IR資料": {type: "files", files: [
+        {name: "real.pdf", type: "file", file: {url: "https://archive.test/real.pdf"}},
+      ]}}} as never;
+      return base(method, path, body);
+    });
+    const classification = {sentiment: "unknown" as const, method: null, score: null, text: "保存済み本文"};
+    const classified = vi.fn();
+    const classifier = vi.fn(async (bytes: Uint8Array) => {
+      expect(new TextDecoder().decode(bytes)).toBe("%PDF-test");
+      return classification;
+    });
+    const { upsertDisclosuresByStock } = await import("./dataset.js");
+    await upsertDisclosuresByStock({service: "test", tagOptions: [], rows: [row],
+      classifyPdf: classifier, onPdfClassified: classified,
+      rejudgePdf: mode === "rejudge", recoverPdfTextKeys: new Set([row.key])});
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe("https://archive.test/real.pdf");
+    expect(uploadFile).not.toHaveBeenCalled();
+    expect(classified).toHaveBeenCalledWith(row.key, classification);
+    expect(vi.mocked(notionRequest).mock.calls.filter(([m, p]) => m === "PATCH" && p === "/pages/existing")).toHaveLength(mode === "rejudge" ? 1 : 0);
+  });
+
+  it.each(["multiple", "external", "http", "non_pdf", "http_error"])("保管済み PDF の %s は発行元へ切り替えず停止", async (failure) => {
+    const base = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (path.endsWith("/query")) return {results: [{id: "existing", properties: {
+        "TDnet ID": {rich_text: [{plain_text: row.key}]},
+        "IR資料状態": {select: {name: "uploaded"}}, "IR資料": {files: [{name: "real.pdf"}]},
+      }}], has_more: false} as never;
+      if (method === "GET" && path === "/pages/existing") {
+        const file = failure === "external"
+          ? {name: "real.pdf", type: "external", external: {url: "https://archive.test/real.pdf"}}
+          : {name: "real.pdf", type: "file", file: {url: failure === "http" ? "http://archive.test/real.pdf" : "https://archive.test/real.pdf"}};
+        return {properties: {"IR資料": {type: "files", files: failure === "multiple" ? [file, file] : [file]}}} as never;
+      }
+      return base(method, path, body);
+    });
+    if (failure === "non_pdf") vi.stubGlobal("fetch", vi.fn(async () => new Response("invalid")));
+    if (failure === "http_error") vi.stubGlobal("fetch", vi.fn(async () => new Response("", {status: 500})));
+    const classified = vi.fn();
+    const { upsertDisclosuresByStock } = await import("./dataset.js");
+    await expect(upsertDisclosuresByStock({service: "test", tagOptions: [], rows: [row],
+      classifyPdf: vi.fn(), onPdfClassified: classified, recoverPdfTextKeys: new Set([row.key])})).rejects.toThrow();
+    expect(classified).not.toHaveBeenCalled();
+    expect(uploadFile).not.toHaveBeenCalled();
+    expect(vi.mocked(fetch).mock.calls.every(([url]) => String(url).startsWith("https://archive.test/"))).toBe(true);
+  });
+
   it("既知の PDF 不在は明示 skippedNoFile で保持する", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 404 })));
     const { upsertDisclosuresByStock } = await import("./dataset.js");

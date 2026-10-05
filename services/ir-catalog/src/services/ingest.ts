@@ -60,7 +60,7 @@ export interface IngestOptions {
    */
   codeToId?: Map<string, number>;
   /**
-   * 既存 terminal (uploaded+hasFile) 行に対しても PDF を再 fetch + 再判定する。
+   * 既存 terminal (uploaded+hasFile) 行も Notion の保管済み PDF から再判定する。
    * 通常 backfill は false (冪等スキップ)。本フラグは新カラム反映用の段階的
    * 移行や Engine 改修後の再評価で使う。範囲を狭く (--ticker / --from / --to)
    * 絞ること。
@@ -164,8 +164,11 @@ async function persistPdfTexts(
   if (entries.length === 0) return;
   for (const [tdnetId, c] of entries) {
     const hit = await db
-      .select({ id: disclosures.id })
+      .select({ id: disclosures.id, status: disclosures.pdfTextStatus,
+        text: disclosureTexts.text, charCount: disclosureTexts.charCount,
+        textTdnetId: sql<string | null>`${disclosureTexts.tdnetId}`.as("textTdnetId") })
       .from(disclosures)
+      .leftJoin(disclosureTexts, eq(disclosureTexts.disclosureId, disclosures.id))
       .where(eq(disclosures.tdnetId, tdnetId))
       .limit(1);
     if (hit.length !== 1) throw new Error(`PDF 本文の対応 D1 行がないため停止 tdnetId=${tdnetId}`);
@@ -177,7 +180,9 @@ async function persistPdfTexts(
         .where(eq(disclosures.tdnetId, tdnetId));
       continue;
     }
-    await db
+    // 送信結果不明で中断しても、現在の全文を照合して同じ INSERT を繰り返さない。
+    const current = hit[0]!;
+    if (current.text !== c.text || current.charCount !== c.text.length || current.textTdnetId !== tdnetId) await db
       .insert(disclosureTexts)
       .values({
         disclosureId,
@@ -189,7 +194,7 @@ async function persistPdfTexts(
         target: disclosureTexts.disclosureId,
         set: { text: c.text, charCount: c.text.length, tdnetId },
       });
-    await db
+    if (current.status !== "ok") await db
       .update(disclosures)
       .set({ pdfTextStatus: "ok" })
       .where(eq(disclosures.id, disclosureId));
@@ -423,6 +428,13 @@ async function archiveDisclosuresByStock(
 ): Promise<IngestResult["notionByStock"]> {
   let notionByStock: IngestResult["notionByStock"] = null;
   if (opts.notionByStock && byStockRows.length > 0) {
+    const current = await db.select({ key: disclosures.tdnetId, pageId: disclosures.notionPageId,
+      status: disclosures.pdfTextStatus, textId: disclosureTexts.id })
+      .from(disclosures).leftJoin(disclosureTexts, eq(disclosureTexts.disclosureId, disclosures.id))
+      .where(sql`${disclosures.tdnetId} IN (SELECT value FROM json_each(${JSON.stringify(byStockRows.map(r => r.key))}))`);
+    const currentByKey = new Map(current.map(r => [r.key, r]));
+    const recoverPdfTextKeys = new Set(current.filter(r => r.status === null || r.status === "pending" ||
+      (r.status === "ok" && r.textId === null)).map(r => r.key));
     // ファイルプロキシ用に (tdnet_id → notion_page_id) を収集して Postgres
     // に書き戻す。upsertDisclosuresByStock は行を create/PATCH した直後に
     // onPagePersisted を呼ぶので、ここで Map に貯めて末尾でバルク UPDATE。
@@ -444,7 +456,9 @@ async function archiveDisclosuresByStock(
       tagOptions: notionTagOptions(),
       rows: byStockRows,
       deadlineMs: phaseDeadline,
-      onPagePersisted: (key, pageId) => pageIdMap.set(key, pageId),
+      onPagePersisted: (key, pageId) => {
+        if (currentByKey.get(key)?.pageId !== pageId) pageIdMap.set(key, pageId);
+      },
       // PDF 本文を OSS 軽量実装 (数値ルール + 東北大極性辞書) で判定し、
       // Notion 列 + PG 4 列に反映。失敗時は呼ばれた側で unknown を返す
       // (バッチを止めない — ルール2)。抽出テキストも添えて返し、D1 の
@@ -458,6 +472,7 @@ async function archiveDisclosuresByStock(
       },
       onPdfClassified: (key, c) => pdfMap.set(key, c),
       rejudgePdf: opts.rejudgePdfSentiment ?? false,
+      recoverPdfTextKeys,
     });
     notionByStock = {
       stocksTouched: r.stocksTouched,
