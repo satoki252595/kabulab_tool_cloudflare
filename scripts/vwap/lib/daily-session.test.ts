@@ -147,6 +147,71 @@ describe("source 10y bounds and independent session", () => {
   });
 });
 
+describe("witnessed daily rows without a new trade", () => {
+  type NoTradeTestResult = {
+    meta: { regularMarketTime: number };
+    indicators: { quote: Array<{ open: Array<number | null>; high: Array<number | null>;
+      low: Array<number | null>; close: Array<number | null>; volume: Array<number | null> }> };
+  };
+  function noTradeRaw(beforeOpen: boolean, change?: (r: NoTradeTestResult) => void) {
+    const result = JSON.parse(new TextDecoder().decode(raw({ regularMarketTime: START - 86400 + 10000,
+      currentTradingPeriod: { regular: { start: beforeOpen ? NEXT_START : START,
+        end: beforeOpen ? NEXT_END : END, timezone: "JST", gmtoffset: 32400 } } },
+      [1475452800, START - 86400, START]))).chart.result[0] as NoTradeTestResult;
+    result.indicators.quote[0].volume = [1000, 200, 0];
+    change?.(result);
+    return new TextEncoder().encode(JSON.stringify({ chart: { error: null, result: [result] } }));
+  }
+
+  it.each([false, true])("full v0/flat raw rows qualify with an independent closed witness (preopen=%s)", async (beforeOpen) => {
+    const at = beforeOpen ? PRE_OPEN : RECEIVED, bytes = noTradeRaw(beforeOpen), parsed = await fresh(bytes, at);
+    const witness = { ...reference, observedAt: at }, c = capture(bytes, at), range = tenYearRangeForDate(reference.date);
+    expect(completedDailyFetch(parsed, c, range)).toBeNull(); // No new legacy allowance.
+    expect(qualifyDailySourceRange(parsed, c, witness)).toEqual(range);
+    const completedFetch = completedDailyFetch(parsed, c, range, witness)!;
+    expect(completedFetch.noTrade).toEqual({ regularMarketPrice: 100, quoteBarTimestamp: START - 86400 });
+    expect(completedFetch.regularMarketTime).toBe(START - 86400 + 10000);
+    expect(completedFetch.regularStart).toBe(beforeOpen ? NEXT_START : START);
+    const saved = assertSavedDailyShape(JSON.stringify({ code: "1301", ...parsed, completedFetch }), "daily/1301.json", "1301");
+    expect(hasCompletedDailyFetch(saved, range)).toBe(true);
+    expect(hasCompletedDailyFetch(saved, tenYearRangeForDate("2026-10-05"))).toBe(false);
+    expect(saved.proof).toEqual(parsed.proof);
+    expect(saved.corporateEvents).toEqual(parsed.corporateEvents);
+    expect(saved.bars).toEqual(parsed.bars);
+    expect(sha(bytes)).toBe(parsed.proof.rawSha);
+    for (const noTrade of [undefined, null, { regularMarketPrice: 101, quoteBarTimestamp: START - 86400 },
+      { regularMarketPrice: 100, quoteBarTimestamp: START }]) {
+      const invalid = { ...saved, completedFetch: { ...completedFetch, noTrade } };
+      expect(hasCompletedDailyFetch(invalid as typeof saved, range)).toBe(false);
+      expect(() => assertSavedDailyShape(JSON.stringify(invalid), "daily/1301.json", "1301")).toThrow();
+    }
+    expect(hasCompletedDailyFetch({ ...saved, completedFetch: { ...completedFetch, sessionReference: undefined } }, range)).toBe(false);
+  });
+
+  it.each([
+    ["newer trade", (r: NoTradeTestResult) => { r.indicators.quote[0].volume[2] = 1; }],
+    ["v0 non-flat", (r: NoTradeTestResult) => { r.indicators.quote[0].open[2] = 99; }],
+    ["flat only after rounding", (r: NoTradeTestResult) => { r.indicators.quote[0].high[2] = 100.001; }],
+    ["no actual quoted-day volume", (r: NoTradeTestResult) => { r.indicators.quote[0].volume[1] = 0; }],
+    ["quoted-day close differs", (r: NoTradeTestResult) => { r.indicators.quote[0].close[1] = 99; }],
+    ["raw null row", (r: NoTradeTestResult) => { r.indicators.quote[0].open[1] = null; }],
+    ["quote before its raw bar", (r: NoTradeTestResult) => { r.meta.regularMarketTime = START - 86400 - 1; }],
+  ])("%s stays HOLD", async (_why, change) => {
+    const bytes = noTradeRaw(true, change), parsed = await fresh(bytes, PRE_OPEN), witness = { ...reference, observedAt: PRE_OPEN };
+    expect(() => qualifyDailySourceRange(parsed, capture(bytes, PRE_OPEN), witness)).toThrow("全原本行");
+  });
+
+  it.each([false, true])("forming/opened metadata and one premature witness stay HOLD (preopen=%s)", async (beforeOpen) => {
+    const bytes = noTradeRaw(beforeOpen), at = beforeOpen ? "2026-10-05T00:00:00.000Z" : "2026-10-02T06:00:00.000Z";
+    const parsed = await fresh(bytes, at), witness = { ...reference, observedAt: at };
+    expect(() => qualifyDailySourceRange(parsed, capture(bytes, at), witness)).toThrow("全原本行");
+    if (beforeOpen) {
+      const earlyWitness = { ...reference, observedAt: PRE_OPEN };
+      expect(() => qualifyDailySourceRange(parsed, capture(bytes, at), earlyWitness)).toThrow("全原本行");
+    }
+  });
+});
+
 describe("normal benchmark capture before stock ingestion", () => {
   it("pre-open metadata retains the prior closed day selected by the existing source-only helper", async () => {
     const bytes = raw({ symbol: "^N225", range: "1mo",
