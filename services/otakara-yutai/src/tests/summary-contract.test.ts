@@ -272,7 +272,7 @@ it("原文と同じ日数・か月期間だけを裏づけ、権利月や換算�
   expect(isSummaryNumbersGrounded("6か月以上保有", "6カ月以上保有", context)).toBe(true);
 });
 
-it.each(["袋", "パック", "セット", "冊", "ケース", "リットル", "室", "杯", "台", "箱", "ゲーム", "ホール", "商品", "親等", "種類", "品", "缶"])("実在する数量単位%sを同数・同単位だけで照合する", (unit) => {
+it.each(["袋", "パック", "セット", "冊", "ケース", "リットル", "室", "杯", "台", "箱", "ゲーム", "ホール", "商品", "親等", "種類", "品", "缶", "足"])("実在する数量単位%sを同数・同単位だけで照合する", (unit) => {
   const context = { minShares: [100], recordMonths: [3] };
   const source = `合成優待商品2${unit}`;
   expect(isSummaryNumbersGrounded(source, `商品2${unit}`, context)).toBe(true);
@@ -295,6 +295,22 @@ it("品目・品種・缶目・缶詰を数量に切り出さず、未確認の�
     expect(isSummaryNumbersGrounded("1缶", source, context)).toBe(false);
   }
   expect(isSummaryNumbersGrounded("1缶", "1尾", context)).toBe(false);
+});
+
+it("足は同数・同単位だけで照合し、足目・足袋・漢数字から切り出さない", () => {
+  const context = { minShares: [100], recordMonths: [3] };
+  expect(isSummaryNumbersGrounded("合成優待1足", "優待1足", context)).toBe(true);
+  expect(isSummaryNumbersGrounded("合成優待2足", "優待1足", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("合成優待1枚", "優待1足", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("合成優待1足", "優待1枚", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("合成優待1足", "優待一足", context)).toBe(false);
+  expect(isSummaryNumbersGrounded("合成優待一足", "優待1足", context)).toBe(false);
+  for (const source of ["合成優待1足目", "合成優待1足袋", "合成優待足袋"]) {
+    expect(isSummaryNumbersGrounded(source, "優待1足", context)).toBe(false);
+  }
+  for (const summary of ["優待1足目", "優待1足袋"]) {
+    expect(isSummaryNumbersGrounded("合成優待1足", summary, context)).toBe(false);
+  }
 });
 
 it("実原文のkg/Kgだけを同義照合し、重量の変更・換算・未観測大小文字を認めない", () => {

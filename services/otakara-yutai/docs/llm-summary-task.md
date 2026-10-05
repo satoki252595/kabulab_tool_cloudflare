@@ -5,7 +5,7 @@
 タスクファイルがあれば作業できるように書いてあります。
 
 - 要約生成・書出し・取込は正常母集団（active かつ equity）の優待行を対象とする。母集団外の既存優待は全行退避に保持し、再生成・更新しない。
-- 契約の版: **`2026-10-05.13`**（`services/otakara-yutai/data-scripts/summary-contract.ts` の `SUMMARY_CONTRACT_VERSION`）
+- 契約の版: **`2026-10-05.14`**（`services/otakara-yutai/data-scripts/summary-contract.ts` の `SUMMARY_CONTRACT_VERSION`）
 - 書き出し: `pnpm yutai:summary:export`（`--violations-only` で契約違反の既存要約だけ）
 - 取り込み: `pnpm yutai:summary:import --tasks <タスク> --results <結果>`（既定は dry-run、`--apply` で書き込み）
 
@@ -137,7 +137,7 @@
 | `internal` | 内部 marker **`【種別：`** を含む（タスク掲載文先頭の表見出し行の記号列を書き写さない。見出しの読みやすい条件文言自体は書いてよい） |
 | `verbatim` | 40 字以上あり、その全体が掲載文にそのまま含まれている（掲載文の書き写し） |
 | `summary_conditions` | 選択・保有・抽選・応募の重要条件が欠落 | 同じ条件を要約に残す |
-| `summary_ungrounded` | 要約の単位付き数値（円額・枚数・袋数・パック数・セット数・冊数・ケース数・リットル数・室数・杯数・台数・箱数・ゲーム数・ホール数・商品数・品数・缶数・親等・種類数・株数・年数・日数・か月の期間・暦の月・回数・点数・人数・部数等）が掲載文・実受取条件と一致しない。桁の表記揺れと観測済みの重量単位kg/Kgだけを同義照合し、掛算・年間換算や別条件の株数を補わない。人数「20名」で率「20%」は根拠づけられない |
+| `summary_ungrounded` | 要約の単位付き数値（円額・枚数・袋数・パック数・セット数・冊数・ケース数・リットル数・室数・杯数・台数・箱数・ゲーム数・ホール数・商品数・品数・缶数・足数・親等・種類数・株数・年数・日数・か月の期間・暦の月・回数・点数・人数・部数等）が掲載文・実受取条件と一致しない。桁の表記揺れと観測済みの重量単位kg/Kgだけを同義照合し、掛算・年間換算や別条件の株数を補わない。人数「20名」で率「20%」は根拠づけられない |
 
 全角の英数字は取り込み時に半角へ揃えるので、どちらで書いても構いません。
 掲載文と完全一致する製品語「3Dプリンター住宅」の「3D」は数量として扱いません。
@@ -155,6 +155,7 @@
   4. 複数の選択肢は種類をまとめ、選択制を示す。代表を全体の価値として書かず、`(3点から選択)` のように添える。
 - 種類がはっきりしない掲載文は、主要な語を残して簡潔にする。架空の商品名を足さない。
 - 割引率の `%` の数字は掲載文の数字をそのまま写す（掲載文の「10%」を「20%」と書かない。掲載文の人数「20名」は率の根拠にならない）。
+- 「足」は掲載文の同じ数値・同じ単位だけで裏づける。「足目」「足袋」から数量を切り出さず、別数量・枚数・漢数字や原文にない足数で補わない。
 - 「品」「缶」は掲載文の同じ数値・同じ単位だけで裏づける。「品目」「品種」を「品」の数へ、「缶目」「缶詰」を「缶」の数へ読み替えず、尾など未対応単位や数量の推定・換算は採用しない。
 - 「日」「か月」は掲載文の同じ数値・同じ単位で裏づける。「か月」「ヶ月」「カ月」「ヵ月」は同じ月期間として照合し、数値・以上/未満等の条件は変えない。期間の「か月」を権利月の「月」で補わず、年・月・日への換算もしない。
 - 冊子などの数量「部」は掲載文の同じ部数で裏づける。別の部数・単位に置き換えない。
@@ -214,7 +215,7 @@
 入力（1 行、読みやすく改行しています）:
 
 ```json
-{"taskId":"0123456789abcdef","contractVersion":"2026-10-05.13","reason":"missing","violations":[],
+{"taskId":"0123456789abcdef","contractVersion":"2026-10-05.14","reason":"missing","violations":[],
  "stockCode":"9990","stockName":"架空ホールディングス",
  "description":"【1年未満】架空ギフトカタログ 2,000円相当\n【1年以上】架空ギフトカタログ 5,000円相当\n■贈呈時期\n毎年7月下旬に発送予定\n※保有株式数の確認は3月末時点","rowCount":2,"recipients":[{"minShares":100,"recordMonth":3,"recordDate":null},{"minShares":100,"recordMonth":9,"recordDate":null}]}
 ```
@@ -222,7 +223,7 @@
 出力:
 
 ```json
-{"taskId":"0123456789abcdef","contractVersion":"2026-10-05.13","shortSummary":"保有期間に応じたカタログギフト","estimatedValue":null}
+{"taskId":"0123456789abcdef","contractVersion":"2026-10-05.14","shortSummary":"保有期間に応じたカタログギフト","estimatedValue":null}
 ```
 
 ### 例 2: 割引券（金額は null）
@@ -230,7 +231,7 @@
 入力の `description`: `架空レストラン全店で使えるお食事代20%割引券を2枚\n※1回の会計につき1枚まで`
 
 ```json
-{"taskId":"fedcba9876543210","contractVersion":"2026-10-05.13","shortSummary":"食事代 20%割引券 2枚","estimatedValue":null}
+{"taskId":"fedcba9876543210","contractVersion":"2026-10-05.14","shortSummary":"食事代 20%割引券 2枚","estimatedValue":null}
 ```
 
 ### 例 3: 複数の選択肢から 1 つ
@@ -238,7 +239,7 @@
 入力の `description`: `次のいずれか1点\n①架空農園のお米 5kg\n②架空製菓の焼き菓子セット\n③寄付（架空財団へ1,000円）`
 
 ```json
-{"taskId":"00ff00ff00ff00ff","contractVersion":"2026-10-05.13","shortSummary":"お米 5kg (3点から選択)","estimatedValue":null}
+{"taskId":"00ff00ff00ff00ff","contractVersion":"2026-10-05.14","shortSummary":"お米 5kg (3点から選択)","estimatedValue":null}
 ```
 
 （お米 5kg は掲載文に金額が無いので `null`。相場を見積もって入れると取り込みではじかれる。）
@@ -248,16 +249,16 @@
 入力の `violations`: `["annotation","prose"]`、`description`: `架空トラベルの宿泊優待券 10,000円券×2枚\n■有効期限\n翌年6月末まで`
 
 ```json
-{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-05.13","shortSummary":"宿泊優待券 10,000円×2枚","estimatedValue":20000}
+{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-05.14","shortSummary":"宿泊優待券 10,000円×2枚","estimatedValue":20000}
 ```
 
 ### はじかれる出力の例
 
 ```json
-{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-05.13","shortSummary":"宿泊券をご利用いただけます。","estimatedValue":20000}
-{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-05.13","shortSummary":"宿泊優待券 ※有効期限あり","estimatedValue":20000}
-{"taskId":"fedcba9876543210","contractVersion":"2026-10-05.13","shortSummary":"食事代 20%割引券 2枚","estimatedValue":2000}
-{"taskId":"0123456789abcdef","contractVersion":"2026-10-05.13","shortSummary":"カタログギフト 5,000円相当","estimatedValue":5000,"description":"…"}
+{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-05.14","shortSummary":"宿泊券をご利用いただけます。","estimatedValue":20000}
+{"taskId":"a1b2c3d4e5f60718","contractVersion":"2026-10-05.14","shortSummary":"宿泊優待券 ※有効期限あり","estimatedValue":20000}
+{"taskId":"fedcba9876543210","contractVersion":"2026-10-05.14","shortSummary":"食事代 20%割引券 2枚","estimatedValue":2000}
+{"taskId":"0123456789abcdef","contractVersion":"2026-10-05.14","shortSummary":"カタログギフト 5,000円相当","estimatedValue":5000,"description":"…"}
 ```
 
 1 行目は `prose`、2 行目は `annotation`、3 行目は割引を金額にしたので金額ガード、4 行目は余計なキーでスキーマ違反です。
