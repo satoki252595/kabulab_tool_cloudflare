@@ -386,6 +386,54 @@ class TestBusinessDayAging:
     # 2026-09-11 は金曜。観測は 23:30 JST（cron 14:30 UTC）に走る。
     FRIDAY = "2026-09-11"
 
+    def test_日曜に観測したEDINET一覧は月曜の実経過時間だけ加齢する(self) -> None:
+        # 通常 ops 37254314741 の原観測: 10/4(日)の一覧、10/5(月)11:11 JST。
+        # 開始日を除く土日の日数では、日曜の24時間を加齢へ足してしまう。
+        now = datetime(2026, 10, 5, 2, 11, tzinfo=UTC)
+        args = {
+            "latest_data_date": "2026-10-04",
+            "source_epoch": 1791124576,
+        }
+        assert slo.observation_age_hours("edinet_documents", **args, now=now) == pytest.approx(
+            11 + 11 / 60
+        )
+        assert slo.judge_observation(
+            "edinet_documents", **args, row_count=1453, now=now
+        ) == "green"
+
+    @pytest.mark.parametrize(
+        ("start", "end", "expected"),
+        [
+            ((2, 23), (3, 1), 1),  # 金曜深夜から土曜: 金曜の1時間を消さない
+            ((2, 23), (4, 1), 1),
+            ((3, 12), (5, 11), 11),  # 土曜開始: 月曜の11時間だけ
+            ((4, 0), (5, 11), 11),
+            ((3, 10), (4, 14), 0),  # 週末内だけでは加齢しない
+            ((2, 0), (5, 11), 35),  # 金曜の正当な35時間は黄のまま
+            ((5, 8), (5, 11), 3),
+            ((4, 23), (2, 23), 0),  # 起点が未来なら既存の0クランプを維持
+        ],
+    )
+    def test_土日の実重複部分だけ差し引く(self, start, end, expected) -> None:
+        base = datetime(2026, 10, *start, tzinfo=slo.JST)
+        now = datetime(2026, 10, *end, tzinfo=slo.JST)
+        assert slo.elapsed_hours(base, now, business_days=True) == expected
+        assert slo.elapsed_hours(
+            base.astimezone(UTC), now.astimezone(UTC), business_days=True
+        ) == expected
+
+    def test_金曜基準の35時間と暦時間の契約を保持する(self) -> None:
+        monday = datetime(2026, 10, 5, 11, tzinfo=slo.JST)
+        assert slo.judge_observation(
+            "tdnet_disclosures", latest_data_date="2026-10-02", source_epoch=1790936100,
+            row_count=1, now=monday,
+        ) == "yellow"
+        assert slo.elapsed_hours(
+            datetime(2026, 10, 2, 23, tzinfo=slo.JST),
+            datetime(2026, 10, 3, 1, tzinfo=slo.JST),
+            business_days=False,
+        ) == 2
+
     @pytest.mark.parametrize(
         ("label", "now_jst_day"),
         [("土", 12), ("日", 13), ("月", 14)],
