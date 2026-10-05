@@ -516,7 +516,7 @@ async function fetchArchivedIrPdf(pageId: string): Promise<Uint8Array> {
   if (url.protocol !== "https:" || url.username || url.password) {
     throw new Error(`保管済み IR資料の URL が不正です: ${pageId}`);
   }
-  const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new Error(`保管済み IR資料の取得失敗: ${pageId} status=${response.status}`);
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (bytes.length <= 5 || !PDF_HEADER.every((b, i) => bytes[i] === b)) {

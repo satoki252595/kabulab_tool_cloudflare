@@ -113,7 +113,7 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
     expect(vi.mocked(notionRequest).mock.calls.filter(([m, p]) => m === "PATCH" && p === "/pages/existing")).toHaveLength(mode === "rejudge" ? 1 : 0);
   });
 
-  it.each(["multiple", "external", "http", "non_pdf", "http_error"])("保管済み PDF の %s は発行元へ切り替えず停止", async (failure) => {
+  it.each(["multiple", "external", "http", "non_pdf", "http_error", "redirect"])("保管済み PDF の %s は発行元へ切り替えず停止", async (failure) => {
     const base = vi.mocked(notionRequest).getMockImplementation()!;
     vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
       if (path.endsWith("/query")) return {results: [{id: "existing", properties: {
@@ -130,6 +130,7 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
     });
     if (failure === "non_pdf") vi.stubGlobal("fetch", vi.fn(async () => new Response("invalid")));
     if (failure === "http_error") vi.stubGlobal("fetch", vi.fn(async () => new Response("", {status: 500})));
+    if (failure === "redirect") vi.stubGlobal("fetch", vi.fn(async () => new Response(null, {status: 302, headers: {location: row.documentUrl}})));
     const classified = vi.fn();
     const { upsertDisclosuresByStock } = await import("./dataset.js");
     await expect(upsertDisclosuresByStock({service: "test", tagOptions: [], rows: [row],
@@ -137,6 +138,7 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
     expect(classified).not.toHaveBeenCalled();
     expect(uploadFile).not.toHaveBeenCalled();
     expect(vi.mocked(fetch).mock.calls.every(([url]) => String(url).startsWith("https://archive.test/"))).toBe(true);
+    expect(vi.mocked(fetch).mock.calls.every(([, options]) => options?.redirect === "manual")).toBe(true);
   });
 
   it("既知の PDF 不在は明示 skippedNoFile で保持する", async () => {
