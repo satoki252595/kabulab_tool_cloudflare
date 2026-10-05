@@ -328,6 +328,26 @@ it("随時のrecipient0を暦0月の根拠にせず、他の実月・期間は�
   expect(isSummaryNumbersGrounded("サービス", "3か月利用可能", context)).toBe(false);
 });
 
+it("原文と同じ同一株主番号を一株の数量と誤認せず、実際の数量と条件を検証する", () => {
+  const context = { minShares: [100], recordMonths: [3] };
+  const source = "同一株主番号で1年以上継続保有、1,000円相当、割引1%";
+  const summary = "同一株主番号で1年以上保有、1,000円相当、割引1%";
+  expect(isSummaryNumbersGrounded(source, summary, context)).toBe(true);
+  expect(missingSummaryConditions(source, summary)).toEqual([]);
+  expect(isSummaryNumbersGrounded(source.replace("同一株主番号", "株主番号"), summary, context)).toBe(false);
+  for (const changed of [
+    summary.replace("番号", "番号1株"),
+    summary.replace("番号", "番号１株"),
+    summary.replace("番号", "番号一株"),
+    summary.replace("同一株主番号", "同一株"),
+    summary.replace("1,000円", "2,000円"),
+    summary.replace("1年以上", "2年以上"),
+    summary.replace("1%", "2%"),
+  ]) expect(isSummaryNumbersGrounded(source, changed, context)).toBe(false);
+  expect(isSummaryNumbersGrounded("同一株主番号で一株保有", "同一株主番号で一株保有", { minShares: [1], recordMonths: [3] })).toBe(false);
+  expect(missingSummaryConditions(source, summary.replace("1年以上保有", "商品贈呈"))).toEqual(["holding_condition_missing"]);
+});
+
 it("原文と同じ3D住宅製品語の数字を数量と誤認せず、他の数字と条件を検証する", () => {
   const context = { minShares: [100], recordMonths: [6] };
   const source = "合成優待:3Dプリンター住宅の1%割引券2枚、100株以上、1年以上保有";
