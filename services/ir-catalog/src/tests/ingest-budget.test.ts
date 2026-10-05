@@ -64,6 +64,14 @@ CREATE TABLE ir_disclosures (
   pdf_text_status text,
   ingested_at integer NOT NULL DEFAULT (unixepoch())
 );
+CREATE TABLE ir_disclosure_texts (
+  id integer PRIMARY KEY AUTOINCREMENT,
+  disclosure_id integer NOT NULL UNIQUE,
+  tdnet_id text NOT NULL,
+  text text NOT NULL,
+  char_count integer NOT NULL,
+  created_at integer NOT NULL DEFAULT (unixepoch())
+);
 `;
 
 function createD1(sqlite: DatabaseSync): unknown {
@@ -202,9 +210,35 @@ describe("ingestBatch の二次予算", () => {
       if (phase === "missing_row") sqlite.exec("DELETE FROM ir_disclosures");
       return { parentDbId: "db1", stocksTouched: 1, created: 1, updated: 0, skippedExisting: 0, skippedNoFile: 0, rejudged: 0, rowErrors: 0, reachedDeadline: false };
     });
-    // write_failure は本文 table 未作成で INSERT が失敗する。
+    if (phase === "write_failure") sqlite.exec(`CREATE TRIGGER fail_text BEFORE INSERT ON ir_disclosure_texts
+      BEGIN SELECT RAISE(ABORT, 'write failed'); END;`);
     await expect(run({})).rejects.toThrow();
     const hit = sqlite.prepare("SELECT pdf_text_status FROM ir_disclosures").get();
     expect(hit === undefined || hit.pdf_text_status === null).toBe(true);
+  });
+
+  it("本文 INSERT 後の中断は全文一致を確認し、添付済みキーだけを再開して INSERT を重ねない", async () => {
+    const db = makeDb(createD1(sqlite));
+    await ingestBatch(db as never, [ITEM], {batchKey: "saved", source: "test",
+      archiveToNotion: false, notionByStock: false, codeToId: new Map([["1001", 1]])});
+    const id = sqlite.prepare("SELECT id FROM ir_disclosures").get()!.id;
+    const text = "保存済み本文𠮷";
+    sqlite.prepare("INSERT INTO ir_disclosure_texts(disclosure_id,tdnet_id,text,char_count) VALUES(?,?,?,?)")
+      .run(id as number, ITEM.id, text, text.length);
+    sqlite.exec("UPDATE ir_disclosures SET notion_page_id='existing'");
+    sqlite.exec(`CREATE TRIGGER prevent_repeat BEFORE INSERT ON ir_disclosure_texts
+      BEGIN SELECT RAISE(ABORT, 'repeat insert'); END;`);
+    vi.mocked(upsertDisclosuresByStock).mockImplementationOnce(async (input) => {
+      expect([...input.recoverPdfTextKeys!]).toEqual([ITEM.id]);
+      input.onPagePersisted?.(ITEM.id, "existing");
+      input.onPdfClassified?.(ITEM.id, {sentiment: "unknown", method: null, score: null, text});
+      return {parentDbId: "db1", stocksTouched: 1, created: 0, updated: 0,
+        skippedExisting: 1, skippedNoFile: 0, rejudged: 0, rowErrors: 0, reachedDeadline: false};
+    });
+    await resumeNotionByStock(db as never, new Date("2026-09-18T00:00:00+09:00"), new Date("2026-09-19T00:00:00+09:00"));
+    expect(sqlite.prepare("SELECT pdf_text_status FROM ir_disclosures").get()!.pdf_text_status).toBe("ok");
+    expect(sqlite.prepare("SELECT text,char_count FROM ir_disclosure_texts").get()).toEqual({text, char_count: text.length});
+    await resumeNotionByStock(db as never, new Date("2026-09-18T00:00:00+09:00"), new Date("2026-09-19T00:00:00+09:00"));
+    expect([...vi.mocked(upsertDisclosuresByStock).mock.calls[1][0].recoverPdfTextKeys!]).toEqual([]);
   });
 });
