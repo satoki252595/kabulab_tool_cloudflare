@@ -29,7 +29,7 @@ import { HEADED_MARK } from "./estimated-value-guard.js";
  * 変えたら上げる。日付 + 連番にしているのは、外部エージェントの作業ログと
  * 突き合わせやすくするため。
  */
-export const SUMMARY_CONTRACT_VERSION = "2026-10-05.12";
+export const SUMMARY_CONTRACT_VERSION = "2026-10-05.13";
 
 /** 比較時だけ同じ月期間の表記を揃え、数値・比較条件・保存文面は変えない。 */
 function normalizeMonthPeriods(text: string): string {
@@ -116,13 +116,18 @@ export function isSummaryNumbersGrounded(
   const sourceHasProductName = description.normalize("NFKC").match(productName) !== null;
   const normalizedSummary = shortSummary.normalize("NFKC").replace(productName, name =>
     sourceHasProductName ? name.slice(2) : name);
+  // 同一株主番号の「一株」は数量ではない。原文と同じ固定語の場合だけ
+  // 比較時に外し、実際の一株・株数・保有期間・金額には触れない。
+  const identityTerm = "同一株主番号";
+  const summaryWithoutIdentityNumber = description.normalize("NFKC").includes(identityTerm)
+    ? normalizedSummary.replaceAll(identityTerm, "株主番号") : normalizedSummary;
   // 上限株数はrecipientの下限ではない。原文と同じ完全な範囲だけを
   // 下限recipientに結び付け、上限単体や別tierを根拠にしない。
   const shareRange = /(?<![0-9.,+\-万千百億兆])([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*株\s*以上\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*株\s*未満/g;
   const ranges = [...description.normalize("NFKC").matchAll(shareRange)].map((m) =>
     [Number(m[1].replaceAll(",", "")), Number(m[2].replaceAll(",", ""))]);
   let rangesGrounded = true;
-  const summaryWithoutRanges = normalizedSummary.replace(shareRange, (_, low: string, high: string) => {
+  const summaryWithoutRanges = summaryWithoutIdentityNumber.replace(shareRange, (_, low: string, high: string) => {
     const lower = Number(low.replaceAll(",", ""));
     const upper = Number(high.replaceAll(",", ""));
     if (!Number.isSafeInteger(lower) || !Number.isSafeInteger(upper) || lower <= 0 || lower >= upper ||
