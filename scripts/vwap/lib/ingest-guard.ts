@@ -152,6 +152,8 @@ export type CompletedDailyFetch = {
   bars: number; rawSha: string; priceSnapshotSha256: string;
   /** 照合済み独立benchmark。最終約定時刻を閉場時刻と混同しない。 */
   sessionReference?: DailySessionReference;
+  /** 実原本の無約定末尾。価格/quote日のbar timestampも推測せず保持する。 */
+  noTrade?: { regularMarketPrice: number; quoteBarTimestamp: number };
 };
 /** observedAtは実原本の観測完了clock。HTTP受領精度の読み替えはしない。 */
 export type DailySessionReference = { date: string; observedAt: string; rawSha: string };
@@ -165,6 +167,23 @@ export function isBeforeOpenHistoricalSession(
   const observed = Date.parse(observedAt) / 1000, observationDay = jstDateSec(observed);
   return jstDateSec(start) === observationDay && jstDateSec(end) === observationDay &&
     date < observationDay && jstDateSec(marketTime) === date && marketTime <= observed && observed < start;
+}
+
+/** 最新約定日の実barと、その後の全v0/flat実barが同じ価格を持つ場合だけ。 */
+function noTradeTailMatches(
+  bars: readonly DailyBar[], marketTime: number, to: string, evidence: CompletedDailyFetch["noTrade"]
+): boolean {
+  if (evidence === undefined || evidence === null || typeof evidence !== "object" ||
+      !Number.isFinite(evidence.regularMarketPrice) || evidence.regularMarketPrice <= 0 ||
+      !Number.isSafeInteger(evidence.quoteBarTimestamp) || evidence.quoteBarTimestamp <= 0 ||
+      evidence.quoteBarTimestamp > marketTime) return false;
+  const quoteDay = jstDateSec(marketTime), price = evidence.regularMarketPrice;
+  if (quoteDay >= to || jstDateSec(evidence.quoteBarTimestamp) !== quoteDay) return false;
+  const quoted = bars.filter((b) => b.date === quoteDay);
+  const tail = bars.filter((b) => b.date > quoteDay);
+  return quoted.length === 1 && quoted[0].v > 0 && quoted[0].c === price &&
+    tail.length > 0 && tail[tail.length - 1].date === to &&
+    tail.every((b) => b.v === 0 && b.o === price && b.h === price && b.l === price && b.c === price);
 }
 
 /** 原本を再取得せず、取得済み同一応答からだけ再開証跡を作る。欠落は未適格。 */
@@ -181,7 +200,9 @@ export function completedDailyFetch(
   const raw = JSON.parse(new TextDecoder().decode(capture.bytes)) as {
     chart?: { result?: Array<{ meta?: { symbol?: unknown; range?: unknown; dataGranularity?: unknown;
       exchangeTimezoneName?: unknown; regularMarketTime?: unknown;
-      currentTradingPeriod?: { regular?: { start?: unknown; end?: unknown } } }; timestamp?: unknown }> };
+      regularMarketPrice?: unknown; currentTradingPeriod?: { regular?: { start?: unknown; end?: unknown } } };
+      timestamp?: unknown; indicators?: { quote?: Array<{ open?: number[]; high?: number[]; low?: number[];
+        close?: number[]; volume?: number[] }> } }> };
   };
   const result = raw.chart?.result?.[0], meta = result?.meta;
   const start = meta?.currentTradingPeriod?.regular?.start;
@@ -190,17 +211,28 @@ export function completedDailyFetch(
   if (meta?.symbol !== fresh.proof.symbol || meta?.range !== "10y" || meta?.dataGranularity !== "1d" ||
       meta?.exchangeTimezoneName !== "Asia/Tokyo" || !Array.isArray(ts) || ts.length !== fresh.bars.length ||
       ![start, end, marketTime].every((v) => typeof v === "number" && Number.isSafeInteger(v) && v > 0)) return null;
+  // 全timestampと採用barの1:1一致。null脱落・重複・順序崩れは証明へ昇格しない。
+  if (ts.some((t, i) => typeof t !== "number" || !Number.isSafeInteger(t) || t <= 0 ||
+      jstDateSec(t) !== fresh.bars[i].date || (i > 0 && ts[i - 1] >= t)) ||
+      ts[0] !== fresh.proof.firstTs || ts[ts.length - 1] !== fresh.proof.lastTs) return null;
   const proof: CompletedDailyFetch = { ...range, regularStart: start as number, regularEnd: end as number,
     regularMarketTime: marketTime as number, bars: fresh.bars.length, rawSha: fresh.proof.rawSha,
     priceSnapshotSha256: bodyPin(priceSnapshotJson(fresh.bars)),
     ...(sessionReference === undefined ? {} : { sessionReference: { ...sessionReference } }) };
+  // 元rawで検査する。丸め後にflatに見えた行を証明へ昇格しない。
+  if (sessionReference !== undefined && typeof meta.regularMarketPrice === "number") {
+    const quote = result?.indicators?.quote?.[0];
+    const quoteIndex = ts.findIndex((t) => typeof t === "number" && jstDateSec(t) === jstDateSec(marketTime as number));
+    if (quote !== undefined && quoteIndex >= 0 && Number.isSafeInteger(ts[quoteIndex])) {
+      const noTrade = { regularMarketPrice: meta.regularMarketPrice, quoteBarTimestamp: ts[quoteIndex] as number };
+      const rawBars = ts.map((t, i) => ({ date: jstDateSec(t), o: quote.open?.[i], h: quote.high?.[i],
+        l: quote.low?.[i], c: quote.close?.[i], v: quote.volume?.[i] })) as DailyBar[];
+      if (noTradeTailMatches(rawBars, marketTime as number, range.to, noTrade)) proof.noTrade = noTrade;
+    }
+  }
   const saved: SavedDaily = { code: fresh.proof.symbol.replace(/\.T$/, ""), ...fresh,
     bars: fresh.bars.map((b) => ({ ...b })), completedFetch: proof };
-  // 全timestampが採用barと1:1で一致すること。null脱落・重複・順序崩れを成功へしない。
-  if (ts.some((t, i) => typeof t !== "number" || !Number.isSafeInteger(t) || t <= 0 ||
-      jstDateSec(t) !== fresh.bars[i].date || (i > 0 && ts[i - 1] >= t)) ||
-      ts[0] !== fresh.proof.firstTs || ts[ts.length - 1] !== fresh.proof.lastTs ||
-      !hasCompletedDailyFetch(saved, range)) return null;
+  if (!hasCompletedDailyFetch(saved, range)) return null;
   return proof;
 }
 
@@ -213,24 +245,39 @@ export function hasCompletedDailyFetch(saved: SavedDaily, range: { from: string;
       !Number.isSafeInteger(c.bars) || c.bars <= 0 || c.bars !== saved.bars.length ||
       ![c.regularStart, c.regularEnd, c.regularMarketTime].every((t) => Number.isSafeInteger(t) && t > 0) ||
       c.regularStart >= c.regularEnd ||
-      jstDateSec(c.regularMarketTime) !== range.to || Date.parse(p.observedAt) / 1000 < c.regularMarketTime ||
-      p.firstTs === null || p.lastTs === null || c.regularMarketTime < p.lastTs ||
+      Date.parse(p.observedAt) / 1000 < c.regularMarketTime || p.firstTs === null || p.lastTs === null ||
       c.priceSnapshotSha256 !== bodyPin(priceSnapshotJson(saved.bars as unknown as DailyBar[])) ||
       c.priceSnapshotSha256 !== saved.corporateEvents.source.priceSnapshotSha256) return false;
-  const sameSession = jstDateSec(c.regularStart) === range.to && jstDateSec(c.regularEnd) === range.to &&
+  const noTrade = c.noTrade !== undefined;
+  if (noTrade ? !noTradeTailMatches(saved.bars as unknown as DailyBar[], c.regularMarketTime, range.to, c.noTrade) ||
+      c.noTrade!.quoteBarTimestamp < p.firstTs || c.noTrade!.quoteBarTimestamp > p.lastTs :
+      jstDateSec(c.regularMarketTime) !== range.to || c.regularMarketTime < p.lastTs) return false;
+  const samePeriod = jstDateSec(c.regularStart) === range.to && jstDateSec(c.regularEnd) === range.to;
+  const sameSession = samePeriod &&
     c.regularMarketTime >= c.regularStart;
   const reference = c.sessionReference;
   if (reference === undefined) {
-    if (!sameSession || c.regularMarketTime < c.regularEnd) return false; // legacy証拠だけでは従来条件を維持。
+    if (noTrade || !sameSession || c.regularMarketTime < c.regularEnd) return false; // legacy証拠だけでは従来条件を維持。
   } else if (reference === null || reference.date !== range.to || !isStrictIsoUtc(reference.observedAt) ||
       typeof reference.rawSha !== "string" || !/^[0-9a-f]{64}$/.test(reference.rawSha) ||
       Date.parse(reference.observedAt) > Date.parse(p.observedAt) ||
       jstDateSec(Date.parse(reference.observedAt) / 1000) !== jstDateSec(Date.parse(p.observedAt) / 1000)) {
     return false;
-  } else if (sameSession ? Date.parse(reference.observedAt) / 1000 < c.regularEnd :
-      !isBeforeOpenHistoricalSession(c.regularStart, c.regularEnd, c.regularMarketTime, range.to, reference.observedAt) ||
-      !isBeforeOpenHistoricalSession(c.regularStart, c.regularEnd, c.regularMarketTime, range.to, p.observedAt)) {
-    return false;
+  } else {
+    if (noTrade) {
+      if (samePeriod) {
+        if (Date.parse(reference.observedAt) / 1000 < c.regularEnd || Date.parse(p.observedAt) / 1000 < c.regularEnd) return false;
+      } else {
+        const quoteDay = jstDateSec(c.regularMarketTime);
+        if (!isBeforeOpenHistoricalSession(c.regularStart, c.regularEnd, c.regularMarketTime, quoteDay, reference.observedAt) ||
+            !isBeforeOpenHistoricalSession(c.regularStart, c.regularEnd, c.regularMarketTime, quoteDay, p.observedAt) ||
+            range.to >= jstDateSec(Date.parse(p.observedAt) / 1000)) return false;
+      }
+    } else if (sameSession ? Date.parse(reference.observedAt) / 1000 < c.regularEnd :
+        !isBeforeOpenHistoricalSession(c.regularStart, c.regularEnd, c.regularMarketTime, range.to, reference.observedAt) ||
+        !isBeforeOpenHistoricalSession(c.regularStart, c.regularEnd, c.regularMarketTime, range.to, p.observedAt)) {
+      return false;
+    }
   }
   const dates = saved.bars.map((b) => b.date as string);
   return dates[0] === jstDateSec(p.firstTs) && dates[dates.length - 1] === jstDateSec(p.lastTs) &&
