@@ -1,5 +1,108 @@
 # kabulab 費用確認 — 2026-10-01
 
+## 2026-10-05 JSTの現在期間の再確認
+
+認証済みCloudflare画面を読み取り、Workers Paidの既存契約と現在期間の従量表示 **$0.00** を確認した。
+Billingの期間ラベルは `Nov2026`、実サイクル10/4〜11/3、観測は31日のうち1日目で、予測表示も$0.00。
+使用量表は未表示だったため、空表を使用量0と解釈しない。
+別の使用量widgetの期間ラベルは10/4〜11/4であり、両画面のラベルを同じ日付へ書き換えない。
+
+| 現在期間の表示 | 観測値 | 包含枠との比較 |
+|---|---:|---|
+| Worker requests | 23.13k | 10M/月以内 |
+| Worker CPU | 300,590 ms | 30M ms/月以内 |
+| Observability events | 23.02k | 20M/月以内 |
+| Builds | 21分 | 6,000分/月以内 |
+| D1 rows read / written | 127.2M / 168.08k | 25B / 50M/月以内 |
+| D1現在保存量 | 779.39 MB | 5 GB以内（metered表示は23.71 MB-month） |
+| R2 Class A / B | 5.92k / 32.51k | Standardなら1M / 10M/月以内 |
+| R2現在保存量 | 3.71 GB | 保存クラス・GB-month・retrieval内訳は未表示 |
+
+`k/M` は画面の丸め値で、アカウント合計・同期遅れ・サービス別帰属不明を含む。
+各widgetの課金使用量表示は$0.00だが、R2の現在GBから月額を計算しない。
+料金の一次資料を10/5 JSTに再確認した：
+[Workers](https://developers.cloudflare.com/workers/platform/pricing/)、
+[D1](https://developers.cloudflare.com/d1/platform/pricing/)、
+[R2](https://developers.cloudflare.com/r2/pricing/)。
+既存の最低$5/月は従量$0.00と別であり、将来の全請求0や固定総額を保証しない。
+
+既存の予算通知2件は各$10の通知設定で、支出の強制上限ではない。
+[公式Budget alerts](https://developers.cloudflare.com/billing/manage/budget-alerts/)。
+今回の観測から追加プランを買う根拠はなく、契約・通知・認証・設定変更は0。
+大量要約はユーザー指定の `muse-spark-1.3-contributor / max` を4並列で実施する。
+Museのnative応答にtoken数・金額がなく、実料金はUNKNOWN。Cloudflare Paidに含まれる費用とは扱わない。
+完了した3巡99バッチの原JSONL32,448,723 bytesを全走査し、provider/model指定99・CLI max99・
+modelSteps99/toolSteps0を確認した。構造化されたusage/token/cost欄は0件で、件数や並行時間から
+料金へ換算しない。独立集計SHA `4083b3acb68976b666d0453cdbce663ec04e6c4ba236917b092373df1de07401`。
+既存CLIのtop/auth/config/trace/exportのhelpにも請求・quota・account usageの読取コマンドは無い。
+未文書化の操作・config値の表示・追加契約・credit補充は行わず、help原応答の監査SHA
+`a78d51ae9a0755be20e7d0ff0c48866a90f10922d737ba85a7c442058e4c6311`を保持する。
+追加の小batch修正巡はこの完了99と別集計し、支払額未観測を0ドルへ置き換えない。
+第四27を加えた完了126バッチも全原JSONL35,873,826 bytesを独立FS走査し、
+modelSteps126・toolSteps0・構造化usage/token/cost項目0を確認した。
+並列のelapsed合計28,066,908 msは請求時間ではない。第5巡はこの完了126に混ぜない。
+集計SHA `5c654117602a26b9cc4cf306c64e55ddd35ba38fbcae0c129cb110a749546452`。
+第5巡2バッチと枚数誤り3群の修正1バッチまで含む全129バッチも終端し、
+全原JSONL36,187,908 bytes、modelSteps129・toolSteps0を独立FS照合した。
+elapsedの並列合計28,519,679 msは請求時間ではない。構造化usage/token/cost欄は
+0件で、料金・token・quotaは引き続きUNKNOWN。集計SHA
+`dec06c815fa42e71b117a09d0e46165ca32c8cc301ab47b6d23bc457c3d3691f`。
+TDnetの元一巡はD1応答3,853回目で停止した。最初3,852回の厳密成功応答に
+存在するmetaだけでは、読取66,731行・書込5,009行・server total_attempts 3,852。
+最後のHTTP500応答にはmetaがなく、その書込結果・使用量・一巡全体の料金はUNKNOWN。
+元応答を全FS照合した集計SHA `5cc36bf03339844b789064a3a35a22208cc9dfe22f104547d23e9ef69676f806`。
+後続の全件状態読取は別のSELECT1回、HTTP200・読取4,945行・書込0・server attempt1。
+復旧用の最初の私有検証は検索POSTの誤判定で送信前に停止した。D1のSELECT3回は
+すべてHTTP200・書込0・server attempt1、読取は50,905/3,828/4,945行。
+実Notion/hosted/PDF/業務書込は0で、旧counter7を実Notion通信へ加算しない。
+旧結果を保持した別実行は01:03:11 UTCまでに終端した。全871 D1応答はstrict成功で、
+server metaの読取68,730行・書込1,298行・total_attempts871を全照合した。
+この実行だけの論理通信はNotion3,762/保管済みPDF217で、発行元・モデル呼出し0。
+末尾の私有列名検証だけがEXIT1となり、追加通信・書込0の全FS検証で保存結果を確定した。
+全照合SHA `cc3820a0c368bc5c08ad5539d56081b6c3b5a3609c281b8f7e75d77f5b69adf8`。
+旧HTTP500のmeta不明・元送信全文不明を変更せず、現在の復旧分と旧未知費用を区別する。
+Muse129原本のNotion物理保管は11,484,745 bytesのgzip1件、Notion8/hosted1・全HTTP200、
+source/D1/model0で正常終了した。保管・確認の論理回数を実請求額とは扱わない。
+正常source0再投影v6はD1 1,764・SQL9,492文、Notion27/hosted6・全HTTP200で終端した。
+全SQLの保存metaは読取259,324行・書込38,638行・total_attempts9,492、欠落0。
+源取得・モデル・Notion retry/UNKNOWNは0。既96,620,903 bytesの源gzipは再アップロードせず、
+新PRE1,115,182 bytesとPOST1,054,343 bytesを物理保管・全文検証した。
+独立全FS SHA `2cd983247fc0bbe6c63bb9e22f87504f8ccddcd4701f045b3f3aae4ee9f1d8f4`。
+単発SQL・論理通信・保存量を請求時間や月額へ換算しない。残1要約の新Museバッチも
+正常終端した。別原native36,244 bytes・modelSteps1/toolSteps0・同指定モデル/maxを全FS照合し、
+旧129集計と分けた。構造化token/cost/quota項目はなく、料金はUNKNOWNを保持する。
+新集計SHA `323cee0213f4f58fea4a36dcb7d8ad3bf01669b3e296caec877fb776fa6c28c7`。
+旧129 receiptを変更せず合算した独立130集計は全native36,224,152 bytes・modelSteps130/toolSteps0。
+重複するbatch elapsed合計28,619,548 msは請求時間ではない。全束縛照合SHA
+`30477211e8db165c9350cc8ba60ec92600d7df9ecc78a23c2f35bf6e32a35479`。
+追加1原本のgzip67,648 bytesはNotion8/hosted1・全HTTP200で物理保管・全文検証し、
+旧129原本やsource本文の再upload0。原生成・拒否`.14`は保存し、`.15`再資格はモデル0。
+全3,588群の通常要約取込はD1 1,379 HTTP・SQL5,583文、Notion12/hosted3、全HTTP200。
+全5,583 query結果の存在するserver metaを照合し、読取379,064行・書込5,337行・
+total_attempts5,583、欠落0を確認した。全1,140原子batchの正常SQLと保存結果も一致した。
+独立全FS SHA `eacfdb142eb5fa9bd94a77a33dd1cd782b41003b0978b93ecafae6f50ab74f37`。
+10/5に再確認した[公式D1超過単価](https://developers.cloudflare.com/d1/platform/pricing/)で、
+包含枠をすべて消費していると仮定したこのread/writeだけの換算は$0.005716064。
+実請求額・保存容量・Worker・R2・税・Muse料金とは別で、単発実績を月額へ外挿しない。
+新PRE gzip2,192,250 bytesを物理保管してから通常CLIを起動し、源GET・追加モデル0。
+全POST gzip1,967,391 bytesの物理保管は別phaseとして計数する。通常子CLIのEXIT0と
+私有末尾検証の元EXIT1を分け、取込の再送や旧未知費用の成功化は行っていない。
+別POST保管はNotion8/hosted1・全HTTP200で正常EOF、全gzipと展開JSONを照合した。
+このphaseのD1・source・model・業務再入は0。原POSTの取得時計と新保管時計を区別し、
+新MIME requestの保存容量を、既原本ファイルの再取得・追加モデル処理へ加算しない。
+業種売買代金の通常一巡はcoverage3,688/3,689で既知の品質保留となった。
+通常traceの内部Worker GET1/D1 binding SELECT3と、未観測のnative packet/meta/料金を区別する。
+業務観測保存試行・Yahoo・発行元・モデル・再dispatch0。catalog同期4定義の更新/skip内訳は
+未観測で、同期を全書込0と断定しない。全実ログclosure SHA
+`20abf6121ccbb8c044ffb78341e977395d81b8afb93daa75dfc700e7afe12169`。
+論理fetch呼出し・serverの記録と、未観測の実HTTP packet attemptを同一視しない。
+通常ops_checkは修正前37254314741と修正後37256039258を各1回実行した。
+どちらも鮮度・マスタ・列地図照合を終え、後者ではEDINETの誤警告が解消した。
+通常workflowによる監視値・列地図の実書込対同値skipやHTTP packet/metaは未観測で、
+検査件数からD1料金を推計せず、追加のYahoo・発行元・モデル呼出し0だけを区別する。
+原画面・請求の個人情報は私有保管し、公開Gitへ載せない。
+私有監査receipt SHA `89f77c384e5535b435ee113c33eff9f2280b2d8e8ecae773f38ee62b1a3433cd`。
+
 ## 判断と対象
 
 Workers Paid の既存契約を使えば、株式・マクロの定時起動移行のために新しい
