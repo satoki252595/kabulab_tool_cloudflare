@@ -232,25 +232,6 @@ def judge(dataset: str, updated_at_epoch: int | None, *, now: datetime | None = 
 # --- 加齢の計算 -----------------------------------------------------------
 
 
-def _weekend_days_after(start: date, end: date) -> int:
-    """(start, end] に含まれる土日の日数。
-
-    start 自身は数えない（start は「あるべき到着時刻」の当日で、その日は
-    加齢の起点だから）。差し引きは 1 日 24h 単位なので、起点が日中にあると
-    過剰に引く可能性があるが、過剰に引く方向は必ず「より緑」＝**誤警報を
-    増やさない**側なので許容する（下で 0 にクランプする）。
-    """
-    if end <= start:
-        return 0
-    count = 0
-    day = start + timedelta(days=1)
-    while day <= end:
-        if day.weekday() >= 5:  # 5=土 6=日
-            count += 1
-        day += timedelta(days=1)
-    return count
-
-
 def _add_business_days(start: date, days: int) -> date:
     """営業日（平日）で days 日進める。days=0 はそのまま返す。"""
     day = start
@@ -263,17 +244,24 @@ def _add_business_days(start: date, days: int) -> date:
 
 
 def elapsed_hours(base: datetime, now: datetime, *, business_days: bool) -> float:
-    """base から now までの経過時間。business_days なら土日を差し引く。
+    """base から now までの経過時間。business_days なら平日の実区間だけ数える。
 
-    JST の暦日で土日を数える（データ基準日が JST の営業日文字列なので、
-    UTC で数えると境界が 9 時間ずれる）。
+    JST の日付境界で区切り、開始日・終了日も実際に重なる時間だけ計上する。
+    日曜の原本を観測した場合や、取得時刻が日中の場合も同じ計算を使う。
     """
-    hours = (now - base).total_seconds() / 3600.0
-    if business_days:
-        hours -= _DAY * _weekend_days_after(
-            base.astimezone(JST).date(), now.astimezone(JST).date()
+    if not business_days:
+        return max(0.0, (now - base).total_seconds() / 3600.0)
+    cursor, end = base.astimezone(JST), now.astimezone(JST)
+    hours = 0.0
+    while cursor < end:
+        next_midnight = (cursor + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
         )
-    return max(0.0, hours)
+        stop = min(end, next_midnight)
+        if cursor.weekday() < 5:
+            hours += (stop - cursor).total_seconds() / 3600.0
+        cursor = stop
+    return hours
 
 
 def _parse_data_date(value: date | str | None) -> date | None:
