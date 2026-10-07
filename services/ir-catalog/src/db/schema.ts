@@ -96,8 +96,8 @@ export const disclosures = sqliteTable(
  * 開示 PDF の本文テキスト = 1 開示 1 行。センチメント判定用に取得済みの
  * PDF バイト列を使い回す (二重取得なし)。抽出テキストは原文のまま保存し、
  * 要約・言い換えはしない (ルール1)。
- * TDnet は PDF を ~31 日で purge するため、古い開示の本文は取得不能 =
- * 行なし (欠損は欠損のまま。ルール2)。
+ * TDnet の原本保持は固定日数ではない (2026-10-08 実測: 公開後 37 日は残存、
+ * 41 日は 404)。消えた開示の本文は取得不能 = 行なし (欠損は欠損のまま。ルール2)。
  */
 export const disclosureTexts = sqliteTable(
   "ir_disclosure_texts",

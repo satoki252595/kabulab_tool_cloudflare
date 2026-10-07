@@ -59,7 +59,7 @@ import type { Database as IrDatabase } from "../../services/ir-catalog/src/db/cl
 import { listDocuments } from "../../services/yuho-quant/src/services/edinet/client.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
 import type { Database as YuhoDatabase } from "../../services/yuho-quant/src/db/client.js";
-import { runIrCatalogCatchup } from "./ir-catalog-tdnet.js";
+import { runIrCatalogCatchup, TDNET_PDF_RETAIN_DAYS } from "./ir-catalog-tdnet.js";
 import { runYuhoEdinetCatchup } from "./yuho-edinet.js";
 
 vi.mock("../../services/ir-catalog/src/services/tdnet/client.js", () => ({
@@ -235,6 +235,39 @@ describe("TDnet の取込は母集団外の開示を書かず、Notion にも渡
     // 銘柄別 DB へ渡す行も同じ
     const byStock = vi.mocked(upsertDisclosuresByStock).mock.calls[0][0];
     expect(byStock.rows.map((row) => row.ticker).sort()).toEqual(INGESTED_TICKERS);
+  });
+
+  it("保存済みは Notion に渡さず、保持日内の未保存だけを足す", async () => {
+    const sec = (days: number) => Math.floor((Date.now() - days * 86_400_000) / 1000);
+    const ins = sqlite.prepare(
+      `INSERT INTO ir_disclosures
+        (stock_id, tdnet_id, company_code, company_name, title, pubdate, document_url, tags, notion_page_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?)`
+    );
+    ins.run(1, "OLDIN", "72030", "テスト7203", "古い未保存", sec(10), "https://example.invalid/old-in.pdf", null);
+    ins.run(
+      1, "OLDOUT", "72030", "テスト7203", "保持日を過ぎた未保存",
+      sec(TDNET_PDF_RETAIN_DAYS + 5), "https://example.invalid/old-out.pdf", null
+    );
+    ins.run(1, "ARCHIVED", "72030", "テスト7203", "保管済み", sec(3), "https://example.invalid/archived.pdf", "page-arch");
+    vi.mocked(listRange).mockResolvedValue(ALL_CODES.map(tdnetItem));
+    vi.mocked(recordPrimaryData).mockResolvedValue({
+      pageId: "p1", outcome: "created", fileTooLarge: false,
+    } as never);
+    vi.mocked(upsertDisclosuresByStock).mockResolvedValue({
+      stocksTouched: 1, created: 1, updated: 0, skippedExisting: 0,
+      skippedNoFile: 0, rejudged: 0, rowErrors: 0, reachedDeadline: false,
+    } as never);
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await runIrCatalogCatchup(db as unknown as IrDatabase);
+    info.mockRestore();
+
+    const keys = vi.mocked(upsertDisclosuresByStock).mock.calls[0][0].rows.map((row) => row.key);
+    expect(keys).toContain("OLDIN");
+    expect(keys).not.toContain("OLDOUT");
+    expect(keys).not.toContain("ARCHIVED");
+    expect(keys.filter((key) => key.startsWith("T")).sort()).toEqual(INGESTED.map((s) => `T${s.code}`).sort());
   });
 
   it("ingestBatch に code→id を注入しない既定の経路", async () => {

@@ -157,4 +157,88 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
     expect(result.skippedNoFile).toBe(1);
     expect(result.created).toBe(0);
   });
+
+  it("入力が新しくても、公開が古い開示から取得する", async () => {
+    pageError = null;
+    const older = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const newer = new Date(Date.now() - 86_400_000).toISOString();
+    const base = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (method === "GET" && path.startsWith("/blocks/")) {
+        return {
+          results: [
+            { id: "child-a", type: "child_database", child_database: { title: "適時開示｜1001" } },
+            { id: "child-b", type: "child_database", child_database: { title: "適時開示｜1002" } },
+          ],
+          has_more: false,
+        } as never;
+      }
+      return base(method, path, body);
+    });
+    const { upsertDisclosuresByStock } = await import("./dataset.js");
+    await upsertDisclosuresByStock({
+      service: "order-test",
+      tagOptions: [],
+      rows: [
+        { ...row, key: "NEW", ticker: "1001", pubdate: newer, title: "新しい開示", documentUrl: "https://example.test/new.pdf" },
+        { ...row, key: "OLD", ticker: "1002", pubdate: older, title: "古い開示", documentUrl: "https://example.test/old.pdf" },
+      ],
+    });
+    expect(vi.mocked(fetch).mock.calls.map((call) => String(call[0]))).toEqual([
+      "https://example.test/old.pdf",
+      "https://example.test/new.pdf",
+    ]);
+  });
+
+  it("予算切れの残りは件数と tdnetId を残し、未取得の行を unavailable にしない", async () => {
+    const older = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const newer = new Date(Date.now() - 86_400_000).toISOString();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { upsertDisclosuresByStock } = await import("./dataset.js");
+      const result = await upsertDisclosuresByStock({
+        service: "deadline-test",
+        tagOptions: [],
+        deadlineMs: 0,
+        rows: [
+          { ...row, key: "NEW", pubdate: newer, title: "新しい開示" },
+          { ...row, key: "OLD", pubdate: older, title: "古い開示" },
+        ],
+      });
+      expect(result.reachedDeadline).toBe(true);
+      expect(result.deadlineRemainderKeys).toEqual(["OLD", "NEW"]);
+      expect(result.created).toBe(0);
+      expect(result.skippedNoFile).toBe(0);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(queryUniqueRow).not.toHaveBeenCalled();
+      const logged = warn.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logged).toContain("[INC-20261008-kabulab_tool_cloudflare-ir-pdf-502] deadline-remainder count=2");
+      expect(logged).toContain("tdnetIds=OLD,NEW");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("31日を超えても取得を試み、404 の tdnetId を記録する", async () => {
+    const pubdate = new Date(Date.now() - 32 * 86_400_000).toISOString();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 404 })));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { upsertDisclosuresByStock } = await import("./dataset.js");
+      const result = await upsertDisclosuresByStock({
+        service: "purge-test",
+        tagOptions: [],
+        rows: [{ ...row, key: "OLD404", pubdate, title: "32日前の開示" }],
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(result.skippedNoFile).toBe(1);
+      expect(result.skippedNoFileKeys).toEqual(["OLD404"]);
+      expect(result.created).toBe(0);
+      const logged = warn.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logged).toContain("[INC-20261008-kabulab_tool_cloudflare-ir-pdf-502] skippedNoFile count=1");
+      expect(logged).toContain("tdnetIds=OLD404");
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });

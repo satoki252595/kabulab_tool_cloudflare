@@ -87,7 +87,8 @@ async function main(): Promise<void> {
    * 既存 terminal (uploaded+hasFile) 行に対しても PDF を再 fetch して再判定
    * + Notion `PDF判定` 列を PATCH。pdf-sentiment 機能の新規導入時や Engine
    * 改修後の段階的反映で使う。`--ticker` / `--from` / `--to` で範囲を絞ること。
-   * PDF 入手不能 (TDnet purge ≥31日 / transient) はスキップ。
+   * PDF 入手不能 (取得した結果が 404・非PDF / transient) はスキップ。
+   * 発表日だけでは取得を省かない。
    */
   const rejudgePdfSentiment = hasFlag("rejudge-pdf-sentiment");
   // 任意の上限時間。Notion エッジ遮断が広域継続したとき無制限に時間が

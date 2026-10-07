@@ -16,7 +16,9 @@
  *     母集団外のコードは取り込まず、Notion にも記録しない
  *   - ルール6: 当日バッチの確定 JSON を Notion 一次データへ実体記録
  *     (key=tdnet-daily-YYYY-MM-DD 冪等)。高シグナルは人間可読 DB へ冪等記録。
- *   - 取りこぼしは翌日以降の WINDOW 重なりと tdnet_id/Notion 冪等で回収。
+ *   - 取りこぼしは、公開から TDNET_PDF_RETAIN_DAYS 日以内の未保存
+ *     (notion_page_id が空) を古い順に次回以降が回収する。
+ *     page id がある行は Notion 照会をしない。
  */
 import type { Database } from "../../services/ir-catalog/src/db/client.js";
 import { loadIngestCodeToId } from "../shared/db/active-equity.js";
@@ -25,12 +27,23 @@ import { ingestBatch } from "../../services/ir-catalog/src/services/ingest.js";
 
 const WINDOW_DAYS = 7;
 /**
+ * 未保存 IR を D1 から拾い直す日数。
+ *
+ * 2026-10-08 02:38 JST の実測: 公開後 37 日の原本は 206、41 日は 404。
+ * 40 日は「まだ TDnet にありうる」上限（確定で消えていた 41 日の手前）。
+ * 一覧取得そのものは WINDOW_DAYS のまま。二次投入だけこの日数まで広げる。
+ * pipeline の ops_check.IR_PDF_RETAIN_DAYS と同じ値。
+ */
+export const TDNET_PDF_RETAIN_DAYS = 40;
+/**
  * 二次データ Notion 投入の実時間上限。**二次フェーズ開始から測る**
  * (D1 upsert 所要に食われない。開始起点の 50s では 2026-06 以降ほぼ
- * 0 件投入だった)。1 行 ≈ PDF 取得 + Notion 3 要求 (~3req/s 直列) +
- * 本文判定で 2〜5s、日次 ≈ 120〜260 行なので 12 分あれば平日分を
- * さばける。多すぎる日は WINDOW_DAYS の重なりと TDnet ID 冪等で
- * 次回が回収する (D1 が正本なので Notion 未投入分も失われない)。
+ * 0 件投入だった)。予算は notion_page_id が空の行だけに使う。
+ * 直近の catchup は 7 日窓 1,181〜1,326 行のうち skip 479〜603 が
+ * 保存済みの照会で、新規は 18〜106 行だった。保存済みを外すと
+ * 定常状態で回すのはおおよそ 1 日分（コメント上の見積 120〜260 行、
+ * 1 行 2〜5 秒）で、12 分に収まる見込み。収まり切らない日は古い未保存を
+ * 優先し、残りは tdnetId をログに残して翌回の遡及が拾う。
  * 常態的に reachedDeadline=true なら backfill を回す合図。
  * catchup.yml の timeout (30 分、yuho と共有) 内に収まること。
  */
@@ -92,6 +105,7 @@ export async function runIrCatalogCatchup(
     archiveToNotion: true,
     notionByStock: true,
     notionByStockBudgetMs: NOTION_BUDGET_MS,
+    unsavedLookbackDays: TDNET_PDF_RETAIN_DAYS,
     codeToId,
   });
 

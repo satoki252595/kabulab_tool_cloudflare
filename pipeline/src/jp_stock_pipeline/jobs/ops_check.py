@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from ..cloud_store import slo
 from ..cloud_store.d1 import D1Error, D1Store
@@ -87,6 +88,38 @@ PROBE_MAX_SILENCE_HOURS = 48.0
 D1_CAPACITY_RED_BYTES = 8_000_000_000
 
 CAPACITY_SQL = "SELECT bytes FROM jss_dataset_freshness WHERE dataset = ?"
+
+# INC-20261008-kabulab_tool_cloudflare-ir-pdf-502
+# 適時開示 PDF を Notion に残す前に TDnet 原本が消えると、ファイルプロキシは 502 になる。
+# 2026-10-08 02:38 JST の実測: 公開後 37 日は 206、41 日は 404。
+# 拾い直し上限 IR_PDF_RETAIN_DAYS=40 は src/cron/ir-catalog-tdnet.ts の
+# TDNET_PDF_RETAIN_DAYS と同じ値（確定 purge の 41 日の手前）。
+# SLO は「公開から 8 日（catchup 窓 7 日 + 起動が翌早朝へずれる分）を超え、
+# 40 日以内なのに notion_page_id が空」。40 日より古い NULL は purge 済みで
+# 戻せない（終端列は今回作らない）。そこまで数えると毎日赤になり、
+# このファイル冒頭が避ける「必ず鳴る判定」になる。
+IR_PDF_SLO_MIN_AGE_DAYS = 8
+IR_PDF_RETAIN_DAYS = 40
+_DAY_SECONDS = 86_400
+_IR_PDF_INCIDENT = "[INC-20261008-kabulab_tool_cloudflare-ir-pdf-502]"
+_IR_PDF_GAP_WHERE = (
+    " WHERE (notion_page_id IS NULL OR notion_page_id = '')"
+    " AND pubdate >= ? AND pubdate <= ?"
+)
+IR_PDF_GAP_COUNT_SQL = "SELECT COUNT(*) AS n FROM ir_disclosures" + _IR_PDF_GAP_WHERE
+IR_PDF_GAP_SAMPLE_SQL = (
+    "SELECT tdnet_id FROM ir_disclosures"
+    + _IR_PDF_GAP_WHERE
+    + " ORDER BY pubdate ASC, tdnet_id ASC LIMIT 30"
+)
+
+
+def ir_pdf_gap_bounds(now_epoch: int) -> list[int]:
+    """pubdate の閉区間 [now-40日, now-8日] を返す。"""
+    return [
+        now_epoch - IR_PDF_RETAIN_DAYS * _DAY_SECONDS,
+        now_epoch - IR_PDF_SLO_MIN_AGE_DAYS * _DAY_SECONDS,
+    ]
 
 
 def _check_freshness(ctx: JobContext, store: D1Store, problems: list[str]) -> None:
@@ -237,6 +270,57 @@ def _check_capacity(store: D1Store, problems: list[str]) -> None:
     logger.info("D1 容量 %.1fGB/10GB", gb)
 
 
+def _check_ir_pdf_archive(
+    store: D1Store, problems: list[str], *, now_epoch: int | None = None
+) -> None:
+    """公開から一定日数たっても Notion 未保管の適時開示を数える。読み取りのみ。"""
+    now = int(datetime.now(UTC).timestamp()) if now_epoch is None else now_epoch
+    bounds = ir_pdf_gap_bounds(now)
+    try:
+        counted = store.query(IR_PDF_GAP_COUNT_SQL, bounds)
+    except D1Error as exc:
+        problems.append(
+            f"{_IR_PDF_INCIDENT} ir_disclosures の notion_page_id 充足を読めない: {exc}"
+        )
+        return
+    raw_n = counted[0].get("n") if counted else None
+    if not isinstance(raw_n, int) or isinstance(raw_n, bool):
+        problems.append(
+            f"{_IR_PDF_INCIDENT} notion_page_id の欠測件数を読めない (n={raw_n!r})"
+        )
+        return
+    if raw_n == 0:
+        logger.info(
+            "適時開示 PDF の Notion 保管: 公開から %d〜%d 日の未保管は 0 件",
+            IR_PDF_SLO_MIN_AGE_DAYS,
+            IR_PDF_RETAIN_DAYS,
+        )
+        return
+    try:
+        sample = store.query(IR_PDF_GAP_SAMPLE_SQL, bounds)
+    except D1Error as exc:
+        problems.append(
+            f"{_IR_PDF_INCIDENT} 未保管 {raw_n} 件の tdnetId を読めない: {exc}"
+        )
+        return
+    ids: list[str] = []
+    for row in sample:
+        tdnet_id = row.get("tdnet_id")
+        if not isinstance(tdnet_id, str) or tdnet_id == "":
+            problems.append(
+                f"{_IR_PDF_INCIDENT} 未保管 {raw_n} 件のうち tdnet_id が空の行がある"
+            )
+            return
+        ids.append(tdnet_id)
+    rest = raw_n - len(ids)
+    suffix = f" 他{rest}件" if rest > 0 else ""
+    problems.append(
+        f"{_IR_PDF_INCIDENT} 公開から{IR_PDF_SLO_MIN_AGE_DAYS}日を超え"
+        f"{IR_PDF_RETAIN_DAYS}日以内で notion_page_id が NULL の適時開示が"
+        f" {raw_n} 件 (tdnetId={','.join(ids)}{suffix})"
+    )
+
+
 def execute(ctx: JobContext) -> None:
     # `ctx.cloud` は runner が `if not settings.dry_run:` の中でしか作らないため
     # 参照すると --dry-run が必ず即失敗する。設定から直接 D1Store を組む
@@ -255,6 +339,7 @@ def execute(ctx: JobContext) -> None:
     _check_probe_alive(store, problems)
     _check_idle_runs(store, problems)
     _check_capacity(store, problems)
+    _check_ir_pdf_archive(store, problems)
 
     if problems:
         for p in problems:
