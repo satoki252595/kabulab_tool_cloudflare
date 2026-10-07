@@ -31,6 +31,10 @@ import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
 import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
 import {
+  compareDisclosuresForArchive,
+  logIrPdfIncident,
+} from "./ir-pdf-incident.js";
+import {
   assertAdoptedDatabaseSchema,
   createDatabaseOrAdopt,
   findBackupChildByTitle,
@@ -102,9 +106,9 @@ export interface ByStockInput {
   tagOptions: Array<{ name: string; color: NotionSelectColor }>;
   rows: ByStockRow[];
   /**
-   * 投入を打ち切る絶対時刻 (epoch ms)。日次 catchup が NOTION_BUDGET_MS
-   * 内に収めるため指定する。超過時は残りを作らず中断 (D1 が正本・
-   * WINDOW 重なりと TDnet ID 冪等で翌日以降が回収する)。backfill は
+   * 投入を打ち切る絶対時刻 (epoch ms)。日次 catchup が予算内に収めるため
+   * 指定する。超過時は残りを作らず中断し、残った tdnet id をログに残す
+   * (D1 が正本。未保存は遡及窓の次回実行が古い順に回収する)。backfill は
    * 未指定 = 無制限 (再開可能・数日級をユーザ了承済)。
    */
   deadlineMs?: number;
@@ -166,6 +170,10 @@ export interface ByStockResult {
   rowErrors: number;
   /** deadline 超過で未処理を残して打ち切ったか (運用者が気づける) */
   reachedDeadline: boolean;
+  /** deadline 時点で手を付けていない tdnet id（古い順）。ログにも残す */
+  deadlineRemainderKeys: string[];
+  /** PDF を添付できず新規行を作らなかった tdnet id。ログにも残す */
+  skippedNoFileKeys: string[];
 }
 
 interface BlockChildren {
@@ -420,26 +428,6 @@ async function resolveStock(
 
 const PDF_HEADER = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]); // "%PDF-"
 
-/**
- * TDnet が開示 PDF をサイト上で保持する公称期間 (日)。
- * release.tdnet.info は公開から ~31 日で原本を purge するため、それより
- * 古い開示は yanoshin リダイレクト経由でも 404 になる (= unavailable 終端)。
- * 過去月バックフィルでこの fetch を毎回試みると yanoshin/tdnet への
- * 無駄な GET が発生するので、`isPdfLikelyPurged` で先に弾く。
- */
-const TDNET_PDF_PURGE_DAYS = 31;
-
-/**
- * pubdate が TDnet purge 期間より古い (PDF 取得を試みる価値が無い) か。
- * 形式不正は安全側で false (= fetch を試みる) を返す。
- */
-function isPdfLikelyPurged(pubdate: string, now: Date = new Date()): boolean {
-  const t = Date.parse(pubdate);
-  if (!Number.isFinite(t)) return false;
-  const ageDays = (now.getTime() - t) / 86_400_000;
-  return ageDays > TDNET_PDF_PURGE_DAYS;
-}
-
 function safeName(s: string): string {
   return s.replace(/[^0-9A-Za-z._-]/g, "");
 }
@@ -658,6 +646,9 @@ export async function upsertDisclosuresByStock(
   const overDeadline = () =>
     input.deadlineMs !== undefined && Date.now() > input.deadlineMs;
 
+  const skippedNoFileKeys: string[] = [];
+  let deadlineRemainderKeys: string[] = [];
+
   if (input.rows.length === 0) {
     return {
       parentDbId,
@@ -669,42 +660,62 @@ export async function upsertDisclosuresByStock(
       rejudged,
       rowErrors,
       reachedDeadline,
+      deadlineRemainderKeys,
+      skippedNoFileKeys,
     };
   }
 
-  // 銘柄ごとに rows をまとめる (子 DB 単位で既存判定/書き込みを行う)
-  const byTicker = new Map<string, ByStockRow[]>();
-  for (const r of input.rows) {
-    const arr = byTicker.get(r.ticker);
+  // 公開が古い行から処理する。銘柄単位にまとめると、新しい開示が多い銘柄が
+  // 窓から抜けかけの他銘柄より先に予算を使い切る。
+  const ordered = [...input.rows].sort(compareDisclosuresForArchive);
+  const rowsByTicker = new Map<string, ByStockRow[]>();
+  for (const r of ordered) {
+    const arr = rowsByTicker.get(r.ticker);
     if (arr) arr.push(r);
-    else byTicker.set(r.ticker, [r]);
+    else rowsByTicker.set(r.ticker, [r]);
   }
+  const sessions = new Map<
+    string,
+    { childDbId: string; existing: ExistingIndex }
+  >();
 
-  for (const [, rows] of byTicker) {
+  try {
+  for (let index = 0; index < ordered.length; index++) {
     if (overDeadline()) {
       reachedDeadline = true;
+      deadlineRemainderKeys = ordered.slice(index).map((r) => r.key);
+      logIrPdfIncident("deadline-remainder", deadlineRemainderKeys);
       break;
     }
-
-    // 親 DB の銘柄ページ + その下の子 DB を確保 (プロセス内キャッシュで
-    // 全実行を通じて 1 銘柄あたり 1 回だけ解決)
-    const { childDbId } = await resolveStock(parentDbId, rows[0], input.tagOptions);
-    // 銘柄解決成功後にカウント (= 実際に書き込み試行へ到達した銘柄数)
-    stocksTouched++;
-
-    let minISO = rows[0].pubdate;
-    let maxISO = rows[0].pubdate;
-    for (const r of rows) {
-      if (r.pubdate < minISO) minISO = r.pubdate;
-      if (r.pubdate > maxISO) maxISO = r.pubdate;
-    }
-    const existing = await loadExistingInRange(childDbId, minISO, maxISO);
-
-    for (const row of rows) {
-      if (overDeadline()) {
-        reachedDeadline = true;
-        break;
+    const row = ordered[index];
+    let session = sessions.get(row.ticker);
+    if (session === undefined) {
+      const tickerRows = rowsByTicker.get(row.ticker);
+      if (tickerRows === undefined || tickerRows.length === 0) {
+        throw new Error(`銘柄 ${row.ticker} の開示行がありません`);
       }
+      // 親 DB の銘柄ページ + その下の子 DB を確保 (プロセス内キャッシュで
+      // 全実行を通じて 1 銘柄あたり 1 回だけ解決)。子 DB の既存照会も
+      // その銘柄の最古行に到達したとき 1 回だけ。
+      const resolved = await resolveStock(parentDbId, row, input.tagOptions);
+      stocksTouched++;
+      let minISO = tickerRows[0].pubdate;
+      let maxISO = tickerRows[0].pubdate;
+      for (const r of tickerRows) {
+        if (r.pubdate < minISO) minISO = r.pubdate;
+        if (r.pubdate > maxISO) maxISO = r.pubdate;
+      }
+      session = {
+        childDbId: resolved.childDbId,
+        existing: await loadExistingInRange(
+          resolved.childDbId,
+          minISO,
+          maxISO
+        ),
+      };
+      sessions.set(row.ticker, session);
+    }
+    const { childDbId, existing } = session;
       const ex = existing.byKey.get(row.key);
       if (ex && isTerminal(ex)) {
         // 本文保存の中断と再判定は、既に物理保管した同じ PDF から再開する。
@@ -741,13 +752,9 @@ export async function upsertDisclosuresByStock(
           continue;
         }
       }
-      // 新規行で発表日が TDnet purge 期間 (~31日) より古い場合は、PDF を
-      // 取りに行っても 404 確定 → 無駄な GET を避けて即 skip (cost 最適化)。
-      // 既存行 (ex) は引き続き fetch して error→uploaded の昇格を試みる。
-      if (!ex && isPdfLikelyPurged(row.pubdate)) {
-        skippedNoFile++;
-        continue;
-      }
+      // 発表日の古さでは取得を省かない。TDnet の原本保持は固定日数ではなく
+      // (2026-10-08 実測: 公開後 37 日は残存、41 日は 404)、未取得のまま
+      // 捨てると原本が消えたあと 502 になる。404 は fetch の結果で判定する。
 
       // 開示 PDF を実体取得して添付 (ルール6)。取得不可/非PDF/上限超過/
       // インフラ失敗は捏造せず添付なし + 状態列に正直記録し、行は作成/
@@ -795,6 +802,7 @@ export async function upsertDisclosuresByStock(
       // status の正直記録を維持して再実行収束を壊さないため。
       if (!ex && irStatus !== "uploaded") {
         skippedNoFile++;
+        skippedNoFileKeys.push(row.key);
         continue;
       }
 
@@ -891,8 +899,9 @@ export async function upsertDisclosuresByStock(
       if (pdfClassification !== null) {
         input.onPdfClassified?.(row.key, pdfClassification);
       }
-    }
-    if (reachedDeadline) break;
+  }
+  } finally {
+    logIrPdfIncident("skippedNoFile", skippedNoFileKeys);
   }
 
   return {
@@ -905,5 +914,7 @@ export async function upsertDisclosuresByStock(
     rejudged,
     rowErrors,
     reachedDeadline,
+    deadlineRemainderKeys,
+    skippedNoFileKeys,
   };
 }

@@ -54,12 +54,16 @@ TDnet 通信は `tdnet/client.ts` が全リクエストを直列化し最小間�
   `適時開示｜<コード>` に **全 IR・全タグ・1IR=1行** を冪等記録
   (親=ticker / 子行=TDnet ID)。行に開示 PDF 実体を `IR資料` 添付 +
   `IR資料状態` (uploaded/unavailable/too_large/**error**)。
-  **TDnet は PDF を ~31日で purge** するため過去分は `unavailable` (終端) を
-  正直記録。一過性失敗は `error` にして継続し、再実行の PATCH 更新で収束。
+  TDnet 原本の保持は固定 31 日ではない (2026-10-08 実測: 公開後 37 日は
+  残存、41 日は 404)。日次は取得を試み、404/非PDF は行を作らず
+  `skippedNoFile` として tdnetId をログに残す。一過性失敗は `error` にして
+  継続し、再実行の PATCH 更新で収束。
 - 「1IR=1行を全銘柄全履歴」は rule-6「高頻度・大量取得の境界」の明示的
   逸脱。**ユーザが規模 (IR数十万・数日級) を了承済** (現運用は直近~1ヶ月) の
   設計判断。冪等・再開可能を必ず維持し、日次は `NOTION_BUDGET_MS` で
-  打ち切り (WINDOW 重なり+冪等で回収)。backfill は無制限。
+  打ち切る。予算は `notion_page_id` が空の行だけに使い、公開から
+  `TDNET_PDF_RETAIN_DAYS` (40) 日以内の未保存を古い順に拾う。打ち切った
+  tdnetId はログに残す。backfill は無制限。
 - Notion 通信は共有 `notion-archive` 経由のみ (api.notion.com 直叩き禁止)。
 
 ## ディレクトリ

@@ -32,7 +32,7 @@ _LEGACY_DDL: tuple[str, ...] = (
     " (stock_id INTEGER, data_date TEXT, fetched_at INTEGER)",
     # 取得時刻の列は宣言しない。設計書にも既存コードにも出てこないので、
     # マニフェストがそれを参照していたらここで `no such column` にして落とす。
-    "CREATE TABLE ir_disclosures (tdnet_id TEXT, pubdate INTEGER)",
+    "CREATE TABLE ir_disclosures (tdnet_id TEXT, pubdate INTEGER, notion_page_id TEXT)",
     "CREATE TABLE core_stocks (id INTEGER PRIMARY KEY, code TEXT, updated_at INTEGER,"
     " is_active INTEGER DEFAULT 1, instrument_type TEXT DEFAULT 'equity')",
     "CREATE TABLE yutai_benefits"
@@ -1147,3 +1147,71 @@ class TestD1Capacity:
         problems: list[str] = []
         ops_check._check_capacity(store, problems)
         assert problems == []
+
+
+class TestIrPdfArchiveSlo:
+    """公開から 8〜40 日で notion_page_id が空の適時開示は SLO 違反。"""
+
+    NOW = 1_800_000_000
+    DAY = 86_400
+
+    def test_境界の内側だけを件数とtdnetIdで失敗にする(self) -> None:
+        store = _FakeStore()
+        rows = [
+            ("edge8", self.NOW - 8 * self.DAY, None),
+            ("edge40", self.NOW - 40 * self.DAY, None),
+            ("mid", self.NOW - 20 * self.DAY, None),
+            ("blank", self.NOW - 15 * self.DAY, ""),
+            ("just_young", self.NOW - 8 * self.DAY + 1, None),
+            ("just_old", self.NOW - 40 * self.DAY - 1, None),
+            ("saved", self.NOW - 20 * self.DAY, "page-saved"),
+        ]
+        for tdnet_id, pubdate, page_id in rows:
+            store.query(
+                "INSERT INTO ir_disclosures (tdnet_id, pubdate, notion_page_id)"
+                " VALUES (?, ?, ?)",
+                [tdnet_id, pubdate, page_id],
+            )
+        problems: list[str] = []
+        ops_check._check_ir_pdf_archive(store, problems, now_epoch=self.NOW)
+        assert len(problems) == 1
+        text = problems[0]
+        assert "[INC-20261008-kabulab_tool_cloudflare-ir-pdf-502]" in text
+        assert "4 件" in text
+        for tdnet_id in ("edge8", "edge40", "mid", "blank"):
+            assert tdnet_id in text
+        for tdnet_id in ("just_young", "just_old", "saved"):
+            assert tdnet_id not in text
+
+    def test_保管済みだけなら問題にしない(self) -> None:
+        store = _FakeStore()
+        store.query(
+            "INSERT INTO ir_disclosures (tdnet_id, pubdate, notion_page_id)"
+            " VALUES ('saved', ?, 'page-1')",
+            [self.NOW - 20 * self.DAY],
+        )
+        problems: list[str] = []
+        ops_check._check_ir_pdf_archive(store, problems, now_epoch=self.NOW)
+        assert problems == []
+
+    def test_充足クエリの失敗は欠測を成功にしない(self) -> None:
+        store = _FakeStore()
+        store.fail_on_prefix = ("SELECT COUNT(*) AS N FROM IR_DISCLOSURES",)
+        problems: list[str] = []
+        ops_check._check_ir_pdf_archive(store, problems, now_epoch=self.NOW)
+        assert len(problems) == 1
+        assert "読めない" in problems[0]
+
+    def test_日次判定は未保管があると失敗する(self, monkeypatch) -> None:
+        store = _FakeStore()
+        judge = TestOpsCheck()
+        judge._seed_freshness(store)
+        judge._seed_probe_ok(store)
+        now = int(datetime.now(UTC).timestamp())
+        store.query(
+            "INSERT INTO ir_disclosures (tdnet_id, pubdate, notion_page_id)"
+            " VALUES ('gap-1', ?, NULL)",
+            [now - 10 * self.DAY],
+        )
+        _wire(monkeypatch, store, ops_check)
+        assert ops_check.main([], env=dict(_D1_ENV)) == 1

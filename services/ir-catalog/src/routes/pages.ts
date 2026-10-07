@@ -110,14 +110,14 @@ pagesRoute.get(
 );
 
 /**
- * 開示資料ファイルプロキシ。TDnet (release.tdnet.info) は PDF を ~31日 で
- * purge するため `document_url` は失効する。本サービスは Notion 子DB に
- * 物理アップロードした PDF を保管しており、その signed URL は ~1h で
+ * 開示資料ファイルプロキシ。TDnet 原本の保持日数は固定ではない
+ * (2026-10-08 実測: 公開後 37 日は残存、41 日は 404)。本サービスは Notion
+ * 子DB に物理アップロードした PDF を保管しており、その signed URL は ~1h で
  * 失効するが Notion ページ取得の度に新規発行される。クリック時に毎回
  * 最新の URL を取得し、**そのバイト列をストリーミングで 200 として
  * 返す** (URL バーを kabulab ドメインに保ち、共有時の URL も永続有効に
- * する)。Notion 取得失敗時は TDnet 原本にフォールバック (≤31日生存)、
- * 両方失敗なら 502 を正直に返す (捏造しない — ルール1/2)。
+ * する)。Notion 取得失敗時は D1 の document_url へフォールバックし、
+ * 両方失敗なら 502 を返す (捏造しない — ルール1/2)。
  */
 const tdnetIdParam = z.object({
   tdnetId: z.string().check(z.regex(/^\d+$/)),
@@ -233,7 +233,7 @@ pagesRoute.get(
       }
     }
 
-    // 2) フォールバック: TDnet 原本 (≤31日なら生存)
+    // 2) フォールバック: D1 に入っている原本 URL (yanoshin → TDnet)
     const fallbackName = `tdnet-${tdnetId}.pdf`;
     const fb = await streamPdf(
       r.documentUrl,

@@ -19,7 +19,7 @@
  * 一次保管・読戻しの失敗は D1 書込前に throw。二次記録・D1 反映の
  * 例外も呼出元へ伝播し、CLI の失敗と後続取得の停止につなげる。
  */
-import { and, eq, gte, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
 import {
   recordPrimaryData,
   verifyArchivedAttachments,
@@ -27,6 +27,10 @@ import {
   type ByStockRow,
   type PdfClassification,
 } from "../../../../src/shared/notion-archive/index.js";
+import {
+  compareDisclosuresForArchive,
+  logIrPdfIncident,
+} from "../../../../src/shared/notion-archive/ir-pdf-incident.js";
 import type { Database } from "../db/client.js";
 import { disclosures, disclosureTexts } from "../db/schema.js";
 import { loadIngestCodeToId } from "../../../../src/shared/db/active-equity.js";
@@ -53,6 +57,12 @@ export interface IngestOptions {
    * 50s が D1 フェーズに食われて二次投入が常時 0 件だった問題の修正)。
    */
   notionByStockBudgetMs?: number;
+  /**
+   * notion_page_id が空の開示を、公開からこの日数以内まで D1 から足して
+   * 二次投入する。日次 catchup が 7 日窓の外へ落ちた未保存を拾うために使う。
+   * 予算ありの実行では、page id が既にある行は Notion 照会へ渡さない。
+   */
+  unsavedLookbackDays?: number;
   /**
    * code→id マップ (バックフィルで再取得を避けるため注入可)。注入するなら
    * src/shared/db/active-equity.ts の `loadIngestCodeToId` で作ること
@@ -385,7 +395,10 @@ export async function ingestBatch(
     markets: p.marketsString,
   }));
 
-  const notionByStock = await archiveDisclosuresByStock(db, byStockRows, opts);
+  const notionByStock = await archiveDisclosuresByStock(db, byStockRows, {
+    ...opts,
+    codeToId,
+  });
 
   return {
     fetched: items.length,
@@ -422,19 +435,154 @@ export async function resumeNotionByStock(
   return archiveDisclosuresByStock(db, rows, {notionByStock: true});
 }
 
+const EMPTY_NOTION_BY_STOCK = {
+  stocksTouched: 0,
+  created: 0,
+  updated: 0,
+  skippedExisting: 0,
+  skippedNoFile: 0,
+  rejudged: 0,
+  rowErrors: 0,
+  reachedDeadline: false,
+} as const;
+
+function hasArchivedPage(pageId: string | null | undefined): boolean {
+  return typeof pageId === "string" && pageId.length > 0;
+}
+
+/**
+ * 予算付きの二次投入で Notion へ渡す行。
+ * page id がある行は照会しない。遡及で得た未保存は、今回バッチより古くても足す。
+ * 再判定 (rejudge) のときはバッチをそのまま渡す（保存済み PDF の再読が目的）。
+ */
+export function selectNotionArchiveRows(input: {
+  batchRows: readonly ByStockRow[];
+  archivedKeys: ReadonlySet<string>;
+  olderUnsaved: readonly ByStockRow[];
+  limitToUnsaved: boolean;
+}): { rows: ByStockRow[]; excludedArchivedKeys: string[] } {
+  if (!input.limitToUnsaved) {
+    return { rows: [...input.batchRows], excludedArchivedKeys: [] };
+  }
+  const byKey = new Map<string, ByStockRow>();
+  for (const row of input.olderUnsaved) {
+    if (input.archivedKeys.has(row.key)) continue;
+    byKey.set(row.key, row);
+  }
+  const excludedArchivedKeys: string[] = [];
+  for (const row of input.batchRows) {
+    if (input.archivedKeys.has(row.key)) {
+      excludedArchivedKeys.push(row.key);
+      continue;
+    }
+    if (!byKey.has(row.key)) byKey.set(row.key, row);
+  }
+  return {
+    rows: [...byKey.values()].sort(compareDisclosuresForArchive),
+    excludedArchivedKeys,
+  };
+}
+
+async function loadUnsavedDisclosures(
+  db: Database,
+  codeToId: Map<string, number>,
+  lookbackDays: number,
+  nowMs: number
+): Promise<ByStockRow[]> {
+  if (!Number.isInteger(lookbackDays) || lookbackDays <= 0) {
+    throw new Error(`未保存IRの遡及日数が不正です: ${String(lookbackDays)}`);
+  }
+  const cutoff = new Date(nowMs - lookbackDays * 86_400_000);
+  const stored = await db
+    .select()
+    .from(disclosures)
+    .where(
+      and(
+        gte(disclosures.pubdate, cutoff),
+        or(isNull(disclosures.notionPageId), eq(disclosures.notionPageId, ""))
+      )
+    )
+    .orderBy(asc(disclosures.pubdate), asc(disclosures.tdnetId));
+  const rows: ByStockRow[] = [];
+  const outsideUniverse: string[] = [];
+  for (const p of stored) {
+    const ticker = companyCodeToTicker(p.companyCode);
+    if (ticker === null) {
+      throw new Error(`未保存IRの銘柄コードが不正です: ${p.tdnetId}`);
+    }
+    const stockId = codeToId.get(ticker);
+    if (stockId === undefined) {
+      outsideUniverse.push(p.tdnetId);
+      continue;
+    }
+    if (stockId !== p.stockId) {
+      throw new Error(`未保存IRの銘柄対応が不一致: ${p.tdnetId}`);
+    }
+    rows.push({
+      key: p.tdnetId,
+      ticker,
+      companyName: p.companyName,
+      companyUrl: buffettCodeUrl(ticker),
+      tags: p.tags,
+      primaryTag: p.primaryTag,
+      pubdate: p.pubdate.toISOString(),
+      title: p.title,
+      documentUrl: p.documentUrl,
+      markets: p.marketsString,
+    });
+  }
+  logIrPdfIncident("universe-excluded", outsideUniverse);
+  return rows;
+}
+
 async function archiveDisclosuresByStock(
   db: Database, byStockRows: ByStockRow[],
-  opts: Pick<IngestOptions, "notionByStock" | "notionByStockBudgetMs" | "notionByStockDeadlineMs" | "rejudgePdfSentiment">
+  opts: Pick<IngestOptions, "notionByStock" | "notionByStockBudgetMs" | "notionByStockDeadlineMs" | "rejudgePdfSentiment" | "unsavedLookbackDays" | "codeToId">
 ): Promise<IngestResult["notionByStock"]> {
   let notionByStock: IngestResult["notionByStock"] = null;
-  if (opts.notionByStock && byStockRows.length > 0) {
-    const current = await db.select({ key: disclosures.tdnetId, pageId: disclosures.notionPageId,
+  const wantsNotion = opts.notionByStock === true
+    && (byStockRows.length > 0 || opts.unsavedLookbackDays !== undefined);
+  if (wantsNotion) {
+    if (opts.rejudgePdfSentiment === true && opts.unsavedLookbackDays !== undefined) {
+      throw new Error("PDF再判定と未保存IRの遡及は同時に指定できません");
+    }
+    const limitToUnsaved = opts.rejudgePdfSentiment !== true
+      && (opts.notionByStockBudgetMs !== undefined || opts.unsavedLookbackDays !== undefined);
+    const current = byStockRows.length === 0 ? [] : await db.select({ key: disclosures.tdnetId, pageId: disclosures.notionPageId,
       status: disclosures.pdfTextStatus, textId: disclosureTexts.id })
       .from(disclosures).leftJoin(disclosureTexts, eq(disclosureTexts.disclosureId, disclosures.id))
       .where(sql`${disclosures.tdnetId} IN (SELECT value FROM json_each(${JSON.stringify(byStockRows.map(r => r.key))}))`);
     const currentByKey = new Map(current.map(r => [r.key, r]));
-    const recoverPdfTextKeys = new Set(current.filter(r => r.status === null || r.status === "pending" ||
-      (r.status === "ok" && r.textId === null)).map(r => r.key));
+    let olderUnsaved: ByStockRow[] = [];
+    if (opts.unsavedLookbackDays !== undefined) {
+      if (opts.codeToId === undefined) {
+        throw new Error("未保存IRの遡及には codeToId が必要です");
+      }
+      olderUnsaved = await loadUnsavedDisclosures(
+        db,
+        opts.codeToId,
+        opts.unsavedLookbackDays,
+        Date.now()
+      );
+    }
+    const archivedKeys = new Set(
+      [...currentByKey.entries()]
+        .filter(([, row]) => hasArchivedPage(row.pageId))
+        .map(([key]) => key)
+    );
+    const selected = selectNotionArchiveRows({
+      batchRows: byStockRows,
+      archivedKeys,
+      olderUnsaved,
+      limitToUnsaved,
+    });
+    logIrPdfIncident("archived-skipped-notion-query", selected.excludedArchivedKeys);
+    if (selected.rows.length === 0) {
+      return { ...EMPTY_NOTION_BY_STOCK };
+    }
+    const sentKeys = new Set(selected.rows.map((row) => row.key));
+    const recoverPdfTextKeys = new Set(current.filter(r => sentKeys.has(r.key) && (r.status === null || r.status === "pending" ||
+      (r.status === "ok" && r.textId === null))).map(r => r.key));
     // ファイルプロキシ用に (tdnet_id → notion_page_id) を収集して Postgres
     // に書き戻す。upsertDisclosuresByStock は行を create/PATCH した直後に
     // onPagePersisted を呼ぶので、ここで Map に貯めて末尾でバルク UPDATE。
@@ -454,7 +602,7 @@ async function archiveDisclosuresByStock(
     const r = await upsertDisclosuresByStock({
       service: "ir-catalog",
       tagOptions: notionTagOptions(),
-      rows: byStockRows,
+      rows: selected.rows,
       deadlineMs: phaseDeadline,
       onPagePersisted: (key, pageId) => {
         if (currentByKey.get(key)?.pageId !== pageId) pageIdMap.set(key, pageId);
@@ -492,16 +640,7 @@ async function archiveDisclosuresByStock(
       await persistPdfTexts(db, pdfMap);
     }
   } else if (opts.notionByStock) {
-    notionByStock = {
-      stocksTouched: 0,
-      created: 0,
-      updated: 0,
-      skippedExisting: 0,
-      skippedNoFile: 0,
-      rejudged: 0,
-      rowErrors: 0,
-      reachedDeadline: false,
-    };
+    notionByStock = { ...EMPTY_NOTION_BY_STOCK };
   }
 
   return notionByStock;

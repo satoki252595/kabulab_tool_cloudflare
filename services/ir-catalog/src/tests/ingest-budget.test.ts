@@ -40,7 +40,7 @@ vi.mock("../../../../src/shared/db/active-equity.js", () => ({
   loadIngestCodeToId: vi.fn(async () => new Map([["1001", 1]])),
 }));
 
-import { ingestBatch, resumeNotionByStock } from "../services/ingest.js";
+import { ingestBatch, resumeNotionByStock, selectNotionArchiveRows } from "../services/ingest.js";
 
 const DDL = `
 CREATE TABLE ir_disclosures (
@@ -208,7 +208,7 @@ describe("ingestBatch の二次予算", () => {
     vi.mocked(upsertDisclosuresByStock).mockImplementationOnce(async (input) => {
       input.onPdfClassified?.("T0001", { sentiment: "unknown", method: null, score: null, text: "試験本文𠮷" });
       if (phase === "missing_row") sqlite.exec("DELETE FROM ir_disclosures");
-      return { parentDbId: "db1", stocksTouched: 1, created: 1, updated: 0, skippedExisting: 0, skippedNoFile: 0, rejudged: 0, rowErrors: 0, reachedDeadline: false };
+      return { parentDbId: "db1", stocksTouched: 1, created: 1, updated: 0, skippedExisting: 0, skippedNoFile: 0, rejudged: 0, rowErrors: 0, reachedDeadline: false, deadlineRemainderKeys: [], skippedNoFileKeys: [] };
     });
     if (phase === "write_failure") sqlite.exec(`CREATE TRIGGER fail_text BEFORE INSERT ON ir_disclosure_texts
       BEGIN SELECT RAISE(ABORT, 'write failed'); END;`);
@@ -233,12 +233,150 @@ describe("ingestBatch の二次予算", () => {
       input.onPagePersisted?.(ITEM.id, "existing");
       input.onPdfClassified?.(ITEM.id, {sentiment: "unknown", method: null, score: null, text});
       return {parentDbId: "db1", stocksTouched: 1, created: 0, updated: 0,
-        skippedExisting: 1, skippedNoFile: 0, rejudged: 0, rowErrors: 0, reachedDeadline: false};
+        skippedExisting: 1, skippedNoFile: 0, rejudged: 0, rowErrors: 0, reachedDeadline: false,
+        deadlineRemainderKeys: [], skippedNoFileKeys: []};
     });
     await resumeNotionByStock(db as never, new Date("2026-09-18T00:00:00+09:00"), new Date("2026-09-19T00:00:00+09:00"));
     expect(sqlite.prepare("SELECT pdf_text_status FROM ir_disclosures").get()!.pdf_text_status).toBe("ok");
     expect(sqlite.prepare("SELECT text,char_count FROM ir_disclosure_texts").get()).toEqual({text, char_count: text.length});
     await resumeNotionByStock(db as never, new Date("2026-09-18T00:00:00+09:00"), new Date("2026-09-19T00:00:00+09:00"));
     expect([...vi.mocked(upsertDisclosuresByStock).mock.calls[1][0].recoverPdfTextKeys!]).toEqual([]);
+  });
+});
+
+function disclosureRow(key: string, pubdate: string) {
+  return {
+    key,
+    ticker: "1001",
+    companyName: "テスト1001",
+    companyUrl: "https://example.test/1001",
+    tags: [] as string[],
+    primaryTag: null,
+    pubdate,
+    title: key,
+    documentUrl: `https://example.test/${key}.pdf`,
+    markets: null,
+  };
+}
+
+describe("二次投入の対象", () => {
+  it("保存済みを外し、未保存は公開が古い順", () => {
+    const selected = selectNotionArchiveRows({
+      batchRows: [
+        disclosureRow("NEW", "2026-10-01T00:00:00.000Z"),
+        disclosureRow("SAVED", "2026-09-01T00:00:00.000Z"),
+      ],
+      archivedKeys: new Set(["SAVED"]),
+      olderUnsaved: [disclosureRow("OLD", "2026-08-01T00:00:00.000Z")],
+      limitToUnsaved: true,
+    });
+    expect(selected.rows.map((row) => row.key)).toEqual(["OLD", "NEW"]);
+    expect(selected.excludedArchivedKeys).toEqual(["SAVED"]);
+  });
+
+  it("再判定のないバックフィルは保存済みも渡す", () => {
+    const selected = selectNotionArchiveRows({
+      batchRows: [
+        disclosureRow("NEW", "2026-10-01T00:00:00.000Z"),
+        disclosureRow("SAVED", "2026-09-01T00:00:00.000Z"),
+      ],
+      archivedKeys: new Set(["SAVED"]),
+      olderUnsaved: [disclosureRow("OLD", "2026-08-01T00:00:00.000Z")],
+      limitToUnsaved: false,
+    });
+    expect(selected.rows.map((row) => row.key)).toEqual(["NEW", "SAVED"]);
+    expect(selected.excludedArchivedKeys).toEqual([]);
+  });
+});
+
+function jstDaysAgo(days: number): string {
+  const t = new Date(Date.now() - days * 86_400_000 + 9 * 3600_000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${t.getUTCFullYear()}-${p(t.getUTCMonth() + 1)}-${p(t.getUTCDate())} ${p(t.getUTCHours())}:${p(t.getUTCMinutes())}:${p(t.getUTCSeconds())}`;
+}
+
+describe("予算付き二次投入の D1 選択", () => {
+  let sqlite: DatabaseSync;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sqlite = new DatabaseSync(":memory:");
+    sqlite.exec(DDL);
+  });
+
+  function insertRaw(tdnetId: string, daysAgo: number, pageId: string | null, companyCode = "10010") {
+    sqlite.prepare(
+      `INSERT INTO ir_disclosures
+        (stock_id, tdnet_id, company_code, company_name, title, pubdate, document_url, tags, notion_page_id)
+       VALUES (1, ?, ?, 'テスト1001', ?, ?, ?, '[]', ?)`
+    ).run(
+      tdnetId,
+      companyCode,
+      tdnetId,
+      Math.floor((Date.now() - daysAgo * 86_400_000) / 1000),
+      `https://example.test/${tdnetId}.pdf`,
+      pageId
+    );
+  }
+
+  it("notion_page_id がある行だけでは Notion を呼ばない", async () => {
+    const db = makeDb(createD1(sqlite));
+    const base = {
+      batchKey: "saved-only",
+      source: "test",
+      archiveToNotion: false,
+      codeToId: new Map([["1001", 1]]),
+    };
+    await ingestBatch(db as never, [ITEM], { ...base, notionByStock: false });
+    sqlite.exec("UPDATE ir_disclosures SET notion_page_id='page-1'");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await ingestBatch(db as never, [ITEM], {
+        ...base,
+        batchKey: "saved-only-2",
+        notionByStock: true,
+        notionByStockBudgetMs: 60_000,
+      });
+      expect(upsertDisclosuresByStock).not.toHaveBeenCalled();
+      const logged = warn.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logged).toContain("[INC-20261008-kabulab_tool_cloudflare-ir-pdf-502] archived-skipped-notion-query");
+      expect(logged).toContain(ITEM.id);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("保持日内の古い未保存を先に渡し、期限外と保存済みは渡さない", async () => {
+    insertRaw("OLD", 30, null);
+    insertRaw("ANCIENT", 100, null);
+    insertRaw("OUT", 10, null, "99990");
+    insertRaw("SAVED", 2, "page-saved");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const db = makeDb(createD1(sqlite));
+      await ingestBatch(db as never, [
+        { ...ITEM, id: "NEW", pubdate: jstDaysAgo(1), title: "新しい開示" },
+        { ...ITEM, id: "SAVED", pubdate: jstDaysAgo(2), title: "保存済み開示" },
+      ], {
+        batchKey: "lookback",
+        source: "test",
+        archiveToNotion: false,
+        notionByStock: true,
+        notionByStockBudgetMs: 60_000,
+        unsavedLookbackDays: 40,
+        codeToId: new Map([["1001", 1]]),
+      });
+      expect(upsertDisclosuresByStock).toHaveBeenCalledTimes(1);
+      const rows = vi.mocked(upsertDisclosuresByStock).mock.calls[0]![0]!.rows;
+      expect(rows.map((row) => row.key)).toEqual(["OLD", "NEW"]);
+      const logged = warn.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logged).toContain("archived-skipped-notion-query");
+      expect(logged).toContain("SAVED");
+      expect(logged).toContain("universe-excluded");
+      expect(logged).toContain("OUT");
+      expect(logged).not.toContain("ANCIENT");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
