@@ -20,11 +20,18 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from datetime import UTC, datetime
+import time
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from ..cloud_store import slo
 from ..cloud_store.d1 import D1Error, D1Store
+from ..collectors.tdnet_yanoshin import BASE_URL
+from ..contracts.stock_code import source_code_to_ticker
+from ..http import FetchError, fetch
+from ..models import JST
 from .freshness_probe import CAPACITY_DATASET
 from .runner import STATUS_SUCCESS, JobContext, build_parser, main_exit, run_job
 
@@ -112,6 +119,37 @@ IR_PDF_GAP_SAMPLE_SQL = (
     + _IR_PDF_GAP_WHERE
     + " ORDER BY pubdate ASC, tdnet_id ASC LIMIT 30"
 )
+
+# INC-20261008-kabulab_tool_cloudflare-ir-universe-gap
+# TDnet 一覧にあり、取込母集団（disclosureIngestCondition と同じ述語）に入り、
+# ir_disclosures に行が無い開示。行が無いので PDF の SLO には出ない。
+# catchup は公開 40 日以内の欠測を挿入する。この判定は、その catchup が
+# 走る前の当日分で毎日赤にしない。
+# catchup は平日 20:00 JST 予定で、実際の開始はしばしば翌日 02:00-04:30 JST。
+# 金曜予定は土曜朝、次は月曜予定の火曜朝。土曜の開示は月曜 23:30 の時点では
+# まだ catchup を通っていない。公開から 3 日を超えた欠けだけを失敗にする。
+# 40 日は src/cron/ir-catalog-tdnet.ts の TDNET_PDF_RETAIN_DAYS と同じ値。
+IR_UNIVERSE_GAP_MIN_AGE_DAYS = 3
+IR_UNIVERSE_GAP_RETAIN_DAYS = 40
+_IR_UNIVERSE_GAP_INCIDENT = "[INC-20261008-kabulab_tool_cloudflare-ir-universe-gap]"
+_TDNET_LIST_DAY_LIMIT = 8000
+_TDNET_LIST_INTERVAL_S = 0.75
+# instrument_type は WHERE だけ。値は SELECT しない。ETF/REIT は入れない。
+# 正本は src/shared/db/active-equity.ts の disclosureIngestCondition。
+_INGEST_CODE_SQL = (
+    "SELECT code FROM core_stocks"
+    " WHERE instrument_type = ? OR (is_active = ? AND instrument_type IS NULL)"
+)
+_EXISTING_TDNET_SQL = "SELECT tdnet_id FROM ir_disclosures WHERE pubdate >= ?"
+
+
+@dataclass(frozen=True)
+class TdnetListItem:
+    """一覧の1開示。tdnet_id は yanoshin の id（ir_disclosures.tdnet_id）。"""
+
+    tdnet_id: str
+    ticker: str | None
+    disclosed_at: datetime
 
 
 def ir_pdf_gap_bounds(now_epoch: int) -> list[int]:
@@ -321,6 +359,185 @@ def _check_ir_pdf_archive(
     )
 
 
+def _unwrap_tdnet_item(item: object) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    inner = item.get("Tdnet")
+    if isinstance(inner, dict):
+        return inner
+    return item
+
+
+def parse_tdnet_list_item(raw: object) -> TdnetListItem | None:
+    """必須項目が読めなければ None。コード不正は ticker=None（欠測には数えない）。"""
+    body = _unwrap_tdnet_item(raw)
+    if body is None:
+        return None
+    tdnet_id = body.get("id")
+    pubdate = body.get("pubdate")
+    company_code = body.get("company_code")
+    if not isinstance(tdnet_id, str) or tdnet_id == "":
+        return None
+    if not isinstance(pubdate, str) or not isinstance(company_code, str) or company_code == "":
+        return None
+    try:
+        disclosed_at = datetime.strptime(pubdate, "%Y-%m-%d %H:%M:%S").replace(tzinfo=JST)
+    except ValueError:
+        return None
+    return TdnetListItem(
+        tdnet_id=tdnet_id,
+        ticker=source_code_to_ticker(company_code),
+        disclosed_at=disclosed_at,
+    )
+
+
+def universe_listing_gaps(
+    items: list[TdnetListItem],
+    universe_codes: set[str],
+    existing_tdnet_ids: set[str],
+    *,
+    now: datetime,
+    min_age_days: int = IR_UNIVERSE_GAP_MIN_AGE_DAYS,
+    retain_days: int = IR_UNIVERSE_GAP_RETAIN_DAYS,
+) -> list[str]:
+    """母集団内・保持窓内・D1 に無い tdnet id。公開が古い順。"""
+    if now.tzinfo is None:
+        raise ValueError("TDnet欠測判定の現在時刻にタイムゾーンがありません")
+    newest = now - timedelta(days=min_age_days)
+    oldest = now - timedelta(days=retain_days)
+    chosen: dict[str, datetime] = {}
+    for item in items:
+        if item.ticker is None or item.ticker not in universe_codes:
+            continue
+        if item.disclosed_at < oldest or item.disclosed_at > newest:
+            continue
+        if item.tdnet_id in existing_tdnet_ids:
+            continue
+        prev = chosen.get(item.tdnet_id)
+        if prev is None or item.disclosed_at < prev:
+            chosen[item.tdnet_id] = item.disclosed_at
+    return [tdnet_id for tdnet_id, _pub in sorted(chosen.items(), key=lambda pair: (pair[1], pair[0]))]
+
+
+def fetch_tdnet_window_listings(now: datetime) -> tuple[list[TdnetListItem], int]:
+    """公開40日の一覧を読む。原本は保存しない（ops_check は何も書かない）。
+
+    1日でも上限到達・JSON 不正なら、欠測0とはせず FetchError。
+    必須項目が読めない行は件数だけ返し、0件成功にしない。
+    """
+    if now.tzinfo is None:
+        raise ValueError("TDnet一覧の現在時刻にタイムゾーンがありません")
+    now_jst = now.astimezone(JST)
+    start = (now_jst - timedelta(days=IR_UNIVERSE_GAP_RETAIN_DAYS)).date()
+    end = now_jst.date()
+    items: list[TdnetListItem] = []
+    unreadable = 0
+    day = start
+    first = True
+    while day <= end:
+        if not first:
+            time.sleep(_TDNET_LIST_INTERVAL_S)
+        first = False
+        ymd = day.strftime("%Y%m%d")
+        url = f"{BASE_URL}/{ymd}.json"
+        resp = fetch(url, params={"limit": _TDNET_LIST_DAY_LIMIT}, timeout=30)
+        try:
+            payload = json.loads(resp.content)
+        except ValueError as exc:
+            raise FetchError(f"TDnet一覧が JSON でない: {ymd}") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+            raise FetchError(f"TDnet一覧の items が配列でない: {ymd}")
+        raw_items = payload["items"]
+        if len(raw_items) >= _TDNET_LIST_DAY_LIMIT:
+            raise FetchError(
+                f"TDnet一覧が上限({_TDNET_LIST_DAY_LIMIT})に到達: {ymd} count={len(raw_items)}"
+            )
+        for raw in raw_items:
+            parsed = parse_tdnet_list_item(raw)
+            if parsed is None:
+                unreadable += 1
+                continue
+            items.append(parsed)
+        day += timedelta(days=1)
+    return items, unreadable
+
+
+def load_ingest_universe_codes(store: D1Store) -> set[str]:
+    """disclosureIngestCondition と同じ母集団の証券コード。定義は広げない。"""
+    rows = store.query(_INGEST_CODE_SQL, ["equity", 0])
+    codes: set[str] = set()
+    for row in rows:
+        code = row.get("code")
+        if not isinstance(code, str) or code == "":
+            raise D1Error("core_stocks.code が空の行があるため母集団を確定できない")
+        codes.add(code)
+    return codes
+
+
+def load_existing_tdnet_ids(store: D1Store, since_epoch: int) -> set[str]:
+    rows = store.query(_EXISTING_TDNET_SQL, [since_epoch])
+    ids: set[str] = set()
+    for row in rows:
+        tdnet_id = row.get("tdnet_id")
+        if not isinstance(tdnet_id, str) or tdnet_id == "":
+            raise D1Error("ir_disclosures.tdnet_id が空の行があるため欠測を確定できない")
+        ids.add(tdnet_id)
+    return ids
+
+
+def _check_ir_universe_gap(
+    store: D1Store,
+    problems: list[str],
+    *,
+    now: datetime | None = None,
+    listings: tuple[list[TdnetListItem], int] | None = None,
+) -> None:
+    """一覧にあって D1 に行が無い母集団内の開示を数える。読み取りのみ。"""
+    moment = datetime.now(UTC) if now is None else now
+    if moment.tzinfo is None:
+        problems.append(f"{_IR_UNIVERSE_GAP_INCIDENT} 判定時刻にタイムゾーンが無い")
+        return
+    try:
+        listed, unreadable = (
+            listings if listings is not None else fetch_tdnet_window_listings(moment)
+        )
+    except FetchError as exc:
+        problems.append(f"{_IR_UNIVERSE_GAP_INCIDENT} TDnet一覧を読めない: {exc}")
+        return
+    if unreadable > 0:
+        problems.append(
+            f"{_IR_UNIVERSE_GAP_INCIDENT} TDnet一覧の必須項目が読めない開示が"
+            f" {unreadable} 件（欠測件数を0とは扱わない）"
+        )
+    try:
+        universe = load_ingest_universe_codes(store)
+        since = int((moment - timedelta(days=IR_UNIVERSE_GAP_RETAIN_DAYS)).timestamp())
+        existing = load_existing_tdnet_ids(store, since)
+    except D1Error as exc:
+        problems.append(
+            f"{_IR_UNIVERSE_GAP_INCIDENT} 母集団または ir_disclosures を読めない: {exc}"
+        )
+        return
+    gaps = universe_listing_gaps(listed, universe, existing, now=moment)
+    if not gaps:
+        if unreadable == 0:
+            logger.info(
+                "適時開示の D1 行: 公開から %d〜%d 日で一覧にあり母集団内の欠測は 0 件",
+                IR_UNIVERSE_GAP_MIN_AGE_DAYS,
+                IR_UNIVERSE_GAP_RETAIN_DAYS,
+            )
+        return
+    sample = gaps[:30]
+    rest = len(gaps) - len(sample)
+    suffix = f" 他{rest}件" if rest > 0 else ""
+    problems.append(
+        f"{_IR_UNIVERSE_GAP_INCIDENT} 公開から{IR_UNIVERSE_GAP_MIN_AGE_DAYS}日を超え"
+        f"{IR_UNIVERSE_GAP_RETAIN_DAYS}日以内で、TDnet一覧にあり母集団内だが"
+        f" ir_disclosures に行が無い適時開示が {len(gaps)} 件"
+        f" (tdnetId={','.join(sample)}{suffix})"
+    )
+
+
 def execute(ctx: JobContext) -> None:
     # `ctx.cloud` は runner が `if not settings.dry_run:` の中でしか作らないため
     # 参照すると --dry-run が必ず即失敗する。設定から直接 D1Store を組む
@@ -340,6 +557,7 @@ def execute(ctx: JobContext) -> None:
     _check_idle_runs(store, problems)
     _check_capacity(store, problems)
     _check_ir_pdf_archive(store, problems)
+    _check_ir_universe_gap(store, problems)
 
     if problems:
         for p in problems:

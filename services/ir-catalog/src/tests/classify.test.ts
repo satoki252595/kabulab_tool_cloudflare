@@ -180,7 +180,7 @@ describe("prepareRows — 冪等な前処理 (ルール1/2)", () => {
   const codeToId = new Map<string, number>([["7203", 1]]);
 
   it("同一 tdnet_id は後勝ちで 1 行に畳む (バッチ全体落下を防ぐ)", () => {
-    const rows = prepareRows(
+    const { rows } = prepareRows(
       [
         item({ id: "100", title: "決算短信" }),
         item({ id: "100", title: "（訂正）決算短信" }),
@@ -192,7 +192,7 @@ describe("prepareRows — 冪等な前処理 (ルール1/2)", () => {
   });
 
   it("ユニバース外コード/不正コードは正直に除外 (捏造しない)", () => {
-    const rows = prepareRows(
+    const prepared = prepareRows(
       [
         item({ id: "1", company_code: "99990" }), // core.stocks に無い
         item({ id: "2", company_code: "ABCDE" }), // 不正
@@ -200,12 +200,14 @@ describe("prepareRows — 冪等な前処理 (ルール1/2)", () => {
       ],
       codeToId
     );
-    expect(rows.map((r) => r.tdnetId)).toEqual(["3"]);
-    expect(rows[0].ticker).toBe("7203");
+    expect(prepared.rows.map((r) => r.tdnetId)).toEqual(["3"]);
+    expect(prepared.rows[0].ticker).toBe("7203");
+    expect(prepared.outsideUniverse).toEqual([{ tdnetId: "1", ticker: "9999" }]);
+    expect(prepared.invalidCode).toEqual([{ tdnetId: "2", companyCode: "ABCDE" }]);
   });
 
   it("pubdate を JST(+09:00) として解釈する", () => {
-    const rows = prepareRows(
+    const { rows } = prepareRows(
       [item({ id: "5", pubdate: "2026-05-18 15:00:00" })],
       codeToId
     );

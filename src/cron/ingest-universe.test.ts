@@ -161,17 +161,21 @@ afterEach(() => {
   sqlite.close();
 });
 
-/** TDnet の 1 開示。company_code は 5 文字 (4 文字ティッカー + 検査文字)。 */
-function tdnetItem(code: string): TdnetItemRaw {
+/** TDnet の 1 開示。company_code は 5 文字 (4 文字ティッカー + 検査文字)。公開日は JST の今日。 */
+function tdnetItem(code: string, over: Partial<TdnetItemRaw> = {}): TdnetItemRaw {
+  const jst = new Date(Date.now() + 9 * 3600 * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  const pubdate = `${jst.getUTCFullYear()}-${p(jst.getUTCMonth() + 1)}-${p(jst.getUTCDate())} 15:00:00`;
   return {
     id: `T${code}`,
-    pubdate: "2026-09-11 15:00:00",
+    pubdate,
     company_code: `${code}0`,
     company_name: `テスト${code}`,
     title: "テスト開示",
     document_url: `https://example.invalid/${code}.pdf`,
     url_xbrl: null,
     markets_string: null,
+    ...over,
   } as TdnetItemRaw;
 }
 
@@ -284,6 +288,110 @@ describe("TDnet の取込は母集団外の開示を書かず、Notion にも渡
     );
     expect(recordPrimaryData).not.toHaveBeenCalled();
     expect(upsertDisclosuresByStock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * INC-20261008-kabulab_tool_cloudflare-ir-universe-gap
+ * 一覧の開始が直近7日のままだと、公開から20日の開示は listRange が空を返し、
+ * D1 に行ができない。保持日数(40)の一覧を取り、母集団内の欠測だけを挿入する。
+ */
+describe("TDnet の日次は保持日数内の D1 欠測を母集団内だけ挿入する", () => {
+  const NOW = Date.parse("2026-10-08T02:30:00+09:00");
+  const PUB_20D = "2026-09-18 02:30:00";
+
+  function mockList(extra: TdnetItemRaw[] = []) {
+    vi.mocked(listRange).mockImplementation(async (range: string) => {
+      const start = range.split("-")[0] ?? "";
+      // 7日窓 (20261001) では 2026-09-18 に届かない。40日窓 (20260829) なら届く。
+      if (start > "20260918") return [];
+      return [
+        tdnetItem("7203", { id: "LATE1", pubdate: PUB_20D, title: "後から母集団に入った開示" }),
+        tdnetItem("1206", { id: "OUT1", pubdate: PUB_20D, title: "母集団外の開示" }),
+        ...extra,
+      ];
+    });
+  }
+
+  function mockNotion() {
+    vi.mocked(recordPrimaryData).mockResolvedValue({
+      pageId: "p1", outcome: "created", fileTooLarge: false,
+    } as never);
+    vi.mocked(upsertDisclosuresByStock).mockResolvedValue({
+      stocksTouched: 1, created: 1, updated: 0, skippedExisting: 0,
+      skippedNoFile: 0, rejudged: 0, rowErrors: 0, reachedDeadline: false,
+    } as never);
+  }
+
+  it("一覧範囲は公開40日で、7日を超えた欠測行を D1 に作る", async () => {
+    mockList();
+    mockNotion();
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await runIrCatalogCatchup(db as unknown as IrDatabase, undefined, NOW);
+    } finally {
+      info.mockRestore();
+      warn.mockRestore();
+    }
+    expect(vi.mocked(listRange).mock.calls[0]?.[0]).toBe("20260829-20261008");
+    expect(
+      sqlite.prepare("SELECT tdnet_id FROM ir_disclosures ORDER BY tdnet_id").all()
+    ).toEqual([{ tdnet_id: "LATE1" }]);
+  });
+
+  it("母集団外の除外は件数と理由と tdnetId をログに残し、行は作らない", async () => {
+    mockList();
+    mockNotion();
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let logs = "";
+    try {
+      await runIrCatalogCatchup(db as unknown as IrDatabase, undefined, NOW);
+      logs = [...info.mock.calls, ...warn.mock.calls].map((c) => c.join(" ")).join("\n");
+    } finally {
+      info.mockRestore();
+      warn.mockRestore();
+    }
+    expect(logs).toContain("[INC-20261008-kabulab_tool_cloudflare-ir-universe-gap]");
+    expect(logs).toContain("outside-universe count=1");
+    expect(logs).toContain("reason=取込母集団に無い銘柄コード");
+    expect(logs).toContain("tdnetIds=OUT1");
+    expect(logs).toContain("d1-missing count=1");
+    expect(logs).toContain("tdnetIds=LATE1");
+    expect(
+      sqlite.prepare("SELECT tdnet_id FROM ir_disclosures WHERE tdnet_id = 'OUT1'").all()
+    ).toEqual([]);
+  });
+
+  it("保持日内で既に D1 にある開示は欠測として挿入し直さない", async () => {
+    const sec = Math.floor(Date.parse("2026-09-18T02:30:00+09:00") / 1000);
+    sqlite.prepare(
+      `INSERT INTO ir_disclosures
+        (stock_id, tdnet_id, company_code, company_name, title, pubdate, document_url, tags)
+       VALUES (1, 'HAVE1', '72030', 'テスト7203', '既存', ?, 'https://example.invalid/have.pdf', '[]')`
+    ).run(sec);
+    mockList([
+      tdnetItem("7203", { id: "HAVE1", pubdate: PUB_20D, title: "既存の開示" }),
+    ]);
+    mockNotion();
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let logs = "";
+    try {
+      const r = await runIrCatalogCatchup(db as unknown as IrDatabase, undefined, NOW);
+      logs = [...info.mock.calls, ...warn.mock.calls].map((c) => c.join(" ")).join("\n");
+      expect(r.upserted).toBe(1);
+    } finally {
+      info.mockRestore();
+      warn.mockRestore();
+    }
+    expect(logs).toContain("d1-missing count=1");
+    expect(logs).toContain("tdnetIds=LATE1");
+    expect(logs).not.toContain("HAVE1");
+    expect(
+      sqlite.prepare("SELECT tdnet_id FROM ir_disclosures ORDER BY tdnet_id").all()
+    ).toEqual([{ tdnet_id: "HAVE1" }, { tdnet_id: "LATE1" }]);
   });
 });
 

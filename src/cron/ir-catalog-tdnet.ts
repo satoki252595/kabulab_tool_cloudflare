@@ -9,11 +9,16 @@
  * 失敗は握り潰さず結果に載せる (ルール2)。
  *
  * 動作:
- *   - 直近 WINDOW_DAYS 日を 1 日ずつ全件取得 (yanoshin は page 無効のため)
+ *   - 公開から TDNET_PDF_RETAIN_DAYS 日の一覧を 1 日ずつ全件取得
+ *     (yanoshin は page 無効のため)
  *   - 取込の母集団 (src/shared/db/active-equity.ts の `loadIngestCodeToId`。core_stocks から
  *     非普通株と、区分が NULL の active 行を除いたもの) の開示を ir_disclosures へ冪等 upsert。
  *     is_active=0 の銘柄 (上場廃止・地域取引所にだけ上場する会社) の開示は取り込む。
- *     母集団外のコードは取り込まず、Notion にも記録しない
+ *     母集団外のコードは取り込まず、Notion にも記録しない。除外した件数と tdnetId はログに残す
+ *   - 直近 WINDOW_DAYS 日は全件を upsert する（表題訂正に追従する）。
+ *     それより前で保持日数以内、母集団に入っていて D1 に行が無い開示だけを挿入する。
+ *     銘柄の core_stocks 追加が開示から 7 日より遅れても、原本が残るあいだは日次で入る。
+ *     既存行を 40 日ぶん毎日書き直さない（D1 書込を欠測分に限る）。
  *   - ルール6: 当日バッチの確定 JSON を Notion 一次データへ実体記録
  *     (key=tdnet-daily-YYYY-MM-DD 冪等)。高シグナルは人間可読 DB へ冪等記録。
  *   - 取りこぼしは、公開から TDNET_PDF_RETAIN_DAYS 日以内の未保存
@@ -23,7 +28,13 @@
 import type { Database } from "../../services/ir-catalog/src/db/client.js";
 import { loadIngestCodeToId } from "../shared/db/active-equity.js";
 import { listRange } from "../../services/ir-catalog/src/services/tdnet/client.js";
-import { ingestBatch } from "../../services/ir-catalog/src/services/ingest.js";
+import {
+  catchupListingRange,
+  formatUniverseGapLog,
+  ingestBatch,
+  loadTdnetIdsSince,
+  selectDisclosuresForCatchup,
+} from "../../services/ir-catalog/src/services/ingest.js";
 
 const WINDOW_DAYS = 7;
 /**
@@ -31,7 +42,8 @@ const WINDOW_DAYS = 7;
  *
  * 2026-10-08 02:38 JST の実測: 公開後 37 日の原本は 206、41 日は 404。
  * 40 日は「まだ TDnet にありうる」上限（確定で消えていた 41 日の手前）。
- * 一覧取得そのものは WINDOW_DAYS のまま。二次投入だけこの日数まで広げる。
+ * 一覧取得もこの日数まで広げる。D1 へ書くのは直近 WINDOW_DAYS の全件と、
+ * それより前で D1 に行が無い母集団内の開示だけ。40 日を超えては取らない。
  * pipeline の ops_check.IR_PDF_RETAIN_DAYS と同じ値。
  */
 export const TDNET_PDF_RETAIN_DAYS = 40;
@@ -68,10 +80,12 @@ function pad(n: number): string {
 
 export async function runIrCatalogCatchup(
   db: Database,
-  shard?: { part: number; of: number }
+  shard?: { part: number; of: number },
+  nowMs: number = Date.now()
 ): Promise<IrCatalogResult> {
   // TDnet は範囲一括取得できるのでシャード分散不要。重複実行を避け shard 0 のみ。
   if (shard && shard.part !== 0) return { ran: false };
+  if (!Number.isFinite(nowMs)) throw new Error("TDnet catchup の現在時刻が不正です");
 
   const started = Date.now();
 
@@ -84,22 +98,42 @@ export async function runIrCatalogCatchup(
   // TDnet の開示日は JST。日付境界も JST で揃える (UTC だと JST 午前に
   // 走ったとき当日分が翌日まで取れず、Notion 冪等キーも 1 日ずれる)。
   const JST_MS = 9 * 3600 * 1000;
-  const to = new Date(Date.now() + JST_MS); // 以降 getUTC* = JST 壁時計
-  const from = new Date(to);
-  from.setUTCDate(from.getUTCDate() - WINDOW_DAYS);
-  const rs = `${from.getUTCFullYear()}${pad(from.getUTCMonth() + 1)}${pad(
-    from.getUTCDate()
-  )}`;
-  const re = `${to.getUTCFullYear()}${pad(to.getUTCMonth() + 1)}${pad(
-    to.getUTCDate()
-  )}`;
-  const range = `${rs}-${re}`;
+  const to = new Date(nowMs + JST_MS); // 以降 getUTC* = JST 壁時計
+  const range = catchupListingRange(nowMs, TDNET_PDF_RETAIN_DAYS);
   const dayKey = `${to.getUTCFullYear()}-${pad(to.getUTCMonth() + 1)}-${pad(
     to.getUTCDate()
   )}`;
 
   const items = await listRange(range);
-  const r = await ingestBatch(db, items, {
+  const existingTdnetIds = await loadTdnetIdsSince(
+    db,
+    new Date(nowMs - TDNET_PDF_RETAIN_DAYS * 86_400_000)
+  );
+  const selected = selectDisclosuresForCatchup({
+    items,
+    codeToId,
+    existingTdnetIds,
+    nowMs,
+    recentWindowDays: WINDOW_DAYS,
+    retainDays: TDNET_PDF_RETAIN_DAYS,
+  });
+  const missingLine = formatUniverseGapLog(
+    "d1-missing",
+    "TDnet一覧の母集団内で公開40日以内だがir_disclosuresに行が無い",
+    selected.missingTdnetIds
+  );
+  if (selected.missingTdnetIds.length > 0) console.warn(missingLine);
+  else console.info(missingLine);
+  if (selected.pastRetainInUniverseIds.length > 0) {
+    console.info(
+      formatUniverseGapLog(
+        "past-retain",
+        "公開から40日を超えるため取り込まない",
+        selected.pastRetainInUniverseIds
+      )
+    );
+  }
+  const r = await ingestBatch(db, selected.items, {
     batchKey: `tdnet-daily-${dayKey}`,
     source: `yanoshin TDnet WebAPI /tdnet/list/{YYYYMMDD}.json 日次キャッチアップ 1日ずつ全件 (範囲 ${range})`,
     archiveToNotion: true,
@@ -120,7 +154,7 @@ export async function runIrCatalogCatchup(
         ? `銘柄別ERR`
         : "-";
   console.info(
-    `[ir-catalog] 日次完了 range=${range} 取得=${r.fetched} ユニバース内=${r.inUniverse} upsert=${r.upserted} ${bsInfo} ${elapsedSec.toFixed(
+    `[ir-catalog] 日次完了 range=${range} 一覧=${items.length} 取得=${r.fetched} ユニバース内=${r.inUniverse} 欠測=${selected.missingTdnetIds.length} upsert=${r.upserted} ${bsInfo} ${elapsedSec.toFixed(
       1
     )}s`
   );
