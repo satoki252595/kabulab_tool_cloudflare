@@ -199,7 +199,7 @@ describe("優待の取込の銘柄引きは active かつ equity のまま", () 
 
 describe("TDnet の取込は母集団外の開示を書かず、Notion にも渡さない", () => {
   it("runIrCatalogCatchup (日次キャッチアップ)", async () => {
-    vi.mocked(listRange).mockResolvedValue(ALL_CODES.map(tdnetItem));
+    vi.mocked(listRange).mockResolvedValue(ALL_CODES.map((code) => tdnetItem(code)));
     vi.mocked(recordPrimaryData).mockResolvedValue({
       pageId: "p1",
       outcome: "created",
@@ -254,7 +254,7 @@ describe("TDnet の取込は母集団外の開示を書かず、Notion にも渡
       sec(TDNET_PDF_RETAIN_DAYS + 5), "https://example.invalid/old-out.pdf", null
     );
     ins.run(1, "ARCHIVED", "72030", "テスト7203", "保管済み", sec(3), "https://example.invalid/archived.pdf", "page-arch");
-    vi.mocked(listRange).mockResolvedValue(ALL_CODES.map(tdnetItem));
+    vi.mocked(listRange).mockResolvedValue(ALL_CODES.map((code) => tdnetItem(code)));
     vi.mocked(recordPrimaryData).mockResolvedValue({
       pageId: "p1", outcome: "created", fileTooLarge: false,
     } as never);
@@ -275,7 +275,7 @@ describe("TDnet の取込は母集団外の開示を書かず、Notion にも渡
   });
 
   it("ingestBatch に code→id を注入しない既定の経路", async () => {
-    const r = await ingestBatch(db as unknown as IrDatabase, ALL_CODES.map(tdnetItem), {
+    const r = await ingestBatch(db as unknown as IrDatabase, ALL_CODES.map((code) => tdnetItem(code)), {
       batchKey: "test",
       source: "test",
       archiveToNotion: false,
@@ -345,11 +345,11 @@ describe("TDnet の日次は保持日数内の D1 欠測を母集団内だけ挿
     mockNotion();
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    let logs = "";
+    let logs: string;
     try {
       await runIrCatalogCatchup(db as unknown as IrDatabase, undefined, NOW);
-      logs = [...info.mock.calls, ...warn.mock.calls].map((c) => c.join(" ")).join("\n");
     } finally {
+      logs = [...info.mock.calls, ...warn.mock.calls].map((c) => c.join(" ")).join("\n");
       info.mockRestore();
       warn.mockRestore();
     }
@@ -377,12 +377,12 @@ describe("TDnet の日次は保持日数内の D1 欠測を母集団内だけ挿
     mockNotion();
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    let logs = "";
+    let logs: string;
     try {
       const r = await runIrCatalogCatchup(db as unknown as IrDatabase, undefined, NOW);
-      logs = [...info.mock.calls, ...warn.mock.calls].map((c) => c.join(" ")).join("\n");
       expect(r.upserted).toBe(1);
     } finally {
+      logs = [...info.mock.calls, ...warn.mock.calls].map((c) => c.join(" ")).join("\n");
       info.mockRestore();
       warn.mockRestore();
     }
