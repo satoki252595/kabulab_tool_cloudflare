@@ -18,6 +18,7 @@ from _doubles import SqliteD1
 
 from jp_stock_pipeline.cloud_store import datasets, ops, slo
 from jp_stock_pipeline.jobs import freshness_probe, ops_check, runner
+from jp_stock_pipeline.models import JST
 
 # 移行元 kabulab-cf が所有する既存表。stockStock の schema.py は jss_* しか作らない
 # ので、観測 SQL を流すためにテスト側で最小の DDL を置く。**マニフェストの SQL が
@@ -68,6 +69,11 @@ def _wire(monkeypatch, store: _FakeStore, *modules) -> None:
     # runner は関数内で d1 を import するのでモジュール属性を差し替える
     monkeypatch.setattr(d1_module, "D1Store", factory)
     monkeypatch.setattr(runner, "connect_local_store", lambda *a, **k: None)
+    # 判定の本体テストは一覧を注入する。main() はネットワークへ出さない。
+    # raising=False: 関数が無い版では属性を足すだけで、main() はそれを呼ばない。
+    monkeypatch.setattr(
+        ops_check, "fetch_tdnet_window_listings", lambda now: ([], 0), raising=False
+    )
     # 容量観測は database API を叩くので小さな値で差し替える (個別テストで上書き可)。
     # 入れないと probe のテストが本物の HTTP を出す。
     store.database_file_size = lambda: {"file_size": 1_000_000_000, "num_tables": 32}
@@ -1214,4 +1220,120 @@ class TestIrPdfArchiveSlo:
             [now - 10 * self.DAY],
         )
         _wire(monkeypatch, store, ops_check)
+        assert ops_check.main([], env=dict(_D1_ENV)) == 1
+
+
+def _list_item(tdnet_id: str, code: str, when: datetime) -> ops_check.TdnetListItem:
+    return ops_check.TdnetListItem(
+        tdnet_id=tdnet_id,
+        ticker=code,
+        disclosed_at=when,
+    )
+
+
+class TestIrUniverseGap:
+    """一覧にあって D1 に行が無い母集団内の開示は SLO 違反。"""
+
+    NOW = datetime(2026, 10, 8, 2, 30, tzinfo=JST)
+
+    def test_母集団内の保持窓だけを件数とtdnetIdで失敗にする(self) -> None:
+        store = _FakeStore()
+        for row in (
+            (1, "7203", 1, "equity"),
+            (2, "1203", 0, "equity"),
+            (3, "1204", 0, None),
+            (4, "1205", 1, None),
+            (5, "1206", 1, "reit_fund"),
+        ):
+            store.query(
+                "INSERT INTO core_stocks (id, code, is_active, instrument_type)"
+                " VALUES (?, ?, ?, ?)",
+                list(row),
+            )
+        assert ops_check.load_ingest_universe_codes(store) == {"7203", "1203", "1204"}
+        have_at = int((self.NOW - timedelta(days=10)).timestamp())
+        store.query(
+            "INSERT INTO ir_disclosures (tdnet_id, pubdate, notion_page_id)"
+            " VALUES ('have', ?, NULL)",
+            [have_at],
+        )
+        items = [
+            _list_item("missing", "7203", self.NOW - timedelta(days=20)),
+            _list_item("have", "7203", self.NOW - timedelta(days=10)),
+            _list_item("reit", "1206", self.NOW - timedelta(days=20)),
+            _list_item("inactive", "1203", self.NOW - timedelta(days=12)),
+            _list_item("too-new", "7203", self.NOW - timedelta(days=1)),
+            _list_item("too-old", "7203", self.NOW - timedelta(days=41)),
+            ops_check.TdnetListItem("bad-code", None, self.NOW - timedelta(days=15)),
+        ]
+        problems: list[str] = []
+        ops_check._check_ir_universe_gap(
+            store, problems, now=self.NOW, listings=(items, 0)
+        )
+        assert len(problems) == 1
+        text = problems[0]
+        assert "[INC-20261008-kabulab_tool_cloudflare-ir-universe-gap]" in text
+        assert "2 件" in text
+        assert "inactive" in text
+        assert "missing" in text
+        for absent in ("have", "reit", "too-new", "too-old", "bad-code"):
+            assert absent not in text
+
+    def test_読めない行は欠測0にしない(self) -> None:
+        store = _FakeStore()
+        problems: list[str] = []
+        ops_check._check_ir_universe_gap(store, problems, now=self.NOW, listings=([], 2))
+        assert len(problems) == 1
+        assert "2 件" in problems[0]
+        assert "読めない" in problems[0]
+
+    def test_一覧取得の失敗は欠測0にしない(self) -> None:
+        store = _FakeStore()
+        problems: list[str] = []
+
+        def boom(now: datetime) -> tuple[list[ops_check.TdnetListItem], int]:
+            raise ops_check.FetchError("接続できない")
+
+        original = ops_check.fetch_tdnet_window_listings
+        ops_check.fetch_tdnet_window_listings = boom
+        try:
+            ops_check._check_ir_universe_gap(store, problems, now=self.NOW)
+        finally:
+            ops_check.fetch_tdnet_window_listings = original
+        assert len(problems) == 1
+        assert "TDnet一覧を読めない" in problems[0]
+
+    def test_母集団クエリの失敗は欠測0にしない(self) -> None:
+        store = _FakeStore()
+        store.fail_on_prefix = ("SELECT CODE FROM CORE_STOCKS",)
+        problems: list[str] = []
+        ops_check._check_ir_universe_gap(
+            store, problems, now=self.NOW, listings=([], 0)
+        )
+        assert len(problems) == 1
+        assert "読めない" in problems[0]
+
+    def test_日次判定はD1に行が無い母集団内開示で失敗する(self, monkeypatch) -> None:
+        store = _FakeStore()
+        judge = TestOpsCheck()
+        judge._seed_freshness(store)
+        judge._seed_probe_ok(store)
+        store.query(
+            "INSERT INTO core_stocks (id, code, is_active, instrument_type)"
+            " VALUES (1, '7203', 1, 'equity')"
+        )
+        when = datetime.now(JST) - timedelta(days=10)
+        item_cls = getattr(ops_check, "TdnetListItem", None)
+        gap = (
+            item_cls(tdnet_id="late-1", ticker="7203", disclosed_at=when)
+            if item_cls is not None
+            else object()
+        )
+        _wire(monkeypatch, store, ops_check)
+        monkeypatch.setattr(
+            ops_check,
+            "fetch_tdnet_window_listings",
+            lambda now: ([gap], 0),
+            raising=False,
+        )
         assert ops_check.main([], env=dict(_D1_ENV)) == 1

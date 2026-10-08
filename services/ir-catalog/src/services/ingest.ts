@@ -226,8 +226,26 @@ interface PreparedRow {
   ticker: string;
 }
 
+/**
+ * INC-20261008-kabulab_tool_cloudflare-ir-universe-gap
+ * 母集団外の除外と、一覧にあって D1 に無い開示のログ用タグ。
+ * pipeline の ops_check も同じ文字列を出す。
+ */
+export const IR_UNIVERSE_GAP_INCIDENT_TAG =
+  "[INC-20261008-kabulab_tool_cloudflare-ir-universe-gap]";
+
+const UNIVERSE_GAP_SAMPLE = 30;
+
+export interface PreparedRows {
+  rows: PreparedRow[];
+  /** コードは4文字ティッカーになるが、取込母集団に無い。母集団の定義は変えない。 */
+  outsideUniverse: { tdnetId: string; ticker: string }[];
+  /** company_code を4文字ティッカーにできない。 */
+  invalidCode: { tdnetId: string; companyCode: string }[];
+}
+
 /** "2026-05-18 20:00:00" (JST) を ISO に。形式が崩れていれば throw (捏造しない) */
-function parsePubdate(s: string): Date {
+export function parseTdnetPubdate(s: string): Date {
   const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(s.trim());
   if (!m) throw new Error(`TDnet pubdate の形式が不正: "${s}"`);
   // TDnet の pubdate は JST。+09:00 を明示して保存する
@@ -239,7 +257,8 @@ function parsePubdate(s: string): Date {
 /**
  * TDnet items を取り込み可能な行へ変換する純関数 (DB 非依存・テスト可能)。
  *
- *  - ユニバース外 (ticker が codeToId に無い) / コード不正は正直に除外
+ *  - ユニバース外 (ticker が codeToId に無い) / コード不正は正直に除外し、
+ *    件数と tdnetId を返す（黙って捨てない）
  *  - tdnet_id で de-dupe (後勝ち)。TDnet は訂正再掲で同一 id を同一バッチに
  *    複数返すことがあり、その重複が 1 INSERT 内に入ると Postgres が
  *    「ON CONFLICT DO UPDATE command cannot affect row a second time」で
@@ -248,13 +267,22 @@ function parsePubdate(s: string): Date {
 export function prepareRows(
   items: TdnetItemRaw[],
   codeToId: Map<string, number>
-): PreparedRow[] {
+): PreparedRows {
   const byId = new Map<string, PreparedRow>();
+  const outsideUniverse: PreparedRows["outsideUniverse"] = [];
+  const invalidCode: PreparedRows["invalidCode"] = [];
   for (const it of items) {
     const ticker = companyCodeToTicker(it.company_code);
-    if (ticker === null) continue;
+    if (ticker === null) {
+      invalidCode.push({ tdnetId: it.id, companyCode: it.company_code });
+      continue;
+    }
     const stockId = codeToId.get(ticker);
-    if (stockId === undefined) continue; // ユニバース外 — 正直に除外
+    if (stockId === undefined) {
+      // ユニバース外 — 取り込み先は変えない。件数と tdnetId は呼び出し側がログに残す。
+      outsideUniverse.push({ tdnetId: it.id, ticker });
+      continue;
+    }
     const { tags, primaryTag } = classify(it.title);
     byId.set(it.id, {
       stockId,
@@ -262,7 +290,7 @@ export function prepareRows(
       companyCode: it.company_code,
       companyName: it.company_name,
       title: it.title,
-      pubdate: parsePubdate(it.pubdate),
+      pubdate: parseTdnetPubdate(it.pubdate),
       documentUrl: it.document_url,
       xbrlUrl: it.url_xbrl,
       marketsString: it.markets_string,
@@ -271,7 +299,143 @@ export function prepareRows(
       ticker,
     });
   }
-  return [...byId.values()];
+  return { rows: [...byId.values()], outsideUniverse, invalidCode };
+}
+
+export function formatUniverseGapLog(
+  kind: string,
+  reason: string,
+  tdnetIds: readonly string[]
+): string {
+  const sample = tdnetIds.slice(0, UNIVERSE_GAP_SAMPLE);
+  const rest = tdnetIds.length - sample.length;
+  const suffix = rest > 0 ? ` 他${rest}件` : "";
+  const ids = sample.length > 0 ? sample.join(",") : "-";
+  return (
+    `${IR_UNIVERSE_GAP_INCIDENT_TAG} ${kind} count=${tdnetIds.length}` +
+    ` reason=${reason} tdnetIds=${ids}${suffix}`
+  );
+}
+
+function logUniverseGap(kind: string, reason: string, tdnetIds: readonly string[]): void {
+  const line = formatUniverseGapLog(kind, reason, tdnetIds);
+  if (tdnetIds.length > 0) console.warn(line);
+  else console.info(line);
+}
+
+const JST_MS = 9 * 3600 * 1000;
+
+/** epoch ms の JST 壁時計。getUTC* が JST の年月日になる。 */
+function jstWall(ms: number): Date {
+  return new Date(ms + JST_MS);
+}
+
+function ymdFromWall(wall: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${wall.getUTCFullYear()}${p(wall.getUTCMonth() + 1)}${p(wall.getUTCDate())}`;
+}
+
+/**
+ * catchup が一覧を取る範囲。終端は JST の今日、始端は「いまから retainDays 前」
+ * の JST 暦日。暦日の先頭は retainDays ちょうどの時刻より古い開示を含むので、
+ * 挿入判断は {@link selectDisclosuresForCatchup} が時刻で切る。
+ */
+export function catchupListingRange(nowMs: number, retainDays: number): string {
+  if (!Number.isInteger(retainDays) || retainDays <= 0) {
+    throw new Error(`TDnet 一覧の保持日数が不正です: ${String(retainDays)}`);
+  }
+  const from = jstWall(nowMs - retainDays * 86_400_000);
+  const to = jstWall(nowMs);
+  return `${ymdFromWall(from)}-${ymdFromWall(to)}`;
+}
+
+/** 直近窓の開始 (JST その日の 0:00)。現行の「今日から windowDays を引いた暦日」と同じ。 */
+export function recentWindowStartMs(nowMs: number, windowDays: number): number {
+  if (!Number.isInteger(windowDays) || windowDays <= 0) {
+    throw new Error(`TDnet 直近窓の日数が不正です: ${String(windowDays)}`);
+  }
+  const start = jstWall(nowMs);
+  start.setUTCDate(start.getUTCDate() - windowDays);
+  return Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()) - JST_MS;
+}
+
+export interface CatchupSelection {
+  /**
+   * ingestBatch に渡す開示。直近窓は全件（表題訂正の再 upsert と、母集団外の
+   * 除外ログ）。それより前で保持日数以内のものは、母集団内かつ D1 に無いもの
+   * と、母集団外（除外ログ用。行は作らない）だけ。既存行の再 upsert はしない。
+   */
+  items: TdnetItemRaw[];
+  /** 直近窓より前で、今回 D1 へ挿入する tdnet id。公開が古い順。 */
+  missingTdnetIds: string[];
+  /** 保持日数を超えた母集団内の tdnet id。挿入しない。 */
+  pastRetainInUniverseIds: string[];
+}
+
+/**
+ * 日次 catchup が D1 へ書く対象を選ぶ。
+ *
+ * 直近 windowDays は従来どおり全件を upsert する（表題訂正に追従する）。
+ * それより前、公開から retainDays 以内で、母集団に入っていて D1 に行が無い
+ * 開示だけを挿入する。母集団に後から入った銘柄の開示を、保持日数のあいだ拾う。
+ * 保持日数を超えた開示は挿入しない（TDnet の原本保持を超えて行を増やさない）。
+ * 母集団の定義は変えない。
+ */
+export function selectDisclosuresForCatchup(input: {
+  items: readonly TdnetItemRaw[];
+  codeToId: ReadonlyMap<string, number>;
+  existingTdnetIds: ReadonlySet<string>;
+  nowMs: number;
+  recentWindowDays: number;
+  retainDays: number;
+}): CatchupSelection {
+  if (!Number.isFinite(input.nowMs)) throw new Error("TDnet catchup の現在時刻が不正です");
+  const retainCutoff = input.nowMs - input.retainDays * 86_400_000;
+  const recentStart = recentWindowStartMs(input.nowMs, input.recentWindowDays);
+  if (retainCutoff > recentStart) {
+    throw new Error("TDnet の保持日数が直近窓より短いため停止");
+  }
+  const items: TdnetItemRaw[] = [];
+  const missing = new Map<string, number>();
+  const pastRetain = new Map<string, number>();
+  for (const it of input.items) {
+    const pubMs = parseTdnetPubdate(it.pubdate).getTime();
+    const ticker = companyCodeToTicker(it.company_code);
+    const inUniverse = ticker !== null && input.codeToId.has(ticker);
+    if (pubMs < retainCutoff) {
+      if (inUniverse) pastRetain.set(it.id, pubMs);
+      continue;
+    }
+    const recent = pubMs >= recentStart;
+    if (inUniverse && !recent && input.existingTdnetIds.has(it.id)) continue;
+    if (inUniverse && !recent) missing.set(it.id, pubMs);
+    items.push(it);
+  }
+  const byPubThenId = (ids: Map<string, number>) =>
+    [...ids.entries()]
+      .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
+      .map(([id]) => id);
+  return {
+    items,
+    missingTdnetIds: byPubThenId(missing),
+    pastRetainInUniverseIds: byPubThenId(pastRetain),
+  };
+}
+
+export async function loadTdnetIdsSince(db: Database, since: Date): Promise<Set<string>> {
+  if (!Number.isFinite(since.getTime())) throw new Error("TDnet 既存行の起点時刻が不正です");
+  const rows = await db
+    .select({ tdnetId: disclosures.tdnetId })
+    .from(disclosures)
+    .where(gte(disclosures.pubdate, since));
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (row.tdnetId.length === 0) {
+      throw new Error("ir_disclosures.tdnet_id が空の行があるため停止");
+    }
+    ids.add(row.tdnetId);
+  }
+  return ids;
 }
 
 export async function ingestBatch(
@@ -281,10 +445,20 @@ export async function ingestBatch(
 ): Promise<IngestResult> {
   const codeToId = opts.codeToId ?? (await loadIngestCodeToId(db));
   const prepared = prepareRows(items, codeToId);
+  logUniverseGap(
+    "outside-universe",
+    "取込母集団に無い銘柄コード",
+    prepared.outsideUniverse.map((row) => row.tdnetId)
+  );
+  logUniverseGap(
+    "invalid-code",
+    "銘柄コードを4文字ティッカーにできない",
+    prepared.invalidCode.map((row) => row.tdnetId)
+  );
 
   const byPrimaryTag: Record<string, number> = {};
   let unclassified = 0;
-  for (const p of prepared) {
+  for (const p of prepared.rows) {
     if (p.primaryTag === null) unclassified++;
     else byPrimaryTag[p.primaryTag] = (byPrimaryTag[p.primaryTag] ?? 0) + 1;
   }
@@ -293,7 +467,7 @@ export async function ingestBatch(
   let notionArchive: IngestResult["notionArchive"] = null;
   if (opts.archiveToNotion) {
     const fileJson = JSON.stringify(
-      prepared.map((p) => ({
+      prepared.rows.map((p) => ({
         tdnet_id: p.tdnetId,
         ticker: p.ticker,
         company_code: p.companyCode,
@@ -319,7 +493,7 @@ export async function ingestBatch(
       metadata: {
         batchKey: opts.batchKey,
         fetched: items.length,
-        inUniverse: prepared.length,
+        inUniverse: prepared.rows.length,
         unclassified,
         byPrimaryTag,
       },
@@ -335,8 +509,8 @@ export async function ingestBatch(
   // 1 行 11 列なので 9 行(=99 bind)ずつに分割する(ADR-0001)。
   let upserted = 0;
   const CHUNK = 9;
-  for (let i = 0; i < prepared.length; i += CHUNK) {
-    const slice = prepared.slice(i, i + CHUNK);
+  for (let i = 0; i < prepared.rows.length; i += CHUNK) {
+    const slice = prepared.rows.slice(i, i + CHUNK);
     if (slice.length === 0) continue;
     await db
       .insert(disclosures)
@@ -382,7 +556,7 @@ export async function ingestBatch(
 
   // 二次データ: 全 IR を Notion「銘柄一覧→銘柄別子DB」へ 1IR=1行で冪等記録
   // (全タグ。一次データ Postgres 格納と同タイミング = TDnet へ追加負荷なし)
-  const byStockRows: ByStockRow[] = prepared.map((p) => ({
+  const byStockRows: ByStockRow[] = prepared.rows.map((p) => ({
     key: p.tdnetId,
     ticker: p.ticker,
     companyName: p.companyName,
@@ -402,7 +576,7 @@ export async function ingestBatch(
 
   return {
     fetched: items.length,
-    inUniverse: prepared.length,
+    inUniverse: prepared.rows.length,
     upserted,
     unclassified,
     byPrimaryTag,
