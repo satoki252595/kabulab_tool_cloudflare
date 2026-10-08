@@ -58,7 +58,8 @@ import {
   type PriceSyncStatus,
 } from "../shared/notion-archive/index.js";
 import { sha256HexBytes } from "../shared/sha256.js";
-import { selectConfirmedCloses } from "./macro-session.js";
+import { diagnoseConfirmedCloses, selectConfirmedCloses } from "./macro-session.js";
+import { formatConfirmedHoldDiag, formatStockSessionDiag } from "./inc-financials-stale-diag.js";
 
 // core スキーマ (共有。日次 sync が更新)
 import * as coreSchema from "../shared/db/core-schema.js";
@@ -1221,6 +1222,12 @@ async function runDailySyncAndRecord(
     }
     assertStockDeadline();
     const sessionLatest = session.ohlcv.at(-1);
+    try {
+      // 計測のみ (INC-20261008-kabulab_tool_cloudflare-financials-stale)。判定には使わない。
+      console.info(formatStockSessionDiag(session.ohlcv, captures[0]?.capture.receivedAt, targetDate));
+    } catch {
+      // 計測ログの失敗は無視する (挙動不変)
+    }
     const sessionFresh = checkFreshClose(sessionLatest, targetDate);
     if (!sessionFresh.ok) {
       const sessionUsedClose = sessionLatest?.adj ?? sessionLatest?.close ?? null;
@@ -2933,7 +2940,7 @@ async function fetchMarketContextTarget(
   }
 
   // holder 経由で受け取る (closure 代入の変数を直接 narrow しない)。
-  const capture: { current: { status: number; bytes: Uint8Array } | null } = {
+  const capture: { current: { status: number; bytes: Uint8Array; receivedAt?: string } | null } = {
     current: null,
   };
   try {
@@ -2973,6 +2980,13 @@ async function fetchMarketContextTarget(
       // session 不足・形成中のみ・確定バー欠落は fetch 失敗ではない。
       // 回収対象にせず、保存時の日付 gate で HOLD する。
       console.warn(`[sync-daily]   マクロ対象 ${target}:`, rootCauseMessage(error));
+      try {
+        // 計測のみ (INC-20261008-kabulab_tool_cloudflare-financials-stale)。判定には使わない。
+        console.warn(formatConfirmedHoldDiag("macro", target, raw.receivedAt,
+          diagnoseConfirmedCloses(raw.bytes, chart.ohlcv, target)));
+      } catch {
+        // 計測ログの失敗は無視する (挙動不変)
+      }
     }
   } catch (error) {
     await collectMacroRawAttempt(

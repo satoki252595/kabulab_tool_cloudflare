@@ -246,6 +246,86 @@ export function selectConfirmedCloses(
   return { value: proved, prev, date: utcDate };
 }
 
+/** INC-20261008-kabulab_tool_cloudflare-financials-stale 計測用の HOLD 理由区分。 */
+export type ConfirmedCloseDiagReason =
+  | "ok"
+  | "null"
+  | "non_finite"
+  | "non_positive"
+  | "duplicate"
+  | "mismatch"
+  | "removed"
+  | "no_candidate"
+  | "other";
+
+export interface ConfirmedCloseDiag {
+  reason: ConfirmedCloseDiagReason;
+  /** 確定候補バーの日付 (UTC 日付。selectConfirmedCloses の date と同一基準)。候補が無ければ null */
+  candidateDate: string | null;
+  /** 原文 session 日 (exchange tz)。読めなければ null */
+  sessionDate: string | null;
+  /** session 終了証明の有無。読めなければ null */
+  ended: boolean | null;
+}
+
+/**
+ * 計測専用 (INC-20261008-kabulab_tool_cloudflare-financials-stale)。
+ * selectConfirmedCloses と同じ候補選択をなぞり、HOLD 理由の区分だけを返す。
+ * 判定・例外・戻り値には一切使わない (呼び出し側はログ出力のみ)。
+ * 決して throw しない。
+ */
+export function diagnoseConfirmedCloses(
+  raw: Uint8Array,
+  bars: DailyOhlcv[],
+  symbol: string
+): ConfirmedCloseDiag {
+  let sessionDate: string | null = null;
+  let ended: boolean | null = null;
+  let candidateDate: string | null = null;
+  try {
+    const ev = readSessionEvidence(raw, symbol, bars);
+    const localDates = ev.timestamps.map((t) => localDateOf(ev.timeZone, t));
+    sessionDate = localDateOf(ev.timeZone, ev.regularStart);
+    ended =
+      localDateOf(ev.timeZone, ev.regularMarketTime) === sessionDate &&
+      ev.regularMarketTime >= ev.regularEnd;
+    let candidate = -1;
+    for (let i = localDates.length - 1; i >= 0; i--) {
+      if (ended ? localDates[i] <= sessionDate : localDates[i] < sessionDate) {
+        candidate = i;
+        break;
+      }
+    }
+    if (candidate < 0) {
+      return { reason: "no_candidate", candidateDate, sessionDate, ended };
+    }
+    candidateDate = utcDateOf(ev.timestamps[candidate]);
+    const rawClose: unknown = ev.closes[candidate];
+    if (rawClose === null || rawClose === undefined) {
+      return { reason: "null", candidateDate, sessionDate, ended };
+    }
+    if (typeof rawClose !== "number" || !Number.isFinite(rawClose)) {
+      return { reason: "non_finite", candidateDate, sessionDate, ended };
+    }
+    if (rawClose <= 0) {
+      return { reason: "non_positive", candidateDate, sessionDate, ended };
+    }
+    const hits = bars.filter((b) => b.date === candidateDate);
+    if (hits.length === 0) {
+      return { reason: "removed", candidateDate, sessionDate, ended };
+    }
+    if (hits.length > 1) {
+      return { reason: "duplicate", candidateDate, sessionDate, ended };
+    }
+    if (hits[0].close !== rawClose) {
+      return { reason: "mismatch", candidateDate, sessionDate, ended };
+    }
+    return { reason: "ok", candidateDate, sessionDate, ended };
+  } catch {
+    return { reason: "other", candidateDate, sessionDate, ended };
+  }
+}
+
 /** HOLD 診断用に older-bar の状況だけ正直に記録する (confirm には使わない)。 */
 function olderBarEvidence(bars: DailyOhlcv[]): string {
   const last = bars.at(-1)?.date ?? "なし";

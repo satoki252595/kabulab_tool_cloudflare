@@ -2,7 +2,9 @@
 import { createHash } from "node:crypto";
 import { fetchChart, type DailyResult, type YahooRawCapture } from "../../../src/shared/yahoo/client.js";
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../../../src/shared/yahoo/raw-custody.js";
-import { selectConfirmedCloses } from "../../../src/cron/macro-session.js";
+import { diagnoseConfirmedCloses, selectConfirmedCloses } from "../../../src/cron/macro-session.js";
+import { formatConfirmedHoldDiag } from "../../../src/cron/inc-financials-stale-diag.js";
+import type { DailyOhlcv } from "../../../src/shared/types.js";
 import { isCalendarDateString, isStrictIsoUtc, jstDateSec, tenYearRangeForDate } from "../../../src/shared/vwap/proof.js";
 import { completedDailyFetch, isBeforeOpenHistoricalSession, sanitizeLogText, type DailySessionReference } from "./ingest-guard.js";
 
@@ -12,11 +14,13 @@ export type { DailySessionReference } from "./ingest-guard.js";
 export async function fetchDailySessionReference(runId: string): Promise<DailySessionReference> {
   const captures: YahooRawAttempt[] = [], missing: YahooRawMissing[] = [];
   let capture: YahooRawCapture | undefined;
+  let diagBars: DailyOhlcv[] | undefined; // 計測のみ (INC-20261008-kabulab_tool_cloudflare-financials-stale)
   try {
     const chart = await fetchChart("^N225", "1mo", { onRaw: (raw) => {
       captures.push({ api: "chart", attempt: 1, capture: raw });
       capture = raw;
     } });
+    diagBars = chart.ohlcv;
     if (captures.length !== 1 || capture === undefined || capture.symbol !== "^N225" || capture.status !== 200) {
       throw new Error("daily session HOLD: benchmarkの同一HTTP原本がありません");
     }
@@ -38,6 +42,16 @@ export async function fetchDailySessionReference(runId: string): Promise<DailySe
     return { date: confirmed.date, observedAt: capture.receivedAt,
       rawSha: createHash("sha256").update(capture.bytes).digest("hex") };
   } catch (e) {
+    try {
+      // 計測のみ (INC-20261008-kabulab_tool_cloudflare-financials-stale)。判定・例外には使わない。
+      const raw = capture as YahooRawCapture | undefined;
+      if (raw !== undefined && diagBars !== undefined) {
+        console.warn(formatConfirmedHoldDiag("vwap-daily-session", "^N225", raw.receivedAt,
+          diagnoseConfirmedCloses(raw.bytes, diagBars, "^N225")));
+      }
+    } catch {
+      // 計測ログの失敗は無視する (挙動不変)
+    }
     if (captures.length === 0) missing.push({ api: "chart", symbol: "^N225", attempt: 1,
       failedAt: new Date().toISOString(), error: sanitizeLogText(e instanceof Error ? e.message : String(e)) });
     throw e;
