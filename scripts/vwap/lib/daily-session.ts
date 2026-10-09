@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { fetchChart, type DailyResult, type YahooRawCapture } from "../../../src/shared/yahoo/client.js";
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../../../src/shared/yahoo/raw-custody.js";
 import { diagnoseConfirmedCloses, selectConfirmedCloses } from "../../../src/cron/macro-session.js";
-import { formatConfirmedHoldDiag } from "../../../src/cron/inc-financials-stale-diag.js";
+import { formatConfirmedHoldDiag, formatNullBandHoldLog } from "../../../src/cron/inc-financials-stale-diag.js";
 import type { DailyOhlcv } from "../../../src/shared/types.js";
 import { isCalendarDateString, isStrictIsoUtc, jstDateSec, tenYearRangeForDate } from "../../../src/shared/vwap/proof.js";
 import { completedDailyFetch, isBeforeOpenHistoricalSession, sanitizeLogText, type DailySessionReference } from "./ingest-guard.js";
@@ -46,8 +46,16 @@ export async function fetchDailySessionReference(runId: string): Promise<DailySe
       // 計測のみ (INC-20261008-kabulab_tool_cloudflare-financials-stale)。判定・例外には使わない。
       const raw = capture as YahooRawCapture | undefined;
       if (raw !== undefined && diagBars !== undefined) {
-        console.warn(formatConfirmedHoldDiag("vwap-daily-session", "^N225", raw.receivedAt,
-          diagnoseConfirmedCloses(raw.bytes, diagBars, "^N225")));
+        const holdDiag = diagnoseConfirmedCloses(raw.bytes, diagBars, "^N225");
+        console.warn(formatConfirmedHoldDiag("vwap-daily-session", "^N225", raw.receivedAt, holdDiag));
+        console.warn(formatNullBandHoldLog({
+          stage: "vwap-daily-session",
+          symbol: "^N225",
+          receivedAt: raw.receivedAt,
+          raw: raw.bytes,
+          bars: diagBars,
+          targetDate: holdDiag.candidateDate,
+        }));
       }
     } catch {
       // 計測ログの失敗は無視する (挙動不変)
