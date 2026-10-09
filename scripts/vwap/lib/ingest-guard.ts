@@ -158,7 +158,14 @@ export type CompletedDailyFetch = {
 /** observedAtは実原本の観測完了clock。HTTP受領精度の読み替えはしない。 */
 export type DailySessionReference = { date: string; observedAt: string; rawSha: string };
 
-/** 当日未開始のperiodと、実観測日より前の源日を区別する。過去の閉場時刻は作らない。 */
+/**
+ * 当日未開始の period と、実観測日より前の源日を区別する。過去の閉場時刻は作らない。
+ *
+ * 前提「D+1 の寄り付き前なら D は確定済み」（date < observationDay かつ observed < start）は
+ * INC-20261008 の実測と合わない。^N225 の D バー close は D 23:30 JST では値があり、
+ * D+1 00:15・02:15・06:15・09:45 JST でも null のままだった（D=2026-10-08 の原文）。
+ * 寄り前であることを確定の証明にはしない。この関数の戻り条件は緩めない。
+ */
 export function isBeforeOpenHistoricalSession(
   start: number, end: number, marketTime: number, date: string, observedAt: string
 ): boolean {

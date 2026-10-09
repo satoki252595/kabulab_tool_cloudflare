@@ -59,7 +59,7 @@ import {
 } from "../shared/notion-archive/index.js";
 import { sha256HexBytes } from "../shared/sha256.js";
 import { diagnoseConfirmedCloses, selectConfirmedCloses } from "./macro-session.js";
-import { formatConfirmedHoldDiag, formatStockSessionDiag } from "./inc-financials-stale-diag.js";
+import { formatConfirmedHoldDiag, formatNullBandHoldLog, formatStockSessionDiag } from "./inc-financials-stale-diag.js";
 
 // core スキーマ (共有。日次 sync が更新)
 import * as coreSchema from "../shared/db/core-schema.js";
@@ -246,7 +246,7 @@ const TOLERATED_FAILURE_RATE = 0.01;
 /**
  * 月曜 (UTC) だけ真。週1ジョブ (prune・年次) の同 run 内分岐用。
  *
- * 株式cronは平日17:13 UTCなのでUTC曜日で見る。JSTでは火〜土曜02:13。
+ * 株式cronは平日09:00 UTC（18:00 JST）なのでUTC曜日で見る。JSTでも月〜金曜の当日。
  * UTC月曜が週の最初の株式run。
  */
 export function isMondayUtc(now: Date = new Date()): boolean {
@@ -1230,6 +1230,19 @@ async function runDailySyncAndRecord(
     }
     const sessionFresh = checkFreshClose(sessionLatest, targetDate);
     if (!sessionFresh.ok) {
+      try {
+        // 理由の切り分けだけ (INC-20261008)。判定・例外文は変えない。
+        console.warn(formatNullBandHoldLog({
+          stage: "stocks-session",
+          symbol: "^N225",
+          receivedAt: captures[0]?.capture.receivedAt,
+          raw: captures[0]?.capture.bytes,
+          bars: session.ohlcv,
+          targetDate,
+        }));
+      } catch {
+        // 理由ログの失敗は無視する (挙動不変)
+      }
       const sessionUsedClose = sessionLatest?.adj ?? sessionLatest?.close ?? null;
       throw new Error(
         `株式同期の対象 ${targetDate} の日足を確認できません ` +
@@ -1846,7 +1859,14 @@ async function buildSnapshot(
   rawOptions?: NonNullable<Parameters<typeof fetchStockRawData>[2]> & { assertCaptured: () => void },
 ): Promise<StockSnapshot> {
   // 1 回の Chart(5y) + QuoteSummary で全指標を賄う
-  const raw = await fetchStockRawData(code, "5y", rawOptions);
+  let chartRaw: YahooRawCapture | undefined;
+  const raw = await fetchStockRawData(code, "5y", rawOptions === undefined ? undefined : {
+    onChartRaw: (capture) => {
+      chartRaw = capture;
+      return rawOptions.onChartRaw?.(capture);
+    },
+    onSummaryRaw: rawOptions.onSummaryRaw,
+  });
   rawOptions?.assertCaptured();
 
   // -- 6mo スライス (swing 用指標の入力。fresh gate の対象もここ) --
@@ -1858,6 +1878,19 @@ async function buildSnapshot(
   // expectedDate は必須 (全 stock パス共通)。dataDate への黙殺代替なし。
   const fresh = checkFreshClose(ohlcv6mo.at(-1), expectedDate);
   if (!fresh.ok) {
+    try {
+      // 理由の切り分けだけ (INC-20261008)。判定・例外文は変えない。追加取得はしない。
+      console.warn(formatNullBandHoldLog({
+        stage: "stocks-snapshot",
+        symbol: code,
+        receivedAt: chartRaw?.receivedAt,
+        raw: chartRaw?.bytes,
+        bars: ohlcv6mo,
+        targetDate: expectedDate,
+      }));
+    } catch {
+      // 理由ログの失敗は無視する (挙動不変)
+    }
     throw new Error(`${code}: 対象 ${expectedDate} の実日足が未取得です。古い日の指標を書き直しません。`);
   }
 

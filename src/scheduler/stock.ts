@@ -11,8 +11,17 @@
  * ログに秘密 (token)・リクエスト URL・run URL の値は出さない。
  */
 
-export const DISPATCH_CRON = "13 17 * * MON-FRI";
-export const READCHECK_CRON = "5 21 * * MON-FRI";
+/**
+ * 株式 dispatch。09:00 UTC = 18:00 JST（取引日 D の当日夜）。
+ * 旧 `13 17`（02:13 JST）は ^N225 の D 終値が null になる帯
+ * （D 23:30 JST 以降。D=2026-10-08 の原文で 00:15 以降が null）の中だった。
+ * 最悪 191 分（docs/test-logs/stock-sync-asof-2026-09-28.md の実測最大
+ * 190.95 分）でも終了は 21:11 JST で、D 23:30 まで 139 分ある。
+ * 15:30〜21:15 JST の終値の有無は未計測なので、この時刻は実測で変わりうる。
+ */
+export const DISPATCH_CRON = "0 9 * * MON-FRI";
+/** 完了窓の上限（14:30 UTC = 23:30 JST）の直後。Yahoo は取らない。 */
+export const READCHECK_CRON = "35 14 * * MON-FRI";
 export const CONTEXT_DISPATCH_CRON = "0 21 * * MON-FRI";
 export const CONTEXT_READCHECK_CRON = "5 22 * * MON-FRI";
 const CONTEXT_DISPATCH_TARGET = "scheduled-context";
@@ -34,10 +43,14 @@ export const GITHUB_USER_AGENT =
  */
 export const DISPATCH_START_DEADLINE_MINUTES = 60;
 
-/** 株式 step が完了すべき UTC 日内時刻 (06:00 JST 基準 = 21:00 UTC)。 */
-export const COMPLETION_CUTOFF_TIME = "21:00:00.000Z";
+/**
+ * 株式 step 完了の上限。D 23:30 JST = 14:30 UTC。
+ * 旧 21:00 UTC（翌 06:00 JST）は null 帯の中なので、帯の開始まで縮めた。
+ * 延ばしてはいない。assertStockDeadline の 21:00 UTC は別で、そのまま。
+ */
+export const COMPLETION_CUTOFF_TIME = "14:30:00.000Z";
 /** 株式 step 完了の下限 (同日 dispatch 予定時刻)。古い別日の成功を通さない。 */
-export const COMPLETION_FLOOR_TIME = "17:13:00.000Z";
+export const COMPLETION_FLOOR_TIME = "09:00:00.000Z";
 
 /**
  * Jobs API の最大ページ数。全頁が必要だが、無制限の照会を防ぐため
@@ -569,6 +582,12 @@ function stepCompletedAtMs(step: RunJobStep, what: string): number {
   return ms;
 }
 
+function utcClock(spec: string): string {
+  const match = /^(\d{2}:\d{2}):\d{2}\.\d{3}Z$/.exec(spec);
+  if (match === null) throw new Error(`完了窓の時刻が不正です: ${spec}`);
+  return match[1];
+}
+
 export interface ReadcheckVerdict {
   stockCompletedAt: string;
 }
@@ -577,7 +596,8 @@ export interface ReadcheckVerdict {
  * 期限 readcheck の純粋判定。次を全て満たすときのみ成功:
  * - job `sync` がちょうど 1 件・completed・conclusion success
  * - step `stock daily sync` が completed・success・completed_at が
- *   同日 17:13 UTC 以降 21:00 UTC 以前 (古い別日の成功を通さない)
+ *   同日 09:00 UTC 以降 14:30 UTC 以前 (古い別日の成功を通さない。
+ *   14:30 UTC = D 23:30 JST より後は null 帯に入った run なので成功にしない)
  * - step `許容内失敗があれば Issue にコメント` が SKIPPED
  *   (success = 許容内失敗ありの false-green。欠落も error)
  * それ以外は全て throw (Workers Logs/Cron Events に error として残る)。
@@ -622,13 +642,13 @@ export function evaluateReadcheck(
   const stockMs = stepCompletedAtMs(stock, `step '${STEP_STOCK}'`);
   if (stockMs < floorMs) {
     throw new Error(
-      `step '${STEP_STOCK}' の完了が同日 17:13 UTC より前です (別日の成功):` +
+      `step '${STEP_STOCK}' の完了が同日 ${utcClock(COMPLETION_FLOOR_TIME)} UTC より前です (別日の成功):` +
         ` completed_at=${stock.completed_at}`
     );
   }
   if (stockMs > cutoffMs) {
     throw new Error(
-      `step '${STEP_STOCK}' の完了が 21:00 UTC を超過しました:` +
+      `step '${STEP_STOCK}' の完了が ${utcClock(COMPLETION_CUTOFF_TIME)} UTC を超過しました:` +
         ` completed_at=${stock.completed_at}`
     );
   }
