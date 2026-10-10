@@ -16,6 +16,11 @@ const body = "%PDF-contract-fixture-only";
 function response(url: string, status: number, text = "") {
   return Object.defineProperty(new Response(text, { status }), "url", { value: url });
 }
+function headerText(headers: Headers) {
+  const entries: [string, string][] = [];
+  headers.forEach((value, key) => entries.push([key, value]));
+  return JSON.stringify(entries);
+}
 
 describe("same-disclosure PDF source and unavailable provenance", () => {
   beforeEach(() => {
@@ -57,7 +62,7 @@ describe("same-disclosure PDF source and unavailable provenance", () => {
     const result = await pagesRoute.request("https://kabulab-cf.satoki252595.workers.dev/file/1274696", {}, { DB: {} as D1Database });
     expect(result.headers.get("X-IR-Source")).toBe("notion_archive");
     expect(result.headers.get("X-IR-Source-URL")).toBe("https://kabulab-cf.satoki252595.workers.dev/ir-catalog/file/1274696");
-    expect(JSON.stringify([...result.headers])).not.toContain("signature");
+    expect(headerText(result.headers)).not.toContain("signature");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -101,7 +106,7 @@ describe("same-disclosure PDF source and unavailable provenance", () => {
     const failed = await result.json();
     expect(failed).toMatchObject({ status: "unavailable", error: "ir_pdf_source_invalid", tdnetId: "1274696" });
     expect(JSON.stringify(failed)).not.toContain("signature");
-    expect(JSON.stringify([...result.headers])).not.toContain("signature");
+    expect(headerText(result.headers)).not.toContain("signature");
   });
 
   it("retains a transient archive lookup failure in the safe failure headers", async () => {
