@@ -187,6 +187,18 @@ TABLE_LICENSE: dict[str, TableLicense] = {
         "TDnet（東証 適時開示）PDF 本文の原文テキスト",
         _CHILD,
     ),
+    # Notion 銘柄ページ ID の写し。本文は持たない。CREATE はコードより先
+    # （未適用のまま地図だけ先だと ops_check は「地図にあって本番に無い表」で失敗する）。
+    "ir_notion_stock_pages": TableLicense(
+        kind=TableKind.OPERATIONAL,
+        tag=LicenseTag.COMMERCIAL_OK,
+        source="kabulab-cf が解決した Notion 銘柄ページ ID の写し",
+        evidence=(
+            "services/ir-catalog/src/db/schema.ts。"
+            "stock_page_id と child_db_id だけを持つ。"
+            "INC-20261008 恒久策 A(a)。本番 CREATE は drizzle/d1 の該当 SQL をコードより先に適用する"
+        ),
+    ),
     # みんかぶ掲載文を含む。設計書 §8.3 は 3 タグでは足りないとして `no-store` の
     # 新設を挙げているが、現行の `licensing.LicenseTag` は 3 値なので最も厳しい
     # personal-only へ倒す。`services/jss-api/src/shared/license.ts` は description /
@@ -282,7 +294,9 @@ ROW_TAG_COLUMN = "license_tag"
 # （declared 側を先に減らしたことで vanished=failure 方向にはならない）。
 # 2026-10-05: 通常 ops_check の実測33表（有報本文・catchup等の3表と
 # JPX overlay の2表を含む）。出自未分類だったのは overlay 2表のみ。
-OBSERVED_TABLE_COUNT = 33
+# 2026-10-10: ir_notion_stock_pages を足して 34。本番 CREATE は未適用。
+# 適用前にこの宣言だけが main に入ると、ops_check は vanished（failure）になる。
+OBSERVED_TABLE_COUNT = 34
 
 # 本番 `sqlite_master` から除く名前。SQLite と D1 の内部表。
 _INTERNAL_PREFIXES = ("sqlite_", "_cf_", "d1_", "__drizzle")

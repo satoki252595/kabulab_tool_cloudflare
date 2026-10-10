@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-10
 
+- 適時開示 PDF の日次保管は、銘柄と Notion の会社ページ（銘柄ページと適時開示 DB）の対応を D1 `ir_notion_stock_pages` に残し、次の catchup からその銘柄の Notion 検索を省く。対応が無い、版が違う、ページが無い、またはアーカイブ済みのときは Notion から引き直して写しを更新する。readback・古い順・12分予算・リトライ回数は変えない。本番は CREATE を先に流してからこのコードを載せる。
 - 適時開示 PDF の Notion 保管は、send（20MB 超は complete）の応答 status が uploaded のとき、確定確認の GET を 1 回省く。pending・status の欠落・JSON でない応答は確認 GET のまま、failed は添付しない。readback・古い順・予算・リトライ回数は変えない。1 件の Notion 呼び出し数は `notion-calls` ログに出る。
 
 ## 2026-10-08

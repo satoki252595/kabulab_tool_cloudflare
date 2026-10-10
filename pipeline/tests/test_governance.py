@@ -187,7 +187,7 @@ class TestFailOpenClosedBoundary:
 PROD_TABLE_NAMES: frozenset[str] = frozenset(
     {
         "core_stock_annual_financials", "core_stock_financials", "core_stocks",
-        "ir_disclosures",
+        "ir_disclosures", "ir_notion_stock_pages",
         "jss_column_license", "jss_dataset_freshness", "jss_financials",
         "jss_index_symbols", "jss_job_runs", "jss_notion_pages", "jss_raw_files",
         "jss_supply_latest",
@@ -205,7 +205,7 @@ PROD_TABLE_NAMES: frozenset[str] = frozenset(
 
 
 class TestProductionSnapshot:
-    """通常 ops_check の実測33表すべてに区分があること。
+    """通常 ops_check の期待表（実測33 + ir_notion_stock_pages）すべてに区分があること。
 
     当初は「本番 PRAGMA を読めないので 27 表しか登録できない」としていたが、
     読み取り専用の `sqlite_master` 照会で残り 3 表（`swing_market_context` /

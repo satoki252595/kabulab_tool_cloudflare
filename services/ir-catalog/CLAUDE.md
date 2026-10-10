@@ -67,7 +67,10 @@ TDnet 通信は `tdnet/client.ts` が全リクエストを直列化し最小間�
   設計判断。冪等・再開可能を必ず維持し、日次は `NOTION_BUDGET_MS` で
   打ち切る。予算は `notion_page_id` が空の行だけに使い、公開から
   `TDNET_PDF_RETAIN_DAYS` (40) 日以内の未保存を古い順に拾う。打ち切った
-  tdnetId はログに残す。backfill は無制限。
+  tdnetId はログに残す。backfill は無制限。銘柄ページと子 DB の ID は
+  D1 `ir_notion_stock_pages` に残し、次回からその銘柄の Notion 検索を省く。
+  写しが無い・版が違う・ページが無い/アーカイブ済みのときだけ引き直す。
+  readback は省かない。
 - Notion 通信は共有 `notion-archive` 経由のみ (api.notion.com 直叩き禁止)。
 
 ## ディレクトリ

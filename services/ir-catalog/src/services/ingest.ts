@@ -32,6 +32,7 @@ import {
   logIrPdfIncident,
 } from "../../../../src/shared/notion-archive/ir-pdf-incident.js";
 import type { Database } from "../db/client.js";
+import { irNotionStockPageCache } from "../db/notion-stock-pages.js";
 import { disclosures, disclosureTexts } from "../db/schema.js";
 import { loadIngestCodeToId } from "../../../../src/shared/db/active-equity.js";
 import { classify, notionTagOptions, buffettCodeUrl } from "./classify.js";
@@ -777,6 +778,7 @@ async function archiveDisclosuresByStock(
       service: "ir-catalog",
       tagOptions: notionTagOptions(),
       rows: selected.rows,
+      stockPageCache: irNotionStockPageCache(db),
       deadlineMs: phaseDeadline,
       onPagePersisted: (key, pageId) => {
         if (currentByKey.get(key)?.pageId !== pageId) pageIdMap.set(key, pageId);

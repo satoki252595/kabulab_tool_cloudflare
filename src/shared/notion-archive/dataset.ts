@@ -25,8 +25,13 @@
  * too_large は終端 skip、error/未添付は PATCH 更新で再実行収束。
  * 捏造・既定値埋めはしない (ルール2)。
  */
-import { assertCursorProgress, notionRequest, notionStats } from "./client.js";
-import { notionEnv } from "./env.js";
+import {
+  assertCursorProgress,
+  NotionUnknownResultError,
+  notionRequest,
+  notionStats,
+} from "./client.js";
+import { NotionConfigError, notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
 import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
@@ -144,7 +149,14 @@ export interface ByStockInput {
   rejudgePdf?: boolean;
   /** D1 本文保存が未完了の既存添付を再抽出する。発行元 PDF は再取得しない。 */
   recoverPdfTextKeys?: ReadonlySet<string>;
+  /**
+   * 銘柄 → Notion 会社ページの写し。あるときは銘柄解決の検索/取得を省く。
+   * 未指定は従来どおり毎回 Notion で解決する（プロセス内キャッシュのみ）。
+   */
+  stockPageCache?: NotionStockPageCache;
 }
+
+type StockCacheOutcome = "hit" | "miss" | "fallback" | "off";
 
 export interface ByStockResult {
   /** 親「銘柄一覧」DB の id (確認用。ingest は未参照) */
@@ -189,11 +201,37 @@ interface BlockChildren {
 
 /** 親「銘柄一覧」DB ID (service 単位) */
 const parentDbCache = new Map<string, string>();
-/** ticker -> { stockPageId, childDbId } (プロセス内・全実行で再利用) */
+/**
+ * ticker -> { stockPageId, childDbId }。同じプロセスの中だけで再利用する。
+ * 実行をまたぐ写しは D1 (`stockPageCache`)。ここには解決済みの ID だけを入れる。
+ */
 const stockCache = new Map<
   string,
   { stockPageId: string; childDbId: string }
 >();
+
+/**
+ * 子 DB `適時開示｜<ticker>` の必須プロパティを変えたら +1 する。
+ * D1 の写しがこの版と違うときは ID を使わず、Notion で再解決して列を足す。
+ */
+export const IR_NOTION_STOCK_PAGE_SCHEMA_VERSION = 1;
+
+/** 銘柄ページと、その下の適時開示 DB。Notion の page/database id。 */
+export interface NotionStockPageRef {
+  stockPageId: string;
+  childDbId: string;
+  schemaVersion: number;
+}
+
+/**
+ * 銘柄 → Notion 会社ページの実行をまたぐ写し。未登録は `undefined`
+ * （ヒットではない）。空の ID は呼び出し側が throw する。
+ */
+export interface NotionStockPageCache {
+  get(service: string, ticker: string): Promise<NotionStockPageRef | undefined>;
+  put(service: string, ticker: string, ref: NotionStockPageRef): Promise<void>;
+  invalidate(service: string, ticker: string): Promise<void>;
+}
 /** 親 DB のタイトル (1 銘柄 = 1 ページ) */
 function parentTitle(service: string): string {
   return `銘柄一覧｜${service}`;
@@ -425,6 +463,114 @@ async function resolveStock(
   const v = { stockPageId, childDbId };
   stockCache.set(row.ticker, v);
   return v;
+}
+
+/**
+ * キャッシュした DB をクエリして 404 / object_not_found / archived のときだけ真。
+ * 結果不明・設定エラー・5xx は偽（呼び出し側は throw する。握りつぶさない）。
+ */
+function isStaleNotionTarget(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error instanceof NotionUnknownResultError) return false;
+  if (error instanceof NotionConfigError) return false;
+  return /status=404\b/.test(error.message)
+    || /code=object_not_found\b/.test(error.message)
+    || /\barchived\b/i.test(error.message)
+    || /\bin_trash\b/.test(error.message);
+}
+
+function assertUsableStockPageRef(
+  ref: NotionStockPageRef,
+  service: string,
+  ticker: string
+): void {
+  if (ref.stockPageId.trim() === "" || ref.childDbId.trim() === "") {
+    throw new Error(
+      `Notion 銘柄ページのキャッシュが空です service=${service} ticker=${ticker}`
+    );
+  }
+}
+
+async function rememberStockPage(
+  cache: NotionStockPageCache,
+  service: string,
+  ticker: string,
+  resolved: { stockPageId: string; childDbId: string }
+): Promise<void> {
+  await cache.put(service, ticker, {
+    stockPageId: resolved.stockPageId,
+    childDbId: resolved.childDbId,
+    schemaVersion: IR_NOTION_STOCK_PAGE_SCHEMA_VERSION,
+  });
+}
+
+/**
+ * 銘柄の子 DB と、その日付範囲の既存行。写しが使えるときは銘柄ページの
+ * 検索・子 DB の列挙・スキーマ GET をしない。写しの DB が 404 または
+ * アーカイブ済みのときだけ従来の解決に戻し、写しを更新する。
+ */
+async function openStockSession(
+  input: ByStockInput,
+  parentDbId: string,
+  row: ByStockRow,
+  minISO: string,
+  maxISO: string
+): Promise<{ childDbId: string; existing: ExistingIndex; stockCache: StockCacheOutcome }> {
+  const cache = input.stockPageCache;
+  if (!cache) {
+    const resolved = await resolveStock(parentDbId, row, input.tagOptions);
+    return {
+      childDbId: resolved.childDbId,
+      existing: await loadExistingInRange(resolved.childDbId, minISO, maxISO),
+      stockCache: "off",
+    };
+  }
+
+  const ticker = row.ticker;
+  const memorized = stockCache.get(ticker);
+  const stored = memorized
+    ? {
+        stockPageId: memorized.stockPageId,
+        childDbId: memorized.childDbId,
+        schemaVersion: IR_NOTION_STOCK_PAGE_SCHEMA_VERSION,
+      }
+    : await cache.get(input.service, ticker);
+
+  if (stored && stored.schemaVersion === IR_NOTION_STOCK_PAGE_SCHEMA_VERSION) {
+    assertUsableStockPageRef(stored, input.service, ticker);
+    try {
+      const existing = await loadExistingInRange(stored.childDbId, minISO, maxISO);
+      stockCache.set(ticker, {
+        stockPageId: stored.stockPageId,
+        childDbId: stored.childDbId,
+      });
+      return { childDbId: stored.childDbId, existing, stockCache: "hit" };
+    } catch (error) {
+      if (!isStaleNotionTarget(error)) throw error;
+      stockCache.delete(ticker);
+      await cache.invalidate(input.service, ticker);
+      const resolved = await resolveStock(parentDbId, row, input.tagOptions);
+      const existing = await loadExistingInRange(resolved.childDbId, minISO, maxISO);
+      await rememberStockPage(cache, input.service, ticker, resolved);
+      return { childDbId: resolved.childDbId, existing, stockCache: "fallback" };
+    }
+  }
+
+  const resolved = await resolveStock(parentDbId, row, input.tagOptions);
+  const existing = await loadExistingInRange(resolved.childDbId, minISO, maxISO);
+  await rememberStockPage(cache, input.service, ticker, resolved);
+  return { childDbId: resolved.childDbId, existing, stockCache: "miss" };
+}
+
+function logNotionCalls(
+  tdnetId: string,
+  requests: number,
+  outcome: "ok" | "error",
+  stockCacheOutcome: StockCacheOutcome
+): void {
+  console.info(
+    `${IR_PDF_ARCHIVE_INCIDENT_TAG} notion-calls tdnetId=${tdnetId} requests=${requests} outcome=${outcome} stockCache=${stockCacheOutcome}`
+  );
 }
 
 const PDF_HEADER = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]); // "%PDF-"
@@ -677,7 +823,7 @@ export async function upsertDisclosuresByStock(
   }
   const sessions = new Map<
     string,
-    { childDbId: string; existing: ExistingIndex }
+    { childDbId: string; existing: ExistingIndex; stockCache: StockCacheOutcome }
   >();
 
   try {
@@ -695,10 +841,8 @@ export async function upsertDisclosuresByStock(
       if (tickerRows === undefined || tickerRows.length === 0) {
         throw new Error(`銘柄 ${row.ticker} の開示行がありません`);
       }
-      // 親 DB の銘柄ページ + その下の子 DB を確保 (プロセス内キャッシュで
-      // 全実行を通じて 1 銘柄あたり 1 回だけ解決)。子 DB の既存照会も
-      // その銘柄の最古行に到達したとき 1 回だけ。
-      const resolved = await resolveStock(parentDbId, row, input.tagOptions);
+      // 親 DB の銘柄ページ + その下の子 DB。写しがあれば Notion の検索/取得は
+      // 省く。子 DB の既存照会は、その銘柄の最初の行で 1 回だけ。
       stocksTouched++;
       let minISO = tickerRows[0].pubdate;
       let maxISO = tickerRows[0].pubdate;
@@ -706,14 +850,7 @@ export async function upsertDisclosuresByStock(
         if (r.pubdate < minISO) minISO = r.pubdate;
         if (r.pubdate > maxISO) maxISO = r.pubdate;
       }
-      session = {
-        childDbId: resolved.childDbId,
-        existing: await loadExistingInRange(
-          resolved.childDbId,
-          minISO,
-          maxISO
-        ),
-      };
+      session = await openStockSession(input, parentDbId, row, minISO, maxISO);
       sessions.set(row.ticker, session);
     }
     const { childDbId, existing } = session;
@@ -793,8 +930,11 @@ export async function upsertDisclosuresByStock(
           irStatus = "uploaded";
           pdfBytesForClassify = pdf.bytes;
         } catch (e) {
-          console.info(
-            `${IR_PDF_ARCHIVE_INCIDENT_TAG} notion-calls tdnetId=${row.key} requests=${notionStats().requests - notionBefore} outcome=error`
+          logNotionCalls(
+            row.key,
+            notionStats().requests - notionBefore,
+            "error",
+            session.stockCache
           );
           if (!(e instanceof NotionFileTooLargeError)) throw e;
           console.warn(`[ir-pdf] WS 上限超過で添付不可: ${pdf.filename}`);
@@ -884,8 +1024,11 @@ export async function upsertDisclosuresByStock(
         );
       }
       if (notionBefore !== undefined && irStatus === "uploaded") {
-        console.info(
-          `${IR_PDF_ARCHIVE_INCIDENT_TAG} notion-calls tdnetId=${row.key} requests=${notionStats().requests - notionBefore} outcome=ok`
+        logNotionCalls(
+          row.key,
+          notionStats().requests - notionBefore,
+          "ok",
+          session.stockCache
         );
       }
       if (ex) updated++;
