@@ -9,6 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-11
 
+- 適時開示catalogの既知`rd.php`原URL自体が404でも、生queryに実記録されたTDnetの18桁PDF名を同社JPX原本の照合に使う。既知https URLだけを受け付け、任意query・資格情報・port・再帰wrapperと7桁catalog IDからの推測を拒否する（Issue #335）。
 - 適時開示PDFがNotion／catalog原URLで取れない場合、同社・同公式PDF名のJPX原本だけを補完候補にする。Notionは単一hosted添付だけを保管元とし、新JPX取得来歴は同じ既存行へ保存して実PDF／metadataを読戻す。実取得元・公表／取得日時・PDF bytes／SHAを返し、取得不能は本文保存を要しない許可headerの経路別安全codeでも示す。既存保管・添付読戻しを再利用し、新資源・有料取得先は追加しない（Issue #335、実資料・本番受入れは検証後に記録）。
 
 ## 2026-10-10

@@ -3,7 +3,7 @@ import { createDb } from "../db/client.js";
 import { listPageFiles } from "../../../../src/shared/notion-archive/index.js";
 import { notionRequest } from "../../../../src/shared/notion-archive/client.js";
 import { pagesRoute } from "../routes/pages.js";
-import { downloadPdf, IR_PDF_LIMIT, jpxPdfUrl } from "../services/official-pdf.js";
+import { downloadPdf, IR_PDF_LIMIT, jpxPdfUrl, officialPdfId } from "../services/official-pdf.js";
 
 vi.mock("../db/client.js", () => ({ createDb: vi.fn() }));
 vi.mock("../../../../src/shared/notion-archive/index.js", () => ({ listPageFiles: vi.fn() }));
@@ -54,6 +54,58 @@ describe("same-disclosure PDF source and unavailable provenance", () => {
     expect(JSON.parse(result.headers.get("X-IR-Attempts")!)).toEqual([
       { source: "notion_archive", code: "attachment_unavailable" },
       { source: "catalog", code: "http_error", httpStatus: 404 }]);
+  });
+
+  it.each(["release.tdnet.info", "www.release.tdnet.info"])("uses the observed %s filename when the catalog wrapper itself returns 404", async (host) => {
+    const wrapper = `https://webapi.yanoshin.jp/rd.php?https://${host}/inbs/140120260810517386.pdf`;
+    const query = { select: vi.fn(), from: vi.fn(), where: vi.fn(), limit: vi.fn() };
+    query.select.mockReturnValue(query); query.from.mockReturnValue(query); query.where.mockReturnValue(query);
+    query.limit.mockResolvedValue([{ documentUrl: wrapper, notionPageId: null, companyCode: "55990",
+      pubdate: new Date("2026-08-12T06:00:00Z") }]);
+    vi.mocked(createDb).mockReturnValue(query as unknown as ReturnType<typeof createDb>);
+    const fetcher = vi.fn().mockResolvedValueOnce(response(wrapper, 404)).mockResolvedValueOnce(response(jpx, 200, body));
+    vi.stubGlobal("fetch", fetcher);
+    const result = await pagesRoute.request("https://kabulab-cf.satoki252595.workers.dev/file/1274696", {}, { DB: {} as D1Database });
+    expect(result.status).toBe(200);
+    expect(await result.text()).toBe(body);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([wrapper, jpx]);
+    expect(fetcher.mock.calls[1][1].redirect).toBe("manual");
+    expect(result.headers.get("X-IR-Catalog-ID")).toBe("1274696");
+    expect(result.headers.get("X-IR-Official-Document-ID")).toBe("140120260810517386");
+    expect(result.headers.get("X-IR-Source")).toBe("jpx");
+    expect(result.headers.get("X-IR-Source-URL")).toBe(jpx);
+    expect(JSON.parse(result.headers.get("X-IR-Attempts")!)).toEqual([
+      { source: "notion_archive", code: "archive_reference_missing" },
+      { source: "catalog", code: "http_error", httpStatus: 404 }]);
+    expect(officialPdfId(wrapper)).toBe("140120260810517386");
+    expect(jpxPdfUrl("55990", wrapper)).toBe(jpx);
+    expect(jpxPdfUrl("55991", wrapper)).toBeNull();
+    expect(jpxPdfUrl("55990\n", wrapper)).toBeNull();
+  });
+
+  it("rejects unrelated, credentialed, recursive or modified wrapper queries without deriving an official ID", () => {
+    const wrapper = "https://webapi.yanoshin.jp/rd.php?";
+    for (const url of [
+      wrapper + tdnet.replace("https:", "http:"),
+      wrapper + tdnet.replace("release.tdnet.info", "other.example.org"),
+      wrapper + tdnet.replace("https://", "https://user@"),
+      wrapper + tdnet.replace(".info/", ".info:443/"),
+      wrapper + tdnet.replace(".info/", ".info:444/"),
+      wrapper + tdnet.replace("/inbs/", "/other/"),
+      wrapper + tdnet.replace("140120260810517386", "1274696"),
+      wrapper + tdnet + "?query=extra", wrapper + tdnet + "#fragment",
+      wrapper + tdnet + "&next=" + tdnet, wrapper + "url=" + tdnet,
+      wrapper + encodeURIComponent(tdnet), wrapper + wrapper + tdnet,
+      wrapper.replace("webapi.yanoshin.jp", "other.example.org") + tdnet,
+      wrapper.replace("/rd.php", "/other.php") + tdnet,
+      wrapper.replace("https://", "https://user@") + tdnet,
+      wrapper.replace(".jp/", ".jp:443/") + tdnet,
+      tdnet.replace(".info/", ".info:443/"),
+      wrapper + tdnet + "\n", wrapper + tdnet + "\r\n", tdnet + "\n", " " + tdnet,
+    ]) {
+      expect(officialPdfId(url)).toBeNull();
+      expect(jpxPdfUrl("55990", url)).toBeNull();
+    }
   });
 
   it("keeps the archive primary and never exposes its signed URL", async () => {

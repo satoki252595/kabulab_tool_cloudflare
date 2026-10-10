@@ -6,16 +6,19 @@ export type PdfDownload =
   | { status: "unavailable" | "transient"; code: string; httpStatus?: number; resolvedUrl?: string };
 
 export function officialPdfId(value: string): string | null {
-  let url: URL;
-  try { url = new URL(value); } catch { return null; }
-  if (url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash) return null;
-  if (url.hostname === "release.tdnet.info") return /^\/inbs\/(\d{18})\.pdf$/.exec(url.pathname)?.[1] ?? null;
-  if (url.hostname === "www2.jpx.co.jp") return /^\/disc\/[0-9A-Z]{5}\/(\d{18})\.pdf$/.exec(url.pathname)?.[1] ?? null;
-  return null;
+  if (/\s/.test(value)) return null;
+  // D1 retains this exact public redirect URL even when yanoshin itself returns
+  // 404. Its raw query is an observed official URL, not a catalog-ID conversion.
+  const wrapper = /^https:\/\/webapi\.yanoshin\.jp\/rd\.php\?(https:\/\/(?:www\.)?release\.tdnet\.info\/inbs\/\d{18}\.pdf)$/.exec(value);
+  const observed = wrapper === null ? value : wrapper[1];
+  // Match raw URLs: no decoding, recursive unwrapping or URL normalization that
+  // could conceal credentials, explicit :443, fragments or additional queries.
+  return /^https:\/\/(?:www\.)?release\.tdnet\.info\/inbs\/(\d{18})\.pdf$/.exec(observed)?.[1]
+    ?? /^https:\/\/www2\.jpx\.co\.jp\/disc\/[0-9A-Z]{5}\/(\d{18})\.pdf$/.exec(observed)?.[1] ?? null;
 }
 
 export function jpxPdfUrl(companyCode: string, observedUrl: string): string | null {
-  if (!/^[0-9A-Z]{4}0$/.test(companyCode)) return null;
+  if (companyCode.length !== 5 || !/^[0-9A-Z]{4}0$/.test(companyCode)) return null;
   const id = officialPdfId(observedUrl);
   if (id === null) return null;
   const url = new URL(observedUrl);
