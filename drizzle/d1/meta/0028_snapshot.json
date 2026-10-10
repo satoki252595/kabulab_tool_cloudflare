@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "64135f54-e399-4e02-b43c-b77d04aa437f",
-  "prevId": "1291619a-1370-4c6c-bd71-9947851a04a0",
+  "id": "5f14fdb6-334e-48b2-9588-9b9cc0a34f4d",
+  "prevId": "64135f54-e399-4e02-b43c-b77d04aa437f",
   "tables": {
     "core_stock_annual_financials": {
       "name": "core_stock_annual_financials",
@@ -1700,6 +1700,67 @@
         }
       },
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "ir_notion_stock_pages": {
+      "name": "ir_notion_stock_pages",
+      "columns": {
+        "service": {
+          "name": "service",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ticker": {
+          "name": "ticker",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "stock_page_id": {
+          "name": "stock_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "child_db_id": {
+          "name": "child_db_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "schema_version": {
+          "name": "schema_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch())"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "ir_notion_stock_pages_service_ticker_pk": {
+          "columns": [
+            "service",
+            "ticker"
+          ],
+          "name": "ir_notion_stock_pages_service_ticker_pk"
+        }
+      },
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
