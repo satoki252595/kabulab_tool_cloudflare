@@ -30,6 +30,8 @@ import { notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
 import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
+import { jpxPdfUrl, officialPdfId, type ArchivedPdfProvenance } from "../../../services/ir-catalog/src/services/official-pdf.js";
+import { sha256HexBytes } from "../sha256.js";
 import {
   IR_PDF_ARCHIVE_INCIDENT_TAG,
   compareDisclosuresForArchive,
@@ -271,6 +273,7 @@ function childProperties(
     市場: { rich_text: {} },
     資料: { url: {} },
     IR資料: { files: {} },
+    IR取得来歴: { rich_text: {} },
     IR資料状態: { select: { options: STATUS_OPTS_LIST } },
     PDF判定: { select: { options: PDF_SENTIMENT_OPTS_LIST } },
     "TDnet ID": { rich_text: {} },
@@ -433,7 +436,8 @@ function safeName(s: string): string {
   return s.replace(/[^0-9A-Za-z._-]/g, "");
 }
 
-type PdfFile = { bytes: Uint8Array; filename: string; contentType: string };
+type PdfFile = { bytes: Uint8Array; filename: string; contentType: string;
+  origin?: Pick<ArchivedPdfProvenance, "source" | "sourceUrl" | "officialDocumentId" | "retrievedAt" | "pdfSha256" | "pdfBytes"> };
 /**
  * PDF 取得結果。
  *  - PdfFile        : 取得成功
@@ -451,48 +455,49 @@ type PdfFetch = PdfFile | "unavailable" | "transient";
  */
 async function fetchIrPdf(
   documentUrl: string,
-  baseName: string
+  baseName: string,
+  ticker: string
 ): Promise<PdfFetch> {
-  let res: Response;
-  try {
-    // タイムアウト必須: 応答が吊られると行ループ先頭の deadline ガードを
-    // 跨いで無期限ブロックし日次 cron 予算が無力化する。timeout/network は
-    // 一過性として正直に扱う (捏造しない — ルール2)。
-    res = await fetch(documentUrl, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(15_000),
-      headers: {
-        "User-Agent": "kabulab-ir-catalog/1.0 (+https://kabulab-cf.satoki252595.workers.dev/ir-catalog/)",
-      },
-    });
-  } catch (e) {
-    console.warn(
-      `[ir-pdf] 取得失敗(一過性) ${documentUrl}: ${(e as Error).message}`
-    );
-    return "transient";
+  let url = documentUrl;
+  let transient = false;
+  // The existing primary/archive size policy stays unchanged. The only extra
+  // source is the same observed official filename under this issuer at JPX.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let observedUrl = url;
+    try {
+      const res = await fetch(url, {
+        redirect: attempt === 0 ? "follow" : "manual",
+        signal: AbortSignal.timeout(15_000),
+        headers: { "User-Agent": "kabulab-ir-catalog/1.0 (+https://kabulab-cf.satoki252595.workers.dev/ir-catalog/)" },
+      });
+      observedUrl = res.url || url;
+      if (res.ok && (attempt === 0 || observedUrl === url)) {
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        if (bytes.length > 5 && PDF_HEADER.every((b, i) => bytes[i] === b)) {
+          const file: PdfFile = { bytes, filename: `${safeName(baseName)}.pdf`, contentType: "application/pdf" };
+          if (attempt === 1) {
+            const documentId = officialPdfId(observedUrl);
+            if (documentId === null) throw new Error("source_identity_invalid");
+            file.origin = { source: "jpx", sourceUrl: observedUrl, officialDocumentId: documentId,
+              retrievedAt: new Date().toISOString(), pdfSha256: await sha256HexBytes(bytes), pdfBytes: bytes.byteLength };
+          }
+          return file;
+        }
+        console.warn(`[ir-pdf] ${baseName} source=${attempt === 0 ? "catalog" : "jpx"} code=not_pdf`);
+      } else {
+        await res.body?.cancel();
+        transient ||= res.status >= 500 || res.status === 429;
+        console.warn(`[ir-pdf] ${baseName} source=${attempt === 0 ? "catalog" : "jpx"} status=${res.status}`);
+      }
+    } catch {
+      transient = true;
+      console.warn(`[ir-pdf] ${baseName} source=${attempt === 0 ? "catalog" : "jpx"} code=network_or_read_failure`);
+    }
+    const jpx = jpxPdfUrl(ticker + "0", observedUrl);
+    if (attempt !== 0 || jpx === null || jpx === url || jpx === observedUrl) break;
+    url = jpx;
   }
-  if (!res.ok) {
-    // 5xx/429 は一過性 → 再実行で再挑戦。4xx(404等)は恒久不在。
-    const transient = res.status >= 500 || res.status === 429;
-    console.warn(
-      `[ir-pdf] 取得失敗${transient ? "(一過性)" : ""} ${documentUrl} status=${res.status}`
-    );
-    return transient ? "transient" : "unavailable";
-  }
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  const isPdf =
-    bytes.length > 5 && PDF_HEADER.every((b, i) => bytes[i] === b);
-  if (!isPdf) {
-    console.warn(
-      `[ir-pdf] PDF ではない応答 ${documentUrl} (${bytes.length}B) — 添付しない`
-    );
-    return "unavailable";
-  }
-  return {
-    bytes,
-    filename: `${safeName(baseName)}.pdf`,
-    contentType: "application/pdf",
-  };
+  return transient ? "transient" : "unavailable";
 }
 
 /** 保存済み添付からの再開。添付の矛盾・取得失敗は発行元へ切り替えず停止する。 */
@@ -763,7 +768,8 @@ export async function upsertDisclosuresByStock(
       // さない — ルール1/2)。一過性失敗は error にして再実行で収束。
       const pdf = await fetchIrPdf(
         row.documentUrl,
-        `${row.ticker}_${row.pubdate.slice(0, 10)}_${row.key}`
+        `${row.ticker}_${row.pubdate.slice(0, 10)}_${row.key}`,
+        row.ticker
       );
       let irFile: Array<{
         name: string;
@@ -847,6 +853,14 @@ export async function upsertDisclosuresByStock(
         IR資料状態: { select: { name: irStatus } },
         "TDnet ID": { rich_text: [{ text: { content: row.key } }] },
       };
+      let originText: string | undefined;
+      if (irStatus === "uploaded" && typeof pdf === "object" && pdf.origin !== undefined) {
+        const origin: ArchivedPdfProvenance = { schema: "ir-pdf-archive-provenance-v1", catalogId: row.key,
+          companyCode: row.ticker + "0", publishedAt: row.pubdate, ...pdf.origin };
+        originText = JSON.stringify(origin);
+        if (originText.length > 1900) throw new Error("archive_provenance_invalid");
+        properties["IR取得来歴"] = { rich_text: [{ text: { content: originText } }] };
+      }
       if (irFile.length > 0) properties["IR資料"] = { files: irFile };
       if (row.primaryTag) {
         properties["代表タグ"] = { select: { name: row.primaryTag } };
@@ -882,6 +896,14 @@ export async function upsertDisclosuresByStock(
           "TDnet 開示 PDF",
           "IR資料"
         );
+      }
+      if (originText !== undefined) {
+        const readback = await notionRequest<{ properties: Record<string, { type: string;
+          rich_text?: Array<{ plain_text: string }> }> }>("GET", `/pages/${pageId}`);
+        const saved = readback.properties["IR取得来歴"];
+        if (saved?.type !== "rich_text" || saved.rich_text?.map((part) => part.plain_text).join("") !== originText) {
+          throw new Error("archive_provenance_readback_mismatch");
+        }
       }
       if (notionBefore !== undefined && irStatus === "uploaded") {
         console.info(
