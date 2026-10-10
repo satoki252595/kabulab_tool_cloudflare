@@ -382,6 +382,7 @@ describe("適時開示 1 件の Notion 呼び出し", () => {
           市場: { type: "rich_text" },
           資料: { type: "url" },
           IR資料: { type: "files" },
+          IR取得来歴: { type: "rich_text" },
           IR資料状態: { type: "select" },
           PDF判定: { type: "select" },
           "TDnet ID": { type: "rich_text" },
