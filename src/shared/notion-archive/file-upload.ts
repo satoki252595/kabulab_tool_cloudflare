@@ -10,7 +10,7 @@
  * 上限超過は捏造で埋めず (ルール2)、型付きエラーで呼び出し側に通知し、
  * 呼び出し側が「アップロード不可」を正直なステータスとして記録する。
  */
-import { notionRequest, notionSendFilePart } from "./client.js";
+import { NotionUnknownResultError, notionRequest, notionSendFilePart } from "./client.js";
 
 /** single_part の上限 (20 MiB) */
 const SINGLE_MAX = 20 * 1024 * 1024;
@@ -108,15 +108,57 @@ interface CreateFileUploadResponse {
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
+ * send / complete の JSON を読む。JSON として読めない成功応答
+ * (SyntaxError、または complete 側の NotionUnknownResultError) は
+ * undefined を返し、呼び出し側が確認 GET へ回す。HTTP エラーは握りつぶさない。
+ */
+async function readUploadResponse(load: () => Promise<unknown>): Promise<unknown> {
+  try {
+    return await load();
+  } catch (e) {
+    if (e instanceof SyntaxError || e instanceof NotionUnknownResultError) {
+      return undefined;
+    }
+    throw e;
+  }
+}
+
+type UploadAck = "uploaded" | "pending" | "confirm";
+
+/**
+ * send（single_part）または complete（multi_part）の応答を分類する。
+ * `status === "uploaded"` のときだけ確認 GET を省ける。
+ * `failed` / `expired` は GET で覆さず throw し、添付しない。
+ * pending・status 欠落・JSON 以外・未知の文字列は確認 GET へ回す。
+ */
+function uploadAck(body: unknown, filename: string, id: string): UploadAck {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return "confirm";
+  }
+  if (!Object.hasOwn(body, "status")) return "confirm";
+  const status = (body as { status: unknown }).status;
+  if (status === "uploaded") return "uploaded";
+  if (status === "pending") return "pending";
+  if (status === "failed" || status === "expired") {
+    throw new Error(
+      `file_upload 未確定 (status=${status}≠uploaded) のため添付しない: ${filename} id=${id}`
+    );
+  }
+  return "confirm";
+}
+
+/**
  * file_upload が `uploaded` に確定したことを検証する。
  *
- * send/complete が HTTP 2xx でも、前段エッジ (CDN/WAF) の応答だったり
- * 確定が非同期だったりすると status が `pending` のまま残ることがある。
- * 未確定の id をページに添付すると Notion が 400 (validation_error
- * "has an invalid status of pending") を返し、これは真正 JSON エラー＝
- * 恒久 throw となって**バッチ全体を巻き添え**にする。確定を確認できない
- * id は返さず throw し、呼び出し側で「アップロード失敗」として正直に
- * 1 行単位で扱わせる (捏造・pending 添付をしない — ルール1/2)。
+ * send/complete の status がちょうど `uploaded` のときは呼ばない。
+ * それ以外 (pending、status 欠落、JSON として読めない応答) はここへ来る。
+ * HTTP 2xx でも前段エッジの応答だったり確定が非同期だったりすると
+ * status が `pending` のまま残ることがある。未確定の id をページに
+ * 添付すると Notion が 400 (validation_error "has an invalid status of
+ * pending") を返し、これは真正 JSON エラー＝恒久 throw となって
+ * **バッチ全体を巻き添え**にする。確定を確認できない id は返さず throw し、
+ * 呼び出し側で「アップロード失敗」として正直に 1 行単位で扱わせる
+ * (捏造・pending 添付をしない — ルール1/2)。
  */
 async function assertUploaded(id: string, filename: string): Promise<void> {
   // 確定は概ね即時だが非同期余地を見て数回だけ短くポーリング。
@@ -193,12 +235,18 @@ export async function uploadFile(args: {
       "/file_uploads",
       { mode: "single_part", filename: uploadName, content_type: uploadType }
     );
-    await notionSendFilePart(created.id, {
-      bytes,
-      filename: uploadName,
-      contentType: uploadType,
-    });
-    await assertUploaded(created.id, uploadName);
+    const sent = uploadAck(
+      await readUploadResponse(() =>
+        notionSendFilePart(created.id, {
+          bytes,
+          filename: uploadName,
+          contentType: uploadType,
+        })
+      ),
+      uploadName,
+      created.id
+    );
+    if (sent !== "uploaded") await assertUploaded(created.id, uploadName);
     return created.id;
   }
 
@@ -214,16 +262,33 @@ export async function uploadFile(args: {
       content_type: uploadType,
     }
   );
+  // パート send は完了前なので pending が正常。読めない応答だけ、
+  // complete が uploaded でも確認 GET を省かない。
+  let uncertainPart = false;
   for (let i = 0; i < numberOfParts; i++) {
     const slice = bytes.subarray(i * PART_SIZE, (i + 1) * PART_SIZE);
-    await notionSendFilePart(created.id, {
-      bytes: slice,
-      filename: uploadName,
-      contentType: uploadType,
-      partNumber: i + 1,
-    });
+    const sent = uploadAck(
+      await readUploadResponse(() =>
+        notionSendFilePart(created.id, {
+          bytes: slice,
+          filename: uploadName,
+          contentType: uploadType,
+          partNumber: i + 1,
+        })
+      ),
+      uploadName,
+      created.id
+    );
+    if (sent === "confirm") uncertainPart = true;
   }
-  await notionRequest("POST", `/file_uploads/${created.id}/complete`, {});
+  const completed = uploadAck(
+    await readUploadResponse(() =>
+      notionRequest<unknown>("POST", `/file_uploads/${created.id}/complete`, {})
+    ),
+    uploadName,
+    created.id
+  );
+  if (completed === "uploaded" && !uncertainPart) return created.id;
   await assertUploaded(created.id, uploadName);
   return created.id;
 }

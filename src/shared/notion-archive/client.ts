@@ -462,6 +462,10 @@ export async function moveDatabase(
 /**
  * file_uploads の送信エンドポイントへ multipart/form-data を POST。
  * Content-Type は fetch に境界を生成させる (手動指定しない)。
+ *
+ * 戻り値は成功応答の JSON 本文 (File Upload オブジェクト)。Notion が
+ * `status` を入れていれば呼び出し側が読める。JSON として読めないときは
+ * `res.json()` が SyntaxError を投げ、呼び出し側が確認 GET へ回す。
  */
 export async function notionSendFilePart(
   fileUploadId: string,
