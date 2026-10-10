@@ -25,12 +25,13 @@
  * too_large は終端 skip、error/未添付は PATCH 更新で再実行収束。
  * 捏造・既定値埋めはしない (ルール2)。
  */
-import { assertCursorProgress, notionRequest } from "./client.js";
+import { assertCursorProgress, notionRequest, notionStats } from "./client.js";
 import { notionEnv } from "./env.js";
 import { NotionFileTooLargeError, uploadFile } from "./file-upload.js";
 import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
 import {
+  IR_PDF_ARCHIVE_INCIDENT_TAG,
   compareDisclosuresForArchive,
   logIrPdfIncident,
 } from "./ir-pdf-incident.js";
@@ -775,11 +776,15 @@ export async function upsertDisclosuresByStock(
       // 取得した PDF バイト列を一度だけ保持し、後段 PDF センチメント判定で
       // 再 fetch せず再利用する (二重取得回避 — cost/通信節約)。
       let pdfBytesForClassify: Uint8Array | null = null;
+      // この開示の Notion 呼び出し数 (upload〜readback)。notionStats は
+      // プロセス累積なので、行の直前との差をログする。
+      let notionBefore: number | undefined;
       if (pdf === "unavailable") {
         irStatus = "unavailable";
       } else if (pdf === "transient") {
         irStatus = "error";
       } else {
+        notionBefore = notionStats().requests;
         try {
           const id = await uploadFile(pdf);
           irFile = [
@@ -788,6 +793,9 @@ export async function upsertDisclosuresByStock(
           irStatus = "uploaded";
           pdfBytesForClassify = pdf.bytes;
         } catch (e) {
+          console.info(
+            `${IR_PDF_ARCHIVE_INCIDENT_TAG} notion-calls tdnetId=${row.key} requests=${notionStats().requests - notionBefore} outcome=error`
+          );
           if (!(e instanceof NotionFileTooLargeError)) throw e;
           console.warn(`[ir-pdf] WS 上限超過で添付不可: ${pdf.filename}`);
           irStatus = "too_large";
@@ -873,6 +881,11 @@ export async function upsertDisclosuresByStock(
           [{ filename: irFile[0].name, bytes: pdfBytesForClassify }],
           "TDnet 開示 PDF",
           "IR資料"
+        );
+      }
+      if (notionBefore !== undefined && irStatus === "uploaded") {
+        console.info(
+          `${IR_PDF_ARCHIVE_INCIDENT_TAG} notion-calls tdnetId=${row.key} requests=${notionStats().requests - notionBefore} outcome=ok`
         );
       }
       if (ex) updated++;

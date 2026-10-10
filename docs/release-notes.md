@@ -7,6 +7,10 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ---
 
+## 2026-10-10
+
+- 適時開示 PDF の Notion 保管は、send（20MB 超は complete）の応答 status が uploaded のとき、確定確認の GET を 1 回省く。pending・status の欠落・JSON でない応答は確認 GET のまま、failed は添付しない。readback・古い順・予算・リトライ回数は変えない。1 件の Notion 呼び出し数は `notion-calls` ログに出る。
+
 ## 2026-10-08
 
 - 適時開示の日次取込は、母集団に入っていて公開から40日以内なのに D1 に行が無い開示を挿入する。直近7日の再取込はそのまま。母集団外として落とした件数と理由をログに残し、同じ欠けがあると ops_check が件数と tdnetId で失敗する。
