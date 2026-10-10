@@ -156,7 +156,15 @@ export interface ByStockInput {
   stockPageCache?: NotionStockPageCache;
 }
 
-type StockCacheOutcome = "hit" | "miss" | "fallback" | "off";
+type StockCacheOutcome = "hit" | "miss" | "fallback" | "off" | "mismatch";
+
+/** GET /databases の parent。page_id 以外は親ページと確定しない。 */
+interface NotionDatabaseParent {
+  type?: string;
+  page_id?: string;
+}
+
+type ParentCheck = "match" | "mismatch" | "unknown";
 
 export interface ByStockResult {
   /** 親「銘柄一覧」DB の id (確認用。ingest は未参照) */
@@ -398,13 +406,50 @@ async function ensureStockPage(
   return created.id;
 }
 
+function notionIdKey(id: string): string {
+  return id.replace(/-/g, "").trim().toLowerCase();
+}
+
+/**
+ * 子 DB の parent.page_id が銘柄ページと同じか。
+ * type が page_id でない、または page_id が空なら判定不能（不一致とは別）。
+ */
+function classifyChildParent(
+  parent: NotionDatabaseParent | undefined,
+  stockPageId: string
+): ParentCheck {
+  if (parent?.type !== "page_id") return "unknown";
+  const pageId = parent.page_id;
+  if (pageId === undefined || pageId.trim() === "") return "unknown";
+  return notionIdKey(pageId) === notionIdKey(stockPageId) ? "match" : "mismatch";
+}
+
+function parentCheckError(
+  check: Exclude<ParentCheck, "match">,
+  service: string,
+  ticker: string,
+  stockPageId: string,
+  childDbId: string,
+  parent: NotionDatabaseParent | undefined
+): Error {
+  if (check === "mismatch") {
+    return new Error(
+      `${IR_PDF_ARCHIVE_INCIDENT_TAG} stockCache=mismatch 引き直しても適時開示 DB の親が銘柄ページと一致しません service=${service} ticker=${ticker} stockPageId=${stockPageId} childDbId=${childDbId} parentPageId=${parent?.page_id ?? ""}`
+    );
+  }
+  return new Error(
+    `${IR_PDF_ARCHIVE_INCIDENT_TAG} stockCache=mismatch 引き直しても適時開示 DB の親ページを判定できません service=${service} ticker=${ticker} stockPageId=${stockPageId} childDbId=${childDbId} parentType=${parent?.type ?? ""}`
+  );
+}
+
 /** 銘柄ページ配下に子「適時開示」DB を確保 (無ければ作成)。既存は
- *  不足プロパティを非破壊 PATCH (冪等)。 */
+ *  不足プロパティを非破壊 PATCH (冪等)。スキーマ GET の parent を返す。
+ *  新規作成は自分が付けた page_id を一致とみなす。 */
 async function ensureChildDb(
   stockPageId: string,
   ticker: string,
   tagOptions: ByStockInput["tagOptions"]
-): Promise<string> {
+): Promise<{ id: string; parentCheck: ParentCheck; parent: NotionDatabaseParent | undefined }> {
   const title = childTitle(ticker);
   let existing = await findChildDatabase(stockPageId, title);
   let adopted = false;
@@ -420,7 +465,13 @@ async function ensureChildDb(
       },
       () => findUniqueChildDatabaseForAdopt(stockPageId, title)
     );
-    if (res.created) return res.id;
+    if (res.created) {
+      return {
+        id: res.id,
+        parentCheck: "match",
+        parent: { type: "page_id", page_id: stockPageId },
+      };
+    }
     // adopted → 下の schema 検証へ進む (同名の古い DB かもしれないため)。
     existing = res.id;
     adopted = true;
@@ -428,6 +479,7 @@ async function ensureChildDb(
   const db = await notionRequest<{
     properties: Record<string, { type: string }>;
     is_inline?: boolean;
+    parent?: NotionDatabaseParent;
   }>("GET", `/databases/${existing}`);
   const want = childProperties(tagOptions);
   if (adopted) {
@@ -448,21 +500,43 @@ async function ensureChildDb(
   if (Object.keys(patch).length > 0) {
     await notionRequest("PATCH", `/databases/${existing}`, patch);
   }
-  return existing;
+  return {
+    id: existing,
+    parentCheck: classifyChildParent(db.parent, stockPageId),
+    parent: db.parent,
+  };
 }
 
 async function resolveStock(
   parentDbId: string,
   row: ByStockRow,
   tagOptions: ByStockInput["tagOptions"]
-): Promise<{ stockPageId: string; childDbId: string }> {
+): Promise<{
+  stockPageId: string;
+  childDbId: string;
+  parentCheck: ParentCheck;
+  parent: NotionDatabaseParent | undefined;
+}> {
   const cached = stockCache.get(row.ticker);
-  if (cached) return cached;
+  if (cached) {
+    return {
+      stockPageId: cached.stockPageId,
+      childDbId: cached.childDbId,
+      parentCheck: "match",
+      parent: { type: "page_id", page_id: cached.stockPageId },
+    };
+  }
   const stockPageId = await ensureStockPage(parentDbId, row);
-  const childDbId = await ensureChildDb(stockPageId, row.ticker, tagOptions);
-  const v = { stockPageId, childDbId };
-  stockCache.set(row.ticker, v);
-  return v;
+  const child = await ensureChildDb(stockPageId, row.ticker, tagOptions);
+  if (child.parentCheck === "match") {
+    stockCache.set(row.ticker, { stockPageId, childDbId: child.id });
+  }
+  return {
+    stockPageId,
+    childDbId: child.id,
+    parentCheck: child.parentCheck,
+    parent: child.parent,
+  };
 }
 
 /**
@@ -505,9 +579,43 @@ async function rememberStockPage(
 }
 
 /**
+ * 引き直した子 DB の親が銘柄ページと一致したときだけ写しを更新する。
+ * 不一致・判定不能は throw し、写しも既存行照会も進めない。
+ */
+async function adoptResolvedStock(
+  input: ByStockInput,
+  cache: NotionStockPageCache,
+  parentDbId: string,
+  row: ByStockRow,
+  minISO: string,
+  maxISO: string,
+  outcome: Exclude<StockCacheOutcome, "hit" | "off">
+): Promise<{ childDbId: string; existing: ExistingIndex; stockCache: StockCacheOutcome }> {
+  const ticker = row.ticker;
+  stockCache.delete(ticker);
+  const resolved = await resolveStock(parentDbId, row, input.tagOptions);
+  if (resolved.parentCheck !== "match") {
+    stockCache.delete(ticker);
+    throw parentCheckError(
+      resolved.parentCheck,
+      input.service,
+      ticker,
+      resolved.stockPageId,
+      resolved.childDbId,
+      resolved.parent
+    );
+  }
+  const existing = await loadExistingInRange(resolved.childDbId, minISO, maxISO);
+  await rememberStockPage(cache, input.service, ticker, resolved);
+  return { childDbId: resolved.childDbId, existing, stockCache: outcome };
+}
+
+/**
  * 銘柄の子 DB と、その日付範囲の既存行。写しが使えるときは銘柄ページの
- * 検索・子 DB の列挙・スキーマ GET をしない。写しの DB が 404 または
- * アーカイブ済みのときだけ従来の解決に戻し、写しを更新する。
+ * 検索と子 DB のブロック列挙をしない。代わりに子 DB を 1 回 GET し、
+ * parent.page_id が写しの銘柄ページと一致するときだけ hit にする。
+ * 不一致・判定不能は写しを使わず引き直す。引き直しても一致しなければ停止する。
+ * 404 / アーカイブは従来どおり引き直して写しを更新する。
  */
 async function openStockSession(
   input: ByStockInput,
@@ -519,6 +627,19 @@ async function openStockSession(
   const cache = input.stockPageCache;
   if (!cache) {
     const resolved = await resolveStock(parentDbId, row, input.tagOptions);
+    // 写しが無い経路はブロック列挙で銘柄ページ配下を見ている。
+    // parent の欠落だけでは止めない。別ページだと分かったときだけ停止する。
+    if (resolved.parentCheck === "mismatch") {
+      stockCache.delete(row.ticker);
+      throw parentCheckError(
+        resolved.parentCheck,
+        input.service,
+        row.ticker,
+        resolved.stockPageId,
+        resolved.childDbId,
+        resolved.parent
+      );
+    }
     return {
       childDbId: resolved.childDbId,
       existing: await loadExistingInRange(resolved.childDbId, minISO, maxISO),
@@ -536,30 +657,47 @@ async function openStockSession(
       }
     : await cache.get(input.service, ticker);
 
-  if (stored && stored.schemaVersion === IR_NOTION_STOCK_PAGE_SCHEMA_VERSION) {
-    assertUsableStockPageRef(stored, input.service, ticker);
-    try {
-      const existing = await loadExistingInRange(stored.childDbId, minISO, maxISO);
-      stockCache.set(ticker, {
-        stockPageId: stored.stockPageId,
-        childDbId: stored.childDbId,
-      });
-      return { childDbId: stored.childDbId, existing, stockCache: "hit" };
-    } catch (error) {
-      if (!isStaleNotionTarget(error)) throw error;
-      stockCache.delete(ticker);
+  if (!(stored && stored.schemaVersion === IR_NOTION_STOCK_PAGE_SCHEMA_VERSION)) {
+    return adoptResolvedStock(input, cache, parentDbId, row, minISO, maxISO, "miss");
+  }
+  assertUsableStockPageRef(stored, input.service, ticker);
+
+  let parent: NotionDatabaseParent | undefined;
+  try {
+    const db = await notionRequest<{
+      parent?: NotionDatabaseParent;
+      archived?: boolean;
+      in_trash?: boolean;
+    }>("GET", `/databases/${stored.childDbId}`);
+    if (db.archived === true || db.in_trash === true) {
       await cache.invalidate(input.service, ticker);
-      const resolved = await resolveStock(parentDbId, row, input.tagOptions);
-      const existing = await loadExistingInRange(resolved.childDbId, minISO, maxISO);
-      await rememberStockPage(cache, input.service, ticker, resolved);
-      return { childDbId: resolved.childDbId, existing, stockCache: "fallback" };
+      return adoptResolvedStock(input, cache, parentDbId, row, minISO, maxISO, "fallback");
     }
+    parent = db.parent;
+  } catch (error) {
+    if (!isStaleNotionTarget(error)) throw error;
+    await cache.invalidate(input.service, ticker);
+    return adoptResolvedStock(input, cache, parentDbId, row, minISO, maxISO, "fallback");
   }
 
-  const resolved = await resolveStock(parentDbId, row, input.tagOptions);
-  const existing = await loadExistingInRange(resolved.childDbId, minISO, maxISO);
-  await rememberStockPage(cache, input.service, ticker, resolved);
-  return { childDbId: resolved.childDbId, existing, stockCache: "miss" };
+  const check = classifyChildParent(parent, stored.stockPageId);
+  if (check !== "match") {
+    await cache.invalidate(input.service, ticker);
+    return adoptResolvedStock(input, cache, parentDbId, row, minISO, maxISO, "mismatch");
+  }
+
+  try {
+    const existing = await loadExistingInRange(stored.childDbId, minISO, maxISO);
+    stockCache.set(ticker, {
+      stockPageId: stored.stockPageId,
+      childDbId: stored.childDbId,
+    });
+    return { childDbId: stored.childDbId, existing, stockCache: "hit" };
+  } catch (error) {
+    if (!isStaleNotionTarget(error)) throw error;
+    await cache.invalidate(input.service, ticker);
+    return adoptResolvedStock(input, cache, parentDbId, row, minISO, maxISO, "fallback");
+  }
 }
 
 function logNotionCalls(

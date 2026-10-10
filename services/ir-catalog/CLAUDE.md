@@ -69,7 +69,9 @@ TDnet 通信は `tdnet/client.ts` が全リクエストを直列化し最小間�
   `TDNET_PDF_RETAIN_DAYS` (40) 日以内の未保存を古い順に拾う。打ち切った
   tdnetId はログに残す。backfill は無制限。銘柄ページと子 DB の ID は
   D1 `ir_notion_stock_pages` に残し、次回からその銘柄の Notion 検索を省く。
-  写しが無い・版が違う・ページが無い/アーカイブ済みのときだけ引き直す。
+  使う前に子 DB の parent.page_id が銘柄ページと一致するか GET で確かめる。
+  写しが無い・版が違う・ページが無い/アーカイブ済み・親が違うか判定できないときだけ引き直す。
+  引き直しても親が一致しない、または判定できないときは停止する。
   readback は省かない。
 - Notion 通信は共有 `notion-archive` 経由のみ (api.notion.com 直叩き禁止)。
 
