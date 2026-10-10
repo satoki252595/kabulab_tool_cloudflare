@@ -16,7 +16,10 @@ import { stockCodeSchema } from "../../../../src/shared/jpx/stock-code-schema.js
 import { STOCK_CODE_ERROR } from "../../../../src/shared/jpx/stock-code.js";
 import { layout } from "../views/layout.js";
 import { disclosures } from "../db/schema.js";
-import { fetchPageFileUrl } from "../../../../src/shared/notion-archive/index.js";
+import { listPageFiles, type PageFileRef } from "../../../../src/shared/notion-archive/index.js";
+import { notionRequest } from "../../../../src/shared/notion-archive/client.js";
+import { downloadPdf, fetchOfficialPdf, officialPdfId, validateArchivedPdfProvenance,
+  type ArchivedPdfProvenance, type PdfAttempt, type PdfDownload } from "../services/official-pdf.js";
 
 /**
  * SSR ルーター。データは Cloudflare D1 バインディング `c.env.DB` から取得する
@@ -114,60 +117,68 @@ pagesRoute.get(
  * (2026-10-08 実測: 公開後 37 日は残存、41 日は 404)。本サービスは Notion
  * 子DB に物理アップロードした PDF を保管しており、その signed URL は ~1h で
  * 失効するが Notion ページ取得の度に新規発行される。クリック時に毎回
- * 最新の URL を取得し、**そのバイト列をストリーミングで 200 として
- * 返す** (URL バーを kabulab ドメインに保ち、共有時の URL も永続有効に
- * する)。Notion 取得失敗時は D1 の document_url へフォールバックし、
- * 両方失敗なら 502 を返す (捏造しない — ルール1/2)。
+ * 最新の URL を取得する。PDF と上限を検査し、返す実bytesの SHA を
+ * X-IR-* provenanceへ束縛する。Notion→catalog原本→同社・同公式PDF名の
+ * JPX原本の順で取得し、全経路失敗は理由を構造化して502で返す。
  */
 const tdnetIdParam = z.object({
   tdnetId: z.string().check(z.regex(/^\d+$/)),
 });
 
-/** PDF を upstream から取得しストリーミング 200 で返す。失敗なら null */
-async function streamPdf(
-  upstreamUrl: string,
+function pdfUnavailable(
+  identity: { tdnetId: string; companyCode: string; publishedAt: string },
+  attempts: PdfAttempt[], status: "unavailable" | "transient", error = "ir_pdf_unavailable", archiveCatalogId?: string
+): Response {
+  const retrievedAt = new Date().toISOString();
+  const headers: Record<string, string> = { "X-IR-Provenance-Schema": "ir-pdf-provenance-v1", "X-IR-Catalog-ID": identity.tdnetId,
+    "X-IR-Company-Code": identity.companyCode, "X-IR-Published-At": identity.publishedAt,
+    "X-IR-Retrieved-At": retrievedAt, "X-IR-Status": status, "X-IR-Attempts": JSON.stringify(attempts) };
+  if (archiveCatalogId !== undefined) headers["X-IR-Archive-Catalog-ID"] = archiveCatalogId;
+  return Response.json({ schema: "ir-pdf-provenance-v1", error, status,
+    tdnetId: identity.tdnetId, companyCode: identity.companyCode, publishedAt: identity.publishedAt, retrievedAt, attempts,
+    ...(archiveCatalogId === undefined ? {} : { archiveCatalogId }) }, { status: 502, headers });
+}
+
+/** Signed attachment URLs stay private; the response binds public provenance to these exact bytes. */
+function pdfResponse(
+  pdf: Extract<PdfDownload, { status: "available" }>,
   filename: string,
-  label: string
-): Promise<Response | null> {
-  const t0 = Date.now();
-  let res: Response;
-  try {
-    res = await fetch(upstreamUrl, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(20_000),
-      headers: {
-        "User-Agent":
-          "kabulab-ir-catalog/1.0 (+https://kabulab-cf.satoki252595.workers.dev/ir-catalog/)",
-      },
-    });
-  } catch (e) {
-    console.error(
-      `[ir-catalog file-proxy] upstream fetch fail (${label}) after ${Date.now() - t0}ms: ${(e as Error).message}`
-    );
-    return null;
+  provenance: { tdnetId: string; companyCode: string; publishedAt: string;
+    source: string; sourceUrl: string; documentId: string | null; attempts: PdfAttempt[];
+    archiveProvenance?: ArchivedPdfProvenance }
+): Response {
+  const source = new URL(provenance.sourceUrl);
+  if (source.protocol !== "https:" || source.username || source.password || source.port || source.search || source.hash
+      || (provenance.source !== "notion_archive"
+          && (!["webapi.yanoshin.jp", "release.tdnet.info", "www2.jpx.co.jp"].includes(source.hostname)
+              || source.hostname === "www2.jpx.co.jp" && (provenance.documentId === null
+                  || source.pathname !== `/disc/${provenance.companyCode}/${provenance.documentId}.pdf`)
+              || source.hostname === "release.tdnet.info" && provenance.documentId === null))) {
+    return pdfUnavailable(provenance, [...provenance.attempts, { source: provenance.source, code: "source_invalid" }],
+      "unavailable", "ir_pdf_source_invalid");
   }
-  const ttfbMs = Date.now() - t0;
-  if (!res.ok || !res.body) {
-    console.warn(
-      `[ir-catalog file-proxy] upstream ${label} status=${res.status} ttfb=${ttfbMs}ms`
-    );
-    return null;
-  }
-  console.info(
-    `[ir-catalog file-proxy] upstream ${label} ttfb=${ttfbMs}ms status=${res.status} cl=${res.headers.get("content-length") ?? "?"}`
-  );
-  const ct = res.headers.get("content-type") ?? "application/pdf";
-  const cl = res.headers.get("content-length");
   // RFC 5987 で日本語ファイル名を安全に伝える。ASCII フォールバック併記
   const asciiName = filename.replace(/[^\x20-\x7e]/g, "_") || "ir.pdf";
   const headers: Record<string, string> = {
-    "Content-Type": ct,
+    "Content-Type": "application/pdf",
     "Content-Disposition": `inline; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
     // signed URL は ~1h で失効する性質上、短めキャッシュに留める
     "Cache-Control": "private, max-age=300",
+    "Content-Length": String(pdf.bytes.byteLength),
+    "X-IR-Provenance-Schema": "ir-pdf-provenance-v1",
+    "X-IR-Catalog-ID": provenance.tdnetId,
+    "X-IR-Company-Code": provenance.companyCode,
+    "X-IR-Published-At": provenance.publishedAt,
+    "X-IR-Retrieved-At": pdf.retrievedAt,
+    "X-IR-Source": provenance.source,
+    "X-IR-Source-URL": provenance.sourceUrl,
+    "X-IR-PDF-SHA256": pdf.sha256,
+    "X-IR-PDF-Bytes": String(pdf.bytes.byteLength),
+    "X-IR-Attempts": JSON.stringify(provenance.attempts),
   };
-  if (cl) headers["Content-Length"] = cl;
-  return new Response(res.body, { status: 200, headers });
+  if (provenance.documentId !== null) headers["X-IR-Official-Document-ID"] = provenance.documentId;
+  if (provenance.archiveProvenance !== undefined) headers["X-IR-Archive-Provenance"] = JSON.stringify(provenance.archiveProvenance);
+  return new Response(pdf.bytes, { status: 200, headers });
 }
 
 pagesRoute.get(
@@ -187,6 +198,8 @@ pagesRoute.get(
       .select({
         notionPageId: disclosures.notionPageId,
         documentUrl: disclosures.documentUrl,
+        companyCode: disclosures.companyCode,
+        pubdate: disclosures.pubdate,
       })
       .from(disclosures)
       .where(eq(disclosures.tdnetId, tdnetId))
@@ -199,52 +212,93 @@ pagesRoute.get(
       return c.json({ error: "disclosure not found" }, 404);
     }
     const r = rows[0];
+    const attempts: PdfAttempt[] = [];
+    const identity = { tdnetId, companyCode: r.companyCode, publishedAt: r.pubdate.toISOString() };
     console.info(
       `[ir-catalog file-proxy] start tdnetId=${tdnetId} db=${dbMs}ms hasNotion=${!!r.notionPageId}`
     );
 
-    // 1) Notion ホスト PDF をストリーミング (主経路)
+    // 1) Notion ホスト PDF (主経路)
     if (r.notionPageId) {
       const tNotionStart = Date.now();
-      let f: { url: string; name: string } | null = null;
+      let files: PageFileRef[] = [];
+      let lookupFailed = false;
       try {
-        f = await fetchPageFileUrl(r.notionPageId, "IR資料");
-      } catch (e) {
+        files = await listPageFiles(r.notionPageId, "IR資料");
+      } catch {
+        lookupFailed = true;
         console.error(
-          `[ir-catalog file-proxy] Notion 取得失敗 tdnetId=${tdnetId} pageId=${r.notionPageId} after ${Date.now() - tNotionStart}ms: ${(e as Error).message}`
+          `[ir-catalog file-proxy] Notion 取得失敗 tdnetId=${tdnetId} after ${Date.now() - tNotionStart}ms`
         );
       }
       const notionMs = Date.now() - tNotionStart;
-      if (f) {
+      if (!lookupFailed && files.length === 1 && files[0].kind === "file") {
+        const f = files[0];
         console.info(
           `[ir-catalog file-proxy] notion-resolved tdnetId=${tdnetId} notion=${notionMs}ms name=${f.name}`
         );
-        const resp = await streamPdf(f.url, f.name, `notion:${tdnetId}`);
-        if (resp) {
+        const pdf = await downloadPdf(f.url, 20_000);
+        if (pdf.status === "available") {
+          let archiveProvenance: ArchivedPdfProvenance | undefined;
+          let page: { properties: Record<string, { type: string; rich_text?: Array<{ plain_text: string }> }> };
+          try {
+            page = await notionRequest<typeof page>("GET", `/pages/${r.notionPageId}`);
+          } catch {
+            return pdfUnavailable(identity, [{ source: "notion_archive", code: "archive_lookup_failed" }], "transient");
+          }
+          try {
+            const saved = page.properties["IR取得来歴"];
+            if (saved !== undefined) {
+              if (saved.type !== "rich_text" || !Array.isArray(saved.rich_text) || saved.rich_text.length > 1
+                  || saved.rich_text.some((part) => typeof part.plain_text !== "string" || part.plain_text.length > 1900)) {
+                throw new Error("archive_provenance_invalid");
+              }
+              const text = saved.rich_text.map((part) => part.plain_text).join("");
+              if (text.length > 0) {
+                const reported: unknown = JSON.parse(text);
+                if (typeof reported === "object" && reported !== null && "catalogId" in reported
+                    && typeof reported.catalogId === "string" && /^\d{1,64}$/.test(reported.catalogId)
+                    && reported.catalogId !== tdnetId) {
+                  // A title/pubdate alias is not proof that a corrected disclosure has the same PDF version.
+                  validateArchivedPdfProvenance(text, { ...identity, tdnetId: reported.catalogId }, pdf);
+                  return pdfUnavailable(identity, [{ source: "notion_archive", code: "archive_catalog_alias" }],
+                    "unavailable", "ir_pdf_catalog_alias_unverified", reported.catalogId);
+                }
+                archiveProvenance = validateArchivedPdfProvenance(text, identity, pdf);
+              }
+            }
+          } catch {
+            return pdfUnavailable(identity, [{ source: "notion_archive", code: "archive_provenance_invalid" }], "unavailable");
+          }
           console.info(
             `[ir-catalog file-proxy] OK tdnetId=${tdnetId} path=notion total=${Date.now() - reqStart}ms (db=${dbMs}ms notion=${notionMs}ms)`
           );
-          return resp;
+          return pdfResponse(pdf, f.name, { ...identity, source: "notion_archive",
+            sourceUrl: new URL(c.req.url).origin + BASE_PATH + "/file/" + tdnetId,
+            documentId: archiveProvenance === undefined ? officialPdfId(r.documentUrl) : archiveProvenance.officialDocumentId,
+            attempts, archiveProvenance });
         }
+        attempts.push({ source: "notion_archive", code: pdf.code, httpStatus: pdf.httpStatus });
       } else {
+        attempts.push({ source: "notion_archive", code: lookupFailed ? "archive_lookup_failed"
+          : files.length === 0 ? "attachment_unavailable" : "archive_not_hosted_single" });
         console.warn(
           `[ir-catalog file-proxy] notion-no-file tdnetId=${tdnetId} notion=${notionMs}ms`
         );
       }
+    } else {
+      attempts.push({ source: "notion_archive", code: "archive_reference_missing" });
     }
 
     // 2) フォールバック: D1 に入っている原本 URL (yanoshin → TDnet)
-    const fallbackName = `tdnet-${tdnetId}.pdf`;
-    const fb = await streamPdf(
-      r.documentUrl,
-      fallbackName,
-      `tdnet:${tdnetId}`
-    );
-    if (fb) {
+    const pdf = await fetchOfficialPdf(r.documentUrl, r.companyCode, 20_000);
+    attempts.push(...pdf.attempts);
+    if (pdf.status === "available") {
       console.info(
-        `[ir-catalog file-proxy] OK tdnetId=${tdnetId} path=tdnet-fallback total=${Date.now() - reqStart}ms`
+        `[ir-catalog file-proxy] OK tdnetId=${tdnetId} path=${pdf.source} total=${Date.now() - reqStart}ms`
       );
-      return fb;
+      return pdfResponse(pdf, `tdnet-${tdnetId}.pdf`, { ...identity, source: pdf.source,
+        sourceUrl: pdf.resolvedUrl, documentId: officialPdfId(pdf.resolvedUrl), attempts });
     }
 
     // 3) 両経路失敗 (TDnet purge 済+Notion未投入 / 上限超過 等)。捏造で
@@ -252,14 +306,11 @@ pagesRoute.get(
     console.error(
       `[ir-catalog file-proxy] FAIL tdnetId=${tdnetId} total=${Date.now() - reqStart}ms`
     );
-    return c.json(
-      {
-        error:
-          "PDF を取得できませんでした (Notion 未投入かつ TDnet 原本も期限切れ/取得失敗)",
-        tdnetId,
-      },
-      502
-    );
+    const status = pdf.status === "transient" || attempts.some((attempt) =>
+      ["archive_lookup_failed", "network_or_timeout", "body_read_failed"].includes(attempt.code)
+      || attempt.httpStatus === 429 || attempt.httpStatus !== undefined && attempt.httpStatus >= 500)
+      ? "transient" : "unavailable";
+    return pdfUnavailable(identity, attempts, status);
   }
 );
 

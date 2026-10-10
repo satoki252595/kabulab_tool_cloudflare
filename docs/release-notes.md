@@ -7,6 +7,10 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ---
 
+## 2026-10-11
+
+- 適時開示PDFがNotion／catalog原URLで取れない場合、同社・同公式PDF名のJPX原本だけを補完候補にする。Notionは単一hosted添付だけを保管元とし、新JPX取得来歴は同じ既存行へ保存して実PDF／metadataを読戻す。実取得元・公表／取得日時・PDF bytes／SHAを返し、取得不能は本文保存を要しない許可headerの経路別安全codeでも示す。既存保管・添付読戻しを再利用し、新資源・有料取得先は追加しない（Issue #335、実資料・本番受入れは検証後に記録）。
+
 ## 2026-10-10
 
 - 適時開示 PDF の Notion 保管は、send（20MB 超は complete）の応答 status が uploaded のとき、確定確認の GET を 1 回省く。pending・status の欠落・JSON でない応答は確認 GET のまま、failed は添付しない。readback・古い順・予算・リトライ回数は変えない。1 件の Notion 呼び出し数は `notion-calls` ログに出る。
