@@ -294,7 +294,7 @@ ROW_TAG_COLUMN = "license_tag"
 # （declared 側を先に減らしたことで vanished=failure 方向にはならない）。
 # 2026-10-05: 通常 ops_check の実測33表（有報本文・catchup等の3表と
 # JPX overlay の2表を含む）。出自未分類だったのは overlay 2表のみ。
-# 2026-10-10: ir_notion_stock_pages を足して 34。本番 CREATE は未適用。
+# 2026-10-10: ir_notion_stock_pages を足して 34。本番 D1（kabulab-cf）に 2026-10-11 適用済み（統括がコネクタで実行、sqlite_master で確認）。
 # 適用前にこの宣言だけが main に入ると、ops_check は vanished（failure）になる。
 OBSERVED_TABLE_COUNT = 34
 
