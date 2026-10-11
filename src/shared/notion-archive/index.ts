@@ -40,9 +40,12 @@ export type {
   ByStockRow,
   ByStockResult,
   NotionSelectColor,
+  NotionStockPageCache,
+  NotionStockPageRef,
   PdfClassification,
   PdfSentimentLabel,
 } from "./dataset.js";
+export { IR_NOTION_STOCK_PAGE_SCHEMA_VERSION } from "./dataset.js";
 export { fetchPageFileUrl, listPageFiles } from "./page-file.js";
 export type { PageFileRef } from "./page-file.js";
 export { verifyArchivedAttachments } from "./readback.js";

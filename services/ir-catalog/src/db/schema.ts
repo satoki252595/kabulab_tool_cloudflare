@@ -24,6 +24,7 @@ import {
   real,
   index,
   uniqueIndex,
+  primaryKey,
 } from "drizzle-orm/sqlite-core";
 import { stocks } from "../../../../src/shared/db/core-schema.js";
 import { HIGH_SIGNAL_TAG_LIST_SQL } from "../services/classify.js";
@@ -117,4 +118,26 @@ export const disclosureTexts = sqliteTable(
     uniqueIndex("ir_texts_disclosure_uq").on(t.disclosureId),
     index("ir_texts_tdnet_idx").on(t.tdnetId),
   ]
+);
+
+/**
+ * 銘柄 → Notion 会社ページの写し。catchup が実行ごとに
+ * 「銘柄一覧」の検索と子 DB の取得を繰り返さないためのもの。
+ * 値は Notion の page id / database id だけで、開示本文は持たない。
+ * 子 DB のプロパティを変えたら `schema_version` をコード側で +1 する
+ * （古い行は使わず再解決する）。既存表の列は変えない。
+ */
+export const notionStockPages = sqliteTable(
+  "ir_notion_stock_pages",
+  {
+    service: text("service").notNull(),
+    ticker: text("ticker").notNull(),
+    stockPageId: text("stock_page_id").notNull(),
+    childDbId: text("child_db_id").notNull(),
+    schemaVersion: integer("schema_version").notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.service, t.ticker] })]
 );
