@@ -45,11 +45,8 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 ### 0028 — 適時開示の銘柄ページ写し
 
 `ir_notion_stock_pages` の CREATE だけ（複合 PK は表定義の中）。既存表への
-DROP / UPDATE / DELETE はない。**本番は未適用。** コード（catchup がこの表を
-読む）より先に `wrangler d1 execute kabulab-cf --remote --file=drizzle/d1/0028_ir_notion_stock_pages.sql`
-で流す。Workers Builds は `migrations_dir` が無く、本番に `d1_migrations` も
-無いので、デプロイでは適用されない。未適用のまま main に入ると、catchup は
-表が無いことで停止し、ops_check は「地図にあって本番に無い表」で失敗する。
+DROP / UPDATE / DELETE はない。本番 D1（kabulab-cf, 639c0315-0d41-4345-95ab-aec5906224ed）に 2026-10-11 適用済み（統括がコネクタで実行、sqlite_master で確認。本番に d1_migrations テーブルは無い）。
+Workers Builds は `migrations_dir` が無く、デプロイではマイグレーションを適用しない。
 0028 生成後の直前 0027 snapshot は削除し、journal と 0027 の SQL は残す。
 
 ### 0027 — EDINET catchup の日付・文書進捗
