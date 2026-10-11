@@ -33,8 +33,9 @@ EOF
 chmod +x "$TMP/bin/pnpm"
 
 pass=0; fail=0
-check() { # name daily_rc intra_rc want_final want_intra_run
+check() { # name daily_rc intra_rc want_final want_intra_run [daily_only] [daily_codes]
   export STUB_LOG="$TMP/calls.log" STUB_DAILY_RC="$2" STUB_INTRA_RC="$3"
+  export DAILY_ONLY="${6:-false}" DAILY_CODES="${7:-}"
   : > "$STUB_LOG"
   out="$(PATH="$TMP/bin:$PATH" bash -e "$TMP/block.sh" 2>&1)"
   rc=$?
@@ -45,6 +46,11 @@ check() { # name daily_rc intra_rc want_final want_intra_run
     fail=$((fail+1)); echo "FAIL $1: want final=$4 intra_run=$5, got final=$rc intra_run=$ran"; echo "$out"
   fi
   echo "$out" | grep -q "daily_exit=" || { fail=$((fail+1)); echo "FAIL $1: status line missing"; }
+  expected_daily="ingest:vwap-daily"
+  if [ "$DAILY_ONLY" = "true" ] && [ -n "$DAILY_CODES" ]; then expected_daily="$expected_daily --codes=$DAILY_CODES"; fi
+  [ "$(grep -Fc 'ingest:vwap-daily' "$STUB_LOG")" -eq 1 ] && grep -Fxq "$expected_daily" "$STUB_LOG" || {
+    fail=$((fail+1)); echo "FAIL $1: daily arguments/call count differ";
+  }
 }
 
 check "daily1-intra-runs-final1" 1 0 1 yes
@@ -53,6 +59,14 @@ check "intra-abort2-final2" 0 2 2 yes
 check "daily-unfinished13-intra-notrun-final2" 13 0 2 no
 check "intra-unfinished13-final2" 0 13 2 yes
 check "success-final0" 0 0 0 yes
+check "daily-only-selected-final0" 0 0 0 no true "7203,6758"
+check "daily-only-all-final0" 0 0 0 no true ""
+check "daily-only-partial-final1" 1 0 1 no true "7203,6758"
+check "daily-only-abort-final2" 2 0 2 no true "7203,6758"
+check "daily-codes-do-not-limit-daily-intra" 0 0 0 yes false "7203,6758"
+
+grep -q -- "- daily$" "$YML" || { fail=$((fail+1)); echo "FAIL: daily dispatch choice missing"; }
+grep -q "DAILY_CODES:.*github.event.inputs.daily_codes" "$YML" || { fail=$((fail+1)); echo "FAIL: daily codes input missing"; }
 
 # failure-artifact 回収口の存在確認 (durable-before-archive の対)。
 grep -q "actions/upload-artifact@v4" "$YML" || { fail=$((fail+1)); echo "FAIL: artifact action missing"; }

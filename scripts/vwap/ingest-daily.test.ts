@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -150,6 +151,85 @@ const completedSaved = async (code: string) => {
 };
 
 describe("daily source前の同日確定済み再開", () => {
+  it.each(["success", "unknown", "config", "transport", "changed-session", "refresh-crossed-day"])(
+    "midnight %s closes the prior batch before one new reference and never repairs old captures", async (mode) => {
+      const before = "2026-10-02T14:59:59.000Z", after = "2026-10-02T15:00:01.000Z";
+      const oldReference = { date: "2026-10-02", observedAt: before, rawSha: "1".repeat(64) };
+      const nextReference = { date: mode === "changed-session" ? "2026-10-01" : oldReference.date,
+        observedAt: after, rawSha: "2".repeat(64) };
+      const referenceMock = vi.mocked(fetchDailySessionReference), qualifyMock = vi.mocked(qualifyDailySourceRange);
+      const originalReference = referenceMock.getMockImplementation()!, originalQualify = qualifyMock.getMockImplementation()!;
+      const actual = await vi.importActual<typeof import("./lib/daily-session.js")>("./lib/daily-session.js");
+      const order: string[] = [];
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(before));
+      vi.stubEnv("GITHUB_RUN_ID", "200");
+      vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+      try {
+        referenceMock.mockImplementation(async (_run, stage) => {
+          order.push(`reference:${stage === undefined ? "initial" : stage}`);
+          if (stage === undefined) return oldReference;
+          if (mode === "unknown") throw new NotionUnknownResultError("unknown reference archive; no resend");
+          if (mode === "config") throw new NotionConfigError("reference archive configuration");
+          if (mode === "transport") throw new Error("reference transport");
+          if (mode === "refresh-crossed-day") vi.setSystemTime(new Date("2026-10-03T15:00:01.000Z"));
+          return nextReference;
+        });
+        qualifyMock.mockImplementation(actual.qualifyDailySourceRange);
+        mockLoadCodes.mockResolvedValue(["A", "B", "C"]);
+        mockR2Get.mockImplementation(async (key) => {
+          order.push(`get:${key}`);
+          rawHook.body = completionRaw(`${key.slice(6, -5)}.T`);
+          return null;
+        });
+        mockFetchDaily.mockImplementation(async (symbol: string) => {
+          order.push(`source:${symbol}`);
+          const fresh = await parseDailyChart(symbol, "10y", rawHook.body!, new Date().toISOString());
+          if (symbol === "A.T") vi.setSystemTime(new Date(after));
+          return fresh;
+        });
+        mockRawArchive.mockImplementation(async (input) => {
+          order.push(`archive:${input.captures.map((c) => c.capture.symbol).join(",")}`);
+          return { pages: ["physical"], rawBytes: 1, compressedBytes: 1 };
+        });
+        mockR2Put.mockImplementation(async (key) => { order.push(`put:${key}`); });
+        await main();
+        expect(referenceMock.mock.calls).toEqual([["200.1"], ["200.1", "vwap-daily-session-1"]]);
+        expect(order.indexOf("archive:A.T")).toBeLessThan(order.indexOf("put:daily/A.json"));
+        expect(order.indexOf("put:daily/A.json")).toBeLessThan(order.indexOf("reference:vwap-daily-session-1"));
+        const saved = assertSavedDailyShape(mockR2Put.mock.calls[0][1], "daily/A.json", "A");
+        expect(saved.proof?.observedAt).toBe(before);
+        expect(saved.completedFetch?.sessionReference).toEqual(oldReference);
+        expect(oldReference).toEqual({ date: "2026-10-02", observedAt: before, rawSha: "1".repeat(64) });
+        if (mode === "success") {
+          expect(process.exitCode).toBe(0);
+          expect(order.indexOf("reference:vwap-daily-session-1")).toBeLessThan(order.indexOf("source:B.T"));
+          expect(mockFetchDaily.mock.calls.map(([symbol]) => symbol)).toEqual(["A.T", "B.T", "C.T"]);
+          expect(mockRawArchive).toHaveBeenCalledTimes(2);
+          expect(mockR2Put).toHaveBeenCalledTimes(3);
+          for (const [key, body] of mockR2Put.mock.calls.slice(1)) {
+            const next = assertSavedDailyShape(body, key, key.slice(6, -5));
+            expect(next.proof?.observedAt).toBe(after);
+            expect(next.completedFetch?.sessionReference).toEqual(nextReference);
+          }
+        } else {
+          expect(process.exitCode).toBe(2);
+          expect(mockR2Get).toHaveBeenCalledTimes(1);
+          expect(mockFetchDaily).toHaveBeenCalledTimes(1);
+          expect(mockRawArchive).toHaveBeenCalledTimes(1); // refresh後のNotion batch送信なし。
+          expect(mockR2Put).toHaveBeenCalledTimes(1); // refresh前に確定したAだけ。queued PUTは残らない。
+          if (mode === "unknown" || mode === "config") expect(mockRecord).not.toHaveBeenCalled();
+          const summary = localSummaryBody();
+          expect(summary.errors).toBe(1);
+          expect(summary.outcomes).toMatchObject({ A: { status: "written" }, B: { status: "error" }, C: { status: "notStarted" } });
+        }
+      } finally {
+        referenceMock.mockImplementation(originalReference);
+        qualifyMock.mockImplementation(originalQualify);
+        vi.useRealTimers(); vi.unstubAllEnvs();
+      }
+    });
+
   it("normal main uses one independent closed-session reference without trimming a Sunday 10y response", async () => {
     const observedAt = "2026-10-04T12:28:34.484Z";
     vi.stubEnv("GITHUB_RUN_ID", "100");
@@ -668,6 +748,12 @@ describe.skipIf(!existsSync(FIX_R2_DAILY_7203))("ingest-daily actual same-cached
 });
 
 describe("tenYearRange", () => {
+  it("the checked-in workflow shell keeps daily-only codes and all daily/intra stop contracts", () => {
+    const result = execFileSync("bash", [fileURLToPath(new URL("./lib/runblock-check.sh", import.meta.url))], {
+      encoding: "utf-8", timeout: 10_000, env: { PATH: process.env.PATH, TMPDIR: tmpdir() },
+    });
+    expect(result).toContain("pass=11 fail=0");
+  });
   it("通常日は JST 10 年前の同月日〜当日", () => {
     expect(tenYearRange("2026-09-30T00:00:00.000Z")).toEqual({ from: "2016-09-30", to: "2026-09-30" });
   });

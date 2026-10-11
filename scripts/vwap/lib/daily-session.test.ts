@@ -85,6 +85,11 @@ describe("source 10y bounds and independent session", () => {
     expect(() => qualifyDailySourceRange(parsed, { ...c, symbol: "1332.T" }, reference)).toThrow("証跡不一致");
     expect(() => qualifyDailySourceRange(parsed, { ...c, url: c.url.replace("10y", "5y") }, reference)).toThrow("要求契約");
     expect(() => qualifyDailySourceRange({ ...parsed, proof: { ...parsed.proof, requestedRange: "5y" } }, c, reference)).toThrow();
+    const crossedAt = "2026-10-04T15:00:01.000Z", crossed = await fresh(bytes, crossedAt);
+    expect(() => qualifyDailySourceRange(crossed, capture(bytes, crossedAt),
+      { ...reference, observedAt: "2026-10-04T14:59:59.000Z" })).toThrow("実受領証跡");
+    expect(crossed.proof.observedAt).toBe(crossedAt);
+    expect(crossed.proof.rawSha).toBe(sha(bytes)); // 取得後のbenchmarkで失敗原本を修理しない。
   });
   it("an out-of-contract first bar and a null-dropped raw row stay HOLD instead of trimming", async () => {
     const outside = raw({}, [1475280000, START]); // 2016-10-01: 独立10y下限より前。
@@ -248,7 +253,7 @@ describe("normal benchmark capture before stock ingestion", () => {
     expect(fetchChart).toHaveBeenCalledTimes(1);
     expect(archiveYahooRawBatch).toHaveBeenCalledTimes(1);
   });
-  it("one shared benchmark and one physical archive settle before returning its independent date", async () => {
+  it.each(["vwap-daily-session", "vwap-daily-session-1"])("benchmark stage %s keeps the actual bytes/clock and physical archive", async (stage) => {
     const bytes = raw({ symbol: "^N225", range: "1mo" });
     vi.mocked(fetchChart).mockImplementationOnce(async (_s, _r, options) => {
       await options!.onRaw!({ ...capture(bytes), symbol: "^N225" });
@@ -257,17 +262,20 @@ describe("normal benchmark capture before stock ingestion", () => {
           { date: "2026-10-02", open: 100, high: 100, low: 100, close: 100, volume: 1000, adj: null }] };
     });
     vi.mocked(archiveYahooRawBatch).mockResolvedValueOnce({ pages: ["physical"], rawBytes: bytes.length, compressedBytes: 1 });
-    expect(await fetchDailySessionReference("1.1")).toEqual({ date: "2026-10-02", observedAt: RECEIVED, rawSha: sha(bytes) });
+    expect(await (stage === "vwap-daily-session" ? fetchDailySessionReference("1.1") :
+      fetchDailySessionReference("1.1", stage))).toEqual({ date: "2026-10-02", observedAt: RECEIVED, rawSha: sha(bytes) });
     expect(fetchChart).toHaveBeenCalledTimes(1);
     expect(fetchChart).toHaveBeenCalledWith("^N225", "1mo", expect.objectContaining({ onRaw: expect.any(Function) }));
-    expect(archiveYahooRawBatch).toHaveBeenCalledWith(expect.objectContaining({ stage: "vwap-daily-session", captures: [expect.objectContaining({ capture: expect.objectContaining({ bytes }) })] }));
+    expect(archiveYahooRawBatch).toHaveBeenCalledWith(expect.objectContaining({ runId: "1.1", stage,
+      captures: [expect.objectContaining({ capture: expect.objectContaining({ bytes, receivedAt: RECEIVED }) })] }));
   });
   it("transport/unknown archive failures STOP with no benchmark retry", async () => {
     vi.mocked(fetchChart).mockRejectedValueOnce(new Error("transport"));
     vi.mocked(archiveYahooRawBatch).mockRejectedValueOnce(new Error("unknown physical write"));
-    await expect(fetchDailySessionReference("1.1")).rejects.toThrow("unknown physical write");
+    await expect(fetchDailySessionReference("1.1", "vwap-daily-session-2")).rejects.toThrow("unknown physical write");
     expect(fetchChart).toHaveBeenCalledTimes(1);
     expect(archiveYahooRawBatch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(archiveYahooRawBatch).mock.calls[0][0].stage).toBe("vwap-daily-session-2");
     expect(vi.mocked(archiveYahooRawBatch).mock.calls[0][0].missing).toHaveLength(1);
   });
   it("a forming benchmark archives its captured body and stops before any per-stock work", async () => {

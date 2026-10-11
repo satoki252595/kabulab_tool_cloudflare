@@ -40,8 +40,9 @@ export async function main() {
   const CONC = 1; // Yahoo取得は環境変数によらず直列。実HTTP間隔は共有clientで制御。
   const runId = resolveRunId();
   const TEN_Y_RANGE = tenYearRange(startedAt); // run 内一定の明示 10y range
-  const reference = await fetchDailySessionReference(runId); // runに1回。原本照合済み独立session。
-  const SOURCE_RANGE = tenYearRangeForDate(reference.date);
+  let reference = await fetchDailySessionReference(runId); // 原本照合済み独立session。
+  let SOURCE_RANGE = tenYearRangeForDate(reference.date);
+  let referenceGeneration = 0;
   let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0, invalid = 0, skipped = 0;
   let consecRL = 0, aborted = false, fatal = false;
   let rawCustodyError: unknown;
@@ -59,6 +60,25 @@ export async function main() {
     }
   };
   for (let offset = 0; offset < codes.length && !aborted && !fatal;) {
+    if (jstDateSec(Date.now() / 1000) !== jstDateSec(Date.parse(reference.observedAt) / 1000)) {
+      try {
+        // 前batchを物理保管/条件付PUTで閉じてから取得する。unknown後に未保管batchを送らない。
+        const refreshed = await fetchDailySessionReference(runId, `vwap-daily-session-${++referenceGeneration}`);
+        if (refreshed.date !== reference.date ||
+            jstDateSec(Date.parse(refreshed.observedAt) / 1000) !== jstDateSec(Date.now() / 1000)) {
+          throw new Error("daily session HOLD: 更新benchmarkの確定取引日/実観測暦日がrunと一致しません");
+        }
+        reference = refreshed;
+        SOURCE_RANGE = tenYearRangeForDate(reference.date);
+      } catch (e) {
+        fatal = true;
+        rawCustodyError = e;
+        errors++;
+        outcomes[codes[offset]] = { status: "error", latestSourceBar: null, bodySha: null };
+        console.error(`daily session refresh STOP: ${sanitizeLogText(e instanceof Error ? e.message : String(e)).slice(0, 200)}`);
+        break;
+      }
+    }
     const batchStart = offset;
     let rawBytes = 0;
     const captures: YahooRawAttempt[] = [];
@@ -69,13 +89,15 @@ export async function main() {
     // ponytail: 最大30銘柄まで先行取得し、Notion呼出しを減らす (PUT unknown検知前の取得済が最大30)。
     for (let wave = 0; wave < 30 && offset < codes.length && !aborted && !fatal &&
       offset - batchStart < 30 && rawBytes < MAX_YAHOO_RAW_BYTES; wave++) {
+      await sleep(DELAY);
+      if (aborted || fatal) break;
+      // HTTP中に跨いだ1件は既存資格検査でHOLD。次銘柄前にbatchを閉じて基準原本を更新する。
+      if (jstDateSec(Date.now() / 1000) !== jstDateSec(Date.parse(reference.observedAt) / 1000)) break;
       const waveCodes = codes.slice(offset, offset + Math.min(CONC, 30 - (offset - batchStart)));
       offset += waveCodes.length;
       const captureStart = captures.length;
       const settled = await Promise.allSettled(waveCodes.map(async (code) => {
         if (aborted || fatal) return;                        // ブロック/故障検知後は残りを叩かない
-        await sleep(DELAY);
-        if (aborted || fatal) return;                        // delay 後に再確認してから R2 へ
         // R2 GET fault は fatal。null は明示 NoSuchKey の正常 bootstrap のみ。
         // 空文字列は bootstrap ではなく腐敗 (=== null 判定。truthiness 禁止)。
         let existing: string | null;
