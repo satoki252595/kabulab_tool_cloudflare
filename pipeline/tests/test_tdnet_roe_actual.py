@@ -62,4 +62,3 @@ def test_direct_tdnet_roe_and_distinct_ordinary_income_return(
         & (tidy.context_ref == context)
     ].empty
     assert record.roa_pct is None
-
