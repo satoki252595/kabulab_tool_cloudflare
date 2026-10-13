@@ -76,7 +76,7 @@ void backupDocTextToNotion;
 
 function applyD1Migrations(target: DatabaseSync): void {
   const dir = join(ROOT, "drizzle", "d1");
-  for (const f of readdirSync(dir).filter((n) => n.endsWith(".sql")).sort()) {
+  for (const f of readdirSync(dir).filter((n) => /^\d{4}_.*\.sql$/.test(n)).sort()) {
     for (const stmt of readFileSync(join(dir, f), "utf-8").split(
       "--> statement-breakpoint"
     )) {
@@ -339,13 +339,14 @@ describe("missing-docs raw-before-DB 契約", () => {
       // 記録は T5+T1 の 2 回、batch は 1 回、text は DBid 解決後の 1 回。
       expect(record.mock.calls.length).toBe(2);
       expect(record.mock.calls.map((c) => c[0].type)).toEqual([5, 1]);
-      expect(sender.mock.calls.length).toBe(1);
+      expect(sender.mock.calls.length).toBe(2);
       expect(backup.mock.calls.length).toBe(1);
       const lastRecord = Math.max(...record.mock.invocationCallOrder);
       const batchOrder = Math.min(...sender.mock.invocationCallOrder);
       const textOrder = Math.min(...backup.mock.invocationCallOrder);
       expect(lastRecord).toBeLessThan(batchOrder);
       expect(batchOrder).toBeLessThan(textOrder);
+      expect(textOrder).toBeLessThan(sender.mock.invocationCallOrder[1]!);
       // metadata は DBid 非依存。
       for (const c of record.mock.calls) {
         const meta = c[0].metadata as Record<string, unknown>;

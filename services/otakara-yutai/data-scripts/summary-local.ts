@@ -31,7 +31,7 @@ import { semifEnv } from "../../../src/shared/semif/env.js";
 import { z } from "../../../src/shared/zod-mini.js";
 import { benefitKey } from "./benefit-key.js";
 import { loadBenefitRows, openOtakaraD1 } from "./benefit-rows.js";
-import { extractYenAmounts, qualifyCompanyPerGrantValue } from "./estimated-value-guard.js";
+import { evaluateCompanyValue } from "./public-facts.js";
 import { applyImportAtomically } from "./import-summary-results.js";
 import { assertNotCommittable } from "./private-path.js";
 import { SummaryResult, planSummaryImport, type ImportPlan } from "./summary-import.js";
@@ -115,22 +115,7 @@ export function companyValue(task: SummaryTask): {
     minShares: task.recipients.map((r) => r.minShares),
     recordMonths: task.recipients.map((r) => r.recordMonth),
   };
-  const candidates = [...new Set(extractYenAmounts(task.description))];
-  const verdicts = candidates.map((value) => ({
-    value,
-    verdict: qualifyCompanyPerGrantValue(task.description, value, context),
-  }));
-  const accepted = verdicts.filter((v) => v.verdict.qualified);
-  if (accepted.length === 1) return { value: accepted[0].value, reason: "qualified_company_per_grant" };
-  return {
-    value: null,
-    reason:
-      accepted.length > 1
-        ? "ambiguous_qualified_amounts"
-        : candidates.length === 0
-          ? "no_source_yen_amount"
-          : [...new Set(verdicts.map((v) => (v.verdict.qualified ? "qualified" : v.verdict.code)))].join(","),
-  };
+  return evaluateCompanyValue(task.description, context);
 }
 
 /** Entire protocol must correspond to the issued batch. Individual malformed summaries stay pending. */

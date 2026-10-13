@@ -49,4 +49,13 @@ describe("RESTRICTED_COLUMNS は列単位ライセンス地図と一致する", 
     });
     expect(input.is_active).toBe(1);
   });
+
+  it("優待は表全体personal-onlyのままで、公開用マスクは条件DTOも伏せる", () => {
+    const whole = JSON.parse(readFileSync(MAP_PATH, "utf8")) as {
+      table_license: Record<string, { kind: string; tag: string }>;
+    };
+    expect(whole.table_license.yutai_benefits).toEqual({ kind: "uniform", tag: "personal-only" });
+    const value = { public_facts: { version: 1 }, description: "原文の番兵", short_summary: "要約の番兵", estimated_value: 3000 };
+    expect(redactColumns("yutai_benefits", value)).toEqual({ public_facts: null, description: null, short_summary: null, estimated_value: null });
+  });
 });

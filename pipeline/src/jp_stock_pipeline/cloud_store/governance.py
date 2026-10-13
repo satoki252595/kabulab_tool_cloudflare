@@ -202,10 +202,11 @@ TABLE_LICENSE: dict[str, TableLicense] = {
     # みんかぶ掲載文を含む。設計書 §8.3 は 3 タグでは足りないとして `no-store` の
     # 新設を挙げているが、現行の `licensing.LicenseTag` は 3 値なので最も厳しい
     # personal-only へ倒す。`services/jss-api/src/shared/license.ts` は description /
-    # short_summary / estimated_value を列単位で伏せている（そちらが実効的な防御）。
+    # short_summary / estimated_value / public_facts を公開用の列マスクで伏せている。
+    # 条件DTOも掲載文の派生であり、公式照合だけで再配布可へ昇格しない。
     "yutai_benefits": _uniform(
         LicenseTag.PERSONAL_ONLY,
-        "みんかぶ掲載文とその派生（要約・金額）",
+        "みんかぶ掲載文とその派生（要約・金額・条件DTO）",
         f"{_CHILD} / datasets.py の yutai_benefits も personal-only",
     ),
     # --- kabulab-cf 所有の EDINET 有報 -------------------------------------

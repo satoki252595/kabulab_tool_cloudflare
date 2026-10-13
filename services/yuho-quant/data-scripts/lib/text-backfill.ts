@@ -57,7 +57,9 @@ export function buildTextBackfillStatements(
   db: Database,
   target: TextBackfillTarget,
   status: string,
-  sections: ExtractedSection[]
+  sections: ExtractedSection[],
+  /** 全文読戻し済みのNotion行。索引/statusと同一batchで確定する。 */
+  notionDocPageId?: string
 ) {
   const sectionRows = sections.map((s) => ({
     documentId: target.id,
@@ -73,7 +75,7 @@ export function buildTextBackfillStatements(
   return [
     db
       .update(yuhoDocuments)
-      .set({ textParseStatus: status })
+      .set({ textParseStatus: status, ...(notionDocPageId === undefined ? {} : { notionDocPageId }) })
       .where(eq(yuhoDocuments.id, target.id)),
     db.delete(textSections).where(eq(textSections.documentId, target.id)),
     ...chunk(sectionRows, 8).map((part) =>

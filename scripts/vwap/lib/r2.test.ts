@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import {
   r2GetVersion,
+  r2GetBytesVersion,
   r2Put,
+  r2PutBytes,
   R2PutRejectedError,
   R2PutUnknownError,
 } from "./r2.js";
@@ -20,7 +22,7 @@ afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 const okGet = () => ({
   ETag: '"native-etag"',
-  Body: { transformToString: async () => "original bytes" },
+  Body: { transformToByteArray: async () => new TextEncoder().encode("original bytes") },
   $metadata: { httpStatusCode: 200 },
 });
 const okPut = () => ({
@@ -203,7 +205,7 @@ describe("r2GetVersion contract", () => {
   it("200 without ETag is a fault", async () => {
     const send = vi.spyOn(S3Client.prototype, "send");
     send.mockImplementationOnce(async () => ({
-      Body: { transformToString: async () => "x" },
+      Body: { transformToByteArray: async () => new TextEncoder().encode("x") },
       $metadata: { httpStatusCode: 200 },
     }));
     await expect(r2GetVersion("daily/7203.json")).rejects.toThrow(/不完全/);
@@ -213,9 +215,39 @@ describe("r2GetVersion contract", () => {
     const send = vi.spyOn(S3Client.prototype, "send");
     send.mockImplementationOnce(async () => ({
       ETag: '"x"',
-      Body: { transformToString: async () => "x" },
+      Body: { transformToByteArray: async () => new TextEncoder().encode("x") },
       $metadata: { httpStatusCode: 206 },
     }));
     await expect(r2GetVersion("daily/7203.json")).rejects.toThrow(/不完全/);
+  });
+});
+
+describe("binary原本も既存CAS/unknown契約を共有する", () => {
+  it("非UTF8 bytesと明示bucketを読書きで保持する", async () => {
+    const body = new Uint8Array([0, 255, 254, 128]);
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockImplementationOnce(async () => ({ ...okGet(), Body: { transformToByteArray: async () => body } }));
+    expect(await r2GetBytesVersion("raw/source/file.zip", "raw-bucket")).toEqual({body, etag: '"native-etag"'});
+    expect((send.mock.calls[0][0] as GetObjectCommand).input.Bucket).toBe("raw-bucket");
+    send.mockImplementationOnce(async () => okPut());
+    await r2PutBytes("raw/source/file.zip", body, null, "raw-bucket", "application/zip");
+    expect((send.mock.calls[1][0] as PutObjectCommand).input).toMatchObject({ Bucket: "raw-bucket", Body: body, ContentType: "application/zip", IfNoneMatch: "*" });
+  });
+  it("binary PUTのunknownは一度で停止し、bucket未指定は送信しない", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValueOnce(svcError("TimeoutError"));
+    await expect(r2PutBytes("raw/file.pdf", new Uint8Array([255]), null, "raw-bucket", "application/pdf")).rejects.toBeInstanceOf(R2PutUnknownError);
+    expect(send).toHaveBeenCalledTimes(1);
+    await expect(r2PutBytes("raw/file.pdf", new Uint8Array([255]), null, undefined, "application/pdf")).rejects.toThrow("bucket");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it("明示singleAttemptのbinary GETは既知5xxでも再読しない", async () => {
+    vi.useFakeTimers();
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValue(svcError("InternalError", 500));
+    const rejected = expect(r2GetBytesVersion("raw/file.pdf", "raw-bucket", { singleAttempt: true })).rejects.toThrow("InternalError");
+    await vi.runAllTimersAsync();
+    await rejected;
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });

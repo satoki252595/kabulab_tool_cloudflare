@@ -27,6 +27,7 @@ import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js
 import { ExistingTextReadbackMismatchError } from "../../services/yuho-quant/src/services/text-backup.js";
 import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
 import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
+import { resumePendingShareholdings } from "../shared/notion-archive/shareholdings.js";
 
 const WINDOW_DAYS = 60;
 /**
@@ -127,6 +128,18 @@ export async function runYuhoEdinetCatchup(
   const ingestErrors: string[] = [];
 
   const overBudget = () => Date.now() - startedAt > TIME_BUDGET_MS;
+  // EDINET completedとは独立。既知保留をNotion保存ZIPから優先再開し、源GETは0。
+  // shard同時実行は保有明細writerを競合させないため、定期main runだけが再開する。
+  const holdingsBudget = { remainingRows: 100 };
+  let holdingsPending = false;
+  if (!shard) {
+    const resumed = await resumePendingShareholdings({ maxRows: holdingsBudget.remainingRows, shouldStop: overBudget });
+    holdingsBudget.remainingRows -= resumed.usedRows;
+    holdingsPending = resumed.pending || resumed.held > 0;
+    if (resumed.resumed > 0) byStatus["holdings:resumed"] = resumed.resumed;
+    if (resumed.held > 0) byStatus["holdings:requires_review"] = resumed.held;
+    if (resumed.pending) byStatus["holdings:pending"] = 1;
+  }
 
   const today = jstDate();
   const scope = shard ? `shard-${shard.part}-of-${shard.of}` : "main";
@@ -236,7 +249,7 @@ export async function runYuhoEdinetCatchup(
       let r;
       try {
         r = await ingestDocument(db, {stockId, stockCode: code, doc,
-          archiveToNotion: true, custody: custodyByDoc.get(doc.docID), d1HttpBatch});
+          archiveToNotion: true, custody: custodyByDoc.get(doc.docID), d1HttpBatch, holdingsBudget});
       } catch (error) {
         if (error instanceof ExistingTextReadbackMismatchError) {
           putPending("text_readback_mismatch");
@@ -253,6 +266,11 @@ export async function runYuhoEdinetCatchup(
         throw error; // 同runの次文書/source/L2へ進まない。
       }
       if (r.outcome !== "skipped_existing") {
+        if (r.holdings) {
+          const hs = `holdings:${r.holdings.status}`;
+          byStatus[hs] = (byStatus[hs] ?? 0) + 1;
+          if (r.holdings.status === "held") holdingsPending = true;
+        }
         byStatus[r.parseStatus] = (byStatus[r.parseStatus] ?? 0) + 1;
         const ok = `oseas:${r.overseasParseStatus}`;
         byStatus[ok] = (byStatus[ok] ?? 0) + 1;
@@ -284,7 +302,7 @@ export async function runYuhoEdinetCatchup(
   }
   const storedSummary = await progressSummary(db, scope, today);
   const pendingDocuments = storedSummary.pendingDocuments;
-  reachedCap = reachedCap || storedSummary.queuedDays > 0;
+  reachedCap = reachedCap || storedSummary.queuedDays > 0 || holdingsPending;
 
   // L2 投影 `p_yuho_growth` の再生成 (L-51/K4b)。シャード実行では走らせない
   // (各シャードが全表を書き直すと sweep が競合する。非シャードの定時実行が

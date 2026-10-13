@@ -112,8 +112,12 @@ ELEMENT_CANDIDATES: dict[str, tuple[str, ...]] = {
         "EquityToAssetRatioSummaryOfBusinessResults",
         "RatioOfOwnersEquityToGrossAssetsIFRSSummaryOfBusinessResults",
     ),
-    # EDINETの原本に直接ある比率だけを使う。利益/自己資本から推計しない。
-    "roe_pct": ("RateOfReturnOnEquitySummaryOfBusinessResults",),
+    # EDINET/TDnetの原本に直接あるROEだけを使う。利益/自己資本から推計しない。
+    # TDnet短信の自己資本当期純利益率もpure小数で、同じ期・連結区分を守る。
+    "roe_pct": (
+        "RateOfReturnOnEquitySummaryOfBusinessResults",
+        "NetIncomeToShareholdersEquityRatio",
+    ),
     "cf_operating": (
         "CashFlowsFromOperatingActivities",
         "NetCashProvidedByUsedInOperatingActivities",

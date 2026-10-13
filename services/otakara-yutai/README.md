@@ -34,6 +34,24 @@ pnpm exec tsx --env-file=.env scripts/biztag-local/main.ts run yutai-summary
 
 ## 内部API
 
+銘柄詳細SSRは、既存本文から純計算した `public_facts` を使い、保有期間区分・選択・
+抽選・申込、併用の確認状態、金額が確定できない理由、掲載出典と受信日時を表示する。
+本文自体は取得・表示しない。掲載URLと会社の公式URLを区別し、未照合・未記録を
+明示する。条件の異なる優待を同じ要約だけで統合せず、銘柄全体の金額を合計しない。
+認定額は既存の厳密判定と保存額の両方が一致した場合だけ表示する。
+
+通常の全量取込でDTOを保存する。本文修正時は旧DTOを無効化し、再生成までは
+未確認と表示する。既存行の再生成では、同一本文の全株数・権利月を判定対象に含める。
+追加のモデル実行や外部通信は不要である。認証付きJSS `/v1/yutai/:code` も同じDTOを
+読むが、無認証JSONの新経路は設けない。公式照合の有無は再配布権の確認を意味しない。
+
+初回の既存行保守は `backfill-public-facts.ts prepare <private-source.json> <private-dir>`
+で完全PRE・期待値・SQLを作る。0029の追加列がNULLの状態で、同じ引数の `apply` を
+使うと、共有NotionへPREを物理保管・照合してから1回だけ送信し、全行・全列を照合する。
+更新するのは `public_facts` だけで、`updated_at` は変更しない。既存DTOを上書きする
+機能や結果不明時の自動再送は無い。実行は `nix develop --command pnpm exec tsx
+--env-file=.env services/otakara-yutai/data-scripts/backfill-public-facts.ts ...` を使う。
+
 | Method | Path | 説明 |
 |--------|------|------|
 | GET | `/api/screening` | スクリーニングページ用フィルター検索（内部利用） |

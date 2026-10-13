@@ -30,7 +30,7 @@
  *       --force 無しの --doc は未処理 (NULL) の通だけに効く)
  */
 import "dotenv/config";
-import { eq, inArray } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import {
   createD1HttpBatchSender,
   createD1HttpDb,
@@ -51,6 +51,7 @@ import {
 import { parseEdinetCsvZip } from "../src/services/edinet/csv.js";
 import { extractTextSections } from "../src/services/edinet/text-sections.js";
 import { backupDocTextToNotion } from "../src/services/text-backup.js";
+import { retireStockTextRow } from "../../../src/shared/notion-archive/index.js";
 import type { Database } from "../src/db/client.js";
 import * as yuhoSchema from "../src/db/schema.js";
 
@@ -137,18 +138,10 @@ for (const r of targets) {
     }
     tally[status] = (tally[status] ?? 0) + 1;
 
-    // text 列の更新 (受注・海外の列・ファクトには触れない) + 定性セクション
-    // 索引の置換 (delete → insert) を 1 文書ぶんの単一 batch で原子適用する。
-    // 本文は Notion のみ (P4)。以下で backupDocTextToNotion が保管する。
-    // 失敗は外の catch で tally.error に計上し非 0 終了する (握り潰さない)。
-    // statement fallback なし。
-    const statements = buildTextBackfillStatements(
-      db as unknown as Database,
-      r,
-      status,
-      sections
-    );
-    await d1HttpBatch(toD1BatchStatements(statements));
+    // 空セクションは抽出状態を確定する。本文ありはNotion verify前に旧索引を触らない。
+    if (sections.length === 0) {
+      await d1HttpBatch(toD1BatchStatements(buildTextBackfillStatements(db as unknown as Database, r, status, sections)));
+    }
 
     // 定性テキスト本文の Notion 保管 (D1 には索引 + 行 ID のみ)。
     // 失敗は当該通の警告に留める (ポインタ NULL の通は P3 が回収)。
@@ -169,10 +162,10 @@ for (const r of targets) {
             force,
           });
           if (nb.rowPageId) {
-            await db
-              .update(yuhoDocuments)
-              .set({ notionDocPageId: nb.rowPageId })
-              .where(eq(yuhoDocuments.id, r.id));
+            await d1HttpBatch(toD1BatchStatements(buildTextBackfillStatements(
+              db as unknown as Database, r, status, sections, nb.rowPageId
+            )));
+            if (nb.replacedRowPageId !== undefined) await retireStockTextRow(nb.replacedRowPageId);
           } else {
             // 本文ありなのに行 ID 未取得は黙って成功にしない (P6 共有根因)。
             console.warn(`[text-backfill] notion text backup 失敗(行 ID 未取得) ${r.docId}: outcome=${nb.outcome}`);

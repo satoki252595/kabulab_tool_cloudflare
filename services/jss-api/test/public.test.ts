@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import app from "../src/public";
 import type { PublicEnv } from "../src/shared/types";
-import { stubD1, stubR2 } from "./helpers";
+import { stubD1, stubR2, yutaiFacts } from "./helpers";
 
 function env(rows: Record<string, unknown>[] = []): PublicEnv {
   return {
@@ -13,6 +13,13 @@ function env(rows: Record<string, unknown>[] = []): PublicEnv {
 }
 
 describe("公開面", () => {
+  it("personal-only優待はDTO追加後もJSS公開面にルートを増やさない", async () => {
+    const row = { genre_id: 1, min_shares: 100, record_month: 3, record_date: null, public_facts: JSON.stringify(yutaiFacts) };
+    const response = await app.request("/v1/yutai/7203", {}, env([row]));
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain("sourceGroup");
+  });
+
   it("書込メソッドを一切受けない", async () => {
     for (const method of ["POST", "PUT", "DELETE", "PATCH"]) {
       const res = await app.request("/v1/meta/licenses", { method }, env());

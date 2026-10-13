@@ -3,6 +3,12 @@ name: cloud_check
 
 on:
   workflow_dispatch:
+    inputs:
+      diagnostic:
+        description: "standard: 従来のHEAD/D1確認、raw-known-object: 既存原本1件のGET/SHA確認（書込なし）"
+        type: choice
+        options: [standard, raw-known-object]
+        default: standard
 
 concurrency:
   group: cloud_check
@@ -23,8 +29,10 @@ jobs:
         with:
           use-flakehub: false
       - name: Sync dependencies
+        if: inputs.diagnostic != 'raw-known-object'
         run: nix develop -c bash -c 'cd pipeline && uv sync --frozen'
       - name: Run cloud_check
+        if: inputs.diagnostic != 'raw-known-object'
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DB_STOCK_MASTER: ${{ secrets.NOTION_DB_STOCK_MASTER }}
@@ -39,8 +47,24 @@ jobs:
           CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
         run: nix develop -c bash -c 'cd pipeline && uv run python -m jp_stock_pipeline.jobs.cloud_check'
 
+      - name: Sync Node dependencies for explicit raw diagnostic
+        if: inputs.diagnostic == 'raw-known-object'
+        run: nix develop -c pnpm install --frozen-lockfile
+      - name: Verify one known raw object (read only, one GET)
+        if: inputs.diagnostic == 'raw-known-object'
+        env:
+          # 現行Python writerと同じ既存Secrets。local.envのscopeを推測しない。
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_RAW: ${{ secrets.R2_BUCKET_RAW }}
+        run: nix develop -c pnpm exec tsx scripts/notion/raw-object-check.ts
+
       - name: 失敗したら Issue を立てる
-        if: failure()
+        if: failure() && inputs.diagnostic != 'raw-known-object'
         uses: ./.github/actions/notify-failure
         with:
           title: "[ジョブ失敗] ${{ github.workflow }}"

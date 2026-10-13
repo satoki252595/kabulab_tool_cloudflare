@@ -36,17 +36,14 @@ function normalizeMonthPeriods(text: string): string {
   return text.normalize("NFKC").replace(/[ヶカヵ]月/g, "か月");
 }
 
-/** 全生成・取込経路で、選択・保有・抽選・応募条件の欠落を保留する。 */
-export function missingSummaryConditions(description: string, summary: string): string[] {
+const periods = (s: string): string[] => [...s.matchAll(/(?<![0-9.,])([0-9]+|半)\s*(年|か月|ヶ月|カ月|ヵ月)\s*(以上|未満|以下|超)/g)].map(m => `${m[1]}${m[2]}${m[3]}`);
+
+/** 原文の適用条件を全生成経路と公開factsの双方で同じように読む。原文自体は返さない。 */
+export function sourceSummaryConditions(description: string) {
   const source = normalizeMonthPeriods(description);
-  const text = normalizeMonthPeriods(summary);
-  const missing: string[] = [];
   const choice = /選[択べんぶび]|いずれか|または|又は/;
   // 株主名簿の「記載又は記録」は優待の選択肢ではない。
   const choices = source.replace(/記載\s*(?:または|又は)\s*記録/g, "");
-  if (choice.test(choices) && !choice.test(text)) missing.push("choice_condition_missing");
-  const period = /(?<![0-9.,])([0-9]+|半)\s*(年|か月|ヶ月|カ月|ヵ月)\s*(以上|未満|以下|超)/g;
-  const periods = (s: string): string[] => [...s.matchAll(period)].map(m => `${m[1]}${m[2]}${m[3]}`);
   let periodSource = source;
   const noteStart = source.indexOf("\n■継続保有期間について");
   if (noteStart >= 0) {
@@ -67,16 +64,32 @@ export function missingSummaryConditions(description: string, summary: string): 
     }
   }
   const requiredPeriods = [...new Set(periods(periodSource))];
+  return {
+    choice: choice.test(choices),
+    holding: /保有期間|継続保有|長期保有/.test(source) || requiredPeriods.length > 0,
+    holdingPeriods: requiredPeriods,
+    lottery: /抽選|当選/.test(source),
+    application: /応募|申(?:し)?込/.test(source),
+  };
+}
+
+/** 全生成・取込経路で、選択・保有・抽選・応募条件の欠落を保留する。 */
+export function missingSummaryConditions(description: string, summary: string): string[] {
+  const facts = sourceSummaryConditions(description);
+  const text = normalizeMonthPeriods(summary);
+  const missing: string[] = [];
+  if (facts.choice && !/選[択べんぶび]|いずれか|または|又は/.test(text)) missing.push("choice_condition_missing");
+  const requiredPeriods = facts.holdingPeriods;
   const claimedPeriods = periods(text);
   const generalHolding = /保有期間(?:に応じ|別|により|によって)/.test(text) && !/[0-9]+[,.0-9]*\s*(?:万|千|百)?\s*(?:円|ポイント)/.test(text);
-  if ((/保有期間|継続保有|長期保有/.test(source) || requiredPeriods.length > 0) &&
+  if (facts.holding &&
       ((!/保有|継続|長期/.test(text) && claimedPeriods.length === 0) ||
        (requiredPeriods.some(p => !claimedPeriods.includes(p)) && !(requiredPeriods.length > 1 && generalHolding)))) {
     missing.push("holding_condition_missing");
   }
-  if (/抽選|当選/.test(source) && !/抽選|当選/.test(text)) missing.push("lottery_condition_missing");
+  if (facts.lottery && !/抽選|当選/.test(text)) missing.push("lottery_condition_missing");
   const application = /応募|申(?:し)?込/;
-  if (application.test(source) && !application.test(text)) missing.push("application_condition_missing");
+  if (facts.application && !application.test(text)) missing.push("application_condition_missing");
   return missing;
 }
 

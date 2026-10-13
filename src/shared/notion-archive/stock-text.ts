@@ -35,11 +35,11 @@
  *   - 有報テキストは不変 (訂正は別 docID の新規通)。読みの Cache は P2 側。
  *
  * 冪等: 行の有無 = DB クエリ (文書完全一致) で判定し、既存ならスキップ。
- * force 時のみ旧行を archived して作り直す (ブロックの選択削除 API が無い
+ * force 時のみ新行を作り、呼出元の全文読戻し・D1 pointer確定後に旧行を archived にする (ブロックの選択削除 API が無い
  * ため。archived 行は残るが非表示で、移行は write-once のため通常出ない)。
  */
 import { queryUniqueRow } from "./archive.js";
-import { assertCursorProgress, notionRequest } from "./client.js";
+import { assertCursorProgress, notionRequest, NotionUnknownResultError } from "./client.js";
 import { notionEnv } from "./env.js";
 
 /** rich_text 1 ブロックの上限 (archive.ts と同一値) */
@@ -243,7 +243,11 @@ export async function findStockTextRowId(
     { property: "文書", title: { equals: docId } },
     `有報テキストの重複 docId=${docId} を選ばず保全停止`
   );
-  return row?.id ?? null;
+  if (row === null) return null;
+  if (typeof row.id !== "string" || row.id.trim() === "") {
+    throw new Error("有報テキストの既存行IDが不正 (追加作成せず保全停止)");
+  }
+  return row.id;
 }
 
 function rowProperties(
@@ -274,11 +278,13 @@ function chunk<T>(arr: T[], size: number): T[][] {
 export interface UpsertStockTextRowResult {
   rowPageId: string;
   outcome: "recorded" | "skipped_existing";
+  /** 新行の全文・D1 pointerの確定後にだけ退役できる旧行。失敗中は保持する。 */
+  replacedPageId?: string;
 }
 
 /**
  * 1 通分の全文を子 DB 行 + 本文ブロックとして冪等記録する。
- * 既存行はスキップ (force 時のみ旧行を archived して作り直す)。
+ * 既存行はスキップ。forceでも旧行を保持し、新行IDと退役候補を返す。
  */
 export async function upsertStockTextRow(args: {
   dbId: string;
@@ -294,21 +300,39 @@ export async function upsertStockTextRow(args: {
   // 入力不正で旧 active 行を消さない。pure 組立をすべて mutation より前に行う。
   const blocks = buildTextBodyBlocks(sections);
   const properties = rowProperties(doc, sections);
-  if (existing && force) {
-    await notionRequest("PATCH", `/pages/${existing}`, { archived: true });
-  }
   const [first, ...rest] = chunk(blocks, CHILDREN_PER_REQUEST);
   const created = await notionRequest<{ id: string }>("POST", "/pages", {
     parent: { database_id: dbId },
     properties,
-    children: first ?? [],
+    children: first,
   });
+  if (typeof created?.id !== "string" || created.id.trim() === "" ||
+      (existing !== null && created.id.replaceAll("-", "").toLowerCase() === existing.replaceAll("-", "").toLowerCase())) {
+    throw new NotionUnknownResultError("有報テキストの新規行ACKが不正 (旧行保持・追加送信なし)");
+  }
   for (const part of rest) {
     await notionRequest("PATCH", `/blocks/${created.id}/children`, {
       children: part,
-    });
+    }, { singleAttempt: true });
   }
-  return { rowPageId: created.id, outcome: "recorded" };
+  return { rowPageId: created.id, outcome: "recorded", ...(existing === null ? {} : { replacedPageId: existing }) };
+}
+
+/** 呼出元が新本文・D1 pointerを確定した後だけ呼ぶ。結果不明時は再送しない。 */
+export async function retireStockTextRow(rowPageId: string): Promise<void> {
+  if (!/^(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.test(rowPageId)) {
+    throw new Error("有報テキスト退役の行IDが不正");
+  }
+  const expected = rowPageId.replaceAll("-", "").toLowerCase();
+  const assertRetired = (page: unknown) => {
+    const p = page as { object?: unknown; id?: unknown; archived?: unknown; in_trash?: unknown } | null;
+    if (p === null || typeof p !== "object" || p.object !== "page" || typeof p.id !== "string" ||
+        p.id.replaceAll("-", "").toLowerCase() !== expected || p.archived !== true || p.in_trash !== true) {
+      throw new NotionUnknownResultError("有報テキスト退役のACK/読戻しが不一致 (結果不明・再送なし)");
+    }
+  };
+  assertRetired(await notionRequest("PATCH", `/pages/${rowPageId}`, { archived: true }, { singleAttempt: true }));
+  assertRetired(await notionRequest("GET", `/pages/${rowPageId}`));
 }
 
 function blockText(

@@ -56,7 +56,7 @@ CREATE INDEX ir_disclosures_stock_pubdate_idx ON ir_disclosures(stock_id, pubdat
  */
 function partialIndexDdl(): string {
   const dir = join(ROOT, "drizzle", "d1");
-  for (const f of readdirSync(dir).filter((n) => n.endsWith(".sql")).sort()) {
+  for (const f of readdirSync(dir).filter((n) => /^\d{4}_.*\.sql$/.test(n)).sort()) {
     for (const stmt of readFileSync(join(dir, f), "utf-8").split("--> statement-breakpoint")) {
       const s = stmt.trim();
       if (s.startsWith("CREATE INDEX `ir_disclosures_high_signal_pubdate`")) return s;

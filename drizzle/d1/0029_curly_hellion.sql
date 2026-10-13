@@ -1,0 +1,1 @@
+ALTER TABLE `yutai_benefits` ADD `public_facts` text;

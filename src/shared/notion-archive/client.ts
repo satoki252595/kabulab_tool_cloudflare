@@ -135,8 +135,11 @@ async function doFetch(
   url: string,
   makeInit: () => RequestInit,
   label: string,
-  isNonIdempotentCreate = false
+  isNonIdempotentCreate = false,
+  singleAttempt = false
 ): Promise<Response> {
+  const stopOnUnknown = isNonIdempotentCreate || singleAttempt;
+  const operation = isNonIdempotentCreate ? "非冪等create" : "単発mutation";
   let attempt = 0;
   for (;;) {
     attempt++;
@@ -154,9 +157,9 @@ async function doFetch(
       // 再送すると同一 helper 内で二重作成し得る。network 例外は送信成否不明
       // のため再送せず即 throw し、呼び出し側の full query 回収 (0=STOP/
       // 1=回収/複数=STOP) に委ねる。
-      if (isNonIdempotentCreate) {
+      if (stopOnUnknown) {
         throw new NotionUnknownResultError(
-          `Notion 非冪等create (${label}) の結果不明のため再送しません (network): ${(e as Error).message}。full query で確認してください`,
+          `Notion ${operation} (${label}) の結果不明のため再送しません (network): ${(e as Error).message}。full query で確認してください`,
           { cause: e }
         );
       }
@@ -178,12 +181,13 @@ async function doFetch(
     // ただし非冪等 create の 529 は結果不明 (過負荷応答でも作成済みの可能性)
     // のため再送しない。明示 429 は拒否 (未作成確定) のため create でも再送可。
     if (res.status === 429 || res.status === 529) {
-      if (isNonIdempotentCreate && res.status === 529) {
+      if (stopOnUnknown && res.status === 529) {
         throw new NotionUnknownResultError(
-          `Notion 非冪等create (${label}) の結果不明のため再送しません (529)。full query で確認してください`
+          `Notion ${operation} (${label}) の結果不明のため再送しません (529)。full query で確認してください`
         );
       }
       stats.rateLimited++;
+      if (singleAttempt) throw new Error(`Notion 単発要求 (${label}) が ${res.status} で拒否されました (再送なし)`);
       const header = res.headers.get("Retry-After");
       const ra = header === null ? NaN : Number(header);
       const waitMs = Number.isFinite(ra)
@@ -201,9 +205,9 @@ async function doFetch(
     const text = await res.text().catch(() => "");
     // 非冪等 create の 5xx・非JSON 4xx (エッジ遮断) は結果不明のため再送禁止。
     // 真正 JSON 4xx (恒久・未作成確定) は下の既存分岐で即 throw する。
-    if (isNonIdempotentCreate && !isPermanent(res.status, text)) {
+    if (stopOnUnknown && !isPermanent(res.status, text)) {
       throw new NotionUnknownResultError(
-        `Notion 非冪等create (${label}) の結果不明のため再送しません (status=${res.status})。full query で確認してください`
+        `Notion ${operation} (${label}) の結果不明のため再送しません (status=${res.status})。full query で確認してください`
       );
     }
     if (isPermanent(res.status, text) || attempt > MAX_RETRY) {
@@ -225,6 +229,8 @@ async function doFetch(
 }
 
 export interface NotionRequestOptions {
+  /** このmutationは1回だけ送信する。結果不明・拒否とも再送しない。共有queue/ペーシングは維持。 */
+  singleAttempt?: boolean;
   /**
    * この呼び出しだけ既定 (`NOTION_VERSION` = 2022-06-28) と異なる
    * Notion-Version を使う。ページ/DB 移動 API 等、新しいデータソース
@@ -370,7 +376,8 @@ export async function notionRequest<T = unknown>(
         body: body === undefined ? undefined : JSON.stringify(body),
       }),
       `${method} ${path}`,
-      isCreate
+      isCreate,
+      opts?.singleAttempt === true
     );
     const family = readListFamily(method, path);
     if (family === null) {

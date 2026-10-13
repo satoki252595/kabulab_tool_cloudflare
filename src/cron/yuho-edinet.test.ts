@@ -19,6 +19,7 @@ import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js
 import { ExistingTextReadbackMismatchError } from "../../services/yuho-quant/src/services/text-backup.js";
 import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
 import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
+import { resumePendingShareholdings } from "../shared/notion-archive/shareholdings.js";
 import type { Database as YuhoDatabase } from "../../services/yuho-quant/src/db/client.js";
 import {
   catchupHttpStatus,
@@ -51,6 +52,9 @@ vi.mock("../../services/yuho-quant/src/services/edinet/list-snapshot.js", async 
 vi.mock("../../services/yuho-quant/src/services/ingest.js", () => ({
   ingestDocument: vi.fn(),
 }));
+vi.mock("../shared/notion-archive/shareholdings.js", () => ({
+  resumePendingShareholdings: vi.fn(async () => ({ usedRows: 0, resumed: 0, held: 0, pending: false })),
+}));
 vi.mock("../../services/yuho-quant/src/services/edinet/archive.js", () => ({
   checkDocsCustody: vi.fn(async () => new Map()),
 }));
@@ -61,7 +65,7 @@ vi.mock("../../services/yuho-quant/src/services/projection.js", () => ({
 
 function applyD1Migrations(target: DatabaseSync): void {
   const dir = join(ROOT, "drizzle", "d1");
-  for (const f of readdirSync(dir).filter((n) => n.endsWith(".sql")).sort()) {
+  for (const f of readdirSync(dir).filter((n) => /^\d{4}_.*\.sql$/.test(n)).sort()) {
     for (const stmt of readFileSync(join(dir, f), "utf-8").split("--> statement-breakpoint")) {
       if (stmt.trim()) target.exec(stmt);
     }
@@ -126,6 +130,22 @@ async function runCatchup(now?: Date) {
 }
 
 describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
+  it("保存原本の保有明細再開をsource一覧より先に行い、残枠を新規ingestへ共有する", async () => {
+    vi.mocked(resumePendingShareholdings).mockResolvedValueOnce({ usedRows: 30, resumed: 1, held: 0, pending: true });
+    vi.mocked(listDocuments).mockResolvedValueOnce({ results: [annualDoc("7203")] } as never).mockResolvedValue({ results: [] } as never);
+    vi.mocked(ingestDocument).mockResolvedValue({ outcome: "ingested", parseStatus: "no_order_table", overseasParseStatus: "no_overseas_table", textParseStatus: "no_text_sections" } as never);
+    const result = await runCatchup();
+    expect(vi.mocked(resumePendingShareholdings).mock.invocationCallOrder.at(-1)).toBeLessThan(vi.mocked(listDocuments).mock.invocationCallOrder[0]);
+    expect(vi.mocked(ingestDocument).mock.calls[0][1].holdingsBudget).toEqual({ remainingRows: 70 });
+    expect(result.byStatus["holdings:resumed"]).toBe(1);
+    expect(catchupHttpStatus(result)).toBe(500);
+  });
+  it("保有明細unknownはEDINET一覧やL2へ進めず、そのまま停止する", async () => {
+    vi.mocked(resumePendingShareholdings).mockRejectedValueOnce(new Error("HOLDINGS_UNKNOWN"));
+    await expect(runCatchup()).rejects.toThrow("HOLDINGS_UNKNOWN");
+    expect(listDocuments).not.toHaveBeenCalled();
+    expect(rebuildYuhoGrowthProjection).not.toHaveBeenCalled();
+  });
   it("当日snapshotは翌日に再観測し後発docだけを取り込み、封印後はsource0", async () => {
     const day = "2026-10-04";
     const firstDoc = annualDoc("7203"), lateDoc = {...annualDoc("7203"), docID: "S1007203LATE"};

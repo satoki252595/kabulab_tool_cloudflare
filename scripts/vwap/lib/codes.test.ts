@@ -28,7 +28,7 @@ const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
 function applyD1Migrations(target: DatabaseSync): void {
   const dir = join(ROOT, "drizzle", "d1");
-  for (const f of readdirSync(dir).filter((n) => n.endsWith(".sql")).sort()) {
+  for (const f of readdirSync(dir).filter((n) => /^\d{4}_.*\.sql$/.test(n)).sort()) {
     for (const stmt of readFileSync(join(dir, f), "utf-8").split("--> statement-breakpoint")) {
       if (stmt.trim()) target.exec(stmt);
     }

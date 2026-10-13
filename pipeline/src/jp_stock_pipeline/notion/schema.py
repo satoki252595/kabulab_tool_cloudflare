@@ -539,7 +539,7 @@ def catalog_blocks(db_ids: dict[str, str]) -> list[dict]:
         _bullet("①銘柄マスタ・③財務サマリ・④開示書類・⑤原本ファイルはNotionで閲覧できます。価格や上場状態の正本はD1で、Notion全DBの空欄が取得漏れを意味するわけではありません。"),
         _bullet("②株価テクニカル・⑥時系列エクスポート・⑦収集ジョブログは退役済み。日足・指標・財務断面・実行履歴はD1、原本・大容量時系列はR2です。"),
         _bullet("⑧需給・⑨株主優待の旧Notion DBは通常更新しません。需給は非公開R2/D1、優待はD1 yutai_benefitsとお宝優待画面を使います。"),
-        _bullet("jss-api-publicは公開可能なRESTだけ、jss-api-privateはAPIキー必須のREST/MCPです。日足・指標・バリュエーション・需給は内部面、公開優待RESTはジャンル・株数・権利月/日だけを返します。"),
+        _bullet("jss-api-publicは公開可能なRESTだけ、jss-api-privateはAPIキー必須のREST/MCPです。日足・指標・バリュエーション・需給・優待条件は内部面です。優待RESTは公開面では提供しません。"),
         _bullet("内部MCPのjp_ohlcv_range / jp_indicators_latest / jp_valuation / jp_supply_latest / jp_dataset_freshness / jp_job_runsで時系列・断面・鮮度・収集結果を確認できます。CI成功はデータ更新成功を意味しません。"),
         _bullet("資金フローは指標定義・観測ログ・取込ログの3DBを使います。sector-turnoverは株価の対象日全件保存後だけ更新し、他28取得元はonly=independentで独立更新します。月次/四半期系列は公表頻度で鮮度を判断します。"),
         _bullet("⑤の歴史原本にはNotionだけに保管されたものがあり、D1 jss_raw_filesの件数とは一致しません。原本relation/raw_page_idを辿り、R2未索引を原本喪失と混同しないでください。"),

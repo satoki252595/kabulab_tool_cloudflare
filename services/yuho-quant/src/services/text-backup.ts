@@ -30,6 +30,8 @@ export interface BackupDocTextResult {
   /** Notion 行 ID。skipped_empty のとき null */
   rowPageId: string | null;
   outcome: "recorded" | "skipped_existing" | "skipped_empty";
+  /** 新pointerのD1 atomic保存が確定した後だけ共有retireStockTextRowで退役する。 */
+  replacedRowPageId?: string;
 }
 
 /** 送信していない既存行の、完全読取後の純全文不一致だけを区別する。 */
@@ -94,7 +96,7 @@ export async function backupDocTextToNotion(args: {
     return { rowPageId: null, outcome: "skipped_empty" };
   }
   const { dbId } = await ensureStockTextDb();
-  const { rowPageId, outcome } = await upsertStockTextRow({
+  const { rowPageId, outcome, replacedPageId } = await upsertStockTextRow({
     dbId,
     doc: { docId, stockCode, fiscalYearEnd, d1DocumentId, textParseStatus },
     sections,
@@ -142,5 +144,5 @@ export async function backupDocTextToNotion(args: {
     }
     throw new Error("有報テキストの読み戻し全文が不一致");
   }
-  return { rowPageId, outcome };
+  return { rowPageId, outcome, ...(replacedPageId === undefined ? {} : { replacedRowPageId: replacedPageId }) };
 }

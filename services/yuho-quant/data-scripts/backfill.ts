@@ -78,6 +78,7 @@ export async function main(): Promise<void> {
   // D1 書込口の明示指定 (Node では必須。ingestDocument 入口 preflight が
   // 未指定を書込前に止める)。sender は無状態なので run 全体で 1 個を使い回す。
   const d1HttpBatch = createD1HttpBatchSender();
+  const holdingsBudget = { remainingRows: 100 };
 
   const to = arg("to") ?? todayISO();
   const years = Number(arg("years") ?? "5");
@@ -204,6 +205,7 @@ export async function main(): Promise<void> {
             force,
             archiveToNotion,
             d1HttpBatch,
+            holdingsBudget,
           });
           stat[r.parseStatus] = (stat[r.parseStatus] ?? 0) + 1;
           if (r.outcome === "ingested") {

@@ -192,13 +192,19 @@ export type StockDetailResult =
 
 export async function fetchStockDetail(code: string, onRaw?: CapturePage): Promise<StockDetailResult> {
   let html: string;
+  let sourceFetchedAt: string | undefined;
   try {
-    html = await fetchPage(`https://minkabu.jp/stock/${code}/yutai`, onRaw);
+    html = await fetchPage(`https://minkabu.jp/stock/${code}/yutai`, page => {
+      sourceFetchedAt = page.receivedAt;
+      onRaw?.(page);
+    });
   } catch (e) {
     const reason = `fetch: ${e instanceof Error ? e.message : String(e)}`.slice(0, 160);
     return { status: "unknown", code, reason };
   }
-  return parseStockDetail(code, html);
+  const result = parseStockDetail(code, html);
+  if (result.status === "ok") result.data.sourceFetchedAt = sourceFetchedAt;
+  return result;
 }
 
 /**

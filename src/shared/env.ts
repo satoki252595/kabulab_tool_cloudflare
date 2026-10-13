@@ -59,6 +59,7 @@ export const sharedEnv = {
   R2_ACCESS_KEY_ID: () => required("R2_ACCESS_KEY_ID"),
   R2_SECRET_ACCESS_KEY: () => required("R2_SECRET_ACCESS_KEY"),
   R2_BUCKET: () => required("R2_BUCKET"),
+  R2_BUCKET_RAW: () => required("R2_BUCKET_RAW"),
   LOCAL_OUT: () => optional("LOCAL_OUT"),
   /**
    * この実行の GitHub Actions run URL。GitHub Actions が自動で注入する

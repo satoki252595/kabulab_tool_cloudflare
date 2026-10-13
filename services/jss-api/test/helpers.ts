@@ -4,6 +4,16 @@ export interface StubRow {
   [key: string]: unknown;
 }
 
+/** 試験専用の条件DTO。掲載文や実企業の制度を表すfixtureではない。 */
+export const yutaiFacts = {
+  version: 1, sourceGroup: "a".repeat(16), holding: true, holdingPeriods: ["5年以上"],
+  choice: false, lottery: false, application: false, combination: "unverified",
+  valueStatus: "source_amount_qualified", qualifiedAmount: 3000,
+  valueReasons: ["qualified_company_per_grant"],
+  source: { listingUrl: "https://minkabu.jp/stock/7203/yutai", fetchedAt: "2026-10-13T15:00:00.000Z",
+    batchFetchedAt: null, officialStatus: "not_verified", officialUrl: null, verifiedAt: null },
+};
+
 export function stubD1(handler: (sql: string, params: unknown[]) => StubRow[]) {
   return {
     prepare(sql: string) {
