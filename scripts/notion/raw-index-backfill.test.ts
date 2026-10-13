@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "../../src/shared/zod-mini.js";
 import { canonicalRawKey } from "./raw-index-plan.js";
-import { createRawDownloader, expectedRawIndex, runRawBackfill, type BackfillIo, type RawBackfillOptions, type RawItem, type RawIndexRow } from "./raw-index-backfill.js";
+import { safeRawFailure, createRawDownloader, expectedRawIndex, runRawBackfill, type BackfillIo, type RawBackfillOptions, type RawItem, type RawIndexRow } from "./raw-index-backfill.js";
 import type { CanonicalRawFile } from "../../src/shared/notion-archive/raw-files.js";
 
 // Protocol fixture only: raw binary fidelity/unknown transport tests, not financial facts.
@@ -41,6 +42,13 @@ function fixture() {
 }
 
 describe("保存済⑤原本のbounded publisher", () => {
+  it("基準日不明も全文照合して保存し、索引NULLと取得時計を維持する", async () => {
+    const f = fixture();
+    f.io.list = vi.fn(async () => [{ ...raw, dataDate: null }]);
+    expect(await runRawBackfill(opts, f.io)).toMatchObject({ status: "snapshot_complete", verified: 1 });
+    expect(f.rows.get(sha)).toMatchObject({ data_date: null, first_fetched_at: Math.floor(Date.parse(raw.fetchedAt) / 1000) });
+    expect(f.rows.get(sha)?.r2_key).toContain("/nodate/nodate/");
+  });
   it("dryはhosted全文SHAまで照合し、原本/index/receiptのmutationを送らない", async () => {
     const f = fixture();
     const result = await runRawBackfill({ ...opts, mode: "dry" }, f.io);
@@ -179,5 +187,25 @@ describe("保存済⑤原本のbounded publisher", () => {
     vi.mocked(f.io.download).mockClear(); vi.mocked(f.io.insert).mockClear(); vi.mocked(f.io.put).mockClear();
     expect(await runRawBackfill(opts, f.io)).toMatchObject({ status: "snapshot_complete", processed: 0, indexAntiJoin: { checked: 1, missing: 0 } });
     expect(f.io.download).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled(); expect(f.rawPuts()).toHaveLength(0);
+  });
+});
+
+
+describe("raw停止診断の秘密非開示", () => {
+  it("許可した固定⑤メッセージだけを表示し、URL/body/causeはSHAへ閉じ込める", () => {
+    expect(safeRawFailure(new Error("⑤原本の基準日が欠測しています。キー日付を捏造せず停止")).detail).toContain("基準日が欠測");
+    const error = new TypeError("https://hosted.invalid/raw?signature=secret-body", { cause: new Error("Authorization secret-cause") });
+    const safe = safeRawFailure(error);
+    expect(safe).toMatchObject({ detail: "contract_or_transport_error", errorClass: "TypeError" });
+    expect(safe.messageSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(safe.causeSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(safe)).not.toMatch(/hosted|secret|Authorization|signature/);
+    expect(safeRawFailure(new Error("[raw-backfill] https://hosted.invalid/secret")).detail).toBe("contract_or_transport_error");
+    expect(safeRawFailure(new Error("⑤原本secretTokenが空です")).detail).toBe("contract_or_transport_error");
+  });
+  it("Zodはissue code/pathだけを出し、input・message・unknown keysを含めない", () => {
+    try { z.strictObject({ items: z.array(z.strictObject({ fetchedAt: z.string() })) }).parse({ items: [{ fetchedAt: null, secretToken: "secret-value" }] }); }
+    catch (error) { const safe = safeRawFailure(error); expect(safe.issues).toEqual(expect.arrayContaining([{ code: "invalid_type", path: ["items", 0, "fetchedAt"] }])); expect(JSON.stringify(safe)).not.toMatch(/secret|Expected|Invalid input/); return; }
+    throw new Error("schema must reject test input");
   });
 });

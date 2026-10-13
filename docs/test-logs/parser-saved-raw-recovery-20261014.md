@@ -11,3 +11,9 @@ Issue #348 の未完分類。調査時点の D1 は受注 `table_unrecognized` 1
 既存 HTML cache は ZIP の member manifest を持たない派生物なので、cache の改善件数を本番修復件数と数えない。過去の中止済み repair grant は再利用しない。
 
 検証: 受注 parser 27 tests、関連 3 suites 49 tests、変更ファイル ESLint、TypeScript、`git diff --check` が成功。
+
+保存原本 pilot の適用準備を追加した。対象は適格 11 操作（本文 7、受注 3、海外 1）と明示保留 2、10 文書・10 銘柄。D1 全列 6 表 4,161 行と Notion 補足 10 行を private PRE に保全し、現行 type-key の事前照会は 11 個とも未作成だった。適用入口は共有原本保存・本文 writer・atomic text-index builder・L2 helper を再利用し、physical PRE → type 別原本全文保存照合 → 新本文全文/7 props 検証 → 全列/全 related-row CAS と D1 atomic 更新 → readback → 旧本文退役 → physical POST とする。本文 7 は 2016 会計期のため、最新補足の本文・タグ・根拠を更新しない。unknown / 不一致は停止し、ラッチを残して read-only 照合へ進む。
+
+隔離 SQLite に実 PRE/schema を載せ、全 11 操作後の facts/indices と他表保全、全列変更 346 ケース、関連行追加 28 ケースの atomic rollback を確認した。L2 は対象 4 銘柄中、実データに画面用 total 条件のある 2 銘柄だけを生成し、残り 2 に仮の total を補わない。13 ZIP の SHA と固定した期待本文/facts/proofs の再解析一致、private 入口の TypeScript も確認。検証は全 fetch 拒否で行い、上流 GET 0・本番業務 mutation 0。本番適用・未対応の全件解消はこの検証結果に含めない。
+
+本番 pilot は完了した。初回は原本 custody 11 件の物理全文照合後、外部更新された L2 の 3 clock 列（as_of/source_max_date/computed_at）を全列ガードで検知し、本文 mutation 前に停止した。旧ラッチを維持した別の残作業計画で fresh PRE と旧→現の clock-only 差分を固定し、既存 custody の再 upload 0 で再照合した。適格 11 操作（本文 7 全節＋D1 pointer/索引、受注 3、海外 1）を保存・読戻し済み。L2 は 4 銘柄対象で適格 2 行を生成し、補足 10 行は不変、PRE/POST は物理全文 SHA を確認した。上流 GET 0、残作業の原本 upload 0。明示保留の海外 2 件と受注・海外の全件未対応は引き続き未解決であり、pilot 成功を全件復旧とは扱わない。

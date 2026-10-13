@@ -73,6 +73,16 @@ def _sink(settings=None, *, r2=None, d1=None) -> CloudSink:
 
 
 class TestRawArtifact:
+    def test_unknown_reference_date_stays_null_in_index(self, tmp_path):
+        artifact = _artifact(tmp_path)
+        artifact.data_date = None
+        r2, d1 = _FakeR2(), _FakeD1()
+        assert _sink(r2=r2, d1=d1).upsert_raw_artifact(artifact) is True
+        assert r2.puts == ["raw/edinet/csv/nodate/nodate/7203/S100XU9L/cccccccccccccccc.zip"]
+        _table, columns, rows, _conflict, _keep = d1.calls[0]
+        assert rows[0][columns.index("data_date")] is None
+        assert rows[0][columns.index("first_fetched_at")] == int(artifact.fetched_at.timestamp())
+
     def test_puts_to_r2_then_indexes_in_d1(self, tmp_path):
         r2, d1 = _FakeR2(), _FakeD1()
         assert _sink(r2=r2, d1=d1).upsert_raw_artifact(_artifact(tmp_path)) is True

@@ -286,8 +286,8 @@ raw/{source}/{datatype}/{yyyy}/{yyyy-mm-dd}/{scope}/{doc_id}/{sha256_16}.{ext}
 |---|---|---|
 | `source` | `edinet` `tdnet` `jpx` `jsf` `minkabu` `yfinance` | `models.Source` を小文字化 |
 | `datatype` | `xbrl` `csv` `pdf` `documents_list` `codelist` `tdnet_list` `tdnet_pdf` `tdnet_xbrl` `splits` `valuation` `margin_weekly` `margin_daily` `zandaka` `shina` `meigara` `seigen` `yutai_monthly` | 現行 `rawstore.raw_filename` の datatype 語彙を拡張 |
-| `yyyy` | `2026` | `data_date` の年（プレフィックス列挙とライフサイクル適用の単位） |
-| `yyyy-mm-dd` | `2026-09-10` | `data_date`。不明時は `nodate` |
+| `yyyy` | `2026` | `data_date` の年。不明時は `nodate`（取得年で補わない） |
+| `yyyy-mm-dd` | `2026-09-10` | `data_date`。不明時は `nodate`、D1の値はNULLを保持 |
 | `scope` | 銘柄コード or `ALL` | 現行 `RawArtifact.scope` |
 | `doc_id` | EDINET docID / TDnet PDFファイル名 / 無ければ `_` | **④開示との結合キー。§3.2 を必ず読むこと** |
 | `sha256_16` | SHA256 先頭16hex | 内容識別子 |
@@ -306,7 +306,7 @@ raw/minkabu/yutai_monthly/2026/2026-09-01/ALL/_/5e8d3f20a1b7c964.json
 
 #### 3.2 `doc_id` セグメントは必須（**前提条件つき**）
 
-**現行の `RawArtifact` に `doc_id` フィールドは存在しない**（`source` / `datatype` / `scope` / `data_date` / `fetched_at` / `url` / `local_path` / `sha256` / `size_bytes` / `license_tag` / `converted_paths` / `convert_status` / `notion_page_id` のみ）。したがってこのキー設計は **`RawArtifact` への `doc_id: str | None` の追加を前提条件とする**。
+`RawArtifact` には現在 `doc_id: str | None` が実装済み。公式取得URLや文書metadataで同定できる文書だけを格納し、不明な文書IDをファイル名の数字から推定しない。基準日不明の原本は `nodate/nodate` partitionへ格納し、D1 `data_date` はNULLのまま取得時計と分ける。
 
 **なぜ `_` へのフォールバックでは駄目か（実測）**:
 

@@ -120,25 +120,34 @@ export function assertCanonicalRawMetadata(expected: Omit<CanonicalRawFile, "sou
   if ((Object.keys(safe) as Array<keyof typeof safe>).some((key) => safe[key] !== expected[key])) throw new Error("⑤原本metadataがmanifestから変化しました");
 }
 
+export interface RawInventoryProgress {
+  phase: "inventory_query" | "inventory_page" | "inventory_partition_complete";
+  prefix: string; queries: number; partitionRows: number; acceptedRows: number; responseRows: number;
+}
+
 /**
  * created_time cutoffで集合を固定し、SHA hexで全域を重複なく分割する。
  * Notionのquery 10,000件打切りを正常終了と扱わず、そのpartitionを捨て再分割。
  * 小さいpilotでも全canonical集合の母集団を確認する。署名URLは返さない。
  */
-export async function listCanonicalRawFiles(cutoff: string, guard: () => void): Promise<CanonicalRawFile[]> {
+export async function listCanonicalRawFiles(cutoff: string, guard: () => void, observe?: (progress: RawInventoryProgress) => void | Promise<void>): Promise<CanonicalRawFile[]> {
   if (!/^\d{4}-\d{2}-\d{2}T/.test(cutoff) || !Number.isFinite(Date.parse(cutoff))) throw new Error("⑤棚卸しcutoffが不正です");
   const dbId = notionEnv.NOTION_DB_RAW_FILES();
   const all = new Map<string, CanonicalRawFile>(), pageIds = new Set<string>();
+  let queries = 0;
   async function partition(prefix: string): Promise<void> {
     const rows: CanonicalRawFile[] = [], seenCursors = new Set<string>(), seenShas = new Set<string>();
     let cursor: string | null = null;
     for (;;) {
       guard();
+      queries++;
+      await observe?.({ phase: "inventory_query", prefix, queries, partitionRows: rows.length, acceptedRows: all.size, responseRows: 0 });
       const response: { results: unknown[]; has_more: boolean; next_cursor: string | null } = await notionRequest("POST", `/databases/${dbId}/query`, {
         filter: { and: [{ property: "SHA256", rich_text: { starts_with: prefix } }, { timestamp: "created_time", created_time: { on_or_before: cutoff } }] },
         sorts: [{ property: "SHA256", direction: "ascending" }], page_size: 100,
         ...(cursor === null ? {} : { start_cursor: cursor }),
       });
+      await observe?.({ phase: "inventory_page", prefix, queries, partitionRows: rows.length, acceptedRows: all.size, responseRows: response.results.length });
       for (const value of response.results) {
         const row = parseCanonicalRawFile(value, dbId);
         if (!row.sha256.startsWith(prefix) || seenShas.has(row.sha256)) throw new Error("⑤partitionに未知/重複SHAがあります");
@@ -157,6 +166,7 @@ export async function listCanonicalRawFiles(cutoff: string, guard: () => void): 
       if (all.has(row.sha256) || pageIds.has(row.pageId)) throw new Error("⑤全域棚卸しに重複SHA/pageがあります");
       all.set(row.sha256, row); pageIds.add(row.pageId);
     }
+    await observe?.({ phase: "inventory_partition_complete", prefix, queries, partitionRows: rows.length, acceptedRows: all.size, responseRows: 0 });
   }
   for (const hex of "0123456789abcdef") await partition(hex);
   if (all.size === 0) throw new Error("⑤canonical集合が空です");

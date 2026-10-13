@@ -55,7 +55,11 @@ describe("T-RAW標本はmutationなしで欠測/未知を保全停止する", ()
     expect(emit.mock.calls.some(([value]) => (value as { phase: string }).phase === "sample")).toBe(false);
     expect(d.get).toHaveBeenCalledTimes(phase === "metadata" ? 0 : 1);
   });
-  it("日付欠測を取得日で補完しない", () => expect(() => canonicalRawKey({ ...raw, dataDate: null }, null)).toThrow("捏造せず停止"));
+  it("基準日不明の原本をnodate/nodateへ分け、取得日を基準日に使わない", () => {
+    const missingDate = { ...raw, dataDate: null };
+    expect(canonicalRawKey(missingDate, null)).toBe(`raw/edinet/csv/nodate/nodate/1001/_/${digest.slice(0, 16)}.zip`);
+    expect(missingDate.dataDate).toBeNull();
+  });
   it("primaryを一度読み、tidy/parquetとsymlinkを選ばない", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "raw-plan-test-"));
     try {

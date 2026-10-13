@@ -38,7 +38,7 @@ def raw_key(
     source: str,
     datatype: str,
     scope: str,
-    data_date: date,
+    data_date: date | None,
     sha256: str,
     ext: str,
     doc_id: str | None = None,
@@ -46,15 +46,18 @@ def raw_key(
     """⑤原本の immutable キー。
 
     ``raw/{source}/{datatype}/{yyyy}/{yyyy-mm-dd}/{scope}/{doc_id}/{sha16}.{ext}``
+    基準日不明は年/日付の代わりに ``nodate/nodate``。取得日で基準日を補わない。
     """
     if not sha256:
         raise ValueError("raw_key: sha256 は必須（immutable キーの一意性の根拠）")
+    partition = ("nodate", "nodate") if data_date is None else (
+        f"{data_date.year:04d}", data_date.isoformat(),
+    )
     return "/".join((
         "raw",
         _seg(source.lower()),
         _seg(datatype.lower()),
-        f"{data_date.year:04d}",
-        data_date.isoformat(),
+        *partition,
         _seg(scope),
         _seg(doc_id, fallback=DOC_ID_FALLBACK),
         f"{sha256[:SHA_PREFIX_LEN]}.{_seg(ext.lstrip('.').lower())}",

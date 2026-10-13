@@ -49,7 +49,10 @@ describe("⑤canonical全集合の固定cutoff/strict partition", () => {
       const b = body as { filter: { and: Array<{ rich_text?: { starts_with: string } }> } };
       return { results: b.filter.and[0]?.rich_text?.starts_with === "c" ? [page()] : [], has_more: false, next_cursor: null };
     });
-    const result = await listCanonicalRawFiles(cutoff, () => {});
+    const progress: object[] = [];
+    const result = await listCanonicalRawFiles(cutoff, () => {}, event => { progress.push(event); });
+    expect(progress).toContainEqual({ phase: "inventory_partition_complete", prefix: "c", queries: 13, partitionRows: 1, acceptedRows: 1, responseRows: 0 });
+    expect(JSON.stringify(progress)).not.toMatch(/signature|sourceUrl|filename|pageId/);
     expect(result).toHaveLength(1); expect(result[0]?.sha256).toBe(digest);
     expect(notionRequest).toHaveBeenCalledTimes(16);
     expect(JSON.stringify(result)).not.toContain("signature");
