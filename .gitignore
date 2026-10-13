@@ -156,3 +156,6 @@ pipeline/tests/fixtures/edinet/issuer-binding/
 
 # Yahoo原本文bytesのrun-local private gzip。公開Git/artifactへ出さない。
 .yahoo-raw-custody/
+
+# 承認済みmainに固定したMac定時処理専用worktree。
+.runtime/

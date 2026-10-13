@@ -67,6 +67,7 @@ jobs:
     concurrency:
       group: yahoo-source
       cancel-in-progress: false
+      queue: max # pending同士の後着cancelを防ぐ。Yahoo取得は引き続き1 jobずつ。
     runs-on: ubuntu-latest
     timeout-minutes: 210
     # 株式 step の実成功出力 (後続 moneyflow の起動条件)。step skip 時は空。

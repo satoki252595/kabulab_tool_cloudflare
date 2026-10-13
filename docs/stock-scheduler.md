@@ -132,7 +132,13 @@ D=2026-10-08 の原文で 00:15 以降が null）の中だった。全銘柄 run
 新しい取得時刻で代用せず、unknownまたは明示失敗にする。
 
 既存ops_checkはactive普通株と小さな断面3表をPKで結合し、完了期限後の当日価格・
-指標・モメンタムの全対象coverageを要求する。マクロは日米共通取引日の保存日を要求する。
+指標・モメンタムの全対象coverageを要求する。期限前は前取引日以上〜当日までの
+実保存値を許容し、未来日を拒否する。マクロは日米共通取引日の保存日を要求する。
 1銘柄のMAX更新だけで残りの停止を隠さず、未登録・古い値を警告する。
 本番readonly実測（2026-10-14 00:42 JST）はSELECT1回、rows_read=14,757、
 rows_written=0、SQL20.73ms。OHLCV全走査やR2列挙は追加しない。
+
+共有`yahoo-source` concurrencyにはGitHub公式の`queue: max`を設定し、後着が
+既存pending runをcancelする既定動作を防ぐ。同時取得は従来どおり1 jobだけ。
+[GitHub公式仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idconcurrency)
+に従い、最大100件のpendingを受け付ける。時刻窓を満たせないrunを成功に変える設定ではない。

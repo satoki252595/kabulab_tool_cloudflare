@@ -1373,3 +1373,16 @@ class TestStockCoverage:
         assert any("indicators" in problem for problem in problems)
         assert any("momentum" in problem for problem in problems)
         assert any("マクロ基準日" in problem for problem in problems)
+
+
+    @pytest.mark.parametrize(("basis", "expected_failures"), [("2026-10-09", 0), ("2026-10-13", 0), ("2026-10-12", 3), ("2026-10-14", 3)])
+    def test_期限前は更新済の当日も許容し未来日は拒否する(self, basis, expected_failures) -> None:
+        store = _FakeStore()
+        store.query("INSERT INTO core_stocks (id,code) VALUES (1,'7203')")
+        store.query("INSERT INTO core_stock_financials (stock_id,data_date,price) VALUES (1,?,100)", [basis])
+        store.query("INSERT INTO swing_stock_indicators VALUES (1,?,100)", [basis])
+        store.query("INSERT INTO p_momentum VALUES (1,?,?,90)", [basis, basis])
+        store.query("INSERT INTO swing_market_context VALUES ('2026-10-09')")
+        problems: list[str] = []
+        ops_check._check_stock_coverage(store, problems, now=datetime(2026, 10, 13, 19, 0, tzinfo=JST))
+        assert len(problems) == expected_failures

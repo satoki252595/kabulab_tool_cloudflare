@@ -112,6 +112,7 @@ jobs:
     concurrency:
       group: yahoo-source
       cancel-in-progress: false
+      queue: max # pending同士の後着cancelを防ぐ。Yahoo取得は引き続き1 jobずつ。
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:

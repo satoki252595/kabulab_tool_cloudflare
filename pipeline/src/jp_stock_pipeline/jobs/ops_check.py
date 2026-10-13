@@ -148,10 +148,10 @@ _EXISTING_TDNET_SQL = "SELECT tdnet_id FROM ir_disclosures WHERE pubdate >= ?"
 # MAXが1銘柄だけ進んだ日に、残りの凍結/未登録を見逃さない。
 STOCK_COVERAGE_SQL = (
     "SELECT COUNT(*) AS expected,"
-    " SUM(CASE WHEN f.data_date = ? AND f.price > 0 THEN 1 ELSE 0 END) AS prices,"
-    " SUM(CASE WHEN i.latest_date = ? AND i.latest_close > 0 THEN 1 ELSE 0 END) AS indicators,"
-    " SUM(CASE WHEN p.as_of = ? AND p.source_max_date = ? AND p.bars > 0 THEN 1 ELSE 0 END) AS momentum,"
-    " MIN(CASE WHEN f.data_date IS NOT ? OR f.price IS NULL OR f.price <= 0 THEN s.code END) AS price_sample,"
+    " SUM(CASE WHEN f.data_date IN (?, ?) AND f.price > 0 THEN 1 ELSE 0 END) AS prices,"
+    " SUM(CASE WHEN i.latest_date IN (?, ?) AND i.latest_close > 0 THEN 1 ELSE 0 END) AS indicators,"
+    " SUM(CASE WHEN p.as_of IN (?, ?) AND p.source_max_date = p.as_of AND p.bars > 0 THEN 1 ELSE 0 END) AS momentum,"
+    " MIN(CASE WHEN f.data_date IS NULL OR f.data_date NOT IN (?, ?) OR f.price IS NULL OR f.price <= 0 THEN s.code END) AS price_sample,"
     " (SELECT MAX(date) FROM swing_market_context) AS macro_date"
     " FROM core_stocks s"
     " LEFT JOIN core_stock_financials f ON f.stock_id = s.id"
@@ -178,7 +178,9 @@ def _check_stock_coverage(store: D1Store, problems: list[str], *, now: datetime 
         utc = current.astimezone(UTC)
         macro_day = utc.date() if utc.hour >= 22 else utc.date() - timedelta(days=1)
         macro_date = latest_session_date(macro_day, ("JPX", "NYSE")).isoformat()
-        rows = store.query(STOCK_COVERAGE_SQL, [expected_date] * 5)
+        # 期限前に既に完了した当日分も受け入れる。未来の日付は受け入れない。
+        today = latest_session_date(current.astimezone(JST).date()).isoformat()
+        rows = store.query(STOCK_COVERAGE_SQL, [expected_date, today] * 4)
     except (D1Error, ValueError) as exc:
         problems.append(f"株式カバレッジを判定できない: {exc}")
         return
@@ -190,7 +192,7 @@ def _check_stock_coverage(store: D1Store, problems: list[str], *, now: datetime 
     for feature in ("prices", "indicators", "momentum"):
         observed = row.get(feature)
         if observed != expected:
-            problems.append(f"株式カバレッジ {feature}: {expected_date}={observed}/{expected}"
+            problems.append(f"株式カバレッジ {feature}: {expected_date}〜{today}={observed}/{expected}"
                             f"（価格欠測例={row.get('price_sample')}）")
     if row.get("macro_date") != macro_date:
         problems.append(f"マクロ基準日: 実保存={row.get('macro_date')} 予定={macro_date}")
