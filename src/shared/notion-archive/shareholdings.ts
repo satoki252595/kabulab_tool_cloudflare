@@ -1,7 +1,7 @@
 /** 保有明細の唯一のNotion入口。旧推定値は残し、原表で確定した列だけを公開する。 */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { parseShareholdingsData, type Shareholding, type ShareholdingsSource, type ShareholdingsExtraction } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
+import { parseShareholdingsData, verifySavedHoldingsSource, type Shareholding, type ShareholdingsSource, type ShareholdingsExtraction } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource, type HoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { edinetArchiveFilename } from "../../../services/yuho-quant/src/services/edinet/archive.js";
 import { findUniqueBackupChildByTitle, queryUniqueRow } from "./archive.js";
@@ -218,9 +218,8 @@ export async function publishVerifiedShareholdings(args: PublishHoldingsArgs): P
   if (args.zip.length > 5 * 1024 * 1024) return hold("1原本5MiBの解析予算を超えています", 0, false);
   if (maxRows === 0) return hold("保有明細のrun件数予算を使い切りました", 0, true);
   const parsed = parseShareholdingsData(args.zip, args.source);
-  if (parsed.status !== "ok") {
-    assert.ok(parsed.reason);
-    return hold(parsed.reason, 0, false);
+  if (parsed.status !== "ok" || parsed.holderScope !== "filer_only") {
+    return hold(parsed.reason ?? "提出会社の保有主体資格が未確認です", 0, false);
   }
   if (parsed.holdings.length > maxRows) return hold("明細件数がrunの残予算を超えています", parsed.holdings.length, parsed.holdings.length <= 100);
   // 並列backfillでも、最初のawait前にrun枠を予約する。未知結果で返却しない。
@@ -246,12 +245,14 @@ export async function publishVerifiedShareholdings(args: PublishHoldingsArgs): P
       { property: "保有会社コード", rich_text: { equals: args.source.stockCode } },
       { property: "銘柄名", rich_text: { equals: holding.name } },
       { property: "期末", date: { equals: args.source.fiscalYearEnd } },
+      { property: "保有種別", select: { equals: holding.kind } },
     ] }, "保有明細が複数あるため原本行を特定できません");
     if (existing) {
       assert.equal(existing.parent.type, "database_id");
       assert.equal(existing.parent.database_id.replaceAll("-", ""), dbId.replaceAll("-", ""));
       assert.equal(existing.archived, false);
       assert.equal(existing.in_trash, false);
+      assertProperties(existing.properties, { "保有会社コード": rt(args.source.stockCode), "銘柄名": rt(holding.name), "期末": { date: { start: args.source.fiscalYearEnd } }, "保有種別": { select: { name: holding.kind } } });
       assert.equal(existing.properties["原本照合済"]?.type, "checkbox");
       assert.equal(typeof existing.properties["原本照合済"].checkbox, "boolean");
     }
@@ -327,23 +328,48 @@ function valuationProperties(holding: Shareholding, valuation: HoldingValuation)
   return properties;
 }
 
+/** 原metadataの欠測は書き換えず、存在するissuer/期末とコード証拠を束縛する。 */
+export function verifySavedHoldingsMetadata(metadata: Record<string, unknown>, source: ShareholdingsSource): { status: "verified"; missing: string[] } | { status: "held"; reason: string } {
+  assert.equal(metadata.docID, source.docId);
+  const missing: string[] = [];
+  for (const [field, expected] of Object.entries({ edinetCode: source.edinetCode, periodEnd: source.fiscalYearEnd })) {
+    if (metadata[field] === undefined || metadata[field] === null) missing.push(field);
+    else assert.equal(metadata[field], expected, "保存原本metadataの提出者/期末が不一致です");
+  }
+  let codeBound = false;
+  if (metadata.stockCode !== undefined) { assert.equal(metadata.stockCode, source.stockCode); codeBound = true; }
+  for (const field of ["secCode", "rawSecCode"] as const) {
+    const code = metadata[field];
+    if (code === undefined || code === null || code === "00000") continue;
+    assert.equal(code, `${source.stockCode}0`, "保存原本metadataの非0証券コードが不一致です");
+    codeBound = true;
+  }
+  if (!codeBound) return { status: "held", reason: "原本metadataの銘柄束縛が未確認です（未割当/NULLは公式提出者逆引きの追加根拠が必要）" };
+  return { status: "verified", missing };
+}
+
 /** 保存type1限定のbackfill準備。新規原本取得・schema変更・行更新は0。 */
-export async function readSavedHoldingsZip(docId: string): Promise<
-  { status: "ready"; archivePageId: string; bytes: Buffer; sha256: string; originalManifest: "known" | "unknown" } |
+export async function readSavedHoldingsZip(source: ShareholdingsSource): Promise<
+  { status: "ready"; archivePageId: string; bytes: Buffer; sha256: string; originalManifest: "known" | "unknown"; sourceCustody: "typed" | "legacy"; metadata: Record<string, unknown>; fetchedAt: string; metadataMissing: string[] } |
   { status: "held"; reason: string }
 > {
+  const { docId } = source;
   assert.match(docId, /^S[0-9A-Z]+$/);
+  if (source.edinetCode === null) return { status: "held", reason: "提出者EDINETコードが未確定です" };
   const dbId = await sourceDatabase();
-  const page = await queryUniqueRow<HoldingPage>(dbId, { property: "Key", title: { equals: `${docId}:type1` } }, "type1原本が複数あり保全停止します");
-  if (page === null) return { status: "held", reason: "最新有報のtype1物理原本が未保管です。新規EDINET取得は実施しません" };
+  let page = await queryUniqueRow<HoldingPage>(dbId, { property: "Key", title: { equals: `${docId}:type1` } }, "type1原本が複数あり保全停止します");
+  const sourceCustody = page === null ? "legacy" : "typed";
+  if (page === null) page = await queryUniqueRow<HoldingPage>(dbId, { property: "Key", title: { equals: docId } }, "legacy原本が複数あり保全停止します");
+  if (page === null) return { status: "held", reason: "現行type1/legacyの物理保管行がありません。公式の原本未提供とは未判定です（上流GETなし）" };
   assert.equal(page.archived, false); assert.equal(page.in_trash, false);
   assert.equal(page.parent.type, "database_id"); assert.equal(page.parent.database_id.replaceAll("-", ""), dbId.replaceAll("-", ""));
   const key = page.properties["Key"];
   assert.equal(key.type, "title"); assert.ok(Array.isArray(key.title));
-  assert.equal(key.title.map(part => { assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text; }).join(""), `${docId}:type1`);
+  assert.equal(key.title.map(part => { assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text; }).join(""), sourceCustody === "typed" ? `${docId}:type1` : docId);
   if (page.properties["保有明細状態"]?.select?.name === "実行中（結果未確定）") return { status: "held", reason: "保有明細の前回結果が未確定です。再送せず読取照合してください" };
-  const files = await listPageFiles(page.id, "Files");
-  if (files.length !== 1 || files[0].kind !== "file" || files[0].name !== edinetArchiveFilename(docId, 1)) return { status: "held", reason: "type1の単一Notion-hosted物理添付を確認できません" };
+  const allFiles = await listPageFiles(page.id, "Files");
+  const files = sourceCustody === "typed" ? allFiles : allFiles.filter(file => file.name === edinetArchiveFilename(docId, 1));
+  if (files.length !== 1 || files[0].kind !== "file" || files[0].name !== edinetArchiveFilename(docId, 1)) return { status: "held", reason: `${sourceCustody}原本のtype1単一Notion-hosted物理添付を確認できません（CSVは代用しません）` };
   assert.equal(new URL(files[0].url).protocol, "https:");
   const response = await fetch(files[0].url, { redirect: "error", signal: AbortSignal.timeout(30_000) });
   assert.equal(response.ok, true);
@@ -357,16 +383,26 @@ export async function readSavedHoldingsZip(docId: string): Promise<
   const metadata = JSON.parse(parts.map(part => {
     assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text;
   }).join(""));
-  assert.equal(metadata.docID, docId);
+  if (metadata.sourceZIPSHA !== undefined) assert.equal(metadata.sourceZIPSHA, digest);
+  if (metadata.sourceZIPBytes !== undefined) assert.equal(metadata.sourceZIPBytes, bytes.length);
+  const metadataProof = verifySavedHoldingsMetadata(metadata, source);
+  if (metadataProof.status === "held") return metadataProof;
+  if (sourceCustody === "typed") assert.equal(metadata.edinetDocType, 1);
+  const fetchedAt = page.properties["Fetched At"]?.date?.start;
+  assert.ok(typeof fetchedAt === "string" && Number.isFinite(Date.parse(fetchedAt)), "保存原本の取得時計が未確認です");
   if (metadata._fileManifest !== undefined) {
     assert.ok(Array.isArray(metadata._fileManifest.files));
-    assert.equal(metadata._fileManifest.files.length, 1);
-    const manifest = metadata._fileManifest.files[0];
+    const manifests = metadata._fileManifest.files.filter((file: { originalFilename?: unknown }) => file.originalFilename === files[0].name);
+    assert.equal(manifests.length, 1);
+    if (sourceCustody === "typed") assert.equal(metadata._fileManifest.files.length, 1);
+    const manifest = manifests[0];
     assert.equal(manifest.originalFilename, files[0].name);
     assert.equal(manifest.byteLength, bytes.length); assert.equal(manifest.sha256, digest);
   }
+  const identity = verifySavedHoldingsSource(bytes, source);
+  if (identity.status === "held") return identity;
   return { status: "ready", archivePageId: page.id, bytes, sha256: digest,
-    originalManifest: metadata._fileManifest === undefined ? "unknown" : "known" };
+    originalManifest: metadata._fileManifest === undefined ? "unknown" : "known", sourceCustody, metadata, fetchedAt, metadataMissing: metadataProof.missing };
 }
 
 const RECOVERY = {

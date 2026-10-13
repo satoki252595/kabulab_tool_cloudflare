@@ -84,6 +84,19 @@ describe("⑤canonical全集合の固定cutoff/strict partition", () => {
     await expect(listCanonicalRawFiles(cutoff, () => { throw new Error("deadline"); })).rejects.toThrow("deadline");
     expect(notionRequest).not.toHaveBeenCalled();
   });
+  it("原本＋tidy/parquetの3添付でも原本名だけを一意選択する", async () => {
+    const p = page();
+    p.properties["ファイル"].files.push(
+      { type: "file", name: "derived.tidy.csv", file: { url: "https://hosted.example/tidy" } },
+      { type: "file", name: "derived.parquet.zip", file: { url: "https://hosted.example/parquet" } }
+    );
+    vi.mocked(notionRequest).mockResolvedValue({ results: [p], has_more: false });
+    const result = await findCanonicalRawFileAttachments([digest]);
+    expect(result.get(digest)?.raw.hostedAttachments).toBe(3);
+    expect(result.get(digest)?.file).toEqual({ name: "edinet_csv_1001_20261013.zip", url: "https://hosted.example/raw?signature=do-not-return" });
+    p.properties["ファイル"].files.push({ type: "file", name: "edinet_csv_1001_20261013.zip.zip", file: { url: "https://hosted.example/ambiguous" } });
+    await expect(findCanonicalRawFileAttachments([digest])).rejects.toThrow("一意に確定できません");
+  });
   it("hostedURLはSHA batchのメモリ内で更新し、immutable metadata差分を検出する", async () => {
     const p = page(), { sourceUrl: _url, ...expected } = parseCanonicalRawFile(p, "a".repeat(32));
     vi.mocked(notionRequest).mockResolvedValue({ results: [p], has_more: false, next_cursor: null });

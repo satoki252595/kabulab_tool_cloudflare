@@ -6,7 +6,7 @@ import { createSemifClient, SEMIF_MODEL } from "../../../../src/shared/semif/ind
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createJevClient, jevEnv } from "../../../../src/shared/jev/index.js";
-import { loadLatestDocs, loadNewStockEligibility, type LatestDoc } from "./source.js";
+import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility, type LatestDoc } from "./source.js";
 import type { LedgerEntry, SupplementRow, SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
 import type { StockTextSection } from "../../../../src/shared/notion-archive/stock-text.js";
 import { makeBudgetedVerifySources } from "./sources-verify.js";
@@ -31,7 +31,7 @@ const notionMocks = vi.hoisted(() => ({
   loadStockMasterIndex: vi.fn(async () => ({ index: new Map<string, string>(), duplicates: new Map<string, string[]>() })),
   createSupplementRow: vi.fn(async (_dbId: string, _row: SupplementRowInput) => "new-page"),
   updateSupplementRow: vi.fn(async (_pageId: string, _row: SupplementRowInput) => {}),
-  replaceEvidenceBlock: vi.fn(async () => {}),
+  replaceEvidenceBlock: vi.fn(async (_pageId: string, _block: unknown, _input: SupplementRowInput, _expected: Record<string, unknown>, guard: () => Promise<void>) => { await guard(); }),
   readStockTextRow: vi.fn(async (): Promise<StockTextSection[]> => []),
   notionStats: vi.fn(() => ({ requests: 0, rateLimited: 0, transientRetries: 0 })),
   resetNotionStats: vi.fn(),
@@ -63,6 +63,7 @@ vi.mock("../../../../src/shared/semif/index.js", async (importOriginal) => ({
 vi.mock("../db/schema.js", () => ({}));
 
 vi.mock("./source.js", () => ({
+  assertLatestDocCurrent: vi.fn(async () => {}),
   loadLatestDocs: vi.fn(async () => []),
   loadNewStockEligibility: vi.fn(async () => ({ eligibleCodes: new Set<string>(), heldCodes: new Set<string>() })),
 }));
@@ -224,7 +225,7 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
     expect(jevEnv.TYPESAFE_API_KEY).not.toHaveBeenCalled();
     expect(summary.jev.calls).toBe(0);
     expect(summary.billingBlocked).toEqual([]);
-    expect(notionMocks.updateSupplementRow.mock.calls[0][1].judgeInput).toContain("機械照合");
+    expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].judgeInput).toContain("機械照合");
   });
 
   it("新規資格成立の初回だけSemIfを起動し、終了後に解放する", async () => {
@@ -277,6 +278,7 @@ function minimalRow(overrides: Partial<SupplementRow>): SupplementRow {
     vocabVersion: null,
     judgedAt: null,
     candidateCount: null,
+    judgeInput: null,
     attempts: null,
     nextRetryAt: null,
     error: null,
@@ -294,9 +296,7 @@ function minimalRow(overrides: Partial<SupplementRow>): SupplementRow {
 
 describe("runBiztag — 保存済みマスタの参照", () => {
   it.each([
-    { docId: "OLD_DOC", vocabVersion: MINI_VOCAB.version },
     { docId: "TEST_DOC", vocabVersion: "v0" },
-    { docId: "OLD_DOC", vocabVersion: "v0" },
   ])("doc=$docId/版=$vocabVersionでも保存タグ・根拠を保持し、本文を再読しない", async ({ docId, vocabVersion }) => {
     vi.mocked(loadLatestDocs).mockResolvedValue([{ stockCode: "6103", companyName: "保存タグ確認",
       sector33: null, doc: { docId: "TEST_DOC", docTypeCode: "120", periodEnd: "2026-03-31",
@@ -476,5 +476,44 @@ describe("runBiztag — billingBlocked 集計", () => {
       model: SEMIF_MODEL,
     });
     expect(summary.billingBlocked).toEqual(["4326", "8888"]);
+  });
+});
+
+
+describe("runBiztag input-change safety", () => {
+  function changedSource() {
+    vi.mocked(loadLatestDocs).mockResolvedValue([{ stockCode: "6103", companyName: "オークマ", sector33: "機械",
+      doc: { docId: "S100YFQC", docTypeCode: "120", periodEnd: "2026-03-31", submittedAt: "2026-06-25T00:00:00Z", notionDocPageId: "new-text", textParseStatus: "ok" } }]);
+    notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "6103", docId: "S100OLD", tagDoc: "S100OLD 2025年3月期", tagStatus: "判定済", vocabVersion: "v0", upstream: ["工作機械"], evidenceText: "保存済み根拠" })]);
+  }
+  it("dry-run source changes do not read fulltext, infer, or change existing values", async () => {
+    changedSource();
+    const summary = await runBiztag({ budgetMs: 10_000, dryRun: true, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: SEMIF_MODEL });
+    expect(summary.countsByKind.source_change_dry_run_hold).toBe(1);
+    expect(summary.qualificationHeld).toEqual(["6103"]);
+    expect(summary.coverage.judged).toBe(0);
+    expect(notionMocks.readStockTextRow).not.toHaveBeenCalled();
+    expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
+    expect(createSemifClient).not.toHaveBeenCalled(); expect(createJevClient).not.toHaveBeenCalled();
+  });
+  it("write直前latest guard失敗を旧判定済のcurrent coverageへ加算しない", async () => {
+    changedSource();
+    notionMocks.readStockTextRow.mockResolvedValueOnce([{ sectionKey: "business", itemName: "事業の内容", text: "工作機械の製造・販売を行っています。" }]);
+    vi.mocked(createSemifClient).mockReturnValueOnce({ askNoul: async () => ({ model: "mock", answers: { "bt.B.MACH.MACHINE_TOOL": 0.95 }, inputTokens: 1, outputTokens: 0, latencyMs: 1, attempts: 1 }), close: async () => {} });
+    vi.mocked(assertLatestDocCurrent).mockRejectedValueOnce(new Error("最新pointer変更 HOLD"));
+    const summary = await runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: SEMIF_MODEL });
+    expect(summary.qualificationHeld).toEqual(["6103"]); expect(summary.coverage.judged).toBe(0);
+    expect(summary.failures[0].message).toContain("最新pointer変更"); expect(summary.judge?.calls).toBe(1);
+    expect(notionMocks.updateSupplementRow).not.toHaveBeenCalled(); expect(assertLatestDocCurrent).toHaveBeenCalledTimes(1);
+  });
+  it("unknown inference preserves old values and is excluded from current-input coverage", async () => {
+    changedSource();
+    notionMocks.readStockTextRow.mockResolvedValueOnce([{ sectionKey: "business", itemName: "事業の内容", text: "工作機械の製造・販売を行っています。" }]);
+    vi.mocked(createSemifClient).mockReturnValueOnce({ askNoul: async () => { throw new Error("unknown local result"); }, close: async () => {} });
+    const summary = await runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: SEMIF_MODEL });
+    expect(summary.qualificationHeld).toEqual(["6103"]); expect(summary.coverage.judged).toBe(0);
+    expect(summary.failures[0].message).toContain("unknown local result");
+    expect(notionMocks.updateSupplementRow).not.toHaveBeenCalled(); expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
+    expect(createJevClient).not.toHaveBeenCalled();
   });
 });

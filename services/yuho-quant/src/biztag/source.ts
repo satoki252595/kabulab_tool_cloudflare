@@ -15,7 +15,7 @@
  * `yuho_text_sections` (索引テーブル。80万行規模) には一切触れない
  * (rows_read を抑える)。
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { stocks } from "../../../../src/shared/db/core-schema.js";
@@ -155,6 +155,7 @@ function assertDocTypeCode(v: string, docId: string): "120" | "130" {
 }
 
 interface DocRow {
+  id: number;
   stockId: number;
   docId: string;
   docTypeCode: string;
@@ -166,7 +167,8 @@ interface DocRow {
 
 function isLater(a: DocRow, b: DocRow): boolean {
   if (a.periodEnd !== b.periodEnd) return a.periodEnd > b.periodEnd;
-  return a.submittedAt.getTime() > b.submittedAt.getTime();
+  if (a.submittedAt.getTime() !== b.submittedAt.getTime()) return a.submittedAt.getTime() > b.submittedAt.getTime();
+  return a.id > b.id;
 }
 
 /**
@@ -185,6 +187,7 @@ export async function loadLatestDocs(db: BiztagSourceDb): Promise<LatestDoc[]> {
 
   const docRows = (await db
     .select({
+      id: yuhoDocuments.id,
       stockId: yuhoDocuments.stockId,
       docId: yuhoDocuments.docId,
       docTypeCode: yuhoDocuments.docTypeCode,
@@ -227,4 +230,26 @@ export async function loadLatestDocs(db: BiztagSourceDb): Promise<LatestDoc[]> {
         : null,
     };
   });
+}
+
+
+/** 書込直前の1社だけを再照会する。旧doc/旧pointerへ戻らず、差異はHOLD。 */
+export async function assertLatestDocCurrent(
+  db: BiztagSourceDb,
+  stockCode: string,
+  expected: NonNullable<LatestDoc["doc"]>
+): Promise<void> {
+  const rows = await db.select({
+    docId: yuhoDocuments.docId, docTypeCode: yuhoDocuments.docTypeCode,
+    periodEnd: yuhoDocuments.periodEnd, submittedAt: yuhoDocuments.submittedAt,
+    notionDocPageId: yuhoDocuments.notionDocPageId, textParseStatus: yuhoDocuments.textParseStatus,
+  }).from(yuhoDocuments).innerJoin(stocks, eq(yuhoDocuments.stockId, stocks.id)).where(and(
+    activeEquityCondition(), eq(stocks.code, stockCode), inArray(yuhoDocuments.docTypeCode, DOC_TYPE_CODES)
+  )).orderBy(desc(yuhoDocuments.periodEnd), desc(yuhoDocuments.submittedAt), desc(yuhoDocuments.id)).limit(1);
+  const actual = rows[0];
+  if (rows.length !== 1 || actual.docId !== expected.docId || actual.docTypeCode !== expected.docTypeCode ||
+      actual.periodEnd !== expected.periodEnd || actual.submittedAt.toISOString() !== expected.submittedAt ||
+      actual.notionDocPageId !== expected.notionDocPageId || actual.textParseStatus !== expected.textParseStatus) {
+    throw new Error(`書込直前に最新有報・本文pointerが変更/欠測 (${stockCode})。旧値を保持してHOLD`);
+  }
 }

@@ -16,15 +16,22 @@ import { parseShareholdingsData, type ShareholdingsSource } from "../src/service
 import { parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../src/services/edinet/shareholdings-valuation.js";
 import { readSavedHoldingsZip, publishVerifiedShareholdings } from "../../../src/shared/notion-archive/shareholdings.js";
 import { verifyArchivedAttachments } from "../../../src/shared/notion-archive/readback.js";
-import { edinetArchiveFilename } from "../src/services/edinet/archive.js";
+import { edinetArchiveFilename, recordEdinetZip } from "../src/services/edinet/archive.js";
 import { guardedHoldingsMutation } from "../../../scripts/notion/shareholdings.js";
+
+// ESM module start: never label a running old parser with a SHA read after long preparation.
+const PARSER_SOURCE_PATH = fileURLToPath(new URL("../src/services/edinet/shareholdings.ts", import.meta.url));
+const PARSER_SOURCE_SHA256 = createHash("sha256").update(readFileSync(PARSER_SOURCE_PATH)).digest("hex");
+function assertParserSourceUnchanged(): void {
+  assert.equal(createHash("sha256").update(readFileSync(PARSER_SOURCE_PATH)).digest("hex"), PARSER_SOURCE_SHA256, "parser source changed after process startup; stop before accepting a plan");
+}
 
 const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 const save = (path: string, value: unknown) => writeFileSync(path, JSON.stringify(value, null, 2) + "\n", { flag: "wx", mode: 0o600 });
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 interface SourcePath { path: string; archivePageId: string; filename: string; sha256: string }
-interface Item { source: ShareholdingsSource; ownerName: string; status: string; reason: string | null; parsedRows: number;
-  archivePageId?: string; zipPath?: string; zipSha256?: string; originalManifest?: string; projectionPath?: string }
+interface Item { parserSourceSha256?: string; source: ShareholdingsSource; ownerName: string; status: string; reason: string | null; parsedRows: number;
+  archivePageId?: string; zipPath?: string; zipSha256?: string; originalManifest?: string; projectionPath?: string; sourceCustody?: "typed" | "legacy"; sourceMetadata?: Record<string, unknown>; sourceFetchedAt?: string; sourceMetadataMissing?: string[] }
 
 function valuationSources(path: string | null): { codeList: ArchivedSource; prices: ArchivedSource[] } | undefined {
   if (path === null) return undefined;
@@ -45,8 +52,8 @@ export async function prepareLatestHoldings(args: { limit: number; afterCode: st
   for (const row of selected.rows) {
     const source: ShareholdingsSource = { docId: row.docId, stockCode: row.stockCode, edinetCode: row.edinetCode, fiscalYearEnd: row.fiscalYearEnd };
     const path = join(args.dir, `${row.stockCode}-${row.docId}.item.json`);
-    if (existsSync(path)) { const item = read(path) as Item; assert.deepEqual(item.source, source); items.push(item); continue; }
-    const saved = await readSavedHoldingsZip(row.docId);
+    if (existsSync(path)) { const item = read(path) as Item; assert.deepEqual(item.source, source); assert.equal(item.parserSourceSha256, PARSER_SOURCE_SHA256, "旧parserのitemは未受入です。保存ZIPから別planへ再解析してください"); items.push(item); continue; }
+    const saved = await readSavedHoldingsZip(source);
     let item: Item;
     if (saved.status === "held") item = { source, ownerName: row.ownerName, status: "held", reason: saved.reason, parsedRows: 0 };
     else {
@@ -61,12 +68,15 @@ export async function prepareLatestHoldings(args: { limit: number; afterCode: st
       writeFileSync(projectionPath, records.map(record => JSON.stringify(record)).join("\n") + (records.length ? "\n" : ""), { flag: "wx", mode: 0o600 });
       item = { source, ownerName: row.ownerName, status: parsed.status === "ok" ? "ready" : "held", reason: parsed.reason,
         parsedRows: parsed.holdings.length, archivePageId: saved.archivePageId, zipPath, zipSha256: saved.sha256,
-        originalManifest: saved.originalManifest, projectionPath };
+        originalManifest: saved.originalManifest, projectionPath, sourceCustody: saved.sourceCustody, sourceMetadata: saved.metadata, sourceFetchedAt: saved.fetchedAt, sourceMetadataMissing: saved.metadataMissing };
     }
+    item.parserSourceSha256 = PARSER_SOURCE_SHA256;
+    assertParserSourceUnchanged();
     save(path, item); items.push(item);
     console.info(JSON.stringify({ docId: source.docId, status: item.status, rows: item.parsedRows }));
   }
-  save(join(args.dir, "plan.json"), { version: 1, observedAt: new Date().toISOString(), selection: { afterCode: args.afterCode, limit: args.limit },
+  assertParserSourceUnchanged();
+  save(join(args.dir, "plan.json"), { version: 1, parserSourceSha256: PARSER_SOURCE_SHA256, observedAt: new Date().toISOString(), selection: { afterCode: args.afterCode, limit: args.limit },
     nextAfterCode: selected.rows.length ? selected.rows[selected.rows.length - 1].stockCode : args.afterCode, more: selected.more,
     valuationPath: args.valuationPath, items, upstreamRequests: 0, productionWrites: 0 });
   console.info(JSON.stringify({ ready: items.filter(item => item.status === "ready").length, held: items.filter(item => item.status === "held").length,
@@ -76,8 +86,10 @@ export async function prepareLatestHoldings(args: { limit: number; afterCode: st
 export async function applyLatestHoldings(dir: string, maxRows: number): Promise<void> {
   assert.ok(Number.isSafeInteger(maxRows) && maxRows >= 1 && maxRows <= 1000);
   assert.equal(readdirSync(dir).some(name => name.endsWith(".pending-write.json")), false, "前回の結果未確定journalがあります。読取照合が必要です");
-  const plan = read(join(dir, "plan.json")) as { version: number; selection: { afterCode: string | null; limit: number }; valuationPath: string | null; items: Item[] };
+  const plan = read(join(dir, "plan.json")) as { version: number; parserSourceSha256: string; selection: { afterCode: string | null; limit: number }; valuationPath: string | null; items: Item[] };
   assert.equal(plan.version, 1);
+  assert.equal(plan.parserSourceSha256, PARSER_SOURCE_SHA256, "旧parser planは未受入です。保存ZIPから再準備してください");
+  assertParserSourceUnchanged();
   // fresh最新文書集合を一度読む。prepare後の新有報へ古い計画を適用しない。
   const fresh = await selectLatestHoldingsDocuments(createD1HttpDb(schema), plan.selection);
   const evidence = valuationSources(plan.valuationPath);
@@ -87,6 +99,8 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
     }
     let usedRows = 0, published = 0, held = 0, pending = 0;
     for (const item of plan.items) {
+      assert.equal(item.parserSourceSha256, PARSER_SOURCE_SHA256, "item parser SHA不一致");
+      assertParserSourceUnchanged();
       const latest = fresh.rows.find(row => row.stockCode === item.source.stockCode);
       assert.equal(latest?.docId, item.source.docId, "最新有報が準備時から変化しました。再準備してください");
       const receipt = join(dir, `${item.source.stockCode}-${item.source.docId}.published.json`);
@@ -95,9 +109,31 @@ export async function applyLatestHoldings(dir: string, maxRows: number): Promise
       if (usedRows + item.parsedRows > maxRows) { pending++; continue; }
       assert.ok(item.zipPath && item.zipSha256 && item.archivePageId);
       const zip = readFileSync(item.zipPath); assert.equal(hash(zip), item.zipSha256);
-      await verifyArchivedAttachments(item.archivePageId, [{ filename: edinetArchiveFilename(item.source.docId, 1), bytes: zip }], "保有明細backfillの保存type1");
+      let archivePageId = item.archivePageId;
+      if (item.sourceCustody === "legacy") {
+        // 非0件の適格通だけを現行keyへ移す。HOLD/0件は上で除外し、一次データを二重化しない。
+        assert.ok(item.parsedRows > 0 && item.sourceMetadata && item.sourceFetchedAt);
+        const custodyReceipt = join(dir, `${item.source.stockCode}-${item.source.docId}.modern-custody.json`);
+        if (existsSync(custodyReceipt)) {
+          const recorded = read(custodyReceipt); assert.equal(recorded.zipSha256, item.zipSha256);
+          archivePageId = recorded.result.pageId;
+          await verifyArchivedAttachments(archivePageId, [{ filename: edinetArchiveFilename(item.source.docId, 1), bytes: zip }], "保有明細backfillの確定済type1");
+        } else {
+          const saved = await readSavedHoldingsZip(item.source);
+          assert.equal(saved.status, "ready");
+          if (saved.status !== "ready") throw new Error("保存原本の現在値が未確認です");
+          assert.equal(saved.sourceCustody, "legacy"); assert.equal(saved.archivePageId, item.archivePageId);
+          assert.equal(saved.sha256, item.zipSha256); assert.ok(saved.bytes.equals(zip));
+          assert.deepEqual(saved.metadata, item.sourceMetadata); assert.equal(saved.fetchedAt, item.sourceFetchedAt);
+          const recorded = await recordEdinetZip({ service: "yuho-quant", docID: item.source.docId, type: 1, zip,
+            source: "Saved Notion legacy type1; holdings-qualified nonzero custody migration; upstream GET 0",
+            fetchedAt: saved.fetchedAt, metadata: { ...saved.metadata, sourceLegacyPageId: saved.archivePageId, sourceSha256: saved.sha256 }, force: false });
+          archivePageId = recorded.pageId;
+          save(custodyReceipt, { observedAt: new Date().toISOString(), zipSha256: item.zipSha256, result: recorded });
+        }
+      } else await verifyArchivedAttachments(archivePageId, [{ filename: edinetArchiveFilename(item.source.docId, 1), bytes: zip }], "保有明細backfillの保存type1");
       const result = await publishVerifiedShareholdings({ source: item.source, ownerName: item.ownerName, zip,
-        archivePageId: item.archivePageId, maxRows: item.parsedRows, valuationSources: evidence });
+        archivePageId, maxRows: item.parsedRows, valuationSources: evidence });
       assert.equal(result.status, "published", "準備時に適格だった明細が未完了です");
       usedRows += item.parsedRows; published++;
       save(receipt, { observedAt: new Date().toISOString(), source: item.source, zipSha256: item.zipSha256, result });

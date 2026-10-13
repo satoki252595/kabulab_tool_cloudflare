@@ -15,13 +15,16 @@
  * 架空値・既定値で埋めない。
  */
 import {
+  recordPrimaryData,
   createDatabaseOrAdopt,
   findBackupChildByTitle,
   findUniqueBackupChildByTitle,
 } from "./archive.js";
-import { assertCursorProgress, notionRequest } from "./client.js";
+import { assertCursorProgress, notionRequest, NotionUnknownResultError } from "./client.js";
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
+import { verifyArchivedAttachments } from "./readback.js";
+import { sha256Hex } from "../sha256.js";
 import { RICH_TEXT_MAX, joinRichText, splitRichText } from "./rich-text.js";
 
 export const SUPPLEMENT_DB_TITLE = "銘柄マスタ（補足）";
@@ -909,7 +912,8 @@ export function buildEvidenceBlock(input: EvidenceBlockInput): unknown {
 interface ChildBlock {
   id: string;
   type: string;
-  heading_3?: { rich_text?: Array<{ plain_text?: string }> };
+  has_children?: boolean;
+  [key: string]: unknown;
 }
 interface ChildrenResponse {
   results: ChildBlock[];
@@ -917,39 +921,186 @@ interface ChildrenResponse {
   next_cursor: string | null;
 }
 
+async function evidenceChildren(parentId: string, depth = 0): Promise<ChildBlock[]> {
+  if (depth > 4) throw new Error("事業タグ根拠の子階層が想定を超過 (旧根拠保持)");
+  const out: ChildBlock[] = [], seen = new Set<string>();
+  let cursor: string | undefined;
+  for (;;) {
+    const qs = cursor ? `?start_cursor=${cursor}&page_size=100` : "?page_size=100";
+    const r = await notionRequest<ChildrenResponse>("GET", `/blocks/${parentId}/children${qs}`);
+    if (!Array.isArray(r.results)) throw new Error("事業タグ根拠の読取形式が不正");
+    for (const block of r.results) {
+      const b = { ...block };
+      if (b.has_children) {
+        const body = b[b.type] as Record<string, unknown>;
+        b[b.type] = { ...body, children: await evidenceChildren(b.id, depth + 1) };
+      }
+      out.push(b);
+    }
+    if (!r.has_more) break;
+    assertCursorProgress(seen, r.next_cursor as string);
+    cursor = r.next_cursor as string;
+  }
+  return out;
+}
+
+function richPlain(value: unknown): string {
+  if (!Array.isArray(value)) throw new Error("事業タグのrich_textが欠落");
+  return value.map((x: { plain_text?: unknown; text?: { content?: unknown } }) => {
+    const text = typeof x.plain_text === "string" ? x.plain_text : x.text?.content;
+    if (typeof text !== "string") throw new Error("事業タグのrich_textが不正");
+    if (typeof x.plain_text === "string" && typeof x.text?.content === "string" && x.plain_text !== x.text.content) {
+      throw new Error("事業タグのrich_textが不一致");
+    }
+    return text;
+  }).join("");
+}
+
+function evidenceValue(block: unknown): unknown {
+  const b = block as { type: string; [key: string]: unknown };
+  if (b.type !== "heading_3" && b.type !== "quote") throw new Error("事業タグ根拠の種類が不正");
+  const body = b[b.type] as { rich_text: unknown; is_toggleable?: boolean; children?: unknown[] };
+  return { type: b.type, text: richPlain(body.rich_text),
+    ...(b.type === "heading_3" ? { toggle: body.is_toggleable, children: (body.children === undefined ? [] : body.children).map(evidenceValue) } : {}) };
+}
+
+function propertyValue(property: unknown): unknown {
+  if (property === null || typeof property !== "object") throw new Error("補足プロパティが欠落");
+  const p = property as Record<string, unknown>;
+  if ("rich_text" in p) return richPlain(p.rich_text);
+  if ("title" in p) return richPlain(p.title);
+  if ("select" in p) return p.select === null ? null : (p.select as { name: string }).name;
+  if ("multi_select" in p) return (p.multi_select as { name: string }[]).map((v) => v.name).sort();
+  if ("relation" in p) return (p.relation as { id: string }[]).map((v) => v.id.replaceAll("-", "").toLowerCase()).sort();
+  if ("number" in p) return p.number;
+  if ("date" in p) {
+    if (p.date === null) return null;
+    const d = (p.date as { start: string }).start;
+    return d.includes("T") ? new Date(d).toISOString() : d;
+  }
+  throw new Error("補足プロパティの読戻し型が不正");
+}
+
+interface EvidencePage {
+  id: string;
+  last_edited_time: string;
+  archived?: boolean;
+  in_trash?: boolean;
+  properties: Record<string, Record<string, unknown>>;
+}
+
+async function evidencePage(pageId: string): Promise<EvidencePage> {
+  const page = await notionRequest<EvidencePage>("GET", `/pages/${pageId}`);
+  if (typeof page.id !== "string" || page.id.replaceAll("-", "").toLowerCase() !== pageId.replaceAll("-", "").toLowerCase() ||
+      typeof page.last_edited_time !== "string" || page.archived === true || page.in_trash === true || !page.properties) {
+    throw new Error("補足行のPRE/読戻しが不正");
+  }
+  for (const property of Object.values(page.properties)) {
+    const kind = "rich_text" in property ? "rich_text" : "title" in property ? "title" : "relation" in property ? "relation" : null;
+    if (kind === null || !Array.isArray(property[kind]) || ((property[kind] as unknown[]).length < 25 && property.has_more !== true)) continue;
+    if (typeof property.id !== "string") throw new Error("補足の長いプロパティIDが欠落");
+    const values: unknown[] = [], seen = new Set<string>();
+    let cursor: string | undefined;
+    for (;;) {
+      const qs = cursor ? `?page_size=100&start_cursor=${encodeURIComponent(cursor)}` : "?page_size=100";
+      const r = await notionRequest<{ results: Record<string, unknown>[]; has_more: boolean; next_cursor: string | null }>(
+        "GET", `/pages/${pageId}/properties/${encodeURIComponent(property.id)}${qs}`);
+      if (!Array.isArray(r.results) || r.results.some((v) => !(kind in v))) throw new Error("補足の全プロパティ読取が不正");
+      values.push(...r.results.map((v) => v[kind]));
+      if (!r.has_more) break;
+      assertCursorProgress(seen, r.next_cursor as string);
+      cursor = r.next_cursor as string;
+    }
+    property[kind] = values;
+  }
+  return page;
+}
+
+/** writeより前に資格/旧値の変更を検出。unknown mutationとは区別する。 */
+export class SupplementWriteHeldError extends Error {
+  constructor(message: string, options?: ErrorOptions) { super(message, options); this.name = "SupplementWriteHeldError"; }
+}
+
 /**
- * 行のページ本文にある既存の「事業タグの根拠」ブロックを削除し、新しい
- * ブロックに置き換える (判定し直すとき)。`block === null` なら削除のみ
- * (根拠なし = 判定不能・本文なし等)。
+ * 既存行の根拠とpropertiesを二段階で置換する。全callerがこの順を共有する。
+ * PRE物理保管→新根拠append/全文verify→properties PATCH/readback→旧根拠退役。
+ * blockがundefinedなら根拠を保持して本文だけを同期、nullなら確定後に根拠を消す。
+ * unknown時は再送・旧根拠削除をせず停止。最終PATCHは適用済みの可能性があるため
+ * 「旧値不変」とは扱わず、PREと現値を照合してから再開する。
  */
 export async function replaceEvidenceBlock(
   pageId: string,
-  block: unknown | null
+  block: unknown | null,
+  input: SupplementRowInput,
+  expectedProperties: Record<string, unknown>,
+  beforeWrite: () => Promise<void>
 ): Promise<void> {
-  const toDelete: string[] = [];
-  let cursor: string | undefined;
-  const seen = new Set<string>();
-  for (;;) {
-    const qs = cursor ? `?start_cursor=${cursor}&page_size=100` : "?page_size=100";
-    const res = await notionRequest<ChildrenResponse>(
-      "GET",
-      `/blocks/${pageId}/children${qs}`
-    );
-    if (res.has_more === true) {
-      assertCursorProgress(seen, res.next_cursor as string);
+  const props = buildSupplementProperties(input);
+  const chunks = chunkPropertiesByBytes(props);
+  if (typeof beforeWrite !== "function" || Object.keys(expectedProperties).length === 0) throw new Error("補足の書込前guardがありません");
+  if (block !== null && block !== undefined) evidenceValue(block); // 全組立をmutationより前に検証
+  const before = await evidencePage(pageId);
+  for (const [name, expected] of Object.entries(expectedProperties)) {
+    if (JSON.stringify(propertyValue(before.properties[name])) !== JSON.stringify(propertyValue(expected))) {
+      throw new SupplementWriteHeldError(`旧タグ・判定根拠がplan後に変更: ${name}。旧値を保持してHOLD`);
     }
-    for (const b of res.results) {
-      if (b.type !== "heading_3") continue;
-      const text = joinRichText(b.heading_3?.rich_text);
-      if (text.startsWith(EVIDENCE_TITLE_PREFIX)) toDelete.push(b.id);
+  }
+  const children = await evidenceChildren(pageId);
+  const old = children.filter((b) => b.type === "heading_3" && richPlain((b.heading_3 as { rich_text: unknown }).rich_text).startsWith(EVIDENCE_TITLE_PREFIX));
+  if (old.length > 1) throw new Error("複数の事業タグ根拠が存在。前回実行/PREを照合するまでHOLD");
+  if (block !== null && block !== undefined && old.some((b) => JSON.stringify(evidenceValue(b)) === JSON.stringify(evidenceValue(block)))) {
+    throw new Error("同じ新根拠が既に存在。前回の結果不明をPRE/現値照合するまで再送しません");
+  }
+  const snapshot = JSON.stringify({ page: before, children, expectedProperties: props, expectedEvidence: block });
+  const preSha = await sha256Hex(snapshot);
+  // 推論確率・新根拠の揺れでunknownの再送ラッチを迂回させない。
+  const executionKey = await sha256Hex(JSON.stringify({ previous: before, nextDocId: input.docId, judgeInput: input.judgeInput }));
+  const filename = "biztag-pre.json";
+  const file = { filename, bytes: new TextEncoder().encode(snapshot), contentType: "application/json" };
+  const stored = await recordPrimaryData({ service: "yuho-quant", key: `biztag-pre/${pageId}/${executionKey}`,
+    source: `Notion supplement ${pageId}`, metadata: { pageId, sha256: preSha, nextDocId: input.docId }, files: [file] });
+  if (stored.outcome === "skipped_existing") throw new NotionUnknownResultError(`同じPREの既存実行あり。自動再送せず照合してください。PRE=${stored.pageId}`);
+  await verifyArchivedAttachments(stored.pageId, [file], "事業タグ更新前PRE");
+  const fresh = await evidencePage(pageId);
+  if (JSON.stringify(fresh) !== JSON.stringify(before)) throw new SupplementWriteHeldError("PRE保管中に補足が変更 (旧根拠保持・HOLD)");
+  await beforeWrite(); // 対象1社のD1最新doc/pointer。ここまではbusiness write 0。
+  if (block !== null && block !== undefined) {
+    try {
+      const appended = await notionRequest<{ results: ChildBlock[] }>("PATCH", `/blocks/${pageId}/children`, { children: [block] }, { singleAttempt: true });
+      if (!Array.isArray(appended.results) || appended.results.length !== 1 || typeof appended.results[0].id !== "string") {
+        throw new NotionUnknownResultError(`新根拠append ACKが不正。旧根拠保持、PRE=${stored.pageId}`);
+      }
+      const got = await notionRequest<ChildBlock>("GET", `/blocks/${appended.results[0].id}`);
+      if (got.id !== appended.results[0].id || got.archived === true || got.in_trash === true) throw new Error(`新根拠ID/状態の読戻し不一致。PRE=${stored.pageId}`);
+      if (got.has_children) {
+        got[got.type] = { ...(got[got.type] as Record<string, unknown>), children: await evidenceChildren(got.id) };
+      }
+      if (JSON.stringify(evidenceValue(got)) !== JSON.stringify(evidenceValue(block))) {
+        throw new Error(`新根拠の全文読戻し不一致 (旧根拠・旧properties保持)。PRE=${stored.pageId}`);
+      }
+    } catch (cause) {
+      throw new NotionUnknownResultError(`新根拠の結果確認が未完。再送せずPREと現値を照合してください。PRE=${stored.pageId}`, { cause });
     }
-    if (!res.has_more || !res.next_cursor) break;
-    cursor = res.next_cursor;
   }
-  for (const id of toDelete) {
-    await notionRequest("DELETE", `/blocks/${id}`);
+  try {
+    for (const part of chunks) await notionRequest("PATCH", `/pages/${pageId}`, { properties: part }, { singleAttempt: true });
+    const after = await evidencePage(pageId);
+    for (const [name, expected] of Object.entries(props)) {
+      if (JSON.stringify(propertyValue(after.properties[name])) !== JSON.stringify(propertyValue(expected))) {
+        throw new Error(`補足の読戻し不一致: ${name}`);
+      }
+    }
+  } catch (cause) {
+    throw new NotionUnknownResultError(`補足propertiesの結果確認が未完。再送・旧根拠削除を停止しPREと現値を照合してください。PRE=${stored.pageId}`, { cause });
   }
-  if (block !== null) {
-    await notionRequest("PATCH", `/blocks/${pageId}/children`, { children: [block] });
+  try {
+    for (const previous of block === undefined ? [] : old) {
+      const retired = await notionRequest<{ id: string; archived: boolean }>("DELETE", `/blocks/${previous.id}`, undefined, { singleAttempt: true });
+      if (retired.id !== previous.id || retired.archived !== true) throw new NotionUnknownResultError(`旧根拠退役ACKが不正。PRE=${stored.pageId}`);
+      const check = await notionRequest<{ id: string; archived: boolean }>("GET", `/blocks/${previous.id}`);
+      if (check.id !== previous.id || check.archived !== true) throw new NotionUnknownResultError(`旧根拠退役の読戻し不一致。PRE=${stored.pageId}`);
+    }
+  } catch (cause) {
+    throw new NotionUnknownResultError(`旧根拠退役の結果確認が未完。再送せずPREと現値を照合してください。PRE=${stored.pageId}`, { cause });
   }
 }
