@@ -59,7 +59,7 @@ import {
   type ObservationDraft,
   type SpecFile,
 } from "../source-spec.js";
-import type { IndicatorDefInput, MoneyflowFrequency } from "../../../../src/shared/notion-archive/index.js";
+import type { IndicatorDefInput, MoneyflowFrequency, PrimaryFile } from "../../../../src/shared/notion-archive/index.js";
 
 // 取得元モジュールと同一のブラウザ相当 UA (モジュールは UA 定数も「一覧ページだけ取る」
 // 関数も export していないため、resolve で一覧ページだけを軽く取るのに同じ値を使う。
@@ -76,25 +76,16 @@ const VALUE_FILE_PREFIX = "investor-equity-value-";
 const VOLUME_FILE_PREFIX = "investor-equity-volume-";
 const UNIFIED_FILE_PREFIX = "investor-equity-unified-";
 
-async function fetchOk(url: string): Promise<Response> {
-  const res = await fetch(url, { headers: { "User-Agent": UA } });
-  if (!res.ok) {
-    throw new Error(`JPX 投資部門別売買状況: HTTP エラー ${res.status} ${res.statusText} (${url})`);
-  }
-  return res;
-}
-
-async function resolveIndex<T>(url: string, parse: (html: string) => T): Promise<T> {
+async function resolveIndex<T>(url: string, parse: (html: string) => T): Promise<{ value: T; primary: Omit<FetchedBatch, "key"> }> {
   const res = await fetch(url, { headers: { "User-Agent": UA } });
   const bytes = new Uint8Array(await res.arrayBuffer());
+  const primary = { source: url, metadata: { httpStatus: res.status, fetchedAt: new Date().toISOString() },
+    files: [{ filename: url === WEEKLY_INDEX_URL ? "jpx-investor-equity-weekly-index.html" : "jpx-investor-equity-monthly-index.html", bytes, contentType: "text/html" }] };
   try {
     if (!res.ok) throw new Error(`JPX 投資部門別売買状況: HTTP エラー ${res.status} (${url})`);
-    return parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return { value: parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)), primary };
   } catch (error) {
-    throw new MoneyflowFetchError(error instanceof Error ? error.message : "JPX一覧解析失敗", {
-      source: url, metadata: { httpStatus: res.status, fetchedAt: new Date().toISOString() },
-      files: [{ filename: url === WEEKLY_INDEX_URL ? "jpx-investor-equity-weekly-index.html" : "jpx-investor-equity-monthly-index.html", bytes, contentType: "text/html" }],
-    }, error);
+    throw new MoneyflowFetchError(error instanceof Error ? error.message : "JPX一覧解析失敗", primary, error);
   }
 }
 
@@ -650,57 +641,74 @@ async function fetchBatch(
     periodType: InvestorEquityPeriodType;
     indexUrl: string;
     indexLabel: string;
+    indexPrimary: Omit<FetchedBatch, "key">;
   } & ({ kind: "legacy"; valueUrl: string; volumeUrl: string } | { kind: "unified"; unifiedUrl: string })
 ): Promise<FetchedBatch> {
-  let fetched: FetchedInvestorEquity;
-  if (args.kind === "unified") {
-    const unifiedBytes = new Uint8Array(await (await fetchOk(args.unifiedUrl)).arrayBuffer());
-    const records = parseInvestorEquityWorkbook(unifiedBytes, urlBasename(args.unifiedUrl));
-    fetched = {
-      kind: "unified",
-      periodType: args.periodType,
-      unifiedUrl: args.unifiedUrl,
-      unifiedBytes,
-      records,
-    };
-  } else {
-    // JPX 規約の「高頻度・高負荷の自動取得の自粛」に合わせ、2 本を順に取る。
-    const valueBytes = new Uint8Array(await (await fetchOk(args.valueUrl)).arrayBuffer());
-    const volumeBytes = new Uint8Array(await (await fetchOk(args.volumeUrl)).arrayBuffer());
-    const valueRecords = parseInvestorEquityWorkbook(valueBytes, urlBasename(args.valueUrl));
-    const volumeRecords = parseInvestorEquityWorkbook(volumeBytes, urlBasename(args.volumeUrl));
-    fetched = {
-      kind: "legacy",
-      periodType: args.periodType,
-      valueUrl: args.valueUrl,
-      volumeUrl: args.volumeUrl,
-      valueBytes,
-      volumeBytes,
-      records: [...valueRecords, ...volumeRecords],
-    };
-  }
-  const archive = jpxInvestorEquityArchiveInput(fetched);
-  const files = archive.files.map((f) => ({ ...f }));
-  // resolve で決めたキーとファイルの中身が一致することを、保管前に確かめる
-  // (一覧ページとリンク先の食い違い・様式変更を一次データとして誤ったキーで保管しない)。
-  toDrafts(args.key, files, args.periodType);
-  return {
-    key: args.key,
-    source: archive.source,
-    metadata: {
-      ...archive.metadata,
-      indexUrl: args.indexUrl,
-      indexLabel: args.indexLabel,
-    },
-    files,
+  const captured: PrimaryFile[] = [...args.indexPrimary.files];
+  const attempts: Array<Record<string, unknown>> = [];
+  const fetchCaptured = async (url: string, prefix: string): Promise<Uint8Array> => {
+    const res = await fetch(url, { headers: { "User-Agent": UA } });
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    captured.push({ filename: `${prefix}${urlBasename(url)}`, bytes, contentType: url.endsWith(".xlsx") ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/vnd.ms-excel" });
+    attempts.push({ url, httpStatus: res.status, fetchedAt: new Date().toISOString(), bytes: bytes.length });
+    if (!res.ok) throw new Error(`JPX 投資部門別売買状況: HTTP エラー ${res.status} (${url})`);
+    return bytes;
   };
+  try {
+    let fetched: FetchedInvestorEquity;
+    if (args.kind === "unified") {
+      const unifiedBytes = await fetchCaptured(args.unifiedUrl, UNIFIED_FILE_PREFIX);
+      const records = parseInvestorEquityWorkbook(unifiedBytes, urlBasename(args.unifiedUrl));
+      fetched = {
+        kind: "unified",
+        periodType: args.periodType,
+        unifiedUrl: args.unifiedUrl,
+        unifiedBytes,
+        records,
+      };
+    } else {
+      // JPX 規約の「高頻度・高負荷の自動取得の自粛」に合わせ、2 本を順に取る。
+      const valueBytes = await fetchCaptured(args.valueUrl, VALUE_FILE_PREFIX);
+      const volumeBytes = await fetchCaptured(args.volumeUrl, VOLUME_FILE_PREFIX);
+      const valueRecords = parseInvestorEquityWorkbook(valueBytes, urlBasename(args.valueUrl));
+      const volumeRecords = parseInvestorEquityWorkbook(volumeBytes, urlBasename(args.volumeUrl));
+      fetched = {
+        kind: "legacy",
+        periodType: args.periodType,
+        valueUrl: args.valueUrl,
+        volumeUrl: args.volumeUrl,
+        valueBytes,
+        volumeBytes,
+        records: [...valueRecords, ...volumeRecords],
+      };
+    }
+    const archive = jpxInvestorEquityArchiveInput(fetched);
+    const files = archive.files.map((f) => ({ ...f }));
+    // resolve で決めたキーとファイルの中身が一致することを、保管前に確かめる
+    // (一覧ページとリンク先の食い違い・様式変更を一次データとして誤ったキーで保管しない)。
+    toDrafts(args.key, files, args.periodType);
+    return {
+      key: args.key,
+      source: archive.source,
+      metadata: {
+        ...archive.metadata,
+        indexUrl: args.indexUrl,
+        indexLabel: args.indexLabel,
+      },
+      files,
+    };
+  } catch (error) {
+    throw new MoneyflowFetchError(error instanceof Error ? error.message : "JPX原本解析失敗", {
+      source: args.indexUrl, metadata: { ...args.indexPrimary.metadata, indexLabel: args.indexLabel, attempts }, files: captured,
+    }, error);
+  }
 }
 
 export const JPX_INVESTOR_EQUITY_WEEKLY_SPEC: MoneyflowSourceSpec = {
   name: WEEKLY_SPEC_NAME,
   indicators: JPX_INVESTOR_EQUITY_WEEKLY_INDICATORS,
   async resolve() {
-    const { latest, key } = await resolveIndex(WEEKLY_INDEX_URL, (html) => {
+    const { value: { latest, key }, primary: indexPrimary } = await resolveIndex(WEEKLY_INDEX_URL, (html) => {
       const latest = latestWeeklyEntry(parseWeeklyIndexHtml(html));
       return { latest, key: weeklyKeyFromIndexLabel(latest.label) };
     });
@@ -709,6 +717,7 @@ export const JPX_INVESTOR_EQUITY_WEEKLY_SPEC: MoneyflowSourceSpec = {
       periodType: "weekly" as const,
       indexUrl: WEEKLY_INDEX_URL,
       indexLabel: latest.label,
+      indexPrimary,
     };
     return {
       key,
@@ -727,7 +736,7 @@ export const JPX_INVESTOR_EQUITY_MONTHLY_SPEC: MoneyflowSourceSpec = {
   name: MONTHLY_SPEC_NAME,
   indicators: JPX_INVESTOR_EQUITY_MONTHLY_INDICATORS,
   async resolve() {
-    const latest = await resolveIndex(MONTHLY_INDEX_URL, (html) => pickLatestPublishedMonth(parseMonthlyIndexHtml(html)));
+    const { value: latest, primary: indexPrimary } = await resolveIndex(MONTHLY_INDEX_URL, (html) => pickLatestPublishedMonth(parseMonthlyIndexHtml(html)));
     const key = `${MONTHLY_SPEC_NAME}-${latest.year}-${pad2(latest.month)}`;
     const unifiedXlsxUrl = latest.unifiedXlsxUrl;
     if (unifiedXlsxUrl !== undefined) {
@@ -737,6 +746,7 @@ export const JPX_INVESTOR_EQUITY_MONTHLY_SPEC: MoneyflowSourceSpec = {
           fetchBatch({
             key,
             periodType: "monthly",
+            indexPrimary,
             indexUrl: MONTHLY_INDEX_URL,
             indexLabel: `${latest.year}年${latest.month}月`,
             kind: "unified",
@@ -755,6 +765,7 @@ export const JPX_INVESTOR_EQUITY_MONTHLY_SPEC: MoneyflowSourceSpec = {
         fetchBatch({
           key,
           periodType: "monthly",
+          indexPrimary,
           indexUrl: MONTHLY_INDEX_URL,
           indexLabel: `${latest.year}年${latest.month}月`,
           kind: "legacy",
