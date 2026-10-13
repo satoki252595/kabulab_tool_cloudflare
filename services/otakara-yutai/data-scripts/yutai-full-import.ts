@@ -52,6 +52,8 @@ import { stockFinancials, stocks, yutaiBenefits, yutaiGenres } from "../src/db/s
 import { type AtomicBatchSender, snapshotStockPreimages } from "./atomic-apply.js";
 import { benefitKey } from "./benefit-key.js";
 import { isSummaryNumbersGrounded, missingSummaryConditions } from "./summary-contract.js";
+import { buildPublicBenefitFacts } from "./public-facts.js";
+import { parsePublicBenefitFacts } from "../src/public-facts.js";
 import { assertBenefitSchedule, assertRecordMonth } from "../src/record-date.js";
 import {
   headedDescription,
@@ -103,6 +105,8 @@ export type StockYutaiData = {
   market: string | null;
   category: string | null;
   benefits: BenefitDetail[];
+  /** 個別ページの実受信時計。旧保存入力では未記録。 */
+  sourceFetchedAt?: string;
 };
 
 /**
@@ -490,12 +494,22 @@ export async function importYutaiFull(
       shortSummary: yutaiBenefits.shortSummary,
       estimatedValue: yutaiBenefits.estimatedValue,
       estimateValueSource: yutaiBenefits.estimateValueSource,
+      publicFacts: yutaiBenefits.publicFacts,
     })
     .from(yutaiBenefits)
     .innerJoin(stocks, eq(stocks.id, yutaiBenefits.stockId))
     .where(activeEquityCondition());
 
   const heldIds = new Set(existing.map((r) => r.stockId));
+  const verifiedOfficial = new Map<string, { url: string; verifiedAt: string }>();
+  for (const row of existing) {
+    const facts = parsePublicBenefitFacts(row.publicFacts, row.code);
+    if (facts !== null && facts.sourceGroup === benefitKey(row.code, row.description) &&
+        facts.source.officialStatus === "verified" && facts.source.officialUrl !== null && facts.source.verifiedAt !== null) {
+      verifiedOfficial.set(carryKey(row.code, row.description, row.minShares, row.recordMonth),
+        { url: facts.source.officialUrl, verifiedAt: facts.source.verifiedAt });
+    }
+  }
   const targetIds = new Set(targets.map((t) => t.stockId));
   const retained = [...heldIds].filter((id) => targetIds.has(id)).length;
   const missingCount = heldIds.size - retained;
@@ -600,6 +614,20 @@ export async function importYutaiFull(
     console.warn(`  戻せない解釈 (掲載文の変更・優待行を消す銘柄): ${droppedInterpretations}件`);
   }
 
+  // 全DTOを業務書込前に検証する。後半の不正clock/条件で前半だけ更新しない。
+  const publicFactsByKey = new Map<string, ReturnType<typeof buildPublicBenefitFacts>>();
+  for (const p of planned) for (const row of p.rows) {
+    const context = plannedGroups.get(p.data.code)?.get(carryBody(row.description));
+    if (context === undefined) throw new Error("公開条件のrecipient群が未確定です");
+    const key = carryKey(p.data.code, row.description, row.minShares, row.recordMonth);
+    publicFactsByKey.set(key, buildPublicBenefitFacts({
+      code: p.data.code, description: row.description, context,
+      fetchedAt: p.data.sourceFetchedAt === undefined ? null : p.data.sourceFetchedAt,
+      batchFetchedAt: sourceFetchedAt === undefined ? null : sourceFetchedAt,
+      official: verifiedOfficial.get(key),
+    }));
+  }
+
   // 全保存成功後の post-image の利回り・スコア追随 (1 回だけ呼ぶ)。
   // scope は「優待行を持っていた銘柄 ∪ 今回取得 ∪ 利回りが残る銘柄」。
   // 廃止・中断再入の stale 利回りを直す。全銘柄には広げない。
@@ -674,11 +702,14 @@ export async function importYutaiFull(
       // (export-summary-tasks.ts) の対象になる。
       const key = carryKey(p.data.code, carryBody(r.description), r.minShares, r.recordMonth);
       const previous = carried.get(key);
+      const publicFacts = publicFactsByKey.get(carryKey(p.data.code, r.description, r.minShares, r.recordMonth));
+      if (publicFacts === undefined) throw new Error("検証済み公開条件がありません");
       builders.push(db.insert(yutaiBenefits).values({
         stockId: p.stockId,
         genreId,
         description: r.description,
         shortSummary: previous === undefined ? null : previous.shortSummary,
+        publicFacts,
         minShares: r.minShares,
         recordMonth: r.recordMonth,
         recordDate: carriedRecordDates.has(key) ? carriedRecordDates.get(key)! : null,

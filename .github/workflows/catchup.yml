@@ -52,6 +52,7 @@ jobs:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NOTION_ARCHIVE_PAGE_ID: ${{ secrets.NOTION_ARCHIVE_PAGE_ID }}
       NOTION_YUHO_TEXT_DB_ID: ${{ secrets.NOTION_YUHO_TEXT_DB_ID }}
+      NOTION_STOCK_HOLDINGS_DB_ID: ${{ secrets.NOTION_STOCK_HOLDINGS_DB_ID }}
       EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
     steps:
       - uses: actions/checkout@v4

@@ -17,6 +17,7 @@ export {
   findStockTextRowId,
   readStockTextRow,
   upsertStockTextRow,
+  retireStockTextRow,
   buildTextBodyBlocks,
   STOCK_TEXT_DB_TITLE,
   TEXT_BODY_MARKER,

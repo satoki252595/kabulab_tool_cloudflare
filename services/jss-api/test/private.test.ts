@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import app, { isAuthorized } from "../src/private";
 import type { PrivateEnv } from "../src/shared/types";
-import { stubD1, stubR2 } from "./helpers";
+import { stubD1, stubR2, yutaiFacts } from "./helpers";
 
 function env(overrides: Partial<PrivateEnv> = {}): PrivateEnv {
   return {
@@ -29,19 +29,31 @@ function env(overrides: Partial<PrivateEnv> = {}): PrivateEnv {
 const AUTH = { headers: { "X-API-Key": "secret-key" } };
 
 describe("内部面の優待時期", () => {
+  it("認証後は適用条件・評価理由を返し、50行で優待段階を切り捨てない", async () => {
+    const rows = Array.from({ length: 51 }, () => ({ genre_id: 1, min_shares: 100, record_month: 3,
+      record_date: null, public_facts: JSON.stringify(yutaiFacts) }));
+    const response = await app.request("/v1/yutai/7203", AUTH, env({ DB: stubD1(sql => /LIMIT 50\b/.test(sql) ? rows.slice(0, 50) : rows) }));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { data: { public_facts: unknown; can_aggregate: boolean }[]; meta: { licenses: string[] } };
+    expect(body.data).toHaveLength(51);
+    expect(body.data[0]?.public_facts).toEqual(yutaiFacts);
+    expect(body.data.every(row => row.can_aggregate === false)).toBe(true);
+    expect(body.meta.licenses).toEqual(["personal-only"]);
+  });
+
   it("実月・随時・単発日を区別し、内部0を暦月として返さない", async () => {
     const rows = [
-      { genre_id: 1, min_shares: 100, record_month: 3, record_date: null },
-      { genre_id: 1, min_shares: 100, record_month: 0, record_date: null },
-      { genre_id: 1, min_shares: 100, record_month: 9, record_date: "2026-09-02" },
+      { genre_id: 1, min_shares: 100, record_month: 3, record_date: null, public_facts: null },
+      { genre_id: 1, min_shares: 100, record_month: 0, record_date: null, public_facts: null },
+      { genre_id: 1, min_shares: 100, record_month: 9, record_date: "2026-09-02", public_facts: null },
     ];
     const res = await app.request("/v1/yutai/7203", AUTH, env({ DB: stubD1(() => rows) }));
     expect(res.status).toBe(200);
     const body = await res.json() as { data: Record<string, unknown>[] };
     expect(body.data).toEqual([
-      { ...rows[0], schedule: "monthly" },
-      { ...rows[1], record_month: null, schedule: "anytime" },
-      { ...rows[2], schedule: "one_off" },
+      { ...rows[0], schedule: "monthly", can_aggregate: false },
+      { ...rows[1], record_month: null, schedule: "anytime", can_aggregate: false },
+      { ...rows[2], schedule: "one_off", can_aggregate: false },
     ]);
   });
 

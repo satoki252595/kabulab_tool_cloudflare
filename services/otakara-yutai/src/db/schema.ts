@@ -1,6 +1,7 @@
 import { sql, relations } from "drizzle-orm";
 import { sqliteTable, integer, text, real, index } from "drizzle-orm/sqlite-core";
 import { stocks as coreStocks } from "../../../../src/shared/db/core-schema.js";
+import type { PublicBenefitFacts } from "../public-facts.js";
 
 /**
  * 002 お宝優待 のスキーマ定義（Cloudflare D1 / SQLite 版） — ADR-0001。
@@ -46,6 +47,8 @@ export const yutaiBenefits = sqliteTable(
       .notNull(),
     description: text("description").notNull(),
     shortSummary: text("short_summary"),
+    /** 原文を公開面へ読ませず、条件・評価保留理由・出典を渡す厳密DTO。 */
+    publicFacts: text("public_facts", { mode: "json" }).$type<PublicBenefitFacts>(),
     minShares: integer("min_shares").notNull(),
     /** 1〜12 は実月、0 は公式掲載が「随時」の専用 enum。未知月は保存しない。 */
     recordMonth: integer("record_month").notNull(),

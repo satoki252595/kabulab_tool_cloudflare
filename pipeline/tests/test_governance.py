@@ -167,6 +167,16 @@ class TestFailOpenClosedBoundary:
         assert report.failures != ()
         assert any("食い違う" in f for f in report.failures)
 
+    def test_優待条件DTOも表全体のpersonal_onlyを継承する(self) -> None:
+        observed = _observed()
+        observed["yutai_benefits"] = "CREATE TABLE yutai_benefits (id INTEGER PRIMARY KEY, public_facts TEXT)"
+        report = G.coverage(observed)
+        assert report.failures == ()
+        assert not [w for w in report.warnings if "yutai_benefits" in w]
+        spec = G.TABLE_LICENSE["yutai_benefits"]
+        assert spec.kind is G.TableKind.UNIFORM
+        assert spec.tag is LicenseTag.PERSONAL_ONLY
+
 
 # 本番 D1 (`kabulab-cf`) の表名スナップショット。2026-09-13 に読み取り専用の
 # `SELECT name FROM sqlite_master WHERE type='table'` で取得した 32 件から、

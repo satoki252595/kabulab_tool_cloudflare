@@ -23,6 +23,7 @@ import {
   renderValueNote,
   type BenefitRow,
 } from "../../app.js";
+import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
 
 const SERVICE_DIR = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -162,6 +163,10 @@ describe("groupBenefits", () => {
     summary: "3,000円相当",
     estimatedValue: 3000,
     estimateValueSource: null,
+    facts: buildPublicBenefitFacts({
+      code: "7203", description: `${over.estimatedValue === undefined ? 3000 : over.estimatedValue}円分の架空ギフト券`,
+      context: { minShares: [100], recordMonths: [3] }, fetchedAt: null, batchFetchedAt: null,
+    }),
     ...over,
   });
 
@@ -188,12 +193,13 @@ describe("groupBenefits", () => {
     expect(g.allMonths).toEqual([3, 9]);
   });
 
-  it("同一商品に複数の推定額があれば大きい方を残す (company のみ)", () => {
+  it("条件DTOの金額が違う行は同一商品と推測して畳まない", () => {
     const [g] = groupBenefits([
       row({ estimatedValue: 3000, estimateValueSource: "company" }),
       row({ recordMonth: 9, recordDate: null, estimatedValue: 5000, estimateValueSource: "company" }),
     ]);
-    expect(g.tiers[0].products[0].estimatedValue).toBe(5000);
+    expect(g.tiers[0].products).toHaveLength(2);
+    expect(g.tiers[0].products.map(p => p.estimatedValue)).toEqual([3000, 5000]);
     expect(g.tiers[0].products[0].estimateValueSource).toBe("company");
   });
 
@@ -206,7 +212,7 @@ describe("groupBenefits", () => {
     expect(p.estimatedValue).toBeNull();
     expect(p.estimateValueSource).toBeNull();
     expect(p.summary).toBe("3,000円相当");
-    expect(p.months).toEqual([3, 9]);
+    expect(g.tiers[0].products.flatMap(product => product.months)).toEqual([3, 9]);
   });
 
   it("株数段階が違えば別 tier にし、株数昇順で返す", () => {

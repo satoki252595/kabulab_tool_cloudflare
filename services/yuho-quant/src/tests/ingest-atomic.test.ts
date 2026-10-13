@@ -68,6 +68,8 @@ import {
 } from "../services/overseas-parser.js";
 import { extractTextSections } from "../services/edinet/text-sections.js";
 import type { EdinetDoc } from "../services/edinet/types.js";
+import { retireStockTextRow } from "../../../../src/shared/notion-archive/index.js";
+import { publishVerifiedShareholdings } from "../../../../src/shared/notion-archive/shareholdings.js";
 import type { D1BatchStatement } from "../../../../src/shared/db/d1-http-client.js";
 
 vi.mock("../services/edinet/client.js", async (importOriginal) => {
@@ -96,6 +98,10 @@ vi.mock("../../../../src/shared/notion-archive/index.js", () => ({
   recordPrimaryData: vi.fn(),
   findBackupRowsByKeys: vi.fn(),
   verifyArchivedAttachments: vi.fn(),
+  retireStockTextRow: vi.fn(),
+}));
+vi.mock("../../../../src/shared/notion-archive/shareholdings.js", () => ({
+  publishVerifiedShareholdings: vi.fn(async () => ({ status: "published", parsed: 0, created: 0, updated: 0, unchanged: 0 })),
 }));
 vi.mock("../services/text-backup.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../services/text-backup.js")>();
@@ -108,7 +114,7 @@ const ROOT = fileURLToPath(new URL("../../../..", import.meta.url));
 
 function applyD1Migrations(target: DatabaseSync): void {
   const dir = join(ROOT, "drizzle", "d1");
-  for (const f of readdirSync(dir).filter((n) => n.endsWith(".sql")).sort()) {
+  for (const f of readdirSync(dir).filter((n) => /^\d{4}_.*\.sql$/.test(n)).sort()) {
     for (const stmt of readFileSync(join(dir, f), "utf-8").split(
       "--> statement-breakpoint"
     )) {
@@ -618,6 +624,11 @@ describe("raw-before-DB 契約 (原本 mandatory)", () => {
       );
       const firstBatch = Math.min(...sender.mock.invocationCallOrder);
       expect(lastVerify).toBeLessThan(firstBatch);
+      const writerCall = vi.mocked(publishVerifiedShareholdings).mock.calls.at(-1)!;
+      expect(writerCall[0].archivePageId).toBe("page-S100GUARD1:type1");
+      const archivedBytes = vi.mocked(recordPrimaryData).mock.calls.find(([input]) => input.key === "S100GUARD1:type1")![0].files![0].bytes;
+      expect(writerCall[0].zip).toEqual(Buffer.from(archivedBytes));
+      expect(vi.mocked(publishVerifiedShareholdings).mock.invocationCallOrder.at(-1)).toBeGreaterThan(lastVerify);
       // metadata は DBid 非依存。
       for (const c of vi.mocked(recordPrimaryData).mock.calls) {
         const meta = c[0].metadata as Record<string, unknown>;
@@ -825,7 +836,7 @@ describe("raw-before-DB 契約 (原本 mandatory)", () => {
       });
       expect(r.outcome).toBe("ingested");
       expect(r.textParseStatus).toBe("ok");
-      expect(sender.mock.calls.length).toBe(1);
+      expect(sender.mock.calls.length).toBe(2);
       expect(vi.mocked(backupDocTextToNotion).mock.calls.length).toBe(1);
       // batch より後に text 保管 (順序)。
       const batchOrder = Math.min(...sender.mock.invocationCallOrder);
@@ -833,6 +844,7 @@ describe("raw-before-DB 契約 (原本 mandatory)", () => {
         ...vi.mocked(backupDocTextToNotion).mock.invocationCallOrder
       );
       expect(batchOrder).toBeLessThan(textOrder);
+      expect(textOrder).toBeLessThan(sender.mock.invocationCallOrder[1]!);
       // 実 id の連携: SELECT の id と backup 引数が一致し、書戻しが残る。
       const row = sqlite
         .prepare("SELECT * FROM yuho_documents WHERE doc_id = 'S100TEXT1'")
@@ -846,4 +858,53 @@ describe("raw-before-DB 契約 (原本 mandatory)", () => {
       restore();
     }
   });
+});
+
+
+describe("本文force置換の保全順序", () => {
+  it.each(["verify-failure", "d1-failure", "success", "retire-unknown"])(
+    "%sでも旧本文はD1確定前に退役せず、索引とpointerを同時確定する", async (phase) => {
+      const restore = silenceConsole();
+      const { sqlite, db } = setupBindingDb();
+      try {
+        setupParserBridges();
+        vi.mocked(retireStockTextRow).mockReset();
+        const oldSections: ReturnType<typeof extractTextSections> = [{ sectionKey: "business", text: "旧本文", charCount: 3,
+          elementId: "e-old", itemName: "旧項目", contextId: "c-old" }];
+        const newSections: ReturnType<typeof extractTextSections> = [{ sectionKey: "risks", text: "新本文", charCount: 3,
+          elementId: "e-new", itemName: "新項目", contextId: "c-new" }];
+        vi.mocked(extractTextSections).mockReturnValue(oldSections);
+        vi.mocked(backupDocTextToNotion).mockResolvedValue({ rowPageId: "old-row", outcome: "recorded" });
+        await ingestDocument(db, { stockId: 11, stockCode: "1001", doc: annualDoc("S100REPLACE") });
+        const state = () => ({
+          page: (sqlite.prepare("SELECT notion_doc_page_id AS page FROM yuho_documents WHERE doc_id='S100REPLACE'").get() as { page: string }).page,
+          sections: sqlite.prepare("SELECT section_key,element_id FROM yuho_text_sections ORDER BY id").all(),
+        });
+        const before = state();
+        vi.mocked(extractTextSections).mockReturnValue(newSections);
+        vi.mocked(backupDocTextToNotion).mockImplementation(async () => {
+          // 新本文をverifyしている間も旧pointer/旧索引が読み取り可能。
+          expect(state()).toEqual(before);
+          if (phase === "verify-failure") throw new Error("readback mismatch");
+          return { rowPageId: "new-row", outcome: "recorded", replacedRowPageId: "old-row" };
+        });
+        vi.mocked(retireStockTextRow).mockImplementation(async () => {
+          expect(state().page).toBe("new-row");
+          expect(state().sections).toEqual([{ section_key: "risks", element_id: "e-new" }]);
+          if (phase === "retire-unknown") throw new Error("archive result unknown");
+        });
+        if (phase === "d1-failure") sqlite.exec("CREATE TRIGGER fail_new_text AFTER INSERT ON yuho_text_sections WHEN NEW.element_id='e-new' BEGIN SELECT RAISE(ABORT,'text atomic failure'); END");
+        const run = ingestDocument(db, { stockId: 11, stockCode: "1001", doc: annualDoc("S100REPLACE"), force: true });
+        if (phase === "success") await expect(run).resolves.toMatchObject({ outcome: "ingested" });
+        else await expect(run).rejects.toThrow();
+        if (phase === "verify-failure" || phase === "d1-failure") {
+          expect(state()).toEqual(before);
+          expect(retireStockTextRow).not.toHaveBeenCalled();
+        } else {
+          expect(state().page).toBe("new-row");
+          expect(retireStockTextRow).toHaveBeenCalledExactlyOnceWith("old-row");
+        }
+      } finally { sqlite.close(); restore(); }
+    }
+  );
 });

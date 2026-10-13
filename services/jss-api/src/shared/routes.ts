@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { assertBenefitSchedule } from "../../../otakara-yutai/src/record-date.js";
+import { parsePublicBenefitFacts, type PublicBenefitFacts } from "../../../otakara-yutai/src/public-facts.js";
 
 import { envelope, errorBody } from "./envelope";
 import { isPublishableAsMetadata, isPublishableInFull, redactColumns } from "./license";
@@ -24,6 +25,8 @@ type YutaiBenefitResponse = {
   record_month: number | null;
   record_date: string | null;
   schedule: "one_off" | "anytime" | "monthly";
+  public_facts: PublicBenefitFacts | null;
+  can_aggregate: false;
 };
 
 /** D1 の COUNT 等で 1 行だけ欲しいときの薄いヘルパ。 */
@@ -387,20 +390,23 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
     if (!isValidCode(code)) {
       return c.json(errorBody("銘柄コードは4桁", "invalid_code"), 400);
     }
-    // みんかぶ掲載文の列は SELECT しない（規約上、取得も公開も不可）。
+    // 掲載文はSELECTしない。条件DTOも内部用途に限定し、再配布可とは扱わない。
     const { results } = await c.env.DB.prepare(
-      "SELECT b.genre_id, b.min_shares, b.record_month, b.record_date FROM yutai_benefits b" +
-        " JOIN core_stocks s ON s.id = b.stock_id WHERE s.code = ? LIMIT 50",
-    ).bind(code).all<Omit<YutaiBenefitResponse, "schedule">>();
+      "SELECT b.genre_id, b.min_shares, b.record_month, b.record_date, b.public_facts FROM yutai_benefits b" +
+        " JOIN core_stocks s ON s.id = b.stock_id WHERE s.code = ? ORDER BY b.id",
+    ).bind(code).all<Omit<YutaiBenefitResponse, "schedule" | "can_aggregate">>();
     return c.json(envelope(results.map((r): YutaiBenefitResponse => {
       const schedule = { recordMonth: r.record_month, recordDate: r.record_date };
       assertBenefitSchedule(schedule);
+      const facts = parsePublicBenefitFacts(r.public_facts, code);
       // 外部 API は暦月と非定期を区別する。内部 enum 0 を月として出さない。
-      return redactColumns("yutai_benefits", {
-        ...r,
+      return {
+        ...redactColumns("yutai_benefits", r),
         record_month: schedule.recordMonth === 0 ? null : schedule.recordMonth,
         schedule: r.record_date !== null ? "one_off" : r.record_month === 0 ? "anytime" : "monthly",
-      });
-    })));
+        public_facts: facts,
+        can_aggregate: false,
+      };
+    }), { licenses: ["personal-only"] }));
   });
 }

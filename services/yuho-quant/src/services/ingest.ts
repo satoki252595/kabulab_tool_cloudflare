@@ -5,7 +5,8 @@
  *       構造化 + CSV 行から定性セクション (事業の内容・リスク等) を抽出 →
  *       物理 ZIP とメタを Notion へ冪等記録 (ルール6。DB batch より先。
  *       raw-before-DB) → yuho_documents / order_facts / overseas_facts /
- *       text_sections に冪等 upsert → 定性テキスト本文のみ DBid 解決後に保管。
+ *       受注/海外ファクトを原子保存 → DBid解決・Notion本文の全文照合 →
+ *       text索引/status/pointerを単一batchで確定 → 置換した旧Notion行を退役。
  *       custody 完備でも DB 書込ありなら parser 使用 bytes の同一確認を
  *       既存 physical へ通す (strict byte guard。重複 mutation なし)。
  *
@@ -30,6 +31,9 @@ import {
   textSections,
 } from "../db/schema.js";
 import { backupDocTextToNotion } from "./text-backup.js";
+import { buildTextBackfillStatements } from "../../data-scripts/lib/text-backfill.js";
+import { retireStockTextRow } from "../../../../src/shared/notion-archive/index.js";
+import { publishVerifiedShareholdings, type ShareholdingsBudget, type PublishHoldingsResult } from "../../../../src/shared/notion-archive/shareholdings.js";
 import { downloadDocument, EdinetNotFoundError, EdinetDocumentFetchError } from "./edinet/client.js";
 import {
   assertNoMetadataOnly,
@@ -71,6 +75,8 @@ export type IngestOutcome =
 const NOTION_SERVICE = "yuho-quant";
 
 interface IngestDetails {
+  /** 有報/本文完了と独立。HOLDは原本保管行から次定時に再開する。 */
+  holdings?: PublishHoldingsResult;
   parseStatus: ParseStatus | "parse_error";
   factCount: number;
   /** 海外売上の構造化結果 (同じ有報から並行構造化)。 */
@@ -156,9 +162,12 @@ export async function ingestDocument(
      * 既存 `db.batch` を使う。両方の指定は sender 曖昧として止める。
      */
     d1HttpBatch?: ReturnType<typeof createD1HttpBatchSender>;
+    /** 通常catchup/backfillのrun全体で共有する100行枠。HOLDは原本行に別途保持。 */
+    holdingsBudget?: ShareholdingsBudget;
   }
 ): Promise<IngestResult> {
   const { stockId, stockCode, doc, force = false, archiveToNotion = true } = args;
+  let holdingsResult: PublishHoldingsResult | undefined;
 
   // Shared entrance preflight: 書込 backend の確定は fetch/remote save より前。
   // sqlite-proxy の db.batch はメソッド自体は存在するが batch callback 未配線
@@ -506,7 +515,7 @@ export async function ingestDocument(
     }
     if (xbrlZip && (needT1 || needDbWork)) {
       if (xbrlFetchedAt === null) throw new Error("XBRL受信完了時刻がありません");
-      await recordEdinetZip({
+      const archivedType1 = await recordEdinetZip({
         service: NOTION_SERVICE,
         docID: doc.docID,
         type: 1,
@@ -516,12 +525,18 @@ export async function ingestDocument(
         metadata,
         force,
       });
+      const holdings = await publishVerifiedShareholdings({ source: { docId: doc.docID, stockCode,
+        edinetCode: doc.edinetCode, fiscalYearEnd: periodEnd }, ownerName: doc.filerName, zip: xbrlZip,
+        archivePageId: archivedType1.pageId, maxRows: 100, budget: args.holdingsBudget });
+      holdingsResult = holdings;
+      console.info(`[ingest] 保有明細 ${holdings.status} docID=${doc.docID} rows=${holdings.parsed}${holdings.status === "held" ? ` reason=${holdings.reason}` : ""}`);
     }
     console.info(`[ingest] 原本保管処理終了 docID=${doc.docID}`);
   }
 
   if (needDbWork) {
-    // 文書 upsert 自体を facts/text 置換と同一 batch に入れる。以前は upsert
+    // 文書upsertと受注/海外factsを同一batchにする。本文ありの旧text索引/statusは
+    // 後段のNotion全文verify・pointer確定まで保持する。以前はupsert
     // を先行コミットして返却 id を facts に流していたため、後続 batch の失敗
     // で「メタだけ埋まって facts 0 件」の部分行が残り、次回以降
     // skipped_existing で永久に埋まらなかった (Node sqlite-proxy の
@@ -552,7 +567,7 @@ export async function ingestDocument(
           honbunFile,
           overseasParseStatus,
           overseasHonbunFile,
-          textParseStatus,
+          ...(sections.length === 0 ? { textParseStatus } : {}),
           submittedAt: parseSubmitDateTime(doc.submitDateTime),
           periodStart: doc.periodStart,
           periodEnd,
@@ -600,20 +615,6 @@ export async function ingestDocument(
       ...o,
     }));
 
-    // 定性セクション索引 (yuho_text_sections) も同じ docId サブクエリを親に
-    // 置換する。本文は Notion のみ (P4)。8 列/行 → D1 bind 上限 100 に対し
-    // 8 行/文 (8×8=64)。抽出器が 1 セクション 1 行に確定済みなので重複は出ない。
-    const sectionRows = sections.map((s) => ({
-      documentId: docIdSubquery,
-      stockId,
-      fiscalYearEnd: periodEnd,
-      sectionKey: s.sectionKey,
-      elementId: s.elementId,
-      itemName: s.itemName,
-      contextId: s.contextId,
-      charCount: s.charCount,
-    }));
-
     const statements = [
       docUpsert,
       db.delete(orderFacts).where(eq(orderFacts.documentId, docIdSubquery)),
@@ -626,10 +627,8 @@ export async function ingestDocument(
       ...chunk(overseasRows, MAX_FACT_ROWS_PER_STMT).map((rows) =>
         db.insert(overseasSalesFacts).values(rows)
       ),
-      db.delete(textSections).where(eq(textSections.documentId, docIdSubquery)),
-      ...chunk(sectionRows, MAX_FACT_ROWS_PER_STMT).map((rows) =>
-        db.insert(textSections).values(rows)
-      ),
+      // 本文ありの索引はNotion全文verify後、pointerと同一batchで置換する。
+      ...(sections.length === 0 ? [db.delete(textSections).where(eq(textSections.documentId, docIdSubquery))] : []),
     ];
     if (d1HttpBatch !== undefined) {
       // 同一 builders を toSQL 化して送る (対象外の束縛値は送らず throw)。
@@ -650,7 +649,8 @@ export async function ingestDocument(
 
   // 定性テキスト本文の Notion 保管 (D1 10GB 上限対策。D1 には索引 + 行 ID)。
   // needDbWork の有無に依らず手元の本文があれば保管し、行 ID を D1 へ
-  // 書き戻す。本文あり (sections>0) なのにポインタが残らない状態は成功に
+  // 索引/statusと原子的に書き戻し、その後に旧Notion行を退役する。
+  // 本文あり (sections>0) なのにポインタが残らない状態は成功に
   // しない: 保管失敗・行なし・行 ID 未取得は throw し、呼び出し側
   // (日次は通単位で失敗計上して継続) が未完了として扱う。既存行がある
   // 場合は backupDocTextToNotion が既存行 ID を返して回収する
@@ -686,11 +686,18 @@ export async function ingestDocument(
       );
     }
     console.info(`[ingest] 本文往復照合終了 docID=${doc.docID}`);
-    await db
-      .update(yuhoDocuments)
-      .set({ notionDocPageId: r.rowPageId })
-      .where(eq(yuhoDocuments.id, id));
+    const textStatements = buildTextBackfillStatements(db, {
+      id, stockId, docId: doc.docID, periodEnd, filerName: doc.filerName,
+    }, textParseStatus, sections, r.rowPageId);
+    if (d1HttpBatch !== undefined) {
+      await d1HttpBatch(toD1BatchStatements(textStatements));
+    } else {
+      const [first, ...rest] = textStatements;
+      if (first === undefined) throw new Error("[ingest] 本文確定batchが空です");
+      await db.batch([first, ...rest]);
+    }
     console.info(`[ingest] 本文ポインタ更新応答受信 docID=${doc.docID}`);
+    if (r.replacedRowPageId !== undefined) await retireStockTextRow(r.replacedRowPageId);
   }
 
   return {
@@ -702,5 +709,6 @@ export async function ingestDocument(
     textParseStatus,
     textSectionCount: sections.length,
     periodEnd,
+    holdings: holdingsResult,
   };
 }

@@ -748,7 +748,7 @@ describe("buildDescriptionUpdateStatements (全文修復の description 書き�
     );
     expect(stmts).toHaveLength(2);
     expect(stmts[0].sql).toBe(
-      "UPDATE yutai_benefits SET description = ?, updated_at = (unixepoch()) WHERE id = ? AND description = ? AND updated_at = ?"
+      "UPDATE yutai_benefits SET description = ?, public_facts = NULL, updated_at = (unixepoch()) WHERE id = ? AND description = ? AND updated_at = ?"
     );
     expect(stmts[0].params).toEqual(["新全文", 11, "旧文A", 100]);
     expect(stmts[1].params).toEqual(["新全文", 12, "旧文B", 200]);

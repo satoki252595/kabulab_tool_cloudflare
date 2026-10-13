@@ -48,7 +48,7 @@ export const RESTRICTED_COLUMNS: Record<string, readonly string[]> = {
   // 派生フラグも原入力の制約を継承する。WHERE 述語と値の公開は別の判断。
   core_stocks: ["market", "sector", "instrument_type", "is_active", "is_yutai"],
   // みんかぶ掲載文とその派生。私的利用の列を公開面では返さない。
-  yutai_benefits: ["description", "short_summary", "estimated_value"],
+  yutai_benefits: ["description", "short_summary", "estimated_value", "public_facts"],
 };
 
 export function redactColumns<T extends Record<string, unknown>>(

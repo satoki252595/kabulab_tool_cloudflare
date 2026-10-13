@@ -84,6 +84,18 @@ describe("text-backup", () => {
     expect(readStockTextRow).toHaveBeenCalledWith(rowPageId, true);
   });
 
+  it("forceの旧行は全文検証中も保持し、検証後にだけ退役候補を返す", async () => {
+    const old = "33333333-3333-3333-3333-333333333333";
+    vi.mocked(upsertStockTextRow).mockResolvedValue({ rowPageId, outcome: "recorded", replacedPageId: old });
+    vi.mocked(readStockTextRow).mockResolvedValueOnce([{ ...sections[0]!, text: "不一致" }]);
+    await expect(backupDocTextToNotion({ ...doc, sections, force: true })).rejects.toThrow("全文が不一致");
+    expect(vi.mocked(notionRequest).mock.calls.every(([method]) => method === "GET")).toBe(true);
+    vi.mocked(readStockTextRow).mockResolvedValue(structuredClone(sections));
+    await expect(backupDocTextToNotion({ ...doc, sections, force: true })).resolves
+      .toEqual({ rowPageId, outcome: "recorded", replacedRowPageId: old });
+    expect(vi.mocked(notionRequest).mock.calls.every(([method]) => method === "GET")).toBe(true);
+  });
+
   it("force を透過する", async () => {
     await backupDocTextToNotion({ ...doc, sections, force: true });
     expect(upsertStockTextRow).toHaveBeenCalledWith(

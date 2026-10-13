@@ -1,0 +1,43 @@
+{
+  "observedAt": "2026-10-13T16:05:32.079Z",
+  "inputs": [
+    {
+      "name": "graph.json",
+      "bytes": 7177700,
+      "sha256": "b1552f1acabab8bf8cf46a44d0f2593bd388edd903c9ab1839f6b9724339f6c7"
+    },
+    {
+      "name": "securities_full.jsonl",
+      "bytes": 24916983,
+      "sha256": "bbb2ce9161e05c690eca1a49ac0d9a95e52d55caed8900f9af1aca60d0321acd"
+    }
+  ],
+  "graphDate": "2026-10-13",
+  "marketDate": "2026-06-16",
+  "sourceRecords": 3632,
+  "counts": {
+    "rows": 27587,
+    "owners": 2231,
+    "targetCodePresent": 25651,
+    "targetCodeMissing": 1936,
+    "pricePresent": 20118,
+    "priceMissing": 7469,
+    "sourceMatchUnique": 27587,
+    "sourceMatchMissing": 0,
+    "sourceMatchAmbiguous": 0,
+    "matchedPlainText": 27587,
+    "matchedHtml": 0,
+    "unitMentionWithoutCellProof": 27586,
+    "noUnitMention": 1,
+    "sharesVerifiedByLegacyWriter": 0,
+    "pricesVerifiedByLegacyWriter": 0
+  },
+  "classification": {
+    "targetCodeMissing": "銘柄コード未確定。非上場の証明ではない",
+    "sourceMatchUnique": "保存済み平文化抽出結果との一致。原表の列・期間・単位の証明ではない",
+    "pricePresent": "旧参考株価。個別観測日・通貨の一次証拠未確認",
+    "legacyShares": "100株未満を切り捨てる正規表現抽出。表の列帰属・単位を未確認"
+  },
+  "productionWrites": 0,
+  "sourceRequests": 0
+}

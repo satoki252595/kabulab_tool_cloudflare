@@ -2,7 +2,8 @@
  * 取りこぼし backfill の 1 文書ぶん batch 構築 + 1 文書処理。
  * data-scripts/backfill-missing-docs.ts (top-level await の CLI で import
  * できない) からテスト可能な部分を切り出したもの。振る舞いの正本はここ。
- * 組成は共有 ingest.ts と同一: 文書 upsert + 3 表の置換を単一 batch に入れ、
+ * 組成は共有 ingest.ts と同一: 文書upsert/受注/海外は先行atomic、本番の本文あり
+ * はNotion全文verify後にtext索引/status/pointerを別の単一batchで確定する。
  * facts/text の documentId は docId サブクエリで参照する (事前 upsert/id
  * 取得の排除。JS 側で id を受け渡さない)。
  * 順序は raw-before-DB: 物理 ZIP の Notion 記録 (type 別 key・実 bytes の
@@ -43,6 +44,8 @@ import {
   type EdinetDoc,
 } from "../../src/services/edinet/types.js";
 import type * as textBackup from "../../src/services/text-backup.js";
+import { buildTextBackfillStatements } from "./text-backfill.js";
+import { retireStockTextRow } from "../../../../src/shared/notion-archive/index.js";
 import type * as edinetArchive from "../../src/services/edinet/archive.js";
 import type * as edinetClient from "../../src/services/edinet/client.js";
 import {
@@ -107,6 +110,8 @@ export interface MissingDocWriteSet {
   /** 保存前検証済みの海外ファクト */
   overseasFacts: OverseasFact[];
   sections: ExtractedSection[];
+  /** 本文ありの索引/statusはNotion verify後にpointerと共に確定する。 */
+  deferText?: boolean;
 }
 
 /**
@@ -139,7 +144,7 @@ export function buildMissingDocStatements(db: Database, w: MissingDocWriteSet) {
         honbunFile: w.honbunFile,
         overseasParseStatus: w.overseasParseStatus,
         overseasHonbunFile: w.overseasHonbunFile,
-        textParseStatus: w.textParseStatus,
+        ...(w.deferText ? {} : { textParseStatus: w.textParseStatus }),
         submittedAt: w.submittedAt,
         periodStart: w.periodStart,
         periodEnd: w.periodEnd,
@@ -190,8 +195,10 @@ export function buildMissingDocStatements(db: Database, w: MissingDocWriteSet) {
     ...chunk(overseasRows, 8).map((rows) =>
       db.insert(overseasSalesFacts).values(rows)
     ),
-    db.delete(textSections).where(eq(textSections.documentId, docIdSubquery)),
-    ...chunk(sectionRows, 8).map((rows) => db.insert(textSections).values(rows)),
+    ...(w.deferText ? [] : [
+      db.delete(textSections).where(eq(textSections.documentId, docIdSubquery)),
+      ...chunk(sectionRows, 8).map((rows) => db.insert(textSections).values(rows)),
+    ]),
   ];
 }
 
@@ -373,8 +380,8 @@ export async function processMissingDoc(
       });
     }
 
-    // 文書 upsert + 3 表の置換を単一 batch で原子適用する (ingest.ts と
-    // 同一組成)。失敗は外の catch で tally.error に計上し非 0 終了する
+    // 親文書と受注/海外を先行atomic保存。本文ありの旧text索引/statusは
+    // Notion verify後のpointer同梱batchまで保持する (ingest.tsと同一)。失敗は外の catch で tally.error に計上し非 0 終了する
     // (握り潰さない)。statement fallback なし。
     const statements = buildMissingDocStatements(db, {
       stockId,
@@ -393,6 +400,7 @@ export async function processMissingDoc(
       deduped,
       overseasFacts,
       sections,
+      deferText: sections.length > 0,
     });
     await deps.d1HttpBatch(toD1BatchStatements(statements));
     // 行 id は batch から取り出さない (ingest.ts と同一方針)。本文保管と
@@ -423,10 +431,11 @@ export async function processMissingDoc(
             force,
           });
           if (r.rowPageId) {
-            await db
-              .update(yuhoDocuments)
-              .set({ notionDocPageId: r.rowPageId })
-              .where(eq(yuhoDocuments.id, docRowId));
+            const textStatements = buildTextBackfillStatements(db, {
+              id: docRowId, stockId, docId: doc.docID, periodEnd, filerName: doc.filerName,
+            }, textParseStatus, sections, r.rowPageId);
+            await deps.d1HttpBatch(toD1BatchStatements(textStatements));
+            if (r.replacedRowPageId !== undefined) await retireStockTextRow(r.replacedRowPageId);
           } else {
             // 本文ありなのに行 ID 未取得は黙って成功にしない (P6 共有根因)。
             console.warn(`[missing] notion text backup 失敗(行 ID 未取得) ${tag}: outcome=${r.outcome}`);

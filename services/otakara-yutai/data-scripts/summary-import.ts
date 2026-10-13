@@ -433,7 +433,7 @@ export function buildDescriptionUpdateStatements(
   return rows
     .filter((r) => r.oldDescription !== newDescription)
     .map((r) => ({
-      sql: "UPDATE yutai_benefits SET description = ?, updated_at = (unixepoch()) WHERE id = ? AND description = ? AND updated_at = ?",
+      sql: "UPDATE yutai_benefits SET description = ?, public_facts = NULL, updated_at = (unixepoch()) WHERE id = ? AND description = ? AND updated_at = ?",
       params: [newDescription, r.id, r.oldDescription, r.updatedAt],
     }));
 }

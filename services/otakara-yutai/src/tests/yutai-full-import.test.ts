@@ -50,11 +50,14 @@ import { scoreStock } from "../../../../src/shared/scoring.js";
 import { headedDescription } from "../../data-scripts/estimated-value-guard.js";
 import type { AtomicBatchSender } from "../../data-scripts/atomic-apply.js";
 import { RAW34TEXT } from "./raw34-excerpts.js";
+import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
+import { parsePublicBenefitFacts } from "../public-facts.js";
+import { benefitKey } from "../../data-scripts/benefit-key.js";
 
 /** drizzle/d1 の全マイグレーションを番号順に流す (本番 D1 と同じ形)。 */
 function applyD1Migrations(target: DatabaseSync): void {
   const dir = join(ROOT, "drizzle", "d1");
-  for (const f of readdirSync(dir).filter((n) => n.endsWith(".sql")).sort()) {
+  for (const f of readdirSync(dir).filter((n) => /^\d{4}_.*\.sql$/.test(n)).sort()) {
     for (const stmt of readFileSync(join(dir, f), "utf-8").split("--> statement-breakpoint")) {
       if (stmt.trim()) target.exec(stmt);
     }
@@ -215,6 +218,48 @@ function isYutaiOf(id: number): unknown {
 }
 
 describe("importYutaiFull は母集団の銘柄の優待だけを作り直す", () => {
+  it("受信時計と純計算の公開条件を保存し、個別時計の欠落をバッチ時計で埋めない", async () => {
+    captureConsole();
+    const sourceFetchedAt = "2026-10-13T15:00:00.000Z";
+    const batchFetchedAt = "2026-10-13T15:01:00.000Z";
+    const data = fetched(NEW_HOLDER.code, "5年以上保有、架空QUOカード3,000円分を選択して応募");
+    await importYutaiFull(db, [...HELD.map(s => fetched(s.code)), { ...data, sourceFetchedAt }], makeRecordingSender().sender, batchFetchedAt);
+    const saved = sqlite.prepare("SELECT public_facts FROM yutai_benefits WHERE stock_id=?").get(NEW_HOLDER.id) as { public_facts: string };
+    expect(parsePublicBenefitFacts(saved.public_facts, NEW_HOLDER.code)).toMatchObject({
+      holdingPeriods: ["5年以上"], choice: true, application: true, combination: "unverified",
+      valueStatus: "unresolved", qualifiedAmount: null,
+      source: { fetchedAt: sourceFetchedAt, batchFetchedAt, officialStatus: "not_verified" },
+    });
+    const old = sqlite.prepare("SELECT public_facts FROM yutai_benefits WHERE stock_id=?").get(HELD[0].id) as { public_facts: string };
+    expect(parsePublicBenefitFacts(old.public_facts)?.source).toMatchObject({ fetchedAt: null, batchFetchedAt });
+  });
+
+  it("既存の公式照合は本文・見出し・株数・月が同じ場合だけ引き継ぐ", async () => {
+    captureConsole();
+    const holder = HELD[0];
+    const description = benefitRowsOf(fetched(holder.code)).rows[0].description;
+    const oldFacts = buildPublicBenefitFacts({ code: holder.code, description, context: { minShares: [100], recordMonths: [3] },
+      fetchedAt: null, batchFetchedAt: null, official: { url: "https://example.com/verified-source", verifiedAt: "2026-10-13T15:00:00.000Z" } });
+    sqlite.prepare("UPDATE yutai_benefits SET description=?,public_facts=? WHERE stock_id=?").run(description, JSON.stringify(oldFacts), holder.id);
+    await importYutaiFull(db, HELD.map(s => fetched(s.code)), makeRecordingSender().sender);
+    const read = () => parsePublicBenefitFacts((sqlite.prepare("SELECT public_facts FROM yutai_benefits WHERE stock_id=?").get(holder.id) as { public_facts: string }).public_facts);
+    expect(read()?.source.officialStatus).toBe("verified");
+    expect(read()?.sourceGroup).toBe(benefitKey(holder.code, description));
+    const changed = fetched(holder.code, "別の架空優待2,000円相当");
+    await importYutaiFull(db, HELD.map(s => s.id === holder.id ? changed : fetched(s.code)), makeRecordingSender().sender);
+    expect(read()?.source.officialStatus).toBe("not_verified");
+  });
+
+  it("末尾銘柄の不正な個別受信時計でも全業務書込前に停止する", async () => {
+    captureConsole();
+    const before = snapshot();
+    const { calls, sender } = makeRecordingSender();
+    await expect(importYutaiFull(db, [...HELD.map(s => fetched(s.code)),
+      { ...fetched(NEW_HOLDER.code), sourceFetchedAt: "2026-02-30T00:00:00.000Z" }], sender)).rejects.toThrow(/DTO/);
+    expect(calls).toHaveLength(0);
+    expect(snapshot()).toEqual(before);
+  });
+
   it("母集団の銘柄は作り直して解釈を戻し、母集団外の優待行・解釈・is_yutai には触らない", async () => {
     const before = snapshot();
     const logs = captureConsole();
@@ -495,11 +540,11 @@ describe("単発権利日の全量取込", () => {
   });
   const actualSourceClock = "2026-10-04T13:06:24.774Z";
 
-  it("新掲載に無い過去単発は原12列・ID不変で残し、通常4行へ日付を転送しない", async () => {
+  it("新掲載に無い過去単発は原13列・ID不変で残し、通常4行へ日付を転送しない", async () => {
     const [oneoff, ...rest] = HELD;
     markPastOneoff(oneoff.id);
     const before = fullRowsOf(oneoff.id);
-    expect(Object.keys(before[0])).toHaveLength(12);
+    expect(Object.keys(before[0])).toHaveLength(13);
     captureConsole();
     const { sender } = makeAtomicSender();
     await importYutaiFull(db, [changedFourTiers(oneoff.code), ...rest.map(s => fetched(s.code))], sender, actualSourceClock);

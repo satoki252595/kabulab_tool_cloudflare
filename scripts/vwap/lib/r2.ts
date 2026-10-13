@@ -80,6 +80,12 @@ function isExplicitRejection(code: string, status: number | "none"): boolean {
  * の null は IfNoneMatch:* で作成する。取得後の競合は 412 で停止する。
  */
 export async function r2Put(key: string, body: string, observedVersion: string | null): Promise<void> {
+  return r2PutBytes(key, new TextEncoder().encode(body), observedVersion, LOCAL_OUT ? undefined : sharedEnv.R2_BUCKET(), "application/json");
+}
+
+/** 原本バイナリも同じ単発/CAS契約で保存する。bucketはcallerが明示する。 */
+export async function r2PutBytes(key: string, body: Uint8Array, observedVersion: string | null, bucket: string | undefined, contentType: string): Promise<void> {
+  if (!contentType.trim()) throw new Error("R2 content type must be explicit");
   if (observedVersion !== null && (typeof observedVersion !== "string" || observedVersion.trim().length === 0 || observedVersion.trim() === "*")) {
     throw new Error("R2 write requires an observed ETag or explicit missing-object null");
   }
@@ -90,9 +96,10 @@ export async function r2Put(key: string, body: string, observedVersion: string |
     await fs.writeFile(p, body);
     return;
   }
+  if (typeof bucket !== "string" || !bucket.trim()) throw new Error("R2 bucket must be explicit");
   let res: unknown;
   try {
-    res = await client().send(new PutObjectCommand({ Bucket: sharedEnv.R2_BUCKET(), Key: key, Body: body, ContentType: "application/json",
+    res = await client().send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType,
       ...(observedVersion === null ? { IfNoneMatch: "*" } : { IfMatch: observedVersion }),
     }));
   } catch (e) {
@@ -120,15 +127,22 @@ export async function r2Get(key: string): Promise<string | null> {
 }
 
 export async function r2GetVersion(key: string): Promise<{ body: string; etag: string } | null> {
+  const found = await r2GetBytesVersion(key, LOCAL_OUT ? undefined : sharedEnv.R2_BUCKET());
+  return found === null ? null : { body: new TextDecoder().decode(found.body), etag: found.etag };
+}
+
+/** 原本をUTF-8へ変換せず全bytesで読む。missing/unknown契約はJSON経路と共通。 */
+export async function r2GetBytesVersion(key: string, bucket: string | undefined): Promise<{ body: Uint8Array; etag: string } | null> {
   if (LOCAL_OUT) {
     try {
-      const body = await fs.readFile(path.join(LOCAL_OUT, key), "utf8");
+      const body = await fs.readFile(path.join(LOCAL_OUT, key));
       return { body, etag: createHash("sha256").update(body).digest("hex") };
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw e;
     }
   }
+  if (typeof bucket !== "string" || !bucket.trim()) throw new Error("R2 bucket must be explicit");
   // 正常 bootstrap は明示 NoSuchKey + service 404 のみ。汎用 404
   // (bucket/endpoint 誤り等)・矛盾メタは missing-object の証明に
   // ならないため fault として throw する。
@@ -136,7 +150,7 @@ export async function r2GetVersion(key: string): Promise<{ body: string; etag: s
   try {
     // GET は mutation と異なり再読しても適用結果が曖昧にならない。
     // nativeな既知5xx familyだけ既存backoffへ接続し、認可/404/未知schemaは即STOP。
-    const r = await retry(() => client().send(new GetObjectCommand({ Bucket: sharedEnv.R2_BUCKET(), Key: key })),
+    const r = await retry(() => client().send(new GetObjectCommand({ Bucket: bucket, Key: key })),
       3, 1000, (e) => {
         const { code, status } = r2CauseOf(e);
         return ["InternalError", "InternalServerError", "ServiceUnavailable", "SlowDown"].includes(code) &&
@@ -147,7 +161,7 @@ export async function r2GetVersion(key: string): Promise<{ body: string; etag: s
     if (status !== 200 || !r.Body || typeof etag !== "string" || etag.length === 0) {
       throw new Error(`R2 GET 応答が不完全です: ${key}`);
     }
-    return { body: await r.Body.transformToString(), etag };
+    return { body: await r.Body.transformToByteArray(), etag };
   } catch (e) {
     const err = e as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
     if (err?.name === "NoSuchKey" && err?.$metadata?.httpStatusCode === 404) return null;

@@ -215,6 +215,7 @@ class TestCatalogPage:
         assert "commercial-ok" in text
         assert "投資助言ではありません" in text
         assert "EDINET（金融庁）" in text  # licensing.ATTRIBUTION の出典表記
+        assert "優待RESTは公開面では提供しません" in text
 
     def test_catalog_lists_all_schema_select_options(self, ensured):
         """ドリフト検知: カタログ説明文に各 select の全選択肢が載っているか。

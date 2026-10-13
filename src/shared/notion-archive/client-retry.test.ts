@@ -221,4 +221,25 @@ describe("notion-archive client retry", () => {
     expect(got).toEqual(page);
     expect(fetchCount).toBe(2);
   });
+
+  it.each([
+    { status: 0, throwMsg: "fetch failed" },
+    { status: 500 },
+    { status: 529, retryAfter: "0" },
+  ])("singleAttempt PATCHの結果不明は再送しない: %j", async (response) => {
+    script = [response];
+    const { notionRequest, NotionUnknownResultError } = await load();
+    await expect(notionRequest("PATCH", "/pages/old", { archived: true }, { singleAttempt: true }))
+      .rejects.toBeInstanceOf(NotionUnknownResultError);
+    expect(fetchCount).toBe(1);
+  });
+
+  it("singleAttempt PATCHの明示429も追加送信しない", async () => {
+    script = [{ status: 429, retryAfter: "0" }];
+    const { notionRequest } = await load();
+    await expect(notionRequest("PATCH", "/pages/old", { archived: true }, { singleAttempt: true }))
+      .rejects.toThrow("429 で拒否");
+    expect(fetchCount).toBe(1);
+  });
+
 });

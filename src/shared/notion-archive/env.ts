@@ -81,6 +81,8 @@ export const notionEnv = {
    * を作っていたが、数千件の子ページが「バックアップ」ページを開けなくした)。
    */
   NOTION_YUHO_TEXT_DB_ID: () => normalizeId(required("NOTION_YUHO_TEXT_DB_ID")),
+  /** 有価証券保有明細。旧推定値と原本照合済みの値を別の列で扱う。 */
+  NOTION_STOCK_HOLDINGS_DB_ID: () => normalizeId(required("NOTION_STOCK_HOLDINGS_DB_ID")),
   /**
    * [移行専用] 有報テキスト DB の **データソース ID** (2025-09-03 以降の
    * マルチソースデータベースモデルでの ID。`NOTION_YUHO_TEXT_DB_ID` の
@@ -103,6 +105,8 @@ export const notionEnv = {
    * 同じもの (値は一致させること)。
    */
   NOTION_DB_STOCK_MASTER: () => normalizeId(required("NOTION_DB_STOCK_MASTER")),
+  /** Python pipelineと同じ⑤原本DB。履歴索引の照合は書込を行わない。 */
+  NOTION_DB_RAW_FILES: () => normalizeId(required("NOTION_DB_RAW_FILES")),
   /** 「銘柄マスタ（補足）」DB ID を固定 (任意。未設定なら Search で自動発見) */
   NOTION_STOCK_SUPPLEMENT_DB_ID: () =>
     optionalId("NOTION_STOCK_SUPPLEMENT_DB_ID"),

@@ -51,7 +51,10 @@ describe("notion-archive stock-text", () => {
       if (!q || q.length === 0) {
         throw new Error(`テスト: 未定義ルートへの fetch: ${key}`);
       }
-      return jsonResponse(q.shift());
+      const response = q.shift();
+      if (response instanceof Error) throw response;
+      if (response instanceof Response) return response;
+      return jsonResponse(response);
     }) as typeof fetch;
     vi.resetModules();
   });
@@ -214,6 +217,13 @@ describe("notion-archive stock-text", () => {
       expect(calls).toHaveLength(1);
     });
 
+    it("既存行IDの欠損を不在へ置換して新createしない", async () => {
+      route("POST", "/v1/databases/db-7203/query", [{ results: [{}], has_more: false, next_cursor: null }]);
+      const { upsertStockTextRow } = await load();
+      await expect(upsertStockTextRow({ dbId: "db-7203", doc, sections, force: true })).rejects.toThrow("既存行IDが不正");
+      expect(calls).toHaveLength(1);
+    });
+
     it("新規行はプロパティ鏡像 + 本文直付けで作る", async () => {
       route("POST", "/v1/databases/db-7203/query", [dbQuery([])]);
       route("POST", "/v1/pages", [{ id: "row-new" }]);
@@ -265,22 +275,36 @@ describe("notion-archive stock-text", () => {
       expect(appended.children).toHaveLength(81);
     });
 
-    it("force は旧行を archived して作り直す", async () => {
+    it("forceでも旧行を保持し、新行と退役候補だけを返す", async () => {
       route("POST", "/v1/databases/db-7203/query", [dbQuery(["row-old"])]);
-      route("PATCH", "/v1/pages/row-old", [{}]);
       route("POST", "/v1/pages", [{ id: "row-new" }]);
       const { upsertStockTextRow } = await load();
-      const got = await upsertStockTextRow({
-        dbId: "db-7203",
-        doc,
-        sections,
-        force: true,
-      });
-      expect(got).toEqual({ rowPageId: "row-new", outcome: "recorded" });
-      const archived = JSON.parse(String(calls[1]?.init.body)) as {
-        archived: boolean;
-      };
-      expect(archived).toEqual({ archived: true });
+      expect(await upsertStockTextRow({ dbId: "db-7203", doc, sections, force: true }))
+        .toEqual({ rowPageId: "row-new", outcome: "recorded", replacedPageId: "row-old" });
+      expect(calls).toHaveLength(2);
+      expect(calls.every((call) => call.init.method !== "PATCH")).toBe(true);
+    });
+
+    it("新create結果不明では旧archiveもcreate再送もしない。重複再入は保全停止", async () => {
+      route("POST", "/v1/databases/db-7203/query", [dbQuery(["row-old"]), dbQuery(["row-old", "row-new"])]);
+      route("POST", "/v1/pages", [new Error("socket reset")]);
+      const { upsertStockTextRow } = await load();
+      await expect(upsertStockTextRow({ dbId: "db-7203", doc, sections, force: true })).rejects.toThrow("結果不明");
+      expect(calls).toHaveLength(2);
+      await expect(upsertStockTextRow({ dbId: "db-7203", doc, sections, force: true })).rejects.toThrow("重複");
+      expect(calls.filter((call) => new URL(call.url).pathname === "/v1/pages")).toHaveLength(1);
+      expect(calls.every((call) => call.init.method !== "PATCH")).toBe(true);
+    });
+
+    it("新行の追記結果不明でも旧をarchiveせず追加送信しない", async () => {
+      route("POST", "/v1/databases/db-7203/query", [dbQuery(["row-old"])]);
+      route("POST", "/v1/pages", [{ id: "row-new" }]);
+      route("PATCH", "/v1/blocks/row-new/children", [new Error("socket reset")]);
+      const { upsertStockTextRow } = await load();
+      const many = Array.from({ length: 60 }, (_, i) => ({ itemName: `項目${i}`, sectionKey: `k${i}`, text: "本文" }));
+      await expect(upsertStockTextRow({ dbId: "db-7203", doc, sections: many, force: true })).rejects.toThrow("結果不明");
+      expect(calls).toHaveLength(3);
+      expect(calls.some((call) => call.url.endsWith("/pages/row-old"))).toBe(false);
     });
 
     it("force の入力不正は旧 archive・新 create の前に停止する", async () => {
@@ -291,6 +315,27 @@ describe("notion-archive stock-text", () => {
       })).rejects.toThrow("キー重複");
       expect(calls).toHaveLength(1);
       expect(calls[0]?.url).toBe("https://api.notion.com/v1/databases/db-7203/query");
+    });
+  });
+
+  describe("retireStockTextRow", () => {
+    const old = "11111111-1111-1111-1111-111111111111";
+    const retired = () => ({ object: "page", id: old, archived: true, in_trash: true });
+    it("旧archiveのACKと読戻し状態が一致した時だけ完了する", async () => {
+      route("PATCH", `/v1/pages/${old}`, [retired()]);
+      route("GET", `/v1/pages/${old}`, [retired()]);
+      const { retireStockTextRow } = await load();
+      await retireStockTextRow(old);
+      expect(calls.map((call) => call.init.method)).toEqual(["PATCH", "GET"]);
+    });
+    it.each(["ack", "readback", "network"])("%s不明/不一致を再送で隠さない", async (failure) => {
+      route("PATCH", `/v1/pages/${old}`, [failure === "network" ? new Error("socket reset")
+        : failure === "ack" ? { ...retired(), archived: false } : retired()]);
+      route("GET", `/v1/pages/${old}`, [{ ...retired(), in_trash: false }]);
+      const { retireStockTextRow } = await load();
+      await expect(retireStockTextRow(old)).rejects.toThrow(/結果不明/);
+      expect(calls.filter((call) => call.init.method === "PATCH")).toHaveLength(1);
+      expect(calls).toHaveLength(failure === "readback" ? 2 : 1);
     });
   });
 

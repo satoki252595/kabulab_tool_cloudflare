@@ -51,6 +51,7 @@ CREATE TABLE yutai_benefits (
   genre_id integer NOT NULL REFERENCES yutai_genres(id),
   description text NOT NULL,
   short_summary text,
+  public_facts text,
   min_shares integer NOT NULL,
   record_month integer NOT NULL,
   record_date text,

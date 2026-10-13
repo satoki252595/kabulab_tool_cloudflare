@@ -31,6 +31,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { beforeAll, describe, expect, it } from "vitest";
 import { otakaraYutaiApp } from "../../app.js";
+import { buildPublicBenefitFacts } from "../../data-scripts/public-facts.js";
 
 const DDL = `
 CREATE TABLE core_stocks (
@@ -58,6 +59,7 @@ CREATE TABLE yutai_benefits (
   genre_id integer NOT NULL REFERENCES yutai_genres(id),
   description text NOT NULL,
   short_summary text,
+  public_facts text,
   min_shares integer NOT NULL,
   record_month integer NOT NULL,
   record_date text,
@@ -231,6 +233,22 @@ async function detailHtml(code: string = CODE): Promise<string> {
 }
 
 describe("GET /stocks/:code のライセンス境界", () => {
+  it("SSRで保有条件・掲載出典・公式未確認を保ち、原文を出さない", async () => {
+    const text = "5年以上継続保有で架空QUOカード2000円分";
+    const facts = buildPublicBenefitFacts({ code: CODE_EQUITY, description: text,
+      context: { minShares: [100], recordMonths: [3] }, fetchedAt: "2026-10-13T15:00:00.000Z", batchFetchedAt: null });
+    sqlite.prepare("UPDATE yutai_benefits SET public_facts = ?, estimated_value = 2000, estimate_value_source = 'company' WHERE stock_id = 3").run(JSON.stringify(facts));
+    try {
+      const html = await detailHtml(CODE_EQUITY);
+      expect(html).toContain("5年以上");
+      expect(html).toContain("会社の公式情報との照合は未実施");
+      expect(html).toContain(`https://minkabu.jp/stock/${CODE_EQUITY}/yutai`);
+      expect(html).not.toContain("出典サイトの掲載文");
+    } finally {
+      sqlite.prepare("UPDATE yutai_benefits SET public_facts = NULL, estimated_value = NULL, estimate_value_source = NULL WHERE stock_id = 3").run();
+    }
+  });
+
   it("随時は説明付きで公開し、0月・月末guide・当月検索へ混ぜない", async () => {
     sqlite.prepare("UPDATE yutai_benefits SET record_month = 0 WHERE stock_id = 3").run();
     try {

@@ -25,6 +25,7 @@ import {
 } from "../../src/shared/db/public-columns.js";
 import { activeEquityCondition, yutaiExistsCondition } from "../../src/shared/db/active-equity.js";
 import { trustedEstimateValue } from "../../src/shared/trusted-value.js";
+import { parsePublicBenefitFacts, VALUE_REASON_LABELS, type PublicBenefitFacts } from "./src/public-facts.js";
 
 /**
  * 002 お宝優待 — kabulab portal 配下の /otakara-yutai サブアプリ
@@ -610,6 +611,7 @@ export type BenefitRow = {
    * (X-01)。以後この値は "company" か null のいずれかになる見込み。
    */
   estimateValueSource: string | null;
+  facts: PublicBenefitFacts | null;
 };
 
 /** 優待をジャンル → 保有段階 → 商品 の3階層にまとめる */
@@ -620,6 +622,7 @@ type ProductGroup = {
   estimateValueSource: string | null;
   months: number[];
   recordDate: string | null;
+  facts: PublicBenefitFacts | null;
 };
 type TierGroup = {
   minShares: number;
@@ -651,13 +654,13 @@ export function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
       if (b.recordDate === null) monthsSet.add(b.recordMonth);
       if (!tierMap.has(b.minShares)) tierMap.set(b.minShares, new Map());
       const productMap = tierMap.get(b.minShares)!;
-      // 表示テキスト単位でまとめる (以前は出典掲載文 description をキーにしていた)。
-      // 原文が違っても要約が同じなら 1 行に畳まれる (意図的)。実データでは 17 組で、
-      // いずれも推定額が一致するため金額は失われない。権利月は months に束ねる。
-      const key = b.summary ? JSON.stringify([b.summary, b.recordDate, b.recordMonth === 0]) : `\u0000anon:${anonSeq++}`;
+      // 要約・時期・条件DTOがすべて同じ行だけをまとめ、異なる条件を失わない。
+      // 同じ条件の権利月は months に束ねる。
+      const key = b.summary ? JSON.stringify([b.summary, b.recordDate, b.recordMonth === 0, b.facts]) : `\u0000anon:${anonSeq++}`;
       // 公開する金額は trust 境界を通った値だけ (company 以外は null → 正直な
       // 「金額換算が難しい優待」表示。要約・月・条件の文言は落とさない)。
-      const trusted = trustedEstimateValue(b);
+      const stored = trustedEstimateValue(b);
+      const trusted = b.facts !== null && b.facts.valueStatus === "source_amount_qualified" && b.facts.qualifiedAmount === stored ? stored : null;
       const trustedSource = trusted === null ? null : b.estimateValueSource;
       if (!productMap.has(key)) {
         productMap.set(key, {
@@ -666,14 +669,13 @@ export function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
           estimateValueSource: trustedSource,
           months: [],
           recordDate: b.recordDate,
+          facts: b.facts,
         });
       }
       const p = productMap.get(key)!;
       if (b.recordDate === null) p.months.push(b.recordMonth);
-      // 最大の推定価値を残す（同一商品が月ごとに別値を持つ場合の保険）。
-      // 値を差し替えるときは出典区分も一緒に差し替える (ルール1: 値と
-      // 出典の対応を崩さない)。
-      if (trusted != null && (p.estimatedValue == null || trusted > p.estimatedValue)) {
+      // 同じDTOの認定額だけを採り、別の値の最大値で補わない。
+      if (trusted !== null && p.estimatedValue === null) {
         p.estimatedValue = trusted;
         p.estimateValueSource = trustedSource;
       }
@@ -686,6 +688,7 @@ export function groupBenefits(rows: BenefitRow[]): GenreGroup[] {
           summary: p.summary,
           estimatedValue: p.estimatedValue,
           estimateValueSource: p.estimateValueSource,
+          facts: p.facts,
           months: [...new Set(p.months)].sort((a, b) => a - b),
           recordDate: p.recordDate,
         })),
@@ -834,7 +837,7 @@ function renderBenefitGroups(groups: GenreGroup[]): string {
               const descHtml = p.summary
                 ? h(p.summary).replace(/\n/g, "<br>")
                 : `<span class="product-desc-empty">優待内容の要約なし（会社の発表をご確認ください）</span>`;
-              return `<li class="benefit-product"><div class="product-desc">${descHtml}</div><div class="product-meta">${valueNote}${dateNote}${monthNote}</div></li>`;
+              return `<li class="benefit-product"><div class="product-desc">${descHtml}</div><div class="product-meta">${valueNote}${dateNote}${monthNote}</div>${renderBenefitFacts(p.facts, p.estimatedValue)}</li>`;
             })
             .join("");
           return `
@@ -860,6 +863,25 @@ function renderBenefitGroups(groups: GenreGroup[]): string {
         </div>`;
     })
     .join("");
+}
+
+/** 公開DTOの事実と確認状態だけを表示する。掲載情報を会社の公式確認と取り違えない。 */
+export function renderBenefitFacts(facts: PublicBenefitFacts | null, amount: number | null): string {
+  if (facts === null) return `<p class="product-desc-empty">適用条件・出典情報は未確認です</p>`;
+  const holding = facts.holding
+    ? facts.holdingPeriods.length > 0 ? `掲載の期間区分 ${facts.holdingPeriods.join("・")}（株数との対応は掲載元で確認）` : "保有条件あり（期間未確定）"
+    : "掲載に記載なし（不要と確認したものではありません）";
+  const combination = { allowed: "掲載上は併用可", not_allowed: "掲載上は併用不可", unverified: "併用可否は未確認" }[facts.combination];
+  const reasons = facts.valueStatus === "source_amount_qualified" && amount === null
+    ? "掲載額の反映は未確認" : facts.valueReasons.map(reason => VALUE_REASON_LABELS[reason]).join("・");
+  return `<details><summary>適用条件・金額の根拠・出典</summary>
+    <p>${termTip("継続保有", "一定の期間、株を持ち続ける条件です。株数だけでなく対象の期間も確認してください。")}: ${h(holding)}</p>
+    <p>選択: ${facts.choice ? "選択条件あり（選択肢を合算しないでください）" : "掲載に記載なし"} / 抽選: ${facts.lottery ? "あり" : "掲載に記載なし"} / 申込・応募: ${facts.application ? "必要" : "掲載に記載なし"}</p>
+    <p>${termTip("併用", "複数の優待を同時に受け取れるかという条件です。選択式の優待をすべて受け取れるとは限りません。")}: ${h(combination)}。銘柄全体の合計額は未確認です。</p>
+    <p>金額: ${h(reasons)}</p>
+    <p><a href="${h(facts.source.listingUrl)}" target="_blank" rel="noopener noreferrer">掲載情報（みんかぶ）</a> / 個別受信日時: ${facts.source.fetchedAt === null ? "未記録" : h(facts.source.fetchedAt)} / バッチ受信日時: ${facts.source.batchFetchedAt === null ? "未記録" : h(facts.source.batchFetchedAt)}</p>
+    <p>${facts.source.officialStatus === "verified" ? `<a href="${h(facts.source.officialUrl!)}" target="_blank" rel="noopener noreferrer">会社の公式情報と照合済み</a>（${h(facts.source.verifiedAt!)}）` : "会社の公式情報との照合は未実施です"}</p>
+  </details>`;
 }
 
 /** ソートセレクトのoptions HTML（スクリーニング・ジャンルページ共通） */
@@ -1440,6 +1462,7 @@ app.get("/stocks/:code", async (c) => {
           shortSummary: true,
           estimatedValue: true,
           estimateValueSource: true,
+          publicFacts: true,
         },
         with: { genre: true },
       },
@@ -1488,7 +1511,7 @@ app.get("/stocks/:code", async (c) => {
       ${renderFinGrid(fin)}
 
       <h3 style="margin-top:24px">${tip("yutai", "株主優待")}</h3>
-      <div class="guide">${stockData.benefits.some(b => b.recordDate !== null || b.recordMonth === 0) ? `優待ごとの${tip("recordmonth", "権利確定月")}${stockData.benefits.some(b => b.recordMonth === 0 && b.recordDate === null) ? `、${recordMonthHtml(0)}の条件` : ""}${stockData.benefits.some(b => b.recordDate !== null) ? `、${tip("recorddate", "単発基準日")}` : ""}をご確認ください。` : `${tip("recordmonth", "権利確定月")}の月末に株を保有していると優待がもらえます。`}${tip("minshares", "最低株数")}以上の保有が必要です。</div>
+      <div class="guide">${stockData.benefits.some(b => b.recordDate !== null || b.recordMonth === 0) ? `優待ごとの${tip("recordmonth", "権利確定月")}${stockData.benefits.some(b => b.recordMonth === 0 && b.recordDate === null) ? `、${recordMonthHtml(0)}の条件` : ""}${stockData.benefits.some(b => b.recordDate !== null) ? `、${tip("recorddate", "単発基準日")}` : ""}をご確認ください。` : `${tip("recordmonth", "権利確定月")}に加え、継続保有・選択・申込などの個別条件をご確認ください。`}${tip("minshares", "最低株数")}以上の保有が必要です。</div>
       ${renderBenefitGroups(groupBenefits(
         // `any` にしない: `with.benefits.columns` から shortSummary を落とすと
         // publicSummary(b) が全行 "" になり、型でもテストでも気づけないまま
@@ -1501,6 +1524,7 @@ app.get("/stocks/:code", async (c) => {
           shortSummary: string | null;
           estimatedValue: number | null;
           estimateValueSource: string | null;
+          publicFacts: PublicBenefitFacts | null;
         }) => ({
           genre: b.genre ? { name: b.genre.name, slug: b.genre.slug } : null,
           minShares: b.minShares,
@@ -1511,6 +1535,7 @@ app.get("/stocks/:code", async (c) => {
           // 列が無い時代は SQLite が識別子を文字列リテラルとして返していた
           // (0005 で解消)。
           estimateValueSource: b.estimateValueSource,
+          facts: parsePublicBenefitFacts(b.publicFacts, code),
         }))
       ))}
     </div>
