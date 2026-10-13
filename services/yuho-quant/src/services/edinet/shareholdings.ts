@@ -130,6 +130,7 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource)
   }
   const tables = extractTables(block.html);
   let lastEnd = 0, scope: "filer" | "other" | "unknown" = "unknown";
+  let ambiguousOwnerSection = false;
   let kind: "特定投資株式" | "みなし保有株式" | null = null;
   let excludedTables = 0;
   for (const [tableIndex, table] of tables.entries()) {
@@ -139,15 +140,28 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource)
     // 当社の株式を相手方が保有する、という表の列見出しは主体証拠に使わない。
     // 保存原典で確認した当社自身の保有説明と明示区画だけ。別会社区画へ入った後は
     // その中の「当社」を提出会社へ読み替えず、次の明示提出会社区画まで対象外。
-    for (const event of before.matchAll(/(?:^|[\s。])当社は、|(?:当社が保有する|当社の保有する)|(?:^|[\s。])([^\s。]{1,100})における株式の保有状況/g)) {
-      if (event[1] !== undefined) {
+    for (const event of before.matchAll(/(?:^|[\s。])当社は、|(?:当社が保有する|当社の保有する)|(?:^|[\s。])([^\s。]{1,100})\s*における株式の保有状況|(?:^|\s)\((最大保有会社の次に大きい会社)\)/g)) {
+      if (event[2] !== undefined) {
+        // S100YB9P's named next-largest holder is a separate section. An
+        // unproved owner section must not inherit the preceding filer scope.
+        const after = before.slice(event.index + event[0].length);
+        const named = /^\s*当社(?:及び|および)連結子会社のうち、[^。]{1,180}?会社は\s+(?:株式会社[^\s。()]{1,80}|[^\s。()]{1,80}株式会社)(?=\s|。|$)/.test(after);
+        scope = named ? "other" : "unknown";
+        ambiguousOwnerSection = !named;
+        kind = null;
+      } else if (event[1] !== undefined) {
         const label = event[1].replace(/^[①-⑳]/, "");
         scope = /^(?:[0-9]+[.)、]?)?(?:当社|提出会社)$/.test(label) ? "filer" : "other";
+        ambiguousOwnerSection = false;
         kind = null;
-      } else if (scope !== "other") scope = "filer";
+      } else if (scope !== "other" && !ambiguousOwnerSection) scope = "filer";
     }
-    const kindHeading = /(?:^|\s)(特定投資株式|みなし保有株式)\s*$/.exec(before);
-    if (kindHeading) kind = kindHeading[1] as Shareholding["kind"];
+    const kindHeading = /(?:^|\s)(特定投資株式|みなし保有株式)(\(信託財産として保有し議決権行使権限のあるもの等\))?\s*$/.exec(before);
+    if (kindHeading && (kindHeading[2] === undefined || kindHeading[1] === "みなし保有株式")) {
+      kind = kindHeading[1] as Shareholding["kind"];
+    } else if (/(?:^|\s)(?:特定投資株式|みなし保有株式)\s*\(/.test(before)) {
+      return { ...result, status: "unsupported", reason: "保有種別見出しの括弧注記を確認できません", holdings: [] };
+    }
     const grid = tableToGridExpanded(table);
     if (grid.length < 4 || !grid[0].some(c => normalize(c) === "銘柄") ||
         !grid.slice(0, 3).some(row => row.some(c => c.includes("株式数")))) continue;
