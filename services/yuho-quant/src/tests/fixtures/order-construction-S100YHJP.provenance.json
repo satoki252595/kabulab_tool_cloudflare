@@ -1,0 +1,26 @@
+{
+  "fixtureKind": "exact original saved type1 ZIP bytes; no generated table or amount",
+  "stockCode": "1719",
+  "docId": "S100YHJP",
+  "edinetCode": "E00317",
+  "periodEnd": "2026-03-31",
+  "fixtureSha256": "957022b0d8d0a188ed968ec54f57fe799ecfd01979209b57f41e614b2bca876a",
+  "byteLength": 802889,
+  "archivePageId": "3e2d74ff-84cd-8167-822a-cba23686e6b1",
+  "sourceCustody": "legacy",
+  "originalManifest": "unknown",
+  "sourcePlanSha256": "1172777ba5a66f8d88e5ff3fc296d8988e9919d690ea10d9fad80f7173358ef7",
+  "sourceItemSha256": "14dd91afe42e6b7aec0897a093b0367e00bee3e50f5fe0a2dc4e65fb4dc76d8d",
+  "metadataQualification": {
+    "status": "verified",
+    "missing": []
+  },
+  "nativeIdentityQualification": {
+    "status": "verified",
+    "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E00317-000_2026-03-31_01_2026-06-25.xbrl"
+  },
+  "copiedAt": "2026-10-13T21:28:51.837846+00:00",
+  "newSourceApiGets": 0,
+  "newNotionReads": 0,
+  "newRawUploads": 0
+}
