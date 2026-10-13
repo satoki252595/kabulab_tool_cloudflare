@@ -43,6 +43,13 @@ export interface FetchedBatch {
   files: PrimaryFile[];
 }
 
+/** resolve/fetch内で解析が失敗しても取得済み原本を別キーで保全し、観測は停止する。 */
+export class MoneyflowFetchError extends Error {
+  constructor(message: string, readonly primary: Omit<FetchedBatch, "key">, cause: unknown) {
+    super(message, { cause }); this.name = "MoneyflowFetchError";
+  }
+}
+
 /** 解析に使うファイル (取得直後の `PrimaryFile`、または Notion 保管済みの再取得分)。 */
 export type SpecFile = Pick<PrimaryFile, "filename" | "bytes">;
 

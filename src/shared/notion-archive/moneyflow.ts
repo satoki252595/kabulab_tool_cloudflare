@@ -1024,6 +1024,19 @@ export async function verifyObservedBatch(
       cursor = res.next_cursor as string;
     }
   }
+  const missing = [...wantByKey].filter(([key]) => !seen.has(key));
+  if (missing.length > 1) fail(`検証読取に行なし ${missing.length} 件。ACK個別再読の上限1件を超過`);
+  if (missing.length === 1) {
+    const [key, want] = missing[0];
+    // query索引の欠落と書込欠落を区別する。同じACK pageIdの原行だけを最大1GETで検証。
+    const native = await notionRequest<ObsRowHit & { archived: boolean; in_trash: boolean; parent: { type: string; database_id: string } }>("GET", `/pages/${want.pageId}`);
+    if (native.properties === undefined || native.archived !== false || native.in_trash !== false || native.parent?.type !== "database_id" ||
+        normalizeId(native.parent.database_id) !== normalizeId(dbId) || normalizeId(native.id) !== normalizeId(want.pageId) ||
+        plainOf(native.properties[MONEYFLOW_OBS_PROPS.key]?.title) !== key || !observationRowMatches(native.properties, want.input))
+      fail(`ACK原行の所属/状態/全値が不一致 key=${key}`);
+    console.warn(`${context}: queryにACK行が含まれず、同一pageIdのnative GET全項目照合で確認 key=${key}`);
+    seen.set(key, [native]);
+  }
   for (const [k, want] of wantByKey) {
     const hits = seen.get(k) ?? [];
     if (hits.length === 0) fail(`検証読取に行なし key=${k}`);

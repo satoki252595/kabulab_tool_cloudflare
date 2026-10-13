@@ -1065,6 +1065,23 @@ describe("notion-archive moneyflow", () => {
       expect(String(calls[1]?.init.body)).toContain("c1");
     });
 
+    it("query欠落1行のみACK原行をnative GETで全項目照合し、writeしない", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [], has_more: false, next_cursor: null }]);
+      route("GET", "/v1/pages/row-a", [{ ...row("row-a", "A", 1), archived: false, in_trash: false, parent: { type: "database_id", database_id: dbId } }]);
+      const { verifyObservedBatch } = await load();
+      await expect(verifyObservedBatch(dbId, "index omission", [{ input: { ...base, category: "A", value: 1 }, pageId: "row-a" }])).resolves.toBeUndefined();
+      expect(calls).toHaveLength(2); expect(calls.every((c) => c.init.method !== "PATCH")).toBe(true);
+    });
+    it("query欠落2行以上は個別GETを増やさず保全停止", async () => {
+      route("POST", `/v1/databases/${dbId}/query`, [{ results: [], has_more: false, next_cursor: null }]);
+      const { verifyObservedBatch } = await load();
+      await expect(verifyObservedBatch(dbId, "index omission", [
+        { input: { ...base, category: "A", value: 1 }, pageId: "row-a" },
+        { input: { ...base, category: "B", value: 2 }, pageId: "row-b" },
+      ])).rejects.toThrow(/上限1件/);
+      expect(calls).toHaveLength(1);
+    });
+
     it("値の不一致・ページID不一致・欠落・重複・不正カーソルは保全停止する", async () => {
       const { verifyObservedBatch } = await load();
       const input = { ...base, category: "A", value: 1 };
@@ -1082,10 +1099,11 @@ describe("notion-archive moneyflow", () => {
       await expect(verifyObservedBatch(dbId, "[test-src] k1", [{ input, pageId: "row-a" }])).rejects.toThrow(
         /ページID不一致/
       );
-      // 欠落
+      // 欠落: ACK原行のnative読取も同値でなければ停止。
       route("POST", `/v1/databases/${dbId}/query`, [{ results: [], has_more: false, next_cursor: null }]);
+      route("GET", "/v1/pages/row-a", [{ ...row("row-a", "A", 9), archived: false, in_trash: false, parent: { type: "database_id", database_id: dbId } }]);
       await expect(verifyObservedBatch(dbId, "[test-src] k1", [{ input, pageId: "row-a" }])).rejects.toThrow(
-        /検証読取に行なし/
+        /ACK原行.*不一致/
       );
       // 重複
       route("POST", `/v1/databases/${dbId}/query`, [

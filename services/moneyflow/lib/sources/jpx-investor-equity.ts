@@ -239,21 +239,15 @@ function parseLegacyTitle(titleRaw: unknown): {
   const endMonth = Number(endMonthStr);
   const endDay = Number(endDayStr);
 
-  if (endMonth !== month) {
-    // タイトルの月 (例: "9月") と終了日の月が一致しない = 本実装が未検証の期間の切り方。
-    // 実ファイルで確認できているのは「月またぎの週は終了日の月に属する」例
-    // (2026年9月第1週 = 8/31〜9/4) のみ。終了日が翌月に入る週 (例: 9/28〜10/2) を
-    // JPX がどちらの月に帰属させるかは未確認のため、推測で受け入れず throw する
-    // (KNOWN_LIMITATIONS 参照)。
-    throw new Error(
-      `JPX 投資部門別売買状況: タイトルの月(${month})と期間終了日の月(${endMonth})が一致しません: "${title}"`
-    );
+  const periodType: InvestorEquityPeriodType = weekStr !== undefined ? "weekly" : "monthly";
+  const weeklyPeriod = periodType === "weekly"
+    ? weeklyRowLabelPeriod(`${year}年${month}月第${weekStr}週(${startMonth}月${startDay}日～${endMonth}月${endDay}日)`)
+    : null;
+  if (periodType === "monthly" && endMonth !== month) {
+    throw new Error(`JPX 投資部門別売買状況: タイトルの月(${month})と期間終了日の月(${endMonth})が一致しません: "${title}"`);
   }
-  // 開始日が終了日より後の月 (例: 8月31日 → 9月4日) は年をまたがない前提で、
-  // 開始月が終了月より大きい場合のみ前年に繰り下げる (12月→1月のまたぎ想定)。
   const startYear = startMonth > endMonth ? year - 1 : year;
 
-  const periodType: InvestorEquityPeriodType = weekStr !== undefined ? "weekly" : "monthly";
   const periodLabel =
     periodType === "weekly" ? `${year}年${month}月第${weekStr}週` : `${year}年${month}月`;
 
@@ -261,8 +255,8 @@ function parseLegacyTitle(titleRaw: unknown): {
     periodType,
     periodLabel,
     periodMonth: `${year}-${pad2(month)}`,
-    periodStart: `${startYear}-${pad2(startMonth)}-${pad2(startDay)}`,
-    periodEnd: `${year}-${pad2(endMonth)}-${pad2(endDay)}`,
+    periodStart: weeklyPeriod === null ? `${startYear}-${pad2(startMonth)}-${pad2(startDay)}` : weeklyPeriod.start,
+    periodEnd: weeklyPeriod === null ? `${year}-${pad2(endMonth)}-${pad2(endDay)}` : weeklyPeriod.end,
   };
 }
 
@@ -949,26 +943,32 @@ const UNIFIED_ROW_FILE_RE = /stock_1_w_(\d{8})_(\d{8})\.(xlsx|pdf)$/;
 // 行ラベル: "2026年9月第3週(9月14日～9月18日)" / "2026年9月第1週(8月31日～9月4日)"
 const WEEKLY_ROW_LABEL_RE = /^(\d{4})年(\d{1,2})月第(\d)週\((\d{1,2})月(\d{1,2})日[～〜~](\d{1,2})月(\d{1,2})日\)$/;
 
-/** ラベルの開始・終了を ISO 日付にする。開始月>終了月なら開始は前年 (年またぎの週)。 */
-function weeklyRowLabelPeriod(label: string): { start: string; end: string } {
+/** 月またぎはラベル月が開始/終了のどちらかであることを検証し、明記された期間を使う。 */
+export function weeklyRowLabelPeriod(label: string): { start: string; end: string } {
   const m = WEEKLY_ROW_LABEL_RE.exec(label.trim());
   if (!m) {
     throw new Error(`JPX 投資部門別売買状況 (週次一覧): 行の日付ラベルの様式が想定外です: "${label}"`);
   }
   const year = Number(m[1]);
+  const labelMonth = Number(m[2]);
   const startMonth = Number(m[4]);
   const startDay = Number(m[5]);
   const endMonth = Number(m[6]);
   const endDay = Number(m[7]);
-  const startYear = startMonth > endMonth ? year - 1 : year;
+  if (labelMonth !== startMonth && labelMonth !== endMonth) throw new Error(`JPX 投資部門別売買状況 (週次一覧): ラベルの月と期間の月が一致しません: "${label}"`);
+  const crossesYear = startMonth > endMonth;
+  const startYear = crossesYear && labelMonth === endMonth ? year - 1 : year;
+  const endYear = crossesYear && labelMonth === startMonth ? year + 1 : year;
   const start = `${startYear}-${pad2(startMonth)}-${pad2(startDay)}`;
-  const end = `${year}-${pad2(endMonth)}-${pad2(endDay)}`;
+  const end = `${endYear}-${pad2(endMonth)}-${pad2(endDay)}`;
   for (const [iso, what] of [[start, "開始日"], [end, "終了日"]] as const) {
     const d = new Date(`${iso}T00:00:00Z`);
     if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== iso) {
       throw new Error(`JPX 投資部門別売買状況 (週次一覧): 「${label}」の${what}が暦日として不正です`);
     }
   }
+  const days = (Date.parse(end) - Date.parse(start)) / 86_400_000;
+  if (days < 0 || days > 6) throw new Error(`JPX 投資部門別売買状況 (週次一覧): 週の期間が不正です: "${label}"`);
   return { start, end };
 }
 
@@ -1860,12 +1860,8 @@ export const KNOWN_LIMITATIONS: readonly string[] = [
     "上限内で桁の検査を通過した。なお新旧は公表週が重ならないため旧様式の同じ週の総計と" +
     "の直接突合はできず、単位の裏付けは新様式ファイル内の見出し・算術一致と同期間の" +
     "新様式 PDF の突合による (旧ファイルの値への倍率合わせはしない)。",
-  "旧様式の期間表題は「タイトルの月 = 期間終了日の月」を前提に検証している " +
-    "(実ファイルで確認できたのは 2026年9月第1週 = 8/31〜9/4 のみ)。終了日が翌月に入る" +
-    "週 (例: 9/28〜10/2) を JPX がどちらの月に帰属させるかは未確認で、そのような表題は" +
-    "throw する。月次新様式の初回が 2026-10-08 掲載 (= 前月最終週の週次と同日) である" +
-    "ことからは 9/28〜10/2 が9月扱いである可能性があり、過去の旧様式ファイルを" +
-    "バックフィルする際は実ファイルで確認すること。",
+  "週次の月またぎはラベル月が開始/終了のいずれかであることと暦日・7日以内を検証する。" +
+    "新様式は明記期間とファイル名の期間一致を必須とし、月次旧様式は終了月一致を保持する。",
   "旧様式の主表のみを読む。表下の「個人・自己の現金/信用の内訳」「海外投資家の法人/" +
     "個人の内訳」は読んでいない。新様式はこの内訳 (自己現金/自己信用/個人現金/個人信用/" +
     "海外投資家法人/海外投資家個人) を列として持ち、逆に自己計/委託計/総計/法人/金融機関/" +

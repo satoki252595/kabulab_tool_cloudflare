@@ -9,7 +9,7 @@ import {
   isMoneyflowRequirement,
   observationKey,
 } from "../../../../src/shared/notion-archive/moneyflow.js";
-import { validateDrafts, type ObservationDraft, type SpecFile } from "../source-spec.js";
+import { MoneyflowFetchError, validateDrafts, type ObservationDraft, type SpecFile } from "../source-spec.js";
 import * as sourceModule from "../sources/jpx-investor-equity.js";
 import type { InvestorEquityMarket, InvestorEquityRecord } from "../sources/jpx-investor-equity.js";
 import {
@@ -146,9 +146,13 @@ describe("weeklyKeyFromIndexLabel (一覧ページの行ラベル → 冪等キ�
     expect(weeklyKeyFromIndexLabel("2026年12月第5週(12月28日～12月30日)")).toBe("jpx-investor-equity-weekly-2026-W53");
     expect(weeklyKeyFromIndexLabel("2027年1月第1週(1月4日～1月8日)")).toBe("jpx-investor-equity-weekly-2027-W01");
   });
-  it("様式外・終了日の月がラベルの月と違う・暦日でないラベルは throw", () => {
+  it("実公表の月またぎを受け入れ、関係ないラベル月・不正な暦日/週期間は停止", () => {
     expect(() => weeklyKeyFromIndexLabel("2026年9月第2週")).toThrow(/様式が想定外/);
-    expect(() => weeklyKeyFromIndexLabel("2026年9月第5週(9月28日～10月2日)")).toThrow(/一致しません/);
+    expect(weeklyKeyFromIndexLabel("2026年9月第5週(9月28日～10月2日)")).toBe("jpx-investor-equity-weekly-2026-W40");
+    expect(weeklyKeyFromIndexLabel("2026年12月第5週(12月28日～1月1日)")).toBe("jpx-investor-equity-weekly-2026-W53");
+    expect(weeklyKeyFromIndexLabel("2027年1月第1週(12月28日～1月1日)")).toBe("jpx-investor-equity-weekly-2026-W53");
+    expect(() => weeklyKeyFromIndexLabel("2026年8月第5週(9月28日～10月2日)")).toThrow(/一致しません/);
+    expect(() => weeklyKeyFromIndexLabel("2026年9月第5週(9月28日～10月8日)")).toThrow(/週の期間/);
     expect(() => weeklyKeyFromIndexLabel("2026年9月第5週(9月28日～9月31日)")).toThrow(/暦日/);
   });
 });
@@ -816,5 +820,41 @@ describe.skipIf(!hasMonthly)("resolve/fetch (月次、fetch スタブで実フ�
     const drafts = JPX_INVESTOR_EQUITY_MONTHLY_SPEC.toObservations({ key: batch.key, files: batch.files });
     validateDrafts(JPX_INVESTOR_EQUITY_MONTHLY_SPEC.name, drafts, JPX_INVESTOR_EQUITY_MONTHLY_SPEC.indicators);
     expect(drafts).toHaveLength(240);
+  });
+});
+
+describe("取得内解析失敗時の全原bytes保全", () => {
+  it("週次一覧と取得済みXLSXを両方保持し、様式失敗を成功へ変えない", async () => {
+    const html = '<table><tr><td>2026年9月第5週(9月28日～10月2日)</td><td><a href="/x/stock_1_w_20260928_20261002.pdf">PDF</a></td><td><a href="/x/stock_1_w_20260928_20261002.xlsx">Excel</a></td></tr></table>';
+    const bytes = new Uint8Array([255, 0, 1]);
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(html)).mockResolvedValueOnce(new Response(bytes));
+    vi.stubGlobal("fetch", fetcher);
+    vi.mocked(sourceModule.parseInvestorEquityWorkbook).mockImplementationOnce(() => { throw new Error("original workbook format failure"); });
+    const resolved = await JPX_INVESTOR_EQUITY_WEEKLY_SPEC.resolve(new Date("2026-10-14T00:00:00Z"));
+    const error = await resolved.fetch().then(() => { throw new Error("停止しなかった"); }, (e: unknown) => e);
+    expect(error).toBeInstanceOf(MoneyflowFetchError);
+    const failure = error as MoneyflowFetchError;
+    expect(failure.message).toBe("original workbook format failure");
+    expect(failure.primary.files).toHaveLength(2);
+    expect(new TextDecoder().decode(failure.primary.files[0].bytes)).toBe(html);
+    expect(Array.from(failure.primary.files[1].bytes)).toEqual(Array.from(bytes));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it("旧2XLSの2本目HTTP失敗でも一覧と先行XLSと失敗bodyを全て保持する", async () => {
+    const html = '<table><tr><td>2026年9月第2週(9月7日～9月11日)</td>' +
+      '<td><a href="/x/stock_vol_1_260902.pdf">PDF</a></td><td><a href="/x/stock_vol_1_260902.xls">Excel</a></td>' +
+      '<td><a href="/x/stock_val_1_260902.pdf">PDF</a></td><td><a href="/x/stock_val_1_260902.xls">Excel</a></td></tr></table>';
+    const bytes = new Uint8Array([1, 2, 3]);
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(html)).mockResolvedValueOnce(new Response(bytes)).mockResolvedValueOnce(new Response("upstream failure", { status: 503 }));
+    vi.stubGlobal("fetch", fetcher);
+    const resolved = await JPX_INVESTOR_EQUITY_WEEKLY_SPEC.resolve(new Date("2026-10-14T00:00:00Z"));
+    const error = await resolved.fetch().then(() => { throw new Error("停止しなかった"); }, (e: unknown) => e);
+    expect(error).toBeInstanceOf(MoneyflowFetchError);
+    const failure = error as MoneyflowFetchError;
+    expect(failure.primary.files).toHaveLength(3);
+    expect(new TextDecoder().decode(failure.primary.files[0].bytes)).toBe(html);
+    expect(Array.from(failure.primary.files[1].bytes)).toEqual(Array.from(bytes));
+    expect(new TextDecoder().decode(failure.primary.files[2].bytes)).toBe("upstream failure");
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 });

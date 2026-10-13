@@ -26,6 +26,7 @@ import {
 } from "../../../src/shared/notion-archive/index.js";
 import {
   validateDrafts,
+  MoneyflowFetchError,
   type MoneyflowSourceSpec,
   type ObservationDraft,
   type SpecFile,
@@ -116,7 +117,7 @@ function parseAndValidate(
 /**
  * 取得元 1 件を実行し、取込ログ用の詳細文を返す。失敗は throw (呼び出し側で集計)。
  */
-export async function runSpec(spec: MoneyflowSourceSpec, ctx: SpecRunContext): Promise<string> {
+async function runSpecInner(spec: MoneyflowSourceSpec, ctx: SpecRunContext): Promise<string> {
   const resolved = await spec.resolve(ctx.now, ctx.dryRun);
   const key = resolved.key;
 
@@ -196,4 +197,26 @@ export async function runSpec(spec: MoneyflowSourceSpec, ctx: SpecRunContext): P
   const written = await writeObservations(drafts, archive.pageId, ctx);
   await verifyWritesIfChanged(spec.name, key, written);
   return `${key} を記録 ${describeCounts(drafts.length, written.counts)}`;
+}
+
+/** 失敗原本は成功バッチと別のSHAキーで保全。再送や別値補完は行わない。 */
+export async function runSpec(spec: MoneyflowSourceSpec, ctx: SpecRunContext): Promise<string> {
+  try { return await runSpecInner(spec, ctx); }
+  catch (error) {
+    if (error instanceof MoneyflowFetchError && !ctx.dryRun) {
+      if (error.primary.files.length === 0) throw new Error(`[${spec.name}] 失敗原本なし。保全未成立`, { cause: error });
+      const hashes = await Promise.all(error.primary.files.map(async (f) => {
+        const hash = await crypto.subtle.digest("SHA-256", f.bytes.slice());
+        return `${f.filename}:${Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+      }));
+      const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(hashes.join("\n")));
+      const key = `failed-${spec.name}-${Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+      const archive = await recordPrimaryData({ service: "moneyflow", key, ...error.primary,
+        metadata: { ...error.primary.metadata, failedBeforeObservation: true, failure: error.message } });
+      if (archive.fileTooLarge) throw new Error(`[${spec.name}] 失敗原本が未保管。観測停止`, { cause: error });
+      await verifyArchivedAttachments(archive.pageId, `[${spec.name}] failed raw`, key, error.primary.files);
+      console.warn(`[${spec.name}] 取得済み失敗原本を物理保全: ${archive.pageId}。観測書込なし`);
+    }
+    throw error;
+  }
 }

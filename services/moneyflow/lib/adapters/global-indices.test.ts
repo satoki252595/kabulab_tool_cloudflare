@@ -134,7 +134,7 @@ function synChartJson(opts: {
             note: "合成テストデータ (実データではない)",
             symbol: opts.symbol,
             currency: opts.currency,
-            instrumentType: "SYNTHETIC_TEST",
+            instrumentType: opts.key === "stoxx50e" ? "INDEX" : "SYNTHETIC_TEST",
             regularMarketPrice: snapshotClose,
             regularMarketTime: SYN_SNAPSHOT_SEC,
             exchangeTimezoneName: timezone,
@@ -474,6 +474,20 @@ describe("toObservations は想定外の入力で throw する (合成テスト�
     expect(() => globalIndicesSpec.toObservations({ key: TARGET_KEY, files: toFiles(responses) })).toThrow(
       /meta\.symbol が期待値と不一致/
     );
+  });
+
+  it("STOXX INDEXのAPI通貨NULLを保持して指数比率を算出し、他symbol/種別のNULLは停止", () => {
+    const responses = synResponses();
+    const raw = JSON.parse(responses.get("stoxx50e") as string);
+    raw.chart.result[0].meta.currency = null; raw.chart.result[0].meta.instrumentType = "INDEX";
+    responses.set("stoxx50e", JSON.stringify(raw));
+    const parsed = parseGlobalIndexWeeklyChart(JSON.stringify(raw), "stoxx50e", "^STOXX50E");
+    expect(parsed.currency).toBeNull();
+    expect(globalIndicesSpec.toObservations({ key: TARGET_KEY, files: toFiles(responses) }).length).toBeGreaterThan(0);
+    raw.chart.result[0].meta.instrumentType = "ETF";
+    expect(() => parseGlobalIndexWeeklyChart(JSON.stringify(raw), "stoxx50e", "^STOXX50E")).toThrow(/meta.instrumentType/);
+    const fx = JSON.parse(responses.get("jpy") as string); fx.chart.result[0].meta.currency = null;
+    expect(() => parseGlobalIndexWeeklyChart(JSON.stringify(fx), "jpy", "JPY=X")).toThrow(/meta.currency/);
   });
 
   it("応答の通貨が想定と違う", () => {

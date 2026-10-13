@@ -1,3 +1,4 @@
+import { MoneyflowFetchError } from "../source-spec.js";
 /**
  * moneyflow アダプタ: 世界の主要株価指数・為替・金利・金・原油の週次騰落 (Phase 5 世界の概況)。
  *
@@ -190,7 +191,7 @@ const INSTRUMENT_TEXT: Readonly<Record<string, InstrumentText>> = {
   },
   stoxx50e: {
     what: "ユーロ・ストックス50 は、ユーロ圏の代表的な大型株50銘柄の株価を時価総額で重み付けしてまとめた株価指数 (ユーロ建て・配当を含まない価格指数)。",
-    caveat: "",
+    caveat: "指数水準はポイントで、週次騰落は同じ指数水準同士の比率。APIの通貨NULLは未掲載のまま保全し、公式の参照通貨EURで観測値を補完しない。",
   },
   ftse: {
     what: "FTSE100 は、ロンドン証券取引所に上場する時価総額の大きい100銘柄をまとめた英国の株価指数 (英ポンド建て・配当を含まない価格指数)。",
@@ -609,7 +610,10 @@ function buildDrafts(key: string, files: readonly SpecFile[]): ObservationDraft[
       `${tag} ${entry.displayName} (${entry.yahooSymbol})`
     );
     const snapshot = parseGlobalIndexWeeklyChart(decodeUtf8(file), entry.key, entry.yahooSymbol);
-    if (snapshot.currency !== expectedCurrency(entry)) {
+    // SX5Eは指数ポイントの同一variant比率。YahooのNULLを公式EURで補完しない。
+    // 公式根拠: https://stoxx.com/index/sx5e/?factsheet=true とEurex SX5E契約。
+    const missingStoxxCurrency = entry.key === "stoxx50e" && snapshot.currency === null && snapshot.instrumentType === "INDEX";
+    if (!missingStoxxCurrency && snapshot.currency !== expectedCurrency(entry)) {
       throw new Error(
         `${tag} ${entry.yahooSymbol}: 応答の通貨 ${snapshot.currency} が想定 (${expectedCurrency(entry)}) と違います`
       );
@@ -639,10 +643,16 @@ async function fetchBatch(key: string, target: ObservationPeriod): Promise<Fetch
   const files: PrimaryFile[] = [];
   const symbols: Array<Record<string, unknown>> = [];
   // 16 銘柄を順番に取る (Yahoo への同時アクセスを増やさない)。モジュールの取得関数は
-  // HTTP ステータスが 2xx でない応答・週足チャートとして読めない応答を throw するので、
-  // エラー応答の本文がこの週のキーで一次データとして保管されることは無い。
+  // HTTP/解析失敗時は取得済みファイルも含めて共通runnerの別SHAキーへ保全し、観測を停止する。
   for (const entry of GLOBAL_INDEX_CATALOG) {
-    const res = await fetchGlobalIndexWeeklyChart(entry.key, GLOBAL_INDICES_CHART_RANGE);
+    let res: Awaited<ReturnType<typeof fetchGlobalIndexWeeklyChart>>;
+    try { res = await fetchGlobalIndexWeeklyChart(entry.key, GLOBAL_INDICES_CHART_RANGE); }
+    catch (error) {
+      if (error instanceof MoneyflowFetchError) throw new MoneyflowFetchError(error.message, {
+        ...error.primary, files: [...files, ...error.primary.files], metadata: { ...error.primary.metadata, targetWeek: target.label, completedSymbols: symbols },
+      }, error);
+      throw error;
+    }
     if (res.key !== entry.key || res.yahooSymbol !== entry.yahooSymbol) {
       throw new Error(`${tag} 取得結果の銘柄が違います: ${res.key}=${res.yahooSymbol} (期待 ${entry.key}=${entry.yahooSymbol})`);
     }
