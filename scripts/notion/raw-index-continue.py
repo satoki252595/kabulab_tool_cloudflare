@@ -14,7 +14,7 @@ def continuation(event: dict, records: list[dict]) -> dict | None:
     assert not inputs.get("reconcile_sha256") and not inputs.get("reconcile_state_sha256")
     count, limit = int(inputs["expected_count"]), int(inputs["limit"])
     assert 0 < count <= 100000 and 0 < limit <= 500
-    assert 0 < int(inputs["max_bytes"]) <= 512 * 1024**2
+    assert 0 < int(inputs["max_bytes"]) <= 2 * 1024**3
     assert 0 < int(inputs["max_seconds"]) <= 3600
     manifest, summary = records
     assert manifest["phase"] == "manifest" and summary["phase"] == "summary"

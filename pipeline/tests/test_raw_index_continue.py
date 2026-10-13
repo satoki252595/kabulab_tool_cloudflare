@@ -60,6 +60,17 @@ def test_same_snapshot_and_decremented_finite_budget():
     assert result["inputs"] == {**event["inputs"], "continue_runs": "1"}
 
 
+def test_largest_real_original_fits_an_explicit_bounded_reservation():
+    event, records = pilot()
+    # Frozen manifest's largest original is 293,241,734 bytes; all four transfers
+    # plus wrapper reservation require 1,173,264,274 bytes before starting it.
+    event["inputs"]["max_bytes"] = "1173264274"
+    assert module.continuation(event, records)["inputs"]["max_bytes"] == "1173264274"
+    event["inputs"]["max_bytes"] = str(2 * 1024**3 + 1)
+    with pytest.raises(AssertionError):
+        module.continuation(event, records)
+
+
 @pytest.mark.parametrize(
     "change", ["unknown", "no_progress", "other_snapshot", "unbounded", "reconcile", "not_main"]
 )

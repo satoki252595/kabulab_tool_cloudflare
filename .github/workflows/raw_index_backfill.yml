@@ -33,7 +33,7 @@ on:
         type: string
         default: "1200"
       continue_runs:
-        description: "成功後に同じ固定集合を継続する残run上限(0で単発)。最大200、各run500件/512MiB/3600秒以下"
+        description: "成功後に同じ固定集合を継続する残run上限(0で単発)。最大200、各run500件/2GiB/新規開始3600秒以下"
         type: string
         default: "0"
       reconcile_sha256:
