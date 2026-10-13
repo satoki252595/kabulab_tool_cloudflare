@@ -23,6 +23,7 @@ from datetime import date, datetime
 import pandas as pd
 
 from ..models import FinancialSummaryRecord, Provenance
+from .direct_roa import direct_net_profit_roa
 
 logger = logging.getLogger(__name__)
 
@@ -549,7 +550,7 @@ def tidy_to_financial_record(
         eps=values["eps"],
         bps=values["bps"],
         roe_pct=values["roe_pct"],
-        roa_pct=None,
+        roa_pct=direct_net_profit_roa(tidy, fiscal_period_end, dtype, consolidated),
         equity_ratio_pct=values["equity_ratio_pct"],
         cf_operating=values["cf_operating"],
         cf_investing=values["cf_investing"],
