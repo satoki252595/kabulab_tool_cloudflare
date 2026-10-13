@@ -4,7 +4,8 @@
  */
 import { describe, expect, it } from "vitest";
 import type { SupplementRow } from "../../../../src/shared/notion-archive/index.js";
-import { INITIAL_SEMIF_INPUT_PREFIX, MAX_RETRY_ATTEMPTS, planWork, withInputReceipt } from "./plan.js";
+import { INITIAL_CLEF_INPUT_PREFIX, INITIAL_SEMIF_INPUT_PREFIX, INPUT_RECEIPT_PREFIX, MAX_RETRY_ATTEMPTS,
+  planWork, readInputReceipt, readTextSyncReceipt, withInputReceipt, withTextSyncReceipt } from "./plan.js";
 import type { LatestDoc, NewStockEligibility } from "./source.js";
 
 const TODAY = "2026-09-25";
@@ -101,7 +102,7 @@ describe("planWork (保存タグを再利用し、不足だけ補完)", () => {
   ])("保存根拠が揃う判定済みなら新有報・語彙との差 %j でも code の保存結果を再利用", (override) => {
     const row = rowOf({ docId: "S100AAAA", tagDoc: "S100AAAA 2026年3月期", vocabVersion: "v0", tagStatus: "判定済", ...override });
     const item = planSingle(latestOf(), row);
-    expect(item.kind).toBe("skip");
+    expect(item.kind).toBe("sync_text");
     expect(item.qualificationHeld).toBeUndefined();
     expect(item.initialSemif).not.toBe(true);
     expect(item.row).toBe(row);
@@ -268,7 +269,7 @@ describe("新規上場の初回だけ SemIf を許可する計画", () => {
       docId: latestDocOf().docId, tagDoc: `${latestDocOf().docId} 2026年3月期`, tagStatus: "判定済", vocabVersion: "v1",
       upstream: ["シリコンウエハ"], evidenceText: "保存済みの根拠文",
     }), { eligibility: eligible });
-    expect(item.kind).toBe("skip");
+    expect(item.kind).toBe("sync_text");
     expect(item.initialSemif).not.toBe(true);
   });
 
@@ -285,9 +286,41 @@ describe("known input provenance", () => {
     expect(planSingle(latestOf(), row())).toMatchObject({ kind: "retag", sourceChangedLocalJudge: true, checkSourceInput: true });
   });
   it("an unchanged known source pointer does not fetch or rejudge merely because vocabulary changed", () => {
-    expect(planSingle(latestOf({ doc: latestDocOf({ notionDocPageId: "old-pointer" }) }), row())).toMatchObject({ kind: "skip" });
+    const synced = { ...row(), judgeInput: withTextSyncReceipt(row().judgeInput!, { docId: "S100AAAA", textPageId: "old-pointer", textsSha256: "d".repeat(64) }) };
+    expect(planSingle(latestOf({ doc: latestDocOf({ notionDocPageId: "old-pointer" }) }), synced)).toMatchObject({ kind: "skip" });
+  });
+  it("機械的な4SHA等価証拠があれば旧model receiptの元pointerを保持したまま再実行NOOP", () => {
+    const saved = row();
+    const next = withTextSyncReceipt(saved.judgeInput!, { docId: "S100AAAA", textPageId: "notion-page-aaaa", textsSha256: "d".repeat(64),
+      equivalentJudgmentInputSha256: readInputReceipt(saved.judgeInput)!.sectionsSha256 });
+    expect(readInputReceipt(next)!.textPageId).toBe("old-pointer");
+    expect(planSingle(latestOf(), { ...saved, judgeInput: next })).toMatchObject({ kind: "skip" });
   });
   it.each(["\n[biztag-input-v1] {invalid}", withInputReceipt("", { docId: "S100OTHER", textPageId: "old-pointer", businessSha256: null, sectionsSha256: "b".repeat(64), stateSha256: null, vocabVersion: "v0", model: null })])("malformed/inconsistent provenance holds instead of treating historical input as proved", (judgeInput) => {
     expect(planSingle(latestOf(), { ...row(), judgeInput })).toMatchObject({ kind: "skip", qualificationHeld: true });
+  });
+});
+
+describe("39本文同期と初回local判定の来歴を分ける", () => {
+  it("旧4SHAが無い同doc判定済みをモデルへ送らず39本文だけ同期する", () => {
+    const row = rowOf({ docId: "S100AAAA", tagDoc: "S100AAAA 2026年3月期", tagStatus: "判定済", vocabVersion: "v0", judgeInput: null });
+    expect(planSingle(latestOf(), row)).toMatchObject({ kind: "sync_text" });
+    const next = withTextSyncReceipt(null, { docId: "S100AAAA", textPageId: "notion-page-aaaa", textsSha256: "e".repeat(64) });
+    expect(readInputReceipt(next)).toBeNull();
+    expect(planSingle(latestOf(), { ...row, judgeInput: next })).toMatchObject({ kind: "skip" });
+  });
+  it("独立39markerを更新しても既存model判定JSONを1byteも書き換えない", () => {
+    const original = withInputReceipt("SemIf新規銘柄の初回判定：保存済み説明", { docId: "S100AAAA", textPageId: "old-pointer", businessSha256: null,
+      sectionsSha256: "a".repeat(64), stateSha256: null, vocabVersion: "v0", model: "Qwen3.5-4B@851bf6e/semif-mlx" });
+    const next = withTextSyncReceipt(original, { docId: "S100AAAA", textPageId: "new-pointer", textsSha256: "b".repeat(64) });
+    expect(next.startsWith("SemIf新規銘柄の初回判定：保存済み説明")).toBe(true);
+    expect(next.split(INPUT_RECEIPT_PREFIX)[1]).toBe(original.split(INPUT_RECEIPT_PREFIX)[1]);
+    expect(readInputReceipt(next)).toEqual(readInputReceipt(original));
+    expect(readTextSyncReceipt(next)).toMatchObject({ textPageId: "new-pointer" });
+  });
+  it.each([INITIAL_CLEF_INPUT_PREFIX, INITIAL_SEMIF_INPUT_PREFIX])("未完初回の%sを互換フラグで再試行する", (prefix) => {
+    const eligible: NewStockEligibility = { eligibleCodes: new Set(["6103"]), heldCodes: new Set() };
+    const row = rowOf({ tagStatus: "判定不能", attempts: 1, error: "初回読取失敗", nextRetryAt: TODAY, judgeInput: `${prefix}：初回の本文` });
+    expect(planSingle(latestOf(), row, { eligibility: eligible })).toMatchObject({ kind: "retry", initialSemif: true });
   });
 });

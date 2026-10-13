@@ -7,7 +7,7 @@ import { SemifUnavailableError } from "../../../../src/shared/semif/index.js";
 import { describe, expect, it, vi } from "vitest";
 import type { SupplementRow, SupplementRowInput } from "../../../../src/shared/notion-archive/index.js";
 import { type JevAskResult, type JevClient } from "../../../../src/shared/jev/index.js";
-import type { WorkItem } from "./plan.js";
+import { INPUT_RECEIPT_PREFIX, readInputReceipt, readTextSyncReceipt, withInputReceipt, type WorkItem } from "./plan.js";
 import { processStock, type ProcessDeps } from "./process.js";
 import type { LatestDoc } from "./source.js";
 import { MINI_VOCAB } from "./vocabulary/__fixtures__/mini-vocab.js";
@@ -96,6 +96,7 @@ function makeDeps(overrides: Partial<ProcessDeps> = {}) {
   const deps: ProcessDeps = {
     vocab: MINI_VOCAB,
     thresholds: THRESHOLDS,
+    model: "Qwen3.5-4B@851bf6e/semif-mlx",
     jevClient: { askNoul: () => Promise.reject(new Error("jev は呼ばれない想定")) },
     today: TODAY,
     resolveMasterPageId: () => "master-page-1",
@@ -139,6 +140,47 @@ function jevAnswering(answers: Record<string, number>): JevClient {
 }
 
 describe("processStock", () => {
+  it("同docの39本文だけを同期し、旧model/4SHA/タグ/根拠/判定時刻を変更しない。二回目はNOOP", async () => {
+    const legacy = withInputReceipt("SemIf入力変更の再判定：保存済み説明", { docId: "S100YFQC", textPageId: "old-pointer", businessSha256: null,
+      sectionsSha256: "a".repeat(64), stateSha256: null, vocabVersion: "v1", model: "Qwen3.5-4B@851bf6e/semif-mlx" });
+    const row = rowOf({ docId: "S100YFQC", tagDoc: "S100YFQC 2026年3月期", tagStatus: "判定済", vocabVersion: "v1",
+      judgedAt: "2026-09-24", upstream: ["工作機械"], evidenceText: "保存済み根拠", judgeInput: legacy });
+    const ask = vi.fn(), latest = vi.fn(async () => {});
+    const { deps, updated, evidenceCalls } = makeDeps({ jevClient: { askNoul: ask }, assertLatestDocCurrent: latest,
+      readStockTextRow: async () => [{ sectionKey: "business", itemName: "事業の内容", text: OKUMA_BUSINESS_TEXT }] });
+    expect(await processStock(itemOf({ kind: "sync_text", row }), deps)).toMatchObject({ outcome: "updated", jevCalls: 0 });
+    const input = updated[0].input;
+    expect(Object.keys(input.texts!)).toHaveLength(39);
+    expect(input.texts!["事業の内容"]).toBe(OKUMA_BUSINESS_TEXT);
+    for (const key of ["upstream", "tagStatus", "tagDoc", "vocabVersion", "judgedAt", "evidenceText", "attempts", "error"]) expect(input).not.toHaveProperty(key);
+    expect(evidenceCalls[0].block).toBeUndefined();
+    expect(input.judgeInput!.split(INPUT_RECEIPT_PREFIX)[1]).toBe(legacy.split(INPUT_RECEIPT_PREFIX)[1]);
+    expect(readInputReceipt(input.judgeInput)).toEqual(readInputReceipt(legacy));
+    expect(readTextSyncReceipt(input.judgeInput)).toMatchObject({ docId: "S100YFQC", textPageId: "notion-page-okuma" });
+    updated.length = 0; evidenceCalls.length = 0;
+    expect(await processStock(itemOf({ kind: "sync_text", row: { ...row, judgeInput: input.judgeInput! } }), deps))
+      .toMatchObject({ outcome: "skipped", jevCalls: 0 });
+    expect(updated).toHaveLength(0); expect(evidenceCalls).toHaveLength(0); expect(ask).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledTimes(2);
+  });
+
+  it("旧判定SHA不明でも39同期markerだけを作り、歴史的判定receiptを生成しない", async () => {
+    const { deps, updated } = makeDeps({ readStockTextRow: async () => [{ sectionKey: "business", itemName: "事業の内容", text: OKUMA_BUSINESS_TEXT }] });
+    await processStock(itemOf({ kind: "sync_text", row: rowOf({ docId: "S100YFQC", tagStatus: "判定済", judgeInput: null }) }), deps);
+    expect(readInputReceipt(updated[0].input.judgeInput)).toBeNull();
+    expect(readTextSyncReceipt(updated[0].input.judgeInput)).not.toBeNull();
+  });
+
+  it("実clientがClefの新規初回失敗はClefと記録し、旧SemIfへ代替しない", async () => {
+    const { deps, updated, created } = makeDeps({ model: "Cloudflare/clef-flash@explicit-test/torch-mps",
+      readStockTextRow: async () => [{ sectionKey: "business", itemName: "事業の内容", text: OKUMA_BUSINESS_TEXT }],
+      jevClient: { askNoul: async () => { throw new SemifUnavailableError("専用headの読取失敗"); } } });
+    await processStock(itemOf({ initialSemif: true }), deps);
+    expect(updated).toHaveLength(0);
+    expect(created[0].input.judgeInput).toMatch(/^Clef-Flash新規銘柄の初回判定/);
+    expect(created[0].input.error).toContain("Clef-Flash 判定に失敗");
+  });
+
   it("skip: 何も書き込まない", async () => {
     const { deps, created, updated, evidenceCalls } = makeDeps();
     const row = rowOf({ tagStatus: "判定済", candidateCount: 3 });
@@ -459,7 +501,7 @@ describe("input-change local rejudgment", () => {
     await processStock(itemOf({ row: rowOf() }), first.deps);
     const previousInput = first.updated[0].input.judgeInput as string;
     const row = saved(); row.docId = docOf().docId; row.tagDoc = "S100YFQC 2026年3月期";
-    row.judgeInput = previousInput.replace("notion-page-okuma", "old-pointer");
+    row.judgeInput = previousInput.replaceAll("notion-page-okuma", "old-pointer");
     const ask = vi.fn();
     const { deps, updated, evidenceCalls } = makeDeps({ readStockTextRow: async () => sections, jevClient: { askNoul: ask } });
     await processStock(itemOf({ kind: "retag", row, sourceChangedLocalJudge: true, checkSourceInput: true }), deps);
@@ -468,13 +510,15 @@ describe("input-change local rejudgment", () => {
     expect(updated[0].input.vocabVersion).toBeUndefined(); expect(updated[0].input.judgedAt).toBeUndefined();
     expect(Object.keys(updated[0].input.texts ?? {})).toHaveLength(39);
     expect(updated[0].input.judgeInput).toContain('"textPageId":"notion-page-okuma"');
+    expect(updated[0].input.judgeInput!.split(INPUT_RECEIPT_PREFIX)[1]).toBe(row.judgeInput.split(INPUT_RECEIPT_PREFIX)[1]);
+    expect(readTextSyncReceipt(updated[0].input.judgeInput)?.equivalentJudgmentInputSha256).toBe(readInputReceipt(row.judgeInput)?.sectionsSha256);
   });
   it("same-doc changed known input calls SemIf instead of silently reusing old tags", async () => {
     const first = makeDeps({ readStockTextRow: async () => sections });
     await processStock(itemOf({ row: rowOf() }), first.deps);
     const previousInput = first.updated[0].input.judgeInput as string;
     const row = saved(); row.docId = docOf().docId; row.tagDoc = "S100YFQC 2026年3月期";
-    row.judgeInput = previousInput.replace("notion-page-okuma", "old-pointer");
+    row.judgeInput = previousInput.replaceAll("notion-page-okuma", "old-pointer");
     const ask = vi.fn(jevAnswering({ "bt.B.MACH.MACHINE_TOOL": 0.95 }).askNoul);
     const { deps, updated } = makeDeps({ jevClient: { askNoul: ask },
       readStockTextRow: async () => [{ ...sections[0], text: OKUMA_BUSINESS_TEXT + "\n" + OKUMA_BUSINESS_TEXT }] });

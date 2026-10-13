@@ -1,4 +1,4 @@
-import { createSemifClient, SEMIF_MODEL } from "../../../../src/shared/semif/index.js";
+import { createClefClient, CLEF_MODEL } from "../../../../src/shared/clef/client.js";
 /**
  * 実I/Oを置き換えてrunの境界を検証する。
  * dry-runは台帳/補足を書かず新規の有料判定をHOLD。
@@ -12,6 +12,7 @@ import type { StockTextSection } from "../../../../src/shared/notion-archive/sto
 import { makeBudgetedVerifySources } from "./sources-verify.js";
 import { MINI_VOCAB } from "./vocabulary/__fixtures__/mini-vocab.js";
 import { composeRunNotify, isBillingBlockedError, runBiztag, type RunSummary } from "./pipeline.js";
+import { withTextSyncReceipt } from "./plan.js";
 
 const notionMocks = vi.hoisted(() => ({
   createLedgerEntry: vi.fn(),
@@ -55,9 +56,9 @@ vi.mock("../../../../src/shared/jev/index.js", async (importOriginal) => ({
   jevEnv: { TYPESAFE_API_KEY: vi.fn(() => "test-key") },
 }));
 
-vi.mock("../../../../src/shared/semif/index.js", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../../../../src/shared/semif/index.js")>(),
-  createSemifClient: vi.fn(() => ({ askNoul: vi.fn(async () => { throw new Error("SemIf は呼ばれない想定"); }), close: vi.fn() })),
+vi.mock("../../../../src/shared/clef/client.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../../../src/shared/clef/client.js")>(),
+  createClefClient: vi.fn(() => ({ askNoul: vi.fn(async () => { throw new Error("Clef-Flash は呼ばれない想定"); }), close: vi.fn() })),
 }));
 
 vi.mock("../db/schema.js", () => ({}));
@@ -158,7 +159,7 @@ describe("runBiztag dry-run スコープ", () => {
       budgetMs: 10_000,
       dryRun: true,
       thresholds: { yesMin: 0.8, noMax: 0.2 },
-      model: SEMIF_MODEL,
+      model: CLEF_MODEL,
     });
 
     // 期限切れ通知が「必要」と判定されていること (このテストの前提が成立している確認)。
@@ -179,7 +180,7 @@ describe("runBiztag dry-run スコープ", () => {
     const summary = await runBiztag({
       budgetMs: 10_000,
       thresholds: { yesMin: 0.8, noMax: 0.2 },
-      model: SEMIF_MODEL,
+      model: CLEF_MODEL,
     });
 
     expect(summary.deadline.shouldNotify).toBe(true);
@@ -196,11 +197,11 @@ describe("runBiztag dry-run スコープ", () => {
     const summary = await runBiztag({
       budgetMs: 1_000,
       thresholds: { yesMin: 0.8, noMax: 0.2 },
-      model: SEMIF_MODEL,
+      model: CLEF_MODEL,
     });
     expect(makeBudgetedVerifySources).not.toHaveBeenCalled();
     expect(createJevClient).not.toHaveBeenCalled();
-    expect(createSemifClient).not.toHaveBeenCalled();
+    expect(createClefClient).not.toHaveBeenCalled();
     expect(summary.gate).toBeNull();
     expect(summary.gateSkippedReason).toContain("停止中");
     expect(jevEnv.TYPESAFE_API_KEY).not.toHaveBeenCalled();
@@ -211,7 +212,7 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
   const latest: LatestDoc = { stockCode: "0001", companyName: "判定境界テスト", sector33: null,
     doc: { docId: "TEST_DOC", docTypeCode: "120", periodEnd: "2026-03-31",
       submittedAt: "2026-06-25T00:00:00.000Z", notionDocPageId: "test-text", textParseStatus: "ok" } };
-  const opts = { budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: SEMIF_MODEL };
+  const opts = { budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL };
   const text = [{ itemName: "事業の内容", sectionKey: "business", text: "工作機械を製造・販売しております。" }];
 
   it("既存の課金失敗は機械で復旧し、新規key/clientに触れない", async () => {
@@ -221,30 +222,30 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
     notionMocks.readStockTextRow.mockResolvedValueOnce(text);
     const summary = await runBiztag(opts);
     expect(createJevClient).not.toHaveBeenCalled();
-    expect(createSemifClient).not.toHaveBeenCalled();
+    expect(createClefClient).not.toHaveBeenCalled();
     expect(jevEnv.TYPESAFE_API_KEY).not.toHaveBeenCalled();
     expect(summary.jev.calls).toBe(0);
     expect(summary.billingBlocked).toEqual([]);
     expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2].judgeInput).toContain("機械照合");
   });
 
-  it("新規資格成立の初回だけSemIfを起動し、終了後に解放する", async () => {
+  it("新規資格成立の初回だけClef-Flashを起動し、終了後に解放する", async () => {
     vi.mocked(loadLatestDocs).mockResolvedValue([latest]);
     vi.mocked(loadNewStockEligibility).mockResolvedValue({ eligibleCodes: new Set(["0001"]), heldCodes: new Set() });
     notionMocks.readStockTextRow.mockResolvedValueOnce(text);
-    const askNoul = vi.fn(async () => ({ model: SEMIF_MODEL, answers: { "bt.B.MACH.MACHINE_TOOL": 0.95 },
+    const askNoul = vi.fn(async () => ({ model: CLEF_MODEL, answers: { "bt.B.MACH.MACHINE_TOOL": 0.95 },
       inputTokens: 50, outputTokens: 0, latencyMs: 1, attempts: 1 }));
     const close = vi.fn();
-    vi.mocked(createSemifClient).mockReturnValueOnce({ askNoul, close });
+    vi.mocked(createClefClient).mockReturnValueOnce({ askNoul, close });
     const summary = await runBiztag(opts);
     expect(jevEnv.TYPESAFE_API_KEY).not.toHaveBeenCalled();
     expect(createJevClient).not.toHaveBeenCalled();
-    expect(createSemifClient).toHaveBeenCalledWith();
+    expect(createClefClient).toHaveBeenCalledWith();
     expect(close).toHaveBeenCalledTimes(1);
-    expect(summary.judge).toMatchObject({ provider: "semif", externalApiCalls: 0, costMetering: "not_metered_local", tokens: null, hardwareCostUsd: null });
+    expect(summary.judge).toMatchObject({ provider: "clef", externalApiCalls: 0, costMetering: "not_metered_local", tokens: null, hardwareCostUsd: null });
     expect(askNoul).toHaveBeenCalledTimes(1);
     expect(summary.jev.calls).toBe(1);
-    expect(notionMocks.createSupplementRow.mock.calls[0][1].judgeInput).toMatch(/^SemIf新規銘柄の初回判定/);
+    expect(notionMocks.createSupplementRow.mock.calls[0][1].judgeInput).toMatch(/^Clef-Flash新規銘柄の初回判定/);
   });
 
   it("新規のdry-runは推論も機械への代替もせず保留する", async () => {
@@ -252,7 +253,7 @@ describe("runBiztag 新規と既存の外部判定境界", () => {
     vi.mocked(loadNewStockEligibility).mockResolvedValue({ eligibleCodes: new Set(["0001"]), heldCodes: new Set() });
     const summary = await runBiztag({ ...opts, dryRun: true });
     expect(createJevClient).not.toHaveBeenCalled();
-    expect(createSemifClient).not.toHaveBeenCalled();
+    expect(createClefClient).not.toHaveBeenCalled();
     expect(jevEnv.TYPESAFE_API_KEY).not.toHaveBeenCalled();
     expect(notionMocks.readStockTextRow).not.toHaveBeenCalled();
     expect(notionMocks.createSupplementRow).not.toHaveBeenCalled();
@@ -296,15 +297,17 @@ function minimalRow(overrides: Partial<SupplementRow>): SupplementRow {
 
 describe("runBiztag — 保存済みマスタの参照", () => {
   it.each([
-    { docId: "TEST_DOC", vocabVersion: "v0" },
-  ])("doc=$docId/版=$vocabVersionでも保存タグ・根拠を保持し、本文を再読しない", async ({ docId, vocabVersion }) => {
+    { docId: "TEST_DOC", vocabVersion: "v0", dryRun: false },
+    { docId: "TEST_DOC", vocabVersion: "v0", dryRun: true },
+  ])("本文同期済みならdoc=$docId/版=$vocabVersion/dryRun=$dryRunでも保存タグ・根拠を保持し、本文を再読しない", async ({ docId, vocabVersion, dryRun }) => {
     vi.mocked(loadLatestDocs).mockResolvedValue([{ stockCode: "6103", companyName: "保存タグ確認",
       sector33: null, doc: { docId: "TEST_DOC", docTypeCode: "120", periodEnd: "2026-03-31",
         submittedAt: "2026-06-25T00:00:00.000Z", notionDocPageId: "test-text", textParseStatus: "ok" } }]);
     notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "6103", docId,
-      tagStatus: "判定済", tagDoc: docId, vocabVersion, upstream: ["工作機械"], evidenceText: "保存済み根拠" })]);
-    const summary = await runBiztag({ budgetMs: 10_000,
-      thresholds: { yesMin: 0.8, noMax: 0.2 }, model: SEMIF_MODEL });
+      tagStatus: "判定済", tagDoc: docId, vocabVersion, upstream: ["工作機械"], evidenceText: "保存済み根拠",
+      judgeInput: withTextSyncReceipt("保存済み判定説明", { docId, textPageId: "test-text", textsSha256: "1".repeat(64) }) })]);
+    const summary = await runBiztag({ budgetMs: 10_000, dryRun,
+      get thresholds(): never { throw new Error("保存タグ再利用はAI較正を読まない"); }, model: CLEF_MODEL });
     expect(summary.countsByKind.skip).toBe(1);
     expect(summary.coverage.judged).toBe(1);
     expect(notionMocks.loadSupplementRows).toHaveBeenCalledTimes(1);
@@ -314,14 +317,14 @@ describe("runBiztag — 保存済みマスタの参照", () => {
     expect(notionMocks.updateSupplementRow).not.toHaveBeenCalled();
     expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
     expect(createJevClient).not.toHaveBeenCalled();
-    expect(createSemifClient).not.toHaveBeenCalled();
+    expect(createClefClient).not.toHaveBeenCalled();
   });
 
   it("HOLD行の保存済み状態を現在の受入済み件数に加算しない", async () => {
     vi.mocked(loadLatestDocs).mockResolvedValue([{ stockCode: "6103", companyName: "保留確認", sector33: null, doc: null }]);
     vi.mocked(loadNewStockEligibility).mockResolvedValue({ eligibleCodes: new Set(), heldCodes: new Set(["6103"]) });
     notionMocks.loadSupplementRows.mockResolvedValueOnce([minimalRow({ stockCode: "6103", tagStatus: "判定済" })]);
-    const summary = await runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: SEMIF_MODEL });
+    const summary = await runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
     expect(summary.qualificationHeld).toEqual(["6103"]);
     expect(summary.countsByTagStatus["判定済"]).toBe(1);
     expect(summary.coverage.judged).toBe(0);
@@ -473,7 +476,7 @@ describe("runBiztag — billingBlocked 集計", () => {
       budgetMs: 10_000,
       dryRun: true,
       thresholds: { yesMin: 0.8, noMax: 0.2 },
-      model: SEMIF_MODEL,
+      model: CLEF_MODEL,
     });
     expect(summary.billingBlocked).toEqual(["4326", "8888"]);
   });
@@ -488,20 +491,20 @@ describe("runBiztag input-change safety", () => {
   }
   it("dry-run source changes do not read fulltext, infer, or change existing values", async () => {
     changedSource();
-    const summary = await runBiztag({ budgetMs: 10_000, dryRun: true, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: SEMIF_MODEL });
+    const summary = await runBiztag({ budgetMs: 10_000, dryRun: true, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
     expect(summary.countsByKind.source_change_dry_run_hold).toBe(1);
     expect(summary.qualificationHeld).toEqual(["6103"]);
     expect(summary.coverage.judged).toBe(0);
     expect(notionMocks.readStockTextRow).not.toHaveBeenCalled();
     expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
-    expect(createSemifClient).not.toHaveBeenCalled(); expect(createJevClient).not.toHaveBeenCalled();
+    expect(createClefClient).not.toHaveBeenCalled(); expect(createJevClient).not.toHaveBeenCalled();
   });
   it("write直前latest guard失敗を旧判定済のcurrent coverageへ加算しない", async () => {
     changedSource();
     notionMocks.readStockTextRow.mockResolvedValueOnce([{ sectionKey: "business", itemName: "事業の内容", text: "工作機械の製造・販売を行っています。" }]);
-    vi.mocked(createSemifClient).mockReturnValueOnce({ askNoul: async () => ({ model: "mock", answers: { "bt.B.MACH.MACHINE_TOOL": 0.95 }, inputTokens: 1, outputTokens: 0, latencyMs: 1, attempts: 1 }), close: async () => {} });
+    vi.mocked(createClefClient).mockReturnValueOnce({ askNoul: async () => ({ model: "mock", answers: { "bt.B.MACH.MACHINE_TOOL": 0.95 }, inputTokens: 1, outputTokens: 0, latencyMs: 1, attempts: 1 }), close: async () => {} });
     vi.mocked(assertLatestDocCurrent).mockRejectedValueOnce(new Error("最新pointer変更 HOLD"));
-    const summary = await runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: SEMIF_MODEL });
+    const summary = await runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
     expect(summary.qualificationHeld).toEqual(["6103"]); expect(summary.coverage.judged).toBe(0);
     expect(summary.failures[0].message).toContain("最新pointer変更"); expect(summary.judge?.calls).toBe(1);
     expect(notionMocks.updateSupplementRow).not.toHaveBeenCalled(); expect(assertLatestDocCurrent).toHaveBeenCalledTimes(1);
@@ -509,10 +512,11 @@ describe("runBiztag input-change safety", () => {
   it("unknown inference preserves old values and is excluded from current-input coverage", async () => {
     changedSource();
     notionMocks.readStockTextRow.mockResolvedValueOnce([{ sectionKey: "business", itemName: "事業の内容", text: "工作機械の製造・販売を行っています。" }]);
-    vi.mocked(createSemifClient).mockReturnValueOnce({ askNoul: async () => { throw new Error("unknown local result"); }, close: async () => {} });
-    const summary = await runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: SEMIF_MODEL });
+    vi.mocked(createClefClient).mockReturnValueOnce({ askNoul: async () => { throw new Error("unknown local result"); }, close: async () => {} });
+    const summary = await runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
     expect(summary.qualificationHeld).toEqual(["6103"]); expect(summary.coverage.judged).toBe(0);
     expect(summary.failures[0].message).toContain("unknown local result");
+    expect(summary.judge?.calls).toBe(1);
     expect(notionMocks.updateSupplementRow).not.toHaveBeenCalled(); expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
     expect(createJevClient).not.toHaveBeenCalled();
   });

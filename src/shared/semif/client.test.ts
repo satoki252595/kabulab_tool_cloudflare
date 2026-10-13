@@ -16,6 +16,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createSemifClient, SemifUnavailableError, SEMIF_MODEL, SEMIF_SOURCE_REVISION, SEMIF_MLX_VERSION, SEMIF_MLX_LM_REVISION } from "./client.js";
 import type { JevNoulQuestion } from "../jev/client.js";
+import { createClefClient, CLEF_MODEL, CLEF_MANIFEST } from "../clef/client.js";
 
 interface FakeRequest {
   id: string;
@@ -84,6 +85,34 @@ const Q: Record<string, JevNoulQuestion> = {
     criteria: { true: "same market substitute", false: "supplier/customer/partner" },
   },
 };
+
+describe("Clef native JSONL boundary", () => {
+  const ready = { ready: true, model: CLEF_MANIFEST.repo, revision: CLEF_MANIFEST.revision,
+    backend: "torch-mps", max_tokens: 16000, source_sha256: CLEF_MANIFEST.source_sha256,
+    torch_version: CLEF_MANIFEST.runtime.torch, transformers_version: CLEF_MANIFEST.runtime.transformers,
+    safetensors_version: CLEF_MANIFEST.runtime.safetensors };
+
+  it("native pinsとモデル保存先を渡し、旧SemIf名に変換せず返す", async () => {
+    const fake = makeFakeServerSpawn({ readyLine: ready,
+      respond: (req) => ({ id: req.id, answers: Object.fromEntries(req.questions.map(q => [q.qid, 0.9])) }) });
+    const client = createClefClient({ pythonBin: "/test/python", modelPath: "/test/clef", spawnFn: fake.spawnFn });
+    try {
+      expect((await client.askNoul("原文", Q)).model).toBe(CLEF_MODEL);
+      expect(fake.spawnCalls[0].args.slice(-2)).toEqual(["--model-path", "/test/clef"]);
+      await client.askNoul("原文", Q);
+      expect(fake.spawnCalls).toHaveLength(1);
+    } finally { client.close(); }
+  });
+
+  it.each(Object.keys(ready))("native readyの%s不一致は入力送信前に停止", async (key) => {
+    const fake = makeFakeServerSpawn({ readyLine: { ...ready, [key]: "mismatch" }, respond: () => "hang" });
+    const client = createClefClient({ pythonBin: "/test/python", modelPath: "/test/clef", spawnFn: fake.spawnFn });
+    try {
+      await expect(client.askNoul("原文", Q)).rejects.toThrow(SemifUnavailableError);
+      expect(fake.writtenRequests).toHaveLength(0);
+    } finally { client.close(); }
+  });
+});
 
 describe("createSemifClient askNoul — 正常系", () => {
   it("closeは起動前にはspawnせず、起動後には解放し再起動しない", async () => {

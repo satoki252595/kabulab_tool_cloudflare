@@ -38,8 +38,8 @@ function isCalibrationFileShape(v: unknown): v is CalibrationFileShape {
  * このファイルを削除して次の較正が済むまで意図的に起動を止められる
  * (下の catch が既定値へフォールバックしない設計はそのまま活かす)。
  */
-export function loadCalibration(judge: "jev" | "semif" = "jev"): Calibration {
-  const filename = judge === "semif" ? "calibration.semif.json" : "calibration.json";
+export function loadCalibration(judge: "jev" | "semif" | "clef" = "jev"): Calibration {
+  const filename = judge === "jev" ? "calibration.json" : `calibration.${judge}.json`;
   const path = new URL(`./${filename}`, import.meta.url);
   let raw: string;
   try {

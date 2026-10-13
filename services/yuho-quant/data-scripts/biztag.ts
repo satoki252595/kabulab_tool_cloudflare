@@ -38,6 +38,7 @@ import { parseVocabulary } from "../src/biztag/vocabulary/load.js";
 import { TEXT_SECTIONS } from "../src/services/edinet/text-sections.js";
 import * as yuhoSchema from "../src/db/schema.js";
 import { createSemifClient, SEMIF_MODEL } from "../../../src/shared/semif/index.js";
+import { CLEF_MODEL } from "../../../src/shared/clef/client.js";
 import { loadCompetitorCalibration, type CompetitorJudge } from "../src/biztag/competitors/calibration.js";
 import {
   evaluateCompetitorsAtThresholds,
@@ -94,7 +95,7 @@ function writeGithubStepSummary(markdown: string): void {
 }
 
 async function runCommand(): Promise<void> {
-  const { model, thresholds } = loadCalibration("semif");
+  let calibration: ReturnType<typeof loadCalibration> | undefined;
   const budgetMin = arg("budget-min") ? Number(arg("budget-min")) : 20;
   const limit = arg("limit") ? Number(arg("limit")) : undefined;
   const codes = arg("codes")
@@ -108,11 +109,16 @@ async function runCommand(): Promise<void> {
     limit,
     codes,
     dryRun,
-    thresholds,
-    model,
+    // 本文同期・機械照合は較正不要。実際のAI判定直前だけ固定モデルと閾値を検証する。
+    get thresholds() {
+      calibration ??= loadCalibration("clef");
+      if (calibration.model !== CLEF_MODEL) throw new Error("Clef-Flashの較正modelが一致しません");
+      return calibration.thresholds;
+    },
+    model: CLEF_MODEL,
   });
   if (summary.judge === undefined) {
-    throw new Error("SemIf の実行計測がありません。STOP");
+    throw new Error("Clef-Flash の実行計測がありません。STOP");
   }
 
   console.info(JSON.stringify(summary, null, 2));
@@ -121,7 +127,7 @@ async function runCommand(): Promise<void> {
       `## biztag run`,
       `- 対象: ${summary.totalStocks} 銘柄 (処理 ${summary.processed} / 残 ${summary.remaining})`,
       `- 判定済率: ${(summary.coverage.ratio * 100).toFixed(1)}%`,
-      `- SemIf: ${summary.judge.calls}回 / ローカル推論 (トークン数・計算費用未計測、外部判定API 0回)`,
+      `- Clef-Flash: ${summary.judge.calls}回 / ローカル推論 (トークン数・計算費用未計測、外部判定API 0回)`,
       `- Notion: ${summary.notion.requests}リクエスト (429 ${summary.notion.rateLimited}回)`,
       `- 単語帳: ${summary.vocabVersion}${summary.vocabSeeded ? " (初回投入)" : ""}`,
       `- 失敗: ${summary.failures.length}件`,

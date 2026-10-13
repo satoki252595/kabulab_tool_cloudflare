@@ -1,0 +1,17 @@
+# 補足39本文の機械同期 — 2026-10-14
+
+同じ有報の判定済み行でも、歴史的な4対象節SHAが未保存だと、従来のplanは本文39列ごとskipしていた。39本文同期を`sync_text`として独立させ、通常のbiztag pipeline→processStock→共有replaceEvidenceBlockへ接続する。本文列のためにモデルを起動・再判定しない。
+
+同期入力は同じdocIDの現在本文・39列・取得状態と独立同期markerだけ。旧タグ、要確認、根拠全文/ブロック、語彙版、モデル判定JSON、判定時刻、再試行履歴を変更しない。存在しない旧4SHAを補わず、旧判定入力JSONは再serializeせず原文字列のまま保持する。
+
+既存「判定入力」の説明部に`[biztag-text-sync-v1]`として現在doc/pointer/39SHAを記録する。これは現在の機械的な本文同期証拠であり、歴史的なモデル判定入力の証明ではない。既知の旧4SHAと現在4節が実照合で同値だった場合だけ、その既存SHAへの等価参照をmachine markerへ追加する。旧モデルreceiptの元pointerも保持する。補足DB schemaとloadSupplementRowsの返却shapeは変えない。
+
+共有本文writerは内容変更時に新ページを作るため、planは現在doc/pointerの同期済markerで二度目をskipする。processを明示再実行してもdoc/pointer/実39SHAが同じなら書込み0。共有writerにもblock=undefinedかつ全対象properties同値のNOOPを置き、最新D1資格を確認したうえでPRE upload・PATCH・根拠操作を省く。
+
+差分がある場合は既存共有writerの完全PRE物理保全/全bytes照合、全旧値CAS、書込直前の対象1社最新doc/pointer照合、単発PATCH、完全読戻しを再利用する。block=undefinedで旧根拠を保持し、読戻しで非更新の保護対象旧propertiesも照合する。結果不明はPREと現値をread-reconcileするまでSTOPし、再送・旧根拠退役・rollback成功を主張しない。
+
+初回処理の新規write prefixは実deps.modelがCloudflare/clef-flashのときClef-Flashとする。旧SemIf prefixと新Clef-Flash prefixは未完初回のreadで両方受理し、initialSemifはローカル初回資格の互換名として維持する。エラー表示も実clientのmodelで分け、旧receiptのモデル名を付け替えない。未知モデルや応答不正は停止し、別モデルへ自動代替しない。
+
+検証では旧4SHA不明の同期、旧判定JSON bytes保持、同pointer/39SHA再実行NOOP、既知4SHA等価時の旧pointer保持、旧/新初回prefix、モデル起動0、物理PRE/guard/unknown latch、保持対象がPATCH後に変更した場合のSTOPを確認する。本変更による原典GET・モデル呼出し・本番Notion/D1適用は0。受入mainと固定対象PREを用いた実適用は別gateで行う。
+
+検証結果: plan/process/source/pipeline・共有補足writer・本文writer/helperの8 suites /277 tests PASS。full TypeScript、対象6files ESLint warning0、diffcheck PASS。pipelineへの追加依存は実clientの`model: opts.model`のみ。同期済markerがあれば全社の先頭から毎日再書込せず、既存limit/時間予算で未同期の残りへ進める。

@@ -3,9 +3,12 @@
  * どちらも実在の有報の原文とゴールデンセットの実測から作った値 (docs/005-yuho-quant-business-tags.md §10・§11.4)。
  */
 import { loadGoldenSet } from "./golden.js";
+import { evaluateAtThresholds } from "./golden.js";
 import { loadCalibration } from "./thresholds.js";
 import { readFileSync } from "node:fs";
 import { SEMIF_MODEL, SEMIF_HF_MODEL, SEMIF_HF_REVISION, SEMIF_SOURCE_REVISION, SEMIF_MLX_VERSION, SEMIF_MLX_LM_REVISION } from "../../../../src/shared/semif/index.js";
+import { CLEF_MODEL, CLEF_MANIFEST } from "../../../../src/shared/clef/client.js";
+import { createHash } from "node:crypto";
 
 describe("同梱データ", () => {
   it("ゴールデンセット v1 が形・不変条件の検査を通る", () => {
@@ -46,5 +49,43 @@ describe("同梱データ", () => {
     expect(file.basis.textBasis).toMatchObject({ savedNotionWholeMetadataMatch: 85,
       sourceRecoveredCsv: 2, savedNotionWholeDefectHold: 2 });
     expect(file.basis.measurement.externalJudgeApiRequests).toBe(0);
+  });
+
+  it("Clef較正の実858確率から精度を再計算し、専用headとruntime pinを照合する", () => {
+    const calibration = loadCalibration("clef");
+    const file = JSON.parse(readFileSync(new URL("./calibration.clef.json", import.meta.url), "utf8"));
+    const bytes = readFileSync(new URL("./golden/evaluation.clef.v1.json", import.meta.url));
+    const evaluation = JSON.parse(bytes.toString());
+    expect(calibration.model).toBe(CLEF_MODEL);
+    expect(file.runtime).toMatchObject({ hfModel: CLEF_MANIFEST.repo, hfRevision: CLEF_MANIFEST.revision,
+      nativeSourceSha256: CLEF_MANIFEST.source_sha256, ...CLEF_MANIFEST.runtime,
+      backend: "torch-mps", quantization: null, maxInputTokens: 16000, base: "Nix" });
+    expect(createHash("sha256").update(readFileSync(new URL("../../local-model/uv.lock", import.meta.url))).digest("hex"))
+      .toBe(file.runtime.uvLockSha256);
+    expect(createHash("sha256").update(readFileSync(new URL("../../../../src/shared/clef/manifest.json", import.meta.url))).digest("hex"))
+      .toBe(file.runtime.modelManifestSha256);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(file.basis.evaluationSha256);
+    expect(evaluation.perItem).toHaveLength(858);
+    for (const [path, expectedSha256] of [
+      ["./golden/v1.json", evaluation.provenance.goldenSha256],
+      ["./vocabulary/v1.json", evaluation.provenance.vocabularySha256],
+    ]) {
+      expect(createHash("sha256").update(readFileSync(new URL(path, import.meta.url))).digest("hex"))
+        .toBe(expectedSha256);
+    }
+    const expected = loadGoldenSet().items.flatMap((item) => item.expect.map((pair) => ({
+      code: item.code, docId: item.docId, termId: pair.termId, expectedLabel: pair.label,
+      mustHit: pair.mustHit === true, mustNot: pair.mustNot === true,
+    })));
+    expect(evaluation.perItem.map(({ code, docId, termId, expectedLabel, mustHit, mustNot }: typeof expected[number]) =>
+      ({ code, docId, termId, expectedLabel, mustHit, mustNot }))).toEqual(expected);
+    const actual = evaluateAtThresholds(evaluation.perItem, calibration.thresholds);
+    expect(actual).toEqual(evaluation.metrics);
+    expect(actual).toMatchObject({ precisionYes: file.basis.atChosenThresholds.precisionYes,
+      recallYes: file.basis.atChosenThresholds.recallYes, mustNotViolations: 0, filterMissRate: 0 });
+    expect(actual.precisionYes).toBeGreaterThanOrEqual(0.9);
+    expect(file.basis.measurement).toMatchObject({ residentProcesses: 1, inferenceRequests: 95,
+      nativeForwards: 96, sourceRequests: 0, externalJudgeApiRequests: 0, productionWrites: 0,
+      swapIncreaseBytes: 0, localHardwareCostUsd: null });
   });
 });

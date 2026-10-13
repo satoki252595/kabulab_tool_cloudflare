@@ -28,7 +28,8 @@ import { docTypeLabelOf } from "./doc-type.js";
 import { formatPeriodJa } from "./evidence.js";
 import { buildJudgeInput, type DocMeta } from "./excerpt.js";
 import { judgeCandidates, type BtThresholds } from "./judge.js";
-import { readInputReceipt, withInputReceipt, type InputReceipt, type WorkItem } from "./plan.js";
+import { INITIAL_CLEF_INPUT_PREFIX, INITIAL_SEMIF_INPUT_PREFIX, readInputReceipt, readTextSyncReceipt,
+  withInputReceipt, withTextSyncReceipt, type InputReceipt, type WorkItem } from "./plan.js";
 import { sha256Hex } from "../../../../src/shared/sha256.js";
 import { isPrefilterSection, prefilter, PREFILTER_SECTIONS, type PrefilterSectionKey } from "./prefilter.js";
 import { summarizeJudgments, summarizeKeywordMatches, type TagOutcome } from "./row.js";
@@ -43,6 +44,8 @@ export interface ProcessDeps {
   vocab: Vocabulary;
   thresholds: BtThresholds;
   jevClient: JevClient;
+  /** 実際に構成した判定clientのモデルID。旧receiptのmodelを代入しない。 */
+  model: string;
   /** 判定日・再試行日の基準 (JST, YYYY-MM-DD) */
   today: string;
   /** ① 銘柄マスタのページ ID 解決 (無ければ null。relation を張らない) */
@@ -135,6 +138,45 @@ function allTextColumnsCleared(): Record<string, string | null> {
   return out;
 }
 
+function textColumnsOf(sections: StockTextSection[]): Record<string, string | null> {
+  const texts = allTextColumnsCleared(), seen = new Set<string>();
+  for (const s of sections) {
+    const title = TITLE_BY_SECTION_KEY.get(s.sectionKey);
+    if (title === undefined || seen.has(s.sectionKey) || typeof s.text !== "string") throw new Error("有報本文の節キー/本文が不正です");
+    seen.add(s.sectionKey);
+    texts[title] = s.text;
+  }
+  return texts;
+}
+
+async function textReceipt(doc: Doc, texts: Record<string, string | null>) {
+  if (doc.notionDocPageId === null) throw new Error("39本文同期のpointerがありません");
+  return { docId: doc.docId, textPageId: doc.notionDocPageId,
+    textsSha256: await sha256Hex(JSON.stringify(TEXT_SECTIONS.map(({ title }) => [title, texts[title]]))) };
+}
+
+function localJudgeName(deps: ProcessDeps): "Clef-Flash" | "SemIf" {
+  if (deps.model.startsWith("Cloudflare/clef-flash@")) return "Clef-Flash";
+  if (deps.model.startsWith("Qwen3.5-4B@")) return "SemIf";
+  throw new Error(`ローカル判定modelが不明です: ${deps.model}`);
+}
+
+async function syncTexts(item: WorkItem, deps: ProcessDeps): Promise<ProcessOutcome> {
+  if (item.row === null || item.doc === null || item.doc.notionDocPageId === null || item.row.docId !== item.doc.docId || item.row.judgeInput === undefined) {
+    throw new Error("39本文のみの同期には同じ有報の既存補足行が必要です");
+  }
+  const sections = await deps.readStockTextRow(item.doc.notionDocPageId);
+  if (sections.length === 0) throw new Error("39本文の同期元が空です。旧値を保持してHOLD");
+  const texts = textColumnsOf(sections), receipt = await textReceipt(item.doc, texts);
+  const previous = readTextSyncReceipt(item.row.judgeInput);
+  const same = previous !== null && previous.docId === receipt.docId && previous.textPageId === receipt.textPageId && previous.textsSha256 === receipt.textsSha256;
+  if (same) await deps.assertLatestDocCurrent(item.stockCode, item.doc);
+  else await writeRowWithEvidence(item, deps, { docId: item.doc.docId, texts, textStatus: "取得済",
+    judgeInput: withTextSyncReceipt(item.row.judgeInput, receipt) }, undefined);
+  return { stockCode: item.stockCode, kind: item.kind, outcome: same ? "skipped" : "updated",
+    tagStatus: item.row.tagStatus, candidateCount: item.row.candidateCount, ...ZERO_JEV_STATS };
+}
+
 /** 今のタグ (labelJa の配列) を今の単語帳の id へ変換する。version_bump の前提上、必ず見つかる。 */
 function idsFromActiveLabels(vocab: Vocabulary, labels: string[]): string[] {
   const map = new Map(vocab.business.filter((t) => !t.deprecated).map((t) => [t.labelJa.toLowerCase(), t.id] as const));
@@ -154,6 +196,8 @@ function idsFromActiveLabels(vocab: Vocabulary, labels: string[]): string[] {
  */
 export async function processStock(item: WorkItem, deps: ProcessDeps): Promise<ProcessOutcome> {
   switch (item.kind) {
+    case "sync_text":
+      return syncTexts(item, deps);
     case "skip":
       return {
         stockCode: item.stockCode,
@@ -286,13 +330,8 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
   // 生の項目名「事業の内容 [テキストブロック]」なので使わない)。39 列すべてを明示し、
   // この書類に無い項目は null で空にする (前の書類の本文を残さない)。知らない節キーは
   // 形式の変化なので throw する (黙って捨てない)。
-  const textsByColumn: Record<string, string | null> = allTextColumnsCleared();
+  const textsByColumn = textColumnsOf(sections);
   for (const s of sections) {
-    const title = TITLE_BY_SECTION_KEY.get(s.sectionKey);
-    if (title === undefined) {
-      throw new Error(`有報テキスト行に未知の節キー「${s.sectionKey}」があります (${item.stockCode} ${doc.docId})`);
-    }
-    textsByColumn[title] = s.text;
     if (isPrefilterSection(s.sectionKey)) {
       sectionMap[s.sectionKey] = s.text;
     }
@@ -302,6 +341,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     throw new Error(`事業タグ対象の本文がありません (${item.stockCode} ${doc.docId})。判定・既存結果の更新を保留します。`);
   }
   const result = prefilter(deps.vocab, sectionMap);
+  const syncedTexts = await textReceipt(doc, textsByColumn);
   const candidateCount = result.candidates.length;
   const baseInput: SupplementRowInput = {
     companyName: item.companyName,
@@ -331,14 +371,18 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     if (previous.sectionsSha256 === receipt.sectionsSha256) {
       if (item.row === null || typeof item.row.judgeInput !== "string") throw new Error("入力照合の既存行が不正です");
       await writeRowWithEvidence(item, deps, {
-        ...baseInput, judgeInput: withInputReceipt(item.row.judgeInput, { ...previous, textPageId: doc.notionDocPageId }),
+        ...baseInput, judgeInput: withTextSyncReceipt(item.row.judgeInput, {
+          ...syncedTexts, equivalentJudgmentInputSha256: previous.sectionsSha256,
+        }),
       }, undefined);
       return { stockCode: item.stockCode, kind: item.kind, outcome: "updated", tagStatus: item.row.tagStatus,
         candidateCount: item.row.candidateCount, ...ZERO_JEV_STATS };
     }
   }
   const localJudge = item.initialSemif === true || item.sourceChangedLocalJudge === true;
-  const judgePrefix = item.sourceChangedLocalJudge ? "SemIf入力変更の再判定" : "SemIf新規銘柄の初回判定";
+  const judgeName = localJudge ? localJudgeName(deps) : null;
+  const judgePrefix = item.sourceChangedLocalJudge ? `${judgeName}入力変更の再判定`
+    : judgeName === "Clef-Flash" ? INITIAL_CLEF_INPUT_PREFIX : INITIAL_SEMIF_INPUT_PREFIX;
 
   if (result.candidates.length === 0) {
     // 候補語 0 件でも「判定済」(判定はした。該当が無かっただけ。§5.6)。
@@ -358,7 +402,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         vocabVersion: deps.vocab.version,
         judgedAt: deps.today,
         candidateCount: 0,
-        judgeInput: withInputReceipt(`${localJudge ? `${judgePrefix}：` : "機械照合："}候補語なし (キーワード照合で該当語なし・外部判定なし)`, receipt),
+        judgeInput: withTextSyncReceipt(withInputReceipt(`${localJudge ? `${judgePrefix}：` : "機械照合："}候補語なし (キーワード照合で該当語なし・外部判定なし)`, receipt), syncedTexts),
         error: null,
         attempts: 0,
         nextRetryAt: null,
@@ -432,7 +476,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         vocabVersion: deps.vocab.version,
         judgedAt: deps.today,
         candidateCount,
-        judgeInput: withInputReceipt(judgeInputSummary, receipt),
+        judgeInput: withTextSyncReceipt(withInputReceipt(judgeInputSummary, receipt), syncedTexts),
         error: null,
         attempts: 0,
         nextRetryAt: null,
@@ -456,7 +500,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     if (item.sourceChangedLocalJudge && item.row !== null) {
       return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row.tagStatus,
         candidateCount: item.row.candidateCount, qualificationHeld: true,
-        error: `SemIf入力変更の再判定をHOLD (旧本文・タグ・根拠・判定版を保持): ${e.message}`, ...ZERO_JEV_STATS };
+        error: `${judgeName}入力変更の再判定をHOLD (旧本文・タグ・根拠・判定版を保持): ${e.message}`, ...ZERO_JEV_STATS };
     }
     return recordFailure(item, deps, {
       textStatus: "取得済",
@@ -468,7 +512,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       texts: textsByColumn,
       candidateCount,
       judgeInput: judgeInputSummary,
-      errorMessage: `SemIf 判定に失敗: ${e.message}`,
+      errorMessage: `${judgeName} 判定に失敗: ${e.message}`,
     });
   }
 }
@@ -514,7 +558,7 @@ async function recordFailure(item: WorkItem, deps: ProcessDeps, args: FailureArg
     judgedAt: null,
     candidateCount: args.candidateCount,
     judgeInput: item.initialSemif && args.judgeInput === null
-      ? "SemIf新規銘柄の初回判定：本文読込失敗 (外部判定なし)" : args.judgeInput,
+      ? `${localJudgeName(deps)}新規銘柄の初回判定：本文読込失敗 (外部判定なし)` : args.judgeInput,
     // rich_text の実測上限に対する安全側の切り詰め (Notion API 側の 2000字/要素 は
     // splitRichText が分割するが、事業タグの「判定エラー」列は原因の要約で十分)。
     error: args.errorMessage.slice(0, 1900),

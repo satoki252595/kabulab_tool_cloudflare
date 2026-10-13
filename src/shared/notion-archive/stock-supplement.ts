@@ -1049,6 +1049,11 @@ export async function replaceEvidenceBlock(
       throw new SupplementWriteHeldError(`旧タグ・判定根拠がplan後に変更: ${name}。旧値を保持してHOLD`);
     }
   }
+  if (block === undefined && Object.entries(props).every(([name, expected]) =>
+    Object.hasOwn(before.properties, name) && JSON.stringify(propertyValue(before.properties[name])) === JSON.stringify(propertyValue(expected)))) {
+    await beforeWrite();
+    return; // 同じ39本文はPRE upload/根拠操作/properties PATCHを行わない。
+  }
   const children = await evidenceChildren(pageId);
   const old = children.filter((b) => b.type === "heading_3" && richPlain((b.heading_3 as { rich_text: unknown }).rich_text).startsWith(EVIDENCE_TITLE_PREFIX));
   if (old.length > 1) throw new Error("複数の事業タグ根拠が存在。前回実行/PREを照合するまでHOLD");
@@ -1092,6 +1097,11 @@ export async function replaceEvidenceBlock(
     for (const [name, expected] of Object.entries(props)) {
       if (JSON.stringify(propertyValue(after.properties[name])) !== JSON.stringify(propertyValue(expected))) {
         throw new Error(`補足の読戻し不一致: ${name}`);
+      }
+    }
+    for (const [name, expected] of Object.entries(expectedProperties)) {
+      if (!(name in props) && JSON.stringify(propertyValue(after.properties[name])) !== JSON.stringify(propertyValue(expected))) {
+        throw new Error(`補足の保持対象が読戻し時に変更: ${name}`);
       }
     }
   } catch (cause) {
