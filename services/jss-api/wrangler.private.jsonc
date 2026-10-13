@@ -18,7 +18,8 @@
   ],
   "r2_buckets": [
     { "binding": "RAW", "bucket_name": "jp-stock-raw" },
-    { "binding": "SUPPLY", "bucket_name": "jp-stock-supply" }
+    { "binding": "SUPPLY", "bucket_name": "jp-stock-supply" },
+    { "binding": "VWAP", "bucket_name": "vwap-data" }
   ],
   "vars": { "SURFACE": "private" }
 }

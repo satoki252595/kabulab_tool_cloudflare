@@ -181,7 +181,7 @@ export const MOF_PORTFOLIO_FLOWS_INDICATORS: MofIndicatorDefinition[] = [
  * この取得元のヘッダ行には引用符内改行を含むセルが実在するため、行単位の
  * 文字列分割ではなく全文を状態機械で走査する。
  */
-function parseCsvRows(text: string): string[][] {
+export function parseCsvRows(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -231,6 +231,7 @@ function parseCsvRows(text: string): string[][] {
     field += ch;
     i++;
   }
+  if (inQuotes) throw new Error("CSVの引用符が閉じていません");
   if (field.length > 0 || row.length > 0) {
     row.push(field);
     rows.push(row);
@@ -247,7 +248,7 @@ function parseCsvRows(text: string): string[][] {
  */
 export function decodeMofCsv(bytes: Uint8Array): string {
   try {
-    return new TextDecoder("shift_jis", { fatal: true }).decode(bytes);
+    return new TextDecoder("shift_jis", { fatal: true, ignoreBOM: false }).decode(bytes);
   } catch (e) {
     throw new Error(
       `MOF CSV: Shift_JIS として復号できないバイト列を含みます (配布形式の変更・破損の可能性): ${String(e)}`,

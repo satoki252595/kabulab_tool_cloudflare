@@ -9,6 +9,8 @@ export interface PrivateEnv {
   DB: D1Database;
   RAW: R2Bucket;
   SUPPLY: R2Bucket;
+  /** 非公開のJPX日次信用残。公開面へbindしない。 */
+  VWAP: R2Bucket;
   SURFACE: "private";
   /** カンマ区切りの APIキー。未設定なら fail-closed で全拒否する。 */
   JSS_API_KEYS?: string;

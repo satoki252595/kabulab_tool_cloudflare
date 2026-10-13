@@ -28,12 +28,14 @@ describe("Worker のバインディング", () => {
     const names = (c.r2_buckets as { binding: string }[]).map((b) => b.binding);
     expect(names).not.toContain("SUPPLY");
     expect(names).not.toContain("TS");
+    expect(names).not.toContain("VWAP");
   });
 
   it("内部面は需給バケットを bind する", () => {
     const c = config("wrangler.private.jsonc");
     const buckets = (c.r2_buckets as { bucket_name: string }[]).map((b) => b.bucket_name);
     expect(buckets).toContain("jp-stock-supply");
+    expect(buckets).toContain("vwap-data");
   });
 
   it("両面とも同じ D1 を読む（データを複製しない）", () => {

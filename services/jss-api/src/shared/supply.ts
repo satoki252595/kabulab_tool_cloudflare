@@ -1,3 +1,6 @@
+import { boundedBytes, MarginCursorError, marginLatest, marginSeries } from "./jpx-margin";
+import { shinaLatest } from "./shina";
+
 /**
  * 需給 API の出典境界。返却データの種類から `meta.attribution` の
  * sources を決める。writer 契約 (`pipeline/.../models.py SupplyPoint` /
@@ -128,11 +131,59 @@ export function parseSupplyFilter(name: string, value: unknown): string | undefi
     if (!KNOWN_TYPES.has(value)) throw new SupplyFilterError(name, value);
     return value;
   }
-  if (name === "from" || name === "to") {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new SupplyFilterError(name, value);
+  if (name === "from" || name === "to" || name === "cursor") {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value) throw new SupplyFilterError(name, value);
     return value;
   }
   // name は呼び出し側の固定値 (クライアント由来でない) なので到達不能のはず。
   // 万一到達したら実装バグとして 500 側へ落とす。
   throw new Error(`未知の需給 filter 名: ${name}`);
+}
+
+/** REST/MCP共通のprovider経路。個人用R2はPrivateEnvだけ。 */
+export async function fetchSupplyLatest(env: import("./types").PrivateEnv, dataType: string | undefined, limit: number) {
+  const rows: Record<string, unknown>[] = [];
+  if (!dataType || dataType === "jsf_zandaka") {
+    const { results } = await env.DB.prepare("SELECT code, data_type, data_date, loan_bal, stock_bal, ratio, turn_days, r2_key, license_tag FROM jss_supply_latest WHERE data_type = ? ORDER BY code LIMIT ?").bind("jsf_zandaka", limit).all<Record<string, unknown>>();
+    for (const row of results) {
+      assertKnownSupplyType(row.data_type, "jss_supply_latest.data_type");
+      if (row.data_type === "jsf_zandaka") rows.push(row);
+    }
+  }
+  if (!dataType || dataType === "jsf_shina") rows.push(...await shinaLatest(env));
+  if (!dataType || dataType === "jpx_margin") rows.push(...await marginLatest(env.VWAP));
+  rows.sort((a, b) => String(a.code).localeCompare(String(b.code)) || String(a.data_type).localeCompare(String(b.data_type)) || String(a.exchange ?? "").localeCompare(String(b.exchange ?? "")));
+  return rows.slice(0, limit);
+}
+
+export async function fetchSupplySeries(env: import("./types").PrivateEnv, code: string, options: { wanted?: string; from?: string; to?: string; cursor?: string }) {
+  if (options.from && options.to && options.from > options.to) throw new SupplyFilterError("from", options.from);
+  if (options.cursor && options.to && options.cursor > options.to) throw new SupplyFilterError("cursor", options.cursor);
+  if (options.cursor && options.wanted && options.wanted !== "jpx_margin") throw new SupplyFilterError("cursor", options.cursor);
+  const filtered: Record<string, unknown[]> = {};
+  let cursor: string | null = null;
+  if (!options.wanted || options.wanted === "jpx_margin") {
+    let result;
+    try { result = await marginSeries(env.VWAP, code, options); }
+    catch (e) { if (e instanceof MarginCursorError) throw new SupplyFilterError("cursor", options.cursor); throw e; }
+    filtered.jpx_margin = result.points; cursor = result.cursor;
+  }
+  let updated: unknown = null, hasJsf = false;
+  if ((!options.wanted || options.wanted !== "jpx_margin") && code.length === 4) {
+    const object = await env.SUPPLY.get(`supply/${code}.json`);
+    if (object) {
+      const payload = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(await boundedBytes(object, 8 * 1024 ** 2))) as Record<string, unknown>;
+      const series = assertSeriesObject(payload.series);
+      updated = payload.updated; hasJsf = true;
+      for (const [key, value] of Object.entries(series)) {
+        assertKnownSupplyType(key, `series key: ${key}`);
+        if (key === "jpx_margin" || (options.wanted && key !== options.wanted)) continue;
+        const points = seriesPointsArray(key, value);
+        filtered[key] = points.filter(p => (!options.from || p.d >= options.from) && (!options.to || p.d <= options.to) && (!options.cursor || p.d <= options.cursor) && (!cursor || p.d > cursor));
+      }
+    }
+  }
+  if (!hasJsf && options.wanted && options.wanted !== "jpx_margin") return null;
+  if (updated === undefined || (updated !== null && typeof updated !== "string")) throw new Error("JSF系列更新時計不正");
+  return { data: { code, updated, series: filtered }, cursor };
 }
