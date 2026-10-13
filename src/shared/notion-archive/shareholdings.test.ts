@@ -294,6 +294,14 @@ describe("保有明細の現行/legacy保存type1 reader", () => {
     expect(await readSavedHoldingsZip(source)).toMatchObject({ status: "ready", metadataMissing: ["edinetCode", "periodEnd"] });
     expect(verifySavedHoldingsSource).toHaveBeenCalledWith(args.zip, source);
   });
+  it("docID欠測はKey/添付名だけで資格化せず理由HOLD、存在する矛盾は従来STOP", async () => {
+    vi.mocked(queryUniqueRow).mockResolvedValue(primary(`${source.docId}:type1`, { docID: undefined }));
+    expect(await readSavedHoldingsZip(source)).toMatchObject({ status: "held", reason: expect.stringContaining("metadataにdocIDがなく") });
+    expect(verifySavedHoldingsSource).not.toHaveBeenCalled();
+    expect(notionRequest).not.toHaveBeenCalled();
+    vi.mocked(queryUniqueRow).mockResolvedValue(primary(`${source.docId}:type1`, { docID: "S100YC5I" }));
+    await expect(readSavedHoldingsZip(source)).rejects.toThrow();
+  });
   it("metadataの非0不正codeや矛盾した保存SHAは許容しない", async () => {
     for (const changes of [{ rawSecCode: "00005" }, { sourceZIPSHA: "0".repeat(64) }]) {
       vi.mocked(queryUniqueRow).mockResolvedValue(primary(`${source.docId}:type1`, changes));

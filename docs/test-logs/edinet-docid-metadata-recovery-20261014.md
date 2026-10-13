@@ -1,0 +1,9 @@
+# EDINET document-ID custody — 2026-10-14
+
+The shared `recordEdinetZip` writer used the explicit document ID for the primary key and filename, but previously relied on callers to include it in Metadata. A modern `S100YJKO:type1` row therefore had the expected hosted filename while Metadata contained only byte/hash/cache/lease/type fields. The holdings source reader stopped on the absent document ID after 1,050 completed documents and 27 cached items of the next chunk. This is missing custody evidence, not proof that EDINET did not provide the document.
+
+The writer now explicitly persists its document ID in Metadata. A caller-supplied ID that conflicts with the explicit argument is rejected before any archive request. Existing archived row metadata is not rewritten. The reader reports absent `metadata.docID` as a reasoned source HOLD, while a present but inconsistent ID still stops. No source qualifies through the missing branch; filename/key alone do not replace the issuer/period/source proof.
+
+The old STOP and partial cache remain intact. All accepted ZIP items in the 21 prior plans already had the exact document ID, so the new missing branch does not affect their qualification. A separate resume reuses those plans and 27 cached items, binds the S100YJKO HOLD to a fresh latest-document read, and continues at 0.5 Notion requests/second. Its classification and price acceptance remain separate; deficient custody is not declared permanently unsupported.
+
+Validation: 85 tests across seven relevant TypeScript suites passed, including archive/caller atomic contracts and holdings/backfill. Targeted ESLint and `git diff --check` passed. This change caused no business writes or upstream retrievals. Private evidence: `holdings-latest-all/source-only-20261014/{S100YJKO-metadata-stop-proof.json,missing-docid-reader-transition-v2.json,full-preparation-resume2-started.json}` under `tmp/feature-audit-20261013/`.
