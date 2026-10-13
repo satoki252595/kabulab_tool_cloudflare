@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type YahooClient = typeof import("./client.js");
 let fetchBars5m: YahooClient["fetchBars5m"];
+let fetchBars5mWindow: YahooClient["fetchBars5mWindow"];
 let fetchDaily: YahooClient["fetchDaily"];
 let fetchYahooChartRaw: YahooClient["fetchYahooChartRaw"];
 let YahooRateLimitError: YahooClient["YahooRateLimitError"];
@@ -17,12 +18,13 @@ const ORIGINAL_ENV = { ...process.env };
 beforeEach(async () => {
   // ケース内のcooldownは実装どおり保持し、別HTTPケースへ持ち越さない。
   vi.resetModules();
-  ({ fetchBars5m, fetchDaily, fetchYahooChartRaw, YahooRateLimitError } = await import("./client.js"));
+  ({ fetchBars5m, fetchBars5mWindow, fetchDaily, fetchYahooChartRaw, YahooRateLimitError } = await import("./client.js"));
 });
 
 afterEach(() => {
   process.env = { ...ORIGINAL_ENV };
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function useProxy() {
@@ -482,6 +484,26 @@ describe("fetchDaily", () => {
 });
 
 describe("fetchBars5m", () => {
+  it("explicit period uses the existing proxy/parser and never sends range/events or retries a 422", async () => {
+    useProxy();vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-13T19:43:00Z"));
+    const window = { period1: Date.parse("2026-08-17T00:00:00Z") / 1000, period2: Date.parse("2026-10-13T06:30:01Z") / 1000 };
+    const seen = stubChart(chartJson(), { status: 422 }), captured: number[] = [];
+    await expect(fetchBars5mWindow("593A.T", window, { onRaw: raw => { captured.push(raw.status); } })).rejects.toThrow("yahoo 422");
+    expect(captured).toEqual([422]);expect(seen).toHaveLength(1);
+    const requested = new URL(new URL(seen[0]).searchParams.get("u")!);
+    expect(requested.searchParams.get("period1")).toBe(String(window.period1));
+    expect(requested.searchParams.get("period2")).toBe(String(window.period2));
+    expect(requested.searchParams.get("interval")).toBe("5m");
+    expect(requested.searchParams.has("range")).toBe(false);expect(requested.searchParams.has("events")).toBe(false);
+  });
+  it("explicit period rejects future/over-60d/noninteger input before HTTP", async () => {
+    useProxy();vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-13T19:43:00Z"));
+    const seen = stubChart(chartJson()), now = Date.now() / 1000;
+    for (const period of [{ period1: now - 61 * 86400, period2: now }, { period1: now - 1, period2: now + 1 }, { period1: now - 1.5, period2: now }]) {
+      await expect(fetchBars5mWindow("593A.T", period)).rejects.toThrow("60日内");
+    }
+    expect(seen).toEqual([]);
+  });
   it("result 欠落・chart.error は空で返さず落とす", async () => {
     useProxy();
     stubChart({ chart: { result: [] } });

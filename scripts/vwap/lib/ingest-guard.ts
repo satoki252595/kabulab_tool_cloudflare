@@ -17,6 +17,7 @@ import { isDailyFetchProof, isStrictIsoUtc, jstDateSec } from "../../../src/shar
 import { assertCorporateEventsShape, assertEventSourceProof, corporateEventPins, corporateSplitProjection, priceSnapshotJson,
   type CorporateEvents } from "../../../src/shared/yahoo/corporate-events.js";
 import type { DailyBar } from "../../../src/shared/yahoo/client.js";
+import type { IntraRecoveryProof, IntraRecoveryWindow } from "./intra-recovery.js";
 
 export type PricedBar = {
   o: number;
@@ -532,11 +533,14 @@ export type IngestCodeOutcome = {
   discardedOutOfRange?: DiscardedOutOfRange;
   /** 確定済み保存物でsource前skipした時のみfalse。今回のsource観測とは数えない。 */
   sourceFetched?: false;
+  /** 明示期間回復だけ。同一captureの全raw timestampと実要求を証明する。 */
+  sourceWindowProof?: IntraRecoveryProof;
 };
 
 export type IngestRunStats = {
   kind: "daily" | "intra";
   range: string;
+  sourceWindow?: IntraRecoveryWindow;
   runId: string;
   skipped?: number;
   codes: number;
@@ -650,6 +654,7 @@ export function buildIngestSummary(stats: IngestRunStats): {
     metadata: {
       kind: stats.kind,
       range: stats.range,
+      ...(stats.sourceWindow === undefined ? {} : { sourceWindow: stats.sourceWindow }),
       runId: stats.runId,
       skipped: stats.skipped ?? 0,
       codes: stats.codes,

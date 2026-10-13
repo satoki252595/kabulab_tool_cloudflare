@@ -3122,6 +3122,9 @@ function parseOverseasTables(
     start,
     durationContexts,
   } of tables) {
+    // S100YD7J: 遠い表題が見出し窓から消えても、原典 TextBlock は
+    // 減損損失と明示する。算術整合する地域別減損額を売上へ採用しない。
+    if (textBlock?.startsWith("NotesImpairmentLosses")) continue;
     const rawGrid = tableToGridExpanded(table);
     if (rawGrid.length < 2) continue;
     // 全角数字・ラテンの半角化 (全パス共通)。S1009XV6 の「その他 ５」等、

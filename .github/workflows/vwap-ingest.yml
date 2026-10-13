@@ -46,6 +46,14 @@ on:
         description: "target=intra の対象コード（カンマ区切り）。空欄は通常の全母集団"
         type: string
         default: ""
+      intra_from:
+        description: "target=intra / 保存422の5銘柄限定。60日内の最初のJP営業日寄付き ISO UTC"
+        type: string
+        default: ""
+      intra_to_exclusive:
+        description: "target=intra / 明示期間の終端 ISO UTC（直近JP引けauction timestamp+1秒、exclusive）"
+        type: string
+        default: ""
 
 concurrency:
   group: vwap-ingest
@@ -98,6 +106,18 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: 明示5分足期間の対象を検査
+        if: github.event_name == 'workflow_dispatch' && (inputs.intra_from != '' || inputs.intra_to_exclusive != '')
+        env:
+          TARGET: ${{ inputs.target }}
+          INTRA_FROM: ${{ inputs.intra_from }}
+          INTRA_TO_EXCLUSIVE: ${{ inputs.intra_to_exclusive }}
+        run: |
+          if [ "$TARGET" != "intra" ] || [ -z "$INTRA_FROM" ] || [ -z "$INTRA_TO_EXCLUSIVE" ]; then
+            echo "explicit_intra_window=invalid reason=target-or-incomplete-boundary"
+            exit 2
+          fi
+
       # 日足10年 + 5分足 (月水金 cron または dispatch=daily-intra/all)。dispatch=daily は日足だけ。
       - name: VWAP daily + intra → R2
         if: >-
@@ -140,8 +160,12 @@ jobs:
         env:
           INTRA_RANGE: ${{ github.event.inputs.intra_range }}
           INTRA_CODES: ${{ github.event.inputs.intra_codes }}
+          INTRA_FROM: ${{ github.event.inputs.intra_from }}
+          INTRA_TO_EXCLUSIVE: ${{ github.event.inputs.intra_to_exclusive }}
         run: |
-          if [ -n "$INTRA_CODES" ]; then
+          if [ -n "$INTRA_FROM" ] || [ -n "$INTRA_TO_EXCLUSIVE" ]; then
+            pnpm ingest:vwap-intra --codes="$INTRA_CODES" --from="$INTRA_FROM" --to-exclusive="$INTRA_TO_EXCLUSIVE"
+          elif [ -n "$INTRA_CODES" ]; then
             pnpm ingest:vwap-intra --codes="$INTRA_CODES"
           else
             pnpm ingest:vwap-intra

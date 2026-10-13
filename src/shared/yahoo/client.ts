@@ -1028,6 +1028,28 @@ export async function fetchBars5m(symbol: string, range = "5d", options?: FetchC
   return parseBars5m(await r.json(), symbol);
 }
 
+/** 明示期間専用。range失敗後の自動代替・再送はしない。原文はHTTP判定前に渡す。 */
+export async function fetchBars5mWindow(
+  symbol: string, window: { period1: number; period2: number }, options?: FetchChartOptions
+): Promise<Bar5m[]> {
+  const { period1, period2 } = window, now = Date.now() / 1000;
+  if (![period1, period2].every(value => Number.isSafeInteger(value) && value > 0) ||
+      period1 >= period2 || period2 > now || period1 < now - 60 * 86400) {
+    throw new Error("5分足明示期間は過去の60日内で指定してください");
+  }
+  const url = new URL(yahooChartSourceUrl(symbol, "", "5m", false));
+  url.searchParams.delete("range");
+  url.searchParams.set("period1", String(period1));
+  url.searchParams.set("period2", String(period2));
+  const response = await yahooFetch(url.toString());
+  if (options?.onRaw) {
+    const bytes = await readRawBytes(response, symbol);
+    await options.onRaw(rawCapture(symbol, response, bytes, new Date().toISOString()));
+  }
+  ensureOk(response);
+  return parseBars5m(await response.json(), symbol);
+}
+
 /** 保存済みの原応答も同じ検査で解析する。HTTP取得・受領時計の再生成はしない。 */
 export function parseBars5m(json: unknown, symbol: string): Bar5m[] {
   const j = json as YahooChartJson;
