@@ -84,9 +84,10 @@ function recordingDb() {
     async (sql, p) => {
       calls.push(sql);
       params.push([...p]);
-      // overlay state: base 確定・世代未適用 (bootstrap gate 通過)。
+      // このsuiteは価格guardを検証する。overlay適用済み世代だけを返し実送信しない。
       if (/^\s*select/i.test(sql) && sql.includes("universe_overlay_state")) {
-        return { rows: [[1, "2026-08-31", null, null, null, null, 0, 0, 0, null]] };
+        return { rows: [[1, "2026-08-31", "2026-09-28T00:00:00Z", "e".repeat(64),
+          new Date().toISOString().slice(0, 10), "2026-09-28T00:00:00Z", 0, 0, 0, "[]"]] };
       }
       return { rows: [] };
     },
@@ -324,19 +325,19 @@ describe("株式とマクロの日次分離", () => {
     expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["2026-09-25", undefined])("実日足が対象日でなければD1を書かない (%s)", async (date) => {
+  it.each(["2026-09-25", undefined])("実日足が対象日でなければ価格を書かない (%s)", async (date) => {
     // dataDateが今日でも、実timestampの日足が無ければ祝日/障害を成功にしない。
     vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart(date)));
     const { db, calls } = recordingDb();
     await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect })).rejects.toThrow("日足を確認できません");
-    expect(calls).toEqual([]);
+    expect(calls.filter(sql => !/^\s*select/i.test(sql))).toEqual([]);
     expect(fetchStockRawData).not.toHaveBeenCalled();
     expect(recordPriceSyncLog).toHaveBeenCalledWith("test-db", expect.objectContaining({
       status: "失敗", tradingDate: null,
     }));
   });
 
-  it("実日足の日付が対象日でも実終値がなければD1を書かない (fresh null bar)", async () => {
+  it("実日足の日付が対象日でも実終値がなければ価格を書かない (fresh null bar)", async () => {
     // 日付だけの gate では対象日の fresh null bar が通過し、古い終値で計算した
     // 指標を対象日付で保存してしまう (F-01)。checkFreshClose で実終値も要求する。
     vi.mocked(fetchChart).mockImplementation(chartWithRaw({
@@ -346,7 +347,7 @@ describe("株式とマクロの日次分離", () => {
     }));
     const { db, calls } = recordingDb();
     await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect })).rejects.toThrow("日足を確認できません");
-    expect(calls).toEqual([]);
+    expect(calls.filter(sql => !/^\s*select/i.test(sql))).toEqual([]);
     expect(fetchStockRawData).not.toHaveBeenCalled();
     expect(recordPriceSyncLog).toHaveBeenCalledWith("test-db", expect.objectContaining({
       status: "失敗", tradingDate: null,
@@ -619,17 +620,17 @@ describe("株式 guard の default パス共有 (stocksOnly 依存の除去)", (
   });
 
   it.each(["2026-09-25", undefined])(
-    "default パスも対象日実日足がなければD1を書かない (%s)",
+    "default パスも対象日実日足がなければ価格を書かない (%s)",
     async (date) => {
       vi.setSystemTime(new Date("2026-09-30T17:13:00Z"));
       vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart(date)));
       const { db, calls } = recordingDb();
       await expect(runDailySync(db, {})).rejects.toThrow("日足を確認できません");
-      expect(calls).toEqual([]);
+      expect(calls.filter(sql => !/^\s*select/i.test(sql))).toEqual([]);
     }
   );
 
-  it("default パスも対象日の fresh null bar ではD1を書かない", async () => {
+  it("default パスも対象日の fresh null bar では価格を書かない", async () => {
     vi.setSystemTime(new Date("2026-09-30T17:13:00Z"));
     vi.mocked(fetchChart).mockImplementation(chartWithRaw({
       symbol: "^N225", price: 100, previousClose: 99, dataDate: "2026-09-30",
@@ -638,7 +639,7 @@ describe("株式 guard の default パス共有 (stocksOnly 依存の除去)", (
     }));
     const { db, calls } = recordingDb();
     await expect(runDailySync(db, {})).rejects.toThrow("日足を確認できません");
-    expect(calls).toEqual([]);
+    expect(calls.filter(sql => !/^\s*select/i.test(sql))).toEqual([]);
   });
 
   it.each([

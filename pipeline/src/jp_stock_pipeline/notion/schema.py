@@ -639,21 +639,44 @@ def _catalog_content(block: dict) -> tuple[str, list[dict]]:
 def _refresh_catalog_page(client: NotionClient, page_id: str, desired: list[dict]) -> None:
     """明示実行だけで本文更新。新本文の全件照合前には旧本文をarchiveしない。"""
     before = client.list_child_blocks(page_id)
-    previous = [_catalog_content(block) for block in before]
+    previous = _catalog_preserved_content(client, before)
     expected = [_catalog_content(block) for block in desired]
-    if previous == expected:
+    managed = {"heading_1", "heading_2", "heading_3", "paragraph", "bulleted_list_item"}
+    if all(block["type"] in managed and not block.get("has_children") for block in before) and [
+        _catalog_content(block) for block in before
+    ] == expected:
         return
     for i in range(0, len(desired), _BLOCK_CHUNK):
         client.append_block_children(page_id, desired[i : i + _BLOCK_CHUNK])
     if not client.dry_run:
         after = client.list_child_blocks(page_id)
-        if ([block["id"] for block in after[:len(before)]] != [block["id"] for block in before]
-                or [_catalog_content(block) for block in after] != previous + expected):
+        if (_catalog_preserved_content(client, after[:len(before)]) != previous
+                or [_catalog_content(block) for block in after[len(before):]] != expected):
             raise ValueError("カタログの追記結果/旧本文が一致しないためarchiveを停止します")
     for block in before:
         result = client.raw_api("PATCH", f"blocks/{block['id']}", json_body={"archived": True})
         if not client.dry_run and (result.get("id") != block["id"] or result.get("archived") is not True):
             raise ValueError("カタログ旧本文のarchive結果が不明です。再送せず確認してください")
+
+
+def _catalog_preserved_content(client: NotionClient, blocks: list[dict]) -> list[dict]:
+    """旧カタログの表・引用・コードも保全し、追記中の編集を検知する。"""
+    allowed = {"heading_1", "heading_2", "heading_3", "paragraph", "bulleted_list_item",
+               "numbered_list_item", "quote", "code", "table", "table_row"}
+    preserved = []
+    for block in blocks:
+        kind = block["type"]
+        if kind not in allowed or (block.get("has_children") and kind != "table"):
+            raise ValueError("カタログに子ページ/DB等が混在するため本文更新を停止します")
+        item = {"id": block["id"], "type": kind, "content": block[kind],
+                "last_edited_time": block.get("last_edited_time")}
+        if block.get("has_children"):
+            rows = client.list_child_blocks(block["id"])
+            if any(row["type"] != "table_row" or row.get("has_children") for row in rows):
+                raise ValueError("旧カタログの表に管理対象外の子要素があり保全停止します")
+            item["rows"] = _catalog_preserved_content(client, rows)
+        preserved.append(item)
+    return preserved
 
 
 # ---------------------------------------------------------------------------

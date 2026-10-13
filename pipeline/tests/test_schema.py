@@ -268,6 +268,26 @@ class TestCatalogPage:
         client.append_block_children.assert_not_called()
         client.raw_api.assert_not_called()
 
+    @pytest.mark.parametrize("table_changed", [False, True])
+    def test_legacy_catalog_table_is_preserved_until_full_readback(self, table_changed):
+        client = Mock(dry_run=False)
+        table = {"id": "table", "type": "table", "has_children": True,
+                 "table": {"table_width": 1, "has_column_header": False, "has_row_header": False}}
+        row = {"id": "row", "type": "table_row", "has_children": False,
+               "table_row": {"cells": [[schema._text("旧案内")]]}}
+        changed = {**row, "table_row": {"cells": [[schema._text("追記中の編集")]]}}
+        desired = [schema._para("現行案内")]
+        client.list_child_blocks.side_effect = [[table], [row], [table, *desired],
+                                               [changed if table_changed else row]]
+        client.raw_api.return_value = {"id": "table", "archived": True}
+        if table_changed:
+            with pytest.raises(ValueError, match="旧本文が一致"):
+                schema._refresh_catalog_page(client, "catalog", desired)
+            client.raw_api.assert_not_called()
+        else:
+            schema._refresh_catalog_page(client, "catalog", desired)
+            client.raw_api.assert_called_once_with("PATCH", "blocks/table", json_body={"archived": True})
+
     @pytest.mark.parametrize("failure", ["append_unknown", "readback_mismatch", "child_database"])
     def test_catalog_refresh_preserves_old_content_until_new_content_is_verified(self, failure):
         client = Mock(dry_run=False)

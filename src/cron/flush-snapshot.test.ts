@@ -471,7 +471,7 @@ describe("loadSavedOhlcvDates / packOhlcvGapChunks", () => {
     const covered = new Set<string>();
     for (const c of chunks) {
       for (const w of c.wanted) {
-        expect(covered.has(w)).toBe(false);
+        if (covered.has(w)) throw new Error(`duplicate probe: ${w}`);
         covered.add(w);
       }
     }
