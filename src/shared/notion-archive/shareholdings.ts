@@ -62,14 +62,8 @@ export function buildHoldingsSchemaPatch(schema: HoldingsSchema): { properties: 
     const old = schema.properties[name];
     assert.ok(old?.id);
     assert.equal(old.type, type);
-    const patch: Record<string, unknown> = { name: legacy };
-    if (type === "select") {
-      assert.ok(old.select);
-      patch.select = { options: old.select.options.map(option => ({ ...option,
-        name: option.name === "非上場" ? "コード未確定" : option.name === "上場" ? "コード照合のみ（未検証）" : option.name,
-      })) };
-    }
-    properties[old.id] = patch;
+    // Legacy option IDs/names also remain unchanged. Notion API cannot rename options.
+    properties[old.id] = { name: legacy };
     renamed.add(name);
   }
   for (const [name, definition] of Object.entries(canonical)) {
@@ -98,7 +92,18 @@ export async function applyHoldingsSchema(expected: HoldingsSchema): Promise<Hol
   const current = await readHoldingsSchema();
   assert.equal(current.id.replaceAll("-", ""), expected.id.replaceAll("-", ""));
   assert.deepEqual(current.properties, expected.properties, "保有明細schemaが準備時から変化しています");
-  const patch = buildHoldingsSchemaPatch(current);
+  let patch = buildHoldingsSchemaPatch(current);
+  const renames = Object.fromEntries(Object.entries(patch.properties).filter(([, value]) =>
+    typeof value === "object" && value !== null && "name" in value));
+  if (Object.keys(renames).length > 0) {
+    // Release the old property names before creating new columns with those names.
+    await notionRequest("PATCH", `/databases/${notionEnv.NOTION_STOCK_HOLDINGS_DB_ID()}`, { properties: renames }, { singleAttempt: true });
+    const renamed = await readHoldingsSchema();
+    for (const [name, legacy] of LEGACY_HOLDINGS_COLUMNS) {
+      assert.equal(renamed.properties[legacy].id, current.properties[name].id);
+    }
+    patch = buildHoldingsSchemaPatch(renamed);
+  }
   if (Object.keys(patch.properties).length > 0) {
     await notionRequest("PATCH", `/databases/${notionEnv.NOTION_STOCK_HOLDINGS_DB_ID()}`, patch, { singleAttempt: true });
   }
@@ -111,7 +116,7 @@ export async function applyHoldingsSchema(expected: HoldingsSchema): Promise<Hol
       for (const option of old.select!.options) {
         const updated: { id: string; name: string; color: string } | undefined = actual.properties[legacy].select!.options.find(o => o.id === option.id);
         assert.ok(updated);
-        assert.equal(updated.name, option.name === "非上場" ? "コード未確定" : option.name === "上場" ? "コード照合のみ（未検証）" : option.name);
+        assert.equal(updated.name, option.name);
       }
     }
   }

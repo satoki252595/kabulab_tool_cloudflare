@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { findCanonicalRawFiles, parseCanonicalRawFile } from "./raw-files.js";
+import { assertCanonicalRawMetadata, findCanonicalRawFileAttachments, findCanonicalRawFiles, listCanonicalRawFiles, parseCanonicalRawFile } from "./raw-files.js";
 import { notionRequest } from "./client.js";
-vi.mock("./client.js", () => ({ notionRequest: vi.fn() }));
+vi.mock("./client.js", () => ({ notionRequest: vi.fn(), assertCursorProgress: (seen: Set<string>, cursor: string) => {
+  if (seen.has(cursor)) throw new Error("cursor repeated"); seen.add(cursor);
+} }));
 vi.mock("./env.js", () => ({ notionEnv: { NOTION_DB_RAW_FILES: () => "a".repeat(32) } }));
 const digest = "c".repeat(64);
 function page() {
@@ -37,5 +39,57 @@ describe("⑤原本のread-only照合", () => {
     if (kind === "trash") value.in_trash = true;
     if (kind === "date") value.properties["データ基準日"].date.start = "2026-02-31";
     expect(() => parseCanonicalRawFile(value, "a".repeat(32))).toThrow();
+  });
+});
+
+describe("⑤canonical全集合の固定cutoff/strict partition", () => {
+  const cutoff = "2026-10-14T00:00:00.000Z";
+  it("16個のhexで全域を照合し、同SHAを複数行採用しない", async () => {
+    vi.mocked(notionRequest).mockImplementation(async (_method, _url, body) => {
+      const b = body as { filter: { and: Array<{ rich_text?: { starts_with: string } }> } };
+      return { results: b.filter.and[0]?.rich_text?.starts_with === "c" ? [page()] : [], has_more: false, next_cursor: null };
+    });
+    const result = await listCanonicalRawFiles(cutoff, () => {});
+    expect(result).toHaveLength(1); expect(result[0]?.sha256).toBe(digest);
+    expect(notionRequest).toHaveBeenCalledTimes(16);
+    expect(JSON.stringify(result)).not.toContain("signature");
+    for (const call of vi.mocked(notionRequest).mock.calls) expect(call[2]).toMatchObject({ filter: { and: [{}, { timestamp: "created_time", created_time: { on_or_before: cutoff } }] } });
+  });
+  it("has_more=falseでも10,000件に達したpartitionは捨てて再分割する", async () => {
+    const records = Array.from({ length: 10_000 }, (_, n) => {
+      const p = page(); p.id = n.toString(16).padStart(32, "0");
+      p.properties.SHA256.rich_text[0]!.plain_text = `0${(n % 16).toString(16)}${n.toString(16).padStart(62, "0")}`;
+      return p;
+    });
+    vi.mocked(notionRequest).mockImplementation(async (_method, _url, body) => {
+      const b = body as { filter: { and: Array<{ rich_text?: { starts_with: string } }> }; start_cursor?: string };
+      const prefix = b.filter.and[0]!.rich_text!.starts_with, selected = records.filter((p) => p.properties.SHA256.rich_text[0]!.plain_text.startsWith(prefix));
+      const offset = b.start_cursor === undefined ? 0 : Number(b.start_cursor), next = offset + 100;
+      return { results: selected.slice(offset, next), has_more: next < selected.length, next_cursor: next < selected.length ? String(next) : null };
+    });
+    const result = await listCanonicalRawFiles(cutoff, () => {});
+    expect(result).toHaveLength(10_000);
+    expect(new Set(result.map((r) => r.sha256)).size).toBe(10_000);
+    expect(vi.mocked(notionRequest).mock.calls.some((call) => JSON.stringify(call[2]).includes('"starts_with":"00"'))).toBe(true);
+  });
+  it("cursor反復は追加query前に停止する", async () => {
+    vi.mocked(notionRequest).mockResolvedValue({ results: [], has_more: true, next_cursor: "same" });
+    await expect(listCanonicalRawFiles(cutoff, () => {})).rejects.toThrow("cursor repeated");
+    expect(notionRequest).toHaveBeenCalledTimes(2);
+  });
+  it("budget guardの停止を握り潰さない", async () => {
+    await expect(listCanonicalRawFiles(cutoff, () => { throw new Error("deadline"); })).rejects.toThrow("deadline");
+    expect(notionRequest).not.toHaveBeenCalled();
+  });
+  it("hostedURLはSHA batchのメモリ内で更新し、immutable metadata差分を検出する", async () => {
+    const p = page(), { sourceUrl: _url, ...expected } = parseCanonicalRawFile(p, "a".repeat(32));
+    vi.mocked(notionRequest).mockResolvedValue({ results: [p], has_more: false, next_cursor: null });
+    const result = await findCanonicalRawFileAttachments([digest]);
+    expect(result.get(digest)?.file.name).toBe(expected.filename);
+    expect(result.get(digest)?.file.url).toContain("signature");
+    expect(() => assertCanonicalRawMetadata(expected, result.get(digest)!.raw)).not.toThrow();
+    expect(vi.mocked(notionRequest).mock.calls[0]?.[1]).toContain("/query");
+    p.properties["サイズ"].number++;
+    expect(() => assertCanonicalRawMetadata(expected, parseCanonicalRawFile(p, "a".repeat(32)))).toThrow("metadataがmanifestから変化");
   });
 });

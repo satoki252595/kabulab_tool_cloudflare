@@ -31,6 +31,12 @@
 
 復旧用の大量処理は通常Cronと分け、上流の再取得を最小化する。Mac監視増分は両処理・ops合計で月120 PUT/240 GET・小JSON2個。歴史原本は最大24.73GBの追加保管で月約$0.285の保守的増分見積り（既存約4GB、無料10GB、$0.015/GB-monthの条件）。通信・照合時間は別で計測する。既存Workers Paid固定費を従量$0に含めない。
 
+02:30 JST追記: PR #351はCI成功後にmain `ef75b480`へmerge。0000誤紐付けを646A/core18156へ移し、D1全34列・Notion全property・元時計/数値不変を確認。日証金の旧20行は最新保存CSV（公表10/13、実申込日10/9、4,752行/4,349コード、SHA `e1f039abe7a824a3c37307be969c9bde007e670d135ce15bfa9ce2918be0f9e0`）に全件非掲載。最新値に補完せず、各旧実観測日で保持する。
+
+Macは同mainで両実処理exit0、開始/終了R2 receiptを全文照合する経路を実行した。夜間手動起動は20/21時の定時開始成功には数えず、次の開始窓を別に確認する。既存Notionの高ROE・業種別・直近開示・決算カレンダー・commercial-okビューの設定も読取り確認し、重複ビューは作らない。[現行のビューAPI](https://developers.notion.com/reference/create-view)に対応しているため、カタログの「API未対応」は修正する。
+
+保有明細schemaの初回要求は確認できず停止。読取り照合で全旧propertyが不変と確認し、[公式API制約](https://developers.notion.com/reference/update-property-schema-object)に沿ってoption改名をやめ、旧property退避→読戻し→正規列作成の二段へ修正する。旧pendingを消して同じ要求を再送しない。
+
 ## 最初の修正
 
 - 母集団overlayをN225鮮度ガードより前へ移動。開始窓・期限・HOLD時の停止は維持。

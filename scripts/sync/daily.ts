@@ -1,6 +1,7 @@
 /**
  * 日次データ取得エントリポイント (Node / GitHub Actions)
  *
+ * 株式と引け後JP legを更新。--context-onlyは保存JP leg + 米国3sourceを翌朝結合する。
  * core/rsi/swing が必要とする財務・指標・OHLCV を Yahoo から取得し D1 へ書き込む。
  * Yahoo は共有クライアントが `YAHOO_PROXY_BASE`(Worker エッジ)経由で取得し、上流の制限を尊重する。
  * 同じrunのYahoo再取得は行わない。D1 へは `createD1HttpDb`(CLOUDFLARE_* env)。
@@ -22,6 +23,8 @@ import {
 } from "../../src/cron/daily.js";
 import { requireYahooProxyForNodeSync, sharedEnv } from "../../src/shared/env.js";
 import { rootCauseMessage } from "../../src/shared/errors.js";
+import { r2GetVersion, r2Put } from "../vwap/lib/r2.js";
+import type { MacroJpLegStore } from "../../src/cron/macro-jp-leg.js";
 
 const MAX_CODES_PER_ERROR = 50;
 const MAX_ERROR_GROUPS = 20;
@@ -60,13 +63,19 @@ async function main(): Promise<void> {
   }
   // Node から Yahoo を直接叩く構成は 429 と全銘柄リトライを招くため、DB 接続前に拒否。
   requireYahooProxyForNodeSync();
+  // 必須設定はsource取得より前に検証。JP原本の持越しは既存R2 bucketへ日付別1object。
+  sharedEnv.R2_ACCOUNT_ID();
+  sharedEnv.R2_ACCESS_KEY_ID();
+  sharedEnv.R2_SECRET_ACCESS_KEY();
+  sharedEnv.R2_BUCKET();
+  const jpLegStore: MacroJpLegStore = { get: r2GetVersion, put: r2Put };
   const db = createDailyDb();
   if (args[0] === "--context-only") {
-    if (!await runMarketContextSync(db)) throw new Error("マクロ同期が不完全です");
+    if (!await runMarketContextSync(db, jpLegStore)) throw new Error("マクロ同期が不完全です");
     console.info("[sync-context] 完了 (株式全量同期は対象外)");
     return;
   }
-  const result = await runDailySync(db, { stocksOnly: args[0] === "--stocks-only" });
+  const result = await runDailySync(db, { stocksOnly: true, jpLegStore });
 
   if (result.failures.length > 0) {
     printFailureSummary(result.failures);

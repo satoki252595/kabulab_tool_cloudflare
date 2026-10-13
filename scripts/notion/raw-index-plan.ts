@@ -49,7 +49,7 @@ export function canonicalRawKey(raw: CanonicalRawFile, docId: string | null): st
   return `raw/${source[raw.source]}/${raw.datatype.toLowerCase()}/${raw.dataDate.slice(0, 4)}/${raw.dataDate}/${raw.scope}/${docId === null ? "_" : docId}/${raw.sha256.slice(0, 16)}.${ext}`;
 }
 
-function verifiedDocId(raw: CanonicalRawFile): string | null {
+export function verifiedDocId(raw: CanonicalRawFile): string | null {
   if (raw.source !== "EDINET" || raw.sourceUrl === null) return null;
   const url = new URL(raw.sourceUrl);
   const match = /^\/api\/v2\/documents\/(S[0-9A-Z]+)$/.exec(url.pathname);

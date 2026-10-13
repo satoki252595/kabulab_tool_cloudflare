@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { unzip } from "../services/edinet/zip.js";
 import {
   parseOverseasData,
   parseOverseasHtml,
@@ -45,6 +46,20 @@ function zip(bodies: Array<[string, string]>): Buffer {
 }
 
 const capture = (): OverseasCapture => ({ status: null, stopReason: null, candidates: [] });
+
+describe("原本ZIPラップの任意上限（既存reader契約を維持）", () => {
+  const html = fx("georows-america-othernorth-europe-S100W1LQ.html"), size = Buffer.byteLength(html);
+  it("単一memberを実サイズ以内で読み、展開不足予算は停止する", () => {
+    const body = zip([[first, html]]);
+    expect(unzip(body, { maxEntries: 1, maxExpandedBytes: size }).get(first)?.toString()).toBe(html);
+    expect(() => unzip(body, { maxEntries: 1, maxExpandedBytes: size - 1 })).toThrow("予算");
+  });
+  it("Mapで同名memberが潰れる前に重複2memberを拒否する", () => {
+    const body = zip([[first, html], [first, html]]);
+    expect(unzip(body).size).toBe(1); // 既存callerは従来どおり。bounded wrapperだけ厳密化。
+    expect(() => unzip(body, { maxEntries: 1, maxExpandedBytes: size * 2 })).toThrow("entry");
+  });
+});
 
 describe("ZIP 分割本文を1つの候補集合で判定", () => {
   it.each([

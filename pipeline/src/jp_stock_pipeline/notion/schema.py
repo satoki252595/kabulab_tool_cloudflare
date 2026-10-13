@@ -27,9 +27,8 @@ config.DB_REGISTRY を唯一の正とする。
 - データカタログページも子ページのタイトル一致で冪等に作成する
 
 ビューについて (§7):
-- 公開 Notion REST API はビュー（フィルタ/ソート済み表示）の作成に未対応のため、
-  推奨ビュー一覧を定数 RECOMMENDED_VIEWS として定義し、データカタログページに
-  手動作成手順を記載し、実行ログにも案内を出す
+- この互換クライアントは2022-06-28版を使用する。ビューは現行API/接続ツールまたは
+  Notion UIで作成する。推奨設定はRECOMMENDED_VIEWSとカタログに記載する。
 
 CLI: python -m jp_stock_pipeline.notion.schema [--dry-run] [--json-out <path>]
 実行後 {論理キー: DB ID} をリポジトリ直下の db_ids.json に書き出し stdout にも表示する
@@ -166,7 +165,7 @@ LISTING_STATUS_OPTIONS: tuple[str, ...] = ("上場", "監理", "整理", "上場
 
 CATALOG_TITLE = "📖 データカタログ"
 
-# §7: 公開 REST API がビュー作成未対応のため、手動作成を案内する推奨ビュー定義
+# §7: 現行ビューAPI/接続ツールまたはUIへ渡す推奨ビュー定義。
 RECOMMENDED_VIEWS: tuple[dict[str, str], ...] = (
     {
         "name": "高ROEランキング",
@@ -426,7 +425,7 @@ def ensure_all(client: NotionClient, settings: Settings) -> dict[str, str]:
     ensure_catalog_page(client, settings, setup, db_ids)
 
     # ビューは公開APIで作成できないため案内のみ (§7)
-    logger.info("推奨ビューは Notion UI で手動作成してください (API未対応):")
+    logger.info("推奨ビューは現行ビューAPI/接続ツールまたはNotion UIで設定してください:")
     for view in RECOMMENDED_VIEWS:
         logger.info("  - %s [%s]: %s", view["name"], DB_REGISTRY[view["db"]][1], view["setup"])
 
@@ -570,11 +569,12 @@ def catalog_blocks(db_ids: dict[str, str]) -> list[dict]:
         _heading(3, "開発者 / API利用者"),
         _bullet("Notion API でそのまま取得できます: POST https://api.notion.com/v1/databases/{database_id}/query"),
         _bullet("Python例: notion_client.Client(auth=TOKEN).databases.query(database_id=...)"),
-        *[_bullet(f"DB ID ({DB_REGISTRY[key][1]}): {db_id}") for key, db_id in db_ids.items()],
-        _heading(2, "推奨ビュー (手動作成手順)"),
+        *[_bullet(f"DB ID ({DB_REGISTRY[key][1]}): {db_id}")
+          for key, db_id in sorted(db_ids.items(), key=lambda item: tuple(DB_REGISTRY).index(item[0]))],
+        _heading(2, "推奨ビューと設定"),
         _para(
-            "Notion の公開 REST API はビュー作成に未対応のため、以下のビューは Notion UI から"
-            "手動で作成してください。"
+            "ビューは現行のNotion API/接続ツール、またはNotion UIから作成できます。"
+            "本セットアップの2022-06-28互換クライアントは本文更新だけを行います。推奨設定は以下です。"
         ),
         *[
             _bullet(f"{view['name']} [{DB_REGISTRY[view['db']][1]}]: {view['setup']}")

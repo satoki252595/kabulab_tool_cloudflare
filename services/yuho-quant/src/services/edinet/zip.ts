@@ -27,7 +27,7 @@ function findEocdOffset(buf: Buffer): number {
   throw new Error("ZIP: End Of Central Directory が見つかりません (壊れた ZIP)");
 }
 
-export function unzip(buf: Buffer): ZipEntries {
+export function unzip(buf: Buffer, limits?: { maxEntries: number; maxExpandedBytes: number }): ZipEntries {
   const eocd = findEocdOffset(buf);
   const totalEntries = buf.readUInt16LE(eocd + 10);
   const cdSize = buf.readUInt32LE(eocd + 12);
@@ -35,9 +35,12 @@ export function unzip(buf: Buffer): ZipEntries {
   if (cdOffset === 0xffffffff || cdSize === 0xffffffff || totalEntries === 0xffff) {
     throw new Error("ZIP: ZIP64 形式は未対応です");
   }
+  if (limits && (!Number.isSafeInteger(limits.maxEntries) || limits.maxEntries < 1 || !Number.isSafeInteger(limits.maxExpandedBytes) || limits.maxExpandedBytes < 0 || totalEntries > limits.maxEntries)) {
+    throw new Error("ZIP: entry/展開予算が不正または超過です");
+  }
 
   const entries: ZipEntries = new Map();
-  let p = cdOffset;
+  let p = cdOffset, expanded = 0;
   for (let n = 0; n < totalEntries; n++) {
     if (buf.readUInt32LE(p) !== CD_SIG) {
       throw new Error(`ZIP: Central Directory ヘッダ破損 (entry ${n})`);
@@ -49,6 +52,7 @@ export function unzip(buf: Buffer): ZipEntries {
     const extraLen = buf.readUInt16LE(p + 30);
     const commentLen = buf.readUInt16LE(p + 32);
     const lfhOffset = buf.readUInt32LE(p + 42);
+    if (limits && expanded + uncompSize > limits.maxExpandedBytes) throw new Error("ZIP: 宣言展開サイズが予算を超えます");
     if (lfhOffset === 0xffffffff || compSize === 0xffffffff) {
       throw new Error("ZIP: ZIP64 形式は未対応です");
     }
@@ -69,10 +73,11 @@ export function unzip(buf: Buffer): ZipEntries {
     if (method === 0) {
       data = Buffer.from(raw);
     } else if (method === 8) {
-      data = inflateRawSync(raw);
+      data = limits ? inflateRawSync(raw, { maxOutputLength: Math.max(1, limits.maxExpandedBytes - expanded) }) : inflateRawSync(raw);
     } else {
       throw new Error(`ZIP: 未対応の圧縮法 method=${method} (${name})`);
     }
+    expanded += data.length;
     if (data.length !== uncompSize) {
       throw new Error(
         `ZIP: 展開サイズ不一致 ${name} expected=${uncompSize} got=${data.length}`
