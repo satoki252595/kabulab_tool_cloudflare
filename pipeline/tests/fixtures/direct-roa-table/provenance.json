@@ -1,0 +1,395 @@
+[
+  {
+    "fixture": "6963-S100YF41.json",
+    "fixtureKind": "mechanically selected original tidy facts; partial document, not full ZIP; no synthesized table or value",
+    "source": "EDINET",
+    "license_tag": "commercial-ok",
+    "sourceFetchedAt": "2026-06-19T15:15:00.000+00:00",
+    "originalExpectedSHAAvailable": false,
+    "independentPriorSHACompared": false,
+    "docID": "S100YF41",
+    "code": "6963",
+    "edinetCode": "E01953",
+    "company": "ローム株式会社",
+    "fiscalYearEnd": "2026-03-31",
+    "url": "https://api.edinet-fsa.go.jp/api/v2/documents/S100YF41?type=1",
+    "fullZIPBytes": 1322750,
+    "fullZIPSHA256": "84cc6e927d5d1d282c5bc845b3dbe2c1dbd9bd390291f5dde37ce0f75d4e6fe6",
+    "member": "XBRL/PublicDoc/jpcrp030000-asr-001_E01953-000_2026-03-31_01_2026-06-19.xbrl",
+    "memberSHA256": "86c440d83fa6d6b5a757a35b1fe58a386d7acdc894ec309930f8d4ed2b520577",
+    "cutoutSHA256": "60379451fca0da5f7720a689dece8b22b1a3e2a0b7e4e78c1c335ff24685cb16",
+    "contexts": [
+      {
+        "id": "FilingDateInstant",
+        "serializedXML": "<xbrli:context xmlns:xbrli=\"http://www.xbrl.org/2003/instance\" xmlns:iso4217=\"http://www.xbrl.org/2003/iso4217\" xmlns:jpcrp030000-asr_E01953-000=\"http://disclosure.edinet-fsa.go.jp/jpcrp030000/asr/001/E01953-000/2026-03-31/01/2026-06-19\" xmlns:jpcrp_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\" xmlns:jpdei_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpdei/2013-08-31/jpdei_cor\" xmlns:jppfs_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jppfs/2025-11-01/jppfs_cor\" xmlns:link=\"http://www.xbrl.org/2003/linkbase\" xmlns:xbrldi=\"http://xbrl.org/2006/xbrldi\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" id=\"FilingDateInstant\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E01953-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:instant>2026-06-19</xbrli:instant>\n</xbrli:period>\n</xbrli:context>\n  ",
+        "serializedSHA256": "d8f5b57cba7b7f663ed3099ea70ecd5831527a7db18a7777582f59b00949c4e7"
+      },
+      {
+        "id": "CurrentYearDuration",
+        "serializedXML": "<xbrli:context xmlns:xbrli=\"http://www.xbrl.org/2003/instance\" xmlns:iso4217=\"http://www.xbrl.org/2003/iso4217\" xmlns:jpcrp030000-asr_E01953-000=\"http://disclosure.edinet-fsa.go.jp/jpcrp030000/asr/001/E01953-000/2026-03-31/01/2026-06-19\" xmlns:jpcrp_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\" xmlns:jpdei_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpdei/2013-08-31/jpdei_cor\" xmlns:jppfs_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jppfs/2025-11-01/jppfs_cor\" xmlns:link=\"http://www.xbrl.org/2003/linkbase\" xmlns:xbrldi=\"http://xbrl.org/2006/xbrldi\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" id=\"CurrentYearDuration\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E01953-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:startDate>2025-04-01</xbrli:startDate>\n<xbrli:endDate>2026-03-31</xbrli:endDate>\n</xbrli:period>\n</xbrli:context>\n  ",
+        "serializedSHA256": "8be74b1c84a614f0ad1109834cd83054da991391dbbec6b983bd9e882360a4f7"
+      }
+    ],
+    "facts": [
+      {
+        "element": "jpdei_cor:EDINETCodeDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "8444962f102f22cf4019c8ee32a4d94745cc9c86e0b2cbfec8abe114366bad37",
+        "serializedElementsSHA256": [
+          "ece1570aecb285ddece7b96984d64a005472790b22b9a604674ce901da9930f1"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:SecurityCodeDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "4a0ebae5437954150baf4688727b36560cdb7813a875f1adadf88a67cd6e8aee",
+        "serializedElementsSHA256": [
+          "c25cb0d623d78d91da2936c0b1bd69aa2d6c83407c4a8a49daaad4ac2bf9dd66"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:FilerNameInJapaneseDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "a457fbeb33f74256f92e000e44c62470d75896d245c6e6161fccd0267349c815",
+        "serializedElementsSHA256": [
+          "67964e0b90d95eb9ab86ce8bf838d062e4a8e6828e38fb2e3dc4ee3d1d96d6bf"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:WhetherConsolidatedFinancialStatementsArePreparedDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "serializedElementsSHA256": [
+          "b619cad9af59f8befc96399282ddb5e7da628c2d3610f4963010f5cff0a46605"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:CurrentFiscalYearStartDateDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "866d562d83a77144c090ae01fef5e5dc5d322dfdcb968ee04e0fa262fe1b2619",
+        "serializedElementsSHA256": [
+          "252eea7f5f37238746519cb99099cfa451539a37ecb67eb002fcea3ea2c18186"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:CurrentPeriodEndDateDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "aa2fbbd6ae6f33b7882cdc675528f73b7c9385f6735a8a099130f111a161c1d3",
+        "serializedElementsSHA256": [
+          "2642a0bebede09f1c3c037b1fa5e4962a8c8fdab7ac9725e68c39eb1f41ae64f"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:TypeOfCurrentPeriodDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "939342fb94f9160a37f9edc0510fced5e779a41117267f426d828d61588af763",
+        "serializedElementsSHA256": [
+          "7f5b013883e00bc7f9b13aa38c0f89dfe98596186aed810f8f3017016454c583"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:CurrentFiscalYearEndDateDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "aa2fbbd6ae6f33b7882cdc675528f73b7c9385f6735a8a099130f111a161c1d3",
+        "serializedElementsSHA256": [
+          "05d7a45ef68dc15e2969244f6aa8d518197c2f8a8e141cefb3a3af09a8711029"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpcrp_cor:ManagementAnalysisOfFinancialPositionOperatingResultsAndCashFlowsTextBlock",
+        "context": "FilingDateInstant",
+        "valueSHA256": "fb4099d60915acbaac1d4702f829388bcaefcbe1de4ec16033d6fe35b91d5e0b",
+        "serializedElementsSHA256": [
+          "62ffc23280cf764ab66ef47d05b605eda4a4d056966cb4aaa0ee370a5d7ac76d"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jppfs_cor:NetSales",
+        "context": "CurrentYearDuration",
+        "valueSHA256": "10aedf97d8247b7889752b89a55262e5d6a4bf0994e7a7e81916739a63689675",
+        "serializedElementsSHA256": [
+          "4b097aa537c7c1686950cb1a179154f8d540b6a821c1a6c1c0c3b3f2946e8b72",
+          "6b990e71f94d14cae4223c6c2510a6a462e74ed76feff3c50c14bfe942b4dc8b"
+        ],
+        "nativeDuplicateCount": 2
+      }
+    ]
+  },
+  {
+    "fixture": "8014-S100YBIN.json",
+    "fixtureKind": "mechanically selected original tidy facts; partial document, not full ZIP; no synthesized table or value",
+    "source": "EDINET",
+    "license_tag": "commercial-ok",
+    "sourceFetchedAt": "2026-06-16T15:31:00.000+00:00",
+    "originalExpectedSHAAvailable": false,
+    "independentPriorSHACompared": false,
+    "docID": "S100YBIN",
+    "code": "8014",
+    "edinetCode": "E02509",
+    "company": "蝶理株式会社",
+    "fiscalYearEnd": "2026-03-31",
+    "url": "https://api.edinet-fsa.go.jp/api/v2/documents/S100YBIN?type=1",
+    "fullZIPBytes": 1271565,
+    "fullZIPSHA256": "160cae1fed1392bddf45781e7e8fd63263cdd04b12ab81971f8625ef5d90f1d9",
+    "member": "XBRL/PublicDoc/jpcrp030000-asr-001_E02509-000_2026-03-31_01_2026-06-16.xbrl",
+    "memberSHA256": "4cd4654736df9f396d62284d66e4c57139dc7c55bc422099059870fb84d2fcb3",
+    "cutoutSHA256": "1f534f2bf5a53924b7afa6e7683bbc366088064a6a162219698f2c3fc4a72a99",
+    "contexts": [
+      {
+        "id": "FilingDateInstant",
+        "serializedXML": "<xbrli:context xmlns:xbrli=\"http://www.xbrl.org/2003/instance\" xmlns:iso4217=\"http://www.xbrl.org/2003/iso4217\" xmlns:jpcrp030000-asr_E02509-000=\"http://disclosure.edinet-fsa.go.jp/jpcrp030000/asr/001/E02509-000/2026-03-31/01/2026-06-16\" xmlns:jpcrp_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\" xmlns:jpdei_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpdei/2013-08-31/jpdei_cor\" xmlns:jppfs_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jppfs/2025-11-01/jppfs_cor\" xmlns:link=\"http://www.xbrl.org/2003/linkbase\" xmlns:xbrldi=\"http://xbrl.org/2006/xbrldi\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" id=\"FilingDateInstant\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E02509-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:instant>2026-06-16</xbrli:instant>\n</xbrli:period>\n</xbrli:context>\n  ",
+        "serializedSHA256": "fb29d1be736b008a00e4d6afa0b8fd2f98ee71fd4cb005d26255a355fb307470"
+      },
+      {
+        "id": "CurrentYearDuration",
+        "serializedXML": "<xbrli:context xmlns:xbrli=\"http://www.xbrl.org/2003/instance\" xmlns:iso4217=\"http://www.xbrl.org/2003/iso4217\" xmlns:jpcrp030000-asr_E02509-000=\"http://disclosure.edinet-fsa.go.jp/jpcrp030000/asr/001/E02509-000/2026-03-31/01/2026-06-16\" xmlns:jpcrp_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\" xmlns:jpdei_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpdei/2013-08-31/jpdei_cor\" xmlns:jppfs_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jppfs/2025-11-01/jppfs_cor\" xmlns:link=\"http://www.xbrl.org/2003/linkbase\" xmlns:xbrldi=\"http://xbrl.org/2006/xbrldi\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" id=\"CurrentYearDuration\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E02509-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:startDate>2025-04-01</xbrli:startDate>\n<xbrli:endDate>2026-03-31</xbrli:endDate>\n</xbrli:period>\n</xbrli:context>\n  ",
+        "serializedSHA256": "e730af196cdc3de174ec3b161e837f2a45665212a3a82ccb950bfdfd927a1e8a"
+      }
+    ],
+    "facts": [
+      {
+        "element": "jpdei_cor:EDINETCodeDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "2481f4bf60e3a9d08c438f1c5c598a1cf64903d823a27a30412aefce00be9755",
+        "serializedElementsSHA256": [
+          "001210d89899c4c79d01225ae668e19511acbf517c2cfff28a12a258938b97d9"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:SecurityCodeDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "e41ab746aebee7f16b209c353ec0ca7127394ab6fa6a578bfa0336c7186a6e1c",
+        "serializedElementsSHA256": [
+          "43a2de869ef978846678e4a646acf74beda4572c30e48559bbbd6c6a9d8c3147"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:FilerNameInJapaneseDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "740a66c4be155f5669973037f8eb56e0d0a9122dceb1986b756a722bb4e16087",
+        "serializedElementsSHA256": [
+          "8461c192b8538816cd4da53f36d7bb891b8c0e97ccd60b36680fdb8f3018516e"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:WhetherConsolidatedFinancialStatementsArePreparedDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "serializedElementsSHA256": [
+          "49bf3f1e7cf5746a9c277e42961d1087fca3b07cb6211d87824611dab4261072"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:CurrentFiscalYearStartDateDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "866d562d83a77144c090ae01fef5e5dc5d322dfdcb968ee04e0fa262fe1b2619",
+        "serializedElementsSHA256": [
+          "d54cb469c9e605740f9247caf5519ccf5c19df53393c3a5702e6b197227a5ab4"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:CurrentPeriodEndDateDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "aa2fbbd6ae6f33b7882cdc675528f73b7c9385f6735a8a099130f111a161c1d3",
+        "serializedElementsSHA256": [
+          "6908d434da6dd644a637c4512692c489380c540e96d31d8058e74d4fc5e2c544"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:TypeOfCurrentPeriodDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "939342fb94f9160a37f9edc0510fced5e779a41117267f426d828d61588af763",
+        "serializedElementsSHA256": [
+          "04694b2e74c765b780e6fc6ff21ec3184de37471ea5a612540afd46db79ecb11"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:CurrentFiscalYearEndDateDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "aa2fbbd6ae6f33b7882cdc675528f73b7c9385f6735a8a099130f111a161c1d3",
+        "serializedElementsSHA256": [
+          "a6375f6cba8ce3dc00ea3b53069047d7115d87b61c9ed5973693111cf6fbc0d8"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpcrp_cor:ManagementAnalysisOfFinancialPositionOperatingResultsAndCashFlowsTextBlock",
+        "context": "FilingDateInstant",
+        "valueSHA256": "d349d4b3444efc354b8a8f8af832c180b134a7321919d8299132d02e9b585c5b",
+        "serializedElementsSHA256": [
+          "278866b57a3b557cc264cd4ebebca0e2a08a3d080be7a5d09129624aa3792e73"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jppfs_cor:NetSales",
+        "context": "CurrentYearDuration",
+        "valueSHA256": "f1a5148c3762b0b84685292fe35e9ec8ba631f78490b262d3cdb46b8b67cc022",
+        "serializedElementsSHA256": [
+          "b654c53af0c89d11be0754498386b3b60cfac578ed71bbe916232fd1dce5e411",
+          "0de5e8567ef33c25e15e88c637151ee637c6281d685da42c2a13e7de3ebc559d"
+        ],
+        "nativeDuplicateCount": 2
+      }
+    ]
+  },
+  {
+    "fixture": "8593-S100YF4V.json",
+    "fixtureKind": "mechanically selected original tidy facts; partial document, not full ZIP; no synthesized table or value",
+    "source": "EDINET",
+    "license_tag": "commercial-ok",
+    "sourceFetchedAt": "2026-06-23T10:06:00.000+00:00",
+    "originalExpectedSHAAvailable": false,
+    "independentPriorSHACompared": false,
+    "docID": "S100YF4V",
+    "code": "8593",
+    "edinetCode": "E04788",
+    "company": "三菱ＨＣキャピタル株式会社",
+    "fiscalYearEnd": "2026-03-31",
+    "url": "https://api.edinet-fsa.go.jp/api/v2/documents/S100YF4V?type=1",
+    "fullZIPBytes": 2624448,
+    "fullZIPSHA256": "c8d5f6358461b4f88b57664a9daec3e9680a5634a28fb8e4ada9a82d675a8294",
+    "member": "XBRL/PublicDoc/jpcrp030000-asr-001_E04788-000_2026-03-31_01_2026-06-23.xbrl",
+    "memberSHA256": "18d7c8c68491a9a72bd66da17b60652547f9552cb244cd0842a44639becfdc9b",
+    "cutoutSHA256": "1f6b6159ed8f0fc702d70a156752e15d66b109358cf45778c43d94adebb943df",
+    "contexts": [
+      {
+        "id": "FilingDateInstant",
+        "serializedXML": "<xbrli:context xmlns:xbrli=\"http://www.xbrl.org/2003/instance\" xmlns:iso4217=\"http://www.xbrl.org/2003/iso4217\" xmlns:jpcrp030000-asr_E04788-000=\"http://disclosure.edinet-fsa.go.jp/jpcrp030000/asr/001/E04788-000/2026-03-31/01/2026-06-23\" xmlns:jpcrp_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\" xmlns:jpdei_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpdei/2013-08-31/jpdei_cor\" xmlns:jppfs_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jppfs/2025-11-01/jppfs_cor\" xmlns:link=\"http://www.xbrl.org/2003/linkbase\" xmlns:utr=\"http://www.xbrl.org/2009/utr\" xmlns:xbrldi=\"http://xbrl.org/2006/xbrldi\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" id=\"FilingDateInstant\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E04788-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:instant>2026-06-23</xbrli:instant>\n</xbrli:period>\n</xbrli:context>\n  ",
+        "serializedSHA256": "6798b976354c9a2b622f0600d23818a52a7c9a7edd74df6d64c925908e2b2d76"
+      },
+      {
+        "id": "CurrentYearDuration",
+        "serializedXML": "<xbrli:context xmlns:xbrli=\"http://www.xbrl.org/2003/instance\" xmlns:iso4217=\"http://www.xbrl.org/2003/iso4217\" xmlns:jpcrp030000-asr_E04788-000=\"http://disclosure.edinet-fsa.go.jp/jpcrp030000/asr/001/E04788-000/2026-03-31/01/2026-06-23\" xmlns:jpcrp_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2025-11-01/jpcrp_cor\" xmlns:jpdei_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jpdei/2013-08-31/jpdei_cor\" xmlns:jppfs_cor=\"http://disclosure.edinet-fsa.go.jp/taxonomy/jppfs/2025-11-01/jppfs_cor\" xmlns:link=\"http://www.xbrl.org/2003/linkbase\" xmlns:utr=\"http://www.xbrl.org/2009/utr\" xmlns:xbrldi=\"http://xbrl.org/2006/xbrldi\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" id=\"CurrentYearDuration\">\n<xbrli:entity>\n<xbrli:identifier scheme=\"http://disclosure.edinet-fsa.go.jp\">E04788-000</xbrli:identifier>\n</xbrli:entity>\n<xbrli:period>\n<xbrli:startDate>2025-04-01</xbrli:startDate>\n<xbrli:endDate>2026-03-31</xbrli:endDate>\n</xbrli:period>\n</xbrli:context>\n  ",
+        "serializedSHA256": "b1806b12a2e7db2645ef8572a690470b76f0c39939fd30531b83b05d986189b6"
+      }
+    ],
+    "facts": [
+      {
+        "element": "jpdei_cor:EDINETCodeDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "942abea468fe787e0ca4fbd0a1d20033931b939781a6cdca46ac31ebe1eb6b08",
+        "serializedElementsSHA256": [
+          "d46d283397a701b7b684ab004c9a02f756dccffa372a06089638f24c333826c7"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:SecurityCodeDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "e37087cdf88b07043da392e010b82f1131874f5146937e839ff6951ea785ecb7",
+        "serializedElementsSHA256": [
+          "d2cbd6e3494fafd8ba1c1a6a4cbedcb34c99b8ca4ce96b285e147e24ce8c65ab"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:FilerNameInJapaneseDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "eb3d1fa82ba03285f360e9a40dde002f5ad41fc0cfe43ea13fd8812136f49c0a",
+        "serializedElementsSHA256": [
+          "3666618a137d52f61df337705bb89091c11d32a692243d41a46b43fc623ce010"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:WhetherConsolidatedFinancialStatementsArePreparedDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "serializedElementsSHA256": [
+          "631bae80798a9ce2de23bd455d8702502ac2d79f57305f6352ad93e48ffa501a"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:CurrentFiscalYearStartDateDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "866d562d83a77144c090ae01fef5e5dc5d322dfdcb968ee04e0fa262fe1b2619",
+        "serializedElementsSHA256": [
+          "9e8c4b5a8708866a3ae85362cb28b288e32d211542cd38c6eedabbd7c2cdeec1"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:CurrentPeriodEndDateDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "aa2fbbd6ae6f33b7882cdc675528f73b7c9385f6735a8a099130f111a161c1d3",
+        "serializedElementsSHA256": [
+          "5cc25d9e2ba02a15264f809938d3dc6bbb09321aa58aed7aa9cf407ed11363c3"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:TypeOfCurrentPeriodDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "939342fb94f9160a37f9edc0510fced5e779a41117267f426d828d61588af763",
+        "serializedElementsSHA256": [
+          "1d7e4aeaccbbfc609e6aed8b83a4732a41cfc0434726d99eb228bb346113263d"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpdei_cor:CurrentFiscalYearEndDateDEI",
+        "context": "FilingDateInstant",
+        "valueSHA256": "aa2fbbd6ae6f33b7882cdc675528f73b7c9385f6735a8a099130f111a161c1d3",
+        "serializedElementsSHA256": [
+          "e6ff9fba1f853fff8870d8d622fdaee7bae830c97ed10a32b1fe905e10f5e6d0"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpcrp_cor:BusinessPolicyBusinessEnvironmentIssuesToAddressEtcTextBlock",
+        "context": "FilingDateInstant",
+        "valueSHA256": "a1c27c7939e4a2d86b08024c91b2b07614190c5717c2fab6fde710399a33d97e",
+        "serializedElementsSHA256": [
+          "2d66fe2e395e6bbd9d6deac731e265ae330c58989bfb5254f7366e36e999b7b6"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpcrp_cor:ManagementAnalysisOfFinancialPositionOperatingResultsAndCashFlowsTextBlock",
+        "context": "FilingDateInstant",
+        "valueSHA256": "acd2210b1e1f7094bafd987742fb9dfc7c6106bc9812e5b63ec4fe570109c653",
+        "serializedElementsSHA256": [
+          "dedd4749b5bd3a21f4467c8e22090c5e8c1f86c2c615ee259841ae97713e356d"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jpcrp_cor:RemunerationForDirectorsAndOtherOfficersTextBlock",
+        "context": "FilingDateInstant",
+        "valueSHA256": "b98c8bdc59e3f786a5fb4bee3154f5cbeef4cb9e177853d8c480b1565dfb0cbc",
+        "serializedElementsSHA256": [
+          "3ffdc3da15063f8925e6e714315ad22d69149aba4a582f2de83a8b12f67bdf26"
+        ],
+        "nativeDuplicateCount": 1
+      },
+      {
+        "element": "jppfs_cor:NetSales",
+        "context": "CurrentYearDuration",
+        "valueSHA256": "ec4e3337388097718b04d72e8c58234fb2d47fe0782e97d3ef1b4075b5455c50",
+        "serializedElementsSHA256": [
+          "152fbbdc7fb2971bee53919f0f2f5c2eeaf71550f43d76acde2b67dfd369e45c",
+          "152fbbdc7fb2971bee53919f0f2f5c2eeaf71550f43d76acde2b67dfd369e45c"
+        ],
+        "nativeDuplicateCount": 2
+      }
+    ]
+  }
+]

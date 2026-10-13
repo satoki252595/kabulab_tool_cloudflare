@@ -256,6 +256,28 @@ def test_hosted_unknown_readback_is_not_retried(client, monkeypatch):
     assert get.call_count == 1
 
 
+@pytest.mark.parametrize("length,chunks,accepted", [
+    ("19", [b"whole-file-protocol"], True),
+    ("21", [], False),
+    (None, [b"whole-file-protocol", b"more"], False),
+])
+def test_hosted_readback_optional_size_cap_is_streamed_once_and_closed(client, monkeypatch, length, chunks, accepted):
+    from types import SimpleNamespace
+
+    closed = []
+    response = SimpleNamespace(status_code=200, headers={} if length is None else {"Content-Length": length},
+                               iter_content=lambda **kw: iter(chunks), close=lambda: closed.append(True))
+    get = Mock(return_value=response)
+    monkeypatch.setattr(module.requests, "get", get)
+    if accepted:
+        assert client.download_file("https://files.example/attachment", max_bytes=20) == b"whole-file-protocol"
+    else:
+        with pytest.raises(module.NotionConfigError, match="サイズ上限"):
+            client.download_file("https://files.example/attachment", max_bytes=20)
+    assert closed == [True]
+    get.assert_called_once_with("https://files.example/attachment", timeout=120, allow_redirects=False, stream=True)
+
+
 class TestPostJsonErrorDetail:
     """4xx の応答本文を握り潰さない。どの権限が足りないかは本文にしか無い。"""
 

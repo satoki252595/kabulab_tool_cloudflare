@@ -223,6 +223,7 @@ class Settings:
         )
     )
     cloud_store: CloudStoreSettings = field(default_factory=CloudStoreSettings)
+    notion_archive_page_id: str | None = None
 
     def db_id(self, key: str) -> str:
         if key not in DB_REGISTRY:
@@ -270,4 +271,5 @@ def load_settings(*, dry_run: bool | None = None, env: dict[str, str] | None = N
         db_ids=_load_db_ids(env),
         local_store=_load_local_store(env),
         cloud_store=_load_cloud_store(env),
+        notion_archive_page_id=env.get("NOTION_ARCHIVE_PAGE_ID") or None,
     )
