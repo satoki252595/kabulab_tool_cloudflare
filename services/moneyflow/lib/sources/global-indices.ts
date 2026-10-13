@@ -152,6 +152,7 @@ function catalogEntry(key: string): GlobalIndexCatalogEntry {
 export interface GlobalIndexFetchResult {
   /** カタログキー (`GlobalIndexCatalogEntry.key`) */
   key: string;
+  /** 要求したカタログsymbol。応答meta.symbolはrawと解析snapshotに保持する。 */
   yahooSymbol: string;
   /** レスポンスボディの生テキスト (パース前。フィクスチャ化・アーカイブ用) */
   raw: string;
@@ -306,7 +307,13 @@ export function parseGlobalIndexWeeklyChart(
   const meta = asRecord(result.meta, `${label}.meta`);
 
   const symbol = asString(meta.symbol, `${label}.meta.symbol`);
-  if (symbol !== expectedYahooSymbol) {
+  // Yahoo lists both JPY=X and USDJPY=X as USD/JPY quoted in JPY. The saved
+  // 2026-10-13 JPY=X response identifies USDJPY=X explicitly; retain that symbol.
+  // https://finance.yahoo.com/quote/JPY%3DX/ /quote/USDJPY%3DX/
+  const explicitUsdJpyAlias = key === "jpy" && expectedYahooSymbol === "JPY=X" && symbol === "USDJPY=X" &&
+    meta.currency === "JPY" && meta.instrumentType === "CURRENCY" && meta.exchangeName === "CCY" &&
+    meta.shortName === "USD/JPY" && meta.longName === "USD/JPY";
+  if (symbol !== expectedYahooSymbol && !explicitUsdJpyAlias) {
     throw new Error(
       `${label}: meta.symbol が期待値と不一致です (期待="${expectedYahooSymbol}", 実際="${symbol}")`
     );

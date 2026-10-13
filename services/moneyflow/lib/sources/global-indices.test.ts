@@ -22,6 +22,7 @@ import { MoneyflowFetchError } from "../source-spec.js";
  * skip し、フィクスチャ不要のテストは常に走らせる。
  */
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,6 +54,44 @@ const DATE = "2026-09-27";
 const fixturePath = (key: string) => join(FIXTURES_DIR, `global-indices-${key}-${DATE}.json`);
 const FIXTURE_KEYS = ["gspc", "n225", "jpy", "eurusd", "ftse", "gold", "tnx", "topix-etf", "sse", "symbol-not-found"];
 const hasFixtures = FIXTURE_KEYS.every((key) => existsSync(fixturePath(key)));
+const jpyAliasFixture = join(FIXTURES_DIR, "global-indices-jpy-alias-2026-10-13.json");
+
+describe.skipIf(!existsSync(jpyAliasFixture))("JPY=X canonical alias (保存実原本、source GET0)", () => {
+  const raw = () => {
+    const bytes = readFileSync(jpyAliasFixture);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe("38bb88a5852e03e9ed13f195ce8b7bd2ddb35110d50095d8561cab8f174c3570");
+    return bytes.toString("utf8");
+  };
+  it("USD/JPY・JPY・CURRENCY・CCYを照合し、観測したUSDJPY=Xをそのまま保持する", () => {
+    const parsed = parseGlobalIndexWeeklyChart(raw(), "jpy", "JPY=X");
+    expect(parsed.yahooSymbol).toBe("USDJPY=X");
+    expect(parsed.currency).toBe("JPY");
+    expect(parsed.instrumentType).toBe("CURRENCY");
+    expect(parsed.longName).toBe("USD/JPY");
+    expect(parsed.bars.length).toBeGreaterThan(0);
+  });
+  it("通常fetchは要求JPY=Xを一度送り、生rawと解析snapshotのUSDJPY=Xを保持する", async () => {
+    fetchYahooChartRawMock.mockReset();
+    const source = raw();
+    fetchYahooChartRawMock.mockResolvedValue(new Response(source, { status: 200 }));
+    const result = await fetchGlobalIndexWeeklyChart("jpy", "6mo");
+    expect(result.yahooSymbol).toBe("JPY=X");
+    expect(result.raw).toBe(source);
+    expect(parseGlobalIndexWeeklyChart(result.raw, result.key, result.yahooSymbol).yahooSymbol).toBe("USDJPY=X");
+    expect(fetchYahooChartRawMock).toHaveBeenCalledExactlyOnceWith("JPY=X", "6mo", "1wk", false);
+  });
+  it.each([
+    ["symbol", "JPYUSD=X"], ["currency", "USD"], ["instrumentType", "INDEX"],
+    ["exchangeName", "OTHER"], ["shortName", "JPY/USD"], ["longName", "JPY/USD"],
+  ])("aliasの%sが異なれば受理しない", (field, value) => {
+    const changed = JSON.parse(raw()); changed.chart.result[0].meta[field] = value;
+    expect(() => parseGlobalIndexWeeklyChart(JSON.stringify(changed), "jpy", "JPY=X")).toThrow(/meta.symbol が期待値と不一致/);
+  });
+  it("別key/別要求symbolにはaliasを広げない", () => {
+    expect(() => parseGlobalIndexWeeklyChart(raw(), "eurusd", "JPY=X")).toThrow(/meta.symbol が期待値と不一致/);
+    expect(() => parseGlobalIndexWeeklyChart(raw(), "jpy", "EURUSD=X")).toThrow(/meta.symbol が期待値と不一致/);
+  });
+});
 
 /**
  * 実フィクスチャ本文。import 時には読まず、参照された時点で読む
