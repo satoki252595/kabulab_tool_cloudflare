@@ -24,7 +24,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from ..cloud_store import slo
 from ..cloud_store.d1 import D1Error, D1Store
@@ -32,6 +32,7 @@ from ..collectors.tdnet_yanoshin import BASE_URL
 from ..contracts.stock_code import source_code_to_ticker
 from ..http import FetchError, fetch
 from ..models import JST
+from ..contracts.market_calendar import latest_session_date
 from .freshness_probe import CAPACITY_DATASET
 from .runner import STATUS_SUCCESS, JobContext, build_parser, main_exit, run_job
 
@@ -141,6 +142,60 @@ _INGEST_CODE_SQL = (
     " WHERE instrument_type = ? OR (is_active = ? AND instrument_type IS NULL)"
 )
 _EXISTING_TDNET_SQL = "SELECT tdnet_id FROM ir_disclosures WHERE pubdate >= ?"
+
+
+# 小さな断面3表だけをPKで結合する。OHLCV全走査・R2列挙は行わない。
+# MAXが1銘柄だけ進んだ日に、残りの凍結/未登録を見逃さない。
+STOCK_COVERAGE_SQL = (
+    "SELECT COUNT(*) AS expected,"
+    " SUM(CASE WHEN f.data_date IN (?, ?) AND f.price > 0 THEN 1 ELSE 0 END) AS prices,"
+    " SUM(CASE WHEN i.latest_date IN (?, ?) AND i.latest_close > 0 THEN 1 ELSE 0 END) AS indicators,"
+    " SUM(CASE WHEN p.as_of IN (?, ?) AND p.source_max_date = p.as_of AND p.bars > 0 THEN 1 ELSE 0 END) AS momentum,"
+    " MIN(CASE WHEN f.data_date IS NULL OR f.data_date NOT IN (?, ?) OR f.price IS NULL OR f.price <= 0 THEN s.code END) AS price_sample,"
+    " (SELECT MAX(date) FROM swing_market_context) AS macro_date"
+    " FROM core_stocks s"
+    " LEFT JOIN core_stock_financials f ON f.stock_id = s.id"
+    " LEFT JOIN swing_stock_indicators i ON i.stock_id = s.id"
+    " LEFT JOIN p_momentum p ON p.stock_id = s.id"
+    " WHERE s.is_active = 1 AND s.instrument_type = 'equity'"
+)
+
+
+def expected_stock_date(now: datetime) -> date:
+    """23:30 JST完了期限の前は前取引日、以降は当取引日を要求する。"""
+    local = now.astimezone(JST)
+    day = local.date()
+    if (local.hour, local.minute) < (23, 30):
+        day -= timedelta(days=1)
+    return latest_session_date(day)
+
+
+def _check_stock_coverage(store: D1Store, problems: list[str], *, now: datetime | None = None) -> None:
+    current = now or datetime.now(UTC)
+    try:
+        expected_date = expected_stock_date(current).isoformat()
+        # contextは同日22:00 UTCが保存期限。JPX/NYSE共通取引日だけが対象。
+        utc = current.astimezone(UTC)
+        macro_day = utc.date() if utc.hour >= 22 else utc.date() - timedelta(days=1)
+        macro_date = latest_session_date(macro_day, ("JPX", "NYSE")).isoformat()
+        # 期限前に既に完了した当日分も受け入れる。未来の日付は受け入れない。
+        today = latest_session_date(current.astimezone(JST).date()).isoformat()
+        rows = store.query(STOCK_COVERAGE_SQL, [expected_date, today] * 4)
+    except (D1Error, ValueError) as exc:
+        problems.append(f"株式カバレッジを判定できない: {exc}")
+        return
+    if len(rows) != 1 or rows[0].get("expected") in (None, 0):
+        problems.append("株式カバレッジ: active普通株の母集団を確認できない")
+        return
+    row = rows[0]
+    expected = row["expected"]
+    for feature in ("prices", "indicators", "momentum"):
+        observed = row.get(feature)
+        if observed != expected:
+            problems.append(f"株式カバレッジ {feature}: {expected_date}〜{today}={observed}/{expected}"
+                            f"（価格欠測例={row.get('price_sample')}）")
+    if row.get("macro_date") != macro_date:
+        problems.append(f"マクロ基準日: 実保存={row.get('macro_date')} 予定={macro_date}")
 
 
 @dataclass(frozen=True)
@@ -556,6 +611,7 @@ def execute(ctx: JobContext) -> None:
     _check_probe_alive(store, problems)
     _check_idle_runs(store, problems)
     _check_capacity(store, problems)
+    _check_stock_coverage(store, problems)
     _check_ir_pdf_archive(store, problems)
     _check_ir_universe_gap(store, problems)
 

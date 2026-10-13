@@ -113,6 +113,35 @@ describe("extractTextSections", () => {
     expect(got[0]!.sectionKey).toBe("dividend_policy");
   });
 
+  it.each([
+    ["securities_note", "有価証券関係", "NotesSecurities"],
+    ["rental_property", "賃貸等不動産関係", "NotesRealEstateForLeaseEtc"],
+    ["segment_info", "セグメント情報等", "NotesSegmentInformationEtc"],
+    ["subsequent_events", "重要な後発事象", "NotesSignificantEventsAfterReportingPeriod"],
+    ["related_parties", "関連当事者情報", "NotesRelatedParties"],
+  ])("%sは区分がその他でも実在する連結注記を当期・連結優先で抽出する", (key, title, element) => {
+    // S100Z2Z6等の実ラベル/要素ID。値は選択検証用の構造データで原本文は含めない。
+    const consolidated = row({
+      elementId: `jpcrp_cor:${element}ConsolidatedFinancialStatementsTextBlock`,
+      itemName: `${title}、連結財務諸表 [テキストブロック]`,
+      relativeYear: "当期", value: "<p>当期連結</p>",
+    });
+    const individual = row({
+      elementId: `jpcrp_cor:${element}FinancialStatementsTextBlock`,
+      itemName: `${title}、財務諸表 [テキストブロック]`,
+      relativeYear: "当期", value: "<p>当期個別</p>",
+    });
+    const prior = { ...consolidated, relativeYear: "前期", value: "<p>前期連結</p>" };
+    for (const rows of [[individual, prior, consolidated], [consolidated, prior, individual]]) {
+      const got = extractTextSections(rows);
+      expect(got).toHaveLength(1);
+      expect(got[0]).toMatchObject({ sectionKey: key, text: "当期連結", elementId: consolidated.elementId });
+    }
+    expect(extractTextSections([prior, individual])[0]?.text).toBe("当期個別");
+    expect(extractTextSections([individual])[0]?.text).toBe("当期個別");
+    expect(extractTextSections([{ ...consolidated, elementId: "jpcrp_cor:UnknownTextBlock" }])).toEqual([]);
+  });
+
   it("剥がして空になる値は行を作らない", () => {
     const got = extractTextSections([
       row({ itemName: "研究開発活動", value: "<p> <br/></p>" }),

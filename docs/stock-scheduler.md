@@ -19,7 +19,7 @@ Trigger へ移す。実実行は従来どおり GitHub Actions (`stock-sync.yml`
 
 ## 設計
 
-CF cron 4 本 (`wrangler.toml` `[triggers]`、曜日は `MON-FRI` 名前指定。
+CF cron 6 本 (`wrangler.toml` `[triggers]`、曜日は `MON-FRI` 名前指定。
 CF の数字曜日は 1=日曜で GitHub と違うため):
 
 | cron (UTC) | 処理 (`src/scheduler/stock.ts`) |
@@ -28,6 +28,8 @@ CF の数字曜日は 1=日曜で GitHub と違うため):
 | `35 14 * * MON-FRI` | 期限 readcheck (receipt + Jobs API で完了検証。成功以外は error。23:35 JST) |
 | `0 21 * * MON-FRI` | `scheduled-context` をdispatch。株式・sector33・moneyflowは起動しない |
 | `5 22 * * MON-FRI` | 専用context receiptのrunを読み、同日のcontext成功と22:00完了期限を検証 |
+| `15 9 * * MON-FRI` | `moneyflow.yml` に `only=independent` をdispatch。株価・JPX休場に依存しない取得元 |
+| `45 14 * * MON-FRI` | 専用moneyflow receiptのrun・ingest step成功と同日09:15〜14:40完了を検証 |
 
 2026-10-09 に株式 dispatch を `13 17`（02:13 JST）から `0 9`（18:00 JST）へ移した。
 02:13 JST は、取引日 D の ^N225 日足 close が null になる時間帯（D 23:30 JST 以降。
@@ -63,9 +65,8 @@ D=2026-10-08 の原文で 00:15 以降が null）の中だった。全銘柄 run
   のみ。`STOCK_SYNC_TARGET=scheduled-stocks` のとき必須
   (欠落・空・空白は fetch 前に落とす)。手動 stocks 未指定は現契約維持。
   時刻のバックデート・原本日付の上書きなし。
-- 新 dispatch target `scheduled-stocks` は株式 only。moneyflow selector は
-  旧 scheduled と同じ空文字 (全 sources)。手動 `stocks` の
-  sector-turnover 限定は維持。
+- 新 dispatch target `scheduled-stocks` は株式 only。株式成功後のmoneyflowは
+  `sector-turnover`だけを連鎖する。他の取得元は独立CF起動が担当し、株式停止で止めない。
 - `scheduled-context` は日付が必須。Node入口は予定日21:00〜21:30 UTCだけ
   開始を許可し、GSPC確定日が予定日と一致することを既存原本gateに追加する。
   N225/VIX/VIの同日・必須値・物理保管は既存条件を保持する。保管後に
@@ -96,10 +97,16 @@ D=2026-10-08 の原文で 00:15 以降が null）の中だった。全銘柄 run
   読取のみ。正常時は平日約22日で88回/月の cron 起動、R2 88 write +44 read
   程度となる (Jobs API のページ数・既存 workload の費用は別計数)。
   cron 変更の伝播には最大 15 分かかる。
-- 祝日: 共有営業日カレンダーは無い。現 producer 仕様どおり、原本の当日
-  実終値なしは明示 failure のまま (N225 前日/null を休場推定して skip 成功
-  には変えない)。`scheduled_date` は検証のみ。祝日 failure → readcheck
-  error の経路を維持し、公式 JPX 休業日正本が入るまで別対応とする。
+- 休場: [JPX公式](https://www.jpx.co.jp/corporate/about-jpx/calendar/)と
+  [NYSE公式](https://www.nyse.com/trade/hours-calendars)の2026/2027公表休業日を
+  `src/shared/market-calendar.json`に固定する。両HTMLは一次データ保管へ実体保存・全文SHA照合済み。
+  株式はJPX、同日マクロはJPX/NYSE双方の取引日だけを対象とし、休場は
+  `market_closed`・理由・出典をログ/戻り値に残す。dispatchもreadcheckもreceiptを作らない。
+  未収録年・不正日付は明示失敗する。NYSE短縮取引日は休場に含めず、確定closeは
+  原文session guardで証明する。原文のNULL・古い日足・部分行を成功へ読み替えない。
+- 価格ガードが失敗しても公式上場状態のoverlayを先に適用する。日次の時間窓・予定日・
+  書込み期限、overlay原本保管/CAS/HOLDは維持する。独立資金フローのreceiptは
+  `stock-scheduler/moneyflow-receipt-<予定UTC日>.json`で、株式・マクロと混同しない。
 - `GITHUB_ACTIONS_TOKEN` 未設定の Worker では scheduled が即 error
   (fail-closed)。既存 gh OAuth を Worker へ移さない。
 
@@ -115,3 +122,23 @@ D=2026-10-08 の原文で 00:15 以降が null）の中だった。全銘柄 run
    株式 step の完了が 14:30 UTC（23:30 JST）より後なら readcheck は失敗する。
 5. 異常時: Cron Events / Workers Logs の error を見て手動トリアージする。
    自動再 POST はしない。
+
+
+## 18時writerの監視
+
+`pipeline/.../cloud_store/slo.py`の株式は当日EOD（lag_days=0）、日証金は翌JPX営業日公表
+（lag_days=1）で判定する。公式JPX休業日は加齢しない。EDINET/TDnetの提出日とは
+同義でないため、これらに市場カレンダーを流用しない。日次の欠損・不正日付を
+新しい取得時刻で代用せず、unknownまたは明示失敗にする。
+
+既存ops_checkはactive普通株と小さな断面3表をPKで結合し、完了期限後の当日価格・
+指標・モメンタムの全対象coverageを要求する。期限前は前取引日以上〜当日までの
+実保存値を許容し、未来日を拒否する。マクロは日米共通取引日の保存日を要求する。
+1銘柄のMAX更新だけで残りの停止を隠さず、未登録・古い値を警告する。
+本番readonly実測（2026-10-14 00:42 JST）はSELECT1回、rows_read=14,757、
+rows_written=0、SQL20.73ms。OHLCV全走査やR2列挙は追加しない。
+
+共有`yahoo-source` concurrencyにはGitHub公式の`queue: max`を設定し、後着が
+既存pending runをcancelする既定動作を防ぐ。同時取得は従来どおり1 jobだけ。
+[GitHub公式仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idconcurrency)
+に従い、最大100件のpendingを受け付ける。時刻窓を満たせないrunを成功に変える設定ではない。

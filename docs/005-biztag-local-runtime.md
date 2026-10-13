@@ -1,6 +1,6 @@
 # 事業タグ・優待要約のMac定時運用
 
-更新: 2026-10-04。事業タグの唯一の定時writerをApple Silicon Macへ移す。
+更新: 2026-10-14。事業タグの唯一の定時writerをApple Silicon Macへ移す。
 新規銘柄の初回だけSemIf/MLXを使い、既存の保存タグを再利用し、旧失敗・不足は
 従来のkeywords/excludes一致で補完する。TypeSafeへの自動代替、語彙審査、
 goldenの定期実行、競合判定は再開しない。
@@ -14,6 +14,10 @@ goldenの定期実行、競合判定は再開しない。
 新しい有料APIは使わない。`tmp/yutai-local`にprivate進捗・原本・送信中記録を残す。
 実行コードはCIを確認してmainへmergeした専用runtime worktreeに固定し、
 自動pull/resetや未レビューのPR実行はしない。
+
+専用runtimeの標準位置は、このサービスの`.runtime/mac`とする。
+プロジェクト外の一時的なOrca workspaceや削除候補の兄弟worktreeをWorkingDirectoryにしない。
+`.runtime/`はGit対象外だが、`git worktree list`に登録された運用worktreeとして保持する。
 
 ```text
 LaunchAgent → nix develop --offline → scripts/biztag-local/main.ts run

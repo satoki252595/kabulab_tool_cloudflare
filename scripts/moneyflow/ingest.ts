@@ -96,12 +96,17 @@ function isPhase1Source(name: string): name is Phase1Source {
 /**
  * `--only=a,b` を解析する純関数。`sources` に含まれない値があれば throw する
  * (推測でその場をしのがない — ルール2)。未指定なら `sources` 全件を返す。
+ * `--only=independent` はsector-turnoverを除いた既存取得元の予約グループ。
  */
 export function parseOnlyArg(argv: readonly string[], sources: readonly string[]): string[] {
   const prefix = "--only=";
   const a = argv.find((x) => x.startsWith(prefix));
   if (!a) return [...sources];
   const requested = a.slice(prefix.length).split(",").map((s) => s.trim());
+  // 株式producerの成否に依存しない既存取得元だけを、同じ正本一覧から選ぶ。
+  if (requested.length === 1 && requested[0] === "independent") {
+    return sources.filter((source) => source !== "sector-turnover");
+  }
   for (const r of requested) {
     if (!sources.includes(r)) {
       throw new Error(`--only: 不明な取得元です: ${r} (使える値: ${sources.join(", ")})`);

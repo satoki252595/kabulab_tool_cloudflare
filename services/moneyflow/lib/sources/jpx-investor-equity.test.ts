@@ -31,6 +31,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import * as XLSX from "xlsx";
+import { JPX_INVESTOR_EQUITY_MONTHLY_SPEC } from "../adapters/jpx-investor-equity.js";
+import { validateDrafts } from "../source-spec.js";
 import {
   JPX_INVESTOR_EQUITY_INDICATORS,
   KNOWN_LIMITATIONS,
@@ -63,6 +65,19 @@ const hasUnifiedSample = has("unified-format-sample-jpx-official.xlsx");
 const hasMonthlySample = has("monthly-unified-sample-jpx-official.xlsx");
 const hasUnifiedW3 = has("weekly-unified-2026-w3-0914-0918.xlsx");
 const hasUnifiedW3Index = has("weekly-index-2026-09-29.html");
+
+it.skipIf(!has("stock_1_m202609.xlsx"))("2026年9月の実月次新様式を448公式セルで受け入れる", () => {
+  const records = parseInvestorEquityWorkbook(loadBytes("stock_1_m202609.xlsx"), "stock_1_m202609.xlsx");
+  expect(records).toHaveLength(112);
+  expect(records.every(r => r.periodMonth === "2026-09" && r.periodType === "monthly" &&
+    r.periodStart === null && r.periodEnd === null && r.buy - r.sell === r.net && r.buy + r.sell === r.total)).toBe(true);
+  const spec = JPX_INVESTOR_EQUITY_MONTHLY_SPEC;
+  const drafts = spec.toObservations({ key: `${spec.name}-2026-09`, files: [{
+    filename: "investor-equity-unified-stock_1_m202609.xlsx", bytes: loadBytes("stock_1_m202609.xlsx"),
+  }] });
+  expect(drafts).toHaveLength(448);
+  expect(() => validateDrafts(spec.name, drafts, spec.indicators)).not.toThrow();
+});
 
 function loadBytes(name: string): Uint8Array {
   return new Uint8Array(readFileSync(join(FIXTURES, name)));

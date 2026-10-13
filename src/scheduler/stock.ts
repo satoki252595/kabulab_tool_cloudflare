@@ -1,3 +1,5 @@
+import { marketClosure, type MarketClosure } from "../shared/market-calendar.js";
+
 /**
  * 株式・マクロ sync の CF スケジューラ (Worker scheduled handler 本体)。
  *
@@ -25,6 +27,9 @@ export const READCHECK_CRON = "35 14 * * MON-FRI";
 export const CONTEXT_DISPATCH_CRON = "0 21 * * MON-FRI";
 export const CONTEXT_READCHECK_CRON = "5 22 * * MON-FRI";
 const CONTEXT_DISPATCH_TARGET = "scheduled-context";
+/** 独立取得元は株価・日米休場に依存させない。既存source直列lockを共有する。 */
+export const MONEYFLOW_DISPATCH_CRON = "15 9 * * MON-FRI";
+export const MONEYFLOW_READCHECK_CRON = "45 14 * * MON-FRI";
 const CONTEXT_START_DEADLINE_MINUTES = 30;
 
 /** dispatch 先 repo は固定 (設定で差し替えない)。 */
@@ -90,8 +95,8 @@ export interface ScheduledControllerLike {
   scheduledTime: number;
 }
 
-export type SchedulerRoute = "dispatch" | "readcheck" | "context-dispatch" | "context-readcheck";
-type SyncKind = "stocks" | "context";
+export type SchedulerRoute = "dispatch" | "readcheck" | "context-dispatch" | "context-readcheck" | "moneyflow-dispatch" | "moneyflow-readcheck";
+type SyncKind = "stocks" | "context" | "moneyflow";
 
 export interface StockReceipt {
   version: number;
@@ -126,6 +131,8 @@ export function routeCron(cron: string): SchedulerRoute {
   if (cron === READCHECK_CRON) return "readcheck";
   if (cron === CONTEXT_DISPATCH_CRON) return "context-dispatch";
   if (cron === CONTEXT_READCHECK_CRON) return "context-readcheck";
+  if (cron === MONEYFLOW_DISPATCH_CRON) return "moneyflow-dispatch";
+  if (cron === MONEYFLOW_READCHECK_CRON) return "moneyflow-readcheck";
   throw new Error(
     `未知の cron です: ${cron} (想定: ${DISPATCH_CRON} / ${READCHECK_CRON} / ${CONTEXT_DISPATCH_CRON} / ${CONTEXT_READCHECK_CRON})`
   );
@@ -168,10 +175,10 @@ export function resolveRunDate(
       `UTC 日跨ぎのため対象日が曖昧です: scheduled=${scheduledDate}`
     );
   }
-  if (route === "dispatch" || route === "context-dispatch") {
+  if (route === "dispatch" || route === "context-dispatch" || route === "moneyflow-dispatch") {
     const delayMs = nowMs - scheduledTimeMs;
-    const deadlineMinutes = route === "dispatch"
-      ? DISPATCH_START_DEADLINE_MINUTES : CONTEXT_START_DEADLINE_MINUTES;
+    const deadlineMinutes = route === "context-dispatch"
+      ? CONTEXT_START_DEADLINE_MINUTES : DISPATCH_START_DEADLINE_MINUTES;
     if (delayMs > deadlineMinutes * 60 * 1000) {
       throw new Error(
         `dispatch 開始期限を超過しました: 遅延=${Math.floor(delayMs / 60000)}分` +
@@ -188,6 +195,10 @@ export function receiptKey(scheduledDate: string): string {
 
 export function contextReceiptKey(scheduledDate: string): string {
   return `stock-scheduler/context-receipt-${scheduledDate}.json`;
+}
+
+export function moneyflowReceiptKey(scheduledDate: string): string {
+  return `stock-scheduler/moneyflow-receipt-${scheduledDate}.json`;
 }
 
 /**
@@ -265,18 +276,23 @@ export async function postStockDispatch(
   token: string,
   scheduledDate: string
 ): Promise<DispatchDetails> {
-  return postDispatch(fetchFn, token, scheduledDate, DISPATCH_TARGET);
+  return postDispatch(fetchFn, token, scheduledDate, "stocks");
 }
 
 async function postDispatch(
   fetchFn: typeof fetch,
   token: string,
   scheduledDate: string,
-  target: typeof DISPATCH_TARGET | typeof CONTEXT_DISPATCH_TARGET
+  kind: SyncKind
 ): Promise<DispatchDetails> {
+  const workflow = kind === "moneyflow" ? "moneyflow.yml" : WORKFLOW_FILE;
+  const inputs = kind === "moneyflow" ? { only: "independent" } : {
+    target: kind === "stocks" ? DISPATCH_TARGET : CONTEXT_DISPATCH_TARGET,
+    scheduled_date: scheduledDate,
+  };
   const res = await fetchFn(
     `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}` +
-      `/actions/workflows/${WORKFLOW_FILE}/dispatches`,
+      `/actions/workflows/${workflow}/dispatches`,
     {
       method: "POST",
       headers: {
@@ -288,7 +304,7 @@ async function postDispatch(
       },
       body: JSON.stringify({
         ref: "main",
-        inputs: { target, scheduled_date: scheduledDate },
+        inputs,
       }),
     }
   );
@@ -366,9 +382,11 @@ export function runContextDispatch(deps: DispatchDeps): Promise<DispatchOutcome>
 }
 
 async function runScheduledDispatch(deps: DispatchDeps, kind: SyncKind): Promise<DispatchOutcome> {
-  const expectedCron = kind === "stocks" ? DISPATCH_CRON : CONTEXT_DISPATCH_CRON;
+  const expectedCron = kind === "stocks" ? DISPATCH_CRON : kind === "context"
+    ? CONTEXT_DISPATCH_CRON : MONEYFLOW_DISPATCH_CRON;
   if (deps.cron !== expectedCron) throw new Error("dispatch の種別と cron が一致しません");
-  const key = kind === "stocks" ? receiptKey(deps.scheduledDate) : contextReceiptKey(deps.scheduledDate);
+  const key = kind === "stocks" ? receiptKey(deps.scheduledDate) : kind === "context"
+    ? contextReceiptKey(deps.scheduledDate) : moneyflowReceiptKey(deps.scheduledDate);
   const { claimed, etag } = await claimReceipt(deps.bucket, key, {
     version: RECEIPT_VERSION,
     scheduledDate: deps.scheduledDate,
@@ -401,7 +419,7 @@ async function runScheduledDispatch(deps: DispatchDeps, kind: SyncKind): Promise
     deps.fetchFn,
     deps.token,
     deps.scheduledDate,
-    kind === "stocks" ? DISPATCH_TARGET : CONTEXT_DISPATCH_TARGET
+    kind
   );
   await saveDispatchResult(deps.bucket, key, etag, {
     version: RECEIPT_VERSION,
@@ -673,7 +691,7 @@ export function evaluateReadcheck(
 export interface ValidDispatchedReceipt {
   version: typeof RECEIPT_VERSION;
   scheduledDate: string;
-  cron: typeof DISPATCH_CRON | typeof CONTEXT_DISPATCH_CRON;
+  cron: typeof DISPATCH_CRON | typeof CONTEXT_DISPATCH_CRON | typeof MONEYFLOW_DISPATCH_CRON;
   status: "dispatched";
   claimedAt: string;
   dispatchedAt: string;
@@ -691,7 +709,7 @@ function parseStoredReceipt(
   text: string,
   key: string,
   expectedDate: string,
-  expectedCron: typeof DISPATCH_CRON | typeof CONTEXT_DISPATCH_CRON
+  expectedCron: typeof DISPATCH_CRON | typeof CONTEXT_DISPATCH_CRON | typeof MONEYFLOW_DISPATCH_CRON
 ): ValidDispatchedReceipt {
   let json: unknown;
   try {
@@ -839,6 +857,34 @@ export async function runContextDeadlineReadcheck(deps: {
   return verdict;
 }
 
+export interface MoneyflowReadcheckVerdict { moneyflowCompletedAt: string }
+
+export async function runMoneyflowDeadlineReadcheck(deps: {
+  bucket: SchedulerBucket; token: string; scheduledDate: string; fetchFn: typeof fetch;
+}): Promise<MoneyflowReadcheckVerdict> {
+  const key = moneyflowReceiptKey(deps.scheduledDate);
+  const obj = await deps.bucket.get(key);
+  if (obj === null) throw new Error(`moneyflow receipt がありません: ${key}`);
+  const receipt = parseStoredReceipt(await obj.text(), key, deps.scheduledDate, MONEYFLOW_DISPATCH_CRON);
+  const jobs = await fetchAllJobs(deps.fetchFn, deps.token, receipt.workflowRunId);
+  const ingest = jobs.filter((job) => job.name === "ingest");
+  if (jobs.length !== 1 || ingest.length !== 1 || ingest[0].status !== "completed" || ingest[0].conclusion !== "success") {
+    throw new Error("独立moneyflow ingest jobが一意の成功完了ではありません");
+  }
+  const steps = ingest[0].steps;
+  const producer = steps?.filter((step) => step.name === "moneyflow ingest");
+  if (!producer || producer.length !== 1 || producer[0].status !== "completed" || producer[0].conclusion !== "success") {
+    throw new Error("独立moneyflow ingest stepが一意の成功完了ではありません");
+  }
+  const done = stepCompletedAtMs(producer[0], "moneyflow ingest");
+  if (done < Date.parse(`${deps.scheduledDate}T09:15:00.000Z`) || done > Date.parse(`${deps.scheduledDate}T14:40:00.000Z`)) {
+    throw new Error("独立moneyflowの完了が同日09:15〜14:40 UTCの範囲外です");
+  }
+  const moneyflowCompletedAt = producer[0].completed_at as string;
+  console.info(`[stock-scheduler] moneyflow readcheck OK: date=${deps.scheduledDate} run_id=${receipt.workflowRunId} completed_at=${moneyflowCompletedAt}`);
+  return { moneyflowCompletedAt };
+}
+
 /**
  * Worker scheduled handler 本体。cron で分岐し、各 await を await する。
  * 失敗は throw (Cron Events に error として残る)。Dispatch 受付は
@@ -848,10 +894,27 @@ export async function handleStockScheduled(
   controller: ScheduledControllerLike,
   env: SchedulerEnv,
   deps: { fetchFn?: typeof fetch; nowMs?: number } = {}
-): Promise<DispatchOutcome | ReadcheckVerdict | ContextReadcheckVerdict> {
+): Promise<DispatchOutcome | ReadcheckVerdict | ContextReadcheckVerdict | MoneyflowReadcheckVerdict | { status: "market_closed"; scheduledDate: string; closures: MarketClosure[] }> {
   const route = routeCron(controller.cron);
   const nowMs = deps.nowMs ?? Date.now();
   const scheduledDate = resolveRunDate(route, controller.scheduledTime, nowMs);
+  if (route === "moneyflow-dispatch" || route === "moneyflow-readcheck") {
+    const common = { bucket: env.BUCKET, token: schedulerToken(env), scheduledDate, fetchFn: deps.fetchFn ?? fetch };
+    return route === "moneyflow-dispatch"
+      ? runScheduledDispatch({ ...common, cron: controller.cron, nowMs }, "moneyflow")
+      : runMoneyflowDeadlineReadcheck(common);
+  }
+  // 株式はJPX、同日マクロはJPX+NYSE双方の取引日だけが対象。
+  // 公表休場は取得失敗と区別し、原本日付や価格を代用しない。
+  const markets = route.startsWith("context-") ? ["JPX", "NYSE"] as const : ["JPX"] as const;
+  const closures = markets.flatMap((market) => {
+    const closure = marketClosure(market, scheduledDate);
+    return closure === null ? [] : [closure];
+  });
+  if (closures.length > 0) {
+    console.info(`[stock-scheduler] market_closed: ${JSON.stringify({ scheduledDate, closures })}`);
+    return { status: "market_closed", scheduledDate, closures };
+  }
   const token = schedulerToken(env);
   const fetchFn = deps.fetchFn ?? fetch;
   if (route === "dispatch" || route === "context-dispatch") {

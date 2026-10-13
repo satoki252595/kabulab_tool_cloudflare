@@ -23,6 +23,14 @@ describe("parseOnlyArg", () => {
     ]);
   });
 
+  it("独立更新は価格依存のsector-turnoverだけを除き、全取得元を重複なく分割する", () => {
+    const independent = parseOnlyArg(["--only=independent"], SOURCES);
+    expect(independent).toHaveLength(28);
+    expect(independent).not.toContain("sector-turnover");
+    expect([...independent, "sector-turnover"].sort()).toEqual([...SOURCES].sort());
+    expect(() => parseOnlyArg(["--only=independent,sector-turnover"], SOURCES)).toThrow(/不明な取得元/);
+  });
+
   it("使えない取得元名を指定すると throw する (推測でその場をしのがない)", () => {
     expect(() => parseOnlyArg(["--only=not-a-real-source"], SOURCES)).toThrow(/不明な取得元です: not-a-real-source/);
   });
