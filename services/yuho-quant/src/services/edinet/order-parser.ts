@@ -283,27 +283,31 @@ function tryPatternB(
   grid: string[][],
   fiscalYearEnd: string
 ): OrderFact[] | null {
-  const flat = grid.map((r) => r.join(" ")).join(" ");
+  // 原表の折返し空白は見出し照合だけで除き、ラベル・金額は原セルを保つ。
+  const compact = (text: string) => text.replace(/[\s\u3000]/g, "");
+  const flat = compact(grid.map((r) => r.join(" ")).join(" "));
   if (!RX_CONSTRUCTION.test(flat) || !RX_CONSTRUCTION_BACKLOG.test(flat)) {
     return null;
   }
   const headerIdx = grid.findIndex(
-    (r) => r.some((c) => RX_CONSTRUCTION.test(c)) && r.some((c) => RX_CONSTRUCTION_BACKLOG.test(c))
+    (r) => r.some((c) => RX_CONSTRUCTION.test(compact(c))) && r.some((c) => RX_CONSTRUCTION_BACKLOG.test(compact(c)))
   );
   if (headerIdx < 0) return null;
   const header = grid[headerIdx];
 
-  // 見出しの数値列 (期首繰越高/当期受注高/計/当期売上高/期末繰越高 等) の並び
-  // 数値列 = 金額単位付き見出しセル。会社で列名が揺れる (清水=
-  // 当期受注(契約)高/次期繰越高, 鹿島=当期受注高/期末繰越高) ため
-  // 「単位付き列」で K を決め、受注/残高はその相対位置で取る (決定論的)。
-  const numericHeaders = header.filter((c) => /百万円|千円|億円/.test(c));
-  const ordersPos = numericHeaders.findIndex((c) => RX_CONSTRUCTION.test(c));
-  const backlogPos = numericHeaders.findIndex((c) => RX_CONSTRUCTION_BACKLOG.test(c));
-  if (ordersPos < 0 || backlogPos < 0 || numericHeaders.length < 2) return null;
-  const K = numericHeaders.length;
-
-  const unit = detectUnit(header.join(" "));
+  // 原見出しの絶対列を使う。期首繰越高の注記併記や欠測で数値の個数が
+  // 変わっても、独立した受注/残高セルをずらさず、他の金額から補完しない。
+  const numericHeaders = header.map((cell, index) => ({ cell: compact(cell), index }))
+    .filter(({ cell }) => /百万円|千円|億円/.test(cell));
+  const ordersHeaders = numericHeaders.filter(({ cell }) => RX_CONSTRUCTION.test(cell));
+  const backlogHeaders = numericHeaders.filter(({ cell }) => RX_CONSTRUCTION_BACKLOG.test(cell));
+  if (ordersHeaders.length !== 1 || backlogHeaders.length !== 1) return null;
+  const ordersCol = ordersHeaders[0].index, backlogCol = backlogHeaders[0].index;
+  const labelCol = Math.min(...numericHeaders.map(({ index }) => index)) - 1;
+  if (labelCol < 0) return null;
+  const unit = detectUnitOrNull(ordersHeaders[0].cell);
+  const backlogUnit = detectUnitOrNull(backlogHeaders[0].cell);
+  if (unit === null || backlogUnit === null || unit.factor !== backlogUnit.factor) return null;
   const consolidated = detectConsolidated(grid.flat().join(" "));
 
   const facts: OrderFact[] = [];
@@ -324,30 +328,28 @@ function tryPatternB(
     } else if (/当事業年度|当連結会計年度/.test(joined)) {
       curFiscal = fiscalYearEnd;
     }
-    // 末尾 K 個の数値セルを値とみなし、その直前セルを種類別ラベルとする
-    const nums = row
-      .map((c, idx) => ({ idx, v: parseJpNumber(c) }))
-      .filter((x) => x.v !== null);
-    if (nums.length < K) continue;
-    const tail = nums.slice(-K);
-    const firstValIdx = tail[0].idx;
-    if (firstValIdx < 1) continue;
-    const label = row[firstValIdx - 1];
+    if (row.length <= Math.max(ordersCol, backlogCol)) continue;
+    const label = row[labelCol];
     if (label === "" || parseJpNumber(label) !== null) continue;
+    const ordersReceived = parseJpNumber(row[ordersCol]), orderBacklog = parseJpNumber(row[backlogCol]);
+    if ([ordersCol, backlogCol].some((col) => parseJpNumber(row[col]) === null &&
+        !/^(?:|―|－|-|—|−)$/.test(compact(row[col])))) return null;
+    if (compact(row[ordersCol]) === "" && compact(row[backlogCol]) === "") continue;
     // 期別を持たない金額行を、入力report期へ暗黙に割り当てない。
     if (curFiscal === null) return null;
+    const kind = classifyRow(label);
     facts.push({
       segmentName: label,
-      segmentKind: classifyRow(label),
-      ordersReceived: tail[ordersPos].v,
-      orderBacklog: tail[backlogPos].v,
+      segmentKind: kind === "segment" ? classifyConstructionRow(label) : kind,
+      ordersReceived,
+      orderBacklog,
       unitLabel: unit.label,
       unitYenFactor: unit.factor,
       fiscalYearEnd: curFiscal,
       isConsolidated: consolidated,
     });
   }
-  if (facts.length === 0) return null;
+  if (!facts.some((f) => f.ordersReceived !== null || f.orderBacklog !== null)) return null;
   return facts;
 }
 
@@ -604,7 +606,7 @@ export function parseOrderData(
       if (fiscal?.side === "Z") continue; // 原表で前期と証明した表は当期候補ではない
       if (fiscal === null || fiscal.date !== reportPeriodEnd) { holdReasons.add("order_table_fiscal_unknown"); continue; }
       // 直前の「提出会社単独/個別」以降が当該表の caption。前段の連結説明を借りない。
-      const individual = [...table.caption.matchAll(/提出会社(?:単独|個別|における|の受注工事)|当社単体/g)].at(-1);
+      const individual = [...table.caption.matchAll(/提出会社(?:単独|個別|における|の(?:受注工事|建設事業|実績))|当社単体|個別の事業の実績/g)].at(-1);
       const caption = individual === undefined ? table.caption : table.caption.slice(individual.index);
       const segments = parsed.facts.filter((f) => f.segmentKind === "segment");
       const companyRows = segments.length > 0 && segments.every((f) => /提出会社/.test(f.segmentName));
@@ -663,7 +665,7 @@ export function parseOrderHtml(
     if (a) {
       return { status: "ok_pattern_a", facts: a, tablesScanned: tables.length };
     }
-    const b = tryPatternB(grid, reportPeriodEnd);
+    const b = tryPatternB(tableToGridExpanded(t), reportPeriodEnd);
     if (b) {
       return { status: "ok_pattern_b", facts: b, tablesScanned: tables.length };
     }

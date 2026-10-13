@@ -1,0 +1,165 @@
+{
+  "fixtureKind": "exact PublicDoc XBRL and all honbun HTML members; subset, not original ZIP",
+  "fixtureSha256": "589581cb5f8897613c372350fe464554fd81f4d9660c282e51ccad7427bb68f0",
+  "fixtureBytes": 1124100,
+  "copiedAt": "2026-10-13T21:35:52.134391+00:00",
+  "items": [
+    {
+      "code": "1860",
+      "docId": "S100YG3E",
+      "periodEnd": "2026-03-31",
+      "zipSha256": "9c42541a955a1bc5e4eb9e56dcd6208fed108857c86a4d90a069ad3f34f3f431",
+      "zipByteLength": 1442842,
+      "archivePageId": "3e1d74ff-84cd-8169-817f-f5127ffeb50b",
+      "sourceCustody": "legacy",
+      "originalManifest": "unknown",
+      "sourcePlanSha256": "466aec75e44701179e2a1b33da0c1575597fbf81c9cd0a2e7f27faf8090f22cb",
+      "members": {
+        "XBRL/PublicDoc/0101010_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "ae060995a0730172760e19863a4b5d4e4d836da47146b10ed5aa575da0336feb",
+          "byteLength": 338549
+        },
+        "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "c925cffd9341bc29a0538367eaedcb55cb544a67b4ff4cf706bc37773dac65ac",
+          "byteLength": 555907
+        },
+        "XBRL/PublicDoc/0103010_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "8856370fb7ccb8d504bb26f44378361b22060b1f7943ad9478523cfd66a6946b",
+          "byteLength": 112328
+        },
+        "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "19561e479dd76d3d2d423f42eda68f4996ff68d4fc75a49c23761f64f4b5864a",
+          "byteLength": 1615650
+        },
+        "XBRL/PublicDoc/0105000_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "c5b116b11667ca733e56b4c2a3bde01402bb96b7b55ab563009b07bcee25abc9",
+          "byteLength": 13842
+        },
+        "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "8cee74ee7daa2c25db949a3e5cb37f0ead9a3dec8dcca39cc0c85e4a6558be18",
+          "byteLength": 194297
+        },
+        "XBRL/PublicDoc/0105020_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "8acb15e4c647ba4d73e6b71e653874f2bc4fa05a058832e6157b5867afcd7597",
+          "byteLength": 96775
+        },
+        "XBRL/PublicDoc/0105025_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "eb139cbe26745d6523ce8f051e2753255ca6419333fe1100c03f6f1b2441e77a",
+          "byteLength": 40764
+        },
+        "XBRL/PublicDoc/0105040_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "34c962ec601ff1a89d9356fc1ad0ea35ad89c6c825e7ec03a33a54be5c42e605",
+          "byteLength": 242616
+        },
+        "XBRL/PublicDoc/0105050_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "26702da621dd3f88598bc323b19326e4858c3485e9582208e68b467b449f755e",
+          "byteLength": 138610
+        },
+        "XBRL/PublicDoc/0105100_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "2ce33d619bbbc7225a69ad7341c1d16396283fb947179b2e01f810e8bd79e19d",
+          "byteLength": 1236349
+        },
+        "XBRL/PublicDoc/0105110_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "af96c38a8321e5149b015353959272b4d51cd472687b2455e8daeae28325cd18",
+          "byteLength": 243470
+        },
+        "XBRL/PublicDoc/0105120_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "8c29bfdad4def4e28173b200fc8074f23e8c2a082d53fa82dff24a59bb0b451d",
+          "byteLength": 117508
+        },
+        "XBRL/PublicDoc/0105310_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "e9e00d4ec41e38dbd8bdb249823409f419d5a543c2a8db9520ce2e818144b379",
+          "byteLength": 283628
+        },
+        "XBRL/PublicDoc/0105320_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "02f85ffd397e0bb9b328bee7f6f4c9d3b7d4cb76771dd06c7ee69fb1709249d0",
+          "byteLength": 191533
+        },
+        "XBRL/PublicDoc/0105330_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "85707065671382ab4e95b34dbf0153235083996f38c74f89e93779f610a13cf0",
+          "byteLength": 274678
+        },
+        "XBRL/PublicDoc/0105400_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "f39b11bd9f0a38e4666bc4fb7b443a689679cdb22f01eaf2371558c042193111",
+          "byteLength": 229589
+        },
+        "XBRL/PublicDoc/0105410_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "8079ab847cf9d49f427c527ee79d9881a1cecf60a9a511a0ecb90414bb9c3108",
+          "byteLength": 263428
+        },
+        "XBRL/PublicDoc/0106010_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "d1affe43eb4c3176b1ae74ebf2d973b3cb70687b7d73d33750f327fd63b95041",
+          "byteLength": 30703
+        },
+        "XBRL/PublicDoc/0107010_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "4d0340825a6dc20990b11dc3cb658677da886eb9a693ee590da30d111acbf241",
+          "byteLength": 18528
+        },
+        "XBRL/PublicDoc/0201010_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "7d4091e986368d5e32b9f80d2549d7bbee9720b0b31e696025e033da94252871",
+          "byteLength": 10250
+        },
+        "XBRL/PublicDoc/jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22.xbrl": {
+          "sha256": "fa986fc5c9f020d87688165ab4e3529ef43396ee54cc9dc72881a2088a911d7d",
+          "byteLength": 7454341
+        }
+      }
+    },
+    {
+      "code": "1980",
+      "docId": "S100Z203",
+      "periodEnd": "2026-03-31",
+      "zipSha256": "a7e81539dc9875dd06c6611d3f04c20a95e0db09b85a2761b58eb526298ac268",
+      "zipByteLength": 919352,
+      "archivePageId": "3eed74ff-84cd-8180-a61c-d93ca539098f",
+      "sourceCustody": "typed",
+      "originalManifest": "known",
+      "sourcePlanSha256": "465a56071bd31dcff3cdd8a8449e4fcb35a640939f1d4e453e5667172db1976c",
+      "members": {
+        "XBRL/PublicDoc/0101010_honbun_jpcrp030000-asr-001_E00194-000_2026-03-31_02_2026-09-17_ixbrl.htm": {
+          "sha256": "36d16c2e7f7095c4f94a9e8412c689f9dfea2cefd183a22c946f35c95d6ad594",
+          "byteLength": 192619
+        },
+        "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E00194-000_2026-03-31_02_2026-09-17_ixbrl.htm": {
+          "sha256": "a0a3e8a2e9e3a8ba087841df4e93a98cf8c6f2f334aa5329418b38cbf436fd32",
+          "byteLength": 291815
+        },
+        "XBRL/PublicDoc/0103010_honbun_jpcrp030000-asr-001_E00194-000_2026-03-31_02_2026-09-17_ixbrl.htm": {
+          "sha256": "563fad621fdb371142edd611ccd39eb14372af3e978855dd97fac0ed4bab0e6e",
+          "byteLength": 42456
+        },
+        "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00194-000_2026-03-31_02_2026-09-17_ixbrl.htm": {
+          "sha256": "a7ffc4708698339ccc2f22a32385c9f842b37e55ee27cbf78659954035c53b28",
+          "byteLength": 1276521
+        },
+        "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E00194-000_2026-03-31_02_2026-09-17_ixbrl.htm": {
+          "sha256": "fa7ff00966c9685eb90f18c2daf4704ae059f8a5d8adf8bdbd150d20946045f1",
+          "byteLength": 1105841
+        },
+        "XBRL/PublicDoc/0105020_honbun_jpcrp030000-asr-001_E00194-000_2026-03-31_02_2026-09-17_ixbrl.htm": {
+          "sha256": "bf44f2e118a0ed400bc2f67fd7486469f6faae773b858e2e0725bc154a3187f7",
+          "byteLength": 679404
+        },
+        "XBRL/PublicDoc/0106010_honbun_jpcrp030000-asr-001_E00194-000_2026-03-31_02_2026-09-17_ixbrl.htm": {
+          "sha256": "70807fc1f0725ef6d00e34d5bcf112e7d63535bc7d8e8508c176c894a38e6766",
+          "byteLength": 15816
+        },
+        "XBRL/PublicDoc/0107010_honbun_jpcrp030000-asr-001_E00194-000_2026-03-31_02_2026-09-17_ixbrl.htm": {
+          "sha256": "e69beca76e7817f8a6e773e882b122182e697189397cbb47ca5814772e38190a",
+          "byteLength": 36398
+        },
+        "XBRL/PublicDoc/0200010_honbun_jpcrp030000-asr-001_E00194-000_2026-03-31_02_2026-09-17_ixbrl.htm": {
+          "sha256": "7e185da13eb0c13ee642c917f3384b769d62a205c6124ffc0ef8d70b1b853ca2",
+          "byteLength": 5389
+        },
+        "XBRL/PublicDoc/jpcrp030000-asr-001_E00194-000_2026-03-31_02_2026-09-17.xbrl": {
+          "sha256": "83d7a9e82cf84f2d5994bb3a4466ca05d121cd15aa511cdebddd350042f011f1",
+          "byteLength": 4670655
+        }
+      }
+    }
+  ],
+  "newSourceApiGets": 0,
+  "newNotionReads": 0,
+  "newRawUploads": 0
+}

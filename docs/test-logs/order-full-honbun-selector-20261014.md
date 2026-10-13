@@ -14,7 +14,7 @@
 
 `tablesWithHeading` は既存 overseas-parser の traversal を html-table に移設した。元の html-table モジュール全文が新ファイルの byte-identical prefix、移設関数本体は export 以外 byte一致。既存保有表 parser の意味を変えていない。market 担当へ依存/source pin を連絡済み。
 
-全本番 caller は `services/ingest.ts` と `data-scripts/lib/missing-backfill.ts`。両方が同じ `parseOrderData` を呼ぶ。単独 HTML の診断/既存 fixture 用 `parseOrderHtml` と reducer の金額選択は維持した。
+全本番 caller は `services/ingest.ts` と `data-scripts/lib/missing-backfill.ts`。両方が同じ `parseOrderData` を呼ぶ。単独 HTML の診断/既存 fixture 用 `parseOrderHtml` も共通 reducer を呼ぶため、以下の建設表修正は通常 ingest/catchup・欠損回復の末端まで同じ経路へ届く。tmp の固定銘柄リストに依存しない。
 
 検証: order / ingest atomic / missing backfill / backfill atomic / overseas / shareholdings / text sections の14 suites・294 tests PASS。full TypeScript / 対象4ファイル ESLint warning0 / diffcheck PASS。
 
@@ -23,3 +23,15 @@
 本作業は保存原本の offline 修正・検証のみ。本番 Notion/D1 書込、原典 API GET、モデル呼出し、新依存は0。source35 v4 の事業タグ本体/共有 writer の code pin は変更していない。実適用には受入 main の source pins、最新 D1、完全 PRE の物理保全、未知結果 latch、旧値照合が別途必要。
 
 本番D1の15対象・200 rowsを2 SELECTで確認（0.156秒、Notion/source/model/write 0）。12社は既存54factsの金額/期同値でscopeのみ要訂正。1815は現本番未対応/facts0から6個別facts、261Aは0から4連結factsへ回復候補。1435は旧2factsの期間資格が未成立であり、資格確定または完全PRE付きの明示保留訂正が必要。通常ingestは既存・forceなし・本文pointerありならDB置換をせず、raw custody不足だけの再取得でも旧factsを保持する。ただしforceまたは欠損pointer回復のDB作業は、未知HOLDの空factsも文書upsert＋旧facts DELETEと同一atomic batchで確定する。missing CLIもforceなしなら既存docを入口で除外するが、processMissingDoc/buildMissingDocStatements自身は置換契約である。全量force実行を本修復の代用にせず、対象別に完全PRE・原本資格・期待payloadを固定する。
+
+## 建設表の折返し空白・注記併記・個別範囲の追加修正
+
+資格済み保存 type1 の実252通を再診断した。未対応67通のうち建設署名41通があり、35通では原見出し「当期受注 工事高」の空白が既存正規表現を不一致にしていた。1719 / S100YHJP はさらに期首繰越セルが「( 271,480 ) 271,519」と併記されるため、対象外セルの数値個数に依存する従来B判定が全行を落としていた。
+
+B判定の見出し照合だけで空白を除き、既存 expanded grid と原見出しの絶対列から受注高・受注残高の独立した2セルを読む。元のラベル・金額・日付は保持する。対象2列の単位が不明・不一致、対象セル自体が併記や未知表現ならHOLDし、期首繰越高・完成工事高・合計などで埋めない。明示欠測はNULLのまま保持する。「建設事業計」は既存 construction 分類でsubtotalとし、elimination分類は維持する。
+
+1719の原表直前「個別の事業の実績」、1860の「提出会社の建設事業」、1980の「提出会社の実績」を表に束縛された個別証拠として追加した。別の前段落の連結説明は借りない。既存の印刷自至日・同ZIP native duration・矛盾時HOLDの関門は維持する。
+
+1719は原ZIP802,889 bytesをそのままfixture化（SHA `957022b0d8d0a188ed968ec54f57fe799ecfd01979209b57f41e614b2bca876a`）。当期2026-03-31・個別・百万円で土木143,578/273,971、建築390,005/414,219、合計533,583/688,190を原表から取得した。1860/1980は全PublicDoc XBRLと全honbun HTMLのexact member subsetを別fixtureに保存し、原ZIP・memberのSHAと物理custodyをprovenanceへ固定した（subsetは原ZIPとは主張しない）。元manifest不在はunknownのまま保持する。
+
+検証は8 suites・106 tests、full TypeScript、対象ESLint warning0、diffcheck PASS。誤った入力期・対象セルの併記・個別明示除去は0facts/HOLD、明示欠測はNULLを実原本の明示的な変形入力で検証した。252原ZIPの再解析は39.481秒、通信・model・本番write0。27通がfacts0からB対応へ回復し、この対象内の未対応は67→42、orders_onlyは7→5。既存対応1893/1921は旧factsを保持し欠落行を追加した。29通の差分・追加236factsには明示欠測NULL行も含み、236件の新金額とは主張しない。原典が未到達の残566通や、未対応42通を非開示・完了とは扱わない。受注の本番訂正は、受入main・原典SHA・完全PRE・期待payloadの別レビュー後に限定適用する。
