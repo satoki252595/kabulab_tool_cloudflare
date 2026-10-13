@@ -76,11 +76,41 @@ describe("株式保有明細の原表資格", () => {
     expect(parse(body)).toMatchObject({ status: "no_detail_table", holdings: [], holderScope: "unqualified" });
     expect(parse(body.replace("<p>特定投資株式</p>", "<p>当社が保有する株式についての説明</p><p>特定投資株式</p>"))).toMatchObject({ status: "no_detail_table", holdings: [] });
   });
+  it("保存S100YHJV/S100YH29の会社名後空白を区画境界として扱い、当社説明を継承しない", () => {
+    // Actual saved headings; table names/numbers remain structural test values.
+    for (const heading of ["株式会社リョーサン における株式の保有状況", "アルフレッサ株式会社\nにおける株式の保有状況"]) {
+      const body = block().replace("提出会社における株式の保有状況", `当社は、投資株式について説明します。${heading}`);
+      expect(parse(body)).toMatchObject({ status: "no_detail_table", holdings: [], holderScope: "unqualified" });
+    }
+    const parent = block(), end = parent.lastIndexOf("</ix:nonNumeric>");
+    const child = table.replaceAll("構造ケースA", "別名義構造ケースC").replaceAll("構造ケースB", "別名義構造ケースD");
+    const mixed = parent.slice(0, end) + `<p>株式会社リョーサン における株式の保有状況</p><p>当社が保有する株式の説明</p><p>特定投資株式</p>${child}` + parent.slice(end);
+    expect(parse(mixed).holdings).toHaveLength(2);
+  });
+  it("保存S100YB9Pの明示次位保有会社区画を除き、主体不明の次位区画は全体HOLD", () => {
+    const parent = block(), end = parent.lastIndexOf("</ix:nonNumeric>");
+    const child = table.replaceAll("構造ケースA", "別名義構造ケースC").replaceAll("構造ケースB", "別名義構造ケースD");
+    const heading = "（最大保有会社の次に大きい会社） 当社及び連結子会社のうち、当連結会計年度における投資株式計上額が最大保有会社の次に大きい会社は 大陽日酸株式会社";
+    const mixed = (label: string) => parent.slice(0, end) + `<p>${label}</p><p>当社が保有する株式の説明</p><p>特定投資株式</p>${child}` + parent.slice(end);
+    expect(parse(mixed(heading)).holdings).toHaveLength(2);
+    expect(parse(mixed("（最大保有会社の次に大きい会社）"))).toMatchObject({ status: "unsupported", holdings: [], holderScope: "unqualified" });
+  });
   it("同名でも特定投資とみなしは別明細とし、同種別の重複はHOLD", () => {
     const body=block(),end=body.lastIndexOf("</ix:nonNumeric>");
     const split=body.slice(0,end)+`<p>みなし保有株式</p>${table}`+body.slice(end);
     expect(parse(split).status).toBe("ok");expect(parse(split).holdings.map(row=>row.kind)).toEqual(["特定投資株式","特定投資株式","みなし保有株式","みなし保有株式"]);
     expect(parse(split.replace("<p>みなし保有株式</p>","<p>特定投資株式</p>")).status).toBe("unsupported");
+  });
+  it("保存S100YD42の限定みなし見出しだけを許し、別種別や未知の括弧を継承しない", () => {
+    const parent = block(), end = parent.lastIndexOf("</ix:nonNumeric>");
+    const mixed = (heading: string) => parent.slice(0, end) + `<p>${heading}</p>${table}` + parent.slice(end);
+    const annotation = "（信託財産として保有し議決権行使権限のあるもの等）";
+    const result = parse(mixed(`みなし保有株式${annotation}`));
+    expect(result.status).toBe("ok");
+    expect(result.holdings.map(row => row.kind)).toEqual(["特定投資株式", "特定投資株式", "みなし保有株式", "みなし保有株式"]);
+    for (const heading of [`特定投資株式${annotation}`, "みなし保有株式（未確認）", "みなし保有株式（信託（未確認））", "みなし保有株式（"]) {
+      expect(parse(mixed(heading))).toMatchObject({ status: "unsupported", holdings: [], holderScope: "unqualified" });
+    }
   });
   it("実表で明示された上下段セル単位・4段単位行・限定注記だけを数値を変えず読む", () => {
     const upper=table.replaceAll("株式数（株）","株式数（上段）").replaceAll("貸借対照表計上額（千円）","貸借対照表計上額（下段）")
