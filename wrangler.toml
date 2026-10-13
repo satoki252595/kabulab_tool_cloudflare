@@ -59,6 +59,7 @@ NOTION_BIZTAG_LEDGER_DB_ID = "3e6d74ff84cd818a91fbe8000056747c"
 # ではないため [vars] に置く (Workers Builds のデプロイで自動反映される)。
 NOTION_ARCHIVE_PAGE_ID = "3e6d74ff84cd81538392df63d269eb93"
 NOTION_YUHO_TEXT_DB_ID = "3e6d74ff84cd813b92a9c1443e09df26"
+NOTION_STOCK_HOLDINGS_DB_ID = "5ad4d311b06f42b4b78ab3801cd509e2"
 
 # Observability: 将来の Worker 呼出ステータスと既存 console ログを残す最小設定。
 # traces は無効のまま (EDINET 外向き URL に Subscription-Key を含むため)。
