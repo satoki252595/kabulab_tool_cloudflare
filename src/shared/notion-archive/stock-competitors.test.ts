@@ -118,6 +118,17 @@ describe("notion-archive stock-competitors", () => {
         writeCompetitorRelation("page-a", { competitorPageIds: many, judgedAt: "2026-09-26", version: "v", judgedDocId: "d" })
       ).rejects.toThrow(/上限/);
     });
+
+    it("単発指定時はnetwork unknownを再PATCHしない", async () => {
+      const { writeCompetitorRelation } = await load();
+      globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+        calls.push({ url: String(url), init: init ?? {} }); throw new Error("network unknown");
+      }) as typeof fetch;
+      await expect(writeCompetitorRelation("page-a", {
+        competitorPageIds: [], judgedAt: "2026-10-14", version: "cand-v1|Qwen3.5-4B@851bf6e/semif-mlx", judgedDocId: "S100Z0VF",
+      }, { singleAttempt: true })).rejects.toThrow("結果不明");
+      expect(calls).toHaveLength(1);
+    });
   });
 
   describe("loadCompetitorMeta", () => {
