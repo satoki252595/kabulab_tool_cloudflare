@@ -142,6 +142,22 @@ describe("extractTextSections", () => {
     expect(extractTextSections([{ ...consolidated, elementId: "jpcrp_cor:UnknownTextBlock" }])).toEqual([]);
   });
 
+  it.each([
+    ["segment_info", "jpigp_cor:NotesSegmentInformationConsolidatedFinancialStatementsIFRSTextBlock", "注記事項－セグメント情報、連結財務諸表（IFRS）"],
+    ["related_parties", "jpigp_cor:NotesRelatedPartiesConsolidatedFinancialStatementsIFRSTextBlock", "注記事項－関連当事者、連結財務諸表（IFRS）"],
+    ["main_customers", "jpigp_cor:InformationAboutMajorCustomersIFRSTextBlock", "主要な顧客に関する情報（IFRS）"],
+  ])("%sは保存実例S100YK0WのIFRS標準IDとラベルの両方で抽出する", (key, elementId, title) => {
+    // 実CSVのID/ラベル/context。本文はCI専用の構造値で、保存原本や実数値はGitへ追加しない。
+    const current = row({ elementId, itemName: `${title} [テキストブロック]`, contextId: "CurrentYearDuration",
+      relativeYear: "当期", value: "<p>【構造テスト本文】当期IFRS</p>" });
+    const prior = { ...current, contextId: "PriorYearDuration", relativeYear: "前期", value: "<p>【構造テスト本文】前期IFRS</p>" };
+    for (const rows of [[prior, current], [current, prior]]) {
+      expect(extractTextSections(rows)).toMatchObject([{ sectionKey: key, elementId, contextId: "CurrentYearDuration", text: "【構造テスト本文】当期IFRS" }]);
+    }
+    expect(extractTextSections([{ ...current, elementId: "extension:UnknownTextBlock" }])).toEqual([]);
+    expect(extractTextSections([{ ...current, itemName: "別のIFRS注記 [テキストブロック]" }])).toEqual([]);
+  });
+
   it("剥がして空になる値は行を作らない", () => {
     const got = extractTextSections([
       row({ itemName: "研究開発活動", value: "<p> <br/></p>" }),

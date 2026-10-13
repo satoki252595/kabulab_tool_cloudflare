@@ -42,3 +42,11 @@ Node入口`pnpm sync:daily:core`は引数なしも株式+JP保管のみ。朝の
 `pnpm exec vitest run src/cron/macro-jp-leg.test.ts src/cron/daily-mode.test.ts src/cron/daily-batch-custody.test.ts src/shared/yahoo/nikkei-vi.test.ts src/cron/macro-session.test.ts src/scheduler/stock-sync-yml.test.ts src/cron/daily.test.ts`：7suite、169PASS。
 
 `pnpm exec tsc --noEmit`、変更6TypeScriptファイルのeslint（warning0）、`git diff --check`成功。閉場/形成中/明示nextsession/旧session/日中quote/NULLclose/前日VI/未来tick/原本改変/Notion不明/R2不明/同日再実行/キャッシュ欠測時source0を検証した。定時macroの予定日・開始窓・期限と既存stock guardの回帰を維持している。
+
+## 片市場休場の予定契約
+
+定時マクロはcronのUTC日DについてJPX/NYSE両方が営業日の朝だけを対象とする（`src/scheduler/stock.ts`の公式calendar判定）。「最新の共通営業日」を検索して過去cacheへ戻る設計ではない。
+
+例：2026-10-12はJPXスポーツの日・NYSE営業日。10/12 21:00 UTC（10/13 06:00 JST）のdispatchと22:05 UTCのreadcheckは理由付き`market_closed`で予定なしとなり、receipt/R2読取・GH送信・source GETはすべて0。10/9 JP原本と10/12 US原本を混ぜたり、10/9 USバーへ戻したりしない。次の10/13 21:00 UTCは両市場営業の予定D=10/13で、JP13 cacheとUS13確定値を要求する。USが12のままなら実欠測としてHOLDする。
+
+2026-09-07のNYSE Labor Day（JPX営業）もdispatch/readcheckとも予定なし。ローカル純seamで上記4caseのfetch0/bucket0を確認し、既存`stock.test.ts`の休日tableにJP休場のcontext2caseを追加した。休場日の前回マクロ値は履歴として残るが、その朝の新規成功値へ日付を付け替えない。
