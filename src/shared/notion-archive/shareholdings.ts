@@ -330,6 +330,7 @@ function valuationProperties(holding: Shareholding, valuation: HoldingValuation)
 
 /** 原metadataの欠測は書き換えず、存在するissuer/期末とコード証拠を束縛する。 */
 export function verifySavedHoldingsMetadata(metadata: Record<string, unknown>, source: ShareholdingsSource): { status: "verified"; missing: string[] } | { status: "held"; reason: string } {
+  if (!("docID" in metadata)) return { status: "held", reason: "保存原本metadataにdocIDがなく同一文書の資格が未確認です（旧metadataは変更しません）" };
   assert.equal(metadata.docID, source.docId);
   const missing: string[] = [];
   for (const [field, expected] of Object.entries({ edinetCode: source.edinetCode, periodEnd: source.fiscalYearEnd })) {

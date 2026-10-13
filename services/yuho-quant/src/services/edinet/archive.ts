@@ -177,12 +177,15 @@ export async function recordEdinetZip(args: {
 }): Promise<RecordResult> {
   const { service, docID, type, zip, source, fetchedAt, metadata, force } =
     args;
+  if ("docID" in metadata && metadata.docID !== docID) {
+    throw new Error("recordEdinetZip: 明示docIDとmetadata.docIDが不一致です。上書きせず停止します");
+  }
   const result = await recordPrimaryData({
     service,
     key: edinetArchiveKey(docID, type),
     source,
     fetchedAt,
-    metadata: { ...metadata, edinetDocType: type },
+    metadata: { ...metadata, docID, edinetDocType: type },
     files: [
       {
         bytes: new Uint8Array(zip),

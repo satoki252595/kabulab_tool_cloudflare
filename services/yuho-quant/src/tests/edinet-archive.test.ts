@@ -59,7 +59,7 @@ describe("edinet archive 共通契約", () => {
     expect(edinetArchiveFilename("S100J2E7", 5)).toBe("S100J2E7_csv.zip");
   });
 
-  it("recordEdinetZip は type 別 key・実 bytes・種別メタで1件記録する", async () => {
+  it("recordEdinetZip は callerメタに欠けても明示docIDをtype別key/実名と束縛して保存する", async () => {
     vi.mocked(recordPrimaryData).mockResolvedValue({
       pageId: "p1",
       outcome: "recorded",
@@ -74,7 +74,7 @@ describe("edinet archive 共通契約", () => {
       zip: bytes,
       source: "EDINET API v2 /documents/S100J2E7?type=1",
       fetchedAt: "2026-09-28T00:00:00.000Z",
-      metadata: { docID: "S100J2E7" },
+      metadata: {},
     });
     expect(out.outcome).toBe("recorded");
     expect(recordPrimaryData).toHaveBeenCalledTimes(1);
@@ -97,6 +97,14 @@ describe("edinet archive 共通契約", () => {
     expect(vcall[1][0].filename).toBe("S100J2E7_xbrl.zip");
     expect(Buffer.from(vcall[1][0].bytes).equals(Buffer.from(bytes))).toBe(true);
     expect(vcall[2]).toContain("S100J2E7:type1");
+  });
+
+  it.each(["S100W16I", null, undefined])("既存metadata.docID=%s が明示IDと矛盾すると記録前STOPし上書きしない", async (docID) => {
+    await expect(recordEdinetZip({ service: "yuho-quant", docID: "S100J2E7", type: 1, zip: realBytes(),
+      source: "EDINET API v2 /documents/S100J2E7?type=1", fetchedAt: "2026-09-28T00:00:00.000Z", metadata: { docID } }))
+      .rejects.toThrow("明示docIDとmetadata.docIDが不一致");
+    expect(recordPrimaryData).not.toHaveBeenCalled();
+    expect(verifyArchivedAttachments).not.toHaveBeenCalled();
   });
 
   it("保管失敗は失敗扱い: error > 0 だけ非0終了する (missing-docs tail 契約)", () => {
