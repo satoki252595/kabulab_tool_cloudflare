@@ -38,6 +38,7 @@
 import {
   MONTHLY_INDEX_URL,
   WEEKLY_INDEX_URL,
+  weeklyRowLabelPeriod,
   jpxInvestorEquityArchiveInput,
   latestWeeklyEntry,
   parseInvestorEquityWorkbook,
@@ -52,6 +53,7 @@ import {
 import { isoWeekLabelOf } from "../iso-week.js";
 import {
   requireSpecFile,
+  MoneyflowFetchError,
   type FetchedBatch,
   type MoneyflowSourceSpec,
   type ObservationDraft,
@@ -80,6 +82,20 @@ async function fetchOk(url: string): Promise<Response> {
     throw new Error(`JPX 投資部門別売買状況: HTTP エラー ${res.status} ${res.statusText} (${url})`);
   }
   return res;
+}
+
+async function resolveIndex<T>(url: string, parse: (html: string) => T): Promise<T> {
+  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  try {
+    if (!res.ok) throw new Error(`JPX 投資部門別売買状況: HTTP エラー ${res.status} (${url})`);
+    return parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch (error) {
+    throw new MoneyflowFetchError(error instanceof Error ? error.message : "JPX一覧解析失敗", {
+      source: url, metadata: { httpStatus: res.status, fetchedAt: new Date().toISOString() },
+      files: [{ filename: url === WEEKLY_INDEX_URL ? "jpx-investor-equity-weekly-index.html" : "jpx-investor-equity-monthly-index.html", bytes, contentType: "text/html" }],
+    }, error);
+  }
 }
 
 function urlBasename(url: string): string {
@@ -129,8 +145,7 @@ const WEEKLY_LIMITATIONS =
   "公表: 毎週第4営業日 (通常木曜、祝日で後ろ倒しあり) 午後3時30分に前週分。" +
   "対象期間ラベルは期間終了日の ISO 週 (YYYY-Www) で、JPX の「◯月第n週」とは数え方が違う。" +
   "月をまたぐ週を JPX がどちらの月に数えるかの規則は公表資料で確認できていない" +
-  " (確認できた例は 2026年9月第1週 = 8/31〜9/4 のみ)。終了日が翌月に入る週" +
-  " (例: 9/28〜10/2) は月の帰属を推測せず取込失敗として止める。";
+  " 月またぎは実公表の9/28〜10/2も受け付け、ラベル月と明記期間/ファイル期間を照合する。";
 
 const MONTHLY_LIMITATIONS =
   COMMON_LIMITATIONS +
@@ -432,32 +447,10 @@ function unifiedDims(rec: InvestorEquityRecord): {
 // 冪等キー
 // ---------------------------------------------------------------------------
 
-// 週次一覧ページの行ラベル: "2026年9月第2週(9月7日～9月11日)" / "2026年9月第1週(8月31日～9月4日)"
-const WEEKLY_INDEX_LABEL_RE = /^(\d{4})年(\d{1,2})月第(\d)週\((\d{1,2})月(\d{1,2})日[～〜~](\d{1,2})月(\d{1,2})日\)$/;
-
-/**
- * 週次一覧ページの行ラベルから冪等キーを作る (期間終了日の ISO 週)。
- * 終了日の月がラベルの月と違う (例: 9/28〜10/2 を「9月第5週」とする) 場合は、
- * 年の帰属を推測せず throw する (取得元モジュールのタイトル検証と同じ方針)。
- */
+/** 週次一覧の明記期間を取得元と同じ検証で読み、終了日の ISO 週をキーにする。 */
 export function weeklyKeyFromIndexLabel(label: string): string {
-  const m = WEEKLY_INDEX_LABEL_RE.exec(label.trim());
-  if (!m) throw new Error(`JPX 投資部門別売買状況 (週次一覧): 行ラベルの様式が想定外です: "${label}"`);
-  const year = Number(m[1]);
-  const month = Number(m[2]);
-  const endMonth = Number(m[6]);
-  const endDay = Number(m[7]);
-  if (endMonth !== month) {
-    throw new Error(
-      `JPX 投資部門別売買状況 (週次一覧): ラベルの月 (${month}) と期間終了日の月 (${endMonth}) が一致しません: "${label}"`
-    );
-  }
-  const periodEnd = `${year}-${pad2(endMonth)}-${pad2(endDay)}`;
-  const d = new Date(`${periodEnd}T00:00:00Z`);
-  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== periodEnd) {
-    throw new Error(`JPX 投資部門別売買状況 (週次一覧): 期間終了日が暦日として不正です: "${label}"`);
-  }
-  return `${WEEKLY_SPEC_NAME}-${isoWeekLabelOf(d)}`;
+  const { end } = weeklyRowLabelPeriod(label);
+  return `${WEEKLY_SPEC_NAME}-${isoWeekLabelOf(new Date(`${end}T00:00:00Z`))}`;
 }
 
 function periodFromKey(key: string, periodType: InvestorEquityPeriodType): string {
@@ -707,9 +700,10 @@ export const JPX_INVESTOR_EQUITY_WEEKLY_SPEC: MoneyflowSourceSpec = {
   name: WEEKLY_SPEC_NAME,
   indicators: JPX_INVESTOR_EQUITY_WEEKLY_INDICATORS,
   async resolve() {
-    const html = await (await fetchOk(WEEKLY_INDEX_URL)).text();
-    const latest = latestWeeklyEntry(parseWeeklyIndexHtml(html));
-    const key = weeklyKeyFromIndexLabel(latest.label);
+    const { latest, key } = await resolveIndex(WEEKLY_INDEX_URL, (html) => {
+      const latest = latestWeeklyEntry(parseWeeklyIndexHtml(html));
+      return { latest, key: weeklyKeyFromIndexLabel(latest.label) };
+    });
     const base = {
       key,
       periodType: "weekly" as const,
@@ -733,8 +727,7 @@ export const JPX_INVESTOR_EQUITY_MONTHLY_SPEC: MoneyflowSourceSpec = {
   name: MONTHLY_SPEC_NAME,
   indicators: JPX_INVESTOR_EQUITY_MONTHLY_INDICATORS,
   async resolve() {
-    const html = await (await fetchOk(MONTHLY_INDEX_URL)).text();
-    const latest = pickLatestPublishedMonth(parseMonthlyIndexHtml(html));
+    const latest = await resolveIndex(MONTHLY_INDEX_URL, (html) => pickLatestPublishedMonth(parseMonthlyIndexHtml(html)));
     const key = `${MONTHLY_SPEC_NAME}-${latest.year}-${pad2(latest.month)}`;
     const unifiedXlsxUrl = latest.unifiedXlsxUrl;
     if (unifiedXlsxUrl !== undefined) {

@@ -1,3 +1,4 @@
+import { MoneyflowFetchError } from "../source-spec.js";
 /**
  * 世界の主要株価指数・為替・金利・金・原油
  * (services/moneyflow/lib/sources/global-indices.ts) のテスト。
@@ -581,8 +582,21 @@ describe("fetchGlobalIndexWeeklyChart (Yahoo クライアントを差し替え�
 
   it("429 (レート制限) は throw する", async () => {
     fetchYahooChartRawMock.mockResolvedValue(new Response("Too Many Requests", { status: 429 }));
-    await expect(fetchGlobalIndexWeeklyChart("n225")).rejects.toThrow(/HTTP 429/);
+    const failure = await fetchGlobalIndexWeeklyChart("n225").then(() => { throw new Error("停止しなかった"); }, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(MoneyflowFetchError);
+    expect((failure as MoneyflowFetchError).message).toMatch(/HTTP 429/);
+    expect(new TextDecoder().decode((failure as MoneyflowFetchError).primary.files[0].bytes)).toBe("Too Many Requests");
+    expect(fetchYahooChartRawMock).toHaveBeenCalledTimes(1);
   });
+  it("不正UTF-8でも原bytesを失敗保全へ渡し、置換文字で上書きしない", async () => {
+    const bytes = new Uint8Array([255, 254, 253]);
+    fetchYahooChartRawMock.mockResolvedValue(new Response(bytes, { status: 200 }));
+    const failure = await fetchGlobalIndexWeeklyChart("stoxx50e").then(() => { throw new Error("停止しなかった"); }, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(MoneyflowFetchError);
+    expect(Array.from((failure as MoneyflowFetchError).primary.files[0].bytes)).toEqual(Array.from(bytes));
+    expect(fetchYahooChartRawMock).toHaveBeenCalledTimes(1);
+  });
+
 });
 
 describe.skipIf(!hasFixtures)("globalIndicesArchiveInput (実フィクスチャ)", () => {

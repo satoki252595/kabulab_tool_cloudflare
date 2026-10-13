@@ -1,3 +1,4 @@
+import { MoneyflowFetchError } from "../source-spec.js";
 /**
  * 世界の主要株価指数・為替・金利・金・原油 (Phase 5: 世界の概況)
  *
@@ -20,7 +21,7 @@
  * クライアント側の既存ロジックに委ねる (このモジュールでは再実装しない)。
  * クライアントは 429 等の HTTP エラーを再試行も throw もせずそのまま返すため、
  * `fetchGlobalIndexWeeklyChart` 側で HTTP ステータスと様式を検査し、異常な
- * 応答本文を「取得成功」として返さない (一次データとして保管させない)。
+ * 応答本文を「取得成功」として返さず、失敗原本として別SHAキーへ物理保全する。
  *
  * ## 実機確認 (2026-09-27, YAHOO_PROXY_BASE 経由)
  * - 対象16銘柄のうち15銘柄は `interval=1wk` で 200 が返り、週次 OHLC が
@@ -167,10 +168,8 @@ export interface GlobalIndexFetchResult {
  * 返す (再試行も throw もしない)。そこでここで
  *   - HTTP ステータスが 2xx でなければ throw する
  *   - 本文を (2) のパーサに通し、様式が想定外なら throw する
- * の2点を検査し、検査を通った本文だけを返す。呼び出し側 (取込) はこの戻り値を
- * そのまま一次データとして保管してよい — エラー応答の本文を「取得成功」として
- * 保管すると、同じ冪等キーの再実行が保管済みの壊れた本文を再解析し続けて
- * 永久に失敗するため (ルール2・ルール6)。
+ * の2点を検査する。失敗時も生bytesをMoneyflowFetchErrorで渡し、共通runnerが
+ * 成功batchと別のSHAキーへ物理保管してから失敗を返す。観測値を補完しない。
  *
  * @param key   `GLOBAL_INDEX_CATALOG` のキー (例: "gspc")
  * @param range Yahoo の `range` パラメータ。週次で最低2週分の確定値が要る
@@ -183,16 +182,20 @@ export async function fetchGlobalIndexWeeklyChart(
 ): Promise<GlobalIndexFetchResult> {
   const entry = catalogEntry(key);
   const res = await fetchYahooChartRaw(entry.yahooSymbol, range, "1wk", false);
-  const raw = await res.text();
-  if (!res.ok) {
-    throw new Error(
-      `fetchGlobalIndexWeeklyChart [${key}=${entry.yahooSymbol}]: HTTP ${res.status} ` +
-        `(本文先頭: ${raw.slice(0, 300)})`
-    );
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const fetchedAt = new Date().toISOString();
+  let raw: string;
+  try {
+    raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    if (!res.ok) throw new Error(`fetchGlobalIndexWeeklyChart [${key}=${entry.yahooSymbol}]: HTTP ${res.status}`);
+    parseGlobalIndexWeeklyChart(raw, key, entry.yahooSymbol);
+  } catch (error) {
+    throw new MoneyflowFetchError(error instanceof Error ? error.message : "Yahoo週足解析失敗", {
+      source: `Yahoo Finance Chart API v8 ${entry.yahooSymbol}`, metadata: { key, yahooSymbol: entry.yahooSymbol, fetchedAt, httpStatus: res.status },
+      files: [{ filename: `global-indices-${key}-${fetchedAt.slice(0, 10)}.json`, bytes, contentType: "application/json" }],
+    }, error);
   }
-  // 様式検査のためだけに解析する (結果は捨てる。保管・再解析は raw から行う)。
-  parseGlobalIndexWeeklyChart(raw, key, entry.yahooSymbol);
-  return { key, yahooSymbol: entry.yahooSymbol, raw, fetchedAt: new Date().toISOString() };
+  return { key, yahooSymbol: entry.yahooSymbol, raw, fetchedAt };
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +239,8 @@ export interface RawWeeklyBar {
 export interface GlobalIndexChartSnapshot {
   key: string;
   yahooSymbol: string;
-  currency: string;
+  /** API欠損はnullのまま。指数の参照通貨と観測された通貨を混同しない。 */
+  currency: string | null;
   instrumentType: string;
   longName: string | null;
   regularMarketPrice: number;
@@ -307,6 +311,7 @@ export function parseGlobalIndexWeeklyChart(
       `${label}: meta.symbol が期待値と不一致です (期待="${expectedYahooSymbol}", 実際="${symbol}")`
     );
   }
+  if (key === "stoxx50e" && meta.instrumentType !== "INDEX") throw new Error(`${label}: meta.instrumentType がINDEXではありません`);
   const dataGranularity = asString(meta.dataGranularity, `${label}.meta.dataGranularity`);
   if (dataGranularity !== "1wk") {
     throw new Error(
@@ -355,7 +360,8 @@ export function parseGlobalIndexWeeklyChart(
   return {
     key,
     yahooSymbol: symbol,
-    currency: asString(meta.currency, `${label}.meta.currency`),
+    currency: meta.currency === null && key === "stoxx50e" && meta.instrumentType === "INDEX"
+      ? null : asString(meta.currency, `${label}.meta.currency`),
     instrumentType: asString(meta.instrumentType, `${label}.meta.instrumentType`),
     // 金先物 (GC=F) 等は longName を持たない実データがある。欠損は null のまま返す。
     longName: typeof meta.longName === "string" ? meta.longName : null,

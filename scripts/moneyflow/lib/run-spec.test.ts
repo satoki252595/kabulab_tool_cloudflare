@@ -4,7 +4,7 @@
  * 「取得元へ取りに行くか」「何を保管し何を書いたか」を検証する。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MoneyflowSourceSpec, ObservationDraft } from "../../../services/moneyflow/lib/source-spec.js";
+import { MoneyflowFetchError, type MoneyflowSourceSpec, type ObservationDraft } from "../../../services/moneyflow/lib/source-spec.js";
 
 // source-spec.ts が observationKey を同モジュールから import しているため、
 // 実物に被せる形で mock する (被せないと validateDrafts の呼び出しで落ちる)。
@@ -187,6 +187,24 @@ describe("runSpec", () => {
     expect(archived.verifyArchivedAttachments).not.toHaveBeenCalled();
     expect(detail).toBe("dry-run key=src-2026-08 2行");
     info.mockRestore();
+  });
+
+  it("resolve/fetch解析失敗でも取得済みbytesを別SHAキーへ保全して元失敗を返す", async () => {
+    const { runSpec } = await import("./run-spec.js"); const { spec } = makeSpec();
+    const failure = new MoneyflowFetchError("index parse failed", { source: "JPX", metadata: { httpStatus: 200 },
+      files: [{ filename: "index.html", bytes: new TextEncoder().encode("unrecognized source response"), contentType: "text/html" }] }, new Error("parse"));
+    const failed = { ...spec, resolve: async () => { throw failure; } };
+    await expect(runSpec(failed, ctx())).rejects.toBe(failure);
+    expect(notion.recordPrimaryData).toHaveBeenCalledWith(expect.objectContaining({ key: expect.stringMatching(/^failed-test-src-[a-f0-9]{64}$/), files: failure.primary.files }));
+    expect(archived.verifyArchivedAttachments).toHaveBeenCalledTimes(1); expect(notion.upsertObservation).not.toHaveBeenCalled();
+  });
+  it("失敗原本保管が失敗/上限超過なら完了扱いせず、dry-runは保管しない", async () => {
+    const { runSpec } = await import("./run-spec.js"); const { spec } = makeSpec();
+    const failure = new MoneyflowFetchError("index parse failed", { source: "JPX", metadata: {}, files: [{ filename: "index.html", bytes: new Uint8Array([60]), contentType: "text/html" }] }, new Error("parse"));
+    const failed = { ...spec, resolve: async () => { throw failure; } };
+    await expect(runSpec(failed, ctx(true))).rejects.toBe(failure); expect(notion.recordPrimaryData).not.toHaveBeenCalled();
+    notion.recordPrimaryData.mockResolvedValueOnce({ pageId: "primary-1", outcome: "recorded", fileTooLarge: true });
+    await expect(runSpec(failed, ctx())).rejects.toThrow(/未保管/); expect(notion.upsertObservation).not.toHaveBeenCalled();
   });
 
   it("解析にはバイト列のコピーを渡す (解析側が detach しても保管用のバイト列は壊れない)", async () => {

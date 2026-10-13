@@ -146,9 +146,13 @@ describe("weeklyKeyFromIndexLabel (一覧ページの行ラベル → 冪等キ�
     expect(weeklyKeyFromIndexLabel("2026年12月第5週(12月28日～12月30日)")).toBe("jpx-investor-equity-weekly-2026-W53");
     expect(weeklyKeyFromIndexLabel("2027年1月第1週(1月4日～1月8日)")).toBe("jpx-investor-equity-weekly-2027-W01");
   });
-  it("様式外・終了日の月がラベルの月と違う・暦日でないラベルは throw", () => {
+  it("実公表の月またぎを受け入れ、関係ないラベル月・不正な暦日/週期間は停止", () => {
     expect(() => weeklyKeyFromIndexLabel("2026年9月第2週")).toThrow(/様式が想定外/);
-    expect(() => weeklyKeyFromIndexLabel("2026年9月第5週(9月28日～10月2日)")).toThrow(/一致しません/);
+    expect(weeklyKeyFromIndexLabel("2026年9月第5週(9月28日～10月2日)")).toBe("jpx-investor-equity-weekly-2026-W40");
+    expect(weeklyKeyFromIndexLabel("2026年12月第5週(12月28日～1月1日)")).toBe("jpx-investor-equity-weekly-2026-W53");
+    expect(weeklyKeyFromIndexLabel("2027年1月第1週(12月28日～1月1日)")).toBe("jpx-investor-equity-weekly-2026-W53");
+    expect(() => weeklyKeyFromIndexLabel("2026年8月第5週(9月28日～10月2日)")).toThrow(/一致しません/);
+    expect(() => weeklyKeyFromIndexLabel("2026年9月第5週(9月28日～10月8日)")).toThrow(/週の期間/);
     expect(() => weeklyKeyFromIndexLabel("2026年9月第5週(9月28日～9月31日)")).toThrow(/暦日/);
   });
 });
