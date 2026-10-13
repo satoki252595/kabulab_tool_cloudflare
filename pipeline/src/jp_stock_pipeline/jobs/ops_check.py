@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
 from ..cloud_store import slo
+from ..cloud_store.local_jobs import check_local_job_receipts
 from ..cloud_store.d1 import D1Error, D1Store
 from ..collectors.tdnet_yanoshin import BASE_URL
 from ..contracts.stock_code import source_code_to_ticker
@@ -604,9 +605,12 @@ def execute(ctx: JobContext) -> None:
     store = D1Store(settings, writer=JOB_NAME)
 
     problems: list[str] = []
+    check_local_job_receipts(settings, problems)
     _check_freshness(ctx, store, problems)
     if ctx.failed:
         # 鮮度表そのものが読めない/空 → それ以上の判定は意味がない
+        for problem in problems:
+            ctx.add_failure("slo", problem)
         return
     _check_probe_alive(store, problems)
     _check_idle_runs(store, problems)

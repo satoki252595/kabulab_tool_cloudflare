@@ -158,6 +158,7 @@ class CloudStoreSettings:
     bucket_timeseries: str = DEFAULT_R2_BUCKET_TIMESERIES
     bucket_raw: str = DEFAULT_R2_BUCKET_RAW
     bucket_supply: str = DEFAULT_R2_BUCKET_SUPPLY
+    local_job_accepted_revision: str | None = None
 
     @property
     def r2_endpoint(self) -> str | None:
@@ -202,6 +203,7 @@ def _load_cloud_store(env: dict[str, str]) -> CloudStoreSettings:
         bucket_timeseries=env.get("R2_BUCKET_TIMESERIES") or DEFAULT_R2_BUCKET_TIMESERIES,
         bucket_raw=env.get("R2_BUCKET_RAW") or DEFAULT_R2_BUCKET_RAW,
         bucket_supply=env.get("R2_BUCKET_SUPPLY") or DEFAULT_R2_BUCKET_SUPPLY,
+        local_job_accepted_revision=env.get("BIZTAG_LOCAL_ACCEPTED_REVISION") or None,
     )
 
 

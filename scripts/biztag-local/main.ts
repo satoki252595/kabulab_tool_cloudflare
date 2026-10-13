@@ -8,16 +8,17 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { preflight } from "./runtime.js";
+import { LOCAL_JOB_HOURS, localJobScheduledFor, parseLocalJobReceipt, startLocalJobReceipt, mirrorLocalJobReceipt } from "./receipt.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 /** 許可した2処理だけを起動する。未知のjobを取得前に拒否する。 */
 export function localJob(kind: string | undefined): { label: string; hour: number; script: string; args: string[] } {
   if (kind === undefined || kind === "biztag") {
-    return { label: "com.kabulab-cf.biztag", hour: 20,
+    return { label: "com.kabulab-cf.biztag", hour: LOCAL_JOB_HOURS.biztag.localHour,
       script: "services/yuho-quant/data-scripts/biztag.ts", args: ["run", "--budget-min=20"] };
   }
   if (kind === "yutai-summary") {
-    return { label: "com.kabulab-cf.yutai-summary", hour: 21,
+    return { label: "com.kabulab-cf.yutai-summary", hour: LOCAL_JOB_HOURS["yutai-summary"].localHour,
       script: "services/otakara-yutai/data-scripts/summary-local.ts", args: ["--limit", "60"] };
   }
   throw new Error("jobはbiztag / yutai-summaryのいずれかを指定してください。");
@@ -72,6 +73,9 @@ async function run(kind: string | undefined): Promise<void> {
   const args = [...job.args];
   if (kind === "yutai-summary") args.push("--state-dir", state);
   const startedAt = new Date().toISOString();
+  const jobKind = kind === "yutai-summary" ? "yutai-summary" : "biztag";
+  const running = parseLocalJobReceipt({ version: 1, kind: jobKind, phase: "running", scheduledFor: localJobScheduledFor(jobKind, startedAt),
+    startedAt, finishedAt: null, revision, acceptedRevision: revision, code: null, signal: null, retries: 0 });
   const receipt = join(state, `${startedAt.replaceAll(":", "-")}-${process.pid}.json`);
   const log = openSync(`${receipt}.log`, "wx", 0o600);
   // 本文/モデル診断は私有ログのみ。spawn環境から不要キーを除くがCLIは.envを再読込する。
@@ -83,6 +87,8 @@ async function run(kind: string | undefined): Promise<void> {
   delete childEnv.TYPESAFE_API_KEY;
   // writer lockはCLIのwithBiztagWriterが保有する。手動CLIも同じ排他境界を通る。
   try {
+    writeFileSync(`${receipt}.started.json`, JSON.stringify(running), { mode: 0o600, flag: "wx" });
+    const mirroredVersion = await startLocalJobReceipt(running, undefined, `${receipt}.previous-incomplete.json`);
     const child = spawn("pnpm", ["exec", "tsx", job.script, ...args], {
       cwd: root, env: childEnv, stdio: ["ignore", log, log], detached: true,
     });
@@ -90,7 +96,7 @@ async function run(kind: string | undefined): Promise<void> {
     const timer = setTimeout(stop, 30 * 60_000);
     process.once("SIGTERM", stop);
     process.once("SIGINT", stop);
-    let result: { code: number | null; signal: NodeJS.Signals | null };
+    let result: { code: number | null; signal: NodeJS.Signals | null } = { code: null, signal: null };
     try {
       result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
         child.once("error", reject);
@@ -100,8 +106,10 @@ async function run(kind: string | undefined): Promise<void> {
       clearTimeout(timer);
       process.removeListener("SIGTERM", stop);
       process.removeListener("SIGINT", stop);
+      const finished = parseLocalJobReceipt({ ...running, phase: "finished", finishedAt: new Date().toISOString(), ...result });
+      writeFileSync(receipt, JSON.stringify(finished), { mode: 0o600, flag: "wx" });
+      await mirrorLocalJobReceipt(finished, mirroredVersion);
     }
-    writeFileSync(receipt, JSON.stringify({ startedAt, finishedAt: new Date().toISOString(), revision, ...result, retries: 0 }), { mode: 0o600, flag: "wx" });
     console.info(JSON.stringify({ status: result.code === 0 ? "completed" : "failed", revision, exitCode: result.code, retries: 0 }));
     if (result.code !== 0) process.exitCode = 1;
   } finally {

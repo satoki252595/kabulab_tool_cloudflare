@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { sqliteTable, text, type BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { parseStockCode } from "../../../../../src/shared/jpx/stock-code.js";
 import { stocks } from "../../../../../src/shared/db/core-schema.js";
-import { isAnnualSecuritiesReport, resolveReportPeriodEnd, secCodeToTicker, type EdinetDoc } from "./types.js";
+import { isAnnualSecuritiesReport, isUnassignedEdinetSecCode, resolveReportPeriodEnd, secCodeToTicker, type EdinetDoc } from "./types.js";
 
 // Python master_sync が実 Notion ① から更新する既存の逆引き区画。読み取りのみ。
 const notionPages = sqliteTable("jss_notion_pages", {
@@ -54,7 +54,7 @@ export async function loadEdinetTickerMap(
 }
 
 /**
- * 証券コードが明記されていれば従来の厳密変換のみ。NULL の場合に限り、
+ * 証券コードが明記されていれば従来の厳密変換のみ。NULL/未割当00000に限り、
  * 年次書類自身の提出者を既存マスタで解決する。未観測は null のまま返す。
  * 大量保有の issuerEdinetCode (提出者と異なる会社) は有報には使わない。
  */
@@ -62,7 +62,7 @@ export function resolveAnnualTicker(
   doc: EdinetDoc,
   edinetToTicker: ReadonlyMap<string, string>
 ): string | null {
-  if (doc.secCode !== null) return secCodeToTicker(doc.secCode);
+  if (!isUnassignedEdinetSecCode(doc.secCode)) return secCodeToTicker(doc.secCode);
   if (!isAnnualSecuritiesReport(doc) || doc.withdrawalStatus !== "0"
     || doc.docInfoEditStatus !== "0" || doc.disclosureStatus !== "0"
     || resolveReportPeriodEnd(doc) === null) return null;

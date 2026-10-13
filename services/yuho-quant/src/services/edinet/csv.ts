@@ -59,7 +59,7 @@ function decodeUtf16le(buf: Buffer): string {
  * - フィールドは "..." で囲まれ、"" は引用符 1 文字を表す
  * - CR は (引用符外で) 無視 (CRLF 対策)
  */
-function tokenizeTsv(text: string): string[][] {
+export function tokenizeDelimited(text: string, delimiter: "\t" | ","): string[][] {
   const records: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -84,7 +84,7 @@ function tokenizeTsv(text: string): string[][] {
     if (ch === '"') {
       inQuotes = true;
       started = true;
-    } else if (ch === "\t") {
+    } else if (ch === delimiter) {
       row.push(field);
       field = "";
       started = false;
@@ -101,6 +101,7 @@ function tokenizeTsv(text: string): string[][] {
       started = true;
     }
   }
+  if (inQuotes) throw new Error("CSV/TSV の引用符が閉じていません");
   if (started || field.length > 0 || row.length > 0) {
     row.push(field);
     records.push(row);
@@ -132,7 +133,7 @@ export function parseEdinetCsvZip(zipBuf: Buffer): EdinetCsvRow[] {
   }
 
   const text = decodeUtf16le(entries.get(mainName)!);
-  const records = tokenizeTsv(text);
+  const records = tokenizeDelimited(text, "\t");
   if (records.length === 0) {
     throw new Error(`EDINET CSV が空です: ${mainName}`);
   }

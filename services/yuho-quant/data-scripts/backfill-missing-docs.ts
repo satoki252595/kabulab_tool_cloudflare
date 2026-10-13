@@ -41,7 +41,7 @@ import {
   listDocuments,
 } from "../src/services/edinet/client.js";
 import type { EdinetDoc } from "../src/services/edinet/types.js";
-import { isAnnualSecuritiesReport } from "../src/services/edinet/types.js";
+import { isAnnualSecuritiesReport, isUnassignedEdinetSecCode } from "../src/services/edinet/types.js";
 import { loadEdinetTickerMap } from "../src/services/edinet/identity.js";
 import { backupDocTextToNotion } from "../src/services/text-backup.js";
 import type { Database } from "../src/db/client.js";
@@ -148,7 +148,7 @@ for (const date of eachDay(fromArg, toArg)) {
     codeToId,
     force,
     await loadEdinetTickerMap(db, listed
-      .filter((doc) => isAnnualSecuritiesReport(doc) && doc.secCode === null && doc.edinetCode !== null)
+      .filter((doc) => isAnnualSecuritiesReport(doc) && isUnassignedEdinetSecCode(doc.secCode) && doc.edinetCode !== null)
       .map((doc) => doc.edinetCode!))
   );
   if (dryRun) {

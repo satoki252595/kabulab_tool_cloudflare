@@ -42,7 +42,7 @@
 
 要素内HTMLは31,928文字で、当期の株式数（株）と貸借対照表計上額（千円）を対応付けた2行を抽出できた。原表の見出し「銘柄 / 当事業年度 / 前事業年度」、行の対応、単位、提出者、期末をすべて検証する。入れ子の `ix:nonNumeric` と自己閉じnilは要素の終端と取り違えない。
 
-確定株数は株へ換算し、帳簿価額は円へ換算する。株価・保有時価・価格観測日・通貨・上場区分はこの表からは確定しないためNULL/未確認のまま。「欠測理由」にその理由を保存する。当期欄が横線なら0へ置換せずNULLとし、株数/帳簿価額の非開示を理由に記録する。
+確定株数は株へ換算し、帳簿価額は円へ換算する。株価・保有時価・価格観測日・通貨・上場区分はこの表だけでは確定しない。後述の独立原典による資格が成立した行だけ価格等を埋め、それ以外はNULL/未確認とし「欠測理由」を保存する。当期欄が横線なら0へ置換せずNULLとし、株数/帳簿価額の非開示を理由に記録する。
 
 原典キーは文書ID・要素ID・ファイル名・context・表番号/行番号・ZIP SHA256・期末。本文の文字列だけを原表照合済とは扱わない。異なる表形、継続要素、複数の対象要素、単位不明、名前と数値の行不一致、同名の複数明細は理由付きHOLDとなり、既存値を上書きしない。
 
@@ -71,6 +71,35 @@
 
 書込modeは送信予約を0600のprivate journalへ先に残す。既存結果またはpending journalがあれば自動再実行しない。HTTP結果不明・読戻し不一致を成功にしない。
 
+## 公式銘柄同定と期末参考時価（追加実証）
+
+有報における「特定投資株式」は国内外の取引所上場銘柄を指すという[金融庁の説明](https://www.fsa.go.jp/access/22/201004b.html)を確認した（2026-10-14参照）。この表区分と、公式コードリストの「上場区分=上場」の両方を確認する。銘柄名の近似・旧graphの銘柄コード・上場一覧の第一候補は使わない。NFKC・空白・㈱/(株)→株式会社という同義表記だけを正規化し、法人格の削除や位置変更はしない。
+
+2026-10-13現在の保存済みEDINETコードリストは11,414社、ZIP SHA256 `f65840ce54b4817583d02669cfbba8cbabf66d2225400a6ec0ee890450b86b0b`。S100Z2Z6の2明細とも公式提出者名へ完全一意一致し、上場区分・証券コード・EDINETコード・法人番号・英字商号を取得できた。コードリスト本体は共有Notion物理アーカイブと全バイト照合済みで、原典行番号・基準日・page/SHAを保存する。
+
+対象コード4887/4272の保存済みYahoo daily raw（run `37202207552.1`、stage `vwap-daily-1530` / `vwap-daily-1200`）を発見し、既存Notion原本の一意照会・gzip全バイト読戻しを実行した。新しいYahoo/EDINET GETは0。gzip内部のbodyBase64を原本bytes長/SHAへ照合し、proxy URLの内側まで確認した要求は `interval=1d&events=split,div&range=10y` だった。
+
+2明細ともsymbolと公式英字商号が一致し、JPY・Asia/Tokyo・2026-06-30の価格バー1本を確認した。期末後からraw captureまでの同じイベント応答にsplitはない（4887の過去splitは2024-09-27）。期末当日のraw `quote.close` × 同じ期末株数だけを「期末参考時価」とする。既存dailyの2桁丸め値、adjclose、局所的な分割係数は使わない。価格基準日は2026-06-30であり、raw取得日や今日の日付へ付け替えない。現在の株価・保有量およびraw capture後の状態は主張しない。
+
+銘柄名/英字商号の不一致、同名やraw候補の重複、価格原典なし、期末当日の休場/欠測、期末後のsplit、観測範囲不足では価格を埋めない。通貨・symbol・原本SHAの矛盾は書込前の資格検証で停止する。価格資格は全行分を先に判定し、一部を更新した後で原本の誤指定に気付く順序を避ける。
+
+追加正規列は「確定銘柄コード」「銘柄照合根拠」「価格照合根拠」「価格照合済」。区分はコードリスト原典で確認できた場合だけ「上場（コードリスト基準日）」とする。原本商号・コード・法人番号・基準日・原典行・page/SHA、価格原本page/gzip SHA/body SHA・symbol・raw timestamp・capture日時・要求範囲・価格/分割の基準を保持する。「価格状態」は同日期末株数×終値による期末参考時価と表示する。既に確定した価格を、後続処理で価格原本が未指定だったという理由でNULLへ消さない。
+
+## 最新保存type1の再解析入口
+
+`services/yuho-quant/data-scripts/backfill-shareholdings.ts` を追加した。D1の母集団は既存開示取込と同じで、各社の最大会計期末、その期末の最新提出日時、同日時の最大行IDで訂正有報を決定する。古い期末の訂正を最新年度へ取り違えない。銘柄コード順・明示cursor・1回1〜50社で全社を走査できる。
+
+```sh
+pnpm exec tsx --env-file-if-exists=.env services/yuho-quant/data-scripts/backfill-shareholdings.ts prepare 50 START /absolute/private/holdings-batch-001 /absolute/private/valuation-source-paths.json
+pnpm exec tsx --env-file-if-exists=.env services/yuho-quant/data-scripts/backfill-shareholdings.ts apply /absolute/private/holdings-batch-001 1000
+```
+
+prepareはD1読取・Notion保存ZIPの取得だけで、原本provider取得・schema/行更新は0。最新type1の一意Key・単一hosted ZIP・バイト長/SHAを確認し、元manifestがある場合は照合、無い場合はunknownを保持する。原表解析と価格資格の結果をprivateの`.item.json` / `.current.jsonl`に出力する。現行投影はD1で選んだ最新有報だけから構成し、過去のNotion行や旧値を破棄しない。原本未保管・未対応表形等は理由付きheldとしてplanへ残す。
+
+applyは準備後も同じ最新文書であることをfresh D1で確認する。銘柄/価格原本はrunで一度だけ全バイト再照合し、各type1も反映直前に全バイト再照合して、共通publisherへ同じbytesを渡す。明示上限へ通全体が収まらない場合は次回へ残す。成功通はreadback後のreceiptで再開でき、結果未確定journalが一つでもあれば自動再送しない。未対応・未処理がある回は非0終了する。planの`more/nextAfterCode`で次の範囲を準備し、heldを全件完了扱いしない。
+
+実入口のreadonly準備で `afterCode=9272, limit=1` から最新S100Z2Z6を選び、2明細/2価格qualifiedの現行JSONLを生成した。これは本番行更新ではない。既に照合済みの同一期間行と異なる訂正原本の自動置換は現時点でsource差分HOLDとなる。過去価格を新日時へ付け替えることや、原典が変わった既存確定値を黙って上書きすることはしない。
+
 ## 費用・性能の上限と未計測部分
 
 既存graphの会社別行数は平均12.365、中央値8、p95=42、p99=62、最大80、100行超0社。ただし旧抽出には100株未満の欠落等があり、これは原表の真の件数分布ではない。保存type1の実証は1通2行だけで、原表全体の日次平均件数は未測定。定時ログの `rows` とHOLD理由で継続観測する。
@@ -85,4 +114,4 @@ repo内に旧5列を読む別consumerは見つからず、外部の旧単発writ
 
 本番確認は旧5列のproperty ID・セル値を保全したPRE、原本ファイルの全文バイト照合、対象明細の正規列・原典キー・NULL価格・旧値不変のPOST、原本行の保有明細状態を一組で行う。全件を未検証のまま残すschema変更だけでは機能完了にしない。
 
-ローカル検証: 保存原本S100Z2Z6は `status=ok / 2行`。schema/純粋parser/通常ingest原子性/catchup境界の4suite53tests PASS、担当ファイルESLint PASS、全体TypeScript PASS（統合後に再実行）。本番証跡はroot担当の反映結果で追記する。
+ローカル検証: 保存原本S100Z2Z6は `status=ok / 2行 / 期末参考時価qualified=2行`。価格・最新文書選定・schema・通常ingest・catchup・既存関連の11suite99tests PASS、担当ファイルESLint PASS、全体TypeScript PASS。本番証跡はroot担当の反映結果で追記する。

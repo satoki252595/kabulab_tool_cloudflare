@@ -3,6 +3,8 @@ import "dotenv/config";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseShareholdingsData } from "../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { applyHoldingsSchema, buildHoldingsSchemaPatch, publishSavedShareholdings } from "../../src/shared/notion-archive/shareholdings.js";
 import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
@@ -11,6 +13,51 @@ const [mode, ...args] = process.argv.slice(2);
 const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 const sha = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
 const save = (path: string, value: unknown) => writeFileSync(path, JSON.stringify(value, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+function publishInput(zipPath: string, metadataPath: string) {
+  const metadata = read(metadataPath);
+  if (metadata.valuationSources !== undefined) {
+    const load = (source: { path: string; archivePageId: string; filename: string; sha256: string }) => ({
+      archivePageId: source.archivePageId, filename: source.filename, sha256: source.sha256, bytes: readFileSync(source.path),
+    });
+    assert.ok(Array.isArray(metadata.valuationSources.prices));
+    metadata.valuationSources = { codeList: load(metadata.valuationSources.codeList), prices: metadata.valuationSources.prices.map(load) };
+  }
+  return { ...metadata, zip: readFileSync(zipPath) };
+}
+
+/** 単通CLIと保存原本backfillが共有する単発送信journal。unknown後は別通へ進まない。 */
+export async function guardedHoldingsMutation<T>(out: string, label: string, action: () => Promise<T>): Promise<T> {
+  const pending = `${out}.pending-write.json`;
+  assert.equal(existsSync(out) || existsSync(pending), false, "既存結果・送信中記録があるため読取照合が必要です");
+  const native = globalThis.fetch;
+  const writes: unknown[] = [];
+  let stopped = false;
+  globalThis.fetch = async (input, init) => {
+    try {
+      assert.equal(stopped, false);
+      const request = new Request(input, init), url = new URL(request.url);
+      assert.equal(url.protocol, "https:");
+      if (request.method !== "GET" && !url.pathname.endsWith("/query")) {
+        assert.equal(url.origin, "https://api.notion.com");
+        writes.push({ time: new Date().toISOString(), method: request.method, urlSha256: sha(request.url), bodySha256: sha(Buffer.from(await request.clone().arrayBuffer())) });
+        writeFileSync(pending, JSON.stringify({ writes, noAutomaticReplay: true }), { mode: 0o600 });
+      }
+      const response = await native(request, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
+      assert.equal(response.status, 200);
+      return response;
+    } catch {
+      stopped = true;
+      throw new NotionConfigError("保有明細の通信未完了。再送せず読取照合してください");
+    }
+  };
+  try {
+    const result = await action();
+    save(out, { observedAt: new Date().toISOString(), mode: label, result, writes: writes.length, sourceRequests: 0 });
+    if (existsSync(pending)) unlinkSync(pending);
+    console.info(JSON.stringify({ outcome: "READBACK_VERIFIED", writes: writes.length }));
+    return result;
+  } finally { globalThis.fetch = native; }
+}
 
 function diagnose(graphPath: string, sourcePath: string) {
   const graphBytes = readFileSync(graphPath), sourceBytes = readFileSync(sourcePath);
@@ -79,37 +126,11 @@ async function main() {
     console.info(JSON.stringify({ status: result.status, reason: result.reason, holdings: result.holdings.length }));
   } else if (mode === "apply-schema" || mode === "publish-saved") {
     assert.equal(args.length, mode === "apply-schema" ? 2 : 3);
-    const out = args[args.length - 1], pending = `${out}.pending-write.json`;
-    assert.equal(existsSync(out) || existsSync(pending), false, "既存結果・送信中記録があるため読取照合が必要です");
-    const native = globalThis.fetch;
-    const writes: unknown[] = [];
-    let stopped = false;
-    globalThis.fetch = async (input, init) => {
-      try {
-        assert.equal(stopped, false);
-        const request = new Request(input, init), url = new URL(request.url);
-        assert.equal(url.protocol, "https:");
-        if (request.method !== "GET" && !url.pathname.endsWith("/query")) {
-          assert.equal(url.origin, "https://api.notion.com");
-          writes.push({ time: new Date().toISOString(), method: request.method, urlSha256: sha(request.url), bodySha256: sha(Buffer.from(await request.clone().arrayBuffer())) });
-          writeFileSync(pending, JSON.stringify({ writes, noAutomaticReplay: true }), { mode: 0o600 });
-        }
-        const response = await native(request, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
-        assert.equal(response.status, 200);
-        return response;
-      } catch {
-        stopped = true;
-        throw new NotionConfigError("保有明細の通信未完了。再送せず読取照合してください");
-      }
-    };
-    try {
-      const result = mode === "apply-schema" ? await applyHoldingsSchema(read(args[0]))
-        : await publishSavedShareholdings({ ...read(args[1]), zip: readFileSync(args[0]) });
-      save(out, { observedAt: new Date().toISOString(), mode, result, writes: writes.length, sourceRequests: 0 });
-      if (existsSync(pending)) unlinkSync(pending);
-      console.info(JSON.stringify({ outcome: "READBACK_VERIFIED", writes: writes.length }));
-    } finally { globalThis.fetch = native; }
+    await guardedHoldingsMutation<unknown>(args[args.length - 1], mode, () => mode === "apply-schema" ? applyHoldingsSchema(read(args[0]))
+      : publishSavedShareholdings(publishInput(args[0], args[1])));
   } else throw new Error("diagnose / schema-plan / parse-saved / apply-schema / publish-saved を指定してください");
 }
 
-main().catch(() => { console.error("SHAREHOLDINGS_STOPPED_NO_AUTOMATIC_REPLAY"); process.exitCode = 1; });
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(() => { console.error("SHAREHOLDINGS_STOPPED_NO_AUTOMATIC_REPLAY"); process.exitCode = 1; });
+}

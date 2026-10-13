@@ -61,7 +61,8 @@ export type EdinetListResponse = z.infer<typeof edinetListResponseSchema>;
  *
  * docTypeCode 120(有報)/130(訂正有報) に加え、
  * ordinanceCode "010"(企業内容等の開示に関する内閣府令) かつ
- * formCode "030000"(有報)/"030001"(訂正有報) を要求する。これにより
+ * formCode "030000"/"030001" と、法24条3項の "040000"/"040001" を要求する。
+ * 後者は公式様式リストESE140327.xlsxと実S100Z0VFで確認。これにより
  * 「有価証券報告書（内国投資信託受益証券）」(ord 030 / form 07A000) 等の
  * 非事業会社の開示を確実に除外する (実 EDINET で確認)。
  */
@@ -70,7 +71,8 @@ export function isAnnualSecuritiesReport(doc: EdinetDoc): boolean {
     doc.withdrawalStatus !== "1" &&
     doc.ordinanceCode === "010" &&
     (doc.docTypeCode === "120" || doc.docTypeCode === "130") &&
-    (doc.formCode === "030000" || doc.formCode === "030001")
+    (doc.formCode === "030000" || doc.formCode === "030001" ||
+      doc.formCode === "040000" || doc.formCode === "040001")
   );
 }
 
@@ -142,5 +144,12 @@ export function resolveReportPeriodEnd(doc: EdinetDoc): string | null {
  * 末尾非 0 の secCode が実在すれば取りこぼす (取り違えより取りこぼしを選ぶ)。
  */
 export function secCodeToTicker(secCode: string | null): string | null {
-  return sourceCodeToTicker(secCode);
+  if (isUnassignedEdinetSecCode(secCode)) return null;
+  const ticker = sourceCodeToTicker(secCode);
+  return ticker === "0000" ? null : ticker;
+}
+
+/** 公式S100Z0VFで確認した未割当00000。その他の不正文字列へ広げない。 */
+export function isUnassignedEdinetSecCode(secCode: string | null): boolean {
+  return secCode === null || secCode === "00000";
 }

@@ -2,16 +2,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { parseShareholdingsData, type Shareholding, type ShareholdingsSource, type ShareholdingsExtraction } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
+import { parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource, type HoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { edinetArchiveFilename } from "../../../services/yuho-quant/src/services/edinet/archive.js";
 import { findUniqueBackupChildByTitle, queryUniqueRow } from "./archive.js";
 import { notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 import { splitRichText } from "./rich-text.js";
 import { verifyArchivedAttachments } from "./readback.js";
+import { listPageFiles } from "./page-file.js";
 
 export interface HoldingsSchema {
   id: string;
-  properties: Record<string, { id: string; type: string; select?: { options: Array<{ id: string; name: string; color: string }> } }>;
+  properties: Record<string, { id: string; type: string; formula?: { expression: string }; select?: { options: Array<{ id: string; name: string; color: string }> } }>;
 }
 
 export const LEGACY_HOLDINGS_COLUMNS = [
@@ -30,7 +32,7 @@ const canonical: Record<string, Record<string, unknown>> = {
   "保有時価": { number: { format: "number" } },
   "通貨": { rich_text: {} },
   "基準日": { date: {} },
-  "区分": { select: { options: [{ name: "未確認", color: "gray" }] } },
+  "区分": { select: { options: [{ name: "未確認", color: "gray" }, { name: "上場（コードリスト基準日）", color: "blue" }] } },
   "保有種別": { select: { options: [{ name: "特定投資株式", color: "blue" }, { name: "みなし保有株式", color: "purple" }] } },
   "出典文書ID": { rich_text: {} },
   "出典要素ID": { rich_text: {} },
@@ -39,9 +41,13 @@ const canonical: Record<string, Record<string, unknown>> = {
   "出典Context": { rich_text: {} },
   "出典原本SHA256": { rich_text: {} },
   "欠測理由": { rich_text: {} },
+  "確定銘柄コード": { rich_text: {} },
+  "銘柄照合根拠": { rich_text: {} },
+  "価格照合根拠": { rich_text: {} },
+  "価格照合済": { checkbox: {} },
   "原本照合済": { checkbox: {} },
   "検証状態": { formula: { expression: 'if(prop("原本照合済"), "明細原本照合済", "未検証（旧取込）")' } },
-  "価格状態": { formula: { expression: 'if(empty(prop("基準日")), "未取得（観測日・通貨未確認）", "価格根拠の確認が必要")' } },
+  "価格状態": { formula: { expression: 'if(prop("価格照合済"), "期末参考時価（同日期末株数×終値）", "未取得（価格・通貨・株数単位の照合未成立）")' } },
 };
 
 /** 既存property/option IDを維持するので、27587行の数値を書き換えない。 */
@@ -68,7 +74,16 @@ export function buildHoldingsSchemaPatch(schema: HoldingsSchema): { properties: 
   }
   for (const [name, definition] of Object.entries(canonical)) {
     const type = Object.keys(definition)[0];
-    if (!renamed.has(name) && schema.properties[name]) assert.equal(schema.properties[name].type, type);
+    if (!renamed.has(name) && schema.properties[name]) {
+      assert.equal(schema.properties[name].type, type);
+      if (type === "formula" && schema.properties[name].formula?.expression !== (definition.formula as { expression: string }).expression) properties[name] = definition;
+      if (type === "select") {
+        const actual = schema.properties[name].select; assert.ok(actual);
+        const required = (definition.select as { options: Array<{ name: string; color: string }> }).options;
+        const missing = required.filter(option => !actual.options.some(existing => existing.name === option.name));
+        if (missing.length > 0) properties[schema.properties[name].id] = { select: { options: [...actual.options, ...missing] } };
+      }
+    }
     else properties[name] = definition;
   }
   return { properties };
@@ -101,6 +116,7 @@ export async function applyHoldingsSchema(expected: HoldingsSchema): Promise<Hol
     }
   }
   for (const [name, definition] of Object.entries(canonical)) assert.equal(actual.properties[name].type, Object.keys(definition)[0]);
+  assert.equal(Object.keys(buildHoldingsSchemaPatch(actual).properties).length, 0, "保有明細schemaのformula/選択肢の読戻しが未成立です");
   return actual;
 }
 
@@ -167,6 +183,8 @@ export interface ShareholdingsBudget { remainingRows: number }
 interface PublishHoldingsArgs {
   source: ShareholdingsSource; ownerName: string; zip: Buffer; archivePageId: string; maxRows: number;
   budget?: ShareholdingsBudget;
+  /** publishVerifiedでは物理全文照合済みの原本だけ。保存入口は内部で照合する。 */
+  valuationSources?: { codeList: ArchivedSource; prices: readonly ArchivedSource[] };
 }
 
 export type PublishHoldingsResult =
@@ -197,15 +215,23 @@ export async function publishVerifiedShareholdings(args: PublishHoldingsArgs): P
   if (parsed.holdings.length > maxRows) return hold("明細件数がrunの残予算を超えています", parsed.holdings.length, parsed.holdings.length <= 100);
   // 並列backfillでも、最初のawait前にrun枠を予約する。未知結果で返却しない。
   if (args.budget) args.budget.remainingRows -= parsed.holdings.length;
+  const zipSha256 = createHash("sha256").update(args.zip).digest("hex");
+  const catalog = args.valuationSources ? parseHoldingsCodeList(args.valuationSources.codeList) : null;
+  const ready = [];
+  for (const holding of parsed.holdings) {
+    const valuation: HoldingValuation = catalog && args.valuationSources
+      ? await qualifyHoldingValuation({ holding, fiscalYearEnd: args.source.fiscalYearEnd, catalog, prices: args.valuationSources.prices })
+      : { status: "unavailable", identity: null, reason: "銘柄同定・個別価格・分割観測の保存原本が未指定です" };
+    ready.push({ holding, valuation, properties: { ...holdingProperties(args.source, args.ownerName, holding),
+      ...sourceProperties(parsed, holding, zipSha256), ...valuationProperties(holding, valuation) } });
+  }
   const dbId = notionEnv.NOTION_STOCK_HOLDINGS_DB_ID();
   const schema = await readHoldingsSchema();
   assert.equal(Object.keys(buildHoldingsSchemaPatch(schema).properties).length, 0, "保有明細schemaの受入が未完了です");
   // 未知のmutation結果で止まった通はこの状態を保持し、定時再開の対象にしない。
   await recordRecoveryMarker(args, "実行中（結果未確定）", "原表の資格成立。全明細の読戻しは未完了", parsed.holdings.length);
   const result = { status: "published" as const, parsed: parsed.holdings.length, created: 0, updated: 0, unchanged: 0 };
-  const zipSha256 = createHash("sha256").update(args.zip).digest("hex");
-  for (const holding of parsed.holdings) {
-    const properties = { ...holdingProperties(args.source, args.ownerName, holding), ...sourceProperties(parsed, holding, zipSha256) };
+  for (const { holding, valuation, properties } of ready) {
     const existing = await queryUniqueRow<HoldingPage>(dbId, { and: [
       { property: "保有会社コード", rich_text: { equals: args.source.stockCode } },
       { property: "銘柄名", rich_text: { equals: holding.name } },
@@ -220,9 +246,19 @@ export async function publishVerifiedShareholdings(args: PublishHoldingsArgs): P
       assert.equal(typeof existing.properties["原本照合済"].checkbox, "boolean");
     }
     if (existing?.properties["原本照合済"]?.checkbox === true) {
-      assertProperties(existing.properties, properties);
-      result.unchanged++;
-      continue;
+      // 期末株数/原本の照合済み行へ価格根拠だけを加える。既存の確定価格は、
+      // 新しい価格原本未指定を理由にNULLへ消さない。原本側の差分はSTOP。
+      const rawProperties = Object.fromEntries(Object.entries(properties).filter(([name]) => !VALUATION_COLUMNS.has(name)));
+      assertProperties(existing.properties, rawProperties);
+      if (valuation.status !== "qualified" && (args.valuationSources === undefined || existing.properties["価格照合済"]?.checkbox === true)) {
+        result.unchanged++; continue;
+      }
+      const expected = Object.fromEntries(Object.entries(properties).filter(([name]) => VALUATION_COLUMNS.has(name)));
+      if (existing.properties["価格照合済"]?.checkbox === true) {
+        assertProperties(existing.properties, expected);
+        result.unchanged++;
+        continue;
+      }
     }
     // 既存未検証行の旧値は専用legacy列に残り、物理PREもrootが保管している。
     const saved: { id: string } = existing
@@ -255,7 +291,72 @@ function sourceProperties(parsed: ShareholdingsExtraction, holding: Shareholding
 export async function publishSavedShareholdings(args: PublishHoldingsArgs): Promise<PublishHoldingsResult> {
   await verifyArchivedAttachments(args.archivePageId,
     [{ filename: edinetArchiveFilename(args.source.docId, 1), bytes: args.zip }], "株式保有の保存原本");
+  if (args.valuationSources) for (const source of [args.valuationSources.codeList, ...args.valuationSources.prices]) {
+    await verifyArchivedAttachments(source.archivePageId, [{ filename: source.filename, bytes: source.bytes }], "保有明細の銘柄・価格原本");
+  }
   return publishVerifiedShareholdings(args);
+}
+
+const VALUATION_COLUMNS = new Set(["株価", "保有時価", "通貨", "基準日", "区分", "確定銘柄コード", "銘柄照合根拠", "価格照合根拠", "価格照合済", "欠測理由"]);
+function valuationProperties(holding: Shareholding, valuation: HoldingValuation): Record<string, HoldingProperty> {
+  const identity = valuation.identity;
+  const properties: Record<string, HoldingProperty> = { "確定銘柄コード": rt(identity === null ? "" : identity.code),
+    "銘柄照合根拠": rt(identity === null ? "" : JSON.stringify(identity)), "価格照合根拠": rt(""),
+    "価格照合済": { checkbox: false } };
+  if (identity !== null) properties["区分"] = { select: { name: "上場（コードリスト基準日）" } };
+  const missing: string[] = [];
+  if (holding.shares === null) missing.push("当期株数は原表が横線で非開示");
+  if (holding.bookValueYen === null) missing.push("当期帳簿価額は原表が横線で非開示");
+  if (valuation.status === "qualified") {
+    Object.assign(properties, { "株価": { number: valuation.price }, "保有時価": { number: valuation.value },
+      "通貨": rt(valuation.currency), "基準日": { date: { start: valuation.date } },
+      "価格照合根拠": rt(JSON.stringify(valuation.priceSource)), "価格照合済": { checkbox: true } });
+    missing.push("期末参考時価。現在の株価・保有量およびraw capture後の状態は未観測");
+  } else missing.push(valuation.reason);
+  properties["欠測理由"] = rt(missing.join("。"));
+  return properties;
+}
+
+/** 保存type1限定のbackfill準備。新規原本取得・schema変更・行更新は0。 */
+export async function readSavedHoldingsZip(docId: string): Promise<
+  { status: "ready"; archivePageId: string; bytes: Buffer; sha256: string; originalManifest: "known" | "unknown" } |
+  { status: "held"; reason: string }
+> {
+  assert.match(docId, /^S[0-9A-Z]+$/);
+  const dbId = await sourceDatabase();
+  const page = await queryUniqueRow<HoldingPage>(dbId, { property: "Key", title: { equals: `${docId}:type1` } }, "type1原本が複数あり保全停止します");
+  if (page === null) return { status: "held", reason: "最新有報のtype1物理原本が未保管です。新規EDINET取得は実施しません" };
+  assert.equal(page.archived, false); assert.equal(page.in_trash, false);
+  assert.equal(page.parent.type, "database_id"); assert.equal(page.parent.database_id.replaceAll("-", ""), dbId.replaceAll("-", ""));
+  const key = page.properties["Key"];
+  assert.equal(key.type, "title"); assert.ok(Array.isArray(key.title));
+  assert.equal(key.title.map(part => { assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text; }).join(""), `${docId}:type1`);
+  if (page.properties["保有明細状態"]?.select?.name === "実行中（結果未確定）") return { status: "held", reason: "保有明細の前回結果が未確定です。再送せず読取照合してください" };
+  const files = await listPageFiles(page.id, "Files");
+  if (files.length !== 1 || files[0].kind !== "file" || files[0].name !== edinetArchiveFilename(docId, 1)) return { status: "held", reason: "type1の単一Notion-hosted物理添付を確認できません" };
+  assert.equal(new URL(files[0].url).protocol, "https:");
+  const response = await fetch(files[0].url, { redirect: "error", signal: AbortSignal.timeout(30_000) });
+  assert.equal(response.ok, true);
+  const length = response.headers.get("Content-Length");
+  if (length !== null && Number(length) > 5 * 1024 * 1024) return { status: "held", reason: "type1原本が1通5MiBの予算を超えています" };
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length > 5 * 1024 * 1024) return { status: "held", reason: "type1原本が1通5MiBの予算を超えています" };
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const parts = page.properties["Metadata"]?.rich_text;
+  assert.ok(Array.isArray(parts));
+  const metadata = JSON.parse(parts.map(part => {
+    assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text;
+  }).join(""));
+  assert.equal(metadata.docID, docId);
+  if (metadata._fileManifest !== undefined) {
+    assert.ok(Array.isArray(metadata._fileManifest.files));
+    assert.equal(metadata._fileManifest.files.length, 1);
+    const manifest = metadata._fileManifest.files[0];
+    assert.equal(manifest.originalFilename, files[0].name);
+    assert.equal(manifest.byteLength, bytes.length); assert.equal(manifest.sha256, digest);
+  }
+  return { status: "ready", archivePageId: page.id, bytes, sha256: digest,
+    originalManifest: metadata._fileManifest === undefined ? "unknown" : "known" };
 }
 
 const RECOVERY = {
@@ -264,14 +365,18 @@ const RECOVERY = {
   "保有明細再開情報": { rich_text: {} },
 } as const;
 let recoveryDb: Promise<string> | undefined;
+let sourceDb: Promise<string> | undefined;
+function sourceDatabase(): Promise<string> {
+  if (!sourceDb) sourceDb = findUniqueBackupChildByTitle({ parentPageId: notionEnv.NOTION_ARCHIVE_PAGE_ID(),
+    title: "一次データ｜yuho-quant", kind: "database" }).then(dbId => { assert.ok(dbId); return dbId; });
+  return sourceDb;
+}
 
 /** 新規DBは作らず、既存yuho一次データDBのtype1行にだけ再開情報を残す。 */
 async function recoveryDatabase(): Promise<string> {
   if (recoveryDb) return recoveryDb;
   recoveryDb = (async () => {
-    const dbId = await findUniqueBackupChildByTitle({ parentPageId: notionEnv.NOTION_ARCHIVE_PAGE_ID(),
-      title: "一次データ｜yuho-quant", kind: "database" });
-    assert.ok(dbId, "有報の一次データDBがありません");
+    const dbId = await sourceDatabase();
     const schema = await notionRequest<HoldingsSchema>("GET", `/databases/${dbId}`);
     const properties: Record<string, unknown> = {};
     for (const [name, definition] of Object.entries(RECOVERY)) {

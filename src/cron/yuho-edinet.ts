@@ -21,6 +21,7 @@ import { enqueueDates, progressQueue, progressContents, progressSummary, savePro
 import { EdinetListFetchError, EdinetDocumentFetchError } from "../../services/yuho-quant/src/services/edinet/client.js";
 import {
   isAnnualSecuritiesReport,
+  isUnassignedEdinetSecCode,
 } from "../../services/yuho-quant/src/services/edinet/types.js";
 import { loadEdinetTickerMap, loadKnownStockCodes, resolveAnnualTicker } from "../../services/yuho-quant/src/services/edinet/identity.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
@@ -203,7 +204,7 @@ export async function runYuhoEdinetCatchup(
     }
     const remaining = targets.filter((doc) => !completed.includes(doc.docID));
     const edinetToTicker = await loadEdinetTickerMap(db, remaining
-      .filter((doc) => doc.secCode === null && doc.edinetCode !== null)
+      .filter((doc) => isUnassignedEdinetSecCode(doc.secCode) && doc.edinetCode !== null)
       .map((doc) => doc.edinetCode!));
     const resolvedTargets = remaining.filter((doc) => {
       const code = resolveAnnualTicker(doc, edinetToTicker);
