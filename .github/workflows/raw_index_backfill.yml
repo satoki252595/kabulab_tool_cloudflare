@@ -1,0 +1,72 @@
+# 明示bulk専用。⑤hosted原本だけを読み、通常cron/source取得へ接続しない。
+name: raw_index_backfill
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry: 原本GET/SHAと欠測計画のみ、apply: CAS保存と索引補完"
+        type: choice
+        options: [dry, apply]
+        default: dry
+      plan_id:
+        description: "再開時は同じID。別IDで先行unknownを迂回しない"
+        type: string
+        default: canonical-20261014
+      expected_count:
+        description: "固定cutoffでの⑤canonical期待件数。不一致は書込前に停止"
+        type: string
+        default: "78831"
+      limit:
+        description: "このrunで検証する最大件数（全量まで拡張可）"
+        type: string
+        default: "50"
+      max_bytes:
+        description: "raw転送予算bytes（hosted/R2 GET/PUT合計をworst-case予約、切詰め禁止）"
+        type: string
+        default: "67108864"
+      max_seconds:
+        description: "新規原本の開始時間予算秒。開始済み1件を完結し、hard timeoutではinflight保全"
+        type: string
+        default: "1200"
+concurrency:
+  group: raw_index_backfill
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
+      - name: Sync Node dependencies
+        run: nix develop -c pnpm install --frozen-lockfile
+      - name: Verify or publish existing canonical originals
+        env:
+          MODE: ${{ inputs.mode }}
+          PLAN_ID: ${{ inputs.plan_id }}
+          EXPECTED_COUNT: ${{ inputs.expected_count }}
+          LIMIT: ${{ inputs.limit }}
+          MAX_BYTES: ${{ inputs.max_bytes }}
+          MAX_SECONDS: ${{ inputs.max_seconds }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DB_RAW_FILES: ${{ secrets.NOTION_DB_RAW_FILES }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_RAW: ${{ secrets.R2_BUCKET_RAW }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          mkdir -m 700 -p tmp/raw-index
+          nix develop -c pnpm exec tsx scripts/notion/raw-index-backfill.ts \
+            "--mode=$MODE" "--plan-id=$PLAN_ID" "--expected-count=$EXPECTED_COUNT" \
+            "--limit=$LIMIT" "--max-bytes=$MAX_BYTES" "--max-seconds=$MAX_SECONDS" \
+            --out=tmp/raw-index/receipt.jsonl
+      # raw body/manifest/private receipt はartifactへ公開しない。再開stateはR2へCAS保管。

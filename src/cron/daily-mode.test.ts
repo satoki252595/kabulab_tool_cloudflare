@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { runDailySync, runMarketContextSync } from "./daily.js";
 import * as dailyModule from "./daily.js";
+import * as jpLegModule from "./macro-jp-leg.js";
+import { r2GetVersion } from "../../scripts/vwap/lib/r2.js";
+const emptyJpStore: jpLegModule.MacroJpLegStore = { get: async () => null, put: async () => { throw new Error("test: unexpected PUT"); } };
 import type { OverlayCollectFn } from "./universe-overlay.js";
 import { fakeOverlayCollect } from "./tests/overlay-batch.js";
 import { chartWithRaw, stockWithRaw } from "./tests/yahoo-capture.js";
@@ -48,7 +51,8 @@ vi.mock("../shared/yahoo/client.js", async (original) => ({
   fetchChart: vi.fn(), fetchStockRawData: vi.fn(),
 }));
 vi.mock("../shared/yahoo/raw-custody.js", () => ({ archiveYahooRawBatch: vi.fn() }));
-vi.mock("../shared/yahoo/nikkei-vi.js", () => ({ fetchNikkeiVi: vi.fn() }));
+vi.mock("../shared/yahoo/nikkei-vi.js", async (original) => ({ ...await original<typeof import("../shared/yahoo/nikkei-vi.js")>(), fetchNikkeiVi: vi.fn() }));
+vi.mock("../../scripts/vwap/lib/r2.js", () => ({ r2GetVersion: vi.fn(), r2Put: vi.fn() }));
 vi.mock("../shared/notion-archive/index.js", async (original) => ({
   ...await original<typeof import("../shared/notion-archive/index.js")>(),
   ensurePriceSyncDb: vi.fn(), recordPriceSyncLog: vi.fn(),
@@ -63,6 +67,7 @@ const fxBytes = (name: string): Uint8Array => readFileSync(join(FX, name));
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(r2GetVersion).mockResolvedValue(null);
   vi.mocked(archiveYahooRawBatch).mockResolvedValue({ pages: ["raw-page"], rawBytes: 1, compressedBytes: 1 });
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-28T17:13:00Z"));
@@ -517,7 +522,8 @@ describe("株式とマクロの日次分離", () => {
     expect(macroArchiveInputs()).toHaveLength(1);
   });
 
-  it("旧 N225 (9/28 候補 null) は HOLD し 9/25 に戻さない", async () => {
+  it("CLIは保存JP原本が無ければHOLDし新規N225や旧日を代用しない", async () => {
+    for (const key of ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"]) vi.stubEnv(key, "symbolic-test-credential");
     vi.setSystemTime(new Date("2026-09-30T01:55:26Z"));
     mockMacro({ ...ALIGNED, "^N225": "n225-20260929.json" });
     const { db, calls } = recordingDb();
@@ -539,8 +545,7 @@ describe("株式とマクロの日次分離", () => {
       errors.mockRestore();
       vi.unstubAllEnvs();
     }
-    expect(fetchChart).toHaveBeenCalledTimes(1);
-    expect(fetchChart).toHaveBeenCalledWith("^N225", "1mo", expect.any(Object));
+    expect(fetchChart).not.toHaveBeenCalled();
     expect(fetchNikkeiVi).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
     const archived = macroArchiveInputs();
@@ -548,11 +553,11 @@ describe("株式とマクロの日次分離", () => {
     const manifest = manifestOf(archived[0]);
     expect(manifest.draft.charts["^N225"].date).toBeNull();
     expect(manifest.gate.reason).toMatch(/N225 確定日が無い/);
-    expect(manifest.attempts).toHaveLength(1);
+    expect(manifest.attempts).toHaveLength(0);
     expect(archived[0].files?.map((f) => f.filename)).toEqual([
-      "macro-N225-attempt0.json", "macro-manifest.json",
+      "macro-manifest.json",
     ]);
-    expect(bytesEqual(archived[0].files![0].bytes, fxBytes("n225-20260929.json"))).toBe(true);
+    expect(new TextDecoder().decode(archived[0].files![0].bytes)).toContain("missing-jp-leg");
     expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
   });
 
@@ -694,7 +699,7 @@ describe("SCHEDULED_DATE 検証 (CF scheduler 経由の一致確認のみ)", () 
     vi.mocked(fetchChart).mockImplementation(chartWithRaw(chart("2026-09-25")));
     const { db } = recordingDb();
     // 検証を通過し、既存の session guard (日足不一致) まで到達する。
-    await expect(runDailySync(db, { stocksOnly: true })).rejects.toThrow(
+    await expect(runDailySync(db, { stocksOnly: true, jpLegStore: emptyJpStore })).rejects.toThrow(
       "日足を確認できません"
     );
     expect(fetchChart).toHaveBeenCalled();
@@ -747,17 +752,52 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
     vi.stubEnv("STOCK_SYNC_TARGET", "scheduled-context");
     vi.stubEnv("SCHEDULED_DATE", "2026-09-29");
     vi.setSystemTime(new Date("2026-09-29T21:00:30Z"));
+    vi.spyOn(jpLegModule, "loadMacroJpLeg").mockResolvedValue({
+      n225: { value: 47505.875, prev: 47000, date: "2026-09-29" }, nikkeiVi: 20, nikkeiViDate: "2026-09-29",
+      reference: { kind: "archived-jp-leg", expectedDate: "2026-09-29", cacheKey: "macro/jp-close/2026-09-29.json",
+        archivePageId: "test-jp-page", manifestSha256: "a".repeat(64),
+        n225: { sha256: "b".repeat(64), receivedAt: "2026-09-29T09:00:00Z", archivePages: ["test-n225-page"] },
+        vi: { sha256: "c".repeat(64), receivedAt: "2026-09-29T09:00:01Z", status: 200 } },
+    });
   });
   afterEach(() => vi.unstubAllEnvs());
 
   it("予定日と原本確定日が一致すればcontextだけを保存する", async () => {
     mockMacro(ALIGNED);
     const { db, calls, params } = recordingDb();
-    expect(await runMarketContextSync(db)).toBe(true);
+    expect(await runMarketContextSync(db, emptyJpStore)).toBe(true);
     expect(calls).toHaveLength(1);
     expect(params[0][0]).toBe("2026-09-29");
     expect(fetchStockRawData).not.toHaveBeenCalled();
     expect(recordPriceSyncLog).not.toHaveBeenCalled();
+    expect(vi.mocked(fetchChart).mock.calls.map(([symbol]) => symbol)).toEqual(["^VIX", "^GSPC", "NIY=F"]);
+    expect(fetchNikkeiVi).not.toHaveBeenCalled();
+    const composite = macroArchiveInputs()[0];
+    expect(composite.files?.map((file) => file.filename).sort()).toEqual([
+      "macro-GSPC-attempt0.json", "macro-NIY-attempt0.json", "macro-VIX-attempt0.json", "macro-manifest.json",
+    ]);
+    const manifest = JSON.parse(new TextDecoder().decode(composite.files!.find((file) => file.filename === "macro-manifest.json")!.bytes));
+    expect(manifest.version).toBe(2);
+    expect(manifest.jpLeg).toMatchObject({ archivePageId: "test-jp-page", expectedDate: "2026-09-29" });
+  });
+
+  it("保存JP原本が無ければHOLD/理由を保管し、当日/旧日の新規N225・VI・米国GETは0", async () => {
+    vi.mocked(jpLegModule.loadMacroJpLeg).mockResolvedValue(null);
+    const { db, calls } = recordingDb();
+    expect(await runMarketContextSync(db, emptyJpStore)).toBe(false);
+    expect(fetchChart).not.toHaveBeenCalled();
+    expect(fetchNikkeiVi).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    const files = macroArchiveInputs()[0].files!;
+    expect(files.map((file) => file.filename)).toEqual(["macro-manifest.json"]);
+    expect(new TextDecoder().decode(files[0].bytes)).toContain("missing-jp-leg");
+  });
+
+  it("定時マクロは保存接続が欠ければ取得前に停止", async () => {
+    const { db, calls } = recordingDb();
+    await expect(runMarketContextSync(db)).rejects.toThrow("JP leg読取接続が必須");
+    expect(fetchChart).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
 
   it("定時マクロの初回429でも予定日を原本へ保持し、保管後はD1を書かない", async () => {
@@ -767,7 +807,7 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
       throw new YahooRateLimitError(429, null);
     });
     const { db, calls } = recordingDb();
-    await expect(runMarketContextSync(db)).rejects.toBeInstanceOf(YahooRateLimitError);
+    await expect(runMarketContextSync(db, emptyJpStore)).rejects.toBeInstanceOf(YahooRateLimitError);
     expect(fetchChart).toHaveBeenCalledTimes(1);
     expect(fetchNikkeiVi).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
@@ -782,12 +822,12 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
   it("予定日欠落・形式不正・遅配は取得前に停止する", async () => {
     const { db, calls } = recordingDb();
     vi.stubEnv("SCHEDULED_DATE", "");
-    await expect(runMarketContextSync(db)).rejects.toThrow("必須");
+    await expect(runMarketContextSync(db, emptyJpStore)).rejects.toThrow("必須");
     vi.stubEnv("SCHEDULED_DATE", "2026/09/29");
-    await expect(runMarketContextSync(db)).rejects.toThrow("形式");
+    await expect(runMarketContextSync(db, emptyJpStore)).rejects.toThrow("形式");
     vi.stubEnv("SCHEDULED_DATE", "2026-09-29");
     vi.setSystemTime(new Date("2026-09-29T21:31:00Z"));
-    await expect(runMarketContextSync(db)).rejects.toThrow("開始");
+    await expect(runMarketContextSync(db, emptyJpStore)).rejects.toThrow("開始");
     expect(fetchChart).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
   });
@@ -797,7 +837,7 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
     vi.setSystemTime(new Date("2026-09-30T21:00:30Z"));
     mockMacro(ALIGNED);
     const { db, calls } = recordingDb();
-    expect(await runMarketContextSync(db)).toBe(false);
+    expect(await runMarketContextSync(db, emptyJpStore)).toBe(false);
     expect(calls).toEqual([]);
     expect(manifestOf(macroArchiveInputs()[0]).gate.reason).toMatch(/GSPC 確定日 2026-09-29 ≠ 予定日 2026-09-30/);
   });
@@ -808,7 +848,7 @@ describe("定時マクロの予定日・開始窓・保存期限", () => {
       vi.setSystemTime(new Date("2026-09-29T22:00:00.001Z"));
     });
     const { db, calls } = recordingDb();
-    expect(await runMarketContextSync(db)).toBe(false);
+    expect(await runMarketContextSync(db, emptyJpStore)).toBe(false);
     expect(macroArchiveInputs()).toHaveLength(1);
     expect(calls).toEqual([]);
   });

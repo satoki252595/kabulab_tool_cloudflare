@@ -207,6 +207,7 @@ class TestCatalogPage:
     def test_catalog_mentions_license_and_disclaimer(self, ensured):
         client, _settings, db_ids = ensured
         blocks = schema.catalog_blocks(db_ids)
+        assert blocks == schema.catalog_blocks(dict(reversed(list(db_ids.items()))))
         text = " ".join(
             rt["text"]["content"]
             for b in blocks
@@ -239,7 +240,7 @@ class TestCatalogPage:
             assert value in text, f"ソース '{value}' がカタログ説明に未記載"
 
     def test_recommended_views_reference_known_dbs(self):
-        """ビューはAPI未対応のため定数定義+カタログ記載 (§7)。"""
+        """現行API/接続ツールまたはUIへ渡す定数定義+カタログ記載 (§7)。"""
         for view in schema.RECOMMENDED_VIEWS:
             assert view["db"] in DB_REGISTRY
             assert view["name"]

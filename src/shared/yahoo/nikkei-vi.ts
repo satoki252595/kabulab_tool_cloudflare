@@ -50,6 +50,7 @@ export async function fetchNikkeiVi(
   options?: FetchNikkeiViOptions
 ): Promise<NikkeiViSnapshot> {
   const res = await fetch(NIKKEI_SMARTCHART_URL, {
+    signal: AbortSignal.timeout(30_000),
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -69,7 +70,11 @@ export async function fetchNikkeiVi(
     );
   }
 
-  const body = await res.text();
+  return parseNikkeiVi(await res.text());
+}
+
+/** 保存済み同一HTMLの再解析。通信なし。 */
+export function parseNikkeiVi(body: string): NikkeiViSnapshot {
   const match = body.match(/window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});/);
   if (!match) {
     throw new Error(

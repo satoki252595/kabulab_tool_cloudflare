@@ -1,6 +1,6 @@
 # 歴史原本索引の復旧計画（2026-10-14）
 
-本番bulk書込は未実施。`scripts/notion/raw-index-plan.ts` は読取専用で、既存local原本50〜100件のSHA・Notion⑤metadata/hosted添付・D1索引・R2全文を照合する。原本をupstreamから取り直さず、Notion原本/派生を新規作成しない。
+本番bulk書込は未実施。既存local原本向け読取専用 `scripts/notion/raw-index-plan.ts` に加え、GH既存資格で⑤hosted原本だけを読む `scripts/notion/raw-index-backfill.ts` と手動専用 workflow を用意した。原本をupstreamから取り直さず、Notion原本/派生を新規作成しない。
 
 ## 実測と範囲
 
@@ -29,8 +29,26 @@ pnpm exec tsx scripts/notion/raw-index-plan.ts --raw-dir=/Users/satoki252595/pro
 4. append/fsyncしたphase receipt（local verified / R2 attempt / R2 verified / D1 attempt / D1 verified）で再開する。inflight/unknownは最初に読取照合し、同値を証明できない状態で再PUT/再INSERTしない。D1保存済同値はwriteなし、矛盾metadataは保全停止。Notion/body/R2旧keyは削除しない。
 5. 完了判定は「Notion canonical SHA集合のD1未索引anti-join=0」と「全索引先R2の全文SHA/サイズ一致」。原本以外の既存R2/D1行があるため、単純なbucket総数一致を完了条件にしない。license tagを保持し、公開APIのcommercial-ok限定契約を拡張しない。doc_id未検証は理由を残し、開示→原本の結合を完了扱いにしない。
 
-raw primary追加は最大24.73GB（予算上限25GB、既存同値skipで実増は減る）。既存全R2を約4GBとする保守計算では月28.73GB、無料10GB控除と課金単位切上げ後は19GB×$0.015＝**$0.285/月**。Workers既存固定$5/月とは別。最大78,831 PUT、候補確認＋保存後全文確認は最大157,662 GET規模で、当月他利用との合算が包含枠内なら操作料金増0。超過時は操作課金も切上げ単位で発生する。[R2公式料金](https://developers.cloudflare.com/r2/pricing/)
+raw primary追加は最大24.73GB（予算上限25GB、既存同値skipで実増は減る）。既存全R2を約4GBとする保守計算では月28.73GB、無料10GB控除と課金単位切上げ後は19GB×$0.015＝**$0.285/月**。Workers既存固定$5/月とは別。raw PUT最大78,831に永続state最大3 PUT/件を加え約315k Class A、current/旧候補/保存後確認のraw GET＋receipt全文読戻しは約473k Class B。chunk起動の少数GET、manifest約数十MBの保管、既知エラーの再調査は別。口座の当月他利用との合算が包含枠内なら操作料金増0。超過時は操作課金も切上げ単位で発生する。[R2公式料金](https://developers.cloudflare.com/r2/pricing/)
 
 worst-case通信はNotion DL24.73GB＋R2 PUT24.73GB＋全文GET24.73GB＝74.19GB。local全量ヒットや既存R2 skipで減る。20/50/100Mbpsなら転送だけ約8.24/3.30/1.65時間で、API latency/Notion pacing/D1 commit待ちは別途必要。dryのR2 GET時間を実測し、次の限定write pilotでPUT＋readback＋D1所要を測ってから全量スケジュールを決める。D1 raw索引は本文を持たず、78,831行×概算2KiBでも約161MB（索引込みの実サイズはpilotで測定、未実測を確定値にしない）。通常cronへ全量作業を入れず、件数/bytes/時間予算を持つ明示CLIで進める。
 
 R2のS3 APIは`PutObject`の条件付き操作をサポートする。SHA16 keyの存在だけでは同一性を認めず、完全SHA256を必ず照合する。[R2 S3互換API](https://developers.cloudflare.com/r2/api/s3/api/)
+
+## 明示GH pilotと再開契約
+
+`.github/workflows/raw_index_backfill.yml` は workflow_dispatch のみ。既存 `CF_*`/`R2_*`/`NOTION_*` secretsをtyped envへ渡す。新鍵・権限拡大・source GET・通常cron追加・artifact公開はない。既存GH鍵のraw読取は run [38432393181](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/38432393181) で全文SHA一致を確認済み。local.env鍵とはscopeが異なる。
+
+初回は `mode=dry / plan_id=canonical-20261014 / expected_count=78831 / limit=50 / max_bytes=67108864 / max_seconds=1200`。dryはremote mutation 0。期待件数は調査時の値で、固定cutoffの現在集合と不一致なら黙って除外せず停止する。applyは同じ入力のmodeだけを変更し、以降同plan-idのcursorから次chunkへ進める。rootがsummaryの正常partialを確認して再dispatchする。自動workflow起動とactions:writeは追加しない。
+
+全集合は作成時刻cutoffとSHA16分割で確定。10,000件に到達したpartitionはhas_more=falseでも破棄し再分割する。共有strict list envelope/cursor前進検査に加えて全SHA/page一意・期待件数・実日付・キーmetadataを検証する。原本URLの更新はSHA 50件OR queryのfilesをメモリ内だけで再利用し、78k件の個別page GETを行わない。非対応拡張子のNotion ZIPラップは原名1member/展開サイズ上限と原本全SHAを検査する。
+
+既存vwap-dataの `ops/raw-index/<plan-id>/manifest.json,state.json,complete.json` にCAS＋全文readbackで保管する。原文・hosted署名URL・取得URLはmanifest/state/local receiptへ含めない。local receiptは0600で各phaseをfsync。global `ops/raw-index/active.json` が別planへの逃避を止める。vwap配信readerはdaily/intra/marginの構成済みkeyしか読まず、ops prefixを任意keyとして公開しない。
+
+順序はR2 current/旧key全文GET→欠測時のみhosted全DL/SHA→永続raw_inflight→単発If-None-Match PUT→全文GET/SHA→永続index_inflight→単一atomic INSERT→D1 readback→cursor確定。D1既存行は取得履歴/derived等を更新せず、同値ならraw/index write0（進捗receipt更新は別に計数）。unknownは即停止し次原本へ進まない。次runはinflight原本/索引を先に読む。一致すれば適用済みを回収、未確認なら再PUT/再INSERTせず保全停止する。
+
+bytes予算はraw転送を1件ごとにworst-case予約し、収まらない次原本を切り詰めず残す。件数・時間予算で正常partialを返す。時間予算後は新原本を開始せず、開始済み1件（または開始済み最終anti-join）を完結する。GH hard timeout/runner消失でも永続inflightが再送を止める。全cursor到達後にcanonical SHA全件をD1 PK IN<=100で再突合し、anti-join 0＋complete receipt全文readbackを検証して初めてsnapshot_complete。全cursor直後に予算到達した場合はremaining=0でもpartialを返し、次runで最終検証だけを再開する。新規Notion原本がcutoff以降に増えた分まで完了とは表示しない。
+
+TDnetの既存doc_idはPDF一覧由来であり、XBRL ZIP URLの番号から同一性を推測しない。既存writerのdoc_idは保持して `retained_existing_unverified`、旧索引のnullは `archived_id_verified_index_legacy_null`、原典metadataでID未確定は `not_proven_from_archived_metadata` と個別receiptへ明示する。SHA原本索引の完了と、④開示→原本のdoc_id結合完了は分ける。
+
+現時点でEDINET/TDnet/yfinance/日証金の既存⑤metadata各1件をread-onlyで照合し、実データのdatatype/scope/date/hosted/key契約が通ることを確認した（追加metadata 4 query、source GET 0）。実pilotのR2 PUT＋D1所要と操作数はGH実行後にrootが計測する。全量の時間は未実測。最悪のNotion metadata pacingは、全棚卸し約800 query＋URL更新約1,577 queryで約15分に抑え、原本転送・逐次D1 latency・fsyncは別途加わる。

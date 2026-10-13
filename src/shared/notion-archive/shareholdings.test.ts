@@ -94,12 +94,24 @@ describe("株式保有の原典限定writer", () => {
   it("5旧列と分類option IDを維持し、新schemaは再実行でmutation不要", () => {
     const before = oldSchema(), snapshot = structuredClone(before);
     const patch = buildHoldingsSchemaPatch(before);
-    expect(patch.properties["old-0"]).toEqual({ name: "旧分類（未検証）", select: { options: [
-      { id: "listed", name: "コード照合のみ（未検証）", color: "blue" }, { id: "no-code", name: "コード未確定", color: "gray" },
-    ] } });
+    expect(patch.properties["old-0"]).toEqual({ name: "旧分類（未検証）" });
     expect(Object.keys(patch.properties).filter(key => key.startsWith("old-"))).toHaveLength(5);
     expect(before).toEqual(snapshot);
     expect(buildHoldingsSchemaPatch(migratedSchema()).properties).toEqual({});
+  });
+
+  it("旧名の退避を読戻してから同名の正規列を作り、旧optionはID/名前とも保持する", async () => {
+    const before = oldSchema(), renamed = structuredClone(before), after = migratedSchema(before);
+    for (const [name, legacy] of LEGACY_HOLDINGS_COLUMNS) {
+      renamed.properties[legacy] = renamed.properties[name]; delete renamed.properties[name];
+    }
+    vi.mocked(notionRequest).mockResolvedValueOnce(before).mockResolvedValueOnce({ id: before.id })
+      .mockResolvedValueOnce(renamed).mockResolvedValueOnce({ id: before.id }).mockResolvedValueOnce(after);
+    await expect(applyHoldingsSchema(before)).resolves.toEqual(after);
+    const writes = vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH");
+    expect(Object.values((writes[0][2] as { properties: object }).properties)).toEqual(LEGACY_HOLDINGS_COLUMNS.map(([, name]) => ({ name })));
+    expect((writes[1][2] as { properties: object }).properties).toHaveProperty("株価");
+    expect(after.properties["旧分類（未検証）"].select).toEqual(before.properties["区分"].select);
   });
 
   it("schema PATCHの結果不明なら再送・読戻しへ進まない", async () => {

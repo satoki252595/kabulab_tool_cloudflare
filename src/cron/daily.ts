@@ -59,6 +59,7 @@ import {
 } from "../shared/notion-archive/index.js";
 import { sha256HexBytes } from "../shared/sha256.js";
 import { diagnoseConfirmedCloses, selectConfirmedCloses } from "./macro-session.js";
+import { captureMacroJpLeg, loadMacroJpLeg, macroJpCacheKey, type MacroJpLeg, type MacroJpLegStore } from "./macro-jp-leg.js";
 import { formatConfirmedHoldDiag, formatNullBandHoldLog, formatStockSessionDiag } from "./inc-financials-stale-diag.js";
 
 // core スキーマ (共有。日次 sync が更新)
@@ -1158,6 +1159,7 @@ export async function runDailySync(
     stocksOnly?: boolean;
     collectOverlay?: OverlayCollectFn;
     sendOverlayBatch?: OverlayBatchSender;
+    jpLegStore?: MacroJpLegStore;
   } = {},
 ): Promise<DailySyncResult> {
   const startedAtMs = Date.now();
@@ -1167,7 +1169,8 @@ export async function runDailySync(
       db,
       options.stocksOnly === true,
       options.collectOverlay,
-      options.sendOverlayBatch
+      options.sendOverlayBatch,
+      options.jpLegStore
     );
   } catch (e) {
     await recordPriceSyncFailureSafely(e, mode, startedAtMs);
@@ -1179,7 +1182,8 @@ async function runDailySyncAndRecord(
   db: Db,
   stocksOnly: boolean,
   collectOverlay?: OverlayCollectFn,
-  sendOverlayBatch?: OverlayBatchSender
+  sendOverlayBatch?: OverlayBatchSender,
+  jpLegStore?: MacroJpLegStore
 ): Promise<DailySyncResult> {
   const startedAt = Date.now();
   // 日付キーと週1ゲートは run 開始時刻に固定する (F-05。Phase 実行時刻で
@@ -1187,6 +1191,9 @@ async function runDailySyncAndRecord(
   const { runDate: targetDate, runMonday } = runDateKeys(startedAt);
   // CF scheduler 経由の run は予定日と対象日の一致を fetch 前に検証する。
   assertScheduledDate(targetDate);
+  if (sharedEnv.STOCK_SYNC_TARGET() === "scheduled-stocks" && jpLegStore === undefined) {
+    throw new Error("定時株式同期にはJP leg保存接続が必須です");
+  }
   const rawRunId = priceSyncBatchRunId(startedAt);
   const assertStockDeadline = () => {
     if (Date.now() >= Date.parse(`${targetDate}T21:00:00Z`)) {
@@ -1224,6 +1231,7 @@ async function runDailySyncAndRecord(
     const captures: YahooRawAttempt[] = [];
     const missing: YahooRawMissing[] = [];
     let session;
+    let sessionArchivePages: string[];
     try {
       session = await fetchChart("^N225", "1mo", { onRaw: (capture) => { captures.push({ api: "chart", attempt: 0, capture }); } });
       if (captures.length !== 1 || captures[0]?.capture.symbol !== "^N225") {
@@ -1235,8 +1243,9 @@ async function runDailySyncAndRecord(
         error: rootCauseMessage(error), failedAt: new Date(Date.now()).toISOString() });
       throw error;
     } finally {
-      await archiveYahooRawBatch({ service: "stock-sync", runId: rawRunId, stage: "stocks-session",
+      const archived = await archiveYahooRawBatch({ service: "stock-sync", runId: rawRunId, stage: "stocks-session",
         expectedDate: targetDate, captures, missing });
+      sessionArchivePages = archived.pages;
     }
     assertStockDeadline();
     const sessionLatest = session.ohlcv.at(-1);
@@ -1266,6 +1275,14 @@ async function runDailySyncAndRecord(
         `株式同期の対象 ${targetDate} の日足を確認できません ` +
         `(日経225実日足=${sessionLatest?.date ?? "未取得"}・実終値=${sessionUsedClose ?? "未取得"})。休場または取得遅延のため書込みを止めます。`
       );
+    }
+    if (jpLegStore !== undefined) {
+      const capture = captures[0]?.capture;
+      if (capture === undefined) throw new Error("JP legのN225同一原本がありません");
+      const jp = await captureMacroJpLeg({ date: targetDate, runId: rawRunId, n225: capture,
+        n225ArchivePages: sessionArchivePages, store: jpLegStore });
+      console.info(`[sync-daily] JP leg ${jp.ok ? "保存照合済み" : "HOLD"}: ${jp.reason}`);
+      assertStockDeadline();
     }
   }
 
@@ -1677,7 +1694,7 @@ async function runDailySyncAndRecord(
 }
 
 /** 米国市場の取引終了後にマクロだけ同期。銘柄全量・株価同期完了記録は触らない。 */
-export async function runMarketContextSync(db: Db): Promise<boolean> {
+export async function runMarketContextSync(db: Db, jpLegStore?: MacroJpLegStore): Promise<boolean> {
   const startedAt = Date.now();
   const scheduled = sharedEnv.STOCK_SYNC_TARGET() === "scheduled-context";
   const targetDate = runDateKeys(startedAt).runDate;
@@ -1698,7 +1715,15 @@ export async function runMarketContextSync(db: Db): Promise<boolean> {
       nyMinutes >= 570 && nyMinutes < 960) {
     throw new Error("米国市場の取引中です。マクロ専用同期は通常市場終了後に実行してください");
   }
-  const context = await fetchMarketContextDraft();
+  if (scheduled && jpLegStore === undefined) throw new Error("定時マクロにはJP leg読取接続が必須です");
+  const jpLeg = jpLegStore === undefined ? undefined : await loadMacroJpLeg(jpLegStore, targetDate);
+  if (jpLeg === null) {
+    console.warn(`[sync-context] JP leg HOLD: 予定日 ${targetDate} の保存済み日本市場原本がありません。上流取得を開始しません。`);
+    await archiveMacroSourceBatch({ startedAt, draft: createMarketContextDraft(), attempts: [], expectedDate: targetDate,
+      jpLeg: { kind: "missing-jp-leg", expectedDate: targetDate, cacheKey: macroJpCacheKey(targetDate) } });
+    return false;
+  }
+  const context = await fetchMarketContextDraft(jpLeg);
   const recovery = await recoverTransientDailyFailures(
     context.failures,
     (target) => fetchMarketContextTarget(context.draft, target, context.collector),
@@ -1709,7 +1734,7 @@ export async function runMarketContextSync(db: Db): Promise<boolean> {
   }
   const saved = await archiveAndPersistMarketContext(db, startedAt, context.draft, context.collector,
     scheduled ? targetDate : undefined,
-    context.sourceStop ? () => { throw context.sourceStop; } : undefined);
+    context.sourceStop ? () => { throw context.sourceStop; } : undefined, jpLeg?.reference);
   if (context.sourceStop) throw context.sourceStop;
   return saved;
 }
@@ -3037,7 +3062,7 @@ function isYahooSourceStop(error: unknown): boolean {
   return error instanceof YahooRateLimitError || /(?:Yahoo|Chart|QuoteSummary).*\b(?:429|503)\b/.test(rootCauseMessage(error));
 }
 
-async function fetchMarketContextDraft(): Promise<{
+async function fetchMarketContextDraft(jpLeg?: MacroJpLeg): Promise<{
   draft: MarketContextDraft;
   failures: DailyRecoveryFailure<MarketContextTarget>[];
   collector: MacroRawAttempt[];
@@ -3046,10 +3071,14 @@ async function fetchMarketContextDraft(): Promise<{
   const draft = createMarketContextDraft();
   const collector: MacroRawAttempt[] = [];
   const failures: DailyRecoveryFailure<MarketContextTarget>[] = [];
-  const targets: readonly MarketContextTarget[] = [
-    ...MARKET_CONTEXT_CHART_SYMBOLS,
-    NIKKEI_VI_TARGET,
-  ];
+  if (jpLeg !== undefined) {
+    draft.charts["^N225"] = { price: jpLeg.n225.value, prevClose: jpLeg.n225.prev, date: jpLeg.n225.date };
+    draft.nikkeiVi = jpLeg.nikkeiVi;
+    draft.nikkeiViDate = jpLeg.nikkeiViDate;
+  }
+  const targets: readonly MarketContextTarget[] = jpLeg === undefined
+    ? [...MARKET_CONTEXT_CHART_SYMBOLS, NIKKEI_VI_TARGET]
+    : ["^VIX", "^GSPC", "NIY=F"];
 
   let sourceStop: Error | null = null;
   for (const target of targets) {
@@ -3262,9 +3291,10 @@ async function archiveAndPersistMarketContext(
   draft: MarketContextDraft,
   attempts: readonly MacroRawAttempt[],
   expectedDate?: string,
-  beforeWrite?: () => void
+  beforeWrite?: () => void,
+  jpLeg?: MacroJpLeg["reference"]
 ): Promise<boolean> {
-  await archiveMacroSourceBatch({ startedAt, draft, attempts, expectedDate });
+  await archiveMacroSourceBatch({ startedAt, draft, attempts, expectedDate, jpLeg });
   return persistMarketContextWithDiagnostics(db, draft, expectedDate, beforeWrite);
 }
 
@@ -3273,18 +3303,17 @@ async function archiveMacroSourceBatch(args: {
   draft: MarketContextDraft;
   attempts: readonly MacroRawAttempt[];
   expectedDate?: string;
+  jpLeg?: MacroJpLeg["reference"] | { kind: "missing-jp-leg"; expectedDate: string; cacheKey: string };
 }): Promise<string> {
   const runId = priceSyncBatchRunId(args.startedAt);
   const key = macroSourceBatchKey(runId, args.startedAt);
-  if (args.attempts.length === 0) {
+  if (args.attempts.length === 0 && args.jpLeg === undefined) {
     throw new Error("マクロ一次原本: attempt 記録が空 (内部不整合のため STOP)");
   }
   // fetchedAt は run 開始ではなく実観測の完了 (全 attempt の最新
   // completedAt)。run startedAt は provenance として別途残す。
-  const fetchedAt = args.attempts
-    .map((a) => a.completedAt)
-    .sort()
-    .at(-1) as string;
+  const fetchedAt = args.attempts.length === 0 ? new Date().toISOString() : args.attempts
+    .map((a) => a.completedAt).sort().at(-1) as string;
   const gate = decideMarketContextGate(args.draft, args.expectedDate);
   const files: Array<{ filename: string; bytes: Uint8Array; contentType: string }> = [];
   const attemptEntries = args.attempts.map((a) => {
@@ -3313,6 +3342,9 @@ async function archiveMacroSourceBatch(args: {
   const manifest = {
     service: "stock-sync",
     kind: "macro-source-batch",
+    version: args.jpLeg === undefined ? 1 : 2,
+    captureContract: args.jpLeg === undefined ? "same-capture" : "JP same-day close archived before US close; same confirmed-date composite",
+    jpLeg: args.jpLeg,
     key,
     runId,
     startedAt: new Date(args.startedAt).toISOString(),
@@ -3337,7 +3369,9 @@ async function archiveMacroSourceBatch(args: {
   const res = await recordPrimaryData({
     service: "stock-sync",
     key,
-    source: "macro-producer final-draft + same-generation raw (chart onRaw + VI HTML)",
+    source: args.jpLeg === undefined
+      ? "macro-producer final-draft + same-generation raw (chart onRaw + VI HTML)"
+      : "macro-producer split capture: archived same-date JP leg reference + US same-fetch raw",
     fetchedAt,
     metadata: {
       key,
@@ -3349,6 +3383,7 @@ async function archiveMacroSourceBatch(args: {
         n225: args.draft.charts["^N225"].date,
         vi: args.draft.nikkeiViDate,
       },
+      jpLeg: args.jpLeg,
       attemptCount: args.attempts.length,
       fileCount: files.length,
     },

@@ -1,5 +1,5 @@
-/** ⑤の既存原本をSHA限定で読む。添付URLを外へ返さず、アップロードは行わない。 */
-import { notionRequest } from "./client.js";
+/** ⑤の既存原本を読む。アップロードは行わず、永続metadataに添付URLを含めない。 */
+import { assertCursorProgress, notionRequest } from "./client.js";
 import { notionEnv } from "./env.js";
 
 export interface CanonicalRawFile {
@@ -81,18 +81,84 @@ export function parseCanonicalRawFile(value: unknown, dbId: string): CanonicalRa
 }
 
 /** OR<=50、応答<=100。欠測はmap不在、重複/打切り/未知行は停止する。 */
-export async function findCanonicalRawFiles(shas: readonly string[]): Promise<Map<string, CanonicalRawFile>> {
+async function queryCanonicalRawPages(shas: readonly string[]): Promise<Map<string, { raw: CanonicalRawFile; page: unknown }>> {
   if (shas.length === 0 || shas.length > 50 || new Set(shas).size !== shas.length || shas.some((sha) => !/^[a-f0-9]{64}$/.test(sha))) throw new Error("⑤原本SHA照合は一意な1〜50件だけです");
   const dbId = notionEnv.NOTION_DB_RAW_FILES();
   const response = await notionRequest<{ results: unknown[]; has_more: boolean }>("POST", `/databases/${dbId}/query`, {
     filter: { or: shas.map((sha) => ({ property: "SHA256", rich_text: { equals: sha } })) }, page_size: 100,
   });
   if (response.has_more || response.results.length >= 100) throw new Error("⑤原本SHA照合が打ち切られました");
-  const result = new Map<string, CanonicalRawFile>();
+  const result = new Map<string, { raw: CanonicalRawFile; page: unknown }>();
   for (const value of response.results) {
     const raw = parseCanonicalRawFile(value, dbId);
     if (!shas.includes(raw.sha256) || result.has(raw.sha256)) throw new Error("⑤原本SHA照合に未知/重複行があります");
-    result.set(raw.sha256, raw);
+    result.set(raw.sha256, { raw, page: value });
   }
   return result;
+}
+
+export async function findCanonicalRawFiles(shas: readonly string[]): Promise<Map<string, CanonicalRawFile>> {
+  return new Map([...await queryCanonicalRawPages(shas)].map(([sha, value]) => [sha, value.raw]));
+}
+
+export interface CanonicalRawAttachment { raw: CanonicalRawFile; file: { name: string; url: string } }
+/** 既存SHA queryのfilesを再利用。署名URLは短命のメモリ内利用専用、log/manifestへ保存禁止。 */
+export async function findCanonicalRawFileAttachments(shas: readonly string[]): Promise<Map<string, CanonicalRawAttachment>> {
+  const result = new Map<string, CanonicalRawAttachment>();
+  for (const [sha, { raw, page }] of await queryCanonicalRawPages(shas)) {
+    const props = object(object(page).properties), attachments = object(props["ファイル"]).files as unknown[];
+    const original = attachments.map(object).filter((file) => file.name === raw.filename || file.name === `${raw.filename}.zip`);
+    if (original.length !== 1) throw new Error("⑤canonical原本添付を一意に確定できません");
+    const file = original[0]!;
+    result.set(sha, { raw, file: { name: file.name as string, url: object(file.file).url as string } });
+  }
+  return result;
+}
+
+export function assertCanonicalRawMetadata(expected: Omit<CanonicalRawFile, "sourceUrl">, fresh: CanonicalRawFile): void {
+  const { sourceUrl: _sourceUrl, ...safe } = fresh;
+  if ((Object.keys(safe) as Array<keyof typeof safe>).some((key) => safe[key] !== expected[key])) throw new Error("⑤原本metadataがmanifestから変化しました");
+}
+
+/**
+ * created_time cutoffで集合を固定し、SHA hexで全域を重複なく分割する。
+ * Notionのquery 10,000件打切りを正常終了と扱わず、そのpartitionを捨て再分割。
+ * 小さいpilotでも全canonical集合の母集団を確認する。署名URLは返さない。
+ */
+export async function listCanonicalRawFiles(cutoff: string, guard: () => void): Promise<CanonicalRawFile[]> {
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(cutoff) || !Number.isFinite(Date.parse(cutoff))) throw new Error("⑤棚卸しcutoffが不正です");
+  const dbId = notionEnv.NOTION_DB_RAW_FILES();
+  const all = new Map<string, CanonicalRawFile>(), pageIds = new Set<string>();
+  async function partition(prefix: string): Promise<void> {
+    const rows: CanonicalRawFile[] = [], seenCursors = new Set<string>(), seenShas = new Set<string>();
+    let cursor: string | null = null;
+    for (;;) {
+      guard();
+      const response: { results: unknown[]; has_more: boolean; next_cursor: string | null } = await notionRequest("POST", `/databases/${dbId}/query`, {
+        filter: { and: [{ property: "SHA256", rich_text: { starts_with: prefix } }, { timestamp: "created_time", created_time: { on_or_before: cutoff } }] },
+        sorts: [{ property: "SHA256", direction: "ascending" }], page_size: 100,
+        ...(cursor === null ? {} : { start_cursor: cursor }),
+      });
+      for (const value of response.results) {
+        const row = parseCanonicalRawFile(value, dbId);
+        if (!row.sha256.startsWith(prefix) || seenShas.has(row.sha256)) throw new Error("⑤partitionに未知/重複SHAがあります");
+        seenShas.add(row.sha256); rows.push(row);
+      }
+      if (rows.length >= 10_000) {
+        if (prefix.length >= 64) throw new Error("⑤SHA partitionを再分割できません");
+        for (const hex of "0123456789abcdef") await partition(prefix + hex);
+        return;
+      }
+      if (!response.has_more) break; // shared clientがfalse/null pairingを検証済み。
+      assertCursorProgress(seenCursors, response.next_cursor!);
+      cursor = response.next_cursor;
+    }
+    for (const row of rows) {
+      if (all.has(row.sha256) || pageIds.has(row.pageId)) throw new Error("⑤全域棚卸しに重複SHA/pageがあります");
+      all.set(row.sha256, row); pageIds.add(row.pageId);
+    }
+  }
+  for (const hex of "0123456789abcdef") await partition(hex);
+  if (all.size === 0) throw new Error("⑤canonical集合が空です");
+  return [...all.values()].sort((a, b) => a.sha256.localeCompare(b.sha256));
 }
