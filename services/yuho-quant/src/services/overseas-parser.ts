@@ -46,6 +46,7 @@ import {
   parseJpNumber,
   unitToYenFactor,
 } from "./edinet/html-table.js";
+import { stripHtml } from "./edinet/text-sections.js";
 
 export type RegionKind = "domestic" | "overseas" | "overseas_total" | "total";
 
@@ -95,6 +96,12 @@ export interface OverseasProof {
   /** 総額セルの区間。total 欠損 (9147 系) は null。 */
   totalLo: number | null;
   totalHi: number | null;
+  /** 単一値行の原表で、裸のその他を地理区分と直接証明した場合だけ運ぶ。 */
+  otherGeography?: {
+    label: string;
+    contextPeriod: DurationContext;
+    classificationNote: string;
+  };
 }
 
 export interface OverseasExtraction {
@@ -235,12 +242,31 @@ const RX_AGGREGATE =
 /** 「その他」系 (地域ブロック内なら overseas, 収益/事業文脈なら除外) */
 const RX_OTHER_REGIONISH = /^(その他|その他の地域|その他地域|その他海外|外国|諸外国|直接輸出|輸出)$/;
 /**
- * 修飾なし Other (地理の立証なし。採用・保存のいずれも不可)。
+ * 修飾なし Other (文字だけでは地理を立証できない)。
  * 海外/外国/輸出を含む明示 (その他海外・外国・諸外国・直接輸出・輸出)
  * は海外活動の明示として修飾済みに扱う (採用側の既存設計を維持)。
  */
 function isBareOther(label: string): boolean {
   return /^(その他|その他の地域|その他地域)$/.test(label);
+}
+
+/** 実1333/3036の分類注記。地域語やOtherの存在だけでは証明しない。 */
+function hasGeographicClassification(note: string): boolean {
+  const n = norm(note).replace(/[、,]/g, "");
+  return /売上高は顧客の所在地を基礎とし(?:て)?国(?:又は|または)地域(?:ごと|別)?に分類/.test(n) ||
+    /各地域の区分の方法は地理的近接度/.test(n);
+}
+
+/** 当該売上TextBlock内、表直後から次のtable/ix境界までの実注記だけ読む。 */
+function geographicNoteAfter(
+  html: string,
+  table: ReturnType<typeof tablesWithHeading>[number]
+): string | null {
+  if (table.textBlock !== SINGLE_ROW_SALES_TEXTBLOCK) return null;
+  const after = html.slice(table.start + table.table.length);
+  const boundary = /<\/?(?:table|ix:nonNumeric)\b/i.exec(after);
+  if (boundary === null) return null;
+  return stripHtml(after.slice(0, boundary.index).replace(/<!--[\s\S]*?-->/g, ""));
 }
 /**
  * 総額列の見出し (連結/合計/計)。S100FHUH で実証: 当連結の報告セグメント表は
@@ -1839,7 +1865,8 @@ function tryGeoCols(
   mode: RoundingMode,
   caption: string = "",
   textBlock: string | null = null,
-  contextPeriod?: DurationContext | null
+  contextPeriod?: DurationContext | null,
+  geographicNote: string | null = null
 ): ParsedTable | "single_row_fiscal_unknown" | "single_row_fiscal_mismatch" | GeoIncomplete | null {
   const flat = gridX.map((r) => r.join("")).join("");
   const unit = detectUnitOrNull(flat) ?? detectUnitOrNull(heading);
@@ -1977,6 +2004,20 @@ function tryGeoCols(
   }
 
   const consolidated = detectConsolidated(gridX.flat().join(" "));
+  const otherLabels = gridX[headerIdx].map(cleanLabel).filter(isBareOther);
+  const nativePeriod = singleRowProof?.contextPeriod;
+  // 既存single-row証明が唯一の値行・売上指標・実期間と印刷期間の一致を担う。
+  // 個別/期不明/複数Japan/総額なし/分類注記なしは従来の未分類HOLDへ進む。
+  const otherGeography: OverseasProof["otherGeography"] =
+    nativePeriod !== undefined &&
+    singleRowProof?.fiscal !== "mismatch" && singleRowProof?.fiscal.side === "T" &&
+    nativePeriod.endDate === normPeriodEnd(fiscalYearEnd) &&
+    resolveTableScope(caption, textBlock, consolidated) === true &&
+    colRole.filter((role) => role === "domestic").length === 1 &&
+    otherLabels.length === 1 && aggregates.length === 1 &&
+    geographicNote !== null && hasGeographicClassification(geographicNote)
+      ? { label: otherLabels[0], contextPeriod: nativePeriod, classificationNote: geographicNote }
+      : undefined;
   const EXCL = /調整額?|セグメント間|内部|消去|割合|％|%/;
   // 非地域列の内訳。会社共通 (全社/本社)・修飾なしその他・事業・期表示の
   // nonzero・欠損は候補ごと却下する (海外 numerator の欠落防止。label
@@ -2017,7 +2058,7 @@ function tryGeoCols(
       !RX_AGG_COL.test(h) &&
       !RX_ELIMINATION.test(h) &&
       !EXCL.test(h) &&
-      (isBareOther(hClean) ||
+      ((isBareOther(hClean) && otherGeography === undefined) ||
         RX_COMPANY_COMMON.test(hClean) ||
         RX_BUSINESS_COL.test(hClean) ||
         RX_FY_LABEL.test(hClean)) &&
@@ -2288,6 +2329,7 @@ function tryGeoCols(
       sumHi: proofSumHi,
       totalLo,
       totalHi,
+      ...(otherGeography ? { otherGeography } : {}),
     },
     valueAxisHeader: singleRowAxis ?? gridX[valueRow]?.join("") ?? "",
     ...(singleRowProof ? { singleRowProof } : {}),
@@ -2345,13 +2387,21 @@ export function validateOverseasSaveSet(
   if (regions.some((f) => f.salesAmount === null)) {
     throw new Error("保存集合に欠損の地域売上があります。");
   }
-  // 地理未分類の backstop: 修飾なしその他 (その他/その他の地域/その他地域)
-  // は地理の立証がないため保存できない (reducer の採用却下をすり抜けた
-  // 不完全集合の保存防止。修飾つきは対象外)。
-  const bareOther = regions.find((f) => isBareOther(f.regionName));
-  if (bareOther) {
+  // 裸Otherは原表の直接証明を保存境界まで必須とする。旧proofへ後付けしない。
+  const bareOthers = regions.filter((f) => isBareOther(f.regionName));
+  const geography = proof?.otherGeography;
+  if (bareOthers.length > 0 && (
+    bareOthers.length !== 1 || geography === undefined ||
+    geography.label !== bareOthers[0].regionName || bareOthers[0].regionKind !== "overseas" ||
+    geography.contextPeriod.endDate !== bareOthers[0].fiscalYearEnd ||
+    geography.contextPeriod.startDate >= geography.contextPeriod.endDate ||
+    !hasGeographicClassification(geography.classificationNote) ||
+    facts.some((f) => f.isConsolidated !== true) ||
+    regions.filter((f) => f.regionKind === "domestic").length !== 1 ||
+    !facts.some((f) => f.regionKind === "total" && f.salesAmount !== null)
+  )) {
     throw new Error(
-      `保存集合に地理未立証のその他地域があります: ${bareOther.regionName}`
+      `保存集合に地理未立証のその他地域があります: ${bareOthers[0].regionName}`
     );
   }
   let domesticSum = 0;
@@ -2516,7 +2566,8 @@ export function parseOverseasData(
     for (const table of tablesWithHeading(body.html)) {
       const start = base + table.start;
       sources.set(start, { honbunFile: body.name, start: table.start });
-      tables.push({ ...table, start, durationContexts });
+      tables.push({ ...table, start, durationContexts,
+        geographicNote: geographicNoteAfter(body.html, table) });
     }
     base += body.html.length + 1;
   }
@@ -2950,6 +3001,7 @@ export function parseOverseasHtml(
   return parseOverseasTables(
     tablesWithHeading(html).map((table) => ({
       ...table, durationContexts: opts.durationContexts,
+      geographicNote: geographicNoteAfter(html, table),
     })),
     reportPeriodEnd,
     { roundingMode: mode, capture: opts.capture }
@@ -2958,6 +3010,7 @@ export function parseOverseasHtml(
 
 type OverseasTable = ReturnType<typeof tablesWithHeading>[number] & {
   durationContexts?: FilingDurationContexts;
+  geographicNote: string | null;
 };
 
 /** 単一 HTML と ZIP 全本文で同じ候補・証拠・曖昧性 Gate を使う。 */
@@ -3032,6 +3085,7 @@ function parseOverseasTables(
     contextRef,
     start,
     durationContexts,
+    geographicNote,
   } of tables) {
     // S100YD7J: 遠い表題が見出し窓から消えても、原典 TextBlock は
     // 減損損失と明示する。算術整合する地域別減損額を売上へ採用しない。
@@ -3122,7 +3176,8 @@ function parseOverseasTables(
         caption,
         textBlock,
         durationContexts === undefined ? undefined :
-          contextRef === null ? null : (durationContexts.get(contextRef) ?? null)
+          contextRef === null ? null : (durationContexts.get(contextRef) ?? null),
+        geographicNote
       );
       // 単一行の売上直接証明はあるが caption/実context で期を証明できない
       // → fiscal-unknown STOP。wide (前表) 継承で採用しない。
@@ -3266,6 +3321,17 @@ function parseOverseasTables(
   }
 
   if (candidates.length > 0) {
+    // Otherの直接証明を持つ同じ当期・連結・単位の原表は、score差でも矛盾を選ばない。
+    const geographicOthers = candidates.filter((c) => c.proof.otherGeography !== undefined);
+    for (const candidate of geographicOthers) {
+      if (geographicOthers.some((other) =>
+        candidate.facts[0].unitYenFactor === other.facts[0].unitYenFactor &&
+        normFactsKey(candidate.facts) !== normFactsKey(other.facts)
+      )) {
+        markCap("geo_present_unstructured", "other-geography-conflict", null);
+        return { status: "geo_present_unstructured", facts: [], tablesScanned };
+      }
+    }
     // 当期・連結・地域注記に最も近い候補を採用。同点は文書の早い方 (連結注記は
     // 個別注記より前に出る) を優先する。ただし同点 top が同一期間/scope の売上
     // metric で値が矛盾する表同士のときは文書順で選ばず未構造化にする (同値は
