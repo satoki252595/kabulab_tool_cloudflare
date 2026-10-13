@@ -148,6 +148,8 @@ def saved_tidy(case, file_kind="csv"):
 @pytest.mark.parametrize("file_kind", ["csv", "xbrl"])
 def test_actual_direct_narrative_reaches_existing_d1_and_notion(case, file_kind):
     code, doc_id, period, expected, digest = case
+    if file_kind == "xbrl" and code in {"6963", "8014", "8593"}:
+        expected = {"6963": -11.6, "8014": 8.0, "8593": 1.3}[code]
     tidy = saved_tidy(case, file_kind)
     if file_kind == "xbrl":
         digest = TYPE1_SHA256[code]

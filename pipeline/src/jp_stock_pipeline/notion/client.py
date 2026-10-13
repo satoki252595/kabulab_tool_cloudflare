@@ -399,15 +399,34 @@ class NotionClient:
             return {}
         return self._call(self._client.pages.retrieve, page_id=page_id)
 
-    def download_file(self, url: str) -> bytes:
+    def download_file(self, url: str, *, max_bytes: int | None = None) -> bytes:
         """Notion が返した添付の全実体を、認証ヘッダ・再試行・redirect 無しで読む。"""
         parsed = urlsplit(url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
             raise NotionConfigError("Notion 添付 URL の形式が不正")
+        if max_bytes is not None and (type(max_bytes) is not int or max_bytes <= 0):
+            raise NotionConfigError("Notion 添付サイズ上限が不正")
         try:
-            response = requests.get(url, timeout=120, allow_redirects=False)
+            options = {"stream": True} if max_bytes is not None else {}
+            response = requests.get(url, timeout=120, allow_redirects=False, **options)
             if response.status_code != 200:
+                if max_bytes is not None:
+                    response.close()
                 raise NotionRequestError(f"Notion 添付読戻し HTTP {response.status_code}")
+            if max_bytes is not None:
+                try:
+                    length = response.headers.get("Content-Length")
+                    if length is not None and (not length.isdigit() or int(length) > max_bytes):
+                        raise NotionConfigError("Notion 添付がサイズ上限を超えた")
+                    chunks, size = [], 0
+                    for chunk in response.iter_content(chunk_size=64 * 1024):
+                        size += len(chunk)
+                        if size > max_bytes:
+                            raise NotionConfigError("Notion 添付がサイズ上限を超えた")
+                        chunks.append(chunk)
+                    return b"".join(chunks)
+                finally:
+                    response.close()
             return response.content
         except requests.RequestException:
             # presigned URL の認証queryを、ジョブの例外traceへ持ち出さない。

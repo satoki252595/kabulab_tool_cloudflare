@@ -63,6 +63,15 @@ def direct_net_profit_roa(
     native_consolidated = _dei(tidy, "WhetherConsolidatedFinancialStatementsArePreparedDEI")
     if native_consolidated != ("true" if consolidated == "連結" else "false"):
         return None
+    from .direct_roa_table import ROATableConflict, direct_table_net_profit_roa  # noqa: PLC0415
+
+    try:
+        table_value = (
+            direct_table_net_profit_roa(tidy, fiscal_period_end) if consolidated == "連結" else None
+        )
+    except ROATableConflict:
+        logger.warning("当期純利益ROAの実表値が衝突しているため本文で補わずHOLD")
+        return None
     blocks = tidy[
         (tidy["element"] == _BLOCK)
         & (tidy["context_ref"] == "FilingDateInstant")
@@ -76,11 +85,13 @@ def direct_net_profit_roa(
         # 既存lxmlでタグの境界を空白として保つ。セルの数値を連結しない。
         text = " ".join(html.fromstring(text).itertext())
     text = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text))
-    if not re.search(_NET_LABEL, text) or "総資産経常利益率" in text:
+    if "総資産経常利益率" in text:
         return None
+    if not re.search(_NET_LABEL, text):
+        return table_value
     current_scope = "当連結会計年度" if consolidated == "連結" else "当事業年度"
     other_scope = "当事業年度" if consolidated == "連結" else "当連結会計年度"
-    values: set[float] = set()
+    values: set[float] = {table_value} if table_value is not None else set()
     for pattern in (_COMPARISON, _DIRECT, _INDICATORS):
         for match in pattern.finditer(text):
             start = text.rfind("。", 0, match.start()) + 1

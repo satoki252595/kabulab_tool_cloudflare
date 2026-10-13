@@ -47,6 +47,12 @@ ALLOWED: frozenset[str] = frozenset(
         "pipeline/tests/fixtures/direct-roa/7911-S100YIAY-type5.zip",
         "pipeline/tests/fixtures/direct-roa/8566-S100YF3N-type5.zip",
         "pipeline/tests/fixtures/direct-roa/provenance.json",
+        # 実type1のHTML TextBlock/native DEI/context機械切出し（全ZIPはprivate）。
+        "pipeline/tests/fixtures/direct-roa-table/6963-S100YF41.json",
+        "pipeline/tests/fixtures/direct-roa-table/8014-S100YBIN.json",
+        "pipeline/tests/fixtures/direct-roa-table/8593-S100YF4V.json",
+        "pipeline/tests/fixtures/direct-roa-table/provenance.json",
+        "pipeline/tests/fixtures/direct-roa-table/README.md",
         # 銘柄コード契約の言語横断テストベクタ（kabulab-cf と同一バイト列で共有）。
         # 取得物ではなく手書きの契約定義で、収録しているのは境界値のコード文字列
         # （大半は "07203" / "A130" / "1234567" のような合成値）と説明文だけ。

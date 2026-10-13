@@ -16,6 +16,7 @@ import re
 import stat
 import tempfile
 import zipfile
+from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -27,8 +28,10 @@ from ..convert import json_to_parquet, xbrl_to_csv
 from ..http import FetchError
 from ..licensing import LicenseTag, source_license
 from ..models import ConvertStatus, Provenance, RawArtifact, Source, now_jst
-from ..notion import file_upload, upsert
+from ..notion import file_upload, saved_edinet, upsert
 from ..transform import normalize
+from ..transform.direct_roa import _dei
+from ..transform.direct_roa_table import has_roa_table_candidate
 from .runner import JobContext, apply_limit, build_parser, main_exit, run_job
 
 logger = logging.getLogger(__name__)
@@ -176,6 +179,98 @@ def _resolve_master_id(
         return None
 
 
+def _roa_table_original(
+    ctx: JobContext, doc: dict, artifact: RawArtifact, tidy, *, sha_map, target_date
+):
+    """平坦CSVが直接値を持たない適格な年次表だけ、同一有報全type1へ切り替える。
+
+    CSVは呼出前に⑤へ物理保管済み。保存type1検索失敗/異原本/既存値不一致はHOLDし、
+    別値による補完や他年度表の復元はしない。原本は失敗時も⑤へ保全する。
+    """
+    if (
+        artifact.datatype != "csv"
+        or doc.get("csvFlag") != "1"
+        or tidy is None
+        or doc.get("docTypeCode") not in ("120", "130")
+        or not has_roa_table_candidate(tidy)
+    ):
+        return artifact, tidy
+    prov = Provenance(
+        source=Source.EDINET,
+        license_tag=source_license(Source.EDINET),
+        data_date=artifact.data_date,
+        fetched_at=artifact.fetched_at,
+    )
+    before = normalize.tidy_to_financial_record(
+        tidy, artifact.scope, prov, disclosure_type="本決算"
+    )
+    if before is None or before.consolidated != "連結":
+        raise ValueError("候補ROA表の年次・連結資格を確定できない")
+    if before.roa_pct is not None:
+        return artifact, tidy  # CSVで直接値を読める場合は追加type1取得をしない。
+    issuer = doc.get("edinetCode")
+    if (
+        not isinstance(issuer, str)
+        or not re.fullmatch(r"E[0-9]{5}", issuer)
+        or _dei(tidy, "EDINETCodeDEI") != issuer
+    ):
+        raise ValueError("候補ROA表の提出主体が一覧と一致しない")
+    native_code = _dei(tidy, "SecurityCodeDEI")
+    if native_code != artifact.scope + "0" and not (
+        native_code == "00000" and doc.get("secCode") in (None, "00000")
+    ):
+        raise ValueError("候補ROA表のnative証券コードが一覧の同定と一致しない")
+    doc_id = doc["docID"]
+    full = saved_edinet.read_saved_type1(
+        ctx.client, ctx.settings, doc_id, artifact.scope, artifact.data_date,
+        edinet_code=issuer, fiscal_period_end=before.fiscal_period_end,
+    )
+    if full is None:
+        full = edinet.fetch_document(
+            ctx.settings, doc_id, 1, code=artifact.scope, data_date=artifact.data_date
+        )
+    if full.size_bytes > saved_edinet.MAX_ZIP_BYTES:
+        ctx.upload_raw(full, sha_map=sha_map, sha_map_date=target_date)
+        raise ValueError("候補ROA表のtype1が5MiB予算を超えたため原本保全してHOLD")
+    try:
+        full_tidy = xbrl_to_csv.xbrl_zip_to_tidy(
+            full.local_path.read_bytes(), artifact.scope, doc_id
+        )
+        xbrl_to_csv.write_tidy(full_tidy, full)
+    except Exception:
+        full.convert_status = ConvertStatus.FAILED
+        ctx.upload_raw(full, sha_map=sha_map, sha_map_date=target_date)
+        raise
+    full.notion_page_id = ctx.upload_raw(full, sha_map=sha_map, sha_map_date=target_date)
+    for name in (
+        "EDINETCodeDEI",
+        "SecurityCodeDEI",
+        "CurrentPeriodEndDateDEI",
+        "CurrentFiscalYearEndDateDEI",
+        "TypeOfCurrentPeriodDEI",
+        "WhetherConsolidatedFinancialStatementsArePreparedDEI",
+    ):
+        original = _dei(tidy, name)
+        if original is None or _dei(full_tidy, name) != original:
+            raise ValueError("候補ROA表type1とCSVのnative DEIが一致しない: " + name)
+    after = normalize.tidy_to_financial_record(
+        full_tidy, artifact.scope, prov, disclosure_type="本決算"
+    )
+    if after is None or after.roa_pct is None:
+        raise ValueError("候補ROA表の当期純利益実績値を直接確認できない")
+    old_values, new_values = asdict(before), asdict(after)
+    changed = [
+        k
+        for k in old_values
+        if k not in ("roa_pct", "provenance") and old_values[k] != new_values[k]
+    ]
+    if changed:
+        raise ValueError("候補ROA表type1で既存財務値が変わるためHOLD: " + ",".join(changed))
+    _export_kabumcp_cache(ctx, artifact, doc_id)  # 同文書のCSV連携を失わない。
+    logger.info("候補ROA表の同一type1原本を採用: docID=%s 既存財務値不変", doc_id)
+    return full, full_tidy
+
+
 def _process_document(
     ctx: JobContext,
     doc: dict,
@@ -217,6 +312,11 @@ def _process_document(
     if doc_type_code in FINANCIAL_DOC_TYPES:
         tidy_artifact, tidy = _fetch_financial_tidy(ctx, doc_id, code, data_date, doc.get("csvFlag"))
         doc_raw_page = ctx.upload_raw(tidy_artifact, sha_map=sha_map, sha_map_date=target_date)
+        tidy_artifact.notion_page_id = doc_raw_page
+        tidy_artifact, tidy = _roa_table_original(
+            ctx, doc, tidy_artifact, tidy, sha_map=sha_map, target_date=target_date
+        )
+        doc_raw_page = tidy_artifact.notion_page_id
 
     # 一覧に未提供と明示された PDF は要求しない。通信・保管失敗は続行しない。
     pdf_flag = doc.get("pdfFlag")
@@ -288,7 +388,7 @@ def _process_document(
             source=Source.EDINET,
             license_tag=source_license(Source.EDINET),  # commercial-ok (§2.1)
             data_date=data_date,
-            fetched_at=now_jst(),
+            fetched_at=tidy_artifact.fetched_at,
             raw_page_id=tidy_artifact.notion_page_id,
         )
         fin = normalize.tidy_to_financial_record(
