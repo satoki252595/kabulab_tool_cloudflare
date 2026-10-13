@@ -158,7 +158,7 @@ const RELATION_MAX = 100;
  * A の行に競合他社の relation とメタ列を書く。**A→B の一方向のみ**
  * (B 側には反映しない。ヘッダコメント参照)。
  */
-export async function writeCompetitorRelation(pageId: string, input: WriteCompetitorRelationInput): Promise<void> {
+export async function writeCompetitorRelation(pageId: string, input: WriteCompetitorRelationInput, opts?: { singleAttempt: true }): Promise<void> {
   if (input.competitorPageIds.length > RELATION_MAX) {
     throw new Error(
       `writeCompetitorRelation: 競合他社の件数が上限 ${RELATION_MAX} を超えます (${input.competitorPageIds.length} 件)`
@@ -171,5 +171,5 @@ export async function writeCompetitorRelation(pageId: string, input: WriteCompet
       [COMPETITOR_PROPS.version]: { rich_text: splitRichText(input.version) },
       [COMPETITOR_PROPS.judgedDocId]: { rich_text: splitRichText(input.judgedDocId) },
     },
-  });
+  }, opts);
 }
