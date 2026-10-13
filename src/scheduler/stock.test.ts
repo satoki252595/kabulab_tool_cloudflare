@@ -4,6 +4,10 @@ import {
   READCHECK_CRON,
   CONTEXT_DISPATCH_CRON,
   CONTEXT_READCHECK_CRON,
+  MONEYFLOW_DISPATCH_CRON,
+  MONEYFLOW_READCHECK_CRON,
+  moneyflowReceiptKey,
+  runMoneyflowDeadlineReadcheck,
   contextReceiptKey,
   evaluateContextReadcheck,
   runContextDispatch,
@@ -875,6 +879,21 @@ describe("runDeadlineReadcheck", () => {
 });
 
 describe("handleStockScheduled", () => {
+  it.each([
+    [DISPATCH_CRON, "2026-10-12T09:00:00Z", "JPX"],
+    [READCHECK_CRON, "2026-10-12T14:35:00Z", "JPX"],
+    [CONTEXT_DISPATCH_CRON, "2026-09-07T21:00:00Z", "NYSE"],
+    [CONTEXT_READCHECK_CRON, "2026-09-07T22:05:00Z", "NYSE"],
+  ])("公表休場の%sは理由付き対象外、receipt/POSTは作らない", async (cron, at, market) => {
+    const { bucket, puts } = makeBucket();
+    const { fetchFn, calls } = makeFetch(() => jsonRes({}));
+    const result = await handleStockScheduled({ cron, scheduledTime: Date.parse(at) },
+      { BUCKET: bucket }, { fetchFn, nowMs: Date.parse(at) + 30_000 });
+    expect(result).toMatchObject({ status: "market_closed", scheduledDate: at.slice(0, 10),
+      closures: [expect.objectContaining({ market, sourceUrl: expect.stringMatching(/^https:\/\//) })] });
+    expect(puts).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
   it("未知 cron は bucket/fetch に触らず落とす", async () => {
     const { bucket, puts } = makeBucket();
     const { fetchFn, calls } = makeFetch(() => jsonRes({}));
@@ -962,5 +981,56 @@ describe("claimReceipt/saveDispatchResult", () => {
     await expect(
       saveDispatchResult(bucket, key, etag as string, dispatchedBody())
     ).rejects.toThrow("CAS");
+  });
+});
+
+
+describe("資金フロー独立取得元のCF起動", () => {
+  const date = "2026-10-12"; // JPX休場でも独立取得元は止めない。
+  const start = Date.parse(`${date}T09:15:00Z`);
+  const jobs = (conclusion = "success", completed = `${date}T14:00:00Z`): RunJob[] => [{
+    name: "ingest", run_id: 101, status: "completed", conclusion,
+    steps: [{ name: "moneyflow ingest", status: "completed", conclusion, completed_at: completed }],
+  }];
+  const receipt = () => ({ ...dispatchedBody(), scheduledDate: date, cron: MONEYFLOW_DISPATCH_CRON,
+    claimedAt: `${date}T09:15:00Z`, dispatchedAt: `${date}T09:15:01Z` });
+
+  it("休場日はindependentのみ1回dispatchし、専用receiptで期限成功を確認する", async () => {
+    const { bucket } = makeBucket();
+    const body = receipt();
+    const { fetchFn, calls } = makeFetch((url) => url.endsWith("/dispatches")
+      ? jsonRes({ workflow_run_id: 101, run_url: body.runUrl, html_url: body.htmlUrl })
+      : jsonRes({ jobs: jobs() }));
+    const env = { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN };
+    vi.useFakeTimers(); vi.setSystemTime(new Date(start + 30_000));
+    try {
+      const controller = { cron: MONEYFLOW_DISPATCH_CRON, scheduledTime: start };
+      expect(await handleStockScheduled(controller, env, { fetchFn, nowMs: start + 30_000 }))
+        .toEqual({ status: "dispatched", workflowRunId: 101 });
+      expect(await handleStockScheduled(controller, env, { fetchFn, nowMs: start + 30_000 }))
+        .toEqual({ status: "duplicate", workflowRunId: 101 });
+    } finally { vi.useRealTimers(); }
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toContain("/moneyflow.yml/dispatches");
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: "main", inputs: { only: "independent" } });
+    const check = Date.parse(`${date}T14:45:00Z`);
+    expect(await handleStockScheduled({ cron: MONEYFLOW_READCHECK_CRON, scheduledTime: check }, env,
+      { fetchFn, nowMs: check + 30_000 })).toEqual({ moneyflowCompletedAt: `${date}T14:00:00Z` });
+    expect(calls).toHaveLength(2);
+  });
+
+  it.each([
+    ["skipped", `${date}T14:00:00Z`],
+    ["failure", `${date}T14:00:00Z`],
+    ["success", `${date}T14:40:01Z`],
+    ["success", `${date}T09:14:59Z`],
+  ])("未実行・失敗・期限外を成功と扱わない (%s %s)", async (conclusion, done) => {
+    const { bucket } = makeBucket({ [moneyflowReceiptKey(date)]: JSON.stringify(receipt()) });
+    const { fetchFn } = makeFetch(() => jsonRes({ jobs: jobs(conclusion, done) }));
+    await expect(runMoneyflowDeadlineReadcheck({ bucket, token: TOKEN, scheduledDate: date, fetchFn })).rejects.toThrow();
+  });
+
+  it("開始60分超過をPOST前に拒否する", () => {
+    expect(() => resolveRunDate("moneyflow-dispatch", start, start + 60 * 60_000 + 1)).toThrow("開始期限");
   });
 });

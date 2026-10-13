@@ -29,7 +29,7 @@ import {
   type PriceSyncBatchInput,
 } from "./daily.js";
 import type { OverlayCollectFn } from "./universe-overlay.js";
-import { fakeOverlayCollect } from "./tests/overlay-batch.js";
+import { emptyUniverseBatch, fakeOverlayCollect } from "./tests/overlay-batch.js";
 import { chartWithRaw, stockWithRaw } from "./tests/yahoo-capture.js";
 import { archiveYahooRawBatch } from "../shared/yahoo/raw-custody.js";
 import { makeTxBatchSender } from "./tests/overlay-test-sender.js";
@@ -266,7 +266,7 @@ let sqlite: DatabaseSync;
 function freshDb(): Db {
   sqlite = new DatabaseSync(":memory:");
   const dir = join(ROOT, "drizzle", "d1");
-  for (const f of readdirSync(dir).filter((n) => n.endsWith(".sql")).sort()) {
+  for (const f of readdirSync(dir).filter((n) => /^\d{4}_.*\.sql$/.test(n)).sort()) {
     for (const stmt of readFileSync(join(dir, f), "utf-8").split("--> statement-breakpoint")) {
       if (stmt.trim()) sqlite.exec(stmt);
     }
@@ -376,6 +376,22 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     expect(body.originalError).toMatch("日足を確認できません");
   });
 
+  it("N225 が古くても公式上場廃止を先に適用し、株価は書かない", async () => {
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-25")));
+    const db = freshDb();
+    seedTarget(1, "1301");
+    const collect: OverlayCollectFn = async (input) => {
+      const batch = emptyUniverseBatch(input.baseAsOf, input.eligibilityAsOf);
+      batch.sources.delisted.rows = [{ code: "1301", companyName: "銘柄1301", market: "プライム", effectiveDate: "2026-09-28", reason: "テスト上場廃止" }];
+      return batch;
+    };
+    await expect(runDailySync(db, { stocksOnly: true, collectOverlay: collect,
+      sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) })).rejects.toThrow("日足を確認できません");
+    expect(sqlite.prepare("SELECT is_active FROM core_stocks WHERE code = '1301'").get()).toEqual({ is_active: 0 });
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM core_stock_financials").get()).toEqual({ n: 0 });
+    expect(fetchStockRawData).not.toHaveBeenCalled();
+  });
+
   it("閾値超過の失敗でも結果 return 前に全件バッチを保管する (CLI throw の前)", async () => {
     vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-09-28")));
     vi.mocked(fetchStockRawData).mockRejectedValue(
@@ -480,14 +496,14 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     expect(fetchStockRawData).toHaveBeenCalledTimes(1);
   });
 
-  it("session原本不明はスキーマ/overlay前STOP", async () => {
+  it("session原本不明でも母集団更新は済ませ、株価write前STOP", async () => {
     vi.mocked(fetchChart).mockResolvedValue(sessionChart("2026-09-28"));
     const db = freshDb(); seedTarget(1, "1301");
     const send = makeTxBatchSender(sqlite, { sends: 0 });
     await expect(runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect, sendOverlayBatch: send })).rejects.toThrow("原本capture");
     expect(fetchStockRawData).not.toHaveBeenCalled();
     expect(vi.mocked(archiveYahooRawBatch).mock.calls[0][0]).toMatchObject({ stage: "stocks-session", captures: [], missing: [expect.objectContaining({ symbol: "^N225" })] });
-    expect(sqlite.prepare("SELECT events_fetched_at AS clock FROM universe_overlay_state").get()).toMatchObject({ clock: null });
+    expect(sqlite.prepare("SELECT events_fetched_at AS clock FROM universe_overlay_state").get()).toMatchObject({ clock: "1970-01-01T00:00:00.000Z" });
   });
 
   it("parse成功でもChart/QuoteSummary capture不足は部分成功にせず全run STOP", async () => {

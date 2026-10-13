@@ -25,30 +25,11 @@ supply_daily `17 3 * * 1-5` / tdnet_hourly `0 0-10 * * 1-5`）。
 見なくなる通知**で、`jobs/ops_check.py` 冒頭のコメント自身が警戒している状態。
 だから日次データセットは土日を差し引いて加齢する。
 
-## 祝日は扱っていない（＝祝日には鳴る。未解決の残件）
+## 現物市場の公式休業日
 
-祝日カレンダー（`jpholiday` 等）は入れていない。依存とメンテ対象が増えるのが
-理由だが、**「1 営業日分の余裕で吸収できる」とは言えない**ので誤解しないこと。
-現在の閾値（日次 30h/48h）と観測時刻（23:30 JST）での実測はこうなる:
-
-| 状態 | 加齢 | 判定 | ops_check |
-|---|---|---|---|
-| 当日データが入っている | 23.5h | green | 静か |
-| 1 営業日欠落（= 単発の祝日と同じ） | 47.5h | **yellow** | **Issue が立つ** |
-| 2 営業日欠落（= 連休・年末年始） | 71.5h | **red** | **Issue が立つ** |
-
-`jobs/ops_check.py` は yellow も違反として扱う（exit 1）ので、**単発の祝日で
-黄、年末年始・GW のような連休で赤が出る**。週末に毎週鳴る問題は消えたが、
-祝日に鳴る問題は残っている（年 20〜25 日程度の見込み）。
-
-これを消すには次のどれかを選ぶ必要があり、どれも検知力か依存を差し出すので
-勝手に決めずユーザ判断に残す:
-
-1. 日次の緑を 1 営業日ぶん緩める（実質 54h/72h）。単発祝日は緑になるが、
-   **本物の 1 日欠落も緑**になり検知が 1 日遅れる。
-2. 祝日カレンダーを入れる。正確だが依存とメンテ（大納会・大発会・臨時休場）が
-   増える。
-3. yellow を Issue にしない。本物の 1 日欠落も鳴らなくなる。
+株式断面・日証金はJS schedulerと同じJPX公式年次一覧で加齢する。
+未収録年は推測せず停止する。EDINET/TDnetの提出日は市場休場と同義では
+ないため、従来の平日加齢を保つ。2026/27の出典は共有JSONに固定する。
 """
 
 from __future__ import annotations
@@ -58,6 +39,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
 from ..models import JST
+from ..contracts.market_calendar import is_session_day
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +63,7 @@ class FreshnessSlo:
     # 一次ソース自体の公表遅延（営業日）。データ基準日にこれを足した時点を
     # 「あるべき到着時刻」とみなす。0 は当日公表。
     lag_days: int = 0
+    market: str | None = None
 
     def judge(self, age_hours: float | None) -> str:
         """green / yellow / red / unknown のいずれかを返す。"""
@@ -99,10 +82,10 @@ _DAY = 24.0
 SLOS: tuple[FreshnessSlo, ...] = (
     FreshnessSlo(
         "d1_core_stock_financials", 30, 48,
-        "日次。実測 2.4h。writer（stock-sync 21:00 UTC = 翌 06:00 JST）が"
-        "前営業日の EOD を書くので data_date は常に T-1（lag_days=1）",
+        "日次。stock-syncは当営業日18:00 JST開始・23:30完了期限。"
+        "当日のEODを当日中に書く（lag_days=0）。JPX公式休業日は加齢しない",
         business_days=True,
-        lag_days=1,
+        market="JPX",
     ),
     FreshnessSlo(
         "tdnet_disclosures", 30, 48,
@@ -120,6 +103,7 @@ SLOS: tuple[FreshnessSlo, ...] = (
         "貸借残は翌営業日 11 時頃の公表なので data_date は常に T-1（lag_days=1）",
         business_days=True,
         lag_days=1,
+        market="JPX",
     ),
     FreshnessSlo(
         "core_stocks", 40 * _DAY, 45 * _DAY,
@@ -232,18 +216,18 @@ def judge(dataset: str, updated_at_epoch: int | None, *, now: datetime | None = 
 # --- 加齢の計算 -----------------------------------------------------------
 
 
-def _add_business_days(start: date, days: int) -> date:
+def _add_business_days(start: date, days: int, market: str | None = None) -> date:
     """営業日（平日）で days 日進める。days=0 はそのまま返す。"""
     day = start
     remaining = days
     while remaining > 0:
         day += timedelta(days=1)
-        if day.weekday() < 5:
+        if is_session_day(day, (market,)) if market is not None else day.weekday() < 5:
             remaining -= 1
     return day
 
 
-def elapsed_hours(base: datetime, now: datetime, *, business_days: bool) -> float:
+def elapsed_hours(base: datetime, now: datetime, *, business_days: bool, market: str | None = None) -> float:
     """base から now までの経過時間。business_days なら平日の実区間だけ数える。
 
     JST の日付境界で区切り、開始日・終了日も実際に重なる時間だけ計上する。
@@ -258,27 +242,26 @@ def elapsed_hours(base: datetime, now: datetime, *, business_days: bool) -> floa
             hour=0, minute=0, second=0, microsecond=0
         )
         stop = min(end, next_midnight)
-        if cursor.weekday() < 5:
+        if is_session_day(cursor.date(), (market,)) if market is not None else cursor.weekday() < 5:
             hours += (stop - cursor).total_seconds() / 3600.0
         cursor = stop
     return hours
 
 
 def _parse_data_date(value: date | str | None) -> date | None:
-    """データ基準日を date にする。読めない値は None（取得時刻へフォールバック）。"""
+    """データ基準日を date にする。不正な値を取得時刻へ置換しない。"""
     if value is None or value == "":
         return None
     if isinstance(value, date):
         return value
     try:
-        return date.fromisoformat(str(value)[:10])
-    except ValueError:
-        logger.warning("データ基準日として読めない値: %r", value)
-        return None
+        return date.fromisoformat(str(value))
+    except ValueError as exc:
+        raise ValueError(f"データ基準日が不正: {value!r}") from exc
 
 
 def _base_datetime(
-    lag_days: int, latest_data_date: date | str | None, source_epoch: int | None
+    lag_days: int, latest_data_date: date | str | None, source_epoch: int | None, market: str | None = None
 ) -> datetime | None:
     """加齢の起点（「あるべき到着時刻」）を決める。
 
@@ -287,7 +270,7 @@ def _base_datetime(
     """
     data_date = _parse_data_date(latest_data_date)
     if data_date is not None:
-        due = _add_business_days(data_date, lag_days)
+        due = _add_business_days(data_date, lag_days, market)
         return datetime(due.year, due.month, due.day, tzinfo=JST)
     if source_epoch:
         return datetime.fromtimestamp(float(source_epoch), tz=UTC)
@@ -308,15 +291,18 @@ def observation_age_hours(
     """
     slo = SLO_BY_DATASET.get(dataset)
     if slo is not None:
-        lag_days, business_days = slo.lag_days, slo.business_days
+        lag_days, business_days, market = slo.lag_days, slo.business_days, slo.market
     elif dataset in NOT_REFRESHED:
-        lag_days, business_days = 0, False
+        lag_days, business_days, market = 0, False, None
     else:
         return None
-    base = _base_datetime(lag_days, latest_data_date, source_epoch)
+    # 日付列が無い2表だけは明示した原本取得時刻で測る。日次の欠損日付はunknown。
+    if latest_data_date in (None, "") and dataset not in ("core_stocks", "yutai_benefits"):
+        return None
+    base = _base_datetime(lag_days, latest_data_date, source_epoch, market)
     if base is None:
         return None
-    return elapsed_hours(base, now or datetime.now(UTC), business_days=business_days)
+    return elapsed_hours(base, now or datetime.now(UTC), business_days=business_days, market=market)
 
 
 def judge_observation(

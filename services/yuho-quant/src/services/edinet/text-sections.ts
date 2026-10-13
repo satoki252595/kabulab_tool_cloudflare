@@ -60,6 +60,8 @@ export interface TextSectionDef {
   key: TextSectionKey;
   /** 法定の有報項目名 (現行様式) */
   title: string;
+  /** CSVの連結区分が「その他」になる注記も、実在する連結要素で識別する。 */
+  consolidatedElement?: string;
 }
 
 /**
@@ -105,12 +107,17 @@ export const TEXT_SECTIONS: readonly TextSectionDef[] = [
   { key: "facilities_plan", title: "設備の新設、除却等の計画" },
   { key: "capex", title: "設備投資等の概要" },
   { key: "securities_schedule", title: "有価証券明細表" },
-  { key: "securities_note", title: "有価証券関係、財務諸表" },
+  { key: "securities_note", title: "有価証券関係、財務諸表",
+    consolidatedElement: "NotesSecuritiesConsolidatedFinancialStatementsTextBlock" },
   { key: "fixed_assets_schedule", title: "有形固定資産等明細表" },
-  { key: "rental_property", title: "賃貸等不動産関係、財務諸表" },
-  { key: "segment_info", title: "セグメント情報等、財務諸表" },
-  { key: "subsequent_events", title: "重要な後発事象、財務諸表" },
-  { key: "related_parties", title: "関連当事者情報、財務諸表" },
+  { key: "rental_property", title: "賃貸等不動産関係、財務諸表",
+    consolidatedElement: "NotesRealEstateForLeaseEtcConsolidatedFinancialStatementsTextBlock" },
+  { key: "segment_info", title: "セグメント情報等、財務諸表",
+    consolidatedElement: "NotesSegmentInformationEtcConsolidatedFinancialStatementsTextBlock" },
+  { key: "subsequent_events", title: "重要な後発事象、財務諸表",
+    consolidatedElement: "NotesSignificantEventsAfterReportingPeriodConsolidatedFinancialStatementsTextBlock" },
+  { key: "related_parties", title: "関連当事者情報、財務諸表",
+    consolidatedElement: "NotesRelatedPartiesConsolidatedFinancialStatementsTextBlock" },
   { key: "parent_info", title: "提出会社の親会社等の情報" },
   { key: "rights_plan", title: "ライツプランの内容" },
   {
@@ -191,28 +198,33 @@ export function stripHtml(html: string): string {
  * 入るため、当期系を優先する (前期と当期の両方がある注記で当期を採る)。
  * 開示項目は提出日時点で単一行が通例 (同点は先勝ち・決定的)。
  */
-function scoreRow(r: EdinetCsvRow): number {
+function scoreRow(r: EdinetCsvRow, consolidatedNote: boolean): number {
   let s = 0;
   if (r.relativeYear.includes("当期")) s += 2;
   else if (r.relativeYear === "提出日時点") s += 1;
-  if (r.consolidatedOrNonConsolidated === "連結") s += 1;
+  if (r.consolidatedOrNonConsolidated === "連結" || consolidatedNote) s += 1;
   return s;
 }
 
 /**
- * CSV 行から定性 6 項目を抜く。1 セクション最大 1 行。
+ * CSV 行から開示テキスト39項目を抜く。1 セクション最大 1 行。
  * マッチも抽出も純粋関数 (テスト容易・副作用なし)。
  */
 export function extractTextSections(rows: EdinetCsvRow[]): ExtractedSection[] {
   const out: ExtractedSection[] = [];
   for (const def of TEXT_SECTIONS) {
     const want = NORMALIZED_TITLES.get(def.key)!;
+    const consolidatedTitle = def.consolidatedElement === undefined ? null
+      : normalizeTitle(def.title.replace("財務諸表", "連結財務諸表"));
     let best: EdinetCsvRow | null = null;
     let bestScore = -1;
     for (const r of rows) {
-      if (!localName(r.elementId).endsWith("TextBlock")) continue;
-      if (normalizeTitle(r.itemName) !== want) continue;
-      const s = scoreRow(r);
+      const element = localName(r.elementId);
+      if (!element.endsWith("TextBlock")) continue;
+      const title = normalizeTitle(r.itemName);
+      const consolidatedNote = element === def.consolidatedElement && title === consolidatedTitle;
+      if (title !== want && !consolidatedNote) continue;
+      const s = scoreRow(r, consolidatedNote);
       if (s > bestScore) {
         bestScore = s;
         best = r;

@@ -535,6 +535,15 @@ def catalog_blocks(db_ids: dict[str, str]) -> list[dict]:
             "本ページは「株式情報」配下の全データベースのスキーマ辞書・ライセンス・更新頻度・"
             "利用ガイドをまとめたものです。"
         ),
+        _heading(2, "現行の保存先と閲覧入口"),
+        _bullet("①銘柄マスタ・③財務サマリ・④開示書類・⑤原本ファイルはNotionで閲覧できます。価格や上場状態の正本はD1で、Notion全DBの空欄が取得漏れを意味するわけではありません。"),
+        _bullet("②株価テクニカル・⑥時系列エクスポート・⑦収集ジョブログは退役済み。日足・指標・財務断面・実行履歴はD1、原本・大容量時系列はR2です。"),
+        _bullet("⑧需給・⑨株主優待の旧Notion DBは通常更新しません。需給は非公開R2/D1、優待はD1 yutai_benefitsとお宝優待画面を使います。"),
+        _bullet("jss-api-publicは公開可能なRESTだけ、jss-api-privateはAPIキー必須のREST/MCPです。日足・指標・バリュエーション・需給は内部面、公開優待RESTはジャンル・株数・権利月/日だけを返します。"),
+        _bullet("内部MCPのjp_ohlcv_range / jp_indicators_latest / jp_valuation / jp_supply_latest / jp_dataset_freshness / jp_job_runsで時系列・断面・鮮度・収集結果を確認できます。CI成功はデータ更新成功を意味しません。"),
+        _bullet("資金フローは指標定義・観測ログ・取込ログの3DBを使います。sector-turnoverは株価の対象日全件保存後だけ更新し、他28取得元はonly=independentで独立更新します。月次/四半期系列は公表頻度で鮮度を判断します。"),
+        _bullet("⑤の歴史原本にはNotionだけに保管されたものがあり、D1 jss_raw_filesの件数とは一致しません。原本relation/raw_page_idを辿り、R2未索引を原本喪失と混同しないでください。"),
+        _bullet("優待金額・保有明細の価格/時価・財務指標の空欄は、未取得、適用条件未確認、原本に開示なし、非上場/通貨/単位未確定を区別して確認します。金額や条件を推測して埋めません。"),
         _para(
             "免責: 本ページおよび配下の全データは情報提供のみを目的としており、投資助言ではありません。"
             "投資判断は自己責任で行ってください。"
@@ -591,7 +600,8 @@ _BLOCK_CHUNK = 80  # Notion API は1リクエスト最大100ブロック
 
 
 def ensure_catalog_page(
-    client: NotionClient, settings: Settings, setup: SchemaSetup, db_ids: dict[str, str]
+    client: NotionClient, settings: Settings, setup: SchemaSetup, db_ids: dict[str, str],
+    *, refresh: bool = False,
 ) -> str:
     """データカタログページを冪等に作成 (子ページのタイトル一致で既存検出)。
 
@@ -600,7 +610,9 @@ def ensure_catalog_page(
     """
     existing = setup.find_child_page(CATALOG_TITLE)
     if existing:
-        logger.info("データカタログ既存: %s (内容は変更しない)", existing)
+        if refresh:
+            _refresh_catalog_page(client, existing, catalog_blocks(db_ids))
+        logger.info("データカタログ既存: %s (本文更新=%s)", existing, refresh)
         return existing
     blocks = catalog_blocks(db_ids)
     page = client.create_page(
@@ -614,6 +626,36 @@ def ensure_catalog_page(
     return page["id"]
 
 
+def _catalog_content(block: dict) -> tuple[str, list[dict]]:
+    kind = block["type"]
+    if kind not in {"heading_1", "heading_2", "heading_3", "paragraph", "bulleted_list_item"}:
+        raise ValueError("カタログに子ページ/DB等が混在するため本文更新を停止します")
+    rich_text = block[kind]["rich_text"]
+    if any(item["type"] != "text" for item in rich_text):
+        raise ValueError("カタログに管理対象外のrich_textがあるため更新を停止します")
+    return kind, [{"content": item["text"]["content"], "link": item["text"].get("link")} for item in rich_text]
+
+
+def _refresh_catalog_page(client: NotionClient, page_id: str, desired: list[dict]) -> None:
+    """明示実行だけで本文更新。新本文の全件照合前には旧本文をarchiveしない。"""
+    before = client.list_child_blocks(page_id)
+    previous = [_catalog_content(block) for block in before]
+    expected = [_catalog_content(block) for block in desired]
+    if previous == expected:
+        return
+    for i in range(0, len(desired), _BLOCK_CHUNK):
+        client.append_block_children(page_id, desired[i : i + _BLOCK_CHUNK])
+    if not client.dry_run:
+        after = client.list_child_blocks(page_id)
+        if ([block["id"] for block in after[:len(before)]] != [block["id"] for block in before]
+                or [_catalog_content(block) for block in after] != previous + expected):
+            raise ValueError("カタログの追記結果/旧本文が一致しないためarchiveを停止します")
+    for block in before:
+        result = client.raw_api("PATCH", f"blocks/{block['id']}", json_body={"archived": True})
+        if not client.dry_run and (result.get("id") != block["id"] or result.get("archived") is not True):
+            raise ValueError("カタログ旧本文のarchive結果が不明です。再送せず確認してください")
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -625,6 +667,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Notion 4DB+データカタログの冪等セットアップ (§6, P0)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Notionへ書き込まず操作を記録のみ")
+    parser.add_argument("--refresh-catalog", action="store_true", help="DBを変更せず既存データカタログ本文だけを更新する（旧本文はarchive）")
     parser.add_argument(
         "--json-out",
         default=str(DEFAULT_DB_IDS_FILE),
@@ -637,10 +680,17 @@ def main(argv: list[str] | None = None) -> int:
     client = NotionClient(
         settings.notion_token, rps=settings.notion_rps, dry_run=settings.dry_run
     )
-    db_ids = ensure_all(client, settings)
+    if args.refresh_catalog:
+        db_ids = {key: settings.db_id(key) for key in DB_REGISTRY}
+        ensure_catalog_page(client, settings, SchemaSetup(client, settings), db_ids, refresh=True)
+    else:
+        db_ids = ensure_all(client, settings)
 
     payload = json.dumps(db_ids, ensure_ascii=False, indent=2)
     print(payload)
+    if args.refresh_catalog:
+        logger.info("カタログのみの更新のためDB IDファイルは変更しません")
+        return 0
     if settings.dry_run:
         logger.info("dry-run のため %s への書き出しはスキップ (合成IDの混入防止)", args.json_out)
     else:

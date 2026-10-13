@@ -1193,13 +1193,31 @@ async function runDailySyncAndRecord(
       throw new Error("株式同期が21:00 UTC期限に達したため新たな書込みを止めます");
     }
   };
-  // 株式の時間窓・N225 対象日/fresh-close guard は全 stock パス共通
-  // (stocksOnly でも default でも同じ。stocksOnly はマクロ有無だけを決める)。
+  // 価格・母集団とも開始窓と予定日・書込み期限は守る。
+  const utcMinutes = new Date(startedAt).getUTCHours() * 60 + new Date(startedAt).getUTCMinutes();
+  if (utcMinutes < 390 || utcMinutes >= 1260) {
+    throw new Error("株式同期は東証15:30 JST終了後から翌06:00 JST基準までに実行してください");
+  }
+  // 母集団は価格取得とは独立して更新する。N225 の欠測で上場廃止の適用を止めない。
+  // HOLD 残があれば不完全失敗を throw し、株価 fetch へ進まない。
+  const overlay = await ensureUniverseOverlay(db, {
+    eligibilityAsOf: targetDate,
+    collect:
+      collectOverlay ??
+      withBasicEvidence((input) => collectUniverseOfficialEvents(input)),
+    sendBatch: (statements) => {
+      assertStockDeadline();
+      return (sendOverlayBatch ?? createD1HttpBatchSender())(statements);
+    },
+  });
+  if (overlay.applied) {
+    console.info(
+      `[sync-daily]   overlay 適用: delist=${overlay.result?.deactivated} ` +
+        `transfer=${overlay.result?.marketUpdated} held=${overlay.result?.heldListingCodes.length}`
+    );
+  }
+  // N225 guard は株式価格の書込みにだけ適用する (stocks/default 共通)。
   {
-    const utcMinutes = new Date(startedAt).getUTCHours() * 60 + new Date(startedAt).getUTCMinutes();
-    if (utcMinutes < 390 || utcMinutes >= 1260) {
-      throw new Error("株式同期は東証15:30 JST終了後から翌06:00 JST基準までに実行してください");
-    }
     // 日本祝日カレンダーを推測しない。対象日の実日足 (日付 + 実終値) が
     // なければ全書込を止める。日付だけの gate では対象日の fresh null bar が
     // 通過し、古い終値で計算した指標を対象日付で保存してしまう (F-01)。
@@ -1256,24 +1274,6 @@ async function runDailySyncAndRecord(
   // -----------------------------------------------------------------
   console.info("[sync-daily] Phase 1: ブートストラップ");
   await assertDailySchema(db);
-  // 母集団 overlay: target-load 前に公式イベントを適用する (Issue #196)。
-  // HOLD 残があれば不完全失敗を throw し、株価 fetch へ進まない。
-  const overlay = await ensureUniverseOverlay(db, {
-    eligibilityAsOf: targetDate,
-    collect:
-      collectOverlay ??
-      withBasicEvidence((input) => collectUniverseOfficialEvents(input)),
-    sendBatch: (statements) => {
-      assertStockDeadline();
-      return (sendOverlayBatch ?? createD1HttpBatchSender())(statements);
-    },
-  });
-  if (overlay.applied) {
-    console.info(
-      `[sync-daily]   overlay 適用: delist=${overlay.result?.deactivated} ` +
-        `transfer=${overlay.result?.marketUpdated} held=${overlay.result?.heldListingCodes.length}`
-    );
-  }
   const targets = await loadDailyTargets(db);
   console.info(`[sync-daily]   対象: ${targets.length} 銘柄 (active かつ equity)`);
   // 優良株選定の入力にする正本の年次実績を 1 文で先読みする。

@@ -1,6 +1,6 @@
 # 008 moneyflow の日次取込 (計画: notion-velvet-goose.md)。
 #
-# stock-sync.yml の株式 sync 成功後に workflow_call で連鎖実行する (#160)。
+# sector-turnoverはstock-sync成功後だけ連鎖。他28取得元はCFからonly=independentで独立起動する。
 # 旧来の独立 cron (平日 08:30 UTC) は stock-sync (17:13 UTC) より先に走り、
 # 当日分の D1 日足が無いまま sector-turnover を要求して失敗した。cron ずらし
 # では再発防止にならない (GitHub の schedule  jitter が数時間ある実測) ため、
@@ -47,7 +47,7 @@ on:
         type: boolean
         default: false
       only:
-        description: "実行する取得元 (カンマ区切り。空なら全部)"
+        description: "取得元名のカンマ区切り。independentは株式日次保存に依存しない28取得元、空は全部"
         type: string
         default: ""
       trade_date:
@@ -65,7 +65,7 @@ on:
         type: boolean
         default: false
       only:
-        description: "実行する取得元 (カンマ区切り。空なら全部)"
+        description: "取得元名のカンマ区切り。independentは株式日次保存に依存しない28取得元、空は全部"
         type: string
         default: ""
     secrets:

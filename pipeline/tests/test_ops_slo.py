@@ -30,10 +30,13 @@ from jp_stock_pipeline.models import JST
 # を必須手順にしている。
 _LEGACY_DDL: tuple[str, ...] = (
     "CREATE TABLE core_stock_financials"
-    " (stock_id INTEGER, data_date TEXT, fetched_at INTEGER)",
+    " (stock_id INTEGER PRIMARY KEY, data_date TEXT, fetched_at INTEGER, price REAL)",
     # 取得時刻の列は宣言しない。設計書にも既存コードにも出てこないので、
     # マニフェストがそれを参照していたらここで `no such column` にして落とす。
     "CREATE TABLE ir_disclosures (tdnet_id TEXT, pubdate INTEGER, notion_page_id TEXT)",
+    "CREATE TABLE swing_stock_indicators (stock_id INTEGER PRIMARY KEY, latest_date TEXT, latest_close REAL)",
+    "CREATE TABLE p_momentum (stock_id INTEGER PRIMARY KEY, as_of TEXT, source_max_date TEXT, bars INTEGER)",
+    "CREATE TABLE swing_market_context (date TEXT PRIMARY KEY)",
     "CREATE TABLE core_stocks (id INTEGER PRIMARY KEY, code TEXT, updated_at INTEGER,"
     " is_active INTEGER DEFAULT 1, instrument_type TEXT DEFAULT 'equity')",
     "CREATE TABLE yutai_benefits"
@@ -379,11 +382,20 @@ class TestJudgeObservation:
             row_count=4445, now=NOW,
         ) == "red"
 
-    def test_読めない基準日は取得時刻へ落ちる(self) -> None:
+    @pytest.mark.parametrize("basis", ["不明", "2026-09-12junk", "2026-02-30"])
+    def test_不正な基準日を新しい取得時刻で緑にしない(self, basis) -> None:
+        with pytest.raises(ValueError, match="基準日が不正"):
+            slo.judge_observation(
+                "d1_core_stock_financials", latest_data_date=basis, source_epoch=_epoch_days_ago(0.1),
+                row_count=3764, now=NOW,
+            )
+
+    def test_欠損基準日は取得時刻で代用せずunknown(self) -> None:
         assert slo.judge_observation(
-            "d1_core_stock_financials", latest_data_date="不明", source_epoch=_epoch_days_ago(0.1),
+            "d1_core_stock_financials", latest_data_date=None, source_epoch=_epoch_days_ago(0.1),
             row_count=3764, now=NOW,
-        ) == "green"
+        ) == "unknown"
+
 
 
 class TestBusinessDayAging:
@@ -482,42 +494,23 @@ class TestBusinessDayAging:
             row_count=4351, now=friday_night,
         ) == "green"
 
-    def test_前営業日基準で1日抜けると黄_2日で赤(self) -> None:
-        """検知力が落ちていないこと（緑に寄せすぎない）。
+    def test_18時writerは当日基準_翌営業日に欠落すると黄(self) -> None:
+        for day, verdict in [(11, "green"), (14, "yellow"), (15, "red")]:
+            assert slo.judge_observation(
+                "d1_core_stock_financials", latest_data_date="2026-09-11", source_epoch=None,
+                row_count=100, now=datetime(2026, 9, day, 23, 30, tzinfo=slo.JST),
+            ) == verdict
 
-        writer（stock-sync 21:00 UTC = 翌 06:00 JST）は前営業日の EOD を
-        書くので data_date は常に T-1（lag_days=1）。旧テストは「金曜基準日
-        at 月曜 = 1 営業日欠落」と数えていたが、月曜朝の run 自体が無い
-        （cron は火〜土曜朝 JST）ため金曜分が最新なのは平常運転である。
-        欠落の数え方を writer の実スケジュールに合わせた。
-        """
-        # 月曜 23:30 に基準日が金曜 = 平常（土曜朝に金曜分を書いたばかり）
-        monday = datetime(2026, 9, 14, 23, 30, tzinfo=slo.JST)
+    def test_JPX祝日は加齢せず翌営業日の欠落を隠さない(self) -> None:
+        for day, verdict in [(12, "green"), (13, "yellow")]:
+            assert slo.judge_observation(
+                "d1_core_stock_financials", latest_data_date="2026-10-09", source_epoch=None,
+                row_count=100, now=datetime(2026, 10, day, 23, 30, tzinfo=slo.JST),
+            ) == verdict
+        # 貸借残の翌営業日公表も10/12休場を飛ばす。
         assert slo.judge_observation(
-            "d1_core_stock_financials", latest_data_date="2026-09-11", source_epoch=None,
-            row_count=100, now=monday,
-        ) == "green"
-        # 火曜 23:30 に基準日が金曜 = 1 営業日欠落（火曜朝の月曜分が無い）
-        tuesday = datetime(2026, 9, 15, 23, 30, tzinfo=slo.JST)
-        assert slo.judge_observation(
-            "d1_core_stock_financials", latest_data_date="2026-09-11", source_epoch=None,
-            row_count=100, now=tuesday,
-        ) == "yellow"
-        # 水曜 23:30 に基準日が金曜 = 2 営業日欠落（月・火分が無い）
-        wednesday = datetime(2026, 9, 16, 23, 30, tzinfo=slo.JST)
-        assert slo.judge_observation(
-            "d1_core_stock_financials", latest_data_date="2026-09-11", source_epoch=None,
-            row_count=100, now=wednesday,
-        ) == "red"
-
-    def test_前営業日の基準日は平常運転で緑(self) -> None:
-        """2026-09-16 本番再現。水曜の ops_check で基準日が火曜なのは
-        「火曜 EOD を水曜朝に書いた」平常運転であり、赤にしてはならない。
-        """
-        wednesday = datetime(2026, 9, 16, 23, 30, tzinfo=slo.JST)
-        assert slo.judge_observation(
-            "d1_core_stock_financials", latest_data_date="2026-09-15", source_epoch=None,
-            row_count=3756, now=wednesday,
+            "jsf_supply", latest_data_date="2026-10-09", source_epoch=None,
+            row_count=4351, now=datetime(2026, 10, 13, 23, 30, tzinfo=slo.JST),
         ) == "green"
 
 
@@ -832,6 +825,15 @@ class TestOpsCheck:
             "yutai_benefits": (None, 8314, recent),
         }
         rows.update(overrides or {})
+        current = datetime.now(UTC)
+        price_date = ops_check.expected_stock_date(current).isoformat()
+        macro_day = current.date() if current.hour >= 22 else current.date() - timedelta(days=1)
+        macro_date = ops_check.latest_session_date(macro_day, ("JPX", "NYSE")).isoformat()
+        store.query("INSERT OR IGNORE INTO core_stocks (id,code) VALUES (1,'7203')")
+        store.query("INSERT OR REPLACE INTO core_stock_financials (stock_id,data_date,price) VALUES (1,?,100)", [price_date])
+        store.query("INSERT OR REPLACE INTO swing_stock_indicators VALUES (1,?,100)", [price_date])
+        store.query("INSERT OR REPLACE INTO p_momentum VALUES (1,?,?,90)", [price_date, price_date])
+        store.query("INSERT OR IGNORE INTO swing_market_context VALUES (?)", [macro_date])
         for dataset, (latest, n, epoch) in rows.items():
             ops.record_freshness(
                 store, dataset=dataset, store_name="D1", location=dataset,
@@ -1319,7 +1321,7 @@ class TestIrUniverseGap:
         judge._seed_freshness(store)
         judge._seed_probe_ok(store)
         store.query(
-            "INSERT INTO core_stocks (id, code, is_active, instrument_type)"
+            "INSERT OR IGNORE INTO core_stocks (id, code, is_active, instrument_type)"
             " VALUES (1, '7203', 1, 'equity')"
         )
         when = datetime.now(JST) - timedelta(days=10)
@@ -1337,3 +1339,37 @@ class TestIrUniverseGap:
             raising=False,
         )
         assert ops_check.main([], env=dict(_D1_ENV)) == 1
+
+
+class TestStockCoverage:
+    def test_完了期限と日米共通休場の契約(self) -> None:
+        assert ops_check.expected_stock_date(datetime(2026, 10, 13, 23, 29, tzinfo=JST)).isoformat() == "2026-10-09"
+        assert ops_check.expected_stock_date(datetime(2026, 10, 13, 23, 30, tzinfo=JST)).isoformat() == "2026-10-13"
+        assert ops_check.latest_session_date(date(2026, 10, 12), ("JPX", "NYSE")).isoformat() == "2026-10-09"
+        with pytest.raises(ValueError, match="未収録"):
+            ops_check.expected_stock_date(datetime(2028, 1, 4, 23, 30, tzinfo=JST))
+
+    def test_1銘柄だけ最新でも残りの凍結と欠測を検知する(self) -> None:
+        store = _FakeStore()
+        store.query("INSERT INTO core_stocks (id,code) VALUES (1,'7203'),(2,'7204'),(3,'7205')")
+        store.query("INSERT INTO core_stocks (id,code,is_active) VALUES (4,'7206',0)")
+        store.query("INSERT INTO core_stock_financials (stock_id,data_date,price) VALUES (1,'2026-10-13',100),(2,'2026-10-09',100)")
+        store.query("INSERT INTO swing_stock_indicators VALUES (1,'2026-10-13',100)")
+        store.query("INSERT INTO p_momentum VALUES (1,'2026-10-13','2026-10-13',90)")
+        store.query("INSERT INTO swing_market_context VALUES ('2026-10-09')")
+        problems: list[str] = []
+        ops_check._check_stock_coverage(store, problems, now=datetime(2026, 10, 13, 23, 35, tzinfo=JST))
+        assert len(problems) == 3
+        assert all("1/3" in problem for problem in problems)
+        assert any("価格欠測例=7204" in problem for problem in problems)
+
+    def test_価格だけ整っても投影とマクロの停止を隠さない(self) -> None:
+        store = _FakeStore()
+        store.query("INSERT INTO core_stocks (id,code) VALUES (1,'7203')")
+        store.query("INSERT INTO core_stock_financials (stock_id,data_date,price) VALUES (1,'2026-10-13',100)")
+        problems: list[str] = []
+        ops_check._check_stock_coverage(store, problems, now=datetime(2026, 10, 13, 23, 35, tzinfo=JST))
+        assert len(problems) == 3
+        assert any("indicators" in problem for problem in problems)
+        assert any("momentum" in problem for problem in problems)
+        assert any("マクロ基準日" in problem for problem in problems)

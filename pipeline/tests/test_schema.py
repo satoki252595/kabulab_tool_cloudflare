@@ -6,6 +6,8 @@ dry-run の NotionClient (conftest の dry_client) を使い、実 Notion へは
 
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import pytest
 
 from jp_stock_pipeline.config import DB_REGISTRY, load_settings
@@ -241,6 +243,45 @@ class TestCatalogPage:
             assert view["db"] in DB_REGISTRY
             assert view["name"]
             assert view["setup"]
+
+    def test_existing_catalog_can_be_refreshed_without_database_mutations(self):
+        client = Mock(dry_run=False)
+        setup = Mock()
+        setup.find_child_page.return_value = "catalog"
+        desired = schema.catalog_blocks({})
+        old = {"id": "old", **schema._para("旧案内")}
+        client.list_child_blocks.side_effect = [[old], [old, *desired]]
+        client.raw_api.return_value = {"id": "old", "archived": True}
+        assert schema.ensure_catalog_page(client, make_settings(), setup, {}, refresh=True) == "catalog"
+        client.create_database.assert_not_called()
+        client.update_database.assert_not_called()
+        client.raw_api.assert_called_once_with("PATCH", "blocks/old", json_body={"archived": True})
+        names = [call[0] for call in client.mock_calls]
+        assert names.index("append_block_children") < names.index("raw_api")
+        assert names.count("list_child_blocks") == 2
+
+    def test_catalog_refresh_is_noop_when_content_matches(self):
+        client = Mock(dry_run=False)
+        desired = [schema._para("現行案内")]
+        client.list_child_blocks.return_value = [{"id": "current", **desired[0]}]
+        schema._refresh_catalog_page(client, "catalog", desired)
+        client.append_block_children.assert_not_called()
+        client.raw_api.assert_not_called()
+
+    @pytest.mark.parametrize("failure", ["append_unknown", "readback_mismatch", "child_database"])
+    def test_catalog_refresh_preserves_old_content_until_new_content_is_verified(self, failure):
+        client = Mock(dry_run=False)
+        old = {"id": "old", **schema._para("旧案内")}
+        if failure == "child_database":
+            old = {"id": "db", "type": "child_database", "child_database": {"title": "保全対象"}}
+        client.list_child_blocks.side_effect = [[old], [old]]
+        if failure == "append_unknown":
+            client.append_block_children.side_effect = RuntimeError("応答結果不明")
+        with pytest.raises((ValueError, RuntimeError)):
+            schema._refresh_catalog_page(client, "catalog", [schema._para("現行案内")])
+        client.raw_api.assert_not_called()
+        if failure == "child_database":
+            client.append_block_children.assert_not_called()
 
 
 class TestMissingProperties:

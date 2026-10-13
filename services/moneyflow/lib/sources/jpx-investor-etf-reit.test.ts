@@ -21,6 +21,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as XLSX from "xlsx";
+import { jpxInvestorEtfSpec, jpxInvestorReitSpec } from "../adapters/jpx-investor-etf-reit.js";
+import { validateDrafts } from "../source-spec.js";
 import {
   expectedJpxInvestorYearMonth,
   fetchAndParseLatestJpxInvestor,
@@ -50,6 +52,19 @@ function loadFixtureBytes(filename: string): Uint8Array {
 function loadFixtureText(filename: string): string {
   return readFileSync(`${FIXTURES_DIR}${filename}`, "utf-8");
 }
+
+it.skipIf(!["etf", "reit"].every(product => existsSync(`${FIXTURES_DIR}${product}_m202609.xlsx`))).each(["etf", "reit"] as const)("%sの2026年9月実新様式は13葉の26金額観測だけを受け入れる", (product) => {
+  const bytes = loadFixtureBytes(`${product}_m202609.xlsx`);
+  const report = parseJpxInvestorWorkbook(bytes, product, "https://www.jpx.co.jp/markets/statistics-equities/investor-type/");
+  expect(report.yearMonth).toBe("2026-09");
+  expect(report.value.categories).toHaveLength(13);
+  expect(report.value.categories.every(r => r.purchases - r.sales === r.balance && r.purchases + r.sales === r.total)).toBe(true);
+  const spec = product === "etf" ? jpxInvestorEtfSpec : jpxInvestorReitSpec;
+  const drafts = spec.toObservations({ key: `${spec.name}-2026-09`, files: [{ filename: `${product}_m202609.xlsx`, bytes }] });
+  expect(drafts).toHaveLength(26);
+  expect(drafts.every(r => r.periodStart === null && r.periodEnd === null)).toBe(true);
+  expect(() => validateDrafts(spec.name, drafts, spec.indicators)).not.toThrow();
+});
 
 // 数値は試験専用の合成入力。公開fixtureは公式の見出しだけ。
 function newFormatWorkbook(product: "etf" | "reit"): XLSX.WorkBook {

@@ -1,0 +1,98 @@
+{
+  "verifiedOn": "2026-10-14",
+  "markets": {
+    "JPX": {
+      "sourceUrl": "https://www.jpx.co.jp/corporate/about-jpx/calendar/",
+      "years": {
+        "2026": {
+          "01-01": "元日",
+          "01-02": "休業日",
+          "01-03": "休業日",
+          "01-12": "成人の日",
+          "02-11": "建国記念の日",
+          "02-23": "天皇誕生日",
+          "03-20": "春分の日",
+          "04-29": "昭和の日",
+          "05-03": "憲法記念日",
+          "05-04": "みどりの日",
+          "05-05": "こどもの日",
+          "05-06": "振替休日",
+          "07-20": "海の日",
+          "08-11": "山の日",
+          "09-21": "敬老の日",
+          "09-22": "休日（祝日法第3条第3項）",
+          "09-23": "秋分の日",
+          "10-12": "スポーツの日",
+          "11-03": "文化の日",
+          "11-23": "勤労感謝の日",
+          "12-31": "休業日"
+        },
+        "2027": {
+          "01-01": "元日",
+          "01-02": "休業日",
+          "01-03": "休業日",
+          "01-11": "成人の日",
+          "02-11": "建国記念の日",
+          "02-23": "天皇誕生日",
+          "03-21": "春分の日",
+          "03-22": "振替休日",
+          "04-29": "昭和の日",
+          "05-03": "憲法記念日",
+          "05-04": "みどりの日",
+          "05-05": "こどもの日",
+          "07-19": "海の日",
+          "08-11": "山の日",
+          "09-20": "敬老の日",
+          "09-23": "秋分の日",
+          "10-11": "スポーツの日",
+          "11-03": "文化の日",
+          "11-23": "勤労感謝の日",
+          "12-31": "休業日"
+        }
+      },
+      "sourcePin": {
+        "fetchedAt": "2026-10-13T15:42:10.114Z",
+        "sha256": "dc15818ba79aa25d11af820d65908c67d1e8c996fd2299b1419c84db13037997",
+        "bytes": 30897,
+        "pageId": "3f8d74ff-84cd-8109-aa1b-d29a59796fc9",
+        "readback": true
+      }
+    },
+    "NYSE": {
+      "sourceUrl": "https://www.nyse.com/trade/hours-calendars",
+      "years": {
+        "2026": {
+          "01-01": "New Year's Day",
+          "01-19": "Martin Luther King, Jr. Day",
+          "02-16": "Washington's Birthday",
+          "04-03": "Good Friday",
+          "05-25": "Memorial Day",
+          "06-19": "Juneteenth National Independence Day",
+          "07-03": "Independence Day observed",
+          "09-07": "Labor Day",
+          "11-26": "Thanksgiving Day",
+          "12-25": "Christmas Day"
+        },
+        "2027": {
+          "01-01": "New Year's Day",
+          "01-18": "Martin Luther King, Jr. Day",
+          "02-15": "Washington's Birthday",
+          "03-26": "Good Friday",
+          "05-31": "Memorial Day",
+          "06-18": "Juneteenth National Independence Day observed",
+          "07-05": "Independence Day observed",
+          "09-06": "Labor Day",
+          "11-25": "Thanksgiving Day",
+          "12-24": "Christmas Day observed"
+        }
+      },
+      "sourcePin": {
+        "fetchedAt": "2026-10-13T15:42:13.734Z",
+        "sha256": "79602f7be5a8f1d39c2b1cac4dd02c4c07f18cf9f92d70602834069154719bad",
+        "bytes": 109229,
+        "pageId": "3f8d74ff-84cd-8154-b30b-e550dbc41358",
+        "readback": true
+      }
+    }
+  }
+}

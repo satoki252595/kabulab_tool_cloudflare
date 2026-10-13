@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
  * stock-sync.yml の target routing 契約 (CF scheduler 移行後)。
  *
  * - 旧株式・macro schedule cronは廃止。monthlyは維持。
- * - dispatch target=scheduled-stocks は株式 only かつ moneyflow 全 sources
- *   (旧 scheduled と同じ空文字)。手動 stocks は sector-turnover 限定を維持。
+ * - stock-syncからのmoneyflow連鎖は価格依存のsector-turnoverだけ。
+ *   他取得元はmoneyflowの既存only入口から独立更新する。
  * - daily step は SCHEDULED_DATE を producer へ渡す。
  */
 
@@ -34,11 +34,10 @@ describe("stock-sync.yml target routing", () => {
     expect(yml).toContain("- scheduled-context");
   });
 
-  it("moneyflow selector: scheduled-stocks は全 sources、手動 stocks は限定維持", () => {
-    expect(yml).toContain(
-      "daily|all|scheduled-stocks|scheduled-context|context|monthly) ONLY=\"\""
-    );
-    expect(yml).toContain('stocks) ONLY="sector-turnover"');
+  it("株式成功に依存するのはsector-turnoverのみで、他取得元を二重起動しない", () => {
+    expect(yml).toContain("      only: sector-turnover");
+    expect(yml).not.toContain("moneyflow_only:");
+    expect(yml).toContain("if: needs.sync.outputs.trade_date != '' && needs.sync.outputs.tolerated_failures == ''");
   });
 
   it("daily step は scheduled-stocks で動き日付と target を渡す", () => {
