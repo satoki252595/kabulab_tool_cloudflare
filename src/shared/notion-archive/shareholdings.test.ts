@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import type { ShareholdingsExtraction } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { parseShareholdingsData } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
+import { qualifyHoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { queryUniqueRow } from "./archive.js";
 import { notionRequest } from "./client.js";
 import { verifyArchivedAttachments } from "./readback.js";
@@ -10,6 +11,9 @@ import { listPageFiles } from "./page-file.js";
 import { applyHoldingsSchema, buildHoldingsSchemaPatch, LEGACY_HOLDINGS_COLUMNS, publishSavedShareholdings, publishVerifiedShareholdings, resumePendingShareholdings, type HoldingsSchema } from "./shareholdings.js";
 
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings.js", () => ({ parseShareholdingsData: vi.fn() }));
+vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js", () => ({
+  parseHoldingsCodeList: vi.fn(() => ({ asOf: "2026-06-30", byLegalName: new Map() })), qualifyHoldingValuation: vi.fn(),
+}));
 vi.mock("./archive.js", () => ({ queryUniqueRow: vi.fn(), findUniqueBackupChildByTitle: vi.fn(async () => "p".repeat(32)) }));
 vi.mock("./client.js", () => ({ notionRequest: vi.fn() }));
 vi.mock("./readback.js", () => ({ verifyArchivedAttachments: vi.fn() }));
@@ -42,7 +46,9 @@ function migratedSchema(schema = oldSchema()): HoldingsSchema {
       const [name, old] = Object.entries(properties).find(([, value]) => value.id === key)!;
       properties[definition.name] = { ...old, ...(definition.select ? { select: definition.select } : {}) };
       delete properties[name];
-    } else properties[key] = { id: `new-${key}`, type: Object.keys(definition)[0] };
+    } else properties[key] = { id: `new-${key}`, type: Object.keys(definition)[0],
+      ...(Object.keys(definition)[0] === "select" ? { select: { options: definition.select!.options.map((option, index) => ({ ...option, id: `opt-${index}` })) } } : {}),
+      ...(Object.keys(definition)[0] === "formula" ? { formula: (definition as unknown as { formula: { expression: string } }).formula } : {}) };
   }
   return { id: schema.id, properties };
 }
@@ -205,5 +211,23 @@ describe("株式保有の原典限定writer", () => {
       expect(native.mock.calls[0][0]).toBe("https://hosted.invalid/saved-only");
       expect(verifyArchivedAttachments).not.toHaveBeenCalled();
     } finally { native.mockRestore(); }
+  });
+
+  it("原本照合済の株数へ同日価格根拠だけを追記し、後の原本未指定で価格を消さない", async () => {
+    await publishVerifiedShareholdings(args);
+    const rowPath = `/pages/${"e".repeat(32)}`;
+    vi.mocked(queryUniqueRow).mockImplementation(async () => await requestRouter("GET", rowPath) as { id: string });
+    const identity = { code: "9999", edinetCode: "E99999", corporateNumber: "1".repeat(13), legalName: holding.name,
+      englishName: "STRUCTURAL", asOf: source.fiscalYearEnd, row: 3, archivePageId: "1".repeat(32), zipSha256: "2".repeat(64) };
+    vi.mocked(qualifyHoldingValuation).mockResolvedValue({ status: "qualified", identity, price: 100, value: 1200, currency: "JPY", date: source.fiscalYearEnd,
+      priceSource: { archivePageId: "3".repeat(32), gzipSha256: "4".repeat(64), bodySha256: "5".repeat(64), filename: "structure.gz", symbol: "9999.T",
+        capturedAt: "2026-07-01T00:00:00Z", sourceTimestamp: 1782777600, range: "10y", priceBasis: "STRUCTURAL", splitObservation: "STRUCTURAL" } });
+    const evidence = { archivePageId: "1".repeat(32), filename: "structure", bytes: Buffer.alloc(0), sha256: "2".repeat(64) };
+    const result = await publishVerifiedShareholdings({ ...args, valuationSources: { codeList: evidence, prices: [evidence] } });
+    expect(result).toMatchObject({ status: "published", updated: 1 });
+    expect(saved[rowPath]).toMatchObject({ "株価": { number: 100 }, "保有時価": { number: 1200 }, "基準日": { date: { start: source.fiscalYearEnd } }, "価格照合済": { checkbox: true } });
+    const priced = structuredClone(saved[rowPath]);
+    expect(await publishVerifiedShareholdings(args)).toMatchObject({ status: "published", unchanged: 1 });
+    expect(saved[rowPath]).toEqual(priced);
   });
 });

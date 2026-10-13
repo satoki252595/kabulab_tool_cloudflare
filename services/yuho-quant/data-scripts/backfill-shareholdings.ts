@@ -1,0 +1,117 @@
+/**
+ * 最新有報の保存type1だけで現行明細を再解析する。EDINET/Yahoo GET=0。
+ * prepare <limit1..50> <afterCode|START> <privateDir> [valuation-source-paths.json]
+ * apply <privateDir> <maxRows1..1000> — 未確定journalがあれば停止。成功通はreceiptで再開。
+ */
+import "dotenv/config";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { resolve, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
+import * as schema from "../src/db/schema.js";
+import { selectLatestHoldingsDocuments } from "./lib/shareholdings-backfill.js";
+import { parseShareholdingsData, type ShareholdingsSource } from "../src/services/edinet/shareholdings.js";
+import { parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../src/services/edinet/shareholdings-valuation.js";
+import { readSavedHoldingsZip, publishVerifiedShareholdings } from "../../../src/shared/notion-archive/shareholdings.js";
+import { verifyArchivedAttachments } from "../../../src/shared/notion-archive/readback.js";
+import { edinetArchiveFilename } from "../src/services/edinet/archive.js";
+import { guardedHoldingsMutation } from "../../../scripts/notion/shareholdings.js";
+
+const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
+const save = (path: string, value: unknown) => writeFileSync(path, JSON.stringify(value, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+interface SourcePath { path: string; archivePageId: string; filename: string; sha256: string }
+interface Item { source: ShareholdingsSource; ownerName: string; status: string; reason: string | null; parsedRows: number;
+  archivePageId?: string; zipPath?: string; zipSha256?: string; originalManifest?: string; projectionPath?: string }
+
+function valuationSources(path: string | null): { codeList: ArchivedSource; prices: ArchivedSource[] } | undefined {
+  if (path === null) return undefined;
+  const config = read(path);
+  const load = (source: SourcePath) => ({ archivePageId: source.archivePageId, filename: source.filename,
+    sha256: source.sha256, bytes: readFileSync(source.path) });
+  assert.ok(Array.isArray(config.prices));
+  return { codeList: load(config.codeList), prices: config.prices.map(load) };
+}
+
+export async function prepareLatestHoldings(args: { limit: number; afterCode: string | null; dir: string; valuationPath: string | null }): Promise<void> {
+  const db = createD1HttpDb(schema);
+  const selected = await selectLatestHoldingsDocuments(db, args);
+  mkdirSync(args.dir, { recursive: true, mode: 0o700 });
+  assert.equal(existsSync(join(args.dir, "plan.json")), false, "準備済みplanを上書きしません");
+  const evidence = valuationSources(args.valuationPath), catalog = evidence ? parseHoldingsCodeList(evidence.codeList) : null;
+  const items: Item[] = [];
+  for (const row of selected.rows) {
+    const source: ShareholdingsSource = { docId: row.docId, stockCode: row.stockCode, edinetCode: row.edinetCode, fiscalYearEnd: row.fiscalYearEnd };
+    const path = join(args.dir, `${row.stockCode}-${row.docId}.item.json`);
+    if (existsSync(path)) { const item = read(path) as Item; assert.deepEqual(item.source, source); items.push(item); continue; }
+    const saved = await readSavedHoldingsZip(row.docId);
+    let item: Item;
+    if (saved.status === "held") item = { source, ownerName: row.ownerName, status: "held", reason: saved.reason, parsedRows: 0 };
+    else {
+      const parsed = parseShareholdingsData(saved.bytes, source);
+      const zipPath = join(args.dir, `${row.stockCode}-${row.docId}.zip`);
+      writeFileSync(zipPath, saved.bytes, { flag: "wx", mode: 0o600 });
+      const records = [];
+      for (const holding of parsed.holdings) records.push({ source, ownerName: row.ownerName, holding,
+        valuation: evidence && catalog ? await qualifyHoldingValuation({ holding, fiscalYearEnd: source.fiscalYearEnd, catalog, prices: evidence.prices })
+          : { status: "unavailable", identity: null, reason: "価格/同定の保存原本が未指定です" } });
+      const projectionPath = join(args.dir, `${row.stockCode}-${row.docId}.current.jsonl`);
+      writeFileSync(projectionPath, records.map(record => JSON.stringify(record)).join("\n") + (records.length ? "\n" : ""), { flag: "wx", mode: 0o600 });
+      item = { source, ownerName: row.ownerName, status: parsed.status === "ok" ? "ready" : "held", reason: parsed.reason,
+        parsedRows: parsed.holdings.length, archivePageId: saved.archivePageId, zipPath, zipSha256: saved.sha256,
+        originalManifest: saved.originalManifest, projectionPath };
+    }
+    save(path, item); items.push(item);
+    console.info(JSON.stringify({ docId: source.docId, status: item.status, rows: item.parsedRows }));
+  }
+  save(join(args.dir, "plan.json"), { version: 1, observedAt: new Date().toISOString(), selection: { afterCode: args.afterCode, limit: args.limit },
+    nextAfterCode: selected.rows.length ? selected.rows[selected.rows.length - 1].stockCode : args.afterCode, more: selected.more,
+    valuationPath: args.valuationPath, items, upstreamRequests: 0, productionWrites: 0 });
+  console.info(JSON.stringify({ ready: items.filter(item => item.status === "ready").length, held: items.filter(item => item.status === "held").length,
+    more: selected.more, upstreamRequests: 0, productionWrites: 0 }));
+}
+
+export async function applyLatestHoldings(dir: string, maxRows: number): Promise<void> {
+  assert.ok(Number.isSafeInteger(maxRows) && maxRows >= 1 && maxRows <= 1000);
+  assert.equal(readdirSync(dir).some(name => name.endsWith(".pending-write.json")), false, "前回の結果未確定journalがあります。読取照合が必要です");
+  const plan = read(join(dir, "plan.json")) as { version: number; selection: { afterCode: string | null; limit: number }; valuationPath: string | null; items: Item[] };
+  assert.equal(plan.version, 1);
+  // fresh最新文書集合を一度読む。prepare後の新有報へ古い計画を適用しない。
+  const fresh = await selectLatestHoldingsDocuments(createD1HttpDb(schema), plan.selection);
+  const evidence = valuationSources(plan.valuationPath);
+  const result = await guardedHoldingsMutation(join(dir, `apply-${Date.now()}.json`), "latest-saved-holdings", async () => {
+    if (evidence) for (const source of [evidence.codeList, ...evidence.prices]) {
+      await verifyArchivedAttachments(source.archivePageId, [{ filename: source.filename, bytes: source.bytes }], "保有明細backfillの価格/同定原本");
+    }
+    let usedRows = 0, published = 0, held = 0, pending = 0;
+    for (const item of plan.items) {
+      const latest = fresh.rows.find(row => row.stockCode === item.source.stockCode);
+      assert.equal(latest?.docId, item.source.docId, "最新有報が準備時から変化しました。再準備してください");
+      const receipt = join(dir, `${item.source.stockCode}-${item.source.docId}.published.json`);
+      if (existsSync(receipt)) { assert.equal(read(receipt).result.status, "published"); continue; }
+      if (item.status !== "ready") { held++; continue; }
+      if (usedRows + item.parsedRows > maxRows) { pending++; continue; }
+      assert.ok(item.zipPath && item.zipSha256 && item.archivePageId);
+      const zip = readFileSync(item.zipPath); assert.equal(hash(zip), item.zipSha256);
+      await verifyArchivedAttachments(item.archivePageId, [{ filename: edinetArchiveFilename(item.source.docId, 1), bytes: zip }], "保有明細backfillの保存type1");
+      const result = await publishVerifiedShareholdings({ source: item.source, ownerName: item.ownerName, zip,
+        archivePageId: item.archivePageId, maxRows: item.parsedRows, valuationSources: evidence });
+      assert.equal(result.status, "published", "準備時に適格だった明細が未完了です");
+      usedRows += item.parsedRows; published++;
+      save(receipt, { observedAt: new Date().toISOString(), source: item.source, zipSha256: item.zipSha256, result });
+    }
+    return { usedRows, published, held, pending, upstreamRequests: 0 };
+  });
+  if (result.held > 0 || result.pending > 0) process.exitCode = 1;
+}
+
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const [mode, ...args] = process.argv.slice(2);
+  const running = mode === "prepare" && (args.length === 3 || args.length === 4)
+    ? prepareLatestHoldings({ limit: Number(args[0]), afterCode: args[1] === "START" ? null : args[1], dir: resolve(args[2]), valuationPath: args[3] === undefined ? null : resolve(args[3]) })
+    : mode === "apply" && args.length === 2 ? applyLatestHoldings(resolve(args[0]), Number(args[1]))
+      : Promise.reject(new Error("prepare limit afterCode|START privateDir [valuation.json] / apply privateDir maxRows を明示してください"));
+  running.catch(() => { console.error("LATEST_HOLDINGS_STOPPED_NO_AUTOMATIC_REPLAY"); process.exitCode = 2; });
+}

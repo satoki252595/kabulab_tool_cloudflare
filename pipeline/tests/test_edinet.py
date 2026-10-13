@@ -82,6 +82,30 @@ class TestNullAnnualIdentity:
             mod.resolve_company_code({"secCode": None, "docTypeCode": "120", "ordinanceCode": "010", "formCode": "030000", "withdrawalStatus": "0", "docInfoEditStatus": "0", "disclosureStatus": "0", "edinetCode": "E04369"}, {"E04369": ""})
 
 
+class TestUnassignedAnnualIdentity:
+    """実S100Z0VF（第四号様式）の00000を、同一提出者だけへ逆引きする。"""
+
+    def test_actual_unassigned_646a(self):
+        fixture = Path(__file__).resolve().parents[2] / "tests/fixtures/edinet-unassigned-sec-code-646A.json"
+        actual = json.loads(fixture.read_text())
+        doc = actual["primary"]
+        registry = actual["officialCodeList"]
+        mapping = {registry["edinetCode"]: registry["securityCode"][:4]}
+        assert doc["secCode"] == "00000"
+        assert doc["formCode"] == "040000"
+        assert not mod.has_sec_code(doc)
+        assert mod.has_identifiable_company(doc)
+        assert mod.resolve_company_code(doc, mapping) == actual["stockCode"]
+        assert mod.resolve_company_code(doc, {}) is None
+        assert mod.resolve_company_code(doc, {"E00001": "646A"}) is None
+        assert mod.resolve_company_code({**doc, "secCode": "25935"}, mapping) is None
+        assert mod.resolve_company_code({**doc, "secCode": " 00000"}, mapping) is None
+        assert mod.resolve_company_code({**doc, "docTypeCode": "160"}, mapping) is None
+        assert mod.resolve_company_code({**doc, "ordinanceCode": "020"}, mapping) is None
+        assert mod.resolve_company_code({**doc, "withdrawalStatus": "1"}, mapping) is None
+        assert doc["secCode"] == "00000"
+
+
 class TestApiKeyRequired:
     def test_list_documents_requires_key(self, tmp_path):
         settings = _settings(tmp_path, api_key=None)

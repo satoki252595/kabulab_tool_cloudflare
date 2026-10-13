@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseOrderHtml } from "../services/edinet/order-parser.js";
-import { parseJpNumber, unitToYenFactor } from "../services/edinet/html-table.js";
+import { parseJpNumber, tableToGrid, unitToYenFactor } from "../services/edinet/html-table.js";
 
 const FX = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const fx = (n: string) => readFileSync(join(FX, n), "utf8");
@@ -231,6 +231,24 @@ describe("Pattern A 一般化 — 2行ヘッダ/単位ラベル/計のみ総計 
 });
 
 describe("Pattern B — 建設業 完成工事 (期別×種類別)", () => {
+  it.each(["期末", "次期"])("正式列名 %s繰越工事高も期/単位/連結を変えず抽出する", (end) => {
+    // 新しい原文fixtureは追加せず既存の実表を使用。aliasは保存原本S100W4NN等で確認済み。
+    const original = fx("patternB-1812-kajima.html");
+    const observedColumnNames = original.replaceAll("当期受注高", "当期受注工事高").replaceAll("期末繰越高", `${end}繰越工事高`);
+    const expected = parseOrderHtml(original, "2025-03-31");
+    const actual = parseOrderHtml(observedColumnNames, "2025-03-31");
+    expect(actual.status).toBe("ok_pattern_b");
+    expect(actual.facts).toEqual(expected.facts);
+    expect(new Set(actual.facts.map((fact) => fact.fiscalYearEnd))).toEqual(new Set(["2024-03-31", "2025-03-31"]));
+  });
+  it("期の証拠が無い表へ入力report期を補完しない", () => {
+    const original = fx("patternB-1812-kajima.html");
+    const withoutPeriod = `<table>${tableToGrid(original).map((row) => `<tr>${row.map((cell) =>
+      `<td>${/年度|自.+年|至.+年/.test(cell) ? "期間不明" : cell}</td>`).join("")}</tr>`).join("")}</table>`;
+    const result = parseOrderHtml(withoutPeriod, "2025-03-31");
+    expect(result.status.startsWith("ok_")).toBe(false);
+    expect(result.facts).toEqual([]);
+  });
   it("1812 鹿島建設 (当期受注高=受注高, 期末繰越高=受注残高相当, 2期分)", () => {
     const r = parseOrderHtml(fx("patternB-1812-kajima.html"), "2025-03-31");
     expect(r.status).toBe("ok_pattern_b");

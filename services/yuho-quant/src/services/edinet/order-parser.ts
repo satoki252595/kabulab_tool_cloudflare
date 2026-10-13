@@ -78,8 +78,8 @@ const RX_ORDERS_COL = /受注高/;
 const RX_BACKLOG_COL = /受注残高|期末受注残高/;
 /** 建設業 完成工事表の受注列: 当期受注高 / 当期 受注(契約)高 等 */
 const RX_CONSTRUCTION = /当期.{0,2}受注(\(契約\)|（契約）)?.{0,2}高/;
-/** 建設業 完成工事表の残高列: 期末繰越高 / 次期繰越高 */
-const RX_CONSTRUCTION_BACKLOG = /(期末|次期).{0,2}繰越高/;
+/** 建設業 完成工事表の残高列。期別×区分表の正式列名「繰越工事高」も含む。 */
+const RX_CONSTRUCTION_BACKLOG = /(期末|次期).{0,2}繰越(?:工事)?高/;
 
 function pickHonbunHtml(entries: Map<string, Buffer>): {
   name: string;
@@ -308,7 +308,7 @@ function tryPatternB(
   const consolidated = detectConsolidated(grid.flat().join(" "));
 
   const facts: OrderFact[] = [];
-  let curFiscal = fiscalYearEnd;
+  let curFiscal: string | null = null;
   for (let i = headerIdx + 1; i < grid.length; i++) {
     const row = grid[i];
     const joined = row.join("").replace(/[\s\u3000]/g, "");
@@ -319,6 +319,7 @@ function tryPatternB(
     );
     if (toDate) {
       curFiscal = `${toDate[1]}-${toDate[2].padStart(2, "0")}-${toDate[3].padStart(2, "0")}`;
+      if (!Number.isFinite(Date.parse(curFiscal)) || new Date(curFiscal).toISOString().slice(0, 10) !== curFiscal) return null;
     } else if (/前事業年度|前連結会計年度/.test(joined)) {
       curFiscal = shiftFiscalYear(fiscalYearEnd, -1);
     } else if (/当事業年度|当連結会計年度/.test(joined)) {
@@ -334,6 +335,8 @@ function tryPatternB(
     if (firstValIdx < 1) continue;
     const label = row[firstValIdx - 1];
     if (label === "" || parseJpNumber(label) !== null) continue;
+    // 期別を持たない金額行を、入力report期へ暗黙に割り当てない。
+    if (curFiscal === null) return null;
     facts.push({
       segmentName: label,
       segmentKind: classifyRow(label),

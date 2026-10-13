@@ -90,7 +90,7 @@ def is_target_document(doc: dict) -> bool:
 def has_sec_code(doc: dict) -> bool:
     """証券コード付き（secCode 非 null・非空）の書類か。"""
     sec = doc.get("secCode")
-    return sec is not None and str(sec).strip() != ""
+    return sec is not None and sec != "00000" and str(sec).strip() != ""
 
 
 def issuer_edinet_code(doc: dict) -> str | None:
@@ -122,14 +122,14 @@ def has_identifiable_company(doc: dict) -> bool:
 
 
 def company_edinet_code(doc: dict) -> str | None:
-    """提出者と対象会社を混同せず、NULL証券コードの識別キーを読む。"""
+    """提出者と対象会社を混同せず、NULL/未割当00000の識別キーを読む。"""
     if is_large_holding(doc):
         return issuer_edinet_code(doc)
     if (
-        doc.get("secCode") is not None
+        doc.get("secCode") not in (None, "00000")
         or doc.get("docTypeCode") not in ("120", "130")
         or doc.get("ordinanceCode") != "010"
-        or doc.get("formCode") not in ("030000", "030001")
+        or doc.get("formCode") not in ("030000", "030001", "040000", "040001")
         or doc.get("withdrawalStatus") != "0"
         or doc.get("docInfoEditStatus") != "0"
         or doc.get("disclosureStatus") != "0"
@@ -141,8 +141,9 @@ def company_edinet_code(doc: dict) -> str | None:
 
 def resolve_company_code(doc: dict, edinet_map: dict[str, str]) -> str | None:
     """証券コード又は実マスタの一意な提出者逆引き。原docは変更しない。"""
-    if doc.get("secCode") is not None:
-        return normalize_sec_code(doc.get("secCode"))
+    if doc.get("secCode") not in (None, "00000"):
+        code = normalize_sec_code(doc.get("secCode"))
+        return None if code == "0000" else code
     issuer = company_edinet_code(doc)
     if issuer is None:
         return None

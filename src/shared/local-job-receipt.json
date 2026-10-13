@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "startGraceMinutes": 5,
+  "completionMinutes": 30,
+  "jobs": {
+    "biztag": { "localHour": 20 },
+    "yutai-summary": { "localHour": 21 }
+  }
+}

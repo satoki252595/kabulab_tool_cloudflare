@@ -40,6 +40,7 @@ import {
 } from "../../src/services/edinet/text-sections.js";
 import {
   resolveReportPeriodEnd,
+  isUnassignedEdinetSecCode,
   secCodeToTicker,
   type EdinetDoc,
 } from "../../src/services/edinet/types.js";
@@ -236,7 +237,7 @@ export async function processMissingDoc(
   const tag = `docID=${doc.docID} ${doc.filerName}`;
   try {
     if (input.stockCode !== undefined && (parseStockCode(input.stockCode) !== input.stockCode ||
-        (doc.secCode !== null && secCodeToTicker(doc.secCode) !== input.stockCode))) {
+        (!isUnassignedEdinetSecCode(doc.secCode) && secCodeToTicker(doc.secCode) !== input.stockCode))) {
       throw new Error("本文補完の明示銘柄コードが原本と不一致");
     }
     // 有報として最低限必要なメタが欠ける異常エントリは捏造せず明示スキップ

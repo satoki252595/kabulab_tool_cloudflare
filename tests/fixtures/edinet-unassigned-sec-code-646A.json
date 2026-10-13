@@ -1,0 +1,35 @@
+{
+  "stockCode": "646A",
+  "sourceDate": "2026-09-07",
+  "sourceUrl": "https://api.edinet-fsa.go.jp/api/v2/documents.json?date=2026-09-07&type=2",
+  "sourceRawSha256": "0a209efdea0fbb31b33cab39cf77c2a9ed88a7c4899082c3ec9b35396539227a",
+  "originalRecordSha256": "67375209bbc7b46d3221c6a7223290e5bca8e14b37ffdab10416b93446ae74b3",
+  "officialCodeList": {
+    "filename": "Edinetcode-20261014.zip",
+    "sha256": "f65840ce54b4817583d02669cfbba8cbabf66d2225400a6ec0ee890450b86b0b",
+    "edinetCode": "E42126",
+    "securityCode": "646A0",
+    "name": "クラサスケミカル株式会社",
+    "listing": "上場"
+  },
+  "primary": {
+    "seqNumber": 228,
+    "docID": "S100Z0VF",
+    "edinetCode": "E42126",
+    "secCode": "00000",
+    "JCN": "5320001020638",
+    "filerName": "クラサスケミカル株式会社",
+    "ordinanceCode": "010",
+    "formCode": "040000",
+    "docTypeCode": "120",
+    "periodStart": "2025-01-01",
+    "periodEnd": "2025-12-31",
+    "submitDateTime": "2026-09-07 15:30",
+    "docDescription": "有価証券報告書（法24条3項に基づくもの）－第2期(2025/01/01－2025/12/31)",
+    "xbrlFlag": "1",
+    "csvFlag": "1",
+    "withdrawalStatus": "0",
+    "docInfoEditStatus": "0",
+    "disclosureStatus": "0"
+  }
+}
