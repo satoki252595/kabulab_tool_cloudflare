@@ -26,7 +26,7 @@ import { resolveActiveVocabulary } from "../active-vocab.js";
 import { todayJst } from "../date-jst.js";
 import { buildSchemaSpec } from "../pipeline.js";
 import { buildCandidates, type CandidateGenOptions, type CompanyProfile, GENERIC_TAG_LABELS } from "./candidates.js";
-import { loadCompetitorCalibration, type CompetitorJudge } from "./calibration.js";
+import { loadCompetitorCalibration, competitorDecisionVersion, competitorInferenceVersion, type CompetitorJudge } from "./calibration.js";
 import { processCompanyCompetitors } from "./process.js";
 
 /** 判定に使うクライアントを judge から作る (jev は API キー必須・semif はローカル常駐プロセス)。 */
@@ -104,7 +104,9 @@ export function needsRecompute(
   if (meta === undefined) return true;
   if (meta.judgedDocId === null || meta.judgedDocId === "") return true;
   if (meta.judgedDocId !== (profile.docId ?? "")) return true;
-  if (meta.version !== versionTag) return true;
+  // 閾値再較正だけでは保存済み生確率を再生成しない。未知版は再判定対象。
+  const previous = competitorInferenceVersion(meta.version), current = competitorInferenceVersion(versionTag);
+  if (previous === null || current === null || previous !== current) return true;
   return false;
 }
 
@@ -116,7 +118,7 @@ export async function runCompetitors(opts: RunCompetitorsOptions): Promise<RunCo
 
   const judge: CompetitorJudge = opts.judge ?? "jev";
   const calibration = loadCompetitorCalibration(judge);
-  const versionTag = `${calibration.candidateVersion}|${calibration.model}`;
+  const versionTag = competitorDecisionVersion(calibration);
   const judgeClient = createJudgeClient(judge, calibration.model);
 
   const { vocab } = await resolveActiveVocabulary(today);

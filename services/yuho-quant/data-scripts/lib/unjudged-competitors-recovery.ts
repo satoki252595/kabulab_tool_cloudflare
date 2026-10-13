@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { CompanyProfile, CandidateScore } from "../../src/biztag/competitors/candidates.js";
-import type { CompetitorCalibration } from "../../src/biztag/competitors/calibration.js";
+import { competitorDecisionVersion, type CompetitorCalibration } from "../../src/biztag/competitors/calibration.js";
 import type { CompetitorMeta, WriteCompetitorRelationInput } from "../../../../src/shared/notion-archive/stock-competitors.js";
 
 export interface PageProperty {
@@ -22,6 +22,7 @@ export interface RecoverySnapshot {
   corpus: CompanyProfile[]; candidates: Record<string, CandidateScore[]>;
   pre: RecoveryPage[]; baseline: CompetitorMeta[]; inputFingerprints: Record<string, string>;
   excludedCorpus: Array<{ code: string; reason: string }>;
+  decisionReview?: { version: "cal-thr050-eval122-20261014"; holdCodes: ["130A", "145A"]; evalInputSha256: string; evalOutputGzipSha256: string; reason: string };
 }
 export interface RecoveryOutput {
   stockCode: string; pageId: string; inputSha256: string;
@@ -31,6 +32,13 @@ export interface RecoveryOutput {
   bands: { yes: number; no: number; uncertain: number };
   modelCalls: number; peakTreeRssKiB: number;
 }
+
+export const RECOVERY_DECISION_REVIEW: NonNullable<RecoverySnapshot["decisionReview"]> = {
+  version: "cal-thr050-eval122-20261014", holdCodes: ["130A", "145A"],
+  evalInputSha256: "e7735381070a95bd4fed11402eac720ea482fcfb5aba6b7f28afa37905e80243",
+  evalOutputGzipSha256: "69dafd69fcb644a00c9af9abe8c4e91a1624e4fdc4f7d9cc8898c00ea5c7f130",
+  reason: "130A/4591はmRNA標的創薬とアプタマー創薬、145A/4386・3962・155Aは現場SaaSと広範な受託/公共DX。保存事業原文だけでは同一顧客の代替購入を確定できず2社を未判定のまま保持する。",
+};
 
 export const COMPETITOR_WRITE_COLUMNS = ["競合他社", "競合判定日", "競合判定の版", "競合判定書類ID"] as const;
 export function canonicalJson(value: unknown): string {
@@ -79,6 +87,14 @@ export function assertRecoverySnapshot(snapshot: RecoverySnapshot): void {
       snapshot.pre.length !== 83 || snapshot.calibration.candidateTopK !== 50 || snapshot.calibration.batchSize !== 50 ||
       snapshot.calibration.model !== "Qwen3.5-4B@851bf6e/semif-mlx" || snapshot.calibration.candidateVersion !== "cand-v1")
     throw new Error("83社/較正版の固定契約が不一致");
+  if (snapshot.calibration.decisionVersion === undefined) {
+    if (snapshot.calibration.thresholds.yesMin !== 0.25 || snapshot.calibration.thresholds.noMax !== 0.09 || snapshot.decisionReview !== undefined) throw new Error("旧較正版の閾値/レビューが不一致");
+  } else if (snapshot.calibration.decisionVersion !== "cal-thr050-eval122-20261014" || snapshot.calibration.thresholds.yesMin !== 0.5 ||
+      snapshot.calibration.thresholds.noMax !== 0.09 || snapshot.decisionReview?.version !== snapshot.calibration.decisionVersion ||
+      canonicalJson(snapshot.decisionReview.holdCodes) !== canonicalJson(["130A", "145A"]) ||
+      snapshot.decisionReview.evalInputSha256 !== "e7735381070a95bd4fed11402eac720ea482fcfb5aba6b7f28afa37905e80243" ||
+      snapshot.decisionReview.evalOutputGzipSha256 !== "69dafd69fcb644a00c9af9abe8c4e91a1624e4fdc4f7d9cc8898c00ea5c7f130" || snapshot.decisionReview.reason.trim() === "")
+    throw new Error("新較正版の閾値/全122較正根拠/2社HOLDが不一致");
   const byCode = new Map(snapshot.corpus.map((p) => [p.stockCode, p]));
   if (byCode.size !== snapshot.corpus.length || new Set(snapshot.corpus.map((p) => p.pageId)).size !== snapshot.corpus.length ||
       new Set(snapshot.baseline.map((p) => p.stockCode)).size !== snapshot.baseline.length ||
@@ -99,7 +115,7 @@ export function assertRecoveryOutput(snapshot: RecoverySnapshot, output: Recover
   const candidates = snapshot.candidates[output.stockCode];
   if (company === undefined || !snapshot.targetCodes.includes(output.stockCode) || output.inputSha256 !== inputSha256 ||
       output.pageId !== company.pageId || output.expected.judgedDocId !== company.docId ||
-      output.expected.version !== `${snapshot.calibration.candidateVersion}|${snapshot.calibration.model}` ||
+      output.expected.version !== competitorDecisionVersion(snapshot.calibration) ||
       canonicalJson(output.candidateCodes) !== canonicalJson(candidates.map((c) => c.stockCode)) ||
       output.modelCalls !== (candidates.length === 0 ? 0 : 1) ||
       canonicalJson(Object.keys(output.probabilities).sort()) !== canonicalJson(candidates.map((c) => `cp.${c.stockCode}`).sort()))
@@ -128,4 +144,27 @@ export function assertOneWaySchema(properties: Record<string, { id: string; rela
   const relation = properties["競合他社"]?.relation;
   if (relation?.type !== "single_property" || relation.database_id.replaceAll("-", "") !== dbId.replaceAll("-", ""))
     throw new Error("競合relationは同一DBの片方向である必要がある");
+}
+
+/** 旧原確率・元doc・実行時刻は保持し、較正変更だけを明示的に再バンド化する。 */
+export function rebandRecoveryOutput(snapshot: RecoverySnapshot, original: RecoveryOutput, inputSha256: string): RecoveryOutput {
+  const candidates = snapshot.candidates[original.stockCode];
+  if (candidates === undefined) throw new Error("対象外の再バンド化は禁止");
+  const bands = { yes: 0, no: 0, uncertain: 0 };
+  const competitorPageIds = candidates.filter((c) => {
+    const p = original.probabilities[`cp.${c.stockCode}`];
+    if (!Number.isFinite(p) || p < 0 || p > 1) throw new Error("原確率が不正");
+    if (p >= snapshot.calibration.thresholds.yesMin) bands.yes++;
+    else if (p <= snapshot.calibration.thresholds.noMax) bands.no++;
+    else bands.uncertain++;
+    return p >= snapshot.calibration.thresholds.yesMin;
+  }).map((c) => c.pageId);
+  const output = { ...original, inputSha256, bands, expected: { ...original.expected, competitorPageIds, version: competitorDecisionVersion(snapshot.calibration) } };
+  assertRecoveryOutput(snapshot, output, inputSha256);
+  return output;
+}
+export function selectedRecoveryCodes(snapshot: RecoverySnapshot): string[] {
+  assertRecoverySnapshot(snapshot);
+  const held = new Set<string>(snapshot.decisionReview === undefined ? [] : snapshot.decisionReview.holdCodes);
+  return snapshot.targetCodes.filter((code) => !held.has(code));
 }

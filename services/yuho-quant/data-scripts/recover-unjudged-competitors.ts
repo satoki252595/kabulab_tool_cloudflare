@@ -14,17 +14,17 @@ import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import { loadIngestCodeToId } from "../../../src/shared/db/active-equity.js";
 import { createSemifClient } from "../../../src/shared/semif/client.js";
 import { buildCandidates, GENERIC_TAG_LABELS } from "../src/biztag/competitors/candidates.js";
-import { loadCompetitorCalibration } from "../src/biztag/competitors/calibration.js";
+import { loadCompetitorCalibration, competitorDecisionVersion } from "../src/biztag/competitors/calibration.js";
 import { processCompanyCompetitors } from "../src/biztag/competitors/process.js";
 import { bandOf } from "../src/biztag/judge.js";
 import { todayJst } from "../src/biztag/date-jst.js";
 import { assertFreshPre, assertRecoveryOutput, assertRecoveryPage, assertRecoveryReadback, assertRecoverySnapshot,
-  assertUnjudged, assertNonTargets, assertOneWaySchema, canonicalJson, propertyText, sha256, type RecoveryPage, type RecoverySnapshot, type RecoveryOutput } from "./lib/unjudged-competitors-recovery.js";
+  selectedRecoveryCodes, RECOVERY_DECISION_REVIEW, assertUnjudged, assertNonTargets, assertOneWaySchema, canonicalJson, propertyText, sha256, type RecoveryPage, type RecoverySnapshot, type RecoveryOutput } from "./lib/unjudged-competitors-recovery.js";
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const SOURCE_FILES = ["services/yuho-quant/src/biztag/competitors/candidates.ts", "services/yuho-quant/src/biztag/competitors/ngram.ts",
   "services/yuho-quant/src/biztag/competitors/process.ts", "services/yuho-quant/src/biztag/competitors/question.ts",
-  "services/yuho-quant/src/biztag/competitors/summary.ts", "services/yuho-quant/src/biztag/competitors/calibration.semif.json",
+  "services/yuho-quant/src/biztag/competitors/summary.ts", "services/yuho-quant/src/biztag/competitors/calibration.semif.json", "services/yuho-quant/src/biztag/competitors/calibration.ts",
   "services/yuho-quant/src/biztag/judge.ts", "services/yuho-quant/src/biztag/text.ts",
   "src/shared/semif/client.ts", "services/yuho-quant/scripts/semif_server.py",
   "src/shared/notion-archive/stock-competitors.ts",
@@ -104,7 +104,7 @@ async function prepare(targetPath: string, dir: string, baselinePath?: string): 
     genericTagLabels: GENERIC_TAG_LABELS, postingCaps: calibration.candidatePostingCaps });
   const candidates = Object.fromEntries(targetCodes.map((code) => { const found = built.get(code); if (found === undefined) throw new Error("候補計算結果欠け"); return [code, found]; }));
   const snapshot: RecoverySnapshot = { version: 1, capturedAt: new Date().toISOString(), revision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim(),
-    dbId, propertyIds, sourceHashes: sourceHashes(), calibration, targetCodes, corpus, candidates, pre, baseline, inputFingerprints: inputFingerprints(rows), excludedCorpus };
+    dbId, propertyIds, sourceHashes: sourceHashes(), calibration, targetCodes, corpus, candidates, pre, baseline, inputFingerprints: inputFingerprints(rows), excludedCorpus, ...(calibration.decisionVersion === undefined ? {} : { decisionReview: RECOVERY_DECISION_REVIEW }) };
   assertRecoverySnapshot(snapshot);
   const bytes = gzipSync(Buffer.from(canonicalJson(snapshot))), inputSha256 = sha256(canonicalJson(snapshot));
   writeFileSync(join(dir, "input.json.gz"), bytes, { flag: "wx", mode: 0o600 }); save(join(dir, "input.json"), snapshot);
@@ -148,7 +148,7 @@ async function generate(dir: string, limit: number): Promise<void> {
         Object.assign(probabilities, result.answers); return result;
       } };
       const outcome = await processCompanyCompetitors(byCode.get(code)!, candidates, byCode, { jevClient: measured, thresholds: snapshot.calibration.thresholds,
-        versionTag: `${snapshot.calibration.candidateVersion}|${snapshot.calibration.model}`, today: todayJst(() => Date.now()), batchSize: 50,
+        versionTag: competitorDecisionVersion(snapshot.calibration), today: todayJst(() => Date.now()), batchSize: 50,
         writeCompetitorRelation: async (pageId, value) => { if (pageId !== byCode.get(code)!.pageId || expected !== undefined) throw new Error("出力write plan不正"); expected = value; } });
       if (expected === undefined) throw new Error("判定の終端出力なし");
       const bands = { yes: 0, no: 0, uncertain: 0 }; for (const p of Object.values(probabilities)) bands[bandOf(p, snapshot.calibration.thresholds)]++;
@@ -175,14 +175,14 @@ async function apply(dir: string): Promise<void> {
   const propertyIds = Object.fromEntries(Object.entries(readSchema.properties).map(([k, v]) => [k, v.id]));
   if (canonicalJson(propertyIds) !== canonicalJson(snapshot.propertyIds)) throw new Error("補足schemaがPREから変化");
   assertOneWaySchema(readSchema.properties, snapshot.dbId);
-  const target = new Set(snapshot.targetCodes);
+  const target = new Set(selectedRecoveryCodes(snapshot));
   const readFingerprints = async () => ({
     meta: Object.fromEntries((await loadCompetitorMeta(snapshot.dbId, propertyIds, SUPPLEMENT_PROPS.code)).map((r) => [r.stockCode, metaFingerprint(r)])),
     input: inputFingerprints(await loadSupplementRows(snapshot.dbId, propertyIds, { textColumns: ["事業の内容"] })),
   });
   const oldMeta = Object.fromEntries(snapshot.baseline.map((r) => [r.stockCode, metaFingerprint(r)])), before = await readFingerprints();
   assertNonTargets(oldMeta, before.meta, target); assertNonTargets(snapshot.inputFingerprints, before.input, target);
-  for (const output of outputs) {
+  for (const output of outputs.filter((o) => target.has(o.stockCode))) {
     const pre = snapshot.pre.find((p) => p.id === output.pageId); if (pre === undefined) throw new Error("PREなし");
     const marker = join(dir, `${output.stockCode}.patch-started.json`);
     if (existsSync(marker)) throw new Error("送信記録あり。未知結果の再送はしない");
@@ -195,8 +195,8 @@ async function apply(dir: string): Promise<void> {
   }
   const after = await readFingerprints();
   assertNonTargets(oldMeta, after.meta, target); assertNonTargets(snapshot.inputFingerprints, after.input, target);
-  save(join(dir, "apply-complete.json"), { inputSha256, outputSha256: receipt.outputSha256, verified: 83, oldChanged: 0, completedAt: new Date().toISOString() });
-  console.info(JSON.stringify({ verified: 83, oldChanged: 0 }));
+  save(join(dir, "apply-complete.json"), { inputSha256, outputSha256: receipt.outputSha256, verified: target.size, held: snapshot.targetCodes.filter((code) => !target.has(code)), decisionVersion: competitorDecisionVersion(snapshot.calibration), oldChanged: 0, completedAt: new Date().toISOString() });
+  console.info(JSON.stringify({ verified: target.size, held: snapshot.targetCodes.filter((code) => !target.has(code)), decisionVersion: competitorDecisionVersion(snapshot.calibration), oldChanged: 0 }));
 }
 
 async function main(): Promise<void> {

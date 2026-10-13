@@ -45,6 +45,16 @@ describe("needsRecompute", () => {
     );
   });
 
+  it("較正版suffixだけの差で既存判定を全社再推論しない", () => {
+    const next = `${versionTag}|cal-thr050-eval122-20261014`;
+    expect(needsRecompute(profile("doc-1"), { judgedDocId: "doc-1", version: versionTag }, next)).toBe(false);
+    expect(needsRecompute(profile("doc-1"), { judgedDocId: "doc-1", version: next }, versionTag)).toBe(false);
+    expect(needsRecompute(profile("doc-2"), { judgedDocId: "doc-1", version: next }, next)).toBe(true);
+    for (const invalid of [`${versionTag}|unknown`, `${next}|extra`, `${versionTag}|cal-`, ""]) {
+      expect(needsRecompute(profile("doc-1"), { judgedDocId: "doc-1", version: invalid }, next)).toBe(true);
+    }
+  });
+
   it("書類・版とも一致していれば再計算不要", () => {
     expect(needsRecompute(profile("doc-1"), { judgedDocId: "doc-1", version: versionTag }, versionTag)).toBe(false);
   });
