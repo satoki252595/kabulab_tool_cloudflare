@@ -2,7 +2,7 @@
 import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { stocks } from "../../../../src/shared/db/core-schema.js";
-import { disclosureIngestCondition } from "../../../../src/shared/db/active-equity.js";
+import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import { yuhoDocuments } from "../../src/db/schema.js";
 import { parseStockCode } from "../../../../src/shared/jpx/stock-code.js";
 
@@ -20,7 +20,7 @@ export async function selectLatestHoldingsDocuments(
   const rows = await db.select({ stockId: latest.stockId, stockCode: stocks.code, docId: latest.docId,
     edinetCode: latest.edinetCode, ownerName: latest.ownerName, fiscalYearEnd: latest.fiscalYearEnd, submittedAt: latest.submittedAt,
   }).from(latest).innerJoin(stocks, eq(stocks.id, latest.stockId))
-    .where(and(eq(latest.rank, 1), disclosureIngestCondition(), args.afterCode === null ? undefined : gt(stocks.code, args.afterCode)))
+    .where(and(eq(latest.rank, 1), activeEquityCondition(), args.afterCode === null ? undefined : gt(stocks.code, args.afterCode)))
     .orderBy(asc(stocks.code)).limit(args.limit + 1);
   return { rows: rows.slice(0, args.limit), more: rows.length > args.limit };
 }

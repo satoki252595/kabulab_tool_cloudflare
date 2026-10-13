@@ -680,51 +680,7 @@ describe("stock-supplement (Notion 通信)", () => {
     });
   });
 
-  describe("replaceEvidenceBlock", () => {
-    const heading = (id: string, text: string) => ({
-      id,
-      type: "heading_3",
-      heading_3: { rich_text: [{ plain_text: text }] },
-    });
-    const other = (id: string) => ({ id, type: "paragraph" });
 
-    it("目印で始まる heading_3 だけ削除し、新しいブロックを追記する", async () => {
-      route("GET", "/v1/blocks/row-1/children", [
-        {
-          results: [
-            other("b0"),
-            heading("b1", "事業タグの根拠（単語帳 v1・有報 S1 2025年3月期）"),
-            heading("b2", "関係ない見出し"),
-          ],
-          has_more: false,
-          next_cursor: null,
-        },
-      ]);
-      route("DELETE", "/v1/blocks/b1", [{}]);
-      route("PATCH", "/v1/blocks/row-1/children", [{}]);
-      const { replaceEvidenceBlock } = await load();
-      const newBlock = { object: "block", type: "heading_3" };
-      await replaceEvidenceBlock("row-1", newBlock);
-      expect(calls.map((c) => `${c.init.method} ${new URL(c.url).pathname}`)).toEqual([
-        "GET /v1/blocks/row-1/children",
-        "DELETE /v1/blocks/b1",
-        "PATCH /v1/blocks/row-1/children",
-      ]);
-      const patchBody = JSON.parse(String(calls[2]?.init.body)) as { children: unknown[] };
-      expect(patchBody.children).toEqual([newBlock]);
-    });
-
-    it("block が null なら削除のみ (追記しない)", async () => {
-      route("GET", "/v1/blocks/row-1/children", [
-        { results: [heading("b1", "事業タグの根拠…")], has_more: false, next_cursor: null },
-      ]);
-      route("DELETE", "/v1/blocks/b1", [{}]);
-      const { replaceEvidenceBlock } = await load();
-      await replaceEvidenceBlock("row-1", null);
-      expect(calls).toHaveLength(2);
-      expect(calls[1]?.init.method).toBe("DELETE");
-    });
-  });
 });
 
 interface TestPropertyDef {

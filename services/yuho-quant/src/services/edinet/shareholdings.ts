@@ -1,4 +1,6 @@
 /** 株式保有の当期明細。平文化CSV・株価・会社名から株数や上場区分を推定しない。 */
+import assert from "node:assert/strict";
+import { isUnassignedEdinetSecCode } from "./types.js";
 import { unzip } from "./zip.js";
 import { extractTables, tableToGridExpanded, unitToYenFactor } from "./html-table.js";
 import { stripHtml } from "./text-sections.js";
@@ -35,6 +37,35 @@ export interface ShareholdingsExtraction {
   elementId: "jpcrp_cor:ShareholdingsTextBlock";
   contextRef: string | null;
   holdings: Shareholding[];
+  holderScope: "filer_only" | "unqualified";
+}
+
+/** 保存type1のDEIを公式namespace・単一PublicDoc・提出者/証券コード/期末で照合する。 */
+export function verifySavedHoldingsSource(zip: Buffer, source: ShareholdingsSource): { status: "verified"; filename: string } | { status: "held"; reason: string } {
+  if (source.edinetCode === null) return { status: "held", reason: "提出者EDINETコードが未確定です" };
+  const entries = [...unzip(zip, { maxEntries: 5000, maxExpandedBytes: 64 * 1024 * 1024 })]
+    .filter(([filename]) => /\/PublicDoc\/[^/]+\.xbrl$/.test(filename));
+  if (entries.length !== 1) return { status: "held", reason: "保存type1のPublicDoc XBRLを一意に特定できません" };
+  const [filename, bytes] = entries[0];
+  assert.ok(filename.includes(`_${source.edinetCode}-`) && filename.includes(`_${source.fiscalYearEnd}_`), "保存type1のmember名と提出者/期末が不一致です");
+  const xml = bytes.toString("utf8").replace(/<!--[\s\S]*?-->/g, "");
+  const bindings = [...xml.matchAll(/\bxmlns:([A-Za-z_][\w.-]*)\s*=\s*(["'])([^"']+)\2/g)];
+  const official = bindings.filter(match => /^http:\/\/disclosure\.edinet-fsa\.go\.jp\/taxonomy\/jpdei\/\d{4}-\d{2}-\d{2}\/jpdei_cor$/.test(match[3]));
+  if (official.length !== 1) return { status: "held", reason: "保存type1の公式DEI namespaceを一意に確認できません" };
+  const prefix = official[0][1];
+  assert.equal(bindings.filter(match => match[1] === prefix).length, 1, "保存type1のDEI namespaceが再束縛されています");
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let unassigned = false;
+  for (const [name, expected] of Object.entries({ EDINETCodeDEI: source.edinetCode, SecurityCodeDEI: `${source.stockCode}0`, CurrentFiscalYearEndDateDEI: source.fiscalYearEnd })) {
+    const matches = [...xml.matchAll(new RegExp(`<${escaped}:${name}\\b([^>]*)>([^<]*)<\\/${escaped}:${name}\\s*>`, "g"))];
+    if (matches.length !== 1) return { status: "held", reason: `保存type1の${name}を一意に確認できません` };
+    assert.match(matches[0][1], /\bcontextRef\s*=\s*(["'])FilingDateInstant\1/, "保存type1のDEI contextが不一致です");
+    const actual = matches[0][2].trim();
+    if (name === "SecurityCodeDEI" && isUnassignedEdinetSecCode(actual)) { unassigned = true; continue; }
+    assert.equal(actual, expected, "保存type1のDEIと文書識別が不一致です");
+  }
+  if (unassigned) return { status: "held", reason: "原本SecurityCodeDEIが未割当00000です。公式提出者逆引きの追加根拠が未確認です" };
+  return { status: "verified", filename };
 }
 
 const normalize = (text: string) => text.normalize("NFKC").replace(/\s/g, "");
@@ -65,9 +96,9 @@ function shareholdingsBlocks(html: string): Array<{ html: string; contextRef: st
   return blocks;
 }
 
-/** 明示非開示はNULL。注記付き・桁区切り不正などは構造を確定させない。 */
+/** 明示非開示はNULL。保存原表の限定注1/2 prefix以外の注記・桁区切り不正はHOLD。 */
 function numberCell(text: string): number | null | undefined {
-  const value = normalize(text);
+  const value = normalize(text).replace(/^\(注[12]\)/, "");
   if (/^(?:-|－|―|—)$/.test(value)) return null;
   if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(value)) return undefined;
   const number = Number(value.replaceAll(",", ""));
@@ -81,7 +112,7 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource)
     throw new Error("株式保有の書類識別・会計期末が不正です");
   }
   const result: ShareholdingsExtraction = { status: "no_detail_table", reason: "株数・単位・当期を確認できる明細表がありません", source,
-    filename: null, elementId: "jpcrp_cor:ShareholdingsTextBlock", contextRef: null, holdings: [] };
+    filename: null, elementId: "jpcrp_cor:ShareholdingsTextBlock", contextRef: null, holdings: [], holderScope: "unqualified" };
   if (source.edinetCode === null) return { ...result, status: "unsupported", reason: "提出者EDINETコードが未確定です" };
   const candidates = [];
   for (const [filename, bytes] of unzip(zip)) {
@@ -98,48 +129,74 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource)
     return { ...result, status: "unsupported", reason: "提出者・会計期末・本文の完全性を確認できません" };
   }
   const tables = extractTables(block.html);
-  let lastEnd = 0;
+  let lastEnd = 0, scope: "filer" | "other" | "unknown" = "unknown";
+  let kind: "特定投資株式" | "みなし保有株式" | null = null;
+  let excludedTables = 0;
   for (const [tableIndex, table] of tables.entries()) {
     const start = block.html.indexOf(table, lastEnd);
-    const before = stripHtml(block.html.slice(0, start));
+    const before = stripHtml(block.html.slice(lastEnd, start)).normalize("NFKC");
     lastEnd = start + table.length;
+    // 当社の株式を相手方が保有する、という表の列見出しは主体証拠に使わない。
+    // 保存原典で確認した当社自身の保有説明と明示区画だけ。別会社区画へ入った後は
+    // その中の「当社」を提出会社へ読み替えず、次の明示提出会社区画まで対象外。
+    for (const event of before.matchAll(/(?:^|[\s。])当社は、|(?:当社が保有する|当社の保有する)|(?:^|[\s。])([^\s。]{1,100})における株式の保有状況/g)) {
+      if (event[1] !== undefined) {
+        const label = event[1].replace(/^[①-⑳]/, "");
+        scope = /^(?:[0-9]+[.)、]?)?(?:当社|提出会社)$/.test(label) ? "filer" : "other";
+        kind = null;
+      } else if (scope !== "other") scope = "filer";
+    }
+    const kindHeading = /(?:^|\s)(特定投資株式|みなし保有株式)\s*$/.exec(before);
+    if (kindHeading) kind = kindHeading[1] as Shareholding["kind"];
     const grid = tableToGridExpanded(table);
     if (grid.length < 4 || !grid[0].some(c => normalize(c) === "銘柄") ||
         !grid.slice(0, 3).some(row => row.some(c => c.includes("株式数")))) continue;
-    if (grid.some(row => row.length < 3)) {
-      return { ...result, status: "unsupported", reason: "明細表の列数が不足しています", holdings: [] };
+    if (scope === "other") { excludedTables++; continue; }
+    if (scope !== "filer") return { ...result, status: "unsupported", reason: "明細の保有主体が当社/提出会社と明示されていません", holdings: [] };
+    if (grid.some(row => row.length < 3)) return { ...result, status: "unsupported", reason: "明細表の列数が不足しています", holdings: [] };
+    const shareHeader = normalize(grid[1][1]), bookHeader = normalize(grid[2][1]);
+    const sharesUnit = /^株式数\((株|千株)\)$/.exec(shareHeader);
+    let bookUnit = /^貸借対照表計上額\((円|千円|百万円)\)$/.exec(bookHeader);
+    let dataStart = 3;
+    const cellUnits = shareHeader === "株式数(上段)" && bookHeader === "貸借対照表計上額(下段)";
+    // 単位だけを第4ヘッダ行へ置く実原表。現在/前期の明示同値を必須にする。
+    if (sharesUnit && bookHeader === "貸借対照表計上額" && grid.length >= 6 && normalize(grid[3][0]) === "銘柄" && normalize(grid[3][1]) === normalize(grid[3][2])) {
+      bookUnit = /^\((円|千円|百万円)\)$/.exec(normalize(grid[3][1]));
+      dataStart = 4;
     }
-    const kind = [...before.matchAll(/特定投資株式|みなし保有株式/g)].at(-1)?.[0];
-    const sharesUnit = /^株式数\((株|千株)\)$/.exec(normalize(grid[1][1]));
-    const bookUnit = /^貸借対照表計上額\((円|千円|百万円)\)$/.exec(normalize(grid[2][1]));
-    if ((kind !== "特定投資株式" && kind !== "みなし保有株式") ||
-        normalize(grid[0][0]) !== "銘柄" || normalize(grid[0][1]) !== "当事業年度" ||
-        normalize(grid[0][2]) !== "前事業年度" || !sharesUnit || !bookUnit ||
-        normalize(grid[1][2]) !== normalize(grid[1][1]) || normalize(grid[2][2]) !== normalize(grid[2][1]) ||
-        (grid.length - 3) % 2 !== 0) {
+    if (kind === null || normalize(grid[0][0]) !== "銘柄" || normalize(grid[0][1]) !== "当事業年度" ||
+        normalize(grid[0][2]) !== "前事業年度" || (!cellUnits && (!sharesUnit || !bookUnit)) ||
+        normalize(grid[1][2]) !== shareHeader || normalize(grid[2][2]) !== bookHeader || (grid.length - dataStart) % 2 !== 0) {
       return { ...result, status: "unsupported", reason: "明細表の保有種別・当期列・株数単位・金額単位を確認できません", holdings: [] };
     }
-    for (let rowIndex = 3; rowIndex < grid.length; rowIndex += 2) {
+    for (let rowIndex = dataStart; rowIndex < grid.length; rowIndex += 2) {
       const row = grid[rowIndex], book = grid[rowIndex + 1];
-      const sharesRaw = numberCell(row[1]), bookValueRaw = numberCell(book[1]);
-      if (!row[0] || normalize(row[0]) !== normalize(book[0]) || /^\d+$/.test(normalize(row[0])) ||
-          sharesRaw === undefined || bookValueRaw === undefined) {
-        return { ...result, status: "unsupported", reason: "銘柄名と株数・帳簿価額の行対応を確認できません", holdings: [] };
+      let shareLabel: "株" | "千株", moneyLabel: "円" | "千円" | "百万円";
+      let sharesRaw: number | null | undefined, bookValueRaw: number | null | undefined;
+      if (cellUnits) {
+        const shareParts = /^(.+?)(千株|株)$/.exec(normalize(row[1]));
+        const bookParts = /^(.+?)(百万円|千円|円)$/.exec(normalize(book[1]));
+        const previousShare = /^(.+?)(千株|株)$/.exec(normalize(row[2]));
+        const previousBook = /^(.+?)(百万円|千円|円)$/.exec(normalize(book[2]));
+        if (!shareParts || !bookParts || !previousShare || !previousBook || shareParts[2] !== previousShare[2] || bookParts[2] !== previousBook[2]) return { ...result, status: "unsupported", reason: "上下段セルの当期/前期単位を確認できません", holdings: [] };
+        shareLabel = shareParts[2] as typeof shareLabel; moneyLabel = bookParts[2] as typeof moneyLabel;
+        sharesRaw = numberCell(shareParts[1]); bookValueRaw = numberCell(bookParts[1]);
+      } else {
+        shareLabel = sharesUnit![1] as typeof shareLabel; moneyLabel = bookUnit![1] as typeof moneyLabel;
+        sharesRaw = numberCell(row[1]); bookValueRaw = numberCell(book[1]);
       }
-      const shareLabel = sharesUnit[1] as "株" | "千株", moneyLabel = bookUnit[1] as "円" | "千円" | "百万円";
+      if (!row[0] || normalize(row[0]) !== normalize(book[0]) || /^\d+$/.test(normalize(row[0])) || sharesRaw === undefined || bookValueRaw === undefined) return { ...result, status: "unsupported", reason: "銘柄名と株数・帳簿価額の行対応を確認できません", holdings: [] };
       const shares = sharesRaw === null ? null : sharesRaw * (shareLabel === "千株" ? 1000 : 1);
       const bookValueYen = bookValueRaw === null ? null : bookValueRaw * unitToYenFactor(moneyLabel);
-      if ((shares !== null && (!Number.isFinite(shares) || shares > Number.MAX_SAFE_INTEGER)) ||
-          (bookValueYen !== null && !Number.isSafeInteger(bookValueYen))) {
-        return { ...result, status: "unsupported", reason: "単位換算後の数値を安全に保存できません", holdings: [] };
-      }
-      result.holdings.push({ name: row[0], kind, shares, sharesRaw, sharesUnit: shareLabel, bookValueYen, bookValueRaw,
-        bookValueUnit: moneyLabel, listingStatus: "unknown", price: null, priceDate: null, priceCurrency: null, tableIndex, rowIndex });
+      if ((shares !== null && (!Number.isFinite(shares) || shares > Number.MAX_SAFE_INTEGER)) || (bookValueYen !== null && !Number.isSafeInteger(bookValueYen))) return { ...result, status: "unsupported", reason: "単位換算後の数値を安全に保存できません", holdings: [] };
+      result.holdings.push({ name: row[0], kind, shares, sharesRaw, sharesUnit: shareLabel, bookValueYen, bookValueRaw, bookValueUnit: moneyLabel,
+        listingStatus: "unknown", price: null, priceDate: null, priceCurrency: null, tableIndex, rowIndex });
     }
   }
-  if (new Set(result.holdings.map(holding => normalize(holding.name))).size !== result.holdings.length) {
+  if (new Set(result.holdings.map(holding => `${holding.kind}:${normalize(holding.name)}`)).size !== result.holdings.length) {
     return { ...result, status: "unsupported", reason: "同名銘柄の複数明細があり、既存行との対応を一意に確定できません", holdings: [] };
   }
-  if (result.holdings.length > 0) return { ...result, status: "ok", reason: null };
+  if (result.holdings.length > 0) return { ...result, status: "ok", reason: null, holderScope: "filer_only" };
+  if (excludedTables > 0) return { ...result, reason: "当社/提出会社と明示された保有区画に適格明細がありません（名義別区画は対象外）" };
   return result;
 }

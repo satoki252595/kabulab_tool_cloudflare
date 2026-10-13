@@ -6,8 +6,8 @@
  * 突き合わせ、銘柄ごとに 1 つの `WorkItem` を作る。「取り込み直後にキューへ積む」
  * はこの差分そのもので実現する (別途キュー表は持たない)。
  *
- * 判定済みタグは銘柄コードで再利用し、有報・語彙の更新では付け直さない。
- * 未設定・判定失敗だけを処理し、上場資格や保存済み結果が不確定なら HOLD。
+ * 判定済みでも入力書類が変われば最新39本文とローカル再判定を同期する。
+ * 同じ書類・入力の結果は保持し、上場資格や保存済み根拠が不確定なら HOLD。
  */
 import type { LatestDoc, NewStockEligibility } from "./source.js";
 import type { SupplementRow } from "../../../../src/shared/notion-archive/index.js";
@@ -16,6 +16,41 @@ import { assertBiztagDate } from "../env.js";
 /** 新規初回の外部判定の最大再試行回数。既存の機械判定には適用しない。 */
 export const MAX_RETRY_ATTEMPTS = 5;
 export const INITIAL_SEMIF_INPUT_PREFIX = "SemIf新規銘柄の初回判定";
+export const INPUT_RECEIPT_PREFIX = "\n[biztag-input-v1] ";
+
+/** 判定入力列の既存の説明を保持し、今後の入力照合に必要な来歴だけを添える。 */
+export interface InputReceipt {
+  docId: string;
+  textPageId: string;
+  businessSha256: string | null;
+  sectionsSha256: string;
+  stateSha256: string | null;
+  vocabVersion: string;
+  model: string | null;
+}
+
+export function readInputReceipt(value: string | null | undefined): InputReceipt | null {
+  if (value === null || value === undefined || !value.includes(INPUT_RECEIPT_PREFIX)) return null;
+  const parts = value.split(INPUT_RECEIPT_PREFIX);
+  if (parts.length !== 2) throw new Error("事業タグの入力来歴が重複しています");
+  const r: unknown = JSON.parse(parts[1]);
+  if (r === null || typeof r !== "object") throw new Error("事業タグの入力来歴が不正です");
+  const p = r as Record<string, unknown>;
+  const hash = (v: unknown) => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
+  if (typeof p.docId !== "string" || p.docId.trim() === "" ||
+      typeof p.textPageId !== "string" || p.textPageId.trim() === "" ||
+      (p.businessSha256 !== null && !hash(p.businessSha256)) || !hash(p.sectionsSha256) ||
+      (p.stateSha256 !== null && !hash(p.stateSha256)) ||
+      typeof p.vocabVersion !== "string" || p.vocabVersion.trim() === "" ||
+      (p.model !== null && (typeof p.model !== "string" || p.model.trim() === ""))) {
+    throw new Error("事業タグの入力来歴が不正です");
+  }
+  return p as unknown as InputReceipt;
+}
+
+export function withInputReceipt(summary: string, receipt: InputReceipt): string {
+  return summary.split(INPUT_RECEIPT_PREFIX)[0] + INPUT_RECEIPT_PREFIX + JSON.stringify(receipt);
+}
 
 export type WorkItemKind =
   | "create_row"
@@ -45,6 +80,10 @@ export interface WorkItem {
   retryExhausted?: boolean;
   /** 公式上場の資格と未完の初回判定が揃った項目だけ true。省略時は機械判定。 */
   initialSemif?: boolean;
+  /** 既存判定の入力doc/4対象節が変わった場合。機械照合へ代替しない。 */
+  sourceChangedLocalJudge?: boolean;
+  /** 同一docの新しい保存本文。既知SHAを照合し、同一なら39本文だけを同期する。 */
+  checkSourceInput?: boolean;
   /** 入力資格/本文/保存済み結果が未確定。skip でも完了扱いにしないための明示。 */
   qualificationHeld?: boolean;
 }
@@ -118,7 +157,23 @@ function planOne(
         (hasTagOrUncertain && (row.evidenceText === null || row.evidenceText.trim().length === 0))) {
       return { ...base, kind: "skip", qualificationHeld: true, reason: "判定済みの保存根拠が欠落・不整合のため HOLD。タグと根拠を保持し上書きしない" };
     }
-    return { ...base, kind: "skip", reason: "銘柄コードの保存済み判定を再利用。有報・単語帳の更新では付け直さない" };
+    let receipt: InputReceipt | null;
+    try { receipt = readInputReceipt(row.judgeInput); }
+    catch { return { ...base, kind: "skip", qualificationHeld: true, reason: "判定入力の来歴が不正のため HOLD。保存済み結果を保持" }; }
+    if (receipt !== null && (receipt.docId !== savedTagDocId || receipt.vocabVersion !== row.vocabVersion)) {
+      return { ...base, kind: "skip", qualificationHeld: true, reason: "判定入力の書類・版が保存済み結果と不一致のため HOLD" };
+    }
+    if (savedTagDocId !== doc.docId) {
+      return { ...base, kind: "retag", sourceChangedLocalJudge: true,
+        reason: `判定根拠の書類が最新と異なる (${savedTagDocId} → ${doc.docId})。最新39本文とSemIf再判定を同期` };
+    }
+    if (receipt !== null && receipt.textPageId !== doc.notionDocPageId) {
+      return { ...base, kind: "retag", sourceChangedLocalJudge: true, checkSourceInput: true,
+        reason: "同じ書類の保存本文が更新。既知の4対象節SHAを照合し、変更時だけSemIf再判定" };
+    }
+    return { ...base, kind: "skip", reason: receipt === null
+      ? "同じ書類の保存済み判定を保持。旧判定の入力SHAは未検証であり、同一入力の証明には使用しない"
+      : "同じ書類・保存本文の判定を再利用。語彙だけの更新では付け直さない" };
   }
   if (hasPreviousJudgment(row)) {
     return { ...base, kind: "skip", qualificationHeld: true, reason: "既存タグ・根拠・判定記録があるが状態が未完のため HOLD。保存済み結果を上書きしない" };

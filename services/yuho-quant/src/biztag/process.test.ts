@@ -65,6 +65,7 @@ function rowOf(overrides: Partial<SupplementRow> = {}): SupplementRow {
     vocabVersion: null,
     judgedAt: null,
     candidateCount: null,
+    judgeInput: null,
     attempts: null,
     nextRetryAt: null,
     error: null,
@@ -99,6 +100,7 @@ function makeDeps(overrides: Partial<ProcessDeps> = {}) {
     today: TODAY,
     resolveMasterPageId: () => "master-page-1",
     readStockTextRow: () => Promise.reject(new Error("readStockTextRow は呼ばれない想定")),
+    assertLatestDocCurrent: async () => {},
     createSupplementRow: (input, evidence) => {
       callOrder.push("createSupplementRow");
       created.push({ pageId: "created", input });
@@ -110,9 +112,12 @@ function makeDeps(overrides: Partial<ProcessDeps> = {}) {
       updated.push({ pageId, input });
       return Promise.resolve();
     },
-    replaceEvidenceBlock: (pageId, block) => {
+    replaceEvidenceBlock: async (pageId, block, input, _expected, guard) => {
+      await guard();
       callOrder.push("replaceEvidenceBlock");
       evidenceCalls.push({ pageId, block });
+      callOrder.push("updateSupplementRow");
+      updated.push({ pageId, input });
       return Promise.resolve();
     },
     ...overrides,
@@ -391,5 +396,95 @@ describe("processStock (spy 呼び出し回数)", () => {
     await processStock(itemOf({ kind: "create_row", doc: null }), deps);
     expect(readSpy).not.toHaveBeenCalled();
     expect(askSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("input-change local rejudgment", () => {
+  const saved = () => rowOf({ docId: "S100OLD", tagStatus: "判定済", tagDoc: "S100OLD 2025年3月期",
+    upstream: ["保存済みタグ"], evidenceText: "保存済み根拠", vocabVersion: "v0", judgedAt: "2025-06-25", judgeInput: "旧入力SHA未記録" });
+  const sections = [{ itemName: "事業の内容", sectionKey: "business", text: OKUMA_BUSINESS_TEXT }];
+  it("uses local judge, synchronizes all39 canonical columns, and saves actual input SHA/doc/pointer/model", async () => {
+    const ask = vi.fn(jevAnswering({ "bt.B.MACH.MACHINE_TOOL": 0.95 }).askNoul);
+    const { deps, updated } = makeDeps({ jevClient: { askNoul: ask }, readStockTextRow: async () => sections });
+    const commit = vi.fn(deps.replaceEvidenceBlock); deps.replaceEvidenceBlock = commit;
+    await processStock(itemOf({ kind: "retag", row: saved(), sourceChangedLocalJudge: true }), deps);
+    expect(commit.mock.calls[0][3]).toMatchObject({ "有報書類ID": { rich_text: [{ type: "text", text: { content: "S100OLD" } }] }, "単語帳の版": { select: { name: "v0" } } });
+    expect(ask).toHaveBeenCalledTimes(1);
+    const write = updated[0].input;
+    expect(Object.keys(write.texts ?? {})).toHaveLength(39);
+    expect(write.texts?.["事業の内容"]).toBe(OKUMA_BUSINESS_TEXT);
+    expect(write.tagDoc).toBe("S100YFQC 2026年3月期");
+    expect(write.judgeInput).toMatch(/^SemIf入力変更の再判定/);
+    expect(write.judgeInput).toContain('"textPageId":"notion-page-okuma"');
+    expect(write.judgeInput).toMatch(/"businessSha256":"[0-9a-f]{64}"/);
+    expect(write.judgeInput).toMatch(/"stateSha256":"[0-9a-f]{64}"/);
+    expect(write.judgeInput).toContain('"model":"mock"');
+  });
+  it.each([new SemifUnavailableError("local busy"), new Error("unknown judgment result")])("failed/unknown inference keeps all existing values and evidence (%s)", async (failure) => {
+    const row = saved(), before = structuredClone(row);
+    const { deps, updated, created, evidenceCalls } = makeDeps({
+      jevClient: { askNoul: async () => { throw failure; } }, readStockTextRow: async () => sections,
+    });
+    const run = processStock(itemOf({ kind: "retag", row, sourceChangedLocalJudge: true }), deps);
+    if (failure instanceof SemifUnavailableError) expect(await run).toMatchObject({ outcome: "skipped", qualificationHeld: true, tagStatus: "判定済" });
+    else await expect(run).rejects.toThrow("unknown judgment result");
+    expect(row).toEqual(before);
+    expect(updated).toEqual([]); expect(created).toEqual([]); expect(evidenceCalls).toEqual([]);
+  });
+  it.each(["latest pointer changed", "latest read failed"])("model待ち後の最終guard失敗は旧値を保持し、追加model/writeを行わない (%s)", async (reason) => {
+    const ask = vi.fn(jevAnswering({ "bt.B.MACH.MACHINE_TOOL": 0.95 }).askNoul);
+    const guard = vi.fn(async () => { throw new Error(reason); });
+    const row = saved(), before = structuredClone(row);
+    const { deps, updated, created, evidenceCalls } = makeDeps({ jevClient: { askNoul: ask },
+      readStockTextRow: async () => sections, assertLatestDocCurrent: guard });
+    expect(await processStock(itemOf({ kind: "retag", row, sourceChangedLocalJudge: true }), deps)).toMatchObject({ qualificationHeld: true, outcome: "skipped", jevCalls: 1, error: expect.stringContaining(reason) });
+    expect(ask).toHaveBeenCalledTimes(1); expect(guard).toHaveBeenCalledTimes(1);
+    expect(updated).toEqual([]); expect(created).toEqual([]); expect(evidenceCalls).toEqual([]); expect(row).toEqual(before);
+  });
+  it("初回の新規createにも最新doc guardを通し、変更時は行を作らない", async () => {
+    const { deps, created, updated } = makeDeps({ jevClient: jevAnswering({ "bt.B.MACH.MACHINE_TOOL": 0.95 }),
+      readStockTextRow: async () => sections, assertLatestDocCurrent: async () => { throw new Error("new latest document"); } });
+    expect(await processStock(itemOf({ initialSemif: true }), deps)).toMatchObject({ qualificationHeld: true, outcome: "skipped", error: expect.stringContaining("new latest document") });
+    expect(created).toEqual([]); expect(updated).toEqual([]);
+  });
+  it("a missing model answer stops before any replacement", async () => {
+    const { deps, updated, evidenceCalls } = makeDeps({ readStockTextRow: async () => sections,
+      jevClient: { askNoul: async () => ({ model: "mock", answers: {}, inputTokens: 1, outputTokens: 0, latencyMs: 1, attempts: 1 }) },
+    });
+    await expect(processStock(itemOf({ kind: "retag", row: saved(), sourceChangedLocalJudge: true }), deps)).rejects.toThrow("応答が無い");
+    expect(updated).toEqual([]); expect(evidenceCalls).toEqual([]);
+  });
+  it("same-doc reparsing with identical known four-section SHA only synchronizes texts, preserving judgment source/version/date", async () => {
+    const first = makeDeps({ readStockTextRow: async () => sections });
+    await processStock(itemOf({ row: rowOf() }), first.deps);
+    const previousInput = first.updated[0].input.judgeInput as string;
+    const row = saved(); row.docId = docOf().docId; row.tagDoc = "S100YFQC 2026年3月期";
+    row.judgeInput = previousInput.replace("notion-page-okuma", "old-pointer");
+    const ask = vi.fn();
+    const { deps, updated, evidenceCalls } = makeDeps({ readStockTextRow: async () => sections, jevClient: { askNoul: ask } });
+    await processStock(itemOf({ kind: "retag", row, sourceChangedLocalJudge: true, checkSourceInput: true }), deps);
+    expect(ask).not.toHaveBeenCalled(); expect(evidenceCalls).toEqual([{ pageId: row.pageId, block: undefined }]);
+    expect(updated[0].input.upstream).toBeUndefined(); expect(updated[0].input.tagDoc).toBeUndefined();
+    expect(updated[0].input.vocabVersion).toBeUndefined(); expect(updated[0].input.judgedAt).toBeUndefined();
+    expect(Object.keys(updated[0].input.texts ?? {})).toHaveLength(39);
+    expect(updated[0].input.judgeInput).toContain('"textPageId":"notion-page-okuma"');
+  });
+  it("same-doc changed known input calls SemIf instead of silently reusing old tags", async () => {
+    const first = makeDeps({ readStockTextRow: async () => sections });
+    await processStock(itemOf({ row: rowOf() }), first.deps);
+    const previousInput = first.updated[0].input.judgeInput as string;
+    const row = saved(); row.docId = docOf().docId; row.tagDoc = "S100YFQC 2026年3月期";
+    row.judgeInput = previousInput.replace("notion-page-okuma", "old-pointer");
+    const ask = vi.fn(jevAnswering({ "bt.B.MACH.MACHINE_TOOL": 0.95 }).askNoul);
+    const { deps, updated } = makeDeps({ jevClient: { askNoul: ask },
+      readStockTextRow: async () => [{ ...sections[0], text: OKUMA_BUSINESS_TEXT + "\n" + OKUMA_BUSINESS_TEXT }] });
+    await processStock(itemOf({ kind: "retag", row, sourceChangedLocalJudge: true, checkSourceInput: true }), deps);
+    expect(ask).toHaveBeenCalledTimes(1); expect(updated[0].input.tagStatus).toBe("判定済");
+    expect(updated[0].input.judgeInput).toContain("SemIf入力変更の再判定");
+  });
+  it("unknown historical SHA cannot certify identical input or overwrite the old judgment", async () => {
+    const { deps, updated, evidenceCalls } = makeDeps({ readStockTextRow: async () => sections });
+    await expect(processStock(itemOf({ kind: "retag", row: saved(), sourceChangedLocalJudge: true, checkSourceInput: true }), deps)).rejects.toThrow("旧SHAがありません");
+    expect(updated).toEqual([]); expect(evidenceCalls).toEqual([]);
   });
 });

@@ -47,7 +47,7 @@ import { MAX_RETRY_ATTEMPTS, planWork, type WorkItem } from "./plan.js";
 import { processStock, type ProcessDeps } from "./process.js";
 import { isPrefilterSection, type PrefilterSectionKey } from "./prefilter.js";
 import { buildReviewPacket, refreshReviewPacketLedger } from "./review.js";
-import { loadLatestDocs, loadNewStockEligibility, type BiztagSourceDb } from "./source.js";
+import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility, type BiztagSourceDb } from "./source.js";
 import type { Vocabulary } from "./vocabulary/schema.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 
@@ -291,7 +291,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
 
   // 4. 補足 DB を確保し、既存行を読む。
   const { dbId: supplementDbId, propertyIds } = await ensureSupplementDb(buildSchemaSpec(vocab, sector33Options));
-  // 銘柄コードで保存済みタグを参照する。判定済みの有報・語彙変更では本文を再取得しない。
+  // 最新docと保存根拠・既知入力pointerを照合する。同一入力は全文再取得しない。
   const rows = await loadSupplementRows(supplementDbId, propertyIds);
   const items = planWork(latest, rows, today, newStockEligibility);
   const retryExhausted = items.filter((i) => i.retryExhausted === true).map((i) => i.stockCode).sort();
@@ -320,6 +320,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     today,
     resolveMasterPageId: (code) => masterIndex.index.get(code) ?? null,
     readStockTextRow,
+    assertLatestDocCurrent: (code, doc) => assertLatestDocCurrent(db, code, doc),
     createSupplementRow: (input, evidence) => createSupplementRow(supplementDbId, input, evidence),
     updateSupplementRow,
     replaceEvidenceBlock,
@@ -351,15 +352,17 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       }
       workBudgetLeft--;
     }
-    if (opts.dryRun && item.initialSemif) {
+    if (opts.dryRun && (item.initialSemif || item.sourceChangedLocalJudge)) {
       // 新規初回は下見で推論しない。機械判定へも切り替えず保留を明示。
       qualificationHeld.push(item.stockCode);
-      countsByKind["initial_judge_dry_run_hold"] = (countsByKind["initial_judge_dry_run_hold"] ?? 0) + 1;
+      const kind = item.sourceChangedLocalJudge ? "source_change_dry_run_hold" : "initial_judge_dry_run_hold";
+      countsByKind[kind] = (countsByKind[kind] ?? 0) + 1;
       processed++;
       continue;
     }
     try {
       const outcome = await processStock(item, deps);
+      if (outcome.qualificationHeld) qualificationHeld.push(item.stockCode);
       if (outcome.error) {
         failures.push({ stockCode: item.stockCode, message: outcome.error });
         if (isBillingBlockedError(outcome.error)) billingBlocked.add(item.stockCode);
@@ -370,12 +373,13 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       countsByKind[outcome.kind] = (countsByKind[outcome.kind] ?? 0) + 1;
       if (outcome.tagStatus) {
         countsByTagStatus[outcome.tagStatus] = (countsByTagStatus[outcome.tagStatus] ?? 0) + 1;
-        if (outcome.tagStatus === "判定済" && !item.qualificationHeld) judged++;
+        if (outcome.tagStatus === "判定済" && !item.qualificationHeld && !outcome.qualificationHeld) judged++;
       }
       jevCalls += outcome.jevCalls;
       jevInputTokens += outcome.jevInputTokens;
       jevOutputTokens += outcome.jevOutputTokens;
     } catch (e) {
+      if (item.sourceChangedLocalJudge) qualificationHeld.push(item.stockCode);
       failures.push({ stockCode: item.stockCode, message: e instanceof Error ? e.message : String(e) });
     }
   }

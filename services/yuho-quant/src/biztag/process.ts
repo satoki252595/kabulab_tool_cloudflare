@@ -12,11 +12,14 @@
  */
 import {
   buildEvidenceBlock,
+  buildSupplementProperties,
+  SUPPLEMENT_PROPS,
   type DocTypeLabel,
   type EvidenceBlockInput,
   type SupplementRowInput,
   type TagStatus,
 } from "../../../../src/shared/notion-archive/index.js";
+import { SupplementWriteHeldError } from "../../../../src/shared/notion-archive/stock-supplement.js";
 import type { StockTextSection } from "../../../../src/shared/notion-archive/stock-text.js";
 import type { JevClient } from "../../../../src/shared/jev/index.js";
 import { SemifUnavailableError } from "../../../../src/shared/semif/index.js";
@@ -25,8 +28,9 @@ import { docTypeLabelOf } from "./doc-type.js";
 import { formatPeriodJa } from "./evidence.js";
 import { buildJudgeInput, type DocMeta } from "./excerpt.js";
 import { judgeCandidates, type BtThresholds } from "./judge.js";
-import type { WorkItem } from "./plan.js";
-import { isPrefilterSection, prefilter, type PrefilterSectionKey } from "./prefilter.js";
+import { readInputReceipt, withInputReceipt, type InputReceipt, type WorkItem } from "./plan.js";
+import { sha256Hex } from "../../../../src/shared/sha256.js";
+import { isPrefilterSection, prefilter, PREFILTER_SECTIONS, type PrefilterSectionKey } from "./prefilter.js";
 import { summarizeJudgments, summarizeKeywordMatches, type TagOutcome } from "./row.js";
 import type { LatestDoc } from "./source.js";
 import { deriveThemes } from "./themes.js";
@@ -45,9 +49,11 @@ export interface ProcessDeps {
   resolveMasterPageId: (stockCode: string) => string | null;
   /** Notion 有報テキスト行の読取 (`notionDocPageId` → セクション列) */
   readStockTextRow: (rowPageId: string) => Promise<StockTextSection[]>;
+  /** モデル待ち後、business writeの直前に最新doc/本文pointerを1社だけ照合する。 */
+  assertLatestDocCurrent: (stockCode: string, doc: Doc) => Promise<void>;
   createSupplementRow: (input: SupplementRowInput, evidence?: unknown | null) => Promise<string>;
   updateSupplementRow: (pageId: string, input: SupplementRowInput) => Promise<void>;
-  replaceEvidenceBlock: (pageId: string, block: unknown | null) => Promise<void>;
+  replaceEvidenceBlock: (pageId: string, block: unknown | null, input: SupplementRowInput, expectedProperties: Record<string, unknown>, beforeWrite: () => Promise<void>) => Promise<void>;
 }
 
 export interface ProcessOutcome {
@@ -61,6 +67,8 @@ export interface ProcessOutcome {
   jevOutputTokens: number;
   /** 判定不能/読込失敗をサマリの失敗通知へ渡す。 */
   error?: string;
+  /** 旧判定が残っていても新入力に対する判定完了には数えない。 */
+  qualificationHeld?: boolean;
 }
 
 const ZERO_JEV_STATS = { jevCalls: 0, jevInputTokens: 0, jevOutputTokens: 0 };
@@ -71,27 +79,41 @@ function nextRetryDate(today: string, attemptsAfter: number): string {
 }
 
 /**
- * 行を書き込む(プロパティ + 根拠ブロック)。
- *
- * 既存行は**根拠ブロックを先に置き換えてから**プロパティを更新する。
- * 逆順(プロパティ→根拠)だと、途中で中断されたとき「事業タグの状態=判定済
- * (新しい書類を指す) なのにページ本文の根拠は古い書類のまま/消えている」
- * という、外からは判定済に見えるのに根拠が壊れている状態が生まれる
- * (§3.1 不変条件はプロパティ間の話だが、根拠ブロックとの整合もここで守る)。
- * 新規行は 1 回の POST に根拠を `children` として同梱するため、そもそも
- * 非atomicな2段階書込みが発生しない。
+ * 行を書き込む (properties + 根拠ブロック)。既存行は共有二段階helperが
+ * PRE物理保管→新根拠全文verify→properties/readback→旧根拠退役を行う。
+ * 新規行はPOSTに根拠をchildrenとして同梱する。
  */
+function savedRowGuard(row: NonNullable<WorkItem["row"]>): Record<string, unknown> {
+  if (row.judgeInput === undefined) throw new Error("旧判定入力の読取が不明。旧値を保持してHOLD");
+  return {
+    ...buildSupplementProperties({ companyName: row.companyName, stockCode: row.stockCode, sector33: row.sector33,
+      docId: row.docId, docType: row.docType, periodEnd: row.periodEnd, submittedAt: row.submittedAt,
+      upstream: row.upstream, downstream: row.downstream, distribution: row.distribution, themes: row.themes,
+      uncertain: row.uncertain, evidenceText: row.evidenceText, tagDoc: row.tagDoc, vocabVersion: row.vocabVersion,
+      judgedAt: row.judgedAt, candidateCount: row.candidateCount, judgeInput: row.judgeInput,
+      attempts: row.attempts, nextRetryAt: row.nextRetryAt, error: row.error }),
+    [SUPPLEMENT_PROPS.textStatus]: { select: row.textStatus === null ? null : { name: row.textStatus } },
+    [SUPPLEMENT_PROPS.tagStatus]: { select: row.tagStatus === null ? null : { name: row.tagStatus } },
+  };
+}
+
 async function writeRowWithEvidence(
   item: WorkItem,
   deps: ProcessDeps,
   input: SupplementRowInput,
   evidenceBlock: unknown | null
 ): Promise<string> {
+  if (item.doc === null) throw new Error("書込前照合に必要な有報がありません");
+  const doc = item.doc;
+  const beforeWrite = async () => {
+    try { await deps.assertLatestDocCurrent(item.stockCode, doc); }
+    catch (cause) { throw new SupplementWriteHeldError(`書込直前の最新有報照合をHOLD: ${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
+  };
   if (item.row) {
-    await deps.replaceEvidenceBlock(item.row.pageId, evidenceBlock);
-    await deps.updateSupplementRow(item.row.pageId, input);
+    await deps.replaceEvidenceBlock(item.row.pageId, evidenceBlock, input, savedRowGuard(item.row), beforeWrite);
     return item.row.pageId;
   }
+  await beforeWrite();
   return deps.createSupplementRow(input, evidenceBlock);
 }
 
@@ -294,6 +316,29 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     texts: textsByColumn,
   };
   const tagDoc = `${doc.docId} ${formatPeriodJa(doc.periodEnd)}`;
+  const business = sectionMap.business;
+  const receipt: InputReceipt = {
+    docId: doc.docId, textPageId: doc.notionDocPageId,
+    businessSha256: business === undefined ? null : await sha256Hex(business),
+    sectionsSha256: await sha256Hex(JSON.stringify(PREFILTER_SECTIONS.map((key) => [key, sectionMap[key] === undefined ? null : sectionMap[key]]))),
+    stateSha256: null, vocabVersion: deps.vocab.version, model: null,
+  };
+  if (item.checkSourceInput) {
+    const previous = readInputReceipt(item.row?.judgeInput);
+    if (previous === null || previous.docId !== doc.docId) {
+      throw new Error("同一書類の入力照合に必要な旧SHAがありません。旧判定を保持してHOLD");
+    }
+    if (previous.sectionsSha256 === receipt.sectionsSha256) {
+      if (item.row === null || typeof item.row.judgeInput !== "string") throw new Error("入力照合の既存行が不正です");
+      await writeRowWithEvidence(item, deps, {
+        ...baseInput, judgeInput: withInputReceipt(item.row.judgeInput, { ...previous, textPageId: doc.notionDocPageId }),
+      }, undefined);
+      return { stockCode: item.stockCode, kind: item.kind, outcome: "updated", tagStatus: item.row.tagStatus,
+        candidateCount: item.row.candidateCount, ...ZERO_JEV_STATS };
+    }
+  }
+  const localJudge = item.initialSemif === true || item.sourceChangedLocalJudge === true;
+  const judgePrefix = item.sourceChangedLocalJudge ? "SemIf入力変更の再判定" : "SemIf新規銘柄の初回判定";
 
   if (result.candidates.length === 0) {
     // 候補語 0 件でも「判定済」(判定はした。該当が無かっただけ。§5.6)。
@@ -313,7 +358,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         vocabVersion: deps.vocab.version,
         judgedAt: deps.today,
         candidateCount: 0,
-        judgeInput: `${item.initialSemif ? "SemIf新規銘柄の初回判定：" : "機械照合："}候補語なし (キーワード照合で該当語なし・外部判定なし)`,
+        judgeInput: withInputReceipt(`${localJudge ? `${judgePrefix}：` : "機械照合："}候補語なし (キーワード照合で該当語なし・外部判定なし)`, receipt),
         error: null,
         attempts: 0,
         nextRetryAt: null,
@@ -337,18 +382,20 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
     periodEnd: doc.periodEnd,
     docTypeLabel: docTypeLabelOf(doc.docTypeCode),
   };
-  let judgeInputSummary = item.initialSemif
-    ? "SemIf新規銘柄の初回判定"
+  let judgeInputSummary = localJudge
+    ? judgePrefix
     : "機械照合：単語帳のキーワード一致・同文の除外語を確認 (AI確率なし)";
 
+  let stats = ZERO_JEV_STATS;
   try {
     let tagOutcome: TagOutcome;
-    let stats = ZERO_JEV_STATS;
-    if (item.initialSemif) {
+    if (localJudge) {
       const judgeInput = buildJudgeInput(meta, sectionMap, result);
-      judgeInputSummary = `SemIf新規銘柄の初回判定：${judgeInput.inputSummary}`;
+      judgeInputSummary = `${judgePrefix}：${judgeInput.inputSummary}`;
+      receipt.stateSha256 = await sha256Hex(judgeInput.state);
       const judged = await judgeCandidates(deps.jevClient, judgeInput,
         result.candidates.map((c) => c.term), deps.thresholds);
+      receipt.model = judged.model;
       tagOutcome = summarizeJudgments(deps.vocab, result.candidates, judged.judgments);
       stats = { jevCalls: judged.calls, jevInputTokens: judged.inputTokens, jevOutputTokens: judged.outputTokens };
     } else {
@@ -385,7 +432,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         vocabVersion: deps.vocab.version,
         judgedAt: deps.today,
         candidateCount,
-        judgeInput: judgeInputSummary,
+        judgeInput: withInputReceipt(judgeInputSummary, receipt),
         error: null,
         attempts: 0,
         nextRetryAt: null,
@@ -401,7 +448,16 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       ...stats,
     };
   } catch (e) {
+    if (e instanceof SupplementWriteHeldError) {
+      return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row === null ? null : item.row.tagStatus,
+        candidateCount: item.row === null ? null : item.row.candidateCount, qualificationHeld: true, error: e.message, ...stats };
+    }
     if (!(e instanceof SemifUnavailableError)) throw e;
+    if (item.sourceChangedLocalJudge && item.row !== null) {
+      return { stockCode: item.stockCode, kind: item.kind, outcome: "skipped", tagStatus: item.row.tagStatus,
+        candidateCount: item.row.candidateCount, qualificationHeld: true,
+        error: `SemIf入力変更の再判定をHOLD (旧本文・タグ・根拠・判定版を保持): ${e.message}`, ...ZERO_JEV_STATS };
+    }
     return recordFailure(item, deps, {
       textStatus: "取得済",
       tagStatus: "判定不能",

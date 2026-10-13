@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { yuhoEnv } from "../env.js";
-import { loadNewStockEligibility } from "./source.js";
+import { assertLatestDocCurrent, loadLatestDocs, loadNewStockEligibility } from "./source.js";
 
 // 公開済みの実 JPX イベント断片。未来/破損等の変更は資格拒否のための unit input。
 const batch = JSON.parse(readFileSync(new URL("../../../../src/cron/__fixtures__/overlay-atomic/batch-excerpt.json", import.meta.url), "utf8"));
@@ -146,5 +146,41 @@ describe("固定開始日の型付き環境変数", () => {
   it("実在するうるう日を固定値として読む", () => {
     vi.stubEnv("BIZTAG_NEW_LISTING_FROM", "2024-02-29");
     expect(yuhoEnv.BIZTAG_NEW_LISTING_FROM()).toBe("2024-02-29");
+  });
+});
+
+
+describe("最新有報の決定的な選択", () => {
+  function latestFixture() {
+    sqlite.exec(`CREATE TABLE core_stocks(id INTEGER, code TEXT, name TEXT, sector33 TEXT, is_active INTEGER, instrument_type TEXT);
+      CREATE TABLE yuho_documents(id INTEGER, stock_id INTEGER, doc_id TEXT, doc_type_code TEXT, period_end TEXT, submitted_at INTEGER, notion_doc_page_id TEXT, text_parse_status TEXT);
+      INSERT INTO core_stocks VALUES(1,'1414','ショーボンドホールディングス',NULL,1,'equity');
+      INSERT INTO yuho_documents VALUES(1,1,'S100Z3O3','120','2026-06-30',1788220800,'original','ok');
+      INSERT INTO yuho_documents VALUES(2,1,'S100Z5EY','130','2026-06-30',1788220800,'correction','ok');`);
+  }
+  it("同一期末・同一提出時刻はD1 idが新しい訂正有報を選ぶ（人工tieの構造回帰）", async () => {
+    latestFixture();
+    const latest = await loadLatestDocs(db());
+    expect(latest).toHaveLength(1);
+    expect(latest[0].doc?.docId).toBe("S100Z5EY");
+    expect(latest[0].doc?.notionDocPageId).toBe("correction");
+    expect(queries).toHaveLength(2); expect(fetch).not.toHaveBeenCalled();
+  });
+  it("write直前は対象1社の1 SELECTで最新doc/期末/本文pointerを照合する", async () => {
+    latestFixture(); const expected = (await loadLatestDocs(db()))[0].doc!; queries=[];
+    await assertLatestDocCurrent(db(), "1414", expected);
+    expect(queries).toHaveLength(1); expect(queries[0]).toContain('order by');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each([
+    "UPDATE yuho_documents SET notion_doc_page_id='changed' WHERE id=2",
+    "UPDATE yuho_documents SET text_parse_status='error' WHERE id=2",
+    "INSERT INTO yuho_documents SELECT 3,stock_id,'OFFLINE_NEW_DOC','130',period_end,submitted_at+1,'newer','ok' FROM yuho_documents WHERE id=2",
+    "UPDATE core_stocks SET is_active=0",
+  ])("plan/model待ち後の変更を古いdoc/pointerで受け入れない (%s)", async (mutation) => {
+    latestFixture(); const expected = (await loadLatestDocs(db()))[0].doc!;
+    sqlite.exec(mutation); queries=[];
+    await expect(assertLatestDocCurrent(db(), "1414", expected)).rejects.toThrow("旧値を保持してHOLD");
+    expect(queries).toHaveLength(1); expect(fetch).not.toHaveBeenCalled();
   });
 });

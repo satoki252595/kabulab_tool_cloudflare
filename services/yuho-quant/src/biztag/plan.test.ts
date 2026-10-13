@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { SupplementRow } from "../../../../src/shared/notion-archive/index.js";
-import { INITIAL_SEMIF_INPUT_PREFIX, MAX_RETRY_ATTEMPTS, planWork } from "./plan.js";
+import { INITIAL_SEMIF_INPUT_PREFIX, MAX_RETRY_ATTEMPTS, planWork, withInputReceipt } from "./plan.js";
 import type { LatestDoc, NewStockEligibility } from "./source.js";
 
 const TODAY = "2026-09-25";
@@ -94,7 +94,6 @@ describe("planWork (保存タグを再利用し、不足だけ補完)", () => {
   });
 
   it.each([
-    { docId: "S100OLD", tagDoc: "S100OLD 2025年3月期", vocabVersion: "v0" },
     { docId: "S100AAAA", vocabVersion: "v1" },
     { upstream: ["シリコンウエハ"], evidenceText: "保存済みの根拠文" },
     { uncertain: "保存済み要確認", evidenceText: "保存済みの根拠文" },
@@ -106,7 +105,12 @@ describe("planWork (保存タグを再利用し、不足だけ補完)", () => {
     expect(item.qualificationHeld).toBeUndefined();
     expect(item.initialSemif).not.toBe(true);
     expect(item.row).toBe(row);
-    expect(item.reason).toContain("再利用");
+    expect(item.reason).toContain("保持");
+  });
+
+  it("最新有報への更新は旧判定を新docへ流用せずSemIf専用の再判定にする", () => {
+    const row = rowOf({ docId: "S100OLD", tagDoc: "S100OLD 2025年3月期", vocabVersion: "v0", tagStatus: "判定済" });
+    expect(planSingle(latestOf(), row)).toMatchObject({ kind: "retag", sourceChangedLocalJudge: true, row });
   });
 
   it.each([
@@ -270,5 +274,20 @@ describe("新規上場の初回だけ SemIf を許可する計画", () => {
 
   it("補足行が重複したら last-wins で初回資格を選ばず停止", () => {
     expect(() => planWork([latestOf()], [rowOf(), rowOf()], TODAY, eligible)).toThrow("重複");
+  });
+});
+
+
+describe("known input provenance", () => {
+  const row = () => rowOf({ docId: "S100AAAA", tagDoc: "S100AAAA 2026年3月期", tagStatus: "判定済", vocabVersion: "v0",
+    judgeInput: withInputReceipt("判定済み説明", { docId: "S100AAAA", textPageId: "old-pointer", businessSha256: "a".repeat(64), sectionsSha256: "b".repeat(64), stateSha256: "c".repeat(64), vocabVersion: "v0", model: "local-model" }) });
+  it("same doc with a changed known fulltext pointer reads actual sections before choosing reuse/rejudge", () => {
+    expect(planSingle(latestOf(), row())).toMatchObject({ kind: "retag", sourceChangedLocalJudge: true, checkSourceInput: true });
+  });
+  it("an unchanged known source pointer does not fetch or rejudge merely because vocabulary changed", () => {
+    expect(planSingle(latestOf({ doc: latestDocOf({ notionDocPageId: "old-pointer" }) }), row())).toMatchObject({ kind: "skip" });
+  });
+  it.each(["\n[biztag-input-v1] {invalid}", withInputReceipt("", { docId: "S100OTHER", textPageId: "old-pointer", businessSha256: null, sectionsSha256: "b".repeat(64), stateSha256: null, vocabVersion: "v0", model: null })])("malformed/inconsistent provenance holds instead of treating historical input as proved", (judgeInput) => {
+    expect(planSingle(latestOf(), { ...row(), judgeInput })).toMatchObject({ kind: "skip", qualificationHeld: true });
   });
 });

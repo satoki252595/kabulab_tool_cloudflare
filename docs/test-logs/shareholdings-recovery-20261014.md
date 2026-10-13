@@ -1,6 +1,8 @@
 # 株式保有明細の原典照合と継続更新（2026-10-14）
 
-この記録はローカル実装・保存原本の検証結果である。本番schema変更・行更新・全件受入は別途読戻しの証跡で判定する。2行の原表解析を27,587行の原典照合完了とは扱わない。
+S100Z2Z6の従来の2行を提出会社の適格明細としたローカル判定・本番資格は無効とする。保存原表の保有主体は子会社「コーア商事株式会社」であり、提出会社「コーア商事ホールディングス株式会社」ではなかった。rootは2026-10-13 18:38:52Zに保有会社名を子会社へ訂正し、保有会社コードを空欄、原本・価格の資格フラグをfalseへ戻して全propertiesを読戻した。数値・期末・原本・価格証拠・旧列は保持した。PREと主体証明はNotion page `3f8d74ff-84cd-8196-b642-f8dd9e0f632b`、private receipt `holdings-subsidiary-correction-completed.json`。
+
+以下の2行抽出・価格照合は独立した数値/価格の検証履歴であり、提出会社の確定保有または全27,587行の原典照合完了を意味しない。新しいfiler-only parserでは同じ保存ZIPが適格0件/HOLDとなる。旧parserのplanは未受入とし、保存ZIPから全計画を再解析する。
 
 ## 保存済みデータの分類
 
@@ -36,15 +38,15 @@
 
 新正規列の「原本照合済」がfalseの行はformulaで「未検証（旧取込）」と表示する。原典照合できた行だけ、正規株数・帳簿価額・保有種別・出典キーを更新する。更新後も旧5列の値をGETで比較する。schema適用は準備時のnative schemaとfresh schemaが一致することを確認してから一回送信し、property ID・型・option IDを読戻す。
 
-## 原表から確定できた範囲
+## 原表の数値検証履歴（提出会社資格は無効）
 
 保存済みS100Z2Z6（9273 / E34071、期末2026-06-30）のtype1 ZIP 622,690 bytesだけを使用した。追加のEDINET取得は0。対象要素は `jpcrp_cor:ShareholdingsTextBlock`、contextは `FilingDateInstant`、実ファイルは `XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E34071-000_2026-06-30_01_2026-09-18_ixbrl.htm`。
 
-要素内HTMLは31,928文字で、当期の株式数（株）と貸借対照表計上額（千円）を対応付けた2行を抽出できた。原表の見出し「銘柄 / 当事業年度 / 前事業年度」、行の対応、単位、提出者、期末をすべて検証する。入れ子の `ix:nonNumeric` と自己閉じnilは要素の終端と取り違えない。
+要素内HTMLは31,928文字で、当期の株式数（株）と貸借対照表計上額（千円）を対応付けた2行を抽出できた。原表の見出し「銘柄 / 当事業年度 / 前事業年度」、行の対応、単位、文書の提出者、期末は検証できたが、当初は文書提出者と明細保有主体を混同した。子会社見出しの後の表を提出会社へ採用する資格はない。入れ子の `ix:nonNumeric` と自己閉じnilは要素の終端と取り違えない。
 
 確定株数は株へ換算し、帳簿価額は円へ換算する。株価・保有時価・価格観測日・通貨・上場区分はこの表だけでは確定しない。後述の独立原典による資格が成立した行だけ価格等を埋め、それ以外はNULL/未確認とし「欠測理由」を保存する。当期欄が横線なら0へ置換せずNULLとし、株数/帳簿価額の非開示を理由に記録する。
 
-原典キーは文書ID・要素ID・ファイル名・context・表番号/行番号・ZIP SHA256・期末。本文の文字列だけを原表照合済とは扱わない。異なる表形、継続要素、複数の対象要素、単位不明、名前と数値の行不一致、同名の複数明細は理由付きHOLDとなり、既存値を上書きしない。
+原典キーは文書ID・要素ID・ファイル名・context・表番号/行番号・ZIP SHA256・期末。本文の文字列だけを原表照合済とは扱わない。異なる表形、継続要素、複数の対象要素、単位不明、名前と数値の行不一致、同じ保有種別内の同名複数明細は理由付きHOLDとなり、既存値を上書きしない。
 
 ## 通常更新・再開の契約
 
@@ -87,7 +89,7 @@
 
 ## 最新保存type1の再解析入口
 
-`services/yuho-quant/data-scripts/backfill-shareholdings.ts` を追加した。D1の母集団は既存開示取込と同じで、各社の最大会計期末、その期末の最新提出日時、同日時の最大行IDで訂正有報を決定する。古い期末の訂正を最新年度へ取り違えない。銘柄コード順・明示cursor・1回1〜50社で全社を走査できる。
+`services/yuho-quant/data-scripts/backfill-shareholdings.ts` を追加した。D1の母集団はactive普通株に限定し、各社の最大会計期末、その期末の最新提出日時、同日時の最大行IDで訂正有報を決定する。古い期末の訂正を最新年度へ取り違えない。銘柄コード順・明示cursor・1回1〜50社で全社を走査できる。
 
 ```sh
 pnpm exec tsx --env-file-if-exists=.env services/yuho-quant/data-scripts/backfill-shareholdings.ts prepare 50 START /absolute/private/holdings-batch-001 /absolute/private/valuation-source-paths.json
@@ -98,7 +100,7 @@ prepareはD1読取・Notion保存ZIPの取得だけで、原本provider取得・
 
 applyは準備後も同じ最新文書であることをfresh D1で確認する。銘柄/価格原本はrunで一度だけ全バイト再照合し、各type1も反映直前に全バイト再照合して、共通publisherへ同じbytesを渡す。明示上限へ通全体が収まらない場合は次回へ残す。成功通はreadback後のreceiptで再開でき、結果未確定journalが一つでもあれば自動再送しない。未対応・未処理がある回は非0終了する。planの`more/nextAfterCode`で次の範囲を準備し、heldを全件完了扱いしない。
 
-実入口のreadonly準備で `afterCode=9272, limit=1` から最新S100Z2Z6を選び、2明細/2価格qualifiedの現行JSONLを生成した。これは本番行更新ではない。既に照合済みの同一期間行と異なる訂正原本の自動置換は現時点でsource差分HOLDとなる。過去価格を新日時へ付け替えることや、原典が変わった既存確定値を黙って上書きすることはしない。
+旧parserの実入口のreadonly準備で `afterCode=9272, limit=1` から最新S100Z2Z6を選び、2明細/2価格qualifiedのJSONLを生成した。この保有主体資格は無効であり、当該旧planを適用しない。数値と価格の証拠だけを保持する。既に照合済みの同一期間行と異なる訂正原本の自動置換は現時点でsource差分HOLDとなる。過去価格を新日時へ付け替えることや、原典が変わった既存確定値を黙って上書きすることはしない。
 
 ## 費用・性能の上限と未計測部分
 
@@ -114,4 +116,4 @@ repo内に旧5列を読む別consumerは見つからず、外部の旧単発writ
 
 本番確認は旧5列のproperty ID・セル値を保全したPRE、原本ファイルの全文バイト照合、対象明細の正規列・原典キー・NULL価格・旧値不変のPOST、原本行の保有明細状態を一組で行う。全件を未検証のまま残すschema変更だけでは機能完了にしない。
 
-ローカル検証: 保存原本S100Z2Z6は `status=ok / 2行 / 期末参考時価qualified=2行`。価格・最新文書選定・schema・通常ingest・catchup・既存関連の11suite99tests PASS、担当ファイルESLint PASS、全体TypeScript PASS。本番証跡はroot担当の反映結果で追記する。
+過去のローカル検証 `S100Z2Z6 status=ok / 2行 / 価格qualified=2行` は保有主体の資格として無効とする。新parserは明示当社/提出会社の区画だけを採用し、名義別区画の「当社」を提出会社へ読み替えない。共有writerもholderScopeを必須にし、自然キーには保有種別を含める。parser source SHAをprocess起動時に固定し、prepare/item/applyの同値を要求する。保存S100Z2Z6の全ZIP SHAを照合した実回帰は `no_detail_table / 0行 / unqualified`。追加検証・全量未完は [最新prepare記録](./holdings-latest-prepare-20261014.md) に残す。
