@@ -108,6 +108,8 @@ jobs:
         run: nix develop -c bash -c 'cd pipeline && uv run ruff check src tests scripts'
       - name: Test
         run: nix develop -c bash -c 'cd pipeline && uv run pytest'
+      - name: Clef local protocol guards
+        run: nix develop -c python3.12 -m unittest discover -s services/yuho-quant/scripts -p test_clef_server.py
       # 配信 Worker (services/jss-api/) は TypeScript。Python と同じ nix devShell
       # の node/pnpm を使う（グローバルへは入れない）。
       - name: Install jss-api deps

@@ -1,4 +1,4 @@
-import { SEMIF_MODEL } from "../semif/index.js";
+import { CLEF_MODEL } from "../clef/client.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -45,7 +45,7 @@ describe("TypeSafe 全停止 (実 policy)", () => {
     const externalFetch = vi.fn();
     vi.stubGlobal("fetch", externalFetch);
     for (const key of ["BIZTAG_NEW_LISTING_FROM", "TYPESAFE_API_KEY", "CLOUDFLARE_API_TOKEN", "NOTION_TOKEN"]) vi.stubEnv(key, "");
-    await expect(runBiztag({ budgetMs: 1, model: SEMIF_MODEL, thresholds: { yesMin: 0.8, noMax: 0.2 } })).rejects.toThrow("BIZTAG_NEW_LISTING_FROM");
+    await expect(runBiztag({ budgetMs: 1, model: CLEF_MODEL, thresholds: { yesMin: 0.8, noMax: 0.2 } })).rejects.toThrow("BIZTAG_NEW_LISTING_FROM");
     expect(externalFetch).not.toHaveBeenCalled();
   });
 

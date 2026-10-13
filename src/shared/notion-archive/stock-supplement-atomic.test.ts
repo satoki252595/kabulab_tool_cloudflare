@@ -18,11 +18,12 @@ const guard = vi.fn(async () => {});
 let requestNonce = 0;
 const old = { id: "old", type: "heading_3", has_children: false,
   heading_3: { rich_text: [{ plain_text: "事業タグの根拠（旧書類）" }], is_toggleable: true } };
-function setup(options: { badEvidence?: boolean; unknownAppend?: boolean; unknownPatch?: boolean; unknownRetire?: boolean; nestedEvidence?: boolean; badPost?: boolean; stalePre?: boolean; longProperty?: boolean; reverseKeys?: boolean | "alternate" } = {}) {
+function setup(options: { badEvidence?: boolean; unknownAppend?: boolean; unknownPatch?: boolean; unknownRetire?: boolean; nestedEvidence?: boolean; badPost?: boolean; stalePre?: boolean; longProperty?: boolean; changedProtectedAfter?: boolean; reverseKeys?: boolean | "alternate" } = {}) {
   let patched = false;
   let pageReads = 0;
   const before = { id: "row", last_edited_time: "2026-10-14T00:00:00Z", properties: expected };
   const after = { ...before, properties: { ...before.properties, ...buildSupplementProperties(input) } };
+  if (options.changedProtectedAfter) Object.assign(after.properties, buildSupplementProperties({ vocabVersion: "変更された旧model版" }));
   if (options.longProperty) after.properties["事業の内容"] = { id: "p", rich_text: Array.from({ length: 25 }, () => ({ plain_text: "分割" })) };
   io.request.mockImplementation(async (method: string, path: string, body?: { properties?: Record<string, unknown> }, opts?: { singleAttempt?: boolean }) => {
     if (method === "GET" && path === "/pages/row") {
@@ -128,6 +129,17 @@ describe("supplement evidence two-phase replacement", () => {
   });
   it("same-input text sync keeps old evidence while still verifying property commit", async () => {
     setup(); await replaceEvidenceBlock("row", undefined, input, expected, guard);
+    expect(mutations()).toEqual(["PATCH /pages/row"]);
+  });
+  it("identical text-only properties skip PRE upload and PATCH while still checking current source", async () => {
+    setup(); await replaceEvidenceBlock("row", undefined, { docId: "S100OLD" }, expected, guard);
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(io.archive).not.toHaveBeenCalled(); expect(io.verify).not.toHaveBeenCalled(); expect(mutations()).toEqual([]);
+    expect(io.request.mock.calls.some(([, path]) => String(path).startsWith("/blocks/"))).toBe(false);
+  });
+  it("a protected old model property changing after text-only PATCH stops without retiring evidence", async () => {
+    setup({ changedProtectedAfter: true });
+    await expect(replaceEvidenceBlock("row", undefined, input, expected, guard)).rejects.toThrow("PRE=pre-archive");
     expect(mutations()).toEqual(["PATCH /pages/row"]);
   });
   it("long rich_text uses full property pagination before comparing", async () => {

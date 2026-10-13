@@ -16,7 +16,45 @@ import { assertBiztagDate } from "../env.js";
 /** 新規初回の外部判定の最大再試行回数。既存の機械判定には適用しない。 */
 export const MAX_RETRY_ATTEMPTS = 5;
 export const INITIAL_SEMIF_INPUT_PREFIX = "SemIf新規銘柄の初回判定";
+export const INITIAL_CLEF_INPUT_PREFIX = "Clef-Flash新規銘柄の初回判定";
 export const INPUT_RECEIPT_PREFIX = "\n[biztag-input-v1] ";
+const TEXT_SYNC_RECEIPT_PREFIX = "\n[biztag-text-sync-v1] ";
+
+/** 現在の39本文同期の証拠。歴史的なタグ判定入力の証拠とは分ける。 */
+export interface TextSyncReceipt {
+  docId: string; textPageId: string; textsSha256: string;
+  /** 既存4SHAと実照合した場合のみ。歴史的に未知の判定入力へ生成しない。 */
+  equivalentJudgmentInputSha256?: string;
+}
+
+export function readTextSyncReceipt(value: string | null | undefined): TextSyncReceipt | null {
+  if (value === null || value === undefined) return null;
+  const parts = value.split(INPUT_RECEIPT_PREFIX)[0].split(TEXT_SYNC_RECEIPT_PREFIX);
+  if (parts.length === 1) return null;
+  if (parts.length !== 2) throw new Error("補足39本文の同期来歴が重複しています");
+  const r: unknown = JSON.parse(parts[1]);
+  if (r === null || typeof r !== "object") throw new Error("補足39本文の同期来歴が不正です");
+  const p = r as Record<string, unknown>;
+  if (typeof p.docId !== "string" || p.docId.trim() === "" ||
+      typeof p.textPageId !== "string" || p.textPageId.trim() === "" ||
+      typeof p.textsSha256 !== "string" || !/^[a-f0-9]{64}$/.test(p.textsSha256) ||
+      (p.equivalentJudgmentInputSha256 !== undefined && (typeof p.equivalentJudgmentInputSha256 !== "string" || !/^[a-f0-9]{64}$/.test(p.equivalentJudgmentInputSha256)))) {
+    throw new Error("補足39本文の同期来歴が不正です");
+  }
+  return p as unknown as TextSyncReceipt;
+}
+
+export function withTextSyncReceipt(value: string | null, receipt: TextSyncReceipt): string {
+  const parts = (value === null ? "" : value).split(INPUT_RECEIPT_PREFIX);
+  if (parts.length > 2) throw new Error("事業タグの入力来歴が重複しています");
+  // 旧判定JSONは再serializeせず原文字列のまま残す。旧4SHA/model/clockを作らない。
+  return parts[0].split(TEXT_SYNC_RECEIPT_PREFIX)[0] + TEXT_SYNC_RECEIPT_PREFIX + JSON.stringify(receipt) +
+    (parts.length === 2 ? INPUT_RECEIPT_PREFIX + parts[1] : "");
+}
+
+function isInitialLocalInput(value: string): boolean {
+  return value.startsWith(INITIAL_SEMIF_INPUT_PREFIX) || value.startsWith(INITIAL_CLEF_INPUT_PREFIX);
+}
 
 /** 判定入力列の既存の説明を保持し、今後の入力照合に必要な来歴だけを添える。 */
 export interface InputReceipt {
@@ -55,6 +93,7 @@ export function withInputReceipt(summary: string, receipt: InputReceipt): string
 export type WorkItemKind =
   | "create_row"
   | "no_text"
+  | "sync_text"
   | "sync_and_tag"
   | "retag"
   | "version_bump"
@@ -78,7 +117,7 @@ export interface WorkItem {
    * 専用フラグ (`reason` の文字列パースに頼らない)。
    */
   retryExhausted?: boolean;
-  /** 公式上場の資格と未完の初回判定が揃った項目だけ true。省略時は機械判定。 */
+  /** ローカル初回資格の互換名。Clefにも使用。省略時は機械判定。 */
   initialSemif?: boolean;
   /** 既存判定の入力doc/4対象節が変わった場合。機械照合へ代替しない。 */
   sourceChangedLocalJudge?: boolean;
@@ -111,7 +150,7 @@ function canInitialSemif(row: SupplementRow | null): boolean {
   if (row.attempts === 0 && row.error === null && row.tagStatus !== "判定不能" && row.tagStatus !== "読込失敗") return true;
   return (row.tagStatus === "判定不能" || row.tagStatus === "読込失敗") &&
     typeof row.attempts === "number" && Number.isInteger(row.attempts) && row.attempts > 0 &&
-    row.judgeInput !== null && row.judgeInput.startsWith(INITIAL_SEMIF_INPUT_PREFIX);
+    row.judgeInput !== null && isInitialLocalInput(row.judgeInput);
 }
 
 function planOne(
@@ -157,19 +196,24 @@ function planOne(
         (hasTagOrUncertain && (row.evidenceText === null || row.evidenceText.trim().length === 0))) {
       return { ...base, kind: "skip", qualificationHeld: true, reason: "判定済みの保存根拠が欠落・不整合のため HOLD。タグと根拠を保持し上書きしない" };
     }
-    let receipt: InputReceipt | null;
-    try { receipt = readInputReceipt(row.judgeInput); }
+    let receipt: InputReceipt | null, textSync: TextSyncReceipt | null;
+    try { receipt = readInputReceipt(row.judgeInput); textSync = readTextSyncReceipt(row.judgeInput); }
     catch { return { ...base, kind: "skip", qualificationHeld: true, reason: "判定入力の来歴が不正のため HOLD。保存済み結果を保持" }; }
     if (receipt !== null && (receipt.docId !== savedTagDocId || receipt.vocabVersion !== row.vocabVersion)) {
       return { ...base, kind: "skip", qualificationHeld: true, reason: "判定入力の書類・版が保存済み結果と不一致のため HOLD" };
     }
     if (savedTagDocId !== doc.docId) {
       return { ...base, kind: "retag", sourceChangedLocalJudge: true,
-        reason: `判定根拠の書類が最新と異なる (${savedTagDocId} → ${doc.docId})。最新39本文とSemIf再判定を同期` };
+        reason: `判定根拠の書類が最新と異なる (${savedTagDocId} → ${doc.docId})。最新39本文とローカル再判定を同期` };
     }
-    if (receipt !== null && receipt.textPageId !== doc.notionDocPageId) {
+    const syncedCurrent = textSync !== null && textSync.docId === doc.docId && textSync.textPageId === doc.notionDocPageId;
+    if (receipt !== null && receipt.textPageId !== doc.notionDocPageId &&
+        !(syncedCurrent && textSync?.equivalentJudgmentInputSha256 === receipt.sectionsSha256)) {
       return { ...base, kind: "retag", sourceChangedLocalJudge: true, checkSourceInput: true,
-        reason: "同じ書類の保存本文が更新。既知の4対象節SHAを照合し、変更時だけSemIf再判定" };
+        reason: "同じ書類の保存本文が更新。既知の4対象節SHAを照合し、変更時だけローカル再判定" };
+    }
+    if (!syncedCurrent) {
+      return { ...base, kind: "sync_text", reason: "同じ書類の39本文だけを機械同期。旧タグ・モデル・根拠・判定時刻を保持し、旧4SHA不明を再判定理由にしない" };
     }
     return { ...base, kind: "skip", reason: receipt === null
       ? "同じ書類の保存済み判定を保持。旧判定の入力SHAは未検証であり、同一入力の証明には使用しない"
@@ -181,7 +225,7 @@ function planOne(
   if (eligibility?.eligibleCodes.has(latest.stockCode) === true && !canInitialSemif(row)) {
     const knownPreviousFailure = (row.tagStatus === "判定不能" || row.tagStatus === "読込失敗") &&
       row.error !== null && row.error.trim().length > 0 && row.judgeInput !== undefined &&
-      (row.judgeInput === null || !row.judgeInput.startsWith(INITIAL_SEMIF_INPUT_PREFIX));
+      (row.judgeInput === null || !isInitialLocalInput(row.judgeInput));
     if (!knownPreviousFailure) {
       return { ...base, kind: "skip", qualificationHeld: true, reason: "新規上場の初回判定履歴が不明なため HOLD。機械判定の完了に置き換えない" };
     }
@@ -189,13 +233,13 @@ function planOne(
   if (eligibility?.eligibleCodes.has(latest.stockCode) === true && canInitialSemif(row)) {
     if (row.attempts !== null && row.attempts > 0) {
       if (row.attempts >= MAX_RETRY_ATTEMPTS) {
-        return { ...base, kind: "skip", retryExhausted: true, reason: "SemIf新規銘柄の初回判定が再試行上限に到達" };
+        return { ...base, kind: "skip", retryExhausted: true, reason: "ローカル新規銘柄の初回判定が再試行上限に到達" };
       }
       if (row.nextRetryAt === null) {
-        return { ...base, kind: "skip", reason: "SemIf新規銘柄の初回判定の再試行期日が未到来" };
+        return { ...base, kind: "skip", reason: "ローカル新規銘柄の初回判定の再試行期日が未到来" };
       }
-      assertBiztagDate(row.nextRetryAt, "SemIf 初回 nextRetryAt");
-      if (row.nextRetryAt > today) return { ...base, kind: "skip", reason: "SemIf新規銘柄の初回判定の再試行期日が未到来" };
+      assertBiztagDate(row.nextRetryAt, "ローカル初回 nextRetryAt");
+      if (row.nextRetryAt > today) return { ...base, kind: "skip", reason: "ローカル新規銘柄の初回判定の再試行期日が未到来" };
       return { ...base, kind: "retry", initialSemif: true, reason: "確認済み新規上場の初回判定を再試行 (専用の判定入力記録あり)" };
     }
     return { ...base, kind: "sync_and_tag", initialSemif: true, reason: "確認済み新規上場の未完の初回判定。最新有報の本文を使用" };

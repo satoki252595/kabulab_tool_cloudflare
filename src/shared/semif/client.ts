@@ -95,20 +95,22 @@ export interface CreateSemifClientOptions {
   now?: () => number;
 }
 
+/** SemIfとClefで共用する、同一JSONLプロトコルのローカル常駐プロセス。 */
+export interface LocalDecisionClientOptions extends CreateSemifClientOptions {
+  pythonBin: string;
+  serverScriptPath: string;
+  hfModel: string;
+  hfRevision: string;
+  model: string;
+  expectedReady: Readonly<Record<string, string | number | boolean>>;
+  serverArgs?: string[];
+}
+
 const DEFAULT_READY_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_MAX_TOKENS = 16_000;
 
-const ReadyLineSchema = z.strictObject({
-  ready: z.literal(true),
-  model: z.string(),
-  revision: z.string(),
-  backend: z.string(),
-  max_tokens: z.number(),
-  source_revision: z.literal(SEMIF_SOURCE_REVISION),
-  mlx_version: z.literal(SEMIF_MLX_VERSION),
-  mlx_lm_revision: z.literal(SEMIF_MLX_LM_REVISION),
-});
+const ReadyLineSchema = z.record(z.string(), z.union([z.string(), z.number(), z.boolean()]));
 
 const AnswersSchema = z.record(z.string(), z.number().check(z.minimum(0), z.maximum(1)));
 
@@ -132,10 +134,7 @@ class SemifServerProcess {
   private nextRequestId = 0;
   private deadError: Error | null = null;
 
-  constructor(private readonly o: Required<Omit<CreateSemifClientOptions, "pythonBin" | "serverScriptPath">> & {
-    pythonBin: string;
-    serverScriptPath: string;
-  }) {}
+  constructor(private readonly o: Required<LocalDecisionClientOptions>) {}
 
   private ensureStarted(): Promise<void> {
     if (this.deadError) return Promise.reject(this.deadError);
@@ -154,6 +153,7 @@ class SemifServerProcess {
         this.o.hfRevision,
         "--max-tokens",
         String(this.o.maxTokens),
+        ...this.o.serverArgs,
       ];
       let child: ChildProcess;
       try {
@@ -218,8 +218,10 @@ class SemifServerProcess {
               );
               return;
             }
-            if (parsedReady.data.model !== this.o.hfModel || parsedReady.data.revision !== this.o.hfRevision ||
-                parsedReady.data.backend !== "mlx" || parsedReady.data.max_tokens !== this.o.maxTokens) {
+            const expected = { ...this.o.expectedReady, ready: true, model: this.o.hfModel,
+              revision: this.o.hfRevision, max_tokens: this.o.maxTokens };
+            if (Object.keys(parsedReady.data).length !== Object.keys(expected).length ||
+                Object.entries(expected).some(([key, value]) => parsedReady.data[key] !== value)) {
               const err = new SemifUnavailableError("semif_server.py のモデル/版/バックエンド/入力上限が較正対象と一致しません");
               this.fail(err);
               rejectReady(err);
@@ -387,13 +389,26 @@ class SemifServerProcess {
 }
 
 export function createSemifClient(o: CreateSemifClientOptions = {}): SemifClient {
-  const resolvedPythonBin = o.pythonBin ?? semifEnv.SEMIF_PYTHON();
-  const resolvedScriptPath = o.serverScriptPath ?? defaultServerScriptPath();
-  const proc = new SemifServerProcess({
-    pythonBin: resolvedPythonBin,
-    serverScriptPath: resolvedScriptPath,
+  return createLocalDecisionClient({ ...o,
+    pythonBin: o.pythonBin ?? semifEnv.SEMIF_PYTHON(),
+    serverScriptPath: o.serverScriptPath ?? defaultServerScriptPath(),
     hfModel: o.hfModel ?? SEMIF_HF_MODEL,
     hfRevision: o.hfRevision ?? SEMIF_HF_REVISION,
+    model: SEMIF_MODEL,
+    expectedReady: { backend: "mlx", source_revision: SEMIF_SOURCE_REVISION,
+      mlx_version: SEMIF_MLX_VERSION, mlx_lm_revision: SEMIF_MLX_LM_REVISION },
+  });
+}
+
+export function createLocalDecisionClient(o: LocalDecisionClientOptions): SemifClient {
+  const proc = new SemifServerProcess({
+    pythonBin: o.pythonBin,
+    serverScriptPath: o.serverScriptPath,
+    hfModel: o.hfModel,
+    hfRevision: o.hfRevision,
+    model: o.model,
+    expectedReady: { ...o.expectedReady },
+    serverArgs: [...(o.serverArgs ?? [])],
     maxTokens: o.maxTokens ?? DEFAULT_MAX_TOKENS,
     readyTimeoutMs: o.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
     requestTimeoutMs: o.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -431,7 +446,7 @@ export function createSemifClient(o: CreateSemifClientOptions = {}): SemifClient
       }
 
       return {
-        model: SEMIF_MODEL,
+        model: o.model,
         answers,
         // 既存 JevClient 形式の互換値。トークン数・ローカル計算費用は未計測。
         // 呼出側で not_metered_local と明記し、実測ゼロと解釈しない。

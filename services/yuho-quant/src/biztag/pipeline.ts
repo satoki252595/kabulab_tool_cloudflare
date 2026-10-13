@@ -34,7 +34,8 @@ import {
   type SupplementSchemaSpec,
 } from "../../../../src/shared/notion-archive/index.js";
 import type { JevClient } from "../../../../src/shared/jev/index.js";
-import { createSemifClient, SEMIF_MODEL, type SemifClient } from "../../../../src/shared/semif/index.js";
+import { createClefClient, CLEF_MODEL } from "../../../../src/shared/clef/client.js";
+import type { SemifClient } from "../../../../src/shared/semif/index.js";
 import { createMemoizedJevClient } from "../../../../src/shared/jev/memo.js";
 import * as yuhoSchema from "../db/schema.js";
 import { yuhoEnv } from "../env.js";
@@ -81,8 +82,8 @@ export interface RunSummary {
   countsByTagStatus: Record<string, number>;
   coverage: { judged: number; total: number; ratio: number };
   jev: { calls: number; inputTokens: number; outputTokens: number; estimatedCostUsd: number };
-  /** jev は旧サマリとの互換キー。実際の判定/費用境界はこの欄に明記する。 */
-  judge?: { provider: "semif"; model: string; calls: number; costMetering: "not_metered_local"; externalApiCalls: 0; tokens: null; hardwareCostUsd: null };
+  /** callsは失敗を含むaskNoul試行数。native forward数/費用は未計測。jevは旧互換キー。 */
+  judge?: { provider: "clef"; model: string; calls: number; costMetering: "not_metered_local"; externalApiCalls: 0; tokens: null; hardwareCostUsd: null };
   notion: NotionStats;
   vocabVersion: string;
   vocabSeeded: boolean;
@@ -236,7 +237,7 @@ function makeDryRunLedgerWrites(): {
 }
 
 export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
-  if (opts.model !== SEMIF_MODEL) throw new Error("新規銘柄の判定モデルがSemIf較正対象と一致しません");
+  if (opts.model !== CLEF_MODEL) throw new Error("新規銘柄の判定モデルがClef-Flash較正対象と一致しません");
   const listingFrom = yuhoEnv.BIZTAG_NEW_LISTING_FROM();
   const start = Date.now();
   const startedAt = new Date(start).toISOString();
@@ -246,9 +247,11 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const db = createD1HttpDb(yuhoSchema) as unknown as BiztagSourceDb;
   const newStockEligibility = await loadNewStockEligibility(db, listingFrom, today);
   let initialClient: SemifClient | null = null;
+  let localJudgeCalls = 0;
   // 新規の実資格と本文候補が揃うまでPythonを起動しない。既存機械経路からは呼ばない。
   const jevClient: JevClient = { askNoul: async (state, questions) => {
-    if (initialClient === null) initialClient = createSemifClient();
+    if (initialClient === null) initialClient = createClefClient();
+    localJudgeCalls++;
     return initialClient.askNoul(state, questions);
   } };
   try {
@@ -313,26 +316,20 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     );
   }
 
-  const realDeps: ProcessDeps = {
+  const deps: ProcessDeps = {
     vocab,
-    thresholds: opts.thresholds,
+    model: opts.model,
+    get thresholds() { return opts.thresholds; },
     jevClient,
     today,
     resolveMasterPageId: (code) => masterIndex.index.get(code) ?? null,
     readStockTextRow,
     assertLatestDocCurrent: (code, doc) => assertLatestDocCurrent(db, code, doc),
-    createSupplementRow: (input, evidence) => createSupplementRow(supplementDbId, input, evidence),
-    updateSupplementRow,
-    replaceEvidenceBlock,
+    createSupplementRow: opts.dryRun ? async () => "dry-run"
+      : (input, evidence) => createSupplementRow(supplementDbId, input, evidence),
+    updateSupplementRow: opts.dryRun ? async () => {} : updateSupplementRow,
+    replaceEvidenceBlock: opts.dryRun ? async () => {} : replaceEvidenceBlock,
   };
-  const deps: ProcessDeps = opts.dryRun
-    ? {
-        ...realDeps,
-        createSupplementRow: async () => "dry-run",
-        updateSupplementRow: async () => {},
-        replaceEvidenceBlock: async () => {},
-      }
-    : realDeps;
 
   const countsByKind: Record<string, number> = {};
   const countsByTagStatus: Record<string, number> = {};
@@ -408,7 +405,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     countsByTagStatus,
     coverage: { judged, total: items.length, ratio: items.length === 0 ? 0 : judged / items.length },
     jev: { calls: jevCalls, inputTokens: jevInputTokens, outputTokens: jevOutputTokens, estimatedCostUsd: 0 },
-    judge: { provider: "semif", model: opts.model, calls: jevCalls, costMetering: "not_metered_local", externalApiCalls: 0, tokens: null, hardwareCostUsd: null },
+    judge: { provider: "clef", model: opts.model, calls: localJudgeCalls, costMetering: "not_metered_local", externalApiCalls: 0, tokens: null, hardwareCostUsd: null },
     notion: notionStats(),
     vocabVersion: vocab.version,
     vocabSeeded: seeded,
@@ -422,7 +419,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     failures,
   };
   } finally {
-    // MLXの常駐モデルは1runで共有し、途中のNotion失敗でも解放する。
+    // Clefの常駐モデルは1runで共有し、途中のNotion失敗でも解放する。
     (initialClient as SemifClient | null)?.close();
   }
 }
