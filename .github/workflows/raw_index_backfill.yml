@@ -32,6 +32,10 @@ on:
         description: "新規原本の開始時間予算秒。開始済み1件を完結し、hard timeoutではinflight保全"
         type: string
         default: "1200"
+      continue_runs:
+        description: "成功後に同じ固定集合を継続する残run上限(0で単発)。最大200、各run500件/512MiB/3600秒以下"
+        type: string
+        default: "0"
       reconcile_sha256:
         description: "人間判断後の単一index_inflight回復だけ。apply/limit1/両SHA必須、通常は空欄"
         type: string
@@ -45,6 +49,7 @@ concurrency:
   cancel-in-progress: false
 permissions:
   contents: read
+  actions: write
 jobs:
   backfill:
     runs-on: ubuntu-latest
@@ -89,3 +94,16 @@ jobs:
             "--limit=$LIMIT" "--max-bytes=$MAX_BYTES" "--max-seconds=$MAX_SECONDS" \
             --out=tmp/raw-index/receipt.jsonl "${reconcile_args[@]}"
       # raw body/manifest/private receipt はartifactへ公開しない。再開stateはR2へCAS保管。
+      - name: Continue the same verified snapshot within the explicit run budget
+        if: ${{ success() && inputs.mode == 'apply' && inputs.continue_runs != '0' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          nix develop -c python3 scripts/notion/raw-index-continue.py \
+            "$GITHUB_EVENT_PATH" tmp/raw-index/receipt.jsonl tmp/raw-index/continuation.json
+          if [ -f tmp/raw-index/continuation.json ]; then
+            # Dispatch is single-attempt. An unknown API result is never resent automatically.
+            gh api --method POST "repos/$GH_REPO/actions/workflows/raw_index_backfill.yml/dispatches" \
+              --input tmp/raw-index/continuation.json
+          fi

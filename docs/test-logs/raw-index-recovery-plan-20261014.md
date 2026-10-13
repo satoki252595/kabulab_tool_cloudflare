@@ -60,3 +60,10 @@ run38449677494は棚卸し78,917件と期待78,832件の不一致で、manifest/
 CLIに任意の`--cutoff=<UTC ISO>`を追加し、workflow_dispatchではcutoff入力を必須とする。値の現在時刻defaultは作らない。UTCのZ終端・実暦日・未来でないことを全request前に検証し、同じ値をdry/apply/再開へ渡す。新manifestはそのcutoffで棚卸し、保存済manifestが明示cutoffと異なればreceiptや原本を書かず停止する。CLIで省略した既存呼出しは従来の取得時計/保存manifest利用を維持する。active/inflight/unknownの再送禁止と全SHA/件数/順序検査は変更しない。
 
 rootのSQL読取でcutoff`2026-10-13T18:31:00.000Z`のcanonical件数78,832を確認した。同じplan-id/expected_count=78832/cutoffでdry→applyを実施する。固定cutoff後の新原本まで全量完了と扱わない。異なる起動時計のdry/apply/再開でmanifest SHAが同じになる回帰と、保存cutoff不一致・不正/未来cutoffの送信前停止を検証する。
+# 成功した固定集合の予算付き継続（2026-10-14追記）
+
+`raw_index_backfill.yml`の`continue_runs`は既定0（単発）。明示した場合だけ、成功runの最終receiptから同一plan/cutoff/count/manifest SHA・検証済み進捗を照合し、GitHub標準のworkflow dispatchで次を1回起動する。残run数は減少し最大200、各runは500原本・512MiB転送予算・3600秒以内。既存R2 CAS/inflight停止を変えず、失敗・結果不明・進捗0では継続しない。手動reconcileを自動継続に接続しない。
+
+全原本のcursor到達だけでは完了にしない。既存CLIの全件索引anti-joinが欠測0で確定した時に継続を終了する。通常Cronと新原本取得へは接続せず、⑤保管済み原本だけを扱う。ローカル常駐ループや新しいPAT・有料runnerは追加しない。`GITHUB_TOKEN`によるworkflow_dispatchの利用は[GitHub公式仕様](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)に従う。
+
+有限の継続機能と全78,832件の本番完了は別の受入。500件の本番実測・独立読戻しを確認してから継続予算を投入し、実所要時間・転送量・追加保存量を記録する。原本/私有receiptを公開artifactへ出さない。
