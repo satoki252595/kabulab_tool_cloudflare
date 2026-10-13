@@ -13,9 +13,9 @@ import { envelope } from "./envelope";
 import { fetchAdjustedOhlcvCached } from "./ohlcv-cache";
 import {
   SUPPLY_TYPES,
-  assertSeriesObject,
+  fetchSupplyLatest,
+  fetchSupplySeries,
   parseSupplyFilter,
-  seriesPointsArray,
   supplySourcesFromLatest,
   supplySourcesFromSeries,
 } from "./supply";
@@ -28,6 +28,7 @@ import {
   parseCodes,
   parseLimit,
 } from "./routes";
+import { isSupplyCode } from "./jpx-margin";
 import type { PrivateEnv } from "./types";
 
 interface JsonRpcRequest {
@@ -61,10 +62,11 @@ export const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        code: { type: "string", description: "4桁の銘柄コード" },
+        code: { type: "string", description: "4文字の銘柄コード（JPXは原文5文字も可）" },
         series: { type: "string", enum: [...SUPPLY_TYPES] },
         from: { type: "string", description: "YYYY-MM-DD" },
         to: { type: "string", description: "YYYY-MM-DD" },
+        cursor: { type: "string", description: "前応答meta.cursor。JPX基準日20日ずつ、nullで終端" },
       },
       required: ["code"],
     },
@@ -176,16 +178,7 @@ async function callTool(
     case "jp_supply_latest": {
       const limit = parseLimit(String(args.limit ?? ""), 100);
       const dataType = parseSupplyFilter("data_type", args.data_type);
-      const stmt = dataType
-        ? env.DB.prepare(
-            "SELECT code, data_type, data_date, loan_bal, stock_bal, ratio, turn_days" +
-              " FROM jss_supply_latest WHERE data_type = ? ORDER BY code LIMIT ?",
-          ).bind(dataType, limit)
-        : env.DB.prepare(
-            "SELECT code, data_type, data_date, loan_bal, stock_bal, ratio, turn_days" +
-              " FROM jss_supply_latest ORDER BY code, data_type LIMIT ?",
-          ).bind(limit);
-      const { results } = await stmt.all();
+      const results = await fetchSupplyLatest(env, dataType, limit);
       return envelope(results, {
         sources: supplySourcesFromLatest(results as Array<{ data_type: unknown }>),
         licenses: ["personal-only"],
@@ -193,26 +186,16 @@ async function callTool(
     }
     case "jp_supply_series": {
       const code = String(args.code ?? "");
-      if (!isValidCode(code)) throw new Error("銘柄コードは4桁");
+      if (!isSupplyCode(code)) throw new Error("銘柄コードは4文字またはJPX原文5文字");
       const wanted = parseSupplyFilter("series", args.series);
       const from = parseSupplyFilter("from", args.from);
       const to = parseSupplyFilter("to", args.to);
-      const object = await env.SUPPLY.get(`supply/${code}.json`);
-      if (!object) throw new Error(`需給データが無い: ${code}`);
-      const payload = (await object.json()) as Record<string, unknown>;
-      const series = assertSeriesObject(payload.series);
-      const filtered: Record<string, unknown[]> = {};
-      for (const [key, value] of Object.entries(series)) {
-        if (wanted && key !== wanted) continue;
-        const points = seriesPointsArray(key, value);
-        filtered[key] = points.filter((p) => {
-          return (!from || p.d >= from) && (!to || p.d <= to);
-        });
-      }
-      return envelope({ code, updated: payload.updated, series: filtered }, {
-        sources: supplySourcesFromSeries(filtered), licenses: ["personal-only"],
-      });
+      const cursor = parseSupplyFilter("cursor", args.cursor);
+      const result = await fetchSupplySeries(env, code, { wanted, from, to, cursor });
+      if (!result) throw new Error(`需給データが無い: ${code}`);
+      return envelope(result.data, { cursor: result.cursor, sources: supplySourcesFromSeries(result.data.series), licenses: ["personal-only"] });
     }
+
     case "jp_ohlcv_range": {
       const code = String(args.code ?? "");
       if (!isValidCode(code)) throw new Error("銘柄コードは4桁");

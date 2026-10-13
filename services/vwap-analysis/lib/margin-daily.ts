@@ -348,9 +348,9 @@ export function parseDailyMarginDates(text: string): { basisDate: string; public
   }
   if (found.size === 0) fail("日付行 (申込み現在…単位：一株、一円…公表日) が見つかりません");
   if (found.size > 1) fail(`日付行がページ間で不一致です: ${[...found].join(" / ").slice(0, 120)}`);
-  const [[b, p]] = [...found].map((s) => s.split("|") as [string, string]);
-  const [by, bm, bd] = b.split("/");
-  const [py, pm, pd] = p.split("/");
+  const [[b, p]] = [...found].map((s) => s.split("|") as [string, string]) as [[string, string]];
+  const [by, bm, bd] = b.split("/") as [string, string, string];
+  const [py, pm, pd] = p.split("/") as [string, string, string];
   const basisDate = toISODate(by, bm, bd, "基準日");
   const publicationDate = toISODate(py, pm, pd, "公表日");
   for (const line of text.split("\n")) {
@@ -537,7 +537,7 @@ export function parseDailyMarginText(
       fail(`未知の株数行です: ${line.slice(0, 100)}`);
     }
     if (line.includes("金額 Val.")) {
-      const enLabel = line.split("金額 Val.")[0].trim();
+      const enLabel = line.split("金額 Val.")[0]!.trim();
       if (TOTAL_EN_LABELS.has(enLabel)) {
         totalValLines.push(line);
         continue;
@@ -582,7 +582,7 @@ export function parseDailyMarginText(
     fail(`合計行数が不一致です: 株数 ${totalShs.length} vs 金額 ${totalValLines.length}`);
   }
   const totals: MarginDailyTotal[] = totalShs.map((t, i) => {
-    const figures = parseTotalValLine(totalValLines[i], t.label);
+    const figures = parseTotalValLine(totalValLines[i]!, t.label);
     assertBreakdown(t.figures, `合計株数行 ${t.label}`);
     assertBreakdown(figures, `合計金額行 ${t.label}`);
     const scope = TOTAL_SCOPE.get(t.label);
@@ -612,10 +612,10 @@ export function parseDailyMarginText(
 /** 市場小計が属する分類 (直前の分類合計行から継承。順序検証つき)。 */
 function currentScope(totalShs: readonly TotalLine[], index: number): MarginDailyTotalScope {
   for (let i = index - 1; i >= 0; i--) {
-    const scope = TOTAL_SCOPE.get(totalShs[i].label);
+    const scope = TOTAL_SCOPE.get(totalShs[i]!.label);
     if (scope) return scope;
   }
-  fail(`合計 ${totalShs[index].label} の属する分類がありません`);
+  fail(`合計 ${totalShs[index]!.label} の属する分類がありません`);
 }
 
 /** 合計セクションの順序検証 (分類合計→市場小計の順。投信等小計は 0 件省略あり)。 */

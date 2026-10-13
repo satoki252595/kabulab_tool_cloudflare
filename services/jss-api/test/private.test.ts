@@ -6,8 +6,9 @@ import { stubD1, stubR2, yutaiFacts } from "./helpers";
 
 function env(overrides: Partial<PrivateEnv> = {}): PrivateEnv {
   return {
-    DB: stubD1(() => [{ code: "7203", data_type: "jsf_zandaka", loan_bal: 100 }]),
+    DB: stubD1(sql => sql.includes("jss_raw_files") ? [] : [{ code: "7203", data_type: "jsf_zandaka", loan_bal: 100 }]),
     RAW: stubR2({}),
+    VWAP: stubR2({"margin/dates.json": []}),
     SUPPLY: stubR2({
       "supply/7203.json": {
         code: "7203",
@@ -125,7 +126,7 @@ describe("内部面の需給", () => {
   });
 
   it("銘柄コードが4桁でなければ 400", async () => {
-    const res = await app.request("/v1/supply/72031", AUTH, env());
+    const res = await app.request("/v1/supply/720311", AUTH, env());
     expect(res.status).toBe(400);
   });
 });

@@ -8,7 +8,7 @@
 | Worker | 用途 | bind | 認証 |
 |---|---|---|---|
 | `jss-api-public` | 公開 REST。`commercial-ok` 全量と `factual-cite` のメタのみ | `DB` / `RAW` | 無認証 |
-| `jss-api-private` | 内部 REST + **MCP**。`personal-only` を含む全量 | `DB` / `RAW` / `SUPPLY` | APIキー必須 |
+| `jss-api-private` | 内部 REST + **MCP**。`personal-only` を含む全量 | `DB` / `RAW` / `SUPPLY` / `VWAP` | APIキー必須 |
 
 **公開面に `jp-stock-supply` と `vwap-data` を bind していないのは意図的**で、
 コードにバグがあっても personal-only のオブジェクトへ物理的に到達できないようにする
@@ -109,3 +109,33 @@ private nokey 401, 100% active.
 - private `b48fdc77-45d6-4d15-b94c-cc95e80b1e3d` exit 0 — `/health` 200、
   無キー 401 `unauthorized` (unauth 契約どおり)。
 - 各 ONE deploy (`--keep-vars`, OAuth 正規 account)。再実施なし。
+
+### 日次JPX信用残・逆日歩の実体
+
+内部面だけが既存 `vwap-data` を `VWAP` として参照する。`jpx_margin` は
+`margin/dates.json` と `margin/daily/<基準日>.json` を検証し、株数 `shares` と
+円金額 `amounts`、一般/制度別の買残・売残を原定義のまま返す。
+`loan_bal` / `stock_bal` への置換はしない。`source` は原本SHA・保管ページ・
+基準日・公表日を含む。元snapshotに取得時計がないため `fetched_at` と、
+JPX単独seriesの `updated` は `null`。公表日を取得時計に転用しない。
+
+JPX時系列は基準日indexの新しい順20日で区切る。`meta.cursor` が非nullなら
+次回に同じ `series` / `from` / `to` と `cursor=<その値>` を渡す。
+REST/MCPは共通readerを使用し、終端は `cursor: null`。
+種類省略の混在応答ではJSFも同じ日付窓へ絞り、ページ間で同日を重複させない。
+4文字コードに加えJPX原文の5文字コードで種類株等を区別できる。
+日付は実在する暦日、cursorは同じJPX基準日indexに存在する値のみを受け付ける。
+indexは128KiB、日次snapshot/既存JSF seriesは8MiB、日次明細は10,000行を上限に、
+bodyを読みながらsize・総計・銘柄同定を検証する。超過/破損時は部分成功にしない。
+
+`jsf_shina` latestは定期 `supply_daily` が保存する全体CSVを、既存D1原本索引から
+1SELECT＋RAW 1GETで読み、全bytes SHAを照合してCP932をfatal復号する。
+貸株超過株数・最高/当日/前日料率・品貸日数・備考・制限・応札倍率・取引所を
+返す。同一コードの取引所を集約せず、`limit` は明細行数である。
+実保存CSVの2行目注記に従い、最高/前日料率は1日1株・口当り、
+当日料率は品貸日数を乗じた元値として返し、単日料率へ換算しない。
+掲載対象外コードの不在を逆日歩0とは解釈しない。空欄/マスクは `null`。
+基準日はCSVの貸借申込日、原本取得時計は `source.first_fetched_at` /
+`last_fetched_at`（Unix秒）、索引日付は `index_data_date` として区別する。
+時系列は同じ定期producerの既存 `jp-stock-supply` を参照し、貸借残高とは別定義を保つ。
+追加の外部データ取得・複製・新しいDB列・公開面のbindingはない。

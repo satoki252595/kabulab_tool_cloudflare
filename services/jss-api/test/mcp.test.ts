@@ -8,9 +8,10 @@ const env: PrivateEnv = {
   DB: stubD1((sql) =>
     sql.includes("jss_supply_latest")
       ? [{ code: "7203", data_type: "jsf_zandaka", loan_bal: 100 }]
-      : [{ dataset: "supply_jsf", latest_data_date: "2026-09-10" }],
+      : sql.includes("jss_raw_files") ? [] : [{ dataset: "supply_jsf", latest_data_date: "2026-09-10" }],
   ),
   RAW: stubR2({}),
+  VWAP: stubR2({"margin/dates.json": []}),
   SUPPLY: stubR2({
     "supply/7203.json": {
       code: "7203",
@@ -55,7 +56,7 @@ describe("MCP", () => {
 
   it("不正な銘柄コードは isError で返す（例外を外へ出さない）", async () => {
     const res = await handleMcp(
-      rpc("tools/call", { name: "jp_supply_series", arguments: { code: "72031" } }), env,
+      rpc("tools/call", { name: "jp_supply_series", arguments: { code: "720311" } }), env,
     );
     const body = await res.json() as { result: { isError: boolean } };
     expect(body.result.isError).toBe(true);

@@ -7,13 +7,24 @@
  * 本番の JSF/JPX 混在有無は未確定のため、混在ケースは契約上の振る舞い
  * (両出典を返す) を固定する。
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import app from "../src/private";
 import { ATTRIBUTION } from "../src/shared/envelope";
 import { TOOLS, handleMcp } from "../src/shared/mcp";
 import type { PrivateEnv } from "../src/shared/types";
 import { stubD1, stubR2 } from "./helpers";
+
+// 出典/filter契約を検査するunit境界。実原本parserは別testで直接検査する。
+vi.mock("../src/shared/jpx-margin", async (original) => ({
+  ...await original<typeof import("../src/shared/jpx-margin")>(),
+  marginLatest: async (bucket: R2Bucket) => (await bucket.get("test/latest"))!.json(),
+  marginSeries: async (bucket: R2Bucket, _code: string, options: {from?: string; to?: string}) => {
+    const points = await (await bucket.get("test/points"))!.json<Array<{d: string}>>();
+    return { points: points.filter(p => (!options.from || p.d >= options.from) && (!options.to || p.d <= options.to)), cursor: null };
+  },
+}));
+vi.mock("../src/shared/shina", () => ({shinaLatest: async (env: PrivateEnv) => (await env.RAW.get("test/latest"))!.json()}));
 
 const JSF = ATTRIBUTION["日証金"] as string;
 const JPX = ATTRIBUTION.JPX as string;
@@ -33,18 +44,14 @@ const JPX_ROW: LatestRow = { code: "7203", data_type: "jpx_margin", data_date: "
 
 /** D1 スタブ。WHERE data_type = ? のバインドを尊重して絞る。 */
 function dbWithRows(rows: LatestRow[]) {
-  return stubD1((_sql, params) => {
-    if (params.length >= 1 && typeof params[0] === "string") {
-      return rows.filter((r) => r.data_type === params[0]);
-    }
-    return rows;
-  });
+  return stubD1(() => rows.filter(r => !["jsf_shina", "jpx_margin"].includes(String(r.data_type))));
 }
 
 function envWith(o: { rows?: LatestRow[]; supply?: Record<string, unknown> }): PrivateEnv {
   return {
     DB: dbWithRows(o.rows ?? []),
-    RAW: stubR2({}),
+    RAW: stubR2({"test/latest": (o.rows ?? []).filter(r => r.data_type === "jsf_shina")}),
+    VWAP: stubR2({"test/latest": (o.rows ?? []).filter(r => r.data_type === "jpx_margin"), "test/points": ((o.supply?.["supply/7203.json"] as {series?: Record<string, unknown>} | undefined)?.series?.jpx_margin) ?? []}),
     SUPPLY: stubR2(o.supply ?? {}),
     SURFACE: "private",
     JSS_API_KEYS: "secret-key",

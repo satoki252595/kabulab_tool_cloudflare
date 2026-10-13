@@ -38,6 +38,7 @@ function privateEnv(): PrivateEnv {
       return BARS;
     }),
     RAW: stubR2({}),
+    VWAP: stubR2({"margin/dates.json": []}),
     SUPPLY: stubR2({}),
     SURFACE: "private",
     JSS_API_KEYS: "secret-key",
@@ -293,6 +294,7 @@ describe("OHLCV edge キャッシュ", () => {
         return BARS;
       }),
       RAW: stubR2({}),
+      VWAP: stubR2({"margin/dates.json": []}),
       SUPPLY: stubR2({}),
       SURFACE: "private",
       JSS_API_KEYS: "secret-key",

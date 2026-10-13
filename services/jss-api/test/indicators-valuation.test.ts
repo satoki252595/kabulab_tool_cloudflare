@@ -81,6 +81,7 @@ function privateEnv(db: D1Database): PrivateEnv {
   return {
     DB: db,
     RAW: stubR2({}),
+    VWAP: stubR2({"margin/dates.json": []}),
     SUPPLY: stubR2({}),
     SURFACE: "private",
     JSS_API_KEYS: "secret-key",

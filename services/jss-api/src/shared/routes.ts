@@ -10,12 +10,13 @@ import {
 } from "./ohlcv-cache";
 import {
   SupplyFilterError,
-  assertSeriesObject,
+  fetchSupplyLatest,
+  fetchSupplySeries,
   parseSupplyFilter,
-  seriesPointsArray,
   supplySourcesFromLatest,
   supplySourcesFromSeries,
 } from "./supply";
+import { isSupplyCode } from "./jpx-margin";
 import type { AnyEnv, PrivateEnv } from "./types";
 
 /** 外部の月は実月のみ。公式「随時」は NULL と schedule で明示する。 */
@@ -275,17 +276,7 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
       }
       throw e;
     }
-    const stmt = dataType
-      ? c.env.DB.prepare(
-          "SELECT code, data_type, data_date, loan_bal, stock_bal, ratio, turn_days," +
-            " r2_key, license_tag FROM jss_supply_latest WHERE data_type = ?" +
-            " ORDER BY code LIMIT ?",
-        ).bind(dataType, limit)
-      : c.env.DB.prepare(
-          "SELECT code, data_type, data_date, loan_bal, stock_bal, ratio, turn_days," +
-            " r2_key, license_tag FROM jss_supply_latest ORDER BY code, data_type LIMIT ?",
-        ).bind(limit);
-    const { results } = await stmt.all<Record<string, unknown>>();
+    const results = await fetchSupplyLatest(c.env, dataType, limit);
     // 出典は実際に返した行から算出する。未知 type の行は throw → 500。
     return c.json(
       envelope(results, { sources: supplySourcesFromLatest(results), licenses: ["personal-only"] }),
@@ -294,18 +285,20 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
 
   app.get("/v1/supply/:code", async (c) => {
     const code = c.req.param("code");
-    if (!isValidCode(code)) {
-      return c.json(errorBody("銘柄コードは4桁", "invalid_code"), 400);
+    if (!isSupplyCode(code)) {
+      return c.json(errorBody("銘柄コードは4文字またはJPX原文5文字", "invalid_code"), 400);
     }
     // filter 検証は R2 get より前。不正 filter は欠損オブジェクト時も
     // 404 に、壊れ payload 時も 500 に変化せず契約どおり 400 を返す。
     let wanted: string | undefined;
     let from: string | undefined;
     let to: string | undefined;
+    let cursor: string | undefined;
     try {
       wanted = parseSupplyFilter("series", c.req.query("series"));
       from = parseSupplyFilter("from", c.req.query("from"));
       to = parseSupplyFilter("to", c.req.query("to"));
+      cursor = parseSupplyFilter("cursor", c.req.query("cursor"));
     } catch (e) {
       if (e instanceof SupplyFilterError) {
         const code2 = e.filterName === "series" ? "invalid_series" : "invalid_range";
@@ -313,26 +306,14 @@ export function mountPrivate(app: Hono<{ Bindings: PrivateEnv }>) {
       }
       throw e;
     }
-    const object = await c.env.SUPPLY.get(`supply/${code}.json`);
-    if (!object) return c.json(errorBody("見つからない", "not_found"), 404);
-    const payload = (await object.json()) as Record<string, unknown>;
-    const series = assertSeriesObject(payload.series);
-    const filtered: Record<string, Array<Record<string, unknown>>> = {};
-    for (const [name, value] of Object.entries(series)) {
-      if (wanted && name !== wanted) continue;
-      const points = seriesPointsArray(name, value);
-      filtered[name] = points.filter((p) => {
-        if (from && p.d < from) return false;
-        if (to && p.d > to) return false;
-        return true;
-      });
+    let result;
+    try { result = await fetchSupplySeries(c.env, code, { wanted, from, to, cursor }); }
+    catch (e) {
+      if (e instanceof SupplyFilterError) return c.json(errorBody(e.message, "invalid_range"), 400);
+      throw e;
     }
-    return c.json(
-      envelope({ code, updated: payload.updated, series: filtered }, {
-        sources: supplySourcesFromSeries(filtered),
-        licenses: ["personal-only"],
-      }),
-    );
+    if (!result) return c.json(errorBody("見つからない", "not_found"), 404);
+    return c.json(envelope(result.data, { cursor: result.cursor, sources: supplySourcesFromSeries(result.data.series), licenses: ["personal-only"] }));
   });
 
   // 日足 OHLCV（提供元の OHLCV（分割調整済み）。adj_* は配当込 total-return）。出来高の現株数補正なし。Yahoo 由来のため内部面のみ。

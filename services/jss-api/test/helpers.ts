@@ -40,11 +40,14 @@ export function stubR2(objects: Record<string, unknown>) {
     async get(key: string) {
       if (!(key in objects)) return null;
       const value = objects[key];
+      const bytes = value instanceof Uint8Array ? value : new TextEncoder().encode(JSON.stringify(value));
       return {
+        size: bytes.byteLength,
+        async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); },
         async json() {
           return value;
         },
-        body: new Blob([JSON.stringify(value)]).stream(),
+        body: new Blob([bytes]).stream(),
         httpMetadata: { contentType: "application/json" },
       };
     },

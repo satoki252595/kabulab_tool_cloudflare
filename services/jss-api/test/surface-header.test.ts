@@ -21,7 +21,7 @@ it("認証後のMCP・REST・原本Responseにsurfaceを付け、401と公開面
     } as unknown as R2Bucket,
   };
   const key = randomBytes(32).toString("hex");
-  const internal: PrivateEnv = { ...common, SUPPLY: stubR2({}), SURFACE: "private", JSS_API_KEYS: key };
+  const internal: PrivateEnv = { ...common, VWAP: stubR2({"margin/dates.json": []}), SUPPLY: stubR2({}), SURFACE: "private", JSS_API_KEYS: key };
   const external: PublicEnv = { ...common, SURFACE: "public" };
   const auth = { headers: { "X-API-Key": key } };
   const initialize = { jsonrpc: "2.0", id: 1, method: "initialize" };
