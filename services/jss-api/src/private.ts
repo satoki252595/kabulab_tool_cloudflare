@@ -42,8 +42,8 @@ app.use("*", async (c, next) => {
   if (!isAuthorized(c.env, c.req.header("X-API-Key"))) {
     return c.json(errorBody("APIキーが不正", "unauthorized"), 401);
   }
-  c.header("X-Surface", "private");
   await next();
+  c.header("X-Surface", "private");
 });
 
 app.post("/mcp", (c) => handleMcp(c.req.raw, c.env));
