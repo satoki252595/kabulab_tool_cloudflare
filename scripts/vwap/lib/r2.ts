@@ -132,7 +132,7 @@ export async function r2GetVersion(key: string): Promise<{ body: string; etag: s
 }
 
 /** 原本をUTF-8へ変換せず全bytesで読む。missing/unknown契約はJSON経路と共通。 */
-export async function r2GetBytesVersion(key: string, bucket: string | undefined): Promise<{ body: Uint8Array; etag: string } | null> {
+export async function r2GetBytesVersion(key: string, bucket: string | undefined, opts?: { singleAttempt?: boolean }): Promise<{ body: Uint8Array; etag: string } | null> {
   if (LOCAL_OUT) {
     try {
       const body = await fs.readFile(path.join(LOCAL_OUT, key));
@@ -151,7 +151,7 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined)
     // GET は mutation と異なり再読しても適用結果が曖昧にならない。
     // nativeな既知5xx familyだけ既存backoffへ接続し、認可/404/未知schemaは即STOP。
     const r = await retry(() => client().send(new GetObjectCommand({ Bucket: bucket, Key: key })),
-      3, 1000, (e) => {
+      opts?.singleAttempt === true ? 1 : 3, 1000, (e) => {
         const { code, status } = r2CauseOf(e);
         return ["InternalError", "InternalServerError", "ServiceUnavailable", "SlowDown"].includes(code) &&
           [500, 502, 503, 504].includes(status as number);

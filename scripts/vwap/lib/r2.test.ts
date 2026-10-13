@@ -241,4 +241,13 @@ describe("binary原本も既存CAS/unknown契約を共有する", () => {
     await expect(r2PutBytes("raw/file.pdf", new Uint8Array([255]), null, undefined, "application/pdf")).rejects.toThrow("bucket");
     expect(send).toHaveBeenCalledTimes(1);
   });
+  it("明示singleAttemptのbinary GETは既知5xxでも再読しない", async () => {
+    vi.useFakeTimers();
+    const send = vi.spyOn(S3Client.prototype, "send");
+    send.mockRejectedValue(svcError("InternalError", 500));
+    const rejected = expect(r2GetBytesVersion("raw/file.pdf", "raw-bucket", { singleAttempt: true })).rejects.toThrow("InternalError");
+    await vi.runAllTimersAsync();
+    await rejected;
+    expect(send).toHaveBeenCalledTimes(1);
+  });
 });
