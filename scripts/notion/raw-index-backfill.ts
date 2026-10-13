@@ -226,6 +226,7 @@ export async function readRawIndex(sha: string): Promise<RawIndexRow | null> {
   if (!/^[a-f0-9]{64}$/.test(sha)) throw new Error("[raw-backfill] D1 SHA不正");
   const response = await fetch(d1HttpQueryUrl(), { method: "POST", headers: {
     Authorization: `Bearer ${sharedEnv.CLOUDFLARE_API_TOKEN()}`, "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(60_000),
     body: JSON.stringify({ sql: "SELECT sha256,r2_bucket,r2_key,source,datatype,scope,doc_id,code,data_date,ext,size_bytes,license_tag,convert_status,first_fetched_at,last_fetched_at FROM jss_raw_files WHERE sha256=?", params: [sha] }) });
   if (!response.ok) throw new Error(`[raw-backfill] D1 read HTTP ${response.status}`);
   const rows = assertD1SingleQueryResponse(await response.json());
@@ -279,6 +280,7 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
     await io.put(key, body, previous === null ? null : previous.etag, io.receiptBucket, "application/json");
     const read = await controlGet(key);
     if (read === null || !Buffer.from(read.body).equals(Buffer.from(body))) throw new Error("[raw-backfill] receipt全文読戻し不一致。再送禁止");
+    await io.emit({ phase: "receipt_verified", key, sha256: digest(body), bytes: body.length });
     return read;
   };
   const parseJson = (version: NonNullable<Version>): unknown => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(version.body));
@@ -314,7 +316,10 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
   const readBody = async (key: string, item: RawItem) => {
     checkClock(); stats.rawGets++;
     const got = await io.get(key, io.rawBucket);
-    if (got) { stats.rawGetBytes += got.body.length; validateBody(got.body, item); }
+    if (got) {
+      stats.rawGetBytes += got.body.length; validateBody(got.body, item);
+      await io.emit({ phase: "raw_verified", sha256: item.sha256, bytes: got.body.length });
+    }
     return got;
   };
   let budgetReserved = 0, stoppedByBudget = false, budgetStopReason: "seconds" | "bytes" | null = null;
@@ -430,9 +435,22 @@ async function main() {
   const receipt = await fs.open(args.get("out")!, "wx", 0o600), before = notionStats();
   const startedAt = Date.now();
   let lastPhase = "starting";
+  let lastRawVerified: { sha256: string; bytes: number } | null = null;
+  let lastProgressAt = 0;
   let inventory = { prefix: "", queries: 0, currentPartitionRows: 0, acceptedRows: 0, responseRows: 0 };
   const emit = async (record: object) => { const phase = (record as { phase?: unknown }).phase; if (typeof phase === "string") lastPhase = phase;
-    await receipt.write(`${JSON.stringify(record)}\n`); await receipt.sync(); };
+    if (phase === "raw_verified") {
+      const { sha256, bytes } = record as { sha256: string; bytes: number };
+      lastRawVerified = { sha256, bytes };
+    }
+    await receipt.write(`${JSON.stringify(record)}\n`); await receipt.sync();
+    // 公開runner logには原本key/URL/bodyを出さず、停止前の送信境界だけ残す。
+    if (["manifest", "receipt_inflight", "receipt_verified", "raw_verified", "raw_inflight", "index_inflight", "verified"].includes(lastPhase) &&
+        (lastPhase === "manifest" || Date.now() - lastProgressAt >= 10_000)) {
+      lastProgressAt = Date.now();
+      console.info(JSON.stringify({ phase: lastPhase, at: new Date().toISOString() }));
+    }
+  };
   const observeInventory = async (record: import("../../src/shared/notion-archive/raw-files.js").RawInventoryProgress) => {
     inventory = { prefix: record.prefix, queries: record.queries, currentPartitionRows: record.partitionRows, acceptedRows: record.acceptedRows, responseRows: record.responseRows };
     await emit(record);
@@ -448,7 +466,7 @@ async function main() {
   } catch (error) {
     // 生URL/body/causeをログへ出さない。remote stateに結果不明phaseが残る。
     const after = notionStats();
-    const failure = { status: "stopped", ...safeRawFailure(error), lastPhase, inventory, elapsedMs: Date.now() - startedAt,
+    const failure = { status: "stopped", ...safeRawFailure(error), lastPhase, lastRawVerified, inventory, elapsedMs: Date.now() - startedAt,
       notionRequests: after.requests - before.requests, notionRateLimited: after.rateLimited - before.rateLimited,
       notionTransientRetries: after.transientRetries - before.transientRetries, upstreamGets: 0, resend: 0 };
     await emit({ ...failure, phase: "stopped" });

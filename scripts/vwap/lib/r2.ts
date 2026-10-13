@@ -101,7 +101,7 @@ export async function r2PutBytes(key: string, body: Uint8Array, observedVersion:
   try {
     res = await client().send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType,
       ...(observedVersion === null ? { IfNoneMatch: "*" } : { IfMatch: observedVersion }),
-    }));
+    }), { abortSignal: AbortSignal.timeout(60_000) });
   } catch (e) {
     const { code, status } = r2CauseOf(e);
     if (isExplicitRejection(code, status)) throw new R2PutRejectedError(key, code, status, e);
@@ -150,7 +150,7 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined,
   try {
     // GET は mutation と異なり再読しても適用結果が曖昧にならない。
     // nativeな既知5xx familyだけ既存backoffへ接続し、認可/404/未知schemaは即STOP。
-    const r = await retry(() => client().send(new GetObjectCommand({ Bucket: bucket, Key: key })),
+    const r = await retry(() => client().send(new GetObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: AbortSignal.timeout(60_000) }),
       opts?.singleAttempt === true ? 1 : 3, 1000, (e) => {
         const { code, status } = r2CauseOf(e);
         return ["InternalError", "InternalServerError", "ServiceUnavailable", "SlowDown"].includes(code) &&

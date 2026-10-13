@@ -13,7 +13,7 @@ Issue #348。対象は保存済み422が確定した593A・598A・603A・604A・
 - `target=intra`、`intra_codes`は上記5コードの重複なし非空部分集合。from/toは両方必須、`--range`/`--limit`混在不可。対象外activeコードも拒否する。
 - 実clockの60日前以降で最初の公式JP営業日09:00から、直近閉場営業日の引け15:30+1秒exclusiveまで。公表済み市場カレンダーと既存厳格ISO helperを使用し、休日・未来・不明年・短縮窓はSTOPする。
 - 2026-10-14寄り前の窓は`2026-08-17T00:00:00Z`〜`2026-10-13T06:30:01Z`。保存実原本には15:30のauction timestampがあるため、06:30:00 exclusiveでは最終バーを落とす。
-- 原URLは`interval=5m&period1=...&period2=...`。range/eventsへ読み替えず、原本とsummary各銘柄の原SHA・実clock・全raw timestamp範囲を保存する。全raw行の営業日・市場時間・5分刻み・昇順・窓内を検査し、null/v0除去前に範囲外があればSTOPする。currency/issuer/EQUITY/interval/timezone不一致、末尾営業日の遅れ、解析後emptyも回復未成立。from/toの秒境界と、実受領clockの小数秒を混同しない。
+- 原URLは`interval=5m&period1=...&period2=...`。range/eventsへ読み替えず、原本とsummary各銘柄の原SHA・実clock・全raw timestamp範囲を保存する。全raw行の営業日・市場時間・5分刻み・昇順・窓内を検査し、null/v0除去前に範囲外があればSTOPする。11:30より後/12:30より前の昼休みは、同長のOHLCV全5配列が厳密nullのスロットだけを欠測paddingと認識し、件数をproofに保持する。部分null・実値・volume0・他時間帯は許容しない。currency/issuer/EQUITY/interval/timezone不一致、末尾営業日の遅れ、解析後emptyも回復未成立。from/toの秒境界と、実受領clockの小数秒を混同しない。
 - 通常5m同様events=false。日足corporateEventsや日足確定証拠には流用しない。原本物理照合前はPUT0、旧barの未知フィールド/範囲外保持と既存保持期間剪定を維持し、既知ETag条件付きPUTのunknown/rejectedは再送せずSTOPする。
 
 ## 実行と検証
@@ -27,6 +27,12 @@ gh workflow run vwap-ingest.yml --ref main \
   -f intra_to_exclusive=2026-10-13T06:30:01Z
 ```
 
-関連7suite194tests、全repo tsc、所有ファイルeslint/diffcheckはPASS。対象/期間/休日/auction境界、実clock .123/.987秒、422 captureの単発保管、窓不一致/stale/非EQUITY/全v0未成立、原本unknown、PUT unknown、既存barフィールド保持を回帰。保存422原文5件と旧R2本文5件のoffline回帰（全120members SHA、既存3,592bars全フィールド保持）、保存日足5原本のEQUITY同定receiptはprivate保存先に残し、原本文・署名URLはGitへ追加しない。
+関連7suite203tests、全repo tsc、所有ファイルeslint/diffcheckはPASS。対象/期間/休日/auction境界、実clock .123/.987秒、422 captureの単発保管、窓不一致/stale/非EQUITY/全v0未成立、原本unknown、PUT unknown、既存barフィールド保持を回帰。保存422原文5件と旧R2本文5件のoffline回帰（全120members SHA、既存3,592bars全フィールド保持）、保存日足5原本のEQUITY同定receiptはprivate保存先に残し、原本文・署名URLはGitへ追加しない。
 
 追加負荷は明示回復時の最大5source GET、既存batch原本1gzipとsummary、最大5R2 GET/5CAS PUT（事後の全文照合は追加5GET）。通常CronのGET/走査増分0。最終完了には実5件の原本物理照合、summary全件成功/unknown0、R2全body SHAと旧履歴保持の照合が必要。
+
+## 初回明示runの保存原本診断
+
+[run 38460357230](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/38460357230)は593Aの1sourceだけを取得し、資格guardで書込前STOP。written0、後4未着手、unknown/rejected0。原本132,460B・SHA `ef0912bcebeb78a25709e9ab64ef1d44535c792ae7d313ad074214f36846db3f`、Notion rawpage `3f8d74ff-84cd-81f8-ad65-c774d64603a2` の物理gzip/全body SHA照合済み。
+
+要求/銘柄/JPY/EQUITY/interval/timezone・2,965全timestampの窓/5分刻み/順序/営業日は適格だった。追加した市場時間guardが、11:35–12:25の418slots（全OHLCV厳密null）を誤って拒否した。昼休みの完全nullだけを区別する最小修正後、同じ実SHA/clockから既存parserが2,332barsを抽出し、旧845timestamps全件を保持してmergeできることをoffline確認。593A原本の再取得は不要、残4のみ別の明示取得対象として扱う。本番CAS適用/事後SHA照合は別途未完。

@@ -12,6 +12,7 @@ function capture(stamps = [window.period1, window.period2 - 1], over: object = {
     url: `https://query1.finance.yahoo.com/v8/finance/chart/593A.T?interval=5m&period1=${window.period1}&period2=${window.period2}`,
     bytes: new TextEncoder().encode(JSON.stringify({ chart: { result: [{
       meta: { symbol: "593A.T", currency: "JPY", instrumentType: "EQUITY", dataGranularity: "5m", exchangeTimezoneName: "Asia/Tokyo" }, timestamp: stamps,
+      indicators: { quote: [Object.fromEntries(["open", "high", "low", "close", "volume"].map(key => [key, stamps.map(() => null)]))] },
     }], error: null } })), ...over };
 }
 describe("explicit five-code intra recovery", () => {
@@ -50,9 +51,25 @@ describe("explicit five-code intra recovery", () => {
   });
   it.each([
     [window.period1 - 300], [window.period2], [stamp("2026-10-12T00:00:00Z")],
-    [stamp("2026-10-13T03:00:00Z")], [window.period1 + 1], [window.period1, window.period1], [],
-  ])("rejects all out-of-window/holiday/lunch/misaligned/duplicate raw rows %j", (...stamps) => {
+    [stamp("2026-10-13T00:00:00Z") - 300], [window.period1 + 1], [window.period1, window.period1], [],
+  ])("rejects all out-of-window/holiday/other-market-hours/misaligned/duplicate raw rows %j", (...stamps) => {
     expect(() => proveIntraRecoveryCapture(capture(stamps), window, "593A.T")).toThrow();
+  });
+  it("counts all-five-fields strict-null lunch padding without inventing a price/bar", () => {
+    const source = capture([window.period1, stamp("2026-10-13T03:00:00Z"), window.period2 - 1]);
+    expect(proveIntraRecoveryCapture(source, window, "593A.T")).toMatchObject({ rawBars: 3, nonTradingNullRows: 1 });
+  });
+  it.each(["partial-null", "zero-volume", "real-value", "missing-field", "invalid-cell-type", "short-array", "wrong-array-shape"])("holds unsupported lunch %s instead of treating it as padding", mode => {
+    const source = capture([window.period1, stamp("2026-10-13T03:00:00Z"), window.period2 - 1]);
+    const json = JSON.parse(new TextDecoder().decode(source.bytes)), quote = json.chart.result[0].indicators.quote[0];
+    if (mode === "partial-null") quote.close[1] = 1;
+    if (mode === "zero-volume") quote.volume[1] = 0;
+    if (mode === "real-value") for (const key of Object.keys(quote)) quote[key][1] = 1;
+    if (mode === "missing-field") delete quote.volume;
+    if (mode === "invalid-cell-type") quote.volume[1] = "undefined";
+    if (mode === "short-array") quote.volume.pop();
+    if (mode === "wrong-array-shape") quote.volume = null;
+    expect(() => proveIntraRecoveryCapture(capture(undefined, { bytes: new TextEncoder().encode(JSON.stringify(json)) }), window, "593A.T")).toThrow();
   });
   it("rejects range=60d capture, wrong issuer, currency and failure without promoting it", () => {
     const original = capture();

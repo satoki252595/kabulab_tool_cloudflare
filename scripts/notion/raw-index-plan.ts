@@ -27,6 +27,7 @@ const sha = (body: Uint8Array) => createHash("sha256").update(body).digest("hex"
 export async function readD1RawIndexes(shas: string[]): Promise<IndexRow[]> {
   if (shas.length < 1 || shas.length > 100 || shas.some((value) => !/^[a-f0-9]{64}$/.test(value))) throw new Error("D1 SHA限定読取の引数が不正です");
   const response = await fetch(d1HttpQueryUrl(), {
+    signal: AbortSignal.timeout(60_000),
     method: "POST", headers: { Authorization: `Bearer ${sharedEnv.CLOUDFLARE_API_TOKEN()}`, "Content-Type": "application/json" },
     body: JSON.stringify({ sql: `SELECT sha256,r2_bucket,r2_key,size_bytes,source,datatype,scope,data_date,license_tag FROM jss_raw_files WHERE sha256 IN (${shas.map(() => "?").join(",")})`, params: shas }),
   });
