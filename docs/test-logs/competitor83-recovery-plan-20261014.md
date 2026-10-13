@@ -177,3 +177,19 @@ pnpm exec tsx --env-file-if-exists=.env services/yuho-quant/data-scripts/recover
 2026-10-14 03:06 JSTに83/83社・83batch・4,150問が終了し、モデルprocessは終了した。各出力の入力SHA/元有報/判定版/質問集合/有限実確率/採用relation集合を全件検証し、全83出力gzipを共有archiveへ物理保管して全bytes照合済み。先行5社の成功出力は再利用し、再推論しなかった。入力と出力を固定した私有review一覧を生成し、品質未承認（`qualityAccepted=false`）、業務PATCH0を明記した。
 
 実モデル経過の合計は1,250.13秒（20分50秒、先行5社のロードを含む）。最大process tree RSS8.796GiB、監視中memory free最少48%、開始前比swap増0MiB、swapout増0。追加モデル取得0、有料AI通信0。先行5社からの時間見積もりより後半は長くなったため、実測合計を最終記録として使う。モデル推論の成功と候補品質の合格を分け、現候補漏れが残ったまま本番修復完了とは報告しない。
+
+## 先行5社の原典レビューと新しい閾値較正
+
+先行5社の旧yes64関係を保存済み事業原文同士で確認した。明確な主業不一致5、明確な矛盾なし39、代替性未確定20。既知5誤判定は141A→7140/2585、145A→9250/3676/3909で、確率は全て0.5未満だった。閾値0.5以上は28関係、うち24は明確な矛盾を認めず、130A→4591と145A→4386/3962/155Aの4関係は未確定である。原典のサービス・顧客市場を再読しても同一顧客にとっての代替購入を確定できなかったため、130A/145Aの2社全体を今回の適用からHOLDする。未知の候補をtrueで埋めない。
+
+既存gold122組（正97/負25、79社）の元docを完全に揃えて新たに較正した。78社は固定入力の元docと一致し、6920のみ保存原本S100WQ7F（旧⑤ZIPとNotion本文486文字がSHA完全一致）を再利用した。上流GET0、追加モデル取得0、有料AI0。同じモデル・質問で122問/58batch、32.68秒。閾値yesMin=0.5/noMax=0.09はTP78/FP5/TN20/FN19、precision=0.939759、recall=0.804124。旧0.25ではTP90/FP9/TN16/FN7、precision=0.909091、recall=0.927835だった。元の歴史perPairを発見したとは扱わず、保存原本による新測定として記録する。goldにもFP5が残り、今回83社全体の新しい実精度保証や候補外recallの保証ではない。
+
+新較正入力SHAは`e7735381070a95bd4fed11402eac720ea482fcfb5aba6b7f28afa37905e80243`、全122生確率gzip SHAは`69dafd69fcb644a00c9af9abe8c4e91a1624e4fdc4f7d9cc8898c00ea5c7f130`。共有物理保管と全bytes照合済み。旧較正版/ownedソースは編集前に物理PRE保全した。
+
+## 最終適用計画は81社、2社HOLD
+
+判定版は`cand-v1|Qwen3.5-4B@851bf6e/semif-mlx|cal-thr050-eval122-20261014`。候補・モデル・質問・元有報・生確率・実行時刻・原判定日を保持し、追加推論0で83出力を再バンド化した。全83の帯はyes578/no1886/uncertain1686。旧全入力/出力を上書きしない。130A/145Aは未判定のまま保持し、固定81社以外へのPATCHをしない。完了receiptは`verified:81`、`held:["130A","145A"]`、`oldChanged:0`を要求する。
+
+私有の最終計画は`tmp/feature-audit-20261013/competitor83-recovery-thr050-final/`。input SHAは`7764ff49e212ad597268dce72535855c9fa41e34b7c1f5768df774d527d34a1e`、output SHAは`48b903bb860a543f9dc7cbcd79c160e2b6e244c1d1efd512c14ec37c945f8f1e`。`review-manifest.json`にselected81/held2と未確定4関係の元doc/本文SHA/理由を保存する。物理PRE、旧input/output、EOF余分空行だけの移行、Set型注釈だけの移行、較正変更の各receiptを別々に保全した。型注釈移行はTypeScriptの出力JavaScriptがbyte一致することを確認し、再推論・判定変更0で新source/input/outputへ再結合した。初期dir・cosmetic dir・thr050 dirは適用せず保全する。
+
+通常callerは`biztag.ts competitorsCommand → runCompetitors → processCompanyCompetitors → shared writeCompetitorRelation`、単発回復はrecovery CLIから同じpure process/shared writerへ進む。版のlegacy2成分/較正3成分を厳密解析し、未知suffixは同値とみなさない。候補版/model/docが変われば既存の再判定条件を維持するが、閾値較正版だけの違いでは全社再推論を起動しない。明示codes/only-unjudgedの動作は維持する。今回normal全社jobは実行しないため、HOLD2社は別途の原典確認待ちになる。

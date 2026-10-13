@@ -38,6 +38,8 @@ export interface CompetitorCalibration {
   candidateVersion: string;
   /** 1往復あたりの最大質問数 (judge ごとに較正ファイルで指定。既定20)。 */
   batchSize: number;
+  /** 閾値だけの較正版。候補/model入力の再推論条件とは分離する。 */
+  decisionVersion?: string;
 }
 
 interface CalibrationFileShape {
@@ -50,6 +52,7 @@ interface CalibrationFileShape {
   candidateVersion: string;
   /** 省略可 (既定20。既存 calibration.json との後方互換のため)。 */
   batchSize?: number;
+  decisionVersion?: string;
 }
 
 function isCalibrationFileShape(v: unknown): v is CalibrationFileShape {
@@ -74,7 +77,8 @@ function isCalibrationFileShape(v: unknown): v is CalibrationFileShape {
     typeof caps === "object" &&
     typeof caps.tag === "number" &&
     typeof caps.ngram === "number" &&
-    (r.batchSize === undefined || typeof r.batchSize === "number")
+    (r.batchSize === undefined || typeof r.batchSize === "number") &&
+    (r.decisionVersion === undefined || (typeof r.decisionVersion === "string" && /^cal-[a-z0-9][a-z0-9.-]*$/.test(r.decisionVersion)))
   );
 }
 
@@ -122,5 +126,19 @@ export function loadCompetitorCalibration(judge: CompetitorJudge = "jev"): Compe
     candidatePostingCaps: json.candidatePostingCaps,
     candidateVersion: json.candidateVersion,
     batchSize: json.batchSize ?? DEFAULT_BATCH_SIZE,
+    ...(json.decisionVersion === undefined ? {} : { decisionVersion: json.decisionVersion }),
   };
+}
+
+/** Legacy 2成分と較正版3成分だけを解釈する。未知のsuffixを同値扱いしない。 */
+export function competitorInferenceVersion(version: string | null): string | null {
+  if (version === null) return null;
+  const parsed = /^(cand-v\d+)\|([A-Za-z0-9@/._-]+)(?:\|(cal-[a-z0-9][a-z0-9.-]*))?$/.exec(version);
+  return parsed === null ? null : `${parsed[1]}|${parsed[2]}`;
+}
+export function competitorDecisionVersion(calibration: CompetitorCalibration): string {
+  const base = `${calibration.candidateVersion}|${calibration.model}`;
+  const result = calibration.decisionVersion === undefined ? base : `${base}|${calibration.decisionVersion}`;
+  if (competitorInferenceVersion(result) === null) throw new Error("競合の判定版が不正");
+  return result;
 }
