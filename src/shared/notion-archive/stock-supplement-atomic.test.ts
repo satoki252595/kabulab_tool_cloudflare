@@ -15,9 +15,10 @@ const block = buildEvidenceBlock({ vocabVersion: "v1", docId: "S100YFQC", period
 const expected = buildSupplementProperties({ docId: "S100OLD", tagStatus: "判定済", tagDoc: "S100OLD 2025年3月期",
   vocabVersion: "v0", judgedAt: "2025-06-25", upstream: ["旧タグ"], judgeInput: "旧判定入力", evidenceText: "旧根拠" });
 const guard = vi.fn(async () => {});
+let requestNonce = 0;
 const old = { id: "old", type: "heading_3", has_children: false,
   heading_3: { rich_text: [{ plain_text: "事業タグの根拠（旧書類）" }], is_toggleable: true } };
-function setup(options: { badEvidence?: boolean; unknownAppend?: boolean; unknownPatch?: boolean; unknownRetire?: boolean; nestedEvidence?: boolean; badPost?: boolean; stalePre?: boolean; longProperty?: boolean } = {}) {
+function setup(options: { badEvidence?: boolean; unknownAppend?: boolean; unknownPatch?: boolean; unknownRetire?: boolean; nestedEvidence?: boolean; badPost?: boolean; stalePre?: boolean; longProperty?: boolean; reverseKeys?: boolean | "alternate" } = {}) {
   let patched = false;
   let pageReads = 0;
   const before = { id: "row", last_edited_time: "2026-10-14T00:00:00Z", properties: expected };
@@ -28,7 +29,8 @@ function setup(options: { badEvidence?: boolean; unknownAppend?: boolean; unknow
       pageReads++;
       if (patched && options.badPost) return before;
       if (options.stalePre && pageReads === 2) return { ...before, last_edited_time: "2026-10-14T01:00:00Z" };
-      return structuredClone(patched ? after : before);
+      const response = { ...structuredClone(patched ? after : before), request_id: `notion-read-${++requestNonce}` };
+      return options.reverseKeys === true || options.reverseKeys === "alternate" && pageReads % 2 === 0 ? reverseKeys(response) : response;
     }
     if (method === "GET" && path.startsWith("/pages/row/properties/")) return { results: [{ rich_text: { plain_text: "保存原文" } }], has_more: false, next_cursor: null };
     if (method === "GET" && path.startsWith("/blocks/row/children")) return { results: [{ ...old, has_children: options.nestedEvidence === true }], has_more: false, next_cursor: null };
@@ -63,11 +65,14 @@ function setup(options: { badEvidence?: boolean; unknownAppend?: boolean; unknow
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  requestNonce = 0;
   guard.mockResolvedValue(undefined);
   io.archive.mockResolvedValue({ pageId: "pre-archive", outcome: "recorded" });
   io.verify.mockResolvedValue(undefined);
 });
 const mutations = () => io.request.mock.calls.filter(([method]) => method !== "GET").map(([method, path]) => `${method} ${path}`);
+const reverseKeys = (value: unknown): unknown => Array.isArray(value) ? value.map(reverseKeys) : value !== null && typeof value === "object"
+  ? Object.fromEntries(Object.entries(value).reverse().map(([key, entry]) => [key, reverseKeys(entry)])) : value;
 
 describe("supplement evidence two-phase replacement", () => {
   it("physically verifies PRE and new full evidence before properties, then verifies properties before retiring old evidence", async () => {
@@ -143,5 +148,28 @@ describe("supplement evidence two-phase replacement", () => {
     await expect(replaceEvidenceBlock("row", block, input, expected, guard)).rejects.toThrow("PRE=pre-archive");
     expect(state.wasPatched()).toBe(true);
     expect(mutations()).toEqual(["PATCH /blocks/row/children", "PATCH /pages/row", "DELETE /blocks/old"]);
+  });
+  it("varying Notion request_id never changes PRE equality or the unknown-execution latch", async () => {
+    setup(); io.request.mockClear();
+    await replaceEvidenceBlock("row", undefined, input, expected, guard);
+    const first = io.archive.mock.calls[0][0];
+    const pre = JSON.parse(new TextDecoder().decode(first.files[0].bytes));
+    expect(pre.page).not.toHaveProperty("request_id");
+    expect(pre.page.last_edited_time).toBe("2026-10-14T00:00:00Z");
+    setup(); io.request.mockClear(); io.archive.mockResolvedValueOnce({ pageId: "pre-archive", outcome: "skipped_existing" });
+    await expect(replaceEvidenceBlock("row", undefined, input, expected, guard)).rejects.toThrow("自動再送せず照合");
+    expect(io.archive.mock.calls[1][0].key).toBe(first.key);
+    expect(mutations()).toEqual([]);
+  });
+  it("object key reordering preserves PRE CAS and cannot bypass the existing-execution latch", async () => {
+    setup({ reverseKeys: "alternate" });
+    await replaceEvidenceBlock("row", undefined, input, expected, guard);
+    const first = io.archive.mock.calls[0][0];
+    setup({ reverseKeys: true }); io.request.mockClear();
+    io.archive.mockResolvedValueOnce({ pageId: "pre-archive", outcome: "skipped_existing" });
+    await expect(replaceEvidenceBlock("row", undefined, input, expected, guard)).rejects.toThrow("自動再送せず照合");
+    expect(io.archive.mock.calls[1][0].key).toBe(first.key);
+    expect(io.archive.mock.calls[1][0].files[0].bytes).toEqual(first.files[0].bytes);
+    expect(mutations()).toEqual([]);
   });
 });

@@ -322,7 +322,7 @@ export async function readLedgerJson(entry: LedgerEntry): Promise<unknown> {
  * `canonicalize` と同じ規則を、shared ライブラリを特定サービスのモジュールへ
  * 依存させないためここで独立に持つ。
  */
-function canonicalizeForHash(value: unknown): unknown {
+export function canonicalizeForHash(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalizeForHash);
   if (value !== null && typeof value === "object") {
     const record = value as Record<string, unknown>;

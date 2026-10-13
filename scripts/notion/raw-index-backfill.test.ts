@@ -133,6 +133,31 @@ describe("保存済⑤原本のbounded publisher", () => {
     await expect(runRawBackfill(opts, f.io)).rejects.toThrow();
     expect(f.rawPuts()).toHaveLength(0); expect(f.io.insert).not.toHaveBeenCalled(); expect(f.io.download).not.toHaveBeenCalled();
   });
+  it("dry/applyの起動時計が異なっても明示cutoffで同じ集合を使い、再開でも維持する", async () => {
+    const f = fixture(), cutoff = "2026-10-13T18:31:00.000Z";
+    let clock = Date.parse("2026-10-14T00:00:00.000Z"); f.io.now = () => clock;
+    await runRawBackfill({ ...opts, cutoff, mode: "dry" }, f.io);
+    clock += 3_600_000;
+    await runRawBackfill({ ...opts, cutoff }, f.io);
+    clock += 3_600_000;
+    await runRawBackfill({ ...opts, cutoff }, f.io);
+    expect(vi.mocked(f.io.list).mock.calls.map(([value]) => value)).toEqual([cutoff, cutoff]);
+    const manifests = f.emitted.filter((r) => (r as { phase: string }).phase === "manifest") as Array<{ cutoff: string; manifestSha256: string }>;
+    expect(manifests.map((r) => r.cutoff)).toEqual([cutoff, cutoff, cutoff]);
+    expect(new Set(manifests.map((r) => r.manifestSha256)).size).toBe(1);
+  });
+  it("保存manifestと異なる明示cutoffは原本/索引/receiptを書かず停止する", async () => {
+    const f = fixture(); await runRawBackfill({ ...opts, cutoff: "2026-10-13T18:31:00.000Z" }, f.io);
+    vi.mocked(f.io.put).mockClear(); vi.mocked(f.io.insert).mockClear(); vi.mocked(f.io.list).mockClear(); vi.mocked(f.io.download).mockClear();
+    await expect(runRawBackfill({ ...opts, cutoff: "2026-10-13T18:30:00.000Z" }, f.io)).rejects.toThrow("明示cutoffと保存manifest");
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled(); expect(f.io.list).not.toHaveBeenCalled(); expect(f.io.download).not.toHaveBeenCalled();
+  });
+  it.each(["", "not-a-time", "2026-02-30T18:31:00.000Z", "2026-10-13T18:31:00+00:00", "2026-10-14T00:00:00.001Z"])("不正/UTCでない/未来のcutoff %s はリクエスト前に停止する", async (cutoff) => {
+    const f = fixture();
+    await expect(runRawBackfill({ ...opts, cutoff }, f.io)).rejects.toThrow("cutoff UTC ISO/未来日時");
+    for (const fn of [f.io.get, f.io.list, f.io.download, f.io.put, f.io.index, f.io.insert]) expect(fn).not.toHaveBeenCalled();
+  });
+
   it("母集団件数不一致はmanifest作成前に停止する", async () => {
     const f = fixture();
     await expect(runRawBackfill({ ...opts, expectedCount: 2 }, f.io)).rejects.toThrow("manifest集合");

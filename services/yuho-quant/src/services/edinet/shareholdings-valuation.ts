@@ -73,8 +73,57 @@ function chartRequest(urlText: string, symbol: string): string {
   return range;
 }
 
+interface PriceMember { api: string; symbol: string; status: number; receivedAt: string; url: string; byteLength: number; sha256: string; bodyBase64: string }
+interface PriceCandidate { source: { archivePageId: string; filename: string; sha256: string }; member: PriceMember }
+interface VerifiedPriceChart {
+  range: string;
+  parsed: Awaited<ReturnType<typeof parseDailyChart>>;
+  raw: { meta: { currency: string; exchangeTimezoneName: string; longName: string }; timestamp: number[]; indicators: { quote: Array<{ close: Array<number | null> }> } };
+}
+
+/** 明示run用。全sourceを一度展開し、候補のbody/要求/chart検証も初回だけ行う。chunk単位で解放する。 */
+export class HoldingsPriceIndex {
+  readonly #bySymbol = new Map<string, PriceCandidate[]>();
+  readonly #verified = new WeakMap<PriceCandidate, Promise<VerifiedPriceChart>>();
+
+  constructor(prices: readonly ArchivedSource[]) {
+    for (const source of prices) {
+      assertSource(source);
+      const wrapper = JSON.parse(gunzipSync(source.bytes).toString("utf8"));
+      assert.equal(wrapper.version, 1); assert.ok(Array.isArray(wrapper.members));
+      for (const member of wrapper.members as PriceMember[]) {
+        if (member.api !== "daily") continue;
+        const candidates = this.#bySymbol.get(member.symbol) ?? [];
+        candidates.push(Object.freeze({ source: Object.freeze({ archivePageId: source.archivePageId, filename: source.filename, sha256: source.sha256 }), member: Object.freeze(member) }));
+        this.#bySymbol.set(member.symbol, candidates);
+      }
+    }
+  }
+
+  candidates(symbol: string): readonly PriceCandidate[] { return this.#bySymbol.get(symbol) ?? []; }
+
+  verifiedChart(candidate: PriceCandidate, symbol: string): Promise<VerifiedPriceChart> {
+    assert.equal(candidate.member.symbol, symbol);
+    let verified = this.#verified.get(candidate);
+    if (verified === undefined) {
+      verified = (async () => {
+        const { member } = candidate;
+        assert.equal(member.status, 200);
+        const bytes = Buffer.from(member.bodyBase64, "base64");
+        assert.equal(bytes.length, member.byteLength); assert.equal(sha(bytes), member.sha256);
+        const range = chartRequest(member.url, symbol);
+        const parsed = await parseDailyChart(symbol, range, bytes, member.receivedAt);
+        const raw = JSON.parse(bytes.toString("utf8")) as { chart: { result: VerifiedPriceChart["raw"][] } };
+        return { range, parsed, raw: raw.chart.result[0] };
+      })();
+      this.#verified.set(candidate, verified);
+    }
+    return verified;
+  }
+}
+
 export async function qualifyHoldingValuation(args: {
-  holding: Shareholding; fiscalYearEnd: string; catalog: ShareholdingsCatalog; prices: readonly ArchivedSource[];
+  holding: Shareholding; fiscalYearEnd: string; catalog: ShareholdingsCatalog; prices: readonly ArchivedSource[] | HoldingsPriceIndex;
 }): Promise<HoldingValuation> {
   // 本関数は原表で確定した特定投資/みなし保有の上場scope限定（FSA開示定義）。
   const candidates = args.catalog.byLegalName.get(exactLegalName(args.holding.name));
@@ -82,22 +131,12 @@ export async function qualifyHoldingValuation(args: {
     reason: candidates === undefined ? "公式上場提出者名へ完全一致しません" : "公式上場提出者名が一意ではありません" };
   const identity = candidates[0], symbol = `${identity.code}.T`;
   if (args.holding.shares === null) return { status: "unavailable", identity, reason: "期末株数が非開示です" };
-  const matches: Array<{ source: ArchivedSource; member: { symbol: string; status: number; receivedAt: string; url: string; byteLength: number; sha256: string; bodyBase64: string } }> = [];
-  for (const source of args.prices) {
-    assertSource(source);
-    const wrapper = JSON.parse(gunzipSync(source.bytes).toString("utf8"));
-    assert.equal(wrapper.version, 1); assert.ok(Array.isArray(wrapper.members));
-    for (const member of wrapper.members) if (member.api === "daily" && member.symbol === symbol) matches.push({ source, member });
-  }
+  const index = args.prices instanceof HoldingsPriceIndex ? args.prices : new HoldingsPriceIndex(args.prices);
+  const matches = index.candidates(symbol);
   if (matches.length !== 1) return { status: "unavailable", identity,
     reason: matches.length === 0 ? "該当symbolの保存日足原本がありません" : "該当symbolの保存日足原本が一意ではありません" };
   const { source, member } = matches[0];
-  assert.equal(member.status, 200);
-  const bytes = Buffer.from(member.bodyBase64, "base64");
-  assert.equal(bytes.length, member.byteLength); assert.equal(sha(bytes), member.sha256);
-  const range = chartRequest(member.url, symbol);
-  const parsed = await parseDailyChart(symbol, range, bytes, member.receivedAt);
-  const raw = JSON.parse(bytes.toString("utf8")).chart.result[0];
+  const { range, parsed, raw } = await index.verifiedChart(matches[0], symbol);
   assert.equal(raw.meta.currency, "JPY"); assert.equal(raw.meta.exchangeTimezoneName, "Asia/Tokyo");
   assert.equal(englishName(raw.meta.longName), englishName(identity.englishName), "価格原本の発行体英字商号が一致しません");
   const dates: string[] = raw.timestamp.map(jstDateSec);

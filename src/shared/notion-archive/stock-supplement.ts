@@ -24,6 +24,7 @@ import { assertCursorProgress, notionRequest, NotionUnknownResultError } from ".
 import type { NotionSelectColor } from "./dataset.js";
 import { notionEnv } from "./env.js";
 import { verifyArchivedAttachments } from "./readback.js";
+import { canonicalizeForHash } from "./biztag-ledger.js";
 import { sha256Hex } from "../sha256.js";
 import { RICH_TEXT_MAX, joinRichText, splitRichText } from "./rich-text.js";
 
@@ -983,6 +984,7 @@ function propertyValue(property: unknown): unknown {
 
 interface EvidencePage {
   id: string;
+  request_id?: string;
   last_edited_time: string;
   archived?: boolean;
   in_trash?: boolean;
@@ -991,6 +993,8 @@ interface EvidencePage {
 
 async function evidencePage(pageId: string): Promise<EvidencePage> {
   const page = await notionRequest<EvidencePage>("GET", `/pages/${pageId}`);
+  // Notionの読取ごとに変わる通信ID。業務値・実編集メタデータは保持する。
+  delete page.request_id;
   if (typeof page.id !== "string" || page.id.replaceAll("-", "").toLowerCase() !== pageId.replaceAll("-", "").toLowerCase() ||
       typeof page.last_edited_time !== "string" || page.archived === true || page.in_trash === true || !page.properties) {
     throw new Error("補足行のPRE/読戻しが不正");
@@ -1051,10 +1055,10 @@ export async function replaceEvidenceBlock(
   if (block !== null && block !== undefined && old.some((b) => JSON.stringify(evidenceValue(b)) === JSON.stringify(evidenceValue(block)))) {
     throw new Error("同じ新根拠が既に存在。前回の結果不明をPRE/現値照合するまで再送しません");
   }
-  const snapshot = JSON.stringify({ page: before, children, expectedProperties: props, expectedEvidence: block });
+  const snapshot = JSON.stringify(canonicalizeForHash({ page: before, children, expectedProperties: props, expectedEvidence: block }));
   const preSha = await sha256Hex(snapshot);
   // 推論確率・新根拠の揺れでunknownの再送ラッチを迂回させない。
-  const executionKey = await sha256Hex(JSON.stringify({ previous: before, nextDocId: input.docId, judgeInput: input.judgeInput }));
+  const executionKey = await sha256Hex(JSON.stringify(canonicalizeForHash({ previous: before, nextDocId: input.docId, judgeInput: input.judgeInput })));
   const filename = "biztag-pre.json";
   const file = { filename, bytes: new TextEncoder().encode(snapshot), contentType: "application/json" };
   const stored = await recordPrimaryData({ service: "yuho-quant", key: `biztag-pre/${pageId}/${executionKey}`,
@@ -1062,7 +1066,7 @@ export async function replaceEvidenceBlock(
   if (stored.outcome === "skipped_existing") throw new NotionUnknownResultError(`同じPREの既存実行あり。自動再送せず照合してください。PRE=${stored.pageId}`);
   await verifyArchivedAttachments(stored.pageId, [file], "事業タグ更新前PRE");
   const fresh = await evidencePage(pageId);
-  if (JSON.stringify(fresh) !== JSON.stringify(before)) throw new SupplementWriteHeldError("PRE保管中に補足が変更 (旧根拠保持・HOLD)");
+  if (JSON.stringify(canonicalizeForHash(fresh)) !== JSON.stringify(canonicalizeForHash(before))) throw new SupplementWriteHeldError("PRE保管中に補足が変更 (旧根拠保持・HOLD)");
   await beforeWrite(); // 対象1社のD1最新doc/pointer。ここまではbusiness write 0。
   if (block !== null && block !== undefined) {
     try {

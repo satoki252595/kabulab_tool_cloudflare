@@ -2,8 +2,8 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
-import { exactLegalName, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../services/edinet/shareholdings-valuation.js";
+import { describe, expect, it, vi } from "vitest";
+import { exactLegalName, HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../services/edinet/shareholdings-valuation.js";
 import type { Shareholding } from "../services/edinet/shareholdings.js";
 
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -61,5 +61,40 @@ describe("保有明細の期末参考時価", () => {
     await expect(qualify(source({ currency: "USD" }))).rejects.toThrow();
     await expect(qualify(source({ issuerName: "STRUCTURAL MISMATCH" }))).rejects.toThrow();
     await expect(qualify({ ...source(), sha256: "0".repeat(64) })).rejects.toThrow();
+  });
+  it("明示indexは同じsourceを一度だけ展開し、同symbolのchart検証を共有して同じ結果を返す", async () => {
+    const saved = source(), spy = vi.spyOn(JSON, "parse");
+    const wrappers = () => spy.mock.calls.filter(([text]) => typeof text === "string" && text.startsWith('{"version":1')).length;
+    const charts = () => spy.mock.calls.filter(([text]) => typeof text === "string" && text.startsWith('{"chart":')).length;
+    try {
+      const expected = await Promise.all([qualify(saved), qualify(saved), qualify(saved)]);
+      expect(wrappers()).toBe(3); expect(charts()).toBe(6);
+      spy.mockClear();
+      const index = new HoldingsPriceIndex([saved]);
+      const actual = await Promise.all([1, 2, 3].map(() => qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices: index })));
+      expect(actual).toEqual(expected);expect(wrappers()).toBe(1);expect(charts()).toBe(2);
+      const changedShares = await qualifyHoldingValuation({ holding: { ...holding, shares: 24 }, fiscalYearEnd: "2026-06-30", catalog, prices: index });
+      expect(changedShares).toMatchObject({ status: "qualified", price: 100, value: 2400 });expect(charts()).toBe(2);
+    } finally { spy.mockRestore(); }
+  });
+  it("chart検証を共有しても銘柄identityをcacheせず、不一致は各回STOPする", async () => {
+    const index = new HoldingsPriceIndex([source()]);
+    expect((await qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices: index })).status).toBe("qualified");
+    const mismatch = { ...catalog, byLegalName: new Map([[exactLegalName(holding.name), [{ ...issuer, englishName: "UNPROVEN IDENTITY" }]]]) };
+    await expect(qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog: mismatch, prices: index })).rejects.toThrow("英字商号");
+    expect((await qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-29", catalog, prices: index })).status).toBe("unavailable");
+  });
+  it.each([{ currency: "USD" }, { issuerName: "UNPROVEN IDENTITY" }, { eventsQuery: false }])("明示indexでも既存原本guardの不一致はSTOP", async options => {
+    const index = new HoldingsPriceIndex([source(options)]);
+    await expect(qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices: index })).rejects.toThrow();
+  });
+  it("明示indexはsource SHAとmember SHAの不一致を許容せず、重複候補を選ばない", async () => {
+    expect(() => new HoldingsPriceIndex([{ ...source(), sha256: "0".repeat(64) }])).toThrow();
+    const duplicated = new HoldingsPriceIndex([source(), source()]);
+    expect(await qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices: duplicated })).toMatchObject({ status: "unavailable", reason: "該当symbolの保存日足原本が一意ではありません" });
+    const saved = source(), wrapper = JSON.parse((await import("node:zlib")).gunzipSync(saved.bytes).toString("utf8"));
+    wrapper.members[0].sha256 = "0".repeat(64);
+    const bytes = gzipSync(Buffer.from(JSON.stringify(wrapper))), index = new HoldingsPriceIndex([{ ...saved, bytes, sha256: hash(bytes) }]);
+    for (let attempt = 0; attempt < 2; attempt++) await expect(qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices: index })).rejects.toThrow();
   });
 });
