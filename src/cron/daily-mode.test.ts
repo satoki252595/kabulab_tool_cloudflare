@@ -523,6 +523,7 @@ describe("株式とマクロの日次分離", () => {
   });
 
   it("CLIは保存JP原本が無ければHOLDし新規N225や旧日を代用しない", async () => {
+    for (const key of ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"]) vi.stubEnv(key, "symbolic-test-credential");
     vi.setSystemTime(new Date("2026-09-30T01:55:26Z"));
     mockMacro({ ...ALIGNED, "^N225": "n225-20260929.json" });
     const { db, calls } = recordingDb();
