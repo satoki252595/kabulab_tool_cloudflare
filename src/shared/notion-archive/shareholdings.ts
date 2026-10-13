@@ -13,8 +13,11 @@ import { listPageFiles } from "./page-file.js";
 
 export interface HoldingsSchema {
   id: string;
+  description: Array<{ plain_text: string }>;
   properties: Record<string, { id: string; type: string; formula?: { expression: string }; select?: { options: Array<{ id: string; name: string; color: string }> } }>;
 }
+
+export const HOLDINGS_DESCRIPTION = "有報の保有株式明細。原本照合済の列だけ確定値として扱い、旧取込の値は未検証列に保持する。期末参考時価は同日期末株数×終値で、価格・通貨・単位・分割を照合できない場合は欠測理由を示す。";
 
 export const LEGACY_HOLDINGS_COLUMNS = [
   ["区分", "旧分類（未検証）", "select"],
@@ -92,6 +95,7 @@ export async function applyHoldingsSchema(expected: HoldingsSchema): Promise<Hol
   const current = await readHoldingsSchema();
   assert.equal(current.id.replaceAll("-", ""), expected.id.replaceAll("-", ""));
   assert.deepEqual(current.properties, expected.properties, "保有明細schemaが準備時から変化しています");
+  assert.deepEqual(current.description, expected.description, "保有明細の説明が準備時から変化しています");
   let patch = buildHoldingsSchemaPatch(current);
   const renames = Object.fromEntries(Object.entries(patch.properties).filter(([, value]) =>
     typeof value === "object" && value !== null && "name" in value));
@@ -104,10 +108,11 @@ export async function applyHoldingsSchema(expected: HoldingsSchema): Promise<Hol
     }
     patch = buildHoldingsSchemaPatch(renamed);
   }
-  if (Object.keys(patch.properties).length > 0) {
-    await notionRequest("PATCH", `/databases/${notionEnv.NOTION_STOCK_HOLDINGS_DB_ID()}`, patch, { singleAttempt: true });
+  if (Object.keys(patch.properties).length > 0 || current.description.map(p => p.plain_text).join("") !== HOLDINGS_DESCRIPTION) {
+    await notionRequest("PATCH", `/databases/${notionEnv.NOTION_STOCK_HOLDINGS_DB_ID()}`, { ...patch, description: splitRichText(HOLDINGS_DESCRIPTION) }, { singleAttempt: true });
   }
   const actual = await readHoldingsSchema();
+  assert.equal(actual.description.map(p => p.plain_text).join(""), HOLDINGS_DESCRIPTION);
   for (const [name, legacy, type] of LEGACY_HOLDINGS_COLUMNS) {
     const old = current.properties[legacy] ? current.properties[legacy] : current.properties[name];
     assert.equal(actual.properties[legacy].id, old.id);

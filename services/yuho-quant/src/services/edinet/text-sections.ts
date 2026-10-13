@@ -62,6 +62,8 @@ export interface TextSectionDef {
   title: string;
   /** CSVの連結区分が「その他」になる注記も、実在する連結要素で識別する。 */
   consolidatedElement?: string;
+  /** 保存CSVで確認したIFRS標準要素と実ラベル（別注記への推定結合はしない）。 */
+  ifrs?: { elementId: string; title: string };
 }
 
 /**
@@ -113,11 +115,15 @@ export const TEXT_SECTIONS: readonly TextSectionDef[] = [
   { key: "rental_property", title: "賃貸等不動産関係、財務諸表",
     consolidatedElement: "NotesRealEstateForLeaseEtcConsolidatedFinancialStatementsTextBlock" },
   { key: "segment_info", title: "セグメント情報等、財務諸表",
-    consolidatedElement: "NotesSegmentInformationEtcConsolidatedFinancialStatementsTextBlock" },
+    consolidatedElement: "NotesSegmentInformationEtcConsolidatedFinancialStatementsTextBlock",
+    ifrs: { elementId: "jpigp_cor:NotesSegmentInformationConsolidatedFinancialStatementsIFRSTextBlock",
+      title: "注記事項－セグメント情報、連結財務諸表（IFRS）" } },
   { key: "subsequent_events", title: "重要な後発事象、財務諸表",
     consolidatedElement: "NotesSignificantEventsAfterReportingPeriodConsolidatedFinancialStatementsTextBlock" },
   { key: "related_parties", title: "関連当事者情報、財務諸表",
-    consolidatedElement: "NotesRelatedPartiesConsolidatedFinancialStatementsTextBlock" },
+    consolidatedElement: "NotesRelatedPartiesConsolidatedFinancialStatementsTextBlock",
+    ifrs: { elementId: "jpigp_cor:NotesRelatedPartiesConsolidatedFinancialStatementsIFRSTextBlock",
+      title: "注記事項－関連当事者、連結財務諸表（IFRS）" } },
   { key: "parent_info", title: "提出会社の親会社等の情報" },
   { key: "rights_plan", title: "ライツプランの内容" },
   {
@@ -125,7 +131,9 @@ export const TEXT_SECTIONS: readonly TextSectionDef[] = [
     title: "行使価額修正条項付新株予約権付社債券等の行使状況等",
   },
   { key: "changes_issued", title: "発行済株式総数、資本金等の推移" },
-  { key: "main_customers", title: "主要な顧客ごとの情報" },
+  { key: "main_customers", title: "主要な顧客ごとの情報",
+    ifrs: { elementId: "jpigp_cor:InformationAboutMajorCustomersIFRSTextBlock",
+      title: "主要な顧客に関する情報（IFRS）" } },
 ];
 
 export type TextParseStatus = "ok" | "no_text_sections" | "parse_error";
@@ -223,8 +231,9 @@ export function extractTextSections(rows: EdinetCsvRow[]): ExtractedSection[] {
       if (!element.endsWith("TextBlock")) continue;
       const title = normalizeTitle(r.itemName);
       const consolidatedNote = element === def.consolidatedElement && title === consolidatedTitle;
-      if (title !== want && !consolidatedNote) continue;
-      const s = scoreRow(r, consolidatedNote);
+      const ifrsNote = def.ifrs !== undefined && r.elementId === def.ifrs.elementId && title === normalizeTitle(def.ifrs.title);
+      if (title !== want && !consolidatedNote && !ifrsNote) continue;
+      const s = scoreRow(r, consolidatedNote || ifrsNote);
       if (s > bestScore) {
         bestScore = s;
         best = r;

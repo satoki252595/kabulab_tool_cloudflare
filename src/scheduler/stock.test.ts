@@ -882,6 +882,8 @@ describe("handleStockScheduled", () => {
   it.each([
     [DISPATCH_CRON, "2026-10-12T09:00:00Z", "JPX"],
     [READCHECK_CRON, "2026-10-12T14:35:00Z", "JPX"],
+    [CONTEXT_DISPATCH_CRON, "2026-10-12T21:00:00Z", "JPX"],
+    [CONTEXT_READCHECK_CRON, "2026-10-12T22:05:00Z", "JPX"],
     [CONTEXT_DISPATCH_CRON, "2026-09-07T21:00:00Z", "NYSE"],
     [CONTEXT_READCHECK_CRON, "2026-09-07T22:05:00Z", "NYSE"],
   ])("公表休場の%sは理由付き対象外、receipt/POSTは作らない", async (cron, at, market) => {

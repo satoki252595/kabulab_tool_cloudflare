@@ -8,7 +8,7 @@ import { queryUniqueRow } from "./archive.js";
 import { notionRequest } from "./client.js";
 import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
-import { applyHoldingsSchema, buildHoldingsSchemaPatch, LEGACY_HOLDINGS_COLUMNS, publishSavedShareholdings, publishVerifiedShareholdings, resumePendingShareholdings, type HoldingsSchema } from "./shareholdings.js";
+import { applyHoldingsSchema, buildHoldingsSchemaPatch, HOLDINGS_DESCRIPTION, LEGACY_HOLDINGS_COLUMNS, publishSavedShareholdings, publishVerifiedShareholdings, resumePendingShareholdings, type HoldingsSchema } from "./shareholdings.js";
 
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings.js", () => ({ parseShareholdingsData: vi.fn() }));
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js", () => ({
@@ -34,7 +34,7 @@ function oldSchema(): HoldingsSchema {
     ...(type === "select" ? { select: { options: [
       { id: "listed", name: "上場", color: "blue" }, { id: "no-code", name: "非上場", color: "gray" },
     ] } } : {}) };
-  return { id: "d".repeat(32), properties };
+  return { id: "d".repeat(32), properties, description: [{ plain_text: "旧取込の説明" }] };
 }
 
 function migratedSchema(schema = oldSchema()): HoldingsSchema {
@@ -50,7 +50,7 @@ function migratedSchema(schema = oldSchema()): HoldingsSchema {
       ...(Object.keys(definition)[0] === "select" ? { select: { options: definition.select!.options.map((option, index) => ({ ...option, id: `opt-${index}` })) } } : {}),
       ...(Object.keys(definition)[0] === "formula" ? { formula: (definition as unknown as { formula: { expression: string } }).formula } : {}) };
   }
-  return { id: schema.id, properties };
+  return { id: schema.id, properties, description: [{ plain_text: HOLDINGS_DESCRIPTION }] };
 }
 
 function mirrored(properties: Record<string, unknown>) {
@@ -111,6 +111,7 @@ describe("株式保有の原典限定writer", () => {
     const writes = vi.mocked(notionRequest).mock.calls.filter(([method]) => method === "PATCH");
     expect(Object.values((writes[0][2] as { properties: object }).properties)).toEqual(LEGACY_HOLDINGS_COLUMNS.map(([, name]) => ({ name })));
     expect((writes[1][2] as { properties: object }).properties).toHaveProperty("株価");
+    expect((writes[1][2] as { description: unknown }).description).toEqual([{ type: "text", text: { content: HOLDINGS_DESCRIPTION } }]);
     expect(after.properties["旧分類（未検証）"].select).toEqual(before.properties["区分"].select);
   });
 
