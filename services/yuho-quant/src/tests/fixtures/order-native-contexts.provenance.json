@@ -1,0 +1,174 @@
+{
+  "fixtureSha256": "365bfb96422ce0461ac543aa33bc1565be2914110a7ef46d0f5fba9f1d7d8e00",
+  "items": [
+    {
+      "code": "1431",
+      "docId": "S100Z3WK",
+      "periodEnd": "2026-06-30",
+      "source": {
+        "zipPath": "/Users/satoki252595/projects/kabulab-cf/tmp/feature-audit-20261013/holdings-latest-all/batch-001/1431-S100Z3WK.zip",
+        "sha256": "e151c32da1551c5b4924c4aafde44e2bc2949d9e34d1c2fb62eccc2877337e02",
+        "bytes": 580701,
+        "metadata": {
+          "status": "verified",
+          "missing": []
+        },
+        "identity": {
+          "status": "verified",
+          "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E31614-000_2026-06-30_01_2026-09-25.xbrl"
+        }
+      },
+      "members": {
+        "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E31614-000_2026-06-30_01_2026-09-25_ixbrl.htm": {
+          "sha256": "fd55e3460ed557cee2d92e0ef443cf1a82181e676360f02bd6b2546c1f586288",
+          "bytes": 95556
+        },
+        "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E31614-000_2026-06-30_01_2026-09-25_ixbrl.htm": {
+          "sha256": "7a1aa3a69e798987044a9e697389e489191aefb4f330a124f03c7e417785a7b3",
+          "bytes": 261103
+        }
+      },
+      "fixturePurpose": "Exact native header and honbun members; source subset, not a replacement original ZIP"
+    },
+    {
+      "code": "1815",
+      "docId": "S100YGCF",
+      "periodEnd": "2026-03-31",
+      "source": {
+        "zipPath": "/Users/satoki252595/projects/kabulab-cf/tmp/feature-audit-20261013/holdings-latest-all/active-legacy-002/1815-S100YGCF.zip",
+        "sha256": "0c72445ab1cef764e3cd771d973c5914310a79b7dc2d85fd714844881d8818a6",
+        "bytes": 1487932,
+        "metadata": {
+          "status": "verified",
+          "missing": []
+        },
+        "identity": {
+          "status": "verified",
+          "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E00065-000_2026-03-31_01_2026-06-23.xbrl"
+        }
+      },
+      "members": {
+        "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00065-000_2026-03-31_01_2026-06-23_ixbrl.htm": {
+          "sha256": "cf2c676d9b1ac8c3f7232ae5013ab4965ea8f4b37325bf42f41495af3c886f6a",
+          "bytes": 151273
+        },
+        "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E00065-000_2026-03-31_01_2026-06-23_ixbrl.htm": {
+          "sha256": "8f09f59378a427a8ed62fc6087def58ca5ceb73edb7162e3970bef6d53a76d95",
+          "bytes": 225141
+        }
+      },
+      "fixturePurpose": "Exact native header and honbun members; source subset, not a replacement original ZIP"
+    },
+    {
+      "code": "1925",
+      "docId": "S100YAZ5",
+      "periodEnd": "2026-03-31",
+      "source": {
+        "zipPath": "/Users/satoki252595/projects/kabulab-cf/tmp/feature-audit-20261013/holdings-latest-all/source-only-20261014/scoped-003/1925-S100YAZ5.zip",
+        "sha256": "85a5c96c18a69dd1f89e6bfc98d05cf6e1dae96bb92499a29c514cdc2052b86f",
+        "bytes": 3692267,
+        "metadata": {
+          "status": "verified",
+          "missing": []
+        },
+        "identity": {
+          "status": "verified",
+          "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E00048-000_2026-03-31_01_2026-06-17.xbrl"
+        }
+      },
+      "members": {
+        "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00048-000_2026-03-31_01_2026-06-17_ixbrl.htm": {
+          "sha256": "725256802ade9b4aeac7aaff3f953006bd5a03174d2f8bba200c6d3ecc603d6e",
+          "bytes": 215727
+        },
+        "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E00048-000_2026-03-31_01_2026-06-17_ixbrl.htm": {
+          "sha256": "15efee0e3f1c70cf06cd50ff7efdb9b4d25c0aff3be16e0cacfad0b56eac5d53",
+          "bytes": 747577
+        }
+      },
+      "fixturePurpose": "Exact native header and honbun members; source subset, not a replacement original ZIP"
+    },
+    {
+      "code": "1812",
+      "docId": "S100YGGI",
+      "periodEnd": "2026-03-31",
+      "source": {
+        "zipPath": "/Users/satoki252595/projects/kabulab-cf/tmp/feature-audit-20261013/holdings-latest-all/active-legacy-002/1812-S100YGGI.zip",
+        "sha256": "900ea125c3aa74d1bb320db16ef5408d62681e8c8afbbd00b2625a3fc22639f6",
+        "bytes": 1649759,
+        "metadata": {
+          "status": "verified",
+          "missing": []
+        },
+        "identity": {
+          "status": "verified",
+          "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E00058-000_2026-03-31_01_2026-06-24.xbrl"
+        }
+      },
+      "members": {
+        "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00058-000_2026-03-31_01_2026-06-24_ixbrl.htm": {
+          "sha256": "33f822d7cd5e7ec915a0423ecc38597c145dcb497a1038d4f11e93a17894d97a",
+          "bytes": 203060
+        },
+        "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E00058-000_2026-03-31_01_2026-06-24_ixbrl.htm": {
+          "sha256": "5344a66fd89e978c7e363baab21bd30bb4dad72f9f478cd86b1d2dbb22de4f56",
+          "bytes": 517609
+        }
+      },
+      "fixturePurpose": "Exact native header and honbun members; source subset, not a replacement original ZIP"
+    },
+    {
+      "code": "1803",
+      "docId": "S100YDXD",
+      "periodEnd": "2026-03-31",
+      "source": {
+        "zipPath": "/Users/satoki252595/projects/kabulab-cf/tmp/feature-audit-20261013/holdings-latest-all/active-legacy-002/1803-S100YDXD.zip",
+        "sha256": "daf36952a8ac17e06db8df1ebaa4084838a4109d8c23e68e114819a8e21f92a4",
+        "bytes": 2880885,
+        "metadata": {
+          "status": "verified",
+          "missing": []
+        },
+        "identity": {
+          "status": "verified",
+          "filename": "XBRL/PublicDoc/jpcrp030000-asr-001_E00053-000_2026-03-31_01_2026-06-22.xbrl"
+        }
+      },
+      "members": {
+        "XBRL/PublicDoc/0000000_header_jpcrp030000-asr-001_E00053-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "a564c732dca0e2a39209f74b95e732e4cee6a20163fbec6059c52a1b5b9baf88",
+          "bytes": 208314
+        },
+        "XBRL/PublicDoc/0101010_honbun_jpcrp030000-asr-001_E00053-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "1c2f5e1c49b11a824b04b0c1164de62d313d2e4f25a66eb94d4c3e604d5b453c",
+          "bytes": 815842
+        },
+        "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00053-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "3b27b4fd83d8e6e8f880dfc88a8567dda83f781a52924515bf21356744289374",
+          "bytes": 1432647
+        },
+        "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E00053-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "0273894ec004769c57ed03e3fb95069f0eaa268b8f23d911282a26840be45f55",
+          "bytes": 1505804
+        },
+        "XBRL/PublicDoc/0105020_honbun_jpcrp030000-asr-001_E00053-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "234a8ed0cfdec87a94232c2dac90368fc6fd7a982bf1e98f364cda90299a53ea",
+          "bytes": 847953
+        },
+        "XBRL/PublicDoc/0106010_honbun_jpcrp030000-asr-001_E00053-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "85ec57c535e0e176eb80786b5973760e271765d429fe49beb6541a1758e4eea1",
+          "bytes": 27747
+        },
+        "XBRL/PublicDoc/0107010_honbun_jpcrp030000-asr-001_E00053-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "cde916e41535137d30e213b0eb6edba8d057d9297e95240dfee66c1859dd8884",
+          "bytes": 49292
+        },
+        "XBRL/PublicDoc/0200010_honbun_jpcrp030000-asr-001_E00053-000_2026-03-31_01_2026-06-22_ixbrl.htm": {
+          "sha256": "b2683f8bc0fdbd98b673bce36eea9e382a7ea7569d97e6a3103f6159c3d4541b",
+          "bytes": 5470
+        }
+      },
+      "fixturePurpose": "Exact native header and honbun members; source subset, not a replacement original ZIP"
+    }
+  ]
+}

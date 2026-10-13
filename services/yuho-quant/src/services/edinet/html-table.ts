@@ -162,3 +162,95 @@ export function unitToYenFactor(unitLabel: string): number {
   if (u.includes("円")) return 1;
   throw new Error(`未知の金額単位です: "${unitLabel}"`);
 }
+
+/** Native table position/caption/TextBlock traversal shared by filing parsers. */
+export function tablesWithHeading(
+  html: string
+): Array<{
+  table: string;
+  heading: string;
+  wide: string;
+  caption: string;
+  textBlock: string | null;
+  contextRef: string | null;
+  start: number;
+}> {
+  const out: Array<{
+    table: string;
+    heading: string;
+    wide: string;
+    caption: string;
+    textBlock: string | null;
+    contextRef: string | null;
+    start: number;
+  }> = [];
+  // table と ix:nonNumeric (TextBlock 囲み) を同一走査で拾う。ix の開閉は
+  // table スタックと独立に追う (表の内外判定だけに使い、表抽出は不変)。
+  const re = /<(\/?)(table|ix:nonNumeric)\b[^>]*>/gi;
+  const stack: number[] = [];
+  // 開いている ix:nonNumeric の内側から見た TextBlock 名 (非 TextBlock は
+  // null の深さ標識)。表を直接囲む TextBlock を contract の直接証明に使う。
+  // contextRef は単一行だけ実 context 期間を結び付け、他は診断に運ぶ。
+  const ixStack: Array<{ tb: string | null; contextRef: string | null }> = [];
+  let m: RegExpExecArray | null;
+  const strip = (s: string): string =>
+    s
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&[a-zA-Z#0-9]+;/g, " ")
+      .replace(/[\s\u3000]+/g, " ")
+      .trim();
+  // 直前に閉じたトップレベル表の終端 (表間 caption の起点)。
+  let prevTopEnd = 0;
+  while ((m = re.exec(html)) !== null) {
+    const isClose = m[0][1] === "/";
+    const tag = m[2].toLowerCase();
+    if (tag !== "table") {
+      if (isClose) {
+        if (ixStack.length > 0) ixStack.pop();
+      } else if (!/\/>$/.test(m[0])) {
+        const nm = /name\s*=\s*"([^"]+)"/i.exec(m[0]);
+        const local = nm ? nm[1].split(":").pop()! : "";
+        const cr = /contextRef\s*=\s*"([^"]+)"/i.exec(m[0]);
+        ixStack.push({
+          tb: /TextBlock$/.test(local) ? local : null,
+          contextRef: cr ? cr[1] : null,
+        });
+      }
+      continue;
+    }
+    if (isClose) {
+      const start = stack.pop();
+      if (start === undefined) continue; // 壊れた HTML 防御
+      const table = html.slice(start, re.lastIndex);
+      // wide: 期首継承と近接headingが共有する可視窓。表題近接型
+      // (TTUY/AO7M: 52-791 文字前) に加え、節表題型 (E00766 の(2)地域別の
+      // 内訳ペア: 節表題が 25676-25680 文字前) も拾う。T 側は終期=pe の
+      // 照合で保護される (不一致→unknown)。Z 側は pe 以前で確定。
+      const wideBefore = html.slice(Math.max(0, start - 60000), start);
+      const wide = strip(wideBefore);
+      // raw の style/タグ長で最寄り題名を切らず、可視160字を近接窓にする。
+      const heading = wide.slice(-160);
+      // caption: 当該表と直前の表の間の原文 (表ローカル。別表の語を含まない)。
+      // 単一行 geocols の限定分岐だけが使う (Sol確定: heading 窄窓 160字には
+      // FY 表題が入らず、wide は別表の売上語を含むため両方とも不適)。
+      // 入れ子内側表は外側表開始からの断片 (狭く取る = 安全側)。
+      const capFrom =
+        stack.length > 0 ? stack[stack.length - 1] : Math.min(prevTopEnd, start);
+      const caption = strip(html.slice(capFrom, start)).slice(-4000);
+      let textBlock: string | null = null;
+      let contextRef: string | null = null;
+      for (let i = ixStack.length - 1; i >= 0; i--) {
+        if (ixStack[i].tb !== null) {
+          textBlock = ixStack[i].tb;
+          contextRef = ixStack[i].contextRef;
+          break;
+        }
+      }
+      if (stack.length === 0) prevTopEnd = re.lastIndex;
+      out.push({ table, heading, start, wide, caption, textBlock, contextRef });
+    } else {
+      stack.push(m.index);
+    }
+  }
+  return out;
+}

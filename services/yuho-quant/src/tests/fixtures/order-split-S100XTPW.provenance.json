@@ -1,0 +1,14 @@
+{
+  "docId": "S100XTPW",
+  "stockCode": "261A",
+  "edinetCode": "E40019",
+  "periodEnd": "2025-12-31",
+  "bytes": 1129985,
+  "sha256": "df58b791f3d9f35df9fa77a32e6e6576f2d611e0c2f1cec3aae882568b10e4c5",
+  "source": "Notion legacy physical original; archive page 3eed74ff-84cd-817b-8149-ee350749743e",
+  "verbatimFullOriginalZip": true,
+  "originalManifest": "unknown",
+  "nativeDeiVerified": true,
+  "oldFirstBodyStatus": "no_order_table",
+  "qualifiedOrderMember": "XBRL/PublicDoc/0102010_honbun_jpcrp030000-asr-001_E40019-000_2025-12-31_01_2026-03-25_ixbrl.htm"
+}

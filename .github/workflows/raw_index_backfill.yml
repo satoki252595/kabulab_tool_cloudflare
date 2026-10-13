@@ -32,6 +32,14 @@ on:
         description: "新規原本の開始時間予算秒。開始済み1件を完結し、hard timeoutではinflight保全"
         type: string
         default: "1200"
+      reconcile_sha256:
+        description: "人間判断後の単一index_inflight回復だけ。apply/limit1/両SHA必須、通常は空欄"
+        type: string
+        default: ""
+      reconcile_state_sha256:
+        description: "旧state.jsonの全bytes SHA256。intent既存/競合/結果不明は再送せず停止"
+        type: string
+        default: ""
 concurrency:
   group: raw_index_backfill
   cancel-in-progress: false
@@ -58,6 +66,8 @@ jobs:
           LIMIT: ${{ inputs.limit }}
           MAX_BYTES: ${{ inputs.max_bytes }}
           MAX_SECONDS: ${{ inputs.max_seconds }}
+          RECONCILE_SHA256: ${{ inputs.reconcile_sha256 }}
+          RECONCILE_STATE_SHA256: ${{ inputs.reconcile_state_sha256 }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DB_RAW_FILES: ${{ secrets.NOTION_DB_RAW_FILES }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -70,8 +80,12 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           mkdir -m 700 -p tmp/raw-index
+          reconcile_args=()
+          if [ -n "$RECONCILE_SHA256" ] || [ -n "$RECONCILE_STATE_SHA256" ]; then
+            reconcile_args+=("--reconcile-sha256=$RECONCILE_SHA256" "--reconcile-state-sha256=$RECONCILE_STATE_SHA256")
+          fi
           nix develop -c pnpm exec tsx scripts/notion/raw-index-backfill.ts \
             "--mode=$MODE" "--plan-id=$PLAN_ID" "--expected-count=$EXPECTED_COUNT" "--cutoff=$CUTOFF" \
             "--limit=$LIMIT" "--max-bytes=$MAX_BYTES" "--max-seconds=$MAX_SECONDS" \
-            --out=tmp/raw-index/receipt.jsonl
+            --out=tmp/raw-index/receipt.jsonl "${reconcile_args[@]}"
       # raw body/manifest/private receipt はartifactへ公開しない。再開stateはR2へCAS保管。
