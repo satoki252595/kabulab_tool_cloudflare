@@ -146,7 +146,7 @@ const jsonRes = (body: unknown, status = 200, link: string | null = null) =>
     headers: link ? { Link: link } : {},
   });
 
-// 2026-09-30 (水)。dispatch 予定 17:13 UTC。
+// 2026-09-30 (水) 17:13 UTC。開始期限・日跨ぎのガード用（定時の 09:00 UTC とは別の時刻）。
 const TUE_1713 = Date.parse("2026-09-30T17:13:00.000Z");
 const TUE_1713_30S = TUE_1713 + 30_000;
 const SAT_1713 = Date.parse("2026-10-03T17:13:00.000Z");
@@ -184,13 +184,13 @@ function syncJob(runId = 101, overrides: Partial<RunJob> = {}): RunJob {
         name: "stock daily sync",
         status: "completed",
         conclusion: "success",
-        completed_at: "2026-09-30T20:30:00.000Z",
+        completed_at: "2026-09-30T12:11:00.000Z",
       },
       {
         name: "許容内失敗があれば Issue にコメント",
         status: "completed",
         conclusion: "skipped",
-        completed_at: "2026-09-30T20:31:00.000Z",
+        completed_at: "2026-09-30T12:12:00.000Z",
       },
     ],
     ...overrides,
@@ -539,7 +539,7 @@ describe("evaluateReadcheck", () => {
   const DATE = "2026-09-30";
   it("正常: sync success + 株式期限内 + コメント SKIPPED", () => {
     expect(evaluateReadcheck([syncJob()], DATE)).toEqual({
-      stockCompletedAt: "2026-09-30T20:30:00.000Z",
+      stockCompletedAt: "2026-09-30T12:11:00.000Z",
     });
   });
   it.each(["stock daily sync", "許容内失敗があれば Issue にコメント"])(
@@ -602,7 +602,7 @@ describe("evaluateReadcheck", () => {
         ],
         DATE
       )
-    ).toThrow("21:00 UTC を超過");
+    ).toThrow("14:30 UTC を超過");
     expect(() =>
       evaluateReadcheck(
         [
@@ -616,7 +616,7 @@ describe("evaluateReadcheck", () => {
       )
     ).toThrow("completed_at がありません");
   });
-  it("株式 step の完了が同日 17:13 より前 (別日の成功) は落とす", () => {
+  it("株式 step の完了が同日 09:00 より前 (別日の成功) は落とす", () => {
     const base = syncJob();
     expect(() =>
       evaluateReadcheck(
@@ -631,21 +631,21 @@ describe("evaluateReadcheck", () => {
         ],
         DATE
       )
-    ).toThrow("17:13 UTC より前");
+    ).toThrow("09:00 UTC より前");
     expect(
       evaluateReadcheck(
         [
           syncJob(101, {
             steps: base.steps!.map((s) =>
               s.name === "stock daily sync"
-                ? { ...s, completed_at: "2026-09-30T17:13:00.000Z" }
+                ? { ...s, completed_at: "2026-09-30T09:00:00.000Z" }
                 : s
             ),
           }),
         ],
         DATE
       )
-    ).toEqual({ stockCompletedAt: "2026-09-30T17:13:00.000Z" });
+    ).toEqual({ stockCompletedAt: "2026-09-30T09:00:00.000Z" });
   });
   it("コメント step の success (false-green)・欠落は落とす", () => {
     const base = syncJob();
@@ -692,7 +692,7 @@ describe("runDeadlineReadcheck", () => {
       scheduledDate: DATE,
       fetchFn,
     });
-    expect(v).toEqual({ stockCompletedAt: "2026-09-30T20:30:00.000Z" });
+    expect(v).toEqual({ stockCompletedAt: "2026-09-30T12:11:00.000Z" });
     expect(calls[0].url).toContain("/actions/runs/101/jobs?per_page=100");
   });
   it("receipt 欠落・破損・claimed・日付不一致・run欠落は落とす", async () => {
@@ -772,7 +772,7 @@ describe("runDeadlineReadcheck", () => {
       scheduledDate: DATE,
       fetchFn,
     });
-    expect(v.stockCompletedAt).toBe("2026-09-30T20:30:00.000Z");
+    expect(v.stockCompletedAt).toBe("2026-09-30T12:11:00.000Z");
     expect(calls).toHaveLength(2);
     const getHeaders = calls[0].init?.headers as Record<string, string>;
     expect(getHeaders["User-Agent"]).toMatch(/^kabulab-stock-scheduler\//);

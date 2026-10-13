@@ -28,9 +28,9 @@ name: stock-sync
 on:
   schedule:
     # 株式の旧 cron (13 17 * * 1-5) は廃止。起動は CF Cron Trigger
-    # (wrangler.toml [triggers] 13 17 MON-FRI) が workflow_dispatch
+    # (wrangler.toml [triggers] 0 9 MON-FRI = 18:00 JST) が workflow_dispatch
     # target=scheduled-stocks で行う (docs/stock-scheduler.md)。
-    # マクロ起動も CF 21:00 UTC に移行し、22:05 UTC に別receiptで期限確認する。
+    # マクロ起動は CF 21:00 UTC のまま、22:05 UTC に別receiptで期限確認する。
     # JPX data_j.xlsx は毎月第3営業日以降に前月末版へ差し替わる。
     # 月初の旧版取得を避け、毎月10日 10:30 JST に母集団同期する。
     - cron: "30 1 10 * *"

@@ -28,7 +28,7 @@ scripts/
 
 | ジョブ | 実行 | コマンド / トリガ |
 |---|---|---|
-| 日次 stock sync (core/rsi/swing) | **自動** (CF trigger 17:13 UTC dispatch + GitHub Actions) | `.github/workflows/stock-sync.yml`(株式・マクロ21:00 UTC) / 手動 `pnpm sync:daily:core --stocks-only` / `--context-only` |
+| 日次 stock sync (core/rsi/swing) | **自動** (CF trigger 09:00 UTC dispatch + GitHub Actions) | `.github/workflows/stock-sync.yml`(株式・マクロ21:00 UTC) / 手動 `pnpm sync:daily:core --stocks-only` / `--context-only` |
 | 月次 母集団 + otakara rebuild | **自動** (GitHub Actions) | 同上(10 日 01:30 UTC) / 手動 `pnpm sync:universe` + `pnpm sync:monthly:core` |
 | VWAP 日足/5分足/信用 → R2 | **自動** (GitHub Actions) | `.github/workflows/vwap-ingest.yml` / 手動 `pnpm ingest:vwap-*` |
 | 005 EDINET / 006 TDnet | **自動** (GitHub Actions) | `.github/workflows/catchup.yml`(平日 11:00 UTC) / 手動 `pnpm ingest:yuho-edinet` / `ingest:ir-tdnet` |

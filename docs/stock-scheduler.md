@@ -24,10 +24,20 @@ CF の数字曜日は 1=日曜で GitHub と違うため):
 
 | cron (UTC) | 処理 (`src/scheduler/stock.ts`) |
 |---|---|
-| `13 17 * * MON-FRI` | R2 receipt を claim → workflow_dispatch POST → run 詳細を CAS 保存 |
-| `5 21 * * MON-FRI` | 期限 readcheck (receipt + Jobs API で完了検証。成功以外は error) |
+| `0 9 * * MON-FRI` | R2 receipt を claim → workflow_dispatch POST → run 詳細を CAS 保存（18:00 JST。取引日 D の当日） |
+| `35 14 * * MON-FRI` | 期限 readcheck (receipt + Jobs API で完了検証。成功以外は error。23:35 JST) |
 | `0 21 * * MON-FRI` | `scheduled-context` をdispatch。株式・sector33・moneyflowは起動しない |
 | `5 22 * * MON-FRI` | 専用context receiptのrunを読み、同日のcontext成功と22:00完了期限を検証 |
+
+2026-10-09 に株式 dispatch を `13 17`（02:13 JST）から `0 9`（18:00 JST）へ移した。
+02:13 JST は、取引日 D の ^N225 日足 close が null になる時間帯（D 23:30 JST 以降。
+D=2026-10-08 の原文で 00:15 以降が null）の中だった。全銘柄 run の最悪所要は
+[stock-sync-asof-2026-09-28.md](./test-logs/stock-sync-asof-2026-09-28.md) の実測最大
+190.95 分（約 191 分。run 35669787483）。18:00 開始なら最悪 21:11 JST 終了で、
+23:30 まで 139 分ある。別 run の最大遅延と最大実行を足した 197.41 分でも 21:17 JST、
+余裕は約 133 分。終値の有無を実測したのは D 21:15 と 23:30 だけで、18:00 を含む
+15:30〜21:15 は未計測。開始時刻は実測の結果で変わりうる。21:15 以降に始めると
+191 分では 23:30 前に終わらない（21:15 開始の最悪終了は翌日 00:26 JST）。
 
 - POST 前ガード: 未知 cron・未来・土日・UTC 日跨ぎ・開始期限
   (株式60分、マクロ30分) 超過
@@ -63,8 +73,9 @@ CF の数字曜日は 1=日曜で GitHub と違うため):
 - マクロreadcheckはsync jobとcontext stepの一意な成功、同日21:00〜22:00
   の完了、株式stepとmoneyflow jobのskipを全て要求する。HOLDは成功にしない。
 - readcheck 成功条件: job `sync` が completed・success かつ `stock daily
-  sync` が success・completed_at が同日 17:13〜21:00 UTC (古い別日の
-  成功を通さない)、かつ `許容内失敗があれば Issue にコメント` が
+  sync` が success・completed_at が同日 09:00〜14:30 UTC (古い別日の
+  成功を通さない。14:30 UTC は D 23:30 JST で、それより後は null 帯に
+  入った完了なので成功にしない。旧上限 21:00 UTC からは縮めた)、かつ `許容内失敗があれば Issue にコメント` が
   SKIPPED (success = 許容内失敗ありの false-green。step 欠落も error)。
   検証対象は receipt の run ID と照合する。Dispatch 受付は同期完了でない。
 - 既存の Notion 完了/失敗バッチ・Actions 通知を再利用。新 table・DO・
@@ -100,6 +111,7 @@ CF の数字曜日は 1=日曜で GitHub と違うため):
    (値はログ・PR・Issue に出さない)。
 3. Root: 本 PR をレビュー後 merge する (既存 cron を先に止めない。
    削除は本 PR に含まれる)。
-4. 翌平日: 株式17:13/21:05、マクロ21:00/22:05のreceipt・run・readcheckを確認する。
+4. 翌平日: 株式09:00/14:35、マクロ21:00/22:05のreceipt・run・readcheckを確認する。
+   株式 step の完了が 14:30 UTC（23:30 JST）より後なら readcheck は失敗する。
 5. 異常時: Cron Events / Workers Logs の error を見て手動トリアージする。
    自動再 POST はしない。
