@@ -4,6 +4,9 @@
  * --mode=dry|apply --plan-id=<安全ID> --limit=50 --max-bytes=67108864
  * --max-seconds=1200 --expected-count=78831 --out=<private.jsonl> [--cutoff=<UTC ISO>]
  * 同plan-idを再開する。別planへ逃げてunknown latchを消せないactive pointerを持つ。
+ * 終端後の人間判断だけ: --mode=apply --limit=1 --cutoff=<固定実値>
+ * --reconcile-sha256=<原本SHA> --reconcile-state-sha256=<旧state全bytes SHA>。
+ * resolution intentが既存なら再送せず停止。旧active/state/cursorは一切更新しない。
  */
 import "dotenv/config";
 import { createHash } from "node:crypto";
@@ -57,6 +60,15 @@ const SAFE_RAW_ERRORS = new Set([
   "[raw-backfill] 先行完了receiptと集合が不一致",
   "[raw-backfill] 引数不正/重複",
   "[raw-backfill] 全引数明示・LOCAL_OUT禁止",
+  "[raw-backfill] 明示reconcileはapply/limit1/固定cutoff/両SHAが必須です",
+  "[raw-backfill] reconcile時間予算到達。再送禁止",
+  "[raw-backfill] reconcile固定receiptが欠落しています",
+  "[raw-backfill] reconcile対象/state全SHA/index_inflightが不一致です",
+  "[raw-backfill] reconcile原本全文GETの予算不足です",
+  "[raw-backfill] reconcile intentが既存です。再送せず停止",
+  "[raw-backfill] reconcile索引が既存です。上書きせず停止",
+  "[raw-backfill] reconcile旧active/stateが変化しました。停止",
+  "[raw-backfill] reconcile索引全列readbackが不一致です。再送禁止",
   "⑤原本metadataがobjectではありません",
   "⑤原本metadataの文字列がありません",
   "⑤原本metadataの文字列が不正です",
@@ -123,6 +135,9 @@ export interface RawBackfillOptions {
   mode: "dry" | "apply"; planId: string; limit: number; maxBytes: number; maxSeconds: number; expectedCount: number;
   /** dry/apply/再開で同じcreated_time集合を固定する明示UTC時刻。省略時は旧取得時計を維持。 */
   cutoff?: string;
+  /** 終端後の人間判断に限る単一索引回復。通常再開のunknown停止は変えない。 */
+  reconcileSha256?: string;
+  reconcileStateSha256?: string;
 }
 export interface RawIndexRow {
   sha256: string; r2_bucket: string; r2_key: string; source: string; datatype: string; scope: string;
@@ -156,6 +171,11 @@ export function validateRawOptions(opts: RawBackfillOptions, now = Date.now()): 
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(opts.cutoff) || !Number.isFinite(epoch) ||
         new Date(epoch).toISOString().slice(0, 19) !== opts.cutoff.slice(0, 19) || !Number.isFinite(now) || epoch > now)
       throw new Error("[raw-backfill] cutoff UTC ISO/未来日時が不正です");
+  }
+  if (opts.reconcileSha256 !== undefined || opts.reconcileStateSha256 !== undefined) {
+    if (opts.mode !== "apply" || opts.limit !== 1 || opts.cutoff === undefined ||
+        !hashSchema.safeParse(opts.reconcileSha256).success || !hashSchema.safeParse(opts.reconcileStateSha256).success)
+      throw new Error("[raw-backfill] 明示reconcileはapply/limit1/固定cutoff/両SHAが必須です");
   }
 }
 export function parseRawManifest(value: unknown, opts: RawBackfillOptions, bucket: string): RawManifest {
@@ -260,9 +280,89 @@ export async function auditRawIndexMembership(items: readonly RawItem[], bucket:
   return { checked: items.length, missing };
 }
 
+/** 人間が旧送信有無unknownを承知した、一意INSERTだけの明示回復。旧latchは変更しない。 */
+export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo) {
+  const started = io.now();
+  validateRawOptions(opts, started);
+  if (opts.reconcileSha256 === undefined || opts.reconcileStateSha256 === undefined)
+    throw new Error("[raw-backfill] 明示reconcileはapply/limit1/固定cutoff/両SHAが必須です");
+  const prefix = `ops/raw-index/${opts.planId}`, activeKey = "ops/raw-index/active.json", stateKey = `${prefix}/state.json`;
+  const resolution = `${prefix}/resolutions/${opts.reconcileSha256}`;
+  let receiptGets = 0, receiptPuts = 0;
+  const checkClock = () => { if (io.now() >= started + opts.maxSeconds * 1000) throw new Error("[raw-backfill] reconcile時間予算到達。再送禁止"); };
+  const get = async (key: string) => { checkClock(); receiptGets++; return io.get(key, io.receiptBucket); };
+  const required = async (key: string) => {
+    const got = await get(key);
+    if (got === null) throw new Error("[raw-backfill] reconcile固定receiptが欠落しています");
+    return got;
+  };
+  const parse = (version: NonNullable<Version>) => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(version.body));
+  const activeVersion = await required(activeKey), active = Active.parse(parse(activeVersion));
+  if (active.planId !== opts.planId) throw new Error("[raw-backfill] 別planがactiveです。unknownを別planで迂回できません");
+  const manifestVersion = await required(`${prefix}/manifest.json`), manifest = parseRawManifest(parse(manifestVersion), opts, io.rawBucket);
+  if (digest(manifestVersion.body) !== active.manifestSha256 || digest(encode(manifest)) !== active.manifestSha256)
+    throw new Error("[raw-backfill] active manifest SHA不一致");
+  const stateVersion = await required(stateKey), state = State.parse(parse(stateVersion)), inflight = state.inflight;
+  if (digest(stateVersion.body) !== opts.reconcileStateSha256 || state.manifestSha256 !== active.manifestSha256 ||
+      state.cursor >= manifest.items.length || inflight === null || inflight.phase !== "index_inflight" ||
+      inflight.sha256 !== opts.reconcileSha256 || manifest.items[state.cursor]!.sha256 !== opts.reconcileSha256 || !inflight.key.startsWith("raw/"))
+    throw new Error("[raw-backfill] reconcile対象/state全SHA/index_inflightが不一致です");
+  const item = manifest.items[state.cursor]!;
+  if (item.sizeBytes > opts.maxBytes) throw new Error("[raw-backfill] reconcile原本全文GETの予算不足です");
+  // 成功後もunknown後も同じ明示操作を再送できない。通常runのread-only回収とは別。
+  if (await get(`${resolution}/intent.json`) !== null || await get(`${resolution}/complete.json`) !== null)
+    throw new Error("[raw-backfill] reconcile intentが既存です。再送せず停止");
+  checkClock();
+  const raw = await io.get(inflight.key, io.rawBucket);
+  if (raw === null) throw new Error("[raw-backfill] D1索引先原本が欠落。再作成せず停止");
+  validateBody(raw.body, item);
+  await io.emit({ phase: "raw_verified", sha256: item.sha256, bytes: raw.body.length });
+  if (await io.index(item.sha256) !== null) throw new Error("[raw-backfill] reconcile索引が既存です。上書きせず停止");
+  const unchanged = async () => {
+    for (const [key, previous] of [[activeKey, activeVersion], [stateKey, stateVersion]] as const) {
+      const fresh = await required(key);
+      if (fresh.etag !== previous.etag || !Buffer.from(fresh.body).equals(Buffer.from(previous.body)))
+        throw new Error("[raw-backfill] reconcile旧active/stateが変化しました。停止");
+    }
+  };
+  const persist = async (key: string, value: unknown) => {
+    const bytes = encode(value);
+    await io.emit({ phase: "resolution_receipt_inflight", key, sha256: digest(bytes), bytes: bytes.length });
+    checkClock(); receiptPuts++;
+    await io.put(key, bytes, null, io.receiptBucket, "application/json");
+    const read = await required(key);
+    if (!Buffer.from(read.body).equals(Buffer.from(bytes))) throw new Error("[raw-backfill] receipt全文読戻し不一致。再送禁止");
+  };
+  await unchanged();
+  const expected = expectedRawIndex(item, io.rawBucket, inflight.key);
+  const intent = { version: 1, kind: "manual-index-reconciliation", planId: opts.planId, cutoff: manifest.cutoff,
+    expectedCount: manifest.expectedCount, manifestSha256: active.manifestSha256, stateSha256: opts.reconcileStateSha256,
+    cursor: state.cursor, sha256: item.sha256, rawBucket: io.rawBucket, rawKey: inflight.key, rawBytes: raw.body.length,
+    expectedIndex: expected, originalSendUnknown: true, maximumInsertAttempts: 1, createdAt: new Date(io.now()).toISOString() };
+  await persist(`${resolution}/intent.json`, intent);
+  await unchanged();
+  await io.emit({ phase: "index_reconciliation_insert_inflight", sha256: item.sha256, originalSendUnknown: true, reconciliationInsertAttempts: 1 });
+  checkClock();
+  await io.insert(expected); // plain unique INSERTだけ。競合・unknownの再送なし。
+  const post = await io.index(item.sha256);
+  if (post === null || Object.keys(post).sort().join("|") !== Object.keys(expected).sort().join("|") ||
+      (Object.keys(expected) as Array<keyof RawIndexRow>).some(key => post[key] !== expected[key]))
+    throw new Error("[raw-backfill] reconcile索引全列readbackが不一致です。再送禁止");
+  await unchanged();
+  const complete = { ...intent, status: "manual_index_reconciliation_complete", completedAt: new Date(io.now()).toISOString(),
+    reconciliationInsertAttempts: 1, fullMetadataReadback: true, oldLatchUnchanged: true, rawPuts: 0, stateResets: 0, upstreamGets: 0 };
+  await persist(`${resolution}/complete.json`, complete);
+  const result = { status: complete.status, sha256: item.sha256, originalSendUnknown: true, reconciliationInsertAttempts: 1,
+    fullMetadataReadback: true, oldLatchUnchanged: true, cursor: state.cursor, rawGets: 1, rawGetBytes: raw.body.length,
+    rawPuts: 0, d1Reads: 2, d1Inserts: 1, receiptGets, receiptPuts, notionDownloads: 0, upstreamGets: 0, stateResets: 0 };
+  await io.emit({ phase: "resolution_complete", ...result });
+  return result;
+}
+
 export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
   const start = io.now();
   validateRawOptions(opts, start);
+  if (opts.reconcileSha256 !== undefined) return reconcileRawIndex(opts, io);
   const deadline = start + opts.maxSeconds * 1000;
   // 一度開始した原本1件はinflightを解決するまで完結。次の原本は期限後に開始しない。
   // hard timeout/runner消失では永続inflightが次runの無条件再送を止める。
@@ -421,21 +521,24 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
 
 async function main() {
   const required = ["mode", "plan-id", "limit", "max-bytes", "max-seconds", "expected-count", "out"];
-  const allowed = [...required, "cutoff"];
+  const allowed = [...required, "cutoff", "reconcile-sha256", "reconcile-state-sha256"];
   const args = new Map<string, string>();
   for (const arg of process.argv.slice(2)) {
-    const m = /^--([a-z-]+)=(.+)$/.exec(arg);
+    const m = /^--([a-z0-9-]+)=(.+)$/.exec(arg);
     if (!m || !allowed.includes(m[1]!) || args.has(m[1]!)) throw new Error("[raw-backfill] 引数不正/重複");
     args.set(m[1]!, m[2]!);
   }
   if (required.some((key) => !args.has(key)) || sharedEnv.LOCAL_OUT() !== undefined) throw new Error("[raw-backfill] 全引数明示・LOCAL_OUT禁止");
   const opts: RawBackfillOptions = { mode: args.get("mode") as "dry" | "apply", planId: args.get("plan-id")!, limit: Number(args.get("limit")),
-    maxBytes: Number(args.get("max-bytes")), maxSeconds: Number(args.get("max-seconds")), expectedCount: Number(args.get("expected-count")), ...(args.has("cutoff") ? { cutoff: args.get("cutoff")! } : {}) };
+    maxBytes: Number(args.get("max-bytes")), maxSeconds: Number(args.get("max-seconds")), expectedCount: Number(args.get("expected-count")), ...(args.has("cutoff") ? { cutoff: args.get("cutoff")! } : {}),
+    ...(args.has("reconcile-sha256") ? { reconcileSha256: args.get("reconcile-sha256")! } : {}),
+    ...(args.has("reconcile-state-sha256") ? { reconcileStateSha256: args.get("reconcile-state-sha256")! } : {}) };
   validateRawOptions(opts);
   const receipt = await fs.open(args.get("out")!, "wx", 0o600), before = notionStats();
   const startedAt = Date.now();
   let lastPhase = "starting";
   let lastRawVerified: { sha256: string; bytes: number } | null = null;
+  let reconciliationInsertAttempts = 0;
   let lastProgressAt = 0;
   let inventory = { prefix: "", queries: 0, currentPartitionRows: 0, acceptedRows: 0, responseRows: 0 };
   const emit = async (record: object) => { const phase = (record as { phase?: unknown }).phase; if (typeof phase === "string") lastPhase = phase;
@@ -443,6 +546,7 @@ async function main() {
       const { sha256, bytes } = record as { sha256: string; bytes: number };
       lastRawVerified = { sha256, bytes };
     }
+    if (phase === "index_reconciliation_insert_inflight") reconciliationInsertAttempts = 1;
     await receipt.write(`${JSON.stringify(record)}\n`); await receipt.sync();
     // 公開runner logには原本key/URL/bodyを出さず、停止前の送信境界だけ残す。
     if (["manifest", "receipt_inflight", "receipt_verified", "raw_verified", "raw_inflight", "index_inflight", "verified"].includes(lastPhase) &&
@@ -468,7 +572,8 @@ async function main() {
     const after = notionStats();
     const failure = { status: "stopped", ...safeRawFailure(error), lastPhase, lastRawVerified, inventory, elapsedMs: Date.now() - startedAt,
       notionRequests: after.requests - before.requests, notionRateLimited: after.rateLimited - before.rateLimited,
-      notionTransientRetries: after.transientRetries - before.transientRetries, upstreamGets: 0, resend: 0 };
+      notionTransientRetries: after.transientRetries - before.transientRetries, upstreamGets: 0,
+      ...(opts.reconcileSha256 === undefined ? { resend: 0 } : { originalSendUnknown: true, reconciliationInsertAttempts }) };
     await emit({ ...failure, phase: "stopped" });
     console.error(JSON.stringify(failure));
     process.exitCode = 1;

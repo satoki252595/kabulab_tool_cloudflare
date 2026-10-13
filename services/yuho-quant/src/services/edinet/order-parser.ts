@@ -21,8 +21,11 @@
  * (XBRL/PublicDoc/..._honbun_jpcrp030000-asr-..._ixbrl.htm) の <table> にある。
  */
 import { unzip } from "./zip.js";
+import { readFilingDurationContexts } from "./duration-context.js";
+import { resolveCandidateFiscal, resolveTableScope } from "../overseas-parser.js";
 import {
   extractTables,
+  tablesWithHeading,
   tableToGrid,
   tableToGridExpanded,
   parseJpNumber,
@@ -63,6 +66,8 @@ export interface OrderExtraction {
   facts: OrderFact[];
   honbunFile: string | null;
   tablesScanned: number;
+  /** 原本候補が不明/矛盾のときは空factsで明示保留する。 */
+  holdReason?: string;
 }
 
 /**
@@ -81,10 +86,10 @@ const RX_CONSTRUCTION = /当期.{0,2}受注(\(契約\)|（契約）)?.{0,2}高/;
 /** 建設業 完成工事表の残高列。期別×区分表の正式列名「繰越工事高」も含む。 */
 const RX_CONSTRUCTION_BACKLOG = /(期末|次期).{0,2}繰越(?:工事)?高/;
 
-function pickHonbunHtml(entries: Map<string, Buffer>): {
+function collectHonbunHtml(entries: Map<string, Buffer>): Array<{
   name: string;
   html: string;
-} | null {
+}> {
   const names = [...entries.keys()];
   // 本文 iXBRL を最優先。無ければ PublicDoc 配下の htm を全て候補に。
   const honbun = names.filter(
@@ -98,13 +103,7 @@ function pickHonbunHtml(entries: Map<string, Buffer>): {
     (n) => /PublicDoc\//i.test(n) && /\.html?$/i.test(n)
   );
   const list = honbun.length > 0 ? honbun : pubHtml;
-  if (list.length === 0) return null;
-  // 受注キーワードを含む htm を選ぶ
-  for (const n of list) {
-    const html = entries.get(n)!.toString("utf8");
-    if (RX_ORDER_KEYWORD.test(html)) return { name: n, html };
-  }
-  return { name: list[0], html: entries.get(list[0])!.toString("utf8") };
+  return list.map((name) => ({ name, html: entries.get(name)!.toString("utf8") }));
 }
 
 function classifyRow(label: string): SegmentKind {
@@ -557,12 +556,87 @@ export function parseOrderData(
     throw new Error(`reportPeriodEnd 形式が不正: ${reportPeriodEnd}`);
   }
   const entries = unzip(zipBuf);
-  const picked = pickHonbunHtml(entries);
-  if (!picked) {
+  const bodies = collectHonbunHtml(entries);
+  if (bodies.length === 0) {
     return { status: "no_order_table", facts: [], honbunFile: null, tablesScanned: 0 };
   }
-  const r = parseOrderHtml(picked.html, reportPeriodEnd);
-  return { ...r, honbunFile: picked.name };
+  const candidates: OrderExtraction[] = [];
+  let tablesScanned = 0;
+  let sawOrdersOnly = false;
+  const holdReasons = new Set<string>();
+  // 全分割本文・全native tableを先に検査する。先頭本文のキーワード、
+  // 候補の順序、失敗後の代替値では選ばず、単一の適格factsetだけを採用する。
+  for (const body of bodies) {
+    const contexts = readFilingDurationContexts(entries, body.name, reportPeriodEnd);
+    for (const table of tablesWithHeading(body.html)) {
+      if (table.textBlock === "ShareholdingsTextBlock") continue;
+      if (!RX_ORDER_KEYWORD.test(table.table)) continue;
+      tablesScanned++;
+      const parsed = parseOrderHtml(table.table, reportPeriodEnd);
+      if (parsed.status === "orders_only") sawOrdersOnly = true;
+      if (parsed.facts.length === 0) continue;
+      const flat = tableToGridExpanded(table.table).map((r) => r.join(" ")).join(" ");
+      let fiscal = resolveCandidateFiscal("", flat, table.caption, reportPeriodEnd);
+      if (fiscal === null && table.contextRef !== null) {
+        const context = contexts.get(table.contextRef);
+        if (context && context.endDate === reportPeriodEnd) fiscal = { side: "T", date: context.endDate };
+      }
+      // 「当年度の受注実績」は同じ filing の実 duration が一意の場合だけ日付へ結ぶ。
+      // FilingDateInstant 等の context 名や呼出引数だけでは当期と推定しない。
+      const nativeCurrent = new Set([...contexts.values()].filter((c) => c?.endDate === reportPeriodEnd)
+        .map((c) => JSON.stringify([c!.entity, c!.startDate, c!.endDate])));
+      const currentOrderCaption = /当(?:連結会計|事業|会計)年度(?:における|の)[^。]{0,80}受注実績/.test(table.caption);
+      const currentValueAxis = /当(?:連結会計|事業|会計)年度/.test(flat.replace(/[\s\u3000]/g, ""));
+      // Bの全行が実印刷「至日」で束縛され、採用期を含む場合だけ複数期表を資格化。
+      // 相対「当年度」はreducerが呼出引数を代入するためfacts自体を期間証拠にしない。
+      const printedEnds = new Set([...toHalfWidthDigits(flat).replace(/[\s\u3000]/g, "")
+        .matchAll(/至(\d{4})年(\d{1,2})月(\d{1,2})日/g)]
+        .map((m) => `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`));
+      const absoluteB = parsed.status === "ok_pattern_b" && printedEnds.has(reportPeriodEnd) &&
+        parsed.facts.every((f) => printedEnds.has(f.fiscalYearEnd));
+      const relativeB = parsed.status === "ok_pattern_b" && fiscal !== "mismatch" &&
+        nativeCurrent.size === 1 && currentValueAxis && parsed.facts.some((f) => f.fiscalYearEnd === reportPeriodEnd);
+      if (absoluteB || relativeB) fiscal = { side: "T", date: reportPeriodEnd };
+      if (fiscal === null && nativeCurrent.size === 1 && (currentOrderCaption || currentValueAxis)) {
+        fiscal = { side: "T", date: reportPeriodEnd };
+      }
+      if (fiscal === "mismatch") { holdReasons.add("order_table_fiscal_mismatch"); continue; }
+      if (fiscal?.side === "Z") continue; // 原表で前期と証明した表は当期候補ではない
+      if (fiscal === null || fiscal.date !== reportPeriodEnd) { holdReasons.add("order_table_fiscal_unknown"); continue; }
+      // 直前の「提出会社単独/個別」以降が当該表の caption。前段の連結説明を借りない。
+      const individual = [...table.caption.matchAll(/提出会社(?:単独|個別|における|の受注工事)|当社単体/g)].at(-1);
+      const caption = individual === undefined ? table.caption : table.caption.slice(individual.index);
+      const segments = parsed.facts.filter((f) => f.segmentKind === "segment");
+      const companyRows = segments.length > 0 && segments.every((f) => /提出会社/.test(f.segmentName));
+      const scope = companyRows || individual !== undefined ? false
+        : resolveTableScope(caption, table.textBlock, parsed.facts[0].isConsolidated);
+      if (scope === null || scope === "mismatch" || parsed.facts.some((f) => f.isConsolidated !== null && f.isConsolidated !== scope)) {
+        holdReasons.add("order_table_scope_unknown_or_mismatch");
+        continue;
+      }
+      if (!parsed.facts.some((f) => f.fiscalYearEnd === reportPeriodEnd) ||
+          parsed.facts.some((f) => f.fiscalYearEnd > reportPeriodEnd)) {
+        holdReasons.add("order_fact_period_mismatch");
+        continue;
+      }
+      candidates.push({ ...parsed, facts: parsed.facts.map((f) => ({ ...f, isConsolidated: scope })), honbunFile: body.name });
+    }
+  }
+  // 全候補の資格化後、連結の開示があればその contract に限定する。
+  // 個別表との異なる値は混ぜず、同じ scope の矛盾だけを HOLD する。
+  candidates.sort((a, b) => a.honbunFile!.localeCompare(b.honbunFile!));
+  const eligible = candidates.some((c) => c.facts[0].isConsolidated === true)
+    ? candidates.filter((c) => c.facts[0].isConsolidated === true) : candidates;
+  const factsets = new Set(eligible.map((c) => JSON.stringify(c.facts.map((f) => [
+    f.fiscalYearEnd, f.isConsolidated, f.unitLabel, f.unitYenFactor,
+    f.segmentKind, f.segmentName, f.ordersReceived, f.orderBacklog,
+  ]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))))));
+  if (factsets.size > 1) holdReasons.add("conflicting_order_factsets");
+  if (holdReasons.size > 0) {
+    return { status: "table_unrecognized", facts: [], honbunFile: null, tablesScanned, holdReason: [...holdReasons].sort().join("+") };
+  }
+  if (factsets.size === 1) return { ...eligible[0], tablesScanned };
+  return { status: tablesScanned === 0 ? "no_order_table" : sawOrdersOnly ? "orders_only" : "table_unrecognized", facts: [], honbunFile: null, tablesScanned };
 }
 
 /**

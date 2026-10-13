@@ -217,6 +217,95 @@ describe("保存済⑤原本のbounded publisher", () => {
 });
 
 
+describe("人間判断後の単一索引reconcile", () => {
+  async function interrupted() {
+    const f = fixture(), insert = f.io.insert;
+    f.io.insert = vi.fn(async () => { throw new Error("old send unknown"); });
+    await expect(runRawBackfill(opts, f.io)).rejects.toThrow("old send unknown");
+    f.io.insert = insert;
+    const stateKey = "ops-bucket/ops/raw-index/test-plan/state.json", activeKey = "ops-bucket/ops/raw-index/active.json";
+    const state = f.objects.get(stateKey)!, active = f.objects.get(activeKey)!;
+    const reconcile: RawBackfillOptions = { ...opts, limit: 1, cutoff: "2026-10-14T00:00:00.000Z", reconcileSha256: sha,
+      reconcileStateSha256: createHash("sha256").update(state.body).digest("hex") };
+    for (const fn of [f.io.get, f.io.put, f.io.list, f.io.download, f.io.index, f.io.insert, f.io.antiJoin, f.io.emit]) vi.mocked(fn).mockClear();
+    f.events.length = 0;
+    return { ...f, reconcile, stateKey, activeKey, oldState: state, oldActive: active };
+  }
+  it("fresh原本SHA不一致はintent/INSERTを送らず停止する", async () => {
+    const f = await interrupted();
+    f.objects.set(`raw-bucket/${key}`, { body: new Uint8Array([1, 2, 3, 4]), etag: '"bad"' });
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("原本全body SHA/サイズ不一致");
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it.each(["state-sha", "fresh-state-etag"])("旧state %s 競合は送信0で停止する", async (kind) => {
+    const f = await interrupted();
+    if (kind === "state-sha") f.reconcile.reconcileStateSha256 = "0".repeat(64);
+    else {
+      const get = f.io.get; let reads = 0;
+      f.io.get = vi.fn(async (target, bucket) => {
+        if (`${bucket}/${target}` === f.stateKey && ++reads === 2) f.objects.set(f.stateKey, { ...f.oldState, etag: '"changed"' });
+        return get(target, bucket);
+      });
+    }
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow();
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it("fresh全SHA→absence→intent CAS/readback→unique1→全列readback、旧latch不変", async () => {
+    const f = await interrupted();
+    const result = await runRawBackfill(f.reconcile, f.io);
+    expect(result).toMatchObject({ status: "manual_index_reconciliation_complete", originalSendUnknown: true,
+      reconciliationInsertAttempts: 1, rawGets: 1, rawPuts: 0, d1Inserts: 1, receiptPuts: 2, oldLatchUnchanged: true });
+    expect(f.io.insert).toHaveBeenCalledTimes(1); expect(f.io.insert).toHaveBeenCalledWith(expectedRawIndex(item, f.io.rawBucket, key));
+    expect(f.io.list).not.toHaveBeenCalled(); expect(f.io.download).not.toHaveBeenCalled(); expect(f.io.antiJoin).not.toHaveBeenCalled();
+    expect(f.objects.get(f.stateKey)).toEqual(f.oldState); expect(f.objects.get(f.activeKey)).toEqual(f.oldActive);
+    expect(f.state()).toMatchObject({ cursor: 0, inflight: { phase: "index_inflight", sha256: sha } });
+    const intentKey = `ops/raw-index/test-plan/resolutions/${sha}/intent.json`;
+    const insertAt = f.events.indexOf("D1:INSERT"), intentAt = f.events.indexOf(`ops-bucket:PUT:${intentKey}`);
+    expect(f.events.indexOf(`raw-bucket:GET:${key}`)).toBeLessThan(intentAt);
+    expect(f.events.indexOf(`ops-bucket:GET:${intentKey}`, intentAt)).toBeLessThan(insertAt);
+    expect(f.events.indexOf("fsync:index_reconciliation_insert_inflight")).toBeLessThan(insertAt);
+    for (const call of vi.mocked(f.io.put).mock.calls) expect(call[2]).toBeNull();
+    vi.mocked(f.io.put).mockClear(); vi.mocked(f.io.insert).mockClear();
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("intentが既存");
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it.each([true, false])("明示INSERT unknown（実適用=%s）はintentを保持し二度目も送信0", async (applied) => {
+    const f = await interrupted(), insert = f.io.insert;
+    f.io.insert = vi.fn(async row => { if (applied) await insert(row); throw new Error("reconcile send unknown"); });
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("reconcile send unknown");
+    expect(f.state().inflight.phase).toBe("index_inflight");
+    expect(f.objects.has(`ops-bucket/ops/raw-index/test-plan/resolutions/${sha}/complete.json`)).toBe(false);
+    vi.mocked(f.io.put).mockClear(); vi.mocked(f.io.insert).mockClear();
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("intentが既存");
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it("intent CASの結果不明はINSERT0、残ったintentで次の明示runも停止する", async () => {
+    const f = await interrupted(), put = f.io.put;
+    f.io.put = vi.fn(async (...args: Parameters<BackfillIo["put"]>) => { await put(...args); throw new Error("intent unknown"); });
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("intent unknown");
+    expect(f.io.put).toHaveBeenCalledTimes(1); expect(f.io.insert).not.toHaveBeenCalled();
+    vi.mocked(f.io.put).mockClear();
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("intentが既存");
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+    expect(f.objects.get(f.stateKey)).toEqual(f.oldState);
+  });
+  it("full15列の取得時計不一致もcompleteにせず旧ラッチを残す", async () => {
+    const f = await interrupted(), insert = f.io.insert;
+    f.io.insert = vi.fn(async row => { await insert({ ...row, first_fetched_at: 1 }); });
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("全列readbackが不一致");
+    expect(f.objects.has(`ops-bucket/ops/raw-index/test-plan/resolutions/${sha}/complete.json`)).toBe(false);
+    expect(f.objects.get(f.stateKey)).toEqual(f.oldState);
+  });
+  it.each([
+    { mode: "dry" }, { limit: 50 }, { cutoff: undefined }, { reconcileSha256: undefined },
+    { reconcileStateSha256: undefined }, { reconcileSha256: "not-hex" },
+  ] as Array<Partial<RawBackfillOptions>>)("独立optionの不正組合せ %j はGET前に停止する", async change => {
+    const f = await interrupted();
+    await expect(runRawBackfill({ ...f.reconcile, ...change }, f.io)).rejects.toThrow("明示reconcile");
+    expect(f.io.get).not.toHaveBeenCalled(); expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+});
+
 describe("raw停止診断の秘密非開示", () => {
   it("許可した固定⑤メッセージだけを表示し、URL/body/causeはSHAへ閉じ込める", () => {
     expect(safeRawFailure(new Error("⑤原本の基準日が欠測しています。キー日付を捏造せず停止")).detail).toContain("基準日が欠測");
