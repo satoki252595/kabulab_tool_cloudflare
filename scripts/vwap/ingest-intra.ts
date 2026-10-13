@@ -5,13 +5,14 @@ import "dotenv/config";
 // 最大 60d まで提供するので、初回は INTRA_RANGE=60d でバックフィルし、以後 5d で延伸。
 // 実行: npx tsx scripts/ingest-intra.ts [--codes=...] [--limit=N] [--range=60d]   KEEP_DAYS=365
 import { fileURLToPath } from "node:url";
-import { fetchBars5m, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES } from "../../src/shared/yahoo/client.js";
+import { fetchBars5m, fetchBars5mWindow, YahooRawTooLargeError, MAX_YAHOO_RAW_BYTES, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
 import { r2GetVersion, r2Put, mapLimit, sleep, retry, R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
 import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { archiveSummaryOrFatal, assertSavedIntraShape, bodyPin, buildIngestSummary, findInvalidBars, mergeIntraBars, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome, type SavedIntra } from "./lib/ingest-guard.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../../src/shared/yahoo/raw-custody.js";
+import { proveIntraRecoveryCapture, resolveIntraRecoveryWindow, type IntraRecoveryProof } from "./lib/intra-recovery.js";
 
 export async function main() {
   // knob は main 内で型付き取得する (未設定・不正値は final catch で exit 2)。
@@ -21,15 +22,18 @@ export async function main() {
   // Yahoo の 5m 上限は 60d。未知値は弾く (ルール2: 黙って既定に倒さない)。
   // どちらも無ければ必須エラー (未設定フォールバックなし)。
   const rangeArg = arg("range");
-  const RANGE = rangeArg ?? sharedEnv.VWAP_INTRA_RANGE();
-  if (!/^([1-9]|[1-5][0-9]|60)d$/.test(RANGE)) {
+  const only = arg("codes"), limit = arg("limit");
+  const sourceWindow = resolveIntraRecoveryWindow({ from: arg("from"), toExclusive: arg("to-exclusive"),
+    codes: only, range: rangeArg, limit, now: new Date().toISOString() });
+  const RANGE = sourceWindow === null ? rangeArg ?? sharedEnv.VWAP_INTRA_RANGE() :
+    `period1=${sourceWindow.period1};period2=${sourceWindow.period2}`;
+  if (sourceWindow === null && !/^([1-9]|[1-5][0-9]|60)d$/.test(RANGE)) {
     throw new Error("INTRA_RANGE/--range は 1d〜60d で指定してください");
   }
   const universe = await loadCodes();
-  const only = arg("codes");
   if (only) assertCodesInUniverse(only.split(","), universe);
   let codes = only ? only.split(",") : universe;
-  const limit = arg("limit"); if (limit) codes = codes.slice(0, Number(limit));
+  if (limit) codes = codes.slice(0, Number(limit));
 
   const cutoffTs = Math.floor(Date.now() / 1000) - KEEP_DAYS * 86400;
   const startedAt = new Date().toISOString();
@@ -41,6 +45,7 @@ export async function main() {
   const unknownCodes: string[] = [];
   const rejectedCodes: string[] = [];
   const outcomes: Record<string, IngestCodeOutcome> = {};
+  const sourceProofs: Record<string, IntraRecoveryProof> = {};
   // R2 fault (PUT unknown/rejected・GET fault) は新規作業を止める。
   // inflight は止めず settle させ正直計数する (取消成功の仮定なし)。
   const stopNewWork = (code: string, why: unknown) => {
@@ -78,19 +83,29 @@ export async function main() {
             attempt++;
             let captured = false;
             try {
-              const bars = await fetchBars5m(`${code}.T`, RANGE, {
-                onRaw: (capture) => {
+              let rawCapture: YahooRawCapture | undefined;
+              const options = {
+                onRaw: (capture: YahooRawCapture) => {
                   captures.push({ api: "intra", attempt, capture });
+                  rawCapture = capture;
                   captured = true;
                   if (capture.symbol !== `${code}.T`) {
                     fatal = true;
                     throw new Error("Yahoo5分足の原本captureと要求銘柄が一致しません (raw custody STOP)");
                   }
                 },
-              });
+              };
+              const bars = sourceWindow === null ? await fetchBars5m(`${code}.T`, RANGE, options) :
+                await fetchBars5mWindow(`${code}.T`, sourceWindow, options);
               if (!captured) {
                 fatal = true;
                 throw new Error("Yahoo5分足が返りましたが原HTTP本文captureがありません (raw custody STOP)");
+              }
+              if (sourceWindow !== null) {
+                try {
+                  sourceProofs[code] = proveIntraRecoveryCapture(rawCapture!, sourceWindow, `${code}.T`);
+                  if (bars.length === 0) throw new Error("5分足明示回復: 全raw行の解析後に採用barがなく回復未成立です");
+                } catch (error) { fatal = true; throw error; }
               }
               return bars;
             } catch (e) {
@@ -222,6 +237,7 @@ export async function main() {
   // 未着手の全件 accounting。prepared-but-stopped は上で latest 付き notStarted。
   for (const code of codes) {
     outcomes[code] ??= { status: "notStarted", latestSourceBar: null, bodySha: null };
+    if (sourceProofs[code] !== undefined) outcomes[code].sourceWindowProof = sourceProofs[code];
   }
   const sortedOutcomes: Record<string, IngestCodeOutcome> = {};
   for (const k of Object.keys(outcomes).sort()) sortedOutcomes[k] = outcomes[k];
@@ -231,7 +247,7 @@ export async function main() {
   console.info(JSON.stringify({ codes: codes.length, range: RANGE, written, skipped, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted, fatal, unknown: unknown.length, rejected: rejected.length }));
   // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 intra に必須接続。
   // 保管失敗は fatal exit 2 にする (未保管の成功なし)。
-  const summary = buildIngestSummary({ kind: "intra", range: RANGE, runId, codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
+  const summary = buildIngestSummary({ kind: "intra", range: RANGE, ...(sourceWindow === null ? {} : { sourceWindow }), runId, codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
   const local = writeSummaryLocal(summary);
   if (!local.ok) {
     console.error(JSON.stringify({ archive: "local-failed", key: summary.key, reason: local.reason }));

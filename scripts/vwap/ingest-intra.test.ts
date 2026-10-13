@@ -13,6 +13,7 @@ import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main } from "./ingest-intra.js";
 
 const intraSource = vi.hoisted(() => vi.fn());
+const intraWindowSource = vi.hoisted(() => vi.fn());
 const rawHook = vi.hoisted(() => ({ enabled: true }));
 
 vi.mock("./lib/r2.js", async (importOriginal) => {
@@ -26,7 +27,7 @@ vi.mock("./lib/codes.js", async (importOriginal) => {
 });
 vi.mock("../../src/shared/yahoo/client.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../../src/shared/yahoo/client.js")>();
-  return { ...mod, fetchBars5m: async (...args: Parameters<typeof mod.fetchBars5m>) => {
+  return { ...mod, fetchBars5mWindow: intraWindowSource, fetchBars5m: async (...args: Parameters<typeof mod.fetchBars5m>) => {
     if (rawHook.enabled) await args[2]?.onRaw?.({ symbol: args[0], status: 200,
       bytes: new TextEncoder().encode("test-only captured HTTP body"),
       url: "https://query1.finance.yahoo.com/v8/finance/chart/test", receivedAt: new Date().toISOString(), headers: {} });
@@ -89,9 +90,50 @@ afterEach(() => {
   process.argv = SAVED_ARGV;
   process.exitCode = undefined;
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("ingest-intra main flow", () => {
+  it.each(["success", "unknown-put", "wrong-window", "unknown-custody", "no-trade"])("explicit five-code recovery %s preserves custody/CAS/proof and stops unknown", async mode => {
+    vi.useFakeTimers({ toFake: ["Date"] });vi.setSystemTime(new Date("2026-10-13T19:43:00.123Z"));
+    process.argv = ["node", "vitest", "--codes=593A,598A", "--from=2026-08-17T00:00:00Z", "--to-exclusive=2026-10-13T06:30:01Z"];
+    mockLoadCodes.mockResolvedValue(["593A", "598A"]);
+    const at = Date.parse("2026-10-13T06:30:00Z") / 1000, fresh = { ...BAR, ts: at };
+    const retained = { ...BAR, ts: at - 300, sourceTag: "existing-field-preserved" };
+    mockR2Get.mockImplementation(async key => ({ body: JSON.stringify({ code: key.split("/")[1].split(".")[0], updated: "2026-10-09T08:00:00Z", bars: [retained] }), etag: "observed-intra-version" }));
+    intraWindowSource.mockImplementation(async (symbol, window, options) => {
+      const bytes = new TextEncoder().encode(JSON.stringify({ chart: { error: null, result: [{
+        meta: { symbol, currency: "JPY", instrumentType: "EQUITY", dataGranularity: "5m", exchangeTimezoneName: "Asia/Tokyo" },
+        timestamp: [mode === "wrong-window" ? window.period2 : at],
+      }] } }));
+      await options.onRaw({ symbol, bytes, status: 200, receivedAt: new Date().toISOString(), headers: {},
+        url: `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=5m&period1=${window.period1}&period2=${window.period2}` });
+      return mode === "no-trade" ? [] : [fresh];
+    });
+    mockRawArchive.mockImplementation(async () => {
+      expect(mockR2Put).not.toHaveBeenCalled();
+      if (mode === "unknown-custody") throw new NotionUnknownResultError("test-only unknown custody");
+      return { pages: ["physical-raw"], rawBytes: 1, compressedBytes: 1 };
+    });
+    if (mode === "unknown-put") mockR2Put.mockRejectedValueOnce(new R2PutUnknownError("intra/593A.json", "timeout", "none", null));
+    else mockR2Put.mockResolvedValue(undefined);
+    await main();
+    expect(mockFetch5m).not.toHaveBeenCalled();
+    expect(intraWindowSource).toHaveBeenCalledTimes(mode === "wrong-window" || mode === "no-trade" ? 1 : 2);
+    expect(mockRawArchive.mock.calls[0][0].captures).toHaveLength(mode === "wrong-window" || mode === "no-trade" ? 1 : 2);
+    if (mode === "wrong-window" || mode === "unknown-custody" || mode === "no-trade") { expect(mockR2Put).not.toHaveBeenCalled();expect(process.exitCode).toBe(2);return; }
+    expect(mockR2Put).toHaveBeenCalledTimes(mode === "unknown-put" ? 1 : 2);
+    expect(mockR2Put.mock.calls[0][2]).toBe("observed-intra-version");
+    expect(JSON.parse(mockR2Put.mock.calls[0][1]).bars).toEqual([retained, fresh]);
+    const body = recordedBody(), outcomes = body.outcomes as Record<string, { status: string; sourceWindowProof: { rawSha256: string; lastTs: number; sourceUrl: string } }>;
+    expect(body.range).toContain("period1=");expect(body.range).not.toBe("60d");
+    expect(outcomes["593A"].sourceWindowProof.lastTs).toBe(at);
+    expect(outcomes["593A"].sourceWindowProof.rawSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(outcomes["593A"].sourceWindowProof.sourceUrl).toContain("period2=");
+    expect(recordedMetadata().sourceWindow).toMatchObject({ toExclusive: "2026-10-13T06:30:01Z" });
+    expect(process.exitCode).toBe(mode === "unknown-put" ? 2 : 0);
+    if (mode === "unknown-put") { expect(body.unknown).toEqual(["593A"]);expect(outcomes["598A"].status).toBe("notStarted"); }
+  });
   it("concurrent replacement rejects the exact observed version and stops remaining codes", async () => {
     mockLoadCodes.mockResolvedValue(["A", "B"]);
     mockR2Get.mockResolvedValue({ body: existingA, etag: "opaque-multipart-2" });
