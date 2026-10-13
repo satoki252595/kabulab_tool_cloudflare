@@ -43,6 +43,10 @@ ALLOWED: frozenset[str] = frozenset(
         "pipeline/tests/fixtures/edinet/context-unit/manifest.json",
         "pipeline/tests/fixtures/edinet/context-unit/tdnet.source.txt",
         "pipeline/tests/fixtures/edinet/context-unit/README.md",
+        # 公開EDINETの全原CSV ZIP（commercial-ok）。ROAの当期値と別定義拒否をCIで確認。
+        "pipeline/tests/fixtures/direct-roa/7911-S100YIAY-type5.zip",
+        "pipeline/tests/fixtures/direct-roa/8566-S100YF3N-type5.zip",
+        "pipeline/tests/fixtures/direct-roa/provenance.json",
         # 銘柄コード契約の言語横断テストベクタ（kabulab-cf と同一バイト列で共有）。
         # 取得物ではなく手書きの契約定義で、収録しているのは境界値のコード文字列
         # （大半は "07203" / "A130" / "1234567" のような合成値）と説明文だけ。
