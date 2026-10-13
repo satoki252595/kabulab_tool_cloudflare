@@ -9,7 +9,7 @@ const DAY = 86400;
 export interface IntraRecoveryWindow { from: string; toExclusive: string; period1: number; period2: number }
 export interface IntraRecoveryProof extends IntraRecoveryWindow {
   sourceUrl: string; observedAt: string; rawSha256: string;
-  rawBars: number; firstTs: number | null; lastTs: number | null;
+  rawBars: number; nonTradingNullRows: number; firstTs: number | null; lastTs: number | null;
 }
 function fail(): never { throw new Error("5分足明示回復: 対象・実clock・60日内のJP営業窓が不一致です"); }
 function seconds(value: string): number {
@@ -57,7 +57,8 @@ export function proveIntraRecoveryCapture(capture: YahooRawCapture, window: Intr
       [...url.searchParams.keys()].some(key => !["period1", "period2", "interval"].includes(key))) fail();
   const json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(capture.bytes)) as {
     chart?: { error?: unknown; result?: Array<{ meta?: { symbol?: unknown; currency?: unknown; instrumentType?: unknown;
-      dataGranularity?: unknown; exchangeTimezoneName?: unknown }; timestamp?: unknown }> };
+      dataGranularity?: unknown; exchangeTimezoneName?: unknown }; timestamp?: unknown;
+      indicators?: { quote?: Array<Record<string, unknown>> } }> };
   };
   const result = json.chart?.result;
   if (json.chart?.error || !Array.isArray(result) || result.length !== 1) fail();
@@ -65,16 +66,24 @@ export function proveIntraRecoveryCapture(capture: YahooRawCapture, window: Intr
   if (meta?.symbol !== symbol || meta.currency !== "JPY" || meta.instrumentType !== "EQUITY" || meta.dataGranularity !== "5m" ||
       meta.exchangeTimezoneName !== "Asia/Tokyo" || !Array.isArray(stamps) || stamps.length === 0) fail();
   if (typeof stamps.at(-1) !== "number" || jstDateSec(stamps.at(-1)) !== jstDateSec(window.period2 - 1)) fail();
+  const quote = result[0].indicators?.quote?.[0], fields = ["open", "high", "low", "close", "volume"];
+  if (quote === undefined || !fields.every(key => Array.isArray(quote[key]) && quote[key].length === stamps.length)) fail();
+  let nonTradingNullRows = 0;
   for (let i = 0; i < stamps.length; i++) {
     const ts: unknown = stamps[i];
     if (typeof ts !== "number" || !Number.isSafeInteger(ts) || ts % 300 !== 0 ||
         ts < window.period1 || ts >= window.period2 || (i > 0 && (stamps[i - 1] as number) >= ts) ||
         marketClosure("JPX", jstDateSec(ts)) !== null) fail();
     const time = ((ts + 32400) % DAY + DAY) % DAY;
-    if (!(time >= 9 * 3600 && time <= 11.5 * 3600 || time >= 12.5 * 3600 && time <= 15.5 * 3600)) fail();
+    if (!(time >= 9 * 3600 && time <= 11.5 * 3600 || time >= 12.5 * 3600 && time <= 15.5 * 3600)) {
+      // 593A実原本の11:35–12:25全null padding。0や部分欠測を無約定へ読み替えない。
+      if (!(time > 11.5 * 3600 && time < 12.5 * 3600) ||
+          !fields.every(key => (quote[key] as unknown[])[i] === null)) fail();
+      nonTradingNullRows++;
+    }
   }
   return { ...window, sourceUrl: url.toString(), observedAt: capture.receivedAt,
-    rawSha256: createHash("sha256").update(capture.bytes).digest("hex"), rawBars: stamps.length,
+    rawSha256: createHash("sha256").update(capture.bytes).digest("hex"), rawBars: stamps.length, nonTradingNullRows,
     firstTs: stamps.length === 0 ? null : stamps[0] as number,
     lastTs: stamps.length === 0 ? null : stamps.at(-1) as number };
 }

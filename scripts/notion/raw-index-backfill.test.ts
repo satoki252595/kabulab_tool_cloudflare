@@ -119,6 +119,7 @@ describe("保存済⑤原本のbounded publisher", () => {
     if (applied) expect(await runRawBackfill(opts, f.io)).toMatchObject({ rawPuts: 0, d1Inserts: 0, status: "snapshot_complete" });
     else await expect(runRawBackfill(opts, f.io)).rejects.toThrow("INSERTを再送せず");
     expect(f.io.insert).not.toHaveBeenCalled(); expect(f.rawPuts()).toHaveLength(0);
+    expect(f.emitted).toContainEqual({ phase: "raw_verified", sha256: sha, bytes: body.length });
   });
   it("別plan-idで先行unknownを迂回しない", async () => {
     const f = fixture(); await runRawBackfill(opts, f.io);

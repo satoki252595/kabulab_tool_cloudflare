@@ -176,6 +176,7 @@ export function createD1HttpDb<TSchema extends Record<string, unknown>>(
       assertBindableParams(params as readonly unknown[]);
       const res = await fetch(url, {
         method: "POST",
+        signal: AbortSignal.timeout(60_000),
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
@@ -232,6 +233,7 @@ export function createD1HttpBatchSender(): (
     }
     const res = await fetch(url, {
       method: "POST",
+      signal: AbortSignal.timeout(60_000),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,

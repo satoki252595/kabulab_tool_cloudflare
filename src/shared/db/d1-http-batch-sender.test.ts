@@ -45,6 +45,23 @@ function okBatch(n: number): Response {
 }
 
 describe("createD1HttpBatchSender", () => {
+  it("通信deadlineで止まり、適用不明のbatchを再送しない", async () => {
+    useTestEnv();
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    const fetchOnce = vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal!.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+    }));
+    vi.stubGlobal("fetch", fetchOnce);
+    try {
+      const pending = createD1HttpBatchSender()([{ sql: "SELECT 1", params: [] }]);
+      controller.abort(new DOMException("transport timed out", "TimeoutError"));
+      await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+      expect(timeout).toHaveBeenCalledWith(60_000);
+      expect(fetchOnce).toHaveBeenCalledTimes(1);
+    } finally { timeout.mockRestore(); }
+  });
+
   it("単発と同じ /query へ {batch:[{sql,params}]} を 1 リクエストで送る", async () => {
     useTestEnv();
     const seen: { url: string; init: RequestInit }[] = [];

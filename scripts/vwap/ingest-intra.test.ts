@@ -105,6 +105,8 @@ describe("ingest-intra main flow", () => {
       const bytes = new TextEncoder().encode(JSON.stringify({ chart: { error: null, result: [{
         meta: { symbol, currency: "JPY", instrumentType: "EQUITY", dataGranularity: "5m", exchangeTimezoneName: "Asia/Tokyo" },
         timestamp: [mode === "wrong-window" ? window.period2 : at],
+        indicators: { quote: [{ open: [fresh.o], high: [fresh.h], low: [fresh.l], close: [fresh.c],
+          volume: [mode === "no-trade" ? 0 : fresh.v] }] },
       }] } }));
       await options.onRaw({ symbol, bytes, status: 200, receivedAt: new Date().toISOString(), headers: {},
         url: `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=5m&period1=${window.period1}&period2=${window.period2}` });

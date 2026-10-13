@@ -54,6 +54,21 @@ it("conditional repair preserves the native ETag and propagates a stale precondi
 });
 
 describe("r2Put contract (1 attempt, no retry)", () => {
+  it("bounded transport abort stops a mutation without replay", async () => {
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementationOnce((_command, options) =>
+      new Promise((_resolve, reject) => {
+        const signal = (options as { abortSignal: AbortSignal }).abortSignal;
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }));
+    const pending = r2Put("daily/7203.json", "{}", null);
+    controller.abort(new DOMException("transport timed out", "TimeoutError"));
+    await expect(pending).rejects.toBeInstanceOf(R2PutUnknownError);
+    expect(timeout).toHaveBeenCalledWith(60_000);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it("known missing objects create only while still absent", async () => {
     const send = vi.spyOn(S3Client.prototype, "send");
     send.mockRejectedValueOnce(svcError("PreconditionFailed", 412));
