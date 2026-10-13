@@ -42,6 +42,13 @@ function fixture() {
 }
 
 describe("保存済⑤原本のbounded publisher", () => {
+  it("基準日不明も全文照合して保存し、索引NULLと取得時計を維持する", async () => {
+    const f = fixture();
+    f.io.list = vi.fn(async () => [{ ...raw, dataDate: null }]);
+    expect(await runRawBackfill(opts, f.io)).toMatchObject({ status: "snapshot_complete", verified: 1 });
+    expect(f.rows.get(sha)).toMatchObject({ data_date: null, first_fetched_at: Math.floor(Date.parse(raw.fetchedAt) / 1000) });
+    expect(f.rows.get(sha)?.r2_key).toContain("/nodate/nodate/");
+  });
   it("dryはhosted全文SHAまで照合し、原本/index/receiptのmutationを送らない", async () => {
     const f = fixture();
     const result = await runRawBackfill({ ...opts, mode: "dry" }, f.io);

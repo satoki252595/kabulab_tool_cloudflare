@@ -40,13 +40,13 @@ export async function readD1RawIndexes(shas: string[]): Promise<IndexRow[]> {
   return rows as IndexRow[];
 }
 
-/** 既存Python keys.raw_keyの命名を保持。日付欠測は架空の取得日で埋めない。 */
+/** Python keys.raw_keyと共通。基準日不明の原本はnodate/nodateへ分け、日付はNULLのまま。 */
 export function canonicalRawKey(raw: CanonicalRawFile, docId: string | null): string {
-  if (raw.dataDate === null) throw new Error("⑤原本の基準日が欠測しています。キー日付を捏造せず停止");
   const source: Record<string, string> = { EDINET: "edinet", TDnet: "tdnet", yfinance: "yfinance", stooq: "stooq", JPX: "jpx", "日証金": "_", "計算": "_" };
   const ext = path.extname(raw.filename).slice(1).toLowerCase();
   if (!source[raw.source] || [raw.datatype, raw.scope, ext, ...(docId === null ? [] : [docId])].some((part) => !/^[A-Za-z0-9._-]+$/.test(part))) throw new Error("⑤原本のキーmetadataが不正です");
-  return `raw/${source[raw.source]}/${raw.datatype.toLowerCase()}/${raw.dataDate.slice(0, 4)}/${raw.dataDate}/${raw.scope}/${docId === null ? "_" : docId}/${raw.sha256.slice(0, 16)}.${ext}`;
+  const partition = raw.dataDate === null ? "nodate/nodate" : `${raw.dataDate.slice(0, 4)}/${raw.dataDate}`;
+  return `raw/${source[raw.source]}/${raw.datatype.toLowerCase()}/${partition}/${raw.scope}/${docId === null ? "_" : docId}/${raw.sha256.slice(0, 16)}.${ext}`;
 }
 
 export function verifiedDocId(raw: CanonicalRawFile): string | null {

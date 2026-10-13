@@ -92,3 +92,5 @@ JPX/NYSE営業日HTML、JPX株式・ETF・REITの2026-09実XLSX、トヨタ優�
 保存13 ZIPのうち適格11操作は、本番D1全列CASと全Notion本文読み戻しを経て完了した。本文7件は歴史文書のため最新補足は0更新、受注3/海外1からの画面投影は適格条件を満たす2銘柄だけ生成し、対象4との差を欠測値で埋めていない。最初の試行は他処理によるp_yuho_growth/3962の日時3列変更を検出して業務書込前に停止し、旧ラッチを保持。新PREで再計画した残入口は、既に保管したtype別原本11を再アップロードせず全文検証した。上流GET0/原本再upload0、PRE/POSTは物理保管・全SHA照合済み。
 
 原本索引dry失敗は件数/byte実測の成功として数えない。共有Notion/Zod/通信例外が伏せられ原因未確定だったため、定型文allowlist・Zod code/path・message/cause SHA・Notion要求/429/再試行数・最終phase/prefix進捗だけを観測する。署名URL/原文/資格情報は出さず、再送制約は維持する。⑤の基準日NULLはyfinance valuation49件あり、架空日付で埋めない。
+
+基準日不明49原本について、共通Python publisherが取得日を基準日へ補っていた根因を修正する。TypeScript/Pythonとも物理partitionは明示`nodate/nodate`、D1 data_dateはNULL、取得時計は元値を保持し、日付あり原本の既存keyは不変。既存索引/R2の旧状態は別途読取照合し、未知の旧オブジェクトを上書きしない。

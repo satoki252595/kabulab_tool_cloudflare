@@ -110,7 +110,7 @@ class CloudSink:
         if not self.settings.r2_enabled():
             return None
         try:
-            data_date = artifact.data_date or artifact.fetched_at.date()
+            data_date = artifact.data_date
             ext = artifact.local_path.suffix.lstrip(".") or "bin"
             key = keys.raw_key(
                 source=str(artifact.source),
@@ -123,7 +123,7 @@ class CloudSink:
             )
             if not self.raw_bucket.exists(key):
                 legacy_key = None
-                if artifact.doc_id and data_date <= LEGACY_KEY_UNTIL:
+                if artifact.doc_id and data_date is not None and data_date <= LEGACY_KEY_UNTIL:
                     legacy_key = keys.raw_key(
                         source=str(artifact.source),
                         datatype=artifact.datatype,
@@ -171,7 +171,7 @@ class CloudSink:
                     str(artifact.source), artifact.datatype, artifact.scope,
                     artifact.doc_id,
                     artifact.scope if artifact.scope != "ALL" else None,
-                    data_date.isoformat(), ext, artifact.size_bytes,
+                    None if data_date is None else data_date.isoformat(), ext, artifact.size_bytes,
                     artifact.license_tag.value, artifact.convert_status.value,
                     epoch, epoch,
                 ]],
