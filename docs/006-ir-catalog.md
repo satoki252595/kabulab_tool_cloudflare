@@ -208,7 +208,8 @@ backfill は無制限 (再開可能)。Notion 通信は
   PDF センチメントで左ボーダー色付け、矛盾時は「本文確認推奨」を明示。
   「PDF推定」は確定でない旨と「AI API 不使用 (利用料 0)」をバルーンで明記。
 - `/signals` 全銘柄横断の高シグナル一覧。
-- `/file/:tdnetId` 開示 PDF の Worker プロキシ (原本が purge 前の直近分のみ到達)。
+- `/file/:tdnetId` 開示 PDF の Worker プロキシ。Notionの単一hosted実添付→catalog原URL→同社・同公式PDF名のJPX原本を使う。external／複数添付はNotion保管へ昇格しない。JPX候補はcatalog会社コードと、catalog URL／実redirect先の18桁PDF名からだけ作り、7桁catalog IDや別会社・別期の資料から推測しない。JPXのredirectは追わない。PDF magic・20,000,000B以内・実SHA256を検査し、`X-IR-*`にschema `ir-pdf-provenance-v1`、catalog ID／会社コード／公式PDF ID（実URLで判明した場合のみ）／原公表日時／実取得日時／取得元／公開URL／PDF bytes・SHA／先行経路の失敗codeを返す。Notion署名URLは返さない。全経路失敗はHTTP502と同schemaの`unavailable`／`transient`・安全な取得元別code／HTTP statusを本文と許可headerへ返し、失敗本文を保存しないconsumerも分類を保持できる。古い決算へ差し替えない。
+- 既存Notion保管は大容量の従来取得・upload上限を維持し、同じJPX URL resolverだけを再利用する。新JPX取得は同じ子DB行の`IR取得来歴` rich_text（1900字以内JSON、schema `ir-pdf-archive-provenance-v1`）へcatalog ID／会社コード／公表日時／同社JPX実URL／公式18桁ID／初回取得日時／実PDF SHA・bytesを保存する。既存不足列PATCHを使い、新DBは作らない。資料URL・旧終端行を変更せず、添付全bytesと来歴fresh GETの一致後だけ既存D1 callbackを許可する。proxyは再取得したhosted bytesと来歴のidentity・時刻・SHAを照合し、`X-IR-Archive-Provenance`で公開originだけ返す。矛盾は停止、来歴の無い旧添付は未報告のまま。既存の表題／公開時刻aliasで今回catalog IDと保存origin IDが異なる場合、`archive_catalog_alias`／`X-IR-Archive-Catalog-ID`で区別して502を返す。同一PDF版の追加証拠が無いaliasを今回要求原本の取得成功・財務検証へ昇格しない。[Notion file種別](https://developers.notion.com/reference/file-object)／[rich_textと上限](https://developers.notion.com/reference/request-limits)確認日2026-10-11。
 - `/api/stock/:code` JSON。
 - デザインは共通 Editorial Swiss Grid (`src/shared/design.ts`)。
 

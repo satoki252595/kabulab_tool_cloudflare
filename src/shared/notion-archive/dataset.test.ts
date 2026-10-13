@@ -11,7 +11,7 @@ vi.mock("./archive.js", () => ({ findBackupChildByTitle: vi.fn(async () => "pare
 vi.mock("./file-upload.js", async (original) => ({ ...await original<typeof import("./file-upload.js")>(), uploadFile: vi.fn() }));
 vi.mock("./readback.js", () => ({ verifyArchivedAttachments: vi.fn() }));
 
-const propertyNames = ["開示表題", "タグ", "代表タグ", "IR発表日", "市場", "資料", "IR資料", "IR資料状態", "PDF判定", "TDnet ID"];
+const propertyNames = ["開示表題", "タグ", "代表タグ", "IR発表日", "市場", "資料", "IR資料", "IR取得来歴", "IR資料状態", "PDF判定", "TDnet ID"];
 const row = { key: "T1", ticker: "1001", companyName: "試験", companyUrl: "https://example.test", tags: [], primaryTag: null, pubdate: new Date().toISOString(), title: "試験開示", documentUrl: "https://example.test/1.pdf", markets: null };
 
 describe("適時開示の未知送信は次行の取得を停止", () => {
@@ -150,12 +150,71 @@ describe("適時開示の未知送信は次行の取得を停止", () => {
     expect(uploadFile).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])("同じ公式 PDF 名の JPX 原本は添付と来歴のfresh読戻し後だけ確定する (%s)", async (mismatch) => {
+    pageError = null;
+    const tdnet = "https://release.tdnet.info/inbs/140120260810517386.pdf";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(
+      Object.defineProperty(new Response("", {status: 404}), "url", {value: tdnet}))
+      .mockResolvedValueOnce(Object.defineProperty(new Response("%PDF-test"), "url", {
+        value: "https://www2.jpx.co.jp/disc/10010/140120260810517386.pdf"})));
+    const persisted = vi.fn();
+    let storedOrigin = "";
+    const base = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (method === "POST" && path === "/pages") {
+        const properties = (body as {properties: {IR取得来歴: {rich_text: Array<{text: {content: string}}>}; 資料: {url: string}}}).properties;
+        storedOrigin = properties.IR取得来歴.rich_text[0].text.content;
+        expect(properties.資料.url).toBe(row.documentUrl);
+      }
+      if (method === "GET" && path === "/pages/written") {
+        expect(persisted).not.toHaveBeenCalled();
+        return {properties: {IR取得来歴: {type: "rich_text", rich_text: [{plain_text: mismatch ? "{}" : storedOrigin}]}}} as never;
+      }
+      return base(method, path, body);
+    });
+    vi.mocked(verifyArchivedAttachments).mockImplementationOnce(async (_page, files) => {
+      expect(new TextDecoder().decode(files[0].bytes)).toBe("%PDF-test");
+      expect(persisted).not.toHaveBeenCalled();
+    });
+    const {upsertDisclosuresByStock} = await import("./dataset.js");
+    const pending = upsertDisclosuresByStock({service: "test", tagOptions: [], rows: [{...row, key: "1274696"}], onPagePersisted: persisted});
+    if (mismatch) {
+      await expect(pending).rejects.toThrow("archive_provenance_readback_mismatch");
+      expect(persisted).not.toHaveBeenCalled();
+    } else {
+      expect((await pending).created).toBe(1);
+      expect(persisted).toHaveBeenCalledWith("1274696", "written");
+    }
+    const origin = JSON.parse(storedOrigin);
+    expect(origin).toMatchObject({schema: "ir-pdf-archive-provenance-v1", catalogId: "1274696", companyCode: "10010",
+      source: "jpx", sourceUrl: "https://www2.jpx.co.jp/disc/10010/140120260810517386.pdf",
+      officialDocumentId: "140120260810517386", publishedAt: row.pubdate, pdfBytes: 9});
+    expect(origin.pdfSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(Number.isFinite(Date.parse(origin.retrievedAt))).toBe(true);
+    expect(uploadFile).toHaveBeenCalledTimes(1);
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetch).mock.calls[1][0]).toBe("https://www2.jpx.co.jp/disc/10010/140120260810517386.pdf");
+  });
+
   it("既知の容量上限は未添付として保持する", async () => {
     vi.mocked(uploadFile).mockRejectedValueOnce(new NotionFileTooLargeError("test.pdf", 2, 1));
     const { upsertDisclosuresByStock } = await import("./dataset.js");
     const result = await upsertDisclosuresByStock({ service: "test", tagOptions: [], rows: [row] });
     expect(result.skippedNoFile).toBe(1);
     expect(result.created).toBe(0);
+  });
+
+  it("既存 primary の20MB超PDFは従来のupload容量判定へ渡す", async () => {
+    pageError = null;
+    const bytes = new Uint8Array(20_000_001);
+    bytes.set(new TextEncoder().encode("%PDF-"));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(bytes)));
+    const { upsertDisclosuresByStock } = await import("./dataset.js");
+    const result = await upsertDisclosuresByStock({ service: "test", tagOptions: [], rows: [row] });
+    expect(result.created).toBe(1);
+    expect(uploadFile).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(uploadFile).mock.calls[0][0].bytes.byteLength).toBe(bytes.byteLength);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("入力が新しくても、公開が古い開示から取得する", async () => {

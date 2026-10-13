@@ -7,6 +7,17 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ---
 
+## 2026-10-11
+
+- 日足の全銘柄取込がJST日付を跨いだとき、次銘柄の取得前に独立benchmarkを別原本として再取得する。取得中に跨いだ原本のHOLD・取得順・SHA・原本保管・条件付PUTの停止は維持し、更新失敗や対象取引日の変更は全体停止する。既存workflowに日足だけの`target=daily`と対象コード`daily_codes`を追加する（本番実行・復旧結果は別途確認）。
+- 適時開示catalogの既知`rd.php`原URL自体が404でも、生queryに実記録されたTDnetの18桁PDF名を同社JPX原本の照合に使う。既知https URLだけを受け付け、任意query・資格情報・port・再帰wrapperと7桁catalog IDからの推測を拒否する（Issue #335）。
+- 適時開示PDFがNotion／catalog原URLで取れない場合、同社・同公式PDF名のJPX原本だけを補完候補にする。Notionは単一hosted添付だけを保管元とし、新JPX取得来歴は同じ既存行へ保存して実PDF／metadataを読戻す。実取得元・公表／取得日時・PDF bytes／SHAを返し、取得不能は本文保存を要しない許可headerの経路別安全codeでも示す。既存保管・添付読戻しを再利用し、新資源・有料取得先は追加しない（Issue #335、実資料・本番受入れは検証後に記録）。
+
+## 2026-10-10
+
+- 適時開示 PDF の日次保管は、銘柄と Notion の会社ページ（銘柄ページと適時開示 DB）の対応を D1 `ir_notion_stock_pages` に残し、次の catchup からその銘柄の Notion 検索を省く。使う前に子 DB の親ページが写しの銘柄ページと一致するか確かめる。対応が無い、版が違う、ページが無い、アーカイブ済み、または親が違うときは Notion から引き直す。引き直しても一致しない、または親を判定できないときは停止する。readback・古い順・12分予算・リトライ回数は変えない。本番 D1（kabulab-cf, 639c0315-0d41-4345-95ab-aec5906224ed）に 2026-10-11 適用済み（統括がコネクタで実行、sqlite_master で確認。本番に d1_migrations テーブルは無い）。
+- 適時開示 PDF の Notion 保管は、send（20MB 超は complete）の応答 status が uploaded のとき、確定確認の GET を 1 回省く。pending・status の欠落・JSON でない応答は確認 GET のまま、failed は添付しない。readback・古い順・予算・リトライ回数は変えない。1 件の Notion 呼び出し数は `notion-calls` ログに出る。
+
 ## 2026-10-09
 
 - 株式の定時取得を 18:00 JST（09:00 UTC）に移し、完了確認を 23:35 JST（14:35 UTC）にした。全銘柄の最悪約191分でも 23:30 JST より前に終わる。終値が null になる時間帯の外で取るためで、終値の判定自体は変えていない。

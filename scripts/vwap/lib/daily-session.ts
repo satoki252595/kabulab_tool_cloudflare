@@ -10,8 +10,8 @@ import { completedDailyFetch, isBeforeOpenHistoricalSession, sanitizeLogText, ty
 
 export type { DailySessionReference } from "./ingest-guard.js";
 
-/** 通常共有benchmarkをrunに1回取得し、物理原本照合を完了してから返す。 */
-export async function fetchDailySessionReference(runId: string): Promise<DailySessionReference> {
+/** 通常共有benchmarkを取得・物理照合する。暦日更新時は別stageで元原本を保持する。 */
+export async function fetchDailySessionReference(runId: string, stage = "vwap-daily-session"): Promise<DailySessionReference> {
   const captures: YahooRawAttempt[] = [], missing: YahooRawMissing[] = [];
   let capture: YahooRawCapture | undefined;
   let diagBars: DailyOhlcv[] | undefined; // 計測のみ (INC-20261008-kabulab_tool_cloudflare-financials-stale)
@@ -65,7 +65,7 @@ export async function fetchDailySessionReference(runId: string): Promise<DailySe
     throw e;
   } finally {
     // 取得失敗/形成中HOLDも保管する。unknownは再送せず呼出元をSTOPする。
-    await archiveYahooRawBatch({ service: "vwap-analysis", runId, stage: "vwap-daily-session", captures, missing });
+    await archiveYahooRawBatch({ service: "vwap-analysis", runId, stage, captures, missing });
   }
 }
 
