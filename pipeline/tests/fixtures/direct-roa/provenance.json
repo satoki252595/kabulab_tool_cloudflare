@@ -1,0 +1,28 @@
+{
+  "fixtureKind": "Complete saved public EDINET CSV ZIP bytes; source clock is not reconstructed",
+  "copiedAt": "2026-10-13T21:50:22.968586+00:00",
+  "items": [
+    {
+      "stockCode": "7911",
+      "docId": "S100YIAY",
+      "type": 5,
+      "periodEnd": "2026-03-31",
+      "filename": "7911-S100YIAY-type5.zip",
+      "bytes": 217888,
+      "sha256": "8ac619e4b5c5658e1aa86d80658030d8a9e01e57454546d4c2dd6ada504a9772",
+      "sourceUrl": "https://api.edinet-fsa.go.jp/api/v2/documents/S100YIAY?type=5",
+      "originalFetchTime": null
+    },
+    {
+      "stockCode": "8566",
+      "docId": "S100YF3N",
+      "type": 5,
+      "periodEnd": "2026-03-31",
+      "filename": "8566-S100YF3N-type5.zip",
+      "bytes": 138896,
+      "sha256": "270c211710faf3133d66459f3050700be1378ab8284b627fff50ec0c1d175f25",
+      "sourceUrl": "https://api.edinet-fsa.go.jp/api/v2/documents/S100YF3N?type=5",
+      "originalFetchTime": null
+    }
+  ]
+}

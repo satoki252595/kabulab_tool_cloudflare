@@ -90,7 +90,7 @@ UNKNOWN_CONSOLIDATED = "不明"
 # `jss_financials` の全 34 列（DDL と同じ順序）。
 # 元の33列に、同じ原本を指すNotion⑤ page IDだけを追加する。
 # `roe_pct` はEDINET原本の比率をそのまま%へ変換する。
-# `roa_pct` は未取得のまま（利益/総資産から計算で補わない §3-1）。
+# `roa_pct` は原本の直接開示値だけ。利益/総資産から計算で補わない (§3-1)。
 COLUMNS: tuple[str, ...] = (
     "code",
     "fiscal_period_end",

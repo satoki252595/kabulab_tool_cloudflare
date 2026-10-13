@@ -103,7 +103,7 @@ class TestColumns:
     def test_thirty_four_columns(self) -> None:
         """元33列を保ち、同原本のNotion page IDを末尾へ追加する。
 
-        29 と数えると 1 列落ちる（`roe_pct` / `roa_pct` は常に None だが
+        29 と数えると 1 列落ちる（`roe_pct` / `roa_pct` も含めて
         列としては存在する）。
         """
         assert len(F.COLUMNS) == 34
