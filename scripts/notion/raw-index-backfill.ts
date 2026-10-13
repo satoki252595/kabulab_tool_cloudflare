@@ -2,7 +2,7 @@
  * ⑤保存原本だけからR2/D1を補完する明示手動CLI。通常cronから呼ばない。
  * dotenv/configが.envを読む。GHは同名の既存secretを渡す。
  * --mode=dry|apply --plan-id=<安全ID> --limit=50 --max-bytes=67108864
- * --max-seconds=1200 --expected-count=78831 --out=<private.jsonl>
+ * --max-seconds=1200 --expected-count=78831 --out=<private.jsonl> [--cutoff=<UTC ISO>]
  * 同plan-idを再開する。別planへ逃げてunknown latchを消せないactive pointerを持つ。
  */
 import "dotenv/config";
@@ -24,6 +24,8 @@ import { canonicalRawKey, readD1RawIndexes, verifiedDocId } from "./raw-index-pl
 const SAFE_RAW_ERRORS = new Set([
   "[raw-backfill] mode/plan/count/bytes/seconds予算が不正です",
   "[raw-backfill] manifest集合/count/orderが不一致です",
+  "[raw-backfill] cutoff UTC ISO/未来日時が不正です",
+  "[raw-backfill] 明示cutoffと保存manifestが不一致です",
   "[raw-backfill] 原本全body SHA/サイズ不一致",
   "[raw-backfill] 取得時計を確定できません",
   "[raw-backfill] D1索引と⑤metadata/keyが不一致",
@@ -119,6 +121,8 @@ const Complete = z.strictObject({ version: z.literal(1), manifestSha256: hashSch
   canonicalCount: integer, r2FullShaVerifiedCount: integer, indexAntiJoinChecked: integer, indexAntiJoinMissing: z.literal(0) });
 export interface RawBackfillOptions {
   mode: "dry" | "apply"; planId: string; limit: number; maxBytes: number; maxSeconds: number; expectedCount: number;
+  /** dry/apply/再開で同じcreated_time集合を固定する明示UTC時刻。省略時は旧取得時計を維持。 */
+  cutoff?: string;
 }
 export interface RawIndexRow {
   sha256: string; r2_bucket: string; r2_key: string; source: string; datatype: string; scope: string;
@@ -139,7 +143,7 @@ export interface BackfillIo {
   emit: (record: object) => Promise<void>; // caller fsyncs before remote mutation.
 }
 
-export function validateRawOptions(opts: RawBackfillOptions): void {
+export function validateRawOptions(opts: RawBackfillOptions, now = Date.now()): void {
   if (!["dry", "apply"].includes(opts.mode) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(opts.planId) ||
       !Number.isSafeInteger(opts.limit) || opts.limit < 1 || opts.limit > 100_000 ||
       !Number.isSafeInteger(opts.maxBytes) || opts.maxBytes < 1 || opts.maxBytes > 64 * 1024 ** 3 ||
@@ -147,9 +151,16 @@ export function validateRawOptions(opts: RawBackfillOptions): void {
       !Number.isSafeInteger(opts.expectedCount) || opts.expectedCount < 1 || opts.expectedCount > 100_000) {
     throw new Error("[raw-backfill] mode/plan/count/bytes/seconds予算が不正です");
   }
+  if (opts.cutoff !== undefined) {
+    const epoch = Date.parse(opts.cutoff);
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(opts.cutoff) || !Number.isFinite(epoch) ||
+        new Date(epoch).toISOString().slice(0, 19) !== opts.cutoff.slice(0, 19) || !Number.isFinite(now) || epoch > now)
+      throw new Error("[raw-backfill] cutoff UTC ISO/未来日時が不正です");
+  }
 }
 export function parseRawManifest(value: unknown, opts: RawBackfillOptions, bucket: string): RawManifest {
   const manifest = Manifest.parse(value);
+  if (opts.cutoff !== undefined && manifest.cutoff !== opts.cutoff) throw new Error("[raw-backfill] 明示cutoffと保存manifestが不一致です");
   if (manifest.planId !== opts.planId || manifest.rawBucket !== bucket || manifest.expectedCount !== opts.expectedCount ||
       manifest.items.length !== opts.expectedCount || new Set(manifest.items.map((r) => r.sha256)).size !== manifest.items.length ||
       new Set(manifest.items.map((r) => r.pageId)).size !== manifest.items.length ||
@@ -249,8 +260,9 @@ export async function auditRawIndexMembership(items: readonly RawItem[], bucket:
 }
 
 export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
-  validateRawOptions(opts);
-  const start = io.now(), deadline = start + opts.maxSeconds * 1000;
+  const start = io.now();
+  validateRawOptions(opts, start);
+  const deadline = start + opts.maxSeconds * 1000;
   // 一度開始した原本1件はinflightを解決するまで完結。次の原本は期限後に開始しない。
   // hard timeout/runner消失では永続inflightが次runの無条件再送を止める。
   let processingItem = false;
@@ -280,7 +292,7 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
   let manifest: RawManifest;
   if (manifestVersion === null) {
     if (activePin) throw new Error("[raw-backfill] active manifestが欠落しています");
-    const cutoff = new Date(io.now()).toISOString(), rows = await io.list(cutoff, checkClock);
+    const cutoff = opts.cutoff === undefined ? new Date(io.now()).toISOString() : opts.cutoff, rows = await io.list(cutoff, checkClock);
     const items = rows.map((row) => { const { sourceUrl: _url, ...safe } = row; return { ...safe, docId: verifiedDocId(row) }; });
     manifest = parseRawManifest({ version: 1, planId: opts.planId, cutoff, expectedCount: opts.expectedCount, rawBucket: io.rawBucket, items }, opts, io.rawBucket);
     if (opts.mode === "apply") await persist(`${prefix}/manifest.json`, manifest, null);
@@ -403,16 +415,17 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
 }
 
 async function main() {
-  const allowed = ["mode", "plan-id", "limit", "max-bytes", "max-seconds", "expected-count", "out"];
+  const required = ["mode", "plan-id", "limit", "max-bytes", "max-seconds", "expected-count", "out"];
+  const allowed = [...required, "cutoff"];
   const args = new Map<string, string>();
   for (const arg of process.argv.slice(2)) {
     const m = /^--([a-z-]+)=(.+)$/.exec(arg);
     if (!m || !allowed.includes(m[1]!) || args.has(m[1]!)) throw new Error("[raw-backfill] 引数不正/重複");
     args.set(m[1]!, m[2]!);
   }
-  if (allowed.some((key) => !args.has(key)) || sharedEnv.LOCAL_OUT() !== undefined) throw new Error("[raw-backfill] 全引数明示・LOCAL_OUT禁止");
+  if (required.some((key) => !args.has(key)) || sharedEnv.LOCAL_OUT() !== undefined) throw new Error("[raw-backfill] 全引数明示・LOCAL_OUT禁止");
   const opts: RawBackfillOptions = { mode: args.get("mode") as "dry" | "apply", planId: args.get("plan-id")!, limit: Number(args.get("limit")),
-    maxBytes: Number(args.get("max-bytes")), maxSeconds: Number(args.get("max-seconds")), expectedCount: Number(args.get("expected-count")) };
+    maxBytes: Number(args.get("max-bytes")), maxSeconds: Number(args.get("max-seconds")), expectedCount: Number(args.get("expected-count")), ...(args.has("cutoff") ? { cutoff: args.get("cutoff")! } : {}) };
   validateRawOptions(opts);
   const receipt = await fs.open(args.get("out")!, "wx", 0o600), before = notionStats();
   const startedAt = Date.now();

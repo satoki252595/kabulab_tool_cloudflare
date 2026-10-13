@@ -69,11 +69,17 @@ kabulabAgents 向け契約は
 [docs/005-yuho-quant-business-tags-contract.md](../../docs/005-yuho-quant-business-tags-contract.md)。
 mono-repo CLAUDE.md のルール1/2/3/6 に加え、以下を厳守する(違反は commit 前に直す):
 
-- **2026-10-03の運用方針: 今後の新規銘柄の初回事業タグはローカルSemIf**。
+- **2026-10-14の復旧契約: 適格な新規初回と実入力の変更だけローカルSemIf**。
   必須設定 `BIZTAG_NEW_LISTING_FROM` と公式上場情報・同じ世代・active・初回未完で
   scopeを証明し実本文候補が揃った後だけMLX常駐モデルをlazyに起動する。
   TypeSafeは新規用途を含め停止し、代替への自動切替はしない。既存の判定済みタグと根拠はNotion
-  銘柄マスタ（補足）の銘柄コードで再利用し、有報/語彙が変わっても付け直さない。
+  銘柄マスタ（補足）の銘柄コードで再利用する。ただし最新有報IDが変わった場合、または
+  同一有報の本文pointer変更と保存済み4対象節SHAの差で実入力変更を証明できた場合だけ、
+  対象限定でローカル再判定する。語彙だけの変更では付け直さない。歴史的に未保存の
+  入力SHAを同一入力の証拠として後付けしない。旧props/根拠の物理保全、書込直前の
+  旧値/最新doc照合、新根拠全文確認後の単発送信・読戻しを必須にする。
+  保存原本の抽出不具合を直す単発修復は、対象・原本SHA・旧PREを固定して個別再判定し、
+  旧SHA不明を同一入力の証明に変えない。通常の全社再判定へ拡張しない。
   未設定/判定失敗だけkeywords/excludesの機械的一致で補完し、新しい機械根拠にAI確率を
   付けない。本文資格不足はHOLDで結果保持。
   語彙審査・精度測定・競合AIは停止を維持し、旧課金切れ25件を新規AIへ送らない。
@@ -157,7 +163,7 @@ pnpm backfill:overseas      # 既存有報の海外埋め戻し (D1 HTTP)
 pnpm yuho:backfill:text     # 既存有報の開示テキスト埋め戻し (CSV のみ・D1 HTTP)
 pnpm yuho:backfill:missing  # 期間指定の取りこぼし回収 (日次上限で欠けた分。無制限・再開可能)
 pnpm audit:overseas         # 全銘柄の取りこぼし署名を集計
-pnpm biztag run             # 今後の新規初回だけAI / 保存タグ再利用・不足だけ機械補完 (開始日必須)
+pnpm biztag run             # 適格新規初回/実入力変更だけSemIf、保存タグ再利用・不足は機械補完
 pnpm biztag gate            # 現在停止: TypeSafeを使う見直し提案審査
 pnpm biztag golden          # 現在停止: TypeSafeを使う精度測定
 pnpm biztag rollback        # 単語帳を過去の版へ巻き戻す (--to=vN --reason=...)

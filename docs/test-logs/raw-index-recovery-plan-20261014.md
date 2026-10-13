@@ -52,3 +52,11 @@ bytes予算はraw転送を1件ごとにworst-case予約し、収まらない次�
 TDnetの既存doc_idはPDF一覧由来であり、XBRL ZIP URLの番号から同一性を推測しない。既存writerのdoc_idは保持して `retained_existing_unverified`、旧索引のnullは `archived_id_verified_index_legacy_null`、原典metadataでID未確定は `not_proven_from_archived_metadata` と個別receiptへ明示する。SHA原本索引の完了と、④開示→原本のdoc_id結合完了は分ける。
 
 現時点でEDINET/TDnet/yfinance/日証金の既存⑤metadata各1件をread-onlyで照合し、実データのdatatype/scope/date/hosted/key契約が通ることを確認した（追加metadata 4 query、source GET 0）。実pilotのR2 PUT＋D1所要と操作数はGH実行後にrootが計測する。全量の時間は未実測。最悪のNotion metadata pacingは、全棚卸し約800 query＋URL更新約1,577 queryで約15分に抑え、原本転送・逐次D1 latency・fsyncは別途加わる。
+
+## dry/apply間の同時追加を除く固定cutoff（2026-10-14）
+
+run38449677494は棚卸し78,917件と期待78,832件の不一致で、manifest/active/stateを含む全mutationより前に停止した。先行dry50後にcanonical原本85件が追加され、別々の起動時計をcutoffに使ったことが原因だった。原本/索引/receipt write0の元失敗履歴は保持する。
+
+CLIに任意の`--cutoff=<UTC ISO>`を追加し、workflow_dispatchではcutoff入力を必須とする。値の現在時刻defaultは作らない。UTCのZ終端・実暦日・未来でないことを全request前に検証し、同じ値をdry/apply/再開へ渡す。新manifestはそのcutoffで棚卸し、保存済manifestが明示cutoffと異なればreceiptや原本を書かず停止する。CLIで省略した既存呼出しは従来の取得時計/保存manifest利用を維持する。active/inflight/unknownの再送禁止と全SHA/件数/順序検査は変更しない。
+
+rootのSQL読取でcutoff`2026-10-13T18:31:00.000Z`のcanonical件数78,832を確認した。同じplan-id/expected_count=78832/cutoffでdry→applyを実施する。固定cutoff後の新原本まで全量完了と扱わない。異なる起動時計のdry/apply/再開でmanifest SHAが同じになる回帰と、保存cutoff不一致・不正/未来cutoffの送信前停止を検証する。

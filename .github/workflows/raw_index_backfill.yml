@@ -12,10 +12,14 @@ on:
         description: "再開時は同じID。別IDで先行unknownを迂回しない"
         type: string
         default: canonical-20261014
+      cutoff:
+        description: "固定集合のUTC ISO締切（Z終端）。dry/apply/再開で同じ実値を明示"
+        type: string
+        required: true
       expected_count:
         description: "固定cutoffでの⑤canonical期待件数。不一致は書込前に停止"
         type: string
-        default: "78831"
+        required: true
       limit:
         description: "このrunで検証する最大件数（全量まで拡張可）"
         type: string
@@ -50,6 +54,7 @@ jobs:
           MODE: ${{ inputs.mode }}
           PLAN_ID: ${{ inputs.plan_id }}
           EXPECTED_COUNT: ${{ inputs.expected_count }}
+          CUTOFF: ${{ inputs.cutoff }}
           LIMIT: ${{ inputs.limit }}
           MAX_BYTES: ${{ inputs.max_bytes }}
           MAX_SECONDS: ${{ inputs.max_seconds }}
@@ -66,7 +71,7 @@ jobs:
         run: |
           mkdir -m 700 -p tmp/raw-index
           nix develop -c pnpm exec tsx scripts/notion/raw-index-backfill.ts \
-            "--mode=$MODE" "--plan-id=$PLAN_ID" "--expected-count=$EXPECTED_COUNT" \
+            "--mode=$MODE" "--plan-id=$PLAN_ID" "--expected-count=$EXPECTED_COUNT" "--cutoff=$CUTOFF" \
             "--limit=$LIMIT" "--max-bytes=$MAX_BYTES" "--max-seconds=$MAX_SECONDS" \
             --out=tmp/raw-index/receipt.jsonl
       # raw body/manifest/private receipt はartifactへ公開しない。再開stateはR2へCAS保管。
