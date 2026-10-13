@@ -20,6 +20,79 @@ import { unzip } from "../../services/yuho-quant/src/services/edinet/zip.js";
 import { r2GetBytesVersion, r2PutBytes } from "../vwap/lib/r2.js";
 import { canonicalRawKey, readD1RawIndexes, verifiedDocId } from "./raw-index-plan.js";
 
+// Error message/body/URL は許可した定型文以外を出さない。
+const SAFE_RAW_ERRORS = new Set([
+  "[raw-backfill] mode/plan/count/bytes/seconds予算が不正です",
+  "[raw-backfill] manifest集合/count/orderが不一致です",
+  "[raw-backfill] 原本全body SHA/サイズ不一致",
+  "[raw-backfill] 取得時計を確定できません",
+  "[raw-backfill] D1索引と⑤metadata/keyが不一致",
+  "[raw-backfill] ⑤原本のSHA batchが欠測しています",
+  "[raw-backfill] ⑤原本のSHA batchが不一致です",
+  "[raw-backfill] 原本文書IDがmanifestから変化しました",
+  "[raw-backfill] 原本ZIP wrapper名不一致",
+  "[raw-backfill] 原本ZIP wrapperは単一実名memberではありません",
+  "[raw-backfill] D1 SHA不正",
+  "[raw-backfill] D1 SHA重複",
+  "[raw-backfill] D1 object行契約不正",
+  "[raw-backfill] 完了anti-joinに未知/重複SHA",
+  "[raw-backfill] 完了anti-join metadata不一致",
+  "[raw-backfill] 準備の時間予算到達。未完manifestを使わず停止",
+  "[raw-backfill] receipt全文読戻し不一致。再送禁止",
+  "[raw-backfill] 別planがactiveです。unknownを別planで迂回できません",
+  "[raw-backfill] active manifestが欠落しています",
+  "[raw-backfill] active manifest SHA不一致",
+  "[raw-backfill] state/manifest/cursor不一致",
+  "[raw-backfill] inflight/index key不一致",
+  "[raw-backfill] inflight原本が未確認。PUTを再送せず保全停止",
+  "[raw-backfill] inflight索引が未確認。INSERTを再送せず保全停止",
+  "[raw-backfill] D1索引先原本が欠落。再作成せず停止",
+  "[raw-backfill] hosted物理転送が予約予算を超えました",
+  "[raw-backfill] PUT後の原本全文確認ができません。再送禁止",
+  "[raw-backfill] R2全文確認前の索引は禁止",
+  "[raw-backfill] INSERT後索引readback欠測。再送禁止",
+  "[raw-backfill] 完了anti-joinに未索引があります。全件成功としない",
+  "[raw-backfill] 先行完了receiptと集合が不一致",
+  "[raw-backfill] 引数不正/重複",
+  "[raw-backfill] 全引数明示・LOCAL_OUT禁止",
+  "⑤原本metadataがobjectではありません",
+  "⑤原本metadataの文字列がありません",
+  "⑤原本metadataの文字列が不正です",
+  "⑤原本の所属/状態が不一致です",
+  "⑤原本SHA/名前/サイズが不正です",
+  "⑤原本の基準日が不正です",
+  "⑤原本の取得日時が不正です",
+  "⑤原本の取得URLが不正です",
+  "⑤原本の物理添付がありません",
+  "⑤原本の添付は一意なhosted fileではありません",
+  "⑤原本hosted URLが不正です",
+  "⑤原本名と物理添付名が対応しません",
+  "⑤原本SHA照合は一意な1〜50件だけです",
+  "⑤原本SHA照合が打ち切られました",
+  "⑤原本SHA照合に未知/重複行があります",
+  "⑤canonical原本添付を一意に確定できません",
+  "⑤原本metadataがmanifestから変化しました",
+  "⑤棚卸しcutoffが不正です",
+  "⑤partitionに未知/重複SHAがあります",
+  "⑤SHA partitionを再分割できません",
+  "⑤全域棚卸しに重複SHA/pageがあります",
+  "⑤canonical集合が空です",
+  "⑤原本の基準日が欠測しています。キー日付を捏造せず停止",
+  "⑤原本のキーmetadataが不正です"
+]);
+const RAW_PROPERTY_NAMES = "SHA256|ファイル名|サイズ|データ基準日|取得日時|取得URL|ファイル|ソース|データ種別|対象銘柄コード|ライセンスタグ|変換状態";
+export function safeRawFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : "non_error_throw";
+  const errorClass = error instanceof Error && /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(error.constructor.name) ? error.constructor.name : "UnknownError";
+  const detail = SAFE_RAW_ERRORS.has(message) || new RegExp(`^⑤原本(${RAW_PROPERTY_NAMES})(の型/完全性が不正です|が空です|が未知です)$`).test(message)
+    || /^\[raw-backfill\] D1 read HTTP [1-5][0-9]{2}$/.test(message) ? message : "contract_or_transport_error";
+  const issues = error instanceof z.core.$ZodError ? error.issues.slice(0, 20).map(issue => ({ code: issue.code,
+    path: issue.path.map(value => typeof value === "number" ? value : typeof value === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(value) ? value : "[redacted]") })) : undefined;
+  const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : null;
+  return { detail, errorClass, messageSha256: digest(new TextEncoder().encode(message)),
+    ...(cause === null ? {} : { causeSha256: digest(new TextEncoder().encode(cause)) }), ...(issues === undefined ? {} : { issues }) };
+}
+
 const digest = (body: Uint8Array) => createHash("sha256").update(body).digest("hex");
 const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 const hashSchema = z.string().check(z.regex(/^[a-f0-9]{64}$/));
@@ -342,19 +415,31 @@ async function main() {
     maxBytes: Number(args.get("max-bytes")), maxSeconds: Number(args.get("max-seconds")), expectedCount: Number(args.get("expected-count")) };
   validateRawOptions(opts);
   const receipt = await fs.open(args.get("out")!, "wx", 0o600), before = notionStats();
-  const emit = async (record: object) => { await receipt.write(`${JSON.stringify(record)}\n`); await receipt.sync(); };
+  const startedAt = Date.now();
+  let lastPhase = "starting";
+  let inventory = { prefix: "", queries: 0, currentPartitionRows: 0, acceptedRows: 0, responseRows: 0 };
+  const emit = async (record: object) => { const phase = (record as { phase?: unknown }).phase; if (typeof phase === "string") lastPhase = phase;
+    await receipt.write(`${JSON.stringify(record)}\n`); await receipt.sync(); };
+  const observeInventory = async (record: import("../../src/shared/notion-archive/raw-files.js").RawInventoryProgress) => {
+    inventory = { prefix: record.prefix, queries: record.queries, currentPartitionRows: record.partitionRows, acceptedRows: record.acceptedRows, responseRows: record.responseRows };
+    await emit(record);
+    if (record.phase === "inventory_partition_complete" || record.phase === "inventory_query" && record.queries % 25 === 0) console.info(JSON.stringify(record));
+  };
   try {
     const result = await runRawBackfill(opts, { rawBucket: sharedEnv.R2_BUCKET_RAW(), receiptBucket: sharedEnv.R2_BUCKET(),
       get: (key, bucket) => r2GetBytesVersion(key, bucket, { singleAttempt: true }), put: r2PutBytes,
-      list: listCanonicalRawFiles, download: createRawDownloader(), index: readRawIndex, insert: insertRawIndex,
+      list: (cutoff, guard) => listCanonicalRawFiles(cutoff, guard, observeInventory), download: createRawDownloader(), index: readRawIndex, insert: insertRawIndex,
       antiJoin: (items) => auditRawIndexMembership(items, sharedEnv.R2_BUCKET_RAW()), now: Date.now, emit });
     const after = notionStats();
     console.info(JSON.stringify({ ...result, notionRequests: after.requests - before.requests }));
   } catch (error) {
     // 生URL/body/causeをログへ出さない。remote stateに結果不明phaseが残る。
-    const detail = error instanceof Error && error.message.startsWith("[raw-backfill]") ? error.message : "contract_or_transport_error";
-    await emit({ phase: "stopped", detail, upstreamGets: 0, resend: 0 });
-    console.error(JSON.stringify({ status: "stopped", detail, resend: 0 }));
+    const after = notionStats();
+    const failure = { status: "stopped", ...safeRawFailure(error), lastPhase, inventory, elapsedMs: Date.now() - startedAt,
+      notionRequests: after.requests - before.requests, notionRateLimited: after.rateLimited - before.rateLimited,
+      notionTransientRetries: after.transientRetries - before.transientRetries, upstreamGets: 0, resend: 0 };
+    await emit({ ...failure, phase: "stopped" });
+    console.error(JSON.stringify(failure));
     process.exitCode = 1;
   } finally { await receipt.close(); }
 }
