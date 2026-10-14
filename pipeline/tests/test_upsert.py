@@ -8,7 +8,9 @@ dry-run の NotionClient を使い実 Notion へは接続しない。
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
+from pathlib import Path
 
 import pytest
 
@@ -31,6 +33,27 @@ from jp_stock_pipeline.notion import upsert
 ENV = notion_env()
 
 FETCHED_AT = datetime(2026, 6, 10, 19, 30, tzinfo=JST)
+
+
+class TestFilesNameBound:
+    def test_actual_rejection_and_derived_100_101_controls(self):
+        actual = json.loads(
+            (Path(__file__).parent / "fixtures/notion/native-filename-118.json").read_text()
+        )["filename"]
+        assert len(actual) == 118
+        allowed = actual[:100]  # 明示offline境界。実際の原典名を短縮する処理ではない。
+        payload = upsert.files_prop([("OFFLINE_UPLOAD_ID_CONTROL", allowed)])
+        assert payload["files"][0]["name"] == allowed
+        for rejected in [actual[:101], actual]:
+            with pytest.raises(ValueError, match="100 UTF-16"):
+                upsert.files_prop([("OFFLINE_UPLOAD_ID_CONTROL", rejected)])
+
+    def test_utf16_conservative_boundary_matches_typescript(self):
+        # Unicodeのnative計数を実証したとは扱わない。TS lengthとの保守的同値だけ検証。
+        allowed = "𠮷" * 48 + ".txt"
+        assert upsert.validate_file_name(allowed) == allowed
+        with pytest.raises(ValueError, match="100 UTF-16"):
+            upsert.validate_file_name("𠮷" * 49 + ".txt")
 
 
 def make_settings():

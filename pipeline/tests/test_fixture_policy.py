@@ -26,6 +26,9 @@ ALLOWED: frozenset[str] = frozenset(
     {
         "pipeline/tests/fixtures/convert/README.md",
         "pipeline/tests/fixtures/convert/tdnet_disclosure_sample.source.txt",
+        # 自プログラムの添付名・Notion validation/ACK・SHAポインタだけの契約メタ。
+        # 金融データ値・原本文書・取得URL・認証値を含むfixtureの許可ではない。
+        "pipeline/tests/fixtures/notion/native-filename-118.json",
         "pipeline/tests/fixtures/jpx/README.md",
         "pipeline/tests/fixtures/jsf/README.md",
         # EDINET は commercial-ok（公共データ利用規約準拠 §2.1）

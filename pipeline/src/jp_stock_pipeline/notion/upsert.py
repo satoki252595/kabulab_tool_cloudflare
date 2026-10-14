@@ -43,6 +43,7 @@ DRY_RUN_ID_PREFIX = "dry-run-"
 
 # Notion rich_text 1要素の上限は2000文字
 _TEXT_LIMIT = 2000
+_FILE_NAME_LIMIT = 100
 
 
 # ---------------------------------------------------------------------------
@@ -92,11 +93,18 @@ def relation_prop(page_ids: Iterable[str]) -> dict:
     return {"relation": [{"id": pid} for pid in page_ids]}
 
 
+def validate_file_name(name: str) -> str:
+    """添付名は短縮しない。TSと同じ保守的UTF-16上限で、HTTP前に拒否する。"""
+    if len(name.encode("utf-16-le")) // 2 > _FILE_NAME_LIMIT:
+        raise ValueError("Notion file attachment name exceeds 100 UTF-16 code units")
+    return name
+
+
 def files_prop(uploads: Iterable[tuple[str, str]]) -> dict:
     """File Upload API でアップロード済みの (file_upload_id, ファイル名) を添付する。"""
     return {
         "files": [
-            {"type": "file_upload", "file_upload": {"id": fid}, "name": _clip(name)}
+            {"type": "file_upload", "file_upload": {"id": fid}, "name": validate_file_name(name)}
             for fid, name in uploads
         ]
     }
