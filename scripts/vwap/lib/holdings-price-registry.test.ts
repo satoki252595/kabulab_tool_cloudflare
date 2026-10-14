@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import { bootstrapPriceSnapshot, publishDailyPriceSnapshot, readActivatedPriceSnapshot } from "./holdings-price-registry.js";
 import { PRICE_ACTIVE_KEY, type PriceReference, type PriceSnapshot } from "../../../src/shared/holdings/price-registry.js";
 import { r2GetVersion, r2Put } from "./r2.js";
+import { resolveLatestHoldingsCodeList } from "../../sync/holdings-code-list.js";
 vi.mock("./r2.js", () => ({ r2GetVersion: vi.fn(), r2Put: vi.fn() }));
+vi.mock("../../sync/holdings-code-list.js", () => ({ resolveLatestHoldingsCodeList: vi.fn() }));
 const hash = (body: string) => createHash("sha256").update(body).digest("hex");
 const ref: PriceReference = { file: { archivePageId: "a".repeat(32), filename: "raw.json.gz", sha256: "b".repeat(64), byteLength: 100 },
   symbol: "7203.T", receivedAt: "2026-10-14T09:00:00.000Z", bodySha256: "c".repeat(64), bodyBytes: 200 };
@@ -16,6 +18,7 @@ beforeEach(() => {
   store.set(registryKey, { body, etag: "registry-old" });
   store.set(PRICE_ACTIVE_KEY, { body: JSON.stringify({ version: 1, snapshotId: "old", registryKey, registrySha256: digest, activatedAt: base.createdAt }), etag: "active-old" });
   vi.mocked(r2GetVersion).mockImplementation(async key => store.get(key) ?? null);
+  vi.mocked(resolveLatestHoldingsCodeList).mockResolvedValue({ status: "ready", file: base.codeList });
   vi.mocked(r2Put).mockImplementation(async (key, body, etag) => {
     expect(store.get(key)?.etag ?? null).toBe(etag); store.set(key, { body, etag: `v${store.size}-${body.length}` });
   });
@@ -55,6 +58,20 @@ describe("通常全量だけの価格snapshot activation", () => {
     for (const changed of [{ complete: false }, { universe: ["7203", "1301"] }, { references: new Map() }]) {
       expect((await publishDailyPriceSnapshot({ ...args, ...changed })).status).toBe("held");
     }
+    expect(store.get(PRICE_ACTIVE_KEY)).toBe(before); expect(r2Put).not.toHaveBeenCalled();
+    expect(resolveLatestHoldingsCodeList).not.toHaveBeenCalled();
+  });
+  it("通常全量は最新の公式銘柄表を新snapshotに束縛し、候補無し/不適格は旧activeを保持する", async () => {
+    const nextCodeList = { ...base.codeList, archivePageId: "e".repeat(32), filename: "new-codes.zip" };
+    vi.mocked(resolveLatestHoldingsCodeList).mockResolvedValue({ status: "ready", file: nextCodeList });
+    await publishDailyPriceSnapshot(args);
+    expect((await readActivatedPriceSnapshot())?.codeList).toEqual(nextCodeList);
+    expect(resolveLatestHoldingsCodeList).toHaveBeenCalledWith(base.codeList, args.finishedAt);
+    const before = store.get(PRICE_ACTIVE_KEY); vi.mocked(r2Put).mockClear();
+    vi.mocked(resolveLatestHoldingsCodeList).mockResolvedValue({ status: "held", reason: "保存世代なし" });
+    expect(await publishDailyPriceSnapshot({ ...args, runId: "next" })).toEqual({ status: "held", reason: "保存世代なし" });
+    vi.mocked(resolveLatestHoldingsCodeList).mockRejectedValue(new Error("newest invalid"));
+    await expect(publishDailyPriceSnapshot({ ...args, runId: "next" })).rejects.toThrow("newest invalid");
     expect(store.get(PRICE_ACTIVE_KEY)).toBe(before); expect(r2Put).not.toHaveBeenCalled();
   });
   it("全文readbackしたregistry→inflight→active→completeを各一回CASし、同じ証拠はwrite0", async () => {

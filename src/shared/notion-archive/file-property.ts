@@ -60,4 +60,3 @@ export function normalizeFilePropForCompare(prop: unknown): { ok: true; norm: un
   }
   return { ok: true, norm: { ...(p as Record<string, unknown>), files: normFiles } };
 }
-
