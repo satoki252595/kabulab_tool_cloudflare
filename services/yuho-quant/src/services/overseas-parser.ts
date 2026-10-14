@@ -219,7 +219,7 @@ interface ParsedTable {
    * stale (交互節表題の直前=前期) でも値列頭の当連結@pe で T 確定する。
    */
   valueAxisHeader?: string;
-  /** 単一行 geocols の直接証明 (分岐受理表のみ。contract/FY を group へ渡す)。 */
+  /** 単一無ラベル行/唯一external行の直接証明 (contract/FY を group へ渡す)。 */
   singleRowProof?: SingleRowProof;
 }
 
@@ -250,19 +250,20 @@ function isBareOther(label: string): boolean {
   return /^(その他|その他の地域|その他地域)$/.test(label);
 }
 
-/** 実1333/3036の分類注記。地域語やOtherの存在だけでは証明しない。 */
+/** 実1333/3036/3382の分類注記。地域語やOtherの存在だけでは証明しない。 */
 function hasGeographicClassification(note: string): boolean {
   const n = norm(note).replace(/[、,]/g, "");
   return /売上高は顧客の所在地を基礎とし(?:て)?国(?:又は|または)地域(?:ごと|別)?に分類/.test(n) ||
-    /各地域の区分の方法は地理的近接度/.test(n);
+    /各地域の区分の方法は地理的近接度/.test(n) ||
+    /国(?:又は|または)地域の区分は地理的近接度/.test(n);
 }
 
-/** 当該売上TextBlock内、表直後から次のtable/ix境界までの実注記だけ読む。 */
+/** 当該TextBlock内、表直後から次のtable/ix境界までの実注記だけ読む。 */
 function geographicNoteAfter(
   html: string,
   table: ReturnType<typeof tablesWithHeading>[number]
 ): string | null {
-  if (table.textBlock !== SINGLE_ROW_SALES_TEXTBLOCK) return null;
+  if (table.textBlock === null) return null;
   const after = html.slice(table.start + table.table.length);
   const boundary = /<\/?(?:table|ix:nonNumeric)\b/i.exec(after);
   if (boundary === null) return null;
@@ -1913,11 +1914,20 @@ function tryGeoCols(
       }
     }
   }
-  // 単一行の直接証明 (分岐が受理した表だけ設定する)。
+  // 単一無ラベル行/唯一external行の直接証明 (受理分岐だけ設定する)。
   let singleRowProof: SingleRowProof | undefined;
   let singleRowAxis: string | undefined;
   // ラベルつき値行か (col0 セルが値でなく行ラベル)。単一行は col0 が数値。
   const valueRowLabeled = valueRow >= 0;
+  const externalRows = gridX.flatMap((row, index) =>
+    /^外部顧客(?:への|に対する)(?:売上高|売上収益|営業収益)$/.test(norm(row[0] ?? "")) ? [index] : []);
+  // 実3382: external行が唯一、当連結の印刷期間、同TB直下注の地理分類が明示。
+  // 無ラベル単一行と同じnative/印刷期間照合へ渡す。合計行だけでは拡張しない。
+  const labeledExternalOther = valueRowLabeled && externalRows.length === 1 &&
+    externalRows[0] === valueRow && gridX[headerIdx].some((h) => isBareOther(cleanLabel(h))) &&
+    lastRangedFiscalTitle(caption) !== null &&
+    resolveTableScope(caption, textBlock, detectConsolidated(flat)) === true &&
+    geographicNote !== null && hasGeographicClassification(geographicNote);
   if (valueRow < 0) {
     // 単一行 geocols の限定分岐 (Sol確定 + Root残gate): 地域 header +
     // 無ラベル数値行が唯一で、売上 TextBlock の囲み + 直前小見出しの sales
@@ -1936,6 +1946,8 @@ function tryGeoCols(
       textBlock
     );
     if (valueRow < 0) return null;
+  }
+  if (!valueRowLabeled || labeledExternalOther) {
     const title = lastRangedFiscalTitle(caption);
     const printed = title ? inheritSourceFiscal(caption, fiscalYearEnd) : null;
     let inh: FiscalResolution;
@@ -2006,6 +2018,10 @@ function tryGeoCols(
   const consolidated = detectConsolidated(gridX.flat().join(" "));
   const otherLabels = gridX[headerIdx].map(cleanLabel).filter(isBareOther);
   const nativePeriod = singleRowProof?.contextPeriod;
+  // 実3382の「計」と「連結」は同じ印刷external総額。差があれば推定せずHOLD。
+  const onePrintedTotal = aggregates.length === 1 || (labeledExternalOther &&
+    aggregates.length === 2 && aggregates.some((a) => a.label === "計") &&
+    aggregates.some((a) => a.label === "連結") && aggregates[0].value === aggregates[1].value);
   // 既存single-row証明が唯一の値行・売上指標・実期間と印刷期間の一致を担う。
   // 個別/期不明/複数Japan/総額なし/分類注記なしは従来の未分類HOLDへ進む。
   const otherGeography: OverseasProof["otherGeography"] =
@@ -2014,7 +2030,7 @@ function tryGeoCols(
     nativePeriod.endDate === normPeriodEnd(fiscalYearEnd) &&
     resolveTableScope(caption, textBlock, consolidated) === true &&
     colRole.filter((role) => role === "domestic").length === 1 &&
-    otherLabels.length === 1 && aggregates.length === 1 &&
+    otherLabels.length === 1 && onePrintedTotal &&
     geographicNote !== null && hasGeographicClassification(geographicNote)
       ? { label: otherLabels[0], contextPeriod: nativePeriod, classificationNote: geographicNote }
       : undefined;
