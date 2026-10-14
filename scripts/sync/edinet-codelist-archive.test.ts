@@ -57,12 +57,12 @@ function stubTransport(files: HostedFile[], bodies: Map<string, Uint8Array>): vo
 }
 
 const GOOD_FILES: HostedFile[] = [
-  { name: "Edinetcode.zip", kind: "file", url: "https://hosted.invalid/z" },
-  { name: "m.json", kind: "file", url: "https://hosted.invalid/m" },
+  { name: "Edinetcode.zip", kind: "file", url: "https://file.notion.so/z" },
+  { name: "m.json", kind: "file", url: "https://file.notion.so/m" },
 ];
 const GOOD_BODIES = new Map([
-  ["https://hosted.invalid/z", ZIP],
-  ["https://hosted.invalid/m", META],
+  ["https://file.notion.so/z", ZIP],
+  ["https://file.notion.so/m", META],
 ]);
 
 function deps(over: Partial<ArchiveDeps> = {}, calls: { record: number } = { record: 0 }): ArchiveDeps {
@@ -158,12 +158,12 @@ describe("edinet-codelist-archive", () => {
   it("同名 ZIP 重複＋manifest 欠落は verified false (件数一致のすり抜けなし)", async () => {
     stubTransport(
       [
-        { name: "Edinetcode.zip", kind: "file", url: "https://hosted.invalid/z" },
-        { name: "Edinetcode.zip", kind: "file", url: "https://hosted.invalid/z2" },
+        { name: "Edinetcode.zip", kind: "file", url: "https://file.notion.so/z" },
+        { name: "Edinetcode.zip", kind: "file", url: "https://file.notion.so/z2" },
       ],
       new Map([
-        ["https://hosted.invalid/z", ZIP],
-        ["https://hosted.invalid/z2", ZIP],
+        ["https://file.notion.so/z", ZIP],
+        ["https://file.notion.so/z2", ZIP],
       ])
     );
     const res = await archiveAndVerify(input(), deps());
@@ -173,30 +173,30 @@ describe("edinet-codelist-archive", () => {
 
   it("欠落・種別・長さ・SHA の不一致は fail", async () => {
     stubTransport(
-      [{ name: "Edinetcode.zip", kind: "file", url: "https://hosted.invalid/z" }],
-      new Map([["https://hosted.invalid/z", ZIP]])
+      [{ name: "Edinetcode.zip", kind: "file", url: "https://file.notion.so/z" }],
+      new Map([["https://file.notion.so/z", ZIP]])
     );
     const one = await archiveAndVerify(input(), deps());
     expect(one.ok).toBe(false);
 
     stubTransport(
       [
-        { name: "Edinetcode.zip", kind: "file", url: "https://hosted.invalid/z" },
-        { name: "m.json", kind: "external", url: "https://hosted.invalid/m" },
+        { name: "Edinetcode.zip", kind: "file", url: "https://file.notion.so/z" },
+        { name: "m.json", kind: "external", url: "https://file.notion.so/m" },
       ],
       GOOD_BODIES
     );
     const ext = await archiveAndVerify(input(), deps());
     expect(ext.ok).toBe(false);
 
-    stubTransport(GOOD_FILES, new Map([["https://hosted.invalid/z", ZIP.slice(0, 2)], ["https://hosted.invalid/m", META]]));
+    stubTransport(GOOD_FILES, new Map([["https://file.notion.so/z", ZIP.slice(0, 2)], ["https://file.notion.so/m", META]]));
     const short = await archiveAndVerify(input(), deps());
     expect(short.ok).toBe(false);
     expect(short.reason).toMatch(/バイト長/);
 
     stubTransport(
       GOOD_FILES,
-      new Map([["https://hosted.invalid/z", new Uint8Array([0x50, 0x4b, 9, 9, 9])], ["https://hosted.invalid/m", META]])
+      new Map([["https://file.notion.so/z", new Uint8Array([0x50, 0x4b, 9, 9, 9])], ["https://file.notion.so/m", META]])
     );
     const sha = await archiveAndVerify(input(), deps());
     expect(sha.ok).toBe(false);

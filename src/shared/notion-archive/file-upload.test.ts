@@ -429,14 +429,14 @@ describe("適時開示 1 件の Notion 呼び出し", () => {
               {
                 name: filename,
                 type: "file",
-                file: { url: "https://files.example.test/hosted.pdf" },
+                file: { url: "https://file.notion.so/hosted.pdf" },
               },
             ],
           },
         },
       },
     ]);
-    harness.route("GET", "files.example.test/hosted.pdf", [
+    harness.route("GET", "file.notion.so/hosted.pdf", [
       new Response(PDF.slice(), { status: 200, headers: { "content-type": "application/pdf" } }),
     ]);
 
@@ -465,7 +465,7 @@ describe("適時開示 1 件の Notion 呼び出し", () => {
       });
       expect(result.created).toBe(1);
       expect(persisted).toHaveBeenCalledWith("T1", pageId);
-      const hosted = harness.calls.filter((c) => c.url.includes("files.example.test/hosted.pdf"));
+      const hosted = harness.calls.filter((c) => c.url.includes("file.notion.so/hosted.pdf"));
       expect(hosted).toHaveLength(1);
       expect(confirmGets(harness.calls)).toHaveLength(0);
       const pdfAt = harness.calls.findIndex((c) => c.url.includes("tdnet.example.test/1.pdf"));

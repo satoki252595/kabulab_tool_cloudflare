@@ -11,6 +11,7 @@
  */
 import { sha256HexBytes } from "../sha256.js";
 import { listPageFiles } from "./page-file.js";
+import { downloadArchivedFile } from "./archived-download.js";
 
 export interface ArchivedFileInput {
   filename: string;
@@ -36,9 +37,7 @@ export async function verifyArchivedAttachments(
   for (const f of files) {
     const got = byName.get(f.filename) ?? fail(`添付「${f.filename}」なし`);
     if (got.kind !== "file") fail(`「${f.filename}」が Notion-hosted 添付ではありません`);
-    const res = await fetch(got.url);
-    if (!res.ok) fail(`「${f.filename}」の再取得に失敗 status=${res.status}`);
-    const bytes = new Uint8Array(await res.arrayBuffer());
+    const bytes = await downloadArchivedFile(got, label, { maxBytes: f.bytes.length });
     if (bytes.length !== f.bytes.length) {
       fail(`「${f.filename}」のバイト長 ${bytes.length} ≠ ${f.bytes.length}`);
     }

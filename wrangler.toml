@@ -32,10 +32,11 @@ database_id = "639c0315-0d41-4345-95ab-aec5906224ed"
 # null になる時間帯の中だった。マクロの 21:00 / 22:05 UTC は変えていない。
 # 資金フローの独立取得元は09:15 UTC起動、14:45 UTCに専用receiptの成功を確認する。
 # 開示catchupは10:00 UTC起動・11:05 UTC確認。Mac20時writer前の10:59 UTC終了が必須。
+# VWAP日足+5分足は従来と同じ月水金08:00 UTC起動、14:35 UTC確認。信用残は従来GHA。
 # 実実行は従来どおり Actions (workflow_dispatch)。曜日は名前指定 (CF の
 # 数字曜日は 1=日曜で GitHub と違うため)。変更の伝播には最大 15 分かかる。
 [triggers]
-crons = ["0 9 * * MON-FRI", "35 14 * * MON-FRI", "0 21 * * MON-FRI", "5 22 * * MON-FRI", "15 9 * * MON-FRI", "45 14 * * MON-FRI", "0 10 * * MON-FRI", "5 11 * * MON-FRI"]
+crons = ["0 9 * * MON-FRI", "35 14 * * MON-FRI", "0 21 * * MON-FRI", "5 22 * * MON-FRI", "15 9 * * MON-FRI", "45 14 * * MON-FRI", "0 10 * * MON-FRI", "5 11 * * MON-FRI", "0 8 * * MON,WED,FRI", "35 14 * * MON,WED,FRI"]
 
 # CRON_SECRET は取込プロキシ/取込ルートの認証 secret（`wrangler secret put CRON_SECRET`）。
 # EDINET_API_KEY / NOTION_TOKEN も Worker 取込ルートで参照する secret（ローカルは .env）。

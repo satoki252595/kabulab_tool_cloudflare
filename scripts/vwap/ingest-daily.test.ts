@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { R2PutRejectedError, R2PutUnknownError } from "./lib/r2.js";
 import { r2GetVersion, r2Put } from "./lib/r2.js";
 import { loadCodes } from "./lib/codes.js";
-import { MAX_YAHOO_RAW_BYTES, YahooRawTooLargeError, parseDailyChart } from "../../src/shared/yahoo/client.js";
+import { MAX_YAHOO_RAW_BYTES, YahooRawTooLargeError, parseDailyChart, type YahooRawCapture } from "../../src/shared/yahoo/client.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { NotionUnknownResultError } from "../../src/shared/notion-archive/client.js";
 import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
@@ -20,7 +20,8 @@ import { referenceFromArchivedParts, readPriceReference, priceMetadata } from ".
 import { publishDailyPriceSnapshot } from "./lib/holdings-price-registry.js";
 
 const dailySource = vi.hoisted(() => vi.fn());
-const rawHook = vi.hoisted(() => ({ enabled: true, status: 200, size: 28, body: null as Uint8Array | null }));
+const rawHook = vi.hoisted(() => ({ enabled: true, status: 200, size: 28, body: null as Uint8Array | null,
+  replay: null as Map<string, YahooRawCapture> | null }));
 
 vi.mock("./lib/r2.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./lib/r2.js")>();
@@ -42,7 +43,10 @@ vi.mock("./lib/daily-session.js", async (importOriginal) => {
 vi.mock("../../src/shared/yahoo/client.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../../src/shared/yahoo/client.js")>();
   return { ...mod, fetchDaily: async (...args: Parameters<typeof mod.fetchDaily>) => {
-    if (rawHook.enabled) await args[2]?.onRaw?.({ symbol: args[0], status: rawHook.status,
+    if (rawHook.replay !== null) {
+      const capture = rawHook.replay.get(args[0]); if (!capture) throw new Error("unexpected actual replay symbol");
+      await args[2]?.onRaw?.(capture);
+    } else if (rawHook.enabled) await args[2]?.onRaw?.({ symbol: args[0], status: rawHook.status,
       bytes: rawHook.body === null ? new Uint8Array(rawHook.size) : rawHook.body,
       url: `https://query1.finance.yahoo.com/v8/finance/chart/${args[0]}?range=${args[1]}&interval=1d&events=split,div`, receivedAt: new Date().toISOString(), headers: {} });
     return dailySource(...args);
@@ -109,6 +113,9 @@ const SAVED_CWD = process.cwd();
 // main() は cwd/.vwap-summaries/ へ原本を書く。repo 汚染防止で tmp へ chdir。
 beforeEach(() => {
   vi.clearAllMocks();
+  mockR2Put.mockReset(); mockR2Put.mockResolvedValue(undefined);
+  vi.mocked(qualifyDailySourceRange).mockReset();
+  vi.mocked(qualifyDailySourceRange).mockImplementation(() => tenYearRange(new Date().toISOString()));
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   process.argv = ["node", "vitest"];
@@ -119,6 +126,7 @@ beforeEach(() => {
   rawHook.status = 200;
   rawHook.size = 28;
   rawHook.body = null;
+  rawHook.replay = null;
   mockRawArchive.mockResolvedValue({ pages: ["test-page"], rawBytes: 1, compressedBytes: 1, archives: [] });
   vi.mocked(referenceFromArchivedParts).mockReturnValue({} as never);
   vi.mocked(readPriceReference).mockReturnValue({ status: "held", reason: "この配管fixtureは物理原本参照を持たない" });
@@ -131,6 +139,8 @@ afterEach(() => {
   process.argv = SAVED_ARGV;
   process.exitCode = undefined;
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 const localSummaryBody = (): Record<string, unknown> => {
   const files = readdirSync(".vwap-summaries");
@@ -414,6 +424,53 @@ describe("daily source前の同日確定済み再開", () => {
 });
 
 describe("ingest-daily main flow", () => {
+  it.each(["success", "unknown", "rejected", "deadline"])("custody後のR2だけ最大2・%s後は開始済みをsettleし後続を止める", async (mode) => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
+    const codes = mode === "success" ? ["A", "B", "C"] : ["A", "B", ...Array.from({ length: 29 }, (_, i) => `C${i}`)];
+    mockLoadCodes.mockResolvedValue(codes); mockR2Get.mockResolvedValue(null);
+    let sourceActive = 0, sourcePeak = 0, writeActive = 0, writePeak = 0, archived = false;
+    mockFetchDaily.mockImplementation(async () => {
+      sourcePeak = Math.max(sourcePeak, ++sourceActive); await Promise.resolve(); sourceActive--;
+      return { bars: [{ ...BAR_A, date: "2026-10-14" }], splits: [], proof: FAKE_PROOF };
+    });
+    mockRawArchive.mockImplementationOnce(async () => {
+      expect(mockR2Put).not.toHaveBeenCalled(); archived = true;
+      return { pages: ["test-page"], rawBytes: 1, compressedBytes: 1, archives: [] };
+    });
+    const pending: Array<{ resolve(): void; reject(error: unknown): void }> = [];
+    mockR2Put.mockImplementation(async () => {
+      expect(archived).toBe(true); writePeak = Math.max(writePeak, ++writeActive);
+      try { await new Promise<void>((resolve, reject) => pending.push({ resolve, reject })); } finally { writeActive--; }
+    });
+    if (mode === "deadline") {
+      vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1"); process.argv.push("--scheduled-date=2026-10-14");
+    }
+    const operation = main();
+    try {
+      await vi.waitFor(() => expect(mockR2Put).toHaveBeenCalledTimes(2));
+      expect(mockRecord).not.toHaveBeenCalled(); expect(sourcePeak).toBe(1); expect(writePeak).toBe(2);
+      if (mode === "success") {
+        pending[0].resolve(); await vi.waitFor(() => expect(mockR2Put).toHaveBeenCalledTimes(3));
+        pending[1].resolve(); pending[2].resolve();
+      } else {
+        if (mode === "deadline") { vi.setSystemTime(new Date("2026-10-14T14:30:00.000Z")); pending[0].resolve(); }
+        else pending[0].reject(mode === "unknown" ? new R2PutUnknownError("daily/A.json", "timeout", "none", null) : new R2PutRejectedError("daily/A.json", "PreconditionFailed", 412, null));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(mockR2Put).toHaveBeenCalledTimes(2); expect(mockRecord).not.toHaveBeenCalled(); pending[1].resolve();
+      }
+      await operation;
+      expect(writeActive).toBe(0); expect(writePeak).toBe(2);
+      const body = recordedBody() as { outcomes: Record<string, { status: string }>; unknown: string[]; rejected: string[] };
+      expect(body.outcomes.B.status).toBe("written");
+      if (mode === "success") { expect(process.exitCode).toBe(0); expect(body.outcomes.C.status).toBe("written"); }
+      else {
+        expect(process.exitCode).toBe(2); expect(mockFetchDaily).toHaveBeenCalledTimes(30);
+        expect(body.outcomes.C28.status).toBe("notStarted");
+        expect(body.unknown).toEqual(mode === "unknown" ? ["A"] : []);
+        expect(body.rejected).toEqual(mode === "rejected" ? ["A"] : []);
+      }
+    } finally { for (const item of pending) item.resolve(); await operation; }
+  });
   it("explicit archived source keeps custody in the run receipt without direct benchmark fetch", async () => {
     process.argv.push("--session-source=archived-jp-leg", `--session-date=${D_TODAY}`);
     const reference = { date: D_TODAY, observedAt: new Date().toISOString(), rawSha: "8".repeat(64) };
@@ -490,23 +547,24 @@ describe("ingest-daily main flow", () => {
     expect(recordedMetadata().unknownCount).toBe(0);
   });
 
-  it("first PUT timeout => PUT1/unknown1/prepared-notStarted1/exit2 (archive still runs)", async () => {
-    mockLoadCodes.mockResolvedValue(["A", "B"]);
+  it("first PUT timeout => inflight2/unknown1/written1/prepared-notStarted1/exit2", async () => {
+    mockLoadCodes.mockResolvedValue(["A", "B", "C"]);
     mockR2Get.mockResolvedValue(null);
     mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
     mockR2Put.mockRejectedValueOnce(new R2PutUnknownError("daily/A.json", "TimeoutError", "none", "test"));
     await main();
     expect(process.exitCode).toBe(2);
-    expect(mockR2Put).toHaveBeenCalledTimes(1);
-    // B は同じ保管batchで取得済みだが、unknown後の新規取得/PUTはしない。
-    expect(mockFetchDaily).toHaveBeenCalledTimes(2);
+    expect(mockR2Put).toHaveBeenCalledTimes(2);
+    // Bはunknown判明前に開始済み。Cも保管済みだがunknown後の新規PUTはしない。
+    expect(mockFetchDaily).toHaveBeenCalledTimes(3);
     expect(mockFetchDaily.mock.calls[0][0]).toBe("A.T");
-    // summary 保管は走り、unknown1/notStarted1 を記録する。
+    // summary保管はunknown1/開始済みBの既知ACK/未送信Cを区別する。
     expect(mockRecord).toHaveBeenCalledTimes(1);
     expect(recordedMetadata().unknownCount).toBe(1);
     const outcomes = recordedBody().outcomes as Record<string, { status: string }>;
     expect(outcomes.A.status).toBe("unknown");
-    expect(outcomes.B.status).toBe("notStarted");
+    expect(outcomes.B.status).toBe("written");
+    expect(outcomes.C.status).toBe("notStarted");
   });
 
   it("strict GET fault => source0/PUT0/exit2", async () => {
@@ -686,6 +744,37 @@ const FIX_R2_DAILY_7203 = join(HERE, "../../services/vwap-analysis/tests/fixture
 const R2_DAILY_7203_SHA = "2a727f0665ba53e78da50944e58714271f20d26e6ad7e9b296dcd5a21e0c8efc";
 const sha256str = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
 
+// 私有保存10y原本3社をそのまま再生。価格/clock/bytesを合成しない。CIの機構回帰は上で必須実行。
+const PUT2_DAILY_REPLAY = "/tmp/kabulab-vwap-put2-replay/daily.json";
+it.skipIf(!existsSync(PUT2_DAILY_REPLAY))("actual saved10y 3source bytes/clock preserve under normal main R2 inflight2 (source0)", async () => {
+  const wire = readFileSync(PUT2_DAILY_REPLAY);
+  expect(createHash("sha256").update(wire).digest("hex")).toBe("c26fb4f6b7b89ecf0d7e08a7b3e33e9e8104710fc5c1ad2dd1b1927b1ae18bed");
+  const plan = JSON.parse(wire.toString()) as { sources: Array<Omit<YahooRawCapture, "bytes"> & { bodyBase64: string; sha256: string; byteLength: number }> };
+  rawHook.replay = new Map(); const fresh = new Map<string, Awaited<ReturnType<typeof parseDailyChart>>>();
+  for (const item of plan.sources) {
+    const bytes = Buffer.from(item.bodyBase64, "base64");
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(item.sha256); expect(bytes.length).toBe(item.byteLength);
+    rawHook.replay.set(item.symbol, { symbol: item.symbol, status: item.status, receivedAt: item.receivedAt, url: item.url, headers: item.headers, bytes });
+    fresh.set(item.symbol, await parseDailyChart(item.symbol, "10y", bytes, item.receivedAt));
+  }
+  vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(Math.max(...plan.sources.map(x => Date.parse(x.receivedAt))) + 1000));
+  mockLoadCodes.mockResolvedValue(plan.sources.map(x => x.symbol.replace(/\.T$/, ""))); mockR2Get.mockResolvedValue(null);
+  // 市場session資格は独立suiteのseam。ここでは本物のraw/解析値とR2順序だけを主張する。
+  // rootが物理受入した固定37202207552.1は2026-10-02 session。取得暦日10-04へ移さない。
+  vi.mocked(fetchDailySessionReference).mockResolvedValueOnce({ date: "2026-10-02", observedAt: new Date().toISOString(), rawSha: "1".repeat(64) });
+  vi.mocked(qualifyDailySourceRange).mockReturnValue(tenYearRange("2026-10-02T08:00:00.000Z"));
+  mockFetchDaily.mockImplementation(async symbol => { const v = fresh.get(symbol); if (!v) throw new Error("unexpected actual source"); return v; });
+  let active = 0, peak = 0;
+  mockR2Put.mockImplementation(async () => { peak = Math.max(peak, ++active); await new Promise(resolve => setTimeout(resolve, 15)); active--; });
+  await main(); expect(process.exitCode).toBe(0); expect(peak).toBe(2); expect(active).toBe(0); expect(mockR2Put).toHaveBeenCalledTimes(3);
+  for (const [key, body] of mockR2Put.mock.calls) {
+    const symbol = key.slice("daily/".length, -".json".length) + ".T", source = fresh.get(symbol)!;
+    const saved = JSON.parse(body); expect(saved.bars).toEqual(source.bars); expect(saved.splits).toEqual(source.splits); expect(saved.proof).toEqual(source.proof);
+  }
+  expect(mockRawArchive.mock.calls[0][0].captures.map(x => createHash("sha256").update(x.capture.bytes).digest("hex")))
+    .toEqual(plan.sources.map(x => x.sha256));
+});
+
 // Actual licensed bytes remain private. This replay uses the actual frozen plan
 // clock, not the machine's later clock; it proves same-run reentry through main().
 const ACTUAL_REPAIR_DIR = "/tmp/vwap-adj-repair";
@@ -741,8 +830,58 @@ it.skipIf(!actualReplayAvailable)("actual repaired NEWPOSTs reenter the SAME nor
     expect(Object.keys(outcomes)).toEqual(ACTUAL_CODES);
     expect(Object.values(outcomes).every((r) => r.status === "skipped")).toBe(true);
   } finally {
-    vi.useRealTimers();
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
   }
+});
+
+describe("通常定時VWAPの日足source前開始/終了窓", () => {
+  it("定時受付だけがbenchmark/個別source/registryへ同じrequest-local guardを渡す", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(COMPLETED_AT));
+    vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    process.argv.push("--scheduled-date=2026-10-02"); mockLoadCodes.mockResolvedValue(["7203"]);
+    rawHook.body = completionRaw("7203.T");
+    mockFetchDaily.mockResolvedValue(await parseDailyChart("7203.T", "10y", rawHook.body, COMPLETED_AT));
+    mockR2Get.mockResolvedValue(null);
+    await main();
+    const guard = vi.mocked(fetchDailySessionReference).mock.calls[0][2];
+    expect(guard).toBeTypeOf("function");
+    expect(mockFetchDaily.mock.calls[0][2].beforeRequest).toBe(guard);
+    expect(vi.mocked(publishDailyPriceSnapshot).mock.calls[0][0].beforeMutation).toBe(guard);
+    expect(process.exitCode).toBe(0); expect(mockR2Put).toHaveBeenCalledTimes(1);
+  });
+  it("registryの非更新read中に完了期限を越えても成功出口へ進まない", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
+    vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    process.argv.push("--scheduled-date=2026-10-14"); mockLoadCodes.mockResolvedValue([]);
+    vi.mocked(publishDailyPriceSnapshot).mockImplementationOnce(async () => {
+      vi.setSystemTime(new Date("2026-10-14T14:30:00.001Z")); return { status: "unchanged" };
+    });
+    await main();
+    expect(process.exitCode).toBe(2); expect(mockR2Put).not.toHaveBeenCalled();
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(recordedBody().scheduledWindow).toMatchObject({ admittedAt: "2026-10-14T08:00:00.000Z" });
+  });
+  it("7時間超の遅配は母集団/benchmark/個別価格/保存すべて0でSTOP", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T15:19:56.144Z"));
+    vi.stubEnv("GITHUB_RUN_ID", "38570657322"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    process.argv.push("--scheduled-date=2026-10-14");
+    await expect(main()).rejects.toThrow("開始期限");
+    expect(mockLoadCodes).not.toHaveBeenCalled(); expect(fetchDailySessionReference).not.toHaveBeenCalled();
+    expect(mockFetchDaily).not.toHaveBeenCalled(); expect(mockR2Put).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled(); expect(mockRawArchive).not.toHaveBeenCalled();
+  });
+  it("受付後の母集団read中に終了窓を越えたらbenchmarkも取得しない", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
+    vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    process.argv.push("--scheduled-date=2026-10-14");
+    mockLoadCodes.mockImplementationOnce(async () => {
+      vi.setSystemTime(new Date("2026-10-14T14:30:00.001Z")); return ["7203"];
+    });
+    await expect(main()).rejects.toThrow("完了期限");
+    expect(fetchDailySessionReference).not.toHaveBeenCalled(); expect(mockFetchDaily).not.toHaveBeenCalled();
+    expect(mockR2Get).not.toHaveBeenCalled(); expect(mockR2Put).not.toHaveBeenCalled();
+  });
 });
 
 describe.skipIf(!existsSync(FIX_R2_DAILY_7203))("ingest-daily actual same-cached (実 excerpt)", () => {

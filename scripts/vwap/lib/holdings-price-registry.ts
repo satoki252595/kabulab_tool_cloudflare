@@ -72,6 +72,7 @@ export async function bootstrapPriceSnapshot(snapshot: PriceSnapshot, verifyFres
 export async function publishDailyPriceSnapshot(args: {
   runId: string; sessionDate: string; finishedAt: string; universe: readonly string[];
   codes: readonly string[]; references: ReadonlyMap<string, PriceReference>; complete: boolean;
+  beforeMutation?: () => void;
 }): Promise<{ status: "activated" | "unchanged" } | { status: "held"; reason: string }> {
   if (!args.complete || JSON.stringify([...args.codes].sort()) !== JSON.stringify([...args.universe].sort())) {
     return { status: "held", reason: "通常全母集団の受入が未完了です。旧価格snapshotを維持します" };
@@ -93,17 +94,20 @@ export async function publishDailyPriceSnapshot(args: {
   const body = JSON.stringify(snapshot), digest = hash(body), registryKey = `ops/holdings-price/snapshot-${args.runId}-${digest}.json`;
   const existing = await get(registryKey, 8 * 1024 * 1024);
   if (existing !== null) assert.equal(existing.body, body, "価格registryの既存bytesが一致しません。上書きしません");
-  else { await r2Put(registryKey, body, null); const actual = await get(registryKey, 8 * 1024 * 1024); assert.equal(actual?.body, body); }
+  else { args.beforeMutation?.(); await r2Put(registryKey, body, null); const actual = await get(registryKey, 8 * 1024 * 1024); assert.equal(actual?.body, body); }
   const state = { version: 1 as const, phase: "inflight" as const, snapshotId: args.runId, registryKey,
     registrySha256: digest, beforeActiveSha256: hash(before.active.body), at: args.finishedAt };
   const intentBody = JSON.stringify(state);
+  args.beforeMutation?.();
   await r2Put(ACTIVATION_KEY, intentBody, before.state?.etag ?? null);
   const intent = await get(ACTIVATION_KEY, 4096); assert.ok(intent); assert.equal(intent.body, intentBody);
   const active = priceActiveSchema.parse({ version: 1, snapshotId: args.runId, registryKey, registrySha256: digest, activatedAt: args.finishedAt });
   const activeBody = JSON.stringify(active);
+  args.beforeMutation?.();
   await r2Put(PRICE_ACTIVE_KEY, activeBody, before.active.etag);
   const activated = await get(PRICE_ACTIVE_KEY, 4096); assert.equal(activated?.body, activeBody);
   const completedBody = JSON.stringify({ ...state, phase: "complete" });
+  // activeは既知ACK＋全文readback済み。期限後も受領記録を閉じ、CLIが最後に期限失敗を出す。
   await r2Put(ACTIVATION_KEY, completedBody, intent.etag);
   assert.equal((await get(ACTIVATION_KEY, 4096))?.body, completedBody);
   return { status: "activated" };
