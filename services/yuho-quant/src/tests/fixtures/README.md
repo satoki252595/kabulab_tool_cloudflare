@@ -80,3 +80,40 @@ negative transformations explicitly; those transformed inputs are not sources.
 | --- | ---: | --- |
 | `metric-heading-pair-S100GAYK.html` | 15,929 | `3e19d143cf52de07079811fcdd90a003544704259f9828f8f2b2839f8c0f8689` |
 | `metric-heading-pair-S100W2ZR.html` | 20,612 | `761fc5dd53c6b42ea9225153083654b577a12ee9099feef81aca5730ed972c03` |
+
+## Explicit geographical Other regression (2026-10-14)
+
+These three excerpts preserve the original current consolidated fiscal caption,
+geographic-sales TextBlock, sole value row, and immediately following note.
+1333 and 3036 explicitly classify the table by geography; 1860 lacks that note
+and remains a negative example. A bare Other label does not qualify a region.
+No amount, period, scope, caption, or note is injected into the source excerpt.
+HTML fixtures have one provenance comment followed by the contiguous raw range.
+XML fixtures assemble only actual root attributes and verbatim current/prior
+duration definitions with the original root closure; they are structural
+projections, not complete XML instances. Negative transformations occur in tests
+only and are never treated as primary sources.
+
+Original HTTP acquisition clocks and producer manifests are UNKNOWN for these
+legacy archives. The saved ZIP full-byte verification and native DEI/period
+qualification are separate receipts from this recovery run; no old manifest or
+judgment-input hash is backfilled. Full ZIPs remain private.
+
+LICENSE: original filing content remains owned by its rights holders. These
+excerpts receive no new redistribution license and are not relicensed under the
+repository code license. Use is limited to actual-source regression.
+
+| Document / official source | Original ZIP bytes / SHA-256 | Honbun member / UTF-16 range |
+| --- | --- | --- |
+| [S100YCK1](https://api.edinet-fsa.go.jp/api/v2/documents/S100YCK1?type=1) / FY 2026-03-31 | 2,030,680 / `b24df1e403dab82c534bf5d1c0e5434c4ba3240ab0cd3a9ae68ae8cb8ddab439` | `XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E00015-000_2026-03-31_01_2026-06-17_ixbrl.htm` / `[1550728,1558344)` |
+| [S100YCV6](https://api.edinet-fsa.go.jp/api/v2/documents/S100YCV6?type=1) / FY 2026-03-31 | 671,807 / `c30ce4a65165ae4facb43bdecbec612fc22f650bcbd89a69e6b690de8689470d` | `XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E02998-000_2026-03-31_01_2026-06-17_ixbrl.htm` / `[1485884,1495103)` |
+| [S100YG3E](https://api.edinet-fsa.go.jp/api/v2/documents/S100YG3E?type=1) / FY 2026-03-31 | 1,442,842 / `9c42541a955a1bc5e4eb9e56dcd6208fed108857c86a4d90a069ad3f34f3f431` | `XBRL/PublicDoc/0105110_honbun_jpcrp030000-asr-001_E00147-000_2026-03-31_01_2026-06-22_ixbrl.htm` / `[120995,129810)` |
+
+| Fixture | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `geographic-other-S100YCK1.html` | 8,290 | `865dd91ff1e34e8e048b380ee035e35e9de644c3289250fa00fc94ece28616a7` |
+| `geographic-other-S100YCK1.xml` | 1,469 | `921db28f131b2b74f74329e850add8caf69207e0bcc8378a2f40dbbfda29bdfc` |
+| `geographic-other-S100YCV6.html` | 9,773 | `63c43287208148674a7bf5912b313d411eb0c893b13e77c05dc165a4d8176d72` |
+| `geographic-other-S100YCV6.xml` | 1,469 | `2bcd08f22bfefe0b3ff3717aaffe61470d53321b46290175cd89302e518f56c5` |
+| `geographic-other-S100YG3E.html` | 9,367 | `6d056da810c78e9c4b39d13f488daca2e2c2a5ac39c9ada5b4aaaaa3bcfa5701` |
+| `geographic-other-S100YG3E.xml` | 1,469 | `42639de6743ed330e4e074237730aac59fc6cef1239e5d8e00c4fd0a19ba912d` |
