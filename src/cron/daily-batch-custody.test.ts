@@ -16,6 +16,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import {
   _resetBatchRunIdForTests,
@@ -23,6 +24,7 @@ import {
   buildPriceSyncBatch,
   categorizeSyncFailure,
   isDailySyncIncomplete,
+  isTransientDailySyncFailure,
   priceSyncBatchKey,
   priceSyncBatchRunId,
   runDailySync,
@@ -36,7 +38,7 @@ import { makeTxBatchSender } from "./tests/overlay-test-sender.js";
 
 const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
 
-import { fetchChart, fetchStockRawData, YahooRawTooLargeError } from "../shared/yahoo/client.js";
+import { fetchChart, fetchStockRawData, parseChartResponse, YahooRawTooLargeError } from "../shared/yahoo/client.js";
 import "../shared/yahoo/nikkei-vi.js";
 import {
   ensurePriceSyncDb,
@@ -455,6 +457,66 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
       new TextDecoder().decode(input.files![0].bytes)
     ) as { failures: unknown[] };
     expect(body.failures).toEqual([]);
+  });
+
+  it.each([false, true])("8303の旧RSI全列/時計保持・原SHA付きHOLDを保存し、当日書込失敗=%sを二重計数しない", async (saveFails) => {
+    vi.mocked(Date.now).mockReturnValue(Date.parse("2026-10-14T10:16:00Z"));
+    vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-10-14")));
+    const projectionBodies = JSON.parse(gunzipSync(readFileSync(new URL("../shared/yahoo/fixtures/stock-daily-scopes-20261014.json.gz", import.meta.url))).toString()) as Record<string, string>;
+    const chart = parseChartResponse(JSON.parse(projectionBodies["8303-chart"]), "8303");
+    // CIは実原典の最小projection。元1221/245本の原SHA検査はprivate原本で別に固定。
+    const hold = { scope: "rsi-5y", reasonCode: "non_positive_adjusted_close", invalidBars: 1,
+      firstDate: "2022-03-30", lastDate: "2022-03-30",
+      sourceSha256: "713a310eae4050629ad65572ff79e6afcd694cd7aecac5b3e9ecbdb889cd6b9f" } as const;
+    const value = { ...stockRaw(130, "2026-10-14"), price: chart.meta.regularMarketPrice,
+      ohlcv: chart.bars.slice(-130), rsiHistoryHold: hold };
+    vi.mocked(fetchStockRawData).mockImplementation(async (...args) => {
+      const [symbol, , options] = args;
+      for (const [api, hook] of [["chart", options?.onChartRaw], ["quote-summary", options?.onSummaryRaw]] as const) {
+        await hook?.({ symbol, status: 200, bytes: new TextEncoder().encode(projectionBodies[`8303-${api}`]),
+          url: `https://test.invalid/yahoo/${api}`, receivedAt: api === "chart" ? "2026-10-14T10:15:47.400Z" : "2026-10-14T10:15:48.285Z", headers: {} });
+      }
+      return value;
+    });
+    const db = freshDb(); seedTarget(1, "8303");
+    sqlite.prepare("INSERT INTO rsi_percentile (stock_id, rsi_10, rsi_10_percentile, computed_at) VALUES (1, 30, 1, 1)").run();
+    const pre = sqlite.prepare("SELECT * FROM rsi_percentile").get();
+    if (saveFails) sqlite.exec("CREATE TRIGGER fail_stock_save BEFORE INSERT ON core_stock_financials BEGIN SELECT RAISE(ABORT, 'D1 HTTP 503 controlled save failure'); END;");
+    const result = await runDailySync(db, { stocksOnly: true, collectOverlay: fakeCollect,
+      sendOverlayBatch: makeTxBatchSender(sqlite, { sends: 0 }) });
+    expect(result).toMatchObject({ totalStocks: 1, successStocks: 0, failedStocks: 1,
+      currentUpdatedStocks: saveFails ? 0 : 1, historyHeldStocks: 1 });
+    expect(fetchStockRawData).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetchStockRawData).mock.calls[0][2]).toMatchObject({ stockDailyScopes: true });
+    expect(sqlite.prepare("SELECT * FROM rsi_percentile").get()).toEqual(pre);
+    const input = vi.mocked(recordPrimaryData).mock.calls.at(-1)![0];
+    const batch = JSON.parse(new TextDecoder().decode(input.files![0].bytes));
+    expect(batch.stats).toEqual({ totalStocks: 1, successStocks: 0, failedStocks: 1 });
+    expect(batch.currentUpdatedStocks).toBe(saveFails ? 0 : 1);
+    expect(batch.rsiHistoryHolds).toEqual([{ code: "8303", ...hold }]);
+    expect(batch.failures[0].error).toContain(hold.sourceSha256);
+    expect(isDailySyncIncomplete(result)).toBe(true);
+    if (saveFails) {
+      expect(batch.failures).toHaveLength(1);
+      // 通常producerはretry:false。回収対象になり得る503でもcallbackへ入らず原本再取得0。
+      expect(isTransientDailySyncFailure(batch.failures[0].error)).toBe(true);
+      expect(batch.failures[0].error).toContain("当日書込未完");
+      expect(sqlite.prepare("SELECT COUNT(*) AS n FROM core_stock_financials").get()).toEqual({ n: 0 });
+      return;
+    }
+    const fin = sqlite.prepare("SELECT price, data_date, fetched_at FROM core_stock_financials").get();
+    expect(fin).toMatchObject({ price: 1478.5, data_date: "2026-10-14", fetched_at: expect.any(Number) });
+    expect(Number(fin?.fetched_at)).toBeGreaterThan(1);
+    expect(Number.isInteger(fin?.fetched_at)).toBe(true);
+    expect(sqlite.prepare("SELECT latest_date FROM swing_stock_indicators").get()).toEqual({ latest_date: "2026-10-14" });
+    expect(sqlite.prepare("SELECT open, high, low, close, volume, adj FROM swing_daily_ohlcv WHERE date = '2026-10-14'").get())
+      .toEqual({ open: 1481, high: 1489.5, low: 1461.5, close: 1478.5, volume: 3868600, adj: 1478.5 });
+    const momentum = sqlite.prepare("SELECT as_of, bars, closes FROM p_momentum").get();
+    expect(momentum).toMatchObject({ as_of: "2026-10-14", bars: 90 });
+    expect(String(momentum?.closes).split(",").at(-1)).toBe("1478.5");
+    // 初回は130本を保存し、既存の週次pruneで90本へ絞る (水曜はpruneしない)。
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM swing_daily_ohlcv").get()).toEqual({ n: 130 });
+    expect(batch.categories.history_hold).toBe(1);
   });
 
   it("全inflight原本を待ち、初回原本保管/readback後だけD1をflushする", async () => {

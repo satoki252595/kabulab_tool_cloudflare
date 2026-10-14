@@ -129,6 +129,17 @@ function countInsertsInto(statements: string[], table: string): number {
 }
 
 describe("writeStockSnapshot の options.writeCoreFinancials", () => {
+  it("長期RSI HOLDでは金融/短期指標を書き、旧RSI行と時計に触れない", async () => {
+    const { db, statements } = makeRecordingDb();
+    await writeStockSnapshot(db, { ...SNAP, rsiPercentile: null, rsiHistoryHold: {
+      scope: "rsi-5y", reasonCode: "non_positive_adjusted_close", invalidBars: 245,
+      firstDate: "2022-03-30", lastDate: "2023-03-29",
+      sourceSha256: "bf9735d9ae7af4888625a5a6e5a53c9f3d69588273a1cb79a4cacbcc5d5244db",
+    } }, undefined);
+    expect(countInsertsInto(statements, "core_stock_financials")).toBe(1);
+    expect(countInsertsInto(statements, "swing_stock_indicators")).toBe(1);
+    expect(statements.some((s) => /rsi_percentile/.test(s))).toBe(false);
+  });
   it("既定では ②断面を書く (既存の呼び出し元の挙動を変えない)", async () => {
     const { db, statements } = makeRecordingDb();
     await writeStockSnapshot(db, SNAP, undefined);

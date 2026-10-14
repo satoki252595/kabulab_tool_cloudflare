@@ -147,7 +147,7 @@ export function screeningPage(props: {
           result.totalMatched > 0
             ? `全${result.totalMatched}件中、${query.offset + 1}件目以降に表示できる行がありません`
             : result.staleExcluded > 0
-              ? `条件に合致した ${result.staleExcluded} 銘柄はすべて ${result.maxAgeDays} 日超の古い算出値で、鮮度不足として除外しました`
+              ? `条件に合致した ${result.staleExcluded} 銘柄は、${result.maxAgeDays} 日超の古い算出値、または現在の株価に対応する算出値が未取得のため除外しました`
               : "条件に合致する銘柄が見つかりません"
         }</div>`
       : `<div style="overflow-x:auto"><table>

@@ -78,6 +78,7 @@ import {
   YahooRateLimitError,
   YahooRawTooLargeError,
   type YahooRawCapture,
+  type RsiHistoryHold,
 } from "../shared/yahoo/client.js";
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../shared/yahoo/raw-custody.js";
 import { checkFreshClose } from "../shared/yahoo/bar-sanity.js";
@@ -127,6 +128,9 @@ export interface DailySyncResult {
   totalStocks: number;
   successStocks: number;
   failedStocks: number;
+  /** 当日金融・短期指標の更新数。長期RSI HOLDの部分更新を含む。 */
+  currentUpdatedStocks?: number;
+  historyHeldStocks?: number;
   /** null = 株式専用の実行でマクロは対象外。 */
   marketContextOk: boolean | null;
   elapsedSec: number;
@@ -176,6 +180,7 @@ interface StockSnapshot {
   annualFinancials: { fiscalYear: number; revenue: number | null }[];
 
   // RSI (rsi-screening 用)
+  rsiHistoryHold?: RsiHistoryHold;
   rsiPercentile: {
     rsi10: number | null;
     rsi10Percentile: number | null;
@@ -186,7 +191,7 @@ interface StockSnapshot {
     rsiMinPercentile: number | null;
     /** パーセンタイル母集団に使った終値の本数 (UI の「母数 N」) */
     sampleBars: number;
-  };
+  } | null;
   blueChip: {
     isBlueChip: boolean;
     operatingMarginTtm: number | null;
@@ -981,6 +986,7 @@ async function recordPriceSyncFailureSafely(
  * (原因不明を一律 genuine にしない — ルール2)。
  */
 export type PriceSyncFailureCategory =
+  | "history_hold"
   | "genuine_source_gap"
   | "priceguard"
   | "networkparse"
@@ -988,6 +994,7 @@ export type PriceSyncFailureCategory =
   | "unknown";
 
 export function categorizeSyncFailure(error: string): PriceSyncFailureCategory {
+  if (error.startsWith("RSI 5y履歴HOLD:")) return "history_hold";
   if (error.includes("10倍超乖離")) return "priceguard";
   if (error.includes("実日足が未取得")) return "genuine_source_gap";
   if (isTransientDailySyncFailure(error)) return "networkparse";
@@ -1016,6 +1023,8 @@ export interface PriceSyncBatchInput {
   failures: { code: string; error: string }[];
   failureCollection: "complete" | "aborted";
   originalError: string | null;
+  currentUpdatedStocks?: number;
+  rsiHistoryHolds?: ({ code: string } & RsiHistoryHold)[];
 }
 
 /** バッチ冪等キー。run 一意 (同一 invocation の success/failure 二重を防ぐ)。 */
@@ -1055,6 +1064,7 @@ export function buildPriceSyncBatch(input: PriceSyncBatchInput): {
   file: { filename: string; bytes: Uint8Array; contentType: string };
 } {
   const categories: Record<PriceSyncFailureCategory, number> = {
+    history_hold: 0,
     genuine_source_gap: 0,
     priceguard: 0,
     networkparse: 0,
@@ -1083,6 +1093,9 @@ export function buildPriceSyncBatch(input: PriceSyncBatchInput): {
     categories,
     failures: input.failures,
     originalError: input.originalError,
+    ...(input.rsiHistoryHolds === undefined ? {} : {
+      currentUpdatedStocks: input.currentUpdatedStocks, rsiHistoryHolds: input.rsiHistoryHolds,
+    }),
     provenance: {
       producer: "runDailySync (Yahoo Chart/QuoteSummary→D1 REST)",
       universe: "core_stocks active+equity (loadDailyTargets)",
@@ -1335,7 +1348,7 @@ async function runDailySyncAndRecord(
   const firstPassFailures: DailyRecoveryFailure<(typeof targets)[number]>[] =
     [];
   const stockStartGate = createDailyStockStartGate(STOCK_START_INTERVAL_MS, Date.parse(`${targetDate}T21:00:00Z`));
-  let succeeded = 0;
+  let succeeded = 0; // 当日金融・短期指標の更新数。全機能成功数は履歴HOLDを後で差し引く。
 
   // 年次は月曜 UTC の run でのみ書く (L-49)。年 1 回変わるものに毎日
   // 15,900 行 upsert していた。曜日の判定は run 開始時刻に固定した
@@ -1449,8 +1462,12 @@ async function runDailySyncAndRecord(
     }
   }
   succeeded += pending.length - flushFailures.length;
+  const historyHolds = pending.filter((item) => item.snap.rsiHistoryHold !== undefined)
+    .map((item) => ({ code: item.snap.code, ...item.snap.rsiHistoryHold! }));
+  const currentHistoryHolds = new Set(historyHolds.filter((hold) =>
+    !flushFailures.some((failure) => failure.target?.code === hold.code)).map((hold) => hold.code));
   console.info(
-    `[sync-daily]   初回成功: ${succeeded} / 初回失敗: ${firstPassFailures.length}`
+    `[sync-daily]   初回当日更新: ${succeeded} / 初回失敗: ${firstPassFailures.length} / RSI履歴HOLD: ${historyHolds.length}`
   );
 
   const recoveryTargets = prioritizeDailyRecoveryFailures(
@@ -1522,6 +1539,10 @@ async function runDailySyncAndRecord(
           correctionDates: nullCloseDatesByStock.get(target.id),
           savedDates: gapSaved.get(target.id),
         });
+        if (snap.rsiHistoryHold !== undefined) {
+          historyHolds.push({ code: snap.code, ...snap.rsiHistoryHold });
+          currentHistoryHolds.add(snap.code);
+        }
         recoveredStocks++;
       } catch (error) {
         if (Date.now() >= Date.parse(`${targetDate}T21:00:00Z`)) custodyStop = error instanceof Error ? error : new Error(String(error));
@@ -1561,6 +1582,17 @@ async function runDailySyncAndRecord(
       });
     }
   }
+  // 当日更新を長期RSIの成功と混同しない。同じ原本は再取得しない。
+  for (const hold of historyHolds) {
+    const error = `RSI 5y履歴HOLD: ${hold.reasonCode}; invalidBars=${hold.invalidBars}; ` +
+      `dates=${hold.firstDate}..${hold.lastDate}; sourceSha256=${hold.sourceSha256}; ` +
+      `${currentHistoryHolds.has(hold.code) ? "当日データのみ更新" : "当日書込未完"}・旧RSI保持`;
+    const failed = failures.find((failure) => failure.code === hold.code);
+    if (failed === undefined) failures.push({ code: hold.code, error });
+    else failed.error += `; ${error}`;
+    console.warn(`[sync-daily] ${hold.code}: ${error}`);
+  }
+  const fullySucceeded = succeeded - currentHistoryHolds.size;
 
   // 最終 draft の保管+保存はここで 1 回だけ (daily/context-only 共通)。
   // HOLD でも実取得の原本は保管する。保管失敗は throw (丸めない)。
@@ -1646,14 +1678,14 @@ async function runDailySyncAndRecord(
     );
   }
   console.info(
-    `[sync-daily] 完了: 成功=${succeeded} 失敗=${failures.length} 所要=${elapsedSec.toFixed(1)}s`
+    `[sync-daily] 完了: 成功=${fullySucceeded} 失敗=${failures.length} 当日更新=${succeeded} RSI履歴HOLD=${historyHolds.length} 所要=${elapsedSec.toFixed(1)}s`
   );
 
   const tradingDate = projected.sourceMaxDate;
   await recordPriceSyncCompletion({
     tradingDate,
     targetStocks: targets.length,
-    updatedStocks: succeeded,
+    updatedStocks: fullySucceeded,
     failedStocks: failures.length,
     reason:
       tradingDate === null
@@ -1671,11 +1703,13 @@ async function runDailySyncAndRecord(
     finishedAt: new Date().toISOString(),
     tradingDate,
     totalStocks: targets.length,
-    successStocks: succeeded,
+    successStocks: fullySucceeded,
     failedStocks: failures.length,
     failures,
     failureCollection: "complete",
     originalError: null,
+    currentUpdatedStocks: succeeded,
+    rsiHistoryHolds: historyHolds,
   });
   console.info(
     `[sync-daily] 失敗バッチ保管: ${batchKey} (全${failures.length}件・切詰なし)`
@@ -1683,8 +1717,10 @@ async function runDailySyncAndRecord(
 
   return {
     totalStocks: targets.length,
-    successStocks: succeeded,
+    successStocks: fullySucceeded,
     failedStocks: failures.length,
+    currentUpdatedStocks: succeeded,
+    historyHeldStocks: historyHolds.length,
     marketContextOk,
     elapsedSec,
     failures,
@@ -1886,6 +1922,7 @@ async function buildSnapshot(
   // 1 回の Chart(5y) + QuoteSummary で全指標を賄う
   let chartRaw: YahooRawCapture | undefined;
   const raw = await fetchStockRawData(code, "5y", rawOptions === undefined ? undefined : {
+    stockDailyScopes: true,
     onChartRaw: (capture) => {
       chartRaw = capture;
       return rawOptions.onChartRaw?.(capture);
@@ -1926,11 +1963,10 @@ async function buildSnapshot(
   // **欠損日を無言で詰めて母集団を縮める**ので、何本で算出したのかを
   // rsiPercentile.sampleBars として持ち UI (母数 N) まで運ぶ。
   // 「5 年」は名前であって保証ではない: 実測で最短 461 本 (≒1.9 年) の銘柄がある。
-  const closes5y = raw.ohlcv
-    .map((r) => r.adj ?? r.close)
-    .filter((c): c is number => c !== null);
-  const rsiSeries = calculateAllRsiSeries(closes5y);
-  const rsiPercentile = computeRsiPercentileSnapshot(rsiSeries);
+  const rsiPercentile = raw.rsiHistoryHold === undefined
+    ? computeRsiPercentileSnapshot(calculateAllRsiSeries(raw.ohlcv
+      .map((r) => r.adj ?? r.close).filter((c): c is number => c !== null)))
+    : null;
   // 優良株選定の年度売上は正本の年次系列 (001 銘柄詳細と共用の gate で整形)。
   // Yahoo 年次 (raw.annualFinancials) は旧表の writer にだけ残す。
   // TTM 営業利益率は Yahoo のまま (単年 jss 値に置き換えると定義が変わる)。
@@ -1988,6 +2024,7 @@ async function buildSnapshot(
     sma20Val < sma60Val;
 
   return {
+    ...(raw.rsiHistoryHold === undefined ? {} : { rsiHistoryHold: raw.rsiHistoryHold }),
     stockId,
     code,
     sector,
@@ -2169,6 +2206,10 @@ function buildFinancialsRows(
 
 function buildRsiRows(item: FlushItem<never>): BuiltRow<Record<string, unknown>>[] {
   const snap = item.snap;
+  if (snap.rsiPercentile === null) {
+    if (snap.rsiHistoryHold === undefined) throw new Error(`${snap.code}: RSI欠測の資格理由がありません`);
+    return [];
+  }
   return [
     {
       item,

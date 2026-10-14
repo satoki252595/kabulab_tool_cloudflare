@@ -166,7 +166,10 @@ export function stockDetailPage(props: {
           ${tip("computedAt", "算出日")}: ${fmtComputedAt(detail.rsi.computedAt, now)}
         </p>
       </div>`
-    : "";
+    : `<div class="card" style="margin-bottom:20px">
+        <h3>${tip("rsi", "RSI")} ${tip("percentile", "パーセンタイル")}</h3>
+        <p>現在の株価に対応するRSIは未取得です。</p>
+      </div>`;
 
   const fundamentalsSection = detail.financials
     ? `

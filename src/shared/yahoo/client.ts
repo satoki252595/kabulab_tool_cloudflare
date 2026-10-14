@@ -539,6 +539,23 @@ export interface ChartResult {
   previousClose: number | null;
   dataDate: string;
   ohlcv: DailyOhlcv[];
+  /** 株式日次の直近窓だけ資格化した場合。5年RSIは更新しない。 */
+  rsiHistoryHold?: RsiHistoryHold;
+}
+
+export interface RsiHistoryHold {
+  scope: "rsi-5y";
+  reasonCode: "non_positive_adjusted_close";
+  invalidBars: number;
+  firstDate: string;
+  lastDate: string;
+  sourceSha256: string;
+}
+
+function assertStockDailyScopeRequest(symbol: string, range: string, onRaw: FetchChartOptions["onRaw"]): void {
+  if (range !== "5y" || !JP_STOCK_PATTERN.test(symbol) || !onRaw) {
+    throw new Error("株式日次の独立scopeには日本株・5y・原文captureが必要です");
+  }
 }
 
 /**
@@ -689,14 +706,17 @@ export function parseChartResponse(json: unknown, symbol: string): ParsedChartRe
 export async function fetchChart(
   symbol: string,
   range = "5y",
-  options?: FetchChartOptions
+  options?: FetchChartOptions & { stockDailyScopes?: true }
 ): Promise<ChartResult> {
+  if (options?.stockDailyScopes) assertStockDailyScopeRequest(symbol, range, options.onRaw);
   const normalized = normalizeSymbol(symbol);
   const url = `${CHART_API_BASE}/${normalized}?range=${range}&interval=1d&events=split%2Cdiv`;
   const response = await yahooFetch(url);
 
+  let sourceBytes: Uint8Array | undefined;
   if (options?.onRaw) {
     const bytes = await readRawBytes(response, symbol);
+    sourceBytes = bytes;
     await options.onRaw(rawCapture(symbol, response, bytes, new Date().toISOString()));
   }
 
@@ -716,7 +736,24 @@ export async function fetchChart(
   // 1909 の 2026-09-11 は close=16,278,046,720 / volume=0（前日 3,700）で、
   // これが業種平均を汚染して 003 のトップに「機械 +2,105,009.25%」が出た。
   // 共有 guard (修復 replay と同一判定)。棄却の warn は従来どおり出す。
-  const { bars: ohlcv, rejected } = guardChartBars(rawBars, meta.regularMarketPrice, symbol);
+  let rsiHistoryHold: RsiHistoryHold | undefined;
+  // 同じ5y原本から最初に用途を分ける。履歴エラーをcatchして別取得へ切り替えない。
+  const badAdjusted = options?.stockDailyScopes
+    ? rawBars.filter((bar) => typeof bar.adj === "number" && bar.adj <= 0)
+    : [];
+  if (badAdjusted.length > 0) {
+    assertRawBarsSane(symbol, rawBars.map((b) => ({ o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume })));
+    if (sourceBytes === undefined) throw new Error("株式日次の原文captureがありません");
+    rsiHistoryHold = {
+      scope: "rsi-5y", reasonCode: "non_positive_adjusted_close", invalidBars: badAdjusted.length,
+      firstDate: badAdjusted[0].date, lastDate: badAdjusted.at(-1)!.date,
+      sourceSha256: await sha256HexBytes(new Uint8Array(sourceBytes)),
+    };
+  }
+  // 履歴HOLD時も直近130本のadjを含む既guardは必須。異常値の置換・除去はしない。
+  const { bars: ohlcv, rejected } = guardChartBars(
+    rsiHistoryHold === undefined ? rawBars : rawBars.slice(-130), meta.regularMarketPrice, symbol
+  );
   if (rejected.length > 0) {
     console.warn(
       `[yahoo] ${symbol}: 帯域チェックで ${rejected.length} 本を採用しませんでした ` +
@@ -738,7 +775,8 @@ export async function fetchChart(
   // しない (実測で別意味と確定 — 呼び出し側は実バー終値で前日比を組む)。
   const previousClose = meta.previousClose ?? null;
 
-  return { symbol, price, previousClose, dataDate, ohlcv };
+  return { symbol, price, previousClose, dataDate, ohlcv,
+    ...(rsiHistoryHold === undefined ? {} : { rsiHistoryHold }) };
 }
 
 // -----------------------------------------------------------------------------
@@ -1398,8 +1436,9 @@ export async function fetchQuoteSummary(code: string, options?: FetchChartOption
 export async function fetchStockRawData(
   code: string,
   range = "5y",
-  options?: { onChartRaw?: FetchChartOptions["onRaw"]; onSummaryRaw?: FetchChartOptions["onRaw"] }
-): Promise<StockRawData> {
+  options?: { onChartRaw?: FetchChartOptions["onRaw"]; onSummaryRaw?: FetchChartOptions["onRaw"]; stockDailyScopes?: true }
+): Promise<StockRawData & { rsiHistoryHold?: RsiHistoryHold }> {
+  if (options?.stockDailyScopes) assertStockDailyScopeRequest(code, range, options.onChartRaw);
   if (!JP_STOCK_PATTERN.test(code)) {
     throw new Error(
       `不正な銘柄コード: ${code} (数字4桁または数字3桁+末尾英字である必要があります)`
@@ -1409,7 +1448,7 @@ export async function fetchStockRawData(
   // Yahoo に並列送信しない。制限なら相方を取得せず STOP。
   // 非制限の parse 失敗では従来どおり相方の原文を capture してから失敗を返す。
   const results = await Promise.allSettled([
-    fetchChart(code, range, { onRaw: options?.onChartRaw }),
+    fetchChart(code, range, { onRaw: options?.onChartRaw, stockDailyScopes: options?.stockDailyScopes }),
   ]);
   const chartAttempt = results[0];
   if (chartAttempt.status === "rejected" &&
@@ -1446,5 +1485,6 @@ export async function fetchStockRawData(
     dataDate: chart.dataDate,
     ohlcv: chart.ohlcv,
     annualFinancials: summary.annualFinancials,
+    ...(chart.rsiHistoryHold === undefined ? {} : { rsiHistoryHold: chart.rsiHistoryHold }),
   };
 }

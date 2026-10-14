@@ -77,6 +77,7 @@ async function seed(input: {
   code: string;
   minPercentile: number;
   computedAt: Date;
+  fetchedAt?: Date;
   isActive?: boolean;
   /** 既定は `equity` (日次の処理対象)。`null` は未分類。 */
   instrumentType?: string | null;
@@ -105,6 +106,8 @@ async function seed(input: {
     percentileSampleBars: input.sampleBars === undefined ? 1223 : input.sampleBars,
     computedAt: input.computedAt,
   });
+  await db.insert(coreSchema.stockFinancials).values({ stockId: stock.id,
+    dataDate: "2026-09-11", fetchedAt: input.fetchedAt === undefined ? input.computedAt : input.fetchedAt });
 }
 
 const query = screeningQuerySchema.parse({});
@@ -132,6 +135,17 @@ describe("percentileFreshnessCutoff", () => {
 });
 
 describe("screenStocks の鮮度条件", () => {
+  it("7日内でも金融だけ新しくなった旧RSIを行/count/filtersから除外する", async () => {
+    const computedAt = new Date(NOW.getTime() - DAY_MS);
+    await seed({ code: "8303", minPercentile: 1, computedAt, fetchedAt: NOW });
+    await seed({ code: "7203", minPercentile: 3, computedAt, fetchedAt: computedAt });
+    const result = await screenStocks(db, query, NOW);
+    expect(result.rows.map((r) => r.code)).toEqual(["7203"]);
+    expect(result.totalMatched).toBe(1);
+    expect(result.staleExcluded).toBe(1);
+    const old = await db.select().from(rsiSchema.stockRsiPercentile);
+    expect(old.find((r) => r.rsiMinPercentile === 1)?.computedAt).toEqual(computedAt);
+  });
   it("古い computed_at の行は結果に出ない (パーセンタイルが最小でも)", async () => {
     // 実測で見つかった状態の再現: 4 ヶ月前の行が最も底値に見えて先頭に来る。
     await seed({
@@ -313,6 +327,16 @@ describe("screenStocks の総数 (F-07 同型)", () => {
 });
 
 describe("GET / (ホーム) の銘柄数", () => {
+  it("Blue Chips件数も新金融に対する旧RSIを数えない", async () => {
+    const fresh = new Date(Math.floor(Date.now() / 1000) * 1000);
+    await seed({ code: "8303", minPercentile: 1, computedAt: new Date(fresh.getTime() - 1000), fetchedAt: fresh });
+    await seed({ code: "7203", minPercentile: 3, computedAt: fresh, fetchedAt: fresh });
+    harness.sqlite.prepare("UPDATE rsi_percentile SET is_blue_chip = 1").run();
+    const res = await app.request("/", {}, { DB: harness.db });
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toMatch(/<span class="num">1<\/span>\s*<span class="lbl">[^]*?Blue Chips/);
+  });
   // ホームの total は screenStocks と同じ母集団 (active かつ equity) で数える。
   // src/shared/db/active-equity.test.ts の静的検査は `eq(stocks.isActive, true)` の
   // 字面しか見ないので、述語の削除や別表記での戻しはここで値として捕まえる。

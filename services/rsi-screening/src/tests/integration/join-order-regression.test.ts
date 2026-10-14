@@ -88,6 +88,8 @@ async function seed(code: string, minPercentile: number): Promise<void> {
     percentileSampleBars: 1223,
     computedAt: FRESH,
   });
+  await db.insert(coreSchema.stockFinancials).values({ stockId: stock.id,
+    dataDate: "2026-09-11", fetchedAt: FRESH });
 }
 
 const query = screeningQuerySchema.parse({});

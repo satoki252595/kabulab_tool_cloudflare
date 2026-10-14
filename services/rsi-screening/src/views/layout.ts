@@ -1,4 +1,5 @@
 import { BASE_PATH } from "../../base-path.js";
+import { termTip, TERM_TIP_STYLES } from "../../../../src/shared/term-tip.js";
 
 /**
  * 共通レイアウト — Editorial Swiss Grid（白黒×ニューブルータリスト）
@@ -123,13 +124,7 @@ button:hover{transform:translate(-2px,-2px);box-shadow:3px 3px 0 0 var(--border)
 .trend-flat{color:var(--text-muted)}
 
 /* === Tooltip (バルーンヘルプ) — 用語にカーソル/タップで説明を表示 === */
-.tip{position:relative;display:inline-block;cursor:help;border-bottom:2px dotted var(--text-muted);font-weight:600}
-.tip .tip-text{visibility:hidden;opacity:0;position:absolute;z-index:20;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);width:300px;background:var(--bg-invert);color:var(--text-invert);font-size:13px;line-height:1.65;padding:14px 16px;border-radius:var(--radius);transition:opacity .15s;pointer-events:none;font-weight:400;border:2px solid var(--border);text-align:left;white-space:normal;letter-spacing:0;text-transform:none;font-family:var(--font-body)}
-.tip .tip-text::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:8px solid transparent;border-top-color:var(--bg-invert)}
-.tip:hover .tip-text,.tip:focus .tip-text,.tip:active .tip-text{visibility:visible;opacity:1}
-@media(max-width:600px){.tip .tip-text{width:240px;font-size:12px;left:0;transform:none}.tip .tip-text::after{left:24px;transform:none}}
-/* テーブルヘッダ内では下線をやや薄く / 大文字組版を維持 */
-th .tip{font-weight:inherit;border-bottom-color:rgba(115,115,115,0.4)}
+${TERM_TIP_STYLES}
 `;
 
 /** HTML エスケープ (XSS 対策) */
@@ -173,9 +168,9 @@ const TIPS: Record<string, string> = {
   sampleBars:
     "母数。このパーセンタイルを計算するのに使った終値の本数 (1 本 = 1 営業日)。「5 年」は約 1,220 本が目安で、上場が浅い銘柄は 500 本前後しかない。本数が少ないほど「過去 5 年で最も底値」の意味が弱くなる。",
   computedAt:
-    "算出日。このパーセンタイルを計算した日付 (右の数字は何日前か)。株価データの同期は平日のみ回るため、金曜の値が月曜まで 3 日据え置かれるのは正常。7 日を超えた古い値は表から除外する。",
+    "このパーセンタイルを計算した日付です。休場日は算出値が据え置かれます。7日を超える値や、現在の株価より前に取得したデータによる算出値は一覧から除外します。",
   staleExcluded:
-    "鮮度不足で除外。条件には合うが、算出日が 7 日より古いため表から外した銘柄数。数字が大きいときは株価データの同期が止まっている可能性がある。",
+    "条件には合いますが、算出日が7日より古いか、現在の株価に対応する算出値が未取得のため一覧から外した銘柄数です。株価だけ更新できて、長期履歴の検査が保留になった場合も含みます。",
   technical: "テクニカル分析。株価チャートの動き (RSI / MACD / 移動平均 等) から「売買タイミング」を判断する分析手法。本サービスの全指標は分割・併合調整済み終値 (adjclose) を使用しているため、株式分割後も数値が連続します。",
 };
 
@@ -188,7 +183,7 @@ const TIPS: Record<string, string> = {
 export function tip(key: string, label: string): string {
   const text = TIPS[key];
   if (!text) return label;
-  return `<span class="tip" tabindex="0">${label}<span class="tip-text">${h(text)}</span></span>`;
+  return termTip(label, text);
 }
 
 /**
