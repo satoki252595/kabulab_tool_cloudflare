@@ -111,5 +111,5 @@ describe("通常保管済み公式銘柄表の更新", () => {
     expect(downloadArchivedFile).not.toHaveBeenCalled();
     expect(await readVerifiedHoldingsCodeList(current.code, zip.length + current.captureBytes.length)).toMatchObject({ source: { bytes: zip }, readBytes: zip.length + current.captureBytes.length });
     expect(await readVerifiedHoldingsCodeList(previous, zip.length)).toMatchObject({ source: { bytes: zip }, asOf, readBytes: zip.length });
-  });
+  }, 15_000); // Parse the full actual FSA ZIP twice even under parallel CI CPU load.
 });

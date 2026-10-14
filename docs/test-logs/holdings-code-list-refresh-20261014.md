@@ -11,3 +11,5 @@
 通信増分は通常全量日足の受入時だけ、最新2件query 1回、fresh page最大2回、hosted ZIP/manifest最大4回（同値原本は共用）＋既存の共有DB探索。ZIPは既存約0.57MB/本、captureは小さいJSONで、通常は新旧合わせ約1.2MB。ハード上限は各ZIP20MiB・capture1MiB。銘柄表用のR2 objectは新設せず、既存snapshot CASの回数は同じ。Nodeの価格runでは256MiBの既存予算内で扱う。
 
 検証は実FSA ZIP fixtureを用い、latest→snapshot束縛、旧active保持、不完全最新からの巻戻し拒否、同時計/未来/後退、別page、ZIP/capture SHA/世代key/取得元、全読取予算、既存単一添付の価格guard、通常日足callerを確認した。関連5suite 70PASS/3既存skip、全repo tsc、owned eslint、diffcheck PASS。本番受入は、CI/main後の次の適格全量日足で行う。初回bootstrapの本番有効化証跡と原本session 2026-10-02は既存[価格registry台帳](./shareholdings-price-registry-20261014.md)を保持し、この変更を本番適用済みとはしない。
+
+初回CIは他5,283件PASS、実FSA ZIPを2回解析する予算境界テスト1件が5秒でtimeoutした。同テストだけ15秒を明示し、実原本の検査内容と本番parserは維持する。
