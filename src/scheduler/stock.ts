@@ -30,6 +30,12 @@ const CONTEXT_DISPATCH_TARGET = "scheduled-context";
 /** 独立取得元は株価・日米休場に依存させない。既存source直列lockを共有する。 */
 export const MONEYFLOW_DISPATCH_CRON = "15 9 * * MON-FRI";
 export const MONEYFLOW_READCHECK_CRON = "45 14 * * MON-FRI";
+/** 開示はMac20時writerより前の平日19時。市場休場日は除外しない。 */
+export const CATCHUP_DISPATCH_CRON = "0 10 * * MON-FRI";
+export const CATCHUP_READCHECK_CRON = "5 11 * * MON-FRI";
+export const CATCHUP_START_TIME = "10:00:00.000Z";
+export const CATCHUP_JOIN_CUTOFF_TIME = "10:58:30.000Z";
+export const CATCHUP_COMPLETION_CUTOFF_TIME = "10:59:00.000Z";
 const CONTEXT_START_DEADLINE_MINUTES = 30;
 
 /** dispatch 先 repo は固定 (設定で差し替えない)。 */
@@ -95,8 +101,8 @@ export interface ScheduledControllerLike {
   scheduledTime: number;
 }
 
-export type SchedulerRoute = "dispatch" | "readcheck" | "context-dispatch" | "context-readcheck" | "moneyflow-dispatch" | "moneyflow-readcheck";
-type SyncKind = "stocks" | "context" | "moneyflow";
+export type SchedulerRoute = "dispatch" | "readcheck" | "context-dispatch" | "context-readcheck" | "moneyflow-dispatch" | "moneyflow-readcheck" | "catchup-dispatch" | "catchup-readcheck";
+type SyncKind = "stocks" | "context" | "moneyflow" | "catchup";
 
 export interface StockReceipt {
   version: number;
@@ -133,6 +139,8 @@ export function routeCron(cron: string): SchedulerRoute {
   if (cron === CONTEXT_READCHECK_CRON) return "context-readcheck";
   if (cron === MONEYFLOW_DISPATCH_CRON) return "moneyflow-dispatch";
   if (cron === MONEYFLOW_READCHECK_CRON) return "moneyflow-readcheck";
+  if (cron === CATCHUP_DISPATCH_CRON) return "catchup-dispatch";
+  if (cron === CATCHUP_READCHECK_CRON) return "catchup-readcheck";
   throw new Error(
     `未知の cron です: ${cron} (想定: ${DISPATCH_CRON} / ${READCHECK_CRON} / ${CONTEXT_DISPATCH_CRON} / ${CONTEXT_READCHECK_CRON})`
   );
@@ -175,9 +183,9 @@ export function resolveRunDate(
       `UTC 日跨ぎのため対象日が曖昧です: scheduled=${scheduledDate}`
     );
   }
-  if (route === "dispatch" || route === "context-dispatch" || route === "moneyflow-dispatch") {
+  if (route === "dispatch" || route === "context-dispatch" || route === "moneyflow-dispatch" || route === "catchup-dispatch") {
     const delayMs = nowMs - scheduledTimeMs;
-    const deadlineMinutes = route === "context-dispatch"
+    const deadlineMinutes = route === "catchup-dispatch" ? 5 : route === "context-dispatch"
       ? CONTEXT_START_DEADLINE_MINUTES : DISPATCH_START_DEADLINE_MINUTES;
     if (delayMs > deadlineMinutes * 60 * 1000) {
       throw new Error(
@@ -199,6 +207,10 @@ export function contextReceiptKey(scheduledDate: string): string {
 
 export function moneyflowReceiptKey(scheduledDate: string): string {
   return `stock-scheduler/moneyflow-receipt-${scheduledDate}.json`;
+}
+
+export function catchupReceiptKey(scheduledDate: string): string {
+  return `stock-scheduler/catchup-receipt-${scheduledDate}.json`;
 }
 
 /**
@@ -285,9 +297,9 @@ async function postDispatch(
   scheduledDate: string,
   kind: SyncKind
 ): Promise<DispatchDetails> {
-  const workflow = kind === "moneyflow" ? "moneyflow.yml" : WORKFLOW_FILE;
+  const workflow = kind === "catchup" ? "catchup.yml" : kind === "moneyflow" ? "moneyflow.yml" : WORKFLOW_FILE;
   const inputs = kind === "moneyflow" ? { only: "independent" } : {
-    target: kind === "stocks" ? DISPATCH_TARGET : CONTEXT_DISPATCH_TARGET,
+    target: kind === "stocks" ? DISPATCH_TARGET : kind === "context" ? CONTEXT_DISPATCH_TARGET : "scheduled-catchup",
     scheduled_date: scheduledDate,
   };
   const res = await fetchFn(
@@ -381,12 +393,16 @@ export function runContextDispatch(deps: DispatchDeps): Promise<DispatchOutcome>
   return runScheduledDispatch(deps, "context");
 }
 
+export function runCatchupDispatch(deps: DispatchDeps): Promise<DispatchOutcome> {
+  return runScheduledDispatch(deps, "catchup");
+}
+
 async function runScheduledDispatch(deps: DispatchDeps, kind: SyncKind): Promise<DispatchOutcome> {
   const expectedCron = kind === "stocks" ? DISPATCH_CRON : kind === "context"
-    ? CONTEXT_DISPATCH_CRON : MONEYFLOW_DISPATCH_CRON;
+    ? CONTEXT_DISPATCH_CRON : kind === "moneyflow" ? MONEYFLOW_DISPATCH_CRON : CATCHUP_DISPATCH_CRON;
   if (deps.cron !== expectedCron) throw new Error("dispatch の種別と cron が一致しません");
   const key = kind === "stocks" ? receiptKey(deps.scheduledDate) : kind === "context"
-    ? contextReceiptKey(deps.scheduledDate) : moneyflowReceiptKey(deps.scheduledDate);
+    ? contextReceiptKey(deps.scheduledDate) : kind === "moneyflow" ? moneyflowReceiptKey(deps.scheduledDate) : catchupReceiptKey(deps.scheduledDate);
   const { claimed, etag } = await claimReceipt(deps.bucket, key, {
     version: RECEIPT_VERSION,
     scheduledDate: deps.scheduledDate,
@@ -691,7 +707,7 @@ export function evaluateReadcheck(
 export interface ValidDispatchedReceipt {
   version: typeof RECEIPT_VERSION;
   scheduledDate: string;
-  cron: typeof DISPATCH_CRON | typeof CONTEXT_DISPATCH_CRON | typeof MONEYFLOW_DISPATCH_CRON;
+  cron: typeof DISPATCH_CRON | typeof CONTEXT_DISPATCH_CRON | typeof MONEYFLOW_DISPATCH_CRON | typeof CATCHUP_DISPATCH_CRON;
   status: "dispatched";
   claimedAt: string;
   dispatchedAt: string;
@@ -709,7 +725,7 @@ function parseStoredReceipt(
   text: string,
   key: string,
   expectedDate: string,
-  expectedCron: typeof DISPATCH_CRON | typeof CONTEXT_DISPATCH_CRON | typeof MONEYFLOW_DISPATCH_CRON
+  expectedCron: typeof DISPATCH_CRON | typeof CONTEXT_DISPATCH_CRON | typeof MONEYFLOW_DISPATCH_CRON | typeof CATCHUP_DISPATCH_CRON
 ): ValidDispatchedReceipt {
   let json: unknown;
   try {
@@ -859,6 +875,44 @@ export async function runContextDeadlineReadcheck(deps: {
 
 export interface MoneyflowReadcheckVerdict { moneyflowCompletedAt: string }
 
+export interface CatchupReadcheckVerdict { tdnetCompletedAt: string; edinetCompletedAt: string }
+
+/** 受付や部分成功を完了と呼ばず、同日の両source成功とLinux writer停止を確認する。 */
+export function evaluateCatchupReadcheck(jobs: RunJob[], scheduledDate: string): CatchupReadcheckVerdict {
+  const catchup = jobs.filter((job) => job.name === "catchup");
+  const biztag = jobs.filter((job) => job.name === "biztag");
+  if (jobs.length !== 2 || catchup.length !== 1 || catchup[0].status !== "completed" || catchup[0].conclusion !== "success" ||
+      biztag.length !== 1 || biztag[0].status !== "completed" || biztag[0].conclusion !== "skipped") {
+    throw new Error("catchup成功完了とbiztag skipを一意に証明できません");
+  }
+  const floor = Date.parse(`${scheduledDate}T${CATCHUP_START_TIME}`);
+  const cutoff = Date.parse(`${scheduledDate}T${CATCHUP_COMPLETION_CUTOFF_TIME}`);
+  const completions = ["catchup起動資格", "ir-catalog TDnet catchup", "yuho-quant EDINET catchup (受注 + 海外売上)"].map((name) => {
+    const steps = catchup[0].steps?.filter((step) => step.name === name);
+    if (!steps || steps.length !== 1 || steps[0].status !== "completed" || steps[0].conclusion !== "success") {
+      throw new Error(`${name}が一意の成功完了ではありません`);
+    }
+    const ms = stepCompletedAtMs(steps[0], name);
+    if (!Number.isFinite(floor) || ms < floor || ms > cutoff || (name === "catchup起動資格" && ms > floor + 5 * 60_000)) throw new Error(`${name}の完了が同日19時起動/19:59 JST完了窓の範囲外です`);
+    return { ms, at: steps[0].completed_at as string };
+  });
+  if (completions[0].ms > completions[1].ms || completions[1].ms > completions[2].ms) throw new Error("catchupの起動資格→TDnet→EDINET完了順序が不正です");
+  return { tdnetCompletedAt: completions[1].at, edinetCompletedAt: completions[2].at };
+}
+
+export async function runCatchupDeadlineReadcheck(deps: {
+  bucket: SchedulerBucket; token: string; scheduledDate: string; fetchFn: typeof fetch;
+}): Promise<CatchupReadcheckVerdict> {
+  const key = catchupReceiptKey(deps.scheduledDate);
+  const obj = await deps.bucket.get(key);
+  if (obj === null) throw new Error(`catchup receiptがありません（当日dispatch未確認）: ${key}`);
+  const receipt = parseStoredReceipt(await obj.text(), key, deps.scheduledDate, CATCHUP_DISPATCH_CRON);
+  const jobs = await fetchAllJobs(deps.fetchFn, deps.token, receipt.workflowRunId);
+  const verdict = evaluateCatchupReadcheck(jobs, deps.scheduledDate);
+  console.info(`[stock-scheduler] catchup readcheck OK: date=${deps.scheduledDate} run_id=${receipt.workflowRunId} edinet_completed_at=${verdict.edinetCompletedAt}`);
+  return verdict;
+}
+
 export async function runMoneyflowDeadlineReadcheck(deps: {
   bucket: SchedulerBucket; token: string; scheduledDate: string; fetchFn: typeof fetch;
 }): Promise<MoneyflowReadcheckVerdict> {
@@ -894,10 +948,16 @@ export async function handleStockScheduled(
   controller: ScheduledControllerLike,
   env: SchedulerEnv,
   deps: { fetchFn?: typeof fetch; nowMs?: number } = {}
-): Promise<DispatchOutcome | ReadcheckVerdict | ContextReadcheckVerdict | MoneyflowReadcheckVerdict | { status: "market_closed"; scheduledDate: string; closures: MarketClosure[] }> {
+): Promise<DispatchOutcome | ReadcheckVerdict | ContextReadcheckVerdict | MoneyflowReadcheckVerdict | CatchupReadcheckVerdict | { status: "market_closed"; scheduledDate: string; closures: MarketClosure[] }> {
   const route = routeCron(controller.cron);
   const nowMs = deps.nowMs ?? Date.now();
   const scheduledDate = resolveRunDate(route, controller.scheduledTime, nowMs);
+  if (route === "catchup-dispatch" || route === "catchup-readcheck") {
+    const common = { bucket: env.BUCKET, token: schedulerToken(env), scheduledDate, fetchFn: deps.fetchFn ?? fetch };
+    return route === "catchup-dispatch"
+      ? runCatchupDispatch({ ...common, cron: controller.cron, nowMs })
+      : runCatchupDeadlineReadcheck(common);
+  }
   if (route === "moneyflow-dispatch" || route === "moneyflow-readcheck") {
     const common = { bucket: env.BUCKET, token: schedulerToken(env), scheduledDate, fetchFn: deps.fetchFn ?? fetch };
     return route === "moneyflow-dispatch"

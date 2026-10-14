@@ -104,9 +104,12 @@ export async function runYuhoEdinetCatchup(
   db: Database,
   shard?: ShardOpts,
   d1HttpBatch?: ReturnType<typeof createD1HttpBatchSender>,
-  holdingPriceSourceLoader?: HoldingPriceSourceLoader
+  holdingPriceSourceLoader?: HoldingPriceSourceLoader,
+  deadlineMs?: number
 ): Promise<YuhoEdinetResult> {
   const startedAt = Date.now();
+  if (deadlineMs !== undefined && (!Number.isSafeInteger(deadlineMs) || startedAt >= deadlineMs)) throw new Error("EDINET catchupの絶対締切が不正または超過しました");
+  const pastDeadline = () => deadlineMs !== undefined && Date.now() >= deadlineMs;
 
   // 進捗 checkpoint (1/5): 各 await 直前に入口だけ出す。前段の完了は次の
   // checkpoint (または末尾の完了 summary) の到達で判る。日付・件数・docID
@@ -129,7 +132,7 @@ export async function runYuhoEdinetCatchup(
   const listErrors: string[] = [];
   const ingestErrors: string[] = [];
 
-  const overBudget = () => Date.now() - startedAt > TIME_BUDGET_MS;
+  const overBudget = () => Date.now() - startedAt > TIME_BUDGET_MS || pastDeadline();
   // EDINET completedとは独立。既知保留をNotion保存ZIPから優先再開し、源GETは0。
   // shard同時実行は保有明細writerを競合させないため、定期main runだけが再開する。
   const holdingsBudget = { remainingRows: 100 };
@@ -142,6 +145,7 @@ export async function runYuhoEdinetCatchup(
     if (resumed.held > 0) byStatus["holdings:requires_review"] = resumed.held;
     if (resumed.pending) byStatus["holdings:pending"] = 1;
   }
+  if (pastDeadline()) throw new Error("EDINET catchupの絶対締切です（既保管結果を保持・再送なし）");
 
   const today = jstDate();
   const scope = shard ? `shard-${shard.part}-of-${shard.of}` : "main";
@@ -165,7 +169,7 @@ export async function runYuhoEdinetCatchup(
     const completed = contents.completed;
     let {pending, snapshot} = contents;
     let list;
-    // 当日の20時一覧は未封印。翌日、完了済IDを保持して終日一覧を再観測する。
+    // 当日の定時一覧は未封印。翌日、完了済IDを保持して終日一覧を再観測する。
     // 途中の snapshot は先に同じ原文から再開し、完了後の次回にだけ再観測する。
     if (snapshot === null || !snapshot.qualified || (row.finished && !row.sealed && date < today)) {
       row = await saveProgress(db, row, {inFlightDocId: "@list"});
@@ -310,7 +314,8 @@ export async function runYuhoEdinetCatchup(
   // (各シャードが全表を書き直すと sweep が競合する。非シャードの定時実行が
   // 拾う。手動バックフィル直後は次回定時まで画面が古いまま)。
   let projectionStocks = 0;
-  if (!shard && listErrors.length === 0) {
+  if (pastDeadline()) reachedCap = true;
+  if (!shard && listErrors.length === 0 && !pastDeadline()) {
     // 進捗 checkpoint (5/5): L2 投影再生成の入口。完了は末尾 summary の 投影= で判る。
     console.info(`[yuho-edinet] 投影再生成 開始`);
     const proj = await rebuildYuhoGrowthProjection(db);
@@ -319,10 +324,11 @@ export async function runYuhoEdinetCatchup(
 
   // 原本/進捗/L2を先に確定する。Nodeの保存価格loaderだけを注入し、WorkerへS3/fsを持ち込まない。
   // 価格は別100明細/116chunk/256MiB/300秒。sourceの残枠・失敗状態を変更しない。
-  if (!shard && holdingPriceSourceLoader) {
+  if (pastDeadline()) reachedCap = true;
+  if (!shard && holdingPriceSourceLoader && !pastDeadline()) {
     const priceStarted = Date.now();
     const prices = await resumePendingShareholdingsPrices({ maxRows: 100,
-      shouldStop: () => Date.now() - priceStarted > TIME_BUDGET_MS,
+      shouldStop: () => Date.now() - priceStarted > TIME_BUDGET_MS || pastDeadline(),
       budget: { remainingChunks: 116, remainingBytes: 256 * 1024 * 1024 }, loadSources: holdingPriceSourceLoader });
     if (prices.resumed > 0) byStatus["holdings_price:resumed"] = prices.resumed;
     if (prices.held > 0) byStatus["holdings_price:requires_review"] = prices.held;
@@ -330,6 +336,7 @@ export async function runYuhoEdinetCatchup(
     reachedCap = reachedCap || prices.pending || prices.held > 0;
   }
 
+  if (pastDeadline()) reachedCap = true;
   const elapsedSec = (Date.now() - startedAt) / 1000;
   console.info(
     `[yuho-edinet] ${listErrors.length || reachedCap || pendingDocuments ? "終了（未完あり）" : "完了"}: shard=${shard ? `${shard.part}/${shard.of}` : "-"} 走査${scannedDays}日 matched=${matched} ingested=${ingested} skip=${skippedExisting} outOfUniverse=${outOfUniverse} pending=${pendingDocuments} cap=${reachedCap} listErrors=${listErrors.length} ingestErrors=${ingestErrors.length} 投影=${projectionStocks} ${elapsedSec.toFixed(1)}s`

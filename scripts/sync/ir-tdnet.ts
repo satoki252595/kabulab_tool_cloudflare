@@ -12,8 +12,10 @@ import * as irSchema from "../../services/ir-catalog/src/db/schema.js";
 import { runIrCatalogCatchup } from "../../src/cron/ir-catalog-tdnet.js";
 import { resumeNotionByStock } from "../../services/ir-catalog/src/services/ingest.js";
 import type { Database } from "../../services/ir-catalog/src/db/client.js";
+import { assertCatchupDeadline, validateCatchupLaunch } from "./catchup-launch.js";
 
 async function main(): Promise<void> {
+  const deadline = validateCatchupLaunch("tdnet");
   // sqlite-proxy(D1 HTTP) と D1 バインディング版は同じ async SQLite クエリビルダ
   // API を持つ(共に BaseSQLiteDatabase)。型クラスのみ異なるためキャストで橋渡し。
   const db = createD1HttpDb(irSchema) as unknown as Database;
@@ -35,8 +37,9 @@ async function main(): Promise<void> {
     }
     r = await resumeNotionByStock(db, from, new Date(to.getTime() + 86400_000));
   } else {
-    r = await runIrCatalogCatchup(db);
+    r = deadline === undefined ? await runIrCatalogCatchup(db) : await runIrCatalogCatchup(db, undefined, Date.now(), deadline);
   }
+  assertCatchupDeadline(deadline);
   console.info("[ir-tdnet]", JSON.stringify(r));
 }
 

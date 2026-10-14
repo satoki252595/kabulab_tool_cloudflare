@@ -6,6 +6,12 @@ import {
   CONTEXT_READCHECK_CRON,
   MONEYFLOW_DISPATCH_CRON,
   MONEYFLOW_READCHECK_CRON,
+  CATCHUP_DISPATCH_CRON,
+  CATCHUP_READCHECK_CRON,
+  catchupReceiptKey,
+  evaluateCatchupReadcheck,
+  runCatchupDispatch,
+  runCatchupDeadlineReadcheck,
   moneyflowReceiptKey,
   runMoneyflowDeadlineReadcheck,
   contextReceiptKey,
@@ -155,6 +161,75 @@ const TUE_1713 = Date.parse("2026-09-30T17:13:00.000Z");
 const TUE_1713_30S = TUE_1713 + 30_000;
 const SAT_1713 = Date.parse("2026-10-03T17:13:00.000Z");
 const TOKEN = "tok-fake-secret";
+
+describe("catchup専用定時入口", () => {
+  // JPX休場日にも旧cronと同じ平日scopeで動く。
+  const date = "2026-09-23";
+  const start = Date.parse(`${date}T10:00:00Z`);
+  const receipt = () => ({ ...dispatchedBody(), cron: CATCHUP_DISPATCH_CRON, scheduledDate: date,
+    claimedAt: `${date}T10:00:01Z`, dispatchedAt: `${date}T10:00:02Z` });
+  const jobs = (): RunJob[] => [{ name: "catchup", run_id: 101, status: "completed", conclusion: "success", steps: [
+    { name: "catchup起動資格", status: "completed", conclusion: "success", completed_at: `${date}T10:01:00Z` },
+    { name: "ir-catalog TDnet catchup", status: "completed", conclusion: "success", completed_at: `${date}T10:10:00Z` },
+    { name: "yuho-quant EDINET catchup (受注 + 海外売上)", status: "completed", conclusion: "success", completed_at: `${date}T10:59:00Z` },
+  ] }, { name: "biztag", run_id: 101, status: "completed", conclusion: "skipped" }];
+
+  it("市場休場に依存せずmainの新targetを1回POSTし専用receipt/readcheckを使う", async () => {
+    vi.setSystemTime(new Date(start + 30_000));
+    const { bucket, puts } = makeBucket();
+    const { fetchFn, calls } = makeFetch((url) => url.includes("/dispatches") ? jsonRes({ workflow_run_id: 101,
+      run_url: dispatchedBody().runUrl, html_url: dispatchedBody().htmlUrl }) : jsonRes({ jobs: jobs() }));
+    const env: SchedulerEnv = { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN };
+    const controller = { cron: CATCHUP_DISPATCH_CRON, scheduledTime: start };
+    expect(routeCron(CATCHUP_DISPATCH_CRON)).toBe("catchup-dispatch");
+    expect(routeCron(CATCHUP_READCHECK_CRON)).toBe("catchup-readcheck");
+    expect(await handleStockScheduled(controller, env, { fetchFn, nowMs: start + 30_000 })).toEqual({ status: "dispatched", workflowRunId: 101 });
+    expect(await handleStockScheduled(controller, env, { fetchFn, nowMs: start + 30_000 })).toEqual({ status: "duplicate", workflowRunId: 101 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toContain("/catchup.yml/dispatches");
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: "main", inputs: { target: "scheduled-catchup", scheduled_date: date } });
+    expect(puts[0].key).toBe(catchupReceiptKey(date));
+    const check = Date.parse(`${date}T11:05:00Z`);
+    expect(await handleStockScheduled({ cron: CATCHUP_READCHECK_CRON, scheduledTime: check }, env, { fetchFn, nowMs: check + 30_000 }))
+      .toEqual({ tdnetCompletedAt: `${date}T10:10:00Z`, edinetCompletedAt: `${date}T10:59:00Z` });
+    expect(await bucket.get(receiptKey(date))).toBeNull();
+  });
+  it("ACK unknownはclaimedを保ち二重POSTせず、誤cron/期限超過も拒否する", async () => {
+    const { bucket } = makeBucket();
+    const { fetchFn, calls } = makeFetch(() => new Response(null, { status: 204 }));
+    const deps = { bucket, token: TOKEN, cron: CATCHUP_DISPATCH_CRON, scheduledDate: date, nowMs: start, fetchFn };
+    await expect(runCatchupDispatch(deps)).rejects.toThrow();
+    await expect(runCatchupDispatch(deps)).rejects.toThrow("未完了");
+    expect(calls).toHaveLength(1);
+    await expect(runCatchupDispatch({ ...deps, cron: DISPATCH_CRON })).rejects.toThrow("一致");
+    expect(() => resolveRunDate("catchup-dispatch", start, start + 5 * 60_000 + 1)).toThrow("開始期限");
+  });
+  it("missing/old/claimed/wrongkind receiptを当日の完了に読み替えない", async () => {
+    const { fetchFn, calls } = makeFetch(() => jsonRes({ jobs: jobs() }));
+    for (const raw of [undefined, { ...receipt(), scheduledDate: "2026-09-22" }, { ...receipt(), status: "claimed" }, { ...receipt(), cron: DISPATCH_CRON }]) {
+      const { bucket } = makeBucket(raw ? { [catchupReceiptKey(date)]: JSON.stringify(raw) } : {});
+      await expect(runCatchupDeadlineReadcheck({ bucket, token: TOKEN, scheduledDate: date, fetchFn })).rejects.toThrow();
+    }
+    expect(calls).toEqual([]);
+  });
+  it("source skip/部分成功/重複/時刻逆転/別日/Linuxbiztag実行を成功にしない", () => {
+    expect(evaluateCatchupReadcheck(jobs(), date).edinetCompletedAt).toBe(`${date}T10:59:00Z`);
+    for (const index of [0, 1, 2]) for (const conclusion of ["skipped", "failure", null]) {
+      const bad = jobs(); bad[0].steps![index].conclusion = conclusion;
+      expect(() => evaluateCatchupReadcheck(bad, date)).toThrow();
+    }
+    for (const at of ["2026-09-22T10:59:00Z", `${date}T10:59:00.001Z`, `${date}T10:09:00Z`, null]) {
+      const bad = jobs(); bad[0].steps![2].completed_at = at;
+      expect(() => evaluateCatchupReadcheck(bad, date)).toThrow();
+    }
+    const duplicate = jobs(); duplicate[0].steps!.push(duplicate[0].steps![1]);
+    expect(() => evaluateCatchupReadcheck(duplicate, date)).toThrow();
+    const liveBiztag = jobs(); liveBiztag[1].conclusion = "success";
+    expect(() => evaluateCatchupReadcheck(liveBiztag, date)).toThrow();
+    expect(() => evaluateCatchupReadcheck([jobs()[0]], date)).toThrow();
+    expect(() => evaluateCatchupReadcheck([...jobs(), jobs()[0]], date)).toThrow();
+  });
+});
 
 function claimBody(date = "2026-09-30"): StockReceipt {
   return {

@@ -9,6 +9,7 @@ import type { Database } from "../../services/yuho-quant/src/db/client.js";
 import { runYuhoEdinetCatchup, catchupHttpStatus, type ShardOpts } from "../../src/cron/yuho-edinet.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { createHoldingPriceSourceLoader } from "./holdings-price-sources.js";
+import { assertCatchupDeadline, validateCatchupLaunch } from "./catchup-launch.js";
 
 export function parseShard(args: readonly string[]): ShardOpts | undefined {
   if (args.includes("--part") || args.includes("--of")) throw new Error("part/of は --part=N --of=N で指定してください");
@@ -26,6 +27,7 @@ export function parseShard(args: readonly string[]): ShardOpts | undefined {
 }
 
 export async function main(args = process.argv.slice(2)): Promise<0 | 1> {
+  const deadline = validateCatchupLaunch("edinet");
   const shard = parseShard(args);
   // 全必須設定を最初の読取・取得・書込より前に検査。Worker/cron 認証は不要。
   yuhoEnv.EDINET_API_KEY();
@@ -37,7 +39,10 @@ export async function main(args = process.argv.slice(2)): Promise<0 | 1> {
   }
   const db = createD1HttpDb(yuhoSchema) as unknown as Database;
   const sender = createD1HttpBatchSender();
-  const result = await runYuhoEdinetCatchup(db, shard, sender, shard ? undefined : createHoldingPriceSourceLoader());
+  const loader = shard ? undefined : createHoldingPriceSourceLoader();
+  const result = deadline === undefined ? await runYuhoEdinetCatchup(db, shard, sender, loader)
+    : await runYuhoEdinetCatchup(db, shard, sender, loader, deadline);
+  assertCatchupDeadline(deadline);
   console.info("[yuho-edinet]", JSON.stringify(result));
   return catchupHttpStatus(result) === 200 ? 0 : 1;
 }
