@@ -1,11 +1,12 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { count, eq, max } from "drizzle-orm";
+import { and, count, eq, gte, max } from "drizzle-orm";
 import { createDb } from "../db/client.js";
 import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
 import { stockRsiPercentile } from "../db/schema.js";
 import { screeningQuerySchema, stockCodeParamSchema } from "../validators/screening.js";
-import { screenStocks } from "../services/screening-service.js";
+import { percentileFreshnessCutoff, screenStocks } from "../services/screening-service.js";
+import { percentileMatchesFinancialSnapshot } from "../services/percentile-freshness.js";
 import { getStockDetail } from "../services/stock-detail-service.js";
 import { homePage } from "../views/home.js";
 import { screeningPage } from "../views/screening.js";
@@ -30,7 +31,12 @@ pagesRoute.get("/", async (c) => {
   const [{ blue }] = await db
     .select({ blue: count() })
     .from(stockRsiPercentile)
-    .where(eq(stockRsiPercentile.isBlueChip, true));
+    .crossJoin(stocks)
+    .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
+    .where(and(eq(stocks.id, stockRsiPercentile.stockId), activeEquityCondition(),
+      eq(stockRsiPercentile.isBlueChip, true),
+      gte(stockRsiPercentile.computedAt, percentileFreshnessCutoff(new Date())),
+      percentileMatchesFinancialSnapshot()));
 
   const [{ lastUpdate }] = await db
     .select({ lastUpdate: max(stockFinancials.dataDate) })

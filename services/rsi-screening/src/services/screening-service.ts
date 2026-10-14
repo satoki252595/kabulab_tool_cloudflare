@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, lt, lte, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, lte, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { stocks, stockFinancials } from "../../../../src/shared/db/core-schema.js";
 import { stockRsiPercentile } from "../db/schema.js";
@@ -8,6 +8,7 @@ import {
 } from "../../../../src/shared/db/public-columns.js";
 import { activeEquityCondition } from "../../../../src/shared/db/active-equity.js";
 import type { ScreeningQuery } from "../validators/screening.js";
+import { percentileMatchesFinancialSnapshot } from "./percentile-freshness.js";
 
 /** スクリーニング結果の1行 */
 export interface ScreeningRow {
@@ -67,13 +68,8 @@ export interface ScreeningResult {
 /**
  * パーセンタイルの鮮度上限 (日)。
  *
- * 日次 sync は GitHub Actions の `0 21 * * 1-5` (平日のみ) で回るため、正常でも
- * 金曜 21:00 → 月曜 21:00 の **3 日** は computed_at が据え置かれる (週末を跨ぐ
- * 行を誤除外しないための下限がここ)。加えて Yahoo 429 や Actions 障害で 1〜2 回
- * run が落ちても生きている行を落としたくないので、3 日 + 予備 4 日 = 7 日とする。
- *
- * 日本の祝日は考慮不要: cron は JPX の休場日にも回り、休場日でも Yahoo の
- * 最新バーで computed_at は更新される (止まるのは run の失敗時だけ)。
+ * 日次は18:00 JST。公式休場日・週末は旧時計を保持するため、週末3日と
+ * 連休・一時停止の余裕を含め7日とする。当日金融より古いRSIは別途除外する。
  *
  * 実測 (2026-09-12 時点) では rsi_percentile の computed_at は MIN=2026-05-15 /
  * MAX=2026-09-11 で、**7 日超の行が 49 件**。4 ヶ月前のパーセンタイルが最新値と
@@ -137,6 +133,7 @@ export async function screenStocks(
   const conditions: SQL[] = [
     ...baseConditions,
     gte(stockRsiPercentile.computedAt, freshnessCutoff),
+    percentileMatchesFinancialSnapshot(),
   ];
 
   const orderBy: SQL = (() => {
@@ -199,8 +196,9 @@ export async function screenStocks(
     .select({ staleExcluded: count() })
     .from(stockRsiPercentile)
     .crossJoin(stocks)
+    .leftJoin(stockFinancials, eq(stockFinancials.stockId, stocks.id))
     .where(
-      and(...baseConditions, lt(stockRsiPercentile.computedAt, freshnessCutoff))
+      and(...baseConditions, sql`NOT COALESCE((${gte(stockRsiPercentile.computedAt, freshnessCutoff)}) AND (${percentileMatchesFinancialSnapshot()}), 0)`)
     );
 
   return { rows, totalMatched, staleExcluded, maxAgeDays: PERCENTILE_MAX_AGE_DAYS };

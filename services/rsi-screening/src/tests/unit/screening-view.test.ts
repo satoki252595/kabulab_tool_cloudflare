@@ -68,7 +68,7 @@ describe("screeningPage の鮮度表示", () => {
       now: NOW,
     });
 
-    expect(html).toContain("3 銘柄はすべて 7 日超の古い算出値");
+    expect(html).toContain("3 銘柄は、7 日超の古い算出値、または現在の株価に対応する算出値が未取得");
     expect(html).not.toContain("条件に合致する銘柄が見つかりません");
   });
 

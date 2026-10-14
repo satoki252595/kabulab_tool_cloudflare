@@ -54,6 +54,11 @@ function detail(computedAt: Date): StockDetail {
 }
 
 describe("stockDetailPage の鮮度表示", () => {
+  it("現在株価に対応するRSIがないときは未取得を明示する", () => {
+    const html = stockDetailPage({ detail: { ...detail(NOW), rsi: null }, now: NOW });
+    expect(html).toContain("現在の株価に対応するRSIは未取得です。");
+    expect(html).not.toContain("001 / RSI PERCENTILE (5Y)");
+  });
   it("鮮度上限内なら算出日と経過日数だけを出す", () => {
     const html = stockDetailPage({
       detail: detail(new Date(NOW.getTime() - 3 * DAY_MS)),

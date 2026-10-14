@@ -118,6 +118,22 @@ afterEach(() => {
 });
 
 describe("getStockDetail の年度売上 (jss_financials)", () => {
+  it("新しい金融時計と旧RSIを結合せず、秒単位で一致した算出行だけ表示する", async () => {
+    await seedStock("8303");
+    const stock = (await db.select().from(coreSchema.stocks))[0];
+    const oldClock = new Date("2026-10-13T09:00:00Z");
+    const newClock = new Date("2026-10-14T10:15:47Z");
+    await db.insert(rsiSchema.stockRsiPercentile).values({ stockId: stock.id,
+      rsi10: 30, rsi10Percentile: 1, computedAt: oldClock });
+    await db.insert(coreSchema.stockFinancials).values({ stockId: stock.id,
+      price: 1478.5, dataDate: "2026-10-14", fetchedAt: newClock });
+    const held = await getStockDetail(db, "8303", "2026-10-14");
+    expect(held?.financials?.price).toBe(1478.5);
+    expect(held?.rsi).toBeNull();
+    expect((await db.select().from(rsiSchema.stockRsiPercentile))[0].computedAt).toEqual(oldClock);
+    harness.sqlite.prepare("UPDATE rsi_percentile SET computed_at = ?").run(newClock.getTime() / 1000);
+    expect((await getStockDetail(db, "8303", "2026-10-14"))?.rsi?.computedAt).toEqual(newClock);
+  });
   it("8154: 本決算・連結の実績だけを期末順に返す (予想・四半期・単体・他銘柄を混ぜない)", async () => {
     await seedStock("8154");
     await seedStock("9999");

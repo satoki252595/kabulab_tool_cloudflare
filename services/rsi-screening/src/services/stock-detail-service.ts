@@ -15,6 +15,7 @@ import {
   publicMarketColumn,
   publicSectorColumn,
 } from "../../../../src/shared/db/public-columns.js";
+import { isPercentileSnapshotCurrent } from "./percentile-freshness.js";
 
 /** 銘柄詳細レスポンス */
 export interface StockDetail {
@@ -165,7 +166,7 @@ export async function getStockDetail(
           dataDate: fin.dataDate,
         }
       : null,
-    rsi: pct
+    rsi: pct && isPercentileSnapshotCurrent(pct.computedAt, fin?.fetchedAt)
       ? {
           rsi10: pct.rsi10,
           rsi10Percentile: pct.rsi10Percentile,
