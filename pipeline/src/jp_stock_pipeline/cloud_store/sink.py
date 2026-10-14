@@ -176,9 +176,9 @@ class CloudSink:
                     epoch, epoch,
                 ]],
                 conflict=["sha256"],
-                # 再取得のたびに excluded.* で上書きすると初回取得時刻が消える。
-                # 既存行があれば first_fetched_at はそのまま残す。
-                keep=["first_fetched_at"],
+                # ⑤は同SHAを初回のmetadataで保持する。後日の再取得でその
+                # data_date（未知のNULLを含む）と初回時計を塗り替えない。
+                keep=["first_fetched_at", "data_date"],
             )
         except D1Error as exc:
             # R2 には原本が残っている＝トレーサビリティは失われていない。

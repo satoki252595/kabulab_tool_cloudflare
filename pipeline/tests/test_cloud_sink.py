@@ -94,8 +94,39 @@ class TestRawArtifact:
         assert conflict == ["sha256"]
         assert rows[0][columns.index("r2_key")] == r2.puts[0]
         assert rows[0][columns.index("doc_id")] == "S100XU9L"
-        # first_fetched_at は再取得のたびに excluded.* で上書きしない (overlaps_refactor)。
-        assert keep == ["first_fetched_at"]
+        assert keep == ["first_fetched_at", "data_date"]
+
+    def test_later_same_bytes_keep_canonical_date_and_first_clock_in_sqlite(self, tmp_path):
+        import sqlite3
+
+        from jp_stock_pipeline.cloud_store.d1 import D1Store
+        from jp_stock_pipeline.cloud_store.sink import _RAW_COLUMNS
+
+        for original_date in (date(2026, 6, 30), None):
+            con = sqlite3.connect(":memory:")
+            con.execute("CREATE TABLE jss_raw_files (sha256 TEXT PRIMARY KEY, "
+                        + ", ".join(_RAW_COLUMNS[1:]) + ")")
+
+            class SqliteD1(D1Store):
+                def query(self, sql, params=None, *, idempotent=True):
+                    con.execute(sql, params or [])
+                    return []
+
+            sink = _sink(d1=SqliteD1(_settings(), writer="test"))
+            artifact = _artifact(tmp_path, doc_id=None)
+            artifact.data_date = original_date
+            first_epoch = int(artifact.fetched_at.timestamp())
+            assert sink.upsert_raw_artifact(artifact) is True
+            artifact.data_date = date(2026, 7, 1)
+            artifact.fetched_at += timedelta(days=1)
+            artifact.doc_id = "S100XU9L"
+            assert sink.upsert_raw_artifact(artifact) is True
+            assert con.execute("SELECT data_date, first_fetched_at, last_fetched_at, doc_id "
+                               "FROM jss_raw_files").fetchone() == (
+                None if original_date is None else original_date.isoformat(),
+                first_epoch, int(artifact.fetched_at.timestamp()), "S100XU9L",
+            )
+            con.close()
 
     def test_d1_is_not_touched_when_r2_fails(self, tmp_path):
         """索引が嘘をつく状態を作らない（R2 → D1 の順序）。"""
