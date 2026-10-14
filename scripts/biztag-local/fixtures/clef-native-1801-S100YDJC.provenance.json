@@ -1,0 +1,34 @@
+{
+  "kind": "ACTUAL_SAVED_LOCAL_CLEF_EVALUATION_VALUES_OFFLINE_ONLY",
+  "fixtureSha256": "64688be3e1a07318c584f1613053e2c8e9dc301c06b4d55bbadd52938c7297d3",
+  "inputs": [
+    {
+      "path": "tmp/feature-audit-20261013/clef-local-20261014/gold-requests-qualified87-v2.json",
+      "sha256": "7636cf66c8df85a9a930177afdea9436959cf24c9a41cc06efad543efd624fb5"
+    },
+    {
+      "path": "tmp/feature-audit-20261013/clef-local-20261014/gold87-eval-v3/result-000.json",
+      "sha256": "a2772a6c88264016841b8736804b9bb1e8753e9f4983ecb16a4d21280d618cb7"
+    },
+    {
+      "path": "tmp/feature-audit-20261013/clef-local-20261014/gold-source-qualified87-v2.json",
+      "sha256": "f82cf8c7f5ac15ab2e4a8d099294fde64996b2808657e12a019edab5f9b77866"
+    },
+    {
+      "path": "tmp/feature-audit-20261013/clef-local-20261014/gold-texts-qualified87-v2.json",
+      "sha256": "f20f641b0318ce2fd559edfebb2f42f6603de94f930fbbf1f09d19215247dfc9"
+    },
+    {
+      "path": "tmp/feature-audit-20261013/biztag-current905-plan-v1/source-qualified905.json",
+      "sha256": "2364a45434c812ab6ff932200e5a73de2d56c00ee8b378253a411a41b35928a3"
+    },
+    {
+      "path": "tmp/feature-audit-20261013/disclosures-recovery-finish/latest3666-v3/chunk-002/1801-S100YDJC.item.json",
+      "sha256": "a96e38e62f8825f28acbe844e2ca9cd077e859b2e44038468bcc426471226582"
+    }
+  ],
+  "projection": "First native gold87 request + exact validated result. Test response JSONL is a structural reserialization of actual answers, not historical original-wire. Native four text equality was checked field-by-field against fullsource item; gold fourSHA uses a different serialization than current ordered tupleSHA, both are preserved. New journal context flags/calibration bindings are offline controls, not retrospective production receipt backfill.",
+  "nativeModelCalls": 0,
+  "externalSourceGets": 0,
+  "productionWrites": 0
+}

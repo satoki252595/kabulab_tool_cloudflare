@@ -13,6 +13,7 @@ import { makeBudgetedVerifySources } from "./sources-verify.js";
 import { MINI_VOCAB } from "./vocabulary/__fixtures__/mini-vocab.js";
 import { composeRunNotify, isBillingBlockedError, runBiztag, type RunSummary } from "./pipeline.js";
 import { withTextSyncReceipt } from "./plan.js";
+import { NotionUnknownResultError } from "../../../../src/shared/notion-archive/client.js";
 
 const notionMocks = vi.hoisted(() => ({
   createLedgerEntry: vi.fn(),
@@ -79,7 +80,7 @@ vi.mock("./active-vocab.js", () => ({
 
 vi.mock("./date-jst.js", () => ({
   // 見直し期限 (8月第1月曜+7日) を確実に過ぎている固定日付にする。
-  todayJst: vi.fn(() => "2026-09-25"),
+  todayJst: vi.fn((now?: () => number) => now ? new Date(now() + 9 * 60 * 60_000).toISOString().slice(0, 10) : "2026-09-25"),
   addDaysJst: vi.fn((d: string) => d),
 }));
 
@@ -509,15 +510,39 @@ describe("runBiztag input-change safety", () => {
     expect(summary.failures[0].message).toContain("最新pointer変更"); expect(summary.judge?.calls).toBe(1);
     expect(notionMocks.updateSupplementRow).not.toHaveBeenCalled(); expect(assertLatestDocCurrent).toHaveBeenCalledTimes(1);
   });
-  it("unknown inference preserves old values and is excluded from current-input coverage", async () => {
+  it("unknown inference preserves old values and stops before the next item or ledger tail", async () => {
     changedSource();
     notionMocks.readStockTextRow.mockResolvedValueOnce([{ sectionKey: "business", itemName: "事業の内容", text: "工作機械の製造・販売を行っています。" }]);
     vi.mocked(createClefClient).mockReturnValueOnce({ askNoul: async () => { throw new Error("unknown local result"); }, close: async () => {} });
-    const summary = await runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL });
-    expect(summary.qualificationHeld).toEqual(["6103"]); expect(summary.coverage.judged).toBe(0);
-    expect(summary.failures[0].message).toContain("unknown local result");
-    expect(summary.judge?.calls).toBe(1);
+    await expect(runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL })).rejects.toThrow("unknown local result");
+    expect(notionMocks.readStockTextRow).toHaveBeenCalledTimes(1);
     expect(notionMocks.updateSupplementRow).not.toHaveBeenCalled(); expect(notionMocks.replaceEvidenceBlock).not.toHaveBeenCalled();
     expect(createJevClient).not.toHaveBeenCalled();
+    expect(notionMocks.listLedgerEntries.mock.calls.some(([, filter]) => filter?.kind === "見直し材料")).toBe(false);
+  });
+  it("publisher unknown stops all later inference and ordinary packet writes", async () => {
+    changedSource();
+    const first = (await loadLatestDocs({} as never))[0];
+    // Explicit queue-order control. A second occurrence is never processed after unknown.
+    vi.mocked(loadLatestDocs).mockResolvedValue([first, first]);
+    notionMocks.readStockTextRow.mockResolvedValue([{ sectionKey: "business", itemName: "事業の内容", text: "工作機械の製造・販売を行っています。" }]);
+    const askNoul = vi.fn(async () => ({ model: CLEF_MODEL, answers: { "bt.B.MACH.MACHINE_TOOL": 0.95 }, inputTokens: 0, outputTokens: 0, latencyMs: 1, attempts: 1 }));
+    vi.mocked(createClefClient).mockReturnValueOnce({ askNoul, close: vi.fn() });
+    notionMocks.replaceEvidenceBlock.mockRejectedValueOnce(new NotionUnknownResultError("append ACK unknown"));
+    await expect(runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL })).rejects.toThrow("ACK unknown");
+    expect(askNoul).toHaveBeenCalledTimes(1); expect(notionMocks.readStockTextRow).toHaveBeenCalledTimes(1);
+    expect(notionMocks.listLedgerEntries.mock.calls.some(([, filter]) => filter?.kind === "見直し材料")).toBe(false);
+  });
+  it("normal journal receives actual input receipt and records reuse as forward0", async () => {
+    changedSource();
+    notionMocks.readStockTextRow.mockResolvedValueOnce([{ sectionKey: "business", itemName: "事業の内容", text: "工作機械の製造・販売を行っています。" }]);
+    const localJournal = vi.fn((_input: unknown) => ({ decidedAt: "2026-09-24T14:59:59Z", beforeSend: vi.fn(), response: vi.fn(), accepted: vi.fn() }));
+    vi.mocked(createClefClient).mockReturnValueOnce({ askNoul: async () => ({ model: CLEF_MODEL, answers: { "bt.B.MACH.MACHINE_TOOL": 0.95 }, inputTokens: 0, outputTokens: 0, latencyMs: 1, attempts: 1, reused: true }), close: vi.fn() });
+    const summary = await runBiztag({ budgetMs: 10_000, thresholds: { yesMin: 0.8, noMax: 0.2 }, model: CLEF_MODEL, localJournal });
+    expect(localJournal).toHaveBeenCalledTimes(1);
+    expect(localJournal.mock.calls[0][0]).toMatchObject({ stockCode: "6103", periodEnd: "2026-03-31", model: CLEF_MODEL, batchIndex: 0,
+      receipt: { docId: "S100YFQC", textPageId: "new-text", model: null } });
+    expect(summary.judge).toMatchObject({ calls: 0, reusedOutputs: 1 });
+    expect(notionMocks.replaceEvidenceBlock.mock.calls[0][2]).toMatchObject({ judgedAt: "2026-09-24" });
   });
 });

@@ -46,6 +46,9 @@ export interface ProcessDeps {
   jevClient: JevClient;
   /** 実際に構成した判定clientのモデルID。旧receiptのmodelを代入しない。 */
   model: string;
+  /** 判定原本の来歴を通常Node journalへ渡す。旧receiptは変更しない。 */
+  localJudgeInput?: (receipt: InputReceipt, textsSha256: string) => void;
+  localJudgeDate?: () => string;
   /** 判定日・再試行日の基準 (JST, YYYY-MM-DD) */
   today: string;
   /** ① 銘柄マスタのページ ID 解決 (無ければ null。relation を張らない) */
@@ -437,6 +440,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
       const judgeInput = buildJudgeInput(meta, sectionMap, result);
       judgeInputSummary = `${judgePrefix}：${judgeInput.inputSummary}`;
       receipt.stateSha256 = await sha256Hex(judgeInput.state);
+      deps.localJudgeInput?.({ ...receipt }, syncedTexts.textsSha256);
       const judged = await judgeCandidates(deps.jevClient, judgeInput,
         result.candidates.map((c) => c.term), deps.thresholds);
       receipt.model = judged.model;
@@ -474,7 +478,7 @@ async function syncAndTag(item: WorkItem, doc: Doc, deps: ProcessDeps): Promise<
         tagStatus: "判定済",
         tagDoc,
         vocabVersion: deps.vocab.version,
-        judgedAt: deps.today,
+        judgedAt: deps.localJudgeDate && localJudge ? deps.localJudgeDate() : deps.today,
         candidateCount,
         judgeInput: withTextSyncReceipt(withInputReceipt(judgeInputSummary, receipt), syncedTexts),
         error: null,
