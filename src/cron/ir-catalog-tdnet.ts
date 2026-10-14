@@ -81,11 +81,13 @@ function pad(n: number): string {
 export async function runIrCatalogCatchup(
   db: Database,
   shard?: { part: number; of: number },
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  deadlineMs?: number
 ): Promise<IrCatalogResult> {
   // TDnet は範囲一括取得できるのでシャード分散不要。重複実行を避け shard 0 のみ。
   if (shard && shard.part !== 0) return { ran: false };
   if (!Number.isFinite(nowMs)) throw new Error("TDnet catchup の現在時刻が不正です");
+  if (deadlineMs !== undefined && (!Number.isSafeInteger(deadlineMs) || Date.now() >= deadlineMs)) throw new Error("TDnet catchupの絶対締切が不正または超過しました");
 
   const started = Date.now();
 
@@ -105,6 +107,7 @@ export async function runIrCatalogCatchup(
   )}`;
 
   const items = await listRange(range);
+  if (deadlineMs !== undefined && Date.now() >= deadlineMs) throw new Error("TDnet catchupの絶対締切です（原文保管を保持・再送なし）");
   const existingTdnetIds = await loadTdnetIdsSince(
     db,
     new Date(nowMs - TDNET_PDF_RETAIN_DAYS * 86_400_000)
@@ -139,9 +142,11 @@ export async function runIrCatalogCatchup(
     archiveToNotion: true,
     notionByStock: true,
     notionByStockBudgetMs: NOTION_BUDGET_MS,
+    notionByStockDeadlineMs: deadlineMs,
     unsavedLookbackDays: TDNET_PDF_RETAIN_DAYS,
     codeToId,
   });
+  if (deadlineMs !== undefined && Date.now() >= deadlineMs) throw new Error("TDnet catchupの絶対締切です（既保管結果を保持・再送なし）");
 
   const elapsedSec = (Date.now() - started) / 1000;
   const bs = r.notionByStock;

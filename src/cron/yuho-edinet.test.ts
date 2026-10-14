@@ -110,14 +110,14 @@ const annualDoc = (code: string) => ({
   filerName: `テスト${code}`,
 });
 
-async function runCatchup(now?: Date, priceLoader?: HoldingPriceSourceLoader) {
+async function runCatchup(now?: Date, priceLoader?: HoldingPriceSourceLoader, deadlineMs?: number) {
   // 本体は sleep を挟む (60 日分)。setTimeout だけ偽物にして進める。
   vi.useFakeTimers({ toFake: now ? ["setTimeout", "Date"] : ["setTimeout"] });
   if (now) vi.setSystemTime(now);
   const info = vi.spyOn(console, "info").mockImplementation(() => {});
   const err = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
-    const running = runYuhoEdinetCatchup(db as unknown as YuhoDatabase, undefined, undefined, priceLoader);
+    const running = runYuhoEdinetCatchup(db as unknown as YuhoDatabase, undefined, undefined, priceLoader, deadlineMs);
     const settled = running.then(value => ({value}), error => ({error}));
     await vi.runAllTimersAsync();
     const outcome = await settled;
@@ -131,6 +131,43 @@ async function runCatchup(now?: Date, priceLoader?: HoldingPriceSourceLoader) {
 }
 
 describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
+  it("期限超過/無効deadlineはDB/source開始前に停止する", async () => {
+    for (const deadline of [Date.now() - 1, NaN, Infinity]) {
+      await expect(runYuhoEdinetCatchup(db as unknown as YuhoDatabase, undefined, undefined, undefined, deadline)).rejects.toThrow("絶対締切");
+    }
+    expect(listDocuments).not.toHaveBeenCalled(); expect(resumePendingShareholdings).not.toHaveBeenCalled();
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM yuho_edinet_catchup_progress").get()?.n).toBe(0);
+  });
+  it("source前の保存保有明細再開が締切へ到達したら一覧/進捗/L2/価格を開始しない", async () => {
+    const now = new Date("2026-10-14T10:00:00Z"), deadline = now.getTime() + 1000;
+    vi.mocked(resumePendingShareholdings).mockImplementationOnce(async (args) => {
+      vi.setSystemTime(deadline); expect(args.shouldStop()).toBe(true);
+      return { usedRows: 0, resumed: 0, held: 0, pending: true };
+    });
+    await expect(runCatchup(now, vi.fn(), deadline)).rejects.toThrow("絶対締切");
+    expect(listDocuments).not.toHaveBeenCalled(); expect(rebuildYuhoGrowthProjection).not.toHaveBeenCalled();
+    expect(resumePendingShareholdingsPrices).not.toHaveBeenCalled();
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM yuho_edinet_catchup_progress").get()?.n).toBe(0);
+  });
+  it("L2が絶対締切へ到達した場合は別300秒の価格phaseを開始せず未完にする", async () => {
+    const now = new Date("2026-10-14T10:00:00Z"), deadline = now.getTime() + 60_000;
+    vi.mocked(listDocuments).mockResolvedValue({ results: [] } as never);
+    vi.mocked(rebuildYuhoGrowthProjection).mockImplementationOnce(async () => { vi.setSystemTime(deadline); return { stocks: 0 } as never; });
+    const result = await runCatchup(now, vi.fn(), deadline);
+    expect(rebuildYuhoGrowthProjection).toHaveBeenCalled(); expect(resumePendingShareholdingsPrices).not.toHaveBeenCalled();
+    expect(result.reachedCap).toBe(true); expect(catchupHttpStatus(result)).toBe(500);
+  });
+  it("締切中のdoc未知結果はinFlightを残し次runも同doc/sourceを再送しない", async () => {
+    const now = new Date("2026-10-14T10:00:00Z"), deadline = now.getTime() + 60_000;
+    vi.mocked(listDocuments).mockResolvedValueOnce({ results: [annualDoc("7203")] } as never);
+    vi.mocked(ingestDocument).mockImplementationOnce(async () => { vi.setSystemTime(deadline); throw new Error("deadline native UNKNOWN"); });
+    await expect(runCatchup(now, undefined, deadline)).rejects.toThrow("UNKNOWN");
+    const row = sqlite.prepare("SELECT in_flight_doc_id FROM yuho_edinet_catchup_progress WHERE in_flight_doc_id IS NOT NULL").get();
+    expect(row?.in_flight_doc_id).toBe("S1007203");
+    const sourceCount = vi.mocked(listDocuments).mock.calls.length;
+    await expect(runCatchup(new Date(deadline + 1), undefined, deadline + 60_000)).rejects.toThrow("in-flight");
+    expect(listDocuments).toHaveBeenCalledTimes(sourceCount); expect(ingestDocument).toHaveBeenCalledTimes(1);
+  });
   it("原本・L2完了を優先した後、Nodeの価格loaderだけを別予算で呼び未完を隠さない", async () => {
     const loader: HoldingPriceSourceLoader = vi.fn();
     vi.mocked(listDocuments).mockResolvedValue({ results: [] } as never);

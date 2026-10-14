@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main, parseShard } from "./yuho-edinet.js";
 import { createD1HttpDb, createD1HttpBatchSender } from "../../src/shared/db/d1-http-client.js";
 import { runYuhoEdinetCatchup } from "../../src/cron/yuho-edinet.js";
@@ -16,7 +16,16 @@ vi.mock("../../src/shared/notion-archive/env.js", () => ({notionEnv: {NOTION_TOK
 vi.mock("./holdings-price-sources.js", () => ({createHoldingPriceSourceLoader: vi.fn(() => vi.fn())}));
 vi.mock("../../src/shared/env.js", () => ({sharedEnv: {R2_ACCOUNT_ID: vi.fn(), R2_ACCESS_KEY_ID: vi.fn(), R2_SECRET_ACCESS_KEY: vi.fn(), R2_BUCKET: vi.fn()}}));
 beforeEach(() => vi.resetAllMocks());
+afterEach(() => vi.unstubAllEnvs());
 describe("direct Node catchup", () => {
+  it("obsolete scheduled runtime stops before source, configuration or DB", async () => {
+    vi.stubEnv("GITHUB_EVENT_NAME", "schedule");
+    await expect(main([])).rejects.toThrow("旧catchup schedule");
+    expect(createD1HttpDb).not.toHaveBeenCalled();
+    expect(runYuhoEdinetCatchup).not.toHaveBeenCalled();
+    expect(yuhoEnv.EDINET_API_KEY).not.toHaveBeenCalled();
+    expect(createHoldingPriceSourceLoader).not.toHaveBeenCalled();
+  });
   it("validates shard without blank/partial/fraction/duplicate coercion", () => {
     expect(parseShard([])).toBeUndefined();
     expect(parseShard(["--part=0", "--of=8"])).toEqual({part: 0, of: 8});

@@ -19,7 +19,7 @@ Trigger へ移す。実実行は従来どおり GitHub Actions (`stock-sync.yml`
 
 ## 設計
 
-CF cron 6 本 (`wrangler.toml` `[triggers]`、曜日は `MON-FRI` 名前指定。
+CF cron 8 本 (`wrangler.toml` `[triggers]`、曜日は `MON-FRI` 名前指定。
 CF の数字曜日は 1=日曜で GitHub と違うため):
 
 | cron (UTC) | 処理 (`src/scheduler/stock.ts`) |
@@ -30,6 +30,8 @@ CF の数字曜日は 1=日曜で GitHub と違うため):
 | `5 22 * * MON-FRI` | 専用context receiptのrunを読み、同日のcontext成功と22:00完了期限を検証 |
 | `15 9 * * MON-FRI` | `moneyflow.yml` に `only=independent` をdispatch。株価・JPX休場に依存しない取得元 |
 | `45 14 * * MON-FRI` | 専用moneyflow receiptのrun・ingest step成功と同日09:15〜14:40完了を検証 |
+| `0 10 * * MON-FRI` | `catchup.yml`の`scheduled-catchup`をdispatch。19:00 JST、TDnet→EDINETの順で実行 |
+| `5 11 * * MON-FRI` | 専用catchup receiptのrun・両source成功とLinux biztag skip、19:59 JSTまでの完了を検証 |
 
 2026-10-09 に株式 dispatch を `13 17`（02:13 JST）から `0 9`（18:00 JST）へ移した。
 02:13 JST は、取引日 D の ^N225 日足 close が null になる時間帯（D 23:30 JST 以降。
@@ -84,6 +86,47 @@ D=2026-10-08 の原文で 00:15 以降が null）の中だった。全銘柄 run
 
 ## 受入
 
+### 開示catchupの19時起動
+
+2026-10-14に、GitHub scheduleで6〜9時間遅配していた平日の開示取込をCFへ移す。
+同じ平日1回・母集団・取得範囲を保ち、開始を20時から19時JSTへ前倒しする。
+20時のMac事業タグ処理と21時の優待処理は移動しない。開示は市場休場日も対象。
+TDnet一覧は40日前〜当日の41暦日を1回ずつ読み、一次原文の物理保管・全文読戻し、
+二次12分予算、EDINETの300秒/60通と別価格300秒予算、通常380ms間隔を維持する。
+二次の予算打切りを全IRの保存完了と呼ばず、EDINETのcap/保留は非0終了する。
+
+初回の起動資格は同日19:00〜19:05だけ。後続EDINETは同日19:58:30まで参加できる。
+Node入口は全fetchに元のsignalと絶対期限の両方を渡し、期限後の追加送信を拒否する。
+AWS SDKのR2読取は既存のタイムアウトとjob停止の対象で、全通信の19:58:30終了を保証するものではない。
+TDnetの既absolute deadlineとEDINETの各phaseにも締切を伝播し、本文・原本の照合は減らさない。
+定時targetだけGitHub job予算を**54分**にする。job開始は初回資格より前なので、
+自動cancel期限は遅くとも19:59になる。手動tdnet/edinet/allは従来60分。
+これは完了率やremote rollbackの保証ではなく、不明結果は既CAS/inFlightを残して停止する。
+Node子watchdogや新しいrate基盤は追加しない。
+
+新targetは両sourceだけを実行し、Linux biztag jobはskipする。手動allは既存の
+Linux biztag停止を含むため、両sourceの正常受入には個別targetを使う。
+checkoutはmainを明示し、取得前にevent ref/SHA・実HEAD・取得済origin/mainの一致と
+tracked cleanを要求する。mainが途中で進んだ場合も別版へ自動再送しない。
+旧scheduleは削除し、新CLIではschedule eventを取得前に拒否する。
+既作成の旧head runには新guardが遡及しないため、切替直前のnative active0を別に確認する。
+未観測の旧server待機イベントが完全に消えたとは扱わない。既catchup concurrencyを保ち、
+receipt claim/dispatch unknownの再POSTを禁止する。EDINET日付progressのCASはTDnetの排他証明ではない。
+
+専用receiptは`stock-scheduler/catchup-receipt-<UTC日>.json`。
+20:05 readcheckは同runの起動資格→TDnet→EDINETが各一意の成功、同日の期限内・順序一致、
+Linux biztagの一意skipを要求する。今日の未観測runや歴史的成功を当日の成功へ読み替えない。
+手動回復は定時19時成功とは分けて確認する。設定・merge・deployだけを受入とは数えず、
+実receipt/run/期限確認で判断する。18時株式・資金フローが19時にもNotion通信中なら、
+その枠は別に確認する。前倒しだけで全process合計の上限を証明しない。
+
+仕様根拠（2026-10-14確認）:
+[GitHub schedule](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)、
+[checkout v4](https://github.com/actions/checkout/blob/v4/README.md)、
+[job timeout](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idtimeout-minutes)、
+[cancel手順](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation)、
+[Cloudflare Cron](https://developers.cloudflare.com/workers/configuration/cron-triggers/)。
+
 - `src/scheduler/*.test.ts`: 曜日・日跨ぎ・期限・重複・曖昧 POST・200 正常・
   target routing・date mismatch・false-green を固定 (mock のみ。live POST なし)。
 - `pnpm typecheck` / `pnpm lint` / `wrangler deploy --dry-run` 成功。
@@ -94,8 +137,8 @@ D=2026-10-08 の原文で 00:15 以降が null）の中だった。全銘柄 run
 
 - Workers Paid で運用する。scheduled は全銘柄の処理を行わず、日次
   各dispatchの R2 2 PUT + GitHub 1 POST と、各readcheckの R2 1 GET + Jobs API
-  読取のみ。正常時は平日約22日で88回/月の cron 起動、R2 88 write +44 read
-  程度となる (Jobs API のページ数・既存 workload の費用は別計数)。
+  読取のみ。開示移行後の8cronは平日約22日で約176回/月、正常な4dispatchのR2計176 writeと
+  4readcheckの88 readが目安 (重複・失敗時とJobs API分頁・既存workloadは別計数)。
   cron 変更の伝播には最大 15 分かかる。
 - 休場: [JPX公式](https://www.jpx.co.jp/corporate/about-jpx/calendar/)と
   [NYSE公式](https://www.nyse.com/trade/hours-calendars)の2026/2027公表休業日を
