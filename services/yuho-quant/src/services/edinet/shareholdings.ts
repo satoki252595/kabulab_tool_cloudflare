@@ -156,10 +156,13 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource)
         kind = null;
       } else if (scope !== "other" && !ambiguousOwnerSection) scope = "filer";
     }
+    const parenthesizedKind = /(?:^|\s)\((特定投資株式|みなし保有株式)\)\s*$/.exec(before);
     const kindHeading = /(?:^|\s)(特定投資株式|みなし保有株式)(\(信託財産として保有し議決権行使権限のあるもの等\))?\s*$/.exec(before);
-    if (kindHeading && (kindHeading[2] === undefined || kindHeading[1] === "みなし保有株式")) {
+    if (parenthesizedKind) {
+      kind = parenthesizedKind[1] as Shareholding["kind"];
+    } else if (kindHeading && (kindHeading[2] === undefined || kindHeading[1] === "みなし保有株式")) {
       kind = kindHeading[1] as Shareholding["kind"];
-    } else if (/(?:^|\s)(?:特定投資株式|みなし保有株式)\s*\(/.test(before)) {
+    } else if (/(?:^|\s)(?:特定投資株式|みなし保有株式)\s*\(|(?:^|\s)\((?:特定投資株式|みなし保有株式)/.test(before)) {
       return { ...result, status: "unsupported", reason: "保有種別見出しの括弧注記を確認できません", holdings: [] };
     }
     const grid = tableToGridExpanded(table);
@@ -168,19 +171,24 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource)
     if (scope === "other") { excludedTables++; continue; }
     if (scope !== "filer") return { ...result, status: "unsupported", reason: "明細の保有主体が当社/提出会社と明示されていません", holdings: [] };
     if (grid.some(row => row.length < 3)) return { ...result, status: "unsupported", reason: "明細表の列数が不足しています", holdings: [] };
-    const shareHeader = normalize(grid[1][1]), bookHeader = normalize(grid[2][1]);
+    // 当期/前期は明示ラベルで選ぶ。連結ラベル・重複・欠落・未知注記は読み替えない。
+    const periods = grid[0].slice(1, 3).map(cell => normalize(cell).replace(/^\((当事業年度|前事業年度)\)$/, "$1"));
+    let current: 1 | 2, previous: 1 | 2;
+    if (periods[0] === "当事業年度" && periods[1] === "前事業年度") { current = 1; previous = 2; }
+    else if (periods[0] === "前事業年度" && periods[1] === "当事業年度") { current = 2; previous = 1; }
+    else return { ...result, status: "unsupported", reason: "明細表の保有種別・当期列・株数単位・金額単位を確認できません", holdings: [] };
+    const shareHeader = normalize(grid[1][current]), bookHeader = normalize(grid[2][current]);
     const sharesUnit = /^株式数\((株|千株)\)$/.exec(shareHeader);
     let bookUnit = /^貸借対照表計上額\((円|千円|百万円)\)$/.exec(bookHeader);
     let dataStart = 3;
     const cellUnits = shareHeader === "株式数(上段)" && bookHeader === "貸借対照表計上額(下段)";
     // 単位だけを第4ヘッダ行へ置く実原表。現在/前期の明示同値を必須にする。
     if (sharesUnit && bookHeader === "貸借対照表計上額" && grid.length >= 6 && normalize(grid[3][0]) === "銘柄" && normalize(grid[3][1]) === normalize(grid[3][2])) {
-      bookUnit = /^\((円|千円|百万円)\)$/.exec(normalize(grid[3][1]));
+      bookUnit = /^\((円|千円|百万円)\)$/.exec(normalize(grid[3][current]));
       dataStart = 4;
     }
-    if (kind === null || normalize(grid[0][0]) !== "銘柄" || normalize(grid[0][1]) !== "当事業年度" ||
-        normalize(grid[0][2]) !== "前事業年度" || (!cellUnits && (!sharesUnit || !bookUnit)) ||
-        normalize(grid[1][2]) !== shareHeader || normalize(grid[2][2]) !== bookHeader || (grid.length - dataStart) % 2 !== 0) {
+    if (kind === null || normalize(grid[0][0]) !== "銘柄" || (!cellUnits && (!sharesUnit || !bookUnit)) ||
+        normalize(grid[1][previous]) !== shareHeader || normalize(grid[2][previous]) !== bookHeader || (grid.length - dataStart) % 2 !== 0) {
       return { ...result, status: "unsupported", reason: "明細表の保有種別・当期列・株数単位・金額単位を確認できません", holdings: [] };
     }
     for (let rowIndex = dataStart; rowIndex < grid.length; rowIndex += 2) {
@@ -188,16 +196,16 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource)
       let shareLabel: "株" | "千株", moneyLabel: "円" | "千円" | "百万円";
       let sharesRaw: number | null | undefined, bookValueRaw: number | null | undefined;
       if (cellUnits) {
-        const shareParts = /^(.+?)(千株|株)$/.exec(normalize(row[1]));
-        const bookParts = /^(.+?)(百万円|千円|円)$/.exec(normalize(book[1]));
-        const previousShare = /^(.+?)(千株|株)$/.exec(normalize(row[2]));
-        const previousBook = /^(.+?)(百万円|千円|円)$/.exec(normalize(book[2]));
+        const shareParts = /^(.+?)(千株|株)$/.exec(normalize(row[current]));
+        const bookParts = /^(.+?)(百万円|千円|円)$/.exec(normalize(book[current]));
+        const previousShare = /^(.+?)(千株|株)$/.exec(normalize(row[previous]));
+        const previousBook = /^(.+?)(百万円|千円|円)$/.exec(normalize(book[previous]));
         if (!shareParts || !bookParts || !previousShare || !previousBook || shareParts[2] !== previousShare[2] || bookParts[2] !== previousBook[2]) return { ...result, status: "unsupported", reason: "上下段セルの当期/前期単位を確認できません", holdings: [] };
         shareLabel = shareParts[2] as typeof shareLabel; moneyLabel = bookParts[2] as typeof moneyLabel;
         sharesRaw = numberCell(shareParts[1]); bookValueRaw = numberCell(bookParts[1]);
       } else {
         shareLabel = sharesUnit![1] as typeof shareLabel; moneyLabel = bookUnit![1] as typeof moneyLabel;
-        sharesRaw = numberCell(row[1]); bookValueRaw = numberCell(book[1]);
+        sharesRaw = numberCell(row[current]); bookValueRaw = numberCell(book[current]);
       }
       if (!row[0] || normalize(row[0]) !== normalize(book[0]) || /^\d+$/.test(normalize(row[0])) || sharesRaw === undefined || bookValueRaw === undefined) return { ...result, status: "unsupported", reason: "銘柄名と株数・帳簿価額の行対応を確認できません", holdings: [] };
       const shares = sharesRaw === null ? null : sharesRaw * (shareLabel === "千株" ? 1000 : 1);

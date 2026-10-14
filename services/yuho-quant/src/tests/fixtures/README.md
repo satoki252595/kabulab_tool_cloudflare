@@ -151,3 +151,21 @@ verbatim duration definitions, not a full original instance.
 
 The preceding rights and regression-only conditions apply. Deliberate negative
 transformations occur in tests, never in primary-source or production output.
+
+## Holdings header forms (2026-10-14)
+
+`holdings-header-forms.json.gz` contains the complete native ShareholdingsTextBlock
+from [S100XCY4](https://api.edinet-fsa.go.jp/api/v2/documents/S100XCY4?type=1),
+[S100YZC3](https://api.edinet-fsa.go.jp/api/v2/documents/S100YZC3?type=1), and
+[S100YDOU](https://api.edinet-fsa.go.jp/api/v2/documents/S100YDOU?type=1).
+Each HTML interval preserves the original UTF-8 bytes, amounts, labels and
+context; JSON/gzip is a regression container, not an original filing ZIP.
+`holdings-header-forms.provenance.json` fixes each source identity, original ZIP
+and member SHA, byte interval, and excerpt SHA. Saved sources were already
+physically archived and read back; no new upstream download was made. Original
+HTTP acquisition clocks and producer manifests remain UNKNOWN and are not
+replaced by the recovery clock. Complete ZIPs and signed URLs remain private.
+
+The preceding rights and regression-only conditions apply: original content is
+owned by its rights holders and receives no new redistribution/code license.
+Negative transformations occur only in tests and never become primary sources.
