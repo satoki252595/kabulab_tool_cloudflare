@@ -9,6 +9,7 @@
  *   呼び出し側で `unknown` 扱い (OCR は導入しない — ルール1 整合)
  */
 import { extractText, getDocumentProxy } from "unpdf";
+import { recordIrPdfPdfParse } from "../../../../../src/shared/notion-archive/ir-pdf-timing.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -42,6 +43,7 @@ export async function extractPdfText(
     timer = setTimeout(() => resolve(null), timeoutMs);
   });
 
+  const parseStarted = performance.now();
   try {
     const result = await Promise.race([extract(bytes), timeout]);
     return result;
@@ -50,6 +52,7 @@ export async function extractPdfText(
     return null;
   } finally {
     if (timer !== null) clearTimeout(timer);
+    recordIrPdfPdfParse(performance.now() - parseStarted);
   }
 }
 
