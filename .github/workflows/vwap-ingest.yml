@@ -38,6 +38,17 @@ on:
         description: "target=daily の対象コード（カンマ区切り）。空欄は通常の全母集団"
         type: string
         default: ""
+      daily_session_source:
+        description: "日足の市場session原本。保存原本は取得前に選択し、失敗後に切替えない"
+        type: choice
+        default: yahoo-direct
+        options:
+          - yahoo-direct
+          - archived-jp-leg
+      daily_session_date:
+        description: "archived-jp-leg専用。実runと同じJST日 YYYY-MM-DD（必須）"
+        type: string
+        default: ""
       intra_range:
         description: "5分足の取得範囲 (target=intra のバックフィル用。例 5d / 60d。Yahoo上限60d)"
         type: string
@@ -118,6 +129,20 @@ jobs:
             exit 2
           fi
 
+      - name: 明示日足session原本の入力を検査
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TARGET: ${{ inputs.target }}
+          DAILY_SESSION_SOURCE: ${{ inputs.daily_session_source }}
+          DAILY_SESSION_DATE: ${{ inputs.daily_session_date }}
+        run: |
+          if [ "$DAILY_SESSION_SOURCE" = "archived-jp-leg" ]; then
+            if [ "$TARGET" != "daily" ] && [ "$TARGET" != "daily-intra" ] && [ "$TARGET" != "all" ]; then exit 2; fi
+            if [ -z "$DAILY_SESSION_DATE" ]; then exit 2; fi
+          elif [ -n "$DAILY_SESSION_DATE" ]; then
+            exit 2
+          fi
+
       # 日足10年 + 5分足 (月水金 cron または dispatch=daily-intra/all)。dispatch=daily は日足だけ。
       - name: VWAP daily + intra → R2
         if: >-
@@ -127,16 +152,21 @@ jobs:
         env:
           DAILY_ONLY: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'daily' }}
           DAILY_CODES: ${{ github.event.inputs.daily_codes }}
+          DAILY_SESSION_SOURCE: ${{ inputs.daily_session_source }}
+          DAILY_SESSION_DATE: ${{ inputs.daily_session_date }}
         run: |
           # daily の errors/invalid (exit1) で intra を道連れにしない。exit2
           # (連続429/503 ABORT・R2 fatal unknown/rejected/GET fault・バッチ保管
           # 失敗・main 想定外) とその他の未完了/異常出口は intra を走らせず exit2 (「これ以上叩くな」
           # 契約と未保管成功なしを維持)。
+          daily_args=()
+          if [ -n "$DAILY_SESSION_SOURCE" ]; then daily_args+=("--session-source=$DAILY_SESSION_SOURCE"); fi
+          if [ -n "$DAILY_SESSION_DATE" ]; then daily_args+=("--session-date=$DAILY_SESSION_DATE"); fi
           daily_rc=0
           if [ "$DAILY_ONLY" = "true" ] && [ -n "$DAILY_CODES" ]; then
-            pnpm ingest:vwap-daily --codes="$DAILY_CODES" || daily_rc=$?
+            pnpm ingest:vwap-daily "${daily_args[@]}" --codes="$DAILY_CODES" || daily_rc=$?
           else
-            pnpm ingest:vwap-daily || daily_rc=$?
+            pnpm ingest:vwap-daily "${daily_args[@]}" || daily_rc=$?
           fi
           if [ "$daily_rc" -ne 0 ] && [ "$daily_rc" -ne 1 ]; then
             echo "daily_exit=${daily_rc} intra_exit=not-run reason=daily-abort"

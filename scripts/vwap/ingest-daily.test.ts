@@ -15,7 +15,7 @@ import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
 import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main, tenYearRange } from "./ingest-daily.js";
 import { assertSavedDailyShape, completedDailyFetch, hasCompletedDailyFetch } from "./lib/ingest-guard.js";
-import { fetchDailySessionReference, qualifyDailySourceRange } from "./lib/daily-session.js";
+import { fetchDailySessionReference, qualifyDailySourceRange, loadArchivedDailySessionReference } from "./lib/daily-session.js";
 import { referenceFromArchivedParts, readPriceReference, priceMetadata } from "../../src/shared/holdings/price-registry.js";
 import { publishDailyPriceSnapshot } from "./lib/holdings-price-registry.js";
 
@@ -34,6 +34,7 @@ vi.mock("./lib/codes.js", async (importOriginal) => {
 vi.mock("./lib/daily-session.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./lib/daily-session.js")>();
   return { ...mod,
+    loadArchivedDailySessionReference: vi.fn(),
     fetchDailySessionReference: vi.fn(async () => ({ date: tenYearRange(new Date().toISOString()).to,
       observedAt: new Date().toISOString(), rawSha: "1".repeat(64) })),
     qualifyDailySourceRange: vi.fn(() => tenYearRange(new Date().toISOString())) };
@@ -413,6 +414,40 @@ describe("daily source前の同日確定済み再開", () => {
 });
 
 describe("ingest-daily main flow", () => {
+  it("explicit archived source keeps custody in the run receipt without direct benchmark fetch", async () => {
+    process.argv.push("--session-source=archived-jp-leg", `--session-date=${D_TODAY}`);
+    const reference = { date: D_TODAY, observedAt: new Date().toISOString(), rawSha: "8".repeat(64) };
+    const custody = { source: "archived-jp-leg" as const, cacheKey: `macro/jp-close/${D_TODAY}.json`, archivePageId: "test-jp", manifestSha256: "9".repeat(64), n225ArchivePageId: "test-n225", n225Filename: "saved.json.gz", n225GzipSha256: "7".repeat(64) };
+    vi.mocked(loadArchivedDailySessionReference).mockResolvedValueOnce({ reference, custody });
+    mockLoadCodes.mockResolvedValue(["A"]); mockR2Get.mockResolvedValue(null);
+    mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
+    await main();
+    expect(loadArchivedDailySessionReference).toHaveBeenCalledExactlyOnceWith(D_TODAY);
+    expect(fetchDailySessionReference).not.toHaveBeenCalled();
+    expect(recordedBody().dailySession).toEqual({ selection: { kind: "archived-jp-leg", date: D_TODAY }, reference, custody });
+    expect(recordedMetadata().dailySession).toEqual(recordedBody().dailySession);
+    expect(mockR2Put.mock.calls[0][1]).not.toContain("test-n225"); // internal archive links stay out of public price JSON.
+  });
+  it("invalid or unavailable explicit source stops before any per-stock or replacement source", async () => {
+    process.argv.push("--session-source=archived-jp-leg");
+    await expect(main()).rejects.toThrow("同日date");
+    expect(loadCodes).not.toHaveBeenCalled(); expect(mockFetchDaily).not.toHaveBeenCalled();
+    process.argv.push(`--session-date=${D_TODAY}`); mockLoadCodes.mockResolvedValue(["A"]);
+    vi.mocked(loadArchivedDailySessionReference).mockRejectedValueOnce(new Error("missing saved source"));
+    await expect(main()).rejects.toThrow("missing saved source");
+    expect(mockFetchDaily).not.toHaveBeenCalled(); expect(fetchDailySessionReference).not.toHaveBeenCalled(); expect(mockR2Put).not.toHaveBeenCalled();
+  });
+  it("archived mode never refreshes a benchmark after midnight", async () => {
+    process.argv.push("--session-source=archived-jp-leg", `--session-date=${D_TODAY}`);
+    const observedAt = new Date().toISOString();
+    vi.mocked(loadArchivedDailySessionReference).mockImplementationOnce(async () => {
+      vi.spyOn(Date, "now").mockReturnValue(Date.parse(observedAt) + 86400_000);
+      return { reference: { date: D_TODAY, observedAt, rawSha: "8".repeat(64) }, custody: { source: "archived-jp-leg", cacheKey: "same-day", archivePageId: "test-jp", manifestSha256: "9".repeat(64), n225ArchivePageId: "test-n225", n225Filename: "saved.json.gz", n225GzipSha256: "7".repeat(64) } };
+    });
+    mockLoadCodes.mockResolvedValue(["A"]); await main();
+    expect(fetchDailySessionReference).not.toHaveBeenCalled(); expect(mockFetchDaily).not.toHaveBeenCalled(); expect(mockR2Put).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(2);
+  });
   it("concurrent replacement rejects the exact observed version and stops remaining codes", async () => {
     mockLoadCodes.mockResolvedValue(["A", "B"]);
     mockR2Get.mockResolvedValue({ body: existingA, etag: "opaque-multipart-2" });

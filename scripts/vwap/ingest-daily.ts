@@ -9,7 +9,7 @@ import { assertCodesInUniverse, loadCodes, arg } from "./lib/codes.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { archiveSummaryOrFatal, assertSavedDailyShape, bodyPin, buildIngestSummary, completedDailyFetch, findInvalidBars, hasCompletedDailyFetch, resolveExitCode, resolveRunId, sanitizeLogText, shouldSkipPut, universePin, writeSummaryLocal, type IngestCodeOutcome } from "./lib/ingest-guard.js";
 import { isStrictIsoUtc, jstDateSec, tenYearRangeForDate } from "../../src/shared/vwap/proof.js";
-import { fetchDailySessionReference, qualifyDailySourceRange } from "./lib/daily-session.js";
+import { fetchDailySessionReference, qualifyDailySourceRange, resolveDailySessionSource, loadArchivedDailySessionReference } from "./lib/daily-session.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { archiveYahooRawBatch, type ArchivedYahooPart, type YahooRawAttempt, type YahooRawMissing } from "../../src/shared/yahoo/raw-custody.js";
 import { priceMetadata, readPriceReference, referenceFromArchivedParts, type PriceReference } from "../../src/shared/holdings/price-registry.js";
@@ -31,6 +31,9 @@ export function tenYearRange(nowIso: string): { from: string; to: string } {
 export async function main() {
   // knob は main 内で型付き取得する (未設定・不正値は final catch で exit 2)。
   // 通常値は vwap-ingest.yml・.env.example で明示宣言。黙示既定なし。
+  const startedAt = new Date().toISOString();
+  const sessionSource = resolveDailySessionSource(arg("session-source"), arg("session-date"), startedAt);
+  console.info(JSON.stringify({ dailySessionSource: sessionSource }));
   const { delayMs: DELAY } = sharedEnv.vwapKnobs();
   const universe = await loadCodes();
   const only = arg("codes");
@@ -38,11 +41,11 @@ export async function main() {
   let codes = only ? only.split(",") : universe;
   const limit = arg("limit"); if (limit) codes = codes.slice(0, Number(limit));
 
-  const startedAt = new Date().toISOString();
   const CONC = 1; // Yahoo取得は環境変数によらず直列。実HTTP間隔は共有clientで制御。
   const runId = resolveRunId();
   const TEN_Y_RANGE = tenYearRange(startedAt); // run 内一定の明示 10y range
-  let reference = await fetchDailySessionReference(runId); // 原本照合済み独立session。
+  const archivedSession = sessionSource.kind === "archived-jp-leg" ? await loadArchivedDailySessionReference(sessionSource.date) : undefined;
+  let reference = archivedSession === undefined ? await fetchDailySessionReference(runId) : archivedSession.reference; // 原本照合済み独立session。
   let SOURCE_RANGE = tenYearRangeForDate(reference.date);
   let referenceGeneration = 0;
   let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0, invalid = 0, skipped = 0;
@@ -66,6 +69,7 @@ export async function main() {
     if (jstDateSec(Date.now() / 1000) !== jstDateSec(Date.parse(reference.observedAt) / 1000)) {
       try {
         // 前batchを物理保管/条件付PUTで閉じてから取得する。unknown後に未保管batchを送らない。
+        if (sessionSource.kind === "archived-jp-leg") throw new Error("daily session HOLD: 保存同日原本は日跨ぎ後に更新・切替できません");
         const refreshed = await fetchDailySessionReference(runId, `vwap-daily-session-${++referenceGeneration}`);
         if (refreshed.date !== reference.date ||
             jstDateSec(Date.parse(refreshed.observedAt) / 1000) !== jstDateSec(Date.now() / 1000)) {
@@ -298,6 +302,10 @@ export async function main() {
   // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 daily に必須接続。
   // 保管失敗は fatal exit 2 にして後続 intra を走らせない (未保管の成功なし)。
   const summary = buildIngestSummary({ kind: "daily", range: "10y-full", runId, codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
+  const dailySession = { selection: sessionSource, reference, ...(archivedSession === undefined ? {} : { custody: archivedSession.custody }) };
+  summary.metadata.dailySession = dailySession;
+  const summaryBody = JSON.parse(new TextDecoder().decode(summary.files[0].bytes));
+  summary.files[0].bytes = new TextEncoder().encode(JSON.stringify({ ...summaryBody, dailySession }));
   const local = writeSummaryLocal(summary);
   if (!local.ok) {
     console.error(JSON.stringify({ archive: "local-failed", key: summary.key, reason: local.reason }));
