@@ -43,6 +43,15 @@ import {
   logIrPdfIncident,
 } from "./ir-pdf-incident.js";
 import {
+  beginIrPdfItemTiming,
+  endIrPdfItemTiming,
+  formatIrPdfItemTimingLine,
+  formatIrPdfNotionStatsLine,
+  measureIrPdfCall,
+  recordIrPdfPdfFetch,
+  recordIrPdfStockResolve,
+} from "./ir-pdf-timing.js";
+import {
   assertAdoptedDatabaseSchema,
   createDatabaseOrAdopt,
   findBackupChildByTitle,
@@ -574,11 +583,11 @@ async function rememberStockPage(
   ticker: string,
   resolved: { stockPageId: string; childDbId: string }
 ): Promise<void> {
-  await cache.put(service, ticker, {
+  await measureIrPdfCall("D1", () => cache.put(service, ticker, {
     stockPageId: resolved.stockPageId,
     childDbId: resolved.childDbId,
     schemaVersion: IR_NOTION_STOCK_PAGE_SCHEMA_VERSION,
-  });
+  }));
 }
 
 /**
@@ -658,7 +667,7 @@ async function openStockSession(
         childDbId: memorized.childDbId,
         schemaVersion: IR_NOTION_STOCK_PAGE_SCHEMA_VERSION,
       }
-    : await cache.get(input.service, ticker);
+    : await measureIrPdfCall("D1", () => cache.get(input.service, ticker));
 
   if (!(stored && stored.schemaVersion === IR_NOTION_STOCK_PAGE_SCHEMA_VERSION)) {
     return adoptResolvedStock(input, cache, parentDbId, row, minISO, maxISO, "miss");
@@ -673,19 +682,19 @@ async function openStockSession(
       in_trash?: boolean;
     }>("GET", `/databases/${stored.childDbId}`);
     if (db.archived === true || db.in_trash === true) {
-      await cache.invalidate(input.service, ticker);
+      await measureIrPdfCall("D1", () => cache.invalidate(input.service, ticker));
       return adoptResolvedStock(input, cache, parentDbId, row, minISO, maxISO, "fallback");
     }
     parent = db.parent;
   } catch (error) {
     if (!isStaleNotionTarget(error)) throw error;
-    await cache.invalidate(input.service, ticker);
+    await measureIrPdfCall("D1", () => cache.invalidate(input.service, ticker));
     return adoptResolvedStock(input, cache, parentDbId, row, minISO, maxISO, "fallback");
   }
 
   const check = classifyChildParent(parent, stored.stockPageId);
   if (check !== "match") {
-    await cache.invalidate(input.service, ticker);
+    await measureIrPdfCall("D1", () => cache.invalidate(input.service, ticker));
     return adoptResolvedStock(input, cache, parentDbId, row, minISO, maxISO, "mismatch");
   }
 
@@ -698,7 +707,7 @@ async function openStockSession(
     return { childDbId: stored.childDbId, existing, stockCache: "hit" };
   } catch (error) {
     if (!isStaleNotionTarget(error)) throw error;
-    await cache.invalidate(input.service, ticker);
+    await measureIrPdfCall("D1", () => cache.invalidate(input.service, ticker));
     return adoptResolvedStock(input, cache, parentDbId, row, minISO, maxISO, "fallback");
   }
 }
@@ -924,6 +933,22 @@ function isTerminal(ex: ExistingRow): boolean {
 export async function upsertDisclosuresByStock(
   input: ByStockInput
 ): Promise<ByStockResult> {
+  const statsAtPhaseStart = notionStats();
+  try {
+    return await runUpsertDisclosuresByStock(input);
+  } finally {
+    const endStats = notionStats();
+    console.info(formatIrPdfNotionStatsLine(endStats, {
+      requests: endStats.requests - statsAtPhaseStart.requests,
+      rateLimited: endStats.rateLimited - statsAtPhaseStart.rateLimited,
+      transientRetries: endStats.transientRetries - statsAtPhaseStart.transientRetries,
+    }));
+  }
+}
+
+async function runUpsertDisclosuresByStock(
+  input: ByStockInput
+): Promise<ByStockResult> {
   const parentDbId = await ensureParentDb(input.service, input.tagOptions);
   let created = 0;
   let updated = 0;
@@ -978,6 +1003,10 @@ export async function upsertDisclosuresByStock(
       break;
     }
     const row = ordered[index];
+    const itemStarted = performance.now();
+    const itemTiming = beginIrPdfItemTiming();
+    let stockCacheLabel: StockCacheOutcome | "unresolved" = "unresolved";
+    try {
     let session = sessions.get(row.ticker);
     if (session === undefined) {
       const tickerRows = rowsByTicker.get(row.ticker);
@@ -993,16 +1022,28 @@ export async function upsertDisclosuresByStock(
         if (r.pubdate < minISO) minISO = r.pubdate;
         if (r.pubdate > maxISO) maxISO = r.pubdate;
       }
-      session = await openStockSession(input, parentDbId, row, minISO, maxISO);
+      const resolveStarted = performance.now();
+      try {
+        session = await openStockSession(input, parentDbId, row, minISO, maxISO);
+      } finally {
+        recordIrPdfStockResolve(performance.now() - resolveStarted);
+      }
       sessions.set(row.ticker, session);
     }
+    stockCacheLabel = session.stockCache;
     const { childDbId, existing } = session;
       const ex = existing.byKey.get(row.key);
       if (ex && isTerminal(ex)) {
         // 本文保存の中断と再判定は、既に物理保管した同じ PDF から再開する。
         if (ex.status === "uploaded" && ex.hasFile && input.classifyPdf &&
           (input.rejudgePdf || input.recoverPdfTextKeys?.has(row.key))) {
-          const bytes = await fetchArchivedIrPdf(ex.pageId);
+          const archivedStarted = performance.now();
+          let bytes: Uint8Array;
+          try {
+            bytes = await fetchArchivedIrPdf(ex.pageId);
+          } finally {
+            recordIrPdfPdfFetch(performance.now() - archivedStarted);
+          }
           const cls = await input.classifyPdf(bytes, row.primaryTag);
           if (input.rejudgePdf) {
             await notionRequest("PATCH", `/pages/${ex.pageId}`, {
@@ -1041,11 +1082,17 @@ export async function upsertDisclosuresByStock(
       // インフラ失敗は捏造せず添付なし + 状態列に正直記録し、行は作成/
       // 更新を継続 (資料URL列で出典担保・1 行の失敗でバッチ全体を落と
       // さない — ルール1/2)。一過性失敗は error にして再実行で収束。
-      const pdf = await fetchIrPdf(
-        row.documentUrl,
-        `${row.ticker}_${row.pubdate.slice(0, 10)}_${row.key}`,
-        row.ticker
-      );
+      const fetchStarted = performance.now();
+      let pdf: PdfFetch;
+      try {
+        pdf = await fetchIrPdf(
+          row.documentUrl,
+          `${row.ticker}_${row.pubdate.slice(0, 10)}_${row.key}`,
+          row.ticker
+        );
+      } finally {
+        recordIrPdfPdfFetch(performance.now() - fetchStarted);
+      }
       let irFile: Array<{
         name: string;
         type: "file_upload";
@@ -1215,6 +1262,15 @@ export async function upsertDisclosuresByStock(
       if (pdfClassification !== null) {
         input.onPdfClassified?.(row.key, pdfClassification);
       }
+    } finally {
+      endIrPdfItemTiming();
+      console.info(formatIrPdfItemTimingLine({
+        tdnetId: row.key,
+        totalMs: Math.round(performance.now() - itemStarted),
+        timing: itemTiming,
+        stockCache: stockCacheLabel,
+      }));
+    }
   }
   } finally {
     logIrPdfIncident("skippedNoFile", skippedNoFileKeys);
