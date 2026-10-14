@@ -1,0 +1,10 @@
+{
+  "source": "same stock-sync stocks-session HTTP response, archived macro JP close cache",
+  "cacheKey": "macro/jp-close/2026-10-14.json",
+  "archivePageId": "3f9d74ff-84cd-815b-a772-c5f3536ce88a",
+  "receivedAt": "2026-10-14T09:02:12.223Z",
+  "byteLength": 2832,
+  "sha256": "82343be04851794a5dfe682e22a8cb7a731159aaf256a8a9e993f02ba1d38772",
+  "bytesUnmodified": true,
+  "newUpstreamGet": 0
+}
