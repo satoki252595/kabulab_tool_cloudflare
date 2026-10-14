@@ -497,7 +497,8 @@ export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo
     fullMetadataReadback: true, oldLatchUnchanged: true, cursor: state.cursor, rawGets: 1, rawGetBytes: raw.body.length,
     rawPuts: 0, d1Reads: 2, d1Inserts: 1, receiptGets, receiptPuts, r2Gets, r2ReadBytes, r2PutBytes,
     r2TransferBytes: r2ReadBytes + r2PutBytes, requests: r2Gets + receiptPuts + 3, requestLimit: 19,
-    d1ResponseBytesMeasured: false, elapsedMs: io.now() - started, notionDownloads: 0, upstreamGets: 0, stateResets: 0 };
+    d1ResponseBytesMeasured: false, sdkErrorResponseBytesMeasured: false,
+    elapsedMs: io.now() - started, notionDownloads: 0, upstreamGets: 0, stateResets: 0 };
   await io.emit({ phase: "resolution_complete", ...result });
   return result;
 }
@@ -721,11 +722,12 @@ async function main() {
   } catch (error) {
     // 生URL/body/causeをログへ出さない。remote stateに結果不明phaseが残る。
     const failurePhase = lastPhase;
-    if (opts.mode === "inspect" && error instanceof Error) {
+    if ((opts.mode === "inspect" || opts.reconcileSha256 !== undefined) && error instanceof Error) {
       const native = error as Error & { $metadata?: { httpStatusCode?: unknown; requestId?: unknown } };
       const details = encode({ name: native.name, message: native.message, stack: native.stack,
-        status: native.$metadata?.httpStatusCode, requestId: native.$metadata?.requestId });
-      await emit({ phase: "inspect_error_private", diagnosticKind: "exception_json_not_http_body", bytes: details.length,
+        status: native.$metadata?.httpStatusCode, requestId: native.$metadata?.requestId, $metadata: native.$metadata });
+      await emit({ phase: opts.mode === "inspect" ? "inspect_error_private" : "reconcile_error_private",
+        diagnosticKind: "exception_json_not_http_body", bytes: details.length,
         complete: details.length <= 16 * 1024, prefixBase64: Buffer.from(details.subarray(0, 16 * 1024)).toString("base64") });
     }
     const after = notionStats();

@@ -9,7 +9,7 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-15
 
-- RAW原本索引の明示単一reconcileで、保存manifestを含む全R2転送を64MiB以内、開始期限を600秒以内へ制限。各GETの単発読取・本文上限・中断証跡を固定し、旧unknownと単発索引INSERTの保護を維持した。
+- RAW原本索引の明示単一reconcileで、保存manifestを含む観測R2オブジェクト本文とreceipt PUT本文を64MiB以内、開始期限を600秒以内へ制限。各GETの単発読取・本文上限・中断証跡を固定し、SDK例外を私有保全して旧unknownと単発索引INSERTの保護を維持した。
 
 ## 2026-10-14
 

@@ -255,7 +255,7 @@ describe("人間判断後の単一索引reconcile", () => {
     const result = await runRawBackfill(f.reconcile, f.io);
     expect(result).toMatchObject({ status: "manual_index_reconciliation_complete", originalSendUnknown: true,
       reconciliationInsertAttempts: 1, rawGets: 1, rawPuts: 0, d1Inserts: 1, receiptPuts: 2, oldLatchUnchanged: true,
-      receiptGets: 13, r2Gets: 14, requests: 19, requestLimit: 19, d1ResponseBytesMeasured: false });
+      receiptGets: 13, r2Gets: 14, requests: 19, requestLimit: 19, d1ResponseBytesMeasured: false, sdkErrorResponseBytesMeasured: false });
     const gets = await Promise.all(vi.mocked(f.io.get).mock.results.map(call => call.value));
     const putBytes = vi.mocked(f.io.put).mock.calls.reduce((total, call) => total + call[1].length, 0);
     const readBytes = gets.reduce((total, got) => total + (got === null ? 0 : got.body.length), 0);
