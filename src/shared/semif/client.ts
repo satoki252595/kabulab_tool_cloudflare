@@ -70,8 +70,18 @@ type SpawnFn = typeof nodeSpawn;
 type ChildProcess = ReturnType<SpawnFn>;
 
 export interface SemifClient extends JevClient {
+  askNoul(state: string, questions: Record<string, JevNoulQuestion>, exchange?: LocalDecisionExchange): Promise<JevAskResult & { reused?: true }>;
   /** 常駐モデルを解放する。未起動ならプロセスを作らない。 */
   close(): void;
+}
+
+/** 通常biztagの同期durable sink。省略時のSemIf/競合判定は従来どおり。 */
+export interface LocalDecisionExchange {
+  replay?: JevAskResult;
+  decidedAt?: string;
+  beforeSend(line: Uint8Array): void;
+  response(line: Uint8Array, complete: boolean): void;
+  accepted(result: JevAskResult): void;
 }
 
 export interface CreateSemifClientOptions {
@@ -120,6 +130,7 @@ const ResponseLineSchema = z.union([
 ]);
 
 interface PendingRequest {
+  exchange?: LocalDecisionExchange;
   resolve: (line: unknown) => void;
   reject: (err: unknown) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -129,10 +140,11 @@ interface PendingRequest {
 class SemifServerProcess {
   private child: ChildProcess | null = null;
   private readyPromise: Promise<void> | null = null;
-  private stdoutBuffer = "";
+  private stdoutBuffer: Buffer = Buffer.alloc(0);
   private pending = new Map<string, PendingRequest>();
   private nextRequestId = 0;
   private deadError: Error | null = null;
+  private lastExchange: LocalDecisionExchange | undefined;
 
   constructor(private readonly o: Required<LocalDecisionClientOptions>) {}
 
@@ -186,12 +198,18 @@ class SemifServerProcess {
       }, this.o.readyTimeoutMs);
 
       child.stdout?.on("data", (chunk: Buffer | string) => {
-        this.stdoutBuffer += chunk.toString();
+        if (this.deadError) return;
+        this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, Buffer.from(chunk)]);
+        if (this.stdoutBuffer.length > 1024 * 1024 && (this.lastExchange || [...this.pending.values()].some(p => p.exchange))) {
+          this.fail(new SemifUnavailableError("local model response exceeds durable line budget"));
+          return;
+        }
         for (;;) {
-          const idx = this.stdoutBuffer.indexOf("\n");
+          const idx = this.stdoutBuffer.indexOf(10);
           if (idx < 0) break;
-          const line = this.stdoutBuffer.slice(0, idx).trim();
-          this.stdoutBuffer = this.stdoutBuffer.slice(idx + 1);
+          const raw = this.stdoutBuffer.subarray(0, idx + 1);
+          const line = raw.toString("utf8").trim();
+          this.stdoutBuffer = this.stdoutBuffer.subarray(idx + 1);
           if (line.length === 0) continue;
 
           if (!settledReady) {
@@ -229,6 +247,14 @@ class SemifServerProcess {
             }
             resolveReady();
             continue;
+          }
+          try {
+            const exchanges = [...this.pending.values()].flatMap(p => p.exchange ? [p.exchange] : []);
+            if (exchanges.length === 0) this.lastExchange?.response(raw, true);
+            else for (const exchange of exchanges) exchange.response(raw, true);
+          } catch (cause) {
+            this.fail(new SemifUnavailableError("local model response journal failed", { cause }));
+            return;
           }
           this.handleResponseLine(line);
         }
@@ -269,6 +295,15 @@ class SemifServerProcess {
   private fail(err: Error): void {
     const child = this.child;
     this.deadError = err;
+    if (this.stdoutBuffer.length > 0) {
+      try {
+        const exchanges = [...this.pending.values()].flatMap(p => p.exchange ? [p.exchange] : []);
+        if (exchanges.length === 0) this.lastExchange?.response(this.stdoutBuffer, false);
+        else for (const exchange of exchanges) exchange.response(this.stdoutBuffer, false);
+      }
+      catch { /* original intent/partial artifact remains; never accept or retry */ }
+      this.stdoutBuffer = Buffer.alloc(0);
+    }
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
       p.reject(err);
@@ -281,6 +316,10 @@ class SemifServerProcess {
 
   close(): void {
     this.fail(new SemifUnavailableError("SemIf 常駐プロセスを終了しました"));
+  }
+
+  assertAlive(): void {
+    if (this.deadError) throw this.deadError;
   }
 
   private handleResponseLine(line: string): void {
@@ -324,7 +363,8 @@ class SemifServerProcess {
     pendingReq.resolve(data);
   }
 
-  async request(state: string, questions: Record<string, JevNoulQuestion>): Promise<Record<string, number>> {
+  async request(state: string, questions: Record<string, JevNoulQuestion>, exchange?: LocalDecisionExchange): Promise<Record<string, number>> {
+    if (exchange && this.pending.size > 0) throw new Error("durable model requests must be sequential");
     await this.ensureStarted();
     if (this.deadError) throw this.deadError;
     const child = this.child;
@@ -357,6 +397,7 @@ class SemifServerProcess {
       }, this.o.requestTimeoutMs);
 
       this.pending.set(requestId, {
+        exchange,
         resolve: (line: unknown) => {
           const data = line as { id: string; answers?: Record<string, number>; error?: string };
           if (data.error !== undefined) {
@@ -374,10 +415,14 @@ class SemifServerProcess {
       });
 
       try {
-        child.stdin!.write(`${JSON.stringify(request)}\n`);
+        const line = `${JSON.stringify(request)}\n`;
+        exchange?.beforeSend(Buffer.from(line));
+        this.lastExchange = exchange;
+        child.stdin!.write(line);
       } catch (err) {
         this.pending.delete(requestId);
         clearTimeout(timer);
+        if (exchange) this.fail(new SemifUnavailableError("local model request journal/send failed", { cause: err }));
         reject(
           new SemifUnavailableError(`semif_server.py への書き込みに失敗しました: ${err instanceof Error ? err.message : String(err)}`, {
             cause: err,
@@ -419,42 +464,58 @@ export function createLocalDecisionClient(o: LocalDecisionClientOptions): SemifC
 
   return {
     close: () => proc.close(),
-    async askNoul(state: string, questions: Record<string, JevNoulQuestion>): Promise<JevAskResult> {
+    async askNoul(state: string, questions: Record<string, JevNoulQuestion>, exchange?: LocalDecisionExchange): Promise<JevAskResult & { reused?: true }> {
       const qids = Object.keys(questions);
       if (qids.length === 0) {
         throw new Error("semif askNoul: questions が空です（呼び出し側の実装ミス）");
       }
-      const start = now();
-      const answers = await proc.request(state, questions);
+      try {
+        proc.assertAlive();
+        const start = now();
+        const replay = exchange?.replay;
+        const answers = replay ? replay.answers : await proc.request(state, questions, exchange);
+        proc.assertAlive();
 
-      // 依頼した questionId と過不足なく一致するか厳密検証する
-      // (一部だけ既定値で埋めて返すことは絶対にしない。ルール2)。
-      for (const qid of qids) {
-        const p = answers[qid];
-        if (p === undefined) {
-          throw new SemifUnavailableError(`semif_server.py の応答に質問 "${qid}" の回答がありません（想定していない欠落）`);
+        // 依頼した questionId と過不足なく一致するか厳密検証する
+        // (一部だけ既定値で埋めて返すことは絶対にしない。ルール2)。
+        for (const qid of qids) {
+          const p = answers[qid];
+          if (p === undefined) {
+            throw new SemifUnavailableError(`semif_server.py の応答に質問 "${qid}" の回答がありません（想定していない欠落）`);
+          }
+          if (!(p >= 0 && p <= 1)) {
+            throw new SemifUnavailableError(`semif_server.py の質問 "${qid}" への応答が不正です（0..1 ではありません）: ${p}`);
+          }
         }
-        if (!(p >= 0 && p <= 1)) {
-          throw new SemifUnavailableError(`semif_server.py の質問 "${qid}" への応答が不正です（0..1 ではありません）: ${p}`);
+        const extraKeys = Object.keys(answers).filter((k) => !qids.includes(k));
+        if (extraKeys.length > 0) {
+          throw new SemifUnavailableError(
+            `semif_server.py が依頼していない質問への回答を返しました（実装ミス）: ${extraKeys.join(",")}`
+          );
         }
-      }
-      const extraKeys = Object.keys(answers).filter((k) => !qids.includes(k));
-      if (extraKeys.length > 0) {
-        throw new SemifUnavailableError(
-          `semif_server.py が依頼していない質問への回答を返しました（実装ミス）: ${extraKeys.join(",")}`
-        );
-      }
 
-      return {
-        model: o.model,
-        answers,
-        // 既存 JevClient 形式の互換値。トークン数・ローカル計算費用は未計測。
-        // 呼出側で not_metered_local と明記し、実測ゼロと解釈しない。
-        inputTokens: 0,
-        outputTokens: 0,
-        latencyMs: now() - start,
-        attempts: 1,
-      };
+        if (replay) {
+          if (replay.model !== o.model) throw new SemifUnavailableError("saved model output identity differs");
+          return { ...replay, reused: true };
+        }
+
+        const result = {
+          model: o.model,
+          answers,
+          // 既存 JevClient 形式の互換値。トークン数・ローカル計算費用は未計測。
+          // 呼出側で not_metered_local と明記し、実測ゼロと解釈しない。
+          inputTokens: 0,
+          outputTokens: 0,
+          latencyMs: now() - start,
+          attempts: 1,
+        };
+        try { exchange?.accepted(result); }
+        catch (cause) { proc.close(); throw new SemifUnavailableError("local model accepted-output journal failed", { cause }); }
+        return result;
+      } catch (error) {
+        if (exchange) proc.close();
+        throw error;
+      }
     },
   };
 }

@@ -14,7 +14,7 @@
  */
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { createSemifClient, SemifUnavailableError, SEMIF_MODEL, SEMIF_SOURCE_REVISION, SEMIF_MLX_VERSION, SEMIF_MLX_LM_REVISION } from "./client.js";
+import { createSemifClient, SemifUnavailableError, SEMIF_MODEL, SEMIF_SOURCE_REVISION, SEMIF_MLX_VERSION, SEMIF_MLX_LM_REVISION, type LocalDecisionExchange } from "./client.js";
 import type { JevNoulQuestion } from "../jev/client.js";
 import { createClefClient, CLEF_MODEL, CLEF_MANIFEST } from "../clef/client.js";
 
@@ -28,6 +28,7 @@ interface FakeRequest {
 function makeFakeServerSpawn(opts: {
   readyLine?: unknown;
   respond: (req: FakeRequest) => unknown | "hang";
+  chunks?: (line: Buffer) => Buffer[];
 }) {
   const spawnCalls: Array<{ command: string; args: string[] }> = [];
   const writtenRequests: FakeRequest[] = [];
@@ -51,7 +52,8 @@ function makeFakeServerSpawn(opts: {
         const resp = opts.respond(req);
         if (resp === "hang") return;
         queueMicrotask(() => {
-          child.stdout.emit("data", Buffer.from(`${JSON.stringify(resp)}\n`));
+          const line = Buffer.from(`${JSON.stringify(resp)}\n`);
+          for (const chunk of opts.chunks ? opts.chunks(line) : [line]) child.stdout.emit("data", chunk);
         });
       },
     };
@@ -111,6 +113,57 @@ describe("Clef native JSONL boundary", () => {
       await expect(client.askNoul("原文", Q)).rejects.toThrow(SemifUnavailableError);
       expect(fake.writtenRequests).toHaveLength(0);
     } finally { client.close(); }
+  });
+});
+
+describe("durable protocol faults — offline controls, no real process/model", () => {
+  function sink(): LocalDecisionExchange {
+    return { beforeSend: vi.fn(), response: vi.fn(), accepted: vi.fn() };
+  }
+  it("intent sink finishes before stdin; response sink finishes before accepted result", async () => {
+    const order: string[] = [];
+    const fake = makeFakeServerSpawn({ respond: req => { order.push("stdin"); return { id: req.id, answers: Object.fromEntries(req.questions.map(q => [q.qid, 0.5])) }; } });
+    const exchange: LocalDecisionExchange = { beforeSend: () => { order.push("intent-fsynced"); }, response: () => { order.push("raw-fsynced"); }, accepted: () => { order.push("accepted-fsynced"); } };
+    const client = createSemifClient({ pythonBin: "/offline-control/python", spawnFn: fake.spawnFn });
+    await client.askNoul("offline protocol control", Q, exchange);
+    expect(order).toEqual(["intent-fsynced", "stdin", "raw-fsynced", "accepted-fsynced"]); client.close();
+  });
+  it("UTF8 chunk split retains original response bytes and an error forbids the next forward", async () => {
+    let original: Buffer | undefined;
+    const fake = makeFakeServerSpawn({ respond: req => ({ id: req.id, error: Q["cp.7203"].instructions }), chunks: line => {
+      original = line; const middle = line.indexOf(Buffer.from("本田")) + 1; return [line.subarray(0, middle), line.subarray(middle)];
+    } });
+    const exchange = sink(), client = createSemifClient({ pythonBin: "/offline-control/python", spawnFn: fake.spawnFn });
+    await expect(client.askNoul("offline protocol control", Q, exchange)).rejects.toThrow(SemifUnavailableError);
+    expect(exchange.response).toHaveBeenCalledWith(original, true); expect(exchange.accepted).not.toHaveBeenCalled();
+    await expect(client.askNoul("next forward forbidden", Q, sink())).rejects.toThrow(SemifUnavailableError);
+    expect(fake.writtenRequests).toHaveLength(1); expect(fake.spawnCalls).toHaveLength(1);
+  });
+  it("request fsync failure sends zero input and never respawns", async () => {
+    const fake = makeFakeServerSpawn({ respond: () => "hang" }), exchange = sink();
+    exchange.beforeSend = () => { throw new Error("offline intent fsync fault"); };
+    const client = createSemifClient({ pythonBin: "/offline-control/python", spawnFn: fake.spawnFn });
+    await expect(client.askNoul("offline protocol control", Q, exchange)).rejects.toThrow();
+    await expect(client.askNoul("next forward forbidden", Q, sink())).rejects.toThrow();
+    expect(fake.writtenRequests).toHaveLength(0); expect(fake.spawnCalls).toHaveLength(1);
+  });
+  it("broken response line is preserved incomplete and closes the request before a second forward", async () => {
+    const fake = makeFakeServerSpawn({ respond: () => "hang" }), exchange = sink();
+    const client = createSemifClient({ pythonBin: "/offline-control/python", spawnFn: fake.spawnFn });
+    const pending = expect(client.askNoul("offline protocol control", Q, exchange)).rejects.toThrow(SemifUnavailableError);
+    await vi.waitFor(() => expect(fake.writtenRequests).toHaveLength(1));
+    const partial = Buffer.from(JSON.stringify({ id: "req-0", error: Q["cp.7203"].instructions }).slice(0, -2));
+    fake.children[0].stdout.emit("data", partial); fake.children[0].emit("close", 1);
+    await pending; expect(exchange.response).toHaveBeenCalledWith(partial, false); expect(exchange.accepted).not.toHaveBeenCalled();
+    await expect(client.askNoul("next forward forbidden", Q, sink())).rejects.toThrow(); expect(fake.writtenRequests).toHaveLength(1);
+  });
+  it("response sink failure never accepts or starts another request", async () => {
+    const fake = makeFakeServerSpawn({ respond: req => ({ id: req.id, answers: Object.fromEntries(req.questions.map(q => [q.qid, 0.5])) }) }), exchange = sink();
+    exchange.response = () => { throw new Error("offline raw fsync fault"); };
+    const client = createSemifClient({ pythonBin: "/offline-control/python", spawnFn: fake.spawnFn });
+    await expect(client.askNoul("offline protocol control", Q, exchange)).rejects.toThrow("journal failed");
+    await expect(client.askNoul("next forward forbidden", Q, sink())).rejects.toThrow();
+    expect(exchange.accepted).not.toHaveBeenCalled(); expect(fake.writtenRequests).toHaveLength(1);
   });
 });
 
