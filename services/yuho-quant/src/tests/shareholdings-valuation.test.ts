@@ -14,17 +14,18 @@ const holding: Shareholding = { name: issuer.legalName, kind: "特定投資株�
   bookValueYen: 10000, bookValueRaw: 10, bookValueUnit: "千円", listingStatus: "unknown", price: null, priceDate: null,
   priceCurrency: null, tableIndex: 0, rowIndex: 3 };
 const ts = (date: string) => Date.parse(`${date}T00:00:00Z`) / 1000;
-function source(options: { splitDate?: string; priceDate?: string; currency?: string; issuerName?: string; eventsQuery?: boolean; duplicate?: boolean } = {}): ArchivedSource {
+function source(options: { splitDate?: string; priceDate?: string; currency?: string; issuerName?: string; symbol?: string; eventsQuery?: boolean; duplicate?: boolean } = {}): ArchivedSource {
   const date = options.priceDate === undefined ? "2026-06-30" : options.priceDate;
   const currency = options.currency === undefined ? "JPY" : options.currency;
   const name = options.issuerName === undefined ? issuer.englishName : options.issuerName;
-  const raw = Buffer.from(JSON.stringify({ chart: { result: [{ meta: { symbol: "7203.T", range: "10y", currency,
+  const symbol = options.symbol === undefined ? "7203.T" : options.symbol;
+  const raw = Buffer.from(JSON.stringify({ chart: { result: [{ meta: { symbol, range: "10y", currency,
     exchangeTimezoneName: "Asia/Tokyo", longName: name, regularMarketPrice: 100, regularMarketTime: ts("2026-07-01") },
     timestamp: [ts(date), ts("2026-07-01")], indicators: { quote: [{ open: [100, 100], high: [100, 100], low: [100, 100], close: [100, 100], volume: [1, 1] }] },
     ...(options.splitDate ? { events: { splits: { split: { date: ts(options.splitDate), numerator: 2, denominator: 1 } } } } : {}),
   }], error: null } }));
-  const member = { api: "daily", symbol: "7203.T", status: 200, receivedAt: "2026-07-02T00:00:00Z", byteLength: raw.length,
-    sha256: hash(raw), bodyBase64: raw.toString("base64"), url: `https://query1.finance.yahoo.com/v8/finance/chart/7203.T?range=10y&interval=1d${options.eventsQuery === false ? "" : "&events=split,div"}` };
+  const member = { api: "daily", symbol, status: 200, receivedAt: "2026-07-02T00:00:00Z", byteLength: raw.length,
+    sha256: hash(raw), bodyBase64: raw.toString("base64"), url: `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=10y&interval=1d${options.eventsQuery === false ? "" : "&events=split,div"}` };
   const bytes = gzipSync(Buffer.from(JSON.stringify({ version: 1, members: options.duplicate ? [member, member] : [member] })));
   return { archivePageId: "b".repeat(32), filename: "raw.json.gz", bytes, sha256: hash(bytes) };
 }
@@ -56,6 +57,30 @@ describe("保有明細の期末参考時価", () => {
   it("同義法人表記だけを正規化し、法人格削除や略称一致はしない", () => {
     expect(exactLegalName("構造㈱")).toBe("構造株式会社");
     expect(exactLegalName("構造株式会社")).not.toBe(exactLegalName("構造"));
+  });
+  // 実FSA ZIPと保存Yahoo日足の商号。価格系列だけは既存の構造検証用chartを使う。
+  it.each([
+    ["8045", "Yokohama Maruuo Co., Ltd", "Yokohama Maruuo Co., Ltd."],
+    ["7481", "oie sangyo co.,ltd", "Oie Sangyo Co., Ltd."],
+    ["9068", "Maruzen Showa Unyu Co,.Ltd.", "Maruzen Showa Unyu Co., Ltd."],
+  ])("英字商号のASCII . , 差だけを許容し、原本を変えない: %s", async (code, fsaName, priceName) => {
+    const target = [...catalog.byLegalName.values()].flat().find(row => row.code === code)!;
+    expect(target.englishName).toBe(fsaName);
+    const saved = source({ symbol: `${code}.T`, issuerName: priceName });
+    expect(await qualifyHoldingValuation({ holding: { ...holding, name: target.legalName }, fiscalYearEnd: "2026-06-30", catalog, prices: [saved] }))
+      .toMatchObject({ status: "qualified", identity: { code }, price: 100 });
+    expect(hash(saved.bytes)).toBe(saved.sha256);
+  });
+  it.each([
+    ["8418", "Yamaguchi Finacial Group,Inc.", "Yamaguchi Financial Group, Inc."],
+    ["9304", "The Shibusawa Warehouse Co.,Ltd.", "Shibusawa Logistics Corporation"],
+    ["3315", "NIPPON COKE & ENGINEERING CO., LTD.", "Nippon Coke & Engineering Company, Limited"],
+    ["6897", "TWIN-BIRD CORPORATION", "Twinbird Corporation"],
+  ])("綴り・語句・略称・ハイフン差は英字商号STOPを維持する: %s", async (code, fsaName, priceName) => {
+    const target = [...catalog.byLegalName.values()].flat().find(row => row.code === code)!;
+    expect(target.englishName).toBe(fsaName);
+    await expect(qualifyHoldingValuation({ holding: { ...holding, name: target.legalName }, fiscalYearEnd: "2026-06-30", catalog,
+      prices: [source({ symbol: `${code}.T`, issuerName: priceName })] })).rejects.toThrow("英字商号");
   });
   it("原本商号/code/JPY/同日期末株数/同日raw close/分割0を検証し、日付と出典SHAを保つ", async () => {
     const result = await qualify(source());

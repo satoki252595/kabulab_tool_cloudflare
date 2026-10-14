@@ -26,7 +26,8 @@ export type HoldingValuation =
 const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 /** (株)/㈱は株式会社の同義表記。法人格の削除・位置変更・近似/略称照合はしない。 */
 export const exactLegalName = (value: string): string => value.normalize("NFKC").replace(/\s/g, "").replaceAll("(株)", "株式会社");
-const englishName = (value: string) => value.normalize("NFKC").replace(/\s/g, "").toLowerCase();
+/** 英字商号のASCII句読点だけを同義化する。綴り・略称・ハイフンは変更しない。 */
+const englishName = (value: string) => value.normalize("NFKC").replace(/[\s.,]/g, "").toLowerCase();
 function assertSource(source: ArchivedSource): void {
   assert.match(source.archivePageId.replaceAll("-", ""), /^[a-f0-9]{32}$/i);
   assert.equal(sha(source.bytes), source.sha256, "保存原本のSHAが不一致です");
