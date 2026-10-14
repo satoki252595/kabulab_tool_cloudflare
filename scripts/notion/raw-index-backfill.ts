@@ -177,8 +177,9 @@ export function validateRawOptions(opts: RawBackfillOptions, now = Date.now()): 
   }
   if (opts.reconcileSha256 !== undefined || opts.reconcileStateSha256 !== undefined) {
     if (opts.mode !== "apply" || opts.limit !== 1 || opts.cutoff === undefined ||
+        opts.maxBytes > 64 * 1024 ** 2 || opts.maxSeconds > 600 ||
         !hashSchema.safeParse(opts.reconcileSha256).success || !hashSchema.safeParse(opts.reconcileStateSha256).success)
-      throw new Error("[raw-backfill] 明示reconcileはapply/limit1/固定cutoff/両SHAが必須です");
+      throw new Error("[raw-backfill] 明示reconcileはapply/limit1/固定cutoff/両SHA/64MiB/600秒以下が必須です");
   }
 }
 
@@ -405,18 +406,38 @@ export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo
     throw new Error("[raw-backfill] 明示reconcileはapply/limit1/固定cutoff/両SHAが必須です");
   const prefix = `ops/raw-index/${opts.planId}`, activeKey = "ops/raw-index/active.json", stateKey = `${prefix}/state.json`;
   const resolution = `${prefix}/resolutions/${opts.reconcileSha256}`;
-  let receiptGets = 0, receiptPuts = 0;
-  const checkClock = () => { if (io.now() >= started + opts.maxSeconds * 1000) throw new Error("[raw-backfill] reconcile時間予算到達。再送禁止"); };
-  const get = async (key: string) => { checkClock(); receiptGets++; return io.get(key, io.receiptBucket); };
-  const required = async (key: string) => {
-    const got = await get(key);
+  const deadline = started + opts.maxSeconds * 1000, signal = AbortSignal.timeout(opts.maxSeconds * 1000);
+  let receiptGets = 0, receiptPuts = 0, r2Gets = 0, r2ReadBytes = 0, r2PutBytes = 0;
+  const checkClock = () => { signal.throwIfAborted(); if (io.now() + 65_000 > deadline) throw new Error("[raw-backfill] reconcileの65秒headroom不足。再送禁止"); };
+  const remainingBytes = () => opts.maxBytes - r2ReadBytes - r2PutBytes;
+  // 固定フローはreceipt13GET + raw1GET。manifestは1回だけ、D1の2SELECT/1INSERTは別計数。
+  const get = async (key: string, bucket = io.receiptBucket, maxBytes = Math.min(256 * 1024, remainingBytes())) => {
+    checkClock();
+    if (r2Gets >= 14 || maxBytes < 1 || maxBytes > remainingBytes()) throw new Error("[raw-backfill] reconcile GET/bytes予算不足。再送禁止");
+    r2Gets++; if (bucket === io.receiptBucket) receiptGets++;
+    await io.emit({ phase: "reconcile_get_inflight", key, bucket, reservedBytes: maxBytes, r2Gets });
+    const got = await io.get(key, bucket, { singleAttempt: true, maxBytes, abortSignal: signal, beforeAttempt: checkClock,
+      onRead: async read => { if (!read.complete) {
+        r2ReadBytes += read.receivedBytes;
+        await io.emit({ phase: "reconcile_partial_body", key, status: read.status, etag: read.etag,
+          contentLength: read.contentLength, receivedBytes: read.receivedBytes, complete: false, r2Gets, r2ReadBytes,
+          prefixBase64: Buffer.from(read.body.subarray(0, 16 * 1024)).toString("base64") });
+      } } });
+    if (got !== null) {
+      r2ReadBytes += got.body.length;
+      if (got.body.length > maxBytes || remainingBytes() < 0) throw new Error("[raw-backfill] reconcile全文読取のbytes予算超過。再送禁止");
+    }
+    return got;
+  };
+  const required = async (key: string, maxBytes?: number) => {
+    const got = await get(key, io.receiptBucket, maxBytes);
     if (got === null) throw new Error("[raw-backfill] reconcile固定receiptが欠落しています");
     return got;
   };
   const parse = (version: NonNullable<Version>) => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(version.body));
   const activeVersion = await required(activeKey), active = Active.parse(parse(activeVersion));
   if (active.planId !== opts.planId) throw new Error("[raw-backfill] 別planがactiveです。unknownを別planで迂回できません");
-  const manifestVersion = await required(`${prefix}/manifest.json`), manifest = parseRawManifest(parse(manifestVersion), opts, io.rawBucket);
+  const manifestVersion = await required(`${prefix}/manifest.json`, remainingBytes()), manifest = parseRawManifest(parse(manifestVersion), opts, io.rawBucket);
   if (digest(manifestVersion.body) !== active.manifestSha256 || digest(encode(manifest)) !== active.manifestSha256)
     throw new Error("[raw-backfill] active manifest SHA不一致");
   const stateVersion = await required(stateKey), state = State.parse(parse(stateVersion)), inflight = state.inflight;
@@ -430,10 +451,11 @@ export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo
   if (await get(`${resolution}/intent.json`) !== null || await get(`${resolution}/complete.json`) !== null)
     throw new Error("[raw-backfill] reconcile intentが既存です。再送せず停止");
   checkClock();
-  const raw = await io.get(inflight.key, io.rawBucket);
+  const raw = await get(inflight.key, io.rawBucket, item.sizeBytes);
   if (raw === null) throw new Error("[raw-backfill] D1索引先原本が欠落。再作成せず停止");
   validateBody(raw.body, item);
   await io.emit({ phase: "raw_verified", sha256: item.sha256, bytes: raw.body.length });
+  checkClock();
   if (await io.index(item.sha256) !== null) throw new Error("[raw-backfill] reconcile索引が既存です。上書きせず停止");
   const unchanged = async () => {
     for (const [key, previous] of [[activeKey, activeVersion], [stateKey, stateVersion]] as const) {
@@ -444,8 +466,9 @@ export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo
   };
   const persist = async (key: string, value: unknown) => {
     const bytes = encode(value);
+    if (bytes.length > 256 * 1024 || bytes.length * 2 > remainingBytes()) throw new Error("[raw-backfill] reconcile receipt PUT/全文読戻しのbytes予算不足。再送禁止");
     await io.emit({ phase: "resolution_receipt_inflight", key, sha256: digest(bytes), bytes: bytes.length });
-    checkClock(); receiptPuts++;
+    checkClock(); receiptPuts++; r2PutBytes += bytes.length;
     await io.put(key, bytes, null, io.receiptBucket, "application/json");
     const read = await required(key);
     if (!Buffer.from(read.body).equals(Buffer.from(bytes))) throw new Error("[raw-backfill] receipt全文読戻し不一致。再送禁止");
@@ -461,6 +484,7 @@ export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo
   await io.emit({ phase: "index_reconciliation_insert_inflight", sha256: item.sha256, originalSendUnknown: true, reconciliationInsertAttempts: 1 });
   checkClock();
   await io.insert(expected); // plain unique INSERTだけ。競合・unknownの再送なし。
+  checkClock();
   const post = await io.index(item.sha256);
   if (post === null || Object.keys(post).sort().join("|") !== Object.keys(expected).sort().join("|") ||
       (Object.keys(expected) as Array<keyof RawIndexRow>).some(key => post[key] !== expected[key]))
@@ -471,7 +495,10 @@ export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo
   await persist(`${resolution}/complete.json`, complete);
   const result = { status: complete.status, sha256: item.sha256, originalSendUnknown: true, reconciliationInsertAttempts: 1,
     fullMetadataReadback: true, oldLatchUnchanged: true, cursor: state.cursor, rawGets: 1, rawGetBytes: raw.body.length,
-    rawPuts: 0, d1Reads: 2, d1Inserts: 1, receiptGets, receiptPuts, notionDownloads: 0, upstreamGets: 0, stateResets: 0 };
+    rawPuts: 0, d1Reads: 2, d1Inserts: 1, receiptGets, receiptPuts, r2Gets, r2ReadBytes, r2PutBytes,
+    r2TransferBytes: r2ReadBytes + r2PutBytes, requests: r2Gets + receiptPuts + 3, requestLimit: 19,
+    d1ResponseBytesMeasured: false, sdkErrorResponseBytesMeasured: false,
+    elapsedMs: io.now() - started, notionDownloads: 0, upstreamGets: 0, stateResets: 0 };
   await io.emit({ phase: "resolution_complete", ...result });
   return result;
 }
@@ -695,11 +722,12 @@ async function main() {
   } catch (error) {
     // 生URL/body/causeをログへ出さない。remote stateに結果不明phaseが残る。
     const failurePhase = lastPhase;
-    if (opts.mode === "inspect" && error instanceof Error) {
+    if ((opts.mode === "inspect" || opts.reconcileSha256 !== undefined) && error instanceof Error) {
       const native = error as Error & { $metadata?: { httpStatusCode?: unknown; requestId?: unknown } };
       const details = encode({ name: native.name, message: native.message, stack: native.stack,
-        status: native.$metadata?.httpStatusCode, requestId: native.$metadata?.requestId });
-      await emit({ phase: "inspect_error_private", diagnosticKind: "exception_json_not_http_body", bytes: details.length,
+        status: native.$metadata?.httpStatusCode, requestId: native.$metadata?.requestId, $metadata: native.$metadata });
+      await emit({ phase: opts.mode === "inspect" ? "inspect_error_private" : "reconcile_error_private",
+        diagnosticKind: "exception_json_not_http_body", bytes: details.length,
         complete: details.length <= 16 * 1024, prefixBase64: Buffer.from(details.subarray(0, 16 * 1024)).toString("base64") });
     }
     const after = notionStats();

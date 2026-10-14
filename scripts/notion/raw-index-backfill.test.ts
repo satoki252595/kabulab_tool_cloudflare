@@ -225,7 +225,7 @@ describe("人間判断後の単一索引reconcile", () => {
     f.io.insert = insert;
     const stateKey = "ops-bucket/ops/raw-index/test-plan/state.json", activeKey = "ops-bucket/ops/raw-index/active.json";
     const state = f.objects.get(stateKey)!, active = f.objects.get(activeKey)!;
-    const reconcile: RawBackfillOptions = { ...opts, limit: 1, cutoff: "2026-10-14T00:00:00.000Z", reconcileSha256: sha,
+    const reconcile: RawBackfillOptions = { ...opts, limit: 1, maxSeconds: 600, cutoff: "2026-10-14T00:00:00.000Z", reconcileSha256: sha,
       reconcileStateSha256: createHash("sha256").update(state.body).digest("hex") };
     for (const fn of [f.io.get, f.io.put, f.io.list, f.io.download, f.io.index, f.io.insert, f.io.antiJoin, f.io.emit]) vi.mocked(fn).mockClear();
     f.events.length = 0;
@@ -254,7 +254,16 @@ describe("人間判断後の単一索引reconcile", () => {
     const f = await interrupted();
     const result = await runRawBackfill(f.reconcile, f.io);
     expect(result).toMatchObject({ status: "manual_index_reconciliation_complete", originalSendUnknown: true,
-      reconciliationInsertAttempts: 1, rawGets: 1, rawPuts: 0, d1Inserts: 1, receiptPuts: 2, oldLatchUnchanged: true });
+      reconciliationInsertAttempts: 1, rawGets: 1, rawPuts: 0, d1Inserts: 1, receiptPuts: 2, oldLatchUnchanged: true,
+      receiptGets: 13, r2Gets: 14, requests: 19, requestLimit: 19, d1ResponseBytesMeasured: false, sdkErrorResponseBytesMeasured: false });
+    const gets = await Promise.all(vi.mocked(f.io.get).mock.results.map(call => call.value));
+    const putBytes = vi.mocked(f.io.put).mock.calls.reduce((total, call) => total + call[1].length, 0);
+    const readBytes = gets.reduce((total, got) => total + (got === null ? 0 : got.body.length), 0);
+    expect(result).toMatchObject({ r2ReadBytes: readBytes, r2PutBytes: putBytes, r2TransferBytes: readBytes + putBytes });
+    for (const call of vi.mocked(f.io.get).mock.calls) expect(call[2]).toMatchObject({ singleAttempt: true,
+      maxBytes: expect.any(Number), abortSignal: expect.any(AbortSignal), beforeAttempt: expect.any(Function), onRead: expect.any(Function) });
+    const manifestReads = vi.mocked(f.io.get).mock.calls.filter(call => call[0].endsWith("/manifest.json"));
+    expect(manifestReads).toHaveLength(1); expect(manifestReads[0]![2]!.maxBytes).toBeGreaterThan(20 * 1024 ** 2);
     expect(f.io.insert).toHaveBeenCalledTimes(1); expect(f.io.insert).toHaveBeenCalledWith(expectedRawIndex(item, f.io.rawBucket, key));
     expect(f.io.list).not.toHaveBeenCalled(); expect(f.io.download).not.toHaveBeenCalled(); expect(f.io.antiJoin).not.toHaveBeenCalled();
     expect(f.objects.get(f.stateKey)).toEqual(f.oldState); expect(f.objects.get(f.activeKey)).toEqual(f.oldActive);
@@ -268,6 +277,48 @@ describe("人間判断後の単一索引reconcile", () => {
     vi.mocked(f.io.put).mockClear(); vi.mocked(f.io.insert).mockClear();
     await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("intentが既存");
     expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it("manifestを含む全R2転送が残bytesを超える前に停止し、旧latchとINSERTを保持する", async () => {
+    const f = await interrupted(), get = f.io.get;
+    const manifest = f.objects.get("ops-bucket/ops/raw-index/test-plan/manifest.json")!;
+    f.io.get = vi.fn(async (target, bucket, options) => {
+      const got = await get(target, bucket, options);
+      if (got !== null && got.body.length > options!.maxBytes!) throw new Error("R2 object exceeds read byte budget");
+      return got;
+    });
+    await expect(runRawBackfill({ ...f.reconcile, maxBytes: manifest.body.length }, f.io)).rejects.toThrow("read byte budget");
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+    expect(f.objects.get(f.stateKey)).toEqual(f.oldState); expect(f.objects.get(f.activeKey)).toEqual(f.oldActive);
+  });
+  it("manifest stream中断の元prefixを16KiBまで私有receiptへ残しmutation0で止める", async () => {
+    const f = await interrupted(), get = f.io.get, partial = new Uint8Array(17 * 1024).fill(120);
+    f.io.get = vi.fn(async (target, bucket, options) => {
+      if (!target.endsWith("/manifest.json")) return get(target, bucket, options);
+      await options!.beforeAttempt!();
+      await options!.onRead!({ status: 200, etag: '"partial"', contentLength: 31579382,
+        body: partial, receivedBytes: partial.length, complete: false });
+      throw new Error("stream interrupted");
+    });
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("stream interrupted");
+    expect(f.emitted).toContainEqual(expect.objectContaining({ phase: "reconcile_partial_body", status: 200,
+      complete: false, receivedBytes: partial.length, r2Gets: 2, prefixBase64: Buffer.from(partial.subarray(0, 16 * 1024)).toString("base64") }));
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it("600秒絶対期限へ65秒headroomが欠けた送信はintent PUT前に停止する", async () => {
+    const f = await interrupted(), emit = f.io.emit;
+    let now = f.io.now(); f.io.now = () => now;
+    f.io.emit = vi.fn(async record => {
+      await emit(record);
+      if ((record as { phase: string }).phase === "resolution_receipt_inflight") now += 535001;
+    });
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("65秒headroom不足");
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+    expect(f.objects.get(f.stateKey)).toEqual(f.oldState);
+  });
+  it.each([{ maxSeconds: 601 }, { maxBytes: 64 * 1024 ** 2 + 1 }])("reconcile上限超過は最初のGET前に止める: %j", async extra => {
+    const f = await interrupted();
+    await expect(runRawBackfill({ ...f.reconcile, ...extra }, f.io)).rejects.toThrow("64MiB/600秒以下");
+    expect(f.io.get).not.toHaveBeenCalled(); expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
   });
   it.each([true, false])("明示INSERT unknown（実適用=%s）はintentを保持し二度目も送信0", async (applied) => {
     const f = await interrupted(), insert = f.io.insert;
