@@ -9,6 +9,8 @@ kabulab-cf の変更履歴。**新しい順**。PR をマージしたら、そ�
 
 ## 2026-10-15
 
+- vwap-ingest・stock-sync・catchup は、実行中の定期runがあるとき後から来た pending が先の pending を消さず、最大100件まで順番に待つ。
+
 - RAW原本索引の明示単一reconcileで、保存manifestを含む観測R2オブジェクト本文とreceipt PUT本文を64MiB以内、開始期限を600秒以内へ制限。各GETの単発読取・本文上限・中断証跡を固定し、SDK例外を私有保全して旧unknownと単発索引INSERTの保護を維持した。
 
 - Notionの通常原本保管と添付処理は、元添付名が100文字を超える入力をuploadやDB照会前に拒否する。原名を黙って短縮せず、upload名だけへの既存`.txt`付与は維持する。
