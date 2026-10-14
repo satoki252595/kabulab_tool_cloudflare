@@ -7,7 +7,7 @@ import { guardChartBars } from "../../../src/shared/yahoo/bar-sanity.js";
 import { loadMacroJpLeg, macroJpCacheKey } from "../../../src/cron/macro-jp-leg.js";
 import { notionRequest } from "../../../src/shared/notion-archive/client.js";
 import { downloadArchivedFile } from "../../moneyflow/lib/archived-files.js";
-import { r2GetVersion } from "./r2.js";
+import { r2GetVersion, type R2ReadOptions } from "./r2.js";
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../../../src/shared/yahoo/raw-custody.js";
 import { diagnoseConfirmedCloses, selectConfirmedCloses } from "../../../src/cron/macro-session.js";
 import { formatConfirmedHoldDiag, formatNullBandHoldLog } from "../../../src/cron/inc-financials-stale-diag.js";
@@ -98,16 +98,17 @@ export function resolveDailySessionSource(source: string | undefined, date: stri
 }
 const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 /** 純読取。R2は1回、既存JP manifest/VIとN225原gzipをfresh物理照合する（原本再保管なし）。 */
-export async function loadArchivedDailySessionReference(date: string): Promise<{
+export async function loadArchivedDailySessionReference(date: string, readOptions?: R2ReadOptions): Promise<{
   reference: DailySessionReference;
   custody: { source: "archived-jp-leg"; cacheKey: string; archivePageId: string; manifestSha256: string;
     n225ArchivePageId: string; n225Filename: string; n225GzipSha256: string };
 }> {
   resolveDailySessionSource("archived-jp-leg", date, new Date().toISOString());
+  const r2Options = readOptions === undefined ? { maxBytes: 20 * 1024 * 1024, abortSignal: AbortSignal.timeout(60_000) } : readOptions;
   let cacheBody: string | undefined;
   const leg = await loadMacroJpLeg({ get: async (key) => {
     assert.equal(key, macroJpCacheKey(date)); assert.equal(cacheBody, undefined, "同runのcache再GETは禁止");
-    const found = await r2GetVersion(key); if (found !== null) cacheBody = found.body; return found;
+    const found = await r2GetVersion(key, r2Options); if (found !== null) cacheBody = found.body; return found;
   }, put: async () => { throw new Error("daily session HOLD: 保存JP原本readerのPUTは禁止"); } }, date);
   if (leg === null || cacheBody === undefined) throw new Error("daily session HOLD: 明示同日の保存JP原本がありません");
   const cache = JSON.parse(cacheBody), raw = Buffer.from(cache.n225.bodyBase64, "base64");

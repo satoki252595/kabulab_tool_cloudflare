@@ -7,6 +7,7 @@ import path from "node:path";
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { sharedEnv } from "../../../src/shared/env.js";
 import { createHash } from "node:crypto";
+import { Readable } from "node:stream";
 
 const LOCAL_OUT = sharedEnv.LOCAL_OUT();
 
@@ -131,7 +132,17 @@ export async function r2Get(key: string): Promise<string | null> {
   return result === null ? null : result.body;
 }
 
-export interface R2ReadOptions { singleAttempt?: boolean; maxBytes?: number }
+export interface R2ReadOptions {
+  singleAttempt?: boolean;
+  maxBytes?: number;
+  /** Callerの絶対期限。SDK headersとbody末尾に同じsignalを適用する。 */
+  abortSignal?: AbortSignal;
+  /** 各SDK send直前の予算予約。SDK内部retryは常に1試行。 */
+  beforeAttempt?: () => void | Promise<void>;
+  /** 200応答の全body、または失敗時のbounded prefix。complete=falseは成功ではない。 */
+  onRead?: (read: { status: 200; etag: string; contentLength: number | undefined;
+    body: Uint8Array; receivedBytes: number; complete: boolean }) => void | Promise<void>;
+}
 export async function r2GetVersion(key: string, opts?: R2ReadOptions): Promise<{ body: string; etag: string; metadata?: Record<string, string> } | null> {
   const found = await r2GetBytesVersion(key, LOCAL_OUT ? undefined : sharedEnv.R2_BUCKET(), opts);
   return found === null ? null : { body: new TextDecoder().decode(found.body), etag: found.etag,
@@ -150,7 +161,10 @@ function assertMetadata(metadata: unknown): asserts metadata is Record<string, s
 /** 原本をUTF-8へ変換せず全bytesで読む。missing/unknown契約はJSON経路と共通。 */
 export async function r2GetBytesVersion(key: string, bucket: string | undefined, opts?: R2ReadOptions): Promise<{ body: Uint8Array; etag: string; metadata?: Record<string, string> } | null> {
   if (opts?.maxBytes !== undefined && (!Number.isSafeInteger(opts.maxBytes) || opts.maxBytes < 1)) throw new Error("R2 read byte budget is invalid");
+  if (opts?.onRead !== undefined && opts.maxBytes === undefined) throw new Error("R2 observed read requires a byte budget");
+  opts?.abortSignal?.throwIfAborted();
   if (LOCAL_OUT) {
+    if (opts?.beforeAttempt !== undefined || opts?.onRead !== undefined) throw new Error("R2 native read observation cannot use LOCAL_OUT");
     try {
       const p = path.join(LOCAL_OUT, key);
       if (opts?.maxBytes !== undefined && (await fs.stat(p)).size > opts.maxBytes) throw new Error("R2 object exceeds read byte budget");
@@ -172,8 +186,16 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined,
   try {
     // GET は mutation と異なり再読しても適用結果が曖昧にならない。
     // nativeな既知5xx familyだけ既存backoffへ接続し、認可/404/未知schemaは即STOP。
-    const r = await retry(() => client().send(new GetObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: AbortSignal.timeout(60_000) }),
-      opts?.singleAttempt === true ? 1 : 3, 1000, (e) => {
+    let signal: AbortSignal;
+    const attempt = async () => {
+      opts?.abortSignal?.throwIfAborted();
+      await opts?.beforeAttempt?.();
+      opts?.abortSignal?.throwIfAborted();
+      const timeout = AbortSignal.timeout(60_000);
+      signal = opts?.abortSignal === undefined ? timeout : AbortSignal.any([timeout, opts.abortSignal]);
+      return client().send(new GetObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: signal });
+    };
+    const r = opts?.singleAttempt === true ? await attempt() : await retry(attempt, 3, 1000, (e) => {
         const { code, status } = r2CauseOf(e);
         return ["InternalError", "InternalServerError", "ServiceUnavailable", "SlowDown"].includes(code) &&
           [500, 502, 503, 504].includes(status as number);
@@ -183,13 +205,48 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined,
     if (status !== 200 || !r.Body || typeof etag !== "string" || etag.length === 0) {
       throw new Error(`R2 GET 応答が不完全です: ${key}`);
     }
-    if (opts?.maxBytes !== undefined && (!Number.isSafeInteger(r.ContentLength) || r.ContentLength! < 0 || r.ContentLength! > opts.maxBytes)) {
-      (r.Body as { destroy?: () => void }).destroy?.();
-      throw new Error("R2 object length is unknown or exceeds read byte budget");
+    let body: Uint8Array;
+    if (opts?.maxBytes !== undefined || opts?.abortSignal !== undefined) {
+      const parts: Uint8Array[] = [];
+      let receivedBytes = 0, preservedBytes = 0;
+      const stream = r.Body;
+      let onAbort: (() => void) | undefined;
+      try {
+        if (opts.maxBytes !== undefined && (!Number.isSafeInteger(r.ContentLength) || r.ContentLength! < 0 || r.ContentLength! > opts.maxBytes)) {
+          throw new Error("R2 object length is unknown or exceeds read byte budget");
+        }
+        if (r.Metadata !== undefined) assertMetadata(r.Metadata);
+        if (!(stream instanceof Readable)) throw new Error("R2 bounded read requires a native Node stream");
+        const aborted = new Promise<never>((_resolve, reject) => {
+          onAbort = () => { stream.destroy(); reject(signal.reason); };
+          signal.addEventListener("abort", onAbort, { once: true });
+        });
+        signal!.throwIfAborted();
+        await Promise.race([aborted, (async () => {
+          for await (const chunk of stream) {
+            if (!(chunk instanceof Uint8Array)) throw new Error("R2 body chunk is not bytes");
+            receivedBytes += chunk.length;
+            const available = opts.maxBytes === undefined ? chunk.length : Math.min(chunk.length, opts.maxBytes - preservedBytes);
+            if (available > 0) { parts.push(Buffer.from(chunk.subarray(0, available))); preservedBytes += available; }
+            if (opts.maxBytes !== undefined && receivedBytes > opts.maxBytes) throw new Error("R2 object exceeds read byte budget");
+            signal!.throwIfAborted();
+          }
+          if (opts.maxBytes !== undefined && receivedBytes !== r.ContentLength) throw new Error("R2 object body length differs from ContentLength");
+        })()]);
+        signal!.throwIfAborted();
+        body = Buffer.concat(parts, preservedBytes);
+      } catch (error) {
+        (stream as { destroy?: () => void }).destroy?.();
+        await opts.onRead?.({ status: 200, etag, contentLength: r.ContentLength, body: Buffer.concat(parts, preservedBytes), receivedBytes, complete: false });
+        throw error;
+      } finally {
+        if (onAbort !== undefined) signal!.removeEventListener("abort", onAbort);
+      }
+      await opts.onRead?.({ status: 200, etag, contentLength: r.ContentLength, body, receivedBytes, complete: true });
+    } else {
+      if (r.Metadata !== undefined) assertMetadata(r.Metadata);
+      body = await r.Body.transformToByteArray();
     }
-    if (r.Metadata !== undefined) assertMetadata(r.Metadata);
-    const body = await r.Body.transformToByteArray();
-    if (opts?.maxBytes !== undefined && body.length > opts.maxBytes) throw new Error("R2 object exceeds read byte budget");
     return { body, etag, ...(r.Metadata === undefined ? {} : { metadata: r.Metadata }) };
   } catch (e) {
     const err = e as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
