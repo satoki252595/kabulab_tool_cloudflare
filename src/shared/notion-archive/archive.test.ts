@@ -72,6 +72,16 @@ describe("notion-archive archive (parentPageId)", () => {
   const load = () => import("./archive.js");
 
   describe("recordPrimaryData", () => {
+    it("実118文字添付名の上限超過はsearch/upload/page作成前に拒否する", async () => {
+      const { recordPrimaryData } = await load();
+      const filename = "stock-saved8303-stock-saved8303-finite-v5-PRE-eca0cad159c9a4024895a29a964ad4cd88bc579afb3929f2a56eaae1d6f79463.json.gz";
+      expect(filename).toHaveLength(118);
+      await expect(recordPrimaryData({ service: "stock-sync", key: "length-preflight-regression", source: "saved native validation_error", metadata: {}, files: [
+        { filename, bytes: Uint8Array.of(0x1f, 0x8b), contentType: "application/gzip" },
+      ] })).rejects.toThrow("100文字");
+      expect(calls).toHaveLength(0);
+    });
+
     it("parentPageId 省略時は NOTION_ARCHIVE_PAGE_ID 配下の「一次データ｜<service>」を使う (既存挙動)", async () => {
       route("POST", "/v1/search", [emptySearch()]);
       route("GET", `/v1/blocks/${ARCHIVE_PAGE}/children`, [emptyChildren()]);
