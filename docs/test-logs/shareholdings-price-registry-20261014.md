@@ -28,10 +28,16 @@ nix develop --offline -c pnpm exec tsx scripts/sync/bootstrap-holdings-price.ts 
   --mode=apply --out=<reviewed-private-directory> --approved-plan-sha=<reviewed-64hex>
 ```
 
-現在は**NOT_ACTIVATED**。private candidate SHA `b940dd66af52055e4773ac4b2d639c655461884e51dd8e6de18ccbdbb0c9f41f`、1,370,373B。過去prototype、原本、旧plansは保全した。
+prepare当時は**NOT_ACTIVATED**。private candidate SHA `b940dd66af52055e4773ac4b2d639c655461884e51dd8e6de18ccbdbb0c9f41f`、1,370,373B。過去prototype、原本、旧plansは保全した。
 
 ## 検証・増分
 
 - 新schema/同PUT/native読取/CAS/unknown/明示memberとbootstrapを含む8suiteは122 pass、既存3 skip。fresh資格失敗・旧状態競合send0、4CAS成功、二度目STOPも検証した。全repo tsc、変更対象eslint、diffcheckはPASS。
 - 実固定116/3456を保存bytesだけで全再検証：20.608秒、観測peakRSS390,873,088B。公式銘柄表込み173,761,367B。全raw SHA/実clock/10/2末尾が一致。Notion/R2/upstream GET・remote writeは0であり、fresh本番物理受入ではない。
 - 初回native/hosted読取以外に原文の追加保存はない。通常全量activationは最大8小型/manifest GET＋4metadata PUT、manifest約1.4MiB。partial/参照欠測ではactivation write0。価格側100rows/116chunks/256MiBの別予算と結果未確定ラッチは通常queue側で管理する。
+
+## 初回本番有効化
+
+PR379/main `5ca89ccc746c3d14da460adb21ab9c0c37950e3a`の52-source closureを固定し、ローカルNixで117native/117hostedの全bytesをfresh資格化した。173,761,367B、238.054秒、全3456 raw SHA/実clock/10/2末尾が一致してから4metadata CASと全文readbackを完了した。source GET・モデル・原本文の再upload・業務行write0。
+
+別の独立読取でcandidate全同値・active・activation complete・registry全文SHAを確認。registry SHA `64f72849d8d1111c9c87e838a125f5626ff94fd4451fc39bac49e87768be87f1`、117source journal SHA `53bd2e1f323bf30b1b0a35e9f1c5ee45c48193250c7d6e6130bfb86c2e717859`。10/2価格の有効化であり、最新10/13日足や全保有明細の価格追記完了には数えない。
