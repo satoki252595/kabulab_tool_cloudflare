@@ -1,0 +1,20 @@
+{
+  "provenance": {
+    "kind": "actual_native_envelope_projection_no_page_records",
+    "sourcePath": "tmp/feature-audit-20261013/holdings-inventory-finite-suffix-002-20261014-v1/read-once/response-50.json",
+    "sourceSha256": "5d85397dfe1379e733f1515f0cb538dcc181332b321363ce157e82c3362297a5",
+    "sourceBytes": 435571,
+    "observedAt": "2026-10-14T15:46:09.207Z",
+    "observedResultCount": 100,
+    "projection": "Only list envelope metadata; page records and private file URLs are omitted."
+  },
+  "envelope": {
+    "object": "list",
+    "has_more": false,
+    "next_cursor": null,
+    "request_status": {
+      "type": "incomplete",
+      "incomplete_reason": "query_result_limit_reached"
+    }
+  }
+}

@@ -7,6 +7,7 @@
  * 非 list (GET 単体・create・PATCH) の不干渉は既存 retry/create cases が担保。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import cappedNativeMetadata from "./fixtures/query-result-limit-metadata.json";
 
 describe("notion-archive client list guard", () => {
   const ORIG_ENV = { ...process.env };
@@ -105,6 +106,38 @@ describe("notion-archive client list guard", () => {
       expect(fetchCount).toBe(2);
     }
   );
+
+  it("保存nativeの末尾false/nullでもrequest_status incompleteなら全量扱いせずfetch1でSTOPする", async () => {
+    // 実応答のmetadata投影。行本文/署名URLをfixtureへ含めず、envelopeだけ検査する。
+    const projected = { ...cappedNativeMetadata.envelope, results: [] };
+    script = [{ status: 200, body: projected }];
+    const { notionRequest, NotionConfigError } = await load();
+    await expect(notionRequest("POST", "/databases/dddddddddddddddddddddddddddddddddd/query", {}))
+      .rejects.toThrow(NotionConfigError);
+    expect(fetchCount).toBe(1);
+  });
+
+  it("request_status completeは原値保持し、incompleteはhas_more=trueの最初のpageでもSTOPする", async () => {
+    const complete = { ...valid, request_status: { type: "complete" } };
+    const incompleteMore = { ...validMore, request_status: cappedNativeMetadata.envelope.request_status };
+    script = [{ status: 200, body: complete }, { status: 200, body: incompleteMore }];
+    const { notionRequest, NotionConfigError } = await load();
+    expect(await notionRequest("POST", "/databases/dddddddddddddddddddddddddddddddddd/query", {})).toEqual(complete);
+    await expect(notionRequest("POST", "/databases/dddddddddddddddddddddddddddddddddd/query", {}))
+      .rejects.toThrow(NotionConfigError);
+    expect(fetchCount).toBe(2);
+  });
+
+  it.each([null, [], "complete", {}, { type: "unknown" }, { type: "incomplete" },
+    { type: "complete", incomplete_reason: "query_result_limit_reached" }, { type: "complete", incomplete_reason: null },
+    { type: "complete", unknown: true }])("未知/不正request_status %jは値を出さずfetch1でSTOPする", async requestStatus => {
+    script = [{ status: 200, body: { ...valid, request_status: requestStatus } }];
+    const { notionRequest, NotionConfigError } = await load();
+    const error = await notionRequest("POST", "/databases/dddddddddddddddddddddddddddddddddd/query", {}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NotionConfigError);
+    expect((error as Error).message).toBe("Notion list 応答が不正 (endpoint=database-query) field=request_status: 未完/未知/不正な状態");
+    expect(fetchCount).toBe(1);
+  });
 
   const malformed: Array<{
     name: string;
@@ -284,6 +317,14 @@ describe("notion-archive client list guard", () => {
       script = [{ status: 200, body: singular }];
       const { notionRequest } = await load();
       expect(await notionRequest("GET", propPath)).toEqual(singular);
+    });
+
+    it("singularでも存在するincomplete markerを無視しない", async () => {
+      script = [{ status: 200, body: { object: "property_item", type: "title", id: "t",
+        request_status: cappedNativeMetadata.envelope.request_status } }];
+      const { notionRequest, NotionConfigError } = await load();
+      await expect(notionRequest("GET", propPath)).rejects.toThrow(NotionConfigError);
+      expect(fetchCount).toBe(1);
     });
 
     it("object 判別子の欠落・不正は reject する", async () => {

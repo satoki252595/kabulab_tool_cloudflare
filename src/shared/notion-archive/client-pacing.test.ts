@@ -60,3 +60,32 @@ it("開始後にrateを変更できない", async () => {
   expect(() => setNotionMaxRps(0.25)).toThrow("pacing");
   expect(starts).toEqual([0]);
 });
+
+it("APIとhostedの再GETは同じ.25rps枠を使い、予定待機中abortは送信しない", async () => {
+  const { notionRequest, setNotionMaxRps, paceNotionNativeRequest } = await load();
+  const { downloadArchivedFile } = await import("./archived-download.js");
+  setNotionMaxRps(0.25);
+  let hostedAttempts = 0;
+  globalThis.fetch = async input => {
+    starts.push(performance.now());
+    if (String(input).includes("file.notion.so") && ++hostedAttempts === 1) throw new TypeError("fetch failed");
+    return new Response("{}");
+  };
+  const work = (async () => {
+    await notionRequest("GET", "/metadata");
+    await downloadArchivedFile({ name: "source.zip", url: "https://file.notion.so/source.zip" }, "mixed", {
+      maxBytes: 2, onAttempt: event => event.phase === "start" ? paceNotionNativeRequest() : undefined,
+    });
+    await notionRequest("GET", "/next");
+  })();
+  await vi.runAllTimersAsync(); await work;
+  expect(starts).toEqual([0, 4000, 8000, 12000]);
+  const parent = new AbortController(), reason = new Error("absolute deadline");
+  const blocked = downloadArchivedFile({ name: "source.zip", url: "https://file.notion.so/source.zip" }, "aborted", {
+    maxBytes: 2, signal: parent.signal, onAttempt: event => event.phase === "start" ? paceNotionNativeRequest(parent.signal) : undefined,
+  });
+  const check = expect(blocked).rejects.toBe(reason);
+  await vi.advanceTimersByTimeAsync(1000); parent.abort(reason);
+  await vi.runAllTimersAsync(); await check;
+  expect(starts).toHaveLength(4);
+});

@@ -9,7 +9,7 @@ import { archiveYahooRawBatch } from "../../../src/shared/yahoo/raw-custody.js";
 import { notionRequest } from "../../../src/shared/notion-archive/client.js";
 import { downloadArchivedFile } from "../../moneyflow/lib/archived-files.js";
 import { r2GetVersion, r2Put } from "./r2.js";
-import { loadArchivedDailySessionReference, qualifyDailySessionReference, resolveDailySessionSource } from "./daily-session.js";
+import { loadArchivedDailySessionReference, loadArchivedStockDailySessionReference, qualifyDailySessionReference, resolveDailySessionSource } from "./daily-session.js";
 
 vi.mock("../../../src/cron/macro-jp-leg.js", async (original) => ({ ...await original<typeof import("../../../src/cron/macro-jp-leg.js")>(), loadMacroJpLeg: vi.fn() }));
 vi.mock("../../../src/shared/yahoo/client.js", async (original) => ({ ...await original<typeof import("../../../src/shared/yahoo/client.js")>(), fetchChart: vi.fn() }));
@@ -48,6 +48,41 @@ beforeEach(() => {
     return { n225: { value: 67744.2890625, prev: 67777.5234375, date }, nikkeiVi: 28.09, nikkeiViDate: date,
       reference: { kind: "archived-jp-leg", expectedDate: date, cacheKey: `macro/jp-close/${date}.json`, archivePageId: "3f9d74ff-84cd-8115-a6fc-f4d19bacd5ae", manifestSha256: "8f39a04649109715fc1cad4669d27b411b7f13c25bc8662f04de9c086285d81e",
         n225: { sha256: sha(raw), receivedAt: clock, archivePages: [pageId] }, vi: { sha256: "bff9db7d529c02e87168c165ee7fa4718b0a30bf53f6bf6111081bb3013eb418", receivedAt: "2026-10-14T09:02:16.025Z", status: 200 } } };
+  });
+});
+
+describe("explicit saved-stock UTC session policy", () => {
+  it.each(["2026-10-14T15:00:00.000Z", "2026-10-14T20:59:59.999Z"])("%s preserves actual source clocks/SHA while distinguishing the real qualification clock", async actualNow => {
+    vi.setSystemTime(new Date(actualNow));
+    const result = await loadArchivedStockDailySessionReference(date);
+    expect(result.reference).toEqual({ date, observedAt: clock, rawSha: sha(raw) });
+    expect(result.qualification).toEqual({ policy: "stock-sync-utc", asOfDate: date, qualifiedAt: actualNow });
+    expect(result.custody.n225GzipSha256).toBe(sha(physical().gzip));
+    expect(r2GetVersion).toHaveBeenCalledTimes(1); expect(notionRequest).toHaveBeenCalledTimes(1); expect(downloadArchivedFile).toHaveBeenCalledTimes(1);
+    expect(fetchChart).not.toHaveBeenCalled(); expect(archiveYahooRawBatch).not.toHaveBeenCalled(); expect(r2Put).not.toHaveBeenCalled();
+    // Same saved date remains outside the independent VWAP JST policy.
+    await expect(loadArchivedDailySessionReference(date)).rejects.toThrow("同日date");
+    expect(r2GetVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["2026-10-14T06:29:59.999Z", date], ["2026-10-14T21:00:00.000Z", date],
+    ["2026-10-15T00:00:00.000Z", date], [now, "2026-10-13"], [now, "2026-10-15"], [now, "2026-02-30"],
+  ])("%s / %s rejects before all source/storage reads", async (actualNow, requestedDate) => {
+    vi.setSystemTime(new Date(actualNow));
+    await expect(loadArchivedStockDailySessionReference(requestedDate)).rejects.toThrow();
+    expect(r2GetVersion).not.toHaveBeenCalled(); expect(notionRequest).not.toHaveBeenCalled(); expect(downloadArchivedFile).not.toHaveBeenCalled(); expect(fetchChart).not.toHaveBeenCalled();
+  });
+
+  it("rechecks actual UTC deadline after physical read and never replaces missing/invalid provenance", async () => {
+    vi.mocked(downloadArchivedFile).mockImplementationOnce(async () => { vi.setSystemTime(new Date("2026-10-14T21:00:00.000Z")); return physical().gzip; });
+    await expect(loadArchivedStockDailySessionReference(date)).rejects.toThrow("翌06:00 JST基準");
+    vi.setSystemTime(new Date(now));
+    vi.mocked(downloadArchivedFile).mockResolvedValueOnce(new Uint8Array([1]));
+    await expect(loadArchivedStockDailySessionReference(date)).rejects.toThrow();
+    vi.mocked(loadMacroJpLeg).mockResolvedValueOnce(null);
+    await expect(loadArchivedStockDailySessionReference(date)).rejects.toThrow("保存JP原本");
+    expect(fetchChart).not.toHaveBeenCalled(); expect(archiveYahooRawBatch).not.toHaveBeenCalled(); expect(r2Put).not.toHaveBeenCalled();
   });
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
