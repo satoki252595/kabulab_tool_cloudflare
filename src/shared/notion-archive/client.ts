@@ -41,6 +41,16 @@ export function setNotionMaxRps(maxRps: number): void {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** 明示bulkの保存hosted GETも、APIのnative試行と同じrate枠へ入れる。 */
+export async function paceNotionNativeRequest(signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  if (nativeMinIntervalMs === null) return;
+  const wait = nativeMinIntervalMs - (performance.now() - lastNativeStart);
+  if (wait > 0) await sleep(wait);
+  signal?.throwIfAborted();
+  lastNativeStart = performance.now();
+}
+
 export interface NotionStats {
   /** 実際に発行した fetch() の総数 (再試行を含む累積) */
   requests: number;
@@ -158,9 +168,7 @@ async function doFetch(
     try {
       const init = makeInit();
       if (nativeMinIntervalMs !== null) {
-        const wait = nativeMinIntervalMs - (performance.now() - lastNativeStart);
-        if (wait > 0) await sleep(wait);
-        lastNativeStart = performance.now();
+        await paceNotionNativeRequest();
       }
       stats.requests++;
       res = await fetch(url, init);

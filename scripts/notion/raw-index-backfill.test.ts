@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "../../src/shared/zod-mini.js";
 import { canonicalRawKey } from "./raw-index-plan.js";
 import { safeRawFailure, createRawDownloader, expectedRawIndex, inspectRawBackfill, parseRawManifest, runRawBackfill, type BackfillIo, type RawBackfillOptions, type RawItem, type RawIndexRow } from "./raw-index-backfill.js";
+import { downloadArchivedFile, type ArchivedDownloadOptions } from "../../src/shared/notion-archive/archived-download.js";
 import type { CanonicalRawFile } from "../../src/shared/notion-archive/raw-files.js";
 
 // Protocol fixture only: raw binary fidelity/unknown transport tests, not financial facts.
@@ -14,6 +15,7 @@ const raw: CanonicalRawFile = { pageId: "b".repeat(32), filename: "edinet_csv_10
 const { sourceUrl: _sourceUrl, ...safe } = raw;
 const item: RawItem = { ...safe, source: "EDINET", licenseTag: "commercial-ok", convertStatus: "完了", docId: "S100TEST" };
 const key = canonicalRawKey(raw, item.docId), legacy = canonicalRawKey(raw, null);
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 const opts: RawBackfillOptions = { mode: "apply", planId: "test-plan", limit: 50, maxBytes: 67108864, maxSeconds: 1200, expectedCount: 1 };
 
 function fixture() {
@@ -23,7 +25,12 @@ function fixture() {
   let version = 0;
   const io: BackfillIo = {
     rawBucket: "raw-bucket", receiptBucket: "ops-bucket", now: () => Date.parse("2026-10-14T00:00:00.000Z"),
-    list: vi.fn(async () => [raw]), download: vi.fn(async () => { events.push("hosted:GET"); return { body, wireBytes: body.length }; }),
+    list: vi.fn(async () => [raw]), download: vi.fn(async (_item, _cohort, options) => {
+      await options!.onAttempt!({ attempt: 1, phase: "start", receivedBytes: 0 });
+      events.push("hosted:GET");
+      await options!.onAttempt!({ attempt: 1, phase: "complete", receivedBytes: body.length, status: 200 });
+      return { body, wireBytes: body.length };
+    }),
     get: vi.fn(async (target, bucket) => { events.push(`${bucket}:GET:${target}`); const found = objects.get(`${bucket}/${target}`); return found === undefined ? null : found; }),
     put: vi.fn(async (target, bytes, previous, bucket) => {
       events.push(`${bucket}:PUT:${target}`);
@@ -187,11 +194,54 @@ describe("保存済⑤原本のbounded publisher", () => {
     const secondRaw = { ...raw, sha256: secondSha, pageId: "d".repeat(32) }, secondItem = { ...item, sha256: secondSha, pageId: secondRaw.pageId };
     const find = vi.fn(async () => new Map([[sha, { raw, file: { name: raw.filename, url: "https://hosted.example/1?signature=never-log" } }],
       [secondSha, { raw: secondRaw, file: { name: raw.filename, url: "https://hosted.example/2?signature=never-log" } }]]));
-    const download = vi.fn(async (file: { name: string; url: string }) => file.url.includes("/1?") ? body : secondBody);
+    const download = vi.fn(async (file: { name: string; url: string }, _context: string, options?: ArchivedDownloadOptions) => {
+      const received = file.url.includes("/1?") ? body : secondBody;
+      await options?.onAttempt?.({ attempt: 1, phase: "start", receivedBytes: 0 });
+      await options?.onAttempt?.({ attempt: 1, phase: "complete", receivedBytes: received.length, status: 200 });
+      return received;
+    });
     const fetchBody = createRawDownloader(find, download), cohort = [item, secondItem];
-    expect((await fetchBody(item, cohort)).body).toEqual(body);
-    expect((await fetchBody(secondItem, cohort)).body).toEqual(secondBody);
+    expect(await fetchBody(item, cohort)).toEqual({ body, wireBytes: body.length });
+    expect(await fetchBody(secondItem, cohort)).toEqual({ body: secondBody, wireBytes: secondBody.length });
     expect(find).toHaveBeenCalledTimes(1); expect(find).toHaveBeenCalledWith([sha, secondSha]); expect(download).toHaveBeenCalledTimes(2);
+  });
+  it("hostedのpartial＋再GET全文を予約/実bytesへ数え、intent後は期限を跨いでも必要readbackを完結する", async () => {
+    const reserved = item.sizeBytes * 5 + 2 * (Math.ceil(item.sizeBytes * 0.001) + 4096);
+    const noRoom = fixture();
+    expect(await runRawBackfill({ ...opts, mode: "dry", maxBytes: reserved - 1 }, noRoom.io)).toMatchObject({
+      processed: 0, stoppedByBudget: true, budgetStopReason: "bytes", notionDownloadAttempts: 0 });
+    expect(noRoom.io.download).not.toHaveBeenCalled();
+    const f = fixture();
+    let clock = f.io.now(); f.io.now = () => clock;
+    const find = vi.fn(async () => new Map([[sha, { raw, file: { name: raw.filename, url: "https://file.notion.so/source.zip" } }]]));
+    f.io.download = createRawDownloader(find, downloadArchivedFile);
+    let reads = 0;
+    const partial = new ReadableStream<Uint8Array>({ pull(controller) {
+      if (reads++ === 0) controller.enqueue(body.subarray(0, 2)); else controller.error(new TypeError("terminated"));
+    } });
+    const get = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(partial)).mockResolvedValueOnce(new Response(body));
+    const put = f.io.put;
+    f.io.put = vi.fn(async (...args: Parameters<BackfillIo["put"]>) => { await put(...args); if (args[3] === f.io.rawBucket) clock += opts.maxSeconds * 1000 + 1; });
+    expect(await runRawBackfill({ ...opts, maxBytes: reserved }, f.io)).toMatchObject({
+      status: "partial", processed: 1, verified: 1, cursor: 1, notionDownloads: 1, notionDownloadAttempts: 2,
+      notionDownloadBytes: 6, rawPutBytes: 4, rawGetBytes: 4, rawTransferBytes: 14,
+      hostedBytesKind: "decoded_body_all_observed_attempts", httpHeadersAndErrorBodyBytesMeasured: false,
+    });
+    expect(get).toHaveBeenCalledTimes(2); expect(find).toHaveBeenCalledOnce();
+    expect(f.rawPuts()).toHaveLength(1); expect(f.io.insert).toHaveBeenCalledOnce(); expect(f.state()).toMatchObject({ cursor: 1, inflight: null });
+    expect(f.emitted.filter(r => (r as { phase: string }).phase === "hosted_read_attempt")).toMatchObject([
+      { attempt: 1, attemptPhase: "start", receivedBytes: 0 }, { attempt: 1, attemptPhase: "transport-error", receivedBytes: 2 },
+      { attempt: 2, attemptPhase: "start", receivedBytes: 0 }, { attempt: 2, attemptPhase: "complete", receivedBytes: 4 },
+    ]);
+  });
+  it("hostedの原サイズ超過も実受信量を保存し、再GET/raw/index mutationへ進めない", async () => {
+    const f = fixture();
+    f.io.download = createRawDownloader(async () => new Map([[sha, { raw, file: { name: raw.filename, url: "https://file.notion.so/source.zip" } }]]));
+    const get = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(Uint8Array.from([1, 2, 3, 4, 5])));
+    await expect(runRawBackfill(opts, f.io)).rejects.toThrow("原本読取予算超過");
+    expect(get).toHaveBeenCalledOnce(); expect(f.rawPuts()).toHaveLength(0); expect(f.io.insert).not.toHaveBeenCalled();
+    expect(f.emitted.at(-1)).toMatchObject({ phase: "hosted_read_attempt", attemptPhase: "error", receivedBytes: 5,
+      notionDownloadAttempts: 1, notionDownloadBytes: 5 });
   });
   it("時刻予算では開始済み1件を確定し、次の原本を開始せずpartialで再開できる", async () => {
     const f = fixture();
