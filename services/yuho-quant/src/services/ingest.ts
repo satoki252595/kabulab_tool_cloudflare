@@ -534,7 +534,7 @@ export async function ingestDocument(
         force,
       });
       if (overseasOmission !== undefined) {
-        overseasOmissionJson = serializeOverseasOmission({ docId: doc.docID, periodEnd,
+        overseasOmissionJson = serializeOverseasOmission({ docId: doc.docID, edinetCode: doc.edinetCode, periodEnd,
           archivePageId: archivedType1.pageId,
           archiveManifest: archivedType1.manifestMatch === "unknown" ? "unknown" : "known",
           zipSha256: await sha256HexBytes(new Uint8Array(xbrlZip)),

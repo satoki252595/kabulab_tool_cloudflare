@@ -71,6 +71,7 @@ const all = await db
     id: yuhoDocuments.id,
     stockId: yuhoDocuments.stockId,
     docId: yuhoDocuments.docId,
+    edinetCode: yuhoDocuments.edinetCode,
     periodEnd: yuhoDocuments.periodEnd,
     filerName: yuhoDocuments.filerName,
     overseasParseStatus: yuhoDocuments.overseasParseStatus,
@@ -154,7 +155,7 @@ for (const r of targets) {
       },
     });
     if (omission !== undefined) {
-      overseasOmissionJson = serializeOverseasOmission({ docId: r.docId, periodEnd: r.periodEnd,
+      overseasOmissionJson = serializeOverseasOmission({ docId: r.docId, edinetCode: r.edinetCode, periodEnd: r.periodEnd,
         archivePageId: archive.pageId, archiveManifest: archive.manifestMatch === "unknown" ? "unknown" : "known",
         zipSha256: await sha256HexBytes(new Uint8Array(zipBytes)), omission });
     }

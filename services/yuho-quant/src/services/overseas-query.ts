@@ -94,6 +94,7 @@ export async function getOverseasTrend(
   const docs = await db
     .select({
       docId: yuhoDocuments.docId,
+      edinetCode: yuhoDocuments.edinetCode,
       periodEnd: yuhoDocuments.periodEnd,
       submittedAt: yuhoDocuments.submittedAt,
       docTypeCode: yuhoDocuments.docTypeCode,

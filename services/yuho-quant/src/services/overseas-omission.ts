@@ -44,12 +44,14 @@ const recordSchema = z.object({
 
 /** 原文の理由と、検証済み物理ZIPの出典。numeric facts/statusとは独立。 */
 export type OverseasOmissionRecord = z.infer<typeof recordSchema>;
-type DocumentIdentity = Pick<OverseasOmissionRecord, "docId" | "periodEnd">;
+type DocumentIdentity = Pick<OverseasOmissionRecord, "docId" | "periodEnd"> & { edinetCode: string };
 
 export function validateOverseasOmission(value: unknown, expected: DocumentIdentity): OverseasOmissionRecord {
   const record = recordSchema.parse(value);
-  if (record.docId !== expected.docId || record.periodEnd !== expected.periodEnd) {
-    throw new Error("省略理由JSONの文書ID・会計期末が保存文書と一致しません");
+  if (record.docId !== expected.docId || record.periodEnd !== expected.periodEnd ||
+      !/^E\d{5}$/.test(expected.edinetCode) ||
+      record.omission.evidence.some(({ contextPeriod }) => contextPeriod.entity.split("-")[0] !== expected.edinetCode)) {
+    throw new Error("省略理由JSONの文書ID・提出者・会計期末が保存文書と一致しません");
   }
   return record;
 }
@@ -61,7 +63,8 @@ export function serializeOverseasOmission(input: DocumentIdentity & {
   zipSha256: string;
   omission: OverseasOmission;
 }): string {
-  return JSON.stringify(validateOverseasOmission({ version: 1, ...input }, input));
+  const { edinetCode: _edinetCode, ...record } = input;
+  return JSON.stringify(validateOverseasOmission({ version: 1, ...record }, input));
 }
 
 /** NULLは理由未保存。非開示や省略理由へ推定せず、壊れたJSONも黙殺しない。 */

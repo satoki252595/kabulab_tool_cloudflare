@@ -69,7 +69,7 @@ function trendChart(points: OverseasYearPoint[]): string {
         const phW = barW + 6;
         const phY = padT + innerH * 0.6;
         return `<rect x="${cx - phW / 2}" y="${phY}" width="${phW}" height="${innerH * 0.4}" fill="none" stroke="var(--border-soft)" stroke-width="1.5" stroke-dasharray="4 3"/>
-<text x="${cx}" y="${phY + innerH * 0.2 + 4}" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--text-muted)">未開示</text>${label}`;
+<text x="${cx}" y="${phY + innerH * 0.2 + 4}" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--text-muted)">データなし</text>${label}`;
       }
       const total = p.totalYen ?? p.overseasYen ?? 0;
       const ov = p.overseasYen ?? 0;
@@ -119,7 +119,7 @@ function trendChart(points: OverseasYearPoint[]): string {
     <span>左軸: 億円 / 右軸: %</span>
   </div>
   <svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="海外売上高(億円)と海外売上高比率(%)の推移 ${h(first)}〜${h(last)}">
-    <desc>濃い棒が海外売上高、ハッチングが国内ほかで合わせて連結売上高。折れ線が海外売上高比率(右軸%)。「未開示」はその年度に地域別売上の開示が無いことを示します。</desc>
+    <desc>濃い棒が海外売上高、ハッチングが国内ほかで合わせて連結売上高。折れ線が海外売上高比率(右軸%)。「データなし」は構造化された値がない年度です。開示の有無は原典をご確認ください。</desc>
     <defs><pattern id="osHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
       <rect width="6" height="6" fill="var(--bg-pure)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--border)" stroke-width="2"/>
     </pattern></defs>
@@ -180,9 +180,8 @@ export function overseasSection(trend: OverseasTrend | null): string {
     `<div class="notice"><strong>${termTip("地域別の外部顧客売上の注記を省略", "会社が原典に明記した注記の省略理由です。海外売上の金額や比率を推計するものではなく、別の売上表の数値・未対応状態とは区別します。")}</strong>
     <details class="omission-proof"><summary>原典の省略理由と出典</summary>
     <p>文書ID: ${h(omission.docId)} / ${termTip("会計期末", "会社の1年間の決算期間が終わる日です。提出日とは異なります。")}: ${h(omission.periodEnd)}</p>
-    <p>${termTip("原文照合用のSHA-256", "ファイルや原文から計算した識別値です。保存した原典と同じ内容かを照合するために使います。")}</p>
     ${omission.omission.evidence.map((proof) => `<blockquote>${h(proof.quote)}</blockquote>
-      <p class="muted">本文: ${h(proof.honbunFile)}<br>原文の期間: ${h(proof.contextPeriod.startDate)} ～ ${h(proof.contextPeriod.endDate)}<br>ZIP全文: ${h(omission.zipSha256)}<br>本文: ${h(proof.memberSha256)}<br>注記: ${h(proof.rawBlockSha256)}</p>`).join("")}
+      <p class="muted">原文の期間: ${h(proof.contextPeriod.startDate)} ～ ${h(proof.contextPeriod.endDate)}</p>`).join("")}
     </details></div>`;
 
   if (hasStructuredData) {

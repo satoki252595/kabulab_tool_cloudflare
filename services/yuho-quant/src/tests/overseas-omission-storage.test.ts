@@ -19,6 +19,7 @@ const fixtures = JSON.parse(fixtureBytes.toString()) as Array<{
   record: OverseasOmissionRecord; status: OverseasParseStatus; facts: OverseasFact[];
 }>;
 const provenance = JSON.parse(readFileSync(new URL("./fixtures/overseas-omission-records.provenance.json", import.meta.url), "utf8"));
+const identity = (fixture: (typeof fixtures)[number]) => ({ ...fixture.record, edinetCode: fixture.metadata.edinetCode });
 let sqlite: DatabaseSync;
 let db: Database;
 
@@ -63,15 +64,16 @@ it("実fullZIPの理由をnullable1列からquery/viewへ渡し、別表の数�
   const beforeFacts = sqlite.prepare("SELECT * FROM yuho_overseas_facts ORDER BY id").all();
   const beforeDocs = sqlite.prepare("SELECT * FROM yuho_documents ORDER BY id").all();
   for (const fixture of fixtures) {
-    const json = serializeOverseasOmission(fixture.record);
-    expect(parseOverseasOmission(json, fixture.record)).toEqual(fixture.record);
+    const json = serializeOverseasOmission(identity(fixture));
+    expect(parseOverseasOmission(json, identity(fixture))).toEqual(fixture.record);
     await db.update(yuhoDocuments).set({ overseasOmissionJson: json }).where(eq(yuhoDocuments.docId, fixture.record.docId));
     const trend = await getOverseasTrendByCode(db, fixture.code);
     expect(trend!.documents[0].overseasParseStatus).toBe(fixture.status);
     expect(trend!.documents[0].overseasOmission).toEqual(fixture.record);
     const html = overseasSection(trend);
     expect(html).toContain(fixture.record.omission.evidence[0].quote);
-    expect(html).toContain(fixture.record.zipSha256);
+    expect(html).not.toContain(fixture.record.zipSha256);
+    expect(html).not.toContain(fixture.record.omission.evidence[0].honbunFile);
     expect(html).toContain(fixture.record.docId);
     expect(html).not.toContain(fixture.record.archivePageId);
     expect(html).not.toContain("OFFLINE_SCHEMA_CONTROL");
@@ -89,7 +91,7 @@ it("実fullZIPの理由をnullable1列からquery/viewへ渡し、別表の数�
 
 it("NULLは理由未保存のまま、非開示・内需・90%を作らない", async () => {
   const fixture = fixtures[0];
-  expect(parseOverseasOmission(null, fixture.record)).toBeNull();
+  expect(parseOverseasOmission(null, identity(fixture))).toBeNull();
   const trend = await getOverseasTrendByCode(db, fixture.code);
   expect(trend!.documents[0].overseasOmission).toBeNull();
   const html = overseasSection(trend);
@@ -101,8 +103,10 @@ it("NULLは理由未保存のまま、非開示・内需・90%を作らない", 
 
 it("文書/FY不一致・無根拠理由・壊れたSHA・native期間不一致は受入しない", () => {
   const record = fixtures[0].record;
+  const expected = identity(fixtures[0]);
   const wrongDoc = { ...record, docId: fixtures[1].record.docId };
-  expect(() => validateOverseasOmission(wrongDoc, record)).toThrow();
+  expect(() => validateOverseasOmission(wrongDoc, expected)).toThrow();
+  expect(() => validateOverseasOmission(record, { ...expected, edinetCode: fixtures[1].metadata.edinetCode })).toThrow();
   for (const mutate of [
     (r: OverseasOmissionRecord) => { r.periodEnd = fixtures[1].record.periodEnd; },
     (r: OverseasOmissionRecord) => { r.omission.evidence = []; },
@@ -111,7 +115,7 @@ it("文書/FY不一致・無根拠理由・壊れたSHA・native期間不一致�
     (r: OverseasOmissionRecord) => { r.omission.evidence[0].contextPeriod.endDate = fixtures[1].record.periodEnd; },
   ]) {
     const bad = structuredClone(record); mutate(bad);
-    expect(() => validateOverseasOmission(bad, record)).toThrow();
+    expect(() => validateOverseasOmission(bad, expected)).toThrow();
   }
 });
 
@@ -119,4 +123,7 @@ it("不正な保存JSONはqueryで失敗し、NULL理由へ黙殺しない", asy
   const fixture = fixtures[0];
   await db.update(yuhoDocuments).set({ overseasOmissionJson: "{" }).where(eq(yuhoDocuments.docId, fixture.record.docId));
   await expect(getOverseasTrendByCode(db, fixture.code)).rejects.toThrow();
+  await db.update(yuhoDocuments).set({ overseasOmissionJson: serializeOverseasOmission(identity(fixture)),
+    edinetCode: fixtures[1].metadata.edinetCode }).where(eq(yuhoDocuments.docId, fixture.record.docId));
+  await expect(getOverseasTrendByCode(db, fixture.code)).rejects.toThrow("提出者");
 });
