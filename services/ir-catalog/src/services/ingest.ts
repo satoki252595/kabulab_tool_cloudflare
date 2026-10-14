@@ -35,6 +35,7 @@ import type { Database } from "../db/client.js";
 import { irNotionStockPageCache } from "../db/notion-stock-pages.js";
 import { disclosures, disclosureTexts } from "../db/schema.js";
 import { loadIngestCodeToId } from "../../../../src/shared/db/active-equity.js";
+import { sha256HexBytes } from "../../../../src/shared/sha256.js";
 import { classify, notionTagOptions, buffettCodeUrl } from "./classify.js";
 import { companyCodeToTicker, type TdnetItemRaw } from "./tdnet/types.js";
 import { classifyPdfSentimentWithText } from "./pdf-sentiment/index.js";
@@ -46,6 +47,8 @@ export interface IngestOptions {
   source: string;
   /** ルール6: バッチ確定 JSON を Notion 一次データへ実体アップロードする */
   archiveToNotion: boolean;
+  /** 日内に変わる日次バッチだけ、実生成ファイルの全文SHAを冪等キーに付ける。 */
+  dailySnapshot?: true;
   /** 二次データ: 全 IR を Notion「銘柄一覧→銘柄別子DB」へ 1IR=1行で記録 */
   notionByStock: boolean;
   /** 二次データ投入の打ち切り絶対時刻 (epoch ms)。日次 cron 用。
@@ -482,14 +485,18 @@ export async function ingestBatch(
         markets: p.marketsString,
       }))
     );
+    const bytes = new TextEncoder().encode(fileJson);
+    const key = opts.dailySnapshot
+      ? `${opts.batchKey}-${await sha256HexBytes(bytes)}`
+      : opts.batchKey;
     const files = [{
-      bytes: new TextEncoder().encode(fileJson),
+      bytes,
       filename: `${opts.batchKey}.json`,
       contentType: "application/json",
     }];
     const r = await recordPrimaryData({
       service: "ir-catalog",
-      key: opts.batchKey,
+      key,
       source: opts.source,
       metadata: {
         batchKey: opts.batchKey,

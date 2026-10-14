@@ -1,0 +1,31 @@
+[
+  {
+    "tdnet_id": "1283961",
+    "ticker": "5987",
+    "company_code": "59870",
+    "company_name": "オーネックス",
+    "pubdate": "2026-10-07T09:30:00.000Z",
+    "title": "第三者割当による新株式の失権、第１回新株予約権の発行の払込完了並びに主要株主の異動の取り消しに関するお知らせ",
+    "tags": [
+      "エクイティファイナンス",
+      "訂正・取消"
+    ],
+    "primary_tag": "エクイティファイナンス",
+    "document_url": "https://webapi.yanoshin.jp/rd.php?https://www.release.tdnet.info/inbs/140120261007547549.pdf",
+    "xbrl_url": null,
+    "markets": "東"
+  },
+  {
+    "tdnet_id": "1283959",
+    "ticker": "6890",
+    "company_code": "68900",
+    "company_name": "フェローテック",
+    "pubdate": "2026-10-07T08:30:00.000Z",
+    "title": "TOPIX（東証株価指数）構成銘柄への新規採用に関するお知らせ",
+    "tags": [],
+    "primary_tag": null,
+    "document_url": "https://webapi.yanoshin.jp/rd.php?https://www.release.tdnet.info/inbs/140120261006546922.pdf",
+    "xbrl_url": null,
+    "markets": "東"
+  }
+]

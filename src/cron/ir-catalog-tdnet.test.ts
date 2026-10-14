@@ -19,6 +19,7 @@ it("同じ41日一覧と12分phaseへだけ絶対締切を追加し、source順�
   await runIrCatalogCatchup({} as never, undefined, now, deadline);
   expect(listRange).toHaveBeenCalledWith("20260904-20261014");
   expect(ingestBatch).toHaveBeenCalledWith(expect.anything(), [], expect.objectContaining({
+    batchKey: "tdnet-daily-2026-10-14", dailySnapshot: true,
     notionByStockBudgetMs: 720_000, notionByStockDeadlineMs: deadline, unsavedLookbackDays: 40,
   }));
   expect(vi.mocked(listRange).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ingestBatch).mock.invocationCallOrder[0]);
