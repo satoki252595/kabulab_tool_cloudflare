@@ -4,6 +4,7 @@ import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { fetchChart, parseChartResponse, type DailyResult, type YahooRawCapture } from "../../../src/shared/yahoo/client.js";
 import { guardChartBars } from "../../../src/shared/yahoo/bar-sanity.js";
+import { assertStockSyncDeadline, assertStockSyncStart, stockSyncRunDate } from "../../../src/shared/stock-sync-window.js";
 import { loadMacroJpLeg, macroJpCacheKey } from "../../../src/cron/macro-jp-leg.js";
 import { notionRequest } from "../../../src/shared/notion-archive/client.js";
 import { downloadArchivedFile } from "../../moneyflow/lib/archived-files.js";
@@ -97,13 +98,40 @@ export function resolveDailySessionSource(source: string | undefined, date: stri
   return { kind: "archived-jp-leg", date };
 }
 const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-/** 純読取。R2は1回、既存JP manifest/VIとN225原gzipをfresh物理照合する（原本再保管なし）。 */
-export async function loadArchivedDailySessionReference(date: string, readOptions?: R2ReadOptions): Promise<{
+type ArchivedDailySessionResult = {
   reference: DailySessionReference;
   custody: { source: "archived-jp-leg"; cacheKey: string; archivePageId: string; manifestSha256: string;
     n225ArchivePageId: string; n225Filename: string; n225GzipSha256: string };
+};
+
+/** VWAPは従来どおり読取前後の実JST当日だけを許可する。 */
+export async function loadArchivedDailySessionReference(date: string, readOptions?: R2ReadOptions): Promise<ArchivedDailySessionResult> {
+  return readArchivedDailySessionReference(date, readOptions, () => {
+    resolveDailySessionSource("archived-jp-leg", date, new Date().toISOString());
+  });
+}
+
+/** 明示した株式UTC対象日だけを読取。古い日付への切替や時刻の注入はしない。 */
+export async function loadArchivedStockDailySessionReference(date: string, readOptions?: R2ReadOptions): Promise<ArchivedDailySessionResult & {
+  qualification: { policy: "stock-sync-utc"; asOfDate: string; qualifiedAt: string };
 }> {
-  resolveDailySessionSource("archived-jp-leg", date, new Date().toISOString());
+  let qualifiedAt: string | undefined;
+  const result = await readArchivedDailySessionReference(date, readOptions, () => {
+    const now = Date.now();
+    if (!isCalendarDateString(date) || date !== stockSyncRunDate(now)) {
+      throw new Error("stock session HOLD: 明示as-of日が実UTC対象日と一致しません");
+    }
+    assertStockSyncStart(now);
+    assertStockSyncDeadline(date, now);
+    qualifiedAt = new Date(now).toISOString();
+  });
+  assert.ok(qualifiedAt !== undefined);
+  return { ...result, qualification: { policy: "stock-sync-utc", asOfDate: date, qualifiedAt } };
+}
+
+/** 純読取。R2は1回、既存JP manifest/VIとN225原gzipをfresh物理照合する（原本再保管なし）。 */
+async function readArchivedDailySessionReference(date: string, readOptions: R2ReadOptions | undefined, assertClock: () => void): Promise<ArchivedDailySessionResult> {
+  assertClock();
   const r2Options = readOptions === undefined ? { maxBytes: 20 * 1024 * 1024, abortSignal: AbortSignal.timeout(60_000) } : readOptions;
   let cacheBody: string | undefined;
   const leg = await loadMacroJpLeg({ get: async (key) => {
@@ -157,8 +185,8 @@ export async function loadArchivedDailySessionReference(date: string, readOption
   const outer = new URL(member.url), target = outer.searchParams.has("u") ? new URL(outer.searchParams.get("u")!) : outer;
   assert.ok(target.protocol === "https:" && ["query1.finance.yahoo.com", "query2.finance.yahoo.com"].includes(target.hostname) && target.port === "" && target.username === "" && target.password === "");
   assert.equal(decodeURIComponent(target.pathname), "/v8/finance/chart/^N225"); assert.equal(target.searchParams.get("range"), "1mo"); assert.equal(target.searchParams.get("interval"), "1d");
-  // 読取中の日跨ぎも資格外。元observedAtを今日へ付け替えない。
-  resolveDailySessionSource("archived-jp-leg", date, new Date().toISOString());
+  // 読取後も同じ明示clock契約を確認。元observedAtを実run clockへ付け替えない。
+  assertClock();
   return { reference, custody: { source: "archived-jp-leg", cacheKey: leg.reference.cacheKey, archivePageId: leg.reference.archivePageId,
     manifestSha256: leg.reference.manifestSha256, n225ArchivePageId: pageId, n225Filename: filename, n225GzipSha256: file.sha256 } };
 }

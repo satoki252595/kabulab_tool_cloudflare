@@ -50,6 +50,7 @@ import {
   type JssAnnualRow,
 } from "../shared/db/jss-financials.js";
 import { sharedEnv } from "../shared/env.js";
+import { assertStockSyncDeadline, assertStockSyncStart, stockSyncRunDate } from "../shared/stock-sync-window.js";
 import {
   ensurePriceSyncDb,
   recordPriceSyncLog,
@@ -274,7 +275,7 @@ export function runDateKeys(startedAt: number): {
 } {
   const at = new Date(startedAt);
   return {
-    runDate: at.toISOString().split("T")[0],
+    runDate: stockSyncRunDate(startedAt),
     runMonday: isMondayUtc(at),
   };
 }
@@ -1209,15 +1210,10 @@ async function runDailySyncAndRecord(
   }
   const rawRunId = priceSyncBatchRunId(startedAt);
   const assertStockDeadline = () => {
-    if (Date.now() >= Date.parse(`${targetDate}T21:00:00Z`)) {
-      throw new Error("株式同期が21:00 UTC期限に達したため新たな書込みを止めます");
-    }
+    assertStockSyncDeadline(targetDate, Date.now());
   };
   // 価格・母集団とも開始窓と予定日・書込み期限は守る。
-  const utcMinutes = new Date(startedAt).getUTCHours() * 60 + new Date(startedAt).getUTCMinutes();
-  if (utcMinutes < 390 || utcMinutes >= 1260) {
-    throw new Error("株式同期は東証15:30 JST終了後から翌06:00 JST基準までに実行してください");
-  }
+  assertStockSyncStart(startedAt);
   // 母集団は価格取得とは独立して更新する。N225 の欠測で上場廃止の適用を止めない。
   // HOLD 残があれば不完全失敗を throw し、株価 fetch へ進まない。
   const overlay = await ensureUniverseOverlay(db, {
