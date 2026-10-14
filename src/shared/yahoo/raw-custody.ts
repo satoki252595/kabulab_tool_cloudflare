@@ -20,6 +20,10 @@ interface RawMember {
   api: string; symbol: string; attempt: number; status: number; receivedAt: string;
   url: string; headers: YahooRawCapture["headers"]; byteLength: number; sha256: string; bodyBase64: string;
 }
+export interface ArchivedYahooPart {
+  archivePageId: string; filename: string; gzipSha256: string; gzipBytes: number;
+  members: Array<Pick<RawMember, "api" | "symbol" | "attempt" | "status" | "receivedAt" | "byteLength" | "sha256">>;
+}
 const SINGLE_PART_CAP = 20 * 1024 * 1024;
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
 export const YAHOO_RAW_LOCAL_DIR = ".yahoo-raw-custody";
@@ -47,7 +51,7 @@ async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
 
 /** 取得なしは呼ばない。transport失敗だけならmissingを実診断として保管する。 */
 export async function archiveYahooRawBatch(input: YahooRawBatchInput): Promise<{
-  pages: string[]; rawBytes: number; compressedBytes: number;
+  pages: string[]; rawBytes: number; compressedBytes: number; archives?: ArchivedYahooPart[];
 }> {
   if (!NAME_RE.test(input.runId) || !NAME_RE.test(input.stage)) throw new Error("Yahoo原本のrun/stageが不正です");
   const missing = input.missing === undefined ? [] : input.missing.map((item) => ({
@@ -88,7 +92,7 @@ export async function archiveYahooRawBatch(input: YahooRawBatchInput): Promise<{
   const pages: string[] = [];
   let rawBytes = 0, compressedBytes = 0;
   const prepared: Array<{ key: string; filename: string; path: string; sha256: string;
-    fetchedAt: string; metadata: Record<string, unknown> }> = [];
+    fetchedAt: string; metadata: Record<string, unknown>; members: ArchivedYahooPart["members"] }> = [];
   for (const [index, part] of chunks.entries()) {
     const members: RawMember[] = [];
     for (const item of part) {
@@ -129,11 +133,13 @@ export async function archiveYahooRawBatch(input: YahooRawBatchInput): Promise<{
         rawBytes: part.reduce((sum, item) => sum + item.capture.bytes.length, 0), compressedBytes: bytes.length };
     const local = writeSummaryLocal({ key, files: [{ filename, bytes, contentType: "application/gzip" }] }, YAHOO_RAW_LOCAL_DIR);
     if (!local.ok) throw new Error(`Yahoo原本のprivate local保存失敗 (${local.reason})。Notion送信前STOP`);
-    prepared.push({ key, filename, path: local.path, sha256: await sha256HexBytes(Uint8Array.from(bytes)), fetchedAt, metadata });
+    prepared.push({ key, filename, path: local.path, sha256: await sha256HexBytes(Uint8Array.from(bytes)), fetchedAt, metadata,
+      members: members.map(({ api, symbol, attempt, status, receivedAt, byteLength, sha256 }) => ({ api, symbol, attempt, status, receivedAt, byteLength, sha256 })) });
     compressedBytes += bytes.length;
   }
   // 全partsを0700/wx0600/fsyncで先に残す。後半POSTがunknownでも原本を再取得・再送しない。
   // CI runnerのlocal diskはjob終了後の永続回収を保証しない (公開artifactへは出さない)。
+  const archives: ArchivedYahooPart[] = [];
   for (const part of prepared) {
     const bytes = Uint8Array.from(readFileSync(part.path));
     if (await sha256HexBytes(bytes) !== part.sha256) throw new Error("Yahoo原本のprivate local bytes不一致。STOP");
@@ -145,6 +151,8 @@ export async function archiveYahooRawBatch(input: YahooRawBatchInput): Promise<{
     }
     await verifyArchivedAttachments(result.pageId, [{ filename: part.filename, bytes }], "Yahoo原本batch");
     pages.push(result.pageId);
+    archives.push({ archivePageId: result.pageId, filename: part.filename, gzipSha256: part.sha256,
+      gzipBytes: bytes.length, members: part.members });
   }
-  return { pages, rawBytes, compressedBytes };
+  return { pages, rawBytes, compressedBytes, archives };
 }

@@ -8,7 +8,7 @@ import { queryUniqueRow } from "./archive.js";
 import { notionRequest } from "./client.js";
 import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
-import { applyHoldingsSchema, buildHoldingsSchemaPatch, HOLDINGS_DESCRIPTION, LEGACY_HOLDINGS_COLUMNS, publishSavedShareholdings, publishVerifiedShareholdings, resumePendingShareholdings, readSavedHoldingsZip, holdingProperties, type HoldingsSchema } from "./shareholdings.js";
+import { applyHoldingsSchema, buildHoldingsSchemaPatch, HOLDINGS_DESCRIPTION, LEGACY_HOLDINGS_COLUMNS, publishSavedShareholdings, publishVerifiedShareholdings, resumePendingShareholdings, resumePendingShareholdingsPrices, readSavedHoldingsZip, holdingProperties, type HoldingsSchema, type HoldingPriceSourceLoader } from "./shareholdings.js";
 
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings.js", () => ({ parseShareholdingsData: vi.fn(), verifySavedHoldingsSource: vi.fn(() => ({ status: "verified", filename: "structural.xbrl" })) }));
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js", () => ({
@@ -73,16 +73,17 @@ async function requestRouter(method: string, path: string, body?: unknown): Prom
   if (method === "GET" && path.startsWith("/databases/")) {
     if (path.includes("p".repeat(32))) return { id: "p".repeat(32), properties: {
       "保有明細状態": { type: "select" }, "保有明細理由": { type: "rich_text" }, "保有明細再開情報": { type: "rich_text" },
+      "保有価格状態": { type: "select" }, "保有価格理由": { type: "rich_text" }, "保有価格再開情報": { type: "rich_text" },
     } };
     return migratedSchema();
   }
   if (method === "PATCH") {
-    saved[path] = (body as { properties: Record<string, unknown> }).properties;
-    return { id: path.split("/").at(-1) };
+    saved[path] = { ...(saved[path] as object), ...(body as { properties: Record<string, unknown> }).properties };
+    return { object: path.startsWith("/databases/") ? "database" : "page", id: path.split("/").at(-1) };
   }
-  if (method === "POST") { saved[`/pages/${"e".repeat(32)}`] = (body as { properties: Record<string, unknown> }).properties; return { id: "e".repeat(32) }; }
+  if (method === "POST") { saved[`/pages/${"e".repeat(32)}`] = (body as { properties: Record<string, unknown> }).properties; return { object: "page", id: "e".repeat(32) }; }
   const properties = saved[path] as Record<string, unknown> | undefined;
-  return { id: path.split("/").at(-1), parent: { type: "database_id", database_id: (path.includes("a".repeat(32)) ? "p" : "d").repeat(32) },
+  return { object: "page", id: path.split("/").at(-1), parent: { type: "database_id", database_id: (path.includes("a".repeat(32)) ? "p" : "d").repeat(32) },
     archived: false, in_trash: false, properties: { ...legacy, ...mirrored(holdingProperties(source,args.ownerName,holding)), Key: { type: "title", title: [{ type: "text", plain_text: `${source.docId}:type1`, text: { content: `${source.docId}:type1` } }] },
       ...(properties ? mirrored(properties) : {}) } };
 }
@@ -162,7 +163,7 @@ describe("株式保有の原典限定writer", () => {
   });
 
   it("株数・帳簿価額だけを確定し、価格/通貨/観測日を補わず、旧値を保つ", async () => {
-    const existing = { id: "e".repeat(32), parent: { type: "database_id", database_id: "d".repeat(32) },
+    const existing = { object: "page", id: "e".repeat(32), parent: { type: "database_id", database_id: "d".repeat(32) },
       archived: false, in_trash: false, properties: { ...legacy, ...mirrored(holdingProperties(source,args.ownerName,holding)), "原本照合済": { type: "checkbox", checkbox: false } } };
     vi.mocked(queryUniqueRow).mockResolvedValue(existing);
     expect(await publishVerifiedShareholdings(args)).toEqual({ status: "published", parsed: 1, created: 0, updated: 1, unchanged: 0 });
@@ -289,7 +290,7 @@ describe("保有明細の現行/legacy保存type1 reader", () => {
     const metadata = { docID: source.docId, edinetCode: source.edinetCode, secCode: `${source.stockCode}0`, periodEnd: source.fiscalYearEnd,
       ...(key.endsWith(":type1") ? { edinetDocType: 1 } : {}), _fileManifest: { files: [{ originalFilename: `${source.docId}_xbrl.zip`, byteLength: args.zip.length,
         sha256: createHash("sha256").update(args.zip).digest("hex") }] }, ...changes };
-    return { id: "b".repeat(32), parent: { type: "database_id", database_id: "p".repeat(32) }, archived: false, in_trash: false,
+    return { object: "page", id: "b".repeat(32), parent: { type: "database_id", database_id: "p".repeat(32) }, archived: false, in_trash: false,
       properties: mirrored({ Key: { title: [{ text: { content: key } }] }, Metadata: { rich_text: [{ text: { content: JSON.stringify(metadata) } }] }, "Fetched At": { date: { start: "2026-07-01T00:00:00Z" } } }) };
   }
   beforeEach(() => { vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://hosted.invalid/type1" }]);
@@ -333,5 +334,187 @@ describe("保有明細の現行/legacy保存type1 reader", () => {
   });
   it.each([{ edinetCode: "E00000" }, { periodEnd: "2025-06-30" }, { _fileManifest: { files: [{ originalFilename: `${source.docId}_xbrl.zip`, byteLength: args.zip.length, sha256: "0".repeat(64) }] } }])("提出者/期末/全SHA不一致はSTOP", async changes => {
     vi.mocked(queryUniqueRow).mockResolvedValue(primary(`${source.docId}:type1`, changes));await expect(readSavedHoldingsZip(source)).rejects.toThrow();expect(queryUniqueRow).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("原本完了とは独立した保存価格queue", () => {
+  const rowPath = `/pages/${"e".repeat(32)}`;
+  const evidence = { archivePageId: "1".repeat(32), filename: "structural-price-source", bytes: Buffer.alloc(0), sha256: "2".repeat(64) };
+  const ready = { status: "ready" as const, snapshotId: "structural-snapshot", evidenceScope: "snapshot structural-snapshot 内。その他保存観測の存在は未判定", codeList: evidence, prices: [evidence] };
+  const budget = () => ({ remainingChunks: 116, remainingBytes: 256 * 1024 * 1024 });
+  const qualified = () => ({ status: "qualified" as const, identity: { code: source.stockCode, edinetCode: source.edinetCode,
+    corporateNumber: "1".repeat(13), legalName: holding.name, englishName: "STRUCTURAL", asOf: source.fiscalYearEnd,
+    row: 3, archivePageId: evidence.archivePageId, zipSha256: evidence.sha256 }, price: 100, value: 1200, currency: "JPY" as const,
+    date: source.fiscalYearEnd, priceSource: { archivePageId: evidence.archivePageId, gzipSha256: evidence.sha256, bodySha256: "3".repeat(64),
+      filename: "structural.gz", symbol: "9999.T", capturedAt: "2026-07-01T00:00:00Z", sourceTimestamp: 1782777600,
+      range: "10y", priceBasis: "STRUCTURAL", splitObservation: "STRUCTURAL" } });
+
+  async function seedPublishedSource(valuationSources?: { codeList: typeof evidence; prices: typeof evidence[] }) {
+    await publishVerifiedShareholdings({ ...args, valuationSources });
+    vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://hosted.invalid/saved-price-phase-only" }]);
+    vi.mocked(queryUniqueRow).mockImplementation(async dbId => {
+      if (dbId !== "p".repeat(32)) return await requestRouter("GET", rowPath) as { id: string };
+      const page = await requestRouter("GET", `/pages/${args.archivePageId}`) as { id: string; properties: Record<string, unknown> };
+      return { ...page, properties: { ...page.properties, ...mirrored({ Metadata: { rich_text: [{ text: { content: JSON.stringify({
+        docID: source.docId, secCode: `${source.stockCode}0`, edinetCode: source.edinetCode, periodEnd: source.fiscalYearEnd,
+        edinetDocType: 1, sourceZIPSHA: createHash("sha256").update(args.zip).digest("hex"), sourceZIPBytes: args.zip.length,
+      }) } }] }, "Fetched At": { date: { start: "2026-07-01T00:00:00Z" } } }) } };
+    });
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (method === "POST" && path.endsWith("/query")) {
+        const status = (body as { filter: { select: { equals: string } } }).filter.select.equals;
+        const page = await requestRouter("GET", `/pages/${args.archivePageId}`) as { properties: Record<string, { select?: { name: string } }> };
+        return { results: page.properties["保有価格状態"]?.select?.name === status ? [page] : [], has_more: false, next_cursor: null };
+      }
+      return requestRouter(method, path, body);
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(Uint8Array.from(args.zip)));
+    return structuredClone(saved[`/pages/${args.archivePageId}`]) as Record<string, unknown>;
+  }
+  afterEach(() => vi.restoreAllMocks());
+
+  it("原本完了と価格pendingの3propsを一度のPATCHで原子的に登録する", async () => {
+    await publishVerifiedShareholdings(args);
+    const patches = vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "PATCH" && path === `/pages/${args.archivePageId}`);
+    const final = patches.at(-1)![2] as { properties: Record<string, unknown> };
+    expect(final.properties).toMatchObject({ "保有明細状態": { select: { name: "明細原本照合済" } }, "保有価格状態": { select: { name: "再開待ち" } } });
+    expect(Object.keys(final.properties)).toHaveLength(6);
+    const info = (final.properties["保有価格再開情報"] as { rich_text: Array<{ text: { content: string } }> }).rich_text.map(p => p.text.content).join("");
+    expect(JSON.parse(info)).toMatchObject({ source, parsed: 1, priceQueueVersion: 1, nextHoldingOffset: 0, unavailableRows: 0 });
+  });
+
+  it("保存ZIPと同じ原表を照合後に既writerへ価格根拠を渡し、価格列以外はPATCHしない", async () => {
+    const sourceBefore = await seedPublishedSource(), rowBefore = structuredClone(saved[rowPath]) as Record<string, unknown>;
+    vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    const loader = vi.fn<HoldingPriceSourceLoader>(async () => ready);
+    const result = await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: loader });
+    expect(result).toEqual({ usedRows: 1, resumed: 1, held: 0, pending: false });
+    expect(loader).toHaveBeenCalledWith(extraction.holdings, budget());
+    const patch = vi.mocked(notionRequest).mock.calls.find(([method, path]) => method === "PATCH" && path === rowPath)![2] as { properties: Record<string, unknown> };
+    expect(patch.properties).toMatchObject({ "株価": { number: 100 }, "保有時価": { number: 1200 }, "価格照合済": { checkbox: true } });
+    for (const name of ["保有株数", "帳簿価額（円）", "出典原本SHA256", "原本照合済", "Name"]) expect(patch.properties).not.toHaveProperty(name);
+    const sourceAfter = saved[`/pages/${args.archivePageId}`] as Record<string, unknown>;
+    for (const name of ["保有明細状態", "保有明細理由", "保有明細再開情報"]) expect(sourceAfter[name]).toEqual(sourceBefore[name]);
+    expect(sourceAfter["保有価格状態"]).toEqual({ select: { name: "価格照合完了" } });
+    for (const [name, value] of Object.entries(rowBefore)) if (!Object.hasOwn(patch.properties, name)) expect((saved[rowPath] as Record<string, unknown>)[name]).toEqual(value);
+  });
+
+  it("snapshot外/未同定価格はNULLと範囲理由を残し、完了値として扱わない", async () => {
+    await seedPublishedSource();
+    vi.mocked(qualifyHoldingValuation).mockResolvedValue({ status: "unavailable", identity: null, reason: "保存価格の資格なし" });
+    const result = await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready });
+    expect(result).toMatchObject({ resumed: 1, held: 1 });
+    expect(saved[rowPath]).toMatchObject({ "株価": { number: null }, "保有時価": { number: null }, "価格照合済": { checkbox: false } });
+    expect(JSON.stringify((saved[rowPath] as Record<string, unknown>)["欠測理由"])).toContain(ready.evidenceScope);
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有明細状態": { select: { name: "明細原本照合済" } }, "保有価格状態": { select: { name: "要確認" } } });
+  });
+
+  it("既に原本・価格照合済みの値は新snapshot欠測で消さず、架空NULLにも欠測数にも置換しない", async () => {
+    vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    await seedPublishedSource({ codeList: evidence, prices: [evidence] });
+    const previous = structuredClone(saved[rowPath]);
+    vi.mocked(qualifyHoldingValuation).mockResolvedValue({ status: "unavailable", identity: null, reason: "新snapshot内の該当観測なし" });
+    expect(await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready })).toMatchObject({ resumed: 1, held: 0 });
+    expect(saved[rowPath]).toEqual(previous);
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有価格状態": { select: { name: "価格照合完了" } } });
+  });
+
+  it("価格mutation未知は独立unknownを保持し、次定時は原本GET/loader/価格再送0", async () => {
+    const sourceBefore = await seedPublishedSource();
+    vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    const routing = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, ...rest) => {
+      if (method === "PATCH" && path === rowPath) throw new Error("PRICE_ACK_UNKNOWN");
+      return routing(method, path, ...rest);
+    });
+    const loader = vi.fn(async () => ready), options = { maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: loader };
+    await expect(resumePendingShareholdingsPrices(options)).rejects.toThrow("PRICE_ACK_UNKNOWN");
+    const sourceAfter = saved[`/pages/${args.archivePageId}`] as Record<string, unknown>;
+    expect(sourceAfter["保有明細状態"]).toEqual(sourceBefore["保有明細状態"]);
+    expect(sourceAfter["保有価格状態"]).toEqual({ select: { name: "実行中（結果未確定）" } });
+    vi.mocked(listPageFiles).mockClear(); loader.mockClear(); vi.mocked(fetch).mockClear();
+    await expect(resumePendingShareholdingsPrices(options)).rejects.toThrow("保有価格に結果未確定");
+    expect(listPageFiles).not.toHaveBeenCalled(); expect(loader).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("別pageを返す価格PATCH ACKを成功/次cursorと扱わず、unknownを保全する", async () => {
+    await seedPublishedSource(); vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    const routing = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, ...rest) => {
+      const response = await routing(method, path, ...rest);
+      return method === "PATCH" && path === rowPath ? { object: "page", id: "f".repeat(32) } : response;
+    });
+    await expect(resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready })).rejects.toThrow("PATCH ACKが別行");
+    expect(notionRequest).not.toHaveBeenCalledWith("GET", `/pages/${"f".repeat(32)}`);
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有価格状態": { select: { name: "実行中（結果未確定）" } } });
+    const page = await requestRouter("GET", `/pages/${args.archivePageId}`) as { properties: Record<string, { rich_text?: Array<{ plain_text: string }> }> };
+    expect(JSON.parse(page.properties["保有価格再開情報"].rich_text!.map(p => p.plain_text).join(""))).toMatchObject({ nextHoldingOffset: 0 });
+  });
+
+  it("ZIPと件数が同じでも全factsの原表順が変わればloader/価格書込前にSTOPする", async () => {
+    const holdings = [holding, { ...holding, kind: "みなし保有株式" as const, rowIndex: 4 }];
+    vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, holdings });
+    await seedPublishedSource();
+    vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, holdings: [...holdings].reverse() });
+    const loader = vi.fn<HoldingPriceSourceLoader>();
+    await expect(resumePendingShareholdingsPrices({ maxRows: 1, shouldStop: () => false, budget: budget(), loadSources: loader })).rejects.toThrow("全facts/order");
+    expect(loader).not.toHaveBeenCalled();
+    expect(vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "PATCH" && path === rowPath)).toHaveLength(0);
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有明細状態": { select: { name: "明細原本照合済" } }, "保有価格状態": { select: { name: "実行中（結果未確定）" } } });
+  });
+
+  it("未有効化snapshotは予算待ちへ誤分類せず要確認としてsource完了を保持する", async () => {
+    await seedPublishedSource();
+    expect(await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(),
+      loadSources: async () => ({ status: "held", reasonCode: "snapshot_unavailable", reason: "有効化未完了" }) })).toMatchObject({ resumed: 0, held: 1, pending: false });
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有価格状態": { select: { name: "要確認" } }, "保有明細状態": { select: { name: "明細原本照合済" } } });
+  });
+
+  it("価格source資格throwでもsource完了は保持し、予算不足だけは次定時に残す", async () => {
+    await seedPublishedSource();
+    const held = await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(),
+      loadSources: async () => ({ status: "held", reason: "全必要chunkの残予算不足", reasonCode: "budget_exhausted" }) });
+    expect(held).toMatchObject({ resumed: 0, pending: true });
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有明細状態": { select: { name: "明細原本照合済" } }, "保有価格状態": { select: { name: "再開待ち" } } });
+    await expect(resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(),
+      loadSources: async () => { throw new Error("PRICE_SOURCE_SHA_MISMATCH"); } })).rejects.toThrow("PRICE_SOURCE_SHA_MISMATCH");
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有明細状態": { select: { name: "明細原本照合済" } }, "保有価格状態": { select: { name: "実行中（結果未確定）" } } });
+  });
+
+  it("全原表を毎回資格化し、価格だけ残行予算のwindowを読戻してcursorを進める", async () => {
+    const holdings = [holding, { ...holding, kind: "みなし保有株式" as const, rowIndex: 4 }];
+    vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, holdings });
+    const sourceBefore = await seedPublishedSource();
+    const created = vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "POST" && path === "/pages");
+    expect(created).toHaveLength(2);
+    const rows = created.map((call, index) => ({ object: "page", id: (index === 0 ? "e" : "f").repeat(32), parent: { type: "database_id", database_id: "d".repeat(32) },
+      archived: false, in_trash: false, properties: { ...legacy, ...mirrored((call[2] as { properties: Record<string, unknown> }).properties) } }));
+    const originalQuery = vi.mocked(queryUniqueRow).getMockImplementation()!;
+    vi.mocked(queryUniqueRow).mockImplementation(async (dbId, filter, message) => {
+      if (dbId === "p".repeat(32)) return originalQuery(dbId, filter, message);
+      const predicates = (filter as { and: Array<{ property: string; select?: { equals: string } }> }).and;
+      const kind = predicates.find(p => p.property === "保有種別")!.select!.equals;
+      return rows.find(row => row.properties["保有種別"].select.name === kind)!;
+    });
+    const originalRequest = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
+      const row = rows.find(row => path === `/pages/${row.id}`);
+      if (!row) return originalRequest(method, path, body, options);
+      if (method === "PATCH") { Object.assign(row.properties, mirrored((body as { properties: Record<string, unknown> }).properties)); return { object: "page", id: row.id }; }
+      return structuredClone(row);
+    });
+    vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    const loader = vi.fn<HoldingPriceSourceLoader>(async () => ready);
+    const options = { maxRows: 1, shouldStop: () => false, budget: budget(), loadSources: loader };
+    expect(await resumePendingShareholdingsPrices(options)).toMatchObject({ usedRows: 1, resumed: 1, pending: true });
+    let page = await requestRouter("GET", `/pages/${args.archivePageId}`) as { properties: Record<string, { rich_text?: Array<{ plain_text: string }> }> };
+    expect(JSON.parse(page.properties["保有価格再開情報"].rich_text!.map(p => p.plain_text).join(""))).toMatchObject({ parsed: 2, nextHoldingOffset: 1 });
+    expect(await resumePendingShareholdingsPrices(options)).toMatchObject({ usedRows: 1, resumed: 1, pending: false });
+    page = await requestRouter("GET", `/pages/${args.archivePageId}`) as typeof page;
+    expect(JSON.parse(page.properties["保有価格再開情報"].rich_text!.map(p => p.plain_text).join(""))).toMatchObject({ parsed: 2, nextHoldingOffset: 2, unavailableRows: 0 });
+    expect(loader.mock.calls.map(call => call[0])).toEqual([[holdings[0]], [holdings[1]]]);
+    const sourceAfter = saved[`/pages/${args.archivePageId}`] as Record<string, unknown>;
+    for (const name of ["保有明細状態", "保有明細理由", "保有明細再開情報"]) expect(sourceAfter[name]).toEqual(sourceBefore[name]);
+    expect(sourceAfter["保有価格状態"]).toEqual({ select: { name: "価格照合完了" } });
   });
 });

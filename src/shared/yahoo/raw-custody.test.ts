@@ -66,6 +66,13 @@ describe("Yahoo原文batchの物理保管境界", () => {
     expect(member.url).toContain("symbol=1301");
     expect(result.pages).toEqual(["p"]);
     expect(result.rawBytes).toBe(raw.length);
+    expect(result.archives).toEqual([{ archivePageId: "p", filename: record.files![0].filename,
+      gzipSha256: await sha256HexBytes(Uint8Array.from(record.files![0].bytes)), gzipBytes: record.files![0].bytes.length,
+      members: [{ api: "chart", symbol: "1301", attempt: 0, status: 429, receivedAt: "2026-10-01T17:13:20.123Z",
+        byteLength: raw.length, sha256: await sha256HexBytes(raw) }] }]);
+    expect(JSON.stringify(result.archives)).not.toContain("url");
+    expect(JSON.stringify(result.archives)).not.toContain("bodyBase64");
+    expect(JSON.stringify(result.archives)).not.toContain("secret");
     expect(verifyArchivedAttachments).toHaveBeenCalledWith("p", [{ filename: record.files![0].filename, bytes: record.files![0].bytes }], "Yahoo原本batch");
   });
 

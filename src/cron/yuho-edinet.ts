@@ -28,7 +28,7 @@ import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js
 import { ExistingTextReadbackMismatchError } from "../../services/yuho-quant/src/services/text-backup.js";
 import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
 import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
-import { resumePendingShareholdings } from "../shared/notion-archive/shareholdings.js";
+import { resumePendingShareholdings, resumePendingShareholdingsPrices, type HoldingPriceSourceLoader } from "../shared/notion-archive/shareholdings.js";
 
 const WINDOW_DAYS = 60;
 /**
@@ -103,7 +103,8 @@ function hashDocId(docId: string): number {
 export async function runYuhoEdinetCatchup(
   db: Database,
   shard?: ShardOpts,
-  d1HttpBatch?: ReturnType<typeof createD1HttpBatchSender>
+  d1HttpBatch?: ReturnType<typeof createD1HttpBatchSender>,
+  holdingPriceSourceLoader?: HoldingPriceSourceLoader
 ): Promise<YuhoEdinetResult> {
   const startedAt = Date.now();
 
@@ -314,6 +315,19 @@ export async function runYuhoEdinetCatchup(
     console.info(`[yuho-edinet] 投影再生成 開始`);
     const proj = await rebuildYuhoGrowthProjection(db);
     projectionStocks = proj.stocks;
+  }
+
+  // 原本/進捗/L2を先に確定する。Nodeの保存価格loaderだけを注入し、WorkerへS3/fsを持ち込まない。
+  // 価格は別100明細/116chunk/256MiB/300秒。sourceの残枠・失敗状態を変更しない。
+  if (!shard && holdingPriceSourceLoader) {
+    const priceStarted = Date.now();
+    const prices = await resumePendingShareholdingsPrices({ maxRows: 100,
+      shouldStop: () => Date.now() - priceStarted > TIME_BUDGET_MS,
+      budget: { remainingChunks: 116, remainingBytes: 256 * 1024 * 1024 }, loadSources: holdingPriceSourceLoader });
+    if (prices.resumed > 0) byStatus["holdings_price:resumed"] = prices.resumed;
+    if (prices.held > 0) byStatus["holdings_price:requires_review"] = prices.held;
+    if (prices.pending) byStatus["holdings_price:pending"] = 1;
+    reachedCap = reachedCap || prices.pending || prices.held > 0;
   }
 
   const elapsedSec = (Date.now() - startedAt) / 1000;

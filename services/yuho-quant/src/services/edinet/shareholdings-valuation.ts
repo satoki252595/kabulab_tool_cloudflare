@@ -9,7 +9,9 @@ import { parseDailyChart } from "../../../../../src/shared/yahoo/client.js";
 import { jstDateSec } from "../../../../../src/shared/vwap/proof.js";
 import type { Shareholding } from "./shareholdings.js";
 
-export interface ArchivedSource { archivePageId: string; filename: string; bytes: Buffer; sha256: string }
+export interface ArchivedSource { archivePageId: string; filename: string; bytes: Buffer; sha256: string;
+  /** Explicit activated members only; full gzip bytes/SHA remain unchanged. Omitted for legacy callers. */
+  priceMembers?: Readonly<Record<string, { bodySha256: string; bodyBytes: number; receivedAt: string }>> }
 export interface ListedIdentity {
   code: string; edinetCode: string; corporateNumber: string; legalName: string; englishName: string;
   asOf: string; row: number; archivePageId: string; zipSha256: string;
@@ -96,12 +98,22 @@ export class HoldingsPriceIndex {
       assertSource(source);
       const wrapper = JSON.parse(gunzipSync(source.bytes).toString("utf8"));
       assert.equal(wrapper.version, 1); assert.ok(Array.isArray(wrapper.members));
+      const selected = new Set<string>();
       for (const member of wrapper.members as PriceMember[]) {
         if (member.api !== "daily") continue;
+        if (source.priceMembers !== undefined) {
+          const expected = source.priceMembers[member.symbol];
+          if (expected === undefined) continue;
+          // Mixed old/new gzip can contain unactivated observations. Never choose those.
+          if (member.sha256 !== expected.bodySha256 || member.byteLength !== expected.bodyBytes || member.receivedAt !== expected.receivedAt) continue;
+          assert.equal(member.status, 200); assert.ok(!selected.has(member.symbol), "価格snapshotの同一memberが重複しています");
+          selected.add(member.symbol);
+        }
         const candidates = bySymbol.get(member.symbol) ?? [];
         candidates.push(Object.freeze({ source: Object.freeze({ archivePageId: source.archivePageId, filename: source.filename, sha256: source.sha256 }), member: Object.freeze(member) }));
         bySymbol.set(member.symbol, candidates);
       }
+      if (source.priceMembers !== undefined) assert.deepEqual([...selected].sort(), Object.keys(source.priceMembers).sort(), "価格snapshotの明示member/SHA/実時計が一致しません");
     }
     return bySymbol;
   }

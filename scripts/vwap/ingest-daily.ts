@@ -11,7 +11,9 @@ import { archiveSummaryOrFatal, assertSavedDailyShape, bodyPin, buildIngestSumma
 import { isStrictIsoUtc, jstDateSec, tenYearRangeForDate } from "../../src/shared/vwap/proof.js";
 import { fetchDailySessionReference, qualifyDailySourceRange } from "./lib/daily-session.js";
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
-import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../../src/shared/yahoo/raw-custody.js";
+import { archiveYahooRawBatch, type ArchivedYahooPart, type YahooRawAttempt, type YahooRawMissing } from "../../src/shared/yahoo/raw-custody.js";
+import { priceMetadata, readPriceReference, referenceFromArchivedParts, type PriceReference } from "../../src/shared/holdings/price-registry.js";
+import { publishDailyPriceSnapshot } from "./lib/holdings-price-registry.js";
 
 /**
  * 明示 10y range (run 起点の JST 暦日。repair保護上限/従来skip用)。先頭barからの導出は禁止
@@ -49,6 +51,7 @@ export async function main() {
   const unknownCodes: string[] = [];
   const rejectedCodes: string[] = [];
   const outcomes: Record<string, IngestCodeOutcome> = {};
+  const priceReferences = new Map<string, PriceReference>();
   // R2 fault (PUT unknown/rejected・GET fault) は新規作業を止める。
   // inflight は止めず settle させ正直計数する (取消成功の仮定なし)。
   const stopNewWork = (code: string, why: unknown) => {
@@ -84,6 +87,7 @@ export async function main() {
     const captures: YahooRawAttempt[] = [];
     const missing: YahooRawMissing[] = [];
     const writes: Array<() => Promise<void>> = [];
+    let archivedParts: ArchivedYahooPart[] = [];
     // 各波は1件。8MiB到達・30波・30銘柄で収集を止め、全inflightを
     // settle後、同じ本文のNotion物理保管/readbackを通してからR2へ送る。
     // ponytail: 最大30銘柄まで先行取得し、Notion呼出しを減らす (PUT unknown検知前の取得済が最大30)。
@@ -102,10 +106,12 @@ export async function main() {
         // 空文字列は bootstrap ではなく腐敗 (=== null 判定。truthiness 禁止)。
         let existing: string | null;
         let observedVersion: string | null;
+        let objectMetadata: Record<string, string> | undefined;
         try {
           const current = await r2GetVersion(`daily/${code}.json`);
           existing = current === null ? null : current.body;
           observedVersion = current === null ? null : current.etag;
+          objectMetadata = current?.metadata;
         } catch (e) {
           // GET fault は typed family のみ記録する (生 SDK cause を出さない)。
           const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
@@ -119,6 +125,8 @@ export async function main() {
         if (existing !== null) {
           try {
             const saved = assertSavedDailyShape(existing, `daily/${code}.json`, code);
+            const standingReference = readPriceReference(objectMetadata, saved.proof);
+            if (standingReference.status === "ready") priceReferences.set(code, standingReference.reference);
             // ponytail: 同じ確定sessionのvendor訂正は自動追跡しない。訂正取得は明示別scope。
             if (hasCompletedDailyFetch(saved, SOURCE_RANGE)) {
               skipped++;
@@ -231,7 +239,9 @@ export async function main() {
         writes.push(async () => {
           if (aborted || fatal) return;
           try {
-            await r2Put(`daily/${code}.json`, postJson, observedVersion);
+            const priceReference = referenceFromArchivedParts(archivedParts, proof);
+            await r2Put(`daily/${code}.json`, postJson, observedVersion, priceMetadata(objectMetadata, priceReference));
+            priceReferences.set(code, priceReference);
           } catch (e) {
             // PUT fault は全件 fatal。区別は正直計数する (unknown/rejected/想定外)。
             if (e instanceof R2PutUnknownError) {
@@ -263,6 +273,8 @@ export async function main() {
       if (captures.length > 0 || missing.length > 0) {
         const raw = await archiveYahooRawBatch({ service: "vwap-analysis", runId,
           stage: `vwap-daily-${batchStart}`, captures, missing });
+        if (!raw.archives) throw new Error("日足原本の物理照合済み参照がありません (raw custody STOP)");
+        archivedParts = raw.archives;
         console.info(JSON.stringify({ rawCustody: "daily", pages: raw.pages.length,
           rawBytes: raw.rawBytes, compressedBytes: raw.compressedBytes }));
       }
@@ -301,6 +313,18 @@ export async function main() {
     return;
   }
   console.info(JSON.stringify({ archive: "recorded", key: summary.key }));
+  // 原文・公開JSONは変えず、全母集団が受入済みの通常runだけ価格snapshotを進める。
+  // subset/既存参照欠測は旧activeを維持。activation unknownは後続利用も止める。
+  try {
+    const priceSnapshot = await publishDailyPriceSnapshot({ runId, sessionDate: reference.date, finishedAt,
+      universe, codes, references: priceReferences,
+      complete: !aborted && !fatal && errors === 0 && invalid === 0 && rateLimited === 0 && empty === 0 && written + skipped === codes.length });
+    console.info(JSON.stringify({ holdingPriceSnapshot: priceSnapshot }));
+  } catch (e) {
+    console.error(`holding price snapshot STOP: ${sanitizeLogText(e instanceof Error ? e.message : String(e)).slice(0, 200)}`);
+    process.exitCode = 2;
+    return;
+  }
   // errors/invalid/rateLimited 計数があれば非0終了 (銘柄 PUT0 は上で確定済み)。
   // R2 fault (fatal) は 2。ワークフローは exit 2 で intra を走らせない。
   process.exitCode = resolveExitCode({ aborted, fatalUnknown: fatal, errors, invalid, rateLimited });

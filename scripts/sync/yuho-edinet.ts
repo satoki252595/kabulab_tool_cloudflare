@@ -7,6 +7,8 @@ import { yuhoEnv } from "../../services/yuho-quant/src/env.js";
 import * as yuhoSchema from "../../services/yuho-quant/src/db/schema.js";
 import type { Database } from "../../services/yuho-quant/src/db/client.js";
 import { runYuhoEdinetCatchup, catchupHttpStatus, type ShardOpts } from "../../src/cron/yuho-edinet.js";
+import { sharedEnv } from "../../src/shared/env.js";
+import { createHoldingPriceSourceLoader } from "./holdings-price-sources.js";
 
 export function parseShard(args: readonly string[]): ShardOpts | undefined {
   if (args.includes("--part") || args.includes("--of")) throw new Error("part/of は --part=N --of=N で指定してください");
@@ -30,9 +32,12 @@ export async function main(args = process.argv.slice(2)): Promise<0 | 1> {
   notionEnv.NOTION_TOKEN();
   notionEnv.NOTION_ARCHIVE_PAGE_ID();
   notionEnv.NOTION_YUHO_TEXT_DB_ID();
+  if (!shard) {
+    sharedEnv.R2_ACCOUNT_ID(); sharedEnv.R2_ACCESS_KEY_ID(); sharedEnv.R2_SECRET_ACCESS_KEY(); sharedEnv.R2_BUCKET();
+  }
   const db = createD1HttpDb(yuhoSchema) as unknown as Database;
   const sender = createD1HttpBatchSender();
-  const result = await runYuhoEdinetCatchup(db, shard, sender);
+  const result = await runYuhoEdinetCatchup(db, shard, sender, shard ? undefined : createHoldingPriceSourceLoader());
   console.info("[yuho-edinet]", JSON.stringify(result));
   return catchupHttpStatus(result) === 200 ? 0 : 1;
 }

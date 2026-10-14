@@ -19,7 +19,7 @@ import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js
 import { ExistingTextReadbackMismatchError } from "../../services/yuho-quant/src/services/text-backup.js";
 import { rebuildYuhoGrowthProjection } from "../../services/yuho-quant/src/services/projection.js";
 import { checkDocsCustody } from "../../services/yuho-quant/src/services/edinet/archive.js";
-import { resumePendingShareholdings } from "../shared/notion-archive/shareholdings.js";
+import { resumePendingShareholdings, resumePendingShareholdingsPrices, type HoldingPriceSourceLoader } from "../shared/notion-archive/shareholdings.js";
 import type { Database as YuhoDatabase } from "../../services/yuho-quant/src/db/client.js";
 import {
   catchupHttpStatus,
@@ -54,6 +54,7 @@ vi.mock("../../services/yuho-quant/src/services/ingest.js", () => ({
 }));
 vi.mock("../shared/notion-archive/shareholdings.js", () => ({
   resumePendingShareholdings: vi.fn(async () => ({ usedRows: 0, resumed: 0, held: 0, pending: false })),
+  resumePendingShareholdingsPrices: vi.fn(async () => ({ usedRows: 0, resumed: 0, held: 0, pending: false })),
 }));
 vi.mock("../../services/yuho-quant/src/services/edinet/archive.js", () => ({
   checkDocsCustody: vi.fn(async () => new Map()),
@@ -109,14 +110,14 @@ const annualDoc = (code: string) => ({
   filerName: `テスト${code}`,
 });
 
-async function runCatchup(now?: Date) {
+async function runCatchup(now?: Date, priceLoader?: HoldingPriceSourceLoader) {
   // 本体は sleep を挟む (60 日分)。setTimeout だけ偽物にして進める。
   vi.useFakeTimers({ toFake: now ? ["setTimeout", "Date"] : ["setTimeout"] });
   if (now) vi.setSystemTime(now);
   const info = vi.spyOn(console, "info").mockImplementation(() => {});
   const err = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
-    const running = runYuhoEdinetCatchup(db as unknown as YuhoDatabase);
+    const running = runYuhoEdinetCatchup(db as unknown as YuhoDatabase, undefined, undefined, priceLoader);
     const settled = running.then(value => ({value}), error => ({error}));
     await vi.runAllTimersAsync();
     const outcome = await settled;
@@ -130,6 +131,31 @@ async function runCatchup(now?: Date) {
 }
 
 describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
+  it("原本・L2完了を優先した後、Nodeの価格loaderだけを別予算で呼び未完を隠さない", async () => {
+    const loader: HoldingPriceSourceLoader = vi.fn();
+    vi.mocked(listDocuments).mockResolvedValue({ results: [] } as never);
+    vi.mocked(resumePendingShareholdingsPrices).mockResolvedValueOnce({ usedRows: 10, resumed: 1, held: 1, pending: true });
+    const result = await runCatchup(undefined, loader);
+    expect(resumePendingShareholdingsPrices).toHaveBeenLastCalledWith({ maxRows: 100, shouldStop: expect.any(Function),
+      budget: { remainingChunks: 116, remainingBytes: 256 * 1024 * 1024 }, loadSources: loader });
+    expect(vi.mocked(rebuildYuhoGrowthProjection).mock.invocationCallOrder.at(-1)).toBeLessThan(vi.mocked(resumePendingShareholdingsPrices).mock.invocationCallOrder.at(-1)!);
+    expect(result.byStatus).toMatchObject({ "holdings_price:resumed": 1, "holdings_price:requires_review": 1, "holdings_price:pending": 1 });
+    expect(catchupHttpStatus(result)).toBe(500);
+  });
+  it("Workerの通常callerでは価格loader/S3処理を呼ばない", async () => {
+    vi.mocked(listDocuments).mockResolvedValue({ results: [] } as never);
+    await runCatchup();
+    expect(resumePendingShareholdingsPrices).not.toHaveBeenCalled();
+  });
+  it("価格unknownでも先に確定したsource進捗とL2を戻さない", async () => {
+    vi.mocked(listDocuments).mockResolvedValue({ results: [] } as never);
+    vi.mocked(resumePendingShareholdingsPrices).mockRejectedValueOnce(new Error("PRICE_UNKNOWN"));
+    await expect(runCatchup(undefined, vi.fn())).rejects.toThrow("PRICE_UNKNOWN");
+    expect(rebuildYuhoGrowthProjection).toHaveBeenCalled();
+    const rows = sqlite.prepare("SELECT in_flight_doc_id FROM yuho_edinet_catchup_progress").all();
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every(row => row.in_flight_doc_id === null)).toBe(true);
+  });
   it("保存原本の保有明細再開をsource一覧より先に行い、残枠を新規ingestへ共有する", async () => {
     vi.mocked(resumePendingShareholdings).mockResolvedValueOnce({ usedRows: 30, resumed: 1, held: 0, pending: true });
     vi.mocked(listDocuments).mockResolvedValueOnce({ results: [annualDoc("7203")] } as never).mockResolvedValue({ results: [] } as never);

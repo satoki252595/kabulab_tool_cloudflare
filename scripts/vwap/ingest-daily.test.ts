@@ -16,6 +16,8 @@ import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main, tenYearRange } from "./ingest-daily.js";
 import { assertSavedDailyShape, completedDailyFetch, hasCompletedDailyFetch } from "./lib/ingest-guard.js";
 import { fetchDailySessionReference, qualifyDailySourceRange } from "./lib/daily-session.js";
+import { referenceFromArchivedParts, readPriceReference, priceMetadata } from "../../src/shared/holdings/price-registry.js";
+import { publishDailyPriceSnapshot } from "./lib/holdings-price-registry.js";
 
 const dailySource = vi.hoisted(() => vi.fn());
 const rawHook = vi.hoisted(() => ({ enabled: true, status: 200, size: 28, body: null as Uint8Array | null }));
@@ -46,6 +48,12 @@ vi.mock("../../src/shared/yahoo/client.js", async (importOriginal) => {
   } };
 });
 vi.mock("../../src/shared/yahoo/raw-custody.js", () => ({ archiveYahooRawBatch: vi.fn() }));
+// 配管testsのcanned proofは原本資格ではない。実member束縛は専用suite/下記回帰で検証。
+vi.mock("../../src/shared/holdings/price-registry.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../../src/shared/holdings/price-registry.js")>();
+  return { ...mod, referenceFromArchivedParts: vi.fn(), readPriceReference: vi.fn(), priceMetadata: vi.fn() };
+});
+vi.mock("./lib/holdings-price-registry.js", () => ({ publishDailyPriceSnapshot: vi.fn() }));
 vi.mock("../../src/shared/notion-archive/index.js", () => ({
   recordPrimaryData: vi.fn(),
 }));
@@ -110,7 +118,11 @@ beforeEach(() => {
   rawHook.status = 200;
   rawHook.size = 28;
   rawHook.body = null;
-  mockRawArchive.mockResolvedValue({ pages: ["test-page"], rawBytes: 1, compressedBytes: 1 });
+  mockRawArchive.mockResolvedValue({ pages: ["test-page"], rawBytes: 1, compressedBytes: 1, archives: [] });
+  vi.mocked(referenceFromArchivedParts).mockReturnValue({} as never);
+  vi.mocked(readPriceReference).mockReturnValue({ status: "held", reason: "この配管fixtureは物理原本参照を持たない" });
+  vi.mocked(priceMetadata).mockReturnValue({});
+  vi.mocked(publishDailyPriceSnapshot).mockResolvedValue({ status: "held", reason: "配管testsではactivationしない" });
   process.chdir(mkdtempSync(join(tmpdir(), "vwap-daily-")));
 });
 afterEach(() => {
@@ -151,6 +163,49 @@ const completedSaved = async (code: string) => {
 };
 
 describe("daily source前の同日確定済み再開", () => {
+  it("同じ条件付PUTへ原本参照だけをmetadata保存し、公開本文には追加しない", async () => {
+    const actual = await vi.importActual<typeof import("../../src/shared/holdings/price-registry.js")>("../../src/shared/holdings/price-registry.js");
+    vi.mocked(referenceFromArchivedParts).mockImplementation(actual.referenceFromArchivedParts);
+    vi.mocked(priceMetadata).mockImplementation(actual.priceMetadata);
+    vi.mocked(readPriceReference).mockImplementation(actual.readPriceReference);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(COMPLETED_AT));
+    try {
+      rawHook.body = completionRaw("7203.T");
+      const fresh = await parseDailyChart("7203.T", "10y", rawHook.body, COMPLETED_AT);
+      mockLoadCodes.mockResolvedValue(["7203", "6758"]);
+      process.argv.push("--codes=7203");
+      mockR2Get.mockResolvedValue(null);
+      mockR2Put.mockResolvedValue(undefined);
+      mockFetchDaily.mockResolvedValue(fresh);
+      const page = "3f8d74ff-84cd-8188-9724-c64cf81e15e8";
+      mockRawArchive.mockImplementation(async ({ captures }) => ({ pages: [page], rawBytes: rawHook.body!.length, compressedBytes: 120,
+        archives: [{ archivePageId: page, filename: "vwap-daily-0-001.json.gz", gzipSha256: "1".repeat(64), gzipBytes: 120,
+          members: captures.map(({ api, attempt, capture }) => ({ api, attempt, symbol: capture.symbol, receivedAt: capture.receivedAt,
+            status: capture.status, byteLength: capture.bytes.length, sha256: createHash("sha256").update(capture.bytes).digest("hex") })) }] }));
+      await main();
+      expect(process.exitCode).toBe(0);
+      expect(mockR2Put).toHaveBeenCalledTimes(1);
+      const [key, body, etag, metadata] = mockR2Put.mock.calls[0];
+      expect(key).toBe("daily/7203.json"); expect(etag).toBeNull();
+      const saved = assertSavedDailyShape(body, key, "7203");
+      const ref = actual.readPriceReference(metadata, saved.proof);
+      expect(ref).toMatchObject({ status: "ready", reference: { file: { archivePageId: page }, bodySha256: fresh.proof.rawSha } });
+      expect(body).not.toContain(page); expect(body).not.toContain("holdings-price");
+      expect(Object.keys(JSON.parse(body))).toEqual(["code", "updated", "bars", "splits", "proof", "corporateEvents", "completedFetch"]);
+      expect(JSON.parse(body).corporateEvents).toEqual(fresh.corporateEvents);
+      expect(vi.mocked(publishDailyPriceSnapshot).mock.calls[0][0]).toMatchObject({ codes: ["7203"], universe: ["7203", "6758"], complete: true });
+    } finally { vi.useRealTimers(); }
+  });
+  it("activation unknownは日足本文を再送せずexit2にする", async () => {
+    mockLoadCodes.mockResolvedValue(["7203"]); mockR2Get.mockResolvedValue(null);
+    mockFetchDaily.mockResolvedValue({ bars: [BAR_A], splits: [], proof: FAKE_PROOF });
+    mockR2Put.mockResolvedValue(undefined);
+    vi.mocked(publishDailyPriceSnapshot).mockRejectedValue(new R2PutUnknownError("ops/holdings-price/active.json", "TimeoutError", "none", "test"));
+    await main();
+    expect(mockR2Put).toHaveBeenCalledTimes(1); expect(mockRawArchive).toHaveBeenCalledTimes(1);
+    expect(process.exitCode).toBe(2);
+  });
   it.each(["success", "unknown", "config", "transport", "changed-session", "refresh-crossed-day"])(
     "midnight %s closes the prior batch before one new reference and never repairs old captures", async (mode) => {
       const before = "2026-10-02T14:59:59.000Z", after = "2026-10-02T15:00:01.000Z";
@@ -190,7 +245,7 @@ describe("daily source前の同日確定済み再開", () => {
         });
         mockRawArchive.mockImplementation(async (input) => {
           order.push(`archive:${input.captures.map((c) => c.capture.symbol).join(",")}`);
-          return { pages: ["physical"], rawBytes: 1, compressedBytes: 1 };
+          return { pages: ["physical"], rawBytes: 1, compressedBytes: 1, archives: [] };
         });
         mockR2Put.mockImplementation(async (key) => { order.push(`put:${key}`); });
         await main();
