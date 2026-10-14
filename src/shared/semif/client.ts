@@ -470,11 +470,11 @@ export function createLocalDecisionClient(o: LocalDecisionClientOptions): SemifC
         throw new Error("semif askNoul: questions が空です（呼び出し側の実装ミス）");
       }
       try {
-        proc.assertAlive();
+        if (exchange) proc.assertAlive();
         const start = now();
         const replay = exchange?.replay;
         const answers = replay ? replay.answers : await proc.request(state, questions, exchange);
-        proc.assertAlive();
+        if (exchange) proc.assertAlive();
 
         // 依頼した questionId と過不足なく一致するか厳密検証する
         // (一部だけ既定値で埋めて返すことは絶対にしない。ルール2)。

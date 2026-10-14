@@ -165,6 +165,16 @@ describe("durable protocol faults — offline controls, no real process/model", 
     await expect(client.askNoul("next forward forbidden", Q, sink())).rejects.toThrow();
     expect(exchange.accepted).not.toHaveBeenCalled(); expect(fake.writtenRequests).toHaveLength(1);
   });
+  it.each([false, true])("close immediately after valid output retains default behavior; journal=%s", async journalled => {
+    const fake = makeFakeServerSpawn({ respond: req => ({ id: req.id, answers: Object.fromEntries(req.questions.map(q => [q.qid, 0.5])) }), chunks: line => {
+      queueMicrotask(() => fake.children[0].emit("close", 1)); return [line];
+    } });
+    const exchange = sink(), client = createSemifClient({ pythonBin: "/offline-control/python", spawnFn: fake.spawnFn });
+    const result = client.askNoul("offline close boundary", Q, journalled ? exchange : undefined);
+    if (journalled) { await expect(result).rejects.toThrow(SemifUnavailableError); expect(exchange.accepted).not.toHaveBeenCalled(); }
+    else await expect(result).resolves.toMatchObject({ model: SEMIF_MODEL, answers: Object.fromEntries(Object.keys(Q).map(qid => [qid, 0.5])) });
+    client.close();
+  });
 });
 
 describe("createSemifClient askNoul — 正常系", () => {

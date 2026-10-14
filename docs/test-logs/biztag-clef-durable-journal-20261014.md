@@ -33,6 +33,7 @@ resident protocolのsplit/破断/異常応答は隔離したfake processで検�
 - publisher ACK不明時は後続モデルと通常review-packet tailを停止する。
 - 保存出力再利用の判定日を再開日の前日に固定して保持する。
 - 既存のモデル0同期、SemIf/競合caller、kernel排他・通常CLI回帰を維持する。
+- 有効応答直後の子終了はjournal接続時だけ受理を止め、既定SemIfの応答契約を保持する。
 
 Nix: 既存`.runtime/mac`のflake/lock、`--offline --no-write-lock-file`。
 Node v22.22.2、pnpm 9.15.9。追加依存/環境変数なし。
@@ -42,7 +43,7 @@ pnpm exec vitest run scripts/biztag-local src/shared/semif src/shared/jev/policy
   services/yuho-quant/src/biztag/{pipeline,process,plan}.test.ts
   services/yuho-quant/src/biztag/competitors/{pipeline,process}.test.ts
   services/yuho-quant/data-scripts/recover-unjudged-competitors.test.ts
-11 suites / 212 tests PASS
+11 suites / 214 tests PASS
 pnpm exec tsc --noEmit: PASS
 owned 8 TypeScript files eslint --max-warnings=0: PASS
 git diff --check: PASS
