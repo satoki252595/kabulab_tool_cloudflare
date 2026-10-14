@@ -4,6 +4,7 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
+from pathlib import Path
 from unittest.mock import Mock
 
 import httpx
@@ -352,7 +353,7 @@ class TestQueryTruncation:
             client.query_database("db", strict=True)
 
     def test_reaching_the_cap_is_detected_without_the_marker(self, monkeypatch):
-        """現行ピン留めの 2022-06-28 版が marker を返すかは未確認なので件数でも見る。"""
+        """marker欠測の旧応答でも件数上限の保険を維持する。"""
         from jp_stock_pipeline.notion.client import QUERY_RESULT_LIMIT, QueryTruncatedError
 
         client = self._client(monkeypatch, {
@@ -363,22 +364,41 @@ class TestQueryTruncation:
         with pytest.raises(QueryTruncatedError):
             client.query_database("db", page_size=QUERY_RESULT_LIMIT, strict=True)
 
-    def test_non_strict_returns_results_but_warns(self, monkeypatch, caplog):
+    def test_non_strict_incomplete_also_raises(self, monkeypatch):
         client = self._client(monkeypatch, {
             "results": [{"id": "x"}],
             "has_more": False,
             "next_cursor": None,
             "request_status": {"type": "incomplete"},
         })
-        with caplog.at_level("WARNING"):
-            rows = client.query_database("db")
-        assert len(rows) == 1
-        assert any("打ち切られた" in r.message for r in caplog.records)
+        with pytest.raises(module.QueryTruncatedError, match="打ち切られた"):
+            client.query_database("db")
 
-    def test_normal_result_neither_warns_nor_raises(self, monkeypatch, caplog):
-        client = self._client(
-            monkeypatch, {"results": [{"id": "x"}], "has_more": False, "next_cursor": None}
-        )
+    @pytest.mark.parametrize("marker", [None, {"type": "complete"}])
+    def test_natural_cap_rejects_default_full_query(self, monkeypatch, marker):
+        response = {"results": [{"id": str(i)} for i in range(module.QUERY_RESULT_LIMIT)],
+                    "has_more": False, "next_cursor": None}
+        if marker is not None:
+            response["request_status"] = marker
+        client = self._client(monkeypatch, response)
+        with pytest.raises(module.QueryTruncatedError):
+            client.query_database("db")
+
+    def test_explicit_partial_cap_keeps_non_strict_contract(self, monkeypatch, caplog):
+        response = {"results": [{"id": str(i)} for i in range(module.QUERY_RESULT_LIMIT)],
+                    "has_more": True, "next_cursor": "c2"}
+        client = self._client(monkeypatch, response)
+        with caplog.at_level("WARNING"):
+            assert len(client.query_database("db", max_pages=1)) == module.QUERY_RESULT_LIMIT
+        with pytest.raises(module.QueryTruncatedError):
+            client.query_database("db", max_pages=1, strict=True)
+
+    @pytest.mark.parametrize("marker", [None, {"type": "complete"}])
+    def test_normal_result_neither_warns_nor_raises(self, monkeypatch, caplog, marker):
+        response = {"results": [{"id": "x"}], "has_more": False, "next_cursor": None}
+        if marker is not None:
+            response["request_status"] = marker
+        client = self._client(monkeypatch, response)
         with caplog.at_level("WARNING"):
             rows = client.query_database("db", strict=True)
         assert len(rows) == 1
@@ -404,6 +424,56 @@ LIST_OPS = [
     lambda c: c.list_page_property_items("page", "prop"),
     lambda c: c.list_child_blocks("block"),
 ]
+
+def test_actual_native_incomplete_terminal_metadata_stops_default_query(client):
+    # TSと同じ実native envelope投影。行本文/署名URLを保持しない技術metadataだけ。
+    fixture = Path(__file__).resolve().parents[2] / "src/shared/notion-archive/fixtures/query-result-limit-metadata.json"
+    envelope = json.loads(fixture.read_text())["envelope"]
+    calls = sdk_responses(client, [(200, {**envelope, "results": []}, {})])
+    with pytest.raises(module.QueryTruncatedError):
+        client.query_database("db")
+    assert len(calls) == 1
+    module.time.sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("operation", LIST_OPS, ids=["query", "property", "blocks"])
+def test_known_incomplete_first_page_stops_all_read_lists(client, operation):
+    body = {"object": "list", "results": [], "has_more": True, "next_cursor": "c2",
+            "request_status": {"type": "incomplete", "incomplete_reason": "query_result_limit_reached"}}
+    calls = sdk_responses(client, [(200, body, {})])
+    with pytest.raises(module.QueryTruncatedError):
+        operation(client)
+    assert len(calls) == 1
+    module.time.sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("status", [None, [], "complete", {}, {"type": "unknown"},
+    {"type": "incomplete", "incomplete_reason": "unknown"},
+    {"type": "complete", "incomplete_reason": "query_result_limit_reached"},
+    {"type": "complete", "incomplete_reason": None}, {"type": "complete", "unknown": True}])
+def test_malformed_request_status_does_not_retry(client, status):
+    calls = sdk_responses(client, [(200, {"object": "list", "results": [], "has_more": False,
+                                        "next_cursor": None, "request_status": status}, {})])
+    with pytest.raises(module.NotionConfigError, match="request_status"):
+        client.query_database("db")
+    assert len(calls) == 1
+    module.time.sleep.assert_not_called()
+
+
+def test_raw_and_scalar_request_status_use_same_guard(client):
+    body = {"object": "property_item", "id": "p", "type": "number", "number": 5,
+            "request_status": {"type": "incomplete"}}
+    calls = sdk_responses(client, [(200, body, {})])
+    with pytest.raises(module.QueryTruncatedError):
+        client.list_page_property_items("page", "prop")
+    assert len(calls) == 1
+    client._session.request.return_value = raw_response(200, body)
+    client._session.request.side_effect = None
+    with pytest.raises(module.QueryTruncatedError):
+        client.raw_api("GET", "/pages/page/properties/prop")
+    assert client._session.request.call_count == 1
+    module.time.sleep.assert_not_called()
+
 
 MALFORMED_ENVELOPES = [
     ("non-dict", ["not", "a", "dict"]),

@@ -395,15 +395,7 @@ describe("recordDiagBatch", () => {
 
 describe("verifyDiagBatchAttachments", () => {
   function jsonResponse(body: unknown): Response {
-    return {
-      ok: true,
-      status: 200,
-      headers: new Headers(),
-      json: async () => body,
-      text: async () => JSON.stringify(body),
-      arrayBuffer: async () =>
-        new TextEncoder().encode(typeof body === "string" ? body : JSON.stringify(body)).buffer as ArrayBuffer,
-    } as Response;
+    return new Response(typeof body === "string" ? body : JSON.stringify(body), { status: 200 });
   }
 
   const pageId = "diag-page";
@@ -417,7 +409,7 @@ describe("verifyDiagBatchAttachments", () => {
   const hosted = (name: string) => ({
     name,
     type: "file",
-    file: { url: `https://files.example.test/${name}` },
+    file: { url: `https://file.notion.so/${name}` },
   });
 
   function stubFetch(pageEntries: unknown[], downloads: Record<string, string>) {
@@ -475,7 +467,7 @@ describe("runGapDiagnostic", () => {
       return {
         name: f.filename,
         type: "file",
-        file: { url: `https://files.example.test/${f.filename}` },
+        file: { url: `https://file.notion.so/${f.filename}` },
       };
     });
     vi.stubGlobal(
@@ -483,21 +475,11 @@ describe("runGapDiagnostic", () => {
       vi.fn(async (url: unknown) => {
         const u = new URL(String(url));
         if (u.pathname === "/v1/pages/diag-page") {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers(),
-            json: async () => ({ properties: { Files: { type: "files", files: entries } } }),
-          } as Response;
+          return new Response(JSON.stringify({ properties: { Files: { type: "files", files: entries } } }), { status: 200 });
         }
         const body = downloads[u.pathname.slice(1)];
         if (body === undefined) throw new Error(`未定義ルート: ${u.pathname}`);
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          arrayBuffer: async () => new TextEncoder().encode(body).buffer as ArrayBuffer,
-        } as Response;
+        return new Response(body, { status: 200 });
       })
     );
   }

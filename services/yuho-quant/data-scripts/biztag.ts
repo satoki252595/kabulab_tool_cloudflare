@@ -10,7 +10,11 @@
  * サブコマンド: run / gate / golden / rollback / packet / stats。
  */
 import "dotenv/config";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createClefJournal } from "../../../scripts/biztag-local/clef-journal.js";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import {
   createLedgerEntry,
@@ -95,6 +99,7 @@ function writeGithubStepSummary(markdown: string): void {
 }
 
 async function runCommand(): Promise<void> {
+  let journal: ReturnType<typeof createClefJournal> | undefined;
   let calibration: ReturnType<typeof loadCalibration> | undefined;
   const budgetMin = arg("budget-min") ? Number(arg("budget-min")) : 20;
   const limit = arg("limit") ? Number(arg("limit")) : undefined;
@@ -105,6 +110,14 @@ async function runCommand(): Promise<void> {
   const dryRun = hasFlag("dry-run");
 
   const summary = await runBiztag({
+    localJournal: input => {
+      // Same canonical .env directory and kernel writer boundary as withBiztagWriter; values never enter the journal.
+      journal ??= createClefJournal(join(dirname(realpathSync(fileURLToPath(new URL("../../../.env", import.meta.url)))), "tmp/biztag-local"), {
+        modelManifestSha256: createHash("sha256").update(readFileSync(new URL("../../../src/shared/clef/manifest.json", import.meta.url))).digest("hex"),
+        calibrationSha256: createHash("sha256").update(readFileSync(new URL("../src/biztag/calibration.clef.json", import.meta.url))).digest("hex"),
+      });
+      return journal(input);
+    },
     budgetMs: budgetMin * 60_000,
     limit,
     codes,

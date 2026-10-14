@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "dry: 原本GET/SHAと欠測計画のみ、apply: CAS保存と索引補完"
+        description: "inspect: 旧receipt/最大2原本の読取のみ、dry: 欠測計画、apply: CAS保存と索引補完"
         type: choice
-        options: [dry, apply]
+        options: [dry, apply, inspect]
         default: dry
       plan_id:
         description: "再開時は同じID。別IDで先行unknownを迂回しない"
@@ -21,15 +21,15 @@ on:
         type: string
         required: true
       limit:
-        description: "このrunで検証する最大件数（全量まで拡張可）"
+        description: "最大件数。inspectは1〜2のみ（PUT/INSERT/continuation禁止）"
         type: string
         default: "50"
       max_bytes:
-        description: "raw転送予算bytes（hosted/R2 GET/PUT合計をworst-case予約、切詰め禁止）"
+        description: "転送予算bytes。inspectはreceipt/原本のR2 GET総64MiB、manifest1回（D1 bytes別）"
         type: string
         default: "67108864"
       max_seconds:
-        description: "新規原本の開始時間予算秒。開始済み1件を完結し、hard timeoutではinflight保全"
+        description: "開始時間予算秒。inspectは最大600秒/各request前65秒headroom"
         type: string
         default: "1200"
       continue_runs:

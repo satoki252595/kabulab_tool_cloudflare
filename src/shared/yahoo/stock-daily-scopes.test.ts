@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { YahooRawCapture } from "./client.js";
+import type { SavedYahooRawCapture, YahooRawCapture } from "./client.js";
 
 const fixture = JSON.parse(gunzipSync(readFileSync(new URL("./fixtures/stock-daily-scopes-20261014.json.gz", import.meta.url))).toString()) as Record<string, string>;
 const proof = JSON.parse(readFileSync(new URL("./fixtures/stock-daily-scopes-20261014.provenance.json", import.meta.url), "utf8")) as {
@@ -80,6 +80,100 @@ describe("通常株式日次の用途別資格 (実原典の最小projection・�
     for (const [code, range, onRaw] of [["^N225", "5y", () => undefined], ["8303", "1y", () => undefined], ["8303", "5y", undefined]] as const) {
       await expect(client.fetchChart(code, range, { stockDailyScopes: true, onRaw })).rejects.toThrow(/独立scope/);
       await expect(client.fetchStockRawData(code, range, { stockDailyScopes: true, onChartRaw: onRaw })).rejects.toThrow(/独立scope/);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+
+function savedSource() {
+  function member(api: "chart" | "quote-summary", receivedAt: string): SavedYahooRawCapture {
+    const bytes = new TextEncoder().encode(fixture[`8303-${api}`]);
+    const url = api === "chart"
+      ? "https://query1.finance.yahoo.com/v8/finance/chart/8303.T?range=5y&interval=1d&events=split%2Cdiv"
+      : "https://query1.finance.yahoo.com/v10/finance/quoteSummary/8303.T?modules=financialData,defaultKeyStatistics,summaryDetail,incomeStatementHistory";
+    return { capture: { symbol: "8303", status: 200, bytes, url, receivedAt, headers: {} },
+      expectedSha256: createHash("sha256").update(bytes).digest("hex"), expectedByteLength: bytes.byteLength };
+  }
+  return { chart: member("chart", "2026-10-14T10:15:47.400Z"),
+    summary: member("quote-summary", "2026-10-14T10:15:48.285Z") };
+}
+
+describe("保存原本と通常定時取得の共通計算", () => {
+  it("実projectionの結果が通常取得と全列同値で、原clock/bytesを変更せずtransport0", async () => {
+    serve("8303");
+    const normal = await client.fetchStockRawData("8303", "5y", {
+      stockDailyScopes: true, onChartRaw: () => undefined, onSummaryRaw: () => undefined,
+    });
+    const source = savedSource();
+    const before = structuredClone(source);
+    const fetch = vi.fn(() => { throw new Error("保存原本の再取得は禁止"); });
+    vi.stubGlobal("fetch", fetch);
+    const saved = await client.parseSavedStockRawData("8303", source);
+    expect(saved).toEqual(normal);
+    const directRedactedCrumb = structuredClone(source);
+    directRedactedCrumb.chart.capture.url += "&crumb=%3Credacted%3E";
+    expect(await client.parseSavedStockRawData("8303", directRedactedCrumb)).toEqual(normal);
+    expect(source).toEqual(before);
+    expect(fetch).not.toHaveBeenCalled();
+    const proxied = structuredClone(source);
+    for (const saved of Object.values(proxied)) {
+      saved.capture.url = `https://kabulab.example.test/api/ingest/yahoo?u=${encodeURIComponent(saved.capture.url)}`;
+    }
+    expect(await client.parseSavedStockRawData("8303", proxied, { proxyBase: "https://kabulab.example.test" })).toEqual(normal);
+    await expect(client.parseSavedStockRawData("8303", proxied)).rejects.toThrow(/要求銘柄/);
+  });
+
+  it("HTTP/credential/port/hash proxy設定と重複uは正規HTTPS内URLでも拒否する", async () => {
+    const fetch = vi.fn(() => { throw new Error("transportは禁止"); });
+    vi.stubGlobal("fetch", fetch);
+    for (const proxyBase of ["http://kabulab.example.test", "https://user:pass@kabulab.example.test",
+      "https://kabulab.example.test:444", "https://kabulab.example.test#hash", "https://kabulab.example.test?extra=1"]) {
+      const source = savedSource();
+      for (const saved of Object.values(source)) {
+        const base = new URL(proxyBase);
+        saved.capture.url = `${base.origin}/api/ingest/yahoo?u=${encodeURIComponent(saved.capture.url)}`;
+      }
+      await expect(client.parseSavedStockRawData("8303", source, { proxyBase })).rejects.toThrow(/HTTPS・proxy設定/);
+    }
+    for (const change of [
+      (url: string) => url.replace("https:", "http:"),
+      (url: string) => url.replace("https://", "https://user:pass@"),
+      (url: string) => url.replace(".test/", ".test:444/"),
+      (url: string) => `${url}#hash`,
+      (url: string) => `${url}&u=${encodeURIComponent(new URL(url).searchParams.get("u")!)}`,
+    ]) {
+      const source = savedSource();
+      for (const saved of Object.values(source)) {
+        saved.capture.url = change(`https://kabulab.example.test/api/ingest/yahoo?u=${encodeURIComponent(saved.capture.url)}`);
+      }
+      await expect(client.parseSavedStockRawData("8303", source, { proxyBase: "https://kabulab.example.test" })).rejects.toThrow();
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("全SHA/bytes/HTTP/銘柄/要求窓/実clockが崩れた保存原本はtransport0でSTOP", async () => {
+    const fetch = vi.fn(() => { throw new Error("transportは禁止"); });
+    vi.stubGlobal("fetch", fetch);
+    const mutations: ((source: ReturnType<typeof savedSource>) => void)[] = [
+      s => { s.chart.expectedSha256 = s.summary.expectedSha256; },
+      s => { s.chart.capture.bytes[0] ^= 1; },
+      s => { s.summary.expectedByteLength++; },
+      s => { s.summary.capture.status = 503; },
+      s => { s.chart.capture.headers.upstreamStatus = "503"; },
+      s => { s.chart.capture.symbol = "7203"; },
+      s => { s.chart.capture.url = s.chart.capture.url.replace("8303.T", "7203.T"); },
+      s => { s.chart.capture.url = s.chart.capture.url.replace("5y", "1y"); },
+      s => { s.chart.capture.url += "&range=5y"; },
+      s => { s.chart.capture.url += "&toString=1"; },
+      s => { s.summary.capture.url = s.summary.capture.url.replace("incomeStatementHistory", "price"); },
+      s => { s.chart.capture.receivedAt = "not-a-clock"; },
+      s => { s.summary.capture.receivedAt = s.chart.capture.receivedAt.replace("47.400", "46.400"); },
+      s => { s.chart.capture.receivedAt = "2026-10-13T10:15:47.400Z"; },
+    ];
+    for (const mutate of mutations) {
+      const source = savedSource(); mutate(source);
+      await expect(client.parseSavedStockRawData("8303", source)).rejects.toThrow();
     }
     expect(fetch).not.toHaveBeenCalled();
   });

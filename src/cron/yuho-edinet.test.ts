@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { ROOT } from "../shared/db/tests/source-scan.js";
 import { INSTRUMENT_TYPES } from "../shared/jpx/instrument-type.js";
+import { enqueueDates } from "../../services/yuho-quant/src/services/edinet/catchup-progress.js";
 import { listDocuments, EdinetListFetchError, EdinetDocumentFetchError } from "../../services/yuho-quant/src/services/edinet/client.js";
 import { captureListSnapshot, EdinetListQualificationError } from "../../services/yuho-quant/src/services/edinet/list-snapshot.js";
 import { ingestDocument } from "../../services/yuho-quant/src/services/ingest.js";
@@ -131,6 +132,38 @@ async function runCatchup(now?: Date, priceLoader?: HoldingPriceSourceLoader, de
 }
 
 describe("catchup 応答契約: 実失敗だけ非 2xx", () => {
+  it("同日照合済みの実15IDのHOLDはqueue0でも消さず、未完内訳を出して500を保つ", async () => {
+    // Saved official EDINET list metadata (2026-08-14〜09-30). This is a
+    // conditional checkpoint-state regression, not a fresh production read.
+    const held = [
+      ["2026-08-14", ["S100YWCV"]],
+      ["2026-08-28", ["S100YZ7E", "S100YZ9G", "S100YXGH", "S100YYYH"]],
+      ["2026-09-25", ["S100Z3CI", "S100Z43C"]],
+      ["2026-09-29", ["S100Z4R8", "S100Z3IX", "S100Z4UN", "S100Z4J5"]],
+      ["2026-09-30", ["S100Z57K", "S100Z590", "S100Z5CH", "S100Z5HU"]],
+    ] as const;
+    await enqueueDates(db as unknown as YuhoDatabase, "main", "2026-10-14");
+    sqlite.exec("UPDATE yuho_edinet_catchup_progress SET finished=1,sealed=1");
+    for (const [date, ids] of held) {
+      sqlite.prepare("INSERT INTO yuho_edinet_catchup_progress(scope,date,finished,sealed,pending_ids,pending_checked_date) VALUES ('main',?,1,1,?,'2026-10-14') ON CONFLICT(scope,date) DO UPDATE SET pending_ids=excluded.pending_ids,pending_checked_date=excluded.pending_checked_date")
+        .run(date, JSON.stringify(ids.map(docId => ({docId, reason: "identity_unresolved"}))));
+    }
+    sqlite.exec("UPDATE yuho_edinet_catchup_progress SET sealed=0 WHERE date='2026-10-14'");
+    const before = sqlite.prepare("SELECT * FROM yuho_edinet_catchup_progress ORDER BY date").all();
+    vi.mocked(resumePendingShareholdings).mockResolvedValueOnce({usedRows: 0, resumed: 0, held: 1, pending: false});
+    vi.mocked(rebuildYuhoGrowthProjection).mockResolvedValueOnce({stocks: 1407} as never);
+    const result = await runCatchup(new Date("2026-10-14T13:46:32.476Z"));
+    expect(result).toMatchObject({scannedDays: 0, matched: 0, ingested: 0, pendingDocuments: 15,
+      reachedCap: true, projectionStocks: 1407, byStatus: {"holdings:requires_review": 1},
+      sourceProgress: {queuedAtStart: 0, pendingDocuments: 15, queuedDays: 0,
+        pendingRecheckDueDays: 0, sameDayPendingWaitDays: 5, futurePendingWaitDays: 0,
+        unsealedTodayWaitDays: 1, inFlightDays: 0,
+        pendingByReason: {identity_unresolved: 15, metadata_unresolved: 0, parse_error: 0, text_readback_mismatch: 0}}});
+    expect(catchupHttpStatus(result)).toBe(500);
+    expect(listDocuments).not.toHaveBeenCalled(); expect(captureListSnapshot).not.toHaveBeenCalled();
+    expect(ingestDocument).not.toHaveBeenCalled(); expect(checkDocsCustody).not.toHaveBeenCalled();
+    expect(sqlite.prepare("SELECT * FROM yuho_edinet_catchup_progress ORDER BY date").all()).toEqual(before);
+  });
   it("期限超過/無効deadlineはDB/source開始前に停止する", async () => {
     for (const deadline of [Date.now() - 1, NaN, Infinity]) {
       await expect(runYuhoEdinetCatchup(db as unknown as YuhoDatabase, undefined, undefined, undefined, deadline)).rejects.toThrow("絶対締切");

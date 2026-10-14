@@ -1,0 +1,54 @@
+{
+  "kind": "ACTUAL_SAVED_NATIVE_NOTION_FILENAME_REJECTION",
+  "filename": "stock-saved8303-stock-saved8303-finite-v5-PRE-eca0cad159c9a4024895a29a964ad4cd88bc579afb3929f2a56eaae1d6f79463.json.gz",
+  "nativeError": {
+    "status": 400,
+    "code": "validation_error",
+    "message": "body failed validation: body.properties.Files.files[0].name.length should be ≤ `100`, instead was `118`."
+  },
+  "provenance": [
+    {
+      "path": "tmp/feature-audit-20261013/stock-saved8303-finite-v5/prepare-once/physical-PRE-intent.json",
+      "sha256": "a25e84705ba158c3462bea9f18c21b989ee8fa70e11e26e84cca9b751beb6d4d"
+    },
+    {
+      "path": "tmp/feature-audit-20261013/stock-saved8303-finite-v5/prepare-once/response-23.bin",
+      "sha256": "40ca8d43aea8ce98e14d2f4c577cf02897f8f1d01c0e9782d0c78fe99afc112e"
+    },
+    {
+      "path": "tmp/feature-audit-20261013/stock-saved8303-finite-v5/prepare-once/response-21.bin",
+      "sha256": "32d1ef5b0c377bb1dadf1b7616fb9326bfd43c814a1023517adeb1cdaee7b1aa"
+    },
+    {
+      "path": "tmp/feature-audit-20261013/stock-saved8303-finite-v5/prepare-once/response-22.bin",
+      "sha256": "6582c7ad3f766b3175633a064b4bba27f40b725ebcdf931767fcfcf38553e56f"
+    },
+    {
+      "path": "tmp/feature-audit-20261013/stock-saved8303-finite-v5/prepare-once/events.jsonl",
+      "sha256": "add7214063c6c60477a3e661abf6d95d79c739989586667cfbe21edecfd58b1b"
+    }
+  ],
+  "projection": "Only actual filename and validation response; original private events retain original clock/ACK. Derived100/101/ZIP/Unicode test cases are explicit offline controls, not production input or native Unicode-limit evidence.",
+  "nativeRequests": 0,
+  "productionWrites": 0,
+  "nativeAcknowledgements": [
+    {
+      "request": 21,
+      "status": 200,
+      "ackAt": "2026-10-14T14:44:15.374Z",
+      "complete": true
+    },
+    {
+      "request": 22,
+      "status": 200,
+      "ackAt": "2026-10-14T14:44:19.418Z",
+      "complete": true
+    },
+    {
+      "request": 23,
+      "status": 400,
+      "ackAt": "2026-10-14T14:44:22.968Z",
+      "complete": true
+    }
+  ]
+}

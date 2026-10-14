@@ -8,6 +8,12 @@ import {
   MONEYFLOW_READCHECK_CRON,
   CATCHUP_DISPATCH_CRON,
   CATCHUP_READCHECK_CRON,
+  VWAP_DISPATCH_CRON,
+  VWAP_READCHECK_CRON,
+  vwapReceiptKey,
+  evaluateVwapReadcheck,
+  runVwapDispatch,
+  runVwapDeadlineReadcheck,
   catchupReceiptKey,
   evaluateCatchupReadcheck,
   runCatchupDispatch,
@@ -34,6 +40,75 @@ import {
   type SchedulerEnv,
   type StockReceipt,
 } from "./stock.js";
+
+describe("定時VWAPは同頻度CF one-shotで開始/終了窓を検査", () => {
+  const date = "2026-10-14", start = Date.parse(`${date}T08:00:00.000Z`);
+  const jobs = (): RunJob[] => [{ name: "ingest", run_id: 101, status: "completed", conclusion: "success", steps: [
+    { name: "VWAP daily + intra → R2", status: "completed", conclusion: "success", started_at: `${date}T08:01:00.000Z`, completed_at: `${date}T14:30:00.000Z` },
+    { name: "VWAP intra backfill → R2", status: "completed", conclusion: "skipped", completed_at: null },
+    { name: "VWAP margin (daily) → R2", status: "completed", conclusion: "skipped", completed_at: null },
+  ] }];
+  it("月水金17時と期限照会を識別し、別曜日/10分遅配はPOST/claim0", async () => {
+    expect(routeCron(VWAP_DISPATCH_CRON)).toBe("vwap-dispatch");
+    expect(routeCron(VWAP_READCHECK_CRON)).toBe("vwap-readcheck");
+    expect(resolveRunDate("vwap-dispatch", start, start + 600_000)).toBe(date);
+    const { bucket, puts } = makeBucket(), { fetchFn, calls } = makeFetch(() => jsonRes({}));
+    for (const at of [start + 600_001, Date.parse("2026-10-15T08:00:00.000Z")]) {
+      await expect(handleStockScheduled({ cron: VWAP_DISPATCH_CRON, scheduledTime: at === start + 600_001 ? start : at },
+        { BUCKET: bucket, GITHUB_ACTIONS_TOKEN: TOKEN }, { fetchFn, nowMs: at })).rejects.toThrow();
+    }
+    expect(calls).toEqual([]); expect(puts).toEqual([]);
+  });
+  it("専用receiptへ1回POSTし、同じ予定日のduplicateは再送0", async () => {
+    vi.setSystemTime(new Date(start));
+    const { bucket, puts } = makeBucket();
+    const { fetchFn, calls } = makeFetch(() => jsonRes({ workflow_run_id: 101,
+      run_url: "https://api.github.com/repos/satoki252595/kabulab_tool_cloudflare/actions/runs/101",
+      html_url: "https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/101" }));
+    const deps = { bucket, token: TOKEN, cron: VWAP_DISPATCH_CRON, scheduledDate: date, nowMs: start, fetchFn };
+    expect(await runVwapDispatch(deps)).toEqual({ status: "dispatched", workflowRunId: 101 });
+    expect(await runVwapDispatch(deps)).toEqual({ status: "duplicate", workflowRunId: 101 });
+    expect(calls).toHaveLength(1); expect(calls[0].url).toContain("vwap-ingest.yml/dispatches");
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: "main", inputs: {
+      target: "scheduled-daily-intra", scheduled_date: date, daily_session_source: "yahoo-direct" } });
+    expect(puts.map(x => x.key)).toEqual([vwapReceiptKey(date), vwapReceiptKey(date), vwapReceiptKey(date)]);
+  });
+  it("unknown dispatchはclaimedを保持してduplicate再送0", async () => {
+    const { bucket } = makeBucket(), { fetchFn, calls } = makeFetch(() => { throw new Error("transport unknown"); });
+    const deps = { bucket, token: TOKEN, cron: VWAP_DISPATCH_CRON, scheduledDate: date, nowMs: start, fetchFn };
+    await expect(runVwapDispatch(deps)).rejects.toThrow("unknown");
+    await expect(runVwapDispatch(deps)).rejects.toThrow("未完了");
+    expect(calls).toHaveLength(1);
+  });
+  it("readcheckは同日の一意成功・17:10内開始・23:30内完了だけ受入", () => {
+    expect(evaluateVwapReadcheck(jobs(), date)).toEqual({ vwapCompletedAt: `${date}T14:30:00.000Z` });
+    for (const at of [null, `${date}T07:59:59Z`, `${date}T08:10:00.001Z`, "2026-10-15T08:00:00Z"]) {
+      const bad = jobs(); bad[0].steps![0].started_at = at;
+      expect(() => evaluateVwapReadcheck(bad, date)).toThrow("開始期限");
+    }
+    for (const at of [null, `${date}T14:30:00.001Z`, `${date}T08:00:00Z`]) {
+      const bad = jobs(); bad[0].steps![0].completed_at = at;
+      expect(() => evaluateVwapReadcheck(bad, date)).toThrow();
+    }
+    for (const index of [0, 1, 2]) {
+      const bad = jobs(); bad[0].steps![index].conclusion = index === 0 ? "failure" : "success";
+      expect(() => evaluateVwapReadcheck(bad, date)).toThrow();
+    }
+    expect(() => evaluateVwapReadcheck([...jobs(), ...jobs()], date)).toThrow("一意");
+  });
+  it("受領済みrunのJobsを全頁照会して期限判定し、claimedは照会0", async () => {
+    const raw = { ...dispatchedBody(), scheduledDate: date, cron: VWAP_DISPATCH_CRON,
+      claimedAt: `${date}T08:00:00Z`, dispatchedAt: `${date}T08:00:01Z` };
+    const { bucket } = makeBucket({ [vwapReceiptKey(date)]: JSON.stringify(raw) });
+    const { fetchFn, calls } = makeFetch(() => jsonRes({ jobs: jobs() }));
+    expect(await runVwapDeadlineReadcheck({ bucket, token: TOKEN, scheduledDate: date, fetchFn }))
+      .toEqual({ vwapCompletedAt: `${date}T14:30:00.000Z` });
+    expect(calls).toHaveLength(1);
+    const claimed = makeBucket({ [vwapReceiptKey(date)]: JSON.stringify({ ...raw, status: "claimed" }) });
+    await expect(runVwapDeadlineReadcheck({ bucket: claimed.bucket, token: TOKEN, scheduledDate: date, fetchFn })).rejects.toThrow("未完了");
+    expect(calls).toHaveLength(1);
+  });
+});
 
 describe("定時マクロの独立dispatchと期限確認", () => {
   const date = "2026-09-30";

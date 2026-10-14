@@ -14,6 +14,7 @@ import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { archiveYahooRawBatch, type ArchivedYahooPart, type YahooRawAttempt, type YahooRawMissing } from "../../src/shared/yahoo/raw-custody.js";
 import { priceMetadata, readPriceReference, referenceFromArchivedParts, type PriceReference } from "../../src/shared/holdings/price-registry.js";
 import { publishDailyPriceSnapshot } from "./lib/holdings-price-registry.js";
+import { scheduledVwapGuard } from "./lib/scheduled-window.js";
 
 /**
  * 明示 10y range (run 起点の JST 暦日。repair保護上限/従来skip用)。先頭barからの導出は禁止
@@ -33,6 +34,14 @@ export async function main() {
   // 通常値は vwap-ingest.yml・.env.example で明示宣言。黙示既定なし。
   const startedAt = new Date().toISOString();
   const sessionSource = resolveDailySessionSource(arg("session-source"), arg("session-date"), startedAt);
+  const runId = resolveRunId();
+  if (arg("scheduled-date") !== undefined && sessionSource.kind !== "yahoo-direct") {
+    throw new Error("定時VWAPの市場sessionは従来のyahoo-directだけです。保存原本は明示手動選択してください");
+  }
+  const schedule = scheduledVwapGuard({ plannedDate: arg("scheduled-date"), runId, phase: "daily" });
+  const fetchReference = (stage?: string) => schedule.admission === null
+    ? stage === undefined ? fetchDailySessionReference(runId) : fetchDailySessionReference(runId, stage)
+    : fetchDailySessionReference(runId, stage, schedule.assertActive);
   console.info(JSON.stringify({ dailySessionSource: sessionSource }));
   const { delayMs: DELAY } = sharedEnv.vwapKnobs();
   const universe = await loadCodes();
@@ -42,10 +51,10 @@ export async function main() {
   const limit = arg("limit"); if (limit) codes = codes.slice(0, Number(limit));
 
   const CONC = 1; // Yahoo取得は環境変数によらず直列。実HTTP間隔は共有clientで制御。
-  const runId = resolveRunId();
   const TEN_Y_RANGE = tenYearRange(startedAt); // run 内一定の明示 10y range
+  schedule.assertActive();
   const archivedSession = sessionSource.kind === "archived-jp-leg" ? await loadArchivedDailySessionReference(sessionSource.date) : undefined;
-  let reference = archivedSession === undefined ? await fetchDailySessionReference(runId) : archivedSession.reference; // 原本照合済み独立session。
+  let reference = archivedSession === undefined ? await fetchReference() : archivedSession.reference; // 原本照合済み独立session。
   let SOURCE_RANGE = tenYearRangeForDate(reference.date);
   let referenceGeneration = 0;
   let written = 0, empty = 0, errors = 0, backfilled = 0, rateLimited = 0, invalid = 0, skipped = 0;
@@ -66,11 +75,12 @@ export async function main() {
     }
   };
   for (let offset = 0; offset < codes.length && !aborted && !fatal;) {
+    try { schedule.assertActive(); } catch (e) { fatal = true; rawCustodyError = e; break; }
     if (jstDateSec(Date.now() / 1000) !== jstDateSec(Date.parse(reference.observedAt) / 1000)) {
       try {
         // 前batchを物理保管/条件付PUTで閉じてから取得する。unknown後に未保管batchを送らない。
         if (sessionSource.kind === "archived-jp-leg") throw new Error("daily session HOLD: 保存同日原本は日跨ぎ後に更新・切替できません");
-        const refreshed = await fetchDailySessionReference(runId, `vwap-daily-session-${++referenceGeneration}`);
+        const refreshed = await fetchReference(`vwap-daily-session-${++referenceGeneration}`);
         if (refreshed.date !== reference.date ||
             jstDateSec(Date.parse(refreshed.observedAt) / 1000) !== jstDateSec(Date.now() / 1000)) {
           throw new Error("daily session HOLD: 更新benchmarkの確定取引日/実観測暦日がrunと一致しません");
@@ -99,6 +109,7 @@ export async function main() {
       offset - batchStart < 30 && rawBytes < MAX_YAHOO_RAW_BYTES; wave++) {
       await sleep(DELAY);
       if (aborted || fatal) break;
+      try { schedule.assertActive(); } catch (e) { fatal = true; rawCustodyError = e; break; }
       // HTTP中に跨いだ1件は既存資格検査でHOLD。次銘柄前にbatchを閉じて基準原本を更新する。
       if (jstDateSec(Date.now() / 1000) !== jstDateSec(Date.parse(reference.observedAt) / 1000)) break;
       const waveCodes = codes.slice(offset, offset + Math.min(CONC, 30 - (offset - batchStart)));
@@ -152,9 +163,11 @@ export async function main() {
         let corporateEvents: Awaited<ReturnType<typeof fetchDaily>>["corporateEvents"];
         let captured = false;
         let sourceCapture: YahooRawCapture | undefined;
+        schedule.assertActive();
         try {
           // 1 社 1 回の単発取得 (producer 側の chart retry なし。失敗は error/HOLD 計数へ)。
           ({ bars, splits, proof, corporateEvents } = await fetchDaily(`${code}.T`, "10y", {
+            ...(schedule.admission === null ? {} : { beforeRequest: schedule.assertActive }),
             onRaw: (capture) => {
               sourceCapture = capture;
               captures.push({ api: "daily", attempt: 1, capture });
@@ -243,6 +256,7 @@ export async function main() {
         writes.push(async () => {
           if (aborted || fatal) return;
           try {
+            schedule.assertActive();
             const priceReference = referenceFromArchivedParts(archivedParts, proof);
             await r2Put(`daily/${code}.json`, postJson, observedVersion, priceMetadata(objectMetadata, priceReference));
             priceReferences.set(code, priceReference);
@@ -287,7 +301,8 @@ export async function main() {
       rawCustodyError = e;
       console.error(`daily raw custody STOP: ${sanitizeLogText(e instanceof Error ? e.message : String(e)).slice(0, 200)}`);
     }
-    await mapLimit(writes, CONC, async (write) => write());
+    // 全batchの原本照合後、異なるR2 keyだけ最大2件。Yahoo取得のCONC=1とは分離する。
+    await mapLimit(writes, 2, async (write) => write());
   }
   // 未着手の全件 accounting。prepared-but-stopped は上で latest 付き notStarted。
   for (const code of codes) {
@@ -304,8 +319,10 @@ export async function main() {
   const summary = buildIngestSummary({ kind: "daily", range: "10y-full", runId, codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, backfilled, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
   const dailySession = { selection: sessionSource, reference, ...(archivedSession === undefined ? {} : { custody: archivedSession.custody }) };
   summary.metadata.dailySession = dailySession;
+  if (schedule.admission !== null) summary.metadata.scheduledWindow = schedule.admission;
   const summaryBody = JSON.parse(new TextDecoder().decode(summary.files[0].bytes));
-  summary.files[0].bytes = new TextEncoder().encode(JSON.stringify({ ...summaryBody, dailySession }));
+  summary.files[0].bytes = new TextEncoder().encode(JSON.stringify({ ...summaryBody, dailySession,
+    ...(schedule.admission === null ? {} : { scheduledWindow: schedule.admission }) }));
   const local = writeSummaryLocal(summary);
   if (!local.ok) {
     console.error(JSON.stringify({ archive: "local-failed", key: summary.key, reason: local.reason }));
@@ -324,9 +341,12 @@ export async function main() {
   // 原文・公開JSONは変えず、全母集団が受入済みの通常runだけ価格snapshotを進める。
   // subset/既存参照欠測は旧activeを維持。activation unknownは後続利用も止める。
   try {
+    schedule.assertActive();
     const priceSnapshot = await publishDailyPriceSnapshot({ runId, sessionDate: reference.date, finishedAt,
       universe, codes, references: priceReferences,
+      ...(schedule.admission === null ? {} : { beforeMutation: schedule.assertActive }),
       complete: !aborted && !fatal && errors === 0 && invalid === 0 && rateLimited === 0 && empty === 0 && written + skipped === codes.length });
+    schedule.assertActive();
     console.info(JSON.stringify({ holdingPriceSnapshot: priceSnapshot }));
   } catch (e) {
     console.error(`holding price snapshot STOP: ${sanitizeLogText(e instanceof Error ? e.message : String(e)).slice(0, 200)}`);

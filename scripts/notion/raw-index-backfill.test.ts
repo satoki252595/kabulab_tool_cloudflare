@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "../../src/shared/zod-mini.js";
 import { canonicalRawKey } from "./raw-index-plan.js";
-import { safeRawFailure, createRawDownloader, expectedRawIndex, runRawBackfill, type BackfillIo, type RawBackfillOptions, type RawItem, type RawIndexRow } from "./raw-index-backfill.js";
+import { safeRawFailure, createRawDownloader, expectedRawIndex, inspectRawBackfill, parseRawManifest, runRawBackfill, type BackfillIo, type RawBackfillOptions, type RawItem, type RawIndexRow } from "./raw-index-backfill.js";
+import { downloadArchivedFile, type ArchivedDownloadOptions } from "../../src/shared/notion-archive/archived-download.js";
 import type { CanonicalRawFile } from "../../src/shared/notion-archive/raw-files.js";
 
 // Protocol fixture only: raw binary fidelity/unknown transport tests, not financial facts.
@@ -14,6 +15,7 @@ const raw: CanonicalRawFile = { pageId: "b".repeat(32), filename: "edinet_csv_10
 const { sourceUrl: _sourceUrl, ...safe } = raw;
 const item: RawItem = { ...safe, source: "EDINET", licenseTag: "commercial-ok", convertStatus: "完了", docId: "S100TEST" };
 const key = canonicalRawKey(raw, item.docId), legacy = canonicalRawKey(raw, null);
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 const opts: RawBackfillOptions = { mode: "apply", planId: "test-plan", limit: 50, maxBytes: 67108864, maxSeconds: 1200, expectedCount: 1 };
 
 function fixture() {
@@ -23,7 +25,12 @@ function fixture() {
   let version = 0;
   const io: BackfillIo = {
     rawBucket: "raw-bucket", receiptBucket: "ops-bucket", now: () => Date.parse("2026-10-14T00:00:00.000Z"),
-    list: vi.fn(async () => [raw]), download: vi.fn(async () => { events.push("hosted:GET"); return { body, wireBytes: body.length }; }),
+    list: vi.fn(async () => [raw]), download: vi.fn(async (_item, _cohort, options) => {
+      await options!.onAttempt!({ attempt: 1, phase: "start", receivedBytes: 0 });
+      events.push("hosted:GET");
+      await options!.onAttempt!({ attempt: 1, phase: "complete", receivedBytes: body.length, status: 200 });
+      return { body, wireBytes: body.length };
+    }),
     get: vi.fn(async (target, bucket) => { events.push(`${bucket}:GET:${target}`); const found = objects.get(`${bucket}/${target}`); return found === undefined ? null : found; }),
     put: vi.fn(async (target, bytes, previous, bucket) => {
       events.push(`${bucket}:PUT:${target}`);
@@ -187,11 +194,54 @@ describe("保存済⑤原本のbounded publisher", () => {
     const secondRaw = { ...raw, sha256: secondSha, pageId: "d".repeat(32) }, secondItem = { ...item, sha256: secondSha, pageId: secondRaw.pageId };
     const find = vi.fn(async () => new Map([[sha, { raw, file: { name: raw.filename, url: "https://hosted.example/1?signature=never-log" } }],
       [secondSha, { raw: secondRaw, file: { name: raw.filename, url: "https://hosted.example/2?signature=never-log" } }]]));
-    const download = vi.fn(async (file: { name: string; url: string }) => file.url.includes("/1?") ? body : secondBody);
+    const download = vi.fn(async (file: { name: string; url: string }, _context: string, options?: ArchivedDownloadOptions) => {
+      const received = file.url.includes("/1?") ? body : secondBody;
+      await options?.onAttempt?.({ attempt: 1, phase: "start", receivedBytes: 0 });
+      await options?.onAttempt?.({ attempt: 1, phase: "complete", receivedBytes: received.length, status: 200 });
+      return received;
+    });
     const fetchBody = createRawDownloader(find, download), cohort = [item, secondItem];
-    expect((await fetchBody(item, cohort)).body).toEqual(body);
-    expect((await fetchBody(secondItem, cohort)).body).toEqual(secondBody);
+    expect(await fetchBody(item, cohort)).toEqual({ body, wireBytes: body.length });
+    expect(await fetchBody(secondItem, cohort)).toEqual({ body: secondBody, wireBytes: secondBody.length });
     expect(find).toHaveBeenCalledTimes(1); expect(find).toHaveBeenCalledWith([sha, secondSha]); expect(download).toHaveBeenCalledTimes(2);
+  });
+  it("hostedのpartial＋再GET全文を予約/実bytesへ数え、intent後は期限を跨いでも必要readbackを完結する", async () => {
+    const reserved = item.sizeBytes * 5 + 2 * (Math.ceil(item.sizeBytes * 0.001) + 4096);
+    const noRoom = fixture();
+    expect(await runRawBackfill({ ...opts, mode: "dry", maxBytes: reserved - 1 }, noRoom.io)).toMatchObject({
+      processed: 0, stoppedByBudget: true, budgetStopReason: "bytes", notionDownloadAttempts: 0 });
+    expect(noRoom.io.download).not.toHaveBeenCalled();
+    const f = fixture();
+    let clock = f.io.now(); f.io.now = () => clock;
+    const find = vi.fn(async () => new Map([[sha, { raw, file: { name: raw.filename, url: "https://file.notion.so/source.zip" } }]]));
+    f.io.download = createRawDownloader(find, downloadArchivedFile);
+    let reads = 0;
+    const partial = new ReadableStream<Uint8Array>({ pull(controller) {
+      if (reads++ === 0) controller.enqueue(body.subarray(0, 2)); else controller.error(new TypeError("terminated"));
+    } });
+    const get = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(partial)).mockResolvedValueOnce(new Response(body));
+    const put = f.io.put;
+    f.io.put = vi.fn(async (...args: Parameters<BackfillIo["put"]>) => { await put(...args); if (args[3] === f.io.rawBucket) clock += opts.maxSeconds * 1000 + 1; });
+    expect(await runRawBackfill({ ...opts, maxBytes: reserved }, f.io)).toMatchObject({
+      status: "partial", processed: 1, verified: 1, cursor: 1, notionDownloads: 1, notionDownloadAttempts: 2,
+      notionDownloadBytes: 6, rawPutBytes: 4, rawGetBytes: 4, rawTransferBytes: 14,
+      hostedBytesKind: "decoded_body_all_observed_attempts", httpHeadersAndErrorBodyBytesMeasured: false,
+    });
+    expect(get).toHaveBeenCalledTimes(2); expect(find).toHaveBeenCalledOnce();
+    expect(f.rawPuts()).toHaveLength(1); expect(f.io.insert).toHaveBeenCalledOnce(); expect(f.state()).toMatchObject({ cursor: 1, inflight: null });
+    expect(f.emitted.filter(r => (r as { phase: string }).phase === "hosted_read_attempt")).toMatchObject([
+      { attempt: 1, attemptPhase: "start", receivedBytes: 0 }, { attempt: 1, attemptPhase: "transport-error", receivedBytes: 2 },
+      { attempt: 2, attemptPhase: "start", receivedBytes: 0 }, { attempt: 2, attemptPhase: "complete", receivedBytes: 4 },
+    ]);
+  });
+  it("hostedの原サイズ超過も実受信量を保存し、再GET/raw/index mutationへ進めない", async () => {
+    const f = fixture();
+    f.io.download = createRawDownloader(async () => new Map([[sha, { raw, file: { name: raw.filename, url: "https://file.notion.so/source.zip" } }]]));
+    const get = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(Uint8Array.from([1, 2, 3, 4, 5])));
+    await expect(runRawBackfill(opts, f.io)).rejects.toThrow("原本読取予算超過");
+    expect(get).toHaveBeenCalledOnce(); expect(f.rawPuts()).toHaveLength(0); expect(f.io.insert).not.toHaveBeenCalled();
+    expect(f.emitted.at(-1)).toMatchObject({ phase: "hosted_read_attempt", attemptPhase: "error", receivedBytes: 5,
+      notionDownloadAttempts: 1, notionDownloadBytes: 5 });
   });
   it("時刻予算では開始済み1件を確定し、次の原本を開始せずpartialで再開できる", async () => {
     const f = fixture();
@@ -225,7 +275,7 @@ describe("人間判断後の単一索引reconcile", () => {
     f.io.insert = insert;
     const stateKey = "ops-bucket/ops/raw-index/test-plan/state.json", activeKey = "ops-bucket/ops/raw-index/active.json";
     const state = f.objects.get(stateKey)!, active = f.objects.get(activeKey)!;
-    const reconcile: RawBackfillOptions = { ...opts, limit: 1, cutoff: "2026-10-14T00:00:00.000Z", reconcileSha256: sha,
+    const reconcile: RawBackfillOptions = { ...opts, limit: 1, maxSeconds: 600, cutoff: "2026-10-14T00:00:00.000Z", reconcileSha256: sha,
       reconcileStateSha256: createHash("sha256").update(state.body).digest("hex") };
     for (const fn of [f.io.get, f.io.put, f.io.list, f.io.download, f.io.index, f.io.insert, f.io.antiJoin, f.io.emit]) vi.mocked(fn).mockClear();
     f.events.length = 0;
@@ -254,7 +304,16 @@ describe("人間判断後の単一索引reconcile", () => {
     const f = await interrupted();
     const result = await runRawBackfill(f.reconcile, f.io);
     expect(result).toMatchObject({ status: "manual_index_reconciliation_complete", originalSendUnknown: true,
-      reconciliationInsertAttempts: 1, rawGets: 1, rawPuts: 0, d1Inserts: 1, receiptPuts: 2, oldLatchUnchanged: true });
+      reconciliationInsertAttempts: 1, rawGets: 1, rawPuts: 0, d1Inserts: 1, receiptPuts: 2, oldLatchUnchanged: true,
+      receiptGets: 13, r2Gets: 14, requests: 19, requestLimit: 19, d1ResponseBytesMeasured: false, sdkErrorResponseBytesMeasured: false });
+    const gets = await Promise.all(vi.mocked(f.io.get).mock.results.map(call => call.value));
+    const putBytes = vi.mocked(f.io.put).mock.calls.reduce((total, call) => total + call[1].length, 0);
+    const readBytes = gets.reduce((total, got) => total + (got === null ? 0 : got.body.length), 0);
+    expect(result).toMatchObject({ r2ReadBytes: readBytes, r2PutBytes: putBytes, r2TransferBytes: readBytes + putBytes });
+    for (const call of vi.mocked(f.io.get).mock.calls) expect(call[2]).toMatchObject({ singleAttempt: true,
+      maxBytes: expect.any(Number), abortSignal: expect.any(AbortSignal), beforeAttempt: expect.any(Function), onRead: expect.any(Function) });
+    const manifestReads = vi.mocked(f.io.get).mock.calls.filter(call => call[0].endsWith("/manifest.json"));
+    expect(manifestReads).toHaveLength(1); expect(manifestReads[0]![2]!.maxBytes).toBeGreaterThan(20 * 1024 ** 2);
     expect(f.io.insert).toHaveBeenCalledTimes(1); expect(f.io.insert).toHaveBeenCalledWith(expectedRawIndex(item, f.io.rawBucket, key));
     expect(f.io.list).not.toHaveBeenCalled(); expect(f.io.download).not.toHaveBeenCalled(); expect(f.io.antiJoin).not.toHaveBeenCalled();
     expect(f.objects.get(f.stateKey)).toEqual(f.oldState); expect(f.objects.get(f.activeKey)).toEqual(f.oldActive);
@@ -268,6 +327,48 @@ describe("人間判断後の単一索引reconcile", () => {
     vi.mocked(f.io.put).mockClear(); vi.mocked(f.io.insert).mockClear();
     await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("intentが既存");
     expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it("manifestを含む全R2転送が残bytesを超える前に停止し、旧latchとINSERTを保持する", async () => {
+    const f = await interrupted(), get = f.io.get;
+    const manifest = f.objects.get("ops-bucket/ops/raw-index/test-plan/manifest.json")!;
+    f.io.get = vi.fn(async (target, bucket, options) => {
+      const got = await get(target, bucket, options);
+      if (got !== null && got.body.length > options!.maxBytes!) throw new Error("R2 object exceeds read byte budget");
+      return got;
+    });
+    await expect(runRawBackfill({ ...f.reconcile, maxBytes: manifest.body.length }, f.io)).rejects.toThrow("read byte budget");
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+    expect(f.objects.get(f.stateKey)).toEqual(f.oldState); expect(f.objects.get(f.activeKey)).toEqual(f.oldActive);
+  });
+  it("manifest stream中断の元prefixを16KiBまで私有receiptへ残しmutation0で止める", async () => {
+    const f = await interrupted(), get = f.io.get, partial = new Uint8Array(17 * 1024).fill(120);
+    f.io.get = vi.fn(async (target, bucket, options) => {
+      if (!target.endsWith("/manifest.json")) return get(target, bucket, options);
+      await options!.beforeAttempt!();
+      await options!.onRead!({ status: 200, etag: '"partial"', contentLength: 31579382,
+        body: partial, receivedBytes: partial.length, complete: false });
+      throw new Error("stream interrupted");
+    });
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("stream interrupted");
+    expect(f.emitted).toContainEqual(expect.objectContaining({ phase: "reconcile_partial_body", status: 200,
+      complete: false, receivedBytes: partial.length, r2Gets: 2, prefixBase64: Buffer.from(partial.subarray(0, 16 * 1024)).toString("base64") }));
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it("600秒絶対期限へ65秒headroomが欠けた送信はintent PUT前に停止する", async () => {
+    const f = await interrupted(), emit = f.io.emit;
+    let now = f.io.now(); f.io.now = () => now;
+    f.io.emit = vi.fn(async record => {
+      await emit(record);
+      if ((record as { phase: string }).phase === "resolution_receipt_inflight") now += 535001;
+    });
+    await expect(runRawBackfill(f.reconcile, f.io)).rejects.toThrow("65秒headroom不足");
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+    expect(f.objects.get(f.stateKey)).toEqual(f.oldState);
+  });
+  it.each([{ maxSeconds: 601 }, { maxBytes: 64 * 1024 ** 2 + 1 }])("reconcile上限超過は最初のGET前に止める: %j", async extra => {
+    const f = await interrupted();
+    await expect(runRawBackfill({ ...f.reconcile, ...extra }, f.io)).rejects.toThrow("64MiB/600秒以下");
+    expect(f.io.get).not.toHaveBeenCalled(); expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
   });
   it.each([true, false])("明示INSERT unknown（実適用=%s）はintentを保持し二度目も送信0", async (applied) => {
     const f = await interrupted(), insert = f.io.insert;
@@ -370,5 +471,131 @@ describe("PUT後の独立readを重ねても索引安全境界を維持する", 
     expect(f.events).not.toContain("fsync:index_inflight");
     expect(f.state()).toMatchObject({ cursor: 0, inflight: { phase: "raw_inflight", sha256: sha } });
     expect(f.rawPuts()).toHaveLength(1);
+  });
+});
+
+describe("RAW結果不明のread-only inspect", () => {
+  const inspectOpts: RawBackfillOptions = { ...opts, mode: "inspect", limit: 2, maxSeconds: 600, cutoff: "2026-10-14T00:00:00.000Z" };
+  const stateObject = "ops-bucket/ops/raw-index/test-plan/state.json", completeObject = "ops-bucket/ops/raw-index/test-plan/complete.json";
+  async function prepared(inflight?: "raw_inflight" | "index_inflight") {
+    const f = fixture();
+    await runRawBackfill(opts, f.io);
+    if (inflight !== undefined) {
+      f.objects.set(stateObject, { body: new TextEncoder().encode(JSON.stringify({ ...f.state(), cursor: 0, inflight: { phase: inflight, sha256: sha, key } })), etag: '"unknown-state"' });
+      f.objects.delete(completeObject);
+    }
+    const original = new Map([...f.objects].map(([name, version]) => [name, { ...version, body: Uint8Array.from(version.body) }]));
+    for (const method of ["put", "insert", "list", "download", "antiJoin"] as const) {
+      vi.mocked(f.io[method]).mockClear();
+      vi.mocked(f.io[method]).mockImplementation(async () => { throw new Error(`inspect called forbidden ${method}`); });
+    }
+    vi.mocked(f.io.get).mockClear(); vi.mocked(f.io.index).mockClear(); f.emitted.length = 0;
+    const unchanged = () => {
+      expect(f.objects).toEqual(original);
+      for (const method of ["put", "insert", "list", "download", "antiJoin"] as const) expect(f.io[method]).not.toHaveBeenCalled();
+    };
+    return { ...f, unchanged };
+  }
+  it("active/manifest/state/complete/current raw/indexを全文照合し、末尾CAS読取まで8request・書込0", async () => {
+    const f = await prepared(), result = await runRawBackfill(inspectOpts, f.io);
+    expect(result).toMatchObject({ status: "read_only_inspection_complete", cursor: 1, remaining: 0,
+      requests: 8, receiptGets: 6, rawGets: 1, d1Reads: 1, unknownCleared: false, oldStateUnchanged: true,
+      subjects: [{ position: 0, sha256: sha, notionPageId: item.pageId, rawKey: key, rawFullShaVerified: true, indexPresent: true,
+        indexMetadataVerified: true, indexDocIdStatus: "verified_archived_id" }], continuationAllowed: false,
+      currentReceiptState: "no_persistent_inflight_observed", originalFailedReceiptAcknowledgement: "unavailable_original_payload_not_reconstructed" });
+    expect(vi.mocked(f.io.get).mock.calls.filter(([target]) => target.endsWith("manifest.json"))).toHaveLength(1);
+    for (const call of vi.mocked(f.io.get).mock.calls) expect(call[2]).toMatchObject({ singleAttempt: true, maxBytes: expect.any(Number), abortSignal: expect.any(AbortSignal) });
+    expect(f.emitted.filter(record => (record as { phase?: string }).phase === "inspect_object")).toHaveLength(7);
+    expect(JSON.stringify(result)).not.toContain("never-log"); expect(JSON.stringify(result)).not.toContain("sourceUrl"); expect(JSON.stringify(result)).not.toContain("bodyBase64");
+    f.unchanged();
+  });
+  it.each(["raw_inflight", "index_inflight"] as const)("%sはresolution2receiptも予算に数え、raw/index実在でもunknownを解除しない", async phase => {
+    const f = await prepared(phase), result = await inspectRawBackfill(inspectOpts, f.io);
+    expect(result).toMatchObject({ cursor: 0, requests: 10, receiptGets: 8, rawGets: 1, d1Reads: 1, inflightPhase: phase, unknownCleared: false,
+      currentReceiptState: "persistent_inflight_retained" });
+    expect(result.receipts.filter(row => row.name.startsWith("resolution_"))).toEqual([
+      { name: "resolution_intent", present: false }, { name: "resolution_complete", present: false }]);
+    f.unchanged();
+  });
+  it("未知rawが実在しなくても欠測をそのまま報告し、原PUT/INSERT/clearへ進まない", async () => {
+    const f = await prepared("raw_inflight");
+    f.rows.delete(sha); f.objects.delete(`raw-bucket/${key}`);
+    const state = Uint8Array.from(f.objects.get(stateObject)!.body);
+    expect(await inspectRawBackfill(inspectOpts, f.io)).toMatchObject({ inflightPhase: "raw_inflight", unknownCleared: false,
+      subjects: [{ indexPresent: false, rawPresent: false, rawFullShaVerified: false }] });
+    expect(f.objects.get(stateObject)!.body).toEqual(state); expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it("current/previousを最大2件だけ読み、実legacy探索も1GETずつ予算へ数える", async () => {
+    const f = await prepared(), encoder = new TextEncoder();
+    const secondBody = new Uint8Array([1, 2, 3, 4]), secondSha = createHash("sha256").update(secondBody).digest("hex");
+    const second = { ...item, sha256: secondSha, pageId: "c".repeat(32) };
+    const items = [item, second].sort((a, b) => a.sha256.localeCompare(b.sha256));
+    const manifestKey = "ops-bucket/ops/raw-index/test-plan/manifest.json", activeKey = "ops-bucket/ops/raw-index/active.json";
+    const manifest = parseRawManifest({ ...JSON.parse(new TextDecoder().decode(f.objects.get(manifestKey)!.body)), expectedCount: 2, items }, { ...inspectOpts, expectedCount: 2 }, f.io.rawBucket);
+    const bytes = encoder.encode(JSON.stringify(manifest)), manifestSha256 = createHash("sha256").update(bytes).digest("hex");
+    f.objects.set(manifestKey, { body: bytes, etag: '"two"' });
+    f.objects.set(activeKey, { body: encoder.encode(JSON.stringify({ version: 1, planId: opts.planId, manifestSha256 })), etag: '"active-two"' });
+    f.objects.set(stateObject, { body: encoder.encode(JSON.stringify({ version: 1, manifestSha256, cursor: 1, inflight: null })), etag: '"state-two"' });
+    f.objects.delete(completeObject); f.rows.clear();
+    const previous = items[0]!, previousBody = previous.sha256 === sha ? body : secondBody, previousKey = canonicalRawKey({ ...previous, sourceUrl: null }, previous.docId);
+    f.objects.set(`raw-bucket/${previousKey}`, { body: previousBody, etag: '"previous"' });
+    f.rows.set(previous.sha256, expectedRawIndex(previous, f.io.rawBucket, previousKey));
+    const current = items[1]!, currentKey = canonicalRawKey({ ...current, sourceUrl: null }, current.docId);
+    f.objects.delete(`raw-bucket/${currentKey}`);
+    const result = await inspectRawBackfill({ ...inspectOpts, expectedCount: 2 }, f.io);
+    expect(result).toMatchObject({ requests: 11, receiptGets: 6, rawGets: 3, d1Reads: 2 });
+    expect(result.subjects).toMatchObject([{ position: 1, indexPresent: false, rawPresent: false }, { position: 0, indexPresent: true, rawFullShaVerified: true }]);
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it("旧cursorが完了を主張する項目の索引欠測は診断成功にせずSTOP", async () => {
+    const f = await prepared(); f.rows.delete(sha);
+    await expect(inspectRawBackfill(inspectOpts, f.io)).rejects.toThrow("旧cursor完了項目が未検証"); f.unchanged();
+  });
+  it("安全なpath以外の旧keyはprivateだけに保持し、console summaryへ秘密を混ぜない", async () => {
+    const f = await prepared("index_inflight"), unsafeKey = `${key}?secret=private-only`;
+    f.rows.set(sha, { ...f.rows.get(sha)!, r2_key: unsafeKey });
+    f.objects.set(`raw-bucket/${unsafeKey}`, { body, etag: '"unsafe-key"' });
+    f.objects.set(stateObject, { body: new TextEncoder().encode(JSON.stringify({ ...f.state(), inflight: { phase: "index_inflight", sha256: sha, key: unsafeKey } })), etag: '"unsafe-state"' });
+    const result = await inspectRawBackfill(inspectOpts, f.io);
+    expect(result.subjects[0]).toMatchObject({ rawKey: null, rawKeyDisclosure: "private_only_not_safe_to_publish", rawFullShaVerified: true });
+    expect(JSON.stringify(result)).not.toContain("private-only"); expect(JSON.stringify(f.emitted)).toContain("private-only");
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it.each(["state-tail", "raw-sha", "index-metadata", "transport"])("%s faultでSTOPし、旧全object/latchとmutation0を保持", async fault => {
+    const f = await prepared("index_inflight"), get = f.io.get, index = f.io.index;
+    let stateReads = 0;
+    f.io.get = vi.fn(async (...args: Parameters<BackfillIo["get"]>) => {
+      const found = await get(...args);
+      if (args[0].endsWith("state.json") && ++stateReads === 2 && fault === "state-tail") return { ...found!, etag: '"changed"' };
+      if (args[1] === f.io.rawBucket) {
+        if (fault === "raw-sha") return { ...found!, body: new Uint8Array([1, 2, 3, 4]) };
+        if (fault === "transport") throw new Error("native GET unknown");
+      }
+      return found;
+    });
+    if (fault === "index-metadata") f.io.index = vi.fn(async digest => ({ ...(await index(digest))!, source: "TDnet" }));
+    await expect(inspectRawBackfill(inspectOpts, f.io)).rejects.toThrow(); f.unchanged();
+  });
+  it("body途中失敗は16KiB prefix/complete=falseをprivate emitし、再GETしない", async () => {
+    const f = await prepared(), get = f.io.get;
+    f.io.get = vi.fn(async (...args: Parameters<BackfillIo["get"]>) => {
+      if (args[0].endsWith("manifest.json")) {
+        await args[2]!.onRead!({ status: 200, etag: '"partial"', contentLength: 50000, body: new Uint8Array(20000), receivedBytes: 20000, complete: false });
+        throw new Error("stream interrupted");
+      }
+      return get(...args);
+    });
+    await expect(inspectRawBackfill(inspectOpts, f.io)).rejects.toThrow("stream interrupted");
+    const partial = f.emitted.find(record => (record as { phase?: string }).phase === "inspect_partial_body") as { complete: boolean; prefixBase64: string; receivedBytes: number };
+    expect(partial.complete).toBe(false); expect(Buffer.from(partial.prefixBase64, "base64")).toHaveLength(16384); expect(partial.receivedBytes).toBe(20000);
+    expect(vi.mocked(f.io.get).mock.calls.filter(([target]) => target.endsWith("manifest.json"))).toHaveLength(1); f.unchanged();
+  });
+  it.each(["bytes", "time", "limit", "reconcile"])("%s予算/別modeの逸脱はsource mutationなしでSTOP", async fault => {
+    const f = await prepared(), bad = { ...inspectOpts };
+    if (fault === "bytes") bad.maxBytes = 1;
+    if (fault === "time") bad.maxSeconds = 64;
+    if (fault === "limit") bad.limit = 3;
+    if (fault === "reconcile") { bad.reconcileSha256 = sha; bad.reconcileStateSha256 = sha; }
+    await expect(inspectRawBackfill(bad, f.io)).rejects.toThrow(); f.unchanged();
   });
 });

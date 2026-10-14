@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { Readable } from "node:stream";
+import { createServer, get as httpGet, type IncomingMessage } from "node:http";
 import {
   r2GetVersion,
   r2GetBytesVersion,
@@ -7,6 +9,7 @@ import {
   r2PutBytes,
   R2PutRejectedError,
   R2PutUnknownError,
+  type R2ReadOptions,
 } from "./r2.js";
 
 vi.mock("../../../src/shared/env.js", () => ({
@@ -294,5 +297,92 @@ describe("binary原本も既存CAS/unknown契約を共有する", () => {
     await vi.runAllTimersAsync();
     await rejected;
     expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("explicit SDK read budgets include the native body tail", () => {
+  it("reserves once before send and observes the exact full bytes/ETag once", async () => {
+    const bytes = new Uint8Array([0, 255, 254, 128]), order: string[] = [];
+    const beforeAttempt = vi.fn(() => { order.push("reserve"); });
+    const onRead = vi.fn(() => { order.push("full-body"); });
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(async () => {
+      order.push("send");
+      return { ...okGet(), ContentLength: bytes.length, Body: Readable.from([bytes]) };
+    });
+    const result = await r2GetBytesVersion("raw/file.zip", "raw-bucket", { singleAttempt: true, maxBytes: 4, beforeAttempt, onRead });
+    expect(new Uint8Array(result!.body)).toEqual(bytes); expect(result!.etag).toBe('"native-etag"');
+    expect(order).toEqual(["reserve", "send", "full-body"]);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(onRead).toHaveBeenCalledExactlyOnceWith({ status: 200, etag: '"native-etag"', contentLength: 4, body: Buffer.from(bytes), receivedBytes: 4, complete: true });
+  });
+
+  it("an expired reservation prevents the native send", async () => {
+    const controller = new AbortController(), onRead = vi.fn();
+    const beforeAttempt = vi.fn(() => { controller.abort(new Error("absolute deadline")); });
+    const send = vi.spyOn(S3Client.prototype, "send");
+    await expect(r2GetVersion("macro/jp-close/2026-10-14.json", { singleAttempt: true, maxBytes: 128, abortSignal: controller.signal, beforeAttempt, onRead })).rejects.toThrow("absolute deadline");
+    expect(beforeAttempt).toHaveBeenCalledTimes(1); expect(send).not.toHaveBeenCalled(); expect(onRead).not.toHaveBeenCalled();
+  });
+
+  it("the caller deadline aborts a stalled tail after headers and preserves the received prefix", async () => {
+    const controller = new AbortController(), prefix = Buffer.from("ab"), stream = new Readable({ read() {} });
+    stream.push(prefix);
+    const onRead = vi.fn(), beforeAttempt = vi.fn();
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(async (_command, options) => {
+      expect((options as { abortSignal: AbortSignal }).abortSignal.aborted).toBe(false);
+      return { ...okGet(), ContentLength: 4, Body: stream };
+    });
+    const pending = r2GetVersion("macro/jp-close/2026-10-14.json", { singleAttempt: true, maxBytes: 4, abortSignal: controller.signal, beforeAttempt, onRead });
+    const rejected = expect(pending).rejects.toThrow("absolute deadline");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    controller.abort(new Error("absolute deadline"));
+    await rejected;
+    expect(stream.destroyed).toBe(true); expect(send).toHaveBeenCalledTimes(1); expect(beforeAttempt).toHaveBeenCalledTimes(1);
+    expect(onRead).toHaveBeenCalledExactlyOnceWith({ status: 200, etag: '"native-etag"', contentLength: 4, body: prefix, receivedBytes: 2, complete: false });
+  });
+
+  it.each([
+    ["short", Buffer.from("ab"), 4, 4, "ContentLength", Buffer.from("ab")],
+    ["oversized chunk", Buffer.from("abcdef"), 4, 4, "byte budget", Buffer.from("abcd")],
+  ])("%s is a fault, with a bounded prefix and actual received-byte count", async (_name, bytes, length, maxBytes, error, prefix) => {
+    const stream = Readable.from([bytes]), onRead = vi.fn();
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(async () => ({ ...okGet(), ContentLength: length, Body: stream }));
+    await expect(r2GetVersion("macro/jp-close/2026-10-14.json", { singleAttempt: true, maxBytes, onRead })).rejects.toThrow(error);
+    expect(onRead).toHaveBeenCalledExactlyOnceWith({ status: 200, etag: '"native-etag"', contentLength: length, body: prefix, receivedBytes: bytes.length, complete: false });
+    expect(stream.destroyed).toBe(true); expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("an actual interrupted HTTP body is never full-read ACK or retried", async () => {
+    // Loopback transport fault injection only: no vendor/R2/production call.
+    const server = createServer((_req, res) => { res.writeHead(200, { "Content-Length": "4" }); res.write("ab"); });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    let incoming: IncomingMessage | undefined;
+    try {
+      const address = server.address(); if (address === null || typeof address === "string") throw new Error("loopback address");
+      incoming = await new Promise<IncomingMessage>((resolve, reject) => { httpGet(`http://127.0.0.1:${address.port}`, resolve).once("error", reject); });
+      const body = incoming, onRead = vi.fn();
+      const send = vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(async () => ({ ...okGet(), ContentLength: 4, Body: body }));
+      const pending = r2GetVersion("macro/jp-close/2026-10-14.json", { singleAttempt: true, maxBytes: 4, onRead });
+      const rejected = expect(pending).rejects.toThrow();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      server.closeAllConnections();
+      await rejected;
+      expect(onRead).toHaveBeenCalledExactlyOnceWith({ status: 200, etag: '"native-etag"', contentLength: 4, body: Buffer.from("ab"), receivedBytes: 2, complete: false });
+      expect(body.destroyed).toBe(true); expect(send).toHaveBeenCalledTimes(1);
+    } finally {
+      incoming?.destroy(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("singleAttempt does not back off/retry known 5xx, and a failed observer cannot become success", async () => {
+    const beforeAttempt = vi.fn(), onRead = vi.fn();
+    const send = vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(svcError("InternalError", 500));
+    const sleep = vi.spyOn(globalThis, "setTimeout");
+    await expect(r2GetVersion("macro/jp-close/2026-10-14.json", { singleAttempt: true, maxBytes: 4, beforeAttempt, onRead })).rejects.toThrow("InternalError");
+    expect(send).toHaveBeenCalledTimes(1); expect(beforeAttempt).toHaveBeenCalledTimes(1); expect(onRead).not.toHaveBeenCalled(); expect(sleep).not.toHaveBeenCalled();
+    send.mockImplementationOnce(async () => ({ ...okGet(), ContentLength: 2, Body: Readable.from([Buffer.from("ab")]) }));
+    const fail: R2ReadOptions["onRead"] = () => { throw new Error("durable observation failed"); };
+    await expect(r2GetVersion("macro/jp-close/2026-10-14.json", { singleAttempt: true, maxBytes: 4, onRead: fail })).rejects.toThrow("durable observation failed");
+    expect(send).toHaveBeenCalledTimes(2);
   });
 });

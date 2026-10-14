@@ -6,7 +6,9 @@ raw_api の書き込みは .ops に記録され合成ID ("dry-run-*") が返る�
 
 from __future__ import annotations
 
+import json
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +22,9 @@ ENV_SETTINGS = {
     "NOTION_DB_IDS_FILE": "/nonexistent/db_ids.json",
     "NOTION_DB_RAW_FILES": "db-raw",
 }
+NATIVE_FILENAME = json.loads(
+    (Path(__file__).parent / "fixtures/notion/native-filename-118.json").read_text()
+)["filename"]
 
 
 def make_settings():
@@ -47,6 +52,48 @@ def make_artifact(tmp_path, content: bytes = b"raw-bytes", *, with_converted: bo
         art.converted_paths = [conv]
         art.convert_status = ConvertStatus.DONE
     return art
+
+
+class TestFilenamePreflight:
+    """実118文字名の拒否と、派生した明示offline境界。HTTP/モデルは実行しない。"""
+
+    def test_actual_native_rejected_attachment_name_sends_no_upload(self, tmp_path, dry_client):
+        path = tmp_path / NATIVE_FILENAME
+        with pytest.raises(ValueError, match="100 UTF-16"):
+            file_upload.upload_file(dry_client, path)
+        assert dry_client.ops == []
+
+    def test_upload_api_filename_keeps_its_separate_existing_contract(self, tmp_path, dry_client):
+        # 実native upload create/sendは118文字で200。100はFiles.name側だけの制約。
+        path = tmp_path / NATIVE_FILENAME
+        path.write_bytes(b"EXPLICIT_OFFLINE_UPLOAD_API_FILENAME_CONTROL")
+        file_upload._upload_single(dry_client, path)
+        assert dry_client.ops[0].payload["filename"] == NATIVE_FILENAME
+        assert [op.op for op in dry_client.ops] == [
+            "POST file_uploads", "POST file_uploads/dry-run-1/send"
+        ]
+
+    def test_zip_suffix_is_counted_before_upload(self, tmp_path, dry_client):
+        # 97文字の入力でも.zip後101文字なら拒否する。
+        path = tmp_path / (NATIVE_FILENAME[:89] + ".parquet")
+        with pytest.raises(ValueError, match="100 UTF-16"):
+            file_upload.upload_file(dry_client, path)
+        assert dry_client.ops == []
+
+    def test_exact_100_zip_name_is_preserved(self, tmp_path, dry_client):
+        path = tmp_path / (NATIVE_FILENAME[:88] + ".parquet")
+        path.write_bytes(b"EXPLICIT_OFFLINE_FILENAME_BOUNDARY_CONTROL")
+        _, name = file_upload.upload_file(dry_client, path)
+        assert len(name) == 100
+        assert name == path.name + ".zip"
+
+    def test_invalid_later_conversion_prevents_every_upload(self, tmp_path, dry_client):
+        artifact = make_artifact(tmp_path)
+        artifact.converted_paths = [tmp_path / NATIVE_FILENAME]
+        with pytest.raises(file_upload.RawUploadError, match="100 UTF-16"):
+            file_upload.upload_raw_artifact(dry_client, make_settings(), artifact)
+        assert dry_client.ops == []
+        assert artifact.notion_page_id is None
 
 
 class TestPlanUpload:
