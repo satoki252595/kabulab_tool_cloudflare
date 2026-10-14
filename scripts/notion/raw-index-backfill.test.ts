@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "../../src/shared/zod-mini.js";
 import { canonicalRawKey } from "./raw-index-plan.js";
-import { safeRawFailure, createRawDownloader, expectedRawIndex, runRawBackfill, type BackfillIo, type RawBackfillOptions, type RawItem, type RawIndexRow } from "./raw-index-backfill.js";
+import { safeRawFailure, createRawDownloader, expectedRawIndex, inspectRawBackfill, parseRawManifest, runRawBackfill, type BackfillIo, type RawBackfillOptions, type RawItem, type RawIndexRow } from "./raw-index-backfill.js";
 import type { CanonicalRawFile } from "../../src/shared/notion-archive/raw-files.js";
 
 // Protocol fixture only: raw binary fidelity/unknown transport tests, not financial facts.
@@ -370,5 +370,131 @@ describe("PUT後の独立readを重ねても索引安全境界を維持する", 
     expect(f.events).not.toContain("fsync:index_inflight");
     expect(f.state()).toMatchObject({ cursor: 0, inflight: { phase: "raw_inflight", sha256: sha } });
     expect(f.rawPuts()).toHaveLength(1);
+  });
+});
+
+describe("RAW結果不明のread-only inspect", () => {
+  const inspectOpts: RawBackfillOptions = { ...opts, mode: "inspect", limit: 2, maxSeconds: 600, cutoff: "2026-10-14T00:00:00.000Z" };
+  const stateObject = "ops-bucket/ops/raw-index/test-plan/state.json", completeObject = "ops-bucket/ops/raw-index/test-plan/complete.json";
+  async function prepared(inflight?: "raw_inflight" | "index_inflight") {
+    const f = fixture();
+    await runRawBackfill(opts, f.io);
+    if (inflight !== undefined) {
+      f.objects.set(stateObject, { body: new TextEncoder().encode(JSON.stringify({ ...f.state(), cursor: 0, inflight: { phase: inflight, sha256: sha, key } })), etag: '"unknown-state"' });
+      f.objects.delete(completeObject);
+    }
+    const original = new Map([...f.objects].map(([name, version]) => [name, { ...version, body: Uint8Array.from(version.body) }]));
+    for (const method of ["put", "insert", "list", "download", "antiJoin"] as const) {
+      vi.mocked(f.io[method]).mockClear();
+      vi.mocked(f.io[method]).mockImplementation(async () => { throw new Error(`inspect called forbidden ${method}`); });
+    }
+    vi.mocked(f.io.get).mockClear(); vi.mocked(f.io.index).mockClear(); f.emitted.length = 0;
+    const unchanged = () => {
+      expect(f.objects).toEqual(original);
+      for (const method of ["put", "insert", "list", "download", "antiJoin"] as const) expect(f.io[method]).not.toHaveBeenCalled();
+    };
+    return { ...f, unchanged };
+  }
+  it("active/manifest/state/complete/current raw/indexを全文照合し、末尾CAS読取まで8request・書込0", async () => {
+    const f = await prepared(), result = await runRawBackfill(inspectOpts, f.io);
+    expect(result).toMatchObject({ status: "read_only_inspection_complete", cursor: 1, remaining: 0,
+      requests: 8, receiptGets: 6, rawGets: 1, d1Reads: 1, unknownCleared: false, oldStateUnchanged: true,
+      subjects: [{ position: 0, sha256: sha, notionPageId: item.pageId, rawKey: key, rawFullShaVerified: true, indexPresent: true,
+        indexMetadataVerified: true, indexDocIdStatus: "verified_archived_id" }], continuationAllowed: false,
+      currentReceiptState: "no_persistent_inflight_observed", originalFailedReceiptAcknowledgement: "unavailable_original_payload_not_reconstructed" });
+    expect(vi.mocked(f.io.get).mock.calls.filter(([target]) => target.endsWith("manifest.json"))).toHaveLength(1);
+    for (const call of vi.mocked(f.io.get).mock.calls) expect(call[2]).toMatchObject({ singleAttempt: true, maxBytes: expect.any(Number), abortSignal: expect.any(AbortSignal) });
+    expect(f.emitted.filter(record => (record as { phase?: string }).phase === "inspect_object")).toHaveLength(7);
+    expect(JSON.stringify(result)).not.toContain("never-log"); expect(JSON.stringify(result)).not.toContain("sourceUrl"); expect(JSON.stringify(result)).not.toContain("bodyBase64");
+    f.unchanged();
+  });
+  it.each(["raw_inflight", "index_inflight"] as const)("%sはresolution2receiptも予算に数え、raw/index実在でもunknownを解除しない", async phase => {
+    const f = await prepared(phase), result = await inspectRawBackfill(inspectOpts, f.io);
+    expect(result).toMatchObject({ cursor: 0, requests: 10, receiptGets: 8, rawGets: 1, d1Reads: 1, inflightPhase: phase, unknownCleared: false,
+      currentReceiptState: "persistent_inflight_retained" });
+    expect(result.receipts.filter(row => row.name.startsWith("resolution_"))).toEqual([
+      { name: "resolution_intent", present: false }, { name: "resolution_complete", present: false }]);
+    f.unchanged();
+  });
+  it("未知rawが実在しなくても欠測をそのまま報告し、原PUT/INSERT/clearへ進まない", async () => {
+    const f = await prepared("raw_inflight");
+    f.rows.delete(sha); f.objects.delete(`raw-bucket/${key}`);
+    const state = Uint8Array.from(f.objects.get(stateObject)!.body);
+    expect(await inspectRawBackfill(inspectOpts, f.io)).toMatchObject({ inflightPhase: "raw_inflight", unknownCleared: false,
+      subjects: [{ indexPresent: false, rawPresent: false, rawFullShaVerified: false }] });
+    expect(f.objects.get(stateObject)!.body).toEqual(state); expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it("current/previousを最大2件だけ読み、実legacy探索も1GETずつ予算へ数える", async () => {
+    const f = await prepared(), encoder = new TextEncoder();
+    const secondBody = new Uint8Array([1, 2, 3, 4]), secondSha = createHash("sha256").update(secondBody).digest("hex");
+    const second = { ...item, sha256: secondSha, pageId: "c".repeat(32) };
+    const items = [item, second].sort((a, b) => a.sha256.localeCompare(b.sha256));
+    const manifestKey = "ops-bucket/ops/raw-index/test-plan/manifest.json", activeKey = "ops-bucket/ops/raw-index/active.json";
+    const manifest = parseRawManifest({ ...JSON.parse(new TextDecoder().decode(f.objects.get(manifestKey)!.body)), expectedCount: 2, items }, { ...inspectOpts, expectedCount: 2 }, f.io.rawBucket);
+    const bytes = encoder.encode(JSON.stringify(manifest)), manifestSha256 = createHash("sha256").update(bytes).digest("hex");
+    f.objects.set(manifestKey, { body: bytes, etag: '"two"' });
+    f.objects.set(activeKey, { body: encoder.encode(JSON.stringify({ version: 1, planId: opts.planId, manifestSha256 })), etag: '"active-two"' });
+    f.objects.set(stateObject, { body: encoder.encode(JSON.stringify({ version: 1, manifestSha256, cursor: 1, inflight: null })), etag: '"state-two"' });
+    f.objects.delete(completeObject); f.rows.clear();
+    const previous = items[0]!, previousBody = previous.sha256 === sha ? body : secondBody, previousKey = canonicalRawKey({ ...previous, sourceUrl: null }, previous.docId);
+    f.objects.set(`raw-bucket/${previousKey}`, { body: previousBody, etag: '"previous"' });
+    f.rows.set(previous.sha256, expectedRawIndex(previous, f.io.rawBucket, previousKey));
+    const current = items[1]!, currentKey = canonicalRawKey({ ...current, sourceUrl: null }, current.docId);
+    f.objects.delete(`raw-bucket/${currentKey}`);
+    const result = await inspectRawBackfill({ ...inspectOpts, expectedCount: 2 }, f.io);
+    expect(result).toMatchObject({ requests: 11, receiptGets: 6, rawGets: 3, d1Reads: 2 });
+    expect(result.subjects).toMatchObject([{ position: 1, indexPresent: false, rawPresent: false }, { position: 0, indexPresent: true, rawFullShaVerified: true }]);
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it("旧cursorが完了を主張する項目の索引欠測は診断成功にせずSTOP", async () => {
+    const f = await prepared(); f.rows.delete(sha);
+    await expect(inspectRawBackfill(inspectOpts, f.io)).rejects.toThrow("旧cursor完了項目が未検証"); f.unchanged();
+  });
+  it("安全なpath以外の旧keyはprivateだけに保持し、console summaryへ秘密を混ぜない", async () => {
+    const f = await prepared("index_inflight"), unsafeKey = `${key}?secret=private-only`;
+    f.rows.set(sha, { ...f.rows.get(sha)!, r2_key: unsafeKey });
+    f.objects.set(`raw-bucket/${unsafeKey}`, { body, etag: '"unsafe-key"' });
+    f.objects.set(stateObject, { body: new TextEncoder().encode(JSON.stringify({ ...f.state(), inflight: { phase: "index_inflight", sha256: sha, key: unsafeKey } })), etag: '"unsafe-state"' });
+    const result = await inspectRawBackfill(inspectOpts, f.io);
+    expect(result.subjects[0]).toMatchObject({ rawKey: null, rawKeyDisclosure: "private_only_not_safe_to_publish", rawFullShaVerified: true });
+    expect(JSON.stringify(result)).not.toContain("private-only"); expect(JSON.stringify(f.emitted)).toContain("private-only");
+    expect(f.io.put).not.toHaveBeenCalled(); expect(f.io.insert).not.toHaveBeenCalled();
+  });
+  it.each(["state-tail", "raw-sha", "index-metadata", "transport"])("%s faultでSTOPし、旧全object/latchとmutation0を保持", async fault => {
+    const f = await prepared("index_inflight"), get = f.io.get, index = f.io.index;
+    let stateReads = 0;
+    f.io.get = vi.fn(async (...args: Parameters<BackfillIo["get"]>) => {
+      const found = await get(...args);
+      if (args[0].endsWith("state.json") && ++stateReads === 2 && fault === "state-tail") return { ...found!, etag: '"changed"' };
+      if (args[1] === f.io.rawBucket) {
+        if (fault === "raw-sha") return { ...found!, body: new Uint8Array([1, 2, 3, 4]) };
+        if (fault === "transport") throw new Error("native GET unknown");
+      }
+      return found;
+    });
+    if (fault === "index-metadata") f.io.index = vi.fn(async digest => ({ ...(await index(digest))!, source: "TDnet" }));
+    await expect(inspectRawBackfill(inspectOpts, f.io)).rejects.toThrow(); f.unchanged();
+  });
+  it("body途中失敗は16KiB prefix/complete=falseをprivate emitし、再GETしない", async () => {
+    const f = await prepared(), get = f.io.get;
+    f.io.get = vi.fn(async (...args: Parameters<BackfillIo["get"]>) => {
+      if (args[0].endsWith("manifest.json")) {
+        await args[2]!.onRead!({ status: 200, etag: '"partial"', contentLength: 50000, body: new Uint8Array(20000), receivedBytes: 20000, complete: false });
+        throw new Error("stream interrupted");
+      }
+      return get(...args);
+    });
+    await expect(inspectRawBackfill(inspectOpts, f.io)).rejects.toThrow("stream interrupted");
+    const partial = f.emitted.find(record => (record as { phase?: string }).phase === "inspect_partial_body") as { complete: boolean; prefixBase64: string; receivedBytes: number };
+    expect(partial.complete).toBe(false); expect(Buffer.from(partial.prefixBase64, "base64")).toHaveLength(16384); expect(partial.receivedBytes).toBe(20000);
+    expect(vi.mocked(f.io.get).mock.calls.filter(([target]) => target.endsWith("manifest.json"))).toHaveLength(1); f.unchanged();
+  });
+  it.each(["bytes", "time", "limit", "reconcile"])("%s予算/別modeの逸脱はsource mutationなしでSTOP", async fault => {
+    const f = await prepared(), bad = { ...inspectOpts };
+    if (fault === "bytes") bad.maxBytes = 1;
+    if (fault === "time") bad.maxSeconds = 64;
+    if (fault === "limit") bad.limit = 3;
+    if (fault === "reconcile") { bad.reconcileSha256 = sha; bad.reconcileStateSha256 = sha; }
+    await expect(inspectRawBackfill(bad, f.io)).rejects.toThrow(); f.unchanged();
   });
 });

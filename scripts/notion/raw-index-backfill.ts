@@ -7,6 +7,7 @@
  * 終端後の人間判断だけ: --mode=apply --limit=1 --cutoff=<固定実値>
  * --reconcile-sha256=<原本SHA> --reconcile-state-sha256=<旧state全bytes SHA>。
  * resolution intentが既存なら再送せず停止。旧active/state/cursorは一切更新しない。
+ * --mode=inspect --limit=1|2 --cutoff=<固定実値>: 最大14request/64MiB/600秒の読取のみ。
  */
 import "dotenv/config";
 import { createHash } from "node:crypto";
@@ -20,7 +21,7 @@ import { assertCanonicalRawMetadata, findCanonicalRawFileAttachments, listCanoni
 import { notionStats, setNotionMaxRps } from "../../src/shared/notion-archive/client.js";
 import { downloadArchivedFile } from "../moneyflow/lib/archived-files.js";
 import { unzip } from "../../services/yuho-quant/src/services/edinet/zip.js";
-import { r2GetBytesVersion, r2PutBytes } from "../vwap/lib/r2.js";
+import { r2GetBytesVersion, r2PutBytes, type R2ReadOptions } from "../vwap/lib/r2.js";
 import { canonicalRawKey, readD1RawIndexes, verifiedDocId } from "./raw-index-plan.js";
 
 // Error message/body/URL は許可した定型文以外を出さない。
@@ -132,7 +133,7 @@ const Active = z.strictObject({ version: z.literal(1), planId: z.string(), manif
 const Complete = z.strictObject({ version: z.literal(1), manifestSha256: hashSchema, completedAt: z.iso.datetime(),
   canonicalCount: integer, r2FullShaVerifiedCount: integer, indexAntiJoinChecked: integer, indexAntiJoinMissing: z.literal(0) });
 export interface RawBackfillOptions {
-  mode: "dry" | "apply"; planId: string; limit: number; maxBytes: number; maxSeconds: number; expectedCount: number;
+  mode: "dry" | "apply" | "inspect"; planId: string; limit: number; maxBytes: number; maxSeconds: number; expectedCount: number;
   /** dry/apply/再開で同じcreated_time集合を固定する明示UTC時刻。省略時は旧取得時計を維持。 */
   cutoff?: string;
   /** 終端後の人間判断に限る単一索引回復。通常再開のunknown停止は変えない。 */
@@ -144,10 +145,10 @@ export interface RawIndexRow {
   doc_id: string | null; code: string | null; data_date: string | null; ext: string; size_bytes: number;
   license_tag: string; convert_status: string; first_fetched_at: number; last_fetched_at: number;
 }
-type Version = { body: Uint8Array; etag: string } | null;
+type Version = Awaited<ReturnType<typeof r2GetBytesVersion>>;
 export interface BackfillIo {
   rawBucket: string; receiptBucket: string;
-  get: (key: string, bucket: string) => Promise<Version>;
+  get: (key: string, bucket: string, options?: R2ReadOptions) => Promise<Version>;
   put: (key: string, bytes: Uint8Array, previous: string | null, bucket: string, contentType: string) => Promise<void>;
   list: typeof listCanonicalRawFiles;
   download: (item: RawItem, cohort: readonly RawItem[]) => Promise<{ body: Uint8Array; wireBytes: number }>;
@@ -159,13 +160,15 @@ export interface BackfillIo {
 }
 
 export function validateRawOptions(opts: RawBackfillOptions, now = Date.now()): void {
-  if (!["dry", "apply"].includes(opts.mode) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(opts.planId) ||
+  if (!["dry", "apply", "inspect"].includes(opts.mode) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(opts.planId) ||
       !Number.isSafeInteger(opts.limit) || opts.limit < 1 || opts.limit > 100_000 ||
       !Number.isSafeInteger(opts.maxBytes) || opts.maxBytes < 1 || opts.maxBytes > 64 * 1024 ** 3 ||
       !Number.isSafeInteger(opts.maxSeconds) || opts.maxSeconds < 1 || opts.maxSeconds > 19_800 ||
       !Number.isSafeInteger(opts.expectedCount) || opts.expectedCount < 1 || opts.expectedCount > 100_000) {
     throw new Error("[raw-backfill] mode/plan/count/bytes/seconds予算が不正です");
   }
+  if (opts.mode === "inspect" && (opts.limit > 2 || opts.maxBytes > 64 * 1024 ** 2 || opts.maxSeconds > 600 || opts.cutoff === undefined))
+    throw new Error("[raw-backfill] inspectは固定cutoff/最大2件/64MiB/600秒です");
   if (opts.cutoff !== undefined) {
     const epoch = Date.parse(opts.cutoff);
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(opts.cutoff) || !Number.isFinite(epoch) ||
@@ -177,6 +180,120 @@ export function validateRawOptions(opts: RawBackfillOptions, now = Date.now()): 
         !hashSchema.safeParse(opts.reconcileSha256).success || !hashSchema.safeParse(opts.reconcileStateSha256).success)
       throw new Error("[raw-backfill] 明示reconcileはapply/limit1/固定cutoff/両SHAが必須です");
   }
+}
+
+/** 結果不明のreceiptと原本を読むだけ。通常再開・reconcile・cursor更新へ接続しない。 */
+export async function inspectRawBackfill(opts: RawBackfillOptions,
+  io: Pick<BackfillIo, "rawBucket" | "receiptBucket" | "get" | "index" | "now" | "emit">) {
+  validateRawOptions(opts, io.now());
+  if (opts.mode !== "inspect") throw new Error("[raw-backfill] inspect modeが必須です");
+  const start = io.now(), deadline = start + opts.maxSeconds * 1000, signal = AbortSignal.timeout(opts.maxSeconds * 1000);
+  const prefix = `ops/raw-index/${opts.planId}`, activeKey = "ops/raw-index/active.json", stateKey = `${prefix}/state.json`;
+  // receipt最大8 + 原本最大4 + 一意索引最大2。manifestは1回だけ全文取得する。
+  const stats = { requests: 0, receiptGets: 0, rawGets: 0, d1Reads: 0, r2ReadBytes: 0 };
+  const receipts: Array<{ name: string; present: boolean; sha256?: string; bytes?: number; etagSha256?: string }> = [];
+  const checkTime = () => { signal.throwIfAborted(); if (io.now() + 65_000 > deadline) throw new Error("[raw-backfill] inspectの65秒headroom不足"); };
+  const reserveRequest = () => { checkTime(); if (stats.requests >= 14) throw new Error("[raw-backfill] inspectの14request予算到達"); stats.requests++; };
+  const get = async (name: string, key: string, bucket: string, maxBytes: number, receipt: boolean) => {
+    if (maxBytes < 1 || stats.r2ReadBytes + maxBytes > opts.maxBytes) throw new Error("[raw-backfill] inspect全文読取のbytes予算不足");
+    reserveRequest();
+    if (receipt) stats.receiptGets++; else stats.rawGets++;
+    await io.emit({ phase: "inspect_get_inflight", name, key, bucket, reservedBytes: maxBytes });
+    const got = await io.get(key, bucket, { singleAttempt: true, maxBytes, abortSignal: signal, beforeAttempt: checkTime,
+      onRead: async read => { if (!read.complete) {
+        stats.r2ReadBytes += read.receivedBytes;
+        await io.emit({ phase: "inspect_partial_body", name, key, status: read.status,
+          etag: read.etag, contentLength: read.contentLength, receivedBytes: read.receivedBytes, complete: false, ...stats,
+          prefixBase64: Buffer.from(read.body.subarray(0, 16 * 1024)).toString("base64") });
+      } } });
+    if (got !== null) {
+      stats.r2ReadBytes += got.body.length;
+      await io.emit({ phase: "inspect_object", name, key, bucket, etag: got.etag, metadata: got.metadata,
+        sha256: digest(got.body), bytes: got.body.length, bodyBase64: Buffer.from(got.body).toString("base64") });
+      if (got.body.length > maxBytes || stats.r2ReadBytes > opts.maxBytes) throw new Error("[raw-backfill] inspect全文読取のbytes予算超過");
+    } else await io.emit({ phase: "inspect_missing", name, key, bucket });
+    if (receipt) receipts.push({ name, present: got !== null, ...(got === null ? {} : {
+      sha256: digest(got.body), bytes: got.body.length, etagSha256: digest(new TextEncoder().encode(got.etag)) }) });
+    return got;
+  };
+  const control = (name: string, key: string, maxBytes = 256 * 1024) => get(name, key, io.receiptBucket, maxBytes, true);
+  const required = (got: Version) => { if (got === null) throw new Error("[raw-backfill] inspect固定receipt欠測"); return got; };
+  const parse = (got: NonNullable<Version>) => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(got.body));
+  const activeVersion = required(await control("active", activeKey)), active = Active.parse(parse(activeVersion));
+  if (active.planId !== opts.planId) throw new Error("[raw-backfill] 別planがactiveです。unknownを別planで迂回できません");
+  const manifestVersion = required(await control("manifest", `${prefix}/manifest.json`, opts.maxBytes - stats.r2ReadBytes));
+  const manifest = parseRawManifest(parse(manifestVersion), opts, io.rawBucket);
+  if (digest(manifestVersion.body) !== active.manifestSha256 || digest(encode(manifest)) !== active.manifestSha256)
+    throw new Error("[raw-backfill] active manifest SHA不一致");
+  const stateVersion = required(await control("state", stateKey)), state = State.parse(parse(stateVersion));
+  if (state.manifestSha256 !== active.manifestSha256 || state.cursor > manifest.items.length ||
+      state.inflight !== null && (state.inflight.sha256 !== manifest.items[state.cursor]?.sha256 || !state.inflight.key.startsWith("raw/")))
+    throw new Error("[raw-backfill] state/manifest/cursor不一致");
+  const completeVersion = await control("complete", `${prefix}/complete.json`);
+  if (completeVersion !== null) {
+    const complete = Complete.parse(parse(completeVersion));
+    if (complete.manifestSha256 !== active.manifestSha256 || complete.canonicalCount !== manifest.items.length ||
+        complete.r2FullShaVerifiedCount !== manifest.items.length || complete.indexAntiJoinChecked !== manifest.items.length ||
+        state.cursor !== manifest.items.length || state.inflight !== null) throw new Error("[raw-backfill] 先行完了receiptと集合が不一致");
+  }
+  if (state.inflight !== null) {
+    for (const phase of ["intent", "complete"] as const) {
+      const resolution = await control(`resolution_${phase}`, `${prefix}/resolutions/${state.inflight.sha256}/${phase}.json`);
+      if (resolution !== null) {
+        const value: unknown = parse(resolution);
+        if (value === null || typeof value !== "object" || Array.isArray(value) ||
+            (value as Record<string, unknown>).planId !== opts.planId || (value as Record<string, unknown>).sha256 !== state.inflight.sha256 ||
+            (value as Record<string, unknown>).manifestSha256 !== active.manifestSha256)
+          throw new Error("[raw-backfill] inspect resolution receipt不一致");
+      }
+    }
+  }
+  const positions = [state.cursor, state.cursor - 1].filter(position => position >= 0 && position < manifest.items.length).slice(0, opts.limit);
+  const subjects = [];
+  for (const position of positions) {
+    const item = manifest.items[position]!;
+    // canonical欠測時だけ実旧キーを読む可能性も、開始前に全bytes予約する。
+    if (stats.r2ReadBytes + item.sizeBytes * 2 > opts.maxBytes) throw new Error("[raw-backfill] inspect原本全文のbytes予算不足");
+    reserveRequest(); stats.d1Reads++;
+    const index = await io.index(item.sha256);
+    await io.emit({ phase: "inspect_index", position, sha256: item.sha256, index });
+    if (index !== null) validateIndex(index, item, io.rawBucket);
+    let key = position === state.cursor && state.inflight !== null ? state.inflight.key : index !== null ? index.r2_key : canonicalRawKey({ ...item, sourceUrl: null }, item.docId);
+    if (position === state.cursor && state.inflight !== null && index !== null && key !== index.r2_key)
+      throw new Error("[raw-backfill] inflight/index key不一致");
+    let raw = await get(`raw_${position}`, key, io.rawBucket, Math.max(1, item.sizeBytes), false);
+    if (raw === null && index === null && !(position === state.cursor && state.inflight !== null) && item.docId !== null) {
+      key = canonicalRawKey({ ...item, sourceUrl: null }, null);
+      raw = await get(`legacy_raw_${position}`, key, io.rawBucket, Math.max(1, item.sizeBytes), false);
+    }
+    if (raw !== null) validateBody(raw.body, item);
+    if (index !== null && raw === null) throw new Error("[raw-backfill] D1索引先原本が欠落。再作成せず停止");
+    if (position < state.cursor && (index === null || raw === null)) throw new Error("[raw-backfill] inspect旧cursor完了項目が未検証");
+    const publishKey = /^raw\/[A-Za-z0-9._/-]{1,1020}$/.test(key);
+    subjects.push({ position, sha256: item.sha256, bytes: item.sizeBytes, notionPageId: item.pageId,
+      source: item.source, datatype: item.datatype, scope: item.scope, docId: item.docId,
+      rawKey: publishKey ? key : null,
+      rawKeyDisclosure: publishKey ? "safe_path_structure" : "private_only_not_safe_to_publish",
+      rawKeySha256: digest(new TextEncoder().encode(key)), indexPresent: index !== null, rawPresent: raw !== null,
+      indexMetadataVerified: index !== null, indexFullRowSha256: index === null ? null : digest(encode(index)),
+      indexDocId: index === null ? null : index.doc_id !== null && /^[A-Z0-9]{1,32}$/.test(index.doc_id) ? index.doc_id : null,
+      indexDocIdStatus: index === null ? "index_missing" : index.doc_id === null ? "legacy_null_retained" : item.docId === null ? "retained_existing_unverified" : "verified_archived_id",
+      rawFullShaVerified: raw !== null, rawETagSha256: raw === null ? null : digest(new TextEncoder().encode(raw.etag)) });
+  }
+  for (const [name, key, previous] of [["state_final", stateKey, stateVersion], ["active_final", activeKey, activeVersion]] as const) {
+    const fresh = required(await control(name, key));
+    if (fresh.etag !== previous.etag || !Buffer.from(fresh.body).equals(Buffer.from(previous.body)))
+      throw new Error("[raw-backfill] inspect中にactive/stateが変化しました");
+  }
+  const result = { status: "read_only_inspection_complete", mode: "inspect", planId: opts.planId, manifestSha256: active.manifestSha256,
+    cursor: state.cursor, remaining: manifest.items.length - state.cursor, inflightPhase: state.inflight === null ? null : state.inflight.phase,
+    inflightSha256: state.inflight === null ? null : state.inflight.sha256, unknownCleared: false, oldStateUnchanged: true,
+    currentReceiptState: state.inflight === null ? "no_persistent_inflight_observed" : "persistent_inflight_retained",
+    originalFailedReceiptAcknowledgement: "unavailable_original_payload_not_reconstructed",
+    receipts, subjects, ...stats, elapsedMs: io.now() - start, requestLimit: 14, upstreamGets: 0, notionRequests: 0,
+    rawPuts: 0, receiptPuts: 0, d1Inserts: 0, stateResets: 0, continuationAllowed: false };
+  await io.emit({ phase: "inspect_summary", ...result });
+  return result;
 }
 export function parseRawManifest(value: unknown, opts: RawBackfillOptions, bucket: string): RawManifest {
   const manifest = Manifest.parse(value);
@@ -362,6 +479,7 @@ export async function reconcileRawIndex(opts: RawBackfillOptions, io: BackfillIo
 export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
   const start = io.now();
   validateRawOptions(opts, start);
+  if (opts.mode === "inspect") return inspectRawBackfill(opts, io);
   if (opts.reconcileSha256 !== undefined) return reconcileRawIndex(opts, io);
   const deadline = start + opts.maxSeconds * 1000;
   // 一度開始した原本1件はinflightを解決するまで完結。次の原本は期限後に開始しない。
@@ -535,7 +653,7 @@ async function main() {
     args.set(m[1]!, m[2]!);
   }
   if (required.some((key) => !args.has(key)) || sharedEnv.LOCAL_OUT() !== undefined) throw new Error("[raw-backfill] 全引数明示・LOCAL_OUT禁止");
-  const opts: RawBackfillOptions = { mode: args.get("mode") as "dry" | "apply", planId: args.get("plan-id")!, limit: Number(args.get("limit")),
+  const opts: RawBackfillOptions = { mode: args.get("mode") as RawBackfillOptions["mode"], planId: args.get("plan-id")!, limit: Number(args.get("limit")),
     maxBytes: Number(args.get("max-bytes")), maxSeconds: Number(args.get("max-seconds")), expectedCount: Number(args.get("expected-count")), ...(args.has("cutoff") ? { cutoff: args.get("cutoff")! } : {}),
     ...(args.has("reconcile-sha256") ? { reconcileSha256: args.get("reconcile-sha256")! } : {}),
     ...(args.has("reconcile-state-sha256") ? { reconcileStateSha256: args.get("reconcile-state-sha256")! } : {}) };
@@ -569,15 +687,23 @@ async function main() {
   };
   try {
     const result = await runRawBackfill(opts, { rawBucket: sharedEnv.R2_BUCKET_RAW(), receiptBucket: sharedEnv.R2_BUCKET(),
-      get: (key, bucket) => r2GetBytesVersion(key, bucket, { singleAttempt: true }), put: r2PutBytes,
+      get: (key, bucket, options) => r2GetBytesVersion(key, bucket, { ...options, singleAttempt: true }), put: r2PutBytes,
       list: (cutoff, guard) => listCanonicalRawFiles(cutoff, guard, observeInventory), download: createRawDownloader(), index: readRawIndex, insert: insertRawIndex,
       antiJoin: (items) => auditRawIndexMembership(items, sharedEnv.R2_BUCKET_RAW()), now: Date.now, emit });
     const after = notionStats();
     console.info(JSON.stringify({ ...result, notionRequests: after.requests - before.requests }));
   } catch (error) {
     // 生URL/body/causeをログへ出さない。remote stateに結果不明phaseが残る。
+    const failurePhase = lastPhase;
+    if (opts.mode === "inspect" && error instanceof Error) {
+      const native = error as Error & { $metadata?: { httpStatusCode?: unknown; requestId?: unknown } };
+      const details = encode({ name: native.name, message: native.message, stack: native.stack,
+        status: native.$metadata?.httpStatusCode, requestId: native.$metadata?.requestId });
+      await emit({ phase: "inspect_error_private", diagnosticKind: "exception_json_not_http_body", bytes: details.length,
+        complete: details.length <= 16 * 1024, prefixBase64: Buffer.from(details.subarray(0, 16 * 1024)).toString("base64") });
+    }
     const after = notionStats();
-    const failure = { status: "stopped", ...safeRawFailure(error), lastPhase, lastRawVerified, inventory, elapsedMs: Date.now() - startedAt,
+    const failure = { status: "stopped", ...safeRawFailure(error), lastPhase: failurePhase, lastRawVerified, inventory, elapsedMs: Date.now() - startedAt,
       notionRequests: after.requests - before.requests, notionRateLimited: after.rateLimited - before.rateLimited,
       notionTransientRetries: after.transientRetries - before.transientRetries, upstreamGets: 0,
       ...(opts.reconcileSha256 === undefined ? { resend: 0 } : { originalSendUnknown: true, reconciliationInsertAttempts }) };
