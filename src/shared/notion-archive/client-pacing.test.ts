@@ -1,0 +1,62 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+const tokenBefore = process.env.NOTION_TOKEN;
+const originalFetch = globalThis.fetch;
+let starts: number[];
+let statuses: number[];
+beforeEach(() => {
+  vi.resetModules();
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  vi.setSystemTime(1_000_000);
+  process.env.NOTION_TOKEN = "protocol-test-token";
+  starts = []; statuses = [];
+  globalThis.fetch = async () => {
+    starts.push(performance.now());
+    const status = statuses.shift() ?? 200;
+    return new Response(JSON.stringify({ ok: true }), { status, headers: { "Retry-After": "0" } });
+  };
+});
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  if (tokenBefore === undefined) delete process.env.NOTION_TOKEN;
+  else process.env.NOTION_TOKEN = tokenBefore;
+  vi.useRealTimers(); vi.resetModules();
+});
+const load = () => import("./client.js");
+it("設定なしの通常queueは380msと順番を維持する", async () => {
+  const { notionRequest } = await load();
+  const calls = Promise.all([notionRequest("GET", "/a"), notionRequest("GET", "/b")]);
+  await vi.runAllTimersAsync(); await calls;
+  expect(starts).toEqual([0, 380]);
+});
+it.each([0.25, 1.5])("明示%s rpsはretryと次queue両方のnative試行へ適用する", async (rps) => {
+  const { notionRequest, setNotionMaxRps, notionStats } = await load();
+  setNotionMaxRps(rps); statuses = [429, 200, 200];
+  const calls = Promise.all([notionRequest("GET", "/a"), notionRequest("GET", "/b")]);
+  await vi.runAllTimersAsync(); await calls;
+  const interval = Math.ceil(1000 / rps);
+  expect(starts).toEqual([0, interval, interval * 2]);
+  expect(notionStats()).toEqual({ requests: 3, rateLimited: 1, transientRetries: 0 });
+});
+it("Retry-Afterがcapより長ければ元の待機を短縮しない", async () => {
+  const { notionRequest, setNotionMaxRps } = await load();
+  setNotionMaxRps(0.25);
+  globalThis.fetch = async () => {
+    starts.push(performance.now());
+    return new Response("{}", { status: starts.length === 1 ? 429 : 200, headers: { "Retry-After": "10" } });
+  };
+  const call = notionRequest("GET", "/a");
+  await vi.runAllTimersAsync(); await call;
+  expect(starts).toEqual([0, 10250]);
+});
+it.each([0, -1, NaN, Infinity, 2.7, Number.MIN_VALUE, 1e-9])("不正または既定より速いrate %s はnative0で拒否する", async (rps) => {
+  const { setNotionMaxRps } = await load();
+  expect(() => setNotionMaxRps(rps)).toThrow("pacing");
+  expect(starts).toEqual([]);
+});
+it("開始後にrateを変更できない", async () => {
+  const { notionRequest, setNotionMaxRps } = await load();
+  await notionRequest("GET", "/a");
+  expect(() => setNotionMaxRps(0.25)).toThrow("pacing");
+  expect(starts).toEqual([0]);
+});

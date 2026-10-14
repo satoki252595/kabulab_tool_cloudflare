@@ -324,3 +324,51 @@ describe("raw停止診断の秘密非開示", () => {
     throw new Error("schema must reject test input");
   });
 });
+
+
+describe("PUT後の独立readを重ねても索引安全境界を維持する", () => {
+  it("body GET完了待ち中にD1 readが開始され、両成功後だけ索引へ進む", async () => {
+    const f = fixture(), get = f.io.get, index = f.io.index;
+    let releaseBody!: () => void, overlapped = false;
+    const bodyReady = new Promise<void>(resolve => { releaseBody = resolve; });
+    f.io.get = vi.fn(async (target, bucket) => {
+      const got = await get(target, bucket);
+      if (bucket === f.io.rawBucket && target === key && f.rawPuts().length === 1) await bodyReady;
+      return got;
+    });
+    f.io.index = vi.fn(async digest => {
+      if (f.rawPuts().length === 1) { overlapped = true; releaseBody(); }
+      return index(digest);
+    });
+    expect(await runRawBackfill(opts, f.io)).toMatchObject({ status: "snapshot_complete", verified: 1 });
+    expect(overlapped).toBe(true); expect(f.io.insert).toHaveBeenCalledTimes(1);
+    expect(f.state()).toMatchObject({ cursor: 1, inflight: null });
+  });
+  it.each(["full-sha", "body-throw", "d1-throw", "invalid-index"])("%sはindex CAS/INSERT0、原raw latchを保持する", async kind => {
+    const f = fixture(), get = f.io.get, index = f.io.index;
+    let postBodySettled = false, postIndexSettled = false;
+    f.io.get = vi.fn(async (target, bucket) => {
+      const got = await get(target, bucket);
+      if (bucket === f.io.rawBucket && target === key && f.rawPuts().length === 1) {
+        await Promise.resolve(); postBodySettled = true;
+        if (kind === "body-throw") throw new Error("post body read failure");
+        if (kind === "full-sha") return { ...got!, body: new Uint8Array([1, 2, 3, 4]) };
+      }
+      return got;
+    });
+    f.io.index = vi.fn(async digest => {
+      if (f.rawPuts().length === 1) {
+        await Promise.resolve(); postIndexSettled = true;
+        if (kind === "d1-throw") throw new Error("post D1 read failure");
+        if (kind === "invalid-index") return { ...expectedRawIndex(item, f.io.rawBucket, key), source: "TDnet" };
+      }
+      return index(digest);
+    });
+    await expect(runRawBackfill(opts, f.io)).rejects.toThrow();
+    expect(postBodySettled).toBe(true); expect(postIndexSettled).toBe(true);
+    expect(f.io.insert).not.toHaveBeenCalled();
+    expect(f.events).not.toContain("fsync:index_inflight");
+    expect(f.state()).toMatchObject({ cursor: 0, inflight: { phase: "raw_inflight", sha256: sha } });
+    expect(f.rawPuts()).toHaveLength(1);
+  });
+});
