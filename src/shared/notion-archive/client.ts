@@ -304,6 +304,7 @@ function readListFamily(
  *   - own `has_more` + boolean
  *   - own `next_cursor` + null/非空文字列 (空白のみ拒否)
  *   - pairing: true→文字列・false→null
+ *   - request_status: absentは保持、presentはcompleteのみ（未完/未知は即STOP）
  * `results` 要素の意味は既存 collector の担当 (触らない)。
  * page-property は object 判別: `list` なら同 guard、
  * `property_item` (singular) は許容、それ以外は reject。
@@ -317,6 +318,16 @@ function assertListEnvelope(body: unknown, family: ReadListFamily): void {
     throw new NotionConfigError(`${where} field=response: object ではない`);
   }
   const b = body as Record<string, unknown>;
+  // request_statusの省略形は保持。存在する場合だけ公式complete形を要求する。
+  // incompleteは10,000件末尾のhas_more=falseでも全量ではない（各pageで拒否）。
+  if (Object.hasOwn(b, "request_status")) {
+    const status = b["request_status"];
+    if (typeof status !== "object" || status === null || Array.isArray(status) ||
+        Object.keys(status).length !== 1 || !Object.hasOwn(status, "type") ||
+        (status as Record<string, unknown>)["type"] !== "complete") {
+      throw new NotionConfigError(`${where} field=request_status: 未完/未知/不正な状態`);
+    }
+  }
   if (family === "page-property") {
     if (!Object.hasOwn(b, "object")) {
       throw new NotionConfigError(`${where} field=object: 判別子が無い`);
