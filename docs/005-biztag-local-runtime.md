@@ -111,6 +111,26 @@ runtime HEADが承認SHAと不一致、追跡対象がdirty、承認SHAが取得
 preflight→plist確認→bootstrapを行う。広い`gh` OAuthはWorkerや外部HTTPへ渡さない。
 本体ログ・clock/exit receiptはprivate `tmp/biztag-local/`、0600で残す。
 
+## Clef判定の原応答と再開
+
+通常の`biztag run`は、同じ`.env`実体を基点にした`tmp/biztag-local/clef-decisions/`へ
+判定入力と原JSONLを保存する。入力の有報ID・期末・39本文SHA・4節SHA・本文pointer・質問/qid・
+語彙の全文hash・モデルmanifest・較正hashを束縛し、送信前にintentと要求原文を、
+応答を受理する前に応答原文を`wx`で新規作成してfile/親directoryをfsyncする。
+directoryは0700、fileは0600。`.env`値は保存しない。
+
+質問集合・確率・全文hashまで検証された`accepted.json`と全原文がある場合は、
+同じ入力・recipeの保存出力を再利用し、Python起動/forwardを行わない。判定日は保存時の完了時計を
+JSTへ変換し、再開日へ更新しない。これはモデル出力の受理であり、Notion保存やジョブの成功ではない。
+公開前には従来の最新有報確認・物理PRE・CAS・全項目読戻しを通す。publisherの不明markerを回避しない。
+
+既知journalの未完intent、破断/未知応答、書込/fsync失敗、束縛の不一致では自動再推論せず停止する。
+未完記録がある次runも、別銘柄を含め次forwardを開始しない。旧記録は削除・上書きしない。
+原文の上限は1file 1MiB、1run 64MiB、保存全体1GiBで、新しい要求の前に6MiBを予約する。
+上限到達はHOLDとして運用者が確認し、無制限保存や自動整理は行わない。
+SemIf/競合判定の既定経路にはこのjournalを接続しない。旧モデルの無記録履歴をClefへ付け替えない。
+有限回復の900 native要求/90分・メモリ等の予算は専用wrapperの別条件で、通常の定時頻度は変えない。
+
 ## 選択理由と実証範囲
 
 調査時点でrepoにself-hosted runnerは0。pinされたnixpkgs25.11の

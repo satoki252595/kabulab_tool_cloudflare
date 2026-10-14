@@ -12,6 +12,9 @@
  * D1 は読むだけ (§0 運営決定)。Node から D1 へは HTTP (`createD1HttpDb`) で読む。
  */
 import { inArray } from "drizzle-orm";
+import type { ClefJournalInput } from "../../../../scripts/biztag-local/clef-journal.js";
+import type { LocalDecisionExchange } from "../../../../src/shared/semif/client.js";
+import { NotionUnknownResultError } from "../../../../src/shared/notion-archive/client.js";
 import { createD1HttpDb } from "../../../../src/shared/db/d1-http-client.js";
 import {
   createLedgerEntry,
@@ -44,7 +47,8 @@ import { todayJst } from "./date-jst.js";
 import { checkDeadline, type DeadlineCheckResult, type GateRunResult } from "./gate.js";
 import { evaluateGolden, goldenItemKey, loadGoldenSet, type GoldenMetrics } from "./golden.js";
 import type { BtThresholds } from "./judge.js";
-import { MAX_RETRY_ATTEMPTS, planWork, type WorkItem } from "./plan.js";
+import { MAX_RETRY_ATTEMPTS, planWork, type WorkItem, type InputReceipt } from "./plan.js";
+import { vocabularyHash } from "./vocabulary/hash.js";
 import { processStock, type ProcessDeps } from "./process.js";
 import { isPrefilterSection, type PrefilterSectionKey } from "./prefilter.js";
 import { buildReviewPacket, refreshReviewPacketLedger } from "./review.js";
@@ -53,6 +57,8 @@ import type { Vocabulary } from "./vocabulary/schema.js";
 import { TEXT_SECTIONS } from "../services/edinet/text-sections.js";
 
 export interface RunBiztagOptions {
+  /** 通常Mac CLIだけが接続するdurable raw-output sink。 */
+  localJournal?: (input: ClefJournalInput) => LocalDecisionExchange;
   /** 処理に充てる時間予算 (ミリ秒)。超えたら新規銘柄の着手を止める。 */
   budgetMs: number;
   /** 実際に処理する (skip 以外の) 銘柄数の上限。 */
@@ -83,7 +89,7 @@ export interface RunSummary {
   coverage: { judged: number; total: number; ratio: number };
   jev: { calls: number; inputTokens: number; outputTokens: number; estimatedCostUsd: number };
   /** callsは失敗を含むaskNoul試行数。native forward数/費用は未計測。jevは旧互換キー。 */
-  judge?: { provider: "clef"; model: string; calls: number; costMetering: "not_metered_local"; externalApiCalls: 0; tokens: null; hardwareCostUsd: null };
+  judge?: { provider: "clef"; model: string; calls: number; reusedOutputs?: number; costMetering: "not_metered_local"; externalApiCalls: 0; tokens: null; hardwareCostUsd: null };
   notion: NotionStats;
   vocabVersion: string;
   vocabSeeded: boolean;
@@ -248,11 +254,37 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const newStockEligibility = await loadNewStockEligibility(db, listingFrom, today);
   let initialClient: SemifClient | null = null;
   let localJudgeCalls = 0;
+  let reusedOutputs = 0, batchIndex = 0;
+  let currentItem: WorkItem | undefined, activeVocabHash: string | undefined;
+  let currentInput: { receipt: InputReceipt; textsSha256: string } | undefined;
+  let currentDecisionAt: number | undefined;
+  let localJudgeStop: { error: unknown } | undefined;
   // 新規の実資格と本文候補が揃うまでPythonを起動しない。既存機械経路からは呼ばない。
   const jevClient: JevClient = { askNoul: async (state, questions) => {
-    if (initialClient === null) initialClient = createClefClient();
-    localJudgeCalls++;
-    return initialClient.askNoul(state, questions);
+    if (localJudgeStop !== undefined) throw localJudgeStop.error;
+    try {
+      let exchange: LocalDecisionExchange | undefined;
+      if (opts.localJournal) {
+        if (!currentItem?.doc || !currentInput || activeVocabHash === undefined) throw new Error("Clef journalの実入力来歴がありません");
+        exchange = opts.localJournal({ stockCode: currentItem.stockCode, periodEnd: currentItem.doc.periodEnd,
+          receipt: { ...currentInput.receipt }, textsSha256: currentInput.textsSha256, model: opts.model,
+          vocabHash: activeVocabHash, batchIndex: batchIndex++, state, questions });
+      }
+      if (initialClient === null) initialClient = createClefClient();
+      localJudgeCalls++;
+      const result = await initialClient.askNoul(state, questions, exchange);
+      if (exchange) {
+        if (exchange.decidedAt === undefined || !Number.isFinite(Date.parse(exchange.decidedAt))) throw new Error("durable model completion clockがありません");
+        const at = Date.parse(exchange.decidedAt);
+        currentDecisionAt = currentDecisionAt === undefined ? at : Math.max(currentDecisionAt, at);
+      }
+      if (result.reused) { localJudgeCalls--; reusedOutputs++; }
+      return result;
+    } catch (error) {
+      localJudgeStop = { error };
+      initialClient?.close();
+      throw error;
+    }
   } };
   try {
   // dry-run は通知・見直し材料の台帳書込を no-op にする。
@@ -265,6 +297,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const initial = await resolveActiveVocabulary(today, { dryRun: opts.dryRun });
   const seeded = initial.seeded;
   const vocab = initial.vocab;
+  if (opts.localJournal) activeVocabHash = await vocabularyHash(vocab);
 
   // 2. 有料の語彙審査・golden評価は再開しない。現在の有効版と期限だけ読む。
   const gate = null;
@@ -319,6 +352,12 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
   const deps: ProcessDeps = {
     vocab,
     model: opts.model,
+    localJudgeInput: (receipt, textsSha256) => { currentInput = { receipt, textsSha256 }; },
+    localJudgeDate: opts.localJournal ? () => {
+      const at = currentDecisionAt;
+      if (at === undefined) throw new Error("model completion clockが不明です");
+      return todayJst(() => at);
+    } : undefined,
     get thresholds() { return opts.thresholds; },
     jevClient,
     today,
@@ -343,6 +382,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
 
   for (let i = 0; i < items.length; i++) {
     const item: WorkItem = items[i];
+    currentItem = item; currentInput = undefined; currentDecisionAt = undefined; batchIndex = 0;
     if (item.kind !== "skip") {
       if (workBudgetLeft <= 0 || Date.now() - start > opts.budgetMs) {
         break;
@@ -359,6 +399,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     }
     try {
       const outcome = await processStock(item, deps);
+      if (localJudgeStop !== undefined) throw localJudgeStop.error;
       if (outcome.qualificationHeld) qualificationHeld.push(item.stockCode);
       if (outcome.error) {
         failures.push({ stockCode: item.stockCode, message: outcome.error });
@@ -376,6 +417,8 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
       jevInputTokens += outcome.jevInputTokens;
       jevOutputTokens += outcome.jevOutputTokens;
     } catch (e) {
+      // Unknown model/publisher results stop the whole run, including later forwards and ledger tail.
+      if (localJudgeStop !== undefined || e instanceof NotionUnknownResultError) throw e;
       if (item.sourceChangedLocalJudge) qualificationHeld.push(item.stockCode);
       failures.push({ stockCode: item.stockCode, message: e instanceof Error ? e.message : String(e) });
     }
@@ -405,7 +448,7 @@ export async function runBiztag(opts: RunBiztagOptions): Promise<RunSummary> {
     countsByTagStatus,
     coverage: { judged, total: items.length, ratio: items.length === 0 ? 0 : judged / items.length },
     jev: { calls: jevCalls, inputTokens: jevInputTokens, outputTokens: jevOutputTokens, estimatedCostUsd: 0 },
-    judge: { provider: "clef", model: opts.model, calls: localJudgeCalls, costMetering: "not_metered_local", externalApiCalls: 0, tokens: null, hardwareCostUsd: null },
+    judge: { provider: "clef", model: opts.model, calls: localJudgeCalls, reusedOutputs, costMetering: "not_metered_local", externalApiCalls: 0, tokens: null, hardwareCostUsd: null },
     notion: notionStats(),
     vocabVersion: vocab.version,
     vocabSeeded: seeded,
