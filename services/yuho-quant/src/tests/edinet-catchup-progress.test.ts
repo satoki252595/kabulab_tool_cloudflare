@@ -8,11 +8,14 @@ import {enqueueDates, progressQueue, progressSummary, saveProgress, jstDate} fro
 let sqlite: DatabaseSync;
 let db: Database;
 let insertCalls: number;
+let queryCalls: number;
 beforeEach(() => {
   sqlite = new DatabaseSync(":memory:");
   insertCalls = 0;
+  queryCalls = 0;
   sqlite.exec(readFileSync(new URL("../../../../drizzle/d1/0027_edinet_catchup_progress.sql", import.meta.url), "utf8").replaceAll("--> statement-breakpoint", ""));
   db = drizzle(async (query, args, method) => {
+    queryCalls++;
     expect(args.length).toBeLessThanOrEqual(100); // 実生成SQLの既定値bindもD1上限に含む。
     if (/^insert\b/i.test(query)) insertCalls++;
     const stmt = sqlite.prepare(query);
@@ -66,5 +69,26 @@ describe("EDINET durable day/doc checkpoint", () => {
     sqlite.exec("UPDATE yuho_edinet_catchup_progress SET sealed=0 WHERE date='2026-06-12'");
     expect(await progressQueue(db, "main", "2026-06-12")).toEqual([]);
     expect((await progressQueue(db, "main", "2026-06-13")).map((r) => r.date)).toEqual(["2026-06-12"]);
+  });
+
+  it("既存1SELECTで同日保留待ち/翌日再照合と実未完理由を分ける", async () => {
+    await enqueueDates(db, "main", "2026-06-12");
+    sqlite.exec("UPDATE yuho_edinet_catchup_progress SET finished=1,sealed=1");
+    sqlite.prepare("UPDATE yuho_edinet_catchup_progress SET pending_ids=?,pending_checked_date=? WHERE date=?")
+      .run('[{"docId":"S100YAVT","reason":"identity_unresolved"}]', "2026-06-12", "2026-06-11");
+    sqlite.exec("UPDATE yuho_edinet_catchup_progress SET sealed=0 WHERE date='2026-06-12'");
+    const before = queryCalls;
+    const sameDay = await progressSummary(db, "main", "2026-06-12");
+    expect(queryCalls - before).toBe(1);
+    expect(sameDay).toMatchObject({pendingDocuments: 1, queuedDays: 0,
+      pendingRecheckDueDays: 0, sameDayPendingWaitDays: 1, futurePendingWaitDays: 0,
+      unsealedTodayWaitDays: 1, inFlightDays: 0,
+      pendingByReason: {identity_unresolved: 1, metadata_unresolved: 0, parse_error: 0, text_readback_mismatch: 0}});
+    expect(await progressQueue(db, "main", "2026-06-12")).toEqual([]);
+    expect(await progressSummary(db, "main", "2026-06-13")).toMatchObject({
+      pendingDocuments: 1, queuedDays: 1, pendingRecheckDueDays: 1,
+      sameDayPendingWaitDays: 0, unsealedTodayWaitDays: 0});
+    expect(sqlite.prepare("SELECT pending_ids FROM yuho_edinet_catchup_progress WHERE date='2026-06-11'").get()?.pending_ids)
+      .toBe('[{"docId":"S100YAVT","reason":"identity_unresolved"}]');
   });
 });
