@@ -30,5 +30,6 @@ Nixプロジェクト環境 (Node 22.22.2 / pnpm 9.15.9、既存lockと依存clo
 
 - native直前hook追加前の初版関連8suite: 199 PASS / 3既存optional skip。同初版の `nix develop -c pnpm test`: 320 suite PASS / 1 suite skip、5545 PASS / 446既存optional skip、49.16秒。
 - 最終関連15suite: 293 PASS / 3既存optional skip。実spacing/clientとfetch置換を使い、全6取得入口・page/crumb/401認証各境界の発信停止、既429理由維持、既開始本文の原clock capture、registry全4PUT前、最終summary後の期限検査を確認する。全体の最終版確認はPR CIでも実施する。
+- main `a61a2fd3` (#409一覧境界/#410 UTC保存session) 統合後の関連16suite: 304 PASS / 3既存optional skip。両release notesと保存readerを保持し、同fileのoptional guardを統合した。
 - `nix develop -c pnpm exec tsc --noEmit`、変更TS15filesのeslint、`git diff --check`: PASS。
 - installed Wrangler 4.101.0 `deploy --dry-run`: Worker compile/config検査 PASS。実upload/deploy/traffic変更0。
