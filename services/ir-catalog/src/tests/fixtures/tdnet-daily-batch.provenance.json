@@ -1,0 +1,18 @@
+{
+  "description": "First two unchanged prepared rows from an actual physically archived daily TDnet batch. This is a derived prepared-row snapshot, NOT the original HTTP response. No financial values/titles/dates were invented. Source update_history is absent/unknown because it is not part of this derived file. The regression reconstructs only fields used by ingestBatch and uses existing normalizeTdnetItem for nullable unknown fields. Local SQLite stock IDs are structural test IDs, not claimed production IDs.",
+  "sourceKey": "tdnet-daily-2026-10-14",
+  "originalFilename": "tdnet-daily-2026-10-14.json",
+  "originalFileSha256": "44ac3b3d5fcbd9ad845c3a3534ecfad7aff56c69fc304970522719481be36f14",
+  "originalFileBytes": 317029,
+  "originalRowCount": 717,
+  "fixtureRowIndices": [
+    0,
+    1
+  ],
+  "fixtureSha256": "d8b3f6b20e00766829b6caa9db11c9ce9c1525c396c51af2ed502551e9ea483d",
+  "fixtureBytes": 1132,
+  "custodyReceiptSha256": "b31fcfd4db8ad352b9e96460f99c94f590a8992904266aa5aa31ab928076bbc2",
+  "sourceHttpAcquisitionClock": "UNKNOWN; archive fetched-at and hosted readback clocks are not substituted",
+  "archiveFetchedAt": "preserved in original native metadata; this fixture does not change it",
+  "rights": "Limited regression projection of public TDnet disclosure metadata; underlying disclosure titles remain with their authors."
+}

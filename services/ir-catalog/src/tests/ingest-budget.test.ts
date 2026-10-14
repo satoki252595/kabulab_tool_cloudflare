@@ -1,8 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/d1";
 import * as irSchema from "../db/schema.js";
 import type { TdnetItemRaw } from "../services/tdnet/types.js";
+import { normalizeTdnetItem } from "../services/tdnet/types.js";
 
 vi.mock("../../../../src/shared/notion-archive/index.js", () => ({
   recordPrimaryData: vi.fn().mockResolvedValue({
@@ -111,6 +114,20 @@ const ITEM: TdnetItemRaw = {
   update_history: null,
 };
 
+// 原HTTPではなく、旧日次アーカイブの実prepared行抜粋。未保存update_historyは補作しない。
+const actualBatch = JSON.parse(readFileSync(new URL("./fixtures/tdnet-daily-batch.actual.json", import.meta.url), "utf8")) as Array<{
+  tdnet_id: string; ticker: string; company_code: string; company_name: string;
+  pubdate: string; title: string; document_url: string; xbrl_url: string | null; markets: string | null;
+}>;
+const actualItems = actualBatch.map((row) => {
+  const pubdate = new Date(Date.parse(row.pubdate) + 9 * 3_600_000).toISOString().slice(0, 19).replace("T", " ");
+  const item = normalizeTdnetItem({ id: row.tdnet_id, company_code: row.company_code,
+    company_name: row.company_name, title: row.title, pubdate, document_url: row.document_url,
+    url_xbrl: row.xbrl_url, markets_string: row.markets }, "saved prepared batch projection");
+  if (item === null) throw new Error("実prepared行の必須fieldが欠けています");
+  return item;
+});
+
 describe("ingestBatch の二次予算", () => {
   let sqlite: DatabaseSync;
 
@@ -118,6 +135,52 @@ describe("ingestBatch の二次予算", () => {
     vi.clearAllMocks();
     sqlite = new DatabaseSync(":memory:");
     sqlite.exec(DDL);
+  });
+
+  function runActual(items: TdnetItemRaw[], dailySnapshot?: true) {
+    return ingestBatch(makeDb(createD1(sqlite)) as never, items, {
+      batchKey: dailySnapshot ? "tdnet-daily-2026-10-14" : "tdnet-2026-10",
+      dailySnapshot, source: "offline regression: saved actual prepared batch",
+      archiveToNotion: true, notionByStock: true,
+      codeToId: new Map(actualBatch.map((row, index) => [row.ticker, index + 1])),
+    });
+  }
+
+  it("実日次行の部分集合が変わる時だけsnapshot keyが変わり、同じ内容は同じkeyへ戻る", async () => {
+    for (const items of [actualItems.slice(0, 1), actualItems, actualItems.slice(0, 1)]) {
+      await runActual(items, true);
+    }
+    const inputs = vi.mocked(recordPrimaryData).mock.calls.map(([input]) => input);
+    for (const [index, input] of inputs.entries()) {
+      const bytes = input.files![0].bytes;
+      expect(JSON.parse(new TextDecoder().decode(bytes))).toEqual(index === 1 ? actualBatch : actualBatch.slice(0, 1));
+      expect(input.key).toBe(`tdnet-daily-2026-10-14-${createHash("sha256").update(bytes).digest("hex")}`);
+      expect(input.files![0].filename).toBe("tdnet-daily-2026-10-14.json");
+      expect(input).not.toHaveProperty("force");
+      expect(input).not.toHaveProperty("fetchedAt");
+    }
+    expect(inputs[0].key).toBe(inputs[2].key);
+    expect(inputs[0].key).not.toBe(inputs[1].key);
+    expect(inputs.some((input) => input.key === "tdnet-daily-2026-10-14")).toBe(false);
+    expect(verifyArchivedAttachments).toHaveBeenCalledTimes(3);
+    expect(sqlite.prepare("SELECT count(*) AS n FROM ir_disclosures").get()?.n).toBe(2);
+  });
+
+  it("月次callerは実行しても従来keyとファイル名を保持する", async () => {
+    await runActual(actualItems);
+    const input = vi.mocked(recordPrimaryData).mock.calls[0][0];
+    expect(input.key).toBe("tdnet-2026-10");
+    expect(input.files![0].filename).toBe("tdnet-2026-10.json");
+  });
+
+  it.each(["archive", "readback"])("日次snapshotの%s未知は再送せずD1/二次処理前に停止する", async (phase) => {
+    const failure = new Error(`injected ${phase} unknown`);
+    if (phase === "archive") vi.mocked(recordPrimaryData).mockRejectedValueOnce(failure);
+    else vi.mocked(verifyArchivedAttachments).mockRejectedValueOnce(failure);
+    await expect(runActual(actualItems, true)).rejects.toBe(failure);
+    expect(recordPrimaryData).toHaveBeenCalledTimes(1);
+    expect(sqlite.prepare("SELECT count(*) AS n FROM ir_disclosures").get()?.n).toBe(0);
+    expect(upsertDisclosuresByStock).not.toHaveBeenCalled();
   });
 
   async function run(opts: {

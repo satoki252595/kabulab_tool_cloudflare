@@ -20,7 +20,8 @@
  *     銘柄の core_stocks 追加が開示から 7 日より遅れても、原本が残るあいだは日次で入る。
  *     既存行を 40 日ぶん毎日書き直さない（D1 書込を欠測分に限る）。
  *   - ルール6: 当日バッチの確定 JSON を Notion 一次データへ実体記録
- *     (key=tdnet-daily-YYYY-MM-DD 冪等)。高シグナルは人間可読 DB へ冪等記録。
+ *     (key=tdnet-daily-YYYY-MM-DD-全文SHA 冪等)。日内更新も旧原本を保持する。
+ *     高シグナルは人間可読 DB へ冪等記録。
  *   - 取りこぼしは、公開から TDNET_PDF_RETAIN_DAYS 日以内の未保存
  *     (notion_page_id が空) を古い順に次回以降が回収する。
  *     page id がある行は Notion 照会をしない。
@@ -140,6 +141,7 @@ export async function runIrCatalogCatchup(
     batchKey: `tdnet-daily-${dayKey}`,
     source: `yanoshin TDnet WebAPI /tdnet/list/{YYYYMMDD}.json 日次キャッチアップ 1日ずつ全件 (範囲 ${range})`,
     archiveToNotion: true,
+    dailySnapshot: true,
     notionByStock: true,
     notionByStockBudgetMs: NOTION_BUDGET_MS,
     notionByStockDeadlineMs: deadlineMs,
