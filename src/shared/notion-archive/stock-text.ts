@@ -393,6 +393,15 @@ export async function readStockTextRow(
     if (res.has_more === false) break;
     cursor = res.next_cursor as string;
   }
+  return parseStockTextBlocks(blocks, rowPageId, strictNative);
+}
+
+/** 全ページ終端まで取得済みの本文を復元する。保存した native POST も通信なしで同じ検証へ渡せる。 */
+export function parseStockTextBlocks(
+  blocks: readonly HeadingBlock[],
+  rowPageId: string,
+  strictNative = false
+): StockTextSection[] {
   // 保管ヘルパーの純全文比較は native の型不正と区別する。既存読取の
   // plain-v1 互換は維持し、この入口だけ全ページ終端後に厳密検査する。
   if (strictNative) {

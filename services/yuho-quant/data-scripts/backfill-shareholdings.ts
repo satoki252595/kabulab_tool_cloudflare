@@ -13,7 +13,7 @@ import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
 import * as schema from "../src/db/schema.js";
 import { selectLatestHoldingsDocuments } from "./lib/shareholdings-backfill.js";
 import { parseShareholdingsData, type ShareholdingsSource } from "../src/services/edinet/shareholdings.js";
-import { parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../src/services/edinet/shareholdings-valuation.js";
+import { HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../src/services/edinet/shareholdings-valuation.js";
 import { readSavedHoldingsZip, publishVerifiedShareholdings } from "../../../src/shared/notion-archive/shareholdings.js";
 import { verifyArchivedAttachments } from "../../../src/shared/notion-archive/readback.js";
 import { edinetArchiveFilename, recordEdinetZip } from "../src/services/edinet/archive.js";
@@ -48,6 +48,7 @@ export async function prepareLatestHoldings(args: { limit: number; afterCode: st
   mkdirSync(args.dir, { recursive: true, mode: 0o700 });
   assert.equal(existsSync(join(args.dir, "plan.json")), false, "準備済みplanを上書きしません");
   const evidence = valuationSources(args.valuationPath), catalog = evidence ? parseHoldingsCodeList(evidence.codeList) : null;
+  const prices = evidence ? new HoldingsPriceIndex(evidence.prices) : null;
   const items: Item[] = [];
   for (const row of selected.rows) {
     const source: ShareholdingsSource = { docId: row.docId, stockCode: row.stockCode, edinetCode: row.edinetCode, fiscalYearEnd: row.fiscalYearEnd };
@@ -62,7 +63,7 @@ export async function prepareLatestHoldings(args: { limit: number; afterCode: st
       writeFileSync(zipPath, saved.bytes, { flag: "wx", mode: 0o600 });
       const records = [];
       for (const holding of parsed.holdings) records.push({ source, ownerName: row.ownerName, holding,
-        valuation: evidence && catalog ? await qualifyHoldingValuation({ holding, fiscalYearEnd: source.fiscalYearEnd, catalog, prices: evidence.prices })
+        valuation: prices && catalog ? await qualifyHoldingValuation({ holding, fiscalYearEnd: source.fiscalYearEnd, catalog, prices })
           : { status: "unavailable", identity: null, reason: "価格/同定の保存原本が未指定です" } });
       const projectionPath = join(args.dir, `${row.stockCode}-${row.docId}.current.jsonl`);
       writeFileSync(projectionPath, records.map(record => JSON.stringify(record)).join("\n") + (records.length ? "\n" : ""), { flag: "wx", mode: 0o600 });

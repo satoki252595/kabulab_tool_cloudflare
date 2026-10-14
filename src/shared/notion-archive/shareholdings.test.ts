@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import type { ShareholdingsExtraction } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { parseShareholdingsData, verifySavedHoldingsSource } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
-import { qualifyHoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
+import { HoldingsPriceIndex, qualifyHoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { queryUniqueRow } from "./archive.js";
 import { notionRequest } from "./client.js";
 import { verifyArchivedAttachments } from "./readback.js";
@@ -12,6 +12,7 @@ import { applyHoldingsSchema, buildHoldingsSchemaPatch, HOLDINGS_DESCRIPTION, LE
 
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings.js", () => ({ parseShareholdingsData: vi.fn(), verifySavedHoldingsSource: vi.fn(() => ({ status: "verified", filename: "structural.xbrl" })) }));
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js", () => ({
+  HoldingsPriceIndex: vi.fn(function () {}),
   parseHoldingsCodeList: vi.fn(() => ({ asOf: "2026-06-30", byLegalName: new Map() })), qualifyHoldingValuation: vi.fn(),
 }));
 vi.mock("./archive.js", () => ({ queryUniqueRow: vi.fn(), findUniqueBackupChildByTitle: vi.fn(async () => "p".repeat(32)) }));
@@ -262,6 +263,23 @@ describe("株式保有の原典限定writer", () => {
     const priced = structuredClone(saved[rowPath]);
     expect(await publishVerifiedShareholdings(args)).toMatchObject({ status: "published", unchanged: 1 });
     expect(saved[rowPath]).toEqual(priced);
+  });
+
+  it("同一通の全明細で価格indexを共有し、後続の原本資格失敗なら行を書き始めない", async () => {
+    vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, holdings: [holding, { ...holding, rowIndex: 4 }] });
+    vi.mocked(qualifyHoldingValuation).mockResolvedValueOnce({ status: "unavailable", identity: null, reason: "保存価格なし" })
+      .mockRejectedValueOnce(new Error("SOURCE_SHA_MISMATCH"));
+    const evidence = { archivePageId: "1".repeat(32), filename: "structure", bytes: Buffer.alloc(0), sha256: "2".repeat(64) };
+    const prices = [evidence];
+    await expect(publishVerifiedShareholdings({ ...args, valuationSources: { codeList: evidence, prices } })).rejects.toThrow("SOURCE_SHA_MISMATCH");
+    expect(HoldingsPriceIndex).toHaveBeenCalledTimes(1);
+    expect(HoldingsPriceIndex).toHaveBeenCalledWith(prices);
+    const calls = vi.mocked(qualifyHoldingValuation).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0][0].prices).toBe(calls[1][0].prices);
+    expect(calls[0][0].prices).toBeInstanceOf(HoldingsPriceIndex);
+    expect(notionRequest).not.toHaveBeenCalled();
+    expect(queryUniqueRow).not.toHaveBeenCalled();
   });
 });
 

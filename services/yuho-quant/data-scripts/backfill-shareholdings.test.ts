@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyLatestHoldings } from "./backfill-shareholdings.js";
+import { applyLatestHoldings, prepareLatestHoldings } from "./backfill-shareholdings.js";
+import { parseShareholdingsData } from "../src/services/edinet/shareholdings.js";
+import { HoldingsPriceIndex, qualifyHoldingValuation } from "../src/services/edinet/shareholdings-valuation.js";
 import { selectLatestHoldingsDocuments } from "./lib/shareholdings-backfill.js";
 import { readSavedHoldingsZip, publishVerifiedShareholdings } from "../../../src/shared/notion-archive/shareholdings.js";
 import { recordEdinetZip } from "../src/services/edinet/archive.js";
@@ -15,6 +17,11 @@ vi.mock("../../../src/shared/notion-archive/shareholdings.js", () => ({ readSave
 vi.mock("../../../src/shared/notion-archive/readback.js", () => ({ verifyArchivedAttachments: vi.fn() }));
 vi.mock("../src/services/edinet/archive.js", () => ({ recordEdinetZip: vi.fn(), edinetArchiveFilename: (doc: string) => `${doc}_xbrl.zip` }));
 vi.mock("../../../scripts/notion/shareholdings.js", () => ({ guardedHoldingsMutation: async (_path: string, _label: string, execute: () => Promise<unknown>) => execute() }));
+vi.mock("../src/services/edinet/shareholdings.js", () => ({ parseShareholdingsData: vi.fn() }));
+vi.mock("../src/services/edinet/shareholdings-valuation.js", () => ({
+  HoldingsPriceIndex: vi.fn(function () {}), parseHoldingsCodeList: vi.fn(() => ({ asOf: "2026-06-30", byLegalName: new Map() })),
+  qualifyHoldingValuation: vi.fn(),
+}));
 const source = { docId: "S100STRUCTURAL", stockCode: "1001", edinetCode: "E00001", fiscalYearEnd: "2026-03-31" };
 const bytes = Buffer.from("Protocol test only; source parser covered in separate suites");
 const sha = createHash("sha256").update(bytes).digest("hex");
@@ -67,5 +74,29 @@ describe("保有明細backfillのlegacy適用境界", () => {
     fixture();writeFileSync(join(dir, `${source.stockCode}-${source.docId}.modern-custody.json`), JSON.stringify({ zipSha256: sha, result: { pageId: "b".repeat(32) } }));
     await applyLatestHoldings(dir, 100);expect(recordEdinetZip).not.toHaveBeenCalled();expect(readSavedHoldingsZip).not.toHaveBeenCalled();
     expect(verifyArchivedAttachments).toHaveBeenCalledWith("b".repeat(32), expect.any(Array), expect.any(String));
+  });
+
+  it("準備の全明細で一つの価格indexを共有し、欠測理由を個別に維持する", async () => {
+    const holding = { name: "構造検証", kind: "特定投資株式" as const, shares: 12, sharesRaw: 12, sharesUnit: "株" as const,
+      bookValueRaw: 34, bookValueUnit: "千円" as const, bookValueYen: 34000, listingStatus: "unknown" as const,
+      price: null, priceDate: null, priceCurrency: null, tableIndex: 0, rowIndex: 3 };
+    vi.mocked(parseShareholdingsData).mockReturnValue({ status: "ok", source, filename: "structural.htm", elementId: "jpcrp_cor:ShareholdingsTextBlock",
+      contextRef: "FilingDateInstant", reason: null, holderScope: "filer_only", holdings: [holding, { ...holding, rowIndex: 4 }] });
+    vi.mocked(qualifyHoldingValuation).mockResolvedValueOnce({ status: "unavailable", identity: null, reason: "価格保存なし" })
+      .mockResolvedValueOnce({ status: "unavailable", identity: null, reason: "当期株数非開示" });
+    const evidence = { path: join(dir, "price.gz"), archivePageId: "1".repeat(32), filename: "structure.gz", sha256: sha };
+    writeFileSync(evidence.path, bytes);
+    const valuationPath = join(dir, "valuation.json");
+    writeFileSync(valuationPath, JSON.stringify({ codeList: evidence, prices: [evidence] }));
+    await prepareLatestHoldings({ limit: 50, afterCode: null, dir, valuationPath });
+    expect(HoldingsPriceIndex).toHaveBeenCalledTimes(1);
+    const calls = vi.mocked(qualifyHoldingValuation).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0][0].prices).toBe(calls[1][0].prices);
+    expect(calls[0][0].prices).toBeInstanceOf(HoldingsPriceIndex);
+    const records = readFileSync(join(dir, `${source.stockCode}-${source.docId}.current.jsonl`), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(records.map(row => row.valuation.reason)).toEqual(["価格保存なし", "当期株数非開示"]);
+    expect(publishVerifiedShareholdings).not.toHaveBeenCalled();
+    expect(recordEdinetZip).not.toHaveBeenCalled();
   });
 });
