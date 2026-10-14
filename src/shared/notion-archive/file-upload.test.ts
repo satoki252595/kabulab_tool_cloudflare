@@ -108,6 +108,18 @@ describe("file_upload の確定確認 GET", () => {
     contentType: "application/pdf",
   };
 
+  it("元Files添付名100文字は保持し、101文字は全HTTPより前に拒否する", async () => {
+    const { uploadFile, toNotionUpload } = await loadUpload();
+    const boundary = `${"a".repeat(96)}.pdf`;
+    expect(toNotionUpload(boundary, "application/pdf")).toEqual({ filename: boundary, contentType: "application/pdf" });
+    await expect(uploadFile({ ...pdf, filename: `${"a".repeat(97)}.pdf` })).rejects.toThrow("100文字");
+    const originalTextName = `${"a".repeat(92)}.jsonl`;
+    expect(originalTextName).toHaveLength(98);
+    // upload名は別のAPI契約。Filesには元98文字名を付けるため.txt後102文字でも維持する。
+    expect(toNotionUpload(originalTextName, "application/x-ndjson")).toEqual({ filename: `${originalTextName}.txt`, contentType: "text/plain" });
+    expect(harness.calls).toHaveLength(0);
+  });
+
   it("uploaded なら確認 GET は 0 回で、pending よりリクエストが 1 少ない", async () => {
     routeSingle(
       { object: "file_upload", id: "upload-1", status: "uploaded" },

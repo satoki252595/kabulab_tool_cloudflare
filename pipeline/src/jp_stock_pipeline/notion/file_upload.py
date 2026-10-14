@@ -49,6 +49,7 @@ from .upsert import (
     text_prop,
     title_prop,
     url_prop,
+    validate_file_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -193,6 +194,13 @@ def _upload_dispatch(client: NotionClient, path: Path) -> str:
     return _upload_multipart(client, path, n_parts)
 
 
+def _upload_name(path: Path) -> str:
+    """upload_fileがFiles.nameへ返す最終名。upload API独自のfilename上限ではない。"""
+    ext = path.suffix.lstrip(".").lower()
+    name = f"{path.name}.zip" if ext and ext not in NOTION_UPLOAD_EXTENSIONS else path.name
+    return validate_file_name(name)
+
+
 def upload_file(client: NotionClient, path: Path) -> tuple[str, str]:
     """1ファイルをアップロードし (file_upload id, 添付ファイル名) を返す。
 
@@ -200,6 +208,7 @@ def upload_file(client: NotionClient, path: Path) -> tuple[str, str]:
     添付名が元名と変わりうる（`<name>` → `<name>.zip`）。呼び出し側は返った名前を
     ⑤ の files プロパティに使う。
     """
+    _upload_name(path)
     ext = path.suffix.lstrip(".").lower()
     if ext and ext not in NOTION_UPLOAD_EXTENSIONS:
         logger.info("Notion 非対応拡張子 .%s を .zip ラップして UL: %s", ext, path.name)
@@ -373,8 +382,11 @@ def upload_raw_artifact(
             artifact.notion_page_id = existing
             return existing
 
+        paths = [artifact.local_path, *artifact.converted_paths]
+        for path in paths:
+            _upload_name(path)  # 後半の長名で前半だけ送信済みになることを防ぐ。
         uploads: list[tuple[str, str]] = []
-        for path in [artifact.local_path, *artifact.converted_paths]:
+        for path in paths:
             upload_id, uploaded_name = upload_file(client, path)
             uploads.append((upload_id, uploaded_name))
         page = client.create_page(
