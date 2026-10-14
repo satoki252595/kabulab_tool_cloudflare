@@ -1,0 +1,17 @@
+# 保存添付GETの有限再読取（2026-10-15）
+
+保存Aの原典資格化は、22回目のhosted GETがheaders前にTypeError(fetch failed)/SocketError(other side closed)で停止した。21件の200全文応答は既知、22件目の読取結果は不明、業務書込は0。保存8303v6は物理PREページ作成と再読まで200で成立し、その添付GETはheaders200の後にbody0Bのまま60秒で中断した。添付33,775Bの全SHA照合は未成立であり、ページがあることを全文保管完了とは扱わない。異なる停止phaseであり、共通サーバ原因や瞬断とは断定しない。
+
+正常の`verifyArchivedAttachments`はNotion APIクライアントの再試行を通らず、署名URLへ直接fetchしていた。共通`archived-download`を使い、同一URLへのGETだけを各45秒・合計90秒・最大2回とする。全体deadlineは再試行で更新せず、callerのAbortSignalがあればそれを優先する。対応したnative fetch/streamの通信切断と各試行のtimeoutだけを再読取し、HTTP 4xx/429/5xx、URL/サイズ/Content-Length/添付名/件数/SHAの不一致、設定・不明・guardエラーは停止する。署名URLの再発行や別原典への切替、mutationの再送は行わない。
+
+共通readbackとmoneyflow readbackは、期待する実添付bytesを上限として渡す。0byteの期待値は明示した0上限で実Responseの空bodyを読む。サイズ未知の既存callerには任意の数値上限を足さず、時間・回数の上限を追加する。圧縮応答のContent-Lengthはwire長、streamは復号後bytesとして区別し、復号後の実bytes上限を守る。成功した完全bodyだけをcallerへ返し、readbackの全長/全SHA照合を維持する。
+
+通常経路はstock/Yahooバッチ、macro/JP市場原本、JPX、TDnet、EDINET一覧とZIP、事業タグPRE、保有明細・価格、moneyflowの保管照合へ到達する。`scripts/moneyflow/lib/archived-files`の再exportはRAW補完、保有価格loader、VWAP保存JP legにも使われる。既存Notion API retryはAPI_BASE/認証に固定され、200 headersで戻るため、hosted全body再読取へ流用しない。Pythonのdownload_file、旧moveToTrash/一部の単発修復・margin/readListSnapshotの直接GETは別実装であり、本PRで同じretry契約へ変えたとは扱わない。
+
+通常成功は1GET/同じbytesで、外部原典GET増加は0。失敗時の増分は最大1GETとその実body（既存/期待サイズ上限内）、合計90秒以内。optional observerはattempt/phase/読取bytes/statusだけを受け、URL・署名・原文・エラーメッセージを出さない。Node専用依存を増やさずWorkerと共通のfetch/stream/WebCryptoを使う。
+
+旧A/Stock/Bodyの私有guardは最初の失敗でsticky STOPし、原run/latchは不変更である。normal helperの修正だけで旧runが復旧するとは扱わない。新しい明示read-only回収は別のonce namespaceと独立予算が必要で、旧GET unknownを未送信と断定しない。Stockのguardが元native TypeErrorをそのまま再throwする場合も、次のguard entryは送信前のstopped assertionで止まり、旧業務を再送しない。
+
+回帰は保存されたAの例外型/原因とV6の200/body0 phaseを通信0で再現し、同URL2GETの成功、部分bodyからの完全再読取、親・全体deadline、2回で終了、guard/unknown/HTTP拒否、0byte、fullSHA不一致を検証する。古いテストのarrayBuffer-only擬似Responseは実stream Responseへ直し、hosted fixture originを既存許可範囲へ揃える。実原本値・原時計・旧保存証跡は変更しない。
+
+最終固定byteをNix Node22環境で検証し、全repo318suite/5,501test PASS、既存1suite/446test SKIP、TypeScript/対象ESLint/diffcheck PASSを確認した。通常アップロード名の既存100文字guardとPythonの修正を含むmain65bfcc4を基点にし、元402/403/405リリースノートを保持した。本作業の本番原典GET・Notion/D1/R2書込・モデル実行は0。

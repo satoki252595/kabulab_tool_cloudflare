@@ -131,7 +131,7 @@ export async function verifyArchivedAttachments(
     const got = hosted[i];
     if (got.name !== want.filename) fail(`添付名不一致「${got.name}」≠「${want.filename}」`);
     if (got.kind !== "file") fail(`「${want.filename}」が Notion-hosted 添付ではありません`);
-    const bytes = await downloadArchivedFile(got, context);
+    const bytes = await downloadArchivedFile(got, context, { maxBytes: want.bytes.length });
     if (bytes.length !== want.bytes.length) {
       fail(`「${want.filename}」のバイト長 ${bytes.length} ≠ ${want.bytes.length}`);
     }

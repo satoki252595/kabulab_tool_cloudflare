@@ -8,16 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 type FetchCalls = Array<{ url: string; init: RequestInit }>;
 
 function jsonResponse(body: unknown): Response {
-  return {
-    ok: true,
-    status: 200,
-    headers: new Headers(),
-    json: async () => body,
-    text: async () => JSON.stringify(body),
-    // 署名付き URL のバイト取得用。文字列ボディは raw バイトとして返す。
-    arrayBuffer: async () =>
-      new TextEncoder().encode(typeof body === "string" ? body : JSON.stringify(body)).buffer as ArrayBuffer,
-  } as Response;
+  // nativeと同じstreamを持つ。文字列はhosted原文、API応答はJSON。
+  return new Response(typeof body === "string" ? body : JSON.stringify(body), { status: 200 });
 }
 
 describe("moneyflow archived-files", () => {
@@ -136,7 +128,7 @@ describe("moneyflow archived-files", () => {
     const hosted = (name: string) => ({
       name,
       type: "file",
-      file: { url: `https://files.example.test/${name}` },
+      file: { url: `https://file.notion.so/${name}` },
     });
     const want = (filename: string, text: string) => ({
       filename,
