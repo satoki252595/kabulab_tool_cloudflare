@@ -34,6 +34,7 @@
  * 受注パーサ (order-parser) と同じ `./edinet/*` を共用する。本ファイルは海外
  * 売上高 固有の構造化のみを担い、受注と同じ有報 1 通から並行して構造化される。
  */
+import { createHash } from "node:crypto";
 import { unzip } from "./edinet/zip.js";
 import {
   readFilingDurationContexts,
@@ -104,12 +105,28 @@ export interface OverseasProof {
   };
 }
 
+/** 明示された地域売上の省略理由。金額/比率や他の開示表の未対応を補わない。 */
+export interface OverseasOmission {
+  reason: "domestic_external_sales_over_90_percent";
+  /** 当該地域注記だけの省略。別 basis の開示数値と共存できる。 */
+  scope: "regional_external_customer_sales_note";
+  evidence: Array<{
+    honbunFile: string;
+    memberSha256: string;
+    rawBlockSha256: string;
+    quote: string;
+    contextPeriod: DurationContext;
+  }>;
+}
+
 export interface OverseasExtraction {
   status: OverseasParseStatus;
   facts: OverseasFact[];
   honbunFile: string | null;
   tablesScanned: number;
   proof?: OverseasProof;
+  /** 原典にある省略理由だけ。status は従来どおり、facts は生成しない。 */
+  omission?: OverseasOmission;
 }
 
 /**
@@ -157,6 +174,7 @@ export interface OverseasCapture {
   status: OverseasParseStatus | null;
   stopReason: string | null;
   candidates: OverseasCandidateCapture[];
+  omission?: OverseasOmission;
   /** 地理未分類で却下した表 (実 reducer 由来。監査用。reject 時のみ採取)。 */
   incomplete?: Array<{
     start: number;
@@ -2532,6 +2550,61 @@ function scoreCandidate(
 }
 
 /**
+ * 実地域売上 TextBlock の省略文だけを読む。入れ子 nonNumeric は depth で
+ * 閉じ、continuation/未閉鎖は不明のまま。コメントは証拠にしない。
+ */
+function geographicOmissionBlocks(html: string): Array<{
+  html: string;
+  visibleHtml: string;
+  contextRef: string | null;
+  complete: boolean;
+}> {
+  let masked = html.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g,
+    (text) => " ".repeat(text.length));
+  let hiddenStart = -1, hiddenDepth = 0;
+  for (const match of masked.matchAll(/<\/?ix:hidden\b[^>]*>/gi)) {
+    const closing = match[0].startsWith("</"), selfClosing = /\/\s*>$/.test(match[0]);
+    if (hiddenStart < 0) {
+      if (closing || selfClosing) continue;
+      hiddenStart = match.index;
+      hiddenDepth = 1;
+      continue;
+    }
+    if (!selfClosing) hiddenDepth += closing ? -1 : 1;
+    if (hiddenDepth !== 0) continue;
+    const end = match.index + match[0].length;
+    masked = masked.slice(0, hiddenStart) + " ".repeat(end - hiddenStart) + masked.slice(end);
+    hiddenStart = -1;
+  }
+  if (hiddenStart >= 0) masked = masked.slice(0, hiddenStart) + " ".repeat(masked.length - hiddenStart);
+  const blocks: ReturnType<typeof geographicOmissionBlocks> = [];
+  let start = -1, depth = 0, contextRef: string | null = null;
+  let continued = false;
+  for (const match of masked.matchAll(/<\/?ix:nonNumeric\b[^>]*>/gi)) {
+    const tag = match[0], closing = tag.startsWith("</"), selfClosing = /\/\s*>$/.test(tag);
+    if (start < 0) {
+      const name = /\sname\s*=\s*(["'])([^"']+)\1/.exec(tag)?.[2];
+      if (closing || selfClosing || name !== `jpcrp_cor:${SINGLE_ROW_SALES_TEXTBLOCK}`) continue;
+      start = match.index + tag.length;
+      depth = 1;
+      const context = /\scontextRef\s*=\s*(["'])([^"']+)\1/.exec(tag);
+      contextRef = context === null ? null : context[2];
+      continued = /\scontinuedAt\s*=/.test(tag);
+      continue;
+    }
+    if (!closing && /\scontinuedAt\s*=/.test(tag)) continued = true;
+    if (!selfClosing) depth += closing ? -1 : 1;
+    if (depth !== 0) continue;
+    blocks.push({ html: html.slice(start, match.index), visibleHtml: masked.slice(start, match.index),
+      contextRef, complete: !continued });
+    start = -1;
+  }
+  if (start >= 0) blocks.push({ html: html.slice(start), visibleHtml: masked.slice(start),
+    contextRef, complete: false });
+  return blocks;
+}
+
+/**
  * type=1 ZIP から海外（地域別）売上を構造化する。確信が持てない表は status で
  * 明示し数値を捏造しない (ルール1/2)。
  */
@@ -2551,6 +2624,7 @@ export function parseOverseasData(
       opts.capture.stopReason = "no-signal";
       opts.capture.candidates = [];
       opts.capture.incomplete = [];
+      delete opts.capture.omission;
     }
     return {
       status: "no_overseas_table",
@@ -2574,11 +2648,38 @@ export function parseOverseasData(
   // 内部選定の offset は全本文で一意。診断は必ず実 filename/本文内 offset
   // に戻す。heading/caption/wide は各本文だけから作り、他本文を借りない。
   const sources = new Map<number, { honbunFile: string; start: number }>();
+  const omissionEvidence: OverseasOmission["evidence"] = [];
+  const currentRegionalTables: DurationContext[] = [];
+  let omissionIncomplete = false;
   let base = 0;
   for (const body of bodies) {
     const durationContexts = readFilingDurationContexts(
       entries, body.name, reportPeriodEnd
     );
+    for (const block of geographicOmissionBlocks(body.html)) {
+      if (!block.complete) {
+        omissionIncomplete = true;
+        continue;
+      }
+      const period = block.contextRef === null ? undefined : durationContexts.get(block.contextRef);
+      if (!period || period.endDate !== reportPeriodEnd) continue;
+      // 同期の地域売上実表と省略文が共存すれば、別の表や総額で補わない。
+      if (/<table\b/i.test(block.visibleHtml)) {
+        currentRegionalTables.push(period);
+        continue;
+      }
+      if (period.contextRef !== "CurrentYearDuration") continue;
+      const quote = stripHtml(block.visibleHtml);
+      const normalized = quote.normalize("NFKC").replace(/[\s、,]/g, "");
+      if (!/^(?:\(1\))?売上高(?:本邦|国内)の外部顧客への売上高が連結損益計算書の売上高の90%を超えるため記載を省略して(?:います|おります)。?$/.test(normalized)) continue;
+      omissionEvidence.push({
+        honbunFile: body.name,
+        memberSha256: createHash("sha256").update(entries.get(body.name)!).digest("hex"),
+        rawBlockSha256: createHash("sha256").update(block.html).digest("hex"),
+        quote,
+        contextPeriod: period,
+      });
+    }
     for (const table of tablesWithHeading(body.html)) {
       const start = base + table.start;
       sources.set(start, { honbunFile: body.name, start: table.start });
@@ -2597,6 +2698,32 @@ export function parseOverseasData(
     const source = sources.get(c.start)!;
     c.start = source.start;
     c.honbunFile = source.honbunFile;
+  }
+  if (omissionEvidence.length > 0 && !omissionIncomplete) {
+    if (currentRegionalTables.some((tablePeriod) => omissionEvidence.some(({ contextPeriod }) =>
+      tablePeriod.entity === contextPeriod.entity &&
+      tablePeriod.startDate === contextPeriod.startDate &&
+      tablePeriod.endDate === contextPeriod.endDate))) {
+      // 矛盾は数値・省略理由とも採用しない。既 status の HOLD を使う。
+      capture.status = "geo_present_unstructured";
+      capture.stopReason = "geographic-omission-conflict";
+      for (const c of capture.candidates) {
+        c.selected = false;
+        c.dropReason = "geographic-omission-conflict";
+      }
+      return { status: "geo_present_unstructured", facts: [], honbunFile: null,
+        tablesScanned: r.tablesScanned };
+    }
+    const omission: OverseasOmission = {
+      reason: "domestic_external_sales_over_90_percent",
+      scope: "regional_external_customer_sales_note",
+      // 短い quote/context が元全文の backing store を保持しないよう値だけ返す。
+      evidence: JSON.parse(JSON.stringify(omissionEvidence)) as OverseasOmission["evidence"],
+    };
+    capture.omission = omission;
+    if (r.status === "no_overseas_table") capture.stopReason = omission.reason;
+    // 別 basis の未対応販売実表があれば既 HOLD/reason を保持する。
+    return { ...r, honbunFile, omission };
   }
   return { ...r, honbunFile };
 }
@@ -3072,6 +3199,7 @@ function parseOverseasTables(
     cap.stopReason = null;
     cap.candidates = [];
     cap.incomplete = [];
+    delete cap.omission;
   }
   const markCap = (
     status: OverseasParseStatus,

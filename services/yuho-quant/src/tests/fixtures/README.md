@@ -169,3 +169,43 @@ replaced by the recovery clock. Complete ZIPs and signed URLs remain private.
 The preceding rights and regression-only conditions apply: original content is
 owned by its rights holders and receives no new redistribution/code license.
 Negative transformations occur only in tests and never become primary sources.
+
+## Explicit regional-sales omission (2026-10-14)
+
+`geographic-omission-five.json.gz` contains verbatim complete regional-sales
+TextBlock excerpts from [S100Z5EY](https://api.edinet-fsa.go.jp/api/v2/documents/S100Z5EY?type=1),
+[S100XSYD](https://api.edinet-fsa.go.jp/api/v2/documents/S100XSYD?type=1),
+[S100XV0K](https://api.edinet-fsa.go.jp/api/v2/documents/S100XV0K?type=1),
+[S100XTWQ](https://api.edinet-fsa.go.jp/api/v2/documents/S100XTWQ?type=1), and
+[S100YD5O](https://api.edinet-fsa.go.jp/api/v2/documents/S100YD5O?type=1).
+The paired XML preserves original root attributes and all verbatim native
+context definitions; other facts and the original header are omitted. This is
+an explicit structural projection and test container, not an original ZIP or
+complete instance. `geographic-omission-five.provenance.json` records source ZIP,
+original member, excerpt and fixture-member SHA-256 separately, with UTF-16
+excerpt intervals and physical archive IDs. Full source ZIPs remain private.
+The gzip fixture is 17,011 bytes, SHA-256
+`ac7e9e5106734ce11afa36781599b4498ff3f8d2a2e665ba0779db2de772060d`.
+
+1414/1435/155A/1852 explicitly omit current consolidated regional external-sales
+information because domestic external sales exceed 90% of consolidated
+income-statement sales. 153A has a real nonconsolidated duration and individual
+income-statement wording; it is a negative for consolidated qualification.
+No omitted foreign amount, ratio, residual or numerical zero is inferred.
+Original HTTP acquisition clocks remain UNKNOWN; saved metadata clocks are not
+substituted. Original manifest known/unknown values remain distinct in the
+provenance. The preceding rights and regression-only conditions apply; negative
+transformations are confined to tests and never become primary data.
+
+`geographic-omission-coexisting-sales.json.gz` adds complete actual revenue or
+segment TextBlocks alongside regional omission notes for
+[372A/S100YYO2](https://api.edinet-fsa.go.jp/api/v2/documents/S100YYO2?type=1),
+[5204/S100YBU1](https://api.edinet-fsa.go.jp/api/v2/documents/S100YBU1?type=1),
+[6059/S100YJMS](https://api.edinet-fsa.go.jp/api/v2/documents/S100YJMS?type=1), and
+[6960/S100YLF7](https://api.edinet-fsa.go.jp/api/v2/documents/S100YLF7?type=1).
+The numeric disclosures remain intact: omission applies only to the regional
+external-customer sales note, not to every sales disclosure in that filing.
+Its provenance JSON separates full source/member SHA from verbatim excerpt and
+XML-projection SHA. The 30,751-byte gzip SHA-256 is
+`025e32330c9a8fec19aba54847478a2504aa51aabbce0ab158eab4545b1bf1d4`.
+The same rights, original-clock UNKNOWN, and regression-only conditions apply.

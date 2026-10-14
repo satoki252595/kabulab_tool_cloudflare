@@ -89,6 +89,7 @@ for (const r of targets) {
   let honbunFile: string | null = null;
   let facts: ReturnType<typeof parseOverseasData>["facts"] = [];
   let proof: ReturnType<typeof parseOverseasData>["proof"];
+  let omission: ReturnType<typeof parseOverseasData>["omission"];
   let zipBytes: Buffer | null = null;
   let fetchedAt: string | null = null;
   try {
@@ -100,6 +101,7 @@ for (const r of targets) {
     honbunFile = ex.honbunFile;
     facts = ex.facts;
     proof = ex.proof;
+    omission = ex.omission;
   } catch (e) {
     if (e instanceof EdinetDocumentArchiveError ||
         (e instanceof EdinetDocumentFetchError && !(e instanceof EdinetNotFoundError))) throw e;
@@ -142,6 +144,7 @@ for (const r of targets) {
         overseasParseStatus: status,
         overseasHonbunFile: honbunFile,
         overseasFactCount: facts.length,
+        ...(omission === undefined ? {} : { overseasOmission: omission }),
         archivedBy: "backfill-overseas",
       },
     });

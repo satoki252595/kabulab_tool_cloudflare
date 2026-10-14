@@ -308,6 +308,7 @@ export async function ingestDocument(
   let overseasHonbunFile: string | null = null;
   let overseasFacts: ReturnType<typeof parseOverseasData>["facts"] = [];
   let overseasProof: ReturnType<typeof parseOverseasData>["proof"];
+  let overseasOmission: ReturnType<typeof parseOverseasData>["omission"];
 
   const csvZip = await downloadDocument(doc.docID, 5);
   const csvFetchedAt = new Date().toISOString();
@@ -406,6 +407,7 @@ export async function ingestDocument(
       overseasHonbunFile = ex.honbunFile;
       overseasFacts = ex.facts;
       overseasProof = ex.proof;
+      overseasOmission = ex.omission;
     } catch (e) {
       overseasParseStatus = "parse_error";
       overseasHonbunFile = null;
@@ -495,6 +497,7 @@ export async function ingestDocument(
       overseasParseStatus,
       overseasHonbunFile,
       overseasFactCount: overseasFacts.length,
+      ...(overseasOmission === undefined ? {} : { overseasOmission }),
       textParseStatus,
       textSectionCount: sections.length,
       xbrlUnavailable,
