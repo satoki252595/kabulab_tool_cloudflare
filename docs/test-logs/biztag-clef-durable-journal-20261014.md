@@ -27,6 +27,7 @@ resident protocolのsplit/破断/異常応答は隔離したfake processで検�
 - UTF-8の日本語途中chunk分割でも原response bytesを保存する。
 - intent fsync失敗時はstdin送信0、raw応答fsync失敗/破断時はaccepted0、後続forward0。
 - 未完intentは不変で、再起動後に別銘柄へ進むことも拒否する。
+- 完成出力後の余分なpartial原文のfsyncが失敗し、partial markerを書けなくても、残った原文だけで跨run停止する。
 - 完成済み出力は実clientのspawnを禁止した状態で再利用できる。
 - state/質問/39本文/語彙/model/manifest/較正の変更、raw/qid破損を拒否する。
 - 1GiBを超えた保存量では新intentを作らず旧ファイルを保持する。
@@ -43,7 +44,7 @@ pnpm exec vitest run scripts/biztag-local src/shared/semif src/shared/jev/policy
   services/yuho-quant/src/biztag/{pipeline,process,plan}.test.ts
   services/yuho-quant/src/biztag/competitors/{pipeline,process}.test.ts
   services/yuho-quant/data-scripts/recover-unjudged-competitors.test.ts
-11 suites / 214 tests PASS
+11 suites / 215 tests PASS
 pnpm exec tsc --noEmit: PASS
 owned 8 TypeScript files eslint --max-warnings=0: PASS
 git diff --check: PASS

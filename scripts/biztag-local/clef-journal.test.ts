@@ -73,6 +73,18 @@ describe("normal Clef durable output", () => {
     expect(() => exchange.accepted(fixture.result)).toThrow(); expect(() => journal({ ...input, batchIndex: 1 })).toThrow("sticky STOP");
     expect(() => createClefJournal(root, pins)(input)).toThrow();
   });
+  it("a partial raw fsync failure after acceptance blocks same-key reuse and other stocks across runs", () => {
+    const root = state(), journal = createClefJournal(root, pins), exchange = journal(input);
+    exchange.beforeSend(request); exchange.response(response, true); exchange.accepted(fixture.result);
+    const d = directory(root), accepted = readFileSync(join(d, "accepted.json"));
+    vi.mocked(fsyncSync).mockImplementationOnce(() => { throw new Error("offline partial raw fsync fault"); });
+    expect(() => exchange.response(response.subarray(0, 10), false)).toThrow("fsync fault");
+    expect(existsSync(join(d, "response-partial.raw"))).toBe(true); expect(existsSync(join(d, "partial.json"))).toBe(false);
+    expect(() => journal(input)).toThrow("sticky STOP");
+    expect(() => createClefJournal(root, pins)(input)).toThrow("unknown model output");
+    expect(() => createClefJournal(root, pins)({ ...input, stockCode: "OFFLINE_OTHER_STOCK_CONTROL" })).toThrow("unknown model output");
+    expect(readFileSync(join(d, "accepted.json"))).toEqual(accepted); expect(readdirSync(join(root, "clef-decisions"))).toHaveLength(1);
+  });
   it.each(["state", "questions", "textsSha256", "vocabHash", "model", "modelManifestSha256", "calibrationSha256"])("%s mismatch never creates another forward latch", key => {
     const root = state(), exchange = createClefJournal(root, pins)(input); exchange.beforeSend(request); exchange.response(response, true); exchange.accepted(fixture.result);
     const changed = structuredClone(input), changedPins = { ...pins };

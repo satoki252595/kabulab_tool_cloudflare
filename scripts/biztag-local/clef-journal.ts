@@ -38,6 +38,7 @@ function answers(value: unknown, qids: string[]): Record<string, number> {
 export function createClefJournal(state: string, pins: { modelManifestSha256: string; calibrationSha256: string }): (input: ClefJournalInput) => LocalDecisionExchange {
   let written = 0, stored: number | undefined, stopped = false;
   const root = join(state, "clef-decisions");
+  const incomplete = (directory: string) => ["response-partial.raw", "partial.json", "unexpected-response.raw"].some(name => existsSync(join(directory, name)));
   const read = (path: string): Buffer => {
     privatePath(path, false); assert(lstatSync(path).size <= FILE_MAX, "journal file size HOLD"); return readFileSync(path);
   };
@@ -65,7 +66,7 @@ export function createClefJournal(state: string, pins: { modelManifestSha256: st
         assert(stored <= STORE_MAX, "journal storage full; preserve old evidence and HOLD");
         // A previous run's unresolved request stops every later forward, including other stocks.
         for (const directory of directories) {
-          assert(!existsSync(join(directory, "partial.json")) && !existsSync(join(directory, "unexpected-response.raw")), "prior unknown model output HOLD");
+          assert(!incomplete(directory), "prior unknown model output HOLD");
           const accepted = jsonLine(read(join(directory, "accepted.json")));
           for (const name of ["input.json", "intent.json", "request.raw", "send.json", "response.raw"]) privatePath(join(directory, name), false);
           for (const name of ["inputSha256", "requestSha256", "responseSha256"]) assert(typeof accepted[name] === "string" && /^[a-f0-9]{64}$/.test(accepted[name] as string), "prior incomplete accepted marker HOLD");
@@ -82,7 +83,7 @@ export function createClefJournal(state: string, pins: { modelManifestSha256: st
       const qids = questions.map(q => q.qid);
       if (existsSync(directory)) {
         privatePath(directory, true);
-        assert(!existsSync(path("partial.json")) && !existsSync(path("unexpected-response.raw")), "incomplete/unknown raw output HOLD");
+        assert(!incomplete(directory), "incomplete/unknown raw output HOLD");
         assert.equal(read(path("input.json")).toString("utf8"), bindingRaw, "saved model input/recipe differs; HOLD, no new forward");
         const requestRaw = read(path("request.raw")), responseRaw = read(path("response.raw"));
         const accepted = jsonLine(read(path("accepted.json")));
