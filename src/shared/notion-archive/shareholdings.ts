@@ -148,6 +148,8 @@ interface HoldingPage {
   parent: { type: string; database_id: string };
   archived: boolean;
   in_trash: boolean;
+  created_time?: string;
+  last_edited_time?: string;
   properties: Record<string, HoldingProperty>;
 }
 
@@ -200,6 +202,8 @@ export function holdingsFactsSha256(holdings: readonly Shareholding[]): string {
 interface PublishHoldingsArgs {
   source: ShareholdingsSource; ownerName: string; zip: Buffer; archivePageId: string; maxRows: number;
   budget?: ShareholdingsBudget;
+  /** 旧cursor欠測HOLDの明示再資格だけ。全props/clockと全原表factsを物理PREへ固定する。 */
+  sourceWindowPre?: ArchivedSource;
   /** publishVerifiedでは物理全文照合済みの原本だけ。保存入口は内部で照合する。 */
   valuationSources?: { codeList: ArchivedSource; prices: readonly ArchivedSource[]; evidenceScope?: string };
 }
@@ -212,42 +216,111 @@ export type HoldingPriceSourceLoader = (holdings: readonly Shareholding[], budge
 
 export type PublishHoldingsResult =
   | { status: "published"; parsed: number; created: number; updated: number; unchanged: number; unavailable?: number; pending?: boolean }
-  | { status: "held"; parsed: number; reason: string };
+  | { status: "held"; parsed: number; reason: string; usedRows?: number; pending?: boolean };
 
 /**
  * recordEdinetZip(type1)の物理全文照合を終えた同一bytesだけを渡す。
- * 原本の再取得・再アップロード・再readbackはせず、原表未対応/予算超過は明示HOLD。
- * maxRowsはrunの残枠。0なら通信せずHOLD、途中打切りで一部成功にはしない。
+ * 原本の再取得・再アップロードはしない。全原表を固定し、残run枠だけを読戻して再開する。
+ * windowの完了は通全体の完了と区別し、最後だけ価格queueへ渡す。
  */
 export async function publishVerifiedShareholdings(args: PublishHoldingsArgs): Promise<PublishHoldingsResult> {
   return publishHoldings(args);
 }
 
-async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapshotId: string; info: RecoveryInfo }): Promise<PublishHoldingsResult> {
+async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapshotId?: string; info: RecoveryInfo }): Promise<PublishHoldingsResult> {
   assert.ok(Number.isSafeInteger(args.maxRows) && args.maxRows >= 0 && args.maxRows <= 1000);
   assert.ok(args.ownerName.trim().length > 0);
   if (args.budget) assert.ok(Number.isSafeInteger(args.budget.remainingRows) && args.budget.remainingRows >= 0 && args.budget.remainingRows <= 100);
-  const maxRows = args.budget ? Math.min(args.maxRows, args.budget.remainingRows) : args.maxRows;
+  const maxRows = Math.min(100, args.budget ? Math.min(args.maxRows, args.budget.remainingRows) : args.maxRows);
   const hold = async (reason: string, parsed: number, retry: boolean): Promise<PublishHoldingsResult> => {
     if (pricePhase) await recordRecoveryInfo(args.archivePageId, pricePhase.info, retry ? "再開待ち" : "要確認", reason, true);
     else await recordRecoveryMarker(args, retry ? "再開待ち" : "要確認", reason, parsed);
     return { status: "held", parsed, reason };
   };
   if (args.zip.length > 5 * 1024 * 1024) return hold("1原本5MiBの解析予算を超えています", 0, false);
-  if (maxRows === 0) return hold("保有明細のrun件数予算を使い切りました", 0, true);
   const parsed = parseShareholdingsData(args.zip, args.source);
   if (parsed.status !== "ok" || parsed.holderScope !== "filer_only") {
     return hold(parsed.reason ?? "提出会社の保有主体資格が未確認です", 0, false);
   }
-  if (!pricePhase && parsed.holdings.length > maxRows) return hold("明細件数がrunの残予算を超えています", parsed.holdings.length, parsed.holdings.length <= 100);
   if (pricePhase) {
     assert.equal(pricePhase.info.parsed, parsed.holdings.length);
     assert.equal(pricePhase.info.factsSha256, holdingsFactsSha256(parsed.holdings), "価格windowの全facts/orderが変化しています");
   }
-  const selected = pricePhase ? parsed.holdings.slice(pricePhase.info.nextHoldingOffset!, pricePhase.info.nextHoldingOffset! + maxRows) : parsed.holdings;
   // 並列backfillでも、最初のawait前にrun枠を予約する。未知結果で返却しない。
-  if (args.budget) args.budget.remainingRows -= selected.length;
+  const reservedRows = Math.min(maxRows, parsed.holdings.length);
+  if (args.budget) args.budget.remainingRows -= reservedRows;
   const zipSha256 = createHash("sha256").update(args.zip).digest("hex");
+  let sourceBefore: HoldingPage | undefined;
+  let sourceInfo: RecoveryInfo | undefined;
+  if (!pricePhase) {
+    const dbId = await recoveryDatabase();
+    sourceBefore = await notionRequest<HoldingPage>("GET", `/pages/${args.archivePageId}`);
+    qualifyRecoveryPage(sourceBefore, args.archivePageId, dbId, args.source);
+    const status = sourceBefore.properties["保有明細状態"]?.select?.name;
+    assert.notEqual(status, "実行中（結果未確定）", "保有明細の前回結果が未確定です。再送せず読取照合してください");
+    sourceInfo = { source: args.source, ownerName: args.ownerName, zipBytes: args.zip.length, zipSha256,
+      parsed: parsed.holdings.length, factsSha256: holdingsFactsSha256(parsed.holdings), sourceQueueVersion: 1, sourceNextHoldingOffset: 0 };
+    const previous = sourceBefore.properties["保有明細再開情報"];
+    const previousText = previous?.type === "rich_text" ? richValue(previous) : "";
+    if (previousText) {
+      const saved = JSON.parse(previousText) as RecoveryInfo;
+      if (saved.sourceQueueVersion === undefined) {
+        if (!args.sourceWindowPre) {
+          if (args.budget) args.budget.remainingRows += reservedRows;
+          return { status: "held", parsed: parsed.holdings.length, reason: "旧再開情報にsource cursorがありません。全props/clockの物理PREを固定した明示再資格が必要です" };
+        }
+        assert.ok(status === "再開待ち" || status === "要確認", "旧cursorの再資格は既知HOLDだけです");
+        const pre = args.sourceWindowPre;
+        assert.equal(createHash("sha256").update(pre.bytes).digest("hex"), pre.sha256);
+        await verifyArchivedAttachments(pre.archivePageId, [{ filename: pre.filename, bytes: pre.bytes }], "保有明細source windowの旧PRE");
+        const proof = JSON.parse(Buffer.from(pre.bytes).toString("utf8")) as { page: HoldingPage; info: RecoveryInfo };
+        assert.deepEqual(proof.info, sourceInfo, "旧PREの全原表束縛が不一致です");
+        for (const name of ["object", "id", "parent", "archived", "in_trash", "properties", "created_time", "last_edited_time"] as const) {
+          assert.deepEqual(proof.page[name], sourceBefore[name], "旧PREのpage/props/clockが変更されています");
+        }
+        assert.ok(typeof sourceBefore.created_time === "string" && Number.isFinite(Date.parse(sourceBefore.created_time)));
+        assert.ok(typeof sourceBefore.last_edited_time === "string" && Number.isFinite(Date.parse(sourceBefore.last_edited_time)));
+        for (const name of ["source", "ownerName", "zipBytes", "zipSha256"] as const) assert.deepEqual(saved[name], sourceInfo[name]);
+      } else {
+        assert.equal(args.sourceWindowPre, undefined, "既存v1へ旧PREを適用しません");
+        assert.equal(saved.sourceQueueVersion, 1);
+        for (const name of ["source", "ownerName", "zipBytes", "zipSha256", "parsed", "factsSha256"] as const) assert.deepEqual(saved[name], sourceInfo[name], "source windowの全facts/order/原本束縛が変更されています");
+        assert.ok(Number.isSafeInteger(saved.sourceNextHoldingOffset) && saved.sourceNextHoldingOffset! >= 0 && saved.sourceNextHoldingOffset! <= saved.parsed);
+        sourceInfo.sourceNextHoldingOffset = saved.sourceNextHoldingOffset;
+        if (status === "明細原本照合済") {
+          assert.equal(saved.sourceNextHoldingOffset, saved.parsed);
+          if (args.budget) args.budget.remainingRows += reservedRows;
+          if (args.valuationSources) {
+            const priceInfo = JSON.parse(richValue(sourceBefore.properties["保有価格再開情報"])) as RecoveryInfo;
+            for (const name of ["source", "ownerName", "zipBytes", "zipSha256", "parsed", "factsSha256"] as const) assert.deepEqual(priceInfo[name], sourceInfo[name]);
+            assert.equal(priceInfo.priceQueueVersion, 1);
+            assert.ok(Number.isSafeInteger(priceInfo.nextHoldingOffset) && priceInfo.nextHoldingOffset! >= 0 && priceInfo.nextHoldingOffset! <= priceInfo.parsed);
+            assert.ok(Number.isSafeInteger(priceInfo.unavailableRows) && priceInfo.unavailableRows! >= 0 && priceInfo.unavailableRows! <= priceInfo.nextHoldingOffset!);
+            if (sourceBefore.properties["保有価格状態"]?.select?.name === "価格照合完了") {
+              assert.equal(priceInfo.nextHoldingOffset, priceInfo.parsed);
+              assert.equal(priceInfo.unavailableRows, 0);
+              return { status: "published", parsed: 0, created: 0, updated: 0, unchanged: 0 };
+            }
+            await recordRecoveryInfo(args.archivePageId, priceInfo, "実行中（結果未確定）", "明示指定の保存価格原本を確認。価格windowの読戻しは未完了", true);
+            return publishHoldings(args, { info: priceInfo, snapshotId: priceInfo.snapshotId });
+          }
+          return { status: "published", parsed: 0, created: 0, updated: 0, unchanged: 0 };
+        }
+        assert.equal(status, "再開待ち", "source windowは再開待ちだけを処理します");
+        assert.ok(saved.sourceNextHoldingOffset! < saved.parsed, "再開待ちのsource cursorが終端に達しています");
+      }
+    } else {
+      assert.ok(status === undefined, "既存source状態に再開情報が欠けています。黙ってcursorを0へ戻しません");
+      assert.equal(args.sourceWindowPre, undefined, "新規sourceへ旧PREは適用しません");
+    }
+    if (maxRows === 0) {
+      await recordRecoveryInfo(args.archivePageId, sourceInfo, "再開待ち", "保有明細のrun件数予算を使い切りました。全原表固定済み", false, undefined, sourceBefore);
+      return { status: "held", parsed: parsed.holdings.length, reason: "保有明細のrun件数予算を使い切りました" };
+    }
+  }
+  const offset = pricePhase ? pricePhase.info.nextHoldingOffset! : sourceInfo!.sourceNextHoldingOffset!;
+  const selected = parsed.holdings.slice(offset, offset + maxRows);
+  if (args.budget) args.budget.remainingRows += reservedRows - selected.length;
   const catalog = args.valuationSources ? parseHoldingsCodeList(args.valuationSources.codeList) : null;
   const prices = args.valuationSources ? new HoldingsPriceIndex(args.valuationSources.prices) : null;
   const ready = [];
@@ -262,7 +335,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
   const schema = await readHoldingsSchema();
   assert.equal(Object.keys(buildHoldingsSchemaPatch(schema).properties).length, 0, "保有明細schemaの受入が未完了です");
   // 未知のmutation結果で止まった通はこの状態を保持し、定時再開の対象にしない。
-  if (!pricePhase) await recordRecoveryMarker(args, "実行中（結果未確定）", "原表の資格成立。全明細の読戻しは未完了", parsed.holdings.length);
+  if (!pricePhase) sourceBefore = await recordRecoveryInfo(args.archivePageId, sourceInfo!, "実行中（結果未確定）", "原表の資格成立。今回windowの読戻しは未完了", false, undefined, sourceBefore);
   const result = { status: "published" as const, parsed: selected.length, created: 0, updated: 0, unchanged: 0 };
   let unavailableInWindow = 0;
   for (const { holding, valuation, properties } of ready) {
@@ -320,15 +393,21 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     }
     if (existing) result.updated++; else result.created++;
   }
-  if (!pricePhase) await recordRecoveryMarker(args, "明細原本照合済", "全明細の保存値・原典キー・旧値保全を読戻し済み", parsed.holdings.length, holdingsFactsSha256(parsed.holdings));
+  if (!pricePhase) {
+    const nextOffset = offset + selected.length, pending = nextOffset < parsed.holdings.length;
+    await recordRecoveryInfo(args.archivePageId, { ...sourceInfo!, sourceNextHoldingOffset: nextOffset },
+      pending ? "再開待ち" : "明細原本照合済", pending ? `原本${nextOffset}/${parsed.holdings.length}明細の読戻し済み。次windowへ再開待ち` : "全明細の保存値・原典キー・旧値保全を読戻し済み",
+      false, undefined, sourceBefore);
+    if (pending) return { status: "held", parsed: parsed.holdings.length, reason: "原本明細のwindow読戻しは完了。残明細は次runへ再開待ち", usedRows: selected.length, pending: true };
+  }
   else {
     const unavailable = pricePhase.info.unavailableRows! + unavailableInWindow;
     const nextHoldingOffset = pricePhase.info.nextHoldingOffset! + selected.length;
     const pending = nextHoldingOffset < parsed.holdings.length;
-    await recordRecoveryInfo(args.archivePageId, { ...pricePhase.info, snapshotId: pricePhase.snapshotId, nextHoldingOffset, unavailableRows: unavailable },
+    await recordRecoveryInfo(args.archivePageId, { ...pricePhase.info, ...(pricePhase.snapshotId === undefined ? {} : { snapshotId: pricePhase.snapshotId }), nextHoldingOffset, unavailableRows: unavailable },
       pending ? "再開待ち" : unavailable > 0 ? "要確認" : "価格照合完了",
       pending ? `価格${nextHoldingOffset}/${parsed.holdings.length}明細の読戻し済み。次windowへ再開待ち` :
-        unavailable > 0 ? `${unavailable}明細は各windowのsnapshot範囲で価格資格未成立。各行の理由を参照。今回の範囲: ${args.valuationSources!.evidenceScope}` : "全明細の価格資格・他props保持を読戻し済み",
+        unavailable > 0 ? `${unavailable}明細は指定保存原本で価格資格未成立。各行の欠測理由を参照` : "全明細の価格資格・他props保持を読戻し済み",
       true, pricePhase.info.nextHoldingOffset);
     return { ...result, unavailable, pending };
   }
@@ -495,6 +574,7 @@ async function recoveryDatabase(): Promise<string> {
 interface RecoveryInfo {
   source: ShareholdingsSource; ownerName: string; zipBytes: number; zipSha256: string; parsed: number;
   factsSha256?: string;
+  sourceQueueVersion?: 1; sourceNextHoldingOffset?: number;
   priceQueueVersion?: 1; nextHoldingOffset?: number; unavailableRows?: number; snapshotId?: string;
 }
 
@@ -510,22 +590,43 @@ function richValue(property: HoldingProperty): string {
   return property.rich_text.map(part => { assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text; }).join("");
 }
 
-async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, status: string, reason: string, price: boolean, previousOffset?: number): Promise<void> {
+function qualifyRecoveryPage(page: HoldingPage, archivePageId: string, dbId: string, source: ShareholdingsSource): void {
+  assert.equal(page.object, "page"); assert.equal(page.id.replaceAll("-", ""), archivePageId.replaceAll("-", ""), "保有再開markerのGETが別行です");
+  assert.equal(page.parent.type, "database_id"); assert.equal(page.parent.database_id.replaceAll("-", ""), dbId.replaceAll("-", ""));
+  assert.equal(page.archived, false); assert.equal(page.in_trash, false);
+  const key = page.properties["Key"];
+  assert.equal(key.type, "title"); assert.ok(Array.isArray(key.title));
+  assert.equal(key.title.map(part => { assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text; }).join(""), `${source.docId}:type1`);
+}
+
+async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, status: string, reason: string, price: boolean, previousOffset?: number, sourceExpected?: HoldingPage): Promise<HoldingPage> {
   const dbId = await recoveryDatabase();
   const before = await notionRequest<HoldingPage>("GET", `/pages/${archivePageId}`);
-  assert.equal(before.object, "page"); assert.equal(before.id.replaceAll("-", ""), archivePageId.replaceAll("-", ""), "保有再開markerのGETが別行です");
-  assert.equal(before.parent.type, "database_id");
-  assert.equal(before.parent.database_id.replaceAll("-", ""), dbId.replaceAll("-", ""));
-  assert.equal(before.archived, false);
-  assert.equal(before.in_trash, false);
+  qualifyRecoveryPage(before, archivePageId, dbId, info.source);
   const phase = price ? "保有価格" : "保有明細";
-  if ((!price && status !== "明細原本照合済" || price && status === "実行中（結果未確定）") && before.properties[`${phase}状態`]?.select?.name === "実行中（結果未確定）") {
+  if ((!price && (status === "実行中（結果未確定）" || sourceExpected === undefined) || price && status === "実行中（結果未確定）") && before.properties[`${phase}状態`]?.select?.name === "実行中（結果未確定）") {
     throw new Error("保有明細の前回結果が未確定です。状態を上書きせず読取照合してください");
   }
-  const key = before.properties["Key"];
-  assert.equal(key.type, "title");
-  assert.ok(Array.isArray(key.title));
-  assert.equal(key.title.map(part => { assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text; }).join(""), `${info.source.docId}:type1`);
+  if (!price && sourceExpected === undefined && before.properties["保有明細再開情報"]?.type === "rich_text" && richValue(before.properties["保有明細再開情報"])) {
+    const saved = JSON.parse(richValue(before.properties["保有明細再開情報"])) as RecoveryInfo;
+    assert.notEqual(before.properties["保有明細状態"]?.select?.name, "明細原本照合済", "確定sourceを解析保留で戻しません");
+    for (const name of ["source", "ownerName", "zipBytes", "zipSha256"] as const) assert.deepEqual(saved[name], info[name]);
+    info = saved; // 資格不成立のHOLDは既存cursor/factsを消さない。
+  }
+  if (sourceExpected) {
+    assert.equal(price, false);
+    assert.deepEqual(before.properties, sourceExpected.properties, "source windowの全propsが開始時から変更されています");
+    assert.deepEqual(before.created_time, sourceExpected.created_time, "source windowの作成時計が変更されています");
+    assert.deepEqual(before.last_edited_time, sourceExpected.last_edited_time, "source windowの編集時計が変更されています");
+    assert.equal(info.sourceQueueVersion, 1);
+    assert.ok(Number.isSafeInteger(info.sourceNextHoldingOffset) && info.sourceNextHoldingOffset! >= 0 && info.sourceNextHoldingOffset! <= info.parsed);
+    if (status === "明細原本照合済") assert.equal(info.sourceNextHoldingOffset, info.parsed);
+    if (sourceExpected.properties["保有明細状態"]?.select?.name === "実行中（結果未確定）") {
+      const prior = JSON.parse(richValue(sourceExpected.properties["保有明細再開情報"])) as RecoveryInfo;
+      for (const name of ["source", "ownerName", "zipBytes", "zipSha256", "parsed", "factsSha256", "sourceQueueVersion"] as const) assert.deepEqual(prior[name], info[name]);
+      assert.ok(info.sourceNextHoldingOffset! >= prior.sourceNextHoldingOffset!);
+    }
+  }
   if (price) {
     assert.equal(before.properties["保有明細状態"]?.select?.name, "明細原本照合済", "原本未確定の価格phaseは開始しません");
     assert.equal(before.properties["保有価格状態"]?.select?.name, status === "実行中（結果未確定）" ? "再開待ち" : "実行中（結果未確定）");
@@ -547,7 +648,8 @@ async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, sta
     } else {
       assert.notEqual(before.properties["保有価格状態"]?.select?.name, "実行中（結果未確定）", "価格unknownの再開情報が欠けています");
       Object.assign(properties, { "保有価格状態": { select: { name: "再開待ち" } },
-      "保有価格理由": rt("原本明細は完了。保存価格の資格確認は未実施"), "保有価格再開情報": rt(JSON.stringify({ ...info, priceQueueVersion: 1, nextHoldingOffset: 0, unavailableRows: 0 })) });
+      "保有価格理由": rt("原本明細は完了。保存価格の資格確認は未実施"), "保有価格再開情報": rt(JSON.stringify({ source: info.source, ownerName: info.ownerName, zipBytes: info.zipBytes, zipSha256: info.zipSha256,
+        parsed: info.parsed, factsSha256: info.factsSha256, priceQueueVersion: 1, nextHoldingOffset: 0, unavailableRows: 0 })) });
     }
   }
   const ack = await notionRequest<{ object: string; id: string }>("PATCH", `/pages/${archivePageId}`, { properties }, { singleAttempt: true });
@@ -560,7 +662,8 @@ async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, sta
   assert.equal(actual.in_trash, false);
   assertProperties(actual.properties, properties);
   if (price) for (const name of ["保有明細状態", "保有明細理由", "保有明細再開情報"]) assert.deepEqual(actual.properties[name], before.properties[name], "価格phaseで原本完了を変更しません");
-  if (!price && status === "明細原本照合済" && !Object.hasOwn(properties, "保有価格状態")) for (const name of ["保有価格状態", "保有価格理由", "保有価格再開情報"]) assert.deepEqual(actual.properties[name], before.properties[name], "既存価格queueを変更しません");
+  if (!price && !Object.hasOwn(properties, "保有価格状態")) for (const name of ["保有価格状態", "保有価格理由", "保有価格再開情報"]) assert.deepEqual(actual.properties[name], before.properties[name], "既存価格queueを変更しません");
+  return actual;
 }
 
 /** 原本完了とは独立。保存ZIP・限定snapshotだけで価格列を追記し、未知は再送しない。 */
@@ -652,24 +755,19 @@ export async function resumePendingShareholdings(args: { maxRows: number; should
     const info = JSON.parse(parts.rich_text.map(part => {
       assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content);
       return part.plain_text;
-    }).join("")) as { source: ShareholdingsSource; ownerName: string; zipBytes: number; zipSha256: string; parsed: number };
+    }).join("")) as RecoveryInfo;
     assert.ok(Number.isSafeInteger(info.zipBytes) && info.zipBytes > 0 && /^[a-f0-9]{64}$/.test(info.zipSha256));
-    const { listPageFiles } = await import("./page-file.js");
-    const files = await listPageFiles(page.id, "Files");
-    assert.equal(files.length, 1);
-    const file = files[0];
-    assert.equal(file.kind, "file");
-    assert.equal(file.name, edinetArchiveFilename(info.source.docId, 1));
-    assert.equal(new URL(file.url).protocol, "https:");
-    const response = await fetch(file.url, { redirect: "error", signal: AbortSignal.timeout(30_000) });
-    assert.equal(response.ok, true, "保有明細の保存原本を再取得できません");
-    const zip = Buffer.from(await response.arrayBuffer());
-    assert.equal(zip.length, info.zipBytes);
-    assert.equal(createHash("sha256").update(zip).digest("hex"), info.zipSha256);
-    const outcome = await publishVerifiedShareholdings({ source: info.source, ownerName: info.ownerName, zip,
+    if (info.sourceQueueVersion === undefined) { result.held++; result.pending = true; continue; }
+    assert.equal(info.sourceQueueVersion, 1);
+    const saved = await readSavedHoldingsZip(info.source);
+    if (saved.status === "held") { result.held++; continue; }
+    assert.equal(saved.archivePageId.replaceAll("-", ""), page.id.replaceAll("-", ""));
+    assert.equal(saved.bytes.length, info.zipBytes); assert.equal(saved.sha256, info.zipSha256);
+    const outcome = await publishVerifiedShareholdings({ source: info.source, ownerName: info.ownerName, zip: saved.bytes,
       archivePageId: page.id, maxRows: args.maxRows - result.usedRows });
     if (outcome.status === "published") { result.usedRows += outcome.parsed; result.resumed++; }
-    else { result.held++; if (outcome.parsed <= 100) result.pending = true; }
+    else if (outcome.pending) { result.usedRows += outcome.usedRows!; result.resumed++; result.pending = true; }
+    else { result.held++; result.pending = true; }
   }
   return result;
 }

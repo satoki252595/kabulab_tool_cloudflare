@@ -8,7 +8,7 @@ import { queryUniqueRow } from "./archive.js";
 import { notionRequest } from "./client.js";
 import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
-import { applyHoldingsSchema, buildHoldingsSchemaPatch, HOLDINGS_DESCRIPTION, LEGACY_HOLDINGS_COLUMNS, publishSavedShareholdings, publishVerifiedShareholdings, resumePendingShareholdings, resumePendingShareholdingsPrices, readSavedHoldingsZip, holdingProperties, type HoldingsSchema, type HoldingPriceSourceLoader } from "./shareholdings.js";
+import { applyHoldingsSchema, buildHoldingsSchemaPatch, HOLDINGS_DESCRIPTION, LEGACY_HOLDINGS_COLUMNS, publishSavedShareholdings, publishVerifiedShareholdings, resumePendingShareholdings, resumePendingShareholdingsPrices, readSavedHoldingsZip, holdingProperties, holdingsFactsSha256, type HoldingsSchema, type HoldingPriceSourceLoader } from "./shareholdings.js";
 
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings.js", () => ({ parseShareholdingsData: vi.fn(), verifySavedHoldingsSource: vi.fn(() => ({ status: "verified", filename: "structural.xbrl" })) }));
 vi.mock("../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js", () => ({
@@ -69,6 +69,11 @@ function mirrored(properties: Record<string, unknown>) {
 
 const legacy = Object.fromEntries(LEGACY_HOLDINGS_COLUMNS.map(([, name]) => [name, { type: "number", number: 777 }]));
 let saved: Record<string, unknown>;
+type TestProperties = Record<string, { select?: { name: string }; rich_text?: Array<{ text: { content: string } }> }>;
+type TestPage = { object: string; id: string; parent: { type: string; database_id: string }; archived: boolean; in_trash: boolean; properties: TestProperties };
+const testProperties = (value: unknown) => value as TestProperties;
+const pageProperties = (value: unknown) => (value as { properties: TestProperties }).properties;
+const restartInfo = (value: unknown, phase = "保有明細") => JSON.parse(testProperties(value)[`${phase}再開情報`].rich_text!.map(p => p.text.content).join("")) as Record<string, unknown>;
 async function requestRouter(method: string, path: string, body?: unknown): Promise<unknown> {
   if (method === "GET" && path.startsWith("/databases/")) {
     if (path.includes("p".repeat(32))) return { id: "p".repeat(32), properties: {
@@ -152,14 +157,12 @@ describe("株式保有の原典限定writer", () => {
     expect(saved[`/pages/${"e".repeat(32)}`]).toEqual(before[`/pages/${"e".repeat(32)}`]);
   });
 
-  it("run予算を超える通は一部だけ更新せず次runへ、残枠0なら解析しない", async () => {
-    vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, holdings: [holding, holding] });
-    expect((await publishVerifiedShareholdings({ ...args, maxRows: 1 })).status).toBe("held");
-    vi.mocked(parseShareholdingsData).mockClear();
+  it("残枠0でも全原表を固定してcursor0を明示し、明細は書かない", async () => {
     expect((await publishVerifiedShareholdings({ ...args, maxRows: 0 })).status).toBe("held");
-    expect(parseShareholdingsData).not.toHaveBeenCalled();
+    expect(parseShareholdingsData).toHaveBeenCalledTimes(1);
     expect(queryUniqueRow).not.toHaveBeenCalled();
     expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有明細状態": { select: { name: "再開待ち" } } });
+    expect(restartInfo(saved[`/pages/${args.archivePageId}`])).toMatchObject({ sourceQueueVersion: 1, sourceNextHoldingOffset: 0, parsed: 1, factsSha256: holdingsFactsSha256([holding]) });
   });
 
   it("株数・帳簿価額だけを確定し、価格/通貨/観測日を補わず、旧値を保つ", async () => {
@@ -195,10 +198,15 @@ describe("株式保有の原典限定writer", () => {
   });
 
   it("並行呼出でも最初の通信前に共有run枠を予約し、未知結果では返却しない", async () => {
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      const result = await requestRouter(method, path, body);
+      if (method === "GET" && path === `/pages/${"c".repeat(32)}`) (result as TestPage).parent.database_id = "p".repeat(32);
+      return result;
+    });
     const budget = { remainingRows: 1 };
     const first = publishVerifiedShareholdings({ ...args, budget });
     expect(budget.remainingRows).toBe(0);
-    const second = publishVerifiedShareholdings({ ...args, budget });
+    const second = publishVerifiedShareholdings({ ...args, archivePageId: "c".repeat(32), budget });
     expect((await first).status).toBe("published");
     expect((await second).status).toBe("held");
     expect(queryUniqueRow).toHaveBeenCalledTimes(1);
@@ -228,8 +236,15 @@ describe("株式保有の原典限定writer", () => {
   });
 
   it("EDINET済から独立した既知HOLDを保存hosted ZIPのSHA照合後に優先再開する", async () => {
+    await publishVerifiedShareholdings({ ...args, maxRows: 0 });
     const info = { source, ownerName: args.ownerName, zipBytes: args.zip.length,
-      zipSha256: createHash("sha256").update(args.zip).digest("hex"), parsed: 1 };
+      zipSha256: createHash("sha256").update(args.zip).digest("hex"), parsed: 1, sourceQueueVersion: 1, sourceNextHoldingOffset: 0, factsSha256: holdingsFactsSha256([holding]) };
+    vi.mocked(queryUniqueRow).mockImplementation(async dbId => dbId === "p".repeat(32) ? {
+      ...(await requestRouter("GET", `/pages/${args.archivePageId}`) as TestPage), properties: {
+        ...pageProperties(await requestRouter("GET", `/pages/${args.archivePageId}`)),
+        ...mirrored({ Metadata: { rich_text: [{ text: { content: JSON.stringify({ docID: source.docId, secCode: `${source.stockCode}0`, edinetCode: source.edinetCode, periodEnd: source.fiscalYearEnd, edinetDocType: 1 }) } }] }, "Fetched At": { date: { start: "2026-07-01T00:00:00Z" } } }),
+      },
+    } : null);
     vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
       if (method === "POST" && path.endsWith("/query")) {
         const status = (body as { filter: { select: { equals: string } } }).filter.select.equals;
@@ -262,7 +277,7 @@ describe("株式保有の原典限定writer", () => {
     expect(result).toMatchObject({ status: "published", updated: 1 });
     expect(saved[rowPath]).toMatchObject({ "株価": { number: 100 }, "保有時価": { number: 1200 }, "基準日": { date: { start: source.fiscalYearEnd } }, "価格照合済": { checkbox: true } });
     const priced = structuredClone(saved[rowPath]);
-    expect(await publishVerifiedShareholdings(args)).toMatchObject({ status: "published", unchanged: 1 });
+    expect(await publishVerifiedShareholdings(args)).toMatchObject({ status: "published", parsed: 0, unchanged: 0 });
     expect(saved[rowPath]).toEqual(priced);
   });
 
@@ -279,7 +294,7 @@ describe("株式保有の原典限定writer", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0][0].prices).toBe(calls[1][0].prices);
     expect(calls[0][0].prices).toBeInstanceOf(HoldingsPriceIndex);
-    expect(notionRequest).not.toHaveBeenCalled();
+    expect(vi.mocked(notionRequest).mock.calls.every(([method]) => method === "GET")).toBe(true);
     expect(queryUniqueRow).not.toHaveBeenCalled();
   });
 });
@@ -337,6 +352,128 @@ describe("保有明細の現行/legacy保存type1 reader", () => {
   });
 });
 
+describe("全原表へ束縛するsource有限window", () => {
+  const holdings = [holding, { ...holding, kind: "みなし保有株式" as const, rowIndex: 4 }];
+  const sourcePath = `/pages/${args.archivePageId}`;
+  const info = () => ({ source, ownerName: args.ownerName, zipBytes: args.zip.length,
+    zipSha256: createHash("sha256").update(args.zip).digest("hex"), parsed: holdings.length,
+    factsSha256: holdingsFactsSha256(holdings), sourceQueueVersion: 1, sourceNextHoldingOffset: 0 });
+  const savedInfo = () => restartInfo(saved[sourcePath]);
+
+  function windowRouter() {
+    const rows: Record<string, TestPage> = {};
+    vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, holdings });
+    vi.mocked(queryUniqueRow).mockImplementation(async (dbId, filter) => {
+      if (dbId === "p".repeat(32)) {
+        const page = await requestRouter("GET", sourcePath) as TestPage;
+        return { ...page, properties: { ...page.properties, ...mirrored({
+          Metadata: { rich_text: [{ text: { content: JSON.stringify({ docID: source.docId, edinetCode: source.edinetCode,
+            secCode: `${source.stockCode}0`, periodEnd: source.fiscalYearEnd, edinetDocType: 1 }) } }] },
+          "Fetched At": { date: { start: "2026-07-01T00:00:00Z" } },
+        }) } };
+      }
+      const kind = (filter as { and: Array<{ property: string; select?: { equals: string } }> }).and.find(p => p.property === "保有種別")!.select!.equals;
+      return Object.values(rows).find(p => p.properties["保有種別"].select!.name === kind) ?? null;
+    });
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
+      if (method === "POST" && path === "/pages") {
+        const pageId = (Object.keys(rows).length === 0 ? "e" : "f").repeat(32);
+        rows[`/pages/${pageId}`] = { object: "page", id: pageId, parent: { type: "database_id", database_id: "d".repeat(32) },
+          archived: false, in_trash: false, properties: testProperties(mirrored((body as { properties: Record<string, unknown> }).properties)) };
+        return { object: "page", id: pageId };
+      }
+      if (rows[path]) return structuredClone(rows[path]);
+      if (method === "POST" && path.endsWith("/query")) {
+        const page = await requestRouter("GET", sourcePath) as TestPage, status = (body as { filter: { select: { equals: string } } }).filter.select.equals;
+        return { results: page.properties["保有明細状態"]?.select?.name === status ? [page] : [], has_more: false, next_cursor: null };
+      }
+      return requestRouter(method, path, body);
+    });
+    return rows;
+  }
+  afterEach(() => vi.restoreAllMocks());
+
+  it("各windowの全読戻し後だけsource cursorが進み、最後だけ価格pendingを同時登録する", async () => {
+    const rows = windowRouter();
+    const first = await publishVerifiedShareholdings({ ...args, maxRows: 1 });
+    expect(first).toMatchObject({ status: "held", parsed: 2, usedRows: 1, pending: true });
+    expect(savedInfo()).toMatchObject({ ...info(), sourceNextHoldingOffset: 1 });
+    expect(testProperties(saved[sourcePath])["保有明細状態"]).toEqual({ select: { name: "再開待ち" } });
+    expect(testProperties(saved[sourcePath])["保有価格状態"]).toBeUndefined();
+    const second = await publishVerifiedShareholdings({ ...args, maxRows: 1 });
+    expect(second).toMatchObject({ status: "published", parsed: 1, created: 1 });
+    expect(Object.keys(rows)).toHaveLength(2);
+    expect(savedInfo()).toMatchObject({ ...info(), sourceNextHoldingOffset: 2 });
+    expect(testProperties(saved[sourcePath])["保有明細状態"]).toEqual({ select: { name: "明細原本照合済" } });
+    const price = restartInfo(saved[sourcePath], "保有価格");
+    expect(price).toMatchObject({ parsed: 2, factsSha256: info().factsSha256, priceQueueVersion: 1, nextHoldingOffset: 0 });
+    expect(price).not.toHaveProperty("sourceNextHoldingOffset");
+    expect(price).not.toHaveProperty("sourceQueueVersion");
+    const calls = vi.mocked(notionRequest).mock.calls;
+    const firstRowRead = calls.findIndex(([method, path]) => method === "GET" && path === `/pages/${"e".repeat(32)}`);
+    const firstCursorAdvance = calls.findIndex(([method, path, body]) => method === "PATCH" && path === sourcePath && pageProperties(body)["保有明細状態"].select!.name === "再開待ち");
+    expect(firstCursorAdvance).toBeGreaterThan(firstRowRead);
+  });
+
+  it("通全体の順序/facts変更は次windowの書込前にSTOPする", async () => {
+    windowRouter(); await publishVerifiedShareholdings({ ...args, maxRows: 1 });
+    vi.mocked(queryUniqueRow).mockClear();
+    vi.mocked(parseShareholdingsData).mockReturnValue({ ...extraction, holdings: [...holdings].reverse() });
+    await expect(publishVerifiedShareholdings({ ...args, maxRows: 1 })).rejects.toThrow("全facts/order");
+    expect(queryUniqueRow).not.toHaveBeenCalled();
+    expect(savedInfo().sourceNextHoldingOffset).toBe(1);
+  });
+
+  it("ACK不明ではcursor0/unknownを保持し、次回は再送しない", async () => {
+    windowRouter(); const route = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
+      if (method === "POST" && path === "/pages") throw new Error("SOURCE_WINDOW_ACK_UNKNOWN");
+      return route(method, path, body, options);
+    });
+    await expect(publishVerifiedShareholdings({ ...args, maxRows: 1 })).rejects.toThrow("SOURCE_WINDOW_ACK_UNKNOWN");
+    expect(savedInfo().sourceNextHoldingOffset).toBe(0);
+    expect(testProperties(saved[sourcePath])["保有明細状態"].select!.name).toBe("実行中（結果未確定）");
+    vi.mocked(notionRequest).mockClear();
+    await expect(publishVerifiedShareholdings({ ...args, maxRows: 1 })).rejects.toThrow("前回結果が未確定");
+    expect(vi.mocked(notionRequest).mock.calls.every(([method]) => method === "GET")).toBe(true);
+  });
+
+  it("通常再開が保存ZIP/native資格を再用し、部分windowの消費行数をrun予算へ数える", async () => {
+    windowRouter(); await publishVerifiedShareholdings({ ...args, maxRows: 0 });
+    vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://hosted.invalid/source-window" }]);
+    const native = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(Uint8Array.from(args.zip)));
+    expect(await resumePendingShareholdings({ maxRows: 1, shouldStop: () => false })).toEqual({ usedRows: 1, resumed: 1, held: 0, pending: true });
+    expect(savedInfo().sourceNextHoldingOffset).toBe(1);
+    expect(await resumePendingShareholdings({ maxRows: 1, shouldStop: () => false })).toEqual({ usedRows: 1, resumed: 1, held: 0, pending: false });
+    expect(native).toHaveBeenCalledTimes(2);
+    expect(verifySavedHoldingsSource).toHaveBeenCalledTimes(2);
+  });
+
+  it("旧cursor欠測は暗黙0へ戻さず、物理PREの全props/clock一致でだけ明示v1を作る", async () => {
+    windowRouter(); const old = { source, ownerName: args.ownerName, zipBytes: args.zip.length, zipSha256: info().zipSha256, parsed: 2 };
+    saved[sourcePath] = { "保有明細状態": { select: { name: "要確認" } }, "保有明細理由": { rich_text: [{ text: { content: "旧上限HOLD" } }] },
+      "保有明細再開情報": { rich_text: [{ text: { content: JSON.stringify(old) } }] } };
+    const route = vi.mocked(notionRequest).getMockImplementation()!;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
+      const result = await route(method, path, body, options);
+      if (method === "GET" && path === sourcePath) Object.assign(result as object, { created_time: "2026-07-01T00:00:00Z", last_edited_time: "2026-07-01T00:00:00Z" });
+      return result;
+    });
+    expect(await publishVerifiedShareholdings({ ...args, maxRows: 1 })).toMatchObject({ status: "held", reason: expect.stringContaining("物理PRE") });
+    expect(savedInfo()).toEqual(old); expect(queryUniqueRow).not.toHaveBeenCalled();
+    const page = await notionRequest("GET", sourcePath);
+    const bytes = Buffer.from(JSON.stringify({ page, info: info() }));
+    const sourceWindowPre = { archivePageId: "1".repeat(32), filename: "source-window-pre.json", bytes,
+      sha256: createHash("sha256").update(bytes).digest("hex") };
+    const changed = Buffer.from(JSON.stringify({ page: { ...(page as object), last_edited_time: "2026-07-02T00:00:00Z" }, info: info() }));
+    await expect(publishVerifiedShareholdings({ ...args, maxRows: 1, sourceWindowPre: { ...sourceWindowPre, bytes: changed, sha256: createHash("sha256").update(changed).digest("hex") } })).rejects.toThrow("props/clock");
+    expect(queryUniqueRow).not.toHaveBeenCalled(); expect(savedInfo()).toEqual(old);
+    expect(await publishVerifiedShareholdings({ ...args, maxRows: 1, sourceWindowPre })).toMatchObject({ status: "held", usedRows: 1, pending: true });
+    expect(savedInfo()).toMatchObject({ ...info(), sourceNextHoldingOffset: 1 });
+    expect(verifyArchivedAttachments).toHaveBeenCalledWith(sourceWindowPre.archivePageId, [{ filename: sourceWindowPre.filename, bytes }], "保有明細source windowの旧PRE");
+  });
+});
+
 describe("原本完了とは独立した保存価格queue", () => {
   const rowPath = `/pages/${"e".repeat(32)}`;
   const evidence = { archivePageId: "1".repeat(32), filename: "structural-price-source", bytes: Buffer.alloc(0), sha256: "2".repeat(64) };
@@ -381,6 +518,18 @@ describe("原本完了とは独立した保存価格queue", () => {
     expect(Object.keys(final.properties)).toHaveLength(6);
     const info = (final.properties["保有価格再開情報"] as { rich_text: Array<{ text: { content: string } }> }).rich_text.map(p => p.text.content).join("");
     expect(JSON.parse(info)).toMatchObject({ source, parsed: 1, priceQueueVersion: 1, nextHoldingOffset: 0, unavailableRows: 0 });
+  });
+
+  it("原本/価格の両完了後の価格付きbackfill再実行はcursor終端を照合してwrite0", async () => {
+    await seedPublishedSource();
+    vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready });
+    const before = structuredClone(saved);
+    vi.mocked(notionRequest).mockClear(); vi.mocked(queryUniqueRow).mockClear();
+    expect(await publishVerifiedShareholdings({ ...args, valuationSources: ready })).toEqual({ status: "published", parsed: 0, created: 0, updated: 0, unchanged: 0 });
+    expect(saved).toEqual(before);
+    expect(vi.mocked(notionRequest).mock.calls.every(([method]) => method === "GET")).toBe(true);
+    expect(queryUniqueRow).not.toHaveBeenCalled();
   });
 
   it("保存ZIPと同じ原表を照合後に既writerへ価格根拠を渡し、価格列以外はPATCHしない", async () => {
