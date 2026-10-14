@@ -107,7 +107,7 @@ export async function publishDailyPriceSnapshot(args: {
   await r2Put(PRICE_ACTIVE_KEY, activeBody, before.active.etag);
   const activated = await get(PRICE_ACTIVE_KEY, 4096); assert.equal(activated?.body, activeBody);
   const completedBody = JSON.stringify({ ...state, phase: "complete" });
-  args.beforeMutation?.();
+  // activeは既知ACK＋全文readback済み。期限後も受領記録を閉じ、CLIが最後に期限失敗を出す。
   await r2Put(ACTIVATION_KEY, completedBody, intent.etag);
   assert.equal((await get(ACTIVATION_KEY, 4096))?.body, completedBody);
   return { status: "activated" };

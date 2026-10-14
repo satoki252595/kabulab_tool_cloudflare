@@ -21,17 +21,19 @@ describe("VWAP定時窓と同run受付時計", () => {
   it.each([start - 1, start + 600_001, start + 26_400_000, NaN])("遅配/早発/不正時計 %s は受付しない", (nowMs) => {
     expect(() => assertVwapAdmission(date, nowMs)).toThrow("開始期限");
   });
-  it("受付端と終了端は許可し、原時計を更新せず次run/日/終了超過を拒否する", () => {
+  it("受付端と終了直前は許可し、原時計を更新せず次run/日/終了端以降を拒否する", () => {
     const directory = mkdtempSync(join(tmpdir(), "vwap-window-"));
     const input = { plannedDate: date, runId: "38570657322.1", directory };
     const admitted = scheduledVwapGuard({ ...input, phase: "daily", nowMs: start + 600_000 });
     const file = join(directory, readdirSync(directory)[0]);
     const before = readFileSync(file, "utf8");
-    const continued = scheduledVwapGuard({ ...input, phase: "intra", nowMs: start + 390 * 60_000 });
+    const continued = scheduledVwapGuard({ ...input, phase: "intra", nowMs: start + 390 * 60_000 - 1 });
     expect(continued.admission).toEqual(admitted.admission);
     expect(readFileSync(file, "utf8")).toBe(before);
     expect(() => scheduledVwapGuard({ ...input, phase: "daily", nowMs: start + 600_000 })).toThrow();
-    expect(() => scheduledVwapGuard({ ...input, phase: "intra", nowMs: start + 390 * 60_000 + 1 })).toThrow("完了期限");
+    for (const nowMs of [start + 390 * 60_000, start + 390 * 60_000 + 1]) {
+      expect(() => scheduledVwapGuard({ ...input, phase: "intra", nowMs })).toThrow("完了期限");
+    }
     expect(() => scheduledVwapGuard({ ...input, runId: "38570657322.2", phase: "intra", nowMs: start + 60_000 })).toThrow();
     expect(() => scheduledVwapGuard({ ...input, plannedDate: "2026-10-16", phase: "intra", nowMs: start + 60_000 })).toThrow("一致");
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(start + 390 * 60_000 + 1));

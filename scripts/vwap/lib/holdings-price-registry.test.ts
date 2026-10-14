@@ -24,7 +24,7 @@ beforeEach(() => {
   });
 });
 describe("通常全量だけの価格snapshot activation", () => {
-  it.each([1, 2, 3, 4])("通常snapshotの第%i PUT直前guard拒否は以後の送信0・既ACK不変", async (rejected) => {
+  it.each([1, 2, 3])("通常snapshotの第%i新規PUT直前guard拒否は以後の送信0・既ACK不変", async (rejected) => {
     let calls = 0;
     const stopped = new Error("completion window expired");
     const beforeMutation = () => { if (++calls === rejected) throw stopped; };
@@ -33,6 +33,19 @@ describe("通常全量だけの価格snapshot activation", () => {
     expect(calls).toBe(rejected);
     if (rejected <= 3) expect(JSON.parse(store.get(PRICE_ACTIVE_KEY)!.body).snapshotId).toBe(base.snapshotId);
     if (rejected >= 3) expect(JSON.parse(store.get("ops/holdings-price/activation.json")!.body).phase).toBe("inflight");
+  });
+  it("activeの既知ACK/fullreadback中に期限を越えてもcomplete受領記録だけを閉じる", async () => {
+    let expired = false;
+    const beforeMutation = vi.fn(() => { if (expired) throw new Error("completion window expired"); });
+    vi.mocked(r2GetVersion).mockImplementation(async key => {
+      const current = store.get(key) ?? null;
+      if (key === PRICE_ACTIVE_KEY && current !== null && JSON.parse(current.body).snapshotId === args.runId) expired = true;
+      return current;
+    });
+    expect(await publishDailyPriceSnapshot({ ...args, beforeMutation })).toEqual({ status: "activated" });
+    expect(expired).toBe(true); expect(beforeMutation).toHaveBeenCalledTimes(3); expect(r2Put).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(store.get("ops/holdings-price/activation.json")!.body).phase).toBe("complete");
+    expect(() => beforeMutation()).toThrow("expired"); // callerの最終期限検査は失敗を保持
   });
   it("初回固定集合は全原本fresh資格→metadata4CAS/readback、再度は既存latchでSTOP", async () => {
     // 件数・順序の構造入力。架空の価格値/原文を保存するテストではない。

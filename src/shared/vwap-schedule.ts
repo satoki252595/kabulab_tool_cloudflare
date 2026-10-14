@@ -27,7 +27,7 @@ export function assertVwapContinuation(plannedDate: string, admittedAt: string, 
     throw new Error("VWAP admissionの実時計が不正です");
   }
   assertVwapAdmission(plannedDate, admittedMs);
-  if (!Number.isFinite(nowMs) || nowMs < admittedMs || nowMs > scheduledVwapWindow(plannedDate).completionCutoff) {
-    throw new Error("VWAP完了期限の範囲外です (予定日23:30 JSTまで)。新規取得・PUTしません");
+  if (!Number.isFinite(nowMs) || nowMs < admittedMs || nowMs >= scheduledVwapWindow(plannedDate).completionCutoff) {
+    throw new Error("VWAP完了期限の範囲外です (予定日23:30 JSTより前)。新規取得・価格PUTしません");
   }
 }
