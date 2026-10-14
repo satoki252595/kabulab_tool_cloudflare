@@ -98,6 +98,22 @@ class _Throttle:
             self._resume_at = max(self._resume_at, time.monotonic() + seconds)
 
 
+def _require_complete_request_status(resp: dict, *, op: str) -> None:
+    """旧marker不在は保持。存在する未完/未知statusは最初のpageからSTOPする。"""
+    if "request_status" not in resp:
+        return
+    status = resp["request_status"]
+    if isinstance(status, dict) and status in (
+        {"type": "incomplete"},
+        {"type": "incomplete", "incomplete_reason": "query_result_limit_reached"},
+    ):
+        raise QueryTruncatedError(
+            f"Notion {op}: クエリが打ち切られた。全件前提の処理を続行せず再試行しません。"
+        )
+    if not isinstance(status, dict) or status != {"type": "complete"}:
+        raise NotionConfigError(f"Notion {op}: request_status が未知/不正。再試行しません。")
+
+
 def _require_read_list_envelope(resp: object, *, op: str) -> tuple[list, bool, str | None]:
     """read-list 応答 envelope の厳密検証。NG は NotionConfigError (再試行なし)。
 
@@ -106,10 +122,12 @@ def _require_read_list_envelope(resp: object, *, op: str) -> tuple[list, bool, s
     - next_cursor は own None または非空 str (空白のみ不可)
     - true→非空 str、false→None の pair まで見る
     - object が present なら list 以外は reject
+    - request_status は absentを保持、presentの未完/未知は即STOP
     エラー文に ID/body/cursor 値は入れない。
     """
     if not isinstance(resp, dict):
         raise NotionConfigError(f"Notion {op}: 応答が dict ではない。再試行しません。")
+    _require_complete_request_status(resp, op=op)
     if resp.get("object", "list") != "list":
         raise NotionConfigError(f"Notion {op}: object が list ではない。再試行しません。")
     results = resp.get("results")
@@ -140,6 +158,7 @@ def _require_scalar_property_item(resp: dict, *, op: str) -> dict:
     payload key を持つ canonical union 形だけ通す。arbitrary non-list の
     `[resp]` success fallback はしない。NG は NotionConfigError。
     """
+    _require_complete_request_status(resp, op=op)
     if resp.get("object") != "property_item":
         raise NotionConfigError(f"Notion {op}: object が list/property_item 以外。再試行しません。")
     ptype = resp.get("type")
@@ -335,14 +354,11 @@ class NotionClient:
     ) -> list[dict]:
         """全ページをページネーションして返す。トークン無し dry-run では空。
 
-        Notion は **1 クエリあたり 10,000 件で打ち切る**。上限に当たると has_more が
-        false になるため、素直に読むと「全件取れた」と誤認する。これを検知して
-        必ず WARNING を出し、`strict=True` なら QueryTruncatedError を送出する。
-        全件を前提にする処理（⑥エクスポート等）は strict を立てること。
-
-        検知は2系統: (1) レスポンスの request_status.incomplete（2025-09-03 版 API で
-        文書化。現行ピン留めの 2022-06-28 版で返るかは未確認）、(2) 取得件数が
-        QUERY_RESULT_LIMIT に達した（版に依らず効く保険）。
+        request_statusの既知incompleteは最初のpageからstrictに関係なく停止する。
+        marker不在は補完せず、自然終端で取得件数>=10,000でも全量とは認定しない。
+        明示max_pagesでhas_more=trueの部分読取だけ従来どおり返す（strict=Trueは
+        件数上限でも停止）。complete markerでも正確10,000件は保守的に停止する。
+        strict引数は既存caller互換のため維持する。
         """
         if self._client is None or str(database_id).startswith("dry-run-"):
             # dry-run の合成DB ID (runner が補完) への実クエリは行わない (§3-6)
@@ -377,19 +393,17 @@ class NotionClient:
                 _check_cursor_unseen(seen, next_cursor, op="query_database")
             results.extend(page_results)
             pages += 1
-            status = resp.get("request_status") or {}
-            incomplete = str(status.get("type", "")) == "incomplete"
-            if not has_more or (max_pages and pages >= max_pages):
+            intentional_partial = bool(has_more and max_pages and pages >= max_pages)
+            if not has_more or intentional_partial:
                 capped = len(results) >= QUERY_RESULT_LIMIT
-                if incomplete or capped:
-                    reason = status.get("incomplete_reason") or "件数が上限に到達"
+                if capped:
                     message = (
                         f"Notion クエリが打ち切られた可能性: db={database_id} "
-                        f"取得={len(results)} 件 上限={QUERY_RESULT_LIMIT} 理由={reason}。"
+                        f"取得={len(results)} 件 上限={QUERY_RESULT_LIMIT}。"
                         "全件前提の処理はこの結果を使ってはならない"
                     )
                     logger.warning("%s", message)
-                    if strict:
+                    if strict or not intentional_partial:
                         raise QueryTruncatedError(message)
                 return results
             cursor = next_cursor
