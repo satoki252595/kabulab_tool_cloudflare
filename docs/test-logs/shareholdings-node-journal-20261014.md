@@ -1,0 +1,18 @@
+# 保有明細Node journalの耐久化 — 2026-10-14
+
+単通CLIと保存原本backfillの`guardedHoldingsMutation`は、従来各送信前に同じpending JSONを上書きし、file/directoryのfsyncを行っていなかった。成功outputもfsyncせずpendingを削除したため、クラッシュ時に送信履歴を失う余地があった。
+
+`scripts/notion/shareholdings.ts`の既存保存関数を、`wx`・0600・file flush・親directory fsyncへ統一した。backfillのitem/plan/ZIP/投影/custody/公開receiptも同じ関数を使用する。追加依存はない。
+
+- action開始前にpendingを排他的作成してfsync。同outputの競合・再起動を拒否する。旧pending/旧outputは形式を変更せず既存bytesを保持して停止する。
+- 同attemptの送信意図・応答headers・終端を新JSONLへ追記し、毎回fsyncする。追記ではO_CREATを使わず、journal消失を新規作成で隠さない。headersの200は全文読戻し成功とは区別する。
+- 不明通信後は当該actionの後続送信と成功outputを拒否。次runもpendingにより停止する。異なるoutを用いた結果不明の迂回は行わず、backfillはdirectory内の未確定pendingを先に検査する。
+- actionが正常に返った後だけ、その実resultをoutputへ排他的fsync保存する。公開/HOLDの意味は既共有publisherのresultで区別し、journal完了を原本・価格の全量成功とは呼ばない。outputに全JSONL SHAと元pending SHAを束縛し、pendingの同bytesを上書きしないhard-linkでcompleted-writeへ保全してから元pendingを削除・directory fsyncする。途中停止はpendingを残して要照合とする。
+
+通常定期取込はNodeファイルjournalを経由しない。`scripts/sync/yuho-edinet.ts → runYuhoEdinetCatchup → ingestDocument / resumePendingShareholdings / resumePendingHoldingPrices → 共有publisher`が、Notionの原本/価格それぞれの「実行中（結果未確定）」を業務送信前に単発保存・全readbackし、unknown時の自動再送を拒否する。本変更はその既存契約を維持し、Workerへファイルシステムを追加しない。CLIとbackfillも同じ共有publisher/原本資格/単位/主体/価格guardを呼ぶ。
+
+旧197A/S100Z3TCの7-wire shadow（条件付きschema1回を含む）と実本番6業務ACK＋後の完了marker単発補完/独立POST証拠は変更していない。本修正によって旧失敗を新成功へ読み替えない。
+
+無通信回帰では、既存1438/S100XCY4保存TextBlockのfixture SHAと実株数22,900/帳簿価額126,408,000円を維持したまま7送信の機構検証を行う。送信前fsync・順序・全prefix保持、2送信目unknown後の後続/次run拒否、旧pending不変、output不変、fsync失敗前send0、送信後output失敗のpending保持を検証する。テストのHTTP応答と7phaseは機構故障注入であり、本番の再送や公開受入ではない。
+
+本番書込/新source取得/原本二重保存/旧journal変更は0。全27,587行の棚卸しと差分公開は別の有限計画・fresh全props CASによる受入が必要で、本修正だけでは完了していない。

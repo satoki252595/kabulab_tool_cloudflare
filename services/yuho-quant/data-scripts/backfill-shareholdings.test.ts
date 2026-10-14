@@ -16,7 +16,7 @@ vi.mock("./lib/shareholdings-backfill.js", () => ({ selectLatestHoldingsDocument
 vi.mock("../../../src/shared/notion-archive/shareholdings.js", () => ({ readSavedHoldingsZip: vi.fn(), publishVerifiedShareholdings: vi.fn() }));
 vi.mock("../../../src/shared/notion-archive/readback.js", () => ({ verifyArchivedAttachments: vi.fn() }));
 vi.mock("../src/services/edinet/archive.js", () => ({ recordEdinetZip: vi.fn(), edinetArchiveFilename: (doc: string) => `${doc}_xbrl.zip` }));
-vi.mock("../../../scripts/notion/shareholdings.js", () => ({ guardedHoldingsMutation: async (_path: string, _label: string, execute: () => Promise<unknown>) => execute() }));
+vi.mock("../../../scripts/notion/shareholdings.js", async original => ({ ...await original<typeof import("../../../scripts/notion/shareholdings.js")>(), guardedHoldingsMutation: async (_path: string, _label: string, execute: () => Promise<unknown>) => execute() }));
 vi.mock("../src/services/edinet/shareholdings.js", () => ({ parseShareholdingsData: vi.fn() }));
 vi.mock("../src/services/edinet/shareholdings-valuation.js", () => ({
   HoldingsPriceIndex: vi.fn(function () {}), parseHoldingsCodeList: vi.fn(() => ({ asOf: "2026-06-30", byLegalName: new Map() })),
