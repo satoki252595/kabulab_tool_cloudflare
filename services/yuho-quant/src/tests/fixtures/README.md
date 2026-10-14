@@ -209,3 +209,18 @@ Its provenance JSON separates full source/member SHA from verbatim excerpt and
 XML-projection SHA. The 30,751-byte gzip SHA-256 is
 `025e32330c9a8fec19aba54847478a2504aa51aabbce0ab158eab4545b1bf1d4`.
 The same rights, original-clock UNKNOWN, and regression-only conditions apply.
+
+## Enumerated holdings headings (2026-10-14)
+
+`holdings-enumerated-kind.json.gz` preserves complete, unmodified native
+ShareholdingsTextBlocks from 3926/S100YKIK, 4578/S100XUA7, 6498/S100XS6X and
+9612/S100XUUG. The paired provenance records the original ZIP/member SHA,
+UTF-8 byte intervals, excerpt SHA, issuer and fiscal year separately. The
+27,113-byte gzip SHA is
+`debd3a69263e52fa7d2f9a214e4d4429f0d13403b09c95e5f6d00b5242d7ca0b`.
+It is a regression container, not an original filing ZIP. Saved metadata clocks
+are retained as metadata; unknown original HTTP acquisition clocks remain
+unknown. Full original ZIPs and signed URLs remain private. The preceding
+rights and regression-only conditions apply; no new redistribution or code
+license is granted to the original filing content. Negative transformations
+occur only in tests and never become primary sources.

@@ -263,12 +263,12 @@ describe("株式保有の原典限定writer", () => {
       }
       return requestRouter(method, path, body);
     });
-    vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://hosted.invalid/saved-only" }]);
+    vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://file.notion.so/saved-only" }]);
     const native = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(Uint8Array.from(args.zip)));
     try {
       expect(await resumePendingShareholdings({ maxRows: 100, shouldStop: () => false })).toEqual({ usedRows: 1, resumed: 1, held: 0, pending: false });
       expect(native).toHaveBeenCalledTimes(1);
-      expect(native.mock.calls[0][0]).toBe("https://hosted.invalid/saved-only");
+      expect(native.mock.calls[0][0]).toBe("https://file.notion.so/saved-only");
       expect(verifyArchivedAttachments).not.toHaveBeenCalled();
     } finally { native.mockRestore(); }
   });
@@ -318,7 +318,7 @@ describe("保有明細の現行/legacy保存type1 reader", () => {
     return { object: "page", id: "b".repeat(32), parent: { type: "database_id", database_id: "p".repeat(32) }, archived: false, in_trash: false,
       properties: mirrored({ Key: { title: [{ text: { content: key } }] }, Metadata: { rich_text: [{ text: { content: JSON.stringify(metadata) } }] }, "Fetched At": { date: { start: "2026-07-01T00:00:00Z" } } }) };
   }
-  beforeEach(() => { vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://hosted.invalid/type1" }]);
+  beforeEach(() => { vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://file.notion.so/type1" }]);
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(Uint8Array.from(args.zip))); });
   afterEach(() => vi.restoreAllMocks());
   it("現行keyがあればlegacyを読まず、完全なmetadata/DEI/SHAを照合する", async () => {
@@ -329,9 +329,9 @@ describe("保有明細の現行/legacy保存type1 reader", () => {
   });
   it("現行不在時だけlegacy bare keyのtype1を明示採用し、同居CSVを使わない", async () => {
     vi.mocked(queryUniqueRow).mockResolvedValueOnce(null).mockResolvedValueOnce(primary(source.docId));
-    vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_csv.zip`, kind: "file", url: "https://hosted.invalid/csv" }, { name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://hosted.invalid/type1" }]);
+    vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_csv.zip`, kind: "file", url: "https://file.notion.so/csv" }, { name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://file.notion.so/type1" }]);
     expect(await readSavedHoldingsZip(source)).toMatchObject({ status: "ready", sourceCustody: "legacy", archivePageId: "b".repeat(32) });
-    expect(queryUniqueRow).toHaveBeenCalledTimes(2);expect(fetch).toHaveBeenCalledTimes(1);expect(vi.mocked(fetch).mock.calls[0][0]).toBe("https://hosted.invalid/type1");
+    expect(queryUniqueRow).toHaveBeenCalledTimes(2);expect(fetch).toHaveBeenCalledTimes(1);expect(vi.mocked(fetch).mock.calls[0][0]).toBe("https://file.notion.so/type1");
   });
   it("manual primaryのissuer/期末metadata欠測はDEIへ束縛して欠測一覧を残す", async () => {
     vi.mocked(queryUniqueRow).mockResolvedValue(primary(`${source.docId}:type1`, { edinetCode: undefined, periodEnd: undefined, secCode: undefined, stockCode: source.stockCode, rawSecCode: `${source.stockCode}0`, sourceZIPSHA: createHash("sha256").update(args.zip).digest("hex"), sourceZIPBytes: args.zip.length }));
@@ -353,7 +353,7 @@ describe("保有明細の現行/legacy保存type1 reader", () => {
     }
   });
   it("壊れた現行添付をlegacyで救済せず、CSV-onlyも未提供とは断定しない", async () => {
-    vi.mocked(queryUniqueRow).mockResolvedValue(primary(`${source.docId}:type1`));vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_csv.zip`, kind: "file", url: "https://hosted.invalid/csv" }]);
+    vi.mocked(queryUniqueRow).mockResolvedValue(primary(`${source.docId}:type1`));vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_csv.zip`, kind: "file", url: "https://file.notion.so/csv" }]);
     expect((await readSavedHoldingsZip(source)).status).toBe("held");expect(queryUniqueRow).toHaveBeenCalledTimes(1);expect(fetch).not.toHaveBeenCalled();
     vi.mocked(queryUniqueRow).mockResolvedValue(null);const missing = await readSavedHoldingsZip(source);expect(missing).toMatchObject({ status: "held", reason: expect.stringContaining("公式の原本未提供とは未判定") });
   });
@@ -470,10 +470,11 @@ describe("全原表へ束縛するsource有限window", () => {
     expect(vi.mocked(notionRequest).mock.calls.every(([method]) => method === "GET")).toBe(true);
   });
 
-  it("通常再開が保存ZIP/native資格を再用し、部分windowの消費行数をrun予算へ数える", async () => {
-    windowRouter(); await publishVerifiedShareholdings({ ...args, maxRows: 0 });
-    vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://hosted.invalid/source-window" }]);
-    const native = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(Uint8Array.from(args.zip)));
+  it.each([args.zip.length, 6 * 1024 * 1024])("通常source再開が保存ZIP/native資格を再用し、部分windowの消費行数を計数する（%s bytes）", async size => {
+    const zip = size === args.zip.length ? args.zip : Buffer.alloc(size);
+    windowRouter(); await publishVerifiedShareholdings({ ...args, zip, maxRows: 0 });
+    vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://file.notion.so/source-window" }]);
+    const native = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(Uint8Array.from(zip)));
     expect(await resumePendingShareholdings({ maxRows: 1, shouldStop: () => false })).toEqual({ usedRows: 1, resumed: 1, held: 0, pending: true });
     expect(savedInfo().sourceNextHoldingOffset).toBe(1);
     expect(await resumePendingShareholdings({ maxRows: 1, shouldStop: () => false })).toEqual({ usedRows: 1, resumed: 1, held: 0, pending: false });
@@ -518,15 +519,15 @@ describe("原本完了とは独立した保存価格queue", () => {
       filename: "structural.gz", symbol: "9999.T", capturedAt: "2026-07-01T00:00:00Z", sourceTimestamp: 1782777600,
       range: "10y", priceBasis: "STRUCTURAL", splitObservation: "STRUCTURAL" } });
 
-  async function seedPublishedSource(valuationSources?: { codeList: typeof evidence; prices: typeof evidence[] }) {
-    await publishVerifiedShareholdings({ ...args, valuationSources });
-    vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://hosted.invalid/saved-price-phase-only" }]);
+  async function seedPublishedSource(valuationSources?: { codeList: typeof evidence; prices: typeof evidence[] }, zip = args.zip) {
+    await publishVerifiedShareholdings({ ...args, zip, valuationSources });
+    vi.mocked(listPageFiles).mockResolvedValue([{ name: `${source.docId}_xbrl.zip`, kind: "file", url: "https://file.notion.so/saved-price-phase-only" }]);
     vi.mocked(queryUniqueRow).mockImplementation(async dbId => {
       if (dbId !== "p".repeat(32)) return await requestRouter("GET", rowPath) as { id: string };
       const page = await requestRouter("GET", `/pages/${args.archivePageId}`) as { id: string; properties: Record<string, unknown> };
       return { ...page, properties: { ...page.properties, ...mirrored({ Metadata: { rich_text: [{ text: { content: JSON.stringify({
         docID: source.docId, secCode: `${source.stockCode}0`, edinetCode: source.edinetCode, periodEnd: source.fiscalYearEnd,
-        edinetDocType: 1, sourceZIPSHA: createHash("sha256").update(args.zip).digest("hex"), sourceZIPBytes: args.zip.length,
+        edinetDocType: 1, sourceZIPSHA: createHash("sha256").update(zip).digest("hex"), sourceZIPBytes: zip.length,
       }) } }] }, "Fetched At": { date: { start: "2026-07-01T00:00:00Z" } } }) } };
     });
     vi.mocked(notionRequest).mockImplementation(async (method, path, body) => {
@@ -537,7 +538,7 @@ describe("原本完了とは独立した保存価格queue", () => {
       }
       return requestRouter(method, path, body);
     });
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(Uint8Array.from(args.zip)));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(Uint8Array.from(zip)));
     return structuredClone(saved[`/pages/${args.archivePageId}`]) as Record<string, unknown>;
   }
   afterEach(() => vi.restoreAllMocks());
@@ -550,6 +551,23 @@ describe("原本完了とは独立した保存価格queue", () => {
     expect(Object.keys(final.properties)).toHaveLength(6);
     const info = (final.properties["保有価格再開情報"] as { rich_text: Array<{ text: { content: string } }> }).rich_text.map(p => p.text.content).join("");
     expect(JSON.parse(info)).toMatchObject({ source, parsed: 1, priceQueueVersion: 1, nextHoldingOffset: 0, unavailableRows: 0 });
+  });
+  it("publisher→保存reader→価格resumeが共通20MiB予算で5MiB超の同じ全ZIPを照合する", async () => {
+    const zip = Buffer.alloc(6 * 1024 * 1024);
+    await seedPublishedSource(undefined, zip);
+    vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    expect(await resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready }))
+      .toEqual({ usedRows: 1, resumed: 1, held: 0, pending: false });
+    const verified = vi.mocked(verifySavedHoldingsSource).mock.calls.at(-1)!;
+    const parsed = vi.mocked(parseShareholdingsData).mock.calls.at(-1)!;
+    expect(verified[0].length).toBe(zip.length); expect(verified[1]).toEqual(source); expect(parsed[1]).toEqual(source);
+    const sha = (value: Buffer) => createHash("sha256").update(value).digest("hex");
+    expect(sha(verified[0])).toBe(sha(zip)); expect(sha(parsed[0])).toBe(sha(zip));
+    expect(restartInfo(saved[`/pages/${args.archivePageId}`], "保有価格").zipBytes).toBe(zip.length);
+    vi.mocked(parseShareholdingsData).mockClear(); saved = {};
+    expect(await publishVerifiedShareholdings({ ...args, zip: Buffer.alloc(20 * 1024 * 1024 + 1) }))
+      .toMatchObject({ status: "held", reason: expect.stringContaining("20MiB") });
+    expect(parseShareholdingsData).not.toHaveBeenCalled();
   });
 
   it("原本/価格の両完了後の価格付きbackfill再実行はcursor終端を照合してwrite0", async () => {

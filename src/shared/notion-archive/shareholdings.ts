@@ -11,6 +11,9 @@ import { splitRichText } from "./rich-text.js";
 import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
 import { normalizeFilePropForCompare } from "./file-property.js";
+import { downloadArchivedFile } from "./archived-download.js";
+
+export const HOLDINGS_ZIP_MAX_BYTES = 20 * 1024 * 1024;
 
 export interface HoldingsSchema {
   id: string;
@@ -251,7 +254,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     else await recordRecoveryMarker(args, retry ? "再開待ち" : "要確認", reason, parsed);
     return { status: "held", parsed, reason };
   };
-  if (args.zip.length > 5 * 1024 * 1024) return hold("1原本5MiBの解析予算を超えています", 0, false);
+  if (args.zip.length > HOLDINGS_ZIP_MAX_BYTES) return hold("1原本20MiBの解析予算を超えています", 0, false);
   const parsed = parseShareholdingsData(args.zip, args.source);
   if (parsed.status !== "ok" || parsed.holderScope !== "filer_only") {
     return hold(parsed.reason ?? "提出会社の保有主体資格が未確認です", 0, false);
@@ -522,13 +525,7 @@ export async function readSavedHoldingsZip(source: ShareholdingsSource): Promise
   const allFiles = await listPageFiles(page.id, "Files");
   const files = sourceCustody === "typed" ? allFiles : allFiles.filter(file => file.name === edinetArchiveFilename(docId, 1));
   if (files.length !== 1 || files[0].kind !== "file" || files[0].name !== edinetArchiveFilename(docId, 1)) return { status: "held", reason: `${sourceCustody}原本のtype1単一Notion-hosted物理添付を確認できません（CSVは代用しません）` };
-  assert.equal(new URL(files[0].url).protocol, "https:");
-  const response = await fetch(files[0].url, { redirect: "error", signal: AbortSignal.timeout(30_000) });
-  assert.equal(response.ok, true);
-  const length = response.headers.get("Content-Length");
-  if (length !== null && Number(length) > 5 * 1024 * 1024) return { status: "held", reason: "type1原本が1通5MiBの予算を超えています" };
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (bytes.length > 5 * 1024 * 1024) return { status: "held", reason: "type1原本が1通5MiBの予算を超えています" };
+  const bytes = Buffer.from(await downloadArchivedFile(files[0], "保有明細type1原本", { maxBytes: HOLDINGS_ZIP_MAX_BYTES }));
   const digest = createHash("sha256").update(bytes).digest("hex");
   const parts = page.properties["Metadata"]?.rich_text;
   assert.ok(Array.isArray(parts));
@@ -727,7 +724,7 @@ export async function resumePendingShareholdingsPrices(args: {
     assert.ok(typeof info.source.edinetCode === "string"); assert.match(info.source.edinetCode, /^E[0-9]{5}$/);
     assert.equal(new Date(`${info.source.fiscalYearEnd}T00:00:00Z`).toISOString().slice(0, 10), info.source.fiscalYearEnd);
     assert.ok(typeof info.ownerName === "string" && info.ownerName.trim());
-    assert.ok(Number.isSafeInteger(info.zipBytes) && info.zipBytes > 0 && info.zipBytes <= 5 * 1024 * 1024);
+    assert.ok(Number.isSafeInteger(info.zipBytes) && info.zipBytes > 0 && info.zipBytes <= HOLDINGS_ZIP_MAX_BYTES);
     assert.match(info.zipSha256, /^[a-f0-9]{64}$/);
     assert.ok(typeof info.factsSha256 === "string"); assert.match(info.factsSha256, /^[a-f0-9]{64}$/);
     assert.ok(Number.isSafeInteger(info.parsed) && info.parsed >= 0);
@@ -790,7 +787,7 @@ export async function resumePendingShareholdings(args: { maxRows: number; should
       assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content);
       return part.plain_text;
     }).join("")) as RecoveryInfo;
-    assert.ok(Number.isSafeInteger(info.zipBytes) && info.zipBytes > 0 && /^[a-f0-9]{64}$/.test(info.zipSha256));
+    assert.ok(Number.isSafeInteger(info.zipBytes) && info.zipBytes > 0 && info.zipBytes <= HOLDINGS_ZIP_MAX_BYTES && /^[a-f0-9]{64}$/.test(info.zipSha256));
     if (info.sourceQueueVersion === undefined) { result.held++; result.pending = true; continue; }
     assert.equal(info.sourceQueueVersion, 1);
     const saved = await readSavedHoldingsZip(info.source);

@@ -1,0 +1,82 @@
+{
+  "description": "保存type1から完全なShareholdingsTextBlockをUTF8 byte rangeで無改変抜粋。新たな原本取得0。",
+  "sourceManifestSha256": "139357c60251364af346d225f4ba54cc93c9538d068c095b676a2e7af1926fb6",
+  "fixtureSha256": "debd3a69263e52fa7d2f9a214e4d4429f0d13403b09c95e5f6d00b5242d7ca0b",
+  "fixtureBytes": 27113,
+  "members": [
+    {
+      "source": {
+        "docId": "S100YKIK",
+        "stockCode": "3926",
+        "edinetCode": "E31936",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "originalZipSha256": "76658025bac87525cbef133b01e788fee3c7716695cc072906796dbf1ed7c70f",
+      "originalMember": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E31936-000_2026-03-31_01_2026-06-25_ixbrl.htm",
+      "originalMemberBytes": 430060,
+      "originalMemberSha256": "530b137412788f2b202c182e870eecb46b234470124f94b84e764fab7d2ad7c4",
+      "excerptStartUtf8Byte": 375546,
+      "excerptEndUtf8Byte": 405547,
+      "excerptBytes": 30001,
+      "excerptSha256": "504c89db75e93de199277aeefc526395fb3483fcc7a8b9197cf6fd4f221f4fc7",
+      "contextRef": "FilingDateInstant",
+      "sourceFetchedAt": "2026-06-25T15:30:00.000+00:00"
+    },
+    {
+      "source": {
+        "docId": "S100XUA7",
+        "stockCode": "4578",
+        "edinetCode": "E21183",
+        "fiscalYearEnd": "2025-12-31"
+      },
+      "originalZipSha256": "323ca705c3af8c5209aa0c8b33c6879a9e149e35da632199fb84fd64630ecb03",
+      "originalMember": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E21183-000_2025-12-31_01_2026-03-26_ixbrl.htm",
+      "originalMemberBytes": 985710,
+      "originalMemberSha256": "6c6631a8639af230c4bef168bbbe8eaa8fac19b347f324bc05c8994854f895d3",
+      "excerptStartUtf8Byte": 643376,
+      "excerptEndUtf8Byte": 985680,
+      "excerptBytes": 342304,
+      "excerptSha256": "88203a15a2b2501ad48e890427e89a71aa6f829bdbb9a6b79a8e0661a439864d",
+      "contextRef": "FilingDateInstant",
+      "sourceFetchedAt": "2026-03-26T10:13:00.000+00:00"
+    },
+    {
+      "source": {
+        "docId": "S100XS6X",
+        "stockCode": "6498",
+        "edinetCode": "E01660",
+        "fiscalYearEnd": "2025-12-31"
+      },
+      "originalZipSha256": "7a14322ec932ebf8a78fb6e44b677a3d75a2e8063277d6f300d73cb02e9c0c21",
+      "originalMember": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E01660-000_2025-12-31_01_2026-03-19_ixbrl.htm",
+      "originalMemberBytes": 1181023,
+      "originalMemberSha256": "8be81f2ec1e9130e7f127e80d0f8e4a5984fa25389be24a10b6e9110009082ce",
+      "excerptStartUtf8Byte": 1067669,
+      "excerptEndUtf8Byte": 1180993,
+      "excerptBytes": 113324,
+      "excerptSha256": "82d03f7f35f7929c97e520d0788a43c7f5db8e7c4e3211962d77e40c12c3df85",
+      "contextRef": "FilingDateInstant",
+      "sourceFetchedAt": "2026-03-19T15:59:00.000+00:00"
+    },
+    {
+      "source": {
+        "docId": "S100XUUG",
+        "stockCode": "9612",
+        "edinetCode": "E04914",
+        "fiscalYearEnd": "2025-12-31"
+      },
+      "originalZipSha256": "150bc1f51b587f89ac184548fdec608b9c316808b36020e4e66cc851a9c028e7",
+      "originalMember": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E04914-000_2025-12-31_01_2026-03-27_ixbrl.htm",
+      "originalMemberBytes": 666046,
+      "originalMemberSha256": "617b00a38468104b0b00d0ab89bee17f4e216bd8c1fcea425203b1feb4217d50",
+      "excerptStartUtf8Byte": 590650,
+      "excerptEndUtf8Byte": 665938,
+      "excerptBytes": 75288,
+      "excerptSha256": "fe2de8fce2d5011f7513339c794db3d19b5ddf43a4ced3962c9066df073e9359",
+      "contextRef": "FilingDateInstant",
+      "sourceFetchedAt": "2026-03-27T15:47:00.000+00:00"
+    }
+  ],
+  "sourceGets": 0,
+  "businessWrites": 0
+}
