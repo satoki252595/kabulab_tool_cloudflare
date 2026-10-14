@@ -41,12 +41,12 @@ export function qualifyDailySessionReference(capture: Pick<YahooRawCapture, "byt
 }
 
 /** 通常共有benchmarkを取得・物理照合する。暦日更新時は別stageで元原本を保持する。 */
-export async function fetchDailySessionReference(runId: string, stage = "vwap-daily-session"): Promise<DailySessionReference> {
+export async function fetchDailySessionReference(runId: string, stage = "vwap-daily-session", beforeRequest?: () => void): Promise<DailySessionReference> {
   const captures: YahooRawAttempt[] = [], missing: YahooRawMissing[] = [];
   let capture: YahooRawCapture | undefined;
   let diagBars: DailyOhlcv[] | undefined; // 計測のみ (INC-20261008-kabulab_tool_cloudflare-financials-stale)
   try {
-    const chart = await fetchChart("^N225", "1mo", { onRaw: (raw) => {
+    const chart = await fetchChart("^N225", "1mo", { ...(beforeRequest === undefined ? {} : { beforeRequest }), onRaw: (raw) => {
       captures.push({ api: "chart", attempt: 1, capture: raw });
       capture = raw;
     } });

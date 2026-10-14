@@ -11,6 +11,7 @@ import { NotionUnknownResultError } from "../../src/shared/notion-archive/client
 import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
 import { archiveYahooRawBatch } from "../../src/shared/yahoo/raw-custody.js";
 import { main } from "./ingest-intra.js";
+import { scheduledVwapGuard } from "./lib/scheduled-window.js";
 
 const intraSource = vi.hoisted(() => vi.fn());
 const intraWindowSource = vi.hoisted(() => vi.fn());
@@ -91,6 +92,56 @@ afterEach(() => {
   process.exitCode = undefined;
   vi.restoreAllMocks();
   vi.useRealTimers();
+  vi.unstubAllEnvs();
+});
+
+describe("通常定時VWAPの5分足は同run受付と終了窓を継承", () => {
+  it("最終empty/summary保管中に期限を越えても成功出口へ進まない", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
+    vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    scheduledVwapGuard({ plannedDate: "2026-10-14", runId: "101.1", phase: "daily" });
+    process.argv.push("--scheduled-date=2026-10-14");
+    mockLoadCodes.mockResolvedValue(["7203"]); mockFetch5m.mockResolvedValue([]); mockR2Get.mockResolvedValue(null);
+    mockRecord.mockImplementationOnce(async () => {
+      vi.setSystemTime(new Date("2026-10-14T14:30:00.001Z"));
+      return { outcome: "recorded", fileTooLarge: false } as never;
+    });
+    await main();
+    expect(process.exitCode).toBe(2); expect(mockFetch5m).toHaveBeenCalledTimes(1);
+    expect(mockFetch5m.mock.calls[0][2].beforeRequest).toBeTypeOf("function");
+    expect(mockRawArchive).toHaveBeenCalledTimes(1); expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockR2Put).not.toHaveBeenCalled();
+    expect(recordedBody().scheduledWindow).toMatchObject({ admittedAt: "2026-10-14T08:00:00.000Z" });
+  });
+  it.each(["missing", "expired"])("受付%sはsource・母集団・PUT0で停止", async (mode) => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
+    vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    if (mode === "expired") {
+      scheduledVwapGuard({ plannedDate: "2026-10-14", runId: "101.1", phase: "daily" });
+      vi.setSystemTime(new Date("2026-10-14T14:30:00.001Z"));
+    }
+    process.argv.push("--scheduled-date=2026-10-14");
+    await expect(main()).rejects.toThrow();
+    expect(mockLoadCodes).not.toHaveBeenCalled(); expect(mockFetch5m).not.toHaveBeenCalled();
+    expect(mockR2Get).not.toHaveBeenCalled(); expect(mockR2Put).not.toHaveBeenCalled();
+    expect(mockRawArchive).not.toHaveBeenCalled();
+  });
+  it("取得中に終了窓へ達しても原本を保管し、価格PUT0・残りnotStartedで終了2", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-14T08:00:00.000Z"));
+    vi.stubEnv("GITHUB_RUN_ID", "101"); vi.stubEnv("GITHUB_RUN_ATTEMPT", "1");
+    scheduledVwapGuard({ plannedDate: "2026-10-14", runId: "101.1", phase: "daily" });
+    process.argv.push("--scheduled-date=2026-10-14");
+    mockLoadCodes.mockResolvedValue(["7203", "6758"]);
+    mockFetch5m.mockImplementationOnce(async () => {
+      vi.setSystemTime(new Date("2026-10-14T14:30:00.001Z")); return [BAR];
+    });
+    mockR2Get.mockResolvedValue(null);
+    await main();
+    expect(mockFetch5m).toHaveBeenCalledTimes(1); expect(mockRawArchive).toHaveBeenCalledTimes(1);
+    expect(mockRawArchive.mock.calls[0][0].captures).toHaveLength(1);
+    expect(mockR2Put).not.toHaveBeenCalled(); expect(process.exitCode).toBe(2);
+    expect(recordedBody().outcomes).toMatchObject({ "6758": { status: "notStarted" } });
+  });
 });
 
 describe("ingest-intra main flow", () => {
