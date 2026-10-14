@@ -357,7 +357,7 @@ describe("notion-archive stock-text", () => {
     });
 
     it("v2 は既知 U+200B 除去後も、分割した JSON と補助文字を原文へ復元する", async () => {
-      const { buildTextBodyBlocks, readStockTextRow } = await load();
+      const { buildTextBodyBlocks, readStockTextRow, parseStockTextBlocks } = await load();
       // 原本で再現した消失条件を文法境界として固定する。報告書データではない。
       const sections = [{
         itemName: "事業\u200bの内容",
@@ -385,6 +385,8 @@ describe("notion-archive stock-text", () => {
         };
       });
       route("GET", "/v1/blocks/row-1/children", [childrenPage(returned)]);
+      expect(parseStockTextBlocks(returned, "row-1")).toEqual(sections);
+      expect(calls).toHaveLength(0);
       expect(await readStockTextRow("row-1")).toEqual(sections);
     });
 
@@ -465,13 +467,18 @@ describe("notion-archive stock-text", () => {
             text: { content: i === 0 ? "抽出テキスト全文 (1項目)" : i === 1 ? "A (a)" : text } }] },
         }));
       route("GET", "/v1/blocks/row-strict/children", [childrenPage(native)]);
-      const { readStockTextRow } = await load();
+      const { readStockTextRow, parseStockTextBlocks } = await load();
+      expect(parseStockTextBlocks(native, "row-strict", true)).toEqual([{ itemName: "A", sectionKey: "a", text }]);
+      expect(calls).toHaveLength(0);
       expect(await readStockTextRow("row-strict", true)).toEqual([{ itemName: "A", sectionKey: "a", text }]);
       const malformed = { ...native[2], code: { rich_text: [{}] } };
       route("GET", "/v1/blocks/row-legacy/children", [childrenPage([native[0], native[1], malformed])]);
       expect(await readStockTextRow("row-legacy")).toEqual([{ itemName: "A", sectionKey: "a", text: "" }]);
       for (const [i, bad] of [malformed, { ...native[2], object: "page" },
         { ...native[2], id: "invalid" }, { ...native[2], has_children: true }].entries()) {
+        const beforeParse = calls.length;
+        expect(() => parseStockTextBlocks([native[0]!, native[1]!, bad], `row-bad-${i}`, true)).toThrow("native");
+        expect(calls).toHaveLength(beforeParse);
         route("GET", `/v1/blocks/row-bad-${i}/children`, [
           childrenPage([native[0], native[1]], true, "next"), childrenPage([bad]),
         ]);
