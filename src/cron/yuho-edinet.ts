@@ -65,6 +65,8 @@ export interface YuhoEdinetResult {
   outOfUniverse: number;
   /** 未解決 identity/metadata/parser・既存本文不一致は保存 snapshot に保留。 */
   pendingDocuments: number;
+  /** 選択した日付queueと、保存保留/翌日待ちの実内訳。成功判定は従来どおり。 */
+  sourceProgress?: Awaited<ReturnType<typeof progressSummary>> & { queuedAtStart: number };
   byStatus: Record<string, number>;
   reachedCap: boolean;
   elapsedSec: number;
@@ -153,6 +155,7 @@ export async function runYuhoEdinetCatchup(
       shard.part < 0 || shard.of <= 0 || shard.part >= shard.of)) throw new Error("EDINET shard 不正");
   const enqueuePending = await enqueueDates(db, scope, today);
   const queue = await progressQueue(db, scope, today);
+  console.info(`[yuho-edinet] source queue=${queue.length}日`);
   let attempted = 0;
   let reachedCap = enqueuePending;
   for (let row of queue) {
@@ -308,6 +311,8 @@ export async function runYuhoEdinetCatchup(
   }
   const storedSummary = await progressSummary(db, scope, today);
   const pendingDocuments = storedSummary.pendingDocuments;
+  const sourceProgress = { queuedAtStart: queue.length, ...storedSummary };
+  console.info(`[yuho-edinet] source進捗: ${JSON.stringify(sourceProgress)} holdingsPending=${holdingsPending}`);
   reachedCap = reachedCap || storedSummary.queuedDays > 0 || holdingsPending;
 
   // L2 投影 `p_yuho_growth` の再生成 (L-51/K4b)。シャード実行では走らせない
@@ -349,6 +354,7 @@ export async function runYuhoEdinetCatchup(
     skippedExisting,
     outOfUniverse,
     pendingDocuments,
+    sourceProgress,
     byStatus,
     reachedCap,
     elapsedSec,

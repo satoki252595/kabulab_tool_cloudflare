@@ -81,11 +81,29 @@ export async function saveProgress(db: Database, row: Progress,
 
 /** 未処理 queue と今日再照合済みの保留も、成功 summary から消さない。 */
 export async function progressSummary(db: Database, scope: string, today: string) {
+  const pendingCount = (reason: PendingDocument["reason"]) => sql<number>`coalesce(sum((
+    select count(*) from json_each(${table.pendingIds}) p
+    where json_extract(p.value, '$.reason') = ${reason}
+  )), 0)`.as(reason);
   const rows = await db.select({
     pendingDocuments: sql<number>`coalesce(sum(json_array_length(${table.pendingIds})), 0)`,
     queuedDays: sql<number>`coalesce(sum(case when ${table.finished} = 0 or (${table.sealed} = 0 and ${table.date} < ${today}) then 1 else 0 end), 0)`,
+    pendingRecheckDueDays: sql<number>`coalesce(sum(case when ${table.finished} = 1 and ${table.sealed} = 1 and ${table.pendingIds} <> '[]' and (${table.pendingCheckedDate} is null or ${table.pendingCheckedDate} < ${today}) then 1 else 0 end), 0)`,
+    sameDayPendingWaitDays: sql<number>`coalesce(sum(case when ${table.finished} = 1 and ${table.sealed} = 1 and ${table.pendingIds} <> '[]' and ${table.pendingCheckedDate} = ${today} then 1 else 0 end), 0)`,
+    futurePendingWaitDays: sql<number>`coalesce(sum(case when ${table.finished} = 1 and ${table.sealed} = 1 and ${table.pendingIds} <> '[]' and ${table.pendingCheckedDate} > ${today} then 1 else 0 end), 0)`,
+    unsealedTodayWaitDays: sql<number>`coalesce(sum(case when ${table.finished} = 1 and ${table.sealed} = 0 and ${table.date} = ${today} then 1 else 0 end), 0)`,
+    inFlightDays: sql<number>`coalesce(sum(case when ${table.inFlightDocId} is not null then 1 else 0 end), 0)`,
+    pendingByReason: {
+      identity_unresolved: pendingCount("identity_unresolved"),
+      metadata_unresolved: pendingCount("metadata_unresolved"),
+      parse_error: pendingCount("parse_error"),
+      text_readback_mismatch: pendingCount("text_readback_mismatch"),
+    },
   }).from(table).where(eq(table.scope, scope));
-  if (rows.length !== 1 || !Object.values(rows[0]).every((v) => Number.isSafeInteger(v) && v >= 0)) {
+  if (rows.length !== 1) throw new Error("EDINET checkpoint summary 不正");
+  const {pendingByReason, ...counts} = rows[0];
+  if (![...Object.values(counts), ...Object.values(pendingByReason)].every((v) => Number.isSafeInteger(v) && v >= 0) ||
+      Object.values(pendingByReason).reduce((sum, count) => sum + count, 0) !== counts.pendingDocuments) {
     throw new Error("EDINET checkpoint summary 不正");
   }
   return rows[0];
