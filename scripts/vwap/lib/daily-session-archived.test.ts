@@ -66,6 +66,20 @@ describe("explicit same-day archived JP benchmark", () => {
     expect(r2GetVersion).toHaveBeenCalledTimes(1); expect(notionRequest).toHaveBeenCalledTimes(1); expect(downloadArchivedFile).toHaveBeenCalledTimes(1);
     expect(fetchChart).not.toHaveBeenCalled(); expect(archiveYahooRawBatch).not.toHaveBeenCalled(); expect(r2Put).not.toHaveBeenCalled();
   });
+  it("the normal no-options caller also bounds SDK headers and body by one explicit deadline", async () => {
+    await loadArchivedDailySessionReference(date);
+    expect(r2GetVersion).toHaveBeenCalledExactlyOnceWith(`macro/jp-close/${date}.json`, { maxBytes: 20 * 1024 * 1024, abortSignal: expect.any(AbortSignal) });
+    const options = vi.mocked(r2GetVersion).mock.calls[0][1]!;
+    expect(options.abortSignal!.aborted).toBe(false); expect(options.singleAttempt).toBeUndefined();
+  });
+  it("forwards explicit native SDK bounds/hooks unchanged to the single real cache getter", async () => {
+    const readOptions = { singleAttempt: true, maxBytes: 1024 * 1024, abortSignal: new AbortController().signal, beforeAttempt: vi.fn(), onRead: vi.fn() };
+    await loadArchivedDailySessionReference(date, readOptions);
+    expect(r2GetVersion).toHaveBeenCalledExactlyOnceWith(`macro/jp-close/${date}.json`, readOptions);
+    vi.mocked(r2GetVersion).mockRejectedValueOnce(new Error("SDK body deadline"));
+    await expect(loadArchivedDailySessionReference(date, readOptions)).rejects.toThrow("SDK body deadline");
+    expect(r2GetVersion).toHaveBeenCalledTimes(2); expect(fetchChart).not.toHaveBeenCalled(); expect(r2Put).not.toHaveBeenCalled();
+  });
   it.each([
     ["changed body", (w: { members: Array<{ bodyBase64: string; receivedAt: string; symbol: string }> }) => { w.members[0].bodyBase64 = Buffer.from("changed").toString("base64"); }],
     ["changed original clock", (w: { members: Array<{ bodyBase64: string; receivedAt: string; symbol: string }> }) => { w.members[0].receivedAt = now; }],
