@@ -15,6 +15,9 @@
 - window開始前にsourceだけを結果未確定にし、全行のACK/対象idと全propsを読戻す。
   全windowが成功した場合だけsource cursorを進める。途中失敗はunknown/cursor不変で停止し、
   次定時に再送しない。開始と終端はtype1行の全props/時計をfresh CAS確認する。
+  NotionのFiles再署名だけは既存の純粋comparatorを共有化して比較する。AWS既知署名query8種と
+  expiryだけを除き、assetのorigin/path・非署名query（versionId等）・name/type・未知fieldは厳密比較する。
+  元のURL/expiryを含むfull PREは加工せず保持し、ZIP全文SHA/bytes照合も別に必須とする。
 - 途中windowは `held + pending + usedRows` を返す。通常callerが通全体の完了と誤認せず、
   通常再開は部分windowの消費行数をrun100行の予算へ計上する。
 - 最後のwindowだけsource完了と独立価格pendingを同一PATCHで登録する。
@@ -54,7 +57,8 @@
 ## 検証
 
 Nixのlocked環境で、共有writer・cron・Node CLI・price loader・厳密原表/価格資格・通常ingest・
-既存backfillの10suiteを実行し146件PASS（担当writerは41件。並行追加された価格loader回帰2件も含む）、skip0。
+既存backfillの10suiteを実行し149件PASS（担当writerは44件）、skip0。
+既存master-dedupの2suite132件も併せ、12suite281件PASS。
 新source回帰は2つの保有種別をmaxRows1で分割するtransport契約試験であり、
 架空明細を本番へ保存していない。実原表parserは既存独立suiteで確認する。
 順序/facts変更STOP、unknown後再送0、部分消費行数、最後だけ価格enqueue、
@@ -62,3 +66,8 @@ Nixのlocked環境で、共有writer・cron・Node CLI・price loader・厳密�
 owned ESLint・TypeScript・diff checkも実施する。
 市場担当の独立source-only reviewでは具体的なfalse-success/cursor/replay問題は検出されなかった。
 本作業による本番write・上流取得・モデル推論は0。
+
+実pilotの2回のNotion GETは同一編集時計・全他props同一で、Filesのurl署名query/expiryだけが変わった。
+actual2page比較とasset path/versionId/name/metadata/clockの5negativeを通信0で検証した
+（private receipt SHA `89caf227cc86f8c6389b445d640f63ff4ae3f493f16a8132a3f7bfd4736d1359`）。
+helperは既存master-dedupの実装を同一bytesで共有moduleへ移し、比較ロジックを二重化していない。

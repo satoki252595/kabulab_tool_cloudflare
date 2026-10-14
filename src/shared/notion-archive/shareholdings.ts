@@ -10,6 +10,7 @@ import { notionEnv } from "./env.js";
 import { splitRichText } from "./rich-text.js";
 import { verifyArchivedAttachments } from "./readback.js";
 import { listPageFiles } from "./page-file.js";
+import { normalizeFilePropForCompare } from "./file-property.js";
 
 export interface HoldingsSchema {
   id: string;
@@ -276,7 +277,8 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
         const proof = JSON.parse(Buffer.from(pre.bytes).toString("utf8")) as { page: HoldingPage; info: RecoveryInfo };
         assert.deepEqual(proof.info, sourceInfo, "旧PREの全原表束縛が不一致です");
         for (const name of ["object", "id", "parent", "archived", "in_trash", "properties", "created_time", "last_edited_time"] as const) {
-          assert.deepEqual(proof.page[name], sourceBefore[name], "旧PREのpage/props/clockが変更されています");
+          assert.deepEqual(name === "properties" ? stableProperties(proof.page.properties) : proof.page[name],
+            name === "properties" ? stableProperties(sourceBefore.properties) : sourceBefore[name], "旧PREのpage/props/clockが変更されています");
         }
         assert.ok(typeof sourceBefore.created_time === "string" && Number.isFinite(Date.parse(sourceBefore.created_time)));
         assert.ok(typeof sourceBefore.last_edited_time === "string" && Number.isFinite(Date.parse(sourceBefore.last_edited_time)));
@@ -389,7 +391,7 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     assertProperties(readback.properties, properties);
     if (existing) for (const [, legacy] of LEGACY_HOLDINGS_COLUMNS) assert.deepEqual(readback.properties[legacy], existing.properties[legacy]);
     if (pricePhase && existing) for (const [name, value] of Object.entries(existing.properties)) {
-      if (!VALUATION_COLUMNS.has(name)) assert.deepEqual(readback.properties[name], value, "価格追記で他propsが変更されています");
+      if (!VALUATION_COLUMNS.has(name)) assert.deepEqual(stableProperty(readback.properties[name]), stableProperty(value), "価格追記で他propsが変更されています");
     }
     if (existing) result.updated++; else result.created++;
   }
@@ -590,6 +592,17 @@ function richValue(property: HoldingProperty): string {
   return property.rich_text.map(part => { assert.equal(part.type, "text"); assert.equal(part.plain_text, part.text?.content); return part.plain_text; }).join("");
 }
 
+/** Notion再署名だけを除く。原本全bytes/SHA照合と物理PREは別途保持する。 */
+function stableProperty(property: HoldingProperty): unknown {
+  if (property?.type !== "files") return property;
+  const normalized = normalizeFilePropForCompare(property);
+  assert.ok(normalized.ok, "Notion Filesの安定同一性を比較できません");
+  return normalized.norm;
+}
+function stableProperties(properties: Record<string, HoldingProperty>): unknown {
+  return Object.fromEntries(Object.entries(properties).map(([name, value]) => [name, stableProperty(value)]));
+}
+
 function qualifyRecoveryPage(page: HoldingPage, archivePageId: string, dbId: string, source: ShareholdingsSource): void {
   assert.equal(page.object, "page"); assert.equal(page.id.replaceAll("-", ""), archivePageId.replaceAll("-", ""), "保有再開markerのGETが別行です");
   assert.equal(page.parent.type, "database_id"); assert.equal(page.parent.database_id.replaceAll("-", ""), dbId.replaceAll("-", ""));
@@ -615,7 +628,7 @@ async function recordRecoveryInfo(archivePageId: string, info: RecoveryInfo, sta
   }
   if (sourceExpected) {
     assert.equal(price, false);
-    assert.deepEqual(before.properties, sourceExpected.properties, "source windowの全propsが開始時から変更されています");
+    assert.deepEqual(stableProperties(before.properties), stableProperties(sourceExpected.properties), "source windowの全propsが開始時から変更されています");
     assert.deepEqual(before.created_time, sourceExpected.created_time, "source windowの作成時計が変更されています");
     assert.deepEqual(before.last_edited_time, sourceExpected.last_edited_time, "source windowの編集時計が変更されています");
     assert.equal(info.sourceQueueVersion, 1);

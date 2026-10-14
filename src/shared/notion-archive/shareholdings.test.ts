@@ -424,6 +424,28 @@ describe("全原表へ束縛するsource有限window", () => {
     expect(savedInfo().sourceNextHoldingOffset).toBe(1);
   });
 
+  it.each(["rotation", "different-object", "different-version"] as const)("Filesの%sを全source CASで検査し、再署名だけを許容する", async change => {
+    windowRouter(); const route = vi.mocked(notionRequest).getMockImplementation()!; let reads = 0;
+    vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
+      const response = await route(method, path, body, options);
+      if (method === "GET" && path === sourcePath) {
+        const n = ++reads, object = change === "different-object" && n > 1 ? "changed-object" : "same-object";
+        const version = change === "different-version" && n > 1 ? "v2" : "v1";
+        (response as { properties: Record<string, unknown> }).properties.Files = { type: "files", files: [{ name: `${source.docId}_xbrl.zip`, type: "file",
+          file: { url: `https://prod-files-secure.s3.us-west-2.amazonaws.com/${object}?versionId=${version}&X-Amz-Date=${n}&X-Amz-Signature=${n}`, expiry_time: String(n) } }] };
+      }
+      return response;
+    });
+    if (change === "rotation") {
+      expect(await publishVerifiedShareholdings({ ...args, maxRows: 1 })).toMatchObject({ status: "held", usedRows: 1, pending: true });
+      expect(savedInfo().sourceNextHoldingOffset).toBe(1);
+    } else {
+      await expect(publishVerifiedShareholdings({ ...args, maxRows: 1 })).rejects.toThrow("全props");
+      expect(queryUniqueRow).not.toHaveBeenCalled();
+      expect(vi.mocked(notionRequest).mock.calls.some(([method]) => method === "PATCH" || method === "POST")).toBe(false);
+    }
+  });
+
   it("ACK不明ではcursor0/unknownを保持し、次回は再送しない", async () => {
     windowRouter(); const route = vi.mocked(notionRequest).getMockImplementation()!;
     vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
