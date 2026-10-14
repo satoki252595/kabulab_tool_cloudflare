@@ -72,6 +72,11 @@ export function toNotionUpload(
   filename: string,
   contentType: string
 ): { filename: string; contentType: string } {
+  // File Upload側の名前とは別に、Files添付の元nameは100文字まで。
+  // upload/原本DB照会前に拒否し、名前や原文を黙って切らない。
+  if (filename.length > 100) {
+    throw new Error("Notion Filesの添付名は100文字以内が必要です（自動短縮なし）");
+  }
   const dot = filename.lastIndexOf(".");
   const ext = dot >= 0 ? filename.slice(dot + 1).toLowerCase() : "";
   if (ext && NOTION_SUPPORTED_EXTENSIONS.has(ext)) {
