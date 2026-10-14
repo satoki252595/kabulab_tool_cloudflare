@@ -1,0 +1,1 @@
+ALTER TABLE `yuho_documents` ADD `overseas_omission_json` text;

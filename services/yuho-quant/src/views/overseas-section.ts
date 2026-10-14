@@ -25,7 +25,7 @@ const PARSE_STATUS_LABEL: Record<string, string> = {
   ok_geo_rows: "構造化済 (地域別売上・地域=行)",
   ok_geo_cols: "構造化済 (地域別売上・地域=列)",
   geo_present_unstructured: "未対応 (地域別売上はあるが構造を判定できず)",
-  no_overseas_table: "海外（地域別）売上の開示なし",
+  no_overseas_table: "構造化できる海外（地域別）売上の表を確認できず",
   parse_error: "解析エラー (原典要確認)",
 };
 
@@ -160,6 +160,7 @@ export const OVERSEAS_SECTION_STYLES = `
 .chart-legend i.sw-overseas{background:var(--bg-invert)}
 .chart-legend i.sw-domestic{background:var(--bg-pure);background-image:repeating-linear-gradient(45deg,var(--border) 0 2px,transparent 2px 6px)}
 .chart-legend i.sw-ratio{background:var(--bg-pure);border-radius:50%;border:2px solid var(--text)}
+.omission-proof{overflow-wrap:anywhere}
 ${TERM_TIP_STYLES}`;
 
 /**
@@ -174,6 +175,15 @@ export function overseasSection(trend: OverseasTrend | null): string {
   const { points, documents, hasStructuredData } = trend;
   const latestDoc = documents[0];
   const latestStatus = latestDoc?.overseasParseStatus ?? null;
+  const omission = latestDoc?.overseasOmission;
+  const omissionNotice = omission === undefined || omission === null ? "" :
+    `<div class="notice"><strong>${termTip("地域別の外部顧客売上の注記を省略", "会社が原典に明記した注記の省略理由です。海外売上の金額や比率を推計するものではなく、別の売上表の数値・未対応状態とは区別します。")}</strong>
+    <details class="omission-proof"><summary>原典の省略理由と出典</summary>
+    <p>文書ID: ${h(omission.docId)} / ${termTip("会計期末", "会社の1年間の決算期間が終わる日です。提出日とは異なります。")}: ${h(omission.periodEnd)}</p>
+    <p>${termTip("原文照合用のSHA-256", "ファイルや原文から計算した識別値です。保存した原典と同じ内容かを照合するために使います。")}</p>
+    ${omission.omission.evidence.map((proof) => `<blockquote>${h(proof.quote)}</blockquote>
+      <p class="muted">本文: ${h(proof.honbunFile)}<br>原文の期間: ${h(proof.contextPeriod.startDate)} ～ ${h(proof.contextPeriod.endDate)}<br>ZIP全文: ${h(omission.zipSha256)}<br>本文: ${h(proof.memberSha256)}<br>注記: ${h(proof.rawBlockSha256)}</p>`).join("")}
+    </details></div>`;
 
   if (hasStructuredData) {
     const latest = [...points].reverse().find((p) => p.overseasYen !== null);
@@ -185,7 +195,7 @@ export function overseasSection(trend: OverseasTrend | null): string {
       <div><span class="lbl">${termTip("連結売上高", "親会社＋子会社を合算した会社全体の売上高。海外売上高比率の分母です。")}</span><span class="val">${oku(latest.totalYen)}<small> 億円</small></span></div>
     </div>`
       : "";
-    return `${heading}${summary}${trendChart(points)}
+    return `${heading}${omissionNotice}${summary}${trendChart(points)}
   <div class="section-label">YEARLY — 最大5年 (地域別内訳付き)</div>
   <div class="table-wrap">${yearTable(points)}</div>`;
   }
@@ -193,6 +203,6 @@ export function overseasSection(trend: OverseasTrend | null): string {
     latestStatus !== null
       ? (PARSE_STATUS_LABEL[latestStatus] ?? latestStatus)
       : "海外売上の取込はこれからです";
-  return `${heading}<div class="notice"><strong>海外（地域別）売上の構造化データはありません。</strong>
-    <span class="st">${h(label)} — 海外売上の開示が無い(内需企業)、または開示形式が現行パーサ未対応</span></div>`;
+  return `${heading}${omissionNotice}<div class="notice"><strong>海外（地域別）売上の構造化データはありません。</strong>
+    <span class="st">${h(label)} — 開示の有無や未対応の理由は原典をご確認ください</span></div>`;
 }

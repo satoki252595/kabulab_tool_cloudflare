@@ -105,6 +105,8 @@ const savedTextStatus = z.nullable(z.enum(["ok", "no_text_sections", "parse_erro
 // 保存行変換は共有正準 (overseas-save-rows.ts) を使用する。
 // (toYen は orders 系が共用。orders の振舞い変更なし。)
 import { toYen, toOverseasSaveRows } from "./overseas-save-rows.js";
+import { serializeOverseasOmission } from "./overseas-omission.js";
+import { sha256HexBytes } from "../../../../src/shared/sha256.js";
 
 /** "2024-06-27 15:30" / "2024-06-27" を Date 化 (JST 表記をそのまま) */
 function parseSubmitDateTime(s: string): Date {
@@ -203,6 +205,8 @@ export async function ingestDocument(
       textParseStatus: yuhoDocuments.textParseStatus,
       periodEnd: yuhoDocuments.periodEnd,
       notionDocPageId: yuhoDocuments.notionDocPageId,
+      // 既存照会で列存在も検査し、migration未適用なら源取得前に停止する。
+      overseasOmissionJson: yuhoDocuments.overseasOmissionJson,
     })
     .from(yuhoDocuments)
     .where(eq(yuhoDocuments.docId, doc.docID))
@@ -309,6 +313,7 @@ export async function ingestDocument(
   let overseasFacts: ReturnType<typeof parseOverseasData>["facts"] = [];
   let overseasProof: ReturnType<typeof parseOverseasData>["proof"];
   let overseasOmission: ReturnType<typeof parseOverseasData>["omission"];
+  let overseasOmissionJson: string | null = null;
 
   const csvZip = await downloadDocument(doc.docID, 5);
   const csvFetchedAt = new Date().toISOString();
@@ -528,6 +533,13 @@ export async function ingestDocument(
         metadata,
         force,
       });
+      if (overseasOmission !== undefined) {
+        overseasOmissionJson = serializeOverseasOmission({ docId: doc.docID, periodEnd,
+          archivePageId: archivedType1.pageId,
+          archiveManifest: archivedType1.manifestMatch === "unknown" ? "unknown" : "known",
+          zipSha256: await sha256HexBytes(new Uint8Array(xbrlZip)),
+          omission: overseasOmission });
+      }
       const holdings = await publishVerifiedShareholdings({ source: { docId: doc.docID, stockCode,
         edinetCode: doc.edinetCode, fiscalYearEnd: periodEnd }, ownerName: doc.filerName, zip: xbrlZip,
         archivePageId: archivedType1.pageId, maxRows: 100, budget: args.holdingsBudget });
@@ -561,6 +573,7 @@ export async function ingestDocument(
         honbunFile,
         overseasParseStatus,
         overseasHonbunFile,
+        overseasOmissionJson,
         textParseStatus,
       })
       .onConflictDoUpdate({
@@ -570,6 +583,7 @@ export async function ingestDocument(
           honbunFile,
           overseasParseStatus,
           overseasHonbunFile,
+          overseasOmissionJson,
           ...(sections.length === 0 ? { textParseStatus } : {}),
           submittedAt: parseSubmitDateTime(doc.submitDateTime),
           periodStart: doc.periodStart,

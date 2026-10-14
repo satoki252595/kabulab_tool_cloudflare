@@ -16,6 +16,15 @@ Cloudflare D1 (`kabulab-cf`) 用のスキーマ生成物。生成は
 
 ## 適用先が 2 系統あることに注意
 
+### 0030 — 地域注記の省略理由（準備のみ・本番未適用）
+
+`0030_overseas_omission_proof.sql` は `yuho_documents.overseas_omission_json`
+nullable TEXT 1列のADDだけ。既存行はNULLで、UPDATEやfacts/statusの変更はない。
+本文・safe20の実処理終端と受入、最新mainへの統合を確認した後、ROOTの別承認で
+SQL適用・列の読戻し・コード配信を行う。既存955件への理由反映も別intentであり、
+このmigrationやデプロイが過去行を埋めることはない。未適用の本番に新query/writerを
+配信しない。snapshot/journalはgenerateで作り、直前0029 snapshotのみ削除した。
+
 | 適用先 | やること |
 | --- | --- |
 | 本番 `kabulab-cf` | **`0010_common_black_bird.sql` は流さない**（適用済み。流すと `duplicate column name` で落ちる）。それ以外の未適用ファイルを番号順に `wrangler d1 execute kabulab-cf --remote --file=...` |

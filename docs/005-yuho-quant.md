@@ -103,6 +103,16 @@ K1a で削除。git 履歴に残る）:
 
 ## DB スキーマ (D1 / 単一 SQLite, 接頭辞テーブル)
 
+`yuho_documents.overseas_omission_json`（0030、nullable TEXT）は、原典に明示された
+地域別外部顧客売上の注記の省略理由だけを保持する。共通helperがversion・docID・
+会計期末、物理保管page ID、parser入力ZIP全文SHA、原文・本文/注記SHA・native期間を
+検証する。通常取込/海外backfillは既存の物理ZIP全読戻し後に同じserializerを使い、
+queryも同じvalidatorで文書と期を照合する。旧manifestのunknownはそのまま保持する。
+NULLは理由未保存であり、非開示の証明ではない。不正JSONは黙ってNULLにしない。
+画面は原文と出典情報を別の売上表の数値・未対応状態と併記し、理由から金額や比率を
+作らない。Notion page IDは内部保管用で公開HTMLへ出さない。本文/既数値の変更や
+既存955件への一括反映、migration本番適用はこの準備に含めない。
+
 ```
 yuho_documents        取り込んだ有報 1 通 = 1 行 (doc_id 一意 = 冪等キー)
   stock_id → core_stocks(id)

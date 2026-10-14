@@ -1,0 +1,166 @@
+[
+  {
+    "code": "1414",
+    "metadata": {
+      "edinetCode": "E00329",
+      "filerName": "ショーボンドホールディングス株式会社",
+      "docTypeCode": "130",
+      "submittedAt": "2026-09-30 15:16",
+      "parseStatus": "table_unrecognized"
+    },
+    "record": {
+      "version": 1,
+      "docId": "S100Z5EY",
+      "periodEnd": "2026-06-30",
+      "archivePageId": "3efd74ff-84cd-819a-9ab2-d29272962fd8",
+      "archiveManifest": "known",
+      "zipSha256": "7a91dd86e30402ec21e2d993c713c33afa5fe3b92501c04dcc09db022446cee7",
+      "omission": {
+        "reason": "domestic_external_sales_over_90_percent",
+        "scope": "regional_external_customer_sales_note",
+        "evidence": [
+          {
+            "honbunFile": "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E00329-000_2026-06-30_02_2026-09-30_ixbrl.htm",
+            "memberSha256": "a7b722c76533c2c8ef10aa6aac2ccaa9401fd3cc617c7c5ef94565920061fd8b",
+            "rawBlockSha256": "99312d5c532551099d92916a061292a80d54b90dd688be6b4ecee471d83bdb22",
+            "quote": "(1）売上高 本邦の外部顧客への売上高が連結損益計算書の売上高の90％を超えるため、記載を省略しています。",
+            "contextPeriod": {
+              "contextRef": "CurrentYearDuration",
+              "entity": "E00329-000",
+              "startDate": "2025-07-01",
+              "endDate": "2026-06-30"
+            }
+          }
+        ]
+      }
+    },
+    "status": "geo_present_unstructured",
+    "facts": []
+  },
+  {
+    "code": "1435",
+    "metadata": {
+      "edinetCode": "E31925",
+      "filerName": "株式会社ｒｏｂｏｔ　ｈｏｍｅ",
+      "docTypeCode": "120",
+      "submittedAt": "2026-03-24 15:30",
+      "parseStatus": "ok_pattern_a"
+    },
+    "record": {
+      "version": 1,
+      "docId": "S100XSYD",
+      "periodEnd": "2025-12-31",
+      "archivePageId": "364d74ff-84cd-81da-8338-d3a4933899a1",
+      "archiveManifest": "unknown",
+      "zipSha256": "2064956f6842509e9aeb53921ba4cbdabe1787c2d026b5bab41f01d1772dfa35",
+      "omission": {
+        "reason": "domestic_external_sales_over_90_percent",
+        "scope": "regional_external_customer_sales_note",
+        "evidence": [
+          {
+            "honbunFile": "XBRL/PublicDoc/0105100_honbun_jpcrp030000-asr-001_E31925-000_2025-12-31_01_2026-03-24_ixbrl.htm",
+            "memberSha256": "f88d4c8b71b6af93589a9753abb0a31a6ea42099056c9887bc97051d34c599bc",
+            "rawBlockSha256": "51ed177c7f450c956dc72642810c3174810e16be5dfd127c5f3147886343117c",
+            "quote": "(1) 売上高 本邦の外部顧客への売上高が連結損益計算書の売上高の90％を超えるため、記載を省略しております。",
+            "contextPeriod": {
+              "contextRef": "CurrentYearDuration",
+              "entity": "E31925-000",
+              "startDate": "2025-01-01",
+              "endDate": "2025-12-31"
+            }
+          }
+        ]
+      }
+    },
+    "status": "geo_present_unstructured",
+    "facts": []
+  },
+  {
+    "code": "372A",
+    "metadata": {
+      "edinetCode": "E40662",
+      "filerName": "株式会社レント",
+      "docTypeCode": "120",
+      "submittedAt": "2026-08-26 16:36",
+      "parseStatus": "no_order_table"
+    },
+    "record": {
+      "version": 1,
+      "docId": "S100YYO2",
+      "periodEnd": "2026-05-31",
+      "archivePageId": "3ecd74ff-84cd-816b-8223-e33057e781ee",
+      "archiveManifest": "known",
+      "zipSha256": "164939bbeb5094d4cfea194f971cdffcae809af8ef281bcf0d0095598866a042",
+      "omission": {
+        "reason": "domestic_external_sales_over_90_percent",
+        "scope": "regional_external_customer_sales_note",
+        "evidence": [
+          {
+            "honbunFile": "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E40662-000_2026-05-31_01_2026-08-26_ixbrl.htm",
+            "memberSha256": "db7b6712b76c75ea418b9d8ed5ed1c3727ec55e9afba8cddd203f130e1fc176a",
+            "rawBlockSha256": "d73fec8fdfded05e8b1aacbee14749797cae0a08ddd08a503158a18712f4f3e2",
+            "quote": "（１）売上高 本邦の外部顧客への売上高が連結損益計算書の売上高の90％を超えるため、記載を省略しております。",
+            "contextPeriod": {
+              "contextRef": "CurrentYearDuration",
+              "entity": "E40662-000",
+              "startDate": "2025-06-01",
+              "endDate": "2026-05-31"
+            }
+          }
+        ]
+      }
+    },
+    "status": "ok_geo_rows",
+    "facts": [
+      {
+        "regionName": "日本",
+        "regionKind": "domestic",
+        "salesAmount": 49321939,
+        "ratioPct": null,
+        "unitLabel": "千円",
+        "unitYenFactor": 1000,
+        "fiscalYearEnd": "2026-05-31",
+        "isConsolidated": true
+      },
+      {
+        "regionName": "アジア",
+        "regionKind": "overseas",
+        "salesAmount": 3623361,
+        "ratioPct": null,
+        "unitLabel": "千円",
+        "unitYenFactor": 1000,
+        "fiscalYearEnd": "2026-05-31",
+        "isConsolidated": true
+      },
+      {
+        "regionName": "海外売上高",
+        "regionKind": "overseas_total",
+        "salesAmount": 3623361,
+        "ratioPct": 6.8,
+        "unitLabel": "千円",
+        "unitYenFactor": 1000,
+        "fiscalYearEnd": "2026-05-31",
+        "isConsolidated": true
+      },
+      {
+        "regionName": "連結売上高",
+        "regionKind": "total",
+        "salesAmount": 52945301,
+        "ratioPct": null,
+        "unitLabel": "千円",
+        "unitYenFactor": 1000,
+        "fiscalYearEnd": "2026-05-31",
+        "isConsolidated": true
+      }
+    ],
+    "proof": {
+      "reconciliationAdjustment": 0,
+      "geoUnclassified": 0,
+      "mode": "unknown",
+      "sumLo": 52945299,
+      "sumHi": 52945302,
+      "totalLo": 52945300.5,
+      "totalHi": 52945302
+    }
+  }
+]
