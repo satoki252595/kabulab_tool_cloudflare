@@ -6,6 +6,7 @@
 `Files.files[0].name.length`の上限100に対する118文字で400となった。
 `pipeline/tests/fixtures/notion/native-filename-118.json`は、その保存済み要求名と
 native validation応答だけの投影。原典path/SHAを同JSONに記録する。
+金融データ値・原文・URL・認証情報を含まない契約メタとして、fixture policyにはこの1pathだけ明示登録する。
 旧送信の成否・原clockを変更せず、失敗した本番処理を再実行していない。
 
 Pythonの通常callerは`jobs/runner.py → upload_raw_artifact → upload_file →
@@ -26,8 +27,8 @@ Nix既存flake/lockからPython3.12.13を使い、`uv sync --offline --locked
 ```text
 pytest test_file_upload.py test_upsert.py test_jobs_smoke.py test_local_store.py
        test_notion_client.py test_notion_create_race.py
-441 passed / 2 existing skipped (tdnet/yanoshin_list_recent.json未取得)
-ruff check owned4 Python files: PASS
+450 passed / 2 existing skipped (tdnet/yanoshin_list_recent.json未取得)
+ruff check owned5 Python files: PASS
 git diff --check: PASS
 ```
 
