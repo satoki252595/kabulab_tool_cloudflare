@@ -24,6 +24,16 @@ beforeEach(() => {
   });
 });
 describe("通常全量だけの価格snapshot activation", () => {
+  it.each([1, 2, 3, 4])("通常snapshotの第%i PUT直前guard拒否は以後の送信0・既ACK不変", async (rejected) => {
+    let calls = 0;
+    const stopped = new Error("completion window expired");
+    const beforeMutation = () => { if (++calls === rejected) throw stopped; };
+    await expect(publishDailyPriceSnapshot({ ...args, beforeMutation })).rejects.toBe(stopped);
+    expect(r2Put).toHaveBeenCalledTimes(rejected - 1);
+    expect(calls).toBe(rejected);
+    if (rejected <= 3) expect(JSON.parse(store.get(PRICE_ACTIVE_KEY)!.body).snapshotId).toBe(base.snapshotId);
+    if (rejected >= 3) expect(JSON.parse(store.get("ops/holdings-price/activation.json")!.body).phase).toBe("inflight");
+  });
   it("初回固定集合は全原本fresh資格→metadata4CAS/readback、再度は既存latchでSTOP", async () => {
     // 件数・順序の構造入力。架空の価格値/原文を保存するテストではない。
     const members = Object.fromEntries(Array.from({ length: 3456 }, (_, i) => {

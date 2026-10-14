@@ -198,11 +198,12 @@ function rememberYahooRateLimit(error: YahooRateLimitError): YahooRateLimitError
 }
 
 /** Yahoo 実通信と Node のプロキシ送信を同じ間隔・停止境界へ通す。 */
-async function pacedYahooFetch(url: string, init: RequestInit): Promise<Response> {
+async function pacedYahooFetch(url: string, init: RequestInit, beforeRequest?: () => void): Promise<Response> {
   const assertNotRateLimited = () => {
     if (credentialRateLimitError !== null && Date.now() < credentialRateLimitedUntil) {
       throw credentialRateLimitError;
     }
+    beforeRequest?.();
   };
   assertNotRateLimited();
   const response = await fetchYahooWithSpacing(url, init, assertNotRateLimited);
@@ -290,7 +291,8 @@ function expireCredentialRefresh(refreshAttempt: number): void {
 
 async function bootstrapYahooCredential(
   refreshAttempt: number,
-  signal: AbortSignal
+  signal: AbortSignal,
+  beforeRequest?: () => void
 ): Promise<{
   crumb: string;
   cookie: string;
@@ -303,7 +305,7 @@ async function bootstrapYahooCredential(
     },
     redirect: "manual",
     signal,
-  });
+  }, beforeRequest);
   assertCredentialRefreshOwner(refreshAttempt);
   if (pageRes.status === 429 || pageRes.status === 503) {
     ensureOk(pageRes);
@@ -321,7 +323,8 @@ async function bootstrapYahooCredential(
         Cookie: cookieStr,
       },
       signal,
-    }
+    },
+    beforeRequest
   );
   assertCredentialRefreshOwner(refreshAttempt);
 
@@ -347,7 +350,7 @@ async function bootstrapYahooCredential(
  * Yahoo Finance の認証値を取得する (30 分キャッシュ + isolate 内 single-flight)。
  * 待機側は自 request の timer だけを await し、bootstrap の I/O Promise を共有しない。
  */
-async function getYahooCredential(): Promise<YahooCredential> {
+async function getYahooCredential(beforeRequest?: () => void): Promise<YahooCredential> {
   const cached = currentYahooCredential();
   if (cached) return cached;
 
@@ -379,7 +382,7 @@ async function getYahooCredential(): Promise<YahooCredential> {
       }
       const refreshError = credentialRefreshErrors[joinedAttempt];
       if (refreshError !== undefined) throw refreshError;
-      return getYahooCredential();
+      return getYahooCredential(beforeRequest);
     } finally {
       removeCredentialRefreshWaiter(joinedAttempt);
     }
@@ -391,7 +394,8 @@ async function getYahooCredential(): Promise<YahooCredential> {
   try {
     const bootstrap = await bootstrapYahooCredential(
       refreshAttempt,
-      AbortSignal.timeout(MAX_CREDENTIAL_REFRESH_MS)
+      AbortSignal.timeout(MAX_CREDENTIAL_REFRESH_MS),
+      beforeRequest
     );
     assertCredentialRefreshOwner(refreshAttempt);
     const credential: YahooCredential = {
@@ -440,8 +444,8 @@ function invalidateYahooCredential(used: YahooCredential): void {
  * 観測した実績あり (typed deadline + cooldown で扱う)。
  * 取込プロキシルート (/api/ingest/yahoo) からも直接呼ばれる (export)。
  */
-export async function yahooFetchDirect(url: string): Promise<Response> {
-  const credential = await getYahooCredential();
+export async function yahooFetchDirect(url: string, beforeRequest?: () => void): Promise<Response> {
+  const credential = await getYahooCredential(beforeRequest);
   const separator = url.includes("?") ? "&" : "?";
   const authUrl = `${url}${separator}crumb=${encodeURIComponent(credential.crumb)}`;
 
@@ -451,11 +455,11 @@ export async function yahooFetchDirect(url: string): Promise<Response> {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
       Cookie: credential.cookie,
     },
-  });
+  }, beforeRequest);
 
   if (res.status === 401) {
     invalidateYahooCredential(credential);
-    const fresh = await getYahooCredential();
+    const fresh = await getYahooCredential(beforeRequest);
     const retryUrl = `${url}${separator}crumb=${encodeURIComponent(fresh.crumb)}`;
     return pacedYahooFetch(retryUrl, {
       headers: {
@@ -463,7 +467,7 @@ export async function yahooFetchDirect(url: string): Promise<Response> {
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         Cookie: fresh.cookie,
       },
-    });
+    }, beforeRequest);
   }
 
   return res;
@@ -479,7 +483,7 @@ export async function yahooFetchDirect(url: string): Promise<Response> {
  *
  * CLAUDE.md ルール2: プロキシ未到達でも別値で握り潰さず、エラーはそのまま伝播させる。
  */
-async function yahooFetch(url: string): Promise<Response> {
+async function yahooFetch(url: string, beforeRequest?: () => void): Promise<Response> {
   const proxyBase = sharedEnv.YAHOO_PROXY_BASE();
   const secret = sharedEnv.CRON_SECRET();
   if (proxyBase && !secret) {
@@ -492,9 +496,9 @@ async function yahooFetch(url: string): Promise<Response> {
     const proxied = `${proxyBase.replace(/\/$/, "")}/api/ingest/yahoo?u=${encodeURIComponent(url)}`;
     return pacedYahooFetch(proxied, {
       headers: { Authorization: `Bearer ${secret}` },
-    });
+    }, beforeRequest);
   }
-  return yahooFetchDirect(url);
+  return yahooFetchDirect(url, beforeRequest);
 }
 
 /** Yahoo の `{ raw, fmt }` フィールドから raw 数値を取り出す */
@@ -626,6 +630,8 @@ function rawCapture(symbol: string, response: Response, bytes: Uint8Array, recei
 }
 
 export interface FetchChartOptions {
+  /** 同期guardをspacing待機/認証後を含む各native fetch直前に検査する。未指定は従来動作。 */
+  beforeRequest?: () => void;
   /**
    * 原文 capture の受取 (任意・1 件)。指定時のみ clone して呼ぶ
    * (未指定の通常呼出はバイト列に触れず従来どおり)。
@@ -711,7 +717,7 @@ export async function fetchChart(
   if (options?.stockDailyScopes) assertStockDailyScopeRequest(symbol, range, options.onRaw);
   const normalized = normalizeSymbol(symbol);
   const url = `${CHART_API_BASE}/${normalized}?range=${range}&interval=1d&events=split%2Cdiv`;
-  const response = await yahooFetch(url);
+  const response = await yahooFetch(url, options?.beforeRequest);
 
   let sourceBytes: Uint8Array | undefined;
   if (options?.onRaw) {
@@ -846,10 +852,11 @@ export async function fetchYahooChartRaw(
   symbol: string,
   range: string,
   interval: string,
-  events = false
+  events = false,
+  beforeRequest?: () => void
 ): Promise<Response> {
   const url = yahooChartSourceUrl(symbol, range, interval, events);
-  return yahooFetch(url);
+  return yahooFetch(url, beforeRequest);
 }
 
 /** chart JSON の最小構造 (fetchBars5m / fetchDaily が読む範囲だけ)。 */
@@ -1070,7 +1077,7 @@ function assertQuoteArrays(
 // 全行 v=0 (妥当 OHLC) → 意図的 business 除外の結果 [] (no-trade 観測。
 // 休日推定・v0 行の保持はしない)。
 export async function fetchBars5m(symbol: string, range = "5d", options?: FetchChartOptions): Promise<Bar5m[]> {
-  const r = await fetchYahooChartRaw(symbol, range, "5m", false);
+  const r = await fetchYahooChartRaw(symbol, range, "5m", false, options?.beforeRequest);
   if (options?.onRaw) {
     const bytes = await readRawBytes(r, symbol);
     await options.onRaw(rawCapture(symbol, r, bytes, new Date().toISOString()));
@@ -1092,7 +1099,7 @@ export async function fetchBars5mWindow(
   url.searchParams.delete("range");
   url.searchParams.set("period1", String(period1));
   url.searchParams.set("period2", String(period2));
-  const response = await yahooFetch(url.toString());
+  const response = await yahooFetch(url.toString(), options?.beforeRequest);
   if (options?.onRaw) {
     const bytes = await readRawBytes(response, symbol);
     await options.onRaw(rawCapture(symbol, response, bytes, new Date().toISOString()));
@@ -1185,7 +1192,7 @@ export async function fetchDaily(
   range = "10y",
   options?: FetchChartOptions
 ): Promise<DailyResult> {
-  const r = await fetchYahooChartRaw(symbol, range, "1d", true);
+  const r = await fetchYahooChartRaw(symbol, range, "1d", true, options?.beforeRequest);
   // body 受信完了で bytes 確定 + clock。onRaw 有無に関わらず取得する (proof のため)。
   const rawBytes = await readRawBytes(r, symbol);
   const observedAt = new Date().toISOString();
@@ -1325,7 +1332,7 @@ export async function fetchQuoteSummary(code: string, options?: FetchChartOption
   }
 
   const url = `${QUOTE_SUMMARY_API_BASE}/${code}.T?modules=${QUOTE_SUMMARY_MODULES}`;
-  const response = await yahooFetch(url);
+  const response = await yahooFetch(url, options?.beforeRequest);
 
   if (options?.onRaw) {
     const bytes = await readRawBytes(response, code);

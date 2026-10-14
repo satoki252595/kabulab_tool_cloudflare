@@ -13,8 +13,12 @@ import { archiveSummaryOrFatal, assertSavedIntraShape, bodyPin, buildIngestSumma
 import { recordPrimaryData } from "../../src/shared/notion-archive/index.js";
 import { archiveYahooRawBatch, type YahooRawAttempt, type YahooRawMissing } from "../../src/shared/yahoo/raw-custody.js";
 import { proveIntraRecoveryCapture, resolveIntraRecoveryWindow, type IntraRecoveryProof } from "./lib/intra-recovery.js";
+import { scheduledVwapGuard } from "./lib/scheduled-window.js";
 
 export async function main() {
+  const startedAt = new Date().toISOString();
+  const runId = resolveRunId();
+  const schedule = scheduledVwapGuard({ plannedDate: arg("scheduled-date"), runId, phase: "intra" });
   // knob は main 内で型付き取得する (未設定・不正値は final catch で exit 2)。
   // 通常値は vwap-ingest.yml・.env.example で明示宣言。黙示既定なし。
   const { delayMs: DELAY, keepDays: KEEP_DAYS } = sharedEnv.vwapKnobs();
@@ -36,9 +40,7 @@ export async function main() {
   if (limit) codes = codes.slice(0, Number(limit));
 
   const cutoffTs = Math.floor(Date.now() / 1000) - KEEP_DAYS * 86400;
-  const startedAt = new Date().toISOString();
   const CONC = 1; // Yahoo取得は環境変数によらず直列。実HTTP間隔は共有clientで制御。
-  const runId = resolveRunId();
   let written = 0, empty = 0, errors = 0, rateLimited = 0, invalid = 0, skipped = 0, done = 0;
   let consecRL = 0, aborted = false, fatal = false;
   let rawCustodyError: unknown;
@@ -72,6 +74,7 @@ export async function main() {
         if (aborted || fatal) return;                        // ブロック/故障検知後は残りを叩かない
         await sleep(DELAY);
         if (aborted || fatal) return;                        // delay 後に再確認してから source へ
+        schedule.assertActive();
         done++;
         // 途中で timeout kill されても進捗が分かるよう定期的に出す(60d バックフィルは長時間)。
         if (done % 500 === 0) console.info(JSON.stringify({ progress: done, total: codes.length, range: RANGE, written, empty, errors, rateLimited }));
@@ -80,11 +83,13 @@ export async function main() {
         try {
           fresh = await retry(async () => {
             if (fatal || aborted) throw new Error("新規Yahoo取得はraw/R2 faultまたはABORTで停止済みです");
+            schedule.assertActive();
             attempt++;
             let captured = false;
             try {
               let rawCapture: YahooRawCapture | undefined;
               const options = {
+                ...(schedule.admission === null ? {} : { beforeRequest: schedule.assertActive }),
                 onRaw: (capture: YahooRawCapture) => {
                   captures.push({ api: "intra", attempt, capture });
                   rawCapture = capture;
@@ -193,6 +198,7 @@ export async function main() {
         writes.push(async () => {
           if (aborted || fatal) return;
           try {
+            schedule.assertActive();
             await r2Put(`intra/${code}.json`, payloadJson, observedVersion);
           } catch (e) {
             // PUT fault は全件 fatal。区別は正直計数する (unknown/rejected/想定外)。
@@ -248,6 +254,11 @@ export async function main() {
   // run 粒度バッチ保管 (per-stock 鏡像は作らない)。通常 intra に必須接続。
   // 保管失敗は fatal exit 2 にする (未保管の成功なし)。
   const summary = buildIngestSummary({ kind: "intra", range: RANGE, ...(sourceWindow === null ? {} : { sourceWindow }), runId, codes: codes.length, written, skipped, empty, errors, invalid, rateLimited, keepDays: KEEP_DAYS, aborted, startedAt, finishedAt, unknown, rejected, universe: universePin(codes), outcomes: sortedOutcomes });
+  if (schedule.admission !== null) {
+    summary.metadata.scheduledWindow = schedule.admission;
+    const body = JSON.parse(new TextDecoder().decode(summary.files[0].bytes));
+    summary.files[0].bytes = new TextEncoder().encode(JSON.stringify({ ...body, scheduledWindow: schedule.admission }));
+  }
   const local = writeSummaryLocal(summary);
   if (!local.ok) {
     console.error(JSON.stringify({ archive: "local-failed", key: summary.key, reason: local.reason }));
@@ -263,6 +274,11 @@ export async function main() {
     return;
   }
   console.info(JSON.stringify({ archive: "recorded", key: summary.key }));
+  try { schedule.assertActive(); } catch (e) {
+    console.error(sanitizeLogText(e instanceof Error ? e.message : String(e)));
+    process.exitCode = 2;
+    return;
+  }
   // errors/invalid/rateLimited 計数があれば非0終了 (銘柄 PUT0 は上で確定済み)。
   // R2 fault (fatal) は 2。
   process.exitCode = resolveExitCode({ aborted, fatalUnknown: fatal, errors, invalid, rateLimited });

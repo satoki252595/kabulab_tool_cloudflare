@@ -1,4 +1,6 @@
 import { marketClosure, type MarketClosure } from "../shared/market-calendar.js";
+import { assertVwapAdmission, scheduledVwapWindow, VWAP_DISPATCH_CRON, VWAP_READCHECK_CRON } from "../shared/vwap-schedule.js";
+export { VWAP_DISPATCH_CRON, VWAP_READCHECK_CRON } from "../shared/vwap-schedule.js";
 
 /**
  * 株式・マクロ sync の CF スケジューラ (Worker scheduled handler 本体)。
@@ -101,8 +103,8 @@ export interface ScheduledControllerLike {
   scheduledTime: number;
 }
 
-export type SchedulerRoute = "dispatch" | "readcheck" | "context-dispatch" | "context-readcheck" | "moneyflow-dispatch" | "moneyflow-readcheck" | "catchup-dispatch" | "catchup-readcheck";
-type SyncKind = "stocks" | "context" | "moneyflow" | "catchup";
+export type SchedulerRoute = "dispatch" | "readcheck" | "context-dispatch" | "context-readcheck" | "moneyflow-dispatch" | "moneyflow-readcheck" | "catchup-dispatch" | "catchup-readcheck" | "vwap-dispatch" | "vwap-readcheck";
+type SyncKind = "stocks" | "context" | "moneyflow" | "catchup" | "vwap";
 
 export interface StockReceipt {
   version: number;
@@ -141,6 +143,8 @@ export function routeCron(cron: string): SchedulerRoute {
   if (cron === MONEYFLOW_READCHECK_CRON) return "moneyflow-readcheck";
   if (cron === CATCHUP_DISPATCH_CRON) return "catchup-dispatch";
   if (cron === CATCHUP_READCHECK_CRON) return "catchup-readcheck";
+  if (cron === VWAP_DISPATCH_CRON) return "vwap-dispatch";
+  if (cron === VWAP_READCHECK_CRON) return "vwap-readcheck";
   throw new Error(
     `未知の cron です: ${cron} (想定: ${DISPATCH_CRON} / ${READCHECK_CRON} / ${CONTEXT_DISPATCH_CRON} / ${CONTEXT_READCHECK_CRON})`
   );
@@ -183,6 +187,13 @@ export function resolveRunDate(
       `UTC 日跨ぎのため対象日が曖昧です: scheduled=${scheduledDate}`
     );
   }
+  if (route === "vwap-dispatch" || route === "vwap-readcheck") {
+    const window = scheduledVwapWindow(scheduledDate); // 月水金だけ。休場は後段で明示skip。
+    if (route === "vwap-dispatch") {
+      if (scheduledTimeMs !== window.start) throw new Error("VWAP予定時刻が17:00 JSTではありません");
+      assertVwapAdmission(scheduledDate, nowMs);
+    }
+  }
   if (route === "dispatch" || route === "context-dispatch" || route === "moneyflow-dispatch" || route === "catchup-dispatch") {
     const delayMs = nowMs - scheduledTimeMs;
     const deadlineMinutes = route === "catchup-dispatch" ? 5 : route === "context-dispatch"
@@ -211,6 +222,10 @@ export function moneyflowReceiptKey(scheduledDate: string): string {
 
 export function catchupReceiptKey(scheduledDate: string): string {
   return `stock-scheduler/catchup-receipt-${scheduledDate}.json`;
+}
+
+export function vwapReceiptKey(scheduledDate: string): string {
+  return `stock-scheduler/vwap-receipt-${scheduledDate}.json`;
 }
 
 /**
@@ -297,10 +312,11 @@ async function postDispatch(
   scheduledDate: string,
   kind: SyncKind
 ): Promise<DispatchDetails> {
-  const workflow = kind === "catchup" ? "catchup.yml" : kind === "moneyflow" ? "moneyflow.yml" : WORKFLOW_FILE;
+  const workflow = kind === "catchup" ? "catchup.yml" : kind === "moneyflow" ? "moneyflow.yml" : kind === "vwap" ? "vwap-ingest.yml" : WORKFLOW_FILE;
   const inputs = kind === "moneyflow" ? { only: "independent" } : {
-    target: kind === "stocks" ? DISPATCH_TARGET : kind === "context" ? CONTEXT_DISPATCH_TARGET : "scheduled-catchup",
+    target: kind === "stocks" ? DISPATCH_TARGET : kind === "context" ? CONTEXT_DISPATCH_TARGET : kind === "vwap" ? "scheduled-daily-intra" : "scheduled-catchup",
     scheduled_date: scheduledDate,
+    ...(kind === "vwap" ? { daily_session_source: "yahoo-direct" } : {}),
   };
   const res = await fetchFn(
     `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}` +
@@ -397,12 +413,16 @@ export function runCatchupDispatch(deps: DispatchDeps): Promise<DispatchOutcome>
   return runScheduledDispatch(deps, "catchup");
 }
 
+export function runVwapDispatch(deps: DispatchDeps): Promise<DispatchOutcome> {
+  return runScheduledDispatch(deps, "vwap");
+}
+
 async function runScheduledDispatch(deps: DispatchDeps, kind: SyncKind): Promise<DispatchOutcome> {
   const expectedCron = kind === "stocks" ? DISPATCH_CRON : kind === "context"
-    ? CONTEXT_DISPATCH_CRON : kind === "moneyflow" ? MONEYFLOW_DISPATCH_CRON : CATCHUP_DISPATCH_CRON;
+    ? CONTEXT_DISPATCH_CRON : kind === "moneyflow" ? MONEYFLOW_DISPATCH_CRON : kind === "vwap" ? VWAP_DISPATCH_CRON : CATCHUP_DISPATCH_CRON;
   if (deps.cron !== expectedCron) throw new Error("dispatch の種別と cron が一致しません");
   const key = kind === "stocks" ? receiptKey(deps.scheduledDate) : kind === "context"
-    ? contextReceiptKey(deps.scheduledDate) : kind === "moneyflow" ? moneyflowReceiptKey(deps.scheduledDate) : catchupReceiptKey(deps.scheduledDate);
+    ? contextReceiptKey(deps.scheduledDate) : kind === "moneyflow" ? moneyflowReceiptKey(deps.scheduledDate) : kind === "vwap" ? vwapReceiptKey(deps.scheduledDate) : catchupReceiptKey(deps.scheduledDate);
   const { claimed, etag } = await claimReceipt(deps.bucket, key, {
     version: RECEIPT_VERSION,
     scheduledDate: deps.scheduledDate,
@@ -462,6 +482,7 @@ export interface RunJobStep {
   status: string;
   conclusion: string | null;
   completed_at: string | null;
+  started_at?: string | null;
 }
 
 export interface RunJob {
@@ -595,6 +616,7 @@ export async function fetchAllJobs(
             status: requiredJobString(step["status"], "step status"),
             conclusion: nullableJobString(step["conclusion"], "step conclusion"),
             completed_at: nullableJobString(step["completed_at"], "step completed_at"),
+            ...(step["started_at"] === undefined ? {} : { started_at: nullableJobString(step["started_at"], "step started_at") }),
           };
         });
       }
@@ -707,7 +729,7 @@ export function evaluateReadcheck(
 export interface ValidDispatchedReceipt {
   version: typeof RECEIPT_VERSION;
   scheduledDate: string;
-  cron: typeof DISPATCH_CRON | typeof CONTEXT_DISPATCH_CRON | typeof MONEYFLOW_DISPATCH_CRON | typeof CATCHUP_DISPATCH_CRON;
+  cron: typeof DISPATCH_CRON | typeof CONTEXT_DISPATCH_CRON | typeof MONEYFLOW_DISPATCH_CRON | typeof CATCHUP_DISPATCH_CRON | typeof VWAP_DISPATCH_CRON;
   status: "dispatched";
   claimedAt: string;
   dispatchedAt: string;
@@ -725,7 +747,7 @@ function parseStoredReceipt(
   text: string,
   key: string,
   expectedDate: string,
-  expectedCron: typeof DISPATCH_CRON | typeof CONTEXT_DISPATCH_CRON | typeof MONEYFLOW_DISPATCH_CRON | typeof CATCHUP_DISPATCH_CRON
+  expectedCron: typeof DISPATCH_CRON | typeof CONTEXT_DISPATCH_CRON | typeof MONEYFLOW_DISPATCH_CRON | typeof CATCHUP_DISPATCH_CRON | typeof VWAP_DISPATCH_CRON
 ): ValidDispatchedReceipt {
   let json: unknown;
   try {
@@ -939,6 +961,47 @@ export async function runMoneyflowDeadlineReadcheck(deps: {
   return { moneyflowCompletedAt };
 }
 
+export interface VwapReadcheckVerdict { vwapCompletedAt: string }
+
+/** 受付/部分成功は完了にせず、定時の日足+5分足だけの一意成功・開始/終了窓を確認。 */
+export function evaluateVwapReadcheck(jobs: RunJob[], scheduledDate: string): VwapReadcheckVerdict {
+  const ingest = jobs.filter((job) => job.name === "ingest");
+  if (jobs.length !== 1 || ingest.length !== 1 || ingest[0].status !== "completed" || ingest[0].conclusion !== "success") {
+    throw new Error("VWAP ingest jobが一意の成功完了ではありません");
+  }
+  const steps = ingest[0].steps;
+  const producer = steps?.filter((step) => step.name === "VWAP daily + intra → R2");
+  if (!producer || producer.length !== 1 || producer[0].status !== "completed" || producer[0].conclusion !== "success") {
+    throw new Error("VWAP日足+5分足stepが一意の成功完了ではありません");
+  }
+  const started = typeof producer[0].started_at === "string" ? Date.parse(producer[0].started_at) : NaN;
+  assertVwapAdmission(scheduledDate, started);
+  const done = stepCompletedAtMs(producer[0], "VWAP日足+5分足");
+  if (done < started || done > scheduledVwapWindow(scheduledDate).completionCutoff) {
+    throw new Error("VWAP日足+5分足の完了が同日23:30 JSTの期限外です");
+  }
+  for (const name of ["VWAP intra backfill → R2", "VWAP margin (daily) → R2"]) {
+    const other = steps?.filter((step) => step.name === name);
+    if (!other || other.length !== 1 || other[0].conclusion !== "skipped") {
+      throw new Error("VWAP定時scope外stepのskipを証明できません");
+    }
+  }
+  return { vwapCompletedAt: producer[0].completed_at as string };
+}
+
+export async function runVwapDeadlineReadcheck(deps: {
+  bucket: SchedulerBucket; token: string; scheduledDate: string; fetchFn: typeof fetch;
+}): Promise<VwapReadcheckVerdict> {
+  const key = vwapReceiptKey(deps.scheduledDate);
+  const obj = await deps.bucket.get(key);
+  if (obj === null) throw new Error(`VWAP receiptがありません: ${key}`);
+  const receipt = parseStoredReceipt(await obj.text(), key, deps.scheduledDate, VWAP_DISPATCH_CRON);
+  const jobs = await fetchAllJobs(deps.fetchFn, deps.token, receipt.workflowRunId);
+  const verdict = evaluateVwapReadcheck(jobs, deps.scheduledDate);
+  console.info(`[stock-scheduler] VWAP readcheck OK: date=${deps.scheduledDate} run_id=${receipt.workflowRunId} completed_at=${verdict.vwapCompletedAt}`);
+  return verdict;
+}
+
 /**
  * Worker scheduled handler 本体。cron で分岐し、各 await を await する。
  * 失敗は throw (Cron Events に error として残る)。Dispatch 受付は
@@ -948,7 +1011,7 @@ export async function handleStockScheduled(
   controller: ScheduledControllerLike,
   env: SchedulerEnv,
   deps: { fetchFn?: typeof fetch; nowMs?: number } = {}
-): Promise<DispatchOutcome | ReadcheckVerdict | ContextReadcheckVerdict | MoneyflowReadcheckVerdict | CatchupReadcheckVerdict | { status: "market_closed"; scheduledDate: string; closures: MarketClosure[] }> {
+): Promise<DispatchOutcome | ReadcheckVerdict | ContextReadcheckVerdict | MoneyflowReadcheckVerdict | CatchupReadcheckVerdict | VwapReadcheckVerdict | { status: "market_closed"; scheduledDate: string; closures: MarketClosure[] }> {
   const route = routeCron(controller.cron);
   const nowMs = deps.nowMs ?? Date.now();
   const scheduledDate = resolveRunDate(route, controller.scheduledTime, nowMs);
@@ -977,6 +1040,12 @@ export async function handleStockScheduled(
   }
   const token = schedulerToken(env);
   const fetchFn = deps.fetchFn ?? fetch;
+  if (route === "vwap-dispatch" || route === "vwap-readcheck") {
+    const common = { bucket: env.BUCKET, token, scheduledDate, fetchFn };
+    return route === "vwap-dispatch"
+      ? runVwapDispatch({ ...common, cron: controller.cron, nowMs })
+      : runVwapDeadlineReadcheck(common);
+  }
   if (route === "dispatch" || route === "context-dispatch") {
     console.info(
       `[stock-scheduler] dispatch 開始: date=${scheduledDate} cron=${controller.cron}`
