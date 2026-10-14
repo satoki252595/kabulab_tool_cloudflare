@@ -224,3 +224,26 @@ unknown. Full original ZIPs and signed URLs remain private. The preceding
 rights and regression-only conditions apply; no new redistribution or code
 license is granted to the original filing content. Negative transformations
 occur only in tests and never become primary sources.
+
+## Regional sales with native source context (2026-10-14)
+
+`overseas-source-backed-five.json.gz` contains verbatim TextBlock excerpts
+from 1379/S100YKAZ, 4290/S100YFPN, 6345/S100YBY2, 6484/S100YH48,
+7085/S100X61U and the different-basis regression 6877/S100XB5N.
+The 82,230-byte gzip SHA-256 is
+`715c72f4830eabb97ca4333b0882e320a43d56454cb9e807aacb3662887e6757`.
+The paired provenance separates complete original ZIP/member hashes from
+UTF-16 excerpt intervals and fixture-member hashes. XML projections preserve
+original root attributes and native context declarations, including the real
+6484 FilingDateInstant; omitted facts and headers are not reconstructed.
+These are regression containers, not complete original filing ZIPs.
+
+The source-backed checks distinguish regional Other from business columns,
+external sales from production, parent totals from child rows, and customer
+location from group-company location. Hidden text and an actual prior-year
+MDA context are negative controls. No missing foreign value, numerical zero,
+source clock or current-year context is invented. Unknown original HTTP clocks
+remain unknown. Full ZIPs and signed URLs remain private. The preceding rights
+and regression-only conditions apply; no new redistribution or code license is
+granted to original filing content. Negative transformations occur only in
+tests and never become primary sources.
