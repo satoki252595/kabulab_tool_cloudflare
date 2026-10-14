@@ -38,7 +38,9 @@ import { createHash } from "node:crypto";
 import { unzip } from "./edinet/zip.js";
 import {
   readFilingDurationContexts,
+  readFilingDateInstant,
   type DurationContext,
+  type FilingDateInstant,
   type FilingDurationContexts,
 } from "./edinet/duration-context.js";
 import {
@@ -97,12 +99,26 @@ export interface OverseasProof {
   /** 総額セルの区間。total 欠損 (9147 系) は null。 */
   totalLo: number | null;
   totalHi: number | null;
-  /** 単一値行の原表で、裸のその他を地理区分と直接証明した場合だけ運ぶ。 */
+  /** 原表で、裸のその他を地理区分と直接証明した場合だけ運ぶ。 */
   otherGeography?: {
     label: string;
     contextPeriod: DurationContext;
     classificationNote: string;
+    /** 原表直後に明示されたbasis。構造axisから所在地の種類を推定しない。 */
+    basisNote?: string;
+    axis?: "primary_geographic_markets_rows" | "closed_geographic_rows_business_columns";
   };
+  /** 外部売上を持たない旨が同年度連結MDAに明示された地域。0値は生成しない。 */
+  internalOnlyRegions?: Array<{
+    label: string;
+    quote: string;
+    honbunFile: string;
+    memberSha256: string;
+    rawBlockSha256: string;
+    contextPeriod: DurationContext;
+    /** MDA が実際に参照した context。提出日時点を current duration と偽らない。 */
+    sourceContext: DurationContext | FilingDateInstant;
+  }>;
 }
 
 /** 明示された地域売上の省略理由。金額/比率や他の開示表の未対応を補わない。 */
@@ -224,6 +240,7 @@ export interface ReducerTrace {
   totalLabel: string | null;
   /** 採用した地域行/列の (leaf indices, label)。 */
   adopted: Array<{ indices: number[]; label: string }>;
+  geographicAxis?: NonNullable<OverseasProof["otherGeography"]>["axis"];
 }
 
 /** 1表の構造化結果。facts と照合の証明を対で返す */
@@ -276,16 +293,68 @@ function hasGeographicClassification(note: string): boolean {
     /国(?:又は|または)地域の区分は地理的近接度/.test(n);
 }
 
+function geographicBasis(note: string): "customer_location" | "group_company_location" | null {
+  const n = norm(note).replace(/[、,]/g, "");
+  if (/売上高は顧客の所在地を基礎とし(?:て)?国(?:又は|または)地域(?:ごと|別)?に分類/.test(n)) return "customer_location";
+  if (/売上高は当社グループ各社の所在地を基礎とし(?:て)?国(?:又は|または)地域(?:ごと|別)?に分類/.test(n)) return "group_company_location";
+  return null;
+}
+
+/** 証拠用の同長mask。既知の非表示subtreeだけ除き、元offset/SHAと可視siblingを保つ。 */
+function maskInvisibleProofHtml(html: string): string {
+  const masked = html.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g,
+    (text) => " ".repeat(text.length));
+  const ranges: Array<[number, number]> = [];
+  let hiddenStart = -1, hiddenName = "", hiddenDepth = 0;
+  for (const match of masked.matchAll(/<\/?([a-z][\w:.-]*)\b(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi)) {
+    const tag = match[0], name = match[1].toLowerCase(), closing = tag.startsWith("</");
+    const selfClosing = /\/\s*>$/.test(tag) || /^(?:area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)$/.test(name);
+    if (hiddenStart >= 0) {
+      if (name === hiddenName && !selfClosing) hiddenDepth += closing ? -1 : 1;
+      if (hiddenDepth !== 0) continue;
+      ranges.push([hiddenStart, match.index + tag.length]);
+      hiddenStart = -1;
+      continue;
+    }
+    if (closing) continue;
+    const hidden = name === "ix:hidden" || /\b(?:hidden|display|visibility)\b/i.test(tag) &&
+      [...tag.slice(1 + match[1].length, -1).matchAll(/([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)]
+        .some((attribute) => {
+          const key = attribute[1].toLowerCase();
+          if (key === "hidden") return true;
+          if (key !== "style") return false;
+          const value = attribute[2] ?? attribute[3] ?? attribute[4];
+          return value !== undefined && /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)\s*(?:!important\s*)?(?:;|$)/i
+            .test(stripHtml(value).replace(/\/\*[\s\S]*?\*\//g, ""));
+        });
+    if (!hidden) continue;
+    if (selfClosing) ranges.push([match.index, match.index + tag.length]);
+    else { hiddenStart = match.index; hiddenName = name; hiddenDepth = 1; }
+  }
+  if (hiddenStart >= 0) ranges.push([hiddenStart, masked.length]);
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    parts.push(masked.slice(cursor, start), " ".repeat(end - start));
+    cursor = end;
+  }
+  parts.push(masked.slice(cursor));
+  return parts.join("");
+}
+
 /** 当該TextBlock内、表直後から次のtable/ix境界までの実注記だけ読む。 */
 function geographicNoteAfter(
   html: string,
-  table: ReturnType<typeof tablesWithHeading>[number]
+  table: ReturnType<typeof tablesWithHeading>[number],
+  proofHtml: string,
 ): string | null {
   if (table.textBlock === null) return null;
-  const after = html.slice(table.start + table.table.length);
+  const start = table.start + table.table.length;
+  const after = html.slice(start);
   const boundary = /<\/?(?:table|ix:nonNumeric)\b/i.exec(after);
   if (boundary === null) return null;
-  return stripHtml(after.slice(0, boundary.index).replace(/<!--[\s\S]*?-->/g, ""));
+  if (/\bcontinuedAt\s*=/i.test(after.slice(0, boundary.index).replace(/<!--[\s\S]*?-->/g, ""))) return null;
+  return stripHtml(proofHtml.slice(start, start + boundary.index));
 }
 /**
  * 総額列の見出し (連結/合計/計)。S100FHUH で実証: 当連結の報告セグメント表は
@@ -868,7 +937,10 @@ function tryGeoRows(
   gridX: string[][],
   fiscalYearEnd: string,
   heading: string,
-  mode: RoundingMode
+  mode: RoundingMode,
+  revenuePeriod?: DurationContext | null,
+  caption?: string,
+  geographicNote: string | null = null,
 ): ParsedTable | GeoIncomplete | null {
   const flat = gridX.map((r) => r.join("")).join("");
   // 単位は表外の見出し ((単位：百万円) 等) に書かれることが多い → heading も見る
@@ -915,6 +987,104 @@ function tryGeoRows(
   const pick = pickValueColForRows(colHeader, gridX.slice(firstNum), reportYear);
   if (!pick) return null;
   const vc = pick.col;
+
+  // 6345: 主たる地域市場の行軸と、報告segment/その他(注)の列軸を区別する。
+  // 表内の実当期・連結・総額列とnative期間が揃う場合だけ、裸Other行を地理とする。
+  const marketAxis = caption?.match(/主たる地域市場\s*$/)?.[0];
+  const marketTitle = caption === undefined ? null : lastRangedFiscalTitle(caption);
+  const marketRange = marketTitle === null ? null : /自(.+?)至(.+?)[）)]/.exec(marketTitle);
+  const firstAggregate = roles.findIndex((role, index) => index >= firstNum && role === "aggregate");
+  const regionRows = roles.slice(firstNum, firstAggregate < 0 ? roles.length : firstAggregate);
+  const bareRowIndices = gridX.flatMap((row, index) =>
+    index >= firstNum && (firstAggregate < 0 || index < firstAggregate) && isBareOther(cleanLabel(row[0] ?? "")) ? [index] : []);
+  // 明示見出しが無い収益分解は、地域行×事業列の全印刷小計閉包でだけ証明する。
+  // dash は原記号のまま照合から除く。0値へ変換せず、未知行/列/bridge は拒否する。
+  const closedMatrix = (() => {
+    if (marketAxis !== undefined || revenuePeriod?.contextRef !== "CurrentYearDuration" ||
+      revenuePeriod.endDate !== fiscalYearEnd || firstAggregate <= firstNum || vc !== width - 1 ||
+      !/報告セグメント/.test(headerRows.flat().join("")) || vc < 3 ||
+      !colHeader.slice(1, vc).every((label) => /事業/.test(label) && !/その他|other/i.test(label)) ||
+      !regionRows.every((role, index) => role === "domestic" ||
+        (role === "overseas" && !isBareOther(cleanLabel(gridX[firstNum + index][0]))) ||
+        isBareOther(cleanLabel(gridX[firstNum + index][0])))) return false;
+    const contract = gridX[firstAggregate], bridge = gridX[firstAggregate + 1], external = gridX[firstAggregate + 2];
+    if (gridX.length !== firstAggregate + 3 || norm(contract[0]) !== "顧客との契約から生じる収益" ||
+      !bridge || norm(bridge[0]) !== "その他の収益" ||
+      !bridge.slice(1).every((cell) => /^\s*[－―ー—−-]\s*$/.test(cell)) ||
+      !external || norm(external[0]) !== "外部顧客への売上高") return false;
+    const numeric = (cell: string): CellAmount | null => parseJpNumberCell(cell);
+    const regionGrid = gridX.slice(firstNum, firstAggregate);
+    if (regionGrid.some((row) => row.length !== width || row.slice(1).some((cell) => {
+      const amount = numeric(cell);
+      return amount === null ? !/^\s*[－―ー—−-]\s*$/.test(cell) : !Number.isInteger(amount.value);
+    }))) return false;
+    for (let ci = 1; ci <= vc; ci++) {
+      const contractCell = numeric(contract[ci]), externalCell = numeric(external[ci]);
+      if (!contractCell || !externalCell || contractCell.value !== externalCell.value ||
+        !cellsConsistent(regionGrid.flatMap((row) => { const cell = numeric(row[ci]); return cell ? [cell] : []; }), contractCell, mode)) return false;
+    }
+    if (!cellsConsistent(contract.slice(1, vc).map((value) => numeric(value)!), numeric(contract[vc])!, mode)) return false;
+    return regionGrid.every((row) => {
+      const total = numeric(row[vc]);
+      return total !== null && cellsConsistent(row.slice(1, vc).flatMap((value) => { const cell = numeric(value); return cell ? [cell] : []; }), total, mode);
+    });
+  })();
+  const otherGeography: OverseasProof["otherGeography"] = (marketAxis !== undefined || closedMatrix) &&
+    marketRange !== null && revenuePeriod !== undefined && revenuePeriod !== null &&
+    revenuePeriod.contextRef === "CurrentYearDuration" &&
+    revenuePeriod.endDate === fiscalYearEnd &&
+    endDateChunkToIso(marketRange[1]) === revenuePeriod.startDate &&
+    endDateChunkToIso(marketRange[2]) === revenuePeriod.endDate &&
+    pick.isAggregateCol && /報告セグメント/.test(headerRows.flat().join("")) &&
+    bareRowIndices.length === 1 && regionRows.filter((role) => role === "domestic").length === 1 &&
+    regionRows.filter((role) => role === "overseas").length > 1 &&
+    gridX.some((row) => norm(row[0] ?? "") === "外部顧客への売上高")
+      ? { label: cleanLabel(gridX[bareRowIndices[0]][0]), contextPeriod: revenuePeriod,
+        classificationNote: marketAxis === undefined ? "報告セグメント列と地域行の全印刷小計が一致" : marketAxis.trim(),
+        ...(geographicNote !== null && geographicBasis(geographicNote) !== null ? { basisNote: geographicNote } : {}),
+        axis: marketAxis === undefined ? "closed_geographic_rows_business_columns" : "primary_geographic_markets_rows" }
+      : undefined;
+
+  // 当期連結の収益分解で、国内等の親行と空stubで字下げされた商品子行。
+  // 各親子の原額区間を照合してから子行を外す。未知の子・欠測・矛盾は従来HOLD。
+  const hierarchyChildren = (() => {
+    if (!revenuePeriod || revenuePeriod.contextRef !== "CurrentYearDuration" ||
+      revenuePeriod.endDate !== fiscalYearEnd) return undefined;
+    const title = lastRangedFiscalTitle(colHeader[vc] ?? "");
+    const range = title === null ? null : /自(.+?)至(.+?)[）)]/.exec(title);
+    if (!range || endDateChunkToIso(range[1]) !== revenuePeriod.startDate ||
+      endDateChunkToIso(range[2]) !== revenuePeriod.endDate) return undefined;
+    if (!gridX.some((row) => norm(row[0] ?? "") === "外部顧客への売上高")) return undefined;
+    const labelWidth = gridX[firstNum].findIndex((cell) => parseJpNumber(cell) !== null);
+    if (labelWidth < 2 || vc < labelWidth) return undefined;
+    const nodes: Array<{ cell: CellAmount; children: number[] }> = [];
+    const stack: number[] = [], children = new Set<number>();
+    for (let i = firstNum; i < gridX.length && roles[i] !== "aggregate"; i++) {
+      if (excluded.has(i)) return undefined;
+      const labels = gridX[i].slice(0, labelWidth).map(cleanLabel);
+      const depth = labels.findIndex((label) => label !== "");
+      if (depth < 0 || labels.slice(depth).some((label) => label !== "" && label !== labels[depth]))
+        return undefined;
+      const cell = parseJpNumberCell(gridX[i][vc] ?? "");
+      if (!cell || !Number.isInteger(cell.value)) return undefined;
+      if (depth === 0) {
+        if ((roles[i] !== "domestic" && roles[i] !== "overseas") || isBareOther(labels[0]))
+          return undefined;
+      } else {
+        if (depth > stack.length ||
+          (classifyRegion(labels[depth]) !== "other" && !isBareOther(labels[depth]))) return undefined;
+        nodes[stack[depth - 1]].children.push(nodes.length);
+        children.add(i);
+      }
+      nodes.push({ cell, children: [] });
+      stack.length = depth;
+      stack.push(nodes.length - 1);
+    }
+    if (children.size === 0 || nodes.some((node) => node.children.length > 0 &&
+      !cellsConsistent(node.children.map((index) => nodes[index].cell), node.cell, mode)))
+      return undefined;
+    return children;
+  })();
 
   // 集計行 (顧客との契約から生じる収益 / 外部顧客への売上高 / 合計 / 連結 / 計) を
   // すべて控える。地域行は「顧客との契約」水準で按分され、「外部顧客への売上高」
@@ -976,6 +1146,7 @@ function tryGeoRows(
 
   for (let i = firstNum; i < gridX.length; i++) {
     if (excluded.has(i)) continue;
+    if (hierarchyChildren?.has(i)) continue;
     const row = gridX[i];
     // 短行は missing cell として共通分類へ通す (tableToGridExpanded は
     // 行ごとの幅で push し全表 padding しないため到達可能。欠損 leaf の
@@ -1127,7 +1298,7 @@ function tryGeoRows(
     // 修飾なしその他行は地理の立証がないため採用しない (W81W その他 1462)。
     // 実数・欠損とも未分類として共有位置で候補ごと却下する (fail-closed)。
     // 修飾つき (その他海外/直接輸出等) は従来どおり採用する。
-    if (isBareOther(rowName)) {
+    if (isBareOther(rowName) && otherGeography === undefined) {
       if (v !== null && cell !== null) {
         geoUnclassifiedCells.push({
           label: rowName,
@@ -1492,10 +1663,12 @@ function tryGeoRows(
       sumHi: proofSumHi,
       totalLo,
       totalHi,
+      ...(otherGeography ? { otherGeography } : {}),
     },
     valueAxisHeader: colHeader[vc] ?? "",
     trace: {
       kind: "rows",
+      ...(otherGeography?.axis ? { geographicAxis: otherGeography.axis } : {}),
       valueIndex: vc,
       valueLabel: colHeader[vc] ?? "",
       totalIndex: totalAgg?.idx ?? null,
@@ -1885,8 +2058,9 @@ function tryGeoCols(
   caption: string = "",
   textBlock: string | null = null,
   contextPeriod?: DurationContext | null,
-  geographicNote: string | null = null
-): ParsedTable | "single_row_fiscal_unknown" | "single_row_fiscal_mismatch" | GeoIncomplete | null {
+  geographicNote: string | null = null,
+  internalOnlyRegions: NonNullable<OverseasProof["internalOnlyRegions"]> = []
+): ParsedTable | "single_row_fiscal_unknown" | "single_row_fiscal_mismatch" | "internal_region_conflict" | GeoIncomplete | null {
   const flat = gridX.map((r) => r.join("")).join("");
   const unit = detectUnitOrNull(flat) ?? detectUnitOrNull(heading);
   if (!unit) return null;
@@ -2067,6 +2241,7 @@ function tryGeoCols(
     quantum: number;
   }> = [];
   const incompleteMissingLabels: string[] = [];
+  const excludedInternalRegions: NonNullable<OverseasProof["internalOnlyRegions"]> = [];
   interface Col {
     index: number;
     name: string;
@@ -2158,11 +2333,29 @@ function tryGeoCols(
     if (EXCL.test(h)) continue;
     const vcell = parseJpNumberCell(gridX[valueRow][ci] ?? "");
     if (vcell !== null && !Number.isInteger(vcell.value)) return null;
+    const title = lastRangedFiscalTitle(caption);
+    const range = title === null ? null : /自(.+?)至(.+?)[）)]/.exec(title);
+    const internal = internalOnlyRegions.find((e) => e.label === hClean &&
+      e.contextPeriod.entity === contextPeriod?.entity &&
+      e.contextPeriod.startDate === contextPeriod?.startDate &&
+      e.contextPeriod.endDate === contextPeriod?.endDate);
+    const internalExternalScope = role === "overseas" &&
+      norm(gridX[valueRow][0]) === "外部顧客への売上高" &&
+      textBlock === "NotesSegmentInformationEtcConsolidatedFinancialStatementsTextBlock" &&
+      contextPeriod?.contextRef === "CurrentYearDuration" && internal !== undefined &&
+      range !== null && endDateChunkToIso(range[1]) === contextPeriod.startDate &&
+      endDateChunkToIso(range[2]) === contextPeriod.endDate;
+    if (internalExternalScope && vcell !== null) return "internal_region_conflict";
     // 既知地域列の売上 leaf 欠損は黙殺しない (rows と同一の完全性)。
     // metric/集計列は上で除外済み。grouping の前に共有位置で却下する。
     // ラベル列 (col0 の行ラベルセル) は leaf ではないため除く。
     if (vcell === null) {
       if (valueRowLabeled && ci === 0) continue;
+      if (internalExternalScope && internal !== undefined &&
+        /^\s*[－―ー—−-]\s*$/.test(gridX[valueRow][ci])) {
+        excludedInternalRegions.push(internal);
+        continue;
+      }
       incompleteMissingLabels.push(cleanLabel(gridX[headerIdx][ci] ?? ""));
       continue;
     }
@@ -2364,6 +2557,7 @@ function tryGeoCols(
       totalLo,
       totalHi,
       ...(otherGeography ? { otherGeography } : {}),
+      ...(excludedInternalRegions.length > 0 ? { internalOnlyRegions: excludedInternalRegions } : {}),
     },
     valueAxisHeader: singleRowAxis ?? gridX[valueRow]?.join("") ?? "",
     ...(singleRowProof ? { singleRowProof } : {}),
@@ -2418,18 +2612,39 @@ export function validateOverseasSaveSet(
     (f) => f.regionKind === "domestic" || f.regionKind === "overseas"
   );
   if (regions.length === 0) return; // 集計のみ/空集合は対象外
+  if (proof?.internalOnlyRegions?.some((e) =>
+    classifyRegion(e.label) !== "overseas" ||
+    regions.some((f) => f.regionName === e.label) || facts.some((f) => f.isConsolidated !== true) ||
+    e.contextPeriod.contextRef !== "CurrentYearDuration" ||
+    e.contextPeriod.endDate !== facts[0].fiscalYearEnd ||
+    e.contextPeriod.startDate >= e.contextPeriod.endDate ||
+    !e.sourceContext || e.sourceContext.entity !== e.contextPeriod.entity ||
+    ("startDate" in e.sourceContext
+      ? e.sourceContext.startDate !== e.contextPeriod.startDate || e.sourceContext.endDate !== e.contextPeriod.endDate
+      : e.sourceContext.contextRef !== "FilingDateInstant" ||
+        /_\d{2}_(\d{4}-\d{2}-\d{2})_ixbrl\.html?$/.exec(e.honbunFile)?.[1] !== e.sourceContext.instantDate) ||
+    e.quote !== `${e.label}におきましては、グループ間のみの売買取引となります。` ||
+    !/^[a-f0-9]{64}$/.test(e.memberSha256) || !/^[a-f0-9]{64}$/.test(e.rawBlockSha256))) {
+    throw new Error("保存集合の内部取引限定地域の原典証明が不正です。");
+  }
   if (regions.some((f) => f.salesAmount === null)) {
     throw new Error("保存集合に欠損の地域売上があります。");
   }
   // 裸Otherは原表の直接証明を保存境界まで必須とする。旧proofへ後付けしない。
   const bareOthers = regions.filter((f) => isBareOther(f.regionName));
   const geography = proof?.otherGeography;
+  if (geography?.basisNote !== undefined && geographicBasis(geography.basisNote) === null) {
+    throw new Error("保存集合の地域所在地basis注記が不明です。");
+  }
   if (bareOthers.length > 0 && (
     bareOthers.length !== 1 || geography === undefined ||
     geography.label !== bareOthers[0].regionName || bareOthers[0].regionKind !== "overseas" ||
     geography.contextPeriod.endDate !== bareOthers[0].fiscalYearEnd ||
     geography.contextPeriod.startDate >= geography.contextPeriod.endDate ||
-    !hasGeographicClassification(geography.classificationNote) ||
+    (!hasGeographicClassification(geography.classificationNote) &&
+      !(((geography.axis === "primary_geographic_markets_rows" && norm(geography.classificationNote) === "主たる地域市場") ||
+         (geography.axis === "closed_geographic_rows_business_columns" && geography.classificationNote === "報告セグメント列と地域行の全印刷小計が一致")) &&
+        geography.contextPeriod.contextRef === "CurrentYearDuration")) ||
     facts.some((f) => f.isConsolidated !== true) ||
     regions.filter((f) => f.regionKind === "domestic").length !== 1 ||
     !facts.some((f) => f.regionKind === "total" && f.salesAmount !== null)
@@ -2553,30 +2768,12 @@ function scoreCandidate(
  * 実地域売上 TextBlock の省略文だけを読む。入れ子 nonNumeric は depth で
  * 閉じ、continuation/未閉鎖は不明のまま。コメントは証拠にしない。
  */
-function geographicOmissionBlocks(html: string): Array<{
+function geographicOmissionBlocks(html: string, masked: string, textBlock = SINGLE_ROW_SALES_TEXTBLOCK): Array<{
   html: string;
   visibleHtml: string;
   contextRef: string | null;
   complete: boolean;
 }> {
-  let masked = html.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g,
-    (text) => " ".repeat(text.length));
-  let hiddenStart = -1, hiddenDepth = 0;
-  for (const match of masked.matchAll(/<\/?ix:hidden\b[^>]*>/gi)) {
-    const closing = match[0].startsWith("</"), selfClosing = /\/\s*>$/.test(match[0]);
-    if (hiddenStart < 0) {
-      if (closing || selfClosing) continue;
-      hiddenStart = match.index;
-      hiddenDepth = 1;
-      continue;
-    }
-    if (!selfClosing) hiddenDepth += closing ? -1 : 1;
-    if (hiddenDepth !== 0) continue;
-    const end = match.index + match[0].length;
-    masked = masked.slice(0, hiddenStart) + " ".repeat(end - hiddenStart) + masked.slice(end);
-    hiddenStart = -1;
-  }
-  if (hiddenStart >= 0) masked = masked.slice(0, hiddenStart) + " ".repeat(masked.length - hiddenStart);
   const blocks: ReturnType<typeof geographicOmissionBlocks> = [];
   let start = -1, depth = 0, contextRef: string | null = null;
   let continued = false;
@@ -2584,7 +2781,7 @@ function geographicOmissionBlocks(html: string): Array<{
     const tag = match[0], closing = tag.startsWith("</"), selfClosing = /\/\s*>$/.test(tag);
     if (start < 0) {
       const name = /\sname\s*=\s*(["'])([^"']+)\1/.exec(tag)?.[2];
-      if (closing || selfClosing || name !== `jpcrp_cor:${SINGLE_ROW_SALES_TEXTBLOCK}`) continue;
+      if (closing || selfClosing || name !== `jpcrp_cor:${textBlock}`) continue;
       start = match.index + tag.length;
       depth = 1;
       const context = /\scontextRef\s*=\s*(["'])([^"']+)\1/.exec(tag);
@@ -2649,14 +2846,39 @@ export function parseOverseasData(
   // に戻す。heading/caption/wide は各本文だけから作り、他本文を借りない。
   const sources = new Map<number, { honbunFile: string; start: number }>();
   const omissionEvidence: OverseasOmission["evidence"] = [];
+  const internalOnlyRegions: NonNullable<OverseasProof["internalOnlyRegions"]> = [];
   const currentRegionalTables: DurationContext[] = [];
   let omissionIncomplete = false;
   let base = 0;
   for (const body of bodies) {
+    const proofHtml = maskInvisibleProofHtml(body.html);
     const durationContexts = readFilingDurationContexts(
       entries, body.name, reportPeriodEnd
     );
-    for (const block of geographicOmissionBlocks(body.html)) {
+    const nativeCurrent = durationContexts.get("CurrentYearDuration");
+    if (nativeCurrent?.endDate === reportPeriodEnd && /グループ間のみ/.test(body.html)) {
+      for (const block of geographicOmissionBlocks(body.html, proofHtml,
+        "ManagementAnalysisOfFinancialPositionOperatingResultsAndCashFlowsTextBlock")) {
+        if (!block.complete) continue;
+        const duration = block.contextRef === null ? undefined : durationContexts.get(block.contextRef);
+        const sourceContext = duration || (block.contextRef === "FilingDateInstant"
+          ? readFilingDateInstant(entries, body.name, reportPeriodEnd) : null);
+        if (!sourceContext || sourceContext.entity !== nativeCurrent.entity ||
+          ("startDate" in sourceContext && (sourceContext.startDate !== nativeCurrent.startDate ||
+            sourceContext.endDate !== nativeCurrent.endDate))) continue;
+        const visible = stripHtml(block.visibleHtml);
+        for (const match of visible.matchAll(/([^\s。]{1,30})におきましては、グループ間のみの売買取引となります。/g)) {
+          const label = match[1];
+          const relative = [...visible.slice(0, match.index).matchAll(/(当|前)連結会計年度/g)].at(-1);
+          if (relative?.[1] !== "当" || classifyRegion(label) !== "overseas" || isBareOther(label)) continue;
+          internalOnlyRegions.push({ label, quote: match[0], honbunFile: body.name,
+            memberSha256: createHash("sha256").update(entries.get(body.name)!).digest("hex"),
+            rawBlockSha256: createHash("sha256").update(block.html).digest("hex"),
+            contextPeriod: nativeCurrent, sourceContext });
+        }
+      }
+    }
+    for (const block of geographicOmissionBlocks(body.html, proofHtml)) {
       if (!block.complete) {
         omissionIncomplete = true;
         continue;
@@ -2683,8 +2905,8 @@ export function parseOverseasData(
     for (const table of tablesWithHeading(body.html)) {
       const start = base + table.start;
       sources.set(start, { honbunFile: body.name, start: table.start });
-      tables.push({ ...table, start, durationContexts,
-        geographicNote: geographicNoteAfter(body.html, table) });
+      tables.push({ ...table, start, durationContexts, internalOnlyRegions,
+        geographicNote: geographicNoteAfter(body.html, table, proofHtml) });
     }
     base += body.html.length + 1;
   }
@@ -2782,10 +3004,14 @@ interface PeriodPairCand {
   wide: string;
   axis: string;
   singleRowProof?: SingleRowProof;
+  trace?: ReducerTrace;
 }
 
 /** 表文面に非売上 metric の標識 (IFRS 移行日列・資産/減損の語) があるか */
-function hasMetricMarkers(flat: string): boolean {
+function hasMetricMarkers(flat: string, trace?: ReducerTrace): boolean {
+  // 採用する外部顧客売上行が直接確定した表の、別行の資産等を混ぜない。
+  if (trace?.kind === "cols" && norm(trace.valueLabel) === "外部顧客への売上高")
+    return false;
   return /移行日|非流動資産|減損損失|有形固定資産|無形資産/.test(flat);
 }
 
@@ -2849,10 +3075,14 @@ function fiscalOfCand(
  */
 function contractOfCand(c: {
   singleRowProof?: SingleRowProof;
+  trace?: ReducerTrace;
   facts: OverseasFact[];
   heading: string;
   flat: string;
 }): SalesContract {
+  // 実採用行が外部顧客売上なら、同表の内部売上/契約小計を採用範囲に混ぜない。
+  if (c.trace?.kind === "cols" && norm(c.trace.valueLabel) === "外部顧客への売上高")
+    return "ext";
   return c.singleRowProof?.contract ?? contractOf(c.facts, c.heading, c.flat);
 }
 
@@ -3116,7 +3346,7 @@ function pickCurrentOfFiscalPair(
   // 同一 contract の T/Z ペアに限る (Gate2。違う集計範囲の表同士の
   // 総額比較は無意味なため STOP へ流す)。
   if (contractOfCand(a) !== contractOfCand(b)) return null;
-  if (hasMetricMarkers(a.flat) || hasMetricMarkers(b.flat)) return null;
+  if (hasMetricMarkers(a.flat, a.trace) || hasMetricMarkers(b.flat, b.trace)) return null;
   const inhA = fiscalOfCand(a, pe);
   const inhB = fiscalOfCand(b, pe);
   if (!inhA || !inhB || inhA === "mismatch" || inhB === "mismatch") return null;
@@ -3141,10 +3371,11 @@ export function parseOverseasHtml(
   } = {}
 ): Omit<OverseasExtraction, "honbunFile"> {
   const mode = opts.roundingMode ?? detectRoundingMode(html).mode;
+  const proofHtml = maskInvisibleProofHtml(html);
   return parseOverseasTables(
     tablesWithHeading(html).map((table) => ({
       ...table, durationContexts: opts.durationContexts,
-      geographicNote: geographicNoteAfter(html, table),
+      geographicNote: geographicNoteAfter(html, table, proofHtml),
     })),
     reportPeriodEnd,
     { roundingMode: mode, capture: opts.capture }
@@ -3154,6 +3385,7 @@ export function parseOverseasHtml(
 type OverseasTable = ReturnType<typeof tablesWithHeading>[number] & {
   durationContexts?: FilingDurationContexts;
   geographicNote: string | null;
+  internalOnlyRegions?: OverseasProof["internalOnlyRegions"];
 };
 
 /** 単一 HTML と ZIP 全本文で同じ候補・証拠・曖昧性 Gate を使う。 */
@@ -3177,6 +3409,7 @@ function parseOverseasTables(
     wide: string;
     axis: string;
     singleRowProof?: SingleRowProof;
+    trace?: ReducerTrace;
   }
   const candidates: Cand[] = [];
   const buffered: {
@@ -3190,6 +3423,7 @@ function parseOverseasTables(
     wide: string;
     scope: ScopeResolution;
     singleRowProof?: SingleRowProof;
+    trace?: ReducerTrace;
   }[] = [];
 
   // 任意 diagnostic の採取口 (capture 未指定なら全て no-op)。
@@ -3230,6 +3464,7 @@ function parseOverseasTables(
     start,
     durationContexts,
     geographicNote,
+    internalOnlyRegions,
   } of tables) {
     // S100YD7J: 遠い表題が見出し窓から消えても、原典 TextBlock は
     // 減損損失と明示する。算術整合する地域別減損額を売上へ採用しない。
@@ -3300,7 +3535,10 @@ function parseOverseasTables(
       });
     };
     {
-      const rows = tryGeoRows(grid, reportPeriodEnd, heading, mode);
+      const rows = tryGeoRows(grid, reportPeriodEnd, heading, mode,
+        textBlock === "NotesRevenueRecognitionConsolidatedFinancialStatementsTextBlock" &&
+          durationContexts !== undefined && contextRef !== null
+          ? durationContexts.get(contextRef) : undefined, caption, geographicNote);
       if (rows && "marker" in rows) capReject("rows", rows);
       else if (rows)
         cand = {
@@ -3321,8 +3559,13 @@ function parseOverseasTables(
         textBlock,
         durationContexts === undefined ? undefined :
           contextRef === null ? null : (durationContexts.get(contextRef) ?? null),
-        geographicNote
+        geographicNote,
+        internalOnlyRegions
       );
+      if (cols === "internal_region_conflict") {
+        markCap("geo_present_unstructured", "internal-region-conflict", null);
+        return { status: "geo_present_unstructured", facts: [], tablesScanned };
+      }
       // 単一行の売上直接証明はあるが caption/実context で期を証明できない
       // → fiscal-unknown STOP。wide (前表) 継承で採用しない。
       if (cols === "single_row_fiscal_unknown") {
@@ -3449,6 +3692,7 @@ function parseOverseasTables(
         flat: b.flat,
         wide: b.wide,
         ...(b.singleRowProof ? { singleRowProof: b.singleRowProof } : {}),
+        ...(b.trace ? { trace: b.trace } : {}),
       });
     }
   }
@@ -3465,13 +3709,18 @@ function parseOverseasTables(
   }
 
   if (candidates.length > 0) {
-    // Otherの直接証明を持つ同じ当期・連結・単位の原表は、score差でも矛盾を選ばない。
+    // 同basis/不明のOther表はscore差でも矛盾を選ばない。原表直後に別basisが
+    // 明示された場合だけ分離し、既存の地域注記優先選択へ進む (6877)。
     const geographicOthers = candidates.filter((c) => c.proof.otherGeography !== undefined);
     for (const candidate of geographicOthers) {
-      if (geographicOthers.some((other) =>
-        candidate.facts[0].unitYenFactor === other.facts[0].unitYenFactor &&
-        normFactsKey(candidate.facts) !== normFactsKey(other.facts)
-      )) {
+      if (geographicOthers.some((other) => {
+        const a = candidate.proof.otherGeography!, b = other.proof.otherGeography!;
+        const aBasis = geographicBasis(a.basisNote === undefined ? a.classificationNote : a.basisNote);
+        const bBasis = geographicBasis(b.basisNote === undefined ? b.classificationNote : b.basisNote);
+        const differentProvenBasis = aBasis !== null && bBasis !== null && aBasis !== bBasis;
+        return !differentProvenBasis && candidate.facts[0].unitYenFactor === other.facts[0].unitYenFactor &&
+          normFactsKey(candidate.facts) !== normFactsKey(other.facts);
+      })) {
         markCap("geo_present_unstructured", "other-geography-conflict", null);
         return { status: "geo_present_unstructured", facts: [], tablesScanned };
       }
@@ -3531,7 +3780,7 @@ function parseOverseasTables(
       if (groups.size === 1) {
         // 全 top が同一 group・同一キー。metric 標識つきの収束は
         // 非売上値の保存になり得るので STOP (fail-closed)。
-        if (tops.some((c) => hasMetricMarkers(c.flat))) {
+        if (tops.some((c) => hasMetricMarkers(c.flat, c.trace))) {
           markCap("geo_present_unstructured", "metric-markers", null);
           return { status: "geo_present_unstructured", facts: [], tablesScanned };
         }
