@@ -1930,7 +1930,19 @@ async function buildSnapshot(
     onSummaryRaw: rawOptions.onSummaryRaw,
   });
   rawOptions?.assertCaptured();
+  return buildStockSnapshot(stockId, code, sector, expectedDate, raw, jssAnnualRows, chartRaw);
+}
 
+/** 通常日次・保存原本補完が共有する純計算。取得・書込・clock生成は含まない。 */
+export function buildStockSnapshot(
+  stockId: number,
+  code: string,
+  sector: string | null,
+  expectedDate: string,
+  raw: Awaited<ReturnType<typeof fetchStockRawData>>,
+  jssAnnualRows: JssAnnualRow[] = [],
+  chartRaw?: YahooRawCapture,
+): StockSnapshot {
   // -- 6mo スライス (swing 用指標の入力。fresh gate の対象もここ) --
   const ohlcv6mo = raw.ohlcv.slice(-130);
   // 日付一致だけでなく対象日の実終値 (adj ?? close) も要求する。

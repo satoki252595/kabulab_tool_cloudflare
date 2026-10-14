@@ -724,7 +724,15 @@ export async function fetchChart(
     await throwYahooHttpError(`Chart API HTTP エラー [${symbol}]`, response);
   }
 
-  const json = await response.json();
+  return qualifyChartResponse(await response.json(), symbol, new Date().toISOString().split("T")[0],
+    options?.stockDailyScopes, sourceBytes);
+}
+
+/** 取得と保存原本replayで共有する資格化。時計も原文も明示入力からのみ使う。 */
+async function qualifyChartResponse(
+  json: unknown, symbol: string, emptyDataDate: string,
+  stockDailyScopes?: true, sourceBytes?: Uint8Array, receivedAt?: string,
+): Promise<ChartResult> {
   const {
     bars: rawBars,
     meta,
@@ -732,13 +740,18 @@ export async function fetchChart(
     closePrices,
   } = parseChartResponse(json, symbol);
 
+  if (receivedAt !== undefined && (timestamps.length === 0 ||
+    timestamps.some(ts => !Number.isFinite(ts) || ts * 1000 > Date.parse(receivedAt)))) {
+    throw new Error("保存Yahoo原本の日足時刻が欠測または実captureclockより未来です");
+  }
+
   // 桁の壊れたバーを取り込まない (bar-sanity.ts 参照)。
   // 1909 の 2026-09-11 は close=16,278,046,720 / volume=0（前日 3,700）で、
   // これが業種平均を汚染して 003 のトップに「機械 +2,105,009.25%」が出た。
   // 共有 guard (修復 replay と同一判定)。棄却の warn は従来どおり出す。
   let rsiHistoryHold: RsiHistoryHold | undefined;
   // 同じ5y原本から最初に用途を分ける。履歴エラーをcatchして別取得へ切り替えない。
-  const badAdjusted = options?.stockDailyScopes
+  const badAdjusted = stockDailyScopes
     ? rawBars.filter((bar) => typeof bar.adj === "number" && bar.adj <= 0)
     : [];
   if (badAdjusted.length > 0) {
@@ -769,7 +782,7 @@ export async function fetchChart(
   const latestTs = timestamps[timestamps.length - 1];
   const dataDate = latestTs
     ? toDateString(latestTs)
-    : new Date().toISOString().split("T")[0];
+    : emptyDataDate;
 
   // source 明示 previousClose のみ。chartPreviousClose / 日足終値での補完は
   // しない (実測で別意味と確定 — 呼び出し側は実バー終値で前日比を組む)。
@@ -1323,7 +1336,11 @@ export async function fetchQuoteSummary(code: string, options?: FetchChartOption
     await throwYahooHttpError(`QuoteSummary API HTTP エラー [${code}]`, response);
   }
 
-  const json = await response.json();
+  return parseQuoteSummaryResponse(await response.json(), code);
+}
+
+/** 通常取得と保存原本で同じ尺度判定・丸め・年度系列を使う。 */
+function parseQuoteSummaryResponse(json: unknown, code: string): QuoteSummaryResult {
   const parsed = yahooQuoteSummaryResponseSchema.parse(json);
 
   if (parsed.quoteSummary.error) {
@@ -1468,9 +1485,12 @@ export async function fetchStockRawData(
   if (chartResult.status !== "fulfilled" || summaryResult.status !== "fulfilled") {
     throw new Error("Yahoo取得結果が確定しません");
   }
-  const chart = chartResult.value;
-  const summary = summaryResult.value;
+  return combineStockRawData(chartResult.value, summaryResult.value);
+}
 
+function combineStockRawData(
+  chart: ChartResult, summary: QuoteSummaryResult,
+): StockRawData & { rsiHistoryHold?: RsiHistoryHold } {
   return {
     price: chart.price,
     per: summary.per,
@@ -1487,4 +1507,76 @@ export async function fetchStockRawData(
     annualFinancials: summary.annualFinancials,
     ...(chart.rsiHistoryHold === undefined ? {} : { rsiHistoryHold: chart.rsiHistoryHold }),
   };
+}
+
+/** 保存済み原文の期待値は、物理保管receiptの全body SHA/実bytesから渡す。 */
+export interface SavedYahooRawCapture {
+  capture: YahooRawCapture;
+  expectedSha256: string;
+  expectedByteLength: number;
+}
+
+async function assertSavedStockCapture(
+  code: string, api: "chart" | "quote-summary", saved: SavedYahooRawCapture, proxyBase?: string,
+): Promise<void> {
+  const { capture, expectedSha256, expectedByteLength } = saved;
+  if (capture.symbol !== code || capture.status !== 200 ||
+    (capture.headers.upstreamStatus !== undefined && capture.headers.upstreamStatus !== "200") ||
+    !/^[0-9a-f]{64}$/.test(expectedSha256) || !Number.isSafeInteger(expectedByteLength) ||
+    expectedByteLength <= 0 || expectedByteLength > MAX_YAHOO_RAW_BYTES ||
+    capture.bytes.byteLength !== expectedByteLength ||
+    !Number.isFinite(Date.parse(capture.receivedAt)) ||
+    new Date(capture.receivedAt).toISOString() !== capture.receivedAt) {
+    throw new Error("保存Yahoo原本の対象・HTTP・全bytes・実clockが不一致です");
+  }
+  const outer = new URL(capture.url);
+  const proxy = proxyBase === undefined ? undefined : new URL(proxyBase);
+  if (outer.protocol !== "https:" || outer.port || outer.username || outer.password || outer.hash ||
+    (proxy !== undefined && (proxy.protocol !== "https:" || proxy.port || proxy.username || proxy.password || proxy.search || proxy.hash))) {
+    throw new Error("保存Yahoo原本のHTTPS・proxy設定が不正です");
+  }
+  let request = outer;
+  if (proxy !== undefined && outer.origin === proxy.origin &&
+    outer.pathname === `${proxy.pathname.replace(/\/$/, "")}/api/ingest/yahoo` &&
+    outer.searchParams.getAll("u").length === 1 && [...outer.searchParams.keys()].every(k => k === "u")) {
+    request = new URL(outer.searchParams.get("u")!);
+  }
+  const expectedBase = api === "chart" ? CHART_API_BASE : QUOTE_SUMMARY_API_BASE;
+  const expected = new URL(`${expectedBase}/${code}.T`);
+  const params = api === "chart"
+    ? { range: "5y", interval: "1d", events: "split,div" }
+    : { modules: QUOTE_SUMMARY_MODULES };
+  // directのcrumbは既存raw captureで秘匿済み。値は使わず、意味を変える余分なqueryは拒否する。
+  if (outer.username || outer.password || outer.hash || request.username || request.password || request.hash ||
+    request.origin !== expected.origin || request.pathname !== expected.pathname ||
+    !Object.entries(params).every(([key, value]) => request.searchParams.getAll(key).length === 1 && request.searchParams.get(key) === value) ||
+    [...request.searchParams.keys()].some(key => key !== "crumb" && !Object.hasOwn(params, key)) ||
+    request.searchParams.getAll("crumb").length > 1) {
+    throw new Error("保存Yahoo原本の要求銘柄・5y/1d・modulesが不一致です");
+  }
+  if (await sha256HexBytes(new Uint8Array(capture.bytes)) !== expectedSha256) {
+    throw new Error("保存Yahoo原本の全body SHAが不一致です");
+  }
+}
+
+/**
+ * 株式日次の保存原本専用入口。fetch/時計生成/書込を行わず、通常取得と同じ関数で資格化する。
+ * proxyBaseは保存時の正規proxyを明示する。原本clock・URL・SHAを新しい取得として作り直さない。
+ */
+export async function parseSavedStockRawData(
+  code: string,
+  source: { chart: SavedYahooRawCapture; summary: SavedYahooRawCapture },
+  options?: { proxyBase?: string },
+): Promise<StockRawData & { rsiHistoryHold?: RsiHistoryHold }> {
+  if (!JP_STOCK_PATTERN.test(code)) throw new Error("保存Yahoo原本の日本株コードが不正です");
+  await assertSavedStockCapture(code, "chart", source.chart, options?.proxyBase);
+  await assertSavedStockCapture(code, "quote-summary", source.summary, options?.proxyBase);
+  if (Date.parse(source.summary.capture.receivedAt) < Date.parse(source.chart.capture.receivedAt)) {
+    throw new Error("保存Yahoo原本の逐次取得clockが逆転しています");
+  }
+  const chartJson: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(source.chart.capture.bytes));
+  const summaryJson: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(source.summary.capture.bytes));
+  const chart = await qualifyChartResponse(chartJson, code, source.chart.capture.receivedAt.split("T")[0],
+    true, source.chart.capture.bytes, source.chart.capture.receivedAt);
+  return combineStockRawData(chart, parseQuoteSummaryResponse(summaryJson, code));
 }

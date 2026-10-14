@@ -22,6 +22,7 @@ import {
   _resetBatchRunIdForTests,
   archivePriceSyncBatch,
   buildPriceSyncBatch,
+  buildStockSnapshot,
   categorizeSyncFailure,
   isDailySyncIncomplete,
   isTransientDailySyncFailure,
@@ -38,7 +39,7 @@ import { makeTxBatchSender } from "./tests/overlay-test-sender.js";
 
 const fakeCollect: OverlayCollectFn = fakeOverlayCollect;
 
-import { fetchChart, fetchStockRawData, parseChartResponse, YahooRawTooLargeError } from "../shared/yahoo/client.js";
+import { fetchChart, fetchStockRawData, parseSavedStockRawData, YahooRawTooLargeError } from "../shared/yahoo/client.js";
 import "../shared/yahoo/nikkei-vi.js";
 import {
   ensurePriceSyncDb,
@@ -463,13 +464,26 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     vi.mocked(Date.now).mockReturnValue(Date.parse("2026-10-14T10:16:00Z"));
     vi.mocked(fetchChart).mockImplementation(chartWithRaw(sessionChart("2026-10-14")));
     const projectionBodies = JSON.parse(gunzipSync(readFileSync(new URL("../shared/yahoo/fixtures/stock-daily-scopes-20261014.json.gz", import.meta.url))).toString()) as Record<string, string>;
-    const chart = parseChartResponse(JSON.parse(projectionBodies["8303-chart"]), "8303");
-    // CIは実原典の最小projection。元1221/245本の原SHA検査はprivate原本で別に固定。
-    const hold = { scope: "rsi-5y", reasonCode: "non_positive_adjusted_close", invalidBars: 1,
-      firstDate: "2022-03-30", lastDate: "2022-03-30",
-      sourceSha256: "713a310eae4050629ad65572ff79e6afcd694cd7aecac5b3e9ecbdb889cd6b9f" } as const;
-    const value = { ...stockRaw(130, "2026-10-14"), price: chart.meta.regularMarketPrice,
-      ohlcv: chart.bars.slice(-130), rsiHistoryHold: hold };
+    const source = Object.fromEntries((["chart", "quote-summary"] as const).map((api) => {
+      const bytes = new TextEncoder().encode(projectionBodies[`8303-${api}`]);
+      const expectedSha256 = api === "chart"
+        ? "713a310eae4050629ad65572ff79e6afcd694cd7aecac5b3e9ecbdb889cd6b9f"
+        : "fa010a5432d415c9b25303ccc15862df647a48ec4acaf9ff57df961cad0488a0";
+      return [api === "chart" ? "chart" : "summary", { expectedSha256, expectedByteLength: bytes.byteLength,
+        capture: { symbol: "8303", status: 200, bytes, headers: {},
+          url: api === "chart"
+            ? "https://query1.finance.yahoo.com/v8/finance/chart/8303.T?range=5y&interval=1d&events=split%2Cdiv"
+            : "https://query1.finance.yahoo.com/v10/finance/quoteSummary/8303.T?modules=financialData,defaultKeyStatistics,summaryDetail,incomeStatementHistory",
+          receivedAt: api === "chart" ? "2026-10-14T10:15:47.400Z" : "2026-10-14T10:15:48.285Z" } }];
+    })) as Parameters<typeof parseSavedStockRawData>[1];
+    // 正常定時入口も同じpure builderへ接続。保存済みprojectionは原clockで解析しtransport0。
+    const value = await parseSavedStockRawData("8303", source);
+    const hold = value.rsiHistoryHold!;
+    const snapshot = buildStockSnapshot(1, "8303", null, "2026-10-14", value, [], source.chart.capture);
+    expect(snapshot).toMatchObject({ price: 1478.5, latestDate: "2026-10-14", rsiPercentile: null, rsiHistoryHold: hold });
+    expect(snapshot.ohlcv6mo).toHaveLength(130);
+    expect(() => buildStockSnapshot(1, "8303", null, "2026-10-15", value, [], source.chart.capture))
+      .toThrow(/実日足が未取得/);
     vi.mocked(fetchStockRawData).mockImplementation(async (...args) => {
       const [symbol, , options] = args;
       for (const [api, hook] of [["chart", options?.onChartRaw], ["quote-summary", options?.onSummaryRaw]] as const) {
@@ -509,6 +523,10 @@ describe("runDailySync 配線: 保管してから return/throw", () => {
     expect(Number(fin?.fetched_at)).toBeGreaterThan(1);
     expect(Number.isInteger(fin?.fetched_at)).toBe(true);
     expect(sqlite.prepare("SELECT latest_date FROM swing_stock_indicators").get()).toEqual({ latest_date: "2026-10-14" });
+    expect(sqlite.prepare("SELECT sma_5, sma_20, sma_75, atr_14, rsi_14, macd, macd_signal, pct_change_1d FROM swing_stock_indicators").get())
+      .toEqual({ sma_5: snapshot.sma5, sma_20: snapshot.sma20, sma_75: snapshot.sma75,
+        atr_14: snapshot.atr14, rsi_14: snapshot.rsi14, macd: snapshot.macd,
+        macd_signal: snapshot.macdSignal, pct_change_1d: snapshot.pctChange1d });
     expect(sqlite.prepare("SELECT open, high, low, close, volume, adj FROM swing_daily_ohlcv WHERE date = '2026-10-14'").get())
       .toEqual({ open: 1481, high: 1489.5, low: 1461.5, close: 1478.5, volume: 3868600, adj: 1478.5 });
     const momentum = sqlite.prepare("SELECT as_of, bars, closes FROM p_momentum").get();
