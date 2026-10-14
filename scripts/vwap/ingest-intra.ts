@@ -238,7 +238,8 @@ export async function main() {
       rawCustodyError = e;
       console.error(`intra raw custody STOP: ${sanitizeLogText(e instanceof Error ? e.message : String(e)).slice(0, 200)}`);
     }
-    await mapLimit(writes, CONC, async (write) => write());
+    // 全batchの原本照合後、異なるR2 keyだけ最大2件。Yahoo取得のCONC=1とは分離する。
+    await mapLimit(writes, 2, async (write) => write());
   }
   // 未着手の全件 accounting。prepared-but-stopped は上で latest 付き notStarted。
   for (const code of codes) {
