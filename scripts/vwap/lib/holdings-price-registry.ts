@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { r2GetVersion, r2Put } from "./r2.js";
 import { priceActiveSchema, priceSnapshotSchema, PRICE_ACTIVE_KEY, type PriceReference, type PriceSnapshot } from "../../../src/shared/holdings/price-registry.js";
+import { resolveLatestHoldingsCodeList } from "../../sync/holdings-code-list.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const ACTIVATION_KEY = "ops/holdings-price/activation.json";
@@ -81,9 +82,11 @@ export async function publishDailyPriceSnapshot(args: {
   const before = await readActive();
   if (before.active === null || before.snapshot === null) return { status: "held", reason: "初期snapshotのfresh物理受入・有効化が未実施です" };
   assert.ok(args.sessionDate >= before.snapshot.sessionDate, "価格snapshotの対象sessionが後退しています");
+  const codeList = await resolveLatestHoldingsCodeList(before.snapshot.codeList, args.finishedAt);
+  if (codeList.status === "held") return codeList;
   const members = Object.fromEntries([...args.codes].sort().map(code => [`${code}.T`, args.references.get(code)!]));
   const snapshot = priceSnapshotSchema.parse({ version: 1, snapshotId: args.runId, sessionDate: args.sessionDate,
-    createdAt: args.finishedAt, codeList: before.snapshot.codeList, members });
+    createdAt: args.finishedAt, codeList: codeList.file, members });
   assert.ok(Object.values(snapshot.members).every(ref => Date.parse(ref.receivedAt) <= Date.parse(args.finishedAt)), "価格原本の実時計がrun完了後です");
   const evidence = (s: PriceSnapshot) => JSON.stringify({ sessionDate: s.sessionDate, codeList: s.codeList, members: s.members });
   if (evidence(snapshot) === evidence(before.snapshot)) return { status: "unchanged" };

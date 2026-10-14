@@ -9,6 +9,7 @@ import { notionRequest } from "../../src/shared/notion-archive/client.js";
 import { parseHoldingsCodeList } from "../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import type { Shareholding } from "../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import type { PriceFile, PriceSnapshot } from "../../src/shared/holdings/price-registry.js";
+import * as codeLists from "./holdings-code-list.js";
 vi.mock("../vwap/lib/holdings-price-registry.js", () => ({ readActivatedPriceSnapshot: vi.fn() }));
 vi.mock("../moneyflow/lib/archived-files.js", () => ({ downloadArchivedFile: vi.fn() }));
 vi.mock("../../src/shared/notion-archive/client.js", () => ({ notionRequest: vi.fn() }));
@@ -86,5 +87,25 @@ describe("通常Nodeの保存価格loader", () => {
     vi.mocked(notionRequest).mockResolvedValue(invalid);
     await expect(createHoldingPriceSourceLoader()([holding], budget())).rejects.toThrow();
     expect(downloadArchivedFile).not.toHaveBeenCalled();
+  });
+  it("codeListのcapture bytesもrun予算へ数え、known budgetだけ再開しunknownは再送しない", async () => {
+    const read = vi.spyOn(codeLists, "readVerifiedHoldingsCodeList");
+    read.mockRejectedValueOnce(new codeLists.HoldingsCodeListBudgetError("capture budget"));
+    const loader = createHoldingPriceSourceLoader(), limit = budget();
+    expect(await loader([holding], limit)).toMatchObject({ status: "held", reasonCode: "budget_exhausted" });
+    expect(limit.remainingBytes).toBe(budget().remainingBytes);
+    read.mockResolvedValue({ source: { ...codeFile, bytes: zip }, asOf: catalog.asOf, readBytes: zip.length + 100 });
+    expect(await loader([holding], limit)).toMatchObject({ status: "ready" });
+    expect(limit.remainingBytes).toBe(budget().remainingBytes - zip.length - 100 - gzip.length);
+    read.mockRestore();
+  });
+  it("価格gzipの単一物理添付guardは2fileを許容しない", async () => {
+    vi.mocked(notionRequest).mockImplementation(async (_method, path) => {
+      if (path.endsWith(codeFile.archivePageId)) return page(codeFile) as never;
+      const invalid = page(priceFile); invalid.properties.Files.files.push({ ...invalid.properties.Files.files[0], name: "extra.json" });
+      return invalid as never;
+    });
+    await expect(createHoldingPriceSourceLoader()([holding], budget())).rejects.toThrow();
+    expect(downloadArchivedFile).toHaveBeenCalledTimes(1);
   });
 });

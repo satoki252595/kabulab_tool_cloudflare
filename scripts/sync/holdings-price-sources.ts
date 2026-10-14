@@ -7,6 +7,7 @@ import { notionRequest } from "../../src/shared/notion-archive/client.js";
 import { priceFileSchema, type PriceFile, type PriceSnapshot } from "../../src/shared/holdings/price-registry.js";
 import { exactLegalName, parseHoldingsCodeList, type ArchivedSource } from "../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import type { Shareholding } from "../../services/yuho-quant/src/services/edinet/shareholdings.js";
+import { HoldingsCodeListBudgetError, readVerifiedHoldingsCodeList } from "./holdings-code-list.js";
 
 export interface HoldingPriceBudget { remainingChunks: number; remainingBytes: number }
 type RichText = { type: string; plain_text: string; text: { content: string } };
@@ -59,10 +60,18 @@ export function createHoldingPriceSourceLoader(): (holdings: readonly Shareholdi
     if (active === null) return { status: "held", reasonCode: "snapshot_unavailable", reason: "保存価格snapshotのfresh物理受入・有効化が未実施です" };
     if (codeList === undefined) {
       if (active.codeList.byteLength > budget.remainingBytes) return { status: "held", reasonCode: "budget_exhausted", reason: "公式銘柄表の保存原本読取予算が不足しています" };
-      budget.remainingBytes -= active.codeList.byteLength;
-      codeList = readHoldingPriceFile(active.codeList);
+      codeList = readVerifiedHoldingsCodeList(active.codeList, budget.remainingBytes).then(result => {
+        budget.remainingBytes -= result.readBytes; return result.source;
+      });
     }
-    const codes = await codeList;
+    let codes: ArchivedSource;
+    try { codes = await codeList; }
+    catch (error) {
+      if (!(error instanceof HoldingsCodeListBudgetError)) throw error;
+      // Native metadata only; no hosted GET was sent. This known budget stop may resume.
+      codeList = undefined;
+      return { status: "held", reasonCode: "budget_exhausted", reason: error.message };
+    }
     catalog ??= parseHoldingsCodeList(codes);
     const required = new Map<string, PriceFile>();
     for (const holding of holdings) {
