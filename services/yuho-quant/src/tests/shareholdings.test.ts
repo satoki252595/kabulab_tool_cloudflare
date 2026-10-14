@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 import { unzip } from "../services/edinet/zip.js";
 import { parseShareholdingsData, verifySavedHoldingsSource } from "../services/edinet/shareholdings.js";
 
@@ -101,6 +104,45 @@ describe("株式保有明細の原表資格", () => {
     expect(parse(split).status).toBe("ok");expect(parse(split).holdings.map(row=>row.kind)).toEqual(["特定投資株式","特定投資株式","みなし保有株式","みなし保有株式"]);
     expect(parse(split.replace("<p>みなし保有株式</p>","<p>特定投資株式</p>")).status).toBe("unsupported");
   });
+  it("種別全体の対になった括弧だけを許し、未知/不完全な次見出しへ前のkindを継承しない", () => {
+    for (const kind of ["特定投資株式", "みなし保有株式"] as const) {
+      expect(parse(block().replace("<p>特定投資株式</p>", `<p>（${kind}）</p>`)).holdings.map(row => row.kind)).toEqual([kind, kind]);
+    }
+    const parent = block(), end = parent.lastIndexOf("</ix:nonNumeric>");
+    for (const heading of ["（みなし保有株式", "（みなし保有株式（未確認））", "（みなし保有株式）未確認"]) {
+      expect(parse(parent.slice(0, end) + `<p>${heading}</p>${table}` + parent.slice(end)))
+        .toMatchObject({ status: "unsupported", holdings: [] });
+    }
+    expect(parse(block().replace("<p>特定投資株式</p>", "<p>特定投資株式及びみなし保有株式</p>"))).toMatchObject({ status: "unsupported", holdings: [] });
+  });
+  it("明示当期/前期で列を選び、対になった期間括弧だけを同義化する", () => {
+    const reverse = table.replace("<td>当事業年度</td><td>前事業年度</td>", "<td>前事業年度</td><td>当事業年度</td>");
+    expect(parse(block(reverse)).holdings[0]).toMatchObject({ shares: 99, bookValueRaw: 888, bookValueYen: 888000 });
+    expect(parse(block(table.replace("当事業年度", "（当事業年度）").replace("前事業年度", "（前事業年度）"))).holdings[0])
+      .toMatchObject({ shares: 12, bookValueRaw: 345 });
+    for (const current of ["当連結会計年度", "（当事業年度", "当事業年度（注）１", "当期"]) {
+      expect(parse(block(table.replace("当事業年度", current)))).toMatchObject({ status: "unsupported", holdings: [] });
+    }
+    expect(parse(block(reverse).replace("提出会社における株式の保有状況", "構造検証子会社における株式の保有状況")))
+      .toMatchObject({ status: "no_detail_table", holdings: [], holderScope: "unqualified" });
+  });
+  it("保存1438/2437/1969の完全なnativeTextBlockで当期の実株数/実帳簿価額を確認する", () => {
+    const bytes = readFileSync(new URL("./fixtures/holdings-header-forms.json.gz", import.meta.url));
+    const provenance = JSON.parse(readFileSync(new URL("./fixtures/holdings-header-forms.provenance.json", import.meta.url), "utf8"));
+    const hash = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
+    expect(hash(bytes)).toBe(provenance.fixtureSha256);
+    const fixtures = JSON.parse(gunzipSync(bytes).toString("utf8")) as Array<{ source: typeof source; filename: string; html: string }>;
+    for (const [code, rows, shares, bookValueYen] of [["1438", 4, 22900, 126408000], ["2437", 1, 98449, 6300000], ["1969", 35, 1318000, 7726000000]] as const) {
+      const fixture = fixtures.find(row => row.source.stockCode === code)!;
+      const member = provenance.members.find((row: { source: typeof source }) => row.source.stockCode === code);
+      expect(hash(fixture.html)).toBe(member.excerptSha256);
+      vi.mocked(unzip).mockReturnValue(new Map([[fixture.filename, Buffer.from(fixture.html)]]));
+      const parsed = parseShareholdingsData(Buffer.alloc(0), fixture.source);
+      expect(parsed).toMatchObject({ status: "ok", holderScope: "filer_only", contextRef: "FilingDateInstant" });
+      expect(parsed.holdings).toHaveLength(rows);
+      expect(parsed.holdings[0]).toMatchObject({ shares, bookValueYen, price: null, priceCurrency: null });
+    }
+  });
   it("保存S100YD42の限定みなし見出しだけを許し、別種別や未知の括弧を継承しない", () => {
     const parent = block(), end = parent.lastIndexOf("</ix:nonNumeric>");
     const mixed = (heading: string) => parent.slice(0, end) + `<p>${heading}</p>${table}` + parent.slice(end);
@@ -117,6 +159,8 @@ describe("株式保有明細の原表資格", () => {
       .replace(">12<",">12株<").replace(">99<",">99株<").replace(">－<",">－株<").replace(">33<",">33株<")
       .replace(">345<",">345千円<").replace(">888<",">888千円<").replace(">0<",">0千円<").replace(">777<",">777千円<");
     expect(parse(block(upper)).holdings[0]).toMatchObject({ shares:12,sharesRaw:12,sharesUnit:"株",bookValueRaw:345,bookValueYen:345000,bookValueUnit:"千円" });
+    expect(parse(block(upper.replace("<td>当事業年度</td><td>前事業年度</td>", "<td>前事業年度</td><td>当事業年度</td>"))).holdings[0])
+      .toMatchObject({ shares:99,bookValueRaw:888,bookValueYen:888000 });
     const fourth=table.replace('rowspan="3"','rowspan="4"').replaceAll("貸借対照表計上額（千円）","貸借対照表計上額").replace('<tr><td rowspan="2">構造ケースA', '<tr><td>（千円）</td><td>（千円）</td></tr><tr><td rowspan="2">構造ケースA');
     expect(parse(block(fourth)).holdings[0]).toMatchObject({ shares:12,bookValueYen:345000,rowIndex:4 });
     expect(parse(block(table.replace(">12<",">（注１） 12<"))).holdings[0]).toMatchObject({ shares:12,sharesRaw:12 });

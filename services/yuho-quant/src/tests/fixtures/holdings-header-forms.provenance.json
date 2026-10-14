@@ -1,0 +1,61 @@
+{
+  "description": "保存type1の完全なShareholdingsTextBlockをUTF8 byte rangeでそのまま抜粋。原文・数値・contextは無改変。追加通信0。",
+  "inputDiagnosisSha256": "2421fb8b908fd13d29c128bc434cf36316a7cfcf0b519d85aa3de773e7a11be5",
+  "fixtureSha256": "4741f8cdd905d2be4280c11a97c2ee70cdad33c2f1cb4b31ce755cf25623ffbb",
+  "fixtureBytes": 15342,
+  "members": [
+    {
+      "source": {
+        "docId": "S100XCY4",
+        "stockCode": "1438",
+        "edinetCode": "E32682",
+        "fiscalYearEnd": "2025-09-30"
+      },
+      "originalZipSha256": "59a86c8ae3d2d4fc06f8e905e4f8495ce5ab9dac40d0e52328558f0a50d30060",
+      "originalMember": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E32682-000_2025-09-30_01_2025-12-24_ixbrl.htm",
+      "originalMemberBytes": 456080,
+      "originalMemberSha256": "8e817f8a7bb9589c7ab9cc446bc0de5204a8d60993d794a5cd56f5812075c113",
+      "excerptStartUtf8Byte": 414270,
+      "excerptEndUtf8Byte": 456050,
+      "excerptBytes": 41780,
+      "excerptSha256": "82070733faed48fe783e29ad36c26482764020e259a8ac89dd1f59e3fadad260",
+      "contextRef": "FilingDateInstant"
+    },
+    {
+      "source": {
+        "docId": "S100YZC3",
+        "stockCode": "2437",
+        "edinetCode": "E05450",
+        "fiscalYearEnd": "2026-05-31"
+      },
+      "originalZipSha256": "5ee4df8497b39833e460528f6294b783a982c7c74865cb1cfab47a141b776883",
+      "originalMember": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E05450-000_2026-05-31_01_2026-08-28_ixbrl.htm",
+      "originalMemberBytes": 492909,
+      "originalMemberSha256": "d7600989bdc749844892ee67a890ebd478f4d80c38624925ebe3bb07395fc807",
+      "excerptStartUtf8Byte": 429951,
+      "excerptEndUtf8Byte": 458430,
+      "excerptBytes": 28479,
+      "excerptSha256": "34c1f1e4e337ddffa1d1936e54b51c72ef83f49e7ab31175bfe2cc91142337fa",
+      "contextRef": "FilingDateInstant"
+    },
+    {
+      "source": {
+        "docId": "S100YDOU",
+        "stockCode": "1969",
+        "edinetCode": "E00149",
+        "fiscalYearEnd": "2026-03-31"
+      },
+      "originalZipSha256": "4a3ffd4f2e6e40a006273611c56a1d6af08e4c8de3d8aa831cafe5829dd85235",
+      "originalMember": "XBRL/PublicDoc/0104010_honbun_jpcrp030000-asr-001_E00149-000_2026-03-31_01_2026-06-18_ixbrl.htm",
+      "originalMemberBytes": 931461,
+      "originalMemberSha256": "f9451ed0b7f85430e67d408fbfb975e18f125c963800f276da032ed048b8743e",
+      "excerptStartUtf8Byte": 650937,
+      "excerptEndUtf8Byte": 893826,
+      "excerptBytes": 242889,
+      "excerptSha256": "346a5ffd4d31ccce6e58f88fed61a2e73f437d8602e08453502f8f8a86a31f19",
+      "contextRef": "FilingDateInstant"
+    }
+  ],
+  "sourceGets": 0,
+  "businessWrites": 0
+}
