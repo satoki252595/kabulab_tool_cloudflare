@@ -1,0 +1,215 @@
+{
+  "description": "Actual EDINET regional sales TextBlock excerpts plus native context XML projections. Source full ZIPs physically saved separately; fixtures are test containers, not original filings. No financial values invented.",
+  "fixtureSha256": "ac7e9e5106734ce11afa36781599b4498ff3f8d2a2e665ba0779db2de772060d",
+  "fixtureBytes": 17011,
+  "documents": [
+    {
+      "code": "1414",
+      "docId": "S100Z5EY",
+      "periodEnd": "2026-06-30",
+      "officialSource": "https://api.edinet-fsa.go.jp/api/v2/documents/S100Z5EY?type=1",
+      "originalZipSha256": "7a91dd86e30402ec21e2d993c713c33afa5fe3b92501c04dcc09db022446cee7",
+      "originalZipBytes": 863442,
+      "originalManifest": "known",
+      "originalHttpAcquisitionClock": "UNKNOWN; saved metadata clock is not original HTTP evidence",
+      "archivePageId": "3efd74ff-84cd-819a-9ab2-d29272962fd8",
+      "htmlExcerpts": [
+        {
+          "originalMember": "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E00329-000_2026-06-30_02_2026-09-30_ixbrl.htm",
+          "originalMemberSha256": "a7b722c76533c2c8ef10aa6aac2ccaa9401fd3cc617c7c5ef94565920061fd8b",
+          "utf16Start": 881572,
+          "utf16End": 881907,
+          "excerptSha256": "b66d88911b0e36e58b48ad621a84fab1079e349683fe6a1ebe44681449aad927"
+        },
+        {
+          "originalMember": "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E00329-000_2026-06-30_02_2026-09-30_ixbrl.htm",
+          "originalMemberSha256": "a7b722c76533c2c8ef10aa6aac2ccaa9401fd3cc617c7c5ef94565920061fd8b",
+          "utf16Start": 888388,
+          "utf16End": 888724,
+          "excerptSha256": "d6ac965aa286aef5a3695a7c3863a6b0877eb01ce80362429efd749ef5723ec7"
+        }
+      ],
+      "xmlProjection": {
+        "originalMember": "XBRL/PublicDoc/jpcrp030000-asr-001_E00329-000_2026-06-30_02_2026-09-30.xbrl",
+        "originalMemberSha256": "14b07d522366506abacef783a105e08ea45485bc0aac1609a083936c15f21c36",
+        "description": "Original root attributes and all verbatim native context definitions; other instance facts omitted. Header not reproduced. This is not an original instance/ZIP.",
+        "fixtureMemberSha256": "301f65f40ac1d78a567233be7c769be725eaa357294bf8877aae60507c153074"
+      },
+      "fixtureMembers": {
+        "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E00329-000_2026-06-30_02_2026-09-30_ixbrl.htm": {
+          "bytes": 868,
+          "sha256": "3574421fec80ac6b496d1c766124ed9201bc7eefb4aeac3e33498863cab99133"
+        },
+        "XBRL/PublicDoc/jpcrp030000-asr-001_E00329-000_2026-06-30_02_2026-09-30.xbrl": {
+          "bytes": 98256,
+          "sha256": "301f65f40ac1d78a567233be7c769be725eaa357294bf8877aae60507c153074"
+        }
+      }
+    },
+    {
+      "code": "1435",
+      "docId": "S100XSYD",
+      "periodEnd": "2025-12-31",
+      "officialSource": "https://api.edinet-fsa.go.jp/api/v2/documents/S100XSYD?type=1",
+      "originalZipSha256": "2064956f6842509e9aeb53921ba4cbdabe1787c2d026b5bab41f01d1772dfa35",
+      "originalZipBytes": 527978,
+      "originalManifest": "unknown",
+      "originalHttpAcquisitionClock": "UNKNOWN; saved metadata clock is not original HTTP evidence",
+      "archivePageId": "364d74ff-84cd-81da-8338-d3a4933899a1",
+      "htmlExcerpts": [
+        {
+          "originalMember": "XBRL/PublicDoc/0105100_honbun_jpcrp030000-asr-001_E31925-000_2025-12-31_01_2026-03-24_ixbrl.htm",
+          "originalMemberSha256": "f88d4c8b71b6af93589a9753abb0a31a6ea42099056c9887bc97051d34c599bc",
+          "utf16Start": 614105,
+          "utf16End": 614961,
+          "excerptSha256": "14a90dd6d1b1bfd174030b2be32d8ea38ff3c4989b60a31be8410d6b1f86ebdd"
+        },
+        {
+          "originalMember": "XBRL/PublicDoc/0105100_honbun_jpcrp030000-asr-001_E31925-000_2025-12-31_01_2026-03-24_ixbrl.htm",
+          "originalMemberSha256": "f88d4c8b71b6af93589a9753abb0a31a6ea42099056c9887bc97051d34c599bc",
+          "utf16Start": 617634,
+          "utf16End": 618491,
+          "excerptSha256": "f05d6219772631ed10da98f4fde71b24eff532cd6c4a82f209571a910a68025e"
+        }
+      ],
+      "xmlProjection": {
+        "originalMember": "XBRL/PublicDoc/jpcrp030000-asr-001_E31925-000_2025-12-31_01_2026-03-24.xbrl",
+        "originalMemberSha256": "eeb470b4bc26b74b7855f488c0457d9c894655490dd4d6534a2610e572082ca5",
+        "description": "Original root attributes and all verbatim native context definitions; other instance facts omitted. Header not reproduced. This is not an original instance/ZIP.",
+        "fixtureMemberSha256": "6bb1fe10cb3dddecbd472631d836210167c416bf7d5a2baaf25b5ba1c2fd4854"
+      },
+      "fixtureMembers": {
+        "XBRL/PublicDoc/0105100_honbun_jpcrp030000-asr-001_E31925-000_2025-12-31_01_2026-03-24_ixbrl.htm": {
+          "bytes": 1954,
+          "sha256": "93cee590b6f72e6b7fe712d5d9ba9d32b529291ab7189467b7fad9dea0c0c171"
+        },
+        "XBRL/PublicDoc/jpcrp030000-asr-001_E31925-000_2025-12-31_01_2026-03-24.xbrl": {
+          "bytes": 99554,
+          "sha256": "6bb1fe10cb3dddecbd472631d836210167c416bf7d5a2baaf25b5ba1c2fd4854"
+        }
+      }
+    },
+    {
+      "code": "153A",
+      "docId": "S100XV0K",
+      "periodEnd": "2025-12-31",
+      "officialSource": "https://api.edinet-fsa.go.jp/api/v2/documents/S100XV0K?type=1",
+      "originalZipSha256": "312871540a40f6d63cb42dc977e2e45a6bb9faf599472b4f28cba73635023b55",
+      "originalZipBytes": 1109425,
+      "originalManifest": "known",
+      "originalHttpAcquisitionClock": "UNKNOWN; saved metadata clock is not original HTTP evidence",
+      "archivePageId": "3eed74ff-84cd-8129-9fb2-c228f21e3811",
+      "htmlExcerpts": [
+        {
+          "originalMember": "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E39397-000_2025-12-31_01_2026-03-30_ixbrl.htm",
+          "originalMemberSha256": "1edaa526b18b11937ac80e71f152700e1d2ced20a7692052ce7f60e819ffd0f0",
+          "utf16Start": 623404,
+          "utf16End": 623742,
+          "excerptSha256": "12efedf2c53328e2e9c26ce062bacb6975e0fd63d12af49504c19003011f8896"
+        },
+        {
+          "originalMember": "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E39397-000_2025-12-31_01_2026-03-30_ixbrl.htm",
+          "originalMemberSha256": "1edaa526b18b11937ac80e71f152700e1d2ced20a7692052ce7f60e819ffd0f0",
+          "utf16Start": 627694,
+          "utf16End": 628033,
+          "excerptSha256": "339f7cdf1f42dd4deaf6c3b57e639f61e5e67f549f221414d315030d5ad2360e"
+        }
+      ],
+      "xmlProjection": {
+        "originalMember": "XBRL/PublicDoc/jpcrp030000-asr-001_E39397-000_2025-12-31_01_2026-03-30.xbrl",
+        "originalMemberSha256": "4f43565df39c2587f7c4c5087ec4a754e82575d1c728b662449741d8f7ffd79c",
+        "description": "Original root attributes and all verbatim native context definitions; other instance facts omitted. Header not reproduced. This is not an original instance/ZIP.",
+        "fixtureMemberSha256": "1234a7a7e0f95f511a50ad68a77453df7af9fe64da71d031506498dc60394313"
+      },
+      "fixtureMembers": {
+        "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E39397-000_2025-12-31_01_2026-03-30_ixbrl.htm": {
+          "bytes": 882,
+          "sha256": "31f44e3aa2a4bcb9614a1e1a737e0fc1673e6a0ce1a9856b40c8a1c67738e08f"
+        },
+        "XBRL/PublicDoc/jpcrp030000-asr-001_E39397-000_2025-12-31_01_2026-03-30.xbrl": {
+          "bytes": 48610,
+          "sha256": "1234a7a7e0f95f511a50ad68a77453df7af9fe64da71d031506498dc60394313"
+        }
+      }
+    },
+    {
+      "code": "155A",
+      "docId": "S100XTWQ",
+      "periodEnd": "2025-12-31",
+      "officialSource": "https://api.edinet-fsa.go.jp/api/v2/documents/S100XTWQ?type=1",
+      "originalZipSha256": "fd3ebbddec070a2d5b2b40f07543ed4c6e9f03bc675b022c3a1abd9ede41cbfc",
+      "originalZipBytes": 480713,
+      "originalManifest": "known",
+      "originalHttpAcquisitionClock": "UNKNOWN; saved metadata clock is not original HTTP evidence",
+      "archivePageId": "3eed74ff-84cd-8183-938f-d0d130553860",
+      "htmlExcerpts": [
+        {
+          "originalMember": "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E39405-000_2025-12-31_01_2026-03-25_ixbrl.htm",
+          "originalMemberSha256": "14ded898b91da8c7b857afb68ca7d2a545fa365f450777d26398e44133553614",
+          "utf16Start": 447112,
+          "utf16End": 447542,
+          "excerptSha256": "ed61cfae05bc17bfa0033585ff5999928ca5d6a937851c1235e226ce83fea3bc"
+        }
+      ],
+      "xmlProjection": {
+        "originalMember": "XBRL/PublicDoc/jpcrp030000-asr-001_E39405-000_2025-12-31_01_2026-03-25.xbrl",
+        "originalMemberSha256": "e5bb17dbfa6aabc1f40549e4dc1d28c88d41e6cea426975ce2174f37e2a4b472",
+        "description": "Original root attributes and all verbatim native context definitions; other instance facts omitted. Header not reproduced. This is not an original instance/ZIP.",
+        "fixtureMemberSha256": "cb663e83dac8e949b6b6eb1a6c933263841d9488a75739a84a2ad881317a20e6"
+      },
+      "fixtureMembers": {
+        "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E39405-000_2025-12-31_01_2026-03-25_ixbrl.htm": {
+          "bytes": 526,
+          "sha256": "ed61cfae05bc17bfa0033585ff5999928ca5d6a937851c1235e226ce83fea3bc"
+        },
+        "XBRL/PublicDoc/jpcrp030000-asr-001_E39405-000_2025-12-31_01_2026-03-25.xbrl": {
+          "bytes": 65653,
+          "sha256": "cb663e83dac8e949b6b6eb1a6c933263841d9488a75739a84a2ad881317a20e6"
+        }
+      }
+    },
+    {
+      "code": "1852",
+      "docId": "S100YD5O",
+      "periodEnd": "2026-03-31",
+      "officialSource": "https://api.edinet-fsa.go.jp/api/v2/documents/S100YD5O?type=1",
+      "originalZipSha256": "7947705cec60c2a6c9dfc3aa496bd5db7f202e7b15de8ef335c5972319e8de9c",
+      "originalZipBytes": 653928,
+      "originalManifest": "unknown",
+      "originalHttpAcquisitionClock": "UNKNOWN; saved metadata clock is not original HTTP evidence",
+      "archivePageId": "3e1d74ff-84cd-81ab-a97e-d85aa7c81176",
+      "htmlExcerpts": [
+        {
+          "originalMember": "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E00120-000_2026-03-31_01_2026-06-18_ixbrl.htm",
+          "originalMemberSha256": "aded607f49856c5f711442a065f44a47e897037b367d19a629a9cbbf89f21b74",
+          "utf16Start": 983269,
+          "utf16End": 983587,
+          "excerptSha256": "63a717756db434003cd79fa85f128cd9c5208c013b9526f8a9433f0f1d83457f"
+        },
+        {
+          "originalMember": "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E00120-000_2026-03-31_01_2026-06-18_ixbrl.htm",
+          "originalMemberSha256": "aded607f49856c5f711442a065f44a47e897037b367d19a629a9cbbf89f21b74",
+          "utf16Start": 984924,
+          "utf16End": 985243,
+          "excerptSha256": "e3c9d10e14cb036b861739696f00ab0e117e656e20685b93a9a0b74fa0bf26a5"
+        }
+      ],
+      "xmlProjection": {
+        "originalMember": "XBRL/PublicDoc/jpcrp030000-asr-001_E00120-000_2026-03-31_01_2026-06-18.xbrl",
+        "originalMemberSha256": "10b2b2d6d4868f917eb32f71c492257db3869c487426268cb5268f9238d545ed",
+        "description": "Original root attributes and all verbatim native context definitions; other instance facts omitted. Header not reproduced. This is not an original instance/ZIP.",
+        "fixtureMemberSha256": "8dce2e928099dc6d271b41083415345126dd1893359218ed1f1d65bc4efa9b23"
+      },
+      "fixtureMembers": {
+        "XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E00120-000_2026-03-31_01_2026-06-18_ixbrl.htm": {
+          "bytes": 838,
+          "sha256": "cc1f8c8d77737a1bd6eade929122cf3fb64304a58e1e35cad6083019306629bd"
+        },
+        "XBRL/PublicDoc/jpcrp030000-asr-001_E00120-000_2026-03-31_01_2026-06-18.xbrl": {
+          "bytes": 115672,
+          "sha256": "8dce2e928099dc6d271b41083415345126dd1893359218ed1f1d65bc4efa9b23"
+        }
+      }
+    }
+  ]
+}

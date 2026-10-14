@@ -311,6 +311,7 @@ export async function processMissingDoc(
     let overseasHonbunFile: string | null = null;
     let overseasFacts: OverseasFact[] = [];
     let overseasProof: ReturnType<typeof parseOverseasData>["proof"];
+    let overseasOmission: ReturnType<typeof parseOverseasData>["omission"];
     if (!csvError && hasOverseas && xbrlZip) {
       try {
         const o = parseOverseasData(xbrlZip, periodEnd);
@@ -318,6 +319,7 @@ export async function processMissingDoc(
         overseasHonbunFile = o.honbunFile;
         overseasFacts = o.facts;
         overseasProof = o.proof;
+        overseasOmission = o.omission;
       } catch (e) {
         overseasParseStatus = "parse_error";
         console.warn(`[missing] overseas parse_error ${tag}: ${(e as Error).message}`);
@@ -364,6 +366,7 @@ export async function processMissingDoc(
       periodEnd, submitDateTime: doc.submitDateTime,
       parseStatus, honbunFile, factCount: deduped.length,
       overseasParseStatus, overseasHonbunFile, overseasFactCount: overseasFacts.length,
+      ...(overseasOmission === undefined ? {} : { overseasOmission }),
       textParseStatus, textSectionCount: sections.length,
       xbrlUnavailable,
     };
