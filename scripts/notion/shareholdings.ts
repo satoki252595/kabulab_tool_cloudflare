@@ -2,8 +2,8 @@
 import "dotenv/config";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { constants, existsSync, readFileSync, unlinkSync, writeFileSync, openSync, closeSync, fsyncSync, linkSync } from "node:fs";
+import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseShareholdingsData } from "../../services/yuho-quant/src/services/edinet/shareholdings.js";
 import { applyHoldingsSchema, buildHoldingsSchemaPatch, publishSavedShareholdings } from "../../src/shared/notion-archive/shareholdings.js";
@@ -12,7 +12,17 @@ import { NotionConfigError } from "../../src/shared/notion-archive/env.js";
 const [mode, ...args] = process.argv.slice(2);
 const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 const sha = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
-const save = (path: string, value: unknown) => writeFileSync(path, JSON.stringify(value, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+function syncParent(path: string): void {
+  const fd = openSync(dirname(path), "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+/** Node CLI/backfillの排他的artifact。既存byteを上書きせずfileと親directoryを確定する。 */
+export function writeHoldingsArtifact(path: string, value: string | Uint8Array): void {
+  writeFileSync(path, value, { mode: 0o600, flag: "wx", flush: true });
+  syncParent(path);
+}
+export const saveHoldingsReceipt = (path: string, value: unknown): void => writeHoldingsArtifact(path, JSON.stringify(value, null, 2) + "\n");
+const save = saveHoldingsReceipt;
+let mutationGuardActive = false;
 function publishInput(zipPath: string, metadataPath: string) {
   const metadata = read(metadataPath);
   if (metadata.valuationSources !== undefined) {
@@ -28,35 +38,57 @@ function publishInput(zipPath: string, metadataPath: string) {
 /** 単通CLIと保存原本backfillが共有する単発送信journal。unknown後は別通へ進まない。 */
 export async function guardedHoldingsMutation<T>(out: string, label: string, action: () => Promise<T>): Promise<T> {
   const pending = `${out}.pending-write.json`;
-  assert.equal(existsSync(out) || existsSync(pending), false, "既存結果・送信中記録があるため読取照合が必要です");
+  const journal = `${out}.write-events.jsonl`, completed = `${out}.completed-write.json`;
+  assert.equal(mutationGuardActive, false, "同processで保有明細guardを重ねません");
+  assert.equal([out, pending, journal, completed].some(path => existsSync(path)), false, "既存結果・送信中記録があるため読取照合が必要です");
+  // action前のwxが同outputの競合/再起動を防ぐ。旧pendingは一切読替え/上書きしない。
+  save(pending, { version: 2, observedAt: new Date().toISOString(), mode: label, journal, writes: [], noAutomaticReplay: true });
+  writeHoldingsArtifact(journal, "");
+  function append(value: unknown): void {
+    // O_CREATなし。journal消失を新規作成で隠さず、既存prefixへだけ追記する。
+    const fd = openSync(journal, constants.O_WRONLY | constants.O_APPEND);
+    try { writeFileSync(fd, JSON.stringify(value) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
+  }
   const native = globalThis.fetch;
   const writes: unknown[] = [];
   let stopped = false;
+  mutationGuardActive = true;
   globalThis.fetch = async (input, init) => {
+    let attempt: number | undefined;
     try {
       assert.equal(stopped, false);
       const request = new Request(input, init), url = new URL(request.url);
       assert.equal(url.protocol, "https:");
       if (request.method !== "GET" && !url.pathname.endsWith("/query")) {
         assert.equal(url.origin, "https://api.notion.com");
-        writes.push({ time: new Date().toISOString(), method: request.method, urlSha256: sha(request.url), bodySha256: sha(Buffer.from(await request.clone().arrayBuffer())) });
-        writeFileSync(pending, JSON.stringify({ writes, noAutomaticReplay: true }), { mode: 0o600 });
+        attempt = writes.length + 1;
+        const intent = { phase: "send-intent", attempt, time: new Date().toISOString(), method: request.method,
+          urlSha256: sha(request.url), bodySha256: sha(Buffer.from(await request.clone().arrayBuffer())) };
+        append(intent); writes.push(intent);
       }
-      const response = await native(request, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
+      const timeout = AbortSignal.timeout(30_000);
+      const response = await native(request, { redirect: "manual", signal: AbortSignal.any([request.signal, timeout]) });
+      if (attempt !== undefined) append({ phase: "response-headers", attempt, time: new Date().toISOString(), status: response.status });
       assert.equal(response.status, 200);
       return response;
     } catch {
       stopped = true;
+      append({ phase: "stopped-no-replay", attempt, time: new Date().toISOString(), fullReadbackVerified: false });
       throw new NotionConfigError("保有明細の通信未完了。再送せず読取照合してください");
     }
   };
   try {
     const result = await action();
-    save(out, { observedAt: new Date().toISOString(), mode: label, result, writes: writes.length, sourceRequests: 0 });
-    if (existsSync(pending)) unlinkSync(pending);
-    console.info(JSON.stringify({ outcome: "READBACK_VERIFIED", writes: writes.length }));
+    assert.equal(stopped, false, "通信STOP後に成功を返しません");
+    append({ phase: "action-returned", time: new Date().toISOString(), writes: writes.length });
+    save(out, { observedAt: new Date().toISOString(), mode: label, result, writes: writes.length, sourceRequests: 0,
+      journal: { version: 2, path: journal, sha256: sha(readFileSync(journal)), pendingSha256: sha(readFileSync(pending)) } });
+    // renameの上書きを避けて旧marker bytesも保持。途中停止ならpendingが残り再送不可。
+    linkSync(pending, completed); syncParent(completed);
+    unlinkSync(pending); syncParent(pending);
+    console.info(JSON.stringify({ outcome: "RESULT_JOURNALED", writes: writes.length }));
     return result;
-  } finally { globalThis.fetch = native; }
+  } finally { globalThis.fetch = native; mutationGuardActive = false; }
 }
 
 function diagnose(graphPath: string, sourcePath: string) {

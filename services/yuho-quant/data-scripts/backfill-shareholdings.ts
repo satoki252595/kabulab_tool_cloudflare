@@ -6,7 +6,7 @@
 import "dotenv/config";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createD1HttpDb } from "../../../src/shared/db/d1-http-client.js";
@@ -17,7 +17,7 @@ import { HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, typ
 import { readSavedHoldingsZip, publishVerifiedShareholdings } from "../../../src/shared/notion-archive/shareholdings.js";
 import { verifyArchivedAttachments } from "../../../src/shared/notion-archive/readback.js";
 import { edinetArchiveFilename, recordEdinetZip } from "../src/services/edinet/archive.js";
-import { guardedHoldingsMutation } from "../../../scripts/notion/shareholdings.js";
+import { guardedHoldingsMutation, saveHoldingsReceipt, writeHoldingsArtifact } from "../../../scripts/notion/shareholdings.js";
 
 // ESM module start: never label a running old parser with a SHA read after long preparation.
 const PARSER_SOURCE_PATH = fileURLToPath(new URL("../src/services/edinet/shareholdings.ts", import.meta.url));
@@ -27,7 +27,7 @@ function assertParserSourceUnchanged(): void {
 }
 
 const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
-const save = (path: string, value: unknown) => writeFileSync(path, JSON.stringify(value, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+const save = saveHoldingsReceipt;
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 interface SourcePath { path: string; archivePageId: string; filename: string; sha256: string }
 interface Item { parserSourceSha256?: string; source: ShareholdingsSource; ownerName: string; status: string; reason: string | null; parsedRows: number;
@@ -60,13 +60,13 @@ export async function prepareLatestHoldings(args: { limit: number; afterCode: st
     else {
       const parsed = parseShareholdingsData(saved.bytes, source);
       const zipPath = join(args.dir, `${row.stockCode}-${row.docId}.zip`);
-      writeFileSync(zipPath, saved.bytes, { flag: "wx", mode: 0o600 });
+      writeHoldingsArtifact(zipPath, saved.bytes);
       const records = [];
       for (const holding of parsed.holdings) records.push({ source, ownerName: row.ownerName, holding,
         valuation: prices && catalog ? await qualifyHoldingValuation({ holding, fiscalYearEnd: source.fiscalYearEnd, catalog, prices })
           : { status: "unavailable", identity: null, reason: "価格/同定の保存原本が未指定です" } });
       const projectionPath = join(args.dir, `${row.stockCode}-${row.docId}.current.jsonl`);
-      writeFileSync(projectionPath, records.map(record => JSON.stringify(record)).join("\n") + (records.length ? "\n" : ""), { flag: "wx", mode: 0o600 });
+      writeHoldingsArtifact(projectionPath, records.map(record => JSON.stringify(record)).join("\n") + (records.length ? "\n" : ""));
       item = { source, ownerName: row.ownerName, status: parsed.status === "ok" ? "ready" : "held", reason: parsed.reason,
         parsedRows: parsed.holdings.length, archivePageId: saved.archivePageId, zipPath, zipSha256: saved.sha256,
         originalManifest: saved.originalManifest, projectionPath, sourceCustody: saved.sourceCustody, sourceMetadata: saved.metadata, sourceFetchedAt: saved.fetchedAt, sourceMetadataMissing: saved.metadataMissing };
