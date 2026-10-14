@@ -2,8 +2,8 @@ export interface ArchivedDownloadOptions {
   /** 省略時は既存の未知サイズ読取。0は明示された空ファイルの上限。 */
   maxBytes?: number;
   signal?: AbortSignal;
-  /** URL・署名・原文を含まない実GET/読取計数。observerの失敗もSTOPする。 */
-  onAttempt?: (event: { attempt: number; phase: "start" | "complete" | "transport-error"; receivedBytes: number; status?: number }) => void;
+  /** URL・署名・原文を含まないGET/読取計数。非通信失敗も通知し、async observerを待つ。 */
+  onAttempt?: (event: { attempt: number; phase: "start" | "complete" | "transport-error" | "error"; receivedBytes: number; status?: number }) => unknown;
 }
 
 function transportError(error: unknown): boolean {
@@ -37,8 +37,9 @@ export async function downloadArchivedFile(file: { name: string; url: string }, 
     const signal = AbortSignal.any([overall, timeout]);
     let receivedBytes = 0;
     let response: Response | undefined;
-    let inTransport = false;
-    options?.onAttempt?.({ attempt, phase: "start", receivedBytes });
+    let inTransport = false, observed = false;
+    await options?.onAttempt?.({ attempt, phase: "start", receivedBytes });
+    overall.throwIfAborted();
     try {
       inTransport = true;
       response = await fetch(file.url, { redirect: "error", signal });
@@ -80,13 +81,15 @@ export async function downloadArchivedFile(file: { name: string; url: string }, 
       if (maxBytes !== undefined && identity && length !== null && receivedBytes !== Number(length)) throw new Error(`${context}: 原本応答のContent-Lengthと実バイト長が不一致`);
       const bytes = new Uint8Array(receivedBytes); let offset = 0;
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-      options?.onAttempt?.({ attempt, phase: "complete", receivedBytes, status: response.status });
+      observed = true;
+      await options?.onAttempt?.({ attempt, phase: "complete", receivedBytes, status: response.status });
       return bytes;
     } catch (error) {
       // 親/全体deadlineは常に優先。設定・不明marker・validationはtransport扱いしない。
       const ownTimeout = timeout.aborted && (error === timeout.reason || error instanceof DOMException && ["TimeoutError", "AbortError"].includes(error.name));
       const retryable = inTransport && (ownTimeout || transportError(error));
-      if (inTransport && (retryable || overall.aborted)) options?.onAttempt?.({ attempt, phase: "transport-error", receivedBytes, ...(response === undefined ? {} : { status: response.status }) });
+      if (!observed) await options?.onAttempt?.({ attempt, phase: inTransport && (retryable || overall.aborted) ? "transport-error" : "error", receivedBytes,
+        ...(response === undefined ? {} : { status: response.status }) });
       overall.throwIfAborted();
       if (!retryable) throw error;
       if (attempt === 2) throw error;

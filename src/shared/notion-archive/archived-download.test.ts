@@ -110,6 +110,24 @@ describe("保存Notion原本のbounded download", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
+  it.each(["start", "complete", "transport-error", "unknown"])("async observerの%s拒否をnative transport再試行へ変えない", async phase => {
+    const error = phase === "unknown" ? new TypeError("fetch failed", { cause: Object.assign(new Error("unknown acknowledgement"), { name: "NotionUnknownResultError", code: "UND_ERR_SOCKET" }) }) : new TypeError("fetch failed");
+    const get = vi.spyOn(globalThis, "fetch");
+    if (phase === "transport-error") get.mockRejectedValue(new TypeError("terminated"));
+    else get.mockResolvedValue(new Response(Uint8Array.from([1])));
+    await expect(downloadArchivedFile(file, "async-observer", { maxBytes: 1, onAttempt: async event => {
+      await Promise.resolve(); if (event.phase === (phase === "unknown" ? "complete" : phase)) throw error;
+    } })).rejects.toBe(error);
+    expect(get).toHaveBeenCalledTimes(phase === "start" ? 0 : 1);
+  });
+  it("async start待機中の親abortは最初のnative GETも開始しない", async () => {
+    const controller = new AbortController(), reason = new Error("parent deadline");
+    const get = vi.spyOn(globalThis, "fetch");
+    await expect(downloadArchivedFile(file, "async-abort", { maxBytes: 1, signal: controller.signal, onAttempt: async event => {
+      if (event.phase === "start") { await Promise.resolve(); controller.abort(reason); }
+    } })).rejects.toBe(reason);
+    expect(get).not.toHaveBeenCalled();
+  });
   it("0byteは明示maxBytes=0で実空bodyを照合し、未知サイズの既存空bodyも保持する", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(null, { headers: { "Content-Length": "0" } })).mockResolvedValueOnce(new Response(null));
     expect((await downloadArchivedFile(file, "zero", { maxBytes: 0 })).length).toBe(0);

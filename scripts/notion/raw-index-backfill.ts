@@ -18,8 +18,8 @@ import { z } from "../../src/shared/zod-mini.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { assertD1SingleQueryResponse, createD1HttpBatchSender, d1HttpQueryUrl } from "../../src/shared/db/d1-http-client.js";
 import { assertCanonicalRawMetadata, findCanonicalRawFileAttachments, listCanonicalRawFiles, type CanonicalRawAttachment } from "../../src/shared/notion-archive/raw-files.js";
-import { notionStats, setNotionMaxRps } from "../../src/shared/notion-archive/client.js";
-import { downloadArchivedFile } from "../moneyflow/lib/archived-files.js";
+import { notionStats, setNotionMaxRps, paceNotionNativeRequest } from "../../src/shared/notion-archive/client.js";
+import { downloadArchivedFile, type ArchivedDownloadOptions } from "../../src/shared/notion-archive/archived-download.js";
 import { unzip } from "../../services/yuho-quant/src/services/edinet/zip.js";
 import { r2GetBytesVersion, r2PutBytes, type R2ReadOptions } from "../vwap/lib/r2.js";
 import { canonicalRawKey, readD1RawIndexes, verifiedDocId } from "./raw-index-plan.js";
@@ -151,7 +151,7 @@ export interface BackfillIo {
   get: (key: string, bucket: string, options?: R2ReadOptions) => Promise<Version>;
   put: (key: string, bytes: Uint8Array, previous: string | null, bucket: string, contentType: string) => Promise<void>;
   list: typeof listCanonicalRawFiles;
-  download: (item: RawItem, cohort: readonly RawItem[]) => Promise<{ body: Uint8Array; wireBytes: number }>;
+  download: (item: RawItem, cohort: readonly RawItem[], options?: Pick<ArchivedDownloadOptions, "signal" | "onAttempt">) => Promise<{ body: Uint8Array; wireBytes: number }>;
   index: (sha: string) => Promise<RawIndexRow | null>;
   insert: (row: RawIndexRow) => Promise<void>;
   antiJoin: (items: readonly RawItem[]) => Promise<{ checked: number; missing: number }>;
@@ -333,7 +333,7 @@ function validateIndex(row: RawIndexRow, item: RawItem, bucket: string, expected
 /** hosted原本を全文取得。Notionが非対応拡張子をZIPで包んだ時だけ、単一実名memberを解く。 */
 export function createRawDownloader(find = findCanonicalRawFileAttachments, download = downloadArchivedFile): BackfillIo["download"] {
   let cache = new Map<string, CanonicalRawAttachment>();
-  return async (item, cohort) => {
+  return async (item, cohort, options) => {
     if (!cache.has(item.sha256)) {
       cache = await find(cohort.map((row) => row.sha256));
       if (cache.size !== cohort.length) throw new Error("[raw-backfill] ⑤原本のSHA batchが欠測しています");
@@ -346,16 +346,24 @@ export function createRawDownloader(find = findCanonicalRawFileAttachments, down
       }
     }
     const { file } = cache.get(item.sha256)!;
-    const wire = await download(file, "⑤raw-index");
+    if (file.name !== item.filename && file.name !== `${item.filename}.zip`) throw new Error("[raw-backfill] 原本ZIP wrapper名不一致");
+    // 元実サイズ＋既存wrapper余裕。最大2GETのpartialも実受信量へ加算する。
+    const maxBytes = file.name === item.filename ? item.sizeBytes : item.sizeBytes + Math.ceil(item.sizeBytes * 0.001) + 4096;
+    let wireBytes = 0;
+    const wire = await download(file, "⑤raw-index", { maxBytes, signal: options?.signal, onAttempt: async event => {
+      if (event.phase === "start") await paceNotionNativeRequest(options?.signal);
+      else wireBytes += event.receivedBytes;
+      await options?.onAttempt?.(event);
+      if (wireBytes > maxBytes * 2) throw new Error("[raw-backfill] hosted物理転送が予約予算を超えました");
+    } });
     let body = wire;
     if (file.name !== item.filename) {
-      if (file.name !== `${item.filename}.zip`) throw new Error("[raw-backfill] 原本ZIP wrapper名不一致");
       const members = unzip(Buffer.from(wire), { maxEntries: 1, maxExpandedBytes: item.sizeBytes });
       if (members.size !== 1 || !members.has(item.filename)) throw new Error("[raw-backfill] 原本ZIP wrapperは単一実名memberではありません");
       body = members.get(item.filename)!;
     }
     validateBody(body, item);
-    return { body, wireBytes: wire.length };
+    return { body, wireBytes };
   };
 }
 
@@ -514,7 +522,7 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
   let processingItem = false;
   const checkClock = () => { if (!processingItem && io.now() >= deadline) throw new Error("[raw-backfill] 準備の時間予算到達。未完manifestを使わず停止"); };
   const stats = { inventoryRows: 0, processed: 0, verified: 0, alreadyComplete: 0, wouldPut: 0, wouldIndex: 0,
-    rawGets: 0, rawPuts: 0, rawGetBytes: 0, rawPutBytes: 0, notionDownloads: 0, notionDownloadBytes: 0,
+    rawGets: 0, rawPuts: 0, rawGetBytes: 0, rawPutBytes: 0, notionDownloads: 0, notionDownloadAttempts: 0, notionDownloadBytes: 0,
     d1Reads: 0, d1Inserts: 0, receiptGets: 0, receiptPuts: 0, receiptBytes: 0, upstreamGets: 0 };
   const prefix = `ops/raw-index/${opts.planId}`, activeKey = "ops/raw-index/active.json";
   const controlGet = async (key: string) => { checkClock(); stats.receiptGets++; const got = await io.get(key, io.receiptBucket); if (got) stats.receiptBytes += got.body.length; return got; };
@@ -573,7 +581,7 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
     const item = manifest.items[state.cursor]!;
     // 先にworst-case raw転送を予約。原本を切り詰めず、次runへ丸ごと残す。
     const wrapperOverhead = Math.ceil(item.sizeBytes * 0.001) + 4096;
-    const reserve = item.sizeBytes * 4 + wrapperOverhead;
+    const reserve = item.sizeBytes * 5 + wrapperOverhead * 2; // 従来予約＋2回目hosted GET最大(size+wrapper)。
     if (budgetReserved + reserve > opts.maxBytes) { stoppedByBudget = true; budgetStopReason = "bytes"; break; }
     budgetReserved += reserve;
     processingItem = true;
@@ -596,10 +604,22 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
     else {
       if (body === null) {
         checkClock(); stats.notionDownloads++;
-        const saved = await io.download(item, manifest.items.slice(state.cursor, state.cursor + 50));
-        stats.notionDownloadBytes += saved.wireBytes;
+        const remainingMs = deadline - io.now();
+        if (remainingMs <= 0) throw new Error("[raw-backfill] 準備の時間予算到達。未完manifestを使わず停止");
+        const beforeBytes = stats.notionDownloadBytes, beforeAttempts = stats.notionDownloadAttempts;
+        const saved = await io.download(item, manifest.items.slice(state.cursor, state.cursor + 50), {
+          signal: AbortSignal.timeout(remainingMs), onAttempt: async event => {
+            if (event.phase === "start") stats.notionDownloadAttempts++;
+            else stats.notionDownloadBytes += event.receivedBytes;
+            await io.emit({ phase: "hosted_read_attempt", sha256: item.sha256, attempt: event.attempt,
+              attemptPhase: event.phase, receivedBytes: event.receivedBytes, status: event.status,
+              notionDownloadAttempts: stats.notionDownloadAttempts, notionDownloadBytes: stats.notionDownloadBytes });
+          },
+        });
+        if (stats.notionDownloadAttempts - beforeAttempts < 1 || stats.notionDownloadAttempts - beforeAttempts > 2 ||
+            saved.wireBytes !== stats.notionDownloadBytes - beforeBytes) throw new Error("[raw-backfill] hosted物理転送が予約予算を超えました");
         validateBody(saved.body, item);
-        if (saved.wireBytes > item.sizeBytes + wrapperOverhead) throw new Error("[raw-backfill] hosted物理転送が予約予算を超えました");
+        if (saved.wireBytes > 2 * (item.sizeBytes + wrapperOverhead)) throw new Error("[raw-backfill] hosted物理転送が予約予算を超えました");
         stats.wouldPut++;
         if (opts.mode === "apply") {
           await saveState({ ...state, inflight: { sha256: item.sha256, key, phase: "raw_inflight" } });
@@ -665,7 +685,8 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
     status: antiJoin !== null && opts.mode === "apply" ? "snapshot_complete" : "partial",
     stoppedByBudget, budgetStopReason, limitReached: stats.processed === opts.limit && state.cursor < manifest.items.length,
     indexAntiJoin: antiJoin, indexAntiJoinRequests: antiJoin === null ? 0 : Math.ceil(antiJoin.checked / 100),
-    elapsedMs: io.now() - start, rawTransferBytes: stats.rawGetBytes + stats.rawPutBytes + stats.notionDownloadBytes };
+    elapsedMs: io.now() - start, rawTransferBytes: stats.rawGetBytes + stats.rawPutBytes + stats.notionDownloadBytes,
+    hostedBytesKind: "decoded_body_all_observed_attempts", httpHeadersAndErrorBodyBytesMeasured: false, r2PartialReadBytesMeasured: false };
   await io.emit({ phase: "summary", ...result });
   return result;
 }
@@ -691,6 +712,7 @@ async function main() {
   let lastPhase = "starting";
   let lastRawVerified: { sha256: string; bytes: number } | null = null;
   let reconciliationInsertAttempts = 0;
+  let hosted = { notionDownloadAttempts: 0, notionDownloadBytes: 0 };
   let lastProgressAt = 0;
   let inventory = { prefix: "", queries: 0, currentPartitionRows: 0, acceptedRows: 0, responseRows: 0 };
   const emit = async (record: object) => { const phase = (record as { phase?: unknown }).phase; if (typeof phase === "string") lastPhase = phase;
@@ -699,6 +721,10 @@ async function main() {
       lastRawVerified = { sha256, bytes };
     }
     if (phase === "index_reconciliation_insert_inflight") reconciliationInsertAttempts = 1;
+    if (phase === "hosted_read_attempt") {
+      const observed = record as { notionDownloadAttempts: number; notionDownloadBytes: number };
+      hosted = { notionDownloadAttempts: observed.notionDownloadAttempts, notionDownloadBytes: observed.notionDownloadBytes };
+    }
     await receipt.write(`${JSON.stringify(record)}\n`); await receipt.sync();
     // 公開runner logには原本key/URL/bodyを出さず、停止前の送信境界だけ残す。
     if (["manifest", "receipt_inflight", "receipt_verified", "raw_verified", "raw_inflight", "index_inflight", "verified"].includes(lastPhase) &&
@@ -733,7 +759,8 @@ async function main() {
     const after = notionStats();
     const failure = { status: "stopped", ...safeRawFailure(error), lastPhase: failurePhase, lastRawVerified, inventory, elapsedMs: Date.now() - startedAt,
       notionRequests: after.requests - before.requests, notionRateLimited: after.rateLimited - before.rateLimited,
-      notionTransientRetries: after.transientRetries - before.transientRetries, upstreamGets: 0,
+      notionTransientRetries: after.transientRetries - before.transientRetries, upstreamGets: 0, ...hosted,
+      hostedBytesKind: "decoded_body_all_observed_attempts", httpHeadersAndErrorBodyBytesMeasured: false,
       ...(opts.reconcileSha256 === undefined ? { resend: 0 } : { originalSendUnknown: true, reconciliationInsertAttempts }) };
     await emit({ ...failure, phase: "stopped" });
     console.error(JSON.stringify(failure));
