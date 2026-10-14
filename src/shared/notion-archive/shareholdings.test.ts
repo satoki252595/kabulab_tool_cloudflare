@@ -67,6 +67,15 @@ function mirrored(properties: Record<string, unknown>) {
   }));
 }
 
+function formulaStatuses(properties: Record<string, unknown>) {
+  const checked = properties["価格照合済"] as { checkbox?: boolean } | undefined;
+  return {
+    "価格状態": { id: migratedSchema().properties["価格状態"].id, type: "formula", formula: { type: "string", string: checked?.checkbox === true
+      ? "期末参考時価（同日期末株数×終値）" : "未取得（価格・通貨・株数単位の照合未成立）" } },
+    "検証状態": { id: migratedSchema().properties["検証状態"].id, type: "formula", formula: { type: "string", string: "明細原本照合済" } },
+  };
+}
+
 const legacy = Object.fromEntries(LEGACY_HOLDINGS_COLUMNS.map(([, name]) => [name, { type: "number", number: 777 }]));
 let saved: Record<string, unknown>;
 type TestProperties = Record<string, { select?: { name: string }; rich_text?: Array<{ text: { content: string } }> }>;
@@ -90,7 +99,8 @@ async function requestRouter(method: string, path: string, body?: unknown): Prom
   const properties = saved[path] as Record<string, unknown> | undefined;
   return { object: "page", id: path.split("/").at(-1), parent: { type: "database_id", database_id: (path.includes("a".repeat(32)) ? "p" : "d").repeat(32) },
     archived: false, in_trash: false, properties: { ...legacy, ...mirrored(holdingProperties(source,args.ownerName,holding)), Key: { type: "title", title: [{ type: "text", plain_text: `${source.docId}:type1`, text: { content: `${source.docId}:type1` } }] },
-      ...(properties ? mirrored(properties) : {}) } };
+      ...(properties ? mirrored(properties) : {}),
+      ...(!path.includes("a".repeat(32)) ? formulaStatuses(properties ?? {}) : {}) } };
 }
 
 beforeEach(() => { vi.clearAllMocks(); saved = {}; vi.mocked(parseShareholdingsData).mockReturnValue(structuredClone(extraction));
@@ -580,6 +590,33 @@ describe("原本完了とは独立した保存価格queue", () => {
     expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有明細状態": { select: { name: "明細原本照合済" } }, "保有価格状態": { select: { name: "要確認" } } });
   });
 
+  it.each(["価格状態の旧値", "価格状態の新値", "価格状態のID", "他のformula"])("計算列の正常な再計算だけを許可し、%sの不整合はSTOPする", async (change) => {
+    await seedPublishedSource(); vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
+    const route = vi.mocked(notionRequest).getMockImplementation()!;
+    const corrupt = (value: unknown) => {
+      const result = value as { properties: Record<string, { checkbox?: boolean; id?: string; formula: { string: string } }> };
+      const checked = result.properties["価格照合済"].checkbox;
+      if (change === "価格状態の旧値" && !checked || change === "価格状態の新値" && checked) result.properties["価格状態"].formula.string = "不整合";
+      if (change === "価格状態のID") result.properties["価格状態"].id = "別ID";
+      if (change === "他のformula" && checked) result.properties["検証状態"].formula.string = "不整合";
+      return value;
+    };
+    const query = vi.mocked(queryUniqueRow).getMockImplementation()!;
+    vi.mocked(queryUniqueRow).mockImplementation(async (...queryArgs) => {
+      const result = await query(...queryArgs);
+      return queryArgs[0] === "d".repeat(32) ? corrupt(result) as { id: string } : result;
+    });
+    vi.mocked(notionRequest).mockImplementation(async (method, path, ...rest) => {
+      const result = await route(method, path, ...rest);
+      return method === "GET" && path === rowPath ? corrupt(result) : result;
+    });
+    vi.mocked(notionRequest).mockClear();
+    await expect(resumePendingShareholdingsPrices({ maxRows: 100, shouldStop: () => false, budget: budget(), loadSources: async () => ready })).rejects.toThrow(change === "他のformula" ? "他props" : "価格状態");
+    const writes = vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "PATCH" && path === rowPath);
+    expect(writes).toHaveLength(change === "価格状態の旧値" || change === "価格状態のID" ? 0 : 1);
+    expect(saved[`/pages/${args.archivePageId}`]).toMatchObject({ "保有価格状態": { select: { name: "実行中（結果未確定）" } } });
+  });
+
   it("既に原本・価格照合済みの値は新snapshot欠測で消さず、架空NULLにも欠測数にも置換しない", async () => {
     vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());
     await seedPublishedSource({ codeList: evidence, prices: [evidence] });
@@ -659,7 +696,8 @@ describe("原本完了とは独立した保存価格queue", () => {
     const created = vi.mocked(notionRequest).mock.calls.filter(([method, path]) => method === "POST" && path === "/pages");
     expect(created).toHaveLength(2);
     const rows = created.map((call, index) => ({ object: "page", id: (index === 0 ? "e" : "f").repeat(32), parent: { type: "database_id", database_id: "d".repeat(32) },
-      archived: false, in_trash: false, properties: { ...legacy, ...mirrored((call[2] as { properties: Record<string, unknown> }).properties) } }));
+      archived: false, in_trash: false, properties: { ...legacy, ...mirrored((call[2] as { properties: Record<string, unknown> }).properties),
+        ...formulaStatuses((call[2] as { properties: Record<string, unknown> }).properties) } }));
     const originalQuery = vi.mocked(queryUniqueRow).getMockImplementation()!;
     vi.mocked(queryUniqueRow).mockImplementation(async (dbId, filter, message) => {
       if (dbId === "p".repeat(32)) return originalQuery(dbId, filter, message);
@@ -671,7 +709,7 @@ describe("原本完了とは独立した保存価格queue", () => {
     vi.mocked(notionRequest).mockImplementation(async (method, path, body, options) => {
       const row = rows.find(row => path === `/pages/${row.id}`);
       if (!row) return originalRequest(method, path, body, options);
-      if (method === "PATCH") { Object.assign(row.properties, mirrored((body as { properties: Record<string, unknown> }).properties)); return { object: "page", id: row.id }; }
+      if (method === "PATCH") { Object.assign(row.properties, mirrored((body as { properties: Record<string, unknown> }).properties)); Object.assign(row.properties, formulaStatuses(row.properties)); return { object: "page", id: row.id }; }
       return structuredClone(row);
     });
     vi.mocked(qualifyHoldingValuation).mockResolvedValue(qualified());

@@ -134,7 +134,9 @@ export async function applyHoldingsSchema(expected: HoldingsSchema): Promise<Hol
 const rt = (text: string) => ({ rich_text: splitRichText(text) });
 
 interface HoldingProperty {
+  id?: string;
   type?: string;
+  formula?: { type: string; string?: string | null };
   rich_text?: Array<{ type?: string; plain_text?: string; text?: { content?: string } }>;
   title?: Array<{ type?: string; plain_text?: string; text?: { content?: string } }>;
   number?: number | null;
@@ -191,6 +193,17 @@ function assertProperties(actual: Record<string, HoldingProperty>, expected: Rec
     else if (type === "date") assert.deepEqual(actual[name].date, value.date === null ? null : { ...value.date, end: null, time_zone: null });
     else assert.equal(actual[name][type], value[type]);
   }
+}
+
+function assertPriceStatus(properties: Record<string, HoldingProperty>, schema: HoldingsSchema): void {
+  const status = properties["価格状態"], checked = properties["価格照合済"];
+  const schemaId = schema.properties["価格状態"].id;
+  assert.ok(typeof schemaId === "string" && schemaId.length > 0, "価格状態のschema IDが欠けています");
+  assert.equal(status?.id, schemaId, "価格状態のproperty IDが不一致です");
+  assert.equal(status?.type, "formula", "価格状態がformulaではありません");
+  assert.equal(checked?.type, "checkbox"); assert.equal(typeof checked.checkbox, "boolean");
+  assert.deepEqual(status.formula, { type: "string", string: checked.checkbox
+    ? "期末参考時価（同日期末株数×終値）" : "未取得（価格・通貨・株数単位の照合未成立）" }, "価格状態の計算結果が照合済フラグと不一致です");
 }
 
 export interface ShareholdingsBudget { remainingRows: number }
@@ -357,7 +370,10 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
       assert.equal(existing.properties["原本照合済"]?.type, "checkbox");
       assert.equal(typeof existing.properties["原本照合済"].checkbox, "boolean");
     }
-    if (pricePhase) assert.equal(existing?.properties["原本照合済"]?.checkbox, true, "価格phaseで原本未確定行の作成/更新はしません");
+    if (pricePhase) {
+      assert.equal(existing?.properties["原本照合済"]?.checkbox, true, "価格phaseで原本未確定行の作成/更新はしません");
+      assertPriceStatus(existing!.properties, schema);
+    }
     if (pricePhase && valuation.status !== "qualified" && existing?.properties["価格照合済"]?.checkbox !== true) unavailableInWindow++;
     if (existing?.properties["原本照合済"]?.checkbox === true) {
       // 期末株数/原本の照合済み行へ価格根拠だけを加える。既存の確定価格は、
@@ -390,8 +406,13 @@ async function publishHoldings(args: PublishHoldingsArgs, pricePhase?: { snapsho
     assert.equal(readback.in_trash, false);
     assertProperties(readback.properties, properties);
     if (existing) for (const [, legacy] of LEGACY_HOLDINGS_COLUMNS) assert.deepEqual(readback.properties[legacy], existing.properties[legacy]);
-    if (pricePhase && existing) for (const [name, value] of Object.entries(existing.properties)) {
-      if (!VALUATION_COLUMNS.has(name)) assert.deepEqual(stableProperty(readback.properties[name]), stableProperty(value), "価格追記で他propsが変更されています");
+    if (pricePhase && existing) {
+      assertPriceStatus(readback.properties, schema);
+      for (const [name, value] of Object.entries(existing.properties)) {
+        // この式だけが価格照合済checkboxから再計算される。他formula・ID・旧値は保持する。
+        const expected = name === "価格状態" ? { ...value, formula: readback.properties[name].formula } : value;
+        if (!VALUATION_COLUMNS.has(name)) assert.deepEqual(stableProperty(readback.properties[name]), stableProperty(expected), "価格追記で他propsが変更されています");
+      }
     }
     if (existing) result.updated++; else result.created++;
   }
