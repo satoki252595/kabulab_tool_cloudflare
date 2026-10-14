@@ -117,3 +117,37 @@ repository code license. Use is limited to actual-source regression.
 | `geographic-other-S100YCV6.xml` | 1,469 | `2bcd08f22bfefe0b3ff3717aaffe61470d53321b46290175cd89302e518f56c5` |
 | `geographic-other-S100YG3E.html` | 9,367 | `6d056da810c78e9c4b39d13f488daca2e2c2a5ac39c9ada5b4aaaaa3bcfa5701` |
 | `geographic-other-S100YG3E.xml` | 1,469 | `42639de6743ed330e4e074237730aac59fc6cef1239e5d8e00c4fd0a19ba912d` |
+
+
+## Explicit external-sales row and Other geography (S100Y4VB)
+
+`geographic-external-row-S100Y4VB.html` is a verbatim contiguous excerpt of the
+actual 3382 filing, FY2026-02-28. The local caption explicitly states the current
+consolidated period. The table distinguishes external operating revenue from
+inter-location revenue and operating profit. Its immediate note identifies the
+country/region classification by geographical proximity and names Australia and
+China in Other. Printed external `計` and `連結` are both 10,430,269 million JPY;
+foreign leaves are 7,960,998 + 624,984 = 8,585,982. Their one-unit difference from
+published total minus Japan remains unchanged.
+
+Official source: [S100Y4VB type1](https://api.edinet-fsa.go.jp/api/v2/documents/S100Y4VB?type=1).
+Original ZIP: 1,517,254 bytes, SHA-256
+`9170e29c50f4c1e130bc0d79daf8b85ed87283d28bb2405c0e0c3a462eacfb81`.
+Physical legacy archive page: `382d74ff-84cd-81fd-8a9f-d3f0ab7feed1`.
+Original producer manifest and original HTTP acquisition clock remain unknown;
+the saved metadata clock is not substituted for either.
+
+Honbun member: `XBRL/PublicDoc/0105010_honbun_jpcrp030000-asr-001_E03462-000_2026-02-28_01_2026-05-20_ixbrl.htm`,
+SHA-256 `75d7a5ec99085b6f4c545e3f03a2fe246f0d9ef68a3268d925c138e039b1c92e`.
+Verbatim UTF-16 interval `[1798108,1816587)`; original fragment SHA-256
+`1c2cc327d4eb019d0b1730ee2b8a37407ad190090f52bf5d460ed2307d5fe325`.
+The XML fixture is a structural projection of original root attributes and
+verbatim duration definitions, not a full original instance.
+
+| Fixture | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `geographic-external-row-S100Y4VB.html` | 19,712 | `a3a3abcb656cc1493e1bf39294760ac3f404d4eb8fd7275b791eff791fb5ef6d` |
+| `geographic-external-row-S100Y4VB.xml` | 1,404 | `54cf45f37da91709d44bbab65682ded25c744433c75e2517622d9b8fd76c54f6` |
+
+The preceding rights and regression-only conditions apply. Deliberate negative
+transformations occur in tests, never in primary-source or production output.
