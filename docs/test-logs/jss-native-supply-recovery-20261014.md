@@ -18,19 +18,23 @@ JPXの買売・株数・円金額・一般/制度信用の意味を保持し、J
 
 追加負荷は新しい外部source GET/保存/有料API/ライブラリ0。latestはJPX2R2 GET（実body約3.6MB）、逆日歩1SELECT＋1R2 GET（約89kB）。seriesはJPX index＋最大20snapshot GETを逐次処理し、全snapshotを同時保持しない。Nix Node実測（stubの直列化/stream/JSONparse/厳格検証込み、Worker CPU/R2 latencyではない）10回中央値はJPX40.78ms、逆日歩1.79ms。Node試験プロセス最大RSS約204MiBは繰り返しstub生成込みであり、Worker使用メモリの実測とは区別する。
 
-最終private probeは既存24ケース＋逆日歩REST/MCP対4件の28ケース・全8tools。JPX/逆日歩のseriesは保存native基準日1日に固定し、独立した保存原本DTO期待digestとREST/MCP相互digestを両方検査する。raw-contentを含む全非health応答はbody読前にX-Surface privateを検証する。nonce256bit/15分expiry/固定宛先・case/値非露出/単発durable latch/unknown STOPを維持し、通常appのCI/main/deploy後にroot承認されたfresh namespaceだけを1回起動する。現段階では本番配置・無配分upload・本番probeは0。
+最終private probeは既存24ケース＋逆日歩REST/MCP対4件の28ケース・全8tools。JPX/逆日歩のseriesは保存native基準日1日に固定し、独立した保存原本DTO期待digestとREST/MCP相互digestを両方検査する。raw-contentを含む認証成功応答はbody読前にX-Surface privateを検証し、401は正式契約どおりヘッダー不在を確認する。nonce256bit/15分expiry/固定宛先・case/値非露出/単発durable latch/unknown STOPを維持し、通常appのCI/main/deploy後にroot承認されたfresh namespaceだけを1回起動した。
 
 最終28-caseの静的監査内訳:
 
 | case群 | 件数 | 成功境界 |
 | --- | ---: | --- |
-| health / missing・invalid auth / licenses | 4 | 固定status、health private、401 unauthorized、非health X-Surface |
+| health / missing・invalid auth / licenses | 4 | 固定status、health private、401 unauthorized＋surfaceなし、認証成功X-Surface private |
 | MCP initialize / tools-list | 2 | 規定protocol、8toolsの名前・3需給enum・cursor型、controlにdata digestを要求しない |
 | JPX latest / series × REST・MCP | 4 | native株数/円・原本来歴の固定期待digest、series1基準日、updated null、相互digest一致 |
 | JSF shina latest / series × REST・MCP | 4 | native CSVと既存seriesの項目・全取引所・1基準日、固定期待digest、相互digest一致 |
 | OHLCV / freshness / indicators / valuation / jobs / raw-file × REST・MCP | 12 | 既存型/件数/資格、RESTとMCPの実際の共通fieldを正規化して相互digest一致 |
 | raw-content / yutai | 2 | body読前surface、186Bの固定SHA、条件DTOと原文非公開・集計不可 |
 
-全早期returnを確認し、非healthは401/rawを含めbody読前header検査を通る。core/runnerは固定case identityを検査する同じdata-pair判定関数を共有する。ローカルharness18checks（workerd manual200/302・nonce/expiry・値非露出・raw header negative・native期待1field破損拒否）と、通常appへ保存実原本を与えた6REST/MCPケースの期待digest一致がPASS。逆日歩seriesの本番既存R2読取は最終liveで検査し、localで架空seriesへ置換して完了扱いしていない。
+全早期returnを確認し、認証成功rawを含めbody読前header検査を通る。core/runnerは固定case identityを検査する同じdata-pair判定関数を共有する。ローカルharness20checks（workerd manual200/302・nonce/expiry・値非露出・raw header negative・native期待1field破損拒否・10組の最終集約・正式401契約）と、通常appへ保存実原本を与えた6REST/MCPケースの期待digest一致がPASS。逆日歩seriesは本番既存R2も最終liveで検査し、localで架空seriesへ置換して完了扱いしていない。
 
 root最終レビュー後、CSV2行目の単位定義をNFKC正規化して最高/前日の日次単位・当日の品貸日数乗算が両方明示されることを必須にした。注記欠落/改変はSTOP。JPX公表日もISO形式だけでなく実在する暦日との一致を必須にした。どちらもnative原値・DTO・期待digestは不変、actual note/calendar明示改変とCI常時のnote境界試験を追加した。
+
+PR369/main `1b8c71d611ce3e47ef35afc27dd32d4adac13ff5` の通常private appを、既存5binding・secret・runtimeを保持しVWAPだけ追加して本番配置した。最終probeは2026-10-13T22:35:49Zに28/28成功、実elapsed22.169秒。全8tools・REST/MCP10組・JPX/逆日歩4組の独立native期待digest、原本186BのSHA、優待条件DTOを確認した。本番version `8772279c-1d81-4474-807b-6fb1f3037208` の100%配信と6bindingは前後完全同値。無配分preview1upload・固定case28要求、traffic変更0、キー値取得/export0、業務書込0、上流source GET0。有料resource追加0、Worker CPU/実請求額は未計測のため数値を補わない。
+
+先行probeは認証後専用ヘッダーを401にも要求した検証側の契約誤認で停止した。正式401のヘッダー不在を維持し、本番コードは変更せず検証側だけを修正した。旧計画・停止receipt・未送信caseはprivateで保全し、承認された別namespaceの単発最終検証で受け入れた。成功receipt SHA-256は `1d8265b23cf316e97fcd5c7e01099bee7c7363c1390382ac25b7558c112b3997`。

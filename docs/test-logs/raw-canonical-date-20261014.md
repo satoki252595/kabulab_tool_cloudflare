@@ -31,3 +31,11 @@ Nix/固定uv.lockで関連114 testsと変更Pythonのruffを確認した。
 private読取分類は`raw-finite200-date-analysis-v1`、13行CAS計画SHAは
 `21146109ac16b32dda10cca2ca2ae4644a59c6fb06d03a09b4fa45e91da7a0e8`。
 公式サイトの再GET・モデル・本番書込はこの検証で0。
+
+## 17時台の本番反映と有限継続
+
+PR377/main `d0fa20752eb743002845681e865446d7351d41b6` の通常修正をCI受入後、13行は27SQLを単一HTTPで送り、全4821行を読戻した。変更は13行のdata_dateだけで、他4808行・他16列・両clock・旧R2 key/bodyは保持した。PRE/POSTはNotion実体保存・全SHA読戻し済み。公式source GET・R2 body/state書込・モデル0。
+
+PRE SHA `ae0c5a6810a112d68e26bd70bb878652ee21da0ae612fec4fb252ce085884384`、POST SHA `5f63d2aa889bdd772ba08588ce7cf56e6c7e99011c45a80482447f3c55b05188`。別の独立確認で全17列/13canonical/物理POST/旧state2337を再照合した後、[run38533846279](https://github.com/satoki252595/kabulab_tool_cloudflare/actions/runs/38533846279)へ一度だけdispatchした。旧200run予算で消費した4runを除き、残196run（continue_runs195）とした。stateのリセット、旧ラッチの消去、原本再取得は行っていない。
+
+17:37 JSTのOAuth読取でcursor2523、実行中inflightを確認し、旧停止地点2337を通過した。これは全78832件完了ではない。以降も固定manifestとfinite budgetを使い、エラー/結果不明は継続停止、最終anti-join欠測0を別受入とする。

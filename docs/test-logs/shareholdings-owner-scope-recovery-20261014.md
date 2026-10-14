@@ -12,4 +12,8 @@
 
 最終 parser SHA は `869fb5e7f8b595d34cbf07fb90b5bf02b61d0e80021683307e649f7a79d965bd`。`verifySavedHoldingsSource` 本体は旧版と byte 同一（関数 SHA `04c8394ef6c983bb03a6943dcf49f2575b27fd8078061a5a4d4c7471049547a0`）で、既存の原本資格と保有主体資格を分けている。新 parser の別計画へ保存 ZIP を再解析するまで旧計画は失効扱いとする。全最新文書の準備・価格資格・本番公開は未完了であり、この検証を全量公開完了とはしない。
 
+修正版の別ディレクトリ `source-only-owner-scope-20261014/` で、従来の 1,565 文書を fresh な active/latest 選択と照合して再準備した。1,557 保存 ZIP は全 SHA・metadata・DEI を再確認し、原本資格が未成立の 8 文書は従前の理由付き HOLD を保持。再ダウンロードは 0、保管先・metadata は不変。旧 ready 677 文書 / 8,301 行は新 ready 674 文書 / 8,166 行となった。181 行の主体除外に加え、旧 HOLD 7 文書の提出会社明細 46 行が新たに適格となった（2784・4091・4208 の計 39 行、および 255A・3184・3353・4290 の計 7 行）。追加 4 文書も、先行する明示子会社区画を除外し、その後の明示提出会社区画だけを採る実原表の証明を保存した。
+
+この部分集合の検証 receipt `cache-reparse-1565-verified.json` SHA は `3fabe444ec83ac09479e3c1e335aabbc4c5d0aa447f31bfd7df84d39fdb11bcd`、追加 4 文書の主体証明 `additional4-recovered-owner-proof-v3.json` SHA は `528873be5c5b1f6228bac5018fbcf57b5f508d2a926d970bd5498671728470c3`。新計画は各 plan/item/projection の全 bytes SHA を content manifest に固定し、旧計画・PAUSE を保持したまま後続の保存原本を最大 0.5 requests/sec で準備中。価格段階と業務書込みは未実施。
+
 関連 4 suites / 55 tests、対象 ESLint、差分空白検査が成功。回帰は実保存見出しと構造用表を使用し、S100Z2Z6 の子会社明細を提出会社へ採用しない既存回帰も維持した。
