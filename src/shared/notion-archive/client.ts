@@ -27,6 +27,17 @@ const MAX_RETRY = 6;
 
 let chain: Promise<unknown> = Promise.resolve();
 let lastStart = 0;
+let nativeMinIntervalMs: number | null = null;
+let lastNativeStart = -Infinity;
+
+/** 明示bulk CLI専用。開始前にだけ下限を固定し、未設定の通常380ms挙動は変えない。 */
+export function setNotionMaxRps(maxRps: number): void {
+  const interval = Math.ceil(1000 / maxRps);
+  if (!Number.isFinite(maxRps) || maxRps <= 0 || maxRps > 1000 / MIN_INTERVAL_MS || !Number.isSafeInteger(interval) || interval > 2_147_483_647 || stats.requests !== 0 || lastStart !== 0) {
+    throw new NotionConfigError("Notion pacingは開始前の正有限・既定以下のrateだけ設定できます");
+  }
+  nativeMinIntervalMs = interval;
+}
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -146,6 +157,11 @@ async function doFetch(
     let res: Response;
     try {
       const init = makeInit();
+      if (nativeMinIntervalMs !== null) {
+        const wait = nativeMinIntervalMs - (performance.now() - lastNativeStart);
+        if (wait > 0) await sleep(wait);
+        lastNativeStart = performance.now();
+      }
       stats.requests++;
       res = await fetch(url, init);
     } catch (e) {

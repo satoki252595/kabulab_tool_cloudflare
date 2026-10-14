@@ -17,7 +17,7 @@ import { z } from "../../src/shared/zod-mini.js";
 import { sharedEnv } from "../../src/shared/env.js";
 import { assertD1SingleQueryResponse, createD1HttpBatchSender, d1HttpQueryUrl } from "../../src/shared/db/d1-http-client.js";
 import { assertCanonicalRawMetadata, findCanonicalRawFileAttachments, listCanonicalRawFiles, type CanonicalRawAttachment } from "../../src/shared/notion-archive/raw-files.js";
-import { notionStats } from "../../src/shared/notion-archive/client.js";
+import { notionStats, setNotionMaxRps } from "../../src/shared/notion-archive/client.js";
 import { downloadArchivedFile } from "../moneyflow/lib/archived-files.js";
 import { unzip } from "../../services/yuho-quant/src/services/edinet/zip.js";
 import { r2GetBytesVersion, r2PutBytes } from "../vwap/lib/r2.js";
@@ -437,6 +437,7 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
     let key = state.inflight !== null ? state.inflight.key : index ? index.r2_key : canonicalRawKey({ ...item, sourceUrl: null }, item.docId);
     if (state.inflight && index && key !== index.r2_key) throw new Error("[raw-backfill] inflight/index key不一致");
     let body = await readBody(key, item);
+    let checkedIndex: RawIndexRow | null | undefined;
     if (state.inflight !== null) {
       if (body === null) throw new Error("[raw-backfill] inflight原本が未確認。PUTを再送せず保全停止");
       if (state.inflight.phase === "index_inflight" && index === null) throw new Error("[raw-backfill] inflight索引が未確認。INSERTを再送せず保全停止");
@@ -460,15 +461,20 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
           await io.emit({ phase: "raw_inflight", sha256: item.sha256, key, bytes: item.sizeBytes });
           checkClock(); stats.rawPuts++; stats.rawPutBytes += saved.body.length;
           await io.put(key, saved.body, null, io.rawBucket, "application/octet-stream");
-          body = await readBody(key, item);
+          // 両方ともreadだけ。全結果を回収し、どちらかの失敗時はindex latch/INSERTへ進めない。
+          const checked = await Promise.allSettled([readBody(key, item), readIndex(item)]);
+          if (checked[0].status === "rejected") throw checked[0].reason;
+          body = checked[0].value;
           if (body === null) throw new Error("[raw-backfill] PUT後の原本全文確認ができません。再送禁止");
+          if (checked[1].status === "rejected") throw checked[1].reason;
+          checkedIndex = checked[1].value;
         }
       }
       stats.wouldIndex++;
       if (opts.mode === "apply") {
         if (body === null) throw new Error("[raw-backfill] R2全文確認前の索引は禁止");
-        // 直前の別writerをreadで照合。同値ならINSERTしない、不一致は止める。
-        index = await readIndex(item);
+        // PUT後の独立read済みの場合も、全body成功後だけ同値判定へ進む。
+        index = checkedIndex === undefined ? await readIndex(item) : checkedIndex;
         if (index !== null) validateIndex(index, item, io.rawBucket, key);
         else {
           await saveState({ ...state, inflight: { sha256: item.sha256, key, phase: "index_inflight" } });
@@ -521,7 +527,7 @@ export async function runRawBackfill(opts: RawBackfillOptions, io: BackfillIo) {
 
 async function main() {
   const required = ["mode", "plan-id", "limit", "max-bytes", "max-seconds", "expected-count", "out"];
-  const allowed = [...required, "cutoff", "reconcile-sha256", "reconcile-state-sha256"];
+  const allowed = [...required, "notion-max-rps", "cutoff", "reconcile-sha256", "reconcile-state-sha256"];
   const args = new Map<string, string>();
   for (const arg of process.argv.slice(2)) {
     const m = /^--([a-z0-9-]+)=(.+)$/.exec(arg);
@@ -534,6 +540,7 @@ async function main() {
     ...(args.has("reconcile-sha256") ? { reconcileSha256: args.get("reconcile-sha256")! } : {}),
     ...(args.has("reconcile-state-sha256") ? { reconcileStateSha256: args.get("reconcile-state-sha256")! } : {}) };
   validateRawOptions(opts);
+  if (args.has("notion-max-rps")) setNotionMaxRps(Number(args.get("notion-max-rps")));
   const receipt = await fs.open(args.get("out")!, "wx", 0o600), before = notionStats();
   const startedAt = Date.now();
   let lastPhase = "starting";

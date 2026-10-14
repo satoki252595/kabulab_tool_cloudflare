@@ -92,7 +92,7 @@ jobs:
           nix develop -c pnpm exec tsx scripts/notion/raw-index-backfill.ts \
             "--mode=$MODE" "--plan-id=$PLAN_ID" "--expected-count=$EXPECTED_COUNT" "--cutoff=$CUTOFF" \
             "--limit=$LIMIT" "--max-bytes=$MAX_BYTES" "--max-seconds=$MAX_SECONDS" \
-            --out=tmp/raw-index/receipt.jsonl "${reconcile_args[@]}"
+            --notion-max-rps=0.25 --out=tmp/raw-index/receipt.jsonl "${reconcile_args[@]}"
       # raw body/manifest/private receipt はartifactへ公開しない。再開stateはR2へCAS保管。
       - name: Continue the same verified snapshot within the explicit run budget
         if: ${{ success() && inputs.mode == 'apply' && inputs.continue_runs != '0' }}
