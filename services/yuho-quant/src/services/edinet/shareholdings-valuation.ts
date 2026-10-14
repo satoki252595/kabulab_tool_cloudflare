@@ -81,26 +81,40 @@ interface VerifiedPriceChart {
   raw: { meta: { currency: string; exchangeTimezoneName: string; longName: string }; timestamp: number[]; indicators: { quote: Array<{ close: Array<number | null> }> } };
 }
 
-/** 明示run用。全sourceを一度展開し、候補のbody/要求/chart検証も初回だけ行う。chunk単位で解放する。 */
+/** 初回候補使用時だけ全sourceを一度展開し、body/要求/chart検証も共有する。chunk単位で解放する。 */
 export class HoldingsPriceIndex {
-  readonly #bySymbol = new Map<string, PriceCandidate[]>();
+  #bySymbol: Map<string, PriceCandidate[]> | null = null;
+  #buildStarted = false;
+  #buildError: unknown;
   readonly #verified = new WeakMap<PriceCandidate, Promise<VerifiedPriceChart>>();
 
-  constructor(prices: readonly ArchivedSource[]) {
-    for (const source of prices) {
+  constructor(private readonly prices: readonly ArchivedSource[]) {}
+
+  private build(): Map<string, PriceCandidate[]> {
+    const bySymbol = new Map<string, PriceCandidate[]>();
+    for (const source of this.prices) {
       assertSource(source);
       const wrapper = JSON.parse(gunzipSync(source.bytes).toString("utf8"));
       assert.equal(wrapper.version, 1); assert.ok(Array.isArray(wrapper.members));
       for (const member of wrapper.members as PriceMember[]) {
         if (member.api !== "daily") continue;
-        const candidates = this.#bySymbol.get(member.symbol) ?? [];
+        const candidates = bySymbol.get(member.symbol) ?? [];
         candidates.push(Object.freeze({ source: Object.freeze({ archivePageId: source.archivePageId, filename: source.filename, sha256: source.sha256 }), member: Object.freeze(member) }));
-        this.#bySymbol.set(member.symbol, candidates);
+        bySymbol.set(member.symbol, candidates);
       }
     }
+    return bySymbol;
   }
 
-  candidates(symbol: string): readonly PriceCandidate[] { return this.#bySymbol.get(symbol) ?? []; }
+  candidates(symbol: string): readonly PriceCandidate[] {
+    if (this.#bySymbol === null) {
+      if (this.#buildStarted) throw this.#buildError;
+      this.#buildStarted = true;
+      try { this.#bySymbol = this.build(); }
+      catch (error) { this.#buildError = error; throw error; }
+    }
+    return this.#bySymbol.get(symbol) ?? [];
+  }
 
   verifiedChart(candidate: PriceCandidate, symbol: string): Promise<VerifiedPriceChart> {
     assert.equal(candidate.member.symbol, symbol);

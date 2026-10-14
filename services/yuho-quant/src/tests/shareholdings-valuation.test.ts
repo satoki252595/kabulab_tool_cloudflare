@@ -89,12 +89,26 @@ describe("保有明細の期末参考時価", () => {
     await expect(qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices: index })).rejects.toThrow();
   });
   it("明示indexはsource SHAとmember SHAの不一致を許容せず、重複候補を選ばない", async () => {
-    expect(() => new HoldingsPriceIndex([{ ...source(), sha256: "0".repeat(64) }])).toThrow();
+    const corrupt = new HoldingsPriceIndex([{ ...source(), sha256: "0".repeat(64) }]);
+    expect(() => corrupt.candidates("7203.T")).toThrow();
     const duplicated = new HoldingsPriceIndex([source(), source()]);
     expect(await qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices: duplicated })).toMatchObject({ status: "unavailable", reason: "該当symbolの保存日足原本が一意ではありません" });
     const saved = source(), wrapper = JSON.parse((await import("node:zlib")).gunzipSync(saved.bytes).toString("utf8"));
     wrapper.members[0].sha256 = "0".repeat(64);
     const bytes = gzipSync(Buffer.from(JSON.stringify(wrapper))), index = new HoldingsPriceIndex([{ ...saved, bytes, sha256: hash(bytes) }]);
     for (let attempt = 0; attempt < 2; attempt++) await expect(qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices: index })).rejects.toThrow();
+  });
+  it("全未同定/株数非開示なら未使用の破損bundleへ触れず、候補使用時だけ一度STOPする", async () => {
+    const index = new HoldingsPriceIndex([{ ...source(), sha256: "0".repeat(64) }]);
+    expect(await qualifyHoldingValuation({ holding: { ...holding, name: holding.name + "別会社" }, fiscalYearEnd: "2026-06-30", catalog, prices: index }))
+      .toMatchObject({ status: "unavailable", reason: "公式上場提出者名へ完全一致しません" });
+    expect(await qualifyHoldingValuation({ holding: { ...holding, shares: null }, fiscalYearEnd: "2026-06-30", catalog, prices: index }))
+      .toMatchObject({ status: "unavailable", reason: "期末株数が非開示です" });
+    let firstError: unknown;
+    try { index.candidates("7203.T"); } catch (error) { firstError = error; }
+    expect(firstError).toBeInstanceOf(Error);
+    expect(() => index.candidates("7203.T")).toThrow(firstError as Error);
+    try { index.candidates("7203.T"); } catch (error) { expect(error).toBe(firstError); }
+    await expect(qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices: index })).rejects.toThrow("SHA");
   });
 });

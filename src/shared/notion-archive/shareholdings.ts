@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { parseShareholdingsData, verifySavedHoldingsSource, type Shareholding, type ShareholdingsSource, type ShareholdingsExtraction } from "../../../services/yuho-quant/src/services/edinet/shareholdings.js";
-import { parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource, type HoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
+import { HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource, type HoldingValuation } from "../../../services/yuho-quant/src/services/edinet/shareholdings-valuation.js";
 import { edinetArchiveFilename } from "../../../services/yuho-quant/src/services/edinet/archive.js";
 import { findUniqueBackupChildByTitle, queryUniqueRow } from "./archive.js";
 import { notionRequest } from "./client.js";
@@ -226,10 +226,11 @@ export async function publishVerifiedShareholdings(args: PublishHoldingsArgs): P
   if (args.budget) args.budget.remainingRows -= parsed.holdings.length;
   const zipSha256 = createHash("sha256").update(args.zip).digest("hex");
   const catalog = args.valuationSources ? parseHoldingsCodeList(args.valuationSources.codeList) : null;
+  const prices = args.valuationSources ? new HoldingsPriceIndex(args.valuationSources.prices) : null;
   const ready = [];
   for (const holding of parsed.holdings) {
-    const valuation: HoldingValuation = catalog && args.valuationSources
-      ? await qualifyHoldingValuation({ holding, fiscalYearEnd: args.source.fiscalYearEnd, catalog, prices: args.valuationSources.prices })
+    const valuation: HoldingValuation = catalog && prices
+      ? await qualifyHoldingValuation({ holding, fiscalYearEnd: args.source.fiscalYearEnd, catalog, prices })
       : { status: "unavailable", identity: null, reason: "銘柄同定・個別価格・分割観測の保存原本が未指定です" };
     ready.push({ holding, valuation, properties: { ...holdingProperties(args.source, args.ownerName, holding),
       ...sourceProperties(parsed, holding, zipSha256), ...valuationProperties(holding, valuation) } });
