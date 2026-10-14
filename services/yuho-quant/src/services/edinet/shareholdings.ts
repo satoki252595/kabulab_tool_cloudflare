@@ -135,7 +135,8 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource)
   let excludedTables = 0;
   for (const [tableIndex, table] of tables.entries()) {
     const start = block.html.indexOf(table, lastEnd);
-    const before = stripHtml(block.html.slice(lastEnd, start)).normalize("NFKC");
+    const beforeHtml = block.html.slice(lastEnd, start);
+    const before = stripHtml(beforeHtml).normalize("NFKC");
     lastEnd = start + table.length;
     // 当社の株式を相手方が保有する、という表の列見出しは主体証拠に使わない。
     // 保存原典で確認した当社自身の保有説明と明示区画だけ。別会社区画へ入った後は
@@ -157,12 +158,23 @@ export function parseShareholdingsData(zip: Buffer, source: ShareholdingsSource)
       } else if (scope !== "other" && !ambiguousOwnerSection) scope = "filer";
     }
     const parenthesizedKind = /(?:^|\s)\((特定投資株式|みなし保有株式)\)\s*$/.exec(before);
-    const kindHeading = /(?:^|\s)(特定投資株式|みなし保有株式)(\(信託財産として保有し議決権行使権限のあるもの等\))?\s*$/.exec(before);
-    if (parenthesizedKind) {
+    const kindHeading = /(?:^|\s)(?:\((?:i|ii)\)\s*)?(特定投資株式|みなし保有株式)(\(信託財産として保有し議決権行使権限のあるもの等\))?\s*$/.exec(before);
+    // A preceding paragraph's parenthesized note is not a heading prefix.
+    let heading = "";
+    for (const part of beforeHtml.split(/<\/(?:p|div|h[1-6])\s*>/i)) {
+      const text = stripHtml(part).normalize("NFKC");
+      if (text) heading = text;
+    }
+    const enumeration = /(?:^|\s)(\([^()]*\)?)\s*(?:特定投資株式|みなし保有株式)(?:\(信託財産として保有し議決権行使権限のあるもの等\))?\s*$/.exec(heading);
+    // Spaced (a)/(b) headings were already accepted by the bare-kind path.
+    // This change adds only (i)/(ii), including headings without a space.
+    if (!parenthesizedKind && enumeration && !["(i)", "(ii)", "(a)", "(b)"].includes(enumeration[1])) {
+      return { ...result, status: "unsupported", reason: "保有種別見出しの列挙記号を確認できません", holdings: [] };
+    } else if (parenthesizedKind) {
       kind = parenthesizedKind[1] as Shareholding["kind"];
     } else if (kindHeading && (kindHeading[2] === undefined || kindHeading[1] === "みなし保有株式")) {
       kind = kindHeading[1] as Shareholding["kind"];
-    } else if (/(?:^|\s)(?:特定投資株式|みなし保有株式)\s*\(|(?:^|\s)\((?:特定投資株式|みなし保有株式)/.test(before)) {
+    } else if (/(?:^|\s)(?:特定投資株式|みなし保有株式)\s*\(|(?:^|\s)\((?:特定投資株式|みなし保有株式)|(?:特定投資株式|みなし保有株式)\s*$/.test(before)) {
       return { ...result, status: "unsupported", reason: "保有種別見出しの括弧注記を確認できません", holdings: [] };
     }
     const grid = tableToGridExpanded(table);

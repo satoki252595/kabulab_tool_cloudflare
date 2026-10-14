@@ -126,6 +126,36 @@ describe("株式保有明細の原表資格", () => {
     expect(parse(block(reverse).replace("提出会社における株式の保有状況", "構造検証子会社における株式の保有状況")))
       .toMatchObject({ status: "no_detail_table", holdings: [], holderScope: "unqualified" });
   });
+  it("保存原表の対になった(i)/(ii)列挙だけを許し、未知/不完全な記号へkindを継承しない", () => {
+    for (const prefix of ["（i）", "（ii） "]) {
+      expect(parse(block().replace("<p>特定投資株式</p>", `<p>${prefix}特定投資株式</p>`)).holdings).toHaveLength(2);
+    }
+    expect(parse(block().replace("<p>特定投資株式</p>", "<p>（a） 特定投資株式</p>")).holdings).toHaveLength(2);
+    expect(parse(block().replace("<p>特定投資株式</p>", "<p>（保有の定量的な効果については記載しておりません。）</p><p>特定投資株式</p>")).holdings).toHaveLength(2);
+    const parent = block(), end = parent.lastIndexOf("</ix:nonNumeric>");
+    for (const prefix of ["（iii）", "（ iii ） ", "（未確認） ", "（i ", "（ii", "（i）未確認", "（a）"]) {
+      expect(parse(parent.slice(0, end) + `<p>${prefix}みなし保有株式</p>${table}` + parent.slice(end)))
+        .toMatchObject({ status: "unsupported", holdings: [] });
+    }
+  });
+  it("保存3926/4578/6498/9612のnative全区画から提出会社の実表だけを採る", () => {
+    const bytes = readFileSync(new URL("./fixtures/holdings-enumerated-kind.json.gz", import.meta.url));
+    const provenance = JSON.parse(readFileSync(new URL("./fixtures/holdings-enumerated-kind.provenance.json", import.meta.url), "utf8"));
+    const hash = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
+    expect(hash(bytes)).toBe(provenance.fixtureSha256);
+    const fixtures = JSON.parse(gunzipSync(bytes).toString("utf8")) as Array<{ source: typeof source; filename: string; html: string }>;
+    for (const [code, rows, shares, bookValueYen] of [["3926", 1, 5347300, 930430000], ["4578", 3, 1176500, 2555000000], ["6498", 17, 37551132, 1724000000], ["9612", 10, 2767, 7000000]] as const) {
+      const fixture = fixtures.find(row => row.source.stockCode === code)!;
+      const member = provenance.members.find((row: { source: typeof source }) => row.source.stockCode === code);
+      expect(hash(fixture.html)).toBe(member.excerptSha256);
+      vi.mocked(unzip).mockReturnValue(new Map([[fixture.filename, Buffer.from(fixture.html)]]));
+      const parsed = parseShareholdingsData(Buffer.alloc(0), fixture.source);
+      expect(parsed).toMatchObject({ status: "ok", holderScope: "filer_only", contextRef: "FilingDateInstant" });
+      expect(parsed.holdings).toHaveLength(rows);
+      expect(parsed.holdings[0]).toMatchObject({ shares, bookValueYen, price: null });
+      expect(parsed.holdings.every(row => row.kind === "特定投資株式")).toBe(true);
+    }
+  });
   it("保存1438/2437/1969の完全なnativeTextBlockで当期の実株数/実帳簿価額を確認する", () => {
     const bytes = readFileSync(new URL("./fixtures/holdings-header-forms.json.gz", import.meta.url));
     const provenance = JSON.parse(readFileSync(new URL("./fixtures/holdings-header-forms.provenance.json", import.meta.url), "utf8"));
