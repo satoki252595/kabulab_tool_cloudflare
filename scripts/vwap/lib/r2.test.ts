@@ -53,6 +53,36 @@ it("conditional repair preserves the native ETag and propagates a stale precondi
   });
 });
 
+it("native metadata uses the same single conditional PUT while body bytes stay unchanged", async () => {
+  const metadata = { "holdings-price": '{"bodySha256":"proof"}', unrelated: "preserved" };
+  const send = vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(async () => okPut());
+  await r2Put("daily/7203.json", "original bytes", '"observed"', metadata);
+  expect(send).toHaveBeenCalledTimes(1);
+  expect((send.mock.calls[0][0] as PutObjectCommand).input).toMatchObject({
+    Body: new TextEncoder().encode("original bytes"), IfMatch: '"observed"', Metadata: metadata,
+  });
+  send.mockImplementationOnce(async () => ({ ...okGet(), Metadata: metadata }));
+  expect(await r2GetVersion("daily/7203.json")).toEqual({ body: "original bytes", etag: '"native-etag"', metadata });
+});
+
+it("invalid/oversized custom metadata never sends or becomes a successful GET", async () => {
+  const send = vi.spyOn(S3Client.prototype, "send");
+  await expect(r2Put("daily/7203.json", "original bytes", null, { "holdings-price": "x".repeat(2048) })).rejects.toThrow("metadata");
+  expect(send).not.toHaveBeenCalled();
+  send.mockImplementationOnce(async () => ({ ...okGet(), Metadata: { "holdings-price": 1 } }));
+  await expect(r2GetVersion("daily/7203.json")).rejects.toThrow("metadata");
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
+it.each([undefined, 1000])("bounded metadata reads reject unknown/oversized length %s before reading the body", async length => {
+  const body = vi.fn(async () => new Uint8Array(1000)), destroy = vi.fn();
+  const send = vi.spyOn(S3Client.prototype, "send").mockImplementationOnce(async () => ({
+    ...okGet(), ...(length === undefined ? {} : { ContentLength: length }), Body: { transformToByteArray: body, destroy },
+  }));
+  await expect(r2GetVersion("ops/holdings-price/active.json", { maxBytes: 128 })).rejects.toThrow("byte budget");
+  expect(send).toHaveBeenCalledTimes(1); expect(body).not.toHaveBeenCalled(); expect(destroy).toHaveBeenCalledTimes(1);
+});
+
 describe("r2Put contract (1 attempt, no retry)", () => {
   it("bounded transport abort stops a mutation without replay", async () => {
     const controller = new AbortController();

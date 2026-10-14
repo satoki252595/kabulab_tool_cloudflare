@@ -79,21 +79,25 @@ function isExplicitRejection(code: string, status: number | "none"): boolean {
  * observedVersion は同じ object の GET で得た不透明 ETag。明示 NoSuchKey
  * の null は IfNoneMatch:* で作成する。取得後の競合は 412 で停止する。
  */
-export async function r2Put(key: string, body: string, observedVersion: string | null): Promise<void> {
-  return r2PutBytes(key, new TextEncoder().encode(body), observedVersion, LOCAL_OUT ? undefined : sharedEnv.R2_BUCKET(), "application/json");
+export async function r2Put(key: string, body: string, observedVersion: string | null, metadata?: Record<string, string>): Promise<void> {
+  return r2PutBytes(key, new TextEncoder().encode(body), observedVersion, LOCAL_OUT ? undefined : sharedEnv.R2_BUCKET(), "application/json", metadata);
 }
 
 /** 原本バイナリも同じ単発/CAS契約で保存する。bucketはcallerが明示する。 */
-export async function r2PutBytes(key: string, body: Uint8Array, observedVersion: string | null, bucket: string | undefined, contentType: string): Promise<void> {
+export async function r2PutBytes(key: string, body: Uint8Array, observedVersion: string | null, bucket: string | undefined, contentType: string, metadata?: Record<string, string>): Promise<void> {
   if (!contentType.trim()) throw new Error("R2 content type must be explicit");
   if (observedVersion !== null && (typeof observedVersion !== "string" || observedVersion.trim().length === 0 || observedVersion.trim() === "*")) {
     throw new Error("R2 write requires an observed ETag or explicit missing-object null");
   }
+  if (metadata !== undefined) assertMetadata(metadata);
   if (LOCAL_OUT) {
     // Local output is a preview, never evidence of the remote server's CAS guarantee.
     const p = path.join(LOCAL_OUT, key);
     await fs.mkdir(path.dirname(p), { recursive: true });
     await fs.writeFile(p, body);
+    // LOCAL_OUT is a preview, not evidence of remote atomic body+metadata/CAS semantics.
+    if (metadata !== undefined) await fs.writeFile(`${p}.s3-metadata.json`, JSON.stringify(metadata));
+    else await fs.rm(`${p}.s3-metadata.json`, { force: true });
     return;
   }
   if (typeof bucket !== "string" || !bucket.trim()) throw new Error("R2 bucket must be explicit");
@@ -101,6 +105,7 @@ export async function r2PutBytes(key: string, body: Uint8Array, observedVersion:
   try {
     res = await client().send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType,
       ...(observedVersion === null ? { IfNoneMatch: "*" } : { IfMatch: observedVersion }),
+      ...(metadata === undefined ? {} : { Metadata: metadata }),
     }), { abortSignal: AbortSignal.timeout(60_000) });
   } catch (e) {
     const { code, status } = r2CauseOf(e);
@@ -126,17 +131,34 @@ export async function r2Get(key: string): Promise<string | null> {
   return result === null ? null : result.body;
 }
 
-export async function r2GetVersion(key: string): Promise<{ body: string; etag: string } | null> {
-  const found = await r2GetBytesVersion(key, LOCAL_OUT ? undefined : sharedEnv.R2_BUCKET());
-  return found === null ? null : { body: new TextDecoder().decode(found.body), etag: found.etag };
+export interface R2ReadOptions { singleAttempt?: boolean; maxBytes?: number }
+export async function r2GetVersion(key: string, opts?: R2ReadOptions): Promise<{ body: string; etag: string; metadata?: Record<string, string> } | null> {
+  const found = await r2GetBytesVersion(key, LOCAL_OUT ? undefined : sharedEnv.R2_BUCKET(), opts);
+  return found === null ? null : { body: new TextDecoder().decode(found.body), etag: found.etag,
+    ...(found.metadata === undefined ? {} : { metadata: found.metadata }) };
+}
+
+function assertMetadata(metadata: unknown): asserts metadata is Record<string, string> {
+  if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata) ||
+      Object.entries(metadata).some(([key, value]) => !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(key) ||
+        typeof value !== "string" || !/^[\x20-\x7e]*$/.test(value)) ||
+      Object.entries(metadata).reduce((bytes, [key, value]) => bytes + key.length + (value as string).length, 0) > 2048) {
+    throw new Error("R2 custom metadata contract is invalid");
+  }
 }
 
 /** 原本をUTF-8へ変換せず全bytesで読む。missing/unknown契約はJSON経路と共通。 */
-export async function r2GetBytesVersion(key: string, bucket: string | undefined, opts?: { singleAttempt?: boolean }): Promise<{ body: Uint8Array; etag: string } | null> {
+export async function r2GetBytesVersion(key: string, bucket: string | undefined, opts?: R2ReadOptions): Promise<{ body: Uint8Array; etag: string; metadata?: Record<string, string> } | null> {
+  if (opts?.maxBytes !== undefined && (!Number.isSafeInteger(opts.maxBytes) || opts.maxBytes < 1)) throw new Error("R2 read byte budget is invalid");
   if (LOCAL_OUT) {
     try {
-      const body = await fs.readFile(path.join(LOCAL_OUT, key));
-      return { body, etag: createHash("sha256").update(body).digest("hex") };
+      const p = path.join(LOCAL_OUT, key);
+      if (opts?.maxBytes !== undefined && (await fs.stat(p)).size > opts.maxBytes) throw new Error("R2 object exceeds read byte budget");
+      const body = await fs.readFile(p);
+      let metadata: Record<string, string> | undefined;
+      try { const value: unknown = JSON.parse(await fs.readFile(`${path.join(LOCAL_OUT, key)}.s3-metadata.json`, "utf8")); assertMetadata(value); metadata = value; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      return { body, etag: createHash("sha256").update(body).digest("hex"), ...(metadata === undefined ? {} : { metadata }) };
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw e;
@@ -161,7 +183,14 @@ export async function r2GetBytesVersion(key: string, bucket: string | undefined,
     if (status !== 200 || !r.Body || typeof etag !== "string" || etag.length === 0) {
       throw new Error(`R2 GET 応答が不完全です: ${key}`);
     }
-    return { body: await r.Body.transformToByteArray(), etag };
+    if (opts?.maxBytes !== undefined && (!Number.isSafeInteger(r.ContentLength) || r.ContentLength! < 0 || r.ContentLength! > opts.maxBytes)) {
+      (r.Body as { destroy?: () => void }).destroy?.();
+      throw new Error("R2 object length is unknown or exceeds read byte budget");
+    }
+    if (r.Metadata !== undefined) assertMetadata(r.Metadata);
+    const body = await r.Body.transformToByteArray();
+    if (opts?.maxBytes !== undefined && body.length > opts.maxBytes) throw new Error("R2 object exceeds read byte budget");
+    return { body, etag, ...(r.Metadata === undefined ? {} : { metadata: r.Metadata }) };
   } catch (e) {
     const err = e as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
     if (err?.name === "NoSuchKey" && err?.$metadata?.httpStatusCode === 404) return null;

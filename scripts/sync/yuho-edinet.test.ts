@@ -7,10 +7,14 @@ import { createD1HttpDb, createD1HttpBatchSender } from "../../src/shared/db/d1-
 import { runYuhoEdinetCatchup } from "../../src/cron/yuho-edinet.js";
 import { yuhoEnv } from "../../services/yuho-quant/src/env.js";
 import { notionEnv } from "../../src/shared/notion-archive/env.js";
+import { createHoldingPriceSourceLoader } from "./holdings-price-sources.js";
+import { sharedEnv } from "../../src/shared/env.js";
 vi.mock("../../src/shared/db/d1-http-client.js", () => ({createD1HttpDb: vi.fn(), createD1HttpBatchSender: vi.fn()}));
 vi.mock("../../src/cron/yuho-edinet.js", async () => ({...await vi.importActual<typeof import("../../src/cron/yuho-edinet.js")>("../../src/cron/yuho-edinet.js"), runYuhoEdinetCatchup: vi.fn()}));
 vi.mock("../../services/yuho-quant/src/env.js", () => ({yuhoEnv: {EDINET_API_KEY: vi.fn()}}));
 vi.mock("../../src/shared/notion-archive/env.js", () => ({notionEnv: {NOTION_TOKEN: vi.fn(), NOTION_ARCHIVE_PAGE_ID: vi.fn(), NOTION_YUHO_TEXT_DB_ID: vi.fn()}}));
+vi.mock("./holdings-price-sources.js", () => ({createHoldingPriceSourceLoader: vi.fn(() => vi.fn())}));
+vi.mock("../../src/shared/env.js", () => ({sharedEnv: {R2_ACCOUNT_ID: vi.fn(), R2_ACCESS_KEY_ID: vi.fn(), R2_SECRET_ACCESS_KEY: vi.fn(), R2_BUCKET: vi.fn()}}));
 beforeEach(() => vi.resetAllMocks());
 describe("direct Node catchup", () => {
   it("validates shard without blank/partial/fraction/duplicate coercion", () => {
@@ -26,7 +30,12 @@ describe("direct Node catchup", () => {
     const log = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       expect(await main(["--part=0", "--of=8"])).toBe(0);
-      expect(runYuhoEdinetCatchup).toHaveBeenCalledWith(db, {part: 0, of: 8}, sender);
+      expect(runYuhoEdinetCatchup).toHaveBeenCalledWith(db, {part: 0, of: 8}, sender, undefined);
+      expect(createHoldingPriceSourceLoader).not.toHaveBeenCalled();
+      const loader = vi.fn(); vi.mocked(createHoldingPriceSourceLoader).mockReturnValue(loader);
+      expect(await main([])).toBe(0);
+      expect(runYuhoEdinetCatchup).toHaveBeenLastCalledWith(db, undefined, sender, loader);
+      expect(sharedEnv.R2_SECRET_ACCESS_KEY).toHaveBeenCalledTimes(1);
       vi.mocked(runYuhoEdinetCatchup).mockResolvedValue({listErrors: ["2026-09-30"], ingestErrors: []} as never);
       expect(await main([])).toBe(1);
       vi.mocked(runYuhoEdinetCatchup).mockResolvedValue({listErrors: [], ingestErrors: [], reachedCap: true, pendingDocuments: 0} as never);
@@ -45,6 +54,12 @@ describe("direct Node catchup", () => {
     vi.mocked(runYuhoEdinetCatchup).mockRejectedValueOnce(new Error("unknown"));
     await expect(main([])).rejects.toThrow("unknown");
     expect(runYuhoEdinetCatchup).toHaveBeenCalledTimes(1);
+  });
+  it("Node price configuration is validated before source/DB and no loader is substituted", async () => {
+    vi.mocked(sharedEnv.R2_ACCESS_KEY_ID).mockImplementationOnce(() => { throw new Error("missing R2"); });
+    await expect(main([])).rejects.toThrow("missing R2");
+    expect(createD1HttpDb).not.toHaveBeenCalled(); expect(runYuhoEdinetCatchup).not.toHaveBeenCalled();
+    expect(createHoldingPriceSourceLoader).not.toHaveBeenCalled();
   });
 });
 

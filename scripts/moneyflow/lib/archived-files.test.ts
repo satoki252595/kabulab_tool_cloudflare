@@ -54,6 +54,19 @@ describe("moneyflow archived-files", () => {
 
   const load = () => import("./archived-files.js");
 
+  it("明示bounded読取はNotion-hosted/stream上限を守り、超過を切り詰め成功にしない", async () => {
+    const { downloadArchivedFile } = await load();
+    const body = new TextEncoder().encode("bounded-source");
+    const request = vi.fn<typeof fetch>(async () => new Response(body));
+    globalThis.fetch = request;
+    const file = { name: "source.json.gz", url: "https://file.notion.so/source?signature=PRIVATE" };
+    await expect(downloadArchivedFile(file, "bounded", { maxBytes: body.length })).resolves.toEqual(body);
+    expect(request.mock.calls[0][1]).toMatchObject({ redirect: "error" });
+    await expect(downloadArchivedFile(file, "bounded", { maxBytes: body.length - 1 })).rejects.toThrow("予算超過");
+    await expect(downloadArchivedFile({ ...file, url: "https://publisher.example.test/source" }, "bounded", { maxBytes: body.length })).rejects.toThrow("URL資格");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   describe("findArchivedRecordByKey", () => {
     const dbId = "primary-db";
     const row = (id: string, key: string) => ({

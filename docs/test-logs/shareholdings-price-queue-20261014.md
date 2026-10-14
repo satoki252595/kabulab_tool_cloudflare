@@ -1,0 +1,19 @@
+# 保存価格からの保有明細定時追記（2026-10-14）
+
+通常Node入口 `scripts/sync/yuho-edinet.ts` → `runYuhoEdinetCatchup`へ、Node専用`createHoldingPriceSourceLoader`を注入する。Worker共通コードはloaderの型/引数だけを持ち、Nodeのfs/S3依存をimportしない。通常GitHub `catchup.yml`は既存R2_ACCOUNT_ID/ACCESS_KEY_ID/SECRET_ACCESS_KEY/BUCKETを既存Secretsから供給し、CLIがsource/DB操作前に型付きgetterで検証する。新secret・依存・外部価格APIはない。
+
+既存の一次データ｜yuho-quantの同じtype1行に「保有価格状態」「保有価格理由」「保有価格再開情報」の3propsを追加する。保有原本完了の既3propsと価格pendingの3propsを同じ単発送信PATCHで登録し、enqueueだけ失敗して永続欠落する境界をなくす。既存の価格進捗/unknownは同原本束縛を確認して保持する。新DBは作らない。
+
+source取込・完了checkpoint・L2投影を優先し、その後価格phaseだけを別100明細/116chunks/256MiB/開始判定300秒で処理する。開始済みwindowのwriterは全読戻しまでawaitするので、壁時計300秒は新しいwindow/書込の開始予算であり強制中断期限ではない。sourceと価格の状態・残予算は共有しない。Workerとshardには価格loaderを注入しない。
+
+再開情報は提出者/doc/期末・owner・元ZIP全SHA/サイズ・明細数・全raw factsの固定列/原表順SHAと、version1・nextHoldingOffset・欠測累計を保持する。全原表の資格を毎回確認し、価格だけ残100行以内のwindowを処理する。windowの全読戻し後だけcursorを進めるので、1通100明細超も次runへ安全に分割再開する。既存`readSavedHoldingsZip`の物理全文/metadata/native DEI照合、原表のfiler-only資格と明細数不変を確認してから、限定価格snapshotを既writerへ渡す。snapshot内に価格/銘柄同定/株数の資格がなければNULL/falseと根拠範囲を示し、他の保存観測まで不存在とは扱わない。欠測が残る完了結果は要確認として残し、全価格を充足した状態と区別する。
+
+価格phaseは既存の原本照合済み行だけを対象に価格列をPATCHし、株数/帳簿価額/原典キー/Name/旧値等の他全propsを読戻しで保持確認する。新しい価格原本が不適格でも既存の照合済み価格をNULLへ消さない。価格phase開始を独立unknownへ単発保存してから進める。資格/通信throw・mutation ACK不明ではそのunknownを保持し、次回は保存原本GET/loader/行書込を再送しない。source原本の完了事実とcheckpointは戻さない。既知の予算不足だけをpendingへ戻す。loaderのreasonCodeを厳密に使い、未有効化snapshotは要確認、予算不足はpendingと分ける。marker GET/PATCH ACK/readbackのpage object・固定ID、行PATCH ACKの既存ID一致も検査し、別pageを成功やcursor前進にしない。
+
+既に旧3propsのみで原本完了済みの歴史行には、このコード導入だけで価格queueを捏造しない。root再集計の固定1900doc/10676明細/849source-qualifiedで最大明細数73、当cohortの>100は0。有限windowは今後の大きい原表と別上限の正常定期再開も対象とする。過去の価格補完は原本完了/明細PREを固定する別の限定enqueue計画が必要。新規・正常source writer再実行では同PATCH登録される。
+
+通信は保存Notion/R2の読取と既存明細への価格追記だけで、Yahoo/EDINET source GET・AI・原本の再複製は0。price loaderは1run cacheで同一catalog/chunkを再読しない。固定116実snapshotの参考実測はgzip173,188,326B→展開630,937,457B、全1900doc/10676holdingのpure検証39.34秒・peakRSS463,781,888B（market担当の保存実原典測定）。activated memberだけの新indexによる固定116/3456実body検証は20.608秒・RSS390,873,088B、最大個別gzip1,919,422B・catalog573,041B。今回の本番価格追記の実経過/通信量は未計測。100明細なら自然キーquery/PATCH/GETは最大300回程度、その他schema/source/marker/snapshot読取が加わる。
+
+検証はNix/locked Nodeで、source完了とpendingの原子登録、保存ZIP資格後の価格列限定PATCH/他props保持、snapshot範囲内NULL理由、価格unknownの再送0、予算pending、source進捗/L2の独立保持、Node注入/Worker非注入、必須R2設定の取得前停止を確認する。実施時点のsource/モデル/業務通信・本番writeは0。
+
+最終checkはNix/locked Nodeで関連10suite138 PASS、skip0。対象はshared writer/queue、cron、Node CLI、Node loader、valuation/parser、ingest atomic/batch、手動backfillの2suite。`pnpm exec tsc --noEmit`、owned6 TypeScript filesのeslint、既存PrettierのYAML parserによるcatchup workflow構文解析、owned8 filesのdiff/EOF/空白checkもPASS。市場担当のsource-only独立レビューはpage object/ID・cursor/全facts SHA・unknown・Node/Worker境界を確認済み。

@@ -1,7 +1,7 @@
 /** 実コードリストと構造検証用chartで、時点・通貨・銘柄・分割の境界を検証。 */
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { gzipSync } from "node:zlib";
+import { gzipSync, gunzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import { exactLegalName, HoldingsPriceIndex, parseHoldingsCodeList, qualifyHoldingValuation, type ArchivedSource } from "../services/edinet/shareholdings-valuation.js";
 import type { Shareholding } from "../services/edinet/shareholdings.js";
@@ -31,6 +31,28 @@ function source(options: { splitDate?: string; priceDate?: string; currency?: st
 const qualify = (priceSource: ArchivedSource) => qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices: [priceSource] });
 
 describe("保有明細の期末参考時価", () => {
+  it("明示snapshotだけを候補化し、同梱の旧観測/非active symbolを流用しない", async () => {
+    const original = source(), wrapper = JSON.parse(gunzipSync(original.bytes).toString("utf8"));
+    const member = wrapper.members[0];
+    const bytes = gzipSync(Buffer.from(JSON.stringify({ ...wrapper, members: [{ ...member, receivedAt: "2026-07-01T00:00:00Z" }, member,
+      { ...member, symbol: "6758.T" }] })));
+    const saved = { ...original, bytes, sha256: hash(bytes), priceMembers: { "7203.T": {
+      bodySha256: member.sha256, bodyBytes: member.byteLength, receivedAt: member.receivedAt } } };
+    const index = new HoldingsPriceIndex([saved]);
+    expect(index.candidates("7203.T")).toHaveLength(1); expect(index.candidates("6758.T")).toHaveLength(0);
+    const expected = await qualify(original);
+    expect(expected.status).toBe("qualified");
+    if (expected.status !== "qualified") throw new Error(expected.reason);
+    expect(await qualifyHoldingValuation({ holding, fiscalYearEnd: "2026-06-30", catalog, prices: index }))
+      .toEqual({ ...expected, priceSource: { ...expected.priceSource, gzipSha256: saved.sha256 } });
+    expect(saved.bytes).toBe(bytes); expect(saved.sha256).toBe(hash(bytes));
+    for (const change of [{ bodySha256: "0".repeat(64) }, { bodyBytes: member.byteLength + 1 }, { receivedAt: "2026-06-30T00:00:00Z" }]) {
+      const mismatch = new HoldingsPriceIndex([{ ...saved, priceMembers: { "7203.T": { ...saved.priceMembers["7203.T"], ...change } } }]);
+      expect(() => mismatch.candidates("7203.T")).toThrow("明示member");
+    }
+    const duplicate = source({ duplicate: true });
+    expect(() => new HoldingsPriceIndex([{ ...duplicate, priceMembers: saved.priceMembers }]).candidates("7203.T")).toThrow("重複");
+  });
   it("同義法人表記だけを正規化し、法人格削除や略称一致はしない", () => {
     expect(exactLegalName("構造㈱")).toBe("構造株式会社");
     expect(exactLegalName("構造株式会社")).not.toBe(exactLegalName("構造"));
