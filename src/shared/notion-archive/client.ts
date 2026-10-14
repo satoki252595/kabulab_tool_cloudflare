@@ -318,7 +318,7 @@ function assertListEnvelope(body: unknown, family: ReadListFamily): void {
     throw new NotionConfigError(`${where} field=response: object ではない`);
   }
   const b = body as Record<string, unknown>;
-  // request_statusは旧APIでは無い。存在する場合だけ公式complete形を要求する。
+  // request_statusの省略形は保持。存在する場合だけ公式complete形を要求する。
   // incompleteは10,000件末尾のhas_more=falseでも全量ではない（各pageで拒否）。
   if (Object.hasOwn(b, "request_status")) {
     const status = b["request_status"];
