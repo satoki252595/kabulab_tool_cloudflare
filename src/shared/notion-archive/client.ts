@@ -18,6 +18,7 @@
  * 同様、薄い自前実装で挙動を完全制御) に合わせる。
  */
 import { NotionConfigError, notionEnv } from "./env.js";
+import { notionTimingKind, recordIrPdfCall, recordIrPdfQueueWait } from "./ir-pdf-timing.js";
 
 const API_BASE = "https://api.notion.com/v1";
 const NOTION_VERSION = "2022-06-28";
@@ -78,12 +79,21 @@ export function resetNotionStats(): void {
 }
 
 /** 全 Notion 通信を直列化 + 最小間隔を強制するゲート */
-function schedule<T>(task: () => Promise<T>): Promise<T> {
+function schedule<T>(task: () => Promise<T>, kind: string): Promise<T> {
   const run = chain.then(async () => {
     const wait = MIN_INTERVAL_MS - (Date.now() - lastStart);
-    if (wait > 0) await sleep(wait);
+    if (wait > 0) {
+      const waitStarted = performance.now();
+      await sleep(wait);
+      recordIrPdfQueueWait(performance.now() - waitStarted);
+    }
     lastStart = Date.now();
-    return task();
+    const callStarted = performance.now();
+    try {
+      return await task();
+    } finally {
+      recordIrPdfCall(kind, performance.now() - callStarted);
+    }
   });
   // キューは失敗しても止めない (次タスクへ繋ぐ)
   chain = run.then(
@@ -399,6 +409,7 @@ export async function notionRequest<T = unknown>(
   // として結果不明再送を禁止する。POST /databases/{id}/query (読取)・
   // PATCH・GET・DELETE・/pages/{id}/move は既存 retry を維持する。
   const isCreate = method === "POST" && (path === "/pages" || path === "/databases");
+  const kind = notionTimingKind(method, path);
   return schedule(async () => {
     const res = await doFetch(
       `${API_BASE}${path}`,
@@ -436,7 +447,7 @@ export async function notionRequest<T = unknown>(
     }
     assertListEnvelope(parsed, family);
     return parsed as T;
-  });
+  }, kind);
 }
 
 /**
@@ -540,7 +551,7 @@ export async function notionSendFilePart(
       `SEND file_upload ${fileUploadId}${part.partNumber ? ` part ${part.partNumber}` : ""}`
     );
     return res.json();
-  });
+  }, "send");
 }
 
 export { API_BASE, NOTION_VERSION };

@@ -59,6 +59,10 @@ on:
         description: "target=intra の対象コード（カンマ区切り）。空欄は通常の全母集団"
         type: string
         default: ""
+      intra_max_start_seconds:
+        description: "target=intra/明示100コード以内専用。新規取得・PUTの開始予算1〜900秒（空欄は既存動作）"
+        type: string
+        default: ""
       intra_from:
         description: "target=intra / 保存422の5銘柄限定。60日内の最初のJP営業日寄付き ISO UTC"
         type: string
@@ -71,6 +75,9 @@ on:
 concurrency:
   group: vwap-ingest
   cancel-in-progress: false
+  # 既定 queue:single は pending を1件だけ残し、次の pending が先の pending を cancel する。
+  # queue:max は最大100件まで待たせる（cancel-in-progress: true とは併用不可）。
+  queue: max
 
 permissions:
   contents: read
@@ -138,12 +145,14 @@ jobs:
           DAILY_SESSION_SOURCE: ${{ inputs.daily_session_source }}
           DAILY_SESSION_DATE: ${{ inputs.daily_session_date }}
           SCHEDULED_DATE: ${{ inputs.scheduled_date }}
+          INTRA_MAX_START_SECONDS: ${{ inputs.intra_max_start_seconds }}
         run: |
           if [ "$TARGET" = "scheduled-daily-intra" ]; then
             if [ -z "$SCHEDULED_DATE" ] || [ "$DAILY_SESSION_SOURCE" != "yahoo-direct" ] || [ -n "$DAILY_SESSION_DATE" ]; then exit 2; fi
           elif [ -n "$SCHEDULED_DATE" ]; then
             exit 2
           fi
+          if [ -n "$INTRA_MAX_START_SECONDS" ] && [ "$TARGET" != "intra" ]; then exit 2; fi
           if [ "$DAILY_SESSION_SOURCE" = "archived-jp-leg" ]; then
             if [ "$TARGET" != "daily" ] && [ "$TARGET" != "daily-intra" ] && [ "$TARGET" != "all" ]; then exit 2; fi
             if [ -z "$DAILY_SESSION_DATE" ]; then exit 2; fi
@@ -206,13 +215,16 @@ jobs:
           INTRA_CODES: ${{ github.event.inputs.intra_codes }}
           INTRA_FROM: ${{ github.event.inputs.intra_from }}
           INTRA_TO_EXCLUSIVE: ${{ github.event.inputs.intra_to_exclusive }}
+          INTRA_MAX_START_SECONDS: ${{ inputs.intra_max_start_seconds }}
         run: |
+          budget_args=()
+          if [ -n "$INTRA_MAX_START_SECONDS" ]; then budget_args+=("--max-start-seconds=$INTRA_MAX_START_SECONDS"); fi
           if [ -n "$INTRA_FROM" ] || [ -n "$INTRA_TO_EXCLUSIVE" ]; then
-            pnpm ingest:vwap-intra --codes="$INTRA_CODES" --from="$INTRA_FROM" --to-exclusive="$INTRA_TO_EXCLUSIVE"
+            pnpm ingest:vwap-intra "${budget_args[@]}" --codes="$INTRA_CODES" --from="$INTRA_FROM" --to-exclusive="$INTRA_TO_EXCLUSIVE"
           elif [ -n "$INTRA_CODES" ]; then
-            pnpm ingest:vwap-intra --codes="$INTRA_CODES"
+            pnpm ingest:vwap-intra "${budget_args[@]}" --codes="$INTRA_CODES"
           else
-            pnpm ingest:vwap-intra
+            pnpm ingest:vwap-intra "${budget_args[@]}"
           fi
 
       # 信用残高 日次 (平日 cron または dispatch=margin/all)
