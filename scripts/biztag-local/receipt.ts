@@ -47,7 +47,7 @@ async function remote(): Promise<MirrorIo> {
   if (sharedEnv.LOCAL_OUT() !== undefined) throw new Error("Mac receipt監視はLOCAL_OUTを本番R2の代用にできません");
   // preflightの.env読取後にR2設定を確定する。import時のpreview設定を持ち越さない。
   const r2 = await import("../vwap/lib/r2.js");
-  return { get: r2.r2GetVersion, put: r2.r2Put };
+  return { get: key => r2.r2GetVersion(key, { maxBytes: 16384, abortSignal: AbortSignal.timeout(60_000) }), put: r2.r2Put };
 }
 
 /** 1PUTのCASと全文readback。競合・結果不明・差分で停止し、PUTを再送しない。 */

@@ -212,6 +212,36 @@ describe("r2GetVersion contract", () => {
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls.every(([command]) => command instanceof GetObjectCommand)).toBe(true);
   });
+  it.each(["ENOTFOUND", "EAI_AGAIN"])("native %s retries only GET; explicit singleAttempt and PUT remain single", async code => {
+    vi.useFakeTimers();
+    const fault = Object.assign(new Error("EXPLICIT_DNS_FAILURE"), { code, syscall: "getaddrinfo" });
+    const send = vi.spyOn(S3Client.prototype, "send").mockRejectedValueOnce(fault).mockImplementationOnce(async () => okGet());
+    const result = expect(r2GetVersion("local-jobs/biztag/latest.json")).resolves.toEqual({ body: "original bytes", etag: '"native-etag"' });
+    await vi.runAllTimersAsync(); await result;
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls.every(([command]) => command instanceof GetObjectCommand)).toBe(true);
+    send.mockReset().mockRejectedValue(fault);
+    await expect(r2GetVersion("local-jobs/biztag/latest.json", { singleAttempt: true })).rejects.toThrow("EXPLICIT_DNS_FAILURE");
+    expect(send).toHaveBeenCalledOnce();
+    send.mockClear();
+    await expect(r2Put("local-jobs/biztag/latest.json", "{}", '"observed"')).rejects.toBeInstanceOf(R2PutUnknownError);
+    expect(send).toHaveBeenCalledOnce();
+  });
+  it("persistent DNS is at most3 GETs; unknown shape or contradictory HTTP never retries", async () => {
+    vi.useFakeTimers();
+    const fault = Object.assign(new Error("EXPLICIT_DNS_FAILURE"), { code: "ENOTFOUND", syscall: "getaddrinfo" });
+    const send = vi.spyOn(S3Client.prototype, "send").mockRejectedValue(fault);
+    const rejected = expect(r2GetVersion("local-jobs/biztag/latest.json")).rejects.toThrow("EXPLICIT_DNS_FAILURE");
+    await vi.runAllTimersAsync(); await rejected;
+    expect(send).toHaveBeenCalledTimes(3);
+    for (const invalid of [new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND", syscall: "getaddrinfo" },
+      Object.assign(new Error("DNS"), { code: "ENOTFOUND", syscall: "connect" }),
+      Object.assign(new Error("DNS"), { code: "ENOTFOUND", syscall: "getaddrinfo", $metadata: { httpStatusCode: 403 } })]) {
+      send.mockReset().mockRejectedValue(invalid);
+      await expect(r2GetVersion("local-jobs/biztag/latest.json")).rejects.toBe(invalid);
+      expect(send).toHaveBeenCalledOnce();
+    }
+  });
 
   it("three failed native GET attempts remain a fault and never become a missing object", async () => {
     vi.useFakeTimers();
